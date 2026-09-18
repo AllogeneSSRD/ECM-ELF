@@ -22,6 +22,8 @@ release/
 *.save
 *-*signature.txt
 
+.tmp*
+
 # CGBN
 cgbn/
 
@@ -39,3 +41,4 @@ tools/ecm_report/*.db*
 # tools/ecm_report/*.png
 tools/ecm_report/*.html
 tools/ecm_report/*.bat
+tools/ecm_report/*.png
