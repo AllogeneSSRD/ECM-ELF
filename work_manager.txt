@@ -1,0 +1,13 @@
+# worktodo.txt - gmp-ecm GPU 任务清单（Windows 版，对应 Linux 的 gpu/worktodo.sh）
+#
+# 每行一条任务，格式与 Linux 版完全一致，只是把 ./ecm 换成了 .\ecm_cuda.exe：
+#   echo '<N 表达式>' | .\ecm_cuda.exe -v -savea xxx.save -gpu -gpuckpt 60 -gpucurves 384 110e6 0
+#
+# 以 # 开头的行为注释、空行被忽略；脚本运行期间可以继续向本文件追加任务行。
+# 任务完成后，该行会被追加到 worktodo.finished.txt，并从本文件中删除。
+# 直接粘贴 Linux 的行（./ecm 或 ecm.exe）也能运行，脚本会自动映射到本目录的 ecm_cuda.exe。
+#
+# 运行方式：
+#   work_manager.bat                          （增量同步，默认）
+#   work_manager.bat --run-log --sync-mode full
+#   powershell -NoProfile -ExecutionPolicy Bypass -File work_manager.ps1 -RunLog
