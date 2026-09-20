@@ -81,6 +81,8 @@ add_executable(ecm
     src/core/ecm_checkpoint.cpp
     src/core/ecm_save.cpp
     src/core/ecm_gpu_common.cpp
+    src/core/ecm_queue_config.cpp
+    src/core/ecm_worktodo.cpp
     src/opencl_ecm_debug_utils.cpp
     src/opencl_ecm_log.cpp
     src/opencl_ecm_mont.cpp
@@ -353,6 +355,8 @@ if(ECM_ENABLE_CUDA)
         src/core/ecm_checkpoint.cpp
         src/core/ecm_save.cpp
         src/core/ecm_gpu_common.cpp
+        src/core/ecm_queue_config.cpp
+        src/core/ecm_worktodo.cpp
         src/opencl_ecm_log.cpp
         src/opencl_ecm_runtime_config.cpp
         # CUDA backend + CGBN stage 1 kernel

@@ -27,10 +27,13 @@
 
 #include "ecm_backend.h"           /* GPU backend seam (OpenCL or CUDA glue) */
 #include "ecm_save.h"
+#include "ecm_checkpoint.h"         /* opencl_ecm_set_work_dir */
 #include "opencl_ecm_runtime_config.h"
 #include "ecm.h"
 #include "cgbn_stage1.h"            /* gpu_pick_random_sigma / gpu_compute_batch_d */
 #include "opencl_ecm_log.h"
+#include "ecm_queue_config.h"
+#include "ecm_worktodo.h"
 
 static void trim(std::string &s){
     while(!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
@@ -692,18 +695,9 @@ static void print_ecm_usage(const char *prog) {
               << "Run with --showkernel for full Montgomery and add/sub path lists.\n";
 }
 
-static bool stdin_is_tty() {
-#ifdef _WIN32
-    return _isatty(_fileno(stdin)) != 0;
-#else
-    return isatty(fileno(stdin)) != 0;
-#endif
-}
-
 static bool ecm_wants_usage(int argc, char **argv) {
-    if (argc <= 1) {
-        return true;
-    }
+    // No explicit -h/--help: let main() dispatch (no args → queue manager mode,
+    // positional B1 → single-run CLI mode). Only explicit help flags print usage.
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "-h" || a == "--help" || a == "/?") {
@@ -711,6 +705,406 @@ static bool ecm_wants_usage(int argc, char **argv) {
         }
     }
     return false;
+}
+
+// ── Queue-manager helpers ─────────────────────────────────────────────────
+
+static bool is_absolute_path_local(const std::string &p) {
+#ifdef _WIN32
+    if (p.size() >= 2 && std::isalpha((unsigned char)p[0]) && p[1] == ':') return true;
+    if (p.size() >= 1 && (p[0] == '\\' || p[0] == '/')) return true;
+    return false;
+#else
+    return !p.empty() && p[0] == '/';
+#endif
+}
+
+static std::string resolve_rel_local(const std::string &base, const std::string &p) {
+    if (p.empty() || is_absolute_path_local(p)) return p;
+    return base + "/" + p;
+}
+
+static std::string get_exe_dir_local() {
+#ifdef _WIN32
+    char buf[MAX_PATH];
+    const DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    if (n > 0 && n < MAX_PATH) {
+        std::string p(buf, n);
+        const std::size_t slash = p.find_last_of("\\/");
+        if (slash != std::string::npos) return p.substr(0, slash);
+    }
+    return "";
+#else
+    char buf[4096];
+    const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n > 0) {
+        buf[n] = '\0';
+        std::string p(buf);
+        const std::size_t slash = p.find_last_of('/');
+        if (slash != std::string::npos) return p.substr(0, slash);
+    }
+    return "";
+#endif
+}
+
+static long long current_epoch_seconds() {
+    return static_cast<long long>(std::time(nullptr));
+}
+
+struct Stage1RunOptions {
+    bool use_gpu = true;
+    int verbose = 0;
+    int device_index = 0;
+    unsigned long gpuckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
+    std::string gpu_mul_path, gpu_sqr_path, gpu_add_path, gpu_sub_path, gpu_special_mult_path;
+    bool sigma_fixed = false;
+    uint32_t fixed_sigma = 0;
+};
+
+struct Stage1RunResult {
+    int ret = ECM_ERROR;
+    bool prepare_failed = false;
+    uint32_t curves = 0;
+    uint32_t firstsigma = 0;
+    mpz_t *factors = nullptr;
+    int *array_found = nullptr;
+};
+
+// Run one stage-1 batch. N and the caller's n_expr are borrowed (not cleared);
+// factors / array_found are allocated here and returned via `out` (caller frees).
+static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
+                           const std::string &savefilename, bool saveappend,
+                           const std::string &n_expr,
+                           const Stage1RunOptions &opt, Stage1RunResult *out) {
+    out->ret = ECM_ERROR;
+    out->prepare_failed = false;
+    out->curves = curves;
+    out->firstsigma = 0;
+    out->factors = nullptr;
+    out->array_found = nullptr;
+
+    if (curves == 0) {
+        std::cerr << "gpucurves must be > 0" << std::endl;
+        return ECM_ERROR;
+    }
+
+    // Setup params.
+    ecm_params params;
+    ecm_init(params);
+    params->gpu = opt.use_gpu ? 1 : 0;
+    params->gpu_number_of_curves = curves;
+    params->gpu_checkpoint_interval_ms = opt.gpuckpt_ms;
+    if (!opt.gpu_mul_path.empty()) {
+        strncpy(params->gpu_mul_path, opt.gpu_mul_path.c_str(), sizeof(params->gpu_mul_path) - 1u);
+        params->gpu_mul_path[sizeof(params->gpu_mul_path) - 1u] = '\0';
+    }
+    if (!opt.gpu_sqr_path.empty()) {
+        strncpy(params->gpu_sqr_path, opt.gpu_sqr_path.c_str(), sizeof(params->gpu_sqr_path) - 1u);
+        params->gpu_sqr_path[sizeof(params->gpu_sqr_path) - 1u] = '\0';
+    }
+    if (!opt.gpu_add_path.empty()) {
+        strncpy(params->gpu_add_path, opt.gpu_add_path.c_str(), sizeof(params->gpu_add_path) - 1u);
+        params->gpu_add_path[sizeof(params->gpu_add_path) - 1u] = '\0';
+    }
+    if (!opt.gpu_sub_path.empty()) {
+        strncpy(params->gpu_sub_path, opt.gpu_sub_path.c_str(), sizeof(params->gpu_sub_path) - 1u);
+        params->gpu_sub_path[sizeof(params->gpu_sub_path) - 1u] = '\0';
+    }
+    if (!opt.gpu_special_mult_path.empty()) {
+        strncpy(params->gpu_special_mult_path, opt.gpu_special_mult_path.c_str(),
+                sizeof(params->gpu_special_mult_path) - 1u);
+        params->gpu_special_mult_path[sizeof(params->gpu_special_mult_path) - 1u] = '\0';
+    }
+    params->verbose = opt.verbose ? 1 : 0;
+    params->param = ECM_PARAM_BATCH_32BITS_D;
+
+    mpz_t batch_s;
+    mpz_init(batch_s);
+    if (!compute_batch_s(batch_s, B1)) {
+        std::cerr << "Failed to compute batch_s" << std::endl;
+        mpz_clear(batch_s);
+        ecm_clear(params);
+        return ECM_ERROR;
+    }
+    mpz_set(params->batch_s, batch_s);
+    params->batch_last_B1_used = B1;
+
+    if (opt.use_gpu) {
+        const int prep = ecm_backend_prepare((size_t)mpz_sizeinbase(N, 2), params->verbose,
+                                             opt.device_index,
+                                             params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
+                                             params->gpu_sqr_path[0] ? params->gpu_sqr_path : nullptr,
+                                             params->gpu_add_path[0] ? params->gpu_add_path : nullptr,
+                                             params->gpu_sub_path[0] ? params->gpu_sub_path : nullptr,
+                                             params->gpu_special_mult_path[0] ? params->gpu_special_mult_path
+                                                                             : nullptr);
+        if (prep != 0) {
+            std::cerr << "GPU: backend prepare failed" << std::endl;
+            out->prepare_failed = true;
+            mpz_clear(batch_s);
+            ecm_clear(params);
+            return ECM_ERROR;
+        }
+    }
+
+    std::string resolved_save = savefilename;
+    if (!resolved_save.empty()) {
+        resolved_save = opencl_ecm_resolve_data_path(resolved_save.c_str());
+        if (!opencl_ecm_check_save_file_writable(resolved_save, saveappend)) {
+            mpz_clear(batch_s);
+            ecm_clear(params);
+            return ECM_ERROR;
+        }
+    }
+
+    mpz_t *factors = (mpz_t *)malloc(sizeof(mpz_t) * curves);
+    int *array_found = (int *)malloc(sizeof(int) * curves);
+    for (uint32_t i = 0; i < curves; i++) {
+        mpz_init(factors[i]);
+        array_found[i] = ECM_NO_FACTOR_FOUND;
+    }
+
+    uint32_t firstsigma =
+        opt.sigma_fixed ? opt.fixed_sigma : gpu_pick_random_sigma(curves);
+    if ((uint64_t)firstsigma + curves > 0x100000000ull) {
+        std::cerr << "sigma range overflows uint32 (sigma + curves > 2^32)" << std::endl;
+        for (uint32_t i = 0; i < curves; i++) mpz_clear(factors[i]);
+        free(factors);
+        free(array_found);
+        mpz_clear(batch_s);
+        ecm_clear(params);
+        return ECM_ERROR;
+    }
+    const uint32_t lastsigma = firstsigma + curves - 1;
+
+    mpz_t batch_d;
+    mpz_init(batch_d);
+    gpu_compute_batch_d(batch_d, firstsigma, N);
+
+    std::cout << "Using B1=" << B1 << ", B2=" << B2
+              << ", sigma=" << ECM_PARAM_BATCH_32BITS_D << ":" << firstsigma
+              << "-" << lastsigma << " (" << curves << " curves)" << std::endl;
+
+    float gputime = 0.0f;
+    const int ret = ecm_backend_stage1(factors, array_found, N, params->batch_s, curves,
+                                       (uint32_t *)&firstsigma, params->gpu_checkpoint_interval_ms,
+                                       &gputime, params->verbose,
+                                       params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
+                                       params->gpu_sqr_path[0] ? params->gpu_sqr_path : nullptr,
+                                       params->gpu_add_path[0] ? params->gpu_add_path : nullptr,
+                                       params->gpu_sub_path[0] ? params->gpu_sub_path : nullptr,
+                                       params->gpu_special_mult_path[0] ? params->gpu_special_mult_path
+                                                                       : nullptr);
+
+    std::cout << "GPU stage1 returned: " << ret << " gputime=" << gputime << " ms\n";
+
+    if (ret != ECM_ERROR && !resolved_save.empty()) {
+        const std::string n_expr_save =
+            opencl_ecm_build_saved_n_expr(n_expr, N, curves, factors, array_found);
+        if (!opencl_ecm_append_save_lines(resolved_save, N, B1, firstsigma, curves, factors,
+                                          n_expr_save)) {
+            std::cerr << "Failed to append OpenCL save lines into " << resolved_save << std::endl;
+        }
+    }
+
+    mpz_clear(batch_d);
+    mpz_clear(batch_s);
+    ecm_clear(params);
+
+    out->ret = ret;
+    out->firstsigma = firstsigma;
+    out->factors = factors;
+    out->array_found = array_found;
+    return ret;
+}
+
+static int run_queue_manager(const std::string &ini_path) {
+    const std::string raw_exe_dir = get_exe_dir_local();
+    const std::string exe_dir = raw_exe_dir.empty() ? "." : raw_exe_dir;
+
+    // Resolve ini path (default: exe_dir/ecm.ini).
+    std::string ini = ini_path;
+    if (ini.empty()) {
+        ini = exe_dir + "/ecm.ini";
+    } else {
+        ini = resolve_rel_local(exe_dir, ini);
+    }
+
+    // Load config; on first run (missing ini), write a default template.
+    EcmQueueConfig cfg;
+    if (!ecm_queue_config_load(ini, cfg)) {
+        if (!ecm_queue_config_write_default(ini)) {
+            ecm_ts_fprintf(stderr, "FATAL: cannot create default config %s\n", ini.c_str());
+            return 1;
+        }
+        ecm_ts_fprintf(stdout, "Created default config: %s\n", ini.c_str());
+    }
+
+    opencl_ecm_set_work_dir(exe_dir.c_str());
+
+    ecm_log_set_progress_color(cfg.progress_color.c_str());
+
+    // Open the mirror log (screen.log by default).
+    FILE *logf = nullptr;
+    if (!cfg.log_file.empty()) {
+        const std::string logpath = resolve_rel_local(exe_dir, cfg.log_file);
+        logf = fopen(logpath.c_str(), "a");
+        if (logf == nullptr) {
+            ecm_ts_fprintf(stderr, "FATAL: cannot open log file %s\n", logpath.c_str());
+            return 1;
+        }
+        ecm_log_set_mirror(logf);
+    }
+
+    const std::string worktodo_path = resolve_rel_local(exe_dir, cfg.worktodo);
+    const std::string finished_path = resolve_rel_local(exe_dir, cfg.finished);
+    const std::string sync1 = resolve_rel_local(exe_dir, cfg.save_sync_dir_1);
+    const std::string sync2 = resolve_rel_local(exe_dir, cfg.save_sync_dir_2);
+
+    Stage1RunOptions opt;
+    opt.use_gpu = true;
+    opt.verbose = cfg.verbose;
+    opt.device_index = cfg.device;
+    opt.gpuckpt_ms = (cfg.gpuckpt_seconds > 0.0)
+                         ? (unsigned long)(cfg.gpuckpt_seconds * 1000.0)
+                         : 0UL;
+    opt.gpu_mul_path = cfg.kernel_mul;
+    opt.gpu_sqr_path = cfg.kernel_sqr;
+    opt.gpu_add_path = cfg.kernel_add;
+    opt.gpu_sub_path = cfg.kernel_sub;
+    opt.gpu_special_mult_path = cfg.kernel_special_mult;
+    opt.sigma_fixed = (cfg.sigma != 0);
+    opt.fixed_sigma = cfg.sigma;
+
+    ecm_ts_fprintf(stdout, "===== ECM queue manager =====\n");
+    ecm_ts_fprintf(stdout, "config : %s\n", ini.c_str());
+    ecm_ts_fprintf(stdout, "worktodo : %s\n", worktodo_path.c_str());
+    ecm_ts_fprintf(stdout, "finished : %s\n", finished_path.c_str());
+    ecm_ts_fprintf(stdout, "log_file : %s\n", cfg.log_file.c_str());
+
+    // Startup full sync (matches the old work_manager.ps1 behaviour).
+    ecm_sync_save_files(exe_dir, sync1, sync2, /*full=*/true, 0);
+
+    int processed = 0;
+    while (true) {
+        std::string line;
+        if (!ecm_worktodo_first_line(worktodo_path, line)) {
+            break;
+        }
+
+        ecm_ts_fprintf(stdout, "START: %s\n", line.c_str());
+
+        EcmStage2Task task;
+        std::string err;
+        if (!ecm_parse_stage2_line(line, task, err)) {
+            ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
+            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+            continue;
+        }
+
+        double B1 = 0.0;
+        if (!ecm_extract_b1_from_save_name(task.save_name, &B1, err)) {
+            ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
+            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+            continue;
+        }
+
+        mpz_t N;
+        mpz_init(N);
+        if (!ecm_compute_stage2_n(task, N, err)) {
+            mpz_clear(N);
+            ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
+            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+            continue;
+        }
+
+        // Rebuild the original N expression for the save-file N= field.
+        std::string cstr = task.c;
+        std::string sign = "+";
+        if (!cstr.empty() && cstr[0] == '-') {
+            sign = "-";
+            cstr = cstr.substr(1);
+        }
+        std::string n_expr = "(" + task.k + "*" + task.b + "^" + std::to_string(task.n) + sign + cstr + ")";
+        if (!task.factors.empty()) {
+            n_expr += "/(";
+            for (std::size_t i = 0; i < task.factors.size(); ++i) {
+                if (i != 0) n_expr += "*";
+                n_expr += task.factors[i];
+            }
+            n_expr += ")";
+        }
+
+        const long long marker = current_epoch_seconds();
+
+        Stage1RunResult result;
+        run_stage1_once(N, B1, /*B2=*/0.0, task.curves_to_run, task.save_name,
+                        /*saveappend=*/true, n_expr, opt, &result);
+
+        const bool has_factors = (result.factors != nullptr);
+
+        if (result.prepare_failed) {
+            if (has_factors) {
+                for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
+                free(result.factors);
+                free(result.array_found);
+            }
+            mpz_clear(N);
+            ecm_ts_fprintf(stderr, "FATAL: GPU backend prepare failed; aborting queue.\n");
+            if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
+            return 1;
+        }
+
+        bool found_factor = false;
+        if (has_factors) {
+            for (uint32_t i = 0; i < result.curves; ++i) {
+                if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
+                    char *fs = mpz_get_str(nullptr, 10, result.factors[i]);
+                    std::cout << "factor[" << i << "]=" << (fs ? fs : "?") << "\n";
+                    free(fs);
+                    found_factor = true;
+                }
+            }
+        }
+        if (found_factor) {
+            ecm_ts_fprintf(stdout, "FACTOR FOUND aid=%s task=%s\n",
+                           task.aid.empty() ? "N/A" : task.aid.c_str(), line.c_str());
+        }
+
+        if (has_factors) {
+            for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
+            free(result.factors);
+            free(result.array_found);
+        }
+        mpz_clear(N);
+
+        if (result.ret == ECM_ERROR) {
+            ecm_ts_fprintf(stderr, "ERROR: stage1 failed for task: %s\n", line.c_str());
+            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+            continue;
+        }
+
+        // Success: move the raw line to the finished file, drop it from worktodo.
+        if (!ecm_append_text_line(finished_path, line)) {
+            ecm_ts_fprintf(stderr, "ERROR: cannot append to %s\n", finished_path.c_str());
+            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+            continue;
+        }
+        ecm_worktodo_advance(worktodo_path, line, WorktodoAction::Remove);
+
+        // Incremental sync of *.save touched by this task.
+        const bool full = (cfg.sync_mode == "full");
+        ecm_sync_save_files(exe_dir, sync1, sync2, full, marker);
+
+        ++processed;
+    }
+
+    ecm_ts_fprintf(stdout, "===== queue done, %d task(s) processed =====\n", processed);
+    if (logf) {
+        ecm_log_set_mirror(nullptr);
+        fclose(logf);
+    }
+    return 0;
 }
 
 int main(int argc, char **argv){
@@ -739,6 +1133,7 @@ int main(int argc, char **argv){
     std::string gpu_sub_path;
     std::string gpu_special_mult_path;
     bool show_kernels = false;
+    std::string ini_path;
     // parse args simple
     std::vector<std::string> pos;
     for(int i=1;i<argc;i++){
@@ -819,6 +1214,10 @@ int main(int argc, char **argv){
             show_kernels = true;
             continue;
         }
+        if(a == "-ini" && i+1<argc) {
+            ini_path = argv[++i];
+            continue;
+        }
         // ---- runtime tuning flags (replace former environment variables) ----
         // Naming convention (kebab-case):
         //   value flags:  --<group>-<noun> <value>   (e.g. --kernel-cache-dir)
@@ -869,6 +1268,7 @@ int main(int argc, char **argv){
         ecm_runtime_config().gp_bin = gp_bin_path;
     }
     ecm_install_timestamped_iostreams();
+    ecm_enable_console_ansi();
 
     if (show_kernels) {
         ecm_backend_print_kernels(stdout);
@@ -876,12 +1276,8 @@ int main(int argc, char **argv){
     }
 
     if (pos.empty()) {
-        if (stdin_is_tty()) {
-            print_ecm_usage(argv[0]);
-        } else {
-            std::cerr << "Missing B1 (stage-1 bound). Run with -h for usage." << std::endl;
-        }
-        return 1;
+        // No positional B1/B2 → queue-manager mode (reads ecm.ini + worktodo).
+        return run_queue_manager(ini_path);
     }
 
     unsigned long gpuckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
@@ -992,142 +1388,43 @@ int main(int argc, char **argv){
     //     std::cout << std::endl;
     // }
 
-    // set up ecm params
-    ecm_params params;
-    ecm_init(params);
-    params->gpu = use_gpu ? 1 : 0;
-    params->gpu_number_of_curves = gpucurves;
-    params->gpu_checkpoint_interval_ms = gpuckpt_ms;
-    if (!gpu_mul_path.empty()) {
-        strncpy(params->gpu_mul_path, gpu_mul_path.c_str(), sizeof(params->gpu_mul_path) - 1u);
-        params->gpu_mul_path[sizeof(params->gpu_mul_path) - 1u] = '\0';
-    }
-    if (!gpu_sqr_path.empty()) {
-        strncpy(params->gpu_sqr_path, gpu_sqr_path.c_str(), sizeof(params->gpu_sqr_path) - 1u);
-        params->gpu_sqr_path[sizeof(params->gpu_sqr_path) - 1u] = '\0';
-    }
-    if (!gpu_add_path.empty()) {
-        strncpy(params->gpu_add_path, gpu_add_path.c_str(), sizeof(params->gpu_add_path) - 1u);
-        params->gpu_add_path[sizeof(params->gpu_add_path) - 1u] = '\0';
-    }
-    if (!gpu_sub_path.empty()) {
-        strncpy(params->gpu_sub_path, gpu_sub_path.c_str(), sizeof(params->gpu_sub_path) - 1u);
-        params->gpu_sub_path[sizeof(params->gpu_sub_path) - 1u] = '\0';
-    }
-    if (!gpu_special_mult_path.empty()) {
-        strncpy(params->gpu_special_mult_path, gpu_special_mult_path.c_str(),
-                sizeof(params->gpu_special_mult_path) - 1u);
-        params->gpu_special_mult_path[sizeof(params->gpu_special_mult_path) - 1u] = '\0';
-    }
-    params->verbose = verbose ? 1 : 0;
-    params->param = ECM_PARAM_BATCH_32BITS_D; // GPU expects batch 32bits d
+    // Execute stage 1 through the shared single-run path.
+    Stage1RunOptions opt;
+    opt.use_gpu = use_gpu;
+    opt.verbose = verbose ? 1 : 0;
+    opt.device_index = gpu_device_index;
+    opt.gpuckpt_ms = gpuckpt_ms;
+    opt.gpu_mul_path = gpu_mul_path;
+    opt.gpu_sqr_path = gpu_sqr_path;
+    opt.gpu_add_path = gpu_add_path;
+    opt.gpu_sub_path = gpu_sub_path;
+    opt.gpu_special_mult_path = gpu_special_mult_path;
+    opt.sigma_fixed = sigma_fixed;
+    opt.fixed_sigma = fixed_sigma;
 
-    // compute batch_s from B1
-    mpz_t batch_s; mpz_init(batch_s);
-    if(!compute_batch_s(batch_s, B1)){
-        std::cerr << "Failed to compute batch_s"<<std::endl;
-        return 1;
-    }
-    // std::cout << "batch_s bit-size: " << mpz_sizeinbase(batch_s, 2) << std::endl;
-    mpz_set(params->batch_s, batch_s);
-    params->batch_last_B1_used = B1;
-
-    // allocate factors
-    uint32_t curves = gpucurves;
-    if(curves == 0){
-        std::cerr << "gpucurves must be > 0"<<std::endl;
-        return 1;
-    }
-
-    if (use_gpu) {
-        int prep = ecm_backend_prepare((size_t)mpz_sizeinbase(N, 2), params->verbose,
-                                       gpu_device_index,
-                                       params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
-                                       params->gpu_sqr_path[0] ? params->gpu_sqr_path : nullptr,
-                                       params->gpu_add_path[0] ? params->gpu_add_path : nullptr,
-                                       params->gpu_sub_path[0] ? params->gpu_sub_path : nullptr,
-                                       params->gpu_special_mult_path[0] ? params->gpu_special_mult_path
-                                                                        : nullptr);
-        if (prep != 0) {
-            std::cerr << "GPU: backend prepare failed" << std::endl;
-            mpz_clear(N);
-            mpz_clear(batch_s);
-            ecm_clear(params);
-            return 1;
-        }
-    }
-
-    if (!savefilename.empty()) {
-        savefilename = opencl_ecm_resolve_data_path(savefilename.c_str());
-        if (!opencl_ecm_check_save_file_writable(savefilename, saveappend)) {
-            mpz_clear(N);
-            mpz_clear(batch_s);
-            ecm_clear(params);
-            return 1;
-        }
-    }
-
-    mpz_t *factors = (mpz_t*) malloc(sizeof(mpz_t)*curves);
-    int *array_found = (int*) malloc(sizeof(int)*curves);
-    for(uint32_t i=0;i<curves;i++){ mpz_init(factors[i]); array_found[i]=ECM_NO_FACTOR_FOUND; }
-
-    uint32_t firstsigma = sigma_fixed ? fixed_sigma : gpu_pick_random_sigma(curves);
-    if ((uint64_t)firstsigma + curves > 0x100000000ull) {
-        std::cerr << "sigma range overflows uint32 (sigma + curves > 2^32)" << std::endl;
-        return 1;
-    }
-    uint32_t lastsigma = firstsigma + curves - 1;
-
-    mpz_t batch_d;
-    mpz_init(batch_d);
-    gpu_compute_batch_d(batch_d, firstsigma, N);
+    Stage1RunResult result;
+    run_stage1_once(N, B1, B2, gpucurves, savefilename, saveappend, nline, opt, &result);
 
     std::vector<uint32_t> go_primes;
     if (print_group_order) {
-        if (!build_primes_up_to_B1(B1, go_primes)) {
-            std::cerr << "Failed to build primes for --go (invalid B1 range)" << std::endl;
-            return 1;
-        }
+        build_primes_up_to_B1(B1, go_primes);
     }
 
-    std::cout << "Using B1=" << B1 << ", B2=" << B2
-              << ", sigma=" << ECM_PARAM_BATCH_32BITS_D << ":" << firstsigma
-              << "-" << lastsigma << " (" << curves << " curves)" << std::endl;
-
-    // {
-    //     unsigned long k_blocks = params->k;
-    //     std::cout << "dF=0, k=" << k_blocks << ", d=";
-    //     mpz_out_str(stdout, 10, batch_d);
-    //     std::cout << ", d2=0, i0=0" << std::endl;
-    // }
-
-    float gputime = 0.0f;
-
-    int ret = ecm_backend_stage1(factors, array_found, N, params->batch_s, curves, &firstsigma,
-                                 params->gpu_checkpoint_interval_ms, &gputime, params->verbose,
-                                 params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
-                                 params->gpu_sqr_path[0] ? params->gpu_sqr_path : nullptr,
-                                 params->gpu_add_path[0] ? params->gpu_add_path : nullptr,
-                                 params->gpu_sub_path[0] ? params->gpu_sub_path : nullptr,
-                                 params->gpu_special_mult_path[0] ? params->gpu_special_mult_path
-                                                                  : nullptr);
-
-    std::cout << "GPU stage1 returned: "<< ret <<" gputime="<< gputime <<" ms\n";
-    for(uint32_t i=0;i<curves;i++){
-        if(array_found[i] != ECM_NO_FACTOR_FOUND){
-            char *s = mpz_get_str(NULL,10,factors[i]);
-            std::cout << "factor["<<i<<"]="<< s <<"\n";
+    for (uint32_t i = 0; i < result.curves; i++) {
+        if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
+            char *s = mpz_get_str(NULL, 10, result.factors[i]);
+            std::cout << "factor[" << i << "]=" << (s ? s : "?") << "\n";
             free(s);
             if (print_group_order) {
-                uint32_t sigma_curve = firstsigma + i;
-                if (mpz_probab_prime_p(factors[i], 25) <= 0) {
+                uint32_t sigma_curve = result.firstsigma + i;
+                if (mpz_probab_prime_p(result.factors[i], 25) <= 0) {
                     std::cout << "  go_factor[" << i << "]=[ ] (factor is not prime, skip #E(F_p))\n";
                     continue;
                 }
                 mpz_t go;
                 mpz_init(go);
                 std::string err;
-                if (!compute_group_order_pari_for_sigma3(go, factors[i], sigma_curve,
+                if (!compute_group_order_pari_for_sigma3(go, result.factors[i], sigma_curve,
                                                          go_gp_exe, &err)) {
                     std::cerr << "go_factor[" << i << "]: gp error: " << err << "\n"
                               << "Please verify gp is working, or provide path with: --gp <path/to/gp>"
@@ -1143,19 +1440,10 @@ int main(int argc, char **argv){
             }
         }
     }
-    std::string n_expr_save = opencl_ecm_build_saved_n_expr(nline, N, curves, factors, array_found);
 
-    if (ret != ECM_ERROR && !savefilename.empty()) {
-        if (!opencl_ecm_append_save_lines(savefilename, N, B1, firstsigma, curves, factors,
-                                          n_expr_save)) {
-            std::cerr << "Failed to append OpenCL save lines into " << savefilename << std::endl;
-            return 1;
-        }
-    }
-    for(uint32_t i=0;i<curves;i++) mpz_clear(factors[i]);
-    free(factors); free(array_found);
-    mpz_clear(batch_d);
-    mpz_clear(N); mpz_clear(batch_s);
-    ecm_clear(params);
+    for (uint32_t i = 0; i < result.curves; i++) mpz_clear(result.factors[i]);
+    free(result.factors);
+    free(result.array_found);
+    mpz_clear(N);
     return 0;
 }

@@ -1,5 +1,5 @@
 @echo off
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
+call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
 echo === cl version ===
 cl 2>&1 | findstr /i "Version"
 echo === nvcc compile sample_01_add ===
