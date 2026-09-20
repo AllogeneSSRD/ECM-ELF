@@ -39,6 +39,9 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 
 #include "cudacommon.h"
 
+// progress-bar colour helpers (ANSI code / reset)
+#include "opencl_ecm_log.h"
+
 // MPA-OpenCl port: replaces GMP-ECM's "ecm.h"/"ecm-gpu.h". Provides OUTPUT_*,
 // outputf/test_verbose shims, ECM_GPU_* constants, and pulls in the project's
 // ECM_* return codes (include/ecm.h).
@@ -51,6 +54,90 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 
 // For %I64u on windows or %llu on linux
 #include <cinttypes>
+
+#ifdef _WIN32
+#include <io.h>      // _isatty, _fileno
+#else
+#include <unistd.h>  // isatty, fileno
+#endif
+
+
+// ASCII progress bar. Deliberately no Unicode: nvcc's EDG frontend misparses
+// UTF-8 string literals under the GBK code page on Windows, and -Xcompiler
+// flags only reach the host cl.exe stage, not nvcc's frontend.
+static bool stdout_is_tty() {
+#ifdef _WIN32
+    return _isatty(_fileno(stdout)) != 0;
+#else
+    return isatty(fileno(stdout)) != 0;
+#endif
+}
+
+static void print_progress(double pct, uint64_t s_partial, uint64_t s_num_bits,
+                           uint64_t this_batch, double per_curve_ms,
+                           double batch_ms, double elapsed_ms, bool newline) {
+    const int bar_width = 40;
+    int filled = (int)(bar_width * (pct / 100.0));
+    if (filled < 0) filled = 0;
+    if (filled > bar_width) filled = bar_width;
+
+    char bar[bar_width + 1];
+    int i;
+    for (i = 0; i < bar_width; i++) {
+        bar[i] = (i < filled) ? '=' : ' ';
+    }
+    bar[bar_width] = '\0';
+    if (filled > 0 && filled < bar_width) {
+        bar[filled - 1] = '>';
+    }
+
+    const double elapsed_s = elapsed_ms / 1000.0;
+
+    // Remaining time from the *current* speed (bits per batch / batch time),
+    // not from elapsed-time extrapolation: the latter is wrong after a
+    // checkpoint resume, where s_partial already starts far from zero while the
+    // elapsed timer restarts at zero.
+    double remaining_s = 0.0;
+    if (this_batch > 0u && batch_ms > 0.0 && s_num_bits > s_partial) {
+        const double bits_per_ms = static_cast<double>(this_batch) / batch_ms;
+        if (bits_per_ms > 0.0) {
+            remaining_s =
+                static_cast<double>(s_num_bits - s_partial) / bits_per_ms / 1000.0;
+        }
+    }
+
+    if (newline) {
+        // Redirected / log mode: a full timestamped line, mirrored to screen.log
+        // via the outputf → ecm_ts_vfprintf path. No ANSI colour in the log.
+        outputf(OUTPUT_ALWAYS,
+                "GPU: [%s] %.1f%%  %llu, +%llu bits (~%.1f ms/curve)  elapsed %.1fs  remaining %.1fs\n",
+                bar, pct,
+                (unsigned long long)s_partial, (unsigned long long)this_batch,
+                per_curve_ms, elapsed_s, remaining_s);
+    } else {
+        // Interactive terminal: in-place update, coloured (ANSI; colour is
+        // configurable via ecm.ini progress_color).
+        fprintf(stdout,
+                "\r%sGPU: [%s] %.1f%%  %llu, +%llu bits (~%.1f ms/curve)  elapsed %.1fs  remaining %.1fs%s",
+                ecm_log_progress_color_code(),
+                bar, pct,
+                (unsigned long long)s_partial, (unsigned long long)this_batch,
+                per_curve_ms, elapsed_s, remaining_s,
+                ecm_log_progress_color_reset());
+        fflush(stdout);
+    }
+}
+
+// How often to emit a full (newline-terminated) progress line when stdout is
+// redirected to a file/pipe. work_manager.ps1 tails the child's stdout file by
+// complete lines, so a `\r` in-place update would never be flushed to the log.
+static bool emit_progress_line(int n) {
+    return ((n < 3) ||
+            (n < 30 && n % 10 == 0) ||
+            (n < 500 && n % 100 == 0) ||
+            (n < 5000 && n % 1000 == 0) ||
+            (n % 10000 == 0));
+}
 
 
 // See cgbn_error_t enum (cgbn.h:39)
@@ -671,16 +758,6 @@ int process_results(mpz_t *factors, int *array_found,
 }
 
 
-static
-int print_nth_batch(int n)
-{
-  return ((n < 3) ||
-          (n < 30 && n % 10 == 0) ||
-          (n < 500 && n % 100 == 0) ||
-          (n < 5000 && n % 1000 == 0) ||
-          (n % 10000 == 0));
-}
-
 /**
  * Checkpoint structure containing state information
  */
@@ -907,7 +984,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       outputf (OUTPUT_ALWAYS, "GPU: Very Large B1! Check magnitute of B1.\n");
 
   if (s_num_bits >= 100000000)
-      outputf (OUTPUT_NORMAL, "GPU: Large B1, S = %'lu bits = %d MB\n",
+      outputf (OUTPUT_NORMAL, "GPU: Large B1, S = %lu bits = %d MB\n",
                s_num_bits, s_num_bits >> 23);
   assert( s_bits != NULL );
 
@@ -1474,38 +1551,27 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     }
   }
 
+  // ── Progress bar (ASCII, only shown on an interactive terminal) ───────
+  const bool show_progress = stdout_is_tty();
+  // ──────────────────────────────────────────────────────────────────────
+
   while (s_partial < s_num_bits) {
     /* decrease batch_size for final batch if needed */
-    batch_size = std::min(s_num_bits - s_partial, batch_size);
-
-    /* print ETA with lessing frequently, 5 early + 5 per 10s + 5 per 100s + every 1000s */
-    if (print_nth_batch (batches_complete)) {
-      outputf (OUTPUT_VERBOSE, "Computing %d bits/call, %lu/%lu (%.1f%%)",
-          batch_size, s_partial, s_num_bits, 100.0 * s_partial / s_num_bits);
-      if (batches_complete < 2 || *gputime < 1000) {
-        outputf (OUTPUT_VERBOSE, "\n");
-      } else {
-        float estimated_total = (*gputime) * ((float) s_num_bits) / s_partial;
-        float eta = estimated_total - (*gputime);
-        outputf (OUTPUT_VERBOSE, ", ETA %.f + %.f = %.f seconds (~%.f ms/curves)\n",
-                eta / 1000, *gputime / 1000, estimated_total / 1000,
-                estimated_total / curves);
-      }
-    }
+    uint64_t this_batch = std::min(s_num_bits - s_partial, batch_size);
 
     CUDA_CHECK(cudaEventRecord (batch_start));
 
     if (dump_file != NULL && dump_host != NULL) {
       CUDA_CHECK(cudaMemcpy(dump_host, gpu_data, data_size, cudaMemcpyDeviceToHost));
-      dump_curve_state_csv(dump_file, "begin", batches_complete, s_partial, batch_size,
+      dump_curve_state_csv(dump_file, "begin", batches_complete, s_partial, this_batch,
                            sigma, BITS, TPI, dump_host, curves, BITS / 32);
     }
 
     /* Call CUDA Kernel. */
     assert (kernel != NULL);
-    (*kernel)<<<BLOCK_COUNT, TPB>>>(report, s_num_bits, s_partial, batch_size, gpu_s_bits, gpu_data, curves, sigma, np0);
+    (*kernel)<<<BLOCK_COUNT, TPB>>>(report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma, np0);
 
-    s_partial += batch_size;
+    s_partial += this_batch;
     batches_complete++;
 
     /* error report uses managed memory, sync the device and check for cgbn errors */
@@ -1516,7 +1582,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
 
     if (dump_file != NULL && dump_host != NULL) {
       CUDA_CHECK(cudaMemcpy(dump_host, gpu_data, data_size, cudaMemcpyDeviceToHost));
-      dump_curve_state_csv(dump_file, "end", batches_complete, s_partial, batch_size,
+      dump_curve_state_csv(dump_file, "end", batches_complete, s_partial, this_batch,
                            sigma, BITS, TPI, dump_host, curves, BITS / 32);
     }
 
@@ -1524,6 +1590,27 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     CUDA_CHECK(cudaEventSynchronize (stop));
     cudaEventElapsedTime (&batch_time, batch_start, stop);
     cudaEventElapsedTime (gputime, global_start, stop);
+
+    // ── Update progress bar ───────────────────────────────────────────────
+    {
+        double pct =
+            (s_num_bits > 0u) ? (100.0 * (double)s_partial / (double)s_num_bits) : 0.0;
+        if (pct > 100.0) pct = 100.0;
+        double per_curve_ms = (curves > 0u) ? ((double)batch_time / (double)curves) : 0.0;
+        const bool final_batch = (s_partial >= s_num_bits);
+
+        if (show_progress) {
+            // Interactive terminal: live in-place update every batch.
+            print_progress(pct, s_partial, s_num_bits, this_batch, per_curve_ms,
+                           (double)batch_time, (double)*gputime, false);
+        } else if (emit_progress_line(batches_complete) || final_batch) {
+            // Redirected (work_manager log tailing): periodic full lines, and
+            // always the final batch so the log shows 100%.
+            print_progress(pct, s_partial, s_num_bits, this_batch, per_curve_ms,
+                           (double)batch_time, (double)*gputime, true);
+        }
+    }
+
     /* Adjust batch_size to aim for 100ms */
     if (batch_time < 80) {
       batch_size = 11*batch_size/10;
@@ -1553,6 +1640,12 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       save_checkpoint(ckpt_filename, &header, data, data_size);
       last_checkpoint_time = *gputime;
     }
+  }
+
+  // ── Mark progress bar complete ──────────────────────────────────────
+  if (show_progress) {
+      fprintf(stdout, "\n");
+      fflush(stdout);
   }
 
   // Copy data back from GPU memory
