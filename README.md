@@ -261,6 +261,24 @@ echo "(2^421-1)" | build_cuda_cmake\ecm_cuda.exe -v -d 0 -gpu -sigma 3:268526266
 
 > 默认 dev build 支持 N ≤ 1024 bit；更大位宽需 `-DECM_CUDA_FULL_BUILD=ON` 重新配置（编译时间显著增加）。
 
+### 队列管理器模式（工作队列 + `ecm.ini`）
+
+`ecm_cuda.exe` 除单次命令行模式外，还内置了一个**工作队列管理器**（对齐原 `work_manager.ps1` 的编排功能，无需外部脚本）：
+
+- **触发**：**无位置参数**（即命令行不带 `<B1>`）时进入队列模式；`-ini <path>` 可指定自定义 ini。
+- **配置**：读取 exe 目录下的 `ecm.ini`（`key = value`，`#` 注释）。首次运行缺失时会**自动生成一份带中英双语注释的默认模板**。
+- **工作队列**：逐行读取 `worktodo.txt`（`ECMSTAGE2` 格式），每行一个任务；成功后追加到 `worktodo.finished.txt` 并从 worktodo 移除；出错的行就地改写为 `# ERROR <原行>`（`finished` 只保留成功项）。
+- **任务行格式**（参考 `pipeline/ecm.py::to_stage2_line`）：
+  ```
+  ECMSTAGE2=[<aid>,]<k>,<b>,<n>,<c>,<save_name>,<B2>,<skip_curves>,<curves_to_run>[,"factors"]
+  ```
+  其中 `B1` 从 `save_name` 提取（`m{n}_{b1}.save`，如 `m8237_110e6.save` → B1=`110e6`），`N = (k*b^n+c)/(f1*f2*…)`；`B2`、`skip_curves` 解析后忽略（stage-1 专用）。
+- **日志**：所有输出带时间戳**追加**写入 `screen.log`（`log_file` 配置），并同时回显 stdout。
+- **同步**：启动时全量、每任务增量地把 `*.save` 同步到两个同步目录（`save_sync_dir_1/2`）。
+- **进度条**：ASCII 进度条，颜色由 `progress_color` 配置；`remaining` 用最近 50 个 batch 的平均速度估算。
+
+代码结构与开发指南见 [docs/DEV_ECM_CUDA_QUEUE_MANAGER.md](docs/DEV_ECM_CUDA_QUEUE_MANAGER.md)。
+
 ---
 
 ## Android
@@ -315,6 +333,7 @@ adb shell run-as com.example.ecm ls -la code_cache/opencl_cache/
 | 文档 | 简介 |
 |------|------|
 | [docs/DEBUG_PARAMETERS_GUIDE.md](docs/DEBUG_PARAMETERS_GUIDE.md) | `cgbn_ecm_stage1` / batch 参数、`gpu_ecm()` 调试输出 |
+| [docs/DEV_ECM_CUDA_QUEUE_MANAGER.md](docs/DEV_ECM_CUDA_QUEUE_MANAGER.md) | 队列管理器 + `ecm.ini` 代码结构与开发指南 |
 | [docs/README.lib](docs/README.lib) | `ecm_params` 结构与 `ecm_factor()` 返回值 |
 
 ### 算子分析

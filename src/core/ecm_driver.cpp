@@ -875,15 +875,15 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
         ecm_clear(params);
         return ECM_ERROR;
     }
-    const uint32_t lastsigma = firstsigma + curves - 1;
-
     mpz_t batch_d;
     mpz_init(batch_d);
     gpu_compute_batch_d(batch_d, firstsigma, N);
 
+    // B1/B2 are fixed for this run. The *actual* sigma is printed by the backend
+    // after it applies any checkpoint resume (the checkpoint may override the
+    // freshly-computed sigma), so it is not printed here.
     std::cout << "Using B1=" << B1 << ", B2=" << B2
-              << ", sigma=" << ECM_PARAM_BATCH_32BITS_D << ":" << firstsigma
-              << "-" << lastsigma << " (" << curves << " curves)" << std::endl;
+              << " (" << curves << " curves)" << std::endl;
 
     float gputime = 0.0f;
     const int ret = ecm_backend_stage1(factors, array_found, N, params->batch_s, curves,

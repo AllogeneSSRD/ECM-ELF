@@ -74,7 +74,7 @@ static bool stdout_is_tty() {
 }
 
 static void print_progress(double pct, uint64_t s_partial, uint64_t this_batch,
-                           double per_curve_ms, double elapsed_ms, double remaining_s,
+                           double per_curve_s, double elapsed_ms, double remaining_s,
                            bool newline) {
     const int bar_width = 40;
     int filled = (int)(bar_width * (pct / 100.0));
@@ -97,19 +97,19 @@ static void print_progress(double pct, uint64_t s_partial, uint64_t this_batch,
         // Redirected / log mode: a full timestamped line, mirrored to screen.log
         // via the outputf → ecm_ts_vfprintf path. No ANSI colour in the log.
         outputf(OUTPUT_ALWAYS,
-                "GPU: [%s] %.1f%%  %llu, +%llu bits (~%.1f ms/curve)  elapsed %.1fs  remaining %.1fs\n",
+                "GPU: [%s] %.1f%%  %llu, +%llu bits (~%.2f s/curve)  elapsed %.1fs  remaining %.1fs\n",
                 bar, pct,
                 (unsigned long long)s_partial, (unsigned long long)this_batch,
-                per_curve_ms, elapsed_s, remaining_s);
+                per_curve_s, elapsed_s, remaining_s);
     } else {
         // Interactive terminal: in-place update, coloured (ANSI; colour is
         // configurable via ecm.ini progress_color).
         fprintf(stdout,
-                "\r%sGPU: [%s] %.1f%%  %llu, +%llu bits (~%.1f ms/curve)  elapsed %.1fs  remaining %.1fs%s",
+                "\r%sGPU: [%s] %.1f%%  %llu, +%llu bits (~%.2f s/curve)  elapsed %.1fs  remaining %.1fs%s",
                 ecm_log_progress_color_code(),
                 bar, pct,
                 (unsigned long long)s_partial, (unsigned long long)this_batch,
-                per_curve_ms, elapsed_s, remaining_s,
+                per_curve_s, elapsed_s, remaining_s,
                 ecm_log_progress_color_reset());
         fflush(stdout);
     }
@@ -1492,6 +1492,12 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     outputf(OUTPUT_VERBOSE, "Checkpoint: restored BITS=%d, TPI=%d, BLOCK_COUNT=%lu\n", BITS, TPI, BLOCK_COUNT);
   }
 
+  // Print the *actual* sigma now that any checkpoint resume has been applied
+  // (the checkpoint may override the freshly-computed sigma from the driver).
+  outputf(OUTPUT_NORMAL, "GPU: sigma=%u (param %d, %u curves)%s\n",
+          sigma, ECM_PARAM_BATCH_32BITS_D, curves,
+          ckpt_loaded ? " [restored from checkpoint]" : " [computed]");
+
   /* np0 is -(N^-1 mod 2**32), used for montgomery representation */
   uint32_t np0 = find_np0(N);
 
@@ -1599,10 +1605,18 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
         }
     }
     double remaining_s = 0.0;
-    if (speed_count > 0 && s_num_bits > s_partial) {
+    double per_curve_s = 0.0;
+    if (speed_count > 0) {
         const double avg_speed = speed_sum / static_cast<double>(speed_count);
         if (avg_speed > 0.0) {
-            remaining_s = static_cast<double>(s_num_bits - s_partial) / avg_speed / 1000.0;
+            // Whole-task estimate (全程): s_num_bits at the current average speed.
+            const double total_ms = static_cast<double>(s_num_bits) / avg_speed;
+            per_curve_s = (curves > 0u)
+                              ? (total_ms / static_cast<double>(curves) / 1000.0)
+                              : 0.0;
+            if (s_num_bits > s_partial) {
+                remaining_s = static_cast<double>(s_num_bits - s_partial) / avg_speed / 1000.0;
+            }
         }
     }
 
@@ -1611,17 +1625,16 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
         double pct =
             (s_num_bits > 0u) ? (100.0 * (double)s_partial / (double)s_num_bits) : 0.0;
         if (pct > 100.0) pct = 100.0;
-        double per_curve_ms = (curves > 0u) ? ((double)batch_time / (double)curves) : 0.0;
         const bool final_batch = (s_partial >= s_num_bits);
 
         if (show_progress) {
             // Interactive terminal: live in-place update every batch.
-            print_progress(pct, s_partial, this_batch, per_curve_ms,
+            print_progress(pct, s_partial, this_batch, per_curve_s,
                            (double)*gputime, remaining_s, false);
         } else if (emit_progress_line(batches_complete) || final_batch) {
             // Redirected (work_manager log tailing): periodic full lines, and
             // always the final batch so the log shows 100%.
-            print_progress(pct, s_partial, this_batch, per_curve_ms,
+            print_progress(pct, s_partial, this_batch, per_curve_s,
                            (double)*gputime, remaining_s, true);
         }
     }

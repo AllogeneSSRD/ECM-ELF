@@ -885,6 +885,11 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
 
     const uint32_t tpi = ckpt_loaded ? ckpt_header.TPI : choose_effective_tpi(limbs);
 
+    // Print the *actual* sigma now that any checkpoint resume has been applied.
+    ecm_ts_fprintf(stdout, "GPU: sigma=%u (param %d, %u curves)%s\n",
+                   sigma, ECM_PARAM_BATCH_32BITS_D, curves,
+                   ckpt_loaded ? " [restored from checkpoint]" : " [computed]");
+
     const EcmAddSubPathDescriptor *add = nullptr;
     const EcmAddSubPathDescriptor *sub = nullptr;
     if (resolve_addsub_paths(gpu_add_path, gpu_sub_path, n_log2, limbs, &add, &sub) != 0) {
