@@ -73,9 +73,9 @@ static bool stdout_is_tty() {
 #endif
 }
 
-static void print_progress(double pct, uint64_t s_partial, uint64_t s_num_bits,
-                           uint64_t this_batch, double per_curve_ms,
-                           double batch_ms, double elapsed_ms, bool newline) {
+static void print_progress(double pct, uint64_t s_partial, uint64_t this_batch,
+                           double per_curve_ms, double elapsed_ms, double remaining_s,
+                           bool newline) {
     const int bar_width = 40;
     int filled = (int)(bar_width * (pct / 100.0));
     if (filled < 0) filled = 0;
@@ -92,19 +92,6 @@ static void print_progress(double pct, uint64_t s_partial, uint64_t s_num_bits,
     }
 
     const double elapsed_s = elapsed_ms / 1000.0;
-
-    // Remaining time from the *current* speed (bits per batch / batch time),
-    // not from elapsed-time extrapolation: the latter is wrong after a
-    // checkpoint resume, where s_partial already starts far from zero while the
-    // elapsed timer restarts at zero.
-    double remaining_s = 0.0;
-    if (this_batch > 0u && batch_ms > 0.0 && s_num_bits > s_partial) {
-        const double bits_per_ms = static_cast<double>(this_batch) / batch_ms;
-        if (bits_per_ms > 0.0) {
-            remaining_s =
-                static_cast<double>(s_num_bits - s_partial) / bits_per_ms / 1000.0;
-        }
-    }
 
     if (newline) {
         // Redirected / log mode: a full timestamped line, mirrored to screen.log
@@ -1513,9 +1500,9 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   CUDA_CHECK(cudaMalloc((void **)&gpu_data, data_size));
   CUDA_CHECK(cudaMemcpy(gpu_data, data, data_size, cudaMemcpyHostToDevice));
 
-  outputf (OUTPUT_VERBOSE,
-          "CGBN<%d, %d> running kernel<%d block x %d threads> input number is %d bits\n",
-          BITS, TPI, BLOCK_COUNT, TPB, n_log2);
+  outputf (OUTPUT_NORMAL,
+          "GPU: CGBN<%d, %d> kernel, N is %zu bits (%d blocks x %d threads)\n",
+          TPI, BITS, n_log2, BLOCK_COUNT, TPB);
 
   /* Start with small batches and increase till timing is ~100ms */
   uint64_t batch_size = 200;
@@ -1555,6 +1542,13 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   const bool show_progress = stdout_is_tty();
   // ──────────────────────────────────────────────────────────────────────
 
+  // Sliding window of recent per-batch speeds (bits/ms) for a stable ETA.
+  const size_t SPEED_WINDOW = 50;
+  double speed_ring[SPEED_WINDOW];
+  size_t speed_count = 0;
+  size_t speed_idx = 0;
+  double speed_sum = 0.0;
+
   while (s_partial < s_num_bits) {
     /* decrease batch_size for final batch if needed */
     uint64_t this_batch = std::min(s_num_bits - s_partial, batch_size);
@@ -1591,6 +1585,27 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     cudaEventElapsedTime (&batch_time, batch_start, stop);
     cudaEventElapsedTime (gputime, global_start, stop);
 
+    // ── Update recent-speed window + ETA ──────────────────────────────────
+    if (batch_time > 0.0f && this_batch > 0u) {
+        const double speed = static_cast<double>(this_batch) / static_cast<double>(batch_time);
+        if (speed_count < SPEED_WINDOW) {
+            speed_ring[speed_count++] = speed;
+            speed_sum += speed;
+        } else {
+            speed_sum -= speed_ring[speed_idx];
+            speed_ring[speed_idx] = speed;
+            speed_sum += speed;
+            speed_idx = (speed_idx + 1) % SPEED_WINDOW;
+        }
+    }
+    double remaining_s = 0.0;
+    if (speed_count > 0 && s_num_bits > s_partial) {
+        const double avg_speed = speed_sum / static_cast<double>(speed_count);
+        if (avg_speed > 0.0) {
+            remaining_s = static_cast<double>(s_num_bits - s_partial) / avg_speed / 1000.0;
+        }
+    }
+
     // ── Update progress bar ───────────────────────────────────────────────
     {
         double pct =
@@ -1601,13 +1616,13 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
 
         if (show_progress) {
             // Interactive terminal: live in-place update every batch.
-            print_progress(pct, s_partial, s_num_bits, this_batch, per_curve_ms,
-                           (double)batch_time, (double)*gputime, false);
+            print_progress(pct, s_partial, this_batch, per_curve_ms,
+                           (double)*gputime, remaining_s, false);
         } else if (emit_progress_line(batches_complete) || final_batch) {
             // Redirected (work_manager log tailing): periodic full lines, and
             // always the final batch so the log shows 100%.
-            print_progress(pct, s_partial, s_num_bits, this_batch, per_curve_ms,
-                           (double)batch_time, (double)*gputime, true);
+            print_progress(pct, s_partial, this_batch, per_curve_ms,
+                           (double)*gputime, remaining_s, true);
         }
     }
 
