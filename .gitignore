@@ -5,6 +5,7 @@ skills-lock.json
 .opencl_cache/
 .refactor/
 .vscode/
+.pdf-tools/
 logs/
 docs/ecm/
 test/bench
@@ -42,3 +43,7 @@ tools/ecm_report/*.db*
 tools/ecm_report/*.html
 tools/ecm_report/*.bat
 tools/ecm_report/*.png
+
+# ECM prob
+tools/ecm_prob/out
+tools/ecm_prob/data
