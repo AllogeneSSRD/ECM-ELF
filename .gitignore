@@ -28,6 +28,11 @@ release/
 # CGBN
 cgbn/
 
+# CPU edwards stage1 Z/2×Z/8
+ecm_edwards_cpu.obj
+src/cpu/*.dll
+src/cpu/*.exe
+
 # Android Studio apk
 Android/ECM/app/debug/
 Android/ECM/app/release/
