@@ -3,33 +3,38 @@
 Windows 可用的 ECM 参数化成功概率定量分析工具。分两阶段：
 
 - **阶段 A（预测）**：`rho.py` 精确移植 GMP-ECM `rho.c`（Dickman-ρ + `ECM_EXTRA_SMOOTHNESS`），
-  `estimates.py` 复刻论文 §9.3 的 5 类朴素估计。
+  `model.py` 在其上叠加"曲线 → 有效除子 D → 成功率/期望曲线数"的模型层。
 - **阶段 B（经验）**：`ecmath.py` 纯 Python 实现 Edwards(a=1) / Montgomery(XZ) / Weierstrass 群律，
-  对穷举素数集做 stage-1 命中测量（`[s]P = identity (mod p)`），`calibrate.py` 反推有效除子 D。
+  对穷举素数集做 stage-1 命中测量，`model.py` 反推有效除子 D。
+
+代码分三层：**库（6 个，可导入，无 CLI）** / **用户 CLI（3 个，`ecm_` 前缀）** / **校验（`tests/`）**。
 
 ## 目录结构
 
 ```
 ecm_prob/
-  rho.py            Dickman-ρ / ecmprob 移植（验证：ρ(u)=28.1894%, u^-u=22.8824% 与论文§9.4一致）
-  estimates.py      论文 §9.3 五类朴素估计（验证：20 项与 §9.4 精确一致）
-  curves.py         曲线清单：Montgomery param0/1/2/3 + Edwards 4条 + p-1/p+1
-  ecmath.py         纯 Python 点运算 + [s]P 标量乘 + 身份判定
-  gen_primes.py     primesieve 生成/缓存 15–20 bit 穷举素数集 + manifest
-  measure.py        经验命中测量
-  sweep.py          跨位宽批量测量（15–20 穷举，21–25 每 bit 65536 固定种子样本）
-  calibrate.py      拟合有效除子 D
-  report.py         汇总输出（markdown + CSV）
-  plot.py           绘图（逐 bit 柱状图 + 成功率/bit + D_eff/bit 折线）
-  predict.py        成功率预测（经验 D_eff / 理论 D / 扭子群 D 三口径，任意 bit/B1）
-  params.py         参数四元组 {bit,B1,N,p} 反解 + GMP-ECM 推荐表复现
-  test_golden.py    论文 §9.1 黄金数字对拍
-  cross_check.py    与 PARI/GP 的点阶交叉校验
-  gp_check.gp       gp 交叉校验脚本
-  bench.py          每素数耗时基准
-  d_eff_table.py    打印 D_eff 跨位宽表（点口径 + 素数集平均口径）
-  data/primes/      bits{b}.bin + manifest.json
-  out/              measure*.json / report.md / summary.csv
+  # ---- 库（可导入，无 CLI）----
+  rho.py            Dickman-ρ + stage1/stage2 概率数学核心（唯一底层模型来源）
+  model.py          模型层：有效除子 D 三口径 + 预测 + 四元组反解 + D_eff 拟合 + GMP 推荐表
+  curves.py         曲线清单：Montgomery param0/1/2/3 + Edwards 4 条 + p-1/p+1
+  ecmath.py         纯 Python 点运算（Edwards/Montgomery/Weierstrass）+ [s]P 标量乘
+  estimates.py      论文 §9.3 五类朴素估计
+  data.py           素数集生成/缓存/加载 + 经验命中测量
+  # ---- 用户 CLI ----
+  ecm_prob.py       预测 / 四元组反解 / GMP 推荐表（subcommand: predict | solve | gmp-table）
+  ecm_sweep.py      素数生成 / 经验扫掠 / 汇总报告（subcommand: primes | sweep | report）
+  ecm_plot.py       绘图（subcommand: empirical | predict）
+  ecm_cost.py       stage-1 成本（点运算层 + 域运算层，调 cost_engine.exe）
+  # ---- 成本模型 ----
+  cost_engine.cpp   C++ PRAC 引擎（uint64 + 筛，无 GMP；cl /O2 编译 -> cost_engine.exe）
+  COST_MODEL.md     成本模型文档（PRAC/梯形/NAF 算法 + 四方案对照）
+  # ---- 校验 ----
+  tests/test_golden.py   论文 §9.1 黄金数字对拍
+  tests/cross_check.py   与 PARI/GP 的点阶交叉校验
+  tests/gp_check.gp      gp 交叉校验脚本
+  tests/bench.py         每素数耗时基准
+  data/primes/       bits{b}.bin + manifest.json
+  out/               measure*.json / report.md / summary.csv / plots/
 ```
 
 ## 快速开始
@@ -37,19 +42,29 @@ ecm_prob/
 ```powershell
 cd D:\code\MPA-OpenCl\tools\ecm_prob
 
-python gen_primes.py            # 生成 15–25 bit 穷举素数（幂等，sha256 缓存）
-python test_golden.py           # 对拍论文 §9.1 四条 Edwards 曲线（20-bit/B1=256）
-python estimates.py             # 对拍论文 §9.4 五类估计
-python report.py 20 256         # 端到端：测量全部曲线 + 校准 D + 输出 out/report.md
-python sweep.py                 # 跨位宽批量测量（15–20 穷举，21–25 采样 65536），B1=256
-python plot.py                  # 绘图：out/plots/{bars_per_bit,success_vs_bit,d_eff_vs_bit}.png
-python predict.py --all 25 256  # 成功率预测表（全部曲线，任意 bit/B1）
-python predict.py suyama_s10 30 1024   # 单条曲线预测
-python params.py --bit 30 --B1 1358 --curves 2    # 四元组任意3个解第4个
-python params.py --gmp-table                       # GMP-ECM 推荐表(bit→B1→curves)
+# 校验
+python tests/test_golden.py        # 对拍论文 §9.1 四条 Edwards 曲线（20-bit/B1=256）
+python estimates.py                # 对拍论文 §9.4 五类估计
+
+# 经验阶段（生成素数 -> 扫掠 -> 汇总/绘图）
+python ecm_sweep.py primes         # 生成 15–25 bit 穷举素数（幂等，sha256 缓存）
+python ecm_sweep.py sweep          # 跨位宽测量（15–20 穷举，21–25 采样 65536），B1=256
+python ecm_sweep.py report 20 256  # 生成 out/report.md + summary.csv
+python ecm_plot.py empirical       # 经验图：bars_per_bit / emp_success_vs_bit / emp_d_eff_vs_bit
+
+# 预测阶段
+python ecm_prob.py predict --all --bit 25 --B1 256            # 全部曲线表（stage1 vs stage1+stage2）
+python ecm_prob.py predict --curve suyama_s10 --bit 30 --B1 1024 --B2 25600
+python ecm_prob.py solve --bit 130 --B1 44e6 --curves 960 --curve param3_s10
+python ecm_prob.py solve --bit 130 --curves 960              # 反解 B1
+python ecm_prob.py gmp-table 30 35 40                         # GMP-ECM 推荐表
+python ecm_plot.py predict --B1 256 --bit 40                  # 预测图（stage1 vs stage1+stage2）
+
+# 成本模型（stage-1 运算量）
+python ecm_cost.py --B1 1000000 --curve suyama_s10   # 点运算层 + 域运算层(M/S/A/Sub/I/D)
 ```
 
-依赖：仅 Python 标准库（`numpy`/`matplotlib` 可选，用于后续绘图）。
+依赖：仅 Python 标准库 + `numpy`/`matplotlib`（绘图）。
 外部工具：`primesieve.exe`（`.refactor/primesieve-12.15-win-x64`）、`gp.exe`（`D:\AppData\Pari64-2-17-3`，可选交叉校验）。
 
 ## 方法论
@@ -58,7 +73,7 @@ python params.py --gmp-table                       # GMP-ECM 推荐表(bit→B1�
 其中 `s = lcm(1..B1) = ∏_{p≤B1} p^{⌊log_p B1⌋}`。等价于 `ord(P mod p)` 为 B1-powersmooth
 （论文 §9 口径，仅 stage 1）。
 
-**有效除子 D_eff**：`calibrate.py` 反解唯一的 `D = exp(δ)`，使 GMP-ECM 的 stage-1 模型
+**有效除子 D_eff**：`model.py` 反解唯一的 `D = exp(δ)`，使 GMP-ECM 的 stage-1 模型
 `stage1_prob(B1, p_ref, δ) = ρ_local(log(p_ref/D)/log B1)` 等于经验成功率
 （`p_ref = 2^(bit−0.5)`），并输出 `extra = D/T`（Galois 额外光滑性因子）。
 归一化方法见下节。
@@ -108,6 +123,44 @@ local-ρ 模型"口径，用于**跨曲线比较**；GMP-ECM 的 `3.134` 按"sta
 期望曲线数"整体标定。两者都是有效除子但基线不同；跨曲线的**相对值**（Edwards Z/12≈25.8、
 Suyama≈20.8、param3≈6.4）在两种口径下都稳健。
 
+## ecm_prob.py solve 参数反解语义
+
+`ecm_prob.py solve` 把 `{bit, B1, N(曲线数), p(单曲线概率)}` 按 **正向 / 反向** 两类语义处理：
+
+- **正向**（`--bit` 与 `--B1` 都给）：`p = f(bit, B1)` 由 rho 模型决定；`--curves` 是"跑多少条"的输入，直接算该配置的 miss。
+- **反向**（`--bit` 或 `--B1` 缺其一）：用 `--prob`，或 `--curves` 经 `p = 1/N`（固定标准 miss = e⁻¹ = 36.8%），反解缺的 `B1`/`bit`。
+
+| 输入 | 语义 | 输出 |
+|---|---|---|
+| `--bit --B1` | 正向，标准 | `p=f(bit,B1)`、`N=1/p`、`miss=36.8%` |
+| `--bit --B1 --curves` | 正向，实际 | `p` + `miss=(1-p)^N` + 36.8% 参考行 |
+| `--bit --B1 --prob` | 正向 | `p`（模型）；若 `prob≠p` 则注一行 |
+| `--bit --curves` | 反向 | `B1`（`p=1/N`，标准 miss=36.8%） |
+| `--B1 --curves` | 反向 | `bit`（`p=1/N`，标准 miss=36.8%） |
+| `--bit --prob` | 反向 | `B1`（`p=prob`，标准 miss=36.8%） |
+| `--B1 --prob` | 反向 | `bit`（`p=prob`，标准 miss=36.8%） |
+
+示例（正向实际 miss，含 stage2）：
+
+```powershell
+python ecm_prob.py solve --curve param3_s10 --bit 130 --B1 44000000 --curves 960
+D = 6.41, B2=100*B1
+p = f(bit=130, B1=4.4e+07) = 0.1824%
+N = 960 curves -> miss = (1-p)^N = 17.3287%
+   (ref: miss = e^-1 = 36.8%  needs N = 1/p = 548.2 curves)
+```
+
+示例（反向求 bit，标准 miss）：
+
+```powershell
+python ecm_prob.py solve --B1 44000000 --curves 960
+D = 20.90, B2=100*B1
+bit = 120.90
+   (standard miss = e^-1 = 36.8%,  p = 0.1042%,  N = 960.0)
+```
+
+核心一句话：**正向时 `p` 由模型决定、`curves` 是输入（算 miss）；反向时 `curves`/`prob` 是目标（`p=1/N` 固定标准 miss=36.8%），反解 `B1`/`bit`。**
+
 ## 数据来源（provenance）
 
 - 素数集：**本地生成**（`primesieve 12.15`），每 bit 一组穷举 `[2^(b−1), 2^b−1]`，
@@ -123,7 +176,7 @@ Suyama≈20.8、param3≈6.4）在两种口径下都稳健。
 |---|---|
 | `rho(u)=28.1894%`, `u^-u=22.8824%`（§9.4） | ✅ 精确一致 |
 | 5 类估计 × 4 扭子群（§9.4 共 20 项） | ✅ 精确一致 |
-| Edwards 4 曲线点阶 vs gp（`cross_check.py`） | ✅ 4/4 一致 |
+| Edwards 4 曲线点阶 vs gp（`tests/cross_check.py`） | ✅ 4/4 一致 |
 | Edwards §9.1 命中数 | 差 0.16%（见下） |
 | Montgomery 2P vs 符号公式 `(9 : 64d+8)` | ✅ 一致 |
 
@@ -132,7 +185,7 @@ Suyama≈20.8、param3≈6.4）在两种口径下都稳健。
 本工具测得 20-bit/B1=256 的严格 B1-powersmooth 命中数为 **Z/12→12404**、Z/2×Z/8→12620、
 Z/2×Z/4→10608、Z/4→9054；论文 §9.1 为 12467 / ~12689 / ~10619 / ~9068。
 
-两者相差 ~0.16%，且系统性地本工具偏低。经 `cross_check.py` 与 gp 点阶逐例核对，
+两者相差 ~0.16%，且系统性地本工具偏低。经 `tests/cross_check.py` 与 gp 点阶逐例核对，
 本工具的 `[s]P=identity` 判定是**数学上严格正确**的（ord(P) 为 B1-powersmooth）。
 论文的 EECM-MPFQ 实测数字略高，是因为其**窗口化加法链在中间倍数撞上 2-挠点时
 会"提前命中"**（inverted/扩展坐标中除零即报因子），这部分素数满足

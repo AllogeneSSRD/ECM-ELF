@@ -47,3 +47,5 @@ tools/ecm_report/*.png
 # ECM prob
 tools/ecm_prob/out
 tools/ecm_prob/data
+tools/ecm_prob/*.exe
+

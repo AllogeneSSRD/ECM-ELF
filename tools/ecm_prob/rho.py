@@ -323,6 +323,18 @@ def stage1_prob(B1: float, N: float, delta: float = ECM_EXTRA_SMOOTHNESS) -> flo
     return _table.local(math.log(effN) / math.log(B1), effN)
 
 
+def stage_prob(B1: float, B2: float, N: float, D: float,
+               nr: float = 0.0, S: int = 0) -> float:
+    """Stage-1 + stage-2 success probability for effective divisor D.
+
+    D is the effective divisor (D = exp(delta)); B2 is the stage-2 bound
+    (B2 <= B1 collapses to stage-1 only).  nr/S control the Brent-Suyama
+    extension (nr = #random points, S = Dickson/power degree); defaults 0/0
+    disable it.
+    """
+    return prob(B1, B2, N, nr, S, math.log(D))
+
+
 def rho(u: float) -> float:
     """Standard Dickman rho function (used by the paper's 'rho(u)' estimate)."""
     return _table.rho(u)
