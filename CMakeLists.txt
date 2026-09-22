@@ -359,9 +359,13 @@ if(ECM_ENABLE_CUDA)
         src/core/ecm_worktodo.cpp
         src/opencl_ecm_log.cpp
         src/opencl_ecm_runtime_config.cpp
-        # CUDA backend + CGBN stage 1 kernel
+        # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu
+        kernels/cuda/cgbn_stage1_kernels_tpi4.cu
+        kernels/cuda/cgbn_stage1_kernels_tpi8.cu
+        kernels/cuda/cgbn_stage1_kernels_tpi16.cu
+        kernels/cuda/cgbn_stage1_kernels_tpi32.cu
     )
 
     target_include_directories(ecm_cuda PRIVATE

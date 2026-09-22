@@ -37,6 +37,8 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include <cgbn.h>
 #include <cuda.h>
 
+#include "cgbn_stage1_kernel.h"  // device templates + per-TPI dispatch seam
+
 #include "cudacommon.h"
 
 // progress-bar colour helpers (ANSI code / reset)
@@ -127,32 +129,6 @@ static bool emit_progress_line(int n) {
 }
 
 
-// See cgbn_error_t enum (cgbn.h:39)
-#define cgbn_normalized_error ((cgbn_error_t) 14)
-#define cgbn_positive_overflow ((cgbn_error_t) 15)
-#define cgbn_negative_overflow ((cgbn_error_t) 16)
-
-// Seems to adds very small overhead (1-10%)
-#define VERIFY_NORMALIZED 0
-// Adds even less overhead (<1%)
-#define CHECK_ERROR 1
-
-// Tested with check_gpuecm.sage
-#define CARRY_BITS 6
-
-// Can dramatically change compile time
-#if 1
-    #define FORCE_INLINE __forceinline__
-#else
-    #define FORCE_INLINE
-#endif
-
-// MPA-OpenCl port: dev build (kernels up to 1024 bits) is the default. Define
-// ECM_CUDA_FULL_BUILD at compile time to build the full kernel set instead.
-#ifndef ECM_CUDA_FULL_BUILD
-#define IS_DEV_BUILD
-#endif
-
 // Checkpoint configuration
 #define CHECKPOINT_MAGIC 0x45555047  // EPUG -> "GPUE" in hex (GPU ECM)
 // 小端格式，magic number 0x45555047 在内存中表示为 "GPUE"，用于验证 checkpoint 文件的正确性
@@ -205,347 +181,6 @@ void from_mpz(const mpz_t s, uint32_t *x, uint32_t count) {
     x[words++]=0;
 }
 
-
-
-// ---------------------------------------------------------------- //
-
-// The CGBN context uses the following three parameters:
-//   TBP             - threads per block (zero means to use the blockDim.x)
-//   MAX_ROTATION    - must be small power of 2, imperically, 4 works well
-//   CONSTANT_TIME   - require constant time algorithms (currently, constant time algorithms are not available)
-
-// Locally it will also be helpful to have several parameters:
-//   TPI             - threads per instance
-//   BITS            - number of bits per instance
-
-/* TODO test how this changes gpu_throughput_test */
-/* NOTE: >= 512 may not be supported for > 2048 bit kernels */
-const uint32_t TPB_DEFAULT = 256;
-
-template<uint32_t tpi, uint32_t bits>
-class cgbn_params_t {
-  public:
-  // parameters used by the CGBN context
-  static const uint32_t TPB=TPB_DEFAULT;           // Reasonable default
-  static const uint32_t MAX_ROTATION=4;            // good default value
-  static const uint32_t SHM_LIMIT=0;               // no shared mem available
-  // MPA-OpenCl port: CONSTANT_TIME is required by CGBN's cgbn_context_t on all
-  // compilers (was previously mis-guarded behind #ifndef _MSC_VER).
-  static const bool     CONSTANT_TIME=false;       // not implemented
-
-  // parameters used locally in the application
-  static const uint32_t TPI=tpi;                   // threads per instance
-  static const uint32_t BITS=bits;                 // instance size
-};
-
-
-template<class params>
-class curve_t {
-  public:
-
-  typedef cgbn_context_t<params::TPI, params>   context_t;
-  typedef cgbn_env_t<context_t, params::BITS>   env_t;
-  typedef typename env_t::cgbn_t                bn_t;
-  typedef cgbn_mem_t<params::BITS>              mem_t;
-
-  context_t _context;
-  env_t     _env;
-  int32_t   _instance; // which curve instance is this
-
-  // Constructor
-  __device__ FORCE_INLINE curve_t(cgbn_monitor_t monitor, cgbn_error_report_t *report, int32_t instance) :
-      _context(monitor, report, (uint32_t)instance), _env(_context), _instance(instance) {}
-
-  // Verify 0 <= r < modulus
-  __device__ FORCE_INLINE void assert_normalized(bn_t &r, const bn_t &modulus) {
-    //if (VERIFY_NORMALIZED && _context.check_errors())
-    if (VERIFY_NORMALIZED && CHECK_ERROR) {
-
-        // Negative overflow
-        if (cgbn_extract_bits_ui32(_env, r, params::BITS-1, 1)) {
-            _context.report_error(cgbn_negative_overflow);
-        }
-        // Positive overflow
-        if (cgbn_compare(_env, r, modulus) >= 0) {
-            _context.report_error(cgbn_positive_overflow);
-        }
-    }
-  }
-
-  // Normalize after addition
-  __device__ FORCE_INLINE void normalize_addition(bn_t &r, const bn_t &modulus) {
-      if (cgbn_compare(_env, r, modulus) >= 0) {
-          cgbn_sub(_env, r, r, modulus);
-      }
-  }
-
-  // Normalize after subtraction (handled instead by checking carry)
-  /*
-  __device__ FORCE_INLINE void normalize_subtraction(bn_t &r, const bn_t &modulus) {
-      if (cgbn_extract_bits_ui32(_env, r, params::BITS-1, 1)) {
-          cgbn_add(_env, r, r, modulus);
-      }
-  }
-  */
-
-  /**
-   * Calculate (r * m) / 2^32 mod modulus
-   *
-   * This removes a factor of 2^32 which is not present in m.
-   * Otherwise m (really d) needs to be passed as a bigint not a uint32
-   */
-  __device__ FORCE_INLINE void special_mult_ui32(bn_t &r, uint32_t m, const bn_t &modulus, uint32_t np0) {
-    //uint32_t thread_i = (blockIdx.x*blockDim.x + threadIdx.x)%params::TPI;
-    bn_t temp;
-
-    uint32_t carry_t1 = cgbn_mul_ui32(_env, r, r, m);
-    uint32_t t1_0 = cgbn_extract_bits_ui32(_env, r, 0, 32);
-    uint32_t q = t1_0 * np0;
-    uint32_t carry_t2 = cgbn_mul_ui32(_env, temp, modulus, q);
-
-    // Can I call dshift_right(1) directly?
-    cgbn_shift_right(_env, r, r, 32);
-    cgbn_shift_right(_env, temp, temp, 32);
-    // Add back overflow carry
-    cgbn_insert_bits_ui32(_env, r, r, params::BITS-32, 32, carry_t1);
-    cgbn_insert_bits_ui32(_env, temp, temp, params::BITS-32, 32, carry_t2);
-
-    if (VERIFY_NORMALIZED) {
-        // (uint32 * X) >> 32 is always less than X
-        assert_normalized(r, modulus);
-        assert_normalized(temp, modulus);
-    }
-
-    // Can't overflow because of CARRY_BITS
-    int32_t carry_q = cgbn_add(_env, r, r, temp);
-    carry_q += cgbn_add_ui32(_env, r, r, t1_0 != 0); // add 1
-
-    if (carry_q > 0) {
-        // This should never happen,
-        // if CHECK_ERROR, no need for the conditional call to cgbn_sub
-        if (CHECK_ERROR) {
-            _context.report_error(cgbn_positive_overflow);
-        } else {
-            cgbn_sub(_env, r, r, modulus);
-        }
-    }
-
-    // 0 <= r, temp < modulus => r + temp + 1 < 2*modulus
-    if (cgbn_compare(_env, r, modulus) >= 0) {
-        cgbn_sub(_env, r, r, modulus);
-    }
-  }
-
-  /**
-   * Compute simultaneously
-   * (q : u) <- [2](q : u)
-   * (w : v) <- (q : u) + (w : v)
-   * A second implementation previously existed in cudakernel_default.cu
-   * See dup_add_batch1 in batch.c
-   */
-  __device__ FORCE_INLINE void double_add_v2(
-          bn_t &q, bn_t &u,
-          bn_t &w, bn_t &v,
-          uint32_t d,
-          const bn_t &modulus,
-          const uint32_t np0) {
-    // q = xA = aX
-    // u = zA = aZ
-    // w = xB = bX
-    // v = zB = bZ
-
-    /* Doesn't seem to be a large cost to using many extra variables */
-    bn_t t, CB, DA, AA, BB, K, dK;
-
-    /* Can maybe use one more bit if cgbn_add subtracts when carry happens */
-    /* Might be nice to add a macro that verifies no carry out of cgbn_add */
-
-    // Is there anything interesting like only one of these can overflow?
-    cgbn_add(_env, t, v, w); // t = (bZ + bX)
-    normalize_addition(t, modulus);
-    if (cgbn_sub(_env, v, v, w)) // v = (bZ - bX)
-        cgbn_add(_env, v, v, modulus);
-
-
-    cgbn_add(_env, w, u, q); // w = (aZ + aX)
-    normalize_addition(w, modulus);
-    if (cgbn_sub(_env, u, u, q)) // u = (aZ - aX)
-        cgbn_add(_env, u, u, modulus);
-    if (VERIFY_NORMALIZED) {
-        assert_normalized(t, modulus);
-        assert_normalized(v, modulus);
-        assert_normalized(w, modulus);
-        assert_normalized(u, modulus);
-    }
-
-    cgbn_mont_mul(_env, CB, t, u, modulus, np0); // C*B
-        normalize_addition(CB, modulus);
-    cgbn_mont_mul(_env, DA, v, w, modulus, np0); // D*A
-        normalize_addition(DA, modulus);
-
-    /* Roughly 40% of time is spent in these two calls */
-    cgbn_mont_sqr(_env, AA, w, modulus, np0);    // AA
-    cgbn_mont_sqr(_env, BB, u, modulus, np0);    // BB
-    normalize_addition(AA, modulus);
-    normalize_addition(BB, modulus);
-    if (VERIFY_NORMALIZED) {
-        assert_normalized(CB, modulus);
-        assert_normalized(DA, modulus);
-        assert_normalized(AA, modulus);
-        assert_normalized(BB, modulus);
-    }
-
-    // q = aX is finalized
-    cgbn_mont_mul(_env, q, AA, BB, modulus, np0); // AA*BB
-    normalize_addition(q, modulus);
-        assert_normalized(q, modulus);
-
-    if (cgbn_sub(_env, K, AA, BB)) // K = AA-BB
-        cgbn_add(_env, K, K, modulus);
-
-    // By definition of d = (sigma / 2^32) % MODN
-    // K = k*R
-    // dK = d*k*R = (K * R * sigma) >> 32
-    cgbn_set(_env, dK, K);
-    special_mult_ui32(dK, d, modulus, np0); // dK = K*d
-        assert_normalized(dK, modulus);
-
-    cgbn_add(_env, u, BB, dK); // BB + dK
-    normalize_addition(u, modulus);
-    if (VERIFY_NORMALIZED) {
-        assert_normalized(K, modulus);
-        assert_normalized(dK, modulus);
-        assert_normalized(u, modulus);
-    }
-
-    // u = aZ is finalized
-    cgbn_mont_mul(_env, u, K, u, modulus, np0); // K(BB+dK)
-    normalize_addition(u, modulus);
-        assert_normalized(u, modulus);
-
-    cgbn_add(_env, w, DA, CB); // DA + CB
-    normalize_addition(w, modulus);
-    if (cgbn_sub(_env, v, DA, CB)) // DA - CB
-        cgbn_add(_env, v, v, modulus);
-    if (VERIFY_NORMALIZED) {
-        assert_normalized(w, modulus);
-        assert_normalized(v, modulus);
-    }
-
-    // w = bX is finalized
-    cgbn_mont_sqr(_env, w, w, modulus, np0); // (DA+CB)^2 mod N
-    normalize_addition(w, modulus);
-        assert_normalized(w, modulus);
-
-    cgbn_mont_sqr(_env, v, v, modulus, np0); // (DA-CB)^2 mod N
-    normalize_addition(v, modulus);
-        assert_normalized(v, modulus);
-
-    // v = bZ is finalized
-    cgbn_shift_left(_env, v, v, 1); // double
-    normalize_addition(v, modulus);
-        assert_normalized(v, modulus);
-  }
-};
-
-
-/**
- * Double-and-add, index decreasing algorithm.
- */
-template<class params>
-__global__ void kernel_double_add(
-        cgbn_error_report_t *report,
-        uint64_t s_bits,
-        uint64_t s_bits_start,
-        uint64_t s_bits_interval,
-        uint32_t *gpu_s_bits,
-        uint32_t *data,
-        uint32_t count,
-        uint32_t sigma_0,
-        uint32_t np0
-        ) {
-  // decode an instance_i number from the blockIdx and threadIdx
-  int32_t instance_i = (blockIdx.x*blockDim.x + threadIdx.x)/params::TPI;
-  if(instance_i >= count)
-    return;
-
-  /* Cast uint32_t array to mem_t */
-  typename curve_t<params>::mem_t *data_cast = (typename curve_t<params>::mem_t*) data;
-
-  cgbn_monitor_t monitor = CHECK_ERROR ? cgbn_report_monitor : cgbn_no_checks;
-
-  curve_t<params> curve(monitor, report, instance_i);
-  typename curve_t<params>::bn_t  aX, aZ, bX, bZ, modulus;
-
-  { // Setup
-      cgbn_load(curve._env, modulus, &data_cast[5*instance_i+0]);
-      cgbn_load(curve._env, aX, &data_cast[5*instance_i+1]);
-      cgbn_load(curve._env, aZ, &data_cast[5*instance_i+2]);
-      cgbn_load(curve._env, bX, &data_cast[5*instance_i+3]);
-      cgbn_load(curve._env, bZ, &data_cast[5*instance_i+4]);
-
-      /* Convert points to mont, has a miniscule bit of overhead with batching. */
-      uint32_t np0_test = cgbn_bn2mont(curve._env, aX, aX, modulus);
-      assert(np0 == np0_test);
-
-      cgbn_bn2mont(curve._env, aZ, aZ, modulus);
-      cgbn_bn2mont(curve._env, bX, bX, modulus);
-      cgbn_bn2mont(curve._env, bZ, bZ, modulus);
-
-      {
-        curve.assert_normalized(aX, modulus);
-        curve.assert_normalized(aZ, modulus);
-        curve.assert_normalized(bX, modulus);
-        curve.assert_normalized(bZ, modulus);
-      }
-  }
-
-  /* Initially
-     P_a = (aX, aZ) contains P
-     P_b = (bX, bZ) contains 2P */
-
-  // d = (sigma / 2^32) mod N BUT 2^32 handled by special_mult_ui32
-  uint32_t d = sigma_0 + instance_i;
-
-  int swapped = 0;
-  for (uint64_t b = s_bits_start; b < s_bits_start + s_bits_interval; b++) {
-    /* Process bits from MSB to LSB, last index to first index
-     * b counts from 0 to s_num_bits */
-    uint64_t nth = s_bits - 1 - b;
-
-    int bit = (gpu_s_bits[nth/32] >> (nth&31)) & 1;
-    if (bit != swapped) {
-        swapped = !swapped;
-        cgbn_swap(curve._env, aX, bX);
-        cgbn_swap(curve._env, aZ, bZ);
-    }
-    curve.double_add_v2(aX, aZ, bX, bZ, d, modulus, np0);
-  }
-
-  if (swapped) {
-    cgbn_swap(curve._env, aX, bX);
-    cgbn_swap(curve._env, aZ, bZ);
-  }
-
-  { // Final output
-    // Convert everything back to bn
-    cgbn_mont2bn(curve._env, aX, aX, modulus, np0);
-    cgbn_mont2bn(curve._env, aZ, aZ, modulus, np0);
-    cgbn_mont2bn(curve._env, bX, bX, modulus, np0);
-    cgbn_mont2bn(curve._env, bZ, bZ, modulus, np0);
-
-    {
-      curve.assert_normalized(aX, modulus);
-      curve.assert_normalized(aZ, modulus);
-      curve.assert_normalized(bX, modulus);
-      curve.assert_normalized(bZ, modulus);
-    }
-    cgbn_store(curve._env, &data_cast[5*instance_i+1], aX);
-    cgbn_store(curve._env, &data_cast[5*instance_i+2], aZ);
-    cgbn_store(curve._env, &data_cast[5*instance_i+3], bX);
-    cgbn_store(curve._env, &data_cast[5*instance_i+4], bZ);
-  }
-}
 
 
 static
@@ -955,6 +590,19 @@ void dump_curve_state_csv(FILE *f,
   fflush(f);
 }
 
+// Resolve a kernel BITS to its instantiated __global__ function pointer (and
+// TPI) by consulting the per-TPI dispatch TUs in order.
+static cgbn_stage1_kernel_fn cgbn_stage1_kernel_dispatch(uint32_t BITS, uint32_t *TPI_out) {
+    cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_tpi4(BITS, TPI_out);
+    if (k != nullptr) return k;
+    k = cgbn_stage1_kernel_tpi8(BITS, TPI_out);
+    if (k != nullptr) return k;
+    k = cgbn_stage1_kernel_tpi16(BITS, TPI_out);
+    if (k != nullptr) return k;
+    k = cgbn_stage1_kernel_tpi32(BITS, TPI_out);
+    return k;
+}
+
 int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
              uint32_t curves, uint32_t *sigma_ptr,
@@ -1033,13 +681,6 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
    */
   /** TODO: try with const vector for BITs/TPI, see if compiler is happy */
   std::vector<uint32_t> available_kernels;
-  typedef cgbn_params_t<4, 128>   cgbn_params_128;
-  typedef cgbn_params_t<4, 192>   cgbn_params_192;
-  typedef cgbn_params_t<4, 256>   cgbn_params_256;
-  typedef cgbn_params_t<4, 384>   cgbn_params_384;
-  typedef cgbn_params_t<4, 512>   cgbn_params_small;
-  typedef cgbn_params_t<8, 768>   cgbn_params_768;
-  typedef cgbn_params_t<8, 1024>  cgbn_params_medium;
   available_kernels.push_back((uint32_t)cgbn_params_128::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_192::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_256::BITS);
@@ -1061,72 +702,44 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
    * time and binary size. A few reasonable sizes are included and a verbose
    * warning is printed when a particular N might benefit from a custom sized
    * kernel.
-   * 
+   *
    * BITS规则: 必须是32的倍数，建议间隔256~512
    * TPI规则: N>512用8, N>2048用16, N>8192用32
    */
 
   // TPI=8 kernels (for 512-2048 bits)
-  typedef cgbn_params_t<8, 1280>  cgbn_params_1280;
-  typedef cgbn_params_t<8, 1536>  cgbn_params_1536;
-  typedef cgbn_params_t<8, 1792>  cgbn_params_1792;
-  typedef cgbn_params_t<8, 2048>  cgbn_params_2048;
   available_kernels.push_back((uint32_t)cgbn_params_1280::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_1536::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_1792::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_2048::BITS);
-  
-  // TPI=16 kernels (for 2560-8192 bits)
-  typedef cgbn_params_t<16, 2560> cgbn_params_2560;
-  typedef cgbn_params_t<16, 3072> cgbn_params_3072;
-  typedef cgbn_params_t<16, 3584> cgbn_params_3584;
-  typedef cgbn_params_t<16, 4096> cgbn_params_4096;
-  typedef cgbn_params_t<16, 4608> cgbn_params_4608;
-  typedef cgbn_params_t<16, 5120> cgbn_params_5120;
-  typedef cgbn_params_t<16, 5632> cgbn_params_5632;
-  typedef cgbn_params_t<16, 6144> cgbn_params_6144;
-  typedef cgbn_params_t<16, 6656> cgbn_params_6656;
-  typedef cgbn_params_t<16, 7168> cgbn_params_7168;
-  typedef cgbn_params_t<16, 7680> cgbn_params_7680;
-  typedef cgbn_params_t<16, 8192> cgbn_params_8192;
 
+  // TPI=16 kernels (for 2560-8192 bits, 256 interval)
   available_kernels.push_back((uint32_t)cgbn_params_2560::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_2816::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_3072::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_3328::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_3584::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_3840::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_4096::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_4352::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_4608::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_4864::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_5120::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_5376::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_5632::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_5888::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_6144::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_6400::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_6656::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_6912::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_7168::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_7424::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_7680::BITS);
+  // available_kernels.push_back((uint32_t)cgbn_params_7936::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_8192::BITS);
-  
+
   // TPI=32 kernels (for 10240+ bits, 512 interval for better optimization)
   // 12288-16384 gap is critical: 9820s->16950s (73% increase!)
-  typedef cgbn_params_t<32, 9216> cgbn_params_9216;
-  typedef cgbn_params_t<32, 10240> cgbn_params_10240;
-  typedef cgbn_params_t<32, 11264> cgbn_params_11264;
-  typedef cgbn_params_t<32, 12288> cgbn_params_12288;
-  typedef cgbn_params_t<32, 13312> cgbn_params_13312;
-  typedef cgbn_params_t<32, 14336> cgbn_params_14336;
-  typedef cgbn_params_t<32, 15360> cgbn_params_15360;
-  typedef cgbn_params_t<32, 16384> cgbn_params_16384;
-  // typedef cgbn_params_t<32, 17408> cgbn_params_17408;
-  // typedef cgbn_params_t<32, 18432> cgbn_params_18432;
-  // typedef cgbn_params_t<32, 19456> cgbn_params_19456;
-  // typedef cgbn_params_t<32, 20480> cgbn_params_20480;
-  // typedef cgbn_params_t<32, 21504> cgbn_params_21504;
-  // typedef cgbn_params_t<32, 22528> cgbn_params_22528;
-  // typedef cgbn_params_t<32, 23552> cgbn_params_23552;
-  // typedef cgbn_params_t<32, 24576> cgbn_params_24576;
-  // typedef cgbn_params_t<32, 25600> cgbn_params_25600;
-  // typedef cgbn_params_t<32, 26624> cgbn_params_26624;
-  // typedef cgbn_params_t<32, 27648> cgbn_params_27648;
-  // typedef cgbn_params_t<32, 28672> cgbn_params_28672;
-  // typedef cgbn_params_t<32, 32768> cgbn_params_32768;
-  
   available_kernels.push_back((uint32_t)cgbn_params_9216::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_10240::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_11264::BITS);
@@ -1135,19 +748,6 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   available_kernels.push_back((uint32_t)cgbn_params_14336::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_15360::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_16384::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_17408::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_18432::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_19456::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_20480::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_21504::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_22528::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_23552::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_24576::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_25600::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_26624::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_27648::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_28672::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_32768::BITS);
 
 #endif
 
@@ -1206,147 +806,14 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       BITS = kernel_bits;
       assert( BITS % 32 == 0 );
 
-      /* Print some debug info about kernel. */
-      /* TODO: return kernelAttr and validate maxThreadsPerBlock. */
-      if (BITS == cgbn_params_128::BITS) {
-        TPI = cgbn_params_128::TPI;
-        kernel = kernel_double_add<cgbn_params_128>;
-      } else if (BITS == cgbn_params_192::BITS) {
-        TPI = cgbn_params_192::TPI;
-        kernel = kernel_double_add<cgbn_params_192>;
-      } else if (BITS == cgbn_params_256::BITS) {
-        TPI = cgbn_params_256::TPI;
-        kernel = kernel_double_add<cgbn_params_256>;
-      } else if (BITS == cgbn_params_384::BITS) {
-        TPI = cgbn_params_384::TPI;
-        kernel = kernel_double_add<cgbn_params_384>;
-      } else if (BITS == cgbn_params_small::BITS) {
-        TPI = cgbn_params_small::TPI;
-        kernel = kernel_double_add<cgbn_params_small>;
-      } else if (BITS == cgbn_params_768::BITS) {
-        TPI = cgbn_params_768::TPI;
-        kernel = kernel_double_add<cgbn_params_768>;
-      } else if (BITS == cgbn_params_medium::BITS) {
-        TPI = cgbn_params_medium::TPI;
-        kernel = kernel_double_add<cgbn_params_medium>;
-#ifndef IS_DEV_BUILD
-      } else if (BITS == cgbn_params_1280::BITS) {
-        TPI = cgbn_params_1280::TPI;
-        kernel = kernel_double_add<cgbn_params_1280>;
-      } else if (BITS == cgbn_params_1536::BITS) {
-        TPI = cgbn_params_1536::TPI;
-        kernel = kernel_double_add<cgbn_params_1536>;
-      } else if (BITS == cgbn_params_1792::BITS) {
-        TPI = cgbn_params_1792::TPI;
-        kernel = kernel_double_add<cgbn_params_1792>;
-      } else if (BITS == cgbn_params_2048::BITS) {
-        TPI = cgbn_params_2048::TPI;
-        kernel = kernel_double_add<cgbn_params_2048>;
-      } else if (BITS == cgbn_params_2560::BITS) {
-        TPI = cgbn_params_2560::TPI;
-        kernel = kernel_double_add<cgbn_params_2560>;
-      } else if (BITS == cgbn_params_3072::BITS) {
-        TPI = cgbn_params_3072::TPI;
-        kernel = kernel_double_add<cgbn_params_3072>;
-      } else if (BITS == cgbn_params_3584::BITS) {
-        TPI = cgbn_params_3584::TPI;
-        kernel = kernel_double_add<cgbn_params_3584>;
-      } else if (BITS == cgbn_params_4096::BITS) {
-        TPI = cgbn_params_4096::TPI;
-        kernel = kernel_double_add<cgbn_params_4096>;
-      } else if (BITS == cgbn_params_4608::BITS) {
-        TPI = cgbn_params_4608::TPI;
-        kernel = kernel_double_add<cgbn_params_4608>;
-      } else if (BITS == cgbn_params_5120::BITS) {
-        TPI = cgbn_params_5120::TPI;
-        kernel = kernel_double_add<cgbn_params_5120>;
-      } else if (BITS == cgbn_params_5632::BITS) {
-        TPI = cgbn_params_5632::TPI;
-        kernel = kernel_double_add<cgbn_params_5632>;
-      } else if (BITS == cgbn_params_6144::BITS) {
-        TPI = cgbn_params_6144::TPI;
-        kernel = kernel_double_add<cgbn_params_6144>;
-      } else if (BITS == cgbn_params_6656::BITS) {
-        TPI = cgbn_params_6656::TPI;
-        kernel = kernel_double_add<cgbn_params_6656>;
-      } else if (BITS == cgbn_params_7168::BITS) {
-        TPI = cgbn_params_7168::TPI;
-        kernel = kernel_double_add<cgbn_params_7168>;
-      } else if (BITS == cgbn_params_7680::BITS) {
-        TPI = cgbn_params_7680::TPI;
-        kernel = kernel_double_add<cgbn_params_7680>;
-      } else if (BITS == cgbn_params_8192::BITS) {
-        TPI = cgbn_params_8192::TPI;
-        kernel = kernel_double_add<cgbn_params_8192>;
-      } else if (BITS == cgbn_params_9216::BITS) {
-        TPI = cgbn_params_9216::TPI;
-        kernel = kernel_double_add<cgbn_params_9216>;
-      } else if (BITS == cgbn_params_10240::BITS) {
-        TPI = cgbn_params_10240::TPI;
-        kernel = kernel_double_add<cgbn_params_10240>;
-      } else if (BITS == cgbn_params_11264::BITS) {
-        TPI = cgbn_params_11264::TPI;
-        kernel = kernel_double_add<cgbn_params_11264>;
-      } else if (BITS == cgbn_params_12288::BITS) {
-        TPI = cgbn_params_12288::TPI;
-        kernel = kernel_double_add<cgbn_params_12288>;
-      } else if (BITS == cgbn_params_13312::BITS) {
-        TPI = cgbn_params_13312::TPI;
-        kernel = kernel_double_add<cgbn_params_13312>;
-      } else if (BITS == cgbn_params_14336::BITS) {
-        TPI = cgbn_params_14336::TPI;
-        kernel = kernel_double_add<cgbn_params_14336>;
-      } else if (BITS == cgbn_params_15360::BITS) {
-        TPI = cgbn_params_15360::TPI;
-        kernel = kernel_double_add<cgbn_params_15360>;
-      } else if (BITS == cgbn_params_16384::BITS) {
-        TPI = cgbn_params_16384::TPI;
-        kernel = kernel_double_add<cgbn_params_16384>;
-
-      // } else if (BITS == cgbn_params_17408::BITS) {
-      //   TPI = cgbn_params_17408::TPI;
-      //   kernel = kernel_double_add<cgbn_params_17408>;
-      // } else if (BITS == cgbn_params_18432::BITS) {
-      //   TPI = cgbn_params_18432::TPI;
-      //   kernel = kernel_double_add<cgbn_params_18432>;
-      // } else if (BITS == cgbn_params_19456::BITS) {
-      //   TPI = cgbn_params_19456::TPI;
-      //   kernel = kernel_double_add<cgbn_params_19456>;
-      // } else if (BITS == cgbn_params_20480::BITS) {
-      //   TPI = cgbn_params_20480::TPI;
-      //   kernel = kernel_double_add<cgbn_params_20480>;
-      // } else if (BITS == cgbn_params_21504::BITS) {
-      //   TPI = cgbn_params_21504::TPI;
-      //   kernel = kernel_double_add<cgbn_params_21504>;
-      // } else if (BITS == cgbn_params_22528::BITS) {
-      //   TPI = cgbn_params_22528::TPI;
-      //   kernel = kernel_double_add<cgbn_params_22528>;
-      // } else if (BITS == cgbn_params_23552::BITS) {
-      //   TPI = cgbn_params_23552::TPI;
-      //   kernel = kernel_double_add<cgbn_params_23552>;
-      // } else if (BITS == cgbn_params_24576::BITS) {
-      //   TPI = cgbn_params_24576::TPI;
-      //   kernel = kernel_double_add<cgbn_params_24576>;
-      // } else if (BITS == cgbn_params_25600::BITS) {
-      //   TPI = cgbn_params_25600::TPI;
-      //   kernel = kernel_double_add<cgbn_params_25600>;
-      // } else if (BITS == cgbn_params_26624::BITS) {
-      //   TPI = cgbn_params_26624::TPI;
-      //   kernel = kernel_double_add<cgbn_params_26624>;
-      // } else if (BITS == cgbn_params_27648::BITS) {
-      //   TPI = cgbn_params_27648::TPI;
-      //   kernel = kernel_double_add<cgbn_params_27648>;
-      // } else if (BITS == cgbn_params_28672::BITS) {
-      //   TPI = cgbn_params_28672::TPI;
-      //   kernel = kernel_double_add<cgbn_params_28672>;
-      // } else if (BITS == cgbn_params_32768::BITS) {
-      //   TPI = cgbn_params_32768::TPI;
-      //   kernel = kernel_double_add<cgbn_params_32768>;
-#endif
-      } else {
+      /* Resolve the kernel function pointer via the per-TPI dispatch TUs. */
+      uint32_t tpi_u32 = 0;
+      kernel = cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
+      if (kernel == nullptr) {
         outputf (OUTPUT_ERROR, "CGBN kernel not found for %d bits\n", BITS);
         return ECM_ERROR;
       }
+      TPI = (int32_t)tpi_u32;
 
       IPB = TPB / TPI;
       BLOCK_COUNT = (curves + IPB - 1) / IPB;
@@ -1390,102 +857,14 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   }
   } // Close the "if (!ckpt_loaded)" block from checkpoint loading
   else {
-    // If checkpoint loaded, still need to set kernel based on BITS and TPI
-    if (BITS == cgbn_params_128::BITS) {
-      kernel = kernel_double_add<cgbn_params_128>;
-    } else if (BITS == cgbn_params_192::BITS) {
-      kernel = kernel_double_add<cgbn_params_192>;
-    } else if (BITS == cgbn_params_256::BITS) {
-      kernel = kernel_double_add<cgbn_params_256>;
-    } else if (BITS == cgbn_params_384::BITS) {
-      kernel = kernel_double_add<cgbn_params_384>;
-    } else if (BITS == cgbn_params_small::BITS) {
-      kernel = kernel_double_add<cgbn_params_small>;
-    } else if (BITS == cgbn_params_768::BITS) {
-      kernel = kernel_double_add<cgbn_params_768>;
-    } else if (BITS == cgbn_params_medium::BITS) {
-      kernel = kernel_double_add<cgbn_params_medium>;
-#ifndef IS_DEV_BUILD
-    } else if (BITS == cgbn_params_1280::BITS) {
-      kernel = kernel_double_add<cgbn_params_1280>;
-    } else if (BITS == cgbn_params_1536::BITS) {
-      kernel = kernel_double_add<cgbn_params_1536>;
-    } else if (BITS == cgbn_params_1792::BITS) {
-      kernel = kernel_double_add<cgbn_params_1792>;
-    } else if (BITS == cgbn_params_2048::BITS) {
-      kernel = kernel_double_add<cgbn_params_2048>;
-    } else if (BITS == cgbn_params_2560::BITS) {
-      kernel = kernel_double_add<cgbn_params_2560>;
-    } else if (BITS == cgbn_params_3072::BITS) {
-      kernel = kernel_double_add<cgbn_params_3072>;
-    } else if (BITS == cgbn_params_3584::BITS) {
-      kernel = kernel_double_add<cgbn_params_3584>;
-    } else if (BITS == cgbn_params_4096::BITS) {
-      kernel = kernel_double_add<cgbn_params_4096>;
-    } else if (BITS == cgbn_params_4608::BITS) {
-      kernel = kernel_double_add<cgbn_params_4608>;
-    } else if (BITS == cgbn_params_5120::BITS) {
-      kernel = kernel_double_add<cgbn_params_5120>;
-    } else if (BITS == cgbn_params_5632::BITS) {
-      kernel = kernel_double_add<cgbn_params_5632>;
-    } else if (BITS == cgbn_params_6144::BITS) {
-      kernel = kernel_double_add<cgbn_params_6144>;
-    } else if (BITS == cgbn_params_6656::BITS) {
-      kernel = kernel_double_add<cgbn_params_6656>;
-    } else if (BITS == cgbn_params_7168::BITS) {
-      kernel = kernel_double_add<cgbn_params_7168>;
-    } else if (BITS == cgbn_params_7680::BITS) {
-      kernel = kernel_double_add<cgbn_params_7680>;
-    } else if (BITS == cgbn_params_8192::BITS) {
-      kernel = kernel_double_add<cgbn_params_8192>;
-    } else if (BITS == cgbn_params_9216::BITS) {
-      kernel = kernel_double_add<cgbn_params_9216>;
-    } else if (BITS == cgbn_params_10240::BITS) {
-      kernel = kernel_double_add<cgbn_params_10240>;
-    } else if (BITS == cgbn_params_11264::BITS) {
-      kernel = kernel_double_add<cgbn_params_11264>;
-    } else if (BITS == cgbn_params_12288::BITS) {
-      kernel = kernel_double_add<cgbn_params_12288>;
-    } else if (BITS == cgbn_params_13312::BITS) {
-      kernel = kernel_double_add<cgbn_params_13312>;
-    } else if (BITS == cgbn_params_14336::BITS) {
-      kernel = kernel_double_add<cgbn_params_14336>;
-    } else if (BITS == cgbn_params_15360::BITS) {
-      kernel = kernel_double_add<cgbn_params_15360>;
-    } else if (BITS == cgbn_params_16384::BITS) {
-      kernel = kernel_double_add<cgbn_params_16384>;
-
-    // } else if (BITS == cgbn_params_17408::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_17408>;
-    // } else if (BITS == cgbn_params_18432::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_18432>;
-    // } else if (BITS == cgbn_params_19456::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_19456>;
-    // } else if (BITS == cgbn_params_20480::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_20480>;
-    // } else if (BITS == cgbn_params_21504::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_21504>;
-    // } else if (BITS == cgbn_params_22528::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_22528>;
-    // } else if (BITS == cgbn_params_23552::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_23552>;
-    // } else if (BITS == cgbn_params_24576::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_24576>;
-    // } else if (BITS == cgbn_params_25600::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_25600>;
-    // } else if (BITS == cgbn_params_26624::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_26624>;
-    // } else if (BITS == cgbn_params_27648::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_27648>;
-    // } else if (BITS == cgbn_params_28672::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_28672>;
-    // } else if (BITS == cgbn_params_32768::BITS) {
-    //   kernel = kernel_double_add<cgbn_params_32768>;
-#endif
-    } else {
+    // If checkpoint loaded, still need to resolve the kernel from its BITS.
+    uint32_t tpi_u32 = 0;
+    kernel = cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
+    if (kernel == nullptr) {
       outputf(OUTPUT_ERROR, "CGBN kernel not found for BITS=%d TPI=%d from checkpoint\n", BITS, TPI);
       return ECM_ERROR;
     }
+    TPI = (int32_t)tpi_u32;
     
     IPB = TPB / TPI;
     BLOCK_COUNT = (curves + IPB - 1) / IPB;
