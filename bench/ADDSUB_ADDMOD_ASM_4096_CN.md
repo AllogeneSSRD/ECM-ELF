@@ -6,7 +6,7 @@
 |------|------|
 | `cgbn/backends/opencl/kernels/mp_addmod_asm_fused.cl` | `asm_fused_block8`：8-limb `v_add_co_ci` / `v_cndmask` VCC 链 |
 | `cgbn/backends/opencl/kernels/mp_addmod_asm_fused_generated.cl` | 核：`ecm_mp_add_mod_fused_asm8`（8 limb）、`ecm_mp_add_mod_fused_unroll_asm`（128=16×block8） |
-| `tools/gen_mp_addmod_asm_fused.py` | 生成器 |
+| `tools/gen/gen_mp_addmod_asm_fused.py` | 生成器 |
 
 仅在 **`__AMDGCN__`** 且 **`--bits 256`（8 limb）或 `4096`（128 limb）** 时拼入 bench；`-DMP_ADDMOD_ASM_ENABLE=1`。
 
@@ -27,7 +27,7 @@
 ## 生成与 bench
 
 ```powershell
-python tools/gen_mp_addmod_asm_fused.py
+python tools/gen/gen_mp_addmod_asm_fused.py
 cmake --build build --config Debug --target opencl_ecm_addsub
 .\build\Debug\opencl_ecm_addsub.exe -d 1 --addsub-only --bits 256 500 64 20
 .\build\Debug\opencl_ecm_addsub.exe -d 1 --addsub-only --bits 4096 1000 128 50

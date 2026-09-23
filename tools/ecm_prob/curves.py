@@ -49,7 +49,7 @@ def batch_32bit_params(sigma: int) -> tuple[tuple[int, int], tuple[int, int]]:
 # Canonical sigma values.  sigma=10 is the paper's Suyama reference curve
 # (paper Section 9.2: "GMP-ECM with a typical Suyama curve, sigma = 10").
 SIGMA_REF = 10
-SIGMA_RANDOM = 1707370477          # from tools/FindGroupOrder3_example.gp
+SIGMA_RANDOM = 1707370477          # from tools/ecm_prob/FindGroupOrder3_example.gp
 
 
 def build_roster() -> list[dict]:

@@ -80,6 +80,10 @@ bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
         else if (key == "log_file") cfg.log_file = val;
         else if (key == "device") set_int(cfg.device);
         else if (key == "edwards") set_int(cfg.edwards);
+        else if (key == "edwards_threads") set_int(cfg.edwards_threads);
+        else if (key == "edwards_naf_w") set_int(cfg.edwards_naf_w);
+        else if (key == "p95_dir") cfg.p95_dir = val;                 // 已废弃, 见 tmp_dir
+        else if (key == "tmp_dir") cfg.tmp_dir = val;
         else if (key == "gpuckpt_seconds") set_double(cfg.gpuckpt_seconds);
         else if (key == "verbose") set_int(cfg.verbose);
         else if (key == "tpi") set_u32(cfg.tpi);
@@ -137,6 +141,28 @@ bool ecm_queue_config_write_default(const std::string &path) {
 "# Stage-1 backend: 0 = GPU, 1 = CPU Edwards (Atkin-Morain).\n"
 "# Stage-1 后端：0 = GPU，1 = CPU Edwards（Atkin-Morain）。\n"
 "edwards = 0\n"
+"\n"
+"# Edwards stage-1 worker threads: 0 = auto (min(curves, CPU cores)), 1 = sequential.\n"
+"# Edwards stage-1 并行线程数：0 = 自动（min(曲线数, CPU 核数)），1 = 顺序执行。\n"
+"edwards_threads = 0\n"
+"\n"
+"# Edwards NAF window (dictionary = 2^(w-2) entries). 0 = built-in default.\n"
+"# Larger w means fewer point additions but a bigger table; w=12 measured best\n"
+"# across 347..4003 bit operands, w>=16 regresses (table no longer cache-resident).\n"
+"# Edwards NAF 窗口（字典 = 2^(w-2) 项）。0 = 使用内置默认值。\n"
+"edwards_naf_w = 0\n"
+"\n"
+"# Local directory for stage-1 results: writes e{n:07d}_c{curve:06d}.tmp (MIDSTAGE,\n"
+"# state=2, for stage 2) and e{n:07d}_c{curve:06d} (STAGE1 self-checkpoint).\n"
+"# ecm.exe never writes into the Prime95 directory; use ecm_p95feeder to transfer.\n"
+"# stage-1 结果落盘目录：写 e{n:07d}_c{curve:06d}.tmp（MIDSTAGE，state=2，供 stage-2）\n"
+"# 与 e{n:07d}_c{curve:06d}（STAGE1 自检查点）。ecm.exe 不再写 Prime95 目录，\n"
+"# 交接请运行独立的 ecm_p95feeder。\n"
+"tmp_dir = .\n"
+"\n"
+"# Deprecated: ecm.exe no longer writes to the Prime95 directory (feeder's job).\n"
+"# 已废弃：ecm.exe 不再写 Prime95 目录（改由 feeder 负责）。\n"
+"p95_dir =\n"
 "\n"
 "# GPU checkpoint interval in seconds.\n"
 "# GPU 检查点间隔（秒）。\n"

@@ -24,6 +24,10 @@ struct EcmQueueConfig {
     // --- driver defaults (queue mode) ---
     int device = 0;
     int edwards = 0;                             // 0 = GPU, 1 = CPU Edwards (Atkin-Morain)
+    int edwards_threads = 0;                     // 0 = auto (min(curves, #cores)); 1 = 顺序
+    int edwards_naf_w = 0;                       // 0 = 默认窗口 (12); 字典 = 2^(w-2)
+    std::string tmp_dir = ".";                   // 本地 stage-1 落盘目录 (e{n:07d}_c{k}.tmp)
+    std::string p95_dir;                         // 已废弃 (ecm.exe 不再写 p95); 保留仅为提示
     double gpuckpt_seconds = 600.0;
     int verbose = 1;
     uint32_t tpi = 8u;

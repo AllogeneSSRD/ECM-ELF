@@ -32,6 +32,8 @@ cgbn/
 # CPU edwards stage1 Z/2×Z/8
 ecm_edwards_cpu.obj
 *.obj
+*.dll
+*.exe
 src/cpu/*.dll
 src/cpu/*.exe
 /test_edwards
@@ -56,5 +58,27 @@ tools/ecm_report/*.png
 tools/ecm_prob/out
 tools/ecm_prob/data
 tools/ecm_prob/*.exe
+
+# tools/ scratch (test/bench sandboxes and built helpers)
+tools/bench/_abtest/
+tools/bench/_speed_*.exe
+tools/test/_feeder_scratch/
+tools/test/fixtures/_test_*.save
+tools/test/*.exe
+tools/refactor/*.exe
+tools/gen/__pycache__/
+
+# Locally rebuilt GMP with x86_64/zen3 (BMI2+ADX) mpn kernels.
+# Regenerate with third_party/build_gmp_zen3.sh; CMake auto-detects
+# third_party/gmp-zen3/dist and falls back to vcpkg GMP when absent.
+/third_party/gmp-zen3/
+/third_party/zen3_runtime/
+
+# Local Edwards stage-1 saves written by ecm.exe (e{n:07d}_c{curve:06d}[.tmp]);
+# they are consumed by ecm_p95feeder. See docs/ECM_EDWARDS_STAGE1.md §11.
+/e[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
+/saves/
+/feeder.ini
+/feeder.log
 
 

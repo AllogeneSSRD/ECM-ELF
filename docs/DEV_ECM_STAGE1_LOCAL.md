@@ -78,7 +78,7 @@ A<48（<1536b）的 `_local` 变体无条件使用完整展开（所有平台安
 |------|------|
 | `kernels/opencl/ecm_stage1_local.cl` | LDS 版 ECM stage1 kernel |
 | `kernels/opencl/mont_mul/mont_mul_unroll_*_local.cl` | LDS 版 mont_mul/sqr（生成器产出） |
-| `tools/gen_mont_unroll.py` | 生成器，`body_local()` 含平台守卫逻辑 |
+| `tools/gen/gen_mont_unroll.py` | 生成器，`body_local()` 含平台守卫逻辑 |
 | `src/opencl_ecm_path_registry.cpp` | Build plan 选择 `_local` 路径、注入 `ECM_STAGE1_WG_SIZE` |
 | `src/opencl_ecm_stage1.cpp` | Host 端 kernel 创建与 WG 启动 |
 | `include/opencl_ecm_runtime_config.h` | `gpu_local`、`wg_size` 字段 |

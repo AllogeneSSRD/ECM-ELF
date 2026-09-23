@@ -257,7 +257,7 @@ struct EcmMontPathDescriptor {           // special_mult 版去掉最后三个�
 4096 固定宽算子需正确设置 `fixed_width/coop_work_group_size/local_scratch_u32`。
 
 新增 special_mult 算子类似：写 `special_mult/special_mult_<stem>.cl`，加 `kSpecialMultAliases_*`，
-在 `ECM_SPECIAL_MULT_OPERATORS` 加一行。固定位宽版由 `tools/gen_special_mult_unroll.py` 单源生成，
+在 `ECM_SPECIAL_MULT_OPERATORS` 加一行。固定位宽版由 `tools/gen/gen_special_mult_unroll.py` 单源生成，
 新增宽度只需在该脚本的 `WIDTHS` 加一行并重新生成。
 
 ### 删除一个算子
@@ -308,8 +308,8 @@ echo '(2^641-1)' | .\build\Debug\ecm.exe -v -d 1 -gpu -sigma 3:20260611 -gpucurv
 
 以下项目已在 REV 14 中完成：
 - Host 端注册表合并（三文件→一文件，四表→两单源，删除 `force_macro`）
-- `add_mod_unroll_{128,192,256,384,512}b.cl` 与 `sub_mod_*` 由 `tools/gen_mp_addsub_bits_stage1.py` 统一生成
-- `special_mult` 固定位宽版由 `tools/gen_special_mult_unroll.py` 统一生成
+- `add_mod_unroll_{128,192,256,384,512}b.cl` 与 `sub_mod_*` 由 `tools/gen/gen_mp_addsub_bits_stage1.py` 统一生成
+- `special_mult` 固定位宽版由 `tools/gen/gen_special_mult_unroll.py` 统一生成
 - 容器分配改为 Exact-Fit Container（按位宽精确匹配，移除 `stage1_need_512_container`）
 - OpenCL 后端源文件（`cgbn_opencl.h`、`impl_opencl.cpp`）移至 `kernels/opencl/`
 
@@ -323,10 +323,10 @@ echo '(2^641-1)' | .\build\Debug\ecm.exe -v -d 1 -gpu -sigma 3:20260611 -gpucurv
 ## 9. common 命名约定
 
 `common/` 下全部文件统一为 `*.h.cl` 后缀（配置、limb 原语、ladder 辅助、算子接口、asm 公共块），
-不再混用 `.cl` / `.inc.cl`。`asm_common.h.cl` 由 `tools/gen_mp_addsub_bits_stage1.py` 生成。
+不再混用 `.cl` / `.inc.cl`。`asm_common.h.cl` 由 `tools/gen/gen_mp_addsub_bits_stage1.py` 生成。
 
 > Android assets（`Android/ECM/app/src/main/assets/kernels/`）是独立副本，重命名后需重新同步资源
-> （`tools/split_ecm_stage1_kernel_tree.py` / kernel_assets 流程）。
+> （`tools/refactor/split_ecm_stage1_kernel_tree.py` / kernel_assets 流程）。
 
 ## 10. auto / manual 双实现与平台门控
 
@@ -414,7 +414,7 @@ static const char *const kMontAliases_mul_unroll768manual[] = {
 **下拉框区分**：Android JNI `build_mont_list` 用 `id` 字段（而非 `aliases[0]`）生成下拉列表，
 因此 auto/prolog/manual 显示为 `unroll_768b` / `unroll_manual_768b` 两个独立可区分选项。
 
-两份实现由 `tools/gen_mont_unroll.py` 单源生成，算法逐位等价。
+两份实现由 `tools/gen/gen_mont_unroll.py` 单源生成，算法逐位等价。
 
 > 注：768b/1024b 位宽较大，其 manual 变体代码量可能超出部分 Adreno 编译器的单文件处理
 > 能力上限。遇到编译失败时可退回 `--mul unroll_768b`（auto 变体），实测 Qualcomm Adreno 830

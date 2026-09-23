@@ -16,10 +16,20 @@ find_package(OpenCL REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # Desktop GMP (vcpkg x64-windows). Android uses ECM_ANDROID_GMP_ROOT in app/CMakeLists.txt.
+#
+# A locally rebuilt GMP with x86_64/zen3 (BMI2 + ADX) mpn kernels is preferred when
+# present: it is 1.17-1.26x faster on stage-1 for >=1000-bit operands (see
+# docs/ECM_EDWARDS_STAGE1.md §10.2). Build it with third_party/build_gmp_zen3.sh
+# (requires BMI2/ADX: Intel Haswell 2013+, AMD Excavator/Zen+).
+# Override with -DECM_WINDOWS_GMP_ROOT=<prefix> to use a different GMP.
 set(ECM_WINDOWS_GMP_ROOT "" CACHE PATH
     "Prefix with include/gmp.h and lib/gmp.lib (e.g. vcpkg installed/x64-windows)")
 if(NOT ECM_WINDOWS_GMP_ROOT)
-    if(DEFINED ENV{VCPKG_ROOT})
+    set(_ecm_gmp_zen3 "${CMAKE_CURRENT_SOURCE_DIR}/third_party/gmp-zen3/dist")
+    if(EXISTS "${_ecm_gmp_zen3}/include/gmp.h" AND EXISTS "${_ecm_gmp_zen3}/lib/gmp.lib")
+        set(ECM_WINDOWS_GMP_ROOT "${_ecm_gmp_zen3}")
+        message(STATUS "GMP: using local zen3/BMI2 build at ${_ecm_gmp_zen3}")
+    elseif(DEFINED ENV{VCPKG_ROOT})
         set(ECM_WINDOWS_GMP_ROOT "$ENV{VCPKG_ROOT}/installed/x64-windows")
     elseif(EXISTS "D:/code/vcpkg/installed/x64-windows/include/gmp.h")
         set(ECM_WINDOWS_GMP_ROOT "D:/code/vcpkg/installed/x64-windows")
@@ -27,6 +37,20 @@ if(NOT ECM_WINDOWS_GMP_ROOT)
 endif()
 find_path(GMP_INCLUDE_DIR NAMES gmp.h HINTS "${ECM_WINDOWS_GMP_ROOT}/include")
 find_library(GMP_LIBRARY NAMES gmp libgmp HINTS "${ECM_WINDOWS_GMP_ROOT}/lib")
+# The vcpkg toolchain sets CMAKE_FIND_ROOT_PATH to its own installed/ triplet, so
+# HINTS outside that root are ignored and find_path/find_library would silently
+# return the vcpkg GMP even when ECM_WINDOWS_GMP_ROOT points elsewhere. Pin both
+# to the configured prefix explicitly (an explicit -DGMP_INCLUDE_DIR/-DGMP_LIBRARY
+# on the command line still wins for its own cache entry only if it is inside the
+# prefix; use ECM_WINDOWS_GMP_ROOT to switch GMP builds).
+if(ECM_WINDOWS_GMP_ROOT)
+    if(EXISTS "${ECM_WINDOWS_GMP_ROOT}/include/gmp.h")
+        set(GMP_INCLUDE_DIR "${ECM_WINDOWS_GMP_ROOT}/include" CACHE PATH "GMP include directory" FORCE)
+    endif()
+    if(EXISTS "${ECM_WINDOWS_GMP_ROOT}/lib/gmp.lib")
+        set(GMP_LIBRARY "${ECM_WINDOWS_GMP_ROOT}/lib/gmp.lib" CACHE FILEPATH "GMP import library" FORCE)
+    endif()
+endif()
 if(NOT GMP_INCLUDE_DIR OR NOT GMP_LIBRARY)
     message(FATAL_ERROR
         "GMP not found (include=${GMP_INCLUDE_DIR}, lib=${GMP_LIBRARY}). "
@@ -89,6 +113,7 @@ add_executable(ecm
     src/opencl_ecm_path_registry.cpp
     src/opencl_ecm_selftest.cpp
     src/cpu/ecm_edwards_cpu.cpp
+    src/cpu/ecm_edwards_save.cpp
 )
 
 target_include_directories(ecm PRIVATE
@@ -109,12 +134,69 @@ target_link_libraries(ecm
 
 ecm_target_link_gmp(ecm)
 
+# ---------------------------------------------------------------------------
+# ecm_p95feeder — standalone Prime95 handoff feeder.
+#
+# ecm.exe writes its stage-1 results locally only (<tmp_dir>/e{n:07d}_c{k}.tmp);
+# the feeder watches that directory and delivers each finished curve into a
+# running Prime95 instance (save file e{n:07d} + an ECM= line under a free
+# [Worker #N] section of worktodo.add). See docs/ECM_EDWARDS_STAGE1.md §11.
+# GMP-only: no OpenCL/OpenSSL dependency.
+# ---------------------------------------------------------------------------
+add_executable(ecm_p95feeder
+    src/core/ecm_p95feeder.cpp
+    src/core/p95_worktodo.cpp
+    src/core/ecm_worktodo.cpp
+    src/cpu/ecm_edwards_save.cpp
+)
+
+target_include_directories(ecm_p95feeder PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/cpu
+)
+
+ecm_target_link_gmp(ecm_p95feeder)
+
+if(MSVC)
+    target_compile_options(ecm_p95feeder PRIVATE /utf-8)
+endif()
+
+foreach(_gmp_dll_cand "${ECM_WINDOWS_GMP_ROOT}/bin/gmp-10.dll"
+                      "${OPENSSL_ROOT_DIR}/bin/gmp-10.dll")
+    if(MSVC AND EXISTS "${_gmp_dll_cand}")
+        add_custom_command(TARGET ecm_p95feeder POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_gmp_dll_cand}"
+                "$<TARGET_FILE_DIR:ecm_p95feeder>"
+            COMMENT "Copying GMP DLL next to ecm_p95feeder")
+        break()
+    endif()
+endforeach()
+
 # indicators.hpp contains Unicode block characters (▌▐█▄…) for progress
 # bars. MSVC's GBK code page misparses them; /utf-8 tells the compiler to
 # treat source files as UTF-8 regardless of system locale.
 if(MSVC)
     target_compile_options(ecm PRIVATE /utf-8)
 endif()
+
+# Copy GMP runtime DLL next to the output binary. The configured GMP prefix
+# (ECM_WINDOWS_GMP_ROOT) wins over the vcpkg default so a custom GMP build --
+# e.g. the x86_64/zen3 (BMI2) rebuild under third_party/gmp-zen3 -- is picked up
+# automatically instead of the generic-kernel vcpkg DLL.
+foreach(_gmp_dll_cand "${ECM_WINDOWS_GMP_ROOT}/bin/gmp-10.dll"
+                      "${OPENSSL_ROOT_DIR}/bin/gmp-10.dll")
+    if(MSVC AND EXISTS "${_gmp_dll_cand}")
+        add_custom_command(TARGET ecm POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_gmp_dll_cand}"
+                "$<TARGET_FILE_DIR:ecm>"
+            COMMENT "Copying GMP DLL (${_gmp_dll_cand}) to output dir")
+        break()
+    endif()
+endforeach()
 
 # Copy OpenSSL + GMP runtime DLLs from vcpkg to output dir
 if(MSVC AND EXISTS "${OPENSSL_ROOT_DIR}/bin")
@@ -125,13 +207,6 @@ if(MSVC AND EXISTS "${OPENSSL_ROOT_DIR}/bin")
     #         "${_vcpkg_bin}/libssl-3-x64.dll"
     #         "$<TARGET_FILE_DIR:ecm>"
     #     COMMENT "Copying OpenSSL DLLs to output dir")
-    if(EXISTS "${_vcpkg_bin}/gmp-10.dll")
-        add_custom_command(TARGET ecm POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_vcpkg_bin}/gmp-10.dll"
-                "$<TARGET_FILE_DIR:ecm>"
-            COMMENT "Copying GMP DLL to output dir")
-    endif()
 endif()
 
 add_executable(main
@@ -362,6 +437,7 @@ if(ECM_ENABLE_CUDA)
         src/opencl_ecm_log.cpp
         src/opencl_ecm_runtime_config.cpp
         src/cpu/ecm_edwards_cpu.cpp
+        src/cpu/ecm_edwards_save.cpp
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu

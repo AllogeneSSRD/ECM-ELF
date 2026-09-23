@@ -14,7 +14,7 @@
 ## 生成
 
 ```powershell
-python tools/gen_mp_add_mod_unroll.py
+python tools/gen/gen_mp_add_mod_unroll.py
 cmake --build build --config Debug --target opencl_ecm_addsub
 ```
 

@@ -352,7 +352,7 @@ Bench 标签：`mont_mul_unroll_i24_blsub`、`mont_mul_unroll_i24_u32_blsub`（�
 
 ### 384-bit 手动展开（`u32_blsub`，已实现）
 
-生成器：`tools/gen_mont_mul_unroll_i24_384_manual.py` → `mont_mul_unroll_i24_384_manual_generated.cl`（16 limb，无循环，逻辑同 `mont_mul_unroll_i24_u32_blsub_body`）。
+生成器：`tools/gen/gen_mont_mul_unroll_i24_384_manual.py` → `mont_mul_unroll_i24_384_manual_generated.cl`（16 limb，无循环，逻辑同 `mont_mul_unroll_i24_u32_blsub_body`）。
 
 | 符号 | 说明 |
 |------|------|
@@ -371,7 +371,7 @@ Bench（仅 `MAX_LIMBS=16` / 384-bit）：`ecm_mont_mul_unroll_i24_384_manual_be
 sqr 与 mul 同序（830 manual 7.07M；642 manual 537K）。
 
 ```bash
-python tools/gen_mont_mul_unroll_i24_384_manual.py
+python tools/gen/gen_mont_mul_unroll_i24_384_manual.py
 ```
 
 | P2 | hot 内核、830@384 stage1 切 manual；642 永不链 manual |

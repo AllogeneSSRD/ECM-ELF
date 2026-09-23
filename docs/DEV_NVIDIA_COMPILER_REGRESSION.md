@@ -122,8 +122,8 @@ NVIDIA 编译器在大展开时表现极差。始终使用明确的展开因子�
 
 | 文件 | 变更 |
 |------|------|
-| `tools/gen_mp_addsub_bits_stage1.py` | `emit_add_unroll`/`emit_sub_unroll`: limbs≥32 → 块融合模式 |
-| `tools/gen_mont_unroll.py` | `body()`/`body_local()`: A≥48 → 平台守卫展开 |
+| `tools/gen/gen_mp_addsub_bits_stage1.py` | `emit_add_unroll`/`emit_sub_unroll`: limbs≥32 → 块融合模式 |
+| `tools/gen/gen_mont_unroll.py` | `body()`/`body_local()`: A≥48 → 平台守卫展开 |
 | `kernels/opencl/add_mod/add_mod_unroll_*.cl` | 生成器产出，≥32 limb 使用块融合 |
 | `kernels/opencl/sub_mod/sub_mod_unroll_*.cl` | 同上 |
 | `kernels/opencl/mont_mul/mont_mul_unroll_*{,_local}.cl` | 生成器产出，含 MONT_UNROLL 宏 |

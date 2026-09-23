@@ -325,11 +325,17 @@ The sections below index subdirectory docs by topic. **This README is an entry p
 
 ### Tools (`tools/`)
 
+`tools/` is grouped by purpose: `gen/` (kernel/parameter code generators), `refactor/`
+(one-off migration scripts), `bench/` (benchmarks and A/B scripts), `test/` (unit and
+integration tests plus fixtures), `disasm/` (disassembly / ISA inspection), plus
+`ecm_prob/`, `ecm_report/` and `log_parser/`. Index: [tools/README.md](tools/README.md).
+
 | Document / entry | Summary |
 |-------------|------|
-| [tools/DISASM_SETUP.md](tools/DISASM_SETUP.md) | Install objdump / llvm-objdump on Windows for ISA export |
-| [kernels/opencl/bench/mp_addsub/README.md](kernels/opencl/bench/mp_addsub/README.md) | add/sub kernel layout, `gen_all.py` regeneration, bench priorities |
-| `tools/gen_*.py`, `disasm_*_isa.ps1` | Montgomery/addsub unroll and asm-block generators; disassembly scripts |
+| [tools/README.md](tools/README.md) | Index of the tools tree (subdirectory roles, common commands) |
+| [tools/disasm/DISASM_SETUP.md](tools/disasm/DISASM_SETUP.md) | Install objdump / llvm-objdump on Windows for ISA export |
+| [kernels/opencl/bench/mp_addsub/README.md](kernels/opencl/bench/mp_addsub/README.md) | add/sub kernel layout, `tools/gen/gen_all.py` regeneration, bench priorities |
+| `tools/gen/gen_*.py`, `tools/disasm/disasm_*_isa.ps1` | Montgomery/addsub unroll and asm-block generators; disassembly scripts |
 
 ### Performance benches (`bench/`)
 
@@ -356,7 +362,7 @@ Cross-vendor overview: [bench/0530_report.md](bench/0530_report.md) (512 / 4096-
 | [docs/README.dev.asm](docs/README.dev.asm) | Upstream asm-redc directory conventions (historical reference) |
 | [bench/ADDSUB_ADDMOD_ASM_4096_CN.md](bench/ADDSUB_ADDMOD_ASM_4096_CN.md) | add/sub-mod 4096-bit AMDGCN asm |
 | [bench/MONT_ISA_4096_ANALYSIS.md](bench/MONT_ISA_4096_ANALYSIS.md) | Montgomery 4096 ISA and asm paths |
-| `tools/disasm_mont_isa.ps1` | Disassembly with `opencl_mont_isa_export` |
+| `tools/disasm/disasm_mont_isa.ps1` | Disassembly with `opencl_mont_isa_export` |
 
 ### IM Compiler (integer-multiply codegen)
 

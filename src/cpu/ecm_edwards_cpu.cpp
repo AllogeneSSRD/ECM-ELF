@@ -23,9 +23,16 @@
 // 标量乘算法开关: 1 = w-NAF + 仿射字典 (默认), 0 = double-and-add (基准).
 #define ECM_EDWARDS_USE_NAF 1
 
-// w-NAF 窗口 (默认 8; 调优/基准用 edwards_set_naf_w 设置).
-// 实测 (B1=1e6): w=8~10 为甜点, 内存随 w 指数增长 (字典 2^(w-2) 项).
-static int g_edwards_naf_w = 8;
+// w-NAF 窗口 (默认 12; 调优/基准用 edwards_set_naf_w, driver 用 --edwards-naf-w).
+// 交替 A/B 实测 (zen3/GMP 内核, B1=1e6/2e5, 3 轮取 min):
+//   M347   w=8 0.622 -> w=12 0.609  (-2.1%)
+//   M677   w=8 1.501 -> w=12 1.467  (-2.3%)
+//   M991   w=8 2.785 -> w=12 2.705  (-2.9%)   [w=14 2.707, w=16 2.823, w=18 3.34]
+//   M2203  w=8 2.120 -> w=12 2.076  (-2.1%)   [w=14 2.130]
+//   M4003  w=8 6.963 -> w=12 6.729  (-3.4%)
+// 并行 (24 曲线/24 线程): 7.31s -> 6.96s (-4.8%)。
+// w>=14 收益转负: 字典 (2^(w-2) 项 × 3840 B) 超出缓存常驻容量。
+static int g_edwards_naf_w = 12;
 void edwards_set_naf_w(int w) {
     if (w >= 2) {
         g_edwards_naf_w = w;
@@ -339,12 +346,16 @@ static void ed_to_affine_batch_mont(ed_affine_mont *aff, ed_point_mont *pts, siz
     for (size_t i = 0; i < n; i++) { mpz_clear(z[i]); mpz_clear(iz[i]); }
 }
 
-// 标量乘 [k]P, w-NAF + 仿射字典 (1 次倍点/bit + 1 次混合加法/非零位).
-static void ed_mul(ed_point &r, const mpz_t k, const ed_point &P, const mpz_t d, const mpz_t N) {
-#if ECM_EDWARDS_USE_NAF
-    mont_ctx_t ctx;
-    if (mont_init(&ctx, N) != 0) {
-        // N 超过固定尺寸上限 (不该发生, <10000 bit); 回退 mpz double-and-add
+// 分块 Montgomery NAF 标量乘 (支持 checkpoint/resume).
+// 返回 true=完成 (r 有效), false=被 progress 中止 (cur 已填充当前累加点).
+static bool ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const mpz_t d,
+                           const mpz_t N, uint32_t chunk_bits,
+                           const edwards_checkpoint_t *resume,
+                           edwards_progress_fn progress, void *pctx,
+                           edwards_checkpoint_t *cur) {
+    mont_ctx_t mc;
+    if (mont_init(&mc, N) != 0) {
+        // N 超固定尺寸上限 (不该发生, <10000 bit); 回退 mpz double-and-add, 无 checkpoint.
         ed_point acc, base;
         ed_init(acc); ed_init(base);
         mpz_set_ui(acc.x, 0); mpz_set_ui(acc.y, 1); mpz_set_ui(acc.z, 1); mpz_set_ui(acc.t, 0);
@@ -356,75 +367,110 @@ static void ed_mul(ed_point &r, const mpz_t k, const ed_point &P, const mpz_t d,
         }
         mpz_set(r.x, acc.x); mpz_set(r.y, acc.y); mpz_set(r.z, acc.z); mpz_set(r.t, acc.t);
         ed_clear(acc); ed_clear(base);
-        return;
+        return true;
     }
 
-    const int w = g_edwards_naf_w;                // 窗口; 数字 ∈ {±1,±3,...,±(2^(w-1)-1)}
-    const size_t m = (size_t)1 << (w - 2);        // 字典项数 (含 P)
+    const int w = g_edwards_naf_w;
+    const size_t m = (size_t)1 << (w - 2);
 
-    // P, d 进 Montgomery 域
     ed_point_mont Pm;
     mont_t dm;
-    mont_to(&Pm.x, P.x, &ctx);
-    mont_to(&Pm.y, P.y, &ctx);
-    mont_to(&Pm.z, P.z, &ctx);
-    mont_to(&Pm.t, P.t, &ctx);
-    mont_to(&dm, d, &ctx);
+    mont_to(&Pm.x, P.x, &mc);
+    mont_to(&Pm.y, P.y, &mc);
+    mont_to(&Pm.z, P.z, &mc);
+    mont_to(&Pm.t, P.t, &mc);
+    mont_to(&dm, d, &mc);
 
-    // 字典 (mont): 奇数倍 {P, 3P, ..., (2^(w-1)-1)P}
     std::vector<ed_point_mont> dict(m);
-    mont_set(&dict[0].x, &Pm.x, &ctx); mont_set(&dict[0].y, &Pm.y, &ctx);
-    mont_set(&dict[0].z, &Pm.z, &ctx); mont_set(&dict[0].t, &Pm.t, &ctx);
-    ed_point_mont dblP, cur;
-    ed_dbl_mont(dblP, Pm, &ctx);                  // 2P
-    mont_set(&cur.x, &Pm.x, &ctx); mont_set(&cur.y, &Pm.y, &ctx);
-    mont_set(&cur.z, &Pm.z, &ctx); mont_set(&cur.t, &Pm.t, &ctx);
+    mont_set(&dict[0].x, &Pm.x, &mc); mont_set(&dict[0].y, &Pm.y, &mc);
+    mont_set(&dict[0].z, &Pm.z, &mc); mont_set(&dict[0].t, &Pm.t, &mc);
+    ed_point_mont dblP, curpt;
+    ed_dbl_mont(dblP, Pm, &mc);
+    mont_set(&curpt.x, &Pm.x, &mc); mont_set(&curpt.y, &Pm.y, &mc);
+    mont_set(&curpt.z, &Pm.z, &mc); mont_set(&curpt.t, &Pm.t, &mc);
     for (size_t j = 1; j < m; j++) {
-        ed_add_mont(cur, cur, dblP, &dm, &ctx);   // cur = (2j+1)P
-        mont_set(&dict[j].x, &cur.x, &ctx); mont_set(&dict[j].y, &cur.y, &ctx);
-        mont_set(&dict[j].z, &cur.z, &ctx); mont_set(&dict[j].t, &cur.t, &ctx);
+        ed_add_mont(curpt, curpt, dblP, &dm, &mc);
+        mont_set(&dict[j].x, &curpt.x, &mc); mont_set(&dict[j].y, &curpt.y, &mc);
+        mont_set(&dict[j].z, &curpt.z, &mc); mont_set(&dict[j].t, &curpt.t, &mc);
     }
 
-    // 字典归一化到仿射 (一次批量逆)
     std::vector<ed_affine_mont> aff(m);
-    ed_to_affine_batch_mont(aff.data(), dict.data(), m, &dm, &ctx);
+    ed_to_affine_batch_mont(aff.data(), dict.data(), m, &dm, &mc);
 
-    // w-NAF 数字
     std::vector<int> digits;
     naf_digits(k, w, digits);
+    const size_t total = digits.size();
 
-    // 主循环: MSB → LSB. Rm 初始为恒等点 (0,1,1,0) 的 Montgomery 表示.
+    // 累加点初始化: 恒等点 或 resume 点
     ed_point_mont Rm;
-    mont_set_ui(&Rm.x, 0, &ctx);
-    mont_set_ui(&Rm.y, 1, &ctx);
-    mont_set_ui(&Rm.z, 1, &ctx);
-    mont_set_ui(&Rm.t, 0, &ctx);
+    size_t done = 0;
+    if (resume && resume->bitnum > 0) {
+        mont_to(&Rm.x, resume->Rx, &mc);
+        mont_to(&Rm.y, resume->Ry, &mc);
+        mont_to(&Rm.z, resume->Rz, &mc);
+        // T = X*Y/Z (仅 resume 时 1 次逆)
+        mpz_t Zinv;
+        mpz_init(Zinv);
+        mpz_invert(Zinv, resume->Rz, mc.Nz);
+        mont_t zinvm, xy;
+        mont_to(&zinvm, Zinv, &mc);
+        mont_mul(&xy, &Rm.x, &Rm.y, &mc);
+        mont_mul(&Rm.t, &xy, &zinvm, &mc);
+        mpz_clear(Zinv);
+        done = resume->bitnum;
+    } else {
+        mont_set_ui(&Rm.x, 0, &mc);
+        mont_set_ui(&Rm.y, 1, &mc);
+        mont_set_ui(&Rm.z, 1, &mc);
+        mont_set_ui(&Rm.t, 0, &mc);
+    }
+
+    // 主循环 (分块; done 从 MSB 已处理位数)
     ed_affine_mont neg;
-    for (size_t i = digits.size(); i-- > 0;) {
-        ed_dbl_mont(Rm, Rm, &ctx);
-        const int dgt = digits[i];
-        if (dgt != 0) {
-            const int a = dgt > 0 ? dgt : -dgt;
-            const size_t idx = (size_t)(a - 1) / 2;   // (2*idx+1) = a
-            if (dgt > 0) {
-                ed_add_affine_mont(Rm, Rm, aff[idx], &ctx);
-            } else {
-                // 负号: 用 −q = (−x, y, −dxy)
-                mont_neg(&neg.x, &aff[idx].x, &ctx);
-                mont_set(&neg.y, &aff[idx].y, &ctx);
-                mont_neg(&neg.dxy, &aff[idx].dxy, &ctx);
-                ed_add_affine_mont(Rm, Rm, neg, &ctx);
+    bool aborted = false;
+    while (done < total) {
+        size_t chunk_end = total;
+        if (chunk_bits != 0 && done + chunk_bits < total) chunk_end = done + chunk_bits;
+        for (; done < chunk_end; done++) {
+            ed_dbl_mont(Rm, Rm, &mc);
+            const int dgt = digits[total - 1 - done];
+            if (dgt != 0) {
+                const int a = dgt > 0 ? dgt : -dgt;
+                const size_t idx = (size_t)(a - 1) / 2;
+                if (dgt > 0) {
+                    ed_add_affine_mont(Rm, Rm, aff[idx], &mc);
+                } else {
+                    mont_neg(&neg.x, &aff[idx].x, &mc);
+                    mont_set(&neg.y, &aff[idx].y, &mc);
+                    mont_neg(&neg.dxy, &aff[idx].dxy, &mc);
+                    ed_add_affine_mont(Rm, Rm, neg, &mc);
+                }
             }
+        }
+        if (done < total && progress && cur) {
+            mont_from(cur->Rx, &Rm.x, &mc);
+            mont_from(cur->Ry, &Rm.y, &mc);
+            mont_from(cur->Rz, &Rm.z, &mc);
+            cur->bitnum = (uint32_t)done;
+            if (!progress(pctx, cur)) { aborted = true; break; }
         }
     }
 
-    // 出 Montgomery 域
-    mont_from(r.x, &Rm.x, &ctx);
-    mont_from(r.y, &Rm.y, &ctx);
-    mont_from(r.z, &Rm.z, &ctx);
-    mont_from(r.t, &Rm.t, &ctx);
+    if (!aborted) {
+        mont_from(r.x, &Rm.x, &mc);
+        mont_from(r.y, &Rm.y, &mc);
+        mont_from(r.z, &Rm.z, &mc);
+        mont_from(r.t, &Rm.t, &mc);
+    }
 
-    mont_clear(&ctx);
+    mont_clear(&mc);
+    return !aborted;
+}
+
+// 标量乘 [k]P (一次性, 无 checkpoint).
+static void ed_mul(ed_point &r, const mpz_t k, const ed_point &P, const mpz_t d, const mpz_t N) {
+#if ECM_EDWARDS_USE_NAF
+    ed_mul_chunked(r, k, P, d, N, 0, nullptr, nullptr, nullptr, nullptr);
 #else
     // double-and-add 基准路径
     ed_point acc, base;
@@ -507,17 +553,48 @@ static void atkin_morain(mpz_t d, ed_point &P, uint64_t sigma, const mpz_t N) {
 }
 
 // ---------------------------------------------------------------------------
-// 公共入口: 单条 Edwards stage-1 曲线
+// 公共入口: 单条 Edwards stage-1 曲线 (分块可恢复)
 // ---------------------------------------------------------------------------
-int edwards_stage1_curve(mpz_t factor, mpz_t Qx, mpz_t Qz,
-                         const mpz_t N, uint64_t sigma, const mpz_t s) {
+void edwards_atkin_morain(mpz_t d, mpz_t Px, mpz_t Py, uint64_t sigma, const mpz_t N) {
+    ed_point P;
+    ed_init(P);
+    atkin_morain(d, P, sigma, N);
+    if (Px) mpz_set(Px, P.x);
+    if (Py) mpz_set(Py, P.y);
+    ed_clear(P);
+}
+int edwards_get_naf_w(void) { return g_edwards_naf_w; }
+
+void edwards_checkpoint_init(edwards_checkpoint_t *c) {
+    c->bitnum = 0;
+    mpz_inits(c->Rx, c->Ry, c->Rz, NULL);
+}
+void edwards_checkpoint_clear(edwards_checkpoint_t *c) {
+    mpz_clears(c->Rx, c->Ry, c->Rz, NULL);
+}
+
+int edwards_stage1_curve_progress(mpz_t factor, mpz_t Qx, mpz_t Qz,
+                                  const mpz_t N, uint64_t sigma, const mpz_t s,
+                                  uint32_t chunk_bits,
+                                  const edwards_checkpoint_t *resume,
+                                  edwards_progress_fn progress, void *ctx) {
     mpz_t d, g;
     mpz_inits(d, g, NULL);
     ed_point P, R;
     ed_init(P); ed_init(R);
 
     atkin_morain(d, P, sigma, N);
-    ed_mul(R, s, P, d, N);
+
+    edwards_checkpoint_t cur;
+    edwards_checkpoint_init(&cur);
+    const bool completed = ed_mul_chunked(R, s, P, d, N, chunk_bits, resume, progress, ctx, &cur);
+    edwards_checkpoint_clear(&cur);
+
+    if (!completed) {
+        ed_clear(P); ed_clear(R);
+        mpz_clears(d, g, NULL);
+        return 2;   // 被 progress 中止 (checkpoint 由调用方处理)
+    }
 
     // ed_to_Montgomery: Qx = z + y, Qz = z - y  (对齐 Prime95 ed_to_Montgomery)
     mpz_t zq, zz;
@@ -534,7 +611,6 @@ int edwards_stage1_curve(mpz_t factor, mpz_t Qx, mpz_t Qz,
         if (factor) mpz_set(factor, g);
         rc = 1;
     } else if (mpz_cmp(g, N) == 0) {
-        // [s]P ≡ identity (mod N): Qz ≡ 0, gcd = N 本身 — 无(非平凡)因子
         rc = 0;
     }
 
@@ -542,6 +618,12 @@ int edwards_stage1_curve(mpz_t factor, mpz_t Qx, mpz_t Qz,
     ed_clear(P); ed_clear(R);
     mpz_clear(d);
     return rc;
+}
+
+int edwards_stage1_curve(mpz_t factor, mpz_t Qx, mpz_t Qz,
+                         const mpz_t N, uint64_t sigma, const mpz_t s) {
+    return edwards_stage1_curve_progress(factor, Qx, Qz, N, sigma, s,
+                                         0, nullptr, nullptr, nullptr);
 }
 
 #ifdef BUILD_ECM_EDWARDS_STANDALONE

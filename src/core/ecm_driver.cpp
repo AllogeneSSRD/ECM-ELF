@@ -11,10 +11,17 @@
 #include <fstream>
 #include <cstdio>
 #include <cstring>
+#include <csignal>
+#include <chrono>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
 #include <sys/stat.h>
 
 #ifdef _WIN32
 #include <io.h>
+#include <direct.h>     /* _mkdir for the local save directory */
 #include <windows.h>
 #include <process.h>
 #define access _access
@@ -39,6 +46,7 @@
 #include "ecm_queue_config.h"
 #include "ecm_worktodo.h"
 #include "ecm_edwards_cpu.h"        /* Edwards (Atkin-Morain) stage-1 CPU path */
+#include "ecm_edwards_save.h"       /* Prime95 ECM 二进制存档读写 */
 
 static void trim(std::string &s){
     while(!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
@@ -704,6 +712,10 @@ static void print_ecm_usage(const char *prog) {
               << "Options:\n"
               << "  -gpu                 Enable GPU stage-1 (requires -gpucurves)\n"
               << "  --edwards            Enable CPU Edwards stage-1 (Atkin-Morain, a=1)\n"
+              << "  --edwards-threads <n>  Edwards stage-1 worker threads (0=auto, 1=serial)\n"
+              << "  --edwards-naf-w <w>  NAF window (default 12); dictionary = 2^(w-2)\n"
+              << "  --tmp-dir <dir>      Local dir for stage-1 saves e{n:07d}_c{k}[.tmp]\n"
+              << "                       (default: current dir; ecm.exe never writes to p95)\n"
               << "  -gpucurves <n>       Number of ECM curves per launch (Edwards: total curves)\n"
               << "  -gpuckpt <sec>       GPU checkpoint interval in seconds (default: 600)\n"
               << "  -d <index>           OpenCL device index (default: 0)\n"
@@ -809,6 +821,8 @@ static long long current_epoch_seconds() {
 struct Stage1RunOptions {
     bool use_gpu = true;
     bool use_edwards = false;        // CPU Edwards (Atkin-Morain) stage-1 path
+    uint32_t edwards_threads = 0;    // 0 = auto (min(curves, #cores)); 1 = 顺序
+    int edwards_naf_w = 0;           // 0 = 用 ecm_edwards_cpu 的默认窗口
     int verbose = 0;
     int device_index = 0;
     unsigned long gpuckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
@@ -816,6 +830,16 @@ struct Stage1RunOptions {
     bool sigma_fixed = false;
     uint32_t fixed_sigma = 0;        // GPU batch sigma (32-bit)
     uint64_t fixed_sigma64 = 0;      // Edwards sigma (64-bit)
+    // 本地 stage-1 落盘目录 (空 = 不落盘/不 checkpoint)。
+    // 结果写成 <tmp_dir>/e{n:07d}_c{curve:06d}.tmp (MIDSTAGE 供 stage-2) 与
+    // <tmp_dir>/e{n:07d}_c{curve:06d} (STAGE1 自检查点); p95 交接由 ecm_p95feeder 负责。
+    std::string tmp_dir;
+    double handoff_k = 1.0;
+    std::string handoff_k_str = "1"; // 原始 k 字符串 (worktodo.add 用)
+    uint32_t handoff_b = 2;
+    uint32_t handoff_n = 0;
+    int32_t handoff_c = -1;
+    std::string handoff_factors;     // 透传给 worktodo.add 的已知因子 (逗号分隔)
 };
 
 struct Stage1RunResult {
@@ -828,12 +852,277 @@ struct Stage1RunResult {
     int *array_found = nullptr;
 };
 
+// ---- Prime95 交接 + 自我 checkpoint (Edwards stage-1) ----
+
+static volatile sig_atomic_t g_edwards_stop = 0;
+static void edwards_sigint_handler(int) { g_edwards_stop = 1; }
+
+// 多曲线并行时串行化输出 (避免 stdout 行交错).
+static std::mutex g_edwards_out_mutex;
+
+static long long edwards_now_ms() {
+    return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// ---- 本地 stage-1 结果落盘 ----
+//
+// ecm.exe 不再与 Prime95 交互。每条曲线把 stage-1 结果写到**本地**目录:
+//     <tmp_dir>/e{n:07d}_c{curve:06d}.tmp       (MIDSTAGE, state=2, 供 stage-2)
+//     <tmp_dir>/e{n:07d}_c{curve:06d}           (STAGE1,  state=1, 分块自检查点)
+// 把结果送进 Prime95 (在 p95 目录写 e{n:07d} + 往 worktodo.add 的 [Worker #N]
+// 段追加 ECM= 行) 由独立程序 ecm_p95feeder 负责。
+
+// 创建目录 (已存在视为成功).
+static bool ensure_dir(const std::string &dir) {
+    if (dir.empty()) return true;
+#ifdef _WIN32
+    if (_mkdir(dir.c_str()) == 0) return true;
+#else
+    if (mkdir(dir.c_str(), 0777) == 0) return true;
+#endif
+    return access(dir.c_str(), 0) == 0;
+}
+
+// 曲线本地路径主干: <tmp_dir>/e{n:07d}_c{curve:06d}
+static std::string edwards_local_stem(const Stage1RunOptions &opt, uint32_t curve_idx) {
+    std::string dir = opt.tmp_dir;
+    if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '/';
+    char name[64];
+    snprintf(name, sizeof(name), "e%07u_c%06u", opt.handoff_n, curve_idx + 1);
+    return dir + name;
+}
+
+// 交接行 (ECM2=...); 仅用于日志/追踪 —— ecm_p95feeder 会从存档头部重建同样的行.
+static std::string edwards_ecm2_line(const Stage1RunOptions &opt, uint64_t sigma,
+                                     uint64_t B1, uint64_t B2) {
+    std::string line = "ECM2=" + (opt.handoff_k_str.empty() ? "1" : opt.handoff_k_str);
+    line += "," + std::to_string(opt.handoff_b);
+    line += "," + std::to_string(opt.handoff_n);
+    line += "," + std::to_string(opt.handoff_c);
+    line += "," + std::to_string(B1);
+    line += "," + std::to_string(B2);
+    line += ",1," + std::to_string(sigma);
+    if (!opt.handoff_factors.empty()) line += ",\"" + opt.handoff_factors + "\"";
+    return line;
+}
+
+// 把一条曲线的 stage-1 结果写成本地 MIDSTAGE 存档 (<tmp_dir>/e{n:07d}_c{k}.tmp).
+static bool edwards_write_local_midstage(const Stage1RunOptions &opt, uint64_t sigma,
+                                         uint32_t curve, uint64_t B1, uint64_t B2,
+                                         const mpz_t Qx, const mpz_t Qz,
+                                         uint32_t curve_idx) {
+    if (opt.tmp_dir.empty()) return true;
+
+    ecm_save_common cm;
+    cm.k = opt.handoff_k;
+    cm.b = opt.handoff_b;
+    cm.n = opt.handoff_n;
+    cm.c = opt.handoff_c;
+    cm.curve = curve;
+    cm.B1 = B1;
+    cm.B2 = B2;
+    cm.sigma = sigma;
+
+    const std::string path = edwards_local_stem(opt, curve_idx) + ".tmp";
+    if (!ecm_edwards_write_midstage(path, cm, Qx, Qz)) {
+        std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+        ecm_ts_fprintf(stderr, "ERROR: cannot write stage-1 save %s\n", path.c_str());
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+        ecm_ts_fprintf(stdout, "stage1 save -> %s : %s\n", path.c_str(),
+                       edwards_ecm2_line(opt, sigma, B1, B2).c_str());
+    }
+    return true;
+}
+
+// 自我 checkpoint 上下文 + 进度回调 (写 STAGE1 存档)
+struct EdwardsCheckpointCtx {
+    const Stage1RunOptions *opt;
+    uint64_t sigma;
+    uint64_t B1, B2;
+    std::string save_path;
+    long long interval_ms;
+    long long last_ms;
+    mpz_srcptr N;
+    mpz_srcptr s;
+};
+
+static int edwards_checkpoint_progress(void *ctx, const edwards_checkpoint_t *cur) {
+    EdwardsCheckpointCtx *c = (EdwardsCheckpointCtx *)ctx;
+    const long long now = edwards_now_ms();
+    const bool due = (now - c->last_ms >= c->interval_ms);
+    if (!due && !g_edwards_stop) return 1;   // 继续
+
+    mpz_t d, Px, Py;
+    mpz_inits(d, Px, Py, NULL);
+    edwards_atkin_morain(d, Px, Py, c->sigma, c->N);
+
+    ecm_save_common cm;
+    cm.k = c->opt->handoff_k;
+    cm.b = c->opt->handoff_b;
+    cm.n = c->opt->handoff_n;
+    cm.c = c->opt->handoff_c;
+    cm.curve = 1;
+    cm.B1 = c->B1;
+    cm.B2 = c->B2;
+    cm.sigma = c->sigma;
+    const uint32_t expbuf = (uint32_t)mpz_sizeinbase(c->s, 2);
+    const uint32_t dict_size = (uint32_t)1u << (edwards_get_naf_w() - 2);
+    ecm_edwards_write_stage1(c->save_path, cm, 2, expbuf, cur->bitnum, dict_size,
+                             Px, Py, cur->Rx, cur->Ry, cur->Rz);
+    c->last_ms = now;
+    mpz_clears(d, Px, Py, NULL);
+
+    if (g_edwards_stop) {
+        std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+        ecm_ts_fprintf(stdout, "checkpoint written (stop): %s @ bitnum=%u\n",
+                       c->save_path.c_str(), cur->bitnum);
+        return 0;   // 中止
+    }
+    return 1;       // 继续
+}
+
+// ---------------------------------------------------------------------------
+// 单条曲线的 stage-1 执行 (顺序/并行共用)
+// ---------------------------------------------------------------------------
+//
+// 线程安全约定: N 与 s 只读共享 (GMP 允许同一 mpz_t 的并发只读访问);
+// 输出 (factor_out / Qx,Qz / checkpoint 文件) 均按曲线索引独立, 无共享写.
+// 返回: 1=因子, 0=无因子, -1=错误, 2=被 SIGINT 中止(已写 checkpoint).
+static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
+                                 const Stage1RunOptions &opt, double B1, double B2,
+                                 uint32_t idx, uint64_t sigma, uint32_t curves,
+                                 mpz_t factor_out, const std::string &ckpt_path) {
+    mpz_t Qx, Qz;
+    mpz_inits(Qx, Qz, NULL);
+
+    int rc;
+    if (!ckpt_path.empty()) {
+        EdwardsCheckpointCtx ck;
+        ck.opt = &opt;
+        ck.sigma = sigma;
+        ck.B1 = (uint64_t)B1;
+        ck.B2 = (uint64_t)B2;
+        ck.save_path = ckpt_path;
+        ck.interval_ms = (long long)opt.gpuckpt_ms;
+        ck.last_ms = edwards_now_ms();
+        ck.N = N;
+        ck.s = s;
+
+        // 检测并恢复 STAGE1 checkpoint
+        edwards_checkpoint_t resume;
+        edwards_checkpoint_init(&resume);
+        {
+            ecm_save_common rcm;
+            uint64_t rsp; uint32_t rebs, rbn, rds;
+            mpz_t rdx, rdy, rex, rey, rez;
+            mpz_inits(rdx, rdy, rex, rey, rez, NULL);
+            if (ecm_edwards_read_stage1(ckpt_path, rcm, &rsp, &rebs, &rbn, &rds,
+                                        rdx, rdy, rex, rey, rez)) {
+                if (rcm.sigma == sigma && rcm.B1 == (uint64_t)B1 && rbn > 0) {
+                    resume.bitnum = rbn;
+                    mpz_set(resume.Rx, rex);
+                    mpz_set(resume.Ry, rey);
+                    mpz_set(resume.Rz, rez);
+                    std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+                    ecm_ts_fprintf(stdout, "curve %u: resume STAGE1 checkpoint @ bitnum=%u\n",
+                                   idx + 1, rbn);
+                }
+            }
+            mpz_clears(rdx, rdy, rex, rey, rez, NULL);
+        }
+
+        const uint32_t chunk_bits = 16384;
+        rc = edwards_stage1_curve_progress(factor_out, Qx, Qz, N, sigma, s, chunk_bits,
+                                           resume.bitnum > 0 ? &resume : nullptr,
+                                           edwards_checkpoint_progress, &ck);
+        edwards_checkpoint_clear(&resume);
+
+        if (rc == 2) {
+            mpz_clears(Qx, Qz, NULL);
+            return 2;
+        }
+    } else {
+        rc = edwards_stage1_curve(factor_out, Qx, Qz, N, sigma, s);
+    }
+
+    // 落盘: 把 stage-1 结果写成本地 MIDSTAGE 存档 (总是写, 即使命中因子).
+    // 送进 Prime95 由独立程序 ecm_p95feeder 负责。
+    if (rc >= 0) {
+        edwards_write_local_midstage(opt, sigma, idx + 1, (uint64_t)B1, (uint64_t)B2,
+                                     Qx, Qz, idx);
+    }
+    mpz_clears(Qx, Qz, NULL);
+    return rc;
+}
+
+// ---------------------------------------------------------------------------
+// 多曲线并行 (每线程一条曲线, 动态取号)
+// ---------------------------------------------------------------------------
+
+struct EdwardsWorkerCtx {
+    mpz_srcptr N;
+    mpz_srcptr s;
+    const Stage1RunOptions *opt;
+    double B1, B2;
+    uint32_t curves;
+    const uint64_t *sigmas;
+    const std::string *ckpt_paths;
+    mpz_t *factors;
+    int *array_found;
+    std::atomic<uint32_t> *next;
+    std::atomic<int> *aborted;
+};
+
+static void edwards_worker(EdwardsWorkerCtx *ctx) {
+    for (;;) {
+        const uint32_t i = ctx->next->fetch_add(1, std::memory_order_relaxed);
+        if (i >= ctx->curves) break;
+        const uint64_t sigma = ctx->sigmas[i];
+        const int rc = edwards_run_one_curve(ctx->N, ctx->s, *ctx->opt, ctx->B1, ctx->B2,
+                                             i, sigma, ctx->curves,
+                                             ctx->factors[i], ctx->ckpt_paths[i]);
+        if (rc > 0) {
+            ctx->array_found[i] = ECM_FACTOR_FOUND_STEP1;
+            std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+            if (ctx->opt->verbose) {
+                std::cout << "  curve " << i << " sigma=" << sigma
+                          << " -> factor found" << std::endl;
+            } else {
+                ecm_ts_fprintf(stdout, "  curve %u sigma=%llu -> factor found\n",
+                               i, (unsigned long long)sigma);
+            }
+        } else if (rc < 0) {
+            std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+            std::cerr << "  curve " << i << " sigma=" << sigma
+                      << " -> Edwards stage-1 internal error" << std::endl;
+        } else if (rc == 2) {
+            ctx->aborted->store(1, std::memory_order_relaxed);
+            break;
+        }
+    }
+}
+
+// 默认线程数: min(curves, 硬件并发数).
+static uint32_t edwards_default_threads(uint32_t curves) {
+    unsigned hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 1;
+    uint32_t t = (uint32_t)hw;
+    if (t > curves) t = curves;
+    return t;
+}
+
 // Run one Edwards (Atkin-Morain) stage-1 batch on the CPU. One curve per sigma.
+//
+// curves == 1 or opt.edwards_threads == 1 -> 顺序执行 (与历史行为一致);
+// 否则按曲线并行 (每线程独立曲线, 动态取号), 吞吐随核数线性提升.
 static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                               const std::string &savefilename, bool saveappend,
                               const std::string &n_expr,
                               const Stage1RunOptions &opt, Stage1RunResult *out) {
-    (void)B2;
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->curves = curves;
@@ -844,6 +1133,14 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
 
     if (curves == 0) {
         std::cerr << "curves must be > 0" << std::endl;
+        return ECM_ERROR;
+    }
+
+    // NAF 窗口 (字典大小 2^(w-2)); 0 = 保持 ecm_edwards_cpu 的默认值.
+    if (opt.edwards_naf_w >= 2) {
+        edwards_set_naf_w(opt.edwards_naf_w);
+    } else if (opt.edwards_naf_w != 0) {
+        std::cerr << "edwards_naf_w must be 0 (default) or >= 2" << std::endl;
         return ECM_ERROR;
     }
 
@@ -865,29 +1162,100 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         array_found[i] = ECM_NO_FACTOR_FOUND;
     }
 
-    uint64_t firstsigma = 0;
+    const bool use_ckpt = !opt.tmp_dir.empty();
+    if (use_ckpt) {
+        g_edwards_stop = 0;
+        signal(SIGINT, edwards_sigint_handler);
+        if (!ensure_dir(opt.tmp_dir)) {
+            std::cerr << "ERROR: cannot create tmp_dir: " << opt.tmp_dir << std::endl;
+            mpz_clear(s);
+            for (uint32_t j = 0; j < curves; j++) mpz_clear(factors[j]);
+            free(factors);
+            free(array_found);
+            return ECM_ERROR;
+        }
+    }
 
-    std::cout << "Using B1=" << B1 << ", B2=" << B2
-              << " (" << curves << " Edwards curves, CPU)" << std::endl;
-
+    // sigma 预生成: random_sigma_u64 使用全局 rand()/srand(), 非线程安全,
+    // 因此全部在主线程生成后再分发给工作线程.
+    std::vector<uint64_t> sigmas(curves);
     for (uint32_t i = 0; i < curves; i++) {
         // Fixed sigma → batch start + i (matches -sigma/-gpucurves semantics);
         // otherwise a fresh Prime95-style random sigma per curve.
-        const uint64_t sigma = opt.sigma_fixed ? (opt.fixed_sigma64 + i) : random_sigma_u64();
-        if (i == 0) {
-            firstsigma = sigma;
-        }
-        const int rc = edwards_stage1_curve(factors[i], nullptr, nullptr, N, sigma, s);
-        if (rc > 0) {
-            array_found[i] = ECM_FACTOR_FOUND_STEP1;
-            if (opt.verbose) {
-                std::cout << "  curve " << i << " sigma=" << sigma
-                          << " -> factor found" << std::endl;
+        sigmas[i] = opt.sigma_fixed ? (opt.fixed_sigma64 + i) : random_sigma_u64();
+    }
+    const uint64_t firstsigma = sigmas[0];
+
+    // checkpoint 路径: 统一每条曲线独立 <tmp_dir>/e{n:07d}_c{6-digit},
+    // 与同名的 .tmp (MIDSTAGE) 区分开, 且并行写不冲突.
+    std::vector<std::string> ckpt_paths(curves);
+    if (use_ckpt) {
+        for (uint32_t i = 0; i < curves; i++) ckpt_paths[i] = edwards_local_stem(opt, i);
+    }
+
+    uint32_t nthreads = opt.edwards_threads;
+    if (nthreads == 0) nthreads = edwards_default_threads(curves);
+    if (nthreads > curves) nthreads = curves;
+    if (nthreads < 1) nthreads = 1;
+
+    std::cout << "Using B1=" << B1 << ", B2=" << B2
+              << " (" << curves << " Edwards curves, CPU";
+    if (nthreads > 1) std::cout << ", " << nthreads << " threads";
+    std::cout << ")";
+    if (use_ckpt) std::cout << " [saves -> " << opt.tmp_dir << "]";
+    std::cout << std::endl;
+
+    bool aborted = false;
+    if (nthreads <= 1) {
+        for (uint32_t i = 0; i < curves; i++) {
+            const int rc = edwards_run_one_curve(N, s, opt, B1, B2, i, sigmas[i], curves,
+                                                 factors[i], ckpt_paths[i]);
+            if (rc > 0) {
+                array_found[i] = ECM_FACTOR_FOUND_STEP1;
+                if (opt.verbose) {
+                    std::cout << "  curve " << i << " sigma=" << sigmas[i]
+                              << " -> factor found" << std::endl;
+                }
+            } else if (rc < 0) {
+                std::cerr << "  curve " << i << " sigma=" << sigmas[i]
+                          << " -> Edwards stage-1 internal error" << std::endl;
+            } else if (rc == 2) {
+                aborted = true;
+                break;
             }
-        } else if (rc < 0) {
-            std::cerr << "  curve " << i << " sigma=" << sigma
-                      << " -> Edwards stage-1 internal error" << std::endl;
         }
+    } else {
+        EdwardsWorkerCtx wctx;
+        wctx.N = N;
+        wctx.s = s;
+        wctx.opt = &opt;
+        wctx.B1 = B1;
+        wctx.B2 = B2;
+        wctx.curves = curves;
+        wctx.sigmas = sigmas.data();
+        wctx.ckpt_paths = ckpt_paths.data();
+        wctx.factors = factors;
+        wctx.array_found = array_found;
+        std::atomic<uint32_t> next(0);
+        std::atomic<int> aborted_flag(0);
+        wctx.next = &next;
+        wctx.aborted = &aborted_flag;
+
+        std::vector<std::thread> pool;
+        pool.reserve(nthreads);
+        for (uint32_t t = 0; t < nthreads; t++) pool.emplace_back(edwards_worker, &wctx);
+        for (auto &th : pool) th.join();
+        aborted = (aborted_flag.load(std::memory_order_relaxed) != 0);
+    }
+
+    if (aborted) {
+        ecm_ts_fprintf(stdout, "stage-1 aborted (checkpoint saved)\n");
+        mpz_clear(s);
+        for (uint32_t j = 0; j < curves; j++) mpz_clear(factors[j]);
+        free(factors);
+        free(array_found);
+        out->ret = ECM_ERROR;
+        return ECM_ERROR;
     }
 
     // Binary Prime95 save format is a later task; the OpenCL text save is not
@@ -1201,6 +1569,8 @@ static int run_queue_manager(const std::string &ini_path) {
     Stage1RunOptions opt;
     opt.use_gpu = true;
     opt.use_edwards = (cfg.edwards != 0);
+    opt.edwards_threads = (cfg.edwards_threads > 0) ? (uint32_t)cfg.edwards_threads : 0u;
+    opt.edwards_naf_w = cfg.edwards_naf_w;
     opt.verbose = cfg.verbose;
     opt.device_index = cfg.device;
     opt.gpuckpt_ms = (cfg.gpuckpt_seconds > 0.0)
@@ -1213,12 +1583,19 @@ static int run_queue_manager(const std::string &ini_path) {
     opt.gpu_special_mult_path = cfg.kernel_special_mult;
     opt.sigma_fixed = (cfg.sigma != 0);
     opt.fixed_sigma = cfg.sigma;
+    opt.tmp_dir = resolve_rel_local(exe_dir, cfg.tmp_dir);
+    if (!cfg.p95_dir.empty()) {
+        ecm_ts_fprintf(stdout,
+            "note: p95_dir is now handled by the separate ecm_p95feeder program; "
+            "ecm.exe only writes local saves to %s\n", opt.tmp_dir.c_str());
+    }
 
     ecm_ts_fprintf(stdout, "===== ECM queue manager =====\n");
     ecm_ts_fprintf(stdout, "config : %s\n", ini.c_str());
     ecm_ts_fprintf(stdout, "worktodo : %s\n", worktodo_path.c_str());
     ecm_ts_fprintf(stdout, "finished : %s\n", finished_path.c_str());
     ecm_ts_fprintf(stdout, "log_file : %s\n", cfg.log_file.c_str());
+    ecm_ts_fprintf(stdout, "saves : %s\n", opt.tmp_dir.c_str());
     ecm_ts_fprintf(stdout, "backend : %s\n", opt.use_edwards ? "edwards" : "gpu");
 
     // Startup full sync (matches the old work_manager.ps1 behaviour).
@@ -1254,6 +1631,19 @@ static int run_queue_manager(const std::string &ini_path) {
                 continue;
             }
             const std::string n_expr = build_n_expr(task.k, task.b, task.n, task.c, task.factors);
+            // 交接字段 (从 ECM= 任务读取)
+            {
+                opt.handoff_k_str = task.k;
+                opt.handoff_k = std::strtod(task.k.c_str(), nullptr);
+                opt.handoff_b = (uint32_t)std::strtoul(task.b.c_str(), nullptr, 10);
+                opt.handoff_n = (uint32_t)task.n;
+                opt.handoff_c = (int32_t)std::strtol(task.c.c_str(), nullptr, 10);
+                opt.handoff_factors.clear();
+                for (size_t fi = 0; fi < task.factors.size(); ++fi) {
+                    if (fi) opt.handoff_factors += ",";
+                    opt.handoff_factors += task.factors[fi];
+                }
+            }
             const bool cont = queue_run_one(
                 N, task.B1, task.B2, task.curves_to_run,
                 task.has_sigma ? task.sigma : 0, task.has_sigma,
@@ -1293,6 +1683,19 @@ static int run_queue_manager(const std::string &ini_path) {
         }
 
         const std::string n_expr = build_n_expr(task.k, task.b, task.n, task.c, task.factors);
+        // 交接字段 (从 ECMSTAGE2 任务读取)
+        {
+            opt.handoff_k_str = task.k;
+            opt.handoff_k = std::strtod(task.k.c_str(), nullptr);
+            opt.handoff_b = (uint32_t)std::strtoul(task.b.c_str(), nullptr, 10);
+            opt.handoff_n = (uint32_t)task.n;
+            opt.handoff_c = (int32_t)std::strtol(task.c.c_str(), nullptr, 10);
+            opt.handoff_factors.clear();
+            for (size_t fi = 0; fi < task.factors.size(); ++fi) {
+                if (fi) opt.handoff_factors += ",";
+                opt.handoff_factors += task.factors[fi];
+            }
+        }
         // ECMSTAGE2 lines carry no per-line sigma: use cfg.sigma (already in opt).
         const bool cont = queue_run_one(
             N, B1, /*B2=*/0.0, task.curves_to_run,
@@ -1326,6 +1729,8 @@ int main(int argc, char **argv){
     bool verbose = false;
     bool use_gpu = false;
     bool use_edwards = false;
+    uint32_t edwards_threads = 0;
+    int edwards_naf_w = 0;
     uint32_t gpucurves = 0;
     double gpuckpt_seconds = -1.0;
     bool gpuckpt_set = false;
@@ -1344,6 +1749,8 @@ int main(int argc, char **argv){
     std::string gpu_special_mult_path;
     bool show_kernels = false;
     std::string ini_path;
+    std::string tmp_dir;                  // 本地 stage-1 落盘目录
+    std::string p95_dir_ignored;          // 兼容旧脚本: 现在由 ecm_p95feeder 处理
     // parse args simple
     std::vector<std::string> pos;
     for(int i=1;i<argc;i++){
@@ -1351,6 +1758,16 @@ int main(int argc, char **argv){
         if(a == "-v") { verbose = true; continue; }
         if(a == "-gpu") { use_gpu = true; continue; }
         if(a == "--edwards") { use_edwards = true; continue; }
+        if((a == "--edwards-threads" || a == "--edthreads") && i+1<argc){
+            try { edwards_threads = (uint32_t)std::stoul(argv[++i]); }
+            catch (...) { std::cerr << "Invalid --edwards-threads value, expected >= 0" << std::endl; return 1; }
+            continue;
+        }
+        if((a == "--edwards-naf-w" || a == "--ednafw") && i+1<argc){
+            try { edwards_naf_w = std::stoi(argv[++i]); }
+            catch (...) { std::cerr << "Invalid --edwards-naf-w value, expected integer" << std::endl; return 1; }
+            continue;
+        }
         if(a == "-gpucurves" && i+1<argc){ gpucurves = (uint32_t)std::stoul(argv[++i]); continue; }
         if(a == "-gpuckpt" && i+1<argc){
             try {
@@ -1430,6 +1847,15 @@ int main(int argc, char **argv){
         }
         if(a == "-ini" && i+1<argc) {
             ini_path = argv[++i];
+            continue;
+        }
+        if(a == "--tmp-dir" && i+1<argc) {
+            tmp_dir = argv[++i];
+            continue;
+        }
+        if(a == "--p95-dir" && i+1<argc) {
+            // 兼容旧脚本: stage-1 结果现在只写本地, p95 交接由 ecm_p95feeder 负责.
+            p95_dir_ignored = argv[++i];
             continue;
         }
         // ---- runtime tuning flags (replace former environment variables) ----
@@ -1613,6 +2039,8 @@ int main(int argc, char **argv){
     Stage1RunOptions opt;
     opt.use_gpu = use_gpu;
     opt.use_edwards = use_edwards;
+    opt.edwards_threads = edwards_threads;
+    opt.edwards_naf_w = edwards_naf_w;
     opt.verbose = verbose ? 1 : 0;
     opt.device_index = gpu_device_index;
     opt.gpuckpt_ms = gpuckpt_ms;
@@ -1624,6 +2052,21 @@ int main(int argc, char **argv){
     opt.sigma_fixed = sigma_fixed;
     opt.fixed_sigma = fixed_sigma;
     opt.fixed_sigma64 = fixed_sigma64;
+    if (tmp_dir.empty()) tmp_dir = ".";      // 默认 = 当前目录 (本地)
+    opt.tmp_dir = tmp_dir;
+    if (!p95_dir_ignored.empty()) {
+        std::cerr << "note: --p95-dir is obsolete for ecm.exe (stage-1 saves are written "
+                     "locally); use --tmp-dir, and run ecm_p95feeder for the p95 handoff"
+                  << std::endl;
+    }
+    {
+        // 存档命名: 假设 N = 2^n - 1 (Mersenne), n = 位长
+        opt.handoff_k = 1.0;
+        opt.handoff_k_str = "1";
+        opt.handoff_b = 2;
+        opt.handoff_n = (uint32_t)mpz_sizeinbase(N, 2);
+        opt.handoff_c = -1;
+    }
 
     Stage1RunResult result;
     run_stage1_once(N, B1, B2, gpucurves, savefilename, saveappend, nline, opt, &result);

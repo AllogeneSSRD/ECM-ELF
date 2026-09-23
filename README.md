@@ -344,11 +344,17 @@ adb shell run-as com.example.ecm ls -la code_cache/opencl_cache/
 
 ### 工具（`tools/`）
 
+`tools/` 按用途分子目录：`gen/`（内核/参数代码生成器）、`refactor/`（一次性迁移脚本）、
+`bench/`（基准与 A/B 脚本）、`test/`（单测/集成测试与夹具）、`disasm/`（反汇编/ISA 检查）、
+`ecm_prob/`、`ecm_report/`、`log_parser/`（各自带 README）。索引见
+[tools/README.md](tools/README.md)。
+
 | 文档 / 入口 | 简介 |
 |-------------|------|
-| [tools/DISASM_SETUP.md](tools/DISASM_SETUP.md) | Windows 安装 objdump / llvm-objdump，配合 ISA 导出 |
-| [kernels/opencl/bench/mp_addsub/README.md](kernels/opencl/bench/mp_addsub/README.md) | add/sub 内核布局、`gen_all.py` 再生成、bench 优先级 |
-| `tools/gen_*.py`、`disasm_*_isa.ps1` | Montgomery/addsub 展开与 asm 块生成；反汇编脚本 |
+| [tools/README.md](tools/README.md) | tools 目录索引（各子目录职责、常用命令） |
+| [tools/disasm/DISASM_SETUP.md](tools/disasm/DISASM_SETUP.md) | Windows 安装 objdump / llvm-objdump，配合 ISA 导出 |
+| [kernels/opencl/bench/mp_addsub/README.md](kernels/opencl/bench/mp_addsub/README.md) | add/sub 内核布局、`tools/gen/gen_all.py` 再生成、bench 优先级 |
+| `tools/gen/gen_*.py`、`tools/disasm/disasm_*_isa.ps1` | Montgomery/addsub 展开与 asm 块生成；反汇编脚本 |
 
 ### 性能测试（`bench/`）
 
@@ -375,7 +381,7 @@ adb shell run-as com.example.ecm ls -la code_cache/opencl_cache/
 | [docs/README.dev.asm](docs/README.dev.asm) | 上游 asm-redc 目录约定（历史参考） |
 | [bench/ADDSUB_ADDMOD_ASM_4096_CN.md](bench/ADDSUB_ADDMOD_ASM_4096_CN.md) | add/sub-mod 4096-bit AMDGCN asm |
 | [bench/MONT_ISA_4096_ANALYSIS.md](bench/MONT_ISA_4096_ANALYSIS.md) | Montgomery 4096 ISA 与 asm 路径 |
-| `tools/disasm_mont_isa.ps1` | 配合 `opencl_mont_isa_export` 反汇编 |
+| `tools/disasm/disasm_mont_isa.ps1` | 配合 `opencl_mont_isa_export` 反汇编 |
 
 ### IM Compiler（整数乘法代码生成）
 

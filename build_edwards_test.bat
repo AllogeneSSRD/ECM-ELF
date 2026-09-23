@@ -1,14 +1,19 @@
 @echo off
-rem Build the standalone Edwards stage-1 cross-validation unit (MSVC + vcpkg GMP).
+rem Build the standalone Edwards stage-1 cross-validation unit (MSVC + GMP).
+rem Prefers the local x86_64/zen3 (BMI2) GMP rebuild when present, else vcpkg GMP.
 setlocal
 
 set "VCVARS=C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
 set "GMP_ROOT=D:\code\vcpkg\installed\x64-windows"
+if exist "D:\code\MPA-OpenCl\third_party\gmp-zen3\dist\lib\gmp.lib" (
+    set "GMP_ROOT=D:\code\MPA-OpenCl\third_party\gmp-zen3\dist"
+)
 set "SRC=D:\code\MPA-OpenCl\src\cpu\ecm_edwards_cpu.cpp"
 set "OUT=D:\code\MPA-OpenCl\src\cpu\ecm_edwards_cpu.exe"
 
 call "%VCVARS%" >nul || (echo vcvars64 failed & exit /b 1)
 
+echo GMP_ROOT=%GMP_ROOT%
 cl /nologo /O2 /EHsc /utf-8 /DBUILD_ECM_EDWARDS_STANDALONE /I "%GMP_ROOT%\include" /I "D:\code\MPA-OpenCl\src\cpu" "%SRC%" /Fe:"%OUT%" /link "%GMP_ROOT%\lib\gmp.lib"
 if errorlevel 1 (echo COMPILE FAILED & exit /b 1)
 
