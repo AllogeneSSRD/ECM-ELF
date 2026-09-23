@@ -1,11 +1,18 @@
 #pragma once
 
-// ECMSTAGE2 worktodo parsing + small file helpers used by the queue manager.
+// Worktodo parsing + small file helpers used by the queue manager.
 //
-// Line format (same as pipeline/ecm.py::to_stage2_line):
-//   ECMSTAGE2=[<aid>,]<k>,<b>,<n>,<c>,<save_name>,<B2>,<skip_curves>,<curves_to_run>[,"factors"]
-// B2 and skip_curves are parsed but ignored (they are for a prime95 stage-2
-// consumer). B1 is not a field: it is extracted from save_name (m{n}_{b1}.save).
+// Two line formats are supported (dispatched by prefix):
+//
+// 1) ECMSTAGE2= (CUDA-oriented, unchanged):
+//      ECMSTAGE2=[<aid>,]<k>,<b>,<n>,<c>,<save_name>,<B2>,<skip_curves>,<curves_to_run>[,"factors"]
+//    B2 and skip_curves are parsed but ignored (they are for a prime95 stage-2
+//    consumer). B1 is not a field: it is extracted from save_name (m{n}_{b1}.save).
+//
+// 2) ECM= / ECM2= (Prime95 native ECM worktodo; both prefixes are equivalent —
+//    added for the Edwards CPU path):
+//      ECM=[<AID>,|N/A,|<nul>][FFT2=<fftl>,|<nul>]<k>,<b>,<n>,<c>,<B1>[,<B2>][,<curves_to_run>][,<specificsigma>][,"comma-separated-list-of-known-factors"]
+//    B2 defaults to 0, curves_to_run defaults to 100 (matching Prime95).
 
 #include <cstdint>
 #include <string>
@@ -25,8 +32,28 @@ struct EcmStage2Task {
     std::vector<std::string> factors; // known factors (optional)
 };
 
+// Prime95 ECM2= task (k*b^n+c, explicit B1/B2, optional 64-bit sigma + factors).
+struct Ecm2Task {
+    std::string raw_line;         // full original line
+    std::string aid;              // "" | "N/A" | real assignment id
+    std::string fft2;             // "" | FFT length string (informational only)
+    std::string k;                // integer string
+    std::string b;                // integer string
+    std::string c;                // signed integer string
+    unsigned long n = 0;          // exponent
+    double B1 = 0.0;
+    double B2 = 0.0;
+    uint32_t curves_to_run = 0;
+    bool has_sigma = false;
+    uint64_t sigma = 0;           // optional specific sigma (64-bit)
+    std::vector<std::string> factors; // known factors (optional)
+};
+
 // Parse one ECMSTAGE2 line into `task`. Returns false and fills `err` on failure.
 bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::string &err);
+
+// Parse one Prime95 ECM2= line into `task`. Returns false and fills `err` on failure.
+bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &err);
 
 // Extract B1 from `save_name` (the token between the last '_' and the trailing
 // ".save"). The token is parsed with strtod, so "110e6", "1e7" and "1000000" all
@@ -37,6 +64,9 @@ bool ecm_extract_b1_from_save_name(const std::string &save_name, double *b1_out,
 // Returns false and fills `err` when a field is malformed or a known factor does
 // not divide (k*b^n + c) exactly.
 bool ecm_compute_stage2_n(const EcmStage2Task &task, mpz_t N, std::string &err);
+
+// Compute N = (k*b^n + c) / (f1 * f2 * ...) for a Prime95 ECM2= task.
+bool ecm_compute_ecm2_n(const Ecm2Task &task, mpz_t N, std::string &err);
 
 // Read the first non-empty, non-comment line of `path`. Returns false if the
 // file is missing or has no task line.

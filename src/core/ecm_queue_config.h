@@ -23,6 +23,7 @@ struct EcmQueueConfig {
 
     // --- driver defaults (queue mode) ---
     int device = 0;
+    int edwards = 0;                             // 0 = GPU, 1 = CPU Edwards (Atkin-Morain)
     double gpuckpt_seconds = 600.0;
     int verbose = 1;
     uint32_t tpi = 8u;

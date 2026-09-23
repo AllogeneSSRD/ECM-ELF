@@ -23,6 +23,10 @@
 #include <unistd.h>
 #endif
 
+#ifdef _MSC_VER
+#include <intrin.h>   /* __rdtsc() for the Prime95-style sigma entropy mix */
+#endif
+
 #include <gmp.h>
 
 #include "ecm_backend.h"           /* GPU backend seam (OpenCL or CUDA glue) */
@@ -34,6 +38,7 @@
 #include "opencl_ecm_log.h"
 #include "ecm_queue_config.h"
 #include "ecm_worktodo.h"
+#include "ecm_edwards_cpu.h"        /* Edwards (Atkin-Morain) stage-1 CPU path */
 
 static void trim(std::string &s){
     while(!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
@@ -348,6 +353,55 @@ static std::string mpz_to_dec_string(const mpz_t v) {
     return out;
 }
 
+// Parse a 64-bit sigma (for the Edwards Atkin-Morain path). Optional "param:"
+// prefix is accepted and ignored for compatibility with -sigma parsing.
+static bool parse_sigma64_arg(const std::string &arg, uint64_t *sigma_out) {
+    std::string s = arg;
+    size_t colon = s.find(':');
+    if (colon != std::string::npos) {
+        s = s.substr(colon + 1);
+    }
+    try {
+        unsigned long long v = std::stoull(s);
+        if (v == 0) {
+            return false;
+        }
+        *sigma_out = (uint64_t)v;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// 64-bit random sigma for the Edwards (Atkin-Morain) path. Direct port of
+// Prime95 ecm.cpp stage-1 init (choose curve, ~line 7397):
+//   sigma  = ((uint64_t)(rand() & 0x1F)) << 48;
+//   sigma += ((uint64_t)(rand() & 0xFFFF)) << 32;
+//   sigma += lo ^ hi ^ ((uint32_t)rand() << 16);   // rdtsc for extra entropy
+//   reject sigma <= 5.
+// `rand()` is seeded once (srand(time)), and __rdtsc() supplies per-call entropy
+// so consecutive curves differ even within the same second.
+static uint64_t random_sigma_u64() {
+    static bool seeded = false;
+    if (!seeded) {
+        srand((unsigned)time(nullptr));
+        seeded = true;
+    }
+    uint64_t sigma;
+    do {
+        uint32_t hi = 0, lo = 0;
+        sigma = ((uint64_t)(rand() & 0x1F)) << 48;
+        sigma += ((uint64_t)(rand() & 0xFFFF)) << 32;
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+        const unsigned __int64 tsc = __rdtsc();
+        hi = (uint32_t)(tsc >> 32);
+        lo = (uint32_t)tsc;
+#endif
+        sigma += (uint64_t)(lo ^ hi ^ ((uint32_t)rand() << 16));
+    } while (sigma <= 5);
+    return sigma;
+}
+
 struct PrimePowerBound {
     uint32_t p;
     uint32_t exp;
@@ -649,7 +703,8 @@ static void print_ecm_usage(const char *prog) {
               << "  B2              Stage-2 bound (optional; 0 disables stage 2)\n\n"
               << "Options:\n"
               << "  -gpu                 Enable GPU stage-1 (requires -gpucurves)\n"
-              << "  -gpucurves <n>       Number of ECM curves per GPU launch\n"
+              << "  --edwards            Enable CPU Edwards stage-1 (Atkin-Morain, a=1)\n"
+              << "  -gpucurves <n>       Number of ECM curves per launch (Edwards: total curves)\n"
               << "  -gpuckpt <sec>       GPU checkpoint interval in seconds (default: 600)\n"
               << "  -d <index>           OpenCL device index (default: 0)\n"
               << "  -sigma <value>       Fixed curve sigma (1..2^32-1; optional param:3: prefix)\n"
@@ -753,12 +808,14 @@ static long long current_epoch_seconds() {
 
 struct Stage1RunOptions {
     bool use_gpu = true;
+    bool use_edwards = false;        // CPU Edwards (Atkin-Morain) stage-1 path
     int verbose = 0;
     int device_index = 0;
     unsigned long gpuckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
     std::string gpu_mul_path, gpu_sqr_path, gpu_add_path, gpu_sub_path, gpu_special_mult_path;
     bool sigma_fixed = false;
-    uint32_t fixed_sigma = 0;
+    uint32_t fixed_sigma = 0;        // GPU batch sigma (32-bit)
+    uint64_t fixed_sigma64 = 0;      // Edwards sigma (64-bit)
 };
 
 struct Stage1RunResult {
@@ -766,9 +823,86 @@ struct Stage1RunResult {
     bool prepare_failed = false;
     uint32_t curves = 0;
     uint32_t firstsigma = 0;
+    uint64_t firstsigma64 = 0;       // full 64-bit sigma (Edwards path)
     mpz_t *factors = nullptr;
     int *array_found = nullptr;
 };
+
+// Run one Edwards (Atkin-Morain) stage-1 batch on the CPU. One curve per sigma.
+static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
+                              const std::string &savefilename, bool saveappend,
+                              const std::string &n_expr,
+                              const Stage1RunOptions &opt, Stage1RunResult *out) {
+    (void)B2;
+    out->ret = ECM_ERROR;
+    out->prepare_failed = false;
+    out->curves = curves;
+    out->firstsigma = 0;
+    out->firstsigma64 = 0;
+    out->factors = nullptr;
+    out->array_found = nullptr;
+
+    if (curves == 0) {
+        std::cerr << "curves must be > 0" << std::endl;
+        return ECM_ERROR;
+    }
+
+    // s = 48 * lcm(1..B1). (GPU batch uses lcm(1..B1); Edwards adds the
+    // lcm(12,16)=48 torsion factor, matching Prime95 ecm_calc_exp.)
+    mpz_t s;
+    mpz_init(s);
+    if (!compute_batch_s(s, B1)) {
+        std::cerr << "Failed to compute Edwards stage-1 exponent" << std::endl;
+        mpz_clear(s);
+        return ECM_ERROR;
+    }
+    mpz_mul_ui(s, s, 48);
+
+    mpz_t *factors = (mpz_t *)malloc(sizeof(mpz_t) * curves);
+    int *array_found = (int *)malloc(sizeof(int) * curves);
+    for (uint32_t i = 0; i < curves; i++) {
+        mpz_init(factors[i]);
+        array_found[i] = ECM_NO_FACTOR_FOUND;
+    }
+
+    uint64_t firstsigma = 0;
+
+    std::cout << "Using B1=" << B1 << ", B2=" << B2
+              << " (" << curves << " Edwards curves, CPU)" << std::endl;
+
+    for (uint32_t i = 0; i < curves; i++) {
+        // Fixed sigma → batch start + i (matches -sigma/-gpucurves semantics);
+        // otherwise a fresh Prime95-style random sigma per curve.
+        const uint64_t sigma = opt.sigma_fixed ? (opt.fixed_sigma64 + i) : random_sigma_u64();
+        if (i == 0) {
+            firstsigma = sigma;
+        }
+        const int rc = edwards_stage1_curve(factors[i], nullptr, nullptr, N, sigma, s);
+        if (rc > 0) {
+            array_found[i] = ECM_FACTOR_FOUND_STEP1;
+            if (opt.verbose) {
+                std::cout << "  curve " << i << " sigma=" << sigma
+                          << " -> factor found" << std::endl;
+            }
+        } else if (rc < 0) {
+            std::cerr << "  curve " << i << " sigma=" << sigma
+                      << " -> Edwards stage-1 internal error" << std::endl;
+        }
+    }
+
+    // Binary Prime95 save format is a later task; the OpenCL text save is not
+    // valid for the Edwards parametrization, so skip it for now.
+    (void)savefilename; (void)saveappend; (void)n_expr;
+
+    mpz_clear(s);
+
+    out->ret = ECM_NO_FACTOR_FOUND;
+    out->firstsigma = (uint32_t)(firstsigma & 0xFFFFFFFFu);
+    out->firstsigma64 = firstsigma;
+    out->factors = factors;
+    out->array_found = array_found;
+    return out->ret;
+}
 
 // Run one stage-1 batch. N and the caller's n_expr are borrowed (not cleared);
 // factors / array_found are allocated here and returned via `out` (caller frees).
@@ -776,6 +910,11 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
                            const Stage1RunOptions &opt, Stage1RunResult *out) {
+    if (opt.use_edwards) {
+        return run_edwards_stage1(N, B1, B2, curves, savefilename, saveappend,
+                                  n_expr, opt, out);
+    }
+
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->curves = curves;
@@ -918,6 +1057,104 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
     return ret;
 }
 
+// Rebuild the original N expression for the save-file N= field.
+static std::string build_n_expr(const std::string &k, const std::string &b,
+                                unsigned long n, const std::string &c,
+                                const std::vector<std::string> &factors) {
+    std::string cstr = c;
+    std::string sign = "+";
+    if (!cstr.empty() && cstr[0] == '-') {
+        sign = "-";
+        cstr = cstr.substr(1);
+    }
+    std::string e = "(" + k + "*" + b + "^" + std::to_string(n) + sign + cstr + ")";
+    if (!factors.empty()) {
+        e += "/(";
+        for (std::size_t i = 0; i < factors.size(); ++i) {
+            if (i != 0) e += "*";
+            e += factors[i];
+        }
+        e += ")";
+    }
+    return e;
+}
+
+// Run one already-parsed queue task (ECM2= or ECMSTAGE2=), report factors, and
+// advance the worktodo file. Returns true to keep processing, false to abort
+// the queue (backend prepare failed).
+static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
+                          uint64_t sigma, bool sigma_fixed,
+                          const std::string &save_name, const std::string &n_expr,
+                          const std::string &aid, const std::string &line,
+                          const std::string &worktodo_path, const std::string &finished_path,
+                          const Stage1RunOptions &base_opt,
+                          const std::string &exe_dir, const std::string &sync1,
+                          const std::string &sync2, bool full_sync, long long marker,
+                          int *processed) {
+    Stage1RunOptions opt = base_opt;
+    if (sigma_fixed) {
+        opt.sigma_fixed = true;
+        opt.fixed_sigma64 = sigma;
+        opt.fixed_sigma = (uint32_t)(sigma & 0xFFFFFFFFu);
+    }
+
+    Stage1RunResult result;
+    run_stage1_once(N, B1, B2, curves, save_name, /*saveappend=*/true, n_expr, opt, &result);
+
+    const bool has_factors = (result.factors != nullptr);
+
+    if (result.prepare_failed) {
+        if (has_factors) {
+            for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
+            free(result.factors);
+            free(result.array_found);
+        }
+        ecm_ts_fprintf(stderr, "FATAL: backend prepare failed; aborting queue.\n");
+        return false;
+    }
+
+    bool found_factor = false;
+    if (has_factors) {
+        for (uint32_t i = 0; i < result.curves; ++i) {
+            if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
+                char *fs = mpz_get_str(nullptr, 10, result.factors[i]);
+                std::cout << "factor[" << i << "]=" << (fs ? fs : "?") << "\n";
+                free(fs);
+                found_factor = true;
+            }
+        }
+    }
+    if (found_factor) {
+        ecm_ts_fprintf(stdout, "FACTOR FOUND aid=%s task=%s\n",
+                       aid.empty() ? "N/A" : aid.c_str(), line.c_str());
+    }
+
+    if (has_factors) {
+        for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
+        free(result.factors);
+        free(result.array_found);
+    }
+
+    if (result.ret == ECM_ERROR) {
+        ecm_ts_fprintf(stderr, "ERROR: stage1 failed for task: %s\n", line.c_str());
+        ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+        return true;
+    }
+
+    if (!ecm_append_text_line(finished_path, line)) {
+        ecm_ts_fprintf(stderr, "ERROR: cannot append to %s\n", finished_path.c_str());
+        ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+        return true;
+    }
+    ecm_worktodo_advance(worktodo_path, line, WorktodoAction::Remove);
+
+    ecm_sync_save_files(exe_dir, sync1, sync2, full_sync, marker);
+    if (processed) {
+        (*processed)++;
+    }
+    return true;
+}
+
 static int run_queue_manager(const std::string &ini_path) {
     const std::string raw_exe_dir = get_exe_dir_local();
     const std::string exe_dir = raw_exe_dir.empty() ? "." : raw_exe_dir;
@@ -963,6 +1200,7 @@ static int run_queue_manager(const std::string &ini_path) {
 
     Stage1RunOptions opt;
     opt.use_gpu = true;
+    opt.use_edwards = (cfg.edwards != 0);
     opt.verbose = cfg.verbose;
     opt.device_index = cfg.device;
     opt.gpuckpt_ms = (cfg.gpuckpt_seconds > 0.0)
@@ -981,11 +1219,13 @@ static int run_queue_manager(const std::string &ini_path) {
     ecm_ts_fprintf(stdout, "worktodo : %s\n", worktodo_path.c_str());
     ecm_ts_fprintf(stdout, "finished : %s\n", finished_path.c_str());
     ecm_ts_fprintf(stdout, "log_file : %s\n", cfg.log_file.c_str());
+    ecm_ts_fprintf(stdout, "backend : %s\n", opt.use_edwards ? "edwards" : "gpu");
 
     // Startup full sync (matches the old work_manager.ps1 behaviour).
     ecm_sync_save_files(exe_dir, sync1, sync2, /*full=*/true, 0);
 
     int processed = 0;
+    const bool full_sync = (cfg.sync_mode == "full");
     while (true) {
         std::string line;
         if (!ecm_worktodo_first_line(worktodo_path, line)) {
@@ -994,8 +1234,42 @@ static int run_queue_manager(const std::string &ini_path) {
 
         ecm_ts_fprintf(stdout, "START: %s\n", line.c_str());
 
-        EcmStage2Task task;
+        const long long marker = current_epoch_seconds();
         std::string err;
+
+        if (line.compare(0, 5, "ECM2=") == 0 || line.compare(0, 4, "ECM=") == 0) {
+            // Prime95 ECM= / ECM2= (等价) 格式: k,b,n,c,B1[,B2][,curves][,sigma][,"factors"].
+            Ecm2Task task;
+            if (!ecm_parse_ecm2_line(line, task, err)) {
+                ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
+                ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+                continue;
+            }
+            mpz_t N;
+            mpz_init(N);
+            if (!ecm_compute_ecm2_n(task, N, err)) {
+                mpz_clear(N);
+                ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
+                ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+                continue;
+            }
+            const std::string n_expr = build_n_expr(task.k, task.b, task.n, task.c, task.factors);
+            const bool cont = queue_run_one(
+                N, task.B1, task.B2, task.curves_to_run,
+                task.has_sigma ? task.sigma : 0, task.has_sigma,
+                /*save_name=*/"", n_expr, task.aid, line,
+                worktodo_path, finished_path, opt,
+                exe_dir, sync1, sync2, full_sync, marker, &processed);
+            mpz_clear(N);
+            if (!cont) {
+                if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
+                return 1;
+            }
+            continue;
+        }
+
+        // ECMSTAGE2= (existing CUDA-oriented format, unchanged semantics).
+        EcmStage2Task task;
         if (!ecm_parse_stage2_line(line, task, err)) {
             ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
             ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
@@ -1018,85 +1292,19 @@ static int run_queue_manager(const std::string &ini_path) {
             continue;
         }
 
-        // Rebuild the original N expression for the save-file N= field.
-        std::string cstr = task.c;
-        std::string sign = "+";
-        if (!cstr.empty() && cstr[0] == '-') {
-            sign = "-";
-            cstr = cstr.substr(1);
-        }
-        std::string n_expr = "(" + task.k + "*" + task.b + "^" + std::to_string(task.n) + sign + cstr + ")";
-        if (!task.factors.empty()) {
-            n_expr += "/(";
-            for (std::size_t i = 0; i < task.factors.size(); ++i) {
-                if (i != 0) n_expr += "*";
-                n_expr += task.factors[i];
-            }
-            n_expr += ")";
-        }
-
-        const long long marker = current_epoch_seconds();
-
-        Stage1RunResult result;
-        run_stage1_once(N, B1, /*B2=*/0.0, task.curves_to_run, task.save_name,
-                        /*saveappend=*/true, n_expr, opt, &result);
-
-        const bool has_factors = (result.factors != nullptr);
-
-        if (result.prepare_failed) {
-            if (has_factors) {
-                for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
-                free(result.factors);
-                free(result.array_found);
-            }
-            mpz_clear(N);
-            ecm_ts_fprintf(stderr, "FATAL: GPU backend prepare failed; aborting queue.\n");
+        const std::string n_expr = build_n_expr(task.k, task.b, task.n, task.c, task.factors);
+        // ECMSTAGE2 lines carry no per-line sigma: use cfg.sigma (already in opt).
+        const bool cont = queue_run_one(
+            N, B1, /*B2=*/0.0, task.curves_to_run,
+            /*sigma=*/0, /*sigma_fixed=*/false,
+            task.save_name, n_expr, task.aid, line,
+            worktodo_path, finished_path, opt,
+            exe_dir, sync1, sync2, full_sync, marker, &processed);
+        mpz_clear(N);
+        if (!cont) {
             if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
             return 1;
         }
-
-        bool found_factor = false;
-        if (has_factors) {
-            for (uint32_t i = 0; i < result.curves; ++i) {
-                if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
-                    char *fs = mpz_get_str(nullptr, 10, result.factors[i]);
-                    std::cout << "factor[" << i << "]=" << (fs ? fs : "?") << "\n";
-                    free(fs);
-                    found_factor = true;
-                }
-            }
-        }
-        if (found_factor) {
-            ecm_ts_fprintf(stdout, "FACTOR FOUND aid=%s task=%s\n",
-                           task.aid.empty() ? "N/A" : task.aid.c_str(), line.c_str());
-        }
-
-        if (has_factors) {
-            for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
-            free(result.factors);
-            free(result.array_found);
-        }
-        mpz_clear(N);
-
-        if (result.ret == ECM_ERROR) {
-            ecm_ts_fprintf(stderr, "ERROR: stage1 failed for task: %s\n", line.c_str());
-            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
-            continue;
-        }
-
-        // Success: move the raw line to the finished file, drop it from worktodo.
-        if (!ecm_append_text_line(finished_path, line)) {
-            ecm_ts_fprintf(stderr, "ERROR: cannot append to %s\n", finished_path.c_str());
-            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
-            continue;
-        }
-        ecm_worktodo_advance(worktodo_path, line, WorktodoAction::Remove);
-
-        // Incremental sync of *.save touched by this task.
-        const bool full = (cfg.sync_mode == "full");
-        ecm_sync_save_files(exe_dir, sync1, sync2, full, marker);
-
-        ++processed;
     }
 
     ecm_ts_fprintf(stdout, "===== queue done, %d task(s) processed =====\n", processed);
@@ -1117,11 +1325,13 @@ int main(int argc, char **argv){
     // so --no-log-timestamp takes effect.
     bool verbose = false;
     bool use_gpu = false;
+    bool use_edwards = false;
     uint32_t gpucurves = 0;
     double gpuckpt_seconds = -1.0;
     bool gpuckpt_set = false;
     bool sigma_fixed = false;
     uint32_t fixed_sigma = 0;
+    uint64_t fixed_sigma64 = 0;
     int gpu_device_index = 0;
     bool print_group_order = false;
     std::string savefilename;
@@ -1140,6 +1350,7 @@ int main(int argc, char **argv){
         std::string a = argv[i];
         if(a == "-v") { verbose = true; continue; }
         if(a == "-gpu") { use_gpu = true; continue; }
+        if(a == "--edwards") { use_edwards = true; continue; }
         if(a == "-gpucurves" && i+1<argc){ gpucurves = (uint32_t)std::stoul(argv[++i]); continue; }
         if(a == "-gpuckpt" && i+1<argc){
             try {
@@ -1165,11 +1376,14 @@ int main(int argc, char **argv){
             continue;
         }
         if(a == "-sigma" && i+1<argc){
-            if(!parse_sigma_arg(argv[++i], &fixed_sigma)){
-                std::cerr << "Invalid -sigma value (need 1..2^32-1, optional param:3: prefix)" << std::endl;
+            if(!parse_sigma64_arg(argv[++i], &fixed_sigma64)){
+                std::cerr << "Invalid -sigma value (need 1..2^64-1, optional param: prefix)" << std::endl;
                 return 1;
             }
             sigma_fixed = true;
+            if (fixed_sigma64 <= 0xFFFFFFFFull) {
+                fixed_sigma = (uint32_t)fixed_sigma64;
+            }
             continue;
         }
         if(a == "-save" && i+1<argc) {
@@ -1310,7 +1524,7 @@ int main(int argc, char **argv){
     }
 
     std::cout << "ecm driver starting" << std::endl;
-    std::cout << "  mode: " << (use_gpu ? "gpu" : "cpu-stub")
+    std::cout << "  mode: " << (use_edwards ? "edwards" : (use_gpu ? "gpu" : "cpu-stub"))
               << ", gpucurves=" << gpucurves
               << ", gpuckpt=" << (gpuckpt_ms == 0 ? 0.0 : gpuckpt_ms / 1000.0) << "s"
               << ", device=" << gpu_device_index
@@ -1389,8 +1603,16 @@ int main(int argc, char **argv){
     // }
 
     // Execute stage 1 through the shared single-run path.
+    if (!use_edwards && sigma_fixed && fixed_sigma64 > 0xFFFFFFFFull) {
+        std::cerr << "Error: -sigma value exceeds 2^32-1; the GPU path needs a "
+                  << "32-bit sigma (use --edwards for 64-bit Edwards sigma)" << std::endl;
+        mpz_clear(N);
+        return 1;
+    }
+
     Stage1RunOptions opt;
     opt.use_gpu = use_gpu;
+    opt.use_edwards = use_edwards;
     opt.verbose = verbose ? 1 : 0;
     opt.device_index = gpu_device_index;
     opt.gpuckpt_ms = gpuckpt_ms;
@@ -1401,6 +1623,7 @@ int main(int argc, char **argv){
     opt.gpu_special_mult_path = gpu_special_mult_path;
     opt.sigma_fixed = sigma_fixed;
     opt.fixed_sigma = fixed_sigma;
+    opt.fixed_sigma64 = fixed_sigma64;
 
     Stage1RunResult result;
     run_stage1_once(N, B1, B2, gpucurves, savefilename, saveappend, nline, opt, &result);

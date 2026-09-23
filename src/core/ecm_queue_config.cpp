@@ -79,6 +79,7 @@ bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
         else if (key == "sync_mode") cfg.sync_mode = val;
         else if (key == "log_file") cfg.log_file = val;
         else if (key == "device") set_int(cfg.device);
+        else if (key == "edwards") set_int(cfg.edwards);
         else if (key == "gpuckpt_seconds") set_double(cfg.gpuckpt_seconds);
         else if (key == "verbose") set_int(cfg.verbose);
         else if (key == "tpi") set_u32(cfg.tpi);
@@ -132,6 +133,10 @@ bool ecm_queue_config_write_default(const std::string &path) {
 "# GPU device index.\n"
 "# GPU 设备索引。\n"
 "device = 0\n"
+"\n"
+"# Stage-1 backend: 0 = GPU, 1 = CPU Edwards (Atkin-Morain).\n"
+"# Stage-1 后端：0 = GPU，1 = CPU Edwards（Atkin-Morain）。\n"
+"edwards = 0\n"
 "\n"
 "# GPU checkpoint interval in seconds.\n"
 "# GPU 检查点间隔（秒）。\n"

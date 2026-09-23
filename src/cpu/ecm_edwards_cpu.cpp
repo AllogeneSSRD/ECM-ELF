@@ -17,6 +17,21 @@
 #include <string>
 #include <gmp.h>
 
+#include "ecm_edwards_cpu.h"
+#include "ecm_edwards_mont.h"
+
+// 标量乘算法开关: 1 = w-NAF + 仿射字典 (默认), 0 = double-and-add (基准).
+#define ECM_EDWARDS_USE_NAF 1
+
+// w-NAF 窗口 (默认 8; 调优/基准用 edwards_set_naf_w 设置).
+// 实测 (B1=1e6): w=8~10 为甜点, 内存随 w 指数增长 (字典 2^(w-2) 项).
+static int g_edwards_naf_w = 8;
+void edwards_set_naf_w(int w) {
+    if (w >= 2) {
+        g_edwards_naf_w = w;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 域运算 (mod N)
 // ---------------------------------------------------------------------------
@@ -161,11 +176,259 @@ static void ed_dbl(ed_point &r, const ed_point &p, const mpz_t N) {
     mpz_clears(A, B, C, D, E, F, G, H, t, NULL);
 }
 
-// 标量乘 [k]P, double-and-add (交叉验证里程碑; NAF 后续)
+// w-NAF: 有符号数字, 每个非零位后至少 w-1 个零位. 返回 LSB-first.
+// 移植 Prime95 ecm.cpp:4824-4856 的 O(bits) 单遍算法 (tstbit + carry, 不做逐位右移).
+static void naf_digits(const mpz_t k, int w, std::vector<int> &digits) {
+    digits.clear();
+    const size_t nbits = mpz_sizeinbase(k, 2);
+    if (nbits == 0) return;
+    const int max_val = (1 << (w - 1)) - 1;      // 2^(w-1)-1 (w=4 → 7)
+
+    std::vector<int> out(nbits + 1, 0);
+    int value = 0;        // 正在构造的 NAF 值 (奇数)
+    int addin = 1;        // 当前位权
+    int carry = 0;        // 负 NAF 码的借位
+    size_t start = 0;     // 当前 NAF 值起始位
+
+    for (size_t bitnum = 0; bitnum < nbits; bitnum++) {
+        int this_bit = carry + (mpz_tstbit(k, bitnum) ? 1 : 0);
+        carry = this_bit >> 1;                   // 0 或 1
+        this_bit &= 1;
+        if (this_bit) {
+            if (value == 0) start = bitnum;      // 新 NAF 值起始
+            value += addin;
+        }
+        if (value == 0) continue;                // addin 仅在构造中翻倍
+        addin <<= 1;
+
+        bool complete;
+        if (bitnum == nbits - 1) {
+            complete = true;
+        } else if (addin < max_val) {
+            complete = false;
+        } else if (value <= max_val && addin - value <= max_val) {
+            complete = false;
+        } else {
+            complete = true;
+        }
+        if (!complete) continue;
+
+        if (value <= max_val) {
+            out[start] = value;                  // 正 NAF 码
+        } else {
+            out[start] = value - addin;          // 负 NAF 码
+            carry = 1;
+        }
+        value = 0;
+        addin = 1;
+    }
+    if (carry) {
+        out[nbits] = 1;                          // 末尾借位补 +1
+    }
+    size_t sz = out.size();
+    while (sz > 1 && out[sz - 1] == 0) sz--;
+    out.resize(sz);
+    digits = std::move(out);
+}
+
+// ---------------------------------------------------------------------------
+// Montgomery 域 Edwards 点运算 (mpn, 标量乘性能路径)
+// ---------------------------------------------------------------------------
+struct ed_point_mont { mont_t x, y, z, t; };
+struct ed_affine_mont { mont_t x, y, dxy; };
+
+static void ed_dbl_mont(ed_point_mont &r, const ed_point_mont &p, const mont_ctx_t *ctx) {
+    mont_t A, B, C, E, F, G, H, t;
+    mont_sqr(&A, &p.x, ctx);
+    mont_sqr(&B, &p.y, ctx);
+    mont_sqr(&C, &p.z, ctx);
+    mont_add(&C, &C, &C, ctx);              // C = 2Z^2
+    mont_add(&t, &p.x, &p.y, ctx);
+    mont_sqr(&E, &t, ctx);
+    mont_sub(&E, &E, &A, ctx);
+    mont_sub(&E, &E, &B, ctx);              // E = (X+Y)^2 - A - B
+    mont_add(&G, &A, &B, ctx);              // G = A + B  (=D+B, a=1)
+    mont_sub(&F, &G, &C, ctx);              // F = G - C
+    mont_sub(&H, &A, &B, ctx);              // H = A - B  (=D-B)
+    mont_mul(&r.x, &E, &F, ctx);
+    mont_mul(&r.y, &G, &H, ctx);
+    mont_mul(&r.t, &E, &H, ctx);
+    mont_mul(&r.z, &F, &G, ctx);
+}
+
+static void ed_add_mont(ed_point_mont &r, const ed_point_mont &p, const ed_point_mont &q,
+                        const mont_t *d, const mont_ctx_t *ctx) {
+    mont_t A, B, C, D, E, F, G, H, t;
+    mont_mul(&A, &p.x, &q.x, ctx);
+    mont_mul(&B, &p.y, &q.y, ctx);
+    mont_mul(&C, &p.t, &q.t, ctx);
+    mont_mul(&C, &C, d, ctx);               // C = d*T1*T2
+    mont_mul(&D, &p.z, &q.z, ctx);
+    mont_add(&t, &p.x, &p.y, ctx);
+    mont_add(&E, &q.x, &q.y, ctx);
+    mont_mul(&E, &t, &E, ctx);
+    mont_sub(&E, &E, &A, ctx);
+    mont_sub(&E, &E, &B, ctx);
+    mont_sub(&F, &D, &C, ctx);
+    mont_add(&G, &D, &C, ctx);
+    mont_sub(&H, &B, &A, ctx);
+    mont_mul(&r.x, &E, &F, ctx);
+    mont_mul(&r.y, &G, &H, ctx);
+    mont_mul(&r.t, &E, &H, ctx);
+    mont_mul(&r.z, &F, &G, ctx);
+}
+
+static void ed_add_affine_mont(ed_point_mont &r, const ed_point_mont &p, const ed_affine_mont &q,
+                               const mont_ctx_t *ctx) {
+    mont_t A, B, C, E, F, G, H, t;
+    mont_mul(&A, &p.x, &q.x, ctx);
+    mont_mul(&B, &p.y, &q.y, ctx);
+    mont_mul(&C, &p.t, &q.dxy, ctx);
+    mont_add(&t, &p.x, &p.y, ctx);
+    mont_add(&E, &q.x, &q.y, ctx);
+    mont_mul(&E, &t, &E, ctx);
+    mont_sub(&E, &E, &A, ctx);
+    mont_sub(&E, &E, &B, ctx);
+    mont_sub(&F, &p.z, &C, ctx);
+    mont_add(&G, &p.z, &C, ctx);
+    mont_sub(&H, &B, &A, ctx);
+    mont_mul(&r.x, &E, &F, ctx);
+    mont_mul(&r.y, &G, &H, ctx);
+    mont_mul(&r.t, &E, &H, ctx);
+    mont_mul(&r.z, &F, &G, ctx);
+}
+
+// 批量求逆 (mpz): iz[i] = z[i]^{-1} mod N, 一次 mpz_invert + O(n) 乘
+static void mpz_batch_invert(mpz_t *iz, mpz_t *z, size_t n, const mpz_t N) {
+    if (n == 0) return;
+    std::vector<mpz_t> prefix(n);
+    for (size_t i = 0; i < n; i++) mpz_init(prefix[i]);
+    mpz_set(prefix[0], z[0]);
+    for (size_t i = 1; i < n; i++) { mpz_mul(prefix[i], prefix[i - 1], z[i]); mpz_mod(prefix[i], prefix[i], N); }
+    mpz_t inv;
+    mpz_init(inv);
+    mpz_invert(inv, prefix[n - 1], N);
+    for (size_t i = n; i-- > 0;) {
+        if (i > 0) {
+            mpz_mul(iz[i], inv, prefix[i - 1]); mpz_mod(iz[i], iz[i], N);
+            mpz_mul(inv, inv, z[i]); mpz_mod(inv, inv, N);
+        } else {
+            mpz_set(iz[i], inv);
+        }
+    }
+    mpz_clear(inv);
+    for (size_t i = 0; i < n; i++) mpz_clear(prefix[i]);
+}
+
+// 归一化字典到仿射 (Z=1): 用 mpz 做那 1 次逆, 其余 mont 运算
+static void ed_to_affine_batch_mont(ed_affine_mont *aff, ed_point_mont *pts, size_t n,
+                                    const mont_t *d, const mont_ctx_t *ctx) {
+    if (n == 0) return;
+    std::vector<mpz_t> z(n), iz(n);
+    for (size_t i = 0; i < n; i++) { mpz_init(z[i]); mpz_init(iz[i]); mont_from(z[i], &pts[i].z, ctx); }
+    mpz_batch_invert(iz.data(), z.data(), n, ctx->Nz);
+
+    mont_t izm, xy;
+    for (size_t i = 0; i < n; i++) {
+        mont_to(&izm, iz[i], ctx);               // iz[i] 进 Montgomery 域
+        mont_mul(&aff[i].x, &pts[i].x, &izm, ctx);
+        mont_mul(&aff[i].y, &pts[i].y, &izm, ctx);
+        mont_mul(&xy, &aff[i].x, &aff[i].y, ctx);
+        mont_mul(&aff[i].dxy, &xy, d, ctx);
+    }
+    for (size_t i = 0; i < n; i++) { mpz_clear(z[i]); mpz_clear(iz[i]); }
+}
+
+// 标量乘 [k]P, w-NAF + 仿射字典 (1 次倍点/bit + 1 次混合加法/非零位).
 static void ed_mul(ed_point &r, const mpz_t k, const ed_point &P, const mpz_t d, const mpz_t N) {
+#if ECM_EDWARDS_USE_NAF
+    mont_ctx_t ctx;
+    if (mont_init(&ctx, N) != 0) {
+        // N 超过固定尺寸上限 (不该发生, <10000 bit); 回退 mpz double-and-add
+        ed_point acc, base;
+        ed_init(acc); ed_init(base);
+        mpz_set_ui(acc.x, 0); mpz_set_ui(acc.y, 1); mpz_set_ui(acc.z, 1); mpz_set_ui(acc.t, 0);
+        mpz_set(base.x, P.x); mpz_set(base.y, P.y); mpz_set(base.z, P.z); mpz_set(base.t, P.t);
+        size_t bits = mpz_sizeinbase(k, 2);
+        for (size_t i = 0; i < bits; ++i) {
+            if (mpz_tstbit(k, i)) ed_add(acc, acc, base, d, N);
+            ed_dbl(base, base, N);
+        }
+        mpz_set(r.x, acc.x); mpz_set(r.y, acc.y); mpz_set(r.z, acc.z); mpz_set(r.t, acc.t);
+        ed_clear(acc); ed_clear(base);
+        return;
+    }
+
+    const int w = g_edwards_naf_w;                // 窗口; 数字 ∈ {±1,±3,...,±(2^(w-1)-1)}
+    const size_t m = (size_t)1 << (w - 2);        // 字典项数 (含 P)
+
+    // P, d 进 Montgomery 域
+    ed_point_mont Pm;
+    mont_t dm;
+    mont_to(&Pm.x, P.x, &ctx);
+    mont_to(&Pm.y, P.y, &ctx);
+    mont_to(&Pm.z, P.z, &ctx);
+    mont_to(&Pm.t, P.t, &ctx);
+    mont_to(&dm, d, &ctx);
+
+    // 字典 (mont): 奇数倍 {P, 3P, ..., (2^(w-1)-1)P}
+    std::vector<ed_point_mont> dict(m);
+    mont_set(&dict[0].x, &Pm.x, &ctx); mont_set(&dict[0].y, &Pm.y, &ctx);
+    mont_set(&dict[0].z, &Pm.z, &ctx); mont_set(&dict[0].t, &Pm.t, &ctx);
+    ed_point_mont dblP, cur;
+    ed_dbl_mont(dblP, Pm, &ctx);                  // 2P
+    mont_set(&cur.x, &Pm.x, &ctx); mont_set(&cur.y, &Pm.y, &ctx);
+    mont_set(&cur.z, &Pm.z, &ctx); mont_set(&cur.t, &Pm.t, &ctx);
+    for (size_t j = 1; j < m; j++) {
+        ed_add_mont(cur, cur, dblP, &dm, &ctx);   // cur = (2j+1)P
+        mont_set(&dict[j].x, &cur.x, &ctx); mont_set(&dict[j].y, &cur.y, &ctx);
+        mont_set(&dict[j].z, &cur.z, &ctx); mont_set(&dict[j].t, &cur.t, &ctx);
+    }
+
+    // 字典归一化到仿射 (一次批量逆)
+    std::vector<ed_affine_mont> aff(m);
+    ed_to_affine_batch_mont(aff.data(), dict.data(), m, &dm, &ctx);
+
+    // w-NAF 数字
+    std::vector<int> digits;
+    naf_digits(k, w, digits);
+
+    // 主循环: MSB → LSB. Rm 初始为恒等点 (0,1,1,0) 的 Montgomery 表示.
+    ed_point_mont Rm;
+    mont_set_ui(&Rm.x, 0, &ctx);
+    mont_set_ui(&Rm.y, 1, &ctx);
+    mont_set_ui(&Rm.z, 1, &ctx);
+    mont_set_ui(&Rm.t, 0, &ctx);
+    ed_affine_mont neg;
+    for (size_t i = digits.size(); i-- > 0;) {
+        ed_dbl_mont(Rm, Rm, &ctx);
+        const int dgt = digits[i];
+        if (dgt != 0) {
+            const int a = dgt > 0 ? dgt : -dgt;
+            const size_t idx = (size_t)(a - 1) / 2;   // (2*idx+1) = a
+            if (dgt > 0) {
+                ed_add_affine_mont(Rm, Rm, aff[idx], &ctx);
+            } else {
+                // 负号: 用 −q = (−x, y, −dxy)
+                mont_neg(&neg.x, &aff[idx].x, &ctx);
+                mont_set(&neg.y, &aff[idx].y, &ctx);
+                mont_neg(&neg.dxy, &aff[idx].dxy, &ctx);
+                ed_add_affine_mont(Rm, Rm, neg, &ctx);
+            }
+        }
+    }
+
+    // 出 Montgomery 域
+    mont_from(r.x, &Rm.x, &ctx);
+    mont_from(r.y, &Rm.y, &ctx);
+    mont_from(r.z, &Rm.z, &ctx);
+    mont_from(r.t, &Rm.t, &ctx);
+
+    mont_clear(&ctx);
+#else
+    // double-and-add 基准路径
     ed_point acc, base;
     ed_init(acc); ed_init(base);
-    // acc = 恒等点 (0,1,1,0)
     mpz_set_ui(acc.x, 0); mpz_set_ui(acc.y, 1); mpz_set_ui(acc.z, 1); mpz_set_ui(acc.t, 0);
     mpz_set(base.x, P.x); mpz_set(base.y, P.y); mpz_set(base.z, P.z); mpz_set(base.t, P.t);
     size_t bits = mpz_sizeinbase(k, 2);
@@ -177,6 +440,7 @@ static void ed_mul(ed_point &r, const mpz_t k, const ed_point &P, const mpz_t d,
     }
     mpz_set(r.x, acc.x); mpz_set(r.y, acc.y); mpz_set(r.z, acc.z); mpz_set(r.t, acc.t);
     ed_clear(acc); ed_clear(base);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +507,45 @@ static void atkin_morain(mpz_t d, ed_point &P, uint64_t sigma, const mpz_t N) {
 }
 
 // ---------------------------------------------------------------------------
+// 公共入口: 单条 Edwards stage-1 曲线
+// ---------------------------------------------------------------------------
+int edwards_stage1_curve(mpz_t factor, mpz_t Qx, mpz_t Qz,
+                         const mpz_t N, uint64_t sigma, const mpz_t s) {
+    mpz_t d, g;
+    mpz_inits(d, g, NULL);
+    ed_point P, R;
+    ed_init(P); ed_init(R);
+
+    atkin_morain(d, P, sigma, N);
+    ed_mul(R, s, P, d, N);
+
+    // ed_to_Montgomery: Qx = z + y, Qz = z - y  (对齐 Prime95 ed_to_Montgomery)
+    mpz_t zq, zz;
+    mpz_inits(zq, zz, NULL);
+    mpz_add(zq, R.z, R.y); if (mpz_cmp(zq, N) >= 0) mpz_sub(zq, zq, N);
+    mpz_sub(zz, R.z, R.y); if (mpz_sgn(zz) < 0) mpz_add(zz, zz, N);
+    if (Qx) mpz_set(Qx, zq);
+    if (Qz) mpz_set(Qz, zz);
+
+    // 因子判定: gcd(Qz, N)
+    mpz_gcd(g, zz, N);
+    int rc = 0;
+    if (mpz_cmp_ui(g, 1) > 0 && mpz_cmp(g, N) < 0) {
+        if (factor) mpz_set(factor, g);
+        rc = 1;
+    } else if (mpz_cmp(g, N) == 0) {
+        // [s]P ≡ identity (mod N): Qz ≡ 0, gcd = N 本身 — 无(非平凡)因子
+        rc = 0;
+    }
+
+    mpz_clears(zq, zz, g, NULL);
+    ed_clear(P); ed_clear(R);
+    mpz_clear(d);
+    return rc;
+}
+
+#ifdef BUILD_ECM_EDWARDS_STANDALONE
+// ---------------------------------------------------------------------------
 // 主程序: 交叉验证 (对比 Prime95 存档)
 // 用法: ecm_edwards_cpu <N> <sigma> <B1>
 // ---------------------------------------------------------------------------
@@ -302,3 +605,4 @@ int main(int argc, char **argv) {
     ed_clear(P); ed_clear(R);
     return 0;
 }
+#endif /* BUILD_ECM_EDWARDS_STANDALONE */

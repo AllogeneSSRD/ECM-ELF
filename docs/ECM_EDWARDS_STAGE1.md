@@ -132,10 +132,46 @@ stage-1 完成后，Edwards 点 `[s]P=(e.x:e.y:e.z)` 转 Montgomery（`ed_to_Mon
 
 ## 8. 实现状态
 
-- [x] `src/cpu/ecm_edwards_cpu.cpp`：Atkin-Morain 构造 + 标准 Edwards 加/倍 + double-and-add + `ed_to_Montgomery`，全部 mpz，独立可测（本 turn 完成并验证）。
-- [ ] 接入 `ecm_driver`（`--edwards` flag，复用 batch_s/sigma/save/因子提取）。
-- [ ] double-and-add → NAF + 字典（性能）。
-- [ ] mpz → mpn Montgomery（性能，目标 <10000 bit）。
+- [x] `src/cpu/ecm_edwards_cpu.cpp/.h`：Atkin-Morain 构造 + 标准 Edwards 加/倍 + double-and-add + `ed_to_Montgomery`，全部 mpz，独立可测。
+- [x] 接入 `ecm_driver`：`--edwards` flag（单次运行）+ 队列管理器 `edwards = 1`（`ecm.ini`）。64-bit sigma（`-sigma` 与 `ECM2=` 的 `specificsigma`）；随机 sigma 直接移植 Prime95 `ecm.cpp:7397` 的生成式（`(rand()&0x1F)<<48 + (rand()&0xFFFF)<<32 + (rdtsc_lo^rdtsc_hi^(rand()<<16))`，拒绝 `sigma<=5`，`srand(time)` + `__rdtsc` 增熵）。
+- [x] Prime95 `ECM2=` worktodo 读取器（`ecm_worktodo.cpp/.h`），保留原 `ECMSTAGE2=` 语义；队列管理器按前缀分发。
+- [x] double-and-add → **w-NAF + 仿射字典**（默认 w=8，可 `edwards_set_naf_w` 调）：`naf_digits` 移植 Prime95 `ecm.cpp:4824-4856` 的 O(bits) 单遍算法（`tstbit` + carry，避免 O(bits²) 逐位右移）；字典批量逆归一化到仿射，混合加法 `ed_add_affine`（8M）。M991 标量乘 9.8s→6.7s（standalone，~31%）；driver 端到端 10s→7.8s（~22%）。
+- [x] mpz → **mpn Montgomery**（`ecm_edwards_mont.h`，固定 160×64-bit limb=10240 bit，覆盖 <10000 bit）：REDC 用 `mpn_addmul_1` 自实现（`mpn_redc_1` 不在公开接口），域运算全部栈上无堆分配。标量乘主循环完全走 Montgomery，曲线构造仍用 mpz（含逆）。M991 driver 端到端 7.8s→3.0s（累计 ~3.3×）。
 - [ ] Prime95 二进制存档读写（字节格式已在本 spec §5 读清）。
 
+### ECM= / ECM2= worktodo 格式（已实现，两者等价）
+
+```
+ECM=[<AID>,|N/A,|<nul>][FFT2=<fftl>,|<nul>]<k>,<b>,<n>,<c>,<B1>[,<B2>][,<curves_to_run>][,<specificsigma>][,"comma-separated-list-of-known-factors"]
+```
+
+- Prime95 将 `ECM=` 与 `ECM2=` 视为等价（`commonc.c:2934`）；`B2` 默认 0，`curves_to_run` 默认 100。
+- `<specificsigma>` 为 64-bit（Atkin-Morain 曲线参数）；缺失/0 = 随机。
+- `N = (k*b^n + c) / (已知因子乘积)`，已知因子不整除时报错。
+- 队列管理器逐行处理：命中/成功 → 移入 finished；错误 → 原位标记 `# ERROR`。
+- 端到端验证（`edwards=1`）：`ECM=1,2,677,-1,1000000,0,1,6581585141005897` → `1943118631`；`ECM=1,2,991,-1,1000000,0,1,105413044550089` → `8218291649`。
+
 > 投影缩放差异：原始 `Qx/Qz` 与 Prime95 相差一个非平凡投影因子 λ（Prime95 的 Atnashev 序列不归一化 Z）。这不影响因子判定（`gcd(Qz,N)`）与跨版本续跑（stage-2 只用仿射 `u=Qx/Qz`）。若需**字节级**复刻 Prime95 存档，须复刻 Atnashev 公式 + 其 NAF 字典归一化序列（非必需，见 §4 说明）。
+
+## 9. 性能调优数据（B1=1e6，`tools/ecm_edwards_bench.cpp`）
+
+### w 窗口扫描（ED_MONT_MAX_LIMBS=160）
+
+| N (bits) | w=2 | w=4 | w=8 | w=10 | w=12 | w=14 | 字典内存(kB) |
+|---|---|---|---|---|---|---|---|
+| M347 (347) | 0.67 | 0.60 | 0.62 | 0.67 | 0.68 | 0.69 | w↔内存: 2^(w-2)×8.75 |
+| M677 (677) | 2.16 | 2.05 | **1.59** | **1.54** | 1.54 | 1.57 | w=8: 560; w=10: 2240; w=14: 35840 |
+| M991 (991) | 3.63 | 3.25 | 3.07 | **2.92** | 2.98 | 2.99 | |
+| M4003 (4003) | 47.4 | 42.4 | 38.8 | — | 37.5 | **37.0** | |
+
+结论：**w=8~10 为甜点**（默认已设 w=8）。更大 w 减少加法，但字典 2^(w-2) 项、缓存不友好（w≥12 时字典 >9MB 不再受益甚至略慢）。字典内存 ≈ 2^(w-2) × (4+3) × limb×8 字节。
+
+### limb 数扫描（对小 N 减少 ED_MONT_MAX_LIMBS）
+
+| N | 160-limb | 16-limb | 说明 |
+|---|---|---|---|
+| M347 (6 limbs) | 0.60 | 0.60 | 无差异（曲线构造 mpz 占主导） |
+| M677 (11 limbs) | 2.05 (w=4) | 1.67 (w=4) | **~18% 快**（缓存局部性） |
+| M991 (16 limbs) | 3.07 (w=8) | 2.98 (w=8) | ~3% 快 |
+
+结论：mpn 热循环已按运行时 `nlimbs` 计算（不按 MAX_LIMBS），故减小 MAX_LIMBS **不改变计算量**，收益来自**结构体更紧凑 → 更好的缓存局部性**，仅对小 N（<~700 bit）显著（10~20%）。默认 160 覆盖 <10000 bit 目标；若部署目标为小 N，可 `-DED_MONT_MAX_LIMBS=16`（≤1024 bit）或 `32`（≤2048 bit）重编译换取该收益。

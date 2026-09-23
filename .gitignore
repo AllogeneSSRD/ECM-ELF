@@ -16,6 +16,7 @@ build_rel/
 build_cuda/*
 !build_cuda/*.bat
 build_cuda_cmake/
+/build_vs18
 
 release/
 
@@ -30,8 +31,10 @@ cgbn/
 
 # CPU edwards stage1 Z/2×Z/8
 ecm_edwards_cpu.obj
+*.obj
 src/cpu/*.dll
 src/cpu/*.exe
+/test_edwards
 
 # Android Studio apk
 Android/ECM/app/debug/
@@ -53,4 +56,5 @@ tools/ecm_report/*.png
 tools/ecm_prob/out
 tools/ecm_prob/data
 tools/ecm_prob/*.exe
+
 

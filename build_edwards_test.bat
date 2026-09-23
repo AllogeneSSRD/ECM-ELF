@@ -9,7 +9,7 @@ set "OUT=D:\code\MPA-OpenCl\src\cpu\ecm_edwards_cpu.exe"
 
 call "%VCVARS%" >nul || (echo vcvars64 failed & exit /b 1)
 
-cl /nologo /O2 /EHsc /utf-8 /I "%GMP_ROOT%\include" "%SRC%" /Fe:"%OUT%" /link "%GMP_ROOT%\lib\gmp.lib"
+cl /nologo /O2 /EHsc /utf-8 /DBUILD_ECM_EDWARDS_STANDALONE /I "%GMP_ROOT%\include" /I "D:\code\MPA-OpenCl\src\cpu" "%SRC%" /Fe:"%OUT%" /link "%GMP_ROOT%\lib\gmp.lib"
 if errorlevel 1 (echo COMPILE FAILED & exit /b 1)
 
 copy /Y "%GMP_ROOT%\bin\gmp-10.dll" "D:\code\MPA-OpenCl\src\cpu\" >nul

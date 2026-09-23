@@ -55,6 +55,10 @@ bool is_int_like(const std::string &s) {
     return true;
 }
 
+bool starts_with(const std::string &s, const std::string &prefix) {
+    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+}
+
 // Split a CSV row, honouring double quotes and "" escapes. Each field is trimmed.
 std::vector<std::string> split_csv(const std::string &s) {
     std::vector<std::string> out;
@@ -199,6 +203,142 @@ bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::st
     return true;
 }
 
+bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &err) {
+    std::string s = line;
+    strip_bom(s);
+    trim(s);
+    task = Ecm2Task{};
+    task.raw_line = s;
+
+    // Prime95 将 ECM= 与 ECM2= 视为等价 (commonc.c:2934)。
+    // 格式: [<AID>,|N/A,|<nul>][FFT2=<fftl>,|<nul>]<k>,<b>,<n>,<c>,<B1>[,<B2>][,<curves>][,<sigma>][,"factors"]
+    std::string body;
+    if (s.size() > 5 && s.compare(0, 5, "ECM2=") == 0) {
+        body = s.substr(5);
+    } else if (s.size() > 4 && s.compare(0, 4, "ECM=") == 0) {
+        body = s.substr(4);
+    } else {
+        err = "line does not start with ECM= or ECM2=";
+        return false;
+    }
+
+    // 分离 quoted known-factors 尾字段 (ECM= 里唯一带引号的字段)。
+    std::string unquoted = body;
+    std::string factors_raw;
+    {
+        const std::size_t q0 = body.find('"');
+        if (q0 != std::string::npos) {
+            unquoted = body.substr(0, q0);
+            const std::size_t q1 = body.rfind('"');
+            if (q1 != std::string::npos && q1 > q0) {
+                factors_raw = body.substr(q0 + 1, q1 - q0 - 1);
+            }
+        }
+    }
+
+    const std::vector<std::string> cols = split_csv(unquoted);
+    if (cols.empty() || (cols.size() == 1 && cols[0].empty())) {
+        err = "no fields after ECM=/ECM2=";
+        return false;
+    }
+
+    std::size_t idx = 0;
+
+    // Optional AID: first field is an AID iff it is not integer-like and not "FFT2=...".
+    if (!is_int_like(cols[idx]) && !starts_with(cols[idx], "FFT2=")) {
+        task.aid = cols[idx];
+        ++idx;
+    }
+    // Optional FFT2 length (informational; e.g. "FFT2=192K").
+    if (idx < cols.size() && starts_with(cols[idx], "FFT2=")) {
+        task.fft2 = cols[idx].substr(5);
+        ++idx;
+    }
+
+    // Required: k, b, n, c, B1.
+    if (cols.size() < idx + 5) {
+        err = "not enough fields (need k,b,n,c,B1)";
+        return false;
+    }
+    task.k = cols[idx];
+    task.b = cols[idx + 1];
+    task.c = cols[idx + 3];
+
+    {   // n (exponent)
+        const std::string &nstr = cols[idx + 2];
+        if (!is_int_like(nstr) || nstr.empty() || nstr[0] == '-') {
+            err = "invalid exponent n: '" + nstr + "'";
+            return false;
+        }
+        char *end = nullptr;
+        const unsigned long v = std::strtoul(nstr.c_str(), &end, 10);
+        if (end == nstr.c_str() || *end != '\0') {
+            err = "invalid exponent n: '" + nstr + "'";
+            return false;
+        }
+        task.n = v;
+    }
+    {   // B1 (required)
+        const std::string &b1str = cols[idx + 4];
+        char *end = nullptr;
+        const double v = std::strtod(b1str.c_str(), &end);
+        if (end == b1str.c_str() || *end != '\0' || !(v > 0.0)) {
+            err = "invalid B1: '" + b1str + "'";
+            return false;
+        }
+        task.B1 = v;
+    }
+
+    // Optional positional fields (匹配 Prime95): B2 (默认 0), curves_to_run (默认 100), sigma, factors。
+    std::size_t p = idx + 5;
+    task.B2 = 0.0;
+    if (cols.size() > p) {
+        const std::string &b2str = cols[p];
+        if (!b2str.empty()) {
+            char *end = nullptr;
+            const double v = std::strtod(b2str.c_str(), &end);
+            if (end != b2str.c_str() && *end == '\0' && v >= 0.0) {
+                task.B2 = v;
+            }
+        }
+        ++p;
+    }
+    task.curves_to_run = 100;   // Prime95 默认 100 条曲线
+    if (cols.size() > p) {
+        const std::string &cstr = cols[p];
+        if (!cstr.empty() && is_int_like(cstr)) {
+            char *end = nullptr;
+            const unsigned long v = std::strtoul(cstr.c_str(), &end, 10);
+            if (end != cstr.c_str() && *end == '\0' && v > 0 && v <= 0xFFFFFFFFul) {
+                task.curves_to_run = static_cast<uint32_t>(v);
+            }
+        }
+        ++p;
+    }
+    if (cols.size() > p) {
+        const std::string &sstr = cols[p];
+        if (!sstr.empty() && is_int_like(sstr)) {
+            char *end = nullptr;
+            const unsigned long long v = std::strtoull(sstr.c_str(), &end, 10);
+            if (end != sstr.c_str() && *end == '\0' && v > 0) {
+                task.has_sigma = true;
+                task.sigma = v;
+            }
+        }
+        ++p;
+    }
+    // known factors (来自 quoted 尾字段)
+    if (!factors_raw.empty()) {
+        const std::vector<std::string> facs = split_csv(factors_raw);
+        for (const std::string &f : facs) {
+            if (!f.empty()) {
+                task.factors.push_back(f);
+            }
+        }
+    }
+    return true;
+}
+
 bool ecm_extract_b1_from_save_name(const std::string &save_name, double *b1_out, std::string &err) {
     const std::string suffix = ".save";
     if (save_name.size() <= suffix.size() ||
@@ -223,30 +363,34 @@ bool ecm_extract_b1_from_save_name(const std::string &save_name, double *b1_out,
     return true;
 }
 
-bool ecm_compute_stage2_n(const EcmStage2Task &task, mpz_t N, std::string &err) {
+// Shared N computation: N = (k*b^n + c) / (f1*f2*...), exact integer arithmetic.
+static bool compute_n_from_fields(const std::string &k_str, const std::string &b_str,
+                                  unsigned long n, const std::string &c_str,
+                                  const std::vector<std::string> &factors,
+                                  mpz_t N, std::string &err) {
     mpz_t k, b, c;
     mpz_init(k);
     mpz_init(b);
     mpz_init(c);
 
     bool ok = true;
-    if (mpz_set_str(k, task.k.c_str(), 10) != 0) {
-        err = "invalid k: '" + task.k + "'";
+    if (mpz_set_str(k, k_str.c_str(), 10) != 0) {
+        err = "invalid k: '" + k_str + "'";
         ok = false;
-    } else if (mpz_set_str(b, task.b.c_str(), 10) != 0) {
-        err = "invalid b: '" + task.b + "'";
+    } else if (mpz_set_str(b, b_str.c_str(), 10) != 0) {
+        err = "invalid b: '" + b_str + "'";
         ok = false;
-    } else if (mpz_set_str(c, task.c.c_str(), 10) != 0) {
-        err = "invalid c: '" + task.c + "'";
+    } else if (mpz_set_str(c, c_str.c_str(), 10) != 0) {
+        err = "invalid c: '" + c_str + "'";
         ok = false;
     }
 
     mpz_t bn;
     mpz_init(bn);
     if (ok) {
-        mpz_pow_ui(bn, b, task.n);       // b^n
-        mpz_mul(N, k, bn);               // k*b^n
-        mpz_add(N, N, c);                // k*b^n + c
+        mpz_pow_ui(bn, b, n);       // b^n
+        mpz_mul(N, k, bn);          // k*b^n
+        mpz_add(N, N, c);           // k*b^n + c
         if (mpz_sgn(N) <= 0) {
             err = "computed N is not positive";
             ok = false;
@@ -256,7 +400,7 @@ bool ecm_compute_stage2_n(const EcmStage2Task &task, mpz_t N, std::string &err) 
     if (ok) {
         mpz_t f;
         mpz_init(f);
-        for (const std::string &fs : task.factors) {
+        for (const std::string &fs : factors) {
             if (mpz_set_str(f, fs.c_str(), 10) != 0) {
                 err = "invalid known factor: '" + fs + "'";
                 ok = false;
@@ -282,6 +426,14 @@ bool ecm_compute_stage2_n(const EcmStage2Task &task, mpz_t N, std::string &err) 
     mpz_clear(b);
     mpz_clear(c);
     return ok;
+}
+
+bool ecm_compute_stage2_n(const EcmStage2Task &task, mpz_t N, std::string &err) {
+    return compute_n_from_fields(task.k, task.b, task.n, task.c, task.factors, N, err);
+}
+
+bool ecm_compute_ecm2_n(const Ecm2Task &task, mpz_t N, std::string &err) {
+    return compute_n_from_fields(task.k, task.b, task.n, task.c, task.factors, N, err);
 }
 
 bool ecm_worktodo_first_line(const std::string &path, std::string &line) {

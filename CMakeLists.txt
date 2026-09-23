@@ -88,6 +88,7 @@ add_executable(ecm
     src/opencl_ecm_mont.cpp
     src/opencl_ecm_path_registry.cpp
     src/opencl_ecm_selftest.cpp
+    src/cpu/ecm_edwards_cpu.cpp
 )
 
 target_include_directories(ecm PRIVATE
@@ -95,6 +96,7 @@ target_include_directories(ecm PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/cpu
 )
 
 target_link_libraries(ecm
@@ -359,6 +361,7 @@ if(ECM_ENABLE_CUDA)
         src/core/ecm_worktodo.cpp
         src/opencl_ecm_log.cpp
         src/opencl_ecm_runtime_config.cpp
+        src/cpu/ecm_edwards_cpu.cpp
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu
@@ -372,6 +375,7 @@ if(ECM_ENABLE_CUDA)
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/core
+        ${CMAKE_SOURCE_DIR}/src/cpu
         ${CMAKE_SOURCE_DIR}/kernels/cuda
         ${CGBN_INCLUDE_DIR}
         ${CGBN_INCLUDE_DIR}/cgbn   # the .cu uses #include <cgbn.h>
