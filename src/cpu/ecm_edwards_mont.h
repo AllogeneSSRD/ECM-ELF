@@ -7,7 +7,49 @@
 
 #include <gmp.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+
+// ---------------------------------------------------------------------------
+// GMP 的 REDC 内核 (internal 接口) 分派
+// ---------------------------------------------------------------------------
+//
+// mpn_redc_1 / mpn_redc_n / mpn_binvert 不在 gmp.h 里 (GMP 明确声明这些是
+// internal、接口可变)，但每个我们使用的 GMP 构建都导出了它们 (vcpkg/zen3 x64 DLL
+// 的 .def 与 Android 静态库)。GMP 6.3.0 自 2023 年起未再更新。
+//
+// 本机实测 (tools/bench/mont_redc_ab.c，zen3 GMP 6.3.0，mul+redc 总时间):
+//   limbs   我们原来的二次循环   mpn_redc_1    mpn_redc_n
+//      20        0.36 us          0.32 (1.10x)   0.38
+//      47        1.59             1.47 (1.08x)   1.54
+//      63        2.80             2.53 (1.11x)   2.60
+//      94        5.64             5.19           4.60 (1.22x)
+//     125        9.54             8.83           7.68 (1.24x)
+//     154       13.83            13.12          10.67 (1.30x)
+// 阈值照抄 GMP 自己的调度 (mpn/x86_64/gmp-mparam.h: REDC_2_TO_REDC_N_THRESHOLD=79)。
+//
+// 置 ECM_MONT_USE_GMP_REDC=0 可退回原来的二次实现 (自检/对照用)。
+#ifndef ECM_MONT_USE_GMP_REDC
+#define ECM_MONT_USE_GMP_REDC 1
+#endif
+#define ECM_MONT_REDC_N_THRESHOLD 79
+#define ECM_MPN_redc_1       __MPN(redc_1)
+#define ECM_MPN_redc_n       __MPN(redc_n)
+#define ECM_MPN_binvert      __MPN(binvert)
+#define ECM_MPN_binvert_itch __MPN(binvert_itch)
+#if ECM_MONT_USE_GMP_REDC
+// C linkage: the DLL exports these with plain C names.
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern mp_limb_t ECM_MPN_redc_1(mp_ptr, mp_ptr, mp_srcptr, mp_size_t, mp_limb_t);
+extern void      ECM_MPN_redc_n(mp_ptr, mp_ptr, mp_srcptr, mp_size_t, mp_srcptr);
+extern void      ECM_MPN_binvert(mp_ptr, mp_srcptr, mp_size_t, mp_ptr);
+extern mp_size_t ECM_MPN_binvert_itch(mp_size_t);
+#ifdef __cplusplus
+}
+#endif
+#endif
 
 #ifndef ED_MONT_MAX_LIMBS
 #define ED_MONT_MAX_LIMBS 160   // 160*64 = 10240 bits (覆盖 <10000 bit 目标)
@@ -19,6 +61,10 @@ typedef struct {
     mp_limb_t N[ED_MONT_MAX_LIMBS];   // 模数 limbs (nlimbs 有效, 其余 0)
     size_t nlimbs;                     // N 的实际 limb 数
     mp_limb_t nprime0;                 // -N^{-1} mod 2^64
+#if ECM_MONT_USE_GMP_REDC
+    mp_limb_t *ip;                     // N^{-1} mod B^nlimbs (供 mpn_redc_n)
+    int use_redc_n;                    // nlimbs >= ECM_MONT_REDC_N_THRESHOLD
+#endif
     mont_t one;                        // R mod N (Montgomery 域中的 1)
     mpz_t Nz;                          // N (mpz, 供转换用)
     mpz_t R;                           // 2^(nlimbs*64)
@@ -67,10 +113,34 @@ static inline int mont_init(mont_ctx_t *ctx, const mpz_t N) {
     }
     mpz_init(ctx->Rinv);
     mpz_invert(ctx->Rinv, ctx->R, N);
+#if ECM_MONT_USE_GMP_REDC
+    // n >= 79 时用 GMP 的次二次归约 mpn_redc_n, 需要 ip = N^{-1} mod B^n。
+    ctx->ip = nullptr;
+    ctx->use_redc_n = (nlimbs >= ECM_MONT_REDC_N_THRESHOLD);
+    if (ctx->use_redc_n) {
+        const mp_size_t n = (mp_size_t)nlimbs;
+        const mp_size_t itch = ECM_MPN_binvert_itch(n);
+        mp_limb_t *scratch = (mp_limb_t *)malloc((size_t)itch * sizeof(mp_limb_t));
+        ctx->ip = (mp_limb_t *)malloc((size_t)n * sizeof(mp_limb_t));
+        if (!scratch || !ctx->ip) {
+            free(scratch);
+            free(ctx->ip);
+            ctx->ip = nullptr;
+            ctx->use_redc_n = 0;
+            return -1;
+        }
+        ECM_MPN_binvert(ctx->ip, ctx->N, n, scratch);
+        free(scratch);
+    }
+#endif
     return 0;
 }
 
 static inline void mont_clear(mont_ctx_t *ctx) {
+#if ECM_MONT_USE_GMP_REDC
+    free(ctx->ip);
+    ctx->ip = nullptr;
+#endif
     mpz_clear(ctx->Nz);
     mpz_clear(ctx->R);
     mpz_clear(ctx->Rinv);
@@ -99,21 +169,34 @@ static inline void mont_from(mpz_t r, const mont_t *a, const mont_ctx_t *ctx) {
     mpz_clear(t);
 }
 
-// REDC: t (2n limbs) -> r (n limbs), r = t * R^{-1} mod N
+// REDC: t (2n limbs) -> r (n limbs), r = t * R^{-1} mod N.  Clobbers t.
 static inline void mont_redc(mp_limb_t *r, mp_limb_t *t, const mont_ctx_t *ctx) {
     const size_t n = ctx->nlimbs;
-    const mp_limb_t *N = ctx->N;
+#if ECM_MONT_USE_GMP_REDC
+    if (ctx->use_redc_n) {
+        // GMP 自己的调度在 n >= 79 时用次二次的 mpn_redc_n; 结果已规范化 (< N)。
+        ECM_MPN_redc_n(r, t, ctx->N, (mp_size_t)n, ctx->ip);
+        return;
+    }
+    {
+        // MPN_REDC_1 约定: 返回非零则再减一次 N。
+        const mp_limb_t cy = ECM_MPN_redc_1(r, t, ctx->N, (mp_size_t)n, ctx->nprime0);
+        if (cy != 0) mpn_sub_n(r, r, ctx->N, n);
+        return;
+    }
+#else
     for (size_t i = 0; i < n; i++) {
         const mp_limb_t m = t[i] * ctx->nprime0;      // low limb
-        const mp_limb_t cy = mpn_addmul_1(t + i, N, n, m);
+        const mp_limb_t cy = mpn_addmul_1(t + i, ctx->N, n, m);
         if (cy) {
             mpn_add_1(t + i + n, t + i + n, n - i, cy);
         }
     }
     mpn_copyi(r, t + n, n);
-    if (mpn_cmp(r, N, n) >= 0) {
-        mpn_sub_n(r, r, N, n);
+    if (mpn_cmp(r, ctx->N, n) >= 0) {
+        mpn_sub_n(r, r, ctx->N, n);
     }
+#endif
 }
 
 static inline void mont_mul(mont_t *r, const mont_t *a, const mont_t *b,

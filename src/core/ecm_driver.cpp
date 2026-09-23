@@ -884,13 +884,43 @@ static bool ensure_dir(const std::string &dir) {
     return access(dir.c_str(), 0) == 0;
 }
 
-// 曲线本地路径主干: <tmp_dir>/e{n:07d}_c{curve:06d}
-static std::string edwards_local_stem(const Stage1RunOptions &opt, uint32_t curve_idx) {
+// 曲线本地路径主干: <tmp_dir>/e{n:07d}_B{B1}_c{curve:06d}
+//
+// B1 必须进名字: 同一个 n 配不同 B1 的不同任务(例如 p95 参考 worktodo 里
+// Worker #2/#3/#4 都是 n=12323 而 B1 分别是 55e6/130e6/400e6)否则会互相覆盖。
+// p95 侧的存档名仍由 ecm_p95feeder 从存档头部推出 (e{n:07d}), 与本名字无关。
+static std::string edwards_local_stem(const Stage1RunOptions &opt, uint32_t curve_idx,
+                                     uint64_t B1) {
     std::string dir = opt.tmp_dir;
     if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '/';
-    char name[64];
-    snprintf(name, sizeof(name), "e%07u_c%06u", opt.handoff_n, curve_idx + 1);
+    char name[80];
+    snprintf(name, sizeof(name), "e%07u_B%llu_c%06u", opt.handoff_n,
+             (unsigned long long)B1, curve_idx + 1);
     return dir + name;
+}
+
+// 目标文件已存在且头部与本次写入不一致 -> 拒绝覆盖 (返回 false).
+// 一致时允许覆盖: 那是正常的 resume / 周期刷新.
+static bool local_save_overwrite_ok(const std::string &path, const ecm_save_common &cm) {
+    if (access(path.c_str(), 0) != 0) return true;   // 不存在, 直接写
+    ecm_save_common old;
+    uint32_t st = 0;
+    if (!ecm_save_read_header(path, old, &st)) return true;  // 损坏文件允许覆盖
+    const bool same = (old.k == cm.k) && (old.b == cm.b) && (old.n == cm.n) &&
+                      (old.c == cm.c) && (old.B1 == cm.B1) && (old.sigma == cm.sigma);
+    if (!same) {
+        std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+        ecm_ts_fprintf(stderr,
+            "ERROR: refusing to overwrite %s: existing save is "
+            "(k=%.0f b=%u n=%u c=%d B1=%llu sigma=%llu) but this run is "
+            "(k=%.0f b=%u n=%u c=%d B1=%llu sigma=%llu)\n",
+            path.c_str(), old.k, old.b, old.n, old.c,
+            (unsigned long long)old.B1, (unsigned long long)old.sigma,
+            cm.k, cm.b, cm.n, cm.c, (unsigned long long)cm.B1,
+            (unsigned long long)cm.sigma);
+        return false;
+    }
+    return true;
 }
 
 // 交接行 (ECM2=...); 仅用于日志/追踪 —— ecm_p95feeder 会从存档头部重建同样的行.
@@ -924,7 +954,8 @@ static bool edwards_write_local_midstage(const Stage1RunOptions &opt, uint64_t s
     cm.B2 = B2;
     cm.sigma = sigma;
 
-    const std::string path = edwards_local_stem(opt, curve_idx) + ".tmp";
+    const std::string path = edwards_local_stem(opt, curve_idx, B1) + ".tmp";
+    if (!local_save_overwrite_ok(path, cm)) return false;
     if (!ecm_edwards_write_midstage(path, cm, Qx, Qz)) {
         std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
         ecm_ts_fprintf(stderr, "ERROR: cannot write stage-1 save %s\n", path.c_str());
@@ -971,8 +1002,10 @@ static int edwards_checkpoint_progress(void *ctx, const edwards_checkpoint_t *cu
     cm.sigma = c->sigma;
     const uint32_t expbuf = (uint32_t)mpz_sizeinbase(c->s, 2);
     const uint32_t dict_size = (uint32_t)1u << (edwards_get_naf_w() - 2);
-    ecm_edwards_write_stage1(c->save_path, cm, 2, expbuf, cur->bitnum, dict_size,
-                             Px, Py, cur->Rx, cur->Ry, cur->Rz);
+    if (local_save_overwrite_ok(c->save_path, cm)) {
+        ecm_edwards_write_stage1(c->save_path, cm, 2, expbuf, cur->bitnum, dict_size,
+                                 Px, Py, cur->Rx, cur->Ry, cur->Rz);
+    }
     c->last_ms = now;
     mpz_clears(d, Px, Py, NULL);
 
@@ -1190,7 +1223,9 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     // 与同名的 .tmp (MIDSTAGE) 区分开, 且并行写不冲突.
     std::vector<std::string> ckpt_paths(curves);
     if (use_ckpt) {
-        for (uint32_t i = 0; i < curves; i++) ckpt_paths[i] = edwards_local_stem(opt, i);
+        for (uint32_t i = 0; i < curves; i++) {
+            ckpt_paths[i] = edwards_local_stem(opt, i, (uint64_t)B1);
+        }
     }
 
     uint32_t nthreads = opt.edwards_threads;

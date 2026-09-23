@@ -28,6 +28,11 @@ bool ecm_edwards_write_midstage(const std::string &path, const ecm_save_common &
 bool ecm_edwards_read_midstage(const std::string &path, ecm_save_common &cm,
                                mpz_t Qx, mpz_t Qz);
 
+// 只读文件头 + 数据区首部字段 (magic/version/k/b/n/c + curve/state/sigma/B1/B2),
+// 不解析 giant。用于"目标文件已存在时是否允许覆盖"的冲突判定。
+// 成功返回 true 并填 cm.curve/cm.B1/cm.B2/cm.sigma 与 *state; 文件缺失/损坏返回 false。
+bool ecm_save_read_header(const std::string &path, ecm_save_common &cm, uint32_t *state);
+
 // STAGE1 (Edwards stage-1 中途 checkpoint). state=1, montg_stage1=0.
 //   dict_start=(x,y) 为基点, e=(x,y,z) 为当前累加点 (标准投影).
 bool ecm_edwards_write_stage1(const std::string &path, const ecm_save_common &cm,

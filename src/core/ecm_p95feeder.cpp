@@ -165,6 +165,7 @@ struct WorkExpectation {
     unsigned long b = 2;
     long c = -1;
     std::string factors;      // 原文的已知因子串 (含引号内内容), 用于转发
+    bool aid_is_na = false;   // 源条目首字段是 "N/A" (手工任务, p95 不会分配 AID)
     std::string raw_line;
 };
 
@@ -200,8 +201,10 @@ bool parse_expectation(const std::string &line, WorkExpectation &out) {
     }
 
     size_t i = 0;
-    if (i < f.size() && (f[i] == "N/A" || f[i].empty())) i++;
-    else if (i < f.size() && f[i].compare(0, 5, "FFT2=") == 0) i++;
+    if (i < f.size() && (f[i] == "N/A" || f[i].empty())) {
+        out.aid_is_na = (f[i] == "N/A");
+        i++;
+    } else if (i < f.size() && f[i].compare(0, 5, "FFT2=") == 0) i++;
     else if (i < f.size()) {
         bool all_hex = !f[i].empty();
         for (char ch : f[i]) if (!std::isxdigit((unsigned char)ch)) { all_hex = false; break; }
@@ -289,11 +292,15 @@ struct Deliverable {
     std::string save_name;     // e{n:07d}
 };
 
+// 组成投递行. AID 规则 (与用户确认过):
+//   * 真实 AID 一律丢弃 -> 不带 AID 字段 (= 空), p95 会为空 AID 重新分配;
+//   * 源条目是 "N/A" -> 原样保留 "N/A" (p95 不会给它分配 AID).
 std::string build_ecm_line(const ecm_save_common &cm, uint64_t sigma,
-                           const std::string &factors) {
+                           const std::string &factors, bool aid_is_na) {
     char kbuf[64];
     std::snprintf(kbuf, sizeof(kbuf), "%.0f", cm.k);
     std::string line = "ECM=";
+    if (aid_is_na) line += "N/A,";
     line += kbuf;
     line += "," + std::to_string(cm.b);
     line += "," + std::to_string(cm.n);
@@ -450,7 +457,7 @@ int run_cycle(const FeederConfig &cfg) {
         d.sigma = cm.sigma;
         d.B1 = cm.B1;
         d.factors = exp ? exp->factors : std::string();
-        d.line = build_ecm_line(cm, cm.sigma, d.factors);
+        d.line = build_ecm_line(cm, cm.sigma, d.factors, exp ? exp->aid_is_na : false);
         d.save_name = p95_ecm_save_name(cm.n);
 
         const int worker = free_workers.front();

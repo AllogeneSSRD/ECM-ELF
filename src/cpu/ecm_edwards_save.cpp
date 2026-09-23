@@ -163,6 +163,36 @@ void make_stage_str(char out[10], uint32_t curve, char stage_no) {
 } // namespace
 
 // ---------------------------------------------------------------------------
+// 仅读头部 (供覆盖冲突判定)
+// ---------------------------------------------------------------------------
+
+bool ecm_save_read_header(const std::string &path, ecm_save_common &cm, uint32_t *state) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    if (!get_header(in, cm)) return false;
+
+    // 数据区布局: curve(4) @52, average_B2(8) @56, state(4) @64,
+    //              sigma(8) @68, B(8) @76, C(8) @84, ...
+    in.seekg(CHECKSUM_OFFSET + 4, std::ios::beg);
+    uint32_t curve = 0, st = 0;
+    uint64_t avg_b2 = 0, sigma = 0, b1 = 0, b2 = 0;
+    if (!get_u32(in, &curve, nullptr)) return false;
+    if (!get_u64(in, &avg_b2, nullptr)) return false;
+    if (!get_u32(in, &st, nullptr)) return false;
+    if (!get_u64(in, &sigma, nullptr)) return false;
+    if (!get_u64(in, &b1, nullptr)) return false;
+    if (!get_u64(in, &b2, nullptr)) return false;
+
+    cm.curve = curve;
+    cm.sigma = sigma;
+    cm.B1 = b1;
+    cm.B2 = b2;
+    (void)avg_b2;
+    if (state) *state = st;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // MIDSTAGE
 // ---------------------------------------------------------------------------
 
