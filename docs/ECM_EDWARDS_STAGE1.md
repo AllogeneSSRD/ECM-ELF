@@ -1,5 +1,12 @@
 # ECM Edwards Stage-1 CPU 实现 Spec
 
+> **§15 是本文最新的一节（2026-09-23）**：Mersenne 折叠域内核（C1）与对称平方（C2）已落地并达标
+> （8 曲线 M3001 B1=1e6：52.1 s → **29.3 s**，即 6.51 → **3.66 s/curve**），同时纠正了
+> §13.8 关于「u≈1.7–1.9 ⇒ 每周期 2 条 vpmadd52」的错误结论（实测 4.0 GHz、峰值 **1 madd/cycle**、
+> CIOS 已在真顶峰 94%），并记录/修复了**两个非规范表示 bug**（折叠域「值 ≥ N」，§15.4；
+> Montgomery CIOS「limb 高位脏」，§15.9 —— 它同时解释了 k=4003 点层自检失败与 B1=1e5 的存档不一致）。
+> 仍然未修的是 **标量路径漏报真实因子**（§15.5），那是当前最该优先的正确性问题。先读 §15 再回头读 §13。
+
 目标：在现有 `ecm_driver` 体系内实现 **Atkin-Morain Edwards（a=1，Z/2×Z/8）Stage-1 CPU 版**，公式参考 Prime95、但用 limb（GMP `mpz`）而非 FFT，目标 <10000-bit 整数。交叉验证对比 Prime95（同 σ 同曲线同 `[s]P`），stage-2 存档格式后置（本 spec 已读清字节格式）。
 
 ## 1. 曲线构造（Atkin-Morain，sigma_type=0）
@@ -814,5 +821,367 @@ powershell -File tools\test\test_feeder.ps1
 `test_checkpoint.ps1` 阶段 1 落 `.ckpt`+`.tmp` 并存参照，阶段 2 只删 `.tmp` 再跑一次，
 断言出现 `resume from .ckpt` 且续跑产出的 8 个 `.tmp` 与参照 **SHA256 全等**（exit 0 = PASS）。
 两个脚本都自包含（自己写 worktodo/ini、自己起 `ecm.exe`），可以直接当回归用。
+
+## 15. Mersenne 折叠域（C1/C2，已落地）+ 两个非规范表示 bug
+
+### 15.1 结论先行
+
+| 指标 | Montgomery（原路径） | **Mersenne 折叠域** | 比 |
+|---|---|---|---|
+| 8 曲线 / M3001 / B1=1e6 墙钟（交替 A/B，3 轮取 min，**三次独立复跑**） | 52.1 / 53.1 / 53.8 s | **29.3 / 30.9 / 32.0 s** | 1.68–1.78× |
+| 每 curve（单核口径 = 批墙钟/8） | 6.51–6.72 s | **3.66 / 3.87 / 4.00 s** | 目标 <4.5 ✅ |
+| 每模乘 madds（n52=58） | 13,630 | **6,728** | 2.03× |
+| 每模平方 madds（n52=58，C2 对称平方） | 13,630 | **3,422** | 3.98× |
+| 每模乘 ns（gate 口径，交替 min） | 3620 | **≈2400** | 1.51×（n52=77/116/155/190：1.56/1.80/1.76/1.66×） |
+| 每 dbl 的 4S+4M（ns/curve，内核口径） | 1811 | **1011** | 1.79× |
+
+三次复跑的离散来自本机后台负载（`cpptools`/Edge/ProcessLasso 等）：绝对墙钟会漂 ±10%，
+**比值稳定在 1.7× 左右**，单核口径三个点都远低于 4.5 s 的目标。
+
+用法：`N = 2^k−1` 时**自动启用**（日志打印 `field : mersenne (2^k=1, k=..., n52=..., fold<<sh)`），
+可用 `--edwards-mersenne auto|on|off` / `ecm.ini` 的 `edwards_mersenne` 强制或回退。
+
+**⚠️ 生产上仍建议先留一个观察期**：域层现在是干净的（§15.4、§15.9 的两个 bug 都已修，M4003
+Montgomery 不变式恢复正确），但**标量路径**在 M3001/sigma=20260922/B1=1e5 上仍漏报一个已被
+三种独立方法确认为真的因子（§15.5），而标量路径正是喂 Prime95 的那条。
+
+### 15.2 做法
+
+`N = 2^k−1 ⇒ 2^k ≡ 1`。radix 2^52、`n = ceil(k/52)`、`sh = 52n − k ∈ [0,52)`，于是
+
+```
+B^n = 2^(52n) = 2^(k+sh) = 2^sh        2^(52c) = 2^(52(c−n)+sh)  (c ≥ n)
+```
+
+即**第 c 列（c ≥ n）折回第 c−n 列、左移 sh 位**：一个移位加一次加法，替代整行 `m_i·N` 归约。
+每模乘 madds 从 `n(4n+3)` 降到 `2n²`，且**不需要 Montgomery 常数**（域就是普通域，`one = 1`）。
+
+`src/cpu/simd_mont_ifma.cpp` 的 `ifma_mersenne_mul` 三步：乘积（每行 2n 个 madd，**两行一迭代**）→
+2n 列进位链 → 降列折叠 + 进位/超 k 位排空 → 条件减 N。点层、字典、存档、gcd **一行没改**（域无关）。
+
+> **两行展开是必须的**：单行版本每列要 1 load + 1 store + 1 add 配 2 个 madd，实测只有
+> **0.67 madd/cycle**；两行一迭代让 1 个 b 向量供 4 个 madd，达到 **~1.0 madd/cycle**（`tools/bench/mers_loop_bench` 实测 L0 vs L2）。折叠域当前整体 0.70（n52=58）~0.87（n52=116）madd/cycle，
+> 说明折叠/归一化尾巴还占 ~25–30% —— 这是 C1b 的空间。
+
+### 15.3 ⚠️ 纠正 §13.8：时钟标定错了 2×
+
+`simd_mont_gate` 的 `calibrate_ghz()` 用 8×SSE2 `paddq` 依赖链标定，读出 2.06 GHz，据此得出
+“u≈1.7–1.9 ⇒ Zen5 每周期能发约 2 条 vpmadd52、乘法器不再是瓶颈”。**实测（`.bench_tmp/probe2.c`、
+`probe3.c`）**：
+
+- 核心频率 ≈ **4.01 GHz**（LCG `x = x*C + A` 依赖链，latency 4）；
+- `vpmadd52` zmm 峰值 = **4.00 Gmadd/s = 1 madd/cycle**（4/8/12/16 条独立链全部饱和在 4.0 ⇒ 端口极限，不是延迟极限）。
+
+所以真实结论正好相反：**CIOS 内核已在真顶峰的 94%**，“分块/寄存器窗口版内核”没有空间，
+**唯一杠杆是减少 madd 条数** —— 这也正是 C1 成立的理由。（`paddq` 在这颗 Zen5 上 latency 似乎是 2，
+不是 1，所以旧标定偏低一倍。）
+
+### 15.4 C1 的 bug 与修复：非规范表示（重要教训）
+
+**症状**：`ed_soa_point_selftest` 在 **k=677（n52=14, sh=51）/ k=991（n52=20, sh=49）** 上大量失败
+（Mersenne 224~323 失败/40 trials，Montgomery 0 失败），而域运算自检、孤立/链式内核对拍、
+字典对拍**全部全绿**。
+
+**定位**：`ptdbg2`（打印 dbl 的内部槽位）→ 最先错的是 `C = 2Z²`；`ddbg`（最小复现）缩到
+**`sqr(N−1)` 得 1 之后，`soa_add(x,x,x)` 把 1 变成垃圾**。根因：折叠内核第 4 步“排空”循环在
+**进位链把顶 limb 顶回到 `2^(52−sh)`（即 k 位以上又出现一位）时提前 break**，于是返回了一个
+**非规范表示**（值 ≥ 2^k）。后续域运算假设算子 < N，于是直接烂掉。
+
+**为什么所有 mpz 级测试都没抓到**：`ifma_to_mpz_lane` 在 Mersenne 域里做 `mpz_mod`，把非规范值
+悄悄规约掉了 —— 任何“读回 mpz 再比较”的测试都是**空洞**的。教训：**要查规范形必须读原始 limb**
+（新增 `.bench_tmp/canary.cpp`：`raw < N` 且 `raw == a·b mod N`）。
+
+**修复**：每轮排空循环在进位链之后**重新检查顶 limb**，两者都干净才退出（`simd_mont_ifma.cpp`）。
+
+**修复后验证**：点层自检 677/991/1000/3001/3002/4003/8011 全部 0 失败；§7 三条不变式在
+Mersenne 域下**全过**（M677→1943118631、M991→8218291649、M4003→16756559，B1=1e6）；
+内核 17 个模数 × 16,320 组对拍 0 失败；`simd_edwards_bench verify` B1=2000 与标量逐位一致；
+`test_checkpoint.ps1` PASS（8 `.ckpt`+8 `.tmp`，续跑结果与整跑 **SHA256 全等**）。
+
+### 15.5 已解决：**标量路径漏报真实因子** —— 见 §15.10
+
+M3001、sigma=20260922、B1=1e5 时，标量路径原本报“无因子”（Mersenne 域报 **3217073**）。
+这个 bug 已在 §15.10 定位并修复：根因是标量 Montgomery 归约 `mpn_redc_1` 的返回值被误用，
+导致结果偶尔 ≥ N（非规范表示），污染了假定算子 < N 的加减法。修复后**三个后端（标量 /
+Montgomery / 折叠域）在每一个 B1 上给出完全相同的命中曲线数与最终点**。
+
+### 15.6 新增工具（都在 `.bench_tmp/`，可直接当 bench 资产）
+| 工具 | 作用 |
+|---|---|
+| `mers_test.cpp` | 折叠/​Montgomery 内核对拍（17 个模数、对抗输入、规范形检查）+ 扫描计时 |
+| `mers_chain.cpp` | 30 万步链式域运算对拍（抓“值相关”bug） |
+| `canary.cpp` | **原始 limb** 规范性检查（`raw < N` 且等于期望值）——mpz 级测试抓不到的那类 bug |
+| `canary_sqr.cpp` | 同上，针对平方内核 |
+| `dirt.cpp` | **limb 高位污染检查**：结果的每个 limb 是否 < 2^52（§15.9 的最小复现，任意 k × 两个域） |
+| `helper_canary.cpp` | 域运算 `add/sub/neg` 的原始 limb 规范性与正确性 |
+| `lane_indep.cpp` | lane 无关性（lane 0 固定、其余 lane 灌垃圾） |
+| `selftest_many.cpp` | 域/点自检多轮跑（先 `set_curves`，否则 `c->d` 未初始化） |
+| `ptdbg2.cpp` / `ddbg.cpp` / `fdbg*.cpp` | 点运算**内部槽位**逐步对拍 / 最小复现 |
+| `mers_loop_bench.cpp` | 乘积主循环形状扫描（单行 0.67 → 两行 1.0 madd/cycle） |
+| `simd_mont_tail.cpp` / `simd_mont_notail.cpp` | 尾巴成本拆解（编译期宏，避免运行时 getenv 污染热路径） |
+| `probe2.c` / `probe3.c` | 时钟与 `vpmadd52` 峰值标定（§15.3 的数据来源） |
+| `ref_common.py` / `ref_ladder4.py` / `verify_hit2.py` / `verify_hit4.py` | 独立参考阶梯（大整数/小模数/二进制） |
+| `ab_mersenne.ps1` / `w_ab.ps1` / `invariants.ps1` | 域 A/B、窗口 A/B、§7 不变式回归 |
+
+### 15.7 第二轮补充（性能定位与 Montgomery 4003 证据）
+
+**折叠域成本拆解（`.bench_tmp/simd_mont_tail.cpp`，编译期宏 `IFMA_NOTAIl` 把尾巴换成直接返回，
+避免运行时 getenv 污染热路径）**：n52=58 时 全核 2827 ns、去掉尾巴 2554 ns ⇒ **尾巴只占 ~270 ns（≈10%）**，
+**乘积主循环才是主体**（≈2550 ns = 6728 madds ⇒ ~0.8 madd/cycle，离 1.0 还有距离，且与 `mers_loop_bench`
+里同一形状达到 ~1.0 不一致）。结论：下一步该压的是**每模乘的 madd 条数**（C2 = 对称平方，预期
+dbl 的 4S 由 n² 级降到 n(n+1)/2 级 ⇒ 每 dbl madds −33% ⇒ 端到端约 4.24 → 3.4 s/curve），
+而不是继续抠尾巴。
+
+**窗口 A/B（8 曲线，M3001，B1=1e6，Mersenne，交替 3 轮取 min）**：w=12 **34.51 s** / w=10 35.05 s /
+w=8 35.47 s ⇒ 字典从 11.4 MB 缩到 0.7 MB **没有**收益，w=12 维持默认。
+
+**Montgomery + k=4003（n52=77，R mod N = 2）当时是坏的 —— 已在 §15.9 定位并修复**：
+
+| 路径 | 点层自检（修复前 → 修复后） | §7 不变式 M4003→16756559 |
+|---|---|---|
+| 标量 (mpn/mpz) | — | ✅ 16756559 |
+| **Mersenne 折叠域** | ✅ 0 失败 → ✅ 0 失败 | ✅ 16756559 |
+| **SIMD Montgomery** | ❌ 216 失败/40 trials → ✅ **0 失败** | ❌ 未找到 → ✅ **16756559** |
+
+当时排除过的原因（都有工具与数据，最后证明**结论是对的、方向差一步**）：内核 `mul`/`sqr` 原样 limb
+规范性 + 正确性（`canary`、`canary_sqr`）、域运算 `add/sub/neg` 原样规范性（`helper_canary`）、
+**lane 无关性**（`lane_indep`）。这些工具的 raw-limb 读取**统统先 `& 2^52−1`**，
+所以「低 52 位对、高位脏」这一类缺陷对它们是**不可见的** —— 见 §15.9。
+
+### 15.8 C2：对称平方（已落地，折叠域）
+
+Montgomery CIOS 的平方无法利用对称性（`sqr` 就是 `mul(a,a)`，13,630 madds），折叠域可以：
+
+```
+a² = 2·Σ_{i<j} a_i·a_j·B^(i+j) + Σ_i a_i²·B^(2i)
+```
+
+所以 `ifma_mersenne_sqr` = **上三角乘积**（每两个 i<j 用 `madd52lo/hi` 各一次 ⇒ n(n−1) 个 madd）
++ **一遍倍增**（每列 3 条指令：`slli`/`add` carry/`and`）+ **再加对角线**（2n 个 madd），
+总共 `n(n−1) + 2n` = **3,422**（n52=58），只有 `mul` 的一半、Montgomery 平方的 1/4。
+
+三个必须遵守的细节（都踩过）：
+
+1. **倍增必须在加对角线之前**，否则对角线也被乘 2；
+2. 奇数 n 不需要“收尾行”：最后一行 i=n−1 的 j 范围 `[i+2, n)` 为空；
+3. 倍增是**列**操作（跨 limb 的进位链），不是 limb 内的，`cy` 要按列传递。
+
+**数据（n52=58，内核口径，交替 min）**：`mul` 2422 ns / `sqr` **1620 ns**（3422 madds ⇒ 2.11 Gmadd/s），
+平方比乘法快 **1.50×**；dbl 的 4S+4M 由 Montgomery 1811 ns → **1011 ns/curve**（1.79×）。
+端到端从 C1 的 4.24 s/curve 降到 **3.66 s/curve**（8 曲线 M3001 B1=1e6 墙钟 33.9 → 29.3 s）。
+（同一台机器上的绝对 ns 会随负载/温度漂 5~10%，所以**以交替 A/B 的比值**为准。）
+
+**正确性**：`canary_sqr` 在 n52=14/20/58/77/155 上原样 limb 规范且正确（两域）；
+`mers_test 20` = **16,320 组对拍 0 失败**（含对抗输入）；点层自检 k=677…8011 两域全 0 失败；
+archive/续跑 SHA256 全等。
+
+### 15.9 第二个非规范表示 bug：CIOS 条件减**没有掩码**（既有 bug，已修复）
+
+**症状**：SIMD-Montgomery 在 **k=4003** 上点层自检 216 失败/40 trials、§7 不变式 M4003 不过、
+B1=1e5 的 Mersenne/Montgomery 存档不一致；而 `canary`/`canary_sqr`（原样 limb！）却报“规范且正确”。
+
+**定位路径**（四步，工具都在 `.bench_tmp/`）：
+
+1. 点层自检的 `[ptsel]`/`[step]` 输出显示**最先错的一步是 `C = 2Z²`**，而 `A = X²`、`B = Y²` 都对；
+2. 加临时探针分离 sqr 与 add：**`sqr(z)` 对，`soa_add(a,a)` 错**（且与是否别名无关）；
+3. 打印**原样 limb**：`soa_add` 的结果每个 limb（1..76）比期望值**正好大 4094 = 2·2047**，
+   而输入 limb 的高 12 位是 `0xFFF` —— **输入本身就是脏的**；
+4. 新增 `dirt.cpp`（最小复现，任意 k × 两域）：**只有 k=4003 的 Montgomery 路径会返回
+   limb > 2^52 的结果**（`mul` 25/160、`sqr` 26/160 的 lane 命中），其它尺寸、折叠域全 0。
+
+**根因**：`ifma_cios` 末尾条件减把 `d = r_k − n_k − borrow` **直接存进 `out`，没有 `& 2^52−1`**。
+limb 借位时 `d` 按 2^64 回绕，**低 52 位是正确的 limb，但第 52..63 位留下借位的垃圾**。
+`N = 2^k−1` 的 limbs 全是极大值（`2^52−1`），所以只要发生一次减法，几乎每个 limb 都会借位。
+
+**为什么只有 k=4003 炸得响**：CIOS 归约前的值 `r` 满足 `r < 2N`，而
+`P(r ≥ N) ≈ N/(4R) = 2^-(sh+2)`（`sh = 52n−k`）。
+
+- `sh ≥ 15`（k=3001/6000/8011…）：命中概率 ~1e-5 量级 —— 单次调用几乎不中，
+  但长阶梯（1e5 步以上）会偶发命中 ⇒ 这就是 §15.5 里 **SIMD-Montgomery 在 B1=1e5
+  报“无因子”**的原因（修复后同样的跑法存档与折叠域 **SHA256 全等**）；
+- `sh = 1`（k = 52n−1，如 4003）：命中概率 ~12.5% **每次归约** ⇒ 点层直接烂掉。
+
+**为什么所有 mpz 级测试都抓不到**（与 §15.4 是同一类陷阱的两个变体）：
+`ifma_lane_to_limbs`（以及所有自写 canary 的 `raw_to_mpz`）都先 `& IFMA_MASK52`，
+`ifma_to_mpz_lane` 之后还会 `mpz_mod`。**「低 52 位对」不等于「limb 规范」**。
+
+**修复**（`src/cpu/simd_mont_ifma.cpp`，1 行）：
+
+```c
+/* d 的借位回绕只污染 52..63 位，低 52 位永远是正确 limb ⇒ 存之前掩码 */
+_mm512_store_si512((__m512i *)(out + 8 * k), _mm512_and_si512(d, mask));
+```
+
+折叠域那一侧的同类代码**不需要**掩码，而且能证明：那边 `r < 2^k` 且 `N = 2^k−1`，
+所以 `r ≥ N` 只能是 `r == N`（所有 limb 都等于 N 的 limb），减法**无借位** ⇒ 天然干净
+（`dirt.cpp` 在 677/991/1001/3001/4003/8011 上对折叠域全 0 命中，实测吻合）。
+
+**回归测试**（防止这类 bug 再次溜过）：`ed_soa_field_selftest` 现在在每轮随机输入上直接检查
+`ifma_mont_mul`/`ifma_mont_sqr` 的**原始 limb 是否 < 2^52**，任一 lane/limb 越界即失败并打印
+`[selftest] mul|sqr lane=… limb=… is dirty`。这条检查与 §15.4 的「值 ≥ N」检查互补：
+一个管**值**非规范，一个管**limb**非规范。
+
+**修复后验证**（全部在本机复跑）：
+
+```
+dirt.exe {677,991,3001,4003,8011} x {mont,mers} x 60 trials   -> 全部 dirty=0
+simd_edwards_bench verify 2^3001-1 / 2^4003-1，两域，ED_SOA_FSELFTEST=100
+    -> field 0 失败、point 0 失败、bit-exact PASS（两域两尺寸）
+invariants.ps1  -> M677 on/off OK、M991 on/off OK、M4003 on/off OK（修复前 Mont/4003 MISMATCH）
+mers_test 20    -> 16,320 对拍 0 失败
+test_checkpoint.ps1 -> PASS（8 .ckpt + 8 .tmp，续跑与整跑 SHA256 全等）
+ab_mersenne.ps1 -> byte-identical: True（修复前 False）
+```
+
+**代价**：每个归约行多一条 `vpandq`，Montgomery 内核 3618.6 ns（修复前 ~3620 ns）= 噪声内，免费。
+
+**顺带修掉的构建缺口**：`ecm_cuda` 这一目标之前**链接失败**（8 个 `ed_soa_*` / `ifma_to_mpz_lane`
+未解析符号），因为共享的 `src/core/ecm_driver.cpp` 无条件调用 CPU Edwards SIMD 批处理，而
+`ecm_cuda` 的源列表里没有那两个 AVX512 TU。已在 `CMakeLists.txt` 给 `ecm_cuda` 补上
+`src/cpu/simd_edwards.cpp` + `src/cpu/simd_mont_ifma.cpp`（`/arch:AVX512` 是**按源文件**设的、
+目录作用域，自动同样生效）。现在 `cmake --build build_vs18 --config Release` **exit 0**（含 CUDA 目标）。
+
+### 15.10 第三个非规范表示 bug：标量 Montgomery 的 `mpn_redc_1` 返回值被误用（已修复）
+
+**这是 §15.5 那个“标量漏报真因子”的根因**，也是本轮最该修的一个。
+
+**先说广谱统计检验（用户要求的做法：用 `tools/ecm_prob` 的小素数比对两个后端的命中率）**：
+
+取 `tools/ecm_prob/data/primes/bits20.bin` 里均匀抽样的 **1000 个 20-bit 素数**，
+每个素数配 `N = p · (2^521−1)`（**必须嵌进大合数**：p 是素数时 stage-1 命中得到的 gcd 就是 N
+本身，驱动把它当平凡因子丢掉，命中率恒为 0，什么都测不出来），B1=256，每个素数 8 条曲线
+（sigma = 1000003 + 7919·i 起连续 8 个），共 8000 条曲线/后端：
+
+| 后端 | 命中 | 命中率 | 参考值（独立 Python + 穷举 38635 个 20-bit 素数，`out/measure_20_256.json`） |
+|---|---|---|---|
+| `simd` (auto) | 2611 / 8000 | **32.6375 %** | Edwards Z/2×Z/8，B1=256 → **32.66 %** |
+| `simd` (Montgomery) | 2611 / 8000 | **32.6375 %** | 同上 |
+| `gmp`（标量） | 2611 / 8000 | **32.6375 %** | 同上 |
+
+**三个后端不只是命中率相同，命中的是同一批 (素数, sigma)**，且报出的因子都等于 p，
+与独立实现相差 0.02 %（1000 个素数的抽样误差 ~0.5 %）⇒ 20-bit / B1=256 这一段**统计上完全正确**。
+
+同一个脚本把 B1 拉到 **1e5**（阶梯长达 14 万 bit —— 正是标量 bug 出没的区间），
+60 个素数 × 8 曲线 = 480 条曲线/后端：
+
+| 后端 | 命中 | 命中率 |
+|---|---|---|
+| `simd` (auto) | 477 / 480 | **99.375 %** |
+| `simd` (Montgomery) | 477 / 480 | **99.375 %** |
+| `gmp`（标量） | 477 / 480 | **99.375 %** |
+
+同样是**逐条曲线一致**（不是“率接近”，是分子完全相同）⇒ 长阶梯区间也修好了。
+
+**但把 B1 拉长就露馅了**（`M3001`，sigma=20260922，8 条曲线，同一个 sigma 集配对比较）：
+
+| B1 | 修复前 标量命中 | 修复前 SIMD | 修复后 标量 / Montgomery / 折叠域 |
+|---|---|---|---|
+| 10000 | 1 | 6 | **6 / 6 / 6** |
+| 20000 | 0 | 6 | **6 / 6 / 6** |
+| 30000 | 0 | 7 | **7 / 7 / 7** |
+| 50000 | 0 | 8 | **8 / 8 / 8** |
+| 75000 | 0 | 8 | **8 / 8 / 8** |
+| 100000 | 0 | 8 | **8 / 8 / 8**（`factor[0]=3217073`） |
+
+修复前标量的命中数**随 B1 非单调**（1→0→0…）：stage-1 的 `s` 在 B1 增大时是**倍数**
+（每个素因子的指数只增不减），所以 `[s]P = O` 一旦成立，更大的 B1 必然仍成立 ——
+非单调即**算术错误**的充分证据，不需要任何外部参考实现就能定性。
+
+**根因**（`src/cpu/ecm_edwards_mont.h` 的 `mont_redc`，nlimbs < 79 的 `mpn_redc_1` 分支）：
+
+```c
+/* 旧代码: 把返回值当成"结果 >= N"的标志位 */
+const mp_limb_t cy = ECM_MPN_redc_1(r, t, ctx->N, n, ctx->nprime0);
+if (cy != 0) mpn_sub_n(r, r, ctx->N, n);
+```
+
+`mpn_redc_1` 返回的是结果**最高位的 limb**（GMP 内部另一种用法是 `MPN_INCR_U(rp, n+1, cy)`），
+**不是**「≥ N」的布尔量。当 `N` 比 `2^(64·nlimbs)` 小得多时（N = 2^3001−1 ⇒ nlimbs=47 ⇒
+B^47 = 2^3008 ≫ 2N）它**恒为 0**，条件减 N 几乎从不执行，于是 REDC 的结果落在 [N, 2N) 时
+被原样返回 —— 值仍然 ≡ 正确值 (mod N)，**但 limb 表示不是规范的**。
+
+为什么这很致命：`mont_add` / `mont_sub` / `mont_neg` 都**假定算子 < N**
+（`mont_add` 只减一次 N，`mont_sub` 借位回加一次 N）。拿到 ≥ N 的算子后它们直接给出错误值，
+错误值再进 `mont_mul` 就被规约成“看着没错但完全不同”的数 ⇒ 长阶梯随机走偏 ⇒ 漏因子。
+短阶梯（B1=100 时只有几十个点运算）大概率碰不到 ⇒ 这也解释了为什么 20-bit/B1=256 的广谱
+统计检验是全绿的。
+
+**为什么现有测试都没抓到**（和 §15.4、§15.9 是同一个陷阱家族）：
+所有 mpz 级比较都会先 `mpz_import` + 归约，**非规范表示与规范表示在 mpz 眼里一模一样**。
+必须直接读 limb（新增 `.bench_tmp/mont_canary.cpp`，就是用抓 SIMD bug 的那支仪器照标量路径）：
+
+```
+修复前: bits=3001 nlimbs=47 use_redc_n=0  trials=60  -> wrong=0  non-canonical=1
+修复后: bits ∈ {677,1000,2000,3000,3001,4003,5000,10000} trials=120 -> wrong=0 non-canonical=0
+```
+
+**修复**（1 行 + 注释）：
+
+```c
+const mp_limb_t cy = ECM_MPN_redc_1(r, t, ctx->N, (mp_size_t)n, ctx->nprime0);
+if (cy != 0 || mpn_cmp(r, ctx->N, n) >= 0) mpn_sub_n(r, r, ctx->N, n);
+```
+
+（REDC 结果 < 2N，所以最多减一次就够。）`mpn_cmp` 的成本实测**免费**：同一个
+`M3001/sigma=20260922/8 曲线` 的标量墙钟 10000→100000 各档都比修复前**略快**
+（B1=1e5：18.0 s → **16.7 s**；B1=7.5e4：13.4 → 12.6），因为原来“错的快”只是省掉了那次减法。
+
+> 注：`use_redc_n` 分支（nlimbs ≥ 79）用的是 GMP 的次二次归约，**返回前已规范化**，
+> canary 在 bits=5000/10000 上 0 失败 ⇒ 不受此 bug 影响；受害区间是 **nlimbs < 79**，
+> 即 N 小于约 5050 bit —— 正好覆盖 M3001 / M4003 这些题目里的尺寸。
+> `ECM_MONT_USE_GMP_REDC=0` 的自研回退分支没有改（默认不走它，仅作对照）。
+
+**顺带一提**：修复后 `simd_edwards_bench verify` 里 “SIMD vs 标量” 的 ladder-only 比值从
+3.41× 变成 3.61~3.91×（Mersenne 6.8~7.0×）—— 不是 SIMD 变快，而是**标量参照物终于算对了**。
+
+### 15.11 stage-1 中止路径的空指针崩溃（已修复，会弹模态崩溃框卡死调用方）
+
+**症状**：把 `--edwards-mersenne on` 用在非 Mersenne 的 N 上（一种误用），进程会打印错误后
+**崩溃**（`0xC0000005`，读地址 0），Windows 弹一个模态“应用程序错误”框等待点击：
+在脚本/管道里调用时**整条流水线会一直挂着**（本次会话真的卡了 15 分钟，
+我自己排查时又被卡了一次）。
+
+**根因**（`src/core/ecm_driver.cpp` 的 CLI 收尾）：stage-1 中止时
+`run_stage1_once()` 已经把 `factors`/`array_found` 释放并**置空**后返回 `ECM_ERROR`，
+而 CLI 收尾**没有检查返回值**就索引：
+
+```c
+run_stage1_once(...);
+for (uint32_t i = 0; i < result.curves; i++)
+    if (result.array_found[i] != ECM_NO_FACTOR_FOUND)   // array_found == nullptr -> 崩
+```
+
+**队列路径**（`run_stage1_outcome` 一带）早就有 `has_factors = (result.factors != nullptr)`
+判断，CLI 路径漏了 —— 两条路径行为不一致正是这个 bug 藏身之处。
+触发面比“误用开关”宽得多：**任何** stage-1 非正常结束都会走这条路，包括用户 Ctrl-C /
+checkpoint 中止（生产里会用到）。
+
+**修复**：CLI 收尾照队列路径加同样的空指针判断，并且**把错误码传出去**
+（`return (rc1 == ECM_ERROR || result.ret == ECM_ERROR) ? 1 : 0;`，原来无条件 `return 0`，
+脚本会把失败当“跑完没因子”）。
+
+**验证**：`--edwards-mersenne on` + 非 Mersenne 的 N，threads=1/8 各 6 次：
+修复前第 1 次就挂起（崩溃框），修复后 **12/12 全部干净退出 exit=1**，整轮 1 秒内跑完。
+同时把日志里那句含糊的 `SIMD stage-1 internal error` 换成了明确原因：
+
+```
+ERROR: --edwards-mersenne on was requested, but this N is not 2^k-1 with k >= 64
+       (N+1 is not a power of two), so the Mersenne fold domain does not apply.
+       Use --edwards-mersenne auto (default) or off.
+```
+
+### 15.12 本轮新增/沿用的验证工具
+
+| 工具 | 作用 |
+|---|---|
+| `.bench_tmp/mont_canary.cpp` | **标量** Montgomery 层 canary（mul/sqr/add/sub/neg vs mpz + 原样 limb 规范性）——§15.10 的定位仪器 |
+| `.bench_tmp/dirt.cpp` | 内核 limb 高位污染检查（任意 k × 两域）——§15.9 |
+| `.bench_tmp/rate_test.ps1` | **命中率广谱统计**：从 `ecm_prob/data/primes/bits{b}.bin` 抽样素数，嵌入大合数，逐后端记录命中率并与参考值对比 |
+| `.bench_tmp/cmp_b1.ps1` | 同一 `(N, sigma)` 上多个 B1 的三后端配对比较（命中数 + 存档最终点是否逐字节相同） |
+| `.bench_tmp/bisect_b1.ps1` | 在已知失败用例上扫 B1，找最小复现档 |
+| `.bench_tmp/dump_tmp.cpp` | 解析 `.tmp`（用驱动自己的 reader）打印 Qx/Qz，用于跨后端比对最终点 |
+| `.bench_tmp/repro_crash.ps1` / `crashloop.cmd` | 中止路径崩溃复现（逐次超时 + 日志，避免模态框卡住调用方） |
+| `.bench_tmp/ab_mersenne.ps1` / `invariants.ps1` / `w_ab.ps1` | 域 A/B、§7 不变式回归、窗口 A/B |
+
 
 

@@ -86,6 +86,8 @@ bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
         else if (key == "cpu_affinity") cfg.affinity = val;           // 别名
         else if (key == "edwards_backend") cfg.edwards_backend = val;
         else if (key == "edbackend") cfg.edwards_backend = val;       // 别名
+        else if (key == "edwards_mersenne") cfg.edwards_mersenne = val;
+        else if (key == "emersenne") cfg.edwards_mersenne = val;      // 别名
         else if (key == "p95_dir") cfg.p95_dir = val;                 // 已废弃, 见 tmp_dir
         else if (key == "tmp_dir") cfg.tmp_dir = val;
         else if (key == "gpuckpt_seconds") set_double(cfg.gpuckpt_seconds);
@@ -167,6 +169,15 @@ bool ecm_queue_config_write_default(const std::string &path) {
 "# stage-1 后端：auto = 自动（有 AVX512-IFMA 且曲线 >= 8 时用批量，否则标量）；\n"
 "# simd = 强制批量（无 ISA 直接报错，不静默降级）；gmp = 强制标量。\n"
 "edwards_backend = auto\n"
+"\n"
+"# Field reduction inside the SIMD backend (ignored by the scalar backend).\n"
+"# auto = N = 2^k-1 uses the Mersenne fold kernel (2^k = 1 turns the reduction\n"
+"#        into a shift: half the madds per field mul), anything else Montgomery\n"
+"# on   = require Mersenne (N not of that shape -> hard error)\n"
+"# off  = force Montgomery (kept for A/B comparison)\n"
+"# SIMD 后端的域归约方式：auto = N=2^k-1 时用 Mersenne 折叠内核（每模乘 madds 减半），\n"
+"# 否则 Montgomery；on = 强制 Mersenne；off = 强制 Montgomery（对照用）。\n"
+"edwards_mersenne = auto\n"
 "\n"
 "# Edwards NAF window (dictionary = 2^(w-2) entries). 0 = built-in default.\n"
 "# Larger w means fewer point additions but a bigger table; w=12 measured best\n"

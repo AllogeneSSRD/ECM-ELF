@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
- * simd_edwards.cpp — see simd_edwards.h for the contract.
+ * simd_edwards.cpp 鈥?see simd_edwards.h for the contract.
  *
  * Field ops are vectorised on top of ifma_mont_mul (batched, lane = curve).
  * Everything here is "the same formula, 8 lanes wide": the scalar reference is
@@ -202,7 +202,7 @@ static void ed_soa_add_affine(ed_soa_ctx_t *c, soa_pt r, const soa_pt p,
 }
 
 /* ---------------------------------------------------------------------------
- * w-NAF digits — copied from ecm_edwards_cpu.cpp naf_digits (which is static
+ * w-NAF digits 鈥?copied from ecm_edwards_cpu.cpp naf_digits (which is static
  * there).  Both produce a valid signed representation of the same exponent, so
  * the ladder's result is identical regardless; kept in sync deliberately.
  * ------------------------------------------------------------------------- */
@@ -271,10 +271,37 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
             ifma_from_mpz_lane(A.data(), k, av, mc);
             ifma_from_mpz_lane(B.data(), k, bv, mc);
         }
+        /* The kernels must return canonical *limbs* (< 2^52), not merely a value
+           that is correct modulo N.  ifma_to_mpz_lane() masks every limb and then
+           applies mpz_mod, so a result that is right per-limb mod 2^52 but dirty
+           above (bits 52..63) passes every mpz comparison while breaking every
+           soa_* helper, which assumes canonical limbs — exactly the k=4003
+           Montgomery defect, where CIOS stored the wrapped limbs of the
+           conditional subtraction unmasked because a borrow is the norm for
+           N = 2^k-1 (N has maximal limbs, so r - N borrows almost everywhere). */
+        {
+            std::vector<uint64_t> K(8 * n);
+            for (int op = 0; op < 2; op++) {
+                if (op == 0) ifma_mont_mul(K.data(), A.data(), B.data(), mc);
+                else ifma_mont_sqr(K.data(), A.data(), mc);
+                for (unsigned k = 0; k < IFMA_LANES; k++) {
+                    for (size_t i = 0; i < n; i++) {
+                        if (K[8 * i + k] > (uint64_t)IFMA_M52) {
+                            if (fails < 16)
+                                printf("  [selftest] %s lane=%u limb %llu = %016llx is dirty (> 2^52)\n",
+                                       op ? "sqr" : "mul", k, (unsigned long long)i,
+                                       (unsigned long long)K[8 * i + k]);
+                            fails++;
+                        }
+                    }
+                }
+            }
+        }
         for (int op = 0; op < 3; op++) {
             if (op == 0) soa_add(R.data(), A.data(), B.data(), mc);
             else if (op == 1) soa_sub(R.data(), A.data(), B.data(), T.data(), mc);
-            else soa_neg(R.data(), A.data(), mc);            for (unsigned k = 0; k < IFMA_LANES; k++) {
+            else soa_neg(R.data(), A.data(), mc);
+            for (unsigned k = 0; k < IFMA_LANES; k++) {
                 ifma_to_mpz_lane(got, R.data(), k, mc);
                 ifma_to_mpz_lane(av, A.data(), k, mc);
                 ifma_to_mpz_lane(bv, B.data(), k, mc);
@@ -380,6 +407,58 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials)
     mpz_clears(av, bv, want, got, tmp, NULL);
     gmp_randclear(rs);
     return fails;
+}
+
+/* ---------------------------------------------------------------------------
+ * Debug hooks for bench/tests: run a single point op on lane 0 and leave the
+ * op's internal arena slots readable via c->arena, so the first diverging field
+ * op can be identified when the point selftest fails.
+ * ------------------------------------------------------------------------- */
+void ed_soa_debug_dbl(ed_soa_ctx_t *c, uint64_t *ox, uint64_t *oy, uint64_t *oz, uint64_t *ot,
+                      const uint64_t *ix, const uint64_t *iy, const uint64_t *iz,
+                      const uint64_t *it)
+{
+    soa_pt in = { (uint64_t *)ix, (uint64_t *)iy, (uint64_t *)iz, (uint64_t *)it };
+    soa_pt out = { ox, oy, oz, ot };
+    ed_soa_dbl(c, out, in);
+}
+
+void ed_soa_debug_add_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a, const uint64_t *b)
+{
+    soa_pt dummy;
+    (void)dummy;
+    soa_add(r, a, b, &c->mc);
+}
+
+void ed_soa_debug_sub_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a, const uint64_t *b,
+                            uint64_t *scratch)
+{
+    soa_sub(r, a, b, scratch, &c->mc);
+}
+
+void ed_soa_debug_neg_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a)
+{
+    soa_neg(r, a, &c->mc);
+}
+
+void ed_soa_debug_add(ed_soa_ctx_t *c, uint64_t *rx, uint64_t *ry, uint64_t *rz, uint64_t *rt,
+                      const uint64_t *ax, const uint64_t *ay, const uint64_t *az, const uint64_t *at,
+                      const uint64_t *bx, const uint64_t *by, const uint64_t *bz, const uint64_t *bt)
+{
+    soa_pt r = { rx, ry, rz, rt };
+    soa_pt a = { (uint64_t *)ax, (uint64_t *)ay, (uint64_t *)az, (uint64_t *)at };
+    soa_pt b = { (uint64_t *)bx, (uint64_t *)by, (uint64_t *)bz, (uint64_t *)bt };
+    ed_soa_add(c, r, a, b);
+}
+
+void ed_soa_debug_add_affine(ed_soa_ctx_t *c, uint64_t *ox, uint64_t *oy, uint64_t *oz,
+                             uint64_t *ot, const uint64_t *ix, const uint64_t *iy,
+                             const uint64_t *iz, const uint64_t *it,
+                             const uint64_t *qx, const uint64_t *qy, const uint64_t *qdxy)
+{
+    soa_pt in = { (uint64_t *)ix, (uint64_t *)iy, (uint64_t *)iz, (uint64_t *)it };
+    soa_pt out = { ox, oy, oz, ot };
+    ed_soa_add_affine(c, out, in, qx, qy, qdxy);
 }
 
 /* ---------------------------------------------------------------------------
@@ -726,9 +805,19 @@ int ed_soa_set_resume(ed_soa_ctx_t *c, size_t start_digit, int lanes,
 
 int ed_soa_init(ed_soa_ctx_t *c, const mpz_t N, int w)
 {
+    return ed_soa_init_ex(c, N, w, IFMA_FIELD_AUTO);
+}
+
+const char *ed_soa_field_name(const ed_soa_ctx_t *c)
+{
+    return ifma_field_name(&c->mc);
+}
+
+int ed_soa_init_ex(ed_soa_ctx_t *c, const mpz_t N, int w, int field_mode)
+{
     memset(c, 0, sizeof(*c));
     if (w < 3 || w > 12) return -1;
-    if (ifma_ctx_init(&c->mc, N) != 0) return -2;
+    if (ifma_ctx_init_ex(&c->mc, N, field_mode) != 0) return -2;
     c->n = c->mc.n;
     c->w = w;
     c->m = (size_t)1 << (w - 2);
@@ -1008,6 +1097,22 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
         if (dbg && (i < 5 || (i % 500) == 0))
             fprintf(stderr, "[soa] after step %zu: R.z limb0 lane0=%llx R.y limb0 lane0=%llx\n",
                     i, (unsigned long long)(R.z[0] & IFMA_M52), (unsigned long long)(R.y[0] & IFMA_M52));
+        /* ED_SOA_DUMP_STEP=N: full point of lane 0 every N digits (debugging a
+           divergence against an external reference ladder). */
+        {
+            static const char *dump_env = getenv("ED_SOA_DUMP_STEP");
+            const long dump_step = dump_env ? atol(dump_env) : 0;
+            if (dbg && dump_step > 0 && (i % (size_t)dump_step) == 0) {
+                mpz_t vx, vy, vz, vt;
+                mpz_inits(vx, vy, vz, vt, NULL);
+                ifma_to_mpz_lane(vx, R.x, 0, mc);
+                ifma_to_mpz_lane(vy, R.y, 0, mc);
+                ifma_to_mpz_lane(vz, R.z, 0, mc);
+                ifma_to_mpz_lane(vt, R.t, 0, mc);
+                gmp_fprintf(stderr, "[dump] %zu %Zd %Zd %Zd %Zd\n", i, vx, vy, vz, vt);
+                mpz_clears(vx, vy, vz, vt, NULL);
+            }
+        }
         if (dbg && total <= 8) {
             mpz_t vx, vy, vz, vt;
             mpz_inits(vx, vy, vz, vt, NULL);

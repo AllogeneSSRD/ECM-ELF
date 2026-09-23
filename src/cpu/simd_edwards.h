@@ -55,8 +55,15 @@ typedef struct {
     void      *progress_ctx;
 } ed_soa_ctx_t;
 
-/* w in [3,12].  Returns 0 on success. */
+/* w in [3,12].  Returns 0 on success.
+   field_mode: IFMA_FIELD_AUTO | IFMA_FIELD_MONT | IFMA_FIELD_MERS (see
+   simd_mont_ifma.h).  AUTO uses the Mersenne fold kernel when N = 2^k - 1,
+   which halves the madds per field mul; everything above the field layer
+   (point ops, dictionary, checkpoint, gcd) is domain agnostic. */
 int  ed_soa_init(ed_soa_ctx_t *c, const mpz_t N, int w);
+int  ed_soa_init_ex(ed_soa_ctx_t *c, const mpz_t N, int w, int field_mode);
+/* "montgomery (R=2^52n)" / "mersenne (2^k=1, k=3001, n52=58, fold<<15)" */
+const char *ed_soa_field_name(const ed_soa_ctx_t *c);
 void ed_soa_clear(ed_soa_ctx_t *c);
 
 /* Per-lane curve setup: sigma[k] -> (d_k, P_k) via Atkin-Morain, then the
@@ -96,6 +103,23 @@ int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials);
 /* Point-op self test: dbl / add / add_affine each compared against the same
    formulas evaluated in mpz.  Returns the number of failures. */
 int ed_soa_point_selftest(ed_soa_ctx_t *c, int trials);
+
+/* Debug hooks: run one point op on the whole batch with caller-provided buffers
+   (8n words each); afterwards c->arena holds the op's internal slots
+   (0..6 = A,B,C,E,F,G,H, 7 = X+Y scratch, 8/9 = add/sub scratch) so a failing
+   step can be compared against mpz. */
+void ed_soa_debug_dbl(ed_soa_ctx_t *c, uint64_t *ox, uint64_t *oy, uint64_t *oz, uint64_t *ot,
+                      const uint64_t *ix, const uint64_t *iy, const uint64_t *iz,
+                      const uint64_t *it);
+void ed_soa_debug_add_affine(ed_soa_ctx_t *c, uint64_t *ox, uint64_t *oy, uint64_t *oz,
+                             uint64_t *ot, const uint64_t *ix, const uint64_t *iy,
+                             const uint64_t *iz, const uint64_t *it,
+                             const uint64_t *qx, const uint64_t *qy, const uint64_t *qdxy);
+/* field-level hooks (one 8n-word buffer per element) */
+void ed_soa_debug_add_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a, const uint64_t *b);
+void ed_soa_debug_sub_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a, const uint64_t *b,
+                            uint64_t *scratch);
+void ed_soa_debug_neg_field(ed_soa_ctx_t *c, uint64_t *r, const uint64_t *a);
 
 #ifdef __cplusplus
 }

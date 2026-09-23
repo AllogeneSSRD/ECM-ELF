@@ -519,6 +519,12 @@ if(ECM_ENABLE_CUDA)
         src/opencl_ecm_runtime_config.cpp
         src/cpu/ecm_edwards_cpu.cpp
         src/cpu/ecm_edwards_save.cpp
+        # ecm_driver.cpp (shared) calls the CPU Edwards SIMD batch unconditionally,
+        # so this target needs the two AVX512 TUs as well — without them the link
+        # fails on ed_soa_* / ifma_to_mpz_lane.  The AVX512 COMPILE_OPTIONS set
+        # above are per-source-file (directory scoped) and so apply here too.
+        src/cpu/simd_edwards.cpp
+        src/cpu/simd_mont_ifma.cpp
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu

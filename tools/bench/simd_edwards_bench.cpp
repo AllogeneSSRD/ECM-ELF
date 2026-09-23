@@ -146,10 +146,20 @@ int main(int argc, char **argv)
     fflush(stdout);
 
     ed_soa_ctx_t ctx;
-    if (ed_soa_init(&ctx, N, w_simd) != 0) { fprintf(stderr, "ed_soa_init failed\n"); return 2; }
+    /* Field selection: AUTO by default (Mersenne fold for N = 2^k-1);
+       ED_SOA_FIELD=mont|mers|auto forces one for A/B work. */
+    int field_mode = IFMA_FIELD_AUTO;
+    if (const char *fm = getenv("ED_SOA_FIELD")) {
+        if (!strcmp(fm, "mont") || !strcmp(fm, "0")) field_mode = IFMA_FIELD_MONT;
+        else if (!strcmp(fm, "mers") || !strcmp(fm, "1")) field_mode = IFMA_FIELD_MERS;
+    }
+    if (ed_soa_init_ex(&ctx, N, w_simd, field_mode) != 0) { fprintf(stderr, "ed_soa_init failed\n"); return 2; }
+    printf("field   : %s\n", ed_soa_field_name(&ctx));
 
     {
-        const int sf = ed_soa_field_selftest(&ctx, 3);
+        int ftr = 3;   /* ED_SOA_FSELFTEST=<n> widens the field-op sweep */
+        if (const char *e = getenv("ED_SOA_FSELFTEST")) ftr = atoi(e);
+        const int sf = ed_soa_field_selftest(&ctx, ftr);
         printf("field ops: add/sub/neg vs mpz: %d failures -> %s\n", sf, sf ? "BAD" : "ok");
         const int sp = ed_soa_point_selftest(&ctx, 2);
         printf("point ops: dbl/add/add_affine vs mpz: %d failures -> %s\n", sp, sp ? "BAD" : "ok");

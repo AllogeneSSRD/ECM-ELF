@@ -47,6 +47,9 @@
 #include "ecm_worktodo.h"
 #include "ecm_edwards_cpu.h"        /* Edwards (Atkin-Morain) stage-1 CPU path */
 #include "ecm_edwards_save.h"       /* Prime95 ECM 二进制存档读写 */
+/* IFMA_FIELD_* 常量 (SIMD 域选择)。头文件不含 AVX512 intrinsic, 基线 TU 可包含;
+   只给 simd_*.cpp 加 /arch:AVX512, 见 §14.1。 */
+#include "simd_mont_ifma.h"
 
 static void trim(std::string &s){
     while(!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
@@ -716,6 +719,9 @@ static void print_ecm_usage(const char *prog) {
             << "  --edwards-backend <m>  auto|simd|gmp (batch 8 curves via AVX512-IFMA;\n"
             << "                         simd forces it and errors out if the CPU lacks it)\n"
               << "  --edwards-naf-w <w>  NAF window (default 12); dictionary = 2^(w-2)\n"
+              << "  --edwards-mersenne <m>  auto|on|off: SIMD field reduction. auto uses the\n"
+              << "                         Mersenne fold kernel when N = 2^k-1 (half the madds\n"
+              << "                         per field mul); off forces Montgomery (A/B only)\n"
               << "  --tmp-dir <dir>      Local dir for stage-1 saves e{n:07d}_c{k}[.tmp]\n"
               << "                       (default: current dir; ecm.exe never writes to p95)\n"
               << "  -gpucurves <n>       Number of ECM curves per launch (Edwards: total curves)\n"
@@ -830,6 +836,9 @@ struct Stage1RunOptions {
     uint32_t  stage1_curves = 0;     // 进度条总数
     std::vector<unsigned> affinity_cpus;   // 亲核性 (空 = 不绑定)
     int edwards_naf_w = 0;           // 0 = 用 ecm_edwards_cpu 的默认窗口
+    /* SIMD 域的归约方式: IFMA_FIELD_AUTO (检测到 N=2^k-1 就用 Mersenne 折叠,
+       madds/模乘减半) | IFMA_FIELD_MONT (强制 Montgomery) | IFMA_FIELD_MERS. */
+    int edwards_field = IFMA_FIELD_AUTO;
     int verbose = 0;
     int device_index = 0;
     unsigned long gpuckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
@@ -1378,7 +1387,44 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
        代价是字典内存 = 3*2^(w-2)*8n 字节 (w=12/n=155 约 29 MB/批), 见启动信息。 */
     int w = edwards_get_naf_w();
     if (w < 3 || w > 12) w = 8;
-    if (ed_soa_init(&ctx, N, w) != 0) return -1;
+    {
+        const int rc = ed_soa_init_ex(&ctx, N, w, opt.edwards_field);
+        if (rc != 0) {
+            /* 保持与原来完全相同的控制流 (先尝试建 ctx, 失败就返回 -1), 只把
+               "SIMD stage-1 internal error" 这句含糊的日志换成能看出原因的话:
+               --edwards-mersenne on 要求 N = 2^k-1 (k>=64), 这是最常见的误用。 */
+            bool want_mers = (opt.edwards_field == IFMA_FIELD_MERS);
+            if (want_mers) {
+                mpz_t t;
+                mpz_init(t);
+                mpz_add_ui(t, N, 1);
+                const bool is_mersenne = (mpz_popcount(t) == 1 && mpz_scan1(t, 0) >= 64);
+                mpz_clear(t);
+                want_mers = !is_mersenne;
+            }
+            std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+            if (want_mers)
+                ecm_ts_fprintf(stderr,
+                               "ERROR: --edwards-mersenne on was requested, but this N is not "
+                               "2^k-1 with k >= 64 (N+1 is not a power of two), so the Mersenne "
+                               "fold domain does not apply. Use --edwards-mersenne auto "
+                               "(default) or off.\n");
+            else
+                ecm_ts_fprintf(stderr,
+                               "ERROR: edwards SIMD context init failed (rc=%d) for a %zu-bit N "
+                               "with dict w=%d.\n", rc, mpz_sizeinbase(N, 2), w);
+            return -1;
+        }
+    }
+
+    /* 第一次成功建 ctx 时把实际选中的域打印出来 (auto 会按 N 的形状决定) */
+    {
+        static std::atomic<int> field_logged(0);
+        if (field_logged.fetch_add(1, std::memory_order_relaxed) == 0) {
+            std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+            ecm_ts_fprintf(stdout, "field           : %s\n", ed_soa_field_name(&ctx));
+        }
+    }
 
     /* 不足 8 条时把最后一个 sigma 补满 (被补的 lane 结果丢弃) */
     uint64_t sg[8];
@@ -2174,6 +2220,23 @@ static int run_queue_manager(const std::string &ini_path) {
     /* edwards_naf_w: 之前同样只在命令行生效, 队列模式会忽略 ini 里的设置 */
     if (cfg.edwards_naf_w >= 3 && cfg.edwards_naf_w <= 12) edwards_set_naf_w(cfg.edwards_naf_w);
     opt.edwards_naf_w = cfg.edwards_naf_w;
+    /* edwards_mersenne: auto | on | off -> SIMD 域的归约方式 */
+    {
+        std::string m = cfg.edwards_mersenne;
+        for (size_t i = 0; i < m.size(); i++) {
+            const char ch = m[i];
+            m[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
+        }
+        if (m.empty() || m == "auto" || m == "1") opt.edwards_field = IFMA_FIELD_AUTO;
+        else if (m == "on" || m == "mersenne" || m == "mers" || m == "yes") opt.edwards_field = IFMA_FIELD_MERS;
+        else if (m == "off" || m == "montgomery" || m == "mont" || m == "no" || m == "0") opt.edwards_field = IFMA_FIELD_MONT;
+        else {
+            ecm_ts_fprintf(stderr,
+                           "WARNING: edwards_mersenne='%s' not recognised (auto|on|off); using auto\n",
+                           cfg.edwards_mersenne.c_str());
+            opt.edwards_field = IFMA_FIELD_AUTO;
+        }
+    }
     opt.verbose = cfg.verbose;
     opt.device_index = cfg.device;
     opt.gpuckpt_ms = (cfg.gpuckpt_seconds > 0.0)
@@ -2339,6 +2402,7 @@ int main(int argc, char **argv){
     uint32_t edwards_threads = 0;
     int edwards_naf_w = 0;
     int edwards_backend = 0;      /* 0=auto 1=simd 2=gmp */
+    int edwards_mersenne = IFMA_FIELD_AUTO;   /* IFMA_FIELD_AUTO|MONT|MERS */
     uint32_t gpucurves = 0;
     double gpuckpt_seconds = -1.0;
     bool gpuckpt_set = false;
@@ -2381,7 +2445,16 @@ int main(int argc, char **argv){
         }
         if((a == "--edwards-naf-w" || a == "--ednafw") && i+1<argc){
             try { edwards_naf_w = std::stoi(argv[++i]); }
-            catch (...) { std::cerr << "Invalid --edwards-naf-w value, expected integer" << std::endl; return 1; }            continue;
+            catch (...) { std::cerr << "Invalid --edwards-naf-w value, expected integer" << std::endl; return 1; }
+            continue;
+        }
+        if((a == "--edwards-mersenne" || a == "--edmers") && i+1<argc){
+            const std::string m = argv[++i];
+            if (m == "auto") edwards_mersenne = IFMA_FIELD_AUTO;
+            else if (m == "on" || m == "mersenne" || m == "mers") edwards_mersenne = IFMA_FIELD_MERS;
+            else if (m == "off" || m == "montgomery" || m == "mont") edwards_mersenne = IFMA_FIELD_MONT;
+            else { std::cerr << "Invalid --edwards-mersenne, expected auto|on|off" << std::endl; return 1; }
+            continue;
         }
         if(a == "-gpucurves" && i+1<argc){ gpucurves = (uint32_t)std::stoul(argv[++i]); continue; }
         if(a == "-gpuckpt" && i+1<argc){
@@ -2657,6 +2730,7 @@ int main(int argc, char **argv){
     opt.edwards_threads = edwards_threads;
     opt.backend = edwards_backend;
     opt.edwards_naf_w = edwards_naf_w;
+    opt.edwards_field = edwards_mersenne;
     opt.verbose = verbose ? 1 : 0;
     opt.device_index = gpu_device_index;
     opt.gpuckpt_ms = gpuckpt_ms;
@@ -2685,47 +2759,56 @@ int main(int argc, char **argv){
     }
 
     Stage1RunResult result;
-    run_stage1_once(N, B1, B2, gpucurves, savefilename, saveappend, nline, opt, &result);
+    const int rc1 = run_stage1_once(N, B1, B2, gpucurves, savefilename, saveappend, nline, opt, &result);
 
     std::vector<uint32_t> go_primes;
     if (print_group_order) {
         build_primes_up_to_B1(B1, go_primes);
     }
 
-    for (uint32_t i = 0; i < result.curves; i++) {
-        if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
-            char *s = mpz_get_str(NULL, 10, result.factors[i]);
-            std::cout << "factor[" << i << "]=" << (s ? s : "?") << "\n";
-            free(s);
-            if (print_group_order) {
-                uint32_t sigma_curve = result.firstsigma + i;
-                if (mpz_probab_prime_p(result.factors[i], 25) <= 0) {
-                    std::cout << "  go_factor[" << i << "]=[ ] (factor is not prime, skip #E(F_p))\n";
-                    continue;
-                }
-                mpz_t go;
-                mpz_init(go);
-                std::string err;
-                if (!compute_group_order_pari_for_sigma3(go, result.factors[i], sigma_curve,
-                                                         go_gp_exe, &err)) {
-                    std::cerr << "go_factor[" << i << "]: gp error: " << err << "\n"
-                              << "Please verify gp is working, or provide path with: --gp <path/to/gp>"
-                              << std::endl;
+    /* 中止/失败时 run_stage1_once 已经释放并把 factors/array_found 置空 —— 直接索引
+       就是空指针解引用 (0xC0000005, Windows 还会弹一个模态崩溃框, 把管道卡死)。
+       队列路径早就用 has_factors 判过了, 这里漏了; 触发条件包括 SIMD 批量报错、
+       用户中止 (SIGINT/checkpoint abort) 等任何 stage-1 非正常结束。 */
+    const bool cli_has_factors = (result.factors != nullptr && result.array_found != nullptr);
+
+    if (cli_has_factors) {
+        for (uint32_t i = 0; i < result.curves; i++) {
+            if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
+                char *s = mpz_get_str(NULL, 10, result.factors[i]);
+                std::cout << "factor[" << i << "]=" << (s ? s : "?") << "\n";
+                free(s);
+                if (print_group_order) {
+                    uint32_t sigma_curve = result.firstsigma + i;
+                    if (mpz_probab_prime_p(result.factors[i], 25) <= 0) {
+                        std::cout << "  go_factor[" << i << "]=[ ] (factor is not prime, skip #E(F_p))\n";
+                        continue;
+                    }
+                    mpz_t go;
+                    mpz_init(go);
+                    std::string err;
+                    if (!compute_group_order_pari_for_sigma3(go, result.factors[i], sigma_curve,
+                                                             go_gp_exe, &err)) {
+                        std::cerr << "go_factor[" << i << "]: gp error: " << err << "\n"
+                                  << "Please verify gp is working, or provide path with: --gp <path/to/gp>"
+                                  << std::endl;
+                        mpz_clear(go);
+                        return 1;
+                    }
+                    auto go_parts = factor_by_small_primes(go, go_primes);
+                    std::cout << "  go[" << i << "]=" << mpz_to_dec_string(go) << "\n";
+                    std::cout << "  go_factor[" << i << "]="
+                              << format_group_order_smooth(go_parts) << "\n";
                     mpz_clear(go);
-                    return 1;
                 }
-                auto go_parts = factor_by_small_primes(go, go_primes);
-                std::cout << "  go[" << i << "]=" << mpz_to_dec_string(go) << "\n";
-                std::cout << "  go_factor[" << i << "]="
-                          << format_group_order_smooth(go_parts) << "\n";
-                mpz_clear(go);
             }
         }
-    }
 
-    for (uint32_t i = 0; i < result.curves; i++) mpz_clear(result.factors[i]);
-    free(result.factors);
-    free(result.array_found);
+        for (uint32_t i = 0; i < result.curves; i++) mpz_clear(result.factors[i]);
+        free(result.factors);
+        free(result.array_found);
+    }
     mpz_clear(N);
-    return 0;
+    /* 让调用方 (脚本/Prime95 前端) 能看到失败, 而不是把 0 当成"跑完了没因子"。 */
+    return (rc1 == ECM_ERROR || result.ret == ECM_ERROR) ? 1 : 0;
 }

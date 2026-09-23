@@ -179,9 +179,14 @@ static inline void mont_redc(mp_limb_t *r, mp_limb_t *t, const mont_ctx_t *ctx) 
         return;
     }
     {
-        // MPN_REDC_1 约定: 返回非零则再减一次 N。
+        // mpn_redc_1 的返回值是结果**最高位的 limb**（GMP 里另一种用法是
+        // MPN_INCR_U(rp, n+1, cy)），并**不是**「结果 ≥ N」的标志位。
+        // 只按 cy != 0 去减 N 的话，REDC 结果落在 [N, 2N) 时就被原样留下了 ——
+        // 值仍然 ≡ 正确值 (mod N)，但 limbb 表示不是规范的，而 mont_add/mont_sub
+        // 都假定算子 < N，于是后续运算被污染（和 SIMD 侧 §15.9 的 bug 同一类）。
+        // 实测: canary 在 bits=3001 (nlimbs=47, redc_1 路径) 上能抓到 ≥ N 的结果。
         const mp_limb_t cy = ECM_MPN_redc_1(r, t, ctx->N, (mp_size_t)n, ctx->nprime0);
-        if (cy != 0) mpn_sub_n(r, r, ctx->N, n);
+        if (cy != 0 || mpn_cmp(r, ctx->N, n) >= 0) mpn_sub_n(r, r, ctx->N, n);
         return;
     }
 #else

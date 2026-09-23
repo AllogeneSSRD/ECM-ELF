@@ -27,6 +27,11 @@ struct EcmQueueConfig {
     int edwards_threads = 0;                     // 0 = auto (min(curves, #cores)); 1 = 顺序
     int edwards_naf_w = 0;                       // 0 = 默认窗口 (12); 字典 = 2^(w-2)
     std::string edwards_backend = "auto";        // auto | simd (AVX512-IFMA 批量) | gmp (标量)
+    // SIMD 域的归约方式 (只影响 simd 后端):
+    //   auto (默认) = N = 2^k-1 时用 Mersenne 折叠 (madds/模乘减半), 否则 Montgomery
+    //   on   = 强制 Mersenne, N 不是 2^k-1 时报错
+    //   off  = 强制 Montgomery (基准对照用)
+    std::string edwards_mersenne = "auto";
     std::string affinity;                        // 亲核性: ""/"none"/"auto" = 不绑定;
                                                  // 或逻辑 CPU 号列表, 如 "1,3,5,7"
     std::string tmp_dir = ".";                   // 本地 stage-1 落盘目录 (e{n:07d}_c{k}.tmp)
