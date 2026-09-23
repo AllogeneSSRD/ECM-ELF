@@ -116,15 +116,22 @@ add_executable(ecm
     src/cpu/ecm_edwards_save.cpp
     src/cpu/simd_edwards.cpp
     src/cpu/simd_mont_ifma.cpp
+    # Suyama-sigma Montgomery stage 1 (Prime95 sigma_type=1 / gmp-ecm -param 0):
+    # scalar MPN path + the 8-lane AVX512-IFMA batch.  See
+    # docs/ECM_Montgomery_STAGE1.md.
+    src/cpu/ecm_mont_cpu.cpp
+    src/cpu/simd_mont_curve.cpp
 )
 
 # 只有这两个 SIMD TU 拿 AVX512 codegen; 调用点必须在 edwards_simd_available()
 # (基线 TU 里的 CPUID 探测) 返回 1 之后, 见 docs/ECM_EDWARDS_STAGE1.md §13.8。
 if(MSVC)
     set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp
+        src/cpu/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 else()
     set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp
+        src/cpu/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
 endif()
 

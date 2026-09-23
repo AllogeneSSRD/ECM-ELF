@@ -47,7 +47,7 @@ cl /nologo /O2 /utf-8 /arch:AVX512 /EHsc %DEFS% ^
    /I "%ROOT%\include" /I "%ROOT%\src" /I "%ROOT%\src\core" /I "%ROOT%\src\cpu" ^
    /I "%ROOT%\tools\diag" /I "%ROOT%\tools\bench" ^
    /I "%ROOT%\third_party\gmp-zen3\dist\include" ^
-   "%ROOT%\%TOOL%" %2 %3 %4 %5 %6 ^
+   "%ROOT%\%TOOL%" %2 %3 %4 %5 %6 %7 %8 %9 ^
    /Fe:"%ROOT%\build_vs18\tools\%NAME%.exe" ^
    /link /LIBPATH:"%ROOT%\third_party\gmp-zen3\dist\lib" gmp.lib
 set RC=%errorlevel%

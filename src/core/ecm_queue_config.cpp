@@ -101,6 +101,11 @@ bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
         else if (key == "kernel_special_mult") cfg.kernel_special_mult = val;
         else if (key == "sigma") set_u32(cfg.sigma);
         else if (key == "save_name_pattern") cfg.save_name_pattern = val;
+        else if (key == "mont") set_int(cfg.mont);
+        else if (key == "mont_backend") cfg.mont_backend = val;
+        else if (key == "mont_torsion") set_int(cfg.mont_torsion);
+        else if (key == "mont_threads") set_int(cfg.mont_threads);
+        else if (key == "mont_save_pattern") cfg.mont_save_pattern = val;
         else if (key == "progress_color") cfg.progress_color = val;
         // Unknown keys are ignored.
     }
@@ -231,7 +236,31 @@ bool ecm_queue_config_write_default(const std::string &path) {
 "\n"
 "# Progress bar color: none|red|green|yellow|blue|magenta|cyan|white|grey.\n"
 "# 进度条颜色：none|red|green|yellow|blue|magenta|cyan|white|grey。\n"
-"progress_color = cyan\n";
+"progress_color = cyan\n"
+"\n"
+"# ---------------------------------------------------------------------------\n"
+"# Suyama-sigma Montgomery stage 1 (docs/ECM_Montgomery_STAGE1.md)\n"
+"# Suyama-sigma 蒙哥马利曲线 stage 1（见开发文档）\n"
+"# ---------------------------------------------------------------------------\n"
+"# 1 = use the Montgomery path for stage 1 instead of GPU/Edwards.\n"
+"# 1 = stage 1 走蒙哥马利路径（替代 GPU/Edwards）。\n"
+"mont = 0\n"
+"\n"
+"# auto | simd (AVX512-IFMA, 8 curves per batch) | gmp (scalar mpn, 1 curve).\n"
+"# auto | simd（AVX512-IFMA，8 曲线一批）| gmp（标量 mpn，1 曲线）。\n"
+"mont_backend = auto\n"
+"\n"
+"# Exponent torsion: 1 = gmp-ecm -param 0 (lcm(1..B1)), 12 = Prime95 choose12.\n"
+"# 指数 torsion：1 = gmp-ecm -param 0（lcm(1..B1)），12 = Prime95 choose12。\n"
+"mont_torsion = 1\n"
+"\n"
+"# Worker threads: 0 = auto (min(#batches, #cores)), 1 = serial.\n"
+"# 工作线程：0 = 自动（min(批数, 核数)），1 = 串行。\n"
+"mont_threads = 0\n"
+"\n"
+"# Save-file name for the Montgomery path; empty = follow save_name_pattern.\n"
+"# 蒙哥马利路径的存档文件名；留空 = 跟随 save_name_pattern。\n"
+"mont_save_pattern = m{n}_{b1}.save\n";
     out.close();
     return !out.fail();
 }

@@ -207,3 +207,71 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
     ecm_ts_fprintf(stdout, "Saved %u curve line(s) to %s\n", curves, savefilename.c_str());
     return true;
 }
+
+/* ---------------------------------------------------------------------------
+ * Suyama-sigma Montgomery (gmp-ecm -param 0) save lines.
+ *
+ * Field family is the same one the param3 writer above uses; the three
+ * differences are documented in ecm_save.h.  SIGMA is 64-bit, so it cannot go
+ * through mpz_set_ui (unsigned long is 32-bit on Windows) -- it is assembled
+ * from two halves instead.
+ * ------------------------------------------------------------------------- */
+bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, double B1,
+                                uint64_t firstsigma, uint32_t curves, const mpz_t *xs,
+                                const int *hit, const std::string &n_expr_save)
+{
+    std::ofstream out(savefilename, std::ios::app);
+    if (!out.is_open()) {
+        ecm_ts_fprintf(stderr, "Could not open file %s for appending\n", savefilename.c_str());
+        return false;
+    }
+
+    mpz_t sigma_mpz, checksum;
+    mpz_init(sigma_mpz);
+    mpz_init(checksum);
+
+    const time_t t = std::time(nullptr);
+    char timebuf[128] = {0};
+    const tm *lt = std::localtime(&t);
+    if (lt) std::strftime(timebuf, sizeof(timebuf), "%a %b %d %H:%M:%S %Y", lt);
+    const std::string who = build_who_field();
+
+    for (uint32_t i = 0; i < curves; ++i) {
+        /* sigma = firstsigma + i, assembled for 64-bit safety */
+        mpz_set_ui(sigma_mpz, (unsigned long)((firstsigma + i) >> 32));
+        mpz_mul_2exp(sigma_mpz, sigma_mpz, 32);
+        mpz_add_ui(sigma_mpz, sigma_mpz, (unsigned long)((firstsigma + i) & 0xFFFFFFFFu));
+
+        mpz_set_d(checksum, B1);
+        mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(sigma_mpz, CHKSUMMOD));
+        mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(N, CHKSUMMOD));
+        mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(xs[i], CHKSUMMOD));
+        mpz_mul_ui(checksum, checksum, 1 % CHKSUMMOD);      /* param 0 -> (param+1) = 1 */
+        const unsigned long csum = mpz_fdiv_ui(checksum, CHKSUMMOD);
+
+        char *sigma_dec = mpz_get_str(nullptr, 10, sigma_mpz);
+        char *x_hex = mpz_get_str(nullptr, 16, xs[i]);
+
+        out << "METHOD=ECM"
+            << "; SIGMA=" << sigma_dec
+            << "; B1=" << std::llround(B1)
+            << "; N=" << n_expr_save
+            << "; X=0x" << x_hex
+            << "; CHECKSUM=" << csum
+            << "; PROGRAM=MPA-ECM;"
+            << " X0=0x0; Y0=0x0;"
+            << (who.empty() ? "" : (" WHO=" + who + ";"))
+            << " TIME=" << timebuf << ";"
+            << "\n";
+
+        free(sigma_dec);
+        free(x_hex);
+        (void)hit;   /* callers already put the factor into xs[i] for hit curves */
+    }
+
+    mpz_clear(sigma_mpz);
+    mpz_clear(checksum);
+    ecm_ts_fprintf(stdout, "Saved %u Montgomery curve line(s) to %s\n", curves,
+                   savefilename.c_str());
+    return true;
+}

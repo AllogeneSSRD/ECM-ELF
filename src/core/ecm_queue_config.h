@@ -47,6 +47,12 @@ struct EcmQueueConfig {
     std::string kernel_special_mult;
     uint32_t sigma = 0;                          // 0 = random
     std::string save_name_pattern = "m{n}_{b1}.save";
+    // --- Suyama-sigma Montgomery stage 1 (docs/ECM_Montgomery_STAGE1.md) ---
+    int mont = 0;                                // 1 = use the Montgomery path instead of GPU/Edwards
+    std::string mont_backend = "auto";           // auto | simd (8 曲线/batch) | gmp (标量)
+    int mont_torsion = 1;                        // 1 = gmp-ecm lcm(1..B1), 12 = Prime95 choose12
+    int mont_threads = 0;                        // 0 = auto (min(#batch, #cores)); 1 = 串行
+    std::string mont_save_pattern = "m{n}_{b1}.save";  // 空 = 跟随 save_name_pattern
     std::string progress_color = "cyan";         // none|red|green|yellow|blue|magenta|cyan|white|grey
 };
 

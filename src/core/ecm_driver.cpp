@@ -46,6 +46,10 @@
 #include "ecm_queue_config.h"
 #include "ecm_worktodo.h"
 #include "ecm_edwards_cpu.h"        /* Edwards (Atkin-Morain) stage-1 CPU path */
+#include "ecm_mont_cpu.h"           /* Suyama-sigma Montgomery stage-1 (scalar mpn) */
+#include "simd_mont_curve.h"        /* Suyama-sigma Montgomery stage-1 (8-lane IFMA) */
+#include <random>
+#include <algorithm>
 #include "ecm_edwards_save.h"       /* Prime95 ECM 二进制存档读写 */
 /* IFMA_FIELD_* 常量 (SIMD 域选择)。头文件不含 AVX512 intrinsic, 基线 TU 可包含;
    只给 simd_*.cpp 加 /arch:AVX512, 见 §14.1。 */
@@ -715,6 +719,12 @@ static void print_ecm_usage(const char *prog) {
               << "Options:\n"
               << "  -gpu                 Enable GPU stage-1 (requires -gpucurves)\n"
               << "  --edwards            Enable CPU Edwards stage-1 (Atkin-Morain, a=1)\n"
+              << "  --mont               Enable Suyama-sigma Montgomery stage-1 (gmp-ecm -param 0\n"
+              << "                       / Prime95 sigma_type=1); see docs/ECM_Montgomery_STAGE1.md\n"
+              << "  --mont-backend <m>   auto|simd|gmp (simd = AVX512-IFMA, 8 curves per batch)\n"
+              << "  --mont-torsion <t>   1 = gmp-ecm lcm(1..B1) (default), 12 = Prime95 choose12\n"
+              << "  --mont-threads <n>   Montgomery worker threads (0=auto, 1=serial); a thread\n"
+              << "                       carries one task = one 8-curve SIMD batch (or 1 curve)\n"
               << "  --edwards-threads <n>  Edwards stage-1 worker threads (0=auto, 1=serial)\n"
             << "  --edwards-backend <m>  auto|simd|gmp (batch 8 curves via AVX512-IFMA;\n"
             << "                         simd forces it and errors out if the CPU lacks it)\n"
@@ -839,6 +849,20 @@ struct Stage1RunOptions {
     /* SIMD 域的归约方式: IFMA_FIELD_AUTO (检测到 N=2^k-1 就用 Mersenne 折叠,
        madds/模乘减半) | IFMA_FIELD_MONT (强制 Montgomery) | IFMA_FIELD_MERS. */
     int edwards_field = IFMA_FIELD_AUTO;
+    /* ---- Suyama-sigma Montgomery stage 1 (docs/ECM_Montgomery_STAGE1.md) ----
+       A separate method from the Edwards path above: same field layer, different
+       curve family (Montgomery Z/12 via Suyama sigma, Prime95 sigma_type=1 /
+       gmp-ecm -param 0). */
+    bool use_mont = false;           // --mont
+    int  mont_backend = 0;           // 0=auto 1=simd(强制) 2=gmp(标量)
+    int  mont_torsion = 1;           // exponent factor: 1 = gmp-ecm, 12 = Prime95 choose12
+    /* Worker threads for the Montgomery path: 0 = auto (min(#tasks, #cores), where a
+       task is one 8-curve SIMD batch or one scalar curve), 1 = serial. */
+    uint32_t mont_threads = 0;
+    /* Save-file name pattern, same convention as the CUDA/GPU stage-1 path
+       (ecm.ini: save_name_pattern = m{n}_{b1}.save).  {n} = Mersenne exponent for
+       N = 2^k-1 (else the bit length), {b1} = compact bound (1e5, 110e6, ...). */
+    std::string mont_save_pattern = "m{n}_{b1}.save";
     int verbose = 0;
     int device_index = 0;
     unsigned long gpuckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
@@ -1903,10 +1927,291 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
 
 // Run one stage-1 batch. N and the caller's n_expr are borrowed (not cleared);
 // factors / array_found are allocated here and returned via `out` (caller frees).
+/* ---------------------------------------------------------------------------
+ * Save-file name for the Montgomery stage-1 path, following the CUDA/GPU
+ * convention (ecm.ini: save_name_pattern = m{n}_{b1}.save):
+ *
+ *   {n}  : the Mersenne exponent k when N = 2^k - 1 (so M4003 -> m4003), else the
+ *          bit length of N;
+ *   {b1} : compact bound -- 100000 -> "1e5", 110000000 -> "110e6", 12345 -> "12345".
+ *
+ * ecm_extract_b1_from_save_name() documents the same pattern on the reading side.
+ * ------------------------------------------------------------------------- */
+static std::string mont_format_save_name(const std::string &pattern, const mpz_t N, double B1) {
+    /* {n} */
+    std::string n_str;
+    {
+        mpz_t t;
+        mpz_init(t);
+        mpz_add_ui(t, N, 1);
+        if (mpz_popcount(t) == 1) n_str = std::to_string((unsigned long)mpz_scan1(t, 0));
+        else                      n_str = std::to_string((unsigned long)mpz_sizeinbase(N, 2));
+        mpz_clear(t);
+    }
+    /* {b1}: mantissa + 'e' + number of trailing zeros when there are >= 3 of them */
+    std::string b1_str;
+    {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.0f", B1);
+        std::string digits(buf);
+        size_t zeros = 0;
+        while (zeros < digits.size() && digits[digits.size() - 1 - zeros] == '0') zeros++;
+        if (zeros >= 3 && zeros < digits.size())
+            b1_str = digits.substr(0, digits.size() - zeros) + "e" + std::to_string(zeros);
+        else
+            b1_str = digits;
+    }
+    std::string out = pattern;
+    for (size_t p = out.find("{n}"); p != std::string::npos; p = out.find("{n}", p))
+        out.replace(p, 3, n_str);
+    for (size_t p = out.find("{b1}"); p != std::string::npos; p = out.find("{b1}", p))
+        out.replace(p, 4, b1_str);
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Suyama-sigma Montgomery stage 1 (Prime95 sigma_type = 1 / gmp-ecm -param 0).
+//
+// Same result contract as run_edwards_stage1: fills out->factors / out->array_found
+// and returns an ECM_* code, so the CLI caller needs no changes.
+//
+//   * s = torsion * lcm(1..B1)   (torsion 1 matches gmp-ecm, 12 matches Prime95;
+//     see docs/ECM_Montgomery_STAGE1.md 4.1)
+//   * 8 curves per AVX512-IFMA batch when available, else the scalar MPN path
+//   * ONE shared save file per task (same N and B1, one self-contained line per
+//     curve -- the reference reader parses METHOD/B1/N from every line, so the
+//     lines must stay self-contained; docs 9.2)
+// ---------------------------------------------------------------------------
+/* Default worker count for the Montgomery stage-1 path.
+ *
+ * The unit of parallel work differs per backend: the SIMD path runs 8 curves per
+ * batch, so its parallelism is capped by the number of batches (curves/8) and the
+ * scalar path by the number of curves.  Extra threads beyond that would only
+ * contend, so clamp -- 8 curves under --mont-backend simd is one thread of real
+ * work no matter how many cores the machine has. */
+static uint32_t mont_default_threads(uint32_t curves, bool use_simd) {
+    unsigned hw = std::thread::hardware_concurrency();
+    if (hw == 0) hw = 1;
+    uint32_t tasks = use_simd ? ((curves + IFMA_LANES - 1) / IFMA_LANES) : curves;
+    if (tasks == 0) tasks = 1;
+    uint32_t t = (uint32_t)hw;
+    if (t > tasks) t = tasks;
+    return t;
+}
+
+static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
+                           const std::string &savefilename, bool saveappend,
+                           const std::string &n_expr,
+                           const Stage1RunOptions &opt, Stage1RunResult *out) {
+    out->ret = ECM_ERROR;
+    out->prepare_failed = false;
+    out->curves = curves;
+    out->firstsigma = 0;
+    out->firstsigma64 = 0;
+    out->factors = nullptr;
+    out->array_found = nullptr;
+    (void)saveappend;
+    (void)B2;
+
+    if (curves == 0) {
+        std::cerr << "curves must be > 0" << std::endl;
+        return ECM_ERROR;
+    }
+    if (opt.mont_torsion != 1 && opt.mont_torsion != 12) {
+        std::cerr << "mont_torsion must be 1 (gmp-ecm) or 12 (Prime95 choose12)" << std::endl;
+        return ECM_ERROR;
+    }
+
+    mpz_t s;
+    mpz_init(s);
+    const size_t s_bits = mont_build_s(s, (uint64_t)B1, (uint64_t)opt.mont_torsion);
+
+    const bool isa = driver_simd_isa_ok();
+    if (opt.mont_backend == 1 && !isa) {
+        ecm_ts_fprintf(stderr,
+                       "ERROR: --mont-backend simd requested but this CPU lacks "
+                       "AVX512-F/DQ/IFMA. Use --mont-backend auto or gmp.\n");
+        mpz_clear(s);
+        return ECM_ERROR;
+    }
+    const bool use_simd = (opt.mont_backend == 1) ? true
+                        : (opt.mont_backend == 2) ? false
+                        : (isa && curves >= 2);
+    ecm_ts_fprintf(stdout, "method          : montgomery (Suyama sigma, %s, torsion=%d)\n",
+                   use_simd ? "AVX512-IFMA 8-lane batch" : "scalar mpn", opt.mont_torsion);
+    ecm_ts_fprintf(stdout, "stage1 exponent : s_bits=%zu (lcm(1..%.0f) x %d)\n",
+                   s_bits, B1, opt.mont_torsion);
+
+    mpz_t *factors = (mpz_t *)malloc(sizeof(mpz_t) * curves);
+    int *array_found = (int *)malloc(sizeof(int) * curves);
+    for (uint32_t i = 0; i < curves; i++) {
+        mpz_init(factors[i]);
+        array_found[i] = ECM_NO_FACTOR_FOUND;
+    }
+
+    /* sigmas: fixed base (from -sigma) or random 64-bit -- gmp-ecm also generates
+       64-bit sigmas, so nothing here is limited to 32 bits. */
+    std::vector<uint64_t> sigmas(curves);
+    if (opt.sigma_fixed) {
+        for (uint32_t i = 0; i < curves; i++) sigmas[i] = opt.fixed_sigma64 + i;
+    } else {
+        std::random_device rd;
+        std::mt19937_64 rng(((uint64_t)rd() << 32) ^ (uint64_t)std::time(nullptr));
+        for (uint32_t i = 0; i < curves; i++) sigmas[i] = rng();
+    }
+    out->firstsigma64 = sigmas[0];
+    out->firstsigma = (uint32_t)(sigmas[0] & 0xFFFFFFFFu);
+
+    /* per-curve results: the normalised x for misses, the factor for hits */
+    std::vector<mpz_t> xs(curves);
+    int *hit = (int *)calloc(curves, sizeof(int));
+    for (uint32_t i = 0; i < curves; i++) mpz_init(xs[i]);
+
+    /* Work split.  A "task" is one SIMD batch (8 curves, one thread) or, on the
+       scalar backend, one curve.  Tasks are handed out by an atomic counter, so a
+       worker that finishes a batch picks up the next one -- with uniform batch cost
+       that is equivalent to a static split, but it degrades gracefully. */
+    const uint32_t tasks = use_simd ? ((curves + IFMA_LANES - 1) / IFMA_LANES) : curves;
+    uint32_t nthreads = opt.mont_threads ? opt.mont_threads
+                                         : mont_default_threads(curves, use_simd);
+    if (nthreads > tasks) nthreads = tasks;
+    if (nthreads < 1) nthreads = 1;
+    ecm_ts_fprintf(stdout, "stage1 threads  : %u worker(s) x %u task(s) of %s\n",
+                   nthreads, tasks, use_simd ? "8 curves" : "1 curve");
+    fflush(stdout);
+
+    /* The exponent bit array depends only on (B1, torsion) -- not on N, not on sigma
+       -- so it is built once here and read by every task below. */
+    size_t nbits = 0;
+    uint8_t *bits = mont_expand_bits(s, &nbits);
+
+    std::atomic<uint32_t> next_task(0);
+    std::atomic<uint32_t> found_atomic(0);
+    std::atomic<int> init_failed(0);
+
+    auto worker = [&]() {
+        if (use_simd) {
+            mont_soa_ctx_t ctx;                     /* per-thread scratch pool */
+            if (mont_soa_init(&ctx, N, IFMA_FIELD_AUTO) != 0) {
+                init_failed.store(1);
+                return;
+            }
+            std::vector<mpz_t> bx(IFMA_LANES), bg(IFMA_LANES);
+            for (unsigned k = 0; k < IFMA_LANES; k++) { mpz_inits(bx[k], bg[k], NULL); }
+            for (;;) {
+                const uint32_t task = next_task.fetch_add(1);
+                if (task >= tasks) break;
+                const uint32_t base = task * IFMA_LANES;
+                const uint32_t cnt = std::min<uint32_t>(IFMA_LANES, curves - base);
+                uint64_t sg[IFMA_LANES];
+                /* a short tail batch repeats its last sigma: unread lanes only waste
+                   SIMD slots, the used lanes stay exactly as requested */
+                for (uint32_t k = 0; k < IFMA_LANES; k++)
+                    sg[k] = sigmas[base + (k < cnt ? k : cnt - 1)];
+
+                mont_soa_stage1_bits(&ctx, bits, nbits, sg, bx.data(), bg.data());
+                uint32_t local = 0;
+                for (uint32_t k = 0; k < cnt; k++) {
+                    if (mpz_cmp_ui(bg[k], 1) > 0 && mpz_cmp(bg[k], N) < 0) {
+                        mpz_set(factors[base + k], bg[k]);
+                        array_found[base + k] = ECM_FACTOR_FOUND_STEP1;
+                        mpz_set(xs[base + k], bg[k]);
+                        hit[base + k] = 1;
+                        local++;
+                    } else {
+                        mpz_set(xs[base + k], bx[k]);
+                    }
+                }
+                if (local) found_atomic.fetch_add(local);
+            }
+            for (unsigned k = 0; k < IFMA_LANES; k++) { mpz_clears(bx[k], bg[k], NULL); }
+            mont_soa_clear(&ctx);
+        } else {
+            for (;;) {
+                const uint32_t c = next_task.fetch_add(1);
+                if (c >= curves) break;
+                mpz_t g, x;
+                mpz_inits(g, x, NULL);
+                mont_stage1_curve_bits_x(g, x, N, sigmas[c], bits, nbits);
+                if (mpz_cmp_ui(g, 1) > 0 && mpz_cmp(g, N) < 0) {
+                    mpz_set(factors[c], g);
+                    array_found[c] = ECM_FACTOR_FOUND_STEP1;
+                    mpz_set(xs[c], g);
+                    hit[c] = 1;
+                    found_atomic.fetch_add(1);
+                } else {
+                    mpz_set(xs[c], x);
+                }
+                mpz_clears(g, x, NULL);
+            }
+        }
+    };
+
+    const auto t0 = std::chrono::steady_clock::now();
+    if (nthreads <= 1) {
+        worker();
+    } else {
+        std::vector<std::thread> pool;
+        pool.reserve(nthreads);
+        for (uint32_t t = 0; t < nthreads; t++)
+            pool.emplace_back([&worker, &opt, t]() {
+                apply_thread_affinity(opt.affinity_cpus, t);
+                worker();
+            });
+        for (auto &th : pool) th.join();
+    }
+    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    free(bits);
+
+    if (init_failed.load()) {
+        ecm_ts_fprintf(stderr, "ERROR: mont SIMD context init failed\n");
+        mpz_clear(s);
+        for (uint32_t i = 0; i < curves; i++) { mpz_clear(factors[i]); mpz_clear(xs[i]); }
+        free(factors); free(array_found); free(hit);
+        return ECM_ERROR;
+    }
+
+    /* Hit lines are printed here, in curve order, rather than from inside the worker
+       loop: with N workers the old placement interleaved lines at random. */
+    const uint32_t found = found_atomic.load();
+    for (uint32_t i = 0; i < curves; i++) {
+        if (hit[i])
+            ecm_ts_fprintf(stdout, "  curve %u sigma=%llu -> factor found\n",
+                           i, (unsigned long long)sigmas[i]);
+    }
+
+    /* ONE shared save file for the whole task (same N, same B1), named with the
+       CUDA/GPU convention: m{n}_{b1}.save */
+    if (!opt.tmp_dir.empty()) {
+        const std::string fname = mont_format_save_name(opt.mont_save_pattern, N, B1);
+        const std::string path = opt.tmp_dir + "/" + fname;
+        ecm_append_save_lines_mont(path, N, B1, sigmas[0], curves, xs.data(), hit,
+                                   n_expr.empty() ? std::to_string(mpz_sizeinbase(N, 2)) : n_expr);
+        ecm_ts_fprintf(stdout, "  save            : %s (%u curve lines, shared)\n",
+                       path.c_str(), curves);
+    }
+
+    ecm_ts_fprintf(stdout, "  curves=%u  hits=%u  wall=%.2fs  (%.3f s/curve)\n",
+                   curves, found, elapsed, curves ? elapsed / curves : 0.0);
+
+    for (uint32_t i = 0; i < curves; i++) mpz_clear(xs[i]);
+    free(hit);
+    mpz_clear(s);
+
+    out->ret = found ? ECM_FACTOR_FOUND_STEP1 : ECM_NO_FACTOR_FOUND;
+    out->factors = factors;
+    out->array_found = array_found;
+    return out->ret;
+}
+
 static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
                            const Stage1RunOptions &opt, Stage1RunResult *out) {
+    if (opt.use_mont) {
+        return run_mont_stage1(N, B1, B2, curves, savefilename, saveappend,
+                               n_expr, opt, out);
+    }
     if (opt.use_edwards) {
         return run_edwards_stage1(N, B1, B2, curves, savefilename, saveappend,
                                   n_expr, opt, out);
@@ -2238,6 +2543,30 @@ static int run_queue_manager(const std::string &ini_path) {
         }
     }
     opt.verbose = cfg.verbose;
+    /* ---- Suyama-sigma Montgomery path (docs/ECM_Montgomery_STAGE1.md) ---- */
+    opt.use_mont = (cfg.mont != 0);
+    opt.mont_threads = (cfg.mont_threads > 0) ? (uint32_t)cfg.mont_threads : 0u;
+    if (cfg.mont_torsion == 1 || cfg.mont_torsion == 12) opt.mont_torsion = cfg.mont_torsion;
+    else ecm_ts_fprintf(stderr,
+                        "WARNING: mont_torsion=%d not recognised (1|12); using 1\n", cfg.mont_torsion);
+    if (!cfg.mont_save_pattern.empty()) opt.mont_save_pattern = cfg.mont_save_pattern;
+    {
+        std::string b = cfg.mont_backend;
+        for (size_t i = 0; i < b.size(); i++) {
+            const char ch = b[i];
+            b[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
+        }
+        if (b.empty() || b == "auto") opt.mont_backend = 0;
+        else if (b == "simd" || b == "avx512") opt.mont_backend = 1;
+        else if (b == "gmp" || b == "scalar" || b == "mpn") opt.mont_backend = 2;
+        else {
+            ecm_ts_fprintf(stderr,
+                           "WARNING: mont_backend='%s' not recognised (auto|simd|gmp); using auto\n",
+                           cfg.mont_backend.c_str());
+            opt.mont_backend = 0;
+        }
+    }
+    if (opt.use_mont) opt.use_edwards = false;   /* method is exclusive */
     opt.device_index = cfg.device;
     opt.gpuckpt_ms = (cfg.gpuckpt_seconds > 0.0)
                          ? (unsigned long)(cfg.gpuckpt_seconds * 1000.0)
@@ -2399,6 +2728,11 @@ int main(int argc, char **argv){
     bool verbose = false;
     bool use_gpu = false;
     bool use_edwards = false;
+    /* Suyama-sigma Montgomery stage 1 (docs/ECM_Montgomery_STAGE1.md) */
+    bool use_mont = false;
+    int  mont_backend = 0;            // 0=auto 1=simd 2=gmp
+    int  mont_torsion = 1;            // 1 = gmp-ecm lcm(1..B1), 12 = Prime95 choose12
+    uint32_t mont_threads = 0;        // 0 = auto
     uint32_t edwards_threads = 0;
     int edwards_naf_w = 0;
     int edwards_backend = 0;      /* 0=auto 1=simd 2=gmp */
@@ -2430,6 +2764,29 @@ int main(int argc, char **argv){
         if(a == "-v") { verbose = true; continue; }
         if(a == "-gpu") { use_gpu = true; continue; }
         if(a == "--edwards") { use_edwards = true; continue; }
+        /* Suyama-sigma Montgomery stage 1 (Prime95 sigma_type=1 / gmp-ecm -param 0) */
+        if(a == "--mont") { use_mont = true; continue; }
+        if((a == "--mont-backend") && i+1<argc){
+            const std::string m = argv[++i];
+            if (m == "auto") mont_backend = 0;
+            else if (m == "simd" || m == "avx512") mont_backend = 1;
+            else if (m == "gmp" || m == "scalar") mont_backend = 2;
+            else { std::cerr << "Invalid --mont-backend, expected auto|simd|gmp" << std::endl; return 1; }
+            continue;
+        }
+        if(a == "--mont-torsion" && i+1<argc){
+            mont_torsion = atoi(argv[++i]);
+            if (mont_torsion != 1 && mont_torsion != 12) {
+                std::cerr << "--mont-torsion must be 1 (gmp-ecm) or 12 (Prime95 choose12)" << std::endl;
+                return 1;
+            }
+            continue;
+        }
+        if((a == "--mont-threads" || a == "--montthreads") && i+1<argc){
+            try { mont_threads = (uint32_t)std::stoul(argv[++i]); }
+            catch (...) { std::cerr << "Invalid --mont-threads value, expected >= 0" << std::endl; return 1; }
+            continue;
+        }
         if((a == "--edwards-backend" || a == "--edbackend") && i+1<argc){
             const std::string m = argv[++i];
             if (m == "auto") edwards_backend = 0;
@@ -2727,6 +3084,10 @@ int main(int argc, char **argv){
     Stage1RunOptions opt;
     opt.use_gpu = use_gpu;
     opt.use_edwards = use_edwards;
+    opt.use_mont = use_mont;
+    opt.mont_backend = mont_backend;
+    opt.mont_torsion = mont_torsion;
+    opt.mont_threads = mont_threads;
     opt.edwards_threads = edwards_threads;
     opt.backend = edwards_backend;
     opt.edwards_naf_w = edwards_naf_w;
