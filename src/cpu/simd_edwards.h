@@ -47,7 +47,11 @@ typedef struct {
     uint64_t  *arena;     /* ED_SOA_ARENA * 8n scratch */
     int        set;       /* curves/dictionary built? */
     int        bad_inv;   /* 诊断: 上一次 set_curves 里 Z 与 N 不互素(z 不可逆)的字典项数 */
-    int      (*progress)(void *ctx, size_t bits_done, size_t bits_total);  /* 批内进度 (可空) */
+    /* --- checkpoint / resume: 进度回调携带当前点, 恢复时从 (digit, 点) 继续 --- */
+    size_t     resume_digit;   /* 从第几个 digit 开始 (0 = 从恒等点从头跑) */
+    uint64_t  *rx0, *ry0, *rz0, *rt0;   /* 8n each: 恢复用初始点 (Montgomery), 可空 */
+    int      (*progress)(void *ctx, size_t bits_done, size_t bits_total,
+                         const uint64_t *Rx, const uint64_t *Ry, const uint64_t *Rz);
     void      *progress_ctx;
 } ed_soa_ctx_t;
 
@@ -67,11 +71,19 @@ int  ed_soa_set_curves(ed_soa_ctx_t *c, const uint64_t *sigma, int lanes);
 int  ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
                    mpz_t *Qx, mpz_t *Qz, mpz_t *factor);
 
-/* 批内进度回调: 每 ED_SOA_PROGRESS_BITS 个 digit 调一次。
-   返回 0 = 继续, 非 0 = 请求中止 (ed_soa_stage1 会立刻返回 1)。 */
+/* 批内进度回调: 每 ED_SOA_PROGRESS_BITS 个 digit 调一次, 并给出当前点 (SoA, Montgomery),
+   上层可据此落盘 checkpoint。返回 0 = 继续, 非 0 = 请求中止 (ed_soa_stage1 立刻返回 1)。 */
 #define ED_SOA_PROGRESS_BITS 16384
-typedef int (*ed_soa_progress_fn)(void *ctx, size_t bits_done, size_t bits_total);
+typedef int (*ed_soa_progress_fn)(void *ctx, size_t bits_done, size_t bits_total,
+                                  const uint64_t *Rx, const uint64_t *Ry, const uint64_t *Rz);
 void ed_soa_set_progress(ed_soa_ctx_t *c, ed_soa_progress_fn fn, void *ctx);
+
+/* 从 checkpoint 恢复: start_digit 个 digit 已完成, 每 lane 给出普通域的 (Rx,Ry,Rz)
+   (Z 必须可逆; 与标量存档同一语义)。内部重算 T = X*Y/Z, 每 lane 一次求逆。
+   传 start_digit = 0 或 Rx = NULL 表示从恒等点从头跑。
+   必须在 ed_soa_set_curves 之后调用 (需要 modulus/one)。 */
+int  ed_soa_set_resume(ed_soa_ctx_t *c, size_t start_digit, int lanes,
+                       const mpz_t *Rx, const mpz_t *Ry, const mpz_t *Rz);
 
 /* Diagnostics for the bench/verification tooling. */
 size_t ed_soa_dict_words(const ed_soa_ctx_t *c);

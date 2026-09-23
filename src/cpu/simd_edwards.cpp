@@ -681,6 +681,49 @@ void ed_soa_set_progress(ed_soa_ctx_t *c, ed_soa_progress_fn fn, void *ctx)
     c->progress_ctx = ctx;
 }
 
+/* 从 checkpoint 恢复: 每 lane 的 (Rx,Ry,Rz) 是普通域值; 转成 Montgomery 并重算 T = X*Y/Z。
+   Z 不可逆时该 lane 直接放弃 (返回非 0), 因为它的状态已经不可用。 */
+int ed_soa_set_resume(ed_soa_ctx_t *c, size_t start_digit, int lanes,
+                      const mpz_t *Rx, const mpz_t *Ry, const mpz_t *Rz)
+{
+    const ifma_ctx_t *mc = &c->mc;
+    const size_t lw = 8 * c->n;
+    c->resume_digit = 0;
+    if (start_digit == 0 || !Rx || !Ry || !Rz) return 0;
+    if (lanes > IFMA_LANES) return -1;
+
+    if (!c->rx0) {
+        c->rx0 = (uint64_t *)_mm_malloc(lw * sizeof(uint64_t), 64);
+        c->ry0 = (uint64_t *)_mm_malloc(lw * sizeof(uint64_t), 64);
+        c->rz0 = (uint64_t *)_mm_malloc(lw * sizeof(uint64_t), 64);
+        c->rt0 = (uint64_t *)_mm_malloc(lw * sizeof(uint64_t), 64);
+        if (!c->rx0 || !c->ry0 || !c->rz0 || !c->rt0) return -3;
+    }
+    /* 先用恒等点填满所有 lane, 再覆盖被恢复的 lane */
+    soa_zero(c->rx0, mc);
+    soa_copy(c->ry0, mc->one, mc);
+    soa_copy(c->rz0, mc->one, mc);
+    soa_zero(c->rt0, mc);
+
+    mpz_t zi, xy, t;
+    mpz_inits(zi, xy, t, NULL);
+    int rc = 0;
+    for (int k = 0; k < lanes; k++) {
+        if (mpz_invert(zi, Rz[k], mc->N) == 0) { rc = -2; break; }   /* Z 不可逆 */
+        ifma_from_mpz_lane(c->rx0, (unsigned)k, Rx[k], mc);
+        ifma_from_mpz_lane(c->ry0, (unsigned)k, Ry[k], mc);
+        ifma_from_mpz_lane(c->rz0, (unsigned)k, Rz[k], mc);
+        mpz_mul(t, Rx[k], Ry[k]); mpz_mod(t, t, mc->N);
+        mpz_mul(t, t, zi); mpz_mod(t, t, mc->N);      /* T = X*Y/Z */
+        ifma_from_mpz_lane(c->rt0, (unsigned)k, t, mc);
+        (void)xy;
+    }
+    mpz_clears(zi, xy, t, NULL);
+    if (rc != 0) return rc;
+    c->resume_digit = start_digit;
+    return 0;
+}
+
 int ed_soa_init(ed_soa_ctx_t *c, const mpz_t N, int w)
 {
     memset(c, 0, sizeof(*c));
@@ -904,14 +947,23 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
         return -3;
     }
     soa_pt R = { rx, ry, rz, rt };
-    soa_zero(R.x, mc);
-    soa_copy(R.y, mc->one, mc);
-    soa_copy(R.z, mc->one, mc);
-    soa_zero(R.t, mc);
+    if (c->resume_digit > 0 && c->rx0) {
+        /* 从 checkpoint 恢复: 用存档里的点, 并从 resume_digit 继续 */
+        soa_copy(R.x, c->rx0, mc);
+        soa_copy(R.y, c->ry0, mc);
+        soa_copy(R.z, c->rz0, mc);
+        soa_copy(R.t, c->rt0, mc);
+    } else {
+        soa_zero(R.x, mc);
+        soa_copy(R.y, mc->one, mc);
+        soa_copy(R.z, mc->one, mc);
+        soa_zero(R.t, mc);
+    }
 
     std::vector<int> digits;
     soa_naf_digits(s, c->w, digits);
     const size_t total = digits.size();
+    const size_t start = (c->resume_digit < total) ? c->resume_digit : 0;
 
     const int dbg = getenv("ED_SOA_DEBUG") != NULL;
     if (dbg) {
@@ -922,12 +974,12 @@ int ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
                 (unsigned long long)(R.z[0] & IFMA_M52), (unsigned long long)(R.y[0] & IFMA_M52));
     }
 
-    for (size_t i = 0; i < total; i++) {
-        /* 批内进度: 每 ED_SOA_PROGRESS_BITS 个 digit 回调一次, 让上层进度条有更新、
-           也让 SIGINT 在批内就有响应 (返回非 0 = 中止, 此时不写任何输出)。 */
+    for (size_t i = start; i < total; i++) {
+        /* 批内进度: 每 ED_SOA_PROGRESS_BITS 个 digit 回调一次, 带上当前点 (供上层写
+           checkpoint), 也让 SIGINT 在批内就有响应 (返回非 0 = 中止, 此时不写输出)。 */
         if (c->progress && total > ED_SOA_PROGRESS_BITS &&
             (i % ED_SOA_PROGRESS_BITS) == 0) {
-            if (c->progress(c->progress_ctx, i, total) != 0) {
+            if (c->progress(c->progress_ctx, i, total, R.x, R.y, R.z) != 0) {
                 _mm_free(rx); _mm_free(ry); _mm_free(rz); _mm_free(rt);
                 _mm_free(nx); _mm_free(ny); _mm_free(nd);
                 return 1;

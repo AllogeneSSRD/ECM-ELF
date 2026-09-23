@@ -87,3 +87,5 @@ tools/gen/__pycache__/
 /tools/test/_m3f_gmp
 /tools/test/_m3f_simd
 /tools/test
+/.bench_tmp
+/test_edwards-1

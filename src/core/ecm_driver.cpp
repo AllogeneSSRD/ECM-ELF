@@ -1269,25 +1269,80 @@ static void edwards_progress_set(double done, uint32_t total, double /*unused*/)
     }
 }
 
-/* 批内进度: bits 粒度, 把"已完成曲线 + 本批已跑比例 × 批大小"折算成总进度 */
+/* 批内进度: bits 粒度, 把"已完成曲线 + 本批已跑比例 × 批大小"折算成总进度。
+   同时承担 checkpoint: 每 gpuckpt_ms(或收到 SIGINT) 就按 lane 把当前点落盘, 存档格式
+   与标量路径**完全相同**, 所以后续用标量或 SIMD 续跑都能读。 */
 struct EdSimdProg {
     std::atomic<uint32_t> *done_ctr;
     uint32_t curves, batch_first, batch_count;
     size_t   s_bits;
     long long t0_ms;
+    const Stage1RunOptions *opt;
+    double   B1, B2;
+    const uint64_t *sigmas;
+    long long last_ms;
+    long long interval_ms;
 };
 
-static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total) {
-    if (g_edwards_stop) return 1;                 /* SIGINT: 批内也能停 */
+static const ifma_ctx_t *g_simd_prog_mc = nullptr;   /* 当前批次的 modulus 上下文 */
+static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
+                                const uint64_t *Rx, const uint64_t *Ry, const uint64_t *Rz) {
     EdSimdProg *pr = (EdSimdProg *)p;
-    if (!g_stage1_bar || bits_total == 0) return 0;
-    const uint32_t base = pr->done_ctr ? pr->done_ctr->load(std::memory_order_relaxed) : 0;
-    const double frac = (double)bits_done / (double)bits_total;
-    const double done_f = (double)base + frac * (double)pr->batch_count;
-    const double lapsed = (double)(edwards_now_ms() - pr->t0_ms);
-    std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
-    edwards_progress_set(done_f, pr->curves, done_f > 0.0 ? lapsed / done_f : 0.0);
-    return 0;
+    const ifma_ctx_t *mc = g_simd_prog_mc;
+
+    /* --- checkpoint (与标量路径同一套写入器/路径/字段) --- */
+    const long long now = edwards_now_ms();
+    const bool due = (now - pr->last_ms >= pr->interval_ms) || g_edwards_stop;
+    if (due && bits_done > 0) {
+        if (mc) {
+            mpz_t d, Px, Py, rx, ry, rz;
+            mpz_inits(d, Px, Py, rx, ry, rz, NULL);
+            size_t written = 0;
+            for (uint32_t k = 0; k < pr->batch_count; k++) {
+                const uint32_t i = pr->batch_first + k;
+                const std::string path = edwards_local_stem(*pr->opt, i, (uint64_t)pr->B1) + ".ckpt";
+                ecm_save_common cm;
+                cm.k = pr->opt->handoff_k;
+                cm.b = pr->opt->handoff_b;
+                cm.n = pr->opt->handoff_n;
+                cm.c = pr->opt->handoff_c;
+                cm.curve = 1;
+                cm.B1 = (uint64_t)pr->B1;
+                cm.B2 = (uint64_t)pr->B2;
+                cm.sigma = pr->sigmas[i];
+                edwards_atkin_morain(d, Px, Py, pr->sigmas[i], mc->N);
+                ifma_to_mpz_lane(rx, Rx, k, mc);
+                ifma_to_mpz_lane(ry, Ry, k, mc);
+                ifma_to_mpz_lane(rz, Rz, k, mc);
+                const uint32_t expbuf = (uint32_t)pr->s_bits;
+                const uint32_t dict_size = (uint32_t)1u << (edwards_get_naf_w() - 2);
+                if (local_save_overwrite_ok(path, cm)) {
+                    ecm_edwards_write_stage1(path, cm, 2, expbuf, (uint32_t)bits_done,
+                                             dict_size, Px, Py, rx, ry, rz);
+                    written++;
+                }
+            }
+            pr->last_ms = now;
+            mpz_clears(d, Px, Py, rx, ry, rz, NULL);
+            if (written && (g_edwards_stop || getenv("ED_SOA_DEBUG"))) {
+                std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+                ecm_ts_fprintf(stdout, "checkpoint written (simd batch %u): %zu lane(s) @ bitnum=%zu\n",
+                               pr->batch_first, written, bits_done);
+            }
+        }
+    }
+
+    /* --- 进度条 --- */
+    if (g_stage1_bar) {
+        const uint32_t base = pr->done_ctr ? pr->done_ctr->load(std::memory_order_relaxed) : 0;
+        const double frac = (bits_total > 0) ? (double)bits_done / (double)bits_total : 0.0;
+        const double done_f = (double)base + frac * (double)pr->batch_count;
+        const double lapsed = (double)(edwards_now_ms() - pr->t0_ms);
+        std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+        edwards_progress_set(done_f, pr->curves, done_f > 0.0 ? lapsed / done_f : 0.0);
+    }
+
+    return g_edwards_stop ? 1 : 0;                 /* SIGINT: 批内也能停 */
 }
 
 /* 标量路径的"曲线内"进度: 包一层 checkpoint 回调, 每 chunk_bits(16384) 位跳一格。
@@ -1338,6 +1393,45 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
     pr.batch_count = count;
     pr.s_bits = mpz_sizeinbase(s, 2);
     pr.t0_ms = opt.stage1_t0_ms;
+    pr.opt = &opt;
+    pr.B1 = B1;
+    pr.B2 = B2;
+    pr.sigmas = sigmas;
+    pr.last_ms = edwards_now_ms();
+    pr.interval_ms = (long long)opt.gpuckpt_ms;
+    g_simd_prog_mc = &ctx.mc;
+    /* ---- resume: 一批 8 条 lane 必须共用恢复点, 所以仅当**所有** lane 都有有效检查点
+       且 bitnum 完全相同时才续跑 (这正是"整批一起被中止、一起落盘"的常态); 否则从头跑。 ---- */
+    {
+        std::vector<mpz_t> rxs(count), rys(count), rzs(count);
+        for (uint32_t k = 0; k < count; k++) mpz_inits(rxs[k], rys[k], rzs[k], NULL);
+        uint32_t common_bitnum = 0;
+        int all_ok = (count > 0);
+        for (uint32_t k = 0; k < count && all_ok; k++) {
+            const uint32_t i = first + k;
+            const std::string path = edwards_local_stem(opt, i, (uint64_t)B1) + ".ckpt";
+            ecm_save_common rcm;
+            uint64_t rsp; uint32_t rebs, rbn, rds;
+            mpz_t rdx, rdy;
+            mpz_inits(rdx, rdy, NULL);
+            const bool ok = ecm_edwards_read_stage1(path, rcm, &rsp, &rebs, &rbn, &rds,
+                                                    rdx, rdy, rxs[k], rys[k], rzs[k]);
+            mpz_clears(rdx, rdy, NULL);
+            if (!ok || rbn == 0 || rcm.sigma != sigmas[i] || rcm.B1 != (uint64_t)B1) { all_ok = 0; break; }
+            if (k == 0) common_bitnum = rbn;
+            else if (rbn != common_bitnum) { all_ok = 0; break; }
+        }
+        if (all_ok && common_bitnum > 0) {
+            const int rr = ed_soa_set_resume(&ctx, common_bitnum, (int)count,
+                                             rxs.data(), rys.data(), rzs.data());
+            std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+            ecm_ts_fprintf(stdout, "simd batch %u: resume from .ckpt @ bitnum=%u (%u lane(s))%s\n",
+                           first, common_bitnum, count,
+                           rr == 0 ? "" : " -- unusable, restarting from scratch");
+            if (rr != 0) ctx.resume_digit = 0;
+        }
+        for (uint32_t k = 0; k < count; k++) mpz_clears(rxs[k], rys[k], rzs[k], NULL);
+    }
     ed_soa_set_progress(&ctx, edwards_simd_progress, &pr);
 
     mpz_t Qx[8], Qz[8], fac[8];
@@ -1575,8 +1669,31 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     std::vector<uint64_t> sigmas(curves);
     for (uint32_t i = 0; i < curves; i++) {
         // Fixed sigma → batch start + i (matches -sigma/-gpucurves semantics);
-        // otherwise a fresh Prime95-style random sigma per curve.
-        sigmas[i] = opt.sigma_fixed ? (opt.fixed_sigma64 + i) : random_sigma_u64();
+        // otherwise a fresh Prime95-style random sigma per curve -- 但若该曲线已有合格的
+        // .ckpt 就**采用存档里的 sigma**（存档覆盖参数）。否则每轮都随机出新的 sigma,
+        // 与存档永久不匹配, 自动续跑永远不会发生（这正是"不会自动从 saves/ 续跑"的根因）。
+        if (opt.sigma_fixed) {
+            sigmas[i] = opt.fixed_sigma64 + i;
+        } else {
+            sigmas[i] = random_sigma_u64();
+            if (!opt.tmp_dir.empty()) {
+                const std::string cp = edwards_local_stem(opt, i, (uint64_t)B1) + ".ckpt";
+                ecm_save_common rcm;
+                uint64_t rsp; uint32_t rebs, rbn, rds;
+                mpz_t dx, dy, rx, ry, rz;
+                mpz_inits(dx, dy, rx, ry, rz, NULL);
+                if (ecm_edwards_read_stage1(cp, rcm, &rsp, &rebs, &rbn, &rds,
+                                           dx, dy, rx, ry, rz) &&
+                    rbn > 0 && rcm.sigma != 0 && rcm.B1 == (uint64_t)B1) {
+                    sigmas[i] = (uint64_t)rcm.sigma;
+                    std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+                    ecm_ts_fprintf(stdout,
+                                   "  curve %u: found .ckpt -> adopting sigma=%llu (bitnum=%u)\n",
+                                   i + 1, (unsigned long long)rcm.sigma, rbn);
+                }
+                mpz_clears(dx, dy, rx, ry, rz, NULL);
+            }
+        }
     }
     const uint64_t firstsigma = sigmas[0];
 
@@ -1585,7 +1702,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     std::vector<std::string> ckpt_paths(curves);
     if (use_ckpt) {
         for (uint32_t i = 0; i < curves; i++) {
-            ckpt_paths[i] = edwards_local_stem(opt, i, (uint64_t)B1);
+            ckpt_paths[i] = edwards_local_stem(opt, i, (uint64_t)B1) + ".ckpt";
         }
     }
 

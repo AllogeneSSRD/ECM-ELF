@@ -83,6 +83,26 @@ static void run_scalar(ScalarResult &r, const mpz_t N, const mpz_t s,
     r.sec = now_sec() - t0;
 }
 
+/* ---- checkpoint/resume 往返自测 ---- */
+static int      g_cap_lanes;
+static size_t   g_cap_digit;
+static mpz_t   *g_cap_x, *g_cap_y, *g_cap_z;
+
+static int cap_cb(void *p, size_t done, size_t total, const uint64_t *Rx,
+                  const uint64_t *Ry, const uint64_t *Rz)
+{
+    ed_soa_ctx_t *c = (ed_soa_ctx_t *)p;
+    (void)total;
+    if (done == 0) return 0;       /* i=0 是空 tick, 继续跑到下一个 16384 边界再捕获 */
+    g_cap_digit = done;
+    for (int k = 0; k < g_cap_lanes; k++) {
+        ifma_to_mpz_lane(g_cap_x[k], Rx, (unsigned)k, &c->mc);
+        ifma_to_mpz_lane(g_cap_y[k], Ry, (unsigned)k, &c->mc);
+        ifma_to_mpz_lane(g_cap_z[k], Rz, (unsigned)k, &c->mc);
+    }
+    return 1;                      /* 在第一个回调点中止, 模拟 checkpoint */
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 4) {
@@ -199,7 +219,41 @@ int main(int argc, char **argv)
                 gmp_printf("  lane %d ok  factor = %Zd\n", i, sf[i]);
             }
         }
-        printf("scalar  : %d curves in %.3f s (%.3f s/curve, w=%d)\n", lanes, sc.sec, sc.sec / lanes, w_simd);        printf("simd    : %d curves in %.3f s (%.3f s/curve, %dx batch)\n",
+        printf("scalar  : %d curves in %.3f s (%.3f s/curve, w=%d)\n", lanes, sc.sec, sc.sec / lanes, w_simd);
+
+        /* ---- resume 往返自测: 跑到第一个回调点中止 -> set_resume -> 跑完 ---- */
+        if (mpz_sizeinbase(s, 2) > (size_t)ED_SOA_PROGRESS_BITS) {
+            std::vector<mpz_t> cx(lanes), cy(lanes), cz(lanes), rx2(lanes), rz2(lanes), rf2(lanes);
+            for (int i = 0; i < lanes; i++) {
+                mpz_inits(cx[i], cy[i], cz[i], rx2[i], rz2[i], rf2[i], NULL);
+            }
+            g_cap_lanes = lanes; g_cap_digit = 0;
+            g_cap_x = cx.data(); g_cap_y = cy.data(); g_cap_z = cz.data();
+
+            ed_soa_set_progress(&ctx, cap_cb, &ctx);
+            const int ab = ed_soa_stage1(&ctx, s, lanes, rx2.data(), rz2.data(), rf2.data());
+            ed_soa_set_progress(&ctx, NULL, NULL);
+
+            int sres = -99, rfail = -1;
+            if (ab == 1 && g_cap_digit > 0) {
+                sres = ed_soa_set_resume(&ctx, g_cap_digit, lanes, cx.data(), cy.data(), cz.data());
+                if (sres == 0) {
+                    ed_soa_stage1(&ctx, s, lanes, rx2.data(), rz2.data(), rf2.data());
+                    rfail = 0;
+                    for (int i = 0; i < lanes; i++) {
+                        if (mpz_cmp(rx2[i], sx[i]) != 0 || mpz_cmp(rz2[i], sz[i]) != 0 ||
+                            mpz_cmp(rf2[i], sf[i]) != 0) rfail++;
+                    }
+                }
+            }
+            printf("resume  : aborted@digit=%zu of s_bits=%zu, set_resume=%d, "
+                   "lanes differing after resume = %d -> %s\n",
+                   g_cap_digit, (size_t)mpz_sizeinbase(s, 2), sres, rfail,
+                   (ab == 1 && sres == 0 && rfail == 0) ? "OK" : "BAD");
+            for (int i = 0; i < lanes; i++) {
+                mpz_clears(cx[i], cy[i], cz[i], rx2[i], rz2[i], rf2[i], NULL);
+            }
+        }        printf("simd    : %d curves in %.3f s (%.3f s/curve, %dx batch)\n",
                lanes, simd_sec + t_set, (simd_sec + t_set) / lanes, IFMA_LANES);
         printf("stage-1 ratio (incl. dictionary, fair vs scalar): %.2fx\n", sc.sec / (simd_sec + t_set));
         printf("ladder-only ratio (dict excluded both sides):     %.2fx\n",

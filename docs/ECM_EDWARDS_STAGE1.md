@@ -693,10 +693,126 @@ stage-1（含每 lane 字典构建）**2.75×**、纯阶梯 **3.16×**（8 曲�
 定位到具体哪一条 `soa_sub`/`ifma_mont_mul` 用错了槽位或参数顺序。注意 `Out-File` 会按控制台
 宽度折断长数字，导出调试输出必须 `-Width 100000`，否则解析到的是截断值（本次已踩过）。
 
-工具钩子：`ED_SOA_DEBUG=1`（字典/每步坐标 dump）、`ED_SOA_S_OVERRIDE=<十进制>`（用小指数
-替换 s，便于逐步手算）。**在这些钩子下 SIMD 阶梯结果尚不可信。**
+工具钩子：`ED_SOA_DEBUG=1`（字典/non-invertible Z/每步坐标 dump）、`ED_SOA_S_OVERRIDE=<十进制>`
+（用小指数替换 s，便于逐步手算）、`ED_SOA_DEBUG` 也会让 SIMD checkpoint 每次落盘都打印一行。
 
-M1 未做、M2 仍待做：**分块/寄存器窗口版内核**（n=154 时 u 掉到 1.34–1.83，累加器还在 L1
+**⚠️ 更正一条曾经的错误结论**：本文早期版本写过"w=8 通过、w=12 失败 / n52=58 失败"以及
+"阶梯结果尚不可信"。后续用三组对照（随机 3001-bit / 2^3001−1 / 2^2203−1，各 w=8 与 w=12）
+查明：那些"失败"**全部**发生在**命中因子**的 lane 上——阶梯走到模某个因子 p 的单位元后，
+Z 与 N 不互素、后续域运算在 N 下不可逆，两条实现各自产出无意义的垃圾，逐位不同是**必然**
+且**无害**的（ECM 在这些 lane 上的有效输出只有因子本身）。修正判据后（Qx/Qz 只在"两侧都没
+命中因子"的 lane 上比较），SIMD 与标量在全部已测尺寸上逐位一致。
+
+M1/M2 仍未做的性能项：**分块/寄存器窗口版内核**（n=154 时 u 掉到 1.34–1.83，累加器还在 L1
 逐列读写）；**对称平方专用内核**（标量侧 `mpn_sqr` 比 `mpn_mul_n` 快 ~18%，现在
 `ifma_mont_sqr` = `cios(a,a)` 低估了 SIMD 在 sqr 上的优势）。
+
+### 13.9 保存文件与 checkpoint / resume（已落地）
+
+**两种本地文件的角色（同名不同后缀，角色一眼可辨）**
+
+| 文件 | 内容 | 消费者 |
+|---|---|---|
+| `<stem>.ckpt` | STAGE1 **自检查点**：`bitnum` + 当前点 `(Rx,Ry,Rz)` + `d`/`P` + `sigma`/`B1` + `dict_size` | 下次运行自己（续跑） |
+| `<stem>.tmp` | MIDSTAGE **最终结果**：`Qx`/`Qz`（+ 头部元数据） | stage-2 / `ecm_p95feeder` |
+
+`<stem> = <tmp_dir>/e{n:07d}_B{B1}_c{curve:06d}`。`ecm_p95feeder` 只扫 `*.tmp`，所以不会把
+中间态当成结果 ✓。
+
+**自动续跑 = 存档覆盖参数**：随机 sigma 模式下每轮都会重新生成 sigma，若仍要求"存档 sigma ==
+本次 sigma"，续跑将**永久不会发生**（本功能最早的缺口）。正确语义是：该曲线存在合格 `.ckpt`
+时**采用存档里的 sigma**（`run_edwards_stage1` 的 sigma 预生成阶段做这个探测）。合格条件：
+`rbn > 0 && sigma != 0 && rcm.B1 == 本次 B1`。
+
+**批一致性规则**：一批 8 条 lane 必须共用恢复点，所以仅当**全部 lane**都有合格 `.ckpt` 且
+`bitnum` **完全相同**时才续跑；否则整批从头跑（这正是"整批一起被中止、一起落盘"的常态）。
+
+**恢复语义**：`ed_soa_set_resume()` 把每 lane 的普通域 `(Rx,Ry,Rz)` 转 Montgomery 并重算
+`T = X·Y/Z`（每 lane 一次求逆；Z 不可逆则该 lane 明确失败并回退从头跑）。阶梯索引两边都是
+`digits[total-1-i]`（`total = digits.size()`），所以标量存档的 `bitnum` 可 **1:1** 当作
+`resume_digit` → **标量 ↔ SIMD 存档互认、可混合续跑**。
+
+**中断语义**：收到 SIGINT 时先写 `.ckpt` 再中止批次，并且**不写**中间态 `.tmp`（不产出半截
+结果）。存档间隔取 ini 的 `gpuckpt_seconds`。
+
+**验收**：① bench 引擎往返自测（`simd_edwards_bench verify` 自动跑，条件 `s_bits > 16384`）
+`aborted@digit=16384 → set_resume=0 → lanes differing after resume = 0`；②
+`tools/test/test_checkpoint.ps1` 逐字节断言（见 §14.5）。
+
+## 14. 构建与运行
+
+### 14.1 前置
+
+```bat
+call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+cmake -S . -B build_vs18 -G "Visual Studio 18 2026" -A x64     :: 只需一次
+```
+
+- GMP 由 CMake 自动探测（`third_party/gmp-zen3/dist`，zen3/BMI2 构建）。**运行前把
+  `<repo>\third_party\gmp-zen3\dist\bin` 加进 PATH**，否则缺 `gmp-10.dll`。
+- ISA 策略：**只有** `src/cpu/simd_mont_ifma.cpp` 与 `src/cpu/simd_edwards.cpp` 拿 `/arch:AVX512`，
+  其余 TU（含 `ecm_driver.cpp`）保持基线；所有 SIMD 调用点必须先过 `driver_simd_isa_ok()`
+  （基线 TU 里的 CPUID+XCR0 探测）。`--edwards-backend simd` 在缺 ISA 时**硬报错、不静默降级**。
+
+### 14.2 主程序
+
+```bat
+cmake --build build_vs18 --config Release --target ecm            :: build_vs18\Release\ecm.exe
+cmake --build build_vs18 --config Release --target ecm_p95feeder :: Prime95 交接投递器
+```
+
+### 14.3 工具与 bench
+
+```bat
+cmake --build build_vs18 --config Release --target <target>
+```
+
+| target | 用途 |
+|---|---|
+| `simd_mont_gate` | M1 闸门：8 lane AVX512-IFMA 内核 vs 生产 `mpn_mul_n/mpn_sqr`+REDC，打印比值与利用率 u（§13.8） |
+| `simd_edwards_bench` | M2 批量点层：`verify` 与生产标量路径逐位对拍；`bench` 做 A/B/C 计时，可传 w（§13.8/§14.5） |
+| `cpu_addsub_bench` | CPU 加减法内核微基准（AVX2 基线 + AVX512 独立 TU） |
+| `cpu_mont_bench` | 早期 CPU Montgomery/CIOS 批量基准（含被否掉的垂直 SIMD 方案） |
+| `opencl_ecm_montsqr` / `opencl_ecm_addsub` | OpenCL 内核基准 |
+| `sliced_cios_test` / `sliced_cios_8192_test` | 切分 CIOS 的自检（8192-bit 版） |
+| `opencl_asm_selftest` / `opencl_mont_isa_export` / `opencl_addsub_isa_export` | OpenCL 汇编内核自检与 ISA 导出 |
+| `main` / `ecm_cuda` | 既有入口与 CUDA 后端（需 CUDA 工具链） |
+
+标量交叉验证用的一次性程序（`ecm_edwards_cpu.cpp` 里 `#ifdef BUILD_ECM_EDWARDS_STANDALONE`
+包着 `main`）由仓库根的 `build_edwards_test.bat` 构建，用法
+`ecm_edwards_cpu <N> <sigma> <B1>`，输出 `Qx/Qz/y_affine/u/gcd(Qz,N)`。
+
+### 14.4 运行
+
+```bat
+:: 队列模式：不带位置参数 B1/B2 即进入，读 ini + worktodo
+ecm.exe -ini test_edwards\ecm.ini
+
+:: 直接模式（单次任务）
+echo (2^3001-1) | ecm.exe --edwards --edwards-backend simd --edwards-threads 8 ^
+                            -gpucurves 64 --tmp-dir test_edwards\saves 11000000 0
+```
+
+批量模式下 **8 条曲线 = 1 批 = 1 个线程**，所以 `-gpucurves` 建议取 `8 × 线程数`；启动信息里的
+`work split` 行会如实显示"几批 → 几个线程忙"，并在有空闲线程时提示提高 `-gpucurves`。
+
+### 14.5 三套验证配方
+
+```bat
+:: ① 内核闸门（≥2× 才算通过；同时给出 u = madd/cycle）
+build_vs18\Release\simd_mont_gate.exe
+
+:: ② 点层/阶梯与生产标量路径逐位对拍（两侧必须同 w；命中因子的 lane 允许不同, 见 §13.8）
+build_vs18\Release\simd_edwards_bench.exe verify (2^8011-1) 2000 1 2 3 4 5 6 7 8
+build_vs18\Release\simd_edwards_bench.exe bench  (2^8011-1) 20000 1 8     :: 同 w 的一致性 + A/B/C 计时
+
+:: ③ 保存/续跑逐字节断言；feeder 集成
+powershell -File tools\test\test_checkpoint.ps1
+powershell -File tools\test\test_feeder.ps1
+```
+
+`test_checkpoint.ps1` 阶段 1 落 `.ckpt`+`.tmp` 并存参照，阶段 2 只删 `.tmp` 再跑一次，
+断言出现 `resume from .ckpt` 且续跑产出的 8 个 `.tmp` 与参照 **SHA256 全等**（exit 0 = PASS）。
+两个脚本都自包含（自己写 worktodo/ini、自己起 `ecm.exe`），可以直接当回归用。
+
 
