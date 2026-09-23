@@ -785,9 +785,17 @@ cmake --build build_vs18 --config Release --target <target>
 | `opencl_asm_selftest` / `opencl_mont_isa_export` / `opencl_addsub_isa_export` | OpenCL 汇编内核自检与 ISA 导出 |
 | `main` / `ecm_cuda` | 既有入口与 CUDA 后端（需 CUDA 工具链） |
 
-标量交叉验证用的一次性程序（`ecm_edwards_cpu.cpp` 里 `#ifdef BUILD_ECM_EDWARDS_STANDALONE`
-包着 `main`）由仓库根的 `build_edwards_test.bat` 构建，用法
-`ecm_edwards_cpu <N> <sigma> <B1>`，输出 `Qx/Qz/y_affine/u/gcd(Qz,N)`。
+标量交叉验证用的一次性程序原先藏在 `src/cpu/ecm_edwards_cpu.cpp` 的
+`#ifdef BUILD_ECM_EDWARDS_STANDALONE` 里（生产 TU 里塞了个 CLI `main`）。
+**现已搬到 `tools/bench/ecm_edwards_standalone.cpp`**（只用 `ecm_edwards_cpu.h` 的公开 API），
+CMake 目标 `ecm_edwards_standalone`：
+
+```bat
+build_vs18\Release\ecm_edwards_standalone.exe <N-decimal> <sigma> <B1> [naf_w]
+:: 输出 d / P / s_bits / Qx / Qz / y_affine / u / gcd(Qz,N) / stage1_rc
+```
+
+（仓库根的 `build_edwards_test.bat` 是旧的一键构建脚本；现在直接用上面的 CMake 目标即可。）
 
 ### 14.4 运行
 
@@ -1170,18 +1178,68 @@ ERROR: --edwards-mersenne on was requested, but this N is not 2^k-1 with k >= 64
        Use --edwards-mersenne auto (default) or off.
 ```
 
-### 15.12 本轮新增/沿用的验证工具
+### 15.12 本轮新增/沿用的验证工具（已迁入 `tools/`，见 `tools/README.md`）
 
-| 工具 | 作用 |
+| 工具（新位置） | 作用 |
 |---|---|
-| `.bench_tmp/mont_canary.cpp` | **标量** Montgomery 层 canary（mul/sqr/add/sub/neg vs mpz + 原样 limb 规范性）——§15.10 的定位仪器 |
-| `.bench_tmp/dirt.cpp` | 内核 limb 高位污染检查（任意 k × 两域）——§15.9 |
-| `.bench_tmp/rate_test.ps1` | **命中率广谱统计**：从 `ecm_prob/data/primes/bits{b}.bin` 抽样素数，嵌入大合数，逐后端记录命中率并与参考值对比 |
-| `.bench_tmp/cmp_b1.ps1` | 同一 `(N, sigma)` 上多个 B1 的三后端配对比较（命中数 + 存档最终点是否逐字节相同） |
-| `.bench_tmp/bisect_b1.ps1` | 在已知失败用例上扫 B1，找最小复现档 |
-| `.bench_tmp/dump_tmp.cpp` | 解析 `.tmp`（用驱动自己的 reader）打印 Qx/Qz，用于跨后端比对最终点 |
-| `.bench_tmp/repro_crash.ps1` / `crashloop.cmd` | 中止路径崩溃复现（逐次超时 + 日志，避免模态框卡住调用方） |
-| `.bench_tmp/ab_mersenne.ps1` / `invariants.ps1` / `w_ab.ps1` | 域 A/B、§7 不变式回归、窗口 A/B |
+| `tools/diag/mont_canary.cpp` | **标量** Montgomery 层 canary（mul/sqr/add/sub/neg vs mpz + 原样 limb 规范性）——§15.10 的定位仪器 |
+| `tools/diag/limb_canary.cpp`（原 `dirt.cpp`） | 内核 limb 高位污染检查（任意 k × 两域）——§15.9 |
+| `tools/stat/ecm_hitrate.ps1`（原 `rate_test.ps1`） | **命中率广谱统计**：从 `ecm_prob/data/primes/bits{b}.bin` 抽样素数，嵌入大合数，逐后端记录命中率并与参考值对比 |
+| `tools/stat/compare_b1.ps1` | 同一 `(N, sigma)` 上多个 B1 的三后端配对比较（命中数 + 存档最终点是否逐字节相同） |
+| `tools/stat/bisect_b1.ps1` | 在已知失败用例上扫 B1，找最小复现档 |
+| `tools/diag/dump_tmp.cpp` | 解析 `.tmp`（用驱动自己的 reader）打印 Qx/Qz，用于跨后端比对最终点 |
+| `tools/diag/crashloop.cmd` | 中止路径崩溃复现（逐次记 exit code）——§15.11 |
+| `tools/test/test_agreement.ps1` | **三后端互认回归**（命中集合 + 存档逐字节） |
+| `tools/test/test_invariants.ps1` | §7 不变式回归（两域 × M677/M991/M4003） |
+| `tools/bench/ab_mersenne.ps1` / `ab_naf_window.ps1` | 验收 A/B、NAF 窗口 A/B |
+| `tools/bench/ecm_edwards_standalone.cpp` | 单曲线 dump（从 `ecm_edwards_cpu.cpp` 的 standalone `main()` 搬出） |
+
+## 16. 发布前 `src/cpu` 拆分计划（本轮已开动）
+
+目标：**产品 TU 里不出现实验/测试/调试代码**，测试代码只在测试目标里编译；文件编码统一；
+每个文件职责单一。A+B（通用 Montgomery 的 SOS + 对称平方）按用户决定**暂缓**。
+
+### 16.1 现状盘点与处置
+
+| 文件 | 角色 | 处置 |
+|---|---|---|
+| `ecm_edwards_cpu.{h,cpp}` | 标量 stage-1（生产）+ 内嵌 standalone `main()` | ✅ **已做**：`main()` 已搬到 `tools/bench/ecm_edwards_standalone.cpp`（只用公开 API），CMake 新目标 `ecm_edwards_standalone`；`edwards_simd_available()`（CPUID 探测，公开头里声明）从 `#ifdef BUILD_ECM_EDWARDS_STANDALONE` 里**移出来**，回到生产 TU |
+| `ecm_edwards_mont.h` | 标量 Montgomery 域（生产，header-only） | 保持；§15.10 的 1 行修复在此 |
+| `ecm_edwards_save.{h,cpp}` | 存档/checkpoint（生产） | 保持 |
+| `simd_edwards.{h,cpp}` | SIMD 批（生产）+ **域/点自检 + 调试挂钩**（约 500 行：`ed_soa_field_selftest`、`ed_soa_point_selftest`、`ed_soa_debug_*`、`ED_SOA_DEBUG` / `ED_SOA_DUMP_STEP` 分支） | ⏳ **待做**（见 16.2） |
+| `simd_mont_ifma.{h,cpp}` | IFMA 内核（生产）+ mpz 互转（生产驱动也用） | ⏳ 待做：把"测试专用"的互转与内核 API 在头里分区注释，设计说明搬进本文档 |
+| `cpu_addsub_bench.cpp`、`cpu_addsub_avx512.cpp`、`cpu_mont_avx.{cpp,h}`、`cpu_mont_scalar.{cpp,h}`、`cpu_mont_bench.cpp` | 早期 OpenCL 对照的微基准（非产品） | ✅ **已做**：全部 `git mv` 到 `tools/bench/`，CMake 路径与 include 同步更新，两个 bench 目标重新编译通过 |
+| `src/cpu/ecm_edwards_cpu.exe`、`src/cpu/gmp-10.dll` | **误提交进源码树的构建产物**（被 `.gitignore` 忽略） | ✅ **已删** |
+
+### 16.2 待做：把 `simd_edwards.cpp` 的测试面拆出去
+
+1. 新建 `src/cpu/simd_edwards_selftest.{h,cpp}`：搬走 `ed_soa_field_selftest`、`ed_soa_point_selftest`、
+   5 个 `ed_soa_debug_*`，以及 `simd_edwards.h` 里对应的声明。
+   自检需要的内部静态函数（`soa_add/sub/neg/cond_sub`）**通过已有的 `ed_soa_debug_*` 包装**调用，
+   这样不必暴露 `static` 实现。
+2. CMake：该 TU 只进 `simd_edwards_bench`（与新的 `simd_edwards_selftest` 目标）；`ecm` / `ecm_cuda` **不含**它。
+   验收：`dumpbin /symbols build_vs18\Release\ecm.exe | findstr /i selftest` 为空。
+3. 生产 TU 里的 `ED_SOA_DEBUG` / `ED_SOA_DUMP_STEP` 分支：改为 `#if ED_SOA_DEBUG_HOOKS`（默认 OFF，
+   只有测试目标打开），保证热路径上连 `getenv` 调用都不存在。
+4. `ed_soa_field_selftest` 里两处**无条件** `gmp_printf("[dbg] pat=...")`（上一轮会话留下的）
+   改成只在失败时打印，避免每次自检刷 16 行噪声。
+
+### 16.3 待做：编码统一（本轮踩到过）
+
+`src/cpu/` 里有 4 个文件含少量**历史乱码**字符（`enc_diag.py` 可体检）：
+`ecm_edwards_cpu.cpp`(21)、`simd_edwards.cpp`(9)、`ecm_edwards_mont.h`(7)、`ecm_edwards_cpu.h`(4)。
+计划：统一成**有效 UTF-8**（或把这几处注释改成英文），并把
+`python tools/diag/enc_diag.py` 作为提交前检查。
+另外 `.gitignore` 里的 `src/cpu/*.exe` / `src/cpu/*.dll` 两条可在产物清理完成后删掉（留着也无害）。
+
+### 16.4 拆分的验收口径
+
+- `cmake --build build_vs18 --config Release` **exit 0**（含 `ecm_cuda`，其源列表缺 SIMD TU 的链接问题本轮已修）；
+- `tools/test/test_agreement.ps1` PASS（三后端互认）；
+- `tools/test/test_checkpoint.ps1` PASS；
+- `tools/test/test_invariants.ps1` 六条 OK；
+- `tools/diag/limb_canary` / `mont_canary` 在两域多个尺寸上 0 失败；
+- 产品二进制里不含自检/调试符号（16.2 第 2 条）。
 
 
 

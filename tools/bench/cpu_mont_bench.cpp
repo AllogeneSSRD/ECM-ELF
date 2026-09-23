@@ -22,8 +22,8 @@
 
 #include <gmp.h>
 
-#include "cpu/cpu_mont_avx.h"
-#include "cpu/cpu_mont_scalar.h"
+#include "cpu_mont_avx.h"
+#include "cpu_mont_scalar.h"
 
 #ifdef _WIN32
     #define WIN32_LEAN_AND_MEAN

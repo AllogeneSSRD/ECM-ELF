@@ -89,3 +89,4 @@ tools/gen/__pycache__/
 /tools/test
 /.bench_tmp
 /test_edwards-1
+/tools/stat/_run

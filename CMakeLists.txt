@@ -272,14 +272,15 @@ target_link_libraries(opencl_ecm_addsub
 # CPUID detection.  Compiling the whole program with /arch:AVX512 would let the
 # compiler emit AVX512 instructions in scalar code, crashing AVX2-only CPUs.
 add_executable(cpu_addsub_bench
-    src/cpu/cpu_addsub_bench.cpp
-    src/cpu/cpu_addsub_avx512.cpp
+    tools/bench/cpu_addsub_bench.cpp
+    tools/bench/cpu_addsub_avx512.cpp
     ${CMAKE_SOURCE_DIR}/src/opencl_ecm_runtime_config.cpp
 )
 
 target_include_directories(cpu_addsub_bench PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/cpu
+    ${CMAKE_SOURCE_DIR}/tools/bench
 )
 
 target_compile_definitions(cpu_addsub_bench PRIVATE BUILD_CPU_ADDSUB_MAIN=1)
@@ -295,10 +296,10 @@ endif()
 
 # AVX512 kernels: isolated TU, only this file gets AVX512 codegen.
 if(MSVC)
-    set_source_files_properties(src/cpu/cpu_addsub_avx512.cpp PROPERTIES
+    set_source_files_properties(tools/bench/cpu_addsub_avx512.cpp PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
 else()
-    set_source_files_properties(src/cpu/cpu_addsub_avx512.cpp PROPERTIES
+    set_source_files_properties(tools/bench/cpu_addsub_avx512.cpp PROPERTIES
         COMPILE_OPTIONS "-mavx512f;-mavx512dq")
 endif()
 
@@ -333,6 +334,30 @@ if(MSVC)
 else()
     set_source_files_properties(src/cpu/simd_mont_ifma.cpp PROPERTIES
         COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
+endif()
+
+# ---------------------------------------------------------------------------
+# ecm_edwards_standalone — one-curve stage-1 dump for cross-checking against
+# Prime95 or an independent reference ladder.  Uses only the public API of
+# src/cpu/ecm_edwards_cpu.h; it used to be a main() inside that production TU
+# behind BUILD_ECM_EDWARDS_STANDALONE.
+# ---------------------------------------------------------------------------
+add_executable(ecm_edwards_standalone
+    tools/bench/ecm_edwards_standalone.cpp
+    src/cpu/ecm_edwards_cpu.cpp
+)
+
+target_include_directories(ecm_edwards_standalone PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/cpu
+)
+
+ecm_target_link_gmp(ecm_edwards_standalone)
+
+if(MSVC)
+    target_compile_options(ecm_edwards_standalone PRIVATE /utf-8)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -458,15 +483,16 @@ target_link_libraries(opencl_addsub_isa_export
 
 # ── CPU Montgomery Benchmark (AVX512/AVX2 batched CIOS) ──
 add_executable(cpu_mont_bench
-    src/cpu_mont_bench.cpp
-    src/cpu/cpu_mont_avx.cpp
-    src/cpu/cpu_mont_scalar.cpp
+    tools/bench/cpu_mont_bench.cpp
+    tools/bench/cpu_mont_avx.cpp
+    tools/bench/cpu_mont_scalar.cpp
 )
 
 target_include_directories(cpu_mont_bench PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/cpu
+    ${CMAKE_SOURCE_DIR}/tools/bench
 )
 
 target_compile_definitions(cpu_mont_bench PRIVATE BUILD_CPU_MONT_MAIN=1)
@@ -475,7 +501,7 @@ ecm_target_link_gmp(cpu_mont_bench)
 
 if(MSVC)
     # AVX512 intrinsics require /arch:AVX512 on MSVC (avx512f, avx512dq used)
-    set_source_files_properties(src/cpu_mont_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX512")
+    set_source_files_properties(tools/bench/cpu_mont_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX512")
 endif()
 
 # ══════════════════════════════════════════════════════════════════════════

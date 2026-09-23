@@ -626,7 +626,6 @@ int edwards_stage1_curve(mpz_t factor, mpz_t Qx, mpz_t Qz,
                                          0, nullptr, nullptr, nullptr);
 }
 
-#ifdef BUILD_ECM_EDWARDS_STANDALONE
 // ---------------------------------------------------------------------------
 // 批处理 SIMD (AVX512-IFMA) 是否可用。必须在**基线 TU** 里做 CPUID 探测：
 // simd_*.cpp 是用 /arch:AVX512 编的，在它内部执行任何代码（哪怕只探测）都可能
@@ -659,64 +658,3 @@ int edwards_simd_available(void) {
 #endif
 }
 #endif
-
-// 主程序: 交叉验证 (对比 Prime95 存档)
-// 用法: ecm_edwards_cpu <N> <sigma> <B1>
-// ---------------------------------------------------------------------------
-int main(int argc, char **argv) {
-    if (argc < 4) { fprintf(stderr, "usage: %s <N> <sigma> <B1>\n", argv[0]); return 1; }
-    mpz_t N, d, s, Qx, Qz, tmp;
-    mpz_inits(N, d, s, Qx, Qz, tmp, NULL);
-    mpz_set_str(N, argv[1], 10);
-    uint64_t sigma = strtoull(argv[2], nullptr, 10);
-    uint64_t B1 = strtoull(argv[3], nullptr, 10);
-
-    ed_point P, R;
-    ed_init(P); ed_init(R);
-    atkin_morain(d, P, sigma, N);
-
-    // s = 48 * lcm(1..B1)
-    mpz_set_ui(s, 48);
-    for (uint64_t p = 2; p <= B1; ++p) {
-        // 简单判素
-        bool prime = true;
-        for (uint64_t q = 2; q * q <= p; ++q) if (p % q == 0) { prime = false; break; }
-        if (!prime) continue;
-        uint64_t v = p;
-        while (v <= B1 / p) v *= p;  // 最大幂
-        mpz_mul_ui(s, s, (unsigned long)v);
-    }
-
-    ed_mul(R, s, P, d, N);
-
-    // ed_to_Montgomery: Qx = z + y, Qz = z - y
-    mpz_add(Qx, R.z, R.y); if (mpz_cmp(Qx, N) >= 0) mpz_sub(Qx, Qx, N);
-    mpz_sub(Qz, R.z, R.y); if (mpz_sgn(Qz) < 0) mpz_add(Qz, Qz, N);
-
-    // 归一化: y_affine = Y / Z, u = Qx / Qz = (1+y)/(1-y)  (投影无关的不变量)
-    mpz_t yaff, u, g;
-    mpz_inits(yaff, u, g, NULL);
-    if (mpz_invert(tmp, R.z, N)) {
-        mod_mul(yaff, R.y, tmp, N);
-        if (mpz_invert(tmp, Qz, N)) {
-            mod_mul(u, Qx, tmp, N);
-        }
-    }
-    mpz_gcd(g, Qz, N);   // 因子判定: gcd(Qz, N) > 1 即命中因子
-
-    gmp_printf("N       = %Zd\n", N);
-    gmp_printf("d       = %Zd\n", d);
-    gmp_printf("P.x     = %Zd\n", P.x);
-    gmp_printf("P.y     = %Zd\n", P.y);
-    gmp_printf("s_bits  = %zu\n", mpz_sizeinbase(s, 2));
-    gmp_printf("Qx      = %Zd\n", Qx);
-    gmp_printf("Qz      = %Zd\n", Qz);
-    gmp_printf("y_affine= %Zd\n", yaff);
-    gmp_printf("u       = %Zd\n", u);
-    gmp_printf("gcd(Qz,N)= %Zd\n", g);
-
-    mpz_clears(N, d, s, Qx, Qz, tmp, yaff, u, g, NULL);
-    ed_clear(P); ed_clear(R);
-    return 0;
-}
-#endif /* BUILD_ECM_EDWARDS_STANDALONE */
