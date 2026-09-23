@@ -82,6 +82,10 @@ bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
         else if (key == "edwards") set_int(cfg.edwards);
         else if (key == "edwards_threads") set_int(cfg.edwards_threads);
         else if (key == "edwards_naf_w") set_int(cfg.edwards_naf_w);
+        else if (key == "affinity") cfg.affinity = val;
+        else if (key == "cpu_affinity") cfg.affinity = val;           // 别名
+        else if (key == "edwards_backend") cfg.edwards_backend = val;
+        else if (key == "edbackend") cfg.edwards_backend = val;       // 别名
         else if (key == "p95_dir") cfg.p95_dir = val;                 // 已废弃, 见 tmp_dir
         else if (key == "tmp_dir") cfg.tmp_dir = val;
         else if (key == "gpuckpt_seconds") set_double(cfg.gpuckpt_seconds);
@@ -145,6 +149,24 @@ bool ecm_queue_config_write_default(const std::string &path) {
 "# Edwards stage-1 worker threads: 0 = auto (min(curves, CPU cores)), 1 = sequential.\n"
 "# Edwards stage-1 并行线程数：0 = 自动（min(曲线数, CPU 核数)），1 = 顺序执行。\n"
 "edwards_threads = 0\n"
+"\n"
+"# CPU affinity for Edwards stage-1 worker threads (亲核性).\n"
+"#   (empty) / none / auto : let the OS schedule (default)\n"
+"#   list of logical CPU numbers, e.g.  Affinity = 1,3,5,7\n"
+"# Worker t is pinned to list[t % count]; on Windows only the first 64 logical\n"
+"# CPUs can be addressed this way.\n"
+"# 留空/none/auto = 交给系统调度；或写逻辑 CPU 号列表，第 t 个线程绑到 list[t % n]。\n"
+"affinity = \n"
+"\n"
+"# Edwards stage-1 backend:\n"
+"#   auto : use the SIMD batch backend when the CPU has AVX512-F/DQ/IFMA and\n"
+"#          curves >= 8, otherwise the scalar GMP path (default)\n"
+"#   simd : force the AVX512-IFMA batch backend (8 curves per batch, dict w=8).\n"
+"#          Hard error if the CPU lacks the ISA - never falls back silently.\n"
+"#   gmp  : force the scalar mpn path (1 curve per thread)\n"
+"# stage-1 后端：auto = 自动（有 AVX512-IFMA 且曲线 >= 8 时用批量，否则标量）；\n"
+"# simd = 强制批量（无 ISA 直接报错，不静默降级）；gmp = 强制标量。\n"
+"edwards_backend = auto\n"
 "\n"
 "# Edwards NAF window (dictionary = 2^(w-2) entries). 0 = built-in default.\n"
 "# Larger w means fewer point additions but a bigger table; w=12 measured best\n"

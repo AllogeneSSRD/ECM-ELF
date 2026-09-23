@@ -82,3 +82,8 @@ tools/gen/__pycache__/
 /feeder.log
 
 
+/tools/test/_m3_gmp
+/tools/test/_m3_simd
+/tools/test/_m3f_gmp
+/tools/test/_m3f_simd
+/tools/test

@@ -114,7 +114,19 @@ add_executable(ecm
     src/opencl_ecm_selftest.cpp
     src/cpu/ecm_edwards_cpu.cpp
     src/cpu/ecm_edwards_save.cpp
+    src/cpu/simd_edwards.cpp
+    src/cpu/simd_mont_ifma.cpp
 )
+
+# 只有这两个 SIMD TU 拿 AVX512 codegen; 调用点必须在 edwards_simd_available()
+# (基线 TU 里的 CPUID 探测) 返回 1 之后, 见 docs/ECM_EDWARDS_STAGE1.md §13.8。
+if(MSVC)
+    set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp
+        PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
+else()
+    set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp
+        PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
+endif()
 
 target_include_directories(ecm PRIVATE
     ${CMAKE_SOURCE_DIR}/kernels/opencl
@@ -320,6 +332,42 @@ if(MSVC)
         COMPILE_OPTIONS "/arch:AVX512")
 else()
     set_source_files_properties(src/cpu/simd_mont_ifma.cpp PROPERTIES
+        COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
+endif()
+
+# ---------------------------------------------------------------------------
+# simd_edwards_bench — M2 verification + timing: batched Edwards stage-1
+# (src/cpu/simd_edwards.cpp) against the production scalar ladder
+# (src/cpu/ecm_edwards_cpu.cpp, without its standalone main).
+# ---------------------------------------------------------------------------
+add_executable(simd_edwards_bench
+    tools/bench/simd_edwards_bench.cpp
+    src/cpu/simd_edwards.cpp
+    src/cpu/simd_mont_ifma.cpp
+    src/cpu/ecm_edwards_cpu.cpp
+)
+
+target_include_directories(simd_edwards_bench PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/cpu
+)
+
+ecm_target_link_gmp(simd_edwards_bench)
+
+if(MSVC)
+    target_compile_options(simd_edwards_bench PRIVATE /utf-8)
+endif()
+
+# Only the two SIMD TUs get AVX512 codegen; the bench TU and the scalar
+# reference stay at the baseline so the binary reports a clean error on a
+# CPU without AVX512-IFMA instead of executing illegal instructions.
+if(MSVC)
+    set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX512")
+else()
+    set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp PROPERTIES
         COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
 endif()
 

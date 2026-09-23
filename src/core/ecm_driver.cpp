@@ -713,6 +713,8 @@ static void print_ecm_usage(const char *prog) {
               << "  -gpu                 Enable GPU stage-1 (requires -gpucurves)\n"
               << "  --edwards            Enable CPU Edwards stage-1 (Atkin-Morain, a=1)\n"
               << "  --edwards-threads <n>  Edwards stage-1 worker threads (0=auto, 1=serial)\n"
+            << "  --edwards-backend <m>  auto|simd|gmp (batch 8 curves via AVX512-IFMA;\n"
+            << "                         simd forces it and errors out if the CPU lacks it)\n"
               << "  --edwards-naf-w <w>  NAF window (default 12); dictionary = 2^(w-2)\n"
               << "  --tmp-dir <dir>      Local dir for stage-1 saves e{n:07d}_c{k}[.tmp]\n"
               << "                       (default: current dir; ecm.exe never writes to p95)\n"
@@ -822,6 +824,11 @@ struct Stage1RunOptions {
     bool use_gpu = true;
     bool use_edwards = false;        // CPU Edwards (Atkin-Morain) stage-1 path
     uint32_t edwards_threads = 0;    // 0 = auto (min(curves, #cores)); 1 = 顺序
+    int      backend = 0;            // 0=auto 1=simd(强制,无 ISA 则报错) 2=gmp(标量)
+    int      backend_auto_pick = -1; // 实际选中的: 1=simd 2=gmp (打印用)
+    long long stage1_t0_ms = 0;      // 进度条计时起点
+    uint32_t  stage1_curves = 0;     // 进度条总数
+    std::vector<unsigned> affinity_cpus;   // 亲核性 (空 = 不绑定)
     int edwards_naf_w = 0;           // 0 = 用 ecm_edwards_cpu 的默认窗口
     int verbose = 0;
     int device_index = 0;
@@ -1025,6 +1032,12 @@ static int edwards_checkpoint_progress(void *ctx, const edwards_checkpoint_t *cu
 // 线程安全约定: N 与 s 只读共享 (GMP 允许同一 mpz_t 的并发只读访问);
 // 输出 (factor_out / Qx,Qz / checkpoint 文件) 均按曲线索引独立, 无共享写.
 // 返回: 1=因子, 0=无因子, -1=错误, 2=被 SIGINT 中止(已写 checkpoint).
+/* 已完成曲线数 (文件作用域, 让"曲线内"的进度回调也能读到) */
+static std::atomic<uint32_t> g_stage1_done(0);
+
+/* 定义在后面 (需要 g_stage1_bar / edwards_progress_set), 这里先声明给调用点用 */
+static int edwards_checkpoint_progress_bar(void *ctx, const edwards_checkpoint_t *cur);
+
 static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
                                  const Stage1RunOptions &opt, double B1, double B2,
                                  uint32_t idx, uint64_t sigma, uint32_t curves,
@@ -1071,7 +1084,7 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
         const uint32_t chunk_bits = 16384;
         rc = edwards_stage1_curve_progress(factor_out, Qx, Qz, N, sigma, s, chunk_bits,
                                            resume.bitnum > 0 ? &resume : nullptr,
-                                           edwards_checkpoint_progress, &ck);
+                                           edwards_checkpoint_progress_bar, &ck);
         edwards_checkpoint_clear(&resume);
 
         if (rc == 2) {
@@ -1108,33 +1121,317 @@ struct EdwardsWorkerCtx {
     int *array_found;
     std::atomic<uint32_t> *next;
     std::atomic<int> *aborted;
+    /* SIMD 批量 (8 曲线/批) 相关 */
+    int simd_ok = 0;
+    std::atomic<uint32_t> *done_ctr = nullptr;
 };
 
-static void edwards_worker(EdwardsWorkerCtx *ctx) {
-    for (;;) {
-        const uint32_t i = ctx->next->fetch_add(1, std::memory_order_relaxed);
-        if (i >= ctx->curves) break;
-        const uint64_t sigma = ctx->sigmas[i];
-        const int rc = edwards_run_one_curve(ctx->N, ctx->s, *ctx->opt, ctx->B1, ctx->B2,
-                                             i, sigma, ctx->curves,
-                                             ctx->factors[i], ctx->ckpt_paths[i]);
-        if (rc > 0) {
-            ctx->array_found[i] = ECM_FACTOR_FOUND_STEP1;
-            std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
-            if (ctx->opt->verbose) {
-                std::cout << "  curve " << i << " sigma=" << sigma
-                          << " -> factor found" << std::endl;
-            } else {
-                ecm_ts_fprintf(stdout, "  curve %u sigma=%llu -> factor found\n",
-                               i, (unsigned long long)sigma);
+// ---------------------------------------------------------------------------
+// SIMD 批量 stage-1 (8 曲线/批, AVX512-IFMA)
+//
+// 每批建一个 ifma/ed_soa 上下文 (字典本来就要按 sigma 重建, 见 §13.8 的 w=8 选型),
+// 跑完整阶梯后逐 lane 落盘成与标量路径**完全相同**的本地 MIDSTAGE 存档, 因此
+// ecm_p95feeder 不需要任何改动。
+//
+// 与标量路径的已知差别 (按 §13 第 6 条"内部实现可不同但必须记录"):
+//   * 没有阶梯中途 checkpoint, 只在批边界响应 SIGINT/写存档 (标量路径每 gpuckpt_ms 写一次);
+//   * 因此也没有 resume: 重跑该批从 s 的第一个 digit 开始。
+// ---------------------------------------------------------------------------
+#include "simd_edwards.h"   /* SoA 批量 Edwards 层 (AVX512-IFMA TU, 见 §13.8) */
+
+/* ---------------------------------------------------------------------------
+ * stage-1 进度条 (照 opencl_ecm_stage1.cpp 的 CUDA host 写法)
+ *
+ * 批量模式下一批 8 条曲线是不可分割的工作单元, 所以进度以"曲线"为粒度、每批跳一格;
+ * 更新点都在 g_edwards_out_mutex 保护下, 避免多条 worker 线程同时动光标。
+ * ------------------------------------------------------------------------- */
+#include "indicators/indicators.hpp"
+
+static indicators::ProgressBar *g_stage1_bar = nullptr;
+
+/* ---------------------------------------------------------------------------
+ * 速率显示 (对齐 kernels/cuda/cgbn_stage1.cu 的 print_progress)
+ *
+ * CUDA 那套的要点有两个, 这里都照做:
+ *  1) 平均的是"速度样本"而不是时间: 每个采样点算 speed = delta_work/delta_t,
+ *     放进环形窗口, avg = sum/count; 然后用 avg 反推 per_curve 与 remaining。
+ *     这样并行批数/频率变化时显示不会乱跳 (直接平均时间就会跳)。
+ *  2) TTY 与非 TTY 两种输出: 终端里原地 \r 更新; 重定向到日志时按衰减节奏打
+ *     整行 (前 3 次、之后 10/100/1000/10000 的倍数), 否则日志会被刷爆。
+ * work 单位是"曲线"(可为小数, 批内按 bit 比例折算), 与总曲线数同一量纲。
+ * ------------------------------------------------------------------------- */
+#define ED_SPEED_WINDOW 12
+struct EdSpeedMeter {
+    double ring[ED_SPEED_WINDOW];
+    int count, idx;
+    double sum;
+    double t_last, w_last, t0;
+    bool started;                    /* 第一个采样点只用来定基准, 不产生速度样本 */
+    EdSpeedMeter() : count(0), idx(0), sum(0.0), t_last(0.0), w_last(0.0), t0(0.0),
+                     started(false) {}
+    void reset() { count = 0; idx = 0; sum = 0.0; t_last = 0.0; w_last = 0.0; t0 = 0.0;
+                   started = false; }
+    void sample(double now, double work) {
+        if (!started) { started = true; t0 = now; t_last = now; w_last = work; return; }
+        const double dt = now - t_last, dw = work - w_last;
+        t_last = now;
+        w_last = work;
+        if (dt < 0.05 || dw <= 1e-12) return;       /* 极小 dt (收尾跳变) 会造出虚高速度样本 */
+        const double speed = dw / dt;               /* 曲线/秒 */
+        if (count < ED_SPEED_WINDOW) {
+            ring[count++] = speed;
+            sum += speed;
+        } else {
+            sum -= ring[idx];
+            ring[idx] = speed;
+            sum += speed;
+            idx = (idx + 1) % ED_SPEED_WINDOW;
+        }
+    }
+    double avg_speed() const { return count > 0 ? sum / (double)count : 0.0; }
+};
+
+static EdSpeedMeter g_speed;
+
+static bool stdout_is_tty_local(void) {
+#if defined(_WIN32)
+    return _isatty(_fileno(stdout)) != 0;
+#else
+    return isatty(fileno(stdout)) != 0;
+#endif
+}
+
+/* 重定向到日志时的打印节奏 (与 CUDA 的 emit_progress_line 一致) */
+static bool emit_progress_line(unsigned n) {
+    return (n < 3u) || (n < 30u && n % 10u == 0u) || (n < 500u && n % 100u == 0u) ||
+           (n < 5000u && n % 1000u == 0u) || (n % 10000u == 0u);
+}
+
+/* ASCII 进度条 (日志模式下用, 与 CUDA print_progress 的条形一致) */
+static const char *progress_bar_ascii(double pct) {
+    static char bar[41];
+    const int width = 40;
+    int filled = (int)(width * (pct / 100.0));
+    if (filled < 0) filled = 0;
+    if (filled > width) filled = width;
+    for (int i = 0; i < width; i++) bar[i] = (i < filled) ? '=' : ' ';
+    bar[width] = '\0';
+    if (filled > 0 && filled < width) bar[filled - 1] = '>';
+    return bar;
+}
+
+static void edwards_progress_set(double done, uint32_t total, double /*unused*/) {
+    if (total == 0) return;
+    /* 进度/速率估计必须单调: 多线程下各线程上报的 (已完成曲线 + 本曲线比例) 会互相穿插
+       (A 报 3.5, B 接着报 5.2, A 下一次又报 3.6), 不单调会产生"大增量/小时间"的虚高
+       速度样本, 把显示速率放大十几倍。取运行最大值即可。 */
+    static double s_max_done = 0.0;
+    if (done <= 0.0) { g_speed.reset(); s_max_done = 0.0; }
+    if (done < s_max_done) done = s_max_done; else s_max_done = done;
+    const double now = (double)edwards_now_ms() / 1000.0;
+    g_speed.sample(now, done);
+
+    double pct = 100.0 * done / (double)total;
+    if (pct > 100.0) pct = 100.0;
+    const double avg = g_speed.avg_speed();
+    const double per_curve_s = avg > 0.0 ? 1.0 / avg : 0.0;              /* 由均值反推 */
+    const double elapsed_s = (g_speed.t0 > 0.0) ? now - g_speed.t0 : 0.0;
+    double remaining_s = 0.0;
+    if (avg > 0.0 && done < (double)total) remaining_s = ((double)total - done) / avg;
+
+    if (!stdout_is_tty_local()) {
+        /* 日志模式: 不打 \r, 按衰减节奏打整行 (带时间戳, 会被 mirror 到 log 文件) */
+        static unsigned lines = 0;
+        static std::atomic<uint32_t> last_emitted(0xFFFFFFFFu);
+        const uint32_t done_i = (uint32_t)done;
+        if (done >= (double)total || emit_progress_line(++lines)) {
+            last_emitted.store(done_i, std::memory_order_relaxed);
+            ecm_ts_fprintf(stdout,
+                           "stage1: [%s] %.1f%%  %.1f/%u (~%.2f s/curve)  "
+                           "elapsed %.1fs  ETA %.1fs\n",
+                           progress_bar_ascii(pct), pct, done, total, per_curve_s,
+                           elapsed_s, remaining_s);
+        }
+        return;
+    }
+
+    if (!g_stage1_bar) return;
+    try {
+        g_stage1_bar->set_progress((float)pct);
+        char postfix[200];
+        snprintf(postfix, sizeof(postfix),
+                 "%.1f%%  %.1f/%u (~%.2f s/curve)  elapsed %.1fs  ETA %.1fs",
+                 pct, done, total, per_curve_s, elapsed_s, remaining_s);
+        g_stage1_bar->set_option(indicators::option::PostfixText{postfix});
+        if (done >= (double)total) g_stage1_bar->mark_as_completed();
+    } catch (...) {
+        /* 进度条永远不能影响 stage-1 的正确性 */
+    }
+}
+
+/* 批内进度: bits 粒度, 把"已完成曲线 + 本批已跑比例 × 批大小"折算成总进度 */
+struct EdSimdProg {
+    std::atomic<uint32_t> *done_ctr;
+    uint32_t curves, batch_first, batch_count;
+    size_t   s_bits;
+    long long t0_ms;
+};
+
+static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total) {
+    if (g_edwards_stop) return 1;                 /* SIGINT: 批内也能停 */
+    EdSimdProg *pr = (EdSimdProg *)p;
+    if (!g_stage1_bar || bits_total == 0) return 0;
+    const uint32_t base = pr->done_ctr ? pr->done_ctr->load(std::memory_order_relaxed) : 0;
+    const double frac = (double)bits_done / (double)bits_total;
+    const double done_f = (double)base + frac * (double)pr->batch_count;
+    const double lapsed = (double)(edwards_now_ms() - pr->t0_ms);
+    std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+    edwards_progress_set(done_f, pr->curves, done_f > 0.0 ? lapsed / done_f : 0.0);
+    return 0;
+}
+
+/* 标量路径的"曲线内"进度: 包一层 checkpoint 回调, 每 chunk_bits(16384) 位跳一格。
+   没有它的话 B1 很大时一条曲线要跑几分钟, 进度条看着就是卡死的。
+   (定义在这里而不是函数旁边, 因为要用到上面的 g_stage1_bar/edwards_progress_set。) */
+static int edwards_checkpoint_progress_bar(void *ctx, const edwards_checkpoint_t *cur) {
+    if (g_stage1_bar && ctx) {
+        EdwardsCheckpointCtx *ck = (EdwardsCheckpointCtx *)ctx;
+        if (ck->opt && ck->s && ck->opt->stage1_curves > 0) {
+            const size_t s_bits = (size_t)mpz_sizeinbase(ck->s, 2);
+            if (s_bits > 0) {
+                const uint32_t base = g_stage1_done.load(std::memory_order_relaxed);
+                double frac = (double)cur->bitnum / (double)s_bits;
+                if (frac > 1.0) frac = 1.0;
+                const double done_f = (double)base + frac;
+                const double lapsed = (double)(edwards_now_ms() - ck->opt->stage1_t0_ms);
+                std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+                edwards_progress_set(done_f, ck->opt->stage1_curves,
+                                     done_f > 0.0 ? lapsed / done_f : 0.0);
             }
-        } else if (rc < 0) {
+        }
+    }
+    return edwards_checkpoint_progress(ctx, cur);
+}
+
+static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N, mpz_srcptr s,
+                                       double B1, double B2, uint32_t first, uint32_t count,
+                                       const uint64_t *sigmas, mpz_t *factors, int *array_found,
+                                       std::atomic<uint32_t> *done_ctr) {
+    ed_soa_ctx_t ctx;
+    /* 字典窗口跟随配置 (edwards_naf_w / ini), 不再硬编码 w=8:
+       这样 SIMD 与标量用同一套 digit/字典, 存档逐字节可比, 也便于混合与续跑。
+       代价是字典内存 = 3*2^(w-2)*8n 字节 (w=12/n=155 约 29 MB/批), 见启动信息。 */
+    int w = edwards_get_naf_w();
+    if (w < 3 || w > 12) w = 8;
+    if (ed_soa_init(&ctx, N, w) != 0) return -1;
+
+    /* 不足 8 条时把最后一个 sigma 补满 (被补的 lane 结果丢弃) */
+    uint64_t sg[8];
+    for (uint32_t k = 0; k < 8; k++) sg[k] = sigmas[first + (k < count ? k : count - 1)];
+
+    if (ed_soa_set_curves(&ctx, sg, 8) != 0) { ed_soa_clear(&ctx); return -1; }
+
+    EdSimdProg pr;
+    pr.done_ctr = done_ctr;
+    pr.curves = (done_ctr && opt.stage1_curves) ? opt.stage1_curves : count;
+    pr.batch_first = first;
+    pr.batch_count = count;
+    pr.s_bits = mpz_sizeinbase(s, 2);
+    pr.t0_ms = opt.stage1_t0_ms;
+    ed_soa_set_progress(&ctx, edwards_simd_progress, &pr);
+
+    mpz_t Qx[8], Qz[8], fac[8];
+    for (int k = 0; k < 8; k++) mpz_inits(Qx[k], Qz[k], fac[k], NULL);
+    const int aborted = ed_soa_stage1(&ctx, s, 8, Qx, Qz, fac);
+    if (aborted) {                                  /* 中途停: 不写任何存档 */
+        for (int k = 0; k < 8; k++) mpz_clears(Qx[k], Qz[k], fac[k], NULL);
+        ed_soa_clear(&ctx);
+        return 2;
+    }
+
+    int rc = 0;
+    for (uint32_t k = 0; k < count; k++) {
+        const uint32_t i = first + k;
+        if (mpz_cmp_ui(fac[k], 1) > 0) {
+            mpz_set(factors[i], fac[k]);
+            array_found[i] = ECM_FACTOR_FOUND_STEP1;
             std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
-            std::cerr << "  curve " << i << " sigma=" << sigma
-                      << " -> Edwards stage-1 internal error" << std::endl;
-        } else if (rc == 2) {
-            ctx->aborted->store(1, std::memory_order_relaxed);
-            break;
+            ecm_ts_fprintf(stdout, "  curve %u sigma=%llu -> factor found\n",
+                           i, (unsigned long long)sigmas[i]);
+        }
+        edwards_write_local_midstage(opt, sigmas[i], i + 1, (uint64_t)B1, (uint64_t)B2,
+                                     Qx[k], Qz[k], i);
+    }
+    for (int k = 0; k < 8; k++) mpz_clears(Qx[k], Qz[k], fac[k], NULL);
+    ed_soa_clear(&ctx);
+
+    if (done_ctr) {
+        const uint32_t done = done_ctr->fetch_add(count, std::memory_order_relaxed) + count;
+        const double lapsed = (double)(edwards_now_ms() - opt.stage1_t0_ms);
+        std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+        edwards_progress_set(done, opt.stage1_curves, done > 0 ? lapsed / done : 0.0);
+    }
+    (void)s;
+    return rc;
+}
+
+static void edwards_worker(EdwardsWorkerCtx *ctx) {
+    const int use_simd = (ctx->opt->backend != 2) && ctx->simd_ok;
+    for (;;) {
+        if (g_edwards_stop) { ctx->aborted->store(1, std::memory_order_relaxed); break; }
+        uint32_t i, n;
+        if (use_simd) {                                   /* 静态分批: 一批 8 条 */
+            i = ctx->next->fetch_add(8, std::memory_order_relaxed);
+            if (i >= ctx->curves) break;
+            n = ctx->curves - i; if (n > 8) n = 8;
+        } else {
+            i = ctx->next->fetch_add(1, std::memory_order_relaxed);
+            if (i >= ctx->curves) break;
+            n = 1;
+        }
+        if (use_simd && n >= 2) {
+            /* 批内至少 2 条才值得批量 (1 条走标量, 见 §13.6 的 hybrid 规则) */
+            const int rc = edwards_run_batch_simd_impl(*ctx->opt, ctx->N, ctx->s, ctx->B1, ctx->B2,
+                                                       i, n, ctx->sigmas, ctx->factors,
+                                                       ctx->array_found, ctx->done_ctr);
+            if (rc < 0) {
+                std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+                std::cerr << "  batch " << i << " -> SIMD stage-1 internal error" << std::endl;
+                ctx->aborted->store(1, std::memory_order_relaxed);
+                break;
+            }
+            continue;
+        }
+        if (use_simd && n == 1) { /* fallthrough to scalar for the tail curve */ }
+        {
+            const uint64_t sigma = ctx->sigmas[i];
+            const int rc = edwards_run_one_curve(ctx->N, ctx->s, *ctx->opt, ctx->B1, ctx->B2,
+                                                 i, sigma, ctx->curves,
+                                                 ctx->factors[i], ctx->ckpt_paths[i]);
+            if (rc > 0) {
+                ctx->array_found[i] = ECM_FACTOR_FOUND_STEP1;
+                std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+                if (ctx->opt->verbose) {
+                    std::cout << "  curve " << i << " sigma=" << sigma
+                              << " -> factor found" << std::endl;
+                } else {
+                    ecm_ts_fprintf(stdout, "  curve %u sigma=%llu -> factor found\n",
+                                   i, (unsigned long long)sigma);
+                }
+            } else if (rc < 0) {
+                std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+                std::cerr << "  curve " << i << " sigma=" << sigma
+                          << " -> Edwards stage-1 internal error" << std::endl;
+            } else if (rc == 2) {
+                ctx->aborted->store(1, std::memory_order_relaxed);
+                break;
+            }
+            if (ctx->done_ctr) {
+                const uint32_t done = ctx->done_ctr->fetch_add(1, std::memory_order_relaxed) + 1;
+                const double lapsed = (double)(edwards_now_ms() - ctx->opt->stage1_t0_ms);
+                std::lock_guard<std::mutex> lk(g_edwards_out_mutex);
+                edwards_progress_set(done, ctx->opt->stage1_curves, done > 0 ? lapsed / done : 0.0);
+            }
         }
     }
 }
@@ -1150,6 +1447,70 @@ static uint32_t edwards_default_threads(uint32_t curves) {
 
 // Run one Edwards (Atkin-Morain) stage-1 batch on the CPU. One curve per sigma.
 //
+#if defined(_MSC_VER)
+#include <intrin.h>
+// AVX512-F + DQ + IFMA 且 OS 已启用 zmm/opmask 状态 (XCR0) 才允许进 simd_edwards。
+// 必须在基线 TU 里探测: simd_*.cpp 是 /arch:AVX512 编的, 在它内部执行任何代码都可能
+// 让编译器在探测前就发出 AVX512 指令。
+static int driver_simd_isa_ok(void) {
+    int r[4] = {0,0,0,0};
+    __cpuid(r, 0);
+    if (r[0] < 7) return 0;
+    __cpuidex(r, 1, 0);
+    if (!((r[2] >> 27) & 1) || !((r[2] >> 28) & 1)) return 0;   /* OSXSAVE, AVX */
+    const unsigned long long xcr0 = _xgetbv(0);
+    if ((xcr0 & 0xE6ULL) != 0xE6ULL) return 0;                  /* opmask+ZMM_Hi256+Hi16_ZMM */
+    __cpuidex(r, 7, 0);
+    return (((r[1] >> 16) & 1) && ((r[1] >> 17) & 1) && ((r[1] >> 21) & 1)) ? 1 : 0;
+}
+#else
+static int driver_simd_isa_ok(void) { return 0; }   /* 非 MSVC 由 CMake 侧保证 */
+#endif
+
+/* ---------------------------------------------------------------------------
+ * 亲核性 (Affinity): "1,3,5,7" -> {1,3,5,7}
+ * 空 / "none" / "auto" -> 空列表 = 不绑定, 交给系统调度。
+ * 第 t 个 worker 绑到 list[t % count]，因此列表长度通常取 = 线程数或物理核数。
+ * ------------------------------------------------------------------------- */
+static std::vector<unsigned> parse_affinity_spec(const std::string &spec) {
+    std::vector<unsigned> out;
+    std::string s;
+    for (char ch : spec) if (ch != ' ' && ch != '\t' && ch != '"') s.push_back(ch);
+    if (s.empty() || s == "none" || s == "auto") return out;
+    size_t pos = 0;
+    while (pos <= s.size()) {
+        const size_t comma = s.find(',', pos);
+        const std::string tok = s.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+        if (!tok.empty()) {
+            try {
+                const long v = std::stol(tok);
+                if (v < 0 || v > 1023) {
+                    std::cerr << "Affinity: CPU index out of range: " << tok << std::endl;
+                } else {
+                    out.push_back((unsigned)v);
+                }
+            } catch (...) {
+                std::cerr << "Affinity: ignoring non-numeric entry: " << tok << std::endl;
+            }
+        }
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    return out;
+}
+
+#if defined(_WIN32)
+#include <windows.h>
+static void apply_thread_affinity(const std::vector<unsigned> &cpus, uint32_t t) {
+    if (cpus.empty()) return;
+    const unsigned cpu = cpus[t % cpus.size()];
+    if (cpu >= 64) return;      /* 单处理器组只有 64 个逻辑 CPU 可用位图表达 */
+    SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1 << cpu);
+}
+#else
+static void apply_thread_affinity(const std::vector<unsigned> &, uint32_t) {}
+#endif
+
 // curves == 1 or opt.edwards_threads == 1 -> 顺序执行 (与历史行为一致);
 // 否则按曲线并行 (每线程独立曲线, 动态取号), 吞吐随核数线性提升.
 static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
@@ -1241,7 +1602,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     std::cout << std::endl;
 
     bool aborted = false;
-    if (nthreads <= 1) {
+    if (nthreads <= 1 && curves == 1) {
         for (uint32_t i = 0; i < curves; i++) {
             const int rc = edwards_run_one_curve(N, s, opt, B1, B2, i, sigmas[i], curves,
                                                  factors[i], ckpt_paths[i]);
@@ -1264,6 +1625,72 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         wctx.N = N;
         wctx.s = s;
         wctx.opt = &opt;
+        /* ---- backend 选择 + 起始信息 (见 §13.6 第 7 条: simd 不允许静默降级) ---- */
+        g_stage1_done.store(0, std::memory_order_relaxed);
+        std::atomic<uint32_t> &done_ctr = g_stage1_done;
+        {
+            const int isa = driver_simd_isa_ok();
+            if (opt.backend == 1 && !isa) {
+                ecm_ts_fprintf(stderr,
+                               "ERROR: --edwards-backend simd requested but this CPU lacks "
+                               "AVX512-F/DQ/IFMA. Refusing to fall back silently; use "
+                               "--edwards-backend auto or gmp.\n");
+                return -1;
+            }
+            wctx.simd_ok = (opt.backend == 1) ? 1
+                         : (opt.backend == 0) ? (isa && curves >= 8) : 0;
+            wctx.done_ctr = &done_ctr;
+            char sbuf[160];
+            snprintf(sbuf, sizeof(sbuf),
+                     "simd (AVX512-IFMA: 8 curves per batch, 1 thread/batch, dict w=%d)",
+                     edwards_get_naf_w() >= 3 ? edwards_get_naf_w() : 8);
+            ecm_ts_fprintf(stdout, "stage-1 backend : %s\n",
+                           wctx.simd_ok ? sbuf : "gmp (scalar mpn, 1 curve/thread)");
+            ecm_ts_fprintf(stdout, "N / s           : %zu bit N, %zu bit s\n",
+                           mpz_sizeinbase(N, 2), mpz_sizeinbase(s, 2));
+            if (wctx.simd_ok) {
+                /* 批量模式下真正的并行度是"批数"而不是线程数: 8 条曲线 = 1 批 = 1 个线程在干活,
+                   其余线程空闲。这里如实显示, 免得用户以为 8 线程都忙。 */
+                const uint32_t batches = (curves + 7u) / 8u;
+                const uint32_t busy = batches < nthreads ? batches : nthreads;
+                ecm_ts_fprintf(stdout,
+                               "work split      : %u batch(es) of 8 curves -> %u thread(s) busy "
+                               "(%u requested)%s\n",
+                               batches, busy, nthreads,
+                               busy < nthreads ? "  [raise --gpucurves for more parallelism]" : "");
+            }
+            if (!opt.affinity_cpus.empty()) {
+                std::string a;
+                for (size_t i = 0; i < opt.affinity_cpus.size(); i++) {
+                    if (i) a += ",";
+                    a += std::to_string(opt.affinity_cpus[i]);
+                }
+                ecm_ts_fprintf(stdout, "affinity        : %s (worker t -> cpu[%s][t %% %zu])\n",
+                               a.c_str(), a.c_str(), opt.affinity_cpus.size());
+            } else {
+                ecm_ts_fprintf(stdout, "affinity        : none (OS scheduler)\n");
+            }
+            fflush(stdout);
+        }
+        /* 进度条: 照 CUDA stage-1 host 的样式, prefix 换成 stage1 */
+        indicators::ProgressBar bar{
+            indicators::option::BarWidth{40},
+            indicators::option::Start{"["},
+            indicators::option::Fill{"="},
+            indicators::option::Lead{">"},
+            indicators::option::Remainder{" "},
+            indicators::option::End{"]"},
+            indicators::option::PrefixText{"stage1: "},
+            indicators::option::PostfixText{""},
+            indicators::option::ShowElapsedTime{true},
+            indicators::option::ShowRemainingTime{true},
+            indicators::option::ForegroundColor{indicators::Color::cyan},
+            indicators::option::FontStyles{
+                std::vector<indicators::FontStyle>{indicators::FontStyle::bold}}};
+        g_stage1_bar = &bar;
+        ((Stage1RunOptions &)opt).stage1_t0_ms = edwards_now_ms();
+        ((Stage1RunOptions &)opt).stage1_curves = curves;
+        edwards_progress_set(0, curves, 0.0);
         wctx.B1 = B1;
         wctx.B2 = B2;
         wctx.curves = curves;
@@ -1278,7 +1705,11 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
 
         std::vector<std::thread> pool;
         pool.reserve(nthreads);
-        for (uint32_t t = 0; t < nthreads; t++) pool.emplace_back(edwards_worker, &wctx);
+        for (uint32_t t = 0; t < nthreads; t++)
+            pool.emplace_back([&wctx, t]() {
+                apply_thread_affinity(wctx.opt->affinity_cpus, t);
+                edwards_worker(&wctx);
+            });
         for (auto &th : pool) th.join();
         aborted = (aborted_flag.load(std::memory_order_relaxed) != 0);
     }
@@ -1605,6 +2036,26 @@ static int run_queue_manager(const std::string &ini_path) {
     opt.use_gpu = true;
     opt.use_edwards = (cfg.edwards != 0);
     opt.edwards_threads = (cfg.edwards_threads > 0) ? (uint32_t)cfg.edwards_threads : 0u;
+    opt.affinity_cpus = parse_affinity_spec(cfg.affinity);
+    /* edwards_backend: auto | simd | gmp  (队列模式下此前只能走 auto) */
+    {
+        std::string b = cfg.edwards_backend;
+        for (size_t i = 0; i < b.size(); i++) {
+            const char ch = b[i];
+            b[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
+        }
+        if (b.empty() || b == "auto") opt.backend = 0;
+        else if (b == "simd" || b == "avx512") opt.backend = 1;
+        else if (b == "gmp" || b == "scalar" || b == "mpn") opt.backend = 2;
+        else {
+            ecm_ts_fprintf(stderr,
+                           "WARNING: edwards_backend='%s' not recognised (auto|simd|gmp); using auto\n",
+                           cfg.edwards_backend.c_str());
+            opt.backend = 0;
+        }
+    }
+    /* edwards_naf_w: 之前同样只在命令行生效, 队列模式会忽略 ini 里的设置 */
+    if (cfg.edwards_naf_w >= 3 && cfg.edwards_naf_w <= 12) edwards_set_naf_w(cfg.edwards_naf_w);
     opt.edwards_naf_w = cfg.edwards_naf_w;
     opt.verbose = cfg.verbose;
     opt.device_index = cfg.device;
@@ -1618,6 +2069,10 @@ static int run_queue_manager(const std::string &ini_path) {
     opt.gpu_special_mult_path = cfg.kernel_special_mult;
     opt.sigma_fixed = (cfg.sigma != 0);
     opt.fixed_sigma = cfg.sigma;
+    /* Edwards 路径用的是 64 位 sigma 与 sigma_fixed 开关; 队列模式此前只设了 32 位字段,
+       导致 ini 里的 sigma 被忽略、每轮都跑随机曲线。 */
+    opt.fixed_sigma64 = (uint64_t)cfg.sigma;
+    opt.sigma_fixed = (cfg.sigma != 0);
     opt.tmp_dir = resolve_rel_local(exe_dir, cfg.tmp_dir);
     if (!cfg.p95_dir.empty()) {
         ecm_ts_fprintf(stdout,
@@ -1631,7 +2086,7 @@ static int run_queue_manager(const std::string &ini_path) {
     ecm_ts_fprintf(stdout, "finished : %s\n", finished_path.c_str());
     ecm_ts_fprintf(stdout, "log_file : %s\n", cfg.log_file.c_str());
     ecm_ts_fprintf(stdout, "saves : %s\n", opt.tmp_dir.c_str());
-    ecm_ts_fprintf(stdout, "backend : %s\n", opt.use_edwards ? "edwards" : "gpu");
+    ecm_ts_fprintf(stdout, "backend : %s\n", opt.use_edwards ? "edwards Z2xZ8" : "gpu");
 
     // Startup full sync (matches the old work_manager.ps1 behaviour).
     ecm_sync_save_files(exe_dir, sync1, sync2, /*full=*/true, 0);
@@ -1766,6 +2221,7 @@ int main(int argc, char **argv){
     bool use_edwards = false;
     uint32_t edwards_threads = 0;
     int edwards_naf_w = 0;
+    int edwards_backend = 0;      /* 0=auto 1=simd 2=gmp */
     uint32_t gpucurves = 0;
     double gpuckpt_seconds = -1.0;
     bool gpuckpt_set = false;
@@ -1793,6 +2249,14 @@ int main(int argc, char **argv){
         if(a == "-v") { verbose = true; continue; }
         if(a == "-gpu") { use_gpu = true; continue; }
         if(a == "--edwards") { use_edwards = true; continue; }
+        if((a == "--edwards-backend" || a == "--edbackend") && i+1<argc){
+            const std::string m = argv[++i];
+            if (m == "auto") edwards_backend = 0;
+            else if (m == "simd" || m == "avx512") edwards_backend = 1;
+            else if (m == "gmp" || m == "scalar") edwards_backend = 2;
+            else { std::cerr << "Invalid --edwards-backend, expected auto|simd|gmp" << std::endl; return 1; }
+            continue;
+        }
         if((a == "--edwards-threads" || a == "--edthreads") && i+1<argc){
             try { edwards_threads = (uint32_t)std::stoul(argv[++i]); }
             catch (...) { std::cerr << "Invalid --edwards-threads value, expected >= 0" << std::endl; return 1; }
@@ -1800,8 +2264,7 @@ int main(int argc, char **argv){
         }
         if((a == "--edwards-naf-w" || a == "--ednafw") && i+1<argc){
             try { edwards_naf_w = std::stoi(argv[++i]); }
-            catch (...) { std::cerr << "Invalid --edwards-naf-w value, expected integer" << std::endl; return 1; }
-            continue;
+            catch (...) { std::cerr << "Invalid --edwards-naf-w value, expected integer" << std::endl; return 1; }            continue;
         }
         if(a == "-gpucurves" && i+1<argc){ gpucurves = (uint32_t)std::stoul(argv[++i]); continue; }
         if(a == "-gpuckpt" && i+1<argc){
@@ -1827,7 +2290,7 @@ int main(int argc, char **argv){
             }
             continue;
         }
-        if(a == "-sigma" && i+1<argc){
+        if((a == "-sigma" || a == "--sigma") && i+1<argc){
             if(!parse_sigma64_arg(argv[++i], &fixed_sigma64)){
                 std::cerr << "Invalid -sigma value (need 1..2^64-1, optional param: prefix)" << std::endl;
                 return 1;
@@ -2075,6 +2538,7 @@ int main(int argc, char **argv){
     opt.use_gpu = use_gpu;
     opt.use_edwards = use_edwards;
     opt.edwards_threads = edwards_threads;
+    opt.backend = edwards_backend;
     opt.edwards_naf_w = edwards_naf_w;
     opt.verbose = verbose ? 1 : 0;
     opt.device_index = gpu_device_index;

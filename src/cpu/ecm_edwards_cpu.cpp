@@ -628,6 +628,38 @@ int edwards_stage1_curve(mpz_t factor, mpz_t Qx, mpz_t Qz,
 
 #ifdef BUILD_ECM_EDWARDS_STANDALONE
 // ---------------------------------------------------------------------------
+// 批处理 SIMD (AVX512-IFMA) 是否可用。必须在**基线 TU** 里做 CPUID 探测：
+// simd_*.cpp 是用 /arch:AVX512 编的，在它内部执行任何代码（哪怕只探测）都可能
+// 让编译器在探测前就发出 AVX512 指令。
+#if defined(_MSC_VER)
+#include <intrin.h>
+int edwards_simd_available(void) {
+    int regs[4] = {0,0,0,0};
+    __cpuid(regs, 0);
+    if (regs[0] < 7) return 0;
+    __cpuidex(regs, 1, 0);
+    const int osxsave = (regs[2] >> 27) & 1;      // OSXSAVE
+    const int avx     = (regs[2] >> 28) & 1;      // AVX
+    if (!osxsave || !avx) return 0;
+    const unsigned long long xcr0 = _xgetbv(0);
+    // 需要 opmask(5) + ZMM_Hi256(6) + Hi16_ZMM(7) 才能安全用 zmm
+    if ((xcr0 & 0xE6ULL) != 0xE6ULL) return 0;
+    __cpuidex(regs, 7, 0);
+    const int f  = (regs[1] >> 16) & 1;           // AVX512F
+    const int dq = (regs[1] >> 17) & 1;           // AVX512DQ (movepi64_mask 要它)
+    const int ifma = (regs[1] >> 21) & 1;         // AVX512_IFMA
+    return (f && dq && ifma) ? 1 : 0;
+}
+#else
+int edwards_simd_available(void) {
+#if defined(__AVX512F__) && defined(__AVX512IFMA__) && defined(__AVX512DQ__)
+    return 1;   // 这个 TU 若用 -mavx512* 编过，则整机假定支持
+#else
+    return 0;
+#endif
+}
+#endif
+
 // 主程序: 交叉验证 (对比 Prime95 存档)
 // 用法: ecm_edwards_cpu <N> <sigma> <B1>
 // ---------------------------------------------------------------------------

@@ -36,6 +36,10 @@ void edwards_atkin_morain(mpz_t d, mpz_t Px, mpz_t Py, uint64_t sigma, const mpz
 // 当前 NAF 窗口 w (字典大小 = 2^(w-2)).
 int edwards_get_naf_w(void);
 
+// 批处理 SIMD (AVX512-IFMA, 8 曲线/批) 是否可用。1 = 可用。
+// 在基线 TU 里用 CPUID 探测; 只有返回 1 才能调用 simd_edwards 的接口。
+int edwards_simd_available(void);
+
 // ---------------------------------------------------------------------------
 // 分块可恢复标量乘 (self-checkpoint 支持)
 // ---------------------------------------------------------------------------

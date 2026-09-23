@@ -1,0 +1,92 @@
+/* ---------------------------------------------------------------------------
+ * simd_edwards.h — batched Edwards stage-1 point layer, 8 curves in one zmm.
+ *
+ * Sits on top of simd_mont_ifma (lane = curve, SoA over 52-bit limbs) and
+ * mirrors src/cpu/ecm_edwards_cpu.cpp's scalar formulas exactly:
+ *   dbl          = 4 sqr + 4 mul
+ *   add          = 9 mul (incl. d)
+ *   add_affine   = 7 mul (affine inputs carry (x, y, dxy = d*x*y))
+ *   result       = Qx = z + y, Qz = z - y, factor = gcd(Qz, N)
+ *
+ * Why the batch works at all: the ladder's w-NAF digits are digits of
+ * s = 48*lcm(1..B1), which is the SAME for every curve, so at each step all
+ * lanes use the same dictionary index.  Only the dictionary *contents* differ
+ * per curve, hence the dictionary lives in one SoA block covering all lanes.
+ *
+ * Window size w is a batch-level decision, not just a speed knob: the
+ * dictionary is 3 * 2^(w-2) * 8n words, i.e. 236 KB per batch at w=8/n=154
+ * versus 3.8 MB at w=12, and w=12 would drag every ladder step out of L3.
+ * Extra adds from the smaller window cost only ~3% of the modmuls
+ * (per bit: 8 + 7/(w+1)).
+ *
+ * !!! AVX512-IFMA TU: compile with /arch:AVX512 and only call after CPUID.
+ * Not thread safe per context (each context owns its scratch arena).
+ * ------------------------------------------------------------------------- */
+#ifndef SIMD_EDWARDS_H
+#define SIMD_EDWARDS_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <gmp.h>
+
+#include "simd_mont_ifma.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define ED_SOA_ARENA 16   /* 8n-word scratch buffers handed out by the ops */
+
+typedef struct {
+    ifma_ctx_t mc;        /* modulus, R, np0, modmul scratch */
+    size_t     n;         /* 52-bit limbs */
+    int        w;         /* batch w-NAF window */
+    size_t     m;         /* dictionary entries: 2^(w-2) */
+    uint64_t  *dict;      /* 3*m*8n: entry j -> x, y, dxy (each 8n, SoA) */
+    uint64_t  *d;         /* 8n: per-lane curve parameter d (Montgomery) */
+    uint64_t  *arena;     /* ED_SOA_ARENA * 8n scratch */
+    int        set;       /* curves/dictionary built? */
+    int        bad_inv;   /* 诊断: 上一次 set_curves 里 Z 与 N 不互素(z 不可逆)的字典项数 */
+    int      (*progress)(void *ctx, size_t bits_done, size_t bits_total);  /* 批内进度 (可空) */
+    void      *progress_ctx;
+} ed_soa_ctx_t;
+
+/* w in [3,12].  Returns 0 on success. */
+int  ed_soa_init(ed_soa_ctx_t *c, const mpz_t N, int w);
+void ed_soa_clear(ed_soa_ctx_t *c);
+
+/* Per-lane curve setup: sigma[k] -> (d_k, P_k) via Atkin-Morain, then the
+   dictionary (2j+1)P in affine form for j < m.  Lanes >= lanes are untouched.
+   Builds the whole batch at once, so pass all 8 (pad sigma with anything). */
+int  ed_soa_set_curves(ed_soa_ctx_t *c, const uint64_t *sigma, int lanes);
+
+/* [s]P over the batch.  s must be the same for all lanes (48*lcm(1..B1)).
+   Fills Qx/Qz (reduced, Montgomery-exited) and factor = gcd(Qz, N) (1 if
+   none) for lanes [0, lanes).  Returns 0 on success, 1 if the progress
+   callback asked to stop (in which case NO output is written). */
+int  ed_soa_stage1(ed_soa_ctx_t *c, const mpz_t s, int lanes,
+                   mpz_t *Qx, mpz_t *Qz, mpz_t *factor);
+
+/* 批内进度回调: 每 ED_SOA_PROGRESS_BITS 个 digit 调一次。
+   返回 0 = 继续, 非 0 = 请求中止 (ed_soa_stage1 会立刻返回 1)。 */
+#define ED_SOA_PROGRESS_BITS 16384
+typedef int (*ed_soa_progress_fn)(void *ctx, size_t bits_done, size_t bits_total);
+void ed_soa_set_progress(ed_soa_ctx_t *c, ed_soa_progress_fn fn, void *ctx);
+
+/* Diagnostics for the bench/verification tooling. */
+size_t ed_soa_dict_words(const ed_soa_ctx_t *c);
+size_t ed_soa_dict_bytes(const ed_soa_ctx_t *c);
+
+/* Field-op self test: random a,b < N per lane, checks that the SoA
+   add/sub/neg helpers agree with mpz.  Returns the number of failures. */
+int ed_soa_field_selftest(ed_soa_ctx_t *c, int trials);
+
+/* Point-op self test: dbl / add / add_affine each compared against the same
+   formulas evaluated in mpz.  Returns the number of failures. */
+int ed_soa_point_selftest(ed_soa_ctx_t *c, int trials);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* SIMD_EDWARDS_H */
