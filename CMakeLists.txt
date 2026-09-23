@@ -290,6 +290,39 @@ else()
         COMPILE_OPTIONS "-mavx512f;-mavx512dq")
 endif()
 
+# ---------------------------------------------------------------------------
+# simd_mont_gate — M1 gate bench for the AVX512-IFMA batched Montgomery kernel
+# (docs/ECM_EDWARDS_STAGE1.md §13).  src/cpu/simd_mont_ifma.cpp is the ONLY file
+# compiled with /arch:AVX512; the bench TU itself stays at the default baseline
+# and the eventual driver must gate every call on runtime CPUID detection.
+# ---------------------------------------------------------------------------
+add_executable(simd_mont_gate
+    tools/bench/simd_mont_gate.cpp
+    src/cpu/simd_mont_ifma.cpp
+)
+
+target_include_directories(simd_mont_gate PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/cpu
+)
+
+ecm_target_link_gmp(simd_mont_gate)
+
+# ecm_edwards_mont.h carries Chinese comments in UTF-8; without /utf-8 MSVC
+# decodes it as CP936 and the preprocessor trips over the comment bytes.
+if(MSVC)
+    target_compile_options(simd_mont_gate PRIVATE /utf-8)
+endif()
+
+if(MSVC)
+    set_source_files_properties(src/cpu/simd_mont_ifma.cpp PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX512")
+else()
+    set_source_files_properties(src/cpu/simd_mont_ifma.cpp PROPERTIES
+        COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
+endif()
+
 add_executable(opencl_ecm_montsqr
     src/opencl_ecm_montsqr_bench.cpp
 )
