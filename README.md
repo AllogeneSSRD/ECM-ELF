@@ -21,6 +21,7 @@
 |------|------|
 | [Quick Start 快速开始](#quick-start-快速开始) | 最短路径：构建 → `ecm` → 微基准 |
 | [命令行选项](#命令行选项) | 命令行选项 |
+| [CPU stage-1 教程](#cpu-stage-1-教程edwardsatkin-morain与-suyama-montgomery--ecmini-配置) | Edwards / Suyama-Montgomery 两条 CPU 路径与 `ecm.ini` 配置、线程/批数、单线程性能对照（vs GMP-ECM / Prime95）、常见坑 |
 | [从源代码构建 (Windows)](#从源代码构建) | 桌面构建、使用与 OpenCL 能力 |
 | [构建 CUDA 后端](#构建CUDA后端CGBN) | NVIDIA CGBN stage-1 构建与使用 |
 | [Android](#android) | ECM运行、微基准 |
@@ -88,6 +89,18 @@ echo "(2^991-1)" | build_rel\Release\ecm.exe -v --go -gpu -gpucurves 384 1e6 0
 | `-v` | verbose 输出详细信息 |
 | `--mul` / `--sqr` / `--add` / `--sub` / `--special-mult <path>` | 覆盖各算子内核路径（id/别名/auto） |
 | `--showkernel` | 从注册表枚举全部算子（id、别名、文件、支持平台） |
+| `--edwards` | 启用 CPU Edwards stage-1（Atkin-Morain，a=1） |
+| `--edwards-backend <auto\|simd\|gmp>` | `simd` = AVX512-IFMA 8 曲线/批（缺 ISA 时直接报错），`gmp` = 标量 |
+| `--edwards-mersenne <auto\|on\|off>` | 归约域：`on` 强制 Mersenne 折叠（需 `N = 2^k-1`），**`off` 强制蒙哥马利归约** |
+| `--edwards-threads <n>` / `--edwards-naf-w <w>` | Edwards 工作线程（0=auto）与 NAF 窗口（默认 12） |
+| `--mont` | 启用 CPU Suyama-Montgomery stage-1（gmp-ecm `-param 0` / Prime95 `sigma_type=1` 语义） |
+| `--mont-backend <auto\|simd\|gmp>` / `--mont-threads <n>` | Montgomery 后端（8 曲线/批）与工作线程（0=auto，1=串行） |
+| `--mont-torsion <1\|12>` | 指数 torsion：`1` = gmp-ecm `lcm(1..B1)`（结果可与 gmp-ecm 逐点对齐），`12` = Prime95 `choose12` |
+| `--affinity <list>` | 绑定工作线程到逻辑 CPU（`0,1,2,3`、范围 `0-7`、混合 `0-3,8,10-11`）；混合核机器上请读教程 4.1 |
+
+> 两条 CPU 路径（`--edwards` / `--mont`）互斥，且它们同样使用 `-gpucurves` 指定曲线数；
+> 完整教程（ini 键、线程与批数、存档续跑、常见坑）见
+> [CPU stage-1 教程](#cpu-stage-1-教程edwardsatkin-morain与-suyama-montgomery--ecmini-配置)。
 
 可选: `--go` 计算 Group Order 群阶并分解
 - 安装 [Pari/GP](https://pari.math.u-bordeaux.fr/) ; 将 `gp.exe` 添加到环境变量或指定路径 `--gp <path>` 。
@@ -124,6 +137,217 @@ echo "(2^991-1)" | build_rel\Release\ecm.exe -v --go -gpu -gpucurves 384 1e6 0
 > Android 无命令行：JNI 入口直接写入 `EcmRuntimeConfig`，缺省沿用默认值。
 
 OpenCL 后端骨架说明：[kernels/opencl/README.md](kernels/opencl/README.md)
+
+---
+
+## CPU stage-1 教程：Edwards（Atkin-Morain）与 Suyama-Montgomery + `ecm.ini` 配置
+
+CPU 侧有**两条独立的 stage-1 路径**，它们共享同一个 `ecm.ini`（`ecm.exe` 与 `ecm_cuda.exe` 都用
+`src/core/ecm_queue_config.cpp` 这一份配置），**命令行开关与 ini 键一一对应**。本节是配置教程；
+算法与开发细节见 [docs/ECM_EDWARDS_STAGE1.md](docs/ECM_EDWARDS_STAGE1.md) 与
+[docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md)。
+
+### 1. 先选方法
+
+| 方法 | 命令行 | ini | 曲线族 / 指数 | 何时用 |
+|---|---|---|---|---|
+| GPU（OpenCL） | `-gpu -gpucurves <n>` | （ini 无开关，默认路径） | Montgomery，suite 与 GPU 核一致 | 有 OpenCL 设备时 |
+| **CPU Edwards** | `--edwards` | `edwards = 1` | Atkin-Morain（twisted Edwards，a=1）；指数与 PrMers/Prime95 同源 | 想在 CPU 上跑、且要 Edwards 语义 |
+| **CPU Suyama-Montgomery** | `--mont` | `mont = 1` | Suyama-σ（Prime95 `sigma_type=1` / gmp-ecm `-param 0`） | **要与 gmp-ecm param0 结果逐点对齐**、或需要 σ 64 位 |
+
+> 两条 CPU 路径**互斥**：命令行上 `--mont` 优先（同时给两个开关时 Edwards 被忽略）；ini 里
+> `mont = 1` 会直接关掉 Edwards，避免同一任务跑两遍。
+
+### 2. 关键 ini 键（CPU 路径）
+
+| ini 键 | 取值 | 默认 | 说明 |
+|---|---|---|---|
+| `edwards` | 0 / 1 | `0` | 启用 CPU Edwards stage-1 |
+| `edwards_backend` | `auto` / `simd` / `gmp` | `auto` | `simd` = AVX512-IFMA 8 曲线/批；`gmp` = 标量 mpn（1 曲线/任务）。`simd` 在缺 AVX512-IFMA 的机器上会**直接报错**，`auto` 会自动回退 |
+| `edwards_mersenne` | `auto` / `on` / `off` | `auto` | **归约域**：`on` = 强制 Mersenne 折叠（要求 `N = 2^k-1`，否则报错）；**`off` = 强制蒙哥马利归约（即"Edwards mont 模式"）**；`auto` = `N = 2^k-1` 时折叠、否则蒙哥马利 |
+| `edwards_threads` | `0` = auto，`1` = 串行，`n` | `0` | Edwards 工作线程；被"批数"夹住（见第 4 节） |
+| `edwards_naf_w` | 3..12 | `0`（=12） | NAF 窗口；字典大小 `2^(w-2)` |
+| `mont` | 0 / 1 | `0` | 启用 CPU Suyama-Montgomery stage-1 |
+| `mont_backend` | `auto` / `simd` / `gmp` | `auto` | 同 `edwards_backend`；`simd` 为 8 曲线/批 |
+| `mont_torsion` | 1 / 12 | `1` | 指数 torsion：**1 = gmp-ecm `-param 0`（`lcm(1..B1)`）**，12 = Prime95 `choose12`（`12·lcm`）|
+| `mont_threads` | `0` = auto | `0` | Montgomery 工作线程；一个任务 = 一个 8 曲线批（`gmp` 后端则 1 曲线）|
+| `mont_save_pattern` | 名称模板 | `m{n}_{b1}.save` | 留空则跟随 `save_name_pattern` |
+| `sigma` | 0 = 随机 | `0` | 固定 σ 时从该值起递增：第 i 条曲线用 `sigma + i`（64 位）|
+| `affinity` | `""` / `1,3,5,7` / `0-7` | `""` | 工作线程 `t` 绑定到列表中的 `cpu[t % len]`；支持范围与混合列表。**本机实测不绑定最快（SMT 兄弟勿同用）**，见 4.1 |
+| `tmp_dir` | 目录 | `.` | 本地 stage-1 存档目录 |
+| `save_name_pattern` | `m{n}_{b1}.save` | 同左 | 读取侧据此从文件名反推 B1（`m8237_110e6.save` → B1=`110e6`）|
+| `worktodo` / `finished` / `log_file` | 路径 | `worktodo.txt` / `worktodo.finished.txt` / `screen.log` | 队列模式输入、成功项、带时间戳日志 |
+
+### 3. 配方：四个可直接抄的 `ecm.ini`
+
+**(a) GIMPS 风格 Suyama-Montgomery（推荐默认）** —— 与 gmp-ecm `-param 0` 逐点对齐：
+
+```ini
+mont = 1
+mont_backend = simd
+mont_torsion = 1
+mont_threads = 0            # auto = min(批数, 核数)
+tmp_dir = saves
+save_name_pattern = m{n}_{b1}.save
+```
+
+**(b) Prime95 `choose12` 语义**（指数为 `12·lcm(1..B1)`，用于与 Prime95/PrMers 对齐）：
+
+```ini
+mont = 1
+mont_torsion = 12
+```
+
+**(c) Edwards + Mersenne 折叠（`N = 2^k-1` 时最快）**：
+
+```ini
+edwards = 1
+edwards_backend = simd
+edwards_mersenne = auto      # N = 2^k-1 ⇒ 折叠域，模乘 madds 减半
+edwards_threads = 0
+edwards_naf_w = 12
+```
+
+**(d) Edwards 强制蒙哥马利归约（"mont 模式"）** —— 三种典型用途：
+
+```ini
+edwards = 1
+edwards_backend = simd
+edwards_mersenne = off       # 强制 Montgomery CIOS，无论 N 是否 2^k-1
+```
+
+| 用途 | 说明 |
+|---|---|
+| `N` 不是 `2^k-1` | 例如 `(2^k-1)/f` 这类已被部分分解的 N：折叠域不适用（`2^k ≢ 1`），必须蒙哥马利归约 |
+| A/B 基准对照 | 与折叠域跑同一条曲线，量化"C2 对称平方 + 折叠"到底省了多少（`docs/ECM_EDWARDS_STAGE1.md` §13 的闸门用同一个开关）|
+| 正确性交叉验证 | 一条曲线的结果应与折叠域**逐点相同**（只是归约方式不同），可用来抓归约内核的 bug |
+
+> 代价：蒙哥马利 CIOS 下每次模乘约 `n(4n+3)` 条 madd（折叠域是 `2n²`，且平方只要 `n(n−1)+2n`），
+> 位宽越大差距越明显 ⇒ 能用折叠域就别用 `off`。
+
+### 4. 线程与"批数"：为什么线程数常常跑不满
+
+SIMD 路径**一次算 8 条曲线**（8 lane SoA，整批共享同一个指数），所以并行度上界是
+`ceil(曲线数/8)`，不是核数：
+
+- `edwards_threads = 0` / `mont_threads = 0` ⇒ 自动取 `min(任务数, 核数)`；
+- 想要 16 个核都忙，`-gpucurves` 至少给到 `8 × 16 = 128`；
+- 启动日志会如实打印，例如：
+  ```
+  stage1 threads  : 8 worker(s) x 8 task(s) of 8 curves
+  work split      : 16 batch(es) of 8 curves -> 8 thread(s) busy (8 requested)
+  ```
+- `--mont-backend gmp`（标量）时 1 曲线 = 1 任务，线程数上界就是曲线数。
+
+#### 4.1 混合核 / 大小核机器：SMT 与亲核性（本机实测，**不要绑定**）
+
+`--affinity <list>`（或 ini `affinity`）把 worker `t` 绑到 `list[t % len]`，语法支持
+`0,1,2,3`、范围 `0-7`、混合 `0-3,8,10-11`。但在 **Ryzen AI 9 HX 370**（4×Zen5 大核 + 8×Zen5c 小核，
+**两组都开 SMT**，共 24 逻辑核）上实测结论是**留空最好**：
+
+| 配置（M3001，B1=1e5，SIMD，每线程 1 批） | 吞吐倍数（vs 单核独占）|
+|---|---|
+| 大核 **2 / 4 个不同物理核** `0,2` / `1,3,5,7` | **2.00× / 3.99×**（线性）|
+| 大核 + SMT 兄弟 `0,1` | 1.11× |
+| 小核 **2 个不同物理核** `8,10` | 1.38×（簇级掉速）|
+| 小核 + SMT 兄弟 `8,9` | 1.11×（同簇同占用下 SMT 是 **+6%**，见下）|
+| 绑定全部 24 逻辑核（小核簇全满 + SMT）24 线程 | **5.85×** ❌ |
+| **不绑定** 16 线程 | **8.46×** ← 效率甜点 |
+| **不绑定** 24 线程 | **9.01×** ← 吞吐上限 |
+
+- **SMT 兄弟 = 相邻编号**：`0,1` 同核、`0,2` 不同核；小核同理（`8,9` 同核、`8,10` 不同核）。
+- **SMT 是"最后资源"**：大核 SMT 稳定 **+10~11%**；小核 SMT 在簇未满时 **+6~8%**，
+  但整簇占满（16 线程）时 **−19%**。⇒ **先填满物理核，再考虑 SMT 兄弟**。
+- **小核簇怕并发**：小核单独跑与大核同速，但只要有 ≥2 线程并发，整簇每核效率掉到 71%（2 线程）→55%（8 线程）。
+- **不绑定 ≠ 放弃优化**：调度器按"物理核优先、SMT 殿后"排布，比任何固定列表都好；
+  手工钉满 24 逻辑核反而强开小核 SMT + 压满大核，吞吐 −35%。只有需要**给别的程序留核**时才手工绑定。
+- `affinity` 的实际取值会打印在启动日志里，便于核对：
+  ```
+  affinity        : 0,1,2,3,4,5,6,7 (worker t -> cpu[0,1,2,3,4,5,6,7][t % 8])
+  ```
+
+#### 4.2 并行效率不是核数（核间不均匀 + 小核簇掉速）
+
+同机实测（M3001，B1=1e5，SIMD，每批 8 曲线，单核独占每批 ≈3.07 s）：
+**4 个不同大核 3.99×（100%）**、8 线程不绑定 **5.26×**、12 线程 **6.94×**、
+16 线程 **8.46×**、24 线程 **9.01×**。即吞吐天花板 ≈ 单核的 9 倍，而不是 24 倍。
+估算总吞吐请按 **~9×（24 线程）或 ~8.5×（16 线程）** 折算；4 线程跑大核是性价比最高的配置（100% 效率）。
+
+#### 4.3 单线程性能对照（M4001 = 2^4001−1，同为 Suyama/Montgomery 曲线，stage 1 only）
+
+| B1 | 本实现（SIMD 8 lane / 1 线程） | GMP-ECM 7.0.6（1 线程） | Prime95 v31（1 worker） |
+|---|---|---|---|
+| 1e5 | **0.60 s/曲线** | 1.79 s | 0.67 s |
+| 1e6 | **6.26 s/曲线** | 15.0 s | 6.72 s |
+| 2e6 | **13.46 s/曲线** | ~30 s | 13.44 s |
+| 1e7 | ~63–67 s（外推）| ~150 s（外推）| **67.2 s（实测）** |
+
+- **单线程：与 Prime95 持平**（B1=2e6 处 13.455 vs 13.44 s，差 0.1%）；**比 GMP-ECM 快 2.2~3.0×**。
+  Prime95 用 GWNUM FFT + PRAC 链，我们用 AVX512-IFMA + 8 lane 批 + 折叠域 + 仿射差分 ladder。
+- **多线程**：本实现不绑定可达 8.46×（16 线程）/9.01×（24 线程）；Prime95 `NumWorkers=1` 时只吃 1 个物理核。
+- **交叉点（B1=1e6，单线程，每曲线秒）**：M127 **0.118** / M521 **0.371** / M1277 **0.98** / M2203 **2.29**
+  / M3001 **4.14**（Prime95 实测 5.65）/ M3500 **5.16** / M4001 **6.29**。Prime95 按 FFT 长度分档
+  （128/256/384/512/…，档位起点 2/2905/5755/8527/…），**档内成本与位宽无关**，我们则按 ≈n^1.66 上升
+  ⇒ **两个交叉点：≈2880 bit 与 ≈3760 bit**；≤2880 bit 我们优势成倍（M127 约 33×、M1277 约 3.9×），
+  **≳6000 bit 交给 Prime95**（384 档起它领先并逐档扩大，19701 bit 处约 6×）。GMP-ECM 无交叉点（全程慢 2.3~2.6×）。
+- **实用判据**：**≲3700 bit 的 N 用本实现最划算**（2000 bit 以下优势成倍到数十倍），**≳6000 bit 用 Prime95（GWNUM FFT）**。
+- 完整条件、命令与复现见 [docs/ECM_Montgomery_STAGE1.md §14](docs/ECM_Montgomery_STAGE1.md)。
+
+### 5. 存档与续跑
+
+- **一个任务一个共享存档**：同一 `(N, B1)` 的所有曲线写进同一个 `m{n}_{b1}.save`，每行一条曲线，
+  行内字段自包含（`METHOD=ECM; SIGMA=<64 位十进制>; B1=…; N=…; X=0x…; CHECKSUM=…;`）。
+  `{n}` = `N = 2^k-1` 时的 Mersenne 指数 `k`，否则 `N` 的位长；`{b1}` 为紧凑写法（`1e5`、`110e6`）。
+- `ecm -resume` 需要**位置参数 B1/B2**（否则报 `Invalid arguments`）：
+  ```
+  ecm.exe -resume saves\m3001_1e5.save 100000 50000
+  ```
+- 队列模式：逐行处理 `worktodo.txt`，成功追加到 `worktodo.finished.txt` 并从队列移除；
+  出错的行就地改写为 `# ERROR <原行>`。
+
+### 6. 常见坑
+
+| 现象 | 原因 / 处理 |
+|---|---|
+| `ERROR: … simd requested but this CPU lacks AVX512-F/DQ/IFMA` | `*_backend = simd` 是硬要求；改 `auto`（自动回退标量）或 `gmp` |
+| 曲线数 < 2 时 SIMD 没生效 | `auto` 需要至少 2 条曲线才走批路径；显式 `simd` 会强制 |
+| 线程数设了却只有一个线程在跑 | 批数上界（见第 4 节）：`-gpucurves` 给得太少 |
+| `edwards_mersenne = on` 直接报错 | 折叠域要求 `N = 2^k-1`；改用 `auto`/`off` |
+| `mont = 1` 后 Edwards 设置全部无效 | 两条 CPU 路径互斥，属预期 |
+| 多进程同时跑同一 `(N, B1)` | 它们会**追加到同一个 `.save`**；请用不同 `tmp_dir`，或让任务粒度覆盖全部曲线 |
+| σ 想复现某条曲线 | `sigma = <值>` 后第 i 条曲线是 `sigma + i`（64 位；gmp-ecm 自动 σ 也超过 32 位）|
+| `affinity = 0-7` 反而慢了 20%+ | 该机上 `0-7` 是 **4 个物理核**的 SMT 兄弟（兄弟为相邻编号）⇒ 8 worker 变成 2 路 SMT。不要绑，或改列不同物理核（如 `1,3,5,7`）|
+| 绑满 24 逻辑核后变慢 35% | 绑定强制小核簇整簇开 SMT 并被压满（簇占满时 SMT −19%、小核每核效率降到 55%）；不绑定让调度器"物理核优先、SMT 殿后"，吞吐从 5.85× 升到 9.01× |
+| `affinity` 里写了非法项 | 现在会打印 `Affinity: ignoring invalid entry '…'` 并忽略该项（旧版本会把 `0-7` 静默解析成 `0`，把全部线程钉到 CPU 0）|
+
+### 7. 一个完整可跑的例子（队列模式）
+
+```
+myrun\
+  ecm.exe          ← build_vs18\Release\ecm.exe
+  ecm.ini          ← 上面的配方 (a)
+  worktodo.txt
+  saves\
+```
+
+`worktodo.txt`（`N = (k*b^n+c)/(f1*…​)`，`ECM2=` 与 `ECM=` 等价）：
+
+```
+ECM2=1,2,3001,-1,100000,0,64
+```
+
+`ecm.ini`：把配方 (a) 的 `tmp_dir` 改成 `saves`，并确保 `worktodo = worktodo.txt`。
+直接运行 `ecm.exe`（**不带位置参数**即进入队列模式），预期输出：
+
+```
+===== ECM queue manager =====
+method          : montgomery (Suyama sigma, AVX512-IFMA 8-lane batch, torsion=1)
+stage1 exponent : s_bits=144344 (lcm(1..100000) x 1)
+stage1 threads  : 8 worker(s) x 8 task(s) of 8 curves
+  save            : D:\myrun\saves/m3001_1e5.save (64 curve lines, shared)
+  curves=64  hits=0  wall=5.02s  (0.078 s/curve)
+===== queue done, 1 task(s) processed =====
+```
 
 ---
 

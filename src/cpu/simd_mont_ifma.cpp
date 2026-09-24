@@ -475,6 +475,13 @@ static inline __m512i ifma_carry_pass(uint64_t *t, size_t from, size_t to,
 /* shared tail of both fold kernels (defined after ifma_mersenne_mul) */
 static void ifma_mersenne_finish(uint64_t *out, uint64_t *t, const ifma_ctx_t *c,
                                  __m512i init_carry);
+/* Steps 3-5 of that tail (fold the high columns down, drain everything at/above
+   position k, canonicalize), entered with the carry out of column 2n-1 in hand.
+   Split out because the square kernel normalizes its columns *and* knows that
+   carry already: it does the doubling, the diagonal and the normalization in one
+   pass, so it must not pay the tail's normalize pass a second time. */
+static void ifma_mersenne_fold_top(uint64_t *out, uint64_t *t, const ifma_ctx_t *c,
+                                   __m512i top);
 
 static void ifma_mersenne_mul(uint64_t *out, const uint64_t *a, const uint64_t *b,
                               const ifma_ctx_t *c)
@@ -553,13 +560,20 @@ static void ifma_mersenne_mul(uint64_t *out, const uint64_t *a, const uint64_t *
 static void ifma_mersenne_finish(uint64_t *out, uint64_t *t, const ifma_ctx_t *c,
                                  __m512i init_carry)
 {
+    const __m512i mask = _mm512_set1_epi64((long long)IFMA_MASK52);
+
+    /* ---- 2. normalize the 2n product columns ---------------------------- */
+    const __m512i top = ifma_carry_pass(t, 0, 2 * c->n, init_carry, mask);
+    ifma_mersenne_fold_top(out, t, c, top);
+}
+
+static void ifma_mersenne_fold_top(uint64_t *out, uint64_t *t, const ifma_ctx_t *c,
+                                   __m512i top)
+{
     const size_t n = c->n;
     const unsigned sh = c->shift;
     const __m512i mask = _mm512_set1_epi64((long long)IFMA_MASK52);
     const __m512i zero = _mm512_setzero_si512();
-
-    /* ---- 2. normalize the 2n product columns ---------------------------- */
-    __m512i top = ifma_carry_pass(t, 0, 2 * n, init_carry, mask);
 
     /* ---- 3. fold the high columns down, highest first ------------------- */
     /* The carry out of column 2n-1 is a digit at column 2n -> columns n, n+1. */
@@ -619,24 +633,29 @@ static void ifma_mersenne_finish(uint64_t *out, uint64_t *t, const ifma_ctx_t *c
         }
     }
 
-    /* ---- 5. canonical: the only value >= N below 2^k is 2^k-1 itself ---- */
+    /* ---- 5. canonical: below 2^k the only representative >= N is 2^k-1 = N ----
+       That value's 52-bit limbs are exactly the all-ones pattern that the broadcast
+       modulus holds (limb j = 2^52-1 for j < n-1, top limb = 2^(52-sh)-1), so
+       canonicalization is a limb-wise equality test against N: lanes where EVERY
+       limb matches hold the value N and must become 0.  The old form subtracted N
+       over the whole array and selected afterwards -- two passes plus a serial
+       borrow chain, 133 ns/batch at n52=58 (34% of the whole tail).  The fixup pass
+       below only runs for lanes that really hit the pattern, which in practice is
+       never. */
     {
-        __m512i borrow = zero;
+        __mmask8 is_N = 0xFF;                        /* per lane: all limbs == N */
         for (size_t k = 0; k < n; k++) {
-            const __m512i rk = _mm512_load_si512((const __m512i *)(t + 8 * k));
-            const __m512i nk = _mm512_load_si512((const __m512i *)(c->nb + 8 * k));
-            const __m512i d = _mm512_sub_epi64(_mm512_sub_epi64(rk, nk), borrow);
-            borrow = _mm512_maskz_set1_epi64(_mm512_movepi64_mask(d), 1);
-            _mm512_store_si512((__m512i *)(out + 8 * k), d);
+            const __m512i v = _mm512_load_si512((const __m512i *)(t + 8 * k));
+            is_N = (__mmask8)(is_N & _mm512_cmpeq_epi64_mask(
+                        v, _mm512_load_si512((const __m512i *)(c->nb + 8 * k))));
+            _mm512_store_si512((__m512i *)(out + 8 * k), v);
         }
-        /* borrow is 0/1 per lane (not a mask): 1 means r < N, so N is subtracted
-           exactly where the final borrow is 0.  mask_blend takes b where set. */
-        const __mmask8 need_sub = _mm512_cmpeq_epi64_mask(borrow, zero);
-        for (size_t k = 0; k < n; k++) {
-            const __m512i orig = _mm512_load_si512((const __m512i *)(t + 8 * k));
-            const __m512i sub = _mm512_load_si512((const __m512i *)(out + 8 * k));
-            _mm512_store_si512((__m512i *)(out + 8 * k),
-                               _mm512_mask_blend_epi64(need_sub, orig, sub));
+        if (is_N != 0) {                             /* rare: value === N */
+            const __mmask8 keep = (__mmask8)(~is_N);
+            for (size_t k = 0; k < n; k++)
+                _mm512_store_si512((__m512i *)(out + 8 * k),
+                    _mm512_maskz_mov_epi64(keep,
+                        _mm512_load_si512((const __m512i *)(t + 8 * k))));
         }
     }
 }
@@ -705,25 +724,39 @@ static void ifma_mersenne_sqr(uint64_t *out, const uint64_t *a, const ifma_ctx_t
             _mm512_add_epi64(_mm512_load_si512((const __m512i *)(t + 8 * (i + 1 + n))), h1));
     }
 
-    /* ---- double the off-diagonal part ----------------------------------- */
+    /* ---- double the off-diagonal part, add the diagonal, normalize -------
+       One pass instead of three.  The doubling must not touch the diagonal, so the
+       diagonal is added per column here rather than in a separate loop: column 2q
+       takes lo(a_q^2) and column 2q+1 takes hi(a_q^2), and both are known before
+       the column is reached (a_q sits at index q <= k/2).  Because the pass also
+       normalizes, the carry chain ends with the carry out of column 2n-1 -- i.e.
+       exactly the `top` digit the tail wants -- so ifma_mersenne_fold_top() is
+       called directly and the tail's own normalize pass is skipped.
+
+       Bounds: t[k] holds at most ~n/2 accumulated lo parts (< 2^57 at n52=58), so
+       2*t[k] + carry + a_q^2 part stays below 2^58 and the 64-bit add cannot wrap.
+       Unrolled by two columns to keep the lo/hi selection out of the loop body;
+       2n is even, so there is no tail. */
     __m512i cy = zero;
-    for (size_t k = 0; k < 2 * n; k++) {
-        const __m512i v = _mm512_add_epi64(
-            _mm512_slli_epi64(_mm512_load_si512((const __m512i *)(t + 8 * k)), 1), cy);
-        cy = _mm512_srli_epi64(v, 52);
-        _mm512_store_si512((__m512i *)(t + 8 * k), _mm512_and_si512(v, mask));
+    for (size_t k = 0; k < 2 * n; k += 2) {
+        const __m512i aq = _mm512_load_si512((const __m512i *)(a + 8 * (k >> 1)));
+        const __m512i sq_lo = _mm512_madd52lo_epu64(zero, aq, aq);
+        const __m512i sq_hi = _mm512_madd52hi_epu64(zero, aq, aq);
+        {   /* column k: 2*t[k] + carry + lo(a_q^2) */
+            const __m512i v = _mm512_add_epi64(_mm512_add_epi64(
+                _mm512_slli_epi64(_mm512_load_si512((const __m512i *)(t + 8 * k)), 1), cy), sq_lo);
+            cy = _mm512_srli_epi64(v, 52);
+            _mm512_store_si512((__m512i *)(t + 8 * k), _mm512_and_si512(v, mask));
+        }
+        {   /* column k+1: 2*t[k+1] + carry + hi(a_q^2) */
+            const __m512i v = _mm512_add_epi64(_mm512_add_epi64(
+                _mm512_slli_epi64(_mm512_load_si512((const __m512i *)(t + 8 * (k + 1))), 1), cy), sq_hi);
+            cy = _mm512_srli_epi64(v, 52);
+            _mm512_store_si512((__m512i *)(t + 8 * (k + 1)), _mm512_and_si512(v, mask));
+        }
     }
 
-    /* ---- add the diagonal a_i^2 (after the doubling!) ------------------- */
-    for (size_t q = 0; q < n; q++) {
-        const __m512i aq = _mm512_load_si512((const __m512i *)(a + 8 * q));
-        _mm512_store_si512((__m512i *)(t + 8 * (2 * q)),
-            _mm512_madd52lo_epu64(_mm512_load_si512((const __m512i *)(t + 8 * (2 * q))), aq, aq));
-        _mm512_store_si512((__m512i *)(t + 8 * (2 * q + 1)),
-            _mm512_madd52hi_epu64(_mm512_load_si512((const __m512i *)(t + 8 * (2 * q + 1))), aq, aq));
-    }
-
-    ifma_mersenne_finish(out, t, c, cy);
+    ifma_mersenne_fold_top(out, t, c, cy);
 }
 
 void ifma_mont_sqr(uint64_t *out, const uint64_t *a, const ifma_ctx_t *c)

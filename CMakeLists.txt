@@ -558,6 +558,10 @@ if(ECM_ENABLE_CUDA)
         # above are per-source-file (directory scoped) and so apply here too.
         src/cpu/simd_edwards.cpp
         src/cpu/simd_mont_ifma.cpp
+        # ecm_driver.cpp also dispatches the Suyama-sigma Montgomery stage-1 path
+        # (--mont / ini mont=1), so both of its TUs are needed here as well.
+        src/cpu/ecm_mont_cpu.cpp
+        src/cpu/simd_mont_curve.cpp
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu

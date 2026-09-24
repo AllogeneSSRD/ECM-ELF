@@ -725,6 +725,10 @@ static void print_ecm_usage(const char *prog) {
               << "  --mont-torsion <t>   1 = gmp-ecm lcm(1..B1) (default), 12 = Prime95 choose12\n"
               << "  --mont-threads <n>   Montgomery worker threads (0=auto, 1=serial); a thread\n"
               << "                       carries one task = one 8-curve SIMD batch (or 1 curve)\n"
+              << "  --affinity <list>    Pin worker t to logical CPU list[t %% len], e.g. 0,1,2,3\n"
+              << "                       or 0-7.  On hybrid CPUs (Zen5 + Zen5c, P+E cores, ...)\n"
+              << "                       this keeps the SIMD workers off the slower cores; the\n"
+              << "                       ini key `affinity` sets the same thing in queue mode\n"
               << "  --edwards-threads <n>  Edwards stage-1 worker threads (0=auto, 1=serial)\n"
             << "  --edwards-backend <m>  auto|simd|gmp (batch 8 curves via AVX512-IFMA;\n"
             << "                         simd forces it and errors out if the CPU lacks it)\n"
@@ -1641,24 +1645,45 @@ static std::vector<unsigned> parse_affinity_spec(const std::string &spec) {
     std::string s;
     for (char ch : spec) if (ch != ' ' && ch != '\t' && ch != '"') s.push_back(ch);
     if (s.empty() || s == "none" || s == "auto") return out;
+
+    /* One index, strictly: "12" ok, "0-7" / "1x" / "" rejected.  The old version
+       used plain std::stol(), which happily parses "0-7" as 0 and silently pinned
+       every worker to CPU 0 -- a 5.5x slowdown that looks like a hardware problem. */
+    auto one = [](const std::string &t, long *v) -> bool {
+        if (t.empty()) return false;
+        size_t used = 0;
+        try { *v = std::stol(t, &used); } catch (...) { return false; }
+        return used == t.size();
+    };
+
     size_t pos = 0;
     while (pos <= s.size()) {
         const size_t comma = s.find(',', pos);
         const std::string tok = s.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
         if (!tok.empty()) {
-            try {
-                const long v = std::stol(tok);
-                if (v < 0 || v > 1023) {
-                    std::cerr << "Affinity: CPU index out of range: " << tok << std::endl;
-                } else {
-                    out.push_back((unsigned)v);
-                }
-            } catch (...) {
-                std::cerr << "Affinity: ignoring non-numeric entry: " << tok << std::endl;
+            const size_t dash = tok.find('-');
+            long lo = 0, hi = 0;
+            bool ok;
+            if (dash == std::string::npos) {                 /* single index */
+                ok = one(tok, &lo);
+                hi = lo;
+            } else {                                          /* inclusive range a-b */
+                ok = one(tok.substr(0, dash), &lo) && one(tok.substr(dash + 1), &hi) && hi >= lo;
+            }
+            if (!ok || lo < 0 || hi > 1023) {
+                std::cerr << "Affinity: ignoring invalid entry '" << tok
+                          << "' (expected <cpu>, <lo>-<hi>, or a comma separated list)"
+                          << std::endl;
+            } else {
+                for (long v = lo; v <= hi; v++) out.push_back((unsigned)v);
             }
         }
         if (comma == std::string::npos) break;
         pos = comma + 1;
+    }
+    if (out.size() > 1024) {
+        std::cerr << "Affinity: list too long, ignoring it" << std::endl;
+        out.clear();
     }
     return out;
 }
@@ -2078,6 +2103,15 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     if (nthreads < 1) nthreads = 1;
     ecm_ts_fprintf(stdout, "stage1 threads  : %u worker(s) x %u task(s) of %s\n",
                    nthreads, tasks, use_simd ? "8 curves" : "1 curve");
+    if (!opt.affinity_cpus.empty()) {
+        std::string a;
+        for (size_t i = 0; i < opt.affinity_cpus.size(); i++) {
+            if (i) a += ",";
+            a += std::to_string(opt.affinity_cpus[i]);
+        }
+        ecm_ts_fprintf(stdout, "affinity        : %s (worker t -> cpu[%s][t %% %zu])\n",
+                       a.c_str(), a.c_str(), opt.affinity_cpus.size());
+    }
     fflush(stdout);
 
     /* The exponent bit array depends only on (B1, torsion) -- not on N, not on sigma
@@ -2733,6 +2767,7 @@ int main(int argc, char **argv){
     int  mont_backend = 0;            // 0=auto 1=simd 2=gmp
     int  mont_torsion = 1;            // 1 = gmp-ecm lcm(1..B1), 12 = Prime95 choose12
     uint32_t mont_threads = 0;        // 0 = auto
+    std::string affinity_spec;        // --affinity, same syntax as the ini key
     uint32_t edwards_threads = 0;
     int edwards_naf_w = 0;
     int edwards_backend = 0;      /* 0=auto 1=simd 2=gmp */
@@ -2780,6 +2815,10 @@ int main(int argc, char **argv){
                 std::cerr << "--mont-torsion must be 1 (gmp-ecm) or 12 (Prime95 choose12)" << std::endl;
                 return 1;
             }
+            continue;
+        }
+        if((a == "--affinity" || a == "--cpu-affinity") && i+1<argc){
+            affinity_spec = argv[++i];
             continue;
         }
         if((a == "--mont-threads" || a == "--montthreads") && i+1<argc){
@@ -3088,6 +3127,7 @@ int main(int argc, char **argv){
     opt.mont_backend = mont_backend;
     opt.mont_torsion = mont_torsion;
     opt.mont_threads = mont_threads;
+    if (!affinity_spec.empty()) opt.affinity_cpus = parse_affinity_spec(affinity_spec);
     opt.edwards_threads = edwards_threads;
     opt.backend = edwards_backend;
     opt.edwards_naf_w = edwards_naf_w;

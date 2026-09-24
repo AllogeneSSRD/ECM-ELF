@@ -127,6 +127,64 @@ OpenCL backend skeleton: [kernels/opencl/README.md](kernels/opencl/README.md)
 
 ---
 
+## CPU stage-1: Edwards vs Suyama-Montgomery (`ecm.ini`) — quick reference
+
+There are **two independent CPU stage-1 paths**, both driven by the same `ecm.ini` (parsed by
+`src/core/ecm_queue_config.cpp`, shared by `ecm.exe` and `ecm_cuda.exe`), and every CLI flag has a
+matching ini key. **The full tutorial (recipes, thread/batch sizing, resume, pitfalls) is written in
+Chinese**: see [CPU stage-1 教程](README.md#cpu-stage-1-教程edwardsatkin-morain与-suyama-montgomery--ecmini-配置).
+
+| Method | CLI | ini | Notes |
+|---|---|---|---|
+| CPU Edwards (Atkin-Morain, a=1) | `--edwards` | `edwards = 1` | `edwards_backend = auto\|simd\|gmp`; `edwards_threads`; `edwards_naf_w` (default 12) |
+| CPU Suyama-Montgomery | `--mont` | `mont = 1` | `mont_backend = auto\|simd\|gmp`; `mont_threads`; `mont_torsion = 1\|12` (`1` = gmp-ecm `-param 0` result alignment, `12` = Prime95 choose12) |
+
+The two paths are mutually exclusive (`--mont` wins on the command line; `mont = 1` disables Edwards in the ini).
+
+| ini key | Values | Default | Meaning |
+|---|---|---|---|
+| `edwards_mersenne` | `auto` / `on` / `off` | `auto` | Reduction domain. `on` = force the Mersenne fold (`N = 2^k-1` required, else error); **`off` = force Montgomery reduction ("Edwards mont mode")**, the right choice when `N` is not `2^k-1` (e.g. `(2^k-1)/f`) or for A/B benchmarking the fold kernel; `auto` picks the fold for `N = 2^k-1` |
+| `edwards_threads` / `mont_threads` | `0` = auto, `1` = serial, `n` | `0` | Worker threads, clamped by the number of *tasks*: one SIMD task is 8 curves, so filling 16 cores needs ≥ 128 curves (`-gpucurves`) |
+| `mont_save_pattern` / `save_name_pattern` | name template | `m{n}_{b1}.save` | One shared save file per `(N, B1)`; `{n}` = Mersenne exponent for `N = 2^k-1`, else the bit length; `{b1}` compact (`1e5`, `110e6`) |
+| `sigma` | `0` = random | `0` | Fixed sigma: curve *i* uses `sigma + i` (64-bit sigma, like gmp-ecm) |
+| `affinity` | `""` / `1,3,5,7` / `0-7` / `0-3,8,10-11` | `""` | Pin worker *t* to `list[t % len]`; the CLI equivalent is `--affinity <list>`. Measured on the HX 370 test box (4 Zen5 + 8 Zen5c cores, **SMT on both**): **leave it unset**. SMT siblings are numbered adjacently and are a *last resort* (big cores +10~11%; small cores +6~8% while the Zen5c cluster has headroom, **-19%** once all 8 small physical cores are loaded). Pinning all 24 logical CPUs drops throughput from 9.01x to 5.85x |
+| `tmp_dir` / `worktodo` / `finished` / `log_file` | paths | `.` / `worktodo.txt` / `worktodo.finished.txt` / `screen.log` | Local saves, queue input, completed tasks, timestamped append-only log |
+
+Single-thread stage-1 on **M4001 = 2^4001-1** (Suyama/Montgomery curves, stage 1 only), seconds/curve:
+
+| B1 | this implementation (SIMD, 1 thread) | GMP-ECM 7.0.6 (1 thread) | Prime95 v31 (1 worker) |
+|---|---|---|---|
+| 1e5 | **0.60** | 1.79 | 0.67 |
+| 1e6 | **6.26** | 15.0 | 6.72 |
+| 2e6 | **13.46** | ~30 | 13.44 |
+| 1e7 | ~63-67 (extrapolated) | ~150 (extrapolated) | **67.2 (measured)** |
+
+On one core we are **on par with Prime95** (13.455 vs 13.44 s at B1=2e6) and **2.2-3.0x faster than
+GMP-ECM**; Prime95's edge is GWNUM FFT + PRAC chains, ours is AVX512-IFMA 8-lane batching + the
+Mersenne fold domain + an affine-difference ladder. Multi-threaded we add 8.46x (16 threads) /
+9.01x (24 threads) on top.
+
+**Crossover (B1=1e6, one thread, seconds/curve)**: M127 **0.118**, M521 **0.371**, M1277 **0.98**,
+M2203 **2.29**, M3001 **4.14** (Prime95 measured 5.65), M3500 **5.16**, M4001 **6.29**. Prime95 picks
+its FFT length in steps (128/256/384/512/..., thresholds 2/2905/5755/8527/...), so its cost is **flat
+in the number size inside one bracket**, while ours grows like n^1.66. That yields **two crossings:
+about 2880 and 3760 bits** - we win by a factor at 2880 bits and below (33x at M127, 3.9x at M1277),
+and **above ~6000 bits Prime95 wins and widens its lead with every FFT step** (~6x at 19701 bits).
+GMP-ECM never crosses: 2.3-2.6x slower throughout. Rule of thumb: **use this implementation below
+~3700-bit N, hand ~6000-bit and larger N to Prime95**. Details: docs/ECM_Montgomery_STAGE1.md §14.
+
+Parallel efficiency is not the core count: on the same box, 4 distinct big cores give 3.99x (linear),
+while unbound 16 / 24 threads give **8.46x / 9.01x** (vs a single core). Budget total throughput at
+~9x, not 24x. The Zen5c cluster also degrades as soon as 2+ threads run on it (per-core efficiency
+0.326 -> 0.230 -> 0.180 batches/s from 1 -> 2 -> 8 cores), which is why the OS scheduler beats any
+hand-written affinity list.
+
+Cost of forcing `edwards_mersenne = off`: Montgomery CIOS costs about `n(4n+3)` madds per modular
+multiplication against the fold domain's `2n^2` (with squarings at `n(n-1)+2n`), so prefer the fold
+whenever `N = 2^k-1`.
+
+---
+
 ## Building from source
 
 ### Dependencies
