@@ -48,6 +48,35 @@ int mont_soa_stage1(mont_soa_ctx_t *c, const mpz_t s, const uint64_t sigmas[IFMA
 int mont_soa_stage1_bits(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
                          const uint64_t sigmas[IFMA_LANES], mpz_t *out_x, mpz_t *out_gcd);
 
+/* ---------------------------------------------------------------------------
+ * Interruptible batch (mid-stage-1 checkpoints, docs/ECM_Montgomery_STAGE1.md §17).
+ *
+ * Every lane walks the SAME exponent bits in lockstep, so one bit offset
+ * describes the whole batch: a paused batch resumes with start_bit and the
+ * per-lane p0/p1 pair.  State layout (a caller-allocated buffer of
+ * mont_soa_state_words() uint64_t, lane-SoA like every other field element):
+ *
+ *     word  0 * lw : X0     p0 = [k]P      (lw = 8*n)
+ *     word  1 * lw : Z0
+ *     word  2 * lw : X1     p1 = [k+1]P
+ *     word  3 * lw : Z1
+ *
+ * on return MONT_SOA_PAUSED the buffer holds the state at *out_bitnum.
+ * Returns MONT_SOA_DONE / MONT_SOA_PAUSED / MONT_SOA_ERROR. */
+typedef int (*mont_soa_progress_fn)(void *ctx, size_t bitnum);
+
+#define MONT_SOA_DONE   0
+#define MONT_SOA_PAUSED 1
+#define MONT_SOA_ERROR  (-1)
+
+size_t mont_soa_state_words(const mont_soa_ctx_t *c);
+
+int mont_soa_stage1_bits_ex(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
+                            const uint64_t sigmas[IFMA_LANES],
+                            size_t start_bit, uint64_t *state, size_t *out_bitnum,
+                            mpz_t *out_x, mpz_t *out_gcd,
+                            mont_soa_progress_fn cb, void *cb_ctx, size_t chunk_bits);
+
 /* Field ops per point operation (reporting / cost accounting). */
 void mont_soa_op_counts(uint64_t *muls_per_bit_x1000);
 

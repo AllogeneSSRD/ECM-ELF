@@ -120,6 +120,13 @@ typedef struct
   int gpu_device_init; /* Is the device initialized?*/
   unsigned int gpu_number_of_curves; 
   unsigned long gpu_checkpoint_interval_ms;
+  /* Curve parametrization of the GPU stage-1 path (ini: gpu_param, CLI: --gpu-param):
+       3 = gmp-ecm batch parametrization (P=(2:1), d = sigma/2^32) -- the historical
+           GPU path, save file carries PARAM=3;
+       0 = Suyama (Prime95 sigma_type=1 / gmp-ecm -param 0): same curves as the CPU
+           path, full-width a24, save file carries no PARAM (param0 form).
+     Defaults to 3 so that an ini without the key behaves exactly as before. */
+  int gpu_param;
   char gpu_mul_path[48];
   char gpu_sqr_path[48];
   char gpu_add_path[32];

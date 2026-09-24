@@ -10,7 +10,7 @@
 | `B1` `B2` 位置参数 | **B1** / **B2** |
 | `-d index` | **设备序号** |
 | `-v` | **详细输出** 勾选 |
-| `-gpuckpt sec` | 高级 → **checkpoint 秒**（0=禁用） |
+| `--ckpt sec` | 高级 → **checkpoint 秒**（0=禁用） |
 | `-sigma value` | 高级 → **sigma**（空=随机） |
 | `--mul/--sqr/--add/--sub` | 高级 → 内核路径（可选） |
 

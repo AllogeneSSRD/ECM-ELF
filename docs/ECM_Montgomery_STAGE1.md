@@ -45,7 +45,10 @@ s = lcm(1..B1) = ∏_{q ≤ B1} q^⌊log_q B1⌋
 - 多条曲线 = 多次尝试（`#E(F_p)` 光滑是概率事件）；
 - 曲线带**大挠子群**（torsion）时，`#E(F_p)` 总是那个挠子群的倍数，等价于"白送"一个小的光滑因子，
   于是有效除子 `D_eff` 更大、成功率更高。Suyama σ 参数化给 **Z/12**（D≈22.97），
-  而 GMP-ECM **param3** 只有 Z/4（D≈7.6）⇒ 成功率大约 3×。这就是本次要做 Suyama 的原因。
+  而 GMP-ECM **param3** 只有 Z/4（D≈7.6）⇒ **有效除子 D 大约 3×**。这就是本次要做 Suyama 的原因。
+  ⚠ 注意这个 ≈3× 是 **D 的比值，不是成功率比值**：成功率 = ρ(log(p/D)/log B1)，D 只以 "log D / log B1"
+  的形式进入，所以比值会小很多，且随位宽/B1 变化。B1=256 实测（bit 15–40，见 §19.5 表）
+  单曲线成功率只有 **1.30×–1.8×**（bit20：30.47% vs 21.64% = 1.41×），模型在 bit130/B1=44e6 给 1.18×。
 - stage-2（B2）是另一套机制，本任务不做，只要求 stage-1 的产物能被它消费。
 
 ### 2.2 Montgomery 曲线的形状与 x-only 的好处
@@ -292,7 +295,8 @@ gmp-ecm 用 `lcm(1..B1)`，Prime95 的 choose12 路径额外乘 12。这个差�
 - Suyama σ 参数化 ⇒ 曲线带 **Z/12** 有理点，有效除子 **D ≈ 22.97**；
 - 与 PrMers `ECM_TE`（Prime95 `choose12` 生成的 twisted Edwards）通过
   **`A = 2(a+d)/(a−d)`** 双有理等价 ⇒ 群阶与挠子群相同；
-- 对比本仓库 GPU 路径的 param3（Z/4，D≈7.6）：成功率约 **3×**。
+- 对比本仓库 GPU 路径的 param3（Z/4，D≈7.6）：**有效除子 D 约 3×**（成功率比值远小于此，
+  随位宽/B1 变化：B1=256 实测 1.30×–1.8×，详见 §19.5 表与 §2.1 的说明）。
 
 ### 4.3 已建立的验证仪器（本轮产物，可复用）
 
@@ -676,6 +680,10 @@ stage1 threads  : 8 worker(s) x 8 task(s) of 8 curves      # 64 曲线，--mont-
 - **ini/队列模式接线**（此前 mont 在队列模式下完全不可用）：新增 `mont`(0/1)、`mont_backend`(auto|simd|gmp)、
   `mont_torsion`(1|12)、`mont_threads`(0=auto)、`mont_save_pattern`，并写入默认 INI 模板；
   `mont = 1` 时强制 `use_edwards = false`（方法互斥）。
+  **2026-09-24 键名整理**：上面这组键与其 Edwards 对应键已合并为**单一字段**——
+  `method = gpu|edwards|mont`、`backend`、`field = auto|mersenne|montgomery`、
+  `stage1_threads`、`naf_w`、`exponent = lcm|choose12`、`save_name_pattern`；
+  旧键仍可读（每次运行提示一次），模板与迁移表见 `src/core/ecm_queue_config.cpp`。
 
 ### 10.3 实测：任务级线性扩展（M1277，B1=1e5，64 曲线，σ=900..963，B2=0）
 
@@ -1387,29 +1395,53 @@ a*b = m0 + (m1 - m0 - m2)*X + m2*X^2     m0 = a0b0, m2 = a1b1, m1 = (a0+a1)(b0+b
 但插值需要除以 2/3、求值点更多 ⇒ 修正 pass 比 Karatsuba 更多，按上面的结论只会更亏；
 且它同样不改变"我们赢在 ≤4 000 bit、输在 ≥6 000 bit"的格局。**未做实测即放弃，理由已充分。**
 
-### 15.2 路径一：底层/访存/汇编优化 —— 只剩 5~15%，且不在访存
+### 15.2 路径一：底层/访存/汇编优化 —— **实测只剩 ≤5%，且不在访存也不在批宽**
 
-已实测的三条边界（§11、§13）：
+已实测的边界（§11、§13）：
 
 | 事实 | 数值 | 含义 |
 |---|---|---|
-| 乘积相位 madd 利用率 | 91%（sqr）/ 96%（mul）的本机屋顶 | **madd 端口已饱和**，加 ILP 在本机无空间 |
-| 工作集敏感性 | 1→16 个操作数缓冲 < 1% | **不是访存受限**，L1 常驻；"访存优化"无处下手 |
+| 乘积相位 madd 利用率 | 91%（sqr）/ 96%（mul）的本机屋顶（4.0 条 zmm madd/ns）| **madd 端口已饱和** |
+| 工作集敏感性 | 1→16 个操作数缓冲 < 1% | **不是访存受限**，L1 常驻 |
 | 辅助 SoA pass | 已从 30 趟/bit 降到 18 趟（§11.3b，−8%） | 已吃掉 |
 | tail（normalize/fold/drain/canonical） | 每个域运算 15~25%，**串行 carry 链**、~0.7 ops/cycle | 唯一还剩的靶子 |
 
-⇒ 路径一**剩余空间 5~15%**，集中在两处：
-1. **tail 的串行 carry 链**：把 2n 列的归一化拆成两条独立链做 ILP（约 4%），
-   或把 canonical 与 drain 融合（约 3%）——两者都要动 $2^k=1$ 折叠的边界，属"高风险区"（§3 注释里的非规范值 bug）。
-2. **乘积循环里的非 madd 指令**（每 4 条 madd 摊 ~7 条 load/store/add）：
-   最有效的手段不是汇编重排，而是**加宽批**——把 8 lane 提到 **16 lane（每个元素 2 条 zmm）**，
-   因为 load/store 是"每向量一次"的固定开销，批宽翻倍即把这部分**按比例摊薄**。
-   估算：非 madd 部分约占乘积相位的 25~30%，加宽批可削掉一半 ⇒ **−10~15%**，代价是池内存翻倍
-   （n=77 时 8 lane 元素 3.7 KB → 16 lane 7.4 KB；22 个元素的池约 90 KB → 180 KB，仍可接受）
-   与寄存器压力上升。
-3. OpenCL 侧的"优化经验"**可迁移的很少**：那些 kernel 是 GPU 目标（256 线程/工作组、LDS 暂存、
-   合并访存、占用率调优），其文档（`ECM_OPERATOR_ANALYSIS.md`、`DEV_CPU_MONT_AVX_PLAN.md`）
-   讨论的是 GPU 占用率与合并访存，和 SIMD-IFMA 的瓶颈（端口饱和 + 串行 carry）不是同一件事。
+#### 15.2.1 批宽 8→16 lane：**实测 0 收益（原判断错误，已更正）**
+
+我原先在 §15.2 写过"加宽批可摊薄 load/store 固定开销，估 −10~15%"——**这个推理是错的**：
+把列从 1 条 zmm 变成 2 条 zmm 时，**访存体积随 lane 一起翻倍**，比例不变：
+
+```
+8  lane: 每迭代 4 madd + (1 b-load + 2 t-load + 2 t-store + 2 add)  = 4 : 7
+16 lane: 每迭代 8 madd + (2 b-load + 4 t-load + 4 t-store + 4 add)  = 8 : 14
+```
+
+唯一不随 lane 变的是循环索引/分支（每 ~11 条指令 1 条）⇒ 理论收益 <1%。
+`tools/bench/lane_width.cpp` 在同一进程里把两种循环形状都跑了一遍（同 n、同 reps、取 best-of-7）：
+
+| 变体 | n52=58 | n52=77 | n52=154 |
+|---|---|---|---|
+| 8 lane/列（生产形状） | 30.80 per-lane madd/ns | 30.54 | 31.46 |
+| **16 lane/列（2×zmm）** | 30.89（**+0.3%**）| 30.72（**+0.6%**）| 31.41（**−0.1%**）|
+| 8 lane + 寄存器分块（8 列累加器常驻，朴素实现） | 11.43（**−63%**）| 11.36（−63%）| 11.80（−63%）|
+
+- **16 lane = 0**：批宽不是杠杆。
+- **寄存器分块朴素实现 −63%**：把输出列搬进寄存器确实省掉了 t 列的载入/存储，但**代价是按块重复读取 `b` 列**
+  （每块 8n 次 b 载入 × 2n/8 块 ≈ 2n² 次），比原来的 n²/2 次更多。要真正做成需要"两个操作数都分块"的
+  寄存器/缓存复用，而 32 个 zmm 寄存器装不下 n=58~77 所需的累加器+操作数瓦片 ⇒ **此路不通**。
+- 生产版 3.85 条 zmm 指令/ns ÷ 屋顶 4.0 条/ns = **96%** ⇒ 乘积相位确实做完了。
+  （注：`lane_width` 打印的"参考屋顶"行不可信——编译器会把常量操作数的 `madd52lo` 强度削减成加法；
+  屋顶一律以 `mers_sqr_phases` 的 8 条独立链测量为准：31.8~32.2 per-lane = 4.0 条指令/ns。）
+
+⇒ 路径一**剩余空间 ≤5%**，只剩 tail 的串行 carry 链（把 2n 列归一化拆成两条独立链做 ILP，约 4%；
+或把 canonical 与 drain 融合，约 3%）——两者都要动 $2^k=1$ 折叠的边界，属"高风险区"（§3 注释里的非规范值 bug）。
+
+#### 15.2.2 OpenCL 的经验为什么帮不上忙
+
+仓库的 OpenCL kernel 是 GPU 目标（256 线程/工作组、LDS 暂存、合并访存、占用率调优），
+其文档（`ECM_OPERATOR_ANALYSIS.md`、`DEV_CPU_MONT_AVX_PLAN.md`、`MONT_UNROLL_I24_MAD24_OPTIMIZATION_CN.md`）
+讨论的是 GPU 占用率与访存合并，而我们的瓶颈是**端口饱和 + 串行 carry 链**，两者没有交集。
+唯一可迁移的是"寄存器分块"思想，而它已在 15.2.1 被实测否决。
 
 ### 15.3 结论与建议
 
@@ -1417,13 +1449,971 @@ a*b = m0 + (m1 - m0 - m2)*X + m2*X^2     m0 = a0b0, m2 = a1b1, m1 = (a0+a1)(b0+b
 |---|---|---|---|
 | **Karatsuba / Toom-Cook** | **−15%（n=154）→ +136%（n=25），均值纯亏**；盈亏平衡 ≈10 250 bit | 高（本次原型踩了 3 个坑） | **不做** |
 | **自研 FFT/NTT** | 在 ≳10 000 bit 才有意义；但那正是 Prime95 的强区（已快我们 6×）| 极高（误差控制/旋转因子表/尺寸分档） | **不做**（战略上交给 Prime95）|
-| **16-lane 加宽批** | **−10~15%**（摊薄非 madd 固定开销）| 中（内核与池改造，ASI 不变） | **推荐，下一步首选** |
-| **tail carry 链 ILP/融合** | −5~8% | 中高（$2^k=1$ 折叠边界，历史上有非规范值 bug）| 可做，排在后面 |
+| ~~16-lane 加宽批~~ | **实测 +0.3%/−0.1% ⇒ 0**（原 −10~15% 的判断已更正，见 15.2.1）| 中 | **不做** |
+| ~~寄存器分块~~ | 朴素实现 **−63%**；要真做需操作数也分块，寄存器不够 | 高 | **不做** |
+| **tail carry 链 ILP/融合** | **≤5%**（−4% + −3%，两者不完全叠加）| 中高（$2^k=1$ 折叠边界，历史上有非规范值 bug）| 唯一剩余项，**风险/收益比不划算，建议搁置** |
 
-**一句话**：复杂度换不来收益（我们的 schoolbook 太密、修正开销是 O(n) 的 4 指令/列），
-真正还有空间的是**把批从 8 lane 加宽到 16 lane**——它摊薄的是 load/store/add 这些"每向量一次"的固定成本，
-而这正是我们与 FFT 之间差的那部分。
+**一句话**：复杂度换不来收益（我们的 schoolbook 太密、修正开销是 O(n) 的 4 指令/列）；
+**批宽与访存也不是杠杆**（16 lane 实测 0、分块实测 −63%、工作集不敏感）；
+乘积相位已在**本机 madd 屋顶的 96%**。⇒ **字段层性能优化到此为止**，
+剩余只有 tail 的串行 carry 链（≤5%、高风险），更大的收益只能来自算法层面（链/FFT，均已论证不划算）
+或换硬件（桌面 Zen 5 的 2 条 zmm madd/周期会让同一份代码再快一截，那属于"换机器"而非"改代码"）。
 
-> 复现：`tools\build_tool.bat tools\bench\mers_karatsuba.cpp` 后
-> `build_vs18\tools\mers_karatsuba.exe <k> 2 1200`（`levels=0` 行是纯 schoolbook 基线，
-> 与生产 mul 逐字节相同才算通过；levels=1 已在 n=25/58/77/116/154 验证 identical）。
+> 复现：`tools\build_tool.bat tools\bench\lane_width.cpp` 后
+> `build_vs18\tools\lane_width.exe 58 2000`（打印三种循环形状的 per-lane 吞吐）；
+> Karatsuba 原型见 15.1 末尾的复现命令。
+
+---
+
+## 16. 新项目可行性：Prime95 高效多项式 stage 2 的移植（2026-09-24）
+
+### 16.1 现状：本仓库没有自己的 stage 2，靠"交接"完成
+
+- CPU 两条路径（Edwards / Montgomery）**只有 stage 1**（命令行接受 `B2` 但只用于显示，`B2=0` 即关闭）。
+- 队列能解析 `ECMSTAGE2=` 行（`ecm_worktodo.cpp:133`，注释写明是 "CUDA-oriented, unchanged" 格式），
+  驱动只做参数搬运（`ecm_driver.cpp:2694`）；但 **GPU/CPU 侧都没有 stage-2 内核**——
+  全仓库 grep `stage2|continuation|pairing` 只命中 driver/config/worktodo 三个文件，无任何 kernel。
+- 实际生产做法（已互通验证，§9.2）：stage 1 写共享存档 `m{n}_{b1}.save` → 交给
+  Prime95（`ecm_p95feeder`）或 gmp-ecm `-resume` 做 stage 2。
+
+### 16.2 Prime95 的 stage 2 到底是什么（源码事实，非猜测）
+
+**两套算法共存，按内存选择**：
+
+| 常量 | 值/位置 | 说明 |
+|---|---|---|
+| `ECM_STAGE2_PAIRING` | 0，`ecm.cpp:1470` | "Old fashioned prime pairing stage 2"（经典 BSGS 素数配对）|
+| `ECM_STAGE2_POLYMULT` | 1，`ecm.cpp:1471` | "FFT/polymult stage 2"（多项式乘法版，主力）|
+| 选择器 | `ecm.cpp:5954` | 对两种 type 分别估价取优；**`:6013`：只有能放进 ≥200 个 gwnum 临时量时才选 polymult**，否则配对 |
+| 低内存退路 | `ecm.cpp:1069` | windowed pairing，窗口 100 ⇒ 额外 ~65 MB |
+| D 值表 | `poly_D_data[]`，`POLY_MAX_D = 164,894,730`、`POLY_MAX_RELPRIMES = 14,100,480` | 预置的一组 (D, first_missing_prime) 参数 |
+| Ftree | `:1579` | 多项式的乘/余树，可按内存决定常驻、落盘或重建 |
+| pairmap | `:874`，`MaximumBitArraySize` 默认 250 MB | 配对位图，超限则分块（会增加 setup 成本）|
+| 压缩与归一 | `polymult_preprocess`、`normalize_pool`（`:717`、`:5342`）| 多项式压缩、按内存约束减少乘法次数 |
+| **成本口径** | `est_stage2_transforms`、`est_stage2_polymult`、`est_stage2_stage1_ratio`（`:747-752`）| **全部以 gwnum transform 为单位** |
+
+⇒ 这套东西的**设计前提就是 FFT**：它的算法（产品树 + 多点求值）、内存规划（pairmap/Ftree 分块）
+与调参（D、多项式的正常化池）都是围绕"乘法是 FFT"来做的。
+
+### 16.3 实测成本（用户日志，M4001，B1=1e7，B2=124,155,521,490 = 12415×B1，单 worker）
+
+```
+Stage 2 init complete.   3,139,541 transforms   Time: 2.65 s
+Stage 2 complete.       14,640,228 transforms   Total time: 13.8 s
+Optimal B2 is 12415*B1 ...  Curve is worth 2.69 B2=100*B1 curves
+Estimated stage 2 vs. stage 1 runtime ratio: 0.312
+```
+
+⇒ **stage 2 ≈ 16.5 s = 0.31 × stage 1（67.2 s）**，而且这是把 B2 抬到 **B1 的 1.24 万倍**之后的成本
+（收益面：这条曲线"值 2.69 条 B2=100·B1 的曲线"）。**这才是"高效"二字的含义。**
+
+### 16.4 我们的算术能不能做？—— 两条路分别判定
+
+**(a) polymult 路：不可行（等于重写 GWNUM FFT）。**
+多项式乘法在这里必须"快"：D 个相对素数、系数 4000 bit，Kronecker 代入后是
+`D × 4000 bit` 量级的**单次大整数乘法**（D=10^6 时约 **4×10^9 bit ≈ 7.7×10^7 个 52-bit limb**）：
+
+| 方法 | 该规模下的 madd/运算量 | 判定 |
+|---|---|---|
+| 我们的 IFMA schoolbook（n²）| (7.7e7)² ≈ **6×10^15 madd** | ✗ 天量 |
+| Karatsuba（n^1.585，§15.1 已实测在小尺寸就亏）| ≈ **10^12** | ✗ |
+| Toom-3（n^1.465）| ≈ **10^11** | ✗ |
+| FFT（n log n log log n）| ≈ 10^9 量级 | ✅ 但这正是 GWNUM |
+
+⇒ 移植 polymult = 自研一个 GWNUM 级 FFT **外加** Ftree（可落盘）、pairmap 分块、polymult_preprocess
+压缩、normalize_pool 调参。与 §15.3 "自研 FFT 不做" 同一结论，且工程量更大。
+
+**(b) pairing 路：可行，但只在 B2/B1 ≲ 100 时有意义。**
+算法简单（经典 BSGS：预存 D 个 baby 点的 x，逐个 giant step 做乘积 `∏(x_jD − x_r)`），我们的原语够用。
+成本模型（每次配对 ≈ 1 次模乘 + 1 次减法；配对次数 ≈ 区间内候选素数数 × 0.5~1）：
+
+| 量 | 值 | 来源 |
+|---|---|---|
+| 我们 batched-8 的一次模乘 | 2020 ns/8 曲线 ⇒ **0.25 µs 核心时间/次** | §11 实测（n52=58）|
+| 候选素数数（B1→B2） | ≈ (B2−B1)/ln B2 | 素数定理 |
+
+以 B1=1e6（我们 stage 1 = **4.14 s/曲线**）为基准：
+
+| B2/B1 | B2 | 候选素数 | pairing stage 2 | 相对 stage 1 | 相对 Prime95（同 B2）|
+|---|---|---|---|---|---|
+| 100 | 1e8 | 5.2e6 | **1.3 s** | **0.32×** ✅ | — |
+| 1000 | 1e9 | 4.8e7 | 12 s | 2.9× | — |
+| 1e4 | 1e10 | 4.5e8 | 113 s | 27× | — |
+| 12415 | 1.24e11 | 4.9e9 | **600~1200 s** | **150~300×** | **36~73× 更慢**（Prime95 16.5 s）|
+
+外加内存与 D 的取舍（**不是硬约束**）：pairing 要常驻 D 个 baby 点 —— 单曲线 D=1e5、n=77 时约 61 MB，
+8 lane 批则约 490 MB。但**配对总数与 D 几乎无关**：
+
+```
+配对次数 ≈ |Rs| × #giants ≈ (0.2·D) × (B2−B1)/(D·ln B2) ≈ 0.2·(B2−B1)/ln B2      ← D 被消掉
+```
+
+⇒ **D 只是"内存 ↔ setup/giant-step 开销"的旋钮**：取 D=1e4 时 8 lane 批的 baby 表仅约 **49 MB**，
+而配对总数不变。所以对 pairing 路而言**内存可控，真正的成本就是那 ~1 次模乘/候选素数**。
+
+### 16.5 判定与建议
+
+| 方案 | 结论 |
+|---|---|
+| 移植 **polymult**（主力算法）| ✗ **不可行**：等于重写 GWNUM FFT + Ftree/pairmap/压缩全栈 |
+| 移植 **pairing**（低内存退路）| ⚠ 可行，但只在 **B2/B1 ≲ 100** 划算（+0.3× stage 1 换 stage-2 收益）；到 1e4 就是 27× stage 1 |
+| **维持现状：我们算 stage 1，stage 2 交给 Prime95 / gmp-ecm** | ✅ **推荐**（三条通路已互通：`.save` 交接、`ECMSTAGE2=` 队列行、`-resume`）|
+| 自研 pairing + 小 B2 作为"无 Prime95 环境兜底" | 可选的小项目，**不要指望替代 polymult** |
+
+### 16.6 真正还有收益的地方：交接本身（附一个关键兼容性结论）
+
+- **成本结构**：我们 stage 1（B1=1e6）4.14 s/曲线，Prime95 stage 2（B1=1e7/B2=1.24e11）16.5 s/曲线
+  ⇒ 在整条流水线里 **stage 2 不再是零头**；随着我们的 stage 1 变快，瓶颈会移到 stage 2。
+- **指数语义必须匹配**（重要，但差异是"窗口"而非系统性）：Prime95 的 stage 1 用 `12·lcm(1..B1)`
+  （choose12），我们默认 `lcm(1..B1)`（`--mont-torsion 1`，与 gmp-ecm `-param 0` 对齐）。
+  两者给出的点**不同**：`12·lcm` 只是把 2-adic 指数 +2、3-adic 指数 +1
+  （`v2(lcm) = ⌊log2 B1⌋`，`v3` 同理），因此**只在群阶的 2、3 幂次恰好比 lcm 多出 ≤2 / ≤1 的窗口内**
+  才会有差异（概率小但非零，不是"系统性漏掉一半曲线"）。不过既然 stage 2 会把 stage-1 的点继续用下去，
+  **严格对齐时仍应匹配语义**：
+  - **要把 stage-1 结果交给 Prime95 做 stage 2，用 `--mont-torsion 12`**，这样整条流水线与
+    Prime95 标准运行同构；
+  - **要与 gmp-ecm `-param 0` 逐点对齐（本项目的验收口径 Q1），用 `torsion 1`，stage 2 交给 gmp-ecm**
+    （gmp-ecm 的 stage 1 同样是 `lcm`，语义自洽）；
+  - 两个目标冲突，**不要混用**：给定 B1，要么"我们 torsion=1 + gmp-ecm stage 2"，
+    要么"我们 torsion=12 + Prime95 stage 2"。
+- **速度比（§14 实测，用于规划分工）**：M3001 档我们 stage 1 快 **1.37×**（4.14 vs 5.65 s @B1=1e6），
+  M4001 档基本**持平**（~67 vs 67 s @B1=1e7）；只有小尺寸才大幅领先（M1277 约 3.9×）。
+  ⇒ 在 4000 bit 级、大 B1 的 GIMPS 场景里，"我们算 stage 1 + 它算 stage 2" 的收益主要来自
+  **并行/调度与流水线**，而不是单核算术优势。
+- 可做的交接优化：worker 持续产出 `.save` 而不空转、按曲线粒度批量交接、
+  让 `ecm_p95feeder` 的队列深度与我们的产出速率匹配（避免 Prime95 侧饥饿或积压）。
+
+> 结论一句话：**Prime95 的 stage 2 不是"一段可以搬过来的代码"，而是一整套以 FFT 为前提的
+> 多项式算法 + 内存规划系统；我们的 IFMA 算术做不了它的主力路径（polymult），做它的退路（pairing）
+> 只在 B2/B1 ≲ 100 时划算。正确的分工仍是"我们算 stage 1 + 它算 stage 2"，并保证指数语义一致；
+> 在 4000 bit 级大 B1 场景下我们 stage 1 的优势只有 ~1.0~1.4×，所以交接/流水线的优化比继续压
+> 单核算术更值得做。**
+
+### 16.7 Prime95 究竟怎么消化 gmp-ecm 的 param0 / param3 存档（源码答案）
+
+**它把 gmp-ecm 的 resume.c 直接搬了进来**：`ecm.cpp:32-34` → `#include "resume_gmp.c"`（12 KB，
+即 gmp-ecm 的 `resume.c`）。所以字段级解析是原生的：`METHOD / X / Y / Z / N / SIGMA / A / B1 /
+PARAM / PROGRAM / CHECKSUM`，缺 `PARAM=` 时**默认 param 0**（`resume_gmp.c:161`：
+`*param = 0;`，注释 "For compatibility reason, param = ECM_PARAM_SUYAMA by default"）——
+这正是我们 writer 对 param 0 省略 `PARAM=` 的依据 ✓。必填字段是
+`METHOD && X && SIGMA && B1`（`resume_gmp.c:284`），我们的行都满足 ✓；CHECKSUM 也按
+`B1 · σ · (param+1) mod CHKSUMMOD` 一致计算（`:297-303`）✓。
+
+**拿到这些字段之后的全部处理**（`ecm.cpp:7348-7380`，即 `w->gmp_ecm_file != NULL` 分支）：
+
+```c
+read_resumefile_line (..., x, n, a, sigma, &param, &b1, stage1_program);
+if (param == 0)      ecmdata.sigma_type = 1;   // gmp-ecm param0 → Suyama 曲线族
+else if (param == 3) ecmdata.sigma_type = 3;   // gmp-ecm param3
+else { "Unsupported GMP-ECM param=%d"; 报错退出 }   // 只支持 0 与 3
+ecmdata.sigma = atoll (sigma 的十进制串);
+ecmdata.B     = (uint64_t) b1;                 // B1 **取自文件**
+ecmdata.state = ECM_STATE_MIDSTAGE;            // ← 直接进入 stage 2
+mpztog (x, ecmdata.Qx_binary);                 // ← 文件的 X 就是 stage-2 输入点
+goto restart3;                                 // 从不重算 stage 1
+```
+
+⇒ **关键答案：`PARAM=` 的唯一作用是"用哪条公式把 σ 变成曲线系数 A"**（param0=Suyama、
+param3=gmp-ecm 的第三种参数化，其他值直接报错）。**指数差异它根本不处理——因为它从不重算
+stage 1**：`X` 被当作既有事实消费，`B1` 也取自文件，后续只是在这个点上再乘 (B1,B2] 的素数。
+`lcm` 与 `12·lcm` 的区别早已烘焙进 `X`，所以整条链路自洽；差别只体现在**覆盖集**：
+`lcm(1..B1) ⊗ primes(B1,B2]` 而不是 Prime95 原生的 `12·lcm ⊗ primes(B1,B2]`。
+⇒ **要用 Prime95 做 stage 2 时，我们 stage 1 用 `--mont-torsion 12` 即可对齐覆盖；存档格式无需改动**
+（仍是"省略 PARAM="的 param0 形态，Prime95 会正确映射成 `sigma_type=1` 的同一曲线族）。
+
+#### 16.7.1 顺着这段代码发现的两个互操作坑（其一已修）
+
+**① σ ≥ 2^63 会被截断（已修）**：Prime95 读 σ 是 `mpz_get_str()` → **`atoll()`**（`ecm.cpp:7375`）。
+σ ≥ 2^63 溢出 ⇒ Prime95 按**被截断的 σ 重建出另一条曲线**，而它加载的 `x` 来自我们的曲线
+⇒ stage 2 在"错误的曲线"上白跑（只损失效率，不会产生错因子：ECM 的 gcd 只会吐出 N 的真因子）。
+Prime95 自己只生成 σ < 2^53（`ecm.cpp:7416`：`(rand()&0x1F)<<48 + (rand()&0xFFFF)<<32 + rdtsc 位`）。
+
+- 我们的 **Edwards 路径**（`random_sigma_u64()`）本来就是照抄这个构造 ⇒ σ < 2^53 ✓ 安全；
+- 但**我写的 Montgomery 路径**用了 `std::mt19937_64` 的**全 64 位** ⇒ 约一半曲线的 σ ≥ 2^63 ✗
+  ⇒ **已改为同一生成器**（`src/core/ecm_driver.cpp`，`run_mont_stage1`），并在
+  `--edwards --sigma <64 位>` 且 `σ+curves ≥ 2^63` 时打印警告、建议交给 gmp-ecm 做 stage 2
+  （gmp-ecm 的 reader 是 mpz 的，不受 `atoll` 限制）。
+- 验证：随机 64 条曲线存档 σ 最大 1.52e15（< 2^53）✓；`--edwards --sigma 1.8447e19` 触发警告 ✓。
+
+**② `N=` 字段只对 `ECMSTAGE2N=` 形式重要**：逐行读取时 `N=` 被**跳过**（`resume_gmp.c:225`），
+N 来自 worktodo 的 `k,b,n,c`；只有"行里没有 N"的 `ECMSTAGE2N=` 变体才会让 Prime95
+去文件里找 `N=`（`ecm.cpp:6890`，找不到就报 "Could not find line containing N= in file"），
+而那条路用 `mpz_set_str(buf, 0)` 解析 ⇒ **只认纯整数**（`0x` 前缀可），
+表达式形如 `N=(2^1277-1)/f` 解析不了。⇒ 若将来要支持 `ECMSTAGE2N=`，
+存档里的 `N=` 应写**纯十进制整数**；`ECMSTAGE2=`（带 k,b,n,c）则无所谓。
+
+> 附：仓库现有的交接是**另一条通路**——`ecm_p95feeder` 把我们的二进制 stage-1 存档
+> （`e{n:07d}_c{k}.tmp`）拷成 Prime95 自己的 `e{n:07d}`，再往 `worktodo.add` 追加一条
+> `ECM=k,b,n,c,B1,B2,1,<σ>`（`ecm_p95feeder.cpp:298-313`）⇒ Prime95 用**它自己的 resume 文件**
+> 直接进 stage 2（`ecm.cpp:7321`："We've finished stage 1, resume stage 2. The save file contained
+> normalized Q"）。两条通路殊途同归：**Prime95 只做 stage 2，用我们产出的点**。
+> 新的 Montgomery 文本存档（§9）走的是 `ECMSTAGE2=` + gmp-ecm 文本格式这条通路（本节 16.7 描述的就是它）。
+
+## 17. 中途检查点与进度条（2026-09-24，用户要求：「参考 CUDA param3，顺便做 Edwards 那套进度界面」）
+
+### 17.1 需求与边界（用户拍板）
+
+| 项 | 结论 |
+|---|---|
+| 检查点格式 | **只需内部自洽**（同一程序写得进、读得出），不要求与 gmp-ecm / Prime95 互通 |
+| 存档（`.save`） | **必须与别的软件互通** ⇒ 本次一行没动它的语义（只修了一个既存 bug，见 §17.6） |
+| 参考对象 | GPU/OpenCL 路径的 `opencl_ecm_checkpoint_*`（整块曲线缓冲 + 一个全局指数位偏移，按 `ckpt_seconds` 定期落盘、启动时校验 `curves`/`s_num_bits` 后恢复）与 Edwards 路径（每曲线 `.ckpt` + 进度条 + 速率窗口） |
+| 键名 | ini `ckpt_seconds`（旧 `gpuckpt_seconds` 仍接受，警告一次）；CLI `--ckpt <秒>`（旧 `-gpuckpt` 仍接受） |
+
+`ckpt_seconds = 0` = 不做定时保存；**Ctrl+C 仍然保存一次**（这一条几乎不花钱，却把「被打断」从
+「白跑」变成「续跑」）。
+
+### 17.2 为什么这条 ladder 的检查点特别便宜（数学事实，不是工程技巧）
+
+ladder 迭代不变式（§2.5）：
+
+```
+每次迭代开始时：p0 = [k]P ，p1 = [k+1]P      （k = 已消耗的指数位数）
+```
+
+而曲线常数 `a24`、差分加法的 `xdiff` **都是 σ 的函数**（`xdiff` 是起点 P 的仿射 x），不是随 k
+变化的状态。⇒ 一个完整的续跑点就是
+
+```
+(bitnum = k, p0, p1) + 识别这批工作的参数 (N, B1, torsion, σ)
+```
+
+一条曲线只要 **4 个域元素**（X0,Z0,X1,Z1）；对照 Edwards：它的 ladder 是 NAF 分块推进的，恢复
+还要窗口字典/分块相位 ⇒ 这条路径天生更适合做检查点。已完成的曲线另存结果（miss 存 x，hit 存
+因子），否则被打断的一次运行会重算所有算完的曲线。
+
+### 17.3 文件格式（内部，`src/core/ecm_mont_ckpt.{h,cpp}`）
+
+每条曲线一个文件，与 .save 同目录：
+
+```
+<tmp_dir>/<save stem>_c%07u.ckpt        例：saves/m3001_1e6_c0000017.ckpt
+```
+
+正文（明文，理由见下）：
+
+```
+MPA-MONT-CKPT 1
+N=<hex>              ← 完整 N，同一性的最强判据
+B1=1000000
+TORSION=12           ← 1 = lcm（gmp-ecm param 0），12 = Prime95 choose12
+SBITS=1442099        ← 指数位数（B1 的另一种指纹）
+CURVE=17
+SIGMA=1234567890123
+LIMBS=0
+FIELD=ifma | mpn
+STATUS=INFLIGHT | DONE
+BITNUM=655360
+X0=.. Z0=.. X1=.. Z1=..              （INFLIGHT 且 BITNUM>0 时）
+HIT=0|1 ; XOUT=.. | FACTOR=..        （DONE 时）
+CHECKSUM=<fnv1a-64 of every byte before this line>
+END
+```
+
+* 三种记录：`INFLIGHT`（BITNUM>0，带 ladder 中间态）、`INFLIGHT`+`BITNUM=0`（**种子**：只钉住该曲线
+  的 σ）、`DONE`（带结果）。
+* **明文而不是二进制**：它在不可预测的时刻被多个 worker 线程写（定时器 / Ctrl+C），崩溃后是人要
+  盯着看的东西；`CHECKSUM`+`END` 让「写了一半」的文件被明确拒绝，而不是当成有效状态续跑。
+* 状态里的 `X0/Z0/X1/Z1` 是**普通域**（mod N）的整数，不是 IFMA 内部表示：写出时走
+  `ifma_to_mpz_lane`，读回时走 `ifma_from_mpz_lane`。这样同一份检查点可以由标量后端接着跑，
+  也可以换 `field` 层接着跑（§17.6 T3 就是用这条性质做的验证）。
+* 拒绝条件（读失败一律当「没有检查点」，不是当「空状态」）：版本不符 / N 不同 / B1 不同 /
+  torsion 不同 / s_bits 不同 / 缺 END / 校验和不符 / `INFLIGHT` 缺状态 / `DONE` 缺结果。
+
+### 17.4 运行时行为（`run_mont_stage1`）
+
+1. **种子写盘**：若启用检查点，每条曲线开工前先写一条 `BITNUM=0` 记录。理由：随机 σ 每次运行都
+   不同，若不钉住，被打断后的续跑会对「还没轮到」的曲线抽一批**新** σ，曲线集合悄悄变了。
+2. **预扫描**：逐曲线读检查点 ⇒ 采纳其中的 σ（`-sigma` 固定值时要求一致）、恢复 `DONE` 曲线的结
+   果（x / 因子 / hits）、记下 `bit_off`（已消耗位数）。
+3. **组任务**：按 `bit_off` 降序分组再切批。一个 SIMD 批的所有 lane 共享一条指数前缀 ⇒
+   **同批必须同起点**；恢复后分组只会让每个「被打断的旧批」浪费至多一个不满的批（1000 条曲线、
+   24 线程量级下 <0.5%），全新运行时所有 `bit_off` 都是 0，退化成原来的顺序切批。
+4. **定时自动保存 = 暂停 → 写盘 → 继续**；**SIGINT = 写盘 → 结束整个运行**（打印「rerun the same
+   command line to resume」并返回 `ECM_ERROR`）。两者由同一个回调返回 1 触发，必须靠
+   `g_stage1_stop` 区分 —— 第一版没有区分，结果「1 秒的自动保存间隔」直接变成了「运行 1 秒就退出」，
+   被 E1 端到端测试抓出来（§17.6）。
+5. **成功后删掉检查点**：`.save` 已经是持久产物（也是互通产物），删掉才能让「再跑一次同样的命令」
+   是**一次全新的运行**，而不是把上次结果原样重放。
+6. **断点粒度** `chunk = nbits/512` 向上取到 2 的幂、下限 4096（B1=1e6 时 4096 bit，约 0.3% 的
+   进度更新粒度）。热循环里用的是**倒计数比较**而不是 `i % chunk`：后者每 bit 一次整数除法，而
+   每 bit 总共只有约 10 次域乘法，实测能看出 1% 量级。
+
+### 17.5 进度显示（与 Edwards 共用一套）
+
+`stage1: [========>          ]  61.2%  9.8/16 (~0.12 s/curve)  elapsed 1.2s  ETA 0.8s`
+
+* 复用 Edwards 的 `g_stage1_bar` + `Stage1SpeedMeter`（**速度样本**窗口而不是时间平均，回推
+  per-curve 与 ETA，避免并行时跳变）+ 非 TTY 时的衰减整行输出（`emit_progress_line`）。
+* 工作量的单位是「曲线」：已完成曲线数 + Σ(每条在跑曲线已消耗位数 / s_bits)，每曲线一个原子计数
+  器，回调里求和 ⇒ 多线程下单调、不需要锁。
+* 中断时进度条不完整（`mark_as_completed` 不会被调用），与「被暂停」的语义一致。
+
+### 17.6 验证（两个测试，全绿）
+
+**单元验证** `tools/test/mont_ckpt_verify.cpp`（N = 2^1277−1，B1=5000，chunk=512，24 项断言）
+
+| 组 | 内容 |
+|---|---|
+| T1 | 标量 ladder：**每个 chunk 都暂停**并从写下的状态续跑 14 次 ⇒ x 与 gcd 与一次跑完逐位相同 |
+| T2 | SIMD 批：8 条 lane 同时暂停/续跑 14 次 ⇒ 8 条 lane 的 x 与 gcd 全部相同 |
+| T3 | **跨路径交接**：SIMD 在 512 位处暂停 → 状态转成普通 mpz → **标量 ladder** 从 512 续跑 ⇒ 与不中断的 x/gcd 相同（这一项同时钉死了 to_mpz/from_mpz 的往返精度） |
+| T4 | 文件往返 + 拒绝：B1/torsion/s_bits/N 不符、截断（缺 END）、改一个字节（校验和）、`DONE` 缺结果，全部被拒；改用例作对照仍被接受 |
+
+**端到端** `tools/test/test_mont_checkpoint.ps1`（M1277，B1=1e6）
+
+| 组 | 内容 | 结果 |
+|---|---|---|
+| E1 | 固定 σ：不中断跑一遍；另起进程跑到 3 s **硬杀**（不给收尾机会）→ 32 个 `.ckpt`、其中 32 个含 ladder 中间态 → 重跑同一命令行 ⇒ 32 行曲线内容（SIGMA/B1/N/X/CHECKSUM）与不中断那次完全一致，跑完检查点被删 | PASS |
+| E2 | 随机 σ：被杀的那次把 32 条曲线的 σ 钉住了 → 续跑必须**采纳**它们（存档里 32/32 条 σ 都与杀进程前的 `.ckpt` 一致） | PASS |
+| E3 | 标量后端（`--backend gmp`，8 曲线 / 2 线程）：同样杀 + 续跑，8 行内容一致 | PASS |
+
+> 说明：E1 比较的是**去除 `WHO=`/`TIME=` 后的曲线内容**，不是逐字节——存档每行都带用户名与
+> 时间戳，两次运行本来就不可能逐字节相同。
+
+**顺带修掉的既存 bug**：`ecm_append_save_lines_mont()` 原先只拿到 `firstsigma`，按
+`firstsigma + i` 推第 i 条曲线的 σ。固定 σ 模式下这是对的，**随机 σ 模式下写出来的 σ 与同一行
+的 X 不是同一条曲线** —— 交给 Prime95 做 stage 2 时它会按错的 σ 重建另一条曲线，然后静默地在
+一条自己从没有过点的曲线上搜索。现在签名收 `const uint64_t *sigmas`（完整数组）。
+
+### 17.7 性能：检查点几乎不花钱（同进程交替 A/B）
+
+第一版用 `i % chunk` 判断点，先在**同一进程内交替**比较三种变体（`tools/bench/mont_ckpt_ab.cpp`，
+旧版 ladder 从 git HEAD 取出、重命名符号后链进同一个二进制；N=2^3001−1，B1=1e6，3 轮）：
+
+```
+  old ladder          : 24014.95 ns/bit  (34.632 s/batch)
+  new, cb = NULL      : 24197.51 ns/bit  (+0.76%)
+  new, cb = progress  : 23877.60 ns/bit  (-0.57%)   ← 驱动实际安装的那种回调
+```
+
+结论：**在噪声内（±1%），不需要为检查点牺牲 ladder 速度**。同机驱动复测 `4.318 s/curve`
+（记录基线 §14.2 是 4.14 s/curve，同一台机器不同时刻的 4% 抖动）。
+
+> 教训记一笔：中间有一次单独测到 42.45 s（= +28%），差点当成回归；把旧实现链进同一个进程交替测
+> 才发现那是机器状态（刚跑完长时间构建/测试后的频率与功耗状态）造成的。**跨进程、跨时间点的
+> 单次测量不能用来判定几个百分点的回归。**
+
+### 17.8 复现命令
+
+```powershell
+# 单元验证（24 项）
+tools\build_tool.bat tools\test\mont_ckpt_verify.cpp src\cpu\ecm_mont_cpu.cpp `
+    src\cpu\simd_mont_curve.cpp src\cpu\simd_mont_ifma.cpp src\core\ecm_mont_ckpt.cpp `
+    src\core\ecm_stage1_exp.cpp
+.\build_vs18\tools\mont_ckpt_verify.exe 5000 512
+
+# 端到端（杀进程 + 续跑，约 1 分钟）
+powershell -NoProfile -File tools\test\test_mont_checkpoint.ps1
+
+# 检查点开销 A/B（先把 git HEAD 的旧 ladder 抽出来并改名，再链进同一个二进制）
+powershell -NoProfile -File tools\test\make_old_ladder.ps1
+tools\build_tool.bat tools\bench\mont_ckpt_ab.cpp src\cpu\simd_mont_curve.cpp `
+    src\cpu\simd_mont_ifma.cpp src\cpu\ecm_mont_cpu.cpp src\core\ecm_stage1_exp.cpp `
+    .bench_tmp\ab_old\old_ladder.cpp
+.\build_vs18\tools\mont_ckpt_ab.exe 3001 1e6 3
+
+# 手工：1 秒自动保存 + 中途 Ctrl+C，然后重跑同一命令行
+echo (2^3001-1) | .\ecm.exe --method mont --tmp-dir saves --ckpt 1 -gpucurves 64 1e6
+```
+
+## 18. 启动阶段的 29 秒：定位与修复（2026-09-24，用户实测报障）
+
+### 18.1 症状
+
+用户的队列任务（`ECM2=1,2,3001,-1,10000000,0,8`，B1=1e7）日志：
+
+```
+[13:59:22] START: ECM2=1,2,3001,-1,10000000,0,8
+[13:59:51] method          : montgomery (Suyama sigma, AVX512-IFMA 8-lane batch, torsion=1)
+```
+
+⇒ **29 秒**卡在"开始算曲线"之前，而 GPU/CUDA 路径跑 B1=1.1e8 只要 5 秒。用户问：是不是
+stage-1 指数（`lcm(1..B1)`）算得太慢？实现是不是不一样？
+
+**答案：是，而且确实不一样——两条路径建指数的方法不同。**
+
+### 18.2 根因：`mont_build_s` 是逐个素数的累加乘法
+
+旧实现（`src/cpu/ecm_mont_cpu.cpp`）：
+
+```cpp
+for (p = 2; p <= B1; ++p) { ...; mpz_mul_ui(s, s, p^e); }   // s 一直在变长
+```
+
+第 i 次乘法的代价是 O(len(s))，而 len(s) 随 i 线性增长 ⇒ 总代价 O(π(B1) × len(s)) —— **素数个数
+× 结果长度**：
+
+| B1 | π(B1) | len(s) | 量级估算 |
+|---|---|---|---|
+| 1e7 | 620,000 | ~225k limb | 620k × 112k ≈ **7e10 limb 操作** ⇒ 实测 **~29 s** ✓ |
+
+而 GPU 路径与 Edwards 路径用的是**乘积树**（`ecm_driver.cpp` 里的 `compute_batch_s()`：二进制计数
+器，把素数幂两两合并），每次 `mpz_mul` 的两个操作数长度相当，GMP 的 Karatsuba/Toom/FFT 全部生效
+⇒ 复杂度降到 O(M(n)·log n)。
+
+> 所以"CUDAC 110e6 只要 5 秒"并不代表 GPU 有特殊算法：**那 5 秒本身也主要是这个乘积树**（见 18.5
+> 实测：B1=1.1e8 需要 ~5.2 s，其中筛法 0.4 s、其余是 GMP 的大数乘法）。两条路径的差距不是 GPU 快，
+> 而是 CPU Montgomery 那条路当时**没有**用乘积树。
+
+### 18.3 修复：三条路径共用一份实现
+
+新增 `src/core/ecm_stage1_exp.{h,cpp}`：
+
+```c
+bool ecm_build_lcm_exponent(mpz_t s, uint64_t B1, uint64_t torsion);
+```
+
+* 奇数/素数筛（从 `p*p` 开始标记，`char` 数组）；
+* 每个素数幂 `p^floor(log_p B1)` 用 `set_u64()` 装进 mpz（**注意 Windows 上 `mpz_set_ui` 只吃
+  32 位 `unsigned long`**，B1 可能超过 2^32——这是 `mont_set_sigma` 记录过的同一个坑）；
+* **二进制计数器**合并：槽 j 保存 2^j 个素数幂的乘积，满了就带着乘积往上进位；最后从最大槽往下乘
+  进 `s`（torsion 先放进去）；
+* 只有 B1 > 5e9 或内存不足才返回 `false`，此时 `s` 保持 `torsion`（绝不留下错的值）。
+
+调用方：
+* `mont_build_s()`（`src/cpu/ecm_mont_cpu.cpp`）→ 薄封装，失败返回 **0**（调用方必须检查）；
+* `compute_batch_s()`（`src/core/ecm_driver.cpp`，GPU 与 Edwards 共用）→ 薄封装，保留原有的
+  B1 范围/取整保护；
+* 于是三个方法（GPU 批量、CPU Edwards、CPU Montgomery）**只有一份指数构造实现**。
+
+### 18.4 正确性验证（`tools/test/stage1_exp_check.cpp`）
+
+| 项 | 方法 | 结果 |
+|---|---|---|
+| 与旧实现逐位相同 | 把旧的二次循环原样搬进测试当参照，扫 12 个 B1（含 0/1/2/3/4 边界）× torsion ∈ {1,12} | PASS |
+| 与实现无关的判据 | 对每个素数 p ≤ 20000：`v_p(s) == floor(log_p B1) + v_p(torsion)` | PASS |
+| 除尽后无残余 | 把 s 里所有素数幂除干净，余数必须正好是 1 | PASS |
+| **换算法的交叉验证** | `lcm(1..B1) = Π_j primorial(⌊B1^(1/j)⌋)`，用 GMP 自己的 `mpz_primorial_ui` 重算（5 个 B1） | PASS |
+| 端到端不回归 | `mont_simd_verify`（8 lane 与标量逐 lane 对拍，M1277/B1=1e5） | PASS 0/8 不一致 |
+| 检查点不回归 | `mont_ckpt_verify` 24 项 + `test_mont_checkpoint.ps1` 三组 | 全绿 |
+
+### 18.5 实测（Ryzen AI 9 HX 370，单线程）
+
+```
+B1 = 1000000       0.016 s   s_bits = 1442099
+B1 = 10000000      0.231 s   s_bits = 14424844      ← 旧实现 ~29 s，用户报的那个 30 秒
+B1 = 110000000     5.257 s   s_bits = 158705536     ← 与 GPU 路径同一份实现，同一个数量级
+mont_expand_bits(1e7)   0.021 s   14424844 bits     ← 位数组展开，可忽略
+B1 = 1.1e8: 筛法 0.414 s（6,303,309 个素数，104 MB），其余 ~4.8 s = 乘积树（GMP FFT）
+```
+
+⇒ 用户场景（B1=1e7）：**29 s → 0.23 s**；端到端复测，`START` 到 `stage1 exponent` 行约 0.23 s，
+到第一条进度条也在 1 s 以内。
+
+> 为什么不换成 primorial 链：同一台机器上 `primorial` 链只快 ~8%（4.23 s vs 4.59 s @1.1e8），
+> 而当前实现既能直接处理素数幂、又少一处整数开方代码；B1 ≥ 1e7 时真正的下界是"把 1.6e8 bit 的
+> 乘积算出来"这一件事本身的 O(M(n)·log n)，没有便宜的捷径。（primorial 恒等式仍然很有用——它被
+> 留作 18.4 里的独立交叉验证。）
+
+### 18.6 复现
+
+```powershell
+tools\build_tool.bat tools\test\stage1_exp_check.cpp src\core\ecm_stage1_exp.cpp src\cpu\ecm_mont_cpu.cpp
+.\build_vs18\tools\stage1_exp_check.exe
+
+# 端到端（队列模式，B1=1e7 的那条任务）
+echo (2^3001-1) | .\ecm.exe --method mont --tmp-dir saves -gpucurves 8 1e7
+```
+
+## 19. 可行性：把 Suyama param0 移植到 CUDA/CGBN（2026-09-24，用户提问）
+
+### 19.1 结论
+
+| 维度 | 判定 |
+|---|---|
+| 技术可行性 | **可行，且改动很小**：host 侧换曲线/起点设置（~150 行 GMP），device 侧两处算子替换（~20 行）。**不需要新算法、不需要 GPU 端求逆**（所有除法都在 host 上做）。 |
+| 性能 | **值得**：同一台机器上，现有 CGBN kernel（param3）在 3000–3200 bit、B1=1e5、8192 条曲线时达 **7.35M（Mersenne）/ 12.1M（随机 N）curve-bits/s**；CPU param0 全 24 线程是 **2.69M / 1.56M** ⇒ 移植后（算子 +22%，见 19.4）预计仍为 **2.2×（Mersenne）～6.4×（随机 N）**。 |
+| 前提 | GPU 必须"上千条曲线同时在飞"：256 条只有 3.8M，8192 条 15.6M。像 `ECM2=1,2,3001,-1,10000000,0,8`（8 条曲线）这种任务在 GPU 上等于空转，应留在 CPU。 |
+| 是否非做不可 | **不一定**。现有 param3 GPU 路径的存档**已经**能被 gmp-ecm（`-param 3` 是 gmp-ecm 自己的 batch 参数化）和 Prime95（`sigma_type=3`，`choose_gmp_ecm_param3()` 注释即 "A = 4*s/2^32-2, x0 = 2"）消费。移植买到的是**曲线族统一**（CPU/GPU 曲线可互换、可与 gmp-ecm param0 逐点对拍、一条 save/resume 通路），不是"从不能用到能用"。见 19.7 的决策问题。 |
+
+### 19.2 现状：GPU 路径的目标形状（源码事实）
+
+`set_p_2p()`（`kernels/cuda/cgbn_stage1.cu:254`，OpenCL 侧同形 `src/opencl_ecm_stage1.cpp:367`）：
+
+```
+每曲线 5 个字：N, P_a(x,z), P_b(x,z)
+P_a = (2 : 1)  固定！        P_b = 2P = (9 : 64·d + 8),  d = σ/2^32
+```
+
+上游 gmp-ecm `batch.c:167` 把前提写死在注释里：`assume (x2:z2) - (x1:z1) = (2:1)` —— **阶梯对的差分点 x 坐标恒为 2**。kernel 里两处"便宜"全部来自这个前提：
+
+1. 加法步（`cgbn_stage1_kernel.h:252-263`）：`bX = (DA+CB)²`、`bZ = 2(DA−CB)²`
+   —— `z_D=1`、`x_D=2` 直接内联，**不需要乘差分坐标**；
+2. 加倍步（同文件 `:219-238`）：曲线常数用 `special_mult_ui32(K, d)`，**d 就是 a24 且只有 32 位**。
+
+指数 `s = lcm(1..B1)`、32 位字数组、`s_bits_start/interval` 分片推进 —— 与 param0 的 τ=1 完全一致，**这部分不用改**。
+
+### 19.3 移植要改什么
+
+Suyama param0 的定义（与本仓库 CPU 路径、gmp-ecm 完全一致）：
+
+```
+u = σ²−5,  v = 4σ,  A = (v−u)³(3u+v)/(4u³v) − 2,  a24 = (A+2)/4
+起点 P = (u³ : v³)         差分点的仿射 x： xdiff = u³/v³
+```
+
+* **Host（GMP，~150 行）**：`set_p_2p` → Suyama 版：算 u,v,A,a24,X0,Z0,xdiff，再用一次 xDBL 得 2P；
+  每曲线 **7 个字**（多 a24 与 xdiff）。σ 可 64 位（数组按 32 位字存）。三次 `mpz_invert` 都在 host。
+* **Device（kernel，~20 行）**，替换 `double_add_v2()`（`cgbn_stage1_kernel.h:162`）里的两处：
+  1. `special_mult_ui32(dK, d, …)`（:226）→ `cgbn_mont_mul(dK, K, a24, …)`
+  2. `cgbn_shift_left(v, v, 1)`（:261）→ `cgbn_mont_mul(v, (DA−CB)², xdiff, …)`
+  3. 从数据数组多载入两个常量。
+* **算子账**：现 kernel 4M+4S+便宜 special_mult → 移植后 **6M+4S**，与 CPU 侧 param0 的算子数**完全相同**
+  （param3 省下的正是这两项）。CGBN 没有专用平方：`impl_cuda.cu` 里
+  `mont_sqr(r,a,n,np0) { …mont_mul(r._limbs, a._limbs, a._limbs, …); }` ⇒ 每个 S 就是一次满宽乘。
+  以 mul 等价计：**8.1 → 10.0 ⇒ 单 bit 代价 +22%**。
+* **顺带的好处**：kernel 变成与 σ 无关（只吃 a24/xdiff），σ→曲线的语义完全回到 host，
+  和 CPU 路径、gmp-ecm 的定义对齐。
+
+### 19.4 实测基线（RTX 4070 Ti / 60 SM，`ecm_cuda` 全量 kernel 构建 sm_89；CPU = Ryzen AI 9 HX 370 24 逻辑核）
+
+单位用 **curve-bits/s**（= 曲线数 × s_bits ÷ 墙钟），因为 GPU 需要上千条曲线、CPU 不需要，用"s/curve"没法比。
+B1=1e5 ⇒ s_bits = 144344。为防"命中即提前退出"污染计时，随机 N 用 3000 位半素数、Mersenne 侧用**素数** M3217。
+
+**GPU（CGBN，param3 = 现状）**
+
+| N | kernel 档 | 曲线数 | 墙钟 | curve-bits/s |
+|---|---|---|---|---|
+| 2999-bit 半素数 | CGBN<16,3072> | 256 | 9.68 s | 3.82 M |
+| 〃 | 〃 | 1024 | 16.5 s | 8.94 M |
+| 〃 | 〃 | 4096 | 40.7 s | **14.52 M** |
+| 〃 | 〃 | 8192 | 75.9 s | **15.58 M** |
+| 〃 | 〃 | 16384 | 156 s | 15.16 M（饱和）|
+| 3999-bit 半素数 | CGBN<16,4096> | 8192 | 115 s | 10.29 M |
+| 3071-bit 半素数 | CGBN<16,3584> | 8192 | 97 s | 12.15 M |
+| 3215-bit 半素数 | CGBN<16,3584> | 8192 | 97 s | 12.13 M |
+| **M3217 = 2^3217−1** | CGBN<16,3584> | 2048 | 80.0 s | 3.69 M |
+| 〃 | 〃 | 4096 | 141 s | 4.19 M |
+| 〃 | 〃 | 8192 | 161 s | **7.35 M** |
+
+**CPU（本仓库 param0，8-lane AVX512-IFMA）**
+
+| N | 归约域 | 线程 | 曲线数 | 墙钟 | curve-bits/s |
+|---|---|---|---|---|---|
+| 2999-bit 半素数 | Montgomery CIOS | 1 | 32 | 27.1 s | 0.17 M |
+| 〃 | CIOS | 8 | 64 | 10.8 s | 0.85 M |
+| 〃 | CIOS | 24 | 192 | 17.8 s | **1.56 M** |
+| M3217 | Mersenne 折叠 | 1 | 8 | 3.73 s | 0.31 M |
+| 〃 | 折叠 | 24 | 192 | 10.3 s | **2.69 M** |
+
+**两个不显然的发现（都是实测，不是推断）**
+
+1. ~~**CGBN 在 `N = 2^k−1` 上慢 1.65×**~~ **—— 2026-09-24 复测推翻**：
+   干净复测（同一构建、同容器 3584、同曲线数、前后相邻运行）显示 Mersenne 与随机 N 吞吐**基本相同**：
+
+   | N（3584 容器，param3） | 4096 曲线 | 8192 曲线 |
+   |---|---|---|
+   | M3217 = 2^3217−1 | 11.26 M | 12.38 M |
+   | 3215-bit 随机半素数 | 10.99 M | 12.57 M |
+
+   3072 容器同样一致（M3001 14.31 M vs 3001-bit 半素数 14.32 M）。
+   原先那组"M3217 只有 3.69/4.19/7.35 M"的数据是在**后台正在跑全量 CUDA 编译**时测的，
+   CPU 侧主机循环（launch/回读/批调度）被拖慢，GPU 于是饿着跑 ⇒ 数字不可用。
+   **教训（本项目第二次踩同一个坑，见 §17.7）**：GPU/H2D 混合负载的计时必须在机器空闲时做，
+   且对照点要前后相邻、同参数。
+2. **GPU 必须喂上千条曲线**，而且寄存器压力决定上限：kernel 每线程 88（3072 容器）/98（3584）/105（4096）个寄存器，
+   每 block 512–640 线程 ⇒ 占用率只有一半左右。256 条曲线时只有 3.8M（60 个 SM 绝大多数闲着）。
+
+
+### 19.5 移植后预计性能（实测 × 算子比 0.82）
+
+**2026-09-24 已在真机上实测到 param0 kernel 本体**（全量构建，RTX 4070 Ti，B1=1e5，4096 曲线）：
+
+| 场景 | param3（旧族） | **param0（新族，实测）** | param0/param3 |
+|---|---|---|---|
+| M3001（3072 容器）| 14.31 M | **11.71 M** | 0.82× |
+| 3001-bit 随机半素数 | 14.32 M | **11.57 M** | 0.81× |
+| M3217（3584 容器）| 11.38 M | **8.85 M** | 0.78× |
+
+⇒ 算子比预测的 0.82 与实测 0.78–0.82 吻合（CGBN 无专用平方，多出的两次满宽乘就是全部代价）。
+
+**同一口径下的命中率实测**（`tools/ecm_prob/out/measure_<bit>_256.json`，B1=256，bit 15–40 全覆盖，
+每点 65536 个采样素数；bit ≤ 20 为穷举）：param0 与 param3 的单曲线成功率比值随位宽缓慢上升 ——
+
+| bit | 15 | 20 | 25 | 30 | 33 | 35 | 36 | 38 | 40 |
+|---|---|---|---|---|---|---|---|---|---|
+| param0 / param3 | 1.30× | 1.41× | 1.49× | 1.62× | 1.53× | 1.58× | 1.72× | 2.12× | 1.52× |
+| param0 绝对值 | 68.80% | 30.47% | 10.26% | 2.841% | 1.169% | 0.568% | 0.444% | 0.278% | 0.102% |
+
+bit ≥ 35 时每点命中数只剩几十个（bit40：67/65536），±0.1–0.3 个百分点是采样噪声，**别把单个点的
+比值当趋势读**；能读出的只有"比值在 1.3–1.8 之间、且比 D 的 3× 小得多"。
+
+与 CPU（同一台机器，干净复测，24 线程 = 全机箱）对比：
+
+| N | GPU param0（4096 曲线） | CPU param0（24 线程） | CPU param0（1 线程） | GPU / 整机 | GPU / 单核 |
+|---|---|---|---|---|---|
+| M3001 | 11.71 M | 3.09 M（折叠域） | ~0.33 M | **3.8×** | ~35× |
+| M3217 | 8.85 M | 2.72 M（折叠域） | 0.31 M | **3.3×** | ~29× |
+| 3001-bit 随机 N | 11.57 M | 1.58 M（CIOS） | ~0.17 M | **7.3×** | ~68× |
+
+⇒ 换成"每因子期望代价"：
+* **GPU param0 vs CPU param0**（同曲线族，成功率项相消）＝ 吞吐比 ＝ 整机 **3.3–7.3×**，单核 ~29–68×；
+* **GPU param0 vs GPU param3** ＝ `(1/0.81) ÷ (1.3–1.8)` ≈ **0.7–0.9×**（省 10–30%）。
+  （早期版本这里写的是 0.27× / 1/11–1/22，那是把"**D 的 3×**"错当成"**成功率的 3×**"叠进去的结果；
+  按实测 1.3–1.8× 修正后就是这个量级。param0 相对 param3 的确定优势更多在于
+  **存档能直接被 gmp-ecm `-param 0` / Prime95 续做 stage 2**、以及与 CPU 路径同曲线同 σ。）
+
+即：**移植（CPU param0 → GPU param0）的收益 ≈ 整个 24 线程 CPU 机箱的 3.3–7.3 倍**，
+且 B1 越大、曲线越多收益越稳（每 bit 成本两边都固定，GPU 的分片启动开销被摊薄）。
+
+### 19.6 移植的风险 / 待测量项（按优先级）
+
+1. **两个常驻满宽常数（a24、xdiff）会吃寄存器**：现在 kernel 只有一个 32 位标量 `d`；
+   改成两个满宽常数 ⇒ 每线程 +约 14 个寄存器（7 limb × 2）⇒ 可能把 512 线程/block 压到 448。
+   缓解：把两者放 **shared memory**（CGBN 自己 `SHM_LIMIT=0`，但我们可用自留区；每实例每 bit 只读 14 次
+   shared load，相对每 bit 数百周期可忽略）。**移植时必须实测这一项**，它可能把 19.5 的 0.82 系数再拉低一点。
+2. **容器档位跳变**：3001 bit 落在 3072（+2% 填充），3217 落在 3584（+11%）；tier 之间是 n² 关系
+   （实测 3072→3584：15.58M → 12.15M，与 (3584/3072)² = 1.36 吻合）。选任务尺寸时值得看一眼档位。
+3. **驱动/命名**：现在 `method` 是互斥三选一（`gpu|edwards|mont`），"mont on CUDA" 需要新的表达方式
+   （见 19.7）。
+4. **OpenCL/AMD 路径不会自动获得 param0**：.cl kernel 是另一份实现，要同步才有同样语义（iGPU 实测只有
+   ~0.2M curve-bits/s 量级 ⇒ 不建议为它做）。
+5. **checkpoint / 存档**：结构不变，但要动格式版本 —— GPU 的 ckpt 存整块"5 字/曲线 + s_partial"，
+   param0 需要 7 字（或只存 (σ, 位偏移) 在 host 侧重算 a24/xdiff，更省）；存档改为
+   `ecm_append_save_lines_mont()`（省略 `PARAM=`，即 param0 文本形态）。
+
+### 19.7 需要你决策的那一个问题
+
+移植买到的是"**曲线族统一**"，而不是"从不能跑到能跑"：
+
+* 现有 param3 存档**已经**能交 Prime95 做 stage 2（`sigma_type=3`）和 gmp-ecm（`-param 3`）；
+* 但它与 gmp-ecm `-param 0`（本项目 CPU 路径与验收口径 Q1）**不是同一条曲线族**。
+
+⇒ 决策点是：**你的 GPU 任务是否必须是 param0 曲线族**（要和 CPU 结果逐点互校、要让同一条 worktodo/存档在
+CPU 与 GPU 之间互换、要交 gmp-ecm 用 `-param 0` 续跑），还是 **param3 曲线族对 GPU 任务可以接受**？
+
+* 若"必须 param0" ⇒ 建议做，工作量约 1-2 天（host 设置 + kernel 两处 + ckpt/存档接线 + 一条对拍验证）。
+* 若"param3 可以" ⇒ **不必移植**：直接用 `ecm_cuda` 跑 GPU 任务，stage 2 交给 Prime95（`param=3`）。
+
+### 19.8 复现命令
+
+```powershell
+# 基准数（半素数：stage 1 不会命中，计时才有效；Mersenne 侧用素数 M3217）
+tools\build_tool.bat tools\bench\gen_semiprime.cpp
+.\build_vs18\tools\gen_semiprime.exe 3001 1 > n3001.txt
+
+# GPU（现成 CUDA 全量构建，NMake 树，见 README「为何单独构建」）
+.\build_cuda_cmake\ecm_cuda.exe -v -gpu -d 0 -sigma 3:12345678 -gpucurves 8192 1e5 0 < n3001.txt
+
+# CPU（同 B1；折叠域只在 N = 2^k-1 时启用，随机 N 走 CIOS，两者相差 1.8×）
+.\build_vs18\Release\ecm.exe --method mont --tmp-dir . -gpucurves 192 --stage1-threads 24 1e5 0 < n3217.txt
+```
+
+## 20. 实施清单：param0 on CUDA/CGBN（2026-09-24 决策后，逐处改动）
+
+决策（用户 2026-09-24）：**必须实现 param0**；选择方式 `method = gpu` + 新增 **`gpu_param = 0|3`**；
+**param3 保留可选**（代码默认 3 = 保持旧行为，ini 模板写 0 并注明推荐）。
+
+### 20.1 现状（已读源码，改动面就在这几处）
+
+`kernels/cuda/cgbn_stage1.cu`：
+
+| 行 | 现状 |
+|---|---|
+| `:254` | `set_p_2p(N, curves, sigma, BITS, &data_size)`：**5 字/曲线** = `N, aX, aZ, bX, bZ`，`P_a=(2:1)`、`P_b=(9, 64d+8)` |
+| `:309` | `process_results(..., const uint32_t *data, cgbn_bits, curves, sigma)`：按 `limbs_per = BITS/32`、5 字步长读回 |
+| `:340` `:1664` | ckpt 头/数据：`header{curves,sigma,BITS,TPI,data_size}` + **整块 data**；恢复时按 `data_size` 反推 strides |
+| `:606` | `cgbn_ecm_stage1(factors, array_found, N, s, curves, sigma_ptr, ckpt_ms, gputime, verbose)` |
+| `:937` | 批循环：`this_batch` 自适应到 ~100 ms，`(*kernel)<<<BLOCK_COUNT,TPB>>>(report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma, np0)` |
+| `:951` | kernel 签名 9 参（见下），曲线常数靠 `sigma` 标量传进 kernel |
+
+`kernels/cuda/cgbn_stage1_kernel.h`：`:162` `double_add_v2(q,u,w,v,uint32_t d,modulus,np0)`；
+`:272` `kernel_double_add<params>(report, s_bits, s_bits_start, s_bits_interval, gpu_s_bits, data, count, sigma_0, np0)`；
+`:423` 每 TPI 一个 dispatch 函数；4 个 `cgbn_stage1_kernels_tpi*.cu` 负责实例化。
+
+### 20.2 改动清单
+
+**(1) kernel：新增 param0 变体（不动原函数）**
+
+`cgbn_stage1_kernel.h` 里加 `double_add_v2_suyama(q,u,w,v, const bn_t &a24, const bn_t &xdiff, modulus, np0)`：
+与 `double_add_v2` 只差两处（其余逐行照抄，保证与 param3 版本同样的调度/归一化模式）：
+
+```
+- special_mult_ui32(dK, d, modulus, np0);            // d 是 32 位 a24
++ cgbn_mont_mul(_env, dK, K, a24, modulus, np0);     // 满宽 a24（Montgomery 域）
+...
+- cgbn_shift_left(_env, v, v, 1);                    // ×2 = 差分坐标 x_D=2
++ cgbn_mont_mul(_env, v, v, xdiff, modulus, np0);    // ×xdiff（差分点仿射 x）
+```
+
+新增 `kernel_double_add_suyama<params>`：与 `kernel_double_add` 同结构，但 Setup 段多载入两个常量：
+
+```
+data 布局（param0，7 字/曲线）：N, a24, xdiff, aX, aZ, bX, bZ
+  a24, xdiff 一次性载入并 bn2mont（与现有 aX/aZ/bX/bZ 同样处理）
+  循环里调用 double_add_v2_suyama(...)
+  （首版把两常数放寄存器；若 regs 涨到掉占用率，改放自留 shared memory —— 见 20.4）
+```
+
+**为什么不用 `special_mult_ui32`**：它只能乘 32 位常数（`(K·R·σ)>>32`），而 Suyama 的 a24 是满宽值。
+**为什么 `cgbn_mont_mul` 是对的**：`a24` 在 Setup 里已 `bn2mont`，与被乘量同域 ✓。
+
+**(2) dispatch：只实例化需要的档位（编译时间是稀缺资源）**
+
+新增 `kernels/cuda/cgbn_stage1_kernels_suyama_tpi16.cu`（先只做 TPI=16 的 3072/3584/4096 三档，
+覆盖 M3001/M3217/4001 目标尺寸），导出
+`cgbn_stage1_kernel_suyama_tpi16(BITS, *TPI_out)`；`cgbn_stage1.cu` 里加
+`cgbn_stage1_kernel_suyama_dispatch(BITS, TPI_out)`（先查 TPI16 表，再按需加其它 TPI）。
+CMake：把新 TU 加进 `ecm_cuda` 的源列表（与 4 个 tpi*.cu 并列）。
+
+**(3) host：Suyama 曲线/起点设置**
+
+`cgbn_stage1.cu` 新增 `set_p_2p_suyama(const mpz_t N, uint32_t curves, uint64_t sigma0, uint32_t BITS, size_t *data_size, const char *field)`：
+
+```
+每曲线 i：σ_i = sigma0 + i（uint64，与 CPU 路径/batch 语义一致）
+  u = σ²−5, v = 4σ
+  A  = (v−u)³(3u+v)/(4u³v) − 2      (mod N)
+  a24 = (A+2)/4                      (mod N)      → 写入 datum[1]
+  X0 = u³, Z0 = v³                   (mod N)
+  xdiff = X0·Z0⁻¹                    (mod N)      → 写入 datum[2]
+  2P ← 一次 xDBL(a24)  → datum[5], datum[6]
+  N → datum[0]; X0,Z0 → datum[3], datum[4]
+```
+
+要点：
+* **所有除法都在 host**（`mpz_invert`），GPU 端不需要求逆；
+* σ 用 `mont_set_sigma()` 同款的 64 位装配（Windows 上 `mpz_set_ui` 只吃 32 位）；
+* 与 `src/cpu/ecm_mont_cpu.cpp:mont_suyama_curve()` 用**同一套公式**（可直接复用/复制该函数以保证逐位一致）；
+* `process_results` 的步长改为「7 字 + 由 `data_size` 反推」而不是硬编码 5。
+
+**(4) 驱动 / 配置：`gpu_param = 0|3`**
+
+* `src/core/ecm_queue_config.{h,cpp}`：新增 `int gpu_param = 3;`（`[gpu]` 组，取值 0|3；非法值警告并回落 3），
+  ini 模板双语注释：`0 = Suyama param0（Z/12，成功率≈3×，推荐）/ 3 = gmp-ecm batch param3（现状）`。
+* `src/core/ecm_driver.cpp`：CLI `--gpu-param 0|3`；经 `Stage1RunOptions` 传给后端 seam。
+* `include/ecm_backend.h` + `src/cuda/ecm_cuda_backend.cu` + `src/opencl_backend_glue.cpp`：
+  seam 增加一个 `gpu_param` 入参；CUDA 侧转给 `cgbn_ecm_stage1(..., param)`；
+  **OpenCL 侧先只接受 3，收到 0 时明确报错**（.cl kernel 未移植，见 20.5）。
+
+**(5) 存档**
+
+* `gpu_param = 0` ⇒ 走 `ecm_append_save_lines_mont()`（`src/core/ecm_save.cpp:219`，param0 文本，**省略 PARAM=**）
+  ⇒ gmp-ecm `-param 0` / Prime95 `sigma_type=1` 都能续 stage 2；
+* `gpu_param = 3` ⇒ 保持现有 `opencl_ecm_append_save_lines()`（写 `PARAM=3`，Prime95 `sigma_type=3`）。
+
+**(6) 检查点**
+
+* 头里加 `param` 字段 + 版本号 +1；`data_size = 7 × curves × BITS/32 × 4`。
+* 恢复时校验 `param` 一致，否则拒绝（不同参数化的缓冲区不可互读）。
+* σ 与位偏移的语义与 CPU 侧一致（σ 决定曲线与起点，`s_partial` 决定阶梯位置）⇒ 续跑行为与 CPU 路径同构。
+
+### 20.3 验收（必须全部通过才算完成）
+
+1. **逐点对拍（前哨，dev/小 kernel 即可迭代）**：同一组 σ、同一 B1，
+   `gpu_param = 0` 的 CUDA 结果与 `--method mont`（CPU 标量 `mont_stage1_curve_bits_x`）**逐曲线 x 相同、hits 相同**。
+   先用 M991（1024 容器，dev build 编译快），再 M1277/M3001。
+2. **吞吐**：M3001 / M3217 上 `gpu_param = 0` vs `gpu_param = 3` vs CPU 24 线程，报 curve-bits/s
+   （预期：param0 比 param3 慢 ~22%，但每因子期望代价 ≈0.41×；CPU 侧见 §19.4 的表）。
+3. **存档互通**：`gpu_param = 0` 的 `.save` 交给 gmp-ecm `-param 0` 续 stage 2（用已有的
+   `tools/test/test_mont_gmp_oracle.ps1` 同款做法）；并与 CPU param0 的 `.save` **内容一致**（同 σ 集合）。
+4. **续跑**：`gpu_param = 0` 跑到一半杀进程 → 重跑同一命令行 → 曲线内容与不中断那次一致（复用
+   `tools/test/test_mont_checkpoint.ps1` 的判据）。
+
+### 20.4 已知风险与先测项
+
+1. **寄存器**：kernel 现在每线程 88/98/105 regs（3072/3584/4096 容器），常驻两个满宽常数额外 +14。
+   首版放寄存器并实测 `numRegsPerThread`；若 block 占用率下降（512→448）则改放 shared memory。
+   **这是移植里唯一可能需要调结构的地方，建议第一步就量化。**
+2. **编译时间**：全量 TPI×BITS 实例化很贵（`cgbn_stage1.cu:664-675` 的注释记录过成本）
+   ⇒ param0 变体只实例化需要的档位，按需扩表。
+3. **容器档位**：3001→3072、3217→3584，tier 之间是 n² 关系（§19.4）⇒ 选任务尺寸时看一眼档位。
+
+### 20.5 明确不做的部分
+
+* **OpenCL (.cl) 路径的 param0**：AMD iGPU 实测 ~0.2M curve-bits/s 量级，投入产出不成立；
+  `gpu_param = 0` 在 OpenCL 后端下明确报错而不是静默降级。
+* param3 路径的任何语义改动（用户要求保留可选）。
+
+### 20.6 进展（2026-09-24：**四项验收全部通过**）
+
+GPU 侧实现已落地，`method = gpu` + `gpu_param = 0` 可用（param3 保持不变）：
+
+| 改动 | 位置 |
+|---|---|
+| param0 阶梯变体 | `kernels/cuda/cgbn_stage1_kernel.h`：`double_add_v2_suyama()` + `kernel_double_add_suyama<params>`（7 字/曲线：`N, a24, xdiff, aX, aZ, bX, bZ`）|
+| 分发 | 新 TU `kernels/cuda/cgbn_stage1_kernels_suyama.cu`：tpi8 的 768/1024（始终编译，供 dev build 做正确性迭代）+ tpi16 的 3072/3584/4096（仅 full build）|
+| host 设置 | `kernels/cuda/cgbn_stage1.cu`：`set_p_2p_suyama()`（u,v,A,a24,X0,Z0,xdiff,2P；三次求逆全在 host）；`process_results()` 改为按 `words_per_curve`/`p1_word`/`p2_word` 读取，不再硬编码 5 字 |
+| 64 位 σ | `cgbn_ecm_stage1(..., uint64_t *sigma, ..., int gpu_param)`；驱动 `firstsigma64`（param0 用同一个 53 位随机生成器）贯通到 seam 的两个后端；param3 仍要求 σ+curves ≤ 2^32（那条路把 d=σ/2^32 当 32 位核参数） |
+| 选择器 | ini `gpu_param`（`[gpu]` 组）+ CLI `--gpu-param 0|3`；代码默认 3（旧 ini 行为不变），模板写 0 并注明推荐 |
+| 存档 | param0 走 `ecm_append_save_lines_mont()`（省略 `PARAM=`）且**必须携带原始 N**；param3 保持 `PARAM=3` + 原有的"N 除以已找到因子"写法 |
+| 检查点 | **格式升到 v4**（两条路径各自的结构体都改了）：`sigma` 变成 **64 位**、新增 `gpu_param` 字段；仍用 `data_size` 反推"每曲线几个字"（5 = param3、7 = param0）双向校验，参数化或布局不符直接拒绝重来。旧 v3 检查点按设计作废（头布局变了）|
+
+**验收结果**
+
+| # | 判据 | 结果 |
+|---|---|---|
+| 1 | GPU param0 与 CPU param0 逐曲线一致 | **PASS**：M991 64/64、991-bit 半素数 64/64、64 位 σ 32/32（含 hit 的因子值；8218291649 与 `docs/ECM_EDWARDS_STAGE1.md` 的 M991 不变量一致）|
+| 2 | 吞吐（M3001/M3217，B1=1e5，4096 曲线）| **PASS**：param0/param3 = 0.78–0.82（与 +22% 算子预测吻合）；vs CPU 24 线程 = 3.3–7.3×（§19.5 表）|
+| 3 | 存档互通 | **PASS**：`ecm-zen3.exe -resume <gpu param0 save> 1e5 1e6` 接受全部 32 行（无 bad checksum）、读到 `N=(2^991-1)`、`sigma=0:777`，并在 **stage 2 找到因子 41473350001** |
+| 4 | 杀进程续跑 | **PASS**：M3217 / 4096 曲线跑到 25 s 硬杀（留下 12.85 MB = 4096×7×(3584/32)×4 B 的 ckpt）→ 重跑同一命令行 ⇒ 4096/4096 行与不中断那次完全一致，成功后 ckpt 自动删除 |
+
+回归：param3 未受影响 —— `ecm_cuda --gpu-param 3` 与 OpenCL `ecm --gpu-param 3` 在同一 N/σ/B1 下 **32/32 行一致**；
+OpenCL 后端收到 `--gpu-param 0` 会**明确报错**（不静默降级）。整套判据固化为
+`tools/test/test_cuda_param0.ps1`（A 对拍 / B 64 位 σ / C gmp-ecm 互通 / D 杀进程续跑 / E param3 回归，
+共 17 项检查，`-SkipSlow` 可跳过 D），2026-09-24 全绿：
+
+```
+=== A. GPU param0 vs CPU param0 (M991, B1=1e5, 64 curves) ===
+  [PASS] GPU reports the Suyama param0 parametrization
+  [PASS] both saves have 64 curve lines (GPU 64, CPU 64)
+  [PASS] GPU and CPU agree on all 64 curves (sigma AND x)
+=== B. 64-bit sigma (> 2^32) ===
+  [PASS] GPU reports the full 64-bit sigma (9007199254740881), not a truncated one
+  [PASS] GPU and CPU agree on all 32 curves at sigma > 2^32
+  [PASS] the save carries the untruncated sigma
+=== C. gmp-ecm accepts the param0 save (resume + stage 2) ===
+  [PASS] no "bad checksum" complaint (the N field is the real N)
+  [PASS] gmp-ecm read N = (2^991-1)
+  [PASS] gmp-ecm read the line as param 0 (Suyama) with our sigma
+=== D. hard kill + resume (M3217, 4096 curves, B1=1e5) ===
+  [PASS] reference run completed
+  [PASS] the run was still going after 25 s (so the kill is a real mid-run kill)
+  [PASS] the killed run left a checkpoint behind
+  [PASS] the checkpoint holds the whole 7-word/curve buffer (12845120 bytes)
+  [PASS] the resumed run completed
+  [PASS] killed+resumed save is identical to the uninterrupted one (4096/4096 lines)
+  [PASS] the checkpoint is removed once the save is written
+=== E. param3 regression: CUDA vs OpenCL ===
+  [PASS] param3 results unchanged across the two backends (32/32 lines)
+  [PASS] the OpenCL backend refuses gpu_param = 0 loudly
+ALL OK
+```
+
+> 迭代速度提示：`build_cuda_dev`（NMake，dev kernel 集）只带 768/1024 的 param0 kernel，
+> 编译快，适合做 M991 这种小 N 的正确性迭代；吞吐/大 N 必须用全量的 `build_cuda_cmake`。
+
+
+**过程中发现并修掉的两个真问题**
+
+1. **param0 存档的 `N=` 不能沿用 GPU 老路径的写法**：`opencl_ecm_build_saved_n_expr()` 会把 N 改写成
+   "N ÷ 已找到的因子"，而 gmp-ecm 用 N 校验每行 checksum ⇒ 32 行全被判 `bad checksum`。param0 分支改用
+   原始 `n_expr`（与 CPU 路径一致）后 gmp-ecm 立刻接受并成功做 stage 2。
+2. **64 位 σ 在 seam 上被截断**：原 seam 是 `uint32_t *sigma`，param0 的 53 位随机 σ 会被截断（曲线变另一条）。
+   现已改为 `uint64_t *sigma` 贯通两端；param3 侧补了显式的 32 位窗口校验。
+
+**顺带（用户要求）：TPI=16 档位从 256 间隔回退到 512 间隔**
+`kernels/cuda/cgbn_stage1_kernels_tpi16.cu` 之前把 2560..8192 按 **256** 间隔全部实例化（23 个），
+选择列表里其实早就只留了 512 间隔（那些 256 档是死实例化），等于每次全量构建白编译 11 个模板。
+现在两份列表统一为 **512 间隔**（2560/3072/3584/4096/4608/5120/5632/6144/6656/7168/7680/8192），
+`available_kernels` 里的注释掉的残留行也清掉了。落在两档之间的 N（如 3300 bit）会用上一档容器
+（3584，多约 8% 每乘代价）——这是这个网格有意接受的取舍（实测 256 网格没有吞吐收益）。
+
+**已知限制（下一步可做）**
+
+* ~~检查点的 `sigma` 字段只有 32 位~~ **已修（2026-09-24）**：两条路径的 ckpt 头都升到 **v4**
+  （`sigma` 64 位 + `gpu_param` 字段，CUDA 侧与 OpenCL 侧的共享结构都是 72 字节），param0 的 64 位 σ
+  现在完整落盘并在恢复时用于校验（参数化不一致会被拒绝，而不是按错的步长/错 σ 读取）。
+* ~~param0 kernel 只实例化 3072/3584/4096~~ **已补全**：现在与 param3 同一张档位表
+  （TPI=4 的 128–512、TPI=8 的 768–2048、TPI=16 的 2560–8192、TPI=32 的 9216–16384），
+  代价是全量构建的实例化数量翻倍（见 §21）。
+* 命中率工具 `tools/stat/ecm_hitrate.ps1` 已重写：可选 `-Engine edwards|mont|gpu`、`-GpuParam 0|3`、
+  `-BitsFrom/-BitsTo` 位宽范围、`-Count N` 采样或 `-All` 全体素数；命中按驱动权威行 `factor[i]=` 计数。
+  顺带修掉一个既有显示 bug：项目日志 shim 就是 `vfprintf`，**不支持 gmp-ecm 的 `%Zd`**
+  （CUDA 的命中行过去打成 `factor d found`，因子值丢失），现在用 `mpz_get_str` 显式渲染。
+* 同工具的两个**测量口径 bug**（第二轮自查发现并修复，都会让"命中率"这一列失真）：
+  1. **多行输出被当成一行**：脚本把 `cmd /c ... | Out-String` 得到的**单个多行字符串**直接喂
+     给 `Select-String`，而 Select-String 对一个字符串只返回**一条**匹配 ⇒ 每个素数的多次命中
+     只算一次，速率被压低成 6.25%（bit20/B1=256 的真值是 30.47%，差 4.9 倍）。
+     修法：先 `-split "`r?`n"` 再匹配（或 `[regex]::Matches`）。教训记在脚本头里。
+  2. **`simd-auto` 不是合法后端名**：驱动器只认 `auto|simd|gmp`，脚本却把 `simd-auto` 原样
+     当 `--backend` 传过去 ⇒ 每个素数都被拒（`Invalid --backend`），1000 个素数全 0 命中而
+     脚本不吭声。现在脚本把 `simd-auto/simd-mers/simd-mont` 翻译成
+     `--backend simd --field auto|mersenne|montgomery`，并对"有输出但没有结果行"的运行报警
+     （summary 里新增 `failedRuns` 列）。
+* 修好后与**独立 Python 模型**（`tools/ecm_prob`，逐曲线独立判 `Z == 0`，bit20 / B1=256）对拍：
+
+  | 引擎 / 曲线族 | 本工具实测 | Python 模型 |
+  |---|---|---|
+  | CPU mont(simd) param0（64 primes × 32 curves）| 625/2048 = **30.518%** | 30.472% |
+  | GPU param0（同上，同一批 σ）| 625/2048 = **30.518%**（与 CPU 逐曲线完全一致）| 30.472% |
+  | GPU param3（同上）| 458/2048 = **22.363%** | 21.641% |
+  | Edwards Z/2xZ/8（1000 primes × 8 curves）| 2611/8000 = **32.6375%** | 32.665% |
+
+  ⇒ param0 的 CUDA 实现不只与 CPU 逐曲线一致，也与完全独立的 Python 模型在同一 σ 族上吻合到
+  0.05 个百分点；param3 的 0.7pp 差异来自 σ 取值族不同（工具用 32 位 σ 序列，模型固定 σ=10）。
+* `tools/ecm_prob/ecm_sweep.py` 的位置参数是**位宽列表**而不是区间（`sweep 31 40` = 只算 31 和 40，
+  实测踩到过），现在显式支持区间写法 `sweep 31-40`（`31..40` 亦可），非法区间直接报错。
+* **横幅在 CUDA 版里谎报 OpenCL（2026-09-24 用户指出并修复）**：driver 是两个 exe 共用的，但
+  "gpu 实现"是**链接期**决定的，于是写死的字符串在 `ecm_cuda.exe` 里全是错的 —— 队列管理器打印
+  `method : gpu (OpenCL)`，帮助首行是 `OpenCL ECM stage-1 driver`，`-d` 写成 "OpenCL device
+  index"，`--showkernel` 写成 "OpenCL kernel paths"，运行行 `Using B1=... (N curves)` 也不带后端。
+  修法：给 backend 接缝加 `const char *ecm_backend_name(void)`（OpenCL glue 返回 `"OpenCL"`，
+  CUDA glue 返回 `"CUDA/CGBN"`，见 `include/ecm_backend.h`），driver 里所有会暴露实现名的位置
+  都改成问它；队列管理器另加一行 `gpu backend : <名字>, param<N>, device <d>`，运行行改成
+  `Using B1=100000, B2=0 (N curves, CUDA/CGBN)`。OpenCL 专用开关（`--mul/--sqr/--add/--sub/
+  --special-mult`、内核缓存、`tpi`/`wg_size`）在帮助与 ini 注释里都显式标了 "(OpenCL only)"，
+  ini 模板里 `method = gpu`、`ckpt_seconds`、`device` 也不再自称 OpenCL（跑哪个实现由 exe 决定，
+  ini 不区分）。两个本地 `ecm.ini`（`build_vs18/Release`、`build_cuda_cmake`）已按新模板刷新，
+  刷新前核对过 key=value 与模板默认值完全一致（没有丢用户设置）。
+* 顺带修掉一个**编码**坑：`tools/stat/ecm_hitrate.ps1` 里有中文注释/字符串但没有 UTF-8 BOM，
+  Windows PowerShell 5.1 于是按系统 ANSI（GBK）解码，UTF-8 的中文会把后面的引号当作 GBK 尾字节
+  **吃掉**（`"（速率不可信）："` 的 `：` 吞了收尾的 `"`），报出一堆看不懂的语法错误。
+  现在该脚本（连同类风险的两个测试脚本）都改成 UTF-8 **with BOM**；`pwsh` 默认按 UTF-8 读，
+  所以这类问题只在用 `powershell`（5.1）跑时暴露 —— 仓库脚本是按 5.1 写的，务必带 BOM。
+
+## 21. param0 与 param3 的 kernel 能否复用？（2026-09-24 用户提问）
+
+**结论：不能复用同一批实例化；两者是两组独立的 `__global__` 函数。** 但"编译两份"这件事可以有不同的
+取舍，下面是完整账。
+
+### 21.1 为什么不能复用
+
+两者的差别全部在**热循环里的每 bit 算术**：
+
+| | param3（batch）| param0（Suyama）|
+|---|---|---|
+| 曲线常数乘法 | `special_mult_ui32(K, d)`：32 位常数 + 单字约简 | `cgbn_mont_mul(K, a24)`：满宽常数 |
+| 差分坐标 | 内联常量 `2`（`shift_left(v,1)`）| `cgbn_mont_mul(v, xdiff)`：满宽常数 |
+| 数据布局 | 5 字/曲线 | 7 字/曲线 |
+| σ | 32 位（`d = σ/2^32`）| 64 位（不进入 kernel，只进 host 设置）|
+
+这几处都是**编译期决定的操作序列**（操作数宽度、常量来源），不是运行期能"传参数解决"的东西 ⇒
+在 CUDA 里它们就是两个不同的 kernel 函数，各自按 (TPI, BITS) 实例化一次。
+
+> （顺带说明为什么这让 param0 略微变慢：CGBN 没有专用平方，`mont_sqr` 就是 `mont_mul`，
+> 所以每 bit 从 8 个满宽乘变成 10 个 ⇒ 实测吞吐 0.78–0.82×，与预测的 +22% 一致。）
+
+### 21.2 如果一定要"只编译一份"，有三条路（都不免费）
+
+| 方案 | 编译时间 | 运行时代价 | 适用 |
+|---|---|---|---|
+| (a) 现状：两个 kernel | 2× | 0 | **当前选择**：两个族都要长期可用时最干净 |
+| (b) 一个 kernel + 运行期 `bool param0` 参数 | **1×** | 热循环里多一次 uniform 分支；两条路径的临时变量都要活着 ⇒ 寄存器上涨（3072 档目前 88 → 可能 >100），占用率可能下降；param3 分支还要额外携带 a24/xdiff 常数 | 只有编译时间/二进制体积是硬约束时才考虑；**必须先实测寄存器与吞吐再决定** |
+| (c) 模板加一个 `bool PARAM0` 参数 | 仍是 2×（模板实例化数不变），只是源码合一 | 0 | 想要"单一实现来源"（避免两份公式漂移）时用它 |
+| (d) 只保留 param0，删掉 param3 | **0.5×**（相对现状）| 0 | **如果确认不再需要 batch 族**，这是最划算的减半方式：老 GPU 存档（`PARAM=3`）将无法续跑 |
+
+**我的建议**：(a) 保持现状。原因是 param3 的实例化本来就是既有资产（编译一次可长期复用），而 (b)
+把"每 bit 热循环"变成带分支的代码，风险/收益不成比例。(d) 是真正的省时间路径，但它是一个**产品决策**
+（是否放弃 batch 族），不该由 kernel 结构决定——如果决定放弃，删掉 param3 的实例化即可，param0 侧的
+成本完全不变。
+
+### 21.3 已落地的档位表（2026-09-24：param0 补全到与 param3 相同）
+
+`kernels/cuda/cgbn_stage1_kernels_suyama.cu` 现在实例化与 param3 完全相同的网格：
+
+```
+TPI=4  :  128, 192, 256, 384, 512                       （始终编译）
+TPI=8  :  768, 1024                                     （始终编译）
+          1280, 1536, 1792, 2048                        （仅 full build）
+TPI=16 :  2560, 3072, 3584, 4096, 4608, 5120, 5632,
+          6144, 6656, 7168, 7680, 8192                  （仅 full build，512 间隔）
+TPI=32 :  9216, 10240, 11264, 12288, 13312, 14336,
+          15360, 16384                                  （仅 full build，512 间隔）
+```
+
+⇒ `gpu_param = 0` 现在能处理与 batch 路径相同范围的所有 N（≤16384 bit），包括
+`docs/ECM_Edwards...` 里那类 M8237 规模的输入（8192 容器）与 hit-rate 工具用的小 N（768 容器）。
+
+代价：全量 CUDA 构建的模板实例化数量翻倍（param3 31 个 + param0 31 个）。开发用的小集合
+（`build_cuda_dev`，`IS_DEV_BUILD`）仍然只编译 TPI=4/8 的小档，所以"改一行、编一次、在 M991 上验证"
+的迭代速度不变。
+#### 20.6.1 补充验证（2026-09-24 晚，ckpt v4 + 档位补全之后）
+
+| 项 | 结果 |
+|---|---|
+| 检查点 v4（64 位 σ） | **PASS**：`test_cuda_param0.ps1` 用例 D 改用 σ = 9007199254740847（> 2³²）跑到 25 s 硬杀 → 续跑 ⇒ 4096/4096 行与不中断一致，且断言"存档仍带完整 64 位 σ"通过；检查点文件 12,845,128 字节 = 4096×7×112×4 + 72 字节 v4 头 ✓ |
+| 新实例化的档位 | **PASS**：M1277 现在走 **CGBN&lt;8, 1536&gt;**（本次新增档）、M4001 走 CGBN&lt;16, 4096&gt;，两者与 CPU param0 各 16/16 行一致 |
+| OpenCL 侧 v4 头 | **PASS**：`ecm.exe -gpu`（param3）写出的 `.dat` 头为 `magic=0x45555047 version=4`、`gpu_param=3`、`BITS=1024`、`TPI=8`、`data_size=327680`（= 512×5×32×4 ✓）；续跑打印 `Resuming from checkpoint: 4.0% complete` 并按存档 σ 恢复 |
+| 全套回归 | `tools/test/test_cuda_param0.ps1` **18/18 PASS**（A 对拍 / B 64 位 σ / C gmp-ecm 互通 / D 硬杀续跑+64 位 σ / E param3 跨后端回归）|

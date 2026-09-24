@@ -13,7 +13,7 @@
     Task line format is identical to the Linux version, only the executable
     path changes (./ecm  ->  .\ecm_cuda.exe):
 
-        echo '<N expression>' | .\ecm_cuda.exe -v -savea m8237_110e6.save -gpu -gpuckpt 300 -gpucurves 384 110e6 0
+        echo '<N expression>' | .\ecm_cuda.exe -v -savea m8237_110e6.save -gpu --ckpt 300 -gpucurves 384 110e6 0
 
     Pasting Linux style lines is fine as well: when the executable token of a
     line cannot be resolved on this machine (./ecm, ecm.exe, ...) the local
@@ -144,7 +144,7 @@ work_manager.bat also accepts the old shell style options:
   -h, --help             same as -Help
 
 Task line format (same as the Linux version, executable path updated):
-  echo '<N expression>' | .\ecm_cuda.exe -v -savea m8237_110e6.save -gpu -gpuckpt 300 -gpucurves 384 110e6 0
+  echo '<N expression>' | .\ecm_cuda.exe -v -savea m8237_110e6.save -gpu --ckpt 300 -gpucurves 384 110e6 0
 
 -v is added automatically when the line does not have it yet.
 
@@ -533,7 +533,7 @@ try {
         }
 
         # Marker for the incremental sync: .save files touched from now on (including
-        # -gpuckpt checkpoints written during the task) belong to this task.
+        # --ckpt checkpoints written during the task) belong to this task.
         $marker = (Get-Date).AddSeconds(-2)
 
         Write-Log -Message ('START: ' + $line) -Color Green

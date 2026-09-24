@@ -147,7 +147,7 @@ stage-1 完成后，Edwards 点 `[s]P=(e.x:e.y:e.z)` 转 Montgomery（`ed_to_Mon
 - [x] **Prime95 二进制存档读写**（`ecm_edwards_save.{h,cpp}`，ECM_VERSION=6）：MIDSTAGE（state=2，Qx/Qz）与 STAGE1（state=1，Edwards checkpoint）写/读，checksum 公式与 `e0000347` **字节级一致**（写出的 204 字节与 Prime95 原文件完全相同）。
 - [x] **交接自动化**（§11 已重构：`ecm.exe` 只落本地盘）：原实现写 `e{n:07d}` + 追加 `worktodo.add`。现在 `ecm.exe` 只写本地 `e{n:07d}_c{curve:06d}.tmp`；把结果送进 Prime95（写 `e{n:07d}` + 往 `worktodo.add` 的 `[Worker #N]` 段追加 `ECM=` 行，按 `MaxHighMemWorkers` 限流）由独立程序 **`ecm_p95feeder`** 负责，见 §11。
 - [x] **多曲线交接**（§11 已重构）：原为 `ecm.exe` 内后台线程复制 + 轮询 p95 消费；现由 `ecm_p95feeder` 以"在飞计数 + 同 N 唯一 + 空闲 Worker 段"规则完成。
-- [x] **自我 checkpoint 恢复**：`ed_mul` 分块可恢复（`edwards_stage1_curve_progress`），每 16384 位回调；时间间隔（复用 `gpuckpt_seconds`）+ SIGINT 触发写 STAGE1 存档；启动时检测并恢复（`resume STAGE1 checkpoint @ bitnum=X`）。
+- [x] **自我 checkpoint 恢复**：`ed_mul` 分块可恢复（`edwards_stage1_curve_progress`），每 16384 位回调；时间间隔（复用 `ckpt_seconds`）+ SIGINT 触发写 STAGE1 存档；启动时检测并恢复（`resume STAGE1 checkpoint @ bitnum=X`）。
 - [x] **多曲线并行（吞吐）**：`curves` 条曲线分派到 `min(curves, #cores)` 个工作线程（每线程独立曲线，原子计数器动态取号）。`ecm.ini` 的 `edwards_threads`（0=自动，1=顺序）/ `--edwards-threads N` 控制；线程内只读共享 `N`/`s`（GMP 支持并发只读），输出按曲线索引隔离；`random_sigma_u64` 用全局 `rand()`，因此 sigma 全部在主线程预生成后分发。多曲线 checkpoint 路径改为每条曲线独立 `e{n:07d}_c{6-digit}`（单曲线仍是 `e{n:07d}`，Prime95 交接路径不变），避免并行写冲突。**24 线程实测 ~12.6× 吞吐**（§10.3）。
 - [x] **GMP x86_64/zen3 内核重建 + NAF 窗口重调**：见 §10.2 / §10.4（单曲线 1.17~1.26×、窗口 w 8→12 约 2~5%）。
 
@@ -353,7 +353,7 @@ ecm.exe（stage-1 计算）                    ecm_p95feeder（搬运）
 - 删除了原后台交接线程（`handoff_worker`/`handoff_start`/`handoff_stop`/`handoff_enqueue`）与 `read_save_state`，`run_edwards_stage1` 因此更短。
 - 单曲线 / 多曲线统一命名：不再有"单曲线写 `e{n:07d}`"的特例，一律 `_c{curve:06d}`，避免并行写冲突与恢复歧义。
 
-验证：M677→1943118631、M991→8218291649 不变式通过；8 曲线并行 4.08 s（8 个 `.tmp`）；`tmp_dir` 为空时工作目录零残留；M4003 上 `gpuckpt_seconds=1` 可见 `e0004003_c000001`（STAGE1）被周期性重写。
+验证：M677→1943118631、M991→8218291649 不变式通过；8 曲线并行 4.08 s（8 个 `.tmp`）；`tmp_dir` 为空时工作目录零残留；M4003 上 `ckpt_seconds=1` 可见 `e0004003_c000001`（STAGE1）被周期性重写。
 
 ### 11.3 `ecm_p95feeder` 侧（新增）
 
@@ -740,7 +740,7 @@ M1/M2 仍未做的性能项：**分块/寄存器窗口版内核**（n=154 时 u 
 `resume_digit` → **标量 ↔ SIMD 存档互认、可混合续跑**。
 
 **中断语义**：收到 SIGINT 时先写 `.ckpt` 再中止批次，并且**不写**中间态 `.tmp`（不产出半截
-结果）。存档间隔取 ini 的 `gpuckpt_seconds`。
+结果）。存档间隔取 ini 的 `ckpt_seconds`。
 
 **验收**：① bench 引擎往返自测（`simd_edwards_bench verify` 自动跑，条件 `s_bits > 16384`）
 `aborted@digit=16384 → set_resume=0 → lanes differing after resume = 0`；②

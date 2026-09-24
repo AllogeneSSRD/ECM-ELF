@@ -68,7 +68,7 @@ ecm.bat
 echo "N" | ecm.exe <-gpu> [-gpucurves <n>] [...] <B1> <B2>
 ```
 
-从标准输入读取合数 **N**（十进制或表达式），执行 stage-1；`-gpu` 启用 OpenCL 批处理曲线。
+从标准输入读取合数 **N**（十进制或表达式），执行 stage-1；`-gpu` 启用 GPU 批处理曲线（`ecm.exe` = OpenCL，`ecm_cuda.exe` = CUDA/CGBN，启动横幅会打印实际后端）。
 尖括号 < >：表示必需提供的参数。
 方括号 [ ]：表示可选参数。
 
@@ -85,7 +85,7 @@ echo "(2^991-1)" | build_rel\Release\ecm.exe -v --go -gpu -gpucurves 384 1e6 0
 |------|------|
 | `<B1>` `<B2>` | 必选位置参数，在命令末尾 |
 | `-gpu` / `-gpucurves <n>` | GPU stage-1 与每批曲线数 |
-| `-d <index>` | OpenCL 设备索引 |
+| `-d <index>` | GPU 设备索引（`ecm.exe` 下是 OpenCL 设备，`ecm_cuda.exe` 下是 CUDA 设备） |
 | `-v` | verbose 输出详细信息 |
 | `--mul` / `--sqr` / `--add` / `--sub` / `--special-mult <path>` | 覆盖各算子内核路径（id/别名/auto） |
 | `--showkernel` | 从注册表枚举全部算子（id、别名、文件、支持平台） |
@@ -151,9 +151,9 @@ CPU 侧有**两条独立的 stage-1 路径**，它们共享同一个 `ecm.ini`�
 
 | 方法 | 命令行 | ini | 曲线族 / 指数 | 何时用 |
 |---|---|---|---|---|
-| GPU（OpenCL） | `-gpu -gpucurves <n>` | （ini 无开关，默认路径） | Montgomery，suite 与 GPU 核一致 | 有 OpenCL 设备时 |
-| **CPU Edwards** | `--edwards` | `edwards = 1` | Atkin-Morain（twisted Edwards，a=1）；指数与 PrMers/Prime95 同源 | 想在 CPU 上跑、且要 Edwards 语义 |
-| **CPU Suyama-Montgomery** | `--mont` | `mont = 1` | Suyama-σ（Prime95 `sigma_type=1` / gmp-ecm `-param 0`） | **要与 gmp-ecm param0 结果逐点对齐**、或需要 σ 64 位 |
+| GPU（OpenCL / CUDA/CGBN） | `-gpu -gpucurves <n>` | `method = gpu` | Montgomery，suite 与 GPU 核一致；**跑哪个实现由 exe 决定**（`ecm.exe`=OpenCL、`ecm_cuda.exe`=CUDA/CGBN，启动时打印 `gpu backend : ...`） | 有 GPU 设备时 |
+| **CPU Edwards** | `--edwards` | `method = edwards` | Atkin-Morain（twisted Edwards，a=1）；指数与 PrMers/Prime95 同源 | 想在 CPU 上跑、且要 Edwards 语义 |
+| **CPU Suyama-Montgomery** | `--mont` | `method = mont` | Suyama-σ（Prime95 `sigma_type=1` / gmp-ecm `-param 0`） | **要与 gmp-ecm param0 结果逐点对齐**、或需要 σ 64 位 |
 
 > 两条 CPU 路径**互斥**：命令行上 `--mont` 优先（同时给两个开关时 Edwards 被忽略）；ini 里
 > `mont = 1` 会直接关掉 Edwards，避免同一任务跑两遍。
@@ -162,20 +162,17 @@ CPU 侧有**两条独立的 stage-1 路径**，它们共享同一个 `ecm.ini`�
 
 | ini 键 | 取值 | 默认 | 说明 |
 |---|---|---|---|
-| `edwards` | 0 / 1 | `0` | 启用 CPU Edwards stage-1 |
-| `edwards_backend` | `auto` / `simd` / `gmp` | `auto` | `simd` = AVX512-IFMA 8 曲线/批；`gmp` = 标量 mpn（1 曲线/任务）。`simd` 在缺 AVX512-IFMA 的机器上会**直接报错**，`auto` 会自动回退 |
-| `edwards_mersenne` | `auto` / `on` / `off` | `auto` | **归约域**：`on` = 强制 Mersenne 折叠（要求 `N = 2^k-1`，否则报错）；**`off` = 强制蒙哥马利归约（即"Edwards mont 模式"）**；`auto` = `N = 2^k-1` 时折叠、否则蒙哥马利 |
-| `edwards_threads` | `0` = auto，`1` = 串行，`n` | `0` | Edwards 工作线程；被"批数"夹住（见第 4 节） |
-| `edwards_naf_w` | 3..12 | `0`（=12） | NAF 窗口；字典大小 `2^(w-2)` |
-| `mont` | 0 / 1 | `0` | 启用 CPU Suyama-Montgomery stage-1 |
-| `mont_backend` | `auto` / `simd` / `gmp` | `auto` | 同 `edwards_backend`；`simd` 为 8 曲线/批 |
-| `mont_torsion` | 1 / 12 | `1` | 指数 torsion：**1 = gmp-ecm `-param 0`（`lcm(1..B1)`）**，12 = Prime95 `choose12`（`12·lcm`）|
-| `mont_threads` | `0` = auto | `0` | Montgomery 工作线程；一个任务 = 一个 8 曲线批（`gmp` 后端则 1 曲线）|
-| `mont_save_pattern` | 名称模板 | `m{n}_{b1}.save` | 留空则跟随 `save_name_pattern` |
-| `sigma` | 0 = 随机 | `0` | 固定 σ 时从该值起递增：第 i 条曲线用 `sigma + i`（64 位）|
+| `method` | `gpu` / `edwards` / `mont` | `gpu` | **选 stage-1 引擎（三选一）**：`gpu`=GPU 批量（OpenCL 还是 CUDA/CGBN 由 exe 决定，ini 不区分，启动横幅打印真实后端）；`edwards`=CPU Edwards/Atkin-Morain；`mont`=CPU Suyama-σ 蒙哥马利（与 gmp-ecm `-param 0` / Prime95 `sigma_type=1` 同族） |
+| `backend` | `auto` / `simd` / `gmp` | `auto` | **两条 CPU 路径共用**。`simd` = AVX512-IFMA 8 曲线/批；`gmp` = 标量 mpn（1 曲线/任务）。`simd` 在缺 AVX512-IFMA 的机器上会**直接报错**，`auto` 自动回退 |
+| `field` | `auto` / `mersenne` / `montgomery` | `auto` | **SIMD 归约域（两条 CPU 路径共用）**：`auto` = `N = 2^k-1` 时用 Mersenne 折叠、否则蒙哥马利；`mersenne` = 强制折叠（形状不符直接报错）；`montgomery` = 强制蒙哥马利 CIOS（A/B 对照用）。实际选中的域打印在 `field layer :` 行 |
+| `stage1_threads` | `0` = auto，`1` = 串行，`n` | `0` | CPU stage-1 工作线程（两条路径共用）；被"任务数"夹住（见第 4 节） |
+| `naf_w` | 3..12 | `0`（=12） | 仅 `method = edwards` 生效：NAF 窗口；字典大小 `2^(w-2)` |
+| `exponent` | `lcm` / `choose12` | `lcm` | 仅 `method = mont` 生效：**`lcm` = `lcm(1..B1)`，与 gmp-ecm `-param 0` 逐点对齐（本项目验收口径）**；`choose12` = `12·lcm(1..B1)`，与 Prime95 `sigma_type=1` 对齐（交给 Prime95 做 stage 2 时用，见文档 §16.7）|
+| `sigma` | 0 = 随机 | `0` | 固定 σ 时从该值起递增：第 i 条曲线用 `sigma + i`（**64 位**，ini 可写十进制；建议 ≤ 2^63，见 §6 常见坑）|
 | `affinity` | `""` / `1,3,5,7` / `0-7` | `""` | 工作线程 `t` 绑定到列表中的 `cpu[t % len]`；支持范围与混合列表。**本机实测不绑定最快（SMT 兄弟勿同用）**，见 4.1 |
-| `tmp_dir` | 目录 | `.` | 本地 stage-1 存档目录 |
-| `save_name_pattern` | `m{n}_{b1}.save` | 同左 | 读取侧据此从文件名反推 B1（`m8237_110e6.save` → B1=`110e6`）|
+| `tmp_dir` | 目录 | `.` | 本地 stage-1 存档目录（`.save` 与中途检查点 `.ckpt` 都放这里）|
+| `ckpt_seconds` | 秒，`0` = 关闭 | `600` | **stage-1 中途检查点间隔**（命令行 `--ckpt`）。三种方法都有：GPU（OpenCL 与 CUDA 共用同一套 v4 头，头里记录参数化）存曲线缓冲 + 指数偏移，Edwards 存 `e{n}_c{k}.ckpt`，Montgomery 存 `m{n}_{b1}_c{k}.ckpt`。`0` = 不做定时保存，但 **Ctrl+C 仍会保存一次** |
+| `save_name_pattern` | `m{n}_{b1}.save` | 同左 | **写出侧**存档名模板（两条 CPU 路径共用）。读取侧**不依赖模板**：只取文件名最后一个 `_` 与 `.save` 之间那段作为 B1（`m8237_110e6.save` → B1=`110e6`）|
 | `worktodo` / `finished` / `log_file` | 路径 | `worktodo.txt` / `worktodo.finished.txt` / `screen.log` | 队列模式输入、成功项、带时间戳日志 |
 
 ### 3. 配方：四个可直接抄的 `ecm.ini`
@@ -183,10 +180,10 @@ CPU 侧有**两条独立的 stage-1 路径**，它们共享同一个 `ecm.ini`�
 **(a) GIMPS 风格 Suyama-Montgomery（推荐默认）** —— 与 gmp-ecm `-param 0` 逐点对齐：
 
 ```ini
-mont = 1
-mont_backend = simd
-mont_torsion = 1
-mont_threads = 0            # auto = min(批数, 核数)
+method = mont
+backend = simd
+exponent = lcm
+stage1_threads = 0          # auto = min(任务数, 核数)
 tmp_dir = saves
 save_name_pattern = m{n}_{b1}.save
 ```
@@ -194,26 +191,26 @@ save_name_pattern = m{n}_{b1}.save
 **(b) Prime95 `choose12` 语义**（指数为 `12·lcm(1..B1)`，用于与 Prime95/PrMers 对齐）：
 
 ```ini
-mont = 1
-mont_torsion = 12
+method = mont
+exponent = choose12         # Prime95 sigma_type=1；交给 Prime95 做 stage 2 时用
 ```
 
 **(c) Edwards + Mersenne 折叠（`N = 2^k-1` 时最快）**：
 
 ```ini
-edwards = 1
-edwards_backend = simd
-edwards_mersenne = auto      # N = 2^k-1 ⇒ 折叠域，模乘 madds 减半
-edwards_threads = 0
-edwards_naf_w = 12
+method = edwards
+backend = simd
+field = auto                # N = 2^k-1 ⇒ 折叠域，模乘 madds 减半
+stage1_threads = 0
+naf_w = 12
 ```
 
 **(d) Edwards 强制蒙哥马利归约（"mont 模式"）** —— 三种典型用途：
 
 ```ini
-edwards = 1
-edwards_backend = simd
-edwards_mersenne = off       # 强制 Montgomery CIOS，无论 N 是否 2^k-1
+method = edwards
+backend = simd
+field = montgomery          # 强制 Montgomery CIOS，无论 N 是否 2^k-1
 ```
 
 | 用途 | 说明 |
@@ -223,14 +220,56 @@ edwards_mersenne = off       # 强制 Montgomery CIOS，无论 N 是否 2^k-1
 | 正确性交叉验证 | 一条曲线的结果应与折叠域**逐点相同**（只是归约方式不同），可用来抓归约内核的 bug |
 
 > 代价：蒙哥马利 CIOS 下每次模乘约 `n(4n+3)` 条 madd（折叠域是 `2n²`，且平方只要 `n(n−1)+2n`），
-> 位宽越大差距越明显 ⇒ 能用折叠域就别用 `off`。
+> 位宽越大差距越明显 ⇒ 能用折叠域就别用 `montgomery`。
+
+> **键名迁移（2026-09-24 整理）**：旧键仍可用（每次运行提示一次），对应关系为
+> `edwards`/`mont` → `method`；`edwards_backend`/`mont_backend` → `backend`；
+> `edwards_threads`/`mont_threads` → `stage1_threads`；`edwards_mersenne` → `field`；
+> `edwards_naf_w` → `naf_w`；`mont_torsion` → `exponent`；`mont_save_pattern` → `save_name_pattern`；
+> `gpuckpt_seconds` → `ckpt_seconds`。
+> 命令行同理：`--backend` / `--field` / `--stage1-threads` / `--naf-w` / `--exponent` / `--method` / `--ckpt`，
+> 旧的 `--edwards-*` / `--mont-*` / `-gpuckpt` 作为别名保留。
+
+### 3.1 中途检查点：跑一半被打断，重跑同一命令即可续跑
+
+`tmp_dir` 非空时两条 CPU 路径都会在**阶梯中途**落盘。续跑不需要额外参数：**重跑同一条命令行**
+即可（检查点里钉着每条曲线的 σ，所以曲线集合不会变），跑完后检查点自动删除，`.save` 成为唯一
+持久产物。想确认续跑了，看启动/结束日志：
+
+```
+checkpoint      : saves/m3001_1e6_c*.ckpt  [12 done, 8 mid-ladder, 964 to run]  autosave 600 s
+  resumed from checkpoint: 12 curve(s) already done, 8 mid-ladder
+```
+
+- Montgomery 路径的检查点格式是**内部格式**（明文，带校验和与 `END`，见
+  [docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md) §17）；要交给 gmp-ecm/Prime95 的
+  是跑完后写出的 `.save`，它仍然逐点互通。
+- 固定 σ（`-sigma`）时被打断的曲线会**精确**接着上次的位偏移跑；实测「杀进程 + 续跑」得到的
+  曲线内容与一次跑完**完全一致**（`tools/test/test_mont_checkpoint.ps1`）。
+- 检查点的开销可忽略：同进程 A/B 实测 **−0.6%±1%**（开进度/检查点回调 vs git HEAD 的旧 ladder）。
+
+### 3.2 启动固定开销：`s = lcm(1..B1)` 的构造成本
+
+`START` 到第一条进度之间只做两件事：构造指数 `s = torsion·lcm(1..B1)`（素数筛 + 乘积树）和把它展开成
+每 bit 一字节的数组。两件事都不依赖 N 与曲线数，所以是**每条任务**的固定成本：
+
+| B1 | 构造 `s` | 展开位数组 | 说明 |
+|---|---|---|---|
+| 1e5 | 0.002 s | 可忽略 | |
+| 1e6 | 0.016 s | 0.002 s | |
+| **1e7** | **0.23 s** | 0.02 s | 队列里常见的 B1；旧实现要 **29 s**（已修，见 §18） |
+| 1.1e8 | 5.3 s | 0.2 s | 其中筛法 0.4 s，其余是 GMP 的 FFT 大数乘法（GPU 路径同一份实现，所以 CUDA 版也 ~5 s） |
+
+> 三种方法（GPU 批量、CPU Edwards、CPU Montgomery）现在共用 `src/core/ecm_stage1_exp.cpp` 里的
+> 同一份乘积树实现。B1 ≥ 1e7 时的成本下界就是"把 1.6e8 bit 的乘积算出来"本身，没有捷径；
+> B1 ≤ 1e6 时它完全可以忽略。细节与排查过程：`docs/ECM_Montgomery_STAGE1.md` §18。
 
 ### 4. 线程与"批数"：为什么线程数常常跑不满
 
 SIMD 路径**一次算 8 条曲线**（8 lane SoA，整批共享同一个指数），所以并行度上界是
 `ceil(曲线数/8)`，不是核数：
 
-- `edwards_threads = 0` / `mont_threads = 0` ⇒ 自动取 `min(任务数, 核数)`；
+- `stage1_threads = 0` ⇒ 自动取 `min(任务数, 核数)`；`1` = 串行；`n` = 指定（会被任务数夹住）；
 - 想要 16 个核都忙，`-gpucurves` 至少给到 `8 × 16 = 128`；
 - 启动日志会如实打印，例如：
   ```
@@ -312,7 +351,9 @@ SIMD 路径**一次算 8 条曲线**（8 lane SoA，整批共享同一个指数�
 | `ERROR: … simd requested but this CPU lacks AVX512-F/DQ/IFMA` | `*_backend = simd` 是硬要求；改 `auto`（自动回退标量）或 `gmp` |
 | 曲线数 < 2 时 SIMD 没生效 | `auto` 需要至少 2 条曲线才走批路径；显式 `simd` 会强制 |
 | 线程数设了却只有一个线程在跑 | 批数上界（见第 4 节）：`-gpucurves` 给得太少 |
-| `edwards_mersenne = on` 直接报错 | 折叠域要求 `N = 2^k-1`；改用 `auto`/`off` |
+| `field = mersenne` 直接报错 | 折叠域要求 `N = 2^k-1`；改用 `field = auto` / `montgomery` |
+| ini 里写了 `sigma` 但曲线不对 | 检查 σ 是否 **≥ 2^63**：可以算，但 Prime95 的 `ECMSTAGE2` 用 `atoll()` 读 σ，会截断成另一条曲线（见文档 §16.7.1）；交给 gmp-ecm 做 stage 2 则无此限 |
+| 改 ini 后行为没变 | 一定是旧键名（如 `mont_torsion`）——运行时会打印一次 `NOTE: ecm.ini uses the pre-2026-09-24 key ...`，照提示改名即可 |
 | `mont = 1` 后 Edwards 设置全部无效 | 两条 CPU 路径互斥，属预期 |
 | 多进程同时跑同一 `(N, B1)` | 它们会**追加到同一个 `.save`**；请用不同 `tmp_dir`，或让任务粒度覆盖全部曲线 |
 | σ 想复现某条曲线 | `sigma = <值>` 后第 i 条曲线是 `sigma + i`（64 位；gmp-ecm 自动 σ 也超过 32 位）|
@@ -417,6 +458,30 @@ build\Debug\opencl_ecm_montsqr.exe --bits 512 1000 128 1
 ## 构建CUDA后端（CGBN）
 
 `ecm_cuda` 是基于上游 CGBN 的原生 CUDA stage-1（`kernels/cuda/cgbn_stage1.cu`），与 OpenCL `ecm` **共享同一 driver / 参数解析 / 检查点 / 保存 / 日志**，仅在链接期通过选择不同后端（`include/ecm_backend.h`）切换 GPU 实现（OpenCL glue：`src/opencl_backend_glue.cpp`；CUDA glue：`src/cuda/ecm_cuda_backend.cu`）。
+
+### 曲线参数化：`gpu_param = 0 | 3`（`--gpu-param`）
+
+`gpu_param` 选 GPU stage-1 用哪一族曲线（ini 与 CLI 同名）：
+
+| 值 | 曲线族 | 挠点 / 成功率 | 存档形态 | 可用后端 |
+|---|---|---|---|---|
+| **0** | **Suyama param0**（Prime95 `sigma_type=1` / gmp-ecm `-param 0`）——**与 CPU `--method mont` 是同一条曲线、同一个 σ** | Z/12；有效除子 D≈21–23（batch 族 ≈6.4–7.6，**D 的比值 ≈3×**）。⚠ 单曲线成功率比值远小于 3×：B1=256 实测 bit15–40 为 **1.30×–1.8×**（bit20：30.47% vs 21.64%） | param0 文本（**无** `PARAM=`），带**原始 N** ⇒ gmp-ecm `-param 0` 与 Prime95 都能接着做 stage 2 | 仅 CUDA/CGBN（OpenCL 内核对 0 会明确报错） |
+| 3 | gmp-ecm batch 参数化（`P=(2:1)`，`d = σ/2^32`）——历史 GPU 路径 | Z/4 | 带 `PARAM=3` | CUDA 与 OpenCL |
+
+默认 3（旧 ini 无该键时行为完全不变；`ecm.ini` 模板写 0 并注明推荐）。参数化换来的是**成功率**：
+param0 每条曲线多花约 22% 时间，但每因子期望代价只有 batch 族的约 0.27×。
+实测（M3001，B1=1e5，4096 曲线，RTX 4070 Ti）：param0 = 11.7 M curve-bits/s（= 整机 24 线程 CPU 的 3.8×，
+单核的约 35×）；保存的 stage-1 结果交给 gmp-ecm 续 stage 2 已实测成功。细节：
+[docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md) §19（可行性/实测基线）与 §20（实现与验收）；
+回归测试：`tools/test/test_cuda_param0.ps1`。
+
+> CUDA 全量构建默认只带 512 间隔的 TPI=16 档位（2560…8192）。256 间隔曾经加过，实测没有吞吐收益、
+> 只让全量构建时间近乎翻倍，已回退。param0 的 kernel 现在与 param3 **同一张档位表**
+> （TPI=4 128–512、TPI=8 768–2048、TPI=16 2560–8192、TPI=32 9216–16384），代价是全量构建的实例化
+> 数量翻倍；dev 构建仍只带小档。两者能否共用实例化见
+> [docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md) §21（结论：不能，每 bit 算术不同；
+> 但若不再需要 batch 族，直接删掉 param3 才是真正省一半编译时间的方式）。
+
 
 ### 依赖
 

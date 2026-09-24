@@ -26,6 +26,18 @@
    when torsion == 1).  Returns s_bits. */
 size_t mont_build_s(mpz_t s, uint64_t B1, uint64_t torsion);
 
+/* mpz_set_ui() takes `unsigned long`, which is 32 bits on Windows, so passing a
+   64-bit sigma through it silently TRUNCATES: sigma = 2^62 became 0, which makes
+   v = 4*sigma = 0, the curve coefficient A degenerate (A = -2, a singular curve)
+   and every curve return the identity (gcd == N, no factor) with X = 0x0 in the
+   save file.  Always go through this helper for sigmas. */
+static inline void mont_set_sigma(mpz_t r, uint64_t sigma)
+{
+    mpz_set_ui(r, (unsigned long)(sigma >> 32));
+    mpz_mul_2exp(r, r, 32);
+    mpz_add_ui(r, r, (unsigned long)(sigma & 0xFFFFFFFFull));
+}
+
 /* Expand the exponent into a byte array of single bits, most significant first:
    bits[0] is the top set bit of s, bits[nbits-1] is bit 0.  Returns the malloc'd
    array (NULL when s == 0) and writes its length to *out_nbits.
@@ -62,5 +74,48 @@ int mont_stage1_curve_bits(mpz_t factor, mpz_t Qx, mpz_t Qz, const mpz_t N,
                            uint64_t sigma, const uint8_t *bits, size_t nbits);
 int mont_stage1_curve_bits_x(mpz_t factor, mpz_t x, const mpz_t N,
                              uint64_t sigma, const uint8_t *bits, size_t nbits);
+
+/* ---------------------------------------------------------------------------
+ * Mid-ladder checkpoint support (docs/ECM_Montgomery_STAGE1.md §17).
+ *
+ * The ladder invariant at the top of every iteration is
+ *
+ *     p0 = [k]P        p1 = [k+1]P            k = bits consumed so far
+ *
+ * so (bitnum = k, p0, p1) is a *complete* resume point: the curve constants are
+ * not state at all -- a24 and xdiff are recomputed from sigma, which the
+ * checkpoint file stores next to the point.  Nothing else in the ladder is
+ * stateful (no FFT scratch, no window table), which is why this path needs no
+ * bit-offset cleverness like the NAF-based Edwards ladder does.
+ * ------------------------------------------------------------------------- */
+typedef struct {
+    size_t bitnum;      /* exponent bits already consumed (0 = fresh curve) */
+    mpz_t  X0, Z0;      /* p0 = [k]P    (plain domain, mod N) */
+    mpz_t  X1, Z1;      /* p1 = [k+1]P  (plain domain, mod N) */
+} mont_ladder_state_t;
+
+void mont_ladder_state_init(mont_ladder_state_t *st);
+void mont_ladder_state_clear(mont_ladder_state_t *st);
+
+/* Progress / pause callback, called every `chunk_bits` exponent bits.  `st`
+ * describes the state at the pause point (bits[0..bitnum-1] consumed); return
+ * non-zero to pause there.  It is NOT called after the last bit: a caller that
+ * wants 100% progress marks the curve done from the return code instead. */
+typedef int (*mont_progress_fn)(void *ctx, const mont_ladder_state_t *st);
+
+#define MONT_LADDER_HIT    1
+#define MONT_LADDER_MISS   0
+#define MONT_LADDER_ERROR  (-1)
+#define MONT_LADDER_PAUSED 2      /* *st holds the resume point */
+
+/* Ladder that can both start and stop in the middle.
+ *   start_bit == 0 : fresh curve built from sigma (st is only written on pause)
+ *   start_bit >  0 : resume; *st must already hold the state at start_bit
+ *                     (start_bit == nbits is legal and just returns that state)
+ * Returns MONT_LADDER_HIT / _MISS / _ERROR / _PAUSED. */
+int mont_stage1_curve_bits_ex(mpz_t factor, mpz_t Qx, mpz_t Qz, const mpz_t N,
+                              uint64_t sigma, const uint8_t *bits, size_t nbits,
+                              size_t start_bit, mont_ladder_state_t *st,
+                              mont_progress_fn cb, void *cb_ctx, size_t chunk_bits);
 
 #endif /* ECM_MONT_CPU_H */

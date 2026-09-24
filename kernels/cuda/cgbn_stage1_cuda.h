@@ -21,9 +21,9 @@ extern "C" {
 
 int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
-             uint32_t curves, uint32_t *sigma,
+             uint32_t curves, uint64_t *sigma,
              unsigned long checkpoint_interval_ms,
-             float *gputime, int verbose);
+             float *gputime, int verbose, int gpu_param);
 
 #ifdef __cplusplus
 }

@@ -176,10 +176,22 @@ void mont_soa_clear(mont_soa_ctx_t *c)
 /* --------------------------------------------------------------------------
  * one batch: [s]P for 8 curves
  * ------------------------------------------------------------------------ */
-int mont_soa_stage1_bits(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
-                         const uint64_t sigmas[IFMA_LANES],
-                         mpz_t *out_x, mpz_t *out_gcd)
+size_t mont_soa_state_words(const mont_soa_ctx_t *c)
 {
+    return 4 * 8 * c->n;
+}
+
+/* The batch ladder, now interruptible: see mont_soa_stage1_bits_ex() in the header.
+   start_bit == 0 keeps the original behaviour bit-for-bit; the only extra code on
+   that path is one `i > start_bit` comparison per checkpoint chunk. */
+int mont_soa_stage1_bits_ex(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
+                            const uint64_t sigmas[IFMA_LANES],
+                            size_t start_bit, uint64_t *state, size_t *out_bitnum,
+                            mpz_t *out_x, mpz_t *out_gcd,
+                            mont_soa_progress_fn cb, void *cb_ctx, size_t chunk_bits)
+{
+    if (start_bit > nbits) return MONT_SOA_ERROR;
+    if (start_bit > 0 && !state) return MONT_SOA_ERROR;
     const ifma_ctx_t *mc = &c->mc;
     const size_t n = c->n, lw = 8 * n;
     uint64_t *pool = c->pool;
@@ -193,14 +205,23 @@ int mont_soa_stage1_bits(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
     uint64_t *t3 = pool + 15 * lw, *t4 = pool + 16 * lw, *t5 = pool + 17 * lw;
     uint64_t *tmp = pool + 18 * lw;      /* scratch for soa_add's candidate r-N */
 
+    /* Resume: the checkpoint buffer uses exactly the pool element layout (lane-SoA,
+       same limb count, same field representation), so restoring p0/p1 is a memcpy. */
+    if (start_bit > 0) {
+        memcpy(R0.X, state + 0 * lw, lw * sizeof(uint64_t));
+        memcpy(R0.Z, state + 1 * lw, lw * sizeof(uint64_t));
+        memcpy(R1.X, state + 2 * lw, lw * sizeof(uint64_t));
+        memcpy(R1.Z, state + 3 * lw, lw * sizeof(uint64_t));
+    }
+
     /* per-lane curve setup: sigma -> A, a24, start (X0:Z0), affine xdiff */
     mpz_t u, v, t, num, den, X0, Z0, Amz, inv;
     mpz_inits(u, v, t, num, den, X0, Z0, Amz, inv, NULL);
     for (unsigned k = 0; k < IFMA_LANES; k++) {
-        mpz_set_ui(u, (unsigned long)sigmas[k]);
+        mont_set_sigma(u, sigmas[k]);
         mpz_mul(u, u, u);
         mpz_sub_ui(u, u, 5);                       /* u = sigma^2 - 5 */
-        mpz_set_ui(v, (unsigned long)sigmas[k]);
+        mont_set_sigma(v, sigmas[k]);
         mpz_mul_ui(v, v, 4);                       /* v = 4*sigma */
         mpz_sub(t, v, u);
         mpz_powm_ui(num, t, 3, mc->N);
@@ -219,8 +240,10 @@ int mont_soa_stage1_bits(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
         mpz_powm_ui(X0, u, 3, mc->N);
         mpz_powm_ui(Z0, v, 3, mc->N);
 
-        ifma_from_mpz_lane(R0.X, k, X0, mc);
-        ifma_from_mpz_lane(R0.Z, k, Z0, mc);
+        if (start_bit == 0) {
+            ifma_from_mpz_lane(R0.X, k, X0, mc);
+            ifma_from_mpz_lane(R0.Z, k, Z0, mc);
+        }
 
         mpz_add_ui(num, Amz, 2);
         mpz_set_ui(inv, 4);
@@ -239,10 +262,31 @@ int mont_soa_stage1_bits(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
        use-after-free that shows up as STATUS_HEAP_CORRUPTION at exit). */
 
     /* R1 = 2*R0, then the branch-free ladder over the shared exponent bits */
-    xz_dbl(R1, R0, a24, A_, B_, E_, tt, tmp, mc);
+    size_t i;
+    if (start_bit == 0) {
+        xz_dbl(R1, R0, a24, A_, B_, E_, tt, tmp, mc);
+        i = 1;                                     /* bits[0] is the implicit top bit */
+    } else {
+        i = start_bit;                             /* state already holds p0/p1 */
+    }
 
     soa_xz *p0 = &R0, *p1 = &R1, *pt = &T;
-    for (size_t i = 1; i < nbits; i++) {           /* bits[0] is the implicit top bit */
+    int paused = 0;
+    /* Checkpoint cadence as a countdown rather than  i % chunk  : the ladder runs
+       one integer division per bit otherwise, which is a real cost against ~10
+       field multiplications. */
+    const size_t ck_stride = (cb && chunk_bits) ? chunk_bits : 0;
+    size_t next_ck = ck_stride ? (start_bit + ck_stride) : 0;   /* 0 = never */
+    for (; i < nbits; i++) {
+        if (ck_stride && i == next_ck) {
+            next_ck += ck_stride;
+            memcpy(state + 0 * lw, p0->X, lw * sizeof(uint64_t));
+            memcpy(state + 1 * lw, p0->Z, lw * sizeof(uint64_t));
+            memcpy(state + 2 * lw, p1->X, lw * sizeof(uint64_t));
+            memcpy(state + 3 * lw, p1->Z, lw * sizeof(uint64_t));
+            if (out_bitnum) *out_bitnum = i;
+            if (cb(cb_ctx, i)) { paused = 1; break; }
+        }
         if (bits[i]) {
             xz_add(*pt, *p1, *p0, xdiff, t0, t1, t2, t3, t4, t5, tmp, mc);
             xz_dbl(*p1, *p1, a24, A_, B_, E_, tt, tmp, mc);
@@ -252,6 +296,11 @@ int mont_soa_stage1_bits(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
             xz_dbl(*p0, *p0, a24, A_, B_, E_, tt, tmp, mc);
             soa_xz *sw = p1; p1 = pt; pt = sw;
         }
+    }
+
+    if (paused) {
+        mpz_clears(u, v, t, num, den, X0, Z0, Amz, inv, NULL);
+        return MONT_SOA_PAUSED;
     }
 
     /* results: per lane, normalise x and take gcd(Z, N) */
@@ -273,7 +322,16 @@ int mont_soa_stage1_bits(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
     }
     mpz_clear(Z);
     mpz_clears(u, v, t, num, den, X0, Z0, Amz, inv, NULL);
-    return 0;
+    if (out_bitnum) *out_bitnum = nbits;
+    return MONT_SOA_DONE;
+}
+
+int mont_soa_stage1_bits(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
+                         const uint64_t sigmas[IFMA_LANES],
+                         mpz_t *out_x, mpz_t *out_gcd)
+{
+    return mont_soa_stage1_bits_ex(c, bits, nbits, sigmas, 0, NULL, NULL,
+                                   out_x, out_gcd, NULL, NULL, 0);
 }
 
 int mont_soa_stage1(mont_soa_ctx_t *c, const mpz_t s, const uint64_t sigmas[IFMA_LANES],

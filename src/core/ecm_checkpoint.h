@@ -9,7 +9,12 @@
 #include <string>
 
 #define OPENCL_ECM_CHECKPOINT_MAGIC 0x45555047u  // "GPUE" little-endian
-#define OPENCL_ECM_CHECKPOINT_VERSION 3
+/* Version 4 (2026-09-24): the header carries a 64-BIT sigma and the curve
+   parametrization.  Version 3 could only store a 32-bit sigma, which is not
+   enough for the GPU Suyama param0 path (gpu_param = 0) -- its sigma comes from
+   the same 53-bit generator the CPU path uses.  Old checkpoints are invalidated
+   on purpose: the header layout changed. */
+#define OPENCL_ECM_CHECKPOINT_VERSION 4
 
 struct opencl_ecm_checkpoint_header_t {
     uint32_t magic;
@@ -18,15 +23,17 @@ struct opencl_ecm_checkpoint_header_t {
     uint64_t s_num_bits;
     int32_t batches_complete;
     uint32_t curves;
-    uint32_t sigma;
+    uint64_t sigma;        /* full 64-bit sigma (was uint32_t before v4) */
     uint32_t BITS;
     uint32_t TPI;
+    uint32_t gpu_param;    /* 3 = batch parametrization, 0 = Suyama param0 */
+    uint32_t reserved;     /* keep the 8-byte alignment explicit */
     uint64_t data_size;
     int64_t timestamp;
 };
 
-static_assert(sizeof(opencl_ecm_checkpoint_header_t) == 64,
-              "opencl_ecm_checkpoint_header_t layout must match cgbn_stage1.cu");
+static_assert(sizeof(opencl_ecm_checkpoint_header_t) == 72,
+              "opencl_ecm_checkpoint_header_t layout must match cgbn_stage1.cu (v4 = 72 bytes)");
 
 /** Writable base directory for checkpoint/save relative paths (e.g. Android app data root). */
 void opencl_ecm_set_work_dir(const char *dir);

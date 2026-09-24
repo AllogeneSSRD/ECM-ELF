@@ -135,10 +135,20 @@ def expected_curves(name: str, bit: float, B1: float,
 # ---------------------------------------------------------------------------
 # 反向求解
 # ---------------------------------------------------------------------------
+#: Stage-2 bound convention used everywhere when the caller does not supply B2:
+#: B2 = B2_FACTOR * B1 (gmp-ecm / Prime95 practice for a 100x stage-2 range).
+B2_FACTOR = 100.0
+
+
+def default_b2(B1: float, factor: float = B2_FACTOR) -> float:
+    """B2 的默认取值 = factor * B1（默认 100 倍）。"""
+    return float(factor) * float(B1)
+
+
 def model_p(bit: float, B1: float, D: float, B2: float | None = None) -> float:
     """p = f(bit, B1[, B2])。B2=None -> 默认 100*B1。对 bit 单调降、对 B1 单调升。"""
     p_ref = 2.0 ** (bit - 0.5)
-    b2 = (100.0 * B1) if B2 is None else B2
+    b2 = default_b2(B1) if B2 is None else B2
     if b2 > B1:
         return rho.stage_prob(B1, b2, p_ref, D)
     return rho.stage1_prob(B1, p_ref, delta=math.log(D))
@@ -220,11 +230,16 @@ def _close(a: float, b: float, rtol: float = 1e-3) -> bool:
     return abs(a - b) <= rtol * max(abs(a), abs(b), 1e-12)
 
 
-def solve(bit, B1, curves, prob, D, B2=None) -> str:
-    """正向：p = f(bit,B1[,B2])，curves 算实际 miss；反向：p/N 反解 B1/bit。"""
+def solve(bit, B1, curves, prob, D, B2=None, b2_label=None) -> str:
+    """正向：p = f(bit,B1[,B2])，curves 算实际 miss；反向：p/N 反解 B1/bit。
+
+    B2=None 表示"用默认约定 B2 = B2_FACTOR*B1"（见 model_p）；b2_label 只影响
+    第一行怎么描述 B2（CLI 用它打印 "--b2-factor 10000 -> B2=10000*B1=..."）。
+    """
     p_target = prob if prob is not None else (1.0 / curves if curves is not None else None)
-    b2_label = f", B2={B2:g}" if B2 is not None else ", B2=100*B1"
-    lines = [f"D = {D:.2f}{b2_label}"]
+    if b2_label is None:
+        b2_label = f"B2={B2:g}" if B2 is not None else "B2=100*B1"
+    lines = [f"D = {D:.2f}, {b2_label}"]
 
     if bit is not None and B1 is not None:          # 正向
         p = model_p(bit, B1, D, B2)

@@ -262,6 +262,96 @@ class curve_t {
     normalize_addition(v, modulus);
         assert_normalized(v, modulus);
   }
+
+  /* -------------------------------------------------------------------------
+   * Suyama param0 variant of the same fused double-and-add
+   * (docs/ECM_Montgomery_STAGE1.md §19/§20).
+   *
+   * The param3 path above is cheap for TWO reasons, both coming from its fixed
+   * shape "P_a = (2:1), P_b = 2P, difference x = 2" (upstream gmp-ecm
+   * batch.c:167: "assume (x2:z2) - (x1:z1) = (2:1)"):
+   *
+   *   * its curve constant is a 32-bit value that plays the role of a24, so the
+   *     doubling uses special_mult_ui32() (32xN multiply + one-word reduction)
+   *     instead of a full-width multiply;
+   *   * its differential addition needs no multiplication by the difference
+   *     coordinate: x_D = 2 is folded into shift_left(v,1).
+   *
+   * Suyama param0 has P = (u^3 : v^3) and a full-width a24 = (A+2)/4, so both
+   * shortcuts have to be given back -- and that is ALL that differs.  The op
+   * count becomes 6M+4S per bit, exactly the CPU reference's, and the kernel
+   * becomes sigma-agnostic (everything sigma-dependent is prepared on the host).
+   * ------------------------------------------------------------------------- */
+  __device__ FORCE_INLINE void double_add_v2_suyama(
+          bn_t &q, bn_t &u,
+          bn_t &w, bn_t &v,
+          const bn_t &a24,
+          const bn_t &xdiff,
+          const bn_t &modulus,
+          const uint32_t np0) {
+    // q = xA = aX
+    // u = zA = aZ
+    // w = xB = bX
+    // v = zB = bZ
+
+    bn_t t, CB, DA, AA, BB, K, dK;
+
+    cgbn_add(_env, t, v, w); // t = (bZ + bX)
+    normalize_addition(t, modulus);
+    if (cgbn_sub(_env, v, v, w)) // v = (bZ - bX)
+        cgbn_add(_env, v, v, modulus);
+
+    cgbn_add(_env, w, u, q); // w = (aZ + aX)
+    normalize_addition(w, modulus);
+    if (cgbn_sub(_env, u, u, q)) // u = (aZ - aX)
+        cgbn_add(_env, u, u, modulus);
+
+    cgbn_mont_mul(_env, CB, t, u, modulus, np0); // C*B
+        normalize_addition(CB, modulus);
+    cgbn_mont_mul(_env, DA, v, w, modulus, np0); // D*A
+        normalize_addition(DA, modulus);
+
+    cgbn_mont_sqr(_env, AA, w, modulus, np0);    // AA
+    cgbn_mont_sqr(_env, BB, u, modulus, np0);    // BB
+    normalize_addition(AA, modulus);
+    normalize_addition(BB, modulus);
+
+    // q = aX is finalized
+    cgbn_mont_mul(_env, q, AA, BB, modulus, np0); // AA*BB
+    normalize_addition(q, modulus);
+
+    if (cgbn_sub(_env, K, AA, BB)) // K = AA-BB = 4XZ
+        cgbn_add(_env, K, K, modulus);
+
+    // dK = a24 * K  (full width -- a24 is NOT a 32-bit batch parameter here)
+    cgbn_mont_mul(_env, dK, K, a24, modulus, np0);
+        assert_normalized(dK, modulus);
+
+    cgbn_add(_env, u, BB, dK); // BB + a24*K
+    normalize_addition(u, modulus);
+
+    // u = aZ is finalized
+    cgbn_mont_mul(_env, u, K, u, modulus, np0); // K(BB + a24*K)
+    normalize_addition(u, modulus);
+
+    cgbn_add(_env, w, DA, CB); // DA + CB
+    normalize_addition(w, modulus);
+    if (cgbn_sub(_env, v, DA, CB)) // DA - CB
+        cgbn_add(_env, v, v, modulus);
+
+    // w = bX is finalized (Z_D = 1: the host normalises the difference point)
+    cgbn_mont_sqr(_env, w, w, modulus, np0); // (DA+CB)^2 mod N
+    normalize_addition(w, modulus);
+
+    cgbn_mont_sqr(_env, v, v, modulus, np0); // (DA-CB)^2 mod N
+    normalize_addition(v, modulus);
+
+    // v = bZ is finalized: x_D * (DA-CB)^2, where x_D = X0/Z0 is the affine x of
+    // the ladder difference point (param3 folds the constant 2 in here instead)
+    cgbn_mont_mul(_env, v, v, xdiff, modulus, np0);
+    normalize_addition(v, modulus);
+        assert_normalized(v, modulus);
+  }
 };
 
 
@@ -364,6 +454,97 @@ __global__ void kernel_double_add(
 }
 
 
+/**
+ * Suyama param0 double-and-add, index decreasing (same ladder, different curve).
+ *
+ * Data layout per curve -- SEVEN words, prepared entirely on the host
+ * (set_p_2p_suyama):   N, a24, xdiff, aX, aZ, bX, bZ
+ *
+ *   a24   = (A+2)/4                       full width, the curve constant
+ *   xdiff = X0/Z0                         affine x of the ladder difference point
+ *   (aX,aZ) = P = (u^3 : v^3)             start point
+ *   (bX,bZ) = 2P                          second ladder point
+ *
+ * `sigma_0` is unused here (kept only because the kernel-pointer type is shared
+ * with the param3 kernel): with param0 everything sigma-dependent is already
+ * baked into the seven words above.
+ */
+template<class params>
+__global__ void kernel_double_add_suyama(
+        cgbn_error_report_t *report,
+        uint64_t s_bits,
+        uint64_t s_bits_start,
+        uint64_t s_bits_interval,
+        uint32_t *gpu_s_bits,
+        uint32_t *data,
+        uint32_t count,
+        uint32_t sigma_0,
+        uint32_t np0
+        ) {
+  (void)sigma_0;
+  int32_t instance_i = (blockIdx.x*blockDim.x + threadIdx.x)/params::TPI;
+  if(instance_i >= count)
+    return;
+
+  typename curve_t<params>::mem_t *data_cast = (typename curve_t<params>::mem_t*) data;
+
+  cgbn_monitor_t monitor = CHECK_ERROR ? cgbn_report_monitor : cgbn_no_checks;
+
+  curve_t<params> curve(monitor, report, instance_i);
+  typename curve_t<params>::bn_t aX, aZ, bX, bZ, a24, xdiff, modulus;
+
+  { // Setup -- 7 words per instance
+      cgbn_load(curve._env, modulus, &data_cast[7*instance_i+0]);
+      cgbn_load(curve._env, a24,     &data_cast[7*instance_i+1]);
+      cgbn_load(curve._env, xdiff,   &data_cast[7*instance_i+2]);
+      cgbn_load(curve._env, aX,      &data_cast[7*instance_i+3]);
+      cgbn_load(curve._env, aZ,      &data_cast[7*instance_i+4]);
+      cgbn_load(curve._env, bX,      &data_cast[7*instance_i+5]);
+      cgbn_load(curve._env, bZ,      &data_cast[7*instance_i+6]);
+
+      /* Convert the values that participate in field multiplications to the
+         Montgomery domain.  N stays as it is (it is the modulus). */
+      uint32_t np0_test = cgbn_bn2mont(curve._env, aX, aX, modulus);
+      assert(np0 == np0_test);
+      cgbn_bn2mont(curve._env, aZ, aZ, modulus);
+      cgbn_bn2mont(curve._env, bX, bX, modulus);
+      cgbn_bn2mont(curve._env, bZ, bZ, modulus);
+      cgbn_bn2mont(curve._env, a24, a24, modulus);
+      cgbn_bn2mont(curve._env, xdiff, xdiff, modulus);
+  }
+
+  /* P_a = (aX, aZ) holds P, P_b = (bX, bZ) holds 2P */
+  int swapped = 0;
+  for (uint64_t b = s_bits_start; b < s_bits_start + s_bits_interval; b++) {
+    uint64_t nth = s_bits - 1 - b;
+    int bit = (gpu_s_bits[nth/32] >> (nth&31)) & 1;
+    if (bit != swapped) {
+        swapped = !swapped;
+        cgbn_swap(curve._env, aX, bX);
+        cgbn_swap(curve._env, aZ, bZ);
+    }
+    curve.double_add_v2_suyama(aX, aZ, bX, bZ, a24, xdiff, modulus, np0);
+  }
+
+  if (swapped) {
+    cgbn_swap(curve._env, aX, bX);
+    cgbn_swap(curve._env, aZ, bZ);
+  }
+
+  { // Final output -- points go back to plain form, at the same 7-word stride
+    cgbn_mont2bn(curve._env, aX, aX, modulus, np0);
+    cgbn_mont2bn(curve._env, aZ, aZ, modulus, np0);
+    cgbn_mont2bn(curve._env, bX, bX, modulus, np0);
+    cgbn_mont2bn(curve._env, bZ, bZ, modulus, np0);
+
+    cgbn_store(curve._env, &data_cast[7*instance_i+3], aX);
+    cgbn_store(curve._env, &data_cast[7*instance_i+4], aZ);
+    cgbn_store(curve._env, &data_cast[7*instance_i+5], bX);
+    cgbn_store(curve._env, &data_cast[7*instance_i+6], bZ);
+  }
+}
+
+
 // ── kernel param typedefs ─────────────────────────────────────────────────
 // TPI=4 (always compiled)
 typedef cgbn_params_t<4, 128>   cgbn_params_128;
@@ -380,7 +561,7 @@ typedef cgbn_params_t<8, 1536>  cgbn_params_1536;
 typedef cgbn_params_t<8, 1792>  cgbn_params_1792;
 typedef cgbn_params_t<8, 2048>  cgbn_params_2048;
 
-// TPI=16 (256 interval; full build only)
+// TPI=16 (512 interval; full build only)
 typedef cgbn_params_t<16, 2560> cgbn_params_2560;
 typedef cgbn_params_t<16, 2816> cgbn_params_2816;
 typedef cgbn_params_t<16, 3072> cgbn_params_3072;
@@ -428,5 +609,14 @@ cgbn_stage1_kernel_fn cgbn_stage1_kernel_tpi4(uint32_t BITS, uint32_t *TPI_out);
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_tpi8(uint32_t BITS, uint32_t *TPI_out);
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_tpi16(uint32_t BITS, uint32_t *TPI_out);
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_tpi32(uint32_t BITS, uint32_t *TPI_out);
+
+/* Suyama param0 variants (method = gpu + gpu_param = 0).  Kept in their own TU so
+   the extra template instantiations do not slow down the param3 kernel builds; the
+   instantiated grid mirrors the param3 one exactly (see the answer to "can the two
+   share instantiations?" in docs/ECM_Montgomery_STAGE1.md §21). */
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi4(uint32_t BITS, uint32_t *TPI_out);
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi8(uint32_t BITS, uint32_t *TPI_out);
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi16(uint32_t BITS, uint32_t *TPI_out);
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi32(uint32_t BITS, uint32_t *TPI_out);
 
 #endif  /* _CGBN_STAGE1_KERNEL_H */

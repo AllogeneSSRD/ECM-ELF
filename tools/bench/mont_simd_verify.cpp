@@ -98,7 +98,11 @@ int main(int argc, char **argv)
             if (hit[k]) mpz_set(xs[k], sg[k]);      /* hit: store the factor */
             else        mpz_set(xs[k], sx[k]);      /* miss: the normalised x */
         }
-        const bool ok = ecm_append_save_lines_mont(argv[6], N, (double)B1, sigma0,
+        /* the save writer takes the FULL per-curve sigma array (a run with random
+           sigmas has no "base + i" relationship; see ecm_save.h) */
+        uint64_t sigma_arr[IFMA_LANES];
+        for (int k = 0; k < IFMA_LANES; k++) sigma_arr[k] = sigmas[k];
+        const bool ok = ecm_append_save_lines_mont(argv[6], N, (double)B1, sigma_arr,
                                                    (uint32_t)IFMA_LANES, xs, hit, argv[1]);
         printf("shared save file: %s -> %s (%u curve lines)\n",
                ok ? "written" : "FAILED", argv[6], (unsigned)IFMA_LANES);

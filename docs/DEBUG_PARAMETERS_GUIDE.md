@@ -295,7 +295,7 @@ echo '(2^1279-1)' | ./ecm -v -gpu -gpucurves 64 1e7 0
 echo '(2^256-1)' | ./ecm -v -gpu -gpucurves 16 1e5 0
 
 # 启用检查点（每 10 分钟保存）
-echo '(2^2048-1)' | ./ecm -v -gpu -gpuckpt 600 -gpucurves 128 1e8 0
+echo '(2^2048-1)' | ./ecm -v -gpu --ckpt 600 -gpucurves 128 1e8 0
 ```
 
 ---

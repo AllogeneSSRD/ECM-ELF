@@ -132,7 +132,7 @@ static bool emit_progress_line(int n) {
 // Checkpoint configuration
 #define CHECKPOINT_MAGIC 0x45555047  // EPUG -> "GPUE" in hex (GPU ECM)
 // 小端格式，magic number 0x45555047 在内存中表示为 "GPUE"，用于验证 checkpoint 文件的正确性
-#define CHECKPOINT_VERSION 3         // Incremented to invalidate old checkpoint files
+#define CHECKPOINT_VERSION 4         // Incremented to invalidate old checkpoint files
 
 // support routine copied from  "CGBN/samples/utility/support.h"
 void cgbn_check(cgbn_error_report_t *report, const char *file=NULL, int32_t line=0) {
@@ -306,11 +306,136 @@ uint32_t* set_p_2p(const mpz_t N,
 }
 
 
+/* ---------------------------------------------------------------------------
+ * Suyama param0 curve/point setup (method = gpu + gpu_param = 0).
+ *
+ * Same math as the CPU reference (src/cpu/ecm_mont_cpu.cpp:mont_suyama_curve) and
+ * as gmp-ecm's -param 0, so the two paths run IDENTICAL curves for the same sigma:
+ *
+ *   u = sigma^2 - 5        v = 4*sigma
+ *   A = (v-u)^3 (3u+v) / (4 u^3 v) - 2      [Montgomery coefficient]
+ *   a24 = (A+2)/4                            [doubling constant, full width]
+ *   P = (u^3 : v^3)                          [start point]
+ *   xdiff = X0/Z0                            [affine x of the ladder difference]
+ *   2P via one xDBL(a24)                     [second ladder point]
+ *
+ * Everything sigma-dependent (including the three inversions) happens HERE, on the
+ * host; the device kernel only sees the seven words below and needs no inversion.
+ * That is why the param0 port costs nothing extra in the kernel besides giving back
+ * the two shortcuts the batch parametrization enjoys (docs §19.3).
+ *
+ * Layout per curve (7 * BITS/32 words):  N, a24, xdiff, aX, aZ, bX, bZ
+ * ------------------------------------------------------------------------- */
+static
+uint32_t* set_p_2p_suyama(const mpz_t N, uint32_t curves, uint64_t sigma0,
+                          uint32_t BITS, size_t *data_size) {
+  const size_t limbs_per = BITS/32;
+  *data_size = 7 * curves * limbs_per * sizeof(uint32_t);
+  uint32_t *data = (uint32_t*) malloc(*data_size);
+  uint32_t *datum = data;
+
+  mpz_t sigma, u, v, t, num, den, inv, A, a24, X0, Z0, xdiff;
+  mpz_t aA, aB, AA, BB, E, X2, Z2;
+  mpz_inits(sigma, u, v, t, num, den, inv, A, a24, X0, Z0, xdiff,
+            aA, aB, AA, BB, E, X2, Z2, NULL);
+
+  for(uint32_t index = 0; index < curves; index++) {
+      /* sigma is 64-bit here (unlike the batch parametrization's 32-bit d), and
+         mpz_set_ui only takes a 32-bit unsigned long on Windows -- assemble from
+         the halves, exactly like mont_set_sigma() does in the CPU path. */
+      const uint64_t sg = sigma0 + (uint64_t)index;
+      mpz_set_ui(sigma, (unsigned long)(sg >> 32));
+      mpz_mul_2exp(sigma, sigma, 32);
+      mpz_add_ui(sigma, sigma, (unsigned long)(sg & 0xFFFFFFFFull));
+
+      mpz_mul(u, sigma, sigma);
+      mpz_sub_ui(u, u, 5);                          /* u = sigma^2 - 5 */
+      mpz_mul_ui(v, sigma, 4);                      /* v = 4*sigma */
+
+      mpz_sub(t, v, u);
+      mpz_powm_ui(num, t, 3, N);                    /* (v-u)^3 */
+      mpz_mul_ui(t, u, 3);
+      mpz_add(t, t, v);                             /* 3u+v */
+      mpz_mul(num, num, t);
+      mpz_mod(num, num, N);
+
+      mpz_powm_ui(den, u, 3, N);                    /* u^3 */
+      mpz_mul_ui(den, den, 4);
+      mpz_mul(den, den, v);
+      mpz_mod(den, den, N);                         /* 4 u^3 v */
+
+      if (mpz_invert(inv, den, N) == 0) {
+          /* gcd(den, N) > 1 means N is already factorable; mirror the CPU path's
+             behaviour (inv = 0) and say so instead of silently building a
+             degenerate curve. */
+          outputf(OUTPUT_ERROR,
+                  "GPU: warning: sigma %llu gives a non-invertible denominator; "
+                  "curve %u will be degenerate (N is factorable)\n",
+                  (unsigned long long)sg, index);
+          mpz_set_ui(inv, 0);
+      }
+      mpz_mul(A, num, inv);
+      mpz_sub_ui(A, A, 2);
+      mpz_mod(A, A, N);                             /* A */
+
+      mpz_add_ui(a24, A, 2);
+      mpz_set_ui(t, 4);
+      mpz_invert(t, t, N);
+      mpz_mul(a24, a24, t);
+      mpz_mod(a24, a24, N);                         /* a24 = (A+2)/4 */
+
+      mpz_powm_ui(X0, u, 3, N);
+      mpz_powm_ui(Z0, v, 3, N);
+
+      if (mpz_invert(inv, Z0, N) == 0) {
+          outputf(OUTPUT_ERROR,
+                  "GPU: warning: sigma %llu gives Z0 not invertible (N is factorable)\n",
+                  (unsigned long long)sg);
+          mpz_set_ui(inv, 0);
+      }
+      mpz_mul(xdiff, X0, inv);
+      mpz_mod(xdiff, xdiff, N);                     /* affine x of P */
+
+      /* 2P, i.e. one xDBL with a24 -- the identical formula the CPU ladder uses:
+         A = X+Z, B = X-Z, AA = A^2, BB = B^2, E = AA-BB,
+         X2 = AA*BB, Z2 = E*(BB + a24*E)                                        */
+      mpz_add(aA, X0, Z0);
+      mpz_sub(aB, X0, Z0);
+      mpz_mul(AA, aA, aA);  mpz_mod(AA, AA, N);
+      mpz_mul(BB, aB, aB);  mpz_mod(BB, BB, N);
+      mpz_sub(E, AA, BB);   mpz_mod(E, E, N);
+      mpz_mul(X2, AA, BB);  mpz_mod(X2, X2, N);
+      mpz_mul(t, a24, E);   mpz_mod(t, t, N);
+      mpz_add(t, t, BB);    mpz_mod(t, t, N);
+      mpz_mul(Z2, E, t);    mpz_mod(Z2, Z2, N);
+
+      from_mpz(N,     datum + 0 * limbs_per, limbs_per);
+      from_mpz(a24,   datum + 1 * limbs_per, limbs_per);
+      from_mpz(xdiff, datum + 2 * limbs_per, limbs_per);
+      from_mpz(X0,    datum + 3 * limbs_per, limbs_per);
+      from_mpz(Z0,    datum + 4 * limbs_per, limbs_per);
+      from_mpz(X2,    datum + 5 * limbs_per, limbs_per);
+      from_mpz(Z2,    datum + 6 * limbs_per, limbs_per);
+
+      outputf (OUTPUT_TRACE,
+               "sigma %llu => a24 %Zd, xdiff %Zd, P (%Zd,%Zd) 2P (%Zd,%Zd)\n",
+               (unsigned long long)sg, a24, xdiff, X0, Z0, X2, Z2);
+
+      datum += 7 * limbs_per;
+  }
+
+  mpz_clears(sigma, u, v, t, num, den, inv, A, a24, X0, Z0, xdiff,
+             aA, aB, AA, BB, E, X2, Z2, NULL);
+  return data;
+}
+
+
 static
 int process_results(mpz_t *factors, int *array_found,
                     const mpz_t N,
                     const uint32_t *data, uint32_t cgbn_bits,
-                    int curves, uint32_t sigma) {
+                    int curves, uint32_t sigma, uint32_t words_per_curve,
+                    int p1_word, int p2_word) {
   mpz_t x_final, z_final, modulo;
   mpz_init(modulo);
   mpz_init(x_final);
@@ -321,18 +446,18 @@ int process_results(mpz_t *factors, int *array_found,
   int youpi = ECM_NO_FACTOR_FOUND;
   int errors = 0;
   for(size_t i = 0; i < curves; i++) {
-    const uint32_t *datum = data + (5 * i * limbs_per);;
+    const uint32_t *datum = data + (words_per_curve * i * limbs_per);
 
     if (test_verbose (OUTPUT_TRACE) && i == 0) {
       to_mpz(modulo, datum + 0 * limbs_per, limbs_per);
       outputf (OUTPUT_TRACE, "index: 0 modulo: %Zd\n", modulo);
 
-      to_mpz(x_final, datum + 1 * limbs_per, limbs_per);
-      to_mpz(z_final, datum + 2 * limbs_per, limbs_per);
+      to_mpz(x_final, datum + p1_word * limbs_per, limbs_per);
+      to_mpz(z_final, datum + (p1_word + 1) * limbs_per, limbs_per);
       outputf (OUTPUT_TRACE, "index: 0 pA: (%Zd, %Zd)\n", x_final, z_final);
 
-      to_mpz(x_final, datum + 3 * limbs_per, limbs_per);
-      to_mpz(z_final, datum + 4 * limbs_per, limbs_per);
+      to_mpz(x_final, datum + p2_word * limbs_per, limbs_per);
+      to_mpz(z_final, datum + (p2_word + 1) * limbs_per, limbs_per);
       outputf (OUTPUT_TRACE, "index: 0 pB: (%Zd, %Zd)\n", x_final, z_final);
     }
 
@@ -340,16 +465,14 @@ int process_results(mpz_t *factors, int *array_found,
     to_mpz(modulo, datum + 0 * limbs_per, limbs_per);
     assert(mpz_cmp(modulo, N) == 0);
 
-    to_mpz(x_final, datum + 1 * limbs_per, limbs_per);
-    to_mpz(z_final, datum + 2 * limbs_per, limbs_per);
+    to_mpz(x_final, datum + p1_word * limbs_per, limbs_per);
+    to_mpz(z_final, datum + (p1_word + 1) * limbs_per, limbs_per);
 
-    /* Very suspicious for (x_final, z_final) to match (x_0, z_0) == (2, 1)
-     * Can happen when
-     * 1. block calculation performed incorrectly (and some blocks not run)
-     * 2. Kernel didn't run because not enough register
-     * 3. nvcc links old version of kernel when something changed
-     */
-    if (mpz_cmp_ui (x_final, 2) == 0 && mpz_cmp_ui (z_final, 1) == 0) {
+    /* Suspicious only for param3, whose start point is literally (2, 1): see below.
+       For param0 the start point is (u^3 : v^3), so the check cannot be applied --
+       a "didn't compute" curve is caught by cgbn's error report instead. */
+    if (p1_word == 1 &&
+        mpz_cmp_ui (x_final, 2) == 0 && mpz_cmp_ui (z_final, 1) == 0) {
       errors += 1;
       if (errors < 10 || errors % 100 == 1)
         outputf (OUTPUT_ERROR, "GPU: curve %d didn't compute?\n", i);
@@ -358,8 +481,13 @@ int process_results(mpz_t *factors, int *array_found,
     array_found[i] = findfactor(factors[i], N, x_final, z_final);
     if (array_found[i] != ECM_NO_FACTOR_FOUND) {
       youpi = array_found[i];
-      outputf (OUTPUT_NORMAL, "GPU: factor %Zd found in Step 1 with curve %ld (-sigma %d:%lu)\n",
-          factors[i], i, ECM_PARAM_BATCH_32BITS_D, sigma + i);
+      /* NOTE: the project's logger is plain vfprintf(), so gmp-ecm's %Zd is NOT
+         supported -- it used to print a literal 'd' and drop the value.  Render the
+         factor explicitly. */
+      char *fac_str = mpz_get_str(NULL, 10, factors[i]);
+      outputf (OUTPUT_NORMAL, "GPU: factor %s found in Step 1 with curve %ld (sigma %d:%lu)\n",
+          fac_str ? fac_str : "?", i, ECM_PARAM_BATCH_32BITS_D, sigma + i);
+      free(fac_str);
     }
   }
 
@@ -381,18 +509,25 @@ int process_results(mpz_t *factors, int *array_found,
 
 
 /**
- * Checkpoint structure containing state information
+ * Checkpoint structure containing state information (CUDA path's own layout; the
+ * OpenCL path uses opencl_ecm_checkpoint_header_t in src/core/ecm_checkpoint.h).
+ *
+ * v4 (2026-09-24): sigma is 64-bit and the curve parametrization is stored, because
+ * the Suyama param0 path (gpu_param = 0) uses the same 53-bit sigma generator as the
+ * CPU path.  v3 checkpoints are invalidated on purpose (header layout changed).
  */
 typedef struct {
   uint32_t magic;            // Magic number for validation
-  uint32_t version;          // Checkpoint format version
+  uint32_t version;          // Checkpoint format version (4)
   uint64_t s_partial;        // Current bit progress
   uint64_t s_num_bits;       // Total bits to process
   int32_t batches_complete;  // Number of completed batches
   uint32_t curves;           // Number of curves
-  uint32_t sigma;            // Starting sigma value
+  uint64_t sigma;            // Starting sigma (full 64 bits since v4)
   uint32_t BITS;             // Kernel bit size
   uint32_t TPI;              // Threads per instance (needed for kernel selection)
+  uint32_t gpu_param;        // 3 = batch parametrization, 0 = Suyama param0
+  uint32_t reserved;         // padding, keeps data_size 8-byte aligned
   size_t data_size;          // Size of GPU data
   time_t timestamp;          // When checkpoint was created
 } checkpoint_header_t;
@@ -603,15 +738,56 @@ static cgbn_stage1_kernel_fn cgbn_stage1_kernel_dispatch(uint32_t BITS, uint32_t
     return k;
 }
 
+/* Suyama param0 kernel lookup (see cgbn_stage1_kernels_suyama.cu). */
+static cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_dispatch(uint32_t BITS, uint32_t *TPI_out) {
+    cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_suyama_tpi4(BITS, TPI_out);
+    if (k != nullptr) return k;
+    k = cgbn_stage1_kernel_suyama_tpi8(BITS, TPI_out);
+    if (k != nullptr) return k;
+    k = cgbn_stage1_kernel_suyama_tpi16(BITS, TPI_out);
+    if (k != nullptr) return k;
+    return cgbn_stage1_kernel_suyama_tpi32(BITS, TPI_out);
+}
+
 int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
-             uint32_t curves, uint32_t *sigma_ptr,
+             uint32_t curves, uint64_t *sigma_ptr,
              unsigned long checkpoint_interval_ms,
-             float *gputime, int verbose)
+             float *gputime, int verbose, int gpu_param)
 {
-  uint32_t sigma = *sigma_ptr;
-  assert( sigma > 0 );
-  assert( ((uint64_t) sigma + curves) <= 0xFFFFFFFF ); // no overflow
+  uint64_t sigma64 = (sigma_ptr != NULL) ? *sigma_ptr : 0;
+
+  /* -------------------------------------------------------------------------
+   * Parametrization selection.
+   *
+   * 3 (default) = gmp-ecm batch parametrization, the historical GPU path:
+   *               P = (2:1), 2P = (9, 64d+8), d = sigma/2^32 doubling constant,
+   *               difference x = 2 folded into the formulas  => 4M+4S + cheap
+   *               32-bit multiply, save file carries PARAM=3.
+   * 0          = Suyama (Prime95 sigma_type=1 / gmp-ecm -param 0): P = (u^3:v^3),
+   *               full-width a24, difference x = xdiff  => 6M+4S, same curves as
+   *               the CPU path, save file carries no PARAM (param0 form).
+   *
+   * NOTE: the selector arrives from the driver (ini gpu_param / CLI --gpu-param);
+   * see docs/ECM_Montgomery_STAGE1.md §20.2 item 4.
+   * ------------------------------------------------------------------------- */
+  const bool param0 = (gpu_param == 0);
+  /* sigma64 is the authoritative curve index (Suyama param0 uses a full 64-bit
+     sigma, like the CPU path); the batch parametrization carries d = sigma/2^32 as
+     a 32-bit kernel parameter, so it needs the 32-bit window. */
+  if (!param0 && sigma64 + (uint64_t)curves > 0x100000000ull) {
+      outputf(OUTPUT_ERROR, "GPU: param3 needs sigma + curves <= 2^32\n");
+      return ECM_ERROR;
+  }
+  const uint32_t sigma32 = (uint32_t)(sigma64 & 0xFFFFFFFFull);
+  if (!param0 && gpu_param != 3) {
+      outputf(OUTPUT_ERROR, "GPU: gpu_param=%d is not 0 or 3; using 3\n", gpu_param);
+  }
+  if (param0) {
+      /* OUTPUT_ALWAYS: which curve family is being run is as important to see as
+         "Using B1=..." -- it decides what the save file can be handed to. */
+      outputf(OUTPUT_ALWAYS, "GPU: parametrization = Suyama param0 (gmp-ecm -param 0 / Prime95 sigma_type=1)\n");
+  }
 
   uint64_t s_num_bits;
   uint32_t *s_bits = allocate_and_set_s_bits(s, &s_num_bits);
@@ -703,7 +879,8 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
    * warning is printed when a particular N might benefit from a custom sized
    * kernel.
    *
-   * BITS规则: 必须是32的倍数，建议间隔256~512
+   * BITS规则: 必须是32的倍数；TPI=16 档位用 512 间隔（256 间隔试过，实测没有吞吐
+   *           收益，只让全量构建时间翻倍，已回退 —— 见 cgbn_stage1_kernels_tpi16.cu）
    * TPI规则: N>512用8, N>2048用16, N>8192用32
    */
 
@@ -713,29 +890,19 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   available_kernels.push_back((uint32_t)cgbn_params_1792::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_2048::BITS);
 
-  // TPI=16 kernels (for 2560-8192 bits, 256 interval)
+  // TPI=16 kernels (for 2560-8192 bits, 512 interval -- must match the
+  // instantiations in cgbn_stage1_kernels_tpi16.cu exactly)
   available_kernels.push_back((uint32_t)cgbn_params_2560::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_2816::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_3072::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_3328::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_3584::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_3840::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_4096::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_4352::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_4608::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_4864::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_5120::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_5376::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_5632::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_5888::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_6144::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_6400::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_6656::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_6912::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_7168::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_7424::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_7680::BITS);
-  // available_kernels.push_back((uint32_t)cgbn_params_7936::BITS);
   available_kernels.push_back((uint32_t)cgbn_params_8192::BITS);
 
   // TPI=32 kernels (for 10240+ bits, 512 interval for better optimization)
@@ -778,19 +945,51 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
               100.0 * ckpt_header.s_partial / ckpt_header.s_num_bits,
               ckpt_header.s_partial, ckpt_header.s_num_bits);
 
-      if (sigma != ckpt_header.sigma) {
-        outputf(OUTPUT_VERBOSE, "Checkpoint sigma overrides current sigma: %u -> %u\n",
-                sigma, ckpt_header.sigma);
+      /* v4 stores the full 64-bit sigma, so a param0 resume can restore the exact
+         curve index (the batch path keeps its 32-bit window). */
+      if (!param0 && ckpt_header.sigma != (uint64_t)sigma32) {
+        outputf(OUTPUT_VERBOSE, "Checkpoint sigma overrides current sigma: %u -> %llu\n",
+                sigma32, (unsigned long long)ckpt_header.sigma);
       }
       
       ckpt_loaded = 1;
-      sigma = ckpt_header.sigma;
+      if (!param0) {
+        sigma64 = ckpt_header.sigma;
+      } else if (ckpt_header.sigma != sigma64) {
+        outputf(OUTPUT_NORMAL,
+                "Checkpoint sigma %llu overrides the requested %llu (param0)\n",
+                (unsigned long long)ckpt_header.sigma, (unsigned long long)sigma64);
+        sigma64 = ckpt_header.sigma;
+      }
       BITS = ckpt_header.BITS;
       TPI = ckpt_header.TPI;  // Restore TPI from checkpoint
       data_size = ckpt_header.data_size;
       data = ckpt_data;
       s_partial = ckpt_header.s_partial;
       batches_complete = ckpt_header.batches_complete;
+
+      /* The buffer layout identifies the parametrization (5 words/curve = param3,
+         7 = param0), so a checkpoint written by the other one must be refused
+         rather than read with the wrong stride -- see docs §20.2 item 6.
+         The header also records it explicitly since v4; both must agree. */
+      {
+        const uint32_t wpc_ck = (uint32_t)(data_size /
+            ((size_t)curves * (size_t)(BITS / 32) * sizeof(uint32_t)));
+        const uint32_t wpc_want = param0 ? 7u : 5u;
+        const uint32_t param_want = param0 ? 0u : 3u;
+        if (wpc_ck != wpc_want || ckpt_header.gpu_param != param_want) {
+          outputf(OUTPUT_NORMAL,
+                  "Checkpoint mismatch (param %u, %u words/curve; this run needs param %u, %u "
+                  "words/curve), starting fresh\n",
+                  ckpt_header.gpu_param, wpc_ck, param_want, wpc_want);
+          free(data);
+          data = NULL;
+          ckpt_loaded = 0;
+          BITS = 0;
+          TPI = 0;
+          s_partial = 0;
+        }
+      }
     } else {
       outputf(OUTPUT_NORMAL, "Checkpoint parameters mismatch (curves or s_num_bits differ), starting fresh\n");
       if (ckpt_data) free(ckpt_data);
@@ -800,6 +999,44 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   
   // If no checkpoint, proceed with normal initialization
   if (!ckpt_loaded) {
+  /* param0 uses the same container grid as param3 (see cgbn_stage1_kernels_suyama.cu):
+     TPI=4 for <=512, TPI=8 up to 2048, TPI=16 2560..8192, TPI=32 9216..16384, all on
+     the 512-bit grid above 2560.  In a dev build only the small tiers exist, and the
+     loop below skips the ones without a kernel instead of failing. */
+  if (param0) {
+    available_kernels.clear();
+    available_kernels.push_back((uint32_t)cgbn_params_128::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_192::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_256::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_384::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_small::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_768::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_medium::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_1280::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_1536::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_1792::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_2048::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_2560::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_3072::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_3584::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_4096::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_4608::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_5120::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_5632::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_6144::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_6656::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_7168::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_7680::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_8192::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_9216::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_10240::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_11264::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_12288::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_13312::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_14336::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_15360::BITS);
+    available_kernels.push_back((uint32_t)cgbn_params_16384::BITS);
+  }
   for (int k_i = 0; k_i < available_kernels.size(); k_i++) {
     uint32_t kernel_bits = available_kernels[k_i];
     if (kernel_bits >= n_log2 + CARRY_BITS) {
@@ -808,8 +1045,15 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
 
       /* Resolve the kernel function pointer via the per-TPI dispatch TUs. */
       uint32_t tpi_u32 = 0;
-      kernel = cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
+      kernel = param0 ? cgbn_stage1_kernel_suyama_dispatch(BITS, &tpi_u32)
+                      : cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
       if (kernel == nullptr) {
+        if (param0) {
+          /* not instantiated in this build (dev builds only carry 768/1024):
+             try the next tier instead of failing outright */
+          BITS = 0;
+          continue;
+        }
         outputf (OUTPUT_ERROR, "CGBN kernel not found for %d bits\n", BITS);
         return ECM_ERROR;
       }
@@ -823,7 +1067,9 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   }
   if (BITS == 0 || kernel == NULL)
     {
-      outputf (OUTPUT_ERROR, "No available CGBN Kernel large enough to process N(%d bits)\n", n_log2);
+      outputf (OUTPUT_ERROR, "No available CGBN Kernel large enough to process N(%d bits)%s\n",
+               n_log2,
+               param0 ? " (param0 kernels follow the param3 grid; a dev build only has <=1024)" : "");
       return ECM_ERROR;
     }
 
@@ -851,15 +1097,17 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   assert( sizeof(curve_t<cgbn_params_medium>::mem_t) == cgbn_params_medium::BITS/8 );
   
   if (!ckpt_loaded) {
-    data = set_p_2p(N, curves, sigma, BITS, &data_size);
-    s_partial = 1;      // First bit (doubling) is handled in set_p_2p
+    data = param0 ? set_p_2p_suyama(N, curves, sigma64, BITS, &data_size)
+                  : set_p_2p(N, curves, sigma32, BITS, &data_size);
+    s_partial = 1;      // First bit (doubling) is handled in set_p_2p[_suyama]
     batches_complete = 0;
   }
   } // Close the "if (!ckpt_loaded)" block from checkpoint loading
   else {
     // If checkpoint loaded, still need to resolve the kernel from its BITS.
     uint32_t tpi_u32 = 0;
-    kernel = cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
+    kernel = param0 ? cgbn_stage1_kernel_suyama_dispatch(BITS, &tpi_u32)
+                    : cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
     if (kernel == nullptr) {
       outputf(OUTPUT_ERROR, "CGBN kernel not found for BITS=%d TPI=%d from checkpoint\n", BITS, TPI);
       return ECM_ERROR;
@@ -871,10 +1119,24 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     outputf(OUTPUT_VERBOSE, "Checkpoint: restored BITS=%d, TPI=%d, BLOCK_COUNT=%lu\n", BITS, TPI, BLOCK_COUNT);
   }
 
+  /* Buffer layout of this run: 5 words/curve for param3 (N, aX, aZ, bX, bZ) and
+     7 for param0 (N, a24, xdiff, aX, aZ, bX, bZ).  Derived, not hard-coded, so a
+     checkpoint resume is validated against it in both directions. */
+  const uint32_t words_per_curve = param0 ? 7u : 5u;
+  const int      p1_word = param0 ? 3 : 1;      /* X of P_a */
+  const int      p2_word = param0 ? 5 : 3;      /* X of P_b */
+  if (data_size != (size_t)words_per_curve * curves * (size_t)(BITS / 32) * sizeof(uint32_t)) {
+    outputf(OUTPUT_ERROR,
+            "GPU: internal error: curve buffer size %zu does not match the %u-word/curve layout\n",
+            data_size, words_per_curve);
+    return ECM_ERROR;
+  }
+
   // Print the *actual* sigma now that any checkpoint resume has been applied
   // (the checkpoint may override the freshly-computed sigma from the driver).
-  outputf(OUTPUT_NORMAL, "GPU: sigma=%u (param %d, %u curves)%s\n",
-          sigma, ECM_PARAM_BATCH_32BITS_D, curves,
+  outputf(OUTPUT_NORMAL, "GPU: sigma=%llu (param %d, %u curves)%s\n",
+          (unsigned long long)(param0 ? sigma64 : (uint64_t)sigma32),
+          param0 ? 0 : (int)ECM_PARAM_BATCH_32BITS_D, curves,
           ckpt_loaded ? " [restored from checkpoint]" : " [computed]");
 
   /* np0 is -(N^-1 mod 2**32), used for montgomery representation */
@@ -943,12 +1205,12 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     if (dump_file != NULL && dump_host != NULL) {
       CUDA_CHECK(cudaMemcpy(dump_host, gpu_data, data_size, cudaMemcpyDeviceToHost));
       dump_curve_state_csv(dump_file, "begin", batches_complete, s_partial, this_batch,
-                           sigma, BITS, TPI, dump_host, curves, BITS / 32);
+                           sigma32, BITS, TPI, dump_host, curves, BITS / 32);
     }
 
     /* Call CUDA Kernel. */
     assert (kernel != NULL);
-    (*kernel)<<<BLOCK_COUNT, TPB>>>(report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma, np0);
+    (*kernel)<<<BLOCK_COUNT, TPB>>>(report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma32, np0);
 
     s_partial += this_batch;
     batches_complete++;
@@ -962,7 +1224,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     if (dump_file != NULL && dump_host != NULL) {
       CUDA_CHECK(cudaMemcpy(dump_host, gpu_data, data_size, cudaMemcpyDeviceToHost));
       dump_curve_state_csv(dump_file, "end", batches_complete, s_partial, this_batch,
-                           sigma, BITS, TPI, dump_host, curves, BITS / 32);
+                           sigma32, BITS, TPI, dump_host, curves, BITS / 32);
     }
 
     CUDA_CHECK(cudaEventRecord (stop));
@@ -1038,9 +1300,13 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       header.s_num_bits = s_num_bits;
       header.batches_complete = batches_complete;
       header.curves = curves;
-      header.sigma = sigma;
+      /* v4: full 64-bit sigma (param0 needs it; the batch path's sigma fits in 32
+         bits by construction) plus the parametrization itself. */
+      header.sigma = param0 ? sigma64 : (uint64_t)sigma32;
       header.BITS = BITS;
       header.TPI = TPI;  // Save TPI for kernel selection on reload
+      header.gpu_param = param0 ? 0u : 3u;
+      header.reserved = 0;
       header.data_size = data_size;
       header.timestamp = time(NULL);
       
@@ -1061,7 +1327,8 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
 
   cudaEventElapsedTime (gputime, global_start, stop);
 
-  youpi = process_results(factors, array_found, N, data, BITS, curves, sigma);
+  youpi = process_results(factors, array_found, N, data, BITS, curves, sigma32,
+                          words_per_curve, p1_word, p2_word);
 
   // clean up
   CUDA_CHECK(cudaFree(gpu_s_bits));
@@ -1088,7 +1355,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   }
 
   /* Write back possibly-updated sigma to caller */
-  *sigma_ptr = sigma;
+  *sigma_ptr = sigma64;
 
   return youpi;
 }

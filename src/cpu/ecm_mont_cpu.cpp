@@ -22,24 +22,24 @@
  * ------------------------------------------------------------------------- */
 #include "ecm_mont_cpu.h"
 #include "ecm_edwards_mont.h"          /* generic MPN Montgomery layer */
+#include "ecm_stage1_exp.h"            /* s = torsion * lcm(1..B1), product tree */
 
 #include <stdlib.h>
 #include <vector>
 
 /* --------------------------------------------------------------------------
  * s = torsion * lcm(1..B1)
+ *
+ * Delegates to the shared product-tree builder (src/core/ecm_stage1_exp.cpp).
+ * The loop that used to live here -- mpz_mul_ui() once per prime power into a
+ * growing accumulator -- is mathematically identical but quadratic in the number
+ * of primes: B1 = 1e7 cost 29 s of startup before the ladder started, which the
+ * user hit as "the task sits there for 30 seconds".  Returns 0 (and leaves s at
+ * torsion) if the bound is out of range or the sieve cannot be allocated.
  * ------------------------------------------------------------------------ */
 size_t mont_build_s(mpz_t s, uint64_t B1, uint64_t torsion)
 {
-    std::vector<char> composite(B1 + 1, 0);
-    mpz_set_ui(s, torsion ? torsion : 1);
-    for (uint64_t p = 2; p <= B1; ++p) {
-        if (composite[p]) continue;
-        for (uint64_t q = p * 2; q <= B1; q += p) composite[q] = 1;
-        uint64_t v = p;
-        while (v <= B1 / p) v *= p;               /* highest power of p <= B1 */
-        mpz_mul_ui(s, s, (unsigned long)v);
-    }
+    if (!ecm_build_lcm_exponent(s, B1, torsion)) return 0;
     return (size_t)mpz_sizeinbase(s, 2);
 }
 
@@ -51,10 +51,10 @@ void mont_suyama_curve(mpz_t A, mpz_t X0, mpz_t Z0, uint64_t sigma, const mpz_t 
     mpz_t u, v, t, num, den, inv, three_u_plus_v;
     mpz_inits(u, v, t, num, den, inv, three_u_plus_v, NULL);
 
-    mpz_set_ui(u, (unsigned long)sigma);
+    mont_set_sigma(u, sigma);
     mpz_mul(u, u, u);
     mpz_sub_ui(u, u, 5);                          /* u = sigma^2 - 5 */
-    mpz_set_ui(v, (unsigned long)sigma);
+    mont_set_sigma(v, sigma);
     mpz_mul_ui(v, v, 4);                          /* v = 4*sigma */
 
     mpz_sub(t, v, u);                             /* v-u */
@@ -159,11 +159,27 @@ uint8_t *mont_expand_bits(const mpz_t s, size_t *out_nbits)
     return bits;
 }
 
-int mont_stage1_curve_bits(mpz_t factor, mpz_t Qx, mpz_t Qz, const mpz_t N,
-                           uint64_t sigma, const uint8_t *bits, size_t nbits)
+void mont_ladder_state_init(mont_ladder_state_t *st)
 {
+    st->bitnum = 0;
+    mpz_inits(st->X0, st->Z0, st->X1, st->Z1, NULL);
+}
+
+void mont_ladder_state_clear(mont_ladder_state_t *st)
+{
+    mpz_clears(st->X0, st->Z0, st->X1, st->Z1, NULL);
+    st->bitnum = 0;
+}
+
+int mont_stage1_curve_bits_ex(mpz_t factor, mpz_t Qx, mpz_t Qz, const mpz_t N,
+                              uint64_t sigma, const uint8_t *bits, size_t nbits,
+                              size_t start_bit, mont_ladder_state_t *st,
+                              mont_progress_fn cb, void *cb_ctx, size_t chunk_bits)
+{
+    if (start_bit > nbits) return MONT_LADDER_ERROR;
+    if (start_bit > 0 && !st) return MONT_LADDER_ERROR;
     mont_ctx_t mc;
-    if (mont_init(&mc, N) != 0) return -1;        /* beyond ED_MONT_MAX_LIMBS */
+    if (mont_init(&mc, N) != 0) return MONT_LADDER_ERROR;  /* beyond ED_MONT_MAX_LIMBS */
 
     mpz_t A, X0, Z0, a24, xdiff, inv;
     mpz_inits(A, X0, Z0, a24, xdiff, inv, NULL);
@@ -175,9 +191,12 @@ int mont_stage1_curve_bits(mpz_t factor, mpz_t Qx, mpz_t Qz, const mpz_t N,
     mpz_mul(a24, a24, inv);
     mpz_mod(a24, a24, N);                         /* a24 = (A+2)/4 */
 
+    /* xdiff is the affine x of the *start* point P, i.e. the difference between
+       the two ladder points at every k -- so it is a pure function of sigma and
+       resume does not need it in the checkpoint. */
     mpz_invert(inv, Z0, N);
     mpz_mul(xdiff, X0, inv);
-    mpz_mod(xdiff, xdiff, N);                      /* affine x of the start point */
+    mpz_mod(xdiff, xdiff, N);
 
     ladder_ctx c;
     c.mc = &mc;
@@ -185,12 +204,42 @@ int mont_stage1_curve_bits(mpz_t factor, mpz_t Qx, mpz_t Qz, const mpz_t N,
     mont_to(&c.xdiff, xdiff, &mc);
 
     xz R0, R1, T;
-    mont_to(&R0.X, X0, &mc);
-    mont_to(&R0.Z, Z0, &mc);
-    xdbl(R1, R0, c);                               /* R1 = 2P */
+    size_t i;
+    if (start_bit == 0) {
+        mont_to(&R0.X, X0, &mc);
+        mont_to(&R0.Z, Z0, &mc);
+        xdbl(R1, R0, c);                          /* R1 = 2P */
+        i = 1;                                    /* bits[0] is the implicit top bit */
+    } else {
+        mont_to(&R0.X, st->X0, &mc);              /* p0 = [k]P   */
+        mont_to(&R0.Z, st->Z0, &mc);
+        mont_to(&R1.X, st->X1, &mc);              /* p1 = [k+1]P */
+        mont_to(&R1.Z, st->Z1, &mc);
+        i = start_bit;
+    }
 
     xz *p0 = &R0, *p1 = &R1, *pt = &T;
-    for (size_t i = 1; i < nbits; i++) {           /* bits[0] is the implicit top bit */
+    int paused = 0;
+    /* Checkpoint cadence as a countdown rather than  i % chunk  : the ladder runs
+       one integer division per bit otherwise, which is a real cost against ~10
+       field multiplications.  Offsets stay aligned to `chunk` relative to the
+       resume point, so a pause is always a valid resume point. */
+    const size_t ck_stride = (cb && chunk_bits) ? chunk_bits : 0;
+    size_t next_ck = ck_stride ? (start_bit + ck_stride) : 0;   /* 0 = never */
+    for (; i < nbits; i++) {
+        if (ck_stride && i == next_ck) {
+            next_ck += ck_stride;
+            mont_from(st->X0, &p0->X, &mc);
+            mpz_mod(st->X0, st->X0, N);
+            mont_from(st->Z0, &p0->Z, &mc);
+            mpz_mod(st->Z0, st->Z0, N);
+            mont_from(st->X1, &p1->X, &mc);
+            mpz_mod(st->X1, st->X1, N);
+            mont_from(st->Z1, &p1->Z, &mc);
+            mpz_mod(st->Z1, st->Z1, N);
+            st->bitnum = i;
+            if (cb(cb_ctx, st)) { paused = 1; break; }
+        }
         if (bits[i]) {
             xadd(*pt, *p1, *p0, c);                /* pt = R0 + R1 (diff P) */
             xdbl(*p1, *p1, c);                     /* R1 = 2*R1 */
@@ -202,19 +251,33 @@ int mont_stage1_curve_bits(mpz_t factor, mpz_t Qx, mpz_t Qz, const mpz_t N,
         }
     }
 
+    if (paused) {
+        /* the loop above already published *st at exactly `i` bits consumed */
+        mpz_clears(A, X0, Z0, a24, xdiff, inv, NULL);
+        mont_clear(&mc);
+        return MONT_LADDER_PAUSED;
+    }
+
     mont_from(Qx, &p0->X, &mc);
     mont_from(Qz, &p0->Z, &mc);
     mpz_mod(Qx, Qx, N);
     mpz_mod(Qz, Qz, N);
 
-    int rc = 0;
+    int rc = MONT_LADDER_MISS;
     if (factor) {
         mpz_gcd(factor, Qz, N);
-        if (mpz_cmp_ui(factor, 1) > 0 && mpz_cmp(factor, N) < 0) rc = 1;
+        if (mpz_cmp_ui(factor, 1) > 0 && mpz_cmp(factor, N) < 0) rc = MONT_LADDER_HIT;
     }
     mpz_clears(A, X0, Z0, a24, xdiff, inv, NULL);
     mont_clear(&mc);
     return rc;
+}
+
+int mont_stage1_curve_bits(mpz_t factor, mpz_t Qx, mpz_t Qz, const mpz_t N,
+                           uint64_t sigma, const uint8_t *bits, size_t nbits)
+{
+    return mont_stage1_curve_bits_ex(factor, Qx, Qz, N, sigma, bits, nbits,
+                                     0, NULL, NULL, NULL, 0);
 }
 
 int mont_stage1_curve(mpz_t factor, mpz_t Qx, mpz_t Qz,

@@ -100,7 +100,7 @@ run_queue_manager()
   | `sync_mode` | `incremental` | 每任务同步模式 `incremental \| full` |
   | `log_file` | `screen.log` | 日志文件（空 = 仅 stdout） |
   | `device` | `0` | GPU 设备索引 |
-  | `gpuckpt_seconds` | `600` | GPU 检查点间隔（秒） |
+  | `ckpt_seconds` | `600` | GPU 检查点间隔（秒） |
   | `verbose` | `1` | 详细程度 |
   | `tpi` | `8` | 每实例线程数（OpenCL） |
   | `wg_size` | `0` | 显式工作组大小（0 = 自动） |

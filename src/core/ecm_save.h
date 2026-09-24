@@ -28,7 +28,12 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
  *   * `X` is the normalised Montgomery x of [s]P for curves that did NOT hit, and
  *     the found factor for curves that DID hit (hit[i] != 0) -- a hit makes the
  *     normalised x meaningless (Z is not invertible).
+ *
+ * `sigmas` is the FULL per-curve array, not a base value: a run with random sigmas
+ * has no sigmas[i] == sigmas[0] + i relationship, and writing a sigma that does not
+ * belong to the stored X makes a stage-2 handoff rebuild a different curve (it then
+ * searches a curve whose point it never had).
  */
 bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, double B1,
-                                uint64_t firstsigma, uint32_t curves, const mpz_t *xs,
+                                const uint64_t *sigmas, uint32_t curves, const mpz_t *xs,
                                 const int *hit, const std::string &n_expr_save);

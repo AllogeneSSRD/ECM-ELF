@@ -90,3 +90,4 @@ tools/gen/__pycache__/
 /.bench_tmp
 /test_edwards-1
 /tools/stat/_run
+/build_cuda_dev

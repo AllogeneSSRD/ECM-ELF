@@ -67,7 +67,7 @@ List all switchable kernel paths: `build\Debug\ecm.exe --showkernel`
 echo "N" | ecm.exe <-gpu> [-gpucurves <n>] [...] <B1> <B2>
 ```
 
-Read composite **N** from stdin (decimal or expression) and run stage-1; `-gpu` enables OpenCL batched curves.  
+Read composite **N** from stdin (decimal or expression) and run stage-1; `-gpu` enables batched GPU curves (`ecm.exe` = OpenCL, `ecm_cuda.exe` = CUDA/CGBN - the startup banner prints which).  
 Angle brackets `< >`: required arguments.  
 Square brackets `[ ]`: optional arguments.
 
@@ -84,7 +84,7 @@ echo "(2^991-1)" | build_rel\Release\ecm.exe -v --go -gpu -gpucurves 384 1e6 0
 |------|------|
 | `<B1>` `<B2>` | Required positional args at the end of the command |
 | `-gpu` / `-gpucurves <n>` | GPU stage-1 and curves per batch |
-| `-d <index>` | OpenCL device index |
+| `-d <index>` | GPU device index (OpenCL device in `ecm`, CUDA device in `ecm_cuda`) |
 | `-v` | Verbose output |
 | `--mul` / `--sqr` / `--add` / `--sub` / `--special-mult <path>` | Override each operator kernel path (id / alias / auto) |
 | `--showkernel` | Enumerate all operators from the registry (id, aliases, file, platforms) |
@@ -136,19 +136,45 @@ Chinese**: see [CPU stage-1 教程](README.md#cpu-stage-1-教程edwardsatkin-mor
 
 | Method | CLI | ini | Notes |
 |---|---|---|---|
-| CPU Edwards (Atkin-Morain, a=1) | `--edwards` | `edwards = 1` | `edwards_backend = auto\|simd\|gmp`; `edwards_threads`; `edwards_naf_w` (default 12) |
-| CPU Suyama-Montgomery | `--mont` | `mont = 1` | `mont_backend = auto\|simd\|gmp`; `mont_threads`; `mont_torsion = 1\|12` (`1` = gmp-ecm `-param 0` result alignment, `12` = Prime95 choose12) |
+| CPU Edwards (Atkin-Morain, a=1) | `--edwards` / `--method edwards` | `method = edwards` | shared `backend = auto\|simd\|gmp`, `stage1_threads`, `field`; `naf_w` (default 12) |
+| CPU Suyama-Montgomery | `--mont` / `--method mont` | `method = mont` | shared `backend`, `stage1_threads`, `field`; `exponent = lcm\|choose12` (`lcm` = gmp-ecm `-param 0` alignment, `choose12` = Prime95) |
 
 The two paths are mutually exclusive (`--mont` wins on the command line; `mont = 1` disables Edwards in the ini).
 
 | ini key | Values | Default | Meaning |
 |---|---|---|---|
-| `edwards_mersenne` | `auto` / `on` / `off` | `auto` | Reduction domain. `on` = force the Mersenne fold (`N = 2^k-1` required, else error); **`off` = force Montgomery reduction ("Edwards mont mode")**, the right choice when `N` is not `2^k-1` (e.g. `(2^k-1)/f`) or for A/B benchmarking the fold kernel; `auto` picks the fold for `N = 2^k-1` |
-| `edwards_threads` / `mont_threads` | `0` = auto, `1` = serial, `n` | `0` | Worker threads, clamped by the number of *tasks*: one SIMD task is 8 curves, so filling 16 cores needs ≥ 128 curves (`-gpucurves`) |
-| `mont_save_pattern` / `save_name_pattern` | name template | `m{n}_{b1}.save` | One shared save file per `(N, B1)`; `{n}` = Mersenne exponent for `N = 2^k-1`, else the bit length; `{b1}` compact (`1e5`, `110e6`) |
-| `sigma` | `0` = random | `0` | Fixed sigma: curve *i* uses `sigma + i` (64-bit sigma, like gmp-ecm) |
+| `field` | `auto` / `mersenne` / `montgomery` | `auto` | SIMD reduction domain, shared by both CPU methods. `auto` = Mersenne fold for `N = 2^k-1` (half the madds per multiply), Montgomery otherwise; `mersenne` = force the fold (error if N is not of that shape); `montgomery` = force CIOS (A/B baseline). The domain actually used is printed on the `field layer :` line |
+| `stage1_threads` | `0` = auto, `1` = serial, `n` | `0` | CPU stage-1 worker threads (both methods), clamped by the number of *tasks*: one SIMD task is 8 curves, so filling 16 cores needs ≥ 128 curves (`-gpucurves`) |
+| `save_name_pattern` | name template | `m{n}_{b1}.save` | Write-side template, shared by both CPU methods; one shared save file per `(N, B1)`. The reader ignores the template and takes B1 from the last `_` token before `.save` |
+| `sigma` | `0` = random | `0` | Fixed sigma: curve *i* uses `sigma + i` (64-bit; keep it ≤ 2^63 because Prime95's ECMSTAGE2 reads SIGMA with `atoll()`) |
 | `affinity` | `""` / `1,3,5,7` / `0-7` / `0-3,8,10-11` | `""` | Pin worker *t* to `list[t % len]`; the CLI equivalent is `--affinity <list>`. Measured on the HX 370 test box (4 Zen5 + 8 Zen5c cores, **SMT on both**): **leave it unset**. SMT siblings are numbered adjacently and are a *last resort* (big cores +10~11%; small cores +6~8% while the Zen5c cluster has headroom, **-19%** once all 8 small physical cores are loaded). Pinning all 24 logical CPUs drops throughput from 9.01x to 5.85x |
-| `tmp_dir` / `worktodo` / `finished` / `log_file` | paths | `.` / `worktodo.txt` / `worktodo.finished.txt` / `screen.log` | Local saves, queue input, completed tasks, timestamped append-only log |
+| `tmp_dir` / `worktodo` / `finished` / `log_file` | paths | `.` / `worktodo.txt` / `worktodo.finished.txt` / `screen.log` | Local saves (`.save` *and* mid-stage-1 `.ckpt`), queue input, completed tasks, timestamped append-only log |
+| `ckpt_seconds` | seconds, `0` = off | `600` | Mid-stage-1 checkpoint interval (CLI `--ckpt`). Every method that has one uses it: the GPU path (OpenCL *and* CUDA - the v4 header records the parametrization) saves the curve buffer + exponent offset, Edwards writes `e{n}_c{k}.ckpt`, Montgomery writes `m{n}_{b1}_c{k}.ckpt`. `0` = no periodic autosave, but **Ctrl+C still saves once** |
+
+**Interrupted runs resume themselves.** With a non-empty `tmp_dir` both CPU methods persist mid-ladder
+state, so the resume is simply *the same command line again* - no extra flag. The checkpoints pin each
+curve's sigma (and, when the run stops cleanly, the results already computed), so a resumed run works on
+the same curve set and skips what is done. Verified end to end: killing the process mid-ladder and
+rerunning reproduces, curve for curve, the same save content as one uninterrupted run
+(`tools/test/test_mont_checkpoint.ps1`), and the ladder hooks cost **-0.6% +/- 1%** in an interleaved A/B
+(`tools/bench/mont_ckpt_ab.cpp`). Montgomery's checkpoint format is internal (plain text, checksummed);
+the interoperable artifact stays the `.save` file written at the end. See
+[docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md) §17.
+
+**Fixed startup cost** (per task, independent of N and of the curve count): building
+`s = torsion*lcm(1..B1)` and expanding it to one byte per bit. All three methods now share one
+product-tree builder (`src/core/ecm_stage1_exp.cpp`):
+
+| B1 | build `s` | expand bits |
+|---|---|---|
+| 1e6 | 0.016 s | 0.002 s |
+| 1e7 | 0.23 s | 0.02 s |
+| 1.1e8 | 5.3 s (0.4 s sieve + FFT multiplies) | 0.2 s |
+
+At B1 = 1e7 the Montgomery path used to spend **29 s** here (a prime-by-prime accumulator, quadratic in
+the number of primes) while the GPU/Edwards paths already used a product tree - that is also where the
+"CUDA needs 5 s for B1 = 1.1e8" figure comes from, since the GPU path pays the same construction.
+Fixed in §18 of the Montgomery doc.
 
 Single-thread stage-1 on **M4001 = 2^4001-1** (Suyama/Montgomery curves, stage 1 only), seconds/curve:
 
@@ -179,7 +205,7 @@ while unbound 16 / 24 threads give **8.46x / 9.01x** (vs a single core). Budget 
 0.326 -> 0.230 -> 0.180 batches/s from 1 -> 2 -> 8 cores), which is why the OS scheduler beats any
 hand-written affinity list.
 
-Cost of forcing `edwards_mersenne = off`: Montgomery CIOS costs about `n(4n+3)` madds per modular
+Cost of forcing `field = montgomery`: Montgomery CIOS costs about `n(4n+3)` madds per modular
 multiplication against the fold domain's `2n^2` (with squarings at `n(n-1)+2n`), so prefer the fold
 whenever `N = 2^k-1`.
 
@@ -251,6 +277,28 @@ build\Debug\opencl_ecm_montsqr.exe --bits 512 1000 128 1
 ## Building the CUDA backend (CGBN)
 
 `ecm_cuda` is a native CUDA stage-1 based on upstream CGBN (`kernels/cuda/cgbn_stage1.cu`). It **shares the same driver / argument parsing / checkpoint / save / logging** as the OpenCL `ecm` binary, and only swaps the GPU implementation at link time via `include/ecm_backend.h` (OpenCL glue: `src/opencl_backend_glue.cpp`; CUDA glue: `src/cuda/ecm_cuda_backend.cu`).
+
+### Curve parametrization: `gpu_param = 0 | 3` (`--gpu-param`)
+
+| value | curve family | torsion / success rate | save form | backends |
+|---|---|---|---|---|
+| **0** | **Suyama param0** (Prime95 `sigma_type=1` / gmp-ecm `-param 0`) - the SAME curves, for the same sigma, as the CPU `--method mont` path | Z/12; effective divisor D ≈ 21-23 vs ≈ 6.4-7.6 for the batch family (a **~3x ratio in D**). ⚠ The *success-rate* ratio is much smaller: measured **1.30x-1.8x** at B1=256 over bits 15-40 (bit 20: 30.47% vs 21.64%) | param0 text (**no** `PARAM=`), carries the **original N** so gmp-ecm `-param 0` and Prime95 both accept it for stage 2 | CUDA/CGBN only (the OpenCL kernels refuse 0 loudly) |
+| 3 | gmp-ecm batch parametrization (`P=(2:1)`, `d = sigma/2^32`) - the historical GPU path | Z/4 | carries `PARAM=3` | CUDA and OpenCL |
+
+Default is 3, so an ini without the key behaves exactly as before (`ecm.ini` ships 0, documented as
+recommended). param0 costs ~22% more time per curve but cuts the expected cost per factor to ~0.27x of the
+batch family. Measured (M3001, B1=1e5, 4096 curves, RTX 4070 Ti): 11.7M curve-bits/s = 3.8x the whole
+24-thread CPU box (~35x a single core), and the resulting stage-1 save was verified to run gmp-ecm
+stage 2 successfully. See [docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md) §19/§20 and the
+regression test `tools/test/test_cuda_param0.ps1`.
+
+> The full CUDA build ships TPI=16 containers on a 512-bit grid (2560...8192). A 256-bit grid was tried and
+> reverted: no throughput gain, nearly double the full-build time. The param0 kernels now cover the SAME
+> grid as param3 (TPI=4 128-512, TPI=8 768-2048, TPI=16 2560-8192, TPI=32 9216-16384), which doubles the
+> number of instantiations in a full build; a dev build still carries only the small tiers. Whether the two
+> parametrizations can share instantiations is answered in
+> [docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md) §21 (short: no, their per-bit arithmetic
+> differs - but if the batch family is no longer needed, dropping param3 is the real way to halve the build).
 
 ### Dependencies
 

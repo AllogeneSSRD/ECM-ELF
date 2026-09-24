@@ -833,12 +833,26 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
                                : 0.0,
                            (unsigned long long)ckpt_header.s_partial,
                            (unsigned long long)ckpt_header.s_num_bits);
-            if (sigma != ckpt_header.sigma) {
-                ocl_log_verbose(verbose, "Checkpoint sigma overrides current sigma: %u -> %u\n",
-                                sigma, ckpt_header.sigma);
+            /* v4 header: a 64-bit sigma outside the 32-bit batch window, or a different
+               parametrization, means this checkpoint belongs to another run (param0) --
+               refuse it rather than truncate the sigma into a different curve. */
+            if (ckpt_header.gpu_param != 3u || ckpt_header.sigma > 0xFFFFFFFFull) {
+                ocl_log_verbose(verbose,
+                                "Checkpoint was written by a different parametrization "
+                                "(gpu_param=%u, sigma=%llu), starting fresh\n",
+                                ckpt_header.gpu_param,
+                                (unsigned long long)ckpt_header.sigma);
+                ckpt_loaded = 0;
+                free(ckpt_data);
+                ckpt_data = nullptr;
+            } else {
+                if (sigma != (uint32_t)ckpt_header.sigma) {
+                    ocl_log_verbose(verbose, "Checkpoint sigma overrides current sigma: %u -> %u\n",
+                                    sigma, (uint32_t)ckpt_header.sigma);
+                }
+                ckpt_loaded = 1;
+                sigma = (uint32_t)ckpt_header.sigma;
             }
-            ckpt_loaded = 1;
-            sigma = ckpt_header.sigma;
         } else {
             ecm_ts_fprintf(stderr,
                            "Checkpoint parameters mismatch (curves or s_num_bits differ), "
@@ -1179,9 +1193,11 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
                     header.s_num_bits = s_num_bits;
                     header.batches_complete = batches_complete;
                     header.curves = curves;
-                    header.sigma = sigma;
+                    header.sigma = (uint64_t)sigma;  /* v4: 64-bit field */
                     header.BITS = BITS;
                     header.TPI = tpi;
+                    header.gpu_param = 3u;           /* OpenCL = batch parametrization */
+                    header.reserved = 0;
                     header.data_size = (uint64_t)data_size;
                     header.timestamp = (int64_t)time(nullptr);
                     opencl_ecm_checkpoint_save(ckpt_filename, &header, ckpt_buf.data(), data_size);
@@ -1234,9 +1250,11 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
             hdr.s_num_bits = s_num_bits;
             hdr.batches_complete = batches_complete;
             hdr.curves   = curves;
-            hdr.sigma    = sigma;
+            hdr.sigma    = (uint64_t)sigma;
             hdr.BITS     = BITS;
             hdr.TPI      = tpi;
+            hdr.gpu_param = 3u;
+            hdr.reserved = 0;
             hdr.data_size = (uint64_t)data_size;
             hdr.timestamp = (int64_t)time(nullptr);
             opencl_ecm_checkpoint_save(ckpt_filename, &hdr, ckpt_buf.data(), data_size);

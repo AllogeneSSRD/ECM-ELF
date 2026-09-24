@@ -88,6 +88,10 @@ void ecm_cuda_print_ptx_version(const void *func) {
 
 /* ── Backend hooks ──────────────────────────────────────────────────────── */
 
+extern "C" const char *ecm_backend_name(void) {
+    return "CUDA/CGBN";
+}
+
 extern "C" void ecm_backend_print_kernels(FILE *out) {
     fprintf(out, "CUDA/CGBN backend: compiled kernel sizes (bits):\n");
 #ifdef ECM_CUDA_FULL_BUILD
@@ -168,9 +172,9 @@ extern "C" int ecm_backend_prepare(size_t n_log2, int verbose, int device_index,
 
 extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
                                   const mpz_t N, const mpz_t s,
-                                  uint32_t curves, uint32_t *sigma,
+                                  uint32_t curves, uint64_t *sigma,
                                   unsigned long checkpoint_interval_ms,
-                                  float *gputime, int verbose,
+                                  float *gputime, int verbose, int gpu_param,
                                   const char *gpu_mul_path, const char *gpu_sqr_path,
                                   const char *gpu_add_path, const char *gpu_sub_path,
                                   const char *gpu_special_mult_path) {
@@ -179,5 +183,5 @@ extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
 
     ecm_cuda_set_verbose(verbose);
     return cgbn_ecm_stage1(factors, array_found, N, s, curves, sigma,
-                           checkpoint_interval_ms, gputime, verbose);
+                           checkpoint_interval_ms, gputime, verbose, gpu_param);
 }

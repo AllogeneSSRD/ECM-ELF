@@ -82,13 +82,24 @@ cl /nologo /O2 /EHsc /utf-8 /I src/core ^
 
 | 文件 | 内容 |
 |---|---|
-| `ecm_hitrate.ps1` | 从 `ecm_prob/data/primes/bits<b>.bin` 抽样素数，**嵌进大合数**（`N = p·(2^521-1)`）后逐后端统计命中率，并与 `ecm_prob` 的独立参考值对比。`-Count/-B1/-Bits/-Only` 可调 |
+| `ecm_hitrate.ps1` | 从 `ecm_prob/data/primes/bits<b>.bin` 抽样素数，**嵌进大合数**（`N = p·(2^521-1)`）后逐后端统计命中率，并与 `ecm_prob` 的独立参考值对比。`-Engine edwards\|mont\|gpu`、`-GpuParam 0\|3`、`-BitsFrom/-BitsTo`（或 `-Bits`）、`-Count N` / `-All`、`-Backend`、`-Curves`、`-Threads`、`-Device`、`-Output csv`、`-Quiet` 可调。输出 `hits/(primes×curves)`（逐曲线命中率）和 `primesHit/primePct`（至少命中一条曲线的素数比例）；`failedRuns` 非 0 说明驱动器根本没跑起来（该行的速率无意义） |
 | `compare_b1.ps1` | 同一 `(N,sigma)` 上多个 B1 的三后端配对比较（命中数 + 存档最终点是否逐字节相同） |
 | `bisect_b1.ps1` | 在已知失败用例上扫 B1 找最小复现档（当初逼出标量 bug 的那张表） |
 | `ref_common.py`、`ref_ladder4.py`、`verify_hit4.py` | 独立 Python 参考阶梯（大整数 / 小模数 / 投影二进制造），用来裁定"这个命中是不是真的" |
 
 > **必须嵌大合数**：若 `N = p` 是素数，stage-1 命中的 `gcd` 就是 N 本身，驱动当平凡因子丢掉
 > ⇒ 命中率恒为 0，什么都测不出来。
+
+> **数多行输出前先拆行**：`$out = cmd /c "..." 2>&1 | Out-String` 得到的是**一个**多行字符串，
+> 而 `$out | Select-String -Pattern ...` 对它只返回**一条**匹配 —— 用 `.Count` 数命中会把
+> "每个素数的多次命中"压成 1 次（2026-09-24 真踩到：报 6.25%，真值 30.47%，差 4.9 倍）。
+> 要么先 `$out -split "`r?`n"`，要么用 `[regex]::Matches($out, ...)`。
+
+> **含中文的 .ps1 必须存成 UTF-8 带 BOM**：Windows PowerShell 5.1 没有 BOM 时按系统 ANSI
+> （中文系统 = GBK）解码脚本，UTF-8 的中文恰好会把**后面的引号/反引号**当成 GBK 尾字节吃掉，
+> 于是出现"明明没写错却报语法错误"（2026-09-24 在 `stat/ecm_hitrate.ps1` 上真踩到：
+> `"（速率不可信）："` 里的 `：` 把收尾的 `"` 吞了）。写成 UTF-8 **with BOM** 即可，
+> `pwsh`（PowerShell 7）默认按 UTF-8 读所以看不出问题，但仓库里其它脚本是给 5.1 用的。
 >
 > **基准值**（`ecm_prob/out/measure_20_256.json`，独立实现 + 穷举 38635 个 20-bit 素数）：
 > Edwards Z/2×Z/8、B1=256 → **32.66 %**。本仓库三后端实测（1000 素数 × 8 曲线）=

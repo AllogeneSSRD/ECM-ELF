@@ -19,7 +19,7 @@ find_package(OpenSSL REQUIRED)
 #
 # A locally rebuilt GMP with x86_64/zen3 (BMI2 + ADX) mpn kernels is preferred when
 # present: it is 1.17-1.26x faster on stage-1 for >=1000-bit operands (see
-# docs/ECM_EDWARDS_STAGE1.md §10.2). Build it with third_party/build_gmp_zen3.sh
+# docs/ECM_EDWARDS_STAGE1.md 搂10.2). Build it with third_party/build_gmp_zen3.sh
 # (requires BMI2/ADX: Intel Haswell 2013+, AMD Excavator/Zen+).
 # Override with -DECM_WINDOWS_GMP_ROOT=<prefix> to use a different GMP.
 set(ECM_WINDOWS_GMP_ROOT "" CACHE PATH
@@ -121,10 +121,15 @@ add_executable(ecm
     # docs/ECM_Montgomery_STAGE1.md.
     src/cpu/ecm_mont_cpu.cpp
     src/cpu/simd_mont_curve.cpp
+    # Mid-stage-1 checkpoints for both of those paths (internal format).
+    src/core/ecm_mont_ckpt.cpp
+    # s = torsion * lcm(1..B1): one product-tree builder shared by the GPU batch,
+    # the CPU Edwards path and the CPU Montgomery path.
+    src/core/ecm_stage1_exp.cpp
 )
 
-# 只有这两个 SIMD TU 拿 AVX512 codegen; 调用点必须在 edwards_simd_available()
-# (基线 TU 里的 CPUID 探测) 返回 1 之后, 见 docs/ECM_EDWARDS_STAGE1.md §13.8。
+# 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
+# (鍩虹嚎 TU 閲岀殑 CPUID 鎺㈡祴) 杩斿洖 1 涔嬪悗, 瑙?docs/ECM_EDWARDS_STAGE1.md 搂13.8銆?
 if(MSVC)
     set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp
         src/cpu/simd_mont_curve.cpp
@@ -154,12 +159,12 @@ target_link_libraries(ecm
 ecm_target_link_gmp(ecm)
 
 # ---------------------------------------------------------------------------
-# ecm_p95feeder — standalone Prime95 handoff feeder.
+# ecm_p95feeder 鈥?standalone Prime95 handoff feeder.
 #
 # ecm.exe writes its stage-1 results locally only (<tmp_dir>/e{n:07d}_c{k}.tmp);
 # the feeder watches that directory and delivers each finished curve into a
 # running Prime95 instance (save file e{n:07d} + an ECM= line under a free
-# [Worker #N] section of worktodo.add). See docs/ECM_EDWARDS_STAGE1.md §11.
+# [Worker #N] section of worktodo.add). See docs/ECM_EDWARDS_STAGE1.md 搂11.
 # GMP-only: no OpenCL/OpenSSL dependency.
 # ---------------------------------------------------------------------------
 add_executable(ecm_p95feeder
@@ -194,7 +199,7 @@ foreach(_gmp_dll_cand "${ECM_WINDOWS_GMP_ROOT}/bin/gmp-10.dll"
     endif()
 endforeach()
 
-# indicators.hpp contains Unicode block characters (▌▐█▄…) for progress
+# indicators.hpp contains Unicode block characters (鈻屸枑鈻堚杽鈥? for progress
 # bars. MSVC's GBK code page misparses them; /utf-8 tells the compiler to
 # treat source files as UTF-8 regardless of system locale.
 if(MSVC)
@@ -311,8 +316,8 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# simd_mont_gate — M1 gate bench for the AVX512-IFMA batched Montgomery kernel
-# (docs/ECM_EDWARDS_STAGE1.md §13).  src/cpu/simd_mont_ifma.cpp is the ONLY file
+# simd_mont_gate 鈥?M1 gate bench for the AVX512-IFMA batched Montgomery kernel
+# (docs/ECM_EDWARDS_STAGE1.md 搂13).  src/cpu/simd_mont_ifma.cpp is the ONLY file
 # compiled with /arch:AVX512; the bench TU itself stays at the default baseline
 # and the eventual driver must gate every call on runtime CPUID detection.
 # ---------------------------------------------------------------------------
@@ -344,7 +349,7 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# ecm_edwards_standalone — one-curve stage-1 dump for cross-checking against
+# ecm_edwards_standalone 鈥?one-curve stage-1 dump for cross-checking against
 # Prime95 or an independent reference ladder.  Uses only the public API of
 # src/cpu/ecm_edwards_cpu.h; it used to be a main() inside that production TU
 # behind BUILD_ECM_EDWARDS_STANDALONE.
@@ -368,7 +373,7 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
-# simd_edwards_bench — M2 verification + timing: batched Edwards stage-1
+# simd_edwards_bench 鈥?M2 verification + timing: batched Edwards stage-1
 # (src/cpu/simd_edwards.cpp) against the production scalar ladder
 # (src/cpu/ecm_edwards_cpu.cpp, without its standalone main).
 # ---------------------------------------------------------------------------
@@ -426,7 +431,7 @@ if(MSVC)
     target_link_options(opencl_ecm_montsqr PRIVATE "/STACK:16777216")
 endif()
 
-# ── Sliced CIOS standalone verification target ────────────────────
+# 鈹€鈹€ Sliced CIOS standalone verification target 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 add_executable(sliced_cios_test
     src/sliced_cios_test.cpp
 )
@@ -488,7 +493,7 @@ target_link_libraries(opencl_addsub_isa_export
     cgbn_opencl
 )
 
-# ── CPU Montgomery Benchmark (AVX512/AVX2 batched CIOS) ──
+# 鈹€鈹€ CPU Montgomery Benchmark (AVX512/AVX2 batched CIOS) 鈹€鈹€
 add_executable(cpu_mont_bench
     tools/bench/cpu_mont_bench.cpp
     tools/bench/cpu_mont_avx.cpp
@@ -511,8 +516,8 @@ if(MSVC)
     set_source_files_properties(tools/bench/cpu_mont_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX512")
 endif()
 
-# ══════════════════════════════════════════════════════════════════════════
-#  ecm_cuda — native CUDA/CGBN backend (mirror of the OpenCL `ecm` executable)
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+#  ecm_cuda 鈥?native CUDA/CGBN backend (mirror of the OpenCL `ecm` executable)
 #
 #  Reuses the exact same driver / argument parsing / checkpoint / save / logging
 #  translation units as `ecm`, swapping only the GPU backend at link time via the
@@ -521,7 +526,7 @@ endif()
 #     - CUDA:   src/cuda/ecm_cuda_backend.cu  (here)
 #
 #  Auto-enabled when a CUDA toolkit is present; force off with -DECM_ENABLE_CUDA=OFF.
-# ══════════════════════════════════════════════════════════════════════════
+# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
 include(CheckLanguage)
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
@@ -553,7 +558,7 @@ if(ECM_ENABLE_CUDA)
         src/cpu/ecm_edwards_cpu.cpp
         src/cpu/ecm_edwards_save.cpp
         # ecm_driver.cpp (shared) calls the CPU Edwards SIMD batch unconditionally,
-        # so this target needs the two AVX512 TUs as well — without them the link
+        # so this target needs the two AVX512 TUs as well 鈥?without them the link
         # fails on ed_soa_* / ifma_to_mpz_lane.  The AVX512 COMPILE_OPTIONS set
         # above are per-source-file (directory scoped) and so apply here too.
         src/cpu/simd_edwards.cpp
@@ -562,6 +567,8 @@ if(ECM_ENABLE_CUDA)
         # (--mont / ini mont=1), so both of its TUs are needed here as well.
         src/cpu/ecm_mont_cpu.cpp
         src/cpu/simd_mont_curve.cpp
+        src/core/ecm_mont_ckpt.cpp
+        src/core/ecm_stage1_exp.cpp
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu
@@ -569,6 +576,9 @@ if(ECM_ENABLE_CUDA)
         kernels/cuda/cgbn_stage1_kernels_tpi8.cu
         kernels/cuda/cgbn_stage1_kernels_tpi16.cu
         kernels/cuda/cgbn_stage1_kernels_tpi32.cu
+        # Suyama param0 kernel variants (gpu_param = 0), kept in a separate TU so
+        # the param3 builds do not pay for the extra instantiations.
+        kernels/cuda/cgbn_stage1_kernels_suyama.cu
     )
 
     target_include_directories(ecm_cuda PRIVATE
@@ -588,6 +598,9 @@ if(ECM_ENABLE_CUDA)
 
     # Dev build (kernels up to 1024 bits) is the default; enable the full CGBN
     # kernel set (larger N, much longer compile) with -DECM_CUDA_FULL_BUILD=ON.
+    # Without it ecm_cuda refuses N >= 1024 bits ("Warning: Dev build, only support
+    # N<1024"), which makes it unusable for the sizes this project targets -- the
+    # dedicated NMake build in the README sets it ON.
     option(ECM_CUDA_FULL_BUILD "Compile the full CGBN kernel set instead of the dev build (N<=1024)" OFF)
     if(ECM_CUDA_FULL_BUILD)
         target_compile_definitions(ecm_cuda PRIVATE ECM_CUDA_FULL_BUILD)

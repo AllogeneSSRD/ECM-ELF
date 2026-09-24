@@ -217,7 +217,7 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
  * from two halves instead.
  * ------------------------------------------------------------------------- */
 bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, double B1,
-                                uint64_t firstsigma, uint32_t curves, const mpz_t *xs,
+                                const uint64_t *sigmas, uint32_t curves, const mpz_t *xs,
                                 const int *hit, const std::string &n_expr_save)
 {
     std::ofstream out(savefilename, std::ios::app);
@@ -237,10 +237,11 @@ bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, 
     const std::string who = build_who_field();
 
     for (uint32_t i = 0; i < curves; ++i) {
-        /* sigma = firstsigma + i, assembled for 64-bit safety */
-        mpz_set_ui(sigma_mpz, (unsigned long)((firstsigma + i) >> 32));
+        /* the curve's own sigma, assembled for 64-bit safety (Windows'
+           mpz_set_ui takes a 32-bit unsigned long) */
+        mpz_set_ui(sigma_mpz, (unsigned long)(sigmas[i] >> 32));
         mpz_mul_2exp(sigma_mpz, sigma_mpz, 32);
-        mpz_add_ui(sigma_mpz, sigma_mpz, (unsigned long)((firstsigma + i) & 0xFFFFFFFFu));
+        mpz_add_ui(sigma_mpz, sigma_mpz, (unsigned long)(sigmas[i] & 0xFFFFFFFFull));
 
         mpz_set_d(checksum, B1);
         mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(sigma_mpz, CHKSUMMOD));
@@ -258,7 +259,7 @@ bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, 
             << "; N=" << n_expr_save
             << "; X=0x" << x_hex
             << "; CHECKSUM=" << csum
-            << "; PROGRAM=MPA-ECM;"
+            << "; PROGRAM=ECM-ELY;"
             << " X0=0x0; Y0=0x0;"
             << (who.empty() ? "" : (" WHO=" + who + ";"))
             << " TIME=" << timebuf << ";"

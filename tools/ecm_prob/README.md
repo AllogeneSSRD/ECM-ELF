@@ -23,7 +23,8 @@ ecm_prob/
   # ---- 用户 CLI ----
   ecm_prob.py       预测 / 四元组反解 / GMP 推荐表（subcommand: predict | solve | gmp-table）
   ecm_sweep.py      素数生成 / 经验扫掠 / 汇总报告（subcommand: primes | sweep | report）
-  ecm_plot.py       绘图（subcommand: empirical | predict）
+  ecm_plot.py       绘图（subcommand: empirical | predict | list）；曲线登记表 + 暖/冷配色见文件头
+  check_plot_colors.py  配色自检：Montgomery 暖 / Edwards 冷（HSV 色相）+ 同族两两 RGB 距离 >=60
   ecm_cost.py       stage-1 成本（点运算层 + 域运算层，调 cost_engine.exe）
   # ---- 成本模型 ----
   cost_engine.cpp   C++ PRAC 引擎（uint64 + 筛，无 GMP；cl /O2 编译 -> cost_engine.exe）
@@ -45,20 +46,40 @@ cd D:\code\MPA-OpenCl\tools\ecm_prob
 # 校验
 python tests/test_golden.py        # 对拍论文 §9.1 四条 Edwards 曲线（20-bit/B1=256）
 python estimates.py                # 对拍论文 §9.4 五类估计
+python check_plot_colors.py        # 绘图配色约定自检（退出码 0=合规 / 1=违规）
+#   已知偏差：test_golden 四条曲线一致比论文低 0.03–0.18pp（Z/12: 12404 vs 12467）。
+#   在改动前的提交 edb717a 上复核结果相同 ⇒ pre-existing，不是回归；精确计数比对故意保留，
+#   因为真回归的表现是"偏差突然变大"或"只剩一条曲线掉队"。
 
 # 经验阶段（生成素数 -> 扫掠 -> 汇总/绘图）
-python ecm_sweep.py primes         # 生成 15–25 bit 穷举素数（幂等，sha256 缓存）
-python ecm_sweep.py sweep          # 跨位宽测量（15–20 穷举，21–25 采样 65536），B1=256
+#   素数集规模上限：bit <= 30 穷举；**bit >= 31 只生成 65536 个**（区间内 64 个均匀窗口各取
+#   1024 个，秒级完成；穷举 bit31 会是 ~420 MB）。--count/--exhaustive-max-bit/--windows 可调。
+#   位置参数是**位宽列表**，区间要写 `31-40`（`sweep 31 40` 只算这两个 bit，不是区间！）。
+python ecm_sweep.py primes         # 生成/复用 15–30（幂等，sha256 校验）
+python ecm_sweep.py primes 31-40 --count 65536      # 31+ 自动走采样（每个 512 KB，秒级）
+python ecm_sweep.py sweep          # 跨位宽测量（默认 bit 15–30，B1=256）
+python ecm_sweep.py sweep --B1 1e5                   # 换 B1；结果存 out/measure_<bit>_<B1>.json
+python ecm_sweep.py sweep 20 22 --B1 1e4 --force     # 离散 bit 列表；--force 强制重算
+python ecm_sweep.py sweep 32-39 --B1 256             # 区间写法（约 9 分钟/bit，单线程 Python）
 python ecm_sweep.py report 20 256  # 生成 out/report.md + summary.csv
-python ecm_plot.py empirical       # 经验图：bars_per_bit / emp_success_vs_bit / emp_d_eff_vs_bit
+python ecm_plot.py empirical       # 经验图（bit 范围自动发现，当前数据 15–40 全覆盖）
+python ecm_plot.py list            # 打印曲线登记表 + 各 B1 的可用 bit
+python ecm_plot.py empirical --bits 15-30 --series suyama_s10,edwards_Z2xZ8
 
 # 预测阶段
+#   B2 口径三个 CLI 一致：默认 B2 = 100*B1（= model.B2_FACTOR）；--b2-factor 改比例
+#   （例如 10000 ⇒ B2 = 10000*B1），--B2 固定绝对值（优先，同时给 --b2-factor 会提示）。
 python ecm_prob.py predict --all --bit 25 --B1 256            # 全部曲线表（stage1 vs stage1+stage2）
 python ecm_prob.py predict --curve suyama_s10 --bit 30 --B1 1024 --B2 25600
+python ecm_prob.py predict --all --bit 130 --B1 1.1e8 --b2-factor 10000   # 统一 B2=10000*B1 对比
 python ecm_prob.py solve --bit 130 --B1 44e6 --curves 960 --curve param3_s10
+python ecm_prob.py solve --bit 130 --B1 110e6 --curves 960 --curve suyama_s10 --b2-factor 10000
 python ecm_prob.py solve --bit 130 --curves 960              # 反解 B1
 python ecm_prob.py gmp-table 30 35 40                         # GMP-ECM 推荐表
 python ecm_plot.py predict --B1 256 --bit 40                  # 预测图（stage1 vs stage1+stage2）
+#   （ecm_plot.py 同一个 --b2-factor 名字，语义相同）
+python ecm_plot.py predict --B1 256 --mix-empirical           # 叠加 measure_*.json 的实测点
+python ecm_plot.py predict --B1 1e6 --bit 60 --series suyama_s10,param3_s10
 
 # 成本模型（stage-1 运算量）
 python ecm_cost.py --B1 1000000 --curve suyama_s10   # 点运算层 + 域运算层(M/S/A/Sub/I/D)
