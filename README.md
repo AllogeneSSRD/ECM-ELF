@@ -528,6 +528,14 @@ param0 每条曲线多花约 22% 时间，但每因子期望代价只有 batch �
 > 数量翻倍；dev 构建仍只带小档。两者能否共用实例化见
 > [docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md) §21（结论：不能，每 bit 算术不同；
 > 但若不再需要 batch 族，直接删掉 param3 才是真正省一半编译时间的方式）。
+>
+> **CGBN 本体还有多少可挖**：见 [docs/ECM_CGBN_OPTIMIZATION.md](docs/ECM_CGBN_OPTIMIZATION.md) ——
+> ① 架构默认乘法变体（sm_70+ 的 WMAD）在 Ada 上已是最优，强切 XMAD/IMAD 慢 1.5–2.3×；
+> ② `mont_sqr` 就是 `mont_mul(a,a)`，专用平方上限 12–14%；③ 删掉每 bit 8 次冗余的
+> `normalize_addition` 实测 **+5.4%（param3）/ +6.7%（param0）**（已落地，18/18 验收全过）；④ add-chain（PRAC/NAF）
+> 的时间天花板已测到下界：每 3 bit 一次加法 **1.47×**、每 5 bit **1.62×**、加法全关 **1.91×**（现实预期 1.4–1.6×），
+> 已有探针开关 `-DECM_PROBE_ADD_DENSITY=k`。
+> 工具：`tools/bench/cgbn_op_probe.cu`（逐算子单价 + 变体 A/B）、`tools/bench/cuda_kernel_ab.ps1`（整 kernel A/B）。
 
 
 ### 依赖

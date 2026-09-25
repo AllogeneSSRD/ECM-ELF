@@ -388,6 +388,16 @@ regression test `tools/test/test_cuda_param0.ps1`.
 > parametrizations can share instantiations is answered in
 > [docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md) §21 (short: no, their per-bit arithmetic
 > differs - but if the batch family is no longer needed, dropping param3 is the real way to halve the build).
+>
+> **How much is left in CGBN itself**: see [docs/ECM_CGBN_OPTIMIZATION.md](docs/ECM_CGBN_OPTIMIZATION.md) -
+> ① the arch-default multiply variant (WMAD for sm_70+) is already optimal on Ada; forcing XMAD/IMAD is
+> 1.5-2.3x slower; ② `mont_sqr` is just `mont_mul(a,a)`, so a dedicated square caps out at 12-14%;
+> ③ removing 8 (param3) / 6 (param0) redundant `normalize_addition` calls per bit measured **+5.4% / +6.7%**
+> (landed; the 18-check acceptance suite passes 18/18); ④ the add-chain (PRAC/NAF) ceiling is now measured
+> down to its floor: one add every 3 bits **1.47x**, every 5 bits **1.62x**, adds fully off **1.91x**
+> (realistic target 1.4-1.6x), with the timing-only probe `-DECM_PROBE_ADD_DENSITY=k`.
+> Tools: `tools/bench/cgbn_op_probe.cu` (per-operator cost + variant A/B), `tools/bench/cuda_kernel_ab.ps1`
+> (whole-kernel A/B).
 
 ### Dependencies
 

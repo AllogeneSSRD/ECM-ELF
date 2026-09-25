@@ -43,6 +43,19 @@
 #define IS_DEV_BUILD
 #endif
 
+// ---------------------------------------------------------------------------
+// PROBE ONLY -- do not enable in production (docs/ECM_CGBN_OPTIMIZATION.md §5)
+//
+// ECM_PROBE_ADD_DENSITY = k makes the fused double-and-add execute its *addition* half only
+// once every k-th bit.  THE RESULT IS MATHEMATICALLY WRONG for k > 1: it exists purely to
+// measure the timing ceiling of an add-chain schedule (PRAC / NAF + dictionary), where the
+// ladder does one doubling per bit but only ~1/3..1/6 of the additions.  k = 1 (default) is
+// the correct kernel.  Build with -DECM_PROBE_ADD_DENSITY=k to run the probe.
+// ---------------------------------------------------------------------------
+#ifndef ECM_PROBE_ADD_DENSITY
+#define ECM_PROBE_ADD_DENSITY 1
+#endif
+
 /* TODO test how this changes gpu_throughput_test */
 /* NOTE: >= 512 may not be supported for > 2048 bit kernels */
 const uint32_t TPB_DEFAULT = 256;
@@ -164,7 +177,8 @@ class curve_t {
           bn_t &w, bn_t &v,
           uint32_t d,
           const bn_t &modulus,
-          const uint32_t np0) {
+          const uint32_t np0,
+          const bool do_add = true) {
     // q = xA = aX
     // u = zA = aZ
     // w = xB = bX
@@ -177,33 +191,42 @@ class curve_t {
     /* Might be nice to add a macro that verifies no carry out of cgbn_add */
 
     // Is there anything interesting like only one of these can overflow?
-    cgbn_add(_env, t, v, w); // t = (bZ + bX)
-    normalize_addition(t, modulus);
-    if (cgbn_sub(_env, v, v, w)) // v = (bZ - bX)
-        cgbn_add(_env, v, v, modulus);
+    if (do_add) {                                  // PROBE: skipped for k > 1 (see top of file)
+      cgbn_add(_env, t, v, w); // t = (bZ + bX)
+      normalize_addition(t, modulus);
+      if (cgbn_sub(_env, v, v, w)) // v = (bZ - bX)
+          cgbn_add(_env, v, v, modulus);
+    }
 
 
     cgbn_add(_env, w, u, q); // w = (aZ + aX)
     normalize_addition(w, modulus);
     if (cgbn_sub(_env, u, u, q)) // u = (aZ - aX)
         cgbn_add(_env, u, u, modulus);
-    if (VERIFY_NORMALIZED) {
+    if (VERIFY_NORMALIZED && do_add) {   // PROBE: t/v are stale when the add half is skipped
         assert_normalized(t, modulus);
         assert_normalized(v, modulus);
         assert_normalized(w, modulus);
         assert_normalized(u, modulus);
     }
 
-    cgbn_mont_mul(_env, CB, t, u, modulus, np0); // C*B
-        normalize_addition(CB, modulus);
-    cgbn_mont_mul(_env, DA, v, w, modulus, np0); // D*A
-        normalize_addition(DA, modulus);
+    // NOTE (2026-09-24, CGBN optimization): NO normalize_addition() after a
+    // cgbn_mont_mul / cgbn_mont_sqr.  CGBN's Montgomery multiply already ends with a
+    // full conditional subtraction (core_mont_wmad.cu:178-189), so its result is < n
+    // and the extra cgbn_compare + conditional cgbn_sub is pure overhead.  Measured
+    // with tools/bench/cgbn_op_probe.cu: that compare+sub costs 43% of a mont_mul at
+    // the 512-bit tier (15% at 1024, 2.6% at 3072, 1.7% at 4096), and this kernel did
+    // 8 of them per bit -> removing them is a double-digit win at small N.
+    // Keep the normalize after cgbn_add/cgbn_sub/cgbn_shift_left (those CAN exceed n).
+    // See docs/ECM_CGBN_OPTIMIZATION.md.
+    if (do_add) {                                  // PROBE: CB/DA exist only for the addition
+      cgbn_mont_mul(_env, CB, t, u, modulus, np0); // C*B
+      cgbn_mont_mul(_env, DA, v, w, modulus, np0); // D*A
+    }
 
     /* Roughly 40% of time is spent in these two calls */
     cgbn_mont_sqr(_env, AA, w, modulus, np0);    // AA
     cgbn_mont_sqr(_env, BB, u, modulus, np0);    // BB
-    normalize_addition(AA, modulus);
-    normalize_addition(BB, modulus);
     if (VERIFY_NORMALIZED) {
         assert_normalized(CB, modulus);
         assert_normalized(DA, modulus);
@@ -213,7 +236,6 @@ class curve_t {
 
     // q = aX is finalized
     cgbn_mont_mul(_env, q, AA, BB, modulus, np0); // AA*BB
-    normalize_addition(q, modulus);
         assert_normalized(q, modulus);
 
     if (cgbn_sub(_env, K, AA, BB)) // K = AA-BB
@@ -236,31 +258,30 @@ class curve_t {
 
     // u = aZ is finalized
     cgbn_mont_mul(_env, u, K, u, modulus, np0); // K(BB+dK)
-    normalize_addition(u, modulus);
         assert_normalized(u, modulus);
 
-    cgbn_add(_env, w, DA, CB); // DA + CB
-    normalize_addition(w, modulus);
-    if (cgbn_sub(_env, v, DA, CB)) // DA - CB
-        cgbn_add(_env, v, v, modulus);
-    if (VERIFY_NORMALIZED) {
-        assert_normalized(w, modulus);
-        assert_normalized(v, modulus);
+    if (do_add) {                     // PROBE: the (w:v) output is the addition's result
+      cgbn_add(_env, w, DA, CB); // DA + CB
+      normalize_addition(w, modulus);   // kept: DA + CB can reach 2n
+      if (cgbn_sub(_env, v, DA, CB)) // DA - CB
+          cgbn_add(_env, v, v, modulus);
+      if (VERIFY_NORMALIZED) {
+          assert_normalized(w, modulus);
+          assert_normalized(v, modulus);
+      }
+
+      // w = bX is finalized
+      cgbn_mont_sqr(_env, w, w, modulus, np0); // (DA+CB)^2 mod N
+          assert_normalized(w, modulus);
+
+      cgbn_mont_sqr(_env, v, v, modulus, np0); // (DA-CB)^2 mod N
+          assert_normalized(v, modulus);
+
+      // v = bZ is finalized
+      cgbn_shift_left(_env, v, v, 1); // double
+      normalize_addition(v, modulus);   // kept: the shift can exceed n
+          assert_normalized(v, modulus);
     }
-
-    // w = bX is finalized
-    cgbn_mont_sqr(_env, w, w, modulus, np0); // (DA+CB)^2 mod N
-    normalize_addition(w, modulus);
-        assert_normalized(w, modulus);
-
-    cgbn_mont_sqr(_env, v, v, modulus, np0); // (DA-CB)^2 mod N
-    normalize_addition(v, modulus);
-        assert_normalized(v, modulus);
-
-    // v = bZ is finalized
-    cgbn_shift_left(_env, v, v, 1); // double
-    normalize_addition(v, modulus);
-        assert_normalized(v, modulus);
   }
 
   /* -------------------------------------------------------------------------
@@ -307,18 +328,13 @@ class curve_t {
         cgbn_add(_env, u, u, modulus);
 
     cgbn_mont_mul(_env, CB, t, u, modulus, np0); // C*B
-        normalize_addition(CB, modulus);
     cgbn_mont_mul(_env, DA, v, w, modulus, np0); // D*A
-        normalize_addition(DA, modulus);
 
     cgbn_mont_sqr(_env, AA, w, modulus, np0);    // AA
     cgbn_mont_sqr(_env, BB, u, modulus, np0);    // BB
-    normalize_addition(AA, modulus);
-    normalize_addition(BB, modulus);
 
     // q = aX is finalized
     cgbn_mont_mul(_env, q, AA, BB, modulus, np0); // AA*BB
-    normalize_addition(q, modulus);
 
     if (cgbn_sub(_env, K, AA, BB)) // K = AA-BB = 4XZ
         cgbn_add(_env, K, K, modulus);
@@ -328,28 +344,24 @@ class curve_t {
         assert_normalized(dK, modulus);
 
     cgbn_add(_env, u, BB, dK); // BB + a24*K
-    normalize_addition(u, modulus);
+    normalize_addition(u, modulus);   // kept: BB + dK can reach 2n
 
     // u = aZ is finalized
     cgbn_mont_mul(_env, u, K, u, modulus, np0); // K(BB + a24*K)
-    normalize_addition(u, modulus);
 
     cgbn_add(_env, w, DA, CB); // DA + CB
-    normalize_addition(w, modulus);
+    normalize_addition(w, modulus);   // kept: DA + CB can reach 2n
     if (cgbn_sub(_env, v, DA, CB)) // DA - CB
         cgbn_add(_env, v, v, modulus);
 
     // w = bX is finalized (Z_D = 1: the host normalises the difference point)
     cgbn_mont_sqr(_env, w, w, modulus, np0); // (DA+CB)^2 mod N
-    normalize_addition(w, modulus);
 
     cgbn_mont_sqr(_env, v, v, modulus, np0); // (DA-CB)^2 mod N
-    normalize_addition(v, modulus);
 
     // v = bZ is finalized: x_D * (DA-CB)^2, where x_D = X0/Z0 is the affine x of
     // the ladder difference point (param3 folds the constant 2 in here instead)
     cgbn_mont_mul(_env, v, v, xdiff, modulus, np0);
-    normalize_addition(v, modulus);
         assert_normalized(v, modulus);
   }
 };
@@ -425,7 +437,8 @@ __global__ void kernel_double_add(
         cgbn_swap(curve._env, aX, bX);
         cgbn_swap(curve._env, aZ, bZ);
     }
-    curve.double_add_v2(aX, aZ, bX, bZ, d, modulus, np0);
+    curve.double_add_v2(aX, aZ, bX, bZ, d, modulus, np0,
+                        (ECM_PROBE_ADD_DENSITY <= 1) || ((b % (uint64_t)ECM_PROBE_ADD_DENSITY) == 0));
   }
 
   if (swapped) {

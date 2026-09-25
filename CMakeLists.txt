@@ -606,6 +606,15 @@ if(ECM_ENABLE_CUDA)
         target_compile_definitions(ecm_cuda PRIVATE ECM_CUDA_FULL_BUILD)
     endif()
 
+    # PROBE ONLY (docs/ECM_CGBN_OPTIMIZATION.md §5): make the fused double-and-add run its
+    # addition half only every k-th bit, to measure the timing ceiling of an add-chain
+    # (PRAC / NAF + dictionary) schedule.  k > 1 IS MATHEMATICALLY WRONG -- results will be
+    # garbage; it exists to answer "how much would a chain with 1/k add density save?".
+    # Default 1 = the correct kernel.
+    set(ECM_PROBE_ADD_DENSITY "1" CACHE STRING
+        "PROBE ONLY: run the fused add every k-th bit (k>1 = wrong results, for timing)")
+    target_compile_definitions(ecm_cuda PRIVATE ECM_PROBE_ADD_DENSITY=${ECM_PROBE_ADD_DENSITY})
+
     # Pascal sm_60 / Maxwell workaround: with NDEBUG (Release), CUDA 12.x fails to
     # unroll one of CGBN's carry chains on the compute_60 PTX path, so CGBN emits
     # its intentional poison ("ASM_ERROR chain destructor: ... loop not unrolled")

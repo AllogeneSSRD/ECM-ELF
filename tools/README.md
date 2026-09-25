@@ -25,6 +25,10 @@ tools/
 > UTF-8、再以 UTF-8 写回，整份文件的中文注释会二次编码损坏（本轮真发生过一次，
 > 只能 `git checkout` 重做）。按行改源码请用 Python + 显式 `encoding="utf-8"`
 > （参考 `tools/diag/enc_diag.py` 的做法；它也能直接体检某个文件）。
+>
+> **`.ps1` 怎么跑**：本机 `powershell.exe` 执行策略是 Restricted，且 `pwsh` 不在 PATH，
+> 所以用 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\...\x.ps1`。含中文的
+> `.ps1` 必须存成 UTF-8 **with BOM**；纯 ASCII 的脚本无需 BOM（如 `test_cuda_param0.ps1`）。
 
 ## test/ — 单元测试与集成测试
 
@@ -72,6 +76,8 @@ cl /nologo /O2 /EHsc /utf-8 /I src/core ^
 | `simd_mont_tail.cpp` / `simd_mont_notail.cpp` | 尾巴成本拆解（用 `set DEFS=/DIFMA_NOTAIl=1` 选无尾版，避免运行时 `getenv` 污染热路径） |
 | `probe2.c` / `probe3.c` | 时钟与 `vpmadd52` 峰值标定（§15.3 数据的来源：4.0 GHz、1 madd/cycle） |
 | `ecm_edwards_standalone.cpp` | 单曲线 stage-1 dump（`d`、基点、`s_bits`、`Qx/Qz`、`u`、`gcd`），用于与 Prime95/参考阶梯对拍。原先藏在 `src/cpu/ecm_edwards_cpu.cpp` 的 `BUILD_ECM_EDWARDS_STANDALONE` 里，现已搬出并加 CMake 目标 `ecm_edwards_standalone` |
+| `cgbn_op_probe.cu` | **CGBN 逐算子单价**（`mont_mul`/`mont_sqr`/compare+cond-sub/add/sub/shift），可切 TPI/BITS 档位，可用 `-DXMP_WMAD/-DXMP_XMAD/-DXMP_IMAD` 切乘法链变体；用于判断"改哪个算子值多少"（结论见 `docs/ECM_CGBN_OPTIMIZATION.md`）。**文件必须保持 ASCII-only**（中文注释会让 nvcc 按 GBK 读、吃掉换行） |
+| `cuda_kernel_ab.ps1` | **整 CUDA kernel A/B 计时**：固定 N（默认 `2^Bits−1`）/B1/曲线数，多次取中位数，输出 `gputime` 与 curve-bits/s；`-Device` 默认 1（计时要在空闲卡上做） |
 | `simd_edwards_bench.cpp` | SIMD 批的验证 + 计时（`verify` 子命令与标量逐位对拍；`ED_SOA_FIELD=mont\|mers\|auto`、`ED_SOA_FSELFTEST=<n>`） |
 | `ab_mersenne.ps1` | 验收 A/B：8 曲线 M3001 B1=1e6，折叠域 vs Montgomery，交替 min-of-3 + 存档字节一致性 |
 | `ab_naf_window.ps1` | NAF 窗口 A/B（w=8/10/12） |
