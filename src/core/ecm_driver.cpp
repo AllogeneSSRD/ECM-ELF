@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -675,7 +675,7 @@ static void print_ecm_usage(const char *prog) {
               << "                       default: 600, 0 = no autosave -- Ctrl+C still saves)\n"
               << "  -d <index>           " << ecm_backend_name()
               << " device index (default: 0)\n"
-              << "  --gpu-param <0|3>    GPU curve parametrization (ini: gpu_param):\n"
+              << "  --gpu-param <0|2|3>  GPU curve parametrization (ini: gpu_param):\n"
               << "                       0 = Suyama param0 (same curves as --method mont,\n"
               << "                           Z/12 torsion, param0 save file) -- CUDA/CGBN only;\n"
               << "                       3 = gmp-ecm batch/PARAM=3 (default, historical GPU path)\n"
@@ -808,6 +808,9 @@ struct Stage1RunOptions {
     int device_index = 0;
     /* Curve parametrization of the GPU stage-1 path (ini: gpu_param, CLI: --gpu-param):
        3 = gmp-ecm batch (historical GPU path, save carries PARAM=3);
+       2 = param2, gmp-ecm's "batch 2" 6-torsion family (save carries PARAM=2, which
+           gmp-ecm reads back but Prime95 cannot; ~11% faster per curve than param0 at
+           the same success rate -- docs/ECM_CGBN_OPTIMIZATION.md §5.6);
        0 = Suyama param0 (same curves as the CPU --method mont path, param0 save). */
     int gpu_param = 3;
     unsigned long ckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
@@ -2818,6 +2821,16 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
                                                factors, hit.data(), n_expr_param0);
             if (!wrote)
                 std::cerr << "Failed to append param0 save lines into " << resolved_save << std::endl;
+        } else if (params->gpu_param == 2) {
+            /* param2 ("batch 2", 6-torsion): PARAM=2 with the ORIGINAL N for the same
+               checksum reason as param0, and SIGMA = the scalar multiplier sigma0+i the
+               GPU used.  gmp-ecm reads this back with -param 2; Prime95 cannot read it
+               (sigma_type only accepts 0/1/3).  See
+               docs/ECM_CGBN_OPTIMIZATION.md §5.6. */
+            wrote = opencl_ecm_append_save_lines(resolved_save, N, B1, firstsigma, curves, factors,
+                                                 n_expr_param0, 2);
+            if (!wrote)
+                std::cerr << "Failed to append param2 save lines into " << resolved_save << std::endl;
         } else {
             wrote = opencl_ecm_append_save_lines(resolved_save, N, B1, firstsigma, curves, factors,
                                                  n_expr_stripped);
@@ -3366,12 +3379,12 @@ int main(int argc, char **argv){
             try {
                 gpu_param_cli = std::stoi(argv[++i]);
             } catch (...) {
-                std::cerr << "Invalid --gpu-param value, expected 0 or 3" << std::endl;
+                std::cerr << "Invalid --gpu-param value, expected 0, 2 or 3" << std::endl;
                 return 1;
             }
-            if (gpu_param_cli != 0 && gpu_param_cli != 3) {
-                std::cerr << "Invalid --gpu-param value, expected 0 (Suyama param0) or 3 "
-                             "(gmp-ecm batch)" << std::endl;
+            if (gpu_param_cli != 0 && gpu_param_cli != 2 && gpu_param_cli != 3) {
+                std::cerr << "Invalid --gpu-param value, expected 0 (Suyama param0), "
+                             "2 (gmp-ecm batch 2 / 6-torsion) or 3 (gmp-ecm batch)" << std::endl;
                 return 1;
             }
             gpu_param_set = true;

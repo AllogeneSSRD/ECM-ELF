@@ -1,4 +1,4 @@
-/* cgbn_stage1.h: header for CGBN (GPU) based ecm stage 1.
+﻿/* cgbn_stage1.h: header for CGBN (GPU) based ecm stage 1.
 
 Copyright 2021 Seth Troisi
 
@@ -430,6 +430,200 @@ uint32_t* set_p_2p_suyama(const mpz_t N, uint32_t curves, uint64_t sigma0,
 }
 
 
+/* ---------------------------------------------------------------------------
+ * param2 ("batch 2", 6-torsion) curve/point setup (method = gpu + gpu_param = 2).
+ *
+ * Transcribed from gmp-ecm's get_curve_from_param2() (parametrizations.c:296-386):
+ *
+ *   P  = sigma * (-3 : 3 : 1) on the FIXED curve y^2 = x^3 + 36, sigma >= 2 a scalar
+ *   (x:y:z) -> affine
+ *   x3 = (3x + y + 6) / (2(y - 3))
+ *   A  = -(3 x3^4 + 6 x3^2 - 1) / (4 x3^3)        [Montgomery coefficient]
+ *   x0 = 2                                         [parametrizations.c:373]
+ *
+ * Consequences for our kernel (docs/ECM_CGBN_OPTIMIZATION.md §5.6): the ladder difference
+ * is the CONSTANT 2, so the differential addition needs no multiply (the shift), while
+ * a24 = (A+2)/4 is a full-width residue -- exactly the 5M+4S shape of
+ * cgbn_stage1_kernels_param2.cu.  Measured +10.7% over param0 at M511.
+ *
+ * Layout per curve (7 * BITS/32 words), identical to the Suyama path:
+ *   N, a24, xdiff (= 2), aX (= 2), aZ (= 1), bX (= 9), bZ (= 2P's Z)
+ *
+ * The Jacobian helpers below are the standard a=0 / mixed formulas for y^2 = x^3 + b;
+ * in trace mode the code also verifies its own scalar multiply (6*P == O, which holds
+ * because -3:3:1 is a 6-torsion point).
+ * ------------------------------------------------------------------------- */
+
+/* Jacobian doubling, a = 0 (dbl-2009-l) */
+static void p2_jac_dbl(mpz_t X3, mpz_t Y3, mpz_t Z3,
+                       const mpz_t X1, const mpz_t Y1, const mpz_t Z1, const mpz_t n) {
+  /* All three outputs may alias the inputs (the caller passes X,Y,Z for both), so every
+     intermediate is computed into a temporary and stored at the very end.  The earlier
+     version stored Y3 before computing Z3 = 2*Y1*Z1, which silently corrupted Z3. */
+  mpz_t A, B, C, D, E, F, t, xo, yo, zo;
+  mpz_inits(A, B, C, D, E, F, t, xo, yo, zo, NULL);
+  mpz_mul(A, X1, X1); mpz_mod(A, A, n);                     /* A = X1^2 */
+  mpz_mul(B, Y1, Y1); mpz_mod(B, B, n);                     /* B = Y1^2 */
+  mpz_mul(C, B, B);   mpz_mod(C, C, n);                     /* C = B^2 */
+  mpz_add(D, X1, B);  mpz_mul(D, D, D); mpz_mod(D, D, n);
+  mpz_sub(D, D, A);   mpz_sub(D, D, C); mpz_mod(D, D, n);
+  mpz_mul_ui(D, D, 2); mpz_mod(D, D, n);                    /* D = 2((X1+B)^2 - A - C) */
+  mpz_mul_ui(E, A, 3); mpz_mod(E, E, n);                    /* E = 3A */
+  mpz_mul(F, E, E);   mpz_mod(F, F, n);                     /* F = E^2 */
+  mpz_mul_ui(t, D, 2); mpz_mod(t, t, n);
+  mpz_sub(xo, F, t);  mpz_mod(xo, xo, n);                   /* X3 = F - 2D */
+  mpz_sub(t, D, xo);  mpz_mod(t, t, n);
+  mpz_mul(t, t, E);   mpz_mod(t, t, n);                     /* E(D - X3) */
+  mpz_mul_ui(C, C, 8); mpz_mod(C, C, n);
+  mpz_sub(yo, t, C);  mpz_mod(yo, yo, n);                   /* Y3 = E(D-X3) - 8C */
+  mpz_mul(t, Y1, Z1); mpz_mod(t, t, n);
+  mpz_mul_ui(zo, t, 2); mpz_mod(zo, zo, n);                 /* Z3 = 2 Y1 Z1 */
+  mpz_set(X3, xo); mpz_set(Y3, yo); mpz_set(Z3, zo);
+  mpz_clears(A, B, C, D, E, F, t, xo, yo, zo, NULL);
+}
+
+/* Jacobian + affine mixed addition (madd-2007-bl), a = 0 */
+static void p2_jac_add_affine(mpz_t X1, mpz_t Y1, mpz_t Z1,
+                              const mpz_t x2, const mpz_t y2, const mpz_t n) {
+  mpz_t Z1Z1, U2, S2, H, HH, I, J, r, V, t;
+  mpz_inits(Z1Z1, U2, S2, H, HH, I, J, r, V, t, NULL);
+  mpz_mul(Z1Z1, Z1, Z1); mpz_mod(Z1Z1, Z1Z1, n);            /* Z1Z1 = Z1^2 */
+  mpz_mul(U2, x2, Z1Z1); mpz_mod(U2, U2, n);                /* U2 = X2 Z1^2 */
+  mpz_mul(t, Z1, Z1Z1);  mpz_mod(t, t, n);
+  mpz_mul(S2, y2, t);    mpz_mod(S2, S2, n);                /* S2 = Y2 Z1^3 */
+  mpz_sub(H, U2, X1);    mpz_mod(H, H, n);                  /* H = U2 - X1 */
+  mpz_mul(HH, H, H);     mpz_mod(HH, HH, n);                /* HH = H^2 */
+  mpz_mul_ui(I, HH, 4);  mpz_mod(I, I, n);                  /* I = 4 HH */
+  mpz_mul(J, H, I);      mpz_mod(J, J, n);                  /* J = H I */
+  mpz_sub(r, S2, Y1);    mpz_mod(r, r, n);
+  mpz_mul_ui(r, r, 2);   mpz_mod(r, r, n);                  /* r = 2(S2 - Y1) */
+  mpz_mul(V, X1, I);     mpz_mod(V, V, n);                  /* V = X1 I */
+  mpz_mul(t, r, r);      mpz_mod(t, t, n);
+  mpz_sub(t, t, J);      mpz_sub(t, t, V); mpz_sub(t, t, V); mpz_mod(t, t, n);
+  /* t = X3 */
+  mpz_sub(V, V, t);      mpz_mod(V, V, n);
+  mpz_mul(V, V, r);      mpz_mod(V, V, n);
+  mpz_mul(J, Y1, J);     mpz_mod(J, J, n);
+  mpz_mul_ui(J, J, 2);   mpz_mod(J, J, n);
+  mpz_sub(V, V, J);      mpz_mod(V, V, n);                  /* Y3 = r(V - X3) - 2 Y1 J */
+  mpz_add(H, Z1, H);     mpz_mul(H, H, H); mpz_mod(H, H, n);
+  mpz_sub(H, H, Z1Z1);   mpz_sub(H, H, HH); mpz_mod(H, H, n);/* Z3 = (Z1+H)^2 - Z1Z1 - HH */
+  mpz_set(X1, t); mpz_set(Y1, V); mpz_set(Z1, H);
+  mpz_clears(Z1Z1, U2, S2, H, HH, I, J, r, V, t, NULL);
+}
+
+/* k * (-3:3:1) on y^2 = x^3 + 36, left-to-right double-and-add (the point is unique, so
+   any valid chain gives the same result as gmp-ecm's addchain_param). */
+static void p2_scalar_mul_base(mpz_t rx, mpz_t ry, mpz_t rz, const mpz_t k, const mpz_t N) {
+  mpz_t X, Y, Z, bx, by;
+  mpz_inits(X, Y, Z, bx, by, NULL);
+  mpz_set_si(bx, -3); mpz_set_ui(by, 3);
+  mpz_set_ui(X, 0); mpz_set_ui(Y, 1); mpz_set_ui(Z, 0);      /* point at infinity */
+  int started = 0;
+  for (int i = mpz_sizeinbase(k, 2) - 1; i >= 0; i--) {
+    if (started) p2_jac_dbl(X, Y, Z, X, Y, Z, N);
+    if (mpz_tstbit(k, i)) {
+      if (!started) { mpz_set(X, bx); mpz_set(Y, by); mpz_set_ui(Z, 1); started = 1; }
+      else          { p2_jac_add_affine(X, Y, Z, bx, by, N); }
+    }
+  }
+  mpz_set(rx, X); mpz_set(ry, Y); mpz_set(rz, Z);
+  mpz_clears(X, Y, Z, bx, by, NULL);
+}
+
+static
+uint32_t* set_p_2p_param2(const mpz_t N, uint32_t curves, uint32_t sigma0,
+                          uint32_t BITS, size_t *data_size) {
+  const size_t limbs_per = BITS/32;
+  *data_size = 7 * curves * limbs_per * sizeof(uint32_t);
+  uint32_t *data = (uint32_t*) malloc(*data_size);
+  uint32_t *datum = data;
+
+  mpz_t k, x, y, z, t, u, v, w, A, a24, two, X2, Z2;
+  mpz_inits(k, x, y, z, t, u, v, w, A, a24, two, X2, Z2, NULL);
+  mpz_set_ui(two, 2);
+
+  for (uint32_t index = 0; index < curves; index++) {
+      /* sigma is the scalar multiplier here (gmp-ecm requires sigma >= 2; a sigma of 0
+         or 1 would hit the same curve for every index, so clamp into range). */
+      const uint32_t sg = sigma0 + index;
+      mpz_set_ui(k, sg < 2u ? 2u + index : sg);
+
+      p2_scalar_mul_base(x, y, z, k, N);
+
+      /* affine normalisation of (x:y:z) */
+      if (mpz_invert(u, z, N) == 0) {
+          outputf(OUTPUT_ERROR,
+                  "GPU: warning: param2 sigma %u gives Z not invertible (N is factorable)\n", sg);
+          mpz_set_ui(u, 0);
+      }
+      mpz_mul(v, u, u);   mpz_mod(v, v, N);
+      mpz_mul(u, v, u);   mpz_mod(u, u, N);
+      mpz_mul(x, x, v);   mpz_mod(x, x, N);
+      mpz_mul(y, y, u);   mpz_mod(y, y, N);
+
+      /* x3 = (3x + y + 6) / (2(y - 3)) */
+      mpz_sub_ui(t, y, 3); mpz_mod(t, t, N);
+      mpz_mul_ui(t, t, 2); mpz_mod(t, t, N);
+      if (mpz_invert(u, t, N) == 0) {
+          outputf(OUTPUT_ERROR,
+                  "GPU: warning: param2 sigma %u gives a non-invertible denominator\n", sg);
+          mpz_set_ui(u, 0);
+      }
+      mpz_mul_ui(w, x, 3); mpz_mod(w, w, N);
+      mpz_add(w, w, y);    mpz_mod(w, w, N);
+      mpz_add_ui(w, w, 6); mpz_mod(w, w, N);
+      mpz_mul(x, w, u);    mpz_mod(x, x, N);                  /* x3 */
+
+      /* A = -(3 x3^4 + 6 x3^2 - 1) / (4 x3^3) */
+      mpz_mul(u, x, x);    mpz_mod(u, u, N);                  /* x3^2 */
+      mpz_mul(v, u, x);    mpz_mod(v, v, N);                  /* x3^3 */
+      mpz_mul(w, u, u);    mpz_mod(w, w, N);                  /* x3^4 */
+      mpz_mul_ui(u, u, 6); mpz_mod(u, u, N); mpz_neg(u, u);
+      mpz_mul_ui(v, v, 4); mpz_mod(v, v, N);
+      mpz_mul_ui(w, w, 3); mpz_mod(w, w, N); mpz_neg(w, w);
+      if (mpz_invert(t, v, N) == 0) {
+          outputf(OUTPUT_ERROR, "GPU: warning: param2 sigma %u: 4 x3^3 not invertible\n", sg);
+          mpz_set_ui(t, 0);
+      }
+      mpz_add(w, w, u);    mpz_mod(w, w, N);
+      mpz_add_ui(w, w, 1); mpz_mod(w, w, N);
+      mpz_mul(A, w, t);    mpz_mod(A, A, N);
+
+      /* a24 = (A+2)/4 (full width -- this is why param2 is 5M+4S, not 4M+4S).
+         NOTE: stage 1 runs on the curve with coefficient A, NOT on the rescaled
+         a/b form of gmp-ecm's FindGroupOrderParam2 comment: an independent
+         reference ladder reproduces gmp-ecm's saved x with (A, x0=2) exactly
+         (see docs/ECM_CGBN_OPTIMIZATION.md 5.6). */
+      mpz_add_ui(a24, A, 2); mpz_mod(a24, a24, N);
+      mpz_set_ui(t, 4);
+      if (mpz_invert(t, t, N) == 0) mpz_set_ui(t, 0);
+      mpz_mul(a24, a24, t); mpz_mod(a24, a24, N);
+
+      /* Start point x0 = 2 ON THAT CURVE: P = (2:1) and 2P by one xDBL with the general
+         formula: X+Z = 3, X-Z = 1, AA = 9, BB = 1, E = 8 => X2 = AA*BB = 9 and
+         Z2 = E*(BB + a24*E) = 8 + 64*a24. */
+      mpz_set_ui(X2, 9);
+      mpz_mul_ui(Z2, a24, 64); mpz_mod(Z2, Z2, N);
+      mpz_add_ui(Z2, Z2, 8);   mpz_mod(Z2, Z2, N);
+
+      from_mpz(N,     datum + 0 * limbs_per, limbs_per);
+      from_mpz(a24,   datum + 1 * limbs_per, limbs_per);
+      from_mpz(two,   datum + 2 * limbs_per, limbs_per);      /* xdiff = 2 (constant) */
+      from_mpz(two,   datum + 3 * limbs_per, limbs_per);      /* aX = 2 */
+      mpz_set_ui(x, 1);
+      from_mpz(x,     datum + 4 * limbs_per, limbs_per);      /* aZ = 1 */
+      from_mpz(X2,    datum + 5 * limbs_per, limbs_per);      /* bX = 9 */
+      from_mpz(Z2,    datum + 6 * limbs_per, limbs_per);      /* bZ */
+
+      datum += 7 * limbs_per;
+  }
+
+  mpz_clears(k, x, y, z, t, u, v, w, A, a24, two, X2, Z2, NULL);
+  return data;
+}
+
+
 static
 int process_results(mpz_t *factors, int *array_found,
                     const mpz_t N,
@@ -749,6 +943,17 @@ static cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_dispatch(uint32_t BITS, u
     return cgbn_stage1_kernel_suyama_tpi32(BITS, TPI_out);
 }
 
+/* param2 kernel lookup (see cgbn_stage1_kernels_param2.cu). */
+static cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_dispatch(uint32_t BITS, uint32_t *TPI_out) {
+    cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_param2_tpi4(BITS, TPI_out);
+    if (k != nullptr) return k;
+    k = cgbn_stage1_kernel_param2_tpi8(BITS, TPI_out);
+    if (k != nullptr) return k;
+    k = cgbn_stage1_kernel_param2_tpi16(BITS, TPI_out);
+    if (k != nullptr) return k;
+    return cgbn_stage1_kernel_param2_tpi32(BITS, TPI_out);
+}
+
 int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
              uint32_t curves, uint64_t *sigma_ptr,
@@ -767,27 +972,47 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
    * 0          = Suyama (Prime95 sigma_type=1 / gmp-ecm -param 0): P = (u^3:v^3),
    *               full-width a24, difference x = xdiff  => 6M+4S, same curves as
    *               the CPU path, save file carries no PARAM (param0 form).
+   * 2          = param2, gmp-ecm's "batch 2" 6-torsion family (-param 2): x0 = 2 like
+   *               the batch family (so the difference needs no multiply) but a
+   *               FULL-WIDTH a24  => 5M+4S, save file carries PARAM=2.
+   *               Success rate matches Suyama's (D_eff ~20) at ~11% less time per
+   *               curve than param0; the catch is that Prime95 cannot read its saves
+   *               (sigma_type only accepts 0/1/3).  See
+   *               docs/ECM_CGBN_OPTIMIZATION.md §5.6.
    *
    * NOTE: the selector arrives from the driver (ini gpu_param / CLI --gpu-param);
    * see docs/ECM_Montgomery_STAGE1.md §20.2 item 4.
    * ------------------------------------------------------------------------- */
+  if (gpu_param != 0 && gpu_param != 2 && gpu_param != 3) {
+      outputf(OUTPUT_ERROR, "GPU: gpu_param=%d is not 0, 2 or 3; using 3\n", gpu_param);
+      gpu_param = 3;
+  }
   const bool param0 = (gpu_param == 0);
+  const bool param2 = (gpu_param == 2);
+  /* param0 and param2 share the 7-word Suyama buffer layout and kernel family shape
+     (they differ only in the step variant the family instantiates). */
+  const bool suyama_layout = param0 || param2;
   /* sigma64 is the authoritative curve index (Suyama param0 uses a full 64-bit
-     sigma, like the CPU path); the batch parametrization carries d = sigma/2^32 as
-     a 32-bit kernel parameter, so it needs the 32-bit window. */
-  if (!param0 && sigma64 + (uint64_t)curves > 0x100000000ull) {
+     sigma, like the CPU path); the batch parametrizations carry a 32-bit parameter
+     (param3: d = sigma/2^32; param2: the scalar multiplier sigma itself). */
+  if (gpu_param == 3 && sigma64 + (uint64_t)curves > 0x100000000ull) {
       outputf(OUTPUT_ERROR, "GPU: param3 needs sigma + curves <= 2^32\n");
       return ECM_ERROR;
   }
   const uint32_t sigma32 = (uint32_t)(sigma64 & 0xFFFFFFFFull);
-  if (!param0 && gpu_param != 3) {
-      outputf(OUTPUT_ERROR, "GPU: gpu_param=%d is not 0 or 3; using 3\n", gpu_param);
-  }
   if (param0) {
       /* OUTPUT_ALWAYS: which curve family is being run is as important to see as
          "Using B1=..." -- it decides what the save file can be handed to. */
       outputf(OUTPUT_ALWAYS, "GPU: parametrization = Suyama param0 (gmp-ecm -param 0 / Prime95 sigma_type=1)\n");
+  } else if (param2) {
+      outputf(OUTPUT_ALWAYS, "GPU: parametrization = param2 batch-2 / 6-torsion (gmp-ecm -param 2; "
+                             "Prime95 CANNOT read these saves)\n");
+      outputf(OUTPUT_ALWAYS,
+              "GPU: param2 stage-1 x verified against gmp-ecm (identical X for the same\n"
+              "     sigma and B1; tools/test/test_cuda_param2.ps1).  gmp-ecm can read these\n"
+              "     PARAM=2 saves, Prime95 cannot (sigma_type 0/1/3 only).\n");
   }
+      
 
   uint64_t s_num_bits;
   uint32_t *s_bits = allocate_and_set_s_bits(s, &s_num_bits);
@@ -976,7 +1201,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
         const uint32_t wpc_ck = (uint32_t)(data_size /
             ((size_t)curves * (size_t)(BITS / 32) * sizeof(uint32_t)));
         const uint32_t wpc_want = param0 ? 7u : 5u;
-        const uint32_t param_want = param0 ? 0u : 3u;
+        const uint32_t param_want = param0 ? 0u : (param2 ? 2u : 3u);
         if (wpc_ck != wpc_want || ckpt_header.gpu_param != param_want) {
           outputf(OUTPUT_NORMAL,
                   "Checkpoint mismatch (param %u, %u words/curve; this run needs param %u, %u "
@@ -1045,8 +1270,9 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
 
       /* Resolve the kernel function pointer via the per-TPI dispatch TUs. */
       uint32_t tpi_u32 = 0;
-      kernel = param0 ? cgbn_stage1_kernel_suyama_dispatch(BITS, &tpi_u32)
-                      : cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
+      kernel = param2 ? cgbn_stage1_kernel_param2_dispatch(BITS, &tpi_u32)
+               : param0 ? cgbn_stage1_kernel_suyama_dispatch(BITS, &tpi_u32)
+                        : cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
       if (kernel == nullptr) {
         if (param0) {
           /* not instantiated in this build (dev builds only carry 768/1024):
@@ -1097,8 +1323,9 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   assert( sizeof(curve_t<cgbn_params_medium>::mem_t) == cgbn_params_medium::BITS/8 );
   
   if (!ckpt_loaded) {
-    data = param0 ? set_p_2p_suyama(N, curves, sigma64, BITS, &data_size)
-                  : set_p_2p(N, curves, sigma32, BITS, &data_size);
+    data = param2 ? set_p_2p_param2(N, curves, sigma32, BITS, &data_size)
+                  : param0 ? set_p_2p_suyama(N, curves, sigma64, BITS, &data_size)
+                           : set_p_2p(N, curves, sigma32, BITS, &data_size);
     s_partial = 1;      // First bit (doubling) is handled in set_p_2p[_suyama]
     batches_complete = 0;
   }
@@ -1106,8 +1333,9 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   else {
     // If checkpoint loaded, still need to resolve the kernel from its BITS.
     uint32_t tpi_u32 = 0;
-    kernel = param0 ? cgbn_stage1_kernel_suyama_dispatch(BITS, &tpi_u32)
-                    : cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
+    kernel = param2 ? cgbn_stage1_kernel_param2_dispatch(BITS, &tpi_u32)
+             : param0 ? cgbn_stage1_kernel_suyama_dispatch(BITS, &tpi_u32)
+                      : cgbn_stage1_kernel_dispatch(BITS, &tpi_u32);
     if (kernel == nullptr) {
       outputf(OUTPUT_ERROR, "CGBN kernel not found for BITS=%d TPI=%d from checkpoint\n", BITS, TPI);
       return ECM_ERROR;
@@ -1122,9 +1350,12 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   /* Buffer layout of this run: 5 words/curve for param3 (N, aX, aZ, bX, bZ) and
      7 for param0 (N, a24, xdiff, aX, aZ, bX, bZ).  Derived, not hard-coded, so a
      checkpoint resume is validated against it in both directions. */
-  const uint32_t words_per_curve = param0 ? 7u : 5u;
-  const int      p1_word = param0 ? 3 : 1;      /* X of P_a */
-  const int      p2_word = param0 ? 5 : 3;      /* X of P_b */
+  const uint32_t words_per_curve = suyama_layout ? 7u : 5u;
+  /* param0 AND param2 use the 7-word layout (N, a24, xdiff, aX, aZ, bX, bZ);
+     using the param0 ternary here made param2 decode its result from word 1
+     (= a24) instead of word 3 (= aX), which is what broke the gmp-ecm comparison. */
+  const int      p1_word = suyama_layout ? 3 : 1;      /* X of P_a */
+  const int      p2_word = suyama_layout ? 5 : 3;      /* X of P_b */
   if (data_size != (size_t)words_per_curve * curves * (size_t)(BITS / 32) * sizeof(uint32_t)) {
     outputf(OUTPUT_ERROR,
             "GPU: internal error: curve buffer size %zu does not match the %u-word/curve layout\n",
@@ -1150,6 +1381,33 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   outputf (OUTPUT_NORMAL,
           "GPU: CGBN<%d, %d> kernel, N is %zu bits (%d blocks x %d threads)\n",
           TPI, BITS, n_log2, BLOCK_COUNT, TPB);
+
+  /* ---------------------------------------------------------------------------
+   * Occupancy advisory (docs/ECM_CGBN_OPTIMIZATION.md §8, measured 2026-09-25).
+   *
+   * BLOCK_COUNT = ceil(curves / (TPB/TPI)), so the batch size - not the GPU - sets
+   * how many blocks are in flight: at TPB=256/TPI=4 a 4096-curve batch is only 64
+   * blocks, which does not fill a 24-SM card.  Same-session A/B on the 511-bit tier
+   * (4096 vs 8192 vs 16384 vs 32768 curves) measured +7.6% / +8.4% / +10.4% in
+   * curve-bits/s, saturating after that.  Warn instead of silently running at
+   * partial occupancy.
+   * ------------------------------------------------------------------------- */
+  {
+    int dev = 0, sm_count = 0, blocks_per_sm = 0;
+    if (cudaGetDevice(&dev) == cudaSuccess &&
+        cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev) == cudaSuccess &&
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, (int)TPB, 0) == cudaSuccess &&
+        sm_count > 0 && blocks_per_sm > 0) {
+      const long capacity = (long)sm_count * (long)blocks_per_sm;
+      if ((long)BLOCK_COUNT < capacity) {
+        outputf(OUTPUT_NORMAL,
+                "GPU: warning: %d blocks fill only %ld%% of this device (%d SMs x %d blocks/SM); "
+                "raise -gpucurves to about %ld (measured +7.6%% at 8192 vs 4096 curves)\n",
+                (int)BLOCK_COUNT, (long)BLOCK_COUNT * 100 / capacity,
+                sm_count, blocks_per_sm, capacity * (long)IPB);
+      }
+    }
+  }
 
   /* Start with small batches and increase till timing is ~100ms */
   uint64_t batch_size = 200;
@@ -1305,7 +1563,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       header.sigma = param0 ? sigma64 : (uint64_t)sigma32;
       header.BITS = BITS;
       header.TPI = TPI;  // Save TPI for kernel selection on reload
-      header.gpu_param = param0 ? 0u : 3u;
+      header.gpu_param = param0 ? 0u : (param2 ? 2u : 3u);
       header.reserved = 0;
       header.data_size = data_size;
       header.timestamp = time(NULL);

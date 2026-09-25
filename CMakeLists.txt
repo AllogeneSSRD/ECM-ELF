@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+﻿cmake_minimum_required(VERSION 3.20)
 project(main)
 
 # MSVC Debug CRT (MDd) has an incompatibility with GMP's custom allocator
@@ -579,6 +579,10 @@ if(ECM_ENABLE_CUDA)
         # Suyama param0 kernel variants (gpu_param = 0), kept in a separate TU so
         # the param3 builds do not pay for the extra instantiations.
         kernels/cuda/cgbn_stage1_kernels_suyama.cu
+        # param2 ("batch 2", 6-torsion) variants (gpu_param = 2): same kernel body as the
+        # Suyama family, instantiated with CONST_DIFF = true (no xdiff multiply).  Separate
+        # TU on purpose -- a runtime flag cost 34% (docs/ECM_CGBN_OPTIMIZATION.md §5.6).
+        kernels/cuda/cgbn_stage1_kernels_param2.cu
     )
 
     target_include_directories(ecm_cuda PRIVATE
@@ -615,6 +619,82 @@ if(ECM_ENABLE_CUDA)
         "PROBE ONLY: run the fused add every k-th bit (k>1 = wrong results, for timing)")
     target_compile_definitions(ecm_cuda PRIVATE ECM_PROBE_ADD_DENSITY=${ECM_PROBE_ADD_DENSITY})
 
+    # PROBE ONLY (docs/ECM_CGBN_OPTIMIZATION.md §5.4): replace the ladder step with a
+    # windowed-chain op mix -- one xz doubling per bit plus one REAL differential addition
+    # with a PROJECTIVE difference point (4M+2S) every M-th bit.  M=1 is the PRAC-like mix,
+    # M=w+1 the ideal width-w NAF density.  RESULTS ARE WRONG (timing only).
+    # Default 0 = probe off, correct kernel.
+    set(ECM_PROBE_CHAIN_W "0" CACHE STRING
+        "PROBE ONLY: chain op mix with one projective-difference add every M bits (wrong results)")
+    target_compile_definitions(ecm_cuda PRIVATE ECM_PROBE_CHAIN_W=${ECM_PROBE_CHAIN_W})
+
+    # Kernel launch/occupancy tunables (docs/ECM_CGBN_OPTIMIZATION.md §5.5/§8).  TPB must
+    # match the launch config in kernels/cuda/cgbn_stage1.cu, hence compile-time.  Defaults
+    # are the MEASURED best from the 2026-09-25 sweep (M511/M761, 8192 curves, B1=1e5,
+    # param3, GPU 1): the historical 256/4 measured 78.18 M curve-bits/s at M511, 128/1
+    # measures 79.15 M, and blocks = curves/(TPB/TPI) is what actually drives throughput
+    # (TPB=512 halves the block count and measures -15%).
+    set(ECM_TPB "128" CACHE STRING "CUDA block size for the CGBN stage-1 kernel")
+    set(ECM_MAX_ROTATION "1" CACHE STRING "CGBN MAX_ROTATION (limb rotation in the multiply)")
+    target_compile_definitions(ecm_cuda PRIVATE ECM_TPB=${ECM_TPB} ECM_MAX_ROTATION=${ECM_MAX_ROTATION})
+
+    # Register cap for the SMALL-tier kernels only (<=2048 bits: the tpi4/tpi8 sources).
+    # Measured: capping 72 -> 56 registers raises occupancy from 7 to 9 blocks/SM and buys
+    # +4.7% at M511 and M761 (48 overflows and gives it back).  The >=2560-bit instantiations
+    # live in other sources and keep the compiler default, because their allocation is
+    # unmeasured and a 56-register cap there could spill badly.  Set to 0 to disable.
+    set(ECM_MAXRREG_SMALL "56" CACHE STRING "maxrregcount for the <=2048-bit kernel sources (0 = off)")
+    if(NOT ECM_MAXRREG_SMALL STREQUAL "0")
+        set_source_files_properties(
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_tpi4.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_tpi8.cu
+            PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SMALL}")
+    endif()
+
+    # Same treatment for the param0 (Suyama) sources -- the *recommended* parametrization --
+    # and for the param2 family, which is the same kernel body instantiated with
+    # CONST_DIFF = true (it MUST be capped too: without the cap the param2 path measured
+    # 74.12 M curve-bits/s instead of the 79+ M its op count predicts).
+    # Measured 2026-09-25 at M511/8192 curves on the param0 path: cap 0 -> 71.07 M, 64 ->
+    # 71.68 M (+0.9%), 56 -> 71.25 M.  So param0 gains far less than param3 (+4.7%) because
+    # it executes 10 mont ops per bit instead of 8.2 and spills sooner -- its remaining gap
+    # to param3 (71.7 vs 82.0 M) is the op count, not occupancy.  64 is the measured best.
+    # NOTE: a per-source-file cap applies to EVERY tier in that file, including the
+    # >=2560-bit instantiations whose allocation is unmeasured -- flagged in
+    # docs/ECM_CGBN_OPTIMIZATION.md §8.
+    set(ECM_MAXRREG_SUYAMA "64" CACHE STRING "maxrregcount for the param0/Suyama + param2 kernel sources (0 = off)")
+    if(NOT ECM_MAXRREG_SUYAMA STREQUAL "0")
+        set_source_files_properties(
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_suyama.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_param2.cu
+            PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SUYAMA}")
+    endif()
+
+    # Tier filter for fast iteration (docs/ECM_CGBN_OPTIMIZATION.md §8).  On this machine
+    # every parallel generator fails (Ninja hangs in compiler ABI detection, MSBuild's CUDA
+    # 13.3 target cancels the build, jom breaks CMake's try_compile), so kernel builds stay
+    # serial and a full build costs ~20 min.  -DECM_TIERS=4096,8192 compiles ONLY those
+    # instantiations, turning the 12-tier tpi16 TU into a couple of seconds.  Empty = all.
+    set(ECM_TIERS "" CACHE STRING "comma-separated BITS list to compile (empty = all tiers)")
+    if(NOT ECM_TIERS STREQUAL "")
+        string(REPLACE "," ";" tier_list "${ECM_TIERS}")
+        target_compile_definitions(ecm_cuda PRIVATE ECM_TIERS_RESTRICTED)
+        foreach(tier IN LISTS tier_list)
+            string(STRIP "${tier}" tier)
+            target_compile_definitions(ecm_cuda PRIVATE ECM_TIER_${tier})
+        endforeach()
+        message(STATUS "ecm_cuda: kernel tiers restricted to ${tier_list}")
+    endif()
+
+    # A/B the two orderings of the fused ladder step (same arithmetic; see the header).
+    set(ECM_STEP_VARIANT "1" CACHE STRING "1 = double_add_v2 (historical), 2 = explicit-prep variant")
+    target_compile_definitions(ecm_cuda PRIVATE ECM_STEP_VARIANT=${ECM_STEP_VARIANT})
+
+    # PROBE ONLY: price the param2-shaped kernel (5M+4S) on the param0 data path.  Wrong
+    # results, timing only -- see docs/ECM_CGBN_OPTIMIZATION.md §5.6.
+    set(ECM_PARAM2SHAPE "0" CACHE STRING "PROBE ONLY: run the param2-shaped step on the param0 path")
+    target_compile_definitions(ecm_cuda PRIVATE ECM_PARAM2SHAPE=${ECM_PARAM2SHAPE})
+
     # Pascal sm_60 / Maxwell workaround: with NDEBUG (Release), CUDA 12.x fails to
     # unroll one of CGBN's carry chains on the compute_60 PTX path, so CGBN emits
     # its intentional poison ("ASM_ERROR chain destructor: ... loop not unrolled")
@@ -631,6 +711,14 @@ if(ECM_ENABLE_CUDA)
     if(_ecm_cuda_low_arch)
         target_compile_options(ecm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-UNDEBUG>)
         message(STATUS "ecm_cuda: undefining NDEBUG for CUDA (sm<=60 CGBN chain-unroll workaround)")
+    endif()
+
+    # Register cap for the CGBN stage-1 kernel (docs/ECM_CGBN_OPTIMIZATION.md §8).  The
+    # occupancy sweep showed throughput tracks the number of resident blocks, so trading a
+    # few registers (spills) for more warps per SM can pay off.  0 = compiler default.
+    set(ECM_MAXRREG "0" CACHE STRING "nvcc --maxrregcount for ecm_cuda (0 = default)")
+    if(NOT ECM_MAXRREG STREQUAL "0")
+        target_compile_options(ecm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--maxrregcount=${ECM_MAXRREG}>)
     endif()
 
     target_link_libraries(ecm_cuda ${GMP_LIBRARY})

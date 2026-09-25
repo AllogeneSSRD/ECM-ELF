@@ -48,6 +48,21 @@ PRAC_ADD = 6 + 2 * SQR        # ell_add_xz_scr : x1*z2-z1*x2, x1*x2-z1*z2, both 
 PRAC_ADD_CHEAP = 4 + 2 * SQR
 PRAC_DBL_OURS = 3 + 2 * SQR   # our xz_dbl form is cheaper than ell_dbl_xz_scr (S < M here)
 
+# The two numbers the economics actually use.  They default to the fold-domain forms above
+# but are overwritten by --sqr (all derived constants must be recomputed) and by --cgbn,
+# which plugs in the values MEASURED on our CUDA/CGBN kernel instead of a field-op model:
+#   ladder step  = 4.24 (doubling half) + 3.86 (affine-normalised add half) = 8.10 M/bit
+#   chain doubling = same xz_dbl                          4.24 M
+#   chain addition with a PROJECTIVE difference (EFD dadd-1987-m-3 = 4M+2S)  6.00 M
+CHAIN_DBL = PRAC_DBL_OURS
+CHAIN_ADD = PRAC_ADD_CHEAP
+
+# measured CUDA/CGBN prices (docs/ECM_CGBN_OPTIMIZATION.md section 4/5)
+CGBN_LADDER_DBL = 4.24
+CGBN_LADDER_ADD = 3.86
+CGBN_CHAIN_DBL = 4.24
+CGBN_CHAIN_ADD = 6.00
+
 PHI = 0.6180339887498948
 
 
@@ -216,22 +231,38 @@ def prime_powers(limit):
 
 
 def main(argv):
-    global SQR, LADDER_DBL, LADDER_ADD, PRAC_DBL, PRAC_ADD
+    global SQR, LADDER_DBL, LADDER_ADD, PRAC_DBL, PRAC_ADD, CHAIN_DBL, CHAIN_ADD
     args = [a for a in argv[1:]]
+    cgbn = "--cgbn" in args
+    if cgbn:
+        args.remove("--cgbn")
     if "--sqr" in args:
         i = args.index("--sqr")
         SQR = float(args[i + 1])
         del args[i:i + 2]
-        LADDER_DBL = LADDER_ADD = 3 + 2 * SQR
-        PRAC_DBL = 4 + SQR
-        PRAC_ADD = 6 + 2 * SQR
+    # NOTE: every derived constant has to be recomputed here.  Leaving PRAC_DBL_OURS /
+    # PRAC_ADD_CHEAP at their import-time values (the old bug) silently priced the chain
+    # with SQR=0.628 while the ladder used the new SQR, which flipped the verdict.
+    LADDER_DBL = LADDER_ADD = 3 + 2 * SQR
+    PRAC_DBL = 4 + SQR
+    PRAC_ADD = 6 + 2 * SQR
+    PRAC_DBL_OURS = 3 + 2 * SQR
+    PRAC_ADD_CHEAP = 4 + 2 * SQR
+    CHAIN_DBL, CHAIN_ADD = PRAC_DBL_OURS, PRAC_ADD_CHEAP
+    if cgbn:
+        SQR = 1.0
+        LADDER_DBL, LADDER_ADD = CGBN_LADDER_DBL, CGBN_LADDER_ADD
+        CHAIN_DBL, CHAIN_ADD = CGBN_CHAIN_DBL, CGBN_CHAIN_ADD
     limits = [int(float(a)) for a in args] or [100000, 1000000]
 
-    print("cost model (M = one fold-domain multiply, sqr = %.3fM)" % SQR)
-    print("  ladder per bit : dbl %.2f + add %.2f = %.2f M   (affine difference)"
+    if cgbn:
+        print("cost model (MEASURED on our CUDA/CGBN kernel, M = one cgbn_mont_mul/sqr)")
+    else:
+        print("cost model (M = one fold-domain multiply, sqr = %.3fM)" % SQR)
+    print("  ladder per bit : dbl %.2f + add %.2f = %.2f M   (affine-normalised difference)"
           % (LADDER_DBL, LADDER_ADD, LADDER_DBL + LADDER_ADD))
-    print("  PRAC           : dbl %.2f M, add %.2f M          (projective difference)"
-          % (PRAC_DBL, PRAC_ADD))
+    print("  chain          : dbl %.2f M, add %.2f M          (projective difference)"
+          % (CHAIN_DBL, CHAIN_ADD))
     print()
 
     # transcription check on every prime power that is cheap to test
@@ -297,7 +328,7 @@ def main(argv):
             dbls += e * d            # p^e : the same chain applied e times
             adds += e * a
         ref = dbls * PRAC_DBL + adds * PRAC_ADD
-        cheap = dbls * PRAC_DBL_OURS + adds * PRAC_ADD_CHEAP
+        cheap = dbls * CHAIN_DBL + adds * CHAIN_ADD
         # ladder: one [s]P pass, s = lcm(1..B1) (torsion 1, see docs §4.2)
         s_bits = int(sum(e * log2(p) for p, e in pp)) + 1
         ladder = s_bits * (LADDER_DBL + LADDER_ADD)
@@ -309,21 +340,38 @@ def main(argv):
               % (s_bits, (dbls + adds) / s_bits))
     print()
     print("reading: 'ref' prices the addition the way the reference implementations do")
-    print("(ell_add_xz_scr = 6M+2S); 'cheap' prices Montgomery's sum/difference form")
-    print("(EFD dadd-1987-m-3 = 4M+2S), which a port SHOULD use -- the reference's")
-    print("4-product form is pure waste in our kernel (S < M here).")
+    print("(ell_add_xz_scr = 6M+2S); 'chain' is the column that matters -- it prices the")
+    print("addition with Montgomery's sum/difference form (EFD dadd-1987-m-3 = 4M+2S),")
+    print("which is the cheapest a chain's PROJECTIVE difference can be.")
     print()
     f = tot_ref / tot_mine            # correction for the measured undercount
-    print("CONCLUSION: after correcting 'cheap' by that %.2f%% undercount, a PRAC chain"
+    print("CONCLUSION: correcting 'chain' for that %.2f%% op-count undercount, a PRAC chain"
           % (100.0 * (f - 1.0)))
     for B1, cheap, ladder in rows:
         print("  B1=%-8d costs %5.3fx the ladder  (uncorrected %5.3fx) -> %s"
               % (B1, cheap * f / ladder, cheap / ladder,
                  "LOSES" if cheap * f > ladder else "wins"))
-    print("The chain does 1.7 ops per bit of s against the ladder's 2.0, but each of its")
-    print("additions costs 5.26M against the ladder's 4.26M, because the ladder's difference")
-    print("point stays AFFINE (one mul by xdiff) while a chain's differences are projective.")
-    print("Net: no win, so the ladder stays.  See docs/ECM_Montgomery_STAGE1.md section 12.")
+    # compute the per-bit split instead of hard-coding the old narrative
+    for B1, cheap, ladder in rows:
+        pp = prime_powers(B1)
+        dbls = adds = 0
+        for p, e in pp:
+            d, a, c, _, _ = prac_chain(p)
+            dbls += e * d
+            adds += e * a
+        s_bits = int(sum(e * log2(p) for p, e in pp)) + 1
+        print("  B1=%-8d %5.2f doublings + %5.2f additions per bit of s "
+              "(%.3f ops/bit vs the ladder's 2.000)"
+              % (B1, dbls / float(s_bits), adds / float(s_bits), (dbls + adds) / float(s_bits)))
+    print("A chain needs FEWER ops per bit than the ladder (its addition-subtraction steps")
+    print("advance the exponent faster than one bit each), but every one of its additions is")
+    print("priced with a PROJECTIVE difference (CHAIN_ADD above) whereas the ladder's")
+    print("difference point stays affine and normalised (LADDER_ADD).  Whether that trades")
+    print("into a win depends entirely on the two prices -- which is why --cgbn exists: it")
+    print("plugs in the values measured on our CUDA/CGBN kernel, where the ladder's add half")
+    print("is unusually cheap (2M+2S because xdiff = 1) and a chain therefore loses.")
+    print("See docs/ECM_Montgomery_STAGE1.md section 12 and")
+    print("docs/ECM_CGBN_OPTIMIZATION.md section 5.4.")
     return 0
 
 

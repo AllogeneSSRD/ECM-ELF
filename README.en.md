@@ -48,8 +48,8 @@ An **engineering-grade stage-1 implementation** for the GIMPS ecosystem (Prime95
   | operand size | CGBN baseline (Ada Lovelace) | AMD RDNA3.5 | Qualcomm Adreno 830 |
   |---|---|---|---|
   | 256 | 100% | 460% | — |
-  | 384 | 100% | 200% | 57.1% |
-  | 512 | 100% | 152% | — |
+  | 384 | 100% | 200% | — |
+  | 512 | 100% | 152% | 57.1% |
   | 1024 | 100% | 93.6% | — |
 
   In other words, an AMD iGPU is far more efficient *per stream processor* at small sizes (turning slightly negative at 1024 bit).
@@ -393,9 +393,28 @@ regression test `tools/test/test_cuda_param0.ps1`.
 > ① the arch-default multiply variant (WMAD for sm_70+) is already optimal on Ada; forcing XMAD/IMAD is
 > 1.5-2.3x slower; ② `mont_sqr` is just `mont_mul(a,a)`, so a dedicated square caps out at 12-14%;
 > ③ removing 8 (param3) / 6 (param0) redundant `normalize_addition` calls per bit measured **+5.4% / +6.7%**
-> (landed; the 18-check acceptance suite passes 18/18); ④ the add-chain (PRAC/NAF) ceiling is now measured
-> down to its floor: one add every 3 bits **1.47x**, every 5 bits **1.62x**, adds fully off **1.91x**
-> (realistic target 1.4-1.6x), with the timing-only probe `-DECM_PROBE_ADD_DENSITY=k`.
+> (landed; the 18-check acceptance suite passes 18/18); ④ the add-chain (PRAC/NAF) direction is now **closed by
+> evidence**: windowing is not merely expensive but illegal in x-only coordinates (each window needs a different
+> difference point), the 1-D differential-chain lower bound of 1.44 additions/bit exceeds the 1.26/bit break-even,
+> and PRAC's measured op counts cost 8-16% more than the ladder. Two timing-only probes remain for future A/B
+> (`-DECM_PROBE_ADD_DENSITY=k`, `-DECM_PROBE_CHAIN_W=M`). The same measurements exposed the **real** remaining
+> lever: the addition half is 59% of the runtime yet its per-operator cost is 44% higher than the doubling's at an
+> equal nominal op count - a scheduling/occupancy problem, see the doc's §5.1/§8.
+> **Throughput defaults (changed 2026-09-25 after measurement)**: `TPB=128`, `MAX_ROTATION=1`, plus
+> `--maxrregcount=56` on the <=2048-bit kernel sources (new switch `-DECM_MAXRREG_SMALL`). Occupancy is
+> the dominant factor on this path: at M511/M761 with 8192 curves, 72 -> 56 registers buys **+4.7%**,
+> while TPB=512 (half the block count) costs **-15%**; MAX_ROTATION 1/2/4 differ by <=0.4%. The **batch
+> size** drives the block count the same way: 8192 curves is **7.6%** faster than 4096 (32768: +10.4%,
+> saturating after that), so prefer **>=8192 curves per batch**; the launcher prints a warning with a
+> suggested `-gpucurves` when the batch does not fill the device. NOTE: an existing build directory keeps
+> the old values in its CMake cache - pass `-DECM_TPB=128 -DECM_MAX_ROTATION=1` or delete the cache.
+>
+> **param2 (batch 2, 6-torsion) is implemented and byte-identical to gmp-ecm** (`--gpu-param 2`): for the
+> same sigma and B1 our stage-1 x equals the one gmp-ecm `-param 2` writes (regression test
+> `tools/test/test_cuda_param2.ps1`, 7/7). Measured **5.7% faster than param0** at M511/B1=1e5, tending
+> towards the ~11% its op count predicts as B1 grows (host-side generation of 0.127-0.227 ms/curve gets
+> amortised away); the success rate matches Suyama. Caveat: its saves carry `PARAM=2`, which **gmp-ecm
+> accepts but Prime95 does not** - so stage 2 must go to gmp-ecm, or stay on param0. See doc §5.6.
 > Tools: `tools/bench/cgbn_op_probe.cu` (per-operator cost + variant A/B), `tools/bench/cuda_kernel_ab.ps1`
 > (whole-kernel A/B).
 

@@ -51,6 +51,17 @@ struct params_t {
 
 enum { OP_MONT_MUL, OP_MONT_SQR, OP_NORM, OP_ADD_NORM, OP_CMP, OP_SUB_COND, OP_SHIFT, OP_COUNT };
 
+// PROBE_VALUE_MODE: are CGBN's Montgomery ops DATA-DEPENDENT in cost?
+//   0 = operands as loaded (generic, full-width)   [default]
+//   1 = force the accumulating operand to 0
+//   2 = force the accumulating operand to 1
+// Build with -DPROBE_VALUE_MODE=n and compare ns/op.  This matters because every
+// timing probe that lets its state collapse to a degenerate value would otherwise
+// silently measure a cheaper kernel (see docs/ECM_CGBN_OPTIMIZATION.md 5.4).
+#ifndef PROBE_VALUE_MODE
+#define PROBE_VALUE_MODE 0
+#endif
+
 template <class params, int OP>
 __global__ void k_probe(cgbn_error_report_t *report,
                         cgbn_mem_t<params::BITS> *data,   // 3 slots per instance: a, b, n
@@ -75,6 +86,11 @@ __global__ void k_probe(cgbn_error_report_t *report,
   cgbn_load(env, n, slot_n);
 
   uint64_t acc = 0;
+#if PROBE_VALUE_MODE == 1
+  if (OP == OP_MONT_MUL || OP == OP_MONT_SQR) cgbn_set_ui32(env, a, 0);
+#elif PROBE_VALUE_MODE == 2
+  if (OP == OP_MONT_MUL || OP == OP_MONT_SQR) cgbn_set_ui32(env, a, 1);
+#endif
   if (OP == OP_MONT_MUL) {
     for (int i = 0; i < iters; i++) env.mont_mul(a, a, b, n, np0);
   } else if (OP == OP_MONT_SQR) {

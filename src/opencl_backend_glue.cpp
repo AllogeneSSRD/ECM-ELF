@@ -1,4 +1,4 @@
-/* opencl_backend_glue.cpp — OpenCL implementation of the ECM backend seam.
+﻿/* opencl_backend_glue.cpp — OpenCL implementation of the ECM backend seam.
 
    Linked only into the `ecm` executable. Each hook forwards to the pre-existing
    OpenCL host functions, so the shared driver behaves exactly as before.
@@ -40,15 +40,16 @@ extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
                                   const char *gpu_mul_path, const char *gpu_sqr_path,
                                   const char *gpu_add_path, const char *gpu_sub_path,
                                   const char *gpu_special_mult_path) {
-    /* gpu_param = 0 (Suyama param0) exists for the CUDA/CGBN kernels only: the
-       OpenCL .cl kernels still bake in the batch parametrization's fixed shape
-       (P = (2:1), difference x = 2).  Refuse loudly instead of silently running a
-       different curve family than the user asked for -- docs §20.5. */
-    if (gpu_param == 0) {
+    /* gpu_param = 0 (Suyama param0) and 2 (param2 batch-2 / 6-torsion) exist for the
+       CUDA/CGBN kernels only: the OpenCL .cl kernels still bake in the batch
+       parametrization's fixed shape (P = (2:1), difference x = 2, a24 = the 32-bit d).
+       Refuse loudly instead of silently running a different curve family than the user
+       asked for -- docs §20.5. */
+    if (gpu_param == 0 || gpu_param == 2) {
         ecm_ts_fprintf(stderr,
-                       "ERROR: gpu_param = 0 (Suyama param0) is not implemented for the "
-                       "OpenCL backend.\n"
-                       "       Use gpu_param = 3 here, or the ecm_cuda build for param0.\n");
+                       "ERROR: gpu_param = %d (%s) is not implemented for the OpenCL backend.\n"
+                       "       Use gpu_param = 3 here, or the ecm_cuda build for param0/param2.\n",
+                       gpu_param, gpu_param == 0 ? "Suyama param0" : "param2 batch-2");
         return ECM_ERROR;
     }
     /* The batch parametrization carries d = sigma/2^32 as a 32-bit kernel value. */

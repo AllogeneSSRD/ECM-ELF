@@ -1,4 +1,4 @@
-#include "ecm_queue_config.h"
+﻿#include "ecm_queue_config.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -135,9 +135,10 @@ bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
         else if (key == "device") set_int(cfg.device);
         else if (key == "gpu_param") {
             set_int(cfg.gpu_param);
-            if (cfg.gpu_param != 0 && cfg.gpu_param != 3) {
+            if (cfg.gpu_param != 0 && cfg.gpu_param != 2 && cfg.gpu_param != 3) {
                 fprintf(stderr, "[ecm] WARNING: gpu_param = %d is not supported (0 = Suyama "
-                                "param0, 3 = gmp-ecm batch); using 3.\n", cfg.gpu_param);
+                                "param0, 2 = param2 batch-2 / 6-torsion, 3 = gmp-ecm batch); "
+                                "using 3.\n", cfg.gpu_param);
                 cfg.gpu_param = 3;
             }
         }

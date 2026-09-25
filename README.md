@@ -48,8 +48,8 @@
   | 位宽（算子级） | CGBN 基准（Ada Lovelace） | AMD RDNA3.5 | Qualcomm Adreno 830 |
   |---|---|---|---|
   | 256 | 100% | 460% | — |
-  | 384 | 100% | 200% | 57.1% |
-  | 512 | 100% | 152% | — |
+  | 384 | 100% | 200% | — |
+  | 512 | 100% | 152% | 57.1% |
   | 1024 | 100% | 93.6% | — |
 
   即：AMD iGPU 的**每流处理器**效率在小位宽下远高于 CGBN（到 1024 bit 转为略低）
@@ -532,9 +532,25 @@ param0 每条曲线多花约 22% 时间，但每因子期望代价只有 batch �
 > **CGBN 本体还有多少可挖**：见 [docs/ECM_CGBN_OPTIMIZATION.md](docs/ECM_CGBN_OPTIMIZATION.md) ——
 > ① 架构默认乘法变体（sm_70+ 的 WMAD）在 Ada 上已是最优，强切 XMAD/IMAD 慢 1.5–2.3×；
 > ② `mont_sqr` 就是 `mont_mul(a,a)`，专用平方上限 12–14%；③ 删掉每 bit 8 次冗余的
-> `normalize_addition` 实测 **+5.4%（param3）/ +6.7%（param0）**（已落地，18/18 验收全过）；④ add-chain（PRAC/NAF）
-> 的时间天花板已测到下界：每 3 bit 一次加法 **1.47×**、每 5 bit **1.62×**、加法全关 **1.91×**（现实预期 1.4–1.6×），
-> 已有探针开关 `-DECM_PROBE_ADD_DENSITY=k`。
+> `normalize_addition` 实测 **+5.4%（param3）/ +6.7%（param0）**（已落地，18/18 验收全过）；④ **add-chain（PRAC/NAF）
+> 已被证据关闭**：x-only 下窗口法不合法（差分加法需要"每个窗口都不同的差值点"），且一维差分链的加法次数下界
+> 1.44/bit 高于赢所需门槛 1.26/bit，PRAC 实测算子数比梯子多 8–16%。两套计时探针（`-DECM_PROBE_ADD_DENSITY=k`、
+> `-DECM_PROBE_CHAIN_W=M`）保留下来做后续 A/B；**顺带量出真正的新杠杆**：加法半边占 59% 运行时间，
+> 但单位算子成本比倍点高 44%（名义算子数相同）⇒ 是调度/占用率问题，见文档 §5.1/§8。
+> **吞吐相关默认值（2026-09-25 实测后已改）**：`TPB=128`、`MAX_ROTATION=1`，并对 ≤2048 bit 的
+> kernel 源文件加 `--maxrregcount=56`（新开关 `-DECM_MAXRREG_SMALL`）。占用率是这条路径的主变量：
+> M511/M761、8192 曲线实测——寄存器 72→56 得 **+4.7%**，TPB=512（block 数减半）反而 **−15%**，
+> MAX_ROTATION 1/2/4 差 ≤0.4%（无影响）。**每批曲线数**同样决定 block 数：8192 曲线比 4096 快
+> **7.6%**（32768 快 10.4% 后饱和），所以**建议每批 ≥8192**；填不满设备时程序会打印告警并给出
+> 建议的 `-gpucurves` 值。注意已有 build 目录的 CMake cache 会保留旧值，需显式
+> `-DECM_TPB=128 -DECM_MAX_ROTATION=1` 或删 cache 重配。
+>
+> **param2（batch 2，6-挠）已实现并与 gmp-ecm 逐字节对齐**（`--gpu-param 2`）：同一 σ/B1 下我们
+> 的 stage-1 x 与 gmp-ecm `-param 2` 完全相同（回归测试 `tools/test/test_cuda_param2.ps1`，7/7）。
+> 实测比 param0 快 **5.7%**（M511、B1=1e5；B1 越大越接近算子数给出的 ~11%，因为主机侧建曲线
+> 0.127–0.227 ms/curve 会被摊薄），成功率与 Suyama 同档。**注意**：存档带 `PARAM=2`，
+> **gmp-ecm 能吃、Prime95 不能吃**（`sigma_type` 只认 0/1/3）—— 所以 stage 2 要么交给 gmp-ecm，
+> 要么保持 param0。细节见文档 §5.6。
 > 工具：`tools/bench/cgbn_op_probe.cu`（逐算子单价 + 变体 A/B）、`tools/bench/cuda_kernel_ab.ps1`（整 kernel A/B）。
 
 

@@ -1,4 +1,4 @@
-#ifndef _CGBN_STAGE1_KERNEL_H
+﻿#ifndef _CGBN_STAGE1_KERNEL_H
 #define _CGBN_STAGE1_KERNEL_H 1
 
 /* cgbn_stage1_kernel.h — device-side CGBN ECM stage-1 kernel templates and the
@@ -56,16 +56,75 @@
 #define ECM_PROBE_ADD_DENSITY 1
 #endif
 
+// ---------------------------------------------------------------------------
+// PROBE ONLY -- do not enable in production (docs/ECM_CGBN_OPTIMIZATION.md §5.4)
+//
+// ECM_PROBE_CHAIN_W = M executes, per bit, ONE xz doubling plus one REAL
+// differential addition every M-th bit, where that addition uses a PROJECTIVE
+// difference point (EFD dadd-1987-m-3, 4M+2S).  That is the price any
+// dictionary / window / co-Z chain has to pay, because a chain's difference is a
+// maintained (projective) point, not our affine-normalised start point (2M+2S).
+//   M = 1 -> PRAC-like op mix (one chain addition per bit)
+//   M = w+1 -> ideal width-w NAF density (1/(w+1) additions per bit) with FREE
+//              invariant maintenance -- an upper bound no real chain reaches
+// THE RESULT IS MATHEMATICALLY WRONG (the difference point is fake).  Timing only.
+// M = 0 (default) disables the probe and the correct fused double-and-add runs.
+// ---------------------------------------------------------------------------
+#ifndef ECM_PROBE_CHAIN_W
+#define ECM_PROBE_CHAIN_W 0
+#endif
+
+// ---------------------------------------------------------------------------
+// A/B experiment (docs/ECM_CGBN_OPTIMIZATION.md §8 item 3): scheduling variant of the
+// fused step.  ECM_STEP_VARIANT = 1 (default) keeps the historical double_add_v2;
+// 2 selects double_add_v2_ssa, which computes exactly the same arithmetic with explicit
+// prep registers (no write-after-read hazard).  Both must give bit-identical saves.
+// ---------------------------------------------------------------------------
+#ifndef ECM_STEP_VARIANT
+#define ECM_STEP_VARIANT 1
+#endif
+
+// ---------------------------------------------------------------------------
+// PROBE ONLY (docs/ECM_CGBN_OPTIMIZATION.md §5.6): run the *param2-shaped* step (affine
+// difference folded into a shift, full-width a24) on the param0 data path to price the
+// param2 kernel.  RESULTS ARE WRONG (a24 is truncated to 32 bits); timing only.
+// ---------------------------------------------------------------------------
+#ifndef ECM_PARAM2SHAPE
+#define ECM_PARAM2SHAPE 0
+#endif
+
 /* TODO test how this changes gpu_throughput_test */
 /* NOTE: >= 512 may not be supported for > 2048 bit kernels */
-const uint32_t TPB_DEFAULT = 256;
+//
+// Tunables (docs/ECM_CGBN_OPTIMIZATION.md §5.5/§8).  Both are COMPILE-TIME on purpose:
+// CGBN's shuffles assume the block really is params::TPB threads wide, so the launch
+// config in kernels/cuda/cgbn_stage1.cu reads the same constant.  Override with
+// -DECM_TPB=<n> / -DECM_MAX_ROTATION=<n> to sweep them.
+//
+// Defaults changed 2026-09-25 from 256/4 after a measured sweep (M511 and M761, 8192
+// curves, B1=1e5, param3, GPU 1, median of 2):
+//   * blocks = curves / (TPB/TPI) is the throughput driver: TPB=512 (half the blocks)
+//     measured -15%, TPB=128 +1.2%, TPB=64 +1.1%.
+//   * MAX_ROTATION 1/2/4 differ by <=0.4% (noise); 1 is the cheapest to be sure about.
+//   * The bigger single lever is the register cap, applied per source file in
+//     CMakeLists (tpi4/tpi8 only, i.e. <=2048 bits): 72 -> 56 registers gives +4.7%
+//     at M511/M761 (48 overflows and loses it again).  The >=2560-bit tiers are left
+//     at the compiler default because a 72+ register allocation there is unmeasured.
+#ifndef ECM_TPB
+#define ECM_TPB 128
+#endif
+#ifndef ECM_MAX_ROTATION
+#define ECM_MAX_ROTATION 1
+#endif
+
+const uint32_t TPB_DEFAULT = ECM_TPB;
 
 template<uint32_t tpi, uint32_t bits>
 class cgbn_params_t {
   public:
   // parameters used by the CGBN context
   static const uint32_t TPB=TPB_DEFAULT;           // Reasonable default
-  static const uint32_t MAX_ROTATION=4;            // good default value
+  static const uint32_t MAX_ROTATION=ECM_MAX_ROTATION; // good default value
   static const uint32_t SHM_LIMIT=0;               // no shared mem available
   // MPA-OpenCl port: CONSTANT_TIME is required by CGBN's cgbn_context_t on all
   // compilers (was previously mis-guarded behind #ifndef _MSC_VER).
@@ -284,6 +343,139 @@ class curve_t {
     }
   }
 
+  /**
+   * A/B experiment (docs/ECM_CGBN_OPTIMIZATION.md §8 item 3): the *same* arithmetic as
+   * double_add_v2, but written with explicit prep registers so that the source has no
+   * write-after-read hazard between the addition half and the doubling half.  In
+   * double_add_v2 the prep (aZ+aX, aZ-aX) is kept in the `w`/`u` registers, and the
+   * doubling overwrites `u`; that forces the addition's two multiplies to issue early and
+   * lengthens the live ranges.  Selected with -DECM_STEP_VARIANT=2.  Correctness is
+   * identical (same formulas, same order of reduction), so the A/B is pure scheduling.
+   */
+  __device__ FORCE_INLINE void double_add_v2_ssa(
+          bn_t &q, bn_t &u,
+          bn_t &w, bn_t &v,
+          uint32_t d,
+          const bn_t &modulus,
+          const uint32_t np0) {
+    bn_t t, CB, DA, AA, BB, K, dK, ax, az, bx, bz;
+
+    // ---- independent prep, no register is read after being written ----
+    cgbn_add(_env, az, u, q); // aZ + aX
+    normalize_addition(az, modulus);
+    if (cgbn_sub(_env, ax, u, q)) // aZ - aX
+        cgbn_add(_env, ax, ax, modulus);
+
+    cgbn_add(_env, bz, v, w); // bZ + bX
+    normalize_addition(bz, modulus);
+    if (cgbn_sub(_env, bx, v, w))
+        cgbn_add(_env, bx, bx, modulus);
+
+    // ---- addition half: CB = (bZ+bX)(aZ-aX), DA = (bZ-bX)(aZ+aX) ----
+    cgbn_mont_mul(_env, CB, bz, ax, modulus, np0);
+    cgbn_mont_mul(_env, DA, bx, az, modulus, np0);
+
+    // ---- doubling half ----
+    cgbn_mont_sqr(_env, AA, az, modulus, np0);
+    cgbn_mont_sqr(_env, BB, ax, modulus, np0);
+    cgbn_mont_mul(_env, q, AA, BB, modulus, np0);
+
+    if (cgbn_sub(_env, K, AA, BB))
+        cgbn_add(_env, K, K, modulus);
+
+    cgbn_set(_env, dK, K);
+    special_mult_ui32(dK, d, modulus, np0);
+
+    cgbn_add(_env, t, BB, dK);
+    normalize_addition(t, modulus);
+    cgbn_mont_mul(_env, u, K, t, modulus, np0);
+
+    // ---- addition half tail ----
+    cgbn_add(_env, w, DA, CB);
+    normalize_addition(w, modulus);
+    if (cgbn_sub(_env, v, DA, CB))
+        cgbn_add(_env, v, v, modulus);
+
+    cgbn_mont_sqr(_env, w, w, modulus, np0);
+    cgbn_mont_sqr(_env, v, v, modulus, np0);
+    cgbn_shift_left(_env, v, v, 1);
+    normalize_addition(v, modulus);
+  }
+
+  /* -------------------------------------------------------------------------
+   * PROBE ONLY: windowed-chain arithmetic (docs/ECM_CGBN_OPTIMIZATION.md §5.4).
+   *
+   * One xz doubling per bit, plus -- every M-th bit -- a REAL differential
+   * addition whose difference point is PROJECTIVE (EFD dadd-1987-m-3, 4M+2S).
+   * The operands/difference are fake (we reuse the live state), so the point
+   * coordinates are meaningless; ONLY the operator mix and its cost are real:
+   *   per bit: 2S + 2M + special_mult_ui32,   plus (do_dadd ? 2S + 4M : 0)
+   * which is exactly what a width-w NAF / PRAC / co-Z chain would execute.
+   * ------------------------------------------------------------------------- */
+  __device__ FORCE_INLINE void chain_probe_step(
+          bn_t &q, bn_t &u,
+          bn_t &w, bn_t &v,
+          uint32_t d,
+          const bn_t &modulus,
+          const uint32_t np0,
+          const bool do_dadd) {
+    bn_t t, CB, DA, AA, BB, K, dK, XD, ZD;
+
+    // ---- (q,u) <- [2](q,u): same op mix as the production doubling half ----
+    cgbn_add(_env, w, u, q); // w = (aZ + aX)
+    normalize_addition(w, modulus);
+    if (cgbn_sub(_env, u, u, q)) // u = (aZ - aX)
+        cgbn_add(_env, u, u, modulus);
+
+    cgbn_mont_sqr(_env, AA, w, modulus, np0);    // AA
+    cgbn_mont_sqr(_env, BB, u, modulus, np0);    // BB
+    cgbn_mont_mul(_env, q, AA, BB, modulus, np0); // q = AA*BB
+
+    if (cgbn_sub(_env, K, AA, BB)) // K = AA-BB
+        cgbn_add(_env, K, K, modulus);
+
+    cgbn_set(_env, dK, K);
+    special_mult_ui32(dK, d, modulus, np0); // dK = K*d (32-bit multiply)
+
+    cgbn_add(_env, u, BB, dK); // BB + dK
+    normalize_addition(u, modulus);
+    cgbn_mont_mul(_env, u, K, u, modulus, np0); // u = K(BB+dK)
+
+    if (!do_dadd)
+      return;
+
+    // ---- (w,v) <- dadd((w,v), (q,u)) with a PROJECTIVE difference (XD:ZD) ----
+    // EFD dadd-1987-m-3:
+    //   X5 = Z1*((X2-Z2)(X3+Z3) + (X2+Z2)(X3-Z3))^2
+    //   Z5 = X1*((X2-Z2)(X3+Z3) - (X2+Z2)(X3-Z3))^2
+    cgbn_set(_env, XD, q); // projective difference: reuses the live state on
+    cgbn_set(_env, ZD, u); // purpose (timing probe only -- value is wrong)
+
+    cgbn_add(_env, t, v, w); // (X2 + Z2)
+    normalize_addition(t, modulus);
+    if (cgbn_sub(_env, v, v, w)) // (X2 - Z2)
+        cgbn_add(_env, v, v, modulus);
+
+    cgbn_add(_env, CB, u, q); // (X3 + Z3)
+    normalize_addition(CB, modulus);
+    if (cgbn_sub(_env, DA, u, q)) // (X3 - Z3)
+        cgbn_add(_env, DA, DA, modulus);
+
+    cgbn_mont_mul(_env, v, v, CB, modulus, np0); // (X2-Z2)(X3+Z3)
+    cgbn_mont_mul(_env, t, t, DA, modulus, np0); // (X2+Z2)(X3-Z3)
+
+    cgbn_add(_env, CB, t, v); // sum
+    normalize_addition(CB, modulus);
+    if (cgbn_sub(_env, DA, t, v)) // difference
+        cgbn_add(_env, DA, DA, modulus);
+
+    cgbn_mont_sqr(_env, CB, CB, modulus, np0);   // sum^2
+    cgbn_mont_sqr(_env, DA, DA, modulus, np0);   // difference^2
+
+    cgbn_mont_mul(_env, w, ZD, CB, modulus, np0); // X5 = Z1*sum^2
+    cgbn_mont_mul(_env, v, XD, DA, modulus, np0); // Z5 = X1*diff^2
+  }
+
   /* -------------------------------------------------------------------------
    * Suyama param0 variant of the same fused double-and-add
    * (docs/ECM_Montgomery_STAGE1.md §19/§20).
@@ -309,7 +501,15 @@ class curve_t {
           const bn_t &a24,
           const bn_t &xdiff,
           const bn_t &modulus,
-          const uint32_t np0) {
+          const uint32_t np0,
+          // const_diff = true means "the ladder difference point is the constant 2",
+          // i.e. the affine xdiff multiply becomes the shift_left(v,1) of the batch
+          // family.  That is exactly gmp-ecm's param 2 (get_curve_from_param2 ends with
+          // mpres_set_ui(x0, 2, n), parametrizations.c:373): full-width a24 (unlike
+          // param3's 32-bit d) with a constant difference (unlike param0's xdiff).
+          // 5M+4S per bit instead of param0's 6M+4S -- see
+          // docs/ECM_CGBN_OPTIMIZATION.md §5.6.  Uniform across the warp, so free.
+          const bool const_diff = false) {
     // q = xA = aX
     // u = zA = aZ
     // w = xB = bX
@@ -361,7 +561,12 @@ class curve_t {
 
     // v = bZ is finalized: x_D * (DA-CB)^2, where x_D = X0/Z0 is the affine x of
     // the ladder difference point (param3 folds the constant 2 in here instead)
-    cgbn_mont_mul(_env, v, v, xdiff, modulus, np0);
+    if (const_diff) {
+      // param2: x_D = 2 -- same shortcut as the batch family, no multiply at all
+      cgbn_shift_left(_env, v, v, 1);
+    } else {
+      cgbn_mont_mul(_env, v, v, xdiff, modulus, np0);
+    }
         assert_normalized(v, modulus);
   }
 };
@@ -437,8 +642,18 @@ __global__ void kernel_double_add(
         cgbn_swap(curve._env, aX, bX);
         cgbn_swap(curve._env, aZ, bZ);
     }
+#if ECM_PROBE_CHAIN_W > 0
+    // PROBE: replace the fused ladder step with the chain op mix (timing only).
+    curve.chain_probe_step(aX, aZ, bX, bZ, d, modulus, np0,
+                           ((b % (uint64_t)ECM_PROBE_CHAIN_W) == 0));
+#elif ECM_STEP_VARIANT == 2
+    // A/B: same arithmetic, explicit prep registers (production only; the add-density
+    // probe above is disabled in this variant).
+    curve.double_add_v2_ssa(aX, aZ, bX, bZ, d, modulus, np0);
+#else
     curve.double_add_v2(aX, aZ, bX, bZ, d, modulus, np0,
                         (ECM_PROBE_ADD_DENSITY <= 1) || ((b % (uint64_t)ECM_PROBE_ADD_DENSITY) == 0));
+#endif
   }
 
   if (swapped) {
@@ -482,7 +697,21 @@ __global__ void kernel_double_add(
  * with the param3 kernel): with param0 everything sigma-dependent is already
  * baked into the seven words above.
  */
-template<class params>
+/**
+ * Suyama param0 double-and-add kernel, and -- with CONST_DIFF = true -- the param2
+ * ("batch 2", 6-torsion) one.  The two differ ONLY in how the ladder difference enters
+ * the differential addition:
+ *
+ *   CONST_DIFF = false : difference is the affine x0 -> one mont_mul by xdiff   (6M+4S)
+ *   CONST_DIFF = true  : difference is the constant 2 -> shift_left, free       (5M+4S)
+ *
+ * gmp-ecm's param 2 sets x0 = 2 (parametrizations.c:373) with a full-width a24, which is
+ * exactly this combination; param0 has a full-width a24 and a genuine xdiff.  Both live in
+ * the same 7-word buffer layout.  CONST_DIFF is a TEMPLATE parameter on purpose: passing
+ * it as a runtime flag instead cost 34% of throughput (registers 71 -> 92, docs §5.6).
+ * See docs/ECM_CGBN_OPTIMIZATION.md §5.6.
+ */
+template<class params, bool CONST_DIFF = false>
 __global__ void kernel_double_add_suyama(
         cgbn_error_report_t *report,
         uint64_t s_bits,
@@ -536,7 +765,19 @@ __global__ void kernel_double_add_suyama(
         cgbn_swap(curve._env, aX, bX);
         cgbn_swap(curve._env, aZ, bZ);
     }
-    curve.double_add_v2_suyama(aX, aZ, bX, bZ, a24, xdiff, modulus, np0);
+#if ECM_PARAM2SHAPE
+    // PROBE: force the *param2-shaped* step (full-width a24 + constant difference 2) on
+    // the param0 data path.  Timing only -- docs/ECM_CGBN_OPTIMIZATION.md §5.6.
+    curve.double_add_v2_suyama(aX, aZ, bX, bZ, a24, xdiff, modulus, np0, true);
+#else
+    /* NOTE (2026-09-25): do NOT try to pick the shift/multiply with a runtime flag here.
+       A warp-uniform `xdiff == 2` test looked free, but keeping xdiff live across the bit
+       loop pushed this kernel from 71 to 92 registers and cost 34% of throughput (the
+       param0 path fell from 71 M to 47 M curve-bits/s, docs §5.6).  param2 therefore gets
+       its OWN kernel family (same instantiations, const_diff = true) and the dispatch
+       chooses the family -- like param0's family already is.  See §8 item 5. */
+    curve.double_add_v2_suyama(aX, aZ, bX, bZ, a24, xdiff, modulus, np0, CONST_DIFF);
+#endif
   }
 
   if (swapped) {
@@ -631,5 +872,14 @@ cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi4(uint32_t BITS, uint32_t *TP
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi8(uint32_t BITS, uint32_t *TPI_out);
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi16(uint32_t BITS, uint32_t *TPI_out);
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi32(uint32_t BITS, uint32_t *TPI_out);
+
+/* param2 ("batch 2", 6-torsion, method = gpu + gpu_param = 2) variants: the same kernel
+   body instantiated with CONST_DIFF = true, so the differential addition drops the xdiff
+   multiply (5M+4S vs param0's 6M+4S).  Its own TU for the same reason as the Suyama set,
+   and its own family rather than a runtime flag (that cost 34%, docs §5.6). */
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi4(uint32_t BITS, uint32_t *TPI_out);
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi8(uint32_t BITS, uint32_t *TPI_out);
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi16(uint32_t BITS, uint32_t *TPI_out);
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi32(uint32_t BITS, uint32_t *TPI_out);
 
 #endif  /* _CGBN_STAGE1_KERNEL_H */

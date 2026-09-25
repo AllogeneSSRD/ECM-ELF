@@ -76,8 +76,10 @@ cl /nologo /O2 /EHsc /utf-8 /I src/core ^
 | `simd_mont_tail.cpp` / `simd_mont_notail.cpp` | 尾巴成本拆解（用 `set DEFS=/DIFMA_NOTAIl=1` 选无尾版，避免运行时 `getenv` 污染热路径） |
 | `probe2.c` / `probe3.c` | 时钟与 `vpmadd52` 峰值标定（§15.3 数据的来源：4.0 GHz、1 madd/cycle） |
 | `ecm_edwards_standalone.cpp` | 单曲线 stage-1 dump（`d`、基点、`s_bits`、`Qx/Qz`、`u`、`gcd`），用于与 Prime95/参考阶梯对拍。原先藏在 `src/cpu/ecm_edwards_cpu.cpp` 的 `BUILD_ECM_EDWARDS_STANDALONE` 里，现已搬出并加 CMake 目标 `ecm_edwards_standalone` |
-| `cgbn_op_probe.cu` | **CGBN 逐算子单价**（`mont_mul`/`mont_sqr`/compare+cond-sub/add/sub/shift），可切 TPI/BITS 档位，可用 `-DXMP_WMAD/-DXMP_XMAD/-DXMP_IMAD` 切乘法链变体；用于判断"改哪个算子值多少"（结论见 `docs/ECM_CGBN_OPTIMIZATION.md`）。**文件必须保持 ASCII-only**（中文注释会让 nvcc 按 GBK 读、吃掉换行） |
-| `cuda_kernel_ab.ps1` | **整 CUDA kernel A/B 计时**：固定 N（默认 `2^Bits−1`）/B1/曲线数，多次取中位数，输出 `gputime` 与 curve-bits/s；`-Device` 默认 1（计时要在空闲卡上做） |
+| `fix_bom.py` | **编码体检/修复**：对"含非 ASCII 且缺 UTF-8 BOM"的源文件补回 BOM（用法 `python tools\diag\fix_bom.py <file...>`）。任何一次"读出来再写回去"的编辑都会丢掉 BOM，而 nvcc/cl 会把无 BOM 的中文注释按 GBK 读、**吃掉换行**，导致下一行的 `#define` 被并进注释（本轮真踩：`CHECKPOINT_VERSION is undefined`）。改完 `cgbn_stage1.cu` 之类的文件请顺手跑一次 |
+| `cgbn_op_probe.cu` | **CGBN 逐算子单价**（`mont_mul`/`mont_sqr`/compare+cond-sub/add/sub/shift），可切 TPI/BITS 档位，可用 `-DXMP_WMAD/-DXMP_XMAD/-DXMP_IMAD` 切乘法链变体、`-DPROBE_VALUE_MODE=0/1/2` 检验算子对**操作数值**是否敏感（实测不敏感：通用/0/1 都是 0.91 ns）；用于判断"改哪个算子值多少"（结论见 `docs/ECM_CGBN_OPTIMIZATION.md`）。**文件必须保持 ASCII-only**（中文注释会让 nvcc 按 GBK 读、吃掉换行） |
+| `cuda_kernel_ab.ps1` | **整 CUDA kernel A/B 计时**：固定 N（默认 `2^Bits−1`）/B1/曲线数，多次取中位数，输出 `gputime` 与 curve-bits/s；`-Device` 默认 1（计时要在空闲卡上做）。探针实验必须 `-NExpr <素数>`，否则垃圾状态会撞出假因子、批次提前结束 |
+| `param2_gen_cost.cpp` | **主机侧建曲线成本**（GMP 独立工具，N 走 stdin，如 `cmd /c "build_vs18\tools\param2_gen_cost.exe 3000 3 < n.txt"`）：对比 param3 形状与 gmp-ecm `get_curve_from_param2`（加法链 + 3 次模逆）的 ms/curve。结论见 `docs/ECM_CGBN_OPTIMIZATION.md` §5.6。**注意别用 PowerShell 管道喂 N**（会加 BOM，gmp-ecm 报 invalid number） |
 | `simd_edwards_bench.cpp` | SIMD 批的验证 + 计时（`verify` 子命令与标量逐位对拍；`ED_SOA_FIELD=mont\|mers\|auto`、`ED_SOA_FSELFTEST=<n>`） |
 | `ab_mersenne.ps1` | 验收 A/B：8 曲线 M3001 B1=1e6，折叠域 vs Montgomery，交替 min-of-3 + 存档字节一致性 |
 | `ab_naf_window.ps1` | NAF 窗口 A/B（w=8/10/12） |

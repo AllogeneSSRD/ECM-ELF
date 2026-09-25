@@ -150,7 +150,7 @@ std::string opencl_ecm_build_saved_n_expr(const std::string &original_expr, cons
 
 bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N, double B1,
                                   uint32_t firstsigma, uint32_t curves, mpz_t *factors,
-                                  const std::string &n_expr_save) {
+                                  const std::string &n_expr_save, int param_id) {
     if (!opencl_ecm_ensure_parent_dir(savefilename.c_str())) {
         ecm_ts_fprintf(stderr, "Could not create parent directory for %s\n",
                        savefilename.c_str());
@@ -180,13 +180,13 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
         mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(sigma_mpz, CHKSUMMOD));
         mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(N, CHKSUMMOD));
         mpz_mul_ui(checksum, checksum, mpz_fdiv_ui(factors[i], CHKSUMMOD));
-        mpz_mul_ui(checksum, checksum, (ECM_PARAM_BATCH_32BITS_D + 1) % CHKSUMMOD);
+        mpz_mul_ui(checksum, checksum, (unsigned long)(param_id + 1) % CHKSUMMOD);
         const unsigned long csum = mpz_fdiv_ui(checksum, CHKSUMMOD);
 
         char *sigma_dec = mpz_get_str(nullptr, 10, sigma_mpz);
         char *x_hex = mpz_get_str(nullptr, 16, factors[i]);
 
-        out << "METHOD=ECM; PARAM=" << ECM_PARAM_BATCH_32BITS_D
+        out << "METHOD=ECM; PARAM=" << param_id
             << "; SIGMA=" << sigma_dec
             << "; B1=" << std::llround(B1)
             << "; N=" << n_expr_save

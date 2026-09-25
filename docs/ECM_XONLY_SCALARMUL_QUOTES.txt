@@ -1,0 +1,62 @@
+﻿PRIMARY QUOTES CONFIRMED FROM SOURCE FETCHES (this session)
+==========================================================
+[A] prime95 / gwnum/ecmstag1.c, ell_mul() -- verbatim:
+"/* Try a series of Lucas chains to find the cheapest. */
+/* First try v = (1+sqrt(5))/2, then (2+v)/(1+v), then (3+2*v)/(2+v), */
+/* then (5+3*v)/(3+2*v), etc.  Finally, execute the cheapest. */
+/* This is much faster than bin_ell_mul, but uses more memory. */"
+
+[B] prime95 / gwnum/ecmstag1.c, before lucas_cost() -- verbatim:
+"/* The costing function assigns an ell_dbl call a cost of 12 and */
+/* an ell_add call a cost of 12.  This cost estimates the number */
+/* of forward and inverse transforms performed. */"
+(actual comments in the bodies: ell_dbl "10 FFTs"; ell_add_fft "12 FFTs, 6 adds";
+ ell_add_fft_last "10 FFTs, 6 adds"; ell_add (unused, ELL_ADD_USED) "16 FFTs")
+
+[C] prime95 / gwnum/ecmstag1.c, before lucas_mul() -- verbatim:
+"/* Perform an elliptic multiply using an algorithm developed by */
+/* Peter Montgomery.  Basically, we try to find a near optimal */
+/* Lucas chain of additions that generates the number we are */
+/* multiplying by.  This minimizes the number of calls to ell_dbl */
+/* and ell_add. */"
+
+[D] prime95 / ecm.cpp, global -- verbatim:
+"int	PRAC_SEARCH = 7;"
+(NOT referenced anywhere inside ecm.cpp itself; the PRAC search lives in
+ gwnum/ecmstag1.c. ecm.cpp includes GMP-ECM's resume_gmp.c and has an
+ Edwards/NAF stage-1 code path for large k*b^n+c via gwnum.)
+
+[E] GMP-ECM / lucas.c, pp1_mul_prac() -- verbatim:
+"static double val = 0.61803398874989485; /* 1/(golden ratio) */"
+"/* Note: we used to use several (4) values of "val", but:"
+"   (1) the code to estimate the best value was buggy;"
+"   (2) even after fixing the bug, the overhead to choose the"
+"       best value was larger than the corresponding gain (for a c155"
+"       and B1=10^7). */"
+(so GMP-ECM's P+1 PRAC uses a SINGLE alpha = 1/phi; ECM's prac() uses 10.)
+
+[F] GMP-ECM / ecm.c -- verbatim invariants and costs:
+"#define ADD 6.0 /* number of multiplications in an addition */"
+"#define DUP 5.0 /* number of multiplications in a duplicate */"
+add3(): "(x3,z3) may be identical to (x2,z2) and to (x,z)"  /* 6 muls (4 muls and 2 squares), 6 add/sub */
+duplicate(): with 5 muls (3 muls and 2 squares) and 4 add/sub
+ecm_mul() binary ladder (used for -go / batch): duplicate + add3 per bit.
+ecm_stage1(): "prac() wants multiplicands > 2"; then for each prime p<=B1,
+  for (r = p; r <= B1; r *= p) ... prac(x, z, p, ...)
+comment in prac(): "/* do the first line of Table 4 whose condition qualifies */"
+  -> explicitly Montgomery 1992 Table 4.
+nv/NV=10 double constants val[0..9] in prac() == exactly the 10 alphas of
+  Zimmermann "20 years of ECM" Fig. 2.
+
+[G] GMP-ECM / ecm.c, Lchain (P McLaughlin 2023) -- verbatim:
+"uint8_t	dif_offset;		/* component index of (summand_1 - summand_2) counting back from parent */"
+"/* note: dif_offset = 0 will indicate that this is a doubled element */"
+"uint8_t base_indx, next_indx, s1_indx, s2_indx, dif_indx;"
+"mpres_t LCS_x[16]; mpres_t LCS_z[16];"
+in the replay loop: s2_indx/dif_indx index the SAME LCS_x[]/LCS_z[] array.
+in generate_Lucas_chain(): "ASSERT( (dif == Lchain[ chain_length-k ].value) && (k < 15) );"
+i.e. the difference is ASSERTED to be a chain element within 15 back;
+hence the 16-slot register file (15 + 1 for the newly written term).
+GMP-ECM reads a file "Lchain_codes.dat" (else: "Lchain_codes.dat file failed
+to open, using prac").
+GWNUM thresholds in ecm-impl.h: 1130 / 1215 / 2100 bits.

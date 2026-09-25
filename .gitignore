@@ -91,3 +91,6 @@ tools/gen/__pycache__/
 /test_edwards-1
 /tools/stat/_run
 /build_cuda_dev
+/build_t16
+/build_jom
+/build_ninja

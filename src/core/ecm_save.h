@@ -13,9 +13,21 @@ bool opencl_ecm_check_save_file_writable(const std::string &savefilename, bool s
 std::string opencl_ecm_build_saved_n_expr(const std::string &original_expr, const mpz_t N,
                                           uint32_t curves, mpz_t *factors, int *array_found);
 
+/**
+ * Append one text save line per curve in the gmp-ecm batch form (`METHOD=ECM; PARAM=id`).
+ *
+ * `param_id` selects the parametrization recorded in the `PARAM=` key and mixed into the
+ * line checksum: 3 = the historical batch family (default, keeps every earlier caller
+ * byte-identical) or 2 = the 6-torsion "batch 2" family (gpu_param = 2).  gmp-ecm reads
+ * both back (`-param 2` / `-param 3`); Prime95 can read neither, it only accepts
+ * sigma_type 0/1/3.
+ */
 bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N, double B1,
                                   uint32_t firstsigma, uint32_t curves, mpz_t *factors,
-                                  const std::string &n_expr_save);
+                                  const std::string &n_expr_save,
+                                  /* ECM_PARAM_BATCH_32BITS_D, spelled out so this header
+                                     does not have to pull in the param-id enum */
+                                  int param_id = 3);
 
 /**
  * Append one text save line per curve for the **Suyama-sigma Montgomery** path
