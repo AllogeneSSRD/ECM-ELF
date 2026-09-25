@@ -1,6 +1,6 @@
 <resources>
     <!-- 顶边栏 -->
-    <string name="app_name">ECM OpenCL</string>
+    <string name="app_name">ECM-ELF</string>
     <string name="subtitle">GPU OpenCL ECM 分解 &amp; 微基准</string>
     <string name="subtitle_ecm">GPU OpenCL ECM Stage-1 分解</string>
     <string name="subtitle_bench">OpenCL 算子微基准</string>
@@ -22,7 +22,7 @@
     <string name="default_gpu_curves">1</string>
     <string name="hint_device_index">-d 设备序号</string>
     <string name="default_device_index">0</string>
-    <string name="hint_gpu_ckpt">-gpuckpt (秒, 0=禁用)</string>
+    <string name="hint_gpu_ckpt">--ckpt (秒, 0=禁用)</string>
     <string name="default_gpu_ckpt">60</string>
     <string name="hint_save_file">-save / -savea 文件名 (空=禁用)</string>
     <string name="chk_save_append">-savea 追加到已有文件</string>

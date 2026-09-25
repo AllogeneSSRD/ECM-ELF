@@ -1,16 +1,118 @@
-# OpenCL-ECM
+# ECM-ELF
 
-本仓库为椭圆曲线因子分解算法的 **OpenCL** 实现。支持 **Windows, Linux, macOS & Android** , 同时移植了可在 **Windows - CUDA** 环境运行的 **[GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm)** (Montgomery param 3)。
+[English](README.en.md) | 中文
 
-程序兼容 **GPM-ECM** & **Prime95** 的 savefile 格式, 支持 checkpoint, 自定义算子 (Montgomery 乘/平方与模加/模减) 并针对 **AMD GPU (GCN、RDNA)** 进行汇编与 ISA 调优。
+椭圆曲线因子分解（ECM）**多后端 stage-1 引擎**：**OpenCL**（Windows / Linux / macOS / Android; param 3)，**CUDA**（CGBN；param 0 Suyama 与 param 3 batch）、**GMP** & **AVX-512 IFMA**（Edwards / Montgomery, x86 CPU 8 curves/线程），三者共用同一个 driver / 参数解析 / 检查点 / 存档逻辑，在链接期切换实现。
 
-英文概览见 [README_en.md](README_en.md)。
+程序兼容 **GPM-ECM** & **Prime95** 的 savefile 格式, 支持 checkpoint, 自定义算子 (Montgomery 乘/平方与模加/模减)；另含队列管理器（worktodo / 存档同步 / 断点续跑）与 Prime95 stage-2 交接工具 `ecm_p95feeder`。
 
+> **本仓库原名 OpenCL-ECM。** 改名原因：现在的主力后端已是 CUDA/CGBN（param 0 + param 3）与 AVX-512 批路径，旧名只描述其中一个后端。**二进制名（`ecm.exe` / `ecm_cuda.exe` / `ecm_p95feeder.exe`）、`.save` 格式、`ecm.ini` 键名一律不变**，老脚本与存档不受影响。
 
 ![Static Badge](https://img.shields.io/badge/language-C-blue)
-![GitHub License](https://img.shields.io/github/license/AllogeneSSRD/opencl-ecm)
-![GitHub commit activity](https://img.shields.io/github/commit-activity/t/AllogeneSSRD/opencl-ecm)
-![GitHub last commit](https://img.shields.io/github/last-commit/AllogeneSSRD/opencl-ecm)
+![GitHub License](https://img.shields.io/github/license/AllogeneSSRD/ECM-ELF)
+![GitHub commit activity](https://img.shields.io/github/commit-activity/t/AllogeneSSRD/ECM-ELF)
+![GitHub last commit](https://img.shields.io/github/last-commit/AllogeneSSRD/ECM-ELF)
+
+
+---
+
+
+## 与现有主流工具相比，本仓库做了什么
+
+面向 GIMPS 生态（Prime95 / gmp-ecm / PrMers）的 **stage-1 工程化实现**：多后端（OpenCL / CUDA-CGBN / AVX-512）、与现有 stage-2 工具**存档互通**、包含梅森数ECM辅助工具。
+
+### 所有后端共用（工具链层）
+
+| 能力 | 说明 |
+|---|---|
+| **任务队列** | `worktodo.txt` 逐行任务，支持 `ECM=` / `ECM2=`（两者等价）/ `ECMSTAGE2=` 三种行式；成功完成后追加到 `worktodo.finished.txt` 并从队列移除，失败行**就地**改写为 `# ERROR <原行>` |
+| **单一 ini 配置** | `ecm.ini`：GPU / CPU / 曲线参数化 / 后端 / 线程 / 亲核性 / 存档命名模板 / 检查点间隔 / 进度条颜色…，；文件缺失时自动生成模板 |
+| **中途检查点** | GPU `.ckpt`、Edwards `e{n}_c{k}.ckpt`、Montgomery `m{n}_{b1}_c{k}.ckpt`。默认 600 s 定时保存，`Ctrl+C` 打断时保存 |
+| **存档与同步** | 同步 `.save` 存档到 Prime95文件夹，添加 worktodo.add |
+| **实时进度** | 命令行进度条显示速率，完成比例，ETA |
+
+### GPU · CUDA / CGBN（`ecm_cuda.exe`）
+
+- **相对 gmp-ecm 的新增能力**
+  - `gpu param 0`：**Suyama σ（Z/12）**，与 gmp-ecm `-param 0` 相同，存档支持 gmp-ecm 与 Prime95 继续做 stage 2；
+  - **原生 Windows** CUDA 构建（Visual Studio / NMake 两条路，不需要 Linux / WSL / msys2 工具链），并完整接入队列管理器 / 中途检查点 / 存档同步；
+  - 曲线参数化可选 `gpu_param = 0 | 3`。
+- 支持 **N ≤ 16384 bit**，**推荐用于 `< 12288 bit`** 的整数。最大可到 N ≤ 65536，但是显著慢与 FFT/NTT 实现
+
+### GPU · OpenCL（`ecm.exe`）
+
+- 跨平台（Windows / Linux / macOS / Android）的 gmp-ecm （param 3）路径：支持自定义算子（`--mul/--sqr/--add/--sub/--special-mult`）
+- 定位：**小位宽**整数。单条曲线耗时更长，但单曲线资源占用更低、同一位宽下可同时容纳的曲线数更多（实测约 **4×** CGBN），靠曲线数换总吞吐 ⇒ 建议 **≲1024 bit**，更大位宽交给 CUDA/CGBN 或 CPU。
+- 归一化到"每流处理器 / CUDA 核心 × 同频"的吞吐对比（CGBN = 100%，作者实测）：
+
+  | 位宽（算子级） | CGBN 基准（Ada Lovelace） | AMD RDNA3.5 | Qualcomm Adreno 830 |
+  |---|---|---|---|
+  | 256 | 100% | 460% | — |
+  | 384 | 100% | 200% | 57.1% |
+  | 512 | 100% | 152% | — |
+  | 1024 | 100% | 93.6% | — |
+
+  即：AMD iGPU 的**每流处理器**效率在小位宽下远高于 CGBN（到 1024 bit 转为略低）
+
+### CPU（Edwards / Montgomery 两条曲线族 × gmp / AVX-512 两种后端）
+
+- **Edwards（Atkin–Morain，a=1，Z/2×Z/8）**：
+
+  - 支持生成 Prime95 风格的 stage1存档，例如 `e0001213` 
+  - 配合 `ecm_p95feeder` 自动投递 ⇒ Prime95 直接执行 stage 2。
+
+- **Montgomery（Suyama σ，Z/12）**：
+
+  - 与 gmp-ecm `-param 0` 同曲线（`A = (v−u)³(3u+v)/(4u³v) − 2`）；
+  - 输出 **gmp-ecm 风格文本存档**（`METHOD=ECM; SIGMA=<64 位>; …X=0x…`），可交付并继续进行stage2： Prime95  `ECMSTAGE2=` 队列行、gmp-ecm `-resume`。
+
+- **两种后端**：`backend = gmp` 与 `backend = simd`（**AVX-512 IFMA + int52 radix、8 曲线/批**）。SIMD 路径具有显著性能优势
+- **性能对照（归一化单线程、每曲线秒、B1=1e6）**，实测点 + 拟合点（出处：`docs/ECM_Montgomery_STAGE1.md` §14.5）：
+
+  | N | FFT 档 | 本实现 | GMP-ECM 7.0.6 | Prime95 v31 | 本实现/GMP-ECM | 本实现/Prime95 |
+  |---|---|---|---|---|---|---|
+  | M127 | 128 | **0.118 s** | — | 3.86 s | — | **32.7×** |
+  | M521 | 128 | **0.371 s** | — | 3.86 s | — | **10.4×** |
+  | M1277 | 128 | **0.979 s** | 2.484 s | 3.86 s | 2.54× | **3.94×** |
+  | M2203 | 128 | **2.285 s** | 5.804 s | 3.86 s | 2.54× | 1.69× |
+  | M3001 | 256 | **4.137 s** | 9.586 s | **5.65 s**（实测）| 2.32× | 1.37× |
+  | M3500 | 256 | **5.164 s** | 11.656 s | 5.65 s | 2.26× | 1.09× |
+  | M4001 | 256 | **6.290 s** | 14.624 s | 5.65 s | 2.32× | 0.90× |
+  | M5755（拟合）| 384 | 12.05 s | ~21 s | 8.06 s | ~1.7× | 0.67× |
+  | M8527（拟合）| 512 | 24.9 s | ~43 s | 10.06 s | ~1.7× | 0.40× |
+
+- **位宽建议**：**建议用于小于 4096 bit 的梅森数**（该区间对 GMP-ECM 快 2.26–2.55×）；超过约 6000 bit 交给 Prime95 的 GWNUM FFT 更划算。
+- **梅森数**：`N = 2^k−1` 走折叠域（每模乘 madds 减半），同尺寸下比一般整数快 **~ 2×**。
+- **多线程**：利用SMT通常只有10%提升 建议每个物理核心只运行一个线程
+
+### 附带工具
+
+**`ecm-report`** —— PrimeNet ECM 进度统计与可视化：数据源 `www.mersenne.org/report_ecm/`
+
+![ECM progress 1-20000](tools/ecm_report/ecm_progress_1-20000_factored_overlay.png)
+
+**`ecm-prob`** —— 基于启发式模型 + 实测标定的 ECM 概率推算工具（纯 Python，研究用途）：
+
+覆盖 **10 种曲线参数化**，并实现了对应的ECM算法（4 种 Edwards 扭子 Z/4、Z/2×Z/4、Z/12、Z/2×Z/8；Montgomery param 0/1/2/3；p−1 / p+1），底层是 GMP-ECM `rho.c` 的忠实移植（Dickman-ρ + local-ρ + Brent-Suyama）
+
+支持用素数集**实测标定有效除子 D_eff**、T-level 计算 反解 `{bit, B1, Curves, prob(miss factor)}`。
+
+
+![emp_d_eff_vs_bit](docs/emp_d_eff_vs_bit.png)
+
+
+| <img src="docs/emp_success_vs_bit.png" width="420"> | <img src="docs/success_vs_B1.png" width="420"> |
+|---|---|
+| 成功率 vs 位宽（实测） | 成功率 vs B1（实测 + 预测） |
+
+
+**工作分配系统** —— 把 GPU 上的 stage 1 自动接到 CPU 的 stage 2：
+
+- **`ecm_p95feeder`（本仓库，ECM）**：向 Prime95 发送 Edwars stage-1，统计队列内stage2任务（`worktodo.txt` + `worktodo.add`，支持 `[Worker #N]` ） 确保按依次运行
+- **AutoWorktodo（配套项目，独立仓库，不在本仓库内）**：针对 **P-1** 流水线的同类自动化 —— GPU 运行 stage 1，Prime95 运行 stage 2 
+  1. **转移**：支持 GpuOwl， PrMers 产出的 `resume_p<exp>_B1_<b1>.p95` 按命名模板 `m{head36}{tail6}`（与 Prime95 的 P-1 存档名一致）复制到目标目录，并把 stage-2 行从暂存区移到 Prime95 消费的 `worktodo.add` 文件；
+  2. **自动分配**：同时为每个指数预生成改写好 `B2` 的 stage-2 行；
+  3. **可视化仪表盘**（ECharts）：三类任务量、当前任务的进度/IPS/ETA、按速度外推的 works/小时·天·周·月、完成历史柱状图（可按 B1/B2 阶段与指数区间筛选）、运行环境与因子数，支持深浅主题与中英文。
 
 
 ---
@@ -19,12 +121,13 @@
 
 | 章节 | 说明 |
 |------|------|
+| [与现有主流工具相比](#与现有主流工具相比本仓库做了什么) | 本仓库的改进点：多后端、与 Prime95/gmp-ecm 存档级互通、性能定位（含每张表的出处） |
 | [Quick Start 快速开始](#quick-start-快速开始) | 最短路径：构建 → `ecm` → 微基准 |
 | [命令行选项](#命令行选项) | 命令行选项 |
 | [CPU stage-1 教程](#cpu-stage-1-教程edwardsatkin-morain与-suyama-montgomery--ecmini-配置) | Edwards / Suyama-Montgomery 两条 CPU 路径与 `ecm.ini` 配置、线程/批数、单线程性能对照（vs GMP-ECM / Prime95）、常见坑 |
 | [从源代码构建 (Windows)](#从源代码构建) | 桌面构建、使用与 OpenCL 能力 |
 | [构建 CUDA 后端](#构建CUDA后端CGBN) | NVIDIA CGBN stage-1 构建与使用 |
-| [Android](#android) | ECM运行、微基准 |
+| [Android](#android) | ECM stage-1 分解、设备探测与微基准 |
 | [开发与文档](#开发与文档) | 数学原理、param、算子分析、工具、bench、AMD 汇编 |
 | [其他文档索引](#其他文档索引) | 正文未单独展开的子文档列表 |
 
@@ -147,7 +250,7 @@ CPU 侧有**两条独立的 stage-1 路径**，它们共享同一个 `ecm.ini`�
 算法与开发细节见 [docs/ECM_EDWARDS_STAGE1.md](docs/ECM_EDWARDS_STAGE1.md) 与
 [docs/ECM_Montgomery_STAGE1.md](docs/ECM_Montgomery_STAGE1.md)。
 
-### 1. 先选方法
+### 1. 选择方法
 
 | 方法 | 命令行 | ini | 曲线族 / 指数 | 何时用 |
 |---|---|---|---|---|
@@ -158,7 +261,7 @@ CPU 侧有**两条独立的 stage-1 路径**，它们共享同一个 `ecm.ini`�
 > 两条 CPU 路径**互斥**：命令行上 `--mont` 优先（同时给两个开关时 Edwards 被忽略）；ini 里
 > `mont = 1` 会直接关掉 Edwards，避免同一任务跑两遍。
 
-### 2. 关键 ini 键（CPU 路径）
+### 2. 配置 ini 键（CPU 路径）
 
 | ini 键 | 取值 | 默认 | 说明 |
 |---|---|---|---|
@@ -232,9 +335,7 @@ field = montgomery          # 强制 Montgomery CIOS，无论 N 是否 2^k-1
 
 ### 3.1 中途检查点：跑一半被打断，重跑同一命令即可续跑
 
-`tmp_dir` 非空时两条 CPU 路径都会在**阶梯中途**落盘。续跑不需要额外参数：**重跑同一条命令行**
-即可（检查点里钉着每条曲线的 σ，所以曲线集合不会变），跑完后检查点自动删除，`.save` 成为唯一
-持久产物。想确认续跑了，看启动/结束日志：
+续跑不需要额外参数：**重跑同一条命令行**即可（检查点保存每条曲线的 σ，所以曲线集合不会变），跑完后检查点自动删除，`.save` 成为唯一持久产物。启动日志会输出是否resume：
 
 ```
 checkpoint      : saves/m3001_1e6_c*.ckpt  [12 done, 8 mid-ladder, 964 to run]  autosave 600 s
@@ -277,60 +378,6 @@ SIMD 路径**一次算 8 条曲线**（8 lane SoA，整批共享同一个指数�
   work split      : 16 batch(es) of 8 curves -> 8 thread(s) busy (8 requested)
   ```
 - `--mont-backend gmp`（标量）时 1 曲线 = 1 任务，线程数上界就是曲线数。
-
-#### 4.1 混合核 / 大小核机器：SMT 与亲核性（本机实测，**不要绑定**）
-
-`--affinity <list>`（或 ini `affinity`）把 worker `t` 绑到 `list[t % len]`，语法支持
-`0,1,2,3`、范围 `0-7`、混合 `0-3,8,10-11`。但在 **Ryzen AI 9 HX 370**（4×Zen5 大核 + 8×Zen5c 小核，
-**两组都开 SMT**，共 24 逻辑核）上实测结论是**留空最好**：
-
-| 配置（M3001，B1=1e5，SIMD，每线程 1 批） | 吞吐倍数（vs 单核独占）|
-|---|---|
-| 大核 **2 / 4 个不同物理核** `0,2` / `1,3,5,7` | **2.00× / 3.99×**（线性）|
-| 大核 + SMT 兄弟 `0,1` | 1.11× |
-| 小核 **2 个不同物理核** `8,10` | 1.38×（簇级掉速）|
-| 小核 + SMT 兄弟 `8,9` | 1.11×（同簇同占用下 SMT 是 **+6%**，见下）|
-| 绑定全部 24 逻辑核（小核簇全满 + SMT）24 线程 | **5.85×** ❌ |
-| **不绑定** 16 线程 | **8.46×** ← 效率甜点 |
-| **不绑定** 24 线程 | **9.01×** ← 吞吐上限 |
-
-- **SMT 兄弟 = 相邻编号**：`0,1` 同核、`0,2` 不同核；小核同理（`8,9` 同核、`8,10` 不同核）。
-- **SMT 是"最后资源"**：大核 SMT 稳定 **+10~11%**；小核 SMT 在簇未满时 **+6~8%**，
-  但整簇占满（16 线程）时 **−19%**。⇒ **先填满物理核，再考虑 SMT 兄弟**。
-- **小核簇怕并发**：小核单独跑与大核同速，但只要有 ≥2 线程并发，整簇每核效率掉到 71%（2 线程）→55%（8 线程）。
-- **不绑定 ≠ 放弃优化**：调度器按"物理核优先、SMT 殿后"排布，比任何固定列表都好；
-  手工钉满 24 逻辑核反而强开小核 SMT + 压满大核，吞吐 −35%。只有需要**给别的程序留核**时才手工绑定。
-- `affinity` 的实际取值会打印在启动日志里，便于核对：
-  ```
-  affinity        : 0,1,2,3,4,5,6,7 (worker t -> cpu[0,1,2,3,4,5,6,7][t % 8])
-  ```
-
-#### 4.2 并行效率不是核数（核间不均匀 + 小核簇掉速）
-
-同机实测（M3001，B1=1e5，SIMD，每批 8 曲线，单核独占每批 ≈3.07 s）：
-**4 个不同大核 3.99×（100%）**、8 线程不绑定 **5.26×**、12 线程 **6.94×**、
-16 线程 **8.46×**、24 线程 **9.01×**。即吞吐天花板 ≈ 单核的 9 倍，而不是 24 倍。
-估算总吞吐请按 **~9×（24 线程）或 ~8.5×（16 线程）** 折算；4 线程跑大核是性价比最高的配置（100% 效率）。
-
-#### 4.3 单线程性能对照（M4001 = 2^4001−1，同为 Suyama/Montgomery 曲线，stage 1 only）
-
-| B1 | 本实现（SIMD 8 lane / 1 线程） | GMP-ECM 7.0.6（1 线程） | Prime95 v31（1 worker） |
-|---|---|---|---|
-| 1e5 | **0.60 s/曲线** | 1.79 s | 0.67 s |
-| 1e6 | **6.26 s/曲线** | 15.0 s | 6.72 s |
-| 2e6 | **13.46 s/曲线** | ~30 s | 13.44 s |
-| 1e7 | ~63–67 s（外推）| ~150 s（外推）| **67.2 s（实测）** |
-
-- **单线程：与 Prime95 持平**（B1=2e6 处 13.455 vs 13.44 s，差 0.1%）；**比 GMP-ECM 快 2.2~3.0×**。
-  Prime95 用 GWNUM FFT + PRAC 链，我们用 AVX512-IFMA + 8 lane 批 + 折叠域 + 仿射差分 ladder。
-- **多线程**：本实现不绑定可达 8.46×（16 线程）/9.01×（24 线程）；Prime95 `NumWorkers=1` 时只吃 1 个物理核。
-- **交叉点（B1=1e6，单线程，每曲线秒）**：M127 **0.118** / M521 **0.371** / M1277 **0.98** / M2203 **2.29**
-  / M3001 **4.14**（Prime95 实测 5.65）/ M3500 **5.16** / M4001 **6.29**。Prime95 按 FFT 长度分档
-  （128/256/384/512/…，档位起点 2/2905/5755/8527/…），**档内成本与位宽无关**，我们则按 ≈n^1.66 上升
-  ⇒ **两个交叉点：≈2880 bit 与 ≈3760 bit**；≤2880 bit 我们优势成倍（M127 约 33×、M1277 约 3.9×），
-  **≳6000 bit 交给 Prime95**（384 档起它领先并逐档扩大，19701 bit 处约 6×）。GMP-ECM 无交叉点（全程慢 2.3~2.6×）。
-- **实用判据**：**≲3700 bit 的 N 用本实现最划算**（2000 bit 以下优势成倍到数十倍），**≳6000 bit 用 Prime95（GWNUM FFT）**。
-- 完整条件、命令与复现见 [docs/ECM_Montgomery_STAGE1.md §14](docs/ECM_Montgomery_STAGE1.md)。
 
 ### 5. 存档与续跑
 
@@ -406,7 +453,7 @@ stage1 threads  : 8 worker(s) x 8 task(s) of 8 curves
 ### 构建
 
 ```powershell
-cd opencl-ecm
+cd ECM-ELF
 # 1. Debug build (开发调试)
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug
@@ -572,7 +619,7 @@ echo "(2^421-1)" | build_cuda_cmake\ecm_cuda.exe -v -d 0 -gpu -sigma 3:268526266
 
 ## Android
 
-完整 stage-1 **`ecm` 驱动当前为 Windows 桌面目标**；Android 侧提供 **OpenCL 可用性探测**与 **ECM 同源算子微基准**（add/sub、mont mul/sqr），用于真机选型与编译缓存验证。
+Android 侧已实现**完整的 ECM stage-1 分解**（OpenCL）：UI 与桌面 `ecm.exe -gpu -gpucurves B1 B2` 参数一一对应（N 表达式/预设、sigma、checkpoint、内核路径覆盖、worktodo 批量执行、`-save` 存档）；另有 **OpenCL 设备探测**与**同源算子微基准**（add/sub、mont mul/sqr）。运行原生分解需链接 GMP：`Android/ECM/README_ECM_FACTORIZATION.md`。
 
 ### 构建
 
@@ -580,12 +627,13 @@ echo "(2^421-1)" | build_cuda_cmake\ecm_cuda.exe -v -d 0 -gpu -sigma 3:268526266
 2. 确认 **`jniLibs/` 内无** 从手机 `adb pull` 的 `libOpenCL.so`（16 KB 页设备会因对齐崩溃）。
 3. 真机 **arm64-v8a** 构建并 Run。
 
-Gradle 会在构建前同步 OpenCL 内核到 APK assets（`syncAddsubKernels`）。总览与 16 KB 页约束：[Android/README.md](Android/README.md)。
+Gradle 会在构建前同步 OpenCL 内核到 APK assets（`syncAddsubKernels` / `syncEcmStage1Kernels`）。总览与 16 KB 页约束：[Android/README.md](Android/README.md)。
 
-### 使用：探测与微基准
+### 使用：ECM 分解、探测与微基准
 
 | 步骤 | 说明 |
 |------|------|
+| ECM stage-1 分解 | UI 对应桌面 `ecm.exe -gpu -gpucurves B1 B2`；未链接 GMP 时运行会提示构建说明 |
 | 设备探测 | 启动 App 自动枚举平台/设备；成功标志 `RESULT: PASS (OpenCL usable)` |
 | ECM add/sub | UI 四参数对应桌面 `opencl_ecm_addsub.exe` |
 | ECM mont mul/sqr | 对应桌面 `opencl_ecm_montsqr.exe`（WG、tpi=4；不含 AMD asm） |
@@ -720,9 +768,9 @@ ECM-OpenCl/
 
 ## 参考与感谢
 
-本仓库参考并感谢上游 **[ZIMMERMANN Paul / ecm · GitLab](https://gitlab.inria.fr/zimmerma/ecm)**（GMP-ECM）的算法、接口与 GPU 路线设计。
+本仓库引用 **[ZIMMERMANN Paul / ecm · GitLab](https://gitlab.inria.fr/zimmerma/ecm)**（GMP-ECM）的算法、接口与 GPU 路线设计。
 
-上游原始说明文档保存在本仓库 [`docs/`](docs/) 目录（自上游同步，便于离线查阅）：
+上游原始说明文档保存在本仓库 [`docs/`](docs/) 目录：
 
 | 文件 | 内容 |
 |------|------|
@@ -732,15 +780,3 @@ ECM-OpenCl/
 | [docs/README.dev](docs/README.dev) | 上游 autotools 开发构建 |
 | [docs/README.dev.asm](docs/README.dev.asm) | 上游架构相关汇编说明 |
 
-
-
-## 其他文档索引
-
-以下为仓库内 **未在上文单独展开** 的 Markdown / 说明文件（已排除 `.gitignore` 中的 `.refactor/`、`.github/`、`build/`、`docs/ecm/` 等）：
-
-| 路径 | 说明 |
-|------|------|
-| [README_en.md](README_en.md) | 英文项目说明 |
-| [docs/README.dev](docs/README.dev) | 上游 autotools 开发说明 |
-
-`test/` 下 Makefile 驱动的 CUDA/OpenCL 测试源文件（无独立 `.md` 索引）用于内核正确性验证；CUDA bench 头文件见 `test/bench_cgbn_*.h`。

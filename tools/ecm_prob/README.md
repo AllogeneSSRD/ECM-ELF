@@ -139,6 +139,14 @@ $$D_{\text{eff}}=\exp(\delta)\ \text{s.t.}\ \rho_{\text{local}}\!\Big(\tfrac{\lo
 
 D_eff 波动仅 ~5–8%（而 fraction 波动 ~10×），证明归一化正确、D_eff 确为曲线固有属性。
 
+**bit ≥ 31 别当真**：那几档每点命中数只剩几十个（bit40：67/65536），二项噪声 `σ_f=√(f(1-f)/n)`
+经反解放大成 D 的 ±25–30%（实测 sd/gm 9–19%），所以 `emp_d_eff_vs_bit.png` 在 31+ 的锯齿是噪声，
+不是模型失效；要压噪声得加大素数集（或提高 B1）。本工具 15–40 全段的实测比值为
+param0/param3 = 1.30×（bit15）→ 1.62×（bit30）→ 1.50–2.12×（bit31–40，噪声区）。
+
+**D 的数值含义、跨参数化可比性（局部幂律 `f ∝ D^e`）、两个口径警告、以及 B2 的影响**
+见 `docs/ECM_PARAMETERIZATION_ANALYSIS.md` **§6.5–§6.8**（本工具 `--b2-factor` 即那节用的口径）。
+
 **D_eff ≈ 21 vs GMP-ECM 22.97 的口径差异**：本工具 D_eff 是"stage-1-only、单一 bit、
 local-ρ 模型"口径，用于**跨曲线比较**；GMP-ECM 的 `3.134` 按"stage1+stage2 + 数位区间
 期望曲线数"整体标定。两者都是有效除子但基线不同；跨曲线的**相对值**（Edwards Z/12≈25.8、

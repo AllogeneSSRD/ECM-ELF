@@ -1,17 +1,111 @@
-# OpenCL-ECM
+# ECM-ELF
 
-This repository is an **OpenCL** implementation of the Elliptic Curve Method (ECM) for integer factorization. It supports **Windows, Linux, macOS & Android**, and also ports **[GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm)** (Montgomery param 3) for **Windows CUDA**.
+[中文](README.md) | English
 
-The programs are compatible with **GMP-ECM** & **Prime95** savefile formats, support checkpoints, custom operators (Montgomery mul/sqr and modular add/sub), and include assembly / ISA tuning for **AMD GPUs (GCN, RDNA)**.
+A **multi-backend stage-1 engine** for the Elliptic Curve Method (ECM): **OpenCL** (Windows / Linux / macOS / Android; param 3), **CUDA** (CGBN; param 0 Suyama and param 3 batch), and **GMP** & **AVX-512 IFMA** (Edwards / Montgomery, x86 CPU, 8 curves per thread). They share one driver / argument parser / checkpoint / save logic and swap the implementation at link time.
 
-For the Chinese documentation, see [README.md](README.md).
+The programs are compatible with **GMP-ECM** & **Prime95** savefile formats, support checkpoints and custom operators (Montgomery mul/sqr and modular add/sub), and add a queue manager (worktodo / save sync / resume) plus the Prime95 stage-2 handoff tool `ecm_p95feeder`.
+
+> **This repository was formerly named OpenCL-ECM.** The rename reflects that the main backends are now CUDA/CGBN (param 0 + param 3) and the AVX-512 batch path, with OpenCL as one of three. The **binary names (`ecm.exe` / `ecm_cuda.exe` / `ecm_p95feeder.exe`), the `.save` format and the `ecm.ini` keys are unchanged**, so existing scripts and saves keep working.
 
 
 ![Static Badge](https://img.shields.io/badge/language-C-blue)
-![GitHub License](https://img.shields.io/github/license/AllogeneSSRD/opencl-ecm)
-![GitHub commit activity](https://img.shields.io/github/commit-activity/t/AllogeneSSRD/opencl-ecm)
-![GitHub last commit](https://img.shields.io/github/last-commit/AllogeneSSRD/opencl-ecm)
+![GitHub License](https://img.shields.io/github/license/AllogeneSSRD/ECM-ELF)
+![GitHub commit activity](https://img.shields.io/github/commit-activity/t/AllogeneSSRD/ECM-ELF)
+![GitHub last commit](https://img.shields.io/github/last-commit/AllogeneSSRD/ECM-ELF)
 
+
+---
+
+## How this repo improves on the existing tools
+
+An **engineering-grade stage-1 implementation** for the GIMPS ecosystem (Prime95 / gmp-ecm / PrMers): multiple backends (OpenCL / CUDA-CGBN / AVX-512), **save-file interoperability** with the existing stage-2 tools, and ECM helper tools for Mersenne numbers.
+
+### Shared by all backends (tooling)
+
+| Capability | Notes |
+|---|---|
+| **Task queue** | One task per line in `worktodo.txt`, accepting `ECM=` / `ECM2=` (equivalent) / `ECMSTAGE2=`; completed tasks are appended to `worktodo.finished.txt` and removed from the queue, failing lines are rewritten in place as `# ERROR <original line>` |
+| **Single ini** | `ecm.ini`: GPU / CPU / curve parametrization / backend / threads / affinity / save-name template / checkpoint interval / progress-bar colour…; a template is generated when the file is missing |
+| **Mid-stage-1 checkpoints** | GPU `.ckpt`, Edwards `e{n}_c{k}.ckpt`, Montgomery `m{n}_{b1}_c{k}.ckpt`. Saved on a 600 s timer by default, and once more when interrupted with `Ctrl+C` |
+| **Saves and sync** | Syncs `.save` files into the Prime95 folder and adds the `worktodo.add` entries |
+| **Live progress** | Command-line progress bar with rate, completion and ETA |
+
+### GPU · CUDA / CGBN (`ecm_cuda.exe`)
+
+- **New versus gmp-ecm**
+  - `gpu param 0`: **Suyama sigma (Z/12)**, the same curve as gmp-ecm `-param 0`; the save can be continued by gmp-ecm *and* by Prime95 for stage 2;
+  - a **native Windows** CUDA build (Visual Studio or NMake; no Linux / WSL / msys2 toolchain), fully wired into the queue manager / checkpoints / save sync;
+  - selectable parametrization `gpu_param = 0 | 3`.
+- Supports **N ≤ 16384 bit**, **recommended for `< 12288 bit`**. It can go up to N ≤ 65536, but is then markedly slower than FFT/NTT implementations.
+
+### GPU · OpenCL (`ecm.exe`)
+
+- Cross-platform (Windows / Linux / macOS / Android) gmp-ecm (param 3) path with custom-operator support (`--mul/--sqr/--add/--sub/--special-mult`).
+- Positioning: **small operands**. A curve takes longer, but its footprint is smaller, so more curves fit in flight at the same size (measured about **4×** CGBN) - throughput comes from curve count. Recommended for **≲1024 bit**; larger sizes go to CUDA/CGBN or the CPU.
+- Normalized per-stream-processor / per-CUDA-core, same-clock throughput (CGBN = 100%, author's measurement):
+
+  | operand size | CGBN baseline (Ada Lovelace) | AMD RDNA3.5 | Qualcomm Adreno 830 |
+  |---|---|---|---|
+  | 256 | 100% | 460% | — |
+  | 384 | 100% | 200% | 57.1% |
+  | 512 | 100% | 152% | — |
+  | 1024 | 100% | 93.6% | — |
+
+  In other words, an AMD iGPU is far more efficient *per stream processor* at small sizes (turning slightly negative at 1024 bit).
+
+### CPU (Edwards / Montgomery curves × gmp / AVX-512 backends)
+
+- **Edwards (Atkin–Morain, a=1, Z/2×Z/8)**:
+  - generates Prime95-style stage-1 saves, e.g. `e0001213`;
+  - with `ecm_p95feeder` it is delivered automatically, so Prime95 runs stage 2 directly.
+- **Montgomery (Suyama sigma, Z/12)**:
+  - the same curve as gmp-ecm `-param 0` (`A = (v−u)³(3u+v)/(4u³v) − 2`);
+  - outputs a **gmp-ecm-style text save** (`METHOD=ECM; SIGMA=<64-bit>; … X=0x…`) that stage 2 can continue from: a Prime95 `ECMSTAGE2=` queue line, or gmp-ecm `-resume`.
+- **Two backends**: `backend = gmp` and `backend = simd` (**AVX-512 IFMA + int52 radix, 8 curves per batch**). The SIMD path is a large performance win.
+- **Benchmark (normalized single thread, seconds per curve, B1=1e6)**, measured plus fitted rows (source: `docs/ECM_Montgomery_STAGE1.md` §14.5):
+
+  | N | FFT tier | this repo | GMP-ECM 7.0.6 | Prime95 v31 | this/GMP-ECM | this/Prime95 |
+  |---|---|---|---|---|---|---|
+  | M127 | 128 | **0.118 s** | — | 3.86 s | — | **32.7×** |
+  | M521 | 128 | **0.371 s** | — | 3.86 s | — | **10.4×** |
+  | M1277 | 128 | **0.979 s** | 2.484 s | 3.86 s | 2.54× | **3.94×** |
+  | M2203 | 128 | **2.285 s** | 5.804 s | 3.86 s | 2.54× | 1.69× |
+  | M3001 | 256 | **4.137 s** | 9.586 s | **5.65 s** (measured) | 2.32× | 1.37× |
+  | M3500 | 256 | **5.164 s** | 11.656 s | 5.65 s | 2.26× | 1.09× |
+  | M4001 | 256 | **6.290 s** | 14.624 s | 5.65 s | 2.32× | 0.90× |
+  | M5755 (fitted) | 384 | 12.05 s | ~21 s | 8.06 s | ~1.7× | 0.67× |
+  | M8527 (fitted) | 512 | 24.9 s | ~43 s | 10.06 s | ~1.7× | 0.40× |
+
+- **Size recommendation**: **use it for Mersenne numbers below 4096 bit** (2.26–2.55× faster than GMP-ECM there); beyond roughly 6000 bit Prime95's GWNUM FFT is the better choice.
+- **Mersenne numbers**: `N = 2^k−1` uses the fold reduction (half the madds per multiply), about **2×** faster than a generic integer of the same size.
+- **Threading**: SMT usually buys only ~10%; run one thread per physical core.
+
+### Bundled tools
+
+**`ecm-report`** - PrimeNet ECM progress statistics and plots; data source: `www.mersenne.org/report_ecm/`
+
+![ECM progress 1-20000](tools/ecm_report/ecm_progress_1-20000_factored_overlay.png)
+
+**`ecm-prob`** - heuristic-plus-measured ECM probability tool (pure Python, research use):
+
+It covers **10 curve parametrizations** and implements the corresponding ECM algorithms (4 Edwards torsions Z/4, Z/2×Z/4, Z/12, Z/2×Z/8; Montgomery param 0/1/2/3; p−1 / p+1). The core is a faithful port of GMP-ECM's `rho.c` (Dickman rho + local rho + Brent-Suyama).
+
+It can **calibrate the effective divisor D_eff from prime sets**, compute t-levels and invert `{bit, B1, curves, miss probability}`.
+
+| <img src="docs/emp_success_vs_bit.png" width="420"> | <img src="docs/success_vs_B1.png" width="420"> |
+|---|---|
+| Success rate vs bit width (measured) | Success rate vs B1 (measured + predicted) |
+
+![emp_d_eff_vs_bit](docs/emp_d_eff_vs_bit.png)
+
+**Work distribution** - wiring GPU stage 1 into CPU stage 2 automatically:
+
+- **`ecm_p95feeder` (this repo, ECM)**: sends Edwards stage-1 saves to Prime95 and counts the stage-2 tasks in the queue (`worktodo.txt` + `worktodo.add`, `[Worker #N]` sections supported) so they run in order.
+- **AutoWorktodo (companion project, separate repository - not part of this repo)**: the same idea for **P-1** pipelines - GPU runs stage 1, Prime95 runs stage 2.
+  1. **Transfer**: supports GpuOwl and PrMers; renames `resume_p<exp>_B1_<b1>.p95` via the `m{head36}{tail6}` template (matching Prime95's P-1 save names) into the target directory, and moves the staged stage-2 rows into the `worktodo.add` file Prime95 consumes;
+  2. **Auto-assign**: pre-generates a stage-2 row with the rewritten `B2` for every exponent;
+  3. **Dashboard** (ECharts): task counts, current job progress / IPS / ETA, projected works per hour/day/week/month, completion history bars filterable by stage (B1/B2) and exponent range, runtime environment and factor count, with light/dark themes and zh/en switching.
 
 ---
 
@@ -19,11 +113,12 @@ For the Chinese documentation, see [README.md](README.md).
 
 | Section | Description |
 |------|------|
+| [How this repo improves on the existing tools](#how-this-repo-improves-on-the-existing-tools) | Multiple backends, save-file interoperability, Mersenne ECM helper tools |
 | [Quick Start](#quick-start) | Shortest path: build → `ecm` → microbenchmarks |
 | [Command-line options](#command-line-options) | CLI flags |
 | [Building from source (Windows)](#building-from-source) | Desktop build, usage, and OpenCL capabilities |
 | [Building the CUDA backend](#building-the-cuda-backend-cgbn) | NVIDIA CGBN stage-1 build and usage |
-| [Android](#android) | ECM runs and microbenchmarks |
+| [Android](#android) | ECM stage-1 factorization, device probe and microbenchmarks |
 | [Development and docs](#development-and-docs) | Math background, params, operator analysis, tools, benches, AMD asm |
 | [Other documentation index](#other-documentation-index) | Sub-docs not expanded in the main body |
 
@@ -199,12 +294,6 @@ and **above ~6000 bits Prime95 wins and widens its lead with every FFT step** (~
 GMP-ECM never crosses: 2.3-2.6x slower throughout. Rule of thumb: **use this implementation below
 ~3700-bit N, hand ~6000-bit and larger N to Prime95**. Details: docs/ECM_Montgomery_STAGE1.md §14.
 
-Parallel efficiency is not the core count: on the same box, 4 distinct big cores give 3.99x (linear),
-while unbound 16 / 24 threads give **8.46x / 9.01x** (vs a single core). Budget total throughput at
-~9x, not 24x. The Zen5c cluster also degrades as soon as 2+ threads run on it (per-core efficiency
-0.326 -> 0.230 -> 0.180 batches/s from 1 -> 2 -> 8 cores), which is why the OS scheduler beats any
-hand-written affinity list.
-
 Cost of forcing `field = montgomery`: Montgomery CIOS costs about `n(4n+3)` madds per modular
 multiplication against the fold domain's `2n^2` (with squarings at `n(n-1)+2n`), so prefer the fold
 whenever `N = 2^k-1`.
@@ -225,7 +314,7 @@ whenever `N = 2^k-1`.
 ### Build
 
 ```powershell
-cd opencl-ecm
+cd ECM-ELF
 # 1. Debug build (development)
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug
@@ -371,7 +460,7 @@ echo "(2^421-1)" | build_cuda_cmake\ecm_cuda.exe -v -d 0 -gpu -sigma 3:268526266
 
 ## Android
 
-The full stage-1 **`ecm` driver currently targets Windows desktop**; the Android side provides **OpenCL usability probing** and **ECM-aligned operator microbenchmarks** (add/sub, mont mul/sqr) for on-device selection and compile-cache validation.
+The Android app implements **full ECM stage-1 factorization** on device (OpenCL): its UI maps one-to-one onto the desktop `ecm.exe -gpu -gpucurves B1 B2` flags (N expression / presets, sigma, checkpoint, kernel path overrides, worktodo batch execution, `-save` output). It also ships an **OpenCL device probe** and **ECM-aligned operator microbenchmarks** (add/sub, mont mul/sqr). Running the native factorization requires linking GMP: `Android/ECM/README_ECM_FACTORIZATION.md`.
 
 ### Build
 
@@ -379,12 +468,13 @@ The full stage-1 **`ecm` driver currently targets Windows desktop**; the Android
 2. Ensure **`jniLibs/` does not contain** a phone-pulled `libOpenCL.so` (`adb pull`) — 16 KB page devices will crash on alignment.
 3. Build and Run on a real **arm64-v8a** device.
 
-Gradle syncs OpenCL kernels into APK assets before build (`syncAddsubKernels`). Overview and 16 KB page constraints: [Android/README.md](Android/README.md).
+Gradle syncs OpenCL kernels into APK assets before build (`syncAddsubKernels` / `syncEcmStage1Kernels`). Overview and 16 KB page constraints: [Android/README.md](Android/README.md).
 
-### Usage: probe and microbenchmarks
+### Usage: ECM factorization, probe and microbenchmarks
 
 | Step | Description |
 |------|------|
+| ECM stage-1 factorization | Maps to desktop `ecm.exe -gpu -gpucurves B1 B2`; without GMP linked the run points to the build instructions |
 | Device probe | On launch the app enumerates platforms/devices; success marker: `RESULT: PASS (OpenCL usable)` |
 | ECM add/sub | UI’s four parameters map to desktop `opencl_ecm_addsub.exe` |
 | ECM mont mul/sqr | Maps to desktop `opencl_ecm_montsqr.exe` (WG, tpi=4; no AMD asm) |

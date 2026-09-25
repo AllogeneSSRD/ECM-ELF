@@ -30,7 +30,8 @@ CURRENT_TIME_RE = re.compile(
     r"Current time:\s*(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}\s+UTC"
 )
 USER_AGENT = (
-    "MPA-OpenCl-ecm_report/1.0 (+local mirror of PrimeNet ECM progress)"
+    # 项目 2026-09-24 由 OpenCL-ECM 改名为 ECM-ELF（多后端：OpenCL/CUDA/AVX-512）
+    "ECM-ELF-ecm_report/1.0 (+local mirror of PrimeNet ECM progress)"
 )
 
 
