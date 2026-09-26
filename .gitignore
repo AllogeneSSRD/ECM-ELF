@@ -12,6 +12,9 @@ test/bench
 
 # build
 build/
+# tools/build holds parallel_nvcc.ps1 (the parallel CUDA compile driver), so the bare
+# "build/" rule above must not swallow that directory.
+!/tools/build/
 build_rel/
 build_cuda/*
 !build_cuda/*.bat
@@ -86,7 +89,12 @@ tools/gen/__pycache__/
 /tools/test/_m3_simd
 /tools/test/_m3f_gmp
 /tools/test/_m3f_simd
-/tools/test
+# tools/test holds the acceptance/regression scripts this project actually relies on
+# (test_cuda_param0.ps1 18 checks, test_cuda_param2.ps1 7 checks, test_cli_args.ps1, ...).
+# The blanket "/tools/test" rule kept them out of version control entirely, so they are
+# re-included here and only the "_"-prefixed scratch directories stay ignored.
+!/tools/test/
+/tools/test/_*
 /.bench_tmp
 /test_edwards-1
 /tools/stat/_run
@@ -94,3 +102,4 @@ tools/gen/__pycache__/
 /build_t16
 /build_jom
 /build_ninja
+/build_nm16

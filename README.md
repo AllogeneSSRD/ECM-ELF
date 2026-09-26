@@ -599,6 +599,41 @@ cmake --build build_cuda_cmake --target ecm_cuda
 
 前两个是正式的两步构建流程；后两个仅用于排错 / 环境验证，不产出 `ecm_cuda.exe`。
 
+### 并行编译（强烈推荐）
+
+**本仓库的 CUDA kernel 按位宽实例化，全量串行编译在开发机上要约 36 分钟**（`cmake --build` 用的是
+NMake Makefiles 生成器，本身是串行的）。因此提供 `tools/build/parallel_nvcc.ps1`：它从
+`compile_commands.json` 取出每个 `.cu` 的**原始 nvcc 命令行**并发启动，再调一次 `cmake --build`
+只做 host TU 与链接。
+
+```powershell
+# 全量并行编译 + 链接（构建目录需已配置过；缺 compile_commands.json 时加 -Reconfigure）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
+
+# 只重编某个 kernel 家族（改了一个 TU 时最省时间）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake -Only suyama
+
+# 常用参数：-Jobs N（默认 min(6, CPU)）、-Only <正则>、-SkipUpToDate、-NoBuild（只编不链接）
+```
+
+实测（8→12 个 CUDA TU 全部从零重编，`-Jobs 6`，RTX 4060 Laptop 开发机）：
+
+| 阶段 | 串行时间之和 | 并行墙钟 | 加速比 |
+|---|---|---|---|
+| 单个大 TU 未拆（8 TU） | 2166 s（36.1 min） | 745 s（12.4 min） | 2.91× |
+| **按 TPI 拆分后（12 TU）** | 2377 s（39.6 min） | **395 s（6.6 min）** | **6.01×** |
+
+要点（都实测过，详见 `docs/ECM_CGBN_OPTIMIZATION.md` §8.8）：
+
+* **并行的上限 = 最慢的单个 TU，不是 CPU 也不是 job 数**。实测 `-Jobs 12` 与 `-Jobs 6` 的墙钟**相同**
+  （394.6 s vs 395.4 s，24 逻辑核平均只有约 6 核在忙）。脚本会打印 `critical path = ...`：
+  如果它一直是同一个文件，就该**按档位/TPI 拆分该 TU**（`suyama`/`param2` 家族已按 TPI=16/32
+  拆成独立 TU；再按位宽把 `*_tpi16.cu` 拆成两半可望到约 200 s）。
+* **只改了一个 kernel 时不要全量编**：`-Only <正则>` 只编匹配的 TU，`-DECM_TIERS=4608` 这类
+  受限档位构建能把单个 TU 从十几分钟压到几秒（见下表 CMake 选项）。
+* ⚠ **改公共头文件（`kernels/cuda/cgbn_stage1_kernel.h`）会让所有 kernel TU 失效** —— 它被 7 个
+  TU include，这是 CMake 正常的头依赖跟踪，不是 bug。
+
 ### CMake 选项
 
 | 选项 | 默认 | 说明 |
@@ -607,6 +642,12 @@ cmake --build build_cuda_cmake --target ecm_cuda
 | `-DCMAKE_CUDA_COMPILER` | 从`Path` `环境变量` 读取 | 修改为 `nvcc.exe` 路径 "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/bin/nvcc.exe" |
 | `-DECM_CUDA_ARCHITECTURES` | `80` | CUDA 计算能力（`89`=RTX 40 系；按 GPU 调整，如 `86`=RTX 30 系） |
 | `-DECM_CUDA_FULL_BUILD` | `OFF` | `ON` 时编译 CGBN 全尺寸 kernel；默认 dev build 仅支持 **N ≤ 1024 bit**，编译更快 |
+| `-DECM_TIERS` | 空（全档位） | **快速迭代**：逗号分隔的档位列表，只编译这些实例化（例 `-DECM_TIERS=4608`，把 tpi16 TU 从十几分钟压到几秒）。档位按 N 的位长向上取档，且 N 必须落在该档内 |
+| `-DECM_NO_PARAM2` | `0` | `1` = **不编译 param2 家族**（它是每个档位的第二份拷贝，单独一个 TU 就要 11 分钟）；此时 `--gpu-param 2` 会明确报错而不是回退 |
+| `-DECM_REG_TARGET_FORCE` | `0` | 覆盖每档位的寄存器预算 `__maxnreg__`（0 = 用表：≤2048 ⇒ 56，2560–5120 ⇒ 128，≥5632 ⇒ 不限制；255 = 全部不限制），用于 A/B |
+| `-DECM_TPB` | `128` | kernel 每块线程数（`TPI=16` 时 128 = 8 实例/块） |
+| `-DECM_MAX_ROTATION` | `1` | CGBN 乘法里的 limb 旋转上限（实测对 4 limb/线程档位几乎无影响） |
+| `-DECM_MAXRREG_SMALL` / `-DECM_MAXRREG_SUYAMA` | `0` | 应急用的**按文件** `--maxrregcount`（会被同文件里的大档位误伤，一般不要用，见下条） |
 | `-DCMAKE_BUILD_TYPE` | `DEBUG` | `Release` |
 | `-DCMAKE_CUDA_FLAGS` | / | 传递给 `nvcc` 的参数`="--verbose --ptxas-options=-v"` |
 

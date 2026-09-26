@@ -140,9 +140,15 @@ fast_propagate_add(c, r);
 
 * `tools/stat/ecm_hitrate.ps1 -Engine mont,gpu -GpuParam 0 -Count 16 -Curves 8`：
   CPU 与 GPU **逐曲线命中集一致**（两边都是 37/128，且所有命中因子都等于 p）。
-* 全量构建后跑 `tools/test/test_cuda_param0.ps1`（18 项：CPU↔GPU 逐曲线一致、64 位 σ、gmp-ecm 互通、
+* 全量构建后跑 `tools/test/test_cuda_param0.ps1`（CPU↔GPU 逐曲线一致、64 位 σ、gmp-ecm 互通、
   硬杀+恢复 4096/4096、param3 回归）：**2026-09-25 在删掉冗余 `normalize_addition` 的全量二进制上
   18/18 全 PASS（ALL OK）**。
+* **第 7 轮（`__maxnreg__` per-tier 寄存器表 + CLI 冲突检查）在全量二进制上的复测**：
+  `test_cuda_param0` **ALL OK（19 PASS / 0 FAIL —— 脚本后来又加过一项，所以是 19 不是 18）**、
+  `test_cuda_param2`（M1279）**ALL OK（7 checks）**、
+  新增 `tools/test/test_cli_args.ps1` **ALL OK（9 checks）**、
+  `ecm_hitrate.ps1 -Engine mont,gpu -GpuParam 0`：CPU `mont/simd` 与 `gpu-param0`
+  **完全一致（两边都是 37/128 = 28.9062%，素数 16/16）** ✓。
 
 ---
 
@@ -321,6 +327,8 @@ w = 2/3/4 的上界 1.70×/1.85×/1.94× **不可达**，真实链在算子数�
 1 → 78.52 M。**差异 ≤0.4%，实际无影响**（CGBN 里这个参数对 4-limb/线程的档位几乎不起作用）。
 
 **④ 寄存器上限（`-DECM_MAXRREG` → `nvcc --maxrregcount`，TPB=128/ROT=1，8192 曲线）**
+（⚠ 第 7 轮起机制已换成 **per-tier `__maxnreg__`**，见 §5.7；下表是当时用"按文件"的
+`--maxrregcount` 量到的，数值仍有效，但结论只对 ≤2048 bit 档位成立）
 
 | 上限 | curve-bits/s | 相对 256/4/无上限（78.32 M） |
 |---|---|---|
@@ -502,6 +510,128 @@ param2 形状，跑在 param0 数据路径上，结果错、只计时）。
 
 ---
 
+## 5.7 寄存器预算：把上限编码进位宽实例化（`__maxnreg__`，第 7 轮）
+
+**问题（用户提出）**：用 `__launch_bounds__` 或 `__maxnreg__(N)`，**在不同位宽的实例化里把寄存器数量编码进去**；
+并指出 `--maxrregcount=N` 只能作用于**单个文件**。
+**结论：建议成立，已落地**（原来的 `__launch_bounds__(TPB, MIN_BLOCKS)` 已删除）；而且"按文件"的限制
+在本仓库是**真的错**，不只是不够灵活。
+
+**① 为什么按文件的上限是错的（实测踩到）**：`-DECM_MAXRREG_SUYAMA=64` 是 §5.6 为 **≤2048 bit** 档位
+实测出来的 +0.9%，但它作为 `nvcc --maxrregcount` 会套到 `cgbn_stage1_kernels_suyama.cu` 里
+**所有 ≥2560 bit 档位**上（2560…8192），而那些档位从没实测过、且更重 ⇒ 这就是"按文件"的硬伤。
+`__maxnreg__` 是**单个 kernel 的属性**，写法上可以取模板常量，于是"每个位宽一个预算"天然成立 ✓。
+
+**② 机制与三个必须知道的细节**
+
+| 事项 | 结论 |
+|---|---|
+| 可用性 | CUDA 13.3 `crt/host_defines.h` **无条件**定义 `__maxnreg__`（`__attribute__((maxnreg(a)))` / `__declspec(maxnreg(n))`），sm_89 实测可用 ✓ |
+| 粒度 | 参数可以是模板常量：`__global__ void __maxnreg__(params::REG_TARGET) kernel_double_add(...)`，`params` 就是该实例化的 `cgbn_params_t<TPI, BITS>` ⇒ **随位宽变化** ✓ |
+| 取值 | **`N` 必须 ≥1**：`__maxnreg__(0)` 直接编译失败（`The maximum number of registers that can be allocated per thread must be positive`，§6.20）⇒ 要表达"不限制"只能写 **255**（sm_89 每线程上限）|
+
+落地形式（`kernels/cuda/cgbn_stage1_kernel.h`）：
+
+```cpp
+static const uint32_t REG_TARGET = (ECM_REG_TARGET_FORCE > 0) ? ECM_REG_TARGET_FORCE
+                                   : ((bits <= 2048u) ? 56u : 255u);
+__global__ void __maxnreg__(params::REG_TARGET) kernel_double_add(...)          // param3
+__global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(...)   // param0 / param2
+```
+
+`-DECM_REG_TARGET_FORCE=N` 覆盖整张表（0 = 用表；A/B 用）；`-DECM_MAXRREG_SMALL` /
+`-DECM_MAXRREG_SUYAMA` **默认都改成 0**（原来 56 / 64）⇒ 全仓库只剩**一个**寄存器机制，不会互相打架。
+
+**③ 实测寄存器（tier 4608、TPB=128、`ptxas -v`，受限档构建）**
+
+| kernel（实例化） | 按表（≥2560 ⇒ 255） | `FORCE=128` | 块/SM（65536/(128·regs)）|
+|---|---|---|---|
+| `kernel_double_add<16,4608>`（param3） | **122**，0 spill | 116，0 spill | 4 → 4 |
+| `kernel_double_add_suyama<16,4608,false>`（param0） | **129**，0 spill | **128**，48 B spill stores / 40 B loads | **3 → 4** ✓ |
+| `kernel_double_add_suyama<16,4608,true>`（param2） | **122**，0 spill | 125，0 spill | 4 → 3 |
+| 小档位（128 bit，TPB=128，按表 56） | 44（上限没起作用） | — | — |
+
+**④ A/B 吞吐（本机 4060 Laptop、24 SM、TPB=128、TPI=16、N=M4423 素数、B1=1e5、
+两个 exe 交替测量取中位数；A/B 期间机器空闲）**
+
+| 曲线数 | A 波数（容量 576） | B 波数（容量 768） | A：按表 129 寄存器 ⇒ 3 块/SM | B：`FORCE=128` ⇒ 4 块/SM | B/A |
+|---|---|---|---|---|---|
+| 576 | 1.00 | 0.75 | 2.38 M | **2.42 M** | **+1.7%** |
+| 768 | 1.33 | 1.00 | 2.51 M | **2.59 M** | **+3.2%** |
+| 1152 | 2.00 | 1.50 | 2.53 M | **2.60 M** | **+2.8%** |
+| 1920 | 3.33 | 2.50 | 2.57 M | **2.63 M** | **+2.2%** |
+
+（每次 2–3 次重复的运行间离散 ≤0.2% —— 例如 576 曲线的 B 三次是 34381/34364/34365 ms。）
+
+**④b 直接测用户的生产档位 tier 5120**（5000 位素数 N 落在 5120 档、同卡、TPB=128、param0）：
+
+| 曲线数 | A 波数（576） | B 波数（768） | A：141 寄存器 ⇒ 3 块/SM | B：128 寄存器 + 144 B spill ⇒ 4 块/SM | B/A |
+|---|---|---|---|---|---|
+| 576 | 1.00 | 0.75 | 1.99 M | 1.99 M | ±0%（A 正好整波，没有尾巴可省）|
+| 768 | 1.33 | 1.00 | 2.06 M | **2.11 M** | **+2.5%** ✓ |
+| 1920 | 3.33 | 2.50 | 2.11 M | **2.14 M** | **+1.4%** ✓ |
+
+⇒ 两个档位结论一致：**128 寄存器（4 块/SM）在有"半空尾波"的批量上稳定赢 1.4–3.2%**，
+只有在 A 恰好整波时打平（576 = A 的 1.00 波）。
+**正确性**：两种分配跑同一条曲线，存档里的 stage-1 X **逐字节相同**（X 头 40 位 hex 一致、长度 1250）✓。
+
+**④c 全档位寄存器/溢出实测（suyama=param0 家族、TPB=128、`ptxas -v`）**
+
+| tier | 2560 | 3072 | 3584 | 4096 | **4608** | **5120** | 5632 | 6144 | 6656 | 7168 | 7680 | 8192 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 不限制寄存器 | 86 | 98 | 109 | 117 | **129** | **141** | 163 | 174 | 178 | 186 | 203 | 211 |
+| 块/SM | 5 | 5 | 4 | 4 | **3** | **3** | 3 | 2 | 2 | 2 | 2 | 2 |
+| `FORCE=128` 后 | 86 | 96 | 110 | 124 | 128 | 128 | 128 | 128 | 128 | 128 | 128 | 128 |
+| spill stores | 0 | 0 | 0 | 0 | **48 B** | **144 B** | 560 B | 1028 B | 1512 B | 1896 B | 2472 B | 3356 B |
+| ⇒ 块/SM | 5 | 5 | 4 | 4 | **4** | **4** | 4 | 4 | 4 | 4 | 4 | 4 |
+
+（TPI=32 档位同理：9216→129、10240→139、11264→154、12288→166 寄存器，`FORCE=128` 的 spill 从
+16 B 涨到 12288 的 1000 B；≤2048 档位在 56 上限下：512 位 508 B、1024 位 556 B、2048 位 3164 B。）
+
+⇒ **据此定表（已落地）**：`bits ≤ 2048 → 56`；`2560 ≤ bits ≤ 5120 → 128`（2560–4096 那里根本不 binding，
+4608/5120 那里有实测收益）；`bits ≥ 5632 → 255`（溢出代价陡增、无实测，不猜）。
+
+**④d 纯占用率对照（用户 4070 Ti（60 SM）@1800MHz 实测，B1=260e6、CGBN<16,5120>、param0；每个配置跑 19–31 小时
+到稳定后取 s/curve —— s/curve 就是吞吐的倒数，可用）**
+
+| 构建 | 寄存器 | 块/SM | 曲线数 | 块数 | s/curve | 说明 |
+|---|---|---|---|---|---|---|
+| 9/24 20:16 | 140 | 1 | 960 | 60（256 thr/块）| 76.75 | 删 `normalize_addition` **之前** |
+| 9/25 16:28 | 141 | 2 | 960 | 120 | **72.88** | 最好 |
+| 9/25 16:28 | 141 | 3 | 1440 | 180 | 77.39 | 反常点，见下 |
+| 9/25 16:28 | 141 | 4 | 1920 | 240 | 74.75 | **1.33 波**（容量 60×3=180）✗ |
+| 9/25 21:51（本轮）| 128 | 2 | 960 | 120 | **72.90** | 最好 |
+| 9/25 21:51（本轮）| 128 | 4 | 1920 | 240 | 73.41 | **正好 1 波**（容量 60×4=240）✓ |
+
+这张表把"占用率"和"波尾"彻底分开了，也**修正了本节 ④ 的归因**：
+
+* **纯占用率**（同样无尾巴、只改驻留块数）＝ 128 寄存器那两行 120 vs 240 块：
+  **72.90 → 73.41，即多一倍驻留 warp 反而慢 0.7%** ⇒ **占用率中性偏负** ✓ 与本轮 ncu
+  （Compute SOL ~83%、DRAM 0.5%，issue-bound）一致，也**印证了用户的判断"继续深挖寄存器没有价值"** ✓。
+  ④ 表里那 +1.7…+3.2% 里**主要成分是"消掉半空尾波"**，不是"块更多"：证据就是 576 曲线那行
+  （A 恰好 1 整波、B 0.75 波）两边打平 ✓。
+* **波尾**：同样是 240 块（1920 曲线），141 寄存器（容量 180 ⇒ **1.33 波**）74.75 vs
+  128 寄存器（容量 240 ⇒ **1 整波**）73.41 ⇒ **+1.8% 就是尾巴的钱** ✓ 这也是本轮寄存器表的真实价值：
+  **让 1920 曲线这批正好压成一整波**，不是让你去追占用率。
+* 用户的 77.39（1440 曲线、180 块、正好 1 波）**与两条规律都不符**（既无尾巴、warp 数居中），
+  是单次 19–31 小时长跑里最可疑的一行；**结论是"需要同窗口交替重测"**，不能据此说"3 块/SM 最差"。
+* 76.75 → 72.88 那 5.3% 与 §4 实测的"删 `normalize_addition` +5.4%/+6.7%"**吻合** ✓
+  （但那一行同时换了块大小 256→128 线程，严格说是两个变量的混合）。
+
+⇒ **修正后的结论（本节 ④/⑤ 的总口径）**：**占用率不是杠杆，波对齐才是**；寄存器上限的作用是
+"把批量的波数对齐到整数"，值 1–2%，**不要指望靠它或靠继续压寄存器拿吞吐**。
+要继续拿吞吐只能去**指令数**那边（§8.9：IMAD 44.9% / IADD3 18.6% / MOV 15.8%）。
+
+**⑤ 对用户生产形状（4070 Ti、60 SM、TPB=128、TPI=16、5120 bit param0）的含义**：容量从
+`60×3×8 = 1440` 变成 `60×4×8 = 1920` 曲线 ✓ —— 他们一直用的 **1920 曲线**在旧分配下是
+**1.33 波**（ncu 的 `Waves Per SM = 1.33`、占用率只有 20.16% 而不是理论 25%，缺口全在尾巴），
+在 128 寄存器下正好是 **1 整波** ✓。本机 4060 的 768 曲线正是同一个"1.33 波 vs 1.00 波"形状，
+实测就是上表的 **+2.5%**（tier 5120）/ **+3.2%**（tier 4608）✓。
+
+⚠ 仍未做：**5632 及以上**档位该不该压到 128（那里 spill 560 B…3356 B，需要单独 A/B）。
+
+---
+
 ## 6. 本次顺带记录的工程陷阱（都真实踩过）
 
 1. **`.cu` 文件里不要写非 ASCII 注释**：文件是 UTF-8 无 BOM，nvcc 按 ANSI(GBK) 读，行尾的中文全角字符
@@ -560,6 +690,50 @@ param2 形状，跑在 param0 数据路径上，结果错、只计时）。
     `s_num_bits`/事件创建/检查点校验等 ~164 行，报的却是"某个 #define undefined"这类**误导性**错误。
     纪律：脚本改完立刻 `git diff --numstat` 看增删行数是否符合预期（本轮就是靠
     "181 deletions"异常才发现），并优先用 `git show HEAD:<file>` 精确还原区间。
+17. **"完美 0.0% 差异"是报警信号：先比对两个二进制的哈希（第 7 轮，差点把假数据写进文档）**。
+    我用 `-DECM_REG_TARGET_FORCE=128` 做寄存器 A/B，两轮构建的两个 exe **哈希完全相同**
+    （`E9A1DD7A6000BEBD`）⇒ 差异当然是 0.0%。真因：**这个变量当时根本没接到 `flags.make` 上**
+    （CMakeLists 里只在一句注释里提到过它）⇒ `cmake -D<无人使用的 cache 变量>` 是**静默空操作** ✗。
+    已修（现在会打印 `ecm_cuda: forcing __maxnreg__(128) on every kernel tier`），修后两个 exe
+    哈希不同、ptxas 寄存器数也不同 ✓。纪律：**改编译宏的 A/B，第一步先确认产物真的变了**
+    （哈希或 `-Xptxas -v` 的寄存器行），再看吞吐。
+18. **把 exe 拷出构建目录会静默失效（第 7 轮）**：变体 exe 需要与 `gmp-10.dll` 同目录，
+    拷到 `.bench_tmp\obj\` 之后运行**什么都不打印**（没有报错、没有 gputime），看起来像"脚本坏了"。
+    做法：变体留在构建目录里（`build_nm16\ecm_u.exe` / `build_nm16\ecm_c128.exe`），
+    `cuda_kernel_ab.ps1 -Exe <构建目录里的名字>` 直接用。
+19. **含中文的 `.ps1` 没有 BOM + `powershell -File` ⇒ 参数被静默吞掉（第 7 轮，作废了一次 A/B）**：
+    `tools/bench/cuda_kernel_ab.ps1` 在 HEAD（`0715172`）里**没有 BOM**（PS 5.1 按 GBK 读，
+    中文注释把行尾吃掉 ⇒ `param()` 块被破坏）⇒ `-NExpr 2^4423-1` **静默失效**，脚本回落到默认
+    `N = 2^Bits-1` = `2^4608-1`（限制档构建里根本没有这个档位）⇒ 拿到 `gputime=0`。
+    可复现指纹：`-Bits 4608` 跑完后 `.bench_tmp\kernel_ab\n_4608.txt` 是 **11 字节 `(2^4608-1)`**
+    （正常应为 9 字节 `2^4423-1`）—— **凡是用 `-NExpr` 的计时，先看这个文件的字节数**。
+    已用 `tools/diag/fix_bom.py` 修复；审计：`tools/**/*.ps1` 里含非 ASCII 的 4 个脚本现在都有 BOM ✓。
+    （顺带说明为什么它有时"看起来"能用：同一个文件在 PS7 会话里被 dot-source 时按 UTF-8 解码，
+    参数就正常 —— **调用方式不同、解码不同**，所以这类 bug 会时隐时现。）
+20. **`__maxnreg__(0)` 不能用来表达"不限制"**：nvcc 直接报
+    `error: The maximum number of registers that can be allocated per thread must be positive`。
+    sm_89 的每线程上限是 **255**，所以要显式放开就写 255（见 §5.7）。
+21. **PowerShell 变量名大小写不敏感：`$jobs` 就是 `[int]$Jobs`（第 7 轮）**。新的并行编译脚本里
+    参数是 `[int]$Jobs`，我随后写 `$jobs = @()` 装任务列表 ⇒ 直接抛
+    `Cannot convert the "System.Object[]" value of type "System.Object[]" to type "System.Int32"`，
+    脚本 0.5 s 就"成功"退出、什么都没编 ✗。改名 `$tuList` 解决。教训：**给脚本参数起名时，别用
+    会在正文里当普通名字复用的词**（PowerShell 不区分大小写，`$jobs`/`$Jobs`/`$JOBS` 同一个变量）。
+22. **`Start-Process -PassThru` 的 `.ExitCode` 可能是 `$null`，而 `$null -ne 0` 在 PowerShell 里是 `$true`（第 7 轮）**：
+    于是**8 个 TU 全部编译成功、产物齐全，却被全部报告成 `FAIL (exit )`** ✗（第一次看到"8/8 FAIL"但
+    exe 明明生成了就是这个原因）。修法：`WaitForExit()` 后仍为 `$null` 时，退回"**obj 是否比启动时刻新**"
+    这一判据（这才是真正关心的属性）。教训：脚本里的"成功/失败"判定不要依赖单一可疑 API，
+    尤其是**用 `$null` 参与比较**时 —— PowerShell 不会替你报错。
+23. **`-sigma i:s` 的前缀是"参数声明"，不能丢（第 7 轮，用户指出）**：原本的
+    `parse_sigma64_arg()` 只取冒号**后面**的数字，把 `i` 直接扔了 ⇒
+    ① `-sigma 3:12345678` 与 `--gpu-param 0` 同时给会被**静默接受**（gmp-ecm 会报
+    `Error, conflict between -sigma and -param arguments`）✗；
+    ② 单独给 `-sigma 0:12345678` 也**不会**选 param0（会跑默认的 param3）✗ —— 这比 ① 更危险，
+    因为用户以为自己指定了参数化。现在按 gmp-ecm 的语义实现：`i` 是参数声明，冲突即报错并返回 1，
+    单独给则**采用** `i`；`i` 不在 {0,2,3} 里则报"不支持的参数化"。
+    回归测试：`tools/test/test_cli_args.ps1`（8 项）。**顺带修掉工具里的错误写法**：
+    `tools/bench/cuda_kernel_ab.ps1` 原来固定写 `-sigma 3:...` 却同时传 `--gpu-param 0/2`，
+    `tools/test/test_cuda_param2.ps1` 也写的是 `--gpu-param 2 -sigma 3:...` ✗ ⇒ 都改成前缀与
+    参数一致（`-sigma $GpuParam:12345678` / `-sigma 2:$Sigma`）。
 
 ---
 
@@ -586,9 +760,11 @@ foreach ($k in 1,2,3,4,5,6,1000000) {
 }
 cmake -S . -B build_cuda_dev -DECM_PROBE_ADD_DENSITY=1   # 还原
 
-# 3) 正确性（§4.4）
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\stat\ecm_hitrate.ps1 -Engine mont,gpu -GpuParam 0 -Bits 20 -Count 16 -Curves 8 -Backend simd -CudaExe build_cuda_dev\ecm_cuda.exe -Device 1
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_cuda_param0.ps1
+# 3) 正确性（§4.4）：CPU↔GPU 命中集一致 + 三套回归
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\stat\ecm_hitrate.ps1 -Engine mont,gpu -GpuParam 0 -Bits 20 -Count 16 -Curves 8 -Backend simd -CudaExe build_cuda_cmake\ecm_cuda.exe -Device 1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_cuda_param0.ps1 -CudaExe build_cuda_cmake\ecm_cuda.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_cuda_param2.ps1 -CudaExe build_cuda_cmake\ecm_cuda.exe -Bits 1279
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_cli_args.ps1    -CudaExe build_cuda_cmake\ecm_cuda.exe   # -sigma i:s vs --gpu-param（§6.23）
 
 # 4) 链算子探针（§5.2/§5.4）：M=1..5 与"只倍点"基线 M=1e6
 $p = (Get-Content .bench_tmp\cuda_p511_prime.txt -Raw).Trim()
@@ -617,8 +793,30 @@ cmd /c "build_vs18\tools\param2_gen_cost.exe 3000 3 < .bench_tmp\paramgen\n1021.
 
 # 7) 占用率杠杆（§5.5）：TPB / ROT / 寄存器上限；还原成生产默认
 cmake -S . -B build_cuda_dev -DECM_TPB=128 -DECM_MAX_ROTATION=1 -DECM_MAXRREG=0 `
-      -DECM_MAXRREG_SMALL=56 -DECM_MAXRREG_SUYAMA=64
+      -DECM_MAXRREG_SMALL=0 -DECM_MAXRREG_SUYAMA=0
 cmake --build build_cuda_dev --config Release --target ecm_cuda
+
+# 8) 并行编译 kernel TU（§8.8）：把 6 个 TU 的 nvcc 并发跑，再让 nmake 只做 host+链接
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_nm16 -Only tpi16
+
+# 9) 寄存器预算 A/B（§5.7）：受限档构建 + 两个变体 exe 留在构建目录里（gmp-10.dll 必须同目录！）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_nm16 -Reconfigure
+#   A = 按表（tier 4608 的 suyama 是 129 寄存器 ⇒ 3 块/SM）
+Copy-Item build_nm16\ecm_cuda.exe build_nm16\ecm_u.exe -Force
+#   B = 全档位强制 128（⇒ 4 块/SM，代价 48 B spill）
+cmake -S . -B build_nm16 -DECM_REG_TARGET_FORCE=128
+Get-ChildItem build_nm16\CMakeFiles\ecm_cuda.dir\kernels\cuda\*.obj | Remove-Item -Force   # 必须删 obj，见 §6.17
+cmake --build build_nm16
+Copy-Item build_nm16\ecm_cuda.exe build_nm16\ecm_c128.exe -Force
+cmake -S . -B build_nm16 -DECM_REG_TARGET_FORCE=0                                          # 还原
+foreach ($c in 576,768,1152,1920) {
+  foreach ($v in 'ecm_u.exe','ecm_c128.exe') {
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools\bench\cuda_kernel_ab.ps1 -Label $v `
+      -Exe "build_nm16\$v" -Bits 4608 -NExpr '2^4423-1' -Curves $c -B1 1e5 -Device 1 -GpuParam 0 -Repeats 3
+  }
+}
+# 注意 -NExpr 一定要带引号；无引号的写法在 PS 5.1 下会被算成表达式（§6.19 同族坑）
 ```
 
 ---
@@ -626,23 +824,24 @@ cmake --build build_cuda_dev --config Release --target ecm_cuda
 ## 8. 下一步与取舍
 
 1. **已完成**：删冗余 `normalize_addition`（§4），收益 +5.4%/+6.7%，全档位无需额外成本，
-   全量构建的 `tools/test/test_cuda_param0.ps1` **18/18 全过**。
+   全量构建的 `tools/test/test_cuda_param0.ps1` **全过**（当时 18 项，现在是 19 项，见 §4.4）。
 2. **已关闭：add-chain / w-NAF**（§5.4）。x-only 下窗口法不合法 + 加法次数下界 1.44/bit > 门槛 1.26/bit
    + PRAC 实测算子数慢 8–16%。**不再投入**（只保留两套探针作为以后复用的计时工具）。
-3. **已落地（2026-09-25）：占用率与每批曲线数** —— 全部证据见 **§5.5**。
+3. **已落地（2026-09-25）：占用率与每批曲线数** —— 全部证据见 **§5.5**，第 7 轮的机制更新见 **§5.7**。
    * 默认值改为 `ECM_TPB=128` + `ECM_MAX_ROTATION=1`（原 256/4）；
-   * 对 **≤2048 bit 的 kernel 源文件**（`cgbn_stage1_kernels_tpi4.cu` / `tpi8.cu`）加
-     `--maxrregcount=56`（新开关 `-DECM_MAXRREG_SMALL`，设 0 可关）；param0 的
-     `cgbn_stage1_kernels_suyama.cu` 按实测设 **64**（`-DECM_MAXRREG_SUYAMA`）。**≥2560 bit 档位
-     保持编译器默认**，因为那里的寄存器分配没有实测，56/64 的上限可能溢出。
+   * ~~对 ≤2048 bit 的 kernel 源文件加 `--maxrregcount=56`、对 suyama 源文件加 64~~ ——
+     **已被 §5.7 取代**：现在统一用 kernel 属性 `__maxnreg__(cgbn_params_t::REG_TARGET)`
+     （`bits<=2048 ⇒ 56`，`≥2560 ⇒ 255` / 可被 `-DECM_REG_TARGET_FORCE` 覆盖）；
+     `-DECM_MAXRREG_SMALL` 与 `-DECM_MAXRREG_SUYAMA` **默认都是 0**（关），只作为应急的钝器保留，
+     因为"按文件"的上限会误伤同文件里未实测的大档位（§5.7 ①）。
    * 启动时会打印**占用率告警**：block 数填不满设备时提示"把 `-gpucurves` 提到约 N"
      （`kernels/cuda/cgbn_stage1.cu`）。
    * ⚠ **已有 build 目录的 CMake cache 会保留旧值**（`ECM_TPB=256` 等），要生效需显式传
      `-DECM_TPB=128 -DECM_MAX_ROTATION=1`，或删掉 cache 重新 configure。
    * **已排除**：`-DECM_STEP_VARIANT=2`（融合步改写为显式 prep 寄存器）实测 **+0.02%**（wash），
      保留在代码里作为证据，默认仍是 variant 1。
-   * **仍未做**：把 `tpi16/tpi32`（≥2560 bit）的寄存器上限也实测一遍；在 ≥2560 bit 档位上复测 TPB
-     （那里 block 数自然变少，最优 TPB 可能不同）。
+   * **部分完成（第 7 轮）**：≥2560 bit 的寄存器表已在测（`__maxnreg__` 后 tier 4608/TPB=128 有
+     A/B 实测，见 §5.7）；TPB 在 ≥2560 bit 档位上的复测仍未做。
 4. **暂缓：专用平方**（§3）。上限 12–14%（α_min=0.75，需要跨 lane 交换部分和），而在 CGBN 现有
    分布式布局里只对称化对角线块只值 **~1–3%**（TPI=4/8 时 50%/TPI 的乘积部），要动
    `core_mont_wmad.cu` —— 相对上面已经拿到的 ~10% 不值得。**除非**以后要重写 CGBN 的乘法核。
@@ -652,10 +851,11 @@ cmake --build build_cuda_dev --config Release --target ecm_cuda
    **待查（开放项）**：真实路径只拿到形状探针上界（+10.7%）的一半多 —— 探针跑 suyama 家族 +
    强制 `const_diff`，真实路径跑 param2 家族，~5 个百分点差异原因未定；
    另：per-source-file 的 `--maxrregcount` 会作用于该文件**所有**档位（含未实测的 ≥2560 bit），
-   ≥2560 bit 的占用率需要单独复测。
+   ≥2560 bit 的占用率需要单独复测 —— **第 7 轮已修**：改用 per-kernel 的 `__maxnreg__`，两个
+   `ECM_MAXRREG_*` 开关默认归零（§5.7）。
    **产品决策**仍在：param2 存档 Prime95 不能吃、gmp-ecm 能吃。
-6. **仍未做（小项）**：在 ≥2560 bit 档位（`tpi16`/`tpi32`）复测 TPB 与寄存器上限 —— 那里 block 数
-   自然变少，最优 TPB 可能与 512/1021 bit 不同；本轮所有占用率结论都来自 ≤2048 bit 档位。
+6. **进行中（第 7 轮）**：在 ≥2560 bit 档位（`tpi16`/`tpi32`）复测寄存器预算与 TPB —— tier 4608 +
+   TPB=128 已实测（§5.7，+2–3%）；其余档位的寄存器/spill 表在测，TPB 复测仍未做。
 7. **大位宽的另一条路**：CUDA 建议 <12288 bit，更大交给 FFT/NTT 实现 —— 若要推大位宽，
    Karatsuba（把乘积部从 n² 降到 n^1.585，乘与平方一起受益）比"只优化平方"覆盖面更大，但工作量也更大。
 8. **编译时间：把 GPU 内核编译并行化（2026-09-25 第 6 轮，进行中）**
@@ -667,12 +867,75 @@ cmake --build build_cuda_dev --config Release --target ecm_cuda
      | Ninja（vcpkg 自带 1.13.2） | configure **卡死**在 "Detecting C compiler ABI info" ✗（10 min 无进展）|
      | MSBuild（VS 生成器，`build_vs18`，`-- /m:24`） | CUDA 13.3 target **取消构建**（MSB5021 终止 cmd），未产出 obj ✗ |
      | jom 1.1.7（并行 NMake） | configure 失败："parallel job execution disabled for Makefile" + `try_compile` 失败 ✗ |
-   * **已落地的替代方案**：`-DECM_TIERS=4096,8192`（`CMakeLists.txt` + 六个 kernel TU 里的
-     `#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_<bits>)` 包裹）⇒ 只编译需要的档位。
-     实测：**tpi16 这个 TU 从 ~3 min 掉到 7.3 s（≈25×）** ✓；不传 `-DECM_TIERS` 时行为与以前完全一致
-     （已验证：dev 全量重建 + `test_cuda_param2` 7/7 + param0/param3 吞吐抽查 ✓）。
-     注意：**受限的全量构建仍需 ~7 min**（瓶颈转到 host TU + 链接），而且第 6 轮那次受限链接
-     **失败了**（原因未查：很可能是 host 代码引用了被裁掉的档位符号），**下一轮先修这个**。
+   * **并行方案全部失败，根因已定位（第 7 轮）**：三条路线失败的**共同点**是它们都用
+     `cmd`/子进程包装 nvcc，而**本环境会终止这类被包装的子进程** ——
+     MSBuild 的 CUDA 13.3.targets 直接报 `MSB5021: 正在终止"cmd"及其子进程，以便取消生成` ✓，
+     Ninja 在 configure 阶段卡死、jom 的 `try_compile` 失败也符合同一模式 ✓；
+     而**直接调用 nvcc 的路径（NMake、以及我用 `cmd /c <bat>` 逐个编译）都正常** ✓✓。
+     ⇒ **可用的并行化做法**（第 7 轮已实现：`tools/build/parallel_nvcc.ps1`）：写一个"并行编译脚本"——把 6 个 kernel TU 的 nvcc
+     命令行**从 PowerShell 直接并发启动**，再调 `cmake --build` 只做链接 ✓。
+
+      ```powershell
+      # 并行编译 kernel TU 并链接（构建目录需已配置过；缺 compile_commands.json 时加 -Reconfigure）
+      powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
+      # 只重编某一个 kernel 家族（改完一个 TU 时最省时间）
+      powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_nm16 -Only tpi16
+      ```
+
+      每个 TU 的日志写在 `<BuildDir>\par_nvcc\`；脚本打印每个 TU 的墙钟时间、串行时间之和与加速比，
+      然后才调 `cmake --build`（此时只剩 host TU 与链接）。两个前提：① 必须有
+      `compile_commands.json`（脚本会按需 configure 并加 `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`）；
+      ② 脚本**默认总是重编所有被选中的 TU**（不做依赖分析 —— 这正是它可靠的代价），
+      省时间要靠 `-Only <正则>`；`-SkipUpToDate` 用时间戳跳过最新的 TU，但改过 CMake 选项时**不要**用。
+
+      **实测（第 7 轮，全部从零重编，本机 = 24 SM 4060 Laptop 的笔记本、**24 逻辑核**）**：
+
+      | 配置 | TU 数 | 串行时间之和 | 并行墙钟 | 加速比 |
+      |---|---|---|---|---|
+      | `-DECM_NO_PARAM2=1`（param2 编成空桩） | 8 | 1305 s（21.8 min）| **636 s（10.6 min）** | 2.05× |
+      | 全量、两个大 TU 未拆 | 8 | **2166.6 s（36.1 min）** | **745.1 s（12.4 min）** | 2.91× |
+      | **全量、按 TPI 拆分后（本轮）** | **12** | **2376.6 s（39.6 min）** | **395.4 s（6.6 min）** | **6.01×** ✓ |
+      | 全量 + host TU + 链接（拆分后） | 12 | — | 499.1 s（8.3 min）| 串行约 42 min |
+
+      拆分后的单 TU 墙钟：`suyama_tpi16` **395 s**（关键路径）、`param2_tpi16` 368 s、`tpi16` 333 s、
+      `suyama_tpi32` 329 s、`param2_tpi32` 311 s、`tpi32` 269 s、`suyama` 119 s、`param2` 114 s、
+      `tpi8` 76 s、`tpi4` 36 s、`cgbn_stage1` 14 s、`ecm_cuda_backend` 12 s。
+      Σ/6 = 396 s ≈ 395 s 墙钟 ⇒ **`-Jobs 6` 的墙钟正好等于最慢 TU**。再往上加 job **没有用**：
+
+      | `-Jobs` | 墙钟 | 最慢 TU | 说明 |
+      |---|---|---|---|
+      | 6 | 395.4 s | `suyama_tpi16` 395.4 s | 12 个 TU 分两批跑 |
+      | 12 | **394.6 s** | `suyama_tpi16` 394.6 s | 12 个并发、每个 TU 用时几乎不变（≤3%）|
+
+      ⇒ 本机 24 逻辑核，实测**平均只有约 6 个核在忙**（大 TU 跑满全程、小 TU 早早结束），
+      所以**瓶颈不是 CPU 也不是 job 数，而是"最慢的单个 TU 的串行编译时间"**。
+      唯一的下一步就是**继续拆最长的 TU**（按位宽拆，见下）。
+
+      **下一步怎么拆（成本分析）**：`*_tpi16.cu` 里 12 个档位的编译成本大致 ∝ 位宽²
+      （每线程 limb 数 × 展开后的 wmad 数量），所以 **8192 一个档位就占整个文件约 17%**。
+      按位宽把 `*_tpi16.cu` 拆成 `2560..6656` / `7168..8192` 两个文件（成本约 46%/46%，剩下的
+      小档位是 8%），每个文件 ≈ 182 s；`*_tpi32.cu`（9216…16384）同理在 `13312` 处拆成 48%/52%，
+      每个 ≈ 165 s ⇒ **墙钟可望从 395 s 降到约 200 s**（全量 CUDA 构建 ~3.5 min，对串行 40 min 是 ~12×）。
+      代价：每个 TPI 家族从 1 个文件变成 2 个，且**顶级 dispatch 要串起来**
+      （`cgbn_stage1_kernel_<fam>_tpi16_lo` / `_hi`，`cgbn_stage1.cu` 里两个 dispatcher 各加一次跳转）。
+
+      ⇒ 四个必须记住的结论：
+     ① **并行的上限由最慢的单个 TU 决定**：`cgbn_stage1_kernels_suyama_tpi16.cu` 一个文件就编了 **395 s**
+      （2560…8192 共 12 个档位）。脚本会打印 `critical path = ...`；**"拆 TU"是这里唯一有效的下一步**
+      （本轮把 `suyama`/`param2` 按 TPI 拆成 3 个文件，墙钟从 745 s → 395 s ✓）。
+     ② **param2 是第二份全档位拷贝**：它自己的 TU 要 **711 s**（拆分后 368+311+114 s），关掉它能把串行时间
+      从 2377 s 砍到 1305 s（**−45%**）。于是新增 `-DECM_NO_PARAM2=1`：param2 的四个查找函数编成返回
+      `nullptr` 的空桩，只做 param0/param3 实验时用它；此时 `--gpu-param 2` 会**明确报错**
+      （"param2 kernels are NOT compiled into this binary"）而不是回退到别的参数化 ✓。
+     ③ **和"串行 20 min"的老印象相比，现在全量串行是 40 min** —— 因为档位（TPI=16/32 的 512 间隔）
+      和 param2 家族都是后来加的。**并行是现在唯一实用的全量构建方式** ✓。
+     ④ **观察到 4–6 个 nvcc 工具链同时跑、每个进程内部 `cicc` 与 `ptxas` 交替、`ptxas` 占大头**，
+      这是**正常现象**：CGBN 的模乘被完全展开，PTX 优化与寄存器分配（ptxas）本来就是这里的主要成本；
+      编译**大档位**（≥5120 bit）时 ptxas 的时间占比还会更高。
+   * **另有两处必须记下的坑**：① VS 生成器目录里 `--target ecm_cuda` 会**什么都没编就"成功"**
+     （93.6 s / 0 个 TU / 无 exe）✗，别把它当成构建成功；② 增量 VS 目录里出现过
+     `LNK1181: 无法打开输入文件 ecm_cuda.dir\Release\cgbn_stage1.obj`（host TU 没被编）✗ ——
+     两者都只在 VS 目录出现，**受限/全量都用 NMake 目录**最稳。
 9. **SASS/PTX 统计（第 6 轮新增工具 `tools/bench/sass_stats.ps1`）**：`cuobjdump -sass` 导出后按
    函数切分并统计 opcode 直方图与 spill 交通。样例（param3 家族，TPI=16、8192 bit、当前未加寄存器上限）：
 
@@ -690,3 +953,76 @@ cmake --build build_cuda_dev --config Release --target ecm_cuda
     param0 只有 63.5 M、param3 69.5 M**，而 **8192 曲线（256 块）时是 71 / 82 M** ⇒
     真正的推荐值是 **`SM × 驻留块数/SM × (TPB/TPI)`**（= `kernels/cuda/cgbn_stage1.cu` 启动时
     打印的那个建议值，例：TPB=128/TPI=8 时 3456），以及它的整数倍；`SM × (TPB/TPI)` 只是下界。
+
+    ⚠ **第 7 轮修正（重要）**：上面这条是**小档位（≤2048 bit、算子少、延迟敏感）**的结论。
+    在**大档位（TPI=16、5120 bit、B1 很大）**上它**不成立**：用户 60-SM 的 4070 Ti 在 B1=260e6 下
+    实测 **960 曲线（2 块/SM）72.90 s/curve 最优，240 块（4 块/SM）73.41**（详见 §5.7 ④d），
+    即"填满块槽位"**不再带来吞吐**，多驻留的 warp 甚至略亏（issue-bound）。因此启动时的
+    占用率提示已经改成：**只有 `块数 < SM 数`（有 SM 完全没活干）才按 `OUTPUT_NORMAL` 警告**；
+    "只填了 N% 的块槽位"降级为 `OUTPUT_VERBOSE` 的**提示**，并且明确说"这不是吞吐缺口，
+    真正有用的是让批量成为整波（避免半空的最后一波）"。**不要再按"填满 SM"去挑大档位的曲线数。**
+11. **大档位（TPI=16/32）的占用率由寄存器决定，且必须用 per-kernel 属性（`__maxnreg__`）而不是全局
+    `--maxrregcount`（2026-09-25 第 6–7 轮，ncu 实测驱动；机制评估见 §5.7）**。用户对 4070 Ti（60 SM）生产运行的 ncu 剖析：
+    kernel `CGBN<16, 5120>`、block 256（16 实例/块）、grid **60 = 1 块/SM**、
+    **寄存器 140/线程** ⇒ `65536/(256×140) = 1.8` ⇒ **被寄存器限制在 1 块/SM = 8 warps = 16.67% 占用率**，
+    而 Compute SOL 已达 **80%**、Memory 22%、DRAM 0.6%（纯 compute/issue-bound）；
+    1920 曲线那次因此是**串行两波**（13.09 → 26.18 ms，线性 ✓），而不是两块同时在驻。
+
+    本机复测（suyama 家族，TPI=16/5120 bit，TPB=256，ptxas -v）：
+
+    | 寄存器上限 | 寄存器 | spill stores | 块/SM | warps/SM |
+    |---|---|---|---|---|
+    | 无（编译器自选） | **141** | 0 | **1** | 8 |
+    | **128** | 128 | **144 B**（轻微）| **2** | **16** |
+    | 96 | 96 | 1412 B（严重）✗ | 2 | 16 |
+
+    ⇒ **128 是 2 块/SM 的最省做法**（只花 144 B spill）；96 换不到更多块、纯粹多花钱 ✗。
+    ⇒ 机制上先改用 **tier 感知的 `__launch_bounds__(params::TPB, params::MIN_BLOCKS)`**（`cgbn_params_t`），
+    **第 7 轮又换成更合适的 `__maxnreg__(params::REG_TARGET)`**（`__launch_bounds__` 已删除，
+    完整评估见 **§5.7**）：
+    `bits<=2048` ⇒ 56 寄存器，`bits>=2560` ⇒ 255（不限制）/ 可用 `-DECM_REG_TARGET_FORCE` 覆盖。
+    **踩过的坑**（`__launch_bounds__` 时代）：一开始写成固定的"4 块"，ptxas 把 56 寄存器放宽到 63、
+    param3 掉 4%（78.84 vs 82.01 M）✗ —— 占用率目标必须用*寄存器预算*表达，不能用块数硬编码；
+    而且 `MIN_BLOCKS` 的形式**天生和 TPB 耦合**（`bits>=2560 ⇒ 2 块` 在 TPB=128 时等价于"允许 256
+    寄存器"= 空约束 ✗），这正是换掉它的原因 ✓。
+
+    加寄存器预算之后 5120 档（param0、4060、TPB=256、2 块/SM）实测：
+    **384 曲线 20.89 s / 768 曲线 41.71 s / 1536 曲线 83.25 s，三者都是 2.65–2.66 M curve-bits/s**
+    —— 即 **2 块/SM 之后按波数线性扩展** ✓（对比早期 1 块/SM 的 2.25 / 1.93 / 2.16 M 那种非单调）。
+    ⚠ 当时那组对照**不是同一次 A/B**（`-DECM_MIN_BLOCKS_FORCE=1` 那次的 VS 目录增量构建遇到
+    `LNK1181`，host TU 没被编 ✗，见 §6.18 同族问题）；**第 7 轮用可验证的 `__maxnreg__` 重做了**：
+    tier 4608/TPB=128 上 3 块/SM → 4 块/SM 稳定 **+1.7…+3.2%** ✓（§5.7 ④ 的表）。
+
+    **TPB=128 的 ncu（用户第二次剖析，1920 曲线 / 5120 bit）**：grid 240、block **128**、
+    寄存器 **141** ⇒ `Block Limit Registers = 3` ⇒ 理论 **12 warps/SM = 25%**，
+    但**实测只有 9.68 warps（20.16%）**，而 `Waves Per SM = 1.33`（240 块 vs 容量 60×3=180）✅
+    ⇒ **这 20% 的占用率缺口完全来自"最后一波只有 1 块/SM"的尾巴** ✓；Compute SOL 反而升到 **83.17%**
+    （TPB=256 时是 80.23% ✓ 与 §5.5 的 TPB 结论一致），DRAM 0.5%。
+
+    **由此修掉我自己规则里的一个 TPB 依赖 bug**：`MIN_BLOCKS` 原来写成"`bits>=2560` ⇒ 2 块"，
+    只有 TPB=256 时等价于"≤128 寄存器" ✗；TPB=128 时它给出 2 块（= 允许 256 寄存器）⇒ 毫无约束 ✗。
+    现在**两个档位都改成寄存器预算**：`65536 / (TPB × (bits<=2048 ? 56 : 128))`
+    ⇒ TPB=128 时小/大档位分别是 **9 / 4**，TPB=256 时是 **4 / 2** ✓✓（大档位实测 128 寄存器 ✓）。
+
+    **波尾敏感性扫描（TPI=16、tier 4608、N=M4423 素数、TPB=128、4060 的 24 SM、
+    容量 = 24×4×8 = 768 曲线/波）**：
+
+    | 曲线数 | 波数 | curve-bits/s |
+    |---|---|---|
+    | 384 | 0.5 | 3.14 M |
+    | 576 | **0.75** | **2.95 M** ✗（唯一明显掉点）|
+    | 768 | 1.0 | 3.10 M |
+    | 1152 | 1.5 | 3.10 M |
+    | 1536 | 2.0 | 3.10 M |
+    | 1920 | 2.5 | 3.11 M |
+    | 3072 | 4.0 | 3.10 M |
+
+    ⇒ **升到 4 块/SM（16 warps）之后，波尾基本不再影响吞吐**（≥1 波时平坦在 3.10 M ✓，
+    只有 0.75 波那种半空波掉 5% ✗）—— 也就是说：**用户那个 20% 的占用率缺口本质上是
+    "3 块/SM + 1.33 波"的组合，把寄存器压到 ≤128（⇒ 4 块/SM）就能把它消掉** ✓。
+    对 4070 Ti（60 SM、TPB=128、TPI=16）：容量从 60×3×8=**1440** 变成 60×4×8=**1920** ✓
+    —— **正好是用户一直在用的 1920 曲线**：在新分配下它从"1.33 波"变成**整整 1 波** ✓。
+
+    **`-DECM_TIERS` 的一个坑**：tier 是按 N 的位长向上取档的，`N = 2^5120−1`（5120 位）
+    并不落在 5120 档 ⇒ 受限构建会报 "No available CGBN Kernel large enough" ✗。
+    做受限实验要挑一个**落在该档内、且是素数**的 N（例：M4423 落在 4608 档 ✓）。

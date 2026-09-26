@@ -463,6 +463,44 @@ The `.bat` scripts under `build_cuda/` each `call vcvars64.bat` first, so you do
 
 The first two are the formal two-step build; the last two are for troubleshooting / environment checks and do not produce `ecm_cuda.exe`.
 
+### Parallel build (strongly recommended)
+
+**The CUDA kernels are instantiated per bit width, and a full serial build takes ~36 minutes**
+(`cmake --build` uses the NMake Makefiles generator, which is serial). Use
+`tools/build/parallel_nvcc.ps1`: it reads the **exact nvcc command lines** for every `.cu` out of
+`compile_commands.json`, launches them concurrently, then calls `cmake --build` once so nmake only
+builds the host TUs and links.
+
+```powershell
+# full parallel build + link (build dir must be configured; add -Reconfigure if needed)
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
+
+# rebuild only one kernel family (fastest when you touched a single TU)
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake -Only suyama
+
+# other options: -Jobs N (default min(6, CPU)), -Only <regex>, -SkipUpToDate, -NoBuild
+```
+
+Measured (all CUDA TUs from scratch, `-Jobs 6`, RTX 4060 Laptop dev machine):
+
+| Stage | Serial sum | Parallel wall | Speedup |
+|---|---|---|---|
+| Two huge TUs not split (8 TUs) | 2166 s (36.1 min) | 745 s (12.4 min) | 2.91× |
+| **After splitting by TPI (12 TUs)** | 2377 s (39.6 min) | **395 s (6.6 min)** | **6.01×** |
+
+Essentials (all measured; see `docs/ECM_CGBN_OPTIMIZATION.md` §8.8):
+
+* **The wall time is bounded by the slowest single TU — not by the CPU or the job count.**
+  Measured: `-Jobs 12` and `-Jobs 6` give the SAME wall (394.6 s vs 395.4 s; on 24 logical cores only
+  ~6 were busy on average). The script prints `critical path = ...`; when it stays the same file,
+  **split that TU** by tier/TPI (the `suyama` / `param2` families were split into per-TPI TUs; a further
+  bit-range split of `*_tpi16.cu` should reach ~200 s).
+* **Do not rebuild everything when you touched one kernel**: `-Only <regex>` compiles just the
+  matching TUs, and restricted-tier builds (`-DECM_TIERS=4608`) cut a single TU from minutes to
+  seconds (see the CMake options below).
+* ⚠ **Editing the shared header (`kernels/cuda/cgbn_stage1_kernel.h`) invalidates every kernel TU** —
+  7 TUs include it. That is normal CMake header-dependency tracking, not a bug.
+
 ### CMake options
 
 | Option | Default | Description |
@@ -471,6 +509,12 @@ The first two are the formal two-step build; the last two are for troubleshootin
 | `-DCMAKE_CUDA_COMPILER` | From `Path` | Path to `nvcc.exe`, e.g. `"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/bin/nvcc.exe"` |
 | `-DECM_CUDA_ARCHITECTURES` | `80` | CUDA compute capability (`89` = RTX 40-series; adjust for your GPU, e.g. `86` = RTX 30-series) |
 | `-DECM_CUDA_FULL_BUILD` | `OFF` | `ON` compiles the full CGBN kernel set; default **dev build** supports **N ≤ 1024 bit** and compiles faster |
+| `-DECM_TIERS` | empty (all) | **Fast iteration**: comma-separated tier list, compiles only those instantiations (e.g. `-DECM_TIERS=4608`, which cuts the tpi16 TU from minutes to seconds). Tiers are chosen by N's bit length and N must fall inside the tier |
+| `-DECM_NO_PARAM2` | `0` | `1` = **do not compile the param2 family** (a second copy of every tier; its own TU costs ~11 minutes). `--gpu-param 2` then fails with a clear error instead of falling back |
+| `-DECM_REG_TARGET_FORCE` | `0` | Override the per-tier `__maxnreg__` register budget (0 = use the table: ≤2048 ⇒ 56, 2560–5120 ⇒ 128, ≥5632 ⇒ uncapped; 255 = uncapped everywhere) for A/B runs |
+| `-DECM_TPB` | `128` | Threads per block (`TPI=16`: 128 = 8 instances per block) |
+| `-DECM_MAX_ROTATION` | `1` | CGBN limb rotation bound (measured to make almost no difference at 4 limbs/thread) |
+| `-DECM_MAXRREG_SMALL` / `-DECM_MAXRREG_SUYAMA` | `0` | Emergency per-FILE `--maxrregcount` (it also hits that file's large tiers; prefer the per-tier `__maxnreg__` above) |
 | `-DCMAKE_BUILD_TYPE` | `DEBUG` | Use `Release` for deployment |
 | `-DCMAKE_CUDA_FLAGS` | / | Extra `nvcc` flags, e.g. `"--verbose --ptxas-options=-v"` |
 

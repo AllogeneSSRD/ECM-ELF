@@ -583,6 +583,15 @@ if(ECM_ENABLE_CUDA)
         # Suyama family, instantiated with CONST_DIFF = true (no xdiff multiply).  Separate
         # TU on purpose -- a runtime flag cost 34% (docs/ECM_CGBN_OPTIMIZATION.md §5.6).
         kernels/cuda/cgbn_stage1_kernels_param2.cu
+        # The TPI=16 (2560..8192) and TPI=32 (9216..16384) lookups of the two families above,
+        # each in its own TU.  They dominate the kernel compile time: with everything in one
+        # file the suyama TU alone took 745 s and param2 711 s, which made them the critical
+        # path of the parallel build even with 6 concurrent nvcc jobs.  Split 2026-09-25 --
+        # see docs/ECM_CGBN_OPTIMIZATION.md 8.8.
+        kernels/cuda/cgbn_stage1_kernels_suyama_tpi16.cu
+        kernels/cuda/cgbn_stage1_kernels_suyama_tpi32.cu
+        kernels/cuda/cgbn_stage1_kernels_param2_tpi16.cu
+        kernels/cuda/cgbn_stage1_kernels_param2_tpi32.cu
     )
 
     target_include_directories(ecm_cuda PRIVATE
@@ -643,7 +652,10 @@ if(ECM_ENABLE_CUDA)
     # +4.7% at M511 and M761 (48 overflows and gives it back).  The >=2560-bit instantiations
     # live in other sources and keep the compiler default, because their allocation is
     # unmeasured and a 56-register cap there could spill badly.  Set to 0 to disable.
-    set(ECM_MAXRREG_SMALL "56" CACHE STRING "maxrregcount for the <=2048-bit kernel sources (0 = off)")
+    # DEFAULT 0: the per-tier __maxnreg__(cgbn_params_t::REG_TARGET) in the kernel header now
+    # encodes the register budget per bit width, which is strictly better than a per-file
+    # --maxrregcount.  Set this to a number only to override it as a blunt instrument.
+    set(ECM_MAXRREG_SMALL "0" CACHE STRING "maxrregcount for the <=2048-bit kernel sources (0 = off)")
     if(NOT ECM_MAXRREG_SMALL STREQUAL "0")
         set_source_files_properties(
             ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_tpi4.cu
@@ -662,11 +674,18 @@ if(ECM_ENABLE_CUDA)
     # NOTE: a per-source-file cap applies to EVERY tier in that file, including the
     # >=2560-bit instantiations whose allocation is unmeasured -- flagged in
     # docs/ECM_CGBN_OPTIMIZATION.md §8.
-    set(ECM_MAXRREG_SUYAMA "64" CACHE STRING "maxrregcount for the param0/Suyama + param2 kernel sources (0 = off)")
+    # DEFAULT 0: a per-FILE cap also hits that file's >=2560-bit instantiations, which the
+    # measurement above shows should stay unconstrained (they want ~141 registers).  The
+    # <=2048-bit tiers inside these files are handled by the tier-aware MIN_BLOCKS instead.
+    set(ECM_MAXRREG_SUYAMA "0" CACHE STRING "maxrregcount for the param0/Suyama + param2 kernel sources (0 = off)")
     if(NOT ECM_MAXRREG_SUYAMA STREQUAL "0")
         set_source_files_properties(
             ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_suyama.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_suyama_tpi16.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_suyama_tpi32.cu
             ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_param2.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_param2_tpi16.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_param2_tpi32.cu
             PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SUYAMA}")
     endif()
 
@@ -686,9 +705,30 @@ if(ECM_ENABLE_CUDA)
         message(STATUS "ecm_cuda: kernel tiers restricted to ${tier_list}")
     endif()
 
+    # A/B override for the per-tier register budget.  0 = use the table in
+    # cgbn_stage1_kernel.h (56 regs for <=2048-bit tiers, uncapped above); any other
+    # value forces one __maxnreg__ target on EVERY tier (255 = explicitly uncapped).
+    # NOTE: this is a *kernel* attribute, not a per-file --maxrregcount, which is why
+    # it can be set per bit width; see docs/ECM_CGBN_OPTIMIZATION.md 5.7.
+    set(ECM_REG_TARGET_FORCE "0" CACHE STRING "force one __maxnreg__ register target for all tiers (0 = per-tier table)")
+    if(NOT ECM_REG_TARGET_FORCE STREQUAL "0")
+        target_compile_definitions(ecm_cuda PRIVATE ECM_REG_TARGET_FORCE=${ECM_REG_TARGET_FORCE})
+        message(STATUS "ecm_cuda: forcing __maxnreg__(${ECM_REG_TARGET_FORCE}) on every kernel tier")
+    endif()
+
     # A/B the two orderings of the fused ladder step (same arithmetic; see the header).
     set(ECM_STEP_VARIANT "1" CACHE STRING "1 = double_add_v2 (historical), 2 = explicit-prep variant")
     target_compile_definitions(ecm_cuda PRIVATE ECM_STEP_VARIANT=${ECM_STEP_VARIANT})
+
+    # param2 is a SECOND FULL COPY of every tier (2560..16384 included), i.e. a large slice of
+    # the kernel compile time, and it is still opt-in at runtime (--gpu-param 2).  Set this to 1
+    # to skip those instantiations entirely while working on the param0/param3 paths;
+    # --gpu-param 2 then fails with an explicit "not compiled into this binary" error.
+    set(ECM_NO_PARAM2 "0" CACHE STRING "1 = do not compile the param2 kernel instantiations")
+    target_compile_definitions(ecm_cuda PRIVATE ECM_NO_PARAM2=${ECM_NO_PARAM2})
+    if(ECM_NO_PARAM2)
+        message(STATUS "ecm_cuda: param2 kernel instantiations DISABLED (-DECM_NO_PARAM2=1)")
+    endif()
 
     # PROBE ONLY: price the param2-shaped kernel (5M+4S) on the param0 data path.  Wrong
     # results, timing only -- see docs/ECM_CGBN_OPTIMIZATION.md §5.6.

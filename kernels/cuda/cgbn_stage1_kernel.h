@@ -117,6 +117,22 @@
 #define ECM_MAX_ROTATION 1
 #endif
 
+// A/B switch for the register target (0 = use the per-tier value encoded in
+// cgbn_params_t::REG_TARGET).  Set it to e.g. 255 to reproduce the "let ptxas decide"
+// allocation the ncu profile of the 4070 Ti run showed (140-141 registers).
+#ifndef ECM_REG_TARGET_FORCE
+#define ECM_REG_TARGET_FORCE 0
+#endif
+
+// Compile-time switch for the param2 kernel family (cgbn_stage1_kernels_param2.cu).
+// `-DECM_NO_PARAM2=1` compiles NO param2 instantiation at all: the family is a second
+// full copy of every tier, so skipping it cuts the kernel compile time noticeably while
+// working on the param0/param3 paths.  `--gpu-param 2` then fails with an explicit error
+// instead of silently falling back to another parametrization.
+#ifndef ECM_NO_PARAM2
+#define ECM_NO_PARAM2 0
+#endif
+
 const uint32_t TPB_DEFAULT = ECM_TPB;
 
 template<uint32_t tpi, uint32_t bits>
@@ -133,6 +149,49 @@ class cgbn_params_t {
   // parameters used locally in the application
   static const uint32_t TPI=tpi;                   // threads per instance
   static const uint32_t BITS=bits;                 // instance size
+
+  /* Per-tier register target, ENCODED INTO THE INSTANTIATION.
+     __maxnreg__(N) constrains ONE kernel, so unlike --maxrregcount (which is per source
+     FILE) the register budget can differ per bit width -- which matters because the
+     suyama/param2 files contain every tier.  N must be >= 1 for every instantiation, so
+     "do not cap" is spelled 255 (= the sm_89 per-thread maximum, i.e. no constraint).
+
+     The table below is measured, not guessed (docs/ECM_CGBN_OPTIMIZATION.md 5.7).
+     ptxas -v register counts for the suyama (param0) family, TPB=128:
+
+       bits :  2560  3072  3584  4096  4608  5120  5632  6144  7168  8192
+       regs :    86    98   109   117   129   141   163   174   186   211   (uncapped)
+       blk/SM:   5     5     4     4     3     3     3     2     2     2
+
+       <=2048 bits : 56.  M511/M761 sweep: 56 registers beat the compiler's 72 by +4.7%;
+                      48 spilled and lost it again (the full-build check at M1021 gave +2.8%).
+       2560..5120  : 128.  For 2560-4096 the natural allocation is already 86-124 registers,
+                      so this cap does NOT bind (same code, still 4-5 blocks/SM, no spill).
+                      For 4608/5120 it binds: 129/141 -> 128 registers moves 3 -> 4 blocks/SM
+                      for 48/144 B of spill stores, and it MEASURABLY wins:
+                        tier 4608 (M4423, 4060, TPB=128): 576 curves +1.7%, 768 +3.2%,
+                                                         1152 +2.8%, 1920 +2.2%
+                        tier 5120 (5000-bit prime, same GPU): 768 curves +2.5%, 1920 +1.4%
+                      (768 curves on the 24-SM 4060 is the same "1.0 vs 1.33 waves" shape as
+                      the 1920-curve batch on the 60-SM 4070 Ti, i.e. the production shape.)
+                      WHAT the win actually is: removing a PARTIAL LAST WAVE, not the extra
+                      resident warps.  At an equal wave shape the two allocations tie (576
+                      curves = 1.0 wave for the 3-block allocation), and the 60-SM 4070 Ti
+                      runs at B1=260e6 (2026-09-25, user data) measure 120 blocks = 2
+                      blocks/SM = 8 warps/SM at 72.90 s/curve vs 240 blocks = 4 blocks/SM =
+                      16 warps at 73.41 s/curve -- i.e. occupancy is neutral-to-negative
+                      because the kernel is issue bound (ncu: Compute SOL ~83%, DRAM ~0.5%).
+                      Use the cap to keep a batch wave-aligned; do not expect occupancy to pay.
+                      Correctness: both allocations produce the identical stage-1 X.
+       5632+ bits  : 255 (uncapped).  Here the cap is expensive -- 560 B of spill stores at
+                      5632, 1028 B at 6144, 3356 B at 8192 -- and no measurement says the
+                      extra blocks pay for it, so this stays an explicitly open item.
+     NOTE: this table describes registers, which is TPB independent, so changing ECM_TPB
+     does not invalidate it (the resulting blocks/SM does change: N blocks/SM needs
+     TPB*regs*N <= 65536). */
+  static const uint32_t REG_TARGET =
+      (ECM_REG_TARGET_FORCE > 0) ? ECM_REG_TARGET_FORCE
+                                 : ((bits <= 2048u) ? 56u : ((bits <= 5120u) ? 128u : 255u));
 };
 
 
@@ -576,7 +635,7 @@ class curve_t {
  * Double-and-add, index decreasing algorithm.
  */
 template<class params>
-__global__ void kernel_double_add(
+__global__ void __maxnreg__(params::REG_TARGET) kernel_double_add(
         cgbn_error_report_t *report,
         uint64_t s_bits,
         uint64_t s_bits_start,
@@ -712,7 +771,7 @@ __global__ void kernel_double_add(
  * See docs/ECM_CGBN_OPTIMIZATION.md §5.6.
  */
 template<class params, bool CONST_DIFF = false>
-__global__ void kernel_double_add_suyama(
+__global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(
         cgbn_error_report_t *report,
         uint64_t s_bits,
         uint64_t s_bits_start,

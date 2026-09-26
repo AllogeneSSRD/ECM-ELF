@@ -1,4 +1,11 @@
-﻿/* cgbn_stage1_kernels_param2.cu -- param2 (gmp-ecm "batch 2", 6-torsion) instantiations.
+﻿/* cgbn_stage1_kernels_param2.cu -- param2 lookups for the small tiers (TPI=4: 128..512, TPI=8: 768..2048).
+ *
+ * The TPI=16 (2560..8192) and TPI=32 (9216..16384) lookups live in
+ * cgbn_stage1_kernels_param2_tpi16.cu / cgbn_stage1_kernels_param2_tpi32.cu: they dominated the compile time of this file
+ * (745 s / 711 s total, the critical path of the parallel build).  See
+ * docs/ECM_CGBN_OPTIMIZATION.md 8.8. */
+
+/* cgbn_stage1_kernels_param2.cu -- param2 (gmp-ecm "batch 2", 6-torsion) instantiations.
  *
  * Generated from cgbn_stage1_kernels_suyama.cu (same grid, same 7-word buffer layout,
  * same kernel body) with the only difference that the per-bit step is instantiated with
@@ -24,6 +31,14 @@
 
 #include "cgbn_stage1_kernel.h"
 
+#if ECM_NO_PARAM2
+/* param2 kernels disabled at configure time (-DECM_NO_PARAM2=1, see CMakeLists.txt).
+   Every lookup returns null, so the dispatcher in cgbn_stage1.cu reports
+   "--gpu-param 2 ... not compiled into this binary" instead of failing to link. */
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi4 (uint32_t BITS, uint32_t *TPI_out) { (void)BITS; (void)TPI_out; return nullptr; }
+cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi8 (uint32_t BITS, uint32_t *TPI_out) { (void)BITS; (void)TPI_out; return nullptr; }
+
+#else
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi4(uint32_t BITS, uint32_t *TPI_out) {
 #if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_128)
     if (BITS == cgbn_params_128::BITS) {
@@ -111,160 +126,4 @@ cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi8(uint32_t BITS, uint32_t *TP
     return nullptr;
 }
 
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi16(uint32_t BITS, uint32_t *TPI_out) {
-#ifndef IS_DEV_BUILD
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_2560)
-    if (BITS == cgbn_params_2560::BITS) {
-        *TPI_out = cgbn_params_2560::TPI;
-        return kernel_double_add_suyama<cgbn_params_2560, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_3072)
-    if (BITS == cgbn_params_3072::BITS) {
-        *TPI_out = cgbn_params_3072::TPI;
-        return kernel_double_add_suyama<cgbn_params_3072, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_3584)
-    if (BITS == cgbn_params_3584::BITS) {
-        *TPI_out = cgbn_params_3584::TPI;
-        return kernel_double_add_suyama<cgbn_params_3584, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_4096)
-    if (BITS == cgbn_params_4096::BITS) {
-        *TPI_out = cgbn_params_4096::TPI;
-        return kernel_double_add_suyama<cgbn_params_4096, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_4608)
-    if (BITS == cgbn_params_4608::BITS) {
-        *TPI_out = cgbn_params_4608::TPI;
-        return kernel_double_add_suyama<cgbn_params_4608, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_5120)
-    if (BITS == cgbn_params_5120::BITS) {
-        *TPI_out = cgbn_params_5120::TPI;
-        return kernel_double_add_suyama<cgbn_params_5120, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_5632)
-    if (BITS == cgbn_params_5632::BITS) {
-        *TPI_out = cgbn_params_5632::TPI;
-        return kernel_double_add_suyama<cgbn_params_5632, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_6144)
-    if (BITS == cgbn_params_6144::BITS) {
-        *TPI_out = cgbn_params_6144::TPI;
-        return kernel_double_add_suyama<cgbn_params_6144, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_6656)
-    if (BITS == cgbn_params_6656::BITS) {
-        *TPI_out = cgbn_params_6656::TPI;
-        return kernel_double_add_suyama<cgbn_params_6656, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_7168)
-    if (BITS == cgbn_params_7168::BITS) {
-        *TPI_out = cgbn_params_7168::TPI;
-        return kernel_double_add_suyama<cgbn_params_7168, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_7680)
-    if (BITS == cgbn_params_7680::BITS) {
-        *TPI_out = cgbn_params_7680::TPI;
-        return kernel_double_add_suyama<cgbn_params_7680, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_8192)
-    if (BITS == cgbn_params_8192::BITS) {
-        *TPI_out = cgbn_params_8192::TPI;
-        return kernel_double_add_suyama<cgbn_params_8192, true>;
-    }
-#endif
-
-#else
-    (void)BITS;
-    (void)TPI_out;
-#endif
-    return nullptr;
-}
-
-cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_tpi32(uint32_t BITS, uint32_t *TPI_out) {
-#ifndef IS_DEV_BUILD
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_9216)
-    if (BITS == cgbn_params_9216::BITS) {
-        *TPI_out = cgbn_params_9216::TPI;
-        return kernel_double_add_suyama<cgbn_params_9216, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_10240)
-    if (BITS == cgbn_params_10240::BITS) {
-        *TPI_out = cgbn_params_10240::TPI;
-        return kernel_double_add_suyama<cgbn_params_10240, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_11264)
-    if (BITS == cgbn_params_11264::BITS) {
-        *TPI_out = cgbn_params_11264::TPI;
-        return kernel_double_add_suyama<cgbn_params_11264, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_12288)
-    if (BITS == cgbn_params_12288::BITS) {
-        *TPI_out = cgbn_params_12288::TPI;
-        return kernel_double_add_suyama<cgbn_params_12288, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_13312)
-    if (BITS == cgbn_params_13312::BITS) {
-        *TPI_out = cgbn_params_13312::TPI;
-        return kernel_double_add_suyama<cgbn_params_13312, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_14336)
-    if (BITS == cgbn_params_14336::BITS) {
-        *TPI_out = cgbn_params_14336::TPI;
-        return kernel_double_add_suyama<cgbn_params_14336, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_15360)
-    if (BITS == cgbn_params_15360::BITS) {
-        *TPI_out = cgbn_params_15360::TPI;
-        return kernel_double_add_suyama<cgbn_params_15360, true>;
-    }
-#endif
-
-#if !defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_16384)
-    if (BITS == cgbn_params_16384::BITS) {
-        *TPI_out = cgbn_params_16384::TPI;
-        return kernel_double_add_suyama<cgbn_params_16384, true>;
-    }
-#endif
-
-#else
-    (void)BITS;
-    (void)TPI_out;
-#endif
-    return nullptr;
-}
+#endif /* !ECM_NO_PARAM2 */

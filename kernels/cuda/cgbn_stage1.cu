@@ -1293,6 +1293,14 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   }
   if (BITS == 0 || kernel == NULL)
     {
+#if ECM_NO_PARAM2
+      if (param2) {
+          outputf (OUTPUT_ERROR, "GPU: --gpu-param 2 was requested but the param2 kernels are "
+                   "NOT compiled into this binary (configured with -DECM_NO_PARAM2=1).\n");
+          outputf (OUTPUT_ERROR, "     Re-configure with -DECM_NO_PARAM2=0 and rebuild ecm_cuda.\n");
+          return ECM_ERROR;
+      }
+#endif
       outputf (OUTPUT_ERROR, "No available CGBN Kernel large enough to process N(%d bits)%s\n",
                n_log2,
                param0 ? " (param0 kernels follow the param3 grid; a dev build only has <=1024)" : "");
@@ -1383,14 +1391,25 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
           TPI, BITS, n_log2, BLOCK_COUNT, TPB);
 
   /* ---------------------------------------------------------------------------
-   * Occupancy advisory (docs/ECM_CGBN_OPTIMIZATION.md §8, measured 2026-09-25).
+   * Occupancy advisory (docs/ECM_CGBN_OPTIMIZATION.md 5.5/5.7/8.11).
    *
-   * BLOCK_COUNT = ceil(curves / (TPB/TPI)), so the batch size - not the GPU - sets
-   * how many blocks are in flight: at TPB=256/TPI=4 a 4096-curve batch is only 64
-   * blocks, which does not fill a 24-SM card.  Same-session A/B on the 511-bit tier
-   * (4096 vs 8192 vs 16384 vs 32768 curves) measured +7.6% / +8.4% / +10.4% in
-   * curve-bits/s, saturating after that.  Warn instead of silently running at
-   * partial occupancy.
+   * BLOCK_COUNT = ceil(curves / (TPB/TPI)), so the batch size - not the GPU - sets how many
+   * blocks are in flight.  Two DIFFERENT things live here and only the first one is a real
+   * problem:
+   *
+   *   (a) BLOCK_COUNT < number of SMs  =>  some SMs have no work at all.  That is a real
+   *       underuse, and it is what this warning now reports.  Measured on the 511-bit tier
+   *       at TPB=256/TPI=4: 4096 vs 8192 curves was +7.6% curve-bits/s.
+   *
+   *   (b) BLOCK_COUNT < sm_count * blocks_per_sm  =>  the register-allowed block SLOTS are
+   *       not all filled.  This is NOT a throughput deficit for the big tiers: the kernel is
+   *       issue bound (ncu: Compute SOL ~83%, DRAM ~0.5%), so extra resident warps buy no
+   *       throughput -- and on a power-limited card they can cost a little.  The user's
+   *       B1=260e6 / 5120-bit param0 runs (60-SM 4070 Ti) measured 120 blocks (2 blocks/SM,
+   *       8 warps) at 72.88-72.90 s/curve vs 240 blocks (4 blocks/SM, 16 warps) at
+   *       73.41 s/curve.  So filling the slots is reported as INFORMATION, without the old
+   *       "raise -gpucurves" claim: what actually helps is the batch fitting a whole number
+   *       of resident blocks (avoid a partial last wave), and that is what the text says.
    * ------------------------------------------------------------------------- */
   {
     int dev = 0, sm_count = 0, blocks_per_sm = 0;
@@ -1399,12 +1418,19 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, (int)TPB, 0) == cudaSuccess &&
         sm_count > 0 && blocks_per_sm > 0) {
       const long capacity = (long)sm_count * (long)blocks_per_sm;
-      if ((long)BLOCK_COUNT < capacity) {
+      if ((long)BLOCK_COUNT < (long)sm_count) {
         outputf(OUTPUT_NORMAL,
-                "GPU: warning: %d blocks fill only %ld%% of this device (%d SMs x %d blocks/SM); "
-                "raise -gpucurves to about %ld (measured +7.6%% at 8192 vs 4096 curves)\n",
-                (int)BLOCK_COUNT, (long)BLOCK_COUNT * 100 / capacity,
-                sm_count, blocks_per_sm, capacity * (long)IPB);
+                "GPU: warning: only %d blocks for %d SMs - some SMs idle; raise -gpucurves to "
+                "about %ld (a multiple of %d keeps whole waves)\n",
+                (int)BLOCK_COUNT, sm_count, (long)sm_count, (int)IPB);
+      } else if ((long)BLOCK_COUNT < capacity) {
+        outputf(OUTPUT_VERBOSE,
+                "GPU: note: %d blocks = %ld%% of the %ld register-allowed block slots "
+                "(%d SMs x %d blocks/SM).  That is not a throughput deficit (the kernel is "
+                "issue bound), but a batch that is a whole multiple of %ld blocks avoids a "
+                "partial last wave.\n",
+                (int)BLOCK_COUNT, (long)BLOCK_COUNT * 100 / capacity, capacity,
+                sm_count, blocks_per_sm, capacity);
       }
     }
   }

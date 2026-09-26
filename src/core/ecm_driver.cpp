@@ -297,10 +297,29 @@ static std::string mpz_to_dec_string(const mpz_t v) {
 
 // Parse a 64-bit sigma (for the Edwards Atkin-Morain path). Optional "param:"
 // prefix is accepted and ignored for compatibility with -sigma parsing.
-static bool parse_sigma64_arg(const std::string &arg, uint64_t *sigma_out) {
+// 64-bit sigma parser.
+//
+// gmp-ecm accepts two forms:
+//   -sigma s        s is the parameter used to compute the curve coefficients
+//   -sigma i:s      the same, AND i selects the parametrization (-param i)
+// The prefix is therefore a parametrization claim, not decoration: "-sigma 3:s" together with
+// "--gpu-param 0" is a contradiction and gmp-ecm rejects it with
+//   "Error, conflict between -sigma and -param arguments".
+// We keep the prefix so that the CLI can apply the same rule (see the caller), instead of
+// silently letting --gpu-param win.
+static bool parse_sigma64_arg(const std::string &arg, uint64_t *sigma_out, int *param_out) {
     std::string s = arg;
+    if (param_out != nullptr) { *param_out = -1; }
     size_t colon = s.find(':');
     if (colon != std::string::npos) {
+        if (param_out != nullptr) {
+            const std::string prefix = s.substr(0, colon);
+            try {
+                *param_out = std::stoi(prefix);
+            } catch (...) {
+                return false;             /* "-sigma x:..." with a non-numeric prefix */
+            }
+        }
         s = s.substr(colon + 1);
     }
     try {
@@ -3262,6 +3281,8 @@ int main(int argc, char **argv){
     int gpu_device_index = 0;
     int gpu_param_cli = 3;          /* --gpu-param 0|3 (0 = Suyama param0) */
     bool gpu_param_set = false;
+    int sigma_param_claim = -1;     /* "-sigma i:s" -> i (gmp-ecm: selects -param i) */
+    bool sigma_param_set = false;
     bool print_group_order = false;
     std::string savefilename;
     bool saveappend = false;
@@ -3404,11 +3425,25 @@ int main(int argc, char **argv){
             continue;
         }
         if((a == "-sigma" || a == "--sigma") && i+1<argc){
-            if(!parse_sigma64_arg(argv[++i], &fixed_sigma64)){
+            int sigma_prefix = -1;                 /* "-sigma i:s" claims -param i */
+            if(!parse_sigma64_arg(argv[++i], &fixed_sigma64, &sigma_prefix)){
                 std::cerr << "Invalid -sigma value (need 1..2^64-1, optional param: prefix)" << std::endl;
                 return 1;
             }
             sigma_fixed = true;
+            /* Like gmp-ecm, "-sigma i:s" also selects the parametrization.  An explicit
+               --gpu-param that disagrees is a contradiction, not a precedence question. */
+            if (sigma_prefix >= 0) {
+                if (sigma_prefix == 0 || sigma_prefix == 2 || sigma_prefix == 3) {
+                    sigma_param_claim = sigma_prefix;
+                    sigma_param_set = true;
+                } else {
+                    std::cerr << "Error, -sigma " << sigma_prefix
+                              << ":... selects an unsupported parametrization "
+                                 "(this build knows -param 0, 2 and 3)" << std::endl;
+                    return 1;
+                }
+            }
             if (fixed_sigma64 <= 0xFFFFFFFFull) {
                 fixed_sigma = (uint32_t)fixed_sigma64;
             }
@@ -3638,6 +3673,23 @@ int main(int argc, char **argv){
     //     mpz_out_str(stdout, 10, N);
     //     std::cout << std::endl;
     // }
+
+    // gmp-ecm semantics for "-sigma i:s": the prefix selects the parametrization as well.
+    // Adopt it when no --gpu-param was given, and reject a contradiction otherwise.  This
+    // has to happen BEFORE the 32-bit sigma check below, which keys off gpu_param_cli.
+    if (sigma_param_set) {
+        if (!gpu_param_set) {
+            gpu_param_cli = sigma_param_claim;
+            gpu_param_set = true;
+        } else if (sigma_param_claim != gpu_param_cli) {
+            std::cerr << "Error, conflict between -sigma and -param arguments" << std::endl;
+            std::cerr << "       -sigma " << sigma_param_claim << ":... selects -param "
+                      << sigma_param_claim << ", but --gpu-param " << gpu_param_cli
+                      << " was also given" << std::endl;
+            mpz_clear(N);
+            return 1;
+        }
+    }
 
     // Execute stage 1 through the shared single-run path.
     // A 64-bit sigma is meaningful for the CPU methods and for the GPU param0 path
