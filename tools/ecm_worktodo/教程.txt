@@ -1,11 +1,56 @@
+ECM 任务管线（Windows 原生，不需要 WSL）
+=======================================
 
-# 基本排序（GNU sort）（按第4列）
-# -u 去重
-wsl
-cd /mnt/d/code/GIMPS/GIMPS_同步/ECM/pipeline/
-sort -t, -k4,4n -u assignment.csv > sorted.csv
+分工
+----
+  stage 1 : 我们的驱动   ecm_cuda.exe  读 ECMSTAGE2= 行（队列模式，自带 checkpoint / finished）
+  stage 2 : Prime95                    读 ECM=/ECM2= 行（原生 worktodo 行，两种前缀等价）
+  生成器  : tools\ecm_worktodo\ecm.py  只生成，不执行；去重/排序/过滤都在它里面
 
-# 生成worktodo
-D:
-cd D:\code\GIMPS\GIMPS_同步\ECM\pipeline
-ecmcuda.bat
+旧流程里的 `wsl` + `sort -t, -k4,4n -u assignment.csv > sorted.csv` 已经取消：
+排序和去重现在是工具内建功能，而且旧命令按"整行第 4 个逗号字段"排序，在没有 AID 的
+行上（ECM=1,2,5153,-1,…）会排错字段；工具改为在解析后的 n 上排序，两种写法都正确。
+
+第一步：看统计（不写文件）
+--------------------------
+  cd tools\ecm_worktodo
+  python ecm.py --input assignment.csv --dry-run
+
+第二步：生成 worktodo
+---------------------
+  ecmcuda.bat      生成 stage-1 队列（ECMSTAGE2= 行，给 ecm_cuda.exe）
+  ecmpr.bat        生成 Prime95 的 ECM=/ECM2= 行（另有 ECMSTAGE2= 版本）
+
+  两个 .bat 都是薄封装：路径和 B1/曲线数写在文件头的 set 变量里，换机器只改那里。
+
+手动调用的常用组合
+------------------
+  python ecm.py --input sorted.csv --set-b1 110e6 --gpu-curves 960 --sort-by n ^
+      --out-ecmstage2 worktodo_add.csv --out-ecm p95_worktodo.txt
+
+  # 先筛再生成（过滤发生在去重之前）
+  python ecm.py --input assignment.csv --min-n 3000000 --max-n 4000000 --max-curves 100 ^
+      --out-ecmstage2 worktodo_add.csv
+
+  # 逐任务命令行脚本（一次性/分批手动跑）
+  python ecm.py --input sorted.csv --emit-cli worktodo.ps1 --emit-cli-kind ps1 --device 1
+  python ecm.py --input sorted.csv --emit-cli worktodo.sh  --emit-cli-kind sh   # gmp-ecm 写法
+
+必须知道的四条规则
+------------------
+  1. save 名契约：ECMSTAGE2= 行没有 B1 字段，驱动的 B1 是从存档名里抽的，
+     所以名字必须满足 <...>_<B1>.save（默认模板 m{n}_{b1}.save）。
+     名字不合格时工具会报错退出；给"自己从存档读 B1"的消费者（如 P95 侧 .p95 存档）
+     时用 --allow-invalid-save-name 显式放行。
+  2. B2=0 在 Prime95 里是"自动选取 B2"，不是"不做 stage 2"。
+  3. 去重判据是 (k,b,n,c)：同一个数无论写成 ECM= 还是 ECM2=、无论 AID 缺失与否，只留一条；
+     冲突保留 B1 最大 -> curves 最大 -> 真 AID 优先 -> 先出现者；known factors 取并集。
+  4. 追加写入（--append-ecm / --append-ecmstage2）不会让同一个数在队列里出现两份工作。
+
+旧开关名仍然可用：--out-windows / --out-prmers / --out-linux / --append-* / --gmpecm-b2 / --p95-b2
+
+回归测试
+--------
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_worktodo_pipeline.ps1
+  （33 项：解析、去重、因子并集、三种输出、save 名校验、排序确定性、BOM/CRLF、
+    以及"生成的行能被我们 C++ 侧解析器接受"的跨实现验收）

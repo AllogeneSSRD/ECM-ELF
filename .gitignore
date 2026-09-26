@@ -103,3 +103,10 @@ tools/gen/__pycache__/
 /build_jom
 /build_ninja
 /build_nm16
+tools/ecm_worktodo/assignment.csv
+tools/ecm_worktodo/assignment.save.csv
+tools/ecm_worktodo/sorted.csv
+tools/ecm_worktodo/worktodo.csv
+tools/ecm_worktodo/worktodo.sh
+tools/ecm_worktodo/worktodo_p95_stage2.txt
+/tools/ecm_worktodo/tmp

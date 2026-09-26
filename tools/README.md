@@ -14,7 +14,8 @@ tools/
 ├── disasm/     反汇编 / ISA 检查（含 Windows 工具链安装）
 ├── ecm_prob/   ECM 参数化概率分析套件（Python，自带 README）
 ├── ecm_report/ 进度数据库/图表（Python + bat，自带 README）
-└── log_parser/ 日志解析（自带 README）
+├── log_parser/ 日志解析（自带 README）
+└── ecm_worktodo/ worktodo 管线生成器（Python，Windows 原生：分配行 → stage1 队列 + P95 行）
 ```
 
 > **小工具编译**：`tools\build_tool.bat <tool.cpp> [额外 .cpp ...]`，产物落到
@@ -57,6 +58,36 @@ cl /nologo /O2 /EHsc /utf-8 /I third_party/gmp-zen3/dist/include /I src/cpu /I s
 cl /nologo /O2 /EHsc /utf-8 /I src/core ^
    tools/test/p95_worktodo_test.cpp src/core/p95_worktodo.cpp /Fe:tools/test/p95_worktodo_test.exe
 ```
+
+## ecm_worktodo/ — stage1/stage2 任务分配管线（Windows 原生）
+
+`ecm.py` 把分配行（Prime95 原生 `ECM=`/`ECM2=`，两种前缀等价）加工成两份 worktodo：
+**stage 1 由我们的驱动跑**（`ECMSTAGE2=` 行），**stage 2 由 Prime95 跑**（`ECM=`/`ECM2=` 行）。
+它**只生成、从不执行**，也从不改写运行中的 Prime95 拥有的文件。
+
+```powershell
+# 生成 stage1 队列（ECMSTAGE2=，B1 藏在 save 名里）+ P95 原生行
+python tools\ecm_worktodo\ecm.py --input tools\ecm_worktodo\sorted.csv `
+    --set-b1 110e6 --gpu-curves 960 --sort-by n `
+    --out-ecmstage2 worktodo_add.csv --out-ecm p95_worktodo.txt
+# 只看统计不写文件；逐任务命令行脚本；旧开关名（--out-windows/--out-prmers/--out-linux）仍然可用
+python tools\ecm_worktodo\ecm.py --input sorted.csv --dry-run
+python tools\ecm_worktodo\ecm.py --input sorted.csv --emit-cli todo.ps1 --emit-cli-kind ps1 --device 1
+```
+
+要点（都是实测/按驱动实现定的，别猜）：
+
+| 规则 | 说明 |
+|---|---|
+| **去重判据** | `(k,b,n,c)` **按数值**比较；冲突保留 **B1 最大 → curves 最大 → 真 AID 优先 → 先出现者**；known factors 取**并集** |
+| **管线顺序** | 解析 → 过滤 → 去重 → 重写（`--set-b1/--set-b2/--set-has-na`）→ 排序。过滤在去重**之前**，否则胜出行被过滤掉会让整个数消失 |
+| **save 名契约** | `ECMSTAGE2=` 没有 B1 字段，驱动用 `ecm_extract_b1_from_save_name()` 从名字里抽 ⇒ 名字必须匹配 `…_<B1>.save`。工具**强校验并非零退出**；给别的消费者（P95 侧自己从存档读 B1）时用 `--allow-invalid-save-name` |
+| **`B2=0` 的语义** | Prime95 里 0 = **自动选取 B2**，不是"不做 stage 2"；`--set-b2` 就是写这个字段 |
+| **换行/编码** | 读自动识别（UTF-8 有/无 BOM → GBK 兜底、无视 BOM、CRLF/LF 都吃）；写 **UTF-8 无 BOM + CRLF**（`--newline lf` 可切）；统计输出是 ASCII |
+| **可选的校验开关** | `--sort-factors`（因子按数值升序规范化，默认关以保持逐字节可比）、`--verify-factors`（精确整数整除校验，默认关） |
+
+入口脚本 `ecmcuda.bat` / `ecmpr.bat` 是薄封装（**GBK 编码**，因为里面有中文路径；换机器只改文件头的 `set` 变量）。
+回归测试：`tools/test/test_worktodo_pipeline.ps1`（33 项，含"输出能被我们的 C++ 解析器接受"的跨实现验收）。
 
 ## bench/ — 基准与 A/B
 
