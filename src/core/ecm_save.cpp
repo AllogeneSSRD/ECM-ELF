@@ -192,7 +192,7 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
             << "; N=" << n_expr_save
             << "; X=0x" << x_hex
             << "; CHECKSUM=" << csum
-            << "; PROGRAM=GMP-ECM 7.0.6;"
+            << "; PROGRAM=ECM-ELY;" /* was GMP-ECM 7.0.6 */
             << " X0=0x0; Y0=0x0;"
             << (who.empty() ? "" : (" WHO=" + who + ";"))
             << " TIME=" << timebuf << ";"

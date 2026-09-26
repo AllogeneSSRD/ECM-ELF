@@ -609,9 +609,73 @@ if(ECM_ENABLE_CUDA)
         ${GMP_INCLUDE_DIR}
     )
 
+    # ---------------------------------------------------------------------------------
+    # Device-code size.  The kernel set is huge (the stage-1 exponent is 375 Mbit at
+    # B1 = 260e6, and every tier is instantiated for three parametrizations), so the
+    # embedded cubins dominate the executable: a full build was 70.4 MB before these
+    # two options.
+    #
+    # Measured on one tier-restricted TU (suyama_tpi16, tier 5120):
+    #     PTX + SASS, uncompressed : 853,000 B      <- CMake's default (arch=89)
+    #     SASS only ("89-real")    : 690,160 B      (-19%: drops the compute_89 PTX)
+    #     PTX + SASS, --compress   : 322,168 B      (-62%)
+    #     SASS only,   --compress  : 159,328 B      (-81%)   <- both options below
+    #
+    # ECM_CUDA_EMBED_PTX=ON keeps the compute_XX PTX so the binary can JIT onto a *newer*
+    # architecture.  OFF (default) therefore drops forward compatibility: an sm_89-only
+    # build refuses to run on sm_90+ with "no kernel image is available".  Re-enable it if
+    # you build on one machine and run on another with a newer GPU.
+    set(ECM_CUDA_EMBED_PTX "OFF" CACHE STRING "1 = also embed PTX (JIT to newer archs; bigger binaries)")
+    set(ECM_CUDA_COMPRESS  "ON"  CACHE STRING "1 = compress the embedded fatbin (-Xfatbin -compress-all)")
+set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (release recipe: the oldest supported arch)")
+
+    if(ECM_CUDA_EMBED_PTX)
+        set(_ecm_cuda_arches "${ECM_CUDA_ARCHITECTURES}")
+    else()
+        # CMake's "-real" suffix means "SASS for this arch, no PTX".
+        set(_ecm_cuda_arches "")
+        foreach(_a IN LISTS ECM_CUDA_ARCHITECTURES)
+            if(_a MATCHES "-real$")
+                list(APPEND _ecm_cuda_arches "${_a}")
+            else()
+                list(APPEND _ecm_cuda_arches "${_a}-real")
+            endif()
+        endforeach()
+    endif()
+
+    # ECM_CUDA_PTX_ARCH=<arch>: embed PTX for ONE architecture only (normally the oldest one
+    # you support) while every other architecture gets SASS only.  This is the release
+    # recipe: the PTX fallback lets the driver JIT onto GPUs newer than anything you built
+    # SASS for, and it costs only ~24% of one SASS set (measured on our kernels).
+    # Set it together with ECM_CUDA_EMBED_PTX=OFF, e.g.
+    #   -DECM_CUDA_ARCHITECTURES=75;86;89;90;100;120 -DECM_CUDA_PTX_ARCH=75
+    if(ECM_CUDA_PTX_ARCH)
+        set(_ecm_cuda_arches "")
+        foreach(_a IN LISTS ECM_CUDA_ARCHITECTURES)
+            if(_a MATCHES "^${ECM_CUDA_PTX_ARCH}(-|$)")
+                list(APPEND _ecm_cuda_arches "${_a}")          # SASS + PTX
+            else()
+                list(APPEND _ecm_cuda_arches "${_a}-real")     # SASS only
+            endif()
+        endforeach()
+        message(STATUS "ecm_cuda: PTX embedded for ${ECM_CUDA_PTX_ARCH} only; "
+                       "device code: ${_ecm_cuda_arches}")
+    endif()
+
     set_target_properties(ecm_cuda PROPERTIES
-        CUDA_ARCHITECTURES "${ECM_CUDA_ARCHITECTURES}"
+        CUDA_ARCHITECTURES "${_ecm_cuda_arches}"
     )
+
+    if(ECM_CUDA_COMPRESS)
+        target_compile_options(ecm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xfatbin;-compress-all>)
+        message(STATUS "ecm_cuda: fatbin compression ON, device code for ${_ecm_cuda_arches}")
+    else()
+        message(STATUS "ecm_cuda: device code for ${_ecm_cuda_arches} (uncompressed)")
+    endif()
+    if(NOT ECM_CUDA_EMBED_PTX AND NOT ECM_CUDA_PTX_ARCH)
+        message(STATUS "ecm_cuda: no PTX embedded -- needs exactly the arch above "
+                       "(set -DECM_CUDA_EMBED_PTX=ON to JIT onto newer GPUs)")
+    endif()
 
     # Dev build (kernels up to 1024 bits) is the default; enable the full CGBN
     # kernel set (larger N, much longer compile) with -DECM_CUDA_FULL_BUILD=ON.

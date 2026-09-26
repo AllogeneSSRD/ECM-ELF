@@ -63,6 +63,8 @@ param(
     [string]$Target = "ecm_cuda",
     [int]$Jobs = 0,
     [string]$Only = "",
+    [string]$SourceRegex = '\.cu$',
+    [switch]$AllSources,
     [switch]$Reconfigure,
     [switch]$SkipUpToDate,
     [switch]$NoBuild,
@@ -93,7 +95,7 @@ if ($Reconfigure -or -not (Test-Path $cmakeFile)) {
 }
 
 $entries = (Get-Content $cmakeFile -Raw | ConvertFrom-Json) |
-    Where-Object { $_.file -match '\.cu$' } |
+    Where-Object { $_.file -match $SourceRegex } |
     Where-Object { -not $Only -or $_.file -match $Only }
 if (-not $entries) { throw "no .cu entries matched (-Only '$Only')" }
 

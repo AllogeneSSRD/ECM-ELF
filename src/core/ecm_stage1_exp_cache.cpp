@@ -1,4 +1,4 @@
-/* ecm_stage1_exp_cache.cpp -- see the header for the contract and the validation rules. */
+﻿/* ecm_stage1_exp_cache.cpp -- see the header for the contract and the validation rules. */
 #include "ecm_stage1_exp_cache.h"
 #include "ecm_stage1_exp.h"          /* ecm_build_lcm_exponent(), the thing being cached */
 
@@ -54,6 +54,29 @@ struct ExpCacheHeader {
     uint64_t csum;          /* additive checksum over the payload words */
 };
 #pragma pack(pop)
+
+/* Create the parent directory of `path` if needed: --exp-cache may point at a directory
+   that does not exist yet, and a failed fopen() must not silently disable caching. */
+static void ensure_parent_dir(const std::string &path)
+{
+    const size_t sep = path.find_last_of("/\\");
+    if (sep == std::string::npos) return;
+    std::string dir = path.substr(0, sep);
+    if (dir.empty()) return;
+#ifdef _WIN32
+    for (size_t i = 1; i <= dir.size(); ++i) {
+        if (i == dir.size() || dir[i] == '/' || dir[i] == '\\') {
+            CreateDirectoryA(dir.substr(0, i).c_str(), nullptr);
+        }
+    }
+#else
+    for (size_t i = 1; i <= dir.size(); ++i) {
+        if (i == dir.size() || dir[i] == '/') {
+            mkdir(dir.substr(0, i).c_str(), 0755);
+        }
+    }
+#endif
+}
 
 static uint64_t fnv1a64(const void *data, size_t len, uint64_t h)
 {
@@ -185,7 +208,7 @@ bool ecm_exp_semantic_check(const mpz_t s, uint64_t B1, std::string *why)
 std::string ecm_exp_cache_path(const std::string &dir, uint64_t B1, uint64_t torsion)
 {
     char name[128];
-    snprintf(name, sizeof name, "ecm_exp_lcm_%llu_t%llu_v%u.bin",
+    snprintf(name, sizeof name, "ecm_B1_%llu_t%llu_v%u.bin",
              (unsigned long long)B1, (unsigned long long)(torsion ? torsion : 1u),
              (unsigned)EXP_CACHE_VERSION);
     if (dir.empty()) return std::string(name);
@@ -287,6 +310,7 @@ bool ecm_exp_cache_save(const std::string &path, const mpz_t s, uint64_t B1, uin
     h.csum = payload_csum(w, count);
 
     const std::string tmp = path + ".tmp";
+    ensure_parent_dir(path);
     FILE *f = fopen(tmp.c_str(), "wb");
     if (!f) {
         free(w);
@@ -331,8 +355,11 @@ bool ecm_build_lcm_exponent_cached(mpz_t s, uint64_t B1, uint64_t torsion,
         const Clock::time_point t0 = Clock::now();
         if (ecm_exp_cache_load(path, s, B1, torsion, &why)) {
             if (detail) {
-                snprintf(buf, sizeof buf, "cache hit (%.2f s, %s)",
-                         secs_since(t0), path.c_str());
+                /* Only the FILE NAME is reported: the log line is already long and the
+                   directory is the same for every entry of a run (see the header). */
+                const size_t sep = path.find_last_of("/\\");
+                const char *name = (sep == std::string::npos) ? path.c_str() : path.c_str() + sep + 1;
+                snprintf(buf, sizeof buf, "cache hit (%.2f s, %s)", secs_since(t0), name);
                 *detail = buf;
             }
             return true;

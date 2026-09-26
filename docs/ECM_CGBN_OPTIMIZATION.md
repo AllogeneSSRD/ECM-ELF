@@ -1026,3 +1026,63 @@ foreach ($c in 576,768,1152,1920) {
     **`-DECM_TIERS` 的一个坑**：tier 是按 N 的位长向上取档的，`N = 2^5120−1`（5120 位）
     并不落在 5120 档 ⇒ 受限构建会报 "No available CGBN Kernel large enough" ✗。
     做受限实验要挑一个**落在该档内、且是素数**的 N（例：M4423 落在 4608 档 ✓）。
+
+---
+
+## 8.9 构建目录与发布规则（长期规则，2026-09-26 用户设定）
+
+**① 本机测试统一用 `build_cuda_cmake`**：**压缩 ON + 不嵌 PTX + `-DECM_CUDA_ARCHITECTURES=89`**
+（这三项就是当前默认值，configure 时不需要额外参数）。实测 exe **70.4 MB → 10.4 MB（−85%）**：
+
+| 嵌入方式（单 TU 实测） | 目标文件 |
+|---|---|
+| PTX + SASS，不压缩（CMake 默认） | 853,000 B |
+| 只嵌 SASS（`89-real`） | 690,160 B（−19%）|
+| PTX + SASS + `-Xfatbin -compress-all` | 322,168 B（−62%）|
+| **只嵌 SASS + 压缩（= 本规则）** | **159,328 B（−81%）** |
+
+⚠ `ECM_CUDA_EMBED_PTX=OFF` 的代价：**不能 JIT 到更新的架构**（在别的架构上会报
+`no kernel image is available`）。跨机分发时用 `-DECM_CUDA_EMBED_PTX=ON` 或下面的发布流程。
+
+**② 发布用 `build_cuda_release` + `tools/build/release_split.ps1`**：
+
+```powershell
+cmake -S . -B build_cuda_release -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ^
+      -DECM_CUDA_FULL_BUILD=ON -DECM_CUDA_ARCHITECTURES="75;86;89;90;100;120" ^
+      -DECM_CUDA_PTX_ARCH=75 -DECM_CUDA_COMPRESS=OFF -DECM_TPB=128 -DECM_MAX_ROTATION=1 ...
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_release
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\release_split.ps1 -BuildDir build_cuda_release -OutDir dist\cuda
+```
+
+`ECM_CUDA_PTX_ARCH=<arch>`（本轮新增）：**只给一个架构嵌 PTX**，其余走 `-real`（纯 SASS）。
+实测（受限 tier 5120 的 6 档构建）：多档 exe 3.3 MB；拆分后 **sm_75 = 3.13 MB（SASS+PTX）**、
+**其余每档 978 KB**；拆分产物在真卡上跑通（sm_89 档 41.4 s、sm_75 档 42.6 s @4060/384 曲线 ——
+同一时段比原生 sm_89 的 26.2 s 慢，疑为笔记本功耗/温度状态，**需受控重测**）。
+
+⚠ **两个硬约束（实测）**：
+* **`nvprune` 不能作用于链接好的 exe**：`nvprune fatal: Input file '...ecm_cuda.exe' not relocatable.`
+  它只接受**可重定位输入**（`.cu.obj` 或 `.lib`）⇒ 流程必须是 **裁 obj → 重新链接**。
+  `release_split.ps1` 做的就是：裁 11 个 `.cu.obj` → 拷回构建目录 → `cmake --build` 重链 → 取出 exe → 还原 obj。
+* **压缩与 `nvprune` 的组合未验证**：验证通过的路径是 **`-DECM_CUDA_COMPRESS=OFF`**（fatbin 未压缩、
+  nvprune 能重写）。所以 `build_cuda_release` 目前设成 OFF。要"压缩 + 拆分"需先确证 nvprune 对压缩
+  fatbin 的行为（在单档输入上它表现为"原样复制"，无法区分"无需裁剪"与"不支持"）。
+
+**③ 架构选择（2026-09-26 实测，5120 bit、B1=1e5、param0、TPB=128）**：
+
+| 架构 | 4060 Laptop（24 SM）384 曲线 | 4070 Ti（60 SM）960 曲线 |
+|---|---|---|
+| sm_80 | 2.113 M curve-bits/s | 7.397 M |
+| sm_86 | 2.112 M | **7.596 M** |
+| sm_89 | 2.112 M | **7.598 M** |
+
+⇒ 三档 cubin **都能在 sm_89 硬件上跑**（同大版本小版本向前兼容的直接实证）；**sm_86 ≈ sm_89（0.03%）**、
+**sm_80 在 4070 Ti 上慢 2.6%**（4060 上无差别，被功耗掩盖）⇒ "8.x 通用二进制"应选 **sm_86**，
+覆盖 A100 才需要 sm_80；40 系榨干性能就单独发 sm_89。
+CUDA 13.3 最低只支持 `compute_75`（`nvcc --list-gpu-arch` 实测）⇒ **10 系（Pascal sm_60/61）用本工具链
+编不出来**，必须用 CUDA ≤ 12.x 生成后以 `fatbinary` 合并，或单独发 legacy 包。
+
+**④ 临时构建目录**：只保留
+`build_cuda_cmake`（本机测试，规则①）、`build_cuda_dev`（dev 构建，测试脚本默认用它）、
+`build_nm16`（tier 受限的快速迭代）、`build_vs18`（宿主 `Release\ecm.exe`，测试脚本依赖）、
+`build_cuda_release`（发布）；其余实验目录（`build`、`build_a80/a86`、`build_cpu_nmake`、`build_cuda`、
+`build_jom`、`build_ninja`、`build_rel`、`build_t16`、`build_reltest`）用完即删。

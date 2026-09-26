@@ -103,6 +103,11 @@ tools/gen/__pycache__/
 /build_jom
 /build_ninja
 /build_nm16
+/build_a80
+/build_a86
+/build_cpu_nmake
+/build_reltest
+/build_cuda_release
 tools/ecm_worktodo/assignment.csv
 tools/ecm_worktodo/assignment.save.csv
 tools/ecm_worktodo/sorted.csv
@@ -110,3 +115,7 @@ tools/ecm_worktodo/worktodo.csv
 tools/ecm_worktodo/worktodo.sh
 tools/ecm_worktodo/worktodo_p95_stage2.txt
 /tools/ecm_worktodo/tmp
+/build_cpu_nmake
+/build_a80
+/build_a86
+/build_reltest2

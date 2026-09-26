@@ -645,6 +645,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps
 | `-DECM_TIERS` | 空（全档位） | **快速迭代**：逗号分隔的档位列表，只编译这些实例化（例 `-DECM_TIERS=4608`，把 tpi16 TU 从十几分钟压到几秒）。档位按 N 的位长向上取档，且 N 必须落在该档内 |
 | `-DECM_NO_PARAM2` | `0` | `1` = **不编译 param2 家族**（它是每个档位的第二份拷贝，单独一个 TU 就要 11 分钟）；此时 `--gpu-param 2` 会明确报错而不是回退 |
 | `-DECM_REG_TARGET_FORCE` | `0` | 覆盖每档位的寄存器预算 `__maxnreg__`（0 = 用表：≤2048 ⇒ 56，2560–5120 ⇒ 128，≥5632 ⇒ 不限制；255 = 全部不限制），用于 A/B |
+| `-DECM_CUDA_EMBED_PTX` | `OFF` | `OFF` = 只嵌 SASS（`code=sm_89`，体积约 −19%），**代价是不能 JIT 到更新的架构**；`ON` 额外嵌 PTX。跨机分发（老机器构建、新卡上跑）用 `ON` |
+| `-DECM_CUDA_COMPRESS` | `ON` | `-Xfatbin -compress-all` 压缩内嵌 fatbin：**单 TU 实测 −62%**，行为不变（载入稍慢）。两项合计 **−81%** |
 | `-DECM_TPB` | `128` | kernel 每块线程数（`TPI=16` 时 128 = 8 实例/块） |
 | `-DECM_MAX_ROTATION` | `1` | CGBN 乘法里的 limb 旋转上限（实测对 4 limb/线程档位几乎无影响） |
 | `-DECM_MAXRREG_SMALL` / `-DECM_MAXRREG_SUYAMA` | `0` | 应急用的**按文件** `--maxrregcount`（会被同文件里的大档位误伤，一般不要用，见下条） |

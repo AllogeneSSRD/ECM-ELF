@@ -512,6 +512,8 @@ Essentials (all measured; see `docs/ECM_CGBN_OPTIMIZATION.md` §8.8):
 | `-DECM_TIERS` | empty (all) | **Fast iteration**: comma-separated tier list, compiles only those instantiations (e.g. `-DECM_TIERS=4608`, which cuts the tpi16 TU from minutes to seconds). Tiers are chosen by N's bit length and N must fall inside the tier |
 | `-DECM_NO_PARAM2` | `0` | `1` = **do not compile the param2 family** (a second copy of every tier; its own TU costs ~11 minutes). `--gpu-param 2` then fails with a clear error instead of falling back |
 | `-DECM_REG_TARGET_FORCE` | `0` | Override the per-tier `__maxnreg__` register budget (0 = use the table: ≤2048 ⇒ 56, 2560–5120 ⇒ 128, ≥5632 ⇒ uncapped; 255 = uncapped everywhere) for A/B runs |
+| `-DECM_CUDA_EMBED_PTX` | `OFF` | `OFF` embeds SASS only (`code=sm_89`, ~19% smaller) but then the binary **cannot JIT onto a newer architecture**; set `ON` when you build on one machine and run on another with a newer GPU |
+| `-DECM_CUDA_COMPRESS` | `ON` | `-Xfatbin -compress-all`: measured **−62%** on a single TU, behaviour unchanged (slightly slower load). Together the two give **−81%** |
 | `-DECM_TPB` | `128` | Threads per block (`TPI=16`: 128 = 8 instances per block) |
 | `-DECM_MAX_ROTATION` | `1` | CGBN limb rotation bound (measured to make almost no difference at 4 limbs/thread) |
 | `-DECM_MAXRREG_SMALL` / `-DECM_MAXRREG_SUYAMA` | `0` | Emergency per-FILE `--maxrregcount` (it also hits that file's large tiers; prefer the per-tier `__maxnreg__` above) |

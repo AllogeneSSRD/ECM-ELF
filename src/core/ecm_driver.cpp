@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -683,9 +683,9 @@ static void print_ecm_usage(const char *prog) {
               << "  --stage1-threads <n> CPU stage-1 worker threads (0=auto, 1=serial). One task\n"
               << "                       is an 8-curve SIMD batch (simd backend) or one curve\n"
               << "  --exp-cache <dir>    cache s = torsion*lcm(1..B1) on disk (default: the exe\n"
-        << "                       directory; \"off\" disables).  B1 = 260e6 costs ~10 s to\n"
-        << "                       build and ~0.3 s to load from a validated cache.\n"
-        << "  --exponent <m>       lcm|choose12 : Montgomery stage-1 exponent. lcm =\n"
+              << "                       directory; \"off\" disables).  B1 = 260e6 costs ~10 s to\n"
+              << "                       build and ~0.3 s to load from a validated cache.\n"
+              << "  --exponent <m>       lcm|choose12 : Montgomery stage-1 exponent. lcm =\n"
               << "                       lcm(1..B1) (gmp-ecm -param 0, default); choose12 =\n"
               << "                       12*lcm(1..B1) (Prime95-style; use when Prime95 runs\n"
               << "                       stage 2 on our point, see doc section 16.7)\n"
@@ -3739,6 +3739,13 @@ int main(int argc, char **argv){
 
     opt.verbose = verbose ? 1 : 0;
     opt.device_index = gpu_device_index;
+    /* Default home of the stage-1 exponent cache for single runs -- run_queue_manager()
+       sets the same default for queue mode, and an explicit --exp-cache / ecm.ini
+       exp_cache always wins (the getter is only consulted when nothing was set). */
+    if (ecm_exp_cache_get_dir().empty()) {
+        const std::string d = get_exe_dir_local();
+        ecm_exp_cache_set_dir(d.empty() ? "." : d);
+    }
     opt.gpu_param = gpu_param_set ? gpu_param_cli : 3;
     opt.ckpt_ms = ckpt_ms;
     opt.gpu_mul_path = gpu_mul_path;
