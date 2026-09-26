@@ -1,0 +1,11 @@
+
+# 基本排序（GNU sort）（按第4列）
+# -u 去重
+wsl
+cd /mnt/d/code/GIMPS/GIMPS_同步/ECM/pipeline/
+sort -t, -k4,4n -u assignment.csv > sorted.csv
+
+# 生成worktodo
+D:
+cd D:\code\GIMPS\GIMPS_同步\ECM\pipeline
+ecmcuda.bat
