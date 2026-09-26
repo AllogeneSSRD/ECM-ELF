@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.20)
 project(main)
 
 # MSVC Debug CRT (MDd) has an incompatibility with GMP's custom allocator
@@ -126,6 +126,9 @@ add_executable(ecm
     # s = torsion * lcm(1..B1): one product-tree builder shared by the GPU batch,
     # the CPU Edwards path and the CPU Montgomery path.
     src/core/ecm_stage1_exp.cpp
+    # persistent, self-validating cache for that value: at B1 = 260e6 the product is 375 Mbit
+    # and costs ~10 s to build, which every queue task would otherwise repeat.
+    src/core/ecm_stage1_exp_cache.cpp
 )
 
 # 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
@@ -569,6 +572,7 @@ if(ECM_ENABLE_CUDA)
         src/cpu/simd_mont_curve.cpp
         src/core/ecm_mont_ckpt.cpp
         src/core/ecm_stage1_exp.cpp
+        src/core/ecm_stage1_exp_cache.cpp
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu

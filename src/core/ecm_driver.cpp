@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -50,6 +50,7 @@
 #include "simd_mont_curve.h"        /* Suyama-sigma Montgomery stage-1 (8-lane IFMA) */
 #include "ecm_mont_ckpt.h"          /* mid-stage-1 checkpoints (Montgomery CPU) */
 #include "ecm_stage1_exp.h"         /* s = torsion * lcm(1..B1), shared product tree */
+#include "ecm_stage1_exp_cache.h"   /* validated on-disk cache for that value */
 #include <random>
 #include <algorithm>
 #include "ecm_edwards_save.h"       /* Prime95 ECM 二进制存档读写 */
@@ -267,7 +268,14 @@ static bool compute_batch_s(mpz_t s, double B1){
     if (limit64 < 2 || limit64 > 5000000000ULL) {
         return false;
     }
-    return ecm_build_lcm_exponent(s, limit64, 1);
+    /* The exponent is cached on disk (validated on load, see ecm_stage1_exp_cache.h): at
+       B1 = 260e6 building it costs ~10 s and every task in a worktodo would repeat that. */
+    std::string status;
+    if (!ecm_build_lcm_exponent_cached(s, limit64, 1, ecm_exp_cache_get_dir(), &status)) {
+        return false;
+    }
+    ecm_ts_fprintf(stdout, "stage1 exponent built: %s\n", status.c_str());
+    return true;
 }
 
 static bool parse_sigma_arg(const std::string &arg, uint32_t *sigma_out) {
@@ -674,7 +682,10 @@ static void print_ecm_usage(const char *prog) {
               << "                       per multiply); montgomery forces the A/B baseline\n"
               << "  --stage1-threads <n> CPU stage-1 worker threads (0=auto, 1=serial). One task\n"
               << "                       is an 8-curve SIMD batch (simd backend) or one curve\n"
-              << "  --exponent <m>       lcm|choose12 : Montgomery stage-1 exponent. lcm =\n"
+              << "  --exp-cache <dir>    cache s = torsion*lcm(1..B1) on disk (default: the exe\n"
+        << "                       directory; \"off\" disables).  B1 = 260e6 costs ~10 s to\n"
+        << "                       build and ~0.3 s to load from a validated cache.\n"
+        << "  --exponent <m>       lcm|choose12 : Montgomery stage-1 exponent. lcm =\n"
               << "                       lcm(1..B1) (gmp-ecm -param 0, default); choose12 =\n"
               << "                       12*lcm(1..B1) (Prime95-style; use when Prime95 runs\n"
               << "                       stage 2 on our point, see doc section 16.7)\n"
@@ -2116,7 +2127,8 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     mpz_t s;
     mpz_init(s);
     const int torsion = opt.exponent_choose12 ? 12 : 1;
-    const size_t s_bits = mont_build_s(s, (uint64_t)B1, (uint64_t)torsion);
+    std::string s_status;
+    const size_t s_bits = mont_build_s(s, (uint64_t)B1, (uint64_t)torsion, &s_status);
     if (s_bits == 0) {
         /* only reachable for B1 > 5e9 or an allocation failure; say so instead of
            running a ladder over the torsion-only exponent */
@@ -2141,8 +2153,8 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                         : (isa && curves >= 2);
     ecm_ts_fprintf(stdout, "method          : montgomery (Suyama sigma, %s, torsion=%d)\n",
                    use_simd ? "AVX512-IFMA 8-lane batch" : "scalar mpn", torsion);
-    ecm_ts_fprintf(stdout, "stage1 exponent : s_bits=%zu (lcm(1..%.0f) x %d)\n",
-                   s_bits, B1, torsion);
+    ecm_ts_fprintf(stdout, "stage1 exponent : s_bits=%zu (lcm(1..%.0f) x %d) [%s]\n",
+                   s_bits, B1, torsion, s_status.c_str());
 
     mpz_t *factors = (mpz_t *)malloc(sizeof(mpz_t) * curves);
     int *array_found = (int *)malloc(sizeof(int) * curves);
@@ -2970,6 +2982,8 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
 static int run_queue_manager(const std::string &ini_path) {
     const std::string raw_exe_dir = get_exe_dir_local();
     const std::string exe_dir = raw_exe_dir.empty() ? "." : raw_exe_dir;
+    /* Default home of the stage-1 exponent cache (overridable by --exp-cache / exp_cache). */
+    ecm_exp_cache_set_dir(exe_dir);
 
     // Resolve ini path (default: exe_dir/ecm.ini).
     std::string ini = ini_path;
@@ -3066,6 +3080,7 @@ static int run_queue_manager(const std::string &ini_path) {
     }
     opt.stage1_threads = cfg.stage1_threads;
     if (!cfg.save_name_pattern.empty()) opt.save_name_pattern = cfg.save_name_pattern;
+    if (!cfg.exp_cache.empty()) ecm_exp_cache_set_dir(cfg.exp_cache);
     /* ---- [edwards] only ------------------------------------------------------ */
     if (cfg.naf_w >= 3 && cfg.naf_w <= 12) edwards_set_naf_w(cfg.naf_w);
     opt.naf_w = cfg.naf_w;
@@ -3394,6 +3409,10 @@ int main(int argc, char **argv){
                 std::cerr << "Invalid --ckpt value, expected number of seconds" << std::endl;
                 return 1;
             }
+            continue;
+        }
+        if(a == "--exp-cache" && i+1<argc){
+            ecm_exp_cache_set_dir(argv[++i]);
             continue;
         }
         if(a == "--gpu-param" && i+1<argc){

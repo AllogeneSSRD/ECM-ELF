@@ -22,9 +22,11 @@
 #include <gmp.h>
 #include <stdint.h>
 
+#include <string>
+
 /* s = torsion * lcm(1..B1) with lcm built from prime powers (gmp-ecm convention
    when torsion == 1).  Returns s_bits. */
-size_t mont_build_s(mpz_t s, uint64_t B1, uint64_t torsion);
+size_t mont_build_s(mpz_t s, uint64_t B1, uint64_t torsion, std::string *detail = nullptr);
 
 /* mpz_set_ui() takes `unsigned long`, which is 32 bits on Windows, so passing a
    64-bit sigma through it silently TRUNCATES: sigma = 2^62 became 0, which makes

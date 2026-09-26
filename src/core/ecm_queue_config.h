@@ -79,6 +79,10 @@ struct EcmQueueConfig {
     // "the token between the last '_' and the trailing .save" (see
     // ecm_extract_b1_from_save_name), so keep that shape when changing it.
     std::string save_name_pattern = "m{n}_{b1}.save";
+// On-disk cache for s = torsion*lcm(1..B1); empty = off, otherwise a directory.
+// B1 = 260e6 needs ~10 s to build and ~0.3 s to load (validated), see
+// src/core/ecm_stage1_exp_cache.h.
+std::string exp_cache;
 
     // --- [edwards] method = edwards only ---
     // NAF window for the Edwards dictionary; 0 = the built-in default (12).

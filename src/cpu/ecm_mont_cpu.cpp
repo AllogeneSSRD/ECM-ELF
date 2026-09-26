@@ -22,7 +22,8 @@
  * ------------------------------------------------------------------------- */
 #include "ecm_mont_cpu.h"
 #include "ecm_edwards_mont.h"          /* generic MPN Montgomery layer */
-#include "ecm_stage1_exp.h"            /* s = torsion * lcm(1..B1), product tree */
+#include "ecm_stage1_exp.h"
+#include "ecm_stage1_exp_cache.h"            /* s = torsion * lcm(1..B1), product tree */
 
 #include <stdlib.h>
 #include <vector>
@@ -37,9 +38,12 @@
  * user hit as "the task sits there for 30 seconds".  Returns 0 (and leaves s at
  * torsion) if the bound is out of range or the sieve cannot be allocated.
  * ------------------------------------------------------------------------ */
-size_t mont_build_s(mpz_t s, uint64_t B1, uint64_t torsion)
+size_t mont_build_s(mpz_t s, uint64_t B1, uint64_t torsion, std::string *detail)
 {
-    if (!ecm_build_lcm_exponent(s, B1, torsion)) return 0;
+    std::string status;
+    /* Cached + validated on load (ecm_stage1_exp_cache.h): at B1 = 260e6 the build is ~10 s. */
+    if (!ecm_build_lcm_exponent_cached(s, B1, torsion, ecm_exp_cache_get_dir(), &status)) return 0;
+    if (detail) *detail = status;
     return (size_t)mpz_sizeinbase(s, 2);
 }
 

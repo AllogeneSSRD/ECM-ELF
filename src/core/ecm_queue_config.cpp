@@ -118,6 +118,7 @@ bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
         else if (key == "affinity") cfg.affinity = val;
         else if (key == "cpu_affinity") cfg.affinity = val;          // 已废弃别名 (见迁移表)
         else if (key == "save_name_pattern") cfg.save_name_pattern = val;
+    else if (key == "exp_cache") cfg.exp_cache = val;
 
         // ---- [edwards] ----------------------------------------------------
         else if (key == "naf_w") set_int(cfg.naf_w);
@@ -323,6 +324,10 @@ bool ecm_queue_config_write_default(const std::string &path) {
 "# 读取侧不依赖模板：只取文件名最后一个 '_' 与 .save 之间那段作为 B1，\n"
 "# 改模板时请保持该形状。\n"
 "save_name_pattern = m{n}_{b1}.save\n"
+        "# exp_cache = <dir|off>           : validated cache for s = torsion*lcm(1..B1).\n"
+        "#                                  B1=260e6: ~10 s to build, ~0.3 s to load;\n"
+        "#                                  default = exe dir, off = do not cache.\n"
+        "exp_cache = .\n"
 "# ---------------------------------------------------------------------------\n"
 "# [edwards] method = edwards only\n"
 "# [edwards] 仅 method = edwards\n"
