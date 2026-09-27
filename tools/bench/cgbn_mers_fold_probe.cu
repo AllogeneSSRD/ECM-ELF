@@ -62,15 +62,268 @@ struct params_t {
   static const uint32_t BITS = bits;
 };
 
+/* PROBE_ROT=1 also runs fold_rot: the rotating-accumulator transplant of CGBN's own
+   `mul` placement (core_mul_wmad.cu:100-123) into mul_wide's accumulation loops.
+   IT IS INCORRECT -- 265/324 edge-battery mismatches -- and therefore OFF by default;
+   see docs/ECM_CGBN_OPTIMIZATION.md 9.10.5.  Reason: mul stores the chain carry-out
+   under a RANGE predicate, so on lanes outside that range rl[] keeps a STALE value.
+   mul tolerates that (its carries are consumed directly), but mul_wide merges the
+   rotated t0/t1 into its ru[]/ra[] carry structure, which then produces a wrong
+   product.  The two routines' bookkeeping is coupled to their chain architectures,
+   so this is not a transplant that can be dropped in. */
+#ifndef PROBE_ROT
+#define PROBE_ROT 0
+#endif
+
 enum { OP_MONT_MUL, OP_MUL_WIDE, OP_REDUCE_WIDE, OP_FOLD_ALIGN, OP_FOLD_ALIGN_CANON,
-       OP_FOLD_GEN, OP_COUNT };
+       OP_FOLD_GEN, OP_FOLD_FUSED,
+#if PROBE_ROT
+       OP_FOLD_ROT,
+#endif
+       OP_COUNT };
+
+/* How many INDEPENDENT chains run per instance.  A dependency chain measures latency;
+   the real kernel has several modmuls in flight, and the earlier rounds showed the chain
+   view ranks mul_wide above mont_mul while the kernel measures the opposite.  With
+   PROBE_CHAINS=2 each instance runs two chains on identical values (chain 0 is verified),
+   which is the cheapest way to expose throughput instead of latency -- docs 9.9(g). */
+#ifndef PROBE_CHAINS
+#define PROBE_CHAINS 1
+#endif
 
 #define SLOTS 4          /* per instance: a, b_plain, b_mont, n */
 
 /* ---------------------------------------------------------------------------
- * Fold multiplication for N = 2^k - 1.
- * Inputs MUST be canonical (a, b < 2^k, and in practice < n).  Output is < n.
+ * MERSENNE FUSED CORE (goal round 1, docs 9.10): CGBN's mul_wide with the fold applied
+ * to its INTERNAL accumulators.
+ *
+ * The product accumulation below is copied VERBATIM from
+ *   cgbn/include/cgbn/core/core_mul_wmad.cu :: core_t<env>::mul_wide (lines 142-320)
+ * (names qualified; the `add[]` input of that function is zero in every CGBN caller of
+ * cgbn_mul_wide, hence mpzero(ra) here).  Only the EPILOGUE differs: instead of
+ * publishing (lo, hi) as two cgbn_t and then folding them with cgbn_* operators, the
+ * fold is applied to rl/ra/carry in place.  That removes the 2*BITS-bit wide object
+ * from the caller's live set -- which is what makes this kernel spill (356 B stores /
+ * 652 B loads at 128 regs vs 144/172 for the Montgomery kernel).
+ *
+ * Why it may be faster: fewer live registers, no mpset of lo/hi, and the fold's
+ * mask/shift/add run on the same arrays the accumulation just produced.
+ * Why it may not be: the accumulation loops (and their broadcast+place bookkeeping for
+ * the low half) are unchanged -- that bookkeeping was ~400 instructions per modmul per
+ * thread, i.e. as expensive as the ~320 madds of arithmetic (docs 9.9(f)).
+ * NOTE: this block must only be compiled in the DEVICE pass -- cgbn.h pulls in cgbn_cuda.h
+ * (and therefore cgbn::core_t) only when __CUDA_ARCH__ is defined; the host pass includes
+ * cgbn_mpz.h instead, where cgbn::core_t does not exist at all.  Hence the guard below,
+ * and the matching guard around the call site in the probe kernel.
  * ------------------------------------------------------------------------- */
+#if defined(__CUDA_ARCH__)
+namespace mers_core {
+
+/* ROT = true selects CGBN's `mul`-style ROTATING low-half accumulator instead of
+   mul_wide's "broadcast + predicated store" (docs 9.10).  Per word pair that trades
+   2 x SHFL for 2 x MOV; SHFL issues through MIO at roughly a quarter of the ALU rate
+   on Ada, so the rotating form should be the cheaper one -- measured below. */
+template<bool ROT, class env_t>
+__device__ __forceinline__ void fused_mul(env_t env,
+                                          typename env_t::cgbn_t &r_out,
+                                          const typename env_t::cgbn_t &a,
+                                          const typename env_t::cgbn_t &b,
+                                          const typename env_t::cgbn_t &n,
+                                          const uint32_t k, const uint32_t t) {
+  typedef cgbn::core_t<env_t> core;
+  const uint32_t LIMBS = env_t::LIMBS;
+  const uint32_t TPI = env_t::TPI;
+  const uint32_t BITS = env_t::BITS;
+  const uint32_t PADDING = env_t::PADDING;
+
+  uint32_t sync = core::sync_mask(), group_thread = threadIdx.x & (TPI - 1);
+  uint32_t tmp, t0, t1, term0, term1, carry;
+  uint32_t rl[LIMBS], ra[LIMBS + 2], ru[LIMBS + 1];
+  int32_t threads = (PADDING != 0) ? (BITS / 32) / LIMBS & 0xFFFE : (int32_t)TPI;
+
+  if (PADDING != 0) cgbn::mpzero<LIMBS>(rl);
+  cgbn::mpzero<LIMBS>(ra);
+  ra[LIMBS] = 0; ra[LIMBS + 1] = 0;
+  cgbn::mpzero<LIMBS>(ru);
+  ru[LIMBS] = 0;
+
+  carry = 0;
+  #pragma nounroll
+  for (int32_t r = 0; r < threads; r += 2) {
+    #pragma unroll
+    for (int32_t l = 0; l < (int32_t)(LIMBS * 2); l += 2) {
+      if (l < (int32_t)LIMBS) term0 = __shfl_sync(sync, b._limbs[l], r, TPI);
+      else                    term0 = __shfl_sync(sync, b._limbs[l - LIMBS], r + 1, TPI);
+      if (l + 1 < (int32_t)LIMBS) term1 = __shfl_sync(sync, b._limbs[l + 1], r, TPI);
+      else                        term1 = __shfl_sync(sync, b._limbs[l + 1 - LIMBS], r + 1, TPI);
+
+      cgbn::chain_t<> chain1;                       // aligned:   T0 * A_even
+      #pragma unroll
+      for (int32_t index = 0; index < (int32_t)LIMBS; index += 2) {
+        ra[index] = chain1.madlo(a._limbs[index], term0, ra[index]);
+        ra[index + 1] = chain1.madhi(a._limbs[index], term0, ra[index + 1]);
+      }
+      if (LIMBS % 2 == 0) ra[LIMBS] = chain1.add(ra[LIMBS], 0);
+
+      cgbn::chain_t<> chain2;                       // unaligned: T0 * A_odd
+      t0 = chain2.add(ra[0], carry);
+      #pragma unroll
+      for (int32_t index = 0; index < (int32_t)(LIMBS - 1); index += 2) {
+        ru[index] = chain2.madlo(a._limbs[index + 1], term0, ru[index]);
+        ru[index + 1] = chain2.madhi(a._limbs[index + 1], term0, ru[index + 1]);
+      }
+      if (LIMBS % 2 == 1) ru[LIMBS - 1] = chain2.add(0, 0);
+
+      cgbn::chain_t<> chain3;                       // unaligned: T1 * A_even
+      t1 = chain3.madlo(a._limbs[0], term1, ru[0]);
+      carry = chain3.madhi(a._limbs[0], term1, ru[1]);
+      #pragma unroll
+      for (int32_t index = 0; index < (int32_t)(LIMBS - 2); index += 2) {
+        ru[index] = chain3.madlo(a._limbs[index + 2], term1, ru[index + 2]);
+        ru[index + 1] = chain3.madhi(a._limbs[index + 2], term1, ru[index + 3]);
+      }
+      if (LIMBS % 2 == 1) ru[LIMBS - 1] = 0;
+      else                ru[LIMBS - 2] = chain3.add(0, 0);
+      ru[LIMBS - 1 + LIMBS % 2] = 0;
+
+      cgbn::chain_t<> chain4;                       // aligned:   T1 * A_odd
+      t1 = chain4.add(t1, ra[1]);
+      #pragma unroll
+      for (int32_t index = 0; index < (int32_t)(LIMBS - 3); index += 2) {
+        ra[index] = chain4.madlo(a._limbs[index + 1], term1, ra[index + 2]);
+        ra[index + 1] = chain4.madhi(a._limbs[index + 1], term1, ra[index + 3]);
+      }
+      ra[LIMBS - 2 - LIMBS % 2] = chain4.madlo(a._limbs[LIMBS - 1 - LIMBS % 2], term1, ra[LIMBS - LIMBS % 2]);
+      ra[LIMBS - 1 - LIMBS % 2] = chain4.madhi(a._limbs[LIMBS - 1 - LIMBS % 2], term1, ra[LIMBS + 1 - LIMBS % 2]);
+      if (LIMBS % 2 == 1) ra[LIMBS - 1] = chain4.add(0, 0);
+
+      if (ROT) {
+        /* CGBN core_mul_wmad.cu :: core_t<env>::mul (lines 100-123), verbatim: store the
+           carry-out under a range predicate, rotate the accumulator by one lane, then read
+           the rotated value back as the chain input of the next iteration. */
+        if (l < (int32_t)LIMBS) {
+          if (group_thread < (uint32_t)(threads - r)) rl[l] = t0;
+          rl[l] = __shfl_sync(sync, rl[l], threadIdx.x + 1, TPI);
+          t0 = rl[l];
+        } else {
+          if (group_thread < (uint32_t)(threads - 1 - r)) rl[l - LIMBS] = t0;
+          rl[l - LIMBS] = __shfl_sync(sync, rl[l - LIMBS], threadIdx.x + 1, TPI);
+          t0 = rl[l - LIMBS];
+        }
+        if (l + 1 < (int32_t)LIMBS) {
+          if (group_thread < (uint32_t)(threads - r)) rl[l + 1] = t1;
+          rl[l + 1] = __shfl_sync(sync, rl[l + 1], threadIdx.x + 1, TPI);
+          t1 = rl[l + 1];
+        } else {
+          if (group_thread < (uint32_t)(threads - 1 - r)) rl[l + 1 - LIMBS] = t1;
+          rl[l + 1 - LIMBS] = __shfl_sync(sync, rl[l + 1 - LIMBS], threadIdx.x + 1, TPI);
+          t1 = rl[l + 1 - LIMBS];
+        }
+      } else {
+        if (l < (int32_t)LIMBS) {
+          tmp = __shfl_sync(sync, t0, 0, TPI);
+          if (group_thread == (uint32_t)r) rl[l] = tmp;
+        } else {
+          tmp = __shfl_sync(sync, t0, 0, TPI);
+          if (group_thread == (uint32_t)(r + 1)) rl[l - LIMBS] = tmp;
+        }
+        if (l + 1 < (int32_t)LIMBS) {
+          tmp = __shfl_sync(sync, t1, 0, TPI);
+          if (group_thread == (uint32_t)r) rl[l + 1] = tmp;
+        } else {
+          tmp = __shfl_sync(sync, t1, 0, TPI);
+          if (group_thread == (uint32_t)(r + 1)) rl[l - LIMBS + 1] = tmp;
+        }
+        t0 = __shfl_sync(sync, t0, threadIdx.x + 1, TPI);
+        t1 = __shfl_sync(sync, t1, threadIdx.x + 1, TPI);
+      }
+
+      ra[LIMBS] = 0;
+      if (group_thread != TPI - 1) {
+        ra[LIMBS - 2] = cgbn::add_cc(ra[LIMBS - 2], t0);
+        ra[LIMBS - 1] = cgbn::addc_cc(ra[LIMBS - 1], t1);
+        ra[LIMBS] = cgbn::addc(0, 0);
+      }
+    }
+  }
+
+  cgbn::chain_t<> chainXX;
+  ra[0] = chainXX.add(ra[0], carry);
+  #pragma unroll
+  for (int32_t index = 1; index < (int32_t)LIMBS; index++)
+    ra[index] = chainXX.add(ra[index], ru[index - 1]);
+  carry = chainXX.add(ra[LIMBS], 0);
+
+  /* imad-algorithm tails (dead for our tiers: PADDING==0 and BITS/32 == TPI*LIMBS) */
+  if (BITS / 32 >= (uint32_t)(threads * LIMBS + LIMBS)) {
+    #pragma unroll
+    for (uint32_t l = 0; l < LIMBS; l++) {
+      tmp = __shfl_sync(sync, b._limbs[l], threads, TPI);
+      cgbn::chain_t<> c3;
+      #pragma unroll
+      for (uint32_t index = 0; index < LIMBS; index++)
+        ra[index] = c3.madlo(a._limbs[index], tmp, ra[index]);
+      carry = c3.add(carry, 0);
+      uint32_t s0 = __shfl_sync(sync, ra[0], 0, TPI);
+      if (group_thread == (uint32_t)threads) rl[l] = s0;
+      uint32_t s1 = __shfl_down_sync(sync, ra[0], 1, TPI);
+      s1 = (group_thread == TPI - 1) ? 0 : s1;
+      cgbn::chain_t<> c4;
+      #pragma unroll
+      for (uint32_t index = 0; index < LIMBS - 1; index++)
+        ra[index] = c4.madhi(a._limbs[index], tmp, ra[index + 1]);
+      ra[LIMBS - 1] = c4.madhi(a._limbs[LIMBS - 1], tmp, carry);
+      carry = c4.add(0, 0);
+      ra[LIMBS - 1] = cgbn::add_cc(ra[LIMBS - 1], s1);
+      carry = cgbn::addc(carry, 0);
+    }
+  }
+  if ((BITS / 32) % LIMBS != 0) {
+    uint32_t r2 = threads + (BITS / 32 >= (uint32_t)(threads * LIMBS + LIMBS));
+    #pragma unroll
+    for (uint32_t l = 0; l < (BITS / 32) % LIMBS; l++) {
+      tmp = __shfl_sync(sync, b._limbs[l], r2, TPI);
+      cgbn::chain_t<> c3;
+      #pragma unroll
+      for (uint32_t index = 0; index < LIMBS; index++)
+        ra[index] = c3.madlo(a._limbs[index], tmp, ra[index]);
+      carry = c3.add(carry, 0);
+      uint32_t s0 = __shfl_sync(sync, ra[0], 0, TPI);
+      if (group_thread == r2) rl[l] = s0;
+      uint32_t s1 = __shfl_down_sync(sync, ra[0], 1, TPI);
+      s1 = (group_thread == TPI - 1) ? 0 : s1;
+      cgbn::chain_t<> c4;
+      #pragma unroll
+      for (uint32_t index = 0; index < LIMBS - 1; index++)
+        ra[index] = c4.madhi(a._limbs[index], tmp, ra[index + 1]);
+      ra[LIMBS - 1] = c4.madhi(a._limbs[LIMBS - 1], tmp, carry);
+      carry = c4.add(0, 0);
+      ra[LIMBS - 1] = cgbn::add_cc(ra[LIMBS - 1], s1);
+      carry = cgbn::addc(carry, 0);
+    }
+  }
+
+  /* ---- FUSED EPILOGUE (the only difference from mul_wide) ---------------------------
+     mul_wide would do: mpset(lo, rl); mpset(hi, ra); fast_propagate_add(carry, hi);
+     We instead fold straight out of rl/ra:
+         m = (rl mod 2^k) + (rl >> k) + (ra << t)   ==  a*b  (mod 2^k - 1)
+     with ra already carrying the top carry, then the same two conditional subtractions
+     the production fold uses (t < k makes m <= 2.5N - 0.5). */
+  core::fast_propagate_add(carry, ra);            /* carry from the low half into ra[0] */
+  uint32_t m[LIMBS];
+  core::bitwise_mask_and(m, rl, (int32_t)k);      /* m  = rl mod 2^k        */
+  core::shift_right(rl, rl, k);                   /* rl = rl >> k  (< 2^t)  */
+  core::shift_left(ra, ra, t);                    /* ra = ra << t  (< 2^k)  */
+  core::add(m, m, rl);
+  core::add(m, m, ra);
+  if (core::compare(m, n._limbs) >= 0) core::sub(m, m, n._limbs);
+  if (core::compare(m, n._limbs) >= 0) core::sub(m, m, n._limbs);
+  cgbn::mpset<LIMBS>(r_out._limbs, m);
+}
+
+} /* namespace mers_core */
+#endif /* __CUDA_ARCH__ */
+
 
 /* k == BITS: ones' complement addition of the two halves. */
 template<class env_t>
@@ -133,38 +386,68 @@ __global__ void k_probe(cgbn_error_report_t *report,
   const int32_t instance = blockIdx.x * ipb + (threadIdx.x / params::TPI);
 
   cgbn_mem_t<params::BITS> *slot = &data[SLOTS * instance];
-  bn_t a, b, n;
-  cgbn_load(env, a, &slot[0]);
+  /* PROBE_CHAINS independent chains on identical values: the real kernel keeps several
+     modmuls in flight, and a single dependency chain only measures latency (docs 9.9g).
+     Chain 0 is the one the host verifies; the others are exact copies of it. */
+  bn_t av[PROBE_CHAINS], b, n;
   cgbn_load(env, b, &slot[b_slot]);
   cgbn_load(env, n, &slot[3]);
+  #pragma unroll
+  for (int c = 0; c < PROBE_CHAINS; c++) cgbn_load(env, av[c], &slot[0]);
 
   if (OP == OP_MONT_MUL) {
-    for (int i = 0; i < iters; i++) env.mont_mul(a, a, b, n, np0);
+    for (int i = 0; i < iters; i++)
+      #pragma unroll
+      for (int c = 0; c < PROBE_CHAINS; c++) env.mont_mul(av[c], av[c], b, n, np0);
   } else if (OP == OP_MUL_WIDE) {
-    typename env_t::cgbn_wide_t p;
-    for (int i = 0; i < iters; i++) {
-      cgbn_mul_wide(env, p, a, b);
-      /* both halves must stay live, otherwise ptxas deletes the low-half stores
-         and the "product price" comes out too low (that artifact was measured:
-         a = p._high gave exactly fold_align's number) */
-      cgbn_add(env, a, p._low, p._high);
-    }
+    for (int i = 0; i < iters; i++)
+      #pragma unroll
+      for (int c = 0; c < PROBE_CHAINS; c++) {
+        typename env_t::cgbn_wide_t p;
+        cgbn_mul_wide(env, p, av[c], b);
+        /* both halves must stay live, otherwise ptxas deletes the low-half stores
+           and the "product price" comes out too low (that artifact was measured:
+           a = p._high gave exactly fold_align's number) */
+        cgbn_add(env, av[c], p._low, p._high);
+      }
   } else if (OP == OP_REDUCE_WIDE) {
-    typename env_t::cgbn_wide_t p;
-    for (int i = 0; i < iters; i++) {
-      cgbn_mul_wide(env, p, a, b);
-      env.mont_reduce_wide(a, p, n, np0);
-    }
+    for (int i = 0; i < iters; i++)
+      #pragma unroll
+      for (int c = 0; c < PROBE_CHAINS; c++) {
+        typename env_t::cgbn_wide_t p;
+        cgbn_mul_wide(env, p, av[c], b);
+        env.mont_reduce_wide(av[c], p, n, np0);
+      }
   } else if (OP == OP_FOLD_ALIGN) {
-    for (int i = 0; i < iters; i++) mers_fold_mul_align(env, a, a, b, n, false);
+    for (int i = 0; i < iters; i++)
+      #pragma unroll
+      for (int c = 0; c < PROBE_CHAINS; c++) mers_fold_mul_align(env, av[c], av[c], b, n, false);
   } else if (OP == OP_FOLD_ALIGN_CANON) {
-    for (int i = 0; i < iters; i++) mers_fold_mul_align(env, a, a, b, n, true);
+    for (int i = 0; i < iters; i++)
+      #pragma unroll
+      for (int c = 0; c < PROBE_CHAINS; c++) mers_fold_mul_align(env, av[c], av[c], b, n, true);
   } else if (OP == OP_FOLD_GEN) {
-    for (int i = 0; i < iters; i++) mers_fold_mul_gen(env, a, a, b, n, k, t);
+    for (int i = 0; i < iters; i++)
+      #pragma unroll
+      for (int c = 0; c < PROBE_CHAINS; c++) mers_fold_mul_gen(env, av[c], av[c], b, n, k, t);
+#if PROBE_ROT
+  } else if (OP == OP_FOLD_ROT) {
+#if defined(__CUDA_ARCH__)
+    for (int i = 0; i < iters; i++)
+      #pragma unroll
+      for (int c = 0; c < PROBE_CHAINS; c++) mers_core::fused_mul<true>(env, av[c], av[c], b, n, k, t);
+#endif
+#endif
+  } else if (OP == OP_FOLD_FUSED) {
+#if defined(__CUDA_ARCH__)
+    for (int i = 0; i < iters; i++)
+      #pragma unroll
+      for (int c = 0; c < PROBE_CHAINS; c++) mers_core::fused_mul<false>(env, av[c], av[c], b, n, k, t);
+#endif
   }
 
-  cgbn_store(env, &slot[0], a);
-  uint64_t acc = cgbn_get_ui32(env, a);
+  cgbn_store(env, &slot[0], av[0]);
+  uint64_t acc = cgbn_get_ui32(env, av[0]);
   if (acc == 0xdeadbeefull) sink[instance] = acc;   /* defeat DCE */
 }
 
@@ -180,6 +463,10 @@ static void launch(int op, int blocks, int iters, cgbn_error_report_t *report,
     case OP_FOLD_ALIGN:       k_probe<params, OP_FOLD_ALIGN><<<blocks, params::TPB>>>(report, dev, np0, k, t, bslot, iters, sink); break;
     case OP_FOLD_ALIGN_CANON: k_probe<params, OP_FOLD_ALIGN_CANON><<<blocks, params::TPB>>>(report, dev, np0, k, t, bslot, iters, sink); break;
     case OP_FOLD_GEN:         k_probe<params, OP_FOLD_GEN><<<blocks, params::TPB>>>(report, dev, np0, k, t, bslot, iters, sink); break;
+    case OP_FOLD_FUSED:       k_probe<params, OP_FOLD_FUSED><<<blocks, params::TPB>>>(report, dev, np0, k, t, bslot, iters, sink); break;
+#if PROBE_ROT
+    case OP_FOLD_ROT:         k_probe<params, OP_FOLD_ROT><<<blocks, params::TPB>>>(report, dev, np0, k, t, bslot, iters, sink); break;
+#endif
   }
 }
 
@@ -205,6 +492,10 @@ static const char *op_name(int op) {
     case OP_FOLD_ALIGN:       return "fold_align";
     case OP_FOLD_ALIGN_CANON: return "fold_align+canon";
     case OP_FOLD_GEN:         return "fold_gen";
+    case OP_FOLD_FUSED:       return "fold_fused";
+#if PROBE_ROT
+    case OP_FOLD_ROT:         return "fold_rot";
+#endif
   }
   return "?";
 }
@@ -307,7 +598,11 @@ static int run_case(int instances, int iters, uint32_t k, const char *tag,
   ops[nops++] = OP_REDUCE_WIDE;
   /* the general fold needs shift_right(low, k); with k == BITS that is a shift by
      the whole word width, so it is only defined for the exact-tier case */
-  if (tshift > 0) ops[nops++] = OP_FOLD_GEN;
+  if (tshift > 0) { ops[nops++] = OP_FOLD_GEN; ops[nops++] = OP_FOLD_FUSED;
+#if PROBE_ROT
+    ops[nops++] = OP_FOLD_ROT;
+#endif
+  }
 
   double ns[2][OP_COUNT];
   bool okv[OP_COUNT];
@@ -339,7 +634,7 @@ static int run_case(int instances, int iters, uint32_t k, const char *tag,
       fprintf(stderr, "  CGBN error (op=%s)\n", op_name(op));
       cgbn_error_report_reset(report);
     }
-    ns[pass][op] = (double)ms * 1e6 / ((double)total * (double)iters);
+    ns[pass][op] = (double)ms * 1e6 / ((double)total * (double)iters * (double)PROBE_CHAINS);
 
     /* verify the final state of the timed chain against GMP */
     CUDA_CHECK(cudaMemcpy(out, dev, (size_t)total * SLOTS * sizeof(mem_t), cudaMemcpyDeviceToHost));
@@ -467,7 +762,11 @@ static int run_edge(uint32_t k, int device, bool aligned) {
   int ops[3];
   int nops = 0;
   if (aligned) ops[nops++] = OP_FOLD_ALIGN_CANON;
-  if (tshift > 0) ops[nops++] = OP_FOLD_GEN;
+  if (tshift > 0) { ops[nops++] = OP_FOLD_GEN; ops[nops++] = OP_FOLD_FUSED;
+#if PROBE_ROT
+    ops[nops++] = OP_FOLD_ROT;
+#endif
+  }
   ops[nops++] = OP_MONT_MUL;
 
   int fails = 0;

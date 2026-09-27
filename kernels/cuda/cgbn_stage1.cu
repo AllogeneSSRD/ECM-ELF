@@ -1477,6 +1477,26 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm, kernel, (int)TPB, 0) == cudaSuccess &&
         sm_count > 0 && blocks_per_sm > 0) {
       const long capacity = (long)sm_count * (long)blocks_per_sm;
+      /* The Mersenne fold family is LATENCY bound (it deletes mont_mul's Q*N chains, so
+         there is less independent work to fill the issue slots): it only reaches parity/
+         lead when at least 2 blocks per SM stay resident.  Measured (4070 Ti, param0,
+         M5003/M4441, docs/ECM_CGBN_OPTIMIZATION.md 9.9):
+           TPB=256, 120 blocks = 2 blocks/SM (16 warps): fold 47.1 s/curve  vs basic 49.1
+           TPB=256,  60 blocks = 1 block/SM  ( 8 warps): fold 55.7 s/curve  vs basic 50.2
+           TPB=128, 240 blocks = 4 blocks/SM (16 warps): fold 51.5 s/curve  vs basic 50.3
+         i.e. below 2 blocks/SM the fold is 10-25% SLOWER than the Montgomery kernels.  The
+         check comes FIRST because a fold batch with less than one block per SM is entirely
+         in its bad regime.  ECM_MERS_FOLD is 0 in production builds: nothing runs there. */
+#if ECM_MERS_FOLD
+      if ((long)BLOCK_COUNT < 2L * (long)sm_count) {
+        outputf(OUTPUT_ALWAYS,
+                "GPU: warning: the Mersenne fold is latency bound and needs >= 2 resident "
+                "blocks/SM; %d blocks for %d SMs is below that (measured 10-25%% SLOWER than a "
+                "non-fold build there).  Raise -gpucurves to about %ld (%d curves/block) or "
+                "rebuild with -DECM_TPB=128.\n",
+                (int)BLOCK_COUNT, sm_count, 2L * (long)sm_count, (int)IPB);
+      } else
+#endif
       if ((long)BLOCK_COUNT < (long)sm_count) {
         outputf(OUTPUT_NORMAL,
                 "GPU: warning: only %d blocks for %d SMs - some SMs idle; raise -gpucurves to "

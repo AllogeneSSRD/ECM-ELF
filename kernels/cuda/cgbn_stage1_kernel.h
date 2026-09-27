@@ -210,6 +210,39 @@
 #define ECM_SBITS_CACHE 0
 #endif
 
+// ---------------------------------------------------------------------------
+// ECM_MERS_FOLD_FUSED = 1 (goal round 1, docs 9.10) replaces the fold's
+// "cgbn_mul_wide(...) then fold the two halves" with a FUSED core: CGBN's product
+// accumulation with the fold applied to its own internal accumulators (rl/ra/carry),
+// so the 2*BITS-bit product never becomes a live object in the caller.
+//
+// Why: the fold kernel spills (356 B stores / 652 B loads at the 128-register cap vs
+// 144/172 for the Montgomery kernel) because it must keep low+high+temp (3*LIMBS words)
+// alive on top of the ladder state, and keeping the caller's wide pair live also stops
+// ptxas from interleaving two independent modmuls.  Probe (tools/bench/cgbn_mers_fold_probe.cu,
+// 4060, 2048 instances, per-op ns; fold_gen = the two-pass production fold): 
+//
+//   parallel chains   tier 4608: gen / fused        tier 5120: gen / fused
+//        1            28.06 / 28.52  (-1.6%)          35.23 / 33.95  (+3.8%)
+//        2            28.87 / 29.54  (-2.3%)          37.86 / 35.91  (+5.2%)
+//        4            35.70 / 29.91  (+16.3%)         40.75 / 40.70  (+0.1%)
+//
+// i.e. the fused core is FLAT across chain counts while the two-pass fold degrades --
+// the register-pressure explanation seen from the throughput side.  Correctness: the
+// accumulation loops are copied verbatim from core_mul_wmad.cu::mul_wide (only the
+// epilogue differs), and the probe verifies the 1000-step chain and the 18-value edge
+// battery of every operator against GMP.
+//
+// Default 0: the two-pass fold stays the reference until the kernel A/B confirms this.
+// ---------------------------------------------------------------------------
+#ifndef ECM_MERS_FOLD_FUSED
+#define ECM_MERS_FOLD_FUSED 0
+#endif
+
+#if ECM_MERS_FOLD_FUSED
+#include "cgbn_mers_fused_core.h"
+#endif
+
 const uint32_t TPB_DEFAULT = ECM_TPB;
 template<uint32_t tpi, uint32_t bits>
 class cgbn_params_t {
@@ -574,6 +607,12 @@ class curve_t {
        NOTE the separate result register: several call sites alias the destination (r)
        with an input (u = K*u, x = x*xdiff), and the first draft's in-place reuse of the
        wide pair would clobber those inputs. */
+#if ECM_MERS_FOLD_FUSED && defined(__CUDA_ARCH__)
+    /* goal round 1 (docs 9.10): fuse the fold into CGBN's product accumulators, so no
+       2*BITS-bit wide object is ever live in this caller (that is what makes the fold
+       kernel spill, and what stops ptxas interleaving two independent modmuls). */
+    mers_core::fused_mul(_env, r, a, b, modulus, k, t);
+#else
     typename env_t::cgbn_wide_t p;
     bn_t m;
     cgbn_mul_wide(_env, p, a, b);
@@ -594,6 +633,7 @@ class curve_t {
     if (cgbn_compare(_env, m, modulus) >= 0) cgbn_sub(_env, m, m, modulus);
     if (cgbn_compare(_env, m, modulus) >= 0) cgbn_sub(_env, m, m, modulus);
     cgbn_set(_env, r, m);
+#endif
 #endif
   }
 

@@ -118,6 +118,8 @@ tools/gen/__pycache__/
 /build_cuda_foldt*/
 /build_cuda_sbcache
 /build_cuda_tpb*/
+# goal round 1: fold with the fused hand-written Mersenne core (docs/ECM_CGBN_OPTIMIZATION.md 9.10)
+/build_cuda_fold_fused
 tools/ecm_worktodo/assignment.csv
 tools/ecm_worktodo/assignment.save.csv
 tools/ecm_worktodo/sorted.csv
