@@ -108,6 +108,16 @@ tools/gen/__pycache__/
 /build_cpu_nmake
 /build_reltest
 /build_cuda_release
+# Mersenne-fold A/B tree (docs/ECM_CGBN_OPTIMIZATION.md 9): same rule as the other local
+# experiment builds -- ignored, deletable once the fold becomes a runtime kernel family.
+/build_cuda_fold
+# single-tier fold build (6144 only), kept as build_cuda_fold\ecm_cuda_fold6144.exe
+/build_cuda_fold6144
+# experiment trees from the fold/TPB optimization round (docs/ECM_CGBN_OPTIMIZATION.md 9.9):
+# fold at other TPB values, basic with ECM_SBITS_CACHE, basic at TPB 256/512
+/build_cuda_foldt*/
+/build_cuda_sbcache
+/build_cuda_tpb*/
 tools/ecm_worktodo/assignment.csv
 tools/ecm_worktodo/assignment.save.csv
 tools/ecm_worktodo/sorted.csv
@@ -119,3 +129,5 @@ tools/ecm_worktodo/worktodo_p95_stage2.txt
 /build_a80
 /build_a86
 /build_reltest2
+/build_cuda_basic_t256
+/build_cuda_fold_t256

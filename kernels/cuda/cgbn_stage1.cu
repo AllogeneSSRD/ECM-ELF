@@ -1381,6 +1381,65 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   /* np0 is -(N^-1 mod 2**32), used for montgomery representation */
   uint32_t np0 = find_np0(N);
 
+#if ECM_MERS_FOLD
+  /* ---------------------------------------------------------------------------
+   * MERSENNE FOLD DOMAIN (kernels/cuda/cgbn_stage1_kernel.h, ECM_MERS_FOLD).
+   *
+   * This build's suyama family (param0 + param2) runs the fold domain, which is
+   * only defined for N = 2^k - 1.  Anything else must be refused LOUDLY: the fold
+   * would silently drop the top bits of the product (CGBN's shift_left inside
+   * fold_mul is a fixed-width shift) and every curve would be wrong.
+   *
+   * The fold needs t = BITS - k, which is passed through the kernel's unused
+   * `sigma_0` argument (the shared kernel-pointer typedef is unchanged).  t >= 1
+   * is required (t == 0 would mean a shift by the whole word width); the tier
+   * search guarantees t >= CARRY_BITS for a Mersenne N because it picks the
+   * smallest kernel with BITS >= n_log2 + CARRY_BITS = k + CARRY_BITS.
+   * ------------------------------------------------------------------------- */
+  uint32_t fold_shift = 0;
+  {
+    if (!suyama_layout) {
+      outputf(OUTPUT_ERROR,
+              "GPU: this binary was built with the Mersenne fold (-DECM_MERS_FOLD=1) and only\n"
+              "     carries fold kernels for --gpu-param 0 and 2; gpu_param=%d needs the\n"
+              "     Montgomery kernels.  Rebuild without -DECM_MERS_FOLD for that path.\n",
+              gpu_param);
+      return ECM_ERROR;
+    }
+    mpz_t n_plus_1;
+    mpz_init(n_plus_1);
+    mpz_add_ui(n_plus_1, N, 1);
+    const bool is_mersenne = (mpz_popcount(n_plus_1) == 1);
+    mpz_clear(n_plus_1);
+    if (!is_mersenne) {
+      outputf(OUTPUT_ERROR,
+              "GPU: this binary was built with the Mersenne fold (-DECM_MERS_FOLD=1), which is\n"
+              "     only valid for N = 2^k - 1; this N is %zu bits but not of that form.\n"
+              "     Rebuild without -DECM_MERS_FOLD for a general modulus.\n", n_log2);
+      return ECM_ERROR;
+    }
+    if (BITS <= (int)n_log2) {
+      outputf(OUTPUT_ERROR, "GPU: internal error: fold has no headroom (BITS=%d, k=%zu)\n",
+              BITS, n_log2);
+      return ECM_ERROR;
+    }
+    fold_shift = (uint32_t)(BITS - (int)n_log2);
+    /* OUTPUT_ALWAYS: which DOMAIN the kernel runs matters as much as which
+       parametrization -- a fold build behaves differently from a stock build, and
+       OUTPUT_NORMAL is invisible at the default verbosity. */
+    outputf(OUTPUT_ALWAYS,
+            "GPU: Mersenne fold domain: N = 2^%zu - 1, k=%zu, t=%u (BITS=%d, TPI=%d)\n",
+            n_log2, n_log2, fold_shift, BITS, TPI);
+  }
+#endif
+
+  /* The suyama family does not use its `sigma_0` slot: a fold build puts t there. */
+#if ECM_MERS_FOLD
+  const uint32_t sigma_arg = fold_shift;
+#else
+  const uint32_t sigma_arg = sigma32;
+#endif
+
   // Copy data
   outputf (OUTPUT_VERBOSE, "Copying %'lu bytes of curves data to GPU\n", data_size);
   CUDA_CHECK(cudaMalloc((void **)&gpu_data, data_size));
@@ -1494,7 +1553,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
 
     /* Call CUDA Kernel. */
     assert (kernel != NULL);
-    (*kernel)<<<BLOCK_COUNT, TPB>>>(report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma32, np0);
+    (*kernel)<<<BLOCK_COUNT, TPB>>>(report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma_arg, np0);
 
     s_partial += this_batch;
     batches_complete++;

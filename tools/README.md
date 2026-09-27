@@ -43,6 +43,7 @@ tools/
 | `test_feeder.ps1` | `ecm_p95feeder` 端到端集成测试（沙箱 p95 目录，7 个周期） |
 | `test_agreement.ps1` | **三后端互认**：同一 `(N,B1,sigma)` 跑 标量 / SIMD-Montgomery / SIMD-折叠域，断言命中集合、因子值、以及每个 `.tmp` **逐字节相同**。含历史失败用例（M3001 σ=20260922 B1=1e5），是 §15.9/§15.10 两个 bug 的回归 |
 | `test_invariants.ps1` | §7 因子不变式回归：M677→1943118631、M991→8218291649、M4003→16756559，两域各一遍 |
+| `test_cuda_mers_fold.ps1` | **梅森折叠域验收**（`-DECM_MERS_FOLD=1` 构建）：折叠 ↔ Montgomery ↔ CPU 三方差分逐行存档对照（M991/M3217/M4999/2^4400−1，param0 + param2）、非梅森 N 与 `--gpu-param 3` 的守卫、以及 M4999 的吞吐 A/B（`-ExpectFoldFaster` 才把"更快"当门限，默认现状是**折叠更慢**，见 `docs/ECM_CGBN_OPTIMIZATION.md` §9） |
 | `fixtures/` | 测试派生文件（`_test_*.save`，由 `ecm_edwards_save_test` 写出） |
 
 手工编译示例（GPE/zen3 前缀按需替换）：
@@ -109,6 +110,7 @@ python tools\ecm_worktodo\ecm.py --input sorted.csv --emit-cli todo.ps1 --emit-c
 | `ecm_edwards_standalone.cpp` | 单曲线 stage-1 dump（`d`、基点、`s_bits`、`Qx/Qz`、`u`、`gcd`），用于与 Prime95/参考阶梯对拍。原先藏在 `src/cpu/ecm_edwards_cpu.cpp` 的 `BUILD_ECM_EDWARDS_STANDALONE` 里，现已搬出并加 CMake 目标 `ecm_edwards_standalone` |
 | `fix_bom.py` | **编码体检/修复**：对"含非 ASCII 且缺 UTF-8 BOM"的源文件补回 BOM（用法 `python tools\diag\fix_bom.py <file...>`）。任何一次"读出来再写回去"的编辑都会丢掉 BOM，而 nvcc/cl 会把无 BOM 的中文注释按 GBK 读、**吃掉换行**，导致下一行的 `#define` 被并进注释（本轮真踩：`CHECKPOINT_VERSION is undefined`）。改完 `cgbn_stage1.cu` 之类的文件请顺手跑一次 |
 | `cgbn_op_probe.cu` | **CGBN 逐算子单价**（`mont_mul`/`mont_sqr`/compare+cond-sub/add/sub/shift），可切 TPI/BITS 档位，可用 `-DXMP_WMAD/-DXMP_XMAD/-DXMP_IMAD` 切乘法链变体、`-DPROBE_VALUE_MODE=0/1/2` 检验算子对**操作数值**是否敏感（实测不敏感：通用/0/1 都是 0.91 ns）；用于判断"改哪个算子值多少"（结论见 `docs/ECM_CGBN_OPTIMIZATION.md`）。**文件必须保持 ASCII-only**（中文注释会让 nvcc 按 GBK 读、吃掉换行） |
+| `cgbn_mers_fold_probe.cu` | **梅森折叠 vs Montgomery 的逐算子探针**：8 档位 × `mont_mul`/`mul_wide`/`mul_wide+reduce`/`fold_gen`/`fold_align`，每档两遍、每个算子一条 1000 步链，全部用 GMP `mpz_powm` 校验，另有 18 个特殊值 × 自身的边界电池（`ktest=edge`）。结论：折叠在 ≥4608 bit 每模乘便宜 21–31%，但**整 kernel 反而慢 15–19%** —— 链口径排不了 throughput，见 `docs/ECM_CGBN_OPTIMIZATION.md` §9 |
 | `cuda_kernel_ab.ps1` | **整 CUDA kernel A/B 计时**：固定 N（默认 `2^Bits−1`）/B1/曲线数，多次取中位数，输出 `gputime` 与 curve-bits/s；`-Device` 默认 1（计时要在空闲卡上做）。探针实验必须 `-NExpr <素数>`，否则垃圾状态会撞出假因子、批次提前结束 |
 | `param2_gen_cost.cpp` | **主机侧建曲线成本**（GMP 独立工具，N 走 stdin，如 `cmd /c "build_vs18\tools\param2_gen_cost.exe 3000 3 < n.txt"`）：对比 param3 形状与 gmp-ecm `get_curve_from_param2`（加法链 + 3 次模逆）的 ms/curve。结论见 `docs/ECM_CGBN_OPTIMIZATION.md` §5.6。**注意别用 PowerShell 管道喂 N**（会加 BOM，gmp-ecm 报 invalid number） |
 | `simd_edwards_bench.cpp` | SIMD 批的验证 + 计时（`verify` 子命令与标量逐位对拍；`ED_SOA_FIELD=mont\|mers\|auto`、`ED_SOA_FSELFTEST=<n>`） |
@@ -158,6 +160,7 @@ python tools\ecm_worktodo\ecm.py --input sorted.csv --emit-cli todo.ps1 --emit-c
 | `dump_tmp.cpp` | 用驱动自己的 reader 解析 `.tmp` 打印 `Qx/Qz`，用于跨后端比对最终点 |
 | `crashloop.cmd` | 中止路径崩溃复现（逐次记 exit code，可看出 `0xC0000005`；§15.11 的回归） |
 | `enc_diag.py` | 文件编码体检：UTF-8 是否有效、CJK/乱码字符数、与 `HEAD` 版本对比 |
+| `ensure_bom.ps1` | **BOM 守卫（构建前自动跑）**：把 `kernels/`、`src/` 下每个源文件与 git HEAD 的 BOM 状态比对并恢复（`-NoFix` 只报告）。与 `bench/fix_bom.py` 的区别：后者是"含非 ASCII 就补 BOM"的钝器（会给本来就无 BOM 的文件制造 diff），前者只在**编辑往返把 BOM 抹掉**时修回去。`tools/build/local_build.ps1` 已内置调用（2026-09-26：`cgbn_stage1.cu` 的 BOM 被抹掉 ⇒ nvcc 按 GBK 读 ⇒ `#define CHECKPOINT_VERSION` 被中文注释吃掉） |
 
 > 三次 bug（§15.4 值非规范、§15.9 limb 非规范、§15.10 limb 非规范）都栽在同一件事上：
 > **"读回 mpz 再比较"的测试是空洞的**。`ifma_to_mpz_lane` 先 `& 2^52−1` 再 `mpz_mod`，

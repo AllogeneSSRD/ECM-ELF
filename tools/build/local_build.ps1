@@ -39,6 +39,7 @@ param(
     [switch]$FullRebuild,
     [switch]$RelinkOnly,
     [switch]$Incremental,      # skip CUDA TUs whose object is newer than the sources (fast host-only edits)
+    [string]$Extra = "",       # extra cmake definitions, e.g. -Extra "-DECM_MERS_FOLD=1"
     [string]$Gmp = "",
     [string]$OpenSslRoot = "",
     [string]$VcVars = ""
@@ -73,9 +74,14 @@ $cfg = @(
     "-DGMP_LIBRARY=$($Gmp -replace '\\','/')/lib/gmp.lib",
     "-DOPENSSL_ROOT_DIR=$OpenSslRoot"
 ) -join ' '
+if ($Extra) { $cfg = "$cfg $Extra" }
 
 Write-Host "== LOCAL build rule: sm_$Arch, compression ON, no PTX, tiers='$(if ($Tiers) { $Tiers } else { 'all' })' =="
-& cmd.exe /c "call `"$VcVars`" >nul 2>&1 && cmake $cfg" | Select-String -Pattern 'device code|PTX embedded|no PTX|Error' |
+# nvcc reads a BOM-less source file as GBK; a CJK comment then swallows the next line of
+# code (that silently removed `#define CHECKPOINT_VERSION` once).  tools/diag/ensure_bom.ps1
+# restores the BOM state git HEAD has, for every tracked source under kernels/ and src/.
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "..\diag\ensure_bom.ps1")
+& cmd.exe /c "call `"$VcVars`" >nul 2>&1 && cmake $cfg" | Select-String -Pattern 'device code|PTX embedded|no PTX|Error|MERSENNE' |
     ForEach-Object { "   $($_.Line.Trim())" }
 if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 

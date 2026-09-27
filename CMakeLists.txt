@@ -769,6 +769,17 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
         foreach(tier IN LISTS tier_list)
             string(STRIP "${tier}" tier)
             target_compile_definitions(ecm_cuda PRIVATE ECM_TIER_${tier})
+            # The 512- and 1024-bit tiers are guarded by their CGBN TYPEDEF NAME, not by
+            # their number (cgbn_params_small = 512, cgbn_params_medium = 1024), so
+            # -DECM_TIERS=1024 used to define ECM_TIER_1024 while every guard asked for
+            # ECM_TIER_medium: the tier list silently compiled NO 1024-bit kernel and the
+            # dispatch fell through to the next tier (observed: a 991-bit N ran on the
+            # 4608-bit suyama kernel, 5x slower, with t = 3617).  Define both spellings.
+            if(tier STREQUAL "512")
+                target_compile_definitions(ecm_cuda PRIVATE ECM_TIER_small)
+            elseif(tier STREQUAL "1024")
+                target_compile_definitions(ecm_cuda PRIVATE ECM_TIER_medium)
+            endif()
         endforeach()
         message(STATUS "ecm_cuda: kernel tiers restricted to ${tier_list}")
     endif()
@@ -802,6 +813,21 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     # results, timing only -- see docs/ECM_CGBN_OPTIMIZATION.md §5.6.
     set(ECM_PARAM2SHAPE "0" CACHE STRING "PROBE ONLY: run the param2-shaped step on the param0 path")
     target_compile_definitions(ecm_cuda PRIVATE ECM_PARAM2SHAPE=${ECM_PARAM2SHAPE})
+
+    # Mersenne fold domain for the suyama family (param0 + param2).  For N = 2^k - 1 the
+    # Montgomery reduction of every modular multiply is replaced by a fold (2^k == 1), which
+    # removes CGBN's Q*N chains -- the GPU analogue of the CPU IFMA fold domain.  Measured
+    # -21%..-31% per modular multiply on the 4060 Laptop at 4608/5120/8192 bits
+    # (tools/bench/cgbn_mers_fold_probe.cu, docs/ECM_CGBN_OPTIMIZATION.md §9).
+    #
+    # This is a WHOLE-BUILD switch: a binary built with -DECM_MERS_FOLD=1 only carries fold
+    # kernels, so it REFUSES any N that is not 2^k - 1 and refuses --gpu-param 3
+    # (kernels/cuda/cgbn_stage1.cu).  Default 0 keeps the historical Montgomery kernels.
+    set(ECM_MERS_FOLD "0" CACHE STRING "1 = suyama family runs the Mersenne fold domain (N = 2^k-1 only)")
+    target_compile_definitions(ecm_cuda PRIVATE ECM_MERS_FOLD=${ECM_MERS_FOLD})
+    if(ECM_MERS_FOLD)
+        message(STATUS "ecm_cuda: MERSENNE FOLD domain enabled for param0/param2 (-DECM_MERS_FOLD=1)")
+    endif()
 
     # Pascal sm_60 / Maxwell workaround: with NDEBUG (Release), CUDA 12.x fails to
     # unroll one of CGBN's carry chains on the compute_60 PTX path, so CGBN emits

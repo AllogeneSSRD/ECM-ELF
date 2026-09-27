@@ -18,6 +18,8 @@
 | 2 | `mont_sqr` 就是 `mont_mul(a,a)`（α = 1.0），专用平方的**理论上限 12–14%**，且 CGBN 的分布式布局要先解决跨 lane 部分和交换 | ≤ +14% | 可做，优先级低 |
 | 3 | 我们每 bit 有 **8 次（param3）/ 6 次（param0）冗余的 `normalize_addition`** —— `mont_mul`/`mont_sqr` 返回时已经 < n；删掉后实测 **param3 +5.4%、param0 +6.7%** | **+5.4% / +6.7%** | **已实现**（本文件 §4） |
 | 4 | add-chain / w-NAF **在 x-only 下不合法**（差值是每窗口都不同的新点，表里没有），且一维差分链的加法次数下界 1.44042/bit > 赢所需门槛 1.26/bit；真实链（PRAC，实测 1.388 加法 + 0.135 倍点每 bit）折成算子数 8.90–9.56 vs 梯子 8.24 ⇒ **慢 8–16%**。探针测出的"理想上界" 1.70×（w=2）/1.85×（w=3）/1.94×（w=4）不可达 | **无（方向关闭）** | 已实现探针 + 实测，结论关闭（§5.4） |
+| 5 | **梅森数折叠域**（N = 2^k−1 时用折叠替代 Montgomery 约简，即 CPU IFMA 那句"模乘减半"）：微观上确实便宜 **−21%…−31%/模乘**（≥4608 bit），但**端到端慢 15–19%**（5120 档 30.77 s vs 26.24 s）——链口径掩盖了 `mont_mul` 的 ILP，kernel 是发射/依赖受限而非指令数受限 | **无（方向关闭，代码保留在默认关闭的开关后）** | 已实现 + 逐行 bit-identical 验收 + 端到端 A/B + 两条排除实验（§9） |
+| 5b | 折叠**优化轮**（§9.9）：尾巴两次折叠→一次折叠+两次条件减（384 曲线档 −14.7%→−7.35%）+ 折叠族自己的 **TPB=256** ⇒ 生产形状（768 曲线/4 块每 SM）**折叠 49,759 ms vs basic 52,577 ms（+5.66%）**、M4441 +8.6%；但 basic 单独把 TPB 从 128 提到 512 也有 **+5.1…5.8%**（通用旋钮，**待在生产形状复测**）⇒ 同参数化下折叠与"最优 basic"是打平～+3.3% | 折叠 +5.7…8.6%（vs 当前 basic）；TPB 旋钮本身 +2.5…5.8% | 已落地、全绿验收；下一步候选是手写梅森专用乘法（§9.9f） |
 
 **优先级建议**：3（已做，免费）→ 4（研究型，收益最大）→ 2（统一小收益，代价大）。
 
@@ -32,6 +34,8 @@
 | 工具 | 用途 |
 |---|---|
 | `tools/bench/cgbn_op_probe.cu` | 逐 **CGBN 算子**单价（`mont_mul`/`mont_sqr`/compare+cond-sub/add/sub/shift），可切 TPI/BITS 档位，可用 `-DXMP_WMAD/-DXMP_XMAD/-DXMP_IMAD` 切乘法链变体、`-DPROBE_VALUE_MODE=0/1/2` 测值依赖性 |
+| `tools/bench/cgbn_mers_fold_probe.cu`（§9） | 梅森折叠 vs `mont_mul` 的**逐算子**探针：8 档位、`mont_mul`/`mul_wide`/`mul_wide+reduce`/`fold_gen`/`fold_align`，每条链与边界电池都用 GMP 校验 |
+| `tools/test/test_cuda_mers_fold.ps1`（§9） | 折叠构建的验收：折叠↔Montgomery↔CPU 逐行存档对照、非梅森 N 与 `--gpu-param 3` 守卫、吞吐 A/B |
 | `tools/bench/cuda_kernel_ab.ps1` | **整 kernel** A/B 计时：固定 N/B1/曲线数，重复取中位数，输出 `gputime` 与 curve-bits/s |
 | `-DECM_PROBE_ADD_DENSITY=k`（§5） | 让融合 double-and-add 只在每 k bit 执行一次加法（k>1 **结果错误**，纯计时探针） |
 | `-DECM_PROBE_CHAIN_W=M`（§5.2/§5.4） | 把融合步换成"每 bit 1 次倍点 + 每 M bit 一次**真实**投影差值差分加法"（结果错误，纯计时探针） |
@@ -54,6 +58,12 @@
   定价要么用**算子数**（结构无关），要么在同一结构内做 A/B。
 * **CGBN 的算子本身对操作数值不敏感**（`-DPROBE_VALUE_MODE=0/1/2` 实测 0.91/0.91/0.91 ns，
   zero 与 one 操作数同价）⇒ 探针状态退化**不会**让算子变快；探针读数的偏差来自结构，不是值。
+* **依赖链口径只能排 latency，排不了 throughput（2026-09-26 新增，代价一次完整的方向误判，§9.5）**：
+  链口径下 `mul_wide` 只要 `mont_mul` 的 0.75×（因为 `mont_mul` 的乘法半与约简半被依赖关系串住、无法重叠，
+  代价被高估），据此预测"折叠快 21%"；但整 kernel A/B 是**慢 15%**——真实 kernel 里每个实例一条链、
+  多个实例并行，`mont_mul` 内部 8 条独立链的 ILP 被充分利用，这才是它的实际吞吐。
+  ⇒ **凡是"删掉一半算子/换更短依赖链"的结论，必须用整 kernel 曲线数相同的 A/B 定案**；
+  探针只能用来排序"同一结构内"的算子数。
 
 ---
 
@@ -638,6 +648,12 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(...)   
    会把**换行符吃掉**，让下一行代码被并进注释。现象极具误导性（报"break statement may only be used within
    a loop or switch"、"expected a declaration"）。`tools/bench/cgbn_op_probe.cu` 现在强制 ASCII-only 并在文件头写了警告。
    （同一族问题：含中文的 `.ps1` 必须存成 UTF-8 **with BOM**，见 `tools/README.md`。）
+   **2026-09-26 又栽一次，这次在既有文件上**：`kernels/cuda/cgbn_stage1.cu` 本来是 **UTF-8 with BOM**
+   （BOM 让它被正确识别为 UTF-8，中文注释才安全），一次文件编辑往返把 BOM 抹掉后，nvcc 退回 GBK 解释，
+   中文注释行尾吃掉换行 ⇒ `#define CHECKPOINT_VERSION` 被并进注释 ⇒ 报
+   "identifier CHECKPOINT_VERSION is undefined"（**定义明明在文件里**，极具误导性）。
+   ⇒ 现在有守卫：`tools/diag/ensure_bom.ps1` 与 git HEAD 比对每个 `kernels/`、`src/` 源文件的 BOM 状态并恢复，
+   `tools/build/local_build.ps1` 每次 configure 前自动跑（`-NoFix` 只报告）。**改完 .cu/.h 先跑一次它**。
 2. **CGBN 的 host 侧需要 GMP**：`gmp.h` 必须**先于** `cgbn.h` 包含，否则 `cgbn_cpu.h` 直接 `#error You must use GMP for now`。
 3. **`cgbn_load` 要非 const 指针**：`cgbn_mem_t<BITS>*`（`const` 版本匹配不上，报错会列出候选签名）。
 4. **设备端 `switch` + 模板 + CGBN 会让 nvcc 的 device 拆分通道出错**：改成模板参数 + `if constexpr` 风格的
@@ -1084,5 +1100,255 @@ CUDA 13.3 最低只支持 `compute_75`（`nvcc --list-gpu-arch` 实测）⇒ **1
 **④ 临时构建目录**：只保留
 `build_cuda_cmake`（本机测试，规则①）、`build_cuda_dev`（dev 构建，测试脚本默认用它）、
 `build_nm16`（tier 受限的快速迭代）、`build_vs18`（宿主 `Release\ecm.exe`，测试脚本依赖）、
-`build_cuda_release`（发布）；其余实验目录（`build`、`build_a80/a86`、`build_cpu_nmake`、`build_cuda`、
-`build_jom`、`build_ninja`、`build_rel`、`build_t16`、`build_reltest`）用完即删。
+`build_cuda_release`（发布）；其余实验目录（`build`、`build_a80/a86`、`build_cpu_nmake`、`build_jom`、`build_ninja`、`build_rel`、`build_t16`、`build_reltest`）用完即删。
+
+---
+
+## 9. 结论 5：梅森数折叠域（Mersenne fold）——微观有效、宏观无效，方向关闭（2026-09-26 实测）
+
+> 起因：**CPU 的 IFMA 路径**在 N = 2^k−1 时把 Montgomery 约简换成折叠
+> （`src/cpu/simd_mont_ifma.cpp::ifma_mersenne_mul`，口径是"madds/模乘减半"）。
+> 问题：**GPU 的 suyama 家族**能不能同样受益？
+> 动机（用户设定）：若 GPU 也能享受这条优化，就不必先除掉已知小因子、可以直接对
+> **完整的 2^k−1** 做 ECM（N 与 N/余因子位宽同档，省掉一层处理）。
+
+**结论：折叠在数学上完全正确（逐行 bit-identical），在微观上也确实更便宜（每模乘 −21%…−31%），
+但端到端实测反而慢 15…19% ⇒ 作为性能杠杆关闭。** 代码与探针保留在默认关闭的开关后
+（`-DECM_MERS_FOLD=0` 是默认值，生产路径零变化），因为"为什么不成立"本身是有价值的证据。
+
+### 9.1 结构事实（CGBN 侧为什么折叠"看起来"该赢）
+
+| 事实 | 出处 |
+|---|---|
+| `mont_mul` = chain1–4（T·A 乘法）+ chain5–8（Q·N 约简），各占一半 madd | `cgbn/include/cgbn/core/core_mont_wmad.cu` |
+| `mul_wide` 只做 T·A 那一半 | `core_mul_wmad.cu` |
+| `cgbn_wide_t = { _low, _high }`（每个线程各 LIMBS 个字） | `cgbn_cuda.h:120` |
+
+⇒ 折叠候选就是 `r = fold(mul_wide(a,b))`：把 Q·N 那一半整体删掉。
+
+### 9.2 算式（k ≤ BITS，t = BITS − k）
+
+```
+P = a*b  (2*BITS bit) = high*2^BITS + low        a, b < 2^k
+P >> k     = high*2^t + (low >> k)        (k <= BITS ⇒ 无交叉项)
+P mod 2^k  = low mod 2^k
+fold(P)    = (P mod 2^k) + (P >> k)   < 3*2^k   → 再折一次消掉进位
+                                      < 2^k + 3 → 两次条件减法规范化
+```
+t = 0 时退化为**反码加法**（`low + high` 的环绕进位加回），即 CPU 折叠域在 GPU 上的对应形式。
+实测中 kernel 走的是通用式（因为 tier 总带 `CARRY_BITS=6` 余量 ⇒ t ≥ 6 恒成立）。
+
+### 9.3 微观实测：折叠确实更便宜（`tools/bench/cgbn_mers_fold_probe.cu`）
+
+装置：4060 Laptop（GPU 1）、4096 实例、**依赖链**（每步吃上一步的结果）、每档两遍、
+`mont_mul` 与折叠的 b 域对齐（都收敛到同一条 `A·B^iters mod N`，用 GMP `mpz_powm` 校验）。
+
+| tier (TPI,BITS) | LIMBS | `mont_mul` | `mul_wide` | `fold_gen`(通用) | `fold_align`(t=0) |
+|---|---|---|---|---|---|
+| 4, 512 | 4 | 0.77 | 0.92 (1.19×) | 2.02 (2.62×) | 1.42 (1.83×) |
+| 8, 1024 | 4 | 2.36 | 1.86 (0.79×) | 3.06 (1.30×) | 2.40 (1.02×) |
+| 8, 2048 | 8 | 7.53 | 5.97 (0.79×) | 7.91 (1.05×) | 5.74 (0.76×) |
+| 16, 3072 | 6 | 17.31 | 14.22 (0.82×) | 17.22 (0.995×) | 15.15 (0.875×) |
+| 16, 4096 | 8 | 29.20 | 22.82 (0.78×) | 27.29 (0.935×) | 21.17 (0.725×) |
+| 16, 4608 | 9 | 35.55 | 24.70 (0.695×) | **28.06 (0.789×)** | 28.96 (0.815×) |
+| 16, 5120 | 10 | 44.45 | 33.47 (0.753×) | **35.22 (0.792×)** | 30.53 (0.687×) |
+| 16, 8192 | 16 | 106.81 | 71.46 (0.669×) | 93.57 (0.876×) | 80.94 (0.758×) |
+
+单位 ns/op（括号内是相对 `mont_mul` 的比值），两遍差异 < 0.01 ns ⇒ 无排序/时钟伪影。
+
+* **折现在 ≥4608 bit 档位赢 21–31%**（5120：0.792×，恰好复现 CPU 那句"模乘减半"）；
+  ≤2048 bit 反而输（1.05–2.62×），因为 `mul_wide` 的 rl/ra 记账 shuffle 在小档位摊不开。
+* `mul_wide + mont_reduce_wide`（分开两次调用）**比融合的 `mont_mul` 更慢**（5120：52.0 vs 44.5 ns = 1.17×）
+  ⇒ 不能把 `mont_mul` 简单拆成"乘 + 约简 = 2×"，融合版本身有 ILP 优势。
+* 正确性：每个算子一次 1000 步链（`A·B^1000`）全部 GMP OK；另有 **18 个特殊值 × 自身 = 324 个乘积**
+  的边界电池（0/1/2/3/n−1/n−2/2^(k−1)±1/R/全 1 字…）在 5120/4608/3072 档全部 0 mismatch
+  （折叠的环绕进位只在这个角落触发，纯随机测试覆盖不到）。
+
+### 9.4 端到端实测：反而慢 15–19%（决定性反例）
+
+装置：4060 Laptop（GPU 1）、384 曲线、B1=1e5、param0、两次取最好、`gputime`（ms）。
+
+| N | tier | mont（128 regs） | fold 通用 | fold **对齐探针**（无 mask/无移位） |
+|---|---|---|---|---|
+| 2^4400−1 | 4608 | **21,553** | 26,532（−18.8%） | 26,518（−18.7%） |
+| 2^4999−1 | 5120 | **26,244** | 30,769（−14.7%） | 30,765（−14.7%） |
+
+排除的两条解释（都做过 A/B）：
+
+1. **不是寄存器/溢出**。fold 家族在 5120 档 spill 336 B/620 B（mont 只有 144/172），于是把寄存器上限
+   放开重测：`ECM_REG_TARGET_FORCE=168`（167 regs，**0 spill**）⇒ 30,517 ms；`=255`（194 regs，0 spill）
+   ⇒ 30,180 ms。**把 spill 清零只换回 1.7%**，仍然落后 13%。
+2. **不是运行期 mask/移位**。`-DECM_MERS_FOLD_PROBE_ALIGN=1`（**结果故意错**：把模数当成 2^BITS−1，
+   折叠点落在字边界，完全不需要 mask 和运行期移位）⇒ 与通用折叠**一模一样**（−18.7% / −14.7%）。
+
+SASS 静态统计（`cuobjdump -arch sm_89 -sass`，`kernel_double_add_suyama<TPI=16,BITS=5120,cd=0>`）：
+
+| | 指令总数 | IMAD.WIDE.U32.X | IADD3.X | SHFL.IDX | IMAD.MOV.U32 |
+|---|---|---|---|---|---|
+| mont | 43,752 | 8,240 | 5,335 | 1,571 | 4,596 |
+| fold | **37,592（−14.1%）** | 3,600 | 2,491 | 1,231 | **10,863（+2.4×）** |
+
+**静态指令少 14% 却慢 15%** ⇒ 这个 kernel 不是"指令数受限"，而是**发射/依赖受限**：
+`mont_mul` 的 8 条链彼此独立、可以互相填满流水线，而折叠只剩"乘法 + 一条串行的 mask/shift/加"链，
+且 `mul_wide` 自身的记账 shuffle 更多。
+
+### 9.5 方法论教训（本次最重要的一条）
+
+**依赖链口径只能排 latency，不能排 throughput。** §9.3 的链口径把 `mul_wide` 排在 `mont_mul`
+前面（0.75×），据此推断折叠该赢 21%；但 kernel 端到端证明 `mul_wide` 的**吞吐**比 `mont_mul` 差
+（1.15–1.19×）。链口径下 `mont_mul` 的乘法与约简两半被依赖关系串起来、无法重叠，它的代价被高估；
+真实 kernel 里每条曲线只有一条链、但有多个实例在飞，`mont_mul` 的内部 ILP 被充分利用。
+这与 §6 第 9/11 条是同一族错误（"结构解释 + 单一口径"⇒ 翻车）。**结论只在整 kernel A/B 上成立。**
+
+### 9.6 实现与状态（保留但不启用）
+
+| 位置 | 内容 |
+|---|---|
+| `kernels/cuda/cgbn_stage1_kernel.h` | `ECM_MERS_FOLD`（默认 0）、`fold_mul`/`fold_sqr`、`double_add_v2_suyama_fold`、`ECM_MERS_FOLD_PROBE_ALIGN` |
+| `kernels/cuda/cgbn_stage1.cu` | 主机侧守卫：非 2^k−1 直接报错、`--gpu-param 3` 拒绝；t 通过 suyama 家族未用的 `sigma_0` 槽传入（不改共享的函数指针 typedef） |
+| `CMakeLists.txt` | `-DECM_MERS_FOLD=0/1`（整构建开关） |
+| `tools/bench/cgbn_mers_fold_probe.cu` | 逐算子探针（8 档、GMP 校验、边界电池） |
+| `tools/test/test_cuda_mers_fold.ps1` | 折叠 vs Montgomery vs CPU 的逐行存档对照 + 守卫 + 吞吐 A/B |
+
+两处**顺带修掉的真实 bug**（与折叠无关，但都是本轮踩出来的）：
+* `-DECM_TIERS=1024`（或 512）**编译不出任何 kernel**：这两个档位的守卫用的是 CGBN typedef 名
+  （`ECM_TIER_medium`/`ECM_TIER_small`）而不是数字。现象很隐蔽：dispatch 返回 nullptr 后
+  循环继续找下一档 ⇒ 991-bit 的 N 悄悄跑在 **4608-bit** kernel 上（t 高达 3617），5× 慢。
+  `CMakeLists.txt` 现在两种拼写都定义。
+* **编辑工具会吃掉 .cu/.h 的 UTF-8 BOM**：`kernels/cuda/cgbn_stage1.cu` 的 BOM 被抹掉后，nvcc 按
+  GBK 读它，中文注释行尾吃掉换行，`#define CHECKPOINT_VERSION` 被并进注释 ⇒ 编译报
+  "identifier CHECKPOINT_VERSION is undefined"（§6 第 1 条的同一族坑，只是这次栽在**既有文件**上）。
+  新增 `tools/diag/ensure_bom.ps1`：与 git HEAD 比对 BOM 状态并恢复，`local_build.ps1` 每次构建前自动跑。
+
+### 9.7 还没走、以及为什么不走的（避免下一轮重复投入）
+
+* **手写词级折叠**（利用 lane 交错布局：把运行期 t-bit 移位换成"1 次 lane 旋转 + 每字一次子字移位"）：
+  9.4 的**对齐探针**说明即使 mask/移位完全免费也还是慢 15% ⇒ 不值得写。
+* **对齐折叠（t = 0）本身**：需要 BITS = k，但加法需要余量（a,b < 2^k−1 ⇒ a+b < 2^(k+1)），
+  容器必须比 k 宽 ⇒ t ≥ 6 恒成立；若强行 BITS = k，就必须把**每次加法的进位也折回**
+  （可做，但按对齐探针的结论收益预期 ≈ 0）。
+* **更细的 tier 网格**把 t 压到 < 32：kernel 集合是编译期固定的（tier 数 = 编译时间），不可行。
+* **只在 N 是完整 2^k−1 时可用**：N/(已知因子) 不是梅森数 ⇒ 与 CPU 路径同一条限制；
+  本轮结论与"是否忽略因子"无关。
+
+### 9.8 复现命令
+```powershell
+# A) 微基准（8 档 + 边界电池；GPU 1 = 4060 Laptop）
+#    build: 见文件头注释；命令：mers_fold.exe <tier 0..7> <instances> <iters> <device> <align|gen|both|edge>
+.\.bench_tmp\cgbn\mers_fold.exe 7 4096 1000 1 both      # tier7 = TPI16/5120
+.\.bench_tmp\cgbn\mers_fold.exe 7 4096 100 1 edge
+
+# B) 折叠构建（受限 tier，约 2 分钟）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\local_build.ps1 `
+    -BuildDir build_cuda_fold -Tiers "1024,3328,4608,5120" -Extra "-DECM_MERS_FOLD=1"
+
+# C) 正确性 + 守卫 + 吞吐（约 3 分钟；-SkipSlow 跳过吞吐段）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_cuda_mers_fold.ps1
+
+# D) 端到端 A/B（N 用合数梅森数即可：param0/suyama 的 gputime 覆盖完整 stage-1）
+echo (2^4999-1) > n.txt
+build_cuda_cmake\ecm_cuda.exe -gpu -d 1 --gpu-param 0 -sigma 300000 -gpucurves 384 -savea m.save 1e5 0 < n.txt
+build_cuda_fold\ecm_cuda.exe  -gpu -d 1 --gpu-param 0 -sigma 300000 -gpucurves 384 -savea f.save 1e5 0 < n.txt
+
+# E) 寄存器杠杆排除（0 spill 也慢 13%）
+powershell ... -File tools\build\local_build.ps1 -BuildDir build_cuda_fold -Tiers "5120" `
+    -Extra "-DECM_MERS_FOLD=1 -DECM_REG_TARGET_FORCE=255"
+
+# F) 对齐探针（结果错，只看时间）
+powershell ... -File tools\build\local_build.ps1 -BuildDir build_cuda_fold -Tiers "5120" `
+    -Extra "-DECM_MERS_FOLD=1 -DECM_MERS_FOLD_PROBE_ALIGN=1"
+```
+
+---
+
+## 9.9 优化轮（2026-09-26 深夜）：折叠从 −15% 追到打平/小胜 —— 关键在**批形状**，不在算法
+
+**触发**：用户在 4070 Ti 上实测 `fold` vs `basic`：M4441 40.9 vs 40.7 s（−0.5%）、M5003 51.4 vs 50.3 s（−2.2%），
+远好于 §9.4 在 4060/384 曲线上的 −15% ⇒ 差距**随批形状变化**，不是常数。
+
+**(a) 形状依赖（4060lp = GPU 1，best-of-2，两次差 ≤0.03%，N 与用户一致）**
+
+| 形状 | 每 SM 驻留块 | basic | fold | 比值 |
+|---|---|---|---|---|
+| M4999 × 384 曲线 | 2 | 26,254 ms | 28,338 ms | −7.35% |
+| M4999 × 768 曲线 | 4 | 52,581 ms | 52,741 ms | −0.29% |
+| M4441 × 768 曲线 | 4 | 42,720 ms | 42,626 ms | **+0.21%** |
+
+⇒ 与用户 4070 Ti 同一图像：**驻留块越多，折叠越占优**（折叠是"延迟受限"型 kernel，需要更多 warp 填发射槽；
+用户的 ncu 也证实折叠的 Compute(SM) Throughput 低 19.7%、占用率却高 11.4%，即"发得少、等得多"）。
+
+**(b) 尾巴优化（已落地，`fold_mul`）：两次折叠 → 一次折叠 + 两次条件减**
+
+证明（t < k，主机侧强制 BITS < 2k）：
+```
+m = (low mod 2^k) + (low >> k) + (high << t)
+    项界：low mod 2^k ≤ N,  high << t ≤ N,  low >> k ≤ 2^t − 1 ≤ (N−1)/2
+    ⇒ m ≤ 2.5N − 0.5  ⇒ 两次条件减即得 < N（无需第二次 mask/shift/add）
+```
+⇒ 每模乘省 3 条算子、**串行链短 3 步**：384 曲线档 **−14.7% → −7.35%**（+7.4 个百分点）。
+正确性：`test_cuda_mers_fold.ps1` 仍全绿（折叠 ↔ Montgomery ↔ CPU 逐行 bit-identical）。
+
+**(c) TPB 扫描（本轮的真正大头，两个域都受益）**
+
+| 配置 | M4441（tier 4608） | M4999（tier 5120） |
+|---|---|---|
+| basic TPB=128（= 当前生产默认） | 42,708 | 52,558 |
+| basic TPB=256 | 41,661（+2.5%） | 51,057（+2.9%） |
+| **basic TPB=512** | 40,621（**+5.1%**） | 49,682（**+5.8%**） |
+| fold TPB=64 | 42,641 | 52,659 |
+| fold TPB=128 | 42,626 | 52,741 |
+| **fold TPB=256** | **39,326（+8.6% vs basic-128；+3.3% vs basic-512）** | 49,759（+5.7% vs basic-128；−0.15% vs basic-512） |
+| fold TPB=512 | 39,783 | **49,499（+6.2%；+0.37%）** |
+| fold TPB=384 | 58,578（**−27%**：768/24=32 块 ÷ 24 SM = 1.33 波，尾波） | — |
+
+* ⚠ **§5.5 的"TPB=128 最好"只在它当时的regime成立**（param3、511/761 bit、8192 曲线）；在
+  **suyama/param0、4608/5120 bit、768 曲线**这个形状下 TPB=256/512 对**两个域**都是 +2.5…5.8% ✗
+  这不是折叠专属，是**通用**旋钮（`-DECM_TPB=512`），值得在生产的 `B1=2.6e8` 形状上复测。
+* 正确性：TPB 只改块组织，不改算术 —— basic@512 与 basic@128 在 M991 上存档 64/64 逐行一致（实测）。
+* TPB 必须是 TI 的整数倍且要让块数整除 SM 数：384 就踩了 1.33 波的坑（−27%）。
+* ⇒ **折叠族应当用自己的 TPB（256）**，其余家族保持 128（CMake 里给折叠族单独的 `ECM_TPB` 即可）。
+
+**(d) 本轮排除掉的方向（都实测）**
+
+* **寄存器**：fold 族 r=168（0 spill）→ **−10.6%/−6.3%**、r=255 → **−12.7%/−6.2%**（相对 r=128）
+  ⇒ 折叠要的是**更多 warp**，不是更多寄存器；`__maxnreg__` 128 必须保留。
+* **每 bit 的 `gpu_s_bits` 依赖全局读**：`ECM_SBITS_CACHE=1`（把指数按 32 bit 缓存进寄存器，
+  消掉每 bit 一次全局读 + 地址算术）实测 fold **±0.1%**、basic **±0.01%** ⇒ 不是瓶颈，方向关闭。
+* **`mul_high`** 不能用来替 `mul_wide`：CGBN 把它实现成 `mul_wide` + 丢弃低半
+  （`core_singleton.cu:110-114`），"低半用便宜的 `mul`、高半单独算" = 2× 工作量 ✗。
+
+**(e) param2 形状（768 曲线档，同一批 N）**
+
+| | basic param0 | basic param2 | fold param2 | fold param0 |
+|---|---|---|---|---|
+| M4441 | 42,726 | 39,010（**+9.5%**） | 39,655（vs basic-p0 **+7.8%**） | 42,575（+0.4%） |
+| M4999 | 52,565 | 47,691（**+10.2%**） | 48,808（vs basic-p0 **+7.7%**） | 52,681（−0.2%） |
+
+⇒ **同一参数化下折叠仍差 1.6–2.3%**；真正的大头是 param2（+9.5–10%），而 param2 的存档 Prime95 读不了
+（`sigma_type` 只认 0/1/3）⇒ 若流水线的 stage 2 走 Prime95，就不能用它（详见 §5.6）。
+
+**(f) 还剩的唯一大杠杆：手写梅森专用乘法（未做，附可行性分析）**
+
+CGBN 的字分布是**连续块**（`impl_cuda.cu` 的 `cgbn_load`：`thread*LIMBS + limb`），所以 `mul_wide`
+必须为低半部分做"广播 + 谓词写入"记账（`core_mul_wmad.cu:214-233`，每个 (l,row) 约 6 条 SHFL +
+2 条谓词 MOV），而只算低半的 `mul` 用**轮转累加器**只要 ~3 条（`core_mul_wmad.cu:100-123`）。
+按 TPI=16/LIMBS=10 估算：`mul_wide` 的记账 ≈ 80 次迭代 × 5 条 ≈ **400 条/线程/模乘**，与乘积算术
+（~320 条 madd）**同量级** ⇒ 若把折叠写成"轮转累加器 + 环形进位"（cyclic schoolbook，2^k ≡ 1 使
+进位环绕），可望砍掉这部分。代价：要自己写一个 core 乘法（在 `cgbn/include/cgbn/core` 旁边），
+风险中等、工作量大 ⇒ 本轮未做，作为下一轮候选。
+
+**(g) 方法论（本轮第二次被链口径误导）**：§9.3 的**依赖链**口径给出"尾巴几乎免费"（对齐探针在 384 曲线档
+与通用折叠一致），但真把尾巴砍掉后 384 曲线档快了 **7.4 个百分点** ⇒ 探针只能排**同一形状**下的算子，
+跨形状/跨驻留块数的比值**不可外推**。与此对照，(a) 说明"哪种形状"比"哪个算子"更重要。
+
+**(h) 复现（全部在 4060lp = GPU 1 上，`basic` = `build_cuda_cmake\ecm_cuda.exe`）**
+
+```powershell
+# 折叠族用自己的 TPB 构建（本轮的推荐配置）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\local_build.ps1 `
+    -BuildDir build_cuda_fold -Tiers "1024,3328,4608,5120" -Extra "-DECM_MERS_FOLD=1 -DECM_TPB=256"
+# 验收（含 768 曲线吞吐 A/B；全绿）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_cuda_mers_fold.ps1
+# 对比 basic 的 TPB 旋钮（两族都受益，值得在生产形状上复测）
+powershell ... -File tools\build\local_build.ps1 -BuildDir build_cuda_tpb512 -Tiers "4608,5120" -Extra "-DECM_TPB=512"
+```

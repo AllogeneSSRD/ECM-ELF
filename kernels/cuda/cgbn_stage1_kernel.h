@@ -133,8 +133,84 @@
 #define ECM_NO_PARAM2 0
 #endif
 
-const uint32_t TPB_DEFAULT = ECM_TPB;
+// ---------------------------------------------------------------------------
+// MERSENNE FOLD DOMAIN (probe, 2026-09-25: docs/ECM_CGBN_OPTIMIZATION.md §9)
+//
+// For N = 2^k - 1 the Montgomery reduction of every modular multiply can be
+// replaced by a fold: 2^k == 1, so for the 2*k-bit product P = hi*2^k + lo we
+// have P == hi + lo (mod N) and no Q*N chain has to be evaluated.  CGBN's
+// mont_mul spends half its madds on that reduction (core_mont_wmad.cu chains
+// 5-8), so the fold is the GPU analogue of the CPU IFMA fold domain
+// (src/cpu/simd_mont_ifma.cpp, ifma_mersenne_mul: "madds/模乘减半").
+//
+// Measured per-modmul cost on the 4060 Laptop (GPU 1), tools/bench/cgbn_mers_fold_probe.cu,
+// 4096 instances, dependency chain, 2 passes (ns/op, second pass; both passes agree):
+//
+//   tier (TPI,BITS)  mont_mul  fold_gen   ratio      verdict
+//    4,  512           0.77      2.02     2.62   LOSS
+//    8, 1024           2.36      3.06     1.30   LOSS
+//    8, 2048           7.53      7.91     1.05   tie
+//   16, 3072          17.31     17.22     0.995  tie
+//   16, 4096          29.20     27.29     0.935  win
+//   16, 4608          35.55     28.06     0.789  WIN
+//   16, 5120          44.45     35.22     0.792  WIN
+//   16, 8192         106.81     93.57     0.876  win
+//
+// (`fold_gen` is the general-k fold the kernel needs; for k == BITS exactly, the
+// fold degenerates to ones'-complement addition and measured 0.687..0.815.)
+//
+// This macro switches the WHOLE suyama kernel family (param0 and param2) to the
+// fold domain, which is only valid for a Mersenne N.  A fold build therefore
+// REFUSES to run anything else (kernels/cuda/cgbn_stage1.cu checks N and errors
+// out), and `--gpu-param 3` is rejected as well.  When ECM_MERS_FOLD = 0 (default)
+// the generated code is bit-identical to the historical Montgomery kernel.
+//
+// The fold needs the shift t = BITS - k at runtime; it is smuggled through the
+// kernel's `sigma_0` argument (unused by the suyama family) so the shared
+// kernel-pointer typedef does not have to change.
+// ---------------------------------------------------------------------------
+#ifndef ECM_MERS_FOLD
+#define ECM_MERS_FOLD 0
+#endif
 
+// ---------------------------------------------------------------------------
+// PROBE ONLY -- do not enable in production: timing only, RESULTS ARE WRONG.
+//
+// ECM_MERS_FOLD_PROBE_ALIGN = 1 prices the fold WITHOUT its runtime shift/mask, i.e.
+// as if the modulus were 2^BITS - 1 instead of 2^k - 1 (it folds at the wrong bit
+// position, so every curve is wrong; only the operator mix is real).  It answers the
+// one question left after the end-to-end A/B:
+//
+//   * aligned fold faster than mont_mul  -> the runtime shift (t up to 255 bits) and
+//     the runtime mask are what kill the general fold, and a hand-written word-level
+//     fold (lane rotation + one sub-word shift per word) is worth writing;
+//   * still not faster -> the fold's serial dependency chain, replacing mont_mul's
+//     eight independent madd chains, is the problem and the direction is closed.
+//
+// See docs/ECM_CGBN_OPTIMIZATION.md 9.6/9.7.
+// ---------------------------------------------------------------------------
+#ifndef ECM_MERS_FOLD_PROBE_ALIGN
+#define ECM_MERS_FOLD_PROBE_ALIGN 0
+#endif
+
+// ---------------------------------------------------------------------------
+// ECM_SBITS_CACHE = 1 caches the stage-1 exponent word in a register instead of
+// re-loading gpu_s_bits[nth/32] (plus its address arithmetic) on EVERY bit.
+//
+// The bit loop walks the exponent MSB-first, so one word stays live for 32
+// consecutive iterations; the historical form issues a *dependent* global load per
+// bit and the warp waits on it before it can decide the ladder swap.  That load is
+// a much bigger share of the time when a kernel has few other instructions to hide
+// it with -- which is exactly the Mersenne-fold kernel's situation (ncu, user-run:
+// Compute (SM) Throughput -19.7% vs the Montgomery kernel, i.e. idle issue slots
+// rather than a saturated machine).  Default 0 keeps the historical path
+// byte-identical; the A/B is in docs/ECM_CGBN_OPTIMIZATION.md 9.9.
+// ---------------------------------------------------------------------------
+#ifndef ECM_SBITS_CACHE
+#define ECM_SBITS_CACHE 0
+#endif
+
+const uint32_t TPB_DEFAULT = ECM_TPB;
 template<uint32_t tpi, uint32_t bits>
 class cgbn_params_t {
   public:
@@ -459,6 +535,141 @@ class curve_t {
     cgbn_mont_sqr(_env, v, v, modulus, np0);
     cgbn_shift_left(_env, v, v, 1);
     normalize_addition(v, modulus);
+  }
+
+  /* -------------------------------------------------------------------------
+   * MERSENNE FOLD DOMAIN (ECM_MERS_FOLD builds only -- see the macro's comment).
+   *
+   * N = 2^k - 1, t = BITS - k >= 1 (the tier always carries CARRY_BITS of headroom
+   * above n_log2, so t >= 6 in practice; t == 0 would need a shift by the whole
+   * word width and is rejected by the host).
+   *
+   *   P = a*b (2*BITS bits) = high*2^BITS + low        a, b < 2^k
+   *   P >> k = high*2^t + (low >> k)                   (k <= BITS)
+   *   P mod 2^k = low mod 2^k
+   *   fold = (P mod 2^k) + (P >> k)  < 3*2^k           -> fold again
+   *                                   < 2^k + 3       -> two conditional subtracts
+   *
+   * Verified against GMP in tools/bench/cgbn_mers_fold_probe.cu: an 18-value edge
+   * battery (0, 1, 2, n-1, n-2, 2^(k-1)+-1, R, ...) x itself, 324 products, plus a
+   * 1000-step chain A*B^1000, on every tier -- no mismatches.
+   *
+   * Note that everything the kernel stores/loads stays in the PLAIN domain: the
+   * bn2mont/mont2bn conversions disappear and no np0 is needed.  Both domains are
+   * exact modular arithmetic, so a fold run and a Montgomery run produce the SAME
+   * stage-1 X (that is the A/B acceptance test).
+   * ------------------------------------------------------------------------- */
+  __device__ FORCE_INLINE void fold_mul(bn_t &r,
+                                        const bn_t &a, const bn_t &b,
+                                        const bn_t &modulus,
+                                        const uint32_t k, const uint32_t t) {
+    /* ONE fold + TWO conditional subtractions, not two folds + one subtraction:
+         m = (low mod 2^k) + (low >> k) + (high << t)     ==  P  (mod 2^k - 1)
+       Each term is bounded (a, b < 2^k => low < 2^(k+t), high < 2^(k-t)):
+         low mod 2^k <= N,  high << t <= N,  low >> k <= 2^t - 1 <= (N-1)/2   [t < k]
+       => m <= 2.5N - 0.5, so TWO conditional subtractions canonicalise it (< N).
+       The second fold (mask + shift + add) the first version ran instead is therefore
+       redundant: it was 3 ops and 2 serial steps per modmul, on the fold's critical
+       path.  t < k is enforced on the host (BITS < 2k).
+       NOTE the separate result register: several call sites alias the destination (r)
+       with an input (u = K*u, x = x*xdiff), and the first draft's in-place reuse of the
+       wide pair would clobber those inputs. */
+    typename env_t::cgbn_wide_t p;
+    bn_t m;
+    cgbn_mul_wide(_env, p, a, b);
+#if ECM_MERS_FOLD_PROBE_ALIGN
+    /* PROBE ONLY (results wrong): fold at the BITS boundary -- ones' complement
+       addition of the two halves, i.e. NO mask and NO runtime shift. */
+    (void)k; (void)t;
+    int32_t c = cgbn_add(_env, r, p._low, p._high);
+    c = cgbn_add_ui32(_env, r, r, (uint32_t)c);       /* end-around carry */
+    c = cgbn_add_ui32(_env, r, r, (uint32_t)c);       /* only if r was all ones */
+    if (cgbn_compare(_env, r, modulus) >= 0) cgbn_sub(_env, r, r, modulus);
+#else
+    cgbn_bitwise_mask_and(_env, m, p._low, (int32_t)k);   /* m    = low mod 2^k     */
+    cgbn_shift_right(_env, p._low, p._low, k);            /* low  = low >> k  (< 2^t) */
+    cgbn_shift_left(_env, p._high, p._high, t);           /* high = high << t (< 2^k) */
+    cgbn_add(_env, m, m, p._low);
+    cgbn_add(_env, m, m, p._high);                        /* m <= 2.5N - 0.5 */
+    if (cgbn_compare(_env, m, modulus) >= 0) cgbn_sub(_env, m, m, modulus);
+    if (cgbn_compare(_env, m, modulus) >= 0) cgbn_sub(_env, m, m, modulus);
+    cgbn_set(_env, r, m);
+#endif
+  }
+
+  /* CGBN implements mont_sqr as mont_mul(a,a) (alpha == 1.0 today), so the fold
+     square is the same call -- kept as a named function so the kernel body reads
+     like the Montgomery one. */
+  __device__ FORCE_INLINE void fold_sqr(bn_t &r, const bn_t &a, const bn_t &modulus,
+                                        const uint32_t k, const uint32_t t) {
+    fold_mul(r, a, a, modulus, k, t);
+  }
+
+  /* -------------------------------------------------------------------------
+   * Suyama param0 fold-domain variant of the fused double-and-add: the SAME
+   * arithmetic and the same op mix (6M+4S, or 5M+4S with const_diff) as
+   * double_add_v2_suyama, with every mont_mul/mont_sqr replaced by fold_mul and
+   * the Montgomery-specific normalization dropped (the fold already returns a
+   * value < n, exactly like CGBN's mont_mul).
+   * ------------------------------------------------------------------------- */
+  __device__ FORCE_INLINE void double_add_v2_suyama_fold(
+          bn_t &q, bn_t &u,
+          bn_t &w, bn_t &v,
+          const bn_t &a24,
+          const bn_t &xdiff,
+          const bn_t &modulus,
+          const uint32_t k, const uint32_t t,
+          const bool const_diff = false) {
+    bn_t tmp, CB, DA, AA, BB, K, dK;
+
+    cgbn_add(_env, tmp, v, w); // t = (bZ + bX)
+    normalize_addition(tmp, modulus);
+    if (cgbn_sub(_env, v, v, w)) // v = (bZ - bX)
+        cgbn_add(_env, v, v, modulus);
+
+    cgbn_add(_env, w, u, q); // w = (aZ + aX)
+    normalize_addition(w, modulus);
+    if (cgbn_sub(_env, u, u, q)) // u = (aZ - aX)
+        cgbn_add(_env, u, u, modulus);
+
+    fold_mul(CB, tmp, u, modulus, k, t); // C*B
+    fold_mul(DA, v, w, modulus, k, t);   // D*A
+
+    fold_sqr(AA, w, modulus, k, t);
+    fold_sqr(BB, u, modulus, k, t);
+
+    fold_mul(q, AA, BB, modulus, k, t);  // q = aX
+
+    if (cgbn_sub(_env, K, AA, BB))
+        cgbn_add(_env, K, K, modulus);
+
+    fold_mul(dK, K, a24, modulus, k, t); // dK = a24*K (full width)
+
+    cgbn_add(_env, u, BB, dK);
+    normalize_addition(u, modulus);
+
+    fold_mul(u, K, u, modulus, k, t);    // u = aZ
+
+    cgbn_add(_env, w, DA, CB);
+    normalize_addition(w, modulus);
+    if (cgbn_sub(_env, v, DA, CB))
+        cgbn_add(_env, v, v, modulus);
+
+    fold_sqr(w, w, modulus, k, t);       // (DA+CB)^2
+    fold_sqr(v, v, modulus, k, t);       // (DA-CB)^2
+
+    if (const_diff) {
+      /* param2: difference x = 2 -- same shortcut as the batch family.  NOTE the
+         normalize_addition() that the Montgomery variant does NOT need: the fold
+         requires every operand to be < 2^k (CGBN's shift_left inside fold_mul
+         would otherwise drop the top bits), and 2v can reach 2n.  Normalizing is
+         value-preserving mod n, so the stage-1 X is unchanged. */
+      cgbn_shift_left(_env, v, v, 1);
+      normalize_addition(v, modulus);
+    } else {
+      fold_mul(v, v, xdiff, modulus, k, t);
+    }
+    assert_normalized(v, modulus);
   }
 
   /* -------------------------------------------------------------------------
@@ -794,6 +1005,14 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(
   curve_t<params> curve(monitor, report, instance_i);
   typename curve_t<params>::bn_t aX, aZ, bX, bZ, a24, xdiff, modulus;
 
+#if ECM_MERS_FOLD
+  /* Mersenne fold build: `sigma_0` is not a sigma here, it is the fold shift
+     t = BITS - k (see the ECM_MERS_FOLD comment at the top of this file).  The
+     host guarantees N = 2^k - 1, k = n_log2 and 1 <= t < BITS. */
+  const uint32_t fold_t = sigma_0;
+  const uint32_t fold_k = (uint32_t)params::BITS - fold_t;
+#endif
+
   { // Setup -- 7 words per instance
       cgbn_load(curve._env, modulus, &data_cast[7*instance_i+0]);
       cgbn_load(curve._env, a24,     &data_cast[7*instance_i+1]);
@@ -803,6 +1022,14 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(
       cgbn_load(curve._env, bX,      &data_cast[7*instance_i+5]);
       cgbn_load(curve._env, bZ,      &data_cast[7*instance_i+6]);
 
+#if ECM_MERS_FOLD
+      /* Fold domain: the host already computed every value mod N, so there is no
+         conversion to do at all (no R, no np0). */
+      curve.assert_normalized(aX, modulus);
+      curve.assert_normalized(aZ, modulus);
+      curve.assert_normalized(bX, modulus);
+      curve.assert_normalized(bZ, modulus);
+#else
       /* Convert the values that participate in field multiplications to the
          Montgomery domain.  N stays as it is (it is the modulus). */
       uint32_t np0_test = cgbn_bn2mont(curve._env, aX, aX, modulus);
@@ -812,13 +1039,32 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(
       cgbn_bn2mont(curve._env, bZ, bZ, modulus);
       cgbn_bn2mont(curve._env, a24, a24, modulus);
       cgbn_bn2mont(curve._env, xdiff, xdiff, modulus);
+#endif
   }
 
   /* P_a = (aX, aZ) holds P, P_b = (bX, bZ) holds 2P */
   int swapped = 0;
+#if ECM_SBITS_CACHE
+  /* ECM_SBITS_CACHE: the exponent is consumed MSB-first, so one 32-bit word serves
+     32 consecutive iterations.  Keep it in a register instead of issuing a dependent
+     global load (plus its `nth/32` address arithmetic) on every bit; refresh at the
+     word boundary, which in this descending walk is (nth & 31) == 31. */
+  const uint64_t b_end = s_bits_start + s_bits_interval;
+  uint32_t s_word = 0;
+  if (s_bits_start < b_end) {
+      s_word = gpu_s_bits[(s_bits - 1 - s_bits_start) >> 5];
+  }
+#endif
   for (uint64_t b = s_bits_start; b < s_bits_start + s_bits_interval; b++) {
     uint64_t nth = s_bits - 1 - b;
+#if ECM_SBITS_CACHE
+    if ((nth & 31) == 31 && b != s_bits_start) {
+        s_word = gpu_s_bits[nth >> 5];
+    }
+    int bit = (s_word >> (nth & 31)) & 1;
+#else
     int bit = (gpu_s_bits[nth/32] >> (nth&31)) & 1;
+#endif
     if (bit != swapped) {
         swapped = !swapped;
         cgbn_swap(curve._env, aX, bX);
@@ -828,6 +1074,9 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(
     // PROBE: force the *param2-shaped* step (full-width a24 + constant difference 2) on
     // the param0 data path.  Timing only -- docs/ECM_CGBN_OPTIMIZATION.md §5.6.
     curve.double_add_v2_suyama(aX, aZ, bX, bZ, a24, xdiff, modulus, np0, true);
+#elif ECM_MERS_FOLD
+    curve.double_add_v2_suyama_fold(aX, aZ, bX, bZ, a24, xdiff, modulus,
+                                    fold_k, fold_t, CONST_DIFF);
 #else
     /* NOTE (2026-09-25): do NOT try to pick the shift/multiply with a runtime flag here.
        A warp-uniform `xdiff == 2` test looked free, but keeping xdiff live across the bit
@@ -845,10 +1094,13 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(
   }
 
   { // Final output -- points go back to plain form, at the same 7-word stride
+#if !ECM_MERS_FOLD
+    /* Fold builds are already in plain form -- there is no R to remove. */
     cgbn_mont2bn(curve._env, aX, aX, modulus, np0);
     cgbn_mont2bn(curve._env, aZ, aZ, modulus, np0);
     cgbn_mont2bn(curve._env, bX, bX, modulus, np0);
     cgbn_mont2bn(curve._env, bZ, bZ, modulus, np0);
+#endif
 
     cgbn_store(curve._env, &data_cast[7*instance_i+3], aX);
     cgbn_store(curve._env, &data_cast[7*instance_i+4], aZ);
