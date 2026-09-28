@@ -161,48 +161,7 @@ target_link_libraries(ecm
 
 ecm_target_link_gmp(ecm)
 
-# ---------------------------------------------------------------------------
-# ecm_p95feeder 鈥?standalone Prime95 handoff feeder.
-#
-# ecm.exe writes its stage-1 results locally only (<tmp_dir>/e{n:07d}_c{k}.tmp);
-# the feeder watches that directory and delivers each finished curve into a
-# running Prime95 instance (save file e{n:07d} + an ECM= line under a free
-# [Worker #N] section of worktodo.add). See docs/ECM_EDWARDS_STAGE1.md 搂11.
-# GMP-only: no OpenCL/OpenSSL dependency.
-# ---------------------------------------------------------------------------
-add_executable(ecm_p95feeder
-    src/core/ecm_p95feeder.cpp
-    src/core/p95_worktodo.cpp
-    src/core/ecm_worktodo.cpp
-    src/cpu/ecm_edwards_save.cpp
-)
-
-target_include_directories(ecm_p95feeder PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/cpu
-)
-
-ecm_target_link_gmp(ecm_p95feeder)
-
-if(MSVC)
-    target_compile_options(ecm_p95feeder PRIVATE /utf-8)
-endif()
-
-foreach(_gmp_dll_cand "${ECM_WINDOWS_GMP_ROOT}/bin/gmp-10.dll"
-                      "${OPENSSL_ROOT_DIR}/bin/gmp-10.dll")
-    if(MSVC AND EXISTS "${_gmp_dll_cand}")
-        add_custom_command(TARGET ecm_p95feeder POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_gmp_dll_cand}"
-                "$<TARGET_FILE_DIR:ecm_p95feeder>"
-            COMMENT "Copying GMP DLL next to ecm_p95feeder")
-        break()
-    endif()
-endforeach()
-
-# indicators.hpp contains Unicode block characters (鈻屸枑鈻堚杽鈥? for progress
+# indicators.hpp contains Unicode block characters for progress
 # bars. MSVC's GBK code page misparses them; /utf-8 tells the compiler to
 # treat source files as UTF-8 regardless of system locale.
 if(MSVC)
@@ -235,292 +194,8 @@ if(MSVC AND EXISTS "${OPENSSL_ROOT_DIR}/bin")
     #         "$<TARGET_FILE_DIR:ecm>"
     #     COMMENT "Copying OpenSSL DLLs to output dir")
 endif()
-
-add_executable(main
-    src/cl_probe.cpp
-    src/main_test.cpp
-    src/opencl_low_risk_tests.cpp
-)
-
-target_include_directories(main PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
-
-target_link_libraries(main
-    OpenSSL::Crypto
-    OpenSSL::SSL
-    cgbn_opencl
-)
-
-ecm_target_link_gmp(main)
-
-add_executable(opencl_ecm_addsub
-    src/opencl_ecm_addsub_bench.cpp
-    src/opencl_ecm_addsub_manifest.cpp
-)
-
-target_include_directories(opencl_ecm_addsub PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
-
-target_compile_definitions(opencl_ecm_addsub PRIVATE BUILD_OPENCL_ECM_ADDSUB_MAIN=1)
-
-target_link_libraries(opencl_ecm_addsub
-    OpenSSL::Crypto
-    OpenSSL::SSL
-    cgbn_opencl
-)
-
-ecm_target_link_gmp(opencl_ecm_addsub)
-
-target_link_libraries(opencl_ecm_addsub
-    OpenSSL::Crypto
-    OpenSSL::SSL
-    cgbn_opencl
-)
-
-# CPU addsub micro-benchmark (no OpenCL dependency, GMP only)
 #
-# ISA strategy: the main TU + scalar/AVX2 kernels are compiled with an AVX2
-# baseline so the binary runs on any AVX2 CPU.  The AVX512 kernels live in a
-# separate TU compiled with /arch:AVX512 and are dispatched only after runtime
-# CPUID detection.  Compiling the whole program with /arch:AVX512 would let the
-# compiler emit AVX512 instructions in scalar code, crashing AVX2-only CPUs.
-add_executable(cpu_addsub_bench
-    tools/bench/cpu_addsub_bench.cpp
-    tools/bench/cpu_addsub_avx512.cpp
-    ${CMAKE_SOURCE_DIR}/src/opencl_ecm_runtime_config.cpp
-)
-
-target_include_directories(cpu_addsub_bench PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/cpu
-    ${CMAKE_SOURCE_DIR}/tools/bench
-)
-
-target_compile_definitions(cpu_addsub_bench PRIVATE BUILD_CPU_ADDSUB_MAIN=1)
-
-ecm_target_link_gmp(cpu_addsub_bench)
-
-# Baseline for the whole target: AVX2 (safe on all target CPUs).
-if(MSVC)
-    target_compile_options(cpu_addsub_bench PRIVATE /arch:AVX2)
-else()
-    target_compile_options(cpu_addsub_bench PRIVATE -mavx2 -mfma)
-endif()
-
-# AVX512 kernels: isolated TU, only this file gets AVX512 codegen.
-if(MSVC)
-    set_source_files_properties(tools/bench/cpu_addsub_avx512.cpp PROPERTIES
-        COMPILE_OPTIONS "/arch:AVX512")
-else()
-    set_source_files_properties(tools/bench/cpu_addsub_avx512.cpp PROPERTIES
-        COMPILE_OPTIONS "-mavx512f;-mavx512dq")
-endif()
-
-# ---------------------------------------------------------------------------
-# simd_mont_gate 鈥?M1 gate bench for the AVX512-IFMA batched Montgomery kernel
-# (docs/ECM_EDWARDS_STAGE1.md 搂13).  src/cpu/simd_mont_ifma.cpp is the ONLY file
-# compiled with /arch:AVX512; the bench TU itself stays at the default baseline
-# and the eventual driver must gate every call on runtime CPUID detection.
-# ---------------------------------------------------------------------------
-add_executable(simd_mont_gate
-    tools/bench/simd_mont_gate.cpp
-    src/cpu/simd_mont_ifma.cpp
-)
-
-target_include_directories(simd_mont_gate PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/cpu
-)
-
-ecm_target_link_gmp(simd_mont_gate)
-
-# ecm_edwards_mont.h carries Chinese comments in UTF-8; without /utf-8 MSVC
-# decodes it as CP936 and the preprocessor trips over the comment bytes.
-if(MSVC)
-    target_compile_options(simd_mont_gate PRIVATE /utf-8)
-endif()
-
-if(MSVC)
-    set_source_files_properties(src/cpu/simd_mont_ifma.cpp PROPERTIES
-        COMPILE_OPTIONS "/arch:AVX512")
-else()
-    set_source_files_properties(src/cpu/simd_mont_ifma.cpp PROPERTIES
-        COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
-endif()
-
-# ---------------------------------------------------------------------------
-# ecm_edwards_standalone 鈥?one-curve stage-1 dump for cross-checking against
-# Prime95 or an independent reference ladder.  Uses only the public API of
-# src/cpu/ecm_edwards_cpu.h; it used to be a main() inside that production TU
-# behind BUILD_ECM_EDWARDS_STANDALONE.
-# ---------------------------------------------------------------------------
-add_executable(ecm_edwards_standalone
-    tools/bench/ecm_edwards_standalone.cpp
-    src/cpu/ecm_edwards_cpu.cpp
-)
-
-target_include_directories(ecm_edwards_standalone PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/cpu
-)
-
-ecm_target_link_gmp(ecm_edwards_standalone)
-
-if(MSVC)
-    target_compile_options(ecm_edwards_standalone PRIVATE /utf-8)
-endif()
-
-# ---------------------------------------------------------------------------
-# simd_edwards_bench 鈥?M2 verification + timing: batched Edwards stage-1
-# (src/cpu/simd_edwards.cpp) against the production scalar ladder
-# (src/cpu/ecm_edwards_cpu.cpp, without its standalone main).
-# ---------------------------------------------------------------------------
-add_executable(simd_edwards_bench
-    tools/bench/simd_edwards_bench.cpp
-    src/cpu/simd_edwards.cpp
-    src/cpu/simd_mont_ifma.cpp
-    src/cpu/ecm_edwards_cpu.cpp
-)
-
-target_include_directories(simd_edwards_bench PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/cpu
-)
-
-ecm_target_link_gmp(simd_edwards_bench)
-
-if(MSVC)
-    target_compile_options(simd_edwards_bench PRIVATE /utf-8)
-endif()
-
-# Only the two SIMD TUs get AVX512 codegen; the bench TU and the scalar
-# reference stay at the baseline so the binary reports a clean error on a
-# CPU without AVX512-IFMA instead of executing illegal instructions.
-if(MSVC)
-    set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp PROPERTIES
-        COMPILE_OPTIONS "/arch:AVX512")
-else()
-    set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp PROPERTIES
-        COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
-endif()
-
-add_executable(opencl_ecm_montsqr
-    src/opencl_ecm_montsqr_bench.cpp
-)
-
-target_include_directories(opencl_ecm_montsqr PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
-
-target_compile_definitions(opencl_ecm_montsqr PRIVATE BUILD_OPENCL_ECM_MONTSQR_MAIN=1)
-
-target_link_libraries(opencl_ecm_montsqr
-    OpenSSL::Crypto
-    OpenSSL::SSL
-    cgbn_opencl
-)
-
-ecm_target_link_gmp(opencl_ecm_montsqr)
-
-if(MSVC)
-    # NVIDIA OpenCL JIT of mont_priv_opt.cl can overflow the default 1MB thread stack.
-    target_link_options(opencl_ecm_montsqr PRIVATE "/STACK:16777216")
-endif()
-
-# 鈹€鈹€ Sliced CIOS standalone verification target 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-add_executable(sliced_cios_test
-    src/sliced_cios_test.cpp
-)
-target_include_directories(sliced_cios_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
-target_link_libraries(sliced_cios_test
-    OpenCL::OpenCL
-)
-ecm_target_link_gmp(sliced_cios_test)
-
-add_executable(sliced_cios_8192_test
-    src/sliced_cios_8192_test.cpp
-)
-target_include_directories(sliced_cios_8192_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(sliced_cios_8192_test OpenCL::OpenCL)
-ecm_target_link_gmp(sliced_cios_8192_test)
-
-add_executable(opencl_asm_selftest
-    src/cl_probe.cpp
-    src/opencl_asm_selftest.cpp
-)
-
-target_include_directories(opencl_asm_selftest PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
-
-target_link_libraries(opencl_asm_selftest
-    OpenCL::OpenCL
-    cgbn_opencl
-)
-
-add_executable(opencl_mont_isa_export
-    src/cl_probe.cpp
-    src/opencl_mont_isa_export.cpp
-)
-
-target_include_directories(opencl_mont_isa_export PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
-
-target_link_libraries(opencl_mont_isa_export
-    OpenCL::OpenCL
-    cgbn_opencl
-)
-
-add_executable(opencl_addsub_isa_export
-    src/cl_probe.cpp
-    src/opencl_addsub_isa_export.cpp
-    src/opencl_ecm_addsub_manifest.cpp
-)
-
-target_include_directories(opencl_addsub_isa_export PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
-
-target_link_libraries(opencl_addsub_isa_export
-    OpenCL::OpenCL
-    cgbn_opencl
-)
-
-# 鈹€鈹€ CPU Montgomery Benchmark (AVX512/AVX2 batched CIOS) 鈹€鈹€
-add_executable(cpu_mont_bench
-    tools/bench/cpu_mont_bench.cpp
-    tools/bench/cpu_mont_avx.cpp
-    tools/bench/cpu_mont_scalar.cpp
-)
-
-target_include_directories(cpu_mont_bench PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/cpu
-    ${CMAKE_SOURCE_DIR}/tools/bench
-)
-
-target_compile_definitions(cpu_mont_bench PRIVATE BUILD_CPU_MONT_MAIN=1)
-
-ecm_target_link_gmp(cpu_mont_bench)
-
-if(MSVC)
-    # AVX512 intrinsics require /arch:AVX512 on MSVC (avx512f, avx512dq used)
-    set_source_files_properties(tools/bench/cpu_mont_avx.cpp PROPERTIES COMPILE_FLAGS "/arch:AVX512")
-endif()
-
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
-#  ecm_cuda 鈥?native CUDA/CGBN backend (mirror of the OpenCL `ecm` executable)
+#  ecm_cuda native CUDA/CGBN backend (mirror of the OpenCL `ecm` executable)
 #
 #  Reuses the exact same driver / argument parsing / checkpoint / save / logging
 #  translation units as `ecm`, swapping only the GPU backend at link time via the
@@ -529,7 +204,7 @@ endif()
 #     - CUDA:   src/cuda/ecm_cuda_backend.cu  (here)
 #
 #  Auto-enabled when a CUDA toolkit is present; force off with -DECM_ENABLE_CUDA=OFF.
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+#
 include(CheckLanguage)
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
@@ -561,7 +236,7 @@ if(ECM_ENABLE_CUDA)
         src/cpu/ecm_edwards_cpu.cpp
         src/cpu/ecm_edwards_save.cpp
         # ecm_driver.cpp (shared) calls the CPU Edwards SIMD batch unconditionally,
-        # so this target needs the two AVX512 TUs as well 鈥?without them the link
+        # so this target needs the two AVX512 TUs as well without them the link
         # fails on ed_soa_* / ifma_to_mpz_lane.  The AVX512 COMPILE_OPTIONS set
         # above are per-source-file (directory scoped) and so apply here too.
         src/cpu/simd_edwards.cpp
@@ -873,4 +548,36 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     endif()
 
     message(STATUS "ecm_cuda enabled (CUDA arch ${ECM_CUDA_ARCHITECTURES}, CGBN ${CGBN_INCLUDE_DIR})")
+endif()
+
+# ===========================================================================
+# Optional helper targets: bench / test / disasm / p95feeder.
+#
+# These used to be defined in this file.  They now live in their own
+# tools/<group>/CMakeLists.txt so that this file stays about the two shipped
+# executables (`ecm` and `ecm_cuda`) plus the libraries they need.
+#
+#   -DECM_BUILD_TOOLS=OFF   configure without any helper target (faster configure and a
+#                           smaller build tree).  `ecm`/`ecm_cuda` are unaffected: none of
+#                           the helpers is a dependency of either.
+# ===========================================================================
+option(ECM_BUILD_TOOLS "Build the bench/test/disasm/p95feeder helper executables under tools/" ON)
+
+# Helper executables keep landing in the build ROOT (not in tools/<group>/), because the
+# docs and the tools/*.ps1 scripts reference them by path:
+#   build_vs18\Release\simd_mont_gate.exe, build_vs18\Release\ecm_p95feeder.exe,
+#   build_cuda_cmake\cpu_mont_bench.exe ...
+# (VS appends the configuration directory to this, i.e. exactly today's layout.)
+function(ecm_tool_output_root target)
+    set_target_properties(${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endfunction()
+
+if(ECM_BUILD_TOOLS)
+    add_subdirectory(tools/bench)
+    add_subdirectory(tools/test)
+    add_subdirectory(tools/disasm)
+    add_subdirectory(tools/p95feeder)
+    message(STATUS "tools: bench/test/disasm/p95feeder helper targets enabled (ECM_BUILD_TOOLS=ON)")
+else()
+    message(STATUS "tools: helper targets disabled (ECM_BUILD_TOOLS=OFF)")
 endif()

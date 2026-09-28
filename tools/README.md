@@ -12,11 +12,41 @@ tools/
 ├── stat/       ECM 命中率统计与后端配对比较（Python/.ps1，用 ecm_prob 的素数集）
 ├── diag/       诊断/canary/崩溃复现（.cpp/.cmd/.py，定位具体缺陷用）
 ├── disasm/     反汇编 / ISA 检查（含 Windows 工具链安装）
+├── p95feeder/  ecm_p95feeder（stage-1 结果投递给 Prime95 的独立进程）
 ├── ecm_prob/   ECM 参数化概率分析套件（Python，自带 README）
 ├── ecm_report/ 进度数据库/图表（Python + bat，自带 README）
 ├── log_parser/ 日志解析（自带 README）
 └── ecm_worktodo/ worktodo 管线生成器（Python，Windows 原生：分配行 → stage1 队列 + P95 行）
 ```
+
+## CMake 布局：`ecm` / `ecm_cuda` 在根，其余都是 tools
+
+根 `CMakeLists.txt` 现在只定义**两个交付物** `ecm`（OpenCL）与 `ecm_cuda`（CUDA/CGBN）
++ 它们需要的两个静态库 `cgbn_opencl`、`opencl_ecm_entry`。所有 bench/test/diag 类可执行文件
+都拆到了各自子目录的 `CMakeLists.txt`：
+
+| 定义位置 | 目标 |
+|---|---|
+| `tools/bench/CMakeLists.txt` | `cpu_addsub_bench`、`cpu_mont_bench`、`simd_mont_gate`、`simd_edwards_bench`、`ecm_edwards_standalone`、`opencl_ecm_addsub`、`opencl_ecm_montsqr` |
+| `tools/test/CMakeLists.txt` | `main`、`sliced_cios_test`、`sliced_cios_8192_test` |
+| `tools/disasm/CMakeLists.txt` | `opencl_asm_selftest`、`opencl_mont_isa_export`、`opencl_addsub_isa_export` |
+| `tools/p95feeder/CMakeLists.txt` | `ecm_p95feeder` |
+| 根 `CMakeLists.txt` | `ecm`、`ecm_cuda`、`cgbn_opencl`、`opencl_ecm_entry` |
+
+* **`-DECM_BUILD_TOOLS=OFF`**：不配置任何工具目标（configure 更快、构建树更小）；
+  `ecm`/`ecm_cuda` 不受影响 —— 没有任何工具目标被它们依赖。默认 `ON`。
+* **产物路径不变（这是硬约束）**：工具可执行文件仍然落在**构建根**（VS 生成器下是
+  `<build>\Release\`），因为文档与脚本按路径引用它们
+  （`build_vs18\Release\simd_mont_gate.exe`、`build_vs18\Release\ecm_p95feeder.exe`、
+  `build_cuda_cmake\cpu_mont_bench.exe` …）。根文件里的 `ecm_tool_output_root(<target>)`
+  就是干这个的。
+* **AVX512 标志要重新声明**：`src/cpu/simd_*.cpp` 的 `/arch:AVX512` 是**源文件属性**，
+  而源文件属性只在同一个 `CMakeLists.txt` 目录内可见。所以 `tools/bench/CMakeLists.txt`
+  对 `simd_mont_gate` / `simd_edwards_bench` 用
+  `set_source_files_properties(<abs path> TARGET_DIRECTORY <target> PROPERTIES COMPILE_OPTIONS ...)`
+  重新声明一次（CMake ≥ 3.18）。改这两个目标时别把这段删了。
+* 新增工具目标时：源码放 `tools/<group>/`，定义写进该目录的 `CMakeLists.txt`，
+  照抄一行 `ecm_tool_output_root(<target>)`。
 
 > **小工具编译**：`tools\build_tool.bat <tool.cpp> [额外 .cpp ...]`，产物落到
 > `build_vs18\tools\<name>.exe`（源码树保持干净）；只给名字时会在 `tools\diag`、
