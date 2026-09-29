@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" ?>
+﻿<?xml version="1.0" encoding="utf-8" ?>
 <!--
   ecm_gui UI strings - ENGLISH IS THE BASELINE.
   Every <Item id="..."> here must exist in every other language file; a missing key
@@ -20,6 +20,42 @@
       <Item id="start_all"         name="Start all workers"/>
       <Item id="stop_all"          name="Stop all workers"/>
       <Item id="quit"              name="Quit"/>
+    </Panel>
+
+    <Panel id="gen">
+      <Item id="title"          name="Generator"/>
+      <Item id="paste_hint"     name="Paste PrimeNet assignments (ECM= / ECM2= lines) here, or load a file. Comment lines starting with # are ignored."/>
+      <Item id="load_file"      name="Open file..."/>
+      <Item id="use_recommended" name="use the recommended curves"/>
+      <Item id="blocks_per_sm"  name="blocks/SM"/>
+      <Item id="dedup"          name="dedup"/>
+      <Item id="save_pattern"   name="save name"/>
+      <Item id="sort_by"        name="sort"/>
+      <Item id="target_device"  name="target GPU"/>
+      <Item id="preview"        name="Generate preview"/>
+      <Item id="apply"          name="Append to worktodo"/>
+      <Item id="target"         name="target:"/>
+      <Item id="preview_ready"  name="Preview ready. Nothing was written yet - press Append to worktodo."/>
+      <Item id="no_preview"     name="Generate a preview first."/>
+      <Item id="applied"        name="Appended. Generate a new preview for the next batch."/>
+      <Item id="gpu_info_failed" name="cannot read the kernel tiers from --gpu-info"/>
+      <Item id="col_lines"      name="lines"/>
+      <Item id="col_segments"   name="worker sections"/>
+      <Item id="col_dup"        name="duplicates removed"/>
+      <Item id="col_skipped"    name="skipped"/>
+      <Item id="errors"         name="Skipped input lines and warnings:"/>
+      <Item id="recommended_note" name="The recommended curves are blocks/SM x SM count x curves-per-block of the tier that line's N would run on (from --gpu-info); a task with known factors is sized after them. Drag &amp; drop of files is still on the TODO list."/>
+    </Panel>
+
+    <Panel id="p95">
+      <Item id="not_configured"  name="Prime95 handoff is OFF: p95_worktodo_path is empty in ecm.ini, so finished tasks are NOT handed to Prime95. Set it (and p95_add_workers) to enable it."/>
+      <Item id="open_ini"        name="open ecm.ini"/>
+      <Item id="ready"           name="Prime95 handoff ready: finished tasks are appended to worktodo.add"/>
+      <Item id="ok"              name="Prime95 handoff OK: the finished task was appended to worktodo.add"/>
+      <Item id="warn"            name="Prime95 handoff warning"/>
+      <Item id="pending"         name="Prime95 handoff FAILED: %d line(s) are parked and will be delivered with the next task"/>
+      <Item id="open_dir"        name="open Prime95 folder"/>
+      <Item id="open_pending"    name="open parked file"/>
     </Panel>
 
     <Panel id="workers">

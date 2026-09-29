@@ -180,7 +180,7 @@ size_t p95_total_handoff(const std::vector<P95WorkerSection> &sections) {
 
 bool p95_write_worktodo_add(const std::string &path,
                             const std::vector<std::pair<int, std::string>> &assignments,
-                            bool append, std::string &err) {
+                            bool append, std::string &err, const char *tmp_suffix) {
     std::vector<P95WorkerSection> sections;
     if (append && !p95_read_worktodo(path, sections, err)) return false;
     if (!append) sections.clear();
@@ -205,7 +205,7 @@ bool p95_write_worktodo_add(const std::string &path,
                          return a.worker < b.worker;
                      });
 
-    const std::string tmp = path + ".feeder.tmp";
+    const std::string tmp = path + (tmp_suffix != nullptr ? tmp_suffix : ".feeder.tmp");
     {
         std::ofstream out(tmp, std::ios::trunc);
         if (!out) { err = "cannot write " + tmp; return false; }
@@ -220,25 +220,23 @@ bool p95_write_worktodo_add(const std::string &path,
         if (out.fail()) { err = "write failed: " + tmp; return false; }
     }
 
-    // Atomic-ish replace (Prime95 may be reading the file concurrently).
-    remove(path.c_str());
-    if (rename(tmp.c_str(), path.c_str()) != 0) {
+    // Replace the real file with the finished temp file. On Windows remove()+rename()
+    // leaves a window in which worktodo.add does not exist at all -- and Prime95 may look
+    // for it at exactly that moment (it deletes the file after incorporating it), so use
+    // the atomic replace instead. On POSIX rename() already replaces atomically.
 #ifdef _WIN32
-        // Windows cannot rename over an existing file; remove() above should have
-        // handled it, so retry once after a tiny delay.
-        Sleep(50);
-        remove(path.c_str());
-        if (rename(tmp.c_str(), path.c_str()) != 0) {
-            err = "cannot replace " + path;
-            remove(tmp.c_str());
-            return false;
-        }
-#else
+    if (!MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
         err = "cannot replace " + path;
         remove(tmp.c_str());
         return false;
-#endif
     }
+#else
+    if (rename(tmp.c_str(), path.c_str()) != 0) {
+        err = "cannot replace " + path;
+        remove(tmp.c_str());
+        return false;
+    }
+#endif
     return true;
 }
 

@@ -145,6 +145,94 @@ static bool should_emit_progress_line(int n, double now_ms) {
     return emit_progress_line(n);
 }
 
+// ── Kernel tier list (D4) ──────────────────────────────────────────────────────
+// The tiers this build carries, in ASCENDING bits order. The run path used to build this
+// list inline twice (once for the default param2/param3 path, once for param0); both
+// copies are reproduced here verbatim so the run path and `--gpu-info`
+// (ecm_cuda_tier_list below) can never disagree about which tiers exist. The selection
+// loop additionally skips a tier whose dispatch returns no kernel, which is how a dev
+// build copes with the larger tiers.
+
+static void ecm_build_tier_list_default(std::vector<uint32_t> &out) {
+  out.clear();
+  out.push_back((uint32_t)cgbn_params_128::BITS);
+  out.push_back((uint32_t)cgbn_params_192::BITS);
+  out.push_back((uint32_t)cgbn_params_256::BITS);
+  out.push_back((uint32_t)cgbn_params_384::BITS);
+  out.push_back((uint32_t)cgbn_params_small::BITS);
+  out.push_back((uint32_t)cgbn_params_768::BITS);
+  out.push_back((uint32_t)cgbn_params_medium::BITS);
+
+  #ifdef IS_DEV_BUILD
+    outputf(OUTPUT_ALWAYS, "Warning: Dev buils, only support N<1024.\n");
+    outputf(OUTPUT_ALWAYS, "Warning: Using dev build with only 2 kernels. Consider adding more kernels for better performance on large inputs.\n");
+  #endif
+
+  #ifndef IS_DEV_BUILD
+  out.push_back((uint32_t)cgbn_params_1280::BITS);
+  out.push_back((uint32_t)cgbn_params_1536::BITS);
+  out.push_back((uint32_t)cgbn_params_1792::BITS);
+  out.push_back((uint32_t)cgbn_params_2048::BITS);
+  out.push_back((uint32_t)cgbn_params_2560::BITS);
+  out.push_back((uint32_t)cgbn_params_3072::BITS);
+  out.push_back((uint32_t)cgbn_params_3584::BITS);
+  out.push_back((uint32_t)cgbn_params_4096::BITS);
+  out.push_back((uint32_t)cgbn_params_4608::BITS);
+  out.push_back((uint32_t)cgbn_params_5120::BITS);
+  out.push_back((uint32_t)cgbn_params_5632::BITS);
+  out.push_back((uint32_t)cgbn_params_6144::BITS);
+  out.push_back((uint32_t)cgbn_params_6656::BITS);
+  out.push_back((uint32_t)cgbn_params_7168::BITS);
+  out.push_back((uint32_t)cgbn_params_7680::BITS);
+  out.push_back((uint32_t)cgbn_params_8192::BITS);
+  out.push_back((uint32_t)cgbn_params_9216::BITS);
+  out.push_back((uint32_t)cgbn_params_10240::BITS);
+  out.push_back((uint32_t)cgbn_params_11264::BITS);
+  out.push_back((uint32_t)cgbn_params_12288::BITS);
+  out.push_back((uint32_t)cgbn_params_13312::BITS);
+  out.push_back((uint32_t)cgbn_params_14336::BITS);
+  out.push_back((uint32_t)cgbn_params_15360::BITS);
+  out.push_back((uint32_t)cgbn_params_16384::BITS);
+  #endif
+}
+
+// param0 uses the same container grid as param3, but the list is built without the
+// dev-build guards: the selection loop skips the tiers this build has no kernel for.
+static void ecm_build_tier_list_param0(std::vector<uint32_t> &out) {
+  out.clear();
+  out.push_back((uint32_t)cgbn_params_128::BITS);
+  out.push_back((uint32_t)cgbn_params_192::BITS);
+  out.push_back((uint32_t)cgbn_params_256::BITS);
+  out.push_back((uint32_t)cgbn_params_384::BITS);
+  out.push_back((uint32_t)cgbn_params_small::BITS);
+  out.push_back((uint32_t)cgbn_params_768::BITS);
+  out.push_back((uint32_t)cgbn_params_medium::BITS);
+  out.push_back((uint32_t)cgbn_params_1280::BITS);
+  out.push_back((uint32_t)cgbn_params_1536::BITS);
+  out.push_back((uint32_t)cgbn_params_1792::BITS);
+  out.push_back((uint32_t)cgbn_params_2048::BITS);
+  out.push_back((uint32_t)cgbn_params_2560::BITS);
+  out.push_back((uint32_t)cgbn_params_3072::BITS);
+  out.push_back((uint32_t)cgbn_params_3584::BITS);
+  out.push_back((uint32_t)cgbn_params_4096::BITS);
+  out.push_back((uint32_t)cgbn_params_4608::BITS);
+  out.push_back((uint32_t)cgbn_params_5120::BITS);
+  out.push_back((uint32_t)cgbn_params_5632::BITS);
+  out.push_back((uint32_t)cgbn_params_6144::BITS);
+  out.push_back((uint32_t)cgbn_params_6656::BITS);
+  out.push_back((uint32_t)cgbn_params_7168::BITS);
+  out.push_back((uint32_t)cgbn_params_7680::BITS);
+  out.push_back((uint32_t)cgbn_params_8192::BITS);
+  out.push_back((uint32_t)cgbn_params_9216::BITS);
+  out.push_back((uint32_t)cgbn_params_10240::BITS);
+  out.push_back((uint32_t)cgbn_params_11264::BITS);
+  out.push_back((uint32_t)cgbn_params_12288::BITS);
+  out.push_back((uint32_t)cgbn_params_13312::BITS);
+  out.push_back((uint32_t)cgbn_params_14336::BITS);
+  out.push_back((uint32_t)cgbn_params_15360::BITS);
+  out.push_back((uint32_t)cgbn_params_16384::BITS);
+}
+
 
 // Checkpoint configuration
 #define CHECKPOINT_MAGIC 0x45555047  // EPUG -> "GPUE" in hex (GPU ECM)
@@ -971,6 +1059,77 @@ static cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_dispatch(uint32_t BITS, u
     return cgbn_stage1_kernel_param2_tpi32(BITS, TPI_out);
 }
 
+/* ── D4: kernel-tier query (ecm_cuda.exe --gpu-info) ─────────────────────────────
+   Reports the tiers this build carries plus the TPB/TPI each one launches with, using the
+   SAME tier lists and the SAME per-TPI dispatch as the run path. That is what makes the
+   `gpucurves` recommendation (`curves = blocks_per_sm * sm_count * (tpb / tpi)`)
+   trustworthy: the numbers cannot drift from what the kernel would actually pick.
+
+   Pure query: no kernel launch, no device call, no file access. `want_bits` is the bit
+   length of the number the task will factor (CARRY_BITS is added here, so callers pass the
+   plain bit size); 0 means "every tier". Returns the number of entries written, or -1 when
+   no tier is large enough. */
+int ecm_cuda_tier_list(int param0, int param2, uint32_t want_bits,
+                       ecm_cuda_tier *out, int max_out, uint32_t *carry_bits) {
+    if (carry_bits != nullptr) *carry_bits = (uint32_t)CARRY_BITS;
+    if (out == nullptr || max_out <= 0) return -1;
+
+    std::vector<uint32_t> tiers;
+    if (param0) {
+        ecm_build_tier_list_param0(tiers);
+    } else {
+        ecm_build_tier_list_default(tiers);
+    }
+
+    int written = 0;
+    for (std::size_t i = 0; i < tiers.size(); ++i) {
+        const uint32_t bits = tiers[i];
+        if (want_bits != 0u && bits < want_bits + (uint32_t)CARRY_BITS) continue;
+        uint32_t tpi_u32 = 0;
+        cgbn_stage1_kernel_fn k = param0 ? cgbn_stage1_kernel_suyama_dispatch(bits, &tpi_u32)
+                                 : param2 ? cgbn_stage1_kernel_param2_dispatch(bits, &tpi_u32)
+                                          : cgbn_stage1_kernel_dispatch(bits, &tpi_u32);
+        if (k == nullptr) continue;          /* tier not instantiated in this build */
+        if (written < max_out) {
+            out[written].bits = bits;
+            out[written].tpb = (uint32_t)TPB_DEFAULT;
+            out[written].tpi = tpi_u32;
+        }
+        ++written;
+        if (want_bits != 0u) break;          /* the kernel would stop at the first fit */
+    }
+    if (want_bits != 0u && written == 0) return -1;
+    return written > max_out ? max_out : written;
+}
+
+int ecm_cuda_fold_build(void) {
+#if ECM_MERS_FOLD
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+int ecm_cuda_tier_occupancy(int param0, int param2, uint32_t bits,
+                            uint32_t *blocks_per_sm) {
+    if (blocks_per_sm == nullptr) return 0;
+    *blocks_per_sm = 0;
+
+    uint32_t tpi_u32 = 0;
+    cgbn_stage1_kernel_fn k = param0 ? cgbn_stage1_kernel_suyama_dispatch(bits, &tpi_u32)
+                             : param2 ? cgbn_stage1_kernel_param2_dispatch(bits, &tpi_u32)
+                                      : cgbn_stage1_kernel_dispatch(bits, &tpi_u32);
+    if (k == nullptr) return 0;   /* tier not instantiated in this build */
+
+    int occ = 0;
+    if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ, k, (int)TPB_DEFAULT, 0)
+            != cudaSuccess || occ <= 0) {
+        return 0;
+    }
+    *blocks_per_sm = (uint32_t)occ;
+    return 1;
+}
+
 int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
              uint32_t curves, uint64_t *sigma_ptr,
@@ -1099,66 +1258,9 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
    */
   /** TODO: try with const vector for BITs/TPI, see if compiler is happy */
   std::vector<uint32_t> available_kernels;
-  available_kernels.push_back((uint32_t)cgbn_params_128::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_192::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_256::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_384::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_small::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_768::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_medium::BITS);
-
-  #ifdef IS_DEV_BUILD
-    outputf(OUTPUT_ALWAYS, "Warning: Dev buils, only support N<1024.\n");
-    outputf(OUTPUT_ALWAYS, "Warning: Using dev build with only 2 kernels. Consider adding more kernels for better performance on large inputs.\n");
-  #endif
-
-  #ifndef IS_DEV_BUILD
-  /**
-   * TPI and BITS have to be set at compile time. Adding multiple cgbn_params
-   * (and their associated kernels) allows for better dynamic selection based
-   * on the size of N (e.g. N < 1024, N < 2048, N < 4096) but increase compile
-   * time and binary size. A few reasonable sizes are included and a verbose
-   * warning is printed when a particular N might benefit from a custom sized
-   * kernel.
-   *
-   * BITS规则: 必须是32的倍数；TPI=16 档位用 512 间隔（256 间隔试过，实测没有吞吐
-   *           收益，只让全量构建时间翻倍，已回退 —— 见 cgbn_stage1_kernels_tpi16.cu）
-   * TPI规则: N>512用8, N>2048用16, N>8192用32
-   */
-
-  // TPI=8 kernels (for 512-2048 bits)
-  available_kernels.push_back((uint32_t)cgbn_params_1280::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_1536::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_1792::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_2048::BITS);
-
-  // TPI=16 kernels (for 2560-8192 bits, 512 interval -- must match the
-  // instantiations in cgbn_stage1_kernels_tpi16.cu exactly)
-  available_kernels.push_back((uint32_t)cgbn_params_2560::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_3072::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_3584::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_4096::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_4608::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_5120::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_5632::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_6144::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_6656::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_7168::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_7680::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_8192::BITS);
-
-  // TPI=32 kernels (for 10240+ bits, 512 interval for better optimization)
-  // 12288-16384 gap is critical: 9820s->16950s (73% increase!)
-  available_kernels.push_back((uint32_t)cgbn_params_9216::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_10240::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_11264::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_12288::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_13312::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_14336::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_15360::BITS);
-  available_kernels.push_back((uint32_t)cgbn_params_16384::BITS);
-
-#endif
+  // The tier list lives in ecm_build_tier_list_default() (see the D4 note near the top)
+  // so this run path and --gpu-info can never disagree about which tiers exist.
+  ecm_build_tier_list_default(available_kernels);
 
   /* Pointer to CUDA kernel. */
   void(*kernel)(cgbn_error_report_t *, uint64_t, uint64_t, uint64_t,
@@ -1246,38 +1348,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
      the 512-bit grid above 2560.  In a dev build only the small tiers exist, and the
      loop below skips the ones without a kernel instead of failing. */
   if (param0) {
-    available_kernels.clear();
-    available_kernels.push_back((uint32_t)cgbn_params_128::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_192::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_256::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_384::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_small::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_768::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_medium::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_1280::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_1536::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_1792::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_2048::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_2560::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_3072::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_3584::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_4096::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_4608::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_5120::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_5632::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_6144::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_6656::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_7168::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_7680::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_8192::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_9216::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_10240::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_11264::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_12288::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_13312::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_14336::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_15360::BITS);
-    available_kernels.push_back((uint32_t)cgbn_params_16384::BITS);
+    ecm_build_tier_list_param0(available_kernels);
   }
   for (int k_i = 0; k_i < available_kernels.size(); k_i++) {
     uint32_t kernel_bits = available_kernels[k_i];
@@ -1511,14 +1582,18 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
                 "blocks/SM; %d blocks for %d SMs is below that (measured 10-25%% SLOWER than a "
                 "non-fold build there).  Raise -gpucurves to about %ld (%d curves/block) or "
                 "rebuild with -DECM_TPB=128.\n",
-                (int)BLOCK_COUNT, sm_count, 2L * (long)sm_count, (int)IPB);
+                (int)BLOCK_COUNT, sm_count, 2L * (long)sm_count * (long)IPB, (int)IPB);
       } else
 #endif
       if ((long)BLOCK_COUNT < (long)sm_count) {
+        /* The suggestion is CURVES, not blocks: `curves = blocks * IPB`.  The old text
+           printed sm_count here, which is a block count -- feeding it into `gpucurves`
+           left the GPU under-occupied (docs/DEV_ECM_WORKTODO.md 5.4). */
         outputf(OUTPUT_NORMAL,
                 "GPU: warning: only %d blocks for %d SMs - some SMs idle; raise -gpucurves to "
-                "about %ld (a multiple of %d keeps whole waves)\n",
-                (int)BLOCK_COUNT, sm_count, (long)sm_count, (int)IPB);
+                "about %ld (%d curves/block; a multiple of %ld keeps whole waves)\n",
+                (int)BLOCK_COUNT, sm_count, (long)sm_count * (long)IPB, (int)IPB,
+                (long)sm_count * (long)IPB);
       } else if ((long)BLOCK_COUNT < capacity) {
         outputf(OUTPUT_VERBOSE,
                 "GPU: note: %d blocks = %ld%% of the %ld register-allowed block slots "

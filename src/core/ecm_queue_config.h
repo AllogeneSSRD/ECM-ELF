@@ -43,7 +43,23 @@ struct EcmQueueConfig {
     std::string save_sync_dir_1;                 // empty = disabled
     std::string save_sync_dir_2;                 // empty = disabled
     std::string sync_mode = "incremental";       // incremental | full
+    // --- Prime95 handoff (docs/DEV_ECM_GUI.md 13) ---
+    // p95_worktodo_path: Prime95's worktodo.txt. A finished task's ECMSTAGE2= line is
+    // appended verbatim to the worktodo.add next to it, so Prime95's stage 2 continues
+    // it. Empty (the default) disables the handoff entirely.
+    std::string p95_worktodo_path;
+    // p95_add_workers: which [Worker #N] section the line goes into --
+    //   "" (default, no section header) | "3" | "1,3" | "1-8" | "auto"
+    // "auto" reads NumWorkers from prime.txt next to worktodo.txt. A section that
+    // worktodo.txt does not have makes the driver fall back to a header-less append
+    // (with a warning); with several candidates the least loaded worker wins.
+    std::string p95_add_workers;
     std::string progress_color = "cyan";         // none|red|green|yellow|blue|magenta|cyan|white|grey
+    // How often a progress line may be written to log_file (seconds):
+    //   60 = default, 0 = never, negative = every line (pre-2026-09-29 behaviour).
+    // Only the FILE is gated; the console/pipe keeps its ~200 ms cadence (the GUI tails
+    // the worker's stdout), and the 100% line always reaches the file.
+    double progress_log_seconds = 60.0;
     bool verbose = true;
 
     // --- [method] stage-1 engine (exactly one) ---

@@ -74,6 +74,8 @@ public:
         ProgressInfo last_progress;
         std::string last_start_line;       // newest "START: <worktodo line>"
         std::vector<HitInfo> hits;         // every hit line seen in this batch (D3 fields)
+        // Every `p95_add:` notice seen in this batch (Prime95 handoff, docs 13).
+        std::vector<P95Notice> p95;
         // The worker printed "No input number on stdin": its executable predates the
         // --worker support (D1/D2) and never entered queue mode. See kOldDriverHint.
         bool old_driver = false;

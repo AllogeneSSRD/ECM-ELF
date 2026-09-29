@@ -103,7 +103,11 @@ OpenCL GPU 上的加速。以下术语按领域分组，为跨设计讨论提供
 | **进度行** | 非 TTY（管道/重定向）下 driver 按衰减节奏打印的整行状态：CPU 侧 `stage1: [bar] 42.3% 42.3/100 (~1.20 s/curve) elapsed … ETA …`；GPU 侧 `GPU: [bar] 42.3% … +N bits (~1.20 s/curve) … remaining …`。GUI 靠它取百分比 / 速度 / ETA，进度条由 GUI 自绘。 |
 | **事件行** | 日志面板真正关心的行：`START:`、`FACTOR FOUND`、`factor[i]=…`、`Checkpoint saved/loaded`、`Resuming from checkpoint`、`ERROR:` 与 `# ERROR <行>`。 |
 | **results 双文件** | `results.json.txt`（追加式 JSONL，真相源，每命中一条对象）+ `results.txt`（同一因子被多条曲线命中时**合并成一行**，含 sigma 列表；从 JSONL 派生、可随时重建）。 |
-| **`gpucurves` 推荐** | 由 `--gpu-info` 给出的 `sm_count/tpb/tpi/ipb` 算建议批量：`blocks ≥ sm_count` 且取整波，折叠域需 `blocks ≥ 2×sm_count`；**不要**填满 register-allowed 槽位（kernel 是 issue bound）。依据与实测见 `docs/DEV_ECM_WORKTODO.md` §5。 |
+| **`gpucurves` 推荐** | 由 `--gpu-info` 给出的逐档位 `ipb` 与 `sm_count` 算建议批量：生成器的公式是 **`curves = 块/SM × sm_count × ipb`**（块/SM 默认 2，面板可调），且不小于该档位的 `curves_min`（`blocks_min × ipb`）；`blocks_min` = 每 SM 一块，`curves_min` 就是内核警告里"raise -gpucurves to about N"的 N。**不要**填满 register-allowed 槽位（kernel 是 issue bound）。依据与实测见 `docs/DEV_ECM_WORKTODO.md` §5、生成器细节见 `docs/DEV_ECM_GUI.md` §19。 |
+| **`--gpu-info`（D4）** | driver 的纯查询开关：打印设备（`device/name/sm_count/cc`）与**逐档位**的 `bits/tpb/tpi/ipb/blocks_per_sm/blocks_min/curves_min/blocks_wave/curves_wave`，`--bits N` 只留内核会选中的那一档。**零副作用**（不启动内核、不写文件、不建 ini），是"GUI/生成器只认一个真相"的接口。OpenCL 构建回答 `not_applicable` 并退出 0。格式与规则见 `docs/DEV_ECM_GUI.md` §11.1。 |
+| **`progress_log_seconds`** | 新的 ini 键：**进度行写进 `log_file` 的最小间隔（秒）**；默认 60，`0` = 文件里不写进度行，负数 = 每行都写。**管道/控制台永远每次**（GUI 靠它显示进度），且 `100.0%` 那行总会写进文件。见 `docs/DEV_ECM_GUI.md` §7.2。 |
+| **Prime95 交接（`worktodo.add`）** | 任务完成且 `.save` 同步后，driver 把该任务行**逐字节原样**（保留 AID 与已知因子）追加到 `p95_worktodo_path` 同目录的 `worktodo.add`；Prime95 自己并进 `worktodo.txt` 后删除该文件。段号由 `p95_add_workers` 决定（空/`3`/`1,3`/`1-8`/`auto`），段头**只认 `worktodo.txt` 里真实存在的段**。失败**绝不阻塞任务**：行落 `p95_add_pending.txt`，下次成功交付时一起送出；GUI 用红/黄/绿/灰通知条显示（红 = 有 pending）。见 `docs/DEV_ECM_GUI.md` §18。 |
+| **生成器（M6 范围 A）** | `ecm_gui` 的"生成器"面板 + `src/gui/worktodo_gen.{h,cpp}`：粘贴 PrimeNet 作业（`ECM=`/`ECM2=`）→ 过滤/去重/改写/排序/存档名校验 → 逐行推荐曲线 → **预览** → **只追加**到 worktodo（追加前重新校验目标文件的大小/mtime）。与 `tools/ecm_worktodo/ecm.py` 在给定同样曲线数时**逐字节一致**。GUI 不含 GMP，位数用算术估算（已知因子按位数和扣减，取下界）。见 `docs/DEV_ECM_GUI.md` §19。 |
 | **`work_manager.ps1`** | **已废弃**：队列/日志/同步编排由 driver 内置队列管理器取代。仅可作测试夹具，不作为生产路径。 |
 
 ---

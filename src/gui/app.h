@@ -15,6 +15,7 @@
 #include "log_parse.h"
 #include "results.h"
 #include "worker_proc.h"
+#include "worktodo_gen.h"
 
 #include <functional>
 #include <memory>
@@ -64,6 +65,11 @@ struct WorkerView {
     bool show_pane = true;
     bool duplicate_device = false;    // another worker uses the same device (warning)
     bool old_driver = false;          // worker exe printed "No input number on stdin"
+    // ---- Prime95 handoff notices (docs/DEV_ECM_GUI.md 18) ---------------------------
+    // The driver prints one `p95_add:` line per finished task; the notice strip shows the
+    // most severe one. A Pending notice (and a non-empty pending file on disk) stays red
+    // until a later delivery succeeds.
+    P95Notice p95;                    // last notice of this worker
     // Percent the driver reported when it resumed from a checkpoint ("Resuming from
     // checkpoint: 23.8% complete"). A resumed run starts its progress line only after a
     // long batch gap (see docs/DEV_ECM_GUI.md 7.2), so the GUI shows this instead of an
@@ -173,6 +179,19 @@ public:
 private:
     void rebuild_workers();
     void draw_menu_bar();
+    // Prominent full-width strip under the menu bar: the Prime95 handoff state in red /
+    // yellow / green / grey, with the two "open" buttons (docs/DEV_ECM_GUI.md 18).
+    // `height` is the row reserved for it and `host_top` the top of the dockspace host,
+    // which the strip must stay above -- otherwise the docked panels paint over it.
+    void draw_p95_notice(float height, float host_top);
+    // Worktodo generator (M6 scope A, docs/DEV_ECM_GUI.md 19): paste assignments, preview
+    // the queue the generator would write, then append it with a re-validated mtime.
+    void draw_gen_panel();
+    void gen_make_preview();
+    void gen_apply();
+    // The file the generated queue is appended to (the ini's `worktodo`, resolved against
+    // the worker executable's directory -- what the driver itself uses).
+    std::string genWorktodoPath() const;
     void draw_workers_table();
     void draw_gpu_panel();
     void draw_results_panel();
@@ -194,6 +213,39 @@ private:
     void tick_graceful_stops(unsigned long long now);
     // Directory holding the worker executable: where the driver writes .ecm_ckpt_*.dat.
     std::string worker_dir() const;
+    // ---- Prime95 handoff ([queue] p95_worktodo_path / p95_add_workers) ---------------
+    // Read from the ini by the GUI itself (not from a worker's output), so the "not
+    // configured" hint is visible before any worker runs.
+    std::string p95_worktodo_path_;       // empty = the handoff is off
+    std::string p95_add_workers_;         // "" | "3" | "1,3" | "1-8" | "auto"
+    std::string p95_trace_last_;          // last traced notice-strip text (change detect)
+    float p95_strip_h_ = 0.0f;            // the strip's real height, reserved in App::draw
+    // ---- worktodo generator (M6 scope A) --------------------------------------------
+    std::string gen_input_;               // the paste box / loaded file
+    // ImGui's InputTextMultiline takes a char buffer (this ImGui version has no
+    // std::string overload), so the buffer is the widget's model and gen_input_ follows it.
+    std::vector<char> gen_input_buf_;
+    bool gen_input_sync_ = false;         // gen_input_ changed outside the widget
+    std::string gen_input_path_;          // last file loaded into it ("" = pasted)
+    std::string gen_save_pattern_ = "m{n}_{b1}.save";
+    std::string gen_sort_by_ = "n";
+    int gen_blocks_per_sm_ = 2;           // the `n` in curves = n * sm_count * ipb
+    bool gen_use_recommended_ = true;     // default ON
+    bool gen_dedup_ = true;
+    int gen_target_device_ = 0;
+    std::string gen_text_;                // the preview (exactly what apply would write)
+    std::string gen_status_;              // one-line result of the last action
+    std::string gen_warnings_;            // rejected input lines, warnings
+    FileStamp gen_stamp_;                 // target state when the preview was made
+    std::string gen_target_;              // the file the preview would be appended to
+    bool gen_has_preview_ = false;
+    int gen_lines_ = 0, gen_segments_ = 0, gen_duplicates_ = 0, gen_read_ = 0,
+        gen_skipped_ = 0;
+    std::string gen_trace_last_;
+    std::string p95AddPath() const;       // <dir of p95_worktodo_path>\worktodo.add
+    std::string p95PendingPath() const;   // <worker dir>\p95_add_pending.txt
+    std::string p95WorktodoPath() const;  // the ini value resolved against the worker dir
+    long long p95PendingCount() const;    // lines waiting in that file (0 when absent)
     // One-shot measurement of the default font (can it draw CJK?), traced so the tests
     // can check "Chinese renders" without a human looking at the screen.
     void trace_font_metrics();
@@ -244,6 +296,8 @@ private:
     // [GUI] graceful_stop_ms: how long to wait for a fresh checkpoint before terminating.
     unsigned long long graceful_stop_ms_ = 300000;
     bool layout_built_ = false;          // default dock layout applied this run
+    std::string start_tab_id_;           // [GUI] start_tab -> window id of the wanted tab
+    bool start_tab_applied_ = false;     // the selection was applied (see draw())
     int panels_traced_at_frame_ = -1;    // frame counter when the rects were traced
     int frame_counter_ = 0;
     unsigned long long last_tick_ms_ = 0;

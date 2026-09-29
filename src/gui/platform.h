@@ -68,6 +68,17 @@ float window_dpi_scale(void *hwnd);
 // "open saves folder" button.
 bool open_in_explorer(const std::string &path);
 
+// Runs a short command and captures its stdout (used by the worktodo generator to read
+// `ecm_cuda.exe --gpu-info`). No console window appears (CREATE_NO_WINDOW), the child is
+// killed when `timeout_ms` passes, and only text on stdout is collected -- diagnostics go
+// to stderr and are left alone. Returns false when the process cannot start or times out.
+bool run_capture(const std::string &command_line, std::string &out, int &exit_code,
+                 int timeout_ms = 20000);
+
+// Native "open file" dialog (comdlg32). Returns false when the user cancels.
+// `filter` uses the Win32 double-NUL format, e.g. "Text\0*.txt\0All\0*.*\0\0".
+bool browse_for_file(std::string &path, const std::string &title, const std::string &filter);
+
 // ---------------------------------------------------------------------------
 // Worker processes -- milestone M2 (docs/DEV_ECM_GUI.md section 5)
 //

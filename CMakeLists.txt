@@ -107,6 +107,10 @@ add_executable(ecm
     src/core/ecm_gpu_common.cpp
     src/core/ecm_queue_config.cpp
     src/core/ecm_worktodo.cpp
+    # Prime95 worktodo.add handoff for finished tasks (docs/DEV_ECM_GUI.md 18) plus the
+    # p95_worktodo helpers it shares with tools/p95feeder.
+    src/core/p95_transfer.cpp
+    src/core/p95_worktodo.cpp
     src/opencl_ecm_debug_utils.cpp
     src/opencl_ecm_log.cpp
     src/opencl_ecm_mont.cpp
@@ -231,6 +235,9 @@ if(ECM_ENABLE_CUDA)
         src/core/ecm_gpu_common.cpp
         src/core/ecm_queue_config.cpp
         src/core/ecm_worktodo.cpp
+        # Prime95 worktodo.add handoff for finished tasks (docs/DEV_ECM_GUI.md 18).
+        src/core/p95_transfer.cpp
+        src/core/p95_worktodo.cpp
         src/opencl_ecm_log.cpp
         src/opencl_ecm_runtime_config.cpp
         src/cpu/ecm_edwards_cpu.cpp

@@ -3,7 +3,9 @@
 #include <cstring>
 
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <commdlg.h>            /* GetOpenFileNameA (comdlg32) */
 #include <shellapi.h>
 #endif
 
@@ -242,6 +244,107 @@ bool open_in_explorer(const std::string &path) {
     return reinterpret_cast<std::intptr_t>(h) > 32;
 #else
     (void)path;
+    return false;
+#endif
+}
+
+bool run_capture(const std::string &command_line, std::string &out, int &exit_code,
+                 int timeout_ms) {
+    out.clear();
+    exit_code = -1;
+#ifdef _WIN32
+    // One inheritable pipe for the child's stdout, with the write end in the child only.
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE rd = nullptr, wr = nullptr;
+    if (!CreatePipe(&rd, &wr, &sa, 0)) return false;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+
+    // The child must also SEE the inherited stdout: STARTF_USESTDHANDLES with the pipe as
+    // hStdOutput is what makes `fprintf(stdout, ...)` land in the pipe. No console window
+    // appears, which a `_popen` would flash on the user's desktop.
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = wr;
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+
+    std::string cmd = command_line;             // CreateProcessA may modify the buffer
+    PROCESS_INFORMATION pi{};
+    const DWORD flags = CREATE_NO_WINDOW;
+    if (!CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, flags, nullptr, nullptr,
+                        &si, &pi)) {
+        CloseHandle(rd);
+        CloseHandle(wr);
+        return false;
+    }
+    CloseHandle(wr);                            // our copy: the child owns the write end
+
+    const DWORD deadline = GetTickCount() + static_cast<DWORD>(timeout_ms < 0 ? 0 : timeout_ms);
+    bool timed_out = false;
+    char buf[4096];
+    for (;;) {
+        DWORD avail = 0;
+        if (PeekNamedPipe(rd, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+            DWORD got = 0;
+            const DWORD want = (avail < sizeof(buf)) ? avail : static_cast<DWORD>(sizeof(buf));
+            if (ReadFile(rd, buf, want, &got, nullptr) && got > 0) {
+                out.append(buf, got);
+                continue;
+            }
+        }
+        if (WaitForSingleObject(pi.hProcess, 20) == WAIT_OBJECT_0) break;
+        if (timeout_ms > 0 && GetTickCount() > deadline) { timed_out = true; break; }
+    }
+    // Drain whatever is still buffered after the process ended.
+    for (;;) {
+        DWORD avail = 0;
+        if (!PeekNamedPipe(rd, nullptr, 0, nullptr, &avail, nullptr) || avail == 0) break;
+        DWORD got = 0;
+        const DWORD want = (avail < sizeof(buf)) ? avail : static_cast<DWORD>(sizeof(buf));
+        if (!ReadFile(rd, buf, want, &got, nullptr) || got == 0) break;
+        out.append(buf, got);
+    }
+
+    DWORD code = 0;
+    if (timed_out) {
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 2000);
+    }
+    GetExitCodeProcess(pi.hProcess, &code);
+    exit_code = static_cast<int>(code);
+    CloseHandle(rd);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return !timed_out;
+#else
+    (void)command_line;
+    (void)timeout_ms;
+    return false;
+#endif
+}
+
+bool browse_for_file(std::string &path, const std::string &title, const std::string &filter) {
+#ifdef _WIN32
+    char name[MAX_PATH] = {0};
+    if (!path.empty() && path.size() < MAX_PATH) {
+        std::memcpy(name, path.c_str(), path.size());
+    }
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = GetActiveWindow();
+    ofn.lpstrFilter = filter.empty() ? "All files\0*.*\0\0" : filter.c_str();
+    ofn.lpstrFile = name;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = title.empty() ? nullptr : title.c_str();
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!GetOpenFileNameA(&ofn)) return false;
+    path.assign(name);
+    return true;
+#else
+    (void)path; (void)title; (void)filter;
     return false;
 #endif
 }

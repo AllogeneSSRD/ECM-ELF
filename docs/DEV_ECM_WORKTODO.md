@@ -128,49 +128,75 @@ curves_wave  = blocks_wave × IPB             ← 推荐 gpucurves
   —— 那是 kernel 的实现细节，复刻必然漂移。
 * 推荐值是"`≥1 block/SM` 且整波"，**不是**"填满槽位"（§5.1 最后两条）。
 
-### 5.3 接口（D4）
+### 5.3 接口（D4，已实现 2026-09-29）
 
 ```
-ecm_cuda.exe --gpu-info -d 0 --bits 5120
-# 机器可读单行（字段顺序固定、key=value、空格分隔）：
-sm_count=60 tpb=256 tpi=… ipb=… blocks_min=60 curves_min=… curves_wave=… [fold_min_blocks=120]
+ecm_cuda.exe --gpu-info [-d N] [--gpu-param 0|2|3] [--bits N]
 ```
 
-* 纯查询、零副作用，仿 `--show-kernels` 的"打印后退出"风格（`ecm_driver.cpp:3578`）。
-* `--bits` 缺省 = 用 ini/默认档位；用于"同一张卡不同 N 位数给不同 `gpucurves`"。
-
-### 5.4 已知的不精确处（顺手一起修）
-
-kernel 现有的两条警告把**建议的 gpucurves** 打成了 `sm_count`（或 `2×sm_count`），
-而实际要求是 `blocks ≥ sm_count` ⇒ `curves ≥ sm_count × IPB`：
+输出**一行一个 `key=value`**，档位行以唯一没有 `=` 的 token `tier` 开头（完整字段与解析规则见
+`DEV_ECM_GUI.md` §11.1）：
 
 ```
-"raise -gpucurves to about %ld (a multiple of %d keeps whole waves)", (long)sm_count, (int)IPB
-"Raise -gpucurves to about %ld (%d curves/block)", 2L*sm_count, (int)IPB        # fold 分支
+gpu_info=1  backend=CUDA/CGBN  device=0  name=NVIDIA GeForce RTX 4070 Ti  sm_count=60  cc=8.9
+gpu_param=0  fold=0  carry_bits=6  picked=0  tier_count=31  ini=<路径|->  worker=1
+tier bits=128 tpb=128 tpi=4 ipb=32 blocks_per_sm=10 blocks_min=60 curves_min=1920 blocks_wave=600 curves_wave=19200
+tier bits=192 …（按 bits 升序，逐档一行）
 ```
 
-⇒ D4 里一并把这两行改成打印**曲线数**（`curves_min = blocks_min × IPB`，整波建议值另给），
-使"警告里的数字"与"`--gpu-info` 的输出"和"真正该填的值"三者一致。
+* 纯查询、零副作用（不启动内核、不写文件、不建 ini），仿 `--showkernel` 的"打印后退出"风格。
+* `--bits N` 只输出 kernel 会选中的那一档（`bits ≥ N + carry_bits` 的最小档）并置 `picked=1`。
+* `sm_count`/`ipb`/`blocks_*`/`curves_*` 全部来自 kernel 侧的**同一张档位表**与
+  运行路径自己用的 `cudaOccupancyMaxActiveBlocksPerMultiprocessor`，因此不会与运行时漂移。
+* `fold=1` 的构建额外给 `fold_blocks_min`/`fold_curves_min`（= `2 × sm_count × ipb`）。
+* OpenCL 构建（`ecm.exe`）打印 `gpu_info=not_applicable` 并**退出 0**（问一个它答不了的问题不是错误）。
 
-### 5.5 验收
+### 5.4 已知的不精确处（**已修**，2026-09-29）
 
-1. `--gpu-info --bits <b>` 输出里的 `ipb`/`sm_count` 与 kernel 自身警告行里的数值**一致**。
-2. 用推荐值（整波）跑一轮真实任务，stdout **不再出现** "raise -gpucurves" / "needs >= 2 resident blocks/SM"。
-3. 对照实验（可复现）：同一 N 与 B1 下，`gpucurves = curves_wave` 与 `gpucurves = 2 × curves_wave`
-   各跑数次取中位数，确认**没有**因为"填满槽位"而变慢（记录 curve-bits/s）。
-4. CPU 路径：`stage1_threads = N` 时检查 `curves ≥ 8N`，不足给提示。
+kernel 原有的两条警告把**建议的 gpucurves** 打成了 `sm_count`（或 `2×sm_count`），
+而实际要求是 `blocks ≥ sm_count` ⇒ `curves ≥ sm_count × IPB`。修好后的文案（实测行）：
+
+```
+普通构建：GPU: warning: only 1 blocks for 60 SMs - some SMs idle; raise -gpucurves to
+          about 1920 (32 curves/block; a multiple of 1920 keeps whole waves)
+折叠构建：GPU: warning: the Mersenne fold is latency bound and needs >= 2 resident blocks/SM;
+          1 blocks for 60 SMs is below that (…). Raise -gpucurves to about 3840 (32 curves/block) …
+```
+
+⇒ "警告里的数字" = `curves_min`（`blocks_min × IPB`）、"`--gpu-info` 的输出"、"真正该填的值"三者一致；
+验收测试 `test_gpu_info.ps1` 直接断言
+`the kernel's suggestion == curves_min (1920)`（把警告行与 `--gpu-info` 的输出对起来比）。
+
+### 5.5 验收（D4 部分已落地）
+
+1. ✅ `--gpu-info --bits <b>` 的选档与**运行路径自己打印**的 `CGBN<tpi, bits>` 一致
+   （`test_gpu_info.ps1` 真跑一条 1 曲线任务取这条自证）。
+2. ✅ 警告行的建议值 == `--gpu-info` 的 `curves_min`（同上测试断言）。
+3. ✅ 生成器（M6 范围 A）用 `n_blocks/SM × sm_count × ipb` 逐行推荐曲线，见
+   `DEV_ECM_GUI.md` §19；用推荐值跑真实任务不再出现 "raise -gpucurves" 的条件是
+   推荐值 ≥ `curves_min`（面板默认 `blocks/SM = 2`，即 ≥ `2 × sm_count × ipb` ≥ `curves_min`）。
+4. ⏳ 对照实验（`curves_wave` vs `2 × curves_wave` 的中位数）仍需在真卡上单独跑一轮，
+   记在 `docs/ECM_CGBN_OPTIMIZATION.md`（本轮没做，不影响生成器正确性）。
 
 ---
 
-## 6. 可视化生成（M6）规划
+## 6. 可视化生成（M6）：范围 A 已落地（2026-09-29）
 
-### 6.1 输入
+已实现的是 **核心子集**：粘贴/打开文件 → 解析 → 过滤/去重/改写/排序 → 存档名校验 →
+逐行推荐曲线 → **预览** → **追加到 worktodo**。实现在 `src/gui/worktodo_gen.{h,cpp}`
+（纯逻辑，可单测）+ `ecm_gui` 的"生成器"面板；参考实现仍是 `ecm.py`，
+两者在给定同样曲线数时**逐字节一致**（5 组对比，见 `DEV_ECM_GUI.md` §19.3）。
 
-* Prime95 分配行（`ECM=`/`ECM2=`）或 CSV（`tools/ecm_worktodo/assignment_sample.csv` 的形状）；
-* 目标参数：每段（worker）的 `B1`、`device`、`gpucurves`（可由 §5 推荐自动填）、`param`（0/2/3）；
-* 现有 `worktodo.txt`（用于**增量追加**而不是整份重写）。
+下面几节保留原始规划作为对照，**与最终实现的差异**已就地标注。
 
-### 6.2 管线（复用 `ecm.py` 已定的规则，别另立一套）
+### 6.1 输入（已实现）
+
+* ✅ Prime95 分配行（`ECM=`/`ECM2=`，含 AID、`FFT2=`、已知因子串）；
+* ✅ 目标参数：`gpucurves` 由 §5 公式逐行自动填（面板可关掉改成固定值），
+  `param`（0/2/3）与 `device` 来自 `--gpu-info -d N` 与 ini；
+* ✅ 现有 `worktodo.txt`（**增量追加**，不重写既有行）。
+
+### 6.2 管线（已实现，规则与 `ecm.py` 一致）
 
 | 规则 | 内容 |
 |---|---|
@@ -179,40 +205,58 @@ kernel 现有的两条警告把**建议的 gpucurves** 打成了 `sm_count`（�
 | save 名契约 | `ECMSTAGE2=` 无 B1 字段，driver 从名字抽 ⇒ 必须匹配 `…_<B1>.save`（工具强校验、非零退出） |
 | `B2=0` 语义 | Prime95 里 0 = 自动选 B2，不是"不做 stage 2" |
 | 编码 | 读自动识别（UTF-8 有/无 BOM → GBK 兜底）；写 **UTF-8 无 BOM + CRLF** |
+| 已知因子的整除性 | ⚠️ 与规划不同：GUI 不含 GMP，只做**形状检查**（整数 > 1）；精确整除仍归 `ecm.py --verify-factors` |
 
-### 6.3 分派到段
+### 6.3 分派到段（已实现，规则简化）
 
-1. 先按"设备 + 位数档"把任务分组（同段 = 同设备、同 `gpucurves`）。
-2. 每组的 `gpucurves` 由 §5 公式给出（同组内不同位数就再拆组）。
-3. 段的编号 = ini 段编号（`[Worker #1] device=…` 与 `worktodo [Worker #1]` 必须指同一张卡）。
-4. 生成结果先给**预览 + diff**，用户确认后再写；写 = 原子替换 + 备份一代。
-5. 拒绝改写正在被读的文件：若目标 `worktodo.txt` 的 `mtime` 在预览后变化 → 重新预览（而不是盲目覆盖）。
+1. 段内的行按**该行 N 的档位**逐行算 `curves`（不再"同段必须同 gpucurves"——队列模式只看行内值）。
+2. 段的编号 = ini 段编号；同一张卡上有多个 worker 时按行序**轮流分配**。
+3. ⚠️ 与规划不同：写文件的方式是**只追加**（不整份重写、不做原子替换+备份），
+   因为目标 `worktodo.txt` 可能正被队列消费，追加不会碰到既有行。
+4. ✅ 预览后再写的两道闸门都在：预览**只算不写**；追加前**重新校验目标文件的大小与 mtime**，
+   变了就拒绝并提示重新生成。
 
-### 6.4 验收
+### 6.4 验收（已达成）
 
-* 生成的文件能被 `ecm_worktodo_test` 的解析器接受（跨实现验收，沿用现有 33 项测试的思路）；
-* 在一个**临时目录**里用生成结果跑一轮真实队列模式（不碰生产 `worktodo.txt`），检查段不串、`# ERROR` 只落本段；
-* 生成的 `gpucurves` 跑起来不再触发 §5.4 的警告。
+* ✅ 与 `ecm.py` **逐字节一致**（5 组：排序 `n`/`b1`、去重、`set-b1`+`set-b2`、`set-has-na`）；
+* ✅ 单测 84 项 + 面板 trace 断言（`tools/test/test_gui_generator.ps1` 共 25 项）；
+* ✅ 生成的 `curves` 与现场 `--gpu-info` 独立复算一致（不同档位给不同值）；
+* ⏳ "在一个临时目录里用生成结果跑一轮真实队列模式"仍由既有脚本覆盖
+  （`test_worker_sections.ps1` / `test_gui_real_workers.ps1` 都在沙箱里跑真队列），
+  生成器自己的测试不额外起队列。
 
 ---
 
-## 7. 与 ini 的对应关系（必须一致）
+## 7. 与 ini 的对应关系（已按实测改写）
 
 | ini | worktodo | 含义 |
 |---|---|---|
 | `NumWorkers = N`（全局） | 段 `[Worker #1..#N]` | worker 数量 |
-| `[Worker #k] device=…` | 段 `[Worker #k]` 的行 | 同一张卡、同一份 `gpucurves` |
-| `[Worker #k] gpucurves=…` | 该段行里的 `curves_to_run` | 必须一致（不一致时 GUI 给提示，driver 以**行内**字段为准） |
+| `[Worker #k] device=…` | 段 `[Worker #k]` 的行 | 同一张卡 |
+| `[Worker #k] gpucurves=…` | 该段行里的 `curves_to_run` | **以行内值为准**：队列模式**从不读** ini 的 `gpucurves`（它只影响单次运行的 `-gpucurves`）。旧版本写"必须一致"是错的口径，已改 |
 | 无 `[Worker #k]` 段 | 无段行 = worker 1 | 向后兼容 |
 
 ---
 
-## 8. TODO
+## 8. 交接给 Prime95（`worktodo.add`，2026-09-29 新增）
+
+完成的任务行（`ECMSTAGE2=`，**逐字节原样**，含 AID 与已知因子）由驱动追加到
+`p95_worktodo_path` 同目录的 `worktodo.add`；Prime95 自己并进 `worktodo.txt` 后删除该文件。
+键、路由规则、锁、pending 与 GUI 通知条的细节见 `docs/DEV_ECM_GUI.md` §18，
+`ecm.ini` 里两个键的说明见 `docs/DEV_ECM_INI.md` §1.2。
+`ecm_p95feeder`（Edwards `.tmp` 交接）**本轮未改一行**，两条路互不影响。
+
+---
+
+## 9. TODO
 
 | 项 | 说明 |
 |---|---|
-| `--emit-worker-sections` | `ecm.py` 支持直接输出分段 worktodo（M6 的 CLI 侧） |
+| `--emit-worker-sections` | `ecm.py` 一次只写一个 `[Worker #N]` 段（要 N 次调用）；GUI 的生成器已能一次写多个段。若要让 CLI 也支持，加一个 `--workers 1-4` 开关即可 |
+| **生成器面板的文件拖放** | 用户要求先只写文档：`DragAcceptFiles` + `WM_DROPFILES` → 等价于"打开文件"（实现要点见 `DEV_ECM_GUI.md` §16） |
+| 生成器的过滤器 UI | 核心已支持 `min_n/max_n/min_curves/max_curves`，面板暂未暴露 |
+| 生成器的 `ECM=`/`ECM2=` 输出 | 范围 A 只做 `ECMSTAGE2=`；原生 Prime95 队列输出（`ecm.py --out-ecm`）尚未进 GUI |
 | 自动均衡 | 若将来卡间算力差导致明显空闲，可考虑"段间借调"（需要原子认领，当前明确不做，见 `DEV_ECM_GUI.md` §6） |
 | B1 计划推荐 | 按指数规模与 ECM 概率模型推荐 B1/B2（数据源：`tools/ecm_prob`、`tools/stat/ecm_hitrate.ps1`），与 `gpucurves` 推荐并列 |
-| stage-2 队列联动 | `ECM=` 行的 B2 与保存目录交接（`ecm_p95feeder`）在 GUI 里可视 |
+| stage-2 队列联动 | ✅ 已做（§8）；仍未做：GUI 里显示 Prime95 侧 `worktodo.txt` 的排队情况 |
 | `# ERROR` 行回收 | GUI 里一键把 `# ERROR` 行恢复成任务行（含失败原因展示） |

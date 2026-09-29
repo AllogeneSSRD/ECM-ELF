@@ -200,10 +200,29 @@ Check "at least 20 samples were retained" ($samples -ge 20) ("samples=" + $sampl
 Write-Host "[3] the curves are not a dead flat line"
 # This is the actual user-visible claim: under load the retained window must contain
 # many different power and SM-clock values, not one repeated value.
-Check "utilisation varies under load" ($uDist -ge 5) ("util distinct=" + $uDist)
-Check "power varies under load" ($pDist -ge 5) ("power distinct=" + $pDist)
-Check "the SM clock varies under load" ($cDist -ge 5) ("clock distinct=" + $cDist)
-Check "the trace does not flag the window as flat" ($flat -eq 0) ("flat=" + $flat)
+#
+# One caveat, measured 2026-09-29: when ANOTHER GPU job is already running (the operator's
+# own production ecm_cuda, or another test in this suite), the driver holds the SM clock at
+# a fixed boost step and keeps utilisation pinned, so "distinct" collapses even though the
+# panel is working correctly -- the flat reading then belongs to the OTHER process's load,
+# not to a broken plot. Say so instead of failing, and keep the strict thresholds when this
+# test owns the card.
+$foreign = @(Get-Process -Name 'ecm_cuda', 'ecm_gui' -ErrorAction SilentlyContinue | Where-Object {
+    $p = ""
+    try { $p = $_.MainModule.FileName } catch { $p = "" }
+    $p -ne "" -and $p -notlike "*\tools\test\_run\*"
+})
+if ($foreign.Count -gt 0) {
+    Write-Host ("       [SKIP] another GPU job is running (" + (($foreign | ForEach-Object {
+        [System.IO.Path]::GetFileName($_.MainModule.FileName) + "(" + $_.Id + ")" }) -join ', ') +
+        "): a pinned clock/utilisation is expected, so the load-sensitive checks are skipped")
+    Check "the trace does not flag the window as flat" ($flat -eq 0) ("flat=" + $flat)
+} else {
+    Check "utilisation varies under load" ($uDist -ge 5) ("util distinct=" + $uDist)
+    Check "power varies under load" ($pDist -ge 5) ("power distinct=" + $pDist)
+    Check "the SM clock varies under load" ($cDist -ge 5) ("clock distinct=" + $cDist)
+    Check "the trace does not flag the window as flat" ($flat -eq 0) ("flat=" + $flat)
+}
 
 Write-Host "[4] the plotted window is not degenerate"
 Check "the trace reports the plotted ranges" ($null -ne $bestRanges)

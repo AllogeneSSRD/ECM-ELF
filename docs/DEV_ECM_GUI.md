@@ -1,4 +1,4 @@
-# ECM / ECM-CUDA 图形前端（`ecm_gui`）开发文档
+﻿# ECM / ECM-CUDA 图形前端（`ecm_gui`）开发文档
 
 `ecm_gui` 是 `ecm.exe`（OpenCL）与 `ecm_cuda.exe`（CUDA/CGBN）的原生图形前端：管理多个 worker 进程、
 每个 worker 一个输出小窗、监控 GPU（占用/频率/功耗），配置全部落在 `ecm.ini` 的 `[GUI]` 与
@@ -64,6 +64,10 @@ Android 明确排除；不要为了"以后也许"把抽象做厚——三层足�
 ---
 
 ## 4. 配置：一份 `ecm.ini` 装下全部
+
+> **全量键表见 `docs/DEV_ECM_INI.md`**（分区：全局 / `[Worker #N]` / `[GUI]`，逐键标注"谁消费、
+> 有没有 CLI 等价物、默认值"，并单列"只有 ini、故意没有 CLI"的那一组）。
+> 下面是段语义与 GUI 写 ini 的规则。
 
 ### 4.1 段语义（与 prime95 一致）
 
@@ -301,6 +305,23 @@ stdout 里也打一行提示（D5，便于 headless 用户看到）。
   CPU/Mont 用 `stage1_now_ms()`），旧的批号里程碑保留以兼容老日志尾随工具。
   实测：用户那份**恢复运行**的 B1=2.6e8 任务，32 s 内 **135 行 ≈ 4.2 行/s**（≈200 ms 一行 ✓）。
   > 代价：driver 的 `log_file` 也按这个节奏增长（~110 B/行 × 5 行/s ≈ 2 MB/小时）。
+* **文件节奏 = `progress_log_seconds`（2026-09-29 加，回答"管道每次、文件每 n 分钟"）**：
+  **管道/控制台永远每次**（GUI 靠它更新进度条与 ETA，约 200 ms 一行）；
+  **`log_file` 另加一道时间闸门**，由 ini 键 `progress_log_seconds` 控制：
+
+  | 取值 | 文件里的进度行 | 用途 |
+  |---|---|---|
+  | `60`（默认） | 最多每 60 s 一行 | 长时间任务不再把 `screen.log` 写爆（上面那 2 MB/小时 → ~7 KB/小时） |
+  | `0` | 一行都不写 | 只想要事件/结果，不想要进度噪音 |
+  | 负数 | 每行都写 | 老行为（需要完整进度轨迹时） |
+
+  无论取值如何，**报告 `100.0%` 的那一行总会写进文件**，所以"任务跑完了"永远能在日志里看到；
+  闸门用 `steady_clock`（系统时间跳变不会让日志静默或突然刷一堆行），并且是在**日志镜像层**
+  （`opencl_ecm_log.cpp` 的 `ecm_ts_vfprintf`）判定，因此 CPU/GPU 两种进度行形状都覆盖，
+  驱动本身不需要知道有没有日志文件。判定 = "行里有 ASCII 条 + `%`"（`GPU: [` / `stage1: [`），
+  横幅、结果、警告一律不算进度行。实测（M521/B1=1e5/4 曲线，7.5 s 任务）：
+  `0` → 文件 1 行（100 %）、管道 27 行；`1` → 文件 7 行、管道 26 行；`-1` → 文件 = 管道 = 27 行。
+  验收：`tools/test/test_progress_cadence.ps1`（19 项）。
 * **恢复百分比**：`Resuming from checkpoint: 23.8% complete` / `Checkpoint loaded: … (23.8%)`
   会被 GUI 解析成进度条起点（trace：`progress seed=23.8 (from checkpoint)`），
   所以即使第一行进度还没来，进度条也不是空白。
@@ -651,12 +672,33 @@ ecm_cuda from the current source, or point [GUI] exe= at a current build
 | **D1** | ini 解析 section 感知 + `--worker N`（`[Worker #N]` 覆盖全局；无段无开关 = 今天的行为） | `src/core/ecm_queue_config.{h,cpp}`、`src/core/ecm_driver.cpp` | 现有 `ecm.ini` 跑队列模式输出与改前**逐行一致**；带 `[Worker #1] device=1` 时打印的 device 变成 1；`--worker 9` 越界给明确报错 |
 | **D2** | worktodo 段感知：只读/只推进自己段 | `src/core/ecm_worktodo.{h,cpp}` | 两段各自消费、互不删行；无段文件行为不变（现有回归脚本 + `ecm_worktodo_test` 仍过） |
 | **D3** | 命中行补 `curve= sigma= param= save=` | `src/core/ecm_driver.cpp`（队列包装层命中打印处） | 三种后端各跑一个已知命中用例，行里四个字段齐全且与 `curve i sigma=M` 行一致 |
-| **D4** | `--gpu-info [-d N] [--bits B]`：打印 `sm_count/tpb/tpi/ipb/blocks_min/curves_min/curves_wave[/fold_min_blocks]` 后退出（仿 `--show-kernels` 的"打印即退"风格） | `src/core/ecm_driver.cpp` + kernel 侧已有属性的读取路径 | 在 4070 Ti 上 `--bits 5120` 的输出与 kernel 自身警告行里的 `IPB`/`sm_count` 一致；用它算出的 `gpucurves` 跑一轮**不再出现** "raise -gpucurves" 警告 |
+| **D4** | `--gpu-info [-d N] [--gpu-param 0\|2\|3] [--bits N]`：打印设备与**逐档位**的 `bits/tpb/tpi/ipb/blocks_per_sm/blocks_min/curves_min/blocks_wave/curves_wave` 后退出（仿 `--showkernel` 的"打印即退"风格） | `src/core/ecm_driver.cpp`（打印）+ `kernels/cuda/cgbn_stage1.cu`（档位表与占用率查询）+ `src/cuda/ecm_cuda_backend.cu` / `src/opencl_backend_glue.cpp`（后端钩子） | **已完成（2026-09-29）**：`tools/test/test_gpu_info.ps1` **52 项**（格式全 `key=value`、退出码、档位递增、`ipb == tpb/tpi`、`curves_min == blocks_min*ipb`、`curves_wave == blocks_wave*ipb`、`blocks_min == sm_count`、`--bits N` 选档与运行路径 `CGBN<tpi, bits>` 实测一致、`-d 99`/超大 `--bits` 干净失败、**零副作用**（不建 ini、不写文件）、ini 覆盖顺序、OpenCL 打 `not_applicable` 且退出 0）。 |
 | **D5** | 队列模式下若 `NumWorkers > 1` 且本段 `device=` 与更低编号段相同 → 打一行警告 | `src/core/ecm_driver.cpp` | 构造重复 device 的 ini，headless 跑一次即出现该行；不改变退出码 |
 
-`--gpu-info` 的定位：`ecm_cuda.exe --gpu-info -d 0 --bits 5120` →
-`sm_count=60 tpb=256 tpi=8 ipb=32 blocks_min=60 curves_min=1920 curves_wave=1920`（示例数字以实测为准）。
-它是"纯查询、零副作用"的开关，给 GUI 与 `ecm_worktodo` 可视化生成器当唯一真相用。
+### 11.1 D4 的输出格式（契约）
+
+```
+gpu_info=1                       # 或 gpu_info=not_applicable（OpenCL 构建）
+backend=CUDA/CGBN  device=0  name=NVIDIA GeForce RTX 4070 Ti  sm_count=60  cc=8.9
+gpu_param=0  fold=0  carry_bits=6  picked=0  tier_count=31  ini=<路径|->  worker=1
+tier bits=128 tpb=128 tpi=4 ipb=32 blocks_per_sm=10 blocks_min=60 curves_min=1920 blocks_wave=600 curves_wave=19200
+tier bits=192 ...（升序）
+```
+
+* 前 13 行是**一行一个** `key=value`；档位行以**唯一没有 `=` 的 token `tier`** 开头，后面是空格分隔的
+  `key=value`。解析器（`src/gui/worktodo_gen.cpp: parse_gpu_info`）就按这两条规则读。
+* `--bits N` 时只输出 kernel 会选中的那一档（`bits >= N + carry_bits` 的最小档，与内核选择逻辑同源），
+  并置 `picked=1`；没有任何档位放得下则退出码 1。
+* `blocks_min` = 每 SM 一个块（低于它内核会警告"some SMs idle"）；`curves_min` = `blocks_min × ipb`
+  ——**就是内核警告行让我们"raise -gpucurves to about N"里的那个 N**。
+  `blocks_wave`/`curves_wave` = 寄存器允许的块槽位与其曲线数（内核注释里"整数倍可避免半波"的那个量）。
+  `fold_*` 只在折叠构建（`-DECM_MERS_FOLD=1`）里出现。
+* **零副作用**：`--gpu-info` 会 `cudaSetDevice`（占用率与计算能力相关，必须问对卡），但**不启动内核、
+  不读检查点、不写任何文件、不建 ini**；`-ini` 存在时只读它来决定生效的 `device`/`gpu_param`
+  （CLI 优先）。因此可以随时在别的 worker 跑着的时候执行。
+* 两处**内核警告文案修正**（原本打印的是 block 数 `sm_count`，喂给 `gpucurves` 会欠占用）：
+  普通构建改成 `curves = sm_count × ipb` 并说明"整数倍可保持整波"；折叠构建改成
+  `2 × sm_count × ipb`。见 `docs/DEV_ECM_WORKTODO.md` §5.4。
 
 ---
 
@@ -859,6 +901,14 @@ powershell -File tools\test\test_gui_all.ps1           # 一键跑上面全部�
 | 13 | 布局持久化 = 关掉 `imgui.ini`，写进 `[GUI]`（4 数矩形 + 停靠串；不采用 prime95 的 9 参数格式） | 我方决定，已说明理由 |
 | 14 | imgui = **vendored** docking @ `64944b45…`（MIT，随仓库分发，见 `third_party/imgui/README.md`） | 用户下载 + 我方拷贝 |
 | 15 | `work_manager.ps1` **已废弃**（被 driver 内置队列取代）；仅可作为测试夹具，不作为生产路径 | 用户确认 |
+| 16 | 交接 Prime95 用 **`ECMSTAGE2=` 原样追加**（保留 AID 与已知因子），**不是** feeder 的 `ECM=` 形式；文件级唯一真相 = `p95_worktodo_path` | 用户明确纠正；`commonc.c:2936` 证实 Prime95 认这个关键字 |
+| 17 | 交接**命中因子也照样交付**（stage 2 仍需 GCD 并上报，我们无法代它上报） | 用户确认 |
+| 18 | 交接功能放**主程序**（`src/core/p95_transfer.cpp`），`ecm_p95feeder` 保持独立、**一行不改** | 用户明确要求 |
+| 19 | 失败处理 = 锁 + 原子替换 + pending 文件 + **绝不阻塞任务**；GUI 用**显著颜色通知条**（红/黄/绿/灰），含 pending 也要通知 | 用户明确要求（"包括 pending 都要通知 GUI 并使用显著颜色"） |
+| 20 | `progress_log_seconds`：**管道每次、文件每 n 秒**（默认 60，0 = 文件不写进度行），100 % 行总写 | 用户明确要求 |
+| 21 | 生成器的推荐曲线 = **`n × sm_count × ipb`**（`n` = 块/SM，默认 2），`ipb` 取该行 N 的档位；GUI **不引 GMP**，位宽用算术估算 | 用户确认；避免复制 kernel 的 TPI 表 |
+| 22 | 生成器**"生成预览"与"追加到 worktodo"分成两个按钮**，追加前重新校验 mtime；文件**拖放**只写文档 TODO | 用户明确要求 |
+| 23 | 本轮的三个新 ini 键（`progress_log_seconds`、`p95_worktodo_path`、`p95_add_workers`）**只从 ini 读，不开 CLI**；长期方向是"很少用的 CLI 逐步下线、改为 ini-only" | 用户长期意图，见 `docs/DEV_ECM_INI.md` §4 |
 
 ---
 
@@ -874,16 +924,18 @@ powershell -File tools\test\test_gui_all.ps1           # 一键跑上面全部�
 | **M4 GPU 监控** ✅ | NVML 动态加载 + 采样线程、每卡卡片（util/功耗与上限/SM 与显存时钟/温度/显存/节流原因 + 三条曲线）、全机合计功耗、优雅降级 | **已完成（2026-09-28）**：① `--gpu-selftest` **27/27**：NVML 加载、每字段合理性、采样线程 ≥2 个时间有序样本、**与 `nvidia-smi` 交错交叉比对**（`-i <卡>` 三次取范围；实测吻合：210/405 MHz、2595/10501 MHz、8.6 vs 8.65 W）、假 DLL 被拒且有原因；② `tools/test/test_gui_gpu.ps1` **15/15**：GUI trace 报 `gpu: nvml ok`、逐卡名称与 `nvidia-smi` 一致（device 数 2/2）、`ECM_GUI_NVML` 指向不存在时 GUI **仍能启动**、trace 报 `gpu: NVML unavailable` 并干净退出 |
 | **M5 results** ✅ | JSONL 追加 + 合并表、命中高亮/通知 | **已完成（2026-09-28）**：① `ecm_gui_results_test` **42/42**：同一因子 4 次命中（含重复的 curve+sigma）只产生**一行** `M677 has a factor: 1943118631 (ECM curves 3,4,9, B1=1e6, param 3, gpu, Sigmas=[...], hits=4)`、JSONL 保留全部 4 条、两个因子两行、重建后逐字节一致（只差 `updated` 时间戳）、截断尾行重放被忽略；② `tools/test/test_gui_results.ps1` **27/27**：真 `ecm_cuda` 跑 M677/B1=1e6 **两轮**，JSONL 只增、表仍"一因子一行"、命中数相加一致、已知因子的 sigma 列表增长、每行可由 JSONL 复算；③ 命中时行高亮 + 状态行提示（trace 断言 `results: factor found: …`）|
 | **M8 首轮实测反馈修正** ✅ | 用户真机跑出来的 5 条：① 最小化后唤不醒、② 功率/频率曲线是直线、③ 默认字体过小、④ 中文不显示、⑤ GUI 源码应在 `src/` 而不是外置工具目录 | **已完成（2026-09-28）**：① 消息泵提到 `IsIconic` 判断**之前**，并整帧跳过最小化期间的渲染（0×0 交换链 `Present` = 0xC0000005）；验收 = 冒烟测试 **[1b]+[1c]**：最小化→还原后 `iconic=False visible=True` 且进程存活、**最小化状态下** post `WM_CLOSE` 必须退出 0（消息泵没通就挂死）；另加 RTV 解绑 + 交换链重建 + `rtv` 空值护栏，杜绝 resize 后的二次崩溃；② `PlotLines` 自动量程（`0,0`）把恒定读数压成直线 → 改为**观测窗口内 min/max ±10 %**；③ `[GUI] font_size = auto` → `round(15 × DPI)`（150 % 实测 **23 px**），新增 `[GUI] font = <路径>` 覆盖，拉丁语言也换系统字体（不再用 13 px 内置位图字体），`style.ScaleAllSizes(dpi)`；④ CJK 走 `msyh.ttc`/`simhei.ttf`/… 且**不再传 `GetGlyphRangesChineseFull()`**（1.93 docking 是动态图集，那两个 API 已 obsolete）；⑤ 全树 `tools/gui/` → **`src/gui/`**（含 `localization/` 并入源码树、根 `CMakeLists.txt` 改 `add_subdirectory(src/gui)`）。验收 = `test_gui_smoke.ps1` **54/54**，其中 [6] 断言四象限布局（四块面板都在客户区内、互不重叠、左列同为 60 %、右列同为 40 %、`Workers` 在输出标签之上、`GPU` 在 `Results` 之上），[7] 断言字号 ≈ 15×DPI、atlas 里**真有**中文字形（`map=11 baked=11 negctl=00`）且本地化 0 缺键；中文另加**像素级**验收 `test_gui_cjk_pixels.ps1` **16/16**（真字形 0.75 em/5 种 ink vs 反例 tofu 0.43 em/单一 ink，标定过的反例必须判失败）；②的机器判据 = `test_gui_gpu_curves.ps1` **15/15**（真 worker 压卡 40 s：忙卡 `power=22 distinct / clock=21 distinct`、`plot` 区间非退化且覆盖观测值；空闲卡 1~2 个不同值 —— 那种"真·直线"是**正确**的）；全套回归复跑（见 §15）**0 失败** |
-| **M6 worktodo 可视化生成** | 见 `docs/DEV_ECM_WORKTODO.md` | 见该文档 |
+| **M6 worktodo 可视化生成** | 见 `docs/DEV_ECM_WORKTODO.md` | **范围 A 已完成（2026-09-29，§19）**：核心（解析/过滤/去重/改写/排序/存档名校验/逐行推荐曲线/段分派/预览/带 mtime 守卫的追加）+ 面板；与 `ecm.py` **逐字节一致** 5 组；`tools/test/test_gui_generator.ps1` **32 项**（含单测 84 项）。未做部分列在 §19.5 与 `DEV_ECM_WORKTODO.md` §9 |
 | **M9 第二轮实测反馈修正** ✅ | 用户真机三条：① 字体想用 ini 调大小（且 150 % 下有点糊）、② 他自己跑的时候中文显示 `???`、③ 生产目录点 Start 后 driver 立刻失败（"环境都配好了"）| **已完成（2026-09-28）**：① `[GUI] font_size` 支持小数（150 % 自动值 22.5 不再凑整）+ 新增 `[GUI] font_snap`（`PixelSnapH`，拉丁小字更锐），并把"ImGui 只有灰度抗锯齿、没有 ClearType"写进 §10.3；② 根因是**字体只在启动时按当时的语言挑**，用户从 Language 菜单切中文时用的还是拉丁字体 ⇒ 现在 `reload_localization()` 置标志、帧循环两帧之间重跑 `apply_ui_font()`，并加了"画不出当前语言的字体不许用"的两级兜底（救回系统 CJK 字体 / 切回英文），删掉了 `App::init` 里硬编码 chineseSimplified 的老守卫；③ 根因是**生产目录的 `ecm_cuda.exe` 是 D1/D2 之前的构建**（二进制里没有 `--worker`/`Worker #` 字符串）：GUI 传的 `--worker 1` 被当成位置参数 ⇒ 走单跑路径 ⇒ `No input number on stdin` ⇒ 退出 1 ⇒ 重启 3 次熔断。GUI 现在把这条 stdout 识别成诊断（状态栏 + trace + 表格红 `!`）。验收：`test_gui_cjk_pixels.ps1` **31/31**（含运行中切语言的 trace + 像素证据）、`test_gui_workers.ps1` **23/23**（新增 `--scenario stale-driver` 复现旧 driver 的整条链路）、`ecm_gui_log_parse_test` **49/49**（`old_driver` 分类）；全套回归复跑 **0 失败** |
 | **M10 第三轮实测反馈修正** ✅ | 用户真机三条：① Workers 表的 Task 太长、要挪到下一行；② 状态列显示成 `workers.state__stopped`；③ 进度条 / ETA 都不显示 | **已完成（2026-09-28）**：① 任务行从表格列改为**每个 worker 的第二行**（跨整表宽度、换行、暗淡；`PushClipRect` 放宽裁剪），其余列改为按示例文本算的固定宽度、进度条列 `WidthStretch` 吃剩余宽度 ⇒ 长 worktodo 不再挤走别的列；② 根因是**从状态名推导本地化键**（`Stopped` → `state__stopped`，多一个下划线），键不存在 ⇒ `t()` 回退成字面量 ⇒ 表里显示 `workers.state__stopped`；改为 `app.h` 里的**显式键表** `state_key()`，补上缺失的 `state_starting`（en/zh 各一条），并在 `--selftest` 加"每个状态 × 两种语言都能解析"的断言；③ 与①同源：Task 列把 ~80 字符的行撑到几千像素宽，进度条/速度/ETA 被推到面板外。验收：`test_gui_workers.ps1` **31/31**（新增 8 项：读 `table: workers …` 实测几何，断言进度条宽 ≥60 px、结束点在表内、速度列在进度条之后、**ETA 列在面板内**、`fits=1`、任务行确实独立成行）、`test_gui_smoke.ps1` **57/57**（在用户那种 885 px 宽面板下同样 `fits=1`）、`--selftest` **35/35** |
 | **M11 第四轮实测反馈修正** ✅ | 用户真机三条：① 测试脚本里进度正常，但在他自己的工作目录跑不显示；② 任务行只显示开头一点点、要占满整行；③ 退出时要静默终止 worker | **已完成（2026-09-28）**：① 用**他的真实任务**（M3571 / B1=2.6e8 / 960 曲线 + 他的检查点与指数缓存）在沙箱里复现：进度行**确实到达并被解析**（trace `worker 1: progress pct=0.0 … eta=88924.6`，driver 日志 8 条 `GPU: [`），所以不是解析问题；可诊断性补三处：详情面板显示 `progress lines <N>`（N=0 + Running ⇒ 是 driver 还没打第一行）、进度条在等第一行时显示 `waiting for the first progress line`（不再空白）、文档写清"进度行不进事件日志面板，要看原文勾 raw output"；② 根因是**两个 ImGui 用法错误**：`PushClipRect(..., intersect=true)` 与单元裁剪求交（等于没放宽），且 `PushTextWrapPos()` 要的是**窗口局部** x（传屏幕坐标 ⇒ 换行被悄悄关掉）⇒ 现在任务行跨列换行，实测 `task_wrap_w=1201 px`（用户窗口尺寸）；顺带给进度条留最小值（先压 Name 列），实测 `progress_w=475 px`、`fits=1`；③ 退出路径改为 `stop_all_quietly()`：`TerminateJobObject` 立即终止 + 单行 `shutdown: terminated N running worker(s)`，不再逐 worker 打 `stopping`、不产生 `Error/Restarting/restart` 记录；并改正旧注释（立即杀进程**不会**让 driver flush 检查点，丢失上界 = `ckpt_seconds`）。验收：`test_gui_workers.ps1` **34/34**（新增：任务行跨列、静默关闭、关闭后无崩溃记录）、`test_gui_smoke.ps1` **57/57**（进度条 ≥90 px + `fits=1`）、`--selftest` **36/36**（动态本地化键守卫） |
 | **M12 第五轮实测反馈修正** ✅ | 用户真机四条：① （纠正上轮理解）退出**不能**静默杀 worker —— 要**弹窗提醒**，同意后**先写检查点**再退出；② 要一个"像你测试那样连续跑所有 GUI ps1 脚本"的脚本；③ 任务行会被表格**纵线**遮挡，能否在任务行隐藏 y；④ Results 表重新排序（先标量 `factors/bits/hits`，再列表 `sigmas/curves`）并允许滚动 | **已完成（2026-09-29）**：① `App::request_close` + 确认模态（回车=停止并退出 / Esc=取消）+ Stopping 阶段：以 `<driver 目录>` 的 `.ecm_ckpt_*.dat` mtime 为基线，**等到更新的检查点出现**才终止，期间显示每 worker 状态与 Force quit；`[GUI] exit_confirm = ask\|stop\|kill`、`[GUI] graceful_stop_ms`（默认 5 min）；Stop 按钮走同一条路。顺带修掉**真实缺陷**：GUI 未设子进程工作目录 ⇒ 检查点/`.save` 落到 GUI 的 CWD（现在 = driver exe 目录）。验收 = 新增 `tools/test/test_gui_exit_checkpoint.ps1` **27/27**（真 ecm_cuda + `ckpt_seconds=3`：WM_CLOSE 不关窗→Esc 取消→再 WM_CLOSE→回车确认→`checkpoint written (…)` → `stopping (checkpoint written)` → 退出 0，且**磁盘上 mtime 确实变新**）；② 新增 `tools/test/test_gui_all.ps1`（15 个入口一键跑完；本轮实测 **15/15 项、466 项检查、0 失败**，全程约 4 分钟无人值守）；③ 表格边框改为 `BordersInnerH\|BordersOuterH`（只留横线，纵线不再横穿任务行）；④ Results 列序改为 `Factor/bits/Hits/First seen/Curves/Sigmas` + `ScrollX\|ScrollY` + 冻结前 4 列。另外：GUI 收到 `--worker` 会警告（跑测试时把 GUI 当 driver 传会开出一个空窗口，用户手动关掉的那个就是它） |
 | **M7 Linux 移植** | GLFW+OpenGL3、`posix_spawn`、`libnvidia-ml` | 见 §16（暂不排期） |
+| **M13 本轮五项（2026-09-29）** ✅ | ① D4 `--gpu-info`（+ 修两处内核警告文案）；② 进度节奏 `progress_log_seconds`（管道每次、文件每 n 秒、100 % 总写）；③ 完成的任务自动交接 Prime95（`worktodo.add` + 通知条）；④ M6 范围 A 生成器（核心 + 面板 + 与 `ecm.py` 逐字节对比）；⑤ 文档（含新 `docs/DEV_ECM_INI.md` 全配置表） | **全部完成**：① `test_gpu_info.ps1` **52 项**（含与运行路径 `CGBN<tpi,bits>` 自证、零副作用、OpenCL `not_applicable`）；② `test_progress_cadence.ps1` **19 项**（实测 `0`→文件 1 行/管道 27 行、`1`→7 行、`-1`→27 行）；③ `test_p95_transfer.ps1` **47 项** + `test_gui_p95_notice.ps1` **23 项**（四色切换、pending 由磁盘驱动、AID/已知因子逐字节保留、锁与 pending 重投）；④ `test_gui_generator.ps1` **25 项**（单测 84 + 与 `ecm.py` 逐字节 5 组 + 逐行推荐独立复算 + 面板 trace）；⑤ `docs/DEV_ECM_INI.md` 新建，`DEV_ECM_GUI.md` 新增 §11.1/§18/§19，`DEV_ECM_WORKTODO.md` §5.3–§9 按实测改写。**随后按用户实测反馈补两处可见性修正**：⑥ 通知条被停靠面板盖住（"四种颜色我实测看不出"）⇒ 预留自己那一行 + 底色带 + 严重度标记 + "未配置"一键打开 ini，并用 `PrintWindow` **像素断言**四色（§18.3.1）；⑦ 生成器块/SM 输入框宽度被 `InputInt` 的步进按钮吃掉（"没有宽度，无法显示数字"）⇒ `step = 0` + 90 px 并把"框宽/可编辑宽"trace 出来给测试断言，同时修掉绝对路径被重复拼接的真 bug、新增 `[GUI] start_tab`（§19.2.1）。最终全套回归 **20/20 项、676 项检查、0 失败**（§15） |
 
 依赖顺序：**D1+D2 先做**（体量小、决定多 worker 的一切，且能立刻用 headless 队列模式验证不回归），
 随后 M1（无依赖，可与 D1/D2 并行），再 M2→M5；M6 消费 D4；M7 最后。
-**D1+D2、M1–M5、M8–M11（四轮实测反馈修正）均已完成并验收。**
+**D1+D2、M1–M5、M8–M11（四轮实测反馈修正）、M12、M13（本轮五项：D4 + 进度节奏 + Prime95 交接 +
+M6 范围 A + 文档）均已完成并验收。**
 
 ---
 
@@ -893,18 +945,29 @@ powershell -File tools\test\test_gui_all.ps1           # 一键跑上面全部�
   * `ecm_gui.exe --selftest` —— ini 往返（保注释/保序/未知键 + `.bak`）、本地化（基线 + 中文 + 回退 + 缺键）、
     ImGui 上下文/docking/viewports、系统字体查找 + DPI 字号（36 项）；
   * `ecm_gui.exe --worker-selftest [--fake <exe>]` —— worker 进程管理全套（48 项，**不需要 GPU**）；
-  * `ecm_gui_log_parse_test.exe` —— 解析层（43 项，纯函数，样本行逐字来自驱动源码的格式串）；
+  * `ecm_gui_log_parse_test.exe` —— 解析层（**71 项**，纯函数，样本行逐字来自驱动源码的格式串；
+    含本轮新增的 `p95_add:` 通知解析）；
   * `ecm_gui.exe --gpu-selftest` —— NVML 监控，含与 `nvidia-smi` 的**交错交叉比对**与假 DLL 降级（27 项）；
-  * `ecm_gui_results_test.exe` —— results 双文件：合并/去重/JSONL 字段/可重建/截断容错（42 项）。
+  * `ecm_gui_results_test.exe` —— results 双文件：合并/去重/JSONL 字段/可重建/截断容错（42 项）；
+  * `ecm_gui_gen_test.exe` —— **worktodo 生成器**（**84 项**，纯逻辑 + 文件：`--gpu-info` 解析、选档、
+    位宽估算、解析、存档名、流水线、mtime 守卫的追加；另有 `--emit` 模式给逐字节对比用）。
 * **真窗口冒烟（已落地）**：`tools/test/test_gui_smoke.ps1`（**57 项**）、`test_gui_workers.ps1`（**34 项**）、
   `test_gui_real_workers.ps1`（23 项，需 GPU）、`test_gui_gpu.ps1`（15 项，NVML 面板与降级）、
   `test_gui_results.ps1`（27 项，真驱动两轮 → 跨运行合并）、
   `test_gui_cjk_pixels.ps1`（**31 项**：像素级中文验收 + 字体救回 + 英文回退 + 运行中切语言，见 §10.3）、
   `test_gui_gpu_curves.ps1`（**15 项**，真 worker 压卡时断言功率/频率曲线**确实在变**，见 §8.1）、
-  `test_gui_exit_checkpoint.ps1`（**27 项**：退出确认 + **退出前必写检查点**，见 §5.6）。
-* **一键全跑**：`tools/test/test_gui_all.ps1` —— 把上面全部 + headless 自测/单测（15 个入口）按顺序跑完，
+  `test_gui_exit_checkpoint.ps1`（**27 项**：退出确认 + **退出前必写检查点**，见 §5.6）、
+  `test_gui_p95_notice.ps1`（**23 项**：Prime95 交接通知条的四色切换，红由磁盘 pending 驱动，见 §18）、
+  `test_gui_generator.ps1`（**25 项**：生成器单测 + 与 `ecm.py` **逐字节**对比 + 面板 trace，见 §19）。
+* **驱动侧新测试**（也进了同一个套件，`exe = 'driver'`）：
+  `test_gpu_info.ps1`（**52 项**，D4，见 §11.1）、`test_progress_cadence.ps1`（**19 项**，见 §7.2）、
+  `test_p95_transfer.ps1`（**47 项**，见 §18.4）。
+* **一键全跑**：`tools/test/test_gui_all.ps1` —— 把上面全部 + headless 自测/单测（**21 个入口**）按顺序跑完，
   逐项打印 `passed/failed` 与耗时，汇总表 + 每项完整日志落在 `tools/test/_run/suite_<时间戳>/`，
   任一失败即非零退出；`-SkipGpu`（不碰显卡）、`-Only '*smoke*'`（挑着跑）、`-List`（只列清单）。
+  **本轮收尾实测（2026-09-29 03:57，机器上同时跑着用户自己的生产 worker）**：
+  `20/20 项、676 项检查、0 失败`（含新增的 `gpu-info` 49 项、`progress-cadence` 19 项、
+  `p95-transfer` 47 项、`p95-notice` 23 项、`generator` 25 项）。
   都用 `EnumWindows` 找 class=`ecm_gui` 的窗口、`PostMessage(WM_CLOSE)` 关闭、读 `--trace` 断言生命周期，
   **不需要截图**；需要 GPU 的用很小的任务（M991/M677 + B1=1e4/1e6，秒级）。
   唯一的例外是 `test_gui_cjk_pixels.ps1`：它**故意**要截图，因为"字有没有真的画出来"只有像素能证明
@@ -931,6 +994,15 @@ powershell -File tools\test\test_gui_all.ps1           # 一键跑上面全部�
 * **不测数学**：GUI 不做数论，别把 `--verify-gpu` 的活搬到 GUI 测试里；真实验收里"命中"只当事件处理。
 * **不回归现有目标**：每次改 CMake 都核对目标列表（`cmake --build <dir> --target help`），
   并确认缺 imgui / `-DECM_BUILD_GUI=OFF` 两条路径都能正常 configure。
+* **与生产运行并存**（2026-09-29 实测的教训）：本机可以**同时**跑着用户自己的
+  `ecm_gui.exe` + `ecm_cuda.exe`。那时：
+  * 进程残留检查必须**按可执行文件路径过滤**（只认本测试启动的那份），否则会把用户的
+    生产进程报成"我们的残留"（`real-workers`/`results-e2e`/`p95-notice` 三处已改）；
+  * 依赖负载形状的断言（`gpu-curves` 的"时钟要有多个取值"）会**因为另一份任务把卡钉在固定
+    boost 档**而失败 —— 这不是面板的缺陷，测试检测到外部 GPU 任务就打印 `[SKIP]` 并说明原因；
+  * 时间型断言要按"实际耗时"放宽（`progress-cadence` 的"文件恰好 1 行"在任务超过 60 s 时
+    会合理地多出中间行；现在先断言日志文件真的被清空，再断言计数）。
+  这三条都是**测试质量**问题，不是功能回归：同样的脚本在"机器空闲"时是严格门限。
 
 ---
 
@@ -942,8 +1014,10 @@ powershell -File tools\test\test_gui_all.ps1           # 一键跑上面全部�
 | **`-sigma` 与 param3 的取值范围检查像是反的（既有疑点）** | `-sigma 20001 -gpu-param 3` → 驱动接受，内核报 `invalid modulus`（`d = sigma>>32 = 0`）；`-sigma 85903640887297 -gpu-param 3`（`d = 20001`，内核要的非零 `d`）→ 驱动**拒绝**："`-sigma` value exceeds 2^32-1; the GPU batch path (gpu_param = 3) needs a 32-bit sigma"。两者只能对一个，需要对着 `cgbn_stage1.cu` 的 param3 曲线构造实测后再定（GUI 侧暂不依赖 `-sigma`，走 ini 的随机 sigma） |
 | GPU 面板：风扇转速 | M4 已做 util/功耗（含上限与百分比）/SM 与显存时钟/温度/显存/节流原因/全机合计功耗/三条曲线；风扇转速（`nvmlDeviceGetFanSpeed`）留待需要时加（笔记本 dGPU 常常不报风扇） |
 | `--status-file` | 若"纯日志解析"在换构建/格式漂移后变脆弱，driver 侧加"每 N 秒原子写一行机器可读状态"，GUI 改为读文件（§13 决策 10 的既定升级路径） |
-| stage-2 交接 | GUI 里一键把 `.save` 交给 `ecm_p95feeder`/Prime95（含进度与失败提示） |
-| GUI 内 worktodo 编辑 | M6 的可视化生成（`docs/DEV_ECM_WORKTODO.md`） |
+| stage-2 交接 | **已完成（2026-09-29，§18）**：驱动把完成的任务行原样追加进 Prime95 的 `worktodo.add`，GUI 用红/黄/绿/灰通知条显示状态。仍未做：GUI 里手动改 `worktodo.add`、或反过来从 Prime95 取任务 |
+| GUI 内 worktodo 编辑 | **部分完成（2026-09-29，§19，M6 范围 A）**：粘贴/打开文件 → 预览 → 追加到 worktodo；未做：过滤器 UI、`ECM=`/`ECM2=`（Prime95 用）输出、CLI 命令输出、任务编辑/删除、从结果反推（详见 §19.5） |
+| **生成器面板的文件拖放（drag & drop）** | 用户已明确"只写进文档 TODO，先不做"：把 `.txt`/`.csv` 拖到生成器面板上应当等价于"打开文件"。实现要点（将来做时照抄即可）：`DragAcceptFiles(hwnd, TRUE)` + 在 `WndProc` 里处理 `WM_DROPFILES`（`DragQueryFileA` 取路径、`DragFinish`），拿到路径后走 `gen_load_file(path)` 那条既有路径；ImGui 只负责画高亮边框。放在 §16 而不是顺手做，是因为它需要动 Win32 消息循环（§3 的抽象边界之外） |
+| 生成器：与 `ecm.py` 的差异收尾 | 已知且**故意**的差异见 §19.5（已知因子的整除性只做形状检查、不含 CLI 发射器、一次写多个段）；若要完全等价，把 GMP 引进 GUI 或让驱动提供 `--verify-run`（属于 §22 的"要不要把数论搬进 GUI"决策） |
 | Linux（M7） | GLFW+OpenGL3、`posix_spawn` + `killpg`、`libnvidia-ml.so`、fontconfig 找 Noto CJK |
 | 中文文档 | 本文档与 `DEV_ECM_WORKTODO.md` 目前是中文；若要让外部贡献者参与本地化，考虑加英文镜像 |
 
@@ -958,3 +1032,157 @@ powershell -File tools\test\test_gui_all.ps1           # 一键跑上面全部�
 | GUI 写 ini 与用户手改冲突 | 原子改写 + 保序 + 只改已知键（§4.3），并保留 `.bak` 一代 |
 | ImGui docking 分支非 release | pin 到具体 commit（`64944b45…`），升级流程写在 `third_party/imgui/README.md` |
 | NVML 版本/驱动不匹配 | 全部调用容错，失败即降级显示（§8） |
+
+---
+
+## 18. Prime95 交接：完成的任务自动进 `worktodo.add`（2026-09-29）
+
+### 18.1 目标与边界
+
+用户要的是"**我们自己算完 stage 1，Prime95 接着算 stage 2**"，而不用手工搬行
+（`ecm_p95feeder` 是另一条路：搬 Edwards 的 `.tmp`，保持独立、**本轮未改一行**）。
+
+通道用 Prime95 官方文档里的投放箱：把行追加到 Prime95 `worktodo.txt` **旁边**的
+`worktodo.add`，Prime95 自己找时间并进 `worktodo.txt` 然后**删掉** `worktodo.add`
+（`undoc.txt:443-447`；源码 `commonc.c: incorporateWorkToDoAddFile()`）。
+这样我们**从不改** `worktodo.txt`，Prime95 自己的记账不受影响。
+
+行必须是 Prime95 认的关键字：**`ECMSTAGE2=` 原样追加**（含 AID 与已知因子串）。
+`commonc.c:2936-2938` 明确支持
+`ECMSTAGE2=k,b,n,c,filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]`，
+并且 AID 前缀正是 Prime95 自己 writer 的写法（`commonc.c:3573`），它靠这个 AID 把最终因子
+按正确的 assignment 上报 —— 所以**不能**丢掉、也**不能**改写成 feeder 的 `ECM=` 形式。
+
+### 18.2 键与规则
+
+| 键 | 行为 |
+|---|---|
+| `p95_worktodo_path` | Prime95 的 `worktodo.txt`；**留空（默认）= 功能关闭**，此时行为与本轮之前完全一致 |
+| `p95_add_workers` | `空`=不写段头；`3`；`1,3`；`1-8`；`auto`=读同目录 `prime.txt` 的 `NumWorkers` |
+
+* 段头**只认 `worktodo.txt` 里真实存在的段**（`worktodo.add` 不算证据）：不存在就退回不带段头，
+  并在日志/GUI 里给黄色提示（Prime95 对未知段头会把行归到别的线程甚至丢掉，不能赌）。
+* 多个候选：按"当前排期最少"选（`worktodo.txt` + `worktodo.add` 的活动行数，段头缺失的行算 worker 1，
+  与 Prime95 的初始 `tnum=0` 一致）；并列取编号小的。只有一个候选就不数。
+* 写入用锁 `worktodo.add.lock`（`CreateFile` `CREATE_NEW`，100 ms 重试、最多 3 s；
+  超过 60 s 的锁文件视为被遗弃并抢占）+ **原子替换**（`MoveFileExA(MOVEFILE_REPLACE_EXISTING)`，
+  之前的 `remove()+rename()` 存在"文件短暂不存在"的窗口，而 Prime95 恰好在找这个文件）。
+* **失败绝不阻塞任务**：任务照样进 `finished`、照样出队；该行落进
+  `<驱动目录>\p95_add_pending.txt`，**下一次成功交付时先把它一起送出**，然后删除 pending。
+* **命中因子也照常交付**（用户明确要求）：stage 2 仍需做 GCD 并上报，我们无法代它上报。
+* 交付发生在"任务完成 → `.save` 同步完"之后、`processed++` 之前（`queue_run_one()` 里）。
+
+### 18.3 GUI：通知条（显著颜色）
+
+菜单栏下面一条**整宽通知条**，永远可见（用户要求"包括 pending 都要通知 GUI 并使用显著颜色"）：
+
+| 颜色 | 含义 | 文本 |
+|---|---|---|
+| 灰 | `p95_worktodo_path` 为空 | "未配置（在 ecm.ini 里设置 …）" |
+| 绿 | 已配置、最近一次交付成功 | "交付成功/就绪" |
+| 黄 | 交付成功但路由退让（缺段头等） | 警告 + 驱动给出的原因 |
+| 红 | 交付失败 / **pending 文件非空** | "失败：N 行待投递" + 原因 |
+
+红条**以磁盘上的 pending 文件为准**（不只是最后一条日志），所以上次会话留下的待投递也会红；
+右边常驻两个按钮：**打开 Prime95 目录** / **打开待投递文件**。消息按严重度只显示最重的一条，
+其余用 `(+N)` 计数。驱动打印的机器可读行：
+
+```
+p95_add: ready workers="1-8" file="…\worktodo.add" pending=2
+p95_add: ok worker=2 added=1 pending_delivered=0 file="…"
+p95_add: warn worker=0 added=1 pending_delivered=0 file="…" note="…"
+p95_add: pending worker=1 lines=3 file="…" error="…"
+```
+
+值一律带引号（只有 `\"` 与行尾 `\\` 是转义），所以空格路径与自由文本都不歧义；
+解析在 `src/gui/log_parse.cpp`（`P95Notice`），通知条状态每帧变化都会 trace
+（`p95 notice: level=red parked=2 text=…`），因此有机器判据。
+
+### 18.4 验收
+
+* `tools/test/test_p95_transfer.ps1` **47 项**（真驱动、真任务）：按号路由、缺段头退让、`auto` 读
+  `NumWorkers`、区间 `1-2` 选空闲 worker、非法值 `2000`/`abc` 退让、**AID 与已知因子逐字节保留**、
+  锁被占用 → 3 s 后落 pending 且**任务仍出队**、下一个任务把 pending 一起送出并清空、超过 60 s 的
+  锁被抢占且交付很快（< 2.5 s）、`worktodo.txt` 从未被改动。
+* `tools/test/test_gui_p95_notice.ps1` **32 项**（含四色像素判据）：灰/绿/红/黄四种颜色的真实切换（红由磁盘 pending 驱动，
+  灰/绿不需要 worker），黄/红发生在**真 worker** 上，关闭 GUI 后不留我们启动的 worker。
+
+---
+
+## 19. worktodo 生成器（M6 范围 A，2026-09-29）
+
+### 19.1 做了什么
+
+面板（`###gen`，与 Workers/Detail 同一个停靠节点的一个标签页）＋纯逻辑核心
+`src/gui/worktodo_gen.{h,cpp}`：
+
+```
+粘贴/打开文件 → 解析 → 过滤 → 去重 → 改写 → 排序 → 存档名校验 → 逐行算推荐曲线 → 预览 → 追加
+```
+
+* 输入：PrimeNet 手动作业（`ECM=` / `ECM2=` 行，可带 AID、`FFT2=`、已知因子串）；
+  以 `#` 开头的注释与空行跳过；`ECMSTAGE2=`（我们的输出格式）跳过并计数。
+* 逐行推荐曲线：**`curves = 块/SM × SM 数 × ipb`**，其中 `ipb` 来自**该行 N 实际会用的档位**
+  （`--bits` 同款选择规则：`bits >= bits(N) + carry_bits` 的最小档），
+  `SM 数`/`ipb` 来自 `ecm_cuda.exe --gpu-info`（**D4，现场读，不抄表**）；`块/SM` 默认 **2**（面板可调）。
+  推荐值不小于该档位的 `curves_min`（内核自己的"别让 SM 闲着"下限）。
+* `bits(N)` 用**纯算术**估算（GUI 不含 GMP）：`log2(k) + n·log2(b)`，`c<0` 且 `k·b^n` 恰为 2 的幂时
+  （Mersenne 情形）减 1 —— 否则 `2^521-1` 会被算成 522 位。带已知因子时按"因子位数之和"扣减，
+  这是**下界**（可能低 1 位），方向安全：档位偏小 ⇒ `ipb` 偏大 ⇒ 曲线数略多而不是欠占用。
+* 段：只输出**有任务**的 `[Worker #N]` 段，段号取自 ini 的 `[Worker #N]`；同一张卡上有多个
+  worker 时按行序**轮流分配**；目标卡在面板上选（默认第一个 worker 的卡）。
+* 存档名：模板 `m{n}_{b1}.save`（`{n}{k}{b}{c}{b1}{b2}`），并按驱动契约校验
+  （必须以 `_<B1>.save` 结尾且 B1 可解析成 > 0 的数），不合格直接报错不生成 —— 因为驱动的
+  `ECMSTAGE2=` 路径**从存档名取 B1**。
+* **"生成预览"和"追加到 worktodo"是两个独立按钮**：预览只算不写；追加前**重新校验目标文件的
+  大小/mtime**（生成预览之后被任何人改过就拒绝并提示重新生成），追加是**只追加**（不截断既有行），
+  追加时不覆盖队列文件里正在被消费的行。追加完成后必须重新预览才能再追加（同一条 mtime 规则）。
+
+### 19.2 与 `ecm.py` 的关系
+
+`tools/ecm_worktodo/ecm.py` 是参考实现，两者在"给定同样的曲线数"时必须**逐字节一致**：
+字段顺序、CSV 引号规则（`"` 翻倍）、段头与结尾空行、`--sort-by` 的稳定排序与 `idx` 兜底、
+去重的胜者规则（B1 → 曲线数 → 有真 AID → 先出现）、已知因子并集，都照抄。
+
+### 19.2.1 面板控件可见性（2026-09-29 用户反馈后的修正）
+
+用户反馈："**生成器的 block/sm 输入框没有宽度，无法显示数字**"。两个原因，都修了：
+
+1. `InputInt` 默认带 `+/-` 步进按钮，而 ImGui **把两个按钮画在给定宽度内部**（每个宽 `GetFrameHeight()`）：
+   150 % DPI 下行高 ≈31 px ⇒ 80 px 的框里被吃掉 63 px，只剩十几像素给数字。现在 `InputInt(..., 0, 0)`
+   （step = 0 关掉按钮，**必须保持 0**）并把宽度提到 90 px；代码里把两个宽度都 trace 出来
+   （`blocks_box_w` 框宽 / `blocks_edit_w` 可编辑宽），测试断言两者 ≥60 px —— 谁把 step 改回非 0，
+   测试立刻红，不用等用户报告。
+2. 顺带修掉一个**真 bug**：`target=` 把绝对路径又拼了一次工作目录
+   （`…\sandbox\D:\…\sandbox\worktodo.txt`）。现在 ini 值解析走 `path_resolve()`：绝对路径原样用，
+   相对路径才按驱动目录拼接（`worktodo` 与 `p95_worktodo_path` 都走这条）。
+3. **`[GUI] start_tab = workers|detail|gen`**：面板不是被选中的标签时 ImGui 会 `SkipItems`，
+   完全不布局、也量不到几何（这正是上面那个宽度一开始量成 176 px 的原因）。这个键既能让你
+   打开就落在生成器上，也让测试能真正量到控件；选择必须用 `SetWindowFocus()` 实现——
+   `DockNodeUpdate()` 每帧把节点的 NavWindow 写回标签栏（`imgui.cpp:19889`），直接改
+   `SelectedTabId` 会被覆盖（实测：节点一直保持 Workers，生成器始终隐藏）。
+### 19.3 验收
+
+* `tools/test/test_gui_generator.ps1` **32 项**：
+  单元测试 **84 项**（`--gpu-info` 解析、选档、位宽估算、解析、存档名、流水线、mtime 守卫的追加）；
+  **与 `ecm.py` 逐字节对比 5 组**（排序 `n` / 排序 `b1` / 去重 / 改写 `set-b1`+`set-b2` / `set-has-na`）；
+  逐行推荐曲线与现场 `--gpu-info` 复算一致（实测 `n=101 → 3840`、`n=521/1019 → 1920`，档位不同 ⇒ 曲线数不同）；
+  GUI 面板真的画出来并 trace 出状态与目标文件。
+* 单测也覆盖了"没有 GPU 报告时拒绝生成推荐值"（OpenCL 构建的 `not_applicable` 路径）。
+
+### 19.4 面板上的文案
+
+`[GUI] language` 决定语言（`localization/{english,chineseSimplified}.xml` 新增 `gen` 面板 22 个键 +
+`p95` 面板 7 个键，`--selftest` 会断言两语言 0 缺键）。
+
+### 19.5 范围 A 明确**没做**（写清楚免得当成 bug）
+
+1. **已知因子的整除性只做形状检查**（整数 > 1）：精确整除需要大数运算，GUI 不含 GMP。
+   `ecm.py --verify-factors` 仍是唯一做精确校验的地方。
+2. **没有 CLI 发射器**（`--emit-cli` 的 sh/ps1/bat）与 **`ECM=`/`ECM2=`（原生 Prime95 worktodo）
+   输出**：范围 A 只做 `ECMSTAGE2=` 队列。
+3. **过滤器的 UI**：核心已实现 `min_n/max_n/min_curves/max_curves`，面板暂时只暴露
+   "去重/排序/存档名/块-SM/目标卡"这几项。
+4. **文件拖放**：见 §16 的 TODO 条目（用户明确要求先只写文档）。
+5. **非法输入行的策略与 `ecm.py` 不同**：`ecm.py` 遇到坏行直接整体退出；GUI **跳过该行并在
+   "被跳过的输入行与警告"里列出来**，其余任务照常生成（一次粘贴 200 行时，一个手误不该让 199 行白费）。

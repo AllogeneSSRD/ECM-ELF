@@ -53,13 +53,18 @@ size_t p95_count_handoff(const P95WorkerSection &s);
 // Number of handoff lines across all worker sections.
 size_t p95_total_handoff(const std::vector<P95WorkerSection> &sections);
 
-// Merge `assignments` (worker number -> ECM= line) into `path` as `[Worker #N]`
+// Merge `assignments` (worker number -> line) into `path` as `[Worker #N]`
 // sections, preserving the rest of the file. With append == false the file is
-// rewritten from only the assignments. Returns false and fills `err` on I/O
-// failure.
+// rewritten from only the assignments. Worker 0 means "no section header".
+// The file is written to `path + tmp_suffix` and then moved over `path`, so a
+// reader (Prime95) never sees a half-written file. The default suffix keeps the
+// feeder's file names unchanged; the driver's worktodo.add delivery uses its own
+// so two writers can never collide on one temp file. Returns false and fills
+// `err` on I/O failure.
 bool p95_write_worktodo_add(const std::string &path,
                             const std::vector<std::pair<int, std::string>> &assignments,
-                            bool append, std::string &err);
+                            bool append, std::string &err,
+                            const char *tmp_suffix = ".feeder.tmp");
 
 // Read an integer key from a Prime95 prime.txt (e.g. MaxHighMemWorkers).
 // Accepts "Key=value" with surrounding whitespace; '#' comments are skipped.

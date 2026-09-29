@@ -23,6 +23,52 @@ std::mutex g_log_mutex;
 // Optional extra output sink (screen.log in queue mode). Guarded by g_log_mutex.
 FILE *g_log_mirror = nullptr;
 
+// Progress cadence for the FILE (mirror) only -- ini key `progress_log_seconds`.
+//   > 0 : at most one progress line per N seconds lands in the log file
+//   = 0 : the log file gets no progress line at all
+//   < 0 : every progress line (the pre-D4 behaviour)
+// The pipe/console still gets every line (~200 ms cadence): the GUI tails the worker's
+// stdout by complete lines and must not wait a minute for the first one. Whatever the
+// cadence, a line reporting 100.0% is always written, so the file always shows the end of
+// a task. See docs/DEV_ECM_GUI.md §7.2.
+double g_progress_log_seconds = 60.0;
+double g_last_progress_log_s = -1.0e18;
+
+// Wall-clock seconds for the file gate. Monotonic (steady_clock) on purpose: a system
+// clock jump (NTP, DST) must not silence the log for an hour or unlock a burst of lines.
+double now_seconds_monotonic() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// Both progress shapes carry an ASCII bar plus a percentage:
+//     GPU: [====>       ]  42.1%  ...   (CUDA / OpenCL stage 1)
+//     stage1: [====>    ]  42.1%  ...   (CPU stage 1, ecm_driver.cpp)
+// Anything else (banners, results, warnings) is never a progress line.
+bool line_is_progress(const char *text) {
+    if (text == nullptr) return false;
+    if (std::strstr(text, "GPU: [") == nullptr && std::strstr(text, "stage1: [") == nullptr) {
+        return false;
+    }
+    return std::strchr(text, '%') != nullptr;
+}
+
+// The task-complete line ("... ] 100.0% ...") is written whatever the cadence.
+bool line_is_progress_end(const char *text) {
+    return line_is_progress(text) && std::strstr(text, " 100.0%") != nullptr;
+}
+
+// Does the file get this progress line? Updates the gate when it says yes.
+bool file_wants_progress(const char *text) {
+    if (g_progress_log_seconds < 0.0) return true;          // every line
+    if (line_is_progress_end(text)) return true;            // always the 100% line
+    if (g_progress_log_seconds == 0.0) return false;        // never
+    const double now = now_seconds_monotonic();
+    if (now - g_last_progress_log_s < g_progress_log_seconds) return false;
+    g_last_progress_log_s = now;
+    return true;
+}
+
 // Progress-bar colour (ANSI escape). Default cyan, matches the OpenCL bar.
 std::string g_progress_color_code = "\033[36m";
 
@@ -150,6 +196,17 @@ bool ecm_log_timestamp_enabled() {
     return ecm_runtime_config().log_timestamp;  // default ON; Use --no-log-timestamp to disable
 }
 
+void ecm_log_set_progress_log_seconds(double seconds) {
+    std::lock_guard<std::mutex> lk(g_log_mutex);
+    g_progress_log_seconds = seconds;
+    g_last_progress_log_s = now_seconds_monotonic();   // the next window starts now
+}
+
+double ecm_log_progress_log_seconds() {
+    std::lock_guard<std::mutex> lk(g_log_mutex);
+    return g_progress_log_seconds;
+}
+
 void ecm_install_timestamped_iostreams() {
     if (!ecm_log_timestamp_enabled()) {
         return;
@@ -181,8 +238,21 @@ int ecm_ts_vfprintf(FILE *stream, const char *fmt, va_list ap) {
     };
 
     emit(stream);
+
     if (g_log_mirror != nullptr && g_log_mirror != stream) {
-        emit(g_log_mirror);
+        /* The file is rate-limited for progress lines (ini progress_log_seconds): a task
+           running for hours would otherwise fill screen.log with a line every 200 ms.
+           The line has to be formatted HERE to be classified, so this renders into a
+           buffer first and falls back to a second vfprintf for anything longer. */
+        char buf[4096];
+        va_list apc;
+        va_copy(apc, ap);
+        const int n = std::vsnprintf(buf, sizeof(buf), fmt, apc);
+        va_end(apc);
+        const bool fits = (n >= 0) && (static_cast<size_t>(n) < sizeof(buf));
+        if (!fits || !line_is_progress(buf) || file_wants_progress(buf)) {
+            emit(g_log_mirror);
+        }
     }
     return 0;
 }

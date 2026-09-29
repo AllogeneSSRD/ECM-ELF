@@ -57,6 +57,29 @@ struct HitInfo {
     std::string save;                    // save-file name (may be empty)
 };
 
+// One `p95_add:` notice, i.e. the outcome of handing a finished task to Prime95 through
+// worktodo.add (docs/DEV_ECM_GUI.md section 13). The driver emits exactly four shapes:
+//   p95_add: ready workers="1-8" file="<...>" pending=<n>
+//   p95_add: ok worker=<n> added=<n> pending_delivered=<n> file="<...>"
+//   p95_add: warn worker=<n> added=<n> pending_delivered=<n> file="<...>" note="<text>"
+//   p95_add: pending worker=<n> lines=<n> file="<...>" error="<text>"
+// Values are quoted; the escaping is exactly what the driver's p95_quote() writes:
+// `\"` is a quote in the text, `\\` is one backslash, and any other `\x` is literal (so a
+// Windows path is NOT doubled and reads normally in the log pane).
+struct P95Notice {
+    enum class Level { Ready, Ok, Warn, Pending };
+    bool valid = false;
+    Level level = Level::Ready;
+    int worker = 0;                       // section the line went to (0 = no header)
+    long long added = 0;                  // lines appended by that delivery
+    long long pending_delivered = 0;      // parked lines re-delivered with it
+    long long lines = 0;                  // lines still parked (Pending shape)
+    long long pending_at_start = 0;       // waiting when the worker started (Ready shape)
+    std::string file;                     // worktodo.add that was written
+    std::string note;                     // why the routing fell back (Warn)
+    std::string error;                    // failure reason (Pending)
+};
+
 struct ParsedLine {
     LogKind kind = LogKind::Raw;
     std::string text;        // the line as received, ANSI codes removed
@@ -69,6 +92,7 @@ struct ParsedLine {
     bool queue_done = false;
     long long tasks_processed = -1;
     std::string start_line;  // the worktodo line of a START: event
+    P95Notice p95;           // set when the line is a `p95_add:` notice
     // Set when the line proves the worker executable does NOT understand the queue-mode
     // invocation (`-ini … --worker N`). Measured case (2026-09-28): a driver built before
     // D1/D2 puts `--worker` into its positional list, takes the single-run path and dies

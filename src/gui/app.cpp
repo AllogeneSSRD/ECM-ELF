@@ -5,9 +5,11 @@
 #include "imgui_internal.h"   // ImGui::DockBuilder* for the initial layout
 
 #include <algorithm>
+#include <cctype>              /* std::tolower for the start_tab value */
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <set>
 #include <sstream>
@@ -16,9 +18,32 @@ namespace ecmgui {
 
 // Bumped whenever the default layout changes: an ini carrying an older number gets
 // the new default layout instead of keeping the old arrangement.
-static const int kLayoutVersion = 3;
+static const int kLayoutVersion = 4;
 
 namespace {
+
+// Directory part of a path ("" when it has no separator). Used by the Prime95 handoff
+// panel: worktodo.add lives next to the worktodo.txt the ini points at.
+std::string path_dir(const std::string &p) {
+    const std::size_t s = p.find_last_of("\\/");
+    return (s == std::string::npos) ? std::string() : p.substr(0, s);
+}
+
+// True for "C:\dir\file", "C:/dir/file" and "\\server\share" -- i.e. a path that must NOT be
+// joined onto another directory.
+bool path_is_absolute(const std::string &p) {
+    if (p.size() >= 2 && p[1] == ':') return true;
+    if (p.size() >= 1 && (p[0] == '\\' || p[0] == '/')) return true;
+    return false;
+}
+
+// An ini path value resolved against `base` (the driver's directory, like the driver does):
+// an absolute value is used as it is instead of being prefixed.
+std::string path_resolve(const std::string &base, const std::string &value) {
+    if (value.empty()) return std::string();
+    if (path_is_absolute(value)) return value;
+    return path_join(base, value);
+}
 
 // The layout blob (ImGui's own settings: dock nodes, panel sizes, viewport
 // positions) is stored as ONE escaped [GUI] key, because values are single-line.
@@ -230,6 +255,11 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
     if (results_txt_.empty()) {
         results_txt_ = path_join(exe_dir(), "results.txt");
     }
+    // Prime95 handoff: the GUI reads these two [queue] keys itself so the notice strip can
+    // say "not configured" before any worker runs, and so the two "open" buttons know
+    // where to look (docs/DEV_ECM_GUI.md 18).
+    p95_worktodo_path_ = ini_.get("", "p95_worktodo_path");
+    p95_add_workers_ = ini_.get("", "p95_add_workers");
     {
         std::string r_err;
         if (!results_.init(results_json_, results_txt_, r_err)) {
@@ -558,6 +588,19 @@ void App::tick() {
         }
         w.events.insert(w.events.end(), d.events.begin(), d.events.end());
         w.raw.insert(w.raw.end(), d.raw.begin(), d.raw.end());
+        // Prime95 handoff notices (docs/DEV_ECM_GUI.md 18): keep the newest one per worker
+        // plus a trace line, so a script can prove what the strip shows.
+        for (const P95Notice &notice : d.p95) {
+            w.p95 = notice;
+            const char *lvl = notice.level == P95Notice::Level::Ok ? "ok"
+                            : notice.level == P95Notice::Level::Warn ? "warn"
+                            : notice.level == P95Notice::Level::Pending ? "pending" : "ready";
+            trace("worker " + std::to_string(w.index) + ": p95 " + lvl + " worker=" +
+                  std::to_string(notice.worker) + " added=" + std::to_string(notice.added) +
+                  " pending=" + std::to_string(notice.pending_at_start + notice.lines) +
+                  (notice.note.empty() ? "" : " note=" + notice.note) +
+                  (notice.error.empty() ? "" : " error=" + notice.error));
+        }
         // "No input number on stdin" means the worker exe never entered queue mode: it is
         // an ecm_cuda built before the D1/D2 changes, which treats `--worker N` as task
         // arguments. Say so once (status line + trace) instead of letting the user watch
@@ -715,12 +758,37 @@ void App::set_window_rect(int x, int y, int w, int h) {
 void App::draw() {
     tick();
 
+    // ---- Prime95 notification strip reserves its own row ------------------------
+    // The strip sits directly under the menu bar and the dockspace starts BELOW it. That
+    // reservation is the fix for "四种颜色的真实切换，我实测看不出" (2026-09-29): the strip used
+    // to be drawn one row lower than WorkPos, i.e. on top of the dockspace area, where the
+    // docked panels are painted over it -- it was there, just invisible.
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    // The height comes from the strip's OWN last measured height, not from a guess: at 150 %
+    // DPI the content row (text + small buttons) is taller than GetFrameHeight(), and a
+    // too-small reservation let the window grow downwards over the dockspace -- measured
+    // 2026-09-29: strip y=156..204 while the host started at y=187, i.e. 17 px of overlap
+    // again. Self-measuring makes the reservation exactly right for any DPI/padding, and the
+    // first frame (before the measurement exists) is covered by the frame-height fallback.
+    const float strip_h = (p95_strip_h_ > 0.0f) ? p95_strip_h_ : ImGui::GetFrameHeight();
+    const ImVec2 host_pos(vp->WorkPos.x, vp->WorkPos.y + strip_h);
+    const ImVec2 host_size(vp->WorkSize.x, vp->WorkSize.y - strip_h);
+
+    // [GUI] start_tab: focus the wanted panel so its dock TAB gets selected. Focusing is the
+    // only mechanism that works here -- DockNodeUpdate() copies the node's NavWindow back into
+    // the tab bar every frame (third_party/imgui/imgui.cpp:19889 "Apply NavWindow focus back
+    // to the tab bar"), so writing node->SelectedTabId is silently overwritten (measured
+    // 2026-09-29: node kept Workers selected with the generator hidden). Retried until the
+    // panel reports itself visible, bounded so a typo in the key cannot loop forever.
+    if (!start_tab_applied_ && !start_tab_id_.empty() && frame_counter_ < 240) {
+        ImGui::SetWindowFocus(start_tab_id_.c_str());
+    }
+
     // ---- dockspace host -------------------------------------------------------
     // One full-viewport window owns the dockspace. Panels dock into it, so the user
     // can rearrange everything and the arrangement is persisted in [GUI] dock_layout.
-    const ImGuiViewport *vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::SetNextWindowPos(host_pos);
+    ImGui::SetNextWindowSize(host_size);
     ImGui::SetNextWindowViewport(vp->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -735,8 +803,8 @@ void App::draw() {
     // frame, and the first frame's viewport WorkSize can still be stale -- so pin the
     // host rect explicitly every frame. Without this the panels end up offset (measured:
     // panels reaching x=1609 in a 1478 px viewport).
-    ImGui::SetWindowPos(vp->WorkPos);
-    ImGui::SetWindowSize(vp->WorkSize);
+    ImGui::SetWindowPos(host_pos);
+    ImGui::SetWindowSize(host_size);
     const ImGuiID dockspace_id = ImGui::GetID("ecm_gui_dockspace");
     // Build the layout once the viewport size has settled (frame 3) and whenever the
     // stored blob predates the current layout version -- so an ini written by an older
@@ -757,6 +825,8 @@ void App::draw() {
     const bool trace_stages = frame_counter_ < 3;
     draw_menu_bar();
     if (trace_stages) trace("draw: menu bar ok");
+    draw_p95_notice(strip_h, host_pos.y);
+    if (trace_stages) trace("draw: p95 notice ok");
     draw_workers_table();
     if (trace_stages) trace("draw: workers table ok");
     draw_gpu_panel();
@@ -765,11 +835,16 @@ void App::draw() {
     if (trace_stages) trace("draw: results panel ok");
     draw_detail_panel();
     if (trace_stages) trace("draw: detail panel ok");
+    draw_gen_panel();
+    if (trace_stages) trace("draw: gen panel ok");
     draw_worker_panes();
     if (trace_stages) trace("draw: worker panes ok");
     // Last so it is on top of everything; also keeps the dockspace from stealing input.
     draw_exit_modal();
     if (trace_stages) trace("draw: exit modal ok");
+
+    // The focus/selection is applied at the START of App::draw (see the SetWindowFocus call
+    // there); nothing to do here beyond recording that it worked.
 
     ++frame_counter_;
     if (panels_traced_at_frame_ < 0 && frame_counter_ > 30) trace_panel_rects();
@@ -1036,8 +1111,11 @@ void App::build_default_layout(unsigned int dockspace_id) {
 
     ImGui::DockBuilderDockWindow("###workers", left_top);
     // Detail shares the workers node as a tab, so it is "aside" the table without
-    // stealing space from it (Workers is the selected tab).
+    // stealing space from it (Workers is the selected tab). The generator does the same:
+    // it is used occasionally (paste assignments, preview, apply), so it must not take
+    // permanent space away from the table the user watches.
     ImGui::DockBuilderDockWindow("###detail", left_top);
+    ImGui::DockBuilderDockWindow("###gen", left_top);
     ImGui::DockBuilderDockWindow("###gpu", right_top);
     ImGui::DockBuilderDockWindow("###results", right_bottom);
     for (const WorkerView &w : workers_) {
@@ -1045,12 +1123,25 @@ void App::build_default_layout(unsigned int dockspace_id) {
         ImGui::DockBuilderDockWindow(id.c_str(), left_bottom);
     }
     ImGui::DockBuilderFinish(dockspace_id);
-    // Make Workers the visible tab of the shared node.
-    if (ImGuiWindow *w = ImGui::FindWindowByName("###workers")) {
-        if (w->DockNode != nullptr) w->DockNode->SelectedTabId = w->TabId;
-    }
+    // Which tab of the shared left-top node is selected at startup: [GUI] start_tab =
+    // workers (default) | detail | gen. The generator is used in bursts (paste, preview,
+    // apply), so being able to open the GUI straight on it is worth one ini key -- and it is
+    // also what lets a test measure the panel's controls, because a non-selected tab is
+    // skipped by ImGui and reports no geometry.
+    std::string tab = ini_.get("GUI", "start_tab", "workers");
+    for (char &c : tab) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const char *tab_id = (tab == "gen" || tab == "generator") ? "###gen"
+                       : (tab == "detail") ? "###detail"
+                                           : "###workers";
+    // The selection is applied LATER (App::draw, after the panels were submitted once):
+    // DockBuilderDockWindow() makes a placeholder for a window that does not exist yet, and
+    // FindWindowByName() right here would return null for ###gen -- measured 2026-09-29: the
+    // layout then kept Workers selected and the generator stayed hidden.
+    start_tab_id_ = tab_id;
+    start_tab_applied_ = false;
     layout_built_ = true;
-    trace("layout: default dock layout built (left=workers+detail/output, right=gpu/results)");
+    trace(std::string("layout: default dock layout built (left=workers+detail+gen/output, "
+                      "right=gpu/results), start_tab=") + tab_id);
 }
 
 void App::trace_panel_rects() {
@@ -1269,6 +1360,471 @@ void App::draw_menu_bar() {
         ImGui::TextDisabled("%s", msg.c_str());
     }
     ImGui::EndMainMenuBar();
+}
+
+// ---- Prime95 handoff (docs/DEV_ECM_GUI.md 18) ---------------------------------------
+
+std::string App::p95AddPath() const {
+    if (p95_worktodo_path_.empty()) return std::string();
+    return path_join(path_dir(p95WorktodoPath()), "worktodo.add");
+}
+
+std::string App::p95PendingPath() const {
+    return path_join(worker_dir(), "p95_add_pending.txt");
+}
+
+long long App::p95PendingCount() const {
+    // Read straight from disk (not from a notice) so the red state is also correct when
+    // the pending file was left by an earlier GUI session or by a hand-run driver.
+    std::ifstream in(p95PendingPath());
+    if (!in) return 0;
+    long long n = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (!line.empty()) ++n;
+    }
+    return n;
+}
+
+void App::draw_p95_notice(float height, float host_top) {
+    // A full-width strip right under the menu bar. The user asked for the handoff state to
+    // be impossible to miss ("如果存在任何异常情况包括 pending 我希望都要通知 GUI 并使用
+    // 显著颜色"), so the strip is always visible -- green when a task was handed over, grey
+    // when the feature is off, yellow for a warning, red while anything is still parked.
+    //
+    // 2026-09-29 (user: "四种颜色的真实切换，我实测看不出；没有配置 p95_worktodo_path 时也没有
+    // 明显提示"): the strip is now drawn at WorkPos (its row is RESERVED, see App::draw) so no
+    // panel can cover it, it carries an ASCII severity marker, and the "not configured" case
+    // gets the same treatment as the others plus a one-click way to fix it. Its rect is traced
+    // so a test can prove it is on screen and above the dockspace.
+    const long long parked = p95PendingCount();
+
+    // Most severe wins; the rest are counted.
+    int level = -1;                        // 0 grey/none, 1 green, 2 yellow, 3 red
+    std::string text;
+    std::string detail;
+    int extra = 0;
+    bool saw_notice = false;               // a worker reported something this session
+    for (const WorkerView &w : workers_) {
+        if (!w.p95.valid) continue;
+        saw_notice = true;
+        const int l = w.p95.level == P95Notice::Level::Pending ? 3
+                    : w.p95.level == P95Notice::Level::Warn ? 2
+                    : 1;                       // Ok and Ready are both "fine"
+        const std::string msg =
+            w.p95.level == P95Notice::Level::Pending
+                ? w.p95.error
+                : (w.p95.level == P95Notice::Level::Warn ? w.p95.note : std::string());
+        if (l > level) {
+            if (level >= 1 && !text.empty()) ++extra;
+            level = l;
+            text = msg;
+        } else if (l == level) {
+            ++extra;
+        }
+    }
+    if (parked > 0) level = 3;             // disk state beats any stale green notice
+
+    char buf[512];
+    ImVec4 fg, bg;                          // text colour, band colour
+    std::string marker;
+    if (level < 0 && p95_worktodo_path_.empty()) {
+        level = 0;                         // grey: nothing is configured
+        std::snprintf(buf, sizeof(buf), "%s", loc_.t("p95", "not_configured").c_str());
+        fg = ImVec4(0.78f, 0.78f, 0.82f, 1.0f);
+        bg = ImVec4(0.16f, 0.16f, 0.20f, 1.0f);
+        marker = "[-] ";
+    } else if (level == 3) {
+        std::snprintf(buf, sizeof(buf), loc_.t("p95", "pending").c_str(),
+                      static_cast<int>(parked > 0 ? parked : 1));
+        fg = ImVec4(1.0f, 0.45f, 0.45f, 1.0f);
+        bg = ImVec4(0.30f, 0.05f, 0.05f, 1.0f);
+        marker = "[FAIL] ";
+        detail = text;
+    } else if (level == 2) {
+        std::snprintf(buf, sizeof(buf), "%s", loc_.t("p95", "warn").c_str());
+        fg = ImVec4(1.0f, 0.80f, 0.25f, 1.0f);
+        bg = ImVec4(0.26f, 0.20f, 0.03f, 1.0f);
+        marker = "[WARN] ";
+        detail = text;
+    } else {
+        // Configured and nothing wrong: green. "ready" before the first task finished,
+        // "ok" once a delivery actually succeeded -- both are the healthy state.
+        level = 1;
+        std::snprintf(buf, sizeof(buf), "%s",
+                      loc_.t("p95", saw_notice ? "ok" : "ready").c_str());
+        fg = ImVec4(0.55f, 1.0f, 0.55f, 1.0f);
+        bg = ImVec4(0.05f, 0.20f, 0.07f, 1.0f);
+        marker = "[OK] ";
+    }
+    std::string line = marker + buf;
+    if (!detail.empty()) line += " - " + detail;
+    if (extra > 0) line += " (+" + std::to_string(extra) + ")";
+
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x, height));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                                   ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBringToFrontOnFocus;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, bg);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
+    ImGui::Begin("###p95_notice", nullptr, flags);
+    ImGui::PushStyleColor(ImGuiCol_Text, fg);
+    ImGui::TextUnformatted(line.c_str());
+    ImGui::PopStyleColor();
+    if (!p95_worktodo_path_.empty()) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton(loc_.t("p95", "open_dir").c_str())) {
+            open_in_explorer(path_dir(p95WorktodoPath()));
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton(loc_.t("p95", "open_pending").c_str())) {
+            open_in_explorer(p95PendingPath());
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("p95_add_workers=%s",
+                            p95_add_workers_.empty() ? "(none)" : p95_add_workers_.c_str());
+    } else {
+        // One click to fix the missing key instead of hunting for ecm.ini.
+        ImGui::SameLine();
+        if (ImGui::SmallButton(loc_.t("p95", "open_ini").c_str())) {
+            open_in_explorer(ini_path_);
+        }
+    }
+    const ImVec2 wmin = ImGui::GetWindowPos();
+    const ImVec2 wmax = ImGui::GetWindowSize();
+    // Remember the real height so App::draw can reserve exactly this row next frame (and cap
+    // it, so a pathological style cannot eat the whole window).
+    p95_strip_h_ = wmax.y;
+    const float cap = ImGui::GetFrameHeight() * 4.0f;
+    if (p95_strip_h_ > cap) p95_strip_h_ = cap;
+    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    // Trace what the strip shows AND where it is: level, parked count, text, and the geometry
+    // (the strip must be above the dockspace; otherwise it is painted over and invisible).
+    // On every change, and at least every ~2 s while it stays the same.
+    {
+        const char *lvl = level == 3 ? "red" : level == 2 ? "yellow" : level == 1 ? "green" : "grey";
+        char geo[256];
+        std::snprintf(geo, sizeof(geo),
+                      " p95 notice: level=%s parked=%lld rect=%.0f,%.0f,%.0fx%.0f host_top=%.0f",
+                      lvl, parked, wmin.x, wmin.y, wmax.x, wmax.y, host_top);
+        const std::string key = geo + std::string(" text=") + line;
+        if (key != p95_trace_last_ || frame_counter_ % 120 == 0) {
+            p95_trace_last_ = key;
+            trace(key);
+        }
+    }
+}
+
+// ---- worktodo generator (M6 scope A, docs/DEV_ECM_GUI.md 19) -------------------------
+
+std::string App::genWorktodoPath() const {
+    // The file the driver's queue reads: the ini's `worktodo` key, resolved against the
+    // worker executable's directory (what the driver does with a relative value). An absolute
+    // value must NOT be prefixed again -- measured 2026-09-29 in the test sandbox:
+    // "D:\...\sandbox\D:\...\sandbox\worktodo.txt" was displayed and would have been written.
+    return path_resolve(worker_dir(), ini_.get("", "worktodo", "worktodo.txt"));
+}
+
+std::string App::p95WorktodoPath() const {
+    return path_resolve(worker_dir(), p95_worktodo_path_);
+}
+
+void App::gen_make_preview() {
+    gen_has_preview_ = false;
+    gen_text_.clear();
+
+    GenOptions opt;
+    opt.valid = true;
+    opt.save_pattern = gen_save_pattern_.empty() ? "m{n}_{b1}.save" : gen_save_pattern_;
+    opt.sort_by = gen_sort_by_;
+    opt.use_recommended = gen_use_recommended_;
+    opt.blocks_per_sm = gen_blocks_per_sm_;
+    opt.dedup = gen_dedup_;
+    for (const WorkerView &w : workers_) {
+        opt.worker_devices.push_back(std::make_pair(w.index, w.device));
+    }
+    opt.target_device = gen_target_device_;
+
+    GpuProfile gpu;
+    if (gen_use_recommended_) {
+        // The tier table and the SM count come from the driver itself (D4), so a copied
+        // table can never drift from the kernels. --gpu-info writes nothing.
+        std::string cmd = "\"" + resolve_worker_exe() + "\" --gpu-info -d " +
+                          std::to_string(gen_target_device_);
+        std::string out;
+        int code = -1;
+        std::string err;
+        if (!run_capture(cmd, out, code, 20000) || code != 0) {
+            gen_status_ = loc_.t("gen", "gpu_info_failed") + " (exit " + std::to_string(code) + ")";
+            gpu.error = out.empty() ? "no output from --gpu-info" : out;
+            trace("gen: gpu-info failed exit=" + std::to_string(code) + " out=" + out);
+        } else if (!parse_gpu_info(out, gpu, err)) {
+            gen_status_ = loc_.t("gen", "gpu_info_failed") + " (" + err + ")";
+            trace("gen: gpu-info unparsable: " + err);
+        } else {
+            trace("gen: gpu-info device=" + std::to_string(gpu.device) + " sm=" +
+                  std::to_string(gpu.sm_count) + " tiers=" + std::to_string(gpu.tiers.size()) +
+                  " carry=" + std::to_string(gpu.carry_bits));
+        }
+    }
+
+    const GenResult r = generate(gen_input_, gpu, opt);
+    if (!r.ok) {
+        gen_status_ = r.error;
+        gen_warnings_.clear();
+        for (const std::string &e : r.parse_errors) gen_warnings_ += e + "\n";
+        trace("gen: preview failed: " + r.error);
+        return;
+    }
+
+    gen_text_ = r.text;
+    gen_lines_ = 0;
+    for (const GenSegment &s : r.segments) gen_lines_ += static_cast<int>(s.lines.size());
+    gen_segments_ = static_cast<int>(r.segments.size());
+    gen_duplicates_ = r.duplicates;
+    gen_read_ = r.read;
+    gen_skipped_ = r.skipped_comment + r.skipped_other + r.skipped_unknown;
+    gen_target_ = genWorktodoPath();
+    gen_warnings_.clear();
+    for (const std::string &e : r.parse_errors) gen_warnings_ += e + "\n";
+    for (const std::string &w : r.warnings) gen_warnings_ += w + "\n";
+
+    // The preview is only valid for THIS state of the target file: apply re-validates it.
+    const bool exists = stamp_file(gen_target_, gen_stamp_);
+    gen_has_preview_ = true;
+
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "gen: preview segments=%d lines=%d read=%d skipped=%d dup=%d target_exists=%d",
+                  gen_segments_, gen_lines_, gen_read_, gen_skipped_, gen_duplicates_,
+                  exists ? 1 : 0);
+    trace(buf);
+    gen_status_ = loc_.t("gen", "preview_ready");
+}
+
+void App::gen_apply() {
+    if (!gen_has_preview_ || gen_text_.empty()) {
+        gen_status_ = loc_.t("gen", "no_preview");
+        trace("gen: apply refused (no preview)");
+        return;
+    }
+    std::string err;
+    size_t bytes = 0;
+    if (!apply_append(gen_target_, gen_text_, gen_stamp_, err, &bytes)) {
+        gen_status_ = err;
+        trace("gen: apply failed reason=" + err);
+        return;
+    }
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "gen: applied bytes=%zu target=%s", bytes, gen_target_.c_str());
+    trace(buf);
+    gen_status_ = loc_.t("gen", "applied");
+    // Re-stamp: a second click must be preceded by a new preview (the queue may have
+    // consumed lines in the meantime).
+    stamp_file(gen_target_, gen_stamp_);
+    gen_has_preview_ = false;
+}
+
+void App::draw_gen_panel() {
+    // A docked panel that is not the selected tab of its node is SKIPPED by ImGui: Begin()
+    // returns false, items are not laid out, and GetItemRectSize() reports stale numbers.
+    // Everything (including the geometry trace the tests read) therefore happens only when the
+    // tab is really visible. `[GUI] start_tab = gen` makes it the selected tab at startup.
+    const bool visible = ImGui::Begin((loc_.t("gen", "title") + "###gen").c_str());
+    if (!visible) {
+        // A hidden tab reports no geometry, so the trace that the tests read cannot exist.
+        // Say why (once every ~2 s) instead of leaving a silent hole -- that is how the
+        // "start_tab selected but the panel never appeared" case was found (2026-09-29).
+        if (frame_counter_ % 120 == 0) {
+            if (const ImGuiWindow *gw = ImGui::FindWindowByName("###gen")) {
+                char dbg[192];
+                std::snprintf(dbg, sizeof(dbg),
+                              "gen: panel hidden (docked=%d node_selected=%u my_tab=%u)",
+                              gw->DockNode != nullptr ? 1 : 0,
+                              gw->DockNode != nullptr ? gw->DockNode->SelectedTabId : 0u,
+                              gw->TabId);
+                trace(dbg);
+            } else {
+                trace("gen: panel window does not exist yet");
+            }
+        }
+        ImGui::End();
+        return;
+    }
+    if (start_tab_id_ == "###gen" && !start_tab_applied_) {
+        start_tab_applied_ = true;         // the wanted tab really is on screen now
+        trace("layout: start_tab is visible: ###gen");
+    }
+
+    // The widget's char buffer is refreshed only when the model changed from outside
+    // (a loaded file); while the user types, ImGui's own state is authoritative and the
+    // model is updated below from the buffer.
+    if (!gen_input_sync_) {
+        gen_input_buf_.assign(gen_input_.begin(), gen_input_.end());
+        gen_input_buf_.push_back('\0');
+        gen_input_sync_ = true;
+    }
+
+    // ---- input -----------------------------------------------------------------------
+    ImGui::TextDisabled("%s", loc_.t("gen", "paste_hint").c_str());
+    if (ImGui::Button(loc_.t("gen", "load_file").c_str())) {
+        std::string path = gen_input_path_;
+        if (browse_for_file(path, loc_.t("gen", "load_file"),
+                            "Assignments (*.txt;*.csv)\0*.txt;*.csv\0All files\0*.*\0\0")) {
+            std::ifstream in(path, std::ios::binary);
+            if (in) {
+                std::ostringstream ss;
+                ss << in.rdbuf();
+                gen_input_ = ss.str();
+                gen_input_path_ = path;
+                gen_input_sync_ = false;      // refresh the widget's char buffer
+                gen_status_ = path;
+                trace("gen: loaded input " + path);
+            } else {
+                gen_status_ = "cannot read " + path;
+                trace("gen: cannot read input " + path);
+            }
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", gen_input_path_.empty() ? "-" : gen_input_path_.c_str());
+
+    ImGui::InputTextMultiline("##gen_input", gen_input_buf_.data(), gen_input_buf_.size(),
+                              ImVec2(-1.0f, 120.0f));
+    gen_input_ = gen_input_buf_.empty() ? std::string() : std::string(gen_input_buf_.data());
+    // ---- options ---------------------------------------------------------------------
+    ImGui::Checkbox(loc_.t("gen", "use_recommended").c_str(), &gen_use_recommended_);
+    ImGui::SameLine();
+    // `blocks/SM` box. `kBlocksStep` MUST stay 0: ImGui reserves two GetFrameHeight() wide step
+    // buttons INSIDE the item width, so at 150 % DPI they ate ~63 px of an 80 px box and the
+    // value was invisible ("没有宽度，无法显示数字", 2026-09-29). With step 0 the whole box edits
+    // the number, and the two traced widths below (frame / editable) let a test catch a
+    // regression to a non-zero step.
+    const int kBlocksStep = 0;
+    const std::string blocks_label = loc_.t("gen", "blocks_per_sm");
+    ImGui::SetNextItemWidth(90.0f);
+    ImGui::InputInt(blocks_label.c_str(), &gen_blocks_per_sm_, kBlocksStep, 0);
+    if (gen_blocks_per_sm_ < 1) gen_blocks_per_sm_ = 1;
+    if (gen_blocks_per_sm_ > 64) gen_blocks_per_sm_ = 64;
+    // GetItemRectSize() covers the frame AND the label drawn next to it; the frame is what the
+    // number is edited in.
+    const float blocks_box_w = ImGui::GetItemRectSize().x - ImGui::CalcTextSize(blocks_label.c_str()).x -
+                               ImGui::GetStyle().ItemInnerSpacing.x;
+    const float blocks_edit_w = blocks_box_w -
+                                ((kBlocksStep != 0) ? 2.0f * ImGui::GetFrameHeight() : 0.0f);
+    ImGui::SameLine();
+    ImGui::Checkbox(loc_.t("gen", "dedup").c_str(), &gen_dedup_);
+
+    // Save pattern + sort field: two short text boxes.
+    {
+        char pattern[128];
+        std::snprintf(pattern, sizeof(pattern), "%s", gen_save_pattern_.c_str());
+        ImGui::SetNextItemWidth(200.0f);
+        if (ImGui::InputText(loc_.t("gen", "save_pattern").c_str(), pattern, sizeof(pattern))) {
+            gen_save_pattern_ = pattern;
+        }
+        char sortf[64];
+        std::snprintf(sortf, sizeof(sortf), "%s", gen_sort_by_.c_str());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.0f);
+        if (ImGui::InputText(loc_.t("gen", "sort_by").c_str(), sortf, sizeof(sortf))) {
+            gen_sort_by_ = sortf;
+        }
+    }
+
+    // Target GPU: the devices the ini's workers use (the recommendation depends on it).
+    {
+        std::vector<int> devices;
+        for (const WorkerView &w : workers_) {
+            if (std::find(devices.begin(), devices.end(), w.device) == devices.end()) {
+                devices.push_back(w.device);
+            }
+        }
+        std::sort(devices.begin(), devices.end());
+        if (devices.empty()) devices.push_back(0);
+        if (std::find(devices.begin(), devices.end(), gen_target_device_) == devices.end()) {
+            gen_target_device_ = devices.front();
+        }
+        std::string current = "GPU " + std::to_string(gen_target_device_);
+        ImGui::SetNextItemWidth(200.0f);
+        if (ImGui::BeginCombo(loc_.t("gen", "target_device").c_str(), current.c_str())) {
+            for (int d : devices) {
+                const std::string label = "GPU " + std::to_string(d);
+                if (ImGui::Selectable(label.c_str(), d == gen_target_device_)) {
+                    gen_target_device_ = d;
+                    gen_has_preview_ = false;      // the recommendation is device specific
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    // ---- actions: generate and apply are deliberately SEPARATE ---------------------
+    if (ImGui::Button(loc_.t("gen", "preview").c_str())) gen_make_preview();
+    ImGui::SameLine();
+    if (!gen_has_preview_) ImGui::BeginDisabled();
+    if (ImGui::Button(loc_.t("gen", "apply").c_str())) gen_apply();
+    if (!gen_has_preview_) ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", loc_.t("gen", "target").c_str());
+    ImGui::SameLine();
+    ImGui::Text("%s", genWorktodoPath().c_str());
+
+    if (!gen_status_.empty()) {
+        ImGui::TextWrapped("%s", gen_status_.c_str());
+    }
+
+    // ---- preview ---------------------------------------------------------------------
+    if (gen_has_preview_) {
+        ImGui::Separator();
+        ImGui::Text("%s: %d, %s: %d, %s: %d, (%s %d)",
+                    loc_.t("gen", "col_lines").c_str(), gen_lines_,
+                    loc_.t("gen", "col_segments").c_str(), gen_segments_,
+                    loc_.t("gen", "col_dup").c_str(), gen_duplicates_,
+                    loc_.t("gen", "col_skipped").c_str(), gen_skipped_);
+        std::string view = gen_text_;
+        if (view.size() > 20000) view = view.substr(0, 20000) + "\r\n... (truncated)";
+        view.push_back('\0');
+        ImGui::InputTextMultiline("##gen_preview", view.data(), view.size(),
+                                  ImVec2(-1.0f, 200.0f), ImGuiInputTextFlags_ReadOnly);
+    }
+
+    if (!gen_warnings_.empty()) {
+        ImGui::Separator();
+        ImGui::TextDisabled("%s", loc_.t("gen", "errors").c_str());
+        std::string view = gen_warnings_;
+        view.push_back('\0');
+        ImGui::InputTextMultiline("##gen_warn", view.data(), view.size(),
+                                  ImVec2(-1.0f, 70.0f), ImGuiInputTextFlags_ReadOnly);
+    }
+
+    ImGui::TextDisabled("%s", loc_.t("gen", "recommended_note").c_str());
+
+    // One trace line per state change so a test can assert the panel's numbers AND that the
+    // controls are wide enough to show their values (the blocks/SM box was unusable once:
+    // 2026-09-29, see the InputInt call above). Not on frame 0/1: the panel has no size yet
+    // and GetItemRectSize() reports a stretched item there.
+    if (frame_counter_ >= 2) {
+        char buf[384];
+        std::snprintf(buf, sizeof(buf),
+                      "gen: panel preview=%d lines=%d segments=%d blocks_box_w=%.0f blocks_edit_w=%.0f blocks_per_sm=%d target=%s",
+                      gen_has_preview_ ? 1 : 0, gen_lines_, gen_segments_, blocks_box_w,
+                      blocks_edit_w, gen_blocks_per_sm_, genWorktodoPath().c_str());
+        if (buf != gen_trace_last_) {
+            gen_trace_last_ = buf;
+            trace(buf);
+        }
+    }
+    // The panel is visible for exactly one frame bundle per change, so the trace above is the
+    // measurement a test can trust: `blocks_box_w` must be a real input width (see the
+    // InputInt call), and `target` must be the resolved file, never a doubled path.
+    ImGui::End();
 }
 
 void App::draw_workers_table() {

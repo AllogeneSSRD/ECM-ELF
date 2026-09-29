@@ -45,6 +45,7 @@
 #include "opencl_ecm_log.h"
 #include "ecm_queue_config.h"
 #include "ecm_worktodo.h"
+#include "p95_transfer.h"           /* finished task -> Prime95 worktodo.add (D4/§13) */
 #include "ecm_edwards_cpu.h"        /* Edwards (Atkin-Morain) stage-1 CPU path */
 #include "ecm_mont_cpu.h"           /* Suyama-sigma Montgomery stage-1 (scalar mpn) */
 #include "simd_mont_curve.h"        /* Suyama-sigma Montgomery stage-1 (8-lane IFMA) */
@@ -722,6 +723,11 @@ static void print_ecm_usage(const char *prog) {
               << "  --special-mult <path>  special_mult (R=2^32) kernel path (OpenCL only)\n"
               << "  --showkernel         List available " << ecm_backend_name()
               << " kernel paths and exit\n"
+              << "  --gpu-info           Report the device this build would use and, per kernel\n"
+              << "                       tier, the curves a full GPU needs; no curve is run and\n"
+              << "                       no file is written. Honours -d and --gpu-param\n"
+              << "  --bits <n>           With --gpu-info: only the tier the kernel would pick\n"
+              << "                       for an N of n bits (default: every tier of this build)\n"
               << "  -h, --help           Show this help and exit\n"
               << "\nRuntime tuning (kebab-case; replaces former environment variables):\n"
               << " Device / operators:\n"
@@ -2941,6 +2947,24 @@ static std::string build_n_expr(const std::string &k, const std::string &b,
     return e;
 }
 
+/* A value for the machine-readable `p95_add:` notice lines. The GUI parses them, so a
+   free-text reason (or a path with spaces) is quoted; the only escape is `\"` for a quote
+   that belongs to the text, plus newlines become spaces -- so a Windows path stays
+   readable in the log pane. A value must never end with a lone backslash (it would make
+   the closing quote ambiguous), hence the final doubling. Documented in
+   src/gui/log_parse.{h,cpp}, which unescapes exactly this way. */
+static std::string p95_quote(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        if (c == '"') { out += '\\'; out += c; }
+        else if (c == '\r' || c == '\n') out += ' ';
+        else out += c;
+    }
+    if (!out.empty() && out.back() == '\\') out += '\\';
+    return out;
+}
+
 // Run one already-parsed queue task (ECM2= or ECMSTAGE2=), report factors, and
 // advance the worktodo file. Returns true to keep processing, false to abort
 // the queue (backend prepare failed).
@@ -2953,7 +2977,8 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                           const Stage1RunOptions &base_opt,
                           const std::string &exe_dir, const std::string &sync1,
                           const std::string &sync2, bool full_sync, long long marker,
-                          int *processed) {
+                          int *processed,
+                          const P95TransferConfig *p95) {
     Stage1RunOptions opt = base_opt;
     if (sigma_fixed) {
         opt.sigma_fixed = true;
@@ -3044,10 +3069,109 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     }
 
     ecm_sync_save_files(exe_dir, sync1, sync2, full_sync, marker);
+
+    /* ── Prime95 handoff (docs/DEV_ECM_GUI.md §18) ──────────────────────────────────
+       The task is finished and its .save is synchronized, so Prime95's stage 2 can take
+       it from worktodo.add. The line goes over VERBATIM -- the AID and the known-factors
+       field are what let Prime95 report the eventual factor under the right assignment --
+       and a handoff failure NEVER fails the task: the line is parked and re-delivered
+       with the next successful delivery, and the GUI shows a red notice meanwhile.
+       This deliberately runs even when a factor was found: stage 2 still has to run the
+       GCD and report, and we cannot submit factors ourselves. */
+    if (p95 != nullptr && !p95->worktodo_path.empty()) {
+        const P95TransferResult tr = p95_transfer_deliver(*p95, line);
+        if (!tr.ok) {
+            ecm_ts_fprintf(stdout,
+                           "p95_add: pending worker=%d lines=%zu file=\"%s\" error=\"%s\"\n",
+                           tr.worker, tr.pending_left, tr.add_path.c_str(),
+                           p95_quote(tr.error).c_str());
+        } else if (!tr.note.empty()) {
+            ecm_ts_fprintf(stdout,
+                           "p95_add: warn worker=%d added=%zu pending_delivered=%zu "
+                           "file=\"%s\" note=\"%s\"\n",
+                           tr.worker, tr.added, tr.pending_delivered, tr.add_path.c_str(),
+                           p95_quote(tr.note).c_str());
+        } else {
+            ecm_ts_fprintf(stdout,
+                           "p95_add: ok worker=%d added=%zu pending_delivered=%zu file=\"%s\"\n",
+                           tr.worker, tr.added, tr.pending_delivered, tr.add_path.c_str());
+        }
+    }
+
     if (processed) {
         (*processed)++;
     }
     return true;
+}
+
+/* ── D4: --gpu-info ───────────────────────────────────────────────────────────────
+   Reports what the linked backend would do, as machine-readable `key=value` text:
+
+     gpu_info=1               (or gpu_info=not_applicable on the OpenCL build)
+     backend=<name>  device=<i>  name=<gpu>  sm_count=<n>  cc=<major>.<minor>
+     gpu_param=<0|2|3>  fold=<0|1>  carry_bits=<n>  picked=<0|1>  tier_count=<n>
+     ini=<path|->  worker=<n>
+     tier bits=<n> tpb=<n> tpi=<n> ipb=<n> blocks_per_sm=<n> blocks_min=<n>
+          curves_min=<n> blocks_wave=<n> curves_wave=<n>
+          [fold_blocks_min=<n> fold_curves_min=<n>]
+
+   The leading `tier` token (the only token without an '=') is what marks a tier line,
+   and `curves_wave` is the number the run path itself names when it suggests a
+   `gpucurves` that keeps whole waves: blocks_per_sm * sm_count * (tpb / tpi).
+
+   Zero side effects: no kernel launch, no checkpoint, no log file, no ini creation --
+   it is safe to ask while another worker is computing. Exit code 0 for the
+   "not applicable" answer too (asking is not an error); 1 only for a real failure
+   (unknown -d, --bits too large for any tier, bad --gpu-param). */
+static int print_gpu_info(const char *ini_used, int worker, int device_index,
+                          int gpu_param, uint32_t want_bits) {
+    ecm_backend_gpu_info info;
+    const char *err = nullptr;
+    const int rc = ecm_backend_query_gpu(device_index, gpu_param, want_bits, &info, &err);
+
+    if (rc == ECM_BACKEND_QUERY_NOT_APPLICABLE) {
+        fprintf(stdout, "gpu_info=not_applicable\nbackend=%s\nreason=%s\n",
+                ecm_backend_name(), (err != nullptr) ? err : "not applicable");
+        fflush(stdout);
+        return 0;
+    }
+    if (rc != ECM_BACKEND_QUERY_OK) {
+        fprintf(stderr, "gpu_info=error\ngpu_info_error=%s\n",
+                (err != nullptr) ? err : "unknown error");
+        fflush(stderr);
+        return 1;
+    }
+
+    fprintf(stdout, "gpu_info=1\n");
+    fprintf(stdout, "backend=%s\n", ecm_backend_name());
+    fprintf(stdout, "device=%d\n", info.device_index);
+    fprintf(stdout, "name=%s\n", info.name);
+    fprintf(stdout, "sm_count=%d\n", info.sm_count);
+    fprintf(stdout, "cc=%d.%d\n", info.cc_major, info.cc_minor);
+    fprintf(stdout, "gpu_param=%d\n", info.gpu_param);
+    fprintf(stdout, "fold=%d\n", info.fold);
+    fprintf(stdout, "carry_bits=%u\n", info.carry_bits);
+    fprintf(stdout, "picked=%d\n", info.picked);
+    fprintf(stdout, "tier_count=%d\n", info.tier_count);
+    fprintf(stdout, "ini=%s\n", (ini_used != nullptr && ini_used[0] != '\0') ? ini_used : "-");
+    fprintf(stdout, "worker=%d\n", worker);
+
+    for (int i = 0; i < info.tier_count; ++i) {
+        const ecm_backend_tier &t = info.tiers[i];
+        fprintf(stdout,
+                "tier bits=%u tpb=%u tpi=%u ipb=%u blocks_per_sm=%u blocks_min=%u "
+                "curves_min=%llu blocks_wave=%u curves_wave=%llu",
+                t.bits, t.tpb, t.tpi, t.ipb, t.blocks_per_sm, t.blocks_min,
+                (unsigned long long)t.curves_min, t.blocks_wave,
+                (unsigned long long)t.curves_wave);
+        if (info.fold != 0) {
+            fprintf(stdout, " fold_blocks_min=%u fold_curves_min=%llu",
+                    t.fold_blocks_min, (unsigned long long)t.fold_curves_min);
+        }
+        fprintf(stdout, "\n");
+    }
+    fflush(stdout);
+    return 0;
 }
 
 static int run_queue_manager(const std::string &ini_path, int worker) {
@@ -3088,6 +3212,10 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     opencl_ecm_set_work_dir(exe_dir.c_str());
 
     ecm_log_set_progress_color(cfg.progress_color.c_str());
+    /* Progress cadence for the log FILE only (ini progress_log_seconds): a task running for
+       hours would otherwise write a progress line into screen.log every 200 ms. The pipe
+       keeps its cadence, and the 100% line always lands in the file. */
+    ecm_log_set_progress_log_seconds(cfg.progress_log_seconds);
 
     // Open the mirror log (screen.log by default).
     FILE *logf = nullptr;
@@ -3105,6 +3233,32 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     const std::string finished_path = resolve_rel_local(exe_dir, cfg.finished);
     const std::string sync1 = resolve_rel_local(exe_dir, cfg.save_sync_dir_1);
     const std::string sync2 = resolve_rel_local(exe_dir, cfg.save_sync_dir_2);
+
+    /* ── Prime95 handoff (docs/DEV_ECM_GUI.md §18, docs/DEV_ECM_WORKTODO.md §8) ─────
+       Every finished task is appended to Prime95's worktodo.add, verbatim, so Prime95's
+       stage 2 can continue it. `p95_worktodo_path` empty = the feature is off (the
+       historical behaviour: ecm_p95feeder does the Edwards .tmp handoff instead). */
+    P95TransferConfig p95cfg;
+    {
+        p95cfg.worktodo_path = resolve_rel_local(exe_dir, cfg.p95_worktodo_path);
+        p95cfg.add_workers = cfg.p95_add_workers;
+        p95cfg.pending_path = p95_transfer_pending_path(exe_dir);
+        if (!p95cfg.worktodo_path.empty()) {
+            const std::string add_path = p95_transfer_add_path(p95cfg.worktodo_path);
+            const size_t parked = p95_transfer_pending_count(p95cfg.pending_path);
+            ecm_ts_fprintf(stdout, "p95_add: ready workers=\"%s\" file=\"%s\" pending=%zu\n",
+                           p95_quote(cfg.p95_add_workers).c_str(),
+                           p95_quote(add_path).c_str(), parked);
+            if (parked > 0) {
+                /* Lines from a previous run are still waiting: the GUI must show red
+                   until a delivery succeeds and clears them. */
+                ecm_ts_fprintf(stdout,
+                               "p95_add: pending worker=0 lines=%zu file=\"%s\" "
+                               "error=\"%zu line(s) from an earlier run are still waiting\"\n",
+                               parked, p95_quote(add_path).c_str(), parked);
+            }
+        }
+    }
 
     Stage1RunOptions opt;
     /* ---- [method] one engine, resolved from the single ini key --------------- */
@@ -3282,7 +3436,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                 task.has_sigma ? task.sigma : 0, task.has_sigma,
                 /*save_name=*/"", n_expr, task.aid, line,
                 worktodo_path, finished_path, worker, opt,
-                exe_dir, sync1, sync2, full_sync, marker, &processed);
+                exe_dir, sync1, sync2, full_sync, marker, &processed, &p95cfg);
             mpz_clear(N);
             if (!cont) {
                 if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
@@ -3338,7 +3492,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             /*sigma=*/0, /*sigma_fixed=*/false,
             task.save_name, n_expr, task.aid, line,
             worktodo_path, finished_path, worker, opt,
-            exe_dir, sync1, sync2, full_sync, marker, &processed);
+            exe_dir, sync1, sync2, full_sync, marker, &processed, &p95cfg);
         mpz_clear(N);
         if (!cont) {
             if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
@@ -3383,6 +3537,7 @@ int main(int argc, char **argv){
     uint32_t fixed_sigma = 0;
     uint64_t fixed_sigma64 = 0;
     int gpu_device_index = 0;
+    bool device_set = false;        /* -d given: wins over the ini's `device` */
     int gpu_param_cli = 3;          /* --gpu-param 0|3 (0 = Suyama param0) */
     bool gpu_param_set = false;
     int sigma_param_claim = -1;     /* "-sigma i:s" -> i (gmp-ecm: selects -param i) */
@@ -3397,6 +3552,8 @@ int main(int argc, char **argv){
     std::string gpu_sub_path;
     std::string gpu_special_mult_path;
     bool show_kernels = false;
+    bool show_gpu_info = false;           // --gpu-info: report tiers/occupancy and exit
+    uint32_t gpu_info_bits = 0;           // --bits N: only the tier that N would pick (0 = all)
     std::string ini_path;
     int worker_index = 1;      // --worker N: ini + worktodo section (see the flag's parse site)
     std::string tmp_dir;                  // 本地 stage-1 落盘目录
@@ -3531,6 +3688,7 @@ int main(int argc, char **argv){
                 std::cerr << "Invalid -d value, expected >= 0" << std::endl;
                 return 1;
             }
+            device_set = true;
             continue;
         }
         if((a == "-sigma" || a == "--sigma") && i+1<argc){
@@ -3598,6 +3756,26 @@ int main(int argc, char **argv){
         }
         if(a == "--showkernel") {
             show_kernels = true;
+            continue;
+        }
+        /* --gpu-info: pure query, handled after argv is fully parsed (it needs -d and
+           --gpu-param, which may appear later on the command line). docs §D4. */
+        if(a == "--gpu-info") {
+            show_gpu_info = true;
+            continue;
+        }
+        if(a == "--bits" && i+1<argc) {
+            try {
+                const long b = std::stol(argv[++i]);
+                if (b < 0 || b > 100000000L) {
+                    std::cerr << "Invalid --bits value, expected an integer >= 0" << std::endl;
+                    return 1;
+                }
+                gpu_info_bits = (uint32_t)b;
+            } catch (...) {
+                std::cerr << "Invalid --bits value, expected an integer >= 0" << std::endl;
+                return 1;
+            }
             continue;
         }
         if(a == "-ini" && i+1<argc) {
@@ -3685,6 +3863,27 @@ int main(int argc, char **argv){
     if (show_kernels) {
         ecm_backend_print_kernels(stdout);
         return 0;
+    }
+
+    if (show_gpu_info) {
+        /* Effective settings resolve CLI > ini [Worker #N] > built-in, the same order the
+           queue path uses, so `-ini ecm.ini --gpu-info` reports what the workers will
+           actually run. The ini is read, never created (a missing one leaves the CLI
+           defaults alone and creates nothing). */
+        const std::string raw_exe_dir = get_exe_dir_local();
+        const std::string exe_dir = raw_exe_dir.empty() ? "." : raw_exe_dir;
+        std::string ini = ini_path.empty() ? (exe_dir + "/ecm.ini")
+                                           : resolve_rel_local(exe_dir, ini_path);
+        int eff_device = gpu_device_index;
+        int eff_param = gpu_param_set ? gpu_param_cli : 3;
+        const char *ini_used = nullptr;
+        EcmQueueConfig info_cfg;
+        if (ecm_queue_config_load(ini, worker_index, info_cfg)) {
+            ini_used = ini.c_str();
+            if (!device_set) eff_device = info_cfg.device;
+            if (!gpu_param_set) eff_param = info_cfg.gpu_param;
+        }
+        return print_gpu_info(ini_used, worker_index, eff_device, eff_param, gpu_info_bits);
     }
 
     if (pos.empty()) {

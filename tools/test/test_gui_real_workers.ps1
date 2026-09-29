@@ -227,7 +227,21 @@ Check "worker 1 log ends with queue done" ($log1 -match 'queue done, 1 task')
 Check "worker 2 log ends with queue done" ($log2 -match 'queue done, 1 task')
 Check "worker 1 used device 0" ($log1 -match 'device 0')
 Check "worker 2 used device 1" ($log2 -match 'device 1')
-Check "no stray ecm_cuda processes" (@(Get-Process -Name 'ecm_cuda' -ErrorAction SilentlyContinue).Count -eq 0)
+# Only the driver THIS test started counts. A production ecm_gui/ecm_cuda pair may well be
+# running on the same machine (measured 2026-09-29: it was, and an unfiltered process count
+# reported it as our stray). This test kills nothing itself -- the GUI owns its workers.
+$strayDeadline = (Get-Date).AddSeconds(10)
+while ((Get-Date) -lt $strayDeadline -and
+       @(Get-Process -Name 'ecm_cuda' -ErrorAction SilentlyContinue | Where-Object {
+             $p = ""
+             try { $p = $_.MainModule.FileName } catch { $p = "" }
+             $p -eq $EcmCuda }).Count -gt 0) {
+    Start-Sleep -Milliseconds 500
+}
+Check "no worker of ours is left behind" (@(Get-Process -Name 'ecm_cuda' -ErrorAction SilentlyContinue | Where-Object {
+        $p = ""
+        try { $p = $_.MainModule.FileName } catch { $p = "" }
+        $p -eq $EcmCuda }).Count -eq 0)
 
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)

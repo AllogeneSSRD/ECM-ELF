@@ -13,6 +13,8 @@
 #include "opencl_ecm_path_registry.h" /* opencl_ecm_print_available_kernels */
 #include "opencl_ecm_log.h"         /* ecm_ts_fprintf */
 
+#include <string.h>                 /* memset */
+
 extern "C" const char *ecm_backend_name(void) {
     return "OpenCL";
 }
@@ -30,6 +32,19 @@ extern "C" int ecm_backend_prepare(size_t n_log2, int verbose, int device_index,
     }
     return gpu_prepare_opencl(n_log2, verbose, gpu_mul_path, gpu_sqr_path,
                               gpu_add_path, gpu_sub_path, gpu_special_mult_path);
+}
+
+/* --gpu-info is a CUDA-only report (it describes CGBN container tiers and the occupancy
+   of the cubin the CUDA backend would launch; the OpenCL .cl kernels have neither).
+   Say so plainly and let the driver exit 0 -- asking a question this build cannot answer
+   is not a failure. */
+extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, uint32_t want_bits,
+                                     ecm_backend_gpu_info *out, const char **err) {
+    (void)device_index; (void)gpu_param; (void)want_bits;
+    /* Zero it so a caller that ignores the return value cannot read garbage. */
+    if (out != nullptr) memset(out, 0, sizeof(*out));
+    if (err != nullptr) *err = "not applicable to the OpenCL backend";
+    return ECM_BACKEND_QUERY_NOT_APPLICABLE;
 }
 
 extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,

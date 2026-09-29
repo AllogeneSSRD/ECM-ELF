@@ -295,6 +295,7 @@ void WorkerProc::drain(DrainedOutput &out) {
                 if (pl.queue_done) saw_queue_done_ = true;
                 if (!pl.start_line.empty()) out.last_start_line = pl.start_line;
                 if (pl.is_hit) out.hits.push_back(pl.hit);
+                if (pl.p95.valid) out.p95.push_back(pl.p95);
                 break;
             case LogKind::Raw:
             default:

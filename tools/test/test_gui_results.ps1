@@ -302,7 +302,20 @@ Check "driver key gpucurves kept" ($after -match '(?m)^gpucurves\s*=\s*8\s*$')
 Check "results_json setting kept"  ($after -match ('(?m)^results_json\s*=\s*' + [regex]::Escape($resultsJson)))
 Check "[GUI] window= written"      ($after -match '(?m)^window\s*=\s*-?\d+,-?\d+,\d+,\d+')
 Check "[GUI] dock_layout written"  ($after -match '(?m)^dock_layout\s*=\s*\S')
-Check "no stray ecm_cuda process"  (@(Get-Process -Name 'ecm_cuda' -ErrorAction SilentlyContinue).Count -eq 0)
+# Only the driver THIS test started counts: a production ecm_gui/ecm_cuda pair may well be
+# running on the same machine (measured 2026-09-29), and this test kills nothing itself.
+$strayDeadline = (Get-Date).AddSeconds(10)
+while ((Get-Date) -lt $strayDeadline -and
+       @(Get-Process -Name 'ecm_cuda' -ErrorAction SilentlyContinue | Where-Object {
+             $p = ""
+             try { $p = $_.MainModule.FileName } catch { $p = "" }
+             $p -eq $EcmCuda }).Count -gt 0) {
+    Start-Sleep -Milliseconds 500
+}
+Check "no worker of ours is left behind" (@(Get-Process -Name 'ecm_cuda' -ErrorAction SilentlyContinue | Where-Object {
+        $p = ""
+        try { $p = $_.MainModule.FileName } catch { $p = "" }
+        $p -eq $EcmCuda }).Count -eq 0)
 
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)

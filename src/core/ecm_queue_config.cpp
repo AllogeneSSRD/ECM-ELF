@@ -193,9 +193,12 @@ bool ecm_queue_config_load(const std::string &path, int worker, EcmQueueConfig &
         else if (key == "save_sync_dir_1") cfg.save_sync_dir_1 = val;
         else if (key == "save_sync_dir_2") cfg.save_sync_dir_2 = val;
         else if (key == "sync_mode") cfg.sync_mode = val;
+        else if (key == "p95_worktodo_path") cfg.p95_worktodo_path = val;
+        else if (key == "p95_add_workers") cfg.p95_add_workers = val;
         else if (key == "log_file") { cfg.log_file = val; cfg.log_file_explicit = true; }
         else if (key == "tmp_dir") cfg.tmp_dir = val;
         else if (key == "progress_color") cfg.progress_color = val;
+        else if (key == "progress_log_seconds") set_double(cfg.progress_log_seconds);
         else if (key == "verbose") set_bool(cfg.verbose);
 
         // ---- [method] -----------------------------------------------------
@@ -345,9 +348,31 @@ bool ecm_queue_config_write_default(const std::string &path) {
 "# Sync mode after each task: incremental | full.\n"
 "# 每个任务完成后的同步模式：incremental | full。\n"
 "sync_mode = incremental\n"
+"# ---------------------------------------------------------------------------\n"
+"# Prime95 handoff: where to append a finished task so Prime95's stage 2 runs it.\n"
+"# 交给 Prime95 继续做 stage 2：任务完成后把它原样追加到这里指向的 worktodo.add。\n"
+"#   p95_worktodo_path : Prime95 的 worktodo.txt（留空 = 关闭该功能）。驱动会把完成\n"
+"#                       的 ECMSTAGE2= 行原样写进同目录的 worktodo.add（保留 AID 与\n"
+"#                       已知因子），Prime95 自己取走后会删掉该文件。\n"
+"#                       由于无法自动上报因子，命中因子的任务也照样交付（stage 2 仍需\n"
+"#                       做 GCD 并上报）。缺省空 = 不交付（老行为）。\n"
+"#   p95_add_workers   : 写进哪个 [Worker #N] 段：\n"
+"#                       空 = 不写段头（Prime95 归给 worker 1）| 3 | 1,3 | 1-8 | auto\n"
+"#                       auto 读同目录 prime.txt 的 NumWorkers；worktodo.txt 里没有该段\n"
+"#                       会退回不带段头（并在日志/GUI 里给出黄色提示）；多个候选时选\n"
+"#                       当前排期最少（worktodo.txt + worktodo.add 的活动行数）的那个。\n"
+"p95_worktodo_path =\n"
+"p95_add_workers =\n"
 "# Progress-bar colour: none|red|green|yellow|blue|magenta|cyan|white|grey.\n"
 "# 进度条颜色：none|red|green|yellow|blue|magenta|cyan|white|grey。\n"
 "progress_color = cyan\n"
+"# How often a progress line may be written to log_file, in seconds:\n"
+"#   60 = default (one line per minute), 0 = no progress line in the file,\n"
+"#   negative = every line.  The console/pipe is NEVER rate-limited (the GUI tails\n"
+"#   the worker's stdout and needs ~200 ms), and the 100% line always reaches the file.\n"
+"# 进度行写入 log_file 的间隔（秒）：60=默认每分钟一行，0=文件里不写进度行，\n"
+"#   负数=每行都写。控制台/管道不受此限制（GUI 靠它显示进度），100% 那行总会写。\n"
+"progress_log_seconds = 60\n"
 "# Verbose output: true | false.\n"
 "# 详细输出：true | false。\n"
 "verbose = true\n"

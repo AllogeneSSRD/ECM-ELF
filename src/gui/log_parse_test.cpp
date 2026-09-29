@@ -181,6 +181,54 @@ int main() {
         check(!d.old_driver, "a queue-manager banner does not flag an old driver");
     }
 
+    // ---- `p95_add:` notices (Prime95 handoff, docs/DEV_ECM_GUI.md 13) -------------
+    // The four shapes the driver emits, including a path with a space and an escaped quote
+    // in the free-text reason: the strip must survive both.
+    {
+        const ParsedLine ready = parse_line(TS "p95_add: ready workers=\"1-8\" file=\"D:\\code\\GIMPS\\p95\\worktodo.add\" pending=2");
+        check(ready.p95.valid, "the ready notice is recognised");
+        check(ready.kind == LogKind::Event, "and it is an Event (it belongs in the log pane)");
+        check(ready.p95.level == P95Notice::Level::Ready, "level = ready");
+        check(ready.p95.pending_at_start == 2, "pending=2 is read", std::to_string(ready.p95.pending_at_start));
+        check(ready.p95.file == "D:\\code\\GIMPS\\p95\\worktodo.add", "the quoted path is unescaped", ready.p95.file);
+
+        const ParsedLine ok = parse_line(TS "p95_add: ok worker=2 added=1 pending_delivered=0 file=\"C:\\p95 dir\\worktodo.add\"");
+        check(ok.p95.level == P95Notice::Level::Ok, "level = ok");
+        check(ok.p95.worker == 2, "worker=2 is read", std::to_string(ok.p95.worker));
+        check(ok.p95.added == 1, "added=1 is read");
+        check(ok.p95.file == "C:\\p95 dir\\worktodo.add", "a path with a space survives", ok.p95.file);
+
+        const ParsedLine warn = parse_line(TS "p95_add: warn worker=0 added=1 pending_delivered=0 file=\"D:\\p95\\worktodo.add\" note=\"worktodo.txt has none of the [Worker #3...] sections p95_add_workers asks for; appending without a section header\"");
+        check(warn.p95.level == P95Notice::Level::Warn, "level = warn");
+        check(warn.p95.worker == 0, "worker=0 (header-less) is read");
+        check(warn.p95.note.find("without a section header") != std::string::npos,
+              "the free-text note is kept whole", warn.p95.note);
+
+        const ParsedLine pend = parse_line(TS "p95_add: pending worker=1 lines=3 file=\"D:\\p95\\worktodo.add\" error=\"worktodo.add is locked: held by another writer (waited 3000 ms)\"");
+        check(pend.p95.level == P95Notice::Level::Pending, "level = pending");
+        check(pend.p95.lines == 3, "lines=3 is read", std::to_string(pend.p95.lines));
+        check(pend.p95.error.find("locked") != std::string::npos, "the error text is kept", pend.p95.error);
+        // An escaped quote inside a value must not end it early: the driver writes \" for a
+        // quote that belongs to the text. Single backslashes are literal (a path with
+        // single backslashes needs no doubling), and a trailing \\ is one backslash.
+        const ParsedLine esc = parse_line(TS "p95_add: pending worker=0 lines=1 file=\"D:\\p95\\worktodo.add\" error=\"cannot append: \\\"bad\\\" name\"");
+        check(esc.p95.error.find("bad") != std::string::npos, "escaped quotes survive", esc.p95.error);
+        check(esc.p95.error.find("cannot append: \"bad\" name") == 0, "and the escape itself is gone", esc.p95.error);
+        // Bytes on the wire: file="D:\p95\\"  (the driver doubles a TRAILING backslash so
+        // the closing quote can never be ambiguous).
+        const ParsedLine tail = parse_line(TS "p95_add: pending worker=0 lines=1 file=\"D:\\p95\\\\\" error=\"x\"");
+        check(tail.p95.file == "D:\\p95\\", "a trailing doubled backslash is one backslash", tail.p95.file);
+        const ParsedLine unknown = parse_line(TS "p95_add: something new");
+        check(unknown.p95.valid && unknown.p95.level == P95Notice::Level::Ready,
+              "an unknown p95_add shape is still a notice (level = ready)");
+
+        // A progress line is NOT a notice, and vice versa.
+        const ParsedLine prog = parse_line(TS "GPU: [===>    ] 42.0%  100, +50 bits (~1.00 s/curve)  elapsed 1.0s  remaining 1.0s");
+        check(!prog.p95.valid, "a progress line is not a p95 notice");
+        check(prog.kind == LogKind::Progress, "and it is still a progress line");
+        check(!ok.progress.valid, "a notice is not mistaken for progress");
+    }
+
     std::printf("\npassed: %d   failed: %d\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

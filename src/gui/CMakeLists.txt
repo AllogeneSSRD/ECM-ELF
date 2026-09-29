@@ -38,13 +38,14 @@ add_executable(ecm_gui WIN32
     results.cpp
     worker_proc.cpp
     worker_selftest.cpp
+    worktodo_gen.cpp
     ${ECM_GUI_SOURCES})
 target_include_directories(ecm_gui PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${ECM_IMGUI_DIR})
 target_link_libraries(ecm_gui PRIVATE
     ecm_gui_imgui
-    d3d11 dxgi d3dcompiler dwmapi shell32)
+    d3d11 dxgi d3dcompiler dwmapi shell32 comdlg32)
 target_compile_options(ecm_gui PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui PROPERTIES
     CXX_STANDARD 17
@@ -103,3 +104,12 @@ target_include_directories(ecm_gui_log_parse_test PRIVATE ${CMAKE_CURRENT_SOURCE
 target_compile_options(ecm_gui_log_parse_test PRIVATE /W3 /utf-8)
 set_target_properties(ecm_gui_log_parse_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 ecm_tool_output_root(ecm_gui_log_parse_test)
+
+# worktodo generator (M6 scope A). The unit test also has an --emit mode so
+# tools/test/test_gui_generator.ps1 can compare its output byte-for-byte with
+# tools/ecm_worktodo/ecm.py.
+add_executable(ecm_gui_gen_test gen_test.cpp worktodo_gen.cpp)
+target_include_directories(ecm_gui_gen_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(ecm_gui_gen_test PRIVATE /W3 /utf-8)
+set_target_properties(ecm_gui_gen_test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+ecm_tool_output_root(ecm_gui_gen_test)

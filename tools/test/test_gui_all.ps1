@@ -96,6 +96,11 @@ $tests = @(
     @{ name = 'results-e2e';     kind = 'script'; target = 'test_gui_results.ps1';        exe = 'gui';    cuda = $true; gpu = $true;  what = 'results dual file, two real runs' }
     @{ name = 'hit-fields';      kind = 'script'; target = 'test_hit_fields.ps1';         exe = '';       cuda = $true; gpu = $true;  what = 'D3 hit line fields (real driver, queue mode)' }
     @{ name = 'worker-sections'; kind = 'script'; target = 'test_worker_sections.ps1';    exe = 'driver'; gpu = $true;  what = 'D1/D2 ini + worktodo [Worker #N] sections' }
+    @{ name = 'gpu-info';        kind = 'script'; target = 'test_gpu_info.ps1';           exe = 'driver'; gpu = $true;  what = 'D4: --gpu-info tiers agree with the run path' }
+    @{ name = 'progress-cadence';kind = 'script'; target = 'test_progress_cadence.ps1';   exe = 'driver'; gpu = $true;  what = 'pipe every line, log file every N s, 100% always' }
+    @{ name = 'p95-transfer';    kind = 'script'; target = 'test_p95_transfer.ps1';       exe = 'driver'; gpu = $true;  what = 'finished task -> Prime95 worktodo.add (routing, lock, pending)' }
+    @{ name = 'p95-notice';      kind = 'script'; target = 'test_gui_p95_notice.ps1';    exe = 'gui';    cuda = $true; gpu = $true; what = 'red/yellow/green/grey notice strip for the handoff' }
+    @{ name = 'generator';       kind = 'script'; target = 'test_gui_generator.ps1';     exe = 'gui';    cuda = $true; gpu = $true; what = 'M6: generator vs ecm.py byte-for-byte + panel' }
 )
 
 if ($List) {

@@ -68,6 +68,74 @@ bool contains(const std::string &s, const char *needle) {
     return s.find(needle) != std::string::npos;
 }
 
+// ---- `p95_add:` notice fields -------------------------------------------------------
+// "… worker=3 added=1 file=\"D:\\p95 dir\\worktodo.add\" note=\"free text\"" -- every
+// value except a number is quoted, so a path with spaces or a free-text reason cannot be
+// mistaken for another key (the driver escapes `"` and `\` inside the value).
+bool kv_pos(const std::string &s, const char *key, std::size_t &val_start) {
+    const std::string pat = std::string(" ") + key + "=";
+    const std::size_t pos = s.find(pat);
+    if (pos == std::string::npos) return false;
+    val_start = pos + pat.size();
+    return true;
+}
+
+bool read_kv_int(const std::string &s, const char *key, long long &out) {
+    std::size_t v = 0;
+    if (!kv_pos(s, key, v)) return false;
+    const char *p = s.c_str() + v;
+    if (*p == '"') return false;             // quoted -> it is a string, not a number
+    char *end = nullptr;
+    const long long n = std::strtoll(p, &end, 10);
+    if (end == p) return false;
+    out = n;
+    return true;
+}
+
+bool read_kv_str(const std::string &s, const char *key, std::string &out) {
+    std::size_t v = 0;
+    if (!kv_pos(s, key, v)) return false;
+    if (v >= s.size() || s[v] != '"') return false;
+    std::string text;
+    for (std::size_t i = v + 1; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c == '\\' && i + 1 < s.size() && (s[i + 1] == '"' || s[i + 1] == '\\')) {
+            // \" -> a quote in the text, \\ -> one backslash (see p95_quote in
+            // ecm_driver.cpp). Any other \x stays as it is, so a Windows path with single
+            // backslashes needs no doubling and reads normally in the log pane.
+            text += s[i + 1];
+            ++i;
+            continue;
+        }
+        if (c == '"') { out = text; return true; }
+        text += c;
+    }
+    return false;                            // unterminated: keep the caller's default
+}
+
+// One `p95_add:` line -> a notice. Returns false when the line is not one.
+bool parse_p95_notice(const std::string &p, P95Notice &out) {
+    if (!starts_with(p, "p95_add:")) return false;
+    const std::string rest = p.substr(8);
+
+    out.valid = true;
+    if (starts_with(rest, " ok")) out.level = P95Notice::Level::Ok;
+    else if (starts_with(rest, " warn")) out.level = P95Notice::Level::Warn;
+    else if (starts_with(rest, " pending")) out.level = P95Notice::Level::Pending;
+    else out.level = P95Notice::Level::Ready;
+
+    long long n = 0;
+    if (read_kv_int(rest, "worker", n)) out.worker = static_cast<int>(n);
+    if (read_kv_int(rest, "added", n)) out.added = n;
+    if (read_kv_int(rest, "pending_delivered", n)) out.pending_delivered = n;
+    if (read_kv_int(rest, "lines", n)) out.lines = n;
+    if (read_kv_int(rest, "pending", n)) out.pending_at_start = n;
+    read_kv_str(rest, "file", out.file);
+    read_kv_str(rest, "note", out.note);
+    read_kv_str(rest, "error", out.error);
+    return true;
+}
+
 } // namespace
 
 std::string strip_ansi(const std::string &s) {
@@ -207,6 +275,18 @@ ParsedLine parse_line(const std::string &line) {
     // NOTE: recorded here and turned into an Error at the very end -- the classification
     // chain below ends with `out.kind = LogKind::Raw`, so setting it here would be lost.
     if (contains(p, "No input number on stdin")) out.old_driver = true;
+
+    // ---- p95_add: notices (Prime95 handoff, docs/DEV_ECM_GUI.md 18) ----------
+    // Classified as an Event so the notice also reaches the log pane; the notice strip
+    // (App::draw_p95_notice) aggregates the fields.
+    {
+        P95Notice notice;
+        if (parse_p95_notice(p, notice)) {
+            out.p95 = notice;
+            out.kind = LogKind::Event;
+            return out;
+        }
+    }
 
     // ---- progress ----------------------------------------------------------
     const bool gpu_progress = starts_with(p, "GPU: [");
