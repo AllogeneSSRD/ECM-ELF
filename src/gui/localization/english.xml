@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  ecm_gui UI strings - ENGLISH IS THE BASELINE.
+  Every <Item id="..."> here must exist in every other language file; a missing key
+  falls back to this file, so a partial translation still runs.
+  See localization/README.md for the contribution workflow.
+-->
+<EcmGui>
+  <Native-Langue name="English" filename="english.xml" version="1">
+
+    <Panel id="menu">
+      <Item id="file"              name="File"/>
+      <Item id="view"              name="View"/>
+      <Item id="language"          name="Language"/>
+      <Item id="tools"             name="Tools"/>
+      <Item id="open_ini"          name="Open ecm.ini folder"/>
+      <Item id="open_localization" name="Open localization folder"/>
+      <Item id="save_settings"     name="Save layout &amp; settings now"/>
+      <Item id="reload_localization" name="Reload localization"/>
+      <Item id="start_all"         name="Start all workers"/>
+      <Item id="stop_all"          name="Stop all workers"/>
+      <Item id="quit"              name="Quit"/>
+    </Panel>
+
+    <Panel id="workers">
+      <Item id="title"        name="Workers"/>
+      <Item id="col_state"    name="State"/>
+      <Item id="col_gpu"      name="GPU"/>
+      <Item id="col_name"     name="Name"/>
+      <Item id="col_task"     name="Task"/>
+      <Item id="col_progress" name="Progress"/>
+      <Item id="col_speed"    name="Speed"/>
+      <Item id="col_eta"      name="ETA"/>
+      <Item id="col_hits"     name="Hits"/>
+      <Item id="col_actions"  name="Actions"/>
+      <Item id="waiting_progress" name="waiting for the first progress line"/>
+      <Item id="resume_note" name="Resumed from a checkpoint. The driver prints its next progress line only after the next batch milestone (or at most once every 10 s with the current build)."/>
+      <Item id="start"        name="Start"/>
+      <Item id="stop"         name="Stop"/>
+      <Item id="start_all"    name="Start all"/>
+      <Item id="stop_all"     name="Stop all"/>
+      <Item id="exe"          name="worker executable:"/>
+      <Item id="show_raw"     name="raw output"/>
+      <Item id="speed_history" name="curves/s"/>
+      <Item id="progress_history" name="progress %"/>
+      <Item id="m2_note"      name="One worker = one ecm_cuda.exe process. Crashes restart after 5 s; three crashes in five minutes stop the worker (breaker). Closing the GUI stops them all."/>
+      <Item id="log_pane"     name="Output"/>
+      <Item id="log_file"     name="log file"/>
+      <Item id="open_saves"   name="Open saves folder"/>
+      <Item id="no_output"    name="No output yet."/>
+      <Item id="m1_note"      name="Config-driven list. Worker processes, live output and restart/breaker logic arrive in M2 (docs/DEV_ECM_GUI.md)."/>
+      <Item id="duplicate_device" name="Another worker uses the same GPU device."/>
+      <Item id="state_stopped"    name="Stopped"/>
+      <Item id="state_starting"   name="Starting"/>
+      <Item id="state_running"    name="Running"/>
+      <Item id="state_restarting" name="Restarting"/>
+      <Item id="state_error"      name="Error"/>
+      <Item id="state_queue_empty" name="Queue empty"/>
+    </Panel>
+
+    <Panel id="gpu">
+      <Item id="title"    name="GPU"/>
+      <Item id="util"     name="Utilisation"/>
+      <Item id="power"    name="Power"/>
+      <Item id="clock_sm" name="SM clock"/>
+      <Item id="clock_mem" name="VRAM clock"/>
+      <Item id="temp"     name="Temperature"/>
+      <Item id="memory"   name="VRAM"/>
+      <Item id="throttle" name="Throttle"/>
+      <Item id="cores"    name="CUDA cores"/>
+      <Item id="poll"     name="NVML poll"/>
+      <Item id="refresh"  name="UI refresh"/>
+      <Item id="m4_note"  name="Sampled through NVML on a background thread. Readings above 3x the enforced power limit are a known driver quirk and stay visible as-is."/>
+      <Item id="nvml_missing" name="NVML not available - GPU panel disabled."/>
+      <Item id="total_power" name="Total power"/>
+    </Panel>
+
+    <Panel id="detail">
+      <Item id="title"            name="Detail"/>
+      <Item id="effective_config" name="Effective configuration (section overrides the global keys):"/>
+      <Item id="task_line"        name="worktodo line"/>
+      <Item id="command_line"     name="command line"/>
+    </Panel>
+
+    <Panel id="results">
+      <Item id="title"       name="Results"/>
+      <Item id="rebuild"     name="Rebuild results.txt from the JSONL"/>
+      <Item id="open_folder" name="Open results folder"/>
+      <Item id="bits"        name="bits"/>
+      <Item id="empty"       name="No factors yet. Hits from every worker land here."/>
+      <Item id="json_file"   name="raw record"/>
+      <Item id="factor"      name="Factor"/>
+      <Item id="curves"      name="Curves"/>
+      <Item id="sigmas"      name="Sigmas"/>
+      <Item id="hits"        name="Hits"/>
+      <Item id="first_seen"  name="First seen"/>
+    </Panel>
+
+  </Native-Langue>
+</EcmGui>

@@ -19,6 +19,9 @@ tools/
 └── ecm_worktodo/ worktodo 管线生成器（Python，Windows 原生：分配行 → stage1 队列 + P95 行）
 ```
 
+> **`ecm_gui` 图形前端不在 `tools/` 下**：它是 `src/gui/`（与 `src/core`、`src/cuda` 平级的），
+> `localization/` 也在 `src/gui/localization/`。见 `docs/DEV_ECM_GUI.md`。
+
 ## CMake 布局：`ecm` / `ecm_cuda` 在根，其余都是 tools
 
 根 `CMakeLists.txt` 现在只定义**两个交付物** `ecm`（OpenCL）与 `ecm_cuda`（CUDA/CGBN）
@@ -31,6 +34,7 @@ tools/
 | `tools/test/CMakeLists.txt` | `main`、`sliced_cios_test`、`sliced_cios_8192_test` |
 | `tools/disasm/CMakeLists.txt` | `opencl_asm_selftest`、`opencl_mont_isa_export`、`opencl_addsub_isa_export` |
 | `tools/p95feeder/CMakeLists.txt` | `ecm_p95feeder` |
+| `src/gui/CMakeLists.txt` | `ecm_gui`（**仅 Windows**；`third_party/imgui/imgui.h` 缺失或 `-DECM_BUILD_GUI=OFF` 时自动跳过） |
 | 根 `CMakeLists.txt` | `ecm`、`ecm_cuda`、`cgbn_opencl`、`opencl_ecm_entry` |
 
 * **`-DECM_BUILD_TOOLS=OFF`**：不配置任何工具目标（configure 更快、构建树更小）；
@@ -67,6 +71,18 @@ tools/
 |---|---|
 | `p95_worktodo_test.cpp` | Prime95 worktodo/prime.txt 解析与写回（35 项断言） |
 | `ecm_worktodo_test.cpp` | `ECM=`/`ECM2=`/`ECMSTAGE2=` 行解析与 N 计算 |
+| `worktodo_sections_test.cpp` | **worktodo 段化**（`[Worker #N]`，D2）：段头语法、section-aware `first_line`/`advance`（只动自己段、段头与注释原样保留）、`list_workers`；**带断言、失败非零退出**（`tools\build_tool.bat tools\test\worktodo_sections_test.cpp src\core\ecm_worktodo.cpp`）|
+| `test_worker_sections.ps1` | **D1+D2 端到端验收**：临时沙箱里造 `ecm.ini`（全局 + `[Worker #1]`/`[Worker #2]`）与分段 `worktodo.txt`，跑 `ecm_cuda.exe -ini … --worker 1/2/3`，断言段覆盖生效、每 worker 独立日志默认值、只标记自己段的行、ini 不被改写、无段文件保持旧行为（24 项检查）|
+| `test_gui_smoke.ps1` | **ecm_gui 真窗口冒烟**：拉起真窗口（Win32+D3D11+ImGui）→ `PostMessage(WM_CLOSE)` → 断言退出码 0、`[GUI] window=`/`dock_layout=` 落盘、driver 键与注释未被改动、`.bak` 存在、**driver 仍能读改写后的 ini**、第二次启动窗口几何与第一次一致；**[1b]/[1c] 最小化→还原后进程存活 + 最小化状态下 post `WM_CLOSE` 必须退出 0**（消息泵回归护栏）；**[6] 四象限布局几何**（都在客户区内／不重叠／左 60 % 右 40 %／上下顺序）；**[7] 字体 ≈15×DPI 且中文 `cjk_ok=1`**（47 项检查；用 `EnumWindows` 找本进程 class=`ecm_gui` 的窗口，并处理 DPI 坐标系差异）|
+| `test_gui_workers.ps1` | **ecm_gui M2 监管验收（假 worker，不需要 GPU）**：四个 worker（正常／崩溃一次／挂死／**旧 driver**）autostart，断言 trace 里的 `autostart pid=`、`state Running`→`QueueEmpty`、崩溃→`Restarting`→恰好一次 `restart #1`、关闭时停止仍在跑的 worker、无残留进程、ini 里 driver 键与 `extra_args`/`autostart` 原样保留；第 4 个 worker 用 `--scenario stale-driver`（逐字节复现 D1/D2 之前那份 ecm_cuda 的输出）断言 GUI 打出 `DIAGNOSIS: … --worker …`；另读 `table: workers …` 实测几何断言**进度条宽度、ETA 列在面板内、`fits=1`、任务行跨整行**；关闭时断言**静默终止**（单行 `shutdown: terminated N running worker(s)`、之后不得出现 `Error/Restarting/restart`）（34 项检查）|
+| `test_gui_real_workers.ps1` | **ecm_gui M2 监管验收（真 `ecm_cuda.exe` + 双卡）**：同一份 `worktodo.txt` 的两个 `[Worker #N]` 段各一条 M991/M997（B1=1e4、8 曲线），断言两行都被成功移除、无 `# ERROR`、`finished` 两条、两份 `screen_<N>.log` 各自只出现自己的指数与 device（"没串"的逐条证据）、无残留进程（23 项检查）|
+| `test_hit_fields.ps1` | **D3 验收**：M677/B1=1e6、8 曲线走**队列模式**，断言命中行含 `curve=/sigma=/param=/method=/save=` 六个字段、`curve` 与下标一致、`sigma-curve` 为同一常数、param/method/save 与任务一致、因子真的整除 `2^677-1`（11 项检查）|
+| `test_gui_gpu.ps1` | **M4/NVML 验收**：① 跑 `--gpu-selftest` 并检查报告（退出码 0、无失败项、NVML 已加载、有设备、交叉比对通过）；② 真 GUI 的 trace 必须报 `gpu: nvml ok`，逐卡名称与 `nvidia-smi` 一致、设备数相等；③ `ECM_GUI_NVML` 指向不存在的 DLL 时 GUI **仍能启动**、trace 报 `gpu: NVML unavailable`、干净退出（15 项检查）|
+| `test_gui_results.ps1` | **M5 验收（真驱动，两轮）**：同一任务（M677/B1=1e6/8 曲线）跑两遍 GUI 队列，断言 `results.json.txt` 是**追加式 JSONL**（字段齐、因子都整除 `2^677-1`）、`results.txt` 始终**一个因子一行**并带 curve/sigma 列表与命中数、两轮命中数相加等于 JSONL 对象数、已知因子 `1943118631` 的 sigma 列表随第二轮增长、每行都能由 JSONL 复算（27 项检查）|
+| `test_gui_cjk_pixels.ps1` | **中文渲染的像素级验收**：抓真窗口（`PrintWindow`），量菜单栏里逐字形格子的**中位宽度**与**不同 ink 值个数**。四轮：[A] 自动字体 → 全宽中文（实测 5 格 / 30 px = 0.75 em / 5 种 ink）；[B] `[GUI] font` 指到画不出中文的字体（`arial.ttf`）→ 必须**被救回**系统 CJK 字体且像素仍是全宽中文（实测 0.43 em / 2 种 ink 是**修好之前**的 tofu 标定值）；[C] `ECM_GUI_CJK_FONT=none` → 必须**切回英文**、绝不出现 `???`；[D] 英文启动 + `--switch-language chineseSimplified`（= Language 菜单）→ 字体必须重挑、切换后像素是全宽中文（31 项检查）|
+| `test_gui_gpu_curves.ps1` | **"曲线是不是一条直线"的机器判据**：真放一个 `ecm_cuda` worker 压 device 0 约 40 s，读 `--trace` 的 `gpu: history` 行，断言忙卡 `util/power/clock` 各有 ≥5 个**不同取值**、`flat=0`、`plot=lo..hi` 非退化且覆盖观测区间；关闭后不残留驱动进程。实测忙卡 `power=22 distinct`、`clock=21 distinct`（空闲卡只有 1~2 个不同值 —— 那才是"真·直线"）（15 项检查）|
+| `test_gui_exit_checkpoint.ps1` | **退出流程验收（真驱动）**：`exit_confirm = ask` 时 `WM_CLOSE` **不关窗**而是弹确认框（trace `exit: confirmation requested`），Esc 取消后 GUI 继续跑；回车确认后 GUI **等到新的检查点落盘**（`worker 1: checkpoint written (…), safe to stop`）才终止 worker，并**独立核对磁盘上 `.ecm_ckpt_*.dat` 的 mtime 比关闭前更新**；`exit_confirm = kill` 仍可立即退出。脚本用 `PostMessage(WM_CLOSE/VK_RETURN/VK_ESCAPE)` 驱动，就像用户在动手（27 项检查）|
+| `test_gui_all.ps1` | **一键跑完整套件**：15 个入口（headless 自测/单测 + 上面所有真窗口脚本）按顺序跑，逐项打印 `passed/failed` 与耗时，汇总表 + 每项完整日志写到 `tools/test/_run/suite_<时间戳>/`，任一失败非零退出。`-SkipGpu` 跳过需要显卡的项、`-Only '*smoke*'` 挑着跑、`-List` 只列清单、`-KeepGoing` 失败后继续；**每项有超时**（默认 900 s，超时算失败），并且**开始/结束/每项之后都清掉 `tools/test/_run` 下遗留的 ecm_gui/fake worker/ecm_cuda 进程**（只杀沙箱副本，绝不动真实构建或生产目录）|
 | `ecm_edwards_save_test.cpp` | Prime95 ECM_VERSION=6 存档读写；与真实 `e0000347` 字节级比对 |
 | `ecm_edwards_checkpoint_test.cpp` | 分块标量乘的中止/恢复等价性（Qx/Qz 一致） |
 | `gen_ckpt.cpp` | 生成一个中途 STAGE1 存档，用于验证驱动恢复 |
@@ -191,6 +207,10 @@ python tools\ecm_worktodo\ecm.py --input sorted.csv --emit-cli todo.ps1 --emit-c
 | `crashloop.cmd` | 中止路径崩溃复现（逐次记 exit code，可看出 `0xC0000005`；§15.11 的回归） |
 | `enc_diag.py` | 文件编码体检：UTF-8 是否有效、CJK/乱码字符数、与 `HEAD` 版本对比 |
 | `ensure_bom.ps1` | **BOM 守卫（构建前自动跑）**：把 `kernels/`、`src/` 下每个源文件与 git HEAD 的 BOM 状态比对并恢复（`-NoFix` 只报告）。与 `bench/fix_bom.py` 的区别：后者是"含非 ASCII 就补 BOM"的钝器（会给本来就无 BOM 的文件制造 diff），前者只在**编辑往返把 BOM 抹掉**时修回去。`tools/build/local_build.ps1` 已内置调用（2026-09-26：`cgbn_stage1.cu` 的 BOM 被抹掉 ⇒ nvcc 按 GBK 读 ⇒ `#define CHECKPOINT_VERSION` 被中文注释吃掉） |
+| `grab_window.ps1` | **窗口截图**（GUI 无头验收的补充）：`-ProcessName ecm_gui -Class ecm_gui -Out shot.png`。按窗口类找顶层窗、用 `PrintWindow(PW_RENDERFULLCONTENT)` 抓客户区存 PNG（D3D11 窗口不加该 flag 会抓到空帧）。人不在屏幕前时用它看界面 |
+| `row_ink_profile.ps1` | **文字行定位**：对截图逐行统计"墨"量（背景亮度取全图直方图众数，`-Delta` 默认 140），把连续的行归成文字带并打印前 60 行明细。用来把 `text_ink_probe.ps1` 对准真正的文字（ImGui 菜单栏不一定在 y=0，抓图还含标题栏） |
+| `text_ink_probe.ps1` | **字形像素体检**：自动找第一条文字带 → 按空列切成逐字形格子 → 报每格宽/高/墨量/中心墨量、中位宽度、不同墨值个数（`-Json` 给脚本用）。判"真字形 vs tofu 方块"的**有效**判据是宽度（0.75 em vs 0.43 em）与"格子是否互相雷同"，不是"中心空不空"（fallback 方块中心也有笔画） |
+| `check_printf_calls.ps1` | **格式串审计**：扫 `src/gui/*.cpp` 里所有 `ImGui::Text*` 调用，数格式串的转换符个数 vs 实参个数，不一致就报行号。起因是一次真实的 0xC0000005：`ImGui::Text("… %s … %s …", …, s.clock_mem_mhz)` 里 `%s` 收到整数，`vsnprintf` 把它当指针解引用，而且**只在显存频率非 0 时才崩**（为 0 时 MSVC 打印 `(null)`），于是"偶尔崩一次"躲过了很久的测试。当前 0 处不符 |
 
 > 三次 bug（§15.4 值非规范、§15.9 limb 非规范、§15.10 limb 非规范）都栽在同一件事上：
 > **"读回 mpz 再比较"的测试是空洞的**。`ifma_to_mpz_lane` 先 `& 2^52−1` 再 `mpz_mod`，
@@ -220,6 +240,57 @@ python tools\ecm_worktodo\ecm.py --input sorted.csv --emit-cli todo.ps1 --emit-c
 `refactor_ecm_stage1_macro_iface.py`、`split_ecm_stage1_kernel_tree.py`、
 `patch_npu_addsub_mod.py`、`validate_stage1.py`、`_trace_4x2.py`。
 保留供追溯/重跑，日常开发不需要。
+
+## src/gui/ — 图形前端 `ecm_gui`（M1 骨架 + M2 worker 管理 + M3 解析 + M4 GPU 监控 + M5 results + M8 反馈修正 已落地）
+
+> 代码在 **`src/gui/`**（不在 `tools/` 下，与 `src/core`、`src/cuda` 平级）。本节留在这里是因为
+> tools 文档承担"所有可执行目标怎么跑、怎么验"的索引职责。
+
+多 worker 进程管理 + 每 worker 输出窗 + GPU 监控（NVML）+ 命中因子汇总（`results.json.txt` / `results.txt`）。
+**配置全部在 `ecm.ini` 里**（全局键 = 所有 worker 的默认值，`[Worker #N]` = 覆盖，`[GUI]` = 前端自身设置），
+worker 进程用 `ecm_cuda.exe -ini ecm.ini --worker N` 启动。
+
+```powershell
+cmake --build build_gui --target ecm_gui ecm_gui_fake_worker ecm_gui_log_parse_test ecm_gui_results_test
+build_gui\ecm_gui.exe                      # 正常启动（配置来自 <exe 目录>\ecm.ini）
+build_gui\ecm_gui.exe --selftest           # 无窗口自测：ini/本地化/字体/状态键（36 项）
+build_gui\ecm_gui.exe --worker-selftest    # 无窗口自测：worker 进程管理（48 项，不需要 GPU）
+build_gui\ecm_gui.exe --gpu-selftest       # 无窗口自测：NVML + 与 nvidia-smi 交叉比对（27 项）
+build_gui\ecm_gui_log_parse_test.exe       # 解析层单测（49 项，含"旧 driver"分类）
+build_gui\ecm_gui_results_test.exe         # results 双文件单测（42 项）
+build_gui\ecm_gui.exe -ini <path> --trace  # 生命周期写 <exe 目录>\ecm_gui_trace.log
+build_gui\ecm_gui.exe -ini <path> --switch-language chineseSimplified
+                                           # 诊断：等于在 Language 菜单里切一次语言（脚本用）
+                                           # 另有 ECM_GUI_CJK_FONT=<path|none> 覆盖 CJK 字体查找
+powershell -File tools\test\test_gui_smoke.ps1        # 真窗口冒烟（57 项：含最小化/还原、布局几何、表格几何、字体与中文）
+powershell -File tools\test\test_gui_workers.ps1      # 假 worker 监管 + 表格几何 + 静默关闭（34 项，含"旧 driver 不认识 --worker"诊断）
+powershell -File tools\test\test_gui_real_workers.ps1 # 真 ecm_cuda + 双卡（23 项，需 GPU）
+powershell -File tools\test\test_gui_gpu.ps1          # NVML 面板 + 降级（15 项）
+powershell -File tools\test\test_gui_results.ps1      # results 双文件（27 项，真 ecm_cuda，两轮）
+powershell -File tools\test\test_gui_cjk_pixels.ps1   # 中文渲染像素验收 + 救回/英文回退/运行中切语言（31 项）
+powershell -File tools\test\test_gui_gpu_curves.ps1   # 真 worker 压卡：功率/频率曲线确实在变（15 项）
+```
+
+要点：
+
+| 项 | 事实 |
+|---|---|
+| 构建开关 | `-DECM_BUILD_GUI=ON/OFF`（默认 ON）、`-DECM_IMGUI_DIR=<dir>`；非 Windows 或目录里没有 `imgui.h` → `gui: skipped`，**其它目标不受影响** |
+| 目标 | `ecm_gui`（WIN32 可执行，产物在构建根）、`ecm_gui_imgui`（vendored ImGui）、`ecm_gui_fake_worker`、`ecm_gui_log_parse_test`、`ecm_gui_results_test` |
+| 依赖 | 只链系统库（`d3d11 dxgi d3dcompiler dwmapi shell32`）；**不**链 `ecm`/`ecm_cuda`/GMP/OpenCL |
+| worker 进程 | `CreateProcessW` + `CREATE_NO_WINDOW`、stdout/stderr **共用同一管道写端**、Job object（`KILL_ON_JOB_CLOSE`）→ 关界面/崩溃不留孤儿占卡；崩溃 5 s 后重启，5 分钟内 3 次则熔断停住 |
+| GPU 监控 | NVML **运行时动态加载**（`nvml.dll`；测试可用 `ECM_GUI_NVML=<dll>` 指到别处验证降级），采样在独立线程。每卡：util/功耗与上限/SM 与显存时钟/温度/显存/节流原因 + 三条曲线 + 全机合计功耗。**注意**：`nvmlDeviceGetNumGpuCores` 给的是 CUDA 核数（不是 SM 数），SM 数由 driver 的 `--gpu-info`（D4，待做）提供 |
+| 布局 | 默认停靠布局（`DockBuilder`，版本 3）：**左列 60 % 宽 = 上 `Workers`（`详情` 与之同节点做标签页）+ 下 每 worker 输出（标签页）；右列 40 % 宽 = 上 `GPU` + 下 `Results`**，每列上下各 50 %。面板用固定 ID（`###workers` 等）→ 切语言不会打乱布局。布局写进 `[GUI] dock_layout` + `dock_layout_ver`（版本变旧会自动重建一次，修掉"面板堆在中间"的历史 ini）。`--trace` 会打每面板矩形，`test_gui_smoke.ps1` 据此断言"都在客户区内、互不重叠、左 60/右 40、上下顺序正确" |
+| 窗口生命周期 | 最小化时**仍泵消息**（否则唤不醒、只能从任务栏关）但**整帧跳过渲染**（0×0 交换链 `Present` 会崩）；`ResizeBuffers` 前先解绑 + `Flush` RTV，失败则重建交换链。回归护栏 = 冒烟测试 [1b]/[1c] |
+| 布局持久化 | 关掉 ImGui 自带的 `imgui.ini`（`io.IniFilename=nullptr`），停靠布局 + 窗口几何写进 `[GUI] dock_layout=` / `window=`；ini 改写保注释、保行序、只动自己认识的键，写前留一代 `.bak` |
+| 截图 | `powershell -File tools\diag\grab_window.ps1 -ProcessName ecm_gui -Out shot.png`（按窗口类抓图；D3D11 窗口用 `PrintWindow(PW_RENDERFULLCONTENT)`，否则抓到空帧）|
+| 界面文案 | `src/gui/localization/*.xml`（UTF-8 无 BOM），`english.xml` 是基线，缺键回退英文；GUI 里 `Language → Reload localization` 热重载 |
+| 字体 | 不打包字体：运行时挑系统字体（CJK → `msyh.ttc` 等；拉丁 → `segoeui` 等），字号 `[GUI] font_size = auto` = `15 px × DPI`（150 % 屏 = **22.5 px**，不凑整；也可写小数如 `23.5`，范围 6–96），`[GUI] font_snap = 1` 让字形推进量对齐整像素（拉丁小字更锐）。**画不出当前语言的字体不会被使用**：`[GUI] font` 指定了也先救回系统 CJK 字体，实在没有就切回英文界面（绝不显示 `???`）；运行中在 Language 菜单切语言会**重新挑字体**。ImGui 1.92+ 动态图集：**不要**再传 `GetGlyphRangesChineseFull()`；ImGui 只有灰度抗锯齿（无 ClearType），想更清楚请调大 `font_size` |
+| 构建 | **一条命令**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_gui.ps1`（自动找 `vcvars64.bat`、必要时 configure、构建 4 个目标；加 `-Selftest` 顺带自测，`-Clean` 从零重建，`-Reconfigure` 换依赖路径后重配）。**注意**：GUI 的构建目录是 **NMake Makefiles**，所以直接在普通 PowerShell 里跑 `cmake --build build_gui --target ecm_gui` 必定失败（`nmake` 只存在于 VS 开发者环境）—— 要么用这个脚本，要么先 `call vcvars64.bat` |
+| 跑测试脚本的参数 | GUI 类脚本传 `-Exe <ecm_gui.exe>`，**driver 类脚本（`test_worker_sections.ps1`）传 `-Exe <ecm_cuda.exe>`** —— 传错不会报错，只会让 `ecm_gui.exe -ini … --worker 1` 开出一个什么都不做的窗口（GUI 现在会对 `--worker` 打警告）。用 `test_gui_all.ps1` 跑就不会踩到：每项都声明了要哪种 exe |
+| worker exe 前提 | GUI 用 `<exe> -ini <ini> --worker N` 启动 worker，所以 **worker 可执行文件必须支持 `--worker`**（即 D1/D2 之后的构建）。旧构建会走单跑路径并打印 `No input number on stdin`，GUI 会把它诊断成 `DIAGNOSIS: … older than the D1/D2 driver changes` 并显示在状态栏/日志/表格红 `!`。一条命令自查：`([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes('<path>\ecm_cuda.exe'))).Contains('--worker')` |
+| DPI | GUI 是 per-monitor DPI aware（物理像素）；外部脚本比较窗口坐标时要乘 `GetDpiForWindow()/96`，字号按同一比例走 |
+| 开发文档 | [../docs/DEV_ECM_GUI.md](../docs/DEV_ECM_GUI.md)（决策记录、里程碑、验收、坑）；worktodo 段化与 `gpucurves` 推荐见 [../docs/DEV_ECM_WORKTODO.md](../docs/DEV_ECM_WORKTODO.md) |
 
 ## ecm_prob/ · ecm_report/ · log_parser/
 

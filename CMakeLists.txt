@@ -581,3 +581,27 @@ if(ECM_BUILD_TOOLS)
 else()
     message(STATUS "tools: helper targets disabled (ECM_BUILD_TOOLS=OFF)")
 endif()
+# ===========================================================================
+# ecm_gui -- the graphical front-end (docs/DEV_ECM_GUI.md).
+#
+# Deliberately independent of ECM_BUILD_TOOLS: it is a deliverable, not a helper,
+# and it is Windows-only (Dear ImGui + Win32 + Direct3D 11 + NVML).
+# It must NEVER break a configure on a machine that cannot build it: the sources
+# live in an optional vendored tree (third_party/imgui) and a missing tree only
+# turns this target off, with a status message.
+# ===========================================================================
+option(ECM_BUILD_GUI "Build the ecm_gui front-end (Windows only, needs third_party/imgui)" ON)
+set(ECM_IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui" CACHE PATH
+    "Dear ImGui source directory used by ecm_gui (docking branch)")
+
+if(NOT ECM_BUILD_GUI)
+    message(STATUS "gui: disabled (ECM_BUILD_GUI=OFF)")
+elseif(NOT WIN32)
+    message(STATUS "gui: skipped (ecm_gui is Windows-only for now; see docs/DEV_ECM_GUI.md M7)")
+elseif(NOT EXISTS "${ECM_IMGUI_DIR}/imgui.h")
+    message(STATUS "gui: skipped -- ${ECM_IMGUI_DIR}/imgui.h not found. Vendor Dear ImGui "
+                   "(docking branch) there; see third_party/imgui/README.md")
+else()
+    add_subdirectory(src/gui)
+    message(STATUS "gui: ecm_gui enabled (ImGui from ${ECM_IMGUI_DIR})")
+endif()

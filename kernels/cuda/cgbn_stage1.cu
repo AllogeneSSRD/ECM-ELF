@@ -128,6 +128,23 @@ static bool emit_progress_line(int n) {
             (n % 10000 == 0));
 }
 
+// Redirected (pipe / file, e.g. under ecm_gui) progress: keep COMPLETE lines, but at the
+// same ~200 ms cadence the interactive branch gets for free from the batch loop (batch_size
+// is auto-tuned so one batch is ~100 ms -- see the pacing code at the end of the loop).
+// Gating on the batch number alone is wrong: that counter is RESTORED from the checkpoint
+// (`batches_complete = ckpt_header.batches_complete`), so a resumed run starts at, say,
+// 73900 and then matches only `n % 10000 == 0` -- with ~1 s per batch that is one line every
+// ~1.7 hours. That is exactly why the GUI sat on "waiting for the first progress line"
+// while the same exe in a console updated every batch (measured 2026-09-29 on a resumed
+// B1=2.6e8 task). The legacy milestones stay active so an old log tailer still sees them.
+static double g_last_progress_line_ms = -1.0e9;   // *gputime (ms) of the last line
+static const double kProgressLineGapMs = 200.0;
+
+static bool should_emit_progress_line(int n, double now_ms) {
+    if (now_ms - g_last_progress_line_ms >= kProgressLineGapMs) return true;
+    return emit_progress_line(n);
+}
+
 
 // Checkpoint configuration
 #define CHECKPOINT_MAGIC 0x45555047  // EPUG -> "GPUE" in hex (GPU ECM)
@@ -1635,11 +1652,13 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
             // Interactive terminal: live in-place update every batch.
             print_progress(pct, s_partial, this_batch, per_curve_s,
                            (double)*gputime, remaining_s, false);
-        } else if (emit_progress_line(batches_complete) || final_batch) {
-            // Redirected (work_manager log tailing): periodic full lines, and
-            // always the final batch so the log shows 100%.
+        } else if (should_emit_progress_line(batches_complete, (double)*gputime) || final_batch) {
+            // Redirected (pipe/file, e.g. under ecm_gui): complete lines, emitted at the
+            // ~200 ms batch cadence (or on the legacy batch milestones), plus always the
+            // final batch so the log shows 100%.
             print_progress(pct, s_partial, this_batch, per_curve_s,
                            (double)*gputime, remaining_s, true);
+            g_last_progress_line_ms = (double)*gputime;
         }
     }
 

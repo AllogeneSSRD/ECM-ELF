@@ -133,3 +133,7 @@ tools/ecm_worktodo/worktodo_p95_stage2.txt
 /build_reltest2
 /build_cuda_basic_t256
 /build_cuda_fold_t256
+
+# ecm_gui build directory (docs/DEV_ECM_GUI.md)
+/build_gui
+/third_party

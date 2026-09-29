@@ -742,11 +742,18 @@ static void print_ecm_usage(const char *prog) {
               << "  --profile-ops [--profile-ops-file <f>]  Operator-count profiling\n"
               << "  --sync-each-batch          Synchronize after each batch\n"
               << "  --verify-gpu [--verify-gpu-strict]   CPU cross-check GPU results\n\n"
+              << "Queue manager (run with no positional B1/B2):\n"
+              << "  -ini <path>                Config file (default: <exe dir>/ecm.ini)\n"
+              << "  --worker <n>               Which worker this process is (1-based, default 1).\n"
+              << "                             Selects the [Worker #n] section of the ini AND of\n"
+              << "                             the worktodo file; keys before the first section\n"
+              << "                             header are the global defaults for every worker.\n\n"
               << "Examples:\n"
               << "  echo '(2^991-1)' | " << name << " -v --go -gpu -gpucurves 384 1e6 0\n"
               << "  echo '(2^421-1)' | " << name << " -gpu -gpucurves 256 -d 1 1e5 0\n"
               << "  echo '(2^4003-1)' | " << name << " -gpu -gpucurves 384 --add asm_b32 1e6 0\n"
-              << "  " << name << " --showkernel\n\n"
+              << "  " << name << " --showkernel\n"
+              << "  " << name << " -ini ecm.ini --worker 2      (queue manager, worker #2)\n\n"
               << "Add/sub path names (for --add / --sub): default, fused, fused_unroll,\n"
               << "  asm/unroll_128b, asm/unroll_192b, asm/unroll_256b, asm/unroll_384b,\n"
               << "  asm/unroll_512b, asm/unroll_4096b (legacy: asm_b16, asm_b32, fused_unroll_b16).\n"
@@ -868,6 +875,12 @@ struct Stage1RunResult {
     uint64_t firstsigma64 = 0;       // full 64-bit sigma (Edwards path)
     mpz_t *factors = nullptr;
     int *array_found = nullptr;
+    // Per-curve sigma of THIS batch (malloc'd, `curves` entries, caller frees; may be
+    // null when a path does not know them). Needed because one batch does NOT always
+    // share a sigma sequence: the Edwards path draws a random 64-bit sigma per curve,
+    // so "firstsigma + i" would be wrong there. Consumers: the hit lines (D3, see
+    // docs/DEV_ECM_GUI.md) and therefore the GUI's results.txt sigma list.
+    uint64_t *sigmas = nullptr;
 };
 
 // ---- 自我 checkpoint / 进度显示 (CPU stage-1: Edwards 与 Montgomery 共用) ----
@@ -1254,12 +1267,19 @@ static void stage1_progress_set(double done, uint32_t total) {
     if (avg > 0.0 && done < (double)total) remaining_s = ((double)total - done) / avg;
 
     if (!stdout_is_tty_local()) {
-        /* 日志模式: 不打 \r, 按衰减节奏打整行 (带时间戳, 会被 mirror 到 log 文件) */
+        /* 日志模式: 不打 \r, 按衰减节奏打整行 (带时间戳, 会被 mirror 到 log 文件)。
+           但"只看批号"是错的: 批号会从 checkpoint 恢复, 恢复后的运行只在 n % 10000 == 0
+           时才打 —— 每批约 1 s 的话就是 ~1.7 小时一行, GUI 会一直显示"等待第一行进度"
+           (2026-09-29 实测)。这里同样按 **时间** 兜底: 距上一行 ≥200 ms 就打一行,
+           与交互式分支每批更新的节奏一致。 */
         static unsigned lines = 0;
         static std::atomic<uint32_t> last_emitted(0xFFFFFFFFu);
+        static double last_line_s = -1.0e9;
         const uint32_t done_i = (uint32_t)done;
-        if (done >= (double)total || emit_progress_line(++lines)) {
+        const bool by_time = (now - last_line_s) >= 0.2;
+        if (done >= (double)total || by_time || emit_progress_line(++lines)) {
             last_emitted.store(done_i, std::memory_order_relaxed);
+            last_line_s = now;
             ecm_ts_fprintf(stdout,
                            "stage1: [%s] %.1f%%  %.1f/%u (~%.2f s/curve)  "
                            "elapsed %.1fs  ETA %.1fs\n",
@@ -1720,6 +1740,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     out->firstsigma64 = 0;
     out->factors = nullptr;
     out->array_found = nullptr;
+    out->sigmas = nullptr;
 
     if (curves == 0) {
         std::cerr << "curves must be > 0" << std::endl;
@@ -1954,6 +1975,12 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     out->firstsigma64 = firstsigma;
     out->factors = factors;
     out->array_found = array_found;
+    /* Edwards draws a random sigma per curve, so publish the exact per-curve values
+       instead of letting consumers assume a sequence. */
+    out->sigmas = (uint64_t *)malloc(sizeof(uint64_t) * (curves ? curves : 1));
+    if (out->sigmas != nullptr) {
+        for (uint32_t i = 0; i < curves; i++) out->sigmas[i] = sigmas[i];
+    }
     return out->ret;
 }
 
@@ -2116,6 +2143,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     out->firstsigma64 = 0;
     out->factors = nullptr;
     out->array_found = nullptr;
+    out->sigmas = nullptr;
     (void)saveappend;
     (void)B2;
 
@@ -2266,6 +2294,10 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     }
     out->firstsigma64 = sigmas[0];
     out->firstsigma = (uint32_t)(sigmas[0] & 0xFFFFFFFFu);
+    out->sigmas = (uint64_t *)malloc(sizeof(uint64_t) * (curves ? curves : 1));
+    if (out->sigmas != nullptr) {
+        for (uint32_t i = 0; i < curves; i++) out->sigmas[i] = sigmas[i];
+    }
 
     /* Work split.  A "task" is one SIMD batch (<= 8 curves, one thread) or, on the
        scalar backend, one curve.  Tasks are handed out by an atomic counter, so a
@@ -2878,6 +2910,12 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
     out->firstsigma = firstsigma;
     out->factors = factors;
     out->array_found = array_found;
+    /* GPU batches use the contiguous convention: curve i has sigma = firstsigma + i
+       (the same rule as -sigma / -gpucurves). */
+    out->sigmas = (uint64_t *)malloc(sizeof(uint64_t) * (curves ? curves : 1));
+    if (out->sigmas != nullptr) {
+        for (uint32_t i = 0; i < curves; i++) out->sigmas[i] = (uint64_t)firstsigma + i;
+    }
     return ret;
 }
 
@@ -2911,6 +2949,7 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                           const std::string &save_name, const std::string &n_expr,
                           const std::string &aid, const std::string &line,
                           const std::string &worktodo_path, const std::string &finished_path,
+                          int worker,
                           const Stage1RunOptions &base_opt,
                           const std::string &exe_dir, const std::string &sync1,
                           const std::string &sync2, bool full_sync, long long marker,
@@ -2932,17 +2971,31 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
             for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
             free(result.factors);
             free(result.array_found);
+            free(result.sigmas);
         }
         ecm_ts_fprintf(stderr, "FATAL: backend prepare failed; aborting queue.\n");
         return false;
     }
 
     bool found_factor = false;
+    /* D3 (docs/DEV_ECM_GUI.md): the hit line carries everything a consumer needs to
+       build a results record, because each back-end prints its own, mutually
+       incompatible hit line ("curve i sigma=M -> factor found" from the CPU paths,
+       "GPU: factor ... with curve c (sigma p:s)" from the GPU ones). Fields: the
+       factor, the curve index inside this batch, the EXACT per-curve sigma
+       (result.sigmas, when the path knows it), the parametrization, which engine ran,
+       and the save-file name (empty for ECM=/ECM2= tasks, which carry no save name). */
+    const char *method_token = opt.use_mont ? "mont" : (opt.use_edwards ? "edwards" : "gpu");
     if (has_factors) {
         for (uint32_t i = 0; i < result.curves; ++i) {
             if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
                 char *fs = mpz_get_str(nullptr, 10, result.factors[i]);
-                std::cout << "factor[" << i << "]=" << (fs ? fs : "?") << "\n";
+                std::cout << "factor[" << i << "]=" << (fs ? fs : "?") << " curve=" << i;
+                if (result.sigmas != nullptr) {
+                    std::cout << " sigma=" << result.sigmas[i];
+                }
+                std::cout << " param=" << opt.gpu_param << " method=" << method_token
+                          << " save=" << save_name << "\n";
                 free(fs);
                 found_factor = true;
             }
@@ -2957,20 +3010,38 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
         for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
         free(result.factors);
         free(result.array_found);
+        free(result.sigmas);
     }
 
     if (result.ret == ECM_ERROR) {
         ecm_ts_fprintf(stderr, "ERROR: stage1 failed for task: %s\n", line.c_str());
-        ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+        // Marking the line is what stops the queue from re-running it: if that write
+        // fails, abort instead of spinning on the same task forever.
+        if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError)) {
+            ecm_ts_fprintf(stderr, "ERROR: cannot mark the failed line in %s; aborting\n",
+                           worktodo_path.c_str());
+            return false;
+        }
         return true;
     }
 
     if (!ecm_append_text_line(finished_path, line)) {
         ecm_ts_fprintf(stderr, "ERROR: cannot append to %s\n", finished_path.c_str());
-        ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+        if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError)) {
+            ecm_ts_fprintf(stderr, "ERROR: cannot mark the failed line in %s; aborting\n",
+                           worktodo_path.c_str());
+            return false;
+        }
         return true;
     }
-    ecm_worktodo_advance(worktodo_path, line, WorktodoAction::Remove);
+    if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::Remove)) {
+        // The task itself succeeded (its .save is on disk), but the queue cannot drop
+        // the line. Abort: continuing would re-run it and append a second time.
+        ecm_ts_fprintf(stderr, "ERROR: cannot remove the finished line from %s; aborting "
+                               "(the task's .save is already written)\n",
+                       worktodo_path.c_str());
+        return false;
+    }
 
     ecm_sync_save_files(exe_dir, sync1, sync2, full_sync, marker);
     if (processed) {
@@ -2979,7 +3050,7 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     return true;
 }
 
-static int run_queue_manager(const std::string &ini_path) {
+static int run_queue_manager(const std::string &ini_path, int worker) {
     const std::string raw_exe_dir = get_exe_dir_local();
     const std::string exe_dir = raw_exe_dir.empty() ? "." : raw_exe_dir;
     /* Default home of the stage-1 exponent cache (overridable by --exp-cache / exp_cache). */
@@ -2994,13 +3065,24 @@ static int run_queue_manager(const std::string &ini_path) {
     }
 
     // Load config; on first run (missing ini), write a default template.
+    // `worker` selects the [Worker #N] section; keys before the first section header
+    // are the global defaults for every worker (see ecm_queue_config.h / D1).
     EcmQueueConfig cfg;
-    if (!ecm_queue_config_load(ini, cfg)) {
+    if (!ecm_queue_config_load(ini, worker, cfg)) {
         if (!ecm_queue_config_write_default(ini)) {
             ecm_ts_fprintf(stderr, "FATAL: cannot create default config %s\n", ini.c_str());
             return 1;
         }
         ecm_ts_fprintf(stdout, "Created default config: %s\n", ini.c_str());
+    }
+    // Several workers appending to one screen.log interleave their lines, so workers
+    // 2..N get their own default log unless the ini set log_file explicitly.
+    if (worker > 1 && !cfg.log_file_explicit && cfg.log_file == "screen.log") {
+        cfg.log_file = "screen_" + std::to_string(worker) + ".log";
+        ecm_ts_fprintf(stdout,
+                       "note: log_file not set in %s; worker %d logs to %s instead of "
+                       "screen.log (per-worker default)\n",
+                       ini.c_str(), worker, cfg.log_file.c_str());
     }
 
     opencl_ecm_set_work_dir(exe_dir.c_str());
@@ -3129,6 +3211,8 @@ static int run_queue_manager(const std::string &ini_path) {
 
     ecm_ts_fprintf(stdout, "===== ECM queue manager =====\n");
     ecm_ts_fprintf(stdout, "config : %s\n", ini.c_str());
+    ecm_ts_fprintf(stdout, "worker : %d (ini section [Worker #%d]; unprefixed keys are the "
+                           "global defaults)\n", worker, worker);
     ecm_ts_fprintf(stdout, "worktodo : %s\n", worktodo_path.c_str());
     ecm_ts_fprintf(stdout, "finished : %s\n", finished_path.c_str());
     ecm_ts_fprintf(stdout, "log_file : %s\n", cfg.log_file.c_str());
@@ -3152,7 +3236,7 @@ static int run_queue_manager(const std::string &ini_path) {
     const bool full_sync = (cfg.sync_mode == "full");
     while (true) {
         std::string line;
-        if (!ecm_worktodo_first_line(worktodo_path, line)) {
+        if (!ecm_worktodo_first_line(worktodo_path, worker, line)) {
             break;
         }
 
@@ -3166,7 +3250,8 @@ static int run_queue_manager(const std::string &ini_path) {
             Ecm2Task task;
             if (!ecm_parse_ecm2_line(line, task, err)) {
                 ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
-                ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+                if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError))
+                    break;
                 continue;
             }
             mpz_t N;
@@ -3174,7 +3259,8 @@ static int run_queue_manager(const std::string &ini_path) {
             if (!ecm_compute_ecm2_n(task, N, err)) {
                 mpz_clear(N);
                 ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
-                ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+                if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError))
+                    break;
                 continue;
             }
             const std::string n_expr = build_n_expr(task.k, task.b, task.n, task.c, task.factors);
@@ -3195,7 +3281,7 @@ static int run_queue_manager(const std::string &ini_path) {
                 N, task.B1, task.B2, task.curves_to_run,
                 task.has_sigma ? task.sigma : 0, task.has_sigma,
                 /*save_name=*/"", n_expr, task.aid, line,
-                worktodo_path, finished_path, opt,
+                worktodo_path, finished_path, worker, opt,
                 exe_dir, sync1, sync2, full_sync, marker, &processed);
             mpz_clear(N);
             if (!cont) {
@@ -3209,14 +3295,16 @@ static int run_queue_manager(const std::string &ini_path) {
         EcmStage2Task task;
         if (!ecm_parse_stage2_line(line, task, err)) {
             ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
-            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+            if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError))
+                break;
             continue;
         }
 
         double B1 = 0.0;
         if (!ecm_extract_b1_from_save_name(task.save_name, &B1, err)) {
             ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
-            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+            if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError))
+                break;
             continue;
         }
 
@@ -3225,7 +3313,8 @@ static int run_queue_manager(const std::string &ini_path) {
         if (!ecm_compute_stage2_n(task, N, err)) {
             mpz_clear(N);
             ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
-            ecm_worktodo_advance(worktodo_path, line, WorktodoAction::MarkError);
+            if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError))
+                break;
             continue;
         }
 
@@ -3248,7 +3337,7 @@ static int run_queue_manager(const std::string &ini_path) {
             N, B1, /*B2=*/0.0, task.curves_to_run,
             /*sigma=*/0, /*sigma_fixed=*/false,
             task.save_name, n_expr, task.aid, line,
-            worktodo_path, finished_path, opt,
+            worktodo_path, finished_path, worker, opt,
             exe_dir, sync1, sync2, full_sync, marker, &processed);
         mpz_clear(N);
         if (!cont) {
@@ -3309,6 +3398,7 @@ int main(int argc, char **argv){
     std::string gpu_special_mult_path;
     bool show_kernels = false;
     std::string ini_path;
+    int worker_index = 1;      // --worker N: ini + worktodo section (see the flag's parse site)
     std::string tmp_dir;                  // 本地 stage-1 落盘目录
     std::string p95_dir_ignored;          // 兼容旧脚本: 现在由 ecm_p95feeder 处理
     // parse args simple
@@ -3514,6 +3604,23 @@ int main(int argc, char **argv){
             ini_path = argv[++i];
             continue;
         }
+        // Which worker this process is: selects the [Worker #N] section of BOTH the
+        // ini and the worktodo file (docs/DEV_ECM_GUI.md D1/D2). 1-based, default 1,
+        // so a single-worker setup (no sections, no switch) behaves as before.
+        if(a == "--worker" && i+1<argc) {
+            try {
+                const long w = std::stol(argv[++i]);
+                if (w < 1 || w > 100000) {
+                    std::cerr << "Invalid --worker value, expected 1..100000" << std::endl;
+                    return 1;
+                }
+                worker_index = (int)w;
+            } catch (...) {
+                std::cerr << "Invalid --worker value, expected an integer >= 1" << std::endl;
+                return 1;
+            }
+            continue;
+        }
         if(a == "--tmp-dir" && i+1<argc) {
             tmp_dir = argv[++i];
             continue;
@@ -3582,7 +3689,7 @@ int main(int argc, char **argv){
 
     if (pos.empty()) {
         // No positional B1/B2 → queue-manager mode (reads ecm.ini + worktodo).
-        return run_queue_manager(ini_path);
+        return run_queue_manager(ini_path, worker_index);
     }
 
     unsigned long ckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
@@ -3787,10 +3894,19 @@ int main(int argc, char **argv){
     const bool cli_has_factors = (result.factors != nullptr && result.array_found != nullptr);
 
     if (cli_has_factors) {
+        /* Same D3 fields as the queue path (docs/DEV_ECM_GUI.md): a consumer must not
+           have to guess which of the three back-end hit lines it is looking at. */
+        const char *cli_method_token =
+            opt.use_mont ? "mont" : (opt.use_edwards ? "edwards" : "gpu");
         for (uint32_t i = 0; i < result.curves; i++) {
             if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
                 char *s = mpz_get_str(NULL, 10, result.factors[i]);
-                std::cout << "factor[" << i << "]=" << (s ? s : "?") << "\n";
+                std::cout << "factor[" << i << "]=" << (s ? s : "?") << " curve=" << i;
+                if (result.sigmas != nullptr) {
+                    std::cout << " sigma=" << result.sigmas[i];
+                }
+                std::cout << " param=" << opt.gpu_param << " method=" << cli_method_token
+                          << " save=" << savefilename << "\n";
                 free(s);
                 if (print_group_order) {
                     uint32_t sigma_curve = result.firstsigma + i;
@@ -3821,6 +3937,7 @@ int main(int argc, char **argv){
         for (uint32_t i = 0; i < result.curves; i++) mpz_clear(result.factors[i]);
         free(result.factors);
         free(result.array_found);
+        free(result.sigmas);
     }
     mpz_clear(N);
     /* 让调用方 (脚本/Prime95 前端) 能看到失败, 而不是把 0 当成"跑完了没因子"。 */

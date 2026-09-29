@@ -1,5 +1,18 @@
 # ECM-CUDA 队列管理器 + `ecm.ini` 开发文档
 
+> **状态与配套改造（2026-10）**
+>
+> * **`work_manager.ps1` 已废弃**：队列/日志/同步编排已由本文件描述的 driver 内置队列管理器取代。
+>   该脚本仅可作为**测试夹具**保留，**不作为生产路径**。
+> * **计划中的改造**（见 [`docs/DEV_ECM_GUI.md`](DEV_ECM_GUI.md) §11 的 D1–D5）：
+>   ini 解析变 **section 感知** 并加 `--worker N`（`[Worker #N]` 覆盖全局）；
+>   `ecm_worktodo` 变 **段感知**（worktodo 单文件用 `[Worker #N]` 分段，见
+>   [`docs/DEV_ECM_WORKTODO.md`](DEV_ECM_WORKTODO.md)）；命中行补 `curve=/sigma=/param=/save=` 字段；
+>   新增只读查询 `--gpu-info`。**无段文件、无 `--worker` 时行为保持不变**。
+> * 图形前端 `ecm_gui` 会读写同一份 `ecm.ini`（GUI 键在 `[GUI]` 段与 `[Worker #N]` 段里，
+>   driver 忽略未知键），因此 ini 的**注释与行序必须可保留**——GUI 侧用独立的
+>   结构化读写器实现（`docs/DEV_ECM_GUI.md` §4.3）。
+
 本文件描述 `ecm_cuda.exe`（以及共享同一 driver 的 OpenCL `ecm.exe`）内置的**工作队列管理器**与 **ini 配置化**改造的代码结构与开发指南。
 
 ---

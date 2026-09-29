@@ -1,9 +1,11 @@
 ﻿#include "ecm_queue_config.h"
+#include "ecm_worktodo.h"      // ecm_worktodo_parse_worker_header ([Worker #N] syntax)
 
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 namespace {
 
@@ -18,14 +20,34 @@ void trim(std::string &s) {
 
 } // namespace
 
-bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
+namespace {
+
+// One raw `key = value` line together with the section it appeared in.
+// `section` is "" for the global part (before the first [Worker #N] header).
+struct IniRawEntry {
+    std::string section;
+    std::string key;
+    std::string val;
+};
+
+// "[Worker #7]" -> 7 ; 0 when the line is not a worker header. The syntax is shared
+// with the worktodo / feeder files, so it lives in ecm_worktodo.cpp.
+static int parse_worker_header(const std::string &line, bool *is_bracket_line) {
+    return ecm_worktodo_parse_worker_header(line, is_bracket_line);
+}
+
+// Read the file into raw entries, tracking [Worker #N] sections.
+// Returns false when the file cannot be opened. `saw_target_section` reports
+// whether a header for `worker` was seen (used for the "section missing" note).
+bool read_ini_entries(const std::string &path, int worker, std::vector<IniRawEntry> &out,
+                      bool *saw_target_section) {
     std::ifstream in(path);
     if (!in.is_open()) {
         return false;
     }
-
+    if (saw_target_section) *saw_target_section = false;
+    std::string section;                       // "" = global
     std::string line;
-    bool warned_legacy = false;   // legacy-key shim warns once per run
     while (std::getline(in, line)) {
         // Strip a UTF-8 BOM if present on the first line.
         if (!line.empty() && static_cast<unsigned char>(line[0]) == 0xEF &&
@@ -37,19 +59,87 @@ bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
         if (line.empty() || line[0] == '#') {
             continue;
         }
-
+        bool bracket = false;
+        const int w = parse_worker_header(line, &bracket);
+        if (w > 0) {
+            section = "worker" + std::to_string(w);
+            if (w == worker && saw_target_section) *saw_target_section = true;
+            continue;
+        }
+        if (bracket) {
+            continue;                          // some other [section] -> ignore
+        }
         const std::size_t eq = line.find('=');
         if (eq == std::string::npos) {
             continue;
         }
-
-        std::string key = line.substr(0, eq);
-        std::string val = line.substr(eq + 1);
-        trim(key);
-        trim(val);
-        if (key.empty()) {
+        IniRawEntry e;
+        e.section = section;
+        e.key = line.substr(0, eq);
+        e.val = line.substr(eq + 1);
+        trim(e.key);
+        trim(e.val);
+        if (e.key.empty()) {
             continue;
         }
+        out.push_back(e);
+    }
+    return true;
+}
+
+// Effective (key,value) list for `worker`: global entries first, then the entries
+// of that worker's section overriding them (an already-seen key is replaced in
+// place, a new one is appended in file order).  `worker <= 0` = global only.
+void resolve_ini_entries(const std::vector<IniRawEntry> &raw, int worker,
+                         std::vector<std::pair<std::string, std::string>> &eff) {
+    for (const IniRawEntry &e : raw) {
+        if (!e.section.empty()) continue;
+        eff.emplace_back(e.key, e.val);
+    }
+    if (worker <= 0) {
+        return;
+    }
+    const std::string want = "worker" + std::to_string(worker);
+    for (const IniRawEntry &e : raw) {
+        if (e.section != want) continue;
+        bool replaced = false;
+        for (auto &kv : eff) {
+            if (kv.first == e.key) {
+                kv.second = e.val;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            eff.emplace_back(e.key, e.val);
+        }
+    }
+}
+
+} // namespace
+
+bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
+    return ecm_queue_config_load(path, 1, cfg);
+}
+
+bool ecm_queue_config_load(const std::string &path, int worker, EcmQueueConfig &cfg) {
+    std::vector<IniRawEntry> raw;
+    bool saw_target_section = false;
+    if (!read_ini_entries(path, worker, raw, &saw_target_section)) {
+        return false;
+    }
+    std::vector<std::pair<std::string, std::string>> entries;
+    resolve_ini_entries(raw, worker, entries);
+    if (worker > 1 && !saw_target_section) {
+        fprintf(stderr,
+                "[ecm] NOTE: %s has no [Worker #%d] section; worker %d uses the global "
+                "values only.\n", path.c_str(), worker, worker);
+    }
+
+    bool warned_legacy = false;   // legacy-key shim warns once per run
+    for (const auto &kv : entries) {
+        const std::string &key = kv.first;
+        const std::string &val = kv.second;
 
         const auto set_int = [&](int &dst) {
             try {
@@ -103,7 +193,7 @@ bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg) {
         else if (key == "save_sync_dir_1") cfg.save_sync_dir_1 = val;
         else if (key == "save_sync_dir_2") cfg.save_sync_dir_2 = val;
         else if (key == "sync_mode") cfg.sync_mode = val;
-        else if (key == "log_file") cfg.log_file = val;
+        else if (key == "log_file") { cfg.log_file = val; cfg.log_file_explicit = true; }
         else if (key == "tmp_dir") cfg.tmp_dir = val;
         else if (key == "progress_color") cfg.progress_color = val;
         else if (key == "verbose") set_bool(cfg.verbose);
@@ -438,7 +528,34 @@ bool ecm_queue_config_write_default(const std::string &path) {
 "kernel_sub =\n"
 "# (special-mult kernel override)\n"
 "# （special-mult 内核覆盖）\n"
-"kernel_special_mult =\n";
+"kernel_special_mult =\n"
+"\n"
+"# ---------------------------------------------------------------------------\n"
+"# Sections: one ini can drive several workers.\n"
+"# 分段：一份 ini 可以驱动多个 worker。\n"
+"#\n"
+"#   * Keys BEFORE the first section header are GLOBAL: every worker starts from\n"
+"#     them.  Keys inside [Worker #N] override the global ones for that worker\n"
+"#     only (the same worker number also selects the worktodo section).\n"
+"#   * 第一个段头之前的键是**全局默认值**，每个 worker 都从它出发；\n"
+"#     [Worker #N] 段里的键只覆盖该 worker（同一个编号也用来选 worktodo 的段）。\n"
+"#   * Start a worker with:  ecm_cuda.exe -ini ecm.ini --worker N\n"
+"#     启动某个 worker：ecm_cuda.exe -ini ecm.ini --worker N\n"
+"#   * [GUI] is for the graphical front-end (ecm_gui); the queue manager ignores\n"
+"#     unknown keys, so both live in this one file.\n"
+"#     [GUI] 段属于图形前端（ecm_gui）；队列管理器忽略不认识的键，所以两者同文件。\n"
+"#   * Workers 2..N log to screen_<N>.log unless log_file is set here, so several\n"
+"#     processes do not interleave into one screen.log.\n"
+"#     若这里没有显式设置 log_file，worker 2..N 默认写 screen_<N>.log，\n"
+"#     免得多个进程往同一个 screen.log 里插花。\n"
+"#\n"
+"# Example / 示例:\n"
+"#   device = 0              # global default\n"
+"#   [Worker #1]\n"
+"#   gpucurves = 960         # this GPU's best batch size\n"
+"#   [Worker #2]\n"
+"#   device = 1\n"
+"#   gpucurves = 384\n";
     out.close();
     return !out.fail();
 }

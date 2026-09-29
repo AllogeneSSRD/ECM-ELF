@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  ecm_gui 界面文案 —— 简体中文。
+  与 localization/english.xml 一一对应：缺哪个键就自动回退英文（不会出现空文本）。
+  欢迎直接改这个文件（或复制它做别的语言），改完在 GUI 里点 Language -> Reload localization 即可生效。
+  编码必须是 UTF-8（可带/不带 BOM）；非 UTF-8 会在 GUI 里报错而不是显示乱码。
+-->
+<EcmGui>
+  <Native-Langue name="简体中文" filename="chineseSimplified.xml" version="1">
+
+    <Panel id="menu">
+      <Item id="file"              name="文件"/>
+      <Item id="view"              name="视图"/>
+      <Item id="language"          name="语言"/>
+      <Item id="tools"             name="工具"/>
+      <Item id="open_ini"          name="打开 ecm.ini 所在目录"/>
+      <Item id="open_localization" name="打开本地化目录"/>
+      <Item id="save_settings"     name="立即保存布局与设置"/>
+      <Item id="reload_localization" name="重新载入本地化"/>
+      <Item id="start_all"         name="启动全部工作线程"/>
+      <Item id="stop_all"          name="停止全部工作线程"/>
+      <Item id="quit"              name="退出"/>
+    </Panel>
+
+    <Panel id="workers">
+      <Item id="title"        name="工作线程"/>
+      <Item id="col_state"    name="状态"/>
+      <Item id="col_gpu"      name="显卡"/>
+      <Item id="col_name"     name="名称"/>
+      <Item id="col_task"     name="当前任务"/>
+      <Item id="col_progress" name="进度"/>
+      <Item id="col_speed"    name="速度"/>
+      <Item id="col_eta"      name="剩余"/>
+      <Item id="col_hits"     name="命中"/>
+      <Item id="col_actions"  name="操作"/>
+      <Item id="waiting_progress" name="等待第一行进度信息"/>
+      <Item id="resume_note" name="从检查点继续。driver 要等下一个 batch 里程碑才打下一行进度（当前构建最多每 10 秒一行）。"/>
+      <Item id="start"        name="启动"/>
+      <Item id="stop"         name="停止"/>
+      <Item id="start_all"    name="全部启动"/>
+      <Item id="stop_all"     name="全部停止"/>
+      <Item id="exe"          name="工作线程可执行文件："/>
+      <Item id="show_raw"     name="原始输出"/>
+      <Item id="speed_history" name="曲线/秒"/>
+      <Item id="progress_history" name="进度 %"/>
+      <Item id="m2_note"      name="一个 worker = 一个 ecm_cuda.exe 进程。崩溃后 5 秒自动重启；五分钟内崩三次则停住（熔断）。关闭界面会一并停止它们。"/>
+      <Item id="log_pane"     name="输出"/>
+      <Item id="log_file"     name="日志文件"/>
+      <Item id="open_saves"   name="打开存档目录"/>
+      <Item id="no_output"    name="暂无输出。"/>
+      <Item id="m1_note"      name="列表来自配置。进程管理、实时输出与崩溃重启/熔断在 M2 落地（见 docs/DEV_ECM_GUI.md）。"/>
+      <Item id="duplicate_device" name="有另一个 worker 用了同一张显卡。"/>
+      <Item id="state_stopped"    name="已停止"/>
+      <Item id="state_starting"   name="启动中"/>
+      <Item id="state_running"    name="运行中"/>
+      <Item id="state_restarting" name="重启中"/>
+      <Item id="state_error"      name="错误"/>
+      <Item id="state_queue_empty" name="队列已空"/>
+    </Panel>
+
+    <Panel id="gpu">
+      <Item id="title"    name="显卡"/>
+      <Item id="util"     name="占用率"/>
+      <Item id="power"    name="功耗"/>
+      <Item id="clock_sm" name="SM 频率"/>
+      <Item id="clock_mem" name="显存频率"/>
+      <Item id="temp"     name="温度"/>
+      <Item id="memory"   name="显存"/>
+      <Item id="throttle" name="节流"/>
+      <Item id="cores"    name="CUDA 核"/>
+      <Item id="poll"     name="NVML 采样间隔"/>
+      <Item id="refresh"  name="界面刷新"/>
+      <Item id="m4_note"  name="由后台线程经 NVML 采样。超过强制功耗上限 3 倍的读数属于已知驱动怪癖，按原样显示。"/>
+      <Item id="nvml_missing" name="NVML 不可用 —— 显卡面板已停用。"/>
+      <Item id="total_power" name="全机功耗"/>
+    </Panel>
+
+    <Panel id="detail">
+      <Item id="title"            name="详情"/>
+      <Item id="effective_config" name="生效配置（段内键覆盖全局键）："/>
+      <Item id="task_line"        name="worktodo 行"/>
+      <Item id="command_line"     name="命令行"/>
+    </Panel>
+
+    <Panel id="results">
+      <Item id="title"       name="结果"/>
+      <Item id="rebuild"     name="从 JSONL 重建 results.txt"/>
+      <Item id="open_folder" name="打开结果目录"/>
+      <Item id="bits"        name="位数"/>
+      <Item id="empty"       name="还没有因子。所有 worker 的命中都会汇总到这里。"/>
+      <Item id="json_file"   name="原始记录"/>
+      <Item id="factor"      name="因子"/>
+      <Item id="curves"      name="曲线"/>
+      <Item id="sigmas"      name="sigma 列表"/>
+      <Item id="hits"        name="命中次数"/>
+      <Item id="first_seen"  name="首次命中"/>
+    </Panel>
+
+  </Native-Langue>
+</EcmGui>

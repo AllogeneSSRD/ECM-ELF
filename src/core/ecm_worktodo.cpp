@@ -436,25 +436,103 @@ bool ecm_compute_ecm2_n(const Ecm2Task &task, mpz_t N, std::string &err) {
     return compute_n_from_fields(task.k, task.b, task.n, task.c, task.factors, N, err);
 }
 
+int ecm_worktodo_parse_worker_header(const std::string &line, bool *is_bracket_line) {
+    if (is_bracket_line) *is_bracket_line = false;
+    if (line.size() < 3 || line.front() != '[' || line.back() != ']') {
+        return 0;
+    }
+    if (is_bracket_line) *is_bracket_line = true;
+    const std::string body = line.substr(1, line.size() - 2);
+    std::size_t p = 0;
+    const char *kw = "worker";
+    while (p < body.size() && std::isspace(static_cast<unsigned char>(body[p]))) p++;
+    for (const char *k = kw; *k; ++k, ++p) {
+        if (p >= body.size() ||
+            std::tolower(static_cast<unsigned char>(body[p])) != *k) {
+            return 0;
+        }
+    }
+    while (p < body.size() && std::isspace(static_cast<unsigned char>(body[p]))) p++;
+    if (p >= body.size() || body[p] != '#') return 0;
+    p++;
+    while (p < body.size() && std::isspace(static_cast<unsigned char>(body[p]))) p++;
+    if (p >= body.size() || !std::isdigit(static_cast<unsigned char>(body[p]))) return 0;
+    int n = 0;
+    while (p < body.size() && std::isdigit(static_cast<unsigned char>(body[p]))) {
+        n = n * 10 + (body[p] - '0');
+        if (n > 1000000) return 0;          // absurd index -> not our header
+        p++;
+    }
+    while (p < body.size() && std::isspace(static_cast<unsigned char>(body[p]))) p++;
+    return (p == body.size()) ? n : 0;
+}
+
+namespace {
+
+// Classification of one raw line for the section-aware queue walk. Keeping the
+// original (untrimmed) text is what lets the rewrite preserve the file verbatim.
+enum class LineKind { Task, Comment, Header, ForeignBracket };
+
+LineKind classify_line(const std::string &raw, int *section_out, int *header_out) {
+    std::string t = raw;
+    strip_bom(t);
+    trim(t);
+    bool bracket = false;
+    const int w = ecm_worktodo_parse_worker_header(t, &bracket);
+    if (w > 0) {
+        if (header_out) *header_out = w;
+        if (section_out) *section_out = w;
+        return LineKind::Header;
+    }
+    if (bracket) {
+        return LineKind::ForeignBracket;
+    }
+    if (t.empty() || t[0] == '#') {
+        return LineKind::Comment;
+    }
+    return LineKind::Task;
+}
+
+bool worker_matches(int section, int worker) {
+    return worker <= 0 || section == worker;
+}
+
+} // namespace
+
 bool ecm_worktodo_first_line(const std::string &path, std::string &line) {
+    return ecm_worktodo_first_line(path, 1, line);
+}
+
+bool ecm_worktodo_first_line(const std::string &path, int worker, std::string &line) {
     std::ifstream in(path);
     if (!in.is_open()) {
         return false;
     }
+    int section = 1;                        // lines before any header = worker 1
     std::string l;
     while (std::getline(in, l)) {
-        strip_bom(l);
-        trim(l);
-        if (l.empty() || l[0] == '#') {
+        const LineKind kind = classify_line(l, &section, nullptr);
+        if (kind != LineKind::Task) {
             continue;
         }
-        line = l;
+        if (!worker_matches(section, worker)) {
+            continue;
+        }
+        std::string t = l;
+        strip_bom(t);
+        trim(t);
+        line = t;
         return true;
     }
     return false;
 }
 
 bool ecm_worktodo_advance(const std::string &path, const std::string &first_line,
+                          WorktodoAction action) {
+    return ecm_worktodo_advance(path, 1, first_line, action);
+}
+
+bool ecm_worktodo_advance(const std::string &path, int worker, const std::string &first_line,
                           WorktodoAction action) {
     (void)first_line;  // We re-scan for the first task line instead of trusting the caller.
     std::ifstream in(path);
@@ -468,19 +546,24 @@ bool ecm_worktodo_advance(const std::string &path, const std::string &first_line
     }
     in.close();
 
+    int section = 1;
     bool found = false;
     for (std::size_t i = 0; i < lines.size(); ++i) {
-        std::string t = lines[i];
-        strip_bom(t);
-        trim(t);
-        if (t.empty() || t[0] == '#') {
-            continue;
+        const LineKind kind = classify_line(lines[i], &section, nullptr);
+        if (kind != LineKind::Task) {
+            continue;                       // headers/comments stay untouched
         }
-        // This is the first task line. `t` should equal `first_line`; if the
-        // file changed under us, still act on the line we actually found.
+        if (!worker_matches(section, worker)) {
+            continue;                       // another worker's line
+        }
+        // This is the first task line of our section. It should equal `first_line`;
+        // if the file changed under us, still act on the line we actually found.
         if (action == WorktodoAction::Remove) {
             lines.erase(lines.begin() + static_cast<std::vector<std::string>::difference_type>(i));
         } else {
+            std::string t = lines[i];
+            strip_bom(t);
+            trim(t);
             lines[i] = "# ERROR " + t;
         }
         found = true;
@@ -503,6 +586,33 @@ bool ecm_worktodo_advance(const std::string &path, const std::string &first_line
         return false;
     }
     return replace_file(tmp, path);
+}
+
+bool ecm_worktodo_list_workers(const std::string &path, std::vector<uint32_t> &workers,
+                               std::string &err) {
+    err.clear();
+    workers.clear();
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        err = "cannot open " + path;
+        return false;
+    }
+    int section = 1;
+    std::vector<uint32_t> seen;
+    std::string l;
+    while (std::getline(in, l)) {
+        const LineKind kind = classify_line(l, &section, nullptr);
+        if (kind != LineKind::Task) {
+            continue;
+        }
+        const uint32_t w = static_cast<uint32_t>(section);
+        if (std::find(seen.begin(), seen.end(), w) == seen.end()) {
+            seen.push_back(w);
+        }
+    }
+    std::sort(seen.begin(), seen.end());
+    workers = seen;
+    return true;
 }
 
 bool ecm_append_text_line(const std::string &path, const std::string &line) {

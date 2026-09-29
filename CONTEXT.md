@@ -91,6 +91,23 @@ OpenCL GPU 上的加速。以下术语按领域分组，为跨设计讨论提供
 
 ---
 
+## GUI 与多 worker（`ecm_gui`）
+
+| 术语 | 定义 |
+|------|------|
+| **worker** | 一个 stage-1 执行体。GUI 里一个 worker = 一个 `ecm_cuda.exe -ini ecm.ini --worker N` 进程（进程隔离、独立输出窗、独立 Job object）。ini 的 `[Worker #N]` 段与 worktodo 的 `[Worker #N]` 段用**同一编号**指同一个 worker。 |
+| **`[Worker #N]` 段** | ini 与 worktodo 共用的分段方式：无段 = worker 1；解析顺序 `段内键 → 全局键 → 内置默认`。不同 GPU 的最佳 `gpucurves` 不同，因此 worktodo 必须分段而不能共享消费。 |
+| **`[GUI]`** | `ecm.ini` 里的前端专属段（窗口几何/停靠串、`refresh_hz`、`gpu_poll_ms`、`language`、`priority`、`font_size`/`font`、results 路径）。driver 忽略未知键，所以两者同住一个文件。 |
+| **`--worker N`** | driver 开关：同时选中 ini 与 worktodo 的 `[Worker #N]` 段。**无段且无此开关时行为与旧版逐行一致**（向后兼容硬要求）。**GUI 的硬前提**：worker 可执行文件必须支持它（D1/D2 之后的构建）——旧构建会把 `--worker` 当位置参数、走单跑路径并打印 `No input number on stdin`，GUI 会诊断为 `DIAGNOSIS: … older than the D1/D2 driver changes`（`docs/DEV_ECM_GUI.md` §11.0）。 |
+| **`ecm_gui`** | 原生图形前端（Dear ImGui docking + Win32/DX11），源码在 **`src/gui/`**（与 `src/core`、`src/cuda` 平级，不是 `tools/` 下的外置工具）。只做监管/展示/配置，**不含任何数论**（不链 GMP/OpenCL/CUDA）。 |
+| **进度行** | 非 TTY（管道/重定向）下 driver 按衰减节奏打印的整行状态：CPU 侧 `stage1: [bar] 42.3% 42.3/100 (~1.20 s/curve) elapsed … ETA …`；GPU 侧 `GPU: [bar] 42.3% … +N bits (~1.20 s/curve) … remaining …`。GUI 靠它取百分比 / 速度 / ETA，进度条由 GUI 自绘。 |
+| **事件行** | 日志面板真正关心的行：`START:`、`FACTOR FOUND`、`factor[i]=…`、`Checkpoint saved/loaded`、`Resuming from checkpoint`、`ERROR:` 与 `# ERROR <行>`。 |
+| **results 双文件** | `results.json.txt`（追加式 JSONL，真相源，每命中一条对象）+ `results.txt`（同一因子被多条曲线命中时**合并成一行**，含 sigma 列表；从 JSONL 派生、可随时重建）。 |
+| **`gpucurves` 推荐** | 由 `--gpu-info` 给出的 `sm_count/tpb/tpi/ipb` 算建议批量：`blocks ≥ sm_count` 且取整波，折叠域需 `blocks ≥ 2×sm_count`；**不要**填满 register-allowed 槽位（kernel 是 issue bound）。依据与实测见 `docs/DEV_ECM_WORKTODO.md` §5。 |
+| **`work_manager.ps1`** | **已废弃**：队列/日志/同步编排由 driver 内置队列管理器取代。仅可作测试夹具，不作为生产路径。 |
+
+---
+
 ## 其他缩写
 
 | 缩写 | 含义 |

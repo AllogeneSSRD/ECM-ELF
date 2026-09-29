@@ -87,6 +87,17 @@
 
 ### 附带工具
 
+**`ecm_gui`（图形前端，`src/gui/`，M1–M5 已落地）** —— 多 worker 进程管理 + 每 worker 输出窗 +
+GPU 监控（NVML）+ 命中因子汇总（`results.json.txt` / `results.txt`），原生 Windows 界面
+（Dear ImGui docking + Win32/Direct3D 11），配置全部落在 `ecm.ini` 的 `[GUI]` 与 `[Worker #N]` 段。
+默认布局：左 60 %（上 Workers/详情标签页、下 每 worker 输出标签页）+ 右 40 %（上 GPU、下 Results）；
+字体按 DPI 自动放大（`[GUI] font_size = auto`）。
+构建：`cmake --build <build> --target ecm_gui`；自测：`ecm_gui.exe --selftest` /
+`--worker-selftest` / `--gpu-selftest`，真窗口验收 `tools\test\test_gui_smoke.ps1`。
+规划、决策记录与验收见
+[docs/DEV_ECM_GUI.md](docs/DEV_ECM_GUI.md)（worktodo 段化与 `gpucurves` 推荐见
+[docs/DEV_ECM_WORKTODO.md](docs/DEV_ECM_WORKTODO.md)）。
+
 **`ecm-report`** —— PrimeNet ECM 进度统计与可视化：数据源 `www.mersenne.org/report_ecm/`
 
 ![ECM progress 1-20000](tools/ecm_report/ecm_progress_1-20000_factored_overlay.png)
@@ -737,8 +748,16 @@ adb shell run-as com.example.ecm ls -la code_cache/opencl_cache/
 | 文档 | 简介 |
 |------|------|
 | [docs/DEBUG_PARAMETERS_GUIDE.md](docs/DEBUG_PARAMETERS_GUIDE.md) | `cgbn_ecm_stage1` / batch 参数、`gpu_ecm()` 调试输出 |
-| [docs/DEV_ECM_CUDA_QUEUE_MANAGER.md](docs/DEV_ECM_CUDA_QUEUE_MANAGER.md) | 队列管理器 + `ecm.ini` 代码结构与开发指南 |
+| [docs/DEV_ECM_CUDA_QUEUE_MANAGER.md](docs/DEV_ECM_CUDA_QUEUE_MANAGER.md) | 队列管理器 + `ecm.ini` 代码结构与开发指南（原 `work_manager.ps1` 已废弃，见该文） |
 | [docs/README.lib](docs/README.lib) | `ecm_params` 结构与 `ecm_factor()` 返回值 |
+
+### 图形前端与 worktodo（`ecm_gui`，`src/gui/`，M1–M5 已落地）
+
+| 文档 | 简介 |
+|------|------|
+| [docs/DEV_ECM_GUI.md](docs/DEV_ECM_GUI.md) | `ecm_gui`（ImGui + Win32/DX11）开发文档：多 worker 进程管理、小窗输出、GPU 监控（NVML）、四象限布局、DPI 字体、`[GUI]`/`[Worker #N]` 配置、配套 driver 改动 D1–D5、里程碑与验收（含 M8 首轮实测反馈修正）、全部决策记录 |
+| [docs/DEV_ECM_WORKTODO.md](docs/DEV_ECM_WORKTODO.md) | worktodo 段化（`[Worker #N]`）与可视化生成规划：段语义、消费者矩阵、按 GPU 的 SM 数与 N 位数推荐 `gpucurves`（含 D4 `--gpu-info`） |
+| [third_party/imgui/README.md](third_party/imgui/README.md) | vendored Dear ImGui（docking 分支）来源、pin、文件清单与 hash |
 
 ### 算子分析
 

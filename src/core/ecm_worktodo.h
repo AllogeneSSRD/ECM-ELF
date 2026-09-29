@@ -80,6 +80,40 @@ enum class WorktodoAction { Remove, MarkError };
 bool ecm_worktodo_advance(const std::string &path, const std::string &first_line,
                           WorktodoAction action);
 
+// ---------------------------------------------------------------------------
+// Sections (2026-10, D2 in docs/DEV_ECM_WORKTODO.md + docs/DEV_ECM_GUI.md)
+//
+// One worktodo file can serve several workers, Prime95 style:
+//
+//     ECMSTAGE2=...                 <- before any header: belongs to worker 1
+//     [Worker #2]
+//     ECMSTAGE2=...                 <- belongs to worker 2 only
+//
+// Rules:
+//   * a worker consumes and advances ONLY its own section;
+//   * headers, comments, blank lines and foreign sections are preserved verbatim
+//     (and in order) when the file is rewritten;
+//   * a repeated header for the same worker is fine (appended-to files do that);
+//   * `worker <= 0` keeps the legacy behaviour: no section filter, i.e. the whole
+//     file is one queue (existing single-worker setups are unaffected).
+// ---------------------------------------------------------------------------
+
+// Shared section-header syntax: "[Worker #N]" (case- and space-insensitive).
+// Returns N (> 0) for a worker header, otherwise 0. When `is_bracket_line` is not
+// null it reports whether the line was some other "[...]" line.
+int ecm_worktodo_parse_worker_header(const std::string &line, bool *is_bracket_line);
+
+// Section-aware variants of the two functions above.
+bool ecm_worktodo_first_line(const std::string &path, int worker, std::string &line);
+bool ecm_worktodo_advance(const std::string &path, int worker, const std::string &first_line,
+                          WorktodoAction action);
+
+// Distinct worker indices that own at least one task line (worker 1 when the file
+// has no headers), ascending. The GUI uses this to flag sections that have no
+// matching worker in ecm.ini. Returns false when the file cannot be opened.
+bool ecm_worktodo_list_workers(const std::string &path, std::vector<uint32_t> &workers,
+                               std::string &err);
+
 // Append one line (with trailing newline) to `path`, creating parent dirs.
 bool ecm_append_text_line(const std::string &path, const std::string &line);
 

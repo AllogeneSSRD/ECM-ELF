@@ -35,6 +35,10 @@ struct EcmQueueConfig {
     std::string worktodo = "worktodo.txt";
     std::string finished = "worktodo.finished.txt";
     std::string log_file = "screen.log";         // empty = screen only
+    // True when `log_file` came from the ini. The driver uses this to give workers
+    // 2..N their own default log (screen_<N>.log) instead of letting several
+    // processes interleave into one file -- without overriding an explicit value.
+    bool log_file_explicit = false;
     std::string tmp_dir = ".";                   // stage-1 output dir
     std::string save_sync_dir_1;                 // empty = disabled
     std::string save_sync_dir_2;                 // empty = disabled
@@ -147,7 +151,19 @@ std::string exp_cache;
 // pre-2026-09-24 key names, which are mapped with a warning so existing ecm.ini
 // files keep working -- see the migration table in the writer's template.
 // Returns true if the file was read (even if empty); false if it could not be opened.
+//
+// Section semantics (2026-10, D1 in docs/DEV_ECM_GUI.md):
+//   * Keys before the first `[Worker #N]` header are GLOBAL: they are the default
+//     for every worker.
+//   * Keys inside `[Worker #N]` override the global ones for that worker only.
+//   * Any other `[...]` line is ignored (GUI keys live in `[GUI]`).
+// `worker` is 1-based and matches the `--worker N` command-line switch, the ini
+// section and the worktodo section. `worker = 1` with no sections in the file is
+// exactly the pre-2026-10 behaviour, so existing ecm.ini files are unaffected.
 bool ecm_queue_config_load(const std::string &path, EcmQueueConfig &cfg);
+
+// Section-aware variant: global keys + the `[Worker #worker]` overrides.
+bool ecm_queue_config_load(const std::string &path, int worker, EcmQueueConfig &cfg);
 
 // Write a commented default INI template to `path`. Returns true on success.
 bool ecm_queue_config_write_default(const std::string &path);
