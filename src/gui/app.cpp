@@ -529,20 +529,18 @@ void App::tick() {
         w.progress_lines += d.progress_lines;
         if (d.last_progress.valid) {
             w.progress = d.last_progress;
-            // Sample for the sparkline. The driver emits progress lines at a decaying
-            // rate, so every line is worth keeping when it carries new information.
-            w.hist_pct.push_back(static_cast<float>(w.progress.pct));
+            // Sample for the chart. The driver emits progress lines at a decaying rate, so
+            // every line is worth keeping when it carries new information. The series holds
+            // SECONDS PER CURVE (see WorkerView::hist_s_per_curve).
             if (w.progress.s_per_curve > 0.0) {
-                w.hist_speed.push_back(static_cast<float>(1.0 / w.progress.s_per_curve));
+                w.hist_s_per_curve.push_back(static_cast<float>(w.progress.s_per_curve));
             }
             const std::size_t cap = 600;
-            if (w.hist_pct.size() > cap) {
-                w.hist_pct.erase(w.hist_pct.begin(),
-                                 w.hist_pct.begin() + static_cast<std::ptrdiff_t>(w.hist_pct.size() - cap));
-            }
-            if (w.hist_speed.size() > cap) {
-                w.hist_speed.erase(w.hist_speed.begin(),
-                                   w.hist_speed.begin() + static_cast<std::ptrdiff_t>(w.hist_speed.size() - cap));
+            if (w.hist_s_per_curve.size() > cap) {
+                w.hist_s_per_curve.erase(
+                    w.hist_s_per_curve.begin(),
+                    w.hist_s_per_curve.begin() +
+                        static_cast<std::ptrdiff_t>(w.hist_s_per_curve.size() - cap));
             }
             // Trace one sample per 1% step at most: a script must be able to check the
             // parsed numbers without the log growing by thousands of lines.
@@ -773,6 +771,23 @@ void App::draw() {
     const float strip_h = (p95_strip_h_ > 0.0f) ? p95_strip_h_ : ImGui::GetFrameHeight();
     const ImVec2 host_pos(vp->WorkPos.x, vp->WorkPos.y + strip_h);
     const ImVec2 host_size(vp->WorkSize.x, vp->WorkSize.y - strip_h);
+
+    // The menu bar and the strip are TWO text bands stacked at the top of the client area.
+    // Traced because the pixel test (tools/test/test_gui_cjk_pixels.ps1) has to know where the
+    // menu bar ends: with the strip right below it, an automatic "first text band" scan merged
+    // the two rows and measured ASCII strip glyphs as if they were Chinese menu glyphs
+    // (median cell width dropped from 30 px to 23 px, measured 2026-09-29).
+    {
+        const float menu_bar_h = vp->WorkPos.y - vp->Pos.y;
+        char mbuf[160];
+        std::snprintf(mbuf, sizeof(mbuf),
+                      "layout: menu_bar_h=%.0f strip_top=%.0f strip_h=%.0f host_top=%.0f",
+                      menu_bar_h, vp->WorkPos.y, strip_h, host_pos.y);
+        if (menu_bar_trace_last_ != mbuf) {
+            menu_bar_trace_last_ = mbuf;
+            trace(mbuf);
+        }
+    }
 
     // [GUI] start_tab: focus the wanted panel so its dock TAB gets selected. Focusing is the
     // only mechanism that works here -- DockNodeUpdate() copies the node's NavWindow back into
@@ -1827,6 +1842,247 @@ void App::draw_gen_panel() {
     ImGui::End();
 }
 
+// ---- one line chart for every panel (docs/DEV_ECM_GUI.md 8) --------------------------
+// Replaces ImGui::PlotLines, which the user found hard to read ("优化所有折线图使其更美观易读",
+// 2026-09-29). What this adds over PlotLines:
+//   * a rounded card with a dark inset background, so the chart reads as one object;
+//   * a subtle 3-line grid and dim min/max labels, so a value can be read off the chart;
+//   * a filled area under the curve plus a 2 px line: the shape is visible at a glance;
+//   * the CURRENT value + unit as the headline (no need to guess from the axis);
+//   * an optional reference line (e.g. the power limit) with its own label;
+//   * a hover read-out: vertical guide + tooltip with the value and its age;
+//   * "collecting…" instead of an empty box while the series is still short.
+void App::draw_metric_plot(const MetricPlot &p, const std::vector<float> &values,
+                          float *used_lo, float *used_hi) {
+    const ImU32 color = (p.color != 0) ? p.color : IM_COL32(90, 170, 255, 255);
+    const ImU32 bg = IM_COL32(18, 20, 24, 255);
+    const ImU32 bg_top = IM_COL32(26, 29, 35, 255);
+    const ImU32 grid = IM_COL32(255, 255, 255, 22);
+    const ImU32 dim = IM_COL32(170, 175, 185, 200);
+    const ImU32 fill = (color & 0x00FFFFFFu) | (60u << IM_COL32_A_SHIFT);
+
+    const float line_h = ImGui::GetTextLineHeight();
+    // The card is "headline row + plot band + min/max row". The heights in MetricPlot are given in
+    // 15 px-font units, so they must scale with the font: at 150 % DPI (font 22.5 px, line height
+    // ~31 px) a fixed 58 px card made the two text rows OVERLAP each other and cover the curve
+    // (measured 2026-09-29 -- the user runs 150 %). The plot band gets its own slot and a floor.
+    const float ui_scale = (font_size_px() > 0.0f) ? (font_size_px_ / 15.0f) : 1.0f;
+    float h = p.height * ui_scale;
+    const float rows_h = line_h * 2.0f + 8.0f;
+    if (h < rows_h + 24.0f) h = rows_h + 24.0f;
+    ImGui::PushID(p.id.c_str());
+    ImGui::InvisibleButton("##plot", ImVec2(-1.0f, h));
+    const ImVec2 p0 = ImGui::GetItemRectMin();
+    const ImVec2 p1 = ImGui::GetItemRectMax();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    // Card background: a subtle vertical gradient (AddRectFilledMultiColor takes no rounding
+    // argument, so the rounded card is the AddRect below).
+    dl->AddRectFilledMultiColor(p0, p1, bg_top, bg_top, bg, bg);
+    dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 18), 5.0f, 0, 1.0f);
+
+    const float pad_x = 6.0f;
+    const ImVec2 a0(p0.x + pad_x, p0.y + line_h + 3.0f);   // below the headline row
+    const ImVec2 a1(p1.x - pad_x, p1.y - line_h - 2.0f);   // above the min/max row
+
+    // Range: fixed, or the observed window with padding (so a nearly constant signal still
+    // shows its shape instead of a dead flat line).
+    float lo = p.lo, hi = p.hi;
+    if (!p.fixed_range && !values.empty()) {
+        float mn = values[0], mx = values[0];
+        for (float v : values) { mn = (v < mn ? v : mn); mx = (v > mx ? v : mx); }
+        float span = mx - mn;
+        const float floor_span = (mx > 0.0f) ? mx * 0.02f : 1.0f;
+        if (span < floor_span) span = floor_span;
+        lo = mn - span * 0.12f;
+        hi = mx + span * 0.12f;
+        if (lo < 0.0f && mn >= 0.0f) lo = 0.0f;
+    }
+    if (hi <= lo) hi = lo + 1.0f;
+
+    // Grid + axis labels.
+    for (int g = 1; g <= 3; ++g) {
+        const float y = a1.y - (a1.y - a0.y) * (static_cast<float>(g) / 4.0f);
+        dl->AddLine(ImVec2(a0.x, y), ImVec2(a1.x, y), grid, 1.0f);
+    }
+
+    if (values.size() < 2) {
+        // Not enough samples: say so instead of drawing a 1-point "line".
+        const char *msg = p.empty_text.empty() ? "collecting..." : p.empty_text.c_str();
+        const ImVec2 ts = ImGui::CalcTextSize(msg);
+        dl->AddText(ImVec2((p0.x + p1.x - ts.x) * 0.5f, (p0.y + p1.y - ts.y) * 0.5f), dim, msg);
+    } else {
+        const float span = hi - lo;
+        const float step_x = (a1.x - a0.x) / static_cast<float>(values.size() - 1);
+        const auto y_of = [&](float v) {
+            float t = (v - lo) / span;
+            t = (t < 0.0f) ? 0.0f : (t > 1.0f ? 1.0f : t);
+            return a1.y - (a1.y - a0.y) * t;
+        };
+
+        // Area fill: one thin column per sample step (a filled area under a polyline is not
+        // convex, so AddConvexPolyFilled cannot be used).
+        for (std::size_t i = 1; i < values.size(); ++i) {
+            const float x0 = a0.x + step_x * static_cast<float>(i - 1);
+            const float x1 = x0 + step_x + 0.5f;
+            const float y = (y_of(values[i - 1]) + y_of(values[i])) * 0.5f;
+            if (y >= a1.y) continue;
+            dl->AddRectFilled(ImVec2(x0, y), ImVec2(x1, a1.y), fill);
+        }
+
+        // Reference line (dashed) with its label on the left. A reference that lies OUTSIDE the
+        // auto-ranged window must not be silently dropped -- measured 2026-09-29: the enforced
+        // 285 W limit against a 141..165 W observed window meant the dashed line never appeared
+        // ("where is the limit line?"). It is pinned to the edge it lies beyond, marked with a
+        // small triangle pointing that way, so "the curve sits far below the limit" stays visible
+        // without stretching the range and flattening the curve.
+        if (p.has_ref) {
+            const bool above = (p.ref > hi);
+            const bool below = (p.ref < lo);
+            const float y = above ? a0.y + 0.5f : (below ? a1.y - 0.5f : y_of(p.ref));
+            const ImU32 ref_col = (above || below) ? IM_COL32(255, 120, 120, 110)
+                                                  : IM_COL32(255, 120, 120, 150);
+            for (float x = a0.x; x < a1.x; x += 8.0f) {
+                dl->AddLine(ImVec2(x, y), ImVec2((x + 4.0f < a1.x ? x + 4.0f : a1.x), y), ref_col,
+                            1.0f);
+            }
+            if (!p.ref_label.empty()) {
+                const ImVec2 ts = ImGui::CalcTextSize(p.ref_label.c_str());
+                // Off-scale labels stay INSIDE the plot band (never over the headline row).
+                const float ty = below ? (a1.y - ts.y - 1.5f) : (y + 1.5f);
+                dl->AddRectFilled(ImVec2(a0.x + 2.0f, ty - 1.0f),
+                                  ImVec2(a0.x + ts.x + 6.0f, ty + ts.y + 1.0f),
+                                  IM_COL32(40, 20, 20, 220), 2.0f);
+                dl->AddText(ImVec2(a0.x + 4.0f, ty), IM_COL32(255, 150, 150, 230),
+                            p.ref_label.c_str());
+                if (above || below) {
+                    // A drawn arrow, not a glyph: no dependency on the font covering U+2191.
+                    const float ax = a0.x + ts.x + 10.0f;
+                    const float ay = ty + ts.y * 0.5f;
+                    const float r = ts.y * 0.28f;
+                    if (above) {
+                        dl->AddTriangleFilled(ImVec2(ax, ay - r), ImVec2(ax - r, ay + r),
+                                              ImVec2(ax + r, ay + r), ref_col);
+                    } else {
+                        dl->AddTriangleFilled(ImVec2(ax, ay + r), ImVec2(ax - r, ay - r),
+                                              ImVec2(ax + r, ay - r), ref_col);
+                    }
+                }
+            }
+        }
+
+        // The curve itself.
+        std::vector<ImVec2> pts;
+        pts.reserve(values.size());
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            pts.push_back(ImVec2(a0.x + step_x * static_cast<float>(i), y_of(values[i])));
+        }
+        dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), color, 0, 2.0f);
+
+        // The newest sample gets a dot: "where are we now" without reading the axis.
+        const ImVec2 last = pts.back();
+        dl->AddCircleFilled(last, 3.0f, color);
+        dl->AddCircle(last, 4.0f, IM_COL32(0, 0, 0, 120), 0, 1.0f);
+
+        // Hover: vertical guide + tooltip.
+        if (ImGui::IsItemHovered() && ImGui::GetIO().MousePos.x >= a0.x &&
+            ImGui::GetIO().MousePos.x <= a1.x) {
+            const int idx = static_cast<int>((ImGui::GetIO().MousePos.x - a0.x) / step_x + 0.5f);
+            const int clamped = (idx < 0) ? 0 : (idx >= static_cast<int>(values.size())
+                                                     ? static_cast<int>(values.size()) - 1
+                                                     : idx);
+            const ImVec2 hp(pts[static_cast<std::size_t>(clamped)].x, a0.y);
+            dl->AddLine(ImVec2(hp.x, a0.y), ImVec2(hp.x, a1.y), IM_COL32(255, 255, 255, 70), 1.0f);
+            dl->AddCircleFilled(pts[static_cast<std::size_t>(clamped)], 2.5f,
+                                IM_COL32(255, 255, 255, 220));
+            char buf[160];
+            if (p.ms_per_sample > 0.0f) {
+                const float age_s = (static_cast<float>(values.size() - 1 - clamped)) *
+                                    p.ms_per_sample / 1000.0f;
+                std::snprintf(buf, sizeof(buf), "%s: %.2f %s\n%.1f s ago", p.label.c_str(),
+                              static_cast<double>(values[static_cast<std::size_t>(clamped)]),
+                              p.unit.c_str(), static_cast<double>(age_s));
+            } else {
+                std::snprintf(buf, sizeof(buf), "%s: %.2f %s\n#%d of %d", p.label.c_str(),
+                              static_cast<double>(values[static_cast<std::size_t>(clamped)]),
+                              p.unit.c_str(), clamped + 1, static_cast<int>(values.size()));
+            }
+            ImGui::SetTooltip("%s", buf);
+        }
+    }
+
+    // Headline: label on the left, current value + unit on the right; min/max dim underneath.
+    // (line_h comes from the layout block above -- the card height is built from it.)
+    dl->AddText(ImVec2(p0.x + 8.0f, p0.y + 2.0f), dim, p.label.c_str());
+    if (!values.empty()) {
+        char vbuf[96];
+        std::snprintf(vbuf, sizeof(vbuf), "%.*f %s", p.decimals,
+                      static_cast<double>(values.back()), p.unit.c_str());
+        const ImVec2 ts = ImGui::CalcTextSize(vbuf);
+        dl->AddText(ImVec2(p1.x - ts.x - 8.0f, p0.y + 2.0f), color, vbuf);
+    }
+    {
+        char b1[64], b2[64];
+        std::snprintf(b1, sizeof(b1), "%.*f", p.decimals, static_cast<double>(lo));
+        std::snprintf(b2, sizeof(b2), "%.*f", p.decimals, static_cast<double>(hi));
+        dl->AddText(ImVec2(a0.x, p1.y - line_h - 1.0f), IM_COL32(140, 145, 155, 180), b1);
+        const ImVec2 ts2 = ImGui::CalcTextSize(b2);
+        dl->AddText(ImVec2(a1.x - ts2.x, p1.y - line_h - 1.0f),
+                    IM_COL32(140, 145, 155, 180), b2);
+    }
+    ImGui::PopID();
+
+    if (used_lo != nullptr) *used_lo = lo;
+    if (used_hi != nullptr) *used_hi = hi;
+    // Trace the chart so a test can assert it exists with a sane range and the reference line
+    // (the panels have no other machine-readable footprint). Rate-limited per chart below.
+    //
+    // The geometry fields exist because of a REAL layout bug (2026-09-29): the card height was a
+    // constant (58/62 px) while the text row height scales with the font, so at 150 % DPI
+    // (font 22.5 px, line_h ~31 px) the headline row and the min/max row OVERLAPPED and both
+    // covered the curve. `band_top`/`band_h` let a test prove the three bands are disjoint at
+    // whatever DPI it runs at: band_top >= line_h + 2 and band_top + band_h <= h - line_h.
+    {
+        char tb[384];
+        const float band_top = a0.y - p0.y;
+        const float band_h = a1.y - a0.y;
+        if (p.has_ref) {
+            std::snprintf(tb, sizeof(tb),
+                          "plot: %s label=\"%s\" n=%d lo=%.2f hi=%.2f last=%.2f ref=%.2f "
+                          "h=%.0f line_h=%.0f band_top=%.0f band_h=%.0f",
+                          p.id.c_str(), p.label.c_str(), static_cast<int>(values.size()),
+                          static_cast<double>(lo), static_cast<double>(hi),
+                          values.empty() ? 0.0 : static_cast<double>(values.back()),
+                          static_cast<double>(p.ref), static_cast<double>(h),
+                          static_cast<double>(line_h), static_cast<double>(band_top),
+                          static_cast<double>(band_h));
+        } else {
+            std::snprintf(tb, sizeof(tb),
+                          "plot: %s label=\"%s\" n=%d lo=%.2f hi=%.2f last=%.2f "
+                          "h=%.0f line_h=%.0f band_top=%.0f band_h=%.0f",
+                          p.id.c_str(), p.label.c_str(), static_cast<int>(values.size()),
+                          static_cast<double>(lo), static_cast<double>(hi),
+                          values.empty() ? 0.0 : static_cast<double>(values.back()),
+                          static_cast<double>(h), static_cast<double>(line_h),
+                          static_cast<double>(band_top), static_cast<double>(band_h));
+        }
+        // Rate limit PER CHART (a single shared timestamp starved every chart but the first
+        // one: util changes on every sample and consumed the window, so power/clock/the worker
+        // speed chart never got traced -- measured 2026-09-29).
+        const unsigned long long now = mono_ms();
+        const bool changed = (plot_trace_last_[p.id] != tb);
+        // The first few changes are always traced (a test needs the early state), after that at
+        // most one line per 2 s per chart.
+        const bool early = (plot_trace_count_[p.id] < 3);
+        const bool due = (now - plot_trace_ms_[p.id] >= 2000ull);
+        if (changed && (early || due)) {
+            plot_trace_last_[p.id] = tb;
+            plot_trace_ms_[p.id] = now;
+            ++plot_trace_count_[p.id];
+            trace(tb);
+        }
+    }
+}
+
 void App::draw_workers_table() {
     // Stable window id (###workers): the docking layout must survive a language switch,
     // otherwise the titles change and ImGui sees a different window.
@@ -2152,7 +2408,19 @@ void App::draw_gpu_panel() {
 
         // History: utilisation, power and SM clock over the retained window (the
         // sampling thread keeps ~2 minutes at the default poll interval).
-        const std::vector<GpuSample> hist = gpu_.history(static_cast<int>(i));
+        const std::vector<GpuSample> hist_raw = gpu_.history(static_cast<int>(i));
+        // Physically impossible readings are dropped from the CHART (they are documented in
+        // docs/DEV_ECM_GUI.md 8.1): the 4060 Laptop intermittently reports 590 W against a 55 W
+        // enforced limit, and ONE such sample stretched the power range to 0..660 W so the real
+        // 1.5..9.4 W curve was drawn as a dead flat line at the bottom (measured 2026-09-29).
+        // The same rule already guards the whole-machine total below, and the card's text row
+        // still shows the raw reading.
+        std::vector<GpuSample> hist;
+        hist.reserve(hist_raw.size());
+        for (const GpuSample &h : hist_raw) {
+            if (h.power_limit_w > 0.0 && h.power_w > 3.0 * h.power_limit_w) continue;
+            hist.push_back(h);
+        }
         if (hist.size() >= 2) {
             std::vector<float> util, power, clock;
             util.reserve(hist.size());
@@ -2163,34 +2431,69 @@ void App::draw_gpu_panel() {
                 power.push_back(static_cast<float>(h.power_w));
                 clock.push_back(static_cast<float>(h.clock_sm_mhz));
             }
-            const std::string tag = "##h" + std::to_string(i);
-            // Auto-range power and clock around the OBSERVED window (with 10 % padding):
-            // with the fixed 0..0 "auto" range ImGui scales to the data, but a nearly
-            // constant signal then looks dead flat -- an explicit padded range shows the
-            // small variations (measured: idle power 9.2 vs 9.6 W, SM clock 210 vs 2595).
-            const auto padded_range = [](const std::vector<float> &v, float lo_fallback,
-                                         float hi_fallback, float *lo, float *hi) {
-                float mn = v.empty() ? lo_fallback : v[0];
-                float mx = mn;
-                for (float x : v) {
-                    mn = (x < mn ? x : mn);
-                    mx = (x > mx ? x : mx);
+            // The charts themselves (grid, headline value, reference line, hover read-out)
+            // are drawn by App::draw_metric_plot, shared with the worker speed chart; power and
+            // SM clock auto-range over the OBSERVED window (a nearly constant signal then still
+            // shows its shape instead of a dead flat line -- measured: idle power 9.2 vs 9.6 W).
+            const float poll_ms = static_cast<float>(gpu_poll_ms_);
+            const float power_limit = static_cast<float>(s.power_limit_w);
+
+            MetricPlot pu;
+            pu.id = "gpu" + std::to_string(i) + "/util";
+            pu.label = loc_.t("gpu", "util");
+            pu.unit = "%";
+            pu.color = IM_COL32(90, 200, 255, 255);
+            pu.fixed_range = true;       // a percentage always reads 0..100
+            pu.lo = 0.0f;
+            pu.hi = 100.0f;
+            pu.decimals = 0;
+            pu.ms_per_sample = poll_ms;
+            pu.empty_text = loc_.t("gpu", "collecting");
+            draw_metric_plot(pu, util);
+
+            MetricPlot pp;
+            pp.id = "gpu" + std::to_string(i) + "/power";
+            pp.label = loc_.t("gpu", "power");
+            pp.unit = "W";
+            pp.color = IM_COL32(255, 190, 70, 255);
+            pp.lo = 0.0f;                // fallback range when the window is still short
+            pp.hi = (power_limit > 0.0f) ? power_limit : 100.0f;
+            pp.decimals = 1;
+            pp.ms_per_sample = poll_ms;
+            pp.empty_text = loc_.t("gpu", "collecting");
+            if (power_limit > 0.0f) {
+                pp.has_ref = true;       // the enforced power limit is the number to compare to
+                pp.ref = power_limit;
+                pp.ref_label = loc_.t("gpu", "power_limit");
+            }
+            // The limit is what that dashed reference line claims. Trace it (when it changes)
+            // so a script can cross-check the chart's `ref=` against the real NVML value
+            // instead of trusting the picture.
+            {
+                char lim[96];
+                std::snprintf(lim, sizeof(lim), "gpu: limits dev=%d power_limit_w=%.1f",
+                              static_cast<int>(i), s.power_limit_w);
+                if (gpu_limit_trace_[static_cast<int>(i)] != lim) {
+                    gpu_limit_trace_[static_cast<int>(i)] = lim;
+                    trace(lim);
                 }
-                float span = mx - mn;
-                if (span < (mx > 0.0f ? mx * 0.02f : 1.0f)) span = (mx > 0.0f ? mx * 0.02f : 1.0f);
-                *lo = mn - span * 0.10f;
-                *hi = mx + span * 0.10f;
-                if (*lo < 0.0f) *lo = 0.0f;
-            };
-            float p_lo = 0.0f, p_hi = 0.0f, c_lo = 0.0f, c_hi = 0.0f;
-            padded_range(power, 0.0f, 1.0f, &p_lo, &p_hi);
-            padded_range(clock, 0.0f, 1.0f, &c_lo, &c_hi);
-            ImGui::PlotLines((tag + "u").c_str(), util.data(), static_cast<int>(util.size()), 0,
-                             loc_.t("gpu", "util").c_str(), 0.0f, 100.0f, ImVec2(-1.0f, 50.0f));
-            ImGui::PlotLines((tag + "p").c_str(), power.data(), static_cast<int>(power.size()), 0,
-                             loc_.t("gpu", "power").c_str(), p_lo, p_hi, ImVec2(-1.0f, 50.0f));
-            ImGui::PlotLines((tag + "c").c_str(), clock.data(), static_cast<int>(clock.size()), 0,
-                             loc_.t("gpu", "clock_sm").c_str(), c_lo, c_hi, ImVec2(-1.0f, 50.0f));
+            }
+            float p_lo = 0.0f, p_hi = 0.0f;
+            draw_metric_plot(pp, power, &p_lo, &p_hi);   // real range, reported by the trace
+
+            MetricPlot pc;
+            pc.id = "gpu" + std::to_string(i) + "/clock";
+            pc.label = loc_.t("gpu", "clock_sm");
+            pc.unit = "MHz";
+            pc.color = IM_COL32(120, 230, 150, 255);
+            pc.lo = 0.0f;
+            pc.hi = 3000.0f;             // fallback; the real range is the observed window
+            pc.decimals = 0;
+            pc.ms_per_sample = poll_ms;
+            pc.empty_text = loc_.t("gpu", "collecting");
+            float c_lo = 0.0f, c_hi = 0.0f;
+            draw_metric_plot(pc, clock, &c_lo, &c_hi);
+
             trace_gpu_history(static_cast<int>(i), hist, p_lo, p_hi, c_lo, c_hi);
         }
     }
@@ -2348,20 +2651,28 @@ void App::draw_worker_panes() {
         ImGui::Separator();
         // Progress panel: the numbers come from the parsed progress line (the ASCII bar
         // in the raw output is NOT what the user sees here).
+        // Only the SPEED is charted. The progress-% chart was dropped on request
+        // (2026-09-29: "worker 日志窗口删去进度%"): the percentage is already the bar in the
+        // Workers table and the headline number right here, and it is monotone, so a second
+        // chart of it carried no information. The speed chart is seconds per curve (the unit
+        // the driver prints and the one the ETA is built from), not curves/second.
         if (w.progress.valid) {
             ImGui::Text("%.1f%%   %.2f s/curve   ETA %.0f s", w.progress.pct,
                         w.progress.s_per_curve, w.progress.eta_s);
-            if (!w.hist_speed.empty()) {
-                ImGui::PlotLines(("##speed" + std::to_string(w.index)).c_str(),
-                                 w.hist_speed.data(), static_cast<int>(w.hist_speed.size()),
-                                 0, loc_.t("workers", "speed_history").c_str(), 0.0f, 0.0f,
-                                 ImVec2(-1.0f, 60.0f));
-            }
-            if (!w.hist_pct.empty()) {
-                ImGui::PlotLines(("##pct" + std::to_string(w.index)).c_str(), w.hist_pct.data(),
-                                 static_cast<int>(w.hist_pct.size()), 0,
-                                 loc_.t("workers", "progress_history").c_str(), 0.0f, 100.0f,
-                                 ImVec2(-1.0f, 60.0f));
+            if (!w.hist_s_per_curve.empty()) {
+                MetricPlot plot;
+                plot.id = "worker" + std::to_string(w.index) + "/s_per_curve";
+                plot.label = loc_.t("workers", "speed_history");
+                plot.unit = "s/curve";
+                plot.color = IM_COL32(180, 150, 255, 255);
+                plot.height = 62.0f;
+                // Two decimals: a curve takes tens of seconds on a big B1, and the useful
+                // differences between progress lines are in the hundredths… but a range of
+                // 1.40..1.44 s/curve must not collapse into "1.4".
+                plot.fixed_range = false;
+                plot.decimals = 2;
+                plot.empty_text = loc_.t("workers", "collecting");
+                draw_metric_plot(plot, w.hist_s_per_curve);
             }
         }
         ImGui::TextDisabled("%s: %s", loc_.t("workers", "log_file").c_str(), w.log_file.c_str());

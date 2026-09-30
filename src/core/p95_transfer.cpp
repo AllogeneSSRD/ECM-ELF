@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <vector>
 
@@ -293,6 +294,40 @@ void park_lines(const P95TransferConfig &cfg, const std::vector<std::string> &li
     write_lines_atomic(cfg.pending_path, all, err);
 }
 
+// ── ledger of delivered lines ────────────────────────────────────────────────────────
+// One record per line:  "sent <line>"  /  "recovered <line>".
+// It exists so the driver can notice that Prime95 threw a delivered line away (rejected AID)
+// and hand it over again without the AID, instead of losing the stage-1 work silently.
+std::vector<std::string> read_ledger(const std::string &path) { return read_lines(path); }
+
+void append_ledger(const std::string &path, const std::string &record) {
+    if (path.empty() || record.empty()) return;
+    std::ofstream out(path, std::ios::binary | std::ios::app);
+    if (!out) return;
+    out << record << "\n";
+}
+
+// "sent"/"recovered" + the line (the line itself may contain spaces? no, but paths do).
+std::string ledger_line(const std::string &record) {
+    const std::size_t sp = record.find(' ');
+    return (sp == std::string::npos) ? std::string() : trim(record.substr(sp + 1));
+}
+std::string ledger_kind(const std::string &record) {
+    const std::size_t sp = record.find(' ');
+    return (sp == std::string::npos) ? record : record.substr(0, sp);
+}
+
+// Is `line` (AID-stripped comparison) already in one of Prime95's worktodo lists?
+bool line_known_to_p95(const std::vector<P95WorkerSection> &sections, const std::string &line) {
+    const std::string want = trim(p95_strip_aid(line));
+    for (const P95WorkerSection &s : sections) {
+        for (const std::string &l : s.lines) {
+            if (trim(p95_strip_aid(l)) == want) return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 bool p95_parse_add_workers(const std::string &spec, std::vector<int> &workers, int &ignored) {
@@ -347,6 +382,131 @@ size_t p95_transfer_pending_count(const std::string &pending_path) {
     return read_lines(pending_path).size();
 }
 
+std::string p95_transfer_ledger_path(const std::string &exe_dir) {
+    return join_path(exe_dir.empty() ? std::string(".") : exe_dir, "p95_add_sent.txt");
+}
+
+// ── assignment keys ─────────────────────────────────────────────────────────────────
+
+std::string p95_line_aid(const std::string &line) {
+    // ECMSTAGE2=[<aid>,]<k>,<b>,…  /  ECM2=[<aid>,][FFT2=..,]<k>,…: the AID is the first field
+    // when it is not integer-like. Our own reader uses the same rule (ecm_worktodo.cpp), so a
+    // line the queue accepted is read the same way here.
+    std::string s = trim(line);
+    std::size_t eq = s.find('=');
+    if (eq == std::string::npos) return std::string();
+    s = s.substr(eq + 1);
+    const std::size_t comma = s.find(',');
+    if (comma == std::string::npos) return std::string();
+    const std::string first = trim(s.substr(0, comma));
+    if (first.empty()) return std::string();
+    bool integer_like = true;
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        const char c = first[i];
+        if (i == 0 && (c == '+' || c == '-')) continue;
+        if (!std::isdigit(static_cast<unsigned char>(c))) { integer_like = false; break; }
+    }
+    if (integer_like) return std::string();          // that field is k, not an AID
+    if (lower(first) == "n/a") return std::string(); // explicit "no AID"
+    return first;
+}
+
+std::string p95_strip_aid(const std::string &line) {
+    const std::string aid = p95_line_aid(line);
+    if (aid.empty()) return line;
+    std::string s = trim(line);
+    const std::size_t eq = s.find('=');
+    if (eq == std::string::npos) return line;
+    const std::string head = s.substr(0, eq + 1);
+    const std::string rest = s.substr(eq + 1);
+    const std::size_t comma = rest.find(',');
+    if (comma == std::string::npos) return line;
+    return head + rest.substr(comma + 1);
+}
+
+std::vector<std::string> p95_rejected_aids(const std::string &prime_log,
+                                           const std::string &results_txt,
+                                           std::string *err) {
+    std::vector<std::string> out;
+    bool read_any = false;
+    const std::string files[2] = {prime_log, results_txt};
+    for (const std::string &path : files) {
+        if (path.empty()) continue;
+        std::ifstream in(path);
+        if (!in) continue;
+        read_any = true;
+        std::string line;
+        while (std::getline(in, line)) {
+            /* Prime95 writes, on the line after "PrimeNet error 43: Invalid assignment key":
+                   ap: no such assignment key, GUID: <guid>, key: <32 hex>
+               Only that shape is accepted, so an unrelated "key:" elsewhere cannot poison the
+               set and make us drop a perfectly good AID. */
+            if (line.find("no such assignment key") == std::string::npos) continue;
+            const std::size_t k = line.rfind("key:");
+            if (k == std::string::npos) continue;
+            std::string key = trim(line.substr(k + 4));
+            for (char &c : key) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (key.size() < 8 || key.size() > 64) continue;
+            bool hex = true;
+            for (char c : key) {
+                if (!std::isxdigit(static_cast<unsigned char>(c))) { hex = false; break; }
+            }
+            if (!hex) continue;
+            if (std::find(out.begin(), out.end(), key) == out.end()) out.push_back(key);
+        }
+    }
+    if (!read_any && err != nullptr) {
+        *err = "no Prime95 log could be read (prime.log / results.txt missing)";
+    }
+    return out;
+}
+
+std::vector<std::string> p95_transfer_recover_lines(const P95TransferConfig &cfg,
+                                                    size_t *rejected_count) {
+    std::vector<std::string> out;
+    const std::vector<std::string> rejected = p95_rejected_aids(cfg.prime_log_path,
+                                                                cfg.results_txt_path);
+    if (rejected_count != nullptr) *rejected_count = rejected.size();
+    if (!cfg.recover_lost || rejected.empty() || cfg.sent_ledger_path.empty()) return out;
+
+    std::vector<std::string> ledger = read_ledger(cfg.sent_ledger_path);
+    if (ledger.empty()) return out;
+
+    /* What Prime95 holds right now: a line that is still in worktodo.txt or waiting in
+       worktodo.add is fine and must not be sent twice. */
+    std::vector<P95WorkerSection> todo_sections, add_sections;
+    std::string err;
+    (void)p95_read_worktodo(cfg.worktodo_path, todo_sections, err);
+    (void)p95_read_worktodo(p95_transfer_add_path(cfg.worktodo_path), add_sections, err);
+
+    /* A line only needs recovery when Prime95 no longer has it: with a rejected AID Prime95
+       deletes the work unit (commonc.c:6567), so it vanished from worktodo.txt without ever
+       running stage 2. */
+    std::vector<std::string> done;      // lines already recovered once
+    for (const std::string &rec : ledger) {
+        if (ledger_kind(rec) == "recovered") {
+            const std::string l = ledger_line(rec);
+            if (!l.empty()) done.push_back(trim(p95_strip_aid(l)));
+        }
+    }
+
+    for (const std::string &rec : ledger) {
+        if (ledger_kind(rec) != "sent") continue;
+        const std::string line = trim(ledger_line(rec));
+        if (line.empty()) continue;
+        const std::string aid = p95_line_aid(line);
+        if (aid.empty()) continue;                       // no AID: Prime95 cannot reject it
+        if (std::find(rejected.begin(), rejected.end(), aid) == rejected.end()) continue;
+        const std::string stripped = trim(p95_strip_aid(line));
+        if (std::find(done.begin(), done.end(), stripped) != done.end()) continue;
+        if (line_known_to_p95(todo_sections, line) || line_known_to_p95(add_sections, line)) {
+            continue;                                    // still queued: nothing to recover
+        }
+        if (std::find(out.begin(), out.end(), stripped) == out.end()) out.push_back(stripped);
+    }
+    return out;
+}
+
 P95TransferResult p95_transfer_deliver(const P95TransferConfig &cfg, const std::string &line) {
     P95TransferResult r;
     if (trim(cfg.worktodo_path).empty()) {
@@ -373,11 +533,47 @@ P95TransferResult p95_transfer_deliver(const P95TransferConfig &cfg, const std::
        failed must not be forgotten just because its queue line is already finished. */
     std::vector<std::string> queued = read_lines(cfg.pending_path);
     r.pending_delivered = queued.size();
+
+    /* Work Prime95 already dropped (rejected AID) is re-queued WITHOUT its AID: the stage-1
+       result is on disk, and Prime95 registers a fresh assignment when there is no key. */
+    std::vector<std::string> recovered = p95_transfer_recover_lines(cfg);
+    r.recovered = recovered.size();
+    for (const std::string &l : recovered) queued.push_back(l);
+
+    /* An AID PrimeNet has already rejected must NOT be attached: Prime95 would report it and
+       delete the task (commonc.c:6550-6569). Everything else keeps its AID. */
+    const std::vector<std::string> rejected = p95_rejected_aids(cfg.prime_log_path,
+                                                                cfg.results_txt_path);
+    const std::string task_aid = p95_line_aid(task);
+    if (!task_aid.empty() &&
+        std::find(rejected.begin(), rejected.end(), task_aid) != rejected.end()) {
+        r.aid_dropped = true;
+        task = p95_strip_aid(task);
+    } else if (!cfg.keep_aid && !task_aid.empty()) {
+        r.aid_dropped = true;                            // ini p95_keep_aid = 0
+        task = p95_strip_aid(task);
+    }
     queued.push_back(task);
 
     std::string note;
     r.worker = choose_worker(cfg, todo_dir, add_path, note);
     r.note = note;
+    if (r.aid_dropped) {
+        const std::string why = (!task_aid.empty() &&
+                                 std::find(rejected.begin(), rejected.end(), task_aid) != rejected.end())
+                                    ? std::string("PrimeNet rejected AID ") + task_aid
+                                    : std::string("p95_keep_aid = 0");
+        const std::string extra =
+            why + ": delivered without the AID so Prime95 registers the work itself "
+                  "(a rejected key makes Prime95 delete the task)";
+        r.note = r.note.empty() ? extra : (r.note + "; " + extra);
+    }
+    if (r.recovered > 0) {
+        const std::string extra = std::to_string(r.recovered) +
+                                  " line(s) Prime95 had dropped (rejected AID) were re-delivered "
+                                  "without their AID";
+        r.note = r.note.empty() ? extra : (r.note + "; " + extra);
+    }
 
     const std::string lock = add_path + ".lock";
     std::string err;
@@ -398,6 +594,15 @@ P95TransferResult p95_transfer_deliver(const P95TransferConfig &cfg, const std::
     /* Our own temp suffix: the feeder may be writing the same directory at the same
        moment, and two writers must not share one temp file. */
     const bool wrote = p95_write_worktodo_add(add_path, assignments, true, err, ".ecm.tmp");
+    if (wrote) {
+        /* Ledger: what went out (so a line Prime95 later throws away can be recovered) and
+           which lines were recoveries themselves (so they are not recovered twice). */
+        if (!cfg.sent_ledger_path.empty()) {
+            for (const std::string &l : recovered) append_ledger(cfg.sent_ledger_path, "recovered " + l);
+            if (!r.aid_dropped) append_ledger(cfg.sent_ledger_path, "sent " + task);
+            else append_ledger(cfg.sent_ledger_path, "sent " + task);   // AID-free: nothing to recover
+        }
+    }
     lock_release(lock);
 
     if (!wrote) {

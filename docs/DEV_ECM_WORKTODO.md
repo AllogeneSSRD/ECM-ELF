@@ -246,6 +246,12 @@ kernel 原有的两条警告把**建议的 gpucurves** 打成了 `sm_count`（�
 `ecm.ini` 里两个键的说明见 `docs/DEV_ECM_INI.md` §1.2。
 `ecm_p95feeder`（Edwards `.tmp` 交接）**本轮未改一行**，两条路互不影响。
 
+**AID（assignment key）必须检查**：带 AID 的行会被 Prime95 拿去向 PrimeNet 报进度，一旦该 key 已失效，
+Prime95 收到 `Invalid assignment key` 会**删掉整条任务**（`commonc.c:6550-6569`），stage 2 永不运行；
+不带 AID 的行反而由 Prime95 自己注册新作业，工作照跑。因此驱动会读 Prime95 的 `prime.log` / `results.txt`，
+被拒的 key 去掉后再交付，并把因此被删掉的行（`p95_add_sent.txt` 里有记录）去掉 AID 重新投一次。
+开关：`p95_keep_aid`（默认 1）、`p95_recover_lost`（默认 1）。
+
 ---
 
 ## 9. TODO

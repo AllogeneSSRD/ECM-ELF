@@ -95,7 +95,10 @@ $iniLines = @(
     '[Worker #1]',
     'name = steady',
     'autostart = 1',
-    'extra_args = --scenario ok --lines 4',
+    # The progress lines must be SPACED OUT (`--delay-ms`): printed back to back they are
+    # drained in one poll and only the last one is seen, so the chart would hold a single
+    # sample. Six spaced lines give the pane a real series to draw.
+    'extra_args = --scenario ok --lines 6 --delay-ms 700',
     '',
     '[Worker #2]',
     'name = flaky',
@@ -233,6 +236,73 @@ if ($tbls.Count -gt 0) {
           ("rows=" + $tbl.Groups[12].Value)
 }
 
+Write-Host "[3c] the worker output pane charts SECONDS PER CURVE (and no progress-% chart)"
+# User request 2026-09-29: "worker 日志窗口删去进度%，曲线/秒 改为 秒/曲线".
+# The charts are traced (`plot: <id> label="…" n=… lo=… hi=… last=…`) because a chart has no
+# other machine-readable footprint. The fake worker's progress line says "~1.20 s/curve", so
+# the plotted value must be ~1.2 -- the OLD charted quantity was 1/s_per_curve = ~0.83, which
+# is how this assertion tells the two apart.
+$plots = [regex]::Matches($log, 'plot: (\S+) label="([^"]*)" n=(\d+) lo=([\d.-]+) hi=([\d.-]+) last=([\d.-]+)')
+Check "the output pane traces its chart" ($plots.Count -gt 0)
+$speed = $null
+# Every worker pane is only DRAWN while its worker is the selected one, so the LAST trace for a
+# worker chart may be a 1-sample snapshot from the moment the pane became visible. Take the trace
+# with the most samples: that is the one that proves a real series is plotted (same unit for all
+# workers, so which worker it came from does not matter).
+foreach ($m in $plots) {
+    if ($m.Groups[1].Value -match '^worker\d+/s_per_curve$') {
+        if ($null -eq $speed -or [int]$m.Groups[3].Value -gt [int]$speed.Groups[3].Value) { $speed = $m }
+    }
+}
+Check "a per-worker speed chart exists" ($null -ne $speed)
+if ($null -ne $speed) {
+    Write-Host ("       " + $speed.Value)
+    Check "it has samples" ([int]$speed.Groups[3].Value -ge 2) ("n=" + $speed.Groups[3].Value)
+    # The label is localized: English "s/curve (lower is better)", Chinese "秒/曲线（越小越快）".
+    # The Chinese check uses \uXXXX escapes because this .ps1 is ASCII-only (a Chinese literal
+    # in a BOM-less .ps1 is decoded as GBK and then never matches -- a documented trap).
+    Check "it is labelled seconds/curve" `
+          (($speed.Groups[2].Value -match 's/curve') -or ($speed.Groups[2].Value -match '\u79d2/\u66f2\u7ebf')) `
+          $speed.Groups[2].Value
+    Check "and NOT the old curves/s label" ($speed.Groups[2].Value -notmatch 'curves/s')
+    # The unit conversion: s/curve ~1.2, not curves/s ~0.83.
+    $last = [double]$speed.Groups[6].Value
+    # Discriminating bound: the fake worker reports "~1.20 s/curve", so the series must be
+    # ~1.2. The OLD charted quantity was curves/s = 1/1.20 = ~0.83, which is < 1.0 and
+    # therefore fails this check.
+    Check "the plotted value is s/curve (not curves/s)" ($last -ge 1.0 -and $last -le 100.0) `
+          ("last=" + $last + " (curves/s would be ~0.83, and a big B1 would be >> 1)")
+    Check "its range brackets the value" (([double]$speed.Groups[4].Value -le $last) -and ([double]$speed.Groups[5].Value -ge $last))
+}
+Check "no progress-% chart is drawn any more" `
+      (@($plots | Where-Object { $_.Groups[1].Value -match 'pct|progress' }).Count -eq 0)
+Check "and no chart is labelled with a progress percentage" `
+      (@($plots | Where-Object { $_.Groups[2].Value -match 'progress %|进度 %' }).Count -eq 0)
+
+Write-Host "[3d] every chart card keeps its three bands disjoint (150 % DPI regression guard)"
+# The card is "headline row + curve band + min/max row". The height used to be a constant, while
+# the text rows scale with the font -- at 150 % DPI (font 22.5 px, line height ~31 px) the two
+# text rows overlapped each other and covered the curve. The trace now reports the geometry, so
+# this is asserted instead of eyeballed.
+$geoms = @{}
+foreach ($m in [regex]::Matches($log, 'plot: (\S+) label="[^"]*" n=\d+ lo=[\d.-]+ hi=[\d.-]+ last=[\d.-]+(?: ref=[\d.-]+)? h=(\d+) line_h=(\d+) band_top=(\d+) band_h=(\d+)')) {
+    $geoms[$m.Groups[1].Value] = $m      # last one wins ([regex]::Match returns the first)
+}
+Check "the trace reports chart geometry" ($geoms.Count -gt 0) ("charts=" + (($geoms.Keys | Sort-Object) -join ','))
+foreach ($id in ($geoms.Keys | Sort-Object)) {
+    $g = $geoms[$id]
+    $h = [double]$g.Groups[2].Value
+    $lh = [double]$g.Groups[3].Value
+    $bt = [double]$g.Groups[4].Value
+    $bh = [double]$g.Groups[5].Value
+    Write-Host ("       {0}: h={1} line_h={2} band={3}..{4}" -f $id, $h, $lh, $bt, ($bt + $bh))
+    Check ("{0}: the curve band starts below the headline row" -f $id) ($bt -ge $lh + 2) `
+          ("band_top=" + $bt + " line_h=" + $lh)
+    Check ("{0}: the curve band ends above the min/max row" -f $id) (($bt + $bh) -le ($h - $lh)) `
+          ("band_end=" + ($bt + $bh) + " min/max row starts at " + ($h - $lh))
+    Check ("{0}: the curve band is at least 24 px tall" -f $id) ($bh -ge 24) ("band_h=" + $bh)
+}
+
 Write-Host "[4] no worker processes are left behind"
 Start-Sleep -Seconds 2
 $stray = @(Get-Process -Name 'ecm_gui_fake_worker' -ErrorAction SilentlyContinue)
@@ -242,7 +312,7 @@ Write-Host "[5] the ini still holds the driver keys plus the [GUI] layout"
 $after = [System.IO.File]::ReadAllText($iniPath)
 Check "device kept"        ($after -match '(?m)^device\s*=\s*0\s*$')
 Check "worker name kept"   ($after -match '(?m)^name\s*=\s*steady\s*$')
-Check "extra_args kept"    ($after -match '(?m)^extra_args\s*=\s*--scenario ok --lines 4\s*$')
+Check "extra_args kept"    ($after -match '(?m)^extra_args\s*=\s*--scenario ok --lines 6 --delay-ms 700\s*$')
 Check "autostart kept"     ($after -match '(?m)^autostart\s*=\s*1\s*$')
 Check "window= written"    ($after -match '(?m)^window\s*=\s*-?\d+,-?\d+,\d+,\d+')
 Check "dock_layout written" ($after -match '(?m)^dock_layout\s*=\s*\S')

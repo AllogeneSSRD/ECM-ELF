@@ -211,7 +211,18 @@ python tools\ecm_worktodo\ecm.py --input sorted.csv --emit-cli todo.ps1 --emit-c
 | `crashloop.cmd` | 中止路径崩溃复现（逐次记 exit code，可看出 `0xC0000005`；§15.11 的回归） |
 | `enc_diag.py` | 文件编码体检：UTF-8 是否有效、CJK/乱码字符数、与 `HEAD` 版本对比 |
 | `ensure_bom.ps1` | **BOM 守卫（构建前自动跑）**：把 `kernels/`、`src/` 下每个源文件与 git HEAD 的 BOM 状态比对并恢复（`-NoFix` 只报告）。与 `bench/fix_bom.py` 的区别：后者是"含非 ASCII 就补 BOM"的钝器（会给本来就无 BOM 的文件制造 diff），前者只在**编辑往返把 BOM 抹掉**时修回去。`tools/build/local_build.ps1` 已内置调用（2026-09-26：`cgbn_stage1.cu` 的 BOM 被抹掉 ⇒ nvcc 按 GBK 读 ⇒ `#define CHECKPOINT_VERSION` 被中文注释吃掉） |
-| `grab_window.ps1` | **窗口截图**（GUI 无头验收的补充）：`-ProcessName ecm_gui -Class ecm_gui -Out shot.png`。按窗口类找顶层窗、用 `PrintWindow(PW_RENDERFULLCONTENT)` 抓客户区存 PNG（D3D11 窗口不加该 flag 会抓到空帧）。人不在屏幕前时用它看界面 |
+
+## gwnum_probe/ — prime95 gwnum 的 IBDWT FFT 实测（2026-09-30）
+
+**不是**构建的一部分、**不**进测试套件（它依赖磁盘上存在 prime95 源码树）。结论写在
+`docs/DEV_GWNUM_FEASIBILITY.md`。
+
+| 文件 | 内容 |
+|---|---|
+| `gwnum_probe.cpp` | 用 prime95 的**预编译** `gwnum64.lib` 测 `gwmul3`/`gwsquare2`：Mersenne 形态（`gwsetup(h,1,2,p,-1)`，p=3571/12323/100003/1000003）与通用模数（`gwsetup_general_mod_64`）；分别测"自动 / 清 AVX-512(→FMA3) / 再清 FMA3(→AVX)"并打印 `gwfft_description`/`FFTLEN`/`FFT_TYPE`/`ARCH`；与仓库自带 GMP 的 `mpz_mul+mpz_mod` 同尺寸对比；**正确性**：恒等式（`3*5`、`(-1)²`、`2·2^(p−1)`）+ 50 组随机数与 GMP 逐位比对 + `gw_get_maxerr`。`--selftest` 只跑恒等式，`--quick` 只跑 3571/12323 |
+| `build_and_run.ps1` | 找 VS 的 `vcvars64.bat`、找最新的 `p95v*.source` 树、`cl /MT`（**必须 /MT**，预编译库是静态 CRT）+ `link gwnum64.lib gmp.lib advapi32.lib`（大页支持），跑探针。`-Prime95Source` / `-VcVars` / `-Quick` |
+| `probe_output.txt` | 3 次重复的原始输出（证据）。关键结论：3571 位时 AVX-512 反而比 FMA3 慢 ~40%（FFT 长度 256 vs 160）；通用模数慢 ~3×；≤13000 位不可能多线程收益 |
+| `grab_window.ps1` | **窗口截图**（GUI 无头验收的补充）：`-ProcessName ecm_gui -Class ecm_gui -Out shot.png`。按窗口类找顶层窗、用 `PrintWindow(PW_RENDERFULLCONTENT)` 抓客户区存 PNG（D3D11 窗口不加该 flag 会抓到空帧）。人不在屏幕前时用它看界面。**同时开着生产 GUI 时必须加 `-ProcId <pid>`**：不加就抓"第一个有窗口的 ecm_gui 进程"，抓到的可能是用户自己的窗口（2026-09-29 实测：抓回来的图是生产窗口的 1052×629，而测试自己的窗口是 1600×1000，像素断言会去量错的界面还照样通过） |
 | `row_ink_profile.ps1` | **文字行定位**：对截图逐行统计"墨"量（背景亮度取全图直方图众数，`-Delta` 默认 140），把连续的行归成文字带并打印前 60 行明细。用来把 `text_ink_probe.ps1` 对准真正的文字（ImGui 菜单栏不一定在 y=0，抓图还含标题栏） |
 | `text_ink_probe.ps1` | **字形像素体检**：自动找第一条文字带 → 按空列切成逐字形格子 → 报每格宽/高/墨量/中心墨量、中位宽度、不同墨值个数（`-Json` 给脚本用）。判"真字形 vs tofu 方块"的**有效**判据是宽度（0.75 em vs 0.43 em）与"格子是否互相雷同"，不是"中心空不空"（fallback 方块中心也有笔画） |
 | `check_printf_calls.ps1` | **格式串审计**：扫 `src/gui/*.cpp` 里所有 `ImGui::Text*` 调用，数格式串的转换符个数 vs 实参个数，不一致就报行号。起因是一次真实的 0xC0000005：`ImGui::Text("… %s … %s …", …, s.clock_mem_mhz)` 里 `%s` 收到整数，`vsnprintf` 把它当指针解引用，而且**只在显存频率非 0 时才崩**（为 0 时 MSVC 打印 `(null)`），于是"偶尔崩一次"躲过了很久的测试。当前 0 处不符 |
@@ -287,7 +298,7 @@ powershell -File tools\test\test_gui_gpu_curves.ps1   # 真 worker 压卡：功�
 | 布局 | 默认停靠布局（`DockBuilder`，版本 3）：**左列 60 % 宽 = 上 `Workers`（`详情` 与之同节点做标签页）+ 下 每 worker 输出（标签页）；右列 40 % 宽 = 上 `GPU` + 下 `Results`**，每列上下各 50 %。面板用固定 ID（`###workers` 等）→ 切语言不会打乱布局。布局写进 `[GUI] dock_layout` + `dock_layout_ver`（版本变旧会自动重建一次，修掉"面板堆在中间"的历史 ini）。`--trace` 会打每面板矩形，`test_gui_smoke.ps1` 据此断言"都在客户区内、互不重叠、左 60/右 40、上下顺序正确" |
 | 窗口生命周期 | 最小化时**仍泵消息**（否则唤不醒、只能从任务栏关）但**整帧跳过渲染**（0×0 交换链 `Present` 会崩）；`ResizeBuffers` 前先解绑 + `Flush` RTV，失败则重建交换链。回归护栏 = 冒烟测试 [1b]/[1c] |
 | 布局持久化 | 关掉 ImGui 自带的 `imgui.ini`（`io.IniFilename=nullptr`），停靠布局 + 窗口几何写进 `[GUI] dock_layout=` / `window=`；ini 改写保注释、保行序、只动自己认识的键，写前留一代 `.bak` |
-| 截图 | `powershell -File tools\diag\grab_window.ps1 -ProcessName ecm_gui -Out shot.png`（按窗口类抓图；D3D11 窗口用 `PrintWindow(PW_RENDERFULLCONTENT)`，否则抓到空帧）|
+| 截图 | `powershell -File tools\diag\grab_window.ps1 -ProcessName ecm_gui -Out shot.png`（按窗口类抓图；D3D11 窗口用 `PrintWindow(PW_RENDERFULLCONTENT)`，否则抓到空帧）。**同时开着生产 GUI 时加 `-ProcId <pid>`**，否则可能抓到用户自己的窗口 |
 | 界面文案 | `src/gui/localization/*.xml`（UTF-8 无 BOM），`english.xml` 是基线，缺键回退英文；GUI 里 `Language → Reload localization` 热重载 |
 | 字体 | 不打包字体：运行时挑系统字体（CJK → `msyh.ttc` 等；拉丁 → `segoeui` 等），字号 `[GUI] font_size = auto` = `15 px × DPI`（150 % 屏 = **22.5 px**，不凑整；也可写小数如 `23.5`，范围 6–96），`[GUI] font_snap = 1` 让字形推进量对齐整像素（拉丁小字更锐）。**画不出当前语言的字体不会被使用**：`[GUI] font` 指定了也先救回系统 CJK 字体，实在没有就切回英文界面（绝不显示 `???`）；运行中在 Language 菜单切语言会**重新挑字体**。ImGui 1.92+ 动态图集：**不要**再传 `GetGlyphRangesChineseFull()`；ImGui 只有灰度抗锯齿（无 ClearType），想更清楚请调大 `font_size` |
 | 构建 | **一条命令**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_gui.ps1`（自动找 `vcvars64.bat`、必要时 configure、构建 4 个目标；加 `-Selftest` 顺带自测，`-Clean` 从零重建，`-Reconfigure` 换依赖路径后重配）。**注意**：GUI 的构建目录是 **NMake Makefiles**，所以直接在普通 PowerShell 里跑 `cmake --build build_gui --target ecm_gui` 必定失败（`nmake` 只存在于 VS 开发者环境）—— 要么用这个脚本，要么先 `call vcvars64.bat` |

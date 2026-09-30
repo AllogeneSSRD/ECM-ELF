@@ -53,6 +53,7 @@ New-Item -ItemType Directory -Force -Path $Sandbox | Out-Null
 
 # The driver parks undelivered lines next to ITS OWN executable.
 $pending = Join-Path (Split-Path -Parent $Exe) 'p95_add_pending.txt'
+$ledger = Join-Path (Split-Path -Parent $Exe) 'p95_add_sent.txt'
 Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
 
 $script:pass = 0
@@ -81,7 +82,9 @@ function Invoke-Task {
         [string]$p95Todo = "",            # Prime95's worktodo.txt as it should look BEFORE
         [string]$primeTxt = "NumWorkers=2`r`n",
         [int]$lockAgeMinutes = -1,        # -1 = no lock; 0 = fresh lock; >0 = stale lock
-        [switch]$KeepAdd                  # keep an existing worktodo.add (for scenario 7b)
+        [switch]$KeepAdd,                 # keep an existing worktodo.add (for scenario 7b)
+        [string]$primeLog = "",           # fake Prime95 prime.log (rejected assignment keys)
+        [string]$iniExtra = ""            # extra ini lines (p95_keep_aid / p95_recover_lost)
     )
     $dir = Join-Path $Sandbox $name
     if (-not $KeepAdd) {
@@ -97,6 +100,7 @@ function Invoke-Task {
     $addPath = Join-Path $dir 'p95\worktodo.add'
 
     Write-Text (Join-Path $dir 'p95\prime.txt') $primeTxt
+    if ($primeLog -ne "") { Write-Text (Join-Path $dir 'p95\prime.log') $primeLog }
     Write-Text $p95TodoPath $p95Todo
     Write-Text $todo ("[Worker #1]`r`n" + $task + "`r`n")
 
@@ -116,6 +120,7 @@ function Invoke-Task {
         ('p95_worktodo_path = ' + $p95TodoPath),
         ('p95_add_workers = ' + $workerSpec)
     )
+    if ($iniExtra -ne '') { $iniLines += $iniExtra }
     Write-Text $ini (($iniLines -join "`r`n") + "`r`n")
 
     $lockPath = $addPath + '.lock'
@@ -257,9 +262,74 @@ Check "delivery was fast (no 3 s wait)"     ($r8.seconds -lt 2.5)
 Check "the line is in worktodo.add"         ($r8.add -contains $task)
 Check "the stale lock file is gone"         (-not (Test-Path $r8.lockPath))
 
+# ------------------------------------------------------------------ [9] rejected AID ----
+# The operator's production run (2026-09-29) showed the failure this guards against: a line
+# delivered with an assignment key PrimeNet has already rejected makes Prime95 DELETE the work
+# unit (commonc.c:6550-6569 "delete it from our work to do file"), so the stage 2 never runs and
+# the stage-1 work is lost. The driver now reads Prime95's own prime.log, drops such a key and
+# re-delivers what Prime95 threw away.
+Write-Host "[9] an AID PrimeNet rejected must not be attached to the delivery"
+$rejectedAid = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+$liveAid = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+$primeLogBad = @(
+    'PrimeNet error 43: Invalid assignment key',
+    ("ap: no such assignment key, GUID: 0e068755443bf5372102b7ceb29a6d62, key: " + $rejectedAid)
+) -join "`r`n"
+$taskBadAid = ('ECMSTAGE2=' + $rejectedAid + ',1,2,521,-1,"m521_1e3.save",0,0,1')
+$taskLiveAid = ('ECMSTAGE2=' + $liveAid + ',1,2,523,-1,"m523_1e3.save",0,0,1')
+
+Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
+$r9 = Invoke-Task -name 'rejectedaid' -task $taskBadAid -workerSpec '1' -p95Todo $todoBoth -primeLog $primeLogBad
+$notice9 = Get-Notice $r9.out 'warn'
+Write-Host ("      notice: {0}" -f $(if ($notice9) { $notice9.Trim() } else { '(none)' }))
+Check "the delivery still happened"          ($r9.add -contains 'ECMSTAGE2=1,2,521,-1,"m521_1e3.save",0,0,1')
+Check "the rejected AID was dropped"         (@($r9.add | Where-Object { $_ -match [regex]::Escape($rejectedAid) }).Count -eq 0)
+Check "the notice says aid=dropped"          ($notice9 -match 'aid=dropped')
+Check "the notice names the rejected key"    ($notice9 -match 'rejected AID')
+Check "the rejected key was detected"        ((Get-Notice $r9.out 'ready') -match 'rejected_aids=1')
+Check "a live AID is kept"                   ($true)   # covered by [6] (verbatim line) and [9b]
+$r9b = Invoke-Task -name 'liveaid' -task $taskLiveAid -workerSpec '1' -p95Todo $todoBoth -primeLog $primeLogBad
+Check "the live AID is still delivered"      ($r9b.add -contains $taskLiveAid)
+Check "and it is reported as kept"           ((Get-Notice $r9b.out 'ok') -match 'aid=kept')
+
+# ------------------------------------------------------------------ [10] recovery --------
+Write-Host "[10] a line Prime95 threw away is re-delivered without its AID"
+Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
+# The ledger says we delivered `taskBadAid`; PrimeNet rejected that key (prime.log above) and
+# Prime95 no longer holds the line, so the driver must hand it over again without the AID.
+[System.IO.File]::WriteAllText($ledger, ('sent ' + $taskBadAid + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+$r10 = Invoke-Task -name 'recover' -task $task -workerSpec '1' -p95Todo $todoBoth -primeLog $primeLogBad
+$notice10 = Get-Notice $r10.out 'warn'
+Write-Host ("      notice: {0}" -f $(if ($notice10) { $notice10.Trim() } else { '(none)' }))
+Check "the lost line came back without its AID" ($r10.add -contains 'ECMSTAGE2=1,2,521,-1,"m521_1e3.save",0,0,1')
+Check "the notice reports recovered=1"          ($notice10 -match 'recovered=1')
+Check "the new task was delivered too"          ($r10.add -contains $task)
+Check "the ledger marks the recovery"           ((Get-Content $ledger -Raw) -match 'recovered ')
+# A second run must NOT hand it over again (it is already in Prime95's file/the ledger).
+$r10b = Invoke-Task -name 'recover' -task $task -workerSpec '1' -p95Todo $todoBoth -primeLog $primeLogBad -KeepAdd
+Check "it is not re-delivered twice"            ($null -eq (Get-Notice $r10b.out 'warn'))
+
+Write-Host "[10b] nothing is recovered when Prime95 still holds the line"
+Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
+[System.IO.File]::WriteAllText($ledger, ('sent ' + $taskBadAid + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+# The line (AID stripped) is already in Prime95's worktodo.txt -> no recovery.
+$r10c = Invoke-Task -name 'recoverheld' -task $task -workerSpec '1' -p95Todo ($todoBoth + 'ECMSTAGE2=1,2,521,-1,"m521_1e3.save",0,0,1' + "`r`n") -primeLog $primeLogBad
+Check "no recovery while Prime95 holds it"      ($null -eq (Get-Notice $r10c.out 'warn'))
+
+# ------------------------------------------------------------------ [11] keep_aid = 0 ----
+Write-Host "[11] p95_keep_aid = 0 drops the AID even when it is not known to be bad"
+Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
+$r11 = Invoke-Task -name 'noaid' -task $taskLiveAid -workerSpec '1' -p95Todo $todoBoth -iniExtra 'p95_keep_aid = 0'
+Check "the line went over without the AID"      ($r11.add -contains 'ECMSTAGE2=1,2,523,-1,"m523_1e3.save",0,0,1')
+Check "no AID is present in worktodo.add"       (@($r11.add | Where-Object { $_ -match [regex]::Escape($liveAid) }).Count -eq 0)
+Check "the notice says why"                     ((Get-Notice $r11.out 'warn') -match 'p95_keep_aid = 0')
+Check "ready reports keep_aid=0"                ((Get-Notice $r11.out 'ready') -match 'keep_aid=0')
+
 # ------------------------------------------------------------------ cleanup -------------
 Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
 Check "no pending file is left in the build dir" (-not (Test-Path $pending))
+Check "no ledger is left in the build dir"       (-not (Test-Path $ledger))
 
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)

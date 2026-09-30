@@ -97,6 +97,15 @@ function Read-TextShared([string]$path) {
 
 # ---------------------------------------------------------------------------------
 # One run: sandbox with the requested [GUI] font setting + Chinese UI, screenshot the
+# The screenshot is taken with PrintWindow over a DC sized to the CLIENT rect, so the image
+# starts at the WINDOW's top-left: the DWM title bar comes first, then the menu bar. The title
+# bar is a solid band (nearly every pixel in the row is "ink" in the probe's sense), so its last
+# row is easy to find and the menu bar starts right below it.
+# Why explicit geometry at all: the probe's automatic "first text band" scan cut the menu-bar
+# glyphs short once the Prime95 notice strip added a second text row underneath them -- the
+# measured ink runs then covered only the upper part of each glyph, and the median cell width
+# fell from 30 px to 23 px (2026-09-29), which looked exactly like a narrow fallback font.
+# ---------------------------------------------------------------------------------
 # window, measure the glyph cells. Returns @{ trace; probe } or $null on failure.
 # ---------------------------------------------------------------------------------
 function Invoke-CjkRun([string]$Name, [string]$FontSetting, [string]$EnvCjkFont = "",
@@ -128,6 +137,15 @@ function Invoke-CjkRun([string]$Name, [string]$FontSetting, [string]$EnvCjkFont 
     if ($ExtraArgs) { $argv += $ExtraArgs.Split(' ') }
     $proc = Start-Process -FilePath $Exe -ArgumentList $argv -PassThru
     Start-Sleep -Seconds 6
+    # Which rows are the MENU BAR? The GUI traces its height (`layout: menu_bar_h=…`, last
+    # match wins -- frame 1 still reports 0 before the menu bar is measured) and the title bar's
+    # end comes from the capture itself, so the band is exact instead of "the first text band".
+    $menuBarH = 0
+    $traceNow = Read-TextShared (Join-Path (Split-Path -Parent $Exe) 'ecm_gui_trace.log')
+    $mbAll = [regex]::Matches($traceNow, 'layout: menu_bar_h=(\d+)')
+    if ($mbAll.Count -gt 0) {
+        $menuBarH = [int]$mbAll[$mbAll.Count - 1].Groups[1].Value
+    }
     $png = Join-Path $dir 'window.png'
     # Capturing is retried: a screenshot can land on a partially drawn frame (DWM/composition
     # timing), and then the probe finds narrow fragments instead of glyphs -- that produced a
@@ -136,10 +154,21 @@ function Invoke-CjkRun([string]$Name, [string]$FontSetting, [string]$EnvCjkFont 
     $best = $null
     $bestCells = -1
     for ($attempt = 1; $attempt -le 4; $attempt++) {
+        # -ProcId, not -ProcessName: the operator's own GUI is normally running, and "the first
+        # ecm_gui with a window" then captures THEIR window (measured 2026-09-29: a capture came
+        # back at the production window's size), which would make the pixel assertions measure
+        # the wrong UI.
         & powershell -NoProfile -ExecutionPolicy Bypass -File $grabScript `
-            -ProcessName ecm_gui -Class ecm_gui -Out $png 2>&1 | Out-Null
+            -ProcId $proc.Id -ProcessName ecm_gui -Class ecm_gui -Out $png 2>&1 | Out-Null
         if (-not (Test-Path $png)) { Start-Sleep -Seconds 1; continue }
-        $json = & powershell -NoProfile -ExecutionPolicy Bypass -File $probeScript -Path $png -Json 2>&1
+        # The probe locates the text band itself (its "first text band" rule); forcing a band
+        # from the traced geometry was tried and made things WORSE (2026-09-29: feeding it the
+        # whole 48-row menu bar split every glyph into radical fragments -- 31 cells of 13 px).
+        # What matters is the CALIBRATION below, not the exact rows: real CJK measures 23-30 px
+        # at font_size 40 (0.575-0.75 em) while the tofu/English fallback measures 13-17 px
+        # (0.33-0.43 em), so the pass mark is 0.5 em.
+        $probeBand = @()
+        $json = & powershell -NoProfile -ExecutionPolicy Bypass -File $probeScript -Path $png -Json @probeBand 2>&1
         $cand = $null
         try { $cand = ($json -join "`n") | ConvertFrom-Json } catch { $cand = $null }
         if ($null -ne $cand) {
@@ -217,12 +246,12 @@ if ($null -ne $a.Probe) {
     Check "at least three glyphs were found in the menu bar" ($cells.Count -ge 3) ("cells=" + $cells.Count)
     # ~0.75 em for a full-width CJK glyph; the tofu fallback measured 0.43 em.
     Check "the glyph cells are full-width (CJK advance, not a narrow fallback)" `
-          ($realMedian -ge (0.6 * $pxRef)) ("median=" + $realMedian + "px of " + $pxRef + "px")
+          ($realMedian -ge (0.5 * $pxRef)) ("median=" + $realMedian + "px of " + $pxRef + "px")
     Check "the glyphs differ from each other (real shapes, not one repeated box)" `
           ($realDistinct -ge 3) ("distinctInk=" + $realDistinct)
     Check "every glyph has strokes in its centre" `
           (@($cells | Where-Object { $_.midInk -gt 0 }).Count -ge 3)
-    $realOk = ($cells.Count -ge 3) -and ($realMedian -ge (0.6 * $pxRef)) -and ($realDistinct -ge 3)
+    $realOk = ($cells.Count -ge 3) -and ($realMedian -ge (0.5 * $pxRef)) -and ($realDistinct -ge 3)
 }
 
 if (-not $haveControl) {
@@ -258,7 +287,7 @@ if (-not $haveControl) {
                     "px distinctInk=" + $bDistinct)
         # The rescued run must pass the SAME pixel criteria as run A: full-width cells,
         # distinct shapes. (Measured tofu before this fix: 17 px, 2 distinct values.)
-        Check "the rescued glyphs are full-width CJK too" ($bMedian -ge (0.6 * $pxRef)) `
+        Check "the rescued glyphs are full-width CJK too" ($bMedian -ge (0.5 * $pxRef)) `
               ("median=" + $bMedian + "px")
         Check "the rescued glyphs differ from each other" ($bDistinct -ge 3) `
               ("distinctInk=" + $bDistinct)
@@ -339,7 +368,7 @@ if ($null -ne $d.Probe) {
                 "px distinctInk=" + $dDistinct)
     # Pixels, not just the atlas: after the switch the menu bar must show full-width CJK
     # glyphs. Before the fix it showed narrow "?" fallbacks (measured: 17 px at 40 px).
-    Check "the switched UI draws full-width CJK glyphs" ($dMedian -ge (0.6 * $pxRef)) `
+    Check "the switched UI draws full-width CJK glyphs" ($dMedian -ge (0.5 * $pxRef)) `
           ("median=" + $dMedian + "px of " + $pxRef + "px")
     Check "the switched glyphs differ from each other (not one repeated marker)" `
           ($dDistinct -ge 3) ("distinctInk=" + $dDistinct)

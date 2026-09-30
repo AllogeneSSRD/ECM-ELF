@@ -371,7 +371,16 @@ stdout 里也打一行提示（D5，便于 headless 用户看到）。
    `workers.waiting_progress`），不再是空白条 —— 空白条会被读成"GUI 坏了"。
 
 详情面板（选中行）：**生效配置**（全局 + 段覆盖后的逐键结果，用于排查"我改了 ini 为什么没生效"）、
-task 行原文、完整命令行、进度历史曲线、事件列表、按钮（Start/Stop/Restart/打开保存目录）。
+task 行原文、完整命令行、**秒/曲线（`s/curve`）历史曲线**、事件列表、按钮（Start/Stop/Restart/打开保存目录）。
+
+> **输出面板画的是"秒/曲线"，不是进度 %，也不是"曲线/秒"（2026-09-29 用户要求）**：
+> ① 进度 % 的曲线被**删掉**（百分比在同一行已有进度条，再画一条曲线是重复信息）；
+> ② 纵轴单位从 `curves/s` 改成 **`s/curve`**（越小越快）—— 用户要的就是这个量，
+> 而 `curves/s` 与"快"是反着读的（数值越大越快），容易看反；
+> ③ 中文标签 `秒/曲线（越小越快）`，英文 `s/curve (lower is better)`。
+> 曲线点的来源与判据见 §8.2，测试断言见 §15（`test_gui_workers.ps1` 的 `[3c]` 段：
+> 断言曲线存在、有真实序列（`n≥2`）、标签单位为 `s/curve`、**数值 ~1.2 而不是 `curves/s` 的 ~0.83**，
+> 并且**不存在**任何进度 % 曲线）。
 
 ---
 
@@ -400,7 +409,76 @@ task 行原文、完整命令行、进度历史曲线、事件列表、按钮（
 | 忙时交叉比对要允许重试 | 比对的目的是证明**自声明的 NVML ABI/枚举读对了量**（错字段会差一个数量级），不是两点读数逐点相等：机器忙时（GUI 自己在渲染、别的测试在跑 GPU 任务）util/功耗/温度都会有百分比级差异，SM 时钟更是在 210↔2595 MHz 间跳（12 倍）⟹ 时钟只做**量程**断言（100..4000 MHz；显存时钟 10501 会被抓出），其余用观测区间 ±容差，并且整套比对**失败会自动重采一次**，两次都不同意才算失败。实测：空闲 5/5、GPU 满载 5/5 通过 |
 | 时钟读数秒级跳变 | 空闲卡在 210 MHz 与 2595 MHz 之间跳（功耗门控）⟹ 与 `nvidia-smi` 的比对必须**交错采样**（先采 NVML、立刻查该卡）并对时钟只做量级校验，否则会误判 |
 | GUI 自己占一点 GPU | 界面走 D3D11 + ImGui，窗口本身会让 util 出现几个百分点甚至偶发尖峰 ⟹ `--gpu-selftest` 的 util 容差放到 ±40（不是 ±5）；worker 在跑时面板上的 util 也含 GUI 自身这点开销 |
-| **"曲线是一条直线"先看是哪种直线**（用户实测反馈） | 空闲卡的功耗/频率**本来就几乎不动** ⟹ 直线是对的，不是 bug。实测（`gpu: history` 自证行，`test_gui_gpu_curves.ps1`）：<br>• 忙卡（4070 Ti 跑 `ecm_cuda`）：`samples=44 util=17 distinct power=22 distinct clock=21 distinct`，功耗 `9.2..102.5 W`、SM 时钟 `632..2774 MHz`；<br>• 空闲卡（4060 Laptop）：`power=2 distinct (1.5..1.6 W) clock=1 distinct (210..210 MHz)` —— 频率就是一条直线。<br>另一种"假直线"是量程问题：`PlotLines` 传 `0,0` 时 ImGui 自动量程会把 ±0.2 W 的抖动压平 ⟹ 现在按**观测窗口 min/max ±10 %** 手动设量程（span 至少 2 %），并且 trace 里直接给 `plot=lo..hi` 与 `distinct` 供脚本断言 |
+| **"曲线是一条直线"先看是哪种直线**（用户实测反馈） | 空闲卡的功耗/频率**本来就几乎不动** ⟹ 直线是对的，不是 bug。实测（`gpu: history` 自证行，`test_gui_gpu_curves.ps1`）：<br>• 忙卡（4070 Ti 跑 `ecm_cuda`）：`samples=44 util=17 distinct power=22 distinct clock=21 distinct`，功耗 `9.2..102.5 W`、SM 时钟 `632..2774 MHz`；<br>• 空闲卡（4060 Laptop）：`power=2 distinct (1.5..1.6 W) clock=1 distinct (210..210 MHz)` —— 频率就是一条直线。<br>另一种"假直线"是量程问题：`PlotLines` 传 `0,0` 时 ImGui 自动量程会把 ±0.2 W 的抖动压平 ⟹ 现在按**观测窗口 min/max ±12 %** 手动设量程（span 至少 2 %，见 §8.2），并且 trace 里直接给 `plot=lo..hi` 与 `distinct` 供脚本断言 |
+
+### 8.2 曲线重做：一个共用的"可读"曲线控件（2026-09-29，用户要求"更美观、易读"）
+
+**问题**：原先每张图都是一句 `ImGui::PlotLines(...)`。ImGui 只给一条折线 + 一个外框，于是实际效果是
+①没有底色/网格，线的形状靠眼睛猜；②没有纵轴刻度，只能看 `min/max` 两个灰字；③量程要么固定要么
+`0,0` 自动（`auto` 会按当前数据抖动，同一张卡在两帧之间纵轴刻度就变了）；④**没有单位**，
+`100` 是 100 %、100 W 还是 100 MHz 全靠上下文；⑤"秒/曲线"这类**越小越好**的量没有参照物。
+
+**做法**：新增一个共用控件 `App::draw_metric_plot(const MetricPlot &p, const std::vector<float> &v,
+float *used_lo, float *used_hi)`（`src/gui/app.h` / `src/gui/app.cpp`），**替换掉全部 `PlotLines`**
+（worker 速度图 + GPU 的 util/功耗/SM 时钟三张图走同一份代码）。参数是一个 `MetricPlot` 结构体：
+
+| 字段 | 作用 |
+|---|---|
+| `id` | 唯一 id，同时是 trace 的主键与 ImGui 的 id（`gpu0/util`、`worker2/s_per_curve`） |
+| `label` / `unit` / `color` | 左上角标题、右上角数值后面的单位、曲线与面积的基色 |
+| `height` / `decimals` | 图高（GPU 图 58、worker 图 62，单位是 **15 px 字号**下的像素：实际高度 = 该值 × 字号/15，并保证曲线带 ≥24 px）、数值小数位 |
+| `fixed_range` + `lo`/`hi` | 固定量程（util 恒为 `0..100`，百分比不该跟着数据缩放） |
+| `ref` / `has_ref` / `ref_label` | 虚线参考线 + 右端小标签（功耗图用**已执行的功耗上限**，见下） |
+| `ms_per_sample` | 悬停时把样本下标换算成"多少秒前"，鼠标读数才有意义 |
+| `empty_text` | 样本不足 2 个时显示的 `collecting…`（本地化键 `gpu.collecting` / `workers.collecting`），而不是画一条假直线 |
+
+**画出来的东西（自下而上）**：圆角卡片底（`AddRectFilled` + `AddRectFilledMultiColor` 的竖直渐变；
+注意 `AddRectFilledMultiColor` **没有圆角参数**，圆角只能由随后的 `AddRect` 给）→ 3 条横向网格线
+（`IM_COL32(255,255,255,22)`）→ 面积填充 → 2 px 折线 → 最新样本的圆点 → 标题行（左标题、右 `数值+单位`）
+→ 量程两端的最小/最大灰字 → 参考虚线 + 标签 → 鼠标悬停时的竖直引导线 + tooltip（数值、单位、`n` 个样本前）。
+
+**面积填充为什么是"逐列矩形"而不是多边形**：曲线（尤其功耗）是**非凸**的，
+`AddConvexPolyFilled` 对非凸多边形会画错；而 ImGui 的 `PathFillConvex` 系列没有非凸版本。
+所以面积由**每列一个矩形**拼成（`AddRectFilled`），视觉等价于面积图且对任意形状都正确。
+
+**量程规则**（两张自动量程的图 —— 功耗与 SM 时钟）：取**观测窗口**的 `min/max`，上下各留 **12 %** 余量，
+并且**至少 2 % 的跨度下限**（否则一条 1.5↔1.6 W 的空闲曲线会被放大成"剧烈波动"）。
+实测（§8.1 那张表）：空闲卡 `power=2 distinct (1.5..1.6 W)`，用了 2 % 下限后曲线才是平的。
+**曲线画完后把真实量程回传**（`used_lo`/`used_hi`），`trace_gpu_history()` 报的就是**画出来的**那个量程，
+所以 `test_gui_gpu_curves.ps1` 的"量程必须覆盖观测数据"断言测的是真图，而不是一份副本。
+
+**曲线也要能被脚本验证**：每张图按帧比较渲染串，**同一张图前 3 次变化必打，之后每图每 2 s 最多一行**：
+
+```
+plot: gpu0/util  label="占用率" n=22 lo=0.00   hi=100.00 last=99.00
+plot: gpu0/power label="功耗"   n=22 lo=137.13 hi=167.17 last=143.73 ref=285.00
+plot: worker1/s_per_curve label="秒/曲线（越小越快）" n=6 lo=1.20 hi=1.20 last=1.20 h=78 line_h=23 band_top=26 band_h=27
+```
+
+限流是**按图**（`std::map<std::string,…>`，键 = `id`）而不是全局：早期版本用一个共享时间戳，
+结果只有"第一张图"有 trace，其余全被吃掉（实测）。另外 `gpu: limits dev=N power_limit_w=X`
+在**上限变化时**打一行 —— 这样脚本可以把功耗图上的 `ref=` 与 NVML 的真实上限**交叉核对**，
+而不是相信那张图。
+
+**布局必须跟着字号走（这一条是本轮最要紧的发现）**：卡片是"标题行 + 曲线带 + 最小/最大值行"，
+而 `MetricPlot::height` 给的是**15 px 字号下的数值**。原先按固定像素用，于是用户在 **150 % 缩放**
+（字体 22.5 px、行高实测 ~31 px）下，两个文字行**互相重叠**、并且一起压在曲线上——看起来就是
+"图很糊、曲线被字盖住"。现在高度按 `font_size_px_/15` 缩放，并给曲线带保底 **24 px**
+（`h = max(height × scale, 2×line_h + 8 + 24)`），三条带互不重叠。这条有**机器断言**：
+trace 里给 `h= line_h= band_top= band_h=`，`test_gui_workers.ps1` 的 `[3d]` 段断言
+`band_top ≥ line_h + 2`、`band_top + band_h ≤ h − line_h`、`band_h ≥ 24`（每张图各 3 条）。
+
+**两个真实数据问题（都是先看到图"不对"才查出来的）**：
+
+1. **一条物理上不可能的尖峰毁掉整张图**：4060 Laptop 会间歇性报 590 W（强制上限 55 W，§8.1 已记录），
+   而功耗曲线是按观测窗口自动量程的 ⇒ 量程被拉成 `0..660.61 W`，真实曲线只剩 `1.5..9.4 W`，
+   在图上就是贴着底边的一条直线。实测（`plot: gpu1/power`）：修前 `lo=0.00 hi=660.61`，
+   修后 `lo=0.68 hi=10.49`。规则与整机功耗合计那条一致：**样本 > 3 × 强制上限就丢弃**，
+   只影响曲线，面板文字行照原样显示驱动给的读数。
+2. **参考线可能落在量程外**：功耗上限 285 W，而观测窗口只有 `134..168 W` ⇒ 原先的
+   `if (ref >= lo && ref <= hi)` 让虚线**永远不出现**（"上限线去哪了？"）。现在越界时把虚线
+   **贴到越界的那条边**（上方/下方），标签带一个**自绘的小三角**指向该方向（自绘而不是 `↑` 字形：
+   不依赖字体是否覆盖 U+2191），既保住"离上限还很远"这个信息，又不会为了塞进上限而把曲线压平。
 
 
 ---
@@ -643,7 +721,9 @@ ecm_cuda from the current source, or point [GUI] exe= at a current build
 >
 > **M3 已实现并验收（同日）**：`log_parse` 的进度字段现在有**真值断言** —— `--worker-selftest`
 > 从 **39/39** 扩到 **48/48**（新增：从真实管道里解析 `pct / s-per-curve / ETA / 曲线数 / bits / GPU 形态`、
-> 表格用的任务行、命中计数）；UI 侧每 worker 加了**速度与进度历史曲线**（`ImGui::PlotLines`）。
+> 表格用的任务行、命中计数）；UI 侧每 worker 加了**速度历史曲线**（当时是 `ImGui::PlotLines` 画
+> `curves/s` **加**进度 %；2026-09-29 重做为共用的 `App::draw_metric_plot`，纵轴改成 `s/curve`
+> 并删掉进度 %，见 §8.2 / M14）。
 >
 > **D3 已实现并验收（同日）**：命中行补 `curve=/sigma=/param=/method=/save=`，**队列与单跑两条路径都补**；
 > 为此 `Stage1RunResult` 新增 `sigmas`（逐曲线真实 sigma 数组 —— Edwards 路径每条曲线是随机 sigma，
@@ -909,6 +989,7 @@ powershell -File tools\test\test_gui_all.ps1           # 一键跑上面全部�
 | 21 | 生成器的推荐曲线 = **`n × sm_count × ipb`**（`n` = 块/SM，默认 2），`ipb` 取该行 N 的档位；GUI **不引 GMP**，位宽用算术估算 | 用户确认；避免复制 kernel 的 TPI 表 |
 | 22 | 生成器**"生成预览"与"追加到 worktodo"分成两个按钮**，追加前重新校验 mtime；文件**拖放**只写文档 TODO | 用户明确要求 |
 | 23 | 本轮的三个新 ini 键（`progress_log_seconds`、`p95_worktodo_path`、`p95_add_workers`）**只从 ini 读，不开 CLI**；长期方向是"很少用的 CLI 逐步下线、改为 ini-only" | 用户长期意图，见 `docs/DEV_ECM_INI.md` §4 |
+| 24 | 折线图统一走共用控件 `App::draw_metric_plot`（圆角卡片 + 网格 + 面积 + 单位 + 参考线 + 悬停读数），**替换掉全部 `ImGui::PlotLines`**；worker 图纵轴改为 **`s/curve`**（越小越快）并**删掉进度 % 曲线**；占用率图固定 `0..100`，功耗/时钟按观测窗口 ±12 % 自动 | 用户明确要求（"删去进度%""曲线/秒 改为秒/曲线""优化所有折线图使其更美观 易读"）；曲线 trace 供脚本断言，见 §8.2 |
 
 ---
 
@@ -931,11 +1012,12 @@ powershell -File tools\test\test_gui_all.ps1           # 一键跑上面全部�
 | **M12 第五轮实测反馈修正** ✅ | 用户真机四条：① （纠正上轮理解）退出**不能**静默杀 worker —— 要**弹窗提醒**，同意后**先写检查点**再退出；② 要一个"像你测试那样连续跑所有 GUI ps1 脚本"的脚本；③ 任务行会被表格**纵线**遮挡，能否在任务行隐藏 y；④ Results 表重新排序（先标量 `factors/bits/hits`，再列表 `sigmas/curves`）并允许滚动 | **已完成（2026-09-29）**：① `App::request_close` + 确认模态（回车=停止并退出 / Esc=取消）+ Stopping 阶段：以 `<driver 目录>` 的 `.ecm_ckpt_*.dat` mtime 为基线，**等到更新的检查点出现**才终止，期间显示每 worker 状态与 Force quit；`[GUI] exit_confirm = ask\|stop\|kill`、`[GUI] graceful_stop_ms`（默认 5 min）；Stop 按钮走同一条路。顺带修掉**真实缺陷**：GUI 未设子进程工作目录 ⇒ 检查点/`.save` 落到 GUI 的 CWD（现在 = driver exe 目录）。验收 = 新增 `tools/test/test_gui_exit_checkpoint.ps1` **27/27**（真 ecm_cuda + `ckpt_seconds=3`：WM_CLOSE 不关窗→Esc 取消→再 WM_CLOSE→回车确认→`checkpoint written (…)` → `stopping (checkpoint written)` → 退出 0，且**磁盘上 mtime 确实变新**）；② 新增 `tools/test/test_gui_all.ps1`（15 个入口一键跑完；本轮实测 **15/15 项、466 项检查、0 失败**，全程约 4 分钟无人值守）；③ 表格边框改为 `BordersInnerH\|BordersOuterH`（只留横线，纵线不再横穿任务行）；④ Results 列序改为 `Factor/bits/Hits/First seen/Curves/Sigmas` + `ScrollX\|ScrollY` + 冻结前 4 列。另外：GUI 收到 `--worker` 会警告（跑测试时把 GUI 当 driver 传会开出一个空窗口，用户手动关掉的那个就是它） |
 | **M7 Linux 移植** | GLFW+OpenGL3、`posix_spawn`、`libnvidia-ml` | 见 §16（暂不排期） |
 | **M13 本轮五项（2026-09-29）** ✅ | ① D4 `--gpu-info`（+ 修两处内核警告文案）；② 进度节奏 `progress_log_seconds`（管道每次、文件每 n 秒、100 % 总写）；③ 完成的任务自动交接 Prime95（`worktodo.add` + 通知条）；④ M6 范围 A 生成器（核心 + 面板 + 与 `ecm.py` 逐字节对比）；⑤ 文档（含新 `docs/DEV_ECM_INI.md` 全配置表） | **全部完成**：① `test_gpu_info.ps1` **52 项**（含与运行路径 `CGBN<tpi,bits>` 自证、零副作用、OpenCL `not_applicable`）；② `test_progress_cadence.ps1` **19 项**（实测 `0`→文件 1 行/管道 27 行、`1`→7 行、`-1`→27 行）；③ `test_p95_transfer.ps1` **47 项** + `test_gui_p95_notice.ps1` **23 项**（四色切换、pending 由磁盘驱动、AID/已知因子逐字节保留、锁与 pending 重投）；④ `test_gui_generator.ps1` **25 项**（单测 84 + 与 `ecm.py` 逐字节 5 组 + 逐行推荐独立复算 + 面板 trace）；⑤ `docs/DEV_ECM_INI.md` 新建，`DEV_ECM_GUI.md` 新增 §11.1/§18/§19，`DEV_ECM_WORKTODO.md` §5.3–§9 按实测改写。**随后按用户实测反馈补两处可见性修正**：⑥ 通知条被停靠面板盖住（"四种颜色我实测看不出"）⇒ 预留自己那一行 + 底色带 + 严重度标记 + "未配置"一键打开 ini，并用 `PrintWindow` **像素断言**四色（§18.3.1）；⑦ 生成器块/SM 输入框宽度被 `InputInt` 的步进按钮吃掉（"没有宽度，无法显示数字"）⇒ `step = 0` + 90 px 并把"框宽/可编辑宽"trace 出来给测试断言，同时修掉绝对路径被重复拼接的真 bug、新增 `[GUI] start_tab`（§19.2.1）。最终全套回归 **20/20 项、676 项检查、0 失败**（§15） |
+| **M14 曲线重做 + 单位修正（2026-09-29，用户实时反馈）** ✅ | 用户三条：① worker 日志窗口**删去进度 %** 曲线；② 速度曲线**由"曲线/秒"改为"秒/曲线"**；③ **所有折线图更美观、易读** | **完成**：新增共用控件 `App::draw_metric_plot`（`src/gui/app.h`/`app.cpp`）替换掉**全部** `ImGui::PlotLines`：圆角渐变卡片 + 3 条网格线 + 逐列矩形面积 + 2 px 折线 + 末尾样本点 + 标题/数值+单位标题行 + 量程两端灰字 + 虚线参考线（功耗图 = 已执行的 NVML 上限）+ 悬停竖直引导线与"n 个样本前"读数；不足 2 个样本时显示 `collecting…`（i18n）。worker 面板只画 **`s/curve`**（`WorkerView::hist_s_per_curve`，中文标签 `秒/曲线（越小越快）`），进度 % 曲线删除；占用率图固定 `0..100`（不再随数据缩放），功耗/时钟按观测窗口 ±12 %（跨度下限 2 %）自动，**并把真实量程回传**给 `trace_gpu_history`。新增 curve trace（`plot: <id> …`，按图限流：前 3 次变化 + 之后每 2 s）与 `gpu: limits dev=N power_limit_w=X`，让测试能断言"画出来的"曲线与量程而不是相信截图。测试：`test_gui_workers.ps1` 新增 `[3c]` 段（曲线存在、`n≥2`、单位为 `s/curve`、数值 ~1.2 而非 `curves/s` 的 ~0.83、**没有任何进度 % 曲线**）；`test_gui_gpu_curves.ps1` 新增 `[4b]` 段（三张图都有序列、范围包住最新值、util 恒为 0..100、功耗图的 `ref=` 等于 NVML 真实上限）。文档：`DEV_ECM_GUI.md` §8.2 新增（含"面积为什么逐列画""限流为什么按图"两条实测教训）、§7.3 详情面板条目改写、决策 24。**实现过程中又量出三个真问题并修掉**：① **150 % 缩放下卡片三条带重叠**（卡片高度是常量，而文字行高随字号变 ⇒ 标题行与最小/最大值行互相重叠并压住曲线）⇒ 高度按字号缩放 + 曲线带保底 24 px，并新增 `[3d]` 几何断言；② **一条物理上不可能的尖峰毁掉整张功耗图**（`plot: gpu1/power` 修前 `lo=0.00 hi=660.61`、修后 `lo=0.68 hi=10.49`）⇒ 曲线丢弃 >3× 强制上限的样本；③ **参考线落在量程外就永远不显示**（上限 285 W vs 窗口 134..168 W）⇒ 越界时虚线贴边 + 自绘三角指示。另修一个测试自身的缺陷：`grab_window.ps1` 按进程名找窗口，会在操作员自己的 GUI 正在运行时抓到**那个**窗口（实测抓到 1052×629 的生产窗口而不是测试的 1600×1000），像素断言会量错界面还照样通过 ⇒ 新增 `-ProcId`，`test_gui_cjk_pixels.ps1` 改为按 PID 抓。**最终全套回归 20/20 项、742 项检查、0 失败**（§15） |
 
 依赖顺序：**D1+D2 先做**（体量小、决定多 worker 的一切，且能立刻用 headless 队列模式验证不回归），
 随后 M1（无依赖，可与 D1/D2 并行），再 M2→M5；M6 消费 D4；M7 最后。
-**D1+D2、M1–M5、M8–M11（四轮实测反馈修正）、M12、M13（本轮五项：D4 + 进度节奏 + Prime95 交接 +
-M6 范围 A + 文档）均已完成并验收。**
+**D1+D2、M1–M5、M8–M11（四轮实测反馈修正）、M12、M13（D4 + 进度节奏 + Prime95 交接 +
+M6 范围 A + 文档）、M14（曲线重做 + `s/curve` 单位修正）均已完成并验收。**
 
 ---
 
@@ -951,27 +1033,35 @@ M6 范围 A + 文档）均已完成并验收。**
   * `ecm_gui_results_test.exe` —— results 双文件：合并/去重/JSONL 字段/可重建/截断容错（42 项）；
   * `ecm_gui_gen_test.exe` —— **worktodo 生成器**（**84 项**，纯逻辑 + 文件：`--gpu-info` 解析、选档、
     位宽估算、解析、存档名、流水线、mtime 守卫的追加；另有 `--emit` 模式给逐字节对比用）。
-* **真窗口冒烟（已落地）**：`tools/test/test_gui_smoke.ps1`（**57 项**）、`test_gui_workers.ps1`（**34 项**）、
-  `test_gui_real_workers.ps1`（23 项，需 GPU）、`test_gui_gpu.ps1`（15 项，NVML 面板与降级）、
-  `test_gui_results.ps1`（27 项，真驱动两轮 → 跨运行合并）、
+* **真窗口冒烟（已落地，括号内为 2026-09-29 22:14 全套实测的项数）**：
+  `tools/test/test_gui_smoke.ps1`（**65 项**）、`test_gui_workers.ps1`（**67 项**，含本轮的 `[3c]`
+  worker 曲线/单位断言与 [3d] 曲线带几何断言，见 §7.3/§8.2）、	est_gui_real_workers.ps1（23 项，需 GPU）、
+  `test_gui_gpu.ps1`（17 项，NVML 面板与降级）、`test_gui_results.ps1`（27 项，真驱动两轮 → 跨运行合并）、
   `test_gui_cjk_pixels.ps1`（**31 项**：像素级中文验收 + 字体救回 + 英文回退 + 运行中切语言，见 §10.3）、
-  `test_gui_gpu_curves.ps1`（**15 项**，真 worker 压卡时断言功率/频率曲线**确实在变**，见 §8.1）、
+  `test_gui_gpu_curves.ps1`（**28 项**，真 worker 压卡时断言功率/频率曲线**确实在变**，并断言**画出来的**
+  三张图（序列长度、量程包住最新值、util 恒 0..100、功耗图的 `ref=` 等于 NVML 真实上限），见 §8.1/§8.2）、
   `test_gui_exit_checkpoint.ps1`（**27 项**：退出确认 + **退出前必写检查点**，见 §5.6）、
-  `test_gui_p95_notice.ps1`（**23 项**：Prime95 交接通知条的四色切换，红由磁盘 pending 驱动，见 §18）、
-  `test_gui_generator.ps1`（**25 项**：生成器单测 + 与 `ecm.py` **逐字节**对比 + 面板 trace，见 §19）。
+  `test_gui_p95_notice.ps1`（**32 项**：Prime95 交接通知条的四色切换，红由磁盘 pending 驱动，见 §18）、
+  `test_gui_generator.ps1`（**32 项**：生成器单测 + 与 `ecm.py` **逐字节**对比 + 面板 trace，见 §19）。
 * **驱动侧新测试**（也进了同一个套件，`exe = 'driver'`）：
-  `test_gpu_info.ps1`（**52 项**，D4，见 §11.1）、`test_progress_cadence.ps1`（**19 项**，见 §7.2）、
-  `test_p95_transfer.ps1`（**47 项**，见 §18.4）。
-* **一键全跑**：`tools/test/test_gui_all.ps1` —— 把上面全部 + headless 自测/单测（**21 个入口**）按顺序跑完，
+  `test_gpu_info.ps1`（**49 项**，D4，见 §11.1）、`test_progress_cadence.ps1`（**19 项**，见 §7.2）、
+  `test_p95_transfer.ps1`（**66 项**，见 §18.4，含 AID 被 PrimeNet 拒收后的自动剥离与台账找回）、
+  `test_hit_fields.ps1`（11 项，D3 命中行字段）、`test_worker_sections.ps1`（24 项，D1/D2 段语义）。
+* **一键全跑**：`tools/test/test_gui_all.ps1` —— 把上面全部 + headless 自测/单测（**20 个入口**）按顺序跑完，
   逐项打印 `passed/failed` 与耗时，汇总表 + 每项完整日志落在 `tools/test/_run/suite_<时间戳>/`，
   任一失败即非零退出；`-SkipGpu`（不碰显卡）、`-Only '*smoke*'`（挑着跑）、`-List`（只列清单）。
-  **本轮收尾实测（2026-09-29 03:57，机器上同时跑着用户自己的生产 worker）**：
-  `20/20 项、676 项检查、0 失败`（含新增的 `gpu-info` 49 项、`progress-cadence` 19 项、
-  `p95-transfer` 47 项、`p95-notice` 23 项、`generator` 25 项）。
+  **最新一套完整回归实测（2026-09-29 22:33，机器上同时跑着用户自己的生产 worker，曲线重做之后）**：
+  `20/20 项、742 项检查、0 失败`
+  （`selftest 36 / worker-selftest 48 / gpu-selftest 27 / log-parse 71 / results-unit 42 / smoke 65 /
+  workers 67 / exit-checkpoint 27 / cjk-pixels 31 / gpu-panel 17 / gpu-curves 28 / real-workers 23 /
+  results-e2e 27 / hit-fields 11 / worker-sections 24 / gpu-info 49 / progress-cadence 19 /
+  p95-transfer 66 / p95-notice 32 / generator 32`）。
   都用 `EnumWindows` 找 class=`ecm_gui` 的窗口、`PostMessage(WM_CLOSE)` 关闭、读 `--trace` 断言生命周期，
   **不需要截图**；需要 GPU 的用很小的任务（M991/M677 + B1=1e4/1e6，秒级）。
   唯一的例外是 `test_gui_cjk_pixels.ps1`：它**故意**要截图，因为"字有没有真的画出来"只有像素能证明
-  （抓图用 `PrintWindow`，被遮挡的窗口也能抓到，不需要人盯着屏幕）。
+  （抓图用 `PrintWindow`，被遮挡的窗口也能抓到，不需要人盯着屏幕；**抓图必须按 PID**
+  （`grab_window.ps1 -ProcId`）：只按进程名找会抓到操作员自己那个 `ecm_gui`，实测抓回来的是
+  1052×629 的生产窗口而不是测试自己的 1600×1000 窗口 —— 那样像素断言量的就是错的界面）。
 * **冒烟测试现在覆盖的三类"只能靠肉眼发现"的缺陷**（都源自用户真机反馈，全部改成机器断言）：
   * **[1b]/[1c] 窗口生命周期**：最小化 → 还原（进程存活、窗口可见）；**最小化状态下** post `WM_CLOSE`
     必须退出 0 —— 这一条就是"消息泵被 `IsIconic` 提前 return 挡住"的回归护栏；
@@ -979,7 +1069,11 @@ M6 范围 A + 文档）均已完成并验收。**
     两两不重叠 / 左列两块同 x 且同宽 / 右列两块同 x 且同宽 / 左列 ≈60 % 右列 ≈40 % / 上下顺序正确"；
   * **[7] 字体**：断言字号 ≈ `15 × DPI`、用的是系统轮廓字体（不是 13 px 内置位图），
     并用 `CalcTextSize("文件")` 实测中文字形宽度（`cjk_ok=1`）—— "字太小""中文是方块"不再靠肉眼回归；
-  * **像素级中文验收**（`test_gui_cjk_pixels.ps1`）：抓真窗口，量菜单栏里每个字形的格子宽度与 ink 值。
+  * **CJK 像素判据的标定（2026-09-29 更新）**：真中文在 `font_size = 40` 下量到 **23–30 px** 的墨迹格宽
+  （0.575–0.75 em），而 tofu/英文回退只有 **13–17 px**（0.33–0.43 em）⇒ 通过线取 **0.5 em**（原来是 0.6 em，
+  只有 1 px 余量，穷出过一次假失败）。**不要**用 trace 的几何去"精确指定"扫描行带：试过把整条 48 px 菜单栏
+  喂给探针，它会把每个汉字拆成偏旁（31 格、中位 13 px）——探针自己的"第一个文本带"规则反而是对的。
+* **像素级中文验收**（`test_gui_cjk_pixels.ps1`）：抓真窗口，量菜单栏里每个字形的格子宽度与 ink 值。
     四轮：[A] 自动字体必须出真中文；[B] `[GUI] font` 指向画不出中文的字体 → **必须被救回**
     （trace `cannot draw CJK: rescuing`，像素仍是全宽中文）；[C] `ECM_GUI_CJK_FONT=none`（假装系统无
     CJK 字体）→ **必须切回英文**、绝不出现 `???`；[D] 英文启动 + `--switch-language`（= Language 菜单）
@@ -1078,25 +1172,84 @@ M6 范围 A + 文档）均已完成并验收。**
 
 | 颜色 | 含义 | 文本 |
 |---|---|---|
-| 灰 | `p95_worktodo_path` 为空 | "未配置（在 ecm.ini 里设置 …）" |
-| 绿 | 已配置、最近一次交付成功 | "交付成功/就绪" |
-| 黄 | 交付成功但路由退让（缺段头等） | 警告 + 驱动给出的原因 |
-| 红 | 交付失败 / **pending 文件非空** | "失败：N 行待投递" + 原因 |
+| 灰 + `[-]` | `p95_worktodo_path` 为空 | "Prime95 handoff is OFF：p95_worktodo_path 为空…"，右侧按钮变成 **打开 ecm.ini** |
+| 绿 + `[OK]` | 已配置、最近一次交付成功 | "交付成功/就绪" |
+| 黄 + `[WARN]` | 交付成功但路由退让（缺段头 / AID 被拒 / 补投丢失件） | 警告 + 驱动给出的原因 |
+| 红 + `[FAIL]` | 交付失败 / **pending 文件非空** | "失败：N 行待投递" + 原因 |
 
+每条都配一个**底色带**（红/黄/绿/灰各自的深色底）+ 上面的严重度标记，比只改文字颜色醒目得多。
 红条**以磁盘上的 pending 文件为准**（不只是最后一条日志），所以上次会话留下的待投递也会红；
 右边常驻两个按钮：**打开 Prime95 目录** / **打开待投递文件**。消息按严重度只显示最重的一条，
 其余用 `(+N)` 计数。驱动打印的机器可读行：
 
 ```
-p95_add: ready workers="1-8" file="…\worktodo.add" pending=2
-p95_add: ok worker=2 added=1 pending_delivered=0 file="…"
-p95_add: warn worker=0 added=1 pending_delivered=0 file="…" note="…"
+p95_add: ready workers="1-8" file="…\worktodo.add" pending=2 keep_aid=1 rejected_aids=2
+p95_add: aid_rejected aid="2F1990C6A1353CE223CBE33633829E3A"
+p95_add: ok worker=2 added=1 pending_delivered=0 recovered=0 aid=kept file="…"
+p95_add: warn worker=0 added=1 pending_delivered=0 recovered=0 aid=dropped file="…" note="…"
 p95_add: pending worker=1 lines=3 file="…" error="…"
 ```
 
 值一律带引号（只有 `\"` 与行尾 `\\` 是转义），所以空格路径与自由文本都不歧义；
 解析在 `src/gui/log_parse.cpp`（`P95Notice`），通知条状态每帧变化都会 trace
 （`p95 notice: level=red parked=2 text=…`），因此有机器判据。
+
+### 18.3.1 让它**真的看得见**（2026-09-29 用户反馈后的修正）
+
+用户反馈："**四种颜色的真实切换，我实测看不出**；在没有配置 `p95_worktodo_path` 时也没有明显提示。"
+根因不是颜色，而是**位置**：通知条画在 `WorkPos + 一个行高`（即压到 dockspace 区域上），而面板是停靠窗口，
+ImGui 按窗口创建顺序绘制 ⇒ 通知条**一直在面板底下**，等于没画。修法：
+
+1. **预留自己那一行**：`App::draw()` 里先算出 `strip_h`（用上一帧实测的条高，首帧回退 `GetFrameHeight()`），
+   dockspace 宿主窗口下移 `strip_h` 并相应减高 ⇒ 通知条与面板**永不重叠**（几何由 trace 断言：
+   `bottom <= host_top`）。为什么要自测高度：150 % DPI 下条内容（文字 + 小按钮）比 `GetFrameHeight()`
+   高，预留小了窗口会自己向下长 —— 实测预留 31 px、真实 48 px，又叠了 17 px。
+2. **每种颜色配一个底色带 + 严重度标记**：`[FAIL]` 红底 / `[WARN]` 黄底 / `[OK]` 绿底 / `[-]` 灰底。
+3. **"未配置"给明确动作**：文案直接点名要改的键，右边给一个 **`打开 ecm.ini`** 按钮。
+4. **像素级验收**（`test_gui_p95_notice.ps1`）：`PrintWindow(PW_RENDERFULLCONTENT)` 抓**主窗口**
+   （多视口模式下同 class 有多个窗口，取客户区最大的那个），按 trace 的条矩形取样一行按色系分类：
+   实测灰 `236/236 中性`、绿 `159 绿`、红 `172 红`、黄 `233 黄`。
+
+### 18.2.1 AID（assignment key）：为什么必须检查它（2026-09-29 生产环境实测）
+
+用户在生成环境反复重启都看不到交付生效，追查到根因**在我这版交付逻辑**：原样保留 AID 是错的。
+
+机制（Prime95 源码，`commonc.c:6550-6569`）：
+
+```c
+/* If we get an invalid assignment key, then the user probably unreserved */
+/* the exponent using the web forms - delete it from our work to do file. */
+rc = sendMessage (PRIMENET_ASSIGNMENT_PROGRESS, &pkt2);
+if (rc == PRIMENET_ERROR_INVALID_ASSIGNMENT_KEY || rc == PRIMENET_ERROR_WORK_NO_LONGER_NEEDED) {
+    rc = deleteWorkToDoLine (tnum, w, TRUE);     /* 整条任务被删掉 */
+}
+```
+
+* 带 AID 的行 ⇒ Prime95 用这个 key 向 PrimeNet 报进度；**key 一旦失效**（作业已取消/关闭/过期），
+  PrimeNet 回 `error 43 / ap: no such assignment key` ⇒ Prime95 **删掉整条任务**，stage 2 永不运行，
+  也没有任何结果 —— 我们算完的 stage 1 白丢。
+* **不带 AID** 的行 ⇒ `w->assignment_uid[0]` 为空，进度上报整段被跳过（`commonc.c:6554` 的条件），
+  Prime95 反而会走 `PRIMENET_REGISTER_ASSIGNMENT`（`commonc.c:6532`）**自己注册一个新 key** ⇒
+  工作照跑、结果照记（实测：M5153 那条 AID-less 交付最后报的是 `AID: 7BD17F7BE`）。
+
+生产环境证据链：15:19 交付 M3583（`p95_add: ok worker=1 added=1`，AID `2F1990C6…`）→ Prime95 收下
+（`Sending expected completion date for M3583`）→ PrimeNet 回 `no such assignment key … key: 2F1990C6…`
+→ 该行从 `worktodo.txt` 消失、`results.txt` 里没有任何 M3583 结果。同一份 `prime.log` 里
+`7CF9949553699526D1F4AA791B138423`（更早完成的 M3571）也被拒 ⇒ 同样下场。
+
+现在的行为（三个机制）：
+
+| 机制 | 说明 |
+|---|---|
+| **识别被拒 key** | 驱动读 Prime95 的 `prime.log` / `results.txt`，只认 `no such assignment key … key: <hex>` 这一种形状（不会把无关的 `key:` 误当 AID）；启动打印 `p95_add: ready … rejected_aids=N`，每个被拒 key 打一行 `p95_add: aid_rejected aid="…"` |
+| **交付时自动去掉被拒的 AID** | 该行 AID 在被拒集合里 ⇒ 去掉后再交付，通知 `aid=dropped` + `note="PrimeNet rejected AID …"`（GUI 黄条），Prime95 于是自己注册新作业并把 stage 2 跑完 |
+| **丢件自动补投** | 每次交付的行记进 `<驱动目录>\p95_add_sent.txt`（`sent <行>` / `recovered <行>`）。若某行 AID 被拒、且 Prime95 的 `worktodo.txt` + `worktodo.add` 里都已没有它（= 被删了）⇒ 下次交付时**去掉 AID 重新投一次**，通知 `recovered=N`（黄条），且不会重复补投 |
+
+新 ini 键：`p95_keep_aid`（默认 `1` = 保留 AID，符合你原本的要求；`0` = 一律不带）、
+`p95_recover_lost`（默认 `1` = 自动补投）。见 `docs/DEV_ECM_INI.md` §1.2。
+
+验收：`tools/test/test_p95_transfer.ps1` 的 [9]/[10]/[10b]/[11] —— 被拒 AID 被去掉、live AID 仍保留、
+补投恰好一次、Prime95 仍持有该行时不补投、`p95_keep_aid=0` 时一律不带。
 
 ### 18.4 验收
 

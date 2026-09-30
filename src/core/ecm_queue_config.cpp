@@ -195,6 +195,8 @@ bool ecm_queue_config_load(const std::string &path, int worker, EcmQueueConfig &
         else if (key == "sync_mode") cfg.sync_mode = val;
         else if (key == "p95_worktodo_path") cfg.p95_worktodo_path = val;
         else if (key == "p95_add_workers") cfg.p95_add_workers = val;
+        else if (key == "p95_keep_aid") set_bool(cfg.p95_keep_aid);
+        else if (key == "p95_recover_lost") set_bool(cfg.p95_recover_lost);
         else if (key == "log_file") { cfg.log_file = val; cfg.log_file_explicit = true; }
         else if (key == "tmp_dir") cfg.tmp_dir = val;
         else if (key == "progress_color") cfg.progress_color = val;
@@ -363,6 +365,13 @@ bool ecm_queue_config_write_default(const std::string &path) {
 "#                       当前排期最少（worktodo.txt + worktodo.add 的活动行数）的那个。\n"
 "p95_worktodo_path =\n"
 "p95_add_workers =\n"
+"#   p95_keep_aid      : 1（默认）= 交付时保留 AID（PrimeNet 的有效 key 能把 stage 2 记到该作业上）；\n"
+"#                       0 = 一律不带 AID。注意：PrimeNet 已拒绝的 key 会让 Prime95 **删掉整条任务**\n"
+"#                       （commonc.c:6550-6569），所以被拒的 AID 驱动会自动去掉后再交付。\n"
+"#   p95_recover_lost  : 1（默认）= 若 Prime95 因被拒 AID 丢掉了我们交付的行，下次交付时\n"
+"#                       自动去掉 AID 重新投一次，避免 stage 1 白算（记录在 p95_add_sent.txt）。\n"
+"p95_keep_aid = 1\n"
+"p95_recover_lost = 1\n"
 "# Progress-bar colour: none|red|green|yellow|blue|magenta|cyan|white|grey.\n"
 "# 进度条颜色：none|red|green|yellow|blue|magenta|cyan|white|grey。\n"
 "progress_color = cyan\n"

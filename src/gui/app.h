@@ -18,11 +18,35 @@
 #include "worktodo_gen.h"
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace ecmgui {
+
+// One line chart. Every chart in the GUI goes through App::draw_metric_plot so they all look
+// and read the same way: rounded card, subtle grid, filled area under the curve, the current
+// value + unit as the headline, min/max on the axis, an optional reference line (e.g. a power
+// limit) and a hover read-out with a vertical guide.
+struct MetricPlot {
+    std::string id;            // must be unique (the "##" prefix is added internally)
+    std::string label;         // headline, e.g. "Power"
+    std::string unit;          // e.g. "W", "%", "MHz", "s/curve"
+    unsigned int color = 0;   // curve + fill colour, IM_COL32(...) (0 = a default blue);
+                              // unsigned int, not ImU32: this header deliberately does not
+                              // include imgui.h (same reason App never uses ImGui types here)
+    float height = 58.0f;
+    bool fixed_range = false;  // true: use lo/hi as given; false: pad the observed window
+    float lo = 0.0f;           // fixed range (or the fallback when the series is short)
+    float hi = 100.0f;
+    float ref = 0.0f;          // reference line value (NAN = none)
+    bool has_ref = false;
+    std::string ref_label;     // drawn next to the reference line
+    std::string empty_text;    // shown while there are not enough samples yet
+    int decimals = 1;          // decimals for the headline value
+    float ms_per_sample = 0.0f; // hover read-out: age of a sample (0 = unknown)
+};
 
 // Worker state -> the plain name (used by --trace and the docs) and the localization id
 // under the "workers" panel. The ids are an EXPLICIT table (not derived from the name):
@@ -57,8 +81,10 @@ struct WorkerView {
     std::vector<std::string> events;  // event layer (timestamped, ANSI-free)
     std::vector<std::string> raw;     // everything, for the "raw output" toggle
     // Progress history for the sparkline (one sample per accepted progress line).
-    std::vector<float> hist_pct;
-    std::vector<float> hist_speed;    // curves/s (1 / s_per_curve)
+    // NOTE: the speed series is SECONDS PER CURVE, not curves/second: the driver prints
+    // s/curve, and "bigger is worse" is the axis the operator compares against the ETA
+    // (user request 2026-09-29: "曲线/秒 改为 秒/曲线").
+    std::vector<float> hist_s_per_curve;
     unsigned long long last_sample_ms = 0;
     double last_traced_pct = -1.0;
     bool show_raw = false;
@@ -187,6 +213,11 @@ private:
     // Worktodo generator (M6 scope A, docs/DEV_ECM_GUI.md 19): paste assignments, preview
     // the queue the generator would write, then append it with a re-validated mtime.
     void draw_gen_panel();
+    // The one line-chart implementation every panel uses (see MetricPlot).
+    // `used_lo`/`used_hi` (optional) receive the y-range the chart actually drew with, which
+    // the GPU history trace reports so a test can check the range covers the data.
+    void draw_metric_plot(const MetricPlot &p, const std::vector<float> &values,
+                          float *used_lo = nullptr, float *used_hi = nullptr);
     void gen_make_preview();
     void gen_apply();
     // The file the generated queue is appended to (the ini's `worktodo`, resolved against
@@ -219,7 +250,12 @@ private:
     std::string p95_worktodo_path_;       // empty = the handoff is off
     std::string p95_add_workers_;         // "" | "3" | "1,3" | "1-8" | "auto"
     std::string p95_trace_last_;          // last traced notice-strip text (change detect)
+    std::map<std::string, std::string> plot_trace_last_;  // per chart: last traced range
+    std::map<std::string, unsigned long long> plot_trace_ms_;  // per chart trace rate limit
+    std::map<std::string, int> plot_trace_count_;            // per chart: lines emitted
+    std::map<int, std::string> gpu_limit_trace_;             // per device: last traced power limit
     float p95_strip_h_ = 0.0f;            // the strip's real height, reserved in App::draw
+    std::string menu_bar_trace_last_;     // top-band geometry trace (change detect)
     // ---- worktodo generator (M6 scope A) --------------------------------------------
     std::string gen_input_;               // the paste box / loaded file
     // ImGui's InputTextMultiline takes a char buffer (this ImGui version has no

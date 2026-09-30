@@ -37,8 +37,9 @@ param(
     [string]$Sandbox = "",
     [int]$Exp = 677,
     [string]$B1 = "1e6",
-    [int]$Curves = 8,
-    [int]$Device = 0
+    [int]$Curves = 16,          # 16 curves make a hit very likely; the retry loop below makes it certain enough
+    [int]$Device = 0,
+    [int]$MaxAttempts = 3       # M677/B1=1e6 is probabilistic: retry with a different sigma
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,13 +97,32 @@ Write-Host ("task    : {0}  (2^{1}-1, B1={2}, {3} curves, device {4})" -f $task,
 Write-Host ""
 
 Write-Host "[1] run the queue manager on the task"
+# A hit is probabilistic (measured 6..11 of 16 curves), so a single run can legitimately report
+# zero and the old version of this test then failed for luck, not for a defect (2026-09-29). The
+# queue mode takes the curve sigma from the ini's `sigma =`, so each attempt uses a different
+# FIXED sigma -- reproducible, and a retry is a new sample instead of the same dice again.
 $cmd = '"{0}" -ini "{1}" --worker 1 < NUL 2>&1' -f $EcmCuda, $ini
-$out = (& cmd /c $cmd | Out-String)
-$lines = @($out -split "`r?`n")
-$hits = @($lines | Where-Object { $_ -match 'factor\[' })
-$done = @($lines | Where-Object { $_ -match 'queue done, 1 task' })
+$out = ''
+$hits = @()
+$done = @()
+$attempt = 0
+while ($attempt -lt $MaxAttempts -and $hits.Count -eq 0) {
+    $attempt++
+    [System.IO.File]::WriteAllText($todo, ("[Worker #1]`r`n" + $task + "`r`n"), $enc)
+    $sigma = 1000003 * $attempt
+    $text = [System.IO.File]::ReadAllText($ini) -replace '(?m)^sigma\s*=.*$', "sigma = $sigma"
+    if ($text -notmatch '(?m)^sigma\s*=') { $text = "sigma = $sigma`r`n" + $text }
+    [System.IO.File]::WriteAllText($ini, $text, $enc)
+    Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue
+    $out = (& cmd /c $cmd | Out-String)
+    $lines = @($out -split "`r?`n")
+    $hits = @($lines | Where-Object { $_ -match 'factor\[' })
+    $done = @($lines | Where-Object { $_ -match 'queue done, 1 task' })
+    Write-Host ("      attempt {0}: sigma={1} hits={2}" -f $attempt, $sigma, $hits.Count)
+}
 Check "the queue processed the task" ($done.Count -eq 1)
-Check "at least one hit line was printed" ($hits.Count -ge 1) ("hits=" + $hits.Count)
+Check "at least one hit line was printed" ($hits.Count -ge 1) `
+      ("hits=" + $hits.Count + " after " + $attempt + " attempt(s)")
 
 $log = if (Test-Path $logFile) { [System.IO.File]::ReadAllText($logFile) } else { '' }
 Check "the hit lines also reached the per-worker log" `

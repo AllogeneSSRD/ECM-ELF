@@ -43,6 +43,8 @@
 | `p95_worktodo_path` | 空 | 驱动/队列（+GUI 只读） | — | Prime95 的 `worktodo.txt`。**留空=关闭交接**。开启后：任务完成且 `.save` 同步完，驱动把该任务行**原样**追加到同目录的 `worktodo.add`（保留 AID 与已知因子串），Prime95 自己取走后删除该文件。命中因子的任务也照样交付（stage 2 仍需做 GCD 并上报）。 |
 | `p95_add_workers` | 空 | 驱动/队列（+GUI 只读） | — | 写入哪个 `[Worker #N]` 段：空=不写段头（Prime95 归给 worker 1）；`3`；`1,3`；`1-8`；`auto`=读同目录 `prime.txt` 的 `NumWorkers`。`worktodo.txt` 里没有该段则退回不带段头（并在日志/GUI 里给黄色提示）；多个候选时选当前排期最少（`worktodo.txt` + `worktodo.add` 的活动行数）的那个。锁文件 `worktodo.add.lock`，失败行落在 `<驱动目录>\p95_add_pending.txt`，下次成功交付时一起送出。 |
 | `p95_dir` | 空 | 驱动/队列 | `--p95-dir`（仅兼容，忽略） | 旧脚本兼容键：stage-1 结果不再写 Prime95 目录，Edwards `.tmp` 交接由独立的 `ecm_p95feeder` 负责。 |
+| `p95_keep_aid` | `1` | 驱动/队列 | — | `1`=交付时保留任务的 AID（PrimeNet 有效 key 能把 stage 2 记到该作业上）；`0`=一律不带。**注意**：key 一旦失效，Prime95 收到 PrimeNet 的 `Invalid assignment key` 会**删掉整条任务**（`commonc.c:6550-6569`），所以驱动会自动检测 Prime95 日志里被拒的 key，去掉后再交付（见 `docs/DEV_ECM_GUI.md` §18.2.1）。 |
+| `p95_recover_lost` | `1` | 驱动/队列 | — | `1`=若 Prime95 因被拒 AID 丢掉了我们交付的行，下次交付时去掉 AID 重新投一次（交付记录在 `<驱动目录>\p95_add_sent.txt`），避免 stage 1 白算。 |
 
 ### 1.3 引擎选择（`[method]` 语义，键在全局段）
 

@@ -77,8 +77,8 @@
       <Item id="stop_all"     name="全部停止"/>
       <Item id="exe"          name="工作线程可执行文件："/>
       <Item id="show_raw"     name="原始输出"/>
-      <Item id="speed_history" name="曲线/秒"/>
-      <Item id="progress_history" name="进度 %"/>
+      <Item id="speed_history" name="秒/曲线（越小越快）"/>
+      <Item id="collecting"    name="正在采集…"/>
       <Item id="m2_note"      name="一个 worker = 一个 ecm_cuda.exe 进程。崩溃后 5 秒自动重启；五分钟内崩三次则停住（熔断）。关闭界面会一并停止它们。"/>
       <Item id="log_pane"     name="输出"/>
       <Item id="log_file"     name="日志文件"/>
@@ -108,6 +108,8 @@
       <Item id="refresh"  name="界面刷新"/>
       <Item id="m4_note"  name="由后台线程经 NVML 采样。超过强制功耗上限 3 倍的读数属于已知驱动怪癖，按原样显示。"/>
       <Item id="nvml_missing" name="NVML 不可用 —— 显卡面板已停用。"/>
+      <Item id="collecting"  name="正在采集…"/>
+      <Item id="power_limit" name="上限"/>
       <Item id="total_power" name="全机功耗"/>
     </Panel>
 

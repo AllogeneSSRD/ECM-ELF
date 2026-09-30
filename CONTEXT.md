@@ -108,6 +108,7 @@ OpenCL GPU 上的加速。以下术语按领域分组，为跨设计讨论提供
 | **`progress_log_seconds`** | 新的 ini 键：**进度行写进 `log_file` 的最小间隔（秒）**；默认 60，`0` = 文件里不写进度行，负数 = 每行都写。**管道/控制台永远每次**（GUI 靠它显示进度），且 `100.0%` 那行总会写进文件。见 `docs/DEV_ECM_GUI.md` §7.2。 |
 | **Prime95 交接（`worktodo.add`）** | 任务完成且 `.save` 同步后，driver 把该任务行**逐字节原样**（保留 AID 与已知因子）追加到 `p95_worktodo_path` 同目录的 `worktodo.add`；Prime95 自己并进 `worktodo.txt` 后删除该文件。段号由 `p95_add_workers` 决定（空/`3`/`1,3`/`1-8`/`auto`），段头**只认 `worktodo.txt` 里真实存在的段**。失败**绝不阻塞任务**：行落 `p95_add_pending.txt`，下次成功交付时一起送出；GUI 用红/黄/绿/灰通知条显示（红 = 有 pending）。见 `docs/DEV_ECM_GUI.md` §18。 |
 | **生成器（M6 范围 A）** | `ecm_gui` 的"生成器"面板 + `src/gui/worktodo_gen.{h,cpp}`：粘贴 PrimeNet 作业（`ECM=`/`ECM2=`）→ 过滤/去重/改写/排序/存档名校验 → 逐行推荐曲线 → **预览** → **只追加**到 worktodo（追加前重新校验目标文件的大小/mtime）。与 `tools/ecm_worktodo/ecm.py` 在给定同样曲线数时**逐字节一致**。GUI 不含 GMP，位数用算术估算（已知因子按位数和扣减，取下界）。见 `docs/DEV_ECM_GUI.md` §19。 |
+| **曲线控件（`draw_metric_plot`）** | `ecm_gui` 里**所有**折线图共用的一个控件（worker 的秒/曲线 + GPU 的占用率/功耗/SM 频率）：圆角渐变卡片 + 3 条网格线 + 面积 + 2 px 折线 + 末尾样本点 + "标题 + 当前值+单位"标题行 + 量程两端灰字 + 虚线参考线（功耗图 = 已执行的 NVML 上限）+ 悬停读数。高度**按字号缩放**（`height` 的单位是 15 px 字号下的像素），曲线带保底 24 px，保证"标题行 / 曲线带 / 最小最大值行"三条带互不重叠。worker 图纵轴是 **秒/曲线（`s/curve`，越小越快）**，不画进度 %。曲线自己会 trace（`plot: <id> … h= line_h= band_top= band_h=`）供脚本断言。见 `docs/DEV_ECM_GUI.md` §8.2。 |
 | **`work_manager.ps1`** | **已废弃**：队列/日志/同步编排由 driver 内置队列管理器取代。仅可作测试夹具，不作为生产路径。 |
 
 ---

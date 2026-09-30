@@ -242,6 +242,52 @@ if ($null -ne $bestRanges) {
           ("plot " + $pLo + ".." + $pHi + " vs data " + $pMn + ".." + $pMx)
 }
 
+Write-Host "[4b] the DRAWN charts carry the right data and range (chart rework, 2026-09-29)"
+# The GPU charts are drawn by App::draw_metric_plot, which traces what it actually plotted:
+#   plot: <id> label="…" n=… lo=… hi=… last=… [ref=…]
+# That trace is the machine-readable counterpart of the picture, so a wrong series, a clamped
+# range or a missing reference line cannot hide behind a prettier chart.
+$charts = @{}
+foreach ($m in [regex]::Matches($log, ('plot: gpu' + $Device + '/(util|power|clock) label="([^"]*)" n=(\d+) lo=([\d.-]+) hi=([\d.-]+) last=([\d.-]+)( ref=([\d.-]+))?'))) {
+    # [regex]::Match returns the FIRST match, so the loop keeps the LAST (= newest) one.
+    $charts[$m.Groups[1].Value] = $m
+}
+foreach ($kind in 'util', 'power', 'clock') {
+    Check ("the {0} chart was drawn and traced" -f $kind) ($charts.ContainsKey($kind)) `
+          ("traced charts: " + (($charts.Keys | Sort-Object) -join ','))
+}
+foreach ($kind in @($charts.Keys)) {
+    $c = $charts[$kind]
+    Write-Host ("       " + $c.Value)
+    Check ("the {0} chart has a real series" -f $kind) ([int]$c.Groups[3].Value -ge 2) `
+          ("n=" + $c.Groups[3].Value)
+    $lo = [double]$c.Groups[4].Value
+    $hi = [double]$c.Groups[5].Value
+    $last = [double]$c.Groups[6].Value
+    Check ("the {0} chart range brackets its newest value" -f $kind) ($lo -le $last -and $hi -ge $last) `
+          ("lo=" + $lo + " last=" + $last + " hi=" + $hi)
+    Check ("the {0} chart range is not degenerate" -f $kind) ($hi -gt $lo) ("lo=" + $lo + " hi=" + $hi)
+}
+if ($charts.ContainsKey('util')) {
+    # A percentage must always read 0..100 (fixed range), never a zoomed window.
+    Check "the utilisation chart is fixed to 0..100 %" `
+          (([double]$charts['util'].Groups[4].Value -eq 0.0) -and ([double]$charts['util'].Groups[5].Value -eq 100.0)) `
+          ("lo=" + $charts['util'].Groups[4].Value + " hi=" + $charts['util'].Groups[5].Value)
+}
+$limit = $null
+foreach ($m in [regex]::Matches($log, ('gpu: limits dev=' + $Device + ' power_limit_w=([\d.]+)'))) {
+    $limit = [double]$m.Groups[1].Value      # last one wins
+}
+Check "the enforced power limit is traced (so ref= can be cross-checked)" ($null -ne $limit)
+if ($charts.ContainsKey('power')) {
+    $ref = $charts['power'].Groups[8].Value
+    Check "the power chart draws a reference line" ($ref -ne "") "no ref= on the power chart"
+    if ($null -ne $limit -and $ref -ne "") {
+        Check "and it is the NVML power limit, not a guess" ([double]$ref -eq $limit) `
+              ("chart ref=" + $ref + " W, NVML limit=" + $limit + " W")
+    }
+}
+
 Write-Host "[5] shutdown leaves nothing behind"
 Check "the GUI exited with code 0" ($exitCode -eq 0) ("exit=" + $exitCode)
 $stray = @()

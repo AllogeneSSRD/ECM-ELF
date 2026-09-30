@@ -137,3 +137,6 @@ tools/ecm_worktodo/worktodo_p95_stage2.txt
 # ecm_gui build directory (docs/DEV_ECM_GUI.md)
 /build_gui
 /third_party
+
+# gwnum probe build artifacts (the probe itself and its recorded output are tracked)
+/tools/gwnum_probe/bin/

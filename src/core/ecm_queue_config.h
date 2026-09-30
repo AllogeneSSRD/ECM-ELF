@@ -54,6 +54,18 @@ struct EcmQueueConfig {
     // worktodo.txt does not have makes the driver fall back to a header-less append
     // (with a warning); with several candidates the least loaded worker wins.
     std::string p95_add_workers;
+    // p95_keep_aid (default true): hand the line over WITH its assignment key.
+    //
+    // Prime95 reports an assignment's progress to PrimeNet under that key; when PrimeNet
+    // answers "Invalid assignment key" Prime95 DELETES the work unit (see the measured case in
+    // src/core/p95_transfer.h). A key PrimeNet has already rejected is therefore dropped
+    // automatically (detected from Prime95's prime.log), and the line goes over without it --
+    // Prime95 then registers the work itself and runs the stage 2. Set this to false to never
+    // send a key at all (the stage-2 work then runs unattributed).
+    bool p95_keep_aid = true;
+    // p95_recover_lost (default true): re-deliver a line that Prime95 threw away because of a
+    // rejected key, so no stage-1 work is lost (it is kept in <exe dir>\p95_add_sent.txt).
+    bool p95_recover_lost = true;
     std::string progress_color = "cyan";         // none|red|green|yellow|blue|magenta|cyan|white|grey
     // How often a progress line may be written to log_file (seconds):
     //   60 = default, 0 = never, negative = every line (pre-2026-09-29 behaviour).

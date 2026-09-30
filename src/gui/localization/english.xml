@@ -77,8 +77,8 @@
       <Item id="stop_all"     name="Stop all"/>
       <Item id="exe"          name="worker executable:"/>
       <Item id="show_raw"     name="raw output"/>
-      <Item id="speed_history" name="curves/s"/>
-      <Item id="progress_history" name="progress %"/>
+      <Item id="speed_history" name="s/curve (lower is better)"/>
+      <Item id="collecting"    name="collecting..."/>
       <Item id="m2_note"      name="One worker = one ecm_cuda.exe process. Crashes restart after 5 s; three crashes in five minutes stop the worker (breaker). Closing the GUI stops them all."/>
       <Item id="log_pane"     name="Output"/>
       <Item id="log_file"     name="log file"/>
@@ -108,6 +108,8 @@
       <Item id="refresh"  name="UI refresh"/>
       <Item id="m4_note"  name="Sampled through NVML on a background thread. Readings above 3x the enforced power limit are a known driver quirk and stay visible as-is."/>
       <Item id="nvml_missing" name="NVML not available - GPU panel disabled."/>
+      <Item id="collecting"  name="collecting..."/>
+      <Item id="power_limit" name="limit"/>
       <Item id="total_power" name="Total power"/>
     </Panel>
 

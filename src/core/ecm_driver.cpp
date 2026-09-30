@@ -2953,6 +2953,20 @@ static std::string build_n_expr(const std::string &k, const std::string &b,
    readable in the log pane. A value must never end with a lone backslash (it would make
    the closing quote ambiguous), hence the final doubling. Documented in
    src/gui/log_parse.{h,cpp}, which unescapes exactly this way. */
+/* Directory part / join for the Prime95 paths. The driver has its own resolve helper for
+   ini values, but these two are about Prime95's own directory (prime.log, results.txt). */
+static std::string p95_dir_of(const std::string &path) {
+    const size_t s = path.find_last_of("\\/");
+    if (s == std::string::npos) return std::string(".");
+    if (s == 0) return path.substr(0, 1);
+    return path.substr(0, s);
+}
+
+static std::string p95_join_path(const std::string &dir, const std::string &name) {
+    if (dir.empty()) return name;
+    const char last = dir[dir.size() - 1];
+    return (last == '\\' || last == '/') ? (dir + name) : (dir + "\\" + name);
+}
 static std::string p95_quote(const std::string &s) {
     std::string out;
     out.reserve(s.size() + 8);
@@ -3087,14 +3101,17 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                            p95_quote(tr.error).c_str());
         } else if (!tr.note.empty()) {
             ecm_ts_fprintf(stdout,
-                           "p95_add: warn worker=%d added=%zu pending_delivered=%zu "
-                           "file=\"%s\" note=\"%s\"\n",
-                           tr.worker, tr.added, tr.pending_delivered, tr.add_path.c_str(),
+                           "p95_add: warn worker=%d added=%zu pending_delivered=%zu recovered=%zu "
+                           "aid=%s file=\"%s\" note=\"%s\"\n",
+                           tr.worker, tr.added, tr.pending_delivered, tr.recovered,
+                           tr.aid_dropped ? "dropped" : "kept", tr.add_path.c_str(),
                            p95_quote(tr.note).c_str());
         } else {
             ecm_ts_fprintf(stdout,
-                           "p95_add: ok worker=%d added=%zu pending_delivered=%zu file=\"%s\"\n",
-                           tr.worker, tr.added, tr.pending_delivered, tr.add_path.c_str());
+                           "p95_add: ok worker=%d added=%zu pending_delivered=%zu recovered=%zu "
+                           "aid=%s file=\"%s\"\n",
+                           tr.worker, tr.added, tr.pending_delivered, tr.recovered,
+                           tr.aid_dropped ? "dropped" : "kept", tr.add_path.c_str());
         }
     }
 
@@ -3243,12 +3260,31 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         p95cfg.worktodo_path = resolve_rel_local(exe_dir, cfg.p95_worktodo_path);
         p95cfg.add_workers = cfg.p95_add_workers;
         p95cfg.pending_path = p95_transfer_pending_path(exe_dir);
+        p95cfg.keep_aid = cfg.p95_keep_aid;
+        p95cfg.recover_lost = cfg.p95_recover_lost;
+        p95cfg.sent_ledger_path = p95_transfer_ledger_path(exe_dir);
         if (!p95cfg.worktodo_path.empty()) {
             const std::string add_path = p95_transfer_add_path(p95cfg.worktodo_path);
+            const std::string p95_dir = p95_dir_of(p95cfg.worktodo_path);
+            /* Prime95's own logs tell us which assignment keys PrimeNet has rejected: a line
+               delivered with such a key is DELETED by Prime95 (commonc.c:6567), so those keys
+               must not be attached any more and the work has to be re-delivered without them. */
+            p95cfg.prime_log_path = p95_join_path(p95_dir, "prime.log");
+            p95cfg.results_txt_path = p95_join_path(p95_dir, "results.txt");
             const size_t parked = p95_transfer_pending_count(p95cfg.pending_path);
-            ecm_ts_fprintf(stdout, "p95_add: ready workers=\"%s\" file=\"%s\" pending=%zu\n",
+            const std::vector<std::string> rejected =
+                p95_rejected_aids(p95cfg.prime_log_path, p95cfg.results_txt_path);
+            ecm_ts_fprintf(stdout,
+                           "p95_add: ready workers=\"%s\" file=\"%s\" pending=%zu keep_aid=%d "
+                           "rejected_aids=%zu\n",
                            p95_quote(cfg.p95_add_workers).c_str(),
-                           p95_quote(add_path).c_str(), parked);
+                           p95_quote(add_path).c_str(), parked,
+                           cfg.p95_keep_aid ? 1 : 0, rejected.size());
+            for (const std::string &aid : rejected) {
+                /* One line per rejected key: the GUI shows them in the log pane, and the
+                   driver's own recovery (below) uses the same set. */
+                ecm_ts_fprintf(stdout, "p95_add: aid_rejected aid=\"%s\"\n", aid.c_str());
+            }
             if (parked > 0) {
                 /* Lines from a previous run are still waiting: the GUI must show red
                    until a delivery succeeds and clears them. */
@@ -3256,6 +3292,20 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                                "p95_add: pending worker=0 lines=%zu file=\"%s\" "
                                "error=\"%zu line(s) from an earlier run are still waiting\"\n",
                                parked, p95_quote(add_path).c_str(), parked);
+            }
+            /* Work Prime95 threw away because of a rejected key is re-delivered right away
+               (without the key), so a restart is enough to recover it. */
+            if (cfg.p95_recover_lost) {
+                size_t rejected_count = 0;
+                const std::vector<std::string> lost =
+                    p95_transfer_recover_lines(p95cfg, &rejected_count);
+                if (!lost.empty()) {
+                    ecm_ts_fprintf(stdout,
+                                   "p95_add: recovered worker=0 lines=%zu file=\"%s\" "
+                                   "note=\"%zu line(s) Prime95 dropped (rejected AID) will be "
+                                   "re-delivered without the AID\"\n",
+                                   lost.size(), p95_quote(add_path).c_str(), lost.size());
+                }
             }
         }
     }
