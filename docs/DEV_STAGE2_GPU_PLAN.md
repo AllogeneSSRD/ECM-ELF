@@ -1983,3 +1983,45 @@ real_batched_split: giant=901.154 gtrees=514.549 fold=162.637 descent=77.128 inv
 2. **性能离目标还很远，但差距已经被分解干净**（§29.2/§27.4）：**73% 的时间在 giant+gtrees 这两块"每批重复的乘法与标量 ladder"上**，而它们各自的优化路径都是明确的（差分加法链；`nw` 编译期化；每次 NTT 调用的主机侧开销）。**没有任何一项需要改算法**。
 3. **这一轮真正的价值**是把三个"看起来像 bug"的东西变成了可测量的东西：rung-2 的"不一致"是**输入不同**（§25）、命名长杆是**诊断扫描 + 一片丢掉因子的真 bug**（§26）、12.7 s 的 setup 链是**标量算术在 local memory**（§26.7）。同时也确认了一个**真实损失**：S5 的实现不在树里（§28）。
 4. **下一步（按 §27.4 的顺序）**：先提交/保护工作（已做，`3bc2500`），再恢复 S5 并修读窗口，再做 `nw` 编译期化，然后重测这条同样的命令 —— **同一条命令、同一个 N、同一个 D**，这样每一轮的对比都是同口径的。
+
+---
+
+## 30. S5（设备下降）：**已从留档恢复**，修掉三个真 bug，但**数值仍不对**（未启用）（2026-10-01）
+
+### 30.1 恢复的做法（可复现）
+
+`build_cuda_cmake/_fixA_attribution_attempt.diff` 是"从 S5 缺失的 HEAD 到含 S5 的工作树"的 diff，所以**它就是 S5 的全文**。做法：
+
+```
+git show 24889e3:tools/bench/stage2_tree_gpu.cu > _base.cu          # 缺 S5 的基线
+git apply --directory=<scratch> _fixA_attribution_attempt.diff      # 得到 _theirs.cu（含 S5）
+git merge-file _ours.cu _base.cu _theirs.cu                          # ours = 本轮的工作树
+```
+**8 处冲突**，全部集中在命名循环与 `BatchedRun` 字段：按 §25 的结论**只取 S5 部分**（子代理那次基于错误前提的"候选归因"改动被丢弃，并在 `run_batched` 里留了一段解释**为什么那种归因不适合本引擎**：CPU 的叶子是 giant 点，本引擎的叶子是 baby 点，两者是**转置**的；实测证据是 rung 2 的 `hit_leaves = P = 240`，只有 baby 读法能解释这个数）。
+
+结果：`stage2_tree_gpu.cu` 从 4558 行回到 **6549 行**，编译通过，**冻结门禁 17/17**（默认真实路径与改动前逐项一致 ⇒ S5 代码是"存在但默认关闭"的）。诊断也一并恢复并加强了：`NTT_S5_DIGDUMP` / `NTT_S5_REDDUMP` / `NTT_S5_CANON_CHECK`，外加本轮新增的 **`s5_kernel_view`**（内核自己看到的 `t[]`/`r[]`/`u[]`/`dy`）与 **`s5_reddump_row`**（逐行对比窗口与 GMP）。
+
+### 30.2 找到并修掉的三个真 bug（每一个都有硬证据）
+
+1. **frontier 的行记账**：`off[q]`（每个孩子的目标行偏移）原本一律按 `nc+1` 预留，而各分支**实际写**的行数是"copy → `e.ncoef`；horner → 1；div → `nc`"，`vol` 也按后者累加 ⇒ **偏移跑到分配之外**。修法：`off` 与 `vol` 用**同一套**分支行数（并在每个孩子处加了一条**不变量断言**：`dstrow + rows ≤ vol`，用真实数据检查，违反就报错而不是静默越界）。
+2. **frontier 的单位**：`D.fitval(vol)` 申请的是 **vol 个 word**，而下降要写 **vol 行 × W 个 word** ⇒ 少了 W 倍。这是 `NTT_S5_ON` "每个系数都返回 0" 的**全部原因**。证据链：
+   * compute-sanitizer：`s5_sub_kernel` "Invalid __global__ write of size 8 bytes ... up to 168 bytes past a nearest allocation of size 192 bytes"；192 B = 24 word = 冻结向量下的 `vol`，而同一 frontier 需要 `vol*W = 72` word ⇒ **完全吻合**；
+   * 而且越界写正好落在**紧邻的 24 字节分配**上 —— 那就是归约的常数 `S->dy`（`Y = 2^(64(L+nw)) mod N`，nw=3 ⇒ 24 字节）。内核自查证实：`s5_kernel_view: gid=0 ... r=fffffffbefffffc0,ffffffffffffffff,0 u=0,0,0 dy=0,0,0` —— **`r` 是对的、`dy` 被清零 ⇒ `u = Mont(r,0) = 0`**。修法：`fitval((vol ? vol : 1) * W)`。
+3. **叶子回写的越界**：一个 chunk 覆盖 `Lc` 个**填充后**的叶子（`Fpad ≥ P`），而调用者的 `dleaf_out` 只有 `P` 行 ⇒ 原来的 `cudaMemcpy(..., Lc*W*8)` 越界（`cudaMemcpy` 直接以 "invalid argument" 拒绝），零填充分支的 `cudaMemset` 也一样。修法：按 `rows_out = min(Lc, P − lo)` 裁剪。
+4. （结构性问题，也已修）**层与层之间没有把 frontier 传下去**：每个 level 都从 `dbound`（chunk 的 H 行）读输入、写进 `dvals`，而没有任何地方把 `dvals` 变成下一层的输入（最后的叶子回写还把**未变的 H** 当作 `H(x_j)` 交出去）。修法：每层结束把 `vol` 行 `cudaMemcpyDeviceToDevice` 回 `dbound`，并检查 `vol ≤ chunkL`。
+
+修完之后，S5 下降**能跑完**（5 层、`entries=47`、`divmods=22`、不再有 CUDA 错误、不再有 `CHECK_bad`），但**结果仍不对**：
+
+```
+descent_check_bad: i=0 word=0 batched=6628348811020935614 slow=4179161277757063021
+descent_check: P=24 divmods_batched=22 divmods_slow=46 mismatching_coefficients=48 first=0
+stage2: algorithm=tree_gpu_batched curves=1 hits=0 bad_factors=0 factors= hit_primes= elapsed=1.26
+```
+
+### 30.3 还差什么（下一轮的第一件事，数据已给足）
+
+* **divmod 次数 22 vs 46**：主机下降对 P=24 做 **46** 次除法，设备只做 **22** —— 设备侧的树走法/分支计数与参考的余式树**不是同一棵树**（填充叶子的处理、`zeros` 分支、以及 horner 分支一次算两个孩子都可能是来源）。先把这个数字对齐（它是最便宜、最不依赖数值的判据），再谈数值。
+* 数值上 `mismatching_coefficients = 48`（24 个叶子 × 2？）⇒ 现在**不能**打开 `NTT_S5_ON`；它保持 opt-in，且失败时是**响亮地失败**（FATAL + 非零退出），不会给错答案。
+* 三个修复都用**真实数据**验证过：不变量断言（越界会先报错）、compute-sanitizer（越界归零）、`s5_kernel_view`（`r` 对而 `dy` 为 0）。
+
+**纪律补充**：这次能修好，靠的是"**把内核自己看到的数据打出来**"（`s5_kernel_view`）而不是继续读代码推理 —— 与 §26.7"两个假设都被实测否掉"是同一个教训：**先让程序说出它看到了什么**。

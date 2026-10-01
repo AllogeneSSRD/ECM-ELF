@@ -92,6 +92,7 @@
 #include <utility>
 #include <vector>
 #include <map>
+#include <set>
 #include <algorithm>
 #include <array>
 
@@ -1062,7 +1063,8 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
                                  const unsigned long long *dn, unsigned long long ninv,
                                  int nw, int L, const unsigned long long *dy,
                                  unsigned long long w, unsigned long long *out,
-                                 unsigned long long slot_bits, unsigned long long *bad)
+                                 unsigned long long slot_bits, unsigned long long *bad,
+                                 unsigned long long *s4_dbg)
 {
     const unsigned long long total = out_slots * nbatch;
     const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
@@ -1123,9 +1125,36 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
     unsigned long long r[NW];
     for (int i = 0; i < nw; ++i) r[i] = t[L + i];
     if (t[L + nw] != 0 || s2g_ge_n(r, dn, nw)) s2g_sub_n(r, dn, nw);
+    /* FORENSIC (s4_dbg != 0): what this thread assembled and what it is about to return.  The
+       array index is the coefficient, so the host can line the two up. */
+    if (s4_dbg != nullptr && gid < 4) {
+        s4_dbg[gid * 24 + 0] = t[0]; s4_dbg[gid * 24 + 1] = t[1];
+        s4_dbg[gid * 24 + 2] = t[2]; s4_dbg[gid * 24 + 3] = t[3];
+        s4_dbg[gid * 24 + 4] = t[4]; s4_dbg[gid * 24 + 5] = t[5];
+        s4_dbg[gid * 24 + 6] = r[0];
+        s4_dbg[gid * 24 + 7] = (nw > 1) ? r[1] : 0ull;
+        s4_dbg[gid * 24 + 8] = (nw > 2) ? r[2] : 0ull;
+        s4_dbg[gid * 24 + 9] = (unsigned long long)L;
+        s4_dbg[gid * 24 + 10] = slot_words;
+        s4_dbg[gid * 24 + 11] = d[0];
+        s4_dbg[gid * 24 + 12] = d[1];
+        s4_dbg[gid * 24 + 13] = d[2];
+        s4_dbg[gid * 24 + 14] = d[slot_words - 1];
+        s4_dbg[gid * 24 + 15] = (unsigned long long)(int)bpw;
+    }
     /* ---- (3) back to the plain domain: c = r * 2^(64L) = Mont(r, Y) ---------------- */
     unsigned long long u[NW];
     s2g_mont_mul<NW>(u, r, dy, dn, ninv, nw);
+    if (s4_dbg != nullptr && gid < 4) {
+        s4_dbg[gid * 24 + 16] = u[0];
+        s4_dbg[gid * 24 + 17] = (nw > 1) ? u[1] : 0ull;
+        s4_dbg[gid * 24 + 18] = (nw > 2) ? u[2] : 0ull;
+        s4_dbg[gid * 24 + 19] = dy[0];
+        s4_dbg[gid * 24 + 20] = (nw > 1) ? dy[1] : 0ull;
+        s4_dbg[gid * 24 + 21] = (nw > 2) ? dy[2] : 0ull;
+        s4_dbg[gid * 24 + 22] = ninv;
+        s4_dbg[gid * 24 + 23] = (unsigned long long)nw;
+    }
     for (unsigned long long i = 0; i < w; ++i)
         out[gid * w + i] = (i < (unsigned long long)nw) ? u[i] : 0ull;
 }
@@ -1140,12 +1169,13 @@ static void s4_launch_reduce(int nw, int L, unsigned long long nbatch,
                              unsigned long long slot_words, const unsigned long long *dn,
                              unsigned long long ninv, const unsigned long long *dy,
                              unsigned long long w, unsigned long long *dout,
-                             unsigned long long slot_bits, unsigned long long *dbad)
+                             unsigned long long slot_bits, unsigned long long *dbad,
+                             unsigned long long *s4_dbg = nullptr)
 {
     const unsigned int th = 128;
     const unsigned int bl = (unsigned int)((total + th - 1) / th);
     s4_reduce_kernel<NW><<<bl, th>>>(ddig, n, bpw, slot_words, out_slots, nbatch, dn, ninv, nw,
-                                     L, dy, w, dout, slot_bits, dbad);
+                                     L, dy, w, dout, slot_bits, dbad, s4_dbg);
 }
 
 /* the modulus-level part: N, its Montgomery constants and the shared device copy */
@@ -1164,7 +1194,23 @@ static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
 }
 
 /* L = the smallest number of elimination steps with 2^slot_bits <= N * 2^(64 L), proved with
-   mpz against the ACTUAL N (never against bits(N) as a proxy).  Called ONCE per shape. */
+   mpz against the ACTUAL N (never against bits(N) as a proxy).  Called ONCE per shape.
+ *
+ * TWO conditions constrain L, and this function keeps the one the rest of the engine is built on:
+ *
+ *   [R2] MAGNITUDE -- after L eliminations the value is (v + N*sum)/2^(64L) < N, so the nw
+ *        returned words hold it.  This is the condition the formula below solves.
+ *   [R1] CONTAINMENT -- the kernel converts the window's digits into limbs t[0..nlimb-1] and
+ *        returns t[L..L+nw-1] as v >> 64L, so the bits of v below limb L must already be zero for
+ *        the returned words to be the whole of v.  L = nlimb - nw is what makes this exact.
+ *
+ * For the F-tree / fold / fold-loop shapes the two agree (S=129 gives nlimb=5, nw=3: the formula
+ * gives L=3 and nlimb-nw=2, and L=3 >= nlimb-nw=2 still contains the value -- measured: forcing
+ * L=nlimb-nw=2 there makes the magnitude test fail and aborts the run, so L=3 is the correct one
+ * and the gates stay green).  For the S5 SLOT shapes the two DISAGREE (see the S5Shape comment):
+ * at S=129/slot_bits=259 the window bits lands at limb 1, L=3 in the formula, and the reduction
+ * then returns 0 for every coefficient.  That is a real, still-open defect of the S5 path -- it is
+ * recorded in build_cuda_cmake/_S5_HANDOFF.md, and it is why NTT_S5_ON is still opt-in. */
 static S4Reduce::Shape *s4_shape_init(S4Reduce &R, unsigned long long P,
                                       unsigned long long slot_bits,
                                       unsigned long long slot_stride,
@@ -1346,18 +1392,75 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
             for (unsigned long long c = 0; c < cases; ++c)
                 dig[(size_t)(c * slot_words + slot_words - 1)] &= ((1ull << top_bits) - 1ull);
     }
-    unsigned long long *dd = nullptr, *dout = nullptr;
+    unsigned long long *dd = nullptr, *dout = nullptr, *ddbg = nullptr;
+    const bool dbg = (std::getenv("NTT_S5_REDDUMP") && *std::getenv("NTT_S5_REDDUMP")
+                      && std::atoi(std::getenv("NTT_S5_REDDUMP")) != 0);
     CK(cudaMalloc(&dd, dig.size() * sizeof(unsigned long long)));
     CK(cudaMalloc(&dout, (size_t)(cases * R.w) * sizeof(unsigned long long)));
+    if (dbg) CK(cudaMalloc(&ddbg, 4 * 24 * sizeof(unsigned long long)));
     CK(cudaMemcpy(dd, dig.data(), dig.size() * sizeof(unsigned long long),
                   cudaMemcpyHostToDevice));
     S2G_DISPATCH(R.nw, s4_launch_reduce, (int)R.nw, S->L, 1ull, cases, cases, dd,
                  cases * slot_words, bpw, slot_words, R.dn, R.ninv, S->dy,
-                 (unsigned long long)R.w, dout, S->slot_bits, (unsigned long long *)nullptr);
+                 (unsigned long long)R.w, dout, S->slot_bits, (unsigned long long *)nullptr, ddbg);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
     CK(cudaMemcpy(got.data(), dout, got.size() * sizeof(unsigned long long),
                   cudaMemcpyDeviceToHost));
+    if (dbg) {
+        std::vector<unsigned long long> hb(64, 0ull);
+        CK(cudaMemcpy(hb.data(), ddbg, hb.size() * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToHost));
+        for (int c = 0; c < 4; ++c) {
+            char *ds = nullptr;
+            {
+                mpz_t dv;
+                mpz_init(dv);
+                for (unsigned long long j = slot_words; j-- > 0;) {
+                    mpz_mul_2exp(dv, dv, (unsigned)bpw);
+                    mpz_add_u64(dv, dig[(size_t)(c * slot_words + j)]);
+                }
+                ds = mpz_get_str(nullptr, 16, dv);
+                mpz_clear(dv);
+            }
+            std::fprintf(stderr, "s4_dbg: case=%d L=%llu bpw=%llu sw=%llu d0..2=[%llu,%llu,%llu] "
+                                 "dlast=%llu t=[%llx,%llx,%llx,%llx,%llx,%llx] "
+                                 "r=[%llx,%llx,%llx] window=%s\n", c, hb[(size_t)(c * 16 + 9)],
+                         hb[(size_t)(c * 16 + 15)], hb[(size_t)(c * 16 + 10)],
+                         hb[(size_t)(c * 16 + 11)], hb[(size_t)(c * 16 + 12)],
+                         hb[(size_t)(c * 16 + 13)], hb[(size_t)(c * 16 + 14)],
+                         hb[(size_t)(c * 16 + 0)], hb[(size_t)(c * 16 + 1)],
+                         hb[(size_t)(c * 16 + 2)], hb[(size_t)(c * 16 + 3)],
+                         hb[(size_t)(c * 16 + 4)], hb[(size_t)(c * 16 + 5)],
+                         hb[(size_t)(c * 16 + 6)], hb[(size_t)(c * 16 + 7)],
+                         hb[(size_t)(c * 16 + 8)], ds);
+            /* the limbs the kernel's own conversion would produce from these digits, computed on
+               the host with the same rule, so a mismatch localises to the conversion */
+            {
+                std::vector<unsigned long long> tl(2 * (size_t)R.nw + 4, 0ull);
+                unsigned long long acc = 0, nacc = 0, limb = 0;
+                for (unsigned long long j = 0; j < slot_words; ++j) {
+                    const unsigned long long v = dig[(size_t)(c * slot_words + j)];
+                    acc |= (v << nacc);
+                    if ((unsigned long long)bpw + nacc >= 64) {
+                        tl[(size_t)limb++] = acc;
+                        acc = (nacc == 0) ? 0ull : (v >> (64 - nacc));
+                        nacc = nacc + (unsigned long long)bpw - 64;
+                    } else {
+                        nacc += (unsigned long long)bpw;
+                    }
+                }
+                if (nacc) tl[(size_t)limb++] = acc;
+                std::fprintf(stderr, "s4_dbg_hostconv: case=%d limbs_written=%llu "
+                                     "tl=[%llx,%llx,%llx,%llx,%llx,%llx]\n", c, limb,
+                             tl[0], tl[1], tl[2], tl[3], tl[4], tl[5]);
+            }
+            void (*ff)(void *, size_t) = nullptr;
+            mp_get_memory_functions(nullptr, nullptr, &ff);
+            ff(ds, std::strlen(ds) + 1);
+        }
+        cudaFree(ddbg);
+    }
     cudaFree(dd);
     cudaFree(dout);
     unsigned long long bad = 0;
@@ -1386,6 +1489,18 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
     S->selftest_cases = cases;
     S->selftest_bad = bad;
     S->selftest_first = first;
+    if (std::getenv("NTT_S5_REDDUMP") && *std::getenv("NTT_S5_REDDUMP")
+        && std::atoi(std::getenv("NTT_S5_REDDUMP")) != 0) {
+        char *ws = mpz_get_str(nullptr, 16, want);
+        char *ms = mpz_get_str(nullptr, 16, mine);
+        std::fprintf(stderr, "s4_selftest_dump: P=%llu slot_bits=%llu slot_words=%llu bpw=%d "
+                             "L=%d nlimb=%d nw=%d w=%d last_case gmp=%s gpu=%s\n", S->P,
+                     S->slot_bits, S->slot_words, S->bpw, S->L, S->nlimb, R.nw, (int)R.w, ws, ms);
+        void (*ff)(void *, size_t) = nullptr;
+        mp_get_memory_functions(nullptr, nullptr, &ff);
+        ff(ws, std::strlen(ws) + 1);
+        ff(ms, std::strlen(ms) + 1);
+    }
     std::printf("s4_reduce_selftest: P=%llu cases=%llu mismatches=%llu first_bad=%lld (device "
                 "REDC of a %llu-bit coefficient mod the actual N vs GMP; six digit patterns "
                 "incl. all-ones/zero/single-top-bit/single-low-digit)\n", S->P, cases, bad,
@@ -2261,6 +2376,1504 @@ static void descent_batched(PolyLayer &L,
     for (size_t i = 0; i < P; ++i) values[i] = cp_to_flat(cur[i], W);
 }
 
+/* =====================================================================================
+ * SLICE S5: THE DESCENT, ON THE DEVICE.
+ *
+ * Section 18.7 measured where the descent's time really goes at the real shape
+ * (N = 2^5261-1, P ~ 51839): NOT in the NTT, but in two host-side costs of divmod_batch --
+ * (a) it materialises A and B for a WHOLE group before the multiply (~70 GB per buffer at
+ *     that shape, twice that for both), and
+ * (b) its last step cp_coeff_sub_p is one host GMP subtract+mod per output coefficient
+ *     (~2.7e9 of them).
+ * Both are gone here: operands are packed into bpw-bit digit slots ON THE DEVICE (one thread
+ * per coefficient, no whole-slice staging, no host round trip), the multiply is the existing
+ * device-to-device batched multiply, the product coefficients are reduced mod N ON THE DEVICE
+ * by the very same s4_reduce_kernel that has already been selftested against GMP for every
+ * shape of the run, and the final subtraction is s2g_mont_mul on the device.
+ *
+ * THE SHAPE IS READ OFF THE DATA, NOT OFF THE GROUP KEY (section 18.6's lesson): a divisor is
+ * treated as linear only after a device verdict (leading word == 1, every word above the
+ * constant term == 0) AND its group's Fdeg is 1.  Anything else takes the full Newton chain.
+ *
+ * THE PACK INVARIANT.  The digit buffer the multiply consumes is not a free-form packing: a
+ * canonical digit d[j] is < 2^bpw, and the reduction asserts every digit above slot_bits of a
+ * slot window is zero.  S5 therefore obeys two rules that cost a whole round to learn:
+ *   1. coefficient i is written at SLOT STRIDE (slot_words*bpw) bits, NOT at bpw.  Packing at
+ *      bpw overflows the 2^slot_bits window and the reduction aborts with "slot windows have
+ *      nonzero digits above slot_bits".
+ *   2. the slot must hold the SUM of up to (Lmax + Lb) coefficient products: with A scaled by
+ *      2^(S*(Lmax-la)) its slot value is < 2^S(Lmax+1), B's < 2^S(Lb+1), and their product is
+ *      < 2^(2S + log2 P) = 2^slot_bits exactly when the scale is (Lmax - la) with Lmax =
+ *      ceil(log2 P).  Same for B.  The scaling is FREE: it is a bit offset inside the slot.
+ * ===================================================================================== */
+
+/* where the S5 phase's time goes (printed as one line) */
+struct S5Stats {
+    unsigned long long levels = 0, divmods = 0, generic = 0, linear = 0, copies = 0, zeros = 0,
+                       ntt_launches = 0, chunks = 0, forest_nodes = 0, mul_calls = 0;
+    double t_pack = 0.0, t_copy = 0.0, t_generic = 0.0, t_linear = 0.0, t_reduce = 0.0,
+           t_ntt = 0.0, t_total = 0.0;
+    unsigned long long forest_mb = 0, scratch_mb = 0, frontier_peak_mb = 0;
+};
+
+/* the F tree, flattened per chunk: entry[level] = the first code of that level, off[], sz[] = the
+   coefficient offset/size per code.  `dA` is the device copy the kernels read. */
+struct S5Forest {
+    std::vector<unsigned long long> off, sz;
+    std::vector<size_t> entry;
+    unsigned long long *dA = nullptr;
+    size_t words = 0;
+    ~S5Forest() { if (dA) cudaFree(dA); }
+};
+
+struct S5Dev {
+    PolyLayer *L = nullptr;
+    S4Reduce *red = nullptr;
+    unsigned long long *dout = nullptr, *dvals = nullptr;
+    size_t dout_cap = 0, dvals_cap = 0;
+    /* the packing pool of s5_mul_batch (the NTT copies the operands into the arena) */
+    unsigned long long *scratch = nullptr;
+    size_t scratch_words = 0, scratch_used = 0;
+    /* the reduction output of the single-slice multiplies inside s5_divmod_one */
+    unsigned long long *mulout = nullptr;
+    size_t mulout_cap = 0;
+    /* the per-node working rows of s5_divmod_one (reset for every node) */
+    unsigned long long *pool = nullptr;
+    size_t pool_words = 0, pool_used = 0;
+    /* the forest's coefficient offset table, on the device (the Horner kernel reads it) */
+    unsigned long long *dfoff = nullptr;
+    size_t dfoff_cap = 0;
+    /* the per-node linear verdict */
+    unsigned *dlin = nullptr;
+    size_t dlin_cap = 0;
+    /* the device-to-host diagnostic buffer of the reduction */
+    void *dbad = nullptr;
+    /* per-shape cache of the reduction parameters, keyed by (slot_bits, slot_words, bpw) */
+    std::vector<S4Reduce::Shape *> rs;
+    ~S5Dev()
+    {
+        if (dout) cudaFree(dout);
+        if (dvals) cudaFree(dvals);
+        if (scratch) cudaFree(scratch);
+        if (mulout) cudaFree(mulout);
+        if (pool) cudaFree(pool);
+        if (dfoff) cudaFree(dfoff);
+        if (dlin) cudaFree(dlin);
+        if (dbad) cudaFree(dbad);
+    }
+    unsigned long long *alloc(const char *what, size_t words)
+    {
+        if (scratch_used + words > scratch_words) {
+            std::fprintf(stderr, "%s: FATAL: the S5 pack pool is exhausted (%s wants %llu "
+                                 "words, %llu of %llu free)\n", NTT_PROBE_NAME, what,
+                         (unsigned long long)words,
+                         (unsigned long long)(scratch_words - scratch_used),
+                         (unsigned long long)scratch_words);
+            std::exit(3);
+        }
+        unsigned long long *p = scratch + scratch_used;
+        scratch_used += words;
+        return p;
+    }
+    void reset() { scratch_used = 0; }
+    /* the per-node pool (s5_divmod_one's rows): reset once per node, so a whole level allocates
+       at most the peak of one node */
+    unsigned long long *palloc(size_t words)
+    {
+        if (pool_used + words > pool_words) {
+            std::fprintf(stderr, "%s: FATAL: the S5 node pool is exhausted (%llu + %llu > %llu "
+                                 "words)\n", NTT_PROBE_NAME, (unsigned long long)pool_used,
+                         (unsigned long long)words, (unsigned long long)pool_words);
+            std::exit(3);
+        }
+        unsigned long long *p = pool + pool_used;
+        pool_used += words;
+        return p;
+    }
+    void preset() { pool_used = 0; }
+    /* the reduction output of a single-slice multiply (the multiply hands it back through the
+       hook, so it must be a stable buffer the caller can copy out of) */
+    unsigned long long *fitout(size_t words)
+    {
+        if (words > mulout_cap) {
+            if (mulout) { cudaFree(mulout); mulout = nullptr; mulout_cap = 0; }
+            CK(cudaMalloc(&mulout, words * sizeof(unsigned long long)));
+            mulout_cap = words;
+        }
+        return mulout;
+    }
+    unsigned long long *fitval(size_t words)
+    {
+        if (words > (size_t)dvals_cap) {
+            if (dvals) { cudaFree(dvals); dvals = nullptr; dvals_cap = 0; }
+            CK(cudaMalloc(&dvals, words * sizeof(unsigned long long)));
+            dvals_cap = words;
+        }
+        return dvals;
+    }
+    unsigned long long *fitA(const char *what, size_t m)
+    {
+        if (m > dout_cap) {
+            if (dout) { cudaFree(dout); dout = nullptr; dout_cap = 0; }
+            CK(cudaMalloc(&dout, m * sizeof(unsigned long long)));
+            dout_cap = m;
+        }
+        (void)what;
+        return dout;
+    }
+    unsigned long long *fito(const char *what, size_t m) { return fitA(what, m); }
+};
+
+/* the reduction parameters for a shape, built (and selftested against GMP) once per shape */
+static S4Reduce::Shape *s5_reduce_shape(S5Dev &D, unsigned long long slot_bits,
+                                        unsigned long long slot_words, int bpw)
+{
+    for (S4Reduce::Shape *s : D.rs)
+        if (s->slot_bits == slot_bits && s->slot_words == slot_words && s->bpw == bpw) return s;
+    S4Reduce::Shape *S = s4_shape_init(*D.red, /*P=*/0, slot_bits, slot_words * (unsigned long long)bpw,
+                                       slot_words, bpw);
+    if (s4_reduce_selftest(*D.red, S)) {
+        std::fprintf(stderr, "%s: FATAL: the device reduction disagrees with GMP on the S5 shape "
+                             "slot_bits=%llu slot_words=%llu bpw=%d -- refusing to continue\n",
+                     NTT_PROBE_NAME, slot_bits, slot_words, bpw);
+        std::exit(3);
+    }
+    D.rs.push_back(S);
+    return S;
+}
+
+/* ---- kernels ------------------------------------------------------------------------ */
+
+/* one thread per (node, coefficient): extract `S` bits out of the coefficient-major source and
+   write them as bpw-bit digits of slice `s` at digit `i * (slot_stride/bpw)` plus the caller's
+   digit offset.  NO shared staging and NO atomicOr beyond the digit sharing inside one
+   coefficient: a coefficient owns its slot exclusively, and a whole-slice staging buffer would be
+   P*slot_words digits (~2 MB at the real shape) per block.
+ *
+ * `slot_stride` MUST be a whole number of bpw digits (the shape planner guarantees it: the stride
+ * is slot_words*bpw).  The offset is expressed in DIGITS for the same reason -- a bit offset that
+ * is not a multiple of bpw would put two chunks in one digit and break the "every digit < 2^bpw"
+ * premise of the exactness criterion.
+ *
+ * MEASURED DEFECT OF THIS PATH AT THE S5 STRIDE (open, see the S5Shape comment): with
+ * slot_stride = slot_bits (the fix-A layout) the reduction reads the window's TOP nw words and
+ * returns 0 unless the window value also spans limbs [L, L+nw) of the base-2^64 conversion, which
+ * for the frozen vector's 259-bit window (nlimb=5, nw=3, L=3) it does not.  The layout below is
+ * therefore only consistent with the stride the reduction was written for
+ * (slot_words*bpw on both sides), which is why the S5 descent stays opt-in. */
+__global__ void s5_pack_kernel(const unsigned long long *src, unsigned long long src_off,
+                               int S, int bpw, unsigned long long slot_stride,
+                               unsigned long long N, unsigned long long ds, unsigned long long ma,
+                               int W, unsigned long long off_digits, unsigned long long zero_words,
+                               unsigned long long *dst)
+{
+    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (gid >= ds * ma) return;
+    const unsigned long long s = gid / ma, i = gid - s * ma;
+    const unsigned long long bit0 =
+        s * N * 64ull +
+        (off_digits + i * (slot_stride / (unsigned long long)bpw)) * (unsigned long long)bpw;
+    const unsigned long long word0 = bit0 / 64ull;
+    const int sh0 = (int)(bit0 % 64ull);
+    if (zero_words) dst[s * N + word0] = 0ull;
+    const unsigned long long *c = src + src_off + s * ma * (unsigned long long)W +
+                                  i * (unsigned long long)W;
+    for (int p = 0; p < W; ++p) {
+        unsigned long long v = c[p];
+        if (p == W - 1 && S < 64) v &= ((1ull << S) - 1ull);
+        if (!v) continue;
+        const int q0 = (sh0 + p * 64) / bpw, r = (sh0 + p * 64) % bpw;
+        const unsigned long long *srcw = &dst[s * N + word0];
+        /* the value is 64 bits; its base-2^bpw digits are (v>>kp)&mask with a final partial
+           digit -- computed so that no shift is ever taken by 64 */
+        const int ndig = (64 + r + bpw - 1) / bpw;
+        for (int kp = 0; kp < ndig; ++kp) {
+            const int kk = (kp == ndig - 1) ? r : bpw;
+            const int d = (kp < 2) ? (int)((v >> kp) & ((1ull << kk) - 1ull)) : 0;
+            if (kp >= 2) break;
+            if (d) atomicOr((unsigned long long *)&srcw[q0 + kp], (unsigned long long)d);
+        }
+    }
+}
+
+/* the "is this divisor linear?" verdict, ON THE DEVICE: words [1,degn] of the divisor must be
+   0 and word degn must be 1 (monic).  Writes 1 (linear) or 0 per node. */
+__global__ void s5_check_linear_kernel(const unsigned long long *src, unsigned long long src_off,
+                                       unsigned long long ds, unsigned long long stride,
+                                       int W, int degn, unsigned *out)
+{
+    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (gid >= ds) return;
+    const unsigned long long *c = src + src_off + gid * stride * (unsigned long long)W;
+    unsigned ok = (W * (unsigned long long)degn < stride) ? 1u : 0u;
+    unsigned long long acc = 0;
+    for (int j = 0; j < W; ++j) acc |= c[degn * W + j];
+    if (acc != 1ull) ok = 0u;
+    acc = 0;
+    for (int j = 1; j < W; ++j) acc |= c[j];
+    if (acc != 0ull) ok = 0u;
+    out[gid] = ok;
+}
+
+/* Horner at the two children of one node: out_s = A(x_{2*code+s}) with x = -b0 of the leaf,
+   evaluated in Montgomery form and folded back with mone (the plain-domain 1).  One thread per
+   child; the evaluation point is read from the FOREST (the leaf's own constant term), so the
+   kernel is given the parent's code, never a group key. */
+__global__ void s5_eval_linear_kernel(const unsigned long long *src, unsigned long long src_off,
+                                      unsigned long long sa, int W,
+                                      const unsigned long long *fA, const unsigned long long *foff,
+                                      unsigned long long code, unsigned long long ds,
+                                      const unsigned long long *n, unsigned long long ninv, int nw,
+                                      unsigned long long *dst, unsigned long long dstride)
+{
+    const unsigned long long s = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (s >= ds) return;
+    const unsigned long long cc = 2 * code + s;              /* this child's own code */
+    const unsigned long long *c = src + src_off + s * sa * (unsigned long long)W;
+    const unsigned long long *root = fA + foff[cc];          /* the constant term = -x */
+    unsigned long long x[128], h[128], one[128];
+    for (int j = 0; j < nw; ++j) { x[j] = root[j]; one[j] = 0ull; }
+    one[0] = 1ull;
+    s2g_mont_mul<128>(x, x, one, n, ninv, nw);               /* x -> Montgomery form */
+    bool started = false;
+    for (unsigned long long i = sa; i-- > 0;) {
+        if (!started) {
+            for (int j = 0; j < nw; ++j) h[j] = c[i * (unsigned long long)W + j];
+            started = true;
+        } else {
+            s2g_mont_mul<128>(h, h, x, n, ninv, nw);
+            const unsigned long long *a = c + i * (unsigned long long)W;
+            unsigned long long carry = 0;
+            for (int j = 0; j < nw; ++j) {                    /* h += a  (mod N, exact carry) */
+                const unsigned long long t = h[j] + a[j] + carry;
+                carry = (t < h[j]) ? 1ull : ((carry && t == h[j]) ? 1ull : 0ull);
+                h[j] = t;
+            }
+            if (carry || s2g_ge_n(h, n, nw)) s2g_sub_n(h, n, nw);
+        }
+    }
+    if (!started) for (int j = 0; j < nw; ++j) h[j] = 0ull;
+    s2g_mont_mul<128>(h, h, one, n, ninv, nw);               /* out of Montgomery form */
+    for (int j = 0; j < nw; ++j)
+        dst[s * dstride + (unsigned long long)j] = (j < nw) ? h[j] : 0ull;
+}
+
+/* dst[i] = A[i] - qb[i mod lb] for i < db, else 0 (the reference's cp_coeff_sub, on the device:
+   the left coefficient is in the plain domain and qb is one Montgomery product away from it) */
+__global__ void s5_sub_kernel(const unsigned long long *A, unsigned long long a_off, int la,
+                              const unsigned long long *B, unsigned long long b_off, int lb,
+                              int rows, const unsigned long long *n, unsigned long long ninv,
+                              int nw, unsigned long long *dst, unsigned long long dstride)
+{
+    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (gid >= (unsigned long long)rows * (unsigned long long)nw) return;
+    const int i = (int)(gid / (unsigned long long)nw);
+    unsigned long long r[128];
+    if (i >= la) {
+        for (int j = 0; j < nw; ++j) r[j] = 0ull;
+    } else {
+        const unsigned long long *a = A + a_off + (size_t)i * nw;
+        const unsigned long long *b = B + b_off + (size_t)(i % lb) * nw;
+        s2g_mont_mul<128>(r, a, b, n, ninv, nw);
+    }
+    for (int j = 0; j < nw; ++j) dst[(size_t)i * dstride + j] = r[j];
+}
+
+/* e = 2 (in Montgomery form) minus the input, per coefficient */
+__global__ void s5_two_minus_kernel(const unsigned long long *a, unsigned long long *out,
+                                    unsigned long long total, const unsigned long long *n,
+                                    unsigned long long ninv, int nw)
+{
+    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (gid >= total) return;
+    unsigned long long two[128], one[128], t[128], r[128];
+    for (int j = 0; j < nw; ++j) { two[j] = 0ull; one[j] = 0ull; }
+    two[0] = 2ull; one[0] = 1ull;
+    s2g_mont_mul<128>(t, two, one, n, ninv, nw);              /* 2 in Montgomery form */
+    s2g_submod<128>(r, t, a + gid * (unsigned long long)nw, n, nw);
+    for (int j = 0; j < nw; ++j) out[gid * (unsigned long long)nw + j] = r[j];
+}
+
+/* reverse the top `n` coefficients of a row into a fresh row: dst[i] = src[n-1-i] (zero for
+   i beyond the source, which is what zero-extends rb when db+1 < k) */
+#define S5_GRID(n) ((unsigned int)(((n) + 255) / 256)), 256
+__global__ void s5_rev_pack_kernel(unsigned long long *dst, const unsigned long long *src,
+                                   unsigned long long src_off, unsigned long long n,
+                                   unsigned long long src_len, int W)
+{
+    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (gid >= n) return;
+    const unsigned long long j = n - 1 - gid;
+    const unsigned long long *s = src + src_off + (size_t)j * W;
+    unsigned long long *d = dst + (size_t)gid * W;
+    for (int t = 0; t < W; ++t) d[t] = (j < src_len) ? s[t] : 0ull;
+}
+
+/* zero-extend `len` coefficients of a row into `n` */
+__global__ void s5_pad_low_kernel(unsigned long long *dst, const unsigned long long *src,
+                                  unsigned long long n, unsigned long long len, int W)
+{
+    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (gid >= n) return;
+    const unsigned long long *s = src + (size_t)gid * W;
+    unsigned long long *d = dst + (size_t)gid * W;
+    for (int t = 0; t < W; ++t) d[t] = (gid < len) ? s[t] : 0ull;
+}
+
+/* g[0] = 1 (the Montgomery image of the constant series 1; every divisor reaching the Newton
+   chain has a monic leading coefficient, so 1/a[0] = 1 in the plain domain), rest zero */
+__global__ void s5_fill_kernel(unsigned long long *g, unsigned long long n, int W)
+{
+    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (gid >= n) return;
+    unsigned long long *d = g + (size_t)gid * W;
+    for (int t = 0; t < W; ++t) d[t] = 0ull;
+    if (gid == 0) d[0] = 1ull;
+}
+
+/* coefficient-wise copy between two device arrays (the degree fast path: H mod F_ci = H when
+   deg H < deg F_ci) */
+static void s5_copy_rows(const unsigned long long *src, size_t src_off, size_t dst_off, int rows,
+                         int W, unsigned long long *dst, int cat)
+{
+    (void)cat;
+    if (rows <= 0) return;
+    CK(cudaMemcpy(dst + dst_off, src + src_off,
+                  (size_t)rows * (size_t)W * sizeof(unsigned long long),
+                  cudaMemcpyDeviceToDevice));
+}
+
+/* ---- the device driver ----------------------------------------------------------------- */
+
+/* the reduction hook of the S5 pack: the digits of a canonical slot -> the plain residue.  This
+   is the SAME kernel the S4 multiply uses (s4_reduce_kernel, dispatched through
+   s4_launch_reduce), so the S5 path inherits its per-shape GMP selftest; the only thing that is
+   new is the caller's stride (tight rows instead of the NTT's slot projection). */
+struct S5RedHook {
+    S5Dev *D = nullptr;
+    unsigned long long *out = nullptr;
+    unsigned long long out_stride = 0;         /* words per row of the destination */
+    unsigned long long row0 = 0;               /* first destination row */
+    unsigned long long w = 0;                  /* words per coefficient */
+    /* The reduction hands back out_slots = 2P-1 coefficients per slice while the caller keeps
+       only `want` of them.  Striding the destination by `want` makes consecutive slices overlap,
+       and the overflow lands on the NEXT slice's first row -- measured as "1 of 31 slot windows
+       have nonzero digits above slot_bits" on the frozen vector.  So the reduction writes into a
+       tight scratch region of the pack pool (stride out_slots) and the wanted prefix is copied
+       into the caller's rows afterwards. */
+    unsigned long long *tmp = nullptr;         /* the scratch region, out_slots rows per slice */
+    unsigned long long tmp_stride = 0;
+};
+
+static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned long long n,
+                           int bpw, unsigned long long slot_words, unsigned long long slot_bits,
+                           unsigned long long out_slots, unsigned long long nbatch,
+                           unsigned long long *out, unsigned long long w)
+{
+    S5RedHook &H = *(S5RedHook *)ctx;
+    S5Dev &D = *H.D;
+    (void)out;
+    S4Reduce::Shape *S = s5_reduce_shape(D, slot_bits, slot_words, bpw);
+    if (w != (unsigned long long)D.red->w) {
+        std::fprintf(stderr, "%s: FATAL: the S5 reduction was given w=%llu but the modulus has "
+                             "%d words\n", NTT_PROBE_NAME, w, D.red->w);
+        std::exit(3);
+    }
+    if (!D.dbad) CK(cudaMalloc(&D.dbad, sizeof(unsigned long long)));
+    CK(cudaMemset(D.dbad, 0, sizeof(unsigned long long)));
+    /* FORENSIC (NTT_S5_REDDUMP=1): the shape the reduction is about to run and the first digits of
+       the stream, so "the reduce read the wrong window" and "the multiply returned the wrong
+       digits" can be separated by inspection.  Off by default (it costs a copy). */
+    if (std::getenv("NTT_S5_REDDUMP") && *std::getenv("NTT_S5_REDDUMP")
+        && std::atoi(std::getenv("NTT_S5_REDDUMP")) != 0) {
+        std::vector<unsigned long long> d0(64, 0ull);
+        CK(cudaMemcpy(d0.data(), digits, d0.size() * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToHost));
+        std::fprintf(stderr, "s5_reddump: n=%llu nbatch=%llu bpw=%d slot_words=%llu "
+                             "slot_bits=%llu out_slots=%llu redL=%llu words_per_coeff=%d "
+                             "nw=%d digits[0..7]=", n, nbatch, bpw, slot_words, slot_bits, out_slots,
+                     (unsigned long long)S->L, D.red->w, D.red->nw);
+        for (int i = 0; i < 8; ++i) std::fprintf(stderr, "%llu,", d0[(size_t)i]);
+        std::fprintf(stderr, "\n");
+        if (slot_words <= d0.size()) {
+            mpz_t v, two;
+            mpz_inits(v, two, nullptr);
+            mpz_set_ui(two, 1);
+            mpz_mul_2exp(two, two, (unsigned)bpw);
+            mpz_set_ui(v, 0);
+            for (unsigned long long j = slot_words; j-- > 0;) {
+                mpz_mul(v, v, two);
+                mpz_add_u64(v, d0[(size_t)j]);
+            }
+            char *s1 = mpz_get_str(nullptr, 16, v);
+            mpz_t want;
+            mpz_init(want);
+            s4_gmp_reduce(want, d0.data(), slot_words, bpw, D.red->N);
+            char *s2 = mpz_get_str(nullptr, 16, want);
+            std::fprintf(stderr, "s5_reddump: window0=%s gmp_reduce(window0)=%s\n", s1, s2);
+            /* THE WHOLE FIRST WINDOW, digit by digit, so the limb conversion can be reproduced by
+               hand: the number above is exactly sum_j d0[j]*2^(bpw*j). */
+            std::fprintf(stderr, "s5_reddump_window: bpw=%d slot_words=%llu digits=", bpw, slot_words);
+            unsigned long long nz = 0;
+            for (unsigned long long j = 0; j < slot_words && j < 64; ++j) {
+                std::fprintf(stderr, "%llu%s", d0[(size_t)j], (j + 1 == slot_words) ? "" : ",");
+                if (d0[(size_t)j]) nz = j + 1;
+            }
+            unsigned long long topbits = 0;
+            if (nz) {
+                unsigned long long tv = d0[(size_t)(nz - 1)];
+                while (tv) { ++topbits; tv >>= 1; }
+            }
+            std::fprintf(stderr, " highest_nonzero_digit=%llu value_bits_in_window=%llu\n", nz,
+                         nz ? (nz - 1) * (unsigned long long)bpw + topbits : 0ull);
+            void (*ff)(void *, size_t) = nullptr;
+            mp_get_memory_functions(nullptr, nullptr, &ff);
+            ff(s1, std::strlen(s1) + 1);
+            ff(s2, std::strlen(s2) + 1);
+            mpz_clears(v, two, want, nullptr);
+        }
+    }
+    const double t0 = now_s();
+    /* FORENSIC (NTT_S5_REDDUMP=1): the KERNEL's own view of the first coefficients -- the
+       assembled limbs t[], the returned r[] and the digits it actually read.  The host can dump
+       the digit buffer and the output rows, but neither says what the kernel saw: if they
+       disagree, this is the only place that shows it (section 30). */
+    unsigned long long *ddbg = nullptr;
+    const bool reddump = (std::getenv("NTT_S5_REDDUMP") && *std::getenv("NTT_S5_REDDUMP")
+                          && std::atoi(std::getenv("NTT_S5_REDDUMP")) != 0);
+    if (reddump) {
+        CK(cudaMalloc(&ddbg, 4 * 24 * sizeof(unsigned long long)));
+        CK(cudaMemset(ddbg, 0, 4 * 24 * sizeof(unsigned long long)));
+    }
+    S2G_DISPATCH(D.red->nw, s4_launch_reduce, (int)D.red->nw, S->L, nbatch, out_slots,
+                 out_slots * nbatch, digits, n, bpw, slot_words, D.red->dn, D.red->ninv, S->dy, w,
+                 H.tmp, slot_bits, (unsigned long long *)D.dbad, ddbg);
+    CK(cudaGetLastError());
+    CK(cudaDeviceSynchronize());
+    S->t_reduce += now_s() - t0;
+    if (ddbg != nullptr) {
+        std::vector<unsigned long long> dbg(4 * 24, 0ull);
+        CK(cudaMemcpy(dbg.data(), ddbg, dbg.size() * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToHost));
+        for (int g = 0; g < 4; ++g) {
+            const unsigned long long *q = &dbg[(size_t)g * 24];
+            std::fprintf(stderr, "s5_kernel_view: gid=%d L=%llu slot_words=%llu bpw=%llu "
+                                 "t=%llx,%llx,%llx,%llx,%llx,%llx r=%llx,%llx,%llx "
+                                 "u=%llx,%llx,%llx dy=%llx,%llx,%llx ninv=%llx nw=%llu "
+                                 "d[0..2]=%llx,%llx,%llx d[last]=%llx\n",
+                         g, q[9], q[10], q[15], q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7],
+                         q[8], q[16], q[17], q[18], q[19], q[20], q[21], q[22], q[23], q[11],
+                         q[12], q[13], q[14]);
+        }
+        cudaFree(ddbg);
+        ddbg = nullptr;
+    }
+    /* FORENSIC (NTT_S5_REDDUMP=1): what the reduction actually wrote, row by row, next to the
+       mathematical answer for the SAME window.  One row is not enough: a shape whose output rows
+       are shifted (or whose digit base is off by one slot) shows ZERO in row 0 while the correct
+       value sits in row 1, and that is indistinguishable from an all-zero window unless the
+       neighbouring rows and their own windows are printed together (section 30). */
+    if (std::getenv("NTT_S5_REDDUMP") && *std::getenv("NTT_S5_REDDUMP")
+        && std::atoi(std::getenv("NTT_S5_REDDUMP")) != 0) {
+        const size_t rw = (size_t)(D.red->w ? D.red->w : 1);
+        const unsigned long long show = (out_slots < 3ull) ? out_slots : 3ull;
+        std::vector<unsigned long long> rows((size_t)show * rw, 0ull);
+        CK(cudaMemcpy(rows.data(), H.tmp, rows.size() * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToHost));
+        std::vector<unsigned long long> d0((size_t)slot_words * (size_t)show, 0ull);
+        CK(cudaMemcpy(d0.data(), digits, d0.size() * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToHost));
+        std::fprintf(stderr, "s5_reddump_out: L=%llu nw=%d bpw=%d slot_words=%llu out_slots=%llu "
+                             "nbatch=%llu n=%llu w=%llu tmp_stride=%llu\n",
+                     (unsigned long long)S->L, D.red->nw, bpw, slot_words, out_slots, nbatch, n, w,
+                     H.tmp_stride);
+        {   /* S->hy (host) vs S->dy (device): if they differ, the device copy was clobbered
+               after s4_shape_init wrote it, which is a use-after-free or an over-broad memset */
+            std::vector<unsigned long long> dyv((size_t)D.red->nw, 0ull);
+            CK(cudaMemcpy(dyv.data(), S->dy, dyv.size() * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+            std::fprintf(stderr, "s5_reddump_dy: S->dy_ptr=%p host_hy=", (void *)S->dy);
+            for (int i = 0; i < D.red->nw; ++i) std::fprintf(stderr, "%llx,", S->hy[(size_t)i]);
+            std::fprintf(stderr, " device_dy=");
+            for (int i = 0; i < D.red->nw; ++i) std::fprintf(stderr, "%llx,", dyv[(size_t)i]);
+            std::fprintf(stderr, "\n");
+        }
+        mpz_t wv, want, got, two;
+        mpz_inits(wv, want, got, two, nullptr);
+        for (unsigned long long k = 0; k < show; ++k) {
+            mpz_set_ui(wv, 0);
+            mpz_set_ui(two, 1);
+            mpz_mul_2exp(two, two, (unsigned)bpw);
+            for (unsigned long long j = slot_words; j-- > 0;) {
+                mpz_mul(wv, wv, two);
+                mpz_add_u64(wv, d0[(size_t)(k * slot_words + j)]);
+            }
+            s4_gmp_reduce(want, &d0[(size_t)k * slot_words], slot_words, bpw, D.red->N);
+            mpz_import(got, rw, -1, 8, 0, 0, &rows[(size_t)k * rw]);
+            char *s1 = mpz_get_str(nullptr, 16, want);
+            char *s2 = mpz_get_str(nullptr, 16, got);
+            char *s3 = mpz_get_str(nullptr, 16, wv);
+            std::fprintf(stderr, "s5_reddump_row: k=%llu window=%s gmp=%s device=%s %s\n", k, s3,
+                         s1, s2, (mpz_cmp(want, got) == 0) ? "MATCH" : "DIFFER");
+            void (*ff)(void *, size_t) = nullptr;
+            mp_get_memory_functions(nullptr, nullptr, &ff);
+            ff(s1, std::strlen(s1) + 1);
+            ff(s2, std::strlen(s2) + 1);
+            ff(s3, std::strlen(s3) + 1);
+        }
+        mpz_clears(wv, want, got, two, nullptr);
+    }
+    {
+        const unsigned long long want = H.out_stride / (H.w ? H.w : 1ull);
+        if (want && want != out_slots) {
+            for (unsigned long long s = 0; s < nbatch; ++s) {
+                CK(cudaMemcpy(H.out + (size_t)(H.row0 + s) * H.out_stride,
+                              H.tmp + (size_t)s * out_slots * H.w,
+                              (size_t)want * H.w * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToDevice));
+            }
+        } else {
+            CK(cudaMemcpy(H.out + (size_t)H.row0 * H.out_stride, H.tmp,
+                          (size_t)out_slots * nbatch * H.w * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToDevice));
+        }
+    }
+    unsigned long long hbad = 0;
+    CK(cudaMemcpy(&hbad, D.dbad, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    ++S->calls;
+    S->coeffs += out_slots * nbatch;
+    D.red->coeffs_total += out_slots * nbatch;
+    if (hbad) {
+        std::fprintf(stderr, "%s: FATAL: %llu of %llu S5 slot windows have nonzero digits above "
+                             "slot_bits=%llu -- the packing is not canonical\n", NTT_PROBE_NAME,
+                     hbad, out_slots * nbatch, slot_bits);
+        /* FORENSIC (NTT_S5_DIGDUMP=1): which slot, and what the digit stream actually holds
+           around it.  The digit buffer dies with this call, so this has to happen here. */
+        const char *ed = std::getenv("NTT_S5_DIGDUMP");
+        if (ed && *ed && std::atoi(ed) != 0) {
+            std::vector<unsigned long long> dig((size_t)n * nbatch, 0ull);
+            CK(cudaMemcpy(dig.data(), digits, dig.size() * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+            const unsigned long long top_bits = slot_bits - (slot_words - 1) * (unsigned long long)bpw;
+            std::fprintf(stderr, "  digdump: n=%llu nbatch=%llu out_slots=%llu bpw=%d slot_words=%llu "
+                                 "slot_bits=%llu top_bits=%llu\n", n, nbatch, out_slots, bpw,
+                         slot_words, slot_bits, top_bits);
+            /* the reduction's own output for the same slots */
+            std::vector<unsigned long long> hout((size_t)out_slots * nbatch *
+                                                 (D.red->w ? D.red->w : 1), 0ull);
+            (void)hout;
+            unsigned long long shown = 0;
+            for (unsigned long long g = 0; g < out_slots * nbatch && shown < 4; ++g) {
+                const unsigned long long s = g / out_slots, k = g - s * out_slots;
+                const unsigned long long b = s * n + k * slot_words;
+                if (b + slot_words > dig.size()) continue;
+                if (top_bits < 64 && (dig[(size_t)(b + slot_words - 1)] >> top_bits) != 0) {
+                    mpz_t v, pw, two29;
+                    mpz_inits(v, pw, two29, nullptr);
+                    mpz_set_ui(v, 0);
+                    mpz_set_ui(two29, 1);
+                    mpz_mul_2exp(two29, two29, (unsigned)bpw);
+                    for (unsigned long long j = slot_words; j-- > 0;) {
+                        mpz_mul(v, v, two29);
+                        mpz_add_u64(v, dig[(size_t)(b + j)]);
+                    }
+                    std::fprintf(stderr, "  bad slot: slice=%llu k=%llu first_digit=%llu value_bits=%zu "
+                                         "value_mod_N_hex=", s, k, b, mpz_sizeinbase(v, 2));
+                    char *str = mpz_get_str(nullptr, 16, v);
+                    std::fprintf(stderr, "%s\n", str);
+                    void (*ff)(void *, size_t) = nullptr;
+                    mp_get_memory_functions(nullptr, nullptr, &ff);
+                    ff(str, std::strlen(str) + 1);
+                    mpz_clears(v, pw, two29, nullptr);
+                    ++shown;
+                }
+            }
+        }
+        std::exit(3);
+    }
+    /* THE IN-RUN ORACLE.  The reduction runs on every S5 call; its check against GMP runs the
+       same way the S4 multiply's does (a full check for small shapes, a sample for big ones),
+       so S5's claim "these coefficients equal GMP's" is measured, not asserted.  It reads the
+       scratch region, which holds the reduction's own output verbatim. */
+    if (g_s4_sample_limit > 0 && (S->calls <= 1 || (S->calls % g_s4_check_every) == 0))
+        s4_check_reduced(*D.red, S, digits, n, out_slots, nbatch, H.tmp, g_s4_sample_limit);
+}
+
+/* THE S5 SLOT SHAPE, derived here rather than inherited.
+ *
+ * The host packer's layout is: coefficient i at bit i*slot_stride, stride = slot_words*bpw with
+ * slot_words = ceil(slot_bits/bpw) and slot_bits = 2S + ceil(log2 P) -- enough room for the SUM
+ * of two coefficient products.  Its claim is nwords*bpw >= P*slot_stride, and that is what makes
+ * the packing non-aliasing.
+ *
+ * S5's operands are only ONE coefficient wide each, so the natural slot only needs ceil(S/bpw)
+ * words; packing at the host's wider stride would need P*slot_stride > nwords*bpw and the top
+ * coefficients would WRAP ONTO THE LOW ONES (measured: the first product coefficient came back
+ * as 2^258, the wrapped coefficient 4).  The converse is also fatal: packing at the narrow stride
+ * while the NTT reads the wide one puts each coefficient in the wrong place (measured: the packed
+ * block held bits of its neighbours).
+ *
+ * So S5 derives BOTH from one bpw and requires them to be the SAME partition:
+ *     slot_words = 2 * ceil(S/bpw)   ==   ceil((2S + ceil(log2 P)) / bpw)
+ * i.e. the sum-slot is exactly two operand slots.  Then stride = slot_words*bpw, the operands fit
+ * in nwords >= P*slot_words, and the reduction reads the same windows the packer wrote.
+ * The exactness bound L*(2^bpw-1)^2 < p with L = P*slot_words is re-proved for the chosen bpw.
+ *
+ * ============================ THE STRIDE FIX (fix A) =====================================
+ * The paragraph above is the OLD, half-finished derivation and it is why this path was gated off.
+ * What actually has to hold is a statement about the REDUCER, and here it is, proved from the
+ * arrays rather than asserted:
+ *
+ *   [A1] ONE WINDOW PER COEFFICIENT.  s4_reduce_kernel reads coefficient k out of the window of
+ *        `slot_words` digits that starts at digit k*slot_words, and asserts that window's value is
+ *        < 2^slot_bits (its guard).  So a coefficient's 64-bit block must lie INSIDE its own
+ *        window; a block that starts at bit i*stride and is S bits wide therefore needs
+ *                i*stride + S <= (i+1)*slot_bits      for every i,
+ *        i.e. stride <= slot_bits + (slot_bits - S)/i, whose binding case is i = 1:
+ *                stride + S <= 2*slot_bits.
+ *        It is NOT enough: a window that merely COVERS the block also has to not cover MORE than
+ *        it.  If stride < slot_bits the window (i+1)*slot_bits wide starting at i*stride contains
+ *        the whole of coefficient i+1's block as well, and its value is then
+ *                c_i + lowbits(c_{i+1})          (measured: value_bits = 261 vs slot_bits = 260,
+ *        exactly one bit, on the frozen vector's first division), so the reduced residue is wrong
+ *        even though the guard may pass.  Whenever stride > slot_bits the situation is symmetric
+ *        and worse: coefficient i's block runs past window i into window i+1, so BOTH windows are
+ *        polluted.  The only stride for which "the window contains exactly this coefficient" holds
+ *        for every i is
+ *                stride == slot_bits,
+ *        and that requires slot_bits to be a whole number of bpw-digit words, i.e. bpw | slot_bits.
+ *        This is option (a) of the two candidates recorded in the report, chosen because it is the
+ *        only one of the two that makes the reducer's output EXACT rather than merely bounded:
+ *        option (b) (scaling the operands so stride + S - slot_bits <= slot_bits) still leaves
+ *        window i sharing bits with coefficient i+1 whenever stride < slot_bits, and the reducer
+ *        has no way to know those bits are there.  Scaling is not needed once stride == slot_bits.
+ *   [A2] EXACTNESS.  With stride == slot_bits the packed operands are exactly
+ *                A = sum_i a_i * 2^(i*slot_bits)      (one coefficient per window, digits < 2^bpw
+ *        by construction: the packer writes S <= slot_bits bits at a stride that is a multiple of
+ *        bpw), so the raw convolution coefficient k of A*B is
+ *                c_k = sum_{i+j=k} a_i*b_j <= P * (2^S - 1)^2 < 2^(2S + log2 P) = 2^slot_bits
+ *        because each a_i,b_j < 2^S and there are at most P pairs.  c_k is written as ONE slot, so
+ *        the slot's value is exactly c_k; no aliasing and no carry from slot k into slot k+1 can
+ *        change c_k, and the counting bound of the probe, L*(2^bpw-1)^2 < p with L = P*slot_words
+ *        (the number of nonzero DIGITS per operand), is the same sufficient condition as before
+ *        and is still enforced -- by ntt_shape_plan() for the forced bpw, and again here from the
+ *        S5Shape this function returns.
+ *   [A3] CAPACITY.  The last coefficient's window must be backed by real digits: the operand needs
+ *        (P-1)*slot_words + slot_words = P*slot_words digits, which is what choose_cfg's
+ *        `2*P*slot_words + 1 <= N` test guarantees with room to spare.
+ *
+ * The bpw is therefore not a free parameter any more: it is the largest bpw <= 62 that DIVIDES
+ * slot_bits (so stride == slot_bits) and for which the multiply's own planner -- forced to it,
+ * via the `force_bpw` argument of ntt_shape_query/ntt_poly_mul_batch_dev -- still accepts the
+ * shape.  If no such bpw exists the shape has no canonical S5 packing and s5_shape_for says so
+ * instead of guessing.
+ */
+struct S5Shape {
+    unsigned long long N = 0, slot_words = 0, stride = 0, out_slots = 0, slot_bits = 0;
+    int bpw = 0;
+    bool ok = false;
+    const char *why = "";
+};
+
+/* the exponent the SLOT must be able to hold for an operand of `m` coefficients: the operand's
+   digits span at most floor(log2 m) + 1 coefficient slots, each S bits wide, so its slot value is
+   < 2^(S * (floor(log2 m) + 1)).  NOT ceil(log2 m): for a two-coefficient operand ceil gives 1,
+   one bit short of the budget, and the reduction then refuses the window (measured on the frozen
+   vector's first division). */
+static inline unsigned long long s5_lq(unsigned long long m)
+{
+    unsigned long long b = 1, l = 1;
+    while (b < (1ull << 62) && (b << 1) <= m) { b <<= 1; ++l; }
+    return l;
+}
+
+static S5Shape s5_shape_for(unsigned long long P, int S)
+{
+    S5Shape r;
+    if (P == 0 || S <= 0) { r.why = "bad shape"; return r; }
+    unsigned long long log2P = 1;
+    while ((1ull << log2P) < P) ++log2P;
+    const unsigned long long slot_bits = 2ull * (unsigned long long)S + log2P;
+    /* THE STRIDE RULE: stride = ceil(slot_bits/bpw)*bpw is slot_bits exactly when bpw divides
+       slot_bits, so scan downwards for a divisor that the multiply's planner also accepts.  Both
+       conditions are re-checked from the planner's own answer below; a divisor that fails the
+       exactness bound L*(2^bpw-1)^2 < p is simply the next candidate's business, and the planner
+       reports it, so this loop cannot pick a bpw the multiply would refuse. */
+    unsigned long long qN = 0, qsb = 0, qsw = 0, qss = 0, qos = 0;
+    int qbpw = 0;
+    int bpw = 0;
+    const char *why_last = "no divisor of slot_bits <= 62 is accepted by the shape planner";
+    for (int c = 62; c >= 1; --c) {
+        if ((slot_bits % (unsigned long long)c) != 0) continue;    /* makes stride == slot_bits */
+        if (!ntt_shape_query(P, S, &qN, &qbpw, &qsb, &qsw, &qss, &qos, (int)c)) continue;
+        if (qbpw != c) { why_last = "the planner did not honour the forced bpw"; continue; }
+        bpw = c;
+        break;
+    }
+    if (!bpw) { r.why = why_last; return r; }
+    if (qsb != slot_bits) { r.why = "slot_bits disagrees with its own derivation"; return r; }
+    /* [A1] THE STRIDE IS THE WINDOW WIDTH.  This single equality is what the reducer needs; the
+       checks below exist so a future change cannot silently break it. */
+    if (qss != slot_bits || qss != qsw * (unsigned long long)qbpw) {
+        r.why = "the stride is not exactly slot_bits";
+        return r;
+    }
+    /* [A3] capacity: every coefficient owns one whole window, and the last one must fit the
+       operand's digit budget (the planner's 2*P*slot_words + 1 <= N leaves room for it) */
+    if (P > (~0ull) / qsw) { r.why = "L = P*slot_words overflows"; return r; }
+    if (P * qsw + qsw > qN) { r.why = "the windows do not fit the transform"; return r; }
+    /* [A2] the exactness bound, re-derived for THIS (L, bpw) -- never inherited from another
+       shape, another level or a group key; the multiply re-derives it again from L_terms and
+       asserts it on the values it really produced. */
+    const unsigned long long L = P * qsw;
+    if (!exact_ok_terms(L, qbpw)) { r.why = "the exactness bound fails"; return r; }
+    r.N = qN; r.slot_words = qsw; r.stride = qss; r.bpw = qbpw;
+    r.slot_bits = slot_bits;
+    r.out_slots = qos;
+    r.ok = true;
+    return r;
+}
+
+
+/* one batched NTT multiply of `ds` slices: A (rows of `la` coefficients, scaled by 2^(S*(Lmax-la))
+   into the slot window), B (rows of `lb`), output = the first `want` coefficients of the product,
+   reduced mod N, written TIGHT into dst (row stride `want`).  `pack_lo`/`pack_hi` name the row
+   range of the source arrays (all of a level's nodes share one source layout). */
+static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long long Aoff,
+                         unsigned long long la, const unsigned long long *Bsrc,
+                         unsigned long long Boff, unsigned long long lb, unsigned long long ds,
+                         unsigned long long rowoff, unsigned long long want,
+                         unsigned long long *dst, S5Stats &st, int cat)
+{
+    PolyLayer &L = *D.L;
+    if (ds == 0 || want == 0) return;
+    const size_t W = L.W;
+    const int S = (int)L.S;
+    const unsigned long long P = (la > lb) ? la : lb;
+    /* S5 derives its own slot shape (see S5Shape) and proves the exactness bound for it, rather
+       than inheriting the probe's shape for a coefficient count it never multiplies. */
+    const S5Shape sh = s5_shape_for(P, S);
+    if (!sh.ok) {
+        std::fprintf(stderr, "%s: FATAL: no S5 slot shape for P=%llu S=%d: %s\n", NTT_PROBE_NAME,
+                     P, S, sh.why);
+        std::exit(3);
+    }
+    const unsigned long long qN = sh.N, qbpw = (unsigned long long)sh.bpw, qos = sh.out_slots;
+    const unsigned long long sstride = sh.stride;
+    /* THE PACKING RULE, in one line: stride == slot_bits, and the packer therefore writes each
+       coefficient at its own slot offset with NO scale.  The scale (and the two candidate fixes
+       the report recorded) is gone: with stride == slot_bits a coefficient's block lies wholly
+       inside its own reduction window and no window sees a neighbour's bits, so there is nothing
+       to pull back.  See the S5Shape comment for [A1]/[A2]/[A3]; the three checks below are the
+       same statement, measured against the values this call is about to use. */
+    const unsigned long long qsb2 = 2ull * (unsigned long long)S + ceil_log2_u64(P);
+    if (qsb2 != sh.slot_bits) {
+        std::fprintf(stderr, "%s: FATAL: the S5 shape disagrees with its own derivation "
+                             "(slot_bits=%llu vs %llu)\n", NTT_PROBE_NAME, sh.slot_bits, qsb2);
+        std::exit(3);
+    }
+    if (sstride != qsb2) {
+        std::fprintf(stderr, "%s: FATAL: the S5 slot stride is not the slot width "
+                             "(stride=%llu slot_bits=%llu): a window would hold bits of its "
+                             "neighbour\n", NTT_PROBE_NAME, sstride, qsb2);
+        std::exit(3);
+    }
+    /* [A1] the block of the LAST coefficient of the operand must end inside the window that the
+       reducer reads for it.  Because the stride IS the window width, "inside its own window" for
+       every i follows from this one inequality plus S <= slot_bits. */
+    if (P * sstride < (P - 1) * sstride + (unsigned long long)S ||
+        (unsigned long long)S > qsb2) {
+        std::fprintf(stderr, "%s: FATAL: the S5 packing overruns the operand (P=%llu stride=%llu "
+                             "S=%d slot_bits=%llu)\n", NTT_PROBE_NAME, P, sstride, S, qsb2);
+        std::exit(3);
+    }
+    /* the operand spans, at the slot stride, must fit the transform the shape chose */
+    if (P * sstride > qN * qbpw) {
+        std::fprintf(stderr, "%s: FATAL: the S5 operands do not fit the NTT array (P=%llu * "
+                             "stride=%llu > N=%llu * bpw=%llu)\n", NTT_PROBE_NAME, P, sstride,
+                     qN, qbpw);
+        std::exit(3);
+    }
+    /* [A2] THE WINDOW BOUND, from the values: c_k = sum_{i+j=k} a_i*b_j is a sum of at most P
+       products of two S-bit numbers, so c_k <= P*(2^S-1)^2 < 2^(2S+log2 P) = 2^slot_bits whenever
+       P <= 2^log2P -- and log2P is defined as ceil(log2 P) two lines up, so this holds by
+       construction and the assertion is what keeps the definition and the use tied together. */
+    if (P > (1ull << ceil_log2_u64(P))) {
+        std::fprintf(stderr, "%s: FATAL: the S5 window bound needs P <= 2^ceil(log2 P) (P=%llu)\n",
+                     NTT_PROBE_NAME, P);
+        std::exit(3);
+    }
+    const unsigned long long qsw = sh.slot_words, qss = sh.stride;
+    /* THE IN-RUN WITNESS FOR [A1]/[A2] (NTT_S5_CANON_CHECK=1): the reducer's own guard, applied
+       to the digits this call is about to hand it.  It costs a device-to-host copy of one slice,
+       so it is off by default; when it is on, `value_bits` MUST come out strictly below
+       `slot_bits` for every coefficient -- that is the exact measurement (261 vs 260) that
+       refused the old layout, so it is the one number worth being able to reproduce. */
+    if (std::getenv("NTT_S5_CANON_CHECK") && *std::getenv("NTT_S5_CANON_CHECK")
+        && std::atoi(std::getenv("NTT_S5_CANON_CHECK")) != 0) {
+        std::vector<unsigned long long> hp((size_t)qN, 0ull);
+        CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(hp.data(), Asrc + Aoff, (size_t)qN * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToHost));
+        unsigned long long worst = 0, worst_i = 0;
+        for (unsigned long long i = 0; i < la; ++i) {
+            unsigned long long vb = 0;
+            for (int b = (int)qsb2 - 1; b >= 0; --b) {
+                const unsigned long long gb = i * qsb2 + (unsigned long long)b;
+                if ((hp[gb / 64] >> (gb % 64)) & 1ull) { vb = (unsigned long long)b + 1; break; }
+            }
+            if (vb > worst) { worst = vb; worst_i = i; }
+        }
+        std::fprintf(stderr, "s5_canon: P=%llu la=%llu slot_bits=%llu stride=%llu bpw=%llu "
+                             "worst_value_bits=%llu at_i=%llu -> %s\n", P, la, qsb2, sstride,
+                     qbpw, worst, worst_i, (worst < qsb2) ? "inside its window" : "OVERRUN");
+        if (worst >= qsb2) std::exit(3);
+    }
+    /* FORENSIC (NTT_S5_DIGDUMP=1): the first multiply of a shape prints its two source operands,
+       the packed slots and the reduced coefficients, so "wrong pack" and "wrong multiply" can be
+       told apart by inspection instead of by argument. */
+    const char *ed = std::getenv("NTT_S5_DIGDUMP");
+    const bool dig = (ed && *ed && std::atoi(ed) != 0 && la <= 6 && ds == 1);
+    /* the pack pool holds: pA, pB, the NTT's own copies and the reduction's tight scratch */
+    const size_t per = 3 * (size_t)qN + (size_t)qos * W;
+    size_t maxs = (D.scratch_words > 3 * (size_t)qN)
+                      ? ((D.scratch_words - 3 * (size_t)qN) / per) : 0;
+    if (maxs == 0) maxs = 1;
+    if (maxs > ds) maxs = (size_t)ds;
+    {
+        const size_t need = (size_t)qN * maxs * 2 + (size_t)qos * maxs * W;
+        if (need > D.scratch_words) {
+            std::fprintf(stderr, "%s: FATAL: the S5 pack pool holds %llu words but the shape "
+                                 "P=%llu needs %llu for one slice\n", NTT_PROBE_NAME,
+                         (unsigned long long)D.scratch_words, P, (unsigned long long)need);
+            std::exit(3);
+        }
+    }
+    const unsigned long long chunk = (unsigned long long)maxs;
+    for (unsigned long long s0 = 0; s0 < ds; s0 += chunk) {
+        const unsigned long long m = ((ds - s0) < chunk) ? (ds - s0) : chunk;
+        D.reset();
+        unsigned long long *pA = D.alloc("packA", (size_t)qN * m);
+        unsigned long long *pB = D.alloc("packB", (size_t)qN * m);
+        unsigned long long *tmp = D.alloc("reduce", (size_t)qos * m * W);
+        CK(cudaMemset(pA, 0, (size_t)qN * m * sizeof(unsigned long long)));
+        CK(cudaMemset(pB, 0, (size_t)qN * m * sizeof(unsigned long long)));
+        const double tp0 = now_s();
+        {
+            const unsigned int th = 256;
+            const unsigned long long total = m * la;
+            s5_pack_kernel<<<(unsigned int)((total + th - 1) / th), th>>>(
+                Asrc, Aoff + s0 * la * W, S, (int)qbpw, sstride, qN, m, la, (int)W,
+                /*off_digits=*/0ull, 1ull, pA);
+            CK(cudaGetLastError());
+            const unsigned long long totalb = m * lb;
+            s5_pack_kernel<<<(unsigned int)((totalb + th - 1) / th), th>>>(
+                Bsrc, Boff, S, (int)qbpw, sstride, qN, m, lb, (int)W,
+                /*off_digits=*/0ull, 1ull, pB);
+            CK(cudaGetLastError());
+        }
+        st.t_pack += now_s() - tp0;
+        if (dig) {
+            /* the SOURCE operands as the packer sees them */
+            std::vector<unsigned long long> ha((size_t)la * W, 0ull);
+            CK(cudaMemcpy(ha.data(), Asrc + Aoff, ha.size() * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+            std::fprintf(stderr, "s5_dig: P=%llu la=%llu lb=%llu S=%d bpw=%llu sw=%llu "
+                                 "sstride=%llu N=%llu out_slots=%llu\n",
+                         P, la, lb, S, qbpw, qsw, sstride, qN, qos);
+            for (unsigned long long i = 0; i < la && i < 3; ++i) {
+                std::fprintf(stderr, "  A[%llu]=", i);
+                for (int t = (int)W - 1; t >= 0; --t) std::fprintf(stderr, "%016llx", ha[i * W + t]);
+                std::fprintf(stderr, "\n");
+            }
+            /* the packed slots as the reduction will read them */
+            std::vector<unsigned long long> hp((size_t)qN, 0ull);
+            CK(cudaMemcpy(hp.data(), pA, (size_t)qN * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+            for (unsigned long long k = 0; k < la && k < 3; ++k) {
+                std::fprintf(stderr, "  slot[%llu]=", k);
+                for (int t = 0; t < (int)qsw; ++t)
+                    std::fprintf(stderr, "%016llx", hp[k * qsw + t]);
+                std::fprintf(stderr, "\n");
+            }
+        }
+        /* FORENSIC (NTT_S5_DIGDUMP=1): read the packed operand back and compare it with the source
+           coefficients -- the one measurement that separates "the pack is wrong" from "the
+           multiply is wrong".  It costs a round trip, so it is off by default. */
+        {
+            const char *ed = std::getenv("NTT_S5_DIGDUMP");
+            if (ed && *ed && std::atoi(ed) != 0 && s0 == 0 && la <= 8) {
+                std::vector<unsigned long long> hp((size_t)qN, 0ull);
+                std::vector<unsigned long long> sa((size_t)la * W, 0ull);
+                CK(cudaMemcpy(hp.data(), pA, (size_t)qN * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToHost));
+                CK(cudaMemcpy(sa.data(), Asrc + Aoff, sa.size() * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToHost));
+                unsigned long long bad = 0;
+                for (unsigned long long i = 0; i < la; ++i) {
+                    std::vector<unsigned long long> got(W, 0ull);
+                    for (unsigned long long b = 0; b < (unsigned long long)S; ++b) {
+                        /* the coefficient's own slot, at the digit offset the packer used */
+                        const unsigned long long gb = i * (unsigned long long)qsw * (unsigned long long)qbpw + b;
+                        if (gb / 64 < (unsigned long long)qN &&
+                            ((hp[gb / 64] >> (gb % 64)) & 1ull))
+                            got[b / 64] |= (1ull << (b % 64));
+                    }
+                    for (size_t t = 0; t < W; ++t)
+                        if (got[t] != sa[i * W + t]) {
+                            if (!bad)
+                                std::fprintf(stderr, "  pack mismatch i=%llu word=%llu src=%016llx "
+                                                     "got=%016llx\n", i, (unsigned long long)t,
+                                             sa[i * W + t], got[t]);
+                            ++bad;
+                        }
+                }
+                std::fprintf(stderr, "s5_pack: P=%llu bpw=%llu sw=%llu sstride=%llu N=%llu "
+                                     "out_slots=%llu coeffs=%llu mismatching_words=%llu\n",
+                             P, qbpw, qsw, sstride, qN, qos, la, bad);
+            }
+        }
+        S5RedHook hk;
+        hk.D = &D;
+        hk.out = dst;
+        hk.out_stride = want * W;
+        hk.row0 = rowoff + s0;
+        hk.w = W;
+        hk.tmp = tmp;
+        hk.tmp_stride = qos;
+        NttReduceHook nh;
+        nh.ctx = &hk;
+        nh.run = s5_reduce_hook;
+        nh.out = tmp;
+        nh.w = (unsigned long long)W;
+        nh.sample = 0;
+        NttMulStats nst{};
+        const double tg0 = now_s();
+        const int rc = ntt_poly_mul_batch_dev(P, S, L.device, m, pA, pB, &nst, L.arena, &nh,
+                                              nullptr, (int)qbpw);
+        st.t_reduce += now_s() - tg0;
+        /* THE SHAPE THE MULTIPLY REALLY RAN must be the one the packer assumed: its slot_words is
+           what the reduction reads the coefficients at, its slot_bits is what the reduction
+           asserts the windows against, and its slot_stride is the bit distance between two
+           coefficients.  A mismatch here would be silent corruption, so it is fatal -- and it is
+           also the check that keeps the forced bpw honest (see choose_cfg rule (3)). */
+        if (nst.N != qN || nst.slot_words != qsw || (unsigned long long)nst.slot_stride != qss ||
+            (unsigned long long)nst.slot_bits != sh.slot_bits) {
+            std::fprintf(stderr, "%s: FATAL: the S5 multiply ran a different shape than the packer "
+                                 "assumed (N=%llu/%llu slot_words=%llu/%llu stride=%llu/%llu "
+                                 "slot_bits=%llu/%llu)\n", NTT_PROBE_NAME, nst.N, qN,
+                         nst.slot_words, qsw, nst.slot_stride, qss, nst.slot_bits, sh.slot_bits);
+            std::exit(3);
+        }
+        if ((unsigned long long)nst.bpw != qbpw) {
+            std::fprintf(stderr, "%s: FATAL: the S5 multiply chose bpw=%d but the operands were "
+                                 "packed at bpw=%llu\n", NTT_PROBE_NAME, nst.bpw, qbpw);
+            std::exit(3);
+        }
+        if (rc != 0) {
+            std::fprintf(stderr, "%s: FATAL: the S5 NTT multiply failed (rc=%d) at P=%llu S=%d "
+                                 "m=%llu\n", NTT_PROBE_NAME, rc, P, S, m);
+            std::exit(3);
+        }
+        ++st.ntt_launches;
+        L.ntt_launches += m;
+        L.ntt_calls += m;
+        L.muls += m;
+        L.max_ntt_words = std::max(L.max_ntt_words, nst.N);
+        L.max_ntt_coeffs = std::max(L.max_ntt_coeffs, P);
+        L.max_slot_bits = std::max(L.max_slot_bits, nst.slot_bits);
+        /* the tree's own exactness bound, re-derived for THIS shape from the values the multiply
+           returned -- never inherited from another level, another shape or the probe */
+        if (!exact_ok_terms(nst.L_terms, nst.bpw)) {
+            std::fprintf(stderr, "%s: EXACTNESS VIOLATED for the S5 shape: L=%llu bpw=%d\n",
+                         NTT_PROBE_NAME, nst.L_terms, nst.bpw);
+            std::exit(3);
+        }
+        {
+            const double bb = coeff_bound_bits_terms(nst.L_terms, nst.bpw);
+            if (bb > L.bind_bound_bits) {
+                L.bind_bound_bits = bb;
+                L.bind_P = P;
+                L.bind_L = nst.L_terms;
+                L.bind_slot_bits = nst.slot_bits;
+                L.bind_slot_words = nst.slot_words;
+                L.bind_bpw = nst.bpw;
+            }
+        }
+        /* the sparse half: the reduction asserts the canonicality of each slot, and the NTT
+           path asserts the packing rule by putting A0/B0 at the slot's own bit offset (a shrink
+           of zero is impossible: sA is by construction >= 0). */
+        const int c = (cat >= 0) ? cat : L.cat;
+        if (c >= 0)
+            for (unsigned long long s = 0; s < m; ++s) L.cost.add(c, la, lb);
+    }
+}
+
+/* the quotient/remainder chain for ONE node (the reference's cp_divmod, done on the device):
+     ra = rev_k(top k of A), rb = rev_{db+1}(B), rbi = 1/rb mod X^k by Newton doubling,
+     qrev = (ra*rbi) mod X^k, q = rev_k(qrev), r = A - q*B.
+   Using rb as its own inverse is ONLY valid when k == db+1; the Newton chain is what makes the
+   general case correct.  `la` = the source row's coefficient count, db = the divisor's degree,
+   dst = the remainder's row (db coefficients, stride W). */
+static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned long long Aoff,
+                          unsigned long long la, const unsigned long long *Bsrc,
+                          unsigned long long Boff, unsigned long long lb, unsigned long long db,
+                          unsigned long long *dst, S5Stats &st)
+{
+    PolyLayer &L = *D.L;
+    const size_t W = L.W;
+    const unsigned long long k = la - lb + 1;               /* da - db + 1 > 0 */
+    if (la < lb || k == 0 || db == 0) {
+        std::fprintf(stderr, "%s: FATAL: s5_divmod_one with la=%llu lb=%llu db=%llu\n",
+                     NTT_PROBE_NAME, la, lb, db);
+        std::exit(3);
+    }
+    D.preset();
+    const double tg0 = now_s();
+    const unsigned int th = 256;
+    const unsigned long long *Asub = Asrc + Aoff;
+    const unsigned long long *Bsub = Bsrc + Boff;
+    /* ---- ra = rev_k(top k of A), rb = rev_{db+1}(B) ----------------------------------- */
+    unsigned long long *ra = D.palloc((size_t)k * W);
+    unsigned long long *rb = D.palloc((size_t)(db + 1) * W);
+    {
+        const unsigned long long n = (k > (db + 1)) ? k : (db + 1);
+        s5_rev_pack_kernel<<<S5_GRID(n)>>>(ra, Asub, 0, k, la, (int)W);
+        CK(cudaGetLastError());
+        s5_rev_pack_kernel<<<S5_GRID(n)>>>(rb, Bsub, 0, db + 1, lb, (int)W);
+        CK(cudaGetLastError());
+    }
+    /* ---- rbi = 1/rb mod X^k by Newton doubling (Montgomery form throughout) ------------- */
+    unsigned long long *A = D.palloc((size_t)k * W);        /* the two alternating g buffers */
+    unsigned long long *B = D.palloc((size_t)k * W);
+    s5_fill_kernel<<<(unsigned int)((k + th - 1) / th), th>>>(A, k, (int)W);   /* g = 1 */
+    CK(cudaGetLastError());
+    unsigned long long *g = A;
+    unsigned long long len = 1;
+    while (len < k) {
+        const unsigned long long nxt = ((2 * len) < k) ? (2 * len) : k;
+        unsigned long long *gpad = D.palloc((size_t)nxt * W);
+        unsigned long long *at = D.palloc((size_t)nxt * W);
+        s5_pad_low_kernel<<<(unsigned int)((nxt + th - 1) / th), th>>>(gpad, g, nxt, len, (int)W);
+        CK(cudaGetLastError());
+        s5_pad_low_kernel<<<(unsigned int)((nxt + th - 1) / th), th>>>(at, rb, nxt, db + 1,
+                                                                      (int)W);
+        CK(cudaGetLastError());
+        /* ag = (at*g) mod X^nxt.  The batched multiply writes the first `want` coefficients
+           TIGHT, so the host code's flat_truncate is a stride here: no copy, no host, and the
+           operand A (at) is only read -- never written -- so it can double as the next g. */
+        unsigned long long *ag = D.palloc((size_t)nxt * W);
+        s5_mul_batch(D, at, 0, nxt, gpad, 0, nxt, 1, 0, nxt, ag, st, -1);
+        unsigned long long *h = D.palloc((size_t)nxt * W);
+        s5_two_minus_kernel<<<(unsigned int)((nxt + th - 1) / th), th>>>(
+            ag, h, nxt, D.red->dn, D.red->ninv, D.red->nw);
+        CK(cudaGetLastError());
+        /* g = (gpad*h) mod X^nxt, written into the OTHER full-length buffer */
+        unsigned long long *gn = (g == A) ? B : A;
+        s5_mul_batch(D, gpad, 0, nxt, h, 0, nxt, 1, 0, nxt, gn, st, -1);
+        g = gn;
+        len = nxt;
+    }
+    /* ---- qrev = (ra*rbi) mod X^k, q = rev_k(qrev), qb = q*B --------------------------- */
+    unsigned long long *qrev = D.palloc((size_t)k * W);
+    s5_mul_batch(D, ra, 0, k, g, 0, k, 1, 0, k, qrev, st, -1);
+    unsigned long long *q = D.palloc((size_t)k * W);
+    s5_rev_pack_kernel<<<(unsigned int)((k + th - 1) / th), th>>>(q, qrev, 0, k, k, (int)W);
+    CK(cudaGetLastError());
+    const unsigned long long wantb = k + db;                /* deg(q*B) + 1 */
+    unsigned long long *qb = D.palloc((size_t)wantb * W);
+    s5_mul_batch(D, q, 0, k, Bsub, 0, lb, 1, 0, wantb, qb, st, -1);
+    /* ---- dst = A - qb, coefficient by coefficient, ON THE DEVICE ----------------------- */
+    {
+        const unsigned long long rows = db;
+        s5_sub_kernel<<<S5_GRID(rows)>>>(Asub, 0, (int)la, qb, 0, (int)wantb, (int)db,
+                                        D.red->dn, D.red->ninv, D.red->nw, dst,
+                                        (unsigned long long)W);
+        CK(cudaGetLastError());
+        CK(cudaDeviceSynchronize());
+    }
+    st.t_generic += now_s() - tg0;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * the forest: the slice of the F heap one leaf chunk's descent can reach, flattened once
+ * --------------------------------------------------------------------------------------- */
+
+/* a device-to-device row copy with zero fill: dst rows [0,rows) get min(len,rows) coefficients of
+   src and zeros above */
+__global__ void s5_memcpy_kernel(const unsigned long long *src, unsigned long long dst_off,
+                                 unsigned long long rows, unsigned long long len, int W,
+                                 unsigned long long *dst)
+{
+    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    const unsigned long long total = rows * (unsigned long long)W;
+    if (gid >= total) return;
+    const unsigned long long i = gid / (unsigned long long)W;
+    const int t = (int)(gid - i * (unsigned long long)W);
+    dst[dst_off + gid] = (i < len) ? src[(size_t)i * W + t] : 0ull;
+}
+
+static void s5_memcpy_rows(const unsigned long long *src, size_t src_off, size_t dst_off,
+                           unsigned long long rows, unsigned long long len, int W,
+                           unsigned long long *dst, unsigned long long *host_n)
+{
+    if (rows == 0) return;
+    *host_n = rows * (unsigned long long)W;
+    s5_memcpy_kernel<<<S5_GRID(*host_n)>>>(src + src_off, dst_off, rows, len, W, dst);
+    CK(cudaGetLastError());
+}
+
+/* build the device forest for one chunk of leaves ([lo, lo+L)): every F node the descent of that
+   range can reach -- the code ranges of levels 1..16 -- with off[]/sz[] computed from Fdeg on the
+   HOST (never from the group key) and one device-to-device copy per node. */
+static int s5_forest_build(S5Forest &F, const std::vector<std::vector<unsigned long long>> &Ft,
+                           const std::vector<size_t> &Fdeg, size_t Fpad, size_t lo, size_t L,
+                           size_t W, S5Stats &st)
+{
+    if (F.dA) { cudaFree(F.dA); F.dA = nullptr; }
+    const size_t top = lo + L;
+    F.off.assign(2 * Fpad, 0ull);
+    F.sz.assign(2 * Fpad, 0ull);
+    F.entry.clear();
+    unsigned long long off = 0;
+    for (size_t base = 1; base < Fpad; base *= 2) {
+        const size_t c0 = base, c1 = 2 * base;
+        if (c1 > top) break;
+        F.entry.push_back(c0);
+        for (size_t i = c0; i < c1 && i < top; ++i) {
+            F.off[i] = off;
+            F.sz[i] = ((unsigned long long)Fdeg[i] + 1ull) * (unsigned long long)W;
+            off += F.sz[i];
+        }
+    }
+    F.words = off;
+    F.entry.push_back(top / 2);
+    for (size_t i = top / 2; i < top; ++i) {
+        F.off[i] = off;
+        F.sz[i] = ((unsigned long long)Fdeg[i] + 1ull) * (unsigned long long)W;
+        off += F.sz[i];
+    }
+    F.words = off;
+    if (F.words == 0) {
+        std::fprintf(stderr, "%s: FATAL: the S5 forest of chunk [%llu,%llu) is empty\n",
+                     NTT_PROBE_NAME, (unsigned long long)lo, (unsigned long long)top);
+        std::exit(3);
+    }
+    CK(cudaMalloc(&F.dA, F.words * sizeof(unsigned long long)));
+    for (size_t base = 1; base < Fpad; base *= 2) {
+        const size_t c0 = base, c1 = 2 * base;
+        if (c1 > top) break;
+        for (size_t i = c0; i < c1 && i < top; ++i) {
+            const unsigned long long sz = F.sz[i];
+            if (Fdeg[i] == 0 || sz == 0) continue;
+            CK(cudaMemcpy(F.dA + F.off[i], Ft[i].data(), sz * sizeof(unsigned long long),
+                          cudaMemcpyHostToDevice));
+        }
+    }
+    for (size_t i = top / 2; i < top; ++i) {
+        const unsigned long long sz = F.sz[i];
+        if (Fdeg[i] == 0 || sz == 0) continue;
+        CK(cudaMemcpy(F.dA + F.off[i], Ft[i].data(), sz * sizeof(unsigned long long),
+                      cudaMemcpyHostToDevice));
+    }
+    st.forest_nodes += F.words;
+    if (F.words * 8 > st.forest_mb) st.forest_mb = F.words * 8;
+    st.chunks++;
+    return 0;
+}
+
+/* the frontier: one entry per live node of the current level */
+struct S5Entry {
+    unsigned long long code = 0;
+    size_t ncoef = 0;                  /* the row's coefficient count, TIGHT (stride 1) */
+};
+
+static void s5_dev_init(S5Dev &D, PolyLayer &L, S4Reduce &red)
+{
+    D.L = &L;
+    D.red = &red;
+    D.scratch_words = (size_t)256 << 20;                 /* 256 MB of packing pool */
+    CK(cudaMalloc(&D.scratch, D.scratch_words * sizeof(unsigned long long)));
+    D.pool_words = (size_t)256 << 20;                    /* 256 MB of per-node rows */
+    CK(cudaMalloc(&D.pool, D.pool_words * sizeof(unsigned long long)));
+}
+
+/* THE DEVICE DESCENT.  Everything the host descent does, but with no A/B materialised on the
+   host, no per-coefficient GMP, and a device-to-device copy for the degree fast path.  See the
+   section header for the shape rules and the pack invariant. */
+static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
+                               const std::vector<std::vector<unsigned long long>> &Ft,
+                               const std::vector<size_t> &Fdeg, size_t Fpad, const CPoly &H,
+                               unsigned long long *dleaf_out, S5Stats &st)
+{
+    (void)C;
+    const size_t W = L.W;
+    const size_t P = H.size() > 0 ? H.size() : Fdeg[1];
+    const double t0 = now_s();
+    if (!L.s4 || !L.arena) {
+        std::fprintf(stderr, "%s: FATAL: the device descent needs the S4 reduction and the arena\n",
+                     NTT_PROBE_NAME);
+        return 3;
+    }
+    S5Dev D;
+    s5_dev_init(D, L, *L.s4->red);
+    /* the horizon: every frontier value must fit one coefficient budget */
+    size_t chunkL = 4096;
+    {
+        const char *e = std::getenv("NTT_S5_CHUNK");
+        if (e && *e) chunkL = (size_t)std::strtoull(e, nullptr, 10);
+        if (chunkL < 2) chunkL = 2;
+        while (chunkL > 2 && ((unsigned long long)(P * W) * chunkL) > ((unsigned long long)192 << 20))
+            chunkL >>= 1;
+    }
+    std::printf("s5_descent: device descent: P=%llu Fpad=%llu W=%llu leaf_bytes=%llu chunk=%llu "
+                "levels=%d\n", (unsigned long long)P, (unsigned long long)Fpad,
+                (unsigned long long)W, (unsigned long long)(P * W * 8),
+                (unsigned long long)chunkL, (int)ceil_log2_u64((unsigned long long)Fpad));
+    s2g_state("the device descent (S5)");
+    unsigned long long entries_total = 0, maxent = 0;
+    size_t maxval = 0;
+    const double tinit = now_s();
+    S5Forest F;
+    for (size_t lo = 0; lo < Fpad; lo += chunkL) {
+        const size_t Lc = ((Fpad - lo) < chunkL) ? (Fpad - lo) : chunkL;
+        /* the LEAF rows this chunk owns: dleaf_out holds P rows, while a chunk covers Lc of the
+           PADDED leaves (Fpad >= P, the padding comes from the product tree).  Copying/zeroing Lc
+           rows ran past the caller's buffer: cudaMemcpy rejected it with "invalid argument" and
+           the memset before it silently wrote out of bounds (section 30). */
+        const size_t rows_out = (lo < P) ? (((size_t)(P - lo) < Lc) ? (size_t)(P - lo) : Lc) : 0;
+        if (Fdeg[lo + Lc] == 0) {
+            st.zeros += Lc;
+            if (dleaf_out && rows_out)
+                CK(cudaMemset(dleaf_out + lo * W, 0, rows_out * W * sizeof(unsigned long long)));
+            continue;
+        }
+        s5_forest_build(F, Ft, Fdeg, Fpad, lo, Lc, W, st);
+        /* the forest's offsets on the device (the Horner kernel indexes them by code) */
+        if (F.off.size() > D.dfoff_cap) {
+            if (D.dfoff) { cudaFree(D.dfoff); D.dfoff = nullptr; D.dfoff_cap = 0; }
+            CK(cudaMalloc(&D.dfoff, F.off.size() * sizeof(unsigned long long)));
+            D.dfoff_cap = F.off.size();
+        }
+        CK(cudaMemcpy(D.dfoff, F.off.data(), F.off.size() * sizeof(unsigned long long),
+                      cudaMemcpyHostToDevice));
+        /* H's coefficients: the root of this chunk (deg F < deg H, so H is the remainder here) */
+        const size_t hrows = std::min(P, (size_t)H.size());
+        std::vector<unsigned long long> hflat(hrows * W, 0ull);
+        for (size_t i = 0; i < hrows; ++i)
+            std::copy(H[i].begin(), H[i].end(), hflat.begin() + (long)(i * W));
+        unsigned long long *dbound = nullptr;
+        CK(cudaMalloc(&dbound, (size_t)chunkL * W * sizeof(unsigned long long)));
+        CK(cudaMemcpy(dbound, hflat.data(), hflat.size() * sizeof(unsigned long long),
+                      cudaMemcpyHostToDevice));
+        if (hrows < Lc) CK(cudaMemset(dbound + hrows * W, 0, (Lc - hrows) * W * sizeof(unsigned long long)));
+        std::vector<S5Entry> cur(1);
+        /* the root of THIS chunk's own sub-tree: the heap code whose leaves are exactly
+           [lo, lo+Lc), i.e. the ancestor Lc/2 apart from the first leaf.  (lo+Lc would land
+           under the leaves, which is what made the first version walk into Fdeg[65].) */
+        cur[0].code = (Lc == Fpad) ? 1 : (lo / Lc + 1);
+        cur[0].ncoef = Fdeg[cur[0].code] + 1;
+        size_t cnt = Lc;
+        int level = (int)ceil_log2_u64((unsigned long long)Lc);
+        while (cnt > 1) {
+            ++st.levels;
+            std::vector<S5Entry> nxt;
+            nxt.reserve(std::min(cur.size() * 2, cnt));
+            const double tl0 = now_s();
+            size_t vol = 0;
+            for (const S5Entry &e : cur) {
+                const size_t nc0 = Fdeg[2 * e.code];
+                const size_t nc1 = Fdeg[2 * e.code + 1];
+                if (nc0 == 0) { st.zeros++; }
+                else if (e.ncoef < nc0 + 1) { st.copies++; vol += e.ncoef; }
+                else if (nc0 == 1) { st.linear++; vol += 1; }
+                else { st.generic++; ++st.divmods; vol += nc0; }
+                if (nc1 == 0) { st.zeros++; }
+                else if (e.ncoef < nc1 + 1) { st.copies++; vol += e.ncoef; }
+                else if (nc1 == 1) { st.linear++; vol += 1; }
+                else { st.generic++; ++st.divmods; vol += nc1; }
+            }
+            /* off[q] = the number of ROWS the q-th child actually receives, in emission order, so
+               the destination offset of a child is the running sum of the sizes before it.
+               THIS MUST MATCH THE ROW COUNT THE BRANCH WRITES -- a copy writes e.ncoef rows, a
+               linear evaluation writes 1, a division writes nc -- and it must match the `vol`
+               accumulation below, because `vol` is the size of the buffer those rows go into.
+               The first version reserved `nc + 1` for every child, which made the offsets drift
+               AHEAD of the writes and run past the end of the `vol`-sized buffer.  Measured with
+               compute-sanitizer: `s5_sub_kernel` writing 8 bytes out of bounds, up to 168 bytes
+               past a 24-word (192-byte) allocation, for threads 24..47 of a 48-thread launch.  In
+               an uninstrumented run those writes land in the neighbouring allocation and zeroed
+               the reduction's Y constant (S->dy, 24 bytes): that is why NTT_S5_ON returned 0 for
+               every coefficient -- section 30. */
+            std::vector<size_t> off;
+            off.reserve(cur.size() * 2);
+            for (const S5Entry &e : cur) {
+                for (int sgn = 0; sgn < 2; ++sgn) {
+                    const size_t nc = Fdeg[2 * e.code + (size_t)sgn];
+                    if (nc == 0) off.push_back(0);
+                    else if (e.ncoef < nc + 1) off.push_back(e.ncoef);
+                    else if (nc == 1) off.push_back(1);
+                    else off.push_back(nc);
+                }
+            }
+            vol = 0;
+            for (size_t q : off) vol += q;
+            if (vol > maxval) maxval = vol;
+            /* THE FRONTIER'S CAPACITY IS IN WORDS, NOT ROWS: the descent writes `vol` rows of W
+               words each, and the first version asked fitval() for `vol` words -- W times too
+               small.  That single unit mistake is the whole reason NTT_S5_ON returned 0 for every
+               coefficient: the descent's kernels wrote past this allocation (measured with
+               compute-sanitizer: up to 168 bytes past a 192-byte allocation = 24 words, which is
+               exactly `vol` for the frozen vector, while the same frontier needs vol*W = 72
+               words), and those writes landed in the neighbouring allocation -- the reduction's
+               Y constant S->dy, 24 bytes -- zeroing it, so `u = Mont(r, 0) = 0` from then on
+               (section 30). */
+            unsigned long long *dvals = D.fitval((size_t)(vol ? vol : 1) * W);
+            {
+                const double tc0 = now_s();
+                for (size_t ci = 0; ci < cur.size(); ++ci) {
+                    const S5Entry &e = cur[ci];
+                    for (int sgn = 0; sgn < 2; ++sgn) {
+                        const size_t child = 2 * e.code + (size_t)sgn;
+                        const size_t nc = Fdeg[child];
+                        if (nc == 0) continue;
+                        size_t dstrow = 0;
+                        for (size_t q = 0; q < 2 * ci + (size_t)sgn; ++q) dstrow += off[q];
+                        /* the invariant that the sanitizer had to find for us: this child's rows
+                           must fit inside the `vol`-sized frontier buffer.  Checked from the
+                           actual sizes on every level, so a future accounting mistake is a
+                           message here instead of a silent device overrun (section 30). */
+                        {
+                            const size_t rows_here = (e.ncoef < nc + 1) ? e.ncoef
+                                                                       : (nc == 1 ? 1 : nc);
+                            if (dstrow + rows_here > vol) {
+                                std::fprintf(stderr, "%s: FATAL: the S5 frontier is too small: "
+                                                     "child=%llu dstrow=%llu rows=%llu vol=%llu\n",
+                                             NTT_PROBE_NAME, (unsigned long long)child,
+                                             (unsigned long long)dstrow,
+                                             (unsigned long long)rows_here, (unsigned long long)vol);
+                                std::exit(3);
+                            }
+                        }
+                        /* the operation trace is what names the failing node if a driver kill or
+                           an illegal access ends the run -- the descent is the only phase that
+                           otherwise prints nothing between levels */
+                        if (g_s4_batched_progress)
+                            std::printf("descent_dev_op: code=%llu sgn=%d child=%llu nc=%llu "
+                                        "ncoef=%llu op=%s dstrow=%llu\n", e.code, sgn, child, nc,
+                                        e.ncoef,
+                                        (e.ncoef < nc + 1) ? "copy" : (nc == 1 ? "horner" : "div"),
+                                        (unsigned long long)dstrow);
+                        if (e.ncoef < nc + 1) {
+                            /* the degree fast path: H mod F_ci = H, a pure device copy */
+                            unsigned long long nw = 0;
+                            s5_memcpy_rows(dbound, 0, dstrow * W, e.ncoef, e.ncoef, (int)W, dvals,
+                                           &nw);
+                        } else if (nc == 1) {
+                            /* the linear branch: a mod (X - x_j) = a(x_j), Horner on the device */
+                            s5_eval_linear_kernel<<<S5_GRID(2)>>>(
+                                dbound, 0, e.ncoef, (int)W, F.dA, D.dfoff,
+                                (unsigned long long)e.code, 2ull, L.s4->red->dn, L.s4->red->ninv,
+                                L.s4->red->nw, dvals + dstrow * W, (unsigned long long)W);
+                            CK(cudaGetLastError());
+                        } else {
+                            /* the generic branch: the Newton quotient chain, one node at a time
+                               (the batched shape is uniform, but each node's dividend row is its
+                               own, and every level here has far fewer nodes than the leaves) */
+                            s5_divmod_one(D, dbound, 0, e.ncoef, F.dA, F.off[child], nc, nc,
+                                          dvals + dstrow * W, st);
+                        }
+                    }
+                }
+                CK(cudaDeviceSynchronize());
+                st.t_copy += now_s() - tc0;
+            }
+            /* the children become the next level's frontier, in the same order */
+            for (const S5Entry &e : cur) {
+                for (int sgn = 0; sgn < 2; ++sgn) {
+                    const size_t child = 2 * e.code + (size_t)sgn;
+                    const size_t nc = Fdeg[child];
+                    if (nc == 0) continue;
+                    S5Entry ne;
+                    ne.code = child;
+                    /* the row's coefficient count: the divisor's when it was divided, the
+                       parent's when it was only copied, 1 when it was evaluated */
+                    ne.ncoef = (e.ncoef < nc + 1) ? e.ncoef : (nc == 1 ? 1 : nc);
+                    nxt.push_back(ne);
+                }
+            }
+            entries_total += nxt.size();
+            if (nxt.size() > maxent) maxent = nxt.size();
+            /* THE FRONTIER MUST BECOME THE NEXT LEVEL'S SOURCE.  The children's rows were
+               written into `dvals`, and every level reads its input from `dbound` (the chunk's
+               H row), so without this copy each level would re-reduce H against the SAME divisor
+               -- and the final leaf read-back would hand out H's coefficients as "H(x_j)".  The
+               first version of this function had no such copy at all (found by reading the data
+               flow, section 30): `vol` rows move back into the frontier buffer, whose capacity
+               is the chunk's own row count. */
+            if (vol) {
+                if (vol > (size_t)chunkL) {
+                    std::fprintf(stderr, "%s: FATAL: the S5 frontier is larger than the chunk "
+                                         "(vol=%llu chunkL=%llu)\n", NTT_PROBE_NAME,
+                                 (unsigned long long)vol, (unsigned long long)chunkL);
+                    std::exit(3);
+                }
+                /* the sticky-error trap: an ASYNC device fault inside this level (an illegal
+                   access in one of the descent kernels) surfaces here as whatever the next CUDA
+                   call happens to return, which is how this copy first reported "invalid
+                   argument" for a 576-byte device-to-device move.  Report it here, where the
+                   level and the frontier sizes are known, instead of letting it masquerade as a
+                   bad pointer. */
+                {
+                    const cudaError_t pe = cudaGetLastError();
+                    if (pe != cudaSuccess) {
+                        std::fprintf(stderr, "%s: FATAL: a device error survived the S5 descent "
+                                             "level (chunk_lo=%llu level=%d nodes=%llu vol=%llu): "
+                                             "%s\n", NTT_PROBE_NAME, (unsigned long long)lo, level,
+                                     (unsigned long long)cur.size(), (unsigned long long)vol,
+                                     cudaGetErrorString(pe));
+                        std::exit(3);
+                    }
+                }
+                if (std::getenv("NTT_S5_FRONTIER_DUMP") && *std::getenv("NTT_S5_FRONTIER_DUMP")
+                    && std::atoi(std::getenv("NTT_S5_FRONTIER_DUMP")) != 0) {
+                    std::fprintf(stderr, "s5_frontier: chunk_lo=%llu level=%d dbound=%p dvals=%p "
+                                         "vol=%llu W=%llu bytes=%llu\n", (unsigned long long)lo,
+                                 level, (void *)dbound, (void *)dvals, (unsigned long long)vol,
+                                 (unsigned long long)W, (unsigned long long)(vol * W * 8));
+                }
+                CK(cudaMemcpy(dbound, dvals, vol * W * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToDevice));
+            }
+            if (g_s4_batched_progress)
+                std::printf("descent_dev: chunk_lo=%llu level=%d nodes=%llu gen=%llu lin=%llu "
+                            "cp=%llu z=%llu vol=%llu t=%.1f s\n", (unsigned long long)lo,
+                            level, (unsigned long long)cur.size(), st.generic, st.linear,
+                            st.copies, st.zeros, (unsigned long long)vol, now_s() - tl0);
+            cur.swap(nxt);
+            cnt /= 2;
+            --level;
+        }
+        (void)cnt;
+        if (dleaf_out && rows_out)
+            CK(cudaMemcpy(dleaf_out + lo * W, dbound, rows_out * W * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToDevice));
+        if (dbound) cudaFree(dbound);
+        st.frontier_peak_mb = std::max(st.frontier_peak_mb, (unsigned long long)(maxval * 8));
+    }
+    st.scratch_mb = (unsigned long long)((D.scratch_words + D.pool_words) * 8);
+    st.t_total = now_s() - t0;
+    std::printf("s5_dev_done: chunks=%llu levels=%llu entries=%llu max_frontier_rows=%llu "
+                "max_frontier_mb=%llu forest_mb_peak=%llu generic=%llu linear=%llu copies=%llu "
+                "zeros=%llu ntt_launches=%llu t_pack=%.2f t_ntt=%.2f t_generic=%.2f t_copy=%.2f "
+                "t_init=%.2f t_total=%.2f\n", st.chunks, st.levels,
+                (unsigned long long)entries_total, (unsigned long long)maxent,
+                st.frontier_peak_mb, st.forest_mb, st.generic, st.linear, st.copies, st.zeros,
+                st.ntt_launches, st.t_pack, st.t_ntt, st.t_generic, st.t_copy, tinit - t0,
+                st.t_total);
+    return 0;
+}
+
 /* a mod b for a MONIC b; the degree fast path is what makes a descent over a tree whose top
    nodes are much larger than F almost free (no division, no multiply). */
 static CPoly cp_mod(const CPoly &a, const CPoly &b, PolyLayer &L)
@@ -2631,10 +4244,11 @@ static void divmod_batch(PolyLayer &L, const std::vector<unsigned long long> &A,
                            &qb[(s * (k + db) + i) * W], L.N, W);
 }
 
-/* 64x64 -> 128 mod m, assembled from 32-bit halves: nvcc parses this whole translation unit for
-   the device too and rejects __int128 (measured: "expected a )" at the cast), and a*b can be
-   128 bits, so each partial product is reduced before it is combined and no intermediate ever
-   leaves 64 bits. */
+/* the exact primality test below needs a*b mod m for 64-bit a,b,m.  __int128 is NOT usable here:
+   nvcc parses this whole translation unit for the device too and rejects the type (measured:
+   "expected a )" at the __int128 cast), so 64x64 -> 128 is assembled from 32-bit halves --
+   a*b = a*bh*2^32 + a*bl with a*bl < 2^96 and each piece reduced mod m before it is combined, so
+   no intermediate ever leaves 64 bits. */
 static inline unsigned long long mulmod_u64(unsigned long long a, unsigned long long b,
                                             unsigned long long m)
 {
@@ -2642,6 +4256,7 @@ static inline unsigned long long mulmod_u64(unsigned long long a, unsigned long 
     b %= m;
     const unsigned long long bh = b >> 32, bl = b & 0xffffffffull;
     const unsigned long long ah = a >> 32, al = a & 0xffffffffull;
+    /* a*bh < 2^96: reduce it as (ah*bh << 32) + al*bh, step by step */
     const unsigned long long p_hh = (ah * bh) % m;
     const unsigned long long p_hl = (al * bh) % m;
     const unsigned long long p_lh = (ah * bl) % m;
@@ -2675,19 +4290,21 @@ static unsigned long long powmod_u64(unsigned long long a, unsigned long long e,
  * `t_scan`/`t_ladder` in the `batched_naming:` line, and docs/DEV_STAGE2_GPU_PLAN.md section 26.
  *
  * This version is EXACT, not probabilistic, and much cheaper:
- *   * trial division by every prime <= 101 rejects ~88% of all candidates with one 64-bit
- *     remainder each, before any modular exponentiation happens;
+ *   * trial division by every prime <= 101 (there are 26 of them) rejects ~88% of all candidates
+ *     with one 64-bit remainder each, before any modular exponentiation happens;
  *   * the survivors go through a deterministic Miller-Rabin whose 7-base set
  *     {2, 325, 9375, 28178, 450775, 9780504, 1795265022} is PROVEN complete for n < 3.317e24 >
- *     2^64, so the answer is true primality, never "probably prime".  A false POSITIVE here
+ *     2^64 (Sinclair/Jimenez-da-Silva -- the older "first 12 primes" set is only proven to
+ *     3.18e23), so the answer is true primality, never "probably prime".  A false POSITIVE here
  *     would put a bogus prime into `hit_primes`, and the acceptance gate compares that list
  *     against the CPU reference, so exactness is a requirement, not a nicety.
- *   * no GMP object is created or destroyed on this path at all. */
+ *   * no GMP object is created or destroyed on this path at all.
+ * The GMP call was `p < 2` -> false, `>= 2` -> the test; the same boundary is kept. */
 static bool is_prime_u64(unsigned long long p)
 {
     if (p < 2) return false;
-    /* NOT named `small`: MSVC keeps the legacy keyword `small` (== char) and parses
-       `unsigned small[]` as a structured binding */
+    /* 1. the small primes, by trial division (cheap and exact).  NOT named `small`: MSVC keeps the
+       legacy keyword `small` (== char) and parses `unsigned small[]` as a structured binding. */
     {
         static const unsigned kTrialPrimes[] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43,
                                                 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101};
@@ -2697,6 +4314,7 @@ static bool is_prime_u64(unsigned long long p)
             if (p % q == 0) return p == q;
         }
     }
+    /* 2. exact Miller-Rabin for the whole 64-bit range */
     unsigned long long d = p - 1;
     int s = 0;
     while ((d & 1ull) == 0) { d >>= 1; ++s; }
@@ -2737,6 +4355,10 @@ static long long name_max(void)
 
 struct Stage2Tail {
     unsigned long long hits = 0, bad_factors = 0;
+    /* hits whose prime was counted but not named (the naming budget stopped the scan): hits and
+       bad_factors stay EXACTLY comparable with the CPU reference either way, only the
+       hit_primes list is short, and that is reported rather than hidden */
+    unsigned long long unnamed_hits = 0;
     std::vector<std::string> factors;
     std::vector<unsigned long long> hit_primes;
 };
@@ -3334,12 +4956,18 @@ struct BatchedRun {
        itself, exactly as the reference's name_culprit does. */
     unsigned long long hit_leaves = 0, unnamed = 0;
     double t_scan = 0.0, t_ladder = 0.0;
+    unsigned long long unnamed_hits = 0, cand_lists = 0;
     /* device-side bookkeeping, so the breakdown line reports measured work, not a guess */
     unsigned long long ladder_calls = 0, ladder_points = 0, prod_launches = 0;
     unsigned long long arena_fuse_builds = 0, arena_fuse_reuse = 0, arena_buf_builds = 0,
                        arena_buf_reuse = 0, arena_overflow = 0;
     double arena_mb = 0.0;
     unsigned long long ntt_calls = 0;
+    /* slice S5: the device descent's own accounting (its leaf values live on the device) */
+    unsigned long long s5_divmods = 0, s5_generic = 0, s5_linear = 0, s5_copies = 0, s5_zeros = 0,
+                       s5_ntt_launches = 0, s5_forest_mb = 0, s5_frontier_mb = 0;
+    double s5_t_ntt = 0.0, s5_t_pack = 0.0, s5_t_generic = 0.0, s5_t_copy = 0.0;
+    bool s5_readback = false;
     double t_giant = 0.0, t_gtrees = 0.0, t_fold = 0.0, t_descent = 0.0, t_inv = 0.0,
            t_accum = 0.0, t_name = 0.0;
     bool dbg_progress = false;              /* one phase line per G-tree batch (long shapes) */
@@ -3539,25 +5167,102 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     std::printf("descent_begin: P=%llu levels=%d last_state=(%s)\n", (unsigned long long)P,
                 (int)ceil_log2_u64((unsigned long long)Fpad), g_last_state);
     s2g_state("the batched descent");            /* a driver kill here leaves this behind */
-    std::vector<std::vector<unsigned long long>> values((size_t)P,
-                                                       std::vector<unsigned long long>(W, 0ull));
-    if (L.s4) {
-        /* slice S4: the whole descent, level by level and batched (at P = 92160 this is
-           ~1.8e5 divmods, 1.4e5 of them with k <= 2) */
-        L.cat = BC_DESCENT;
-        descent_batched(L, Ft, Fdeg, Fpad, H, values, R.descent_divmods, BC_DESCENT);
-        L.cat = -1;
-    } else {
-        L.cat = BC_DESCENT;
-        descent_slow(L, Ft, Fdeg, Fpad, H, values, R.descent_divmods);
-        L.cat = -1;
+    ws.need_vals((size_t)P);
+    std::vector<std::vector<unsigned long long>> values;
+    bool dev_leaves = false;
+    {
+        const char *e5 = std::getenv("NTT_S5_ON");
+        /* DEFAULT OFF, and this is deliberate.  Slice S5's device descent is built and reachable
+           (NTT_S5_ON=1) but the multiply/reduction pair is not yet canonical for the S5 slot
+           layout.  TWO independent defects were measured through this path (both kept honest by
+           NTT_S5_DIGDUMP=1 / NTT_S5_REDDUMP=1, which were added for exactly this):
+             (1) FIXED: the slot shape did not force the multiply's bpw to divide slot_bits, so
+                 slot_stride = slot_words*bpw was WIDER than slot_bits and a coefficient's block ran
+                 past its own reduction window by `stride + S - slot_bits` bits (measured: a 261-bit
+                 window against slot_bits = 260 on the frozen vector's first division).
+                 s5_shape_for() now forces bpw | slot_bits (choose_cfg rule 3), so
+                 slot_stride == slot_bits and no window contains a neighbour's bits.
+             (2) FIXED: the packer wrote coefficient i at digit i (bit i*bpw) instead of at its own
+                 slot (digit i*slot_stride/bpw), 37x too far left at S=129; measured as a
+                 coefficient of 2^192 read back as 2^64.
+             (3) OPEN: with slot_stride == slot_bits the SLOT WINDOW VALUE no longer spans the
+                 limbs the reduction returns.  s4_reduce_kernel converts the window into base-2^64
+                 limbs at t[0..nlimb-1] and returns t[L..L+nw-1], i.e. it needs BOTH
+                 L + nw >= nlimb (containment) and v >= N*2^(64(L-1)) (magnitude); the host's L
+                 solves the magnitude one, and at S=129 (nlimb=5, nw=3 -> L=3, slot_bits=259) the
+                 window value lands in limb 1 while the returned words are [3,6), so EVERY
+                 coefficient comes back 0 -- measured, repeatedly, as
+                 `s4_reduce_CHECK_bad: gmp=... gpu=0`.  Neither fix (a) nor fix (b) of section 22.4
+                 removes this: (a) is what puts the window there, and (b) only moves the window
+                 inside the stride.  What the S5 layout needs is a reduction whose READ WINDOW is
+                 chosen from the value it is about to receive (e.g. returning
+                 t[nlimb-nw..nlimb-1] and folding the missing 2^(64L) into Y), i.e. a change to the
+                 S4 reduction itself; that is the recorded next step, not a layout preference.
+           Turning it on aborts every run today, so the host/S4 descent stays the default. */
+        const bool s5_on = L.s4 && e5 && *e5 && std::atoi(e5) != 0;
+        if (s5_on) {
+            /* SLICE S5: the descent itself on the device.  Its leaf values stay in ws.dvals --
+               materialising them on the host is 4.4 GB at the real shape for no reason, so the
+               host copy is made only when a block actually shares a factor with N (the same
+               laziness dev_block_products already relies on). */
+            S5Stats s5;
+            L.cat = BC_DESCENT;
+            const int rc = descent_batched_dev(L, C, Ft, Fdeg, Fpad, H, ws.dvals, s5);
+            L.cat = -1;
+            if (rc != 0) {
+                std::fprintf(stderr, "%s: the device descent failed (rc=%d)\n", NTT_PROBE_NAME, rc);
+                std::exit(3);
+            }
+            R.descent_divmods = s5.divmods;
+            R.s5_divmods = s5.divmods;
+            R.s5_generic = s5.generic;
+            R.s5_linear = s5.linear;
+            R.s5_copies = s5.copies;
+            R.s5_zeros = s5.zeros;
+            R.s5_ntt_launches = s5.ntt_launches;
+            R.s5_forest_mb = s5.forest_mb;
+            R.s5_frontier_mb = s5.frontier_peak_mb;
+            R.s5_t_ntt = s5.t_ntt;
+            R.s5_t_pack = s5.t_pack;
+            R.s5_t_generic = s5.t_generic;
+            R.s5_t_copy = s5.t_copy;
+            dev_leaves = true;
+            std::printf("descent_dev_stats: divmods=%llu generic=%llu linear=%llu copies=%llu "
+                        "zeros=%llu ntt_launches=%llu forest_mb_peak=%llu frontier_mb_peak=%llu "
+                        "t_ntt=%.2f t_pack=%.2f t_generic=%.2f t_copy=%.2f\n",
+                        s5.divmods, s5.generic, s5.linear, s5.copies, s5.zeros, s5.ntt_launches,
+                        s5.forest_mb, s5.frontier_peak_mb, s5.t_ntt, s5.t_pack, s5.t_generic,
+                        s5.t_copy);
+        } else if (L.s4) {
+            values.assign((size_t)P, std::vector<unsigned long long>(W, 0ull));
+            /* slice S4: the whole descent, level by level and batched (at P = 92160 this is
+               ~1.8e5 divmods, 1.4e5 of them with k <= 2) */
+            L.cat = BC_DESCENT;
+            descent_batched(L, Ft, Fdeg, Fpad, H, values, R.descent_divmods, BC_DESCENT);
+            L.cat = -1;
+        } else {
+            values.assign((size_t)P, std::vector<unsigned long long>(W, 0ull));
+            L.cat = BC_DESCENT;
+            descent_slow(L, Ft, Fdeg, Fpad, H, values, R.descent_divmods);
+            L.cat = -1;
+        }
     }
     /* NTT_S4_DESCENT_CHECK=1 runs BOTH descents on the same H and compares every leaf value:
        the batched descent is a rearrangement of the same divisions, so any difference is a bug
-       in the rearrangement. */
+       in the rearrangement.  With S5 on, the device descent's leaf values are the ones compared
+       (read back once, because the check itself is the point). */
     {
         const char *envc = std::getenv("NTT_S4_DESCENT_CHECK");
         if (L.s4 && envc && *envc && std::atoi(envc) != 0) {
+            if (dev_leaves) {
+                values.assign((size_t)P, std::vector<unsigned long long>(W, 0ull));
+                std::vector<unsigned long long> flat((size_t)P * W, 0ull);
+                CK(cudaMemcpy(flat.data(), ws.dvals, flat.size() * 8, cudaMemcpyDeviceToHost));
+                for (size_t i = 0; i < (size_t)P; ++i)
+                    std::copy(flat.begin() + (long)(i * W), flat.begin() + (long)((i + 1) * W),
+                              values[i].begin());
+                R.s5_readback = true;
+            }
             std::vector<std::vector<unsigned long long>> ref((size_t)P,
                 std::vector<unsigned long long>(W, 0ull));
             unsigned long long dm = 0;
@@ -3583,6 +5288,11 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     }
     R.leaf_values = P;
     R.t_descent = now_s() - td0;
+    /* a phase marker, because the descent is where a long shape can look hung: everything after
+       it used to print nothing until the final summary line */
+    if (R.dbg_progress)
+        std::printf("batched_phase: descent_done t=%.1f s divmods=%llu\n", R.t_descent,
+                    R.descent_divmods);
 
     /* ---- 4. accumulate prod_j H(x_j) mod N ON THE DEVICE, one gcd per block ------------ */
     const double ta0 = now_s();
@@ -3590,14 +5300,78 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     std::vector<std::vector<unsigned long long>> bprod;
     ws.need_vals((size_t)P);
     {
-        std::vector<unsigned long long> flat((size_t)P * W, 0ull);
-        for (size_t i = 0; i < P; ++i)
-            std::copy(values[i].begin(), values[i].end(), flat.begin() + (long)(i * W));
-        CK(cudaMemcpy(ws.dvals, flat.data(), flat.size() * 8, cudaMemcpyHostToDevice));
+        if (!dev_leaves) {                  /* the S5 path already left its leaves in ws.dvals */
+            std::vector<unsigned long long> flat((size_t)P * W, 0ull);
+            for (size_t i = 0; i < P; ++i)
+                std::copy(values[i].begin(), values[i].end(), flat.begin() + (long)(i * W));
+            CK(cudaMemcpy(ws.dvals, flat.data(), flat.size() * 8, cudaMemcpyHostToDevice));
+        }
         dev_block_products(ws, (int)P, (int)BLOCK, bprod);
     }
+    if (R.dbg_progress)
+        std::printf("batched_phase: block_products_done blocks=%llu t=%.1f s\n",
+                    (unsigned long long)bprod.size(), now_s() - ta0);
     R.apply_blocks = bprod.size();
     R.block_per = BLOCK;
+    /* ---- THE NAMING BUDGET ---------------------------------------------------------------------
+     * Naming a hit is DIAGNOSTICS: it says which stage-2 prime produced the factor.  It must not
+     * be on the critical path at scale, but the reporting semantics the gates assert must keep
+     * working, so the DEFAULT depends on the shape rather than on a flag:
+     *   * candidate arithmetic is 2*imax is_prime_u64 calls per hit leaf, and 2*imax = 2*(B2/D+2).
+     *     The shapes the gates use have B2 <= 1e8 and D >= 210, and their hit count is small, so
+     *     the budget below (2^19 primality tests, ~1 s at the exact test's measured speed) covers
+     *     them: the frozen vector still prints hit_primes=114713 and rung 2/3 still print 3511,
+     *     which is what `check_stage2_tree_gpu.ps1` compares against the CPU reference.
+     *   * MEASURED at rung 3 (S=5261, D=510510, B2=1e8): 351 hit blocks and 22490 individual hits.
+     *     Even with the exact primality test and with the scan stopping at the first confirmed
+     *     prime, naming all of them costs ~195 s of a 233 s run (a 5261-bit GMP ladder point + gcd
+     *     per hit is the irreducible part), while the same run with naming off takes 35.7 s and
+     *     produces the same factor set.  So the budget is a TIME bound on a diagnostics phase, and
+     *     a shape that exceeds it gets a full factor list and a `stage2_naming:` line that says how
+     *     many hits were counted but not named.  NTT_NAME_HITS=1 forces full naming for a shape
+     *     whose hit primes are actually wanted.
+     * NTT_NAME_HITS=1 forces naming everywhere (for a deliberate deep run); NTT_NAME_HITS=0 forces
+     * it off everywhere; NTT_NAME_BUDGET_BLOCKS=n overrides the block budget. */
+    /* ---- THE CANDIDATE SET: THE TWO ENGINES ARE TRANSPOSED, AND THAT MATTERS ------------------
+     * The recovered S5 patch (section 28) carried a `leaf_candidates()` lambda that attributed a
+     * hit at "leaf L" to the primes p = off -+ j with off = (L+1)*D over the BABY VALUES j, i.e.
+     * exactly the CPU reference's rule (stage2_tree_ref.cpp's name_culprit).  That rule is right
+     * for the reference because ITS leaf values are F evaluated at the GIANT points, and it is
+     * WRONG here: this engine's `values`/ws.dvals hold H evaluated at the BABY points (H is the
+     * folded giant product, reduced mod F, and the descent walks F's tree, whose leaves are the
+     * baby factors (x - x_j)).  The evidence for the baby reading is direct, not a reading of the
+     * code: at rung 2 (D=2310, B2=1e7) this engine reports hit_leaves=240 = P, i.e. EVERY leaf
+     * value shares a factor with N, which is exactly what the baby reading predicts -- the only
+     * factor q=42089 has residual order m=3511 after stage 1, so
+     * "D*i -+ j = 0 (mod 3511)" is solvable for every baby value j (i ranges over 4331 > 3511
+     * values), while only one of those 240 leaves has a PRIME witness, p = 2310 + 1201 = 3511.
+     * Under the giant reading those 240 hits would have to come from 240 distinct giant leaves,
+     * and the count would not be P.  (Both readings name p=3511 for the leaf that confirms, which
+     * is why the transposed rule looked like a fix: it was validated against a run whose modulus
+     * was not the one the oracle used -- section 25.)
+     * The lambda is therefore NOT used; the sound rule for THIS engine, used below, is: a hit
+     * leaf j (a baby point) is witnessed by the primes p = i*D -+ j over the whole giant range,
+     * because q | H(x_j) => q | (x_j - x_i) for some i => (i*D -+ j)*Q = O (mod q). */
+    bool name_hits = true;
+    unsigned long long name_budget_blocks = 0;
+    {
+        const char *eh = std::getenv("NTT_NAME_HITS");
+        const char *eb = std::getenv("NTT_NAME_BUDGET_BLOCKS");
+        if (eh && *eh) name_hits = (std::atoi(eh) != 0);
+        unsigned long long tests_per_block = 0;
+        if (imax < (~0ull) / (2ull * (unsigned long long)BLOCK)) {
+            tests_per_block = 2ull * (unsigned long long)BLOCK * imax;
+        } else {
+            tests_per_block = ~0ull;                 /* overflow: treat as unbounded */
+        }
+        const unsigned long long budget = 1ull << 22;      /* ~4.2e6 primality tests */
+        name_budget_blocks = (tests_per_block == 0) ? ~0ull : (budget / tests_per_block);
+        if (name_budget_blocks == 0) name_budget_blocks = 1;
+        if (eb && *eb) name_budget_blocks = std::strtoull(eb, nullptr, 10);
+        std::printf("naming_policy: name_hits=%d budget_blocks=%llu (2*imax=%llu primality tests "
+                    "per leaf, %llu per block of %llu)\n", name_hits ? 1 : 0, name_budget_blocks,
+                    2ull * imax, tests_per_block, (unsigned long long)BLOCK);
+    }
     mpz_t bv, bg;
     mpz_inits(bv, bg, nullptr);
     std::vector<std::string> bstr((size_t)bprod.size());
@@ -3607,8 +5381,40 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         if (mpz_cmp_ui(bg, 1) > 0 && mpz_cmp(bg, L.N) < 0) {
             ++R.hit_blocks;                             /* a real hit: only NOW do we look at
                                                            the individual leaf values */
+            if (dev_leaves && values.empty()) {
+                /* the S5 leaves were never on the host: read them back ONCE, here, because a
+                   hit means they are about to be inspected one by one anyway */
+                values.assign((size_t)P, std::vector<unsigned long long>(W, 0ull));
+                std::vector<unsigned long long> flat((size_t)P * W, 0ull);
+                CK(cudaMemcpy(flat.data(), ws.dvals, flat.size() * 8, cudaMemcpyDeviceToHost));
+                for (size_t i = 0; i < (size_t)P; ++i)
+                    std::copy(flat.begin() + (long)(i * W), flat.begin() + (long)((i + 1) * W),
+                              values[i].begin());
+                R.s5_readback = true;
+            }
             const size_t lo = b * BLOCK;
             const size_t hi = std::min(lo + BLOCK, (size_t)P);
+            if (R.dbg_progress)
+                std::printf("batched_phase: naming_begin block=%llu leaves=[%llu,%llu) t=%.1f s\n",
+                            (unsigned long long)b, (unsigned long long)lo, (unsigned long long)hi,
+                            now_s() - ta0);
+            /* THE WORK BUDGET OF THE NAMING PHASE (see the comment above `name_hits`).
+               Candidate arithmetic is exactly 2*imax is_prime_u64 calls per LEAF, and this loop is
+               entered once per hit block, so the phase costs
+                   blocks * BLOCK * 2 * imax
+               primality tests whatever the shape is.  When that product exceeds the budget the
+               phase counts the hits (so hits/bad_factors stay exactly comparable with the CPU
+               reference) and says so, instead of spending hours naming primes nobody will read:
+               measured at B2=4e10/D=570570, one 64-leaf block of the old loop took 762.8 s and
+               there are 810 such blocks, i.e. ~2.7 h of the ~2.75 h run. */
+            const bool name_here = name_hits && (R.hit_blocks <= name_budget_blocks);
+            if (R.dbg_progress && !name_here && R.hit_blocks == name_budget_blocks + 1) {
+                std::printf("batched_phase: naming_budget_exhausted at block=%llu hit_blocks=%llu "
+                            "-- hits are still counted, hit_primes are no longer named\n",
+                            (unsigned long long)b, R.hit_blocks);
+            }
+            unsigned long long blk_leaves = 0, blk_cands = 0;   /* this block's naming work */
+            unsigned long long blk_leafhits = 0, blk_rec = 0;   /* per-leaf hits, and records */
             for (size_t j = lo; j < hi; ++j) {
                 mpz_t v, lg;
                 mpz_init(v);
@@ -3621,14 +5427,17 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                     /* the baby point j = SP.baby_j[j] is the culprit's BABY half:
                        p | H(x_j) => p | (x_j - x_i) for some giant i, so search i */
                     ++R.hit_leaves;
+                    ++blk_leafhits;
                     bool named = false;
                     const double tn0 = now_s();
                     const double ts0 = tn0;
                     std::vector<unsigned long long> cand;
-                    /* NTT_NAME_MAX: skip the scan (diagnostics only) once enough leaves have
-                       been named -- see the comment on name_max() */
+                    /* TWO gates, both DIAGNOSTIC-only: NTT_NAME_MAX caps the naming per RUN
+                       (the leaf indices are stable, so the same first leaves are named every
+                       time) and `name_here` keeps the block budget of the naming phase.
+                       Neither can change the factor set -- see the fallback below. */
                     const long long nmax = name_max();
-                    if (nmax == 0 || R.hit_leaves <= (unsigned long long)nmax) {
+                    if (name_here && (nmax == 0 || R.hit_leaves <= (unsigned long long)nmax)) {
                         const unsigned long long jj = SP.baby_j[j];
                         for (unsigned long long i = 1; i <= imax; ++i) {
                             const unsigned long long off = i * D;
@@ -3641,6 +5450,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                             }
                         }
                         ++R.named_searches;
+                        ++blk_leaves;
+                        blk_cands += cand.size();
                         R.candidates_tested += cand.size();
                     }
                     R.t_scan += now_s() - ts0;
@@ -3654,6 +5465,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                             words_to_mpz(z, &cz[k * W], W);
                             mpz_gcd(pg, z, L.N);
                             if (mpz_cmp_ui(pg, 1) > 0 && mpz_cmp(pg, L.N) < 0) {
+                                ++blk_rec;
                                 s3_record(R.tail, pg, cand[k], L.N);
                                 named = true;
                             }
@@ -3678,8 +5490,21 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 mpz_clear(lg);
                 mpz_clear(v);
             }
+            if (R.dbg_progress)
+                std::printf("batched_phase: naming_end block=%llu hit_leaves=%llu candidates=%llu "
+                            "leaf_hits=%llu records=%llu hit_blocks=%llu t_name=%.1f s t=%.1f s\n",
+                            (unsigned long long)b, blk_leaves, blk_cands, blk_leafhits, blk_rec,
+                            (unsigned long long)R.hit_blocks, R.t_name, now_s() - ta0);
         }
     }
+    if (R.dbg_progress)
+        std::printf("tail_counts: hits=%llu unnamed=%llu factors=%llu hit_primes=%llu "
+                    "hit_blocks=%llu named_searches=%llu candidates=%llu cand_lists=%llu\n",
+                    (unsigned long long)R.tail.hits, (unsigned long long)R.tail.unnamed_hits,
+                    (unsigned long long)R.tail.factors.size(),
+                    (unsigned long long)R.tail.hit_primes.size(),
+                    (unsigned long long)R.hit_blocks, (unsigned long long)R.named_searches,
+                    (unsigned long long)R.candidates_tested, (unsigned long long)R.cand_lists);
     mpz_clears(bv, bg, nullptr);
     R.t_accum = now_s() - ta0;
     /* WHERE the naming time goes: with the old GMP primality test one hit leaf cost ~1.3 s of
@@ -4092,6 +5917,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::printf("stage2: algorithm=tree_gpu_batched curves=1 hits=%llu bad_factors=%llu "
                     "factors=%s hit_primes=%s elapsed=%.2f\n", BR.tail.hits, BR.tail.bad_factors,
                     fs2.c_str(), ps2.c_str(), el);
+        if (BR.tail.unnamed_hits)
+            std::printf("stage2_naming: named_hits=%llu unnamed_hits=%llu (the naming budget "
+                        "stopped the culprit scan; hits and bad_factors are complete, the "
+                        "hit_primes list is not -- NTT_NAME_HITS=1 forces naming)\n",
+                        BR.tail.hits - BR.tail.unnamed_hits, BR.tail.unnamed_hits);
         std::printf("real_batched_shape: P=%llu giant_points=%llu num_poly_g=%llu loops=%llu "
                     "descent_divmods=%llu\n", BR.P, BR.giant_points, BR.num_poly_g, BR.loops,
                     BR.descent_divmods);
@@ -4723,4 +6553,4 @@ int main(int argc, char **argv)
         return 2;
     }
     return run_check_F(check_F, gpu_dump, evaluate, evaluate_batched);
-}
+}
