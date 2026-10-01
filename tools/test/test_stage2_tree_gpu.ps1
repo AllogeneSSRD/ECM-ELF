@@ -85,6 +85,12 @@ $r210 = RunCheck @('-D', '210')
 $r2310 = RunCheck @('-D', '2310')
 $rEval = RunCheck @('-D', '210', '-Evaluate')
 $rSharp = RunCheck @('-D', '210', '-Evaluate', '-B2', '114000')
+# [6] the naming cap must NOT lose a factor (docs/DEV_STAGE2_GPU_PLAN.md sections 26.3/26.5):
+# with NTT_NAME_MAX=1 the candidate scan stops after the first hit leaf, but every OTHER hit
+# leaf's factor is recorded from its own gcd.  Before that fix the reported factor set depended
+# on the diagnostic scan, so a capped run could report NO factor at all -- and at B2=1e11 a full
+# scan is ~26 hours, i.e. the cap is not optional in production.
+$rCap = RunCheck @('-D', '210', '-Evaluate', '-NameMax', '1')
 $out = $r210.out + "`n" + $r2310.out + "`n" + $rEval.out + "`n" + $rSharp.out
 $code = $rEval.code
 
@@ -122,6 +128,15 @@ Check "B2=114000 finds nothing (sharpness, both sides)" ($out -match 'hits=0') $
 # [5] the acceptance script's own verdict and exit code
 Check "the acceptance script reports all checks passed" ($out -match 'all checks passed') $out.Trim()
 Check "the acceptance script exits 0" ($code -eq 0) ("exit=" + $code)
+
+# [6] the capped-naming regression: the factor set must survive a bounded diagnostic scan
+Check "the capped run (NTT_NAME_MAX=1) still finds the frozen factor" `
+      ($rCap.out -match 'factors=59649589127497217') $rCap.out.Trim()
+Check "the capped run reports no bogus factor" ($rCap.out -match 'bad_factors=0') $rCap.out.Trim()
+Check "the capped run's acceptance script exits 0" ($rCap.code -eq 0) ("exit=" + $rCap.code)
+Check "the naming accounting line is printed (hit_leaves / unnamed / t_scan / t_ladder)" `
+      ($rCap.out -match 'batched_naming: hit_blocks=\d+ hit_leaves=\d+ named_searches=\d+ candidates_tested=\d+ unnamed=\d+ t_scan=[\d.]+ t_ladder=[\d.]+ t_name=[\d.]+ name_max=\d+') `
+      $rCap.out.Trim()
 
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)

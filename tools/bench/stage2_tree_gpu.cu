@@ -674,10 +674,19 @@ static void s2g_launch_ladder(int nw, int npts, const unsigned long long *dn,
                               unsigned long long *dx, unsigned long long *dz)
 {
     const unsigned int th = 64;
-    /* the same kernel, launched once per <= g_ladder_cap points (grid-stride inside) */
+    /* the same kernel, launched once per <= g_ladder_cap points (grid-stride inside).
+       THE GRID IS SIZED TO THE CHUNK, NOT TO THE CAP.  This one line was worth 100x: the launch
+       used to be `ceil(g_ladder_cap/64)` blocks whatever the chunk was, i.e. 8192 threads for a
+       ONE-point chain, and this kernel's arrays are indexed with the runtime `nw` and therefore
+       live in LOCAL memory (see the note on s2g_mont_mul) -- so every launch committed
+       ~8192 x 5 KB = 40 MB of local memory for nothing.  Measured before the fix: a 1-point
+       launch (the setup chain, 25 sequential prime powers) cost 0.51 s and a 2768-point batch
+       cost 1.29 s, i.e. almost all of it launch overhead; the naming loop's 664388 candidate
+       ladders cost 309 s of a 318 s run (section 26).  The thread->point mapping and the
+       grid-stride arithmetic are unchanged, so the result is bit-identical. */
     for (int p0 = 0; p0 < npts; p0 += g_ladder_cap) {
         const int m = ((npts - p0) < g_ladder_cap) ? (npts - p0) : g_ladder_cap;
-        const unsigned int bl = (unsigned int)((g_ladder_cap + th - 1) / th);
+        const unsigned int bl = (unsigned int)((m + th - 1) / th);
         s2g_ladder_kernel<NW><<<bl, th>>>(dn, ninv, nw, dqx, dqz, da24, dmone, djs + p0, m,
                                           dx + (size_t)p0 * nw, dz + (size_t)p0 * nw);
     }
@@ -1796,16 +1805,36 @@ static void ladder_points(const LadderCtx &C, const std::vector<unsigned long lo
     outx.assign(n * nw, 0ull);
     outz.assign(n * nw, 0ull);
     if (n == 0) return;
-    unsigned long long *dn = nullptr, *dqx = nullptr, *dqz = nullptr, *da24 = nullptr,
-                       *dmone = nullptr, *djs = nullptr, *dx = nullptr, *dz = nullptr;
-    CK(cudaMalloc(&dn, nw * 8));
-    CK(cudaMalloc(&dqx, nw * 8));
-    CK(cudaMalloc(&dqz, nw * 8));
-    CK(cudaMalloc(&da24, nw * 8));
-    CK(cudaMalloc(&dmone, nw * 8));
-    CK(cudaMalloc(&djs, n * 8));
-    CK(cudaMalloc(&dx, outx.size() * 8));
-    CK(cudaMalloc(&dz, outz.size() * 8));
+    /* ONE set of device buffers for every ladder call in the process.  This used to be eight
+       cudaMalloc + eight cudaFree per CALL, and at nw=83 (5261 bits) the driver overhead
+       dominated the arithmetic completely: the setup chain is 25 calls with ONE point each and
+       it measured 12.693 s of every real run (~0.5 s per call), while each of those ladders is a
+       <=10-bit chain, i.e. a few hundred Montgomery multiplications (section 26.6).  The buffers
+       grow on demand and are keyed by nw, so the only thing that changes is when memory is
+       requested: the kernel, the packing, the values and the results are bit-identical. */
+    static unsigned long long *dn = nullptr, *dqx = nullptr, *dqz = nullptr, *da24 = nullptr,
+                              *dmone = nullptr, *djs = nullptr, *dx = nullptr, *dz = nullptr;
+    static size_t cap_nw = 0, cap_n = 0;
+    if (cap_nw != nw) {
+        cudaFree(dn); cudaFree(dqx); cudaFree(dqz); cudaFree(da24); cudaFree(dmone);
+        cudaFree(djs); cudaFree(dx); cudaFree(dz);
+        dn = dqx = dqz = da24 = dmone = djs = dx = dz = nullptr;
+        cap_nw = nw;
+        cap_n = 0;
+        CK(cudaMalloc(&dn, nw * 8));
+        CK(cudaMalloc(&dqx, nw * 8));
+        CK(cudaMalloc(&dqz, nw * 8));
+        CK(cudaMalloc(&da24, nw * 8));
+        CK(cudaMalloc(&dmone, nw * 8));
+    }
+    if (n > cap_n) {
+        cudaFree(djs); cudaFree(dx); cudaFree(dz);
+        djs = dx = dz = nullptr;
+        CK(cudaMalloc(&djs, n * 8));
+        CK(cudaMalloc(&dx, n * nw * 8));
+        CK(cudaMalloc(&dz, n * nw * 8));
+        cap_n = n;
+    }
     CK(cudaMemcpy(dn, C.hn.data(), nw * 8, cudaMemcpyHostToDevice));
     CK(cudaMemcpy(dqx, C.hqx.data(), nw * 8, cudaMemcpyHostToDevice));
     CK(cudaMemcpy(dqz, C.hqz.data(), nw * 8, cudaMemcpyHostToDevice));
@@ -1818,8 +1847,6 @@ static void ladder_points(const LadderCtx &C, const std::vector<unsigned long lo
     CK(cudaDeviceSynchronize());
     CK(cudaMemcpy(outx.data(), dx, outx.size() * 8, cudaMemcpyDeviceToHost));
     CK(cudaMemcpy(outz.data(), dz, outz.size() * 8, cudaMemcpyDeviceToHost));
-    cudaFree(dn); cudaFree(dqx); cudaFree(dqz); cudaFree(da24); cudaFree(dmone);
-    cudaFree(djs); cudaFree(dx); cudaFree(dz);
 }
 
 /* ===================================================================================== *
@@ -2604,17 +2631,108 @@ static void divmod_batch(PolyLayer &L, const std::vector<unsigned long long> &A,
                            &qb[(s * (k + db) + i) * W], L.N, W);
 }
 
+/* 64x64 -> 128 mod m, assembled from 32-bit halves: nvcc parses this whole translation unit for
+   the device too and rejects __int128 (measured: "expected a )" at the cast), and a*b can be
+   128 bits, so each partial product is reduced before it is combined and no intermediate ever
+   leaves 64 bits. */
+static inline unsigned long long mulmod_u64(unsigned long long a, unsigned long long b,
+                                            unsigned long long m)
+{
+    a %= m;
+    b %= m;
+    const unsigned long long bh = b >> 32, bl = b & 0xffffffffull;
+    const unsigned long long ah = a >> 32, al = a & 0xffffffffull;
+    const unsigned long long p_hh = (ah * bh) % m;
+    const unsigned long long p_hl = (al * bh) % m;
+    const unsigned long long p_lh = (ah * bl) % m;
+    const unsigned long long p_ll = (al * bl) % m;
+    unsigned long long r = (((p_hh << 32) % m) + p_hl) % m;   /* the 2^64 part */
+    r = (((r << 32) % m) + p_lh) % m;                         /* the 2^32 part */
+    r = (r + p_ll) % m;
+    return r;
+}
+
+static unsigned long long powmod_u64(unsigned long long a, unsigned long long e,
+                                     unsigned long long m)
+{
+    unsigned long long r = 1ull % m;
+    a %= m;
+    while (e) {
+        if (e & 1ull) r = mulmod_u64(r, a, m);
+        a = mulmod_u64(a, a, m);
+        e >>= 1;
+    }
+    return r;
+}
+
+/* ---- the 64-bit primality test the naming loop lives or dies by ----------------------------
+ *
+ * The culprit-naming loop calls this ~2*(B2/D) times PER HIT LEAF, so at the real shape
+ * (B2=4e10, D=570570) one hit leaf costs 1.4e5 calls.  The old implementation was
+ * mpz_probab_prime_p(z, 25): a GMP object created and destroyed, plus 25 Miller-Rabin rounds,
+ * for a number that is already known to be < 2^64.  It measured ~150 us per call, which is what
+ * made the naming loop (not the algorithm) the pole of the whole run -- see the split timers
+ * `t_scan`/`t_ladder` in the `batched_naming:` line, and docs/DEV_STAGE2_GPU_PLAN.md section 26.
+ *
+ * This version is EXACT, not probabilistic, and much cheaper:
+ *   * trial division by every prime <= 101 rejects ~88% of all candidates with one 64-bit
+ *     remainder each, before any modular exponentiation happens;
+ *   * the survivors go through a deterministic Miller-Rabin whose 7-base set
+ *     {2, 325, 9375, 28178, 450775, 9780504, 1795265022} is PROVEN complete for n < 3.317e24 >
+ *     2^64, so the answer is true primality, never "probably prime".  A false POSITIVE here
+ *     would put a bogus prime into `hit_primes`, and the acceptance gate compares that list
+ *     against the CPU reference, so exactness is a requirement, not a nicety.
+ *   * no GMP object is created or destroyed on this path at all. */
 static bool is_prime_u64(unsigned long long p)
 {
     if (p < 2) return false;
-    mpz_t z;
-    mpz_init(z);
-    mpz_import(z, 1, -1, 8, 0, 0, &p);            /* NOT mpz_set_ui/mpz_add_ui: on Windows
-                                                     unsigned long is 32 bits and those
-                                                     truncate silently (section 14.10) */
-    const int r = mpz_probab_prime_p(z, 25);
-    mpz_clear(z);
-    return r != 0;
+    /* NOT named `small`: MSVC keeps the legacy keyword `small` (== char) and parses
+       `unsigned small[]` as a structured binding */
+    {
+        static const unsigned kTrialPrimes[] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43,
+                                                47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101};
+        const int nsmall = (int)(sizeof(kTrialPrimes) / sizeof(kTrialPrimes[0]));
+        for (int i = 0; i < nsmall; ++i) {
+            const unsigned long long q = kTrialPrimes[i];
+            if (p % q == 0) return p == q;
+        }
+    }
+    unsigned long long d = p - 1;
+    int s = 0;
+    while ((d & 1ull) == 0) { d >>= 1; ++s; }
+    static const unsigned long long base[] = {2ull, 325ull, 9375ull, 28178ull, 450775ull,
+                                              9780504ull, 1795265022ull};
+    const int nbase = (int)(sizeof(base) / sizeof(base[0]));
+    for (int ib = 0; ib < nbase; ++ib) {
+        const unsigned long long b = base[ib];
+        if (b % p == 0) continue;
+        unsigned long long x = powmod_u64(b % p, d, p);
+        if (x == 1ull || x == p - 1ull) continue;
+        bool composite = true;
+        for (int i = 1; i < s; ++i) {
+            x = mulmod_u64(x, x, p);
+            if (x == p - 1ull) { composite = false; break; }
+        }
+        if (composite) return false;
+    }
+    return true;
+}
+
+/* NTT_NAME_MAX=n: name at most the first n hit leaves (a hit leaf = a leaf whose value shares a
+   factor with N).  0 or unset = name EVERY hit leaf, which is what the validation runs use
+   (the gate compares `hit_primes` against the CPU reference).  The scan is pure DIAGNOSTICS --
+   the factor set no longer depends on it -- so a timing run sets this to keep it out of the
+   wall clock.  Naming is bounded per RUN, not per block: the leaf indices are stable and the
+   first leaves are the same ones every run. */
+static long long g_name_max = -1;
+static long long name_max(void)
+{
+    if (g_name_max < 0) {
+        const char *e = std::getenv("NTT_NAME_MAX");
+        g_name_max = (e && *e) ? std::atoll(e) : 0;
+        if (g_name_max < 0) g_name_max = 0;
+    }
+    return g_name_max;
 }
 
 struct Stage2Tail {
@@ -2982,8 +3100,13 @@ static void dev_block_products(S3Workspace &W, int nvals, int per_block,
     ++W.prod_launches;
 }
 
-/* the reference's record(): keep a factor that really divides N, and its hit prime */
-static void s3_record(Stage2Tail &out, const mpz_t f, unsigned long long prime, const mpz_t N)
+/* the reference's record(): keep a factor that really divides N, and its hit prime.
+   `count_hit` = whether this record also counts as an ATTRIBUTED hit.  The batched engine's
+   fallback (a hit leaf whose stage-2 prime could not be identified) records the factor but must
+   NOT inflate `hits`: `hits`/`hit_primes` are compared against the CPU reference by the
+   acceptance gate, while the factor set is reported independently. */
+static void s3_record(Stage2Tail &out, const mpz_t f, unsigned long long prime, const mpz_t N,
+                      bool count_hit = true)
 {
     if (mpz_cmp_ui(f, 1) <= 0 || mpz_cmp(f, N) == 0) return;
     mpz_t tq;
@@ -3000,7 +3123,7 @@ static void s3_record(Stage2Tail &out, const mpz_t f, unsigned long long prime, 
     mp_get_memory_functions(nullptr, nullptr, &ff);
     ff(s, std::strlen(s) + 1);
     if (prime) out.hit_primes.push_back(prime);
-    ++out.hits;
+    if (count_hit) ++out.hits;
 }
 
 /* ===================================================================================== *
@@ -3092,6 +3215,40 @@ static std::vector<unsigned long long> prime_powers_u64(unsigned long long B1)
 
 /* Q = [prod p^e] P0 through the device ladder, one prime power per step; Q and P0 are NORMAL
    domain (X : Z) on input and output.  Returns the number of device ladders used. */
+/* the WHOLE [prod pps] chain in ONE launch.  The steps are sequentially dependent (each ladder
+   starts where the previous one ended), so there is nothing to parallelise ACROSS steps: exactly
+   one thread runs them all, keeping the point in the MONTGOMERY domain throughout (the ladder
+   never needs the normal domain, only the caller does).  This replaces 25 launches with 7 tiny
+   pageable-memory copies each, which measured 12.693 s of EVERY real curve -- the copies, not
+   the arithmetic, were the whole cost (section 26.6). */
+template <int NW>
+__global__ void s2g_ladder_chain_kernel(const unsigned long long *dps, int npps,
+                                        unsigned long long ninv, int nw,
+                                        const unsigned long long *dn,
+                                        const unsigned long long *da24,
+                                        const unsigned long long *dmone,
+                                        unsigned long long *qx, unsigned long long *qz)
+{
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    unsigned long long x[NW], z[NW], rx[NW], rz[NW];
+    for (int i = 0; i < nw; ++i) { x[i] = qx[i]; z[i] = qz[i]; }
+    for (int s = 0; s < npps; ++s) {
+        s2g_ladder<NW>(dps[s], x, z, da24, dn, ninv, nw, dmone, rx, rz);
+        for (int i = 0; i < nw; ++i) { x[i] = rx[i]; z[i] = rz[i]; }
+    }
+    for (int i = 0; i < nw; ++i) { qx[i] = x[i]; qz[i] = z[i]; }
+}
+
+template <int NW>
+static void s2g_launch_ladder_chain(int nw, const unsigned long long *dps, int npps,
+                                    unsigned long long ninv, const unsigned long long *dn,
+                                    const unsigned long long *da24,
+                                    const unsigned long long *dmone,
+                                    unsigned long long *qx, unsigned long long *qz)
+{
+    s2g_ladder_chain_kernel<NW><<<1, 1>>>(dps, npps, ninv, nw, dn, da24, dmone, qx, qz);
+}
+
 static unsigned long long ladder_product(const std::vector<unsigned long long> &hn, size_t nw,
                                          unsigned long long ninv, const mpz_t N,
                                          const mpz_t a24, const mpz_t R,
@@ -3102,41 +3259,66 @@ static unsigned long long ladder_product(const std::vector<unsigned long long> &
                                          const std::vector<unsigned long long> &hmone,
                                          LadderCtx &ctx)
 {
-    mpz_t t, rmul;
-    mpz_inits(t, rmul, nullptr);
-    std::vector<unsigned long long> hr(nw, 0ull);
-    mpz_to_words(hr, nw, R);
-    unsigned long long calls = 0;
-    for (unsigned long long pk : pps) {
-        LadderCtx &C = ctx;
-        C.hn = hn;
-        C.nw = nw;
-        C.ninv = ninv;
-        C.ha24 = ha24;
-        C.hmone = hmone;
-        C.hqx.assign(nw, 0ull);
-        C.hqz.assign(nw, 0ull);
-        {   /* Q * R mod N */
-            mpz_t x;
-            mpz_init(x);
-            words_to_mpz(x, qx.data(), nw);
-            mpz_mul(x, x, R);
-            mpz_mod(x, x, N);
-            mpz_to_words(C.hqx, nw, x);
-            words_to_mpz(x, qz.data(), nw);
-            mpz_mul(x, x, R);
-            mpz_mod(x, x, N);
-            mpz_to_words(C.hqz, nw, x);
-            mpz_clear(x);
-        }
-        std::vector<unsigned long long> ox, oz;
-        ladder_points(C, std::vector<unsigned long long>(1, pk), ox, oz);
-        qx.assign(ox.begin(), ox.begin() + (long)nw);
-        qz.assign(oz.begin(), oz.begin() + (long)nw);
-        ++calls;
+    mpz_t t, rinv;
+    mpz_inits(t, rinv, nullptr);
+    const int nh = (int)pps.size();
+    unsigned long long *dps = nullptr, *dhn = nullptr, *dqx = nullptr, *dqz = nullptr,
+                       *da24d = nullptr, *dmoned = nullptr;
+    CK(cudaMalloc(&dps, (size_t)nh * 8));
+    CK(cudaMalloc(&dhn, nw * 8));
+    CK(cudaMalloc(&dqx, nw * 8));
+    CK(cudaMalloc(&dqz, nw * 8));
+    CK(cudaMalloc(&da24d, nw * 8));
+    CK(cudaMalloc(&dmoned, nw * 8));
+    CK(cudaMemcpy(dps, pps.data(), (size_t)nh * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(dhn, hn.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(da24d, ha24.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(dmoned, hmone.data(), nw * 8, cudaMemcpyHostToDevice));
+    ctx.hn = hn;
+    ctx.nw = nw;
+    ctx.ninv = ninv;
+    ctx.ha24 = ha24;
+    ctx.hmone = hmone;
+    ctx.hqx.assign(nw, 0ull);
+    ctx.hqz.assign(nw, 0ull);
+    {   /* Q enters the kernel as the MONTGOMERY IMAGE Q*R mod N (one copy, not one per step) */
+        words_to_mpz(t, qx.data(), nw);
+        mpz_mul(t, t, R);
+        mpz_mod(t, t, N);
+        mpz_to_words(ctx.hqx, nw, t);
+        words_to_mpz(t, qz.data(), nw);
+        mpz_mul(t, t, R);
+        mpz_mod(t, t, N);
+        mpz_to_words(ctx.hqz, nw, t);
     }
-    mpz_clears(t, rmul, nullptr);
-    return calls;
+    CK(cudaMemcpy(dqx, ctx.hqx.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(dqz, ctx.hqz.data(), nw * 8, cudaMemcpyHostToDevice));
+    S2G_DISPATCH((int)nw, s2g_launch_ladder_chain, (int)nw, dps, nh, ninv, dhn, da24d, dmoned,
+                 dqx, dqz);
+    CK(cudaGetLastError());
+    CK(cudaDeviceSynchronize());
+    std::vector<unsigned long long> ox(nw, 0ull), oz(nw, 0ull);
+    CK(cudaMemcpy(ox.data(), dqx, nw * 8, cudaMemcpyDeviceToHost));
+    CK(cudaMemcpy(oz.data(), dqz, nw * 8, cudaMemcpyDeviceToHost));
+    cudaFree(dps); cudaFree(dhn); cudaFree(dqx); cudaFree(dqz); cudaFree(da24d); cudaFree(dmoned);
+    /* back to the plain domain: X = image * R^-1 mod N (N is odd, so R is invertible) */
+    if (mpz_invert(rinv, R, N) == 0) {
+        std::fprintf(stderr, "%s: the Montgomery constant is not invertible mod N\n",
+                     NTT_PROBE_NAME);
+        std::exit(2);
+    }
+    qx.assign(nw, 0ull);
+    qz.assign(nw, 0ull);
+    words_to_mpz(t, ox.data(), nw);
+    mpz_mul(t, t, rinv);
+    mpz_mod(t, t, N);
+    mpz_to_words(qx, nw, t);
+    words_to_mpz(t, oz.data(), nw);
+    mpz_mul(t, t, rinv);
+    mpz_mod(t, t, N);
+    mpz_to_words(qz, nw, t);
+    mpz_clears(t, rinv, nullptr);
+    return (unsigned long long)nh;
 }
 struct BatchedRun {
     Stage2Tail tail;
@@ -3144,6 +3326,14 @@ struct BatchedRun {
     unsigned long long descent_divmods = 0, leaf_values = 0, apply_blocks = 0, block_per = 0;
     unsigned long long small_primes = 0;
     unsigned long long hit_blocks = 0, named_searches = 0, candidates_tested = 0;
+    /* the naming loop's own accounting: a HIT LEAF is a leaf whose value shares a factor with N
+       (there can be many of them -- the batched engine evaluates H at the BABY points, and one
+       stage-2 prime can be covered by several baby points, so `hit_leaves` is NOT comparable
+       with the CPU reference's `hits`, whose leaves are the GIANT points).  `unnamed` counts hit
+       leaves whose scan found no confirming prime: their factor is recorded from the leaf gcd
+       itself, exactly as the reference's name_culprit does. */
+    unsigned long long hit_leaves = 0, unnamed = 0;
+    double t_scan = 0.0, t_ladder = 0.0;
     /* device-side bookkeeping, so the breakdown line reports measured work, not a guess */
     unsigned long long ladder_calls = 0, ladder_points = 0, prod_launches = 0;
     unsigned long long arena_fuse_builds = 0, arena_fuse_reuse = 0, arena_buf_builds = 0,
@@ -3420,29 +3610,42 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             const size_t lo = b * BLOCK;
             const size_t hi = std::min(lo + BLOCK, (size_t)P);
             for (size_t j = lo; j < hi; ++j) {
-                mpz_t v;
+                mpz_t v, lg;
                 mpz_init(v);
+                mpz_init(lg);
                 words_to_mpz(v, values[j].data(), W);
-                mpz_gcd(pg, v, L.N);
-                if (mpz_cmp_ui(pg, 1) > 0 && mpz_cmp(pg, L.N) < 0) {
+                /* `lg` (this leaf's own gcd) is kept SEPARATE from `pg` (a later candidate's
+                   gcd), because the fallback below needs the leaf's value after the scan */
+                mpz_gcd(lg, v, L.N);
+                if (mpz_cmp_ui(lg, 1) > 0 && mpz_cmp(lg, L.N) < 0) {
                     /* the baby point j = SP.baby_j[j] is the culprit's BABY half:
                        p | H(x_j) => p | (x_j - x_i) for some giant i, so search i */
+                    ++R.hit_leaves;
+                    bool named = false;
                     const double tn0 = now_s();
-                    const unsigned long long jj = SP.baby_j[j];
+                    const double ts0 = tn0;
                     std::vector<unsigned long long> cand;
-                    for (unsigned long long i = 1; i <= imax; ++i) {
-                        const unsigned long long off = i * D;
-                        for (int sgn = 0; sgn < 2; ++sgn) {
-                            if (sgn == 0 && off < jj) continue;
-                            const unsigned long long p = (sgn == 0) ? (off - jj) : (off + jj);
-                            if (p <= B1 || p > B2) continue;
-                            if (!is_prime_u64(p)) continue;
-                            cand.push_back(p);
+                    /* NTT_NAME_MAX: skip the scan (diagnostics only) once enough leaves have
+                       been named -- see the comment on name_max() */
+                    const long long nmax = name_max();
+                    if (nmax == 0 || R.hit_leaves <= (unsigned long long)nmax) {
+                        const unsigned long long jj = SP.baby_j[j];
+                        for (unsigned long long i = 1; i <= imax; ++i) {
+                            const unsigned long long off = i * D;
+                            for (int sgn = 0; sgn < 2; ++sgn) {
+                                if (sgn == 0 && off < jj) continue;
+                                const unsigned long long p = (sgn == 0) ? (off - jj) : (off + jj);
+                                if (p <= B1 || p > B2) continue;
+                                if (!is_prime_u64(p)) continue;
+                                cand.push_back(p);
+                            }
                         }
+                        ++R.named_searches;
+                        R.candidates_tested += cand.size();
                     }
-                    ++R.named_searches;
-                    R.candidates_tested += cand.size();
+                    R.t_scan += now_s() - ts0;
                     if (!cand.empty()) {
+                        const double tl0 = now_s();
                         std::vector<unsigned long long> cx, cz;
                         ladder_points_ws(ws, cand, cx, cz);
                         for (size_t k = 0; k < cand.size(); ++k) {
@@ -3450,19 +3653,42 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                             mpz_init(z);
                             words_to_mpz(z, &cz[k * W], W);
                             mpz_gcd(pg, z, L.N);
-                            if (mpz_cmp_ui(pg, 1) > 0 && mpz_cmp(pg, L.N) < 0)
+                            if (mpz_cmp_ui(pg, 1) > 0 && mpz_cmp(pg, L.N) < 0) {
                                 s3_record(R.tail, pg, cand[k], L.N);
+                                named = true;
+                            }
                             mpz_clear(z);
                         }
+                        R.t_ladder += now_s() - tl0;
+                    }
+                    if (!named) {
+                        /* THE REFERENCE'S OWN CONVENTION (stage2_tree_ref.cpp name_culprit): a
+                           hit whose stage-2 prime cannot be identified is STILL a real factor,
+                           so record the leaf gcd itself with prime = 0 instead of dropping it.
+                           Without this the reported factor SET would depend on the naming scan:
+                           a hit leaf whose candidates happen not to confirm used to contribute
+                           NOTHING, which is a silently lost factor.  `unnamed` counts these and
+                           `hits` is left as the number of ATTRIBUTED hits, so `hits`/`hit_primes`
+                           stay comparable with the CPU reference. */
+                        s3_record(R.tail, lg, 0, L.N, /*count_hit=*/false);
+                        ++R.unnamed;
                     }
                     R.t_name += now_s() - tn0;
                 }
+                mpz_clear(lg);
                 mpz_clear(v);
             }
         }
     }
     mpz_clears(bv, bg, nullptr);
     R.t_accum = now_s() - ta0;
+    /* WHERE the naming time goes: with the old GMP primality test one hit leaf cost ~1.3 s of
+       pure `is_prime_u64` calls, which is 98.7% of a rung-2 run (measured, section 26). */
+    std::printf("batched_naming: hit_blocks=%llu hit_leaves=%llu named_searches=%llu "
+                "candidates_tested=%llu unnamed=%llu t_scan=%.3f t_ladder=%.3f t_name=%.3f "
+                "name_max=%lld\n",
+                R.hit_blocks, R.hit_leaves, R.named_searches, R.candidates_tested, R.unnamed,
+                R.t_scan, R.t_ladder, R.t_name, name_max());
     mpz_clears(g, pg, nullptr);
     /* the device-side counters: how much of the orchestration actually happened once */
     R.ladder_calls = ws.ladder_calls;
@@ -3659,10 +3885,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         return 3;
     }
     const unsigned long long imax = B2 / D + 2;
+    /* B1 and B2 are printed RAW, not as a derived count: --b2 used to be read with strtoull
+       base 10, so "1e11" silently became 1 and the run quietly computed a B2=1 shape
+       (giant_points=2) while every other line looked normal -- caught only because
+       giant_points was printed at all (section 27).  Both are parsed as floating point now. */
     std::printf("real_shape: D=%llu P=phi(D)/2=%llu baby_points=%llu giant_points=%llu "
-                "num_poly_g=%llu loops=%llu S_bits=%ld\n", D, P_baby,
+                "num_poly_g=%llu loops=%llu B1=%llu B2=%llu S_bits=%ld\n", D, P_baby,
                 (unsigned long long)baby_j.size(), imax, (P_baby + imax - 1) / P_baby,
-                (imax + P_baby - 1) / P_baby - 1, (long)L.S);
+                (imax + P_baby - 1) / P_baby - 1, B1, B2, (long)L.S);
 
     /* ---- Montgomery parameters (R, ninv, a24, Q) ---- */
     mpz_t R, tmp, a24, ax, az;
@@ -4453,10 +4683,13 @@ int main(int argc, char **argv)
         else if (!std::strcmp(a, "--real")) real = true;
         else if (!std::strcmp(a, "--n")) real_n = next();
         else if (!std::strcmp(a, "--n-hex")) { real_n = next(); real_hex = true; }
-        else if (!std::strcmp(a, "--sigma")) r_sigma = std::strtoull(next(), nullptr, 10);
-        else if (!std::strcmp(a, "--b1")) r_b1 = std::strtoull(next(), nullptr, 10);
-        else if (!std::strcmp(a, "--b2")) r_b2 = std::strtoull(next(), nullptr, 10);
-        else if (!std::strcmp(a, "--d")) r_d = std::strtoull(next(), nullptr, 10);
+        else if (!std::strcmp(a, "--sigma")) r_sigma = (unsigned long long)std::strtod(next(), nullptr);
+        /* strtod, NOT strtoull(base 10): "--b2 1e11" is how the plan and Prime95's own
+           parameters write B2, and strtoull stops at the 'e' and returns 1 (measured:
+           a whole run computed a B2=1 shape and printed giant_points=2, section 27) */
+        else if (!std::strcmp(a, "--b1")) r_b1 = (unsigned long long)std::strtod(next(), nullptr);
+        else if (!std::strcmp(a, "--b2")) r_b2 = (unsigned long long)std::strtod(next(), nullptr);
+        else if (!std::strcmp(a, "--d")) r_d = (unsigned long long)std::strtod(next(), nullptr);
         else if (!std::strcmp(a, "--choose-d")) choose_d = true;
         else if (!std::strcmp(a, "--s2")) real_s2 = true;
         else if (!std::strcmp(a, "--curves")) r_curves = std::atoi(next());

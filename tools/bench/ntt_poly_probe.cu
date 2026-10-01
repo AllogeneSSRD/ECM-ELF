@@ -2006,13 +2006,65 @@ static double coeff_bound_bits(unsigned long long n, int bpw)
  *       digit past the window, hence the extra word.
  *       (Packing compactly at exactly slot_bits bits per coefficient -- i.e. only
  *       ceil(2*P*slot_bits/bpw) digits -- is NOT usable: it breaks (1), see run_poly.)
+ *
+ *   (3) `force_bpw` (default 0 = auto) makes the CHOICE of bpw the caller's, and the caller is
+ *       the only thing that can legitimately make it: the DEVICE-descent caller (S5 in
+ *       stage2_tree_gpu.cu) packs the operands itself, so whether slot_stride == slot_bits is
+ *       visible to it and to nobody else.  It exists because slot_stride = ceil(slot_bits/bpw)*bpw
+ *       is slot_bits only when bpw divides slot_bits, and the S5 reducer reads ONE WINDOW PER
+ *       COEFFICIENT, so a stride wider than the window would put each coefficient's block one
+ *       word outside the window the reducer asserts against.  Everything else here is unchanged:
+ *       the exactness bound L*(2^bpw-1)^2 < p is still enforced for the forced bpw, and it must
+ *       pass, otherwise the choice is rejected exactly as an auto choice would be.
  */
 static NttCfg choose_cfg(unsigned long long payload_bits, unsigned long long slot_bits,
-                         unsigned long long P = 0)
+                         unsigned long long P = 0, int force_bpw = 0)
 {
     NttCfg c{};
     c.ok = false;
     c.L = 0;
+    if (force_bpw != 0) {
+        if (force_bpw < 1 || force_bpw > 62) {
+            c.why = "the forced bpw is outside 1..62";
+            return c;
+        }
+        const unsigned long long s =
+            (slot_bits + (unsigned long long)force_bpw - 1) / (unsigned long long)force_bpw;
+        if (P > 0 && P > (~0ull) / s) {
+            c.why = "the forced bpw overflows L = P * ceil(slot_bits/bpw)";
+            return c;
+        }
+        const unsigned long long l =
+            (P > 0) ? (P * s)
+                    : ((payload_bits + (unsigned long long)force_bpw - 1) /
+                       (unsigned long long)force_bpw);
+        if (!exact_ok_terms(l, force_bpw)) {
+            c.why = "the forced bpw fails the exactness bound L*(2^bpw-1)^2 < p";
+            return c;
+        }
+        c.slot_words = s;
+        c.L = l;
+        c.bpw = force_bpw;
+        for (int k = 1; k <= 32; ++k) {
+            const unsigned long long n = 1ull << k;
+            if (n > (1ull << 32) / 8) break;
+            const unsigned long long need_words =
+                (P > 0) ? (2 * P * c.slot_words + 1)
+                        : ((2 * payload_bits + (unsigned long long)force_bpw - 1) /
+                           (unsigned long long)force_bpw + 1);
+            if (n >= need_words) {
+                c.nwords = n;
+                c.k = k;
+                c.ok = true;
+                return c;
+            }
+        }
+        c.bpw = 0;
+        c.slot_words = 0;
+        c.L = 0;
+        c.why = "no power-of-two transform length holds the forced bpw's slot words";
+        return c;
+    }
     for (int k = 1; k <= 32; ++k) {
         const unsigned long long n = 1ull << k;
         if (n > (1ull << 32) / 8) break;
@@ -2326,12 +2378,13 @@ static bool extract_exact_coeffs(const unsigned long long *digits, unsigned long
    shape before it calls the multiply.  Returns false if the shape is refused. */
 static bool ntt_shape_query(unsigned long long P, int S, unsigned long long *N_out, int *bpw_out,
                             unsigned long long *slot_bits_out, unsigned long long *slot_words_out,
-                            unsigned long long *slot_stride_out, unsigned long long *out_slots_out)
+                            unsigned long long *slot_stride_out, unsigned long long *out_slots_out,
+                            int force_bpw = 0)
 {
     unsigned long long log2P = 1;
     while ((1ull << log2P) < P) ++log2P;
     const unsigned long long slot_bits = 2ull * (unsigned long long)S + log2P;
-    const NttCfg cfg = choose_cfg(P * slot_bits, slot_bits, P);
+    const NttCfg cfg = choose_cfg(P * slot_bits, slot_bits, P, force_bpw);
     if (!cfg.ok) return false;
     if (N_out) *N_out = cfg.nwords;
     if (bpw_out) *bpw_out = cfg.bpw;
@@ -2365,30 +2418,31 @@ struct NttShape {
    arena owns that) and is still resolved per call. */
 struct NttShapeCacheEntry {
     unsigned long long P = 0;
-    int S = 0, device = -1;
+    int S = 0, device = -1, force_bpw = 0;
     NttShape sh;
 };
 
 static int ntt_shape_plan_uncached(unsigned long long P, int S, int device, NttArena *arena,
-                                   FuseCtx &fc, NttShape &sh);
+                                   FuseCtx &fc, NttShape &sh, int force_bpw);
 
 static int ntt_shape_plan(unsigned long long P, int S, int device, NttArena *arena,
-                          FuseCtx &fc, NttShape &sh)
+                          FuseCtx &fc, NttShape &sh, int force_bpw = 0)
 {
     static std::vector<NttShapeCacheEntry> memo;
     for (const NttShapeCacheEntry &e : memo) {
-        if (e.P == P && e.S == S && e.device == device) {
+        if (e.P == P && e.S == S && e.device == device && e.force_bpw == force_bpw) {
             sh = e.sh;
             ntt_arena_fuse(arena, sh.N, sh.k, sh.omega, sh.omega_inv, fc);
             return 0;
         }
     }
-    const int rc = ntt_shape_plan_uncached(P, S, device, arena, fc, sh);
+    const int rc = ntt_shape_plan_uncached(P, S, device, arena, fc, sh, force_bpw);
     if (rc == 0) {
         NttShapeCacheEntry e;
         e.P = P;
         e.S = S;
         e.device = device;
+        e.force_bpw = force_bpw;
         e.sh = sh;
         memo.push_back(e);
     }
@@ -2396,7 +2450,7 @@ static int ntt_shape_plan(unsigned long long P, int S, int device, NttArena *are
 }
 
 static int ntt_shape_plan_uncached(unsigned long long P, int S, int device, NttArena *arena,
-                                   FuseCtx &fc, NttShape &sh)
+                                   FuseCtx &fc, NttShape &sh, int force_bpw)
 {
     if (P == 0 || S <= 0) {
         std::fprintf(stderr, NTT_PROBE_NAME ": bad shape P=%llu S=%d\n",
@@ -2416,7 +2470,7 @@ static int ntt_shape_plan_uncached(unsigned long long P, int S, int device, NttA
     sh.slot_bits = 2ull * (unsigned long long)S + log2P;
     sh.payload_bits = P * sh.slot_bits;
 
-    const NttCfg cfg = choose_cfg(sh.payload_bits, sh.slot_bits, P);
+    const NttCfg cfg = choose_cfg(sh.payload_bits, sh.slot_bits, P, force_bpw);
     if (!cfg.ok) {
         std::fprintf(stderr, NTT_PROBE_NAME ": %s\n", cfg.why.c_str());
         return 2;
@@ -2926,6 +2980,114 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
     if (!arena) fuse_release(fc);
     if (own) { cudaFree(dA); cudaFree(dB); cudaFree(dQ); cudaFree(dOut); cudaFree(dRes); }
     return rc;
+}
+
+/* ---- the DEVICE-to-DEVICE batched multiply (M3 slice S5) ------------------------------
+   The tree's descent keeps every operand on the device, so the host packing of
+   ntt_poly_mul_batch_host (one host loop over P*W words per slice, plus a full H2D copy) is
+   pure cost there.  This entry point takes the operands ALREADY PACKED as bpw-bit digits --
+   the caller owns its layout and packs on the device -- and runs the very same shape plan,
+   the very same passes, the very same carry and the very same exactness assertions.  It only
+   writes the reduced coefficients where the hook says, or the raw digit buffer.
+   `dA`/`dB` are nbatch*N digits each; when `in_place` is false they are copied into the
+   arena's buffers first (the arena's dA/dB are the only scratch the passes use).
+
+   `force_bpw` (default 0 = auto) is passed straight through to the shape plan.  The caller packs
+   the operands itself, so when it needs slot_stride == slot_bits (one reduction window per
+   coefficient, which is what the S5 reducer asserts) it must make the SAME bpw choice the
+   multiply makes; see choose_cfg rule (3).  When the forced bpw cannot meet
+   L*(2^bpw-1)^2 < p or the capacity test, the plan fails and this returns non-zero. */
+int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned long long nbatch,
+                           const unsigned long long *dAin, const unsigned long long *dBin,
+                           NttMulStats *st, NttArena *arena, const NttReduceHook *hook,
+                           unsigned long long **digits_out = nullptr, int force_bpw = 0)
+{
+    if (nbatch == 0) {
+        std::fprintf(stderr, NTT_PROBE_NAME ": batch of zero slices\n");
+        return 2;
+    }
+    NttShape sh;
+    FuseCtx fc;
+    {
+        const int rc = ntt_shape_plan(P, S, device, arena, fc, sh, force_bpw);
+        if (rc) return rc;
+    }
+    sh.L_terms = sh.P * sh.slot_words;
+    {
+        const int rc = ntt_shape_exactness(sh);
+        if (rc) return rc;
+    }
+    const unsigned long long N = sh.N, out_slots = sh.out_slots, W = sh.W;
+    NttArena::BufEntry *ab = ntt_arena_bufs(arena, N, out_slots, nbatch);
+    unsigned long long *dA = nullptr, *dB = nullptr, *dQ = nullptr, *dOut = nullptr,
+                       *dRes = nullptr;
+    bool own = false;
+    if (ab) {
+        dA = ab->dA; dB = ab->dB; dQ = ab->dQ; dOut = ab->dOut; dRes = ab->dRes;
+    } else {
+        own = true;
+        CK(cudaMalloc(&dA, (size_t)(N * nbatch) * sizeof(unsigned long long)));
+        CK(cudaMalloc(&dB, (size_t)(N * nbatch) * sizeof(unsigned long long)));
+        CK(cudaMalloc(&dQ, (size_t)(N * nbatch) * sizeof(unsigned long long)));
+        CK(cudaMalloc(&dOut, (size_t)(out_slots * nbatch) * sizeof(unsigned long long)));
+        CK(cudaMalloc(&dRes, 2 * (size_t)nbatch * sizeof(unsigned long long)));
+    }
+    CK(cudaMemcpy(dA, dAin, (size_t)N * nbatch * sizeof(unsigned long long),
+                  cudaMemcpyDeviceToDevice));
+    CK(cudaMemcpy(dB, dBin, (size_t)N * nbatch * sizeof(unsigned long long),
+                  cudaMemcpyDeviceToDevice));
+    const unsigned long long max_y = 65535;
+    const unsigned long long nchunk = (nbatch + max_y - 1) / max_y;
+    NttPassResult r;
+    r.hRes.assign((size_t)(2 * nbatch), 0);
+    for (unsigned long long ci = 0; ci < nchunk; ++ci) {
+        const unsigned long long s0 = ci * max_y;
+        const unsigned long long m = ((nbatch - s0) < max_y) ? (nbatch - s0) : max_y;
+        NttPassResult rr = ntt_run_passes(sh, fc, dA + s0 * N, dB + s0 * N, dQ + s0 * N,
+                                          dOut + s0 * out_slots, dRes + 2 * s0, m, 0,
+                                          nullptr, nullptr, nullptr, nullptr);
+        std::copy(rr.hRes.begin(), rr.hRes.end(), r.hRes.begin() + (long)(2 * s0));
+        r.t_fwd += rr.t_fwd; r.t_inv += rr.t_inv; r.t_slot += rr.t_slot;
+        if (nchunk == 1) r.digits = rr.digits;
+        if (hook && hook->run && hook->out && hook->w) {
+            hook->run(hook->ctx, rr.digits, N, sh.bpw, sh.slot_words, sh.slot_bits, out_slots,
+                      m, hook->out + (size_t)(s0 * out_slots) * hook->w, hook->w);
+            CK(cudaGetLastError());
+            CK(cudaDeviceSynchronize());
+        }
+    }
+    if (st) {
+        st->P = P; st->S = S; st->N = N; st->k = sh.k; st->bpw = sh.bpw;
+        st->slot_bits = sh.slot_bits; st->slot_stride = sh.slot_stride;
+        st->slot_words = sh.slot_words; st->out_slots = out_slots; st->L_terms = sh.L_terms;
+        st->cw = (unsigned long long)((sh.slot_bits + 63) / 64);
+        st->passes_fwd = sh.passes_fwd; st->passes_total = sh.passes_total;
+        st->carry_rounds = sh.carry_rounds;
+        st->carry_residual = 0; st->carry_max_bits = 0;
+        for (unsigned long long s = 0; s < nbatch; ++s) {
+            st->carry_residual += r.hRes[(size_t)(2 * s)];
+            if (r.hRes[(size_t)(2 * s + 1)] > st->carry_max_bits)
+                st->carry_max_bits = r.hRes[(size_t)(2 * s + 1)];
+        }
+        st->mem_mb = sh.mem_mb * (double)nbatch;
+        st->t_fwd = r.t_fwd; st->t_inv = r.t_inv; st->t_slot = r.t_slot;
+        st->fuse_t = fc.t; st->fuse_nms = fc.nms;
+        for (int q = 0; q < fc.nms && q < 8; ++q) st->fuse_ms[q] = fc.ms[q];
+        st->exact_valid = true;
+    }
+    unsigned long long bad_res = 0;
+    for (unsigned long long s = 0; s < nbatch; ++s)
+        if (r.hRes[(size_t)(2 * s)] != 0) ++bad_res;
+    if (bad_res) {
+        std::fprintf(stderr, NTT_PROBE_NAME ": CARRY DID NOT CONVERGE in %llu of %llu slices "
+                             "after %d rounds\n", bad_res, nbatch, sh.carry_rounds);
+        if (own) { cudaFree(dA); cudaFree(dB); cudaFree(dQ); cudaFree(dOut); cudaFree(dRes); }
+        return 4;
+    }
+    if (digits_out) *digits_out = (nchunk == 1) ? r.digits : nullptr;
+    if (!arena) fuse_release(fc);
+    if (own) { cudaFree(dA); cudaFree(dB); cudaFree(dQ); cudaFree(dOut); cudaFree(dRes); }
+    return 0;
 }
 
 int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int dump,

@@ -43,6 +43,12 @@ param(
     [int]$D = 210,
     [int]$Device = 1,
     [switch]$Evaluate,
+    # NTT_NAME_MAX for the GPU run: 0 (default) names EVERY hit leaf, so `hits`/`hit_primes`
+    # are directly comparable with the CPU reference.  A positive value caps the DIAGNOSTIC
+    # candidate scan (docs/DEV_STAGE2_GPU_PLAN.md section 27.3: at B2=1e11 a full scan would
+    # take ~26 hours), which makes `hits`/`hit_primes` PARTIAL by construction -- the factor
+    # set must still be identical, and that is what is asserted instead.
+    [int]$NameMax = 0,
     [string]$Sandbox = ''
 )
 
@@ -74,6 +80,7 @@ Write-Host ("  cpu: " + $cpuSummary.Value.Trim())
 
 $gpuArgs = @('--check-F', $cpu, '--device', "$Device", '--dump-F-gpu', $gpuDump)
 if ($Evaluate) { $gpuArgs += '--evaluate'; $gpuArgs += '--evaluate-batched' }
+if ($NameMax -gt 0) { $env:NTT_NAME_MAX = "$NameMax" } else { Remove-Item Env:\NTT_NAME_MAX -ErrorAction SilentlyContinue }
 $gpuOut = (& $gpu @gpuArgs 2>&1 | Out-String)
 $gpuOut.Trim() -split "`n" | ForEach-Object { Write-Host ("  gpu: " + $_.TrimEnd()) }
 $gpuCode = $LASTEXITCODE
@@ -117,10 +124,26 @@ if ($Evaluate) {
         if ($c.Success) {
             Need "batched: same factor set as the CPU reference" ($b.Groups[4].Value -eq $c.Groups[4].Value) `
                  ("batched=" + $b.Groups[4].Value + " cpu=" + $c.Groups[4].Value)
-            Need "batched: same hit_primes as the CPU reference" ($b.Groups[5].Value -eq $c.Groups[5].Value) `
-                 ("batched=" + $b.Groups[5].Value + " cpu=" + $c.Groups[5].Value)
-            Need "batched: same hits as the CPU reference" ($b.Groups[2].Value -eq $c.Groups[2].Value) `
-                 ("batched=" + $b.Groups[2].Value + " cpu=" + $c.Groups[2].Value)
+            if ($NameMax -gt 0) {
+                # the naming scan is capped, so `hits`/`hit_primes` are PARTIAL by construction.
+                # What must still hold: every prime the capped run DID name is one the CPU also
+                # names (no bogus prime), and the factor set above is complete -- which is the
+                # regression that the fallback record fixed (section 26.3).
+                $cp = @($c.Groups[5].Value -split ',' | Where-Object { $_ })
+                $gp = @($b.Groups[5].Value -split ',' | Where-Object { $_ })
+                $subset = $true
+                foreach ($p in $gp) { if ($cp -notcontains $p) { $subset = $false } }
+                Need "batched: the capped run's hit_primes are a subset of the CPU's" $subset `
+                     ("batched=" + $b.Groups[5].Value + " cpu=" + $c.Groups[5].Value)
+                Need "batched: the cap was honoured (named_searches <= NTT_NAME_MAX)" `
+                     ($gpuOut -match ('batched_naming: .*named_searches=(\d+) ') -and `
+                      [int]$Matches[1] -le $NameMax) $gpuOut.Trim()
+            } else {
+                Need "batched: same hit_primes as the CPU reference" ($b.Groups[5].Value -eq $c.Groups[5].Value) `
+                     ("batched=" + $b.Groups[5].Value + " cpu=" + $c.Groups[5].Value)
+                Need "batched: same hits as the CPU reference" ($b.Groups[2].Value -eq $c.Groups[2].Value) `
+                     ("batched=" + $b.Groups[2].Value + " cpu=" + $c.Groups[2].Value)
+            }
         }
         if ($g.Success) {
             Need "batched: same factor set as the SIMPLE (S2) tail" ($b.Groups[4].Value -eq $g.Groups[4].Value) `

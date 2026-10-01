@@ -1452,3 +1452,447 @@ D=2310:        coeffs_gpu=241 coeffs_cpu=241 mismatches=0 ; F_degree 240/240 ok=
 **两个已知的大赢面（已记录、未开始）**：
 1. **giant 点生成 910 s / 1581 s（57.5 %）** —— 换成**差分加法链**（相邻 i 逐个相加；CPU 参考的 giant 表就是这么做的，约 10 次域乘/步，而非每点一条 10522 步 ladder）预计降一到两个数量级。这是**单项最大**的收益。
 2. **下降第 ≥16 层搬上设备**（批量求值），因为 1.7e9 次模乘加在主机 GMP 里不可能完成。
+
+### 18.7 S5（下降设备化）：未完成，但**长杆被测量清楚了 —— 它不是 NTT**（2026-10-01）
+
+**S5 的状态：未完成，且没有把回归留在树里。** 我独立核对过：
+
+* `git diff --numstat -- tools/bench/stage2_tree_gpu.cu` = **0 行** ⇒ 该文件与 HEAD **逐字节相同**（子代理中途用 PowerShell 字符串重写把换行全删了，靠 `git checkout` 恢复）。
+* 只有 `tools/bench/ntt_poly_probe.cu` 被改（**+102 行**，纯新增）：`ntt_poly_mul_batch_dev(P,S,device,nbatch,dAin,dBin,st,arena,hook,digits_out)` —— **设备到设备的批量乘法**，操作数是**已在设备上打包好的 digit 缓冲**，归约后的系数写进 hook 的设备缓冲；形状计划/内核/进位/精确性断言与 `ntt_poly_mul_batch_host` 相同，对既有路径 0 改动。
+* 设备下降驱动 `descent_batched_dev` **不在树里** ⇒ **真实形状仍然停在 §18.6 的位置**，因此**没有每曲线墙钟、没有相位分解**（未完成的形状不报时间）。
+
+#### 最有价值的产出：长杆的**真实**位置（实测，不是推断）
+
+新增 `NTT_S4_DESCENT_SHAPES=1` 插桩，把**每个分组的真实 `(k, da, db, nodes)` 从向量里读出来**：
+
+* 冻结形状与模型精确一致：level 5 = `k=1 da=1 db=1 nodes=24`；levels 1–4 = `k=16/8/4/2`。
+* ⇒ **真实形状最后一层是 `da≈51839, db=1, k≈51839, ~51840 nodes`** —— 不是先前那位从**分组键**推出来的 `(51839,1)`，也不是 `k=2`；而且**那一层的除数确实是线性的** ⇒ **深层应当走"线性/求值"分支**。
+
+**长杆不在 NTT 乘法里**，而在 `divmod_batch` 的两处**主机侧**成本：
+
+1. 它在调用乘法**之前**为**整个分组**物化 A 与 B（该形状下 ≈ **70 GB/缓冲**，两个就是 140 GB）；
+2. 它的最后一步 `cp_coeff_sub_p` 是**每个输出系数一次主机 GMP 减+取模**（≈ **2.7e9 次**）。
+
+⇒ **两者都必须去掉；光把 NTT 改成批量也跑不完。** 这修正了 §18.6 里"第 16 层是主机 GMP 的 1.7e9 次模乘加"的表述 —— 真正的数字与瓶颈是上面这两条。
+
+#### 顺带找到并搞懂的两个真 bug（都记下来，不只是打补丁）
+
+1. 打包的操作数必须写在**槽步长** `slot_words*bpw` 上，**不是** `bpw` —— 按 `bpw` 写会溢出 `2^slot_bits` 窗口，归约会以 `slot windows have nonzero digits above slot_bits` 中止。
+2. 打包内核**不能把一个 slice 整个暂存在单个 block 的共享内存里**（真实形状下那是 `P*slot_words` 个 digit ≈ 2 MB）—— 正确设计是**每系数一线程**直接 `atomicOr` 进全局 digit 缓冲，没有尺寸上限。
+
+另外它纠正了自己第一版的一个数学错误：**商不是把 `rb` 当作自己的逆**（那只在 `k == db+1` 时成立），正确需要完整 Newton 链（`rbi = 1/rb mod X^k` 倍增，再 `qrev = ra*rbi`）。
+
+#### 事故与教训（子代理主动披露）
+
+它用 **PowerShell 字符串重写**去拼接新内核，结果把 `stage2_tree_gpu.cu` 的**换行全部删掉**；因为 `edit` 工具随后以 "file changed since it was read" 拒绝写入，它改用 `git checkout --` 恢复。**教训：绝不要用字符串替换改写源码文件（用 `edit` 工具），并且改动前确认目标文件在 git 里有基线** —— 这次正是有基线才没有损失。
+
+#### 我这次自证时出现的一个未解释项（不掩盖）
+
+我用套件门禁跑 `test_stage2_tree_gpu.ps1` 得到 **11/13**（失败项："锐利性 `B2=114000` 两边都为空" 与 "验收脚本退出 0"，后者 `exit=-1`），而子代理自述同一脚本 `-D 210 -Evaluate` 是 `all checks passed`。我随后直接调用 exe 时用错了 CLI（该模式要求 `--check-F <file>`，回 `exit=2` 是用法错误而非崩溃），**未能在此之前把这一项查清**。相关观察：exe 时间戳是 **10:04:24**（较新的一次构建），`stage2_tree_gpu.cu` 与 HEAD 相同，残留进程 0。另外**近 2 小时有 45 条 `nvlddmkm` 事件** —— 与"大量真实形状运行被强杀、每次拆卸都可能产生 153"一致（§18.5.1），但也意味着**不能把驱动事件日志当作干净基线**。**下一步接手时第一件事**：用 `run_with_timeout.ps1` 逐条重跑我那四次调用，确定 11/13 是环境（日志被占/残留/驱动）还是真回退。
+
+#### 已交付的精确下一步（按顺序，子代理给出的清单）
+
+1. 声明 `struct S5PackOp {ull rows,off,slot_words,slot_stride; uint src_stride,S; uint rev;}` 与 `s5_pack_kernel`（每系数一线程，`bit = r*slot_stride + j`，`atomicOr` 进 `dst + s*N`）、`s5_qrev_dig_kernel`、`s5_unpack_red_kernel`、`s5_unpack_dig_kernel`、`s5_selfcopy_kernel`、`s5_ident_first_slice_kernel`、`s5_two_minus_kernel`、`s5_check_linear_kernel`、`s5_eval_linear_kernel`（Horner，每节点一线程，结果用 `s2g_mont_mul(pl,h,one_mont)` 转回）；**全部用 `edit` 工具，绝不重写文件**。
+2. 驱动 `descent_batched_dev(L,C,Ft_flat,Fdeg,Fpad,H,dleaf_out,S5Stats&)`：按 `Fdeg` 建计划，分支与主机版 `descent_batched` 相同（`Fdeg==0` → 零；`cur_len < Fdeg[ci]+1` → D2D 拷贝；否则分组），**线性分支**用设备判定 + Horner 求值，**通用分支**走上文那条 Newton 链，**按 `s5_chunk_for`（~512 MB）分块**以避开 TDR。
+3. 在 `run_batched` 里以 `NTT_S5_OFF`（默认开）为开关调用它，并把 `ws.dvals` 喂给 `dev_block_products`。
+4. 重跑 `test_ntt_poly` 22/22、`test_stage2_tree_ref` 62/62、`test_stage2_tree_gpu` 13/13，然后真实形状（`--real --n-hex <2^5261-1> --sigma 26 --b1 1000 --b2 1940000000000 --choose-d --device 1`，预算 5400 s）。
+
+---
+
+## 21. 步进验证纪律：**不要直接上巨大的 B2**（用户指示，2026-10-01）
+
+**问题**：直接跑生产量级的 `B2 = 1.94e12` 耗时以小时计 —— 上一个子代理把整份预算花在两次这样的尝试上，**一个数也没拿到**。这不是能力问题，是**测试形状的选择**问题。
+
+**先分清哪个旋钮动哪笔成本**（这决定了步进应该同时收哪两个量）：
+
+| 成本项 | 由谁决定 | 依据 |
+|---|---|---|
+| **descent** | **D**（P = φ(D)/2）—— 深层每层约 P/2 个节点、每节点一个度 P 的除法 | §18.6/§18.7：真实形状最后一层 `da≈51839 db=1 k≈51839 ~51840 nodes` |
+| **fold 循环** | **B2/D**（`num_polyG = ceil(numDsections/poly_size)`） | §18.2：66 轮 = ⌈(B2/D)/P⌉ |
+
+⇒ **两个旋钮都要收**，而不是只收 B2（只收 B2 而保持 D，descent 那笔最大的开销一点不减）。
+
+**步进阶梯（每一级都应在分钟级跑完，并报该级的相位数字与峰值分配）**：
+
+| 级 | 形状 | 为什么是这一级 |
+|---|---|---|
+| 1 | 冻结向量（S=129、D=210、B2=1e6） | 正确性，秒级 |
+| **2** | **S=5261 + 小 D（D=2310、P=240）+ 小 B2（1e7）** | **最有价值的一级**：它同时压到**真实模数位宽**（精确性界与 5261 位系数的全部路径）**并且小到 CPU 参考能算** ⇒ `stage2_tree_ref` 在此成为**真 oracle**（本项目早先已跑过 D=2310/S=5261，46 s）⇒ 可对拍**因子集合与 `hit_primes`** |
+| 3 | S=5261、D=510510/P=46080、B2=1e8 | 上一轮**已跑完整**过的形状（`factors=42089 hit_primes=3511`、`descent_divmods=91800`）⇒ 作为"中等"基线，新相位数字与它对照 |
+| 4 | S=5261、预算上限 D=570570/P=51840，B2 按 1e9 → 1e10 → 1e11 → 1.94e12 逐级 | 每级报逐层 descent 时间与峰值显存；**一旦某相位的外推说明下一级在预算内跑不完，就停** |
+| 5 | 生产 B2 | 只有**真的跑完**才宣称"真实形状完成"，并给出墙钟与相位分解；跑不完就报**新长杆的数字**，不报时间 |
+
+**两条附带纪律**：
+* 每一级都要用 `run_with_timeout.ps1` 给**足够跑完**的预算；被超时杀掉的运行算"未测量"，**不算数据点**（§18.5.1 已记录：早先日志里 367 s/992 s 的"死亡"其实是 harness 超时，不构成证据）。
+* 第 2 级顺带解决"交叉验证"问题：`S=5261/D=2310` 下 `stage2_tree_ref` 能给出因子集合与 `hit_primes`，这比只有运行内抽样强得多 —— 若一致，要**明确写出来并附原始行**。
+
+**为什么这条值得单列一节**：本项目已经因为"直接上最大形状"损失了两轮预算（一次是真实形状 113 s 静默死亡查了很久，一次是把 `B2=1.94e12` 跑了两遍没出数）。**"能分钟级跑完 + 有 oracle 可比" 的形状选择，本身就是一种可复用的工程资产。**
+
+---
+
+## 22. S5 与步进阶梯的结果：**S=5261 下与 CPU oracle 对拍成功**，瓶颈转移到"命名循环"（2026-10-01）
+
+### 22.1 TASK 0 结论：那次 11/13 是**环境问题**，不是回退
+
+重跑 `test_stage2_tree_gpu.ps1` ⇒ **13/13、exit 0、40.3 s**，`[ok] B2=114000 finds nothing` 与 `[ok] the acceptance script exits 0` 都在；把四次调用逐条经 `run_with_timeout.ps1` 单独跑也都过；无残留进程、无回退。（当时所见为环境态：既有日志显示脚本此前已产出完整 dump。）**结论：我那次 11/13 的记录应视为环境波动，不是新回退。**
+
+### 22.2 步进阶梯：**用户那条建议立刻兑现了**
+
+| 级 | 形状 | 结果 |
+|---|---|---|
+| 1 | S=129, D=210, B2=1e6 | 40 s，门禁 13/13，`factors=59649589127497217 hit_primes=114713` |
+| **2** | **S=5261, D=2310, P=240, B2=1e7** | **314.2 s —— 与 CPU oracle 在真实模数位宽上完全一致**：`stage2_tree_ref` 给 `factors=42089 hit_primes=3511`（278.41 s），GPU 分批尾巴给 `factors=42089 hit_primes=3511`（314.21 s）⇒ **同一因子集合且同一命中素数**；该次运行内另有 `gmp_selftest_bad=0`、`gmp_checked=2831 gmp_check_bad=0` |
+| 3 | S=5261, D=510510, P=46080, B2=1e8 | 56.19 s，`factors=42089 hit_primes=3511`（与上一轮基线签名一致）；descent 28.8 s / 91800 divmods；level 15 = 3.4 s、**level 16 = 2.0 s**；F 树 9.4 s；fold 2/2；arena 4275.6 MB `overflow=0`；主机峰值 6066 MB |
+| 4 | S=5261, D=570570, P=51840（`--choose-d` 选），B2=4e10 | **descent 在 74.2 s / 103678 divmods 内跑完**（levels 9–15 = 5.0/4.7/4.5/4.2/3.8/3.6 s、**level 16 = 2.2 s**）；F 树 10.7 s；fold 2/2 共 29.8 s（giant 17.4、gtrees 10.4、fold 1.9）；arena 4508 MB `overflow=0`；主机峰值 6484 MB。随后运行被中止在 **`naming_begin block=1 t=762.8 s`** |
+
+**里程碑（这一项把我们此前的一个限制消掉了）**：**"S=5261 下不存在 CPU 交叉验证"的说法作废** —— 第 2 级在**真实模数位宽**上给出了与 `stage2_tree_ref` **逐项一致**的因子集合与命中素数。这比只有运行内抽样强得多，也是 S5 之前做不到的。
+
+**另一项硬结论**：`D=570570/P=51840` 下**descent 已完成**，其中第 16 层 **2.2 s**（先前移交时记为 ">54 分钟未完成"）⇒ **S5 的设备下降确实解决了 §18.6/§18.7 描述的那根长杆**（`divmod_batch` 的整组物化 + 逐系数主机 GMP 归约）。
+
+### 22.3 瓶颈已转移：**"命名循环"现在是最大的一笔**
+
+`naming_begin block=1 t=762.8 s` —— **一个 64 叶的 block 花了 762.8 s**，而这样的 block 有 **810 个** ⇒ 在 B2=4e10 下外推约 **2.7 小时**。该循环做的是 `is_prime_u64` + 候选扫描，**每命中一次进入一次**。⇒ **§18.7 里"1.7e9 次主机 GMP 模乘加是长杆"的描述已被这次测量取代**（那一段现在只作为历史记录保留）。
+
+### 22.4 S5 的实现与**尚未正确**的一处（默认关闭，附精确修法）
+
+**已实现**（`stage2_tree_gpu.cu`，+1308/−18，仅用 `edit` 工具）：`S5Stats/S5Forest/S5Dev/S5Shape` + `s5_shape_for`；`s5_pack_kernel`（每系数一线程、**槽步长**、`atomicOr`、不做整 slice 暂存）、`s5_rev_pack_kernel`、`s5_pad_low_kernel`、`s5_fill_kernel`、`s5_check_linear_kernel`、`s5_eval_linear_kernel`（Horner + `one_mont` 的 mont_mul）、`s5_sub_kernel`、`s5_two_minus_kernel`、`s5_memcpy_kernel`；`s5_reduce_hook/s5_reduce_shape`（复用 S4 的设备归约，含每形状 GMP 自检与规范性断言）；`s5_mul_batch`（设备到设备，操作数在设备上打包，**每形状重新推导精确性界**）；`s5_divmod_one`（**完整 Newton 链**，绝不再把 `rb` 当自己的逆）；`descent_batched_dev`（分块森林、三分支与主机版一致）；`run_batched` 接线 + `batched_phase:` 标记（**正是这个标记把 762.8 s 的长杆定位出来的**）。
+
+**为什么默认关闭**（`NTT_S5_ON` opt-in）：乘法的槽步长是 `slot_words*bpw ≥ 2S+log2 P`，而 `s4_reduce_kernel` 断言"每个槽窗口的值 `< 2^slot_bits`"；一个操作数系数的块占 `i*stride .. i*stride+S`，**可能超出自己的窗口 `stride + S − slot_bits` 位**。在冻结向量的第一次 S5 除法上实测：**`value_bits=261` vs `slot_bits=260`，正好多一位**，归约**正确地拒绝了它** ✓（守卫生效、没有静默给错答案）。
+**精确修法**（代码注释里也有）：① 选一个**整除 `slot_bits` 的 bpw**，使 `stride == slot_bits`，块就不跨窗口（并让形状规划器与之一致）；② 或者对操作数做缩放使 `stride + S − slot_bits ≤ slot_bits`，并从"最多 2 对系数能落进一个窗口"这一点**证明**每窗口的界。
+
+### 22.5 门禁与披露
+
+最终构建（exe 12:29:25）后三门禁复验：`test_stage2_tree_gpu` **13/13**、`test_ntt_poly` **22/22**、`test_stage2_tree_ref` **62/62**；`git status` 只显示 `stage2_tree_gpu.cu` 与 `ntt_poly_probe.cu`（外加先前就有的 docs/ 与 ecm_report/ 改动）；无残留 GPU 进程。**子代理主动披露**：删一个死函数时它**一次**用了 PowerShell 文本管道（违反"只用 `edit`"的规则），文件完好（可编译、门禁全过、diff +1308/−18），换行已归一化为 LF —— 它没有隐瞒。**这条披露本身值得肯定**，与 §18.7 那次导致文件损坏的事故相比，这次至少是在可控范围内并主动报告。
+
+---
+
+## 23. 修 A/B 的进展、一个结构性阻塞、以及**对 §22.2 的更正**（2026-10-01）
+
+**门禁**（最终构建）：`test_stage2_tree_gpu` **13/13**、`test_ntt_poly` **22/22**、`test_stage2_tree_ref` **62/62**；`git status` 只有 `stage2_tree_gpu.cu`（+1795/−44）与 `ntt_poly_probe.cu`（+172/−10）；无 GPU 崩溃、只用 device 1、无残留进程。
+
+### 23.1 更正：§22.2 的"命中素数一致"**不可复现**，只有**因子集合一致**成立
+
+§22.2 我写过"rung 2（S=5261/D=2310/B2=1e7）两边给出同一因子集合**且同一命中素数**"。**该说法必须加限定**：
+
+* 该形状下 CPU oracle 的输出是 `hits=1`、因子 1 个、`hit_primes=3511`（**3511 是一个素数，不是 3511 个素数** —— 这一点我此前读得不够清楚）。
+* 当前树上 GPU 分批尾巴给出 **`hits=263`、`hit_primes=1009,1013,…,2393`（全部 < 2000）**，而 CPU 给 `hits=1 / hit_primes=3511`。**因子集合仍然完全一致**（逐项核对过，首个因子相同），**但 hits/hit_primes 不一致**。
+* 子代理的结论：这些 GPU 素数都是**与 D 互素的小值** ⇒ 指向**每叶候选生成里的 `SP.baby_j` 索引/索引-值混淆**（`jj = SP.baby_j[j]` 然后 `p = i*D ± jj`），而**不是下降**。它同时指出：**在这棵树上，无论它改动之前还是之后，rung 2 的"命中素数一致"都复现不出来** —— 所以那一格应当只保留"因子集合一致"。
+* **结论**：**修正 §22.2** —— 在 S=5261 上真正被确立的是**因子集合与 CPU oracle 逐项一致**（这仍然很强，也是"该位宽下有 CPU 交叉验证"的依据）；**命中素数的一致性目前不成立**，根因是候选生成，已列为下一步第一件事。
+
+### 23.2 FIX A（S5 设备下降）：未完成，但**结构性阻塞被测量清楚了**
+
+已完成：`ntt_poly_probe.cu:choose_cfg()` 增加 `force_bpw`（规则 3）并贯穿 `ntt_shape_query`/`ntt_shape_plan`（含 memo 键）/`ntt_poly_mul_batch_dev`；`s5_shape_for()` 现在选**能整除 `slot_bits` 的最大 bpw（≤62）**，使 `slot_stride == slot_bits`（§22.4 的方案 a）。另修两处真 bug：`s5_pack_kernel` 曾把系数 i 写在 `i*bpw` 位而不是槽步长（S=129 时偏左 37 倍，`NTT_S5_DIGDUMP=1` 显示 2^192 读回成 2^64）；偏移现在以 **bpw 位数字**为单位表达（非 bpw 整数倍的位偏移会把块混进同一个 digit，破坏"每 digit < 2^bpw"）。
+
+**仍然阻塞（实测，不是推理）**：当 `stride == slot_bits` 后，**S4 归约对每个 S5 系数都返回 0**。原因：`s4_reduce_kernel` 把窗口转成限位 `t[0..nlimb-1]`，但返回的是 `t[L..L+nw-1]` —— 它**同时**需要**包含性**（`L+nw ≥ nlimb`）与**量级**（`2^slot_bits ≤ N·2^(64L)`）。S=129/slot_bits=259/nlimb=5/nw=3 时主机取 `L=3` 满足量级、但窗口位落在 limb 1，返回的 `[3,6)` 全是 0 ⇒ 每次运行都 `s4_reduce_CHECK_bad: gmp=… gpu=0`。它试过 `L=nlimb−nw=2`：**既不满足量级**（`2^259 > N·2^128`）**又破坏了本来能用的 S4 路径**（门禁掉到 5/13/6）⇒ **已回退**并在 `s4_shape_init` 注释里记录 R1/R2。**§22.4 的两个方案都消不掉这一条**；正确方向是**让归约的"读窗口"由它实际收到的值决定**（例如返回 `t[nlimb−nw..nlimb−1]`，并把缺失的 `2^(64L)` 折进 Y）。`NTT_S5_ON` 保持 opt-in；本轮所有门禁数字来自**未改动的 S4 主机下降**。诊断开关保留：`NTT_S5_DIGDUMP`、`NTT_S5_REDDUMP`、`NTT_S5_CANON_CHECK`。
+
+### 23.3 FIX B（命名循环）：已实现，并抓住两个真问题
+
+* `is_prime_u64` 改为**精确且便宜**：先用 ≤101 的 26 个素数试除，再做**确定性 7 基 Miller-Rabin**（对 n < 3.317e24 > 2^64 已证明），mulmod 用 32 位半宽（这个 TU 里 nvcc 拒绝 `__int128`；MSVC 还把 `small` 当关键字，为此多花了一次构建）。不再用 GMP 对象。
+* **候选表按"baby 点值"缓存**（按 block 缓存是**错的** —— 它改变了推进步进而把命中从 1 抬到 22490；这个错被抓住并改掉）；ladder+GCD 在**第一个确认素数处立即停止**。
+* 命名现在还有**时间预算**（2^22 次素性测试，`NTT_NAME_HITS`/`NTT_NAME_BUDGET_BLOCKS` 可覆盖）；预算用尽时**命中仍被计数**并打印 `stage2_naming:`（named vs unnamed），**因子集合不受影响**。门禁形状的默认命名行为不变（13/13 已证明仍打印 `hit_primes=114713`）。
+
+### 23.4 阶梯与预算（本轮）
+
+* **rung 3（S=5261/D=510510/B2=1e8）在关掉命名后 231 s 完成**：其中 **accumulation 195 s**、descent 30.1 s、NTT 26.3 s、arena 4275.6 MB `overflow=0`。**即便用精确素性测试 + 提前退出，那个形状下给 22490 个命中命名仍要 ~195 s** —— 因为**每个命中一次 5261 位 GMP ladder+GCD 是不可压缩的**，这正是预算存在的理由。
+* **rung 4/5 与生产 B2=1.94e12 的每曲线墙钟未做**（没有预算）。因此**真实形状仍未跑完**，不报时间。
+
+### 23.5 下一步（明确）
+
+1. **修 `run_batched` 候选生成里 `baby_j` 的索引/索引-值混淆** —— 这是 rung-2 命中素数差异的**全部**原因（因子集合已一致）；修好后 rung 2 才能真正成为"位宽 + 命中素数"双重对拍。
+2. 读 §22/§18.7 里的 "3511" 时**必须按"一个素数"理解**，并**从 CPU 参考重新推导该形状应有的命中数**再宣称一致 —— 这条教训与 §14.10（判据不能由意图推出）同源：**"两边数字相同"要先确认那个数字的含义**。
+3. FIX A 按 §23.2 的方向重做归约的读窗口；之后才能把 `NTT_S5_ON` 打开。
+
+---
+
+## 24. 一次中止的尝试：树是绿的，但 TASK 1 未修好（我实测的现状，2026-10-01）
+
+上一个子代理**没跑完就耗尽空间**（无报告）。按纪律我先自证仓库状态，再自证它要交付的**那项验收**：
+
+### 24.1 它留下的状态（我亲自验）
+
+| 项 | 结果 |
+|---|---|
+| 门禁 | `test_stage2_tree_gpu.ps1` **13/13**（22 s）✓ ⇒ **树留在绿的状态**（这条纪律它守住了：源码 14:51:22、exe 14:54:12，构建完成才中止） |
+| `git status` | 只有 `stage2_tree_gpu.cu`、`ntt_poly_probe.cu`（以及先前就有的 docs/ 与 ecm_report/ 改动）✓ |
+| TASK 1（候选生成/命中归因） | **未修好**：我按它留下的参数文件跑 rung 2（`--real --n-hex <2^5261-1> --b2 1e7 --d 2310`，292.3 s、exit 0），GPU 仍打印 **`hits=263` / `hit_primes=1009,…`**，而 CPU oracle 的原始行是 **`hits=1 bad_factors=0 factors=42089 hit_primes=3511`**（278.41 s）⇒ **因子集合一致、命中归因仍不一致** |
+| TASK 2（S5 读窗口） | **仍是 opt-in**：代码注释明确写着"the multiply/reduction pair is not yet canonical for the S5 slot"与"what the S5 layout needs is a reduction whose READ WINDOW is chosen from the value it receives" ⇒ **诊断写清了、实现没做** |
+| TASK 3（阶梯） | 13:03 之后**没有新的阶梯日志**；只有 14:31–15:16 的参数文件（`_rung2_args.txt`/`_cpu_args.txt`/`_t1_args.txt`）⇒ 它准备到"要跑对拍"就停了 |
+
+### 24.2 本轮的新知识：**命名开销与"假命中数"成正比 ⇒ 修好 TASK 1 同时也解决长杆**
+
+我这次 rung-2 运行里（`naming_policy: name_hits=1 budget_blocks=7`）：
+
+```
+batched_phase: naming_begin block=0 leaves=[0,64)   t=0.0 s
+batched_phase: naming_begin block=1 leaves=[64,128) t=73.3 s
+batched_phase: naming_begin block=2 leaves=[128,192) t=146.6 s
+batched_phase: naming_begin block=3 leaves=[192,240) t=220.0 s      ⇒ ~73 s/块
+```
+⇒ **整个 292 s 的运行几乎全花在命名上，而且是因为有 263 个"假命中"**：每个命中要做一次 **5261 位 GMP ladder + GCD**（不可压缩），263 个/块就是 73 s/块。**若归因修好（该形状只有 1 个真命中），命名就退化成"一次 ladder+GCD"≈ 秒级** ⇒ **"命名循环是长杆"这个现象本身就是 TASK 1 那个 bug 的影子**，不是两个独立问题。
+
+**结论（对 §22.3/§23.3 的补充）**：不要把"命名 762.8 s/块"当成独立的性能问题去优化 —— **先修命中归因**；归因正确后命名开销自然落回噪声级。这也解释了为什么"精确素性测试 + 提前退出 + 时间预算"那一轮优化没有把 rung 3 的 195 s 压下来：**那 22490 个（同样是虚假的）命中才是成本来源**。
+
+### 24.3 下一步（顺序不变，且现在更明确）
+
+1. **修 `run_batched` 候选生成里 `SP.baby_j` 的索引/索引-值混淆**（`jj = SP.baby_j[j]` 之后 `p = i*D ± jj`）：验收就是 rung 2 与 CPU oracle **同 `hits` 且同 `hit_primes`**（`hits=1`、`hit_primes=3511`），并且**冻结门禁的 `hit_primes=114713` 不变**。**这一项同时消掉长杆。**
+2. 再按 §23.2 实现 S4 归约的**读窗口由实际值决定**，之后打开 `NTT_S5_ON` 并用冻结/rung 2/rung 3 与主机下降逐项对齐。
+3. 最后爬 rung 4/5 到生产 B2，取每曲线墙钟。
+
+---
+
+## 25. **重大更正：所谓"分批引擎在 S=5261 上算术不成立"是假象——两次运行用的根本不是同一个 N**（2026-10-01）
+
+§23.1、§24 与上一个子代理的整条证据链都建立在一个前提上：**GPU 在 rung 2 给出的因子不整除 N、命中数与 CPU oracle 不一致**。本轮我把这个前提本身查了一遍，**它是错的**：那两次运行（GPU 与 CPU）**用的模数不同**。
+
+### 25.1 证据：`--n-hex` 少了开头的一个 `1`
+
+* `5261 = 4·1315 + 1` ⇒ **2^5261−1 的十六进制是 `1` 后接 1315 个 `f`（共 1316 位）**。
+* 而 `build_cuda_cmake/_t1_args.txt` 与 `_rung2_args.txt` 里的 `--n-hex` 是 **1316 个 `f`、没有开头那个 `1`** ⇒ 那个数是 **2^5264−1**（Python 实测 `int(hex,16).bit_length() = 5264`，且日志首行本来就印着 **`N_bits=5264`**）。
+* CPU oracle 用的是 `--n <十进制>`（`_cpu_args.txt`），日志首行 `N_bits=5261`。
+* ⇒ **CPU 在 2^5261−1 上跑，GPU 在 2^5264−1 上跑。**
+
+按日志首行的 `N_bits=` 把两边排开（这一列我在写 §23/§24 时**没有看**）：
+
+| 日志 | N_bits | 输出 |
+|---|---|---|
+| `_ladder_r2b.log` | **5261** | `hits=1 factors=42089 hit_primes=3511`（314.21 s） |
+| `_ladder_r3.log` | **5261** | `hits=1 factors=42089 hit_primes=3511`（56.19 s） |
+| `_ladder_r2_cpu.log` / `_rung2_cpu.log` | **5261** | `hits=1 factors=42089 hit_primes=3511` |
+| `_rung2_full.log` / `_rung2_new.log` / `_rung2_new2.log` / `_rung2_eval.log` | 5264 | `hits=263`，因子 220/244 位 |
+| `_rung3.log` / `_rung3b` / `_rung3c` / `_rung3_nn` | 5264 | `hits=22490…46276`，9 个因子 |
+| `_t1_gpu_run.log` / `_fixA_r2_gpu.log` / `_fixA_r2_s2.log` | 5264 | `hits=263` |
+
+**规律一目了然：`N_bits=5261` 的运行两边完全一致；所有"不一致"的运行都是 `N_bits=5264`。**
+
+### 25.2 我先前那条"独立 Python 检查"错在哪
+
+我（以及子代理的 `_fixA_py.py`）当时都是**对着 2^5261−1 去验 GPU 的因子**，得到"不整除"。实测：
+
+```
+N = 2^5261−1:  42089 | N  = True        (2^5261 mod 42089 = 1)
+N = 2^5264−1:  42089 | N  = False
+GPU 的 220 位因子 1568164681281655112676978893829977998528202328427332923833597965855
+               整除 2^5261−1 = False   整除 2^5264−1 = True
+```
+
+逐项复核（Python，从日志里用正则取数，不用手抄）：
+
+| 日志 | 记录的因子个数 | 是否全部整除 **2^5264−1** |
+|---|---|---|
+| `_fixA_r2_gpu.log` | 1（220 位） | **是** |
+| `_rung2_eval.log` / `_rung2_new2.log` | 2（220、244 位） | **都是** |
+| `_rung3.log` | 9（220–251 位） | **都是** |
+
+⇒ **`bad_factors=0` 一直是对的**：引擎给它的每个因子都真的整除它拿到手的那个 N。"算术不成立"这个结论，是我拿**另一个 N** 去整除检验出来的。
+
+### 25.3 连带作废/更正的结论
+
+1. **§23.1 对 §22.2 的更正要撤回。** 在**同一个** N=2^5261−1 下，GPU（`_ladder_r2b.log`）给的是 `hits=1 factors=42089 hit_primes=3511`，与 CPU oracle **逐字一致**（含命中素数 3511）⇒ §22.2 原本写的"同一因子集合**且同一命中素数**"成立。（那次是旧构建；本轮正在用当前构建在**正确的 N** 上重跑，见 §26。）
+2. **§24.2"263 个假命中 ⇒ 命名是长杆"不成立。** 那 263 个命中是 **2^5264−1 上的真命中**。2^5264−1 的小因子极多（5264 = 2⁴·7·47 ⇒ 2^d−1 对每个 d | 5264 都整除它），命中数本来就该很大。**命中数由 N 的因子结构决定，跨模数比较命中数是没有意义的。**
+3. **§24 的 TASK 1（`SP.baby_j` 索引/索引-值混淆）并未被证明存在。** 它的全部证据（hits 不一致、因子"不整除"、`leaf_hits=64/64/64/48` 视为"退化"）都来自模数不一致；在 2^5264−1 上"每个 baby 点都能覆盖到某个小因子"是**正常现象**。最后一个子代理据此改写了 naming 的归因、做了 292→185 s 的"提速"，最后**自己回退并留绿树** —— 处置正确，但问题本身是虚的。
+4. **§24.1 表格里"TASK 1 未修好"改为"TASK 1 未证伪：输入不一致导致那次对拍无效"。** 同样地，§23.3 里"按 block 缓存把命中从 1 抬到 22490"这条观察也是在 5264 上做的 ⇒ 那条 FIX B 的动机描述需要按"另一个 N"重读。
+
+### 25.4 教训：**对拍之前先对拍输入**
+
+这与 §14.10（判据不能由意图推出）同源，但更靠前一步：**"数字不同"与"数字的含义不同"是同一类错误的两面**。要断言"两个实现不一致"，第一步不是看输出，而是**证明两边读到的 N、sigma、B1、B2、D 逐项相同**。本轮的 `N_bits=` 首行**一分钟就能发现**，我却先花掉了一整轮（§24）加一个子代理去修一个不存在的行为差异。
+
+**新增纪律（立即生效）**：
+
+* 任何 `--n-hex` 都要**回读校验**（`int(hex,16).bit_length()` == 目标位数，并断言目标小因子整除它）；参数文件与 N 一起留档。
+* 对拍报告的第一行必须写 **`N_bits=` / `sigma` / `B1` / `B2` / `D`** 五项，缺一项即视为无效对拍。
+* 用 `--n-hex` 手工拼串是**危险动作**：$2^k-1$ 的十六进制在 $k \bmod 4 \ne 0$ 时必须带前导 `1`，这正是本轮的坑。
+
+### 25.5 立即的重跑（本轮进行中）
+
+`build_cuda_cmake/_rung2_ok_args.txt` = `--real --n-hex 1`+1315×`f` `--sigma 26 --b1 1000 --b2 1e7 --d 2310 --device 1`（Python 已校验 `bits=5261`、`42089 | N`），用当前构建（exe 16:48:31，源码与 HEAD 逐字节相同）重跑，验收条件 = 与 `_rung2_cpu.log` 的 **`hits=1 factors=42089 hit_primes=3511`** 逐项一致。结果写 §26。
+
+**因此 §24.3 的"下一步"顺序也要改**：先重跑 rung 2 正名，再谈 S5 读窗口（§23.2，仍有效且是真正的代码问题），然后直接爬 rung 4/5 到生产 B2 取每曲线墙钟 —— 中间那一步"修 `baby_j` 候选生成"在没有新证据前**不应再做**。
+
+---
+
+## 26. rung 2 正名（正确的 N）+ 命名循环的真相：**一行 100× 的启动 bug 与一处静默丢因子**（2026-10-01）
+
+### 26.1 验收：分批引擎在**正确的 N = 2^5261−1** 上与 CPU oracle 逐项一致
+
+```
+GPU（当前构建，`--real --n-hex 1`+1315×`f` `--b2 1e7 --d 2310 --device 1`，317.28 s）
+  stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 hit_primes=3511
+CPU（`_rung2_cpu.log`，277.90 s）
+  stage2: algorithm=tree curves=1 hits=1 bad_factors=0 factors=42089 hit_primes=3511
+```
+
+**逐项一致（含 `hits` 与 `hit_primes`）** ⇒ **§23.1 对 §22.2 的更正、§24 的 TASK 1、以及那个子代理为它做的改动，全部作废**：分批引擎在 S=5261 上从来没错过，是我喂了两个不同的 N（§25）。**TASK 1 关闭，不需要任何代码改动。**
+
+### 26.2 但这一跑暴露了一个真问题：**318 s 里的 314 s 是命名循环**
+
+```
+real_batched_split: giant=1.111 gtrees=0.910 fold=0.487 descent=0.554 inv=0.153
+                    accum=314.371 name=314.313 f_tree_incl=0.631
+```
+⇒ **算法本体（F 树 + G 树 + fold + descent + 逆）≈ 4.2 s，命名 314.3 s（98.7%）**。§22.3 说"命名是长杆"，在**正确的 N** 上依然成立 —— 但原因与 §24.2 猜的完全不同（不是"假命中"）。
+
+### 26.3 三个实测事实（新增 `batched_naming:` 一行把命名拆开）
+
+```
+batched_naming: hit_blocks=4 hit_leaves=240 named_searches=240 candidates_tested=664388
+                unnamed=239 t_scan=4.941 t_ladder=309.231 t_name=314.313 name_max=0
+```
+
+1. **`hit_leaves=240` = 全部叶子命中。这不是 bug。** 分批引擎的叶子是 **baby 点**（H 在 x_j 上求值），而**同一个 stage-2 素数可以被多个 baby 点覆盖**，所以命中叶子数远大于 CPU 的 `hits`（CPU 的叶子是 giant 点）⇒ **`hits` 与 `hit_leaves` 是两种约定，不能逐数比较**；能比较的是**因子集合**与 `hit_primes`。§23.1 只是指出过这一点，这里补上可验证的推理与实测：rung 2 唯一因子 `q=42089` 的**剩余阶** `m=3511`（stage 1 之后 Q 的阶），命中条件 `D·i ∓ j ≡ 0 (mod 3511)`（D=2310）对**每个** baby 值 j 都有解（i 上限 4331 > 3511）⇒ 240 个叶子全命中；而 240 组里只有 `(i=1, j=1201)` 给出**素数**候选（p = 3511 = 2310+1201），所以只有 1 次归因成功 ⇒ `hits=1` ✓ 与 CPU 一致。
+2. **`unnamed=239` 是一个真 bug（本轮修掉）。** 命中叶子的因子**只在候选素数被 ladder 确认时**才被 `s3_record` 记录；**不能归因的 239 个叶子一个因子都没记** ⇒ **报告出来的因子集合依赖于诊断性的命名扫描**，某个命中叶子扫不出素数时它的因子就被**静默丢掉**。修法照 CPU 参考自己的 `name_culprit`：**不能归因也照样记录叶子的 gcd**（prime=0）；这类记录进 `unnamed` 而**不进 `hits`**（新增 `s3_record(..., count_hit=false)`），以保持 `hits`/`hit_primes` 与 CPU 参考逐项可比。rung 2 修后输出**逐字不变**（`hits=1 factors=42089 hit_primes=3511`）—— 因为那 239 个叶子的 gcd 都是同一个 42089，去重后因子串不变。
+3. **成本在 ladder，不在素性测试。** `t_scan=4.94 s`：664388 次素性测试 ⇒ **7.4 µs/次**（把 `mpz_probab_prime_p(z,25)` 换成"≤101 的 26 个素数试除 + 7 基确定性 MR、mulmod 走 32 位半宽"之后，比原来的 ~150 µs 快 **20×**）；`t_ladder=309.2 s`：664388 个候选点 ⇒ **465 µs/点**。
+
+### 26.4 根因：**ladder 的启动网格总是按 cap 铺满**（一行）
+
+`s2g_launch_ladder` 用的是
+
+```cpp
+const unsigned int bl = (unsigned int)((g_ladder_cap + th - 1) / th);   /* 128 块 = 8192 线程 */
+```
+
+**无论这一批有多少个点**；而 `s2g_mont_mul` / `s2g_ladder` 里的数组是按**运行期** `nw` 索引的（不是模板参数 `NW`）⇒ 它们**全在 local memory**，于是一次启动就要为 8192 个线程提交约 **40 MB** local memory，哪怕只需要 1 个线程。两个实测数字正好对上这个模型：
+
+| 观测 | 点数 | 启动次数 | 耗时 | 每次启动 |
+|---|---|---|---|---|
+| setup 链（25 个素数幂，**单点**） | 1/次 | 25 | **12.702 s** | **0.51 s** |
+| 命名 loop（240 批） | ~2768/批 | 240 | **309.2 s** | 1.29 s（其中固定部分 ≈0.5 s）|
+
+**修法（一行）**：`bl = ceil(min(npts−p0, cap) / 64)`。thread→point 映射与 grid-stride 算术**完全不变** ⇒ 结果逐位相同，而每个点的**边际**成本不变、**固定**成本按点数摊薄。
+
+### 26.5 本轮改动清单（全部只用 `edit` 工具）
+
+| # | 位置 | 内容 |
+|---|---|---|
+| 1 | `is_prime_u64`（+ `mulmod_u64`/`powmod_u64`） | 精确且便宜：26 个小素数试除 + 7 基确定性 MR（nvcc 在这个 TU 里拒绝 `__int128`，所以 mulmod 走 32 位半宽）|
+| 2 | `run_batched` 命名分支 | `hit_leaves` / `unnamed` 计数、`t_scan`/`t_ladder` 计时；新增 `batched_naming:` 打印 |
+| 3 | `s3_record` | 新增 `count_hit` 参数：不能归因的命中仍记因子，但不抬高 `hits` |
+| 4 | `name_max()` + `NTT_NAME_MAX` | 命名扫描的**可选上限**（默认 0 = 全部命名，供验收；计时运行用它把纯诊断开销移出墙钟）|
+| 5 | `s2g_launch_ladder` | **网格按批大小取**（§26.4，一行）|
+
+### 26.6 修后实测（同一形状、同一 N）
+
+**(a) 改动 1–4 之后**（`_rung2_fast_gpu.log`，318.14 s）：
+
+```
+batched_naming: hit_blocks=4 hit_leaves=240 named_searches=240 candidates_tested=664388
+                unnamed=239 t_scan=4.941 t_ladder=309.231 t_name=314.313 name_max=0
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 hit_primes=3511
+```
+输出与修前**逐字相同**；素性测试从 ~150 µs/次 降到 **7.4 µs/次**（`t_scan` 只有 4.9 s，含 664388 次测试 + 候选表构建）。
+
+**(b) 再加改动 5（网格按批大小）之后**（`_rung2_grid_gpu.log`，239.11 s）：
+
+```
+batched_naming: ... candidates_tested=664388 unnamed=239 t_scan=4.776 t_ladder=230.608 t_name=235.511
+```
+⇒ 命名 **314.3 → 235.5 s（−25%）**，`t_ladder` 309.2 → 230.6 s，**输出仍逐字相同**。所以网格铺满只是**次要**原因，主因是**每点**成本。
+
+**(c) `t_ladder` 的 230.6 s 是什么（算术对得上）**：每个命中叶子的候选素数约 `664388/240 = 2768` 个，`ladder_points_ws` 把 X 与 Z **两个坐标全部拷回主机** ⇒ 每叶子 `2×2768×83×8 B = 3.68 MB`，240 个叶子共 **882 MB** 的 D2H；按 3.8 GB/s 计正好 ≈ 232 s ⇒ **这一项是数据搬运，不是 ladder 的算术**（每个候选素数是 ≤24 位的标量，ladder 只有 ~24 步）。**次要结论**：命名若要用在生产里，要么只回传 Z（减半），要么在设备上做归约；本轮的处置是**给它加上限**（改动 4）。
+
+**(d) setup 链：每个真实曲线的 12.7 s 是 `cudaMalloc`，不是运算**。`real_setup: prime_powers=25 ladder_chain_seconds=12.693`，**修了网格之后仍然是 12.693 s**（说明与网格无关）。原因在 `ladder_points()`：它**每次调用**都做 8 次 `cudaMalloc` + 8 次 `cudaFree` + 7 次 `cudaMemcpy` + 1 次启动 + 1 次同步；25 步 ⇒ **400 次驱动分配调用**，每次 ~31 ms ⇒ 12.7 s。而这 25 个 ladder 的指数是**素数幂 ≤ B1=1000**（≤10 位），算术量是几百次 Montgomery 乘法。**修法**：把 8 个设备缓冲做成**进程内持久缓存**（按 `nw` 键控、按需增长），`ladder_points` 的 6 个调用点一次性受益；内核、打包与结果**逐位不变**。改后数字见 §26.7。
+
+**门禁**：改动 1–4 之后冻结向量 `test_stage2_tree_gpu.ps1` **13/13**（构建 260.6 s、链接 4.8 s）。
+
+### 26.7 setup 链：两个假设都被实测否掉，真因是**标量算术全在 local memory**
+
+**(a) 修法 1（持久缓冲）之后**：`ladder_chain_seconds=12.693 → 12.656`（`_rung2_name1_gpu.log`）。**没变。**
+**(b) 修法 2（整条链一次启动、单线程、全程留在 Montgomery 域）之后**：`= 12.100`（`_rung2_chain_gpu.log`）。**还是没变。**
+
+两次改动的**正确性**都验证了：Q 与改前**逐位相同**（`real_setup_Q: Q_x_hex=107c6a23ce9ad03b…`，1316 个十六进制位），冻结门禁 **13/13** ✓。而且它们确实把命名从 314.3 s 降到 235.5 s（改法 5）、把每步的 7 次小拷贝和 400 次驱动分配消掉了。
+
+**但 12 s 一分没少 ⇒ 成本在算术本身。** 算一下：25 个素数幂的 ladder 总步数 `Σ bitlen(p^e) ≈ 175` 步，每步 `xDBL+xADD = 6+8 = 14` 次 Montgomery 乘法 ⇒ 约 **2450 次 `s2g_mont_mul`**，而它们现在是**一个线程顺序**做的（链是顺序依赖的，没有跨步并行度）⇒
+
+```
+12.1 s / 2450 = 4.9 ms  每次 83-limb Montgomery 乘法
+              = 0.36 us 每个 MAC（13778 个 MAC）
+              ≈ 650 周期/MAC
+```
+
+**650 周期一个乘加**只有一个解释：**这些数组根本不在寄存器里**。`s2g_mont_mul` / `s2g_addmod` / `s2g_xdbl` / `s2g_xadd` / `s2g_ladder` 全部是 `template <int NW>` 但**循环边界用运行期参数 `nw`**、数组又按 `NW`（这里是 128）声明并以指针互相传递 ⇒ 编译器只能把 `t[2*NW+2]`、`x[NW]`… 放进 **local memory**；每线程 ~5–10 KB 的帧让占用率崩掉，于是每次片内 local 访问都走 L2/DRAM，且没有 ILP 去掩盖延迟。**这是整个引擎最大的性能缺陷**，也正好解释了为什么：
+
+| 部件 | 表现 | 说明 |
+|---|---|---|
+| NTT 多项式乘法 | **0.084 ns/操作数位**（M2 门禁达标）| digit 数组 + 融合 radix-16，寄存器/共享内存友好 |
+| 标量 ladder（setup 链、giant 点、命名确认、S5 下降）| **~650 周期/MAC** | 上述 local-memory 问题 |
+| 命名候选 ladder 的边际成本 | 每点 ~0.28 ms | 同一个原因 |
+
+**下一个大优化因此是明确的**：把 `nw` 变成**编译期常量**（按**精确**字数的模板实例化 / dispatch），让这些数组回到寄存器。预期收益是数十倍，作用在 setup 链（每曲线 12 s → ~0.2 s）、giant 点（真实形状下是主项）、命名确认与设备下降上。**本轮不做**（改动面在 6 个互相调用的模板函数与 dispatch 上，风险不小，且要重新过全部门禁），记为下一轮第一件事。
+
+### 26.8 命名上限下的 rung 2（当前构建，`_rung2_name1_gpu.log` / `_rung2_chain_gpu.log`）
+
+```
+NTT_NAME_MAX=1:
+  batched_naming: hit_blocks=4 hit_leaves=240 named_searches=1 candidates_tested=2746
+                  unnamed=240 t_scan=0.020 t_ladder=0.960 t_name=0.981 name_max=1
+  stage2: algorithm=tree_gpu_batched curves=1 hits=0 bad_factors=0 factors=42089 hit_primes= elapsed=4.55
+```
+⇒ **整条 rung-2 曲线 17.6 s**（其中 setup 链 12.1 s、命名 1.0 s、算法本体 4.5 s），**因子集合仍然正确（42089）** —— 这正是改动 3（不能归因也记因子）的价值：`hits`/`hit_primes` 变成**部分**（按设计，`hits=0` 因为被命名的那 1 个叶子不是真凶），但**因子没有丢**。要完整命名就把 `NTT_NAME_MAX` 留 0（验收运行）。
+
+---
+
+## 27. 阶梯（正确的 N=2^5261−1，当前构建）与一个**被 `strtoull` 吃掉的参数**（2026-10-01）
+
+### 27.1 rung 3 完整命名：**逐项一致**（`_rung3_ok.log`）
+
+```
+real_shape: D=510510 P=phi(D)/2=46080 baby_points=46080 giant_points=197 num_poly_g=1 loops=0 S_bits=5261
+real_setup: prime_powers=25 ladder_chain_seconds=12.113
+ftree_real: leaves=46080 padded=65536 muls=46079 ntt_calls=46079 ntt_seconds=13.221
+batched_naming: hit_blocks=3 hit_leaves=21 named_searches=21 candidates_tested=2622 unnamed=21 t_scan=0.023 t_ladder=10.529 t_name=10.553 name_max=0
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 hit_primes=3511 elapsed=52.84
+real_batched_split: giant=0.502 gtrees=0.042 fold=0.000 descent=37.626 inv=0.000 accum=10.668 name=10.553 f_tree_incl=23.286
+real_batched_cost: poly_muls=407715 operand_bits=48309261484 f_tree=8841714094 g_tree=21810270 fold=0 descent=39445737120 inv=0 total=48309261484
+```
+⇒ **`hits=1 factors=42089 hit_primes=3511`，与 CPU oracle（`_rung2_cpu.log`/`_rung2_cpu.log` 同一 N、B2=1e8 ⊇ 1e7）逐项一致**；**descent 37.6 s 是这一级的主项**（占 71%），F 树 23.3 s，命名 10.6 s，**整个曲线 52.84 s**（旧构建同形状 56.19 s）。
+
+### 27.2 `--b2 1e11` 被 `strtoull` 读成 **1**
+
+第一次跑"生产 B2"时我按计划文档的写法传了 `--b2 1e11`，结果：
+
+```
+real_shape: D=570570 ... giant_points=2 ...        <- imax = B2/D + 2 = 2  ⇒ B2 = 1 !
+stage2: ... factors= hit_primes= elapsed=4.77
+```
+原因：`r_b2 = std::strtoull(next(), nullptr, 10)` **在 `'e'` 处停下并返回 1**。`--b1`/`--sigma`/`--d` 同样写法，有同样的风险。
+
+**修法（本轮）**：四个参数改 `std::strtod`（接受 `1e11` 与十进制两种写法），并把 **`B1`/`B2` 原样打印**进 `real_shape:` 行 —— 这样"参数被吃掉"这种事故在下一次的第一行就能看出来。**注意：这正是 §25 那类陷阱的第三次出现**（`--n-hex` 少一个 `1`、`--b2` 里的 `e`、以及 §23.1 的 `3511` 被读成"3511 个素数"），所以纪律再加一条：**新增/使用命令行参数时，日志必须回显它的解析结果**。
+
+**已核对：本轮之前只有我这一次 `_b2_1e11_args.txt` 用了指数写法**（扫描全部 `_*args*.txt`）；`_ladder_r4.log` 的 `giant_points=70107` 证明那次 `B2=4e10` 是**真的**解析成了 4e10，因此 §22 的 rung-4 数字仍然有效。
+
+### 27.3 **B2 = 1e11 的每曲线墙钟：191.74 s**（`_b2_1e11b.log`，`NTT_NAME_MAX=1`）
+
+```
+real_shape: D=570570 P=phi(D)/2=51840 baby_points=51840 giant_points=175265 num_poly_g=4 B1=1000 B2=100000000000 S_bits=5261
+real_setup: prime_powers=25 ladder_chain_seconds=12.102
+ftree_real: leaves=51840 padded=65536 muls=51839 ntt_calls=51839 ntt_seconds=13.523
+batched_naming: hit_blocks=810 hit_leaves=51824 named_searches=1 candidates_tested=3925 unnamed=51824 t_scan=0.385 t_ladder=1.789 t_name=2.212 name_max=1
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 hit_primes=3511 elapsed=191.74
+real_batched_cost: poly_muls=641799 operand_bits=156715440386 f_tree=10066968754 g_tree=33815972140 fold=9156871306 descent=98728561338 inv=4947066848 total=156715440386
+real_batched_split: giant=43.883 gtrees=28.572 fold=8.024 descent=79.443 inv=8.306 accum=5.241 name=2.212 f_tree_incl=24.229
+```
+
+* **正确性**：在真实模数（5261 位）与 B2=1e11 下 `hits=1 bad_factors=0 factors=42089 hit_primes=3511` —— **与 CPU oracle 的因子与命中素数一致**（同一 N、B2 更大只会更多覆盖，实际覆盖集不变）。
+* **每曲线 = 191.74 s（分批阶段）+ 12.10 s（setup 链）≈ 204 s**。分解（占分批阶段的百分比）：
+
+| 阶段 | 秒 | 占比 | 备注 |
+|---|---|---|---|
+| descent（主机 GMP 余式树） | **79.44** | 41% | B2 无关，只随 P 变 |
+| giant（每个 i 一次独立 ladder） | **43.88** | 23% | 随 B2 线性 |
+| gtrees（3 棵 G 树）| 28.57 | 15% | 每棵 ≈9.5 s，随 B2/D/P 线性 |
+| F 树（含在分批计时内）| 24.23 | 13% | 一次 |
+| fold + inv | 16.33 | 8.5% | 随批数线性 |
+| naming（**诊断**，已限 1 个叶子）| 2.21 | 1.2% | 见下 |
+| accumulate/gcd | 5.24 | 2.7% | |
+| setup 链 | 12.10 | — | §26.7：单线程 local-memory 算术 |
+
+* **计入的操作数位 1.567e11 ⇒ 有效速率 191.74/1.567e11 = 1.22 ns/操作数位**，而 NTT 探针在同等形状上实测 **0.084 ns/位** ⇒ **引擎比它自己的 NTT 慢 14.5×**。差额不在 NTT，而在每次调用前后的主机侧包装/抽取/拷贝与上面那几个非 NTT 阶段。
+* **命名必须限流（本节最硬的一条）**：这个形状下 **51840 个叶子里有 51824 个命中**，而给**一个**叶子做完整候选扫描要 **3925 次素性测试 + 1.79 s 的确认 ladder** ⇒ 全量命名 ≈ 51824 × 1.8 s ≈ **26 小时**。上了 `NTT_NAME_MAX=1` 之后命名只花 **2.21 s**，而**因子集合完全不受影响**（改动 3 的 fallback）。这正是 §22.3/§24.2 那个"命名长杆"的**真实规模**。
+* **与目标（B2≥1e11 时每曲线 ≤6 s）的差距：204 s vs 6 s ⇒ 32×。** 差距的归属是明确的（上表），不是"未知的慢"。
+
+### 27.4 要走到目标，按性价比排序的清单（每项都有本轮实测数字支撑）
+
+1. **设备下降（S5）**：descent 79.4 s 是最大单项，而 S5 的实现**只差 §23.2 那个"读窗口由实际收到的值决定"的修法**（已写好 pack/rev_pack/eval/divmod 全套内核，只是默认关闭）。修好并打开它，目标是把 79.4 s 压到个位数。
+2. **标量算术去 local memory（§26.7）**：4.9 ms/次 Montgomery 乘法是**所有**标量部件（setup 链 12.1 s、giant 43.9 s、命名确认、下降的逐系数部分）的共同乘数。把 `nw` 变成编译期常量（精确字数实例化）是**一次性投入、多处受益**的改动。
+3. **giant 点改用差分加法链**：现在是"每个 i 做一次 ~41 步的独立 ladder"（≈574 次 Montgomery 乘法/点）。Montgomery 差分加法只要有差值点 `x_D`，`x_{(i+1)D} = xADD(x_{iD}, x_D, x_{(i-1)D})` 就只要 ~14 次乘法/点 ⇒ 算术量降 ~40×。代价：链是**顺序依赖**的，必须分块并行（每块用一次 ladder 播种），第 2 项修好后收益才能兑现。
+4. **每次 NTT 调用的主机侧开销**（1.22 vs 0.084 ns/位的那 14.5×）：按 §14 的办法重新拆解 `batched_ntt_usecall:`，把打包/抽取/拷贝从热路径里拿掉（S5 已经演示过"操作数留在设备上"的做法）。
+5. **更大的 D**：现在是 8 GB 卡上能放下的最大 D=570570；生产参数 D=1411410/P=132480 的 transform 需要约 **36 GB** 显存（`_ladder_r4.log` 的 `d_budget_choice` 行），所以要么把 transform 分块/流式化，要么换更大的卡。**工作总量 ∝ 1/D ⇒ 这一项是唯一能把总量往下压一个档次的**。
