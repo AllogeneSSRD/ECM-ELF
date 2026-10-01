@@ -101,6 +101,33 @@ $tests = @(
     @{ name = 'p95-transfer';    kind = 'script'; target = 'test_p95_transfer.ps1';       exe = 'driver'; gpu = $true;  what = 'finished task -> Prime95 worktodo.add (routing, lock, pending)' }
     @{ name = 'p95-notice';      kind = 'script'; target = 'test_gui_p95_notice.ps1';    exe = 'gui';    cuda = $true; gpu = $true; what = 'red/yellow/green/grey notice strip for the handoff' }
     @{ name = 'generator';       kind = 'script'; target = 'test_gui_generator.ps1';     exe = 'gui';    cuda = $true; gpu = $true; what = 'M6: generator vs ecm.py byte-for-byte + panel' }
+    # M1 of the CUDA-stage-2 plan: reference stage 2 (CPU/GMP, no GPU needed).  It needs BOTH
+    # the reference exe and the driver (the driver produces the stage-1 save it consumes), so it
+    # locates both itself; exe = '' keeps the harness from passing the wrong one.
+    @{ name = 'stage2-ref';      kind = 'script'; target = 'test_stage2_ref.ps1';      exe = '';       cuda = $true; gpu = $false; what = 'reference stage 2: affine oracle + save conventions + known factor' }
+    # --go/param-0 group order + the minimum-B1/B2 derivation.  Needs gp/PARI; it SKIPS
+    # (exit 0) when gp is missing, so it never breaks a machine without PARI.
+    @{ name = 'go-group-order';  kind = 'script'; target = 'test_go_group_order.ps1';  exe = '';       cuda = $true; gpu = $false; what = '--go param 0 group order + min B1/B2 bounds (needs gp)' }
+    # M0 of the CUDA-stage-2 plan: is the cuFFT/Kronecker multiplication CORRECT (bit-exact vs
+    # GMP, and every coefficient of the stage-2 polynomial primitive)?  It locates the probe exe
+    # and uses a NON-busy device (default 1) itself, so exe = ''.  gpu = $true only so that
+    # -SkipGpu drops it; it also skips on its own when no CUDA device is present.
+    @{ name = 'cufft-kron';      kind = 'script'; target = 'test_cufft_kron.ps1';      exe = '';       cuda = $false; gpu = $true; what = 'M0: cuFFT big-int bit-exact vs GMP + poly coefficients verified' }
+    # M1: the GPU pairing stage 2 against the CPU reference (frozen vector, B2 sharpness,
+    # a 199-curve sweep, a real driver stage-1 save, clean failures).  It locates both the
+    # probe exe (tools/build/build_stage2_probe.ps1) and ecm_cuda itself, and uses a
+    # NON-busy device (default 1); it skips cleanly when the probe is missing.
+    @{ name = 'stage2-gpu';      kind = 'script'; target = 'test_stage2_gpu.ps1';      exe = '';       cuda = $true;  gpu = $true; what = 'M1: CUDA/CGBN stage 2 == CPU reference stage 2 (incl. save path)' }
+    # M3's first step: the TREE-based stage 2 (product tree + Bernstein remainder tree,
+    # i.e. the structure the GPU engine will implement) on the CPU, against the pairing
+    # reference.  It locates its own exe (tools/bench/stage2_tree_ref.cpp, built standalone
+    # with cl.exe + the repo's GMP) and skips cleanly when that is missing.  No GPU needed.
+    @{ name = 'stage2-tree';     kind = 'script'; target = 'test_stage2_tree_ref.ps1'; exe = '';       cuda = $true;  gpu = $false; what = 'M3: tree stage 2 == pairing reference (frozen, sharpness, save, cost model)' }
+    # M3 GPU side, slices S1/S2: the GPU baby product tree must equal the CPU reference's F
+    # coefficient by coefficient (mod N) on two shapes, and the frozen factor must carry the SAME
+    # hit prime (114713) as both CPU references.  It drives tools/build/check_stage2_tree_gpu.ps1
+    # (one place defines acceptance, this one gates it) and uses device 1.
+    @{ name = 'stage2-tree-gpu'; kind = 'script'; target = 'test_stage2_tree_gpu.ps1'; exe = '';       cuda = $true;  gpu = $true;  what = 'S1/S2: GPU F tree == CPU F tree coefficient-by-coefficient + frozen factor' }
 )
 
 if ($List) {

@@ -226,3 +226,17 @@ if(MSVC)
     set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/cpu_mont_avx.cpp
         PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 endif()
+
+# ---------------------------------------------------------------------------
+# stage2_ref -- ECM stage 2 reference implementation (correctness first).
+# See docs/DEV_STAGE2_GPU_PLAN.md (milestone M1) and tools/test/test_stage2_ref.ps1.
+add_executable(stage2_ref
+    ${CMAKE_CURRENT_SOURCE_DIR}/stage2_ref.cpp
+)
+
+target_include_directories(stage2_ref PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+ecm_target_link_gmp(stage2_ref)
+ecm_tool_output_root(stage2_ref)

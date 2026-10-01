@@ -140,3 +140,4 @@ tools/ecm_worktodo/worktodo_p95_stage2.txt
 
 # gwnum probe build artifacts (the probe itself and its recorded output are tracked)
 /tools/gwnum_probe/bin/
+vc140.pdb

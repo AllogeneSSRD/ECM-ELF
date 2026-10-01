@@ -500,9 +500,20 @@ static std::string get_gp_executable(const std::string &explicit_path = "") {
     return "gp";
 }
 
-static bool compute_group_order_pari_for_sigma3(mpz_t order_out, const mpz_t p,
-                                                uint32_t sigma, const std::string &gp_path,
-                                                std::string *err) {
+/* Group order of the ECM curve attached to `sigma` modulo the prime p, computed by gp/PARI.
+ *
+ * The four parametrizations follow the canonical FindGroupOrder() script (the same one gmp-ecm
+ * ships): param 0 = Suyama sigma (what --method mont and --gpu-param 0 use, i.e. our own stage
+ * 1 default), 1 = "A = 4s^2/2^64-2", 2 = the 6-torsion family, 3 = the historical GPU path
+ * (A = 4s/2^32-2).
+ *
+ * Besides the order we also return gp's exact FACTORIZATION of it (lines "<prime> <exponent>"),
+ * because that is what determines the minimum B1/B2 needed to find this factor -- printed by
+ * --go as go_min_bounds[].  The previous version hardcoded param 3 and returned only the order,
+ * so for a param-0 curve (our default) the reported order was simply the wrong curve's. */
+static bool compute_group_order_pari(mpz_t order_out, std::string *factor_lines_out,
+                                     const mpz_t p, uint32_t sigma, int param,
+                                     const std::string &gp_path, std::string *err) {
     char tmp_file[L_tmpnam];
     if (std::tmpnam(tmp_file) == nullptr) {
         if (err) *err = "failed to create temporary script path";
@@ -526,10 +537,36 @@ static bool compute_group_order_pari_for_sigma3(mpz_t order_out, const mpz_t p,
     const std::string p_dec = mpz_to_dec_string(p);
     gpfile << "p = " << p_dec << ";\n";
     gpfile << "s = " << sigma << ";\n";
-    gpfile << "A = Mod(4*s, p) / Mod(2^32, p) - 2;\n";
-    gpfile << "b = 4*A + 10;\n";
+    switch (param) {
+        case 0:   /* Suyama sigma: our own stage 1 */
+            gpfile << "v = Mod(4*s, p);\n";
+            gpfile << "u = Mod(s^2 - 5, p);\n";
+            gpfile << "x = u^3;\n";
+            gpfile << "A = (3*u + v)*(v - u)^3/(4*x*v) - 2;\n";
+            gpfile << "x = x/v^3;\n";
+            gpfile << "b = x*(x*(x + A) + 1);\n";
+            break;
+        case 1:
+            gpfile << "A = Mod(4*s^2, p)/Mod(2^64, p) - 2;\n";
+            gpfile << "b = 4*A + 10;\n";
+            break;
+        case 2:
+            gpfile << "E0 = ellinit([0, Mod(36, p)]);\n";
+            gpfile << "t = ellmul(E0, [-3, 3], s);\n";
+            gpfile << "x3 = (3*t[1] + t[2] + 6)/(2*(t[2] - 3));\n";
+            gpfile << "A = -(3*x3^4 + 6*x3^2 - 1)/(4*x3^3);\n";
+            gpfile << "b = 1/(4*A + 10);\n";
+            break;
+        default:  /* param 3: the historical GPU path */
+            gpfile << "A = Mod(4*s, p)/Mod(2^32, p) - 2;\n";
+            gpfile << "b = 4*A + 10;\n";
+            break;
+    }
     gpfile << "E = ellinit([0, b*A, 0, b^2, 0]);\n";
-    gpfile << "print(lift(ellcard(E)));\n";
+    gpfile << "n = lift(ellcard(E));\n";
+    gpfile << "print(n);\n";
+    gpfile << "f = factor(n);\n";
+    gpfile << "for(i = 1, #f~, print(f[i,1], \" \", f[i,2]));\n";
     gpfile << "quit();\n";
     gpfile.close();
 
@@ -624,7 +661,8 @@ static bool compute_group_order_pari_for_sigma3(mpz_t order_out, const mpz_t p,
 
     std::istringstream iss(output);
     std::string line;
-    std::string last_int;
+    std::string order_str;
+    std::string factor_lines;
     while (std::getline(iss, line)) {
         trim(line);
         if (line.empty()) continue;
@@ -634,16 +672,30 @@ static bool compute_group_order_pari_for_sigma3(mpz_t order_out, const mpz_t p,
         for (size_t i = start; ok && i < line.size(); ++i) {
             if (!std::isdigit((unsigned char)line[i])) ok = false;
         }
-        if (ok) last_int = line;
+        if (ok) {
+            /* the order is printed before the factor lines */
+            if (order_str.empty()) order_str = line;
+            continue;
+        }
+        /* "<prime> <exponent>" pairs from factor(n) */
+        std::istringstream ls(line);
+        std::string a1, a2, extra;
+        if ((ls >> a1 >> a2) && !(ls >> extra)) {
+            bool ok1 = !a1.empty(), ok2 = !a2.empty();
+            for (char c : a1) if (!std::isdigit((unsigned char)c)) ok1 = false;
+            for (char c : a2) if (!std::isdigit((unsigned char)c)) ok2 = false;
+            if (ok1 && ok2) factor_lines += a1 + " " + a2 + "\n";
+        }
     }
-    if (last_int.empty()) {
+    if (order_str.empty()) {
         if (err) *err = "gp returned no integer ellcard output";
         return false;
     }
-    if (mpz_set_str(order_out, last_int.c_str(), 10) != 0) {
+    if (mpz_set_str(order_out, order_str.c_str(), 10) != 0) {
         if (err) *err = "failed to parse gp ellcard integer";
         return false;
     }
+    if (factor_lines_out != nullptr) *factor_lines_out = factor_lines;
     return true;
 }
 
@@ -4142,6 +4194,14 @@ int main(int argc, char **argv){
        用户中止 (SIGINT/checkpoint abort) 等任何 stage-1 非正常结束。 */
     const bool cli_has_factors = (result.factors != nullptr && result.array_found != nullptr);
 
+    /* Effective parametrization of THIS run, for the --go group-order helper: the CPU
+       Montgomery engine and the Edwards engine both use Suyama sigma = param 0 (their saves
+       carry no PARAM= key, so gmp-ecm/Prime95 read them as param 0), while the GPU engines use
+       opt.gpu_param (0/2/3).  Passing opt.gpu_param unconditionally made --go report the order
+       of a param-3 curve for a param-0 run (measured: largest_prime came back as 2666737705477
+       instead of the true 114713 for the 2^128+1 / sigma=26 case). */
+    const int go_param = (opt.use_mont || opt.use_edwards) ? 0 : opt.gpu_param;
+
     if (cli_has_factors) {
         /* Same D3 fields as the queue path (docs/DEV_ECM_GUI.md): a consumer must not
            have to guess which of the three back-end hit lines it is looking at. */
@@ -4166,8 +4226,9 @@ int main(int argc, char **argv){
                     mpz_t go;
                     mpz_init(go);
                     std::string err;
-                    if (!compute_group_order_pari_for_sigma3(go, result.factors[i], sigma_curve,
-                                                             go_gp_exe, &err)) {
+                    std::string go_factor_lines;
+                    if (!compute_group_order_pari(go, &go_factor_lines, result.factors[i],
+                                                  sigma_curve, go_param, go_gp_exe, &err)) {
                         std::cerr << "go_factor[" << i << "]: gp error: " << err << "\n"
                                   << "Please verify gp is working, or provide path with: --gp <path/to/gp>"
                                   << std::endl;
@@ -4178,6 +4239,59 @@ int main(int argc, char **argv){
                     std::cout << "  go[" << i << "]=" << mpz_to_dec_string(go) << "\n";
                     std::cout << "  go_factor[" << i << "]="
                               << format_group_order_smooth(go_parts) << "\n";
+                    /* Minimum bounds that would find THIS factor, straight from the exact
+                       factorization of #E(F_p) that gp just printed:
+                         min_b1_stage1 : stage 1 alone must cover the largest prime power in the
+                                         order (ECM removes each prime in the order once);
+                         min_b1_stage2 / min_b2_stage2 : to let STAGE 2 finish the job, stage 1
+                                         must cover the order divided by ONE copy of its largest
+                                         prime factor, and B2 must reach that prime.
+                       This is the deterministic way to build a test vector for a given factor
+                       instead of sweeping sigmas. */
+                    {
+                        std::vector<std::pair<std::string, int>> facs;
+                        std::istringstream fs(go_factor_lines);
+                        std::string fl;
+                        while (std::getline(fs, fl)) {
+                            std::istringstream ls(fl);
+                            std::string pr;
+                            int ex = 0;
+                            if (ls >> pr >> ex) facs.push_back(std::make_pair(pr, ex));
+                        }
+                        mpz_t pw, best, best2;
+                        mpz_inits(pw, best, best2, nullptr);
+                        mpz_set_ui(best, 0);
+                        mpz_set_ui(best2, 1);
+                        std::string best_prime, min_b1_stage1, min_b1_stage2 = "1";
+                        int best_exp = 0;
+                        for (const auto &fp : facs) {
+                            mpz_set_str(pw, fp.first.c_str(), 10);
+                            mpz_pow_ui(pw, pw, (unsigned long)fp.second);
+                            if (mpz_cmp(pw, best) > 0) {
+                                mpz_set(best, pw);
+                                best_prime = fp.first;
+                                best_exp = fp.second;
+                                min_b1_stage1 = mpz_to_dec_string(pw);
+                            }
+                        }
+                        for (const auto &fp : facs) {
+                            const int e = fp.second - ((fp.first == best_prime) ? 1 : 0);
+                            if (e <= 0) continue;
+                            mpz_set_str(pw, fp.first.c_str(), 10);
+                            mpz_pow_ui(pw, pw, (unsigned long)e);
+                            if (mpz_cmp(pw, best2) > 0) {
+                                mpz_set(best2, pw);
+                                min_b1_stage2 = mpz_to_dec_string(pw);
+                            }
+                        }
+                        std::cout << "  go_min_bounds[" << i << "]: param=" << go_param
+                                  << " largest_prime=" << (best_prime.empty() ? "0" : best_prime)
+                                  << " min_b1_stage1=" << (min_b1_stage1.empty() ? "0" : min_b1_stage1)
+                                  << " min_b1_stage2=" << min_b1_stage2
+                                  << " min_b2_stage2=" << (best_prime.empty() ? "0" : best_prime)
+                                  << " largest_exponent=" << best_exp << "\n";
+                        mpz_clears(pw, best, best2, nullptr);
+                    }
                     mpz_clear(go);
                 }
             }

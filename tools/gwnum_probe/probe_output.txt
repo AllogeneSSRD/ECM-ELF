@@ -1,0 +1,88 @@
+﻿# gwnum probe runs (3 repetitions, --quick = 3571 and 12323 bits; host: AMD Ryzen AI 9 HX 370, Zen 5)
+
+===== run 1  (2026-09-30 10:38:47)
+gwnum probe -- IBDWT feasibility for our ECM sizes
+cpu: AMD Ryzen AI 9 HX 370 w/ Radeon 890M           
+cpu flags: 0x00d6ffaf  avx2=1 avx512f=1 avx512vl=1 avx512dq=1  cores=24
+gwnum version: 31.4
+
+== 2^3571 - 1 (3571 bits, Mersenne form)  iters=20000
+  gwnum auto (AVX-512)       mul     0.51 us (  1971706/s)  sqr     0.35 us  mul[FFT_S2]     0.35 us  fftlen=256 type=1 arch=8 err=8.78e-07 bad=0
+                             fft: AVX-512 FFT length 256
+  AVX-512 off -> FMA3        mul     0.37 us (  2712637/s)  sqr     0.26 us  mul[FFT_S2]     0.26 us  fftlen=160 type=1 arch=4 err=0.0625 bad=0
+                             fft: FMA3 FFT length 160
+  AVX-512+FMA3 off -> AVX    mul     0.37 us (  2702666/s)  sqr     0.26 us  mul[FFT_S2]     0.26 us  fftlen=160 type=1 arch=3 err=0.0781 bad=0
+                             fft: AVX FFT length 160
+  gwnum general modulus      mul     1.37 us (   728903/s)  sqr     1.09 us  mul[FFT_S2]     0.00 us  fftlen=256 type=1 arch=8 err=2.54e-06 bad=0
+                             fft: Montgomery reduction AVX-512 FFT length 2x256
+  GMP (zen3 build)           mul+mod     3.01 us (   332336/s)   raw mpz_mul     0.97 us
+
+== 2^12323 - 1 (12323 bits, Mersenne form)  iters=20000
+  gwnum auto (AVX-512)       mul     1.14 us (   874160/s)  sqr     0.79 us  mul[FFT_S2]     0.80 us  fftlen=640 type=1 arch=8 err=0.00276 bad=0
+                             fft: AVX-512 FFT length 640
+  AVX-512 off -> FMA3        mul     1.37 us (   729954/s)  sqr     1.00 us  mul[FFT_S2]     0.97 us  fftlen=640 type=1 arch=4 err=0.00244 bad=0
+                             fft: FMA3 FFT length 640
+  AVX-512+FMA3 off -> AVX    mul     1.34 us (   745529/s)  sqr     0.97 us  mul[FFT_S2]     0.99 us  fftlen=640 type=1 arch=3 err=0.00269 bad=0
+                             fft: AVX FFT length 640
+  gwnum general modulus      mul     3.24 us (   308515/s)  sqr     2.54 us  mul[FFT_S2]     0.00 us  fftlen=640 type=1 arch=8 err=0.00581 bad=0
+                             fft: Montgomery reduction AVX-512 FFT length 2x640
+  GMP (zen3 build)           mul+mod    22.71 us (    44038/s)   raw mpz_mul     9.36 us
+
+
+===== run 2  (2026-09-30 10:38:58)
+gwnum probe -- IBDWT feasibility for our ECM sizes
+cpu: AMD Ryzen AI 9 HX 370 w/ Radeon 890M           
+cpu flags: 0x00d6ffaf  avx2=1 avx512f=1 avx512vl=1 avx512dq=1  cores=24
+gwnum version: 31.4
+
+== 2^3571 - 1 (3571 bits, Mersenne form)  iters=20000
+  gwnum auto (AVX-512)       mul     0.58 us (  1724450/s)  sqr     0.34 us  mul[FFT_S2]     0.35 us  fftlen=256 type=1 arch=8 err=8.78e-07 bad=0
+                             fft: AVX-512 FFT length 256
+  AVX-512 off -> FMA3        mul     0.36 us (  2752243/s)  sqr     0.26 us  mul[FFT_S2]     0.25 us  fftlen=160 type=1 arch=4 err=0.0625 bad=0
+                             fft: FMA3 FFT length 160
+  AVX-512+FMA3 off -> AVX    mul     0.37 us (  2721644/s)  sqr     0.26 us  mul[FFT_S2]     0.26 us  fftlen=160 type=1 arch=3 err=0.0781 bad=0
+                             fft: AVX FFT length 160
+  gwnum general modulus      mul     1.37 us (   731861/s)  sqr     1.09 us  mul[FFT_S2]     0.00 us  fftlen=256 type=1 arch=8 err=2.54e-06 bad=0
+                             fft: Montgomery reduction AVX-512 FFT length 2x256
+  GMP (zen3 build)           mul+mod     3.00 us (   333523/s)   raw mpz_mul     0.97 us
+
+== 2^12323 - 1 (12323 bits, Mersenne form)  iters=20000
+  gwnum auto (AVX-512)       mul     1.15 us (   869044/s)  sqr     0.79 us  mul[FFT_S2]     0.80 us  fftlen=640 type=1 arch=8 err=0.00276 bad=0
+                             fft: AVX-512 FFT length 640
+  AVX-512 off -> FMA3        mul     1.36 us (   733705/s)  sqr     1.00 us  mul[FFT_S2]     0.97 us  fftlen=640 type=1 arch=4 err=0.00244 bad=0
+                             fft: FMA3 FFT length 640
+  AVX-512+FMA3 off -> AVX    mul     1.34 us (   747228/s)  sqr     0.96 us  mul[FFT_S2]     0.98 us  fftlen=640 type=1 arch=3 err=0.00269 bad=0
+                             fft: AVX FFT length 640
+  gwnum general modulus      mul     3.24 us (   308696/s)  sqr     2.56 us  mul[FFT_S2]     0.00 us  fftlen=640 type=1 arch=8 err=0.00581 bad=0
+                             fft: Montgomery reduction AVX-512 FFT length 2x640
+  GMP (zen3 build)           mul+mod    22.57 us (    44315/s)   raw mpz_mul     8.32 us
+
+
+===== run 3  (2026-09-30 10:39:01)
+gwnum probe -- IBDWT feasibility for our ECM sizes
+cpu: AMD Ryzen AI 9 HX 370 w/ Radeon 890M           
+cpu flags: 0x00d6ffaf  avx2=1 avx512f=1 avx512vl=1 avx512dq=1  cores=24
+gwnum version: 31.4
+
+== 2^3571 - 1 (3571 bits, Mersenne form)  iters=20000
+  gwnum auto (AVX-512)       mul     0.50 us (  1992508/s)  sqr     0.34 us  mul[FFT_S2]     0.35 us  fftlen=256 type=1 arch=8 err=8.78e-07 bad=0
+                             fft: AVX-512 FFT length 256
+  AVX-512 off -> FMA3        mul     0.37 us (  2730115/s)  sqr     0.27 us  mul[FFT_S2]     0.27 us  fftlen=160 type=1 arch=4 err=0.0625 bad=0
+                             fft: FMA3 FFT length 160
+  AVX-512+FMA3 off -> AVX    mul     0.37 us (  2684312/s)  sqr     0.26 us  mul[FFT_S2]     0.26 us  fftlen=160 type=1 arch=3 err=0.0781 bad=0
+                             fft: AVX FFT length 160
+  gwnum general modulus      mul     1.37 us (   730106/s)  sqr     1.09 us  mul[FFT_S2]     0.00 us  fftlen=256 type=1 arch=8 err=2.54e-06 bad=0
+                             fft: Montgomery reduction AVX-512 FFT length 2x256
+  GMP (zen3 build)           mul+mod     3.00 us (   333785/s)   raw mpz_mul     0.96 us
+
+== 2^12323 - 1 (12323 bits, Mersenne form)  iters=20000
+  gwnum auto (AVX-512)       mul     1.15 us (   866885/s)  sqr     0.78 us  mul[FFT_S2]     0.80 us  fftlen=640 type=1 arch=8 err=0.00276 bad=0
+                             fft: AVX-512 FFT length 640
+  AVX-512 off -> FMA3        mul     1.36 us (   732947/s)  sqr     1.00 us  mul[FFT_S2]     0.97 us  fftlen=640 type=1 arch=4 err=0.00244 bad=0
+                             fft: FMA3 FFT length 640
+  AVX-512+FMA3 off -> AVX    mul     1.34 us (   744560/s)  sqr     0.96 us  mul[FFT_S2]     0.98 us  fftlen=640 type=1 arch=3 err=0.00269 bad=0
+                             fft: AVX FFT length 640
+  gwnum general modulus      mul     3.23 us (   309273/s)  sqr     2.55 us  mul[FFT_S2]     0.00 us  fftlen=640 type=1 arch=8 err=0.00581 bad=0
+                             fft: Montgomery reduction AVX-512 FFT length 2x640
+  GMP (zen3 build)           mul+mod    22.58 us (    44296/s)   raw mpz_mul     8.15 us
+

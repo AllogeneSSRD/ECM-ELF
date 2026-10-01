@@ -508,6 +508,7 @@ build\Debug\opencl_ecm_montsqr.exe --bits 512 1000 128 1
 | 程序二进制缓存 | FNV-1a 键、`/.opencl_cache/` | 实现见 `kernels/opencl/impl_opencl.cpp`；变量见下表 |
 | 内核树与 manifest | `.cl` 注册、路径枚举 | [kernels/opencl/bench/mp_addsub/README.md](kernels/opencl/bench/mp_addsub/README.md) |
 | 调试参数 | `--profile-ops`、`--verify-gpu` 等 | [docs/DEBUG_PARAMETERS_GUIDE.md](docs/DEBUG_PARAMETERS_GUIDE.md) |
+| **stage 2 自研 / GPU 化可行性** | 复用 gwnum 的可行性与实测；自研 CPU stage 2 的结论；**CUDA stage 2 规划（含分阶段里程碑与 go/no-go 门槛）** | [docs/DEV_GWNUM_FEASIBILITY.md](docs/DEV_GWNUM_FEASIBILITY.md) · [docs/DEV_STAGE2_SELFHOST_FEASIBILITY.md](docs/DEV_STAGE2_SELFHOST_FEASIBILITY.md) · [docs/DEV_STAGE2_GPU_PLAN.md](docs/DEV_STAGE2_GPU_PLAN.md) |
 
 ---
 
