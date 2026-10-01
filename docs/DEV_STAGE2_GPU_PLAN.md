@@ -2334,3 +2334,48 @@ S4/S5 路径给乘法装了**归约 hook**，hook 直接从 `digits` 自己归�
 
 * 每曲线仍是 **611.19 s**（生产形状，3.20× 基线），因子集合不变；NTT 预算归属 ~67%。
 * 设备归约 **88 s / NTT 的 33%**，其中尾部 2/3 ⇒ 下一轮的**第一条**就是 §35.1 的除法归约（预计省 ~22 s，2-3%），第二条仍是那 ~33% 碎片（`hRes` 的 D2H 等）。
+
+---
+
+## 36. 找到那 33% 碎片的真身：**归约 hook 每次调用都在做一次 8 字节 D2H**（2026-07-… 记于 2026-10-02）
+
+给 hook 的"计时器之外"部分装了表（`s4_reduce_hook_tail:` 与 `S->t_hookd2h/t_hooksample`），读代码时就看到了问题本身：
+
+```cpp
+    /* 旧代码，逐字 */
+    CK(cudaMemset(R.dbad, 0, sizeof(unsigned long long)));          // 每次调用一次驱动调用
+    S2G_DISPATCH(... s4_launch_reduce ...);                          // ← t_reduce 从这里开始
+    CK(cudaDeviceSynchronize());
+    S->t_reduce += now_s() - t0;
+    CK(cudaMemcpy(&hbad, R.dbad, 8, cudaMemcpyDeviceToHost));        // 每次调用一次小 D2H
+```
+
+`dbad` 是"槽窗口超出 `slot_bits` 的数字个数"的**单调诊断计数器** —— 却**每次调用**都 `cudaMemset` 一次、再把 8 字节 `cudaMemcpy` 回来一次。小 D2H 在这台机器上是**纯延迟**（批量 D2H 才 2.9 GB/s），一次 10-20 µs：1e11 形状 589960 次调用、生产形状 **3.81e6 次调用** ⇒ 这正好是那"没人归属的 23 µs/调用"的一大块。
+
+**修法**（保持诊断能力，去掉每次调用的开销）：
+
+* 计数器**每个形状只清一次**（形状第一次调用时）；
+* **每 `g_s4_check_every`（8）次调用读一次**（与运行内 GMP oracle 同节拍），并与上次读到的值比较 ⇒ **违规仍会在发生后的 8 次调用内报 FATAL**；
+* 时间记进 `t_hookd2h`，随 `s4_reduce_hook_tail:` 打印。
+
+**实测**：冻结门禁 **20/20**（这条路径的所有正确性断言都还在）；B2=1e11 同形状 `per_call` 76.8 → **65.9 µs**、`ntt_seconds` 45.3 → **38.9 s**，但本机运行间噪声有 ±10%（同形状历史：90.4/73.7/77.1/85.7/85.2/74.2/79.1 s），所以**按"小、且在噪声内"记**；生产形状（调用数 6.5×）才是它该兑现的地方，用 §36.1 的同一命令复测。
+
+**教训（与 §26.7/§34 同源）**：**"每次调用都做一次 8 字节 D2H"** 这种模式在宿主循环里几乎看不见（没有计时器覆盖），但只要数一下**调用次数 × 单次延迟**就知道它是分钟级的。这条与 §33 的"主机打包 36.8 µs/调用"是同一类错误。
+
+### 36.1 生产形状复测（同一命令，`_prod_cntfix.log`）
+
+```
+real_setup: prime_powers=25 ladder_chain_seconds=12.098
+ftree_real: leaves=51840 padded=65536 muls=51839 ntt_calls=51839 ntt_seconds=3.332
+real_batched_split: giant=49.886 gtrees=228.720 fold=77.473 descent=35.313 inv=2.403 accum=11.461 name=8.533 f_tree_incl=14.445
+real_batched_breakdown: wall=655.45 ntt_calls=3814929 ntt_launches=1927 ntt_seconds=266.662 (40.7%)
+real_batched_coeffback: us_per_call=5.4 total=20.578 s volume=54.96 GB effective_GBps=2.67
+real_batched_carrycheck: us_per_call=4.5 total=17.272 s
+real_batched_rawupload: us_per_call=2.8 total=10.862 s volume=57.32 GB effective_GBps=5.28
+s4_multiply_stats: launches=1946 poly_muls=3866768 coeffs_reduced=89776320 t_reduce=88.855 gmp_check_bad=0
+stage2: ... hits=1 bad_factors=0 factors=42089,72677470068901752199 hit_primes=3511 elapsed=655.45
+```
+
+* **因子集合与基线逐项一致** ✓（`bad_factors=0`、`hit_primes=3511`）。
+* 墙钟 **655.45 s**，而同一命令上一轮是 **611.19 s** ⇒ **这次修复的效果落在噪声里**（同形状同命令的历史散布 ~±7%）。**按实况记**：它去掉的是**可证明不必要**的每调用驱动工作（单调诊断计数器），但**没能测出可观的时间收益**，因为单次 8 字节 D2H 的成本比我预估的低（`t_hookd2h` 计时器已就位；它目前只在冻结路径打印，真实路径的打印是下一轮的一行小改动）。
+* 教训依然是**先量再改**：我在 §36 开头把这一项估成"分钟级"，实测把它降到"噪声级"。**估错的代价只是四次构建，不是错的代码** —— 这正是把改动和度量绑在一起的价值。

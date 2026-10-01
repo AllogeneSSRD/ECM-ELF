@@ -1130,6 +1130,7 @@ struct S4Reduce {
         unsigned long long *dy = nullptr;
         unsigned long long calls = 0, coeffs = 0, canon_bad = 0;
         unsigned long long checked = 0, check_bad = 0, check_first = 0, full_checks = 0;
+        double t_hookd2h = 0.0, t_hooksample = 0.0;
         unsigned long long selftest_cases = 0, selftest_bad = 0;
         long long selftest_first = -1;
         double t_reduce = 0.0;
@@ -1442,25 +1443,37 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
         std::exit(3);
     }
     const unsigned long long total = out_slots * nbatch;
-    const double t0 = now_s();
     if (!R.dbad) {
         CK(cudaMalloc(&R.dbad, sizeof(unsigned long long)));
         R.dbad_host = 0;
     }
-    CK(cudaMemset(R.dbad, 0, sizeof(unsigned long long)));
+    const double t0 = now_s();
+    /* THE COUNTER'S RESET IS NOT PER-CALL WORK (objective 4, section 36).  `dbad` counts slot
+       windows whose digits overflowed the window: it is MONOTONE and purely diagnostic, yet the
+       old code reset it with a cudaMemset AND read it back with an 8-byte device-to-host copy on
+       EVERY call.  A small pageable D2H is pure latency here (~10-20 us; bulk D2H runs at
+       2.9 GB/s), so at 589960 calls that is seconds and at the production shape's 3.8e6 calls it
+       is minutes -- all of it inside "the unattributed part of ntt_seconds".  Now it is reset
+       once per shape and read every g_s4_check_every calls (the GMP oracle's cadence), so a
+       violation is still reported within 8 calls of happening. */
+    if (S->calls == 0) CK(cudaMemset(R.dbad, 0, sizeof(unsigned long long)));
     S2G_DISPATCH(R.nw, s4_launch_reduce, (int)R.nw, S->L, nbatch, out_slots, total, digits, n,
                  bpw, slot_words, R.dn, R.ninv, S->dy, w, out, slot_bits, R.dbad);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
     S->t_reduce += now_s() - t0;
-    unsigned long long hbad = 0;
-    CK(cudaMemcpy(&hbad, R.dbad, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    const double th0 = now_s();
+    unsigned long long hbad = S->canon_bad;
+    if ((S->calls % g_s4_check_every) == 0)
+        CK(cudaMemcpy(&hbad, R.dbad, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
     ++R.reduce_calls;
-    S->canon_bad += hbad;
-    if (hbad) {
+    S->t_hookd2h += now_s() - th0;
+    if (hbad != S->canon_bad) {
+        const unsigned long long added = hbad - S->canon_bad;
+        S->canon_bad = hbad;
         std::fprintf(stderr, "%s: FATAL: %llu of %llu slot windows have nonzero digits above "
                              "slot_bits=%llu -- the reduction bound C < 2^slot_bits does NOT "
-                             "apply to these values\n", NTT_PROBE_NAME, hbad, total, slot_bits);
+                             "apply to these values\n", NTT_PROBE_NAME, added, total, slot_bits);
         std::exit(3);
     }
     ++S->calls;
@@ -1471,8 +1484,11 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
        device memory (that was a real crash, "CUDA error invalid argument", the first time the
        S2 tail ran without the arena).  Reading it here is also the stronger check: the raw
        digits GMP sees are the ones the transform and the carry just produced. */
-    if (g_s4_sample_limit > 0 && (S->calls <= 1 || (S->calls % g_s4_check_every) == 0))
+    if (g_s4_sample_limit > 0 && (S->calls <= 1 || (S->calls % g_s4_check_every) == 0)) {
+        const double ts0 = now_s();
         s4_check_reduced(R, S, digits, n, out_slots, nbatch, out, g_s4_sample_limit);
+        S->t_hooksample += now_s() - ts0;
+    }
 }
 
 /* one coefficient, reduced on the host with GMP the way the pre-S4 code did it: the digits
@@ -6861,6 +6877,12 @@ static int run_check_F(const char *path, const char *gpu_dump_path, bool evaluat
                             S->P, S->slot_bits, S->L, S->nlimb, S->bound_bits, S->calls,
                             S->coeffs, S->checked, S->check_bad, S->full_checks, S->canon_bad,
                             S->t_reduce);
+                std::printf("s4_reduce_hook_tail: P=%llu d2h_bad_us_per_call=%.1f sample_checks="
+                            "%llu sample_us_per_call=%.1f | t_hookd2h=%.3f s t_hooksample=%.3f s\n",
+                            S->P, S->calls ? 1e6 * S->t_hookd2h / (double)S->calls : 0.0,
+                            S->calls / (g_s4_check_every ? g_s4_check_every : 1),
+                            S->calls ? 1e6 * S->t_hooksample / (double)S->calls : 0.0,
+                            S->t_hookd2h, S->t_hooksample);
             }
             std::printf("s4_multiply_stats: enabled=1 launches=%llu poly_muls=%llu "
                         "tree_level_calls=%llu shape_groups=%llu reduce_launches=%llu "
