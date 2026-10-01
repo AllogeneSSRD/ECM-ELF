@@ -2309,6 +2309,7 @@ struct NttMulStats {
        proves the exactness bound) and the device-to-device copy of the two operands into the
        arena's scratch (section 34) */
     double t_plan = 0.0, t_opcopy = 0.0;
+    double t_hout = 0.0;
     unsigned long long carry_residual = 0, carry_max_bits = 0;
     int fuse_t = 0, fuse_nms = 0, fuse_ms[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     bool exact_valid = false;
@@ -2718,6 +2719,9 @@ struct NttPassResult {
        kernel over N*nbatch digits and a device-to-host copy) and it was untimed, which is why
        more than half of ntt_seconds had no owner (docs/DEV_STAGE2_GPU_PLAN.md section 34). */
     double t_check = 0.0;
+    /* the slot assembly + its D2H: skipped entirely when the caller has a reduction hook, which
+       never reads them (section 35) */
+    double t_hout = 0.0;
     unsigned long long *digits = nullptr;      /* the buffer holding the canonical digits */
     std::vector<unsigned long long> hOut;      /* nbatch * out_slots slot projections */
     std::vector<unsigned long long> hRes;      /* 2 * nbatch carry diagnostics */
@@ -2734,7 +2738,8 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     int dump, std::vector<unsigned long long> *hfa,
                                     std::vector<unsigned long long> *hfb,
                                     std::vector<unsigned long long> *hPre,
-                                    std::vector<unsigned long long> *hPost)
+                                    std::vector<unsigned long long> *hPost,
+                                    bool need_hout = true)
 {
     NttPassResult r;
     const unsigned long long N = sh.N, out_slots = sh.out_slots;
@@ -2818,17 +2823,28 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
         CK(cudaMemcpy(hPost->data(), dDig, N * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
     }
-    const unsigned int blSlots = (unsigned int)((out_slots + threads - 1) / threads);
-    {
-        const dim3 gr(blSlots, (unsigned int)nbatch);
-        slot_assemble_kernel<<<gr, threads>>>(dDig, out_slots, sh.slot_bits, sh.slot_stride,
-                                              sh.bpw, dOut, N);
-    }
-    CK(cudaGetLastError());
-    r.hOut.assign((size_t)(out_slots * nbatch), 0);
-    CK(cudaMemcpy(r.hOut.data(), dOut, r.hOut.size() * sizeof(unsigned long long),
-                  cudaMemcpyDeviceToHost));
     r.t_slot = now_s() - t2;
+    /* THE SLOT PROJECTION IS ONLY FOR A CALLER WITHOUT A HOOK (objective 4, section 35): the
+       caller that installed one reduces the coefficients on the device out of `digits` itself and
+       never looks at `dOut`/`hOut`, so the assembly kernel and the D2H of out_slots*nbatch words
+       are pure waste for it.  Measured and switchable (NTT_S4_KEEPHOUT=1 restores the old
+       behaviour) rather than assumed. */
+    const double t4 = now_s();
+    if (need_hout) {
+        const unsigned int blSlots = (unsigned int)((out_slots + threads - 1) / threads);
+        {
+            const dim3 gr(blSlots, (unsigned int)nbatch);
+            slot_assemble_kernel<<<gr, threads>>>(dDig, out_slots, sh.slot_bits, sh.slot_stride,
+                                                  sh.bpw, dOut, N);
+        }
+        CK(cudaGetLastError());
+        r.hOut.assign((size_t)(out_slots * nbatch), 0);
+        CK(cudaMemcpy(r.hOut.data(), dOut, r.hOut.size() * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToHost));
+    } else {
+        r.hOut.clear();
+    }
+    r.t_hout = now_s() - t4;
 
     /* Carry convergence assert (UNTIMED until now, and always run -- a carry that stops early is
        silent: the digits are simply wrong above some index).  ONE PASS over the whole digit array
@@ -2903,6 +2919,12 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
     const size_t slice_in = (size_t)P * W;               /* u64 words per operand slice */
     std::vector<uint64_t> hA((size_t)(N * nbatch), 0), hB((size_t)(N * nbatch), 0);
     unsigned long long maxdigit = 0;
+    /* with a reduction hook the caller never reads the slot projections, so the assembly kernel
+       and its D2H are skipped (NTT_S4_KEEPHOUT=1 restores the old behaviour for the A/B) */
+    const bool want_hout = (hook == nullptr || hook->run == nullptr) ? true : [] {
+        const char *e = std::getenv("NTT_S4_KEEPHOUT");
+        return e && *e && std::atoi(e) != 0;
+    }();
     const double thp0 = now_s();
     for (unsigned long long s = 0; s < nbatch; ++s) {
         if (!ntt_pack_operand(sh, wordsA + s * slice_in, wordsB + s * slice_in,
@@ -2951,8 +2973,9 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         const unsigned long long m = ((nbatch - s0) < max_y) ? (nbatch - s0) : max_y;
         NttPassResult rr = ntt_run_passes(sh, fc, dA + s0 * N, dB + s0 * N, dQ + s0 * N,
                                           dOut + s0 * out_slots, dRes + 2 * s0, m, 0,
-                                          nullptr, nullptr, nullptr, nullptr);
-        std::copy(rr.hOut.begin(), rr.hOut.end(), r.hOut.begin() + (long)(s0 * out_slots));
+                                          nullptr, nullptr, nullptr, nullptr, want_hout);
+        if (want_hout)
+            std::copy(rr.hOut.begin(), rr.hOut.end(), r.hOut.begin() + (long)(s0 * out_slots));
         std::copy(rr.hRes.begin(), rr.hRes.end(), r.hRes.begin() + (long)(2 * s0));
         r.t_fwd += rr.t_fwd; r.t_inv += rr.t_inv; r.t_slot += rr.t_slot;
         r.t_check += rr.t_check;
@@ -3072,14 +3095,23 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
     const double t_copy = now_s() - tcopy0;
     const unsigned long long max_y = 65535;
     const unsigned long long nchunk = (nbatch + max_y - 1) / max_y;
+    /* with a reduction hook the caller never reads the slot projections, so the assembly kernel
+       and its D2H are skipped here too (NTT_S4_KEEPHOUT=1 restores the old behaviour for the A/B) */
+    const bool want_hout = (hook == nullptr || hook->run == nullptr) ? true : [] {
+        const char *e = std::getenv("NTT_S4_KEEPHOUT");
+        return e && *e && std::atoi(e) != 0;
+    }();
     NttPassResult r;
+    if (want_hout) r.hOut.assign((size_t)(out_slots * nbatch), 0);
     r.hRes.assign((size_t)(2 * nbatch), 0);
     for (unsigned long long ci = 0; ci < nchunk; ++ci) {
         const unsigned long long s0 = ci * max_y;
         const unsigned long long m = ((nbatch - s0) < max_y) ? (nbatch - s0) : max_y;
         NttPassResult rr = ntt_run_passes(sh, fc, dA + s0 * N, dB + s0 * N, dQ + s0 * N,
                                           dOut + s0 * out_slots, dRes + 2 * s0, m, 0,
-                                          nullptr, nullptr, nullptr, nullptr);
+                                          nullptr, nullptr, nullptr, nullptr, want_hout);
+        if (!rr.hOut.empty())
+            std::copy(rr.hOut.begin(), rr.hOut.end(), r.hOut.begin() + (long)(s0 * out_slots));
         std::copy(rr.hRes.begin(), rr.hRes.end(), r.hRes.begin() + (long)(2 * s0));
         r.t_fwd += rr.t_fwd; r.t_inv += rr.t_inv; r.t_slot += rr.t_slot;
         r.t_check += rr.t_check;
@@ -3109,6 +3141,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         st->t_check += r.t_check;
         st->t_plan += t_plan;
         st->t_opcopy += t_copy;
+        st->t_hout += r.t_hout;
         /* the DEVICE entry point packs on the device: no host packing, no host scan and no
            operand upload to attribute, so those three fields stay 0 on this path */
         st->fuse_t = fc.t; st->fuse_nms = fc.nms;
