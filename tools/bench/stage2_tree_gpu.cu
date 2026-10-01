@@ -890,6 +890,16 @@ struct PolyLayer {
        ntt_seconds that is not t_fwd/t_inv/t_slot; these four are the measured parts of it. */
     double t_setup = 0.0, t_pack = 0.0, t_maxc = 0.0, t_h2d = 0.0, t_d2h = 0.0, t_ext = 0.0,
            t_xchk = 0.0;
+    /* OBJECTIVE 4 (section 32): the copy of the reduced PRODUCT back to the host that
+       poly_mul_batch_modN does once per chunk -- the volume and the time of it, measured here
+       because no timer in the probe covers it (the probe's host-side timers belong to the host
+       implementation, which the batched path does not use). */
+    double t_d2h_coeff = 0.0;
+    unsigned long long d2h_coeff_words = 0;
+    /* OBJECTIVE 4: the three phases of the BATCHED entry point that its timers never covered:
+       the host-side packing of the operands, the max-coefficient scan over the packed batch, and
+       the upload of the packed operands (section 32). */
+    double t_hpack = 0.0, t_scan = 0.0, t_h2d_batch = 0.0;
 
     PolyLayer() { mpz_init(N); }
     ~PolyLayer() { mpz_clear(N); }
@@ -1753,7 +1763,13 @@ static void poly_mul_batch_modN(PolyLayer &L,
                                                (s0 == 0) ? &slots : nullptr, &st, L.arena, &h2,
                                                nullptr);
         if (r1 != 0) { rc = r1; break; }
-        /* the reduced coefficients of this chunk, back to the host */
+        /* the reduced coefficients of this chunk, back to the host -- AND THIS TRANSFER IS THE
+           POINT OF OBJECTIVE 4 (section 32): it is `m * out_slots * W` words, i.e. the WHOLE
+           product of every slice at full slot width, and it is neither inside the probe's timers
+           (they belong to the host implementation) nor inside the tree's own phases.  It is
+           therefore timed and counted HERE, so "the 111 us per call that nobody measured" can be
+           attributed instead of guessed. */
+        const double td0 = now_s();
         std::vector<unsigned long long> all((size_t)(m * out_slots * W), 0ull);
         CK(cudaMemcpy(all.data(), h2.out, all.size() * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
@@ -1761,6 +1777,8 @@ static void poly_mul_batch_modN(PolyLayer &L,
             std::copy(all.begin() + (long)(s * out_slots * W),
                       all.begin() + (long)(s * out_slots * W + nc * W),
                       out.begin() + (long)((s0 + s) * nc * W));
+        L.t_d2h_coeff += now_s() - td0;
+        L.d2h_coeff_words += (unsigned long long)all.size();
     }
     L.ntt_seconds += now_s() - t0;
     if (rc != 0) {
@@ -1775,6 +1793,9 @@ static void poly_mul_batch_modN(PolyLayer &L,
     L.t_fwd += st.t_fwd;
     L.t_inv += st.t_inv;
     L.t_slot += st.t_slot;
+    L.t_hpack += st.t_hpack;
+    L.t_scan += st.t_scan;
+    L.t_h2d_batch += st.t_h2d_batch;
     L.max_ntt_words = std::max(L.max_ntt_words, st.N);
     L.max_ntt_coeffs = std::max(L.max_ntt_coeffs, (unsigned long long)P);
     L.max_slot_bits = std::max(L.max_slot_bits, st.slot_bits);
@@ -6182,6 +6203,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const double ns = L.ntt_seconds;
         const double fw0 = L.t_fwd, iv0 = L.t_inv, sl0 = L.t_slot, st0 = L.t_setup, pk0 = L.t_pack,
                      mc0 = L.t_maxc, h20 = L.t_h2d, d20 = L.t_d2h, ex0 = L.t_ext, xc0 = L.t_xchk;
+        const double dc0 = L.t_d2h_coeff;
+        const unsigned long long dw0 = L.d2h_coeff_words;
+        const double hp0 = L.t_hpack, sc0 = L.t_scan, hb0 = L.t_h2d_batch;
         const double t0 = now_s();
         BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad);
         const double el = now_s() - t0;
@@ -6235,6 +6259,22 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                                  (L.t_h2d - h20) + (L.t_d2h - d20) + (L.t_ext - ex0) +
                                  (L.t_xchk - xc0)) * 1e6,
                         L.ntt_calls - nb);
+            /* OBJECTIVE 4: the one phase the probe cannot see -- the reduced product coming back
+               to the host once per chunk in the batched path (section 32). */
+            const double gb = (double)(L.d2h_coeff_words - dw0) * 8.0 / 1073741824.0;
+            const double tdc = L.t_d2h_coeff - dc0;
+            std::printf("real_batched_coeffback: us_per_call=%.1f total=%.3f s volume=%.2f GB "
+                        "effective_GBps=%.2f share_of_ntt=%.1f%%\n",
+                        inv_c * tdc * 1e6, tdc, gb, tdc > 0 ? gb / tdc : 0.0,
+                        (L.ntt_seconds - ns) > 0 ? 100.0 * tdc / (L.ntt_seconds - ns) : 0.0);
+            /* and the three phases the batched entry point never had timers for */
+            const double thp = L.t_hpack - hp0, tsc = L.t_scan - sc0, th2 = L.t_h2d_batch - hb0;
+            const double acc = inv_c * (thp + tsc + th2) * 1e6;
+            std::printf("real_batched_hostbatch: us_per_call=%.1f (pack=%.1f scan=%.1f h2d=%.1f) "
+                        "totals pack=%.3f scan=%.3f h2d=%.3f s share_of_ntt=%.1f%%\n", acc,
+                        inv_c * thp * 1e6, inv_c * tsc * 1e6, inv_c * th2 * 1e6, thp, tsc, th2,
+                        (L.ntt_seconds - ns) > 0 ? 100.0 * (thp + tsc + th2) / (L.ntt_seconds - ns)
+                                                 : 0.0);
         }
         if (s4_on) {
             unsigned long long sel_cases = 0, sel_bad = 0, checked = 0, check_bad = 0,

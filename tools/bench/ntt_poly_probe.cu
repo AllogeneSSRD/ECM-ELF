@@ -2297,6 +2297,12 @@ struct NttMulStats {
     int S = 0, k = 0, bpw = 0;
     int passes_fwd = 0, passes_total = 0, carry_rounds = 0;
     double mem_mb = 0.0, t_fwd = 0.0, t_inv = 0.0, t_slot = 0.0;
+    /* OBJECTIVE 4 (docs/DEV_STAGE2_GPU_PLAN.md section 32): the batched entry point packs its
+       operands ON THE HOST, scans them for the max coefficient, and ships them to the device --
+       none of which any of the timers above covers, because they were written for the other
+       entry point.  Measured separately so the "111 us per call that nobody measured" can be
+       attributed instead of guessed. */
+    double t_hpack = 0.0, t_scan = 0.0, t_h2d_batch = 0.0;
     unsigned long long carry_residual = 0, carry_max_bits = 0;
     int fuse_t = 0, fuse_nms = 0, fuse_ms[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     bool exact_valid = false;
@@ -2884,18 +2890,22 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
     const size_t slice_in = (size_t)P * W;               /* u64 words per operand slice */
     std::vector<uint64_t> hA((size_t)(N * nbatch), 0), hB((size_t)(N * nbatch), 0);
     unsigned long long maxdigit = 0;
+    const double thp0 = now_s();
     for (unsigned long long s = 0; s < nbatch; ++s) {
         if (!ntt_pack_operand(sh, wordsA + s * slice_in, wordsB + s * slice_in,
                               hA.data() + s * N, hB.data() + s * N, &maxdigit))
             return 5;
     }
+    const double t_hpack = now_s() - thp0;
     unsigned long long maxcoeff = 0, maxcoeff_k = 0, maxcoeff_limbs = 0;
     bool maxcoeff_ran = false;
+    const double tsc0 = now_s();
     {
         const int rc = ntt_shape_maxcoeff(sh, hA, hB, &maxcoeff, &maxcoeff_k, &maxcoeff_ran,
                                           &maxcoeff_limbs);
         if (rc) return rc;
     }
+    const double t_scan = now_s() - tsc0;
     NttArena::BufEntry *ab = ntt_arena_bufs(arena, N, out_slots, nbatch);
     unsigned long long *dA = nullptr, *dB = nullptr, *dQ = nullptr, *dOut = nullptr,
                        *dRes = nullptr;
@@ -2910,10 +2920,12 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         CK(cudaMalloc(&dOut, (size_t)(out_slots * nbatch) * sizeof(unsigned long long)));
         CK(cudaMalloc(&dRes, 2 * (size_t)nbatch * sizeof(unsigned long long)));
     }
+    const double h2d0 = now_s();
     CK(cudaMemcpy(dA, hA.data(), hA.size() * sizeof(unsigned long long),
                   cudaMemcpyHostToDevice));
     CK(cudaMemcpy(dB, hB.data(), hB.size() * sizeof(unsigned long long),
                   cudaMemcpyHostToDevice));
+    const double t_h2d_batch = now_s() - h2d0;
     /* nbatch is a gridDim.y, and 65535 is the whole range of gridDim.y: a caller that asks for
        more is SPLIT here (chunk by chunk, the hook included) rather than silently truncated. */
     const unsigned long long max_y = 65535;
@@ -2953,6 +2965,9 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         }
         st->mem_mb = sh.mem_mb * (double)nbatch;
         st->t_fwd = r.t_fwd; st->t_inv = r.t_inv; st->t_slot = r.t_slot;
+        st->t_hpack += t_hpack;
+        st->t_scan += t_scan;
+        st->t_h2d_batch += t_h2d_batch;
         st->fuse_t = fc.t; st->fuse_nms = fc.nms;
         for (int q = 0; q < fc.nms && q < 8; ++q) st->fuse_ms[q] = fc.ms[q];
         st->exact_valid = true;
@@ -3071,6 +3086,8 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         }
         st->mem_mb = sh.mem_mb * (double)nbatch;
         st->t_fwd = r.t_fwd; st->t_inv = r.t_inv; st->t_slot = r.t_slot;
+        /* the DEVICE entry point packs on the device: no host packing, no host scan and no
+           operand upload to attribute, so those three fields stay 0 on this path */
         st->fuse_t = fc.t; st->fuse_nms = fc.nms;
         for (int q = 0; q < fc.nms && q < 8; ++q) st->fuse_ms[q] = fc.ms[q];
         st->exact_valid = true;
