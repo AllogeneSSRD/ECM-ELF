@@ -2244,3 +2244,66 @@ s4_multiply_stats: ... t_reduce=88.196 gmp_checked=240010 gmp_check_bad=0 full_c
 1. 给 `ntt_run_passes` 装 pass 级计时，找出那 ~52%（这是现在最大的一块）。
 2. 设备归约 88.2 s（0.98 µs/系数）本身也是一个独立的优化目标（REDC 的消除步数与 slot 形状）。
 3. S5 设备下降的树走法对齐（§30.3）仍然在清单上。
+
+---
+
+## 34. 把 ntt_seconds 的账算清：**已归属 65%**，最大单项是设备归约（§33.5 第 1 项）
+
+给 `ntt_run_passes` 与设备入口装了三个新计时器（都是**每 chunk** 一次读数，不是每次调用）：
+
+* `t_check`：**进位收敛断言**（`cudaMemset` + 一次覆盖全数字数组的内核 + 一次 D2H），**每次调用都跑**，此前完全没计时；
+* `t_plan`：`ntt_shape_plan`（`choose_cfg` 会**用 GMP 重新证明精确性界**）；
+* `t_opcopy`：设备入口把操作数拷进 arena 暂存的两次 D2D。
+
+**B2=1e11 实测（`_devpath_1e11.log`，per_call = 68.9 µs，`ntt_seconds` = 40.65 s）：**
+
+| 项 | µs/调用 | 合计 | 占 ntt_seconds |
+|---|---|---|---|
+| 设备归约（`s4_multiply_stats: t_reduce`）| 25.4 | 15.2 s | **37%** |
+| 结果系数 D2H（8.25 GB @ 2.78 GB/s）| 5.0 | 2.97 s | 7.3% |
+| fwd | 5.4 | 3.2 s | 7.8% |
+| 原始系数 H2D（8.61 GB @ 4.96 GB/s）| 2.9 | 1.74 s | 4.3% |
+| **进位收敛断言**（新测）| 2.9 | 1.71 s | 4.2% |
+| inv | 2.4 | 1.4 s | 3.5% |
+| carry + slot + slot D2H | 0.7 | 0.4 s | 1.0% |
+| shape plan（新测）| **0.0** | **0.008 s** | 0.0% |
+| 操作数 D2D 拷贝（新测）| **0.0** | **0.024 s** | 0.1% |
+| **已归属** | **44.7** | **26.6 s** | **65%** |
+| 仍未归属 | ~24 | ~14 s | 35% |
+
+**两个被实测否掉的猜测**（这是本轮第二次）：进位收敛断言只占 4.2%（我原以为是"每次调用多跑一整趟"的大头，实际 N 不大时它很便宜）；shape plan 与操作数 D2D 拷贝基本是零（**plan 是缓存的**，D2D 走的是设备带宽）。
+
+**结论**：现在 NTT 预算里**最大的单项是设备归约（37%）**，其余是"每项几个百分点"的碎片。⇒ 下一步的次序改为：
+
+1. **设备归约**（25.4 µs/调用）：REDC 的消除步数 `L` 由 `slot_bits = 2S + ceil(log2 P)` 决定、而 `slot_words = slot_bits/bpw` —— 形状选择（bpw 越大、L 越小）与"能否一次归约两个系数"是两条具体路子。
+2. 那 35% 碎片：需要在 `ntt_run_passes` 里把 `hOut` 的 D2H（在 `t_slot` 里）与 `hRes` 的 D2H 单独拆出来。
+3. 曲线层面：`gtrees + fold` 仍是 49%（它们就是这些 NTT 调用），所以上面的收益直接反映到每曲线墙上。
+
+### 34.1 生产形状上的同一份账（`_prod_b256.log`）
+
+```
+real_giant_chain: chunks=17 seed_points=26581
+real_batched_split: giant=46.819 gtrees=225.856 fold=74.837 descent=33.501 inv=2.136 accum=11.106 name=8.238 f_tree_incl=13.530
+real_batched_breakdown: wall=611.19 ntt_calls=3814929 ntt_launches=1927 ntt_seconds=267.507 (43.8%)
+real_batched_ntt_usecall: per_call=70.1 fwd=8.0 inv=3.5 carry_slot_out=1.0
+real_batched_coeffback: us_per_call=4.7 total=17.755 s volume=54.96 GB effective_GBps=3.10 share_of_ntt=6.6%
+real_batched_carrycheck: us_per_call=4.1 total=15.606 s share_of_ntt=5.8%
+real_batched_rawupload: us_per_call=2.5 total=9.599 s volume=57.32 GB effective_GBps=5.97 share_of_ntt=3.6%
+real_batched_devpath: plan_us_per_call=0.0 (total=0.022 s) opcopy_us_per_call=0.0 (total=0.075 s)
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089,72677470068901752199 hit_primes=3511 elapsed=611.19
+```
+
+* **每曲线 611.19 s**（基线 1956.88 s ⇒ **3.20×**），**因子集合逐项一致** ✓ `bad_factors=0` ✓。
+* 归属：coeffback 4.7 + carrycheck 4.1 + rawupload 2.5 + fwd/inv/slot 12.5 + 设备归约 23.1 = **46.9 µs/调用（67%）**，未归属 ~23 µs（33%）。
+* 设备归约在生产形状是 **88.0 s**（`t_reduce`），是 NTT 预算里最大的单项（33%）。
+
+### 34.2 目标④的收尾：`NTT_GIANT_CHAIN_BLOCK=256` 在生产形状上已验证
+
+| | block=64（默认）| block=256 |
+|---|---|---|
+| `seed_points` | 106271 | **26581** |
+| giant | 49.86 s | **46.82 s** |
+| 每曲线 | 625.63 s | **611.19 s** |
+| 因子集合 | `42089,72677470068901752199` | **相同** ✓ |
+
+**实测结论（与预期不符，按实测记）**：把播种点数降 4 倍只省了 **14 s（2.3%）** —— 说明 giant 阶段的成本主要不是播种的**算术**，而是（a）链本身（3.4e6 个点 × 8 次 Montgomery 乘法 ≈ 14 s）与（b）**每次 ladder 启动的固定开销**（每个 chunk 一次播种启动，17 个 chunk）。默认仍取 64（退化点损伤半径更小，且差别只有 2%）。

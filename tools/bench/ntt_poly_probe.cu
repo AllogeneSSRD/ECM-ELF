@@ -2303,6 +2303,12 @@ struct NttMulStats {
        entry point.  Measured separately so the "111 us per call that nobody measured" can be
        attributed instead of guessed. */
     double t_hpack = 0.0, t_scan = 0.0, t_h2d_batch = 0.0;
+    /* the extra pass the carry-convergence assert costs (section 34) */
+    double t_check = 0.0;
+    /* where the REST of the device entry point's time goes: the shape plan (choose_cfg, which
+       proves the exactness bound) and the device-to-device copy of the two operands into the
+       arena's scratch (section 34) */
+    double t_plan = 0.0, t_opcopy = 0.0;
     unsigned long long carry_residual = 0, carry_max_bits = 0;
     int fuse_t = 0, fuse_nms = 0, fuse_ms[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     bool exact_valid = false;
@@ -2708,6 +2714,10 @@ static void ntt_shape_print(const NttShape &sh, const FuseCtx &fc, bool verbose,
 /* what one run of the device passes produced */
 struct NttPassResult {
     double t_fwd = 0.0, t_inv = 0.0, t_slot = 0.0;
+    /* the carry-convergence assert below is a WHOLE EXTRA PASS over the digit array (a memset, a
+       kernel over N*nbatch digits and a device-to-host copy) and it was untimed, which is why
+       more than half of ntt_seconds had no owner (docs/DEV_STAGE2_GPU_PLAN.md section 34). */
+    double t_check = 0.0;
     unsigned long long *digits = nullptr;      /* the buffer holding the canonical digits */
     std::vector<unsigned long long> hOut;      /* nbatch * out_slots slot projections */
     std::vector<unsigned long long> hRes;      /* 2 * nbatch carry diagnostics */
@@ -2820,8 +2830,10 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                   cudaMemcpyDeviceToHost));
     r.t_slot = now_s() - t2;
 
-    /* Carry convergence assert (UNTIMED, and always run -- a carry that stops early is
-       silent: the digits are simply wrong above some index). */
+    /* Carry convergence assert (UNTIMED until now, and always run -- a carry that stops early is
+       silent: the digits are simply wrong above some index).  ONE PASS over the whole digit array
+       plus a D2H per call, which is why it is now measured. */
+    const double t3 = now_s();
     r.hRes.assign((size_t)(2 * nbatch), 0);
     CK(cudaMemset(dRes, 0, 2 * nbatch * sizeof(unsigned long long)));
     {
@@ -2831,6 +2843,7 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     CK(cudaGetLastError());
     CK(cudaMemcpy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
                   cudaMemcpyDeviceToHost));
+    r.t_check = now_s() - t3;
     return r;
 }
 
@@ -2942,6 +2955,7 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         std::copy(rr.hOut.begin(), rr.hOut.end(), r.hOut.begin() + (long)(s0 * out_slots));
         std::copy(rr.hRes.begin(), rr.hRes.end(), r.hRes.begin() + (long)(2 * s0));
         r.t_fwd += rr.t_fwd; r.t_inv += rr.t_inv; r.t_slot += rr.t_slot;
+        r.t_check += rr.t_check;
         if (nchunk == 1) r.digits = rr.digits;
         if (hook && hook->run && hook->out && hook->w) {
             hook->run(hook->ctx, rr.digits, N, sh.bpw, sh.slot_words, sh.slot_bits, out_slots,
@@ -2965,6 +2979,7 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         }
         st->mem_mb = sh.mem_mb * (double)nbatch;
         st->t_fwd = r.t_fwd; st->t_inv = r.t_inv; st->t_slot = r.t_slot;
+        st->t_check += r.t_check;
         st->t_hpack += t_hpack;
         st->t_scan += t_scan;
         st->t_h2d_batch += t_h2d_batch;
@@ -3023,10 +3038,12 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
     }
     NttShape sh;
     FuseCtx fc;
+    const double tplan0 = now_s();
     {
         const int rc = ntt_shape_plan(P, S, device, arena, fc, sh, force_bpw);
         if (rc) return rc;
     }
+    const double t_plan = now_s() - tplan0;
     sh.L_terms = sh.P * sh.slot_words;
     {
         const int rc = ntt_shape_exactness(sh);
@@ -3047,10 +3064,12 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         CK(cudaMalloc(&dOut, (size_t)(out_slots * nbatch) * sizeof(unsigned long long)));
         CK(cudaMalloc(&dRes, 2 * (size_t)nbatch * sizeof(unsigned long long)));
     }
+    const double tcopy0 = now_s();
     CK(cudaMemcpy(dA, dAin, (size_t)N * nbatch * sizeof(unsigned long long),
                   cudaMemcpyDeviceToDevice));
     CK(cudaMemcpy(dB, dBin, (size_t)N * nbatch * sizeof(unsigned long long),
                   cudaMemcpyDeviceToDevice));
+    const double t_copy = now_s() - tcopy0;
     const unsigned long long max_y = 65535;
     const unsigned long long nchunk = (nbatch + max_y - 1) / max_y;
     NttPassResult r;
@@ -3063,6 +3082,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
                                           nullptr, nullptr, nullptr, nullptr);
         std::copy(rr.hRes.begin(), rr.hRes.end(), r.hRes.begin() + (long)(2 * s0));
         r.t_fwd += rr.t_fwd; r.t_inv += rr.t_inv; r.t_slot += rr.t_slot;
+        r.t_check += rr.t_check;
         if (nchunk == 1) r.digits = rr.digits;
         if (hook && hook->run && hook->out && hook->w) {
             hook->run(hook->ctx, rr.digits, N, sh.bpw, sh.slot_words, sh.slot_bits, out_slots,
@@ -3086,6 +3106,9 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         }
         st->mem_mb = sh.mem_mb * (double)nbatch;
         st->t_fwd = r.t_fwd; st->t_inv = r.t_inv; st->t_slot = r.t_slot;
+        st->t_check += r.t_check;
+        st->t_plan += t_plan;
+        st->t_opcopy += t_copy;
         /* the DEVICE entry point packs on the device: no host packing, no host scan and no
            operand upload to attribute, so those three fields stay 0 on this path */
         st->fuse_t = fc.t; st->fuse_nms = fc.nms;

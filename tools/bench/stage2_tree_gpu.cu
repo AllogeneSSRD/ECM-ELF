@@ -916,6 +916,9 @@ struct PolyLayer {
        the host-side packing of the operands, the max-coefficient scan over the packed batch, and
        the upload of the packed operands (section 32). */
     double t_hpack = 0.0, t_scan = 0.0, t_h2d_batch = 0.0;
+    /* the carry-convergence assert's own pass (section 34) */
+    double t_check = 0.0;
+    double t_plan = 0.0, t_opcopy = 0.0;
 
     PolyLayer() { mpz_init(N); }
     ~PolyLayer() { mpz_clear(N); }
@@ -1908,6 +1911,9 @@ static void poly_mul_batch_modN(PolyLayer &L,
     L.t_hpack += st.t_hpack;
     L.t_scan += st.t_scan;
     L.t_h2d_batch += st.t_h2d_batch;
+    L.t_check += st.t_check;
+    L.t_plan += st.t_plan;
+    L.t_opcopy += st.t_opcopy;
     L.max_ntt_words = std::max(L.max_ntt_words, st.N);
     L.max_ntt_coeffs = std::max(L.max_ntt_coeffs, (unsigned long long)P);
     L.max_slot_bits = std::max(L.max_slot_bits, st.slot_bits);
@@ -6317,7 +6323,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                      mc0 = L.t_maxc, h20 = L.t_h2d, d20 = L.t_d2h, ex0 = L.t_ext, xc0 = L.t_xchk;
         const double dc0 = L.t_d2h_coeff;
         const unsigned long long dw0 = L.d2h_coeff_words;
-        const double hp0 = L.t_hpack, sc0 = L.t_scan, hb0 = L.t_h2d_batch;
+        const double hp0 = L.t_hpack, sc0 = L.t_scan, hb0 = L.t_h2d_batch, ck0 = L.t_check;
+        const double pl0b = L.t_plan, oc0 = L.t_opcopy;
         const double ry0 = L.s4 ? L.s4->t_h2d_raw : 0.0;
         const unsigned long long rw0 = L.s4 ? L.s4->raw_words : 0ull;
         const unsigned long long pl0 = L.s4 ? L.s4->pack_launches : 0ull;
@@ -6384,12 +6391,26 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                         (L.ntt_seconds - ns) > 0 ? 100.0 * tdc / (L.ntt_seconds - ns) : 0.0);
             /* and the three phases the batched entry point never had timers for */
             const double thp = L.t_hpack - hp0, tsc = L.t_scan - sc0, th2 = L.t_h2d_batch - hb0;
+            const double tck = L.t_check - ck0;
             const double acc = inv_c * (thp + tsc + th2) * 1e6;
             std::printf("real_batched_hostbatch: us_per_call=%.1f (pack=%.1f scan=%.1f h2d=%.1f) "
                         "totals pack=%.3f scan=%.3f h2d=%.3f s share_of_ntt=%.1f%%\n", acc,
                         inv_c * thp * 1e6, inv_c * tsc * 1e6, inv_c * th2 * 1e6, thp, tsc, th2,
                         (L.ntt_seconds - ns) > 0 ? 100.0 * (thp + tsc + th2) / (L.ntt_seconds - ns)
                                                  : 0.0);
+            /* THE CARRY-CONVERGENCE ASSERT (section 34): a whole extra pass over the digit array
+               plus a D2H, run on EVERY call and never timed before now. */
+            std::printf("real_batched_carrycheck: us_per_call=%.1f total=%.3f s "
+                        "share_of_ntt=%.1f%%\n", inv_c * tck * 1e6, tck,
+                        (L.ntt_seconds - ns) > 0 ? 100.0 * tck / (L.ntt_seconds - ns) : 0.0);
+            /* ... and the two remaining pieces of the device entry point: the shape plan
+               (choose_cfg re-proving the exactness bound per call) and the device-to-device copy
+               of the packed operands into the arena's scratch. */
+            const double tpl = L.t_plan - pl0b, toc = L.t_opcopy - oc0;
+            std::printf("real_batched_devpath: plan_us_per_call=%.1f (total=%.3f s) "
+                        "opcopy_us_per_call=%.1f (total=%.3f s) share_of_ntt=%.1f%%\n",
+                        inv_c * tpl * 1e6, tpl, inv_c * toc * 1e6, toc,
+                        (L.ntt_seconds - ns) > 0 ? 100.0 * (tpl + toc) / (L.ntt_seconds - ns) : 0.0);
             /* OBJECTIVE 4, the DEVICE-pack version of the same two items: the raw coefficient
                upload and the packing pass are now on the device, so what is left here is one
                small H2D per chunk plus two kernel launches (section 33). */
