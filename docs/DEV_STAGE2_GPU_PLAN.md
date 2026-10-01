@@ -2177,3 +2177,70 @@ real_batched_hostbatch:   us_per_call=63.3 (pack=36.8 scan=6.3 h2d=20.2) totals 
 2. 给 `ntt_run_passes` 装 pass 级计时（每个 pass 一次读数），找出剩下的 ~70 µs/调用。
 3. 用同一条生产命令（D=570570, B2=1.94e12）复测，验收 = 因子集合逐项一致 + `bad_factors=0`。
 * 门禁：`test_stage2_tree_gpu.ps1` 现在 **20/20**（新增 3 项：链逐点对拍=0 失配、链确实被使用、链版仍找到冻结因子）。
+
+---
+
+## 33. 目标④落地：**操作数打包搬到设备**，NTT 预算 90.2 → 39.9 s，曲线 133.4 → 74.2 s（B2=1e11）
+
+### 33.1 做法（关键：格式其实很简单）
+
+`ntt_pack_operand`（探针里的**主机**打包器）写的是：系数 i 的第 k 个 bpw 位数字 → 数字下标 `i*slot_words + k`（因为它的位偏移是 `i*slot_stride + b`，而 `slot_stride` 与 `b` 都是 bpw 的整数倍 ⇒ **纯粹的数字重排，没有任何跨位进位**）。所以设备侧打包就是一个"每 (slice, 系数) 一个线程"的置换内核：`s4_pack_batch_kernel`（`tools/bench/stage2_tree_gpu.cu`）。目标缓冲区**先 memset 成 0** ⇒ 窗口尾部（`ceil(S/bpw)..slot_words`，正是归约断言必须为 0 的那一段）自动是 0。
+
+**为什么这一步值得做**：原始系数是每个 slice `P*W` 个 word，而**打包后**是 `N ≈ 2*P*slot_words` 个 word —— 在 S=5261 下后者大 **~9 倍**。所以"在设备上打包"同时省掉了主机打包**和**那份巨大的上传。
+
+**开关**：默认走设备打包；`NTT_S4_HOSTPACK=1` 走旧的主机打包路径（作为 A/B oracle 保留）。
+
+### 33.2 A/B（B2=1e11，同一形状、同一 N，`_devpack_1e11.log` vs `_hostbatch_1e11.log`）
+
+| | 主机打包（§32）| **设备打包（本节）** |
+|---|---|---|
+| 曲线墙钟 | 116.59 s | **74.21 s** |
+| `ntt_seconds` | 85.51 s（73.3%）| **39.92 s（53.8%）** |
+| gtrees | 23.13 s | **12.41 s** |
+| fold | 6.77 s | **3.34 s** |
+| descent | 64.43 s | 33.62 s |
+| **因子集合 / 命中素数** | `42089` / `3511` | **`42089` / `3511`** ✓ |
+| `bad_factors` | 0 | 0 ✓ |
+
+* **打包+上传：57 µs/调用 → 2.9 µs/调用**（`real_batched_rawupload: us_per_call=2.9 total=1.681 s volume=8.61 GB effective_GBps=5.12`，占 NTT 的 **4.2%**，而 §32 里那两项占 **33%**）。
+* 结果系数回传不变（`real_batched_coeffback: 4.8 µs/调用, 2.83 s, 8.25 GB @ 2.91 GB/s`，占 7.1%）。
+* **冻结门禁 20/20 通过**（其中包含"每个 F 系数与 CPU 参考逐项相等"、分批 vs CPU 因子/命中素数一致、以及运行内的 GMP 归约抽样）⇒ 设备打包产生的数字格式与主机打包**等价**，这是比"数字看起来对"更强的证据。
+* 阶梯回顾（同一条命令、同一 N）：**191.74 s（ladder+主机打包）→ 133.35 s（+giant 链）→ 74.21 s（+设备打包）**。
+
+### 33.3 还剩下的 50%
+
+`ntt_seconds` 39.92 s 的构成：结果回传 2.83 + 原始上传 1.68 + fwd/inv/slot ~4.8 + 设备归约 ~15 ⇒ **仍有 ~15-20 s（~50%）没有归属**，与 §32 的判断一致：`ntt_run_passes` 的 pass 级计时**没有覆盖全部 pass**。这是下一轮装表的目标（每个 pass 一次读数）。
+
+### 33.4 生产形状复测（**同一条命令**，D=570570, B2=1.94e12, N=2^5261−1，`_devpack_prod.log`）
+
+```
+real_shape: D=570570 P=51840 giant_points=3400110 B2=1940000000000 S_bits=5261
+real_giant_chain: chunks=17 seed_points=106271
+ftree_real: leaves=51840 padded=65536 muls=51839 ntt_calls=51839 ntt_seconds=3.230
+batched_naming: hit_blocks=810 hit_leaves=51824 named_searches=1 unnamed=51824 t_name=8.247 name_max=1
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089,72677470068901752199 hit_primes=3511 elapsed=625.63
+real_batched_split: giant=49.851 gtrees=228.663 fold=76.837 descent=34.334 inv=2.137 accum=11.050 name=8.247 f_tree_incl=13.429
+real_batched_breakdown: wall=625.63 ntt_calls=3814929 ntt_launches=1927 ntt_seconds=270.274 (43.2%)
+real_batched_rawupload: us_per_call=2.6 total=9.953 s volume=57.32 GB effective_GBps=5.76 pack_launches=70870 share_of_ntt=3.7%
+real_batched_coeffback: us_per_call=4.8 total=18.382 s volume=54.96 GB effective_GBps=2.99 share_of_ntt=6.8%
+s4_multiply_stats: ... t_reduce=88.196 gmp_checked=240010 gmp_check_bad=0 full_checks=11
+```
+
+**每曲线墙钟的三次台阶（同一条命令、同一个 N、同一个 D）：**
+
+| 版本 | 分批阶段 | 每曲线 | 相对基线 |
+|---|---|---|---|
+| ladder + 主机打包（§29）| 1956.88 s | 32.8 min | 1.00× |
+| + giant 差分加法链（§31）| 1113.93 s | 18.8 min | 1.76× |
+| **+ 设备侧打包（本节）** | **625.63 s** | **10.4 min** | **3.13×** |
+
+* **因子集合逐项相同**：`42089,72677470068901752199`，`hit_primes=3511`，`bad_factors=0` ✓（3.4e6 个点、3.81e6 次多项式乘法的规模上）。
+* 顺带被加速的不止 gtrees/fold：**F 树 13.781 → 3.230 s**、**descent 73.670 → 34.334 s**、设备归约 97.084 → 88.196 s（同一个分批乘法也被这两处使用）。
+* 现在的分布：**gtrees 228.7 s（36.5%）+ fold 76.8 s（12.3%）= 49%**、giant 49.9（8%）、descent 34.3（5.5%）、F 树 13.4、naming 8.2、accum 11.1。
+* NTT 预算 270.3 s 的已知构成：结果回传 18.4（6.8%）+ 原始上传 10.0（3.7%）+ fwd/inv/slot ~12 + **设备归约 88.2（33%）** ⇒ 仍有 **~140 s（52%）** 落在 pass 级计时器覆盖不到的地方。
+
+### 33.5 下一步
+
+1. 给 `ntt_run_passes` 装 pass 级计时，找出那 ~52%（这是现在最大的一块）。
+2. 设备归约 88.2 s（0.98 µs/系数）本身也是一个独立的优化目标（REDC 的消除步数与 slot 形状）。
+3. S5 设备下降的树走法对齐（§30.3）仍然在清单上。

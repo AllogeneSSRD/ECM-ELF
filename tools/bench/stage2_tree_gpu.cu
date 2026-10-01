@@ -847,7 +847,23 @@ struct S4Ctx {
     unsigned long long launches = 0, muls = 0, groups = 0, level_calls = 0;
     long long sample_limit = 4096;      /* a full GMP check below this many coefficients */
     bool selftested = false;
-    ~S4Ctx() { if (d_out) cudaFree(d_out); }
+    /* OBJECTIVE 4 (section 33): the DEVICE-side operand packing.  Before this, every batched
+       multiply packed its operands in a host loop (36.8 us per polynomial multiplication,
+       measured) and then uploaded the PACKED operands (20.2 us) -- 33% of the whole NTT budget.
+       Packing on the device needs the raw coefficients on the device (P*W words per slice, which
+       is ~9x SMALLER than the packed form at S=5261) and a digit buffer per operand. */
+    unsigned long long *d_rawA = nullptr, *d_rawB = nullptr, *d_packA = nullptr, *d_packB = nullptr;
+    size_t d_raw_cap = 0, d_pack_cap = 0;
+    double t_h2d_raw = 0.0, t_packdev = 0.0;
+    unsigned long long raw_words = 0, pack_launches = 0;
+    ~S4Ctx()
+    {
+        if (d_out) cudaFree(d_out);
+        if (d_rawA) cudaFree(d_rawA);
+        if (d_rawB) cudaFree(d_rawB);
+        if (d_packA) cudaFree(d_packA);
+        if (d_packB) cudaFree(d_packB);
+    }
 };
 
 struct PolyLayer {
@@ -1665,6 +1681,57 @@ static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned lon
 }
 
 /* ===================================================================================== *
+ *  DEVICE-SIDE OPERAND PACKING for the default (S4) batched multiply -- objective 4, §33
+ *
+ *  `ntt_pack_operand` (the probe's host packer) writes coefficient i's base-2^bpw digits at the
+ *  digit indices  i*slot_words + k,  k = 0 .. ceil(S/bpw)-1:  its bit offset is
+ *  i*slot_stride + b with slot_stride a multiple of bpw and b itself a multiple of bpw, so the
+ *  packing is a pure digit permutation with no carries across digits.  This kernel does exactly
+ *  that, one thread per (slice, coefficient); the destination is pre-zeroed, which is also what
+ *  makes the digits between ceil(S/bpw) and slot_words (the window tail the reduction asserts to
+ *  be zero) zero.  It is therefore the SAME format the host packer produced, and the S4
+ *  reduction's own in-run GMP sample is what checks it.
+ *
+ *  WHY: measured at B2=1e11, the host packing cost 36.8 us per polynomial multiplication and the
+ *  upload of its PACKED result another 20.2 us -- 33% of the entire NTT budget (section 32).  The
+ *  raw coefficients are P*W words per slice, about 9x fewer than the packed form at S=5261, so
+ *  this replaces both with one small upload and one device pass.
+ * ===================================================================================== */
+__global__ void s4_pack_batch_kernel(const unsigned long long *src, int S, int bpw,
+                                     unsigned long long slot_words, unsigned long long N,
+                                     unsigned long long ds, unsigned long long ma, int W,
+                                     unsigned long long *dst)
+{
+    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (gid >= ds * ma) return;
+    const unsigned long long s = gid / ma, i = gid - s * ma;
+    const unsigned long long *c = src + gid * (unsigned long long)W;  /* slice stride = ma*W */
+    unsigned long long *d = dst + s * N + i * slot_words;
+    const unsigned long long mask = (bpw >= 64) ? ~0ull : ((1ull << bpw) - 1ull);
+    const int ndig = (S + bpw - 1) / bpw;
+    for (int k = 0; k < ndig; ++k) {
+        const int bit = k * bpw;
+        const int w = bit >> 6, sh = bit & 63;
+        unsigned long long v = c[w] >> sh;
+        if (sh + bpw > 64 && (w + 1) < W) v |= c[w + 1] << (64 - sh);   /* bits >= S stay zero */
+        d[k] = v & mask;
+    }
+}
+
+static void s4_launch_pack_batch(const unsigned long long *src, int S, int bpw,
+                                 unsigned long long slot_words, unsigned long long N,
+                                 unsigned long long ds, unsigned long long ma, int W,
+                                 unsigned long long *dst)
+{
+    const unsigned long long total = ds * ma;
+    if (total == 0) return;
+    const unsigned int th = 256;
+    const unsigned int bl = (unsigned int)((total + th - 1) / th);
+    s4_pack_batch_kernel<<<bl, th>>>(src, S, bpw, slot_words, N, ds, ma, W, dst);
+    CK(cudaGetLastError());
+}
+
+/* ===================================================================================== *
  *  SLICE S4 (A) -- THE BATCHED MULTIPLY OF ONE SHAPE, WITH THE DEVICE REDUCTION
  *
  *  poly_mul_modN() multiplies ONE pair and reduces the exact coefficients on the host with
@@ -1694,9 +1761,9 @@ static void poly_mul_batch_modN(PolyLayer &L,
        the hook fires, and the hook fires inside the multiply -- so the shape is queried here,
        without touching the device.  Never inferred: ntt_shape_query runs the SAME choose_cfg
        the multiply will run. */
+    unsigned long long qN = 0, qsb = 0, qsw = 0, qss = 0, qos = 0;
+    int qbpw = 0;
     {
-        unsigned long long qN = 0, qsb = 0, qsw = 0, qss = 0, qos = 0;
-        int qbpw = 0;
         if (!ntt_shape_query(P, (int)L.S, &qN, &qbpw, &qsb, &qsw, &qss, &qos)) {
             std::fprintf(stderr, "%s: the shape P=%llu S=%d is refused by the multiply\n",
                          NTT_PROBE_NAME, (unsigned long long)P, (int)L.S);
@@ -1754,14 +1821,59 @@ static void poly_mul_batch_modN(PolyLayer &L,
         }
     }
     int rc = 0;
+    /* THE DEVICE PACKING SWITCH (objective 4, section 33): default is the device packer; set
+       NTT_S4_HOSTPACK=1 to run the old host-packing path, which is kept as the A/B oracle. */
+    static const bool host_pack = [] {
+        const char *e = std::getenv("NTT_S4_HOSTPACK");
+        return e && *e && std::atoi(e) != 0;
+    }();
     for (unsigned long long s0 = 0; s0 < nbatch; s0 += chunk) {
         const unsigned long long m = ((nbatch - s0) < chunk) ? (nbatch - s0) : chunk;
         NttReduceHook h2 = hook;
         if (hook.out) h2.out = hook.out + (size_t)(s0 * out_slots) * W;
-        const int r1 = ntt_poly_mul_batch_host(P, (int)L.S, L.device, m,
-                                               wa + s0 * P * W, wb + s0 * P * W,
-                                               (s0 == 0) ? &slots : nullptr, &st, L.arena, &h2,
-                                               nullptr);
+        int r1 = 0;
+        if (host_pack) {
+            r1 = ntt_poly_mul_batch_host(P, (int)L.S, L.device, m,
+                                         wa + s0 * P * W, wb + s0 * P * W,
+                                         (s0 == 0) ? &slots : nullptr, &st, L.arena, &h2,
+                                         nullptr);
+        } else {
+            /* 1. the RAW coefficients to the device (P*W words per slice per operand) ... */
+            const size_t raw_words = (size_t)m * P * W;
+            if (raw_words > C.d_raw_cap) {
+                if (C.d_rawA) { cudaFree(C.d_rawA); cudaFree(C.d_rawB); C.d_rawA = C.d_rawB = nullptr; }
+                CK(cudaMalloc(&C.d_rawA, raw_words * sizeof(unsigned long long)));
+                CK(cudaMalloc(&C.d_rawB, raw_words * sizeof(unsigned long long)));
+                C.d_raw_cap = raw_words;
+            }
+            const double th0 = now_s();
+            CK(cudaMemcpy(C.d_rawA, wa + s0 * P * W, raw_words * sizeof(unsigned long long),
+                          cudaMemcpyHostToDevice));
+            CK(cudaMemcpy(C.d_rawB, wb + s0 * P * W, raw_words * sizeof(unsigned long long),
+                          cudaMemcpyHostToDevice));
+            /* 2. ... packed into digits ON the device (both operands, one launch each) ... */
+            const size_t pack_words = (size_t)m * (size_t)qN;
+            if (pack_words > C.d_pack_cap) {
+                if (C.d_packA) { cudaFree(C.d_packA); cudaFree(C.d_packB); C.d_packA = C.d_packB = nullptr; }
+                CK(cudaMalloc(&C.d_packA, pack_words * sizeof(unsigned long long)));
+                CK(cudaMalloc(&C.d_packB, pack_words * sizeof(unsigned long long)));
+                C.d_pack_cap = pack_words;
+            }
+            CK(cudaMemset(C.d_packA, 0, pack_words * sizeof(unsigned long long)));
+            CK(cudaMemset(C.d_packB, 0, pack_words * sizeof(unsigned long long)));
+            s4_launch_pack_batch(C.d_rawA, (int)L.S, qbpw, qsw, qN, m, P, (int)W, C.d_packA);
+            s4_launch_pack_batch(C.d_rawB, (int)L.S, qbpw, qsw, qN, m, P, (int)W, C.d_packB);
+            C.t_h2d_raw += now_s() - th0;
+            C.raw_words += (unsigned long long)raw_words * 2;
+            C.pack_launches += 2;
+            /* 3. ... and the multiply itself, device-to-device (the same passes, the same carry,
+               the same exactness assertions, the same reduction hook) */
+            NttMulStats nst{};
+            r1 = ntt_poly_mul_batch_dev(P, (int)L.S, L.device, m, C.d_packA, C.d_packB, &nst,
+                                        L.arena, &h2, nullptr, qbpw);
+            st = nst;                     /* the caller's stats are the dev path's */
+            if (s0 == 0) slots.clear();   /* the host path filled this; the dev path does not */
+        }
         if (r1 != 0) { rc = r1; break; }
         /* the reduced coefficients of this chunk, back to the host -- AND THIS TRANSFER IS THE
            POINT OF OBJECTIVE 4 (section 32): it is `m * out_slots * W` words, i.e. the WHOLE
@@ -6206,6 +6318,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const double dc0 = L.t_d2h_coeff;
         const unsigned long long dw0 = L.d2h_coeff_words;
         const double hp0 = L.t_hpack, sc0 = L.t_scan, hb0 = L.t_h2d_batch;
+        const double ry0 = L.s4 ? L.s4->t_h2d_raw : 0.0;
+        const unsigned long long rw0 = L.s4 ? L.s4->raw_words : 0ull;
+        const unsigned long long pl0 = L.s4 ? L.s4->pack_launches : 0ull;
         const double t0 = now_s();
         BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad);
         const double el = now_s() - t0;
@@ -6275,6 +6390,18 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                         inv_c * thp * 1e6, inv_c * tsc * 1e6, inv_c * th2 * 1e6, thp, tsc, th2,
                         (L.ntt_seconds - ns) > 0 ? 100.0 * (thp + tsc + th2) / (L.ntt_seconds - ns)
                                                  : 0.0);
+            /* OBJECTIVE 4, the DEVICE-pack version of the same two items: the raw coefficient
+               upload and the packing pass are now on the device, so what is left here is one
+               small H2D per chunk plus two kernel launches (section 33). */
+            if (L.s4) {
+                const double traw = L.s4->t_h2d_raw - ry0;
+                const double gbr = (double)(L.s4->raw_words - rw0) * 8.0 / 1073741824.0;
+                std::printf("real_batched_rawupload: us_per_call=%.1f total=%.3f s volume=%.2f GB "
+                            "effective_GBps=%.2f pack_launches=%llu share_of_ntt=%.1f%%\n",
+                            inv_c * traw * 1e6, traw, gbr, traw > 0 ? gbr / traw : 0.0,
+                            L.s4->pack_launches - pl0,
+                            (L.ntt_seconds - ns) > 0 ? 100.0 * traw / (L.ntt_seconds - ns) : 0.0);
+            }
         }
         if (s4_on) {
             unsigned long long sel_cases = 0, sel_bad = 0, checked = 0, check_bad = 0,
