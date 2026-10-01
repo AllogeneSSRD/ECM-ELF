@@ -119,7 +119,7 @@ namespace {
  * on 3024 host + 200000 device cases and 100064 (lo,hi) folds, boundary pairs included.
  */
 __host__ __device__ inline unsigned long long gl_reduce(unsigned long long lo,
-                                                       unsigned long long hi)
+                                                        unsigned long long hi)
 {
     for (int iter = 0; iter < 4; ++iter) {
         /* exact: lo + hi*(2^32-1) = lo + (hi<<32) - hi, split into (lo', hi') */
