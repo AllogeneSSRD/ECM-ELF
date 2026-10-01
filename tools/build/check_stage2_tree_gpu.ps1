@@ -49,6 +49,8 @@ param(
     # take ~26 hours), which makes `hits`/`hit_primes` PARTIAL by construction -- the factor
     # set must still be identical, and that is what is asserted instead.
     [int]$NameMax = 0,
+    # force the giant-point differential-addition chain and check it against the ladder
+    [switch]$ChainCheck,
     [string]$Sandbox = ''
 )
 
@@ -81,6 +83,13 @@ Write-Host ("  cpu: " + $cpuSummary.Value.Trim())
 $gpuArgs = @('--check-F', $cpu, '--device', "$Device", '--dump-F-gpu', $gpuDump)
 if ($Evaluate) { $gpuArgs += '--evaluate'; $gpuArgs += '--evaluate-batched' }
 if ($NameMax -gt 0) { $env:NTT_NAME_MAX = "$NameMax" } else { Remove-Item Env:\NTT_NAME_MAX -ErrorAction SilentlyContinue }
+# -ChainCheck: force the giant-point DIFFERENTIAL-ADDITION CHAIN (section 31) and make it compare
+# itself against the old per-point ladder, point by point, on the affine x value.  Both give the
+# same point in different projective representations, so X/Z mod N is the only comparable quantity
+# -- and `mismatches=0` is the assertion that the chain is exact on this shape.
+if ($ChainCheck) { $env:NTT_GIANT_CHAIN_MIN = '0'; $env:NTT_GIANT_CHAIN_CHECK = '1' }
+else { Remove-Item Env:\NTT_GIANT_CHAIN_MIN -ErrorAction SilentlyContinue
+       Remove-Item Env:\NTT_GIANT_CHAIN_CHECK -ErrorAction SilentlyContinue }
 $gpuOut = (& $gpu @gpuArgs 2>&1 | Out-String)
 $gpuOut.Trim() -split "`n" | ForEach-Object { Write-Host ("  gpu: " + $_.TrimEnd()) }
 $gpuCode = $LASTEXITCODE
@@ -100,6 +109,15 @@ Need "the exactness bound L*(2^bpw-1)^2 < p holds for the tree's own shapes" `
      ($gpuOut -match 'exactness: .* -> OK') ''
 $diff = @(Compare-Object (Get-Content $cpu) (Get-Content $gpuDump) -SyncWindow 0)
 Need "the two dump files are identical line by line" ($diff.Count -eq 0) ("differing=" + $diff.Count)
+
+if ($ChainCheck) {
+    # the chain must reproduce the ladder's points EXACTLY (affine x, point by point)
+    Need "the giant chain matches the per-point ladder on every point" `
+         ($gpuOut -match 'giant_chain_check: points=(\d+) blocks=\d+ per_block=\d+ seed_points=\d+ mismatches=0') `
+         ($gpuOut -split "`n" | Where-Object { $_ -match 'giant_chain_check' } | Select-Object -First 1)
+    Need "the giant chain was actually used (chunks >= 1)" `
+         ($gpuOut -match '(real|batched)_giant_chain: chunks=[1-9]') ''
+}
 
 if ($Evaluate) {
     $g = [regex]::Match($gpuOut, 'stage2: algorithm=tree_gpu curves=(\d+) hits=(\d+) bad_factors=(\d+) factors=([^ ]*) hit_primes=([^ ]*)')

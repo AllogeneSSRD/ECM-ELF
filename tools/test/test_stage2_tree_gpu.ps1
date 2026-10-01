@@ -91,6 +91,10 @@ $rSharp = RunCheck @('-D', '210', '-Evaluate', '-B2', '114000')
 # on the diagnostic scan, so a capped run could report NO factor at all -- and at B2=1e11 a full
 # scan is ~26 hours, i.e. the cap is not optional in production.
 $rCap = RunCheck @('-D', '210', '-Evaluate', '-NameMax', '1')
+# [7] the giant-point DIFFERENTIAL-ADDITION CHAIN (objective 3, section 31) is now the default for
+# large chunks, so it gets its own acceptance: forced on the frozen vector together with its own
+# point-by-point comparison against the per-point ladder.
+$rChain = RunCheck @('-D', '210', '-Evaluate', '-ChainCheck')
 $out = $r210.out + "`n" + $r2310.out + "`n" + $rEval.out + "`n" + $rSharp.out
 $code = $rEval.code
 
@@ -137,6 +141,14 @@ Check "the capped run's acceptance script exits 0" ($rCap.code -eq 0) ("exit=" +
 Check "the naming accounting line is printed (hit_leaves / unnamed / t_scan / t_ladder)" `
       ($rCap.out -match 'batched_naming: hit_blocks=\d+ hit_leaves=\d+ named_searches=\d+ candidates_tested=\d+ unnamed=\d+ t_scan=[\d.]+ t_ladder=[\d.]+ t_name=[\d.]+ name_max=\d+') `
       $rCap.out.Trim()
+
+# [7] the giant-point chain (objective 3): exact on every point, and really used
+Check "the giant chain reproduces the ladder point by point (mismatches=0)" `
+      ($rChain.out -match 'giant_chain_check: points=\d+ .*mismatches=0') $rChain.out.Trim()
+Check "the giant chain was really used (chunks >= 1)" `
+      ($rChain.out -match '(real|batched)_giant_chain: chunks=[1-9]') $rChain.out.Trim()
+Check "the chained run still finds the frozen factor" `
+      ($rChain.out -match 'factors=59649589127497217') $rChain.out.Trim()
 
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)

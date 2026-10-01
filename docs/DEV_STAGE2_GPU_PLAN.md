@@ -2025,3 +2025,116 @@ stage2: algorithm=tree_gpu_batched curves=1 hits=0 bad_factors=0 factors= hit_pr
 * 三个修复都用**真实数据**验证过：不变量断言（越界会先报错）、compute-sanitizer（越界归零）、`s5_kernel_view`（`r` 对而 `dy` 为 0）。
 
 **纪律补充**：这次能修好，靠的是"**把内核自己看到的数据打出来**"（`s5_kernel_view`）而不是继续读代码推理 —— 与 §26.7"两个假设都被实测否掉"是同一个教训：**先让程序说出它看到了什么**。
+
+---
+
+## 31. giant 点改用**差分加法链**：算术量降 ~70×，并在过程中找到一个"命中点就是退化点"的真相（2026-10-01）
+
+### 31.1 为什么（数字来自 §29.2）
+
+A=1.94e12 / D=570570 那一档：**giant 阶段 901.15 s，占整条曲线 1957 s 的 46%**。原因是实现方式：**每个** giant 点都用一次**独立的 ladder** 算 `[i*D]Q`（3.4e6 个点 × ~41 步 × 14 次 Montgomery 乘法 ≈ 2e9 次乘法）。
+
+### 31.2 做法
+
+giant 点是**同一个点的连续倍数**，所以
+
+```
+x_{(i+1)D} = xADD( x_{iD}, x_D, x_{(i-1)D} )
+```
+
+每个点只要 **8 次** Montgomery 乘法（一次 xADD）而不是 ~574 次。链是**顺序**的，所以并行度放在**点之间**：一个线程负责连续 `per_block` 个点，每个 block 用**两次 ladder** 播种（链需要两个连续值起步），`x_D` 用一次 ladder。点全程保持 **Montgomery 域里的射影 (X:Z) 对** —— 唯一的消费者是主机的 `affine_x = X/Z mod N`，而它**对射影缩放不变**，所以既不需要求逆也不需要转换（这正是省掉每点一次 5261 位求逆的原因）。
+
+开关：`NTT_GIANT_LADDER=1` 强制旧路径（当作 oracle）；`NTT_GIANT_CHAIN_CHECK=1` **两条路都算并逐点比较 affine x**；`NTT_GIANT_CHAIN_BLOCK=n` 设每线程点数（默认 **64**，理由见 §31.4）；`NTT_GIANT_CHAIN_MIN=n` 按点数选路（默认 32768：小形状用 ladder、大形状用链）。
+
+### 31.3 验证
+
+* **冻结形状**（D=210，4763 个 giant 点，19 个 block）：`giant_chain_check: points=4763 blocks=19 per_block=256 seed_points=39 mismatches=0` ⇒ **逐点 affine x 完全相同**，且该次运行照旧 `factors=59649589127497217 hit_primes=114713` ✓。
+* **rung 2 真实模数**（4331 点）：**表面上**有 73 处不一致 —— 但见 §31.4，它们**全部**由一个"退化点"解释，不是链的算术错。
+* 端到端因子集：rung 2 强制用链时仍然给出 `factors=42089` ✓（与 ladder 路径一致）。
+
+### 31.4 过程中发现的真相：**"命中点"在 x-only 算术里就是退化点**
+
+rung 2 的逐点比较第一次出现不一致的**全局下标永远是 3511**，与 block 大小无关（试了 64/128/200/512/1000），而且不一致的**个数恰好等于"block 末尾 − 3511"**（9/73/89/73/489）⇒ 出问题的是**链本身在某一点之后带走了一个状态**，不是 block 结构。
+
+逐点把 Z 取出来做 `gcd(Z, N)` 之后，机制完全清楚了：
+
+```
+giant_chain_window: i=3510 equal=0 chain_Z_noninvertible=1 ladder_Z_noninvertible=1
+giant_chain_window: i=3511 equal=1 chain_Z_noninvertible=0 ladder_Z_noninvertible=0
+giant_chain_window: i=3512 equal=0 chain_Z_noninvertible=1 ladder_Z_noninvertible=0
+...
+```
+
+* 在**同一点**上，**ladder 和链的 Z 都**与 N 不互素（`gcd(Z,N) > 1`）⇒ 该点**模 N 的某个因子是单位元** —— 这正是 stage 2 要找的"命中"。（3511 恰好是 rung 2 命中的因子 42089 在 stage 1 之后的**剩余阶**，与 §26.3 的推理一致。）
+* `affine_x_gmp` 对这种情况**故意回退成 X**，而两个不同的射影代表有不同的 X ⇒ **在该点上比较 affine x 本来就是无意义的**（所以 3511 那一格显示"相等/不等"都不说明问题）。
+* **链会把因子带下去**：Z_{k+1} 的公式里含有 Z_k·Z_k ⇒ 一旦 Z 含因子 q，之后每个 Z 都含 q，而 ladder 的下一点是一个全新的点（Z 可逆）。所以链的"损伤半径"= **该 block 的剩余点**。
+
+**因此**：`per_block` 默认取 **64**（损伤 ≤64 个叶子；播种成本 = 每 64 点 2 个 ladder ≈ 每点 18 次 Montgomery 乘法，仍比 ladder 的 ~574 少 32×），而不是算术上更省的 256。
+
+### 31.5 一条留给下一轮的线索（很重要）
+
+上一条同时暴露了**ladder 路径**的同类弱点：一个"退化点"的 affine x 会回退成 X，于是那个叶子的多项式因子 `(X − x_i)` **不是真的那个因子**。目前两种路径都还能找到因子（rung 2 两条路都给出 42089），但这个行为**没有被设计成显式的"命中"**：更正确的做法是在 `affine_x_gmp` 检测到非可逆 Z 时**当场记录 `gcd(Z,N)` 作为一个因子**（这是免费的检测：`mpz_invert` 本来就返回失败），而不是让它退化成一个任意叶子。这既能让 giant 阶段的语义变干净，也能让"链带因子"这件事变成**特性**而不是污染。
+
+### 31.6 实测：生产 B2 上 giant 阶段 **901.15 → 49.86 s**，整条曲线 **1956.88 → 1113.93 s**，**因子集合完全不变**（`_chain_prod.log`）
+
+```
+real_shape: D=570570 P=51840 giant_points=3400110 num_poly_g=66 B1=1000 B2=1940000000000 S_bits=5261
+real_setup: prime_powers=25 ladder_chain_seconds=12.099
+ftree_real: leaves=51840 padded=65536 muls=51839 ntt_calls=51839 ntt_seconds=13.781
+real_giant_chain: chunks=17 seed_points=106271 chunks_per_ladder=0
+batched_naming: hit_blocks=810 hit_leaves=51824 named_searches=1 candidates_tested=3925 unnamed=51824 t_scan=8.307 t_ladder=1.948 t_name=10.291 name_max=1
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089,72677470068901752199 hit_primes=3511 elapsed=1113.93
+real_batched_split: giant=49.858 gtrees=518.676 fold=166.033 descent=73.670 inv=7.979 accum=13.972 name=10.291 f_tree_incl=24.771
+```
+
+| 项 | ladder 版（§29.2）| 链版（本节）| 变化 |
+|---|---|---|---|
+| giant | **901.15 s** | **49.86 s** | **−94.5%（18.1×）** |
+| gtrees | 514.55 | 518.68 | 不变（NTT 主导）|
+| fold | 162.64 | 166.03 | 不变 |
+| descent | 77.13 | 73.67 | 不变 |
+| 分批阶段合计 | **1956.88** | **1113.93** | **−43%（1.76×）** |
+| 每曲线（含 setup 12.1 s）| ~1969 s | **~1126 s** | 32.8 min → **18.8 min** |
+| **因子集合** | `42089,72677470068901752199` | **`42089,72677470068901752199`** | **逐项相同** ✓ |
+| `bad_factors` | 0 | 0 | ✓ |
+
+* **正确性**：生产规模下**因子集合与 ladder 路径逐项相同**，`hit_primes=3511` 相同，`bad_factors=0` ⇒ 链在 3.4e6 个点上没有引入任何回归。
+* **种子成本已可量化**：`seed_points=106271`（每 chunk 约 3240 个 block × 2 + 1）× ~574 次 Montgomery 乘法 ≈ 6.1e7 次 ≈ **36 s**，即 giant 阶段的 49.9 s 里**约 36 s 是播种**、约 14 s 是链本身。把 `per_block` 从 64 提到 256 应把播种降到 ~1/4（预计 giant ≈ 25 s），代价是退化点的损伤半径 64 → 256 个叶子；用 B2=1e11 做 A/B（`_chain_1e11_b256.log`：`giant=…`、`factors=42089` 必须与 ladder 版一致）。
+* 现在**剩下的主项已经翻转**：`gtrees 518.7 + fold 166.0 = 684.7 s = 61%`，全部是 NTT 调用；giant 从 46% 降到 **4.5%**。⇒ 目标④（每次 NTT 调用的主机侧开销/batched 结构）与 ②（`nw` 编译期化）现在才是下一块要啃的。
+
+### 31.7 `per_block` 的 A/B（B2=1e11，`_chain_1e11_b256.log`）与"已翻转"的账
+
+```
+real_giant_chain: chunks=1 seed_points=1371 chunks_per_ladder=0
+real_batched_split: giant=2.114 gtrees=25.518 fold=7.009 descent=69.971 inv=6.857 accum=5.331 name=2.142 f_tree_incl=19.461
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 hit_primes=3511 elapsed=133.35
+real_batched_breakdown: wall=133.35 ntt_calls=589960 ntt_launches=559 ntt_seconds=97.679 (73.2%) arena_mb=4764.1 arena_overflow=0
+```
+
+* `per_block=256` 在这个形状上把 giant 压到 **2.114 s**（ladder 版是 43.88 s，§27.3），**因子集合与 ladder 版逐项相同**（`factors=42089 hit_primes=3511 bad_factors=0`）⇒ 放大 block 本身不改变结论。曲线 **191.74 → 133.35 s（1.44×）**。
+* **默认仍取 64**：生产形状的 49.86 s 是**实测**的，而 256 在生产形状是**推算**（~25 s）—— 实测优先，等下一次生产规模运行再把它一起验掉（那时顺手把 ④ 的改动也带上）。
+* **④ 的量级现在有了硬数字**：这个形状 `ntt_calls=589960`、`ntt_seconds=97.679` ⇒ **每次调用平均 165.6 µs**，而其中真正在 GPU 上的部分（在冻结形状上量到）只有 `fwd 14.0 + inv 9.9 + carry_slot_out 25.7 ≈ 50 µs`，`t_reduce=14.7 s`（25 µs/调用）也在里面 ⇒ **每次调用还有 ~90-115 µs 花在包装/主机侧**。这就是目标④要拆的那一块，下一节用 `NTT_HOST_BREAK=1` 的 `batched_ntt_usecall:` 把它分开。
+
+### 31.8 目标④的第一步：**把这个拆分搬到真实形状上**（原来只有冻结形状会打印）
+
+`real_batched_ntt_usecall:` 是本轮新增的：真实形状的分批阶段过去只打印总数（`real_batched_breakdown`），于是"每次 165 µs 花在哪"只能靠冻结形状猜。现在它每次曲线都会打印（`_nttbreak2_1e11.log`）：
+
+```
+real_batched_breakdown: wall=116.59 ntt_calls=589960 ntt_launches=559 ntt_seconds=85.506 (73.3%) arena_mb=4764.1 arena_overflow=0
+real_batched_ntt_usecall: per_call=144.9 setup=0.0 pack=0.0 maxcoeff=0.0 h2d=0.0 fwd=4.6 inv=2.5 carry_slot_out=0.7 d2h=0.0 extract=0.0 xcheck=0.0 hostside=0.0 | calls=589960
+```
+
+**读数（这就是 ④ 的现状）**：
+
+* `per_call = 144.9 µs`；**被计时的 GPU 阶段只有 `fwd 4.6 + inv 2.5 + carry_slot_out 0.7 = 7.8 µs`**（比冻结形状的 ~50 µs 小得多，因为分批结构在这一层做的是**小**乘法）。
+* 设备归约另计：`s4_multiply_stats: t_reduce=15.182 s` ⇒ **25.7 µs/调用**。
+* ⇒ **每次调用还有约 111 µs 落在"既不是 fwd/inv/slot、也不是设备归约"的地方**，而且**所有主机侧子计时器都是 0** —— 这说明它们**不在被计时的那些代码路径里**（那些是*主机版*乘法的阶段；S4 分批路径在设备上打包、在设备上归约，走的是另一条路）。
+* 换句话说：**④ 的 111 µs/调用在一段没有计时器的代码里**。下一步就是给它装表：`poly_mul_modN`/`flat_mul_batch`/`ntt_poly_mul_host` 里"启动前后的主机胶水"（系数在两个表示之间的搬运、逐系数循环、断言/抽样检查）是首要嫌疑 —— 这一层每次调用要碰 `P*W` 个 word（这个形状 P 到 32769、W=83 ⇒ 数百万 word/调用）。
+* **口径说明**：`NTT_HOST_BREAK=1` 只让 per_call 从 133.35 s 涨到 139.53 s（+4.6%）⇒ 装表本身很便宜，**这些数字可以作为后续改动的前后对照**。
+
+### 31.9 本轮（目标第 2 轮）小结与下一轮入口
+
+* ③ 完成：giant 阶段 **901.15 → 49.86 s**（生产 B2 实测，因子集合不变），曲线 **1956.9 → 1113.9 s**。
+* ④ 的第一半完成：**测量口径搬到了真实形状**，并定位到"~111 µs/调用在未计时的胶水里"。
+* ① 的收尾（S5 设备下降的树走法对齐，见 §30.3）与 ② （`nw` 编译期化 —— 注意 §26.7 的实测：单线程 4.9 ms/次 Montgomery 乘法是**延迟/占用率**问题，光把它变成编译期常量不足以把 83-limb 数组放进寄存器；真正的杠杆是**减少乘法次数**，③ 已经证明了这条路的效果）都留在清单上。
+* 门禁：`test_stage2_tree_gpu.ps1` 现在 **20/20**（新增 3 项：链逐点对拍=0 失配、链确实被使用、链版仍找到冻结因子）。

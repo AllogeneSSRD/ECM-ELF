@@ -694,6 +694,81 @@ static void s2g_launch_ladder(int nw, int npts, const unsigned long long *dn,
 }
 
 /* ===================================================================================== *
+ *  THE DIFFERENTIAL-ADDITION CHAIN FOR THE GIANT POINTS (objective 3, section 31)
+ *
+ *  The giant points are CONSECUTIVE MULTIPLES of one point: x_{(i+1)D} = xADD(x_{iD}, x_D,
+ *  x_{(i-1)D}), so every point after the first two costs ONE differential addition -- 8 Montgomery
+ *  multiplications -- instead of a full ~bitlen(i*D)-step ladder (~574 at the real shape).
+ *
+ *  WHY IT MATTERS: measured at A=1.94e12/D=570570 the ladder version spent 901 s of a 1957 s
+ *  curve on this phase alone (46%): 3.4e6 points x 41 ladder steps x 14 multiplications.
+ *
+ *  A chain is SEQUENTIAL, so it is parallelised ACROSS the points, not inside one: one thread owns
+ *  a block of `per_block` consecutive multiples and every block is seeded by two ladder points
+ *  (a chain needs two consecutive values to start).  The points stay PROJECTIVE (X:Z) in the
+ *  Montgomery domain -- the only consumer is the host's affine_x = X/Z mod N, which is invariant
+ *  under projective scaling, so no inversion and no conversion is needed.
+ * ===================================================================================== */
+template <int NW>
+__global__ void s2g_chain_kernel(const unsigned long long *dn, unsigned long long ninv, int nw,
+                                 const unsigned long long *ddx, const unsigned long long *ddz,
+                                 const unsigned long long *dsx, const unsigned long long *dsz,
+                                 const unsigned long long *esx, const unsigned long long *esz,
+                                 unsigned long long npts, unsigned long long per_block,
+                                 unsigned long long blocks,
+                                 unsigned long long *out_x, unsigned long long *out_z)
+{
+    const unsigned long long t = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (t >= blocks) return;
+    const unsigned long long start = t * per_block;
+    if (start >= npts) return;
+    const unsigned long long end = ((start + per_block) < npts) ? (start + per_block) : npts;
+    unsigned long long xa[NW], za[NW], xb[NW], zb[NW], xc[NW], zc[NW];
+    for (int j = 0; j < nw; ++j) {
+        xa[j] = dsx[(size_t)t * nw + j];
+        za[j] = dsz[(size_t)t * nw + j];
+        xb[j] = esx[(size_t)t * nw + j];
+        zb[j] = esz[(size_t)t * nw + j];
+    }
+    for (int j = 0; j < nw; ++j) {
+        out_x[(size_t)start * nw + j] = xa[j];
+        out_z[(size_t)start * nw + j] = za[j];
+    }
+    if (end > start + 1)
+        for (int j = 0; j < nw; ++j) {
+            out_x[(size_t)(start + 1) * nw + j] = xb[j];
+            out_z[(size_t)(start + 1) * nw + j] = zb[j];
+        }
+    for (unsigned long long k = start + 2; k < end; ++k) {
+        /* x_k = x_{k-1} + x_1, with the difference x_{k-2}: p = x_{k-1}, q = x_D, diff = x_{k-2} */
+        s2g_xadd<NW>(xc, zc, xb, zb, ddx, ddz, xa, za, dn, ninv, nw);
+        for (int j = 0; j < nw; ++j) {
+            out_x[(size_t)k * nw + j] = xc[j];
+            out_z[(size_t)k * nw + j] = zc[j];
+            xa[j] = xb[j];
+            za[j] = zb[j];
+            xb[j] = xc[j];
+            zb[j] = zc[j];
+        }
+    }
+}
+
+template <int NW>
+static void s2g_launch_chain(int nw, unsigned long long blocks, unsigned long long npts,
+                             unsigned long long per_block, unsigned long long ninv,
+                             const unsigned long long *dn, const unsigned long long *ddx,
+                             const unsigned long long *ddz, const unsigned long long *dsx,
+                             const unsigned long long *dsz, const unsigned long long *esx,
+                             const unsigned long long *esz, unsigned long long *ox,
+                             unsigned long long *oz)
+{
+    const unsigned int th = 64;
+    const unsigned int bl = (unsigned int)((blocks + th - 1) / th);
+    s2g_chain_kernel<NW><<<bl, th>>>(dn, ninv, nw, ddx, ddz, dsx, dsz, esx, esz, npts, per_block,
+                                    blocks, ox, oz);
+}
+
+/* ===================================================================================== *
  *  the polynomial layer: PolyN = m*W words, coefficient-major (see the header)
  * ===================================================================================== */
 
@@ -4702,6 +4777,147 @@ static void ladder_points_ws(S3Workspace &W, const std::vector<unsigned long lon
     W.ladder_points_total += n;
 }
 
+/* one chunk of giant points through the DIFFERENTIAL-ADDITION CHAIN (see s2g_chain_kernel):
+   seeds from the existing ladder, then one xADD per point.  `gx`/`gz` come back as PROJECTIVE
+   (X:Z) Montgomery pairs, which is all the caller's affine_x = X/Z mod N needs.
+   `per_block` points per thread; `check` also computes the chunk the old way and compares the
+   affine x values (the ladder and the chain give different projective representatives of the
+   same point, so the affine value is the only thing that can be compared). */
+static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, unsigned long long D,
+                              unsigned long long clo, unsigned long long chi,
+                              unsigned long long per_block, std::vector<unsigned long long> &gx,
+                              std::vector<unsigned long long> &gz, bool check,
+                              unsigned long long &seed_points)
+{
+    const size_t nw = C.nw;
+    const unsigned long long npts = chi - clo + 1;
+    const unsigned long long blocks = (npts + per_block - 1) / per_block;
+    mpz_t Rm, X, Z;
+    mpz_inits(Rm, X, Z, nullptr);
+    /* R = the Montgomery constant (the image of 1) is exactly what the ladder context holds as
+       `hmone`, so the normal->image conversion needs no extra constant */
+    words_to_mpz(Rm, C.hmone.data(), nw);
+    /* the ladder points we need: for every block its first two multiples, plus x_D itself */
+    std::vector<unsigned long long> js;
+    js.reserve((size_t)(2 * blocks + 1));
+    for (unsigned long long b = 0; b < blocks; ++b) {
+        const unsigned long long i0 = clo + b * per_block;
+        js.push_back(i0 * D);
+        js.push_back((i0 + 1 <= chi ? (i0 + 1) : i0) * D);
+    }
+    js.push_back(D);                                    /* the difference point x_D */
+    seed_points = (unsigned long long)js.size();
+    std::vector<unsigned long long> lx, lz;
+    ladder_points_ws(W, js, lx, lz);
+    /* the seeds and the difference point as MONTGOMERY IMAGES (x*R mod N) */
+    std::vector<unsigned long long> hdsx((size_t)blocks * nw, 0ull), hdsz((size_t)blocks * nw, 0ull),
+                                     hesx((size_t)blocks * nw, 0ull), hesz((size_t)blocks * nw, 0ull),
+                                     hdx(nw, 0ull), hdz(nw, 0ull);
+    {
+        std::vector<unsigned long long> tmpw(nw, 0ull);
+        auto img = [&](std::vector<unsigned long long> &dst, size_t off, size_t e, bool use_z) {
+            words_to_mpz(X, use_z ? &lz[e * nw] : &lx[e * nw], nw);
+            mpz_mul(X, X, Rm);
+            mpz_mod(X, X, L.N);
+            mpz_to_words(tmpw, nw, X);
+            std::copy(tmpw.begin(), tmpw.end(), dst.begin() + (long)off);
+        };
+        for (unsigned long long b = 0; b < blocks; ++b) {
+            img(hdsx, (size_t)b * nw, (size_t)(2 * b), false);
+            img(hdsz, (size_t)b * nw, (size_t)(2 * b), true);
+            img(hesx, (size_t)b * nw, (size_t)(2 * b + 1), false);
+            img(hesz, (size_t)b * nw, (size_t)(2 * b + 1), true);
+        }
+        img(hdx, 0, (size_t)(2 * blocks), false);
+        img(hdz, 0, (size_t)(2 * blocks), true);
+    }
+    unsigned long long *ddsx = nullptr, *ddsz = nullptr, *desx = nullptr, *desz = nullptr,
+                       *ddx = nullptr, *ddz = nullptr, *ox = nullptr, *oz = nullptr;
+    const size_t nseed = (size_t)blocks * nw;
+    CK(cudaMalloc(&ddsx, nseed * 8));
+    CK(cudaMalloc(&ddsz, nseed * 8));
+    CK(cudaMalloc(&desx, nseed * 8));
+    CK(cudaMalloc(&desz, nseed * 8));
+    CK(cudaMalloc(&ddx, nw * 8));
+    CK(cudaMalloc(&ddz, nw * 8));
+    CK(cudaMalloc(&ox, (size_t)npts * nw * 8));
+    CK(cudaMalloc(&oz, (size_t)npts * nw * 8));
+    CK(cudaMemcpy(ddsx, hdsx.data(), nseed * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(ddsz, hdsz.data(), nseed * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(desx, hesx.data(), nseed * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(desz, hesz.data(), nseed * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(ddx, hdx.data(), nw * 8, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(ddz, hdz.data(), nw * 8, cudaMemcpyHostToDevice));
+    S2G_DISPATCH((int)nw, s2g_launch_chain, (int)nw, blocks, npts, per_block, C.ninv, W.dn, ddx,
+                 ddz, ddsx, ddsz, desx, desz, ox, oz);
+    CK(cudaGetLastError());
+    CK(cudaDeviceSynchronize());
+    gx.assign((size_t)npts * nw, 0ull);
+    gz.assign((size_t)npts * nw, 0ull);
+    CK(cudaMemcpy(gx.data(), ox, gx.size() * 8, cudaMemcpyDeviceToHost));
+    CK(cudaMemcpy(gz.data(), oz, gz.size() * 8, cudaMemcpyDeviceToHost));
+    cudaFree(ddsx); cudaFree(ddsz); cudaFree(desx); cudaFree(desz);
+    cudaFree(ddx); cudaFree(ddz); cudaFree(ox); cudaFree(oz);
+    /* THE CHECK: the same chunk through the ladder, compared on the AFFINE x value (the chain and
+       the ladder hold different projective representatives of the same point, so X and Z cannot
+       be compared -- X/Z mod N can, and that is the only quantity the caller uses). */
+    if (check) {
+        std::vector<unsigned long long> gjs((size_t)npts, 0ull);
+        for (unsigned long long i = 0; i < npts; ++i) gjs[(size_t)i] = (clo + i) * D;
+        std::vector<unsigned long long> cx, cz;
+        ladder_points_ws(W, gjs, cx, cz);
+        std::vector<unsigned long long> a1(nw, 0ull), a2(nw, 0ull);
+        unsigned long long bad = 0, first = 0;
+        for (unsigned long long i = 0; i < npts; ++i) {
+            mpz_t X1, Z1;
+            mpz_inits(X1, Z1, nullptr);
+            words_to_mpz(X1, &gx[(size_t)i * nw], nw);
+            words_to_mpz(Z1, &gz[(size_t)i * nw], nw);
+            affine_x_gmp(X, X1, Z1, L.N);
+            mpz_to_words(a1, nw, X);
+            words_to_mpz(X1, &cx[(size_t)i * nw], nw);
+            words_to_mpz(Z1, &cz[(size_t)i * nw], nw);
+            affine_x_gmp(X, X1, Z1, L.N);
+            mpz_to_words(a2, nw, X);
+            if (a1 != a2) {
+                if (!bad) first = i;
+                /* the PATTERN matters: sparse mismatches inside blocks mean an arithmetic edge
+                   case, a whole block means a seed problem, and everything after one index means
+                   a truncated transfer.  Print the first eight. */
+                if (bad < 8)
+                    std::fprintf(stderr, "giant_chain_mismatch: i=%llu block=%llu off=%llu\n",
+                                 i, i / per_block, i % per_block);
+                ++bad;
+            }
+            /* THE DEGENERACY WINDOW: a giant point whose Z is not invertible mod N is a point
+               where stage 2 has effectively FOUND a factor (gcd(Z, N) > 1), and affine_x_gmp
+               deliberately falls back to X for it.  Such a point cannot be compared between two
+               different projective representatives -- and, more importantly, the CHAIN must not
+               run through it (the xADD formula is undefined with Z = 0 mod q).  Print the window
+               around the first mismatch so the two explanations can be told apart by inspection. */
+            if (bad && i <= first + 12) {
+                mpz_t Zc, Zl, g;
+                mpz_inits(Zc, Zl, g, nullptr);
+                words_to_mpz(Zc, &gz[(size_t)i * nw], nw);
+                words_to_mpz(Zl, &cz[(size_t)i * nw], nw);
+                mpz_gcd(g, Zc, L.N);
+                const bool zc_bad = (mpz_cmp_ui(g, 1) > 0);
+                mpz_gcd(g, Zl, L.N);
+                const bool zl_bad = (mpz_cmp_ui(g, 1) > 0);
+                std::fprintf(stderr, "giant_chain_window: i=%llu equal=%d chain_Z_noninvertible=%d "
+                                     "ladder_Z_noninvertible=%d\n", i, (a1 == a2) ? 1 : 0,
+                             zc_bad ? 1 : 0, zl_bad ? 1 : 0);
+                mpz_clears(Zc, Zl, g, nullptr);
+            }
+            mpz_clears(X1, Z1, nullptr);
+        }
+        std::printf("giant_chain_check: points=%llu blocks=%llu per_block=%llu seed_points=%llu "
+                    "mismatches=%llu first=%llu\n", npts, blocks, per_block, seed_points, bad,
+                    first);
+    }
+    mpz_clears(Rm, X, Z, nullptr);
+}
+
 /* the block product of nvals values, computed ON the device from a device buffer */
 static void dev_block_products(S3Workspace &W, int nvals, int per_block,
                                std::vector<std::vector<unsigned long long>> &out)
@@ -4956,6 +5172,10 @@ struct BatchedRun {
        itself, exactly as the reference's name_culprit does. */
     unsigned long long hit_leaves = 0, unnamed = 0;
     double t_scan = 0.0, t_ladder = 0.0;
+    /* the giant-point chain accounting: how many chunks went through the chain and how many
+       LADDER points the seeds cost (a chain needs two seeds per block, so this is the part of the
+       phase that is not one-xADD-per-point -- section 31) */
+    unsigned long long giant_chain_chunks = 0, giant_seed_points = 0;
     unsigned long long unnamed_hits = 0, cand_lists = 0;
     /* device-side bookkeeping, so the breakdown line reports measured work, not a guess */
     unsigned long long ladder_calls = 0, ladder_points = 0, prod_launches = 0;
@@ -5072,10 +5292,62 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         const unsigned long long c1 = ((imax - c0) < pts_per_chunk) ? imax : (c0 + pts_per_chunk);
         const size_t clo = (size_t)(c0 + 1), chi = (size_t)c1;
         const double tgp = now_s();
-        gjs.resize(chi - clo + 1);
-        for (size_t i = clo; i <= chi; ++i) gjs[i - clo] = (unsigned long long)i * D;
         s2g_state("giant ladder chunk: about to launch");   /* the last state on a driver kill */
-        ladder_points_ws(ws, gjs, gx, gz);
+        /* THE CHAIN BY DEFAULT (see s2g_chain_kernel): one differential addition per giant point
+           instead of a full ladder.  NTT_GIANT_LADDER=1 forces the old per-point ladder (kept as
+           the oracle), NTT_GIANT_CHAIN_CHECK=1 runs BOTH and compares the affine x values,
+           NTT_GIANT_CHAIN_BLOCK=n sets the points per thread (default 256: at the real shape that
+           is 786 blocks per chunk, one seed launch, and ~10-30 ms of chain work per chunk). */
+        /* NTT_GIANT_CHAIN_BLOCK: points per thead.  The default is deliberately SMALL (64) even
+           though a larger block is cheaper in arithmetic: a chain that passes through a point
+           with Z not invertible mod N (i.e. a point that is the identity modulo one of N's
+           factors -- exactly the hit stage 2 is looking for!) carries that degeneracy in its Z
+           into every following point of the block, and those leaves are then garbage.  Measured
+           at rung 2: the single degenerate index 3511 (= the residual order of the factor 42089)
+           contaminates the rest of whatever block contains it and nothing else -- the mismatch
+           count is exactly (block_end - 3511) for every block size tried (9/73/89/73/489 for
+           64/128/200/512/1000).  A small block bounds that damage; the seed cost is 2 ladder
+           points per block, i.e. ~18 Montgomery multiplications per point at 64 (still ~32x less
+           than the ladder's ~574).  Set NTT_GIANT_CHAIN_BLOCK to trade the two. */
+        static const unsigned long long chain_block = [] {
+            const char *e = std::getenv("NTT_GIANT_CHAIN_BLOCK");
+            unsigned long long v = (e && *e) ? std::strtoull(e, nullptr, 10) : 64ull;
+            if (v < 4) v = 4;
+            if (v > 1u << 20) v = 1u << 20;
+            return v;
+        }();
+        static const bool force_ladder = [] {
+            const char *e = std::getenv("NTT_GIANT_LADDER");
+            return e && *e && std::atoi(e) != 0;
+        }();
+        static const bool chain_check = [] {
+            const char *e = std::getenv("NTT_GIANT_CHAIN_CHECK");
+            return e && *e && std::atoi(e) != 0;
+        }();
+        /* WHICH PATH, DECIDED BY SIZE -- measured, not guessed.  The chain's arithmetic per point
+           is ~70x smaller (one xADD vs a full ladder), but it carries FIXED costs the ladder path
+           does not: a second launch, six small uploads and a host-side Montgomery conversion of
+           the seeds.  At rung 2 (imax=4331) that makes the chain SLOWER (giant=1.671 s vs
+           1.097 s, measured), while at the production shape (imax=3.4e6) the ladder's arithmetic
+           is 901 s and the chain's fixed costs are irrelevant.  So: below `chain_min` points per
+           chunk use the ladder, above it use the chain.  NTT_GIANT_CHAIN_MIN=0 forces the chain
+           (for the checks), NTT_GIANT_CHAIN_MIN=<big> forces the ladder. */
+        static const unsigned long long chain_min = [] {
+            const char *e = std::getenv("NTT_GIANT_CHAIN_MIN");
+            return (e && *e) ? std::strtoull(e, nullptr, 10) : 32768ull;
+        }();
+        const unsigned long long npts = (unsigned long long)(chi - clo + 1);
+        if (force_ladder || npts < chain_min) {
+            gjs.resize(chi - clo + 1);
+            for (size_t i = clo; i <= chi; ++i) gjs[i - clo] = (unsigned long long)i * D;
+            ladder_points_ws(ws, gjs, gx, gz);
+        } else {
+            unsigned long long seed_points = 0;
+            giant_chunk_chain(L, C, ws, D, (unsigned long long)clo, (unsigned long long)chi,
+                              chain_block, gx, gz, chain_check, seed_points);
+            R.giant_seed_points += seed_points;
+            ++R.giant_chain_chunks;
+        }
         R.t_giant += now_s() - tgp;
         /* the G trees of the batches that lie inside this point chunk */
         for (unsigned long long b = c0 / P; b < R.num_poly_g && b * P < c1; ++b) {
@@ -5908,6 +6180,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         }
         const unsigned long long nb = L.ntt_calls, nl = L.ntt_launches;
         const double ns = L.ntt_seconds;
+        const double fw0 = L.t_fwd, iv0 = L.t_inv, sl0 = L.t_slot, st0 = L.t_setup, pk0 = L.t_pack,
+                     mc0 = L.t_maxc, h20 = L.t_h2d, d20 = L.t_d2h, ex0 = L.t_ext, xc0 = L.t_xchk;
         const double t0 = now_s();
         BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad);
         const double el = now_s() - t0;
@@ -5933,11 +6207,35 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::printf("real_batched_split: giant=%.3f gtrees=%.3f fold=%.3f descent=%.3f inv=%.3f "
                     "accum=%.3f name=%.3f f_tree_incl=%.3f\n", BR.t_giant, BR.t_gtrees, BR.t_fold,
                     BR.t_descent, BR.t_inv, BR.t_accum, BR.t_name, t_f);
+        std::printf("real_giant_chain: chunks=%llu seed_points=%llu chunks_per_ladder=%llu\n",
+                    BR.giant_chain_chunks, BR.giant_seed_points,
+                    BR.giant_chain_chunks ? 0ull : 1ull);
         std::printf("real_batched_breakdown: wall=%.2f ntt_calls=%llu ntt_launches=%llu "
                     "ntt_seconds=%.3f (%.1f%%) arena_mb=%.1f arena_overflow=%llu\n", el,
                     L.ntt_calls - nb, L.ntt_launches - nl, L.ntt_seconds - ns,
                     el > 0 ? 100.0 * (L.ntt_seconds - ns) / el : 0.0, arena.mb(),
                     BR.arena_overflow);
+        /* WHERE the NTT-attributed time goes, PER CALL (objective 4).  The phase columns are only
+           filled when NTT_HOST_BREAK=1 (two clock reads per phase); without it they print 0 and
+           only per_call is meaningful.  The point of the line: `ntt_seconds/ntt_calls` at the real
+           shape is ~165 us per call, while the GPU phases measured on the frozen shape are ~50 us,
+           so the rest is wrapper/host work -- and these columns say which part. */
+        if (L.ntt_calls > nb) {
+            const double inv_c = 1.0 / (double)(L.ntt_calls - nb);
+            std::printf("real_batched_ntt_usecall: per_call=%.1f setup=%.1f pack=%.1f maxcoeff=%.1f "
+                        "h2d=%.1f fwd=%.1f inv=%.1f carry_slot_out=%.1f d2h=%.1f extract=%.1f "
+                        "xcheck=%.1f hostside=%.1f | calls=%llu\n",
+                        inv_c * (L.ntt_seconds - ns) * 1e6, inv_c * (L.t_setup - st0) * 1e6,
+                        inv_c * (L.t_pack - pk0) * 1e6, inv_c * (L.t_maxc - mc0) * 1e6,
+                        inv_c * (L.t_h2d - h20) * 1e6, inv_c * (L.t_fwd - fw0) * 1e6,
+                        inv_c * (L.t_inv - iv0) * 1e6, inv_c * (L.t_slot - sl0) * 1e6,
+                        inv_c * (L.t_d2h - d20) * 1e6, inv_c * (L.t_ext - ex0) * 1e6,
+                        inv_c * (L.t_xchk - xc0) * 1e6,
+                        inv_c * ((L.t_setup - st0) + (L.t_pack - pk0) + (L.t_maxc - mc0) +
+                                 (L.t_h2d - h20) + (L.t_d2h - d20) + (L.t_ext - ex0) +
+                                 (L.t_xchk - xc0)) * 1e6,
+                        L.ntt_calls - nb);
+        }
         if (s4_on) {
             unsigned long long sel_cases = 0, sel_bad = 0, checked = 0, check_bad = 0,
                                full = 0, canon = 0, coeffs = 0;
@@ -6357,6 +6655,8 @@ static int run_check_F(const char *path, const char *gpu_dump_path, bool evaluat
         std::printf("batched_split: giant=%.3f gtrees=%.3f fold=%.3f descent=%.3f inv=%.3f "
                     "accum=%.3f name=%.3f\n", BR.t_giant, BR.t_gtrees, BR.t_fold,
                     BR.t_descent, BR.t_inv, BR.t_accum, BR.t_name);
+        std::printf("batched_giant_chain: chunks=%llu seed_points=%llu\n",
+                    BR.giant_chain_chunks, BR.giant_seed_points);
         std::printf("batched_breakdown: wall=%.2f ntt_seconds=%.3f (%.1f%%) ntt_calls=%llu "
                     "ntt_launches=%llu non_ntt_seconds=%.3f ladder_launches=%llu ladder_points=%llu "
                     "prod_launches=%llu fuse_builds=%llu fuse_reuse=%llu buf_builds=%llu "
