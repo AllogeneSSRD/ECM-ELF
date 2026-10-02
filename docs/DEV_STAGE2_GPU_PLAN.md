@@ -3308,3 +3308,31 @@ S5 需要 `NTT_CARRY_ROUNDS=128`，而共享公式给 ~6：
 **触发点是硬边界**（112 失败 / 128 成功），而且失败是**响亮**的：`s5_mul_batch` 拒绝 carry 未收敛的乘法、归约 hook 拒绝非规范窗口，两条独立断言 ✓ ——**所以"轮次数不对"不会静默损坏，只会拒绝**。**为什么需要这么多仍未解释**（公式假设 ~6，实测 ~128），这是 `NTT_S5_ON` 默认打开前要收的最后一条。
 
 **状态**：门禁 **27/27**（含新的 S5 组），`NTT_S5_ON` 仍为 opt-in（等轮次数的推导与更大形状的验证），工作区干净。
+
+### 53.5 轮次数的根因**找到了**：形状规划器会退化成 `bpw = 1`
+
+把失败信息补上一行（`s5_mul_batch` 的 `rc != 0` 分支现在报**未收敛 digit 数**与**最大 digit 高度**）：
+
+```
+The carry reported 1 unconverged digits with a maximum digit height of 2 bits (bpw=1)
+```
+
+**`bpw = 1`！** 读 `s5_shape_for` 就明白了：
+
+```cpp
+const unsigned long long slot_bits = 2ull * S + log2P;
+for (int c = 62; c >= 1; --c) {
+    if ((slot_bits % c) != 0) continue;      /* 要求 stride == slot_bits，即 bpw | slot_bits */
+    ...
+}
+```
+
+它在 **62 往下找一个 `slot_bits` 的约数**。而 `slot_bits = 2S + log2P` 经常是**质数**（例：S=129、P=17 → 263），这时 ≤62 的约数**只有 1** ⇒ **bpw=1** ✗。
+
+而 `bpw=1` 的后果是灾难性的：每个 digit 只有 1 位，digit 高度 2 bit ⇒ **carry 的链长变成 O(N)**（128 轮正是这么来的）✓；同时 slot 变成 263 个"1 位 digit"，数组要 P×263 宽 ✓。
+
+**这也解释了 112→128 的硬边界**：不是"多几轮就好"，而是某个形状在 `bpw=1` 下需要与数组长度同阶的轮次 ✓。
+
+**修法（下一轮，改动明确但涉及布局，需谨慎）**：不要用"bpw 整除最小的 slot_bits"来满足 `stride == slot_bits`，而是**把 slot 向上取整到 bpw 的倍数**——$2^{2S+\lceil\log_2 P\rceil} \le 2^{slot\_bits}$ 是**上界**，把 slot 放大到 `stride = ceil(slot_bits/bpw)*bpw` 完全合法 ✓，前提是**打包器与归约读的是同一个 stride**（现在两者都按 `slot_stride/bpw` 换算，已经一致 ✓）。§31 里"stride > slot_bits 会越窗"的那个历史结论，是在**打包器按 stride、归约按 slot_bits** 的错配下得到的 ✗——现在两侧同源，把 stride 定为唯一宽度即可 ✓。
+
+**本轮完整结论**：目标 ② 达成（逐叶全绿、因子与命中素数同参考、进回归套件 27/27）；S5 最后一个未解项（轮次数）的**根因已定位到形状规划器的一个退化分支（`bpw=1`）**，修法与验收条件都写清楚了。

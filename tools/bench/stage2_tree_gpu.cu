@@ -4170,8 +4170,12 @@ static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long
            corruption.  It is fatal now. */
         if (rc != 0) {
             std::fprintf(stderr, "%s: FATAL: the S5 multiply failed (rc=%d) at P=%llu -- refusing "
-                                 "to reduce digits it cannot trust\n", NTT_PROBE_NAME, rc,
-                         (unsigned long long)P);
+                                 "to reduce digits it cannot trust.  The carry reported %llu "
+                                 "unconverged digits with a maximum digit height of %llu bits "
+                                 "(bpw=%llu), so it needs at least %llu rounds plus the ripple's "
+                                 "own length\n", NTT_PROBE_NAME, rc, (unsigned long long)P,
+                         nst.carry_residual, nst.carry_max_bits, qbpw,
+                         qbpw ? (nst.carry_max_bits + qbpw - 1) / qbpw : 0ull);
             std::exit(3);
         }
         /* THE SHAPE THE MULTIPLY REALLY RAN must be the one the packer assumed: its slot_words is
