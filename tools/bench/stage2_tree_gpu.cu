@@ -3985,8 +3985,23 @@ static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long
                      qN, qbpw);
         std::exit(3);
     }
-    /* [A2] THE WINDOW BOUND, from the values: c_k = sum_{i+j=k} a_i*b_j is a sum of at most P
-       products of two S-bit numbers, so c_k <= P*(2^S-1)^2 < 2^(2S+log2 P) = 2^slot_bits whenever
+    /* ---- THE ARRAY MUST HOLD EVERY PRODUCT WINDOW, NOT JUST THE OPERANDS (section 52) -------
+       The assertions above bound the OPERANDS: `P*slot_stride <= N*bpw`.  The reduction then
+       reads `out_slots = 2P-1` windows at `k*slot_words`, and the LAST of them ends at
+       `(2P-1)*slot_words` WORDS -- nearly twice the operand span.  Nothing checked that against
+       the array size, so the tail windows of every multiply could be read from beyond the slice.
+       Asserted here, where both numbers are known. */
+    if (sh.out_slots * sh.slot_words > qN) {
+        std::fprintf(stderr, "%s: FATAL: the S5 product windows overrun the digit array: "
+                             "out_slots=%llu * slot_words=%llu = %llu words > N=%llu "
+                             "(the operand assertion only bounds P=%llu, not 2P-1)\n",
+                     NTT_PROBE_NAME, (unsigned long long)sh.out_slots,
+                     (unsigned long long)sh.slot_words,
+                     (unsigned long long)(sh.out_slots * sh.slot_words), qN,
+                     (unsigned long long)P);
+        std::exit(3);
+    }
+    /* [A2] THE WINDOW BOUND, from the values: c_k = sum_{i+j=k} a_i*b_j is a sum of at most P       products of two S-bit numbers, so c_k <= P*(2^S-1)^2 < 2^(2S+log2 P) = 2^slot_bits whenever
        P <= 2^log2P -- and log2P is defined as ceil(log2 P) two lines up, so this holds by
        construction and the assertion is what keeps the definition and the use tied together. */
     if (P > (1ull << ceil_log2_u64(P))) {
