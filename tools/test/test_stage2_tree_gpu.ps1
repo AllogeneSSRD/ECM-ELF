@@ -95,6 +95,10 @@ $rCap = RunCheck @('-D', '210', '-Evaluate', '-NameMax', '1')
 # large chunks, so it gets its own acceptance: forced on the frozen vector together with its own
 # point-by-point comparison against the per-point ladder.
 $rChain = RunCheck @('-D', '210', '-Evaluate', '-ChainCheck')
+# [8] the two OPERAND PACKERS must agree end to end (section 33): the device packer is the
+# default and the host packer is the oracle, and the frozen shape is where both can be run
+# against the CPU reference's factor set.
+$rHostPack = RunCheck @('-D', '210', '-Evaluate', '-HostPack')
 $out = $r210.out + "`n" + $r2310.out + "`n" + $rEval.out + "`n" + $rSharp.out
 $code = $rEval.code
 
@@ -149,6 +153,12 @@ Check "the giant chain was really used (chunks >= 1)" `
       ($rChain.out -match '(real|batched)_giant_chain: chunks=[1-9]') $rChain.out.Trim()
 Check "the chained run still finds the frozen factor" `
       ($rChain.out -match 'factors=59649589127497217') $rChain.out.Trim()
+
+# [8] the device packer (default) and the host packer (oracle) must agree on the factor set
+Check "the host-packing oracle still finds the frozen factor (device packer's A/B)" `
+      ($rHostPack.out -match 'factors=59649589127497217' -and `
+       $rHostPack.out -match 'hit_primes=114713') $rHostPack.out.Trim()
+Check "the host-packing A/B exits 0" ($rHostPack.code -eq 0) ("exit=" + $rHostPack.code)
 
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)

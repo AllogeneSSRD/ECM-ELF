@@ -51,6 +51,9 @@ param(
     [int]$NameMax = 0,
     # force the giant-point differential-addition chain and check it against the ladder
     [switch]$ChainCheck,
+    # run the OLD host-side operand packing (NTT_S4_HOSTPACK=1) instead of the default device
+    # packer, for the A/B: both must find the same factor set (section 33)
+    [switch]$HostPack,
     [string]$Sandbox = ''
 )
 
@@ -90,6 +93,7 @@ if ($NameMax -gt 0) { $env:NTT_NAME_MAX = "$NameMax" } else { Remove-Item Env:\N
 if ($ChainCheck) { $env:NTT_GIANT_CHAIN_MIN = '0'; $env:NTT_GIANT_CHAIN_CHECK = '1' }
 else { Remove-Item Env:\NTT_GIANT_CHAIN_MIN -ErrorAction SilentlyContinue
        Remove-Item Env:\NTT_GIANT_CHAIN_CHECK -ErrorAction SilentlyContinue }
+if ($HostPack) { $env:NTT_S4_HOSTPACK = '1' } else { Remove-Item Env:\NTT_S4_HOSTPACK -ErrorAction SilentlyContinue }
 $gpuOut = (& $gpu @gpuArgs 2>&1 | Out-String)
 $gpuOut.Trim() -split "`n" | ForEach-Object { Write-Host ("  gpu: " + $_.TrimEnd()) }
 $gpuCode = $LASTEXITCODE

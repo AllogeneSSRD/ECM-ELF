@@ -6483,6 +6483,13 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                             "coeffs=%llu gmp_checked=%llu gmp_bad=%llu slot_canonical_bad=%llu "
                             "t_reduce=%.3f\n", S->P, S->slot_bits, S->L, S->nlimb, S->calls,
                             S->coeffs, S->checked, S->check_bad, S->canon_bad, S->t_reduce);
+                /* the hook's out-of-timer work on the REAL shape too (section 36): the canonical
+                   counter's readback and the in-run GMP oracle */
+                std::printf("s4_reduce_hook_tail: P=%llu d2h_bad_us_per_call=%.2f "
+                            "sample_us_per_call=%.2f | t_hookd2h=%.3f s t_hooksample=%.3f s\n",
+                            S->P, S->calls ? 1e6 * S->t_hookd2h / (double)S->calls : 0.0,
+                            S->calls ? 1e6 * S->t_hooksample / (double)S->calls : 0.0,
+                            S->t_hookd2h, S->t_hooksample);
             }
             std::printf("s4_multiply_stats: enabled=1 launches=%llu poly_muls=%llu "
                         "coeffs_reduced=%llu t_reduce=%.3f gmp_selftest_cases=%llu "
