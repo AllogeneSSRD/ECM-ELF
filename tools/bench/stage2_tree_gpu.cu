@@ -370,6 +370,67 @@ static void affine_x_gmp(mpz_t out, const mpz_t X, const mpz_t Z, const mpz_t N)
     (void)affine_x_gmp_checked(out, X, Z, N);
 }
 
+/* ---- THE PROJECTIVE LEAF (objective 4, section 42) -----------------------------------------
+ *  The scale of the giant-point segment: S2G_GFINV_SEG points share ONE invertibility test and
+ *  one inverse, and that is also the granularity at which the two leaf forms are mixed.
+ *  Measured (section 41): an mpz_invert costs ~70 us for the production modulus while a modular
+ *  multiply costs ~6.5 us, and a segment of 16 contains one of the ~0.9% DEGENERATE giant
+ *  points with probability 13.4% -- which is what makes 16 the right size (8/16/32 give
+ *  45.0/42.4/43.4 us per point on the OLD scheme). */
+static const size_t S2G_GFINV_SEG = 16;
+
+/* dst = -x mod n, W words, for x < n.  Pure word arithmetic: no GMP objects at all, which is
+   the whole point of the projective leaf.  x == 0 gives 0 (the old affine path's value for the
+   identity). */
+static void words_neg_mod_n(std::vector<unsigned long long> &dst, size_t off,
+                            const unsigned long long *x, const unsigned long long *n, size_t W)
+{
+    bool zero = true;
+    for (size_t i = 0; i < W; ++i)
+        if (x[i]) { zero = false; break; }
+    if (zero) {
+        for (size_t i = 0; i < W; ++i) dst[off + i] = 0ull;
+        return;
+    }
+    unsigned long long borrow = 0;
+    for (size_t i = 0; i < W; ++i) {
+        const unsigned long long t = n[i] - x[i];
+        const unsigned long long b1 = (n[i] < x[i]) ? 1ull : 0ull;
+        const unsigned long long d = t - borrow;
+        const unsigned long long b2 = (t < borrow) ? 1ull : 0ull;
+        dst[off + i] = d;
+        borrow = b1 | b2;
+    }
+}
+
+/* the per-segment product of the z values, mod N, computed ON THE HOST.  Used by the LADDER
+   path (whose outputs are in the normal domain, where a device Montgomery product would be
+   wrong); the chain path gets the same quantity from the device, out of the images it already
+   has.  Either way it is the product of the values AS RETURNED -- the scale the projective
+   leaves carry -- so the host cannot tell the two apart. */
+static void gfinv_segprod_host(std::vector<unsigned long long> &out, size_t npts, size_t nw,
+                               const std::vector<unsigned long long> &gz, const mpz_t N)
+{
+    const size_t nseg = (npts + S2G_GFINV_SEG - 1) / S2G_GFINV_SEG;
+    out.assign(nseg * nw, 0ull);
+    mpz_t p, t;
+    mpz_inits(p, t, nullptr);
+    std::vector<unsigned long long> tmp(nw, 0ull);
+    for (size_t s = 0; s < nseg; ++s) {
+        const size_t a = s * S2G_GFINV_SEG;
+        const size_t b = ((a + S2G_GFINV_SEG) < npts) ? (a + S2G_GFINV_SEG) : npts;
+        words_to_mpz(p, &gz[a * nw], nw);
+        for (size_t i = a + 1; i < b; ++i) {
+            words_to_mpz(t, &gz[i * nw], nw);
+            mpz_mul(p, p, t);
+            mpz_mod(p, p, N);
+        }
+        mpz_to_words(tmp, nw, p);
+        std::copy(tmp.begin(), tmp.end(), out.begin() + (long)(s * nw));
+    }
+    mpz_clears(p, t, nullptr);
+}
+
 /* ===================================================================================== *
  *  device: x-only Montgomery arithmetic mod N and the reference's ladder
  *
@@ -778,6 +839,49 @@ static void s2g_launch_chain(int nw, unsigned long long blocks, unsigned long lo
     const unsigned int bl = (unsigned int)((blocks + th - 1) / th);
     s2g_chain_kernel<NW><<<bl, th>>>(dn, ninv, nw, ddx, ddz, dsx, dsz, esx, esz, npts, per_block,
                                     blocks, ox, oz);
+}
+
+/* ===================================================================================== *
+ *  THE SEGMENT PRODUCTS OF THE GIANT z-COORDINATES (objective 4, section 42)
+ *
+ *  One thread per segment of `seg` consecutive giant points; ONE Montgomery multiplication per
+ *  point, in the MONTGOMERY DOMAIN the chain already hands back (the product of images is the
+ *  image of the product, so no conversion and no extra constant is needed).  The host then asks
+ *  ONE question per segment -- is this product invertible mod N? -- and the answer decides
+ *  whether the segment's leaves can be written in the PROJECTIVE form [ -X, Z ] (two word-level
+ *  operations, no GMP at all) instead of being converted to affine [ -x, 1 ] with a modular
+ *  inversion per point.  See the note at the leaf loop for why the two forms may be MIXED and
+ *  why the tree is then bit-identical to the old one after one global scaling.
+ * ===================================================================================== */
+template <int NW>
+__global__ void s2g_segprod_kernel(const unsigned long long *dn, unsigned long long ninv, int nw,
+                                   const unsigned long long *dz, unsigned long long npts,
+                                   unsigned long long seg, unsigned long long nseg,
+                                   unsigned long long *out)
+{
+    const unsigned long long s = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (s >= nseg) return;
+    const unsigned long long start = s * seg;
+    if (start >= npts) return;
+    const unsigned long long end = ((start + seg) < npts) ? (start + seg) : npts;
+    unsigned long long p[NW], tmp[NW];
+    for (int i = 0; i < nw; ++i) p[i] = dz[(size_t)start * nw + i];
+    for (unsigned long long j = start + 1; j < end; ++j) {
+        s2g_mont_mul<NW>(tmp, p, dz + (size_t)j * nw, dn, ninv, nw);
+        for (int i = 0; i < nw; ++i) p[i] = tmp[i];
+    }
+    for (int i = 0; i < nw; ++i) out[(size_t)s * nw + i] = p[i];
+}
+
+template <int NW>
+static void s2g_launch_segprod(int nw, unsigned long long npts, unsigned long long seg,
+                               unsigned long long ninv, const unsigned long long *dn,
+                               const unsigned long long *dz, unsigned long long *out)
+{
+    const unsigned long long nseg = (npts + seg - 1) / seg;
+    const unsigned int th = 64;
+    const unsigned int bl = (unsigned int)((nseg + th - 1) / th);
+    s2g_segprod_kernel<NW><<<bl, th>>>(dn, ninv, nw, dz, npts, seg, nseg, out);
 }
 
 /* ===================================================================================== *
@@ -5063,7 +5167,9 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
                               unsigned long long clo, unsigned long long chi,
                               unsigned long long per_block, std::vector<unsigned long long> &gx,
                               std::vector<unsigned long long> &gz, bool check,
-                              unsigned long long &seed_points)
+                              unsigned long long &seed_points,
+                              std::vector<unsigned long long> *gseg = nullptr,
+                              unsigned long long seg = 16)
 {
     const size_t nw = C.nw;
     const unsigned long long npts = chi - clo + 1;
@@ -5132,6 +5238,18 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
     gz.assign((size_t)npts * nw, 0ull);
     CK(cudaMemcpy(gx.data(), ox, gx.size() * 8, cudaMemcpyDeviceToHost));
     CK(cudaMemcpy(gz.data(), oz, gz.size() * 8, cudaMemcpyDeviceToHost));
+    /* the per-segment z-products, while the point buffers are still on the device (section 42) */
+    unsigned long long *dsp = nullptr;
+    if (gseg) {
+        const unsigned long long nseg = (npts + seg - 1) / seg;
+        gseg->assign((size_t)nseg * nw, 0ull);
+        CK(cudaMalloc(&dsp, (size_t)nseg * nw * 8));
+        S2G_DISPATCH((int)nw, s2g_launch_segprod, (int)nw, npts, seg, C.ninv, W.dn, oz, dsp);
+        CK(cudaGetLastError());
+        CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(gseg->data(), dsp, gseg->size() * 8, cudaMemcpyDeviceToHost));
+        cudaFree(dsp);
+    }
     cudaFree(ddsx); cudaFree(ddsz); cudaFree(desx); cudaFree(desz);
     cudaFree(ddx); cudaFree(ddz); cudaFree(ox); cudaFree(oz);
     /* THE CHECK: the same chunk through the ladder, compared on the AFFINE x value (the chain and
@@ -5477,6 +5595,16 @@ struct BatchedRun {
        `gleaves` is the one part of the loop body that no phase timer owned (the host GMP
        affine conversion of every giant point, section 31.4/38). */
     double t_pre_loop = 0.0, t_loop_wall = 0.0, t_post_loop = 0.0, t_gleaves = 0.0;
+    /* the one pass over H that removes the projective scale (section 42) */
+    double t_gscale = 0.0;
+    /* ---- THE PROJECTIVE BOOKKEEPING MUST BE EXACTLY SELF-CONSISTENT ----------------------
+       The factor set CANNOT validate Gamma: any invertible Gamma gives the same gcds, so a
+       doubled or missing factor would still "pass".  The invariant that can be checked is
+       combinatorial and exact: every projective leaf must be covered by exactly one accumulated
+       segment product, i.e. gamma_points == proj_points at the end of the run.  A missed segment
+       makes it too small, a double count makes it too large, and either way it is a hard error
+       rather than a silently different scale. */
+    unsigned long long proj_points = 0, proj_gamma_points = 0, proj_segments = 0, proj_fallbacks = 0;
     /* ... and the four parts of `gleaves`, because "the host affine conversion" is 36% of the
        whole curve and each part has a different fix (section 41) */
     double t_gin = 0.0, t_ginv = 0.0, t_gmul = 0.0, t_gout = 0.0;
@@ -5543,6 +5671,19 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
        what disappears is the peak memory. */
     std::vector<unsigned long long> gjs;
     std::vector<unsigned long long> gx, gz;
+    /* the per-segment z-products (section 42), one chunk at a time */
+    std::vector<unsigned long long> gseg;
+    unsigned long long proj_points = 0, proj_gamma_points = 0, proj_segments = 0,
+                       proj_fallbacks = 0;
+    /* GAMMA^-1: the ONE global correction the projective leaves need.  The G tree of a batch
+       whose leaves are projective is GAMMA_b * prod(X - x_i) instead of prod(X - x_i), and the
+       folds carry that constant through (H <- (G*H) mod F scales by the same constant), so H
+       comes out of the loop as GAMMA * prod_b f_b.  GAMMA = prod of the z values of exactly the
+       points whose leaf is projective, i.e. a product of INVERTIBLE elements -- which is why it
+       is invertible, and why multiplying H by GAMMA^-1 before the descent reproduces the old
+       polynomial EXACTLY (mod N, coefficient by coefficient). */
+    mpz_t Ginv;
+    mpz_init_set_ui(Ginv, 1);
 
     /* ---- 2. the outer loop: ceil(I/P) batches, the first one SEEDS H ------------------- */
     R.num_poly_g = (imax + (unsigned long long)P - 1) / (unsigned long long)P;
@@ -5630,14 +5771,21 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             return (e && *e) ? std::strtoull(e, nullptr, 10) : 32768ull;
         }();
         const unsigned long long npts = (unsigned long long)(chi - clo + 1);
+        /* the per-SEGMENT z-product grid is shared by the two paths (section 42): the chain
+           computes it on the device out of the Montgomery images it already produced, the
+           ladder path computes the very same product on the host.  Both are the product of the
+           z values AS RETURNED, which is exactly the scale the projective leaves carry. */
+        gseg.assign(((size_t)npts + S2G_GFINV_SEG - 1) / S2G_GFINV_SEG * (size_t)C.nw, 0ull);
         if (force_ladder || npts < chain_min) {
             gjs.resize(chi - clo + 1);
             for (size_t i = clo; i <= chi; ++i) gjs[i - clo] = (unsigned long long)i * D;
             ladder_points_ws(ws, gjs, gx, gz);
+            gfinv_segprod_host(gseg, (size_t)npts, (size_t)C.nw, gz, L.N);
         } else {
             unsigned long long seed_points = 0;
             giant_chunk_chain(L, C, ws, D, (unsigned long long)clo, (unsigned long long)chi,
-                              chain_block, gx, gz, chain_check, seed_points);
+                              chain_block, gx, gz, chain_check, seed_points, &gseg,
+                              S2G_GFINV_SEG);
             R.giant_seed_points += seed_points;
             ++R.giant_chain_chunks;
         }
@@ -5656,49 +5804,111 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             const double tgl0 = now_s();
             mpz_t X, Z, ax, neg, gq;
             mpz_inits(X, Z, ax, neg, gq, nullptr);
-            /* ---- THE BATCHED AFFINE CONVERSION (objective 4, section 41) --------------------
-               x_i = X_i / Z_i mod N is one mpz_invert per giant point, and that inversion is
-               MEASURED at 61.5 us for the production modulus while the two input conversions and
-               the output conversion together are 0.75 us -- so 224.8 s of a 621 s curve, the
-               single largest phase in the engine and larger than the whole NTT (234 s).
-               Montgomery's trick removes almost all of it: inside a segment of SEG points, ONE
-               inversion of the product plus ~3 multiplications per point yields every Z_i^-1.
-               A segment that contains a giant point with gcd(Z_i, N) > 1 -- the degenerate point
-               of objective 3, ~0.9% of them at the production shape -- cannot be inverted as a
-               block, so that segment falls back to the per-point path, which is ALSO what detects
-               and records the degeneracy (s3_record).  A clean segment computes exactly the same
-               x_i = X_i * Z_i^-1 mod N as the old code, bit for bit, and a fallback segment runs
-               the old code verbatim: the leaves cannot change either way. */
-            const int SEG = 16;
+            /* ---- THE PROJECTIVE LEAF, AND WHY THE TREE CANNOT CHANGE (section 42) ------------
+               x_i = X_i / Z_i mod N used to be one mpz_invert per giant point: MEASURED at 61.5 us
+               for the production modulus while the two input conversions and the output conversion
+               together are 0.75 us, so 224.8 s of a 621 s curve -- the largest single phase in the
+               engine, larger than the whole NTT (234 s).  Section 41 got it to 132.8 s with
+               Montgomery's trick on the host; this removes the inversion from the CLEAN path
+               entirely.
+               The leaf does not have to be monic.  If it is written PROJECTIVELY as
+                   [ -X_i , Z_i ]      instead of      [ -x_i , 1 ],
+               then the factor is  Z_i*X - X_i = Z_i*(X - x_i), i.e. exactly Z_i times the old
+               leaf, and a product tree over a MIXED set of leaves is
+                   (prod over the projective ones of Z_i) * prod over ALL of them (X - x_i).
+               So a segment whose z-product is INVERTIBLE mod N writes its leaves projectively at
+               word level (two word operations, no GMP), and a segment whose product is NOT
+               invertible -- it contains one of the ~0.9% DEGENERATE giant points, gcd(Z_i,N) > 1,
+               the hit of objective 3 -- falls back to the affine path VERBATIM, degeneracy record
+               included.  Gamma = the product of exactly the projective segments' z values is
+               therefore a product of invertible elements, and multiplying H by Gamma^-1 once
+               before the descent reproduces the old polynomial coefficient for coefficient.
+               ONE mpz_invert per SEGMENT, not per point, and that invert is ALSO the Gamma^-1
+               factor it contributes -- nothing is computed twice.  The segment products come from
+               the device for the chain path (s2g_segprod_kernel, out of the Montgomery images the
+               chain already has) and from the host for the ladder path. */
+            const size_t SEG = S2G_GFINV_SEG;
             /* plain arrays, not std::vector: mpz_t is an ARRAY type (__mpz_struct[1]) and cannot
                be held in a std::vector */
-            mpz_t pv[SEG + 1], zv[SEG];
-            for (int s = 0; s <= SEG; ++s) mpz_init(pv[s]);
-            for (int s = 0; s < SEG; ++s) mpz_init(zv[s]);
-            mpz_t pinv, zinv;
-            mpz_inits(pinv, zinv, nullptr);
+            mpz_t pv[32 + 1], zv[32];
+            for (int s = 0; s <= 32; ++s) mpz_init(pv[s]);
+            for (int s = 0; s < 32; ++s) mpz_init(zv[s]);
+            mpz_t pinv, zinv, pseg, invp;
+            mpz_inits(pinv, zinv, pseg, invp, nullptr);
             std::vector<unsigned long long> w(W, 0ull);
-            for (size_t a = lo; a < hi; a += (size_t)SEG) {
-                const size_t nb = ((a + (size_t)SEG) < hi) ? (size_t)SEG : (hi - a);
-                const double t1 = now_s();
-                bool clean = true;
-                mpz_set_ui(pv[0], 1);
-                for (size_t j = 0; j < nb; ++j) {
-                    const size_t q = (a + j) - (clo - 1);
-                    words_to_mpz(zv[j], &gz[q * W], W);
-                    if (mpz_sgn(zv[j]) == 0) { clean = false; break; }
-                    mpz_mul(pv[j + 1], pv[j], zv[j]);
-                    mpz_mod(pv[j + 1], pv[j + 1], L.N);
+            /* THE SEGMENT GRID IS IN CHUNK-LOCAL INDICES, because that is the grid the device
+               built `gseg` on (`giant_chunk_chain` segments [0,SEG), [SEG,2SEG), ... over the
+               chunk's own points).  The point indices here are GLOBAL (lo = b*P), so the local
+               index is `l - (clo-1)`; using the global one walked `gseg` off its end for every
+               point after the first chunk -- silently at 1e11 (the read landed inside the heap)
+               and as an access violation at the production shape, which is how it was found.
+               `first_touch` keeps Gamma from counting a segment twice when a BATCH boundary
+               falls inside it: only the batch that owns the segment's first point adds its
+               inverse, and the other half's projective leaves are covered by that one factor. */
+            const size_t lbase = clo - 1;               /* local 0 == global lbase */
+            const size_t lhi = hi - lbase;
+            for (size_t la = lo - lbase; la < lhi;) {
+                const size_t sidx = la / SEG;
+                const size_t send = (sidx + 1) * SEG;
+                const size_t lend = (send < lhi) ? send : lhi;
+                const size_t nb = lend - la;
+                const bool first_touch = (la == sidx * SEG);
+                /* a hard guard, because getting this wrong the first time was SILENT at 1e11 (the
+                   out-of-range read landed inside the heap and only Gamma was wrong) and an access
+                   violation at the production shape -- an index that must be in range is asserted,
+                   not trusted */
+                if ((sidx + 1) * W > gseg.size()) {
+                    std::fprintf(stderr, "%s: FATAL: giant segment %llu is outside the %llu "
+                                         "segment products of this chunk (local index %llu of "
+                                         "%llu)\n", NTT_PROBE_NAME, (unsigned long long)sidx,
+                                 (unsigned long long)(gseg.size() / W), (unsigned long long)la,
+                                 (unsigned long long)lhi);
+                    std::exit(3);
                 }
+                const double t1 = now_s();
+                words_to_mpz(pseg, &gseg[sidx * W], W);
                 const double t2 = now_s();
-                if (clean && mpz_invert(pinv, pv[nb], L.N) == 0) clean = false;
+                const bool clean = (mpz_invert(invp, pseg, L.N) != 0);
                 const double t3 = now_s();
                 R.t_gin += t2 - t1;
                 R.t_ginv += t3 - t2;
-                if (!clean) {
-                    /* the old per-point path, verbatim -- including the degeneracy record */
+                if (clean) {
+                    if (first_touch) {
+                        mpz_mul(Ginv, Ginv, invp);
+                        mpz_mod(Ginv, Ginv, L.N);
+                        /* the points the DEVICE's segment product covers (the last segment of a
+                           chunk can be short) */
+                        const size_t seglen = ((sidx + 1) * SEG < npts) ? SEG
+                                                                        : (npts - sidx * SEG);
+                        proj_gamma_points += seglen;
+                        ++proj_segments;
+                    }
+                    for (size_t q = la; q < lend; ++q) {
+                        words_neg_mod_n(bleaf[q + lbase - lo], 0, &gx[q * W], C.hn.data(), W);
+                        std::copy(&gz[q * W], &gz[q * W] + (long)W,
+                                  bleaf[q + lbase - lo].begin() + (long)W);
+                        ++proj_points;
+                    }
+                    R.t_gout += now_s() - t3;
+                    la = lend;
+                    continue;
+                }
+                /* ---- the affine path, VERBATIM (Montgomery's trick inside the segment, and the
+                   old per-point path for whatever still refuses to invert) ------------------ */
+                bool seg_clean = true;
+                mpz_set_ui(pv[0], 1);
+                proj_fallbacks += nb;
+                for (size_t j = 0; j < nb; ++j) {
+                    const size_t q = la + j;
+                    words_to_mpz(zv[j], &gz[q * W], W);
+                    if (mpz_sgn(zv[j]) == 0) { seg_clean = false; break; }
+                    mpz_mul(pv[j + 1], pv[j], zv[j]);
+                    mpz_mod(pv[j + 1], pv[j + 1], L.N);
+                }
+                if (seg_clean && mpz_invert(pinv, pv[nb], L.N) == 0) seg_clean = false;
+                if (!seg_clean) {
                     for (size_t j = 0; j < nb; ++j) {
-                        const size_t i = a + j, q = i - (clo - 1);
+                        const size_t q = la + j, bi = q + lbase - lo;
                         words_to_mpz(X, &gx[q * W], W);
                         words_to_mpz(Z, &gz[q * W], W);
                         if (!affine_x_gmp_checked(ax, X, Z, L.N)) {
@@ -5709,14 +5919,15 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                         mpz_neg(neg, ax);
                         mpz_mod(neg, neg, L.N);
                         mpz_to_words(w, W, neg);
-                        std::copy(w.begin(), w.end(), bleaf[i - lo].begin());
-                        bleaf[i - lo][W] = 1;
+                        std::copy(w.begin(), w.end(), bleaf[bi].begin());
+                        bleaf[bi][W] = 1;
                     }
                     R.t_gout += now_s() - t3;
+                    la = lend;
                     continue;
                 }
                 for (size_t j = nb; j-- > 0;) {
-                    const size_t i = a + j, q = i - (clo - 1);
+                    const size_t q = la + j, bi = q + lbase - lo;
                     mpz_mul(zinv, pinv, pv[j]);
                     mpz_mod(zinv, zinv, L.N);        /* Z_j^-1 */
                     mpz_mul(pinv, pinv, zv[j]);
@@ -5727,14 +5938,15 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                     mpz_neg(neg, ax);
                     mpz_mod(neg, neg, L.N);          /* the leaf (X - x_i) = [ -x_i, 1 ] */
                     mpz_to_words(w, W, neg);
-                    std::copy(w.begin(), w.end(), bleaf[i - lo].begin());
-                    bleaf[i - lo][W] = 1;
+                    std::copy(w.begin(), w.end(), bleaf[bi].begin());
+                    bleaf[bi][W] = 1;
                 }
                 R.t_gout += now_s() - t3;
+                la = lend;
             }
-            for (int s = 0; s <= SEG; ++s) mpz_clear(pv[s]);
-            for (int s = 0; s < SEG; ++s) mpz_clear(zv[s]);
-            mpz_clears(pinv, zinv, nullptr);
+            for (int s = 0; s <= 32; ++s) mpz_clear(pv[s]);
+            for (int s = 0; s < 32; ++s) mpz_clear(zv[s]);
+            mpz_clears(pinv, zinv, pseg, invp, nullptr);
             mpz_clears(X, Z, ax, neg, nullptr);
             R.t_gleaves += now_s() - tgl0;
         }
@@ -5796,6 +6008,51 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         R.t_loop_wall += now_s() - tloop0;
     }
+    /* ---- UNDO THE PROJECTIVE SCALE (section 42) ------------------------------------------
+       The projective leaves multiplied the tree by Gamma, and the fold carries a constant
+       straight through (H <- (G*H) mod F scales by the same constant), so H left the loop as
+       Gamma * prod_b f_b mod F.  ONE pass over H's coefficients by Gamma^-1 restores the exact
+       polynomial the old monic leaves produced -- not approximately: every step of the tree is
+       reduced mod N coefficient by coefficient, so the scaling is exact in that ring, and
+       gcd(v, N) is unchanged by an invertible factor either way. */
+    if (mpz_cmp_ui(Ginv, 1) != 0 && !H.empty()) {
+        const double tg0 = now_s();
+        mpz_t c;
+        mpz_init(c);
+        for (size_t i = 0; i < H.size(); ++i) {
+            words_to_mpz(c, H[i].data(), W);
+            mpz_mul(c, c, Ginv);
+            mpz_mod(c, c, L.N);
+            mpz_to_words(H[i], W, c);
+        }
+        mpz_clear(c);
+        R.t_gscale = now_s() - tg0;
+    }
+    /* THE INVARIANT (section 42): one accumulated segment product per projective leaf set, no
+       more and no less.  The factor set cannot see a wrong Gamma (any INVERTIBLE one gives the
+       same gcds), so this is asserted instead of trusted. */
+    if (proj_points != proj_gamma_points) {
+        std::fprintf(stderr, "%s: FATAL: the projective scale covers %llu points but %llu leaves "
+                             "were written projectively -- Gamma is not the product of exactly "
+                             "those z values\n", NTT_PROBE_NAME,
+                     (unsigned long long)proj_gamma_points, (unsigned long long)proj_points);
+        std::exit(3);
+    }
+    {
+        mpz_t t;
+        mpz_init(t);
+        if (mpz_invert(t, Ginv, L.N) == 0) {
+            std::fprintf(stderr, "%s: FATAL: the projective scale Gamma is not invertible mod N "
+                                 "-- H cannot be unscaled\n", NTT_PROBE_NAME);
+            std::exit(3);
+        }
+        mpz_clear(t);
+    }
+    R.proj_points = proj_points;
+    R.proj_gamma_points = proj_gamma_points;
+    R.proj_segments = proj_segments;
+    R.proj_fallbacks = proj_fallbacks;
+    mpz_clear(Ginv);
     R.t_post_loop = now_s();
 
     /* ---- 3. ONE descent of H against the F tree: H(x_j) at every baby point ------------ */
@@ -6619,10 +6876,16 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     BR.t_pre_loop + BR.t_loop_wall + BR.t_post_loop, el, BR.t_gleaves,
                     BR.t_loop_wall - BR.t_giant - BR.t_gtrees - BR.t_fold - BR.t_gleaves);
         std::printf("real_batched_gleaves: in=%.3f invert=%.3f out=%.3f (us_per_point: in=%.2f "
-                    "invert=%.2f out=%.2f)\n", BR.t_gin, BR.t_ginv, BR.t_gout,
+                    "invert=%.2f out=%.2f) gscale=%.3f s\n", BR.t_gin, BR.t_ginv, BR.t_gout,
                     BR.giant_points ? 1e6 * BR.t_gin / (double)BR.giant_points : 0.0,
                     BR.giant_points ? 1e6 * BR.t_ginv / (double)BR.giant_points : 0.0,
-                    BR.giant_points ? 1e6 * BR.t_gout / (double)BR.giant_points : 0.0);
+                    BR.giant_points ? 1e6 * BR.t_gout / (double)BR.giant_points : 0.0,
+                    BR.t_gscale);
+        /* section 42: the projective leaves and the segment products that cover them must match
+           EXACTLY (asserted in run_batched); the number is reported so a drift is visible */
+        std::printf("real_batched_projective: leaves=%llu gamma_points=%llu segments=%llu "
+                    "affine_fallback_points=%llu\n", BR.proj_points, BR.proj_gamma_points,
+                    BR.proj_segments, BR.proj_fallbacks);
         std::printf("real_giant_chain: chunks=%llu seed_points=%llu chunks_per_ladder=%llu\n",
                     BR.giant_chain_chunks, BR.giant_seed_points,
                     BR.giant_chain_chunks ? 0ull : 1ull);
