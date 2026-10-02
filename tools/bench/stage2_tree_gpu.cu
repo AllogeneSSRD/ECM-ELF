@@ -1328,6 +1328,13 @@ struct S4Reduce {
     };
     std::vector<Shape *> shapes;
     unsigned long long reduce_calls = 0, coeffs_total = 0;
+    /* the asynchronous `dbad` readback (section 43): one copy in flight at a time, compared on
+       the following call, and resolved for good by s4_dbad_resolve() */
+    unsigned long long *h_dbad = nullptr;
+    cudaEvent_t ev_dbad = nullptr;
+    bool dbad_inflight = false;
+    Shape *dbad_shape = nullptr;
+    unsigned long long dbad_expected = 0;
 
     S4Reduce() { mpz_init(N); }
     ~S4Reduce()
@@ -1335,6 +1342,8 @@ struct S4Reduce {
         for (Shape *s : shapes) delete s;
         if (dn) cudaFree(dn);
         if (dbad) cudaFree(dbad);
+        if (h_dbad) cudaFreeHost(h_dbad);
+        if (ev_dbad) cudaEventDestroy(ev_dbad);
         mpz_clear(N);
     }
     /* the key must be the WHOLE shape, not slot_bits: slot_bits = 2S + ceil(log2 P) is the same
@@ -1348,6 +1357,32 @@ struct S4Reduce {
         return nullptr;
     }
 };
+
+/* Resolve the pending asynchronous `dbad` readback, if there is one (section 43).  NON-BLOCKING
+   by default: the point of the whole exercise is that the host must not wait for the work it has
+   just queued.  `wait=true` is used only where a violation could otherwise be lost -- before the
+   counter is reset for a new shape, and once at the end of the run.  A violation is FATAL, in the
+   same terms as the old synchronous check (the counter is monotone, so a late read is complete:
+   it cannot miss a violation, it can only report it later). */
+static void s4_dbad_resolve(S4Reduce &R, bool wait = false)
+{
+    if (!R.dbad_inflight) return;
+    if (wait) CK(cudaEventSynchronize(R.ev_dbad));
+    else if (cudaEventQuery(R.ev_dbad) != cudaSuccess) return;
+    R.dbad_inflight = false;
+    const unsigned long long hbad = *R.h_dbad;
+    S4Reduce::Shape *S = R.dbad_shape;
+    if (S && hbad != R.dbad_expected) {
+        const unsigned long long added = (hbad > R.dbad_expected) ? (hbad - R.dbad_expected)
+                                                                 : hbad;
+        std::fprintf(stderr, "%s: FATAL: %llu (of %llu so far) slot windows of P=%llu have "
+                             "nonzero digits above slot_bits=%llu -- the reduction bound "
+                             "C < 2^slot_bits does NOT apply to these values\n", NTT_PROBE_NAME,
+                     added, S->coeffs, S->P, S->slot_bits);
+        std::exit(3);
+    }
+    if (S) S->canon_bad = hbad;
+}
 
 /* base-2^64 limbs of the slot window -> mod N, on the device.  One thread per coefficient. */
 template <int NW>
@@ -1643,7 +1678,14 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
        is minutes -- all of it inside "the unattributed part of ntt_seconds".  Now it is reset
        once per shape and read every g_s4_check_every calls (the GMP oracle's cadence), so a
        violation is still reported within 8 calls of happening. */
-    if (S->calls == 0) CK(cudaMemset(R.dbad, 0, sizeof(unsigned long long)));
+    if (S->calls == 0) {
+        /* ... AND THE PENDING READBACK MUST BE RESOLVED BEFORE THE RESET (section 43): `dbad` is
+           shared by every shape and is zeroed when a shape starts, so a copy still in flight
+           would read the post-reset zero and look exactly like a violation.  Once per shape, so
+           the wait is free. */
+        s4_dbad_resolve(R);
+        CK(cudaMemset(R.dbad, 0, sizeof(unsigned long long)));
+    }
     /* MARK THE KERNEL IN-STREAM AND RESOLVE IT LATER (section 41): no cudaDeviceSynchronize()
        here any more -- see the note on `t_reduce` in S4Reduce::Shape. */
     const int dts = S->dt_slot();
@@ -1657,19 +1699,30 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
     S->dt_used[dts] = true;
     S->t_reduce_host += now_s() - t0;
     const double th0 = now_s();
-    unsigned long long hbad = S->canon_bad;
-    if ((S->calls % g_s4_check_every) == 0)
-        CK(cudaMemcpy(&hbad, R.dbad, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    /* ---- THE DIAGNOSTIC READBACK MUST NOT DRAIN EITHER (objective 4, section 43) -----------
+       This is the SAME trap section 41 found in the carry-residual check, in the hook instead of
+       the multiply: an 8-byte blocking copy issued right after a chunk's worth of kernels has
+       been queued waits for all of them, and it MEASURED 19.2 s at the production shape (1946
+       calls, ~10 ms each) for a counter that is never read as a control input.  `dbad` is
+       monotone, so reading it LATE is exactly as good: the copy is asynchronous into pinned
+       memory and the PREVIOUS one is compared on the next call (and at the end of the run).
+       A violation is therefore still reported -- one call later instead of immediately. */
+    s4_dbad_resolve(R);
+    if (!R.dbad_inflight && (S->calls % g_s4_check_every) == 0) {
+        if (!R.h_dbad) {
+            CK(cudaHostAlloc((void **)&R.h_dbad, sizeof(unsigned long long), cudaHostAllocDefault));
+            *R.h_dbad = 0;
+            CK(cudaEventCreate(&R.ev_dbad));
+        }
+        CK(cudaMemcpyAsync(R.h_dbad, R.dbad, sizeof(unsigned long long),
+                           cudaMemcpyDeviceToHost));
+        CK(cudaEventRecord(R.ev_dbad));
+        R.dbad_inflight = true;
+        R.dbad_shape = S;
+        R.dbad_expected = S->canon_bad;
+    }
     ++R.reduce_calls;
     S->t_hookd2h += now_s() - th0;
-    if (hbad != S->canon_bad) {
-        const unsigned long long added = hbad - S->canon_bad;
-        S->canon_bad = hbad;
-        std::fprintf(stderr, "%s: FATAL: %llu of %llu slot windows have nonzero digits above "
-                             "slot_bits=%llu -- the reduction bound C < 2^slot_bits does NOT "
-                             "apply to these values\n", NTT_PROBE_NAME, added, total, slot_bits);
-        std::exit(3);
-    }
     ++S->calls;
     S->coeffs += total;
     R.coeffs_total += total;
@@ -6979,6 +7032,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                                full = 0, canon = 0, coeffs = 0;
             double t_red = 0.0, t_red_host = 0.0;
             unsigned long long dt_blocked = 0;
+            s4_dbad_resolve(red, /*wait=*/true);   /* section 43: the last readback must be checked */
             for (S4Reduce::Shape *S : red.shapes) {
                 S->dt_flush();     /* the run is over and the stream has drained: resolve the
                                       deferred marks now (section 41) */
@@ -7388,8 +7442,9 @@ static int run_check_F(const char *path, const char *gpu_dump_path, bool evaluat
             unsigned long long sel_cases = 0, sel_bad = 0, checked = 0, check_bad = 0,
                                full = 0, canon = 0, coeffs = 0;
             double t_red = 0.0;
+            s4_dbad_resolve(red, /*wait=*/true);   /* section 43: the last readback must be checked */
             for (S4Reduce::Shape *S : red.shapes) {
-                S->dt_flush();     /* resolve the deferred marks (section 41) */
+                S->dt_flush();     /* resolve the deferred marks (section 41/42) */
                 sel_cases += S->selftest_cases; sel_bad += S->selftest_bad;
                 checked += S->checked; check_bad += S->check_bad;
                 full += S->full_checks; canon += S->canon_bad; coeffs += S->coeffs;
