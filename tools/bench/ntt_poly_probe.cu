@@ -1510,6 +1510,23 @@ struct NttArena {
        shape keeps its caching) and retry before falling back to the per-call path. */
     unsigned long long tbl_evictions = 0, tbl_words_freed = 0;
 
+    /* A cudaMalloc THAT CAN FAIL WITHOUT KILLING THE RUN.  The cap accounting is in words the
+       arena believes it owns, but the device's REAL free memory can be smaller -- the stage-2
+       engine holds its own pools (the ladder, the frontier, the S5 forests) and the driver
+       reserves some -- so an allocation that passes the cap check can still come back "out of
+       memory".  Measured, not theorised: at NTT_S4_BATCH_MB=96 the arena's own check passed and
+       the very next cudaMalloc failed, and because that site used CK() the whole run died
+       (ntt_poly_probe.cu:1634 cudaMalloc dA, exit 2).  Every arena allocation is a CACHE, so
+       failing one is recoverable: the caller falls back to the per-call path, which is exactly
+       the `overflow` path that already exists for cap refusals. */
+    static bool try_malloc(unsigned long long **p, size_t bytes)
+    {
+        if (cudaMalloc((void **)p, bytes) == cudaSuccess) return true;
+        (void)cudaGetLastError();             /* clear the sticky error before anything else runs */
+        *p = nullptr;
+        return false;
+    }
+
     /* the words a cached shape's tables occupy: sum over outer passes of (S + 2^M) for the forward
        and again for the inverse, exactly as ntt_fuse_cache_tables allocates them */
     static unsigned long long fuse_table_words(const FuseCtx &c)
@@ -1631,9 +1648,23 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         NttArena::BigEntry e;
         e.n = n;
         e.nbatch = nbatch;
-        CK(cudaMalloc(&e.dA, n * nbatch * sizeof(unsigned long long)));
-        CK(cudaMalloc(&e.dB, n * nbatch * sizeof(unsigned long long)));
-        CK(cudaMalloc(&e.dQ, n * nbatch * sizeof(unsigned long long)));
+        /* the three big buffers are the whole cost of a shape, so this is where a real out-of-
+           memory shows up first -- and it is a cache, so it degrades instead of aborting */
+        if (!NttArena::try_malloc(&e.dA, n * nbatch * sizeof(unsigned long long)) ||
+            !NttArena::try_malloc(&e.dB, n * nbatch * sizeof(unsigned long long)) ||
+            !NttArena::try_malloc(&e.dQ, n * nbatch * sizeof(unsigned long long))) {
+            if (e.dA) cudaFree(e.dA);
+            if (e.dB) cudaFree(e.dB);
+            if (e.dQ) cudaFree(e.dQ);
+            ++ar->overflow;
+            if (ar->overflow <= 4)
+                std::fprintf(stderr, "%s: arena could NOT allocate N=%llu nbatch=%llu (%.0f MB): "
+                                     "the device is out of memory (the cap says %.0f of %.0f MB "
+                                     "free) -- falling back to per-call cudaMalloc\n",
+                             NTT_PROBE_NAME, n, nbatch, need / 1048576.0, ar->bytes / 1048576.0,
+                             ar->cap_bytes / 1048576.0);
+            return nullptr;
+        }
         e.words = (size_t)(3 * n * nbatch);
         ar->bytes += need;
         ar->bigs.push_back(e);
@@ -1659,7 +1690,12 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         if (small->dOut) cudaFree(small->dOut);
         small->dOut = nullptr;
         small->out_cap = 0;
-        CK(cudaMalloc(&small->dOut, out_slots * nbatch * sizeof(unsigned long long)));
+        if (!NttArena::try_malloc(&small->dOut, out_slots * nbatch * sizeof(unsigned long long))) {
+            /* out_cap is left at 0, so the next call at this (N, nbatch) simply retries the
+               growth -- the entry stays valid, only unusable until an allocation succeeds */
+            ++ar->overflow;
+            return nullptr;
+        }
         small->out_cap = out_slots;
         small->words = (size_t)(out_slots * nbatch + 2 * nbatch);
         ar->bytes += extra;
@@ -1674,8 +1710,18 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         e.n = n;
         e.nbatch = nbatch;
         e.out_cap = out_slots;
-        CK(cudaMalloc(&e.dOut, out_slots * nbatch * sizeof(unsigned long long)));
-        CK(cudaMalloc(&e.dRes, 2 * nbatch * sizeof(unsigned long long)));
+        if (!NttArena::try_malloc(&e.dOut, out_slots * nbatch * sizeof(unsigned long long)) ||
+            !NttArena::try_malloc(&e.dRes, 2 * nbatch * sizeof(unsigned long long))) {
+            if (e.dOut) cudaFree(e.dOut);
+            if (e.dRes) cudaFree(e.dRes);
+            ++ar->overflow;
+            if (ar->overflow <= 4)
+                std::fprintf(stderr, "%s: arena could NOT allocate the small buffers for N=%llu "
+                                     "nbatch=%llu (%.0f MB): the device is out of memory -- "
+                                     "falling back to per-call cudaMalloc\n",
+                             NTT_PROBE_NAME, n, nbatch, need / 1048576.0);
+            return nullptr;
+        }
         e.words = (size_t)(out_slots * nbatch + 2 * nbatch);
         ar->bytes += need;
         ar->smalls.push_back(e);

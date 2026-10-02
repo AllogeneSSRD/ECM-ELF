@@ -1225,7 +1225,21 @@ static bool g_s4_descent_trace = false;
    run and a working run were indistinguishable); NTT_NO_PROGRESS=1 turns them off. */
 static bool g_s4_batched_progress = true;
 
-/* per-chunk device-buffer budget for a batched multiply (MB): see poly_mul_batch_modN */
+/* per-chunk device-buffer budget for a batched multiply (MB): see poly_mul_batch_modN.
+   THE ONE-SHAPE LADDER (section 27) says bigger is faster: at D=1231230/B2=1e11, P=115200 the whole
+   run is 107.88 s (16 MB) / 91.27 s (32 MB) / 83.68 s (64 MB) with identical factor sets, and the
+   two chunk sizes move NO transfer volume at all (D2H 13.67 GB and H2D 14.29 GB in every run; only
+   pack_launches changes, 37006 / 20256 / 11130) -- the win is the per-chunk fixed cost (~2 ms per
+   chunk: removing 8375 chunks bought 19 s), not bandwidth.  96 MB and above die outright with a real
+   "CUDA error out of memory" even though the arena's cap check passed, because the cap comes from
+   the free memory at startup while the engine also holds its own pools.
+   BUT THE PRODUCTION SHAPE REVERSES THE RESULT, and that is why this default stays 32:
+   at D=1231230/B2=1.94e12 the 64 MB budget reports "device free=0 MB of 8188 MB" at descent start
+   and the host-side naming ladder goes from t_ladder=1.33 s to 142.00 s -- the phase after the
+   descent is starved of device memory, and the run takes 373.98 s instead of 253.53 s (measured, both
+   with the current binary).  A per-chunk budget is therefore NOT a free lever: it trades tree time
+   for whatever needs the device later.  The arena allocations now degrade instead of aborting (see
+   NttArena::try_malloc), so a too-large value costs time rather than the run. */
 static unsigned long long g_s4_batch_budget_mb = 32;
 
 struct S4Reduce {
