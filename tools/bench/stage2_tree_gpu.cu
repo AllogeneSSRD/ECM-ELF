@@ -3089,6 +3089,16 @@ __global__ void s5_pack_kernel(const unsigned long long *src, unsigned long long
     if (zero_words) dst[s * N + word0] = 0ull;
     const unsigned long long *c = src + src_off + s * ma * (unsigned long long)W +
                                   i * (unsigned long long)W;
+    /* ---- THIS PACKER WRITES AT MOST TWO DIGITS PER COEFFICIENT (section 45) ---------------
+       `if (kp >= 2) break;` below caps the digit loop at kp = 0,1 -- 14 bits of a 129-bit value
+       at bpw = 7 -- and `(v >> kp) & mask` is the right digit only when the coefficient happens
+       to start on a digit boundary.  Everything above bit 2*bpw is dropped, which is exactly why
+       the S5 descent now passes on the ONE shape whose coefficients fit in two digits (P=2, D=10)
+       and fails on every real one.  It is left as it is ON PURPOSE for this build: a corrected
+       version was written and reverted the same round because it made the S5 path corrupt memory
+       (it tripped the S4 reduction's in-run GMP oracle, `s4_reduce_CHECK_bad`, which only fires
+       on values the S5 path does not own).  The correction is recorded in the plan; it needs its
+       bounds re-derived before it goes back in. */
     for (int p = 0; p < W; ++p) {
         unsigned long long v = c[p];
         if (p == W - 1 && S < 64) v &= ((1ull << S) - 1ull);
@@ -3227,8 +3237,13 @@ __global__ void s5_two_minus_kernel(const unsigned long long *a, unsigned long l
     for (int j = 0; j < nw; ++j) out[gid * (unsigned long long)nw + j] = r[j];
 }
 
-/* reverse the top `n` coefficients of a row into a fresh row: dst[i] = src[n-1-i] (zero for
-   i beyond the source, which is what zero-extends rb when db+1 < k) */
+/* reverse the TOP `n` coefficients of a row of `src_len` coefficients: dst[i] = src[src_len-1-i],
+   and 0 once i reaches the row (which is what zero-extends a short operand into a longer one).
+   THE ROW LENGTH, NOT `n`, IS THE BASE OF THE REVERSAL, and that distinction is the whole bug
+   of section 45: the first version used `j = n - 1 - i`, which reverses the FIRST n coefficients.
+   For `rb` (n == src_len) and for `q` (n == src_len) the two readings coincide, so only the
+   `ra` call -- the top k coefficients of a dividend with la > k of them -- was wrong, and it
+   quietly fed the quotient chain the dividend's LOW coefficients instead of its high ones. */
 #define S5_GRID(n) ((unsigned int)(((n) + 255) / 256)), 256
 __global__ void s5_rev_pack_kernel(unsigned long long *dst, const unsigned long long *src,
                                    unsigned long long src_off, unsigned long long n,
@@ -3236,10 +3251,14 @@ __global__ void s5_rev_pack_kernel(unsigned long long *dst, const unsigned long 
 {
     const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
     if (gid >= n) return;
-    const unsigned long long j = n - 1 - gid;
-    const unsigned long long *s = src + src_off + (size_t)j * W;
     unsigned long long *d = dst + (size_t)gid * W;
-    for (int t = 0; t < W; ++t) d[t] = (j < src_len) ? s[t] : 0ull;
+    if (gid >= src_len) {
+        for (int t = 0; t < W; ++t) d[t] = 0ull;
+        return;
+    }
+    const unsigned long long j = src_len - 1 - gid;
+    const unsigned long long *s = src + src_off + (size_t)j * W;
+    for (int t = 0; t < W; ++t) d[t] = s[t];
 }
 
 /* zero-extend `len` coefficients of a row into `n` */
@@ -3962,6 +3981,7 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
         std::exit(3);
     }
     D.preset();
+    static int divdump_calls2 = 0;
     const double tg0 = now_s();
     const unsigned int th = 256;
     const unsigned long long *Asub = Asrc + Aoff;
@@ -4005,6 +4025,17 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
         unsigned long long *gn = (g == A) ? B : A;
         s5_mul_batch(D, gpad, 0, nxt, h, 0, nxt, 1, 0, nxt, gn, st, -1);
         g = gn;
+        /* THE CONSTANT TERM OF A NEWTON INVERSE IS A FIXED POINT (section 45): every divisor that
+           reaches this chain is monic (rb[0] = 1), so 1/rb has constant term 1 at EVERY doubling
+           -- if it ever stops being 1, the iteration that did it is the broken one.  Two words
+           per line: this console splits long printf output mid-field. */
+        if (std::getenv("NTT_S5_DIVDUMP") && *std::getenv("NTT_S5_DIVDUMP")
+            && std::atoi(std::getenv("NTT_S5_DIVDUMP")) != 0 && divdump_calls2++ < 60) {
+            unsigned long long g0[2] = {0, 0};
+            CK(cudaMemcpy(g0, gn, sizeof(g0), cudaMemcpyDeviceToHost));
+            std::fprintf(stderr, "s5_newton: len=%llu g0=%llx g1=%llx\n", len,
+                         (unsigned long long)g0[0], (unsigned long long)g0[1]);
+        }
         len = nxt;
     }
     /* ---- qrev = (ra*rbi) mod X^k, q = rev_k(qrev), qb = q*B --------------------------- */
@@ -4026,6 +4057,91 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
         CK(cudaDeviceSynchronize());
     }
     st.t_generic += now_s() - tg0;
+    /* ---- THE HOST `cp_divmod` IS THE REFERENCE THIS FUNCTION REARRANGES (section 45) -------
+       NTT_S5_DIVDUMP=1 recomputes the SAME division on the host from the SAME device inputs and
+       reports whether the device's QUOTIENT and REMAINDER agree with it.  That splits the
+       function in half in one run: a quotient that differs means the rev-pack / Newton chain, a
+       quotient that agrees but a remainder that does not means the q*B multiply or the final
+       subtraction.  Every field is a small integer or a flag -- the earlier forensics were
+       misread because this console splits long printf lines mid-field, which produced a false
+       "231 of 486 rows differ" that cost a whole investigation. */
+    {
+        static int divdump_calls = 0;
+        const char *dd = std::getenv("NTT_S5_DIVDUMP");
+        if (dd && *dd && std::atoi(dd) != 0 && divdump_calls++ < 3) {
+            std::vector<unsigned long long> Ah((size_t)la * W, 0ull), Bh((size_t)lb * W, 0ull);
+            CK(cudaMemcpy(Ah.data(), Asub, Ah.size() * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+            CK(cudaMemcpy(Bh.data(), Bsub, Bh.size() * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+            std::vector<unsigned long long> QD((size_t)k * W, 0ull), RD((size_t)db * W, 0ull);
+            CK(cudaMemcpy(QD.data(), q, QD.size() * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+            CK(cudaMemcpy(RD.data(), dst, RD.size() * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+            const CPoly a_h = cp_from_flat(Ah, la - 1, W);
+            const CPoly b_h = cp_from_flat(Bh, lb - 1, W);
+            CPoly q_h, r_h;
+            cp_divmod(q_h, r_h, a_h, b_h, L);
+            long qbad = -1, rbad = -1;
+            for (size_t i = 0; i < k && qbad < 0; ++i)
+                for (size_t t = 0; t < W; ++t) {
+                    const unsigned long long want = (i < q_h.size()) ? q_h[i][t] : 0ull;
+                    if (QD[i * W + t] != want) { qbad = (long)i; break; }
+                }
+            for (size_t i = 0; i < (size_t)db && rbad < 0; ++i)
+                for (size_t t = 0; t < W; ++t) {
+                    const unsigned long long want = (i < r_h.size()) ? r_h[i][t] : 0ull;
+                    if (RD[i * W + t] != want) { rbad = (long)i; break; }
+                }
+            std::fprintf(stderr, "s5_divdump: la=%llu lb=%llu db=%llu k=%llu flag_q=%ld flag_r=%ld\n",
+                         la, lb, db, k, qbad, rbad);
+            /* ---- WHICH STAGE OF THE QUOTIENT CHAIN (each flag: -1 = equal, else the first
+               differing coefficient index).  ra -> rb -> Newton inverse g -> qrev/q. ---------- */
+            {
+                CPoly ra_h, rb_h;
+                cp_resize(ra_h, k, W);
+                cp_resize(rb_h, (size_t)db + 1, W);
+                for (size_t i = 0; i < k && i < (size_t)la; ++i)
+                    ra_h[i] = a_h[(size_t)((long)la - 1 - (long)i)];
+                for (size_t i = 0; i <= (size_t)db && i < (size_t)lb; ++i)
+                    rb_h[i] = b_h[(size_t)((long)db - (long)i)];
+                std::vector<unsigned long long> RA((size_t)k * W, 0ull),
+                                               RB((size_t)(db + 1) * W, 0ull),
+                                               G((size_t)k * W, 0ull),
+                                               GB((size_t)k * W, 0ull);
+                CK(cudaMemcpy(RA.data(), ra, RA.size() * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToHost));
+                CK(cudaMemcpy(RB.data(), rb, RB.size() * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToHost));
+                CK(cudaMemcpy(G.data(), g, G.size() * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToHost));
+                const CPoly g_h = cp_inv_series(rb_h, k, L);
+                for (size_t i = 0; i < k && i < g_h.size(); ++i)
+                    std::copy(g_h[i].begin(), g_h[i].end(), GB.begin() + (long)(i * W));
+                long f_ra = -1, f_rb = -1, f_g = -1;
+                for (size_t i = 0; i < k && f_ra < 0; ++i)
+                    for (size_t t = 0; t < W; ++t)
+                        if (RA[i * W + t] != ra_h[i][t]) { f_ra = (long)i; break; }
+                for (size_t i = 0; i <= (size_t)db && f_rb < 0; ++i)
+                    for (size_t t = 0; t < W; ++t)
+                        if (RB[i * W + t] != rb_h[i][t]) { f_rb = (long)i; break; }
+                for (size_t i = 0; i < k && f_g < 0; ++i)
+                    for (size_t t = 0; t < W; ++t)
+                        if (G[i * W + t] != GB[i * W + t]) { f_g = (long)i; break; }
+                std::fprintf(stderr, "s5_divstage: ra=%ld rb=%ld g=%ld rb0=%llx g0=%llx\n", f_ra,
+                             f_rb, f_g, (unsigned long long)RB[0], (unsigned long long)G[0]);
+            }
+            /* the first two words of the remainder this call WROTE, so the caller's view of the
+               same buffer can be compared field by field (short lines: this console splits long
+               ones mid-field) */
+            for (int t = 0; t < 2; ++t)
+                std::fprintf(stderr, "s5_divdump_dst: t=%d dev=%llx ref=%llx\n", t,
+                             (unsigned long long)RD[t],
+                             (unsigned long long)((r_h.size() && r_h[0].size() > (size_t)t)
+                                                      ? r_h[0][(size_t)t] : 0ull));
+        }
+    }
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -4239,6 +4355,7 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
         cur[0].ncoef = std::min(Fdeg[cur[0].code] + 1, (size_t)Lc);
         size_t cnt = Lc;
         int level = (int)ceil_log2_u64((unsigned long long)Lc);
+        bool level_first = true;
         while (cnt > 1) {
             ++st.levels;
             std::vector<S5Entry> nxt;
@@ -4346,9 +4463,17 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                         } else {
                             /* the generic branch: the Newton quotient chain, one node at a time
                                (the batched shape is uniform, but each node's dividend row is its
-                               own, and every level here has far fewer nodes than the leaves) */
+                               own, and every level here has far fewer nodes than the leaves).
+                               `lb` IS THE DIVISOR'S COEFFICIENT COUNT, i.e. deg+1 -- the S5 shape
+                               stores a monic divisor of Fdeg[child] as Fdeg[child]+1 rows.  The
+                               first version passed `nc`, one too few, which made
+                               s5_rev_pack_kernel treat the leading coefficient as "beyond the
+                               source" and write rb[0] = 0 instead of 1: the Newton inverse was
+                               then of a NON-MONIC series, so every quotient -- and therefore every
+                               remainder at this level and everything below it -- was wrong
+                               (section 45, found with NTT_S5_LEVEL_CHECK=1). */
                             s5_divmod_one(D, dbound, (unsigned long long)(e.rowoff * W), e.ncoef,
-                                          F.dA, F.off[child], nc, nc, dvals + dstrow * W, st);
+                                          F.dA, F.off[child], nc + 1, nc, dvals + dstrow * W, st);
                         }
                     }
                 }
@@ -4416,6 +4541,62 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                 CK(cudaMemcpy(dbound, dvals, vol * W * sizeof(unsigned long long),
                               cudaMemcpyDeviceToDevice));
             }
+            /* ---- THE FIRST LEVEL, AGAINST AN ORACLE THAT DOES NOT CARE WHICH BRANCH RAN -----
+               (objective 2 / section 45.)  The first level has exactly ONE parent -- the chunk's
+               H -- so "the device's row for child c" must equal `H mod Ft[c]`, and that identity
+               is true whatever branch the device chose (division, Horner, copy, zero).  Checking
+               it here splits the descent in half in one run: a mismatch means the DIVISION is
+               wrong, a match means every later level's bookkeeping is.  The earlier attempt to
+               answer this from the recovery dumps was read off lines that the console splits
+               mid-field, which produced a false "231 of 486 rows differ" (section 45). */
+            if (level_first && std::getenv("NTT_S5_LEVEL_CHECK") && *std::getenv("NTT_S5_LEVEL_CHECK")
+                && std::atoi(std::getenv("NTT_S5_LEVEL_CHECK")) != 0) {
+                std::vector<unsigned long long> flat((size_t)vol * W, 0ull);
+                CK(cudaMemcpy(flat.data(), dbound, flat.size() * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToHost));
+                size_t row = 0;
+                unsigned long long bad_words = 0, bad_children = 0, first_child = 0;
+                for (size_t ci = 0; ci < cur.size(); ++ci) {
+                    for (int sgn = 0; sgn < 2; ++sgn) {
+                        const size_t child = 2 * cur[ci].code + (size_t)sgn;
+                        const size_t nc = Fdeg[child];
+                        if (nc == 0) continue;
+                        const size_t rows_here = (cur[ci].ncoef < nc + 1) ? cur[ci].ncoef
+                                                 : ((nc == 1 && !no_linear) ? 1 : nc);
+                        /* the host oracle, straight from the definition */
+                        const CPoly Dc = cp_from_flat(Ft[child], Fdeg[child], W);
+                        const CPoly Rc = cp_mod(H, Dc, L);
+                        std::vector<unsigned long long> want((size_t)nc * W, 0ull);
+                        for (size_t k = 0; k < Rc.size() && k < nc; ++k)
+                            std::copy(Rc[k].begin(), Rc[k].end(), want.begin() + (long)(k * W));
+                        unsigned long long bw = 0;
+                        for (size_t k = 0; k < (size_t)nc * W; ++k)
+                            if (flat[row * W + k] != want[k]) {
+                                if (!bad_words) {
+                                    std::fprintf(stderr, "s5_level_bad: child=%llu word=%llu "
+                                                         "device=%llu oracle=%llu\n",
+                                                 (unsigned long long)child, (unsigned long long)k,
+                                                 flat[row * W + k], want[k]);
+                                }
+                                ++bw;
+                            }
+                        if (bw) { ++bad_children; if (!first_child) first_child = child; }
+                        if (bw && bad_children == 1)
+                            for (int t = 0; t < 2; ++t)
+                                std::fprintf(stderr, "s5_lvl_first: child=%llu rowoff=%llu t=%d "
+                                                     "dev=%llx oracle=%llx\n",
+                                             (unsigned long long)child, (unsigned long long)row, t,
+                                             (unsigned long long)flat[row * W + (size_t)t],
+                                             (unsigned long long)want[(size_t)t]);
+                        bad_words += bw;
+                        row += rows_here;
+                    }
+                }
+                std::fprintf(stderr, "s5_level_check: parent_rows=%llu children=%llu "
+                                     "bad_children=%llu bad_words=%llu first_bad_child=%llu\n",
+                             (unsigned long long)cur.size(), (unsigned long long)row,
+                             bad_children, bad_words, (unsigned long long)first_child);
+            }
             if (g_s4_batched_progress)
                 std::printf("descent_dev: chunk_lo=%llu level=%d nodes=%llu gen=%llu lin=%llu "
                             "cp=%llu z=%llu vol=%llu t=%.1f s\n", (unsigned long long)lo,
@@ -4424,6 +4605,7 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
             cur.swap(nxt);
             cnt /= 2;
             --level;
+            level_first = false;
         }
         (void)cnt;
         if (dleaf_out && rows_out)
