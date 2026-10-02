@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Same-binary ABBA benchmark of reduction, sampling oracle, carry checks or direct packing.
+    Same-binary ABBA benchmark of reduction, sampling oracle, carry checks, packing or chunk budget.
 .DESCRIPTION
     Defaults to the production shape in DEV_GPUOWL_NTT_NOTES.md section 32.  Writes a log
     for each run, provenance.json and results.csv.  The mode, GMP checks, factors/hit primes,
@@ -16,7 +16,9 @@ param(
     [UInt64]$D = 1231230,
     [int]$Sigma = 26,
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb')][string]$Target = 'reduction',
+    [ValidateRange(1,256)][int]$BatchMB = 32,
+    [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
     [string]$Output = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -24,6 +26,7 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repo
 if (-not $Exe) { $Exe = Join-Path $repo 'build_cuda_cmake\stage2_tree_gpu.exe' }
 if (-not (Test-Path -LiteralPath $Exe)) { throw "missing binary: $Exe" }
+if ($Target -eq 'batch_mb' -and $BatchMB -eq $CandidateBatchMB) { throw 'chunk budgets must differ for A/B' }
 if (-not $Output) { $Output = Join-Path $repo ('build_cuda_cmake\_reduce_ab_' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
 $binaryHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
@@ -34,7 +37,8 @@ if ($Target -eq 'oracle') { $order = @('blocking', 'oracle_async', 'oracle_async
 if ($Target -eq 'oracle_pack') { $order = @('gmp_digits', 'limb_pack', 'limb_pack', 'gmp_digits') }
 if ($Target -eq 'carry_batch') { $order = @('carry_per_chunk', 'carry_batch', 'carry_batch', 'carry_per_chunk') }
 if ($Target -eq 'pack_direct') { $order = @('pack_copy', 'pack_direct', 'pack_direct', 'pack_copy') }
-$overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB='32'; NTT_S4_ASYNC='1';
+if ($Target -eq 'batch_mb') { $order = @("batch_$BatchMB", "batch_$CandidateBatchMB", "batch_$CandidateBatchMB", "batch_$BatchMB") }
+$overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
                 NTT_S4_ORACLE_TEST_BAD='0'; NTT_S4_SAMPLE='96'; NTT_S4_CHECK_EVERY='8';
@@ -48,7 +52,8 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_S4_ORACLE_ASYNC=$(if ($mode -eq 'oracle_async') { '1' } else { '0' });
         NTT_S4_ORACLE_PACK=$(if ($mode -eq 'gmp_digits') { '0' } else { '1' });
         NTT_S4_CARRY_BATCH=$(if ($mode -eq 'carry_batch') { '1' } else { '0' });
-        NTT_S4_PACK_DIRECT=$(if ($Target -eq 'pack_direct' -and $mode -eq 'pack_copy') { '0' } else { '1' }) }
+        NTT_S4_PACK_DIRECT=$(if ($Target -eq 'pack_direct' -and $mode -eq 'pack_copy') { '0' } else { '1' });
+        NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
    mode_controls=$modeControls; started=(Get-Date -Format o); head=(& git rev-parse HEAD) } |
@@ -63,11 +68,13 @@ try {
         $oraclePack = $(if ($mode -eq 'gmp_digits') { '0' } else { '1' })
         $carryBatch = $(if ($mode -eq 'carry_batch') { '1' } else { '0' })
         $packDirect = $(if ($Target -eq 'pack_direct' -and $mode -eq 'pack_copy') { '0' } else { '1' })
+        $batchBudget = $(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { $CandidateBatchMB } else { $BatchMB })
         $env:NTT_S4_OLDTAIL = $(if ($algorithm -eq 'montgomery') { '1' } else { '0' })
         $env:NTT_S4_ORACLE_ASYNC = $oracleAsync
         $env:NTT_S4_ORACLE_PACK = $oraclePack
         $env:NTT_S4_CARRY_BATCH = $carryBatch
         $env:NTT_S4_PACK_DIRECT = $packDirect
+        $env:NTT_S4_BATCH_MB = "$batchBudget"
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -93,6 +100,11 @@ try {
         $carryTime = [regex]::Match($text, 'real_batched_carrysplit:.*?d2h=([0-9.]+) s')
         $carryLedger = [regex]::Match($text, 'real_batched_carrytime: group_readback=([0-9.]+) chunk_readback=([0-9.]+) total=([0-9.]+)')
         $inputPack = [regex]::Match($text, 'real_batched_input: direct_enabled=(\d+) direct_chunks=(\d+) copied_chunks=(\d+) d2d_bytes=(\d+) avoided_bytes=(\d+) packed_peak_bytes=(\d+) temp_peak_bytes=(\d+) temp_current_bytes=(\d+) pack_host=([0-9.]+) copy_host=([0-9.]+)')
+        $phaseSplit = [regex]::Match($text, 'real_batched_split: giant=([0-9.]+) gtrees=([0-9.]+) fold=([0-9.]+) descent=([0-9.]+) inv=([0-9.]+) accum=([0-9.]+) name=([0-9.]+) f_tree_incl=([0-9.]+)')
+        $naming = [regex]::Match($text, 'batched_naming:.*?t_scan=([0-9.]+) t_ladder=([0-9.]+) t_name=([0-9.]+)')
+        $arenaSize = [regex]::Match($text, 'real_batched_breakdown:.*?ntt_seconds=([0-9.]+).*?arena_mb=([0-9.]+)')
+        # This is the most recent giant-ladder snapshot, not an exact descent/naming minimum.
+        $memorySnapshot = [regex]::Match($text, 'descent_begin:.*?device free=(\d+) MB of (\d+) MB')
         $oracleLine = [regex]::Match($text, '(?m)^s4_oracle_stats:.*').Value
         $oracle = @{}
         foreach ($field in @('async','selected','queued','compared','samples','pending','ring_waits',
@@ -102,6 +114,7 @@ try {
             if ($metric.Success) { $oracle[$field] = $metric.Groups[1].Value }
         }
         if ($rc -ne 0 -or -not $stage.Success -or -not $reduce.Success -or -not $arena.Success -or
+            -not $phaseSplit.Success -or -not $naming.Success -or -not $arenaSize.Success -or
             $stage.Groups[2].Value -ne '0' -or $arena.Groups[1].Value -ne '0' -or
             $text -notmatch ("s4_reduce_mode: algorithm=" + $algorithm) -or
             $text -cmatch 'FATAL|MISMATCH|gmp_bad=[1-9]|gmp_selftest_bad=[1-9]|gmp_check_bad=[1-9]|mismatches=[1-9]|slot_canonical_bad=[1-9]') {
@@ -168,24 +181,45 @@ try {
             copied_chunks=$inputPack.Groups[3].Value; d2d_bytes=$inputPack.Groups[4].Value;
             avoided_bytes=$inputPack.Groups[5].Value; packed_peak_bytes=$inputPack.Groups[6].Value;
             temp_peak_bytes=$inputPack.Groups[7].Value; temp_current_bytes=$inputPack.Groups[8].Value;
-            input_pack_host=[double]$inputPack.Groups[9].Value; input_copy_host=[double]$inputPack.Groups[10].Value }
+            input_pack_host=[double]$inputPack.Groups[9].Value; input_copy_host=[double]$inputPack.Groups[10].Value;
+            batch_mb=$batchBudget; giant=[double]$phaseSplit.Groups[1].Value;
+            gtrees=[double]$phaseSplit.Groups[2].Value; fold=[double]$phaseSplit.Groups[3].Value;
+            descent=[double]$phaseSplit.Groups[4].Value; inverse=[double]$phaseSplit.Groups[5].Value;
+            accum=[double]$phaseSplit.Groups[6].Value; naming=[double]$phaseSplit.Groups[7].Value;
+            f_tree=[double]$phaseSplit.Groups[8].Value; naming_scan=[double]$naming.Groups[1].Value;
+            naming_ladder=[double]$naming.Groups[2].Value; ntt_seconds=[double]$arenaSize.Groups[1].Value;
+            arena_mb=[double]$arenaSize.Groups[2].Value;
+            giant_snapshot_free_mb=$(if ($memorySnapshot.Success) { [double]$memorySnapshot.Groups[1].Value } else { $null }) }
         if ($rows.Count -gt 0 -and ($row.coeffs -ne $rows[0].coeffs -or $row.factors -ne $rows[0].factors -or
             $row.hit_primes -ne $rows[0].hit_primes -or $row.hits -ne $rows[0].hits -or
+            ($Target -ne 'batch_mb' -and (
             $row.oracle_samples -ne $rows[0].oracle_samples -or $row.oracle_jobs -ne $rows[0].oracle_jobs -or
             $row.oracle_signature -ne $rows[0].oracle_signature -or
             $row.carry_deferred -ne $rows[0].carry_deferred -or $row.carry_slices -ne $rows[0].carry_slices -or
             $row.raw_async -ne $rows[0].raw_async -or $row.out_async -ne $rows[0].out_async -or
-            $row.h2d_gib -ne $rows[0].h2d_gib -or $row.d2h_gib -ne $rows[0].d2h_gib -or
-            $row.pack_launches -ne $rows[0].pack_launches)) {
+            $row.pack_launches -ne $rows[0].pack_launches)) -or
+            $row.h2d_gib -ne $rows[0].h2d_gib -or $row.d2h_gib -ne $rows[0].d2h_gib)) {
             throw "A/B results or coefficient count changed; inspect $log"
         }
         if ($rows.Count -gt 0 -and
             ([UInt64]$row.d2d_bytes+[UInt64]$row.avoided_bytes -ne
              [UInt64]$rows[0].d2d_bytes+[UInt64]$rows[0].avoided_bytes -or
+             ($Target -ne 'batch_mb' -and (
              [long]$row.direct_chunks+[long]$row.copied_chunks -ne
              [long]$rows[0].direct_chunks+[long]$rows[0].copied_chunks -or
-             $row.packed_peak_bytes -ne $rows[0].packed_peak_bytes)) {
+             $row.packed_peak_bytes -ne $rows[0].packed_peak_bytes)))) {
             throw "A/B packed input workload changed; inspect $log"
+        }
+        # Budget changes intentionally change chunk/sample schedules. Repeated runs of EACH
+        # mode must still reproduce the complete sampling and staging workload.
+        $sameMode = @($rows | Where-Object mode -eq $mode)
+        if ($sameMode.Count) {
+            foreach ($field in @('oracle_samples','oracle_jobs','oracle_signature','carry_deferred',
+                                 'carry_slices','carry_checked','carry_finishes','carry_max_group',
+                                 'raw_async','out_async','pack_launches','direct_chunks','copied_chunks',
+                                 'packed_peak_bytes','temp_peak_bytes','batch_mb')) {
+                if ($row.$field -ne $sameMode[0].$field) { throw "repeated $mode changed $field; inspect $log" }
+            }
         }
         $rows += $row
         $rows | Export-Csv -LiteralPath (Join-Path $Output 'results.csv') -NoTypeInformation -Encoding UTF8
@@ -217,6 +251,13 @@ try {
                 (($new | Measure-Object d2d_bytes -Average).Average / 1GB),
                 (($old | Measure-Object temp_peak_bytes -Average).Average / 1MB),
                 (($new | Measure-Object temp_peak_bytes -Average).Average / 1MB))
+    Write-Host ("pack launches: {0:F0} -> {1:F0}; arena: {2:F1} -> {3:F1} MiB; naming ladder: {4:F3} -> {5:F3}s" -f
+                ($old | Measure-Object pack_launches -Average).Average,
+                ($new | Measure-Object pack_launches -Average).Average,
+                ($old | Measure-Object arena_mb -Average).Average,
+                ($new | Measure-Object arena_mb -Average).Average,
+                ($old | Measure-Object naming_ladder -Average).Average,
+                ($new | Measure-Object naming_ladder -Average).Average)
 } finally {
     foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
 }

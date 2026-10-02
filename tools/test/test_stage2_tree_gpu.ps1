@@ -633,13 +633,15 @@ try {
 # Many interior chunks and changing shapes exercise reused dirty spectra and padding. Compare
 # EVERY output word's fingerprint, plus independent frozen factor and unchanged GMP samples.
 $directSaved=@{}
-foreach ($key in @('NTT_S4_PACK_DIRECT','NTT_S4_CARRY_BATCH','NTT_S4_CHUNK_MAX','NTT_S4_CARRY_TEST_BAD',
+foreach ($key in @('NTT_S4_BATCH_MB','NTT_S4_PACK_DIRECT','NTT_S4_CARRY_BATCH','NTT_S4_CHUNK_MAX','NTT_S4_CARRY_TEST_BAD',
                    'NTT_S4_ASYNC','NTT_S4_DEFER_CARRY','NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_PACK',
                    'NTT_S4_HOSTPACK','NTT_S4_OLDTAIL','NTT_S5_ON','NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY',
                    'NTT_S4_CARRY_TRACE','NTT_ARENA_CAP_KB')) {
     $directSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')
 }
 try {
+    # Compare pack paths at ONE explicit budget: their defaults intentionally differ now.
+    $env:NTT_S4_BATCH_MB='32'
     $env:NTT_S4_CHUNK_MAX='64'; $env:NTT_S4_CARRY_TEST_BAD='0'; $env:NTT_S4_ASYNC='1'
     $env:NTT_S4_DEFER_CARRY='1'; $env:NTT_S4_ORACLE_ASYNC='0'; $env:NTT_S4_ORACLE_PACK='1'
     $env:NTT_S4_HOSTPACK='0'; $env:NTT_S4_OLDTAIL='0'; $env:NTT_S5_ON='0'
@@ -733,6 +735,86 @@ try {
 }
 
 Write-Host ""
+# [19] Larger chunks change the sample schedule but must preserve EVERY output word.
+$budgetSaved=@{}
+foreach ($key in @('NTT_S4_BATCH_MB','NTT_S4_PACK_DIRECT','NTT_S4_CARRY_BATCH','NTT_S4_CHUNK_MAX',
+                   'NTT_S4_CARRY_TEST_BAD','NTT_S4_ORACLE_TEST_BAD','NTT_S4_ASYNC','NTT_S4_DEFER_CARRY',
+                   'NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_PACK','NTT_S4_HOSTPACK','NTT_S4_OLDTAIL',
+                   'NTT_S5_ON','NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY','NTT_S4_CARRY_TRACE','NTT_ARENA_CAP_KB')) {
+    $budgetSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')
+}
+try {
+    $env:NTT_S4_PACK_DIRECT='1'; $env:NTT_S4_CARRY_BATCH='0'; $env:NTT_S4_CHUNK_MAX='0'
+    $env:NTT_S4_CARRY_TEST_BAD='0'; $env:NTT_S4_ORACLE_TEST_BAD='0'; $env:NTT_S4_ASYNC='1'
+    $env:NTT_S4_DEFER_CARRY='1'; $env:NTT_S4_ORACLE_ASYNC='0'; $env:NTT_S4_ORACLE_PACK='1'
+    $env:NTT_S4_HOSTPACK='0'; $env:NTT_S4_OLDTAIL='0'; $env:NTT_S5_ON='0'
+    $env:NTT_S4_SAMPLE='96'; $env:NTT_S4_CHECK_EVERY='8'; $env:NTT_S4_CARRY_TRACE='1'
+    $env:NTT_ARENA_CAP_KB=''
+    $budgetOutputs=@(); $budgetCodes=@()
+    foreach ($budget in @(32,64,64)) {
+        $env:NTT_S4_BATCH_MB="$budget"
+        $budgetOutputs+=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096)
+        $budgetCodes+=$LASTEXITCODE
+    }
+    $budgetWords=$true; $budgetChecks=$true; $budgetDirect=$true
+    $budgetBaseTrace=[regex]::Match($budgetOutputs[0],$carryTracePattern)
+    $budgetBaseInput=[regex]::Match($budgetOutputs[0],$inputPattern)
+    foreach ($oBudget in $budgetOutputs) {
+        $mTrace=[regex]::Match($oBudget,$carryTracePattern)
+        $mOracle=[regex]::Match($oBudget,$oraclePattern)
+        $mInput=[regex]::Match($oBudget,$inputPattern)
+        $mCarry=[regex]::Match($oBudget,$carryPattern)
+        $mGmp=[regex]::Match($oBudget,'s4_multiply_stats:.*gmp_checked=(\d+)')
+        $budgetWords=$budgetWords -and $budgetBaseTrace.Success -and $mTrace.Success -and
+            [long]$mTrace.Groups[1].Value -gt 0 -and $mTrace.Value -eq $budgetBaseTrace.Value
+        $budgetChecks=$budgetChecks -and $mOracle.Success -and $mGmp.Success -and $mCarry.Success -and
+            [long]$mOracle.Groups[2].Value -gt 0 -and
+            $mOracle.Groups[2].Value -eq $mOracle.Groups[4].Value -and $mOracle.Groups[6].Value -eq '0' -and
+            $mOracle.Groups[5].Value -eq $mGmp.Groups[1].Value -and $mOracle.Groups[8].Value -eq '0' -and
+            $mCarry.Groups[1].Value -eq $mCarry.Groups[5].Value -and
+            $mCarry.Groups[1].Value -eq $mCarry.Groups[2].Value -and
+            $oBudget -cnotmatch 'FATAL|MISMATCH|gmp_check_bad=[1-9]|slot_canonical_bad=[1-9]'
+        $budgetDirect=$budgetDirect -and $budgetBaseInput.Success -and $mInput.Success -and
+            $mInput.Groups[1].Value -eq '1' -and [long]$mInput.Groups[2].Value -gt 0 -and
+            $mInput.Groups[3].Value -eq '0' -and $mInput.Groups[4].Value -eq '0' -and
+            $mInput.Groups[5].Value -eq $budgetBaseInput.Groups[5].Value -and
+            $mInput.Groups[7].Value -eq '0' -and $mInput.Groups[8].Value -eq '0'
+    }
+    Check "chunk budget: all runs retain frozen factor and hit set" `
+          (@($budgetCodes | Where-Object { $_ -ne 0 }).Count -eq 0 -and
+           @($budgetOutputs | Where-Object { [regex]::Match($_,$resultPattern).Value -ne $resultOld }).Count -eq 0) `
+          "exit=$($budgetCodes -join '/')"
+    Check "chunk budget: ALL polynomial output words agree across partitions" $budgetWords ""
+    Check "chunk budget: each partition independently completes GMP and carry checks" $budgetChecks ""
+    Check "chunk budget: logical packed bytes identical with zero input D2D/temp allocation" $budgetDirect ""
+    $budgetLargeInput=[regex]::Match($budgetOutputs[1],$inputPattern)
+    Check "chunk budget: 64 MB actually reduces chunk count" `
+          ($budgetLargeInput.Success -and $budgetBaseInput.Success -and
+           [long]$budgetLargeInput.Groups[2].Value -lt [long]$budgetBaseInput.Groups[2].Value) ""
+    Check "chunk budget: repeated 64 MB retains oracle schedule and sample signature" `
+          ([regex]::Match($budgetOutputs[1],$oraclePattern).Success -and
+           [regex]::Match($budgetOutputs[1],$oraclePattern).Value -eq
+           [regex]::Match($budgetOutputs[2],$oraclePattern).Value) ""
+    Check "chunk budget: explicit override selects both budgets" `
+          ($budgetOutputs[0] -match 's4_batch_budget: mb=32 env_override=1 direct=1 host_pack=0' -and
+           $budgetOutputs[1] -match 's4_batch_budget: mb=64 env_override=1 direct=1 host_pack=0') ""
+    $env:NTT_S4_BATCH_MB=''
+    $budgetDefaultTrace=[regex]::Match($oFallbackCopy,$carryTracePattern).Value
+    foreach ($control in @('direct','copy','host')) {
+        $env:NTT_S4_PACK_DIRECT=$(if($control -eq 'copy'){'0'}else{'1'})
+        $env:NTT_S4_HOSTPACK=$(if($control -eq 'host'){'1'}else{'0'})
+        $oDefaultBudget=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096); $cDefaultBudget=$LASTEXITCODE
+        $expectedMB=$(if($control -eq 'direct'){64}else{32})
+        Check "chunk budget: $control default is $expectedMB MB with identical ALL-word output" `
+              ($cDefaultBudget -eq 0 -and
+               $oDefaultBudget -match "s4_batch_budget: mb=$expectedMB env_override=0 direct=$env:NTT_S4_PACK_DIRECT host_pack=$env:NTT_S4_HOSTPACK" -and
+               [regex]::Match($oDefaultBudget,$carryTracePattern).Success -and
+               [regex]::Match($oDefaultBudget,$carryTracePattern).Value -eq $budgetDefaultTrace) "exit=$cDefaultBudget"
+    }
+} finally {
+    foreach ($key in $budgetSaved.Keys) { [Environment]::SetEnvironmentVariable($key,$budgetSaved[$key],'Process') }
+}
+
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }
 exit 0

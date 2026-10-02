@@ -1329,14 +1329,19 @@ static unsigned long long *pin_words(unsigned long long **slot, size_t *cap, siz
    chunk: removing 8375 chunks bought 19 s), not bandwidth.  96 MB and above die outright with a real
    "CUDA error out of memory" even though the arena's cap check passed, because the cap comes from
    the free memory at startup while the engine also holds its own pools.
-   BUT THE PRODUCTION SHAPE REVERSES THE RESULT, and that is why this default stays 32:
+   THE OLD COPIED-INPUT PRODUCTION PATH REVERSES THE RESULT:
    at D=1231230/B2=1.94e12 the 64 MB budget reports "device free=0 MB of 8188 MB" at descent start
    and the host-side naming ladder goes from t_ladder=1.33 s to 142.00 s -- the phase after the
    descent is starved of device memory, and the run takes 373.98 s instead of 253.53 s (measured, both
    with the current binary).  A per-chunk budget is therefore NOT a free lever: it trades tree time
    for whatever needs the device later.  The arena allocations now degrade instead of aborting (see
-   NttArena::try_malloc), so a too-large value costs time rather than the run. */
-static unsigned long long g_s4_batch_budget_mb = 32;
+   NttArena::try_malloc), so a too-large value costs time rather than the run.
+   AFTER DIRECT PACK (section 37, 2026-10-03), the SAME production shape/binary ABBA gives
+   213.225 -> 208.075 s at 32/64 MB, pack launches 44942 -> 24462, arena 5779 -> 6215.6 MiB,
+   no overflow and naming ladder 1.429 -> 1.453 s. Keep 64 ONLY for direct device packing;
+   copied inputs and host packing retain 32. This is a scratch budget, NOT a total VRAM cap.
+   The modest wall-time gain still has run-to-run noise; GPU-Z busy time is unchanged. */
+static const unsigned long long g_s4_batch_budget_mb = 64;
 
 struct S4Reduce;
 static void s4_oracle_release(S4Reduce &R);
@@ -2913,12 +2918,25 @@ static void poly_mul_batch_modN(PolyLayer &L,
        poly_mul_batch_modN -- whose own sub-timers the dev path never fills.  The chunking below is
        the first suspect: a level's batch is split into ceil(nbatch/chunk) chunk round-trips, each
        with its own H2D, pack, NTT, reduce and D2H.  This knob makes that testable. */
+    /* The legacy controls have not gained the direct packer's VRAM headroom. */
+    static const bool host_pack = [] {
+        const char *e = std::getenv("NTT_S4_HOSTPACK");
+        return e && *e && std::atoi(e) != 0;
+    }();
     static const unsigned long long s4_batch_mb = [] {
         const char *e = std::getenv("NTT_S4_BATCH_MB");
         return (e && *e) ? std::strtoull(e, nullptr, 10) : 0ull;
     }();
-    const unsigned long long budget_bytes =
-        (s4_batch_mb ? s4_batch_mb : g_s4_batch_budget_mb) << 20;
+    static const unsigned long long default_mb =
+        (!host_pack && g_s4_pack_direct) ? g_s4_batch_budget_mb : 32ull;
+    const unsigned long long effective_mb = s4_batch_mb ? s4_batch_mb : default_mb;
+    const unsigned long long budget_bytes = effective_mb << 20;
+    static bool budget_reported = false;
+    if (!budget_reported) {
+        std::printf("s4_batch_budget: mb=%llu env_override=%d direct=%d host_pack=%d\n",
+                    effective_mb, (int)(s4_batch_mb != 0), (int)g_s4_pack_direct, (int)host_pack);
+        budget_reported = true;
+    }
     unsigned long long chunk = 1;
     {
         unsigned long long qN2 = 0;
@@ -2935,10 +2953,6 @@ static void poly_mul_batch_modN(PolyLayer &L,
     int rc = 0;
     /* THE DEVICE PACKING SWITCH (objective 4, section 33): default is the device packer; set
        NTT_S4_HOSTPACK=1 to run the old host-packing path, which is kept as the A/B oracle. */
-    static const bool host_pack = [] {
-        const char *e = std::getenv("NTT_S4_HOSTPACK");
-        return e && *e && std::atoi(e) != 0;
-    }();
     /* ---- THE DEFERRED CARRY CHECK (section 29) ----------------------------------------------
        Every chunk ends with the probe's carry check, which is a pageable D2H of 2*nbatch words and
        therefore waits for the device to finish everything queued before it: a full pipeline drain

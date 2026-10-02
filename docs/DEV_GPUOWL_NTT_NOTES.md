@@ -1835,3 +1835,167 @@ chunk/采样调度未再修改。最终 binary 做了完整门禁和上述 smoke
 然后再预算固定 F/finv 的原始设备输入或 spectrum 缓存，以减少反复上传/pack/forward。
 N=2^27 时一个 spectrum 就是 **1 GiB**，同时缓存 F 与 finv 可能重新吃掉本轮释放的全部空间；
 需要先将缓存计入统一预算、明确失效/驱逐规则和余量，再接入。这些后续优化本轮尚未实现。
+
+## 37. Direct pack 后扩大 chunk：减少往返，保留后续阶段显存余量（2026-10-03）
+
+### 37.1 起点、假设与本轮修改
+
+起点为用户已提交的 `736172d`（pack 直接写入 NTT arena），工作区初始干净。
+本轮首先使用该提交的已有二进制做实验，再修改默认策略；没有重新改写 CUDA 算法或 NTT kernels。
+生产二进制 SHA256 为 `1ADA3E0EEC7F09B23127396EF77F66369EC80A53C516C049D8BA197D84EB163F`，
+重建前副本保存在 [测量二进制](D:/code/MPA-OpenCl/build_cuda_cmake/stage2_tree_gpu_batch_budget_measured.exe)。
+
+待验证假设：direct pack 已释放旧临时输入池，因此 64 MB 可能在不挤压 naming 的前提下减少 chunk，
+改善每块上传、pack、carry finish 和 host API 的固定开销。另一个可能结果是等待仅换到其他计时项，
+GPU 空闲仍由 host 树操作和准备主导。§27 旧复制路径 64 MB 的显存耗尽/naming 退化仍是历史反例。
+
+最终策略与源码位置：
+
+- [stage2_tree_gpu.cu:1323](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1323)：保留旧预算实验的原因，补充本轮证据；direct 默认预算为 64 MB。
+- [stage2_tree_gpu.cu:2922](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2922)：先读取 host-pack 开关，选择默认预算。
+  仅 `PACK_DIRECT=1 && HOSTPACK=0` 默认 64；复制路径 `PACK_DIRECT=0` 或 host-pack 默认仍为 32。
+  有效的正值 `NTT_S4_BATCH_MB` 优先覆盖默认；0/未设置使用默认。
+- [stage2_tree_gpu.cu:2936](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2936)：首次 S4 batched multiply 打印
+  `s4_batch_budget: mb=... env_override=... direct=... host_pack=...`，便于确认实际策略。
+- [stage2_tree_gpu.cu:2940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2940)：保持原 chunk 选择公式和折半规则，
+  `(3*N*chunk + out_slots*chunk)*8 <= budget_bytes`，保留 CHUNK_MAX 覆盖。
+  一个 oversized shape 最少仍处理一个 slice，所以该预算不是全局显存硬上限。
+- [bench_stage2_reduce_ab.ps1:19](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:19)：增加 `-Target batch_mb`、
+  `-BatchMB 32 -CandidateBatchMB 64`，固定其余生产开关并生成 32/64/64/32 同二进制 ABBA。
+  CSV 增加各阶段计时、naming ladder、arena 和最近 giant 快照字段，后者不是 descent/naming 最低余量。
+
+### 37.2 跨 chunk 的正确性与采样口径
+
+不同预算会改变实际 chunk 数，因此会改变 pack launches、carry finishes、async transfer 次数、
+oracle jobs/sample count/signature。原先跨路径 A/B 要求这些计数相同，对预算实验不能直接套用。
+
+[runner:193](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:193) 的预算比较仍要求结果因子、hit set、
+归约系数总数、打印的 H2D/D2H volume 和全部逻辑 packed 输入字节一致；
+每个预算自身必须完整执行 GMP/carry 检查，selected=compared、samples=gmp_checked、pending=0、fallbacks=0。
+[runner:215](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:215) 同时要求同预算两次重复的
+调度计数、sample signature 和 staging 工作量一致。其他 A/B target 原有跨模式工作量要求继续保留。
+
+[test_stage2_tree_gpu.ps1:738](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:738) 新增门禁 [19]：
+129-bit 冻结因子形状，D=1231230、B2=5000000，CHUNK_MAX=0，运行 32/64/64 MB。
+检查每一个返回多项式 word 的签名一致、冻结因子/hit set 不变、64 MB 实际减少 chunk、
+各自 GMP/carry 完整检查、同预算 oracle 重复性、零 input D2D/临时 packed pool。
+全输出签名包含原 multiply 调用的 ma/mb/nbatch 和全部输出 word，因此不随内部 chunk 分区改变。
+另检查显式预算优先级及 direct/copy/host 三种未设置预算时的默认选择和全输出一致。
+
+初次完整门禁为 91 passed / 1 failed：新增解析取到了单个 `s4_reduce_stats` 的 gmp_checked，
+误与全局 oracle.samples 比较。改为匹配 `s4_multiply_stats` 汇总行后，新六项独立复核全部通过；
+这次失败是门禁解析错误，日志没有 GPU/GMP 数值不一致。
+[初次完整日志](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_gate_initial.log)、
+[六项复核](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_gate19.log)。最终重建后的完整门禁见 §37.5。
+
+重建后首次完整门禁为 94 passed / 2 failed：旧 [18] pack 对照没有显式固定预算，
+复制路径的新默认为 32，direct 为 64，导致它要求相同的 chunk 数和 oracle signature 不再相同；
+全部 word 和冻结因子检查仍通过。修复是在 [18] 保存/恢复 BATCH_MB，并为所有 pack 控制显式指定 32，
+使该组只比较 pack 路径；新增 [19] 单独检验跨预算及条件默认。
+[混合默认的门禁日志](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_gate_policy_mixed.log)。
+
+### 37.3 生产 ABBA：同二进制、仅改变预算
+
+参数与 §36 相同：N_hex=`1` 后接 1315 个 `f`（5261 bits），sigma=26，B1=1000，
+B2=1940000000000，D=1231230，GPU1 RTX4060 Laptop 8GB。
+固定 PACK_DIRECT=1、OLDTAIL=0、CARRY_BATCH=0、ORACLE_ASYNC=0、ORACLE_PACK=1、
+ASYNC=1、DEFER_CARRY=1、HOSTPACK=0、S5_ON=0、SAMPLE=96、CHECK_EVERY=8、NAME_MAX=1。
+生产输出全量 hash 关闭，保持原抽样和诊断；小形状门禁开启全量 hash。
+NAME_MAX=1 只命名部分诊断候选，因此对照 hit set 是相同上限下的结果。
+
+[完整 provenance](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_ab_20261003/provenance.json)、
+[原始四轮 CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_ab_20261003/results.csv)、
+[runner 汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_ab_20261003_driver.log)。
+运行时间为 London 2026-10-03 00:11:41–00:28:04；JSON 内的 UTC 时间可能显示 10-02 23 点。
+
+每轮 elapsed / 全进程墙钟 / t_reduce：
+
+- 32 MB A1：**213.83 / 249.157 / 21.508 s**。
+- 64 MB B1：**204.62 / 239.538 / 18.484 s**。
+- 64 MB B2：**211.53 / 246.101 / 18.730 s**。
+- 32 MB A2：**212.62 / 247.703 / 21.613 s**。
+
+32 → 64 MB 的两轮均值：
+
+- Stage2 **213.225 → 208.075 s，-5.150 s / -2.42%**；进程墙钟 **248.430 → 242.8195 s，-2.26%**。
+- t_reduce **21.5605 → 18.607 s，-13.70%**。归约系数仍为 **62,385,796**，没有减少算法工作量。
+- pack launches **44,942 → 24,462，-45.57%**；全部 S4 direct chunks **23,415 → 12,738，-45.60%**。
+  前者的历史计数区间不含 F 树，后者包含全部 S4 调用，不可直接用前者除以二代替后者。
+- carry finishes / checked interior chunks **22,175 → 11,516，-48.07%**，每个已选择 chunk 均被检查。
+- H2D **38.81 GiB**、D2H **37.27 GiB** 不变（日志历史名称为 GB，实际除数为 2^30）。
+  全部逻辑 packed 输入 **621,800,292,352 bytes / 579.0966 GiB** 不变；input D2D 与临时输入池仍均为 0。
+- arena **5779.0 → 6215.6 MiB，+436.6 MiB**；pinned raw staging 两边均 **152,986,928 bytes**。
+  最近 giant 快照 free **1998 → 1994 MB**；所有 arena overflow 为 0。
+- naming ladder **1.429 → 1.453 s**；整个 naming **4.3735 → 4.9285 s**。
+  没有重现 §27 的 ladder 142 s 退化，但 naming 并没有变快。
+
+阶段均值 giant **20.895 → 20.751 s**、G trees **69.6975 → 66.838 s**、fold **27.2125 → 28.222 s**、
+descent **56.0305 → 50.354 s**、accum **11.8315 → 12.214 s**。
+主要阶段改善发生在 G trees/descent；fold 与 accum 本轮反而稍慢。
+不能将这些互相嵌套的阶段计时再与 t_reduce、oracle、copy 计时相加。
+
+host 账本 rawupload **6.0725 → 5.029 s**，pack enqueue **1.9419 → 1.2472 s**，
+coeffback **3.952 → 3.724 s**，carry D2H **68.861 → 65.7105 s**；
+oracle host **12.6187 → 11.5875 s**，其中 wait **10.7476 → 10.3707 s**、GMP **1.1679 → 0.7479 s**。
+这些计时包括 enqueue、同步与等待归属，尤其 carry D2H 不是纯传输耗时。
+rawupload 历史总量含 pack enqueue，二者也不能相加。
+
+抽样事实必须单独说明：每 8 个 chunk 的原 cadence 未改，但 jobs **2941 → 1609**、samples
+**167021 → 95906**；signature 分别为 `2f6b299f92a780ca` / `a7f13ab751eaf263`，各自两次重复相同。
+样本减小是 chunk 分区的结果，也贡献部分 host 成本下降；本实验没有将两种预算调整到同样样本密度，
+所以 -2.42% 是保留现有 cadence 的整体配置收益，不能声称全由 API/传输固定开销造成。
+
+两轮 32 MB spread=1.21 s，64 MB spread=6.91 s，大于均值改善 5.15 s。
+两次 64 MB 均快于两次 32 MB，且 pack/carry 调用与归约计时变化可重复；据此采用条件化的 64 MB 默认。
+**速度幅度仍需要更多生产重复验证，不能宣传为稳定的 2.42% 加速。**
+
+### 37.4 GPU-Z：没有解决 GPU 空闲
+
+[阶段传感器汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_ab_20261003/gpuz/summary.json)、
+[传感器快照 CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_ab_20261003/gpuz/sensors.csv)。
+只使用四轮时间窗，排除整个历史文件中的长时间 idle；阶段对齐来自现有 wall timers，属于近似。
+GPU-Z header 不含设备 ID，结合本轮 GPU1 的负载/显存变化进行关联；GPU Load 是采样 busy time，
+不能当作 SM occupancy，1 Hz 采样峰值也不能当作精确显存最大值或可用余量。
+
+- giant/G-tree/fold 主循环：32 MB **263 samples、mean load 57.365%**；64 MB **263 samples、57.152%**。
+  <=5% 的样本 **44/263 → 45/263**，主循环空闲没有明显改善。
+- descent/accum/naming：mean load **46.892 → 46.672%**；<=5% 样本 **34/139 → 27/128**。
+  时段有所缩短，平均 busy time 仍几乎相同。
+- 四轮整个进程时间窗中，32 MB 采样显存峰值均 **6015 MB**；64 MB 均 **6225 MB**。
+  64 MB 增加显存占用，仍未看到旧路径接近 8GB 的峰值与 naming 退化。
+
+因此这轮可确认减少 chunk 往返，不能确认 GPU 利用率得到改善，也不能从 GPU-Z 低负载直接断言 PCIe 饱和。
+下一步应继续减少 host 准备与重复输入 materialization，并记录减少的实际字节和准备时间。
+
+### 37.5 最终验收与下一轮边界
+
+本轮默认只有 direct device-pack 从 32 变 64；其余生产开关不变。
+回退显式设置 `$env:NTT_S4_BATCH_MB='32'`；复制和 host-pack 控制在未设置预算时继续使用 32。
+runner 的 `BatchMB` 默认仍为 32，用于复现历史对照和本轮 32/64 实验；之后其他 target 若要匹配新的
+direct 生产预算，需显式传 `-BatchMB 64`，不可把 runner 的固定预算误当作二进制默认策略。
+上述生产测量对应 `1ADA...` 二进制，最终重建版本增加条件默认和一次预算打印，
+实际 pack/NTT/reduce kernels、chunk 选择规则和 oracle cadence 没有修改。
+
+最终构建 compile **297.7 s** / link **3.1 s**，exit=0，
+[构建日志](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_build_final.log)。
+最终二进制 SHA256 为 `C698217CE3AD49564D4B10A6C11D5E2D58AA6F9CDE7F96558ED917AA17C179E7`。
+最终版本没有再跑一整组生产 ABBA，不能将测量二进制与最终构建 SHA 混写。
+
+最终完整门禁 **96 passed / 0 failed**，
+[最终完整日志](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_gate_final.log)。
+最终 runner 四轮 batch_mb smoke、四轮 reduction smoke（显式 64 MB）均通过，每轮 610 coefficients：
+[budget smoke CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_smoke_final/results.csv)、
+[reduction smoke CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_reduction_smoke_final/results.csv)。
+`NTT_S4_OFF=1` 旧 host-GMP 路径另做 smoke，exit=0：
+[S4-off 日志](D:/code/MPA-OpenCl/build_cuda_cmake/_batch_budget_s4off_smoke.log)。
+PowerShell 语法解析和 `git -c core.whitespace=cr-at-eol diff --check` 通过。
+测量仅使用 GPU1；本轮没有提交 Git。
+
+后续优先排查 [flat_mul_batch:6282](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6282)：
+现在无论 ma/mb 是否已等于 P 都创建两份零填充 wa/wb 再 copy；已经满足步长的输入有机会直接借用，
+只为短输入构造 padding。这个改动必须保证异步 pinned memcpy 时源仍有效，保留短输入 stride 契约，
+若 out 与 A/B 别名则需要保留拷贝，避免 out.assign 破坏借用源；
+并覆盖 Newton 两次 multiply、qrev 和 qb 四个调用点。本轮尚未实现它。
+
+固定 F/finv 原始输入或 spectrum 驻留也仍待做：一个 N=2^27 spectrum 为 1 GiB，本轮 arena 又增加
+436.6 MiB，必须先统一预算和驱逐规则。单纯继续提高到 96/128 MB 缺乏本轮证据，不能默认启用。
