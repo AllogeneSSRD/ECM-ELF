@@ -334,6 +334,36 @@ Check "deferred carry check: the default-budget control run agrees" `
 Check "deferred carry check: no carry-convergence failure was reported" `
       ($oDef -notmatch 'CARRY DID NOT CONVERGE' -and $oDef2 -notmatch 'CARRY DID NOT CONVERGE') ""
 
+# [12] THE ASYNCHRONOUS CHUNK TRANSFERS (section 30).  The upload uses pinned staging and the
+# readback goes into double-buffered pinned memory, consumed one chunk late, so neither transfer
+# forces the implicit sync that a PAGEABLE copy needs.  The gain is real but SMALL at the shapes a
+# test can afford (production 2x2: async -2.5%, deferral -0.5%, both -3.4%, all four inside one
+# binary because the card's clock swings 1000-1772 MHz and cross-build comparisons are confounded).
+# A small gain is exactly the kind that a silent regression -- losing pinned memory and quietly
+# falling back to the blocking path -- would hide, so this asserts the counters instead of timing:
+# every upload and every readback went through the pinned path, and the fallback counter is zero.
+$mAx = [regex]::Match($oDef2, 'raw_async=(\d+) out_async=(\d+) fallbacks=(\d+) \(async_enabled=1\)')
+if ($mAx.Success) {
+    $ra = [int]$mAx.Groups[1].Value
+    $oa = [int]$mAx.Groups[2].Value
+    $fb = [int]$mAx.Groups[3].Value
+    Check "async transfers: every upload and readback used the pinned path (no fallback)" `
+          ($ra -gt 0 -and $oa -gt 0 -and $fb -eq 0) ("raw_async=$ra out_async=$oa fallbacks=$fb")
+} else {
+    Check "async transfers: the accounting line is printed (raw_async/out_async/fallbacks)" $false `
+          $oDef2.Trim()
+}
+$env:NTT_S4_ASYNC = '0'
+$oBlk = (& $Exe @('--real', '--n', '340282366920938463463374607431768211457', '--sigma', '26',
+                  '--b1', '1000', '--b2', '5000000', '--d', '1231230', '--device', "$Device") 2>&1 |
+         Out-String)
+$cBlk = $LASTEXITCODE
+Remove-Item Env:\NTT_S4_ASYNC -ErrorAction SilentlyContinue
+Check "async transfers: the blocking-off A/B gives the same frozen factor" `
+      ($oBlk -match 'bad_factors=0 factors=59649589127497217' -and $cBlk -eq 0) ("exit=" + $cBlk)
+Check "async transfers: NTT_S4_ASYNC=0 really disables the pinned path (A/B knob works)" `
+      ($oBlk -match 'raw_async=0 out_async=0 .*async_enabled=0') $oBlk.Trim()
+
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

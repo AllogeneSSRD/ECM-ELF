@@ -1230,6 +1230,61 @@ static bool g_s4_batched_progress = true;
    Printed so tools/test can assert the deferral actually happened. */
 static unsigned long long g_defer_chunks = 0, g_defer_finishes = 0, g_defer_slices = 0;
 
+/* ---- PINNED STAGING FOR THE CHUNK ROUND-TRIPS (section 30) --------------------------------
+   Section 28 measured what the per-chunk cost really is: a PAGEABLE transfer cannot be overlapped,
+   because the driver has to wait for the stream before it can stage the buffer -- so each chunk
+   paid a full pipeline drain twice (upload, readback) on top of the one the carry check used to
+   add.  Section 29 removed the carry check's drain; this removes the other two by staging through
+   PAGE-LOCKED host memory: the host memcpy into the pinned buffer costs no device time at all, and
+   the following cudaMemcpyAsync needs no implicit sync, so the kernels of the next chunk stay
+   queued instead of waiting for the host.  The output side is double buffered so the host consumes
+   chunk k-1 while chunk k is still copying and computing.
+
+   Host RAM only -- the device footprint is unchanged (the arena's 5779 MB is the binding
+   constraint, section 27.3), and the buffers are small: at the production shape one chunk's raw
+   coefficients are 0.43 MB per operand and its reduced output 1.66 MB.  A failed pinning falls back
+   to the old blocking path rather than aborting. */
+static unsigned long long *g_pin_raw[2] = {nullptr, nullptr};
+static size_t g_pin_raw_cap[2] = {0, 0};
+static unsigned long long *g_pin_out[2] = {nullptr, nullptr};
+static size_t g_pin_out_cap[2] = {0, 0};
+static cudaEvent_t g_pin_ev[2] = {nullptr, nullptr};
+
+/* THE A/B KNOBS OF SECTIONS 29 AND 30.  Both techniques are timing-sensitive and the card's SM
+   clock swings between 1000 and 1772 MHz from run to run (read from the GPU-Z sensor log), which is
+   8-10% of a wall clock -- the same order as the effects being measured.  Cross-BUILD comparisons
+   are therefore confounded by clock drift, so each technique has a runtime switch and the honest
+   A/B is four back-to-back runs of ONE binary.  Defaults: both ON. */
+static bool opt_off(const char *name)
+{
+    const char *e = std::getenv(name);
+    return e && *e && std::atoi(e) == 0;
+}
+static const bool g_s4_defer_carry = !opt_off("NTT_S4_DEFER_CARRY");
+static const bool g_s4_async = !opt_off("NTT_S4_ASYNC");
+/* counted so tools/test can assert the asynchronous path was TAKEN (section 30): the timing
+   difference between the blocking and the pinned path is small enough that a run which silently
+   fell back to blocking would look like a normal result */
+static unsigned long long g_pin_raw_used = 0, g_pin_out_used = 0, g_pin_fallbacks = 0;
+
+/* ONE slot, ONE capacity.  Sharing a capacity between the two slots was a real bug: when slot 0
+   grew it raised the shared cap, so slot 1 looked big enough while still pointing at the smaller
+   buffer, and the upload died with "CUDA error invalid argument" at the second tree level
+   (measured, P=5). */
+static unsigned long long *pin_words(unsigned long long **slot, size_t *cap, size_t words)
+{
+    if (*slot && *cap >= words) return *slot;
+    if (*slot) { (void)cudaFreeHost(*slot); *slot = nullptr; *cap = 0; }
+    void *q = nullptr;
+    if (cudaHostAlloc(&q, words * sizeof(unsigned long long), cudaHostAllocDefault) != cudaSuccess) {
+        (void)cudaGetLastError();       /* no pinned memory: the caller keeps the blocking path */
+        return nullptr;
+    }
+    *slot = (unsigned long long *)q;
+    *cap = words;
+    return *slot;
+}
+
 /* per-chunk device-buffer budget for a batched multiply (MB): see poly_mul_batch_modN.
    THE ONE-SHAPE LADDER (section 27) says bigger is faster: at D=1231230/B2=1e11, P=115200 the whole
    run is 107.88 s (16 MB) / 91.27 s (32 MB) / 83.68 s (64 MB) with identical factor sets, and the
@@ -2271,7 +2326,18 @@ static void poly_mul_batch_modN(PolyLayer &L,
        buffer.  Interior chunks therefore lose their fwd/inv event attribution (the events are
        destroyed unread, since reading them would need the drain we are removing) -- the last chunk
        of each call still reports the sample. */
-    const bool defer_ok = (!host_pack && L.arena != nullptr);
+    const bool defer_ok = (!host_pack && L.arena != nullptr && g_s4_defer_carry);
+    /* the doubly-buffered PINNED output staging (section 30): reserved once per call at the largest
+       chunk this call can use, so every chunk of the call follows the same path (mixing a blocking
+       chunk with the deferred-consumption scheme would break the pending bookkeeping) */
+    const size_t out_words_max = (size_t)(chunk * out_slots * W);
+    if (!g_pin_ev[0]) CK(cudaEventCreateWithFlags(&g_pin_ev[0], cudaEventDisableTiming));
+    if (!g_pin_ev[1]) CK(cudaEventCreateWithFlags(&g_pin_ev[1], cudaEventDisableTiming));
+    const bool async_out = (g_s4_async &&
+                            pin_words(&g_pin_out[0], &g_pin_out_cap[0], out_words_max) != nullptr &&
+                            pin_words(&g_pin_out[1], &g_pin_out_cap[1], out_words_max) != nullptr);
+    unsigned long long ci = 0, pend_m = 0, pend_s0 = 0;
+    bool out_pending = false;
     bool carry_pending = false;
     unsigned long long carry_pending_m = 0;
     double carry_d2h_acc = 0.0;
@@ -2318,10 +2384,26 @@ static void poly_mul_batch_modN(PolyLayer &L,
                 C.d_raw_cap = raw_words;
             }
             const double th0 = now_s();
-            CK(cudaMemcpy(C.d_rawA, wa + s0 * P * W, raw_words * sizeof(unsigned long long),
-                          cudaMemcpyHostToDevice));
-            CK(cudaMemcpy(C.d_rawB, wb + s0 * P * W, raw_words * sizeof(unsigned long long),
-                          cudaMemcpyHostToDevice));
+            /* ASYNC UPLOAD VIA PINNED STAGING (section 30): the host memcpy into pinned memory
+               touches no device state, so it cannot drain the pipeline, and the pinned
+               cudaMemcpyAsync needs no implicit sync either.  Without pinned memory the old
+               blocking pair runs unchanged. */
+            const size_t raw_bytes = raw_words * sizeof(unsigned long long);
+            unsigned long long *pa = g_s4_async ? pin_words(&g_pin_raw[0], &g_pin_raw_cap[0], raw_words)
+                                                : nullptr;
+            unsigned long long *pb = g_s4_async ? pin_words(&g_pin_raw[1], &g_pin_raw_cap[1], raw_words)
+                                                : nullptr;
+            if (pa && pb) {
+                std::memcpy(pa, wa + s0 * P * W, raw_bytes);
+                std::memcpy(pb, wb + s0 * P * W, raw_bytes);
+                CK(cudaMemcpyAsync(C.d_rawA, pa, raw_bytes, cudaMemcpyHostToDevice));
+                CK(cudaMemcpyAsync(C.d_rawB, pb, raw_bytes, cudaMemcpyHostToDevice));
+                ++g_pin_raw_used;
+            } else {
+                CK(cudaMemcpy(C.d_rawA, wa + s0 * P * W, raw_bytes, cudaMemcpyHostToDevice));
+                CK(cudaMemcpy(C.d_rawB, wb + s0 * P * W, raw_bytes, cudaMemcpyHostToDevice));
+                if (g_s4_async) ++g_pin_fallbacks;
+            }
             /* 2. ... packed into digits ON the device (both operands, one launch each) ... */
             const size_t pack_words = (size_t)m * (size_t)qN;
             if (pack_words > C.d_pack_cap) {
@@ -2353,17 +2435,65 @@ static void poly_mul_batch_modN(PolyLayer &L,
            product of every slice at full slot width, and it is neither inside the probe's timers
            (they belong to the host implementation) nor inside the tree's own phases.  It is
            therefore timed and counted HERE, so "the 111 us per call that nobody measured" can be
-           attributed instead of guessed. */
+           attributed instead of guessed.
+
+           SECTION 30: it is now an ASYNC copy into pinned staging, and the chunk that is copied
+           here is consumed on the NEXT iteration -- so the host never waits for the device unless
+           the device is genuinely behind, which is the difference between "the transfer is
+           overlapped" and "the pipeline is drained per chunk".  `out_pending` marks the one chunk
+           that has been copied but not yet written into `out`; the end of the call drains it. */
+        const size_t out_words = (size_t)(m * out_slots * W);
+        if (!async_out) {
+            /* NO PINNED MEMORY: the original blocking readback, so a failed pinning costs speed
+               and never correctness (and never a half-filled `out`) */
+            const double td0 = now_s();
+            std::vector<unsigned long long> all(out_words, 0ull);
+            CK(cudaMemcpy(all.data(), h2.out, out_words * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+            for (unsigned long long s = 0; s < m; ++s)
+                std::copy(all.begin() + (long)(s * out_slots * W),
+                          all.begin() + (long)(s * out_slots * W + nc * W),
+                          out.begin() + (long)((s0 + s) * nc * W));
+            L.t_d2h_coeff += now_s() - td0;
+            L.d2h_coeff_words += (unsigned long long)out_words;
+            continue;
+        }
+        unsigned long long *po = g_pin_out[(size_t)(ci & 1)];
         const double td0 = now_s();
-        std::vector<unsigned long long> all((size_t)(m * out_slots * W), 0ull);
-        CK(cudaMemcpy(all.data(), h2.out, all.size() * sizeof(unsigned long long),
-                      cudaMemcpyDeviceToHost));
-        for (unsigned long long s = 0; s < m; ++s)
-            std::copy(all.begin() + (long)(s * out_slots * W),
-                      all.begin() + (long)(s * out_slots * W + nc * W),
-                      out.begin() + (long)((s0 + s) * nc * W));
+        CK(cudaMemcpyAsync(po, h2.out, out_words * sizeof(unsigned long long),
+                           cudaMemcpyDeviceToHost));
+        CK(cudaEventRecord(g_pin_ev[ci & 1]));
+        ++g_pin_out_used;
         L.t_d2h_coeff += now_s() - td0;
-        L.d2h_coeff_words += (unsigned long long)all.size();
+        L.d2h_coeff_words += (unsigned long long)out_words;
+        /* NOW consume the previous chunk's buffer: its copy has had this whole chunk's work to
+           finish, so this wait is normally already satisfied */
+        if (out_pending) {
+            const double tw0 = now_s();
+            CK(cudaEventSynchronize(g_pin_ev[(ci - 1) & 1]));
+            const unsigned long long *prev = g_pin_out[(ci - 1) & 1];
+            for (unsigned long long s = 0; s < pend_m; ++s)
+                std::copy(prev + (size_t)s * out_slots * W,
+                          prev + (size_t)s * out_slots * W + nc * W,
+                          out.begin() + (long)((pend_s0 + s) * nc * W));
+            L.t_d2h_coeff += now_s() - tw0;
+        }
+        pend_m = m;
+        pend_s0 = s0;
+        out_pending = true;
+        ++ci;
+    }
+    /* THE ONE DRAIN OF THE COEFFICIENT READBACK: the last chunk copied but not yet consumed */
+    if (out_pending) {
+        const double tw0 = now_s();
+        CK(cudaEventSynchronize(g_pin_ev[(ci - 1) & 1]));
+        const unsigned long long *prev = g_pin_out[(ci - 1) & 1];
+        for (unsigned long long s = 0; s < pend_m; ++s)
+            std::copy(prev + (size_t)s * out_slots * W,
+                      prev + (size_t)s * out_slots * W + nc * W,
+                      out.begin() + (long)((pend_s0 + s) * nc * W));
+        L.t_d2h_coeff += now_s() - tw0;
+        out_pending = false;
     }
     L.ntt_seconds += now_s() - t0;
     /* the deferred chunks' carry verdict, folded back into the caller's account: their counters
@@ -8120,6 +8250,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             std::printf("real_batched_carrydefer: chunks_deferred=%llu finishes=%llu "
                         "deferred_slices=%llu\n",
                         g_defer_chunks, g_defer_finishes, g_defer_slices);
+            /* SECTION 30: the pinned/async path, counted for the same reason as above -- and the
+               fallback count, so a run that silently lost pinned memory cannot look normal */
+            std::printf("real_batched_asyncxfer: raw_async=%llu out_async=%llu fallbacks=%llu "
+                        "(async_enabled=%d)\n",
+                        g_pin_raw_used, g_pin_out_used, g_pin_fallbacks, g_s4_async ? 1 : 0);
             /* OBJECTIVE 4: the one phase the probe cannot see -- the reduced product coming back
                to the host once per chunk in the batched path (section 32). */
             const double gb = (double)(L.d2h_coeff_words - dw0) * 8.0 / 1073741824.0;
