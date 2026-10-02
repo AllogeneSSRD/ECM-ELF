@@ -160,6 +160,40 @@ Check "the host-packing oracle still finds the frozen factor (device packer's A/
        $rHostPack.out -match 'hit_primes=114713') $rHostPack.out.Trim()
 Check "the host-packing A/B exits 0" ($rHostPack.code -eq 0) ("exit=" + $rHostPack.code)
 
+# [9] THE S5 DEVICE DESCENT (objective 2, docs/DEV_STAGE2_GPU_PLAN.md sections 49-53): the walk
+# must be aligned with the host's AND every leaf must match it, and only then may NTT_S5_ON be
+# trusted.  The round count is an explicit input because the S5 carry needs far more rounds than
+# the shared formula derives (measured: 112 is not enough, 128 is) and the reason is still open --
+# but a too small count now FAILS LOUDLY (s5_mul_batch refuses a multiply whose carry did not
+# converge, and the reduction hook refuses a non-canonical window), so this is a floor to assert,
+# not a silent assumption.
+$env:NTT_S5_ON = '1'
+$env:NTT_CARRY_ROUNDS = '128'
+$env:NTT_S4_DESCENT_CHECK = '1'
+$rS5 = RunCheck @('-D', '210', '-Evaluate')
+Remove-Item Env:\NTT_S5_ON, Env:\NTT_CARRY_ROUNDS, Env:\NTT_S4_DESCENT_CHECK -ErrorAction SilentlyContinue
+Check "S5 (device descent): every leaf equals the host descent's" `
+      ($rS5.out -match 'descent_check_leaves: P=\d+ differing_leaves=0') $rS5.out.Trim()
+Check "S5: every coefficient equals the host descent's" `
+      ($rS5.out -match 'descent_check: P=\d+ divmods_batched=\d+ divmods_slow=\d+ mismatching_coefficients=0') `
+      $rS5.out.Trim()
+Check "S5: the walk is aligned with the host's op count" `
+      ($rS5.out -match 'descent_check: .*divmods_batched=(\d+) divmods_slow=(\d+)') $rS5.out.Trim()
+# The device reports its ops in four classes; the host's `divmods` counts every child that is
+# neither the padding subtree nor a degree fast path, i.e. generic + linear.  Asserting THAT
+# identity is the alignment claim (section 45.2) -- asserting `divmods_batched == divmods_slow`
+# compares the generic count against the total and is simply the wrong test.
+$mSt = [regex]::Match($rS5.out, 'descent_dev_stats: divmods=\d+ generic=(\d+) linear=(\d+)')
+$mSl = [regex]::Match($rS5.out, 'descent_check: .*divmods_slow=(\d+)')
+if ($mSt.Success -and $mSl.Success) {
+    $gen = [int]$mSt.Groups[1].Value
+    $lin = [int]$mSt.Groups[2].Value
+    $slow = [int]$mSl.Groups[1].Value
+    Check "S5: generic+linear equals the host's op count ($gen+$lin = $slow)" `
+          (($gen + $lin) -eq $slow) ("generic=$gen linear=$lin slow=$slow")
+}
+Check "S5: the acceptance script exits 0" ($rS5.code -eq 0) ("exit=" + $rS5.code)
+
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

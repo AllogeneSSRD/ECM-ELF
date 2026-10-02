@@ -3249,3 +3249,62 @@ descent_check: divmods_batched=22 divmods_slow=46
 **下一步**：在归约已经可信的现在，把树走法按 **§45.3 的层级预言机**（`NTT_S5_LEVEL_CHECK`，第一层必须等于 `H mod Ft[c]`）**逐层**推进——现在这个预言机是可信的，因为它下游的乘法和归约都已经被 GMP 抽查拧紧了。
 
 **状态**：门禁 22/22，`NTT_S5_ON` 继续 opt-in（走法还未通过逐叶对拍），工作区干净。
+
+---
+
+## 53. 第 19 轮：**目标 ② 达成——S5 设备下降逐叶对拍全绿**（2026-10-02）
+
+### 53.1 最后一个根因 bug：Newton 迭代里的常数 2 减错了对象
+
+归约可信之后，`NTT_S5_DIVDUMP` 立刻把范围压到 Newton 逆：
+
+```
+s5_divstage: ra=-1 rb=-1 g=1 rb0=1 g0=1
+```
+
+`ra`/`rb` 全对、常数项 `g0=1` 也对（说明单首一化和 rev-pack 都好了），**只有 `g` 的系数 1 错**。对照宿主参考 `cp_inv_series`：
+
+```cpp
+{ mpz_to_words(h[0], W, two); }        /* h[0] = 2   —— 只有常数项 */
+h = cp_addsub(h, ag, L, /*sub=*/true); /* h -= ag    —— 其余系数是 -ag[i] */
+```
+
+即 $h = 2 - ag$ 是**多项式**语义：$h_0 = 2 - ag_0$，而 $h_i = -ag_i\ (i>0)$。
+
+而设备的 `s5_two_minus_kernel` 做的是 `r = 2 - a` **对每个系数都减 2** ✗ ⇒ 迭代算出的级数是错的：系数 1 得到 `2 - rb1` 而不是 `-rb1` ✓ **与测量到的 `g=1` 完全一致** ✓。
+
+修法（一行语义修正）：`lhs = 0`，**只在 `gid == 0` 时 `lhs[0] = 2`**，其余系数 `0 - a` ✓。
+
+### 53.2 修完之后的读数
+
+```
+s5_divstage:  ra=-1 rb=-1 g=-1 rb0=1 g0=1                     ← 整条商链与宿主一致
+s5_level_check: parent_rows=1 children=24 bad_children=0 bad_words=0   ← 第一层精确
+descent_check_leaves: P=24 differing_leaves=0                  ← 逐叶全对
+descent_check: P=24 divmods_batched=22 divmods_slow=46 mismatching_coefficients=0
+stage2: algorithm=tree_gpu_batched hits=1 bad_factors=0 factors=59649589127497217 hit_primes=114713
+```
+
+**目标 ② 的两条验收全部满足**：
+1. **树走法对齐**：设备的四类计数 `generic 22 + linear 24 = 46 = 主机的 divmods` ✓（§45.2 的判据）；
+2. **逐叶与主机下降对拍**：`differing_leaves=0`、`mismatching_coefficients=0` ✓；
+3. 并且**找到的因子与命中素数都等于 CPU 参考**（`59649589127497217` / `114713`）✓。
+
+### 53.3 归入回归套件：`tools/test` 现在 **27/27**
+
+新增第 [9] 组（`test_stage2_tree_gpu.ps1`），把目标 ② 的验收钉成常驻测试：在冻结向量上开 `NTT_S5_ON=1` + 逐叶对拍，断言
+`differing_leaves=0`、`mismatching_coefficients=0`、`generic+linear == divmods_slow`、脚本退出 0 ✓。
+
+（写这组测试时我自己先错了两次：先断言 `divmods_batched == divmods_slow`（比较的是"通用"与"总数"✗），再被 PowerShell 的 `$Matches` 覆盖坑了一次 ✗——两次都是**测试写错**而不是被测对象错，记在这里当反面教材。）
+
+### 53.4 仍未解决、但已"响亮失败"的一件事：carry 轮次数
+
+S5 需要 `NTT_CARRY_ROUNDS=128`，而共享公式给 ~6：
+
+| 轮次 | 64 | 68 | 72 | 80 | 96 | 112 | **128** |
+|---|---|---|---|---|---|---|---|
+| 结果 | 失败 | 失败 | 失败 | 失败 | 失败 | 失败（`rc=4`：carry 未收敛）| **全绿** ✓ |
+
+**触发点是硬边界**（112 失败 / 128 成功），而且失败是**响亮**的：`s5_mul_batch` 拒绝 carry 未收敛的乘法、归约 hook 拒绝非规范窗口，两条独立断言 ✓ ——**所以"轮次数不对"不会静默损坏，只会拒绝**。**为什么需要这么多仍未解释**（公式假设 ~6，实测 ~128），这是 `NTT_S5_ON` 默认打开前要收的最后一条。
+
+**状态**：门禁 **27/27**（含新的 S5 组），`NTT_S5_ON` 仍为 opt-in（等轮次数的推导与更大形状的验证），工作区干净。

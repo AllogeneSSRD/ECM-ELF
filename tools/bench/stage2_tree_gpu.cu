@@ -3334,10 +3334,12 @@ __global__ void s5_sub_kernel(const unsigned long long *A, unsigned long long a_
     for (int j = 0; j < nw; ++j) dst[(size_t)i * dstride + j] = r[j];
 }
 
-/* e = 2 - a, per coefficient, in the PLAIN domain.  The Newton step is `g <- g*(2 - a*g)` and
-   every operand here is a plain reduced value, so the constant is a plain 2; the first version
-   built it as `Mont(2, 1) = 2*R^-1` and subtracted THAT, which makes the iteration compute
-   `g*(2 - a*g*R^-1)` -- not the inverse of anything (section 44). */
+/* h = 2 - a, PER COEFFICIENT -- and the 2 belongs to the CONSTANT COEFFICIENT ONLY (section 53).
+   The host reference (`cp_inv_series`) is explicit: `h[0] = 2` and then `h -= ag`, so
+   `h[0] = 2 - ag[0]` while `h[i] = -ag[i]` for every i > 0.  Subtracting 2 from every coefficient
+   instead (the first version) makes the Newton step compute a different series: measured through
+   `NTT_S5_DIVDUMP=1`, the inverse's constant term was right and its coefficient 1 was
+   `2 - rb1` instead of `-rb1`, i.e. `s5_divstage: g=1 ... g0=1`. */
 __global__ void s5_two_minus_kernel(const unsigned long long *a, unsigned long long *out,
                                     unsigned long long total, const unsigned long long *n,
                                     unsigned long long ninv, int nw)
@@ -3345,10 +3347,10 @@ __global__ void s5_two_minus_kernel(const unsigned long long *a, unsigned long l
     const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
     if (gid >= total) return;
     (void)ninv;
-    unsigned long long two[128], r[128];
-    for (int j = 0; j < nw; ++j) two[j] = 0ull;
-    two[0] = 2ull;
-    s2g_submod<128>(r, two, a + gid * (unsigned long long)nw, n, nw);
+    unsigned long long lhs[128], r[128];
+    for (int j = 0; j < nw; ++j) lhs[j] = 0ull;
+    if (gid == 0) lhs[0] = 2ull;                 /* only the constant coefficient carries the 2 */
+    s2g_submod<128>(r, lhs, a + gid * (unsigned long long)nw, n, nw);
     for (int j = 0; j < nw; ++j) out[gid * (unsigned long long)nw + j] = r[j];
 }
 
