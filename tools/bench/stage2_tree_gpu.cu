@@ -2034,12 +2034,39 @@ static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned lon
                     S->check_first = s * out_slots + k0 + q;
                     char *ws = mpz_get_str(nullptr, 16, want);
                     char *ms = mpz_get_str(nullptr, 16, mine);
-                    std::printf("s4_reduce_CHECK_bad: slice=%llu k=%llu gmp=%s gpu=%s\n",
-                                s, k0 + q, ws, ms);
+                    /* ---- AND THE TWO THINGS THAT SPLIT THE CAUSE (section 51) ------------
+                       A dictionary of the failure without its context is what cost rounds 14-17:
+                       report whether THIS window's digits are canonical (the kernel's conversion
+                       ORs them in, so a digit >= 2^bpw loses its high bits) and what the REDC
+                       invariant requires r to be, so "the carry did not canonicalise" and "the
+                       elimination is wrong" are distinguishable from one line. */
+                    unsigned long long mx = 0, mj = 0;
+                    for (unsigned long long jj = 0; jj < S->slot_words; ++jj) {
+                        const unsigned long long v = digbuf[(size_t)(q * S->slot_words + jj)];
+                        if (v > mx) { mx = v; mj = jj; }
+                    }
+                    mpz_t tv, rexp, tw;
+                    mpz_inits(tv, rexp, tw, nullptr);
+                    for (unsigned long long jj = S->slot_words; jj-- > 0;) {
+                        mpz_mul_2exp(tv, tv, (unsigned)S->bpw);
+                        mpz_add_u64(tv, digbuf[(size_t)(q * S->slot_words + jj)]);
+                    }
+                    mpz_set_ui(tw, 1);
+                    mpz_mul_2exp(tw, tw, (mp_bitcnt_t)(64 * S->L));
+                    mpz_invert(tw, tw, R.N);
+                    mpz_mul(rexp, tv, tw);
+                    mpz_mod(rexp, rexp, R.N);
+                    char *rs = mpz_get_str(nullptr, 16, rexp);
+                    std::printf("s4_reduce_CHECK_bad: slice=%llu k=%llu gmp=%s gpu=%s "
+                                "max_digit=%llu/%llu(mj=%llu)%s rexp=%s\n",
+                                s, k0 + q, ws, ms, mx, (1ull << S->bpw) - 1ull, mj,
+                                (mx < (1ull << S->bpw)) ? " CANON" : " NONCANON", rs);
                     void (*ff)(void *, size_t) = nullptr;
                     mp_get_memory_functions(nullptr, nullptr, &ff);
                     ff(ws, std::strlen(ws) + 1);
                     ff(ms, std::strlen(ms) + 1);
+                    ff(rs, std::strlen(rs) + 1);
+                    mpz_clears(tv, rexp, tw, nullptr);
                 }
                 ++S->check_bad;
                 std::fprintf(stderr, "%s: FATAL: the device reduction disagrees with GMP at "
@@ -3481,7 +3508,9 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
        other check here can see -- and that is the whole of the S5 descent's remaining mystery
        (measured: digit 10 of the failing window was 2715379 against a bpw=7 limit of 127).
        Checked once per shape, where the window is already being read for the GMP oracle. */
-    if (S->calls == 0 && slot_words <= 512) {
+    /* On the ORACLE's cadence (not just once per shape): the first version checked only
+       `S->calls == 0`, so a window that went non-canonical later would sail past it. */
+    if ((S->calls <= 1 || (S->calls % g_s4_check_every) == 0) && slot_words <= 512) {
         std::vector<unsigned long long> w0((size_t)slot_words, 0ull);
         CK(cudaMemcpy(w0.data(), digits, w0.size() * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
