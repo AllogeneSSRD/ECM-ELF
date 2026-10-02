@@ -1768,11 +1768,19 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
         for (unsigned long long j = 0; j < slot_words; ++j) {
             s = s * 6364136223846793005ull + 1442695040888963407ull;
             unsigned long long v;
-            switch (c % 6) {
+            switch (c % 7) {
                 case 0: v = maxd; break;                                  /* all ones */
                 case 1: v = 0; break;                                     /* zero */
                 case 2: v = (j + 1 == slot_words) ? 1ull : 0ull; break;   /* single top bit */
                 case 3: v = (j == 0) ? maxd : 0ull; break;                /* low digit full */
+                /* ---- A DENSE WINDOW WHOSE VALUE IS BELOW N (section 46) --------------------
+                   The S5 descent failed on exactly this shape of window: 96 bits, i.e. TWO limbs
+                   both fully populated, and below N so the reduction must hand the value back
+                   unchanged.  Every other pattern here is either >= N (all ones, single top bit,
+                   the random default) or occupies one limb (zero, low digit full), so the one
+                   case that was wrong was the one case not covered.  A test suite is only as
+                   good as the shapes it contains. */
+                case 6: v = (j < (slot_words * 2ull) / 5ull) ? (s & maxd) : 0ull; break;
                 default: v = s & maxd; break;
             }
             dig[(size_t)(c * slot_words + j)] = v;
@@ -3089,31 +3097,48 @@ __global__ void s5_pack_kernel(const unsigned long long *src, unsigned long long
     if (zero_words) dst[s * N + word0] = 0ull;
     const unsigned long long *c = src + src_off + s * ma * (unsigned long long)W +
                                   i * (unsigned long long)W;
-    /* ---- THIS PACKER WRITES AT MOST TWO DIGITS PER COEFFICIENT (section 45) ---------------
-       `if (kp >= 2) break;` below caps the digit loop at kp = 0,1 -- 14 bits of a 129-bit value
-       at bpw = 7 -- and `(v >> kp) & mask` is the right digit only when the coefficient happens
-       to start on a digit boundary.  Everything above bit 2*bpw is dropped, which is exactly why
-       the S5 descent now passes on the ONE shape whose coefficients fit in two digits (P=2, D=10)
-       and fails on every real one.  It is left as it is ON PURPOSE for this build: a corrected
-       version was written and reverted the same round because it made the S5 path corrupt memory
-       (it tripped the S4 reduction's in-run GMP oracle, `s4_reduce_CHECK_bad`, which only fires
-       on values the S5 path does not own).  The correction is recorded in the plan; it needs its
-       bounds re-derived before it goes back in. */
-    for (int p = 0; p < W; ++p) {
-        unsigned long long v = c[p];
-        if (p == W - 1 && S < 64) v &= ((1ull << S) - 1ull);
-        if (!v) continue;
-        const int q0 = (sh0 + p * 64) / bpw, r = (sh0 + p * 64) % bpw;
-        const unsigned long long *srcw = &dst[s * N + word0];
-        /* the value is 64 bits; its base-2^bpw digits are (v>>kp)&mask with a final partial
-           digit -- computed so that no shift is ever taken by 64 */
-        const int ndig = (64 + r + bpw - 1) / bpw;
-        for (int kp = 0; kp < ndig; ++kp) {
-            const int kk = (kp == ndig - 1) ? r : bpw;
-            const int d = (kp < 2) ? (int)((v >> kp) & ((1ull << kk) - 1ull)) : 0;
-            if (kp >= 2) break;
-            if (d) atomicOr((unsigned long long *)&srcw[q0 + kp], (unsigned long long)d);
-        }
+    /* =====================================================================================
+     * THE PACKER, CORRECTED (objective 2 / section 46).
+     *
+     * The old loop below wrote AT MOST TWO DIGITS per coefficient (`if (kp >= 2) break;`) and
+     * took them as `(v >> kp) & mask`, which is the right digit only when the coefficient starts
+     * on a digit boundary.  At bpw = 7 that is 14 bits of a 129-bit coefficient: everything above
+     * bit 2*bpw never reached the transform, which is why the S5 descent passed on the one shape
+     * whose coefficients fit in two digits (P=2, D=10) and failed on every real one.
+     *
+     * The corrected form takes digit j straight out of the source words (coefficient bit j*bpw,
+     * possibly spanning two words) and places it at the coefficient's own bit j*bpw in the packed
+     * stream (also possibly spanning two words).
+     *
+     * BOUNDS, which is what the first attempt got wrong (it mixed a word index relative to
+     * `word0` with an absolute one, so every coefficient but the first wrote into the slice's LOW
+     * words):  the digit count is clamped to the coefficient's own slot (`slot_words` digits), and
+     * every store is guarded by `wj < N`, so the write cannot leave the slice.  The guarantee the
+     * guards rest on is the assertion `s5_mul_batch` already makes -- `P*slot_stride <= N*bpw` --
+     * which bounds the last coefficient's slot by the end of the slice.
+     * ===================================================================================== */
+    const unsigned long long sw_dig = slot_stride / (unsigned long long)bpw;   /* digits per slot */
+    unsigned long long ndig = ((unsigned long long)S + (unsigned long long)bpw - 1ull) /
+                              (unsigned long long)bpw;
+    if (ndig > sw_dig) ndig = sw_dig;
+    const unsigned long long mask = (bpw >= 64) ? ~0ull : ((1ull << bpw) - 1ull);
+    for (unsigned long long j = 0; j < ndig; ++j) {
+        const unsigned long long bit = j * (unsigned long long)bpw;
+        const unsigned long long wi = bit >> 6;
+        if (wi >= (unsigned long long)W) break;
+        const int sh = (int)(bit & 63ull);
+        unsigned long long d = c[wi] >> sh;
+        if (sh && (wi + 1) < (unsigned long long)W) d |= c[wi + 1] << (64 - sh);
+        d &= mask;
+        if (!d) continue;
+        /* the digit's place, measured from the start of `word0` */
+        const unsigned long long ab = (unsigned long long)sh0 + bit;
+        const unsigned long long wj = word0 + (ab >> 6);
+        if (wj >= N) break;
+        const int sh2 = (int)(ab & 63ull);
+        atomicOr((unsigned long long *)&dst[s * N + wj], d << sh2);
+        if (sh2 + (int)bpw > 64 && (wj + 1) < N)
+            atomicOr((unsigned long long *)&dst[s * N + wj + 1], d >> (64 - sh2));
     }
 }
 
