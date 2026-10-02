@@ -268,6 +268,28 @@ Check "S5 on D=30030: the batched engine finds the frozen factor" `
       ($rS5huge.out -match 'algorithm=tree_gpu_batched .*hits=1 bad_factors=0 factors=59649589127497217') `
       $rS5huge.out.Trim()
 
+# [10] THE ARENA'S CACHE EVICTION (section 20, objective 1).  NttArena caches, per (N, nbatch), the
+# three big buffers dA/dB/dQ (3N words) plus dOut/dRes, and per N the fused per-pass tables -- all
+# of it a PURE CACHE that used to be kept forever.  That is what capped D: at a larger P the fold's
+# shape needed room while earlier shapes still held thousands of MB, the arena refused, the run fell
+# back to per-call cudaMalloc and died with "out of memory" at the production shape.
+# evict_other_shapes() now frees every other shape's caches before refusing, and THIS IS THE ONLY
+# TEST THAT EXERCISES IT (every other group goes through --check-F, which never enters run_real).
+# THE CAP IS CALIBRATED FROM MEASUREMENT: at the frozen N with D=1231230 (P=115200) the run reaches
+# 439 MB of arena; the cap below is 342 MB, so the cached sum does not fit and the allocator must
+# evict.  `arena_overflow=0` is the assertion -- without eviction this run refuses and counts
+# overflows.  Cost: 0.64 s.
+$env:NTT_ARENA_CAP_KB = '350000'
+$oEv = (& $Exe @('--real', '--n', '340282366920938463463374607431768211457', '--sigma', '26',
+                 '--b1', '1000', '--b2', '5000000', '--d', '1231230', '--device', "$Device") 2>&1 |
+       Out-String)
+$cEv = $LASTEXITCODE
+Remove-Item Env:\NTT_ARENA_CAP_KB -ErrorAction SilentlyContinue
+Check "arena eviction: a large-P run fits a cap below its natural usage (arena_overflow=0)" `
+      ($oEv -match 'arena_overflow=0' -and $oEv -notmatch 'arena refuses') $oEv.Trim()
+Check "arena eviction: same frozen factor and a clean exit" `
+      ($oEv -match 'bad_factors=0 factors=59649589127497217' -and $cEv -eq 0) ("exit=" + $cEv)
+
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

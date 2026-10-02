@@ -3047,6 +3047,15 @@ struct S5Stats {
        about accordingly (and at P=240 the forest printed as "63360 MB", i.e. 63 GB that was never
        allocated).  The labels now say bytes. */
     unsigned long long forest_bytes = 0, scratch_bytes = 0, frontier_peak_bytes = 0;
+    /* ---- PER-STAGE COST OF ONE DIVISION (section 21) ----------------------------------------
+       t_generic and t_copy overlapped (both covered the whole level loop), so they could not say
+       WHERE a 5.0 ms division spends its time -- and that is the number item 2 has to attack.
+       These add up inside s5_divmod_one: the two rev-packs, the Newton doubling chain (the only
+       part that is inherently per-node), the q*B multiply and the final subtraction, plus the
+       launch and division counts of each branch. */
+    double t_revpack = 0.0, t_newton = 0.0, t_qb = 0.0, t_sub = 0.0;
+    unsigned long long n_div = 0, n_horner = 0, n_copy = 0, n_launch_horner = 0, n_launch_div = 0;
+    unsigned long long newton_steps = 0, newton_muls = 0;
 };
 
 /* the F tree, flattened per chunk: entry[level] = the first code of that level, off[], sz[] = the
@@ -4335,6 +4344,9 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
     D.preset();
     static int divdump_calls2 = 0;
     const double tg0 = now_s();
+    double ts0 = tg0;                       /* per-stage stamps (section 21) */
+    ++st.n_div;
+    const unsigned long long newton_steps_before = st.newton_steps;
     const unsigned int th = 256;
     const unsigned long long *Asub = Asrc + Aoff;
     const unsigned long long *Bsub = Bsrc + Boff;
@@ -4355,7 +4367,9 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
     CK(cudaGetLastError());
     unsigned long long *g = A;
     unsigned long long len = 1;
+    st.t_revpack += now_s() - ts0; ts0 = now_s();
     while (len < k) {
+        ++st.newton_steps;
         const unsigned long long nxt = ((2 * len) < k) ? (2 * len) : k;
         unsigned long long *gpad = D.palloc((size_t)nxt * W);
         unsigned long long *at = D.palloc((size_t)nxt * W);
@@ -4369,6 +4383,7 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
            operand A (at) is only read -- never written -- so it can double as the next g. */
         unsigned long long *ag = D.palloc((size_t)nxt * W);
         s5_mul_batch(D, at, 0, nxt, gpad, 0, nxt, 1, 0, nxt, ag, st, -1);
+        st.newton_muls += (2 * len == nxt) ? 2 : 2;
         unsigned long long *h = D.palloc((size_t)nxt * W);
         s5_two_minus_kernel<<<(unsigned int)((nxt + th - 1) / th), th>>>(
             ag, h, nxt, D.red->dn, D.red->ninv, D.red->nw);
@@ -4390,6 +4405,7 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
         }
         len = nxt;
     }
+    st.t_newton += now_s() - ts0; ts0 = now_s();
     /* ---- qrev = (ra*rbi) mod X^k, q = rev_k(qrev), qb = q*B --------------------------- */
     unsigned long long *qrev = D.palloc((size_t)k * W);
     s5_mul_batch(D, ra, 0, k, g, 0, k, 1, 0, k, qrev, st, -1);
@@ -4399,6 +4415,7 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
     const unsigned long long wantb = k + db;                /* deg(q*B) + 1 */
     unsigned long long *qb = D.palloc((size_t)wantb * W);
     s5_mul_batch(D, q, 0, k, Bsub, 0, lb, 1, 0, wantb, qb, st, -1);
+    st.t_qb += now_s() - ts0; ts0 = now_s();
     /* ---- dst = A - qb, coefficient by coefficient, ON THE DEVICE -----------------------
        THE LAUNCH MUST COVER rows*nw THREADS, NOT rows (section 55).  This kernel is written with
        ONE THREAD PER (ROW, WORD): it guards on `gid >= rows*nw` and derives its row as `gid/nw`.
@@ -4419,6 +4436,11 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
         CK(cudaGetLastError());
         CK(cudaDeviceSynchronize());
     }
+    st.t_sub += now_s() - ts0;
+    /* the multiply count of THIS division: 2 per doubling step + qrev + q*B (the first version
+       accumulated `2*st.newton_steps + 2`, i.e. the RUNNING total, which over-counted
+       quadratically -- 19311210 instead of ~16000 at D=30030) */
+    st.n_launch_div += (unsigned long long)(2 * (st.newton_steps - newton_steps_before) + 2);
     st.t_generic += now_s() - tg0;
     /* ---- THE HOST `cp_divmod` IS THE REFERENCE THIS FUNCTION REARRANGES (section 45) -------
        NTT_S5_DIVDUMP=1 recomputes the SAME division on the host from the SAME device inputs and
@@ -4919,11 +4941,13 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                                replaces -- the invariant `vol <= chunkL` is preserved by the same
                                argument that made the branch legal in the first place. */
                             unsigned long long nw = 0;
+                            ++st.n_copy;
                             s5_memcpy_rows(dbound, e.rowoff * W, dstrow * W, e.deg + 1, e.deg + 1,
                                            (int)W, dvals, &nw);
                         } else if (nc == 1 && !no_linear) {
                             /* the linear branch: a mod (X - x_j) = a(x_j), Horner on the device.
                                One launch per CHILD, one row written. */
+                            ++st.n_horner; ++st.n_launch_horner;
                             s5_eval_linear_kernel<<<S5_GRID(1)>>>(
                                 dbound, (unsigned long long)(e.rowoff * W), e.ncoef, (int)W,
                                 F.dA, D.dfoff,
@@ -5107,6 +5131,19 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
     }
     st.scratch_bytes = (unsigned long long)((D.scratch_words + D.pool_words) * 8);
     st.t_total = now_s() - t0;
+    /* the per-stage account of a division (section 21): t_generic/t_copy overlapped, these do not */
+    {
+        const unsigned long long nd = st.n_div ? st.n_div : 1;
+        std::printf("s5_div_cost: divisions=%llu newton_steps=%llu newton_muls=%llu "
+                    "t_revpack=%.2f t_newton=%.2f t_qb=%.2f t_sub=%.2f | per division: "
+                    "revpack=%.0f us newton=%.0f us qb=%.0f us sub=%.0f us total=%.0f us | "
+                    "branches: horner=%llu (launches=%llu) copy=%llu div_launches=%llu\n",
+                    st.n_div, st.newton_steps, st.newton_muls, st.t_revpack, st.t_newton, st.t_qb,
+                    st.t_sub, st.t_revpack * 1e6 / (double)nd, st.t_newton * 1e6 / (double)nd,
+                    st.t_qb * 1e6 / (double)nd, st.t_sub * 1e6 / (double)nd,
+                    (st.t_revpack + st.t_newton + st.t_qb + st.t_sub) * 1e6 / (double)nd,
+                    st.n_horner, st.n_launch_horner, st.n_copy, st.n_launch_div);
+    }
     std::printf("s5_dev_done: chunks=%llu levels=%llu entries=%llu max_frontier_rows=%llu "
                 "max_frontier_bytes=%llu forest_bytes_peak=%llu generic=%llu linear=%llu copies=%llu "
                 "zeros=%llu ntt_launches=%llu t_pack=%.2f t_ntt=%.2f t_generic=%.2f t_copy=%.2f "
