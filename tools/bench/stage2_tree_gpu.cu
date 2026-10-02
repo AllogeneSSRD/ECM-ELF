@@ -4634,13 +4634,28 @@ struct S5Entry {
    level's row width and the per-level differential check, so the four can never disagree. */
 static inline bool s5_fastpath(const S5Entry &e, size_t nc) { return e.deg < nc; }
 
-static void s5_dev_init(S5Dev &D, PolyLayer &L, S4Reduce &red)
+static void s5_dev_init(S5Dev &D, PolyLayer &L, S4Reduce &red, size_t P, size_t W)
 {
     D.L = &L;
     D.red = &red;
-    D.scratch_words = (size_t)256 << 20;                 /* 256 MB of packing pool */
+    /* ---- SIZE THE POOLS FROM THE SHAPE, NOT FROM A FIXED 2 GB (section 57) -------------------
+       These were `256 << 20` WORDS = 2 GB each (the comment said "256 MB": the same units slip as
+       section 54.7's forest_bytes), i.e. 4 GB on top of an arena that already holds 4257 MB of an
+       8 GB card at the production shape -- so `cudaMalloc(&D.pool, ...)` failed with "CUDA error
+       out of memory" and NTT_S5_ON could not be run at the real shape AT ALL.  That, not a
+       numerical doubt, is why production-scale S5 had never been exercised.
+       The packing pool must hold, per multiply, the two packed operands and the reducer's scratch:
+       3*qN + qos*W words, and 32M words (256 MB) covers the largest production shape's
+       3*4.1M + 1M = 13.3M words with room to spare.  The row pool must hold ONE division's rows:
+       ra/rb/A/B (k*W each), the Newton chain's four buffers per doubling step and qrev/q/qb, i.e.
+       at most ~7*P*W for k, db <= P/2 -- so 8*P*W.  Both bump allocators already fail LOUDLY,
+       naming the request and the capacity, so these are bounds with a tripwire rather than guesses;
+       the real peaks are printed by s5_dev_done (scratch/pool_bytes) so the next round can tighten
+       them from evidence. */
+    const size_t floor_words = (size_t)8 << 20;                    /* 64 MB floor for tiny shapes */
+    D.scratch_words = std::max(floor_words, (size_t)32 << 20);     /* 256 MB of packing pool */
     CK(cudaMalloc(&D.scratch, D.scratch_words * sizeof(unsigned long long)));
-    D.pool_words = (size_t)256 << 20;                    /* 256 MB of per-node rows */
+    D.pool_words = std::max(floor_words, (size_t)8 * P * W);
     CK(cudaMalloc(&D.pool, D.pool_words * sizeof(unsigned long long)));
     /* R2 = R^2 mod N with R = 2^(64*nw): the ONE constant that turns a plain value into its
        MONTGOMERY IMAGE through the multiplier the S5 kernels have (mont_mul(x, R2) = x*R).  The
@@ -4684,7 +4699,7 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
         return 3;
     }
     S5Dev D;
-    s5_dev_init(D, L, *L.s4->red);
+    s5_dev_init(D, L, *L.s4->red, P, W);
     /* NTT_S5_NO_LINEAR=1 routes a degree-1 divisor through the GENERIC Newton division instead of
        the Horner shortcut.  It is a DIAGNOSTIC, and a decisive one: the linear branch is 24 of the
        46 operations on the frozen vector and it fires only at the last level, so if the leaf
@@ -4740,7 +4755,16 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
         for (size_t i = 0; i < hrows; ++i)
             std::copy(H[i].begin(), H[i].end(), hflat.begin() + (long)(i * W));
         unsigned long long *dbound = nullptr;
-        CK(cudaMalloc(&dbound, (size_t)chunkL * W * sizeof(unsigned long long)));
+        /* THE FRONTIER FEEDS ITSELF, SO THIS BUFFER MUST HOLD A WHOLE LEVEL'S ROWS (section 57).
+           It was `chunkL*W`, but the level loop copies `vol` rows back into it (the frontier must
+           become the next level's source), and `vol` is NOT bounded by chunkL: a copy reserves
+           deg+1 rows while its sibling may be divided into nc rows, and the padded/unbalanced F
+           tree does not split a chunk in half -- measured at the production shape (Fpad=65536,
+           P=51840, chunkL=32, deg H=9): vol=44.  Copying 44 rows into a 32-row buffer is exactly
+           the "CUDA error invalid argument" this produced.  The accounting bound below (4*chunkL)
+           and this allocation are the same statement and must move together. */
+        const size_t fbuf_rows = 4 * (size_t)chunkL;
+        CK(cudaMalloc(&dbound, fbuf_rows * W * sizeof(unsigned long long)));
         CK(cudaMemcpy(dbound, hflat.data(), hflat.size() * sizeof(unsigned long long),
                       cudaMemcpyHostToDevice));
         if (hrows < Lc) CK(cudaMemset(dbound + hrows * W, 0, (Lc - hrows) * W * sizeof(unsigned long long)));
@@ -4938,8 +4962,18 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                flow, section 30): `vol` rows move back into the frontier buffer, whose capacity
                is the chunk's own row count. */
             if (vol) {
-                if (vol > (size_t)chunkL) {
-                    std::fprintf(stderr, "%s: FATAL: the S5 frontier is larger than the chunk "
+                /* `vol` IS THE BUFFER'S SIZE -- fitval(vol*W) below allocates exactly it and the
+                   pool refuses anything it cannot hold -- so this is an ACCOUNTING tripwire against
+                   runaway row arithmetic, not a memory bound.  It used to demand `vol <= chunkL`,
+                   which is only true for a BALANCED, unpadded chunk: at the production shape
+                   (Fpad=65536, P=51840, chunkL=32, deg H = 9) a chunk's children legitimately
+                   reserve 44 rows, because a copy reserves deg+1 rows while its sibling may be
+                   divided into nc rows and the padded/unbalanced F tree does not split a chunk in
+                   half.  Measured: `vol=44 chunkL=32`.  The bound is therefore 4*chunkL -- still
+                   far below anything a real accounting error would produce (which is what section
+                   30's device overruns looked like), and no longer a false alarm. */
+                if (vol > 4 * (size_t)chunkL) {
+                    std::fprintf(stderr, "%s: FATAL: the S5 frontier is implausibly large "
                                          "(vol=%llu chunkL=%llu)\n", NTT_PROBE_NAME,
                                  (unsigned long long)vol, (unsigned long long)chunkL);
                     std::exit(3);

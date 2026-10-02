@@ -3707,3 +3707,33 @@ static inline bool s5_fastpath(const S5Entry &e, size_t nc) { return e.deg < nc;
 门禁：**`passed: 38   failed: 0`**，退出 0 ✓（= 上一轮的 34 + 新的 4）。
 
 **第三次自己写错的测试（记下来当反面教材）**：新块最初放在"关掉 S5 的那一跑"之后，而那一段正好 `Remove-Item Env:\NTT_S5_ON` ⇒ 新块**悄悄测的是宿主下降**（0.07 s、完全没有 `descent_check*` 行、4 条里 3 条失败）。这与之前那两次（`$Matches` 被覆盖、`divmods_batched` 拿去和 `divmods_slow` 比）同类：**测试里的环境状态也要像被测对象一样被断言/复核**。修法是显式重设开关并加注释说明为什么必须重设。
+
+---
+
+## 57. 生产形状上的 S5：数值未受怀疑，而是**从没跑通过**
+
+目标 ② 的最后一步是"在生产形状上验证 S5"。逐叶对拍在生产形状上**不可负担**（`nw = 83`、`descent_slow` 的量级是小时级 ✗），所以改成**可负担的等价判据**：在**真实生产形状**上做 A/B（同一命令、只把 `--b2 1940000000000` 换成 `5000000`），要求**因子集合逐项一致、`bad_factors=0`、命中素数一致**。
+
+**S5 关（基线，模板 = `build_cuda_cmake/_b2_prod_args.txt` 改 B2）**：
+
+```
+real_batched_shape: P=51840 giant_points=10 num_poly_g=1 loops=0 descent_divmods=97200
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 hit_primes=3511 elapsed=10.93
+real_batched_split: giant=0.384 gtrees=0.006 fold=0.000 descent=4.700 inv=0.000 accum=1.414 name=0.358 f_tree_incl=13.000
+```
+
+⇒ **`P=51840`、`S=5261`、`nw=83` 的真实形状，一次 10.93 s**，可以作为以后每次改动的生产形状回归（比 397 s 的生产命令便宜 36 倍）✓。
+
+**S5 开：连续撞上三个"从没被验证过的假设"**，每一个都是生产形状第一次触发的：
+
+| # | 现象 | 根因 | 状态 |
+|---|---|---|---|
+| 1 | `CUDA error out of memory` 在 `cudaMalloc(&D.pool, ...)` | `s5_dev_init` 里 `scratch_words` / `pool_words` 是**固定的 `256 << 20` 个字 = 各 2 GB**（注释写的是 "256 MB"——与 §54.7 同类的单位笔误），合计 4 GB，而生产形状的 arena 已占 4257 MB / 8188 MB ⇒ 只剩 1832 MB ✗ | **已修**：按形状定尺寸（`pool = max(64 MB, 8*P*W)`；`scratch` 固定 256 MB，够最大形状的 `3*qN + qos*W ≈ 13.3M` 字），共约 531 MB ✓ |
+| 2 | `FATAL: the S5 frontier is larger than the chunk (vol=44 chunkL=32)` | `vol <= chunkL` 只在**平衡且无填充**的块上成立：拷贝分支保留 `deg+1` 行、它的兄弟可能被除成 `nc` 行，而这条填充/不平衡的 F 树**不会把一块正好劈成两半** ⇒ 实测 `vol=44 > 32`。放宽断言后立刻在 `cudaMemcpy(dbound, dvals, vol*W*8)` 上得到 `CUDA error invalid argument` ⇒ **那个断言保护的正是 `dbound` 只有 `chunkL*W` 字这件事** ✗，两者必须同时改 | **已修**：`dbound` 改为按 `4*chunkL` 行分配，断言与分配是同一句话（并改名为 "implausibly large"）|
+| 3 | `FATAL: the S5 frontier is implausibly large (vol=143 chunkL=32)` | 更深的层上 `vol` 仍在涨 ⇒ **块的映射 `code = lo/Lc + 1` 并不能描述"32 片叶子的子树"**：`Fpad=65536`、`chunkL=32` 时 `lo=0` 给出 `code=1`，即**整棵树的根**（degree 51840），于是"一块"其实走了整棵树 ✗ | **未修（本轮结论）** |
+
+**结论（必须写清楚）**：生产形状上 S5 的问题**不是数值、而是"从来没跑通过"**——它此前每一次验收都在**单块**形状上（D=30030 的 `chunk=4096`、D=2310 的 `chunk=4096`），于是**分块路径从未被执行过**；生产形状（`leaf_bytes = 34 MB`）是第一个触发分块的形状（`chunk=32`），`code = lo/Lc + 1` 的映射随即暴露为错 ✗。因此：
+
+* 目标 ② 在 **P=24 / 240 / 2880 三个单块形状上成立**（逐叶逐系数全绿、恒等式对齐、进套件），但**生产形状仍不能打开 `NTT_S5_ON`**；
+* 下一步（下一轮第一件事）：把块的根 code 从**树结构**推出来（而不是 `lo/Lc + 1`），或让分块边界按真实祖先切分；然后用上面那条 **10.93 s 的生产形状 A/B** 复验（因子集合 + `bad_factors=0`），最后才谈默认打开；
+* 本轮的两处内存/尺寸修复（按形状定池尺寸、`dbound` 按 frontier 上界分配）本身是**无条件正确**的改进，且让"生产形状跑 S5"从"不可能"变成"只差一个映射 bug" ✓。
