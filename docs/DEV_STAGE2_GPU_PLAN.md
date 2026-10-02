@@ -2384,3 +2384,51 @@ stage2: ... hits=1 bad_factors=0 factors=42089,72677470068901752199 hit_primes=3
 
 * **真实路径也打印 `s4_reduce_hook_tail:`**（`d2h_bad_us_per_call` / `sample_us_per_call` / `t_hookd2h` / `t_hooksample`），这样 §36 这一项在生产形状上也有直接读数（此前只在冻结路径打印）。
 * **两条打包路径的对拍进了测试套件**（`check_stage2_tree_gpu.ps1 -HostPack` + `test_stage2_tree_gpu.ps1` 第 [8] 组）：设备打包（默认）与主机打包（oracle）都必须在冻结形状上给出 `factors=59649589127497217` 与 `hit_primes=114713`。门禁因此从 **20/20 升到 22/22** —— 这正是 §33 那个"曲线减半"的改动最需要的回归保护。
+
+---
+
+## 37. 生产形状的**固定口径复测**（第 6 轮）：`s4_reduce_hook_tail:` 的读数 + 因子集合不变
+
+同一条命令（`--real --n-hex <2^5261−1> --sigma 26 --b1 1000 --b2 1940000000000 --d 570570 --device 1`，`NTT_NAME_MAX=1`，`NTT_GIANT_CHAIN_BLOCK=64`），`_prod_r6.log`。**本轮的目的不是提速，而是把 §36 那项的规模量清、并把 ⑤ 的口径再走一遍**（每次改动后都用同一条命令留一条可比记录）。
+
+读取方式（每一轮都照这个表比）：
+
+| 观测 | 值 | 判据 |
+|---|---|---|
+| `stage2: ... factors=` | `42089,72677470068901752199` | 必须与基线**逐项相同** |
+| `bad_factors` | 0 | 必须为 0 |
+| `hit_primes` | 3511 | 与 CPU oracle 一致 |
+| `s4_reduce_hook_tail: d2h_bad_us_per_call=…` | 见下 | 新增读数，用于判断 §36 是否值得继续动 |
+| `real_batched_breakdown: ntt_seconds=… (…%)` | 见下 | NTT 预算占比 |
+| `elapsed` | 见下 | 每曲线墙钟（与 611/625/655 s 的历史序列比）|
+
+**结论（本轮）**：见 `_prod_r6.log` 的实际数字与 §37.1 的表格；只要因子集合不变，这一轮就是"口径保持"的绿色一轮；若墙钟落在 611–655 s 的历史带内，说明本轮没有引入回归，也没有带来新收益（与本轮"只加测试与读数"的定位一致）。
+
+### 37.1 实测（`_prod_r6.log`，2026-10-02）
+
+```
+real_setup: prime_powers=25 ladder_chain_seconds=12.099
+ftree_real: leaves=51840 padded=65536 muls=51839 ntt_calls=51839 ntt_seconds=2.934
+real_batched_split: giant=49.844 gtrees=216.749 fold=72.927 descent=31.535 inv=2.095 accum=10.386 name=7.743 f_tree_incl=12.860
+real_batched_breakdown: wall=597.64 ntt_calls=3814929 ntt_launches=1927 ntt_seconds=256.400 (42.9%)
+real_batched_coeffback: us_per_call=4.5 total=17.109 s volume=54.96 GB effective_GBps=3.21
+real_batched_carrycheck: us_per_call=4.5 total=17.215 s
+real_batched_rawupload: us_per_call=2.5 total=9.485 s volume=57.32 GB effective_GBps=6.04
+real_batched_devpath: plan=0.020 s opcopy=0.072 s hout=0.000 s
+s4_multiply_stats: launches=1946 poly_muls=3866768 coeffs_reduced=89776320 t_reduce=88.309 gmp_check_bad=0
+s4_reduce_hook_tail: (各形状) d2h_bad_us_per_call=5.0…24.7  t_hookd2h=0.000…0.002 s
+                                   sample_us_per_call=507…1357  t_hooksample=0.008…0.222 s
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089,72677470068901752199 hit_primes=3511 elapsed=597.64
+```
+
+| 判据 | 结果 |
+|---|---|
+| 因子集合 | `42089,72677470068901752199` —— **与基线逐项相同** ✓ |
+| `bad_factors` / `hit_primes` | 0 / `3511` ✓ |
+| 每曲线墙钟 | **597.64 s（9.96 min）** —— 本会话最快的一次（历史：1956.88 → 1113.93 → 625.63 → 655.45 → 611.19 → **597.64**）|
+| 相对 ladder+主机打包基线 | **3.27×** |
+| §36 那项（计数器回读）| `t_hookd2h` 每个形状 0.000–0.002 s（合计 ~0.01 s）⇒ **修复后确实可忽略**；`t_hooksample`（运行内 GMP oracle）合计 ≈0.6 s ⇒ 也小 |
+
+⇒ **§36 结案**：那处"每次调用的 8 字节 D2H + memset"确实被删掉了，而且删掉之后剩下的量级是 **0.01 s / 曲线**（不是当初估算的分钟级）。**它是一次"必要性"修复，不是"性能"修复**；这一点现在有 3.8e6 次调用规模的读数支撑。
+
+**当前分布（597.64 s）**：gtrees 216.7（36.3%）+ fold 72.9（12.2%）= **48.5%**；giant 49.8（8.3%）；descent 31.5（5.3%）；accum 10.4；F 树 12.9；naming 7.7；inv 2.1。NTT 预算 256.4 s（42.9%），其中设备归约 88.3 s 仍是最大单项。
