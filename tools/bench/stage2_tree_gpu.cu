@@ -4145,10 +4145,25 @@ static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long
         }
         /* FORENSIC (NTT_S5_DIGDUMP=1): read the packed operand back and compare it with the source
            coefficients -- the one measurement that separates "the pack is wrong" from "the
-           multiply is wrong".  It costs a round trip, so it is off by default. */
+           multiply is wrong".  It costs a round trip, so it is off by default.
+
+           THE READ MUST MATCH THE WRITTEN LAYOUT (section 54.6).  The digit array holds ONE DIGIT
+           PER 64-BIT WORD (each < 2^bpw) -- that is how the reducer reads its window (slot_words
+           digits, low digit first) and how the slot dump above reads it (`hp[k*qsw + t]`).  This
+           comparison instead treated the buffer as a BIT array (`hp[bit/64] >> (bit%64)`), i.e. a
+           DIFFERENT data structure from the one under test, so it accused the packer on shapes that
+           are demonstrably exact: at D=210, 358 of 596 samples reported mismatching_words != 0 at
+           n=64/sw=10, a shape whose descent is leaf-for-leaf correct.  A checker that cries wolf
+           everywhere cannot localise anything -- and note that its neighbour ten lines up was
+           reading the same buffer correctly, so the two halves of this one block disagreed with
+           each other.  (Section 14.8 is the same lesson pointing the other way: a checker that
+           endorsed the packer through a shared wrong assumption.) */
         {
             const char *ed = std::getenv("NTT_S5_DIGDUMP");
-            if (ed && *ed && std::atoi(ed) != 0 && s0 == 0 && la <= 8) {
+            /* la <= 512, not la <= 8: the shapes worth checking are the LARGE ones (the root
+               division multiplies at la = 129), and a cap that only sees the deep levels cannot
+               see the shape that fails. */
+            if (ed && *ed && std::atoi(ed) != 0 && s0 == 0 && la <= 512) {
                 std::vector<unsigned long long> hp((size_t)qN, 0ull);
                 std::vector<unsigned long long> sa((size_t)la * W, 0ull);
                 CK(cudaMemcpy(hp.data(), pA, (size_t)qN * sizeof(unsigned long long),
@@ -4158,12 +4173,17 @@ static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long
                 unsigned long long bad = 0;
                 for (unsigned long long i = 0; i < la; ++i) {
                     std::vector<unsigned long long> got(W, 0ull);
-                    for (unsigned long long b = 0; b < (unsigned long long)S; ++b) {
-                        /* the coefficient's own slot, at the digit offset the packer used */
-                        const unsigned long long gb = i * (unsigned long long)qsw * (unsigned long long)qbpw + b;
-                        if (gb / 64 < (unsigned long long)qN &&
-                            ((hp[gb / 64] >> (gb % 64)) & 1ull))
-                            got[b / 64] |= (1ull << (b % 64));
+                    /* coefficient i occupies the digits [i*qsw, i*qsw+qsw), digit t holding the
+                       coefficient's bits [t*bpw, (t+1)*bpw) */
+                    for (unsigned long long t = 0; t < (unsigned long long)qsw; ++t) {
+                        const unsigned long long d = i * (unsigned long long)qsw + t;
+                        if (d >= (unsigned long long)qN) break;
+                        const unsigned long long v = hp[d];
+                        for (unsigned long long b = 0; b < (unsigned long long)qbpw; ++b) {
+                            const unsigned long long bit = t * (unsigned long long)qbpw + b;
+                            if (bit >= (unsigned long long)S) break;
+                            if ((v >> b) & 1ull) got[bit / 64] |= (1ull << (bit % 64));
+                        }
                     }
                     for (size_t t = 0; t < W; ++t)
                         if (got[t] != sa[i * W + t]) {
