@@ -1617,6 +1617,70 @@ static void s4_launch_reduce(int nw, int L, unsigned long long nbatch,
                                      L, dy, w, dout, slot_bits, dbad, s4_dbg, s4_tail_mont_mode());
 }
 
+/* ---- THE 2-BY-1 DIVISION PRIMITIVE (objective 4, docs/DEV_GPUOWL_NTT_NOTES.md section 31) -----
+   The reduction's tail spends 2*nw^2 MACs putting the R factor back, but with L == nw the whole
+   reduction can be ONE plain long division of C by N at about nw^2 MACs.  The measurements say that
+   is the right thing to want: t_reduce is 21.6 s at the B2=1e11 shape, it does NOT move when the
+   run's wall clock moves between 83.8 s and 94.9 s, and it does not move when the kernel's local
+   arrays shrink by a third -- so it is LATENCY-bound on the elimination's serial carry chain, and
+   only fewer dependent MACs help.
+
+   A long division needs an exact 2-by-1 quotient digit.  The first version of this function was a
+   half-remembered published code sequence and was wrong in 256 of 256 GMP comparisons; it is now
+   estimate-plus-exact-remainder-correction, right by construction: Moeller-Granlund's estimate
+   floor((v*u1)/2^64) + u1 is never above the true quotient and at most 2 below it, so the loop steps
+   down on underflow and up while the remainder is still >= d. */
+__host__ __device__ __forceinline__ void s2g_mul64(unsigned long long a, unsigned long long b,
+                                                   unsigned long long &lo, unsigned long long &hi)
+{
+#if defined(__CUDA_ARCH__)
+    lo = a * b;
+    hi = __umul64hi(a, b);
+#else
+    /* host code has no 128-bit type here (MSVC), so the high half comes from the 32-bit split:
+       a*b = p11*2^64 + K*2^32 + p00 with K = p01 + p10, and floor((K*2^32 + p00)/2^64) =
+       (K>>32) + ((K&m32) + (p00>>32))>>32 -- the two carry terms below. */
+    const unsigned long long m32 = 0xffffffffull;
+    const unsigned long long a0 = a & m32, a1 = a >> 32, b0 = b & m32, b1 = b >> 32;
+    const unsigned long long p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    const unsigned long long ks = (p01 & m32) + (p10 & m32);
+    const unsigned long long lo_mid = ks + (p00 >> 32);
+    lo = (lo_mid << 32) | (p00 & m32);
+    hi = p11 + (p01 >> 32) + (p10 >> 32) + (lo_mid >> 32);
+#endif
+}
+
+__host__ __device__ __forceinline__ unsigned long long s2g_udiv_2by1(unsigned long long u1,
+                                                                    unsigned long long u0,
+                                                                    unsigned long long d,
+                                                                    unsigned long long v)
+{
+    unsigned long long lo = 0, hi = 0;
+    s2g_mul64(v, u1, lo, hi);
+    unsigned long long q = hi + u1;
+    for (int guard = 0; guard < 8; ++guard) {
+        unsigned long long plo = 0, phi = 0;
+        s2g_mul64(q, d, plo, phi);
+        const unsigned long long rlo = u0 - plo;
+        const unsigned long long b1 = (u0 < plo) ? 1ull : 0ull;
+        const unsigned long long rhi = u1 - phi - b1;
+        if ((u1 < phi) || (u1 == phi && b1 != 0)) { --q; continue; }   /* estimate too high */
+        if (rhi != 0 || rlo >= d) { ++q; continue; }                   /* still >= d: step up */
+        return q;                                                      /* exact */
+    }
+    return q;
+}
+
+/* the modulus-level division constants, computed once: FILE-STATICS ON PURPOSE.  An earlier attempt
+   kept them in S4Reduce::Shape and the --check-F path then died silently -- exit 3 with EMPTY
+   stderr, the gate falling from 47/47 to 16 passed / 32 failed, and a stash-and-rebuild bisect put
+   the blame on that round's changes.  Here they change no struct layout and touch no per-shape
+   code; the 64-bit values cross the GMP boundary through mpz_import/mpz_export, so no assumption
+   about the width of `unsigned long` is involved. */
+static std::vector<unsigned long long> g_div_hns;   /* N << dshift, nw words, top bit set */
+static unsigned long long g_div_recip = 0;          /* its reciprocal word */
+static int g_div_shift = 0, g_div_nw = 0;
+
 /* the modulus-level part: N, its Montgomery constants and the shared device copy */
 static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
                           const std::vector<unsigned long long> &hn, unsigned long long ninv)
@@ -1629,6 +1693,71 @@ static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
     CK(cudaMalloc(&R.dn, (size_t)R.nw * sizeof(unsigned long long)));
     CK(cudaMemcpy(R.dn, R.hn.data(), (size_t)R.nw * sizeof(unsigned long long),
                   cudaMemcpyHostToDevice));
+    /* ---- THE DIVISION CONSTANTS, AND THE PRIMITIVE CHECKED AGAINST GMP (section 31) ---------
+       N << dshift (top bit set) and its reciprocal word, then 256 numerators per modulus compared
+       against GMP -- random ones plus the saturating extreme u1 = d-1, u0 = all ones.  A mismatch is
+       FATAL: section 35.1 of the plan document records that this area was once optimised with wrong
+       maths and caught by a test, so the arithmetic is checked before anything depends on it. */
+    {
+        const unsigned long long top = R.hn[(size_t)R.nw - 1];
+        int sh = 0;
+        while (sh < 64 && ((top << sh) & (1ull << 63)) == 0) ++sh;
+        if (sh == 64) sh = 0;
+        g_div_shift = sh;
+        g_div_nw = R.nw;
+        g_div_hns.assign((size_t)R.nw, 0ull);
+        for (int i = R.nw - 1; i >= 0; --i) {
+            const unsigned long long v = R.hn[(size_t)i];
+            g_div_hns[(size_t)i] = (sh == 0)
+                ? v : ((v << sh) | (i > 0 ? (R.hn[(size_t)i - 1] >> (64 - sh)) : 0ull));
+        }
+        const unsigned long long d = g_div_hns[(size_t)R.nw - 1];
+        mpz_t num, den, q, t64;
+        mpz_inits(num, den, q, t64, nullptr);
+        mpz_set_ui(num, 1);
+        mpz_mul_2exp(num, num, 128);
+        mpz_sub_ui(num, num, 1);
+        mpz_import(den, 1, -1, 8, 0, 0, &d);          /* exact, whatever sizeof(unsigned long) is */
+        mpz_fdiv_q(q, num, den);
+        mpz_set_ui(t64, 1);
+        mpz_mul_2exp(t64, t64, 64);
+        mpz_sub(q, q, t64);
+        g_div_recip = 0;
+        mpz_export(&g_div_recip, nullptr, -1, 8, 0, 0, q);
+        {
+            unsigned long long cases = 0, bad = 0, seed = 0x9e3779b97f4a7c15ull;
+            mpz_t n2, qq, rr, gq;
+            mpz_inits(n2, qq, rr, gq, nullptr);
+            for (int t = 0; t < 256; ++t) {
+                seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+                const unsigned long long u1 = (t == 1) ? (d - 1) : (seed % d);
+                seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+                const unsigned long long u0 = (t == 1) ? ~0ull : seed;
+                if (u1 >= d) continue;
+                const unsigned long long got = s2g_udiv_2by1(u1, u0, d, g_div_recip);
+                unsigned long long two[2] = {u0, u1};      /* little-endian: low word first */
+                mpz_import(n2, 2, -1, 8, 0, 0, two);
+                mpz_fdiv_qr(qq, rr, n2, den);
+                mpz_import(gq, 1, -1, 8, 0, 0, &got);
+                ++cases;
+                if (mpz_cmp(gq, qq) != 0) {
+                    ++bad;
+                    if (bad <= 3)
+                        std::fprintf(stderr, "%s: udiv_2by1 MISMATCH u1=%llu u0=%llu got=%llu\n",
+                                     NTT_PROBE_NAME, u1, u0, got);
+                }
+            }
+            mpz_clears(n2, qq, rr, gq, nullptr);
+            std::printf("s4_udiv_check: cases=%llu bad=%llu (2-by-1 division vs GMP, dshift=%d)\n",
+                        cases, bad, g_div_shift);
+            if (bad) {
+                std::fprintf(stderr, "%s: FATAL: the 2-by-1 division primitive disagrees with GMP "
+                                     "-- refusing to continue\n", NTT_PROBE_NAME);
+                std::exit(3);
+            }
+        }
+        mpz_clears(num, den, q, t64, nullptr);
+    }
     return 0;
 }
 

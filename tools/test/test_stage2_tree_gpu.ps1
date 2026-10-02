@@ -334,6 +334,26 @@ Check "deferred carry check: the default-budget control run agrees" `
 Check "deferred carry check: no carry-convergence failure was reported" `
       ($oDef -notmatch 'CARRY DID NOT CONVERGE' -and $oDef2 -notmatch 'CARRY DID NOT CONVERGE') ""
 
+# [13] THE 2-BY-1 DIVISION PRIMITIVE (section 31 of docs/DEV_GPUOWL_NTT_NOTES.md).  Groundwork for
+# objective 4's division reduction: the tail of the device reduction can go from 2*nw^2 MACs to about
+# nw^2 by replacing the final Montgomery multiplication with ONE plain long division of C by N, and a
+# long division needs an exact 2-by-1 quotient digit.  Section 35.1 of docs/DEV_STAGE2_GPU_PLAN.md
+# records that a previous optimisation in this area was mathematically wrong and was caught by the
+# gate, so the arithmetic is checked BEFORE anything depends on it: the primitive is verified on the
+# host against GMP for 256 numerators per modulus, saturating extreme included, and a mismatch is
+# fatal.  Its first version was wrong in 256 of 256 cases and this check stopped the run.
+# The constants are FILE-STATICS at modulus level, deliberately not per-shape: an earlier attempt put
+# them in S4Reduce::Shape and the --check-F path then died silently (exit 3, empty stderr, gate
+# 47/47 -> 16 passed / 32 failed), which a stash-and-rebuild bisect confirmed.
+$mU = [regex]::Matches($oDef2, 's4_udiv_check: cases=(\d+) bad=(\d+)')
+Check "udiv primitive: the GMP check runs with a full 256 cases" `
+      ($mU.Count -ge 1 -and $mU[0].Groups[1].Value -eq '256') ("lines=" + $mU.Count)
+Check "udiv primitive: zero disagreements with GMP (the fatal guard would have stopped the run)" `
+      ($mU.Count -ge 1 -and ($mU | Where-Object { $_.Groups[2].Value -ne '0' }).Count -eq 0) `
+      (($mU | Select-Object -First 2 | ForEach-Object { $_.Value.Trim() }) -join ' | ')
+Check "udiv primitive: no mismatch message on either run" `
+      ($oDef2 -notmatch 'udiv_2by1 MISMATCH' -and $oDef -notmatch 'udiv_2by1 MISMATCH') ""
+
 # [12] THE ASYNCHRONOUS CHUNK TRANSFERS (section 30).  The upload uses pinned staging and the
 # readback goes into double-buffered pinned memory, consumed one chunk late, so neither transfer
 # forces the implicit sync that a PAGEABLE copy needs.  The gain is real but SMALL at the shapes a
