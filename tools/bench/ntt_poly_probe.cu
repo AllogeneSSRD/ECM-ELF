@@ -2756,7 +2756,23 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
        every length 2..4096) -- there is no bit-reversal kernel anywhere in the data path.
        The FUSED implementation (section 12 above) runs the very same stages in the very same
        order; `fusecheck` compares it element by element against this per-stage code. */
-    const double t0 = now_s();
+    /* ---- THE TIMERS MUST NOT SERIALISE THE PIPELINE (objective 4, section 39) ---------------
+       These two phases used to be followed by `cudaDeviceSynchronize()` purely so that t_fwd and
+       t_inv could be measured.  The GPU-Z sensor log says what that costs: over a B2=1e11 run the
+       GPU was at >=80% load only 33% of the samples and BELOW 20% for 26% of them (mean 58.7%,
+       mean board power 19.8 W of a ~60 W budget) -- i.e. the engine leaves the device idle about
+       two fifths of the time, and one cause is exactly this: the host drained the pipeline twice
+       per multiply for no reason but the clock.
+       The dependency the sync provided is already provided by the STREAM (the inverse reads what
+       the forward wrote, the carry reads what the inverse wrote), so the timers move to CUDA
+       events: recorded in-stream, read once at the end of the call, never blocking.  The numbers
+       stay honest (events measure GPU time, not host time) and the host can queue the next
+       phases while the device is still executing. */
+    cudaEvent_t ev_f0, ev_f1, ev_i1;
+    CK(cudaEventCreate(&ev_f0));
+    CK(cudaEventCreate(&ev_f1));
+    CK(cudaEventCreate(&ev_i1));
+    CK(cudaEventRecord(ev_f0));
     ntt_forward_fused(dA, fc, sh.omega, nbatch);
     ntt_forward_fused(dB, fc, sh.omega, nbatch);
     if (dump && nbatch == 1 && hfa && hfb) {
@@ -2769,13 +2785,10 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     }
     /* the pointwise product AND the 1/N scale are elementwise, so they ride along inside the
        inverse's tile pass (which touches the array once anyway) -- two whole passes saved */
-    CK(cudaDeviceSynchronize());
-    r.t_fwd = now_s() - t0;
+    CK(cudaEventRecord(ev_f1));
 
-    const double t1 = now_s();
     ntt_inverse_fused(dA, dB, fc, sh.omega_inv, sh.n_scale, nbatch);
-    CK(cudaDeviceSynchronize());
-    r.t_inv = now_s() - t1;
+    CK(cudaEventRecord(ev_i1));
 
     if (dump && nbatch == 1 && hPre) {
         hPre->assign(N, 0);
@@ -2860,6 +2873,18 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     CK(cudaMemcpy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
                   cudaMemcpyDeviceToHost));
     r.t_check = now_s() - t3;
+    /* the in-stream event timers, read once the stream has drained (the copies above guarantee
+       that) -- see the note at ev_f0 */
+    {
+        float ms = 0.0f;
+        CK(cudaEventElapsedTime(&ms, ev_f0, ev_f1));
+        r.t_fwd = (double)ms * 1e-3;
+        CK(cudaEventElapsedTime(&ms, ev_f1, ev_i1));
+        r.t_inv = (double)ms * 1e-3;
+        cudaEventDestroy(ev_f0);
+        cudaEventDestroy(ev_f1);
+        cudaEventDestroy(ev_i1);
+    }
     return r;
 }
 

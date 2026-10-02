@@ -2465,3 +2465,42 @@ stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089,7
 
 * **giant 点的退化检测目前只在 giant 循环里做**（baby 侧同一套已加，只是这些形状尚未出现退化 baby 点）；把两处合并成一个 helper 是下一轮的小清理。
 * 剩余的清单不变：设备归约（88.3 s）、`ntt_run_passes` 里分散的碎片、S5 树走法对齐（§30.3）。
+
+---
+
+## 39. 用 GPU-Z 实时日志量"引擎到底把 GPU 喂饱了没有"：**没有**（2026-10-02，用户建议的观测手段）
+
+用户提示可以用 `C:\Users\Elysia\Documents\GPU-Z Sensor Log.txt` 实时看占用。这个日志是 **1 Hz 的 CSV**，含 `GPU Load [%]`、`Memory Used [MB]`、`GPU Clock`、`Board Power Draw [W]`，而且**确实记的是我们跑的那块卡**（判据：跑起来 `Memory Used` 从 245 MB 跳到 833 MB→6341 MB，结束又落回 245 MB —— 正是 arena 的分配曲线）。
+
+### 39.1 改前的读数（B2=1e11，92 s，`_gpu_load_1e11.log`）
+
+```
+GPU Load  min/mean/median/max = 0 / 58.7 / 68.0 / 100
+samples >=80%: 33%   samples <20%: 26%
+GPU Clock mean = 1596 MHz ; Board Power mean = 19.8 W, max = 56.0 W（该卡 TGP ~60 W）
+```
+
+⇒ **引擎不是 GPU 吞吐受限**：平均只有 ~59% 占用，**四分之一的时间显卡几乎空转**，功耗只用到预算的三分之一。这条**改变了优化方向** —— 之前几轮都在啃内核（NTT 相位、归约），而现在的证据说明**主机侧/同步/启动**才是下一个大目标。
+
+### 39.2 立刻兑现的一处：**计时器不再排空流水线**
+
+`ntt_run_passes` 在 forward 之后与 inverse 之后各有一个 `cudaDeviceSynchronize()` —— 它**只为测 `t_fwd`/`t_inv` 而存在**（依赖关系本来由 stream 保证：inverse 读 forward 写的，carry 读 inverse 写的）。改成 **CUDA event**（在流内记录、调用结束时读一次，不阻塞）：数字仍然诚实（event 量的是 GPU 时间），但主机可以在设备还在跑时就把后续阶段排进队列。
+
+| | 改前（每调用排空两次）| 改后（event）|
+|---|---|---|
+| 墙钟（B2=1e11）| 73.71 s | **67.72 s** |
+| `ntt_seconds` | 38.88 s | **36.77 s** |
+| `fwd`/调用 | 5.4 µs（含排空）| **4.3 µs（纯 GPU）** |
+| GPU-Z `GPU Load` 均值 | 62.6% | **65.7%** |
+| `>=80%` 采样占比 | 34% | **38%** |
+| `<20%` 采样占比（空转）| 20% | **16%** |
+| 功耗均值 | 21.0 W | 20.0 W |
+| 因子集合 | `42089` | **相同** ✓（门禁 22/22）|
+
+⇒ 一处**两行**的改动：墙钟 −8%，空转占比 20%→16%。**但它离"喂饱"还差很远**（`>=80%` 仍只有 38%），所以：
+
+### 39.3 下一轮的方向（由这条证据定）
+
+1. **减少/消除阻塞拷贝**：每次调用仍有 `H2D`（原始系数）、`D2H`（结果系数）、`D2H`（进位残差断言）三种**页式阻塞拷贝**，每一个都会排空流水线 ⇒ 改用 `cudaMemcpyAsync` + 固定(pinned)缓冲 + 让 chunk 之间重叠（§33/§34 已量过它们的量：rawupload 2.5 µs/调用、coeffback 4.5、carrycheck 4.5）。
+2. **合并 launch**：`ntt_launches=1927` 对 559 个 chunk ⇒ 每个 chunk 里 forward/inverse/carry/slot 是分开的 launch；把它们并成一个 kernel（或至少让同一 chunk 的 2 个 forward 合成一个）能直接减少主机侧序列。
+3. 只有在占用率明显上去之后，内核级优化（设备归约 88.3 s）才是正确的下一步。
