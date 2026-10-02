@@ -384,6 +384,53 @@ Check "async transfers: the blocking-off A/B gives the same frozen factor" `
 Check "async transfers: NTT_S4_ASYNC=0 really disables the pinned path (A/B knob works)" `
       ($oBlk -match 'raw_async=0 out_async=0 .*async_enabled=0') $oBlk.Trim()
 
+# [14] Plain long division replaces BOTH REDC and domain restoration.  Exercise the runtime
+# A/B in one binary, and require exact factor/hit agreement as well as the independent full
+# multiword remainder fixtures (including borrow repairs).  Explicit modes avoid inheriting
+# a developer's A/B setting; restore that setting even if a launch fails.
+$savedTail = $env:NTT_S4_OLDTAIL
+try {
+    $tailArgs = @('--real', '--n', '340282366920938463463374607431768211457', '--sigma', '26',
+                  '--b1', '1000', '--b2', '5000000', '--d', '1231230', '--device', "$Device")
+    $env:NTT_S4_OLDTAIL = '0'
+    $oDiv = (& $Exe @tailArgs 2>&1 | Out-String)
+    $cDiv = $LASTEXITCODE
+    $env:NTT_S4_OLDTAIL = '1'
+    $oMont = (& $Exe @tailArgs 2>&1 | Out-String)
+    $cMont = $LASTEXITCODE
+    Check "division reduction: frozen factor, clean exit on both A/B paths" `
+          ($cDiv -eq 0 -and $cMont -eq 0 -and
+           $oDiv -match 'bad_factors=0 factors=59649589127497217' -and
+           $oMont -match 'bad_factors=0 factors=59649589127497217') "exit=$cDiv/$cMont"
+    Check "division reduction: the runtime knob selects both algorithms" `
+          ($oDiv -match 's4_reduce_mode: algorithm=division' -and
+           $oMont -match 's4_reduce_mode: algorithm=montgomery') ""
+    $divSummary = [regex]::Match($oDiv, 'stage2:.*factors=([^\s]*) hit_primes=([^\s]*)')
+    $montSummary = [regex]::Match($oMont, 'stage2:.*factors=([^\s]*) hit_primes=([^\s]*)')
+    Check "division reduction: factor and hit-prime sets agree exactly" `
+          ($divSummary.Success -and $montSummary.Success -and
+           $divSummary.Groups[1].Value -eq $montSummary.Groups[1].Value -and
+           $divSummary.Groups[2].Value -eq $montSummary.Groups[2].Value) ""
+    $divFixture = [regex]::Match($oDiv, 's4_div_check: cases=(\d+) bad=(\d+) repairs=(\d+)')
+    Check "division reduction: full GMP fixtures pass and exercise borrow repairs" `
+          ($divFixture.Success -and $divFixture.Groups[1].Value -eq '608' -and
+           $divFixture.Groups[2].Value -eq '0' -and [int]$divFixture.Groups[3].Value -gt 0) `
+          $divFixture.Value
+    $env:NTT_S4_OLDTAIL = '0'
+    foreach ($edgeN in @('ffffffffffffffc5', 'ffffffffffffffffffffffffffffff61')) {
+        $oEdge = (& $Exe @('--real', '--n-hex', $edgeN, '--sigma', '26', '--b1', '20',
+                          '--b2', '1000', '--d', '210', '--device', "$Device") 2>&1 | Out-String)
+        $cEdge = $LASTEXITCODE
+        Check "division reduction: GPU normalized edge modulus $edgeN agrees with GMP" `
+              ($cEdge -eq 0 -and $oEdge -match 'algorithm=division .*dshift=0' -and
+               $oEdge -match 's4_reduce_selftest:.*mismatches=0' -and
+               $oEdge -notmatch 'div_rem MISMATCH|udiv_2by1 MISMATCH|FATAL|gmp_bad=[1-9]|mismatches=[1-9]') "exit=$cEdge"
+    }
+} finally {
+    if ($null -eq $savedTail) { Remove-Item Env:\NTT_S4_OLDTAIL -ErrorAction SilentlyContinue }
+    else { $env:NTT_S4_OLDTAIL = $savedTail }
+}
+
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

@@ -1460,6 +1460,81 @@ static void s4_dbad_resolve(S4Reduce &R, bool wait = false)
     if (S) S->canon_bad = hbad;
 }
 
+/* Modulus-level constants, deliberately outside the per-shape objects.  The normalized
+   divisor is broadcast from constant memory; its width is bounded by S2G_DISPATCH. */
+static std::vector<unsigned long long> g_div_hns;
+static unsigned long long g_div_recip = 0;
+static int g_div_shift = 0, g_div_nw = 0;
+__device__ __constant__ unsigned long long g_div_dns[128];
+
+__host__ __device__ __forceinline__ void s2g_mul64(unsigned long long, unsigned long long,
+                                                unsigned long long &, unsigned long long &);
+__host__ __device__ __forceinline__ unsigned long long s2g_udiv_2by1(
+    unsigned long long, unsigned long long, unsigned long long, unsigned long long);
+
+/* Plain long division of an UNNORMALIZED coefficient by N.  ns = N << shift is normalized,
+   and t has two spare high words.  No Montgomery domain enters this path: the result is C mod N.
+   The exact top-two-word quotient can overestimate the full quotient by at most two when the
+   divisor's high bit is set.  Subtract the full product, then add the divisor back on underflow.
+   Return the repair count (used by the independent GMP fixtures), or -1 on an invariant failure.
+   The host and device execute this same helper, including the 64-bit multiplication primitive. */
+template <int NW>
+__host__ __device__ __forceinline__ int s4_div_rem(unsigned long long *t, int limbs,
+    const unsigned long long *ns, int nw, int shift, unsigned long long recip,
+    unsigned long long *out)
+{
+    for (int i = 0; i < nw; ++i) out[i] = 0;
+    if (shift != 0) {
+        unsigned long long carry = 0;
+        for (int i = 0; i < limbs; ++i) {
+            const unsigned long long v = t[i];
+            t[i] = (v << shift) | carry;
+            carry = v >> (64 - shift);
+        }
+        t[limbs++] = carry;
+    }
+    while (limbs > 0 && t[limbs - 1] == 0) --limbs;
+    t[limbs] = 0;                        /* high sentinel, including the shift == 0 case */
+    int repairs = 0;
+    const unsigned long long top = ns[nw - 1];
+    for (int j = limbs - nw; j >= 0; --j) {
+        const unsigned long long u1 = t[j + nw], u0 = t[j + nw - 1];
+        if (u1 > top) return -1;
+        const unsigned long long q = (u1 == top) ? ~0ull
+                                                  : s2g_udiv_2by1(u1, u0, top, recip);
+        unsigned long long carry = 0;
+        for (int i = 0; i < nw; ++i) {
+            unsigned long long lo, hi;
+            s2g_mul64(q, ns[i], lo, hi);
+            const unsigned long long sub = lo + carry;
+            hi += (sub < lo) ? 1ull : 0ull;
+            const unsigned long long v = t[j + i];
+            t[j + i] = v - sub;
+            carry = hi + ((v < sub) ? 1ull : 0ull);
+        }
+        bool under = t[j + nw] < carry;
+        t[j + nw] -= carry;
+        for (int correction = 0; under && correction < 2; ++correction) {
+            unsigned long long c = 0;
+            for (int i = 0; i < nw; ++i) {
+                const unsigned long long v = t[j + i], sum = v + ns[i];
+                const unsigned long long next = sum + c;
+                c = ((sum < v) || (next < sum)) ? 1ull : 0ull;
+                t[j + i] = next;
+            }
+            const unsigned long long v = t[j + nw];
+            t[j + nw] = v + c;
+            under = (t[j + nw] >= v);    /* wrapping the negative high word ends the borrow */
+            ++repairs;
+        }
+        if (under) return -1;
+    }
+    for (int i = 0; i < nw; ++i)
+        out[i] = (shift == 0) ? t[i]
+            : ((t[i] >> shift) | (i + 1 < nw ? (t[i + 1] << (64 - shift)) : 0ull));
+    return repairs;
+}
+
 /* base-2^64 limbs of the slot window -> mod N, on the device.  One thread per coefficient. */
 template <int NW>
 __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long long n,
@@ -1469,7 +1544,8 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
                                  int nw, int L, const unsigned long long *dy,
                                  unsigned long long w, unsigned long long *out,
                                  unsigned long long slot_bits, unsigned long long *bad,
-                                 unsigned long long *s4_dbg, int tail_mont)
+                                 unsigned long long *s4_dbg, int tail_mont,
+                                 int div_shift, unsigned long long div_recip)
 {
     const unsigned long long total = out_slots * nbatch;
     const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
@@ -1509,7 +1585,18 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
         if (top_bits < 64 && bad != nullptr && (d[slot_words - 1] >> top_bits) != 0)
             atomicAdd(bad, 1ull);
     }
-    /* ---- (2) L Montgomery elimination steps: each makes limb i zero and divides by 2^64 - */
+    unsigned long long u[NW];
+    if (!tail_mont && s4_dbg == nullptr) {
+        /* Replace BOTH the L-step elimination and its domain-restoration multiply.  The
+           forensic dump explicitly retains the old REDC path because it exposes r*R^-L. */
+        const int limbs = (int)((slot_words * (unsigned long long)bpw + 63) / 64);
+        const int rc = s4_div_rem<NW>(t, limbs, g_div_dns, nw, div_shift, div_recip, u);
+        if (rc < 0 && bad != nullptr) atomicAdd(bad, 1ull);
+        for (unsigned long long i = 0; i < w; ++i)
+            out[gid * w + i] = (i < (unsigned long long)nw) ? u[i] : 0ull;
+        return;
+    }
+    /* ---- (2) old A/B path: L Montgomery elimination steps ---------------------------- */
     for (int i = 0; i < L; ++i) {
         const unsigned long long m = t[i] * ninv;
         unsigned long long c = 0;
@@ -1559,9 +1646,7 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
        an nw-limb modulus costs about L*nw MACs against this tail's 2*nw^2, i.e. ~25% of the
        reduction at L == nw -- which is the only real opening here, and it needs a division with
        a quotient estimate, not a reshuffle of the existing steps.  `tail_mont` is still accepted
-       so the A/B switch exists, but both paths are the same arithmetic today. */
-    unsigned long long u[NW];
-    (void)tail_mont;
+       so the A/B switch exists, but the old arithmetic remains the forensic and A/B oracle. */
     s2g_mont_mul<NW>(u, r, dy, dn, ninv, nw);
     if (s4_dbg != nullptr && gid < 4) {
         /* ---- THE WINDOW CHECKSUM (section 48) -------------------------------------------
@@ -1589,8 +1674,8 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
 /* (the slot-canonical check is folded into s4_reduce_kernel above: the digits are in registers
    there, and a separate kernel would add one launch and one full read per batched multiply) */
 
-/* the tail mode (objective 4 / section 35): 0 = shift-and-reduce (the default), 1 = the old
-   full Montgomery multiplication by Y.  Read once from NTT_S4_OLDTAIL so the A/B needs no rebuild. */
+/* Reduction mode: 0 = direct plain long division of C (default); 1 = old REDC followed by
+   Montgomery restoration with Y.  Read once from NTT_S4_OLDTAIL for same-binary A/B. */
 static int s4_tail_mont_mode(void)
 {
     static int mode = -1;
@@ -1614,7 +1699,8 @@ static void s4_launch_reduce(int nw, int L, unsigned long long nbatch,
     const unsigned int th = 128;
     const unsigned int bl = (unsigned int)((total + th - 1) / th);
     s4_reduce_kernel<NW><<<bl, th>>>(ddig, n, bpw, slot_words, out_slots, nbatch, dn, ninv, nw,
-                                     L, dy, w, dout, slot_bits, dbad, s4_dbg, s4_tail_mont_mode());
+                                     L, dy, w, dout, slot_bits, dbad, s4_dbg, s4_tail_mont_mode(),
+                                     g_div_shift, g_div_recip);
 }
 
 /* ---- THE 2-BY-1 DIVISION PRIMITIVE (objective 4, docs/DEV_GPUOWL_NTT_NOTES.md section 31) -----
@@ -1677,9 +1763,87 @@ __host__ __device__ __forceinline__ unsigned long long s2g_udiv_2by1(unsigned lo
    the blame on that round's changes.  Here they change no struct layout and touch no per-shape
    code; the 64-bit values cross the GMP boundary through mpz_import/mpz_export, so no assumption
    about the width of `unsigned long` is involved. */
-static std::vector<unsigned long long> g_div_hns;   /* N << dshift, nw words, top bit set */
-static unsigned long long g_div_recip = 0;          /* its reciprocal word */
-static int g_div_shift = 0, g_div_nw = 0;
+/* Test the SAME host/device long-division helper against GMP on full multiword remainders.
+   Synthetic moduli exercise shift=0/63, nw=1/128, saturated quotient estimates and the
+   add-back branch; those events are too rare for random product coefficients alone. */
+static void s4_div_check(const std::vector<unsigned long long> &actual)
+{
+    mpz_t den, num, want, got, norm, q, dtop, radix;
+    mpz_inits(den, num, want, got, norm, q, dtop, radix, nullptr);
+    mpz_set_ui(radix, 1);
+    mpz_mul_2exp(radix, radix, 64);
+    unsigned long long cases = 0, bad = 0, repairs = 0, seed = 0x89abcdef01234567ull;
+    const int widths[] = {1, 2, 3, 8, 83, 128};
+    for (int fixture = 0; fixture < 19; ++fixture) {
+        const int nw = (fixture == 0) ? (int)actual.size() : widths[(fixture - 1) / 3];
+        std::vector<unsigned long long> hn((size_t)nw), ns((size_t)nw);
+        for (int i = 0; i < nw; ++i) {
+            seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+            hn[(size_t)i] = seed;
+        }
+        if (fixture == 0) hn = actual;
+        else {
+            const int kind = (fixture - 1) % 3;
+            hn[(size_t)nw - 1] = (kind == 0) ? 0x8000000000000000ull
+                : (kind == 1 ? 1ull : 0x1ffffffffull);
+            hn[0] |= 1ull;
+        }
+        mpz_import(den, (size_t)nw, -1, 8, 0, 0, hn.data());
+        int shift = 0;
+        while ((hn[(size_t)nw - 1] << shift) < 0x8000000000000000ull) ++shift;
+        mpz_mul_2exp(norm, den, (unsigned)shift);
+        mpz_export(ns.data(), nullptr, -1, 8, 0, 0, norm);
+        mpz_import(dtop, 1, -1, 8, 0, 0, &ns[(size_t)nw - 1]);
+        mpz_set_ui(num, 1);
+        mpz_mul_2exp(num, num, 128);
+        mpz_sub_ui(num, num, 1);
+        mpz_fdiv_q(q, num, dtop);
+        mpz_sub(q, q, radix);
+        unsigned long long recip = 0;
+        mpz_export(&recip, nullptr, -1, 8, 0, 0, q);
+        for (int c = 0; c < 32; ++c) {
+            unsigned long long t[260] = {}, out[128] = {};
+            if (c < 3) { mpz_set(num, den); if (c == 0) mpz_sub_ui(num, num, 1);
+                          if (c == 2) mpz_add_ui(num, num, 1); }
+            else if (c == 3) {
+                mpz_sub_ui(num, den, 1); mpz_mul_2exp(num, num, 64);
+                mpz_add(num, num, radix); mpz_sub_ui(num, num, 1);
+            } else if (c < 7) {
+                mpz_mul(num, den, den);
+                if (c == 4) mpz_sub_ui(num, num, 1);
+                if (c == 6) { mpz_add(num, num, den); mpz_sub_ui(num, num, 1); }
+            } else if (c == 7) mpz_set_ui(num, 0);
+            else {
+                for (int i = 0; i < 2 * nw; ++i) {
+                    seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+                    t[i] = seed;
+                }
+                mpz_import(num, (size_t)2 * nw, -1, 8, 0, 0, t);
+            }
+            std::memset(t, 0, sizeof(t));
+            size_t limbs = 0;
+            mpz_export(t, &limbs, -1, 8, 0, 0, num);
+            const int rc = s4_div_rem<128>(t, (int)limbs, ns.data(), nw, shift, recip, out);
+            mpz_mod(want, num, den);
+            mpz_import(got, (size_t)nw, -1, 8, 0, 0, out);
+            ++cases;
+            if (rc < 0 || mpz_cmp(want, got) != 0) {
+                ++bad;
+                if (bad <= 3) std::fprintf(stderr, "%s: div_rem MISMATCH fixture=%d case=%d "
+                                                    "nw=%d shift=%d rc=%d\n",
+                                           NTT_PROBE_NAME, fixture, c, nw, shift, rc);
+            } else repairs += (unsigned long long)rc;
+        }
+    }
+    mpz_clears(den, num, want, got, norm, q, dtop, radix, nullptr);
+    std::printf("s4_div_check: cases=%llu bad=%llu repairs=%llu (full remainder vs GMP, "
+                "widths=1..128 shifts=0..63)\n", cases, bad, repairs);
+    if (bad || repairs == 0) {
+        std::fprintf(stderr, "%s: FATAL: long division failed its GMP/borrow-repair fixtures\n",
+                     NTT_PROBE_NAME);
+        std::exit(3);
+    }
+}
 
 /* the modulus-level part: N, its Montgomery constants and the shared device copy */
 static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
@@ -1711,6 +1875,8 @@ static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
             g_div_hns[(size_t)i] = (sh == 0)
                 ? v : ((v << sh) | (i > 0 ? (R.hn[(size_t)i - 1] >> (64 - sh)) : 0ull));
         }
+        CK(cudaMemcpyToSymbol(g_div_dns, g_div_hns.data(),
+                              (size_t)R.nw * sizeof(unsigned long long)));
         const unsigned long long d = g_div_hns[(size_t)R.nw - 1];
         mpz_t num, den, q, t64;
         mpz_inits(num, den, q, t64, nullptr);
@@ -1758,6 +1924,10 @@ static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
         }
         mpz_clears(num, den, q, t64, nullptr);
     }
+    s4_div_check(R.hn);
+    std::printf("s4_reduce_mode: algorithm=%s nw=%d dshift=%d (NTT_S4_OLDTAIL=%d)\n",
+                s4_tail_mont_mode() ? "montgomery" : "division", R.nw, g_div_shift,
+                s4_tail_mont_mode());
     return 0;
 }
 

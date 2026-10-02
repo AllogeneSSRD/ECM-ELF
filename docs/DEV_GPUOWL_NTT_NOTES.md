@@ -1094,3 +1094,176 @@ s4_udiv_check: cases=256 bad=0 (2-by-1 division vs GMP, dshift=63)   ← 小模�
 ⇒ 本轮**净速度收益仍是 0** ✗（诚实记录 ✓），但 ①归约是**延迟瓶颈**、方向是"更少的依赖 MAC" ✓；
 ②2-by-1 除法原语**已被 GMP 验住并进了门禁** ✓；③一个静默 abort 的教训（**别把模数级常量放进会被
 复制/清零的每形状结构体** ✓）—— 第 ④ 项（长除法尾部，预期 ~35 s / ~14%）现在是**可执行**的 ✓。
+
+## 32. 当前仓库的优化计划与第一步：直接长除法归约
+
+### 32.1 优先级与依据
+
+本轮以 HEAD `8918b89` 为起点，结合近两天提交与 §27–31 的实测推进。D 搜索、arena 驱逐、baby 分段逆元、
+异步 pinned 传输与 carry check 延迟读取已经实现。§30 同二进制复测将 carry deferral 的收益纠正为约 0.5%，
+async 约 2.5%；不能再把它们的历史估值当成待实现收益。64 MB batch budget 在短 B2 上更快，但生产形状会
+挤压后续 naming 的显存并显著变慢，因此保持 32 MB。
+
+1. **本轮实施：普通长除法直接计算 C mod N。**归约占生产 54.015 / 250.29 s（21.6%），先减少依赖 MAC。
+   原路径约 L·nw + 2·nw²；新路径约 (coefficient_limbs−nw+1)·nw，另有归一化、商估计和借位回补。
+   “约省 35 s”只是操作数估算，是否达到由同二进制生产 A/B 决定。
+2. **随后：用新实测重新定位热点并校准 D 模型。**归约成本下降会影响不同 P/shape 的相对成本；先更新
+   measured cost 与显存可行性，再决定 D，保留固定 D 的对照以隔离算法与参数变化。
+3. **多项式流水：固定 F/reciprocal 的设备驻留、截断高/低半积和 sibling 输入变换复用。**对照 Prime95
+   MULHI/MULLO/FMA 与 polymult_several，减少折叠和下降的重复打包、无用系数、往返。显存需按阶段预算，
+   不能依赖全局增大 chunk。
+4. **S5 下降：逐层布局契约先于 batching。**§23 分组版数值错误已回退；逐叶对拍、slice/B/output stride
+   与父子 code 映射正确后，才能跨节点批量。当前默认保持原主机驱动下降，生产 A/B 不混入 S5。
+
+### 32.2 本轮实现与数学边界
+
+在 `tools/bench/stage2_tree_gpu.cu` 中增加 `s4_div_rem`，对解包后的原始 C 做归一化普通长除法，直接输出
+plain-domain 的 C mod N；因此同时跳过 `(2)` 的 L 次 Montgomery 消去和 `(3)` 的域恢复乘法。不能对移位后的
+量再做 Montgomery REDC，那会把域因子带回来（§35.1 的旧错误）。
+
+复用已经由 GMP 验证的 `s2g_udiv_2by1` 与模数级 `g_div_hns/g_div_recip/g_div_shift`。归一化 N 放在 CUDA
+constant memory 中（128 words，覆盖当前 dispatch），不改变 `S4Reduce::Shape` 布局。长除法采用顶两 limb
+商估计、全宽乘减、下溢时加回除数；归一化除数保证商估计最多高 2，允许最多两次回补。结果再右移撤销
+归一化。原有 slot-bound、GMP selftest 与系数抽样检查继续执行。
+
+运行时开关沿用 `NTT_S4_OLDTAIL`：0/未设置为直接长除法，1 为旧 REDC + Montgomery 域恢复。同一个
+二进制打印 `s4_reduce_mode`，保证 A/B 模式可观察。显式 forensic dump 为保留 REDC 中间值语义仍走旧路径。
+
+### 32.3 验证与性能验收
+
+- **全宽余数 oracle：**同一 host/device helper 对 19 个模数 × 32 个分子做 GMP 对拍（608 cases），覆盖
+  1/2/3/8/83/128 limbs、归一化移位 0/63 边界、N±1、N²−1/N²/N²+N−1、商位饱和及随机分子；
+  要求真实触发借位回补。
+- **设备 oracle：**每个真实 shape 的 96 个 digit patterns 对拍 GMP；已有 frozen F 系数、baby points、
+  S5 逐叶、factor/hit、arena/carry/async 门禁覆盖仍保留。
+- **新增门禁 [14]：**直接归约与旧路径同二进制比 factor/hit 集合，确认运行时模式；再跑 64/128-bit
+  已归一化模数（shift=0）设备 oracle，补上原 frozen modulus 的 shift=63 以外的边界。
+- **生产 A/B：**N=2^5261−1、sigma=26、B1=1000、B2=1.94e12、D=1231230、device=1、NAME_MAX=1，
+  batch=32 MB、async/defer=1、S5=0。比较旧/新同二进制的 elapsed、进程 wall、t_reduce、归约系数数目、
+  arena overflow、因子/hit 集合与错误计数；收益只来自这组结果，不能由 MAC 数直接宣布。
+
+构建使用 `tools/build/build_stage2_tree_gpu.ps1 -Rebuild`，CUDA 编译与链接 exit=0。运行
+`tools/test/test_stage2_tree_gpu.ps1 -Device 1`，**56 passed / 0 failed**；原有 50 条门禁和新增 6 条均通过。
+64/128-bit shift=0 设备边界运行也均 exit=0，所有 GMP 检查错误为 0。
+
+生产复测脚本为 `tools/bench/bench_stage2_reduce_ab.ps1`：默认固定上述参数，按旧/新/新/旧顺序运行，
+每轮确认二进制 SHA256 不变，检查模式、GMP 错误、arena overflow 与 factor/hit/coeffs 一致性，保存
+`provenance.json`、每轮原始日志与 `results.csv`。例如：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench/bench_stage2_reduce_ab.ps1 `
+  -Output build_cuda_cmake/_reduce_ab_20261002
+```
+
+### 32.4 源码定位与下一轮实施边界
+
+- [stage2_tree_gpu.cu:1482](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1482)：`s4_div_rem`，归一化、
+  商估计、乘减/借位回补及撤销归一化；[同文件:1589](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1589)
+  是 kernel 的新旧分流；[同文件:1769](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1769) 是全宽 GMP fixtures。
+- [test_stage2_tree_gpu.ps1:387](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:387)：新门禁 [14]；
+  [bench_stage2_reduce_ab.ps1:14](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:14)：生产 A/B 默认参数。
+- **固定多项式/截断积的下一处入口：**
+  [stage2_tree_gpu.cu:6054](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6054) 的 `divmod_batch`。
+  先记录每层 reciprocal 重建次数、输入变换次数、打包/复制字节与需要的系数区间，验证固定 F/倒数可在
+  现有 arena 预算内驻留，再加入显式 MULHI/MULLO/FMA 或 sibling 多输出接口。Prime95 的参照位置是
+  [ecm.cpp:9470](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9470) 的折叠高半积及
+  [同文件:9474](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9474) 的低半积 FNMADD；
+  [同文件:9729](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9729) 的左右子节点共用输入变换。
+  仅丢弃输出系数并不能证明节省 NTT 算术，必须区分少做打包/归约与实际缩小 transform 的收益。
+- **验收顺序：**逐乘法/逐层余式/全部叶值 oracle → 既有门禁 → 固定 D 同二进制生产 A/B → 重扫 D。
+  以总 elapsed 下降且无 arena overflow 为采用条件；若只降低某一 kernel 耗时但恶化峰值显存或 host
+  调度成本，则先保留实验开关。不同 D 下 incidental GCD 的因子集合可能变化（§20–23），不能复用
+  本轮固定 D 的“完整 factor 集相等”作为跨 D 的唯一正确性判据。
+- **长除法的后续候选：**若归约仍是大项，先统计商位数、零商、一次/两次 add-back 的比例，区分商估计、
+  multiply-subtract 和 borrow repair 的成本。当前顶两 limb 商估计正确但可能偏大，需要全宽加回；
+  可评估用除数第二高 limb 做 Knuth 商位预修正，以少量乘法换掉整条 nw-limb 回补链。该候选尚未实现、
+  未测收益；应保持 generic N 门禁，不能只用本轮 Mersenne 模数验证一般模数性能。
+
+### 32.5 本轮生产 ABBA 实测：默认采用直接长除法
+
+同一 SHA256 `1E88FE0FB2FDE46111F58E7A291458B327F402A08D86E4FA2455A4F04F12D011` 二进制，
+在 device 1（RTX 4060 Laptop / 8 GB）运行。四轮顺序与结果如下，单位均为秒：
+
+- A1 旧路径：Stage2 elapsed **223.97**，进程 wall **258.996**，`t_reduce` **55.521**。
+- B1 长除法：Stage2 elapsed **212.95**，进程 wall **248.422**，`t_reduce` **21.432**。
+- B2 长除法：Stage2 elapsed **197.37**，进程 wall **230.679**，`t_reduce` **21.463**。
+- A2 旧路径：Stage2 elapsed **223.11**，进程 wall **257.574**，`t_reduce` **55.563**。
+
+**均值：Stage2 223.54 → 205.16 s（−18.38 s / −8.2%）；进程 wall 258.285 → 239.551 s（−7.3%）；
+归约 55.542 → 21.448 s（−34.095 s / −61.4%）。**新路径默认开启，旧路径仍由 `NTT_S4_OLDTAIL=1` 选择。
+归约 kernel 省时接近原先约 35 s 的估算，但“生产总耗时 −14%”的推算未兑现，必须纠正为本轮 **−8.2%**。
+两轮新路径 kernel 时间相差仅 0.031 s，但总 elapsed 相差 15.58 s；仅两轮样本，不能将均值当作所有形状、
+所有机器的固定收益。历史 250.29 s 不与本轮直接拼接计算收益。
+
+四轮均 exit=0、`coeffs_reduced=62385796`、`hits=1`、`factors=42089`、`hit_primes=3511`、
+`arena_overflow=0`；每轮 `gmp_selftest_cases=2304`、`gmp_selftest_bad=0`、`gmp_checked=167021`、
+`gmp_check_bad=0`，所有 shape 的 slot canonical 检查为 0。host fixtures 每轮 608 cases / bad=0，
+累计触发 9621 次借位回补。此计数来自 host 合成 fixtures，并非生产 GPU 的回补次数。
+
+阶段账说明收益与下一步：旧路径两轮 G 树 83.095/82.372 s、descent 61.149/61.086 s；新路径分别
+73.503/67.376 s 与 55.348/52.539 s。giant 始终约 20.7 s；fold 旧 27.756/27.780 s，新 27.706/24.057 s。
+新路径第一轮 host `gleaves` 8.998 s、`loop_host` 5.147 s，第二轮为 6.556/3.641 s，旧路径约
+6.34/3.52 s。CPU 阶段、NTT 其他工作和异步调度仍影响总墙钟；不能把累计 kernel 时间差直接加到总收益。
+
+证据保存于 [results.csv](D:/code/MPA-OpenCl/build_cuda_cmake/_reduce_ab_20261002/results.csv)、
+[provenance.json](D:/code/MPA-OpenCl/build_cuda_cmake/_reduce_ab_20261002/provenance.json)，同目录含
+`1_montgomery.log`、`2_division.log`、`3_division.log`、`4_montgomery.log`；门禁原始输出为
+[门禁日志](D:/code/MPA-OpenCl/build_cuda_cmake/_div_gate.log)。这些测量文件位于构建目录，不作为源码提交。
+
+### 32.6 GPU-Z 实时日志：周期空闲与下一步优先级修正
+
+读取用户指定 `C:\Users\Elysia\Documents\GPU-Z Sensor Log.txt`，保存当时的传感器 CSV 快照与分析 JSON。
+本次快照覆盖 **2026-10-02 18:57:13–19:03:25（本机 London 时间）**，373 个一秒样本。
+日志表头不含设备名；1800 MHz 时钟和约 7–8 GB 显存与同时读取的 GPU 1 状态一致，这是设备识别的推断。
+GPU Load 是采样忙闲比例，不是 CUDA SM occupancy；一秒采样不能定位微秒/毫秒级 kernel 间隙。
+
+基于 A/B 进程 wall 和 `real_batched_wall` 粗对齐：
+
+- **A2 giant/Gtree/fold 主循环约 18:58:54–19:01:14：**140 个样本，平均 GPU Load **72.55%**；
+  **13/140（9.3%）**样本 ≤5%，16/140 <20%。低负载单点约每 9–12 s 出现一次，例如 18:59:03、
+  18:59:12、18:59:24、18:59:33、18:59:45、18:59:54。循环内空闲确实存在。
+- **A2 下降/accum/naming 约 19:01:14–19:02:25：**70 个样本，平均 Load **64.30%**，7 个样本 ≤5%。
+- **B2 新路径尾部 18:57:13–18:58:07：**只覆盖 55 个样本，平均 Load 50.62%，10 个样本 ≤5%；
+  18:57:57–59 与 18:58:01–07 是长低负载段，含尾部 naming/结束边界。不能拿这个尾部与 A2 全循环
+  比较新旧 GPU 利用率。原始日志在 B2 接近结束时才开始，没有覆盖两轮新路径的完整主循环。
+- 全窗口 97/373 个样本 ≤5%，其中约 62 个落在最后一轮结束后。**不能把这 26.0% 全算成算法空闲。**
+
+本轮 runner 尚未记录绝对 run start/end，因此上述边界由 provenance 开始时间和逐轮 wall 累加推断，
+并有打印、验证、CSV 导出等小间隙误差；是阶段级定位，不能据此认定某个同步调用就是具体低谷的根因。
+已为以后 runner 增加每轮 `started/ended`，不改变本次四轮的二进制与测量。另注意
+[stage2_tree_gpu.cu:7400](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7400) 的 `batched_progress t`
+只是 `giant+gtrees+fold`，不含 `gleaves/loop_host`，不能作为主循环的绝对墙钟时间。
+
+**下一步先分解、再消除 GPU 等待：**
+
+1. **拆开采样 oracle 的等待与 CPU 工作。**
+   [s4_check_reduced:2365](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2365) 对原始 digits 和余数做
+   两次阻塞 `cudaMemcpy`，然后 GMP 对拍；计时入口在
+   [同文件:2120](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2120)。四轮 `t_hooksample` 的 shape 总和
+   是 22.713/22.513/19.056/22.631 s，包含等待 GPU 完成、复制和 GMP，**不是全可删除的 CPU 成本**。
+   先增加 wait/copy/GMP 分项与绝对阶段标记；若 CPU 对拍造成断供，再把采样快照异步复制到 bounded pinned
+   ring，延后 CPU 对拍，在 buffer 复用前保证快照已经入队、run teardown 前 drain，保留同样的样本与错误门禁。
+2. **分段求逆后的 giant leaf 准备仍在 host。**
+   [同文件:7211](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7211) 到
+   [同文件:7362](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7362) 在 G 树开始前完成 GMP segment inverse、
+   退化 affine 分支和 bleaf 构造；已使用 projective leaf + 分段求逆，不应再建议重复实现批量逆元。
+   可评估 CPU 准备下一 block 与 GPU 当前 tree/fold 重叠，但 Gamma、退化记录和临时 arena 所有权必须独立。
+3. **减少 host 往返与折叠 CPU 操作。**
+   [同文件:7376](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7376) 的 fold 对 `T/qrev/q/qb/H` 做主机
+   vector 复制、反转和 GMP 系数减法；设备驻留 F/finv、低/高截断积与设备减法可同时减少工作和断供。
+   后续与 §32.4 的 sibling 变换复用合并设计，按阶段显存预算推进，保持 32 MB 对照。
+
+可重复执行的快照脚本为
+[analyze_stage2_gpuz.ps1:10](D:/code/MPA-OpenCl/tools/bench/analyze_stage2_gpuz.ps1:10)：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench/analyze_stage2_gpuz.ps1 `
+  -BenchOutput build_cuda_cmake/_reduce_ab_20261002 -Output build_cuda_cmake/_reduce_ab_20261002/gpuz
+```
+
+本次快照 [sensors.csv](D:/code/MPA-OpenCl/build_cuda_cmake/_reduce_ab_20261002/gpuz/sensors.csv) 和
+[summary.json](D:/code/MPA-OpenCl/build_cuda_cmake/_reduce_ab_20261002/gpuz/summary.json) 已保存。
+长除法已完成；接下来的优化验收继续以固定参数的生产总墙钟为准，再用更新后的成本校准 D。
+新增脚本通过 PowerShell 语法检查；补绝对时间后的 runner 另以 64-bit N、B1=20/B2=1000/D=210 跑完
+四轮 smoke，610 个归约系数与 factor/hit 结果一致，并成功生成含 `started/ended` 的 CSV 及传感器分析。
+该 smoke 仅验证测量工具，性能结论仍来自 §32.5 的生产四轮。
