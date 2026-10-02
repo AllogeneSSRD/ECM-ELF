@@ -160,18 +160,25 @@ Check "the host-packing oracle still finds the frozen factor (device packer's A/
        $rHostPack.out -match 'hit_primes=114713') $rHostPack.out.Trim()
 Check "the host-packing A/B exits 0" ($rHostPack.code -eq 0) ("exit=" + $rHostPack.code)
 
-# [9] THE S5 DEVICE DESCENT (objective 2, docs/DEV_STAGE2_GPU_PLAN.md sections 49-53): the walk
+# [9] THE S5 DEVICE DESCENT (objective 2, docs/DEV_STAGE2_GPU_PLAN.md sections 49-54): the walk
 # must be aligned with the host's AND every leaf must match it, and only then may NTT_S5_ON be
-# trusted.  The round count is an explicit input because the S5 carry needs far more rounds than
-# the shared formula derives (measured: 112 is not enough, 128 is) and the reason is still open --
-# but a too small count now FAILS LOUDLY (s5_mul_batch refuses a multiply whose carry did not
-# converge, and the reduction hook refuses a non-canonical window), so this is a floor to assert,
-# not a silent assumption.
+# trusted.  No carry-round override is needed any more: the shape planner used to round the bpw
+# DOWN to a divisor of the (often prime) slot width and could land on bpw = 1, whose single-bit
+# digits make the carry's chain O(N) -- 128 rounds were needed to work around it.  Rounding the
+# SLOT UP instead removes that degradation entirely, so this group now runs the DEFAULT shape.
 $env:NTT_S5_ON = '1'
-$env:NTT_CARRY_ROUNDS = '128'
 $env:NTT_S4_DESCENT_CHECK = '1'
 $rS5 = RunCheck @('-D', '210', '-Evaluate')
-Remove-Item Env:\NTT_S5_ON, Env:\NTT_CARRY_ROUNDS, Env:\NTT_S4_DESCENT_CHECK -ErrorAction SilentlyContinue
+$rS5big = RunCheck @('-D', '2310', '-B1', '1000', '-B2', '400000', '-Evaluate')
+# ... and THE SAME LARGER SHAPE with S5 OFF (the descent CHECK stays on, because these lines are
+# the assertion), which is a regression guard for the leaf-count fix (section 54.5): the descent's
+# leaf count used to come from `H.size()`, and at this shape the whole giant set is ONE block of
+# 175 giant points while P = 240, so H is legitimately SHORT (`H = T`, no reduction) and every
+# consumer that walked P rows walked past the descent's output.  The host-descent path must
+# therefore be exact here -- walking 64 rows past `ref` was a host access violation before.
+Remove-Item Env:\NTT_S5_ON -ErrorAction SilentlyContinue
+$rBigNoS5 = RunCheck @('-D', '2310', '-B1', '1000', '-B2', '400000', '-Evaluate')
+Remove-Item Env:\NTT_S4_DESCENT_CHECK -ErrorAction SilentlyContinue
 Check "S5 (device descent): every leaf equals the host descent's" `
       ($rS5.out -match 'descent_check_leaves: P=\d+ differing_leaves=0') $rS5.out.Trim()
 Check "S5: every coefficient equals the host descent's" `
@@ -193,6 +200,30 @@ if ($mSt.Success -and $mSl.Success) {
           (($gen + $lin) -eq $slow) ("generic=$gen linear=$lin slow=$slow")
 }
 Check "S5: the acceptance script exits 0" ($rS5.code -eq 0) ("exit=" + $rS5.code)
+# THE LEAF-COUNT FIX (section 54.5), asserted where it was found: at D=2310 with S5 OFF the host
+# descent must be exact AND must still find the frozen factor.  Both were violated by `P =
+# H.size()`; the descent check CRASHED (host 0xC0000005) on the 64 rows the descent never produced.
+Check "D=2310 (S5 off): the host descent is exact (leaf-count regression guard)" `
+      ($rBigNoS5.out -match 'descent_check_leaves: P=240 differing_leaves=0' -and `
+       $rBigNoS5.out -match 'descent_check: P=240 divmods_batched=478 divmods_slow=478 mismatching_coefficients=0') `
+      $rBigNoS5.out.Trim()
+Check "D=2310 (S5 off): the frozen factor is still found" `
+      ($rBigNoS5.out -match 'factors=59649589127497217' -and $rBigNoS5.out -match 'bad_factors=0') `
+      $rBigNoS5.out.Trim()
+Check "D=2310 (S5 off): the acceptance script exits 0" ($rBigNoS5.code -eq 0) ("exit=" + $rBigNoS5.code)
+# ---- KNOWN DEFECT, ASSERTED AS A DEFECT (section 54.6) --------------------------------------
+# At D=2310 the S5 device descent is WRONG: every one of the 240 leaves differs from the host
+# descent, the ratio is not a power of the Montgomery radix (so it is not a domain offset), and
+# the engine consequently finds NO factor where the CPU reference finds the frozen one.  D=210
+# (P=24) is exact, so the defect needs a multiply at P >= 113 -- a shape the frozen vector never
+# reaches (its largest is P=17) -- which is exactly why the suite must carry a larger shape.
+# These two checks are deliberately INVERTED: they fail the moment the defect is fixed, which is
+# the moment they must be rewritten as the positive assertions above.  They exist so that S5 can
+# never be mistaken for working, and so that flipping NTT_S5_ON to default-on cannot pass a gate.
+Check "S5 on D=2310 is STILL A KNOWN DEFECT: the descent does not crash, and reports every leaf" `
+      ($rS5big.out -match 'descent_check_leaves: P=240 differing_leaves=240') $rS5big.out.Trim()
+Check "S5 on D=2310 is STILL A KNOWN DEFECT: the batched engine finds no factor" `
+      ($rS5big.out -match 'algorithm=tree_gpu_batched .*hits=0') $rS5big.out.Trim()
 
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)

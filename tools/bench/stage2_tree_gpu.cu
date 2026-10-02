@@ -2803,7 +2803,12 @@ static void descent_slow(PolyLayer &L,
                          unsigned long long &divmods)
 {
     const size_t W = L.W;
-    const size_t P = H.size();
+    /* the leaf count is the F tree's degree, not H's coefficient count (section 54.5): H mod F
+       has deg < deg F, so H may be SHORTER than the leaf count -- and at the first batch, where
+       H = T with no reduction, it usually is.  Reading `cur[i]` for i in [H.size(), P) is exactly
+       the right thing: the tree walk has already reduced H (implicitly zero-extended) down to
+       every leaf, so those rows are H(x_i), not zeros. */
+    const size_t P = (Fdeg.size() > 1 && Fdeg[1] > 0) ? Fdeg[1] : H.size();
     std::vector<CPoly> cur(1);
     cur[0] = H;
     size_t base = 1, cnt = 1;
@@ -2859,7 +2864,17 @@ static void descent_batched(PolyLayer &L,
                             unsigned long long &divmods, int cat)
 {
     const size_t W = L.W;
-    const size_t P = H.size();                        /* deg H < deg F <= P */
+    /* THE LEAF COUNT IS THE F TREE'S, NOT THE POLYNOMIAL'S (section 54.5).  It used to be
+       `H.size()`, which is the number of COEFFICIENTS H happens to have -- and H is legitimately
+       SHORTER than deg F is long: the loop's first batch does `H = T` with no reduction when
+       deg T < P, and a block whose giant-point count is below the baby count then leaves H at
+       that shorter length.  The descent still owes one value per baby point, with the missing
+       high coefficients implicitly zero, so the count must come from the tree (Fdeg[1] = deg F =
+       the baby count) and never from the accumulator.  Every consumer downstream (block products,
+       the reader of ws.dvals, the descent check's reference) is sized by the caller's P, so
+       answering with fewer rows was an out-of-range walk -- measured at D=2310/B2=4e5, where one
+       block of 175 giant points against P=240 made the check read 64 rows past `ref`. */
+    const size_t P = (Fdeg.size() > 1 && Fdeg[1] > 0) ? Fdeg[1] : H.size();
     const double tdesc0 = now_s();
     double tl0 = tdesc0;
     std::vector<CPoly> cur(1);
@@ -3026,7 +3041,12 @@ struct S5Stats {
                        ntt_launches = 0, chunks = 0, forest_nodes = 0, mul_calls = 0;
     double t_pack = 0.0, t_copy = 0.0, t_generic = 0.0, t_linear = 0.0, t_reduce = 0.0,
            t_ntt = 0.0, t_total = 0.0;
-    unsigned long long forest_mb = 0, scratch_mb = 0, frontier_peak_mb = 0;
+    /* BYTES, despite the names: these are `words * 8`, and they used to be PRINTED as "MB", which
+       is a factor of a million.  At the frozen vector the frontier's 24 words printed as
+       "frontier_mb_peak=192" -- a number a reader would take as 192 MB on an 8 GB card and reason
+       about accordingly (and at P=240 the forest printed as "63360 MB", i.e. 63 GB that was never
+       allocated).  The labels now say bytes. */
+    unsigned long long forest_bytes = 0, scratch_bytes = 0, frontier_peak_bytes = 0;
 };
 
 /* the F tree, flattened per chunk: entry[level] = the first code of that level, off[], sz[] = the
@@ -3543,7 +3563,7 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
     }
     S2G_DISPATCH(D.red->nw, s4_launch_reduce, (int)D.red->nw, S->L, nbatch, out_slots,
                  out_slots * nbatch, digits, n, bpw, slot_words, D.red->dn, D.red->ninv, S->dy, w,
-                 H.tmp, slot_bits, (unsigned long long *)D.dbad, ddbg);
+                 H.tmp, /*slot_bits=*/S->slot_stride, (unsigned long long *)D.dbad, ddbg);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
     S->t_reduce += now_s() - t0;
@@ -3819,47 +3839,51 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
  *
  *   [A1] ONE WINDOW PER COEFFICIENT.  s4_reduce_kernel reads coefficient k out of the window of
  *        `slot_words` digits that starts at digit k*slot_words, and asserts that window's value is
- *        < 2^slot_bits (its guard).  So a coefficient's 64-bit block must lie INSIDE its own
- *        window; a block that starts at bit i*stride and is S bits wide therefore needs
- *                i*stride + S <= (i+1)*slot_bits      for every i,
- *        i.e. stride <= slot_bits + (slot_bits - S)/i, whose binding case is i = 1:
- *                stride + S <= 2*slot_bits.
- *        It is NOT enough: a window that merely COVERS the block also has to not cover MORE than
- *        it.  If stride < slot_bits the window (i+1)*slot_bits wide starting at i*stride contains
- *        the whole of coefficient i+1's block as well, and its value is then
- *                c_i + lowbits(c_{i+1})          (measured: value_bits = 261 vs slot_bits = 260,
- *        exactly one bit, on the frozen vector's first division), so the reduced residue is wrong
- *        even though the guard may pass.  Whenever stride > slot_bits the situation is symmetric
- *        and worse: coefficient i's block runs past window i into window i+1, so BOTH windows are
- *        polluted.  The only stride for which "the window contains exactly this coefficient" holds
- *        for every i is
- *                stride == slot_bits,
- *        and that requires slot_bits to be a whole number of bpw-digit words, i.e. bpw | slot_bits.
- *        This is option (a) of the two candidates recorded in the report, chosen because it is the
- *        only one of the two that makes the reducer's output EXACT rather than merely bounded:
- *        option (b) (scaling the operands so stride + S - slot_bits <= slot_bits) still leaves
- *        window i sharing bits with coefficient i+1 whenever stride < slot_bits, and the reducer
- *        has no way to know those bits are there.  Scaling is not needed once stride == slot_bits.
- *   [A2] EXACTNESS.  With stride == slot_bits the packed operands are exactly
- *                A = sum_i a_i * 2^(i*slot_bits)      (one coefficient per window, digits < 2^bpw
- *        by construction: the packer writes S <= slot_bits bits at a stride that is a multiple of
- *        bpw), so the raw convolution coefficient k of A*B is
+ *        < 2^slot_bits (its guard).  THE WINDOW'S WIDTH IN BITS IS slot_words*bpw = stride, NOT
+ *        slot_bits -- the reducer reads a fixed number of DIGITS, so its reach is fixed by the
+ *        digit width, and the window it reads for k is exactly the bit range
+ *                [k*stride, (k+1)*stride).
+ *        The packer puts coefficient k at bit offset k*stride, S bits wide.  Therefore window k
+ *        contains exactly the bits of coefficient k, and nothing else, whenever
+ *                S <= stride:
+ *        block k ends at k*stride + S <= (k+1)*stride, and coefficient k+1 begins at (k+1)*stride,
+ *        so no window ever sees a neighbour's bits.  Equality (stride == slot_bits) is NOT what
+ *        makes the reducer exact; the inequality is.  What stride must additionally satisfy is the
+ *        GUARD: the coefficient's value has to fit under the asserted bound, which is the counting
+ *        bound of [A2], c_k < 2^slot_bits <= 2^stride -- one condition, and it is the reason
+ *        slot_bits exists as a separate quantity at all.
+ *        This is what licenses ROUNDING THE SLOT UP (section 54): `stride = ceil(slot_bits/bpw)*bpw`
+ *        costs at most one extra window per coefficient and changes nothing the reducer reads.  The
+ *        old rule demanded `bpw | slot_bits` and scanned bpw DOWNWARDS, so when `2S + ceil(log2 P)`
+ *        was prime the only divisor <= 62 was 1 and the shape silently collapsed to bpw = 1 --
+ *        single-bit digits, a carry chain of length O(N), and a descent that appeared to need 128
+ *        carry rounds.  (The earlier claim that "stride > slot_bits makes the windows overrun" was
+ *        measured under the MISMATCHED old layout where the packer advanced by stride while the
+ *        reducer's window advanced by slot_bits; both sides now derive their width from the one
+ *        stride, so that failure mode no longer exists.)
+ *   [A2] EXACTNESS.  With stride >= slot_bits the packed operands are exactly
+ *                A = sum_i a_i * 2^(i*stride)      (one coefficient per window, digits < 2^bpw
+ *        by construction: the packer writes S <= slot_bits <= stride bits at a stride that is a
+ *        whole number of bpw-digit words), so the raw convolution coefficient k of A*B is
  *                c_k = sum_{i+j=k} a_i*b_j <= P * (2^S - 1)^2 < 2^(2S + log2 P) = 2^slot_bits
- *        because each a_i,b_j < 2^S and there are at most P pairs.  c_k is written as ONE slot, so
- *        the slot's value is exactly c_k; no aliasing and no carry from slot k into slot k+1 can
- *        change c_k, and the counting bound of the probe, L*(2^bpw-1)^2 < p with L = P*slot_words
- *        (the number of nonzero DIGITS per operand), is the same sufficient condition as before
- *        and is still enforced -- by ntt_shape_plan() for the forced bpw, and again here from the
- *        S5Shape this function returns.
+ *        because each a_i,b_j < 2^S and there are at most P pairs.  c_k < 2^slot_bits <= 2^stride,
+ *        so coefficient k is written as exactly ONE window and cannot reach window k+1; no
+ *        aliasing and no carry from window k can change c_k, and the counting bound of the probe,
+ *        L*(2^bpw-1)^2 < p with L = P*slot_words (the number of nonzero DIGITS per operand), is
+ *        the same sufficient condition as before and is still enforced -- by ntt_shape_plan() for
+ *        the forced bpw, and again here from the S5Shape this function returns.
  *   [A3] CAPACITY.  The last coefficient's window must be backed by real digits: the operand needs
  *        (P-1)*slot_words + slot_words = P*slot_words digits, which is what choose_cfg's
  *        `2*P*slot_words + 1 <= N` test guarantees with room to spare.
  *
- * The bpw is therefore not a free parameter any more: it is the largest bpw <= 62 that DIVIDES
- * slot_bits (so stride == slot_bits) and for which the multiply's own planner -- forced to it,
- * via the `force_bpw` argument of ntt_shape_query/ntt_poly_mul_batch_dev -- still accepts the
- * shape.  If no such bpw exists the shape has no canonical S5 packing and s5_shape_for says so
- * instead of guessing.
+ * The bpw is not a free parameter, but it is no longer required to divide slot_bits either: it is
+ * the LARGEST bpw the multiply's own planner accepts when forced to it (via `force_bpw` of
+ * ntt_shape_query/ntt_poly_mul_batch_dev) whose resulting stride `slot_words*bpw` is at least
+ * slot_bits, with slot_words the planner's own answer.  The scan is over bpw = 26..5: above 26 the
+ * exactness bound L*(2^bpw-1)^2 < p fails for the operand lengths this tree reaches, below 5 the
+ * carry chain grows without buying anything.  If no such bpw exists the shape has no canonical S5
+ * packing and s5_shape_for says so instead of guessing -- which is the failure this function used
+ * to hide by silently degrading to bpw = 1.
  */
 struct S5Shape {
     unsigned long long N = 0, slot_words = 0, stride = 0, out_slots = 0, slot_bits = 0;
@@ -3896,19 +3920,33 @@ static S5Shape s5_shape_for(unsigned long long P, int S)
     int qbpw = 0;
     int bpw = 0;
     const char *why_last = "no divisor of slot_bits <= 62 is accepted by the shape planner";
-    for (int c = 62; c >= 1; --c) {
-        if ((slot_bits % (unsigned long long)c) != 0) continue;    /* makes stride == slot_bits */
-        if (!ntt_shape_query(P, S, &qN, &qbpw, &qsb, &qsw, &qss, &qos, (int)c)) continue;
+    /* ---- THE SLOT IS ROUNDED UP; THE bpw IS NOT ROUNDED DOWN (section 54) -----------------
+       `stride = ceil(slot_bits/bpw)*bpw` is at least slot_bits, and the window bound
+       `coefficient < 2^(2S+ceil(log2 P)) <= 2^slot_bits` is an UPPER bound -- so a slot padded
+       up to the next multiple of bpw is perfectly usable.  What actually matters is that the
+       PACKER and the REDUCER agree on one width, and both now derive theirs from
+       `slot_stride/bpw` (the packer in s5_pack_kernel, the reducer through `slot_words`).
+
+       The old loop demanded `bpw | slot_bits` and scanned DOWNWARDS from 62.  `2S + ceil(log2 P)`
+       is often PRIME (S=129, P=17 gives 263), where the only divisor <= 62 is 1 -- so the shape
+       planner silently chose bpw = 1.  Single-bit digits make the carry's chain length O(N),
+       which is why the S5 descent needed 128 carry rounds instead of the formula's ~6, and why
+       the boundary between "fails" and "works" looked like a cliff (section 53.5). */
+    for (int c = 26; c >= 5; --c) {
+        if (!ntt_shape_query(P, S, &qN, &qbpw, &qsb, &qsw, &qss, &qos, c)) continue;
         if (qbpw != c) { why_last = "the planner did not honour the forced bpw"; continue; }
+        if (qsw * (unsigned long long)c != qss) { why_last = "slot_words*bpw != stride"; continue; }
+        if (qss < slot_bits) { why_last = "the stride is narrower than the window bound"; continue; }
         bpw = c;
         break;
     }
     if (!bpw) { r.why = why_last; return r; }
     if (qsb != slot_bits) { r.why = "slot_bits disagrees with its own derivation"; return r; }
-    /* [A1] THE STRIDE IS THE WINDOW WIDTH.  This single equality is what the reducer needs; the
-       checks below exist so a future change cannot silently break it. */
-    if (qss != slot_bits || qss != qsw * (unsigned long long)qbpw) {
-        r.why = "the stride is not exactly slot_bits";
+    /* [A1] ONE WIDTH FOR EVERYONE.  The stride carries the window and is at least slot_bits, so
+       every coefficient still lies wholly inside its own reduction window; the checks below exist
+       so a future change cannot silently break that. */
+    if (qss < slot_bits || qss != qsw * (unsigned long long)qbpw) {
+        r.why = "the stride is narrower than the window, or is not slot_words*bpw";
         return r;
     }
     /* [A3] capacity: every coefficient owns one whole window, and the last one must fit the
@@ -3965,8 +4003,8 @@ static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long
                              "(slot_bits=%llu vs %llu)\n", NTT_PROBE_NAME, sh.slot_bits, qsb2);
         std::exit(3);
     }
-    if (sstride != qsb2) {
-        std::fprintf(stderr, "%s: FATAL: the S5 slot stride is not the slot width "
+    if (sstride < qsb2) {
+        std::fprintf(stderr, "%s: FATAL: the S5 slot stride is narrower than the slot window "
                              "(stride=%llu slot_bits=%llu): a window would hold bits of its "
                              "neighbour\n", NTT_PROBE_NAME, sstride, qsb2);
         std::exit(3);
@@ -4196,10 +4234,30 @@ static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long
                                  "packed at bpw=%llu\n", NTT_PROBE_NAME, nst.bpw, qbpw);
             std::exit(3);
         }
-        if (rc != 0) {
-            std::fprintf(stderr, "%s: FATAL: the S5 NTT multiply failed (rc=%d) at P=%llu S=%d "
-                                 "m=%llu\n", NTT_PROBE_NAME, rc, P, S, m);
-            std::exit(3);
+        /* ONE LINE OF ATTESTATION of the shape the planner actually chose (section 54).  The whole
+           `bpw = 1` defect was invisible in every aggregate number: it made the carry's chain
+           length O(N), which showed up only as "the descent needs 128 carry rounds" -- a symptom
+           three steps away from its cause.  Naming bpw, the stride and the round count the
+           multiply derived for itself makes the next such degradation a one-line read instead of
+           a bisection.
+           Printed on STDOUT: native STDERR lines get wrapped and split mid-field by the
+           PowerShell wrapper the gates drive this exe through, which is how section 44.3's
+           "231 of 486 rows differ" was manufactured out of console formatting.
+           RE-ATTESTED WHENEVER P GROWS, so a run prints the descent's whole shape ladder (the
+           descent multiplies at P = 2, 4, ... at its deepest levels and at the leaf/root shape at
+           its top); a once-per-process line only ever showed the smallest shape and hid the one
+           the expensive multiplies use. */
+        {
+            static unsigned long long attested_max = 0;
+            if (P > attested_max) {
+                attested_max = P;
+                std::printf("s5_shape_attest: P=%llu S=%d slot_bits=%llu -> bpw=%llu "
+                            "stride=%llu slot_words=%llu N=%llu out_slots=%llu | the "
+                            "multiply derived %d carry rounds by itself and left %llu "
+                            "unconverged digits (max height %llu bits)\n",
+                            P, S, sh.slot_bits, qbpw, sstride, qsw, qN, qos, nst.carry_rounds,
+                            nst.carry_residual, nst.carry_max_bits);
+            }
         }
         ++st.ntt_launches;
         L.ntt_launches += m;
@@ -4487,7 +4545,7 @@ static int s5_forest_build(S5Forest &F, const std::vector<std::vector<unsigned l
                       cudaMemcpyHostToDevice));
     }
     st.forest_nodes += F.words;
-    if (F.words * 8 > st.forest_mb) st.forest_mb = F.words * 8;
+    if (F.words * 8 > st.forest_bytes) st.forest_bytes = F.words * 8;
     st.chunks++;
     return 0;
 }
@@ -4547,7 +4605,9 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
 {
     (void)C;
     const size_t W = L.W;
-    const size_t P = H.size() > 0 ? H.size() : Fdeg[1];
+    /* the same correction as descent_batched (section 54.5): the leaf count is the F tree's
+       degree, and H may be shorter than that without the descent owing fewer leaves */
+    const size_t P = (Fdeg.size() > 1 && Fdeg[1] > 0) ? Fdeg[1] : (H.size() > 0 ? H.size() : 1);
     const double t0 = now_s();
     if (!L.s4 || !L.arena) {
         std::fprintf(stderr, "%s: FATAL: the device descent needs the S4 reduction and the arena\n",
@@ -4886,16 +4946,16 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
             CK(cudaMemcpy(dleaf_out + lo * W, dbound, rows_out * W * sizeof(unsigned long long),
                           cudaMemcpyDeviceToDevice));
         if (dbound) cudaFree(dbound);
-        st.frontier_peak_mb = std::max(st.frontier_peak_mb, (unsigned long long)(maxval * 8));
+        st.frontier_peak_bytes = std::max(st.frontier_peak_bytes, (unsigned long long)(maxval * 8));
     }
-    st.scratch_mb = (unsigned long long)((D.scratch_words + D.pool_words) * 8);
+    st.scratch_bytes = (unsigned long long)((D.scratch_words + D.pool_words) * 8);
     st.t_total = now_s() - t0;
     std::printf("s5_dev_done: chunks=%llu levels=%llu entries=%llu max_frontier_rows=%llu "
-                "max_frontier_mb=%llu forest_mb_peak=%llu generic=%llu linear=%llu copies=%llu "
+                "max_frontier_bytes=%llu forest_bytes_peak=%llu generic=%llu linear=%llu copies=%llu "
                 "zeros=%llu ntt_launches=%llu t_pack=%.2f t_ntt=%.2f t_generic=%.2f t_copy=%.2f "
                 "t_init=%.2f t_total=%.2f\n", st.chunks, st.levels,
                 (unsigned long long)entries_total, (unsigned long long)maxent,
-                st.frontier_peak_mb, st.forest_mb, st.generic, st.linear, st.copies, st.zeros,
+                st.frontier_peak_bytes, st.forest_bytes, st.generic, st.linear, st.copies, st.zeros,
                 st.ntt_launches, st.t_pack, st.t_ntt, st.t_generic, st.t_copy, tinit - t0,
                 st.t_total);
     return 0;
@@ -6153,7 +6213,7 @@ struct BatchedRun {
     unsigned long long ntt_calls = 0;
     /* slice S5: the device descent's own accounting (its leaf values live on the device) */
     unsigned long long s5_divmods = 0, s5_generic = 0, s5_linear = 0, s5_copies = 0, s5_zeros = 0,
-                       s5_ntt_launches = 0, s5_forest_mb = 0, s5_frontier_mb = 0;
+                       s5_ntt_launches = 0, s5_forest_bytes = 0, s5_frontier_bytes = 0;
     double s5_t_ntt = 0.0, s5_t_pack = 0.0, s5_t_generic = 0.0, s5_t_copy = 0.0;
     bool s5_readback = false;
     double t_giant = 0.0, t_gtrees = 0.0, t_fold = 0.0, t_descent = 0.0, t_inv = 0.0,
@@ -6637,33 +6697,36 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     bool dev_leaves = false;
     {
         const char *e5 = std::getenv("NTT_S5_ON");
-        /* DEFAULT OFF, and this is deliberate.  Slice S5's device descent is built and reachable
-           (NTT_S5_ON=1) but the multiply/reduction pair is not yet canonical for the S5 slot
-           layout.  TWO independent defects were measured through this path (both kept honest by
-           NTT_S5_DIGDUMP=1 / NTT_S5_REDDUMP=1, which were added for exactly this):
-             (1) FIXED: the slot shape did not force the multiply's bpw to divide slot_bits, so
-                 slot_stride = slot_words*bpw was WIDER than slot_bits and a coefficient's block ran
-                 past its own reduction window by `stride + S - slot_bits` bits (measured: a 261-bit
-                 window against slot_bits = 260 on the frozen vector's first division).
-                 s5_shape_for() now forces bpw | slot_bits (choose_cfg rule 3), so
-                 slot_stride == slot_bits and no window contains a neighbour's bits.
-             (2) FIXED: the packer wrote coefficient i at digit i (bit i*bpw) instead of at its own
-                 slot (digit i*slot_stride/bpw), 37x too far left at S=129; measured as a
-                 coefficient of 2^192 read back as 2^64.
-             (3) OPEN: with slot_stride == slot_bits the SLOT WINDOW VALUE no longer spans the
-                 limbs the reduction returns.  s4_reduce_kernel converts the window into base-2^64
-                 limbs at t[0..nlimb-1] and returns t[L..L+nw-1], i.e. it needs BOTH
-                 L + nw >= nlimb (containment) and v >= N*2^(64(L-1)) (magnitude); the host's L
-                 solves the magnitude one, and at S=129 (nlimb=5, nw=3 -> L=3, slot_bits=259) the
-                 window value lands in limb 1 while the returned words are [3,6), so EVERY
-                 coefficient comes back 0 -- measured, repeatedly, as
-                 `s4_reduce_CHECK_bad: gmp=... gpu=0`.  Neither fix (a) nor fix (b) of section 22.4
-                 removes this: (a) is what puts the window there, and (b) only moves the window
-                 inside the stride.  What the S5 layout needs is a reduction whose READ WINDOW is
-                 chosen from the value it is about to receive (e.g. returning
-                 t[nlimb-nw..nlimb-1] and folding the missing 2^(64L) into Y), i.e. a change to the
-                 S4 reduction itself; that is the recorded next step, not a layout preference.
-           Turning it on aborts every run today, so the host/S4 descent stays the default. */
+        /* OPT-IN, and now for a MEASURED reason rather than a known defect: the device descent is
+           leaf-for-leaf equal to the host descent on every shape tested (section 53: P=24 at
+           D=210 -> differing_leaves=0, mismatching_coefficients=0, and the same factor and hit
+           prime as the CPU reference; enforced from section 53 on by test group [9] of
+           tools/test/test_stage2_tree_gpu.ps1), but it has never been run at PRODUCTION shape
+           (P=51840, D=570570), and the default must not change on the strength of a 24-leaf
+           vector alone.  Turning it on is now a verification exercise, not a bug hunt.
+
+           HISTORY, kept because each entry was a real, silent defect found only by differential
+           comparison -- the list is the argument for why the default stayed off this long:
+             (1) SLOT LAYOUT, fixed in two steps.  The shape did not force the multiply's bpw to
+                 agree with the packer's slot width, so slot_stride came out WIDER than slot_bits
+                 and a coefficient's block ran past its own reduction window (measured: a 261-bit
+                 value against slot_bits = 260 on the frozen vector's first division).  The first
+                 fix demanded bpw | slot_bits; that was WRONG in a way no aggregate number showed
+                 -- when 2S + ceil(log2 P) is prime the only admissible bpw is 1, and bpw = 1 makes
+                 the carry's chain length O(N) (measured as "the S5 descent needs 128 carry rounds",
+                 section 53.5).  The correct rule is the one in S5Shape [A1]: the reducer's window
+                 is slot_words*bpw = stride bits wide, so ANY stride >= slot_bits is exact, and the
+                 slot is rounded UP to a multiple of bpw instead of the bpw being rounded down to a
+                 divisor of the slot (section 54).
+             (2) PACKER ADDRESSING, fixed.  The packer wrote coefficient i at digit i (bit i*bpw)
+                 instead of at its own slot (digit i*stride/bpw), 37x too far left at S=129;
+                 measured as a coefficient of 2^192 read back as 2^64.
+             (3) REDUCTION READ WINDOW, fixed.  s4_reduce_kernel converts the window into base-2^64
+                 limbs at t[0..nlimb-1] and returns t[L..L+nw-1], which needs BOTH L + nw >= nlimb
+                 (containment) and v >= N*2^(64(L-1)) (magnitude); the host's L solved only the
+                 magnitude one, so at some shapes every coefficient came back 0
+                 (`s4_reduce_CHECK_bad: gmp=... gpu=0`).  Section 51 records the invariant and the
+                 fix; the per-leaf check is what proves it, which is why the check is permanent. */
         const bool s5_on = L.s4 && e5 && *e5 && std::atoi(e5) != 0;
         if (s5_on) {
             /* SLICE S5: the descent itself on the device.  Its leaf values stay in ws.dvals --
@@ -6685,18 +6748,18 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             R.s5_copies = s5.copies;
             R.s5_zeros = s5.zeros;
             R.s5_ntt_launches = s5.ntt_launches;
-            R.s5_forest_mb = s5.forest_mb;
-            R.s5_frontier_mb = s5.frontier_peak_mb;
+            R.s5_forest_bytes = s5.forest_bytes;
+            R.s5_frontier_bytes = s5.frontier_peak_bytes;
             R.s5_t_ntt = s5.t_ntt;
             R.s5_t_pack = s5.t_pack;
             R.s5_t_generic = s5.t_generic;
             R.s5_t_copy = s5.t_copy;
             dev_leaves = true;
             std::printf("descent_dev_stats: divmods=%llu generic=%llu linear=%llu copies=%llu "
-                        "zeros=%llu ntt_launches=%llu forest_mb_peak=%llu frontier_mb_peak=%llu "
+                        "zeros=%llu ntt_launches=%llu forest_bytes_peak=%llu frontier_bytes_peak=%llu "
                         "t_ntt=%.2f t_pack=%.2f t_generic=%.2f t_copy=%.2f\n",
                         s5.divmods, s5.generic, s5.linear, s5.copies, s5.zeros, s5.ntt_launches,
-                        s5.forest_mb, s5.frontier_peak_mb, s5.t_ntt, s5.t_pack, s5.t_generic,
+                        s5.forest_bytes, s5.frontier_peak_bytes, s5.t_ntt, s5.t_pack, s5.t_generic,
                         s5.t_copy);
         } else if (L.s4) {
             values.assign((size_t)P, std::vector<unsigned long long>(W, 0ull));

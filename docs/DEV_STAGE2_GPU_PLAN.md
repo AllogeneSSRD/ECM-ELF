@@ -3336,3 +3336,175 @@ for (int c = 62; c >= 1; --c) {
 **修法（下一轮，改动明确但涉及布局，需谨慎）**：不要用"bpw 整除最小的 slot_bits"来满足 `stride == slot_bits`，而是**把 slot 向上取整到 bpw 的倍数**——$2^{2S+\lceil\log_2 P\rceil} \le 2^{slot\_bits}$ 是**上界**，把 slot 放大到 `stride = ceil(slot_bits/bpw)*bpw` 完全合法 ✓，前提是**打包器与归约读的是同一个 stride**（现在两者都按 `slot_stride/bpw` 换算，已经一致 ✓）。§31 里"stride > slot_bits 会越窗"的那个历史结论，是在**打包器按 stride、归约按 slot_bits** 的错配下得到的 ✗——现在两侧同源，把 stride 定为唯一宽度即可 ✓。
 
 **本轮完整结论**：目标 ② 达成（逐叶全绿、因子与命中素数同参考、进回归套件 27/27）；S5 最后一个未解项（轮次数）的**根因已定位到形状规划器的一个退化分支（`bpw=1`）**，修法与验收条件都写清楚了。
+
+---
+
+## 54. 把 slot 向上取整：`bpw=1` 消失、轮次数回到公式、以及它顺带抓出的两个真 bug
+
+§53.5 把"128 轮"的根因定位到 `s5_shape_for` 的退化分支（`bpw | slot_bits` 的要求，在 `slot_bits` 是质数时只剩 `bpw=1`）。本轮实施修法，并在验证过程中**被自己新加的大形状测试抓出两个独立缺陷**：一个已修（并且它本来就是引擎里的真 bug），一个把目标 ② 的"通过"结论**推翻到"只在冻结向量上通过"**。
+
+### 54.1 修法：slot 向上取整，而不是 bpw 向下取整
+
+`tools/bench/stage2_tree_gpu.cu`：
+
+| 位置 | 改动 |
+|---|---|
+| `s5_shape_for` | 扫描 `c = 26..5`，接受 `qss = ceil(slot_bits/bpw)*bpw >= slot_bits`；**不再要求 `bpw \| slot_bits`** |
+| `s5_shape_for` | `[A1]` 检查放宽为 `qss >= slot_bits && qss == qsw*bpw` |
+| `s5_mul_batch` | stride 检查放宽为 `sstride < slot_bits` 才 FATAL |
+| S5 归约 launch | 把 `S->slot_stride`（而不是 `slot_bits`）作为归约 kernel 的窗口宽度参数，打包/归约同源 |
+| 新增 `s5_shape_attest` | 每次 **P 变大**时往 **stdout** 打印一行形状（bpw/stride/slot_words/N/out_slots/carry 轮次/未收敛 digit 数）|
+
+**顺带更正了一条写错的推导**。原文 `[A1]` 说"只有 `stride == slot_bits` 才能让归约精确，因此要求 `bpw | slot_bits`"。这是把**归约窗口的宽度**记错了：`s4_reduce_kernel` 读的是 `slot_words` 个 **digit**，所以窗口的比特宽度是
+
+```
+slot_words * bpw = stride      （不是 slot_bits）
+```
+
+而打包器把系数 k 放在比特 `k*stride` 处、宽度 S。于是只要 `S <= stride`，窗口 k 就**恰好**只包含系数 k 的比特，一个邻居的位都进不来 ✓；`slot_bits` 只承担另一件事——窗口值的上界 `c_k < 2^slot_bits <= 2^stride` 必须被 guard 接受 ✓。**等式不是精确性的来源，不等式才是**，所以把 slot 放大到 `bpw` 的倍数完全合法（每个系数最多多占一个窗口，归约读的东西一个字都没变）✓。
+
+而 `tools/bench/ntt_poly_probe.cu` 本来就是按这个契约写的（`slot_stride = ceil(slot_bits/bpw)*bpw`，见该文件 2041 / 2371 / 2525 行的注释），**是 S5 自己多要求了一个更强的条件**——这个多出来的条件正是退化成 `bpw=1` 的入口。§22.4 那条"stride > slot_bits 会越窗"的历史结论，是在**打包器按 stride、归约按 slot_bits** 的错配布局下测出来的 ✗，两侧同源之后那个失效模式不存在了。
+
+### 54.2 形状阶梯（实测，`s5_shape_attest`）
+
+冻结向量（D=210，P=24）与 D=2310（P=240）的 S5 下降**每次乘法**的形状：
+
+| P | slot_bits | bpw | stride | slot_words | N | out_slots | 自算 carry 轮次 | 未收敛 digit |
+|---|---|---|---|---|---|---|---|---|
+| 2 | 259 | 26 | 260 | 10 | 64 | 3 | 5 | 0 |
+| 4 | 260 | 26 | 260 | 10 | 128 | 7 | 5 | 0 |
+| 8 | 261 | 26 | 286 | 11 | 256 | 15 | 5 | 0 |
+| 16 | 262 | 26 | 286 | 11 | 512 | 31 | 5 | 0 |
+| 17 (D=210 最大) | 263 | 26 | 286 | 11 | 512 | 33 | 5 | 0 |
+| 32 | 263 | 26 | 286 | 11 | 1024 | 63 | 5 | 0 |
+| 64 | 264 | 26 | 286 | 11 | 2048 | 127 | 5 | 0 |
+| 113 (D=2310 根) | 265 | 26 | 286 | 11 | 4096 | 225 | 5 | 0 |
+| 129 (D=2310 根) | 266 | 26 | 286 | 11 | 4096 | 257 | 5 | 0 |
+
+**三点结论**：
+1. **`bpw=1` 消失了** ✓：所有形状都是 `bpw=26`（`2^26-1` 的 digit 高度 26 bit，不再是 2 bit）。
+2. **公式自己给的轮次数（5）就够**：每一形状都是"自算 5 轮、0 个未收敛 digit" ✓ —— §53.4 那个"公式说 ~6、实测要 128"的硬边界，**根因就是 `bpw=1` 把 carry 链拉成 O(N)**，不需要再解释别的 ✓。
+3. `stride > slot_bits`（260/286 vs 259/261/266…）在所有形状上都发生，正是 §54.1 更正的 `[A1]` 允许的情形。
+
+### 54.3 性能（同一冻结向量、同一命令，前后各一跑）
+
+| 指标 | 修前（`NTT_CARRY_ROUNDS=128`，`bpw=1`）| 修后（默认轮次，`bpw=26`）| 比 |
+|---|---|---|---|
+| 整跑 wall | **18.94 s** | **1.29 s** | 14.7× |
+| batched 引擎的 NTT 总时 | 18.061 s | 0.759 s | 23.8× |
+| **每次 NTT 调用** | **3368.4 µs** | **139.2 µs** | 24.2× |
+| 其中 `carry+slot+out` | **3205.1 µs** | **4.4 µs** | **728×** |
+| 其中 `fwd` / `inv` | 15.2 / 8.0 µs | 19.0 / 8.9 µs | 基本不变 |
+| S5 下降 `t_total` | 0.89 s | 0.29 s | 3.1× |
+| `t_generic` / `t_copy` | 0.45 / 0.66 | 0.06 / 0.08 | — |
+| 结果 | 因子 59649589127497217、命中素数 114713 ✓ | 同 ✓ | — |
+
+**因果链是干净的**：`fwd`/`inv`（真正的变换工作）几乎没变（15.2→19.0、8.0→8.9 µs），**全部收益都在 carry 那一段**（3205 µs → 4.4 µs）✓ —— 与"`bpw=1` 让 carry 链变成 O(N)"完全一致，不是"机器今天比较快"。`NTT_CARRY_ROUNDS` 这个 override 现在是**多余的**：整跑不再需要任何环境开关（除 `NTT_S5_ON` 本身），§53.4 记录的 `112 失败 / 128 成功` 硬边界随之消失。
+
+（`per_call` 与 wall 在两三次重复间有 ~10–20% 抖动：实测 116.9–139.2 µs、1.08–1.29 s。上表取最后一跑的完整分解；`carry` 那一段的量级差（10³）远大于抖动。）
+
+### 54.4 回归套件：27 → **32** 项，第 [9] 组去掉 override 并加上大形状
+
+`tools/test/test_stage2_tree_gpu.ps1` 第 [9] 组现在：
+1. **删掉 `NTT_CARRY_ROUNDS=128`**（不再需要，见 §54.3）✓；
+2. 冻结向量（D=210）的 5 条断言不变（逐叶全绿、逐系数零差异、`generic+linear == divmods_slow`、脚本退出 0）✓；
+3. **新增 D=2310 的两跑共 5 条**：S5 关（叶子数修复的回归守卫，3 条）+ S5 开（**已知缺陷的金丝雀**，2 条，见 §54.6）。
+
+门禁实测：**`passed: 32   failed: 0`**，退出 0 ✓（32 = 原 27 + 新 5）。
+
+### 54.5 顺带抓出的真 bug ①（已修）：下降的叶子数被当成了 `H.size()`
+
+新加的 D=2310 那一跑立刻**崩了**（host `0xC0000005`，rip 确定），而且崩在**第一次比较**就报出叶子 0 不一致之后：
+
+```
+descent_begin: P=240 levels=8
+s5_descent: device descent: P=176 Fpad=256 W=3 ...
+descent_check_bad: i=0 word=0 batched=17843455366677180133 slow=14781187960332707680
+（然后 CRASH，连 descent_check_leaves 都没打印出来）
+```
+
+**`P=240` 与 `P=176` 不是同一个数**：引擎的叶子数是 `Fdeg[1]`（"deg F = the baby count"，第 6227 行），而 `descent_slow` / `descent_batched` / `descent_batched_dev` 三个函数都写 `const size_t P = H.size()`。
+
+**为什么 `H` 会短**：折叠加法循环的第一批有一条捷径 `if (degT < P) { H = T; }`（T = 该批 G 树的根）——`deg T < deg F` 时 `T mod F = T`，不需要归约 ✓ 数学上完全正确。而 D=2310 / B2=4e5 这个形状下**整批巨点只有 175 个**，于是 `H` 只有 176 个系数：
+
+```
+batched_shape: P=phi(D)/2=240 giant_points=175 num_poly_g=1 loops=0 ... leaf_values=240
+```
+
+`P=240` 的下降欠 240 个叶子，`H.size()=176` 的下降只给 176 个 —— 而**下游每一个消费者都是按调用方的 P 走的**（block products、`ws.dvals` 的读者、校验用的 `ref`），所以 `ref[i]`（i=176..239）读到了数组之外 ⇒ 崩 ✓。**这不是"少算了零"，是"少算了 H(x_i)"**：缺的 64 个叶子在隐式零延伸下各自的真值是 `H mod (X-x_j)`，不是 0；就算没崩，那 64 个 0 会让块乘积变成 0、`gcd(0,N)=N` **悄悄**混进结果（`bad_factors` 只检查"每个上报因子整除 N 且 >1"，N 自己满足 ✗）。
+
+**修法**：三个函数一律取 `P = (Fdeg.size() > 1 && Fdeg[1] > 0) ? Fdeg[1] : H.size()`，并用注释写清"叶子数是树的、不是多项式的"。设备侧本来就为短 H 做好了准备（`hrows = min(P, H.size())` + memset 补零到 `Lc`），只是它自己也把 `P` 取成了 `H.size()` ✓。
+
+**可达性不是理论上的**：我们自己的 rung-1 日志（`build_cuda_cmake/_b2_1e11.log`）就是这种形状——
+
+```
+real_shape: D=570570 P=phi(D)/2=51840 baby_points=51840 giant_points=2 num_poly_g=1 loops=0
+stage2: algorithm=tree_gpu_batched curves=1 hits=0 bad_factors=0 factors= hit_primes= elapsed=4.77
+real_batched_split: ... descent=4.481 ...
+```
+
+`H.size()=2` 对 `P=51840`，它**真的执行了**分批下降（`real_batched_split`/`real_batched_breakdown` 都在），而那一跑 `hits=0`（B2 < D，本来也该是 0）所以**没人发现**。生产形状（D=570570）在 B2 大时的批大小 ≈ 51k 与 P=51840 **几乎相等**，这个 bug 在生产上一直是"擦肩而过"。教训（第 N 次同型）：**"计数相等"不是正确性证据**，而"某个形状下刚好相等"更不是。
+
+D=2310、S5 关的那一跑在修复后是**精确**的，并且这被钉成了回归守卫：
+
+```
+descent_check_leaves: P=240 differing_leaves=0
+descent_check: P=240 divmods_batched=478 divmods_slow=478 mismatching_coefficients=0
+stage2: algorithm=tree_gpu_batched ... hits=1 bad_factors=0 factors=59649589127497217 hit_primes=114713 elapsed=0.62
+```
+
+### 54.6 顺带抓出的真 bug ②（**未修**）：S5 在 `P >= 113` 的乘法形状上逐叶全错
+
+同一跑在**修完叶子数之后**不再崩，但 S5 的下降**每一个叶子都错**：
+
+```
+descent_check_leaves: P=240 differing_leaves=240 first8=0,1,2,3,4,5,6,7
+descent_check: P=240 divmods_batched=238 divmods_slow=478 mismatching_coefficients=480 first=0
+descent_check_domain: slow/batched = f846a5cf09a41e21806a03f0aee4c41d = R^1000
+stage2: algorithm=tree_gpu_batched ... hits=0 bad_factors=0 factors= hit_primes=
+```
+
+**先排除了"域"这一类**：`R^1000` 是"±8 内找不到 R 的幂"的哨兵值。我用 PowerShell 的 `BigInteger` **独立重算**了这个比值并**与引擎打印的数字逐位一致**（`f846a5cf09a41e21806a03f0aee4c41d`），再把搜索范围扩到 `R = 2^(64W) mod N`（W=2..6）的 ±600 次幂——**全部不是**。所以设备的叶子值不是"对的值乘了一个常数"，是**另一个数** ✓。（顺带一个坑：`BigInteger.Parse(s, HexNumber)` 在首字符 >= 8 时按**补码**解析成负数，必须前缀 `0`。）
+
+**再定位到哪一层**：`NTT_S5_LEVEL_CHECK=1` 的逐层对拍显示**根节点就已经错**：
+
+```
+descent_dev_op: code=1 sgn=0 child=2 nc=128 ncoef=241 op=div dstrow=0
+s5_level_bad: child=2 word=258 device=0 oracle=15022292016606706088
+s5_level_bad: child=2 word=259 device=0 ...    ← 接着 261,262,264,265,267...
+```
+
+即"根的第一个孩子那一行，从系数 86 起，每个系数的**低两个 limb 全是 0**，第三个 limb 与 oracle 相同"。**第三次重复同一形状结论**：D=210 的全部乘法形状是 `P <= 17`，D=2310 的根乘法是 `P = 113 / 129` —— 缺陷**只在 `P >= 113` 的形状上出现**，而冻结向量的最大形状恰好是 17，所以 §53 的"目标 ② 达成"**只在冻结向量这一形状上成立**。
+
+**已排除的**（不要重复查）：
+* 归约本身：`NTT_S5_REDDUMP=1` 的逐行对拍里 **`DIFFER=0`**（每个被抽样的窗口都与 GMP 一致）✓；
+* 归约窗口/`bpw`/stride 的一致性：`s5_mul_batch` 的 `nst` 与打包器形状的 FATAL 对账没有触发 ✓；
+* carry：每个形状"5 轮、0 未收敛 digit" ✓（§54.2）；
+* 叶子数与形状阶梯：见 §54.2/§54.5（`ncoef=241` 对 `nc=128` 会把 `H` 的 176 个系数隐式补零到 256 行，这是**正确**的）。
+
+**一个新发现的、必须警惕的假校验器**：`s5_pack` 的自检（"打包器写进设备的 digit 是否等于宿主期望"）在**几乎所有形状上都报 `mismatching_words > 0`**，包括 D=210 里工作正常的 `n=64 sw=10 sb=259`（596 次抽样里 358 次报不一致）。一个在正常形状上也报错的校验器**不能用来定位缺陷**——它要么本身的期望还按旧的 stride 规则算（§54.1 改了打包的定位规则），要么比较的对象就不是同一个东西。**这是 §14.8/§44 那条教训的第三次现身：先证明校验器，再相信校验结果。** 下一步做 §54.6 之前应先把 `s5_pack` 的自检修到"在已知正确的形状上全绿"。
+
+**结论（必须写清楚）**：目标 ② 的验收**只在冻结向量（P=24）上成立**；在 D=2310（P=240）上 S5 是错的。因此 **`NTT_S5_ON` 保持 opt-in**，并且测试套件把这件事**钉成一条会响的金丝雀**：`test_stage2_tree_gpu.ps1` 第 [9] 组断言 "S5 在 D=2310 仍不崩溃、且仍然逐叶全错（`differing_leaves=240`）" 与 "batched 引擎仍然找不到因子（`hits=0`）"。一旦修好，**这两条会立刻变红**，必须改写成 §54.4 那样的正向断言——这就是它们存在的意义：让 `NTT_S5_ON` 不可能被误当成"已经能用"，也让"悄悄默认打开"过不了门禁 ✓。
+
+### 54.7 量测层顺带修掉的两处（都不是算法，但都会误导人）
+
+1. **`forest_mb_peak` / `frontier_mb_peak` 其实是字节**：`F.words * 8` 与 `maxval * 8` 被按 "MB" 打印，**差 10⁶**。冻结向量上真实的 24 词前端打成 `frontier_mb_peak=192`，一个读者会当成 192 MB；D=2310 上打成 `63360` —— **63 GB，一块 8 GB 卡上从未分配过的量**。标签已改为 `*_bytes` ✓。
+2. **长 stderr 行会被 PowerShell 包装截断**（§44.3 那个"231/486 行不同"假结论的来源）：`s5_shape_attest` 与 `s5_level_check` 都因此被截成 `...the multiply d` + `+ CategoryInfo ...`。新增的诊断一律打 **stdout**；读 stderr 时必须用 `read` 工具看原始文件，而不是看控制台的转义行 ✓。
+
+### 54.8 一个构建系统的坑：obj 比源新 ≠ obj 含最新源
+
+`tools/build/build_stage2_tree_gpu.ps1` 的增量判据是"obj 比 `stage2_tree_gpu.cu`（和它 include 的 `ntt_poly_probe.cu`）新就跳过编译"。我在**上一次编译还没读完源文件时**改了该文件，于是 obj 的 mtime（编译结束时）晚于源的 mtime（我编辑时）⇒ 脚本判"up to date"，**复用了不含我改动的 obj**（实测：新加的 `s5_shape_attest` 与 `*_bytes` 标签都不见了）。**教训**：这种 make 式判据在"编译期间改源"时会给出**静默的错答案**；改完源要重编，用 `-Rebuild` 强制，并且**用新诊断的第一行来证明它在 exe 里**（本轮就是这么发现的）。
+
+### 54.9 本轮状态与下一步
+
+**已完成**：
+* `bpw=1` 退化消失；S5 在冻结向量上以**默认 carry 轮次**通过，整跑 **18.94 → 1.29 s**，每次 NTT 调用 **3368.4 → 139.2 µs**（carry 段 3205 → 4.4 µs），`NTT_CARRY_ROUNDS` override 不再需要 ✓；
+* 叶子数 bug（`H.size()` → `Fdeg[1]`）已修，并进回归套件（D=2310、S5 关，逐叶零差异 + 找到冻结因子）✓ —— 这个 bug 在**生产形状上一直擦肩而过**（批大小 ≈ 51k vs P=51840）；
+* 形状阶梯 attestation、`[A1]` 推导更正、字节标签、stdout 诊断 ✓；
+* 门禁：第 [9] 组删掉 override、加上 D=2310 两跑（含已知缺陷金丝雀）。
+
+**未完成 / 下一步（按优先级）**：
+1. **修 `s5_pack` 的自检**，让它在已知正确的形状（D=210 全部）上全绿——否则 §54.6 的定位会被一个一直报警的校验器牵着走；
+2. 用 `P >= 113` 的形状定位 S5 的真实缺陷（`0xC0000...` 之外，证据已经缩到"根节点的第一次除法、系数 86 起低两 limb 归零"，首选怀疑串联反演的**截断长度**：`2*nxt-1` / `nxt` 的记账在最后一步 64→129 上，等价于"商的高位/余式的低位"错位）；
+3. 修好后把金丝雀翻成正向断言，再在**更大形状**（例如 D=30030 或生产 P=51840 的 `-Evaluate`）上逐叶对拍；
+4. 只有在那之后才谈 `NTT_S5_ON` 默认打开；届时仍需一次生产命令（同一 `_b2_prod_args.txt`）验证因子集合逐项一致、`bad_factors=0`。
