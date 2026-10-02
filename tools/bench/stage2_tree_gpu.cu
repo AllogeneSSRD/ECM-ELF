@@ -4727,6 +4727,13 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
     size_t maxval = 0;
     const double tinit = now_s();
     S5Forest F;
+    /* THE FOREST DOES NOT DEPEND ON THE CHUNK (section 58): s5_forest_build lays out EVERY node
+       with Fdeg != 0 in [1, 2*Fpad) -- it uses `lo`/`L` only for its error message -- so calling it
+       per chunk re-copies the whole tree for every chunk.  At the production shape that is 2048
+       chunks x the whole forest, which is pure repeated work (and the first thing this function
+       does on every call is free and re-upload the same buffer).  Built once here, reused by every
+       chunk; the device offsets are identical because the layout is keyed on Fdeg alone. */
+    bool forest_built = false;
     for (size_t lo = 0; lo < Fpad; lo += chunkL) {
         const size_t Lc = ((Fpad - lo) < chunkL) ? (Fpad - lo) : chunkL;
         /* the LEAF rows this chunk owns: dleaf_out holds P rows, while a chunk covers Lc of the
@@ -4740,7 +4747,10 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                 CK(cudaMemset(dleaf_out + lo * W, 0, rows_out * W * sizeof(unsigned long long)));
             continue;
         }
-        s5_forest_build(F, Ft, Fdeg, Fpad, lo, Lc, W, st);
+        if (!forest_built) {
+            s5_forest_build(F, Ft, Fdeg, Fpad, lo, Lc, W, st);
+            forest_built = true;
+        }
         /* the forest's offsets on the device (the Horner kernel indexes them by code) */
         if (F.off.size() > D.dfoff_cap) {
             if (D.dfoff) { cudaFree(D.dfoff); D.dfoff = nullptr; D.dfoff_cap = 0; }
@@ -4749,11 +4759,30 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
         }
         CK(cudaMemcpy(D.dfoff, F.off.data(), F.off.size() * sizeof(unsigned long long),
                       cudaMemcpyHostToDevice));
-        /* H's coefficients: the root of this chunk (deg F < deg H, so H is the remainder here) */
-        const size_t hrows = std::min(P, (size_t)H.size());
+        /* ---- THE CHUNK'S ROOT CODE, FROM THE TREE'S OWN ARITHMETIC (section 58) --------------
+           With Fpad leaves at the heap codes [Fpad, 2*Fpad) and children 2c/2c+1, the node whose
+           leaves are exactly [lo, lo+Lc) is
+                   code = Fpad/Lc + lo/Lc,
+           which is valid because chunkL is a power of two (it halves from 4096 below) and Fpad is a
+           power of two >= it, so both divisions are exact and lo steps by Lc.  For Lc == Fpad this
+           gives 1, the root -- the single-chunk case every earlier S5 acceptance ran, which is why
+           the old `(Lc == Fpad) ? 1 : (lo/Lc + 1)` looked fine: in the multi-chunk case it returns
+           1 for lo = 0, i.e. THE WHOLE TREE for a 32-leaf chunk, and the frontier then grew without
+           bound (measured vol=143 against chunkL=32 at the production shape). */
+        const unsigned long long ccode = (unsigned long long)(Fpad / Lc) + (unsigned long long)(lo / Lc);
+        /* ---- AND ITS DIVIDEND IS `H mod F_chunk`, NOT `H` -----------------------------------
+           A chunk's descent must start from the accumulator REDUCED to that sub-tree: the walk
+           below divides by the chunk root's CHILDREN, and everything it produces is
+           (H mod F_chunk) mod (descendants) -- feeding it the whole H (degree 51839 against a
+           32-leaf chunk) is not a smaller version of the same thing, it is a different problem, and
+           the degree fast path would then compare the wrong degree.  For the single-chunk case
+           `H mod F = H` (the fold loop already reduced it), so this is a no-op there and the
+           earlier shapes are unaffected. */
+        const CPoly Hc = cp_mod(H, cp_from_flat(Ft[(size_t)ccode], Fdeg[(size_t)ccode], W), L);
+        const size_t hrows = std::min((size_t)Lc, (size_t)Hc.size());
         std::vector<unsigned long long> hflat(hrows * W, 0ull);
         for (size_t i = 0; i < hrows; ++i)
-            std::copy(H[i].begin(), H[i].end(), hflat.begin() + (long)(i * W));
+            std::copy(Hc[i].begin(), Hc[i].end(), hflat.begin() + (long)(i * W));
         unsigned long long *dbound = nullptr;
         /* THE FRONTIER FEEDS ITSELF, SO THIS BUFFER MUST HOLD A WHOLE LEVEL'S ROWS (section 57).
            It was `chunkL*W`, but the level loop copies `vol` rows back into it (the frontier must
@@ -4769,10 +4798,7 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                       cudaMemcpyHostToDevice));
         if (hrows < Lc) CK(cudaMemset(dbound + hrows * W, 0, (Lc - hrows) * W * sizeof(unsigned long long)));
         std::vector<S5Entry> cur(1);
-        /* the root of THIS chunk's own sub-tree: the heap code whose leaves are exactly
-           [lo, lo+Lc), i.e. the ancestor Lc/2 apart from the first leaf.  (lo+Lc would land
-           under the leaves, which is what made the first version walk into Fdeg[65].) */
-        cur[0].code = (Lc == Fpad) ? 1 : (lo / Lc + 1);
+        cur[0].code = ccode;
         /* THE ROOT'S ROW WIDTH IS BOUNDED BY THE ROWS THAT EXIST (section 44).  `Fdeg[code]+1`
            is an upper bound on the coefficients of the chunk's polynomial (deg H < deg F), and
            the extra row is a harmless leading zero whenever the chunk is at least that wide --
@@ -4787,7 +4813,7 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
            padded width -- see S5Entry::deg for what testing the width cost (43 needless
            full-size divisions at D=30030, i.e. most of the descent's time). */
         cur[0].deg = std::min((size_t)Fdeg[cur[0].code],
-                              H.size() ? (size_t)(H.size() - 1) : 0u);
+                              Hc.size() ? (size_t)(Hc.size() - 1) : 0u);
         size_t cnt = Lc;
         int level = (int)ceil_log2_u64((unsigned long long)Lc);
         bool level_first = true;
