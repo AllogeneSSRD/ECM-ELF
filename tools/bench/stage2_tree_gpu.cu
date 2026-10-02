@@ -4399,12 +4399,23 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
     const unsigned long long wantb = k + db;                /* deg(q*B) + 1 */
     unsigned long long *qb = D.palloc((size_t)wantb * W);
     s5_mul_batch(D, q, 0, k, Bsub, 0, lb, 1, 0, wantb, qb, st, -1);
-    /* ---- dst = A - qb, coefficient by coefficient, ON THE DEVICE ----------------------- */
+    /* ---- dst = A - qb, coefficient by coefficient, ON THE DEVICE -----------------------
+       THE LAUNCH MUST COVER rows*nw THREADS, NOT rows (section 55).  This kernel is written with
+       ONE THREAD PER (ROW, WORD): it guards on `gid >= rows*nw` and derives its row as `gid/nw`.
+       Launching it with S5_GRID(rows) therefore supplies only ceil(rows/256)*256 threads, and for
+       rows = 128 at nw = 3 that is 256 of the 384 needed -- so rows 0..85 were computed and rows
+       86..127 were NEVER WRITTEN (86 = floor(255/3), exactly the first coefficient the descent
+       check flagged, word 258 = 86*3).  It stayed hidden because every smaller shape fits in one
+       block: at D=210 rows = 16 needs 48 threads, and the D=2310 level-7 divisions have rows = 64
+       (192 threads) -- both correct, both green.  The destination kept its previous contents, so
+       the "low two limbs are zero" signature the forensics showed was a STALE ROW, not a shifted
+       value.  `s5_memcpy_rows` (above) passes S5_GRID(rows*W) for exactly this reason; this call
+       site simply missed the factor. */
     {
         const unsigned long long rows = db;
-        s5_sub_kernel<<<S5_GRID(rows)>>>(Asub, 0, (int)la, qb, 0, (int)wantb, (int)db,
-                                        D.red->dn, D.red->ninv, D.red->nw, dst,
-                                        (unsigned long long)W);
+        s5_sub_kernel<<<S5_GRID((unsigned long long)rows * (unsigned long long)D.red->nw)>>>(
+            Asub, 0, (int)la, qb, 0, (int)wantb, (int)db,
+            D.red->dn, D.red->ninv, D.red->nw, dst, (unsigned long long)W);
         CK(cudaGetLastError());
         CK(cudaDeviceSynchronize());
     }
@@ -4448,6 +4459,28 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
                 }
             std::fprintf(stderr, "s5_divdump: la=%llu lb=%llu db=%llu k=%llu flag_q=%ld flag_r=%ld\n",
                          la, lb, db, k, qbad, rbad);
+            /* ---- THE LAST SPLIT: `qb = q*B` OR `A - qb` (section 55) -------------------------
+               flag_q already clears the rev-pack and the whole Newton chain, and flag_r says the
+               REMAINDER first differs at some coefficient.  The remainder is produced by exactly
+               two more device operations -- the q*B multiply and the subtraction -- so reading
+               `qb` back and comparing it with the host's q_h*b_h splits them, and that is the last
+               split this function can offer.  A `flag_qb` that equals `flag_r` means the MULTIPLY;
+               `flag_qb = -1` with a nonzero `flag_r` means the SUBTRACTION. */
+            {
+                const unsigned long long wantb = k + db;      /* deg(q*B) + 1, as at the call site */
+                std::vector<unsigned long long> QBh((size_t)wantb * W, 0ull);
+                CK(cudaMemcpy(QBh.data(), qb, QBh.size() * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToHost));
+                const CPoly hb = cp_mul(q_h, b_h, L);
+                long qbbad = -1;
+                for (size_t i = 0; i < (size_t)wantb && qbbad < 0; ++i)
+                    for (size_t t = 0; t < W; ++t) {
+                        const unsigned long long want = (i < hb.size()) ? hb[i][t] : 0ull;
+                        if (QBh[i * W + t] != want) { qbbad = (long)i; break; }
+                    }
+                std::fprintf(stderr, "s5_divdump_qb: wantb=%llu flag_qb=%ld\n",
+                             (unsigned long long)wantb, qbbad);
+            }
             /* ---- WHICH STAGE OF THE QUOTIENT CHAIN (each flag: -1 = equal, else the first
                differing coefficient index).  ra -> rb -> Newton inverse g -> qrev/q. ---------- */
             {

@@ -211,19 +211,25 @@ Check "D=2310 (S5 off): the frozen factor is still found" `
       ($rBigNoS5.out -match 'factors=59649589127497217' -and $rBigNoS5.out -match 'bad_factors=0') `
       $rBigNoS5.out.Trim()
 Check "D=2310 (S5 off): the acceptance script exits 0" ($rBigNoS5.code -eq 0) ("exit=" + $rBigNoS5.code)
-# ---- KNOWN DEFECT, ASSERTED AS A DEFECT (section 54.6) --------------------------------------
-# At D=2310 the S5 device descent is WRONG: every one of the 240 leaves differs from the host
-# descent, the ratio is not a power of the Montgomery radix (so it is not a domain offset), and
-# the engine consequently finds NO factor where the CPU reference finds the frozen one.  D=210
-# (P=24) is exact, so the defect needs a multiply at P >= 113 -- a shape the frozen vector never
-# reaches (its largest is P=17) -- which is exactly why the suite must carry a larger shape.
-# These two checks are deliberately INVERTED: they fail the moment the defect is fixed, which is
-# the moment they must be rewritten as the positive assertions above.  They exist so that S5 can
-# never be mistaken for working, and so that flipping NTT_S5_ON to default-on cannot pass a gate.
-Check "S5 on D=2310 is STILL A KNOWN DEFECT: the descent does not crash, and reports every leaf" `
-      ($rS5big.out -match 'descent_check_leaves: P=240 differing_leaves=240') $rS5big.out.Trim()
-Check "S5 on D=2310 is STILL A KNOWN DEFECT: the batched engine finds no factor" `
-      ($rS5big.out -match 'algorithm=tree_gpu_batched .*hits=0') $rS5big.out.Trim()
+# ---- S5 ON A SHAPE 10x THE FROZEN VECTOR (section 55) ---------------------------------------
+# These two checks were the INVERTED canary of section 54.6 ("S5 at D=2310 is still a known
+# defect") until round 21 found and fixed the cause: `s5_sub_kernel` guards on `rows*nw` and
+# derives its row as `gid/nw`, but the call site launched S5_GRID(rows) -- ceil(rows/256)*256
+# threads instead of rows*nw.  At D=2310 the root division has rows = 128 and nw = 3, so only
+# gid <= 255 existed and rows 0..85 were written while rows 86..127 kept their previous contents
+# (86 = floor(255/3), exactly the first coefficient the descent check flagged).  Every smaller
+# shape fits in one block (D=210: rows = 16 -> 48 threads; D=2310 level 7: rows = 64 -> 192), which
+# is why a P=24 vector could not see it.  Now that it is fixed these are positive assertions, and
+# they are the reason this group carries a second, larger shape at all.
+Check "S5 on D=2310: every leaf equals the host descent's" `
+      ($rS5big.out -match 'descent_check_leaves: P=240 differing_leaves=0') $rS5big.out.Trim()
+Check "S5 on D=2310: every coefficient equals the host descent's" `
+      ($rS5big.out -match 'descent_check: P=240 divmods_batched=238 divmods_slow=478 mismatching_coefficients=0') `
+      $rS5big.out.Trim()
+Check "S5 on D=2310: the batched engine finds the frozen factor" `
+      ($rS5big.out -match 'algorithm=tree_gpu_batched .*hits=1 bad_factors=0 factors=59649589127497217 hit_primes=114713') `
+      $rS5big.out.Trim()
+Check "S5 on D=2310: the acceptance script exits 0" ($rS5big.code -eq 0) ("exit=" + $rS5big.code)
 
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
