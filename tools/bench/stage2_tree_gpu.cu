@@ -3054,6 +3054,11 @@ struct S5Stats {
        part that is inherently per-node), the q*B multiply and the final subtraction, plus the
        launch and division counts of each branch. */
     double t_revpack = 0.0, t_newton = 0.0, t_qb = 0.0, t_sub = 0.0;
+    /* the inside of one S5 multiply (section 22): the probe's own per-call timers, accumulated */
+    double t_mul_fwd = 0.0, t_mul_inv = 0.0, t_mul_slot = 0.0, t_mul_hpack = 0.0, t_mul_h2d = 0.0;
+    double t_mul_check = 0.0, t_mul_check_d2h = 0.0, t_mul_check_kernel = 0.0;
+    double t_mul_hplan = 0.0, t_mul_hopcopy = 0.0, t_mul_all = 0.0;
+    unsigned long long mul_first_shape = 0;
     unsigned long long n_div = 0, n_horner = 0, n_copy = 0, n_launch_horner = 0, n_launch_div = 0;
     unsigned long long newton_steps = 0, newton_muls = 0;
 };
@@ -4227,6 +4232,21 @@ static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long
         const int rc = ntt_poly_mul_batch_dev(P, S, L.device, m, pA, pB, &nst, L.arena, &nh,
                                               nullptr, (int)qbpw);
         st.t_reduce += now_s() - tg0;
+        /* ---- WHERE ONE S5 MULTIPLY SPENDS ITS 550 us (section 22) --------------------------
+           `t_generic` said a division costs 2542 us and that 4.7 multiplies of ~550 us each make
+           it up, but a degree-1440 multiply at S=129 has no business costing 550 us -- the NTT of
+           that size is tens of microseconds.  The multiply's own timers (t_fwd/t_inv/t_slot from
+           the probe, plus the carry-convergence check and its readback that section 41 split into
+           three parts) are accumulated here so the answer is measured rather than assumed. */
+        st.mul_calls++;
+        st.t_mul_fwd += nst.t_fwd; st.t_mul_inv += nst.t_inv; st.t_mul_slot += nst.t_slot;
+        st.t_mul_hpack += nst.t_hpack; st.t_mul_h2d += nst.t_h2d_batch;
+        st.t_mul_check += nst.t_check;
+        st.t_mul_check_d2h += nst.t_check_d2h; st.t_mul_check_kernel += nst.t_check_kernel;
+        st.t_mul_hplan += nst.t_plan; st.t_mul_hopcopy += nst.t_opcopy;
+        st.t_mul_all += nst.t_fwd + nst.t_inv + nst.t_slot + nst.t_hpack + nst.t_h2d_batch +
+                        nst.t_check + nst.t_plan + nst.t_opcopy + nst.t_hout;
+        if (st.mul_calls == 1) st.mul_first_shape = P;
         /* ---- THE MULTIPLY'S RETURN CODE WAS CAPTURED AND NEVER EXAMINED (section 49) --------
            `ntt_poly_mul_batch_dev` returns 4 with "CARRY DID NOT CONVERGE" on stderr when the
            carry stage leaves a digit at or above 2^bpw.  That is EXACTLY the state the S5
@@ -5143,6 +5163,16 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                     st.t_qb * 1e6 / (double)nd, st.t_sub * 1e6 / (double)nd,
                     (st.t_revpack + st.t_newton + st.t_qb + st.t_sub) * 1e6 / (double)nd,
                     st.n_horner, st.n_launch_horner, st.n_copy, st.n_launch_div);
+        const unsigned long long mc = st.mul_calls ? st.mul_calls : 1;
+        std::printf("s5_mul_cost: calls=%llu (first P=%llu) t_all=%.2f | per call: fwd=%.0f "
+                    "inv=%.0f slot=%.0f hpack=%.0f h2d=%.0f check=%.0f (d2h=%.0f kernel=%.0f) "
+                    "hplan=%.0f hopcopy=%.0f | accounted=%.2f of t_generic=%.2f\n",
+                    st.mul_calls, st.mul_first_shape, st.t_mul_all, st.t_mul_fwd * 1e6 / (double)mc,
+                    st.t_mul_inv * 1e6 / (double)mc, st.t_mul_slot * 1e6 / (double)mc,
+                    st.t_mul_hpack * 1e6 / (double)mc, st.t_mul_h2d * 1e6 / (double)mc,
+                    st.t_mul_check * 1e6 / (double)mc, st.t_mul_check_d2h * 1e6 / (double)mc,
+                    st.t_mul_check_kernel * 1e6 / (double)mc, st.t_mul_hplan * 1e6 / (double)mc,
+                    st.t_mul_hopcopy * 1e6 / (double)mc, st.t_mul_all, st.t_generic);
     }
     std::printf("s5_dev_done: chunks=%llu levels=%llu entries=%llu max_frontier_rows=%llu "
                 "max_frontier_bytes=%llu forest_bytes_peak=%llu generic=%llu linear=%llu copies=%llu "
