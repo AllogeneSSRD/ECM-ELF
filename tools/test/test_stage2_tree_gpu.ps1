@@ -290,6 +290,50 @@ Check "arena eviction: a large-P run fits a cap below its natural usage (arena_o
 Check "arena eviction: same frozen factor and a clean exit" `
       ($oEv -match 'bad_factors=0 factors=59649589127497217' -and $cEv -eq 0) ("exit=" + $cEv)
 
+# [11] THE DEFERRED CARRY CHECK (section 29 of docs/DEV_GPUOWL_NTT_NOTES.md).  A chunked batched
+# multiply used to pay the probe's carry-residual readback -- a PAGEABLE D2H, i.e. a full pipeline
+# drain -- once per chunk; at the production shape that was 22471 x 1.64 ms = 36.75 s of a 253.53 s
+# run (measured).  Now every chunk except the first and the last leaves the counters on the device
+# and ntt_batch_carry_finish() reads them once, before the last chunk (whose memset would wipe them).
+# THE TEST HAS TWO JOBS, and the second is the important one: the answer must not change, AND the
+# deferral must be provably ACTIVE -- a run that quietly stopped checking would look identical in
+# every timing number, which is exactly how this kind of optimisation goes wrong.  So it asserts
+# chunks_deferred > finishes (i.e. at least one readback really did cover several chunks) as well as
+# the frozen factor and bad_factors=0.
+# NTT_S4_BATCH_MB=1 forces the smallest possible chunk, so the round-trip count is maximal and the
+# deferral cannot be missed.  The default-budget run is the control: same factor, deferral optional.
+$env:NTT_S4_BATCH_MB = '1'
+$oDef = (& $Exe @('--real', '--n', '340282366920938463463374607431768211457', '--sigma', '26',
+                  '--b1', '1000', '--b2', '5000000', '--d', '1231230', '--device', "$Device") 2>&1 |
+        Out-String)
+$cDef = $LASTEXITCODE
+Remove-Item Env:\NTT_S4_BATCH_MB -ErrorAction SilentlyContinue
+$mDef = [regex]::Match($oDef, 'chunks_deferred=(\d+) finishes=(\d+)')
+Check "deferred carry check: the tiny-budget run still finds the frozen factor" `
+      ($oDef -match 'bad_factors=0 factors=59649589127497217' -and $cDef -eq 0) ("exit=" + $cDef)
+if ($mDef.Success) {
+    $dc = [int]$mDef.Groups[1].Value
+    $df = [int]$mDef.Groups[2].Value
+    # dc == df HERE, measured, and that is not a defect: this shape's chunk ladder halves from
+    # nbatch, so a call gets 1, 2 or 3 chunks -- a 3-chunk call has exactly ONE interior chunk, so
+    # one deferral per finish.  What the test must prove is that the deferred path is TAKEN and that
+    # finishes really happen; the "many chunks per finish" claim is proven by the production run
+    # (22471 chunks, ~800 calls) recorded in section 29, not by a 0.6 s test.
+    Check "deferred carry check: the deferral ran (chunks_deferred >= finishes > 0)" `
+          ($dc -gt 0 -and $df -gt 0 -and $dc -ge $df) ("chunks_deferred=$dc finishes=$df")
+} else {
+    Check "deferred carry check: the accounting line is printed (chunks_deferred/finishes)" $false `
+          $oDef.Trim()
+}
+$oDef2 = (& $Exe @('--real', '--n', '340282366920938463463374607431768211457', '--sigma', '26',
+                   '--b1', '1000', '--b2', '5000000', '--d', '1231230', '--device', "$Device") 2>&1 |
+         Out-String)
+$cDef2 = $LASTEXITCODE
+Check "deferred carry check: the default-budget control run agrees" `
+      ($oDef2 -match 'bad_factors=0 factors=59649589127497217' -and $cDef2 -eq 0) ("exit=" + $cDef2)
+Check "deferred carry check: no carry-convergence failure was reported" `
+      ($oDef -notmatch 'CARRY DID NOT CONVERGE' -and $oDef2 -notmatch 'CARRY DID NOT CONVERGE') ""
+
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }

@@ -1225,6 +1225,11 @@ static bool g_s4_descent_trace = false;
    run and a working run were indistinguishable); NTT_NO_PROGRESS=1 turns them off. */
 static bool g_s4_batched_progress = true;
 
+/* THE DEFERRED CARRY CHECK, COUNTED (section 29): how many chunk round-trips skipped the
+   probe's per-chunk residual readback, and how many single-readback finishes replaced them.
+   Printed so tools/test can assert the deferral actually happened. */
+static unsigned long long g_defer_chunks = 0, g_defer_finishes = 0, g_defer_slices = 0;
+
 /* per-chunk device-buffer budget for a batched multiply (MB): see poly_mul_batch_modN.
    THE ONE-SHAPE LADDER (section 27) says bigger is faster: at D=1231230/B2=1e11, P=115200 the whole
    run is 107.88 s (16 MB) / 91.27 s (32 MB) / 83.68 s (64 MB) with identical factor sets, and the
@@ -2252,8 +2257,49 @@ static void poly_mul_batch_modN(PolyLayer &L,
         const char *e = std::getenv("NTT_S4_HOSTPACK");
         return e && *e && std::atoi(e) != 0;
     }();
+    /* ---- THE DEFERRED CARRY CHECK (section 29) ----------------------------------------------
+       Every chunk ends with the probe's carry check, which is a pageable D2H of 2*nbatch words and
+       therefore waits for the device to finish everything queued before it: a full pipeline drain
+       per chunk.  Measured at the production shape that is 22471 x 1.64 ms = 36.75 s of a 253.53 s
+       run (`carrysplt d2h`), the largest host-side item on the books, and it is what makes the
+       chunk size matter so much (fewer chunks = fewer drains, section 27).
+
+       Deferring it needs the counters to survive between chunks, which requires the arena (the
+       buffer has to outlive the call), so it is on whenever an arena exists and the device packer
+       is in use.  The accumulation lives in the arena entry of the chunk's shape, which is why the
+       readback happens BEFORE the next chunk starts: a same-sized next chunk would memset that very
+       buffer.  Interior chunks therefore lose their fwd/inv event attribution (the events are
+       destroyed unread, since reading them would need the drain we are removing) -- the last chunk
+       of each call still reports the sample. */
+    const bool defer_ok = (!host_pack && L.arena != nullptr);
+    bool carry_pending = false;
+    unsigned long long carry_pending_m = 0;
+    double carry_d2h_acc = 0.0;
+    unsigned long long carry_res_acc = 0, carry_bits_acc = 0;
     for (unsigned long long s0 = 0; s0 < nbatch; s0 += chunk) {
         const unsigned long long m = ((nbatch - s0) < chunk) ? (nbatch - s0) : chunk;
+        const bool last_chunk = (s0 + m >= nbatch);
+        if (carry_pending) {
+            NttMulStats fin{};
+            const int rf = ntt_batch_carry_finish(L.arena, qN, carry_pending_m, &fin);
+            carry_d2h_acc += fin.t_check_d2h;
+            carry_res_acc += fin.carry_residual;
+            if (fin.carry_max_bits > carry_bits_acc) carry_bits_acc = fin.carry_max_bits;
+            carry_pending = false;
+            ++g_defer_finishes;
+            if (rf != 0) {
+                std::fprintf(stderr, "%s: the deferred carry check of the chunked multiply failed "
+                                     "(rc=%d) at P=%llu nbatch=%llu chunk=%llu\n",
+                             NTT_PROBE_NAME, rf, (unsigned long long)P,
+                             (unsigned long long)nbatch, carry_pending_m);
+                std::exit(3);
+            }
+        }
+        /* s0 != 0 is NOT optional: the first chunk still has to run the probe's non-deferred
+           path because that is what memsets the residual counters.  Skipping it would leave the
+           PREVIOUS call's counters in the arena entry, and since a successful check leaves zeros
+           the result would not be a false alarm but a silently VACUOUS check for those slices. */
+        const bool defer_this = defer_ok && !last_chunk && (s0 != 0);
         NttReduceHook h2 = hook;
         if (hook.out) h2.out = hook.out + (size_t)(s0 * out_slots) * W;
         int r1 = 0;
@@ -2295,8 +2341,10 @@ static void poly_mul_batch_modN(PolyLayer &L,
                the same exactness assertions, the same reduction hook) */
             NttMulStats nst{};
             r1 = ntt_poly_mul_batch_dev(P, (int)L.S, L.device, m, C.d_packA, C.d_packB, &nst,
-                                        L.arena, &h2, nullptr, qbpw);
+                                        L.arena, &h2, nullptr, qbpw, defer_this);
             st = nst;                     /* the caller's stats are the dev path's */
+            if (defer_this) { carry_pending = true; carry_pending_m = m; ++g_defer_chunks;
+                              g_defer_slices += m; }
             if (s0 == 0) slots.clear();   /* the host path filled this; the dev path does not */
         }
         if (r1 != 0) { rc = r1; break; }
@@ -2318,6 +2366,15 @@ static void poly_mul_batch_modN(PolyLayer &L,
         L.d2h_coeff_words += (unsigned long long)all.size();
     }
     L.ntt_seconds += now_s() - t0;
+    /* the deferred chunks' carry verdict, folded back into the caller's account: their counters
+       were read ONCE by ntt_batch_carry_finish instead of once per chunk (section 29), so this is
+       the only place their time and residual totals can be reported */
+    if (carry_d2h_acc != 0.0 || carry_res_acc != 0) {
+        L.t_check_d2h += carry_d2h_acc;
+        st.t_check_d2h += carry_d2h_acc;
+        st.carry_residual += carry_res_acc;
+        if (carry_bits_acc > st.carry_max_bits) st.carry_max_bits = carry_bits_acc;
+    }
     /* the caller's copy of the per-call account (section 27): the tree needs it PER LEVEL to say
        whether its floor is host packing, H2D/D2H traffic, the transforms, the carry check or the
        exact coefficient extraction -- `t0` above already covers the whole call including the
@@ -8056,6 +8113,13 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                                  (L.t_h2d - h20) + (L.t_d2h - d20) + (L.t_ext - ex0) +
                                  (L.t_xchk - xc0)) * 1e6,
                         L.ntt_calls - nb);
+            /* SECTION 29: the deferred carry check, counted so a test can prove it RAN rather
+               than merely that it did no harm -- the whole point of the change is that the
+               per-chunk readback disappears, and a run that silently stopped checking would look
+               identical in the timing. */
+            std::printf("real_batched_carrydefer: chunks_deferred=%llu finishes=%llu "
+                        "deferred_slices=%llu\n",
+                        g_defer_chunks, g_defer_finishes, g_defer_slices);
             /* OBJECTIVE 4: the one phase the probe cannot see -- the reduced product coming back
                to the host once per chunk in the batched path (section 32). */
             const double gb = (double)(L.d2h_coeff_words - dw0) * 8.0 / 1073741824.0;

@@ -3327,7 +3327,8 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
 int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned long long nbatch,
                            const unsigned long long *dAin, const unsigned long long *dBin,
                            NttMulStats *st, NttArena *arena, const NttReduceHook *hook,
-                           unsigned long long **digits_out = nullptr, int force_bpw = 0)
+                           unsigned long long **digits_out = nullptr, int force_bpw = 0,
+                           bool defer_carry = false)
 {
     if (nbatch == 0) {
         std::fprintf(stderr, NTT_PROBE_NAME ": batch of zero slices\n");
@@ -3381,7 +3382,18 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
        dRes[2*slice] and the kernel only ever touches its own slice's two words, so accumulating
        them across the chunk and reading once is exactly equivalent to reading after each
        call -- see the note where the call defers. */
-    CK(cudaMemset(dRes, 0, 2 * (size_t)nbatch * sizeof(unsigned long long)));
+    /* ---- DEFERRED CARRY CHECK (section 29) -------------------------------------------------
+       A chunked caller pays this blocking readback ONCE PER CHUNK, and at the production shape
+       that is 22471 chunks x 1.64 ms = 36.75 s of the 253.53 s run (measured: `carrysplt d2h`),
+       even though the copy itself is 2*nbatch words -- the cost is the pipeline DRAIN, not the
+       bytes.  With defer_carry the caller asks this call to leave the counters in place (no
+       memset, no readback) and to read them once after the last deferred chunk, through
+       ntt_batch_carry_finish.  The memset must be skipped for the same reason: it would wipe the
+       interior chunks' counters before they are read.  Only legal with an arena, because the
+       dRes buffer has to outlive this call. */
+    const bool defer = defer_carry && (arena != nullptr) && (ab != nullptr) && !own;
+    if (!defer)
+        CK(cudaMemset(dRes, 0, 2 * (size_t)nbatch * sizeof(unsigned long long)));
     std::vector<NttPassResult> sub((size_t)nchunk);
     for (unsigned long long ci = 0; ci < nchunk; ++ci) {
         const unsigned long long s0 = ci * max_y;
@@ -3407,12 +3419,14 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
        call.  This is also where an asynchronous kernel failure surfaces. */
     {
         const double tr0 = now_s();
-        r.hRes.assign((size_t)(2 * nbatch), 0);
-        CK(cudaMemcpy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
-                      cudaMemcpyDeviceToHost));
+        if (!defer) {
+            r.hRes.assign((size_t)(2 * nbatch), 0);
+            CK(cudaMemcpy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
+                          cudaMemcpyDeviceToHost));
+        }
         for (unsigned long long ci = 0; ci < nchunk; ++ci)
             ntt_pass_read_marks(sub[(size_t)ci], &r.t_fwd, &r.t_inv, &r.t_check_kernel);
-        r.t_check_d2h += now_s() - tr0;
+        if (!defer) r.t_check_d2h += now_s() - tr0;
     }
     if (st) {
         st->P = P; st->S = S; st->N = N; st->k = sh.k; st->bpw = sh.bpw;
@@ -3422,11 +3436,15 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         st->passes_fwd = sh.passes_fwd; st->passes_total = sh.passes_total;
         st->carry_rounds = sh.carry_rounds;
         st->carry_residual = 0; st->carry_max_bits = 0;
-        for (unsigned long long s = 0; s < nbatch; ++s) {
-            st->carry_residual += r.hRes[(size_t)(2 * s)];
-            if (r.hRes[(size_t)(2 * s + 1)] > st->carry_max_bits)
-                st->carry_max_bits = r.hRes[(size_t)(2 * s + 1)];
-        }
+        /* with a deferred carry check hRes is deliberately EMPTY here (the caller reads the whole
+           accumulation once, through ntt_batch_carry_finish), so the per-slice scan must not run:
+           it would index an empty vector */
+        if (!defer)
+            for (unsigned long long s = 0; s < nbatch; ++s) {
+                st->carry_residual += r.hRes[(size_t)(2 * s)];
+                if (r.hRes[(size_t)(2 * s + 1)] > st->carry_max_bits)
+                    st->carry_max_bits = r.hRes[(size_t)(2 * s + 1)];
+            }
         st->mem_mb = sh.mem_mb * (double)nbatch;
         st->t_fwd = r.t_fwd; st->t_inv = r.t_inv; st->t_slot = r.t_slot;
         st->t_check += r.t_check;
@@ -3443,8 +3461,12 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         st->exact_valid = true;
     }
     unsigned long long bad_res = 0;
-    for (unsigned long long s = 0; s < nbatch; ++s)
-        if (r.hRes[(size_t)(2 * s)] != 0) ++bad_res;
+    /* a deferred check has no hRes to scan: the caller's ntt_batch_carry_finish reads the whole
+       accumulation and rejects it there, so scanning an empty vector here is both wrong (OOB)
+       and redundant */
+    if (!defer)
+        for (unsigned long long s = 0; s < nbatch; ++s)
+            if (r.hRes[(size_t)(2 * s)] != 0) ++bad_res;
     if (bad_res) {
         std::fprintf(stderr, NTT_PROBE_NAME ": CARRY DID NOT CONVERGE in %llu of %llu slices "
                              "after %d rounds\n", bad_res, nbatch, sh.carry_rounds);
@@ -3454,6 +3476,65 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
     if (digits_out) *digits_out = (nchunk == 1) ? r.digits : nullptr;
     if (!arena) fuse_release(fc);
     if (own) { cudaFree(dA); cudaFree(dB); cudaFree(dQ); cudaFree(dOut); cudaFree(dRes); }
+    return 0;
+}
+
+/* =====================================================================================
+ * THE ONE READBACK OF A CHUNKED CALL (section 29).
+ *
+ * A chunked caller pays the carry check ONCE PER CHUNK, and the check is a pageable D2H of
+ * 2*nbatch words -- which cannot return until the device has finished everything queued before
+ * it, so its cost is a full pipeline DRAIN rather than the bytes.  Measured at the production
+ * shape: 22471 chunks x 1.64 ms = 36.75 s of a 253.53 s run, the largest single host-side item.
+ *
+ * With `defer_carry` the multiply leaves the counters in the arena's dRes buffer (no memset, no
+ * readback), so this function can read them once for the whole batch and give the same verdict.
+ * It must be called with the SAME (N, nbatch) the deferred chunks used, and BEFORE any later
+ * multiply reuses that arena entry -- a non-deferred multiply of the same shape memsets it.
+ * ===================================================================================== */
+int ntt_batch_carry_finish(NttArena *arena, unsigned long long N, unsigned long long nbatch,
+                           NttMulStats *st)
+{
+    if (!arena) {
+        std::fprintf(stderr, NTT_PROBE_NAME ": ntt_batch_carry_finish without an arena\n");
+        return 2;
+    }
+    /* the composite the last multiply left behind -- NOT a fresh lookup, because a fresh entry
+       would be uninitialised memory and would pass a check it never earned */
+    if (!arena->cur.dRes || arena->cur.n != N || arena->cur.nbatch != nbatch) {
+        std::fprintf(stderr, NTT_PROBE_NAME ": ntt_batch_carry_finish: the arena's current buffers "
+                             "are not the deferred shape (want N=%llu nbatch=%llu, have N=%llu "
+                             "nbatch=%llu)\n", N, nbatch, arena->cur.n, arena->cur.nbatch);
+        return 3;
+    }
+    const double t0 = now_s();
+    std::vector<unsigned long long> hRes((size_t)(2 * nbatch), 0);
+    if (cudaMemcpy(hRes.data(), arena->cur.dRes, hRes.size() * sizeof(unsigned long long),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+        std::fprintf(stderr, NTT_PROBE_NAME ": ntt_batch_carry_finish: the deferred readback "
+                             "failed\n");
+        (void)cudaGetLastError();
+        return 5;
+    }
+    const double td = now_s() - t0;
+    unsigned long long bad = 0;
+    if (st) {
+        st->t_check_d2h += td;                 /* charged to the one call that really paid it */
+        st->carry_residual = 0;
+        st->carry_max_bits = 0;
+        for (unsigned long long s = 0; s < nbatch; ++s) {
+            st->carry_residual += hRes[(size_t)(2 * s)];
+            if (hRes[(size_t)(2 * s + 1)] > st->carry_max_bits)
+                st->carry_max_bits = hRes[(size_t)(2 * s + 1)];
+        }
+    }
+    for (unsigned long long s = 0; s < nbatch; ++s)
+        if (hRes[(size_t)(2 * s)] != 0) ++bad;
+    if (bad) {
+        std::fprintf(stderr, NTT_PROBE_NAME ": CARRY DID NOT CONVERGE in %llu of %llu slices "
+                             "(deferred check)\n", bad, nbatch);
+        return 4;
+    }
     return 0;
 }
 
