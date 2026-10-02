@@ -25,6 +25,10 @@ $clockIndex = [Array]::IndexOf($headers, 'GPU Clock [MHz]')
 $memoryIndex = [Array]::IndexOf($headers, 'Memory Used [MB]')
 $controllerIndex = [Array]::IndexOf($headers, 'Memory Controller Load [%]')
 $busIndex = [Array]::IndexOf($headers, 'Bus Interface Load [%]')
+$cpuIndex = -1
+for ($i=0; $i -lt $headers.Count; ++$i) {
+    if ($headers[$i] -like 'CPU Temperature*') { $cpuIndex=$i; break }
+}
 $indices = @($dateIndex,$loadIndex,$clockIndex,$memoryIndex,$controllerIndex,$busIndex)
 if (($indices | Measure-Object -Minimum).Minimum -lt 0) { throw 'GPU-Z header lacks required sensors' }
 $maxIndex = ($indices | Measure-Object -Maximum).Maximum
@@ -44,16 +48,28 @@ $samples = @(
             $values += $value
         }
         if ($valid) {
+            $cpuTemp = $null
+            if ($cpuIndex -ge 0 -and $parts.Count -gt $cpuIndex) {
+                $value = 0.0
+                if ([double]::TryParse($parts[$cpuIndex].Trim(), [Globalization.NumberStyles]::Float,
+                                      $culture, [ref]$value)) { $cpuTemp = $value }
+            }
             [pscustomobject]@{ time=$stamp; gpu_load_pct=$values[0]; clock_mhz=$values[1];
-                memory_mb=$values[2]; memory_controller_pct=$values[3]; bus_interface_pct=$values[4] }
+                memory_mb=$values[2]; memory_controller_pct=$values[3]; bus_interface_pct=$values[4];
+                cpu_temperature_c=$cpuTemp }
         }
     }
 )
 if ($samples.Count -lt 2) { throw 'fewer than two complete GPU-Z samples' }
 $samples | Export-Csv -LiteralPath (Join-Path $Output 'sensors.csv') -NoTypeInformation -Encoding UTF8
 function Summarize-Samples($items) {
+    $cpuItems = @($items | Where-Object { $null -ne $_.cpu_temperature_c })
+    $cpuMean = $null
+    if ($cpuItems.Count) { $cpuMean = [math]::Round(($cpuItems | Measure-Object cpu_temperature_c -Average).Average,3) }
     [pscustomobject]@{ samples=$items.Count;
         mean_load_pct=[math]::Round(($items | Measure-Object gpu_load_pct -Average).Average,3);
+        mean_clock_mhz=[math]::Round(($items | Measure-Object clock_mhz -Average).Average,3);
+        mean_cpu_temperature_c=$cpuMean;
         low_le5_samples=@($items | Where-Object gpu_load_pct -LE 5).Count;
         low_lt20_samples=@($items | Where-Object gpu_load_pct -LT 20).Count }
 }

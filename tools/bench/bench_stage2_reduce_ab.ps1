@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Same-binary ABBA benchmark of direct division versus Montgomery coefficient reduction.
+    Same-binary ABBA benchmark of coefficient reduction or deferred sampling oracle.
 .DESCRIPTION
     Defaults to the production shape in DEV_GPUOWL_NTT_NOTES.md section 32.  Writes a log
     for each run, provenance.json and results.csv.  The mode, GMP checks, factors/hit primes,
@@ -16,6 +16,7 @@ param(
     [UInt64]$D = 1231230,
     [int]$Sigma = 26,
     [int]$Device = 1,
+    [ValidateSet('reduction','oracle','oracle_pack')][string]$Target = 'reduction',
     [string]$Output = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -29,12 +30,15 @@ $binaryHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
 $runArgs = @('--real', '--n-hex', $NHex, '--sigma', "$Sigma", '--b1', "$B1", '--b2', "$B2",
              '--d', "$D", '--device', "$Device")
 $order = @('montgomery', 'division', 'division', 'montgomery')
+if ($Target -eq 'oracle') { $order = @('blocking', 'oracle_async', 'oracle_async', 'blocking') }
+if ($Target -eq 'oracle_pack') { $order = @('gmp_digits', 'limb_pack', 'limb_pack', 'gmp_digits') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB='32'; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
-                NTT_S5_REDDUMP='0' }
+                NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
+                NTT_S4_ORACLE_TEST_BAD='0'; NTT_S4_SAMPLE='96'; NTT_S4_CHECK_EVERY='8' }
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
-@{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; env=$overrides;
+@{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
    started=(Get-Date -Format o); head=(& git rev-parse HEAD) } |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Output 'provenance.json') -Encoding UTF8
 $rows = @()
@@ -42,7 +46,12 @@ try {
     foreach ($key in $overrides.Keys) { [Environment]::SetEnvironmentVariable($key, $overrides[$key], 'Process') }
     for ($i = 0; $i -lt $order.Count; ++$i) {
         $mode = $order[$i]
-        $env:NTT_S4_OLDTAIL = $(if ($mode -eq 'montgomery') { '1' } else { '0' })
+        $algorithm = $(if ($mode -eq 'montgomery') { 'montgomery' } else { 'division' })
+        $oracleAsync = $(if ($mode -eq 'oracle_async') { '1' } else { '0' })
+        $oraclePack = $(if ($mode -eq 'gmp_digits') { '0' } else { '1' })
+        $env:NTT_S4_OLDTAIL = $(if ($algorithm -eq 'montgomery') { '1' } else { '0' })
+        $env:NTT_S4_ORACLE_ASYNC = $oracleAsync
+        $env:NTT_S4_ORACLE_PACK = $oraclePack
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -60,19 +69,43 @@ try {
         $stage = [regex]::Match($text, 'stage2:.*?hits=(\d+) bad_factors=(\d+) factors=([^\s]*) hit_primes=([^\s]*) elapsed=([0-9.]+)')
         $reduce = [regex]::Match($text, 's4_multiply_stats:.*?coeffs_reduced=(\d+) t_reduce=([0-9.]+)')
         $arena = [regex]::Match($text, 'real_batched_breakdown:.*?arena_overflow=(\d+)')
+        $oracleLine = [regex]::Match($text, '(?m)^s4_oracle_stats:.*').Value
+        $oracle = @{}
+        foreach ($field in @('async','selected','queued','compared','samples','pending','ring_waits',
+                              'fallbacks','signature','t_wait','t_copy_host','t_gmp','host_total',
+                              'pack','t_num','t_mod')) {
+            $metric = [regex]::Match($oracleLine, ('(?:^| )' + $field + '=([^\s]+)'))
+            if ($metric.Success) { $oracle[$field] = $metric.Groups[1].Value }
+        }
         if ($rc -ne 0 -or -not $stage.Success -or -not $reduce.Success -or -not $arena.Success -or
             $stage.Groups[2].Value -ne '0' -or $arena.Groups[1].Value -ne '0' -or
-            $text -notmatch ("s4_reduce_mode: algorithm=" + $mode) -or
+            $text -notmatch ("s4_reduce_mode: algorithm=" + $algorithm) -or
             $text -cmatch 'FATAL|MISMATCH|gmp_bad=[1-9]|gmp_selftest_bad=[1-9]|gmp_check_bad=[1-9]|mismatches=[1-9]|slot_canonical_bad=[1-9]') {
             throw "A/B validation failed (exit=$rc); inspect $log"
+        }
+        # Use the full stats line for the oracle sample count.
+        $checked = [regex]::Match($text, 's4_multiply_stats:.*?gmp_checked=(\d+)')
+        if ($oracle.Count -ne 16 -or $oracle.async -ne $oracleAsync -or $oracle.pack -ne $oraclePack -or
+            $oracle.selected -ne $oracle.compared -or $oracle.pending -ne '0' -or
+            $oracle.fallbacks -ne '0' -or -not $checked.Success -or
+            $oracle.samples -ne $checked.Groups[1].Value -or
+            ($oracleAsync -eq '1' -and $oracle.queued -ne $oracle.selected) -or
+            ($oracleAsync -eq '0' -and $oracle.queued -ne '0')) {
+            throw "oracle validation failed; inspect $log"
         }
         $row = [pscustomobject]@{ run=$i+1; mode=$mode; elapsed=[double]$stage.Groups[5].Value;
             wall=[math]::Round($sw.Elapsed.TotalSeconds,3); t_reduce=[double]$reduce.Groups[2].Value;
             coeffs=[UInt64]$reduce.Groups[1].Value; hits=$stage.Groups[1].Value;
             factors=$stage.Groups[3].Value; hit_primes=$stage.Groups[4].Value; log=$log;
-            started=$runStarted.ToString('o'); ended=$runEnded.ToString('o') }
+            started=$runStarted.ToString('o'); ended=$runEnded.ToString('o');
+            oracle_samples=$oracle.samples; oracle_jobs=$oracle.selected; oracle_signature=$oracle.signature;
+            oracle_wait=[double]$oracle.t_wait; oracle_copy_host=[double]$oracle.t_copy_host;
+            oracle_gmp=[double]$oracle.t_gmp; oracle_host=[double]$oracle.host_total;
+            oracle_num=[double]$oracle.t_num; oracle_mod=[double]$oracle.t_mod; oracle_pack=$oracle.pack }
         if ($rows.Count -gt 0 -and ($row.coeffs -ne $rows[0].coeffs -or $row.factors -ne $rows[0].factors -or
-            $row.hit_primes -ne $rows[0].hit_primes -or $row.hits -ne $rows[0].hits)) {
+            $row.hit_primes -ne $rows[0].hit_primes -or $row.hits -ne $rows[0].hits -or
+            $row.oracle_samples -ne $rows[0].oracle_samples -or $row.oracle_jobs -ne $rows[0].oracle_jobs -or
+            $row.oracle_signature -ne $rows[0].oracle_signature)) {
             throw "A/B results or coefficient count changed; inspect $log"
         }
         $rows += $row
@@ -80,14 +113,21 @@ try {
         Write-Host ("  elapsed={0:F2}s wall={1:F2}s t_reduce={2:F3}s coeffs={3}" -f
                     $row.elapsed, $row.wall, $row.t_reduce, $row.coeffs)
     }
-    $old = $rows | Where-Object mode -eq 'montgomery'
-    $new = $rows | Where-Object mode -eq 'division'
+    $old = $rows | Where-Object mode -eq $order[0]
+    $new = $rows | Where-Object mode -eq $order[1]
     $oldTime = ($old | Measure-Object elapsed -Average).Average
     $newTime = ($new | Measure-Object elapsed -Average).Average
     $oldReduce = ($old | Measure-Object t_reduce -Average).Average
     $newReduce = ($new | Measure-Object t_reduce -Average).Average
     Write-Host ("ABBA mean: elapsed {0:F2} -> {1:F2}s ({2:F1}%); t_reduce {3:F3} -> {4:F3}s ({5:F1}%)" -f
                 $oldTime, $newTime, (100*($newTime/$oldTime-1)), $oldReduce, $newReduce, (100*($newReduce/$oldReduce-1)))
+    Write-Host ("oracle host: {0:F3} -> {1:F3}s; wait {2:F3} -> {3:F3}s; GMP {4:F3} -> {5:F3}s" -f
+                ($old | Measure-Object oracle_host -Average).Average,
+                ($new | Measure-Object oracle_host -Average).Average,
+                ($old | Measure-Object oracle_wait -Average).Average,
+                ($new | Measure-Object oracle_wait -Average).Average,
+                ($old | Measure-Object oracle_gmp -Average).Average,
+                ($new | Measure-Object oracle_gmp -Average).Average)
 } finally {
     foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
 }

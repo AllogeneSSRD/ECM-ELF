@@ -1267,3 +1267,202 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench/analyze_stage2_g
 新增脚本通过 PowerShell 语法检查；补绝对时间后的 runner 另以 64-bit N、B1=20/B2=1000/D=210 跑完
 四轮 smoke，610 个归约系数与 factor/hit 结果一致，并成功生成含 `started/ended` 的 CSV 及传感器分析。
 该 smoke 仅验证测量工具，性能结论仍来自 §32.5 的生产四轮。
+
+## 33. 延后采样 oracle：有界 pinned 快照与分项计时
+
+### 33.1 起点与实现
+
+用户已提交 §32，当前起点为 `db040c9`（长除法）。本轮只优化采样 oracle，固定长除法与 D、32 MB batch、
+async chunk transfer、carry deferral 和 S5=0；不把上一轮归约收益计入本轮。§32 的代码行号对应该提交，
+本节行号对应本轮工作树。
+
+- **保持覆盖：**相同的首调用/每 8 次检查 cadence、sample_limit=96、rotating slice/start coefficient
+  和 small-batch full checks。原有 GMP 余数判据与 mismatch 诊断抽成共享 `s4_compare_snapshot`。
+  每个选中 snapshot 对 shape/call/slice/start/count 混合成 64-bit signature；A/B 除了样本数量和结果，
+  还比较 signature，以检测调度优化是否改变采样位置。
+- **捕获在设备 scratch 复用前入队：**原始 digit 窗口和设备归约输出分别 `cudaMemcpyAsync` 到独立 pinned
+  host 缓冲，随后记录 ready event。快照队列中不保存 device 指针；拷贝与后续设备复用都在当前默认 stream
+  中按顺序执行。延后 GMP 时访问的是已经捕获的 host 快照。
+- **有界队列：**默认 4 槽，`NTT_S4_ORACLE_RING=1..8` 可控制；每槽独立维护 digits/reduced 容量。
+  下一次归约入队后，主线程只处理 ready 的旧快照，借此让 GPU 当前工作与 CPU 对拍重叠。队列满时只等
+  最旧快照，不能覆盖尚未完成或未经验证的数据。pinning 失败回到阻塞检查并计数，不丢检查。
+- **完整排空：**F 树、Stage2 tail/batched run 的计时结束前 drain；报告检查计数前再次确认队列空。
+  `S4Reduce` 析构先 drain/free oracle，再销毁 shapes 和 GMP N，避免悬空引用。模数级状态放 file-static，
+  不改变 `S4Reduce::Shape` 或其复制/清零契约。
+- **同二进制开关：**`NTT_S4_ORACLE_ASYNC=0` 为阻塞捕获/立即对拍；1 为 pinned 捕获/延后对拍。
+  开关不改变设备归约算术和样本选择。
+
+### 33.2 计时口径与门禁
+
+`s4_oracle_stats` 输出 selected/queued/compared/samples/pending、ring_waits/fallbacks、signature 和 pinned peak。
+`t_wait` 是显式等 ready event 的 host 时间；`t_copy_host` 是复制调用的 host 时间，异步模式中是入队时间，
+不能解释成 PCIe DMA 的纯设备时间。`t_gmp` 是同一比较 helper 的 CPU 时间；`t_alloc` 记录 pinned 申请/扩容。
+`host_total=t_capture+t_reap+t_drain` 覆盖主线程全部 oracle 工作；wait/copy/GMP/alloc 是其中的分项，
+不能再次相加到 host_total。原 shape 的 `t_hooksample` 在新模式只记录捕获调用及其队列背压，延后对拍应看
+新统计，不能把两种模式的旧字段直接相减。
+
+CUDA 构建 exit=0（compile 145.4 s / link 2.4 s），门禁 **63 passed / 0 failed**。新增 [15] 七项：
+两个模式都找到 frozen factor；pinned 路径实际运行且无 fallback；所有 selected 都 compared、pending=0；
+采样 signature/样本数量/job 数一致；snapshot 样本数等于 GMP checked；单槽队列确实触发背压；
+`NTT_S4_ORACLE_TEST_BAD=1` 将最后 pending 的 host 快照改一位，阶段 drain 必须报 GMP mismatch 并非零退出。
+故障开关只用于门禁，生产 runner 显式置 0。
+
+生产 runner 新增 `-Target oracle`，顺序 blocking/async/async/blocking；固定长除法并比较相同的
+factor/hit/归约数量/GMP samples/selected/signature，要求 pending=0、fallbacks=0。小模数 smoke 四轮通过；
+生产四轮的完整证据保存在以下目录：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench/bench_stage2_reduce_ab.ps1 `
+  -Target oracle -Output build_cuda_cmake/_oracle_ab_20261002
+```
+
+### 33.3 生产结果：等待减少不等于总墙钟改善，队列默认关闭
+
+同一二进制 SHA256 `C4F3958BD2D195C6BEA8BB3FAE91DA521ABA0EFA27183A5D0E20F80F8FAA6097`，
+仍为 §32 的 5261-bit N / B2=1.94e12 / D=1231230 / device=1。Stage2 elapsed 与 oracle 分项（秒）：
+
+- A1 blocking：elapsed **190.66**，oracle host **18.315**，wait **11.651**，GMP **6.251**。
+- B1 async：elapsed **230.65**，oracle host **12.170**，wait **0**，GMP **10.819**。
+- B2 async：elapsed **228.93**，oracle host **13.325**，wait **0**，GMP **11.974**。
+- A2 blocking：elapsed **236.23**，oracle host **24.598**，wait **11.015**，GMP **12.687**。
+
+原始均值 **213.45 → 229.79 s（+7.7%）**，oracle host 21.457 → 12.747 s，显式 wait 11.333 → 0。
+四轮 selected=compared=2941、samples=167021、signature=`2f6b299f92a780ca`、pending=0、fallbacks=0；
+异步两轮 queued=2941，pinned peak=1,959,936 bytes（host 内存），每轮 factor/hit/coeffs 和全部 GMP 门禁一致。
+**未证明端到端收益，`NTT_S4_ORACLE_ASYNC` 默认改为 0；1 保留为有正确性门禁的实验路径。**
+
+这里不能把 +7.7% 宣布为队列的固有回归：同一种 blocking 的 GMP 从 6.251 升到 12.687 s，elapsed
+变化 45.57 s。GPU-Z 对主循环粗对齐显示 A1/B1/B2/A2 的 CPU package 温度均值分别
+64.42/80.23/77.10/77.51 °C；GPU clock 均值约 1794/1786/1771/1765 MHz，平均 GPU Load 为
+65.95/53.03/58.45/54.30%。低负载（≤5%）样本为 13/120、25/146、23/145、22/149。
+存在明显负载/热状态变化；温度本身不证明 CPU 频率或热限速的具体因果。即使只比相邻 B2/A2，
+228.93/236.23 s 的约 −3.1% 也只是单次样本，不能作为默认启用依据。
+
+本轮 falsifiable hypotheses：①运行条件变化会让 A2 的 GMP 也升高（实测成立）；②pinned 直接读取变慢
+会仅抬高 async 的 CPU 时间（A2 也变慢，现有数据不支持单独归因）；③在 hook 内处理旧快照可能延迟
+bulk-output D2H 的入队（源码有该依赖，需额外 stream/CPU trace 才能量化）。避免叠加新改动，下一轮
+固定 blocking，只减少整数组装本身的 CPU 工作。
+
+证据：[results.csv](D:/code/MPA-OpenCl/build_cuda_cmake/_oracle_ab_20261002/results.csv)、
+[provenance.json](D:/code/MPA-OpenCl/build_cuda_cmake/_oracle_ab_20261002/provenance.json)、
+[GPU-Z 分阶段统计](D:/code/MPA-OpenCl/build_cuda_cmake/_oracle_ab_20261002/gpuz/summary.json)。
+此组传感器从测量前开始写入，四轮主循环均有覆盖；不能使用全文件均值（含大量运行外的 idle）。
+
+## 34. Oracle 整数组装：主机 limb 加法后一次 mpz_import
+
+### 34.1 数学契约与独立性
+
+`s4_gmp_reduce` 原先对每个原始 digit 执行一次 `mpz_mul_2exp` 和 `mpz_add_u64`，约 500 digits/系数；
+本轮保持相同的 `C = Σ d[j]·2^(bpw·j)`，改用主机 64-bit limbs 的带进位加法拼出完整 C，再一次
+`mpz_import`，最后仍用同一 GMP `mpz_mod(C,N)`。GPU 归约算术、sample positions、数量和 GMP 判据不变。
+
+**不能 OR 拼装。**非规范 digit（大于 `2^bpw−1`）可能互相重叠；GPU 原组装的 OR 在这类错误输入上
+不等于数学加法，oracle 若复制 OR 会掩盖 carry/slot 错误。新 helper 使用 low/high 两 word 加法，
+显式处理溢出并传播 carry，保证任意 unsigned 64-bit digits 都按原 GMP 求和。
+
+新增 378 组 exact-integer fixtures，在 modulo 之前逐个与原 GMP 构造比较，覆盖 0/1/2/3/63/64/65/
+502/1024 digits，bpw=1/19/21/31/32/63/64，以及全零、规范随机、全 64-bit ones、单个末位 full word、
+非规范随机和交替 full words。避免只比较 `C mod N` 导致错误整数组装偶然碰撞。
+
+开关 `NTT_S4_ORACLE_PACK=0/1` 比较原 GMP digit 循环与 limb 组装。snapshot 比较新增 `t_num`（整数组装）
+和 `t_mod`（GMP 求余）分项；它们是 `t_gmp` 的子项，不另外加到 host_total。
+
+源码定位（本轮工作树）：
+
+- [stage2_tree_gpu.cu:2205](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2205)：limb 加法与 carry 传播；
+  [同文件:2232](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2232)：保留的 GMP digit 组装；
+  [同文件:2242](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2242)：378 组完整整数对拍；
+  [同文件:2272](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2272)：组装开关与 GMP mod 分项。
+- [同文件:2510](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2510)：两种调度共用的 GMP 检查；
+  [同文件:2643](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2643)：保持原采样窗口选择并捕获快照；
+  [同文件:2598](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2598)：完成检查后才能成功；
+  [同文件:1421](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1421)：析构先排空，再释放 shapes/N。
+- [test_stage2_tree_gpu.ps1:434](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:434)：延后队列门禁；
+  [同文件:497](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:497)：两种整数组装与采样覆盖门禁；
+  [bench_stage2_reduce_ab.ps1:34](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:34)：固定 blocking 的 pack ABBA。
+
+CUDA 第二次构建 exit=0（compile **304.4 s** / link **2.7 s**）。完整门禁 **68 passed / 0 failed**，
+新增 [16] 五项通过；确切整数 fixtures、两种组装路径的 frozen factor、sample positions/signature/job 数
+和全部 GMP 检查一致。日志：[门禁输出](D:/code/MPA-OpenCl/build_cuda_cmake/_oracle_pack_gate.log)。
+64-bit N / B1=20 / B2=1000 / D=210 的 `-Target oracle_pack` 四轮 smoke 也通过，归约系数均为 610；
+它仅检查 runner 和分项解析，不能用于性能结论。
+
+### 34.2 生产验证：整数组装默认启用，Stage2 均值降低 6.2%
+
+固定 `NTT_S4_ORACLE_ASYNC=0` 与长除法，两种整数组装按 slow/pack/pack/slow 同二进制比较；
+不将 §33 的异步调度变化混入本轮。命令：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench/bench_stage2_reduce_ab.ps1 `
+  -Target oracle_pack -Output build_cuda_cmake/_oracle_pack_ab_20261002
+```
+
+二进制 SHA256 `E3B0E2C19934380C56EE80F698E878AB468A145E5C2C26B31A6D0B60BF90F4D1`，
+仍为 5261-bit N / B1=1000 / B2=1.94e12 / D=1231230 / sigma=26 / device=1。四轮结果（秒）：
+
+- A1 GMP digits：Stage2 **225.23**，整跑 wall **262.065**，num **9.814501**，mod **0.867660**，
+  GMP **10.740070**，oracle host **22.680957**。
+- B1 limb pack：Stage2 **210.26**，整跑 wall **244.271**，num **0.305008**，mod **0.823052**，
+  GMP **1.174554**，oracle host **13.138240**。
+- B2 limb pack：Stage2 **212.21**，整跑 wall **247.344**，num **0.307049**，mod **0.820674**，
+  GMP **1.178317**，oracle host **13.103561**。
+- A2 GMP digits：Stage2 **225.00**，整跑 wall **259.158**，num **10.626269**，mod **0.925789**，
+  GMP **11.615334**，oracle host **23.542585**。
+
+ABBA 均值：
+
+- **Stage2 225.115 → 211.235 s（−6.17%，节省 13.880 s）**；含 setup/baby 的整跑 wall
+  **260.612 → 245.808 s（−5.68%）**。
+- 整数组装 **10.220385 → 0.306029 s（−97.01%）**；GMP 求余 **0.896724 → 0.821863 s**；
+  整个 oracle CPU 比较 **11.177702 → 1.176436 s（−89.47%）**。
+- oracle host **23.111771 → 13.120900 s（节省 9.991 s）**；显式 host wait **11.095008 → 11.113462 s**。
+  主机组装工作减少，等待量保持不变。
+- 设备归约 **21.620 → 21.504 s（−0.54%）**，算术路径未改。
+  `ntt_seconds` **113.876 → 103.432 s** 包含 wrapper/host/oracle，因此不能把这 10.444 s 解释为 NTT kernel 收益。
+
+四轮均有 **selected=compared=2941 / samples=167021 / signature=2f6b299f92a780ca / pending=0 / queued=0 /
+fallbacks=0**；归约系数 **62,385,796**、factor **42089**、hit prime **3511**、hits=1 完全一致。
+GMP selftest/check bad、slot canonical bad、bad factors、arena overflow 均为 0；arena peak 均 **5779 MB**。
+**`NTT_S4_ORACLE_PACK` 默认启用；0 保留同二进制原路径对照。`NTT_S4_ORACLE_ASYNC` 仍默认关闭。**
+
+GPU-Z 快照完整覆盖四轮（2026-10-02 20:08:22–20:25:15，英国本地时间）。runner 的 run start/end 是实测
+时间戳，16 个阶段均有样本，`run_time_inferred=false`；阶段边界由末尾 elapsed/phase wall 粗推，仍受
+1 Hz 采样和报告尾部时间影响。主循环 A1/B1/B2/A2：
+
+- 平均 GPU Load：**55.048 / 57.803 / 60.926 / 55.455%**；≤5% 样本：**23/145、22/132、21/135、21/143**。
+- 平均 GPU clock：**1790.690 / 1792.727 / 1782.333 / 1782.587 MHz**。
+- 平均 CPU package 温度：**79.282 / 67.627 / 67.828 / 67.098 °C**。
+
+优化两轮仍存在明显低负载区间；主循环 ≤5% 的样本比例没有下降，不能声称已经解决频繁 idle。
+CPU 温度变化存在，但 A2 与 B1/B2 的温度接近，A1/A2 总时间也接近；直接整数组装分项的收益在两轮
+B 中复现。此次 **−6.17% 是固定形状下四轮的观测值**，其超过 oracle host 减少的部分还包含其他阶段
+波动，不能全部归因于组装。GPU Load 是采样忙碌程度，不能替代 SM occupancy；GPU-Z header 未标设备，
+与 device=1 的时钟/显存匹配仍是推断。下一轮应使用稳定条件重复生产测试并定位剩余 idle。
+
+证据：[results.csv](D:/code/MPA-OpenCl/build_cuda_cmake/_oracle_pack_ab_20261002/results.csv)、
+[provenance.json](D:/code/MPA-OpenCl/build_cuda_cmake/_oracle_pack_ab_20261002/provenance.json)、
+[GPU-Z 阶段统计](D:/code/MPA-OpenCl/build_cuda_cmake/_oracle_pack_ab_20261002/gpuz/summary.json)、
+[传感器快照](D:/code/MPA-OpenCl/build_cuda_cmake/_oracle_pack_ab_20261002/gpuz/sensors.csv)。
+provenance 的 env 是 runner 基础模板，每轮由 mode 覆盖；实际归约始终 division，pack 按 0/1/1/0，
+async 始终 0，并由各轮日志及 runner 验证。不能跨 §32/§33 的不同二进制直接相减计算本轮收益。
+
+### 34.3 下一轮优化边界
+
+1. **先验证延后队列能否改善总时间。**本轮 pack 后 CPU 比较已很短，未来测量应固定 `PACK=1`，
+   对照 `ORACLE_ASYNC=0/1`，并记录 bulk-output D2H 入队与 CPU reap 的先后。`t_wait` 测量主线程等待
+   设备完成；设备此时可能仍在执行归约。把等待移到后续输出复制可以改变计时归属，不能直接把约 11 s
+   视为可删除的 GPU idle 或端到端收益。队列继续 opt-in，只有生产总墙钟通过才默认启用。
+2. **推进 fold 的固定多项式驻留。**[stage2_tree_gpu.cu:7636](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7636)
+   计算 T，随后 host 构造 reversed T、截断 finv 和 q；[同文件:7651](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7651)
+   再乘 F，最后 [同文件:7654](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7654) 逐系数 GMP 减法。
+   先给 F/finv 分配模数生命周期的设备缓存，再按形状增加截断乘法和设备减法接口；显存预算继续以
+   当前约 5.8 GB arena 和 32 MB batch 为约束，不能把全部树的变换无界缓存。
+3. **G 树与下降按形状复用 sibling 输入变换。**保持现有跨节点批处理，减少相同被除数/固定除数的
+   重复 forward transforms；结合 §32.4 中 Prime95 MULHI/MULLO/FMAs 的契约设计，不重复启用已知很慢的
+   S5 逐节点路径。先对每种 shape 统计可复用次数与缓存字节，再实现 bounded reuse。
+4. **giant leaf 的主机工作单独重叠。**现有 projective leaves + segment inverses 已减少求逆次数；
+   [同文件:7542](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7542) 的 GMP segment inverse 与退化 affine
+   处理仍在 G 树入队前。下一 block 的准备需要独立 Gamma/退化记录/leaf 缓冲所有权；保持因子和
+   hit-prime 门禁，在固定 D 下测量，再做 D 调优。
+
+上述阶段时间包含 CPU、GPU 与同步，oracle 时间也包含在相应 tree/fold 阶段中，不能把所有计时列相加。

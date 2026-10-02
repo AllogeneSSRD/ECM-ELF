@@ -1302,6 +1302,9 @@ static unsigned long long *pin_words(unsigned long long **slot, size_t *cap, siz
    NttArena::try_malloc), so a too-large value costs time rather than the run. */
 static unsigned long long g_s4_batch_budget_mb = 32;
 
+struct S4Reduce;
+static void s4_oracle_release(S4Reduce &R);
+
 struct S4Reduce {
     /* the modulus (shared by every shape of the run) */
     int nw = 0;                          /* words of N */
@@ -1415,6 +1418,7 @@ struct S4Reduce {
     S4Reduce() { mpz_init(N); }
     ~S4Reduce()
     {
+        s4_oracle_release(*this);       /* snapshots reference shapes and N: drain FIRST */
         for (Shape *s : shapes) delete s;
         if (dn) cudaFree(dn);
         if (dbad) cudaFree(dbad);
@@ -1433,6 +1437,70 @@ struct S4Reduce {
         return nullptr;
     }
 };
+
+/* Modulus-level oracle state; leave Shape's layout alone.  Capture before device scratch is
+   reused, compare a completed HOST snapshot while later GPU work runs.  No device pointer is
+   retained past the capture call.  Memory and delayed validation are bounded by this ring. */
+/* Deferred validation remains opt-in: its first production A/B did not establish a win. */
+static const bool g_s4_oracle_async = [] {
+    const char *e = std::getenv("NTT_S4_ORACLE_ASYNC");
+    return e && *e && std::atoi(e) != 0;
+}();
+static const bool g_s4_oracle_pack = !opt_off("NTT_S4_ORACLE_PACK");
+static const int g_s4_oracle_ring = [] {
+    const char *e = std::getenv("NTT_S4_ORACLE_RING");
+    return e && *e ? std::max(1, std::min(8, std::atoi(e))) : 4;
+}();
+struct S4OracleSlot {
+    unsigned long long *digits = nullptr, *reduced = nullptr;
+    size_t digcap = 0, redcap = 0;
+    cudaEvent_t ready = nullptr;
+    S4Reduce::Shape *shape = nullptr;
+    unsigned long long slice = 0, k0 = 0, count = 0, out_slots = 0;
+};
+static S4OracleSlot g_oracle_slot[8];
+static S4Reduce *g_oracle_owner = nullptr;
+static cudaEvent_t g_oracle_block_ev = nullptr;
+struct S4OracleStats {
+    unsigned long long selected = 0, queued = 0, compared = 0, samples = 0;
+    unsigned long long head = 0, tail = 0, ring_waits = 0, fallbacks = 0;
+    unsigned long long signature = 1469598103934665603ull, pinned_peak = 0;
+    double t_wait = 0.0, t_copy = 0.0, t_gmp = 0.0, t_alloc = 0.0;
+    double t_capture = 0.0, t_reap = 0.0, t_drain = 0.0;
+    double t_num = 0.0, t_mod = 0.0;
+};
+static S4OracleStats g_oracle;
+static void s4_oracle_reap(S4Reduce &R, bool wait);
+static void s4_oracle_drain(S4Reduce &R);
+static void s4_gmp_pack_check();
+
+static void s4_oracle_reset(S4Reduce &R)
+{
+    if (g_oracle_owner && g_oracle_owner != &R) {
+        std::fprintf(stderr, "%s: FATAL: overlapping modulus oracle owners\n", NTT_PROBE_NAME);
+        std::exit(3);
+    }
+    g_oracle_owner = &R;
+    g_oracle = S4OracleStats{};
+    std::printf("s4_oracle_mode: async=%d ring=%d pack=%d (same samples and GMP predicate)\n",
+                (int)g_s4_oracle_async, g_s4_oracle_ring, (int)g_s4_oracle_pack);
+}
+
+static void s4_oracle_report()
+{
+    std::printf("s4_oracle_stats: async=%d selected=%llu queued=%llu compared=%llu samples=%llu "
+                "pending=%llu ring_waits=%llu fallbacks=%llu signature=%016llx pinned_peak=%llu "
+                "t_wait=%.6f t_copy_host=%.6f t_gmp=%.6f t_alloc=%.6f "
+                "t_capture=%.6f t_reap=%.6f t_drain=%.6f host_total=%.6f "
+                "pack=%d t_num=%.6f t_mod=%.6f\n",
+                (int)g_s4_oracle_async, g_oracle.selected, g_oracle.queued, g_oracle.compared,
+                g_oracle.samples, g_oracle.tail - g_oracle.head, g_oracle.ring_waits,
+                g_oracle.fallbacks, g_oracle.signature, g_oracle.pinned_peak,
+                g_oracle.t_wait, g_oracle.t_copy, g_oracle.t_gmp, g_oracle.t_alloc,
+                g_oracle.t_capture, g_oracle.t_reap, g_oracle.t_drain,
+                g_oracle.t_capture + g_oracle.t_reap + g_oracle.t_drain,
+                (int)g_s4_oracle_pack, g_oracle.t_num, g_oracle.t_mod);
+}
 
 /* Resolve the pending asynchronous `dbad` readback, if there is one (section 43).  NON-BLOCKING
    by default: the point of the whole exercise is that the host must not wait for the work it has
@@ -1854,6 +1922,8 @@ static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
     R.ninv = ninv;
     R.hn = hn;
     mpz_set(R.N, N);
+    s4_oracle_reset(R);
+    s4_gmp_pack_check();
     CK(cudaMalloc(&R.dn, (size_t)R.nw * sizeof(unsigned long long)));
     CK(cudaMemcpy(R.dn, R.hn.data(), (size_t)R.nw * sizeof(unsigned long long),
                   cudaMemcpyHostToDevice));
@@ -2110,6 +2180,10 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
     ++S->calls;
     S->coeffs += total;
     R.coeffs_total += total;
+    /* This reduction is already queued: comparing an OLD snapshot can overlap it. */
+    const double tr0 = now_s();
+    s4_oracle_reap(R, false);
+    g_oracle.t_reap += now_s() - tr0;
     /* THE IN-RUN ORACLE, here rather than at the call site: the digit buffer belongs to the
        multiply and is released when it returns, so a check done afterwards would read freed
        device memory (that was a real crash, "CUDA error invalid argument", the first time the
@@ -2124,17 +2198,88 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
 
 /* one coefficient, reduced on the host with GMP the way the pre-S4 code did it: the digits
    are the exact integer C = sum_j d[j] 2^(bpw j), so C mod N is the oracle. */
-static void s4_gmp_reduce(mpz_t out, const unsigned long long *digits, unsigned long long nslots,
-                          int bpw, const mpz_t N)
+/* Exact SUM of arbitrary 64-bit digits at bpw-bit offsets, including NONCANONICAL digits.
+   Use addition with carry, not OR: OR would reproduce the GPU assembler's failure for bad
+   carry output and turn an independent oracle into a false agreement. Two spare words bound
+   the possible carry beyond the last digit's 64-bit value. */
+static void s4_gmp_assemble(mpz_t v, const unsigned long long *digits,
+                           unsigned long long nslots, int bpw)
 {
-    mpz_t v;
-    mpz_init(v);
+    std::vector<unsigned long long> words((size_t)((nslots * (unsigned long long)bpw + 63) / 64) + 2, 0ull);
+    for (unsigned long long j = 0; j < nslots; ++j) {
+        const unsigned long long bit = j * (unsigned long long)bpw, value = digits[j];
+        const size_t k = (size_t)(bit / 64);
+        const int shift = (int)(bit % 64);
+        const unsigned long long low = value << shift, old = words[k];
+        words[k] = old + low;
+        const unsigned long long carry = (words[k] < old) ? 1ull : 0ull;
+        const unsigned long long high = shift ? (value >> (64 - shift)) : 0ull;
+        const unsigned long long before = words[k + 1], sum = before + high;
+        const unsigned long long next = sum + carry;
+        words[k + 1] = next;
+        bool c = (sum < before) || (next < sum);
+        for (size_t i = k + 2; c; ++i) {
+            if (i >= words.size()) {
+                std::fprintf(stderr, "%s: FATAL: oracle assembly carry escaped its bound\n", NTT_PROBE_NAME);
+                std::exit(3);
+            }
+            c = (++words[i] == 0);
+        }
+    }
+    mpz_import(v, words.size(), -1, sizeof(unsigned long long), 0, 0, words.data());
+}
+
+static void s4_gmp_assemble_slow(mpz_t v, const unsigned long long *digits,
+                                unsigned long long nslots, int bpw)
+{
     mpz_set_ui(v, 0);
     for (unsigned long long j = nslots; j-- > 0;) {
         mpz_mul_2exp(v, v, (unsigned)bpw);
-        mpz_add_u64(v, digits[j]);       /* NOT mpz_add_ui: on Windows that truncates to 32 bits */
+        mpz_add_u64(v, digits[j]);
     }
+}
+
+static void s4_gmp_pack_check()
+{
+    const int counts[] = {0, 1, 2, 3, 63, 64, 65, 502, 1024};
+    const int bases[] = {1, 19, 21, 31, 32, 63, 64};
+    unsigned long long seed = 0x1234fedcba987654ull, cases = 0, bad = 0;
+    mpz_t want, got;
+    mpz_inits(want, got, nullptr);
+    for (int n : counts) for (int b : bases) for (int pattern = 0; pattern < 6; ++pattern) {
+        std::vector<unsigned long long> digits((size_t)n, 0ull);
+        for (int i = 0; i < n; ++i) {
+            seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+            const unsigned long long mask = (b == 64) ? ~0ull : ((1ull << b) - 1ull);
+            digits[(size_t)i] = pattern == 0 ? 0ull : pattern == 1 ? (seed & mask)
+                : pattern == 2 ? ~0ull : pattern == 3 ? (i == n - 1 ? ~0ull : 0ull)
+                : pattern == 4 ? seed : ((i & 1) ? ~0ull : 1ull);
+        }
+        s4_gmp_assemble_slow(want, digits.data(), (unsigned long long)n, b);
+        s4_gmp_assemble(got, digits.data(), (unsigned long long)n, b);
+        ++cases;
+        if (mpz_cmp(want, got) != 0) ++bad;
+    }
+    mpz_clears(want, got, nullptr);
+    std::printf("s4_oracle_pack_check: cases=%llu bad=%llu (exact integers, bpw=1..64, "
+                "canonical AND noncanonical digits)\n", cases, bad);
+    if (bad) {
+        std::fprintf(stderr, "%s: FATAL: packed oracle assembly disagrees with GMP\n", NTT_PROBE_NAME);
+        std::exit(3);
+    }
+}
+
+static void s4_gmp_reduce(mpz_t out, const unsigned long long *digits, unsigned long long nslots,
+                          int bpw, const mpz_t N, bool timed = false)
+{
+    mpz_t v;
+    mpz_init(v);
+    double t0 = timed ? now_s() : 0.0;
+    if (g_s4_oracle_pack) s4_gmp_assemble(v, digits, nslots, bpw);
+    else s4_gmp_assemble_slow(v, digits, nslots, bpw);
+    if (timed) { g_oracle.t_num += now_s() - t0; t0 = now_s(); }
     mpz_mod(out, v, N);
+    if (timed) g_oracle.t_mod += now_s() - t0;
     mpz_clear(v);
 }
 
@@ -2362,44 +2507,17 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
    and the start coefficient with the call counter, so consecutive calls look at different
    places.  A run always lies INSIDE ONE SLICE: the digits are slice-major at stride n, so the
    coefficient order is contiguous within a slice and NOT across slices. */
-static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned long long *ddig,
-                             unsigned long long n, unsigned long long out_slots,
-                             unsigned long long nbatch, const unsigned long long *d_out,
-                             long long sample_limit)
+static void s4_compare_snapshot(S4Reduce &R, S4Reduce::Shape *S,
+    unsigned long long s, unsigned long long k0, unsigned long long cnt,
+    unsigned long long out_slots, const unsigned long long *digbuf,
+    const unsigned long long *redbuf)
 {
-    const unsigned long long total = out_slots * nbatch;
-    if (!total || sample_limit == 0) return;
-    const unsigned long long lim = (unsigned long long)sample_limit;
-    const bool small_batch = (nbatch <= 4 && total <= lim);
-    std::vector<std::array<unsigned long long, 3>> runs;   /* (slice, k0, count) */
-    if (small_batch) {
-        for (unsigned long long s = 0; s < nbatch; ++s) runs.push_back({s, 0ull, out_slots});
-        ++S->full_checks;
-    } else {
-        unsigned long long cnt = lim;
-        if (cnt > out_slots) cnt = out_slots;
-        uint64_t seed = 0x9e3779b97f4a7c15ull * (S->calls + 1) + total;
-        seed = seed * 6364136223846793005ull + 1442695040888963407ull;
-        const unsigned long long s = (seed >> 11) % nbatch;
-        seed = seed * 6364136223846793005ull + 1442695040888963407ull;
-        const unsigned long long room = (out_slots > cnt) ? (out_slots - cnt + 1) : 1;
-        const unsigned long long k0 = (seed >> 11) % room;
-        runs.push_back({s, k0, cnt});
-    }
+    const double t0 = now_s();
     mpz_t want, mine;
     mpz_inits(want, mine, nullptr);
-    std::vector<unsigned long long> digbuf, redbuf;
-    for (const std::array<unsigned long long, 3> &rr : runs) {
-        const unsigned long long s = rr[0], k0 = rr[1], cnt = rr[2];
-        digbuf.assign((size_t)(cnt * S->slot_words), 0ull);
-        redbuf.assign((size_t)(cnt * R.w), 0ull);
-        CK(cudaMemcpy(digbuf.data(), ddig + s * n + k0 * S->slot_words,
-                      digbuf.size() * sizeof(unsigned long long), cudaMemcpyDeviceToHost));
-        CK(cudaMemcpy(redbuf.data(), d_out + (s * out_slots + k0) * R.w,
-                      redbuf.size() * sizeof(unsigned long long), cudaMemcpyDeviceToHost));
         for (unsigned long long q = 0; q < cnt; ++q) {
             s4_gmp_reduce(want, &digbuf[(size_t)(q * S->slot_words)], S->slot_words, S->bpw,
-                          R.N);
+                          R.N, true);
             mpz_import(mine, (size_t)R.w, -1, 8, 0, 0, &redbuf[(size_t)(q * R.w)]);
             ++S->checked;
             if (mpz_cmp(want, mine) != 0) {
@@ -2447,8 +2565,153 @@ static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned lon
                 std::exit(3);
             }
         }
-    }
     mpz_clears(want, mine, nullptr);
+    ++g_oracle.compared;
+    g_oracle.samples += cnt;
+    g_oracle.t_gmp += now_s() - t0;
+}
+
+/* Resolve ONE oldest snapshot.  Only ring pressure and final drain may wait. */
+static bool s4_oracle_one(S4Reduce &R, bool wait)
+{
+    if (g_oracle.head == g_oracle.tail) return false;
+    S4OracleSlot &slot = g_oracle_slot[g_oracle.head % g_s4_oracle_ring];
+    const cudaError_t status = cudaEventQuery(slot.ready);
+    if (status == cudaErrorNotReady && !wait) return false;
+    if (status == cudaErrorNotReady) {
+        const double t0 = now_s();
+        CK(cudaEventSynchronize(slot.ready));
+        g_oracle.t_wait += now_s() - t0;
+    } else CK(status);
+    s4_compare_snapshot(R, slot.shape, slot.slice, slot.k0, slot.count, slot.out_slots,
+                        slot.digits, slot.reduced);
+    ++g_oracle.head;
+    return true;
+}
+
+static void s4_oracle_reap(S4Reduce &R, bool wait)
+{
+    if (g_oracle_owner != &R) return;
+    while (s4_oracle_one(R, wait)) {}
+}
+
+static void s4_oracle_drain(S4Reduce &R)
+{
+    if (g_oracle_owner != &R) return;
+    const double t0 = now_s();
+    /* Gate-only fault injection: corrupt the LAST pending host snapshot, specifically proving
+       that the final drain validates it before success or destruction. Never alter device data. */
+    const char *bad = std::getenv("NTT_S4_ORACLE_TEST_BAD");
+    if (bad && std::atoi(bad) != 0 && g_oracle.head != g_oracle.tail) {
+        S4OracleSlot &slot = g_oracle_slot[(g_oracle.tail - 1) % g_s4_oracle_ring];
+        CK(cudaEventSynchronize(slot.ready));
+        slot.reduced[0] ^= 1ull;
+    }
+    s4_oracle_reap(R, true);
+    if (g_oracle.selected != g_oracle.compared) {
+        std::fprintf(stderr, "%s: FATAL: oracle lost snapshots (%llu selected, %llu compared)\n",
+                     NTT_PROBE_NAME, g_oracle.selected, g_oracle.compared);
+        std::exit(3);
+    }
+    g_oracle.t_drain += now_s() - t0;
+}
+
+static void s4_oracle_release(S4Reduce &R)
+{
+    if (g_oracle_owner != &R) return;
+    s4_oracle_drain(R);
+    for (S4OracleSlot &slot : g_oracle_slot) {
+        if (slot.digits) CK(cudaFreeHost(slot.digits));
+        if (slot.reduced) CK(cudaFreeHost(slot.reduced));
+        if (slot.ready) CK(cudaEventDestroy(slot.ready));
+        slot = S4OracleSlot{};
+    }
+    if (g_oracle_block_ev) CK(cudaEventDestroy(g_oracle_block_ev));
+    g_oracle_block_ev = nullptr;
+    g_oracle_owner = nullptr;
+}
+
+static void s4_oracle_block_ready()
+{
+    if (!g_oracle_block_ev) CK(cudaEventCreateWithFlags(&g_oracle_block_ev, cudaEventDisableTiming));
+    CK(cudaEventRecord(g_oracle_block_ev));
+    const double t0 = now_s();
+    CK(cudaEventSynchronize(g_oracle_block_ev));
+    g_oracle.t_wait += now_s() - t0;
+}
+
+static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned long long *ddig,
+                             unsigned long long n, unsigned long long out_slots,
+                             unsigned long long nbatch, const unsigned long long *d_out,
+                             long long sample_limit)
+{
+    const unsigned long long total = out_slots * nbatch;
+    if (!total || sample_limit == 0) return;
+    const double tc0 = now_s();
+    const unsigned long long lim = (unsigned long long)sample_limit;
+    const bool small_batch = (nbatch <= 4 && total <= lim);
+    std::vector<std::array<unsigned long long, 3>> runs;
+    if (small_batch) {
+        for (unsigned long long s = 0; s < nbatch; ++s) runs.push_back({s, 0ull, out_slots});
+        ++S->full_checks;
+    } else {
+        const unsigned long long cnt = std::min(lim, out_slots);
+        uint64_t seed = 0x9e3779b97f4a7c15ull * (S->calls + 1) + total;
+        seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+        const unsigned long long s = (seed >> 11) % nbatch;
+        seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+        const unsigned long long room = (out_slots > cnt) ? (out_slots - cnt + 1) : 1;
+        runs.push_back({s, (seed >> 11) % room, cnt});
+    }
+    if (!g_s4_oracle_async) s4_oracle_block_ready();
+    for (const auto &rr : runs) {
+        const unsigned long long s = rr[0], k0 = rr[1], cnt = rr[2];
+        const size_t ndig = (size_t)(cnt * S->slot_words), nred = (size_t)(cnt * R.w);
+        ++g_oracle.selected;
+        for (const auto v : {S->P, S->slot_bits, S->slot_words,
+                            (unsigned long long)S->bpw, S->calls, s, k0, cnt})
+            g_oracle.signature = (g_oracle.signature ^ v) * 1099511628211ull;
+        bool captured = false;
+        if (g_s4_oracle_async) {
+            if (g_oracle.tail - g_oracle.head == (unsigned long long)g_s4_oracle_ring) {
+                ++g_oracle.ring_waits;
+                s4_oracle_one(R, true);     /* never overwrite a pending HOST snapshot */
+            }
+            S4OracleSlot &slot = g_oracle_slot[g_oracle.tail % g_s4_oracle_ring];
+            const double ta0 = now_s();
+            auto *dig = pin_words(&slot.digits, &slot.digcap, ndig);
+            auto *red = pin_words(&slot.reduced, &slot.redcap, nred);
+            g_oracle.t_alloc += now_s() - ta0;
+            unsigned long long bytes = 0;
+            for (const auto &q : g_oracle_slot) bytes += 8ull * (q.digcap + q.redcap);
+            g_oracle.pinned_peak = std::max(g_oracle.pinned_peak, bytes);
+            if (dig && red) {
+                if (!slot.ready) CK(cudaEventCreateWithFlags(&slot.ready, cudaEventDisableTiming));
+                slot.shape = S; slot.slice = s; slot.k0 = k0; slot.count = cnt;
+                slot.out_slots = out_slots;
+                const double t0 = now_s();
+                CK(cudaMemcpyAsync(dig, ddig + s * n + k0 * S->slot_words,
+                                   ndig * 8, cudaMemcpyDeviceToHost));
+                CK(cudaMemcpyAsync(red, d_out + (s * out_slots + k0) * R.w,
+                                   nred * 8, cudaMemcpyDeviceToHost));
+                CK(cudaEventRecord(slot.ready));
+                g_oracle.t_copy += now_s() - t0;
+                ++g_oracle.tail; ++g_oracle.queued;
+                captured = true;
+            } else { ++g_oracle.fallbacks; s4_oracle_block_ready(); }
+        }
+        if (!captured) {
+            std::vector<unsigned long long> dig(ndig), red(nred);
+            const double t0 = now_s();
+            CK(cudaMemcpy(dig.data(), ddig + s * n + k0 * S->slot_words,
+                          ndig * 8, cudaMemcpyDeviceToHost));
+            CK(cudaMemcpy(red.data(), d_out + (s * out_slots + k0) * R.w,
+                          nred * 8, cudaMemcpyDeviceToHost));
+            g_oracle.t_copy += now_s() - t0;
+            s4_compare_snapshot(R, S, s, k0, cnt, out_slots, dig.data(), red.data());
+        }
+    }
+    g_oracle.t_capture += now_s() - tc0;
 }
 
 /* ===================================================================================== *
@@ -8412,6 +8675,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     (unsigned long long)baby_j.size(), tb1 - tb0, now_s() - tb1, noninv);
         FTreeStats fs;
         Ft = build_tree_flat(L, leaf, Fdeg, Fpad, fs, BC_FTREE);
+        s4_oracle_drain(red);    /* include final F-tree validation in its phase timer */
         fdeg = Fdeg[1];
         std::printf("ftree_real: leaves=%llu padded=%llu muls=%llu ntt_calls=%llu "
                     "ntt_seconds=%.3f\n", (unsigned long long)fs.leaves,
@@ -8436,6 +8700,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             L.arena = nullptr;
             const double t0 = now_s();
             const Stage2Tail tail = run_stage2_tail(L, C, SP, Ft[1], fdeg);
+            s4_oracle_drain(red);
             const double el = now_s() - t0;
             L.arena = save;
             std::string fs2, ps2;
@@ -8461,6 +8726,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const unsigned long long pl0 = L.s4 ? L.s4->pack_launches : 0ull;
         const double t0 = now_s();
         BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad);
+        s4_oracle_drain(red);    /* validation must finish BEFORE elapsed and success */
         /* merge the factors that degenerate BABY points revealed (objective 3): each already
            divides N by construction, and they are deduplicated against what the naming stage
            found, so the reported fact set cannot change for a shape where the naming stage
@@ -8617,6 +8883,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             double t_red = 0.0, t_red_host = 0.0;
             unsigned long long dt_blocked = 0;
             s4_dbad_resolve(red, /*wait=*/true);   /* section 43: the last readback must be checked */
+            s4_oracle_drain(red);
+            s4_oracle_report();
             for (S4Reduce::Shape *S : red.shapes) {
                 S->dt_flush();     /* the run is over and the stream has drained: resolve the
                                       deferred marks now (section 41) */
@@ -8938,6 +9206,7 @@ static int run_check_F(const char *path, const char *gpu_dump_path, bool evaluat
         L.arena = s2_arena ? &arena2 : nullptr;
         const double t0 = now_s();
         const Stage2Tail tail = run_stage2_tail(L, C, SP, F, fdeg);
+        s4_oracle_drain(red);
         const double elapsed = now_s() - t0;
         L.arena = save_arena;
         std::string factors;
@@ -8977,6 +9246,7 @@ static int run_check_F(const char *path, const char *gpu_dump_path, bool evaluat
         L.arena = &arena;
         const double t0 = now_s();
         BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad);
+        s4_oracle_drain(red);
         const double elapsed = now_s() - t0;
         L.arena = nullptr;
         const unsigned long long ntt_calls_b = L.ntt_calls - ntt_before;
@@ -9027,6 +9297,8 @@ static int run_check_F(const char *path, const char *gpu_dump_path, bool evaluat
                                full = 0, canon = 0, coeffs = 0;
             double t_red = 0.0;
             s4_dbad_resolve(red, /*wait=*/true);   /* section 43: the last readback must be checked */
+            s4_oracle_drain(red);
+            s4_oracle_report();
             for (S4Reduce::Shape *S : red.shapes) {
                 S->dt_flush();     /* resolve the deferred marks (section 41/42) */
                 sel_cases += S->selftest_cases; sel_bad += S->selftest_bad;

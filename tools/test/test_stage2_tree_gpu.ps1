@@ -431,6 +431,106 @@ try {
     else { $env:NTT_S4_OLDTAIL = $savedTail }
 }
 
+# [15] Deferred oracle: retain the SAME samples, validate every captured snapshot, bound the
+# queue, and detect a corrupted final snapshot at the phase drain. All toggles are restored.
+$oracleSaved = @{}
+foreach ($key in @('NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_RING','NTT_S4_ORACLE_TEST_BAD',
+                    'NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY','NTT_S4_OLDTAIL')) {
+    $oracleSaved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+}
+try {
+    $env:NTT_S4_OLDTAIL = '0'; $env:NTT_S4_ORACLE_RING = '4'; $env:NTT_S4_ORACLE_TEST_BAD = '0'
+    $env:NTT_S4_SAMPLE = '96'; $env:NTT_S4_CHECK_EVERY = '8'
+    $oracleArgs = @('--real','--n','340282366920938463463374607431768211457','--sigma','26',
+                    '--b1','1000','--b2','5000000','--d','1231230','--device',"$Device")
+    $env:NTT_S4_ORACLE_ASYNC = '0'
+    $oSyncOracle = (& $Exe @oracleArgs 2>&1 | Out-String); $cSyncOracle = $LASTEXITCODE
+    $env:NTT_S4_ORACLE_ASYNC = '1'
+    $oAsyncOracle = (& $Exe @oracleArgs 2>&1 | Out-String); $cAsyncOracle = $LASTEXITCODE
+    $oraclePattern = 's4_oracle_stats: async=(\d+) selected=(\d+) queued=(\d+) compared=(\d+) samples=(\d+) pending=(\d+) ring_waits=(\d+) fallbacks=(\d+) signature=([0-9a-f]+)'
+    $mSync = [regex]::Match($oSyncOracle,$oraclePattern)
+    $mAsync = [regex]::Match($oAsyncOracle,$oraclePattern)
+    Check "oracle: blocking and asynchronous modes find the same frozen factor" `
+          ($cSyncOracle -eq 0 -and $cAsyncOracle -eq 0 -and
+           $oSyncOracle -match 'bad_factors=0 factors=59649589127497217' -and
+           $oAsyncOracle -match 'bad_factors=0 factors=59649589127497217') "exit=$cSyncOracle/$cAsyncOracle"
+    Check "oracle: mode switch works and all asynchronous snapshots use pinned memory" `
+          ($mSync.Success -and $mAsync.Success -and $mSync.Groups[1].Value -eq '0' -and
+           $mSync.Groups[3].Value -eq '0' -and $mAsync.Groups[1].Value -eq '1' -and
+           [long]$mAsync.Groups[3].Value -gt 0 -and
+           $mAsync.Groups[2].Value -eq $mAsync.Groups[3].Value -and
+           $mAsync.Groups[8].Value -eq '0') ""
+    $allConsumed = $mSync.Success -and $mAsync.Success
+    foreach ($mOracle in @($mSync,$mAsync)) {
+        $allConsumed = $allConsumed -and $mOracle.Groups[2].Value -eq $mOracle.Groups[4].Value -and
+                       $mOracle.Groups[6].Value -eq '0'
+    }
+    Check "oracle: every selected snapshot was compared and the final queue is empty" $allConsumed ""
+    Check "oracle: sample positions, count and job count agree across the same-binary A/B" `
+          ($mSync.Success -and $mAsync.Success -and
+           $mSync.Groups[2].Value -eq $mAsync.Groups[2].Value -and
+           $mSync.Groups[5].Value -eq $mAsync.Groups[5].Value -and
+           $mSync.Groups[9].Value -eq $mAsync.Groups[9].Value) ""
+    $mGmpOracle = [regex]::Match($oAsyncOracle,'s4_multiply_stats:.*gmp_checked=(\d+)')
+    Check "oracle: checked GMP coefficient count equals the snapshot sample count" `
+          ($mAsync.Success -and $mGmpOracle.Success -and
+           $mAsync.Groups[5].Value -eq $mGmpOracle.Groups[1].Value -and
+           $oAsyncOracle -match 't_wait=[0-9.]+ t_copy_host=[0-9.]+ t_gmp=[0-9.]+') ""
+    $env:NTT_S4_ORACLE_RING = '1'; $env:NTT_S4_CHECK_EVERY = '1'
+    $stressArgs = @('--real','--n-hex','ffffffffffffffc5','--sigma','26','--b1','20','--b2','1000',
+                    '--d','210','--device',"$Device")
+    $oOracleRing = (& $Exe @stressArgs 2>&1 | Out-String); $cOracleRing = $LASTEXITCODE
+    $mRing = [regex]::Match($oOracleRing,$oraclePattern)
+    Check "oracle: one-slot ring exercises backpressure without losing or overwriting snapshots" `
+          ($cOracleRing -eq 0 -and $mRing.Success -and [long]$mRing.Groups[7].Value -gt 0 -and
+           $mRing.Groups[2].Value -eq $mRing.Groups[4].Value -and $mRing.Groups[6].Value -eq '0') "exit=$cOracleRing"
+    $env:NTT_S4_ORACLE_TEST_BAD = '1'
+    $prevOracleErrors = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $oOracleBad = (& $Exe @stressArgs 2>&1 | Out-String); $cOracleBad = $LASTEXITCODE
+    $ErrorActionPreference = $prevOracleErrors
+    Check "oracle: corrupted last pending snapshot is fatal at the phase drain" `
+          ($cOracleBad -ne 0 -and $oOracleBad -match 'FATAL: the device reduction disagrees with GMP') "exit=$cOracleBad"
+} finally {
+    foreach ($key in $oracleSaved.Keys) { [Environment]::SetEnvironmentVariable($key,$oracleSaved[$key],'Process') }
+}
+
+# [16] Pack the oracle's exact integer once instead of repeated GMP shifts/adds. The host
+# fixtures compare the INTEGER before modulo, including arbitrary noncanonical 64-bit digits.
+$packSaved = @{}
+foreach ($key in @('NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_PACK','NTT_S4_ORACLE_TEST_BAD')) {
+    $packSaved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+}
+try {
+    $env:NTT_S4_ORACLE_ASYNC = '0'; $env:NTT_S4_ORACLE_TEST_BAD = '0'
+    $env:NTT_S4_ORACLE_PACK = '0'
+    $oSlowPack = (& $Exe @oracleArgs 2>&1 | Out-String); $cSlowPack = $LASTEXITCODE
+    $env:NTT_S4_ORACLE_PACK = '1'
+    $oFastPack = (& $Exe @oracleArgs 2>&1 | Out-String); $cFastPack = $LASTEXITCODE
+    Check "oracle pack: both assembly algorithms retain the frozen factor" `
+          ($cSlowPack -eq 0 -and $cFastPack -eq 0 -and
+           $oSlowPack -match 'bad_factors=0 factors=59649589127497217' -and
+           $oFastPack -match 'bad_factors=0 factors=59649589127497217') "exit=$cSlowPack/$cFastPack"
+    Check "oracle pack: exact-integer fixtures cover canonical and noncanonical digits" `
+          ($oSlowPack -match 's4_oracle_pack_check: cases=378 bad=0' -and
+           $oFastPack -match 's4_oracle_pack_check: cases=378 bad=0') ""
+    Check "oracle pack: same-binary knob selects slow and packed assembly" `
+          ($oSlowPack -match 's4_oracle_stats:.*pack=0 t_num=[0-9.]+ t_mod=[0-9.]+' -and
+           $oFastPack -match 's4_oracle_stats:.*pack=1 t_num=[0-9.]+ t_mod=[0-9.]+') ""
+    $mSlowPack = [regex]::Match($oSlowPack,$oraclePattern)
+    $mFastPack = [regex]::Match($oFastPack,$oraclePattern)
+    Check "oracle pack: full sample positions, count and job count are identical" `
+          ($mSlowPack.Success -and $mFastPack.Success -and
+           $mSlowPack.Groups[2].Value -eq $mFastPack.Groups[2].Value -and
+           $mSlowPack.Groups[5].Value -eq $mFastPack.Groups[5].Value -and
+           $mSlowPack.Groups[9].Value -eq $mFastPack.Groups[9].Value) ""
+    Check "oracle pack: neither oracle reports GMP disagreement or incomplete snapshots" `
+          ($oSlowPack -notmatch 'FATAL|gmp_check_bad=[1-9]|gmp_bad=[1-9]' -and
+           $oFastPack -notmatch 'FATAL|gmp_check_bad=[1-9]|gmp_bad=[1-9]' -and
+           $mSlowPack.Groups[6].Value -eq '0' -and $mFastPack.Groups[6].Value -eq '0') ""
+} finally {
+    foreach ($key in $packSaved.Keys) { [Environment]::SetEnvironmentVariable($key,$packSaved[$key],'Process') }
+}
+
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }
