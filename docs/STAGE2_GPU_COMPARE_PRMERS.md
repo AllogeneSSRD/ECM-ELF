@@ -1,8 +1,16 @@
-# GPU Stage 2 实现对比：本仓库与 PrMers
+# ECM GPU Stage 2：本仓库树形实验与 Prime95 Poly 方法对照
 
 **调查日期：2026-10-02**  
-**范围：ECM Stage 2（Montgomery x-only）**；本报告不把 PrMers 的 P−1 V-trace Stage 2 当作同一实现。  
-**方法：**静态阅读本仓库源码、PrMers 子树源码及 `docs/DEV_STAGE2_*` 开发记录。这里的性能数字引用仓库已有记录，不是本次重新跑出的 benchmark。
+**范围：ECM Stage 2；主线是本仓库 CUDA 多项式树实验与 Prime95 Poly 方法。** PrMers Gaussian ECM BSGS 仅作补充对照；PrMers 的 P−1 V-trace 不属于椭圆曲线 Stage 2。
+**方法：**静态阅读本仓库、Prime95 与 PrMers 源码，以及 docs/DEV_GPUOWL_NTT_NOTES.md。性能数字只引用开发日志已记录的数据；本次没有重新运行 benchmark。Prime95 ECM 源文件实际位于 .refactor/p95v3106b01.source/ecm.cpp（不是 ecm/ 子目录），多项式乘法实现位于同版本 gwnum/polymult.c/.h。
+
+## 本次补充摘要（ECM Poly Stage 2 主线）
+
+- Prime95 Poly 的主算法是 F baby-root 积树、按 giant block 构造 G、递推 H ← G·H mod F，再沿 F 树做 Bernstein scaled remainder descent；Prime95 原码流程与当前 CUDA 树版逐段对应，详见 §27.1–27.3。
+- 当前 GPU 路线的主要实现差别是算术/数据通路：Prime95 用 Gwnum 浮点 FFT 与 roundoff guard；本仓库使用精确系数 NTT、设备打包与模 N 归约。树形算法相似不代表底层访存成本相同。
+- 最新生产记录：D=1,231,230 / P=115,200，elapsed 273.55 s；成本驱动 D 搜索与 arena 跨形状驱逐已带来 −31.2%。此后优先检查 gtree 每层固定成本；F 树逐层数据已显示 0.26–0.75 s 的层成本地板，但高 B2 的 G 树仍需单独测量。
+- S5 分组下降曾实现 1.9× 小形状加速但结果不正确，代码已回退。只有逐层余数和叶值对拍通过，并在生产形状 A/B 证明更快，才应重新启用。
+- PrMers 的直接 BSGS 对照保留在旧章节作为旁支；它不能直接代表 Poly/NTT Stage 2 的访存或性能。
 
 ## 1. 结论摘要
 
@@ -97,3 +105,57 @@
 | PrMers optimized-path dispatch | `.refactor/PrMers-main/src/modes/RunGaussianMersenneEcmFast.cpp:607-617` | 说明 `-bsgs` 进入优化实现 |
 | PrMers 发布与验收条件 | `.refactor/PrMers-main/RELEASE_V99.98_GAUSSIAN_ECM_FUSED_BSGS.md:37-87` | 判据、默认 D、checkpoint、上线前 A/B 条件 |
 | PrMers P−1 Stage2 区分 | `.refactor/PrMers-main/src/io/CliParser.cpp:90-104` | 避免把 P−1 V-trace 与 ECM BSGS 混为一谈 |
+
+
+> **阅读顺序：**下面的 §27 是本报告主线，追踪 Prime95 ECM Poly Stage 2 的数学流程、源码及其与当前 CUDA 实验的对应关系；原有 §1–6 保留为 PrMers 直接 BSGS 的补充比较。主要性能结论取自 [DEV_GPUOWL_NTT_NOTES.md](DEV_GPUOWL_NTT_NOTES.md) 最新记录。
+
+## 27. ECM Stage 2 核心：Prime95 Poly 方法与当前 CUDA 实验
+
+### 27.1 Poly Stage 2 在算什么
+
+令 Stage 1 输出点为 Q，选取偶数 D。对 D 的相对素数 residue 生成 baby 点 x_j=x([j]Q)，构造 F(X)=∏(X−x_j)。对每个 giant block，生成点 Y_i=[m_iD]Q，构造 G_b(X)=∏(X−x(Y_i))。然后将每块 giant 信息折叠进 H(X)←G_b(X)H(X) mod F(X)。沿 F 的余式树下降可得到每个 baby 根上的 H(x_j)；它等价于该 baby 点与已处理 giant 点差项的批量乘积（符号/可逆尺度因子按实现约定处理）。最终把叶值合并并对模数 N 求 GCD，以发现因子。
+
+这把 BSGS 的逐项 X_g Z_b−Z_g X_b 命中判定改写成“多项式积—模 F 折叠—多点求值”。D 仍决定 baby 集大小与 giant block 数的折中；算法没有消除所有点运算，而是把大量 prime pair 的交叉项变成平衡树上的批量多项式运算。
+
+### 27.2 Prime95 源码路径（可直接按行复查）
+
+1. **D、P、B2 与内存成本选择。**numrels 是小于 D/2 的相对素数个数；Poly 实现以它作为多项式长度。每个 giant block 的 section 数向 poly_size 的倍数补齐，保持批形状规则；成本模型估算 F/R/G/H、Ftree 与 polymult scratch 的内存，并加入超出 L2 后的惩罚。代码还搜索更合适的 B2：Poly 下经济区间可以远大于传统 pairing。见 [ecm.cpp:429–436, 731–739, 5756–5810, 6011–6055](../.refactor/p95v3106b01.source/ecm.cpp)。
+2. **F 产品树。**从 nQx 的相对素数点建立线性 monic 因子，先用专用 helper 合并小因子，再逐层两两 polymult。FFT 计划按相近形状保存/重用；每层后批量 unFFT/FFT 系数。见 [ecm.cpp:9095–9212](../.refactor/p95v3106b01.source/ecm.cpp)。
+3. **F 的倒数多项式与预处理。**用 Newton 倍增迭代求 reciprocal 1/F，然后对 F/R 预转置、压缩，以减少内存占用。见 [ecm.cpp:9232–9295](../.refactor/p95v3106b01.source/ecm.cpp)。
+4. **G 产品树。**每个 outer loop 通过 mQ_next_array 生成一块巨点，构造 G 的平衡乘积树。polyG/polyH 共用连续分配，polyGaux 只保留一部分临时结果，注释明确这是用少量辅助空间省掉整块复制。见 [ecm.cpp:9320–9327, 9354–9435](../.refactor/p95v3106b01.source/ecm.cpp)。
+5. **折叠 H←GH mod F。**首个 G block 初始化 H；之后用三段运算：先乘 G·H，乘 1/F 取高位得到商，再用 FMA 减去商乘 F 并只留低位余数。见 [ecm.cpp:9458–9474](../.refactor/p95v3106b01.source/ecm.cpp)。
+6. **Bernstein scaled remainder descent。**先把 H 乘 1/F 形成 scaled remainder，再逐层把父余数对左右子多项式取余，最终落到线性因子/叶值。为了控制峰值内存，Prime95 释放 F/R、切片处理 H，并按可用内存从内存、磁盘保存或重建 Ftree 行。每个父 H 同时对左右两个子树求余时，polymult_several 让两个 child 运算共享共同操作数的变换。见 [ecm.cpp:9538–9578, 9627–9737](../.refactor/p95v3106b01.source/ecm.cpp)。
+7. **合并叶值与 GCD。**helper 线程生成部分积，合并后进入 ECM GCD；在此之前释放大块多项式工作集。见 [ecm.cpp:9760–9880](../.refactor/p95v3106b01.source/ecm.cpp)。
+
+gwnum/polymult 是 Prime95 的浮点 FFT/实数大整数表示路径，调用方检查 roundoff 和 safety margin；它不是本仓库的精确整数 NTT。Poly 选项包括 monic 输入、只取乘积高/低系数、FMA、保留计划及复用计划；polymult_several 允许一份输入乘多个相关多项式。见 [polymult.h:128–157](../.refactor/p95v3106b01.source/gwnum/polymult.h)、[polymult.c:4903–5050](../.refactor/p95v3106b01.source/gwnum/polymult.c)。FFT/Karatsuba 阈值处还留有 “Fix me” 注释，见 [polymult.c:531–539](../.refactor/p95v3106b01.source/gwnum/polymult.c)。
+
+### 27.3 Prime95 与当前 GPU 分支：算法、数据流和访存差异
+
+| 维度 | Prime95 ECM Poly | 本仓库 CUDA 实验 |
+|---|---|---|
+| 多项式乘法 | Gwnum 浮点 FFT，配 safety margin/roundoff 检查 | uint64_t 系数、coefficient-major 扁平缓冲；打包为 NTT digits，做精确卷积与模 N 系数归约。S4 的统一批乘入口见 [stage2_tree_gpu.cu:2133–2144](../tools/bench/stage2_tree_gpu.cu)，H2D、设备打包和 NTT 调用见 [stage2_tree_gpu.cu:2252–2284](../tools/bench/stage2_tree_gpu.cu)。 |
+| F/G 树调度 | F/G 按层构造；F 树计划可重用 | F 树及每层同 shape 节点在 host 聚合后调用 poly_mul_batch_modN；数据在 host 扁平数组与 GPU scratch 间搬运。见 [stage2_tree_gpu.cu:2389–2485](../tools/bench/stage2_tree_gpu.cu)。 |
+| 巨点与 G block | mQ_next_array 提供一段 giant 点，再构造 G | chunk/chain 产生巨点并构造 G 树；对可逆 Z 的段用 projective 叶子，整段只求一次逆并把尺度补偿进 H，遇到不可逆段回退到 affine 路径。见 [stage2_tree_gpu.cu:6620–6635, 6720–6850](../tools/bench/stage2_tree_gpu.cu)。 |
+| H fold | 三次专用 multiply/FMA，使用高/低半积 | CPU 侧按精确系数实现三乘法折叠：完整 G·H、对 reciprocal 取商、减 qF 得余数。见 [stage2_tree_gpu.cu:6870–6895](../tools/bench/stage2_tree_gpu.cu)。 |
+| Descent | 分层 scaled remainder，必要时切片并重建/读入 Ftree；两个 child remainder 可共享输入变换 | 默认是主机驱动、同层按除法形状分组的批量下降；节点余式递推可见 [stage2_tree_gpu.cu:2912–3055](../tools/bench/stage2_tree_gpu.cu)，Newton 倒数与两次乘法的批量 divmod 见 [stage2_tree_gpu.cu:5551–5605](../tools/bench/stage2_tree_gpu.cu)。S5 设备下降由 NTT_S5_ON 显式开启，默认关闭，见 [stage2_tree_gpu.cu:6975–7045](../tools/bench/stage2_tree_gpu.cu)。 |
+| 工作集策略 | 成本模型纳入保存 Ftree 到磁盘、压缩 F/R、workspace 及 L2 影响 | NTT arena 复用、驱逐其它形状缓存；单次批乘按显存 budget 切 chunk。Ftree 目前需供 descent 访问；全局合并 G batch 会增加峰值缓冲。见 [stage2_tree_gpu.cu:2202–2233](../tools/bench/stage2_tree_gpu.cu)。 |
+
+### 27.4 当前实验状态：已完成项与当前热点
+
+开发日志记录的生产形状为 D=1,231,230、P=115,200，14 个 G blocks、13 次 fold，Stage 2 elapsed=273.55 s；其中 gtrees 101.142 s、fold 35.285 s、descent 76.458 s，NTT 合计 159.067 s（58.1%）。旧 D=570,570 记录为 397.83 s，因子集合相同；变化是 −31.2%。arena 驱逐与成本模型 D 搜索已落地，不应当再列成“待实现优化”。见 [DEV_GPUOWL_NTT_NOTES.md §19–20](DEV_GPUOWL_NTT_NOTES.md)。
+
+日志 §26 在小 B2（5e6）下测的是 P=115,200 的 **F 树**：17 层各约 0.26–0.75 s；一层 57,600 次乘法约 0.75 s，而顶层仅 1 次乘法也约 0.71 s，作者据此估算约 80% 是与节点数弱相关的每层成本。把相近层数外推到 G 树得到约 84 s，与实测 101 s 同量级，但这仍是外推，不是大 B2 G 树逐层实测。日志提出下一步在 B2≈1e11 下打印 G 树自身阶梯，并拆 poly_mul_batch_modN 的 host pack、H2D、forward/inverse、exact reduce/check、D2H 与同步时间。见 [DEV_GPUOWL_NTT_NOTES.md §26](DEV_GPUOWL_NTT_NOTES.md)；树层计时点见 [stage2_tree_gpu.cu:2417–2485](../tools/bench/stage2_tree_gpu.cu)。
+
+### 27.5 结合 Prime95 Poly 设计的优化候选（按优先级）
+
+1. **先定位每层固定成本，再扫批次预算。**这是当前最大且有数据支撑的机会：在大 B2 下分别记录 F/G 每层节点数、shape group 数、batch chunk 数、host 打包、H2D/D2H、forward/inverse、精确归约/check 与同步。现有 NTT_S4_BATCH_MB 可改变单次 GPU 批量预算（默认值见 [stage2_tree_gpu.cu:1239, 2219–2249](../tools/bench/stage2_tree_gpu.cu)）。固定 D/N/参数扫预算，确认 chunk round-trip 是否造成地板；放大预算可能减少启动和复制，但会抬高显存峰值，必须同时记录 arena_mb/overflow 与 exactness 检查。
+   **（当天已执行：见 [DEV_GPUOWL_NTT_NOTES.md §27](DEV_GPUOWL_NTT_NOTES.md)。结论是分块数确实是杠杆，但**不是**传输量——三次跑的 H2D/D2H 体积逐字节相同，只有分块数变；省下的是每个分块约 2 ms 的固定开销。默认预算已 32 → 64 MB，96 MB 起实测 OOM，上限由显存而非代码给出。）**
+2. **把 Prime95 的“一个父项、两个余式子项”共享工作映射到 GPU。**Prime95 的 polymult_several 对同一父余数乘两个 sibling divisor，共用一份输入的 FFT。当前 host descent 虽会按 (deg dividend, deg divisor) 组批，但 divmod_batch 内部仍有 reciprocal、quotient multiply、q·B multiply 等多阶段安排。可探索把同一层 sibling 的反转/倒数数据、输入变换和 workspace 做成多输出批任务，减少重复 pack、NTT、归约与 launch；先对比所有叶值再谈吞吐。
+3. **重新设计 S5 分组除法，不能复用已回退实现。**开发日志 §21–23 显示逐节点 S5 在 D=30030 上约 2.542 ms/除法，慢于 host batched 路径约 330 µs/除法；按同层形状分组曾得到 1.9× speedup，却出现结构化叶值错误并完全回退。下一版应按层对比 quotient/remainder 和每个叶值，重点检查每 slice 的 B 指针、hook 输出步长、frontier/code 连续性；只有在 P=24/240/2880 及生产 P 上逐叶一致、且 A/B 更快后再启用。生产形状是否受益不能从小形状推断。见 [DEV_GPUOWL_NTT_NOTES.md §21–23](DEV_GPUOWL_NTT_NOTES.md)。
+4. **下降层内 CPU 并行是近期低风险候选，但要先确认瓶颈归属。**同一层节点独立，日志按 76.5 s 估出约 35 s 的理论节省；实际代码共享 PolyLayer、batch buffers 与 GPU stream，需要先把线程私有 scratch、批次形成和 device 同步路径分清。用逐层 hash/leaf 对拍防止只比总 GCD 掩盖错值。预计收益是日志估算而非本次验证结果。见 [DEV_GPUOWL_NTT_NOTES.md §24](DEV_GPUOWL_NTT_NOTES.md)。
+5. **给 baby ladder/归一化单独计时，再考虑批量逆元或 projective 表示。**日志从进程 wall 与已知计时器差额估计 baby ladder 加 affine 约 30 s，但当前没有独立计时；日志估计每段一次逆可能节省其中约 7 s，置信度低于已计时的 tree/descent 热点。巨点分段 projective 补偿已有实现，不等于 baby 侧可以直接照搬：要证明缩放因子对 F、reciprocal、fold 与最终 GCD 全程一致。
+6. **D/B2 与跨 G-block 融合留到固定成本下降后重新搜索。**D 成本模型 + arena eviction 已让生产形状从 397.83 s 降到 273.55 s；继续增大 D 能减 G blocks，但增大 P、Ftree、reciprocal 和 descent 工作。跨 block 融合有显存代价；应在 per-level floor 消除后重新做 D optimum 搜索，而非预设“更大 D/全合并更快”。
+
+### 27.6 与 PrMers 对比的边界与 benchmark 口径
+
+PrMers 的 BSGS 路径是逐 prime cross-product 扫描，与 Prime95/本仓库 Poly 路径是不同算法映射。它适合说明小工作集驻留寄存器、巨点在线推进、减少表流量等思路，不能直接推断 Poly Stage 2 的复杂度或 CUDA NTT 性能。Prime95 日志和当前 GPU 数据对应不同 CPU/GPU、不同模数/边界/构建；本报告只作代码路径与瓶颈形态比较，不把秒数当同参数 A/B 结论。
