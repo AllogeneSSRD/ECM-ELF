@@ -2146,7 +2146,8 @@ static void s4_launch_pack_batch(const unsigned long long *src, int S, int bpw,
 static void poly_mul_batch_modN(PolyLayer &L,
                                 const unsigned long long *wa, const unsigned long long *wb,
                                 size_t ma, size_t mb, size_t nbatch,
-                                std::vector<unsigned long long> &out, int cat = -1)
+                                std::vector<unsigned long long> &out, int cat = -1,
+                                NttMulStats *st_out = nullptr)
 {
     const size_t W = L.W;
     const size_t P = (ma > mb) ? ma : mb;
@@ -2205,7 +2206,19 @@ static void poly_mul_batch_modN(PolyLayer &L,
        "out of memory".  A per-chunk device budget keeps every (N, chunk) buffer small; the
        arena caches one entry per (N, chunk) because the chunk size is a deterministic function
        of N.  Bigger budget = fewer launches; smaller = less memory. */
-    const unsigned long long budget_bytes = g_s4_batch_budget_mb << 20;
+    /* ---- NTT_S4_BATCH_MB: THE PER-CHUNK DEVICE BUDGET (section 27) --------------------------
+       This was a hard-coded 32 MB.  The per-level timers showed a ~0.3-0.4 s FIXED cost per tree
+       level that does not depend on the multiply count at all (3600 tiny multiplies cost 0.375 s,
+       and ONE multiply of the full degree costs 0.618 s), and it lands inside
+       poly_mul_batch_modN -- whose own sub-timers the dev path never fills.  The chunking below is
+       the first suspect: a level's batch is split into ceil(nbatch/chunk) chunk round-trips, each
+       with its own H2D, pack, NTT, reduce and D2H.  This knob makes that testable. */
+    static const unsigned long long s4_batch_mb = [] {
+        const char *e = std::getenv("NTT_S4_BATCH_MB");
+        return (e && *e) ? std::strtoull(e, nullptr, 10) : 0ull;
+    }();
+    const unsigned long long budget_bytes =
+        (s4_batch_mb ? s4_batch_mb : g_s4_batch_budget_mb) << 20;
     unsigned long long chunk = 1;
     {
         unsigned long long qN2 = 0;
@@ -2291,6 +2304,14 @@ static void poly_mul_batch_modN(PolyLayer &L,
         L.d2h_coeff_words += (unsigned long long)all.size();
     }
     L.ntt_seconds += now_s() - t0;
+    /* the caller's copy of the per-call account (section 27): the tree needs it PER LEVEL to say
+       whether its floor is host packing, H2D/D2H traffic, the transforms, the carry check or the
+       exact coefficient extraction -- `t0` above already covers the whole call including the
+       host-side copies, so `total` = now - t0 minus the sum of the parts is the unattributed rest */
+    if (st_out) {
+        *st_out = st;
+        st_out->t_total_call = now_s() - t0;
+    }
     if (rc != 0) {
         std::fprintf(stderr, "%s: ntt_poly_mul_batch_host failed (rc=%d) at P=%llu S=%d "
                              "nbatch=%llu\n", NTT_PROBE_NAME, rc, (unsigned long long)P,
@@ -2406,6 +2427,8 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
     for (size_t base = pad / 2; ; base /= 2) {
         const double tl0 = now_s();
         unsigned long long lvl_muls = 0, lvl_groups = 0;
+        double lvl_fwd = 0, lvl_inv = 0, lvl_slot = 0, lvl_hpack = 0, lvl_h2d = 0, lvl_check = 0;
+        double lvl_plan = 0, lvl_opcopy = 0, lvl_hout = 0, lvl_total = 0;
         /* nodes [base, 2*base), children at [2*base, 4*base) -- all children are already built */
         std::map<std::pair<size_t, size_t>, std::vector<size_t>> groups;
         for (size_t i = base; i < 2 * base; ++i) {
@@ -2434,10 +2457,18 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
                           wb.begin() + (long)(s * P * W));
             }
             std::vector<unsigned long long> res;
-            poly_mul_batch_modN(L, wa.data(), wb.data(), ma, mb, nbatch, res, cat);
+            NttMulStats gst{};
+            poly_mul_batch_modN(L, wa.data(), wb.data(), ma, mb, nbatch, res, cat, &gst);
             ++L.s4->groups;
             ++lvl_groups;
             lvl_muls += nbatch;
+            if (lvl_trace) {
+                lvl_fwd += gst.t_fwd; lvl_inv += gst.t_inv; lvl_slot += gst.t_slot;
+                lvl_hpack += gst.t_hpack; lvl_h2d += gst.t_h2d_batch;
+                lvl_check += gst.t_check; lvl_plan += gst.t_plan;
+                lvl_opcopy += gst.t_opcopy; lvl_hout += gst.t_hout;
+                lvl_total += gst.t_total_call;
+            }
             for (size_t s = 0; s < nbatch; ++s) {
                 const size_t i = g.second[s];
                 t[i].assign(res.begin() + (long)(s * nc * W), res.begin() + (long)((s + 1) * nc * W));
@@ -2446,8 +2477,12 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
             }
         }
         if (lvl_trace)
-            std::printf("tree_level: base=%llu groups=%llu muls=%llu t=%.3f s\n",
-                        (unsigned long long)base, lvl_groups, lvl_muls, now_s() - tl0);
+            std::printf("tree_level: base=%llu groups=%llu muls=%llu t=%.3f s | ntt total=%.3f "
+                        "fwd=%.3f inv=%.3f slot=%.3f hpack=%.3f h2d=%.3f check=%.3f plan=%.3f "
+                        "opcopy=%.3f hout=%.3f\n",
+                        (unsigned long long)base, lvl_groups, lvl_muls, now_s() - tl0, lvl_total,
+                        lvl_fwd, lvl_inv, lvl_slot, lvl_hpack, lvl_h2d, lvl_check, lvl_plan,
+                        lvl_opcopy, lvl_hout);
         if (base == 1) break;
     }
     return t;

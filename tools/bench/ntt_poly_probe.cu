@@ -2423,6 +2423,9 @@ struct NttMulStats {
        arena's scratch (section 34) */
     double t_plan = 0.0, t_opcopy = 0.0;
     double t_hout = 0.0;
+    /* the WHOLE call's wall time (section 27): the tree's per-level floor is whatever is left once
+       the parts below are subtracted, so the total has to be reported next to them */
+    double t_total_call = 0.0;
     unsigned long long carry_residual = 0, carry_max_bits = 0;
     int fuse_t = 0, fuse_nms = 0, fuse_ms[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     bool exact_valid = false;
