@@ -1764,6 +1764,28 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
     std::vector<unsigned long long> dig((size_t)(cases * slot_words), 0),
                                     got((size_t)(cases * R.w), 0);
     uint64_t s = 0x243f6a8885a308d3ull;
+    /* THE EXACT WINDOW THE S5 DESCENT FAILED ON (section 47): 0xfc861cfcb724b25400000001, the
+       one value for which the REDC invariant `r == V*2^-(64L) mod N` was measured to break, in
+       limb 0 only.  It is put in as a CASE so that "the same shape passes on synthetic values and
+       fails on the real one" stops being a paradox and becomes a one-second reproduction. */
+    const bool have_real_case = (S->slot_bits == 259ull && bpw == 7 && slot_words == 37);
+    unsigned long long real_dig[64] = {0};
+    if (have_real_case) {
+        mpz_t v, two;
+        mpz_inits(v, two, nullptr);
+        mpz_set_str(v, "fc861cfcb724b25400000001", 16);
+        mpz_set_ui(two, 1);
+        mpz_mul_2exp(two, two, (unsigned)bpw);
+        for (unsigned long long j = 0; j < slot_words; ++j) {
+            mpz_t q;
+            mpz_init(q);
+            mpz_fdiv_qr(q, v, v, two);            /* v = q*2^bpw + (v mod 2^bpw) */
+            real_dig[j] = mpz_get_ui(v);
+            mpz_set(v, q);
+            mpz_clear(q);
+        }
+        mpz_clears(v, two, nullptr);
+    }
     for (unsigned long long c = 0; c < cases; ++c) {
         for (unsigned long long j = 0; j < slot_words; ++j) {
             s = s * 6364136223846793005ull + 1442695040888963407ull;
@@ -1781,6 +1803,8 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
                    case that was wrong was the one case not covered.  A test suite is only as
                    good as the shapes it contains. */
                 case 6: v = (j < (slot_words * 2ull) / 5ull) ? (s & maxd) : 0ull; break;
+                /* the recorded real failure (section 47) */
+                case 5: v = have_real_case ? real_dig[j] : (s & maxd); break;
                 default: v = s & maxd; break;
             }
             dig[(size_t)(c * slot_words + j)] = v;
@@ -3492,6 +3516,26 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
             char *s3 = mpz_get_str(nullptr, 16, wv);
             std::fprintf(stderr, "s5_reddump_row: k=%llu window=%s gmp=%s device=%s %s\n", k, s3,
                          s1, s2, (mpz_cmp(want, got) == 0) ? "MATCH" : "DIFFER");
+            /* THE REDC INVARIANT, FROM GMP (section 47): after L elimination steps the kernel's
+               r must be V * 2^-(64L) mod N, and `s5_kernel_view` prints the r it actually holds.
+               Printing the expectation here turns "the reduction is wrong" into "the elimination
+               is wrong" or "the tail mont_mul is wrong" without a second run. */
+            {
+                mpz_t rexp, t;
+                mpz_inits(rexp, t, nullptr);
+                mpz_set_ui(t, 1);
+                mpz_mul_2exp(t, t, (mp_bitcnt_t)(64 * S->L));
+                mpz_invert(t, t, D.red->N);
+                mpz_mul(rexp, wv, t);
+                mpz_mod(rexp, rexp, D.red->N);
+                char *sr = mpz_get_str(nullptr, 16, rexp);
+                std::fprintf(stderr, "s5_reddump_rexp: k=%llu L=%llu rexp=%s\n", k,
+                             (unsigned long long)S->L, sr);
+                void (*ff)(void *, size_t) = nullptr;
+                mp_get_memory_functions(nullptr, nullptr, &ff);
+                ff(sr, std::strlen(sr) + 1);
+                mpz_clears(rexp, t, nullptr);
+            }
             void (*ff)(void *, size_t) = nullptr;
             mp_get_memory_functions(nullptr, nullptr, &ff);
             ff(s1, std::strlen(s1) + 1);
