@@ -343,19 +343,31 @@ static void words_to_mpz(mpz_t out, const unsigned long long *w, size_t W)
 
 /* mirror of stage2_tree_ref.cpp's affine_x for a point given as (X, Z):
    x = X/Z mod N, 0 for the identity, and the un-invertible case keeps X -- that is the
-   "Z shares a factor with N" case, which the reference passes through unchanged. */
-static void affine_x_gmp(mpz_t out, const mpz_t X, const mpz_t Z, const mpz_t N)
+   "Z shares a factor with N" case, which the reference passes through unchanged.
+
+   `_checked` returns false for that last case instead of hiding it (objective 3 / section 31.4):
+   gcd(Z, N) > 1 means the point is the IDENTITY modulo a factor of N -- i.e. exactly the hit
+   stage 2 is looking for -- and the host can then record that factor explicitly instead of
+   letting an arbitrary representative X become a leaf of the giant product. */
+static bool affine_x_gmp_checked(mpz_t out, const mpz_t X, const mpz_t Z, const mpz_t N)
 {
-    if (mpz_cmp_ui(Z, 0) == 0) { mpz_set_ui(out, 0); return; }
+    if (mpz_cmp_ui(Z, 0) == 0) { mpz_set_ui(out, 0); return true; }
     mpz_t inv;
     mpz_init(inv);
-    if (mpz_invert(inv, Z, N) == 0) {
+    const bool ok = (mpz_invert(inv, Z, N) != 0);
+    if (!ok) {
         mpz_set(out, X);
     } else {
         mpz_mul(out, X, inv);
         mpz_mod(out, out, N);
     }
     mpz_clear(inv);
+    return ok;
+}
+
+static void affine_x_gmp(mpz_t out, const mpz_t X, const mpz_t Z, const mpz_t N)
+{
+    (void)affine_x_gmp_checked(out, X, Z, N);
 }
 
 /* ===================================================================================== *
@@ -5359,6 +5371,8 @@ struct BatchedRun {
        LADDER points the seeds cost (a chain needs two seeds per block, so this is the part of the
        phase that is not one-xADD-per-point -- section 31) */
     unsigned long long giant_chain_chunks = 0, giant_seed_points = 0;
+    /* objective 3: giant points whose Z shares a factor with N (the hit made explicit) */
+    unsigned long long giant_degenerate = 0;
     unsigned long long unnamed_hits = 0, cand_lists = 0;
     /* device-side bookkeeping, so the breakdown line reports measured work, not a guess */
     unsigned long long ladder_calls = 0, ladder_points = 0, prod_launches = 0;
@@ -5543,14 +5557,23 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         size_t bpad = 0;
         FTreeStats bs;
         {
-            mpz_t X, Z, ax, neg;
-            mpz_inits(X, Z, ax, neg, nullptr);
+            mpz_t X, Z, ax, neg, gq;
+            mpz_inits(X, Z, ax, neg, gq, nullptr);
             std::vector<unsigned long long> w(W, 0ull);
             for (size_t i = lo; i < hi; ++i) {
                 const size_t q = i - (clo - 1);        /* index inside this chunk */
                 words_to_mpz(X, &gx[q * W], W);
                 words_to_mpz(Z, &gz[q * W], W);
-                affine_x_gmp(ax, X, Z, L.N);
+                /* OBJECTIVE 3 (section 31.4, measured at rung 2): a GIANT point whose Z shares a
+                   factor with N is the identity modulo that factor -- the hit stage 2 is looking
+                   for, and the very thing that makes the chain "carry" a factor into the rest of
+                   its block.  Recording gcd(Z, N) here makes that explicit; it is deduplicated
+                   against the naming stage's factors and credited to no hit. */
+                if (!affine_x_gmp_checked(ax, X, Z, L.N)) {
+                    ++R.giant_degenerate;
+                    mpz_gcd(gq, Z, L.N);
+                    s3_record(R.tail, gq, 0, L.N, /*count_hit=*/false);
+                }
                 mpz_neg(neg, ax);
                 mpz_mod(neg, neg, L.N);               /* the leaf (X - x_i) = [ -x_i, 1 ] */
                 mpz_to_words(w, W, neg);
@@ -6300,19 +6323,36 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     std::vector<std::vector<unsigned long long>> Ft;
     std::vector<size_t> Fdeg;
     size_t Fpad = 0, fdeg = 0;
+    /* OBJECTIVE 3 (section 31.4): factors revealed by DEGENERATE BABY POINTS -- points whose Z
+       shares a factor with N, i.e. points that are the identity modulo that factor.  Collected
+       here (the batched run does not exist yet) and merged into the reported factor set below. */
+    std::vector<std::string> baby_deg;
     {
         const double t0 = now_s();
         std::vector<unsigned long long> bx, bz;
         ladder_points(C, baby_j, bx, bz);
         std::vector<std::vector<unsigned long long>> leaf(baby_j.size());
         {
-            mpz_t X, Z, xj, neg;
-            mpz_inits(X, Z, xj, neg, nullptr);
+            mpz_t X, Z, xj, neg, gq;
+            mpz_inits(X, Z, xj, neg, gq, nullptr);
             std::vector<unsigned long long> w(nw, 0ull);
+            unsigned long long noninv = 0;
             for (size_t i = 0; i < baby_j.size(); ++i) {
                 words_to_mpz(X, &bx[i * nw], nw);
                 words_to_mpz(Z, &bz[i * nw], nw);
-                affine_x_gmp(xj, X, Z, L.N);
+                /* OBJECTIVE 3 (section 31.4): a BABY point whose Z shares a factor with N is the
+                   identity modulo that factor -- i.e. a hit, not an accident.  Record the factor
+                   explicitly (prime = 0, no hit credited, exactly like the reference's unnamed
+                   record) instead of silently turning an arbitrary representative into a leaf. */
+                if (!affine_x_gmp_checked(xj, X, Z, L.N)) {
+                    ++noninv;
+                    mpz_gcd(gq, Z, L.N);
+                    char *gs = mpz_get_str(nullptr, 10, gq);
+                    baby_deg.push_back(gs);
+                    void (*ff)(void *, size_t) = nullptr;
+                    mp_get_memory_functions(nullptr, nullptr, &ff);
+                    ff(gs, std::strlen(gs) + 1);
+                }
                 mpz_neg(neg, xj);
                 mpz_mod(neg, neg, L.N);
                 mpz_to_words(w, nw, neg);
@@ -6320,7 +6360,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 std::copy(w.begin(), w.end(), leaf[i].begin());
                 leaf[i][nw] = 1;
             }
-            mpz_clears(X, Z, xj, neg, nullptr);
+            if (noninv)
+                std::printf("baby_degenerate: points=%llu of %llu have Z sharing a factor with N "
+                            "-> their gcd was recorded as a factor\n", noninv,
+                            (unsigned long long)baby_j.size());
+            mpz_clears(X, Z, xj, neg, gq, nullptr);
         }
         std::printf("ladder: baby_points=%llu (device x_j; there is no CPU reference at this "
                     "shape, see the report)\n", (unsigned long long)baby_j.size());
@@ -6374,6 +6418,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const unsigned long long pl0 = L.s4 ? L.s4->pack_launches : 0ull;
         const double t0 = now_s();
         BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad);
+        /* merge the factors that degenerate BABY points revealed (objective 3): each already
+           divides N by construction, and they are deduplicated against what the naming stage
+           found, so the reported fact set cannot change for a shape where the naming stage
+           already reaches them. */
+        for (const std::string &s : baby_deg)
+            if (std::find(BR.tail.factors.begin(), BR.tail.factors.end(), s) ==
+                BR.tail.factors.end())
+                BR.tail.factors.push_back(s);
         const double el = now_s() - t0;
         std::string fs2, ps2;
         for (size_t i = 0; i < BR.tail.factors.size(); ++i) { if (i) fs2 += ","; fs2 += BR.tail.factors[i]; }
@@ -6400,6 +6452,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::printf("real_giant_chain: chunks=%llu seed_points=%llu chunks_per_ladder=%llu\n",
                     BR.giant_chain_chunks, BR.giant_seed_points,
                     BR.giant_chain_chunks ? 0ull : 1ull);
+        /* objective 3: giant points that are the IDENTITY modulo a factor of N -- the hit made
+           explicit.  Their gcd(Z, N) was recorded as a factor (credited to no hit). */
+        std::printf("real_giant_degenerate: points=%llu\n", BR.giant_degenerate);
         std::printf("real_batched_breakdown: wall=%.2f ntt_calls=%llu ntt_launches=%llu "
                     "ntt_seconds=%.3f (%.1f%%) arena_mb=%.1f arena_overflow=%llu\n", el,
                     L.ntt_calls - nb, L.ntt_launches - nl, L.ntt_seconds - ns,
