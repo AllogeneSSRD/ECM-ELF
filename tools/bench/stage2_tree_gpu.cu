@@ -972,6 +972,10 @@ struct S4Ctx {
     size_t d_raw_cap = 0, d_pack_cap = 0;
     double t_h2d_raw = 0.0, t_packdev = 0.0;
     unsigned long long raw_words = 0, pack_launches = 0;
+    /* All S4 device-packed calls, including F-tree/inverse before the main-loop timers. */
+    unsigned long long input_direct = 0, input_copied = 0, input_d2d_bytes = 0;
+    unsigned long long input_avoided_bytes = 0, packed_peak_bytes = 0, temp_peak_bytes = 0;
+    double t_input_copy_host = 0.0;
     ~S4Ctx()
     {
         if (d_out) cudaFree(d_out);
@@ -1268,6 +1272,9 @@ static bool opt_off(const char *name)
 }
 static const bool g_s4_defer_carry = !opt_off("NTT_S4_DEFER_CARRY");
 static const bool g_s4_async = !opt_off("NTT_S4_ASYNC");
+/* Default direct-to-scratch: production removes 2 GiB of temporary inputs and 579 GiB of
+   D2D. The ~2% ABBA time gain is smaller than control drift, so speed remains unproven. */
+static const bool g_s4_pack_direct = !opt_off("NTT_S4_PACK_DIRECT");
 /* Same-binary candidate: accumulate identical interior chunks, check BEFORE the tail reset.
    Opt-in until production ABBA establishes a gain. */
 static const bool g_s4_carry_batch = [] {
@@ -2794,6 +2801,34 @@ static void s4_launch_pack_batch(const unsigned long long *src, int S, int bpw,
     CK(cudaGetLastError());
 }
 
+struct S4InputPack {
+    S4Ctx *C = nullptr;
+    unsigned long long P = 0, N = 0, slot_words = 0;
+    int S = 0, bpw = 0, W = 0;
+};
+
+static int s4_pack_final_input(void *ctx, const NttShape &sh, unsigned long long nbatch,
+                              unsigned long long *dA, unsigned long long *dB)
+{
+    const S4InputPack &p = *(const S4InputPack *)ctx;
+    /* The query that budgeted/padded raw operands MUST agree with the engine's actual plan. */
+    if (sh.P != p.P || sh.S != p.S || sh.N != p.N || sh.bpw != p.bpw ||
+        sh.slot_words != p.slot_words || sh.W != (unsigned long long)p.W) {
+        std::fprintf(stderr, "%s: S4 input pack shape disagrees with the NTT plan\n", NTT_PROBE_NAME);
+        return 3;
+    }
+    const double t0 = now_s();
+    const size_t bytes = (size_t)nbatch * sh.N * sizeof(unsigned long long);
+    /* Reused scratch contains spectra/previous outputs. Clear gaps, window tails and unused
+       coefficients on EVERY call, then overwrite the occupied digits with the original packer. */
+    CK(cudaMemsetAsync(dA, 0, bytes));
+    CK(cudaMemsetAsync(dB, 0, bytes));
+    s4_launch_pack_batch(p.C->d_rawA, p.S, p.bpw, p.slot_words, p.N, nbatch, p.P, p.W, dA);
+    s4_launch_pack_batch(p.C->d_rawB, p.S, p.bpw, p.slot_words, p.N, nbatch, p.P, p.W, dB);
+    p.C->t_packdev += now_s() - t0;   /* host enqueue time, never a pipeline drain */
+    return 0;
+}
+
 /* ===================================================================================== *
  *  SLICE S4 (A) -- THE BATCHED MULTIPLY OF ONE SHAPE, WITH THE DEVICE REDUCTION
  *
@@ -3023,16 +3058,26 @@ static void poly_mul_batch_modN(PolyLayer &L,
             }
             /* 2. ... packed into digits ON the device (both operands, one launch each) ... */
             const size_t pack_words = (size_t)m * (size_t)qN;
-            if (pack_words > C.d_pack_cap) {
+            if (!g_s4_pack_direct && pack_words > C.d_pack_cap) {
                 if (C.d_packA) { cudaFree(C.d_packA); cudaFree(C.d_packB); C.d_packA = C.d_packB = nullptr; }
                 CK(cudaMalloc(&C.d_packA, pack_words * sizeof(unsigned long long)));
                 CK(cudaMalloc(&C.d_packB, pack_words * sizeof(unsigned long long)));
                 C.d_pack_cap = pack_words;
+                C.temp_peak_bytes = std::max(C.temp_peak_bytes, 16ull * C.d_pack_cap);
             }
-            CK(cudaMemset(C.d_packA, 0, pack_words * sizeof(unsigned long long)));
-            CK(cudaMemset(C.d_packB, 0, pack_words * sizeof(unsigned long long)));
-            s4_launch_pack_batch(C.d_rawA, (int)L.S, qbpw, qsw, qN, m, P, (int)W, C.d_packA);
-            s4_launch_pack_batch(C.d_rawB, (int)L.S, qbpw, qsw, qN, m, P, (int)W, C.d_packB);
+            C.packed_peak_bytes = std::max(C.packed_peak_bytes, 16ull * pack_words);
+            S4InputPack pack{&C, (unsigned long long)P, qN, qsw, (int)L.S, qbpw, (int)W};
+            NttInputHook input{&pack, s4_pack_final_input};
+            const double tp0 = C.t_packdev;
+            if (!g_s4_pack_direct) {
+                /* Control: identical digits go through the retained temporary buffers + D2D. */
+                CK(cudaMemset(C.d_packA, 0, pack_words * sizeof(unsigned long long)));
+                CK(cudaMemset(C.d_packB, 0, pack_words * sizeof(unsigned long long)));
+                const double tpack0 = now_s();
+                s4_launch_pack_batch(C.d_rawA, (int)L.S, qbpw, qsw, qN, m, P, (int)W, C.d_packA);
+                s4_launch_pack_batch(C.d_rawB, (int)L.S, qbpw, qsw, qN, m, P, (int)W, C.d_packB);
+                C.t_packdev += now_s() - tpack0;
+            }
             C.t_h2d_raw += now_s() - th0;
             C.raw_words += (unsigned long long)raw_words * 2;
             C.pack_launches += 2;
@@ -3040,7 +3085,16 @@ static void poly_mul_batch_modN(PolyLayer &L,
                the same exactness assertions, the same reduction hook) */
             NttMulStats nst{};
             r1 = ntt_poly_mul_batch_dev(P, (int)L.S, L.device, m, C.d_packA, C.d_packB, &nst,
-                                        L.arena, &h2, nullptr, qbpw, defer_this);
+                                        L.arena, &h2, nullptr, qbpw, defer_this,
+                                        g_s4_pack_direct ? &input : nullptr);
+            /* Keep rawupload's historical upload+packing host total comparable. The direct
+               pack is queued INSIDE the engine, so add just its own enqueue time here. */
+            if (g_s4_pack_direct) C.t_h2d_raw += C.t_packdev - tp0;
+            if (r1 == 0) {
+                if (g_s4_pack_direct) { ++C.input_direct; C.input_avoided_bytes += 16ull * pack_words; }
+                else { ++C.input_copied; C.input_d2d_bytes += 16ull * pack_words; }
+                C.t_input_copy_host += nst.t_opcopy;
+            }
             st = nst;                     /* the caller's stats are the dev path's */
             if (defer_this) {
                 carry_pending = true; carry_pending_m = m; ++carry_pending_chunks;
@@ -8898,6 +8952,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                         g_defer_checked_chunks, g_defer_max_group);
             std::printf("real_batched_carrytrace: enabled=%d words=%llu signature=%016llx\n",
                         (int)g_s4_carry_trace, g_carry_output_words, g_carry_output_hash);
+            if (L.s4) std::printf("real_batched_input: direct_enabled=%d direct_chunks=%llu copied_chunks=%llu "
+                        "d2d_bytes=%llu avoided_bytes=%llu packed_peak_bytes=%llu "
+                        "temp_peak_bytes=%llu temp_current_bytes=%llu pack_host=%.6f copy_host=%.6f "
+                        "(all S4 device-packed calls)\n",
+                        (int)g_s4_pack_direct, L.s4->input_direct, L.s4->input_copied,
+                        L.s4->input_d2d_bytes, L.s4->input_avoided_bytes, L.s4->packed_peak_bytes,
+                        L.s4->temp_peak_bytes, 16ull * L.s4->d_pack_cap,
+                        L.s4->t_packdev, L.s4->t_input_copy_host);
             std::printf("real_batched_carrytime: group_readback=%.6f chunk_readback=%.6f "
                         "total=%.6f (all S4 calls, each readback charged once)\n",
                         g_carry_group_readback, g_carry_chunk_readback,

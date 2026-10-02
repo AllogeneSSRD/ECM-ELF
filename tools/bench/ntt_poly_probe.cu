@@ -3158,6 +3158,16 @@ struct NttReduceHook {
     unsigned long long sample = 0;
 };
 
+/* Populate the engine's FINAL scratch after shape planning and buffer lookup. The callback
+   queues writes on the same default stream as the passes, including ALL padding digits.
+   It must not allocate/evict arena entries or retain these pointers after the call. Works
+   with owned fallback scratch too; the caller never needs to cache an arena pointer. */
+struct NttInputHook {
+    void *ctx = nullptr;
+    int (*run)(void *ctx, const NttShape &shape, unsigned long long nbatch,
+               unsigned long long *dA, unsigned long long *dB) = nullptr;
+};
+
 /* the batched multiply.  Same shape plan, same packing, same passes as ntt_poly_mul_host --
    the differences are (a) nbatch slices per launch, (b) an optional device post-reduction,
    (c) no host exact extraction (the hook replaces it).  Returns 0 or a refusal code. */
@@ -3316,8 +3326,8 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
    the caller owns its layout and packs on the device -- and runs the very same shape plan,
    the very same passes, the very same carry and the very same exactness assertions.  It only
    writes the reduced coefficients where the hook says, or the raw digit buffer.
-   `dA`/`dB` are nbatch*N digits each; when `in_place` is false they are copied into the
-   arena's buffers first (the arena's dA/dB are the only scratch the passes use).
+   `dAin`/`dBin` are nbatch*N digits each and copied into engine scratch. Alternatively,
+   `input` populates that scratch after planning/lookup; then both input pointers may be null.
 
    `force_bpw` (default 0 = auto) is passed straight through to the shape plan.  The caller packs
    the operands itself, so when it needs slot_stride == slot_bits (one reduction window per
@@ -3328,7 +3338,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
                            const unsigned long long *dAin, const unsigned long long *dBin,
                            NttMulStats *st, NttArena *arena, const NttReduceHook *hook,
                            unsigned long long **digits_out = nullptr, int force_bpw = 0,
-                           bool defer_carry = false)
+                           bool defer_carry = false, const NttInputHook *input = nullptr)
 {
     if (nbatch == 0) {
         std::fprintf(stderr, NTT_PROBE_NAME ": batch of zero slices\n");
@@ -3363,11 +3373,21 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         CK(cudaMalloc(&dRes, 2 * (size_t)nbatch * sizeof(unsigned long long)));
     }
     const double tcopy0 = now_s();
-    CK(cudaMemcpy(dA, dAin, (size_t)N * nbatch * sizeof(unsigned long long),
-                  cudaMemcpyDeviceToDevice));
-    CK(cudaMemcpy(dB, dBin, (size_t)N * nbatch * sizeof(unsigned long long),
-                  cudaMemcpyDeviceToDevice));
-    const double t_copy = now_s() - tcopy0;
+    if (input) {
+        const int rc = input->run ? input->run(input->ctx, sh, nbatch, dA, dB) : 2;
+        if (rc) {
+            if (!arena) fuse_release(fc);
+            if (own) { cudaFree(dA); cudaFree(dB); cudaFree(dQ); cudaFree(dOut); cudaFree(dRes); }
+            return rc;
+        }
+        CK(cudaGetLastError());
+    } else {
+        CK(cudaMemcpy(dA, dAin, (size_t)N * nbatch * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToDevice));
+        CK(cudaMemcpy(dB, dBin, (size_t)N * nbatch * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToDevice));
+    }
+    const double t_copy = input ? 0.0 : now_s() - tcopy0;
     const unsigned long long max_y = 65535;
     const unsigned long long nchunk = (nbatch + max_y - 1) / max_y;
     /* with a reduction hook the caller never reads the slot projections, so the assembly kernel

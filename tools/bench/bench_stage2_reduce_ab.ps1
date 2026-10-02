@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Same-binary ABBA benchmark of reduction, sampling oracle or accumulated carry checks.
+    Same-binary ABBA benchmark of reduction, sampling oracle, carry checks or direct packing.
 .DESCRIPTION
     Defaults to the production shape in DEV_GPUOWL_NTT_NOTES.md section 32.  Writes a log
     for each run, provenance.json and results.csv.  The mode, GMP checks, factors/hit primes,
@@ -16,7 +16,7 @@ param(
     [UInt64]$D = 1231230,
     [int]$Sigma = 26,
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct')][string]$Target = 'reduction',
     [string]$Output = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -33,12 +33,13 @@ $order = @('montgomery', 'division', 'division', 'montgomery')
 if ($Target -eq 'oracle') { $order = @('blocking', 'oracle_async', 'oracle_async', 'blocking') }
 if ($Target -eq 'oracle_pack') { $order = @('gmp_digits', 'limb_pack', 'limb_pack', 'gmp_digits') }
 if ($Target -eq 'carry_batch') { $order = @('carry_per_chunk', 'carry_batch', 'carry_batch', 'carry_per_chunk') }
+if ($Target -eq 'pack_direct') { $order = @('pack_copy', 'pack_direct', 'pack_direct', 'pack_copy') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB='32'; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
                 NTT_S4_ORACLE_TEST_BAD='0'; NTT_S4_SAMPLE='96'; NTT_S4_CHECK_EVERY='8';
                 NTT_S4_CARRY_BATCH='0'; NTT_S4_CHUNK_MAX='0'; NTT_S4_CARRY_TEST_BAD='0';
-                NTT_S4_CARRY_TRACE='0' }
+                NTT_S4_CARRY_TRACE='0'; NTT_S4_PACK_DIRECT='1' }
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
 $modeControls = @(foreach ($mode in $order) {
@@ -46,7 +47,8 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_S4_OLDTAIL=$(if ($mode -eq 'montgomery') { '1' } else { '0' });
         NTT_S4_ORACLE_ASYNC=$(if ($mode -eq 'oracle_async') { '1' } else { '0' });
         NTT_S4_ORACLE_PACK=$(if ($mode -eq 'gmp_digits') { '0' } else { '1' });
-        NTT_S4_CARRY_BATCH=$(if ($mode -eq 'carry_batch') { '1' } else { '0' }) }
+        NTT_S4_CARRY_BATCH=$(if ($mode -eq 'carry_batch') { '1' } else { '0' });
+        NTT_S4_PACK_DIRECT=$(if ($Target -eq 'pack_direct' -and $mode -eq 'pack_copy') { '0' } else { '1' }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
    mode_controls=$modeControls; started=(Get-Date -Format o); head=(& git rev-parse HEAD) } |
@@ -60,10 +62,12 @@ try {
         $oracleAsync = $(if ($mode -eq 'oracle_async') { '1' } else { '0' })
         $oraclePack = $(if ($mode -eq 'gmp_digits') { '0' } else { '1' })
         $carryBatch = $(if ($mode -eq 'carry_batch') { '1' } else { '0' })
+        $packDirect = $(if ($Target -eq 'pack_direct' -and $mode -eq 'pack_copy') { '0' } else { '1' })
         $env:NTT_S4_OLDTAIL = $(if ($algorithm -eq 'montgomery') { '1' } else { '0' })
         $env:NTT_S4_ORACLE_ASYNC = $oracleAsync
         $env:NTT_S4_ORACLE_PACK = $oraclePack
         $env:NTT_S4_CARRY_BATCH = $carryBatch
+        $env:NTT_S4_PACK_DIRECT = $packDirect
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -88,6 +92,7 @@ try {
         $backVolume = [regex]::Match($text, 'real_batched_coeffback:.*?total=([0-9.]+) s volume=([0-9.]+) GB')
         $carryTime = [regex]::Match($text, 'real_batched_carrysplit:.*?d2h=([0-9.]+) s')
         $carryLedger = [regex]::Match($text, 'real_batched_carrytime: group_readback=([0-9.]+) chunk_readback=([0-9.]+) total=([0-9.]+)')
+        $inputPack = [regex]::Match($text, 'real_batched_input: direct_enabled=(\d+) direct_chunks=(\d+) copied_chunks=(\d+) d2d_bytes=(\d+) avoided_bytes=(\d+) packed_peak_bytes=(\d+) temp_peak_bytes=(\d+) temp_current_bytes=(\d+) pack_host=([0-9.]+) copy_host=([0-9.]+)')
         $oracleLine = [regex]::Match($text, '(?m)^s4_oracle_stats:.*').Value
         $oracle = @{}
         foreach ($field in @('async','selected','queued','compared','samples','pending','ring_waits',
@@ -126,6 +131,18 @@ try {
             ([long]$carry.Groups[6].Value -gt 1 -and $carry.Groups[1].Value -eq $carry.Groups[2].Value)) {
             throw "carry/staging validation failed; inspect $log"
         }
+        if (-not $inputPack.Success -or $inputPack.Groups[1].Value -ne $packDirect -or
+            [UInt64]$inputPack.Groups[6].Value -eq 0 -or
+            ($packDirect -eq '1' -and ($inputPack.Groups[3].Value -ne '0' -or
+                $inputPack.Groups[4].Value -ne '0' -or $inputPack.Groups[7].Value -ne '0' -or
+                $inputPack.Groups[8].Value -ne '0' -or [long]$inputPack.Groups[2].Value -le 0 -or
+                [UInt64]$inputPack.Groups[5].Value -eq 0 -or [double]$inputPack.Groups[10].Value -ne 0)) -or
+            ($packDirect -eq '0' -and ($inputPack.Groups[2].Value -ne '0' -or
+                $inputPack.Groups[5].Value -ne '0' -or [long]$inputPack.Groups[3].Value -le 0 -or
+                [UInt64]$inputPack.Groups[4].Value -eq 0 -or
+                $inputPack.Groups[6].Value -ne $inputPack.Groups[7].Value))) {
+            throw "input pack validation failed; inspect $log"
+        }
         $row = [pscustomobject]@{ run=$i+1; mode=$mode; elapsed=[double]$stage.Groups[5].Value;
             wall=[math]::Round($sw.Elapsed.TotalSeconds,3); t_reduce=[double]$reduce.Groups[2].Value;
             coeffs=[UInt64]$reduce.Groups[1].Value; hits=$stage.Groups[1].Value;
@@ -146,7 +163,12 @@ try {
             carry_d2h=[double]$carryTime.Groups[1].Value;
             carry_group_readback=[double]$carryLedger.Groups[1].Value;
             carry_chunk_readback=[double]$carryLedger.Groups[2].Value;
-            carry_total_readback=[double]$carryLedger.Groups[3].Value }
+            carry_total_readback=[double]$carryLedger.Groups[3].Value;
+            pack_direct=$packDirect; direct_chunks=$inputPack.Groups[2].Value;
+            copied_chunks=$inputPack.Groups[3].Value; d2d_bytes=$inputPack.Groups[4].Value;
+            avoided_bytes=$inputPack.Groups[5].Value; packed_peak_bytes=$inputPack.Groups[6].Value;
+            temp_peak_bytes=$inputPack.Groups[7].Value; temp_current_bytes=$inputPack.Groups[8].Value;
+            input_pack_host=[double]$inputPack.Groups[9].Value; input_copy_host=[double]$inputPack.Groups[10].Value }
         if ($rows.Count -gt 0 -and ($row.coeffs -ne $rows[0].coeffs -or $row.factors -ne $rows[0].factors -or
             $row.hit_primes -ne $rows[0].hit_primes -or $row.hits -ne $rows[0].hits -or
             $row.oracle_samples -ne $rows[0].oracle_samples -or $row.oracle_jobs -ne $rows[0].oracle_jobs -or
@@ -156,6 +178,14 @@ try {
             $row.h2d_gib -ne $rows[0].h2d_gib -or $row.d2h_gib -ne $rows[0].d2h_gib -or
             $row.pack_launches -ne $rows[0].pack_launches)) {
             throw "A/B results or coefficient count changed; inspect $log"
+        }
+        if ($rows.Count -gt 0 -and
+            ([UInt64]$row.d2d_bytes+[UInt64]$row.avoided_bytes -ne
+             [UInt64]$rows[0].d2d_bytes+[UInt64]$rows[0].avoided_bytes -or
+             [long]$row.direct_chunks+[long]$row.copied_chunks -ne
+             [long]$rows[0].direct_chunks+[long]$rows[0].copied_chunks -or
+             $row.packed_peak_bytes -ne $rows[0].packed_peak_bytes)) {
+            throw "A/B packed input workload changed; inspect $log"
         }
         $rows += $row
         $rows | Export-Csv -LiteralPath (Join-Path $Output 'results.csv') -NoTypeInformation -Encoding UTF8
@@ -182,6 +212,11 @@ try {
                 ($new | Measure-Object carry_finishes -Average).Average,
                 ($old | Measure-Object carry_checked -Average).Average,
                 ($new | Measure-Object carry_checked -Average).Average)
+    Write-Host ("packed input D2D: {0:F3} -> {1:F3} GiB; temporary device inputs: {2:F1} -> {3:F1} MiB" -f
+                (($old | Measure-Object d2d_bytes -Average).Average / 1GB),
+                (($new | Measure-Object d2d_bytes -Average).Average / 1GB),
+                (($old | Measure-Object temp_peak_bytes -Average).Average / 1MB),
+                (($new | Measure-Object temp_peak_bytes -Average).Average / 1MB))
 } finally {
     foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
 }

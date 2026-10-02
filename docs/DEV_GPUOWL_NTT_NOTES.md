@@ -1634,3 +1634,204 @@ packed buffers，[ntt_poly_probe.cu:3366](D:/code/MPA-OpenCl/tools/bench/ntt_pol
 不会因 plan/table allocation 或 eviction 失效。保留旧临时输入路径作同二进制对照，记录省掉的 D2D 字节、
 临时 input peak、arena overflow，以及 naming 阶段可用显存；用本轮完整 output signature 和 GMP 门禁验证。
 在这一步缩小峰值之后，再预算固定 F/finv 的 spectra 缓存与 sibling 变换复用。
+
+## 36. S4 pack 直接写入最终 NTT scratch：删除 packed 输入副本（2026-10-02）
+
+### 36.1 起点、假设与实现边界
+
+本轮从用户已提交的 `879f3d8`（跨 chunk 批量 carry 检查）继续，工作树起始干净。
+沿用 §35 的规划：原 S4 上传 raw coefficients，先 pack 到 `C.d_packA/B`，然后
+`ntt_poly_mul_batch_dev` 用两次 D2D 将 packed digits 搬到实际 forward 使用的 `dA/dB`。
+旧流程的两份临时 packed 输入会与 arena scratch、twiddle tables 同时占用显存。
+这里的目标是删除这两份**设备端中间副本**；原 raw H2D、结果 D2H、host 多项式树布局仍然存在。
+
+验证假设按优先级排列：
+
+1. 若 packed 中间副本的拷贝/分配构成开销，直接写入应使 S4 input D2D 字节和临时 packed 分配归零。
+2. 若临时输入挤占缓存和后续 naming 所需显存，删除后应改善实际可用显存或相关阶段时间。
+3. 若 host 准备、oracle 和回读才是主要瓶颈，第一项即使成立，也不保证总墙钟或 GPU busy time 提升。
+
+实现增加 `NttInputHook`：engine **先**完成 `ntt_shape_plan` 和 `ntt_arena_bufs`，取得最终 scratch，
+**再**调用输入回调，随后进入原 NTT passes/carry/reduction。回调不能分配/驱逐 arena entry，不能跨调用保存
+scratch 指针；当 arena cache 拒绝当前形状时，同一个回调也可以填充 engine 自己分配的 fallback scratch。
+所有写入使用原 default stream，upload → zero → pack → forward 保持顺序。
+
+`s4_pack_final_input` 核对 query 与实际 plan 的 P/S/N/bpw/slot_words/W 一致，
+每一调用均清零完整 `nbatch*N` digits，再用原 `s4_pack_batch_kernel` 写 occupied digits。
+清零不能省略：复用的 scratch 中可能保留上一调用 spectra、不同 operand 长度及 shape 的数据。
+padding、window tails 和未使用 coefficients 必须保持零；没有改 NTT、carry 或 mod-N 算术 kernel。
+
+`NTT_S4_PACK_DIRECT=0/1` 在同一二进制选择原临时 pack+copy / 最终 scratch pack。
+初始候选默认 0；完成生产验证后，基于确定的显存收益改为默认 1，保留 0 作对照。
+`NTT_S4_HOSTPACK=1` 仍走原 host-packing 入口。
+carry batch、oracle async、chunk cap 都是独立开关，本轮生产对照只改变 PACK_DIRECT。
+
+### 36.2 观测口径与门禁
+
+新增 `real_batched_input` 的统计范围是**全程所有 S4 device-packed 调用**，包括 F-tree 和 inverse；
+不是 `real_batched_rawupload/coeffback/devpath` 的 main Stage2 时间窗口，不能将其 host 时间重复相加。
+
+- `direct_chunks/copied_chunks`：成功执行的 direct / 中间副本 chunk 数。
+- `d2d_bytes/avoided_bytes`：两份 packed operands 的实际 / 被消除的逻辑 D2D 字节数（每 chunk 为 `16*N*m`）。
+- `packed_peak_bytes`：任一 chunk 两份 packed 输入的最大逻辑大小，两条路径应相同。
+- `temp_peak_bytes/temp_current_bytes`：S4 临时 `d_packA/B` pool 的峰值/保留容量；direct 路径均应为 0。
+  这不是整卡显存峰值，arena 可能利用释放的空间缓存更多 shape，整卡变化另外观察。
+- `pack_host/copy_host`：host enqueue/API wall time，不是 CUDA kernel/拷贝 event 时间。
+  control 的 pack_host 只记两个 pack launch，direct 含两个 memsetAsync 和两个 pack launch；不据此比较 pack kernel 效率。
+
+gate [18] 以 129-bit frozen-factor、D=1231230、chunk cap=64 比较 copy、direct、direct+carry batch、
+direct+blocking transfers，核对全体返回 word 的指纹、已知因子/hit set、GMP sample jobs/positions，
+并要求 direct 的 D2D 和临时 packed pool 真正归零。
+另用小 shape 的 `NTT_ARENA_CAP_KB=1` 强制 owned-scratch fallback（关闭 deferral），
+及 host-packing 兼容路径核对全输出指纹。指纹是 64-bit 差分检查，不是无碰撞的数学证明；GMP/known factor 门禁同时保留。
+
+源码定位（本轮工作树）：
+
+- [ntt_poly_probe.cu:3165](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3165)：输入回调契约。
+- [同文件:3341](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3341)：可选 input 参数，旧调用者默认不受影响。
+- [同文件:3376](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3376)：最终 scratch lookup 后调用回调，替代两次 D2D。
+- [stage2_tree_gpu.cu:2810](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2810)：plan 核对、完整 zero 和原 pack kernel。
+- [同文件:3061](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3061)：direct 不分配临时 packed pool。
+- [同文件:3089](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3089)：S4 接入，统计实际/避免的 input D2D。
+- [同文件:8955](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8955)：全程 input ledger。
+- [test_stage2_tree_gpu.ps1:632](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:632)：gate [18]。
+- [bench_stage2_reduce_ab.ps1:144](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:144)：生产验证零副本路径确实执行。
+
+首次 CUDA 构建 compile **324.1 s** / link **4.3 s**，exit=0；测量二进制 SHA256
+`7D807B269BF6029062653E18A53BD92A2BADBF3694D970FA12F9BB0649B2E737`。
+首次完整 gate **85 passed / 1 failed**，失败是检查脚本误报：PowerShell 默认不区分大小写，
+新增的 `-notmatch 'MISMATCH'` 把正常 `mismatches=0` 当错误。改为 `-cnotmatch`，继续捕获真正的大写错误标志。
+复现日志中 copy/direct 都为 selected=compared=1477、samples=7072、signature=`47d69a40700ba2c1`，
+GMP/slot canonical 错误均为 0；所有四条路径的全输出指纹检查也已通过。
+证据：[初次 gate](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_gate_initial.log)、
+[copy fixture](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_copy_fixture.log)、
+[direct fixture](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_fixture.log)。
+
+脚本修正后，测量二进制完整门禁 **86 passed / 0 failed**（原 77 项 + gate [18] 9 项），
+[修正后 gate](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_gate_corrected.log)。
+同一二进制的新 runner 四轮 64-bit smoke 通过（每轮 610 coefficients），
+[smoke CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_smoke_initial/results.csv)。
+smoke 只验执行路径/解析/计数，不用其毫秒级时间估算性能。
+
+### 36.3 固定生产形状、同一二进制 ABBA
+
+运行方式：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench/bench_stage2_reduce_ab.ps1 `
+    -Target pack_direct -Output build_cuda_cmake/_pack_direct_ab_20261002
+```
+
+固定 NHex=`1` + 1315 个 `f`（5261-bit）、sigma=26、B1=1000、B2=1.94e12、D=1231230、
+device=1（RTX 4060 Laptop 8 GB），PACK_DIRECT=0/1/1/0。
+固定 BATCH_MB=32、OLDTAIL=0、DEFER_CARRY=1、CARRY_BATCH=0、ASYNC=1、HOSTPACK=0、S5_ON=0、
+ORACLE_PACK=1、ORACLE_ASYNC=0、SAMPLE=96、CHECK_EVERY=8，chunk cap/fault injection/full-output trace 均为 0。
+每轮校验二进制 SHA 不变；oracle jobs/samples/positions、factor/hit set、raw/result 传输量、chunk 工作量均须一致。
+生产 trace 关闭，完整输出指纹使用 §36.2 的小形状门禁，不为指纹加一次生产 host 全量扫描。
+
+证据目录：[生产 ABBA](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_ab_20261002/results.csv)、
+[provenance](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_ab_20261002/provenance.json)。
+
+四轮结果（Stage2 / 完整进程墙钟 / reduction kernel）：
+
+- A1 copy：**233.88 / 271.239 / 21.748 s**。
+- B1 direct：**223.66 / 260.361 / 21.737 s**。
+- B2 direct：**221.57 / 256.914 / 21.900 s**。
+- A2 copy：**220.35 / 255.247 / 21.647 s**。
+
+Stage2 均值 **227.115 → 222.615 s（-1.98%，4.500 s）**；完整墙钟
+**263.243 → 258.638 s（-1.75%）**。control 内部差 **13.53 s**，direct 内部差 **2.09 s**，
+最后一轮 control 比两轮 direct 都快。因此这四轮**未证明可重复的速度收益**，不能按 2% 对生产收益作承诺。
+归约 kernel 均值 **21.698 → 21.819 s（+0.56%）**，本轮没有减少归约算法工作量。
+
+确定、每轮重复的资源收益：
+
+- 全程 **23,415** 个 S4 device-packed chunks；copy 每轮的两份 input D2D 合计
+  **621,800,292,352 bytes = 579.0968 GiB**，direct 每轮 **0 bytes**，avoided ledger 与 control 完全相等。
+- 最大 packed operands 的逻辑大小均为 **2,147,483,648 bytes = 2 GiB**；
+  临时 pool 峰值和保留容量从 **2 GiB → 0**，arena 本身仍为 **5779.0 MiB**，overflow=0。
+- carry deferred=checked=finishes=**22,175**，deferred slices=**2,548,522**，max group=1；没有借用累计 carry 的改变。
+- raw/out async 均为 **23,415**，fallback=0，raw staging reuse waits=0，host pinned raw 容量 **152,986,928 bytes**。
+- main Stage2 打印 raw H2D **38.81 GiB**、result D2H **37.27 GiB**，pack launches=**44,942**，四轮相同。
+  省去的是 packed input D2D；这些 PCIe 数据量未改变。
+- reduce coefficients=**62,385,796**，factor=**42089**，hit prime=**3511**，hits=1。
+  oracle selected=compared=**2941**，samples=**167,021**，positions signature=`2f6b299f92a780ca`，pending=0；
+  GMP/selftest/canonical/bogus-factor 错误均为 0。
+
+host 分项均值：rawupload（含 packing enqueue）**7.315 → 7.100 s**，coeffback **4.324 → 4.257 s**，
+全程 oracle host **13.143 → 12.894 s**（wait **10.958 → 10.685 s**，GMP **1.319 → 1.370 s**）。
+carry readback 全程 ledger **71.833 → 70.505 s**；该项是 barrier/API 墙钟，包括等此前 GPU 工作完成，
+不能当成计数器字节的物理传输时间，也不能再与 kernel 时间相加。
+全程 input copy_host **1.082 → 0 s**；pack_host **0.963 → 2.317 s** 的口径差异见 §36.2。
+旧 `real_batched_devpath` 来自每个 multi-chunk 调用最后覆盖的 `st`，不完整累计各 chunk 的 opcopy；
+因此本轮用新增的 input ledger 核对全部拷贝及其 API 时间。
+
+### 36.4 GPU-Z：显存下降得到旁证，空闲尚未改善
+
+新增 sensor 分析字段：分阶段显存均值/采样峰值、memory controller load 和 bus interface load，
+[analyze_stage2_gpuz.ps1:72](D:/code/MPA-OpenCl/tools/bench/analyze_stage2_gpuz.ps1:72)。
+结果：[完整 sensor/phase summary](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_ab_20261002/gpuz/summary.json)、
+[按样本数加权的均值](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_ab_20261002/analysis_summary.json)。
+
+主循环（giant/G-tree/fold）A1/B1/B2/A2：
+
+- 样本数 **146 / 140 / 142 / 139**，GPU Load 均值 **57.397 / 54.064 / 57.014 / 57.763%**。
+- ≤5% low-load 样本 **19 / 21 / 22 / 21**。
+- 显存采样峰值 **8063 / 6015 / 6015 / 8063 MB**；两次 direct 均比相应 control 少 **2048 MB**。
+- GPU clock 均值 **1773.699 / 1774.071 / 1769.472 / 1793.741 MHz**，
+  CPU temperature 均值 **70.399 / 71.184 / 72.426 / 71.777°C**。
+
+按样本加权，主循环 GPU Load **57.576 → 55.549%**，后处理（descent/accum/naming）
+**46.275 → 46.504%**，未观察到 GPU busy time 的改善；主循环平均显存
+**7407 → 5340 MB**，memory controller load **20.035 → 17.302%**，bus interface load **3.544 → 3.340%**。
+这些采样不能区分每个空档是 host 准备、同步、调度还是传输，也不能将 bus 指标当作精确 PCIe 带宽。
+
+descent_begin 打印的 last_state 在两次 control 均为 device free=**0 MB**，direct 均为 **1998 MB**。
+这来自最近 giant ladder chunk 的 snapshot，**不是** descent 全程最小值，也不是 naming 入口的精确读数。
+其 host private commit charge 为 control **10708/10702 MB**、direct **8656/8667 MB**；
+该字段来自 `PagefileUsage`，不能称为物理 RAM 峰值。
+
+GPU-Z header 未记录设备 ID；采样时序、时钟和显存变化与 GPU1 匹配，设备归属仍属推断。
+四轮有实际起止 timestamp，run_time_inferred=false；阶段边界由 wall timers 推算，约 1 Hz 采样只给出采样峰值。
+文件全局均值包含此前空闲/其他实验，不能用来代表本轮生产占用率。
+
+### 36.5 最终验收与默认
+
+基于重复验证的 **2 GiB 显存**和 **579 GiB D2D** 收益，最终 `NTT_S4_PACK_DIRECT` **默认 1**；
+设置 `NTT_S4_PACK_DIRECT=0` 即恢复临时 packed inputs + D2D。
+保留 carry batch=0、oracle async=0、limb oracle=1、32 MB chunk 的现有默认。
+这次默认变更依据资源收益，速度提升仍需更多生产对照验证。
+
+最终 CUDA 构建 compile **276.9 s** / link **2.9 s**，exit=0；最终二进制 SHA256
+`1ADA3E0EEC7F09B23127396EF77F66369EC80A53C516C049D8BA197D84EB163F`。
+默认开启 direct 后的完整门禁再次 **86 passed / 0 failed**，
+[最终 gate](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_gate_final.log)。
+最终 runner 四轮 `pack_direct` smoke、四轮 `oracle_pack` smoke 均通过（每轮 610 coefficients），
+[direct smoke CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_smoke_final/results.csv)、
+[oracle smoke CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_oracle_pack_direct_smoke_final/results.csv)。
+runner 独立测试 reduction/oracle/carry 时固定 PACK_DIRECT=1，与最终生产默认对齐；
+pack_direct target 仍明确设置 0/1/1/0。
+
+另核对无 PACK_DIRECT 环境变量时确实 direct_enabled=1、20 direct chunks、copied=0、temp=0，
+以及 `NTT_S4_OFF=1` 旧 host-GMP 路径 exit=0：
+[default smoke](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_default_smoke.log)、
+[S4-off smoke](D:/code/MPA-OpenCl/build_cuda_cmake/_pack_direct_s4off_smoke.log)。
+最终新统计打印以 `if (L.s4)` 保护，避免 S4-off 时读取空 context。
+
+生产 ABBA 对应前述 `7D807...` 二进制，其副本保存为
+[测量二进制](D:/code/MPA-OpenCl/build_cuda_cmake/stage2_tree_gpu_pack_direct_measured.exe)。
+最终构建相对该测量版本增加 S4-off 统计保护、改变默认开关；input callback、device kernels、
+chunk/采样调度未再修改。最终 binary 做了完整门禁和上述 smoke，**没有重新跑完整生产 ABBA**；
+不能将两者的 SHA 混写。所有 PowerShell 脚本语法解析和 `git diff --check` 通过；本轮没有提交 Git。
+
+### 36.6 下一轮：利用显存余量减少 chunk 往返，再考虑固定输入驻留
+
+下一轮优先利用释放的显存重新评估 **32 → 64 MB chunk budget**，用同一二进制只改变预算，
+验证更多数据能否在每个 chunk 内处理，从而减少 round-trips、pack launches 和 host API 固定开销。
+必须同时记录 device free、pool/arena 容量、naming ladder 和全进程墙钟；旧 §27 的 64 MB 在生产形状曾造成
+显存耗尽和 naming 巨幅变慢，新路径也需重新测量。chunk 改变会改变 oracle jobs/sample positions，
+应保留各自完整检查并用不受 chunk 划分影响的结果/全输出门禁核对，不能要求两个预算的 sample signature 相同。
+
+然后再预算固定 F/finv 的原始设备输入或 spectrum 缓存，以减少反复上传/pack/forward。
+N=2^27 时一个 spectrum 就是 **1 GiB**，同时缓存 F 与 finv 可能重新吃掉本轮释放的全部空间；
+需要先将缓存计入统一预算、明确失效/驱逐规则和余量，再接入。这些后续优化本轮尚未实现。

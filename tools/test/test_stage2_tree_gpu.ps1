@@ -539,7 +539,8 @@ try {
 $carryBatchSaved = @{}
 foreach ($key in @('NTT_S4_CARRY_BATCH','NTT_S4_CHUNK_MAX','NTT_S4_CARRY_TEST_BAD','NTT_S4_ASYNC',
                    'NTT_S4_DEFER_CARRY','NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_PACK','NTT_S4_HOSTPACK',
-                   'NTT_S4_OLDTAIL','NTT_S5_ON','NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY','NTT_S4_CARRY_TRACE')) {
+                   'NTT_S4_OLDTAIL','NTT_S5_ON','NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY','NTT_S4_CARRY_TRACE',
+                   'NTT_S4_PACK_DIRECT')) {
     $carryBatchSaved[$key] = [Environment]::GetEnvironmentVariable($key,'Process')
 }
 try {
@@ -548,6 +549,7 @@ try {
     $env:NTT_S4_HOSTPACK='0'; $env:NTT_S4_OLDTAIL='0'; $env:NTT_S5_ON='0'
     $env:NTT_S4_SAMPLE='96'; $env:NTT_S4_CHECK_EVERY='8'
     $env:NTT_S4_CARRY_TRACE='1'
+    $env:NTT_S4_PACK_DIRECT='0'
     $carryBatchArgs=@('--real','--n','340282366920938463463374607431768211457','--sigma','26',
                      '--b1','1000','--b2','5000000','--d','1231230','--device',"$Device")
     $env:NTT_S4_CARRY_BATCH='0'
@@ -625,6 +627,109 @@ try {
            $mCarryFault.Success -and [long]$mCarryFault.Groups[1].Value -gt 1) "exit=$cCarryFault"
 } finally {
     foreach ($key in $carryBatchSaved.Keys) { [Environment]::SetEnvironmentVariable($key,$carryBatchSaved[$key],'Process') }
+}
+
+# [18] Populate FINAL NTT scratch after planning/lookup, without temporary packed inputs.
+# Many interior chunks and changing shapes exercise reused dirty spectra and padding. Compare
+# EVERY output word's fingerprint, plus independent frozen factor and unchanged GMP samples.
+$directSaved=@{}
+foreach ($key in @('NTT_S4_PACK_DIRECT','NTT_S4_CARRY_BATCH','NTT_S4_CHUNK_MAX','NTT_S4_CARRY_TEST_BAD',
+                   'NTT_S4_ASYNC','NTT_S4_DEFER_CARRY','NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_PACK',
+                   'NTT_S4_HOSTPACK','NTT_S4_OLDTAIL','NTT_S5_ON','NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY',
+                   'NTT_S4_CARRY_TRACE','NTT_ARENA_CAP_KB')) {
+    $directSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')
+}
+try {
+    $env:NTT_S4_CHUNK_MAX='64'; $env:NTT_S4_CARRY_TEST_BAD='0'; $env:NTT_S4_ASYNC='1'
+    $env:NTT_S4_DEFER_CARRY='1'; $env:NTT_S4_ORACLE_ASYNC='0'; $env:NTT_S4_ORACLE_PACK='1'
+    $env:NTT_S4_HOSTPACK='0'; $env:NTT_S4_OLDTAIL='0'; $env:NTT_S5_ON='0'
+    $env:NTT_S4_SAMPLE='96'; $env:NTT_S4_CHECK_EVERY='8'; $env:NTT_S4_CARRY_TRACE='1'
+    $env:NTT_S4_CARRY_BATCH='0'; $env:NTT_ARENA_CAP_KB=''
+    $env:NTT_S4_PACK_DIRECT='0'
+    $oInputCopy=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096); $cInputCopy=$LASTEXITCODE
+    $env:NTT_S4_PACK_DIRECT='1'
+    $oInputDirect=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096); $cInputDirect=$LASTEXITCODE
+    $env:NTT_S4_CARRY_BATCH='1'
+    $oInputBatch=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096); $cInputBatch=$LASTEXITCODE
+    $env:NTT_S4_ASYNC='0'
+    $oInputBlocking=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096); $cInputBlocking=$LASTEXITCODE
+    $inputOutputs=@($oInputCopy,$oInputDirect,$oInputBatch,$oInputBlocking)
+    Check "direct pack: all schedules/transfers retain the frozen factor and hit set" `
+          ($cInputCopy -eq 0 -and $cInputDirect -eq 0 -and $cInputBatch -eq 0 -and $cInputBlocking -eq 0 -and
+           @($inputOutputs | Where-Object { $_ -notmatch 'bad_factors=0 factors=59649589127497217' -or
+               [regex]::Match($_,$resultPattern).Value -ne $resultOld }).Count -eq 0) `
+          "exit=$cInputCopy/$cInputDirect/$cInputBatch/$cInputBlocking"
+    $inputPattern='real_batched_input: direct_enabled=(\d+) direct_chunks=(\d+) copied_chunks=(\d+) d2d_bytes=(\d+) avoided_bytes=(\d+) packed_peak_bytes=(\d+) temp_peak_bytes=(\d+) temp_current_bytes=(\d+) pack_host=([0-9.]+) copy_host=([0-9.]+)'
+    $mInputCopy=[regex]::Match($oInputCopy,$inputPattern)
+    $mInputDirect=[regex]::Match($oInputDirect,$inputPattern)
+    Check "direct pack: control actually uses temporary packed inputs and D2D" `
+          ($mInputCopy.Success -and $mInputCopy.Groups[1].Value -eq '0' -and
+           $mInputCopy.Groups[2].Value -eq '0' -and [long]$mInputCopy.Groups[3].Value -gt 0 -and
+           [UInt64]$mInputCopy.Groups[4].Value -gt 0 -and $mInputCopy.Groups[5].Value -eq '0' -and
+           $mInputCopy.Groups[6].Value -eq $mInputCopy.Groups[7].Value) ""
+    $directAccounting=$mInputCopy.Success
+    foreach ($directOutput in @($oInputDirect,$oInputBatch,$oInputBlocking)) {
+        $m=[regex]::Match($directOutput,$inputPattern)
+        $directAccounting=$directAccounting -and $m.Success -and $m.Groups[1].Value -eq '1' -and
+            $m.Groups[2].Value -eq $mInputCopy.Groups[3].Value -and $m.Groups[3].Value -eq '0' -and
+            $m.Groups[4].Value -eq '0' -and $m.Groups[5].Value -eq $mInputCopy.Groups[4].Value -and
+            $m.Groups[6].Value -eq $mInputCopy.Groups[6].Value -and $m.Groups[7].Value -eq '0' -and
+            $m.Groups[8].Value -eq '0' -and [double]$m.Groups[10].Value -eq 0
+    }
+    Check "direct pack: removes ALL S4 input D2D bytes and temporary allocations" $directAccounting ""
+    $directWords=$true; $directSamples=$true
+    $baseTrace=[regex]::Match($oInputCopy,$carryTracePattern)
+    $baseOracle=[regex]::Match($oInputCopy,$oraclePattern)
+    foreach ($inputOutput in $inputOutputs) {
+        $mTrace=[regex]::Match($inputOutput,$carryTracePattern)
+        $mOracle=[regex]::Match($inputOutput,$oraclePattern)
+        $directWords=$directWords -and $baseTrace.Success -and $mTrace.Success -and
+            [long]$mTrace.Groups[1].Value -gt 0 -and $mTrace.Value -eq $baseTrace.Value
+        $directSamples=$directSamples -and $baseOracle.Success -and $mOracle.Success -and
+            $mOracle.Groups[2].Value -eq $baseOracle.Groups[2].Value -and
+            $mOracle.Groups[5].Value -eq $baseOracle.Groups[5].Value -and
+            $mOracle.Groups[9].Value -eq $baseOracle.Groups[9].Value -and
+            $inputOutput -cnotmatch 'FATAL|MISMATCH|gmp_check_bad=[1-9]|slot_canonical_bad=[1-9]'
+    }
+    Check "direct pack: ALL polynomial output words agree with the copied-input path" $directWords ""
+    Check "direct pack: GMP jobs, samples and positions remain identical" $directSamples ""
+    $mDirectCarry=[regex]::Match($oInputBatch,$carryPattern)
+    Check "direct pack: accumulated carry checks retain every interior chunk" `
+          ($mDirectCarry.Success -and [long]$mDirectCarry.Groups[6].Value -gt 1 -and
+           $mDirectCarry.Groups[1].Value -eq $mDirectCarry.Groups[5].Value) ""
+    Check "direct pack: pinned path and blocking path are both exercised" `
+          ($oInputDirect -match 'raw_async=[1-9]\d* out_async=[1-9]\d* fallbacks=0 \(async_enabled=1\)' -and
+           $oInputBlocking -match 'raw_async=0 out_async=0 fallbacks=0 \(async_enabled=0\)') ""
+
+    # Refuse the arena cache at a SMALL shape. No deferral: owned fallback counters cannot
+    # outlive the multiply. The input callback must work on owned scratch as well as the arena.
+    $env:NTT_S4_CHUNK_MAX='0'; $env:NTT_S4_CARRY_BATCH='0'; $env:NTT_S4_DEFER_CARRY='0'
+    $env:NTT_S4_ASYNC='1'; $env:NTT_ARENA_CAP_KB='1'
+    $fallbackArgs=@('--real','--n-hex','ffffffffffffffc5','--sigma','26','--b1','20',
+                    '--b2','1000','--d','210','--device',"$Device")
+    $prevFallbackErrors=$ErrorActionPreference; $ErrorActionPreference='Continue'
+    $env:NTT_S4_PACK_DIRECT='0'
+    $oFallbackCopy=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096); $cFallbackCopy=$LASTEXITCODE
+    $env:NTT_S4_PACK_DIRECT='1'
+    $oFallbackDirect=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096); $cFallbackDirect=$LASTEXITCODE
+    $ErrorActionPreference=$prevFallbackErrors
+    Check "direct pack: refused arena uses owned scratch with matching ALL-word output" `
+          ($cFallbackCopy -eq 0 -and $cFallbackDirect -eq 0 -and
+           $oFallbackCopy -match 'arena_overflow=[1-9]\d*' -and $oFallbackDirect -match 'arena_overflow=[1-9]\d*' -and
+           [regex]::Match($oFallbackCopy,$carryTracePattern).Success -and
+           [regex]::Match($oFallbackCopy,$carryTracePattern).Value -eq
+           [regex]::Match($oFallbackDirect,$carryTracePattern).Value -and
+           $oFallbackDirect -match 'direct_chunks=[1-9]\d* copied_chunks=0 d2d_bytes=0' -and
+           $oFallbackDirect -notmatch 'FATAL|gmp_check_bad=[1-9]') "exit=$cFallbackCopy/$cFallbackDirect"
+    $env:NTT_ARENA_CAP_KB=''; $env:NTT_S4_HOSTPACK='1'
+    $oHostCompat=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096); $cHostCompat=$LASTEXITCODE
+    Check "direct pack: host-packing control bypasses the new callback" `
+          ($cHostCompat -eq 0 -and [regex]::Match($oHostCompat,$carryTracePattern).Success -and
+           [regex]::Match($oHostCompat,$carryTracePattern).Value -eq
+           [regex]::Match($oFallbackCopy,$carryTracePattern).Value -and
+           $oHostCompat -match 'direct_chunks=0 copied_chunks=0 d2d_bytes=0 avoided_bytes=0') "exit=$cHostCompat"
+} finally {
+    foreach ($key in $directSaved.Keys) { [Environment]::SetEnvironmentVariable($key,$directSaved[$key],'Process') }
 }
 
 Write-Host ""

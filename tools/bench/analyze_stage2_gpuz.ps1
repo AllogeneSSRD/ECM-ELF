@@ -69,6 +69,10 @@ function Summarize-Samples($items) {
     [pscustomobject]@{ samples=$items.Count;
         mean_load_pct=[math]::Round(($items | Measure-Object gpu_load_pct -Average).Average,3);
         mean_clock_mhz=[math]::Round(($items | Measure-Object clock_mhz -Average).Average,3);
+        mean_memory_mb=[math]::Round(($items | Measure-Object memory_mb -Average).Average,3);
+        peak_memory_mb=($items | Measure-Object memory_mb -Maximum).Maximum;
+        mean_memory_controller_pct=[math]::Round(($items | Measure-Object memory_controller_pct -Average).Average,3);
+        mean_bus_interface_pct=[math]::Round(($items | Measure-Object bus_interface_pct -Average).Average,3);
         mean_cpu_temperature_c=$cpuMean;
         low_le5_samples=@($items | Where-Object gpu_load_pct -LE 5).Count;
         low_lt20_samples=@($items | Where-Object gpu_load_pct -LT 20).Count }
