@@ -519,3 +519,73 @@ stage2_tree_gpu.exe --real --n-hex <N> --sigma 26 --b1 1000 --b2 <B2> --choose-d
 
 候选集 = **所有 47-smooth 的 `D ≤ 2×10⁸`**（本次枚举 379,419 个），显式栈枚举、每个恰好访问一次；
 显存可行性仍是**硬过滤**（`real_run_words` + `arena_cap`）。
+
+## 20. 第 ① 项落地：arena 驱逐缓存 ⇒ 解锁更大的 D ⇒ 生产曲线 **−31.2%**
+
+### 20.1 为什么 arena 是共同瓶颈
+
+§19.5 的结论是"生产 B2 上 D 只剩 ~3%，因为它被显存卡住"。量清 arena 的构成后原因很清楚
+（`ntt_poly_probe.cu` 的 `NttArena`）：
+
+| 条目 | 内容 | 大小 | 可驱逐？ |
+|---|---|---|---|
+| `BigEntry`（按 `(N, nbatch)` 缓存）| `dA`/`dB`/`dQ` | **3·N·nbatch 字** | 是（纯缓存）|
+| `SmallEntry` | `dOut`（可增长）+ `dRes` | `out_slots·nbatch + 2·nbatch` 字 | 是 |
+| `FuseEntry` 的**逐 pass 表缓存** | `passF/radF/passI/radI` | 约 **N + N/2 字** | 是（可在下次 multiply 重建）|
+
+**三者都是缓存，而旧代码从不驱逐**：`bigs`/`smalls`/表缓存一路只增不减 ✗。于是在 `P=115200`
+时出现实测的情形——
+
+```
+stage2_tree_gpu: arena refuses N=134217728 nbatch=1 (needs 3072 MB, has 5627 of 6338 MB):
+                 falling back to per-call cudaMalloc
+CUDA error out of memory (2) ... call: cudaMalloc(&dB, ...)
+```
+
+——arena 里 5627 MB 全是**更早形状**的大缓冲，新形状要 3072 MB 就放不下，回退到 per-call
+`cudaMalloc` 然后 OOM ✗。**卡住 D 的不是表缓存（只占 1.5N），而是那 3N/形状的永久缓存。**
+
+### 20.2 修法：`NttArena::evict_other_shapes(keep_n, keep_nbatch)`
+
+在 `ntt_arena_bufs` **拒绝之前**先驱逐**除了当前形状之外**的一切缓存：其它 `FuseEntry` 的表缓存 +
+其它 `(N, nbatch)` 的 `BigEntry`（`dA/dB/dQ`）与 `SmallEntry`，并把它们占的字数从 `ar->bytes` 里扣掉 ✓。
+安全性：`ntt_arena_bufs` 在**每次 multiply 开始时**调用，返回的条目只在该次调用内使用，所以"驱逐别的形状"
+不会碰到正在用的缓冲 ✓；被驱逐的形状下次需要时按需重建 ✓（表缓存由 `ntt_fuse_cache_tables` 自动重建 ✓）。
+
+配套把可行性估计 `real_shape_words` 改成**`3N + os`**（不再计表缓存）：它必须描述**分配器真实的行为**，
+否则扫描会推荐一个跑不起来的 D ✗（这正是第一次尝试时发生的事——估计放行了、分配器拒绝、进程 OOM ✗）。
+
+### 20.3 生产实测：`D=1231230 / P=115200`
+
+```
+d_scan_reference: D=1231230 P=115200 imax=1575662 batches=14 fit=yes | loop=132.2 tree=112.3
+                  giant=23.5 glue=6.4 total=299.4
+real_batched_shape: P=115200 giant_points=1575662 num_poly_g=14 loops=13
+real_batched_split: giant=20.779 gtrees=101.142 fold=35.285 descent=76.458 inv=4.968
+                    accum=10.756 name=4.155
+real_batched_wall: pre=13.287 loop_wall=171.839 post=87.215 sum=272.341 (elapsed=273.55)
+real_batched_breakdown: wall=273.55 ntt_calls=2497255 ntt_launches=798 ntt_seconds=159.067 (58.1%)
+                        arena_mb=5779.0 arena_overflow=0
+stage2: ... hits=1 bad_factors=0 factors=42089,72677470068901752199 hit_primes=3511 elapsed=273.55
+```
+
+| | D=570570（旧）| **D=1231230（新）** | 变化 |
+|---|---|---|---|
+| **`elapsed`** | 397.83 s | **273.55 s** | **−31.2%** ✓（模型预测 299.4 ⇒ −29%，差 2 点 ✓）|
+| 进程 wall | 422.8 s | **317.3 s** | −25% ✓ |
+| `loop_wall` | 346.750 | **171.839** | −50.4% ✓ |
+| gtrees / fold / giant | 192.9 / 72.8 / 50.7 | **101.1 / 35.3 / 20.8** | −48% / −52% / −59% ✓ |
+| `post`（宿主 GMP）| 44.202 | **87.215** | **+97%** ✗（`∝ P`，如模型所料）|
+| descent / pre | 31.1 / 6.3 | **76.5 / 13.3** | +146% / +110% ✗ |
+| NTT 秒 / 调用 / launch | 219.2 / 3.81M / 1927 | 159.1 / 2.50M / 798 | −27% ✓ |
+| arena | 4684.5 MB | **5779.0 MB（overflow=0）** | 驱逐生效、**无 per-call 回退** ✓ |
+| 因子集合 | `42089,72677470068901752199` | **同** ✓ | `bad_factors=0` ✓ `hit_primes=3511` ✓ |
+
+**收益 −31.2%（每曲线省 124 s），因子逐项一致** ✓ —— 这是 §29 那轮（4.92×）之后单项最大的一次。
+
+### 20.4 下一步因此改变（重要）
+
+`post` 从 44 s 涨到 **87 s**、descent 从 31 s 涨到 **76 s**，现在它是生产曲线里**第二大项**（31.9%），
+而它 100% 是**宿主 GMP 串行** ✗。也就是说：**第 ① 项做完之后，第 ② 项（S5 设备下降按形状跨节点批量）
+的价值大幅上升**，而且它会再次移动 D 的最优点（下降变便宜 ⇒ 更愿意用大 D / 大 P ⇒ loop 更省）✓。
+第 ③ 项（gtrees 跨批合并）现在的池子小了（101 s），但仍值得做；第 ④（`t_reduce`）和第 ⑤（D2H）不变。

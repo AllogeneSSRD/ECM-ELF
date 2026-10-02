@@ -1487,17 +1487,89 @@ struct NttArena {
     struct BigEntry {                       /* the shape-independent buffers: 3*N words each */
         unsigned long long n = 0, nbatch = 1;
         unsigned long long *dA = nullptr, *dB = nullptr, *dQ = nullptr;
+        size_t words = 0;                   /* what this entry costs, for eviction accounting */
     };
     struct SmallEntry {                     /* only these depend on out_slots */
         unsigned long long n = 0, nbatch = 1;
         unsigned long long out_cap = 0;     /* GROWN, never shrunk: reused by every smaller
                                                out_slots at the same N */
         unsigned long long *dOut = nullptr, *dRes = nullptr;
+        size_t words = 0;
     };
     std::vector<BigEntry> bigs;
     std::vector<SmallEntry> smalls;
     BufEntry cur;                           /* the composite the caller is handed */
     unsigned long long overflow = 0;      /* shapes that did NOT fit the cap (per-call path) */
+    /* ---- THE TABLE CACHES ARE EVICTABLE, AND THAT IS THE CHEAPEST MEMORY WE HAVE ------------
+       ntt_fuse_cache_tables() stores one table pair per outer pass, summing to about N + N/2
+       words for a cached shape -- 35% of what one transform length costs, ~1.2 GB of the 4.6 GB
+       the real shape holds.  Every byte of it is a PURE CACHE: the per-call path rebuilds the same
+       tables with two extra launches, and the kernels that read them check `tables_cached` first,
+       so dropping them can only cost speed, never correctness.  When an allocation would exceed
+       the cap we therefore evict the caches of every shape EXCEPT the one being allocated (the hot
+       shape keeps its caching) and retry before falling back to the per-call path. */
+    unsigned long long tbl_evictions = 0, tbl_words_freed = 0;
+
+    /* the words a cached shape's tables occupy: sum over outer passes of (S + 2^M) for the forward
+       and again for the inverse, exactly as ntt_fuse_cache_tables allocates them */
+    static unsigned long long fuse_table_words(const FuseCtx &c)
+    {
+        if (!c.tables_cached) return 0;
+        unsigned long long w = 0;
+        int L = 0;
+        for (int p = 0; p < c.nms; ++p) { const int M = c.ms[p]; w += (c.n >> (L + M)) + (1ull << M); L += M; }
+        L = c.outer_stages;
+        for (int p = c.nms - 1; p >= 0; --p) { const int M = c.ms[p]; L -= M; w += (1ull << (c.k - L - M)) + (1ull << M); }
+        return w;
+    }
+
+    static void fuse_drop_tables(FuseCtx &c)
+    {
+        for (int p = 0; p < FUSE_MAX_PASSES; ++p) {
+            if (c.passF[p]) cudaFree(c.passF[p]);
+            if (c.radF[p]) cudaFree(c.radF[p]);
+            if (c.passI[p]) cudaFree(c.passI[p]);
+            if (c.radI[p]) cudaFree(c.radI[p]);
+            c.passF[p] = c.radF[p] = c.passI[p] = c.radI[p] = nullptr;
+        }
+        c.tables_cached = false;             /* the per-call path rebuilds them on demand */
+    }
+
+    /* free the table caches of every shape except `keep_n`, AND the big/small buffers of every
+       other (n, nbatch) -- see the long comment above: all of it is a cache, the multiply that is
+       being set up now is the only live user, and without evicting the BIGS the arena still held
+       5627 MB of earlier shapes when the fold's own 3072 MB shape asked for room at P=115200 and
+       the run fell back to per-call cudaMalloc and died with "out of memory" (measured).  Returns
+       the words freed. */
+    unsigned long long evict_other_shapes(unsigned long long keep_n,
+                                          unsigned long long keep_nbatch)
+    {
+        unsigned long long freed = 0;
+        for (FuseEntry &e : fuses) {
+            if (e.n == keep_n || !e.fc.tables_cached) continue;
+            freed += fuse_table_words(e.fc);
+            fuse_drop_tables(e.fc);
+        }
+        for (size_t i = bigs.size(); i-- > 0;) {
+            BigEntry &b = bigs[i];
+            if (b.n == keep_n && b.nbatch == keep_nbatch) continue;
+            if (b.dA) cudaFree(b.dA);
+            if (b.dB) cudaFree(b.dB);
+            if (b.dQ) cudaFree(b.dQ);
+            freed += b.words;
+            bigs.erase(bigs.begin() + (long)i);
+        }
+        for (size_t i = smalls.size(); i-- > 0;) {
+            SmallEntry &s = smalls[i];
+            if (s.n == keep_n && s.nbatch == keep_nbatch) continue;
+            if (s.dOut) cudaFree(s.dOut);
+            if (s.dRes) cudaFree(s.dRes);
+            freed += s.words;
+            smalls.erase(smalls.begin() + (long)i);
+        }
+        if (freed) { ++tbl_evictions; tbl_words_freed += freed; bytes -= freed * 8; }
+        return freed;
+    }
 
     /* a fused shape becomes unbounded work per call, so it must not be built while another
        shape's buffers are still live on a small card: the caller sets cap_bytes and the two
@@ -1540,6 +1612,13 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         if (b.n == n && b.nbatch == nbatch) { big = &b; ++ar->buf_hits; break; }
     if (!big) {
         const size_t need = (size_t)(3 * n * nbatch) * sizeof(unsigned long long) + 16;
+        /* BEFORE REFUSING, EVICT EVERYTHING THE ARENA CACHES FOR OTHER SHAPES (see the NttArena
+           comment).  The table caches alone were not enough: at P=115200 the fold's shape needed
+           3072 MB while the arena still held 5627 MB of earlier shapes' BIG buffers, so the run
+           fell back to per-call cudaMalloc and died with "out of memory" (measured).  The hot
+           shape keeps its own entry, and every evicted shape is rebuilt on demand. */
+        if (ar->cap_bytes && ar->bytes + need > ar->cap_bytes)
+            ar->evict_other_shapes(n, nbatch);
         if (ar->cap_bytes && ar->bytes + need > ar->cap_bytes) {
             ++ar->overflow;
             if (ar->overflow <= 4)
@@ -1555,6 +1634,7 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         CK(cudaMalloc(&e.dA, n * nbatch * sizeof(unsigned long long)));
         CK(cudaMalloc(&e.dB, n * nbatch * sizeof(unsigned long long)));
         CK(cudaMalloc(&e.dQ, n * nbatch * sizeof(unsigned long long)));
+        e.words = (size_t)(3 * n * nbatch);
         ar->bytes += need;
         ar->bigs.push_back(e);
         ++ar->buf_builds;
@@ -1581,6 +1661,7 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         small->out_cap = 0;
         CK(cudaMalloc(&small->dOut, out_slots * nbatch * sizeof(unsigned long long)));
         small->out_cap = out_slots;
+        small->words = (size_t)(out_slots * nbatch + 2 * nbatch);
         ar->bytes += extra;
     } else if (!small) {
         const size_t need = (size_t)(out_slots * nbatch + 2 * nbatch) *
@@ -1595,6 +1676,7 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         e.out_cap = out_slots;
         CK(cudaMalloc(&e.dOut, out_slots * nbatch * sizeof(unsigned long long)));
         CK(cudaMalloc(&e.dRes, 2 * nbatch * sizeof(unsigned long long)));
+        e.words = (size_t)(out_slots * nbatch + 2 * nbatch);
         ar->bytes += need;
         ar->smalls.push_back(e);
         ++ar->buf_builds;

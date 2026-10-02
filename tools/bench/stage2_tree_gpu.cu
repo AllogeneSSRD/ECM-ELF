@@ -7294,16 +7294,20 @@ static unsigned long long phi_u64(unsigned long long n){
     return r;
 }
 
-/* the arena footprint of one transform length: the shared big buffers (3*N words) plus the
-   FuseCtx tables of that N (N + N/2 + the per-pass tables).  Shapes that share N share the
-   buffers and the tables, so the run's footprint is the sum over DISTINCT N, not over shapes. */
+/* the arena footprint of one transform length: the shared big buffers (3*N words) plus dOut.
+   THE TABLE CACHES ARE NOT COUNTED (section 20): ntt_fuse_cache_tables stores ~N + N/2 words per
+   cached shape, but they are a PURE CACHE and NttArena::drop_table_caches evicts the ones belonging
+   to other shapes before the arena refuses an allocation, so what a shape must be able to hold is
+   the big buffers and the small ones.  Counting the caches in made the fold's shape look like 4.5N
+   and that is what rejected every D above ~600000 in the section 19 scan -- i.e. it was a
+   feasibility test that no longer matched the allocator. */
 static unsigned long long real_shape_words(unsigned long long P, int S, bool *ok)
 {
     unsigned long long N = 0, sw = 0, ss = 0, os = 0;
     int bpw = 0;
     if (!ntt_shape_query(P, S, &N, &bpw, nullptr, &sw, &ss, &os)) { *ok = false; return 0; }
     *ok = true;
-    return 3 * N + (N + N / 2 + 4 * 8 * 64) + os;
+    return 3 * N + os;
 }
 
 /* the two transform lengths a D actually needs: the fold/inverse at (P+1) coefficients and the
