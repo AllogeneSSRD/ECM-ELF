@@ -4607,6 +4607,17 @@ static int s5_forest_build(S5Forest &F, const std::vector<std::vector<unsigned l
 struct S5Entry {
     unsigned long long code = 0;
     size_t ncoef = 0;                  /* the row's coefficient count, TIGHT (stride 1) */
+    /* THE POLYNOMIAL'S DEGREE, which is NOT the row's width (section 56).  `H mod F = H` whenever
+       deg H < deg F, and the copy branch below exploits exactly that -- but testing the ROW WIDTH
+       instead tested how wide the row the descendant happens to sit in is, and at a chunk's root
+       that width is the whole chunk (Fdeg[code]+1) while the true dividend can be far shorter: at
+       D=30030/B2=2e6 the entire giant set is one block of 68 points, so deg H = 67 against a root
+       divisor of degree 2048, and the device ran 43 FULL-SIZE Newton divisions whose result is
+       provably H itself.  They are the most expensive divisions in the descent -- most of
+       t_generic = 6.36 s out of t_total = 7.42 s -- and they also broke the section 45.2 counting
+       identity (generic+linear = 5758 against divmods_slow = 5715).  `deg` is therefore tracked
+       down the frontier while `ncoef` keeps describing the layout, so no row ever changes size. */
+    size_t deg = 0;
     /* WHERE THIS NODE'S ROW IS, in the frontier buffer the level's kernels read.  Without it
        every node divided the frontier's FIRST row: the first level has exactly one node, so it
        was right, and every level below it was silently wrong -- the decisions (generic/horner/
@@ -4617,6 +4628,11 @@ struct S5Entry {
        both children of a node divide the SAME parent row. */
     size_t rowoff = 0;
 };
+
+/* THE FAST PATH IS ABOUT THE POLYNOMIAL, NOT ABOUT THE ROW (section 56) -- see S5Entry::deg.
+   One definition, used by the `vol` accounting, the branch, the operation trace, the next
+   level's row width and the per-level differential check, so the four can never disagree. */
+static inline bool s5_fastpath(const S5Entry &e, size_t nc) { return e.deg < nc; }
 
 static void s5_dev_init(S5Dev &D, PolyLayer &L, S4Reduce &red)
 {
@@ -4740,6 +4756,14 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
            repro P=2/Fpad=2 gave ncoef=3 against a 2-row buffer), the kernel read one row past the
            allocation and Horner started on garbage.  Clamp it to what `dbound` actually holds. */
         cur[0].ncoef = std::min(Fdeg[cur[0].code] + 1, (size_t)Lc);
+        /* THE ROOT'S TRUE DEGREE (section 56).  The row is padded to the chunk's width, but the
+           POLYNOMIAL in it is the dividend this descent really has: for a single-chunk shape that
+           is H itself (deg H = H.size()-1, zero-extended), and for a chunked shape it is
+           H mod F_chunk (deg < Fdeg[code]).  The fast path must be decided on this, not on the
+           padded width -- see S5Entry::deg for what testing the width cost (43 needless
+           full-size divisions at D=30030, i.e. most of the descent's time). */
+        cur[0].deg = std::min((size_t)Fdeg[cur[0].code],
+                              H.size() ? (size_t)(H.size() - 1) : 0u);
         size_t cnt = Lc;
         int level = (int)ceil_log2_u64((unsigned long long)Lc);
         bool level_first = true;
@@ -4753,11 +4777,11 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                 const size_t nc0 = Fdeg[2 * e.code];
                 const size_t nc1 = Fdeg[2 * e.code + 1];
                 if (nc0 == 0) { st.zeros++; }
-                else if (e.ncoef < nc0 + 1) { st.copies++; vol += e.ncoef; }
+                else if (s5_fastpath(e, nc0)) { st.copies++; vol += e.deg + 1; }
                 else if (nc0 == 1 && !no_linear) { st.linear++; vol += 1; }
                 else { st.generic++; ++st.divmods; vol += nc0; }
                 if (nc1 == 0) { st.zeros++; }
-                else if (e.ncoef < nc1 + 1) { st.copies++; vol += e.ncoef; }
+                else if (s5_fastpath(e, nc1)) { st.copies++; vol += e.deg + 1; }
                 else if (nc1 == 1 && !no_linear) { st.linear++; vol += 1; }
                 else { st.generic++; ++st.divmods; vol += nc1; }
             }
@@ -4779,7 +4803,7 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                 for (int sgn = 0; sgn < 2; ++sgn) {
                     const size_t nc = Fdeg[2 * e.code + (size_t)sgn];
                     if (nc == 0) off.push_back(0);
-                    else if (e.ncoef < nc + 1) off.push_back(e.ncoef);
+                    else if (s5_fastpath(e, nc)) off.push_back(e.deg + 1);
                     else if (nc == 1 && !no_linear) off.push_back(1);
                     else off.push_back(nc);
                 }
@@ -4812,9 +4836,9 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                            actual sizes on every level, so a future accounting mistake is a
                            message here instead of a silent device overrun (section 30). */
                         {
-                            const size_t rows_here = (e.ncoef < nc + 1) ? e.ncoef
-                                                                       : ((nc == 1 && !no_linear)
-                                                                              ? 1 : nc);
+                            const size_t rows_here = s5_fastpath(e, nc)
+                                                         ? e.deg + 1
+                                                         : ((nc == 1 && !no_linear) ? 1 : nc);
                             if (dstrow + rows_here > vol) {
                                 std::fprintf(stderr, "%s: FATAL: the S5 frontier is too small: "
                                                      "child=%llu dstrow=%llu rows=%llu vol=%llu\n",
@@ -4831,12 +4855,21 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                             std::printf("descent_dev_op: code=%llu sgn=%d child=%llu nc=%llu "
                                         "ncoef=%llu op=%s dstrow=%llu\n", e.code, sgn, child, nc,
                                         e.ncoef,
-                                        (e.ncoef < nc + 1) ? "copy" : (nc == 1 ? "horner" : "div"),
+                                        s5_fastpath(e, nc) ? "copy" : (nc == 1 ? "horner" : "div"),
                                         (unsigned long long)dstrow);
-                        if (e.ncoef < nc + 1) {
-                            /* the degree fast path: H mod F_ci = H, a pure device copy */
+                        if (s5_fastpath(e, nc)) {
+                            /* the degree fast path: H mod F_ci = H, a pure device copy.
+                               THE COPY IS ONLY as WIDE AS THE POLYNOMIAL (section 56): copying the
+                               parent's whole row width would put `ncoef` rows into the frontier for
+                               each child, and at a chunk root that width is the whole chunk -- at
+                               D=30030 two such children needed vol=5762 against a 4096-row chunk
+                               and the frontier invariant refused it (loudly: "the S5 frontier is
+                               larger than the chunk").  `deg+1 <= nc` because the fast path means
+                               deg < nc, so a copy can never need more rows than the division it
+                               replaces -- the invariant `vol <= chunkL` is preserved by the same
+                               argument that made the branch legal in the first place. */
                             unsigned long long nw = 0;
-                            s5_memcpy_rows(dbound, e.rowoff * W, dstrow * W, e.ncoef, e.ncoef,
+                            s5_memcpy_rows(dbound, e.rowoff * W, dstrow * W, e.deg + 1, e.deg + 1,
                                            (int)W, dvals, &nw);
                         } else if (nc == 1 && !no_linear) {
                             /* the linear branch: a mod (X - x_j) = a(x_j), Horner on the device.
@@ -4876,10 +4909,20 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                     if (nc == 0) continue;
                     S5Entry ne;
                     ne.code = child;
-                    /* the row's coefficient count: the divisor's when it was divided, the
-                       parent's when it was only copied, 1 when it was evaluated */
-                    ne.ncoef = (e.ncoef < nc + 1) ? e.ncoef
+                    /* the row's coefficient count: the divisor's when it was divided, deg+1 when it
+                       was only copied (the copy writes exactly that many rows -- see the copy
+                       branch), 1 when it was evaluated */
+                    ne.ncoef = s5_fastpath(e, nc) ? (e.deg + 1)
                                                   : ((nc == 1 && !no_linear) ? 1 : nc);
+                    /* ... and the DEGREE the next level must decide with (section 56):
+                       * a copy returns H itself, so the degree is unchanged (and the fast path was
+                         only taken because it is < nc, so the invariant holds);
+                       * a division returns deg R < nc, so it is capped at nc-1 -- this is what
+                         keeps the cap sound level after level rather than only approximately;
+                       * the linear evaluation returns the constant H(x_j). */
+                    ne.deg = s5_fastpath(e, nc)
+                                 ? e.deg
+                                 : ((nc == 1 && !no_linear) ? 0 : std::min(e.deg, nc - 1));
                     ne.rowoff = dstrow_all;
                     dstrow_all += ne.ncoef;
                     nxt.push_back(ne);
@@ -4948,8 +4991,9 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                         const size_t child = 2 * cur[ci].code + (size_t)sgn;
                         const size_t nc = Fdeg[child];
                         if (nc == 0) continue;
-                        const size_t rows_here = (cur[ci].ncoef < nc + 1) ? cur[ci].ncoef
-                                                 : ((nc == 1 && !no_linear) ? 1 : nc);
+                        const size_t rows_here = s5_fastpath(cur[ci], nc)
+                                                     ? cur[ci].deg + 1
+                                                     : ((nc == 1 && !no_linear) ? 1 : nc);
                         /* the host oracle, straight from the definition */
                         const CPoly Dc = cp_from_flat(Ft[child], Fdeg[child], W);
                         const CPoly Rc = cp_mod(H, Dc, L);

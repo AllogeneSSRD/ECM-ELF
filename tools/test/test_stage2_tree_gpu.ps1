@@ -230,6 +230,43 @@ Check "S5 on D=2310: the batched engine finds the frozen factor" `
       ($rS5big.out -match 'algorithm=tree_gpu_batched .*hits=1 bad_factors=0 factors=59649589127497217 hit_primes=114713') `
       $rS5big.out.Trim()
 Check "S5 on D=2310: the acceptance script exits 0" ($rS5big.code -eq 0) ("exit=" + $rS5big.code)
+# ---- A THIRD SHAPE WHERE THE FAST PATH ACTUALLY FIRES (section 56.2) -------------------------
+# At D=30030 (P=2880) the whole giant set is ONE block of 68 points, so deg H = 67 against a root
+# divisor of degree 2048: `H mod F = H` at the top levels, and the descent must take the COPY
+# branch there instead of running 43 full-size Newton divisions (which is what testing the ROW
+# WIDTH instead of the polynomial's DEGREE cost it: most of t_generic, and the section 45.2
+# counting identity off by exactly 43).  The copy must also write deg+1 rows and not the parent's
+# full width, or the frontier overflows ("the S5 frontier is larger than the chunk").
+# NOTE: this run's acceptance script exits 1 for an unrelated and already-documented reason (the S2
+# host tail counts hit BLOCKS: tail_counts hit_blocks=2 factors=1, section 55.7), so only the
+# descent and the batched summary are asserted here -- deliberately not the exit code.
+# The two switches are RE-SET here: the S5-off regression run above removed them, and without this
+# the block silently measured the HOST descent (0.07 s, no `descent_check` lines at all) -- a third
+# self-inflicted test bug of this kind, after `$Matches` being clobbered and `divmods_batched` being
+# compared against `divmods_slow`.
+$env:NTT_S5_ON = '1'
+$env:NTT_S4_DESCENT_CHECK = '1'
+$rS5huge = RunCheck @('-D', '30030', '-B1', '1000', '-B2', '2000000', '-Evaluate')
+Remove-Item Env:\NTT_S5_ON, Env:\NTT_S4_DESCENT_CHECK -ErrorAction SilentlyContinue
+Check "S5 on D=30030 (degree fast path): every leaf equals the host descent's" `
+      ($rS5huge.out -match 'descent_check_leaves: P=2880 differing_leaves=0') $rS5huge.out.Trim()
+Check "S5 on D=30030: every coefficient equals the host descent's" `
+      ($rS5huge.out -match 'descent_check: P=2880 divmods_batched=\d+ divmods_slow=5715 mismatching_coefficients=0') `
+      $rS5huge.out.Trim()
+# ... and the section 45.2 identity, which is the assertion that the fast path is decided on the
+# DEGREE: generic+linear must equal the host's division count exactly.
+$mH = [regex]::Match($rS5huge.out, 'descent_dev_stats: divmods=\d+ generic=(\d+) linear=(\d+)')
+$mHs = [regex]::Match($rS5huge.out, 'descent_check: P=2880 .*divmods_slow=(\d+)')
+if ($mH.Success -and $mHs.Success) {
+    $gh = [int]$mH.Groups[1].Value
+    $lh = [int]$mH.Groups[2].Value
+    $sh = [int]$mHs.Groups[1].Value
+    Check "S5 on D=30030: generic+linear equals the host's op count ($gh+$lh = $sh)" `
+          (($gh + $lh) -eq $sh) ("generic=$gh linear=$lh slow=$sh")
+}
+Check "S5 on D=30030: the batched engine finds the frozen factor" `
+      ($rS5huge.out -match 'algorithm=tree_gpu_batched .*hits=1 bad_factors=0 factors=59649589127497217') `
+      $rS5huge.out.Trim()
 
 Write-Host ""
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
