@@ -1488,6 +1488,16 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
     (void)tail_mont;
     s2g_mont_mul<NW>(u, r, dy, dn, ninv, nw);
     if (s4_dbg != nullptr && gid < 4) {
+        /* ---- THE WINDOW CHECKSUM (section 48) -------------------------------------------
+           `s5_reddump_row` computes the window from a cudaMemcpy of the same pointer the kernel
+           was launched with, and the two disagree -- which is only possible if the kernel READ
+           something else.  24 debug slots are all taken, so slot 23 (which held `nw`, a value the
+           host already knows) carries an order-sensitive checksum of the digits the kernel
+           actually consumed.  Equal checksums mean the inputs are identical and the arithmetic is
+           the difference; different checksums mean the read is. */
+        unsigned long long cks = 0;
+        for (unsigned long long j = 0; j < slot_words; ++j) cks += d[j] * (j + 1ull);
+        s4_dbg[gid * 24 + 23] = cks;
         s4_dbg[gid * 24 + 16] = u[0];
         s4_dbg[gid * 24 + 17] = (nw > 1) ? u[1] : 0ull;
         s4_dbg[gid * 24 + 18] = (nw > 2) ? u[2] : 0ull;
@@ -1495,7 +1505,6 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
         s4_dbg[gid * 24 + 20] = (nw > 1) ? dy[1] : 0ull;
         s4_dbg[gid * 24 + 21] = (nw > 2) ? dy[2] : 0ull;
         s4_dbg[gid * 24 + 22] = ninv;
-        s4_dbg[gid * 24 + 23] = (unsigned long long)nw;
     }
     for (unsigned long long i = 0; i < w; ++i)
         out[gid * w + i] = (i < (unsigned long long)nw) ? u[i] : 0ull;
@@ -1771,20 +1780,37 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
     const bool have_real_case = (S->slot_bits == 259ull && bpw == 7 && slot_words == 37);
     unsigned long long real_dig[64] = {0};
     if (have_real_case) {
-        mpz_t v, two;
-        mpz_inits(v, two, nullptr);
+        mpz_t v, two, q, rem;
+        mpz_inits(v, two, q, rem, nullptr);
         mpz_set_str(v, "fc861cfcb724b25400000001", 16);
         mpz_set_ui(two, 1);
         mpz_mul_2exp(two, two, (unsigned)bpw);
+        /* GMP's fdiv_qr requires all four variables to be DISTINCT (the first version aliased
+           the remainder with the dividend, so this case did not contain the window it claimed
+           to -- which is why "the same shape passes in isolation" survived one round of being
+           turned into a unit test at all, section 48). */
         for (unsigned long long j = 0; j < slot_words; ++j) {
-            mpz_t q;
-            mpz_init(q);
-            mpz_fdiv_qr(q, v, v, two);            /* v = q*2^bpw + (v mod 2^bpw) */
-            real_dig[j] = mpz_get_ui(v);
+            mpz_fdiv_qr(q, rem, v, two);
+            real_dig[j] = mpz_get_ui(rem);
             mpz_set(v, q);
-            mpz_clear(q);
         }
-        mpz_clears(v, two, nullptr);
+        mpz_clears(v, two, q, rem, nullptr);
+        /* prove the decomposition, digit by digit: rebuilt must equal the hex we started from */
+        {
+            mpz_t back;
+            mpz_init_set_ui(back, 0);
+            for (unsigned long long j = slot_words; j-- > 0;) {
+                mpz_mul_2exp(back, back, (unsigned)bpw);
+                mpz_add_ui(back, back, real_dig[j]);
+            }
+            char *bs = mpz_get_str(nullptr, 16, back);
+            std::printf("s4_reduce_realcase: rebuilt=%s ok=%d\n", bs,
+                        (std::strcmp(bs, "fc861cfcb724b25400000001") == 0) ? 1 : 0);
+            void (*ff)(void *, size_t) = nullptr;
+            mp_get_memory_functions(nullptr, nullptr, &ff);
+            ff(bs, std::strlen(bs) + 1);
+            mpz_clear(back);
+        }
     }
     for (unsigned long long c = 0; c < cases; ++c) {
         for (unsigned long long j = 0; j < slot_words; ++j) {
@@ -1819,6 +1845,24 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
                 dig[(size_t)(c * slot_words + slot_words - 1)] &= ((1ull << top_bits) - 1ull);
     }
     unsigned long long *dd = nullptr, *dout = nullptr, *ddbg = nullptr;
+    /* ---- THE GEOMETRY A/B (section 48) ----------------------------------------------------
+       Every launch argument here is identical to the S5 multiply's EXCEPT `n` (the slice stride),
+       `out_slots` and `total`: this selftest uses `cases*slot_words / cases / cases`, the real call
+       uses `N / out_slots / out_slots*nbatch`.  NTT_S5_SELFTEST_N makes this selftest run with the
+       REAL stride, which is the last variable left between "the same window passes in isolation"
+       and "it fails in situ". */
+    unsigned long long sel_n = cases * slot_words;
+    {
+        const char *e = std::getenv("NTT_S5_SELFTEST_N");
+        if (e && *e) {
+            const unsigned long long v = std::strtoull(e, nullptr, 10);
+            if (v >= slot_words) sel_n = v;
+        }
+    }
+    const unsigned long long sel_os = (sel_n < cases * slot_words) ? (sel_n / slot_words) : cases;
+    if (sel_os < cases)
+        std::printf("s4_reduce_selftest_geom: n=%llu out_slots=%llu (the real call's stride)\n",
+                    sel_n, sel_os);
     const bool dbg = (std::getenv("NTT_S5_REDDUMP") && *std::getenv("NTT_S5_REDDUMP")
                       && std::atoi(std::getenv("NTT_S5_REDDUMP")) != 0);
     CK(cudaMalloc(&dd, dig.size() * sizeof(unsigned long long)));
@@ -1826,8 +1870,8 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
     if (dbg) CK(cudaMalloc(&ddbg, 4 * 24 * sizeof(unsigned long long)));
     CK(cudaMemcpy(dd, dig.data(), dig.size() * sizeof(unsigned long long),
                   cudaMemcpyHostToDevice));
-    S2G_DISPATCH(R.nw, s4_launch_reduce, (int)R.nw, S->L, 1ull, cases, cases, dd,
-                 cases * slot_words, bpw, slot_words, R.dn, R.ninv, S->dy,
+    S2G_DISPATCH(R.nw, s4_launch_reduce, (int)R.nw, S->L, 1ull, sel_os, sel_os, dd,
+                 sel_n, bpw, slot_words, R.dn, R.ninv, S->dy,
                  (unsigned long long)R.w, dout, S->slot_bits, (unsigned long long *)nullptr, ddbg);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
@@ -1893,7 +1937,7 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
     long long first = -1;
     mpz_t want, mine;
     mpz_inits(want, mine, nullptr);
-    for (unsigned long long c = 0; c < cases; ++c) {
+    for (unsigned long long c = 0; c < sel_os; ++c) {
         s4_gmp_reduce(want, &dig[(size_t)(c * slot_words)], slot_words, bpw, R.N);
         mpz_import(mine, (size_t)R.w, -1, 8, 0, 0, &got[(size_t)(c * R.w)]);
         if (mpz_cmp(want, mine) != 0) {
@@ -3466,8 +3510,8 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
                          q[8], q[16], q[17], q[18], q[19], q[20], q[21], q[22], q[23], q[11],
                          q[12], q[13], q[14]);
         }
-        cudaFree(ddbg);
-        ddbg = nullptr;
+        /* `ddbg` is KEPT until after the row dump, so the same coefficient can be printed from
+           both the kernel's registers and the output buffer on adjacent lines (section 48). */
     }
     /* FORENSIC (NTT_S5_REDDUMP=1): what the reduction actually wrote, row by row, next to the
        mathematical answer for the SAME window.  One row is not enough: a shape whose output rows
@@ -3516,6 +3560,25 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
             char *s3 = mpz_get_str(nullptr, 16, wv);
             std::fprintf(stderr, "s5_reddump_row: k=%llu window=%s gmp=%s device=%s %s\n", k, s3,
                          s1, s2, (mpz_cmp(want, got) == 0) ? "MATCH" : "DIFFER");
+            /* THE SAME COORDINATE, FROM THE KERNEL'S OWN REGISTERS (section 48): `device` above
+               comes from the output buffer, and this comes from the kernel's debug array at the
+               SAME gid.  Printing both on one line is what makes "the kernel's u and the row I am
+               comparing are the same coefficient" checkable instead of assumed -- the whole
+               paradox of section 47.3 rests on that correspondence. */
+            if (ddbg != nullptr) {
+                unsigned long long ku[3] = {0, 0, 0}, kck = 0;
+                CK(cudaMemcpy(ku, ddbg + (size_t)k * 24 + 16, sizeof(ku), cudaMemcpyDeviceToHost));
+                CK(cudaMemcpy(&kck, ddbg + (size_t)k * 24 + 23, sizeof(kck),
+                              cudaMemcpyDeviceToHost));
+                unsigned long long hck = 0;
+                for (unsigned long long j = 0; j < slot_words; ++j)
+                    hck += d0[(size_t)(k * slot_words + j)] * (j + 1ull);
+                std::fprintf(stderr, "s5_reddump_samecoef: k=%llu kernel_u=%llx,%llx,%llx "
+                                     "kernel_ck=%llx host_ck=%llx %s\n", k,
+                             (unsigned long long)ku[0], (unsigned long long)ku[1],
+                             (unsigned long long)ku[2], (unsigned long long)kck,
+                             (unsigned long long)hck, (kck == hck) ? "SAME_INPUTS" : "DIFF_INPUTS");
+            }
             /* THE REDC INVARIANT, FROM GMP (section 47): after L elimination steps the kernel's
                r must be V * 2^-(64L) mod N, and `s5_kernel_view` prints the r it actually holds.
                Printing the expectation here turns "the reduction is wrong" into "the elimination
@@ -3544,6 +3607,7 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
         }
         mpz_clears(wv, want, got, two, nullptr);
     }
+    if (ddbg) { cudaFree(ddbg); ddbg = nullptr; }
     {
         const unsigned long long want = H.out_stride / (H.w ? H.w : 1ull);
         if (want && want != out_slots) {
