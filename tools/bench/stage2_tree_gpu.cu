@@ -2954,6 +2954,9 @@ struct S5Dev {
     /* the per-node linear verdict */
     unsigned *dlin = nullptr;
     size_t dlin_cap = 0;
+    /* R^2 mod N, the plain -> Montgomery image constant (section 44) */
+    std::vector<unsigned long long> hR2;
+    unsigned long long *dR2 = nullptr;
     /* the device-to-host diagnostic buffer of the reduction */
     void *dbad = nullptr;
     /* per-shape cache of the reduction parameters, keyed by (slot_bits, slot_words, bpw) */
@@ -3126,30 +3129,47 @@ __global__ void s5_check_linear_kernel(const unsigned long long *src, unsigned l
 /* Horner at the two children of one node: out_s = A(x_{2*code+s}) with x = -b0 of the leaf,
    evaluated in Montgomery form and folded back with mone (the plain-domain 1).  One thread per
    child; the evaluation point is read from the FOREST (the leaf's own constant term), so the
-   kernel is given the parent's code, never a group key. */
+   kernel is given the parent's code, never a group key.
+   BOTH CHILDREN DIVIDE THE SAME PARENT ROW: the source is `src + src_off` for s = 0 and for
+   s = 1.  The first version scaled it by the child index (`s * sa * W`), which made the second
+   child of every node evaluate a NEIGHBOURING node's polynomial instead of its own parent's
+   (section 44). */
 __global__ void s5_eval_linear_kernel(const unsigned long long *src, unsigned long long src_off,
                                       unsigned long long sa, int W,
                                       const unsigned long long *fA, const unsigned long long *foff,
-                                      unsigned long long code, unsigned long long ds,
-                                      const unsigned long long *n, unsigned long long ninv, int nw,
+                                      unsigned long long child, const unsigned long long *n,
+                                      unsigned long long ninv, int nw,
+                                      const unsigned long long *R2,
                                       unsigned long long *dst, unsigned long long dstride)
 {
-    const unsigned long long s = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
-    if (s >= ds) return;
-    const unsigned long long cc = 2 * code + s;              /* this child's own code */
-    const unsigned long long *c = src + src_off + s * sa * (unsigned long long)W;
-    const unsigned long long *root = fA + foff[cc];          /* the constant term = -x */
-    unsigned long long x[128], h[128], one[128];
-    for (int j = 0; j < nw; ++j) { x[j] = root[j]; one[j] = 0ull; }
-    one[0] = 1ull;
-    s2g_mont_mul<128>(x, x, one, n, ninv, nw);               /* x -> Montgomery form */
+    /* ONE CHILD PER CALL, and the child's own code is an ARGUMENT.  The first version computed
+       both children from the parent's code (`cc = 2*code + threadIdx.x`) while the CALLER already
+       looped over the two children and advanced the destination row for each: the second call
+       wrote the first call's second row again one row further on, so every node ended up with
+       one child's value duplicated and the other's never computed -- and when one child was the
+       padding subtree (degree 0) it wrote a row that did not exist at all (section 44). */
+    const unsigned long long *c = src + src_off;
+    /* ---- THE EVALUATION POINT AND ITS DOMAIN (section 44) --------------------------------
+       The leaf is [ -root, 1 ] = X - root, so the point the remainder is taken at is the ROOT
+       itself: x = -b0 mod N (the host's leaf_mod_linear_batch says the same thing in one line).
+       The first version evaluated at `root`, i.e. at MINUS the baby point -- a wrong value that
+       no amount of downstream checking could have made right.
+       The point then has to be a MONTGOMERY IMAGE, because the coefficients it multiplies come
+       from the plain-domain frontier and `s2g_mont_mul(h, xR) = h*x` keeps them plain: one
+       multiplication by R^2 is the only conversion needed, and NO conversion at the end (the
+       first version converted with `one = 1`, which is a multiplication by R^-1 applied to a
+       value that was already plain). */
+    unsigned long long x[128], h[128], zero[128], r2[128];
+    for (int j = 0; j < nw; ++j) { zero[j] = 0ull; r2[j] = R2[j]; }
+    s2g_submod<128>(x, zero, fA + foff[child], n, nw);       /* x = -root = the baby point */
+    s2g_mont_mul<128>(x, x, r2, n, ninv, nw);                /* x -> x*R */
     bool started = false;
     for (unsigned long long i = sa; i-- > 0;) {
         if (!started) {
             for (int j = 0; j < nw; ++j) h[j] = c[i * (unsigned long long)W + j];
             started = true;
         } else {
-            s2g_mont_mul<128>(h, h, x, n, ninv, nw);
+            s2g_mont_mul<128>(h, h, x, n, ninv, nw);         /* h = h*x, both plain */
             const unsigned long long *a = c + i * (unsigned long long)W;
             unsigned long long carry = 0;
             for (int j = 0; j < nw; ++j) {                    /* h += a  (mod N, exact carry) */
@@ -3161,13 +3181,16 @@ __global__ void s5_eval_linear_kernel(const unsigned long long *src, unsigned lo
         }
     }
     if (!started) for (int j = 0; j < nw; ++j) h[j] = 0ull;
-    s2g_mont_mul<128>(h, h, one, n, ninv, nw);               /* out of Montgomery form */
     for (int j = 0; j < nw; ++j)
-        dst[s * dstride + (unsigned long long)j] = (j < nw) ? h[j] : 0ull;
+        dst[(unsigned long long)j] = (j < nw) ? h[j] : 0ull;
 }
 
-/* dst[i] = A[i] - qb[i mod lb] for i < db, else 0 (the reference's cp_coeff_sub, on the device:
-   the left coefficient is in the plain domain and qb is one Montgomery product away from it) */
+/* dst[i] = A[i] - B[i mod lb] mod N for i < la, else 0 (the reference's cp_coeff_sub, ON THE
+   DEVICE, in the PLAIN domain).  The first version computed `s2g_mont_mul(A[i], B[i mod lb])`
+   and stored THAT -- a Montgomery PRODUCT where the whole operation is a SUBTRACTION, with no
+   subtraction anywhere in the kernel (section 44).  The domain is plain on both sides: the
+   frontier rows come from the host or from the S4 reduction, and s5_mul_batch's output is the
+   reduced plain product, so nothing here needs R at all. */
 __global__ void s5_sub_kernel(const unsigned long long *A, unsigned long long a_off, int la,
                               const unsigned long long *B, unsigned long long b_off, int lb,
                               int rows, const unsigned long long *n, unsigned long long ninv,
@@ -3176,29 +3199,31 @@ __global__ void s5_sub_kernel(const unsigned long long *A, unsigned long long a_
     const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
     if (gid >= (unsigned long long)rows * (unsigned long long)nw) return;
     const int i = (int)(gid / (unsigned long long)nw);
+    (void)ninv;
     unsigned long long r[128];
     if (i >= la) {
         for (int j = 0; j < nw; ++j) r[j] = 0ull;
     } else {
-        const unsigned long long *a = A + a_off + (size_t)i * nw;
-        const unsigned long long *b = B + b_off + (size_t)(i % lb) * nw;
-        s2g_mont_mul<128>(r, a, b, n, ninv, nw);
+        s2g_submod<128>(r, A + a_off + (size_t)i * nw, B + b_off + (size_t)(i % lb) * nw, n, nw);
     }
     for (int j = 0; j < nw; ++j) dst[(size_t)i * dstride + j] = r[j];
 }
 
-/* e = 2 (in Montgomery form) minus the input, per coefficient */
+/* e = 2 - a, per coefficient, in the PLAIN domain.  The Newton step is `g <- g*(2 - a*g)` and
+   every operand here is a plain reduced value, so the constant is a plain 2; the first version
+   built it as `Mont(2, 1) = 2*R^-1` and subtracted THAT, which makes the iteration compute
+   `g*(2 - a*g*R^-1)` -- not the inverse of anything (section 44). */
 __global__ void s5_two_minus_kernel(const unsigned long long *a, unsigned long long *out,
                                     unsigned long long total, const unsigned long long *n,
                                     unsigned long long ninv, int nw)
 {
     const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
     if (gid >= total) return;
-    unsigned long long two[128], one[128], t[128], r[128];
-    for (int j = 0; j < nw; ++j) { two[j] = 0ull; one[j] = 0ull; }
-    two[0] = 2ull; one[0] = 1ull;
-    s2g_mont_mul<128>(t, two, one, n, ninv, nw);              /* 2 in Montgomery form */
-    s2g_submod<128>(r, t, a + gid * (unsigned long long)nw, n, nw);
+    (void)ninv;
+    unsigned long long two[128], r[128];
+    for (int j = 0; j < nw; ++j) two[j] = 0ull;
+    two[0] = 2ull;
+    s2g_submod<128>(r, two, a + gid * (unsigned long long)nw, n, nw);
     for (int j = 0; j < nw; ++j) out[gid * (unsigned long long)nw + j] = r[j];
 }
 
@@ -4043,20 +4068,18 @@ static int s5_forest_build(S5Forest &F, const std::vector<std::vector<unsigned l
     F.off.assign(2 * Fpad, 0ull);
     F.sz.assign(2 * Fpad, 0ull);
     F.entry.clear();
+    /* ---- EVERY NODE THE KERNELS CAN ASK FOR MUST BE IN THE FOREST (section 44) ------------
+       The heap is t[1] = the tree root and t[Fpad + i] = leaf i, so the nodes live in
+       [1, 2*Fpad) and the LEAVES are [Fpad, 2*Fpad).  The first version walked
+       `for (base = 1; base < Fpad; base *= 2)` and then re-walked `[top/2, top)`, which covers
+       the internal nodes TWICE and the leaves NEVER: `off[leaf]` stayed 0 and the Horner kernel
+       read `fA + 0`, i.e. the root's own coefficients, as the evaluation point of every baby
+       point.  Laying out every node with a nonzero degree in ascending code order keeps the
+       internal offsets exactly where the generic division expects them (internal codes come
+       first) and appends the leaves after them. */
     unsigned long long off = 0;
-    for (size_t base = 1; base < Fpad; base *= 2) {
-        const size_t c0 = base, c1 = 2 * base;
-        if (c1 > top) break;
-        F.entry.push_back(c0);
-        for (size_t i = c0; i < c1 && i < top; ++i) {
-            F.off[i] = off;
-            F.sz[i] = ((unsigned long long)Fdeg[i] + 1ull) * (unsigned long long)W;
-            off += F.sz[i];
-        }
-    }
-    F.words = off;
-    F.entry.push_back(top / 2);
-    for (size_t i = top / 2; i < top; ++i) {
+    for (size_t i = 1; i < 2 * Fpad; ++i) {
+        if (Fdeg[i] == 0) continue;                       /* the padding subtree is the constant 1 */
         F.off[i] = off;
         F.sz[i] = ((unsigned long long)Fdeg[i] + 1ull) * (unsigned long long)W;
         off += F.sz[i];
@@ -4068,20 +4091,9 @@ static int s5_forest_build(S5Forest &F, const std::vector<std::vector<unsigned l
         std::exit(3);
     }
     CK(cudaMalloc(&F.dA, F.words * sizeof(unsigned long long)));
-    for (size_t base = 1; base < Fpad; base *= 2) {
-        const size_t c0 = base, c1 = 2 * base;
-        if (c1 > top) break;
-        for (size_t i = c0; i < c1 && i < top; ++i) {
-            const unsigned long long sz = F.sz[i];
-            if (Fdeg[i] == 0 || sz == 0) continue;
-            CK(cudaMemcpy(F.dA + F.off[i], Ft[i].data(), sz * sizeof(unsigned long long),
-                          cudaMemcpyHostToDevice));
-        }
-    }
-    for (size_t i = top / 2; i < top; ++i) {
-        const unsigned long long sz = F.sz[i];
-        if (Fdeg[i] == 0 || sz == 0) continue;
-        CK(cudaMemcpy(F.dA + F.off[i], Ft[i].data(), sz * sizeof(unsigned long long),
+    for (size_t i = 1; i < 2 * Fpad; ++i) {
+        if (Fdeg[i] == 0 || F.sz[i] == 0) continue;
+        CK(cudaMemcpy(F.dA + F.off[i], Ft[i].data(), F.sz[i] * sizeof(unsigned long long),
                       cudaMemcpyHostToDevice));
     }
     st.forest_nodes += F.words;
@@ -4094,6 +4106,15 @@ static int s5_forest_build(S5Forest &F, const std::vector<std::vector<unsigned l
 struct S5Entry {
     unsigned long long code = 0;
     size_t ncoef = 0;                  /* the row's coefficient count, TIGHT (stride 1) */
+    /* WHERE THIS NODE'S ROW IS, in the frontier buffer the level's kernels read.  Without it
+       every node divided the frontier's FIRST row: the first level has exactly one node, so it
+       was right, and every level below it was silently wrong -- the decisions (generic/horner/
+       copy/zero) do not depend on the data, so the operation counts still matched the host's
+       exactly (46 = 46) while the leaf values did not.  Found with a one-level repro (P=2,
+       D=10) and then read off the kernels: `s5_eval_linear_kernel` even scaled the source by the
+       CHILD index (`s * sa * W`), i.e. it assumed each child had a dividend of its own, while
+       both children of a node divide the SAME parent row. */
+    size_t rowoff = 0;
 };
 
 static void s5_dev_init(S5Dev &D, PolyLayer &L, S4Reduce &red)
@@ -4104,6 +4125,26 @@ static void s5_dev_init(S5Dev &D, PolyLayer &L, S4Reduce &red)
     CK(cudaMalloc(&D.scratch, D.scratch_words * sizeof(unsigned long long)));
     D.pool_words = (size_t)256 << 20;                    /* 256 MB of per-node rows */
     CK(cudaMalloc(&D.pool, D.pool_words * sizeof(unsigned long long)));
+    /* R2 = R^2 mod N with R = 2^(64*nw): the ONE constant that turns a plain value into its
+       MONTGOMERY IMAGE through the multiplier the S5 kernels have (mont_mul(x, R2) = x*R).  The
+       linear leaf branch needs it because its evaluation point and its coefficients both arrive
+       in the plain domain -- see the note in s5_eval_linear_kernel (section 44). */
+    {
+        const size_t nw = (size_t)red.nw;
+        mpz_t Rr, R2;
+        mpz_inits(Rr, R2, nullptr);
+        mpz_set_ui(Rr, 1);
+        mpz_mul_2exp(Rr, Rr, (mp_bitcnt_t)(64 * nw));
+        mpz_mod(Rr, Rr, red.N);
+        mpz_mul(R2, Rr, Rr);
+        mpz_mod(R2, R2, red.N);
+        D.hR2.assign(nw, 0ull);
+        mpz_to_words(D.hR2, nw, R2);
+        CK(cudaMalloc(&D.dR2, nw * sizeof(unsigned long long)));
+        CK(cudaMemcpy(D.dR2, D.hR2.data(), nw * sizeof(unsigned long long),
+                      cudaMemcpyHostToDevice));
+        mpz_clears(Rr, R2, nullptr);
+    }
 }
 
 /* THE DEVICE DESCENT.  Everything the host descent does, but with no A/B materialised on the
@@ -4125,6 +4166,15 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
     }
     S5Dev D;
     s5_dev_init(D, L, *L.s4->red);
+    /* NTT_S5_NO_LINEAR=1 routes a degree-1 divisor through the GENERIC Newton division instead of
+       the Horner shortcut.  It is a DIAGNOSTIC, and a decisive one: the linear branch is 24 of the
+       46 operations on the frozen vector and it fires only at the last level, so if the leaf
+       values match the host's with the shortcut off, the defect is inside the shortcut -- and if
+       they do not, it is in the generic path.  Cheaper than reading either. */
+    const bool no_linear = [] {
+        const char *e = std::getenv("NTT_S5_NO_LINEAR");
+        return e && *e && std::atoi(e) != 0;
+    }();
     /* the horizon: every frontier value must fit one coefficient budget */
     size_t chunkL = 4096;
     {
@@ -4180,7 +4230,13 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
            [lo, lo+Lc), i.e. the ancestor Lc/2 apart from the first leaf.  (lo+Lc would land
            under the leaves, which is what made the first version walk into Fdeg[65].) */
         cur[0].code = (Lc == Fpad) ? 1 : (lo / Lc + 1);
-        cur[0].ncoef = Fdeg[cur[0].code] + 1;
+        /* THE ROOT'S ROW WIDTH IS BOUNDED BY THE ROWS THAT EXIST (section 44).  `Fdeg[code]+1`
+           is an upper bound on the coefficients of the chunk's polynomial (deg H < deg F), and
+           the extra row is a harmless leading zero whenever the chunk is at least that wide --
+           which is the real shape.  When it is NOT (the padded leaves are few: the one-level
+           repro P=2/Fpad=2 gave ncoef=3 against a 2-row buffer), the kernel read one row past the
+           allocation and Horner started on garbage.  Clamp it to what `dbound` actually holds. */
+        cur[0].ncoef = std::min(Fdeg[cur[0].code] + 1, (size_t)Lc);
         size_t cnt = Lc;
         int level = (int)ceil_log2_u64((unsigned long long)Lc);
         while (cnt > 1) {
@@ -4194,11 +4250,11 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                 const size_t nc1 = Fdeg[2 * e.code + 1];
                 if (nc0 == 0) { st.zeros++; }
                 else if (e.ncoef < nc0 + 1) { st.copies++; vol += e.ncoef; }
-                else if (nc0 == 1) { st.linear++; vol += 1; }
+                else if (nc0 == 1 && !no_linear) { st.linear++; vol += 1; }
                 else { st.generic++; ++st.divmods; vol += nc0; }
                 if (nc1 == 0) { st.zeros++; }
                 else if (e.ncoef < nc1 + 1) { st.copies++; vol += e.ncoef; }
-                else if (nc1 == 1) { st.linear++; vol += 1; }
+                else if (nc1 == 1 && !no_linear) { st.linear++; vol += 1; }
                 else { st.generic++; ++st.divmods; vol += nc1; }
             }
             /* off[q] = the number of ROWS the q-th child actually receives, in emission order, so
@@ -4220,7 +4276,7 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                     const size_t nc = Fdeg[2 * e.code + (size_t)sgn];
                     if (nc == 0) off.push_back(0);
                     else if (e.ncoef < nc + 1) off.push_back(e.ncoef);
-                    else if (nc == 1) off.push_back(1);
+                    else if (nc == 1 && !no_linear) off.push_back(1);
                     else off.push_back(nc);
                 }
             }
@@ -4253,7 +4309,8 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                            message here instead of a silent device overrun (section 30). */
                         {
                             const size_t rows_here = (e.ncoef < nc + 1) ? e.ncoef
-                                                                       : (nc == 1 ? 1 : nc);
+                                                                       : ((nc == 1 && !no_linear)
+                                                                              ? 1 : nc);
                             if (dstrow + rows_here > vol) {
                                 std::fprintf(stderr, "%s: FATAL: the S5 frontier is too small: "
                                                      "child=%llu dstrow=%llu rows=%llu vol=%llu\n",
@@ -4275,21 +4332,23 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                         if (e.ncoef < nc + 1) {
                             /* the degree fast path: H mod F_ci = H, a pure device copy */
                             unsigned long long nw = 0;
-                            s5_memcpy_rows(dbound, 0, dstrow * W, e.ncoef, e.ncoef, (int)W, dvals,
-                                           &nw);
-                        } else if (nc == 1) {
-                            /* the linear branch: a mod (X - x_j) = a(x_j), Horner on the device */
-                            s5_eval_linear_kernel<<<S5_GRID(2)>>>(
-                                dbound, 0, e.ncoef, (int)W, F.dA, D.dfoff,
-                                (unsigned long long)e.code, 2ull, L.s4->red->dn, L.s4->red->ninv,
-                                L.s4->red->nw, dvals + dstrow * W, (unsigned long long)W);
+                            s5_memcpy_rows(dbound, e.rowoff * W, dstrow * W, e.ncoef, e.ncoef,
+                                           (int)W, dvals, &nw);
+                        } else if (nc == 1 && !no_linear) {
+                            /* the linear branch: a mod (X - x_j) = a(x_j), Horner on the device.
+                               One launch per CHILD, one row written. */
+                            s5_eval_linear_kernel<<<S5_GRID(1)>>>(
+                                dbound, (unsigned long long)(e.rowoff * W), e.ncoef, (int)W,
+                                F.dA, D.dfoff,
+                                (unsigned long long)child, L.s4->red->dn, L.s4->red->ninv,
+                                L.s4->red->nw, D.dR2, dvals + dstrow * W, (unsigned long long)W);
                             CK(cudaGetLastError());
                         } else {
                             /* the generic branch: the Newton quotient chain, one node at a time
                                (the batched shape is uniform, but each node's dividend row is its
                                own, and every level here has far fewer nodes than the leaves) */
-                            s5_divmod_one(D, dbound, 0, e.ncoef, F.dA, F.off[child], nc, nc,
-                                          dvals + dstrow * W, st);
+                            s5_divmod_one(D, dbound, (unsigned long long)(e.rowoff * W), e.ncoef,
+                                          F.dA, F.off[child], nc, nc, dvals + dstrow * W, st);
                         }
                     }
                 }
@@ -4297,6 +4356,7 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                 st.t_copy += now_s() - tc0;
             }
             /* the children become the next level's frontier, in the same order */
+            size_t dstrow_all = 0;
             for (const S5Entry &e : cur) {
                 for (int sgn = 0; sgn < 2; ++sgn) {
                     const size_t child = 2 * e.code + (size_t)sgn;
@@ -4306,7 +4366,10 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                     ne.code = child;
                     /* the row's coefficient count: the divisor's when it was divided, the
                        parent's when it was only copied, 1 when it was evaluated */
-                    ne.ncoef = (e.ncoef < nc + 1) ? e.ncoef : (nc == 1 ? 1 : nc);
+                    ne.ncoef = (e.ncoef < nc + 1) ? e.ncoef
+                                                  : ((nc == 1 && !no_linear) ? 1 : nc);
+                    ne.rowoff = dstrow_all;
+                    dstrow_all += ne.ncoef;
                     nxt.push_back(ne);
                 }
             }
@@ -6216,7 +6279,9 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             descent_slow(L, Ft, Fdeg, Fpad, H, ref, dm);
             L.cat = -1;
             unsigned long long bad = 0, first = 0;
-            for (size_t i = 0; i < (size_t)P; ++i)
+            unsigned long long badleaves = 0, firsts[8] = {0}, nfirst = 0;
+            for (size_t i = 0; i < (size_t)P; ++i) {
+                bool dl = false;
                 for (size_t q = 0; q < W; ++q)
                     if (values[i][q] != ref[i][q]) {
                         if (!bad) {
@@ -6226,7 +6291,55 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                                         (unsigned long long)q, values[i][q], ref[i][q]);
                         }
                         ++bad;
+                        dl = true;
                     }
+                if (dl) { ++badleaves; if (nfirst < 8) firsts[nfirst++] = (unsigned long long)i; }
+            }
+            std::printf("descent_check_leaves: P=%llu differing_leaves=%llu first8=", (unsigned long long)P,
+                        badleaves);
+            for (unsigned long long z = 0; z < nfirst; ++z)
+                std::printf("%s%llu", z ? "," : "", firsts[z]);
+            std::printf("\n");
+            /* ---- WHAT IS THE DEVICE'S VALUE, EXACTLY? (section 44) -------------------------
+               A DOMAIN mistake is a constant factor, and a constant factor is NAMEABLE: compute
+               ref/device mod N and ask whether it is R^k for a small k (R = 2^(64*nw), the
+               Montgomery radix).  That turns "the numbers disagree" into "the device returns the
+               plain value times R^-2", which is a diagnosis instead of a search. */
+            if (bad) {
+                mpz_t a, b, ai, ratio, R, pw, Rinv;
+                mpz_inits(a, b, ai, ratio, R, pw, Rinv, nullptr);
+                words_to_mpz(a, values[first].data(), W);
+                words_to_mpz(b, ref[first].data(), W);
+                mpz_set_ui(R, 1);
+                for (size_t i = 0; i < W * 64; ++i) { mpz_mul_2exp(R, R, 1); mpz_mod(R, R, L.N); }
+                char *sb = mpz_get_str(nullptr, 16, b), *sa = mpz_get_str(nullptr, 16, a);
+                std::printf("descent_check_values: i=%llu slow=%s batched=%s\n",
+                            first, sb, sa);
+                free(sb); free(sa);
+                if (mpz_invert(ai, a, L.N) != 0) {
+                    mpz_mul(ratio, b, ai); mpz_mod(ratio, ratio, L.N);
+                    int kbest = 1000;
+                    mpz_set_ui(pw, 1);
+                    for (int k = 0; k <= 8 && kbest == 1000; ++k) {
+                        if (mpz_cmp(pw, ratio) == 0) kbest = k;
+                        mpz_mul(pw, pw, R); mpz_mod(pw, pw, L.N);
+                    }
+                    if (mpz_invert(Rinv, R, L.N) != 0) {
+                        mpz_set_ui(pw, 1);
+                        for (int k = 1; k <= 8 && kbest == 1000; ++k) {
+                            mpz_mul(pw, pw, Rinv); mpz_mod(pw, pw, L.N);
+                            if (mpz_cmp(pw, ratio) == 0) kbest = -k;
+                        }
+                    }
+                    char *sr = mpz_get_str(nullptr, 16, ratio);
+                    std::printf("descent_check_domain: slow/batched = %s = R^%d\n", sr, kbest);
+                    free(sr);
+                } else {
+                    std::printf("descent_check_domain: the device's leaf value is NOT invertible "
+                                "mod N\n");
+                }
+                mpz_clears(a, b, ai, ratio, R, pw, Rinv, nullptr);
+            }
             std::printf("descent_check: P=%llu divmods_batched=%llu divmods_slow=%llu "
                         "mismatching_coefficients=%llu first=%llu\n", (unsigned long long)P,
                         R.descent_divmods, dm, bad, first);
