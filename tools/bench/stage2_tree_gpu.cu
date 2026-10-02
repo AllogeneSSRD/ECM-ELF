@@ -2393,7 +2393,19 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
         return t;
     }
     ++L.s4->level_calls;
+    /* ---- PER-LEVEL TIMES OF A TREE (section 26) ---------------------------------------------
+       The cost model says every level of a product tree carries the SAME operand bits (P*slot_bits
+       per level, whatever the degree), and the measured per-phase rates (g_tree 0.32 ns per operand
+       bit, fold 0.38, descent 0.33) say the phases are uniformly efficient -- which would make the
+       G tree's 101 s inherent rather than wasteful.  That is a big claim to leave on arithmetic, so
+       each level is timed and the first two builds (the F tree, then the first G tree) print their
+       ladder: if the levels are equal, the tree has no cheap half to attack. */
+    static int lvl_print = 0;
+    const bool lvl_trace = (lvl_print < 2);
+    if (lvl_trace) ++lvl_print;
     for (size_t base = pad / 2; ; base /= 2) {
+        const double tl0 = now_s();
+        unsigned long long lvl_muls = 0, lvl_groups = 0;
         /* nodes [base, 2*base), children at [2*base, 4*base) -- all children are already built */
         std::map<std::pair<size_t, size_t>, std::vector<size_t>> groups;
         for (size_t i = base; i < 2 * base; ++i) {
@@ -2424,6 +2436,8 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
             std::vector<unsigned long long> res;
             poly_mul_batch_modN(L, wa.data(), wb.data(), ma, mb, nbatch, res, cat);
             ++L.s4->groups;
+            ++lvl_groups;
+            lvl_muls += nbatch;
             for (size_t s = 0; s < nbatch; ++s) {
                 const size_t i = g.second[s];
                 t[i].assign(res.begin() + (long)(s * nc * W), res.begin() + (long)((s + 1) * nc * W));
@@ -2431,6 +2445,9 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
                 ++fs.muls;
             }
         }
+        if (lvl_trace)
+            std::printf("tree_level: base=%llu groups=%llu muls=%llu t=%.3f s\n",
+                        (unsigned long long)base, lvl_groups, lvl_muls, now_s() - tl0);
         if (base == 1) break;
     }
     return t;
