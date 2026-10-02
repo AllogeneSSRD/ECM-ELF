@@ -7329,10 +7329,8 @@ static bool real_run_words(unsigned long long P, int S, unsigned long long *out_
     return true;
 }
 
-struct DChoice {
-    unsigned long long D = 0, P = 0, largest_words = 0, total_words = 0;
-    bool fits = false;
-};
+/* the D scan's candidate record lives with the scan itself (section 59); the old `DChoice`, which
+   only carried a memory footprint, was replaced by a cost+coverage model */
 
 static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
@@ -7364,62 +7362,166 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 "requested_D=%llu choose_d=%d\n", g_device, prop.name, (long)L.S, sigma, B1, B2,
                 D_in, choose_d ? 1 : 0);
 
-    /* ---- the D search: the largest D whose largest transform still fits the budget ---- */
+    /* ---- THE D SEARCH (section 59) ----------------------------------------------------------
+       `--choose-d` used to take the LARGEST D whose transforms fit memory, on the grounds that
+       "work is proportional to 1/D".  That is half the story and the wrong half to optimise:
+
+         * the MAIN LOOP is proportional to 1/D -- imax = B2/D giant steps, and this engine ties
+           the batch size to P exactly (`num_poly_g = ceil(imax/P)`, section 27/S3), so every
+           multiply in the loop is a degree-P x degree-P multiply and the loop costs
+           imax * log2(min(P, imax));
+         * the F TREE, the Newton inverse, the remainder DESCENT and the block ACCUMULATION are all
+           proportional to P = phi(D)/2, which GROWS with D.
+
+       There is therefore an interior optimum, and it must be weighted by what a curve actually
+       covers: stage 2 tests the residues +-j (mod D) for j <= P, i.e. the phi(D) UNITS of D, so the
+       fraction of the (B1,B2] primes it can see is phi(D)/D.  A D with many small prime factors is
+       a WORSE curve per unit of B2 -- that is the trade Prime95's `efficiency` score and its
+       "Curve is worth 2.63 ... curves" line make explicit (section 18) and we had no equivalent of.
+
+       THERE IS NO COVERAGE TRADE -- EVERY CANDIDATE COVERS ESSENTIALLY ALL OF (B1,B2], and the first
+       version of this model got that wrong in a way worth recording here, because the measurement
+       caught it immediately.  It weighted each candidate by phi(D)/D, the density of the UNITS among
+       the D residues (0.18 for D=570570), which ranked the prime power D=19^4=130321 (phi/D=0.947)
+       far above the baseline -- and the run it produced was 2x SLOWER (measured 127.00 s against
+       62.93 s at B2=1e11).  The error: a PRIME p > D that does not divide D is automatically
+       COPRIME to D, so its residue p mod D is always one of the units, and the baby set
+       {+-j : j <= P, gcd(j,D) = 1} is EXACTLY the set of units.  Every prime in (B1,B2] larger than
+       D is therefore covered whatever phi(D)/D is; the primes that can be missed are those in
+       (P, D], whose count is pi(D)-pi(P) ~ 1e4 against pi(1e11) ~ 4e9, i.e. a fraction ~1e-5.
+       So the choice is a PURE COST question -- minimise (loop + tree + giant + glue) -- and the
+       table reports the missed-prime estimate as information only.
+
+       THE MODEL IS FITTED TO MEASURED PHASE TIMES, NOT GUESSED.  The reference is the production
+       run of section 56.1 (D=570570, P=51840, imax=3400110, giant_points=3400110):
+           gtrees 192.920 + fold 72.836          = 265.756   loop,  per imax*log2(P)
+           pre 6.335 + descent 31.134 + accum 13.068 = 50.537  tree, per P
+           giant 50.655                                  per imax
+           gleaves 20.722 + loop_host 9.617      = 30.339   per batch
+           face value plus the ~25 s setup that lives outside `elapsed`
+       Turned into RATES (so the model does not depend on the B2 being planned) and re-applied, it
+       reproduces that run to 0.1%: 265.7 + 50.5 + 50.7 + 30.3 + 25.0 = 422.3 s against the measured
+       397.83 + 25 = 422.8 s.  Its job is ranking, not prediction to the second.
+
+       Memory feasibility stays a HARD filter: a candidate whose shapes do not fit the arena is not
+       a candidate at all. */
     unsigned long long D = D_in, P_baby = 0;
     {
+        struct DCand {
+            unsigned long long D = 0, P = 0, imax = 0, batches = 0;
+            double units = 0.0, loop = 0.0, tree = 0.0, giant = 0.0, glue = 0.0, total = 0.0;
+            double rate = 0.0;                       /* covered values per second (coverage ~ 1) */
+            bool fits = false;
+            unsigned long long total_words = 0;
+        };
+        const double RP = 51840.0, RIM = 3400110.0, RB = 66.0;
+        const double RLOOP = 265.756, RTREE = 50.537, RGIANT = 50.655, RGLUE = 30.339, RSETUP = 25.0;
+        auto lg2 = [](double x) { return (x > 1.0) ? (std::log(x) / std::log(2.0)) : 1.0; };
+        auto model = [&](DCand &c) {
+            c.imax = B2 / c.D + 2;
+            const unsigned long long bsz = (c.P < c.imax) ? c.P : c.imax;
+            c.batches = bsz ? (c.imax + bsz - 1) / bsz : 1;
+            c.units = (double)c.P * 2.0 / (double)c.D;      /* phi(D)/D: informational only */
+            c.loop = (RLOOP / (RIM * lg2(RP))) * (double)c.imax * lg2((double)bsz);
+            c.tree = (RTREE / RP) * (double)c.P;
+            c.giant = (RGIANT / RIM) * (double)c.imax;
+            c.glue = (RGLUE / RB) * (double)c.batches;
+            c.total = c.loop + c.tree + c.giant + c.glue + RSETUP;
+            const double span = (B2 > B1) ? (double)(B2 - B1) : 1.0;
+            c.rate = span / (c.total > 1e-9 ? c.total : 1e-9);
+        };
+        /* every 47-smooth D (products of the primes below with ANY exponents): the step size need
+           not be squarefree, and a repeated factor multiplies D (fewer steps) without changing
+           phi(D)/D, which is exactly the trade the model is about. */
         static const unsigned long long prim[] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41,
                                                   43, 47};
-        std::vector<DChoice> cands;
-        if (choose_d) {
-            const size_t np = sizeof(prim) / sizeof(prim[0]);
-            for (unsigned long long mask = 1; mask < (1ull << np); ++mask) {
-                unsigned long long d = 1;
-                bool over = false;
-                for (size_t i = 0; i < np; ++i)
-                    if (mask & (1ull << i)) {
-                        if (d > 200000000ull / prim[i]) { over = true; break; }
-                        d *= prim[i];
-                    }
-                if (over || d > 200000000ull) continue;
-                DChoice c;
-                c.D = d;
-                c.P = phi_u64(d) / 2;
-                if (c.P == 0) continue;
-                unsigned long long ww = 0;
-                if (!real_run_words(c.P, (int)L.S, &ww, &c.largest_words, nullptr)) continue;
-                c.largest_words = ww;
-                c.total_words = ww;
-                c.fits = (double)c.total_words * 8.0 <= (double)cap;
-                cands.push_back(c);
-            }
-            std::sort(cands.begin(), cands.end(),
-                      [](const DChoice &a, const DChoice &b) { return a.D < b.D; });
-            const DChoice *best = nullptr;
-            for (const DChoice &c : cands)
-                if (c.fits && (!best || c.D > best->D)) best = &c;
-            std::printf("d_budget: free=%.0f MB reserve=%.0f MB cap=%.0f MB ; candidates=%llu ; "
-                        "the largest transform of a candidate is 3*N+out_slots+N+N/2 words\n",
-                        freeb / 1048576.0, reserve / 1048576.0, cap / 1048576.0,
-                        (unsigned long long)cands.size());
-            {
-                unsigned long long shown = 0;
-                for (size_t i = cands.size(); i-- > 0 && shown < 12; ++shown) {
-                    const DChoice &c = cands[i];
-                    std::printf("d_budget_choice: D=%llu P=phi/2=%llu largest_transform=%.0f MB "
-                                "total_needed=%.0f MB fits=%d\n", c.D, c.P,
-                                (double)c.largest_words * 8.0 / 1048576.0,
-                                (double)c.total_words * 8.0 / 1048576.0, c.fits ? 1 : 0);
+        const size_t np = sizeof(prim) / sizeof(prim[0]);
+        const unsigned long long dlim = 200000000ull;
+        std::vector<DCand> cands;
+        cands.reserve(60000);
+        /* iterative enumeration of every 47-smooth D <= dlim: an explicit stack visits each
+           candidate exactly once, needs no recursion and no <functional> */
+        {
+            std::vector<std::pair<size_t, unsigned long long>> stk;
+            stk.push_back({0, 1ull});
+            while (!stk.empty()) {
+                const size_t i = stk.back().first;
+                const unsigned long long cur = stk.back().second;
+                stk.pop_back();
+                if (i == np) {
+                    DCand c;
+                    c.D = cur;
+                    c.P = phi_u64(cur) / 2;
+                    if (c.P == 0) continue;
+                    model(c);
+                    cands.push_back(c);
+                    continue;
+                }
+                unsigned long long v = cur;
+                for (;;) {
+                    stk.push_back({i + 1, v});
+                    if (v > dlim / prim[i]) break;
+                    v *= prim[i];
                 }
             }
-            if (!best) {
+        }
+        std::sort(cands.begin(), cands.end(),
+                  [](const DCand &a, const DCand &b) { return a.total < b.total; });
+        std::printf("d_scan: candidates=%llu (47-smooth D <= %llu) ; model fitted to the section "
+                    "56.1 run (rates: loop=%.3f s per imax*log2, tree=%.1f us per leaf, "
+                    "giant=%.2f us per step, glue=%.2f ms per batch) ; ranked by TOTAL COST "
+                    "(coverage is ~1 for every candidate: a prime p > D is coprime to D, so its "
+                    "residue is a unit and the baby set IS the units)\n",
+                    (unsigned long long)cands.size(), dlim,
+                    RLOOP / (RIM * lg2(RP)), RTREE * 1e6 / RP, RGIANT * 1e6 / RIM, RGLUE * 1e3 / RB);
+        DCand best;
+        unsigned long long checked = 0, shown = 0;
+        for (DCand &c : cands) {
+            if (shown >= 14 && best.D) break;
+            if (checked++ > 4000 && best.D) break;
+            unsigned long long tw = 0;
+            if (!real_run_words(c.P, (int)L.S, &tw, nullptr, nullptr)) continue;
+            c.total_words = tw;
+            c.fits = ((double)tw * 8.0 <= (double)cap);
+            if (!c.fits) continue;
+            if (!best.D || c.total < best.total) best = c;
+            if (shown < 14) {
+                /* the missed-prime estimate: only (P, D] can be missed, and pi(x) ~ x/ln x */
+                const double missed = (double)c.D / std::log((double)c.D) -
+                                      (double)c.P / std::log((double)(c.P > 2 ? c.P : 3));
+                std::printf("d_scan_choice: D=%llu P=phi/2=%llu imax=%llu batches=%llu "
+                            "units=%.4f missed_primes~%.0f fit=%.0f MB | loop=%.1f tree=%.1f "
+                            "giant=%.1f glue=%.1f total=%.1f rate=%.3g vals/s\n",
+                            c.D, c.P, c.imax, c.batches, c.units, missed,
+                            (double)tw * 8.0 / 1048576.0, c.loop, c.tree, c.giant, c.glue, c.total,
+                            c.rate);
+                ++shown;
+            }
+        }
+        /* the requested D, for comparison (even when it is not the winner) */
+        if (D_in) {
+            DCand r;
+            r.D = D_in;
+            r.P = phi_u64(D_in) / 2;
+            model(r);
+            unsigned long long tw = 0;
+            const bool okm = real_run_words(r.P, (int)L.S, &tw, nullptr, nullptr);
+            std::printf("d_scan_reference: D=%llu P=%llu imax=%llu batches=%llu units=%.4f "
+                        "fit=%s | loop=%.1f tree=%.1f giant=%.1f glue=%.1f total=%.1f "
+                        "rate=%.3g vals/s\n",
+                        r.D, r.P, r.imax, r.batches, r.units, okm ? "yes" : "NO",
+                        r.loop, r.tree, r.giant, r.glue, r.total, r.rate);
+        }
+        if (choose_d) {
+            if (!best.D) {
                 std::fprintf(stderr, "%s: no candidate D fits the budget (cap=%.0f MB)\n",
                              NTT_PROBE_NAME, cap / 1048576.0);
                 return 3;
             }
-            D = best->D;
-            std::printf("d_budget_decision: D=%llu P=phi(D)/2=%llu (the largest D whose tree + "
-                        "fold + descent shapes fit; work is proportional to 1/D, so this is the "
-                        "fastest admissible shape)\n", D, best->P);
+            D = best.D;
+            std::printf("d_scan_decision: D=%llu P=phi(D)/2=%llu (the CHEAPEST admissible shape by "
+                        "the fitted cost model -- NOT the largest D that fits, which is what this "
+                        "flag used to pick; see the header comment)\n", D, best.P);
         } else {
             P_baby = phi_u64(D) / 2;
             bool ok1 = false, ok2 = false;
