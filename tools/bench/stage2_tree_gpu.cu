@@ -1229,6 +1229,8 @@ static bool g_s4_batched_progress = true;
    probe's per-chunk residual readback, and how many single-readback finishes replaced them.
    Printed so tools/test can assert the deferral actually happened. */
 static unsigned long long g_defer_chunks = 0, g_defer_finishes = 0, g_defer_slices = 0;
+static unsigned long long g_defer_checked_chunks = 0, g_defer_max_group = 0;
+static double g_carry_group_readback = 0.0, g_carry_chunk_readback = 0.0;
 
 /* ---- PINNED STAGING FOR THE CHUNK ROUND-TRIPS (section 30) --------------------------------
    Section 28 measured what the per-chunk cost really is: a PAGEABLE transfer cannot be overlapped,
@@ -1244,8 +1246,12 @@ static unsigned long long g_defer_chunks = 0, g_defer_finishes = 0, g_defer_slic
    constraint, section 27.3), and the buffers are small: at the production shape one chunk's raw
    coefficients are 0.43 MB per operand and its reduced output 1.66 MB.  A failed pinning falls back
    to the old blocking path rather than aborting. */
-static unsigned long long *g_pin_raw[2] = {nullptr, nullptr};
-static size_t g_pin_raw_cap[2] = {0, 0};
+/* Two upload slots, each with its OWN A/B capacities. Removing a carry drain must not let
+   the CPU overwrite pinned input while a preceding H2D still reads it. */
+static unsigned long long *g_pin_raw[2][2] = {};
+static size_t g_pin_raw_cap[2][2] = {};
+static cudaEvent_t g_pin_raw_ev[2] = {};
+static bool g_pin_raw_pending[2] = {};
 static unsigned long long *g_pin_out[2] = {nullptr, nullptr};
 static size_t g_pin_out_cap[2] = {0, 0};
 static cudaEvent_t g_pin_ev[2] = {nullptr, nullptr};
@@ -1262,6 +1268,29 @@ static bool opt_off(const char *name)
 }
 static const bool g_s4_defer_carry = !opt_off("NTT_S4_DEFER_CARRY");
 static const bool g_s4_async = !opt_off("NTT_S4_ASYNC");
+/* Same-binary candidate: accumulate identical interior chunks, check BEFORE the tail reset.
+   Opt-in until production ABBA establishes a gain. */
+static const bool g_s4_carry_batch = [] {
+    const char *e = std::getenv("NTT_S4_CARRY_BATCH");
+    return e && *e && std::atoi(e) != 0;
+}();
+/* Gate-only chunk cap and counter fault; production explicitly disables both. */
+static const unsigned long long g_s4_chunk_max = [] {
+    const char *e = std::getenv("NTT_S4_CHUNK_MAX");
+    return e && *e ? std::strtoull(e, nullptr, 10) : 0ull;
+}();
+static const bool g_s4_carry_test_bad = [] {
+    const char *e = std::getenv("NTT_S4_CARRY_TEST_BAD");
+    return e && *e && std::atoi(e) != 0;
+}();
+static bool g_s4_carry_injected = false;
+static const bool g_s4_carry_trace = [] {
+    const char *e = std::getenv("NTT_S4_CARRY_TRACE");
+    return e && *e && std::atoi(e) != 0;
+}();
+static unsigned long long g_carry_output_hash = 1469598103934665603ull, g_carry_output_words = 0;
+static unsigned long long g_pin_raw_waits = 0;
+static double g_pin_raw_wait = 0.0;
 /* counted so tools/test can assert the asynchronous path was TAKEN (section 30): the timing
    difference between the blocking and the pinned path is small enough that a run which silently
    fell back to blocking would look like a normal result */
@@ -2867,6 +2896,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
             if (bytes <= budget_bytes) { chunk = c; break; }
         }
     }
+    if (g_s4_chunk_max) chunk = std::min(chunk, g_s4_chunk_max);
     int rc = 0;
     /* THE DEVICE PACKING SWITCH (objective 4, section 33): default is the device packer; set
        NTT_S4_HOSTPACK=1 to run the old host-packing path, which is kept as the A/B oracle. */
@@ -2884,8 +2914,10 @@ static void poly_mul_batch_modN(PolyLayer &L,
        Deferring it needs the counters to survive between chunks, which requires the arena (the
        buffer has to outlive the call), so it is on whenever an arena exists and the device packer
        is in use.  The accumulation lives in the arena entry of the chunk's shape, which is why the
-       readback happens BEFORE the next chunk starts: a same-sized next chunk would memset that very
-       buffer.  Interior chunks therefore lose their fwd/inv event attribution (the events are
+       readback happens BEFORE a non-deferred chunk resets the counters. Identical deferred chunks
+       skip that reset and can accumulate their atomicAdd/atomicMax counters in place. The original
+       per-interior finish remains the CARRY_BATCH=0 control. Interior chunks lose their fwd/inv
+       event attribution (the events are
        destroyed unread, since reading them would need the drain we are removing) -- the last chunk
        of each call still reports the sample. */
     const bool defer_ok = (!host_pack && L.arena != nullptr && g_s4_defer_carry);
@@ -2901,33 +2933,41 @@ static void poly_mul_batch_modN(PolyLayer &L,
     unsigned long long ci = 0, pend_m = 0, pend_s0 = 0;
     bool out_pending = false;
     bool carry_pending = false;
-    unsigned long long carry_pending_m = 0;
-    double carry_d2h_acc = 0.0;
+    unsigned long long carry_pending_m = 0, carry_pending_chunks = 0;
+    double carry_d2h_acc = 0.0, chunk_d2h_acc = 0.0;
     unsigned long long carry_res_acc = 0, carry_bits_acc = 0;
+    auto finish_carry = [&] {
+        NttMulStats fin{};
+        const int rf = ntt_batch_carry_finish(L.arena, qN, carry_pending_m, &fin);
+        carry_d2h_acc += fin.t_check_d2h;
+        g_carry_group_readback += fin.t_check_d2h;
+        carry_res_acc += fin.carry_residual;
+        carry_bits_acc = std::max(carry_bits_acc, fin.carry_max_bits);
+        ++g_defer_finishes;
+        if (rf != 0) {
+            std::fprintf(stderr, "%s: the deferred carry check of the chunked multiply failed "
+                                 "(rc=%d) at P=%llu nbatch=%llu chunk=%llu accumulated=%llu\n",
+                         NTT_PROBE_NAME, rf, (unsigned long long)P,
+                         (unsigned long long)nbatch, carry_pending_m, carry_pending_chunks);
+            std::exit(3);
+        }
+        g_defer_checked_chunks += carry_pending_chunks;
+        g_defer_max_group = std::max(g_defer_max_group, carry_pending_chunks);
+        carry_pending = false;
+        carry_pending_chunks = 0;
+    };
     for (unsigned long long s0 = 0; s0 < nbatch; s0 += chunk) {
         const unsigned long long m = ((nbatch - s0) < chunk) ? (nbatch - s0) : chunk;
         const bool last_chunk = (s0 + m >= nbatch);
-        if (carry_pending) {
-            NttMulStats fin{};
-            const int rf = ntt_batch_carry_finish(L.arena, qN, carry_pending_m, &fin);
-            carry_d2h_acc += fin.t_check_d2h;
-            carry_res_acc += fin.carry_residual;
-            if (fin.carry_max_bits > carry_bits_acc) carry_bits_acc = fin.carry_max_bits;
-            carry_pending = false;
-            ++g_defer_finishes;
-            if (rf != 0) {
-                std::fprintf(stderr, "%s: the deferred carry check of the chunked multiply failed "
-                                     "(rc=%d) at P=%llu nbatch=%llu chunk=%llu\n",
-                             NTT_PROBE_NAME, rf, (unsigned long long)P,
-                             (unsigned long long)nbatch, carry_pending_m);
-                std::exit(3);
-            }
-        }
         /* s0 != 0 is NOT optional: the first chunk still has to run the probe's non-deferred
            path because that is what memsets the residual counters.  Skipping it would leave the
            PREVIOUS call's counters in the arena entry, and since a successful check leaves zeros
            the result would not be a false alarm but a silently VACUOUS check for those slices. */
         const bool defer_this = defer_ok && !last_chunk && (s0 != 0);
+        /* SAME (N,m), no reset: atomic counters retain every interior chunk's verdict. Finish
+           before a last/short/non-deferred chunk, or at function exit, never after its memset. */
+        if (carry_pending && (!g_s4_carry_batch || !defer_this || carry_pending_m != m))
+            finish_carry();
         NttReduceHook h2 = hook;
         if (hook.out) h2.out = hook.out + (size_t)(s0 * out_slots) * W;
         int r1 = 0;
@@ -2951,15 +2991,30 @@ static void poly_mul_batch_modN(PolyLayer &L,
                cudaMemcpyAsync needs no implicit sync either.  Without pinned memory the old
                blocking pair runs unchanged. */
             const size_t raw_bytes = raw_words * sizeof(unsigned long long);
-            unsigned long long *pa = g_s4_async ? pin_words(&g_pin_raw[0], &g_pin_raw_cap[0], raw_words)
+            const size_t upload_slot = g_s4_carry_batch ? (size_t)(ci & 1) : 0;
+            if (g_s4_async && g_pin_raw_pending[upload_slot]) {
+                const cudaError_t ready = cudaEventQuery(g_pin_raw_ev[upload_slot]);
+                if (ready == cudaErrorNotReady) {
+                    const double tw0 = now_s();
+                    CK(cudaEventSynchronize(g_pin_raw_ev[upload_slot]));
+                    g_pin_raw_wait += now_s() - tw0;
+                    ++g_pin_raw_waits;
+                } else CK(ready);
+                g_pin_raw_pending[upload_slot] = false;
+            }
+            unsigned long long *pa = g_s4_async ? pin_words(&g_pin_raw[upload_slot][0], &g_pin_raw_cap[upload_slot][0], raw_words)
                                                 : nullptr;
-            unsigned long long *pb = g_s4_async ? pin_words(&g_pin_raw[1], &g_pin_raw_cap[1], raw_words)
+            unsigned long long *pb = g_s4_async ? pin_words(&g_pin_raw[upload_slot][1], &g_pin_raw_cap[upload_slot][1], raw_words)
                                                 : nullptr;
             if (pa && pb) {
                 std::memcpy(pa, wa + s0 * P * W, raw_bytes);
                 std::memcpy(pb, wb + s0 * P * W, raw_bytes);
                 CK(cudaMemcpyAsync(C.d_rawA, pa, raw_bytes, cudaMemcpyHostToDevice));
                 CK(cudaMemcpyAsync(C.d_rawB, pb, raw_bytes, cudaMemcpyHostToDevice));
+                if (!g_pin_raw_ev[upload_slot])
+                    CK(cudaEventCreateWithFlags(&g_pin_raw_ev[upload_slot], cudaEventDisableTiming));
+                CK(cudaEventRecord(g_pin_raw_ev[upload_slot]));
+                g_pin_raw_pending[upload_slot] = true;
                 ++g_pin_raw_used;
             } else {
                 CK(cudaMemcpy(C.d_rawA, wa + s0 * P * W, raw_bytes, cudaMemcpyHostToDevice));
@@ -2987,11 +3042,26 @@ static void poly_mul_batch_modN(PolyLayer &L,
             r1 = ntt_poly_mul_batch_dev(P, (int)L.S, L.device, m, C.d_packA, C.d_packB, &nst,
                                         L.arena, &h2, nullptr, qbpw, defer_this);
             st = nst;                     /* the caller's stats are the dev path's */
-            if (defer_this) { carry_pending = true; carry_pending_m = m; ++g_defer_chunks;
-                              g_defer_slices += m; }
+            if (defer_this) {
+                carry_pending = true; carry_pending_m = m; ++carry_pending_chunks;
+                ++g_defer_chunks; g_defer_slices += m;
+                if (g_s4_carry_test_bad && !g_s4_carry_injected) {
+                    /* Corrupt ONLY the diagnostic counter after the first interior chunk.
+                       Later good chunks and the tail must never hide this error. */
+                    CK(cudaMemsetAsync(L.arena->cur.dRes, 1, sizeof(unsigned long long)));
+                    g_s4_carry_injected = true;
+                    std::printf("s4_carry_fault: first interior diagnostic poisoned P=%llu m=%llu\n",
+                                (unsigned long long)P, m);
+                }
+            }
             if (s0 == 0) slots.clear();   /* the host path filled this; the dev path does not */
         }
         if (r1 != 0) { rc = r1; break; }
+        /* Readbacks of ALL non-deferred chunks, not only the final overwritten `st`.
+           Interior deferred chunks contribute zero here and are charged by finish_carry. */
+        chunk_d2h_acc += st.t_check_d2h;
+        g_carry_chunk_readback += st.t_check_d2h;
+        carry_bits_acc = std::max(carry_bits_acc, st.carry_max_bits);
         /* the reduced coefficients of this chunk, back to the host -- AND THIS TRANSFER IS THE
            POINT OF OBJECTIVE 4 (section 32): it is `m * out_slots * W` words, i.e. the WHOLE
            product of every slice at full slot width, and it is neither inside the probe's timers
@@ -3045,6 +3115,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
         out_pending = true;
         ++ci;
     }
+    if (carry_pending) finish_carry();
     /* THE ONE DRAIN OF THE COEFFICIENT READBACK: the last chunk copied but not yet consumed */
     if (out_pending) {
         const double tw0 = now_s();
@@ -3057,16 +3128,25 @@ static void poly_mul_batch_modN(PolyLayer &L,
         L.t_d2h_coeff += now_s() - tw0;
         out_pending = false;
     }
+    /* Gate-only fingerprint of EVERY returned word, including H2D operand/staging mistakes
+       which the digit-based GMP reduction oracle cannot detect independently. */
+    if (g_s4_carry_trace) {
+        for (const auto v : {(unsigned long long)ma, (unsigned long long)mb,
+                            (unsigned long long)nbatch, (unsigned long long)out.size()})
+            g_carry_output_hash = (g_carry_output_hash ^ v) * 1099511628211ull;
+        for (const auto v : out)
+            g_carry_output_hash = (g_carry_output_hash ^ v) * 1099511628211ull;
+        g_carry_output_words += (unsigned long long)out.size();
+    }
     L.ntt_seconds += now_s() - t0;
     /* the deferred chunks' carry verdict, folded back into the caller's account: their counters
        were read ONCE by ntt_batch_carry_finish instead of once per chunk (section 29), so this is
        the only place their time and residual totals can be reported */
-    if (carry_d2h_acc != 0.0 || carry_res_acc != 0) {
-        L.t_check_d2h += carry_d2h_acc;
-        st.t_check_d2h += carry_d2h_acc;
-        st.carry_residual += carry_res_acc;
-        if (carry_bits_acc > st.carry_max_bits) st.carry_max_bits = carry_bits_acc;
-    }
+    /* Charge through `st` ONCE below. Directly adding to L here as well double-counted every
+       finish; keeping only the last chunk also omitted the first non-deferred readback. */
+    st.t_check_d2h = chunk_d2h_acc + carry_d2h_acc;
+    st.carry_residual += carry_res_acc;
+    st.carry_max_bits = std::max(st.carry_max_bits, carry_bits_acc);
     /* the caller's copy of the per-call account (section 27): the tree needs it PER LEVEL to say
        whether its floor is host packing, H2D/D2H traffic, the transforms, the carry check or the
        exact coefficient extraction -- `t0` above already covers the whole call including the
@@ -8813,13 +8893,24 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                per-chunk readback disappears, and a run that silently stopped checking would look
                identical in the timing. */
             std::printf("real_batched_carrydefer: chunks_deferred=%llu finishes=%llu "
-                        "deferred_slices=%llu\n",
-                        g_defer_chunks, g_defer_finishes, g_defer_slices);
+                        "deferred_slices=%llu batch_enabled=%d checked_chunks=%llu max_group=%llu\n",
+                        g_defer_chunks, g_defer_finishes, g_defer_slices, (int)g_s4_carry_batch,
+                        g_defer_checked_chunks, g_defer_max_group);
+            std::printf("real_batched_carrytrace: enabled=%d words=%llu signature=%016llx\n",
+                        (int)g_s4_carry_trace, g_carry_output_words, g_carry_output_hash);
+            std::printf("real_batched_carrytime: group_readback=%.6f chunk_readback=%.6f "
+                        "total=%.6f (all S4 calls, each readback charged once)\n",
+                        g_carry_group_readback, g_carry_chunk_readback,
+                        g_carry_group_readback + g_carry_chunk_readback);
             /* SECTION 30: the pinned/async path, counted for the same reason as above -- and the
                fallback count, so a run that silently lost pinned memory cannot look normal */
             std::printf("real_batched_asyncxfer: raw_async=%llu out_async=%llu fallbacks=%llu "
-                        "(async_enabled=%d)\n",
-                        g_pin_raw_used, g_pin_out_used, g_pin_fallbacks, g_s4_async ? 1 : 0);
+                        "(async_enabled=%d) raw_reuse_waits=%llu raw_reuse_wait=%.6f "
+                        "raw_pinned_bytes=%llu\n",
+                        g_pin_raw_used, g_pin_out_used, g_pin_fallbacks, g_s4_async ? 1 : 0,
+                        g_pin_raw_waits, g_pin_raw_wait,
+                        8ull * (g_pin_raw_cap[0][0] + g_pin_raw_cap[0][1] +
+                                g_pin_raw_cap[1][0] + g_pin_raw_cap[1][1]));
             /* OBJECTIVE 4: the one phase the probe cannot see -- the reduced product coming back
                to the host once per chunk in the batched path (section 32). */
             const double gb = (double)(L.d2h_coeff_words - dw0) * 8.0 / 1073741824.0;

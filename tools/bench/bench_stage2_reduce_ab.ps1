@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Same-binary ABBA benchmark of coefficient reduction or deferred sampling oracle.
+    Same-binary ABBA benchmark of reduction, sampling oracle or accumulated carry checks.
 .DESCRIPTION
     Defaults to the production shape in DEV_GPUOWL_NTT_NOTES.md section 32.  Writes a log
     for each run, provenance.json and results.csv.  The mode, GMP checks, factors/hit primes,
@@ -16,7 +16,7 @@ param(
     [UInt64]$D = 1231230,
     [int]$Sigma = 26,
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch')][string]$Target = 'reduction',
     [string]$Output = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -32,14 +32,24 @@ $runArgs = @('--real', '--n-hex', $NHex, '--sigma', "$Sigma", '--b1', "$B1", '--
 $order = @('montgomery', 'division', 'division', 'montgomery')
 if ($Target -eq 'oracle') { $order = @('blocking', 'oracle_async', 'oracle_async', 'blocking') }
 if ($Target -eq 'oracle_pack') { $order = @('gmp_digits', 'limb_pack', 'limb_pack', 'gmp_digits') }
+if ($Target -eq 'carry_batch') { $order = @('carry_per_chunk', 'carry_batch', 'carry_batch', 'carry_per_chunk') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB='32'; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
-                NTT_S4_ORACLE_TEST_BAD='0'; NTT_S4_SAMPLE='96'; NTT_S4_CHECK_EVERY='8' }
+                NTT_S4_ORACLE_TEST_BAD='0'; NTT_S4_SAMPLE='96'; NTT_S4_CHECK_EVERY='8';
+                NTT_S4_CARRY_BATCH='0'; NTT_S4_CHUNK_MAX='0'; NTT_S4_CARRY_TEST_BAD='0';
+                NTT_S4_CARRY_TRACE='0' }
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
+$modeControls = @(foreach ($mode in $order) {
+    [pscustomobject]@{ mode=$mode;
+        NTT_S4_OLDTAIL=$(if ($mode -eq 'montgomery') { '1' } else { '0' });
+        NTT_S4_ORACLE_ASYNC=$(if ($mode -eq 'oracle_async') { '1' } else { '0' });
+        NTT_S4_ORACLE_PACK=$(if ($mode -eq 'gmp_digits') { '0' } else { '1' });
+        NTT_S4_CARRY_BATCH=$(if ($mode -eq 'carry_batch') { '1' } else { '0' }) }
+})
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
-   started=(Get-Date -Format o); head=(& git rev-parse HEAD) } |
+   mode_controls=$modeControls; started=(Get-Date -Format o); head=(& git rev-parse HEAD) } |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Output 'provenance.json') -Encoding UTF8
 $rows = @()
 try {
@@ -49,9 +59,11 @@ try {
         $algorithm = $(if ($mode -eq 'montgomery') { 'montgomery' } else { 'division' })
         $oracleAsync = $(if ($mode -eq 'oracle_async') { '1' } else { '0' })
         $oraclePack = $(if ($mode -eq 'gmp_digits') { '0' } else { '1' })
+        $carryBatch = $(if ($mode -eq 'carry_batch') { '1' } else { '0' })
         $env:NTT_S4_OLDTAIL = $(if ($algorithm -eq 'montgomery') { '1' } else { '0' })
         $env:NTT_S4_ORACLE_ASYNC = $oracleAsync
         $env:NTT_S4_ORACLE_PACK = $oraclePack
+        $env:NTT_S4_CARRY_BATCH = $carryBatch
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -69,6 +81,13 @@ try {
         $stage = [regex]::Match($text, 'stage2:.*?hits=(\d+) bad_factors=(\d+) factors=([^\s]*) hit_primes=([^\s]*) elapsed=([0-9.]+)')
         $reduce = [regex]::Match($text, 's4_multiply_stats:.*?coeffs_reduced=(\d+) t_reduce=([0-9.]+)')
         $arena = [regex]::Match($text, 'real_batched_breakdown:.*?arena_overflow=(\d+)')
+        $carry = [regex]::Match($text, 'real_batched_carrydefer: chunks_deferred=(\d+) finishes=(\d+) deferred_slices=(\d+) batch_enabled=(\d+) checked_chunks=(\d+) max_group=(\d+)')
+        $upload = [regex]::Match($text, 'raw_reuse_waits=(\d+) raw_reuse_wait=([0-9.]+) raw_pinned_bytes=(\d+)')
+        $transfers = [regex]::Match($text, 'real_batched_asyncxfer: raw_async=(\d+) out_async=(\d+) fallbacks=0 \(async_enabled=1\)')
+        $rawVolume = [regex]::Match($text, 'real_batched_rawupload:.*?total=([0-9.]+) s volume=([0-9.]+) GB.*?pack_launches=(\d+)')
+        $backVolume = [regex]::Match($text, 'real_batched_coeffback:.*?total=([0-9.]+) s volume=([0-9.]+) GB')
+        $carryTime = [regex]::Match($text, 'real_batched_carrysplit:.*?d2h=([0-9.]+) s')
+        $carryLedger = [regex]::Match($text, 'real_batched_carrytime: group_readback=([0-9.]+) chunk_readback=([0-9.]+) total=([0-9.]+)')
         $oracleLine = [regex]::Match($text, '(?m)^s4_oracle_stats:.*').Value
         $oracle = @{}
         foreach ($field in @('async','selected','queued','compared','samples','pending','ring_waits',
@@ -93,6 +112,20 @@ try {
             ($oracleAsync -eq '0' -and $oracle.queued -ne '0')) {
             throw "oracle validation failed; inspect $log"
         }
+        if (-not $carry.Success -or -not $upload.Success -or -not $transfers.Success -or
+            -not $rawVolume.Success -or -not $backVolume.Success -or -not $carryTime.Success -or
+            -not $carryLedger.Success -or
+            [math]::Abs([double]$carryLedger.Groups[3].Value-[double]$carryLedger.Groups[1].Value-
+                       [double]$carryLedger.Groups[2].Value) -gt 0.000002 -or
+            $text -notmatch 'real_batched_carrytrace: enabled=0 words=0 ' -or
+            $carry.Groups[4].Value -ne $carryBatch -or $carry.Groups[1].Value -ne $carry.Groups[5].Value -or
+            [long]$carry.Groups[2].Value -gt [long]$carry.Groups[1].Value -or
+            ([long]$carry.Groups[1].Value -gt 0 -and
+             ([long]$carry.Groups[2].Value -lt 1 -or [long]$carry.Groups[6].Value -lt 1 -or
+              ($carryBatch -eq '0' -and $carry.Groups[1].Value -ne $carry.Groups[2].Value))) -or
+            ([long]$carry.Groups[6].Value -gt 1 -and $carry.Groups[1].Value -eq $carry.Groups[2].Value)) {
+            throw "carry/staging validation failed; inspect $log"
+        }
         $row = [pscustomobject]@{ run=$i+1; mode=$mode; elapsed=[double]$stage.Groups[5].Value;
             wall=[math]::Round($sw.Elapsed.TotalSeconds,3); t_reduce=[double]$reduce.Groups[2].Value;
             coeffs=[UInt64]$reduce.Groups[1].Value; hits=$stage.Groups[1].Value;
@@ -101,11 +134,27 @@ try {
             oracle_samples=$oracle.samples; oracle_jobs=$oracle.selected; oracle_signature=$oracle.signature;
             oracle_wait=[double]$oracle.t_wait; oracle_copy_host=[double]$oracle.t_copy_host;
             oracle_gmp=[double]$oracle.t_gmp; oracle_host=[double]$oracle.host_total;
-            oracle_num=[double]$oracle.t_num; oracle_mod=[double]$oracle.t_mod; oracle_pack=$oracle.pack }
+            oracle_num=[double]$oracle.t_num; oracle_mod=[double]$oracle.t_mod; oracle_pack=$oracle.pack;
+            carry_deferred=$carry.Groups[1].Value; carry_finishes=$carry.Groups[2].Value;
+            carry_slices=$carry.Groups[3].Value; carry_checked=$carry.Groups[5].Value;
+            carry_max_group=$carry.Groups[6].Value; carry_batch=$carryBatch;
+            raw_reuse_waits=$upload.Groups[1].Value; raw_reuse_wait=[double]$upload.Groups[2].Value;
+            raw_pinned_bytes=$upload.Groups[3].Value; raw_async=$transfers.Groups[1].Value;
+            out_async=$transfers.Groups[2].Value; raw_upload=[double]$rawVolume.Groups[1].Value;
+            h2d_gib=[double]$rawVolume.Groups[2].Value; pack_launches=$rawVolume.Groups[3].Value;
+            coeffback=[double]$backVolume.Groups[1].Value; d2h_gib=[double]$backVolume.Groups[2].Value;
+            carry_d2h=[double]$carryTime.Groups[1].Value;
+            carry_group_readback=[double]$carryLedger.Groups[1].Value;
+            carry_chunk_readback=[double]$carryLedger.Groups[2].Value;
+            carry_total_readback=[double]$carryLedger.Groups[3].Value }
         if ($rows.Count -gt 0 -and ($row.coeffs -ne $rows[0].coeffs -or $row.factors -ne $rows[0].factors -or
             $row.hit_primes -ne $rows[0].hit_primes -or $row.hits -ne $rows[0].hits -or
             $row.oracle_samples -ne $rows[0].oracle_samples -or $row.oracle_jobs -ne $rows[0].oracle_jobs -or
-            $row.oracle_signature -ne $rows[0].oracle_signature)) {
+            $row.oracle_signature -ne $rows[0].oracle_signature -or
+            $row.carry_deferred -ne $rows[0].carry_deferred -or $row.carry_slices -ne $rows[0].carry_slices -or
+            $row.raw_async -ne $rows[0].raw_async -or $row.out_async -ne $rows[0].out_async -or
+            $row.h2d_gib -ne $rows[0].h2d_gib -or $row.d2h_gib -ne $rows[0].d2h_gib -or
+            $row.pack_launches -ne $rows[0].pack_launches)) {
             throw "A/B results or coefficient count changed; inspect $log"
         }
         $rows += $row
@@ -128,6 +177,11 @@ try {
                 ($new | Measure-Object oracle_wait -Average).Average,
                 ($old | Measure-Object oracle_gmp -Average).Average,
                 ($new | Measure-Object oracle_gmp -Average).Average)
+    Write-Host ("carry finishes: {0:F0} -> {1:F0}; checked interior chunks: {2:F0} -> {3:F0}" -f
+                ($old | Measure-Object carry_finishes -Average).Average,
+                ($new | Measure-Object carry_finishes -Average).Average,
+                ($old | Measure-Object carry_checked -Average).Average,
+                ($new | Measure-Object carry_checked -Average).Average)
 } finally {
     foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
 }

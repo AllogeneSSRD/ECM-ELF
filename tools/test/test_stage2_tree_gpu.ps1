@@ -294,12 +294,13 @@ Check "arena eviction: same frozen factor and a clean exit" `
 # multiply used to pay the probe's carry-residual readback -- a PAGEABLE D2H, i.e. a full pipeline
 # drain -- once per chunk; at the production shape that was 22471 x 1.64 ms = 36.75 s of a 253.53 s
 # run (measured).  Now every chunk except the first and the last leaves the counters on the device
-# and ntt_batch_carry_finish() reads them once, before the last chunk (whose memset would wipe them).
+# and ntt_batch_carry_finish() validates them before a later reset. CARRY_BATCH=0 finishes each
+# interior chunk; CARRY_BATCH=1 combines identical interiors until before the tail's reset.
 # THE TEST HAS TWO JOBS, and the second is the important one: the answer must not change, AND the
 # deferral must be provably ACTIVE -- a run that quietly stopped checking would look identical in
 # every timing number, which is exactly how this kind of optimisation goes wrong.  So it asserts
-# chunks_deferred > finishes (i.e. at least one readback really did cover several chunks) as well as
-# the frozen factor and bad_factors=0.
+# positive completed deferrals as well as the frozen factor and bad_factors=0. Group [17] forces
+# MANY interior chunks and proves cross-chunk accumulation plus early-error preservation.
 # NTT_S4_BATCH_MB=1 forces the smallest possible chunk, so the round-trip count is maximal and the
 # deferral cannot be missed.  The default-budget run is the control: same factor, deferral optional.
 $env:NTT_S4_BATCH_MB = '1'
@@ -316,9 +317,9 @@ if ($mDef.Success) {
     $df = [int]$mDef.Groups[2].Value
     # dc == df HERE, measured, and that is not a defect: this shape's chunk ladder halves from
     # nbatch, so a call gets 1, 2 or 3 chunks -- a 3-chunk call has exactly ONE interior chunk, so
-    # one deferral per finish.  What the test must prove is that the deferred path is TAKEN and that
-    # finishes really happen; the "many chunks per finish" claim is proven by the production run
-    # (22471 chunks, ~800 calls) recorded in section 29, not by a 0.6 s test.
+    # one deferral per finish in the old path. This test proves the deferred path is TAKEN and
+    # completed; production before section 35 also had one finish per interior chunk, so it did
+    # NOT prove cross-chunk accumulation. Group [17] now exercises and proves that separately.
     Check "deferred carry check: the deferral ran (chunks_deferred >= finishes > 0)" `
           ($dc -gt 0 -and $df -gt 0 -and $dc -ge $df) ("chunks_deferred=$dc finishes=$df")
 } else {
@@ -529,6 +530,101 @@ try {
            $mSlowPack.Groups[6].Value -eq '0' -and $mFastPack.Groups[6].Value -eq '0') ""
 } finally {
     foreach ($key in $packSaved.Keys) { [Environment]::SetEnvironmentVariable($key,$packSaved[$key],'Process') }
+}
+
+# [17] Accumulate SAME-shape interior carry diagnostics before the tail resets them. A chunk
+# cap forces MANY interior chunks at a cheap shape; two input staging slots keep H2D ownership
+# valid after the per-chunk drain is removed. Poison the FIRST interior counter, then require
+# failure before a later successful chunk/tail could hide it.
+$carryBatchSaved = @{}
+foreach ($key in @('NTT_S4_CARRY_BATCH','NTT_S4_CHUNK_MAX','NTT_S4_CARRY_TEST_BAD','NTT_S4_ASYNC',
+                   'NTT_S4_DEFER_CARRY','NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_PACK','NTT_S4_HOSTPACK',
+                   'NTT_S4_OLDTAIL','NTT_S5_ON','NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY','NTT_S4_CARRY_TRACE')) {
+    $carryBatchSaved[$key] = [Environment]::GetEnvironmentVariable($key,'Process')
+}
+try {
+    $env:NTT_S4_CHUNK_MAX='64'; $env:NTT_S4_CARRY_TEST_BAD='0'; $env:NTT_S4_ASYNC='1'
+    $env:NTT_S4_DEFER_CARRY='1'; $env:NTT_S4_ORACLE_ASYNC='0'; $env:NTT_S4_ORACLE_PACK='1'
+    $env:NTT_S4_HOSTPACK='0'; $env:NTT_S4_OLDTAIL='0'; $env:NTT_S5_ON='0'
+    $env:NTT_S4_SAMPLE='96'; $env:NTT_S4_CHECK_EVERY='8'
+    $env:NTT_S4_CARRY_TRACE='1'
+    $carryBatchArgs=@('--real','--n','340282366920938463463374607431768211457','--sigma','26',
+                     '--b1','1000','--b2','5000000','--d','1231230','--device',"$Device")
+    $env:NTT_S4_CARRY_BATCH='0'
+    $oCarryOld=(& $Exe @carryBatchArgs 2>&1 | Out-String); $cCarryOld=$LASTEXITCODE
+    $env:NTT_S4_CARRY_BATCH='1'
+    $oCarryBatch=(& $Exe @carryBatchArgs 2>&1 | Out-String); $cCarryBatch=$LASTEXITCODE
+    $carryPattern='real_batched_carrydefer: chunks_deferred=(\d+) finishes=(\d+) deferred_slices=(\d+) batch_enabled=(\d+) checked_chunks=(\d+) max_group=(\d+)'
+    $mCarryOld=[regex]::Match($oCarryOld,$carryPattern)
+    $mCarryBatch=[regex]::Match($oCarryBatch,$carryPattern)
+    $resultPattern='stage2:.*hits=\d+ bad_factors=0 factors=[^\s]+ hit_primes=[^\s]+'
+    $resultOld=[regex]::Match($oCarryOld,$resultPattern).Value
+    $resultBatch=[regex]::Match($oCarryBatch,$resultPattern).Value
+    Check "carry accumulation: same factor/hit set and clean exits" `
+          ($cCarryOld -eq 0 -and $cCarryBatch -eq 0 -and $resultOld -ne '' -and $resultOld -eq $resultBatch -and
+           $oCarryOld -match 'bad_factors=0 factors=59649589127497217') "exit=$cCarryOld/$cCarryBatch"
+    Check "carry accumulation: control retains one finish per interior chunk" `
+          ($mCarryOld.Success -and [long]$mCarryOld.Groups[1].Value -gt 0 -and
+           $mCarryOld.Groups[1].Value -eq $mCarryOld.Groups[2].Value -and
+           $mCarryOld.Groups[1].Value -eq $mCarryOld.Groups[5].Value -and
+           $mCarryOld.Groups[4].Value -eq '0' -and $mCarryOld.Groups[6].Value -eq '1') ""
+    Check "carry accumulation: several interior chunks share one checked finish" `
+          ($mCarryBatch.Success -and $mCarryBatch.Groups[4].Value -eq '1' -and
+           [long]$mCarryBatch.Groups[6].Value -gt 1 -and [long]$mCarryBatch.Groups[2].Value -gt 0 -and
+           [long]$mCarryBatch.Groups[2].Value -lt [long]$mCarryBatch.Groups[1].Value -and
+           $mCarryBatch.Groups[1].Value -eq $mCarryBatch.Groups[5].Value -and
+           $mCarryBatch.Groups[1].Value -eq $mCarryOld.Groups[1].Value -and
+           $mCarryBatch.Groups[3].Value -eq $mCarryOld.Groups[3].Value) ""
+    $mCarryOracleOld=[regex]::Match($oCarryOld,$oraclePattern)
+    $mCarryOracleBatch=[regex]::Match($oCarryBatch,$oraclePattern)
+    Check "carry accumulation: the SAME oracle jobs/samples/positions are checked" `
+          ($mCarryOracleOld.Success -and $mCarryOracleBatch.Success -and
+           $mCarryOracleOld.Groups[2].Value -eq $mCarryOracleBatch.Groups[2].Value -and
+           $mCarryOracleOld.Groups[5].Value -eq $mCarryOracleBatch.Groups[5].Value -and
+           $mCarryOracleOld.Groups[9].Value -eq $mCarryOracleBatch.Groups[9].Value -and
+           $oCarryBatch -notmatch 'FATAL|gmp_check_bad=[1-9]|slot_canonical_bad=[1-9]') ""
+    Check "carry accumulation: pinned uploads and outputs remain active with no fallback" `
+          ($oCarryBatch -match 'raw_async=[1-9]\d* out_async=[1-9]\d* fallbacks=0 \(async_enabled=1\).*raw_pinned_bytes=[1-9]\d*') ""
+    $env:NTT_S4_ASYNC='0'
+    $oCarryBlocking=(& $Exe @carryBatchArgs 2>&1 | Out-String); $cCarryBlocking=$LASTEXITCODE
+    Check "carry accumulation: blocking-transfer fallback retains the same result" `
+          ($cCarryBlocking -eq 0 -and [regex]::Match($oCarryBlocking,$resultPattern).Value -eq $resultOld -and
+           $oCarryBlocking -match 'raw_async=0 out_async=0 fallbacks=0 \(async_enabled=0\)') "exit=$cCarryBlocking"
+    $carryTracePattern='real_batched_carrytrace: enabled=1 words=(\d+) signature=([0-9a-f]+)'
+    $mTraceOld=[regex]::Match($oCarryOld,$carryTracePattern)
+    $mTraceBatch=[regex]::Match($oCarryBatch,$carryTracePattern)
+    $mTraceBlocking=[regex]::Match($oCarryBlocking,$carryTracePattern)
+    Check "carry accumulation: ALL returned polynomial words agree across schedules and transfers" `
+          ($mTraceOld.Success -and $mTraceBatch.Success -and $mTraceBlocking.Success -and
+           [long]$mTraceOld.Groups[1].Value -gt 0 -and
+           $mTraceOld.Groups[1].Value -eq $mTraceBatch.Groups[1].Value -and
+           $mTraceOld.Groups[1].Value -eq $mTraceBlocking.Groups[1].Value -and
+           $mTraceOld.Groups[2].Value -eq $mTraceBatch.Groups[2].Value -and
+           $mTraceOld.Groups[2].Value -eq $mTraceBlocking.Groups[2].Value) ""
+    $carryLedgerOk=$true
+    foreach ($carryLedgerOutput in @($oCarryOld,$oCarryBatch,$oCarryBlocking)) {
+        $mLedger=[regex]::Match($carryLedgerOutput,'real_batched_carrytime: group_readback=([0-9.]+) chunk_readback=([0-9.]+) total=([0-9.]+)')
+        $carryLedgerOk=$carryLedgerOk -and $mLedger.Success
+        if ($mLedger.Success) {
+            $carryLedgerOk=$carryLedgerOk -and [double]$mLedger.Groups[1].Value -gt 0 -and
+                [double]$mLedger.Groups[2].Value -gt 0 -and
+                [math]::Abs([double]$mLedger.Groups[3].Value-[double]$mLedger.Groups[1].Value-
+                           [double]$mLedger.Groups[2].Value) -le 0.000002
+        }
+    }
+    Check "carry accounting: group and non-deferred readbacks have separate, additive totals" $carryLedgerOk ""
+    $env:NTT_S4_ASYNC='1'; $env:NTT_S4_CARRY_TEST_BAD='1'
+    $prevCarryErrors=$ErrorActionPreference; $ErrorActionPreference='Continue'
+    $oCarryFault=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096); $cCarryFault=$LASTEXITCODE
+    $ErrorActionPreference=$prevCarryErrors
+    # A wide capture prevents native stderr wrapping INSIDE "accumulated" itself.
+    $mCarryFault=[regex]::Match($oCarryFault,'accumulated=(\d+)')
+    Check "carry accumulation: an EARLY interior counter fault is fatal before the tail reset" `
+          ($cCarryFault -ne 0 -and $oCarryFault -match 's4_carry_fault: first interior' -and
+           $oCarryFault -match 'CARRY DID NOT CONVERGE' -and
+           $mCarryFault.Success -and [long]$mCarryFault.Groups[1].Value -gt 1) "exit=$cCarryFault"
+} finally {
+    foreach ($key in $carryBatchSaved.Keys) { [Environment]::SetEnvironmentVariable($key,$carryBatchSaved[$key],'Process') }
 }
 
 Write-Host ""
