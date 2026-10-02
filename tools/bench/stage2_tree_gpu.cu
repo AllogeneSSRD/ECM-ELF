@@ -7762,36 +7762,90 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     {
         const double t0 = now_s();
         std::vector<unsigned long long> bx, bz;
+        unsigned long long noninv = 0;              /* printed as real_baby: ... degenerate= */
+        const double tb0 = now_s();
         ladder_points(C, baby_j, bx, bz);
+        const double tb1 = now_s();
         std::vector<std::vector<unsigned long long>> leaf(baby_j.size());
         {
             mpz_t X, Z, xj, neg, gq;
             mpz_inits(X, Z, xj, neg, gq, nullptr);
             std::vector<unsigned long long> w(nw, 0ull);
-            unsigned long long noninv = 0;
-            for (size_t i = 0; i < baby_j.size(); ++i) {
-                words_to_mpz(X, &bx[i * nw], nw);
-                words_to_mpz(Z, &bz[i * nw], nw);
-                /* OBJECTIVE 3 (section 31.4): a BABY point whose Z shares a factor with N is the
-                   identity modulo that factor -- i.e. a hit, not an accident.  Record the factor
-                   explicitly (prime = 0, no hit credited, exactly like the reference's unnamed
-                   record) instead of silently turning an arbitrary representative into a leaf. */
-                if (!affine_x_gmp_checked(xj, X, Z, L.N)) {
-                    ++noninv;
-                    mpz_gcd(gq, Z, L.N);
-                    char *gs = mpz_get_str(nullptr, 10, gq);
-                    baby_deg.push_back(gs);
-                    void (*ff)(void *, size_t) = nullptr;
-                    mp_get_memory_functions(nullptr, nullptr, &ff);
-                    ff(gs, std::strlen(gs) + 1);
+            /* ---- ONE INVERSION PER SEGMENT, NOT PER POINT (section 25) --------------------------
+               x_j = X_j/Z_j mod N used to cost one mpz_invert per BABY point: 115200 of them at
+               ~61.5 us each is ~7 s, and the whole pre-`elapsed` setup -- this ladder plus its
+               conversion and real_setup's 12.1 s -- is ~44 s of the 317 s wall clock, the second
+               largest improvable item after the G tree.  Section 42 already fixed exactly this for
+               the GIANT points (224.8 s -> 20.3 s) with Montgomery's trick: invert the segment's
+               PRODUCT once, then walk back.  Same code shape here, same fallback: if any Z in the
+               segment is not invertible (gcd(Z,N) > 1 -- the degeneracy that IS a factor, objective
+               3) the whole segment drops to the per-point path, which records the gcd. */
+            const size_t BS = 256;
+            /* plain C arrays, NOT std::vector<mpz_t>: mpz_t is an ARRAY type, so a vector of it
+               cannot be constructed (measured: "a new-initializer may not be specified for an
+               array" from MSVC's xmemory) -- the same trap this project recorded once before */
+            mpz_t pv[BS + 1];                            /* prefix products */
+            mpz_t zv[BS];
+            for (size_t j = 0; j <= BS; ++j) mpz_init(pv[j]);
+            for (size_t j = 0; j < BS; ++j) mpz_init(zv[j]);
+            mpz_t iprod, tmul;
+            mpz_inits(iprod, tmul, nullptr);
+            const size_t nb = baby_j.size();
+            for (size_t lo = 0; lo < nb; lo += BS) {
+                const size_t hi = ((lo + BS) < nb) ? (lo + BS) : nb;
+                const size_t seg = hi - lo;
+                bool clean = true;
+                mpz_set_ui(pv[0], 1);
+                for (size_t j = 0; j < seg; ++j) {
+                    words_to_mpz(zv[j], &bz[(lo + j) * nw], nw);
+                    if (mpz_sgn(zv[j]) == 0) { clean = false; break; }
+                    mpz_mul(pv[j + 1], pv[j], zv[j]);
+                    mpz_mod(pv[j + 1], pv[j + 1], L.N);
                 }
-                mpz_neg(neg, xj);
-                mpz_mod(neg, neg, L.N);
-                mpz_to_words(w, nw, neg);
-                leaf[i].assign(2 * nw, 0ull);
-                std::copy(w.begin(), w.end(), leaf[i].begin());
-                leaf[i][nw] = 1;
+                if (clean && mpz_invert(iprod, pv[seg], L.N) == 0) clean = false;
+                if (!clean) {
+                    /* the affine path, VERBATIM: whatever refuses to invert is a hit, not an
+                       accident, and affine_x_gmp_checked records its gcd as a factor */
+                    for (size_t j = 0; j < seg; ++j) {
+                        words_to_mpz(X, &bx[(lo + j) * nw], nw);
+                        words_to_mpz(Z, &bz[(lo + j) * nw], nw);
+                        if (!affine_x_gmp_checked(xj, X, Z, L.N)) {
+                            ++noninv;
+                            mpz_gcd(gq, Z, L.N);
+                            char *gs = mpz_get_str(nullptr, 10, gq);
+                            baby_deg.push_back(gs);
+                            void (*ff)(void *, size_t) = nullptr;
+                            mp_get_memory_functions(nullptr, nullptr, &ff);
+                            ff(gs, std::strlen(gs) + 1);
+                        }
+                        mpz_neg(neg, xj);
+                        mpz_mod(neg, neg, L.N);
+                        mpz_to_words(w, nw, neg);
+                        leaf[lo + j].assign(2 * nw, 0ull);
+                        std::copy(w.begin(), w.end(), leaf[lo + j].begin());
+                        leaf[lo + j][nw] = 1;
+                    }
+                    continue;
+                }
+                /* Montgomery's trick, walking BACKWARDS: iprod is 1/(z_j..z_{seg-1}) at each step,
+                   so x_j = X_j * iprod, and then iprod *= z_j moves it one point back. */
+                for (size_t j = seg; j-- > 0;) {
+                    words_to_mpz(X, &bx[(lo + j) * nw], nw);
+                    mpz_mul(tmul, X, iprod);
+                    mpz_mod(xj, tmul, L.N);
+                    mpz_mul(iprod, iprod, zv[j]);
+                    mpz_mod(iprod, iprod, L.N);
+                    mpz_neg(neg, xj);
+                    mpz_mod(neg, neg, L.N);
+                    mpz_to_words(w, nw, neg);
+                    leaf[lo + j].assign(2 * nw, 0ull);
+                    std::copy(w.begin(), w.end(), leaf[lo + j].begin());
+                    leaf[lo + j][nw] = 1;
+                }
             }
+            for (size_t j = 0; j <= BS; ++j) mpz_clear(pv[j]);
+            for (size_t j = 0; j < BS; ++j) mpz_clear(zv[j]);
+            mpz_clears(iprod, tmul, nullptr);
             if (noninv)
                 std::printf("baby_degenerate: points=%llu of %llu have Z sharing a factor with N "
                             "-> their gcd was recorded as a factor\n", noninv,
@@ -7800,6 +7854,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         }
         std::printf("ladder: baby_points=%llu (device x_j; there is no CPU reference at this "
                     "shape, see the report)\n", (unsigned long long)baby_j.size());
+        /* the setup pieces that live OUTSIDE `elapsed` had no timer at all (section 25): they are
+           ~44 s of the 317 s wall clock, so naming them is the first step */
+        std::printf("real_baby: points=%llu ladder=%.3f s affine=%.3f s degenerate=%llu\n",
+                    (unsigned long long)baby_j.size(), tb1 - tb0, now_s() - tb1, noninv);
         FTreeStats fs;
         Ft = build_tree_flat(L, leaf, Fdeg, Fpad, fs, BC_FTREE);
         fdeg = Fdeg[1];
