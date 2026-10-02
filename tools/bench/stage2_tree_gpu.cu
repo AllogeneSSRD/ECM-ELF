@@ -930,6 +930,9 @@ struct PolyLayer {
     double t_hpack = 0.0, t_scan = 0.0, t_h2d_batch = 0.0;
     /* the carry-convergence assert's own pass (section 34) */
     double t_check = 0.0;
+    /* the three parts of t_check (section 41): the reset launch, the kernel's own GPU time and
+       the blocking 16-byte readback that drains the pipeline */
+    double t_check_reset = 0.0, t_check_kernel = 0.0, t_check_d2h = 0.0;
     double t_plan = 0.0, t_opcopy = 0.0;
     /* the slot assembly + its D2H, skipped when a reduction hook is installed (section 35) */
     double t_hout = 0.0;
@@ -1146,7 +1149,75 @@ struct S4Reduce {
         unsigned long long selftest_cases = 0, selftest_bad = 0;
         long long selftest_first = -1;
         double t_reduce = 0.0;
-        ~Shape() { if (dy) cudaFree(dy); }
+        /* ---- THE HOOK'S OWN TIMING MUST NOT DRAIN THE PIPELINE (docs section 41) ----------
+           A `cudaDeviceSynchronize()` used to sit right after the reduction kernel purely so
+           that `t_reduce` could be accumulated.  That made `t_reduce` a mixture of kernel time
+           and a full pipeline drain, and at the production shape it read 88.229 s out of the
+           252.300 s of `ntt_seconds` -- the largest single item on the books.  The marks are
+           CUDA events now, resolved on a LATER call once the device has caught up (so the host
+           never has to wait for work it just queued), which makes `t_reduce` the kernels' own
+           GPU time and `t_reduce_host` what the host actually paid.  The ring is bounded, so a
+           host that is more than DTRING calls ahead still blocks -- but on the OLDEST mark,
+           once, instead of once per call. */
+        static const int DTRING = 8;
+        cudaEvent_t dt_ev[DTRING][2] = {};
+        bool dt_used[DTRING] = {};
+        double t_reduce_host = 0.0;
+        unsigned long long dt_blocks = 0;
+        ~Shape() { if (dy) cudaFree(dy); dt_destroy(); }
+        void dt_destroy()
+        {
+            for (int i = 0; i < DTRING; ++i)
+                if (dt_used[i]) {
+                    cudaEventDestroy(dt_ev[i][0]);
+                    cudaEventDestroy(dt_ev[i][1]);
+                    dt_ev[i][0] = dt_ev[i][1] = nullptr;
+                    dt_used[i] = false;
+                }
+        }
+        /* resolve every mark the device has already passed; NEVER blocks */
+        void dt_reap()
+        {
+            float ms = 0.0f;
+            for (int i = 0; i < DTRING; ++i) {
+                if (!dt_used[i]) continue;
+                if (cudaEventQuery(dt_ev[i][1]) != cudaSuccess) continue;
+                if (cudaEventElapsedTime(&ms, dt_ev[i][0], dt_ev[i][1]) == cudaSuccess)
+                    t_reduce += (double)ms * 1e-3;
+                cudaEventDestroy(dt_ev[i][0]);
+                cudaEventDestroy(dt_ev[i][1]);
+                dt_ev[i][0] = dt_ev[i][1] = nullptr;
+                dt_used[i] = false;
+            }
+        }
+        /* take a slot for a new mark: reuse a resolved one, else wait for what is already
+           queued.  The wait happens only when the host is a whole ring ahead of the device,
+           which is the one place the deferred timing can still cost anything. */
+        int dt_slot()
+        {
+            dt_reap();
+            for (int i = 0; i < DTRING; ++i)
+                if (!dt_used[i]) return i;
+            ++dt_blocks;
+            dt_flush();
+            return 0;
+        }
+        /* resolve everything, waiting if necessary -- called once, when the run is over and the
+           stream has drained anyway, so it never costs anything */
+        void dt_flush()
+        {
+            for (int i = 0; i < DTRING; ++i) {
+                if (!dt_used[i]) continue;
+                cudaEventSynchronize(dt_ev[i][1]);
+                float ms = 0.0f;
+                if (cudaEventElapsedTime(&ms, dt_ev[i][0], dt_ev[i][1]) == cudaSuccess)
+                    t_reduce += (double)ms * 1e-3;
+                cudaEventDestroy(dt_ev[i][0]);
+                cudaEventDestroy(dt_ev[i][1]);
+                dt_ev[i][0] = dt_ev[i][1] = nullptr;
+                dt_used[i] = false;
+            }
+        }
         Shape() = default;
         Shape(const Shape &) = delete;
         Shape &operator=(const Shape &) = delete;
@@ -1469,11 +1540,18 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
        once per shape and read every g_s4_check_every calls (the GMP oracle's cadence), so a
        violation is still reported within 8 calls of happening. */
     if (S->calls == 0) CK(cudaMemset(R.dbad, 0, sizeof(unsigned long long)));
+    /* MARK THE KERNEL IN-STREAM AND RESOLVE IT LATER (section 41): no cudaDeviceSynchronize()
+       here any more -- see the note on `t_reduce` in S4Reduce::Shape. */
+    const int dts = S->dt_slot();
+    CK(cudaEventCreate(&S->dt_ev[dts][0]));
+    CK(cudaEventCreate(&S->dt_ev[dts][1]));
+    CK(cudaEventRecord(S->dt_ev[dts][0]));
     S2G_DISPATCH(R.nw, s4_launch_reduce, (int)R.nw, S->L, nbatch, out_slots, total, digits, n,
                  bpw, slot_words, R.dn, R.ninv, S->dy, w, out, slot_bits, R.dbad);
     CK(cudaGetLastError());
-    CK(cudaDeviceSynchronize());
-    S->t_reduce += now_s() - t0;
+    CK(cudaEventRecord(S->dt_ev[dts][1]));
+    S->dt_used[dts] = true;
+    S->t_reduce_host += now_s() - t0;
     const double th0 = now_s();
     unsigned long long hbad = S->canon_bad;
     if ((S->calls % g_s4_check_every) == 0)
@@ -1967,6 +2045,9 @@ static void poly_mul_batch_modN(PolyLayer &L,
     L.t_scan += st.t_scan;
     L.t_h2d_batch += st.t_h2d_batch;
     L.t_check += st.t_check;
+    L.t_check_reset += st.t_check_reset;
+    L.t_check_kernel += st.t_check_kernel;
+    L.t_check_d2h += st.t_check_d2h;
     L.t_plan += st.t_plan;
     L.t_opcopy += st.t_opcopy;
     L.t_hout += st.t_hout;
@@ -5387,6 +5468,18 @@ struct BatchedRun {
     bool s5_readback = false;
     double t_giant = 0.0, t_gtrees = 0.0, t_fold = 0.0, t_descent = 0.0, t_inv = 0.0,
            t_accum = 0.0, t_name = 0.0;
+    /* ---- THE BOOKS MUST BALANCE (section 41) -------------------------------------------
+       `batched_progress: t=` is the SUM of the three loop timers, not a wall clock, so a run
+       can look fully accounted while the loop is really much longer: at the production shape
+       those three add up to 308.6 s and the curve's wall is 555.3 s, and the missing ~186 s
+       was invisible for several rounds because nothing timed the loop ITSELF.  These four
+       numbers close the loop: pre + loop_wall + post must equal the caller's `elapsed`, and
+       `gleaves` is the one part of the loop body that no phase timer owned (the host GMP
+       affine conversion of every giant point, section 31.4/38). */
+    double t_pre_loop = 0.0, t_loop_wall = 0.0, t_post_loop = 0.0, t_gleaves = 0.0;
+    /* ... and the four parts of `gleaves`, because "the host affine conversion" is 36% of the
+       whole curve and each part has a different fix (section 41) */
+    double t_gin = 0.0, t_ginv = 0.0, t_gmul = 0.0, t_gout = 0.0;
     bool dbg_progress = false;              /* one phase line per G-tree batch (long shapes) */
 };
 
@@ -5399,6 +5492,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     const size_t W = L.W;
     const unsigned long long D = SP.D, B1 = SP.B1, B2 = SP.B2;
     const unsigned long long imax = B2 / D + 2;          /* the SAME giant set S2/the CPU ref use */
+    const double t_entry = now_s();
     const size_t P = Fdeg[1];                            /* deg F = the baby count = poly_size */
     BatchedRun R;
     R.P = P;
@@ -5486,6 +5580,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         pts_per_chunk = P * ((k + P - 1) / P);
     }
     for (unsigned long long c0 = 0; c0 < imax; c0 += pts_per_chunk) {
+        if (c0 == 0) R.t_pre_loop = now_s() - t_entry;
+        const double tloop0 = now_s();
         const unsigned long long c1 = ((imax - c0) < pts_per_chunk) ? imax : (c0 + pts_per_chunk);
         const size_t clo = (size_t)(c0 + 1), chi = (size_t)c1;
         const double tgp = now_s();
@@ -5557,30 +5653,90 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         size_t bpad = 0;
         FTreeStats bs;
         {
+            const double tgl0 = now_s();
             mpz_t X, Z, ax, neg, gq;
             mpz_inits(X, Z, ax, neg, gq, nullptr);
+            /* ---- THE BATCHED AFFINE CONVERSION (objective 4, section 41) --------------------
+               x_i = X_i / Z_i mod N is one mpz_invert per giant point, and that inversion is
+               MEASURED at 61.5 us for the production modulus while the two input conversions and
+               the output conversion together are 0.75 us -- so 224.8 s of a 621 s curve, the
+               single largest phase in the engine and larger than the whole NTT (234 s).
+               Montgomery's trick removes almost all of it: inside a segment of SEG points, ONE
+               inversion of the product plus ~3 multiplications per point yields every Z_i^-1.
+               A segment that contains a giant point with gcd(Z_i, N) > 1 -- the degenerate point
+               of objective 3, ~0.9% of them at the production shape -- cannot be inverted as a
+               block, so that segment falls back to the per-point path, which is ALSO what detects
+               and records the degeneracy (s3_record).  A clean segment computes exactly the same
+               x_i = X_i * Z_i^-1 mod N as the old code, bit for bit, and a fallback segment runs
+               the old code verbatim: the leaves cannot change either way. */
+            const int SEG = 16;
+            /* plain arrays, not std::vector: mpz_t is an ARRAY type (__mpz_struct[1]) and cannot
+               be held in a std::vector */
+            mpz_t pv[SEG + 1], zv[SEG];
+            for (int s = 0; s <= SEG; ++s) mpz_init(pv[s]);
+            for (int s = 0; s < SEG; ++s) mpz_init(zv[s]);
+            mpz_t pinv, zinv;
+            mpz_inits(pinv, zinv, nullptr);
             std::vector<unsigned long long> w(W, 0ull);
-            for (size_t i = lo; i < hi; ++i) {
-                const size_t q = i - (clo - 1);        /* index inside this chunk */
-                words_to_mpz(X, &gx[q * W], W);
-                words_to_mpz(Z, &gz[q * W], W);
-                /* OBJECTIVE 3 (section 31.4, measured at rung 2): a GIANT point whose Z shares a
-                   factor with N is the identity modulo that factor -- the hit stage 2 is looking
-                   for, and the very thing that makes the chain "carry" a factor into the rest of
-                   its block.  Recording gcd(Z, N) here makes that explicit; it is deduplicated
-                   against the naming stage's factors and credited to no hit. */
-                if (!affine_x_gmp_checked(ax, X, Z, L.N)) {
-                    ++R.giant_degenerate;
-                    mpz_gcd(gq, Z, L.N);
-                    s3_record(R.tail, gq, 0, L.N, /*count_hit=*/false);
+            for (size_t a = lo; a < hi; a += (size_t)SEG) {
+                const size_t nb = ((a + (size_t)SEG) < hi) ? (size_t)SEG : (hi - a);
+                const double t1 = now_s();
+                bool clean = true;
+                mpz_set_ui(pv[0], 1);
+                for (size_t j = 0; j < nb; ++j) {
+                    const size_t q = (a + j) - (clo - 1);
+                    words_to_mpz(zv[j], &gz[q * W], W);
+                    if (mpz_sgn(zv[j]) == 0) { clean = false; break; }
+                    mpz_mul(pv[j + 1], pv[j], zv[j]);
+                    mpz_mod(pv[j + 1], pv[j + 1], L.N);
                 }
-                mpz_neg(neg, ax);
-                mpz_mod(neg, neg, L.N);               /* the leaf (X - x_i) = [ -x_i, 1 ] */
-                mpz_to_words(w, W, neg);
-                std::copy(w.begin(), w.end(), bleaf[i - lo].begin());
-                bleaf[i - lo][W] = 1;
+                const double t2 = now_s();
+                if (clean && mpz_invert(pinv, pv[nb], L.N) == 0) clean = false;
+                const double t3 = now_s();
+                R.t_gin += t2 - t1;
+                R.t_ginv += t3 - t2;
+                if (!clean) {
+                    /* the old per-point path, verbatim -- including the degeneracy record */
+                    for (size_t j = 0; j < nb; ++j) {
+                        const size_t i = a + j, q = i - (clo - 1);
+                        words_to_mpz(X, &gx[q * W], W);
+                        words_to_mpz(Z, &gz[q * W], W);
+                        if (!affine_x_gmp_checked(ax, X, Z, L.N)) {
+                            ++R.giant_degenerate;
+                            mpz_gcd(gq, Z, L.N);
+                            s3_record(R.tail, gq, 0, L.N, /*count_hit=*/false);
+                        }
+                        mpz_neg(neg, ax);
+                        mpz_mod(neg, neg, L.N);
+                        mpz_to_words(w, W, neg);
+                        std::copy(w.begin(), w.end(), bleaf[i - lo].begin());
+                        bleaf[i - lo][W] = 1;
+                    }
+                    R.t_gout += now_s() - t3;
+                    continue;
+                }
+                for (size_t j = nb; j-- > 0;) {
+                    const size_t i = a + j, q = i - (clo - 1);
+                    mpz_mul(zinv, pinv, pv[j]);
+                    mpz_mod(zinv, zinv, L.N);        /* Z_j^-1 */
+                    mpz_mul(pinv, pinv, zv[j]);
+                    mpz_mod(pinv, pinv, L.N);        /* inverse of the shorter product */
+                    words_to_mpz(X, &gx[q * W], W);
+                    mpz_mul(ax, X, zinv);
+                    mpz_mod(ax, ax, L.N);
+                    mpz_neg(neg, ax);
+                    mpz_mod(neg, neg, L.N);          /* the leaf (X - x_i) = [ -x_i, 1 ] */
+                    mpz_to_words(w, W, neg);
+                    std::copy(w.begin(), w.end(), bleaf[i - lo].begin());
+                    bleaf[i - lo][W] = 1;
+                }
+                R.t_gout += now_s() - t3;
             }
+            for (int s = 0; s <= SEG; ++s) mpz_clear(pv[s]);
+            for (int s = 0; s < SEG; ++s) mpz_clear(zv[s]);
+            mpz_clears(pinv, zinv, nullptr);
             mpz_clears(X, Z, ax, neg, nullptr);
+            R.t_gleaves += now_s() - tgl0;
         }
         const double tg0 = now_s();
         std::vector<std::vector<unsigned long long>> gt =
@@ -5638,7 +5794,9 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                         L.arena ? L.arena->overflow : 0ull);
         }
         }
+        R.t_loop_wall += now_s() - tloop0;
     }
+    R.t_post_loop = now_s();
 
     /* ---- 3. ONE descent of H against the F tree: H(x_j) at every baby point ------------ */
     const double td0 = now_s();
@@ -5993,6 +6151,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 R.hit_blocks, R.hit_leaves, R.named_searches, R.candidates_tested, R.unnamed,
                 R.t_scan, R.t_ladder, R.t_name, name_max());
     mpz_clears(g, pg, nullptr);
+    /* close the books (section 41): pre + loop_wall + post must equal the caller's `elapsed` */
+    R.t_post_loop = now_s() - R.t_post_loop;
     /* the device-side counters: how much of the orchestration actually happened once */
     R.ladder_calls = ws.ladder_calls;
     R.ladder_points = ws.ladder_points_total;
@@ -6412,6 +6572,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const double dc0 = L.t_d2h_coeff;
         const unsigned long long dw0 = L.d2h_coeff_words;
         const double hp0 = L.t_hpack, sc0 = L.t_scan, hb0 = L.t_h2d_batch, ck0 = L.t_check;
+        const double cr0 = L.t_check_reset, ck0b = L.t_check_kernel, cd0 = L.t_check_d2h;
         const double pl0b = L.t_plan, oc0 = L.t_opcopy, ho0 = L.t_hout;
         const double ry0 = L.s4 ? L.s4->t_h2d_raw : 0.0;
         const unsigned long long rw0 = L.s4 ? L.s4->raw_words : 0ull;
@@ -6449,6 +6610,19 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::printf("real_batched_split: giant=%.3f gtrees=%.3f fold=%.3f descent=%.3f inv=%.3f "
                     "accum=%.3f name=%.3f f_tree_incl=%.3f\n", BR.t_giant, BR.t_gtrees, BR.t_fold,
                     BR.t_descent, BR.t_inv, BR.t_accum, BR.t_name, t_f);
+        /* THE BOOKS, CLOSED (section 41): pre + loop_wall + post == `el` above, and the only
+           part of the loop body that no phase timer owned is the host affine conversion of the
+           giant points (`gleaves`).  loop_host = loop_wall - giant - gtrees - fold - gleaves is
+           then everything else the host does inside the loop with the device idle. */
+        std::printf("real_batched_wall: pre=%.3f loop_wall=%.3f post=%.3f sum=%.3f (elapsed=%.2f) "
+                    "| gleaves=%.3f loop_host=%.3f\n", BR.t_pre_loop, BR.t_loop_wall, BR.t_post_loop,
+                    BR.t_pre_loop + BR.t_loop_wall + BR.t_post_loop, el, BR.t_gleaves,
+                    BR.t_loop_wall - BR.t_giant - BR.t_gtrees - BR.t_fold - BR.t_gleaves);
+        std::printf("real_batched_gleaves: in=%.3f invert=%.3f out=%.3f (us_per_point: in=%.2f "
+                    "invert=%.2f out=%.2f)\n", BR.t_gin, BR.t_ginv, BR.t_gout,
+                    BR.giant_points ? 1e6 * BR.t_gin / (double)BR.giant_points : 0.0,
+                    BR.giant_points ? 1e6 * BR.t_ginv / (double)BR.giant_points : 0.0,
+                    BR.giant_points ? 1e6 * BR.t_gout / (double)BR.giant_points : 0.0);
         std::printf("real_giant_chain: chunks=%llu seed_points=%llu chunks_per_ladder=%llu\n",
                     BR.giant_chain_chunks, BR.giant_seed_points,
                     BR.giant_chain_chunks ? 0ull : 1ull);
@@ -6502,6 +6676,17 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             std::printf("real_batched_carrycheck: us_per_call=%.1f total=%.3f s "
                         "share_of_ntt=%.1f%%\n", inv_c * tck * 1e6, tck,
                         (L.ntt_seconds - ns) > 0 ? 100.0 * tck / (L.ntt_seconds - ns) : 0.0);
+            /* WHICH PART of that is the pass and which is the drain (section 41): the kernel's
+               own GPU time comes from in-stream events, the readback is the blocking D2H of the
+               two 8-byte counters.  A readback far larger than the kernel is pure latency. */
+            {
+                const double trs = L.t_check_reset - cr0, tke = L.t_check_kernel - ck0b,
+                             td2 = L.t_check_d2h - cd0;
+                std::printf("real_batched_carrysplit: reset_us_per_call=%.1f kernel_us_per_call="
+                            "%.1f d2h_us_per_call=%.1f | totals reset=%.3f kernel=%.3f "
+                            "d2h=%.3f s\n", inv_c * trs * 1e6, inv_c * tke * 1e6, inv_c * td2 * 1e6,
+                            trs, tke, td2);
+            }
             /* ... and the two remaining pieces of the device entry point: the shape plan
                (choose_cfg re-proving the exactness bound per call) and the device-to-device copy
                of the packed operands into the arena's scratch. */
@@ -6529,15 +6714,25 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if (s4_on) {
             unsigned long long sel_cases = 0, sel_bad = 0, checked = 0, check_bad = 0,
                                full = 0, canon = 0, coeffs = 0;
-            double t_red = 0.0;
+            double t_red = 0.0, t_red_host = 0.0;
+            unsigned long long dt_blocked = 0;
             for (S4Reduce::Shape *S : red.shapes) {
+                S->dt_flush();     /* the run is over and the stream has drained: resolve the
+                                      deferred marks now (section 41) */
                 sel_cases += S->selftest_cases; sel_bad += S->selftest_bad;
                 checked += S->checked; check_bad += S->check_bad; full += S->full_checks;
                 canon += S->canon_bad; coeffs += S->coeffs; t_red += S->t_reduce;
+                t_red_host += S->t_reduce_host; dt_blocked += S->dt_blocks;
                 std::printf("s4_reduce_stats: P=%llu slot_bits=%llu L=%d nlimb=%d launches=%llu "
                             "coeffs=%llu gmp_checked=%llu gmp_bad=%llu slot_canonical_bad=%llu "
                             "t_reduce=%.3f\n", S->P, S->slot_bits, S->L, S->nlimb, S->calls,
                             S->coeffs, S->checked, S->check_bad, S->canon_bad, S->t_reduce);
+                /* section 41: how much of the hook is the KERNEL and how much is the host */
+                std::printf("s4_reduce_split: P=%llu kernel_us_per_call=%.2f "
+                            "host_us_per_call=%.2f ring_waits=%llu | t_reduce_host=%.3f s\n",
+                            S->P, S->calls ? 1e6 * S->t_reduce / (double)S->calls : 0.0,
+                            S->calls ? 1e6 * S->t_reduce_host / (double)S->calls : 0.0,
+                            S->dt_blocks, S->t_reduce_host);
                 /* the hook's out-of-timer work on the REAL shape too (section 36): the canonical
                    counter's readback and the in-run GMP oracle */
                 std::printf("s4_reduce_hook_tail: P=%llu d2h_bad_us_per_call=%.2f "
@@ -6547,9 +6742,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                             S->t_hookd2h, S->t_hooksample);
             }
             std::printf("s4_multiply_stats: enabled=1 launches=%llu poly_muls=%llu "
-                        "coeffs_reduced=%llu t_reduce=%.3f gmp_selftest_cases=%llu "
+                        "coeffs_reduced=%llu t_reduce=%.3f t_reduce_host=%.3f ring_waits=%llu "
+                        "gmp_selftest_cases=%llu "
                         "gmp_selftest_bad=%llu gmp_checked=%llu gmp_check_bad=%llu "
-                        "full_checks=%llu\n", s4.launches, s4.muls, coeffs, t_red, sel_cases,
+                        "full_checks=%llu\n", s4.launches, s4.muls, coeffs, t_red, t_red_host,
+                        dt_blocked, sel_cases,
                         sel_bad, checked, check_bad, full);
         }
     }
@@ -6929,6 +7126,7 @@ static int run_check_F(const char *path, const char *gpu_dump_path, bool evaluat
                                full = 0, canon = 0, coeffs = 0;
             double t_red = 0.0;
             for (S4Reduce::Shape *S : red.shapes) {
+                S->dt_flush();     /* resolve the deferred marks (section 41) */
                 sel_cases += S->selftest_cases; sel_bad += S->selftest_bad;
                 checked += S->checked; check_bad += S->check_bad;
                 full += S->full_checks; canon += S->canon_bad; coeffs += S->coeffs;

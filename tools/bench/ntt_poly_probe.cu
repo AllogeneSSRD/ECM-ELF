@@ -531,14 +531,43 @@ __global__ void carry_residual_kernel(const unsigned long long *c, unsigned long
     c += (size_t)blockIdx.y * stride;
     out += 2 * (size_t)blockIdx.y;
     const unsigned long long i = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    const unsigned long long v = c[i];
-    if (v >= (1ull << bpw)) atomicAdd(out, 1ull);
-    /* max digit height, in a second slot of `out` */
-    int h = 0;
-    unsigned long long t = v;
-    while (t) { ++h; t >>= 1; }
-    atomicMax((unsigned long long *)&out[1], (unsigned long long)h);
+    const unsigned long long lim = 1ull << bpw;
+    unsigned long long bad = 0, mx = 0;
+    if (i < n) {
+        const unsigned long long v = c[i];
+        if (v >= lim) bad = 1;
+        /* max digit height, in a second slot of `out`: 64 - clz, and 0 for the digit 0 --
+           exactly the value of the old `while (t) { ++h; t >>= 1; }` loop */
+        mx = v ? (unsigned long long)(64 - __clzll((long long)v)) : 0ull;
+    }
+    /* THE REDUCTION IS PER WARP, THEN PER BLOCK -- NOT PER THREAD (objective 4, section 41).
+       The old kernel had EVERY thread in the grid doing an atomicAdd AND an atomicMax on the
+       SAME two globals: for a slice of N words that is 2*N/32 serialised global atomics for a
+       value that is a single 64-bit count, and it was 60.6 s at the production shape (24% of
+       ntt_seconds).  A first attempt folded per BLOCK with *shared* 64-bit atomics and came out
+       2.6x SLOWER at B2=1e11 (measured: t_check 1.864 -> 4.858 s), because 64-bit shared-memory
+       atomics are emulated and serialise ~32 deep per warp -- so the fold starts in the warp
+       (shuffles, no memory traffic) and only lane 0 of each warp touches shared memory, leaving
+       one global atomic pair per block.  The results are bit-identical to the old kernel's. */
+    const unsigned mask = 0xffffffffu;
+    #pragma unroll
+    for (int off = 16; off > 0; off >>= 1) {
+        bad += __shfl_down_sync(mask, bad, off);
+        const unsigned long long o = __shfl_down_sync(mask, mx, off);
+        if (o > mx) mx = o;
+    }
+    __shared__ unsigned long long sh_bad, sh_mx;
+    if (threadIdx.x == 0) { sh_bad = 0ull; sh_mx = 0ull; }
+    __syncthreads();
+    if ((threadIdx.x & 31u) == 0u) {
+        if (bad) atomicAdd(&sh_bad, bad);
+        atomicMax(&sh_mx, mx);
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        if (sh_bad) atomicAdd(out, sh_bad);
+        atomicMax((unsigned long long *)&out[1], sh_mx);
+    }
 }
 
 /*
@@ -2303,8 +2332,10 @@ struct NttMulStats {
        entry point.  Measured separately so the "111 us per call that nobody measured" can be
        attributed instead of guessed. */
     double t_hpack = 0.0, t_scan = 0.0, t_h2d_batch = 0.0;
-    /* the extra pass the carry-convergence assert costs (section 34) */
+    /* the extra pass the carry-convergence assert costs (section 34), and its three parts
+       (section 41: the reset launch, the kernel, the blocking readback) */
     double t_check = 0.0;
+    double t_check_reset = 0.0, t_check_kernel = 0.0, t_check_d2h = 0.0;
     /* where the REST of the device entry point's time goes: the shape plan (choose_cfg, which
        proves the exactness bound) and the device-to-device copy of the two operands into the
        arena's scratch (section 34) */
@@ -2719,12 +2750,25 @@ struct NttPassResult {
        kernel over N*nbatch digits and a device-to-host copy) and it was untimed, which is why
        more than half of ntt_seconds had no owner (docs/DEV_STAGE2_GPU_PLAN.md section 34). */
     double t_check = 0.0;
+    /* ... and THAT total is itself split, because its three parts have three different fixes
+       (section 41): the reset memset launch, the kernel itself, and the blocking 16-byte D2H
+       that drains the whole pipeline before the host can look at the two counters. */
+    double t_check_reset = 0.0, t_check_kernel = 0.0, t_check_d2h = 0.0;
     /* the slot assembly + its D2H: skipped entirely when the caller has a reduction hook, which
        never reads them (section 35) */
     double t_hout = 0.0;
     unsigned long long *digits = nullptr;      /* the buffer holding the canonical digits */
     std::vector<unsigned long long> hOut;      /* nbatch * out_slots slot projections */
     std::vector<unsigned long long> hRes;      /* 2 * nbatch carry diagnostics */
+    /* DEFERRED IN-STREAM MARKS (docs section 41).  Reading an event's elapsed time is only
+       possible once the event has completed, so a call that has no other reason to drain the
+       pipeline must either block here (which is exactly the cost being removed) or hand the
+       marks back untouched.  The batched device entry point does the latter: it owns the one
+       blocking copy at the end of its chunk, and reads these five marks right afterwards.
+       ev[0..1] = forward, ev[1..2] = inverse, ev[3..4] = carry-residual kernel. */
+    cudaEvent_t dev_ev[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+    /* the carry-residual counters, read in the same deferred step (empty until then) */
+    bool res_deferred = false;
 };
 
 /* forward, pointwise product, inverse, carry, slot assembly and the carry-convergence
@@ -2739,7 +2783,7 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     std::vector<unsigned long long> *hfb,
                                     std::vector<unsigned long long> *hPre,
                                     std::vector<unsigned long long> *hPost,
-                                    bool need_hout = true)
+                                    bool need_hout = true, bool defer_res = false)
 {
     NttPassResult r;
     const unsigned long long N = sh.N, out_slots = sh.out_slots;
@@ -2863,15 +2907,53 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
        silent: the digits are simply wrong above some index).  ONE PASS over the whole digit array
        plus a D2H per call, which is why it is now measured. */
     const double t3 = now_s();
-    r.hRes.assign((size_t)(2 * nbatch), 0);
-    CK(cudaMemset(dRes, 0, 2 * nbatch * sizeof(unsigned long long)));
+    /* the kernel's OWN GPU time, from events recorded in-stream around it.  With defer_res the
+       marks are handed back (r.dev_ev[3..4]) and read by the caller after its own drain. */
+    cudaEvent_t ev_c0, ev_c1;
+    CK(cudaEventCreate(&ev_c0));
+    CK(cudaEventCreate(&ev_c1));
+    if (!defer_res) {
+        r.hRes.assign((size_t)(2 * nbatch), 0);
+        CK(cudaMemset(dRes, 0, 2 * nbatch * sizeof(unsigned long long)));
+    }
+    const double t3a = now_s();
+    r.t_check_reset = t3a - t3;
+    CK(cudaEventRecord(ev_c0));
     {
         const dim3 gr(blocks, (unsigned int)nbatch);
         carry_residual_kernel<<<gr, threads>>>(dDig, N, sh.bpw, dRes, N);
     }
     CK(cudaGetLastError());
+    CK(cudaEventRecord(ev_c1));
+    if (defer_res) {
+        /* NOTHING HERE DRAINS THE PIPELINE (section 41).  `dRes` holds 2 words per slice and the
+           kernel indexes them by slice, so the counters of every call in a chunk simply
+           ACCUMULATE in place: one memset before the caller's chunk loop and one readback after
+           it reproduce exactly the per-call values, at one drain per chunk instead of one per
+           call.  Measured at the production shape: the whole carry check was 60.6 s (24% of
+           ntt_seconds) of which the kernel itself is 0.2 us per call -- the rest was the 16-byte
+           blocking readback draining the pipeline. */
+        r.res_deferred = true;
+        r.dev_ev[3] = ev_c0;
+        r.dev_ev[4] = ev_c1;
+        r.t_check = now_s() - t3;
+        r.dev_ev[0] = ev_f0;
+        r.dev_ev[1] = ev_f1;
+        r.dev_ev[2] = ev_i1;
+        return r;
+    }
+    const double tc0 = now_s();
     CK(cudaMemcpy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
                   cudaMemcpyDeviceToHost));
+    r.t_check_d2h = now_s() - tc0;
+    r.t_check_kernel = 0.0;
+    {
+        float ms = 0.0f;
+        if (cudaEventElapsedTime(&ms, ev_c0, ev_c1) == cudaSuccess)
+            r.t_check_kernel = (double)ms * 1e-3;       /* the GPU's own time */
+    }
+    cudaEventDestroy(ev_c0);
+    cudaEventDestroy(ev_c1);
     r.t_check = now_s() - t3;
     /* the in-stream event timers, read once the stream has drained (the copies above guarantee
        that) -- see the note at ev_f0 */
@@ -2886,6 +2968,24 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
         cudaEventDestroy(ev_i1);
     }
     return r;
+}
+
+/* Read (and release) the DEFERRED in-stream marks of one call (section 41).  Only valid once
+   the stream has been drained past them, which the caller's own blocking copy guarantees. */
+static void ntt_pass_read_marks(NttPassResult &r, double *t_fwd, double *t_inv, double *t_chk)
+{
+    float ms = 0.0f;
+    if (r.dev_ev[0] && r.dev_ev[1] &&
+        cudaEventElapsedTime(&ms, r.dev_ev[0], r.dev_ev[1]) == cudaSuccess)
+        *t_fwd += (double)ms * 1e-3;
+    if (r.dev_ev[1] && r.dev_ev[2] &&
+        cudaEventElapsedTime(&ms, r.dev_ev[1], r.dev_ev[2]) == cudaSuccess)
+        *t_inv += (double)ms * 1e-3;
+    if (r.dev_ev[3] && r.dev_ev[4] &&
+        cudaEventElapsedTime(&ms, r.dev_ev[3], r.dev_ev[4]) == cudaSuccess)
+        *t_chk += (double)ms * 1e-3;
+    for (int i = 0; i < 5; ++i)
+        if (r.dev_ev[i]) { cudaEventDestroy(r.dev_ev[i]); r.dev_ev[i] = nullptr; }
 }
 
 /* ---- the optional device-side post-reduction hook (slice S4) ---------------------------
@@ -3004,6 +3104,9 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         std::copy(rr.hRes.begin(), rr.hRes.end(), r.hRes.begin() + (long)(2 * s0));
         r.t_fwd += rr.t_fwd; r.t_inv += rr.t_inv; r.t_slot += rr.t_slot;
         r.t_check += rr.t_check;
+        r.t_check_reset += rr.t_check_reset;
+        r.t_check_kernel += rr.t_check_kernel;
+        r.t_check_d2h += rr.t_check_d2h;
         if (nchunk == 1) r.digits = rr.digits;
         if (hook && hook->run && hook->out && hook->w) {
             hook->run(hook->ctx, rr.digits, N, sh.bpw, sh.slot_words, sh.slot_bits, out_slots,
@@ -3028,6 +3131,9 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         st->mem_mb = sh.mem_mb * (double)nbatch;
         st->t_fwd = r.t_fwd; st->t_inv = r.t_inv; st->t_slot = r.t_slot;
         st->t_check += r.t_check;
+        st->t_check_reset += r.t_check_reset;
+        st->t_check_kernel += r.t_check_kernel;
+        st->t_check_d2h += r.t_check_d2h;
         st->t_hpack += t_hpack;
         st->t_scan += t_scan;
         st->t_h2d_batch += t_h2d_batch;
@@ -3128,25 +3234,42 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
     }();
     NttPassResult r;
     if (want_hout) r.hOut.assign((size_t)(out_slots * nbatch), 0);
-    r.hRes.assign((size_t)(2 * nbatch), 0);
+    /* ONE reset and ONE readback for the whole chunk (section 41): the counters live at
+       dRes[2*slice] and the kernel only ever touches its own slice's two words, so accumulating
+       them across the chunk and reading once is exactly equivalent to reading after each
+       call -- see the note where the call defers. */
+    CK(cudaMemset(dRes, 0, 2 * (size_t)nbatch * sizeof(unsigned long long)));
+    std::vector<NttPassResult> sub((size_t)nchunk);
     for (unsigned long long ci = 0; ci < nchunk; ++ci) {
         const unsigned long long s0 = ci * max_y;
         const unsigned long long m = ((nbatch - s0) < max_y) ? (nbatch - s0) : max_y;
         NttPassResult rr = ntt_run_passes(sh, fc, dA + s0 * N, dB + s0 * N, dQ + s0 * N,
                                           dOut + s0 * out_slots, dRes + 2 * s0, m, 0,
-                                          nullptr, nullptr, nullptr, nullptr, want_hout);
+                                          nullptr, nullptr, nullptr, nullptr, want_hout, true);
+        sub[(size_t)ci] = rr;
         if (!rr.hOut.empty())
             std::copy(rr.hOut.begin(), rr.hOut.end(), r.hOut.begin() + (long)(s0 * out_slots));
-        std::copy(rr.hRes.begin(), rr.hRes.end(), r.hRes.begin() + (long)(2 * s0));
-        r.t_fwd += rr.t_fwd; r.t_inv += rr.t_inv; r.t_slot += rr.t_slot;
+        r.t_slot += rr.t_slot;
         r.t_check += rr.t_check;
+        r.t_check_reset += rr.t_check_reset;
         if (nchunk == 1) r.digits = rr.digits;
         if (hook && hook->run && hook->out && hook->w) {
             hook->run(hook->ctx, rr.digits, N, sh.bpw, sh.slot_words, sh.slot_bits, out_slots,
                       m, hook->out + (size_t)(s0 * out_slots) * hook->w, hook->w);
             CK(cudaGetLastError());
-            CK(cudaDeviceSynchronize());
         }
+    }
+    /* THE ONE DRAIN OF THE WHOLE CHUNK (section 41): the carry counters and the deferred
+       in-stream marks are both read here, after a single blocking copy, instead of once per
+       call.  This is also where an asynchronous kernel failure surfaces. */
+    {
+        const double tr0 = now_s();
+        r.hRes.assign((size_t)(2 * nbatch), 0);
+        CK(cudaMemcpy(r.hRes.data(), dRes, r.hRes.size() * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToHost));
+        for (unsigned long long ci = 0; ci < nchunk; ++ci)
+            ntt_pass_read_marks(sub[(size_t)ci], &r.t_fwd, &r.t_inv, &r.t_check_kernel);
+        r.t_check_d2h += now_s() - tr0;
     }
     if (st) {
         st->P = P; st->S = S; st->N = N; st->k = sh.k; st->bpw = sh.bpw;
@@ -3164,6 +3287,9 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         st->mem_mb = sh.mem_mb * (double)nbatch;
         st->t_fwd = r.t_fwd; st->t_inv = r.t_inv; st->t_slot = r.t_slot;
         st->t_check += r.t_check;
+        st->t_check_reset += r.t_check_reset;
+        st->t_check_kernel += r.t_check_kernel;
+        st->t_check_d2h += r.t_check_d2h;
         st->t_plan += t_plan;
         st->t_opcopy += t_copy;
         st->t_hout += r.t_hout;
