@@ -3024,3 +3024,71 @@ s5_reddump_rexp:     k=0 L=3 rexp=b724b25400000000ffffffff0379e304      ← 不�
 顺带把校验和换成**强校验**（例如两个不同权重的和，或逐 digit 打印到独立文件），因为弱校验正是当前唯一"看起来验过、其实没验死"的地方。— **规则：任何被当作证据的校验，先证明它能区分。**
 
 **状态**：门禁 22/22（所有改动都在 S5 路径内），`NTT_S5_ON` 继续 opt-in；本轮把 S5 的可能性空间压缩到"一处验证对象错误"，并明确了下一次运行要做什么。
+
+---
+
+## 49. 第 17 轮：**S5 的谜团破了——窗口的 digit 根本不是规范形式**（2026-10-02）
+
+### 49.1 把"同一个核、同样的输入、不同结果"这个矛盾拆掉
+
+先做了一次**决定性实验**：把失败窗口的 digit 从设备上抄下来，**在同一个进程里用最简单的几何**（`n = slot_words`、`out_slots = 1`、`total = 1`、`dbad = nullptr`、`s4_dbg = nullptr`）**再发一次同一个核**：
+
+```
+gmp        = fc861cfcb724b25400000001
+inline     = fa7bfcfcb724b25400000001     ← 生产路径里的那一次
+standalone = fa7bfcfcb724b25400000001     → STANDALONE_ALSO_WRONG
+```
+
+**独立发射也是错的** ⇒ **发射（grid / n / out_slots / total / dbad）不是变量，digit 才是**。于是矛头指向"两侧对同一串 digit 的理解不同"。
+
+### 49.2 根因：**digit 不是规范形式**
+
+在 `s5_reddump_row` 旁边加一条**逐 digit 规范性**测量（每个 digit 必须 < 2^bpw）：
+
+```
+s5_reddump_canon: k=0 bpw=7 max_digit=2715379 at_j=10 limit=127 NON_CANONICAL_DIGIT
+s5_reddump_canon: k=1 bpw=7 max_digit=0       at_j=0  limit=127 CANONICAL
+```
+
+**窗口的第 10 个 digit 是 2,715,379（22 bit），而 bpw=7 的上限是 127。**
+
+这一条把第 14–16 轮**所有"悖论"一次性解释干净**：
+
+| 现象 | 解释 |
+|---|---|
+| 自检 96 个用例全过 | 自检的 digit 都由 `s & maxd` / 常量构造，**永远 < 2^bpw** ✓ 规范 ✓ |
+| 把真实窗口做成用例仍然过 | 同上：`real_dig` 是**规范分解**（`rebuilt=... ok=1` 证明的就是这一点），而真实窗口**不是** |
+| 校验和 `SAME_INPUTS` | 两侧读到的**确实是同一串非规范 digit** ✓ 校验和没说谎 |
+| 独立发射也错 | 同样的非规范 digit ✓ |
+| 只有 limb0 错、limb1 对 | `acc \|= v << nacc` 对超宽 digit **丢掉高位并污染相邻 digit**，而 GMP 的 `sum d[j]2^(bpw j)` **保留**它 |
+
+**核的转换是 `acc |= v << nacc`（OR）**，所以一个宽于 bpw 的 digit 会静默丢位；而**核自己的规范性检查只看 `slot_bits` 之上**（
+`(d[slot_words-1] >> top_bits) != 0`），**从不逐 digit 检查**——所以这条路径一直是静默的。
+
+### 49.3 顺带找到的第二个真 bug：**忽略的返回码**
+
+```cpp
+const int rc = ntt_poly_mul_batch_dev(...);     /* ← 捕获了 */
+st.t_reduce += now_s() - tg0;                   /* ← 从此再没用过 */
+```
+
+`ntt_poly_mul_batch_dev` 在 carry 不收敛时**返回 4 并打印 `CARRY DID NOT CONVERGE`** —— 而这正是 S5 归约活不下去的那个状态。**把返回码忽略掉，等于把"响亮的失败"变成"静默的损坏"。** 现在 `rc != 0` 是 FATAL。
+
+### 49.4 本轮落地的两个修复（都已验证会触发）
+
+1. **`s5_mul_batch` 检查 `rc`** —— carry 不收敛不再被吞掉；
+2. **S5 归约 hook 在动归约之前断言窗口的逐 digit 规范性**（每个形状查一次，代价是一次 `slot_words` 字的 D2H），不满足就**指名报出**是哪个 digit、多宽、上限多少，然后 `exit(3)`。
+
+实测：现在运行 S5 会立刻得到
+
+```
+FATAL: the S5 reduction was handed a NON-CANONICAL window: digit 10 of the first coefficient is ...
+```
+
+——**从一个"数值莫名其妙不对"的谜团，变成一个指名道姓、可复现的失败**。
+
+### 49.5 下一步（唯一一件）
+
+**让 carry 阶段对这个形状收敛**。已经知道的事实：`sh.carry_rounds = 2 + ceil((k + 3*bpw)/bpw)`（`ntt_poly_probe.cu:2589`），S4 的形状全都收敛（残差检查从未报过），S5 的形状（bpw=7，slot_bits=259，P 很小）不收敛。下一轮要做的就是**把这个公式按 S5 的几何重推一遍**（或者让残差检查在不为零时自动加轮次），然后用第 49.4 的断言确认它变绿——**这一次是一个有明确验收条件的任务**，不再是猜。
+
+**状态**：门禁 22/22（改动都在 S5 路径内），`NTT_S5_ON` 继续 opt-in，工作区干净。

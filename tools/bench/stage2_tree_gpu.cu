@@ -1248,6 +1248,8 @@ struct S4Reduce {
         std::vector<unsigned long long> hy;
         unsigned long long *dy = nullptr;
         unsigned long long calls = 0, coeffs = 0, canon_bad = 0;
+        /* 1 once the window canonicality of this shape has been checked (section 49) */
+        unsigned long long canon_checked = 0;
         unsigned long long checked = 0, check_bad = 0, check_first = 0, full_checks = 0;
         double t_hookd2h = 0.0, t_hooksample = 0.0;
         unsigned long long selftest_cases = 0, selftest_bad = 0;
@@ -3479,6 +3481,31 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
         }
     }
     const double t0 = now_s();
+    /* ---- IS THE WINDOW THE REDUCTION IS ABOUT TO READ CANONICAL? (section 49) --------------
+       The kernel's digit-to-limb conversion is `acc |= v << nacc`: an OR, which silently drops
+       the high bits of any digit wider than bpw.  The host's GMP reduction treats the digits as a
+       number and keeps them, so ONE non-canonical digit makes the two sides disagree in a way no
+       other check here can see -- and that is the whole of the S5 descent's remaining mystery
+       (measured: digit 10 of the failing window was 2715379 against a bpw=7 limit of 127).
+       Checked once per shape, where the window is already being read for the GMP oracle. */
+    if (S->calls == 0 && slot_words <= 512) {
+        std::vector<unsigned long long> w0((size_t)slot_words, 0ull);
+        CK(cudaMemcpy(w0.data(), digits, w0.size() * sizeof(unsigned long long),
+                      cudaMemcpyDeviceToHost));
+        unsigned long long mx = 0, mj = 0;
+        for (unsigned long long j = 0; j < slot_words; ++j)
+            if (w0[(size_t)j] > mx) { mx = w0[(size_t)j]; mj = j; }
+        if (mx >= (1ull << bpw)) {
+            std::fprintf(stderr, "%s: FATAL: the S5 reduction was handed a NON-CANONICAL window: "
+                                 "digit %llu of the first coefficient is %llu but bpw=%d (limit "
+                                 "%llu).  The kernel's `acc |= v << nacc` would drop its high "
+                                 "bits while GMP keeps them, so the two cannot agree -- fix the "
+                                 "carry stage (or its round count) before reducing here\n",
+                         NTT_PROBE_NAME, mj, mx, bpw, (1ull << bpw) - 1ull);
+            std::exit(3);
+        }
+        S->canon_checked = 1;
+    }
     /* FORENSIC (NTT_S5_REDDUMP=1): the KERNEL's own view of the first coefficients -- the
        assembled limbs t[], the returned r[] and the digits it actually read.  The host can dump
        the digit buffer and the output rows, but neither says what the kernel saw: if they
@@ -3560,6 +3587,22 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
             char *s3 = mpz_get_str(nullptr, 16, wv);
             std::fprintf(stderr, "s5_reddump_row: k=%llu window=%s gmp=%s device=%s %s\n", k, s3,
                          s1, s2, (mpz_cmp(want, got) == 0) ? "MATCH" : "DIFFER");
+            /* ---- ARE THE WINDOW'S DIGITS CANONICAL? (section 49) ---------------------------
+               The kernel's digit-to-limb conversion is `acc |= v << nacc` -- an OR, which silently
+               DROPS the high bits of a digit that is wider than bpw.  The host's GMP reduction
+               treats the digits as a number (`sum d[j] 2^(bpw j)`) and keeps them.  So a single
+               non-canonical digit makes the two sides disagree in exactly the way observed, and
+               the kernel's own canonicity check only looks ABOVE slot_bits, never per digit. */
+            {
+                unsigned long long mx = 0, mj = 0;
+                for (unsigned long long j = 0; j < slot_words; ++j) {
+                    const unsigned long long v = d0[(size_t)(k * slot_words + j)];
+                    if (v > mx) { mx = v; mj = j; }
+                }
+                std::printf("s5_reddump_canon: k=%llu bpw=%d max_digit=%llu at_j=%llu limit=%llu "
+                            "%s\n", k, bpw, mx, mj, (1ull << bpw) - 1ull,
+                            (mx < (1ull << bpw)) ? "CANONICAL" : "NON_CANONICAL_DIGIT");
+            }
             /* THE SAME COORDINATE, FROM THE KERNEL'S OWN REGISTERS (section 48): `device` above
                comes from the output buffer, and this comes from the kernel's debug array at the
                SAME gid.  Printing both on one line is what makes "the kernel's u and the row I am
@@ -3598,6 +3641,47 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
                 mp_get_memory_functions(nullptr, nullptr, &ff);
                 ff(sr, std::strlen(sr) + 1);
                 mpz_clears(rexp, t, nullptr);
+            }
+            /* ---- THE SAME WINDOW, THROUGH A FRESH LAUNCH OF THE SAME KERNEL (section 49) ----
+               Everything about the in-line call checks out -- the digits by checksum, every
+               parameter by construction -- yet it disagrees with GMP while the selftest agrees on
+               the same value.  So take THIS window's digits, put them through a standalone launch
+               with the selftest's geometry, right here, and print three numbers side by side:
+               GMP, the in-line device output, and the standalone one.  A standalone run that is
+               RIGHT makes the launch the difference; one that is also WRONG makes the digits the
+               difference -- and then the weak checksum is what lied. */
+            if (k == 0) {
+                std::vector<unsigned long long> w1((size_t)slot_words, 0ull);
+                CK(cudaMemcpy(w1.data(), digits, w1.size() * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToHost));
+                unsigned long long *dw = nullptr, *dow = nullptr;
+                CK(cudaMalloc(&dw, w1.size() * sizeof(unsigned long long)));
+                CK(cudaMalloc(&dow, (size_t)D.red->w * sizeof(unsigned long long)));
+                CK(cudaMemcpy(dw, w1.data(), w1.size() * sizeof(unsigned long long),
+                              cudaMemcpyHostToDevice));
+                S2G_DISPATCH(D.red->nw, s4_launch_reduce, (int)D.red->nw, S->L, 1ull, 1ull, 1ull,
+                             dw, slot_words, bpw, slot_words, D.red->dn, D.red->ninv, S->dy,
+                             (unsigned long long)D.red->w, dow, S->slot_bits,
+                             (unsigned long long *)nullptr, (unsigned long long *)nullptr);
+                CK(cudaGetLastError());
+                CK(cudaDeviceSynchronize());
+                std::vector<unsigned long long> o1((size_t)D.red->w, 0ull);
+                CK(cudaMemcpy(o1.data(), dow, o1.size() * sizeof(unsigned long long),
+                              cudaMemcpyDeviceToHost));
+                mpz_t st;
+                mpz_init(st);
+                mpz_import(st, (size_t)D.red->w, -1, 8, 0, 0, o1.data());
+                char *ss = mpz_get_str(nullptr, 16, st);
+                std::fprintf(stderr, "s5_reddump_standalone: k=0 n=%llu out_slots=1 gmp=%s "
+                                     "inline=%s standalone=%s %s\n", slot_words, s1, s2, ss,
+                             (mpz_cmp(want, st) == 0) ? "STANDALONE_MATCHES_GMP"
+                                                      : "STANDALONE_ALSO_WRONG");
+                void (*ff2)(void *, size_t) = nullptr;
+                mp_get_memory_functions(nullptr, nullptr, &ff2);
+                ff2(ss, std::strlen(ss) + 1);
+                mpz_clear(st);
+                cudaFree(dw);
+                cudaFree(dow);
             }
             void (*ff)(void *, size_t) = nullptr;
             mp_get_memory_functions(nullptr, nullptr, &ff);
@@ -4037,6 +4121,20 @@ static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long
         const int rc = ntt_poly_mul_batch_dev(P, S, L.device, m, pA, pB, &nst, L.arena, &nh,
                                               nullptr, (int)qbpw);
         st.t_reduce += now_s() - tg0;
+        /* ---- THE MULTIPLY'S RETURN CODE WAS CAPTURED AND NEVER EXAMINED (section 49) --------
+           `ntt_poly_mul_batch_dev` returns 4 with "CARRY DID NOT CONVERGE" on stderr when the
+           carry stage leaves a digit at or above 2^bpw.  That is EXACTLY the state the S5
+           reduction cannot survive: the kernel's digit-to-limb conversion ORs each digit in
+           (`acc |= v << nacc`), so a digit wider than bpw silently loses its high bits, while the
+           host's GMP reduction treats the digits as a number and keeps them -- a disagreement no
+           other check in this file can see.  Ignoring the code turned a loud failure into silent
+           corruption.  It is fatal now. */
+        if (rc != 0) {
+            std::fprintf(stderr, "%s: FATAL: the S5 multiply failed (rc=%d) at P=%llu -- refusing "
+                                 "to reduce digits it cannot trust\n", NTT_PROBE_NAME, rc,
+                         (unsigned long long)P);
+            std::exit(3);
+        }
         /* THE SHAPE THE MULTIPLY REALLY RAN must be the one the packer assumed: its slot_words is
            what the reduction reads the coefficients at, its slot_bits is what the reduction
            asserts the windows against, and its slot_stride is the bit distance between two
