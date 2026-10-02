@@ -3607,3 +3607,33 @@ s5_sub_kernel<<<S5_GRID((unsigned long long)rows * (unsigned long long)D.red->nw
 1. **再加一个跨阈值的形状**（例如 `D=30030` ⇒ P=2880，根除法 `rows ≈ 1440`、`nw=3` ⇒ 需要 4320 线程，跨过 85 的阈值 17 倍），逐叶对拍通过后再往 P=51840 靠；
 2. 把"launch 覆盖 guard"这件事**变成结构性保证**：给每个 S5 kernel 的调用点加一句"需要的线程数"计算与断言（本轮已按此改写 `s5_sub_kernel` 的调用点与注释，其余调用点逐一对过：`s5_fill_kernel`（guard `n`）✓、`s5_pad_low_kernel`（`n`）✓、`s5_rev_pack_kernel`（`n`）✓、`s5_pack_kernel`（`ds*ma`，调用点传 `m*la` ✓）、`s5_memcpy_kernel`（`rows*W`，调用点传 `rows*W` ✓）、`s5_two_minus_kernel`（`total`，调用点传 `nxt` ✓）、`s5_eval_linear_kernel`（每线程串行 Horner，只需 1 个线程 ✓））；
 3. 之后跑一次生产命令（`_b2_prod_args.txt`）确认因子集合逐项一致、`bad_factors=0`，**再**谈默认打开。
+
+### 55.7 跨阈值的第三个形状：`D=30030`（P=2880）
+
+`D=30030 ⇒ P = phi(D)/2 = 2880`（冻结向量的 120 倍、`rows > 85` 阈值的 17 倍以上），S5 开、逐叶对拍：
+
+```
+s5_dev_done: chunks=1 levels=12 entries=5761 max_frontier_rows=2880 generic=2878 linear=2880
+             copies=3 zeros=3 ntt_launches=17232 t_generic=6.36 t_copy=7.23 t_total=7.42
+descent_check_leaves: P=2880 differing_leaves=0                       ← 2880 片叶子全对 ✓
+descent_check: P=2880 divmods_batched=2878 divmods_slow=5715 mismatching_coefficients=0
+stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=59649589127497217 hit_primes=114713 elapsed=16.39
+```
+
+**逐叶、逐系数全绿、因子与命中素数同 CPU 参考** ✓ —— §55.2 那个阈值型缺陷在跨阈值 17 倍处仍然修好了。
+
+**但有一处必须写清楚的差异：走法计数在 P=2880 上不再相等。** §45.2 的判据是 `generic + linear == divmods_slow`，在 P=24（22+24=46 ✓）和 P=240（238+240=478 ✓）都成立，而这里 **2878 + 2880 = 5758 ≠ 5715**（差 43）。原因不是数值错（`mismatching_coefficients=0` ✓），而是**设备判断"这个节点要不要真除法"用的是行的宽度，宿主用的是多项式的真实次数**：
+
+```
+descent_dev_op: code=1 sgn=0 child=2 nc=2048 ncoef=2881 op=div     ← 设备：行宽 2881 ≥ 2049 ⇒ 真除法
+descent_dev_op: code=2 sgn=0 child=4 nc=1024 ncoef=2048 op=div     ← 又一层
+descent_dev_op: code=3 sgn=0 child=6 nc=832  ncoef=832  op=copy    ← 行宽恰好小于 nc+1 ⇒ 走快路
+```
+
+`batched_shape: ... giant_points=68 num_poly_g=1 loops=0` ⇒ 这一跑 `H = T`、**`deg H = 67`**（68 个系数），而根除法的除数是 2048 次 ⇒ `H mod F_child = H`，**宿主一次真除法都不做**（`descent_slow` 判 `cur[j].size() >= Fdeg+1`）✗；设备却沿左侧主干连做 43 次**最大规模**的牛顿除法（结果当然还是 H ✓，所以数值全对，只是白做）。这 43 次落在最贵的层级上，也正是 `t_generic=6.36 s` 占 `t_total=7.42 s` 的主要原因。
+
+**这是 §55.6 之后新增的一条量化优化线索（对应目标 ④"找出下一处可复用/可跳过的工作"）**：把设备的快路判据从"行宽"改成"真实次数"（根节点的真实次数可以在**分块时由宿主**算出来，一旦为 0 就把 `cur[0].ncoef` 收窄到 `deg H + 1`；更深层的行宽本来就等于除数的次数 ✓）。修它同时会让 §45.2 的计数恒等式在 P=2880 上恢复成立。
+
+**另一处形状相关的差异（与 S5 无关，记录备查）**：验收脚本在 D=30030 上报 `[FAIL] same hits -- gpu=2 cpu=1`，指的是 **S2 主机尾路径**（`algorithm=tree_gpu`）：它把"命中块"当命中计数，`tail_counts: hits=1 unnamed=0 factors=1 hit_blocks=2` ⇒ **两块命中暴露同一个因子**，而 `same factor set` / `same hit_primes` / `bad_factors=0` 全绿 ✓、分批（S5）路径的 `batched: same hits as the CPU reference` 也全绿 ✓。也就是说这是**计数定义**的差异，不是因子错——但它说明验收脚本的 `same hits` 断言对形状敏感，值得单独收一次。
+
+**因此本轮的状态**：`NTT_S5_ON` 仍为 opt-in（生产形状的 `rows ≈ 25920`、`nw = 83`，比这里测过的任何形状都更极端，而且刚修的这个缺陷证明"阈值型缺陷只有跨阈值才能抓"）；第 [9] 组现在覆盖 P=24 与 P=240 两个点、逐叶逐系数全绿 ✓，门禁 **34/34**。
