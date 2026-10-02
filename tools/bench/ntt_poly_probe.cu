@@ -2587,6 +2587,18 @@ static int ntt_shape_plan_uncached(unsigned long long P, int S, int device, NttA
     sh.passes_fwd = fc.passes_fwd;
     sh.passes_total = 2 * fc.passes_fwd + fc.passes_fwd + 1;      /* +1 = the carry cone */
     sh.carry_rounds = 2 + (sh.k + 2 * sh.bpw + sh.bpw - 1) / sh.bpw;
+    /* NTT_CARRY_ROUNDS=<n> RAISES the round count (never lowers it).  The S5 descent was handed a
+       window whose digit 10 was 2715379 against a bpw = 7 limit of 127 (section 49), i.e. the
+       carry did not canonicalise -- and the round count above is the only knob that decides it.
+       This switch exists so "is it just the round count?" is one run per value instead of one
+       derivation per value. */
+    {
+        const char *e = std::getenv("NTT_CARRY_ROUNDS");
+        if (e && *e) {
+            const int v = std::atoi(e);
+            if (v > sh.carry_rounds) sh.carry_rounds = v;
+        }
+    }
     return 0;
 }
 

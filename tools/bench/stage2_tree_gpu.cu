@@ -3168,30 +3168,32 @@ __global__ void s5_pack_kernel(const unsigned long long *src, unsigned long long
     const unsigned long long *c = src + src_off + s * ma * (unsigned long long)W +
                                   i * (unsigned long long)W;
     /* =====================================================================================
-     * THE PACKER, CORRECTED (objective 2 / section 46).
+     * THE PACKER, CORRECTED FOR THE SECOND TIME -- AND THE FIRST TIME RIGHT (section 50).
      *
-     * The old loop below wrote AT MOST TWO DIGITS per coefficient (`if (kp >= 2) break;`) and
-     * took them as `(v >> kp) & mask`, which is the right digit only when the coefficient starts
-     * on a digit boundary.  At bpw = 7 that is 14 bits of a 129-bit coefficient: everything above
-     * bit 2*bpw never reached the transform, which is why the S5 descent passed on the one shape
-     * whose coefficients fit in two digits (P=2, D=10) and failed on every real one.
+     * The digit array holds ONE DIGIT PER 64-BIT WORD.  That is the convention of every consumer:
+     * `s4_reduce_kernel` reads `digits[s*n + k*slot_words + j]` and calls it digit j,
+     * `carry_residual_kernel` tests each WORD against 2^bpw, the carry canonicalises each WORD,
+     * and `s5_reddump_row` rebuilds the window as `sum d0[j] * 2^(bpw*j)`.  A digit is stored as a
+     * value, not as `bpw` bits inside a word.
      *
-     * The corrected form takes digit j straight out of the source words (coefficient bit j*bpw,
-     * possibly spanning two words) and places it at the coefficient's own bit j*bpw in the packed
-     * stream (also possibly spanning two words).
-     *
-     * BOUNDS, which is what the first attempt got wrong (it mixed a word index relative to
-     * `word0` with an absolute one, so every coefficient but the first wrote into the slice's LOW
-     * words):  the digit count is clamped to the coefficient's own slot (`slot_words` digits), and
-     * every store is guarded by `wj < N`, so the write cannot leave the slice.  The guarantee the
-     * guards rest on is the assertion `s5_mul_batch` already makes -- `P*slot_stride <= N*bpw` --
-     * which bounds the last coefficient's slot by the end of the slice.
+     * Two wrong versions preceded this one:
+     *   (1) the original capped the loop at two digits and took them as `(v >> kp) & mask`, so a
+     *       129-bit coefficient lost everything above bit 2*bpw -- canonical, but truncated;
+     *   (2) the first correction took the digits correctly but wrote them BIT-PACKED (`d << (ab&63)`
+     *       across word boundaries).  That is a different data structure: the words no longer hold
+     *       digits, so the array the reduction reads is not canonical and cannot be made so by any
+     *       number of carry rounds -- measured as `s5_reddump_canon: max_digit=2715379` against a
+     *       limit of 127, unchanged for 8/12/16/20 rounds (section 49).
+     * This version keeps (2)'s digit extraction and restores the one-digit-per-word layout.  The
+     * coefficient owns its own `ndig` words, so there are no atomics and no straddling, and the
+     * store is bounded by `off_digits + (i+1)*slot_words <= N`, which `s5_mul_batch` asserts.
      * ===================================================================================== */
-    const unsigned long long sw_dig = slot_stride / (unsigned long long)bpw;   /* digits per slot */
+    const unsigned long long sw_dig = slot_stride / (unsigned long long)bpw;   /* words per slot */
     unsigned long long ndig = ((unsigned long long)S + (unsigned long long)bpw - 1ull) /
                               (unsigned long long)bpw;
     if (ndig > sw_dig) ndig = sw_dig;
     const unsigned long long mask = (bpw >= 64) ? ~0ull : ((1ull << bpw) - 1ull);
+    unsigned long long *wrow = dst + s * N + off_digits + i * sw_dig;
     for (unsigned long long j = 0; j < ndig; ++j) {
         const unsigned long long bit = j * (unsigned long long)bpw;
         const unsigned long long wi = bit >> 6;
@@ -3199,16 +3201,7 @@ __global__ void s5_pack_kernel(const unsigned long long *src, unsigned long long
         const int sh = (int)(bit & 63ull);
         unsigned long long d = c[wi] >> sh;
         if (sh && (wi + 1) < (unsigned long long)W) d |= c[wi + 1] << (64 - sh);
-        d &= mask;
-        if (!d) continue;
-        /* the digit's place, measured from the start of `word0` */
-        const unsigned long long ab = (unsigned long long)sh0 + bit;
-        const unsigned long long wj = word0 + (ab >> 6);
-        if (wj >= N) break;
-        const int sh2 = (int)(ab & 63ull);
-        atomicOr((unsigned long long *)&dst[s * N + wj], d << sh2);
-        if (sh2 + (int)bpw > 64 && (wj + 1) < N)
-            atomicOr((unsigned long long *)&dst[s * N + wj + 1], d >> (64 - sh2));
+        wrow[j] = d & mask;
     }
 }
 

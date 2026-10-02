@@ -3092,3 +3092,70 @@ FATAL: the S5 reduction was handed a NON-CANONICAL window: digit 10 of the first
 **让 carry 阶段对这个形状收敛**。已经知道的事实：`sh.carry_rounds = 2 + ceil((k + 3*bpw)/bpw)`（`ntt_poly_probe.cu:2589`），S4 的形状全都收敛（残差检查从未报过），S5 的形状（bpw=7，slot_bits=259，P 很小）不收敛。下一轮要做的就是**把这个公式按 S5 的几何重推一遍**（或者让残差检查在不为零时自动加轮次），然后用第 49.4 的断言确认它变绿——**这一次是一个有明确验收条件的任务**，不再是猜。
 
 **状态**：门禁 22/22（改动都在 S5 路径内），`NTT_S5_ON` 继续 opt-in，工作区干净。
+
+---
+
+## 50. 第 17 轮（续）：**打包器的正确形式 = 一个字一个 digit**（2026-10-02）
+
+### 50.1 为什么"加轮次"没用 —— 因为我修错了数据结构
+
+拿到 §49.2 的"digit 非规范"之后，第一个假设是"carry 轮次不够"。加了 `NTT_CARRY_ROUNDS=<n>`（只升不降，`ntt_poly_probe.cu` 里 `sh.carry_rounds` 之后）扫 8/12/16/20：
+
+```
+rounds=8  NON-CANONICAL
+rounds=12 NON-CANONICAL
+rounds=16 NON-CANONICAL
+rounds=20 NON-CANONICAL
+```
+
+**加多少轮都不行** ⇒ 不是轮次数，而是**数组根本不是 digit 数组**。
+
+### 50.2 digit 数组的约定：**一个 64 位字装一个 digit**
+
+这一点被**所有**消费者共同定义，读一遍就能确认：
+
+| 消费者 | 它怎么读 | 含义 |
+|---|---|---|
+| `s4_reduce_kernel` | `digits[s*n + k*slot_words + j]` 当作 digit j | 字 = digit |
+| `carry_residual_kernel` | 每个**字**与 `2^bpw` 比较 | 字 = digit |
+| carry 核 | 每个**字**规约到 bpw 位 | 字 = digit |
+| `s5_reddump_row` | `sum d0[j] * 2^(bpw*j)` | 字 = digit |
+
+而我在第 14 轮"修好"的打包器写的是**位紧凑**（`d << (ab&63)`，跨字两次 `atomicOr`）——**那是另一种数据结构**：字不再装 digit，于是转换核 `acc |= v << nacc`（OR！）读到的就是垃圾，而 GMP 把同一串字当"数字"读却不会 ✗。**非规范 digit（2715379 vs 上限 127）就是这么来的，而且无论多少轮 carry 都救不回来。**
+
+⇒ **第 14 轮那个"修好并盖章（`mismatching_words=0`）"的打包器，方向就是错的**；它当时的 `mismatching_words=0` 之所以成立，是因为**它的自检（`s5_pack` 的读回比较）用的是同一种错误的位紧凑假设**——**校验器和被测对象共用一个错误假设，于是互相背书**。（这与 §45.1 是同一条教训的另一面：**先证明校验器，再相信校验结果**。）
+
+### 50.3 正确形式（已落地、已验证）
+
+保留第 14 轮正确的 **digit 抽取**（按系数 bit `j*bpw` 取，可跨源字），把**落点**改回**一字一 digit**：
+
+```cpp
+unsigned long long *wrow = dst + s * N + off_digits + i * sw_dig;   /* 该系数自己的 slot */
+for (j = 0; j < ndig; ++j) {
+    d = <coefficient bits [j*bpw, (j+1)*bpw)>;
+    wrow[j] = d & mask;                 /* 普通写，无原子操作、无跨字 */
+}
+```
+
+**边界**由 `s5_mul_batch` 已断言的 `off_digits + (i+1)*slot_words <= N` 保证；每个系数独占自己的字 ⇒ **不需要 atomicOr、不可能跨字、不可能越界**（比上一版更简单）。
+
+**验收**（`NTT_S5_REDDUMP=1`，逐 digit 规范性）：
+
+```
+s5_reddump_canon: k=0 bpw=7  max_digit=1  at_j=0  limit=127        CANONICAL
+s5_reddump_canon: k=1 bpw=7  max_digit=122 at_j=14 limit=127       CANONICAL
+s5_reddump_canon: k=0 bpw=26 max_digit=1  at_j=0  limit=67108863   CANONICAL
+s5_reddump_canon: k=2 bpw=26 max_digit=48755261 at_j=5 ...         CANONICAL
+```
+
+**修复前**：`max_digit=2715379 limit=127 NON_CANONICAL`；**修复后**：全部 `CANONICAL` ✓。而且**原来那个 k=0 的归约不一致消失了**——S5 归约的错误位置从"第 0 个系数"移到了**第 1 个系数**：
+
+```
+s4_reduce_CHECK_bad: slice=0 k=1 gmp=2 gpu=ffffffffffffffffffc0000000000003
+```
+
+⇒ **根因（打包的数据结构）已修掉并盖章**，剩下的是一处**具体的、位置明确的**归约不一致（系数 1，窗口值是 2，设备返回一个 ≥ N 的垃圾值），不再是"整条路径莫名其妙不对"。
+
+**下一步**：按这处 `k=1` 的不一致继续压（窗口是规范的、值只有 2，所以这时 `r` 的不变式检查会直接指出是消去还是尾巴；`s5_reddump_rexp` 已经就位）。
+
+**状态**：门禁 22/22（打包器只在 S5 路径内使用，默认路径零影响），`NTT_S5_ON` 继续 opt-in，工作区干净。
