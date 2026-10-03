@@ -18,7 +18,7 @@ param(
     [ValidateSet(1,12)][int]$Stage1Extra = 1,
     [string]$ExpectedQHex = '',
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window','chunk_output','scaled_descent','groot_device')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window','chunk_output','scaled_descent','groot_device','groot_memory')][string]$Target = 'reduction',
     [ValidateRange(1,256)][int]$BatchMB = 32,
     [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
     [ValidateRange(0,65536)][int]$ArenaMB = 0,
@@ -50,6 +50,7 @@ if ($Target -eq 'output_window') { $order = @('full_output','output_window','out
 if ($Target -eq 'chunk_output') { $order = @('whole_output_buffer','chunk_output_buffer','chunk_output_buffer','whole_output_buffer') }
 if ($Target -eq 'scaled_descent') { $order = @('division_descent','scaled_descent','scaled_descent','division_descent') }
 if ($Target -eq 'groot_device') { $order = @('host_groot','device_groot','device_groot','host_groot') }
+if ($Target -eq 'groot_memory') { $order = @('legacy_gmemory','compact_gmemory','compact_gmemory','legacy_gmemory') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
@@ -61,6 +62,7 @@ $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_FUSE_COMPACT_SCRATCH='1'; NTT_FUSE_LIFETIME_TEST='0';
                 NTT_S4_FINAL_READBACK='0'; NTT_S4_FINAL_READBACK_TEST='0';
                 NTT_S4_OUTPUT_WINDOW='0'; NTT_S4_OUTPUT_WINDOW_TEST='0'; NTT_S4_CHUNK_OUTPUT='0';
+                NTT_GROOT_LEAF_STAGING='1'; NTT_GROOT_COMPACT_RAW='1'; NTT_GROOT_LEAF_CHUNK='0';
                 NTT_GROOT_DEVICE='0'; NTT_GROOT_DEVICE_TEST='0'; NTT_GROOT_DEVICE_CHECK='0'; NTT_GROOT_DEVICE_TEST_BAD='0';
                 NTT_SCALED_DESCENT='0'; NTT_SCALED_TEST='0'; NTT_SCALED_CHECK='0'; NTT_S4_DESCENT_CHECK='0';
                 NTT_STAGE1_EXTRA="$Stage1Extra"; NTT_STAGE1_Q_DUMP=$(if($ExpectedQHex -or $Stage1Extra -eq 12){'1'}else{'0'}) }
@@ -79,10 +81,12 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_ARENA_WORKSPACE_POOL=$(if ($mode -eq 'keyed_workspace') { '0' } else { '1' });
         NTT_FUSE_COMPACT_SCRATCH=$(if ($mode -eq 'wide_scratch') { '0' } else { '1' });
         NTT_S4_FINAL_READBACK=$(if ($mode -eq 'whole_readback') { '1' } else { '0' });
-        NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device')) { '1' } else { '0' });
-        NTT_S4_CHUNK_OUTPUT=$(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device')) { '1' } else { '0' });
-        NTT_GROOT_DEVICE=$(if ($mode -eq 'device_groot') { '1' } else { '0' });
-        NTT_SCALED_DESCENT=$(if ($mode -eq 'scaled_descent' -or $Target -eq 'groot_device') { '1' } else { '0' });
+        NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory')) { '1' } else { '0' });
+        NTT_S4_CHUNK_OUTPUT=$(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory')) { '1' } else { '0' });
+        NTT_GROOT_DEVICE=$(if ($mode -eq 'device_groot' -or $Target -eq 'groot_memory') { '1' } else { '0' });
+        NTT_GROOT_LEAF_STAGING=$(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' });
+        NTT_GROOT_COMPACT_RAW=$(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' });
+        NTT_SCALED_DESCENT=$(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory')) { '1' } else { '0' });
         NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
@@ -112,10 +116,13 @@ try {
         $env:NTT_ARENA_WORKSPACE_POOL = $(if ($mode -eq 'keyed_workspace') { '0' } else { '1' })
         $env:NTT_FUSE_COMPACT_SCRATCH = $(if ($mode -eq 'wide_scratch') { '0' } else { '1' })
         $env:NTT_S4_FINAL_READBACK = $(if ($mode -eq 'whole_readback') { '1' } else { '0' })
-        $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device')) { '1' } else { '0' })
-        $env:NTT_S4_CHUNK_OUTPUT = $(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device')) { '1' } else { '0' })
-        $env:NTT_GROOT_DEVICE = $(if ($mode -eq 'device_groot') { '1' } else { '0' })
-        $env:NTT_SCALED_DESCENT = $(if ($mode -eq 'scaled_descent' -or $Target -eq 'groot_device') { '1' } else { '0' })
+        $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory')) { '1' } else { '0' })
+        $env:NTT_S4_CHUNK_OUTPUT = $(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory')) { '1' } else { '0' })
+        $env:NTT_GROOT_DEVICE = $(if ($mode -eq 'device_groot' -or $Target -eq 'groot_memory') { '1' } else { '0' })
+        $env:NTT_SCALED_DESCENT = $(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory')) { '1' } else { '0' })
+        $env:NTT_GROOT_LEAF_STAGING = $(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' })
+        $env:NTT_GROOT_COMPACT_RAW = $(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' })
+        $residentMode = $env:NTT_GROOT_DEVICE -eq '1'
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -163,14 +170,29 @@ try {
             $m=[regex]::Match($gdeviceLine,"(?:^| )$field=(\d+)")
             if($m.Success){$gdevice[$field]=[UInt64]$m.Groups[1].Value}
         }
-        if($Target -eq 'groot_device' -and ($gdevice.Count -ne 18 -or
+        if($Target -in @('groot_device','groot_memory') -and ($gdevice.Count -ne 18 -or
            "$($gdevice.enabled)" -ne $env:NTT_GROOT_DEVICE -or $scaled.enabled -ne 1 -or
            $scaled.checked_states -ne 0 -or $scaled.checked_words -ne 0 -or
-           ($mode -eq 'device_groot' -and ($gdevice.trees -le 0 -or $gdevice.fallbacks -ne 0 -or
+           ($residentMode -and ($gdevice.trees -le 0 -or $gdevice.fallbacks -ne 0 -or
                $gdevice.resident_words -le 0 -or $gdevice.trace_words -ne 0 -or
                $gdevice.metadata_words -ne 3*$gdevice.pairs -or $gdevice.checked_nodes -ne 0 -or $gdevice.checked_words -ne 0)) -or
-           ($mode -ne 'device_groot' -and ($gdevice.trees -ne 0 -or $gdevice.resident_words -ne 0)))) {
+           (-not $residentMode -and ($gdevice.trees -ne 0 -or $gdevice.resident_words -ne 0)))) {
             throw "resident G-root path/accounting failed; inspect $log"
+        }
+        $gmemoryLine=[regex]::Match($text,'(?m)^real_batched_gmemory:.*').Value;$gmemory=@{}
+        foreach($field in @('compact_raw','leaf_staging','pinned_trees','pinned_slices','pinned_words','pageable_words',
+                            'leaf_fallbacks','legacy_trees','pinned_borrow_peak_bytes','rawA_peak_bytes','rawB_peak_bytes')) {
+            $m=[regex]::Match($gmemoryLine,"(?:^| )$field=(\d+)")
+            if($m.Success){$gmemory[$field]=[UInt64]$m.Groups[1].Value}
+        }
+        if($Target -eq 'groot_memory' -and ($gmemory.Count -ne 11 -or
+           "$($gmemory.compact_raw)" -ne $env:NTT_GROOT_COMPACT_RAW -or "$($gmemory.leaf_staging)" -ne $env:NTT_GROOT_LEAF_STAGING -or
+           $gmemory.pinned_words+$gmemory.pageable_words -ne $gdevice.leaf_words -or
+           $gmemory.rawA_peak_bytes+$gmemory.rawB_peak_bytes -ne $gdevice.raw_peak_bytes -or
+           ($mode -eq 'compact_gmemory' -and ($gmemory.pinned_trees -ne $gdevice.trees -or $gmemory.leaf_fallbacks -ne 0 -or
+             $gmemory.legacy_trees -ne 0 -or $gmemory.pageable_words -ne 0 -or $gdevice.host_staging_peak_bytes -ne 0)) -or
+           ($mode -eq 'legacy_gmemory' -and ($gmemory.legacy_trees -ne $gdevice.trees -or $gmemory.pinned_words -ne 0)))) {
+            throw "G-root memory path/accounting failed; inspect $log"
         }
         $reduce = [regex]::Match($text, 's4_multiply_stats:.*?coeffs_reduced=(\d+) t_reduce=([0-9.]+)')
         $arena = [regex]::Match($text, 'real_batched_breakdown:.*?arena_overflow=(\d+)')
@@ -315,7 +337,7 @@ try {
             ($grootOnly -eq '0' -and ($groot.Groups[3].Value -ne '0' -or $groot.Groups[4].Value -ne '0' -or
                 $groot.Groups[7].Value -ne '0' -or $groot.Groups[8].Value -ne '0' -or
                 $groot.Groups[5].Value -ne $groot.Groups[6].Value)) -or
-            ($grootOnly -eq '1' -and $mode -ne 'device_groot' -and ([long]$groot.Groups[3].Value -le 0 -or
+            ($grootOnly -eq '1' -and -not $residentMode -and ([long]$groot.Groups[3].Value -le 0 -or
                 [UInt64]$groot.Groups[7].Value -eq 0 -or [UInt64]$groot.Groups[8].Value -eq 0))) {
             throw "G-tree lifecycle accounting failed; inspect $log"
         }
@@ -379,6 +401,7 @@ try {
             groot_input_released_bytes=$groot.Groups[8].Value; groot_root_words=$groot.Groups[9].Value;
             groot_release=[double]$groot.Groups[12].Value;
             observed_host_peak_mb=(@($hostPeaks | ForEach-Object {[double]$_.Groups[2].Value}) | Measure-Object -Maximum).Maximum }
+        foreach($field in $gmemory.Keys){$row|Add-Member -NotePropertyName ("gmemory_"+$field) -NotePropertyValue $gmemory[$field]}
         foreach($field in $gdevice.Keys){$row|Add-Member -NotePropertyName ("gdevice_"+$field) -NotePropertyValue $gdevice[$field]}
         $row|Add-Member -NotePropertyName groot_root_hash -NotePropertyValue $groot.Groups[11].Value
         $row|Add-Member -NotePropertyName leaf_count -NotePropertyValue $leaves.Groups[1].Value
@@ -403,7 +426,7 @@ try {
         $row|Add-Member -NotePropertyName stage1_extra -NotePropertyValue $Stage1Extra
         $row|Add-Member -NotePropertyName q_sha256_hex -NotePropertyValue $qHash
         if($rows.Count -gt 0 -and $row.q_sha256_hex -ne $rows[0].q_sha256_hex){throw "Stage1 Q changed between modes; inspect $log"}
-        if($mode -eq 'device_groot' -and $row.gdevice_trees -ne $row.groot_builds){throw "resident G tree/build count disagrees"}
+        if($residentMode -and $row.gdevice_trees -ne $row.groot_builds){throw "resident G tree/build count disagrees"}
         if($row.chunk_calls -ne $row.window_calls){throw "Chunk output logical calls disagree; inspect $log"}
         if($row.window_d2h_words+$row.gdevice_resident_words -ne $row.final_copied_words+$row.final_avoided_words -or
            $row.window_calls -ne $row.final_calls) {throw "Output/readback accounting disagrees; inspect $log"}
@@ -471,6 +494,7 @@ try {
                 if ($row.$field -ne $sameMode[0].$field) { throw "repeated $mode changed $field; inspect $log" }
             }
         }
+        if($sameMode.Count){foreach($field in $gmemory.Keys){$name="gmemory_"+$field;if($row.$name -ne $sameMode[0].$name){throw "G-root memory workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in $gdevice.Keys){$name="gdevice_"+$field;if($row.$name -ne $sameMode[0].$name){throw "resident G workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in $scaled.Keys){$name="scaled_"+$field;if($row.$name -ne $sameMode[0].$name){throw "scaled workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in $workspace.Keys){$name="workspace_"+$field;if($row.$name -ne $sameMode[0].$name){throw "workspace workload changed within mode: $field"}}}

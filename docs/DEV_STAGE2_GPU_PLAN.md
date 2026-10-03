@@ -3791,7 +3791,7 @@ stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 h
 ## 59. 2026-10-03 当前执行路线：scaled descent 与 G-root 驻留
 
 §58为此前S5逐节点设备求余实验的历史记录。现阶段已新增按degree分组的scaled descent，
-入口 [stage2_tree_gpu.cu:6894](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6894)，
+入口 [stage2_tree_gpu.cu:6940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6940)，
 `NTT_SCALED_DESCENT=1`，S5关闭；普通下降默认继续可作同二进制对照。
 根只建立一次scaled状态，复用fold的finv，各非平凡孩子一次sibling乘法及中间窗口，避免逐节点求逆/求商。
 独立GPU/GMP节点/Horner门禁41/0，既有回归188/0。真实M4423匹配完整Q的ABBA完整Stage2
@@ -3808,7 +3808,7 @@ stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 h
 
 ## 60. 2026-10-03：G-root 驻留阶段通过，继续控制内存与调度
 
-59所述G-root候选已实现，[build_groot_device:3869](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3869)，
+59所述G-root候选已实现，[build_groot_device:3890](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3890)，
 `NTT_GROOT_DEVICE=1`，默认0。仅两个相邻级规范modN frontier，租用现有raw staging；
 初始叶一次上传、最终根一次返回，内部degree分组gather/NTT/carry/reduce/scatter。
 保持projective/degenerate/Gamma合同，F树仍host；不等同Prime95 NO_UNFFT。
@@ -3826,3 +3826,22 @@ Gtrees **39.664→27.752s（−30.03%）**；main H2D/D2H **26.16/19.90→11.37/
 每一步仍需独立完整结果门禁、同binary总时间和整体内存测量，性能不能仅从拷贝量推断。
 详细源文件行号/合同/四轮数据/原始证据见
 [DEV_GPUOWL_NTT_NOTES§47](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3343)。
+
+
+## 61. 2026-10-03：leaf staging 复用与 raw 分别定容通过
+
+§60的G-root内存代价已部分收敛：raw A/B分别保存容量，B只需首parent frontier；
+leaf上传借用现有pinned output staging，event保护覆写及trace入口grow/free生命周期，async关闭保留回退。
+GROOT_DEVICE仍默认0；LEAF_STAGING/COMPACT_RAW在该路径默认1、各自0保留对照。
+独立组合/3叶强制复用门禁61/0、原188/0、scaled41/0。
+
+同binary生产ABBA raw pair少30.762MiB、额外pageable leaf vector123.047MiB→0；
+整体NVML峰值 **5069→5027MiB（−42MiB）**、host观察private峰值均值 **7998→7973MiB（−25MiB）**。
+完整 **95.799127→95.618982s（−0.188%）**，时间基本持平，GPU idle未证明改善；
+依旧比既有Prime95 CPU1 90.460s慢5.703%/5.158982s，长期目标未达成。
+
+下一轮优先新驻留基线carry batch门禁与ABBA，必要时Nsight Systems2026分析chunk gap/等待。
+之后共享scaled父NTT（inverse写A、B是只读谱，但需generation/shape/slot生命周期证明）、device fold；
+避免仅减少API调用数或局部容量就宣称总速度/内存提升。
+完整原文件行号、合同、四轮计时和整体峰值证据见
+[DEV_GPUOWL_NTT_NOTES§48](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3514)。

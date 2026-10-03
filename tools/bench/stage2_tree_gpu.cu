@@ -969,7 +969,21 @@ struct S4Ctx {
        Packing on the device needs the raw coefficients on the device (P*W words per slice, which
        is ~9x SMALLER than the packed form at S=5261) and a digit buffer per operand. */
     unsigned long long *d_rawA = nullptr, *d_rawB = nullptr, *d_packA = nullptr, *d_packB = nullptr;
-    size_t d_raw_cap = 0, d_pack_cap = 0;
+    size_t d_rawA_cap = 0, d_rawB_cap = 0, d_pack_cap = 0;
+    size_t raw_capacity(const unsigned long long *p) const {
+        return p==d_rawA ? d_rawA_cap : p==d_rawB ? d_rawB_cap : 0;
+    }
+    void raw_reserve(size_t a,size_t b) {
+        // Each operand/frontier keeps its own capacity; a larger A never implies a larger B.
+        if(a>d_rawA_cap) {
+            if(d_rawA)CK(cudaFree(d_rawA));d_rawA=nullptr;d_rawA_cap=0;
+            CK(cudaMalloc(&d_rawA,a*8));d_rawA_cap=a;
+        }
+        if(b>d_rawB_cap) {
+            if(d_rawB)CK(cudaFree(d_rawB));d_rawB=nullptr;d_rawB_cap=0;
+            CK(cudaMalloc(&d_rawB,b*8));d_rawB_cap=b;
+        }
+    }
     double t_h2d_raw = 0.0, t_packdev = 0.0;
     unsigned long long raw_words = 0, pack_launches = 0;
     /* All S4 device-packed calls, including F-tree/inverse before the main-loop timers. */
@@ -1334,6 +1348,18 @@ struct GDeviceStats {
     unsigned long long checked_nodes=0, checked_words=0;
 };
 static GDeviceStats g_gdevice;
+// Existing pinned output staging is borrowed only after its event, never grown for leaves.
+static const bool g_groot_leaf_staging = !opt_off("NTT_GROOT_LEAF_STAGING");
+static const bool g_groot_compact_raw = !opt_off("NTT_GROOT_COMPACT_RAW");
+static const size_t g_groot_leaf_chunk = [] {
+    const char *e=std::getenv("NTT_GROOT_LEAF_CHUNK");return e?(size_t)std::strtoull(e,nullptr,10):0;
+}();
+struct GMemoryStats {
+    unsigned long long pinned_trees=0,pinned_slices=0,pinned_words=0,pageable_words=0;
+    unsigned long long leaf_fallbacks=0,legacy_trees=0,pinned_borrow_peak_bytes=0;
+    unsigned long long rawA_peak_bytes=0,rawB_peak_bytes=0;
+};
+static GMemoryStats g_gmemory;
 static const bool g_s4_groot_only = !opt_off("NTT_S4_GROOT_ONLY");
 struct GRootStats {
     unsigned long long builds = 0, nodes_released = 0, passthrough_moves = 0;
@@ -3015,7 +3041,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
     S4Ctx &C = *L.s4;
     if(resident && ((resident->src!=C.d_rawA && resident->src!=C.d_rawB) ||
                    (resident->dst!=C.d_rawA && resident->dst!=C.d_rawB) ||
-                   resident->src_words>C.d_raw_cap || resident->dst_words>C.d_raw_cap)) {
+                   resident->src_words>C.raw_capacity(resident->src) || resident->dst_words>C.raw_capacity(resident->dst))) {
         std::fprintf(stderr,"%s: FATAL: resident frontier is not owned raw staging\n",NTT_PROBE_NAME);std::exit(3);
     }
     const unsigned long long out_slots = 2 * P - 1; // FULL shape and canonical assertion
@@ -3226,12 +3252,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
         } else {
             /* 1. the RAW coefficients to the device (P*W words per slice per operand) ... */
             const size_t raw_words = (size_t)m * P * W;
-            if (raw_words > C.d_raw_cap) {
-                if (C.d_rawA) { cudaFree(C.d_rawA); cudaFree(C.d_rawB); C.d_rawA = C.d_rawB = nullptr; }
-                CK(cudaMalloc(&C.d_rawA, raw_words * sizeof(unsigned long long)));
-                CK(cudaMalloc(&C.d_rawB, raw_words * sizeof(unsigned long long)));
-                C.d_raw_cap = raw_words;
-            }
+            C.raw_reserve(raw_words,raw_words);
             const double th0 = now_s();
             /* ASYNC UPLOAD VIA PINNED STAGING (section 30): the host memcpy into pinned memory
                touches no device state, so it cannot drain the pipeline, and the pinned
@@ -3893,20 +3914,45 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
     S4Ctx &C=*L.s4;
     // Exclusive lease of the existing raw staging pair. Resident calls never upload raw inputs.
     const size_t need=2*n*W;
-    if(C.d_raw_cap<need) {
-        if(C.d_rawA) {CK(cudaFree(C.d_rawA));CK(cudaFree(C.d_rawB));}
-        C.d_rawA=C.d_rawB=nullptr;C.d_raw_cap=0;
-        CK(cudaMalloc(&C.d_rawA,need*8));CK(cudaMalloc(&C.d_rawB,need*8));C.d_raw_cap=need;
-    }
-    g_gdevice.raw_peak_bytes=std::max(g_gdevice.raw_peak_bytes,16ull*C.d_raw_cap);
-    std::vector<unsigned long long> initial(need);
-    for(size_t i=0;i<n;++i)std::copy(leaf[i].begin(),leaf[i].end(),initial.begin()+2*i*W);
-    g_gdevice.host_staging_peak_bytes=std::max(g_gdevice.host_staging_peak_bytes,8ull*initial.capacity());
+    size_t next_need=0;
+    for(size_t i=pad/2;pad>1 && i<pad;++i)if(deg[i])next_need+=(deg[i]+1)*W;
+    // Dense linear leaves: frontier words = (n + nonempty nodes)*W, decreasing each level.
+    // A holds the largest (leaf) frontier; B only needs the first parent frontier.
+    C.raw_reserve(need,g_groot_compact_raw?next_need:need);
+    g_gdevice.raw_peak_bytes=std::max(g_gdevice.raw_peak_bytes,8ull*(C.d_rawA_cap+C.d_rawB_cap));
+    g_gmemory.rawA_peak_bytes=std::max(g_gmemory.rawA_peak_bytes,8ull*C.d_rawA_cap);
+    g_gmemory.rawB_peak_bytes=std::max(g_gmemory.rawB_peak_bytes,8ull*C.d_rawB_cap);
     const double upload=now_s();
-    CK(cudaMemcpy(C.d_rawA,initial.data(),need*8,cudaMemcpyHostToDevice));
+    bool available[2]={false,false},used[2]={false,false};
+    if(g_groot_leaf_staging && g_s4_async)for(int k=0;k<2;++k)
+        available[k]=g_pin_out[k] && g_pin_out_cap[k]>=2*W && g_pin_ev[k];
+    if(available[0] || available[1]) {
+        ++g_gmemory.pinned_trees;size_t offset=0,turn=0;
+        while(offset<n) {
+            size_t k=turn++&1;if(!available[k])k^=1;
+            // The last D2H or our previous H2D must consume this pinned slot before CPU writes it.
+            CK(cudaEventSynchronize(g_pin_ev[k]));
+            size_t take=std::min(n-offset,g_pin_out_cap[k]/(2*W));
+            if(g_groot_leaf_chunk)take=std::min(take,g_groot_leaf_chunk);
+            for(size_t i=0;i<take;++i)std::copy(leaf[offset+i].begin(),leaf[offset+i].end(),g_pin_out[k]+2*i*W);
+            CK(cudaMemcpyAsync(C.d_rawA+2*offset*W,g_pin_out[k],take*2*W*8,cudaMemcpyHostToDevice));
+            CK(cudaEventRecord(g_pin_ev[k]));used[k]=true;
+            ++g_gmemory.pinned_slices;g_gmemory.pinned_words+=take*2*W;
+            g_gmemory.pinned_borrow_peak_bytes=std::max(g_gmemory.pinned_borrow_peak_bytes,16ull*take*W);
+            offset+=take;
+        }
+        // Trace multiplies may grow/free output staging at entry: finish EVERY leaf H2D first.
+        // n=1 has no multiply, so it also needs this explicit endpoint fence.
+        for(int k=0;k<2;++k)if(used[k])CK(cudaEventSynchronize(g_pin_ev[k]));
+    } else {
+        if(g_groot_leaf_staging)++g_gmemory.leaf_fallbacks;else ++g_gmemory.legacy_trees;
+        std::vector<unsigned long long> initial(need);
+        for(size_t i=0;i<n;++i)std::copy(leaf[i].begin(),leaf[i].end(),initial.begin()+2*i*W);
+        g_gdevice.host_staging_peak_bytes=std::max(g_gdevice.host_staging_peak_bytes,8ull*initial.capacity());
+        CK(cudaMemcpy(C.d_rawA,initial.data(),need*8,cudaMemcpyHostToDevice));g_gmemory.pageable_words+=need;
+    }
     C.t_h2d_raw+=now_s()-upload;C.raw_words+=need;
     g_gdevice.leaf_words+=need;
-    std::vector<unsigned long long>().swap(initial);
     auto *cur=C.d_rawA,*next=C.d_rawB;size_t cur_words=need;
     std::vector<unsigned long long> offsets(pad);
     for(size_t i=0;i<pad;++i)offsets[i]=std::min(i,n)*2*W;
@@ -3941,7 +3987,7 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
         const double level_start=now_s();
         std::vector<unsigned long long> target(base);size_t next_words=0;
         for(size_t i=0;i<base;++i) {target[i]=next_words;if(deg[base+i])next_words+=(deg[base+i]+1)*W;}
-        if(next_words>C.d_raw_cap) {std::fprintf(stderr,"%s: FATAL: resident next frontier exceeds raw lease\n",NTT_PROBE_NAME);std::exit(3);}
+        if(next_words>C.raw_capacity(next)) {std::fprintf(stderr,"%s: FATAL: resident next frontier exceeds raw lease\n",NTT_PROBE_NAME);std::exit(3);}
         g_gdevice.logical_frontier_peak_bytes=std::max(g_gdevice.logical_frontier_peak_bytes,8ull*(cur_words+next_words));
         std::map<std::pair<size_t,size_t>,std::vector<size_t>> groups;
         for(size_t i=0;i<base;++i) {
@@ -9754,7 +9800,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=false;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
@@ -9968,6 +10014,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             g_gdevice.leaf_words,g_gdevice.root_words,g_gdevice.resident_words,g_gdevice.trace_words,g_gdevice.metadata_words,
             g_gdevice.metadata_peak_bytes,g_gdevice.raw_peak_bytes,g_gdevice.logical_frontier_peak_bytes,
             g_gdevice.host_staging_peak_bytes,g_gdevice.checked_nodes,g_gdevice.checked_words);
+        std::printf("real_batched_gmemory: compact_raw=%d leaf_staging=%d pinned_trees=%llu pinned_slices=%llu pinned_words=%llu pageable_words=%llu leaf_fallbacks=%llu legacy_trees=%llu pinned_borrow_peak_bytes=%llu rawA_peak_bytes=%llu rawB_peak_bytes=%llu\n",
+            (int)g_groot_compact_raw,(int)g_groot_leaf_staging,g_gmemory.pinned_trees,g_gmemory.pinned_slices,
+            g_gmemory.pinned_words,g_gmemory.pageable_words,g_gmemory.leaf_fallbacks,g_gmemory.legacy_trees,
+            g_gmemory.pinned_borrow_peak_bytes,g_gmemory.rawA_peak_bytes,g_gmemory.rawB_peak_bytes);
         std::printf("real_batched_groot: root_only=%d builds=%llu nodes_released=%llu moves=%llu "
                     "node_peak_bytes=%llu retained_peak_bytes=%llu released_bytes=%llu input_released_bytes=%llu "
                     "root_words=%llu trace=%d root_hash=%016llx t_release=%.6f (node capacities, not process peak)\n",

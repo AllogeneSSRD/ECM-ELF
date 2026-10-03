@@ -408,7 +408,7 @@ CUDA checkpoint升为5，旧v4重新计算。生产M4423/sigma26/B1=1000/choose1
 
 ### 28.11 Prime95 scaled descent 的 CUDA 首次接入（2026-10-03）
 
-[descent_scaled](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6894)
+[descent_scaled](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6940)
 实现根scaled状态及每孩子一次sibling反转多项式乘法，通过 `NTT_SCALED_DESCENT=1` 启用，默认0保留对照。
 参考Prime95原文件的 [root MULHI](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9540)、
 [sibling polymult_several](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9729)。
@@ -437,10 +437,10 @@ M4423/相同完整Q/B1/实际B2的同二进制ABBA，两边OUTPUT_WINDOW=1、CHU
 
 ### 28.12 G-root device 驻留的生产证据（2026-10-03）
 
-[build_groot_device:3869](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3869)
+[build_groot_device:3890](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3890)
 保留两个相邻级规范modN系数，初始leaf一次H2D、最终root一次D2H；内部按degree分组，
-[gather:2888](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2888) 直接写NTT input scratch，
-[scatter:2927](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2927) 将归约结果写下一层。
+[gather:2914](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2914) 直接写NTT input scratch，
+[scatter:2953](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2953) 将归约结果写下一层。
 租用S4现有raw pair，保持相同完整NTT/carry/归约/oracle；degree0 padding为虚拟1，非首一projective叶与Gamma不改。
 F树和scaled frontier仍在host；本轮未实现Prime95 NO_UNFFT、共享父FFT或循环短变换。
 NTT素数p不同于ECM模数N，保留规范word避免直接跨层复用未归约谱的错误。
@@ -459,3 +459,25 @@ NTT素数p不同于ECM模数N，保留规范word避免直接跨层复用未归�
 下一轮控制initial leaf staging与raw pair扩容，再测新驻留基线的carry batch/timeline、fold衔接与scaled父FFT复用。
 完整原文件行号、算术/生命周期合同、逐轮计时和原始内存证据见
 [开发日志§47](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3343)。
+
+
+### 28.13 G-root 内存代价收敛（2026-10-03）
+
+[raw_reserve:976](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:976) 分别记录A/B容量；
+最大leaf层由A承担、B按首个父层定容，后续层payload单调不增，保留每层实际span检查。
+[leaf staging:3926](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3926) 借用已有pinned输出buffer，
+覆写前/交还前均通过event保证上一D2H或本轮H2D消费完毕；不新分配leaf pinned，容量不足分块，async关闭回退。
+`NTT_GROOT_COMPACT_RAW / NTT_GROOT_LEAF_STAGING` 默认1、分别0保留对照；GROOT_DEVICE仍默认0。
+新增独立组合/强制3叶片段复用门禁累计61/0，原188/0、scaled41/0。
+
+生产同binary两边G-root/ scaled/window/chunk-output=1，仅切换两项内存开关：
+
+- raw pair **246.094→215.332MiB（少30.762MiB）**；额外pageable leaf vector123.047MiB→0。
+- 整卡NVML峰值两轮都 **5069→5027MiB（少42MiB）**；host观察private峰值均值 **7998→7973MiB（少25MiB）**。
+- 完整Stage2 **95.799127→95.618982s（−0.188%）**，时间基本持平，没有稳定加速或idle改善的证明。
+- 全部根/叶/因子/传输量/NTT及检查工作量一致；相对既有CPU1 90.460s仍慢5.703%，CPU本轮未重跑。
+
+下一轮在此基线上验证carry batch及必要的timeline，再推进共享父NTT/device fold；
+本轮保留规范modN系数，仍没有Prime95 NO_UNFFT/CIRCULAR或共享父FFT。
+详细源文件行号、生命周期、四轮数据与统计边界见
+[开发日志§48](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3514)。
