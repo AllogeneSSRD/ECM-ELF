@@ -2866,3 +2866,220 @@ degree=1 时唯一状态系数应等于 H(root)；degree=0 padding 没有叶值�
 覆盖不平衡树、composite N、constant/zero H、identity padding 和 projective scale；
 再接入本轮任意 first/count 窗口，完整 NTT/carry 仍保持，最后单独优化 sibling spectrum 共享。
 同步补齐 GPU full Stage2 计时和匹配 M4423/实际 B2 的 CPU 对比，避免把历史异形状数据当成目标已达成。
+
+## 44. 按 chunk 复用设备输出、完整计时与实际 Q 对齐（2026-10-03）
+
+### 44.1 输出寿命与实现
+
+`NTT_S4_CHUNK_OUTPUT=1` 为当前候选默认，0 保留整批设备输出对照；
+按既定 outer chunk 的 `chunk*output_slots*W` 请求容量，count=0 仍保留一个 sentinel word。
+输入、NTT、carry、全部源槽 canonical、window 和 chunk 调度均保持原有控制。
+复用时各 outer chunk 的 hook 输出从 C.d_out 起点写入；engine 内部的65535-slice切片仍在当前 chunk 内
+按 count 推进。归约 hook 排队的 oracle 快照与之后的 chunk D2H 均位于同一默认 stream，
+先复制再下一次归约覆盖；CPU 的 pending 元数据从双 pinned 缓冲读取，未保存旧 C.d_out 数据指针。
+`NTT_S4_FINAL_READBACK=1` 自动禁用复用并保留整批布局，不能在小缓冲上继续执行旧整批复制。
+新增 chunkoutput 账本区分实际复用/整批调用、多 chunk 复用、实际最大请求、假设整批请求和保留容量。
+
+最终二进制完整门禁 **188 passed / 0 failed**：
+[门禁原始输出](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_q_gate.log)。
+新门禁每组均比较独立 GMP、全部返回字、
+oracle位置与完成数，以及两种 window、四种 transfer/fallback 路径和5-slice的2/2/1尾部。
+第一版尚未加入 Q 对齐控制的二进制也通过188/0；生产以最终版本为准。
+实现：[开关和账本](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1306)、
+[分配容量](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3006)、
+[每 chunk 输出地址](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3094)、
+[同 stream 回传](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3236)。
+最终exe SHA256=`AF6624AD3AFB2D7B79153337E6A95A34BBB4CC35EC7AEB17BA2B3CDA0A255B90`；
+Stage2源码SHA256=`4EC54F337FD5D0600670B60CDA16BFE54C8A21DF40CE14ACFB4ECE2882B015C3`，
+NTT源码未变，SHA256=`66CB4FFE1E5DCD8F765BA9059A29A317980223BA106613B3451644DDEE2EDD51`。
+生产数据在本节后续记录。
+
+### 44.2 完整 Stage2 计时
+
+新增 stage2_full_wall：Stage1 的 Q 准备后起算初始化，包含 plain→Montgomery context/reducer、
+必需数学 selftests、baby points 与 F-tree；提前枚举 baby index 的实测时间单列并加回 init一次。
+main 为原 run_batched wall，包含 reciprocal/giants/G-tree/fold/descent/累积/GCD/naming及最终oracle drain。
+total=init+main；Stage1 和之前的通用 GPU/Montgomery启动检查排除。
+任选门禁夹具会被计入 init，但 clean=0；额外S2参考运行或多次重复curve也标clean=0，
+init标注为共享初始化，避免重复curve被误认作独立曲线总耗时。
+clean仅描述程序内的夹具/S2/重复curve配置，不保证外部CPU/GPU独占。
+代码：[baby index 计时](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9048)、
+[Q之后起算](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9142)、
+[初始化终点](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9352)、
+[完整Stage2输出](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9406)。
+
+### 44.3 复核既有指数约定：相同 sigma/B1 不等于相同 Q
+
+继续核对 [Montgomery Stage1](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:7463)，
+参考源码会给p=2增加2次、p=3增加1次，实际指数为12·lcm(1…B1)。
+这使之前GPU的 lcm-only Q 与 Prime95 Q 不同，必须在相同起点比较前处理。
+旧CPU时间记录仍是有效的CPU单逻辑核运行，但仅凭相同sigma/B1不能完成GPU起点对齐。
+
+使用实际31.7.1.0隔离exe、MontgSigma=1/MontgStage1=1/sigma26/M4423/B1=1000、
+B2=B1和GmpEcmHook=1完成Stage1并导出完整Q：
+[实际 results.txt](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_q_match_20261003/results.txt)、
+[screen.log](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_q_match_20261003/screen.log)。
+独立任意精度整数 Montgomery ladder 使用本仓库Suyama公式，分别计算[lcm]P和[12·lcm]P：
+[q_comparison.json](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_q_match_20261003/q_comparison.json)。
+只有后者与实际Prime95 Q全字相同；规范小写hex SHA256为
+`33cc6c63cec26c39900a7ed4ff551e2c2e0a533422905b538ec4f4aa809f092f`。
+原lcm-only Q的独立计算hash为`9268a7638964e07b0c40c72b89dffbc2335fdf334e82fd56f00d5d9cf4347d0b`，不同。
+隔离进程PID35156 mask=8388608，完成后已按exe路径结束。
+
+GPU新增可选 `NTT_STAGE1_EXTRA=12`，默认1保留既有冻结向量；
+`NTT_STAGE1_Q_DUMP=1` 导出完整归一化Q，用于与实际Prime95逐字核对。
+公平比较使用GPU M4423（hex `7`+1105个`f`）、B1=1000、sigma26、extra12、
+B2=2011326186870（Prime95实际扩展边界），并记录各自 D、degree、内存和完整Stage2计时。
+CPU记录还要在当前环境重复；上一轮原有Prime95的后台竞争已结束，不能将不同环境的单次时间直接当因果结论。
+新GPU二进制已输出1106位hex的完整Q，与上述实际Prime95 Q逐字相同：
+[q_gpu_matched.json](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/q_gpu_matched.json)、
+[GPU原始Q日志](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/q_gpu.log)。
+该Q smoke只用于数学输入核对，计时不是性能基线。
+代码：[额外乘数](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9107)、
+[完整Q诊断](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9134)、
+[A/B输入合同](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:126)。
+`12·lcm`约定此前已写在 [Montgomery Stage1文档](D:/code/MPA-OpenCl/docs/ECM_Montgomery_STAGE1.md:145)
+和 [ini选项](D:/code/MPA-OpenCl/docs/DEV_ECM_INI.md:60)。本轮补的是实验探针的Q对齐及实际exe全字验证，
+不是新增生产指数约定。生产CPU Montgomery已通过 `exponent=choose12` 选择此约定；
+GPU批量路径的实际接线问题见§44.7。探针独立运行、不读取ecm.ini，其环境开关不作为新的生产配置。
+
+### 44.4 同 Q / 实际 B2 的生产 ABBA：减少局部显存，未获得总加速
+
+证据：[候选源码/二进制](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_ab_20261003/candidate_source.json)、
+[固定控制](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_ab_20261003/provenance.json)、
+[逐轮 CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_ab_20261003/results.csv)、
+[均值](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_ab_20261003/summary.json)、
+[原始总输出](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_production.log)。
+GPU1 RTX4060 Laptop，M4423 / sigma26 / B1=1000 / extra12 / B2=2011326186870，
+D=1231230、P=115200、batch64 MiB、arena6300 MiB；whole/chunk/chunk/whole同二进制。
+四轮完整Q hash均为§44.3的 `33cc6c63…f092f`，输出因子/命中为空。
+division、direct pack、flat direct、root-only G、workspace pool、compact scratch固定为开；
+final_readback/window/carry_batch/oracle_async固定为0，抽样96/every8。
+这轮隔离 chunk 容量；没有同时切换输出窗口，也没有用M5261历史数据归因。
+
+- 主计时依次 **123.45 /121.94 /120.85 /119.62 s**，均值 **121.535→121.395 s（−0.12%）**。
+  完整Stage2依次 **137.770904 /136.787636 /134.922784 /133.747884 s**，
+  均值 **135.759394→135.855210 s（+0.07%）**；init **14.226297→14.462607 s**。
+  control完整时间spread4.023020 s，candidate1.864852 s；**未证明总加速或稳定回退**。
+  进程wall **145.080→145.163 s（+0.057%）**，不能替代纯Stage2。
+- 834次调用全部进入复用；418次实际有多个 outer chunk，12508 chunks。
+  输出设备保留/最大请求 **193536000→129024560 bytes（184.570→123.047 MiB）**，
+  少 **64511440 bytes /61.523 MiB（−33.33%）**；增长次数11→8。
+  每轮假设整批峰值仍193536000 bytes，说明变的是实际容量，而非工作量。
+  单次完整G·H仍决定最大chunk输出；双 pinned输出 **258049120 bytes /246.095 MiB** 未缩小。
+- 全S4 source/reduced=63984416、returned=49024656、输出4478909120 words=
+  **33.370473 GiB** 完全相同。主循环H2D/D2H **33.60/32.27 GiB**、pack launches24066、
+  workspace CUDA分配24、完整arena payload peak3487.0 MiB均未改变。
+  t_reduce **13.8460→13.9045 s**；这些数据不支持“减少传输或MAC”的解释。
+- 独立GMP mandatory selftest2400/bad0；oracle1581 jobs /97854 samples，signature
+  `bf1265044d6b7b50`四轮一致，selected=compared、pending=0、carry/canonical/GMP bad0。
+  保留默认chunk复用是容量优化；设备窗口仍默认0，后续算法候选另设对照。
+
+[约1 Hz NVML原始采样](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_ab_20261003/gpu1_sensors.csv)、
+[分阶段汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_ab_20261003/gpu1_summary.json)：
+整卡峰值 **4945 MiB两模式相同**，未证明整体VRAM峰值下降；
+下降/累积/naming阶段峰值 **4731→4669 MiB** 与输出缓冲少61.52 MiB吻合。
+进程private snapshot峰值均值 **7926.5→7924.0 MiB**，无明显RAM峰值收益。
+进程mean load **71.14→69.30%**，≤5%样本 **29/286→37/287（10.14→12.89%）**；
+main的pre/giant/post合并低负载 **25/240→31/240（10.42→12.92%）**。
+giant/Gtree/fold的mean SM clock **1786.82→1787.39 MHz**；没有明显频率差异。
+NVML busy不是SM occupancy，阶段边界由wall计时/进程终点近似推断；
+不能把新增的低负载样本都断言为某个host函数或PCIe等待。
+GPU-Z文件仍停在00:55:41，未作为本轮实时证据。
+
+补充 [Nsight Systems 2026.1.3 小夹具对账](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/profile_comparison.json)：
+window=0、sample=0、chunk_max=2、139-case GMP窗口夹具，kernel3904两模式相同；
+H2D1010 calls /102384 bytes、D2H1020 calls /72944 bytes均相同；
+全部返回1520 words、指纹 `b7f4b3ba49b0f2c2` 相同。
+chunk账本158次调用、candidate148次真正多chunk/485 chunks，
+输出容量 **576→264 bytes**、增长 **5→3**；CUDA API总malloc **97→95**、free **108→106**。
+memory events 中control存在576-byte cudaMalloc/free，candidate没有该容量、使用264-byte分配。
+这与输出缩小/减少增长吻合；其他对象也可能请求264 bytes，不能仅凭字节大小认定所有这类event属于输出。
+实际是软件CUDA trace，硬件trace不支持；小形状不证明生产速度或整卡峰值变化。
+
+### 44.5 Prime95 单逻辑CPU复测
+
+匹配完整Q之后，CPU两轮与GPU生产顺序运行，避免本次CPU benchmark与GPU主机准备并发。
+实际exe为31.7.1.0（参考源码31.6b1），SHA256
+`DB0BE3F8E85ABC2708E704183D3C932543FCB19D27E276CC54FA8194EF50A7A1`。
+独立目录 [run b](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_cpu1_match_20261003b/summary.json)、
+[run c](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_cpu1_match_20261003c/summary.json)，
+各自保留prime.txt/worktodo.txt/screen.log/结果/逐线程采样和启动/完成记录。
+NumWorkers=1、CoresPerWorker=1、Stage2ExtraThreads=0、MontgSigma=1、MontgStage1=1、
+ForceECMStage2Type=1，Memory2048 MiB；OS全进程mask8388608仅允许逻辑CPU23。
+176和177个约500ms样本均保持mask；主要worker累计CPU分别88.453125 /89.359375 s，
+main线程0.046875 /0.078125 s，其余所见线程CPU增量0。
+两个自建进程PID40500/28924在完成后按绝对exe路径结束，未改动用户进程。
+launch/completion未发现旧用户Prime95 PID42696，不等于证明系统无其他CPU竞争。
+
+两轮均M4423/sigma26/B1=1000，requestedB2=1940000000000、actualB2=2011326186870，
+D1531530 /degree138240 /Ftree cache3 /1988 MiB，AVX-512 FFT length256，无因子。
+init **7.724 /7.794 s**，main **82.612 /82.790 s**，GCD0；
+完整Stage2 **90.336 /90.584 s**，均值 **90.460 s**，spread0.248 s。
+进程private提交峰值约2108.34 /2108.20 MiB，非物理RAM驻留峰值。
+此时背景环境与§43的单次119.220 s资格记录不同，不将两者差异归因给任何代码优化。
+
+[CPU/GPU完整比较](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/cpu_gpu_comparison.json)：
+M4423、归一化Q、sigma/B1和实际B2已匹配；GPU完整Stage2均值 **135.855210 s**，
+CPU **90.460 s**，GPU/CPU=**1.501826（GPU耗时多50.18%）**，长期目标尚未达到。
+各自D/degree、giant调度、poly表示和内存预算不同，这是实现端到端对比，不是相同NTT工作量的kernel测速。
+GPU总时间保留mandatory GMP selftests、抽样oracle及其等待，CPU保留自身roundoff checks；
+GPU约9.10 s的oracle host总时间含等待，不能直接从总时间减去来宣称无检查性能。
+CPU RAM预算2048 MiB和GPU arena6300 MiB是不同资源预算，未作等内存约束比较。
+
+### 44.6 下一算法候选：scaled descent 的独立整数合同已验证
+
+新增可复现原型 [test_stage2_scaled_contract.py](D:/code/MPA-OpenCl/tools/test/test_stage2_scaled_contract.py:1)，
+使用Python任意精度整数，验证§43.4定义的普通系数scaled递推；结果
+[scaled_contract.json](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/scaled_contract.json)：
+**480 cases /10176 states /20256 state words /4176 leaf values /bad0**。
+每个节点以独立monic长除法得到 H mod F_node，再用三角级数求解得到预期scaled状态；
+每个真实叶以原H的独立Horner核对。覆盖1/2/3/5/7/8/9/13/16/23度、
+两侧随机identity padding、零/常数/高系数H、15/21/35复合模数及64/521位模数。
+此原型不是CUDA/GMP门禁，未覆盖projective归一化或证明生产速度。
+
+本形状candidate的Gtrees约42.29 s、fold19.24 s、descent29.01 s，仍有33.60/32.27 GiB主循环往返。
+下一步用已有finv构造根scaled状态，再以父状态乘sibling反转多项式、取中间区间，
+替换 [descent_batched](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3986)
+调用的逐节点 [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6923)。
+预计减少Newton inverse /qrev/q·B乘法和host相减；收益必须生产测量，不能把29秒全算作可移除。
+实现顺序：普通系数/GMP全节点及全叶正确性→batched NTT任意窗口→device驻留与sibling spectrum共享。
+Prime95对应 [root MULHI](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9540)、
+[polymult_several](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9729)，
+同时还有circular表示、NO_UNFFT/plan复用和1/8子树分片；普通系数原型未实现这些优化。
+随后优化G-tree/折叠中的系数驻留及parent transform复用，并重新评估D/degree成本模型。
+Prime95的 [first_missing_prime/B2_start relocation](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:827)
+也减少D sections；匹配N/Q/B1/B2不代表两实现的内部giant数量、D或多项式表示相同。
+
+### 44.7 用户提醒后的ini核对：配置解析不等于GPU路径已接通
+
+`ecm.ini` 的 `exponent=lcm|choose12` 和CLI `--exponent` 已存在。
+[队列解析](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:3432)和
+[CLI解析](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:3704)会设置exponent_choose12；
+[CPU Montgomery](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:2215)按该值传torsion=1/12，确实生效。
+但 [GPU调用](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:2828)
+使用compute_batch_s(batch_s,B1)，其 [缓存builder](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:275)
+固定torsion=1。当前GPU批量的choose12仅被解析、未传给指数builder。
+不能仅依据ini键表宣称生产GPU Montgomery Stage1已乘12。
+
+以原生产exe（SHA256 `9A8204F99E6D72A1169591CE11B51336201B881A701183C81E85E48F5FC40471`）
+在GPU1隔离运行 `--method gpu --gpu-param 0 --exponent choose12`、M4423/s26/B1=1000：
+[driver.log](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/driver_choose12/driver.log)、
+[q.save](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/driver_choose12/q.save)。
+实际1438 bits，完整Q等于lcm-only（hash `9268a763…347d0b`），不等于Prime95的choose12 Q。
+
+本轮曾试接已有torsion参数，未引入新ini键；GPU指数1442 bits确已生效，
+但大位宽Q回归失败，故该试改**已撤回**，生产驱动源码保持本轮前语义并重新构建。
+失败不是仅有配置问题：在保留的原生产exe上，M4423/s26/B1=4、exponent=lcm也与
+独立整数参考不一致，返回码仍0；
+[原二进制复现](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/driver_choose12/original_regression.json)。
+这证明至少一个大位宽短指数正确性问题在试改前已存在。
+试改期间M4423的lcm B1=2/3/5/1000通过、B1=4/20失败；
+choose12短指数在61/1277位通过，在4001/4423/5261位失败；2/8 curves仍可复现。
+CPU Montgomery/choose12的M4423完整Q通过，shared exponent builder的最小B1=2输出为24正确。
+目前证据只缩小到生产大位宽GPU路径，**根因尚未定位**，不把它归因于某个MAC/初始化函数。
+
+下一诊断先用原exe的M4423/B1=4最小例与独立参考逐步定位，再接回已有exponent选项并覆盖
+CLI/default/全局ini/worker override，以及checkpoint指数长度变化。
+前述188/0门禁、GPU生产ABBA和完整Q匹配使用stage2_tree_gpu.exe独立ladder；
+它们没有调用生产CGBN Stage1，不证明生产驱动的这个新发现问题已解决。

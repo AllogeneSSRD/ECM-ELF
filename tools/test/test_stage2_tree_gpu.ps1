@@ -1264,6 +1264,70 @@ try {
     foreach($key in $windowSaved.Keys){[Environment]::SetEnvironmentVariable($key,$windowSaved[$key],'Process')}
 }
 
+# [26] One chunk device output: real 2/2/1 consumers and snapshots precede overwrite.
+$chunkOverrides=$windowOverrides.Clone()
+$chunkOverrides.NTT_S4_CHUNK_OUTPUT='0'
+$chunkSaved=@{}
+foreach($key in $chunkOverrides.Keys){$chunkSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')}
+try {
+    foreach($key in $chunkOverrides.Keys){[Environment]::SetEnvironmentVariable($key,$chunkOverrides[$key],'Process')}
+    $chunkPattern='real_batched_chunkoutput: enabled=(\d+) calls=(\d+) reused_calls=(\d+) whole_calls=(\d+) multi_chunk_reused=(\d+) reused_chunks=(\d+) legacy_calls=(\d+) grows=(\d+) request_peak_bytes=(\d+) whole_peak_bytes=(\d+) retained_peak_bytes=(\d+)'
+    foreach($window in @('0','1')) {
+        $env:NTT_S4_OUTPUT_WINDOW=$window
+        foreach($mode in @('pinned','blocking','host','refused')) {
+            $env:NTT_S4_ASYNC=$(if($mode -eq 'blocking'){'0'}else{'1'})
+            $env:NTT_S4_HOSTPACK=$(if($mode -eq 'host'){'1'}else{'0'})
+            $env:NTT_S4_ORACLE_ASYNC=$(if($mode -eq 'pinned'){'1'}else{'0'})
+            $env:NTT_ARENA_CAP_KB=$(if($mode -eq 'refused'){'1'}else{''})
+            $outputs=@();$codes=@();$ledgers=@()
+            foreach($enabled in @('0','1')) {
+                $env:NTT_S4_CHUNK_OUTPUT=$enabled
+                $outputs+=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096);$codes+=$LASTEXITCODE
+                $ledgers+=[regex]::Match($outputs[-1],$chunkPattern)
+            }
+            Check "chunk output/$window/$mode`: independent GMP verifies aliases/windows/2-2-1 tail" `
+                (@($codes|Where-Object{$_ -ne 0}).Count -eq 0 -and
+                 @($outputs|Where-Object{$_ -notmatch 's4_output_window_check: cases=139 words=1105 canonical_cases=2 bad=0' -or
+                     $_ -cmatch 'FATAL|CRASH|MISMATCH|gmp_check_bad=[1-9]'}).Count -eq 0) ''
+            $a=$ledgers[0];$b=$ledgers[1]
+            Check "chunk output/$window/$mode`: compact device allocation is exercised and accounted" `
+                ($a.Success -and $b.Success -and $a.Groups[1].Value -eq '0' -and $b.Groups[1].Value -eq '1' -and
+                 $a.Groups[2].Value -eq $b.Groups[2].Value -and $a.Groups[3].Value -eq '0' -and
+                 $a.Groups[4].Value -eq $a.Groups[2].Value -and $b.Groups[3].Value -eq $b.Groups[2].Value -and
+                 $b.Groups[4].Value -eq '0' -and [long]$b.Groups[5].Value -gt 0 -and
+                 [long]$b.Groups[6].Value -gt [long]$b.Groups[3].Value -and $b.Groups[7].Value -eq '0' -and
+                 [long]$b.Groups[11].Value -le [long]$a.Groups[11].Value -and
+                 [long]$b.Groups[9].Value -lt [long]$b.Groups[10].Value) ''
+            Check "chunk output/$window/$mode`: ALL returned words and oracle positions survive reuse" `
+                ([regex]::Match($outputs[0],$carryTracePattern).Success -and
+                 [regex]::Match($outputs[0],$carryTracePattern).Value -eq [regex]::Match($outputs[1],$carryTracePattern).Value -and
+                 [regex]::Match($outputs[0],$oraclePattern).Success -and
+                 [regex]::Match($outputs[0],$oraclePattern).Value -eq [regex]::Match($outputs[1],$oraclePattern).Value) ''
+        }
+        $env:NTT_S4_ASYNC='1';$env:NTT_S4_HOSTPACK='0';$env:NTT_ARENA_CAP_KB=''
+        $env:NTT_S4_FINAL_READBACK='1';$env:NTT_S4_CHUNK_OUTPUT='1'
+        $output=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096);$code=$LASTEXITCODE
+        $m=[regex]::Match($output,$chunkPattern)
+        Check "chunk output/$window`: whole-readback control retains complete layout automatically" `
+            ($code -eq 0 -and $output -match 's4_output_window_check: cases=139 words=1105 canonical_cases=2 bad=0' -and
+             $m.Success -and $m.Groups[3].Value -eq '0' -and $m.Groups[4].Value -eq $m.Groups[2].Value -and
+             $m.Groups[7].Value -eq $m.Groups[2].Value -and $m.Groups[9].Value -eq $m.Groups[10].Value) ''
+        $env:NTT_S4_FINAL_READBACK='0'
+    }
+    $env:NTT_S4_OUTPUT_WINDOW_TEST='0';$env:NTT_S4_OUTPUT_WINDOW='0';$env:NTT_S4_CHUNK_MAX='64'
+    $env:NTT_S4_CHUNK_OUTPUT='';$env:NTT_S4_ORACLE_ASYNC='0';$env:NTT_S4_CARRY_TRACE='0'
+    $output=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096);$code=$LASTEXITCODE
+    Check 'chunk output: default is reuse and frozen factor/hit set remains unchanged' `
+        ($code -eq 0 -and $output -match 'real_batched_chunkoutput: enabled=1' -and
+         [regex]::Match($output,$resultPattern).Value -eq $resultOld) ''
+    $t=[regex]::Match($output,'stage2_full_wall: curve=1 shape=([0-9.]+) init=([0-9.]+) main=([0-9.]+) total=([0-9.]+) fixture=([0-9.]+) clean=1')
+    Check 'full Stage2 wall: init and main add up, no optional fixtures included' `
+        ($t.Success -and [double]$t.Groups[2].Value -ge [double]$t.Groups[1].Value -and
+         [math]::Abs([double]$t.Groups[2].Value+[double]$t.Groups[3].Value-[double]$t.Groups[4].Value) -lt 0.000003) ''
+} finally {
+    foreach($key in $chunkSaved.Keys){[Environment]::SetEnvironmentVariable($key,$chunkSaved[$key],'Process')}
+}
+
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }
 exit 0

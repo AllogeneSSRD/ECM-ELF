@@ -352,3 +352,42 @@ init11.277 s、main107.943 s，报告完整Stage2 **119.220 s**，无因子。
 229个样本均为进程affinity mask8388608（仅逻辑CPU23），主要计算由一个worker承担。
 包含原有Prime95后台竞争，仅一轮资格记录；GPU尚未匹配 N/实际B2与完整Stage2边界，
 **不能将本轮M5261时间与119.220 s当作公平速度比，也未达到长期目标。**
+
+### 28.9 2026-10-03：chunk复用与匹配Prime95 Q后的实际差距
+
+[poly_mul_batch_modN](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3006)
+改为按outer chunk请求输出设备容量，默认 `NTT_S4_CHUNK_OUTPUT=1`，0保留整批对照。
+各chunk复用C.d_out起点；oracle快照/D2H在同一默认stream中先于下一次覆盖排队。
+final_readback=1自动回到整批布局。完整门禁 **188/0**；
+Nsight小夹具全部输出/传输/kernel相同，输出576→264 bytes，CUDA malloc97→95。
+
+M4423生产同二进制ABBA：输出容量 **184.570→123.047 MiB（−61.523 MiB）**，
+完整Stage2均值 **135.759394→135.855210 s（+0.07%）**，未证明加速。
+整体NVML峰值仍4945 MiB，下降阶段4731→4669 MiB；H2D/D2H仍33.60/32.27 GiB。
+这一步是局部容量优化，数据往返和乘法数量尚未减少。
+
+复核既有约定：[Prime95 Montgomery Stage1](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:7463)
+包含额外2²·3，指数为12·lcm(1…B1)，此前仅对齐sigma/B1并未对齐Q。
+实际31.7.1.0 exe导出完整Q后，独立整数ladder和GPU `NTT_STAGE1_EXTRA=12` 均逐字匹配，
+M4423/sigma26/B1=1000的规范hex SHA256为
+`33cc6c63cec26c39900a7ed4ff551e2c2e0a533422905b538ec4f4aa809f092f`。
+默认extra1保留原有冻结测试，匹配比较显式使用extra12。
+生产 `exponent=choose12` 已在ini/CLI和CPU Montgomery实现；当前GPU批量builder仍固定torsion1。
+试接GPU已有选项时暴露大位宽短指数Q错误，已在原exe的M4423/B1=4/lcm复现，根因待定位。
+试改已撤回；探针的Q对齐与188/0门禁不能代表这个生产CGBN问题已解决，详见开发日志§44.7。
+
+新CPU两轮全进程affinity仅逻辑CPU23，1 worker、Stage2ExtraThreads=0，
+Montgomery/poly、AVX-512 FFT256、Memory2048 MiB，actualB2=2011326186870。
+完整Stage2 **90.336 /90.584 s**，均值 **90.460 s**；
+GPU使用相同M4423/Q/B1/实际B2，完整均值 **135.855210 s**，耗时比 **1.501826**。
+GPU仍多50.18%，尚未超过CPU单逻辑核；不同D/degree/内存预算及检查机制必须保留在解释中。
+这轮不与带原有Prime95竞争的119.220 s历史资格时间直接作优化归因。
+
+下一候选为Prime95的scaled descent：
+[root MULHI](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9540)和
+[sibling polymult_several](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9729)
+避免本仓库逐节点Newton inverse/qrev/q·B，随后共享父spectrum并保持device系数驻留。
+新增 [普通系数整数原型](D:/code/MPA-OpenCl/tools/test/test_stage2_scaled_contract.py:1)
+已验证480cases /10176states /4176真实叶值，无错误；它尚不是CUDA/GMP实现或生产性能证据。
+详细实现行号、计时边界、证据和推进顺序见
+[开发日志 §44](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:2870)。

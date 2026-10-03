@@ -15,8 +15,10 @@ param(
     [UInt64]$B2 = 1940000000000,
     [UInt64]$D = 1231230,
     [int]$Sigma = 26,
+    [ValidateSet(1,12)][int]$Stage1Extra = 1,
+    [string]$ExpectedQHex = '',
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window','chunk_output')][string]$Target = 'reduction',
     [ValidateRange(1,256)][int]$BatchMB = 32,
     [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
     [ValidateRange(0,65536)][int]$ArenaMB = 0,
@@ -45,6 +47,7 @@ if ($Target -eq 'workspace') { $order = @('keyed_workspace','workspace_pool','wo
 if ($Target -eq 'fuse_scratch') { $order = @('wide_scratch','compact_scratch','compact_scratch','wide_scratch') }
 if ($Target -eq 'final_readback') { $order = @('whole_readback','chunk_readback','chunk_readback','whole_readback') }
 if ($Target -eq 'output_window') { $order = @('full_output','output_window','output_window','full_output') }
+if ($Target -eq 'chunk_output') { $order = @('whole_output_buffer','chunk_output_buffer','chunk_output_buffer','whole_output_buffer') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
@@ -55,7 +58,8 @@ $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_ARENA_WORKSPACE_POOL='1'; NTT_ARENA_WORKSPACE_TEST='0';
                 NTT_FUSE_COMPACT_SCRATCH='1'; NTT_FUSE_LIFETIME_TEST='0';
                 NTT_S4_FINAL_READBACK='0'; NTT_S4_FINAL_READBACK_TEST='0';
-                NTT_S4_OUTPUT_WINDOW='0'; NTT_S4_OUTPUT_WINDOW_TEST='0' }
+                NTT_S4_OUTPUT_WINDOW='0'; NTT_S4_OUTPUT_WINDOW_TEST='0'; NTT_S4_CHUNK_OUTPUT='0';
+                NTT_STAGE1_EXTRA="$Stage1Extra"; NTT_STAGE1_Q_DUMP=$(if($ExpectedQHex -or $Stage1Extra -eq 12){'1'}else{'0'}) }
 if ($ArenaMB -gt 0) { $overrides.NTT_ARENA_CAP_KB = "$([long]$ArenaMB * 1024)" }
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
@@ -72,6 +76,7 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_FUSE_COMPACT_SCRATCH=$(if ($mode -eq 'wide_scratch') { '0' } else { '1' });
         NTT_S4_FINAL_READBACK=$(if ($mode -eq 'whole_readback') { '1' } else { '0' });
         NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window') { '1' } else { '0' });
+        NTT_S4_CHUNK_OUTPUT=$(if ($mode -eq 'chunk_output_buffer') { '1' } else { '0' });
         NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
@@ -102,6 +107,7 @@ try {
         $env:NTT_FUSE_COMPACT_SCRATCH = $(if ($mode -eq 'wide_scratch') { '0' } else { '1' })
         $env:NTT_S4_FINAL_READBACK = $(if ($mode -eq 'whole_readback') { '1' } else { '0' })
         $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window') { '1' } else { '0' })
+        $env:NTT_S4_CHUNK_OUTPUT = $(if ($mode -eq 'chunk_output_buffer') { '1' } else { '0' })
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -116,6 +122,12 @@ try {
         $sw.Stop()
         $runEnded = Get-Date
         $text = Get-Content -LiteralPath $log -Raw
+        $qHex=[regex]::Match($text,'real_setup_Q_full: hex=([0-9a-f]+)').Groups[1].Value
+        if($text -notmatch "stage1_extra=$Stage1Extra(?:\s|$)" -or
+           ($ExpectedQHex -and $qHex -cne $ExpectedQHex.ToLowerInvariant()) -or
+           ($env:NTT_STAGE1_Q_DUMP -eq '1' -and -not $qHex)) {
+            throw "Stage1 Q/scalar contract failed; inspect $log"
+        }
         $stage = [regex]::Match($text, 'stage2:.*?hits=(\d+) bad_factors=(\d+) factors=([^\s]*) hit_primes=([^\s]*) elapsed=([0-9.]+)')
         $reduce = [regex]::Match($text, 's4_multiply_stats:.*?coeffs_reduced=(\d+) t_reduce=([0-9.]+)')
         $arena = [regex]::Match($text, 'real_batched_breakdown:.*?arena_overflow=(\d+)')
@@ -141,6 +153,23 @@ try {
             if($m.Success){$workspace[$field]=[UInt64]$m.Groups[1].Value}
         }
         $fuseLine=[regex]::Match($text,'(?m)^ntt_fuse_base_stats:.*').Value;$fuse=@{}
+        $chunkLine=[regex]::Match($text,'(?m)^real_batched_chunkoutput:.*').Value;$chunk=@{}
+        foreach($field in @('enabled','calls','reused_calls','whole_calls','multi_chunk_reused','reused_chunks','legacy_calls','grows','request_peak_bytes','whole_peak_bytes','retained_peak_bytes')) {
+            $m=[regex]::Match($chunkLine,"(?:^| )$field=(\d+)")
+            if($m.Success){$chunk[$field]=[UInt64]$m.Groups[1].Value}
+        }
+        if($chunk.Count -ne 11 -or "$($chunk.enabled)" -ne $env:NTT_S4_CHUNK_OUTPUT -or
+           $chunk.calls -le 0 -or $chunk.calls -ne $chunk.reused_calls+$chunk.whole_calls -or
+           $chunk.request_peak_bytes -gt $chunk.whole_peak_bytes -or $chunk.request_peak_bytes -gt $chunk.retained_peak_bytes -or
+           ($chunk.enabled -eq 1 -and ($chunk.reused_calls -ne $chunk.calls -or $chunk.whole_calls -ne 0 -or
+               ($Target -eq 'chunk_output' -and $D -gt 2310 -and $chunk.multi_chunk_reused -le 0))) -or
+           ($chunk.enabled -eq 0 -and ($chunk.reused_calls -ne 0 -or $chunk.whole_calls -ne $chunk.calls))) {
+            throw "Chunk output control/accounting failed; inspect $log"
+        }
+        $fullWall=[regex]::Match($text,'stage2_full_wall: curve=1 shape=([0-9.]+) init=([0-9.]+) main=([0-9.]+) total=([0-9.]+) fixture=([0-9.]+) clean=1')
+        if(-not $fullWall.Success -or [math]::Abs([double]$fullWall.Groups[2].Value+[double]$fullWall.Groups[3].Value-[double]$fullWall.Groups[4].Value) -gt 0.000003) {
+            throw "Full Stage2 timing boundary failed; inspect $log"
+        }
         $windowLine=[regex]::Match($text,'(?m)^real_batched_outputwindow:.*').Value;$window=@{}
         foreach($field in @('enabled','calls','source_coeffs','reduced_coeffs','returned_coeffs','skipped_coeffs','d2h_words','device_peak_bytes','pinned_peak_bytes')) {
             $m=[regex]::Match($windowLine,"(?:^| )$field=(\d+)")
@@ -311,6 +340,18 @@ try {
         foreach($field in $fuse.Keys){$row|Add-Member -NotePropertyName ("fuse_"+$field) -NotePropertyValue $fuse[$field]}
         foreach($field in $final.Keys){$row|Add-Member -NotePropertyName ("final_"+$field) -NotePropertyValue $final[$field]}
         foreach($field in $window.Keys){$row|Add-Member -NotePropertyName ("window_"+$field) -NotePropertyValue $window[$field]}
+        foreach($field in $chunk.Keys){$row|Add-Member -NotePropertyName ("chunk_"+$field) -NotePropertyValue $chunk[$field]}
+        $row|Add-Member -NotePropertyName stage2_full -NotePropertyValue ([double]$fullWall.Groups[4].Value)
+        $row|Add-Member -NotePropertyName stage2_init -NotePropertyValue ([double]$fullWall.Groups[2].Value)
+        $row|Add-Member -NotePropertyName stage2_shape -NotePropertyValue ([double]$fullWall.Groups[1].Value)
+        if($qHex) {
+            $qSha=[Security.Cryptography.SHA256]::Create()
+            try {$qHash=[BitConverter]::ToString($qSha.ComputeHash([Text.Encoding]::UTF8.GetBytes($qHex))).Replace('-','').ToLowerInvariant()} finally {$qSha.Dispose()}
+        } else {$qHash=''}
+        $row|Add-Member -NotePropertyName stage1_extra -NotePropertyValue $Stage1Extra
+        $row|Add-Member -NotePropertyName q_sha256_hex -NotePropertyValue $qHash
+        if($rows.Count -gt 0 -and $row.q_sha256_hex -ne $rows[0].q_sha256_hex){throw "Stage1 Q changed between modes; inspect $log"}
+        if($row.chunk_calls -ne $row.window_calls){throw "Chunk output logical calls disagree; inspect $log"}
         if($row.window_d2h_words -ne $row.final_copied_words+$row.final_avoided_words -or
            $row.window_calls -ne $row.final_calls) {throw "Output/readback accounting disagrees; inspect $log"}
         if($rows.Count -gt 0 -and ($row.final_calls -ne $rows[0].final_calls -or
@@ -373,6 +414,7 @@ try {
         if($sameMode.Count){foreach($field in $fuse.Keys){$name="fuse_"+$field;if($row.$name -ne $sameMode[0].$name){throw "fuse workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in @('calls','copied_words','avoided_words','host_peak_bytes')){$name="final_"+$field;if($row.$name -ne $sameMode[0].$name){throw "final readback workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in $window.Keys){$name="window_"+$field;if($row.$name -ne $sameMode[0].$name){throw "output window workload changed within mode: $field"}}}
+        if($sameMode.Count){foreach($field in $chunk.Keys){$name="chunk_"+$field;if($row.$name -ne $sameMode[0].$name){throw "chunk output workload changed within mode: $field"}}}
         if($sameMode.Count -and ($row.coeffs -ne $sameMode[0].coeffs -or $row.d2h_gib -ne $sameMode[0].d2h_gib)) {
             throw "repeated $mode changed reduction/transfer workload; inspect $log"
         }

@@ -1301,6 +1301,15 @@ struct FinalReadbackStats {
     double t_copy=0.0;
 };
 static FinalReadbackStats g_final_readback;
+/* Output snapshots/copies are queued before the next reduction on the SAME default stream.
+   Legacy whole-call readback requires the original per-slice device layout. */
+static const bool g_s4_chunk_output = !opt_off("NTT_S4_CHUNK_OUTPUT");
+struct ChunkOutputStats {
+    unsigned long long calls=0, reused_calls=0, whole_calls=0, multi_chunk_reused=0;
+    unsigned long long reused_chunks=0, legacy_calls=0, grows=0;
+    unsigned long long request_peak_bytes=0, whole_peak_bytes=0, retained_peak_bytes=0;
+};
+static ChunkOutputStats g_chunk_output;
 /* Main-loop G trees only need the root; 0 retains the full heap for same-binary A/B. */
 static const bool g_s4_groot_only = !opt_off("NTT_S4_GROOT_ONLY");
 struct GRootStats {
@@ -2939,16 +2948,9 @@ static void poly_mul_batch_modN(PolyLayer &L,
         }
     }
     const size_t need = nbatch * output_slots * W;
-    const size_t allocation_need=std::max((size_t)1,need); // empty window still checks full source
-    if (allocation_need > C.d_out_cap) {
-        if (C.d_out) { cudaFree(C.d_out); C.d_out = nullptr; C.d_out_cap = 0; }
-        CK(cudaMalloc(&C.d_out, allocation_need * sizeof(unsigned long long)));
-        C.d_out_cap = allocation_need;
-    }
     NttReduceHook hook;
     hook.ctx = C.red;
     hook.run = s4_reduce_hook;
-    hook.out = C.d_out;
     hook.w = (unsigned long long)W;
     hook.first=output_first; hook.count=output_slots;
 
@@ -3001,6 +3003,26 @@ static void poly_mul_batch_modN(PolyLayer &L,
         }
     }
     if (g_s4_chunk_max) chunk = std::min(chunk, g_s4_chunk_max);
+    const bool chunk_output=g_s4_chunk_output && !g_s4_final_readback;
+    const size_t allocation_need=std::max((size_t)1,
+        (size_t)(chunk_output ? chunk : nbatch)*output_slots*W);
+    if(allocation_need>C.d_out_cap) {
+        if(C.d_out) { CK(cudaFree(C.d_out)); C.d_out=nullptr; C.d_out_cap=0; }
+        CK(cudaMalloc(&C.d_out,allocation_need*sizeof(unsigned long long)));
+        C.d_out_cap=allocation_need;
+        ++g_chunk_output.grows;
+    }
+    hook.out=C.d_out;
+    ++g_chunk_output.calls;
+    if(chunk_output) {
+        ++g_chunk_output.reused_calls;
+        g_chunk_output.reused_chunks+=(nbatch+chunk-1)/chunk;
+        if(chunk<nbatch) ++g_chunk_output.multi_chunk_reused;
+    } else ++g_chunk_output.whole_calls;
+    if(g_s4_chunk_output && g_s4_final_readback) ++g_chunk_output.legacy_calls;
+    g_chunk_output.request_peak_bytes=std::max(g_chunk_output.request_peak_bytes,8ull*allocation_need);
+    g_chunk_output.whole_peak_bytes=std::max(g_chunk_output.whole_peak_bytes,8ull*std::max((size_t)1,need));
+    g_chunk_output.retained_peak_bytes=std::max(g_chunk_output.retained_peak_bytes,8ull*C.d_out_cap);
     int rc = 0;
     /* THE DEVICE PACKING SWITCH (objective 4, section 33): default is the device packer; set
        NTT_S4_HOSTPACK=1 to run the old host-packing path, which is kept as the A/B oracle. */
@@ -3069,7 +3091,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
         if (carry_pending && (!g_s4_carry_batch || !defer_this || carry_pending_m != m))
             finish_carry();
         NttReduceHook h2 = hook;
-        if (hook.out) h2.out = hook.out + (size_t)(s0 * output_slots) * W;
+        if (hook.out) h2.out = hook.out + (chunk_output ? 0 : (size_t)(s0 * output_slots) * W);
         int r1 = 0;
         if (host_pack) {
             r1 = ntt_poly_mul_batch_host(P, (int)L.S, L.device, m,
@@ -9023,6 +9045,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     /* the baby set: j COPRIME TO D, j <= D/2, ascending (the CPU reference's own rule).  Not
        "coprime to N": the first version of this filtered by gcd(N,j) and produced 1155 points
        for D=2310 instead of 240. */
+    const double stage2_shape_begin=now_s();
     std::vector<unsigned long long> baby_j;
     for (unsigned long long j = 1; j <= D / 2; ++j)
         if (gcd_u64(j, D) == 1) baby_j.push_back(j);
@@ -9031,6 +9054,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                      NTT_PROBE_NAME, (unsigned long long)baby_j.size(), P_baby);
         return 3;
     }
+    const double stage2_shape_seconds=now_s()-stage2_shape_begin;
     const unsigned long long imax = B2 / D + 2;
     /* B1 and B2 are printed RAW, not as a derived count: --b2 used to be read with strtoull
        base 10, so "1e11" silently became 1 and the run quietly computed a B2=1 shape
@@ -9079,6 +9103,15 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
 
     /* ---- Q = [lcm(1..B1)] P0 through the device ladder chain ---- */
     std::vector<unsigned long long> pps = prime_powers_u64(B1);
+    unsigned long long stage1_extra=1;
+    if(const char *e=std::getenv("NTT_STAGE1_EXTRA")) {
+        if(*e) stage1_extra=std::strtoull(e,nullptr,10);
+    }
+    if(stage1_extra!=1 && stage1_extra!=12) {
+        std::fprintf(stderr,"%s: NTT_STAGE1_EXTRA must be 1 or 12\n",NTT_PROBE_NAME);
+        return 2;
+    }
+    if(stage1_extra!=1) pps.push_back(stage1_extra);
     std::vector<unsigned long long> qx(nw), qz(nw);
     mpz_to_words(qx, nw, ax);
     mpz_to_words(qz, nw, az);
@@ -9087,7 +9120,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const double tc0 = now_s();
         ladder_product(hn, nw, ninv, L.N, a24, R, pps, qx, qz, ha24, hmone, chain_ctx);
         std::printf("real_setup: sigma=%llu suyama=ok prime_powers=%llu ladder_chain_seconds="
-                    "%.3f\n", sigma, (unsigned long long)pps.size(), now_s() - tc0);
+                    "%.3f stage1_extra=%llu\n", sigma, (unsigned long long)pps.size(), now_s() - tc0,stage1_extra);
     }
     {
         mpz_t X, Z;
@@ -9097,11 +9130,16 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         affine_x_gmp(tmp, X, Z, L.N);
         char *s = mpz_get_str(nullptr, 16, tmp);
         std::printf("real_setup_Q: Q_x_hex=%.64s... (%zu hex digits)\n", s, std::strlen(s));
+        const char *qfull=std::getenv("NTT_STAGE1_Q_DUMP");
+        if(qfull && std::atoi(qfull)!=0) std::printf("real_setup_Q_full: hex=%s\n",s);
         void (*ff)(void *, size_t) = nullptr;
         mp_get_memory_functions(nullptr, nullptr, &ff);
         ff(s, std::strlen(s) + 1);
         mpz_clears(X, Z, nullptr);
     }
+    /* Stage1 Q is ready. Include context/reducer setup, baby/F-tree, then the entire tail.
+       Baby index enumeration ran before Stage1; account its measured work once separately. */
+    const double stage2_init_begin=now_s();
     LadderCtx C;
     C.hn = hn;
     C.nw = nw;
@@ -9143,10 +9181,12 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if (ee && *ee) g_s4_check_every = (unsigned long long)std::strtoull(ee, nullptr, 10);
     }
     L.arena = &arena;
+    double stage2_fixture_begin=0.0;
     if (s4_on) {
         s4_reduce_init(red, L.N, nw, hn, ninv);
         s4.red = &red;
         L.s4 = &s4;
+        stage2_fixture_begin=now_s();
         const char *flat_test = std::getenv("NTT_S4_FLAT_TEST");
         if (flat_test && std::atoi(flat_test) != 0) s4_flat_input_check(L);
         const char *readback_test = std::getenv("NTT_S4_FINAL_READBACK_TEST");
@@ -9154,6 +9194,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const char *window_test=std::getenv("NTT_S4_OUTPUT_WINDOW_TEST");
         if(window_test && std::atoi(window_test)!=0) s4_output_window_check(L);
     }
+    if(!s4_on) stage2_fixture_begin=now_s();
     const char *groot_test = std::getenv("NTT_S4_GROOT_TEST");
     if (groot_test && std::atoi(groot_test) != 0) groot_lifetime_check(L);
     const char *workspace_test = std::getenv("NTT_ARENA_WORKSPACE_TEST");
@@ -9162,6 +9203,13 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if (fuse_test && std::atoi(fuse_test) != 0) {
         ntt_fuse_lifetime_check(g_device);
         ntt_fuse_capacity_check(g_device);
+    }
+    const double stage2_fixture_seconds=now_s()-stage2_fixture_begin;
+    bool stage2_extra_fixtures=false;
+    for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
+                           "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST"}) {
+        const char *v=std::getenv(key);
+        if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
     {
         bool ok1 = false, ok2 = false;
@@ -9301,6 +9349,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 L.bind_L, L.bind_bpw, L.bind_bound_bits, mpz_log2d_p(),
                 exact_ok_terms(L.bind_L, L.bind_bpw) ? "OK" : "VIOLATED");
 
+    const double stage2_init_seconds=stage2_shape_seconds+now_s()-stage2_init_begin;
     /* ---- the tails ---- */
     Stage2Params SP;
     SP.D = D; SP.B1 = B1; SP.B2 = B2; SP.baby_j = baby_j;
@@ -9354,6 +9403,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::printf("stage2: algorithm=tree_gpu_batched curves=1 hits=%llu bad_factors=%llu "
                     "factors=%s hit_primes=%s elapsed=%.2f\n", BR.tail.hits, BR.tail.bad_factors,
                     fs2.c_str(), ps2.c_str(), el);
+        std::printf("stage2_full_wall: curve=%d shape=%.6f init=%.6f main=%.6f total=%.6f "
+                    "fixture=%.6f clean=%d (init includes baby/F-tree and mandatory selftests; "
+                    "main includes GCD, naming and oracle drain; Stage1 excluded; init shared)\n",
+                    cv+1,stage2_shape_seconds,stage2_init_seconds,el,stage2_init_seconds+el,
+                    stage2_fixture_seconds,(int)(!stage2_extra_fixtures && !run_s2 && curves==1));
         if (BR.tail.unnamed_hits)
             std::printf("stage2_naming: named_hits=%llu unnamed_hits=%llu (the naming budget "
                         "stopped the culprit scan; hits and bad_factors are complete, the "
@@ -9445,6 +9499,13 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                         g_output_window.reduced_coeffs,g_output_window.returned_coeffs,
                         g_output_window.skipped_coeffs,g_output_window.d2h_words,
                         g_output_window.device_peak_bytes,g_output_window.pinned_peak_bytes);
+            std::printf("real_batched_chunkoutput: enabled=%d calls=%llu reused_calls=%llu whole_calls=%llu "
+                        "multi_chunk_reused=%llu reused_chunks=%llu legacy_calls=%llu grows=%llu "
+                        "request_peak_bytes=%llu whole_peak_bytes=%llu retained_peak_bytes=%llu\n",
+                        (int)g_s4_chunk_output,g_chunk_output.calls,g_chunk_output.reused_calls,
+                        g_chunk_output.whole_calls,g_chunk_output.multi_chunk_reused,g_chunk_output.reused_chunks,
+                        g_chunk_output.legacy_calls,g_chunk_output.grows,g_chunk_output.request_peak_bytes,
+                        g_chunk_output.whole_peak_bytes,g_chunk_output.retained_peak_bytes);
             std::printf("real_batched_finalreadback: enabled=%d calls=%llu copied_words=%llu "
                         "avoided_words=%llu host_peak_bytes=%llu t_copy=%.6f "
                         "(all S4 calls incl F-tree; additional to chunk coeffback)\n",

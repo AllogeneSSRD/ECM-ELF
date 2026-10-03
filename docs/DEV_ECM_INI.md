@@ -62,6 +62,12 @@
 | `sigma` | `0` | 驱动/队列 | `-sigma` | 固定 sigma（0=随机）。 |
 | `ckpt_seconds` | `600` | 驱动/队列 | `--ckpt` | 任务中途存档间隔（秒），0=不自动存档（Ctrl+C 仍会存）。 |
 
+`exponent=choose12` 的数学含义是 `12*lcm(1..B1)`，`lcm` 是 `lcm(1..B1)`。
+CPU `method=mont` 已实际消费该选项。2026-10-03核对发现，生产GPU批量路径虽然解析了该键，
+但调用的指数builder仍固定torsion=1，尚未实现该选项的GPU接线。
+试接线时还暴露原生产exe的大位宽短指数Q错误；修复和回归完成前不能把该配置当作GPU完整Q对齐保证。
+代码、最小复现和独立参考证据见 [开发日志§44.7](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3054)。
+
 ### 1.4 GPU 键
 
 | 键 | 默认 | 谁消费 | CLI | 说明 |
