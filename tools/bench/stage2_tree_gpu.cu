@@ -1157,6 +1157,9 @@ static std::vector<unsigned long long> poly_mul_modN(PolyLayer &L,
 struct FTreeStats {
     size_t leaves = 0, padded = 0;
     unsigned long long muls = 0;
+    unsigned long long node_peak_bytes = 0, node_retained_bytes = 0, node_released_bytes = 0;
+    unsigned long long nodes_released = 0, passthrough_moves = 0;
+    double t_release = 0.0;
 };
 
 /* the stage-2 parameters both tails need, independent of where they came from (a CPU dump for
@@ -1277,6 +1280,16 @@ static const bool g_s4_async = !opt_off("NTT_S4_ASYNC");
 static const bool g_s4_pack_direct = !opt_off("NTT_S4_PACK_DIRECT");
 /* Borrow already padded flat operands; 0 retains both host materializations for A/B. */
 static const bool g_s4_flat_direct = !opt_off("NTT_S4_FLAT_DIRECT");
+/* Main-loop G trees only need the root; 0 retains the full heap for same-binary A/B. */
+static const bool g_s4_groot_only = !opt_off("NTT_S4_GROOT_ONLY");
+struct GRootStats {
+    unsigned long long builds = 0, nodes_released = 0, passthrough_moves = 0;
+    unsigned long long peak_node_bytes = 0, peak_retained_bytes = 0, released_bytes = 0;
+    unsigned long long input_released_bytes = 0, root_words = 0;
+    unsigned long long root_hash = 1469598103934665603ull;
+    double t_release = 0.0;
+};
+static GRootStats g_groot;
 /* Same-binary candidate: accumulate identical interior chunks, check BEFORE the tail reset.
    Opt-in until production ABBA establishes a gain. */
 static const bool g_s4_carry_batch = [] {
@@ -3301,7 +3314,8 @@ static void poly_mul_batch_modN(PolyLayer &L,
    launches per tree drops from (leaves-1) to (levels x distinct shapes). */
 static std::vector<std::vector<unsigned long long>> build_tree_flat(
     PolyLayer &L, const std::vector<std::vector<unsigned long long>> &leaf,
-    std::vector<size_t> &deg, size_t &pad_out, FTreeStats &fs, int cat = -1)
+    std::vector<size_t> &deg, size_t &pad_out, FTreeStats &fs, int cat = -1,
+    bool keep_children = true)
 {
     const size_t W = L.W;
     const size_t n = leaf.size();
@@ -3310,20 +3324,80 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
     fs.leaves = n;
     fs.padded = pad;
     pad_out = pad;
-    std::vector<std::vector<unsigned long long>> t(2 * pad, std::vector<unsigned long long>(W, 0ull));
+    /* Root-only callers never read a consumed child again. Internal placeholders need no
+       payload; leaves, including constant-one padding, are defined before the first level. */
+    std::vector<std::vector<unsigned long long>> t = keep_children
+        ? std::vector<std::vector<unsigned long long>>(2 * pad, std::vector<unsigned long long>(W, 0ull))
+        : std::vector<std::vector<unsigned long long>>(2 * pad);
     deg.assign(2 * pad, 0);
-    for (size_t i = 0; i < 2 * pad; ++i) t[i][0] = 1;          /* the constant 1 */
+    for (size_t i = keep_children ? 0 : pad; i < 2 * pad; ++i) {
+        if (!keep_children) t[i].assign(W, 0ull);
+        t[i][0] = 1;                                        /* the constant 1 */
+    }
     for (size_t i = 0; i < n; ++i) { t[pad + i] = leaf[i]; deg[pad + i] = 1; }
+    size_t live_words = 0;
+    for (const auto &v : t) live_words += v.capacity();
+    fs.node_peak_bytes = 8ull * live_words;
+    auto update_parent = [&](size_t i, size_t old_cap) {
+        live_words -= old_cap; live_words += t[i].capacity();
+        fs.node_peak_bytes = std::max(fs.node_peak_bytes, 8ull * live_words);
+    };
+    auto passthrough = [&](size_t i, size_t child) {
+        const size_t old = t[i].capacity(), source = t[child].capacity();
+        if (keep_children) { t[i] = t[child]; update_parent(i, old); }
+        else {
+            t[i] = std::move(t[child]);
+            live_words -= old + source;
+            live_words += t[i].capacity() + t[child].capacity();
+            fs.node_peak_bytes = std::max(fs.node_peak_bytes, 8ull * live_words);
+            ++fs.passthrough_moves;
+        }
+        deg[i] = deg[child];
+    };
+    auto release_children = [&](size_t first, size_t last) {
+        if (keep_children) return;
+        const double tr0 = now_s();
+        for (size_t i = first; i < last; ++i) {
+            const size_t old = t[i].capacity();
+            std::vector<unsigned long long>().swap(t[i]);
+            live_words -= old; fs.node_released_bytes += 8ull * old;
+            ++fs.nodes_released;
+        }
+        fs.t_release += now_s() - tr0;
+    };
+    auto finish = [&] {
+        fs.node_retained_bytes = 8ull * live_words;
+        if (g_s4_carry_trace) {
+            size_t actual = 0;
+            for (size_t i=0; i<t.size(); ++i) {
+                actual += t[i].capacity();
+                if (!keep_children && i>1 && !t[i].empty()) {
+                    std::fprintf(stderr, "%s: FATAL: root-only tree retains child %llu\n", NTT_PROBE_NAME,
+                                 (unsigned long long)i); std::exit(3);
+                }
+            }
+            if (actual != live_words) {
+                std::fprintf(stderr, "%s: FATAL: tree capacity accounting mismatch\n", NTT_PROBE_NAME);
+                std::exit(3);
+            }
+        }
+    };
+    /* A one-leaf tree has no parent level (base=0 would never reach the loop's base=1 stop). */
+    if (pad == 1) { finish(); return t; }
     if (!L.s4) {                                               /* the pre-S4 path, unchanged */
         for (size_t i = pad; i-- > 1; ) {
-            if (poly_is_one(t[2 * i].data(), W)) { t[i] = t[2 * i + 1]; deg[i] = deg[2 * i + 1]; }
-            else if (poly_is_one(t[2 * i + 1].data(), W)) { t[i] = t[2 * i]; deg[i] = deg[2 * i]; }
+            if (deg[2*i] == 0 && poly_is_one(t[2 * i].data(), W)) { passthrough(i, 2*i+1); }
+            else if (deg[2*i+1] == 0 && poly_is_one(t[2 * i + 1].data(), W)) { passthrough(i, 2*i); }
             else {
+                const size_t old = t[i].capacity();
                 t[i] = poly_mul_modN(L, t[2 * i], deg[2 * i], t[2 * i + 1], deg[2 * i + 1], cat);
+                update_parent(i, old);
                 deg[i] = deg[2 * i] + deg[2 * i + 1];
                 ++fs.muls;
             }
+            release_children(2*i, 2*i+2);
         }
+        finish();
         return t;
     }
     ++L.s4->level_calls;
@@ -3346,8 +3420,8 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
         std::map<std::pair<size_t, size_t>, std::vector<size_t>> groups;
         for (size_t i = base; i < 2 * base; ++i) {
             const size_t c0 = 2 * i, c1 = 2 * i + 1;
-            if (poly_is_one(t[c0].data(), W)) { t[i] = t[c1]; deg[i] = deg[c1]; }
-            else if (poly_is_one(t[c1].data(), W)) { t[i] = t[c0]; deg[i] = deg[c0]; }
+            if (deg[c0] == 0 && poly_is_one(t[c0].data(), W)) { passthrough(i, c1); }
+            else if (deg[c1] == 0 && poly_is_one(t[c1].data(), W)) { passthrough(i, c0); }
             else {
                 const size_t ma = deg[c0] + 1, mb = deg[c1] + 1;
                 groups[std::make_pair((ma < mb) ? ma : mb, (ma < mb) ? mb : ma)].push_back(i);
@@ -3384,11 +3458,16 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
             }
             for (size_t s = 0; s < nbatch; ++s) {
                 const size_t i = g.second[s];
+                const size_t old = t[i].capacity();
                 t[i].assign(res.begin() + (long)(s * nc * W), res.begin() + (long)((s + 1) * nc * W));
+                update_parent(i, old);
                 deg[i] = ma + mb - 2;
                 ++fs.muls;
             }
         }
+        /* Inputs were copied into wa/wb before the call; all device readers use that owned
+           staging. Every sibling group has finished consuming this level before reclamation. */
+        release_children(2*base, 4*base);
         if (lvl_trace)
             std::printf("tree_level: base=%llu groups=%llu muls=%llu t=%.3f s | ntt total=%.3f "
                         "fwd=%.3f inv=%.3f slot=%.3f hpack=%.3f h2d=%.3f check=%.3f plan=%.3f "
@@ -3398,6 +3477,7 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
                         lvl_opcopy, lvl_hout);
         if (base == 1) break;
     }
+    finish();
     return t;
 }
 
@@ -3783,7 +3863,7 @@ static void descent_slow(PolyLayer &L,
         for (size_t j = 0; j < cnt; ++j) {
             for (int sgn = 0; sgn < 2; ++sgn) {
                 const size_t ci = nbase + 2 * j + (size_t)sgn;
-                if (poly_is_one(Ft[ci].data(), W)) {
+                if (Fdeg[ci] == 0 && poly_is_one(Ft[ci].data(), W)) {
                     cp_resize(nxt[2 * j + (size_t)sgn], 1, W);      /* H mod 1 = 0 */
                 } else {
                     if (cur[j].size() >= Fdeg[ci] + 1) ++divmods;
@@ -3856,7 +3936,7 @@ static void descent_batched(PolyLayer &L,
             for (int sgn = 0; sgn < 2; ++sgn) {
                 const size_t ci = nbase + 2 * j + (size_t)sgn;
                 const size_t slot = 2 * j + (size_t)sgn;
-                if (poly_is_one(Ft[ci].data(), W)) {
+                if (Fdeg[ci] == 0 && poly_is_one(Ft[ci].data(), W)) {
                     cp_resize(nxt[slot], 1, W);       /* H mod 1 = 0 */
                     continue;
                 }
@@ -6437,6 +6517,83 @@ static void s4_flat_input_check(PolyLayer &L)
     if (bad) std::exit(3);
 }
 
+/* Independent GMP product oracle, including X+1 and an internal polynomial with constant
+   coefficient one. A scalar limb test alone must never classify either as the identity. */
+static void groot_lifetime_check(PolyLayer &L)
+{
+    const size_t W = L.W;
+    S4Ctx *saved_s4 = L.s4;
+    unsigned long long cases=0, words=0, descent_cases=0, bad=0;
+    mpz_t c, a, b, sum;
+    mpz_inits(c, a, b, sum, nullptr);
+    for (int backend=0; backend<2; ++backend) {
+        if (backend && !saved_s4) continue;
+        L.s4 = backend ? saved_s4 : nullptr;
+        for (size_t n : {0u, 1u, 2u, 3u, 5u, 8u, 9u, 17u}) {
+            std::vector<std::vector<unsigned long long>> leaves;
+            std::vector<unsigned long long> expected(W, 0ull);
+            expected[0]=1;
+            for (size_t i=0; i<n; ++i) {
+                if (i%4==2) mpz_sub_ui(c, L.N, 1);
+                else mpz_set_ui(c, i%4==3 ? 2 : 1);
+                std::vector<unsigned long long> leaf(2*W, 0ull), next((i+2)*W, 0ull);
+                mpz_to_words(leaf, W, c); leaf.resize(2*W, 0ull); leaf[W]=1;
+                leaves.push_back(leaf);
+                for (size_t k=0; k<i+2; ++k) {
+                    mpz_set_ui(sum, 0);
+                    if (k<=i) {
+                        words_to_mpz(a, &expected[k*W], W);
+                        mpz_mul(sum, a, c);
+                    }
+                    if (k>0) { words_to_mpz(b, &expected[(k-1)*W], W); mpz_add(sum, sum, b); }
+                    mpz_mod(sum, sum, L.N);
+                    std::vector<unsigned long long> coef(W);
+                    mpz_to_words(coef, W, sum);
+                    std::copy(coef.begin(), coef.end(), next.begin()+(long)(k*W));
+                }
+                expected.swap(next);
+            }
+            for (bool keep : {true, false}) {
+                FTreeStats fs;
+                size_t pad=0; std::vector<size_t> deg;
+                auto tree=build_tree_flat(L, leaves, deg, pad, fs, -1, keep);
+                ++cases; words+=expected.size();
+                if (deg[1]!=n || tree[1]!=expected) ++bad;
+                if (!keep) for (size_t i=2; i<tree.size(); ++i) if (!tree[i].empty()) ++bad;
+                if (keep && n>=2) {
+                    /* H(X)=X+5 evaluated at each leaf root -c; independent of cp_mod. */
+                    CPoly H(2, std::vector<unsigned long long>(W, 0ull)); H[0][0]=5; H[1][0]=1;
+                    for (int method=0; method<2; ++method) {
+                        /* Batched division requires S4. Its input tree may be built by either
+                           backend, but it must not inherit the CPU builder's null context. */
+                        if (method && !saved_s4) continue;
+                        L.s4 = method ? saved_s4 : (backend ? saved_s4 : nullptr);
+                        std::vector<std::vector<unsigned long long>> values;
+                        unsigned long long divmods=0;
+                        if (method) descent_batched(L, tree, deg, pad, H, values, divmods, -1);
+                        else descent_slow(L, tree, deg, pad, H, values, divmods);
+                        L.s4 = backend ? saved_s4 : nullptr;
+                        ++descent_cases;
+                        if (values.size()!=n) { ++bad; continue; }
+                        for (size_t i=0; i<n; ++i) {
+                            words_to_mpz(c, leaves[i].data(), W);
+                            mpz_ui_sub(sum, 5, c); mpz_mod(sum, sum, L.N);
+                            std::vector<unsigned long long> coef(W); mpz_to_words(coef, W, sum);
+                            if (values[i]!=coef) ++bad;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    L.s4=saved_s4;
+    mpz_clears(c, a, b, sum, nullptr);
+    std::printf("groot_lifetime_check: cases=%llu words=%llu descent_cases=%llu bad=%llu "
+                "(GMP, empty/single/padded trees, constant-one nonconstant polynomials)\n",
+                cases, words, descent_cases, bad);
+    if (bad) std::exit(3);
+}
+
 /* nbatch slices of `n` coefficients each, coefficient-wise A - B mod N (the flat twin of
    cp_addsub, used by the batched Newton step h = 2 - a*g) */
 static std::vector<unsigned long long> cp_addsub_flat(const std::vector<unsigned long long> &A,
@@ -6819,7 +6976,7 @@ static Stage2Tail run_stage2_tail(PolyLayer &L, const LadderCtx &C, const Stage2
             for (int sgn = 0; sgn < 2; ++sgn) {
                 const size_t ci = nbase + 2 * j + (size_t)sgn;
                 /* the padding leaves are the constant 1 in the same flat form */
-                if (poly_is_one(gt[ci].data(), W)) {
+                if (gdeg[ci] == 0 && poly_is_one(gt[ci].data(), W)) {
                     cp_resize(nxt[2 * j + (size_t)sgn], 1, W);   /* F mod 1 = 0 */
                 } else {
                     if (cur[j].size() >= gdeg[ci] + 1) ++divisions;
@@ -7888,8 +8045,24 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         const double tg0 = now_s();
         std::vector<std::vector<unsigned long long>> gt =
-            build_tree_flat(L, bleaf, bdeg, bpad, bs, BC_GTREE);
+            build_tree_flat(L, bleaf, bdeg, bpad, bs, BC_GTREE, !g_s4_groot_only);
+        if (g_s4_groot_only) {
+            const double tr0 = now_s();
+            for (const auto &v : bleaf) g_groot.input_released_bytes += 8ull * v.capacity();
+            std::vector<std::vector<unsigned long long>>().swap(bleaf);
+            bs.t_release += now_s() - tr0;
+        }
         R.t_gtrees += now_s() - tg0;
+        ++g_groot.builds;
+        g_groot.nodes_released += bs.nodes_released;
+        g_groot.passthrough_moves += bs.passthrough_moves;
+        g_groot.released_bytes += bs.node_released_bytes;
+        g_groot.peak_node_bytes = std::max(g_groot.peak_node_bytes, bs.node_peak_bytes);
+        g_groot.peak_retained_bytes = std::max(g_groot.peak_retained_bytes, bs.node_retained_bytes);
+        g_groot.t_release += bs.t_release;
+        g_groot.root_words += gt[1].size();
+        if (g_s4_carry_trace)
+            for (const auto w : gt[1]) g_groot.root_hash = (g_groot.root_hash ^ w) * 1099511628211ull;
         gs.leaves += bs.leaves;
         gs.padded += bs.padded;
         gs.muls += bs.muls;
@@ -8818,6 +8991,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const char *flat_test = std::getenv("NTT_S4_FLAT_TEST");
         if (flat_test && std::atoi(flat_test) != 0) s4_flat_input_check(L);
     }
+    const char *groot_test = std::getenv("NTT_S4_GROOT_TEST");
+    if (groot_test && std::atoi(groot_test) != 0) groot_lifetime_check(L);
     {
         bool ok1 = false, ok2 = false;
         const double w1 = (double)real_shape_words(P_baby, (int)L.S, &ok1);
@@ -9017,6 +9192,13 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::printf("real_batched_shape: P=%llu giant_points=%llu num_poly_g=%llu loops=%llu "
                     "descent_divmods=%llu\n", BR.P, BR.giant_points, BR.num_poly_g, BR.loops,
                     BR.descent_divmods);
+        std::printf("real_batched_groot: root_only=%d builds=%llu nodes_released=%llu moves=%llu "
+                    "node_peak_bytes=%llu retained_peak_bytes=%llu released_bytes=%llu input_released_bytes=%llu "
+                    "root_words=%llu trace=%d root_hash=%016llx t_release=%.6f (node capacities, not process peak)\n",
+                    (int)g_s4_groot_only, g_groot.builds, g_groot.nodes_released, g_groot.passthrough_moves,
+                    g_groot.peak_node_bytes, g_groot.peak_retained_bytes, g_groot.released_bytes,
+                    g_groot.input_released_bytes, g_groot.root_words, (int)g_s4_carry_trace,
+                    g_groot.root_hash, g_groot.t_release);
         std::printf("real_batched_cost: poly_muls=%llu operand_bits=%llu f_tree=%llu g_tree=%llu "
                     "fold=%llu descent=%llu inv=%llu total=%llu\n", L.cost.tot_muls(),
                     L.cost.tot_bits(), L.cost.bits[BC_FTREE], L.cost.bits[BC_GTREE],

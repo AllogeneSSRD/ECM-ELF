@@ -186,7 +186,7 @@ PrMers 的 BSGS 路径是逐 prime cross-product 扫描，与 Prime95/本仓库 
 - 本仓库 §37 的对照为 **5261-bit Mersenne 模数 M5261（GPU 走通用奇数归约）**、B1=1000、B2=1.94e12、D=1231230、P=115200、GPU1。
   模数、曲线参数、边界、degree、giant block 数、硬件和线程配置都不同；208 s 与 74.6 s 不能直接相除后叫加速比。
   Prime95 的 transforms 是 Gwnum 变换计数，也不能直接和 GPU wrapper/NTT launch count 相比。
-- GPU 的 CLI lapsed 从 [stage2_tree_gpu.cu:8994](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8994) 的 run_batched 前开始；baby/Ftree 已在此前建立，Ftree 时间另列 f_tree_incl。进程 wall 还包括 stage1、设置和自检。因而当前 elapsed 也不能直接作为完整 Stage2 wall；公平基线需要单独划定 stage1/Stage2 分界。
+- GPU 的 CLI elapsed 从 [stage2_tree_gpu.cu:9170](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9170) 的 run_batched 前开始；baby/Ftree 已在此前建立，Ftree 时间另列 f_tree_incl。进程 wall 还包括 stage1、设置和自检。因而当前 elapsed 也不能直接作为完整 Stage2 wall；公平基线需要单独划定 stage1/Stage2 分界。
 
 ### 28.2 性能优势分层，而非只看 FFT 核心
 
@@ -200,7 +200,7 @@ PrMers 的 BSGS 路径是逐 prime cross-product 扫描，与 Prime95/本仓库 
 **B. 选择所需输出、融合算术与复用存储。**[ecm.cpp:9465](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9465)
 复用 polyGH 的上下半；随后 quotient 只返回高半，remainder 通过 MULLO+FNMADD 融合差法得到。
 [polymult.h:128](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/gwnum/polymult.h:128) 还包含隐含 monic、MULHI/LO/MID 和 FMA 接口。
-当前 GPU fold 在 [stage2_tree_gpu.cu:7897](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7897) 附近仍是三次完整 cp_mul，
+当前 GPU fold 在 [stage2_tree_gpu.cu:8074](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8074) 附近仍是三次完整 cp_mul，
 生成完整 qrev/qb 再截断/做 host 差法。只剪 D2H 不等于截断 convolution；但 GPU 先只归约/回传所需窗口可降低具体工作量，
 之后再实现高/低/中间乘积，才能进一步减少 transform 范围。
 
@@ -210,8 +210,8 @@ PrMers 的 BSGS 路径是逐 prime cross-product 扫描，与 Prime95/本仓库 
 [ecm.cpp:9729](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9729) 用 polymult_several 共用父输入变换。
 [polymult.c:4904](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/gwnum/polymult.c:4904) 明确输入只读和 FFT 一次。
 当前 GPU 默认下降调用 divmod_batch；每组先反转 divisor 并跑 inv_series_batch Newton，再 qrev、q·B、host remainder。
-见 [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6582)、
-[inv_series_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6483)。
+见 [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6739)、
+[inv_series_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6640)。
 因此当前实现与 Prime95 并非只是同一下降算法的设备位置不同；直接套一个 transposed 子式到普通 remainder 上不成立。
 必须定义完整 scaled 状态、索引/反转/monic 约定、初始 scaling 和最终叶值，逐层对拍，不能凭相同 GCD 证明正确。
 
@@ -239,3 +239,20 @@ GPU 目前保留 host word vectors、CPoly、arena 和多种 pools，并反复 m
    Nsight Compute 用于随后确认的热点 kernel。剖析运行与无 profiler 的性能 A/B 分开。
 5. 建立 Prime95 真正单执行线程、同模数/边界/输入点或同曲线参数的基线，同时报告 full Stage2 wall、stage1 分界、
    RAM/VRAM 峰值、曲线失败/因子口径和重复性。达成这个基线并超越前，长期目标保持未完成。
+
+### 28.4 2026-10-03 后续：根节点消费者与整树消费者
+
+Nsight 短窗口和本轮代码细节见 [DEV_GPUOWL_NTT_NOTES.md §39](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:2126)。
+观察到的长间隙有许多没有 CUDA API 覆盖，但采集完整性有警告、没有 CPU stack sampling，不能证明具体准备函数的因果。
+当前先明确对象寿命：[run_batched](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8048)
+的 G 块只消费根，而 F 树及 [run_stage2_tail](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6948)
+的 G 树需要完整下降节点。因此 root-only 只用于前者，每层消费完释放 children，构造后释放重复叶输入。
+这借鉴的是 Prime95 对工作集寿命的管理，算法仍是普通 product/remainder tree，未实现 scaled descent、
+poly spectrum 驻留或 MULHI/MULLO。独立 GMP fixture 还覆盖常数项为 1 的非恒等多项式，
+修复此前 tree/descent 将 `X+1` 误判为常数 1 的边界；完整同二进制门禁和生产结果在 §39 记录。
+
+最终门禁 **110 passed / 0 failed**。本形状同二进制 ABBA 的 CLI elapsed 均值
+**220.41 → 198.22 s（−10.07%）**，观测进程私有提交峰值均值 **10734 → 9315 MiB（−13.22%）**；
+arena 仍 **6215.6 MiB**。full 两轮波动 12.04 s，root 两轮 0.46 s，因此不把该比例外推到其他形状。
+主循环约 1 Hz NVML mean load **53.48 → 62.29%**，低负载样本占比 **25.61 → 16.67%**，下降阶段仍有大量间隙。
+这个进展没有减少通用 mod-N 的理论算术、NTT 系数数或回传量，也没有达成与 Prime95 单执行线程的公平速度比较。

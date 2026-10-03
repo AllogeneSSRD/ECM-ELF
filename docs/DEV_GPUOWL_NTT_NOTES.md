@@ -2122,3 +2122,156 @@ NVML/WDDM 的采样显存峰值也不等同 arena 的已分配字节，不能拿
 窗口可先减少归约、回传和 host 物化；并不自动减少 full NTT 或输入上传。
 Prime95 MULHI/MULLO、scaled 表示和多输出共享输入的契约复核见
 [STAGE2_GPU_COMPARE_PRMERS.md §28](D:/code/MPA-OpenCl/docs/STAGE2_GPU_COMPARE_PRMERS.md)。
+
+## 39. Nsight 短窗口与 G 树生命周期（2026-10-03）
+
+### 39.1 捕获条件与证据限制
+
+在 `6f8e0fc` / 二进制 SHA256
+`03138BD6DC91328E005FB289108C5750C78D87A4142F42B85A98299619D65220` 上，
+对 §38 相同 M5261、sigma=26、B1=1000、B2=1940000000000、D=1231230、GPU1、64 MB 配置
+运行 Systems 2026.1.3：`--trace=cuda,nvtx --sample=none --cpuctxsw=none --delay=50
+--duration=30 --kill=false --wait=primary`。采样不与生产 ABBA 同时运行。
+报告及参数见 [capture provenance](D:/code/MPA-OpenCl/build_cuda_cmake/_nsys_stage2_main_20261003/provenance.json)、
+[main.nsys-rep](D:/code/MPA-OpenCl/build_cuda_cmake/_nsys_stage2_main_20261003/main.nsys-rep)、
+[SQLite 分析脚本](D:/code/MPA-OpenCl/build_cuda_cmake/_nsys_stage2_main_20261003/analyze_trace.py) 和
+[timeline_summary.json](D:/code/MPA-OpenCl/build_cuda_cmake/_nsys_stage2_main_20261003/timeline_summary.json)。
+
+这里没有 CPU sampling/call stacks，不能把“没有 CUDA API 的区间”直接归因于某个 CPU 函数，
+也不能区分 CPU 运算、缺页和线程被调度出去。报告 `DIAGNOSTIC_EVENT` 明确提示
+`Not all CUDA events might have been collected`、没有收集 NVTX、UM trace 不受支持，
+并使用 software instrumented trace。因此下面是**已记录事件的覆盖及候选线索**，
+不是完整设备占用率、缺失事件校正后的空闲时间或严格的 CPU/GPU 瓶颈证明。
+捕获目标随后自然退出，没有把剖析运行计入速度样本。
+
+### 39.2 记录到的时间线
+
+- 时间窗 29.992694 s；kernel/memcpy/memset 的 GPU 区间并集 16.180721 s，覆盖 53.95%。
+  分别记录 kernel 14.294952 s、memcpy 1.572986 s、memset 0.312783 s。
+- 未覆盖 GPU 区间 13.811973 s，其中没有 CUDA API 覆盖的区间 12.368331 s；
+  有 API 覆盖的 1.443642 s，其中同步类 API 覆盖 1.019716 s。API 与 GPU 时间重叠，不能相加。
+- `cudaMemcpy` API 累计 11.0368 s / 2628 calls，但实际记录 memcpy GPU 时间仅 1.573 s。
+  ≤32-byte D2H：714 次，设备时间约 0.001107 s，关联 API 累计 6.50394 s。
+  这些小回读包含等待先前 stream 工作，不能按 API 耗时判定 PCIe 带宽瓶颈。
+- 记录 D2H 13.364 GB、H2D 6.687 GB；大 D2H 的设备时间 1.0624 s。
+  仍有减少回传的空间，单纯减少字节不能保证消除所有准备间隙。
+- 热点包含 128-word 模板实例的 S4 reduce（实际 nw=83）2.9361 s，
+  tile forward 2.1636 s、ladder 2.0479 s、outer forward M4 1.5203 s、tile inverse 1.3275 s。
+  `build_pass_table` 7548 次 / 0.56447 s，提示 arena 驱逐后重建表值得审计。
+- 记录 `cudaMalloc` 446 次 / 0.1412 s、`cudaFree` 450 次 / 0.2821 s。
+  这是共享 workspace 的候选依据，尚不能解释十余秒 API-free 区间。
+
+### 39.3 先缩短只消费根节点的 G 树寿命
+
+[build_tree_flat](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3315) 增加 `keep_children` 契约。
+默认保留完整树，供 F 树及需要下降的尾部 G 树使用。
+[run_batched 的逐块 G 构造](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8048) 只消费 `gt[1]`，
+启用 `NTT_S4_GROOT_ONLY=1` 时：
+
+- 不预分配内部常数节点的 coefficient payload；保留 padding 叶子的常数 1。
+- 每层所有分组乘法返回、输出父节点物化后，释放已消费的子层 coefficient vectors。
+  CPU fallback 按父节点消费完成后释放其两个子节点。
+- 恒等 padding 的 passthrough 移动子节点 payload；次数 metadata 保留供后续父层使用。
+- 构造结束释放重复的 `bleaf` 输入；fold 仍使用完整 G 根。
+- 记录节点 capacity 峰值、返回时 retained capacity、累计释放量及释放时间。
+  该账本不含 vector headers、wa/wb/res、GPU/pinned staging、其他树和 allocator 瞬时重分配；
+  **不是进程峰值或 VRAM**。`t_release` 是 gtrees 时间的子集，不能再次加到总耗时。
+- `NTT_S4_CARRY_TRACE=1` 时逐字 hash G 根并验证 capacity 账本及所有子节点已空；生产关闭这次扫描。
+  `NTT_S4_GROOT_ONLY=0` 保留同二进制全树对照。
+
+同时修复两个原有边界：`pad=1` 直接返回，避免 GPU 层循环 base=0 无法停止；
+以及 tree/descent 的恒等判断加 degree=0 条件。
+[poly_is_one](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1054) 只检查一个 coefficient，
+`X+1` 或常数项为 1 的高次多项式不能因此当作常数 1。
+[GMP fixture](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6522) 独立逐叶卷积并计算 `H(-c)`，
+覆盖 full/root-only、S4/CPU fallback、空树/单叶/非二次幂树以及 slow/batched descent。
+性能与内存实测见下面的门禁和生产 ABBA，不从时间线推导因果或加速比例。
+
+### 39.4 门禁
+
+最终构建 SHA256：`4BBF5863474E8EAB73F7A708C607A283A4D0B8FAF14C0D2DBEBEB0822A89E02A`；
+nvcc compile 271.6 s、link 3.2 s。
+[完整门禁日志](D:/code/MPA-OpenCl/build_cuda_cmake/_groot_gate_20261003.log)：
+`tools/test/test_stage2_tree_gpu.ps1 -InProcessChecks`，**110 passed / 0 failed**。
+[新增第 21 组](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:925) 包括：
+
+- full/root-only 的冻结因子和 hit set、所有多项式输出字、oracle job/sample/signature 一致。
+- 逐字 G 根 trace 一致；carry trace 模式在函数内部独立重算 capacity 账本，验证所有子节点已清空。
+- D=210、P=24、B2=4830 得到 25 giant points，验证 24 叶不满二次幂树加单叶尾块，S4 和 CPU fallback 均通过。
+- GMP fixture 32 个构造用例、24 个下降用例：129-bit 的 636 root words 和 M5261 的 17596 root words，bad=0。
+  两个构造后端的完整树分别喂给 slow/batched descent，独立 GMP 计算 `H(-c)`；
+  batched division 始终使用有效 S4 context。
+
+第一次夹具尝试把 CPU builder 的 null S4 context 直接交给 batched division，触发 host access violation。
+这是测试调用契约错误；修正并重编译后才运行上述完整门禁。无效运行保留在
+[fixture smoke log](D:/code/MPA-OpenCl/build_cuda_cmake/_groot_fixture_smoke.log)，未计入性能结果。
+早期小形状 smoke 使用中间二进制，仅检查 runner/尾块，不作为最终生产性能依据。
+
+生产 ABBA 使用最终二进制、§38 参数和 64 MB，顺序 full/root/root/full；
+[candidate source hashes](D:/code/MPA-OpenCl/build_cuda_cmake/_groot_ab_20261003/candidate_source.json)
+记录基于 `6f8e0fc` 的未提交候选源文件，避免只用 HEAD 描述 dirty build。
+
+### 39.5 生产 ABBA：RAM 与时间均有进展，VRAM 不变
+
+[provenance](D:/code/MPA-OpenCl/build_cuda_cmake/_groot_ab_20261003/provenance.json)、
+[results.csv](D:/code/MPA-OpenCl/build_cuda_cmake/_groot_ab_20261003/results.csv)、
+[完整 runner 汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_groot_ab_run.log)。
+同一最终二进制，GPU1，full/root/root/full，四轮全部 exit=0：
+
+- CLI elapsed：**214.39 / 198.45 / 197.99 / 226.43 s**；均值 **220.410 → 198.220 s（−10.07%）**。
+  full 的两轮相差 12.04 s，root 相差 0.46 s；只报告本形状这一组 ABBA，不能视为固定加速率。
+- 进程 wall：**251.021 / 233.244 / 232.994 / 262.548 s**，均值 **256.785 → 233.119 s（−9.22%）**。
+  wall 包含 stage1/setup/selftests/baby/Ftree；CLI elapsed 从 run_batched 开始，二者均非独立 full Stage2 边界。
+- gtrees：**74.700 → 66.272 s（−11.28%）**；fold **32.084 → 25.917 s（−19.22%）**。
+  giant **20.888 → 20.752 s**，descent **48.685 → 47.064 s**，t_reduce **18.783 → 18.572 s**。
+  工作量不变，不把这些微小 kernel/其他阶段波动归因于新的算术优化。
+- 每块节点 capacity 峰值 **1550934016 → 278263808 bytes（1479.1 → 265.4 MiB）**；
+  返回时 retained 峰值 **1550934016 → 76493464 bytes（1479.1 → 72.9 MiB）**。
+  这是局部 vector payload 账本，不是进程峰值。
+- 14 个 G 构造累计释放 child payload **20011363744 bytes**、重复 bleaf **2092479136 bytes**；
+  nodes_released=3669988、moves=259346，所有模式 root_words=130781108。
+  root 的 `t_release` 均值 **1.922084 s**，已计入 gtrees。
+- 既有诊断快照观察到的进程私有提交峰值：full **10735 / 10733**，root **9320 / 9310**；
+  均值 **10734 → 9315（−1419，−13.22%）**。日志标 MB，代码实际按 1048576 换算，单位 MiB。
+  这不是 RSS/working-set 测量，不把局部释放字节、私有提交量和驻留 RAM 混为同一指标。
+- arena **6215.6 MiB → 6215.6 MiB**，overflow 四轮均 0；**本轮没有 VRAM 节省**。
+  raw H2D **38.81 GiB**、系数 D2H **37.27 GiB**、pack launches **24462**、direct chunks **12738** 不变。
+  flat copy **1312963056 bytes**、zero **1569628936 bytes** 不变，本轮主要减少保留寿命与 padding passthrough 拷贝。
+- 四轮 factor=42089、hit_prime=3511、bad_factors=0；coeffs_reduced=62385796。
+  GMP selected/compared **1609 jobs / 95906 samples**，signature=`a7f13ab751eaf263`；
+  carry deferred/checked **11516 chunks**，所有生产样本完成，pending=0。
+
+据此保留 `NTT_S4_GROOT_ONLY=1` 默认，回退 `=0`。
+RAM 容量账本与重复进程峰值均下降，两轮候选都比两轮对照快；门禁及生产验证通过。
+尚未用 CPU stacks 证实每一段时间差的来源，也尚未完成与 Prime95 单执行线程的公平比较，长期目标继续。
+
+### 39.6 GPU 空闲与下一轮候选
+
+GPU-Z 文件最后更新时间仍是 00:55:41，不能作当前实时数据。本轮独立 GPU1 约 1 Hz NVML 采样：
+[gpu1_sensors.csv](D:/code/MPA-OpenCl/build_cuda_cmake/_groot_ab_20261003/gpu1_sensors.csv)、
+[可重跑汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_groot_ab_20261003/analyze_smi.ps1)、
+[gpu1_summary.json](D:/code/MPA-OpenCl/build_cuda_cmake/_groot_ab_20261003/gpu1_summary.json)。
+logger 已在 runner 结束的 finally 中停止。按既有 wall timers 近似划分阶段：
+
+- giant/Gtree/fold：full **285 samples、53.48% mean load、≤5% 为 73/285**；
+  root **246 samples、62.29%、≤5% 为 41/246**。低负载样本占比 **25.61% → 16.67%**。
+  mean SM clock **1774.16 → 1779.09 MHz**，mean temperature **73.82 → 74.59°C**。
+  主循环记录到的空闲减少，平均负载仍明显低于 100%；不等于 SM occupancy。
+- descent/accum/naming：**47.28 → 50.26% mean load**，低负载 **32/123 → 34/121**，仍有大量间隙。
+  四轮采样显存峰值都 **5989 MiB**；NVML/WDDM residency 不等于 arena 分配账本。
+
+下一轮优先审计并接入 **按容量复用 NTT A/B/Q workspace**：
+[BigEntry](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1520)、
+[ntt_arena_bufs](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1649)。
+目前按 `(N,nbatch)` 保留并驱逐大缓冲；较小 shape 可以复用容量更大的三块 scratch。
+独立记录 workspace、twiddle cache、small buffers、外部 pools 的当前与峰值预算、增长和驱逐次数。
+`SmallEntry::dRes` 需继续承载按 shape 的 carry 累积，不能随意共用或提前清零。
+现有 S4/S5 device 调用均不导出 digits_out，输入来自独立 raw/pack 存储；
+仍需处理公共接口输入别名、fallback 和 oracle 排队快照的生命周期。
+当前 kernel/拷贝/事件均在 default stream，复用依赖 stream 顺序；将来跨 stream 必须明确消费者事件。
+增长避免旧/新三块大 workspace 同时驻留导致峰值 OOM，并正确回滚预算和失败分配。
+尚未改动 NttArena，**这些是下一候选，未测出显存收益**。
+
+随后继续 output-window（只归约/回传必要系数）、叶输入所有权转移与 scaled descent。
+root-only 目前仍复制原始 bleaf 后再释放；可另设候选移动叶输入、跳过实际叶子的常数占位分配，
+减少真实拷贝与分配次数，但要保留完整树消费者和 GMP oracle，不把生命周期变化冒称为截断乘积算法。

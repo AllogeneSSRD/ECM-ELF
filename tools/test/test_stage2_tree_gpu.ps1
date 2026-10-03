@@ -922,6 +922,88 @@ try {
     foreach($key in $flatSaved.Keys){[Environment]::SetEnvironmentVariable($key,$flatSaved[$key],'Process')}
 }
 
+# [21] Root-only G trees: compare every polynomial output and every G-root word.
+$grootSaved=@{}
+foreach($key in @('NTT_S4_GROOT_ONLY','NTT_S4_GROOT_TEST','NTT_S4_FLAT_TEST','NTT_S4_OFF',
+                  'NTT_S4_BATCH_MB','NTT_S4_CHUNK_MAX','NTT_S4_PACK_DIRECT','NTT_S4_FLAT_DIRECT',
+                  'NTT_S4_CARRY_BATCH','NTT_S4_CARRY_TEST_BAD','NTT_S4_ORACLE_TEST_BAD',
+                  'NTT_S4_ASYNC','NTT_S4_DEFER_CARRY','NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_PACK',
+                  'NTT_S4_HOSTPACK','NTT_S4_OLDTAIL','NTT_S5_ON','NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY',
+                  'NTT_S4_CARRY_TRACE','NTT_ARENA_CAP_KB','NTT_NAME_MAX','NTT_CARRY_ROUNDS')) {
+    $grootSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')
+}
+try {
+    $env:NTT_S4_GROOT_TEST='0'; $env:NTT_S4_FLAT_TEST='0'; $env:NTT_S4_OFF='0'
+    $env:NTT_S4_BATCH_MB='64'; $env:NTT_S4_CHUNK_MAX='0'; $env:NTT_S4_PACK_DIRECT='1'
+    $env:NTT_S4_FLAT_DIRECT='1'; $env:NTT_S4_CARRY_BATCH='0'; $env:NTT_S4_CARRY_TEST_BAD='0'
+    $env:NTT_S4_ORACLE_TEST_BAD='0'; $env:NTT_S4_ASYNC='1'; $env:NTT_S4_DEFER_CARRY='1'
+    $env:NTT_S4_ORACLE_ASYNC='0'; $env:NTT_S4_ORACLE_PACK='1'; $env:NTT_S4_HOSTPACK='0'
+    $env:NTT_S4_OLDTAIL='0'; $env:NTT_S5_ON='0'; $env:NTT_S4_SAMPLE='96'; $env:NTT_S4_CHECK_EVERY='8'
+    $env:NTT_S4_CARRY_TRACE='1'; $env:NTT_ARENA_CAP_KB=''; $env:NTT_NAME_MAX='1'; $env:NTT_CARRY_ROUNDS=''
+    $grootOutputs=@(); $grootCodes=@()
+    foreach($control in @('0','1')) {
+        $env:NTT_S4_GROOT_ONLY=$control
+        $grootOutputs+=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096)
+        $grootCodes+=$LASTEXITCODE
+    }
+    $grootPattern='real_batched_groot: root_only=(\d+) builds=(\d+) nodes_released=(\d+) moves=(\d+) node_peak_bytes=(\d+) retained_peak_bytes=(\d+) released_bytes=(\d+) input_released_bytes=(\d+) root_words=(\d+) trace=(\d+) root_hash=([0-9a-f]+)'
+    $grootFull=[regex]::Match($grootOutputs[0],$grootPattern)
+    $grootRoot=[regex]::Match($grootOutputs[1],$grootPattern)
+    Check 'G roots: frozen factor and hit set remain identical' `
+          (@($grootCodes | Where-Object{$_ -ne 0}).Count -eq 0 -and
+           [regex]::Match($grootOutputs[0],$resultPattern).Success -and
+           [regex]::Match($grootOutputs[0],$resultPattern).Value -eq $resultOld -and
+           [regex]::Match($grootOutputs[1],$resultPattern).Value -eq $resultOld) "exit=$($grootCodes -join '/')"
+    Check 'G roots: ALL polynomial outputs and oracle schedule agree' `
+          ([regex]::Match($grootOutputs[0],$carryTracePattern).Success -and
+           [regex]::Match($grootOutputs[0],$carryTracePattern).Value -eq [regex]::Match($grootOutputs[1],$carryTracePattern).Value -and
+           [regex]::Match($grootOutputs[0],$oraclePattern).Success -and
+           [regex]::Match($grootOutputs[0],$oraclePattern).Value -eq [regex]::Match($grootOutputs[1],$oraclePattern).Value -and
+           @($grootOutputs | Where-Object{$_ -cmatch 'FATAL|MISMATCH|gmp_check_bad=[1-9]'}).Count -eq 0) ''
+    Check 'G roots: every root word agrees, child payloads are released and accounted' `
+          ($grootFull.Success -and $grootRoot.Success -and $grootFull.Groups[1].Value -eq '0' -and
+           $grootRoot.Groups[1].Value -eq '1' -and $grootFull.Groups[2].Value -eq $grootRoot.Groups[2].Value -and
+           $grootFull.Groups[9].Value -eq $grootRoot.Groups[9].Value -and $grootFull.Groups[10].Value -eq '1' -and
+           $grootFull.Groups[11].Value -eq $grootRoot.Groups[11].Value -and
+           [long]$grootRoot.Groups[3].Value -gt 0 -and [long]$grootRoot.Groups[7].Value -gt 0 -and
+           [long]$grootRoot.Groups[8].Value -gt 0 -and $grootFull.Groups[3].Value -eq '0' -and
+           [long]$grootRoot.Groups[6].Value -lt [long]$grootFull.Groups[6].Value -and
+           $grootFull.Groups[5].Value -eq $grootFull.Groups[6].Value) ''
+    # 25 giants = one 24-leaf block plus a single-leaf tail. Previously pad=1 never terminated.
+    $edgeResultPattern='stage2:.*?hits=\d+ bad_factors=0 factors=[^\r\n]*? hit_primes=[^\r\n]*? elapsed='
+    foreach($backend in @('0','1')) {
+        $env:NTT_S4_OFF=$backend
+        $edgeOutputs=@(); $edgeCodes=@()
+        foreach($control in @('0','1')) {
+            $env:NTT_S4_GROOT_ONLY=$control
+            $edgeArgs=@('--real','--n','340282366920938463463374607431768211457','--sigma','26',
+                        '--b1','20','--b2','4830','--d','210','--device',"$Device")
+            $edgeOutputs+=(& $Exe @edgeArgs 2>&1 | Out-String -Width 4096); $edgeCodes+=$LASTEXITCODE
+        }
+        $edgeFull=[regex]::Match($edgeOutputs[0],$grootPattern); $edgeRoot=[regex]::Match($edgeOutputs[1],$grootPattern)
+        Check "G roots: S4_OFF=$backend partial padding and single-leaf tail terminate with identical roots" `
+              (@($edgeCodes | Where-Object{$_ -ne 0}).Count -eq 0 -and $edgeFull.Success -and $edgeRoot.Success -and
+               $edgeFull.Groups[2].Value -eq '2' -and $edgeRoot.Groups[2].Value -eq '2' -and
+               $edgeFull.Groups[9].Value -eq $edgeRoot.Groups[9].Value -and
+               $edgeFull.Groups[11].Value -eq $edgeRoot.Groups[11].Value -and
+               [regex]::Match($edgeOutputs[0],$edgeResultPattern).Success -and
+               [regex]::Match($edgeOutputs[0],$edgeResultPattern).Value -eq [regex]::Match($edgeOutputs[1],$edgeResultPattern).Value -and
+               @($edgeOutputs | Where-Object{$_ -cmatch 'FATAL|MISMATCH|gmp_check_bad=[1-9]'}).Count -eq 0) "exit=$($edgeCodes -join '/')"
+    }
+    $env:NTT_S4_OFF='0'; $env:NTT_S4_GROOT_ONLY='1'; $env:NTT_S4_GROOT_TEST='1'
+    foreach($width in @('short','long')) {
+        $fixtureArgs=@('--real','--sigma','26','--b1','20','--b2','1000','--d','210','--device',"$Device")
+        if($width -eq 'long') { $fixtureArgs+=@('--n-hex',('1'+('f'*1315))) } else { $fixtureArgs+=@('--n','340282366920938463463374607431768211457') }
+        $fixture=(& $Exe @fixtureArgs 2>&1 | Out-String -Width 4096); $fixtureCode=$LASTEXITCODE
+        $expectedWords=$(if($width -eq 'long'){17596}else{636})
+        Check "G roots: $width GMP oracle covers both tree lifetimes/backends and both descents" `
+              ($fixtureCode -eq 0 -and $fixture -match "groot_lifetime_check: cases=32 words=$expectedWords descent_cases=24 bad=0" -and
+               $fixture -cnotmatch 'FATAL|MISMATCH|gmp_check_bad=[1-9]') "exit=$fixtureCode"
+    }
+} finally {
+    foreach($key in $grootSaved.Keys){[Environment]::SetEnvironmentVariable($key,$grootSaved[$key],'Process')}
+}
+
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }
 exit 0
