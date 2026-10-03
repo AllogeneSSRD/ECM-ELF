@@ -3644,3 +3644,108 @@ CPU本轮未重跑、D/degree/内存/检查差异同47.4，长期目标仍未完
 [descent_scaled:6940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6940) 目前仍将两个孩子作为独立pair。
 fold仍17.6245s，候选device衔接应先明确H、G-root、quotient/low remainder与oracle snapshot的生命周期，
 避免为持久H另加大量VRAM却没有端到端收益。只降低下降的8.629s并不足以解释全部剩余瓶颈。
+
+## 49. 驻留基线 carry batching：小幅收益与主机准备空档（2026-10-03）
+
+### 49.1 实现范围、门禁与比较合同
+
+本轮修改测量/门禁脚本，未改变CUDA树源、共享NTT源或二进制。使用§48同一exe，SHA256
+`23357AFC1B1E0588B54C7BAEF414C415217ADF368F0BB2F08506414C27BD5369`；两份CUDA源hash同§48.2。
+已有 [carry开关:1374](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1374) 默认0。
+[finish_carry:3190](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3190) 将相同arena形状的中间chunk计数合并，
+[边界:3220](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3220) 在非deferred/尾chunk、m变化前结束，
+函数退出亦收尾；保留每个chunk的atomic检查贡献，不能在计数器被reset后再检查。
+[raw上传:3262](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3262) 的候选交替两份pinned raw staging，增加host容量。
+G-root的resident gather/scatter、metadata、leaf staging生命周期仍须满足§47/48。
+
+[门禁脚本:16](D:/code/MPA-OpenCl/tools/test/test_stage2_groot_device.py:16) 新增 `--carry-only`，新增26进程门禁 **26/0**：
+129/5261位各normal、blocking、arena拒绝回退的0/1配对；实际frozen/tail/long负载在window0/1下配对；
+first resident frontier与first interior carry的批处理毒化均必须失败。
+chunk_max=2、leaf_chunk=3强制多chunk及staging覆盖；比较完整根/叶/returned coefficient指纹、因子及命中集合。
+检查 `chunks_deferred=checked_chunks`；控制finishes=checked/max_group=1，eligible候选实际合并，防止空门禁。
+完整脚本现包含87进程，本轮又完整运行 **87/0**；既有§48的188/0与scaled41/0使用同binary，不能说本轮重新运行了这两套。
+证据：[26/0 summary](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_20261003/gate/summary.json)、
+[87/0 summary](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_20261003/full_gate/summary.json)。
+
+[AB脚本:21](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:21) 新增 `-Target groot_carry`，顺序
+per_chunk/batch/batch/per_chunk；两边GROOT_DEVICE、LEAF_STAGING、COMPACT_RAW、scaled、window、chunk-output均1，
+只切换CARRY_BATCH。oracle async=0、sample96/every8、pack1、S5关闭；预算及Stage1 extra12同§48。
+Gdevice/Gmemory账本保持严格检查，增加同模式raw pinned容量重复检查；所有Q/结果、NTT工作量、抽样和传输字数一致。
+P24/N129四轮smoke通过，不能从小形状得出生产性能结论。
+
+### 49.2 生产 ABBA 与内存代价
+
+GPU1 RTX4060Laptop，M4423/sigma26/B1=1000/extra12/actualB2=2011326186870/D1231230/P115200，
+batch64MiB/arena6300MiB；不占用GPU0。完整Stage2包括init、自检、main、GCD、naming和oracle drain，排除Stage1。
+四轮full **95.575068 /95.179017 /95.194519 /95.663702s**，main
+**81.979986 /81.588418 /81.605839 /82.029723s**。
+均值full **95.619385→95.186768s（−0.452%，少0.432617s）**，main **82.004855→81.597129s（−0.497%）**。
+单组ABBA的候选两轮差0.015502s、控制差0.088634s；属于小幅收益，保留开关，不改默认。
+
+- carry finishes **8241→252（−96.94%）**，checked_chunks仍8241，max_group **1→222**。
+- carry total readback **59.676512→40.735621s**，group部分 **22.608131→3.673025s**，chunk部分约37.07s不动。
+- oracle t_wait **6.313248→19.928362s**，coeffback host计时 **0.5775→4.4285s**；等待转移明显。
+  [同步oracle fence:2770](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2770) 等待此前GPU工作，
+  这些计时不能加总成可删除的纯CPU成本；减少18.94s readback统计不等于减少18.94s墙钟。
+- raw pinned容量 **129025120→202425440byte（+70MiB）**，输出pinned/raw device/workspace容量不变。
+  host观察private峰值 **7974 /7995 /7998 /7974MiB**，均值 **7974→7996.5MiB（+22.5MiB）**。
+  NVML四轮整卡采样峰值均 **5027MiB**，没有VRAM下降证据。
+- NVML约1Hz main busy **82.85→83.74%**、≤5% **16/162→14/162**，变化很小；不等于SM occupancy。
+  时钟main均值1782.96→1780.56MHz、温度61.81→62.54℃。
+
+根hash `105d6128bbf522db`、115200叶/8064000word/hash `14651449389211157465`、因子/命中集合均空。
+完整Q仍逐字匹配实际Prime95，SHA256 `33cc6c63cec26c39900a7ed4ff551e2c2e0a533422905b538ec4f4aa809f092f`。
+403 batch calls/1979251 poly pairs/40218760 reduced coeff、pack16846、sample66139/0、jobs1126、selftest2400/0，
+oracle signature `b9cbd2041266767a`；arena overflow=0、full clean=1。t_reduce **9.7245→9.732s**，未改善。
+Gtrees27.5735→27.260s、fold17.600→17.6105s、descent8.6345→8.5185s、giant14.497→14.512s。
+main H2D/D2H仍11.37/5.46GiB（旧摘要舍入，metadata另计）；resident/window/root endpoint字数全一致。
+
+证据：[results.csv](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_ab_20261003/results.csv)、
+[summary](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_ab_20261003/summary.json)、
+[provenance与实际mode_controls](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_ab_20261003/provenance.json)、
+[NVML summary](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_ab_20261003/gpu1_summary.json)、
+[测量exe/source/runner](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_ab_20261003/measured/stage2_tree_gpu.exe)。
+相对既有CPU1 full90.460s仍慢 **5.225%/4.726768s**；CPU本轮未重跑，D/degree/内存/检查差异同§47，长期目标未达成。
+
+### 49.3 Nsight Systems2026：主要空档仍在CUDA API之外
+
+本机Nsight Systems2026.1.3，仅trace目标进程树CUDA，sample/cpuctxsw=none、CUDA event trace=false。
+每个进程延迟35秒、采集35秒；两次重采样串行，完整目标exit=0后才开始下一个，完整输出的Q/根/叶和检查量与ABBA一致。
+窗口落在giant/G-tree/fold循环，不包含全部main，工作混合并非严格逐调用配对；不使用profiler计时宣称端到端加速。
+以SQLite `ANALYSIS_DETAILS.duration` 为记录边界，将API/activity裁剪到窗口；不能把跨边界API的负start扩大为额外idle。
+
+控制/候选记录窗口 **35.007333 /35.009127s**；kernel+copy+memset区间并集
+**27.873018 /27.750760s（79.621% /79.267%）**，不是SM occupancy。
+idle **7.134315 /7.258367s**，与同步API重叠 **0.523923 /0.371137s**，
+不在任何CUDA runtime API内 **6.429800 /6.767648s**。没有证明batch减少整体idle。
+两边最长五个gap约 **501–547 /504–537ms**，随后均为 **129024000byte H2D（123.046875MiB）**：
+与 [resident叶上传:3938](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3938) payload吻合。
+GPU copy区间并集只有 **0.538556 /0.581198s**；大量小D2H的correlated API时间仍包含等待GPU计算，
+不能把copy API长耗时直接解释成PCIe传输成本。无CPU调用栈，不能将全部no-API gap指定为某一个CPU函数。
+
+初次 `_gcarry_profile_20261003` 不作为模式比较证据：本机限时Nsight CLI返回后目标仍存活，第二次profile与第一目标尾部重叠，
+并采到初始化；已停止自己启动的残留PID33232。重采样通过launcher将完整stdout写入独立文件、保存目标PID/exit completion，
+等完成标志再启动下一GPU运行。此问题不影响此前独立完成的未插桩ABBA。
+证据：[比较与完整结果验证](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_profile_clean_20261003/comparison.json)、
+[控制timeline](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_profile_clean_20261003/carry_per_chunk/timeline_summary.json)、
+[候选timeline](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_profile_clean_20261003/carry_batch/timeline_summary.json)、
+[重采样runner](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_profile_clean_20261003/run_profile_clean.ps1)。
+
+### 49.4 下一轮顺序与Stage1配置
+
+按证据重新排优先级：
+
+1. **segment批量求逆**：当前 [SEG=16:380](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:380)，
+   [每段mpz_invert:8721](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8721) 在生产102100段约3.45s，
+   gleaves总计约4.05s。优先研究在相同segment grid上对段积做Montgomery批量求逆，保持first_touch/Gamma精确覆盖；
+   组合积不invertible时逐段回退，保留degenerate点和因子记录。不会改变GPU segment kernel的依赖链长度。
+   新路径必须有部分坏段、跨batch边界、末段、完整叶与因子门禁；3.45s是当前成本，不是承诺净节省。
+2. 拆分leaf准备/flatten、fold的CPoly构造和GMP减法计时；将长gap与阶段关联后再推进device leaf/fold。
+   [bleaf分配:8648](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8648)、
+   [fold:8827](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8827)、
+   [cp_coeff_sub:4131](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:4131) 是具体入口；没有调用栈证据就不做精确空档归因。
+3. shared-parent FFT/scaled下降仍有价值，但优先处理已测主机准备段；carry batch默认0，保留新resident生产A/B目标。
+
+ini配置含义已经在§45修复并核对：`method=gpu`、`gpu_param=0`、`exponent=choose12` 实现生产CUDA Montgomery Stage1
+的 `12*lcm(1..B1)`；需相同N/sigma/B1才对齐Prime95。见 [DEV_ECM_INI:65](D:/code/MPA-OpenCl/docs/DEV_ECM_INI.md:65)。
+Stage2探针仍用显式 `NTT_STAGE1_EXTRA=12`，两者入口不同，不因ini已有键而混淆测量来源。

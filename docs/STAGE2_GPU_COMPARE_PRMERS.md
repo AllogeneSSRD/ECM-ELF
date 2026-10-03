@@ -481,3 +481,22 @@ NTT素数p不同于ECM模数N，保留规范word避免直接跨层复用未归�
 本轮保留规范modN系数，仍没有Prime95 NO_UNFFT/CIRCULAR或共享父FFT。
 详细源文件行号、生命周期、四轮数据与统计边界见
 [开发日志§48](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3514)。
+
+### 28.14 驻留 carry batching 与主机准备空档（2026-10-03）
+
+已有 [carry合并:3190](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3190) 在G-root驻留基线上新增门禁26/0，
+完整G-root门禁重跑87/0；生产同binary ABBA保持所有系数、8241个中间carry verdict与GMP抽样，finishes8241→252。
+完整Stage2 **95.619385→95.186768s（少0.432617s/0.452%）**，增加raw pinned70MiB与host观察private峰值22.5MiB，
+整卡NVML峰值均5027MiB；默认仍0。carry readback少18.94s但oracle fence等待多13.62s，不能将API等待当成纯拷贝成本。
+
+Nsight Systems2026独立35秒主循环窗口显示GPU活动占比79.62/79.27%，
+no-CUDA-API空档6.43/6.77s、最长约半秒，随后均为123.047MiB叶上传。
+两个完整profile目标Q/根/叶/检查工作量通过；限时CLI返回不代表目标退出，已用completion标志串行重采样。
+无CPU调用栈，不将所有空档归因于单个host函数；profile不作为总速度证据。
+
+下一轮先减少 [逐段求逆:8721](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8721)
+实测102100段/约3.45s成本：相同grid段积批量求逆、不可逆组合逐段回退、保留first_touch/Gamma/degenerate语义。
+之后叶准备/fold主机构造与device衔接。仍为规范modN系数/full NTT路径，未实现Prime95 NO_UNFFT或共享父谱。
+相对既有Prime95 CPU1 90.460s仍慢5.225%，CPU未重跑；生产Stage1×12配置见DEV_ECM_INI:65。
+详细代码行号、测量范围及原始证据见
+[开发日志§49](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3648)。

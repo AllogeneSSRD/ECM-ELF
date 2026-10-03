@@ -3845,3 +3845,26 @@ GROOT_DEVICE仍默认0；LEAF_STAGING/COMPACT_RAW在该路径默认1、各自0�
 避免仅减少API调用数或局部容量就宣称总速度/内存提升。
 完整原文件行号、合同、四轮计时和整体峰值证据见
 [DEV_GPUOWL_NTT_NOTES§48](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3514)。
+
+## 62. 2026-10-03：驻留 carry batch 门禁与 timeline 完成
+
+新增resident carry gate26/0，完整G-root门禁重跑87/0；新增生产ABBA `-Target groot_carry`。
+同binary仅切换carry batch，所有8241个中间chunk仍检查，finishes8241→252。
+完整Stage2 **95.619385→95.186768s（−0.452%，少0.432617s）**；
+raw pinned **+70MiB**，host观察private峰值均值 **+22.5MiB**，NVML峰值均5027MiB。
+oracle fence等待6.31→19.93s，readback等待转移；不把少18.94s readback统计当成墙钟收益。
+保持CARRY_BATCH默认0，GROOT_DEVICE仍opt-in；本轮未修改CUDA代码。
+
+Nsight Systems2026完成两次独立主循环35秒采样，全目标Q/根/叶/工作量通过。
+GPU活动区间并集占比79.62/79.27%，no-CUDA-API idle6.43/6.77s；
+两边最长gap约半秒，随后均123.047MiB叶H2D，carry未消除准备空档。
+初次限时采样产生的目标尾部重叠已排除，重采样launcher等待目标completion才运行下一项。
+没有CPU调用栈、窗口工作混合非逐调用配对，不作精确CPU函数归因或profile加速结论。
+
+下一轮优先相同segment grid的**段积批量求逆**：102100段的逐段GMP invert实测约3.45s；
+组合积不可逆则逐段回退，保持跨batch first_touch/Gamma覆盖、末段、degenerate点与因子集合。
+之后拆分叶准备/fold host构造，再推进device leaf/fold和shared-parent FFT。
+既有CPU1 90.460s仍领先4.726768s/5.225%，长期目标仍未完成。
+生产Stage1×12用 `method=gpu / gpu_param=0 / exponent=choose12`，探针对齐仍显式EXTRA=12。
+详细代码行号、四轮数据、内存与trace原始证据见
+[DEV_GPUOWL_NTT_NOTES§49](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3648)。
