@@ -299,3 +299,27 @@ NVML 显存 **5759 → 4903 MiB**，观测进程私有提交峰值均值 **9213 
 下一步先实现保持完整 NTT/carry 的输出窗口，减少必要 mod-N 归约与回传，再验证 scaled 状态的下降原型。
 隔离 Prime95 单线程配置已准备，但启动验证未进入 ECM；实际二进制版本 31.7.1.0 与参考源码 31.6b1 不同。
 目前仍没有可比较的 CPU Stage2 时间，完整 Stage2 计时边界和匹配曲线的公平基线继续作为必要验收。
+
+### 28.7 2026-10-03：chunk 输出之后的重复 D2H
+
+输出窗口审计发现 [poly_mul_batch_modN](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2877)
+在完整 chunk 回传/drain 后，再整批回传 C.d_out 并重新写 out。
+默认 `NTT_S4_FINAL_READBACK=0` 跳过这次复制，1 恢复对照；
+[实际分支](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3297)
+单独统计额外回传，最终全字指纹覆盖两条路径返回给消费者的结果。
+这减少相同数据的重复搬运，普通 remainder 算法、NTT/carry/归约数量保持一致。
+
+完整门禁 **135 passed / 0 failed**。Nsight 小型夹具的 D2H 恰少 **36 次 / 9520 bytes**，
+与软件 ledger 完全吻合，H2D/kernel counts 与最终输出不变。
+M5261 生产 ABBA 均值 **192.450 → 182.045 s（−5.41%）**，进程 wall **227.1965 → 216.480 s（−4.72%）**；
+candidate 两轮差 11.21 s，control 差 0.68 s，收益限定于本形状/环境。
+移除 **38.579 GiB** 额外 D2H（所有 S4 调用含 F-tree），主 batched chunk D2H 仍 **37.27 GiB**。
+局部临时 host payload 峰值 **218.85 MiB →0**，但 NVML 仍 **4903 MiB**，
+进程私有提交峰值均值 **8359.5 → 8406.5 MiB**，整体内存峰值改善未获证明。
+主循环低负载样本 **17.72 → 19.74%**，频繁空闲仍在。
+计时口径、传感器、代码与原始日志见 [开发日志 §42](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:2577)。
+
+隔离 Prime95 改为无参数启动后成功完成 M4423/sigma26 的 Montgomery/poly smoke；
+requested B2=5e6 实际扩展为 5187000，短任务未验证 OS 线程并发，未与 GPU 匹配边界。
+启动障碍已解决，公平单执行线程 full Stage2 基线仍未建立。下一步将 chunk device 输出寿命与
+first/count 窗口一起定义，再减少必要归约/回传；scaled descent 和 spectrum 驻留仍是更大的算法候选。

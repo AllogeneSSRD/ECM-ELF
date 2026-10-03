@@ -1130,6 +1130,71 @@ try {
     foreach($key in $fuseSaved.Keys){[Environment]::SetEnvironmentVariable($key,$fuseSaved[$key],'Process')}
 }
 
+# [24] Chunk output is final: independent GMP checks 5 slices with chunk=2 (2/2/1), including
+# unequal strides and output aliases. Verify both transfer schedules, host packing and refusal.
+$readbackOverrides=@{
+    NTT_S4_FINAL_READBACK='0'; NTT_S4_FINAL_READBACK_TEST='1'; NTT_S4_FLAT_TEST='0';
+    NTT_S4_BATCH_MB='64'; NTT_S4_CHUNK_MAX='2'; NTT_S4_PACK_DIRECT='1'; NTT_S4_FLAT_DIRECT='1';
+    NTT_S4_CARRY_BATCH='1'; NTT_S4_CARRY_TEST_BAD='0'; NTT_S4_ORACLE_TEST_BAD='0';
+    NTT_S4_ASYNC='1'; NTT_S4_DEFER_CARRY='1'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_PACK='1';
+    NTT_S4_HOSTPACK='0'; NTT_S4_OLDTAIL='0'; NTT_S5_ON='0'; NTT_S4_SAMPLE='96';
+    NTT_S4_CHECK_EVERY='8'; NTT_S4_CARRY_TRACE='1'; NTT_NAME_MAX='1'; NTT_CARRY_ROUNDS='';
+    NTT_ARENA_CAP_KB=''; NTT_ARENA_WORKSPACE_POOL='1'; NTT_ARENA_WORKSPACE_TEST='0';
+    NTT_S4_GROOT_ONLY='1'; NTT_S4_GROOT_TEST='0'; NTT_S4_OFF='0';
+    NTT_FUSE_COMPACT_SCRATCH='1'; NTT_FUSE_LIFETIME_TEST='0'
+}
+$readbackSaved=@{}
+foreach($key in $readbackOverrides.Keys){$readbackSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')}
+try {
+    foreach($key in $readbackOverrides.Keys){[Environment]::SetEnvironmentVariable($key,$readbackOverrides[$key],'Process')}
+    $readbackPattern='real_batched_finalreadback: enabled=(\d+) calls=(\d+) copied_words=(\d+) avoided_words=(\d+) host_peak_bytes=(\d+) t_copy=([0-9.]+)'
+    foreach($mode in @('pinned','blocking','host','refused')) {
+        $env:NTT_S4_ASYNC=$(if($mode -eq 'blocking'){'0'}else{'1'})
+        $env:NTT_S4_HOSTPACK=$(if($mode -eq 'host'){'1'}else{'0'})
+        $env:NTT_S4_ORACLE_ASYNC=$(if($mode -eq 'pinned'){'1'}else{'0'})
+        $env:NTT_ARENA_CAP_KB=$(if($mode -eq 'refused'){'1'}else{''})
+        $outputs=@();$codes=@();$ledgers=@()
+        foreach($enabled in @('1','0')) {
+            $env:NTT_S4_FINAL_READBACK=$enabled
+            $outputs+=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096);$codes+=$LASTEXITCODE
+            $ledgers+=[regex]::Match($outputs[-1],$readbackPattern)
+        }
+        Check "final readback/$mode`: independent GMP verifies 2/2/1 chunks, strides and aliases" `
+            (@($codes|Where-Object{$_ -ne 0}).Count -eq 0 -and
+             @($outputs|Where-Object{$_ -notmatch 's4_final_readback_check: cases=16 words=400 bad=0' -or
+                 $_ -cmatch 'FATAL|MISMATCH|gmp_bad=[1-9]|gmp_check_bad=[1-9]'}).Count -eq 0) "exit=$($codes -join '/')"
+        $tr0=[regex]::Match($outputs[0],$carryTracePattern);$tr1=[regex]::Match($outputs[1],$carryTracePattern)
+        $or0=[regex]::Match($outputs[0],$oraclePattern);$or1=[regex]::Match($outputs[1],$oraclePattern)
+        Check "final readback/$mode`: ALL final output words and independent oracle coverage agree" `
+            ($tr0.Success -and $tr1.Success -and $tr0.Value -eq $tr1.Value -and
+             $or0.Success -and $or1.Success -and $or0.Groups[2].Value -eq $or1.Groups[2].Value -and
+             $or0.Groups[5].Value -eq $or1.Groups[5].Value -and $or0.Groups[9].Value -eq $or1.Groups[9].Value -and
+             $or0.Groups[6].Value -eq '0' -and $or1.Groups[6].Value -eq '0') ''
+        $a=$ledgers[0];$b=$ledgers[1]
+        Check "final readback/$mode`: duplicate D2H and host temporary really disappear" `
+            ($a.Success -and $b.Success -and $a.Groups[1].Value -eq '1' -and $b.Groups[1].Value -eq '0' -and
+             [UInt64]$a.Groups[2].Value -gt 0 -and $a.Groups[2].Value -eq $b.Groups[2].Value -and
+             [UInt64]$a.Groups[3].Value -gt 0 -and $a.Groups[3].Value -eq $b.Groups[4].Value -and
+             $a.Groups[4].Value -eq '0' -and $b.Groups[3].Value -eq '0' -and
+             [UInt64]$a.Groups[5].Value -gt 0 -and $b.Groups[5].Value -eq '0' -and $b.Groups[6].Value -eq '0.000000') ''
+    }
+    $env:NTT_S4_FINAL_READBACK_TEST='0';$env:NTT_S4_ASYNC='1';$env:NTT_S4_HOSTPACK='0'
+    $env:NTT_S4_ORACLE_ASYNC='0';$env:NTT_ARENA_CAP_KB='';$env:NTT_S4_CHUNK_MAX='64'
+    $productionOutputs=@();$productionCodes=@()
+    foreach($enabled in @('1','0')) {
+        $env:NTT_S4_FINAL_READBACK=$enabled
+        $productionOutputs+=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096);$productionCodes+=$LASTEXITCODE
+    }
+    Check 'final readback: frozen multi-chunk factor/hit set and EVERY final word agree' `
+        (@($productionCodes|Where-Object{$_ -ne 0}).Count -eq 0 -and
+         @($productionOutputs|Where-Object{[regex]::Match($_,$resultPattern).Value -ne $resultOld}).Count -eq 0 -and
+         [regex]::Match($productionOutputs[0],$carryTracePattern).Success -and
+         [regex]::Match($productionOutputs[0],$carryTracePattern).Value -eq
+             [regex]::Match($productionOutputs[1],$carryTracePattern).Value) ''
+} finally {
+    foreach($key in $readbackSaved.Keys){[Environment]::SetEnvironmentVariable($key,$readbackSaved[$key],'Process')}
+}
+
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }
 exit 0

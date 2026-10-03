@@ -1280,6 +1280,17 @@ static const bool g_s4_async = !opt_off("NTT_S4_ASYNC");
 static const bool g_s4_pack_direct = !opt_off("NTT_S4_PACK_DIRECT");
 /* Borrow already padded flat operands; 0 retains both host materializations for A/B. */
 static const bool g_s4_flat_direct = !opt_off("NTT_S4_FLAT_DIRECT");
+/* Each chunk already reaches OUT through its blocking/pinned readback. Retain the redundant
+   whole-call copy only for a same-binary control, never as a correctness fallback. */
+static const bool g_s4_final_readback = [] {
+    const char *e=std::getenv("NTT_S4_FINAL_READBACK");
+    return e && *e && std::atoi(e)!=0;
+}();
+struct FinalReadbackStats {
+    unsigned long long calls=0, copied_words=0, avoided_words=0, host_peak_bytes=0;
+    double t_copy=0.0;
+};
+static FinalReadbackStats g_final_readback;
 /* Main-loop G trees only need the root; 0 retains the full heap for same-binary A/B. */
 static const bool g_s4_groot_only = !opt_off("NTT_S4_GROOT_ONLY");
 struct GRootStats {
@@ -3211,16 +3222,6 @@ static void poly_mul_batch_modN(PolyLayer &L,
         L.t_d2h_coeff += now_s() - tw0;
         out_pending = false;
     }
-    /* Gate-only fingerprint of EVERY returned word, including H2D operand/staging mistakes
-       which the digit-based GMP reduction oracle cannot detect independently. */
-    if (g_s4_carry_trace) {
-        for (const auto v : {(unsigned long long)ma, (unsigned long long)mb,
-                            (unsigned long long)nbatch, (unsigned long long)out.size()})
-            g_carry_output_hash = (g_carry_output_hash ^ v) * 1099511628211ull;
-        for (const auto v : out)
-            g_carry_output_hash = (g_carry_output_hash ^ v) * 1099511628211ull;
-        g_carry_output_words += (unsigned long long)out.size();
-    }
     L.ntt_seconds += now_s() - t0;
     /* the deferred chunks' carry verdict, folded back into the caller's account: their counters
        were read ONCE by ntt_batch_carry_finish instead of once per chunk (section 29), so this is
@@ -3285,14 +3286,16 @@ static void poly_mul_batch_modN(PolyLayer &L,
     if (c >= 0)
         for (size_t s = 0; s < nbatch; ++s) L.cost.add(c, ma, mb);
     L.slot_checks += nbatch * nc;
-    /* back to the host: out_slots coefficients per slice, of which the caller keeps nc */
+    /* Shape lookup remains checked even when the redundant readback is disabled. */
     S4Reduce::Shape *S = C.red->find(st.slot_bits, st.slot_words, st.bpw);
     if (!S) {
         std::fprintf(stderr, "%s: FATAL: the reduction shape changed under the multiply\n",
                      NTT_PROBE_NAME);
         std::exit(3);
     }
-    {
+    ++g_final_readback.calls;
+    if (g_s4_final_readback) {
+        const double tfinal=now_s();
         std::vector<unsigned long long> all(need, 0ull);
         CK(cudaMemcpy(all.data(), C.d_out, need * sizeof(unsigned long long),
                       cudaMemcpyDeviceToHost));
@@ -3300,6 +3303,26 @@ static void poly_mul_batch_modN(PolyLayer &L,
             std::copy(all.begin() + (long)(s * out_slots * W),
                       all.begin() + (long)(s * out_slots * W + nc * W),
                       out.begin() + (long)(s * nc * W));
+        const double elapsed=now_s()-tfinal;
+        g_final_readback.copied_words+=need;
+        g_final_readback.host_peak_bytes=std::max(g_final_readback.host_peak_bytes,8ull*need);
+        g_final_readback.t_copy+=elapsed;
+        /* Historical ntt_seconds stopped BEFORE this copy. Include it in the control's call
+           time, while keeping coefficient D2H's existing chunk-only ledger separately labelled. */
+        L.ntt_seconds+=elapsed;
+    } else {
+        g_final_readback.avoided_words+=need;
+    }
+    if (st_out) st_out->t_total_call=now_s()-t0;
+    /* Fingerprint the actual FINAL output, after either path; the old trace preceded the
+       whole-call overwrite and could not detect a fault introduced by that last copy. */
+    if (g_s4_carry_trace) {
+        for (const auto v : {(unsigned long long)ma, (unsigned long long)mb,
+                            (unsigned long long)nbatch, (unsigned long long)out.size()})
+            g_carry_output_hash = (g_carry_output_hash ^ v) * 1099511628211ull;
+        for (const auto v : out)
+            g_carry_output_hash = (g_carry_output_hash ^ v) * 1099511628211ull;
+        g_carry_output_words += (unsigned long long)out.size();
     }
     /* the in-run oracle (the device's coefficients against GMP) runs INSIDE the hook, where
        the digit buffer is still alive */
@@ -6437,7 +6460,7 @@ static void flat_mul_batch(PolyLayer &L, const std::vector<unsigned long long> &
 
 /* Gate-only: exercise real batch multiply with full/short strides and output aliases.
    A separate GMP convolution checks every returned coefficient, independently of NTT digits. */
-static void s4_flat_input_check(PolyLayer &L)
+static void s4_flat_input_check(PolyLayer &L, size_t slices = 3)
 {
     /* Regression for a unit carry crossing many warps/blocks.  Compare every digit,
        not just the final modular remainder, and keep batched slices independent. */
@@ -6477,7 +6500,7 @@ static void s4_flat_input_check(PolyLayer &L)
     mpz_inits(av, bv, sum, term, nullptr);
     const size_t W = L.W;
     for (const auto dims : {std::pair<size_t,size_t>{3,3}, {2,5}, {5,2}, {1,4}, {4,1}}) {
-        const size_t ma = dims.first, mb = dims.second, nb = 3, nc = ma + mb - 1;
+        const size_t ma = dims.first, mb = dims.second, nb = slices, nc = ma + mb - 1;
         std::vector<unsigned long long> a(nb*ma*W), b(nb*mb*W), expected(nb*nc*W);
         auto fill = [&](std::vector<unsigned long long> &v) {
             for (size_t i=0; i<v.size()/W; ++i) {
@@ -6512,8 +6535,8 @@ static void s4_flat_input_check(PolyLayer &L)
         }
     }
     mpz_clears(av, bv, sum, term, nullptr);
-    std::printf("s4_flat_input_check: cases=%llu words=%llu bad=%llu (GMP, short/full strides, A/B/both aliases)\n",
-                cases, words, bad);
+    std::printf("%s: cases=%llu words=%llu bad=%llu (GMP, short/full strides, A/B/both aliases)\n",
+                slices==3 ? "s4_flat_input_check" : "s4_final_readback_check", cases, words, bad);
     if (bad) std::exit(3);
 }
 
@@ -8990,6 +9013,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         L.s4 = &s4;
         const char *flat_test = std::getenv("NTT_S4_FLAT_TEST");
         if (flat_test && std::atoi(flat_test) != 0) s4_flat_input_check(L);
+        const char *readback_test = std::getenv("NTT_S4_FINAL_READBACK_TEST");
+        if (readback_test && std::atoi(readback_test) != 0) s4_flat_input_check(L,5);
     }
     const char *groot_test = std::getenv("NTT_S4_GROOT_TEST");
     if (groot_test && std::atoi(groot_test) != 0) groot_lifetime_check(L);
@@ -9275,6 +9300,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                         g_defer_checked_chunks, g_defer_max_group);
             std::printf("real_batched_carrytrace: enabled=%d words=%llu signature=%016llx\n",
                         (int)g_s4_carry_trace, g_carry_output_words, g_carry_output_hash);
+            std::printf("real_batched_finalreadback: enabled=%d calls=%llu copied_words=%llu "
+                        "avoided_words=%llu host_peak_bytes=%llu t_copy=%.6f "
+                        "(all S4 calls incl F-tree; additional to chunk coeffback)\n",
+                        (int)g_s4_final_readback,g_final_readback.calls,g_final_readback.copied_words,
+                        g_final_readback.avoided_words,g_final_readback.host_peak_bytes,g_final_readback.t_copy);
             if (L.s4) std::printf("real_batched_input: direct_enabled=%d direct_chunks=%llu copied_chunks=%llu "
                         "d2d_bytes=%llu avoided_bytes=%llu packed_peak_bytes=%llu "
                         "temp_peak_bytes=%llu temp_current_bytes=%llu pack_host=%.6f copy_host=%.6f "

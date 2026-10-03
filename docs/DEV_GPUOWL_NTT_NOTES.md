@@ -2573,3 +2573,136 @@ Stage2ExtraThreads=0、UsePrimenet=0、MontgSigma=1、ForceECMStage2Type=1；
 这不是有效 CPU 基线；用户原有 Prime95 实例保持运行。
 仍须验证有效配置与实际执行线程、匹配 N/B1/B2/sigma/曲线类型、排除因子提前终止，
 并建立 GPU 完整 Stage2 wall 与 stage1 分界后才能判断是否超过 Prime95 CPU 单执行线程。
+
+## 42. 2026-10-03：移除 chunk 输出之后的重复整批回传
+
+### 42.1 新发现改变实施顺序
+
+基于 `1540061`，原计划推进 §40.5 的输出窗口。审计发现
+[poly_mul_batch_modN 的 chunk 收尾](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3214)
+已完成所有 slice 的回传、pending event 同步和最终 out 写入；
+但原函数末尾又分配 `nbatch*out_slots*W` 个 host words，将 C.d_out 整批 cudaMemcpy D2H 后再次写 out。
+chunk 与整批路径使用相同 device 结果，第二次复制没有新数学输入。
+它位于旧 ntt_seconds/t_total_call 和 chunk coeffback 账本结束之后；
+旧生产报告的 37.27 GiB D2H 因而只覆盖 chunk 回传，不是全部系数回传流量。
+先隔离这一可直接验证的重复工作，再继续输出窗口；未完成的窗口原型保存在忽略的 build 目录，未混入本轮代码。
+
+### 42.2 同二进制对照及验收范围
+
+[NTT_S4_FINAL_READBACK](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1285)
+默认 0，1 恢复末尾整批回传。
+[末尾分支](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3297)
+保留 shape lookup、错误退出、完整 NTT/carry、exactness、canonical 和 GMP oracle。
+最终全字指纹移到两个分支之后，覆盖实际交给消费者的结果；旧指纹位于整批 overwrite 之前。
+control 的额外 allocation/copy/host scatter 时间现在计入 ntt_seconds，t_total_call 延长到分支完成，
+因此新 ntt_seconds 不可与历史遗漏这次 copy 的数值直接做速度对比。
+新增 finalreadback ledger 单独记录所有 S4 调用（包含 F-tree）的 copied/avoided words、host temporary payload 峰值和 host copy time；
+现有 coeffback 仍是主 batched 区间的 chunk-only 流量，两个统计范围不能直接相加为 full Stage2 流量。
+
+[五 slice 夹具](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6463)
+复用独立 GMP convolution，短/长 operand stride、A/B/both output alias 均验证每个返回字。
+chunk=2 强制 2/2/1；pinned、blocking、host pack、预算拒绝各跑两种开关，
+并核对最终字指纹、oracle jobs/samples/signature/pending 与复制/跳过容量守恒。
+另用冻结 129-bit 多 chunk 输入核对全部 polynomial words、factor 与 hit set。
+
+构建 compile 296.7 s / link 3.5 s，exit=0；
+binary SHA256=`942F4078362F7347E03E1D9BAA32B31AD54E2FA23CD5A151A4F27F9F8A6F8DF2`。
+[build log](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_build.log)、
+[build source](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_20261003/build_source.json)。
+完整门禁 **135 passed / 0 failed**、exit=0：
+[gate log](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_gate.log)。
+[第 24 组](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:1133)
+新增 13 个检查；五 slice 夹具每种路径均 **16 cases / 400 words / bad=0**。
+
+### 42.3 Nsight Systems 核对实际流量
+
+同一最终二进制、64-bit 小型输入加五 slice 夹具，two-mode profiling/export 均 exit=0：
+[profile comparison](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_20261003/profile_comparison.json)。
+whole 路径 36 次 S4 调用，copied_words=1190；chunk 路径 avoided_words=1190。
+CUPTI D2H events **378 → 342 次**、bytes **449136 → 439616**；
+差值 **36 次 / 9520 bytes** 恰好等于软件账本的额外回传。
+H2D 均 **301 次 / 461872 bytes**，kernel 均 **1072 次**；
+最终输出 trace 均 `a0c3c5b63d1bfb1a`，oracle signature 均 `f895df8e56987132`。
+报告没有 missing-event 诊断；提示 UM/P2P 不支持和使用 software instrumentation，
+因此此短采集只证明 memcpy 计数/字节与 kernel 数量，不拿 profiler 时间作生产性能依据。
+nsys 没有把目标 stdout 回显到 capture.log；从 SQLite ProcessStreams/StringIds 提取了目标日志，
+未重启已经成功且完整的采集：
+[whole app log](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_20261003/readback_1.app.log)、
+[chunk app log](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_20261003/readback_0.app.log)。
+
+### 42.4 生产 ABBA
+
+无 profiler，同二进制 whole/chunk/chunk/whole，使用 §41 相同 GPU1/M5261、
+B1=1000、B2=1.94e12、D=1231230、sigma=26、64 MiB batch、6300 MiB arena。
+workspace pool、compact FuseCtx、root-only Gtree、flat/direct pack 开启，division reduction；
+carry-batch=0、oracle-async=0、S5=0，四轮均 exit=0。
+[results.csv](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_ab_20261003/results.csv)、
+[summary.json](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_ab_20261003/summary.json)、
+[source hashes](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_ab_20261003/candidate_source.json)、
+[binary/environment](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_ab_20261003/provenance.json)。
+
+- CLI elapsed **192.11 / 176.44 / 187.65 / 192.79 s**；均值 **192.450 → 182.045 s（−5.41%）**。
+  control 差 0.68 s、candidate 差 11.21 s；两次 candidate 均低于两次 control，但此均值不外推到其他形状。
+- 进程 wall **226.375 / 210.656 / 222.304 / 228.018 s**；均值 **227.1965 → 216.480 s（−4.72%）**。
+  仍不是排除 stage1/setup 并包含全部 F-tree/init/GCD 的独立 Stage2 wall。
+- 817 次 S4 调用（包含 F-tree）每轮额外整批 copied/avoided words 均为 **5178021068**，
+  移除 **38.579 GiB D2H**。这还不包括本轮保持不变的主 batched chunk coeffback **37.27 GiB**。
+  control 额外 copy host time 均值 **11.844189 s**，candidate=0；包含 host allocation、D2H 和 scatter，非纯设备 copy 时间。
+  单次临时 host 请求 payload 峰值 **229478400 bytes（218.85 MiB）→0**。
+- 新口径 ntt_seconds 均值 **97.234 → 86.120 s**，包含 control 新补入的末尾复制；
+  t_reduce **18.5520 → 18.5545 s**，数学归约工作没有减少。
+  Gtrees **62.248 → 57.871 s**、fold **26.300 → 25.736 s**、descent **47.775 → 41.3415 s**；
+  这些是包含 host/等待的阶段 wall，不能解释为 NTT kernel 加速。
+- factor=42089、hit_prime=3511、hits=1、bad_factors=0、coeffs=62385796；
+  oracle **1609 jobs / 95906 samples**、signature=`a7f13ab751eaf263`、pending=0 四轮相同。
+  H2D **38.81 GiB**、pack launches=24462、direct chunks=12738、carry deferred/checked=11516 均相同。
+  arena payload/counters 全部重复：full peak=3629192080 bytes、workspace allocations=21、grows=7、hits=12731、evictions=0。
+- NVML 整卡显存四轮均 **4903 MiB**；private commit peaks **8362 / 8408 / 8405 / 8357 MiB**，
+  均值 **8359.5 → 8406.5 MiB（+47 MiB）**。本轮未证明整体 VRAM/RAM 峰值降低；
+  移除局部临时请求与进程提交峰值不是同一指标，不能将前者直接当作后者的节省。
+
+[约 1 Hz NVML 汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_final_readback_ab_20261003/gpu1_summary.json)：
+主循环 mean load **59.84 → 58.96%**，≤5% samples **42/237 → 45/228（17.72 → 19.74%）**；
+mean SM clock **1782.03 → 1788.42 MHz**、temperature **65.22 → 64.88°C**。
+下降/累积/naming mean load **48.09 → 52.89%**，≤5% **29/119 → 29/108**；
+mean clock **1638.66 → 1603.06 MHz**。阶段边界仍按 wall timers 近似，不是 occupancy。
+额外 D2H 与 host 工作移除已获 CUDA 事件/字节验证，生产两轮均有时间收益，保留 final_readback=0 默认；
+final_readback=1 回退。主循环频繁空闲没有解决，CPU/driver/准备间隙继续需要测量。
+
+### 42.5 Prime95 隔离启动已验证，公平基线仍待匹配
+
+参考源码
+[Prime95.cpp 的 MFC 命令行处理](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/prime95/Prime95.cpp:139)
+在 `_chdir` 与自定义 `-W` 解析之前调用 ProcessShellCommand。
+推测此前分开的 `-W directory` 把目录先交给 MFC file-open，造成初始化前等待；
+实际二进制版本不同，不能仅凭参考源码断言卡住的具体对话框。
+将同一隔离 exe 改为无参数启动，其他配置/依赖不变，立即进入 ECM 并完成：
+[startup_verified.json](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_cpu1_prepare/startup_verified.json)、
+[screen.log](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_cpu1_prepare/screen.log)。
+日志显示单 worker affinity core #1、AVX-512 FFT length 256、Montgomery sigma=26、B1=1000，
+requested B2=5000000 被扩展为实际 **5187000**；D=2730、degree=288、memory=9 MiB，使用 poly Stage2。
+stage1=0.006 s、stage2 init=0.009 s、stage2 complete=0.048 s、GCD=0.000 s。
+这些只是启动 smoke 输出；任务太短，未采样证明实际 OS 线程并发，也未与 GPU 参数/计时边界匹配。
+实例完成后等待，已按独立 exe 路径校验结束；用户原实例继续运行。
+此约 1 CPU-second 的启动验证发生于生产 ABBA 第一轮，作为该轮环境扰动记录；
+后续生产轮不再运行 CPU smoke。下一轮要记录实际线程 CPU 增量、共享 CPU 负载、Prime95 扩展边界，
+并把 GPU 完整 Stage2（含 F-tree/init/GCD）的计时与 CPU 对齐，长期目标仍未完成。
+
+### 42.6 后续候选
+
+1. 删除末尾整批消费者后，C.d_out 不再必须覆盖全部 nbatch；可按最大 outer chunk 保留，
+   复用同一默认 stream 输出区。要求 D2H 和 oracle 快照复制在后续写入前排队，
+   内部 engine chunk 的偏移仍有效；final_readback=1 对照需要整批布局，不能直接缩小而保留旧复制。
+   这应与 first/count 输出窗口的 compact stride 一并定义、验证。
+2. 按 §40.5 接入 Newton ag/gn、qrev 和 q·divisor 的必要窗口，减少 mod-N 与 chunk D2H；
+   输入形状、完整 NTT/carry/exactness 不缩短。CPoly 短实际乘积需要显式补零至 requested prefix，
+   count=0 不能走 cp_from_flat(count-1)；保留全部源槽 canonical 检查与独立 GMP 源索引映射。
+3. 补齐 GPU full Stage2 wall，使用无提前因子的 M4423，与已能启动的隔离 Prime95 poly 相匹配。
+   参考 CPU init 的局部计时在打印时 TIMER_CLR，之后 Stage2 complete 的 print_timer 使用同一局部槽，
+   不能只取 complete 行当全部 Stage2：
+   [ecm.cpp:9335](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9335)、
+   [ecm.cpp:9843](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9843)、
+   [GCD 单独计时](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9876)。
+   更长 CPU 输入需实际验证有效线程、扩展 B2 和计时边界；参考 31.6 源码不能代替实际 31.7 二进制证据。
+4. 再推进 scaled descent 和 sibling 父 spectrum 复用；当前仍是普通 product/remainder tree，
+   与 Prime95 的 MULHI/MULLO/transposed scaled 方法存在算法工作量差距。
