@@ -1,14 +1,14 @@
 # ECM GPU Stage 2：本仓库树形实验与 Prime95 Poly 方法对照
 
-**调查日期：2026-10-02**  
+**调查日期：2026-10-02；实验追记：2026-10-03**
 **范围：ECM Stage 2；主线是本仓库 CUDA 多项式树实验与 Prime95 Poly 方法。** PrMers Gaussian ECM BSGS 仅作补充对照；PrMers 的 P−1 V-trace 不属于椭圆曲线 Stage 2。
-**方法：**静态阅读本仓库、Prime95 与 PrMers 源码，以及 docs/DEV_GPUOWL_NTT_NOTES.md。性能数字只引用开发日志已记录的数据；本次没有重新运行 benchmark。Prime95 ECM 源文件实际位于 .refactor/p95v3106b01.source/ecm.cpp（不是 ecm/ 子目录），多项式乘法实现位于同版本 gwnum/polymult.c/.h。
+**方法：**初始调查静态阅读本仓库、Prime95 与 PrMers 源码，以及 docs/DEV_GPUOWL_NTT_NOTES.md；后续实测与代码变更按 §28 逐轮追记，计时边界和验证以对应开发日志为准。Prime95 ECM 源文件实际位于 .refactor/p95v3106b01.source/ecm.cpp（不是 ecm/ 子目录），多项式乘法实现位于同版本 gwnum/polymult.c/.h。
 
 ## 本次补充摘要（ECM Poly Stage 2 主线）
 
 - Prime95 Poly 的主算法是 F baby-root 积树、按 giant block 构造 G、递推 H ← G·H mod F，再沿 F 树做 Bernstein scaled remainder descent；Prime95 原码流程与当前 CUDA 树版逐段对应，详见 §27.1–27.3。
 - 当前 GPU 路线的主要实现差别是算术/数据通路：Prime95 用 Gwnum 浮点 FFT 与 roundoff guard；本仓库使用精确系数 NTT、设备打包与模 N 归约。树形算法相似不代表底层访存成本相同。
-- 最新生产记录：D=1,231,230 / P=115,200，elapsed 273.55 s；成本驱动 D 搜索与 arena 跨形状驱逐已带来 −31.2%。此后优先检查 gtree 每层固定成本；F 树逐层数据已显示 0.26–0.75 s 的层成本地板，但高 B2 的 G 树仍需单独测量。
+- 初始调查的生产记录：D=1,231,230 / P=115,200，elapsed 273.55 s；成本驱动 D 搜索与 arena 跨形状驱逐已带来 −31.2%。后续打包、存储寿命、重复读回与输出窗口的实测见 §28；不同阶段/二进制的数据不能直接相减归因。
 - S5 分组下降曾实现 1.9× 小形状加速但结果不正确，代码已回退。只有逐层余数和叶值对拍通过，并在生产形状 A/B 证明更快，才应重新启用。
 - PrMers 的直接 BSGS 对照保留在旧章节作为旁支；它不能直接代表 Poly/NTT Stage 2 的访存或性能。
 
@@ -323,3 +323,32 @@ candidate 两轮差 11.21 s，control 差 0.68 s，收益限定于本形状/环�
 requested B2=5e6 实际扩展为 5187000，短任务未验证 OS 线程并发，未与 GPU 匹配边界。
 启动障碍已解决，公平单执行线程 full Stage2 基线仍未建立。下一步将 chunk device 输出寿命与
 first/count 窗口一起定义，再减少必要归约/回传；scaled descent 和 spectrum 驻留仍是更大的算法候选。
+
+### 28.8 2026-10-03：输出窗口已接入，总速度收益未获证明
+
+[NttReduceHook](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3364)
+支持 first/count，完整输入/NTT/carry 保持，输出 slice stride 使用 count。
+[设备归约](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1685)
+先检查全部源槽 canonical 上界，再跳过窗口外 mod-N MAC；
+[独立 GMP snapshot](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2721)
+从原始 first+compact_k 读 digits，按紧凑 stride 读输出。
+Newton inverse、反转商和 q·divisor 的消费者改为请求必要前缀，支持短乘积补零和空输出。
+任意窗口（含非零 first）的接口为后续 scaled descent 中间区间输出作准备。
+目前尚未实现 Prime95 MULHI/MULLO 的 NTT 工作量缩减或共享父 spectrum。
+
+完整门禁 **160/0**，短/83-limb 独立 GMP 窗口、树/下降验证通过。
+Nsight 小夹具减少 **120 次 /26240 bytes D2H**，与 ledger 一致，H2D/kernel count及最终输出相同。
+M5261生产同二进制 ABBA 主计时均值 **173.555→173.905 s（+0.20%）**，
+进程wall **208.092→208.099 s**，未证明总时间改善；归约 **18.6475→16.6910 s（−10.49%）**，
+全部S4输出少 **9.106872 GiB**，局部设备输出容量少 **72.949 MiB**。
+整体NVML峰值仍4913 MiB，GPU频繁空闲未解决；`NTT_S4_OUTPUT_WINDOW=1` 保持可选，默认0。
+同二进制full对照也已使用紧凑主机前缀，不能与上一轮历史数据直接相减归因。
+详情、覆盖边界、原始日志和下一轮数学契约见
+[开发日志 §43](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:2710)。
+
+Prime95单逻辑CPU资格运行已完成：31.7.1.0、M4423、Montgomery sigma26、B1=1000，
+requested B2=1.94e12，实际扩展至 **2011326186870**；D=1531530、degree138240。
+init11.277 s、main107.943 s，报告完整Stage2 **119.220 s**，无因子。
+229个样本均为进程affinity mask8388608（仅逻辑CPU23），主要计算由一个worker承担。
+包含原有Prime95后台竞争，仅一轮资格记录；GPU尚未匹配 N/实际B2与完整Stage2边界，
+**不能将本轮M5261时间与119.220 s当作公平速度比，也未达到长期目标。**

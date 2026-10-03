@@ -3366,19 +3366,31 @@ struct NttReduceHook {
     /* digits: nbatch*N u64 of bpw-bit digits, laid out slice after slice.  Coefficient k of
        slice s occupies exactly the slot_words digits at [s*N + k*slot_words, +slot_words)
        (the packing stride is word-aligned, so a coefficient never straddles a slot boundary),
-       and its value is < 2^slot_bits.  Write nbatch*out_slots coefficients of `w` u64 words
-       each into `out`, slice-major.  Runs on the device, one launch (or a few). */
+       and its value is < 2^slot_bits. Write nbatch*count coefficients of `w` u64 words
+       each into `out`, slice-major. Shape/carry remain full. first/count select source slots
+       and count is the compact output stride; ~0ull means full. count=0 still runs the hook
+       for source diagnostics, with an optional null output pointer. */
     void (*run)(void *ctx, const unsigned long long *digits, unsigned long long n, int bpw,
                 unsigned long long slot_words, unsigned long long slot_bits,
                 unsigned long long out_slots, unsigned long long nbatch,
-                unsigned long long *out, unsigned long long w) = nullptr;
-    unsigned long long *out = nullptr;     /* device buffer: nbatch*out_slots*w words */
+                unsigned long long *out, unsigned long long w,
+                unsigned long long first, unsigned long long count) = nullptr;
+    unsigned long long *out = nullptr;     /* device buffer: nbatch*resolved_count*w words */
     unsigned long long w = 0;              /* u64 words per reduced coefficient */
     /* how many (slice, coefficient) pairs to verify against the host on EVERY batch: a full
        check is cheap for small shapes, and a sample is the honest option for big ones.  0 =
        none (the caller then says so in its own report). */
     unsigned long long sample = 0;
+    unsigned long long first = 0, count = ~0ull;
 };
+
+static bool ntt_hook_window(const NttReduceHook *hook, unsigned long long slots,
+                             unsigned long long &count)
+{
+    count=hook && hook->count!=~0ull ? hook->count : slots;
+    const auto first=hook ? hook->first : 0ull;
+    return first<=slots && count<=slots-first;
+}
 
 /* Populate the engine's FINAL scratch after shape planning and buffer lookup. The callback
    queues writes on the same default stream as the passes, including ALL padding digits.
@@ -3417,6 +3429,8 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         if (rc) return rc;
     }
     const unsigned long long N = sh.N, out_slots = sh.out_slots, W = sh.W;
+    unsigned long long hook_count=out_slots;
+    if (!ntt_hook_window(hook,out_slots,hook_count)) return 2;
     const size_t slice_in = (size_t)P * W;               /* u64 words per operand slice */
     std::vector<uint64_t> hA((size_t)(N * nbatch), 0), hB((size_t)(N * nbatch), 0);
     unsigned long long maxdigit = 0;
@@ -3490,9 +3504,10 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         r.t_check_kernel += rr.t_check_kernel;
         r.t_check_d2h += rr.t_check_d2h;
         if (nchunk == 1) r.digits = rr.digits;
-        if (hook && hook->run && hook->out && hook->w) {
+        if (hook && hook->run && hook->w && (hook->out || hook_count==0)) {
             hook->run(hook->ctx, rr.digits, N, sh.bpw, sh.slot_words, sh.slot_bits, out_slots,
-                      m, hook->out + (size_t)(s0 * out_slots) * hook->w, hook->w);
+                      m, hook->out ? hook->out + (size_t)(s0 * hook_count) * hook->w : nullptr,
+                      hook->w, hook->first, hook_count);
             CK(cudaGetLastError());
             CK(cudaDeviceSynchronize());
         }
@@ -3588,6 +3603,8 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         if (rc) return rc;
     }
     const unsigned long long N = sh.N, out_slots = sh.out_slots, W = sh.W;
+    unsigned long long hook_count=out_slots;
+    if (!ntt_hook_window(hook,out_slots,hook_count)) return 2;
     std::vector<unsigned long long> alias_a, alias_b;
     auto preserve=[&](const unsigned long long *p, std::vector<unsigned long long> &saved) {
         size_t remaining=0;
@@ -3679,9 +3696,10 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         r.t_check += rr.t_check;
         r.t_check_reset += rr.t_check_reset;
         if (nchunk == 1) r.digits = rr.digits;
-        if (hook && hook->run && hook->out && hook->w) {
+        if (hook && hook->run && hook->w && (hook->out || hook_count==0)) {
             hook->run(hook->ctx, rr.digits, N, sh.bpw, sh.slot_words, sh.slot_bits, out_slots,
-                      m, hook->out + (size_t)(s0 * out_slots) * hook->w, hook->w);
+                      m, hook->out ? hook->out + (size_t)(s0 * hook_count) * hook->w : nullptr,
+                      hook->w, hook->first, hook_count);
             CK(cudaGetLastError());
         }
     }

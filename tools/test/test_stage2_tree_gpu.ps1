@@ -1195,6 +1195,75 @@ try {
     foreach($key in $readbackSaved.Keys){[Environment]::SetEnvironmentVariable($key,$readbackSaved[$key],'Process')}
 }
 
+# [25] Compact output windows preserve the full transform and source diagnostics.
+$windowOverrides=$readbackOverrides.Clone()
+$windowOverrides.NTT_S4_FINAL_READBACK_TEST='0'
+$windowOverrides.NTT_S4_OUTPUT_WINDOW='0'
+$windowOverrides.NTT_S4_OUTPUT_WINDOW_TEST='1'
+$windowSaved=@{}
+foreach($key in $windowOverrides.Keys){$windowSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')}
+try {
+    foreach($key in $windowOverrides.Keys){[Environment]::SetEnvironmentVariable($key,$windowOverrides[$key],'Process')}
+    foreach($mode in @('pinned','blocking','host','refused','keyed','copy','whole_readback','oldtail')) {
+        $env:NTT_S4_ASYNC=$(if($mode -eq 'blocking'){'0'}else{'1'})
+        $env:NTT_S4_HOSTPACK=$(if($mode -eq 'host'){'1'}else{'0'})
+        $env:NTT_S4_ORACLE_ASYNC=$(if($mode -eq 'pinned'){'1'}else{'0'})
+        $env:NTT_ARENA_CAP_KB=$(if($mode -eq 'refused'){'1'}else{''})
+        $env:NTT_ARENA_WORKSPACE_POOL=$(if($mode -eq 'keyed'){'0'}else{'1'})
+        $env:NTT_S4_PACK_DIRECT=$(if($mode -eq 'copy'){'0'}else{'1'})
+        $env:NTT_S4_FINAL_READBACK=$(if($mode -eq 'whole_readback'){'1'}else{'0'})
+        $env:NTT_S4_OLDTAIL=$(if($mode -eq 'oldtail'){'1'}else{'0'})
+        $outputs=@();$codes=@();$ledgers=@()
+        foreach($enabled in @('0','1')) {
+            $env:NTT_S4_OUTPUT_WINDOW=$enabled
+            $outputs+=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096);$codes+=$LASTEXITCODE
+            $ledger=@{}
+            $line=[regex]::Match($outputs[-1],'(?m)^real_batched_outputwindow:.*').Value
+            foreach($field in @('enabled','calls','source_coeffs','reduced_coeffs','returned_coeffs','skipped_coeffs','d2h_words','device_peak_bytes','pinned_peak_bytes')) {
+                $m=[regex]::Match($line,"(?:^| )$field=(\d+)")
+                if($m.Success){$ledger[$field]=[UInt64]$m.Groups[1].Value}
+            }
+            $ledgers+=$ledger
+        }
+        Check "output window/$mode`: independent GMP checks arbitrary/empty windows and 2/2/1 strides/aliases" `
+            (@($codes|Where-Object{$_ -ne 0}).Count -eq 0 -and
+             @($outputs|Where-Object{$_ -notmatch 's4_output_window_check: cases=139 words=[1-9]\d* canonical_cases=2 bad=0' -or
+                 $_ -cmatch 'FATAL|CRASH|MISMATCH|gmp_bad=[1-9]|gmp_check_bad=[1-9]'}).Count -eq 0) "exit=$($codes -join '/')"
+        $tr0=[regex]::Match($outputs[0],$carryTracePattern);$tr1=[regex]::Match($outputs[1],$carryTracePattern)
+        $oracleOk=$true
+        foreach($output in $outputs) {
+            $m=[regex]::Match($output,$oraclePattern)
+            $oracleOk=$oracleOk -and $m.Success -and [UInt64]$m.Groups[2].Value -gt 0 -and
+                $m.Groups[2].Value -eq $m.Groups[4].Value -and [UInt64]$m.Groups[5].Value -gt 0 -and $m.Groups[6].Value -eq '0'
+        }
+        Check "output window/$mode`: ALL returned words agree and both modes drain nonempty GMP coverage" `
+            ($tr0.Success -and $tr1.Success -and $tr0.Value -eq $tr1.Value -and $oracleOk) ''
+        $a=$ledgers[0];$b=$ledgers[1]
+        Check "output window/$mode`: full source retained while reduction and D2H shrink to requested count" `
+            ($a.Count -eq 9 -and $b.Count -eq 9 -and $a.enabled -eq 0 -and $b.enabled -eq 1 -and
+             $a.calls -gt 0 -and $a.calls -eq $b.calls -and $a.source_coeffs -eq $b.source_coeffs -and
+             $a.returned_coeffs -eq $b.returned_coeffs -and $a.reduced_coeffs -eq $a.source_coeffs -and
+             $a.skipped_coeffs -eq 0 -and $b.reduced_coeffs -eq $b.returned_coeffs -and
+             $b.source_coeffs -eq $b.reduced_coeffs+$b.skipped_coeffs -and $b.skipped_coeffs -gt 0 -and
+             $b.d2h_words -lt $a.d2h_words) ''
+    }
+    $env:NTT_S4_OUTPUT_WINDOW_TEST='0';$env:NTT_S4_ASYNC='1';$env:NTT_S4_HOSTPACK='0'
+    $env:NTT_ARENA_CAP_KB='';$env:NTT_ARENA_WORKSPACE_POOL='1';$env:NTT_S4_PACK_DIRECT='1'
+    $env:NTT_S4_FINAL_READBACK='0';$env:NTT_S4_OLDTAIL='0';$env:NTT_S4_CHUNK_MAX='64'
+    $outputs=@();$codes=@()
+    foreach($enabled in @('0','1')) {
+        $env:NTT_S4_OUTPUT_WINDOW=$enabled
+        $outputs+=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096);$codes+=$LASTEXITCODE
+    }
+    Check 'output window: frozen multi-chunk factor/hit set and EVERY returned word agree' `
+        (@($codes|Where-Object{$_ -ne 0}).Count -eq 0 -and
+         @($outputs|Where-Object{[regex]::Match($_,$resultPattern).Value -ne $resultOld}).Count -eq 0 -and
+         [regex]::Match($outputs[0],$carryTracePattern).Success -and
+         [regex]::Match($outputs[0],$carryTracePattern).Value -eq [regex]::Match($outputs[1],$carryTracePattern).Value) ''
+} finally {
+    foreach($key in $windowSaved.Keys){[Environment]::SetEnvironmentVariable($key,$windowSaved[$key],'Process')}
+}
+
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }
 exit 0

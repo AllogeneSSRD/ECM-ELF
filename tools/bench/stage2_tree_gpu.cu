@@ -1280,6 +1280,16 @@ static const bool g_s4_async = !opt_off("NTT_S4_ASYNC");
 static const bool g_s4_pack_direct = !opt_off("NTT_S4_PACK_DIRECT");
 /* Borrow already padded flat operands; 0 retains both host materializations for A/B. */
 static const bool g_s4_flat_direct = !opt_off("NTT_S4_FLAT_DIRECT");
+/* Opt-in until the full numerical/production gate validates the compact contract. */
+static const bool g_s4_output_window = [] {
+    const char *e=std::getenv("NTT_S4_OUTPUT_WINDOW");
+    return e && *e && std::atoi(e)!=0;
+}();
+struct OutputWindowStats {
+    unsigned long long calls=0, source_coeffs=0, reduced_coeffs=0, returned_coeffs=0;
+    unsigned long long skipped_coeffs=0, d2h_words=0, device_peak_bytes=0, pinned_peak_bytes=0;
+};
+static OutputWindowStats g_output_window;
 /* Each chunk already reaches OUT through its blocking/pinned readback. Retain the redundant
    whole-call copy only for a same-binary control, never as a correctness fallback. */
 static const bool g_s4_final_readback = [] {
@@ -1680,7 +1690,8 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
                                  unsigned long long w, unsigned long long *out,
                                  unsigned long long slot_bits, unsigned long long *bad,
                                  unsigned long long *s4_dbg, int tail_mont,
-                                 int div_shift, unsigned long long div_recip)
+                                 int div_shift, unsigned long long div_recip,
+                                 unsigned long long first, unsigned long long count)
 {
     const unsigned long long total = out_slots * nbatch;
     const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
@@ -1688,6 +1699,12 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
     const unsigned long long s = gid / out_slots;
     const unsigned long long k = gid - s * out_slots;
     const unsigned long long *d = digits + s * n + k * slot_words;
+    /* SAME source-slot bound assertion, even for omitted coefficients. No NTT truncation.
+       Separate the source index from compact output slice*count+(k-first). */
+    const unsigned long long top_bits=slot_bits-(slot_words-1)*(unsigned long long)bpw;
+    if(top_bits<64 && bad && (d[slot_words-1]>>top_bits)!=0) atomicAdd(bad,1ull);
+    if(k<first || k-first>=count) return;
+    const unsigned long long out_gid=s*count+k-first;
 
     /* ---- (1) bpw-bit digits -> base-2^64 limbs, least significant first.  acc holds the
        bits not yet flushed; v << nacc may spill past bit 63, and the spill is recovered as
@@ -1711,15 +1728,6 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
         }
         if (nacc > 0) t[limb++] = acc;
     }
-    /* the value-assertion the reduction bound needs: the digits of THIS slot above slot_bits
-       must be zero (that is what makes the coefficient < 2^slot_bits).  Checked here, where the
-       digits are already in registers, so the precondition costs no extra launch. */
-    {
-        const unsigned long long top_bits = slot_bits -
-                                            (slot_words - 1) * (unsigned long long)bpw;
-        if (top_bits < 64 && bad != nullptr && (d[slot_words - 1] >> top_bits) != 0)
-            atomicAdd(bad, 1ull);
-    }
     unsigned long long u[NW];
     if (!tail_mont && s4_dbg == nullptr) {
         /* Replace BOTH the L-step elimination and its domain-restoration multiply.  The
@@ -1728,7 +1736,7 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
         const int rc = s4_div_rem<NW>(t, limbs, g_div_dns, nw, div_shift, div_recip, u);
         if (rc < 0 && bad != nullptr) atomicAdd(bad, 1ull);
         for (unsigned long long i = 0; i < w; ++i)
-            out[gid * w + i] = (i < (unsigned long long)nw) ? u[i] : 0ull;
+            out[out_gid * w + i] = (i < (unsigned long long)nw) ? u[i] : 0ull;
         return;
     }
     /* ---- (2) old A/B path: L Montgomery elimination steps ---------------------------- */
@@ -1803,7 +1811,7 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
         s4_dbg[gid * 24 + 22] = ninv;
     }
     for (unsigned long long i = 0; i < w; ++i)
-        out[gid * w + i] = (i < (unsigned long long)nw) ? u[i] : 0ull;
+        out[out_gid * w + i] = (i < (unsigned long long)nw) ? u[i] : 0ull;
 }
 
 /* (the slot-canonical check is folded into s4_reduce_kernel above: the digits are in registers
@@ -1829,13 +1837,14 @@ static void s4_launch_reduce(int nw, int L, unsigned long long nbatch,
                              unsigned long long ninv, const unsigned long long *dy,
                              unsigned long long w, unsigned long long *dout,
                              unsigned long long slot_bits, unsigned long long *dbad,
-                             unsigned long long *s4_dbg = nullptr)
+                             unsigned long long *s4_dbg = nullptr,
+                             unsigned long long first = 0, unsigned long long count = ~0ull)
 {
     const unsigned int th = 128;
     const unsigned int bl = (unsigned int)((total + th - 1) / th);
     s4_reduce_kernel<NW><<<bl, th>>>(ddig, n, bpw, slot_words, out_slots, nbatch, dn, ninv, nw,
                                      L, dy, w, dout, slot_bits, dbad, s4_dbg, s4_tail_mont_mode(),
-                                     g_div_shift, g_div_recip);
+                                     g_div_shift, g_div_recip, first, count==~0ull ? out_slots : count);
 }
 
 /* ---- THE 2-BY-1 DIVISION PRIMITIVE (objective 4, docs/DEV_GPUOWL_NTT_NOTES.md section 31) -----
@@ -2165,12 +2174,14 @@ static S4Reduce::Shape *s4_shape_init(S4Reduce &R, unsigned long long P,
 static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned long long *ddig,
                              unsigned long long n, unsigned long long out_slots,
                              unsigned long long nbatch, const unsigned long long *d_out,
-                             long long sample_limit);
+                             long long sample_limit, unsigned long long first = 0,
+                             unsigned long long count = ~0ull);
 
 static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned long long n,
                            int bpw, unsigned long long slot_words, unsigned long long slot_bits,
                            unsigned long long out_slots, unsigned long long nbatch,
-                           unsigned long long *out, unsigned long long w)
+                           unsigned long long *out, unsigned long long w,
+                           unsigned long long first, unsigned long long count)
 {
     S4Reduce &R = *(S4Reduce *)ctx;
     S4Reduce::Shape *S = R.find(slot_bits, slot_words, bpw);
@@ -2214,7 +2225,7 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
     CK(cudaEventCreate(&S->dt_ev[dts][1]));
     CK(cudaEventRecord(S->dt_ev[dts][0]));
     S2G_DISPATCH(R.nw, s4_launch_reduce, (int)R.nw, S->L, nbatch, out_slots, total, digits, n,
-                 bpw, slot_words, R.dn, R.ninv, S->dy, w, out, slot_bits, R.dbad);
+                 bpw, slot_words, R.dn, R.ninv, S->dy, w, out, slot_bits, R.dbad, nullptr, first, count);
     CK(cudaGetLastError());
     CK(cudaEventRecord(S->dt_ev[dts][1]));
     S->dt_used[dts] = true;
@@ -2245,8 +2256,8 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
     ++R.reduce_calls;
     S->t_hookd2h += now_s() - th0;
     ++S->calls;
-    S->coeffs += total;
-    R.coeffs_total += total;
+    S->coeffs += count*nbatch;
+    R.coeffs_total += count*nbatch;
     /* This reduction is already queued: comparing an OLD snapshot can overlap it. */
     const double tr0 = now_s();
     s4_oracle_reap(R, false);
@@ -2258,7 +2269,7 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
        digits GMP sees are the ones the transform and the carry just produced. */
     if (g_s4_sample_limit > 0 && (S->calls <= 1 || (S->calls % g_s4_check_every) == 0)) {
         const double ts0 = now_s();
-        s4_check_reduced(R, S, digits, n, out_slots, nbatch, out, g_s4_sample_limit);
+        s4_check_reduced(R, S, digits, n, out_slots, nbatch, out, g_s4_sample_limit, first, count);
         S->t_hooksample += now_s() - ts0;
     }
 }
@@ -2710,33 +2721,35 @@ static void s4_oracle_block_ready()
 static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned long long *ddig,
                              unsigned long long n, unsigned long long out_slots,
                              unsigned long long nbatch, const unsigned long long *d_out,
-                             long long sample_limit)
+                             long long sample_limit, unsigned long long first,
+                             unsigned long long count)
 {
-    const unsigned long long total = out_slots * nbatch;
+    if(count==~0ull) count=out_slots;
+    const unsigned long long total = count * nbatch;
     if (!total || sample_limit == 0) return;
     const double tc0 = now_s();
     const unsigned long long lim = (unsigned long long)sample_limit;
     const bool small_batch = (nbatch <= 4 && total <= lim);
     std::vector<std::array<unsigned long long, 3>> runs;
     if (small_batch) {
-        for (unsigned long long s = 0; s < nbatch; ++s) runs.push_back({s, 0ull, out_slots});
+        for (unsigned long long s = 0; s < nbatch; ++s) runs.push_back({s, 0ull, count});
         ++S->full_checks;
     } else {
-        const unsigned long long cnt = std::min(lim, out_slots);
+        const unsigned long long cnt = std::min(lim, count);
         uint64_t seed = 0x9e3779b97f4a7c15ull * (S->calls + 1) + total;
         seed = seed * 6364136223846793005ull + 1442695040888963407ull;
         const unsigned long long s = (seed >> 11) % nbatch;
         seed = seed * 6364136223846793005ull + 1442695040888963407ull;
-        const unsigned long long room = (out_slots > cnt) ? (out_slots - cnt + 1) : 1;
+        const unsigned long long room = (count > cnt) ? (count - cnt + 1) : 1;
         runs.push_back({s, (seed >> 11) % room, cnt});
     }
     if (!g_s4_oracle_async) s4_oracle_block_ready();
     for (const auto &rr : runs) {
-        const unsigned long long s = rr[0], k0 = rr[1], cnt = rr[2];
+        const unsigned long long s = rr[0], k0 = rr[1], source_k=first+k0, cnt = rr[2];
         const size_t ndig = (size_t)(cnt * S->slot_words), nred = (size_t)(cnt * R.w);
         ++g_oracle.selected;
         for (const auto v : {S->P, S->slot_bits, S->slot_words,
-                            (unsigned long long)S->bpw, S->calls, s, k0, cnt})
+                            (unsigned long long)S->bpw, S->calls, s, source_k, cnt})
             g_oracle.signature = (g_oracle.signature ^ v) * 1099511628211ull;
         bool captured = false;
         if (g_s4_oracle_async) {
@@ -2754,12 +2767,12 @@ static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned lon
             g_oracle.pinned_peak = std::max(g_oracle.pinned_peak, bytes);
             if (dig && red) {
                 if (!slot.ready) CK(cudaEventCreateWithFlags(&slot.ready, cudaEventDisableTiming));
-                slot.shape = S; slot.slice = s; slot.k0 = k0; slot.count = cnt;
+                slot.shape = S; slot.slice = s; slot.k0 = source_k; slot.count = cnt;
                 slot.out_slots = out_slots;
                 const double t0 = now_s();
-                CK(cudaMemcpyAsync(dig, ddig + s * n + k0 * S->slot_words,
+                CK(cudaMemcpyAsync(dig, ddig + s * n + source_k * S->slot_words,
                                    ndig * 8, cudaMemcpyDeviceToHost));
-                CK(cudaMemcpyAsync(red, d_out + (s * out_slots + k0) * R.w,
+                CK(cudaMemcpyAsync(red, d_out + (s * count + k0) * R.w,
                                    nred * 8, cudaMemcpyDeviceToHost));
                 CK(cudaEventRecord(slot.ready));
                 g_oracle.t_copy += now_s() - t0;
@@ -2770,12 +2783,12 @@ static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned lon
         if (!captured) {
             std::vector<unsigned long long> dig(ndig), red(nred);
             const double t0 = now_s();
-            CK(cudaMemcpy(dig.data(), ddig + s * n + k0 * S->slot_words,
+            CK(cudaMemcpy(dig.data(), ddig + s * n + source_k * S->slot_words,
                           ndig * 8, cudaMemcpyDeviceToHost));
-            CK(cudaMemcpy(red.data(), d_out + (s * out_slots + k0) * R.w,
+            CK(cudaMemcpy(red.data(), d_out + (s * count + k0) * R.w,
                           nred * 8, cudaMemcpyDeviceToHost));
             g_oracle.t_copy += now_s() - t0;
-            s4_compare_snapshot(R, S, s, k0, cnt, out_slots, dig.data(), red.data());
+            s4_compare_snapshot(R, S, s, source_k, cnt, out_slots, dig.data(), red.data());
         }
     }
     g_oracle.t_capture += now_s() - tc0;
@@ -2878,15 +2891,25 @@ static void poly_mul_batch_modN(PolyLayer &L,
                                 const unsigned long long *wa, const unsigned long long *wb,
                                 size_t ma, size_t mb, size_t nbatch,
                                 std::vector<unsigned long long> &out, int cat = -1,
-                                NttMulStats *st_out = nullptr)
+                                NttMulStats *st_out = nullptr,
+                                size_t first = 0, size_t count = (size_t)-1)
 {
     const size_t W = L.W;
     const size_t P = (ma > mb) ? ma : mb;
-    const size_t nc = ma + mb - 1;
+    const size_t full_nc=ma+mb-1;
+    if(count==(size_t)-1) count=full_nc;
+    if(first>full_nc || count>full_nc-first) {
+        std::fprintf(stderr,"%s: FATAL: invalid polynomial output window\n",NTT_PROBE_NAME);
+        std::exit(3);
+    }
+    const size_t nc=count;
     out.assign(nbatch * nc * W, 0ull);
     if (nbatch == 0) return;
     S4Ctx &C = *L.s4;
-    const unsigned long long out_slots = 2 * P - 1;
+    const unsigned long long out_slots = 2 * P - 1; // FULL shape and canonical assertion
+    const unsigned long long output_slots=g_s4_output_window ? count : out_slots;
+    const unsigned long long output_first=g_s4_output_window ? first : 0;
+    const size_t host_first=g_s4_output_window ? 0 : first;
     /* the per-shape reduction (L, the domain constant and the GMP selftest) must exist BEFORE
        the hook fires, and the hook fires inside the multiply -- so the shape is queried here,
        without touching the device.  Never inferred: ntt_shape_query runs the SAME choose_cfg
@@ -2915,17 +2938,19 @@ static void poly_mul_batch_modN(PolyLayer &L,
             C.selftested = true;
         }
     }
-    const size_t need = nbatch * out_slots * W;
-    if (need > C.d_out_cap) {
+    const size_t need = nbatch * output_slots * W;
+    const size_t allocation_need=std::max((size_t)1,need); // empty window still checks full source
+    if (allocation_need > C.d_out_cap) {
         if (C.d_out) { cudaFree(C.d_out); C.d_out = nullptr; C.d_out_cap = 0; }
-        CK(cudaMalloc(&C.d_out, need * sizeof(unsigned long long)));
-        C.d_out_cap = need;
+        CK(cudaMalloc(&C.d_out, allocation_need * sizeof(unsigned long long)));
+        C.d_out_cap = allocation_need;
     }
     NttReduceHook hook;
     hook.ctx = C.red;
     hook.run = s4_reduce_hook;
     hook.out = C.d_out;
     hook.w = (unsigned long long)W;
+    hook.first=output_first; hook.count=output_slots;
 
     std::vector<unsigned long long> slots;
     NttMulStats st{};
@@ -2999,7 +3024,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
     /* the doubly-buffered PINNED output staging (section 30): reserved once per call at the largest
        chunk this call can use, so every chunk of the call follows the same path (mixing a blocking
        chunk with the deferred-consumption scheme would break the pending bookkeeping) */
-    const size_t out_words_max = (size_t)(chunk * out_slots * W);
+    const size_t out_words_max = (size_t)(chunk * output_slots * W);
     if (!g_pin_ev[0]) CK(cudaEventCreateWithFlags(&g_pin_ev[0], cudaEventDisableTiming));
     if (!g_pin_ev[1]) CK(cudaEventCreateWithFlags(&g_pin_ev[1], cudaEventDisableTiming));
     const bool async_out = (g_s4_async &&
@@ -3044,7 +3069,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
         if (carry_pending && (!g_s4_carry_batch || !defer_this || carry_pending_m != m))
             finish_carry();
         NttReduceHook h2 = hook;
-        if (hook.out) h2.out = hook.out + (size_t)(s0 * out_slots) * W;
+        if (hook.out) h2.out = hook.out + (size_t)(s0 * output_slots) * W;
         int r1 = 0;
         if (host_pack) {
             r1 = ntt_poly_mul_batch_host(P, (int)L.S, L.device, m,
@@ -3157,7 +3182,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
         g_carry_chunk_readback += st.t_check_d2h;
         carry_bits_acc = std::max(carry_bits_acc, st.carry_max_bits);
         /* the reduced coefficients of this chunk, back to the host -- AND THIS TRANSFER IS THE
-           POINT OF OBJECTIVE 4 (section 32): it is `m * out_slots * W` words, i.e. the WHOLE
+           POINT OF OBJECTIVE 4 (section 32): it is `m * output_slots * W` words, i.e. the WHOLE
            product of every slice at full slot width, and it is neither inside the probe's timers
            (they belong to the host implementation) nor inside the tree's own phases.  It is
            therefore timed and counted HERE, so "the 111 us per call that nobody measured" can be
@@ -3168,17 +3193,17 @@ static void poly_mul_batch_modN(PolyLayer &L,
            the device is genuinely behind, which is the difference between "the transfer is
            overlapped" and "the pipeline is drained per chunk".  `out_pending` marks the one chunk
            that has been copied but not yet written into `out`; the end of the call drains it. */
-        const size_t out_words = (size_t)(m * out_slots * W);
+        const size_t out_words = (size_t)(m * output_slots * W);
         if (!async_out) {
             /* NO PINNED MEMORY: the original blocking readback, so a failed pinning costs speed
                and never correctness (and never a half-filled `out`) */
             const double td0 = now_s();
             std::vector<unsigned long long> all(out_words, 0ull);
-            CK(cudaMemcpy(all.data(), h2.out, out_words * sizeof(unsigned long long),
-                          cudaMemcpyDeviceToHost));
+            if(out_words) CK(cudaMemcpy(all.data(), h2.out, out_words * sizeof(unsigned long long),
+                                       cudaMemcpyDeviceToHost));
             for (unsigned long long s = 0; s < m; ++s)
-                std::copy(all.begin() + (long)(s * out_slots * W),
-                          all.begin() + (long)(s * out_slots * W + nc * W),
+                std::copy(all.begin() + (long)((s * output_slots + host_first) * W),
+                          all.begin() + (long)((s * output_slots + host_first + nc) * W),
                           out.begin() + (long)((s0 + s) * nc * W));
             L.t_d2h_coeff += now_s() - td0;
             L.d2h_coeff_words += (unsigned long long)out_words;
@@ -3186,8 +3211,8 @@ static void poly_mul_batch_modN(PolyLayer &L,
         }
         unsigned long long *po = g_pin_out[(size_t)(ci & 1)];
         const double td0 = now_s();
-        CK(cudaMemcpyAsync(po, h2.out, out_words * sizeof(unsigned long long),
-                           cudaMemcpyDeviceToHost));
+        if(out_words) CK(cudaMemcpyAsync(po, h2.out, out_words * sizeof(unsigned long long),
+                                        cudaMemcpyDeviceToHost));
         CK(cudaEventRecord(g_pin_ev[ci & 1]));
         ++g_pin_out_used;
         L.t_d2h_coeff += now_s() - td0;
@@ -3199,8 +3224,8 @@ static void poly_mul_batch_modN(PolyLayer &L,
             CK(cudaEventSynchronize(g_pin_ev[(ci - 1) & 1]));
             const unsigned long long *prev = g_pin_out[(ci - 1) & 1];
             for (unsigned long long s = 0; s < pend_m; ++s)
-                std::copy(prev + (size_t)s * out_slots * W,
-                          prev + (size_t)s * out_slots * W + nc * W,
+                std::copy(prev + ((size_t)s * output_slots + host_first) * W,
+                          prev + ((size_t)s * output_slots + host_first) * W + nc * W,
                           out.begin() + (long)((pend_s0 + s) * nc * W));
             L.t_d2h_coeff += now_s() - tw0;
         }
@@ -3216,8 +3241,8 @@ static void poly_mul_batch_modN(PolyLayer &L,
         CK(cudaEventSynchronize(g_pin_ev[(ci - 1) & 1]));
         const unsigned long long *prev = g_pin_out[(ci - 1) & 1];
         for (unsigned long long s = 0; s < pend_m; ++s)
-            std::copy(prev + (size_t)s * out_slots * W,
-                      prev + (size_t)s * out_slots * W + nc * W,
+            std::copy(prev + ((size_t)s * output_slots + host_first) * W,
+                      prev + ((size_t)s * output_slots + host_first) * W + nc * W,
                       out.begin() + (long)((pend_s0 + s) * nc * W));
         L.t_d2h_coeff += now_s() - tw0;
         out_pending = false;
@@ -3293,15 +3318,23 @@ static void poly_mul_batch_modN(PolyLayer &L,
                      NTT_PROBE_NAME);
         std::exit(3);
     }
+    ++g_output_window.calls;
+    g_output_window.source_coeffs+=nbatch*out_slots;
+    g_output_window.reduced_coeffs+=nbatch*output_slots;
+    g_output_window.returned_coeffs+=nbatch*count;
+    g_output_window.skipped_coeffs+=nbatch*(out_slots-output_slots);
+    g_output_window.d2h_words+=nbatch*output_slots*W;
+    g_output_window.device_peak_bytes=std::max(g_output_window.device_peak_bytes,8ull*C.d_out_cap);
+    g_output_window.pinned_peak_bytes=std::max(g_output_window.pinned_peak_bytes,8ull*(g_pin_out_cap[0]+g_pin_out_cap[1]));
     ++g_final_readback.calls;
     if (g_s4_final_readback) {
         const double tfinal=now_s();
         std::vector<unsigned long long> all(need, 0ull);
-        CK(cudaMemcpy(all.data(), C.d_out, need * sizeof(unsigned long long),
-                      cudaMemcpyDeviceToHost));
+        if(need) CK(cudaMemcpy(all.data(), C.d_out, need * sizeof(unsigned long long),
+                               cudaMemcpyDeviceToHost));
         for (size_t s = 0; s < nbatch; ++s)
-            std::copy(all.begin() + (long)(s * out_slots * W),
-                      all.begin() + (long)(s * out_slots * W + nc * W),
+            std::copy(all.begin() + (long)((s * output_slots + host_first) * W),
+                      all.begin() + (long)((s * output_slots + host_first + nc) * W),
                       out.begin() + (long)(s * nc * W));
         const double elapsed=now_s()-tfinal;
         g_final_readback.copied_words+=need;
@@ -3750,9 +3783,12 @@ static CPoly cp_addsub(const CPoly &a, const CPoly &b, PolyLayer &L, bool sub)
 /* a*b mod N through the SAME GPU multiply the F tree uses.  With slice S4's batched multiply
    in place (L.s4) this is the batched entry point with nbatch == 1, i.e. the same kernels AND
    the device-side mod-N reduction -- the tree has one multiply path, never two. */
-static CPoly cp_mul(const CPoly &a, const CPoly &b, PolyLayer &L)
+static CPoly cp_mul(const CPoly &a, const CPoly &b, PolyLayer &L, size_t keep = (size_t)-1)
 {
     const size_t W = L.W;
+    if(a.empty() || b.empty()) return {};
+    const size_t nc=a.size()+b.size()-1;
+    const size_t wanted=keep==(size_t)-1 ? nc : std::min(keep,nc);
     if (L.s4) {
         /* the batched entry point takes nbatch slices of P*W words, ZERO-PADDED: an operand
            shorter than P must not be handed over as a tight array, or the packer reads past
@@ -3767,13 +3803,13 @@ static CPoly cp_mul(const CPoly &a, const CPoly &b, PolyLayer &L)
         for (size_t i = 0; i < b.size(); ++i)
             std::copy(b[i].begin(), b[i].end(), fb.begin() + (long)(i * W));
         std::vector<unsigned long long> fc;
-        poly_mul_batch_modN(L, fa.data(), fb.data(), a.size(), b.size(), 1, fc);
-        return cp_from_flat(fc, a.size() + b.size() - 2, W);
+        poly_mul_batch_modN(L, fa.data(), fb.data(), a.size(), b.size(), 1, fc,-1,nullptr,0,wanted);
+        return wanted ? cp_from_flat(fc,wanted-1,W) : CPoly{};
     }
     const std::vector<unsigned long long> fa = cp_to_flat(a, W);
     const std::vector<unsigned long long> fb = cp_to_flat(b, W);
     const std::vector<unsigned long long> fc = poly_mul_modN(L, fa, a.size() - 1, fb, b.size() - 1);
-    return cp_from_flat(fc, a.size() + b.size() - 2, W);
+    return wanted ? cp_from_flat(fc,wanted-1,W) : CPoly{};
 }
 
 /* g = 1/a mod X^k.  The reference's Newton doubling, with its two hard-won details kept:
@@ -3800,7 +3836,7 @@ static CPoly cp_inv_series(const CPoly &a, size_t k, PolyLayer &L)
     while (g.size() < k) {
         const size_t nxt = std::min(2 * g.size(), k);
         const CPoly at(a.begin(), a.begin() + (long)std::min(a.size(), nxt));
-        CPoly ag = cp_mul(at, g, L);
+        CPoly ag = cp_mul(at, g, L, nxt);
         cp_resize(ag, nxt, W);                        /* mod X^nxt */
         CPoly h;
         cp_resize(h, nxt, W);
@@ -3814,7 +3850,7 @@ static CPoly cp_inv_series(const CPoly &a, size_t k, PolyLayer &L)
         }
         h = cp_addsub(h, ag, L, /*sub=*/true);        /* h = 2 - ag */
         cp_resize(h, nxt, W);
-        CPoly gn = cp_mul(g, h, L);
+        CPoly gn = cp_mul(g, h, L, nxt);
         cp_resize(gn, nxt, W);                        /* mod X^nxt */
         g = gn;
     }
@@ -3839,13 +3875,13 @@ static void cp_divmod(CPoly &q, CPoly &r, const CPoly &a, const CPoly &b, PolyLa
     for (size_t i = 0; i < k; ++i) ra[i] = a[(size_t)(da - (long)i)];
     for (size_t i = 0; i <= (size_t)db; ++i) rb[i] = b[(size_t)(db - (long)i)];
     const CPoly rbi = cp_inv_series(rb, k, L);
-    CPoly qrev = cp_mul(ra, rbi, L);
+    CPoly qrev = cp_mul(ra, rbi, L, k);
     cp_resize(qrev, k, W);
     cp_resize(q, k, W);
     for (size_t i = 0; i < k; ++i) q[i] = qrev[k - 1 - i];
     cp_trim(q);
 
-    const CPoly qb = cp_mul(q, b, L);
+    const CPoly qb = cp_mul(q, b, L, (size_t)db);
     if (db == 0) {
         cp_resize(r, 1, W);
     } else {
@@ -4539,8 +4575,13 @@ struct S5RedHook {
 static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned long long n,
                            int bpw, unsigned long long slot_words, unsigned long long slot_bits,
                            unsigned long long out_slots, unsigned long long nbatch,
-                           unsigned long long *out, unsigned long long w)
+                           unsigned long long *out, unsigned long long w,
+                           unsigned long long first, unsigned long long count)
 {
+    if(first!=0 || count!=out_slots) {
+        std::fprintf(stderr,"%s: FATAL: S5 requires full hook output\n",NTT_PROBE_NAME);
+        std::exit(3);
+    }
     S5RedHook &H = *(S5RedHook *)ctx;
     S5Dev &D = *H.D;
     (void)out;
@@ -6394,14 +6435,16 @@ static FlatInputStats g_flat_input;
 
 static void flat_mul_batch(PolyLayer &L, const std::vector<unsigned long long> &A, size_t ma,
                            const std::vector<unsigned long long> &B, size_t mb, size_t nbatch,
-                           std::vector<unsigned long long> &out, int cat)
+                           std::vector<unsigned long long> &out, int cat,
+                           size_t first = 0, size_t count = (size_t)-1)
 {
     const size_t W = L.W;
     const size_t P = (ma > mb) ? ma : mb;           /* the multiply takes ONE shape per launch */
-    const size_t nc = ma + mb - 1;
+    const size_t nc = count==(size_t)-1 ? ma+mb-1 : count;
     /* CONTRACT: every operand holds exactly nbatch slices of MA (MB) coefficients -- so its
        length is nbatch*ma*W (nbatch*mb*W) and its slice stride IS ma (mb) -- and the result is
-       written TIGHTLY at nc = ma+mb-1 coefficients per slice.  All three are load-bearing, and
+       written TIGHTLY at the requested count (default ma+mb-1) coefficients per slice.
+       FIRST addresses the full source convolution. All three are load-bearing, and
        all three were assumed rather than checked until the real shape broke:
          * a SHORTER operand (or one whose real slice is shorter than ma) is read past its end;
          * a LONGER one used to make the result `A.size()/ma * nc` words -- inflating each
@@ -6452,10 +6495,13 @@ static void flat_mul_batch(PolyLayer &L, const std::vector<unsigned long long> &
         8ull * (wa.capacity() + wb.capacity()));
     g_flat_input.control_peak_bytes = std::max(g_flat_input.control_peak_bytes, 16ull * padded_words);
     g_flat_input.t_prepare += now_s() - tp0;
-    poly_mul_batch_modN(L, pa, pb, ma, mb, nbatch, out, cat);
-    /* the multiply hands back nbatch*nc*W; the assign is what makes the TIGHT packing above a
-       guarantee rather than a property of the multiply's implementation */
-    if (out.size() != nbatch * nc * W) out.assign(nbatch * nc * W, 0ull);
+    poly_mul_batch_modN(L, pa, pb, ma, mb, nbatch, out, cat, nullptr, first, count);
+    /* The multiply must return the exact compact stride. A mismatch must never turn into
+       a silently zero-filled polynomial. */
+    if (out.size() != nbatch * nc * W) {
+        std::fprintf(stderr,"%s: FATAL: compact batch output size mismatch\n",NTT_PROBE_NAME);
+        std::exit(3);
+    }
 }
 
 /* Gate-only: exercise real batch multiply with full/short strides and output aliases.
@@ -6538,6 +6584,102 @@ static void s4_flat_input_check(PolyLayer &L, size_t slices = 3)
     std::printf("%s: cases=%llu words=%llu bad=%llu (GMP, short/full strides, A/B/both aliases)\n",
                 slices==3 ? "s4_flat_input_check" : "s4_final_readback_check", cases, words, bad);
     if (bad) std::exit(3);
+}
+
+/* Gate-only arbitrary windows, including nonzero FIRST and empty output. The reference is
+   an independent coefficient convolution from the original inputs, never assembled NTT digits. */
+static void s4_output_window_check(PolyLayer &L)
+{
+    const size_t W=L.W, nb=5;
+    unsigned long long cases=0,words=0,bad=0,canonical_cases=0;
+    mpz_t av,bv,term,sum,inv;
+    mpz_inits(av,bv,term,sum,inv,nullptr);
+    for(const auto dims : {std::pair<size_t,size_t>{3,3},{2,5},{5,2},{1,4},{4,1},{1,1}}) {
+        const size_t ma=dims.first,mb=dims.second,nc=ma+mb-1;
+        std::vector<unsigned long long> a(nb*ma*W),b(nb*mb*W);
+        for(int operand=0;operand<2;++operand) {
+            auto &v=operand ? b : a;
+            for(size_t i=0;i<v.size()/W;++i) {
+                mpz_sub_ui(av,L.N,(unsigned long)(operand ? 2*i+3 : i+1));
+                if(i%7==0) mpz_set_ui(av,0);
+                mpz_mod(av,av,L.N);
+                std::vector<unsigned long long> c(W);mpz_to_words(c,W,av);
+                std::copy(c.begin(),c.end(),v.begin()+(long)(i*W));
+            }
+        }
+        std::vector<std::pair<size_t,size_t>> windows{{0,nc},{0,0},{nc,0},{0,1},{nc-1,1}};
+        if(nc>1) windows.push_back({1,nc-1});
+        if(nc>=4) windows.push_back({2,2});
+        for(int alias=0;alias<4;++alias) {
+            if(alias==3 && ma!=mb) continue;
+            const auto &oracle_b=alias==3 ? a : b;
+            std::vector<unsigned long long> expected(nb*nc*W);
+            for(size_t s=0;s<nb;++s) for(size_t k=0;k<nc;++k) {
+                mpz_set_ui(sum,0);
+                for(size_t i=0;i<ma;++i) if(k>=i && k-i<mb) {
+                    words_to_mpz(av,&a[(s*ma+i)*W],W);
+                    words_to_mpz(bv,&oracle_b[(s*mb+k-i)*W],W);
+                    mpz_mul(term,av,bv);mpz_add(sum,sum,term);
+                }
+                mpz_mod(sum,sum,L.N);
+                std::vector<unsigned long long> c(W);mpz_to_words(c,W,sum);
+                std::copy(c.begin(),c.end(),expected.begin()+(long)((s*nc+k)*W));
+            }
+            for(const auto window : windows) {
+                const size_t first=window.first,count=window.second;
+                auto aa=a,bb=b;
+                std::vector<unsigned long long> separate,want(nb*count*W);
+                auto &out=alias==1 || alias==3 ? aa : alias==2 ? bb : separate;
+                for(size_t s=0;s<nb;++s)
+                    std::copy(expected.begin()+(long)((s*nc+first)*W),
+                              expected.begin()+(long)((s*nc+first+count)*W),want.begin()+(long)(s*count*W));
+                flat_mul_batch(L,aa,ma,alias==3 ? aa : bb,mb,nb,out,-1,first,count);
+                ++cases;words+=out.size();if(out!=want) ++bad;
+            }
+        }
+        std::vector<unsigned long long> empty_a,empty_b,empty_out(7,123);
+        flat_mul_batch(L,empty_a,ma,empty_b,mb,0,empty_out,-1,0,0);
+        ++cases;if(!empty_out.empty()) ++bad;
+    }
+    /* A constant series is shorter than the requested Newton prefix at its first step. */
+    CPoly constant;cp_resize(constant,1,W);constant[0][0]=2;
+    const CPoly inverse=cp_inv_series(constant,5,L);
+    mpz_set_ui(av,2);mpz_invert(inv,av,L.N);
+    std::vector<unsigned long long> ci(W);mpz_to_words(ci,W,inv);
+    ++cases;words+=inverse.size()*W;
+    if(inverse.size()!=5 || inverse[0]!=ci) ++bad;
+    for(size_t i=1;i<inverse.size();++i) if(!cp_coeff_zero(inverse[i])) ++bad;
+
+    /* A bound violation in an OMITTED source slot must still be counted, including count=0.
+       Use a separate diagnostic buffer so this intentional fault cannot poison the real run. */
+    unsigned long long n=0,sb=0,sw=0,ss=0,os=0;int bpw=0;
+    if(!ntt_shape_query(5,(int)L.S,&n,&bpw,&sb,&sw,&ss,&os)) std::exit(3);
+    S4Reduce &R=*L.s4->red;
+    S4Reduce::Shape *S=s4_shape_init(R,5,sb,ss,sw,bpw);
+    const unsigned long long source_slots=9,slices=2,raw_stride=source_slots*sw;
+    std::vector<unsigned long long> digits(slices*raw_stride,0);
+    const auto top=sb-(sw-1)*(unsigned long long)bpw;
+    digits[raw_stride+2*sw+sw-1]=1ull<<top; // source k=2, outside both tested windows
+    unsigned long long *dd=nullptr,*dout=nullptr,*dbad=nullptr;
+    CK(cudaMalloc(&dd,digits.size()*8));CK(cudaMalloc(&dout,(slices*W+2)*8));CK(cudaMalloc(&dbad,8));
+    CK(cudaMemcpy(dd,digits.data(),digits.size()*8,cudaMemcpyHostToDevice));
+    for(const auto window : {std::pair<unsigned long long,unsigned long long>{7,1},{0,0}}) {
+        const unsigned long long first=window.first,count=window.second;
+        std::vector<unsigned long long> canary(slices*W+2,0xfeedfacedeadbeefull),got(canary.size());
+        CK(cudaMemcpy(dout,canary.data(),canary.size()*8,cudaMemcpyHostToDevice));CK(cudaMemset(dbad,0,8));
+        S2G_DISPATCH(R.nw,s4_launch_reduce,(int)R.nw,S->L,slices,source_slots,source_slots*slices,
+                     dd,raw_stride,bpw,sw,R.dn,R.ninv,S->dy,R.w,dout,sb,dbad,nullptr,first,count);
+        unsigned long long hb=0;
+        CK(cudaMemcpy(&hb,dbad,8,cudaMemcpyDeviceToHost));CK(cudaMemcpy(got.data(),dout,got.size()*8,cudaMemcpyDeviceToHost));
+        ++canonical_cases;if(hb!=1) ++bad;
+        for(size_t i=0;i<got.size();++i) if(got[i]!=(i<slices*count*W ? 0ull : canary[i])) ++bad;
+    }
+    CK(cudaFree(dd));CK(cudaFree(dout));CK(cudaFree(dbad));
+    mpz_clears(av,bv,term,sum,inv,nullptr);
+    std::printf("s4_output_window_check: cases=%llu words=%llu canonical_cases=%llu bad=%llu "
+                "(GMP convolution, arbitrary/empty windows, strides, aliases, 5 slices, constant inverse)\n",
+                cases,words,canonical_cases,bad);
+    if(bad) std::exit(3);
 }
 
 /* Independent GMP product oracle, including X+1 and an internal polynomial with constant
@@ -6727,11 +6869,9 @@ static void inv_series_batch(PolyLayer &L, const std::vector<unsigned long long>
            of `g`, returning 3*len-1 coefficients where the code assumed am+len-1 -- the slice
            strides below stopped matching their buffers, and at the real shape (P = 4096,
            W = 83) that walked off the heap inside flat_truncate's memcpy. */
-        flat_mul_batch(L, at, am, (len == nxt) ? g : gpad, nxt, nbatch, ag, cat);
-        /* the multiply's assertion above fixed ag's length at nbatch*(am+nxt-1)*W, which IS the
-           stride declared here -- the two are the same expression, so the operand can never be
-           short */
-        flat_truncate(ag, nbatch, am + nxt - 1, nxt, W, "inv_series_batch: ag=a*g");
+        flat_mul_batch(L, at, am, (len == nxt) ? g : gpad, nxt, nbatch, ag, cat, 0, nxt);
+        /* The returned prefix is already tight at nxt coefficients per slice; the input and
+           transform shape still cover the complete product. */
         if (ag.size() != nbatch * nxt * W) ag.resize(nbatch * nxt * W, 0ull);
         h.assign(nbatch * nxt * W, 0ull);
         {
@@ -6748,8 +6888,7 @@ static void inv_series_batch(PolyLayer &L, const std::vector<unsigned long long>
         h = cp_addsub_flat(h, ag, nbatch * nxt, L.W, L.N, /*sub=*/true);   /* h = 2 - ag */
         h.resize(nbatch * nxt * W);
         /* ---- g = (g*h) mod X^nxt ---------------------------------------------------- */
-        flat_mul_batch(L, gpad, nxt, h, nxt, nbatch, gn, cat);
-        flat_truncate(gn, nbatch, 2 * nxt - 1, nxt, W, "inv_series_batch: gn=g*h");
+        flat_mul_batch(L, gpad, nxt, h, nxt, nbatch, gn, cat, 0, nxt);
         if (gn.size() != nbatch * nxt * W) gn.resize(nbatch * nxt * W, 0ull);
         g.swap(gn);
         len = nxt;
@@ -6797,22 +6936,19 @@ static void divmod_batch(PolyLayer &L, const std::vector<unsigned long long> &A,
                      (unsigned long long)nbatch, (unsigned long long)k, (unsigned long long)W);
         std::exit(3);
     }
-    flat_mul_batch(L, ra, k, rbi, k, nbatch, qrev, cat);
-    flat_truncate(qrev, nbatch, 2 * k - 1, k, W,
-                  "divmod_batch: qrev=ra*rbi");   /* mod X^k (REPACKED) */
+    flat_mul_batch(L, ra, k, rbi, k, nbatch, qrev, cat, 0, k);
     q.assign(nbatch * k * W, 0ull);
     for (size_t s = 0; s < nbatch; ++s)
         for (size_t i = 0; i < k; ++i)
             std::copy(qrev.begin() + (long)((s * k + (k - 1 - i)) * W),
                       qrev.begin() + (long)((s * k + (k - 1 - i) + 1) * W),
                       q.begin() + (long)((s * k + i) * W));
-    flat_mul_batch(L, q, k, B, db + 1, nbatch, qb, cat);
-    qb.resize(nbatch * (k + db) * W);
+    flat_mul_batch(L, q, k, B, db + 1, nbatch, qb, cat, 0, db);
     out.assign(nbatch * db * W, 0ull);
     for (size_t s = 0; s < nbatch; ++s)
         for (size_t i = 0; i < db; ++i)
             cp_coeff_sub_p(&out[(s * db + i) * W], &A[(s * (da + 1) + i) * W],
-                           &qb[(s * (k + db) + i) * W], L.N, W);
+                           &qb[(s * db + i) * W], L.N, W);
 }
 
 /* the exact primality test below needs a*b mod m for 64-bit a,b,m.  __int128 is NOT usable here:
@@ -8104,12 +8240,12 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             for (size_t i = 0; i < k; ++i) ra[i] = T[degT - i];
             cp_resize(rbi, k, W);                      /* the cached inverse, truncated to k */
             for (size_t i = 0; i < k; ++i) rbi[i] = finv[i];
-            CPoly qrev = cp_mul(ra, rbi, L);
+            CPoly qrev = cp_mul(ra, rbi, L, k);
             cp_resize(qrev, k, W);
             CPoly q;
             cp_resize(q, k, W);
             for (size_t i = 0; i < k; ++i) q[i] = qrev[k - 1 - i];
-            const CPoly qb = cp_mul(q, Fpoly, L);
+            const CPoly qb = cp_mul(q, Fpoly, L, P);
             cp_resize(H, P, W);                        /* r = T - q*F has degree < P */
             for (size_t i = 0; i < P; ++i)
                 cp_coeff_sub(H[i], T[i], (i < qb.size()) ? qb[i] : cp_zero(W), L.N, W);
@@ -9015,6 +9151,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if (flat_test && std::atoi(flat_test) != 0) s4_flat_input_check(L);
         const char *readback_test = std::getenv("NTT_S4_FINAL_READBACK_TEST");
         if (readback_test && std::atoi(readback_test) != 0) s4_flat_input_check(L,5);
+        const char *window_test=std::getenv("NTT_S4_OUTPUT_WINDOW_TEST");
+        if(window_test && std::atoi(window_test)!=0) s4_output_window_check(L);
     }
     const char *groot_test = std::getenv("NTT_S4_GROOT_TEST");
     if (groot_test && std::atoi(groot_test) != 0) groot_lifetime_check(L);
@@ -9300,6 +9438,13 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                         g_defer_checked_chunks, g_defer_max_group);
             std::printf("real_batched_carrytrace: enabled=%d words=%llu signature=%016llx\n",
                         (int)g_s4_carry_trace, g_carry_output_words, g_carry_output_hash);
+            std::printf("real_batched_outputwindow: enabled=%d calls=%llu source_coeffs=%llu reduced_coeffs=%llu "
+                        "returned_coeffs=%llu skipped_coeffs=%llu d2h_words=%llu device_peak_bytes=%llu "
+                        "pinned_peak_bytes=%llu (all S4 calls incl F-tree; shape/carry full)\n",
+                        (int)g_s4_output_window,g_output_window.calls,g_output_window.source_coeffs,
+                        g_output_window.reduced_coeffs,g_output_window.returned_coeffs,
+                        g_output_window.skipped_coeffs,g_output_window.d2h_words,
+                        g_output_window.device_peak_bytes,g_output_window.pinned_peak_bytes);
             std::printf("real_batched_finalreadback: enabled=%d calls=%llu copied_words=%llu "
                         "avoided_words=%llu host_peak_bytes=%llu t_copy=%.6f "
                         "(all S4 calls incl F-tree; additional to chunk coeffback)\n",

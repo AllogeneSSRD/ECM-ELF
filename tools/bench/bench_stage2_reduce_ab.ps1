@@ -16,7 +16,7 @@ param(
     [UInt64]$D = 1231230,
     [int]$Sigma = 26,
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window')][string]$Target = 'reduction',
     [ValidateRange(1,256)][int]$BatchMB = 32,
     [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
     [ValidateRange(0,65536)][int]$ArenaMB = 0,
@@ -44,6 +44,7 @@ if ($Target -eq 'groot') { $order = @('full_gtree','groot','groot','full_gtree')
 if ($Target -eq 'workspace') { $order = @('keyed_workspace','workspace_pool','workspace_pool','keyed_workspace') }
 if ($Target -eq 'fuse_scratch') { $order = @('wide_scratch','compact_scratch','compact_scratch','wide_scratch') }
 if ($Target -eq 'final_readback') { $order = @('whole_readback','chunk_readback','chunk_readback','whole_readback') }
+if ($Target -eq 'output_window') { $order = @('full_output','output_window','output_window','full_output') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
@@ -53,7 +54,8 @@ $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_CARRY_ROUNDS=''; NTT_S4_GROOT_ONLY='1'; NTT_S4_GROOT_TEST='0'; NTT_S4_OFF='0';
                 NTT_ARENA_WORKSPACE_POOL='1'; NTT_ARENA_WORKSPACE_TEST='0';
                 NTT_FUSE_COMPACT_SCRATCH='1'; NTT_FUSE_LIFETIME_TEST='0';
-                NTT_S4_FINAL_READBACK='0'; NTT_S4_FINAL_READBACK_TEST='0' }
+                NTT_S4_FINAL_READBACK='0'; NTT_S4_FINAL_READBACK_TEST='0';
+                NTT_S4_OUTPUT_WINDOW='0'; NTT_S4_OUTPUT_WINDOW_TEST='0' }
 if ($ArenaMB -gt 0) { $overrides.NTT_ARENA_CAP_KB = "$([long]$ArenaMB * 1024)" }
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
@@ -69,6 +71,7 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_ARENA_WORKSPACE_POOL=$(if ($mode -eq 'keyed_workspace') { '0' } else { '1' });
         NTT_FUSE_COMPACT_SCRATCH=$(if ($mode -eq 'wide_scratch') { '0' } else { '1' });
         NTT_S4_FINAL_READBACK=$(if ($mode -eq 'whole_readback') { '1' } else { '0' });
+        NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window') { '1' } else { '0' });
         NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
@@ -98,6 +101,7 @@ try {
         $env:NTT_ARENA_WORKSPACE_POOL = $(if ($mode -eq 'keyed_workspace') { '0' } else { '1' })
         $env:NTT_FUSE_COMPACT_SCRATCH = $(if ($mode -eq 'wide_scratch') { '0' } else { '1' })
         $env:NTT_S4_FINAL_READBACK = $(if ($mode -eq 'whole_readback') { '1' } else { '0' })
+        $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window') { '1' } else { '0' })
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -137,6 +141,19 @@ try {
             if($m.Success){$workspace[$field]=[UInt64]$m.Groups[1].Value}
         }
         $fuseLine=[regex]::Match($text,'(?m)^ntt_fuse_base_stats:.*').Value;$fuse=@{}
+        $windowLine=[regex]::Match($text,'(?m)^real_batched_outputwindow:.*').Value;$window=@{}
+        foreach($field in @('enabled','calls','source_coeffs','reduced_coeffs','returned_coeffs','skipped_coeffs','d2h_words','device_peak_bytes','pinned_peak_bytes')) {
+            $m=[regex]::Match($windowLine,"(?:^| )$field=(\d+)")
+            if($m.Success){$window[$field]=[UInt64]$m.Groups[1].Value}
+        }
+        if($window.Count -ne 9 -or "$($window.enabled)" -ne $env:NTT_S4_OUTPUT_WINDOW -or
+           $window.calls -le 0 -or $window.returned_coeffs -le 0 -or
+           $window.source_coeffs -ne $window.reduced_coeffs+$window.skipped_coeffs -or
+           $window.returned_coeffs -gt $window.reduced_coeffs -or
+           ($window.enabled -eq 1 -and ($window.reduced_coeffs -ne $window.returned_coeffs -or $window.skipped_coeffs -le 0)) -or
+           ($window.enabled -eq 0 -and $window.skipped_coeffs -ne 0)) {
+            throw "Output window contract/accounting failed; inspect $log"
+        }
         $finalLine=[regex]::Match($text,'(?m)^real_batched_finalreadback:.*').Value;$final=@{}
         foreach($field in @('enabled','calls','copied_words','avoided_words','host_peak_bytes','t_copy')) {
             $m=[regex]::Match($finalLine,"(?:^| )$field=([0-9.]+)")
@@ -293,9 +310,17 @@ try {
         foreach($field in $workspace.Keys){$row|Add-Member -NotePropertyName ("workspace_"+$field) -NotePropertyValue $workspace[$field]}
         foreach($field in $fuse.Keys){$row|Add-Member -NotePropertyName ("fuse_"+$field) -NotePropertyValue $fuse[$field]}
         foreach($field in $final.Keys){$row|Add-Member -NotePropertyName ("final_"+$field) -NotePropertyValue $final[$field]}
+        foreach($field in $window.Keys){$row|Add-Member -NotePropertyName ("window_"+$field) -NotePropertyValue $window[$field]}
+        if($row.window_d2h_words -ne $row.final_copied_words+$row.final_avoided_words -or
+           $row.window_calls -ne $row.final_calls) {throw "Output/readback accounting disagrees; inspect $log"}
         if($rows.Count -gt 0 -and ($row.final_calls -ne $rows[0].final_calls -or
-           $row.final_copied_words+$row.final_avoided_words -ne $rows[0].final_copied_words+$rows[0].final_avoided_words)) {
+           ($Target -ne 'output_window' -and
+            $row.final_copied_words+$row.final_avoided_words -ne $rows[0].final_copied_words+$rows[0].final_avoided_words))) {
             throw "Final readback logical workload changed; inspect $log"
+        }
+        if($rows.Count -gt 0 -and ($row.window_source_coeffs -ne $rows[0].window_source_coeffs -or
+           $row.window_returned_coeffs -ne $rows[0].window_returned_coeffs)) {
+            throw "Output window changed transform source or consumer workload; inspect $log"
         }
         if ($rows.Count -gt 0 -and ($row.groot_builds -ne $rows[0].groot_builds -or
             $row.groot_root_words -ne $rows[0].groot_root_words)) {
@@ -309,15 +334,15 @@ try {
             $row.flat_control_peak_bytes -ne $rows[0].flat_control_peak_bytes)) {
             throw "flat input logical workload changed; inspect $log"
         }
-        if ($rows.Count -gt 0 -and ($row.coeffs -ne $rows[0].coeffs -or $row.factors -ne $rows[0].factors -or
+        if ($rows.Count -gt 0 -and (($Target -ne 'output_window' -and $row.coeffs -ne $rows[0].coeffs) -or $row.factors -ne $rows[0].factors -or
             $row.hit_primes -ne $rows[0].hit_primes -or $row.hits -ne $rows[0].hits -or
             ($Target -ne 'batch_mb' -and (
-            $row.oracle_samples -ne $rows[0].oracle_samples -or $row.oracle_jobs -ne $rows[0].oracle_jobs -or
-            $row.oracle_signature -ne $rows[0].oracle_signature -or
+            ($Target -ne 'output_window' -and ($row.oracle_samples -ne $rows[0].oracle_samples -or
+            $row.oracle_jobs -ne $rows[0].oracle_jobs -or $row.oracle_signature -ne $rows[0].oracle_signature)) -or
             $row.carry_deferred -ne $rows[0].carry_deferred -or $row.carry_slices -ne $rows[0].carry_slices -or
             $row.raw_async -ne $rows[0].raw_async -or $row.out_async -ne $rows[0].out_async -or
             $row.pack_launches -ne $rows[0].pack_launches)) -or
-            $row.h2d_gib -ne $rows[0].h2d_gib -or $row.d2h_gib -ne $rows[0].d2h_gib)) {
+            $row.h2d_gib -ne $rows[0].h2d_gib -or ($Target -ne 'output_window' -and $row.d2h_gib -ne $rows[0].d2h_gib))) {
             throw "A/B results or coefficient count changed; inspect $log"
         }
         if ($rows.Count -gt 0 -and
@@ -347,6 +372,10 @@ try {
         if($sameMode.Count){foreach($field in $workspace.Keys){$name="workspace_"+$field;if($row.$name -ne $sameMode[0].$name){throw "workspace workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in $fuse.Keys){$name="fuse_"+$field;if($row.$name -ne $sameMode[0].$name){throw "fuse workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in @('calls','copied_words','avoided_words','host_peak_bytes')){$name="final_"+$field;if($row.$name -ne $sameMode[0].$name){throw "final readback workload changed within mode: $field"}}}
+        if($sameMode.Count){foreach($field in $window.Keys){$name="window_"+$field;if($row.$name -ne $sameMode[0].$name){throw "output window workload changed within mode: $field"}}}
+        if($sameMode.Count -and ($row.coeffs -ne $sameMode[0].coeffs -or $row.d2h_gib -ne $sameMode[0].d2h_gib)) {
+            throw "repeated $mode changed reduction/transfer workload; inspect $log"
+        }
         $rows += $row
         $rows | Export-Csv -LiteralPath (Join-Path $Output 'results.csv') -NoTypeInformation -Encoding UTF8
         Write-Host ("  elapsed={0:F2}s wall={1:F2}s t_reduce={2:F3}s coeffs={3}" -f
@@ -424,6 +453,15 @@ try {
                 ($new | Measure-Object final_t_copy -Average).Average,
                 (($old | Measure-Object final_host_peak_bytes -Average).Average / 1MB),
                 (($new | Measure-Object final_host_peak_bytes -Average).Average / 1MB))
+    Write-Host ("output window (ALL S4 incl F-tree): reduced {0:F0} -> {1:F0} coeffs; chunk D2H {2:F3} -> {3:F3} GiB; retained output device capacity {4:F1} -> {5:F1} MiB; pinned capacity {6:F1} -> {7:F1} MiB" -f
+                ($old | Measure-Object window_reduced_coeffs -Average).Average,
+                ($new | Measure-Object window_reduced_coeffs -Average).Average,
+                (($old | Measure-Object window_d2h_words -Average).Average * 8 / 1GB),
+                (($new | Measure-Object window_d2h_words -Average).Average * 8 / 1GB),
+                (($old | Measure-Object window_device_peak_bytes -Average).Average / 1MB),
+                (($new | Measure-Object window_device_peak_bytes -Average).Average / 1MB),
+                (($old | Measure-Object window_pinned_peak_bytes -Average).Average / 1MB),
+                (($new | Measure-Object window_pinned_peak_bytes -Average).Average / 1MB))
 } finally {
     foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
 }
