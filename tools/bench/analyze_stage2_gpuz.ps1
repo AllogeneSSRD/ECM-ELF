@@ -109,7 +109,8 @@ if ($BenchOutput) {
         if ($phases.Success) {
             $loopStart = $stageStart.AddSeconds([double]$phases.Groups[1].Value)
             $postStart = $loopStart.AddSeconds([double]$phases.Groups[2].Value)
-            $ranges += [pscustomobject]@{phase='pre_Ftree_reciprocal';start=$stageStart;end=$loopStart}
+            # The F tree is built before run_batched/elapsed; pre covers small primes and reciprocal setup.
+            $ranges += [pscustomobject]@{phase='pre_small_primes_reciprocal';start=$stageStart;end=$loopStart}
             $ranges += [pscustomobject]@{phase='giant_Gtree_fold_loop';start=$loopStart;end=$postStart}
             $ranges += [pscustomobject]@{phase='descent_accum_naming';start=$postStart;end=$end}
         }

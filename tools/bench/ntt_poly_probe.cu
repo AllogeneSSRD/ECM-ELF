@@ -480,7 +480,9 @@ __global__ void bitrev_swap_kernel(unsigned long long *a, unsigned long long log
  *
  * repeated until every digit is < 2^bpw.  One round is NOT enough (q[i-1] can be up to
  * 2^(k+bpw), so the digits are still taller than bpw bits afterwards), but the digit height
- * falls by ~bpw bits per round, so ~(k+2*bpw)/bpw + 2 rounds suffice.
+ * falls by ~bpw bits per round.  The height bound only ensures digits <= 2^bpw;
+ * it does NOT bound convergence: a unit carry can cross an arbitrarily long run of
+ * digits equal to 2^bpw-1.  The fused kernel resolves that final binary carry exactly.
  *
  * WHY THE PREVIOUS THREE-KERNEL SCHEME WAS WRONG (this was the bug): it replaced q[i-1] by an
  * exclusive PREFIX SUM of all the quotients below i, `c[i] += sum_{j<i} q[j]`.  For the exact
@@ -798,7 +800,8 @@ static void ntt_inverse(unsigned long long *d, unsigned long long n, int k,
  * ripple EXACTLY (same recurrence, same integer arithmetic, no reordering of the values),
  * while touching the array once instead of once per round.  The digit heights stay far
  * inside 64 bits by the same argument as before (each level adds at most 2^bpw).
- * The convergence assert in run_poly (every digit < 2^bpw afterwards) is unchanged.
+ * This cone reduces the height to at most the radix.  The binary carry below then
+ * canonicalises long all-mask runs; the convergence assert in run_poly is unchanged.
  *
  * RACE WARNING (this bit me): the cone READS the raw digits at i-1..i-R while it WRITES digit
  * i, so it must NOT write the array it reads -- a neighbouring thread may already have
@@ -809,13 +812,9 @@ static void ntt_inverse(unsigned long long *d, unsigned long long n, int k,
  * convergence assert, pipedump) reads cout.
  */
 template <int ROUNDS>
-__global__ void carry_cone_kernel(const unsigned long long *c, unsigned long long *cout,
-                                  unsigned long long n, int bpw, unsigned long long stride)
+__device__ __forceinline__ unsigned long long carry_cone_value(
+    const unsigned long long *c, unsigned long long i, int bpw)
 {
-    const size_t sl = (size_t)blockIdx.y * stride;
-    const unsigned long long i = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    c += sl; cout += sl;
     const unsigned long long mask = (1ull << bpw) - 1ull;
     unsigned long long v[ROUNDS + 1];
     v[0] = c[i];
@@ -826,7 +825,41 @@ __global__ void carry_cone_kernel(const unsigned long long *c, unsigned long lon
 #pragma unroll
         for (int j = 0; j + r <= ROUNDS; ++j) v[j] = (v[j] & mask) + (v[j + 1] >> bpw);
     }
-    cout[i] = v[0];
+    return v[0];
+}
+
+/* After the height-reduction cone x <= radix.  Thus its remaining carry is binary:
+   x==radix generates, x==radix-1 propagates, all smaller x kill.  A warp ballot finds
+   the nearest preceding non-propagating digit in the warp.  Lane zero determines the
+   incoming carry by reading immutable cone values backwards across warp/block boundaries.
+   Only one lane does that lookback; no global scratch, host drain or extra launch is needed.
+   The worst case is a long all-mask run (lookback is linear per warp), but the result is
+   exact for any length, rather than depending on an empirical number of ripple rounds. */
+template <int ROUNDS>
+__global__ void carry_cone_kernel(const unsigned long long *c, unsigned long long *cout,
+                                  unsigned long long n, int bpw, unsigned long long stride)
+{
+    const size_t sl = (size_t)blockIdx.y * stride;
+    const unsigned long long i = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    c += sl; cout += sl;
+    const unsigned long long mask = (1ull << bpw) - 1ull;
+    const unsigned long long x = carry_cone_value<ROUNDS>(c, i, bpw);
+    const unsigned int live = __activemask(), lane = threadIdx.x & 31;
+    const unsigned int stop = __ballot_sync(live, x != mask);
+    const unsigned int generate = __ballot_sync(live, x > mask);
+    unsigned int incoming = 0;
+    if (lane == 0) {
+        unsigned long long j = i;
+        while (j) {
+            const unsigned long long prev = carry_cone_value<ROUNDS>(c, --j, bpw);
+            if (prev != mask) { incoming = prev > mask; break; }
+        }
+    }
+    incoming = __shfl_sync(live, incoming, 0);
+    const unsigned int preceding = stop & ((1u << lane) - 1u);
+    if (preceding) incoming = (generate >> (31 - __clz(preceding))) & 1u;
+    cout[i] = (x + incoming) & mask;
 }
 
 /* ---- twiddle tables ---------------------------------------------------------------- */
@@ -2718,11 +2751,8 @@ static int ntt_shape_plan_uncached(unsigned long long P, int S, int device, NttA
     sh.passes_fwd = fc.passes_fwd;
     sh.passes_total = 2 * fc.passes_fwd + fc.passes_fwd + 1;      /* +1 = the carry cone */
     sh.carry_rounds = 2 + (sh.k + 2 * sh.bpw + sh.bpw - 1) / sh.bpw;
-    /* NTT_CARRY_ROUNDS=<n> RAISES the round count (never lowers it).  The S5 descent was handed a
-       window whose digit 10 was 2715379 against a bpw = 7 limit of 127 (section 49), i.e. the
-       carry did not canonicalise -- and the round count above is the only knob that decides it.
-       This switch exists so "is it just the round count?" is one run per value instead of one
-       derivation per value. */
+    /* NTT_CARRY_ROUNDS raises the height-reduction rounds for diagnostic comparisons.
+       Long binary carry chains are resolved exactly, independently of this override. */
     {
         const char *e = std::getenv("NTT_CARRY_ROUNDS");
         if (e && *e) {
@@ -2985,9 +3015,9 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
 
     /* ---- carry stage: reduce every digit back to bpw bits and ripple the quotient into the
        next digit.  ONE PASS: the cone of the same recurrence is unfolded into registers
-       (carry_cone_kernel), bit-identical to running the rounds one after another but touching
-       the array once instead of 2*rounds times.  If the round count ever exceeds the register
-       cone, the old round-by-round kernels take over. */
+       (carry_cone_kernel), followed inside that kernel by exact binary propagation.
+       If the round count exceeds the register cone, height reduction uses the old kernels
+       and a final cone kernel resolves the remaining binary carry. */
     const double t2 = now_s();
     const int carry_rounds = sh.carry_rounds;
     unsigned long long *dDig = dA;
@@ -3016,6 +3046,10 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                 CK(cudaGetLastError());
             }
         }
+        const dim3 gr(blocks, (unsigned int)nbatch);
+        carry_cone_kernel<1><<<gr, threads>>>(dA, dQ, N, sh.bpw, N);
+        CK(cudaGetLastError());
+        dDig = dQ;
     }
     r.digits = dDig;
     if (dump && nbatch == 1 && hPost) {

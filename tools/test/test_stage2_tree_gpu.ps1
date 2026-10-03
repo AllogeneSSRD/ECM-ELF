@@ -33,7 +33,9 @@
 param(
     [string]$Exe = '',
     [string]$Check = '',
-    [int]$Device = 1
+    [int]$Device = 1,
+    # For hosts where nested PowerShell startup stalls; retain child-like NTT env isolation.
+    [switch]$InProcessChecks
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,10 +77,35 @@ Write-Host ""
 # locates the exe itself, so we only pass shapes and the device.
 function RunCheck([string[]]$extra) {
     $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    $o = (& powershell -NoProfile -ExecutionPolicy Bypass -File $Check -Device $Device @extra 2>&1 | Out-String)
-    $c = $LASTEXITCODE
-    $ErrorActionPreference = $prev
+    $nttBefore=@{}
+    if($InProcessChecks) {
+        Get-ChildItem Env: | Where-Object Name -Like 'NTT_*' | ForEach-Object { $nttBefore[$_.Name]=$_.Value }
+    }
+    try {
+        $ErrorActionPreference = 'Continue'
+        if($InProcessChecks) {
+            # Array splatting passes strings positionally to a script; named flags need a hash.
+            $checkArgs=@{Device=$Device}
+            for($i=0;$i -lt $extra.Count;++$i) {
+                $key=$extra[$i].TrimStart('-')
+                if($i+1 -lt $extra.Count -and -not $extra[$i+1].StartsWith('-')) {
+                    $checkArgs[$key]=$extra[++$i]
+                } else { $checkArgs[$key]=$true }
+            }
+            $o = (& $Check @checkArgs *>&1 | Out-String)
+        } else {
+            $o = (& powershell -NoProfile -ExecutionPolicy Bypass -File $Check -Device $Device @extra 2>&1 | Out-String)
+        }
+        $c = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+        if($InProcessChecks) {
+            Get-ChildItem Env: | Where-Object Name -Like 'NTT_*' | ForEach-Object {
+                [Environment]::SetEnvironmentVariable($_.Name,$null,'Process')
+            }
+            foreach($key in $nttBefore.Keys){[Environment]::SetEnvironmentVariable($key,$nttBefore[$key],'Process')}
+        }
+    }
     return @{ out = $o; code = $c }
 }
 $r210 = RunCheck @('-D', '210')
@@ -813,6 +840,86 @@ try {
     }
 } finally {
     foreach ($key in $budgetSaved.Keys) { [Environment]::SetEnvironmentVariable($key,$budgetSaved[$key],'Process') }
+}
+
+# [20] Borrow full-stride flat operands, retain short-input padding and output-alias clones.
+$flatSaved=@{}
+foreach($key in @('NTT_S4_FLAT_DIRECT','NTT_S4_FLAT_TEST','NTT_S4_BATCH_MB','NTT_S4_CHUNK_MAX',
+                  'NTT_S4_PACK_DIRECT','NTT_S4_CARRY_BATCH','NTT_S4_CARRY_TEST_BAD','NTT_S4_ORACLE_TEST_BAD',
+                  'NTT_S4_ASYNC','NTT_S4_DEFER_CARRY','NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_PACK',
+                  'NTT_S4_HOSTPACK','NTT_S4_OLDTAIL','NTT_S5_ON','NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY',
+                  'NTT_S4_CARRY_TRACE','NTT_ARENA_CAP_KB','NTT_NAME_MAX','NTT_CARRY_ROUNDS')) {
+    $flatSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')
+}
+try {
+    $env:NTT_S4_FLAT_TEST='1'; $env:NTT_S4_BATCH_MB='64'; $env:NTT_S4_CHUNK_MAX='64'
+    $env:NTT_S4_PACK_DIRECT='1'; $env:NTT_S4_CARRY_TEST_BAD='0'; $env:NTT_S4_ORACLE_TEST_BAD='0'
+    $env:NTT_S4_DEFER_CARRY='1'; $env:NTT_S4_ORACLE_ASYNC='0'; $env:NTT_S4_ORACLE_PACK='1'
+    $env:NTT_S4_OLDTAIL='0'; $env:NTT_S5_ON='0'; $env:NTT_S4_SAMPLE='96'
+    $env:NTT_CARRY_ROUNDS=''
+    $env:NTT_S4_CHECK_EVERY='8'; $env:NTT_S4_CARRY_TRACE='1'; $env:NTT_ARENA_CAP_KB=''; $env:NTT_NAME_MAX='1'
+    $flatOutputs=@(); $flatCodes=@()
+    foreach($mode in @('copy','borrow','blocking','carry_batch','hostpack')) {
+        $env:NTT_S4_FLAT_DIRECT=$(if($mode -eq 'copy'){'0'}else{'1'})
+        $env:NTT_S4_ASYNC=$(if($mode -eq 'blocking'){'0'}else{'1'})
+        $env:NTT_S4_CARRY_BATCH=$(if($mode -eq 'carry_batch'){'1'}else{'0'})
+        $env:NTT_S4_HOSTPACK=$(if($mode -eq 'hostpack'){'1'}else{'0'})
+        $flatOutputs+=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096)
+        $flatCodes+=$LASTEXITCODE
+    }
+    $flatPattern='real_batched_flatinput: direct_enabled=(\d+) calls=(\d+) borrowed=(\d+) padded=(\d+) alias_clones=(\d+) copy_bytes=(\d+) zero_bytes=(\d+) avoided_copy_bytes=(\d+) avoided_zero_bytes=(\d+) temp_peak_bytes=(\d+) control_peak_bytes=(\d+) t_prepare=([0-9.]+)'
+    $flatBaseTrace=[regex]::Match($flatOutputs[0],$carryTracePattern)
+    $flatBaseOracle=[regex]::Match($flatOutputs[0],$oraclePattern)
+    $flatBaseResult=[regex]::Match($flatOutputs[0],$resultPattern)
+    $flatWords=$flatBaseTrace.Success; $flatSamples=$flatBaseOracle.Success; $flatFixtures=$true
+    foreach($oFlat in $flatOutputs) {
+        $flatWords=$flatWords -and [regex]::Match($oFlat,$carryTracePattern).Value -eq $flatBaseTrace.Value
+        $flatSamples=$flatSamples -and [regex]::Match($oFlat,$oraclePattern).Success -and
+            [regex]::Match($oFlat,$oraclePattern).Value -eq $flatBaseOracle.Value -and
+            $oFlat -cnotmatch 'FATAL|MISMATCH|gmp_bad=[1-9]|gmp_check_bad=[1-9]|slot_canonical_bad=[1-9]'
+        $flatFixtures=$flatFixtures -and $oFlat -match 's4_flat_input_check: cases=16 words=720 bad=0' -and
+            $oFlat -match 'carry_chain_check: cases=6 words=49230 bad=0'
+    }
+    Check "flat input: all modes retain frozen factor and hit set" `
+          (@($flatCodes | Where-Object{$_ -ne 0}).Count -eq 0 -and $flatBaseResult.Success -and
+           $flatOutputs[0] -match 'factors=59649589127497217' -and
+           @($flatOutputs | Where-Object{[regex]::Match($_,$resultPattern).Value -ne $flatBaseResult.Value}).Count -eq 0) ""
+    Check "flat input: ALL output words agree across copies, borrowed and transfer schedules" $flatWords ""
+    Check "flat input: oracle jobs/samples/positions unchanged" $flatSamples ""
+    Check "flat input: independent GMP covers full/short strides and A/B/both aliases" $flatFixtures ""
+    $mFlatCopy=[regex]::Match($flatOutputs[0],$flatPattern)
+    $mFlatBorrow=[regex]::Match($flatOutputs[1],$flatPattern)
+    Check "flat input: control really materializes both operands" `
+          ($mFlatCopy.Success -and $mFlatCopy.Groups[1].Value -eq '0' -and
+           $mFlatCopy.Groups[3].Value -eq '0' -and
+           [long]$mFlatCopy.Groups[4].Value -eq 2*[long]$mFlatCopy.Groups[2].Value -and
+           $mFlatCopy.Groups[8].Value -eq '0' -and $mFlatCopy.Groups[9].Value -eq '0' -and
+           $mFlatCopy.Groups[10].Value -eq $mFlatCopy.Groups[11].Value) ""
+    Check "flat input: borrowed bytes replace copies/zeroes without changing logical input" `
+          ($mFlatBorrow.Success -and $mFlatBorrow.Groups[1].Value -eq '1' -and
+           $mFlatBorrow.Groups[2].Value -eq $mFlatCopy.Groups[2].Value -and
+           [long]$mFlatBorrow.Groups[3].Value -gt 0 -and [long]$mFlatBorrow.Groups[4].Value -gt 0 -and
+           [long]$mFlatBorrow.Groups[5].Value -gt 0 -and
+           [UInt64]$mFlatBorrow.Groups[6].Value+[UInt64]$mFlatBorrow.Groups[8].Value -eq [UInt64]$mFlatCopy.Groups[6].Value -and
+           [UInt64]$mFlatBorrow.Groups[7].Value+[UInt64]$mFlatBorrow.Groups[9].Value -eq [UInt64]$mFlatCopy.Groups[7].Value -and
+           [UInt64]$mFlatBorrow.Groups[6].Value -lt [UInt64]$mFlatCopy.Groups[6].Value) ""
+    $env:NTT_S4_CHUNK_MAX='0'; $env:NTT_S4_CARRY_BATCH='0'; $env:NTT_S4_HOSTPACK='0'; $env:NTT_S4_ASYNC='1'
+    $longFlatArgs=@('--real','--n-hex',('1'+('f'*1315)),'--sigma','26','--b1','1000','--b2','5000000','--d','2310','--device',"$Device")
+    $env:NTT_S4_FLAT_DIRECT='0'
+    $oLongFlatCopy=(& $Exe @longFlatArgs 2>&1 | Out-String -Width 4096); $cLongFlatCopy=$LASTEXITCODE
+    $env:NTT_S4_FLAT_DIRECT='1'
+    $oLongFlatBorrow=(& $Exe @longFlatArgs 2>&1 | Out-String -Width 4096); $cLongFlatBorrow=$LASTEXITCODE
+    Check "flat input: 83-word coefficients and aliased outputs match independent GMP" `
+          ($cLongFlatCopy -eq 0 -and $cLongFlatBorrow -eq 0 -and
+           $oLongFlatCopy -match 's4_flat_input_check: cases=16 words=19920 bad=0' -and
+           $oLongFlatBorrow -match 's4_flat_input_check: cases=16 words=19920 bad=0' -and
+           $oLongFlatCopy -match 'carry_chain_check: cases=6 words=49230 bad=0' -and
+           $oLongFlatBorrow -match 'carry_chain_check: cases=6 words=49230 bad=0' -and
+           [regex]::Match($oLongFlatCopy,$carryTracePattern).Success -and
+           [regex]::Match($oLongFlatCopy,$carryTracePattern).Value -eq
+           [regex]::Match($oLongFlatBorrow,$carryTracePattern).Value) "exit=$cLongFlatCopy/$cLongFlatBorrow"
+} finally {
+    foreach($key in $flatSaved.Keys){[Environment]::SetEnvironmentVariable($key,$flatSaved[$key],'Process')}
 }
 
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)

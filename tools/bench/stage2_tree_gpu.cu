@@ -1275,6 +1275,8 @@ static const bool g_s4_async = !opt_off("NTT_S4_ASYNC");
 /* Default direct-to-scratch: production removes 2 GiB of temporary inputs and 579 GiB of
    D2D. The ~2% ABBA time gain is smaller than control drift, so speed remains unproven. */
 static const bool g_s4_pack_direct = !opt_off("NTT_S4_PACK_DIRECT");
+/* Borrow already padded flat operands; 0 retains both host materializations for A/B. */
+static const bool g_s4_flat_direct = !opt_off("NTT_S4_FLAT_DIRECT");
 /* Same-binary candidate: accumulate identical interior chunks, check BEFORE the tail reset.
    Opt-in until production ABBA establishes a gain. */
 static const bool g_s4_carry_batch = [] {
@@ -6279,6 +6281,14 @@ static void flat_truncate(std::vector<unsigned long long> &v, size_t nbatch, siz
 /* out = A*B, where A holds nbatch slices of ma coefficients and B nbatch slices of mb, each
    slice W words per coefficient.  The slices are zero-padded to P = max(ma,mb) because the
    multiply takes a single shape per launch. */
+struct FlatInputStats {
+    unsigned long long calls = 0, borrowed = 0, padded = 0, alias_clones = 0;
+    unsigned long long copy_bytes = 0, zero_bytes = 0, avoided_copy_bytes = 0, avoided_zero_bytes = 0;
+    unsigned long long temp_peak_bytes = 0, control_peak_bytes = 0;
+    double t_prepare = 0.0;
+};
+static FlatInputStats g_flat_input;
+
 static void flat_mul_batch(PolyLayer &L, const std::vector<unsigned long long> &A, size_t ma,
                            const std::vector<unsigned long long> &B, size_t mb, size_t nbatch,
                            std::vector<unsigned long long> &out, int cat)
@@ -6295,8 +6305,8 @@ static void flat_mul_batch(PolyLayer &L, const std::vector<unsigned long long> &
            slice to k coefficients in the Newton step of inv_series_batch, after which
            flat_truncate was handed a slice stride it had never declared and read off the end.
        Both were host access violations at P = 4096 / W = 83.  The stride is stated once, here,
-       and every caller now has to satisfy it: the only three call sites are
-       inv_series_batch's two Newton multiplies and divmod_batch's qrev = ra*rbi. */
+       and every caller now has to satisfy it: Newton's two multiplies plus divmod_batch's
+       qrev = ra*rbi and qb = q*B. */
     if (A.size() != nbatch * ma * W || B.size() != nbatch * mb * W) {
         std::fprintf(stderr, "%s: FATAL: flat_mul_batch operand shape mismatch: A=%llu (must be "
                              "%llu = nbatch*ma*W), B=%llu (must be %llu = nbatch*mb*W) for "
@@ -6307,17 +6317,124 @@ static void flat_mul_batch(PolyLayer &L, const std::vector<unsigned long long> &
                      (unsigned long long)W);
         std::exit(3);
     }
-    std::vector<unsigned long long> wa(nbatch * P * W, 0ull), wb(nbatch * P * W, 0ull);
-    for (size_t s = 0; s < nbatch; ++s) {
-        std::copy(A.begin() + (long)(s * ma * W), A.begin() + (long)((s + 1) * ma * W),
-                  wa.begin() + (long)(s * P * W));
-        std::copy(B.begin() + (long)(s * mb * W), B.begin() + (long)((s + 1) * mb * W),
-                  wb.begin() + (long)(s * P * W));
-    }
-    poly_mul_batch_modN(L, wa.data(), wb.data(), ma, mb, nbatch, out, cat);
+    const double tp0 = now_s();
+    std::vector<unsigned long long> wa, wb;
+    const size_t padded_words = nbatch * P * W;
+    auto input = [&](const std::vector<unsigned long long> &v, size_t m,
+                     std::vector<unsigned long long> &scratch) -> const unsigned long long * {
+        const unsigned long long bytes = 8ull * v.size();
+        /* poly_mul_batch_modN assigns OUT before reading input. Clone aliases even when
+           their stride already matches P. Borrowed sources stay alive for this whole call;
+           async uploads copy them to owned pinned staging before returning to this function. */
+        if (g_s4_flat_direct && m == P && &v != &out) {
+            ++g_flat_input.borrowed;
+            g_flat_input.avoided_copy_bytes += bytes;
+            g_flat_input.avoided_zero_bytes += 8ull * padded_words;
+            return v.data();
+        }
+        ++g_flat_input.padded;
+        if (&v == &out) ++g_flat_input.alias_clones;
+        scratch.assign(padded_words, 0ull);
+        for (size_t s = 0; s < nbatch; ++s)
+            std::copy(v.begin() + (long)(s * m * W), v.begin() + (long)((s + 1) * m * W),
+                      scratch.begin() + (long)(s * P * W));
+        g_flat_input.copy_bytes += bytes;
+        g_flat_input.zero_bytes += 8ull * padded_words;
+        return scratch.data();
+    };
+    const auto *pa = input(A, ma, wa);
+    const auto *pb = input(B, mb, wb);
+    ++g_flat_input.calls;
+    g_flat_input.temp_peak_bytes = std::max(g_flat_input.temp_peak_bytes,
+        8ull * (wa.capacity() + wb.capacity()));
+    g_flat_input.control_peak_bytes = std::max(g_flat_input.control_peak_bytes, 16ull * padded_words);
+    g_flat_input.t_prepare += now_s() - tp0;
+    poly_mul_batch_modN(L, pa, pb, ma, mb, nbatch, out, cat);
     /* the multiply hands back nbatch*nc*W; the assign is what makes the TIGHT packing above a
        guarantee rather than a property of the multiply's implementation */
     if (out.size() != nbatch * nc * W) out.assign(nbatch * nc * W, 0ull);
+}
+
+/* Gate-only: exercise real batch multiply with full/short strides and output aliases.
+   A separate GMP convolution checks every returned coefficient, independently of NTT digits. */
+static void s4_flat_input_check(PolyLayer &L)
+{
+    /* Regression for a unit carry crossing many warps/blocks.  Compare every digit,
+       not just the final modular remainder, and keep batched slices independent. */
+    const size_t carry_n = 8205, carry_nb = 3;
+    unsigned long long carry_bad = 0;
+    for (const int bpw : {14, 26}) {
+        const unsigned long long mask = (1ull << bpw) - 1;
+        std::vector<unsigned long long> raw(carry_n*carry_nb), expected(raw.size()), actual(raw.size());
+        for (size_t s=0; s<carry_nb; ++s) {
+            const size_t start = s==0 ? 0 : s==1 ? 31 : 255;
+            for (size_t j=start; j<start+4097; ++j) raw[s*carry_n+j] = mask;
+            raw[s*carry_n+start] = 1ull << 60;
+            /* A second generator after a kill and a partial warp at the array end. */
+            raw[s*carry_n+7001] = mask+1;
+            for (size_t j=7002; j<carry_n-1; ++j) raw[s*carry_n+j] = mask;
+            unsigned long long carry = 0;
+            for (size_t j=0; j<carry_n; ++j) {
+                const auto v = raw[s*carry_n+j] + carry;
+                expected[s*carry_n+j] = v & mask;
+                carry = v >> bpw;
+            }
+        }
+        unsigned long long *di = nullptr, *doo = nullptr;
+        CK(cudaMalloc(&di, raw.size()*8)); CK(cudaMalloc(&doo, raw.size()*8));
+        CK(cudaMemcpy(di, raw.data(), raw.size()*8, cudaMemcpyHostToDevice));
+        carry_cone_kernel<5><<<dim3((unsigned int)((carry_n+255)/256), (unsigned int)carry_nb), 256>>>(
+            di, doo, carry_n, bpw, carry_n);
+        CK(cudaGetLastError());
+        CK(cudaMemcpy(actual.data(), doo, actual.size()*8, cudaMemcpyDeviceToHost));
+        CK(cudaFree(di)); CK(cudaFree(doo));
+        for (size_t i=0; i<actual.size(); ++i) if (actual[i] != expected[i]) ++carry_bad;
+    }
+    std::printf("carry_chain_check: cases=6 words=49230 bad=%llu (14/26-bit radix, 4097-digit chains)\n", carry_bad);
+    if (carry_bad) std::exit(3);
+    unsigned long long cases = 0, words = 0, bad = 0;
+    mpz_t av, bv, sum, term;
+    mpz_inits(av, bv, sum, term, nullptr);
+    const size_t W = L.W;
+    for (const auto dims : {std::pair<size_t,size_t>{3,3}, {2,5}, {5,2}, {1,4}, {4,1}}) {
+        const size_t ma = dims.first, mb = dims.second, nb = 3, nc = ma + mb - 1;
+        std::vector<unsigned long long> a(nb*ma*W), b(nb*mb*W), expected(nb*nc*W);
+        auto fill = [&](std::vector<unsigned long long> &v) {
+            for (size_t i=0; i<v.size()/W; ++i) {
+                mpz_sub_ui(av, L.N, (unsigned long)(i+1));
+                mpz_mod(av, av, L.N);
+                std::vector<unsigned long long> coef(W);
+                mpz_to_words(coef, W, av);
+                std::copy(coef.begin(), coef.end(), v.begin() + (long)(i*W));
+            }
+        };
+        fill(a); fill(b);
+        for (size_t s=0; s<nb; ++s) for (size_t k=0; k<nc; ++k) {
+            mpz_set_ui(sum, 0);
+            for (size_t i=0; i<ma; ++i) if (k>=i && k-i<mb) {
+                words_to_mpz(av, &a[(s*ma+i)*W], W);
+                words_to_mpz(bv, &b[(s*mb+k-i)*W], W);
+                mpz_mul(term, av, bv); mpz_add(sum, sum, term);
+            }
+            mpz_mod(sum, sum, L.N);
+            std::vector<unsigned long long> coef(W);
+            mpz_to_words(coef, W, sum);
+            std::copy(coef.begin(), coef.end(), expected.begin() + (long)((s*nc+k)*W));
+        }
+        for (int alias=0; alias<4; ++alias) {
+            if (alias==3 && ma!=mb) continue;
+            auto aa=a, bb=b;
+            std::vector<unsigned long long> separate;
+            auto &result = alias==1 || alias==3 ? aa : alias==2 ? bb : separate;
+            flat_mul_batch(L, aa, ma, alias==3 ? aa : bb, mb, nb, result, -1);
+            ++cases; words += result.size();
+            if (result != expected) ++bad;
+        }
+    }
+    mpz_clears(av, bv, sum, term, nullptr);
+    std::printf("s4_flat_input_check: cases=%llu words=%llu bad=%llu (GMP, short/full strides, A/B/both aliases)\n",
+                cases, words, bad);
+    if (bad) std::exit(3);
 }
 
 /* nbatch slices of `n` coefficients each, coefficient-wise A - B mod N (the flat twin of
@@ -8698,6 +8815,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         s4_reduce_init(red, L.N, nw, hn, ninv);
         s4.red = &red;
         L.s4 = &s4;
+        const char *flat_test = std::getenv("NTT_S4_FLAT_TEST");
+        if (flat_test && std::atoi(flat_test) != 0) s4_flat_input_check(L);
     }
     {
         bool ok1 = false, ok2 = false;
@@ -8978,6 +9097,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                         "total=%.6f (all S4 calls, each readback charged once)\n",
                         g_carry_group_readback, g_carry_chunk_readback,
                         g_carry_group_readback + g_carry_chunk_readback);
+            std::printf("real_batched_flatinput: direct_enabled=%d calls=%llu borrowed=%llu padded=%llu "
+                        "alias_clones=%llu copy_bytes=%llu zero_bytes=%llu avoided_copy_bytes=%llu "
+                        "avoided_zero_bytes=%llu temp_peak_bytes=%llu control_peak_bytes=%llu t_prepare=%.6f "
+                        "(all flat_mul_batch calls, host padding only)\n", (int)g_s4_flat_direct,
+                        g_flat_input.calls, g_flat_input.borrowed, g_flat_input.padded, g_flat_input.alias_clones,
+                        g_flat_input.copy_bytes, g_flat_input.zero_bytes, g_flat_input.avoided_copy_bytes,
+                        g_flat_input.avoided_zero_bytes, g_flat_input.temp_peak_bytes,
+                        g_flat_input.control_peak_bytes, g_flat_input.t_prepare);
             /* SECTION 30: the pinned/async path, counted for the same reason as above -- and the
                fallback count, so a run that silently lost pinned memory cannot look normal */
             std::printf("real_batched_asyncxfer: raw_async=%llu out_async=%llu fallbacks=%llu "

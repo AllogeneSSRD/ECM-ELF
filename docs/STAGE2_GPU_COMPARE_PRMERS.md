@@ -159,3 +159,83 @@ gwnum/polymult 是 Prime95 的浮点 FFT/实数大整数表示路径，调用方
 ### 27.6 与 PrMers 对比的边界与 benchmark 口径
 
 PrMers 的 BSGS 路径是逐 prime cross-product 扫描，与 Prime95/本仓库 Poly 路径是不同算法映射。它适合说明小工作集驻留寄存器、巨点在线推进、减少表流量等思路，不能直接推断 Poly Stage 2 的复杂度或 CUDA NTT 性能。Prime95 日志和当前 GPU 数据对应不同 CPU/GPU、不同模数/边界/构建；本报告只作代码路径与瓶颈形态比较，不把秒数当同参数 A/B 结论。
+
+## 28. 当前性能差距：日志计时边界与算法工作量复核（2026-10-03）
+
+本节以当前起点 `8b5b57f` 和本机日志/源码重新核对。§27 中性能记录和源码行号是 10-02 的历史快照；
+当前预算、归约和 direct pack 已经过多轮修改，最新证据见 DEV_GPUOWL_NTT_NOTES.md §37–38。
+本轮目标仍是 CUDA ECM Poly Stage2，同时减少 RAM/VRAM；本次并未证明超过 Prime95 单核。
+
+### 28.1 首先统一比较口径
+
+- 日志为 [p95v3104/screen.log](D:/code/GIMPS/p95v3104/screen.log:1)，源码为本仓库的 v31.06b01。
+  两个版本不能当作同一次构建；以下源码用于核对机制，最终同参数比较需记录精确 binary、参数和线程数。
+- [screen.log:11](D:/code/GIMPS/p95v3104/screen.log:11) 将 worker1 绑定到 logical CPU1，
+  [screen.log:86](D:/code/GIMPS/p95v3104/screen.log:86) 明确为 polymult helper 绑定 logical CPU3。
+  **单个 worker 不等于单线程。**不能把这份 M3613 秒数宣传为单核成绩，也不能仅凭 logical CPU 编号判断物理核拓扑。
+  [ecm.cpp:6839](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:6839) 的
+  stage2_threads=stage1_threads+Stage2ExtraThreads，并在 [ecm.cpp:7852](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:7852) 交给 polymult。
+- `Stage 2 init complete` 在 [ecm.cpp:9335](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9335) 结束并清掉 init timer/count；
+  [ecm.cpp:9351](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9351) 重新开始主体 timer；
+  [ecm.cpp:9844](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9844) 的 `Total time` 是主体到 GCD 前，
+  不是包含 init 的全 Stage2，也不是仅 giant 主循环。最终 GCD 另计。
+- M8317 worker3 curve456 的完整窗口为 [screen.log:8195](D:/code/GIMPS/p95v3104/screen.log:8195)：
+  B1=110000000，actual B2=496623617490，D=510510，degree=46080，2038 MB、Ftree cache budget=7，FFT=512。
+  init **3.214 s**，主体 **71.386 s**，相加 **74.600 s**（不含另计 GCD）；日志没有证明这条曲线只有一个执行线程。
+  PolyG 约 2.1 s/块、PolyH 约 1.35 s/更新，末尾有 scaled H 与 F up/down。
+- 本仓库 §37 的对照为 **5261-bit Mersenne 模数 M5261（GPU 走通用奇数归约）**、B1=1000、B2=1.94e12、D=1231230、P=115200、GPU1。
+  模数、曲线参数、边界、degree、giant block 数、硬件和线程配置都不同；208 s 与 74.6 s 不能直接相除后叫加速比。
+  Prime95 的 transforms 是 Gwnum 变换计数，也不能直接和 GPU wrapper/NTT launch count 相比。
+- GPU 的 CLI lapsed 从 [stage2_tree_gpu.cu:8994](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8994) 的 run_batched 前开始；baby/Ftree 已在此前建立，Ftree 时间另列 f_tree_incl。进程 wall 还包括 stage1、设置和自检。因而当前 elapsed 也不能直接作为完整 Stage2 wall；公平基线需要单独划定 stage1/Stage2 分界。
+
+### 28.2 性能优势分层，而非只看 FFT 核心
+
+**A. 特殊模数算术。**日志的 M3613/M8317 是 Mersenne 对象，而当前 GPU 生产 fixture 是 M5261，但设备算术仍走任意奇数的通用归约。
+[gwnum.h:96](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/gwnum/gwnum.h:96) 描述 K*B^N+C 的专用 setup；
+[gwnum.h:105](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/gwnum/gwnum.h:105) 对 generic modular setup 给出更高成本说明。
+该注释不能当作本机 ECM 的实测 3× 比例，但足以说明 Mersenne 路径与本仓库通用 long division 不公平等价。
+本仓库精确 Kronecker NTT 的槽宽包含乘积位宽和累加界，随后逐系数做多 limb 模 N 归约；
+这是当前精确通用路线的算术成本，不能靠删 host 副本完全消除。
+
+**B. 选择所需输出、融合算术与复用存储。**[ecm.cpp:9465](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9465)
+复用 polyGH 的上下半；随后 quotient 只返回高半，remainder 通过 MULLO+FNMADD 融合差法得到。
+[polymult.h:128](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/gwnum/polymult.h:128) 还包含隐含 monic、MULHI/LO/MID 和 FMA 接口。
+当前 GPU fold 在 [stage2_tree_gpu.cu:7897](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7897) 附近仍是三次完整 cp_mul，
+生成完整 qrev/qb 再截断/做 host 差法。只剪 D2H 不等于截断 convolution；但 GPU 先只归约/回传所需窗口可降低具体工作量，
+之后再实现高/低/中间乘积，才能进一步减少 transform 范围。
+
+**C. scaled descent 是实际算法差距。**[ecm.cpp:9542](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9542)
+是 H×R 的高半，不是常数 Γ 去缩放。之后每个父项对两个 sibling 构造 circular+MULHI 的 scaled 子项，
+[ecm.cpp:9706](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9706) 描述两份输出，
+[ecm.cpp:9729](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9729) 用 polymult_several 共用父输入变换。
+[polymult.c:4904](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/gwnum/polymult.c:4904) 明确输入只读和 FFT 一次。
+当前 GPU 默认下降调用 divmod_batch；每组先反转 divisor 并跑 inv_series_batch Newton，再 qrev、q·B、host remainder。
+见 [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6582)、
+[inv_series_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6483)。
+因此当前实现与 Prime95 并非只是同一下降算法的设备位置不同；直接套一个 transposed 子式到普通 remainder 上不成立。
+必须定义完整 scaled 状态、索引/反转/monic 约定、初始 scaling 和最终叶值，逐层对拍，不能凭相同 GCD 证明正确。
+
+**D. 表示与工作集生命周期。**Prime95 NO_UNFFT/NEXTFFT 保留 Gwnum 系数的变换状态，SAVE/USE_PLAN 保留同形状计划。
+这与多项式的 PRE_FFT 不是同一个层次。尤其 [ecm.cpp:9283](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9283)
+默认 ECMPolyCompress=1 只做预处理/预转置；PRE_FFT 仅隐藏选项 -1/-2，PRE_COMPRESS 另由 2/-2 开启。
+不能把默认性能归因于已经缓存了 F/R 多项式 FFT，或看到 `Poly compress` 就断言启用了 PRE_COMPRESS。
+Prime95 在下降前释放 F/R，按 slice 读入/重建 Ftree，并预先回收工作内存；缓存预算见
+[ecm.cpp:5857](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:5857)；缓存单位是 poly_size 个 gwnums 的容量，
+不是 GPU batch chunk 数，也不能解释为只存两棵节点多项式。
+GPU 目前保留 host word vectors、CPoly、arena 和多种 pools，并反复 materialize/pad/上传输入。
+
+### 28.3 本轮行动与后续验收
+
+先实施 §37 候选的 flat input 借用：已满足 P stride 且不与 out 别名时直接传 const view，
+只为短输入和别名构造副本；有同二进制开关、完整 GMP alias/stride 门禁与 byte/time ledger。
+此改动减少 host 准备，不宣称减少 NTT、设备传输或通用 modular reduction 工作量。
+
+下一阶段优先选择可验证的 output-window 接口和 scaled descent 原型，而非继续仅增大 chunk：
+
+1. 固定反转、scale、monic 和叶值契约，用独立 GMP 算法核对每层 scaled 输出及最终 H(x_j)。
+2. 将 ordinary-divmod 与 scaled 路径并存，以相同 F/H/N 比较工作量、全部叶值、因子和时间。
+3. 做 output window 后再设备驻留：统一 arena/pool/spectrum 生命周期和峰值预算；一个大 spectrum 已占 1 GiB。
+4. 若 host prepare 改善却 GPU 空闲不降，先用 Nsight Systems 分辨 CPU 准备、CUDA API 等待和 stream gap；
+   Nsight Compute 用于随后确认的热点 kernel。剖析运行与无 profiler 的性能 A/B 分开。
+5. 建立 Prime95 真正单执行线程、同模数/边界/输入点或同曲线参数的基线，同时报告 full Stage2 wall、stage1 分界、
+   RAM/VRAM 峰值、曲线失败/因子口径和重复性。达成这个基线并超越前，长期目标保持未完成。

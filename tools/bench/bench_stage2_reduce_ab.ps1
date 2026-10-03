@@ -16,7 +16,7 @@ param(
     [UInt64]$D = 1231230,
     [int]$Sigma = 26,
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct')][string]$Target = 'reduction',
     [ValidateRange(1,256)][int]$BatchMB = 32,
     [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
     [string]$Output = ''
@@ -38,12 +38,14 @@ if ($Target -eq 'oracle_pack') { $order = @('gmp_digits', 'limb_pack', 'limb_pac
 if ($Target -eq 'carry_batch') { $order = @('carry_per_chunk', 'carry_batch', 'carry_batch', 'carry_per_chunk') }
 if ($Target -eq 'pack_direct') { $order = @('pack_copy', 'pack_direct', 'pack_direct', 'pack_copy') }
 if ($Target -eq 'batch_mb') { $order = @("batch_$BatchMB", "batch_$CandidateBatchMB", "batch_$CandidateBatchMB", "batch_$BatchMB") }
+if ($Target -eq 'flat_direct') { $order = @('flat_copy','flat_direct','flat_direct','flat_copy') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
                 NTT_S4_ORACLE_TEST_BAD='0'; NTT_S4_SAMPLE='96'; NTT_S4_CHECK_EVERY='8';
                 NTT_S4_CARRY_BATCH='0'; NTT_S4_CHUNK_MAX='0'; NTT_S4_CARRY_TEST_BAD='0';
-                NTT_S4_CARRY_TRACE='0'; NTT_S4_PACK_DIRECT='1' }
+                NTT_S4_CARRY_TRACE='0'; NTT_S4_PACK_DIRECT='1'; NTT_S4_FLAT_DIRECT='1'; NTT_S4_FLAT_TEST='0';
+                NTT_CARRY_ROUNDS='' }
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
 $modeControls = @(foreach ($mode in $order) {
@@ -53,6 +55,7 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_S4_ORACLE_PACK=$(if ($mode -eq 'gmp_digits') { '0' } else { '1' });
         NTT_S4_CARRY_BATCH=$(if ($mode -eq 'carry_batch') { '1' } else { '0' });
         NTT_S4_PACK_DIRECT=$(if ($Target -eq 'pack_direct' -and $mode -eq 'pack_copy') { '0' } else { '1' });
+        NTT_S4_FLAT_DIRECT=$(if ($mode -eq 'flat_copy') { '0' } else { '1' });
         NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
@@ -69,12 +72,14 @@ try {
         $carryBatch = $(if ($mode -eq 'carry_batch') { '1' } else { '0' })
         $packDirect = $(if ($Target -eq 'pack_direct' -and $mode -eq 'pack_copy') { '0' } else { '1' })
         $batchBudget = $(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { $CandidateBatchMB } else { $BatchMB })
+        $flatDirect = $(if ($mode -eq 'flat_copy') { '0' } else { '1' })
         $env:NTT_S4_OLDTAIL = $(if ($algorithm -eq 'montgomery') { '1' } else { '0' })
         $env:NTT_S4_ORACLE_ASYNC = $oracleAsync
         $env:NTT_S4_ORACLE_PACK = $oraclePack
         $env:NTT_S4_CARRY_BATCH = $carryBatch
         $env:NTT_S4_PACK_DIRECT = $packDirect
         $env:NTT_S4_BATCH_MB = "$batchBudget"
+        $env:NTT_S4_FLAT_DIRECT = $flatDirect
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -101,6 +106,7 @@ try {
         $carryLedger = [regex]::Match($text, 'real_batched_carrytime: group_readback=([0-9.]+) chunk_readback=([0-9.]+) total=([0-9.]+)')
         $inputPack = [regex]::Match($text, 'real_batched_input: direct_enabled=(\d+) direct_chunks=(\d+) copied_chunks=(\d+) d2d_bytes=(\d+) avoided_bytes=(\d+) packed_peak_bytes=(\d+) temp_peak_bytes=(\d+) temp_current_bytes=(\d+) pack_host=([0-9.]+) copy_host=([0-9.]+)')
         $phaseSplit = [regex]::Match($text, 'real_batched_split: giant=([0-9.]+) gtrees=([0-9.]+) fold=([0-9.]+) descent=([0-9.]+) inv=([0-9.]+) accum=([0-9.]+) name=([0-9.]+) f_tree_incl=([0-9.]+)')
+        $flat = [regex]::Match($text, 'real_batched_flatinput: direct_enabled=(\d+) calls=(\d+) borrowed=(\d+) padded=(\d+) alias_clones=(\d+) copy_bytes=(\d+) zero_bytes=(\d+) avoided_copy_bytes=(\d+) avoided_zero_bytes=(\d+) temp_peak_bytes=(\d+) control_peak_bytes=(\d+) t_prepare=([0-9.]+)')
         $naming = [regex]::Match($text, 'batched_naming:.*?t_scan=([0-9.]+) t_ladder=([0-9.]+) t_name=([0-9.]+)')
         $arenaSize = [regex]::Match($text, 'real_batched_breakdown:.*?ntt_seconds=([0-9.]+).*?arena_mb=([0-9.]+)')
         # This is the most recent giant-ladder snapshot, not an exact descent/naming minimum.
@@ -156,6 +162,15 @@ try {
                 $inputPack.Groups[6].Value -ne $inputPack.Groups[7].Value))) {
             throw "input pack validation failed; inspect $log"
         }
+        if (-not $flat.Success -or $flat.Groups[1].Value -ne $flatDirect -or
+            [long]$flat.Groups[3].Value+[long]$flat.Groups[4].Value -ne 2*[long]$flat.Groups[2].Value -or
+            [long]$flat.Groups[5].Value -gt [long]$flat.Groups[4].Value -or
+            [UInt64]$flat.Groups[10].Value -gt [UInt64]$flat.Groups[11].Value -or
+            ($flatDirect -eq '0' -and ($flat.Groups[3].Value -ne '0' -or
+                $flat.Groups[8].Value -ne '0' -or $flat.Groups[9].Value -ne '0' -or
+                $flat.Groups[10].Value -ne $flat.Groups[11].Value))) {
+            throw "flat input accounting failed; inspect $log"
+        }
         $row = [pscustomobject]@{ run=$i+1; mode=$mode; elapsed=[double]$stage.Groups[5].Value;
             wall=[math]::Round($sw.Elapsed.TotalSeconds,3); t_reduce=[double]$reduce.Groups[2].Value;
             coeffs=[UInt64]$reduce.Groups[1].Value; hits=$stage.Groups[1].Value;
@@ -189,7 +204,21 @@ try {
             f_tree=[double]$phaseSplit.Groups[8].Value; naming_scan=[double]$naming.Groups[1].Value;
             naming_ladder=[double]$naming.Groups[2].Value; ntt_seconds=[double]$arenaSize.Groups[1].Value;
             arena_mb=[double]$arenaSize.Groups[2].Value;
-            giant_snapshot_free_mb=$(if ($memorySnapshot.Success) { [double]$memorySnapshot.Groups[1].Value } else { $null }) }
+            giant_snapshot_free_mb=$(if ($memorySnapshot.Success) { [double]$memorySnapshot.Groups[1].Value } else { $null });
+            flat_direct=$flatDirect; flat_calls=$flat.Groups[2].Value; flat_borrowed=$flat.Groups[3].Value;
+            flat_padded=$flat.Groups[4].Value; flat_alias_clones=$flat.Groups[5].Value;
+            flat_copy_bytes=$flat.Groups[6].Value; flat_zero_bytes=$flat.Groups[7].Value;
+            flat_avoided_copy_bytes=$flat.Groups[8].Value; flat_avoided_zero_bytes=$flat.Groups[9].Value;
+            flat_temp_peak_bytes=$flat.Groups[10].Value; flat_control_peak_bytes=$flat.Groups[11].Value;
+            flat_prepare=[double]$flat.Groups[12].Value }
+        if ($rows.Count -gt 0 -and ($row.flat_calls -ne $rows[0].flat_calls -or
+            [UInt64]$row.flat_copy_bytes+[UInt64]$row.flat_avoided_copy_bytes -ne
+            [UInt64]$rows[0].flat_copy_bytes+[UInt64]$rows[0].flat_avoided_copy_bytes -or
+            [UInt64]$row.flat_zero_bytes+[UInt64]$row.flat_avoided_zero_bytes -ne
+            [UInt64]$rows[0].flat_zero_bytes+[UInt64]$rows[0].flat_avoided_zero_bytes -or
+            $row.flat_control_peak_bytes -ne $rows[0].flat_control_peak_bytes)) {
+            throw "flat input logical workload changed; inspect $log"
+        }
         if ($rows.Count -gt 0 -and ($row.coeffs -ne $rows[0].coeffs -or $row.factors -ne $rows[0].factors -or
             $row.hit_primes -ne $rows[0].hit_primes -or $row.hits -ne $rows[0].hits -or
             ($Target -ne 'batch_mb' -and (
@@ -217,7 +246,9 @@ try {
             foreach ($field in @('oracle_samples','oracle_jobs','oracle_signature','carry_deferred',
                                  'carry_slices','carry_checked','carry_finishes','carry_max_group',
                                  'raw_async','out_async','pack_launches','direct_chunks','copied_chunks',
-                                 'packed_peak_bytes','temp_peak_bytes','batch_mb')) {
+                                 'packed_peak_bytes','temp_peak_bytes','batch_mb','flat_calls','flat_borrowed',
+                                 'flat_padded','flat_alias_clones','flat_copy_bytes','flat_zero_bytes',
+                                 'flat_avoided_copy_bytes','flat_avoided_zero_bytes','flat_temp_peak_bytes')) {
                 if ($row.$field -ne $sameMode[0].$field) { throw "repeated $mode changed $field; inspect $log" }
             }
         }
@@ -258,6 +289,15 @@ try {
                 ($new | Measure-Object arena_mb -Average).Average,
                 ($old | Measure-Object naming_ladder -Average).Average,
                 ($new | Measure-Object naming_ladder -Average).Average)
+    Write-Host ("flat host preparation: {0:F3} -> {1:F3}s; copied {2:F3} -> {3:F3} GiB; zeroed {4:F3} -> {5:F3} GiB; padding peak {6:F1} -> {7:F1} MiB" -f
+                ($old | Measure-Object flat_prepare -Average).Average,
+                ($new | Measure-Object flat_prepare -Average).Average,
+                (($old | Measure-Object flat_copy_bytes -Average).Average / 1GB),
+                (($new | Measure-Object flat_copy_bytes -Average).Average / 1GB),
+                (($old | Measure-Object flat_zero_bytes -Average).Average / 1GB),
+                (($new | Measure-Object flat_zero_bytes -Average).Average / 1GB),
+                (($old | Measure-Object flat_temp_peak_bytes -Average).Average / 1MB),
+                (($new | Measure-Object flat_temp_peak_bytes -Average).Average / 1MB))
 } finally {
     foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
 }

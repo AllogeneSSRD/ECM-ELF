@@ -332,7 +332,7 @@ carry_slot_out=4.4 µs`、**`host_side` 占大头**（打包、memcpy、launch�
 5. **D2H 回读**：`carrysplit d2h=58.45 s` 是每 chunk 一次阻塞回读，可分批/异步化。
 6. **小 `B2`/多曲线**：≈25 s 的初始梯子与自检是固定成本，一条命令跑多曲线可摊销，顺带拉高占用率。
 
-## 18. Prime95 ECM stage 2 真实日志逐行解读（2 core @4.0 GHz）与逐项对照
+## 18. Prime95 ECM stage 2 日志解读（历史快照，2026-10-03 复核）
 
 数据来源：用户提供的 Prime95 worker 日志，`ECM on M3613`（3613 bit）、curve #2、`B1=260000000`、
 `B2=TBD`（自动选）、预算 3072 MB。**第 1–10 节是 gpuowl、§11–17 是本项目引擎、本节是 Prime95**，
@@ -350,19 +350,19 @@ carry_slot_out=4.4 µs`、**`host_side` 占大头**（打包、memcpy、launch�
 | `Optimal B2 is 16713*B1 = 4345380000000. Actual B2 will be 4345458567450. Curve is worth 2.63 B2=100*B1 curves.` | **B2 最优化**：最优 `B2/B1 = 16713`；实际 B2 取整到 `D` 的倍数（让最后一个巨步正好落在 B2）；并给出这条曲线相当于多少条 `B2=100·B1` 曲线的价值 | **我们没有 B2 最优化器** ✗ 这正是"下一处可复用工作"的一个方向 |
 | `Est. init transforms: 22269816, main loop transforms: 115204723, init poly cost: 88428605, main loop poly cost: 941039185` | **运行前**的成本模型：init/主循环各需多少次变换、多项式乘法代价 | 我们有 `batched_cost*` 成本模型（operand_bits 口径），但**只统计不预测** |
 | `Estimated stage 2 vs. stage 1 runtime ratio: 0.263` | 预估 stage 2 / stage 1 时间比 | 我们没有这个预估 |
-| `Using 2849MB of memory. D: 2552550, degree-230400 polynomials. Ftree polys in memory: 2` | **最终方案**：`D = 2552550`；多项式度数 `230400`；F 树只保留 2 个多项式在内存里（其余落盘/分块）| 我们：`--d 570570`、`P = φ(D)/2 = 51840`、`Ftree polys in memory` 对应我们的 chunk 分块 |
+| `Using 2849MB of memory. D: 2552550, degree-230400 polynomials. Ftree polys in memory: 2` | **最终方案**：`D = 2552550`；多项式度数 `230400`；Ftree 缓存预算为 2×poly_size 个 gwnums 的容量；不是仅两个节点多项式| 我们：`--d 570570`、`P = φ(D)/2 = 51840`、Ftree 缓存预算和我们的 GPU chunk 是不同层次 |
 | `nQx complete. Time: 1.459 sec.` | 预计算巨步点 `[i]Q` 的 x 坐标（我们的"巨点梯子"）| `giant` / `ladder`（我们在设备上做）|
-| `Setting affinity to run polymult helper thread on logical CPU 3` | 用**第二个核**做多项式乘法（2 核任务的第二个 worker）| 我们：1 个宿主线程 + GPU |
+| `Setting affinity to run polymult helper thread on logical CPU 3` | 另有一个 polymult helper 执行线程，绑定 logical CPU3；不是另一个 worker，也不能据此推断物理核数| 我们：1 个宿主线程 + GPU |
 | `Round off: 0, avg poly_size: 0.879906, EB: 7.95989, SM: 0, Time: 0.252 sec.` 起，`avg poly_size` 逐层翻倍 `3.5→7.03→…→115200`（共 17 层，Σ≈5.354 s）| **F 树自底向上逐层构建**：`avg poly_size` = 该层多项式的平均 FFT 字数，翻倍到 115200 = 230400/2 即树顶的两个半树 | 我们的 **F 树**（`pre`，一次性分批 NTT）|
-| `PolyR built. Time: 2.082 sec.` | 树顶合成（两个 115200 度的半树相乘）得到整棵 F 树的根 | F 树的最后一层 |
-| `Poly compress. Time: 0.207 sec.` | 压缩多项式表示（省内存）| 我们的 chunk/forest 布局 |
+| `PolyR built. Time: 2.082 sec.` | 倒数多项式 R≈1/F 的 Newton 构建；不是 F 树最后一层（2026-10-03 源码复核） | 我们的 finv / reciprocal 构建 |
+| `Poly compress. Time: 0.207 sec.` | 默认 ECMPolyCompress=1 为预处理/预转置；PRE_COMPRESS 为选项 2/-2，不能仅凭该日志推断压缩或 FFT 缓存| 我们的 chunk/forest 布局 |
 | `Stage 2 init complete. 16742065 transforms, 2 modular inverses. Time: 9.796 sec.` | **init 阶段合计**：1674 万次变换、2 次模逆、9.796 s | 我们的 `pre`（6.335 s）+ 自检/设置 |
 | `PolyG built. Time: 5.611 sec.`（共 **7 次**，Σ41.015 s）| 主循环里每个"批"构建一棵 G 树（该批巨点的乘积树）| 我们的 **`gtrees`**（生产 66 批、Σ192.920 s）|
 | `PolyH built. Time: 2.877 sec.`（共 **6 次**，Σ17.762 s）| 跟着构建/更新 H（`H ← (G·H) mod F` 的等价物）| 我们的 **`fold`**（生产 Σ72.836 s，每批 3 次满尺寸乘法）|
-| `H(X) scaled. Time: 0.933 sec.` | H 的整体常数缩放 | 我们的 Γ 投影缩放（§42，`Ginv` 一次全局缩放）|
+| `H(X) scaled. Time: 0.933 sec.` | H 乘倒数 R 后取高半，进入 Bernstein scaled remainder 表示（ecm.cpp:9542）；不是整体常数缩放 | 当前 Γ 投影去缩放是另一件事；默认下降仍用普通 divmod |
 | `PolyF up / PolyF down`（1.218 / 2.492 / 4.620 / 7.777 s，Σ16.107 s）| **余式树下降**（Bernstein）：沿 F 树逐层取余到叶子 | 我们的 **`descent`**（生产 31.134 s，宿主 GMP；`NTT_S5_ON` 时走设备）|
 | `gg = mul H(X). Time: 0.101 sec.` | 把各叶子结果乘起来 | 我们的 **`accum`**（块积）|
-| `Stage 2 complete. 115311553 transforms, 7 modular inverses. Total time: 74.344 sec.` | **主循环合计**：1.153 亿次变换、7 次模逆、74.344 s | 我们的 `loop_wall`（346.750 s）|
+| `Stage 2 complete. 115311553 transforms, 7 modular inverses. Total time: 74.344 sec.` | init 后到 GCD 前的主体合计，含 G/H、scaled descent、accum 等；init 另计（ecm.cpp:9335/9351/9844） | 不能只对应我们的 `loop_wall`，还需包含 post/descent/accum 等 |
 | `Stage 2 GCD complete. Time: 0.000 sec.` | 最后的 gcd | 我们的块级 gcd（`accum` 13.068 s，含块积；他们这一项 0.000 应是未计或极快）|
 
 **参数约定的一致性是重要旁证**：他们的 `D: 2552550` 与 `degree-230400 polynomials` 满足
@@ -387,9 +387,9 @@ carry_slot_out=4.4 µs`、**`host_side` 占大头**（打包、memcpy、launch�
 
 吞吐：init **1.71 M transforms/s**、主循环 **1.55 M transforms/s**。
 
-### 18.3 与我们生产形状的对照（都按同口径归一化）
+### 18.3 历史异参数对照（不构成性能倍数证据）
 
-| 量 | Prime95（2 core @4 GHz，M3613）| 我们（RTX 4060 + 1 宿主线程，M5261）| 比 |
+| 量 | Prime95（主线程＋helper，M3613）| 我们（RTX 4060 + 1 宿主线程，M5261）| 比 |
 |---|---|---|---|
 | `D` | 2552550 | 570570 | 我们小 4.5× |
 | `P = φ(D)/2`（多项式度数）| **230400** | **51840** | 我们小 4.4× |
@@ -405,12 +405,7 @@ carry_slot_out=4.4 µs`、**`host_side` 占大头**（打包、memcpy、launch�
 | 内存 | 2849 MB（预算 3072）| arena 4684 MB + 宿主私有峰值 7802 MB | 我们差 2–3× |
 | 变换计数 | init 16.74 M + main 115.31 M | `ntt_calls=3,814,929`（**批量调用**单位，不可直接比）| — |
 
-**归一化后才是关键结论**：每个巨步的成本还要除以多项式度数 `P`（一步的乘法和折叠规模都 ∝ P）。
-Prime95：`43.7 µs / 230400 = 0.19 ns`（每步每叶子）；我们：`102 µs / 51840 = 1.97 ns` ⇒
-**我们慢约 10×** ✓。再折算 `N` 的位宽（他们 3613 bit、我们 5261 bit，1.46×），仍然**约 7×** ✓。
-
-也就是说：**用户"GPU 占用率低、和 CPU 比没快多少"的直觉在数字上成立** —— 我们的 stage-2 机器
-每单位数学工作比 Prime95 在 2 个 CPU 核上慢约一个数量级，而且 `B2` 还比它小 2.2 倍、`P` 小 4.4 倍。
+**2026-10-03 复核**：上表保留历史秒数，但其中主循环计时边界、模数算术、下降算法和线程配置不同，比 列不能作为加速比。原来再线性除以 P/模数位宽得到约 7–10× 差距的推断已撤销：NTT 长度与多项式复杂度不按这两个量线性缩放。当前机制与比较口径见 [STAGE2_GPU_COMPARE_PRMERS.md §28](D:/code/MPA-OpenCl/docs/STAGE2_GPU_COMPARE_PRMERS.md)。
 
 ### 18.4 能直接抄的三件事（按收益排序）
 
@@ -418,7 +413,7 @@ Prime95：`43.7 µs / 230400 = 0.19 ns`（每步每叶子）；我们：`102 µs
    而我们用 `D=570570`（P=51840）却有 3.4e6 步。**每步的固定开销（launch/sync/宿主胶水）不随 P 增长**，
    所以"更少更大的步"对 GPU 更有利；他们自己的覆盖率也印证大 D 更划算（`numvals` 1413778/1524700 =
    **93 %** 对 471692/2012607 = **23 %**）✓。**下一轮应把 `D` 当搜索维度**（用我们已有的 `batched_cost`
-   模型 + 实测），而不是固定 `--d`。
+   模型 + 实测），而不是固定 `--d`。此建议是历史起点；当前已有 D 成本模型与实测选择，见 §27、§37。
 2. **下降不要用宿主 GMP**：他们的余式树 69.9 µs/叶子，我们 600.6 µs/叶子（8.6×）✗。这正是 S5 的目标，
    但 S5 现在每次除法 5.0 ms（§58.3）—— **先把同层除法按形状跨节点批量**，目标是把每叶子成本压到
    70 µs 量级（对应每除法 ≈48 µs，与宿主同量级）。
@@ -437,7 +432,7 @@ Prime95：`43.7 µs / 230400 = 0.19 ns`（每步每叶子）；我们：`102 µs
 * **`B1` 差 6 个数量级**（他们 `B1=2.6e8`、我们 `B1=1000`）⇒ ECM 阶段语义不可比；可比的只有 stage-2
   机器本身（同一棵 F 树/余式树/折叠结构）。
 * 他们的 `B2` 是**优化后的目标**，我们的 `--b2` 是**上限**。
-* 他们是 **2 个核**（主线程 + polymult helper），我们是 1 个宿主线程 + GPU。
+* 他们至少使用 **主线程 + polymult helper 两个执行线程**；日志未证明对应两个物理核，我们是 1 个宿主线程 + GPU。
 * 日志里 `Stage 2 GCD complete. Time: 0.000 sec.` 与 `Time: 0.252 sec.` 这类量可能只是计时粒度/未计的
   结果，不要当成"他们的 gcd 是免费的"。
 
@@ -1999,3 +1994,131 @@ PowerShell 语法解析和 `git -c core.whitespace=cr-at-eol diff --check` 通�
 
 固定 F/finv 原始输入或 spectrum 驻留也仍待做：一个 N=2^27 spectrum 为 1 GiB，本轮 arena 又增加
 436.6 MiB，必须先统一预算和驱逐规则。单纯继续提高到 96/128 MB 缺乏本轮证据，不能默认启用。
+
+## 38. flat 输入借用与长进位链修复（2026-10-03）
+
+### 38.1 输入生命周期与统计范围
+
+起点 `8b5b57f`。实现位于 [flat_mul_batch:6292](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6292)。
+原路径总是分配两个 nbatch×P×W 的零填充向量，再复制每个 slice。
+现在 ma/mb 已等于 P、且该输入向量不与 out 别名时，直接借用 const 指针；短输入仍逐 slice 填充。
+out 与 A/B 同一向量时必须先克隆，因为内部 multiply 会先 out.assign，不能借用被覆盖的源。
+异步上传在本次调用内将输入复制到自有 pinned staging；源向量在整个调用期间有效。
+Newton 两次 multiply、qrev 和 q·B 四个调用点均经过此接口。
+
+默认 `NTT_S4_FLAT_DIRECT=1`；设为 0 恢复两份副本，便于同二进制 ABBA。
+[real_batched_flatinput:9100](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9100) 记录所有 flat 调用的
+borrowed/padded/alias 数量、实际/避免的 copy 和 zero 字节、临时 host padding 峰值及 t_prepare。
+峰值只包括 wa/wb 的 capacity，**不是进程 RAM 峰值，也不是 VRAM**；t_prepare 只覆盖分配/清零/复制，
+不含 NTT 和向量析构。NTT、chunk、H2D/D2H 和 oracle cadence 的工作量保持一致。
+
+### 38.2 新边界门禁揭示旧进位错误
+
+[s4_flat_input_check:6360](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6360) 用独立 GMP 完整卷积核对
+16 个 full/short stride、A/B/双方 out 别名案例，每个输入系数取 N−(i+1)。
+129-bit 模数的五种复制/借用/阻塞/批量 carry/hostpack 调度原本都通过；
+5261-bit、83-word 的同类案例在 **FLAT_DIRECT=0 复制控制**上仍失败。
+`(N−1)^2 mod N` 应为 1；NTT 后某个数字为 67108864，超过 bpw=26 的 mask 67108863，随后设备归约和 GMP 不同。
+
+可重复的最小 real 参数是 `--n-hex ('1'+('f'*1315)) --sigma 26 --b1 20 --b2 1000 --d 210 --device 1`，
+开启 FLAT_TEST=1、FLAT_DIRECT=0。失败的旧二进制 SHA256 为
+`0D0EBBDECCEBB95C40D55057D38324A7352CAAE25DB5B5C5821E988DF04904E3`。
+[默认轮数日志](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_long_default_min.log) exit=3；
+仅增加 `NTT_CARRY_ROUNDS=512` 的 [对照日志](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_long_rounds512.log) exit=0。
+因此这是原进位阶段的问题，不能归因于输入借用或新 long-division 尾部。
+
+原公式 `2+ceil((k+2*bpw)/bpw)` 只保证高度下降，不保证规范化：
+一个单位进位可沿任意长的 radix−1 串传播，每轮只前进一步。
+此前随机测试未暴露该模式；归约 primitive 自检也无法替代真实卷积的边界测试。
+
+### 38.3 保持单次 launch 的精确进位
+
+[carry_cone_value:815](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:815) 保留原有限轮 cone 计算。
+原始系数的高度界 H≤k+2*bpw；迭代上界满足 M(r+1)≤radix−1+floor(M(r)/radix)。
+现有轮数足以令 cone 输出 x≤radix，此时剩余进位为二值：x=radix 生成、x=radix−1 传播、较小值终止。
+[carry_cone_kernel:839](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:839) 用 warp ballot 找到本 warp
+最近的非传播项；lane0 从只读原输入重算前方 cone 值，确定跨 warp/block 的入进位。
+输出为 `(x+incoming)&mask`。每个 slice 使用自己的基址，回看不跨 slice；输入/输出仍分离，避免读写竞争。
+没有新增全局 scratch、host 同步或默认路径 launch。超过 10 轮的诊断 fallback 也有最终精确处理。
+
+该实现的回看在长 all-mask 串上仍可能较贵，最坏不保证线性总工作量；后续如该模式成为生产热点，
+可改为分块 generate/propagate scan。不能再用增加固定轮数声称覆盖任意长度。
+新回归逐字检查 14/26-bit radix、三批独立 slices、4097-digit 长串、warp/block 边界和末尾部分 warp，
+共 **49230 words**；83-word GMP fixture 另外核对 **19920 words**。
+[修复后最小案例](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_long_exact_min.log) 两项 bad=0、exit=0，未设置轮数覆盖。
+
+构建 compile **258.5 s** / link **2.9 s**，exit=0，
+[构建日志](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_exact_build.log)。最终二进制 SHA256：
+`03138BD6DC91328E005FB289108C5750C78D87A4142F42B85A98299619D65220`。
+### 38.4 完整门禁与同二进制生产 ABBA
+
+完整门禁 **103 passed / 0 failed**，
+[日志](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_exact_gate_final.log)。
+本机嵌套 PowerShell 启动曾停顿/返回 −1，正常权限重跑也遇到该问题；直接调用相同验收脚本正常。
+门禁新增可选 `-InProcessChecks`，以命名参数调用原验收脚本、捕获全部输出流，并逐次保存/恢复 NTT 环境，
+默认仍使用子进程。最终完整门禁使用该选项，没有改变 CUDA 验收逻辑。
+[四轮 runner smoke](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_direct_smoke_final/results.csv) 每轮 610 coefficients，全通过。
+
+生产使用同一 `03138...` 二进制，`-Target flat_direct -BatchMB 64 -Device 1`，
+顺序复制/借用/借用/复制；FLAT_TEST=0、默认进位轮数，其余生产开关和 §37 的 64 MB 条件一致。
+模数是 **M5261**（hex `1` 后 1315 个 `f`），本 GPU 实现仍使用通用奇数归约，而非 Mersenne 专用算术。
+B1=1000、B2=1.94e12、D=1231230、sigma=26、P=115200。
+[CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_direct_ab_20261003/results.csv)、
+[参数与 SHA](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_direct_ab_20261003/provenance.json)、
+[runner 汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_direct_ab_20261003/runner.log)。
+
+- `elapsed` 四轮为 **213.51 / 214.16 / 198.25 / 199.87 s**；复制均值 **206.69**、借用 **206.205 s**（−0.235%）。
+  两个模式内部 spread 分别 **13.64 / 15.91 s**，远大于均值差，**没有整体加速证据**。
+  进程 wall 均值 **241.311 → 241.558 s**，也没有改善。
+- descent 均值 **50.720 → 46.445 s**（−8.43%）；flat t_prepare **2.808714 → 0.268883 s**（−90.43%）。
+  分项下降可确认；t_prepare 不包含析构，不能将 descent 的全部差额归因于这一个计时器。
+- flat 共 **454 calls / 908 operands**。复制控制全部 materialize；借用 **879** 个、padding **29** 个，生产 alias=0。
+  copy **13.557 → 1.223 GiB**（−90.98%），zero **13.796 → 1.462 GiB**（−89.40%）；
+  每次生产避免 copy/zero 各 **13244140680 bytes**。这两个账本是不同内存操作，不能称作避免两倍 PCIe 上传。
+- flat 临时 host padding 峰值 **291.8 → 145.9 MiB**，减半。
+  原有诊断观察到的进程 host peak 四轮约 **10730 / 10734 / 10724 / 10727 MB**，整体峰值未下降。
+  临时 padding 的节省没有改变此前其他阶段的进程峰值。
+- arena **6215.6 MiB**、overflow=0；临时 packed device inputs 仍为 0，此轮没有减少 VRAM。
+  H2D **38.81 GiB**、D2H **37.27 GiB**、pack launches **24462**、raw chunks **12738** 均相同。
+  归约均值 **18.618 → 18.678 s**，没有改善。
+- 每轮 **62385796 coefficients**，factor=`42089`、hit prime=`3511`，已启用检查均正常（生产为抽样；逐输出核对在门禁中）；
+  oracle **1609 jobs / 95906 samples**，signature=`a7f13ab751eaf263`；carry checked chunks **11516**。
+  runner 核对了这些工作量、copy+avoided/zero+avoided，以及同模式两次的字节/峰值计数相同。
+
+注意 CLI elapsed 从 Ftree 已建完后的 run_batched 开始，不是完整 Stage2。
+进程 wall 包含 stage1、设置、自检、baby 和 Ftree；下一轮公平 CPU 比较必须独立划定边界，不能将两者直接当 full Stage2。
+
+### 38.5 GPU 采样与下一轮优先级
+
+用户 GPU-Z 日志停在 **00:55:41**，未覆盖本轮，不能复用旧数据声称实时 GPU 改善。
+本轮用 nvidia-smi 显式指定 **GPU1**，约 1 Hz 采集 NVML busy time、频率、温度和显存：
+[原始 CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_direct_ab_20261003/gpu1_sensors.csv)、
+[阶段汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_direct_ab_20261003/gpu1_summary.json)、
+[可重跑汇总脚本](D:/code/MPA-OpenCl/build_cuda_cmake/_flat_direct_ab_20261003/analyze_smi.ps1)。
+时间窗从本轮 started/ended 和既有 wall timers 近似推断，busy time 不是 SM occupancy。
+NVML/WDDM 的采样显存峰值也不等同 arena 的已分配字节，不能拿二者差额当作精确可用预算。
+
+- giant/Gtree/fold：复制 **258 samples、60.709% mean load**；借用 **263 samples、58.319%**。
+  ≤5% 样本 **44/258 → 52/263**，主循环空闲未减少。
+  平均 SM clock **1781.9 → 1776.6 MHz**、温度 **73.93 → 74.10°C**；仍不能排除 CPU/其他时序波动。
+- descent/accum/naming：mean load **49.252 → 50.900%**，≤5% 样本 **31/127 → 34/120**。
+  时段变短，没有消除低负载间隙。四轮采样显存峰值均 **5989 MiB**。
+
+据此保留输入借用默认：它减少实际准备成本和局部 RAM，完整门禁通过；不宣传总速度、VRAM或进程峰值改善。
+回退用 `NTT_S4_FLAT_DIRECT=0`；长进位链的正确性修复不依赖该开关。
+
+下一轮先做 **Nsight Systems 的独立短窗口 capture**，区分 CPU 准备、CUDA API 等待和 stream gap；
+之后再选 Nsight Compute 的热点 kernel，剖析时间不参与无 profiler 的 ABBA。
+已确认本机工具为 Systems 2026.1.3、Compute 2026.2.1。
+
+显存候选是 [NttArena::BigEntry:1520](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1520) /
+[ntt_arena_bufs:1649](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1649)：
+目前 A/B/Q 按 `(N, nbatch)` 保留多组，本质是临时 workspace；可探索跨形状按容量复用。
+先分别记录 big buffers、twiddle tables、small buffers 和外部 pools 的预算，审计 oracle/pack 的跨 stream 读者，
+再用事件保证旧数据消费完成；dRes 的累积账本和真正驻留的 spectrum 不能一并覆盖。
+这只是代码候选，**尚未实现或测出 VRAM 节省**。
+
+算法侧继续优先 output-window，随后 scaled descent：当前 qrev/q·B/Newton 仍生成并归约完整乘积后截断。
+窗口可先减少归约、回传和 host 物化；并不自动减少 full NTT 或输入上传。
+Prime95 MULHI/MULLO、scaled 表示和多输出共享输入的契约复核见
+[STAGE2_GPU_COMPARE_PRMERS.md §28](D:/code/MPA-OpenCl/docs/STAGE2_GPU_COMPARE_PRMERS.md)。
