@@ -381,6 +381,10 @@ static const size_t S2G_GFINV_SEG = 16;
 
 // Batch inverses of the EXISTING segment products, not of a larger point segment.
 // Only a bounded 64-segment window is retained; no chunk-sized inverse array.
+static const bool g_fold_flat = [] {
+    const char *e=std::getenv("NTT_FOLD_FLAT");
+    return e && *e && std::atoi(e)!=0;
+}();
 static const bool g_gfinv_batch = [] {
     const char *e=std::getenv("NTT_GFINV_BATCH"); return e && std::atoi(e)!=0;
 }();
@@ -7009,6 +7013,130 @@ static void flat_mul_batch(PolyLayer &L, const std::vector<unsigned long long> &
     }
 }
 
+/* Host-contiguous fold; the GPU multiply and its checks are shared with CPoly.
+   H keeps the SAME declared coefficient count as the legacy path: only the remainder
+   is trimmed, never T or the inverse. This matters when a leading coefficient is zero. */
+struct FoldFlatStats {
+    bool enabled=false;
+    unsigned long long folds=0, muls=0, sub_coeffs=0, peak_bytes=0;
+    double t_prepare=0, t_multiply=0, t_subtract=0, t_bridge=0;
+};
+static void fold_flat_step(PolyLayer &L, const std::vector<unsigned long long> &G,
+                           std::vector<unsigned long long> &H,
+                           const std::vector<unsigned long long> &F,
+                           const std::vector<unsigned long long> &finv, FoldFlatStats &st)
+{
+    const size_t W=L.W, P=F.size()/W-1;
+    if(!L.s4 || !W || !P || F.size()%W || G.size()%W || H.size()%W || finv.size()%W) {
+        std::fprintf(stderr,"%s: FATAL: flat fold shape mismatch\n",NTT_PROBE_NAME);std::exit(3);
+    }
+    ++st.folds;
+    if(G.empty() || H.empty()) {H.clear();return;}
+    std::vector<unsigned long long> T,qrev,qb;
+    auto multiply=[&](const std::vector<unsigned long long> &a,
+                      const std::vector<unsigned long long> &b,
+                      std::vector<unsigned long long> &out,size_t count=(size_t)-1) {
+        const double t=now_s();flat_mul_batch(L,a,a.size()/W,b,b.size()/W,1,out,BC_FOLD,0,count);
+        st.t_multiply+=now_s()-t;++st.muls;
+    };
+    multiply(G,H,T);
+    const size_t degT=T.size()/W-1;
+    if(degT<P) {H=std::move(T);return;}
+    const size_t k=degT-P+1;
+    if(finv.size()<k*W) {std::fprintf(stderr,"%s: FATAL: flat fold inverse too short\n",NTT_PROBE_NAME);std::exit(3);}
+    {
+        const double tp=now_s();
+        std::vector<unsigned long long> ra(k*W),rbi(finv.begin(),finv.begin()+k*W);
+        for(size_t i=0;i<k;++i)std::copy_n(T.data()+(degT-i)*W,W,ra.data()+i*W);
+        st.t_prepare+=now_s()-tp;
+        multiply(ra,rbi,qrev,k);
+        st.peak_bytes=std::max(st.peak_bytes,8ull*(H.capacity()+T.capacity()+ra.capacity()+rbi.capacity()+qrev.capacity()));
+    } // reverse inputs no longer live when q*F is formed
+    const double tq=now_s();
+    for(size_t i=0;i<k/2;++i)for(size_t w=0;w<W;++w)std::swap(qrev[i*W+w],qrev[(k-1-i)*W+w]);
+    st.t_prepare+=now_s()-tq;
+    multiply(qrev,F,qb,P);
+    H.resize(P*W);
+    st.peak_bytes=std::max(st.peak_bytes,8ull*(H.capacity()+T.capacity()+qrev.capacity()+qb.capacity()));
+    const double ts=now_s();
+    // Reuse GMP limbs for the whole remainder, preserving general composite-N mod semantics.
+    mpz_t a,b;mpz_inits(a,b,nullptr);
+    std::vector<unsigned long long> word(W);
+    for(size_t i=0;i<P;++i) {
+        words_to_mpz(a,T.data()+i*W,W);words_to_mpz(b,qb.data()+i*W,W);
+        mpz_sub(a,a,b);mpz_mod(a,a,L.N);mpz_to_words(word,W,a);
+        std::copy_n(word.data(),W,H.data()+i*W);
+    }
+    mpz_clears(a,b,nullptr);st.sub_coeffs+=P;
+    const char *fault=std::getenv("NTT_FOLD_FLAT_TEST_BAD");
+    if(fault && std::atoi(fault) && !H.empty()) H[0]^=1;
+    while(H.size()>W && std::all_of(H.end()-W,H.end(),[](unsigned long long x){return x==0;}))H.resize(H.size()-W);
+    st.t_subtract+=now_s()-ts;
+}
+
+/* Independent schoolbook GMP product + classical monic long division, NOT the
+   reversed-inverse division used by the candidate and the legacy GPU path. */
+static std::vector<unsigned long long> fold_gmp_reference(PolyLayer &L,
+    const std::vector<unsigned long long> &G,const std::vector<unsigned long long> &H,
+    const std::vector<unsigned long long> &F)
+{
+    const size_t W=L.W,P=F.size()/W-1;
+    auto out=groot_product_gmp(L,G,H);
+    if(out.size()/W<=P)return out;
+    mpz_t a,b,c;mpz_inits(a,b,c,nullptr);std::vector<unsigned long long> word(W);
+    for(size_t i=out.size()/W;i-->P;) {
+        words_to_mpz(c,out.data()+i*W,W);
+        for(size_t j=0;j<P;++j) {
+            words_to_mpz(a,out.data()+(i-P+j)*W,W);words_to_mpz(b,F.data()+j*W,W);
+            mpz_submul(a,c,b);mpz_mod(a,a,L.N);mpz_to_words(word,W,a);
+            std::copy_n(word.data(),W,out.data()+(i-P+j)*W);
+        }
+        std::fill_n(out.data()+i*W,W,0ull);
+    }
+    mpz_clears(a,b,c,nullptr);out.resize(P*W);
+    while(out.size()>W && std::all_of(out.end()-W,out.end(),[](unsigned long long x){return x==0;}))out.resize(out.size()-W);
+    return out;
+}
+static void fold_flat_fixture(PolyLayer &L)
+{
+    const size_t W=L.W;unsigned long long cases=0,words=0;
+    mpz_t z;mpz_init(z);std::vector<unsigned long long> word(W);
+    for(size_t P:{1u,2u,3u,8u,17u}) {
+        std::vector<unsigned long long> F(W,0);F[0]=1;
+        for(size_t j=0;j<P;++j) {
+            mpz_set_ui(z,j+2);mpz_neg(z,z);mpz_mod(z,z,L.N);mpz_to_words(word,W,z);
+            std::vector<unsigned long long> leaf(2*W);std::copy_n(word.data(),W,leaf.data());leaf[W]=1;
+            F=groot_product_gmp(L,F,leaf);
+        }
+        CPoly rev=cp_from_flat(F,P,W);std::reverse(rev.begin(),rev.end());
+        auto inverse=cp_to_flat(cp_inv_series(rev,P+1,L),W);
+        for(size_t mode=0;mode<4;++mode) {
+            const size_t nh=mode==1?1:mode==2?P:P+1,ng=mode==1?1:P+1;
+            auto make=[&](size_t n,bool zero){
+                std::vector<unsigned long long> v(n*W);
+                for(size_t j=0;j<n;++j) {
+                    if(zero)mpz_set_ui(z,0);
+                    else if(mode==2)mpz_sub_ui(z,L.N,j%3+1);
+                    else {mpz_set_ui(z,17*j+3);mpz_mul_2exp(z,z,(unsigned long)((j*31)%L.S));}
+                    mpz_mod(z,z,L.N);mpz_to_words(word,W,z);std::copy_n(word.data(),W,v.data()+j*W);
+                }return v;
+            };
+            auto H=make(nh,mode==0),G=make(ng,false);
+            FoldFlatStats stats;
+            // mode 3 exercises repeated folds and a shorter final G with the same inverse.
+            for(size_t round=0;round<(mode==3?3u:1u);++round) {
+                if(round==2)G.resize(std::min(G.size(),2*W));
+                auto expected=fold_gmp_reference(L,G,H,F);
+                fold_flat_step(L,G,H,F,inverse,stats);
+                if(H!=expected) {std::fprintf(stderr,"%s: FATAL: flat fold GMP mismatch P=%llu mode=%llu round=%llu\n",NTT_PROBE_NAME,(unsigned long long)P,(unsigned long long)mode,(unsigned long long)round);std::exit(3);}
+                ++cases;words+=H.size();
+            }
+        }
+    }
+    mpz_clear(z);
+    std::printf("fold_flat_fixture: cases=%llu words=%llu bad=0 (GMP schoolbook/monic long division, zero/near-N/short/padded/repeated folds)\n",cases,words);
+}
+
 /* Scaled remainder descent: one sibling multiply per nontrivial child.
    Independent GMP node/Horner checks are opt-in, excluded from clean timings. */
 struct ScaledStats {
@@ -8519,6 +8647,7 @@ static unsigned long long ladder_product(const std::vector<unsigned long long> &
     return (unsigned long long)nh;
 }
 struct BatchedRun {
+    FoldFlatStats fold_flat;
     Stage2Tail tail;
     unsigned long long giant_points = 0, num_poly_g = 0, loops = 0, P = 0;
     unsigned long long descent_divmods = 0, leaf_values = 0, apply_blocks = 0, block_per = 0;
@@ -8593,7 +8722,9 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         std::fprintf(stderr,"%s: FATAL: scaled descent needs S4 and cannot be combined with S5\n",NTT_PROBE_NAME);
         std::exit(3);
     }
+    const bool fold_flat_enabled=g_fold_flat && L.s4;
     BatchedRun R;
+    R.fold_flat.enabled=fold_flat_enabled;
     R.P = P;
     R.giant_points = imax;
     R.dbg_progress = true;                  /* one line per G-tree batch: gate-able, machine-readable */
@@ -8665,7 +8796,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
        reduction needs (deg T = 2P => k = P+1).  Computed ONCE and reused by every fold --
        the reference's cost model has no such term, so it is charged to its own category. */
     CPoly finv;
-    const CPoly Fpoly = cp_from_flat(Ft[1], Fdeg[1], W);
+    const CPoly Fpoly = fold_flat_enabled ? CPoly{} : cp_from_flat(Ft[1], Fdeg[1], W);
     const double ti0 = now_s();
     if (R.loops > 0) {
         CPoly revF;
@@ -8678,6 +8809,11 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         L.cat = -1;
     }
     R.t_inv = now_s() - ti0;
+    std::vector<unsigned long long> Hflat,finvflat;
+    if(fold_flat_enabled && !finv.empty()) {
+        const double tb=now_s();finvflat=cp_to_flat(finv,W);CPoly{}.swap(finv);
+        R.fold_flat.t_bridge+=now_s()-tb;
+    }
     CPoly H;
     FTreeStats gs;
     /* the giant points are computed in POINT CHUNKS that are a whole number of G-tree batches
@@ -8950,9 +9086,15 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         gs.leaves += bs.leaves;
         gs.padded += bs.padded;
         gs.muls += bs.muls;
-        if (b == 0) { H = cp_from_flat(gt[1], bdeg[1], W); continue; }
+        if (b == 0) {
+            if(fold_flat_enabled)Hflat=std::move(gt[1]);else H=cp_from_flat(gt[1],bdeg[1],W);
+            continue;
+        }
         /* ---- the fold: H <- (G*H) mod F, three full-size multiplies ---- */
         const double tf0 = now_s();
+        if(fold_flat_enabled) {
+            fold_flat_step(L,gt[1],Hflat,Ft[1],finvflat,R.fold_flat);
+        } else {
         const CPoly G = cp_from_flat(gt[1], bdeg[1], W);
         L.cat = BC_FOLD;
         const CPoly T = cp_mul(G, H, L);
@@ -8975,6 +9117,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             for (size_t i = 0; i < P; ++i)
                 cp_coeff_sub(H[i], T[i], (i < qb.size()) ? qb[i] : cp_zero(W), L.N, W);
             cp_trim(H);
+        }
         }
         L.cat = -1;
         R.t_fold += now_s() - tf0;
@@ -9000,6 +9143,12 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         }
         R.t_loop_wall += now_s() - tloop0;
+    }
+    if(fold_flat_enabled && !Hflat.empty()) {
+        const double tb=now_s();H=cp_from_flat(Hflat,Hflat.size()/W-1,W);
+        if(!finvflat.empty())finv=cp_from_flat(finvflat,finvflat.size()/W-1,W);
+        std::vector<unsigned long long>().swap(Hflat);std::vector<unsigned long long>().swap(finvflat);
+        R.fold_flat.t_bridge+=now_s()-tb;
     }
     /* ---- UNDO THE PROJECTIVE SCALE (section 42) ------------------------------------------
        The projective leaves multiplied the tree by Gamma, and the fold carries a constant
@@ -9912,6 +10061,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if(scaled_test && std::atoi(scaled_test)!=0) scaled_descent_fixture(L);
     }
     if(!s4_on) stage2_fixture_begin=now_s();
+    const char *fold_test=std::getenv("NTT_FOLD_FLAT_TEST");
+    if(fold_test && std::atoi(fold_test))fold_flat_fixture(L);
     const char *ginv_test=std::getenv("NTT_GFINV_BATCH_TEST");
     if(ginv_test && std::atoi(ginv_test))gfinv_batch_fixture(L.N,nw);
     const char *gdevice_test=std::getenv("NTT_GROOT_DEVICE_TEST");
@@ -9930,7 +10081,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
@@ -10155,6 +10306,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     "main includes GCD, naming and oracle drain; Stage1 excluded; init shared)\n",
                     cv+1,stage2_shape_seconds,stage2_init_seconds,el,stage2_init_seconds+el,
                     stage2_fixture_seconds,(int)(!stage2_extra_fixtures && !run_s2 && curves==1));
+        std::printf("real_batched_foldflat: enabled=%d folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu prepare=%.6f multiply=%.6f subtract=%.6f bridge=%.6f\n",
+            (int)BR.fold_flat.enabled,BR.fold_flat.folds,BR.fold_flat.muls,BR.fold_flat.sub_coeffs,BR.fold_flat.peak_bytes,
+            BR.fold_flat.t_prepare,BR.fold_flat.t_multiply,BR.fold_flat.t_subtract,BR.fold_flat.t_bridge);
         std::printf("real_batched_gfinv: enabled=%d requests=%llu cache_hits=%llu groups=%llu segments=%llu group_attempts=%llu group_failures=%llu individual_attempts=%llu good=%llu nonunits=%llu scratch_peak_bytes=%llu t_prepare=%.6f\n",
             (int)g_gfinv_batch,g_gfinv.requests,g_gfinv.cache_hits,g_gfinv.groups,g_gfinv.segments,
             g_gfinv.group_attempts,g_gfinv.group_failures,g_gfinv.individual_attempts,g_gfinv.good,

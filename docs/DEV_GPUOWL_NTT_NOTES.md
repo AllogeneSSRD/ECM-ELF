@@ -3878,3 +3878,102 @@ CPU本轮未重跑，其D1531530/degree138240、内存/检查与GPU不同；不�
 在修复后基线重采Nsight窗口并关联CUDA外空档，再推进device leaf/fold与共享父NTT。
 正确baby入口另有新增prefix乘法成本，后续可研究设备批量归一化，但必须继续比较独立全baby/F和冻结因子；
 不可通过恢复错误输入换取旧计时。
+
+## 51. 连续缓冲 host fold 与主机准备成本（2026-10-03）
+
+### 51.1 从成本模型选择候选
+
+已补全 [逐步骤报告的计算/空间/传输模型](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:506)。
+§50 正确入口基线中 G 树约占 28.87%、fold 19.08%，归约 kernel 10.13% 是这些阶段的子项。
+本轮先处理 fold 中源码可确认的主机分配/复制：每轮将 G、T、ra/rbi、qrev/q、qF 转为逐系数 CPoly，
+再展平上传，最终每个余式系数创建/释放两个 GMP 对象。连续系数表示也为后续 device fold 提供直接输入格式。
+此次未重采 Nsight，不把全部 CUDA 外空档归因于这些函数；收益以同二进制 A/B 为准。
+
+### 51.2 实现、所有权与统计口径
+
+新增 [NTT_FOLD_FLAT:384](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:384)，默认0。
+[fold_flat_step:7024](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7024) 保持三次现有 GPU 乘法及窗口，
+不增加另一套 NTT/归约。H 跨 G 批次连续保存；首个 G 根 move；Ft 根借用，finv 展平一次。
+ra/rbi 在 qF 前释放；qrev 原地反转用作 q；每轮复用两 GMP 临时数做相同模减法。
+T/finv 不 trim，余式 trim 规则与旧路径一致，防止零高项改变声明 degree 或 inverse 长度。
+下降前恢复 H 和完整 finv，候选必须保持 `root_inverse_reused=1`。
+[S4关闭回退:8725](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8725) 令实际 enabled=0、走原 CPoly，
+避免无 S4 时调用解引用 `L.s4` 的 flat multiply。
+
+`real_batched_foldflat` 报 folds/muls/sub_coeffs/peak_bytes 和 prepare/multiply/subtract/bridge；
+multiply 含共享乘法内部的 pack/check/等待，是 host 墙钟，不是纯 GPU kernel 时间。
+bridge 含 finv/H 两端表示转换；peak 是所统计连续容器的同时存活 capacity，不是全进程 RAM。
+本例模型：14 folds/42 multiplies/1612800系数模减法；旧七类中间对象约12335971次系数 vector 创建，
+GMP init/clear 对象数从3225600降至28。前者是按实际尺寸的结构估算，非 allocator 采样结果。
+主要连续临时载荷峰值 `8W(6P+5)=387074800bytes`，不含固定F/finv、G根、补齐区及 pinned。
+主机/设备上传读回仍在；本例 fold 边界模型为 H2D约4.9484GiB、D2H约3.2661GiB，尚未消除。
+
+### 51.3 同一最终二进制的门禁
+
+最终隔离构建 [exe](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_final_20261003/stage2_tree_gpu.exe)，
+SHA256 **A9A94DB278EC2507AC89EB77B64A1B188CE8917E084E7A58D65DC41A42732490**。
+原默认 exe 当时被用户的 GPU0 `--real --choose-d` 进程使用，链接报 LNK1104；采用独立目录，没有覆盖该 exe。
+本轮 GPU 工作均在 GPU1，未终止用户的 GPU0 进程。
+
+[test_stage2_fold_flat.py](D:/code/MPA-OpenCl/tools/test/test_stage2_fold_flat.py:1) **18/0**：
+三个位宽/合数 fixture各30个完整余式，与独立 GMP schoolbook乘法+经典 monic 长除法比较，
+覆盖零/近N/短输入/非2幂/重复fold/短末批；实际新旧全输出、carry trace、Gamma/fallback及因子比较。
+冻结已知因子59649589127497217/114713及独立完整叶hash7706779146789021619必须一致；
+N15/35坏段、choose12、M4423/M5261、S4关闭回退、输出毒化被独立比较拒绝均通过。
+证据：[18/0 summary](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_final_gate_20261003/summary.json)。
+
+原完整门禁显式启用 FOLD_FLAT，在最终二进制 **188/0**。
+其 check runner 只将 GPU exe定位改到隔离构建，CPU参考、检查内容、形状和 GPU1 不变，
+保留 [完整日志](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_final_full_gate_20261003.log)、
+[runner定位](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_final_check.ps1)、
+[构建日志](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_final_build_20261003.log)。
+这些门禁不证明链式段积精确 Gamma 尺度或 g=N 饱和块边界，报告§13/§19的静态疑点仍待独立验证。
+
+### 51.4 最终同二进制 ABBA 与资源结果
+
+采用§51.3最终SHA二进制，GPU1 M4423/sigma26/B1=1000/extra12，actualB2=2011326186870、D1231230、P115200、I1633592。
+batch64MiB/arena6300MiB；两边GFINV_BATCH=1、deviceG-root/scaled/window/chunk-output=1，carrybatch=0，
+GMP sample96/every8、oracleasync=0。新增 `-Target fold_flat` 顺序vector/flat/flat/vector，只切换FOLD_FLAT。
+四轮full **103.265444 /96.226066 /96.962568 /99.447771s**；均exit0、fullclean1、overflow0。
+完整均值 **101.3566075→96.594317s（−4.7622905s/−4.6985%）**；main **85.309476→80.753009s（−5.3411%）**；
+init **16.0471315→15.841308s**；进程wall **110.733→106.025s**。控制首末有3.817673s差异，不能把跨轮历史秒数视为严格加速。
+
+fold **20.1565→14.271s（−5.8855s/−29.1990%）**。
+候选14 folds/42 multiplies/1612800系数模减法，主要临时capacity峰值387074800bytes；
+prepare0.536074s、multiply13.104712s、subtract0.321191s、bridge0.129317s。
+bridge在fold两端且部分计时在fold外；multiply包含pack/检查/等待，不能当GPU纯运算时间。
+Gtrees **28.3225→28.497s**、giant **14.573→14.591s**、descent **9.005→9.4175s**，
+t_reduce **9.7945→9.8085s**；证据支持减少host fold成本，没有证明NTT/归约变快。
+
+完整Q hash **33cc6c63cec26c39900a7ed4ff551e2c2e0a533422905b538ec4f4aa809f092f**匹配实际Prime95保存点；
+Groot hash **105d6128bbf522db**、完整leaf hash **9100612758855566221**，四轮一致。
+403calls/1979251pairs/40218760reduced、66139GMP samples/2400selftests/4full checks、carrychecked/finishes8241均相同且bad0；
+H2D/D2H主账rounded11.37/5.46GiB未变。新flat input ledger calls23→65，新增42次fold记账，
+不能将该ledger新增copy_bytes当成全流程拷贝增加；旧CPoly展平复制原本未纳入该表。
+
+观察host private峰值控制7904/8040MB、候选7758/7760MB，均值 **7972→7759MB（−213MB/−2.6719%）**；
+不是物理RAM或纯载荷和。workspacefull **3656064320bytes**、Grootraw **225792000bytes**未变；
+约1Hz NVML整卡峰值均 **5036MiB**，未减少显存。fullbusy **75.885→77.947%**、mainbusy **77.262→79.403%**；
+full low≤5%样本27/200→17/190，是粗GPUbusy采样，不是SMoccupancy或精确idle时长。
+
+最早的runner实验漏设fold target顺序、运行旧归约对照，已经停止自有进程、保留INVALID标记，未纳入结论。
+补上明确模式序列和按mode断言，正确小形状ABBA通过；初版正确生产ABBA105.9637415→97.351111s（−8.128%）仅作过程证据。
+最终加入S4-off回退后重新构建、18/0+188/0并再做上面的ABBA，最终数据优先。
+证据：[final summary](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/summary.json)、
+[CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/results.csv)、
+[GPU1采样](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/gpu1_summary.json)、
+[最终源码/exe/runner/分析快照](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/measured/stage2_tree_gpu.cu:7024)。
+所有测量源文件hash在运行后复核一致；ignored目录证据不随Git提交，tracked gate/runner可复现。
+
+### 51.5 后续性能目标
+
+默认FOLD_FLAT仍0；小形状没有证实加速，当前树引擎仍属实验入口。候选比旧CPU单核90.460s慢6.134317s/6.781%，
+CPU本轮未重跑且D/degree/检查不同，不能宣称超越Prime95或完成长期目标。
+本轮最终Gtree占29.50%、fold14.77%、giant15.11%、下降9.75%；内部归约占10.15%，不额外求和。
+下一轮重点：deviceleaf/fold边界、固定F/finv频域复用，以及以微基准判断协作limb运算缩短归约依赖链是否有效。
+推进deviceleaf前应独立确认chain segment/Gamma精确尺度，不用新旧因子互比代替全系数尺度验证。
+
+并行不同曲线是长期吞吐候选；GPU1总8188MiB，单配置峰5036MiB，直接复制两套会超过容量。
+先评估共享GPU scratch、交错GPU队列与另一曲线CPU准备、curve/context所有权；当前全局可变状态不支持直接多线程重入。
+单曲线串行成本换算35.518→37.269curves/h（+4.93%）只是预算，不是不同sigma/save实际吞吐测量。
+真实并行队列必须核对每条曲线完整输出和实际curves/hour，不用重复同一Q/F的`--curves K`作证明。

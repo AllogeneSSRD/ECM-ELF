@@ -18,7 +18,7 @@ param(
     [ValidateSet(1,12)][int]$Stage1Extra = 1,
     [string]$ExpectedQHex = '',
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window','chunk_output','scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window','chunk_output','scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat')][string]$Target = 'reduction',
     [ValidateRange(1,256)][int]$BatchMB = 32,
     [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
     [ValidateRange(0,65536)][int]$ArenaMB = 0,
@@ -51,6 +51,7 @@ if ($Target -eq 'chunk_output') { $order = @('whole_output_buffer','chunk_output
 if ($Target -eq 'scaled_descent') { $order = @('division_descent','scaled_descent','scaled_descent','division_descent') }
 if ($Target -eq 'groot_device') { $order = @('host_groot','device_groot','device_groot','host_groot') }
 if ($Target -eq 'groot_memory') { $order = @('legacy_gmemory','compact_gmemory','compact_gmemory','legacy_gmemory') }
+if ($Target -eq 'fold_flat') { $order = @('vector_fold','flat_fold','flat_fold','vector_fold') }
 if ($Target -eq 'gfinv_batch') { $order = @('segment_individual','segment_batch','segment_batch','segment_individual') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
@@ -66,14 +67,17 @@ $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_GROOT_LEAF_STAGING='1'; NTT_GROOT_COMPACT_RAW='1'; NTT_GROOT_LEAF_CHUNK='0';
                 NTT_GROOT_DEVICE='0'; NTT_GROOT_DEVICE_TEST='0'; NTT_GROOT_DEVICE_CHECK='0'; NTT_GROOT_DEVICE_TEST_BAD='0';
                 NTT_SCALED_DESCENT='0'; NTT_SCALED_TEST='0'; NTT_SCALED_CHECK='0'; NTT_S4_DESCENT_CHECK='0';
+                NTT_FOLD_FLAT='0'; NTT_FOLD_FLAT_TEST='0'; NTT_FOLD_FLAT_TEST_BAD='0';
                 NTT_GFINV_BATCH='0'; NTT_GFINV_BATCH_TEST='0'; NTT_GFINV_BATCH_TEST_BAD='0'; NTT_REAL_F_DUMP='';
                 NTT_STAGE1_EXTRA="$Stage1Extra"; NTT_STAGE1_Q_DUMP=$(if($ExpectedQHex -or $Stage1Extra -eq 12){'1'}else{'0'}) }
 if ($ArenaMB -gt 0) { $overrides.NTT_ARENA_CAP_KB = "$([long]$ArenaMB * 1024)" }
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
+if($Target -eq 'fold_flat' -and ($order -join ',') -ne 'vector_fold,flat_fold,flat_fold,vector_fold'){throw 'flat fold ABBA order invalid'}
 $modeControls = @(foreach ($mode in $order) {
     [pscustomobject]@{ mode=$mode;
-        NTT_GFINV_BATCH=$(if ($mode -eq 'segment_batch') { '1' } else { '0' });
+        NTT_FOLD_FLAT=$(if ($mode -eq 'flat_fold') { '1' } else { '0' });
+        NTT_GFINV_BATCH=$(if ($mode -eq 'segment_batch' -or $Target -eq 'fold_flat') { '1' } else { '0' });
         NTT_S4_OLDTAIL=$(if ($mode -eq 'montgomery') { '1' } else { '0' });
         NTT_S4_ORACLE_ASYNC=$(if ($mode -eq 'oracle_async') { '1' } else { '0' });
         NTT_S4_ORACLE_PACK=$(if ($mode -eq 'gmp_digits') { '0' } else { '1' });
@@ -84,12 +88,12 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_ARENA_WORKSPACE_POOL=$(if ($mode -eq 'keyed_workspace') { '0' } else { '1' });
         NTT_FUSE_COMPACT_SCRATCH=$(if ($mode -eq 'wide_scratch') { '0' } else { '1' });
         NTT_S4_FINAL_READBACK=$(if ($mode -eq 'whole_readback') { '1' } else { '0' });
-        NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch')) { '1' } else { '0' });
-        NTT_S4_CHUNK_OUTPUT=$(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch')) { '1' } else { '0' });
-        NTT_GROOT_DEVICE=$(if ($mode -eq 'device_groot' -or $Target -in @('groot_memory','groot_carry','gfinv_batch')) { '1' } else { '0' });
+        NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat')) { '1' } else { '0' });
+        NTT_S4_CHUNK_OUTPUT=$(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat')) { '1' } else { '0' });
+        NTT_GROOT_DEVICE=$(if ($mode -eq 'device_groot' -or $Target -in @('groot_memory','groot_carry','gfinv_batch','fold_flat')) { '1' } else { '0' });
         NTT_GROOT_LEAF_STAGING=$(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' });
         NTT_GROOT_COMPACT_RAW=$(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' });
-        NTT_SCALED_DESCENT=$(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch')) { '1' } else { '0' });
+        NTT_SCALED_DESCENT=$(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat')) { '1' } else { '0' });
         NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
@@ -108,7 +112,8 @@ try {
         $batchBudget = $(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { $CandidateBatchMB } else { $BatchMB })
         $flatDirect = $(if ($mode -eq 'flat_copy') { '0' } else { '1' })
         $grootOnly = $(if ($mode -eq 'full_gtree') { '0' } else { '1' })
-        $env:NTT_GFINV_BATCH = $(if ($mode -eq 'segment_batch') { '1' } else { '0' })
+        $env:NTT_FOLD_FLAT = $(if ($mode -eq 'flat_fold') { '1' } else { '0' })
+        $env:NTT_GFINV_BATCH = $(if ($mode -eq 'segment_batch' -or $Target -eq 'fold_flat') { '1' } else { '0' })
         $env:NTT_S4_OLDTAIL = $(if ($algorithm -eq 'montgomery') { '1' } else { '0' })
         $env:NTT_S4_ORACLE_ASYNC = $oracleAsync
         $env:NTT_S4_ORACLE_PACK = $oraclePack
@@ -120,10 +125,10 @@ try {
         $env:NTT_ARENA_WORKSPACE_POOL = $(if ($mode -eq 'keyed_workspace') { '0' } else { '1' })
         $env:NTT_FUSE_COMPACT_SCRATCH = $(if ($mode -eq 'wide_scratch') { '0' } else { '1' })
         $env:NTT_S4_FINAL_READBACK = $(if ($mode -eq 'whole_readback') { '1' } else { '0' })
-        $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch')) { '1' } else { '0' })
-        $env:NTT_S4_CHUNK_OUTPUT = $(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch')) { '1' } else { '0' })
-        $env:NTT_GROOT_DEVICE = $(if ($mode -eq 'device_groot' -or $Target -in @('groot_memory','groot_carry','gfinv_batch')) { '1' } else { '0' })
-        $env:NTT_SCALED_DESCENT = $(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch')) { '1' } else { '0' })
+        $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat')) { '1' } else { '0' })
+        $env:NTT_S4_CHUNK_OUTPUT = $(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat')) { '1' } else { '0' })
+        $env:NTT_GROOT_DEVICE = $(if ($mode -eq 'device_groot' -or $Target -in @('groot_memory','groot_carry','gfinv_batch','fold_flat')) { '1' } else { '0' })
+        $env:NTT_SCALED_DESCENT = $(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat')) { '1' } else { '0' })
         $env:NTT_GROOT_LEAF_STAGING = $(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' })
         $env:NTT_GROOT_COMPACT_RAW = $(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' })
         $residentMode = $env:NTT_GROOT_DEVICE -eq '1'
@@ -181,6 +186,16 @@ try {
             $ginv.group_attempts+$ginv.individual_attempts -gt $ginv.segments+$ginv.groups)))) {
             throw "Segment inverse control/accounting failed; inspect $log"
         }
+        $foldLine=[regex]::Match($text,'(?m)^real_batched_foldflat:.*').Value;$foldFlat=@{}
+        foreach($field in @('enabled','folds','muls','sub_coeffs','peak_bytes','prepare','multiply','subtract','bridge')) {
+            $m=[regex]::Match($foldLine,"(?:^| )$field=([0-9.]+)")
+            if($m.Success){$foldFlat[$field]=[double]$m.Groups[1].Value}
+        }
+        if($Target -eq 'fold_flat' -and ($foldFlat.Count -ne 9 -or "$($foldFlat.enabled)" -ne $(if($mode -eq 'flat_fold'){'1'}else{'0'}) -or
+           $ginv.enabled -ne 1 -or $shape.Groups[4].Value -eq '0' -or
+           ($foldFlat.enabled -eq 1 -and ($foldFlat.folds -ne [UInt64]$shape.Groups[4].Value -or
+             $foldFlat.muls -le 0 -or $foldFlat.sub_coeffs -le 0 -or $foldFlat.peak_bytes -le 0 -or
+             $scaled.root_inverse_reused -ne 1)))) {throw "flat fold accounting/inverse reuse failed; inspect $log"}
         $gleaf=[regex]::Match($text,'real_batched_gleaves: in=([0-9.]+) invert=([0-9.]+) out=([0-9.]+).*gscale=([0-9.]+)')
         $projective=[regex]::Match($text,'real_batched_projective: leaves=(\d+) gamma_points=(\d+) segments=(\d+) affine_fallback_points=(\d+)')
         $gdeviceLine=[regex]::Match($text,'(?m)^real_batched_gdevice:.*').Value;$gdevice=@{}
@@ -190,7 +205,7 @@ try {
             $m=[regex]::Match($gdeviceLine,"(?:^| )$field=(\d+)")
             if($m.Success){$gdevice[$field]=[UInt64]$m.Groups[1].Value}
         }
-        if($Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch') -and ($gdevice.Count -ne 18 -or
+        if($Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat') -and ($gdevice.Count -ne 18 -or
            "$($gdevice.enabled)" -ne $env:NTT_GROOT_DEVICE -or $scaled.enabled -ne 1 -or
            $scaled.checked_states -ne 0 -or $scaled.checked_words -ne 0 -or
            ($residentMode -and ($gdevice.trees -le 0 -or $gdevice.fallbacks -ne 0 -or
@@ -205,7 +220,7 @@ try {
             $m=[regex]::Match($gmemoryLine,"(?:^| )$field=(\d+)")
             if($m.Success){$gmemory[$field]=[UInt64]$m.Groups[1].Value}
         }
-        if($Target -in @('groot_memory','groot_carry','gfinv_batch') -and ($gmemory.Count -ne 11 -or
+        if($Target -in @('groot_memory','groot_carry','gfinv_batch','fold_flat') -and ($gmemory.Count -ne 11 -or
            "$($gmemory.compact_raw)" -ne $env:NTT_GROOT_COMPACT_RAW -or "$($gmemory.leaf_staging)" -ne $env:NTT_GROOT_LEAF_STAGING -or
            $gmemory.pinned_words+$gmemory.pageable_words -ne $gdevice.leaf_words -or
            $gmemory.rawA_peak_bytes+$gmemory.rawB_peak_bytes -ne $gdevice.raw_peak_bytes -or
@@ -421,6 +436,7 @@ try {
             groot_input_released_bytes=$groot.Groups[8].Value; groot_root_words=$groot.Groups[9].Value;
             groot_release=[double]$groot.Groups[12].Value;
             observed_host_peak_mb=(@($hostPeaks | ForEach-Object {[double]$_.Groups[2].Value}) | Measure-Object -Maximum).Maximum }
+        foreach($field in $foldFlat.Keys){$row|Add-Member -NotePropertyName ("fold_flat_"+$field) -NotePropertyValue $foldFlat[$field]}
         foreach($field in $ginv.Keys){$row|Add-Member -NotePropertyName ("gfinv_"+$field) -NotePropertyValue $ginv[$field]}
         foreach($entry in @(@('gleaf_in',1),@('gleaf_inverse',2),@('gleaf_out',3),@('gscale',4))){
             $row|Add-Member -NotePropertyName $entry[0] -NotePropertyValue ([double]$gleaf.Groups[$entry[1]].Value)
@@ -484,7 +500,7 @@ try {
             $row.groot_root_words -ne $rows[0].groot_root_words)) {
             throw "G-tree workload changed; inspect $log"
         }
-        if ($Target -ne 'scaled_descent' -and $rows.Count -gt 0 -and ($row.flat_calls -ne $rows[0].flat_calls -or
+        if ($Target -notin @('scaled_descent','fold_flat') -and $rows.Count -gt 0 -and ($row.flat_calls -ne $rows[0].flat_calls -or
             [UInt64]$row.flat_copy_bytes+[UInt64]$row.flat_avoided_copy_bytes -ne
             [UInt64]$rows[0].flat_copy_bytes+[UInt64]$rows[0].flat_avoided_copy_bytes -or
             [UInt64]$row.flat_zero_bytes+[UInt64]$row.flat_avoided_zero_bytes -ne
