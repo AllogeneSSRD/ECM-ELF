@@ -16,7 +16,7 @@ param(
     [UInt64]$D = 1231230,
     [int]$Sigma = 26,
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch')][string]$Target = 'reduction',
     [ValidateRange(1,256)][int]$BatchMB = 32,
     [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
     [ValidateRange(0,65536)][int]$ArenaMB = 0,
@@ -42,6 +42,7 @@ if ($Target -eq 'batch_mb') { $order = @("batch_$BatchMB", "batch_$CandidateBatc
 if ($Target -eq 'flat_direct') { $order = @('flat_copy','flat_direct','flat_direct','flat_copy') }
 if ($Target -eq 'groot') { $order = @('full_gtree','groot','groot','full_gtree') }
 if ($Target -eq 'workspace') { $order = @('keyed_workspace','workspace_pool','workspace_pool','keyed_workspace') }
+if ($Target -eq 'fuse_scratch') { $order = @('wide_scratch','compact_scratch','compact_scratch','wide_scratch') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
@@ -49,7 +50,8 @@ $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_CARRY_BATCH='0'; NTT_S4_CHUNK_MAX='0'; NTT_S4_CARRY_TEST_BAD='0';
                 NTT_S4_CARRY_TRACE='0'; NTT_S4_PACK_DIRECT='1'; NTT_S4_FLAT_DIRECT='1'; NTT_S4_FLAT_TEST='0';
                 NTT_CARRY_ROUNDS=''; NTT_S4_GROOT_ONLY='1'; NTT_S4_GROOT_TEST='0'; NTT_S4_OFF='0';
-                NTT_ARENA_WORKSPACE_POOL='1'; NTT_ARENA_WORKSPACE_TEST='0' }
+                NTT_ARENA_WORKSPACE_POOL='1'; NTT_ARENA_WORKSPACE_TEST='0';
+                NTT_FUSE_COMPACT_SCRATCH='1'; NTT_FUSE_LIFETIME_TEST='0' }
 if ($ArenaMB -gt 0) { $overrides.NTT_ARENA_CAP_KB = "$([long]$ArenaMB * 1024)" }
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
@@ -63,6 +65,7 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_S4_FLAT_DIRECT=$(if ($mode -eq 'flat_copy') { '0' } else { '1' });
         NTT_S4_GROOT_ONLY=$(if ($mode -eq 'full_gtree') { '0' } else { '1' });
         NTT_ARENA_WORKSPACE_POOL=$(if ($mode -eq 'keyed_workspace') { '0' } else { '1' });
+        NTT_FUSE_COMPACT_SCRATCH=$(if ($mode -eq 'wide_scratch') { '0' } else { '1' });
         NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
@@ -90,6 +93,7 @@ try {
         $env:NTT_S4_FLAT_DIRECT = $flatDirect
         $env:NTT_S4_GROOT_ONLY = $grootOnly
         $env:NTT_ARENA_WORKSPACE_POOL = $(if ($mode -eq 'keyed_workspace') { '0' } else { '1' })
+        $env:NTT_FUSE_COMPACT_SCRATCH = $(if ($mode -eq 'wide_scratch') { '0' } else { '1' })
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -123,9 +127,19 @@ try {
         $workspace=@{}
         foreach($field in @('pool','hits','grows','mallocs','frees','workspace_bytes','big_bytes','small_bytes',
                            'table_bytes','owned_bytes','big_peak_bytes','small_peak_bytes','table_peak_bytes',
-                           'owned_peak_bytes','aliases','alias_bytes','evictions','evicted_words','legacy_mallocs','legacy_frees')) {
+                           'owned_peak_bytes','aliases','alias_bytes','evictions','evicted_words','legacy_mallocs','legacy_frees',
+                           'fuse_base_bytes','fuse_base_peak_bytes','full_bytes','full_peak_bytes')) {
             $m=[regex]::Match($workspaceLine,"(?:^| )$field=(\d+)")
             if($m.Success){$workspace[$field]=[UInt64]$m.Groups[1].Value}
+        }
+        $fuseLine=[regex]::Match($text,'(?m)^ntt_fuse_base_stats:.*').Value;$fuse=@{}
+        foreach($field in @('compact','allocations','frees','live_bytes','peak_bytes')) {
+            $m=[regex]::Match($fuseLine,"(?:^| )$field=(\d+)")
+            if($m.Success){$fuse[$field]=[UInt64]$m.Groups[1].Value}
+        }
+        if($fuse.Count -ne 5 -or "$($fuse.compact)" -ne $env:NTT_FUSE_COMPACT_SCRATCH -or
+           $fuse.live_bytes -ne $workspace.fuse_base_bytes -or $fuse.live_bytes -gt $fuse.peak_bytes) {
+            throw "FuseCtx ownership/control accounting failed; inspect $log"
         }
         $naming = [regex]::Match($text, 'batched_naming:.*?t_scan=([0-9.]+) t_ladder=([0-9.]+) t_name=([0-9.]+)')
         $arenaSize = [regex]::Match($text, 'real_batched_breakdown:.*?ntt_seconds=([0-9.]+).*?arena_mb=([0-9.]+)')
@@ -202,7 +216,10 @@ try {
                 [UInt64]$groot.Groups[7].Value -eq 0 -or [UInt64]$groot.Groups[8].Value -eq 0))) {
             throw "G-tree lifecycle accounting failed; inspect $log"
         }
-        if($workspace.Count -ne 20 -or "$($workspace.pool)" -ne $env:NTT_ARENA_WORKSPACE_POOL -or
+        if($workspace.Count -ne 24 -or "$($workspace.pool)" -ne $env:NTT_ARENA_WORKSPACE_POOL -or
+           $workspace.full_bytes -ne $workspace.owned_bytes+$workspace.fuse_base_bytes -or
+           $workspace.full_bytes -gt $workspace.full_peak_bytes -or
+           $workspace.fuse_base_bytes -gt $workspace.fuse_base_peak_bytes -or
            $workspace.big_bytes+$workspace.small_bytes+$workspace.table_bytes -ne $workspace.owned_bytes -or
            $workspace.workspace_bytes -gt $workspace.big_bytes -or $workspace.owned_bytes -gt $workspace.owned_peak_bytes -or
            $workspace.big_bytes -gt $workspace.big_peak_bytes -or $workspace.small_bytes -gt $workspace.small_peak_bytes -or
@@ -260,6 +277,7 @@ try {
             groot_release=[double]$groot.Groups[12].Value;
             observed_host_peak_mb=(@($hostPeaks | ForEach-Object {[double]$_.Groups[2].Value}) | Measure-Object -Maximum).Maximum }
         foreach($field in $workspace.Keys){$row|Add-Member -NotePropertyName ("workspace_"+$field) -NotePropertyValue $workspace[$field]}
+        foreach($field in $fuse.Keys){$row|Add-Member -NotePropertyName ("fuse_"+$field) -NotePropertyValue $fuse[$field]}
         if ($rows.Count -gt 0 -and ($row.groot_builds -ne $rows[0].groot_builds -or
             $row.groot_root_words -ne $rows[0].groot_root_words)) {
             throw "G-tree workload changed; inspect $log"
@@ -308,6 +326,7 @@ try {
             }
         }
         if($sameMode.Count){foreach($field in $workspace.Keys){$name="workspace_"+$field;if($row.$name -ne $sameMode[0].$name){throw "workspace workload changed within mode: $field"}}}
+        if($sameMode.Count){foreach($field in $fuse.Keys){$name="fuse_"+$field;if($row.$name -ne $sameMode[0].$name){throw "fuse workload changed within mode: $field"}}}
         $rows += $row
         $rows | Export-Csv -LiteralPath (Join-Path $Output 'results.csv') -NoTypeInformation -Encoding UTF8
         Write-Host ("  elapsed={0:F2}s wall={1:F2}s t_reduce={2:F3}s coeffs={3}" -f
@@ -369,10 +388,15 @@ try {
                 (($old | Measure-Object workspace_table_peak_bytes -Average).Average / 1MB),
                 (($new | Measure-Object workspace_table_peak_bytes -Average).Average / 1MB))
     Write-Host ("workspace CUDA allocations: {0:F0} -> {1:F0}; capacity growths: {2:F0}; reuse hits: {3:F0}" -f
-                ($old | Measure-Object workspace_legacy_mallocs -Average).Average,
-                ($new | Measure-Object workspace_mallocs -Average).Average,
+                (($old | Measure-Object workspace_legacy_mallocs -Average).Average + ($old | Measure-Object workspace_mallocs -Average).Average),
+                (($new | Measure-Object workspace_legacy_mallocs -Average).Average + ($new | Measure-Object workspace_mallocs -Average).Average),
                 ($new | Measure-Object workspace_grows -Average).Average,
                 ($new | Measure-Object workspace_hits -Average).Average)
+    Write-Host ("FuseCtx mandatory payload peak: {0:F1} -> {1:F1} MiB; complete cached arena payload peak: {2:F1} -> {3:F1} MiB" -f
+                (($old | Measure-Object workspace_fuse_base_peak_bytes -Average).Average / 1MB),
+                (($new | Measure-Object workspace_fuse_base_peak_bytes -Average).Average / 1MB),
+                (($old | Measure-Object workspace_full_peak_bytes -Average).Average / 1MB),
+                (($new | Measure-Object workspace_full_peak_bytes -Average).Average / 1MB))
 } finally {
     foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
 }

@@ -276,3 +276,26 @@ NVML 整卡采样显存峰值 **5989 → 5759 MiB**；A/B/Q ledger 峰值 **3654
 下一轮先明确 fuse 预算拒绝分支的临时对象 owner 和 release，补齐全部表/scratch 账本及重复 fallback 门禁；
 随后在完整 NTT/carry 上实现必要输出窗口，降低归约、回传与输出缓冲，再做 scaled descent 数学原型。
 Prime95 单执行线程、同模数/边界/曲线或输入点的完整 Stage2 基线仍缺，不能据此宣称已超越 Prime95。
+
+### 28.6 2026-10-03：完整 FuseCtx 账本与实际 scratch 容量
+
+已修复预算拒绝后临时 FuseCtx 的释放：
+[FuseCallGuard](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1345)
+按实际 owner 覆盖 host/device batch、single host 和提前返回，缓存借用仍由 arena 释放。
+[fuse_init](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1266)
+遍历 forward/inverse 实际 pass 取最大 scratch 容量，默认 `NTT_FUSE_COMPACT_SCRATCH=1`，`=0` 保留宽容量对照。
+M=1 仍给足 N/2；纯 tile 不分配没有消费者的 coarse/radix scratch。
+[base ledger](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1197)
+和 arena full 字段补齐此前遗漏的 mandatory tile tables/scratch；full 仍不包含外部 Stage2 pools 与驱动开销。
+
+完整门禁 **122 passed / 0 failed**，包括独立 GMP DFT 的 **72 cases / 1585152 words** 和宽/紧容量寿命守恒。
+同二进制 M5261 生产 ABBA 的 CLI elapsed 均值 **190.600 → 191.910 s（+0.69%）**，没有证明加速。
+完整 arena 缓存 payload 峰值 **4508828064 → 3629192080 bytes（−19.51%）**；
+NVML 显存 **5759 → 4903 MiB**，观测进程私有提交峰值均值 **9213 → 8360 MiB**。
+主循环低负载样本比例 **17.99 → 19.01%**，H2D/D2H 仍 **38.81/37.27 GiB**，空闲与传输量未解决。
+证据和范围见 [开发日志 §41](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:2456)。
+
+这一步缩小工作区并修复所有权；Prime95 MULHI/MULLO、scaled descent 和父输入变换复用的算法差距仍在。
+下一步先实现保持完整 NTT/carry 的输出窗口，减少必要 mod-N 归约与回传，再验证 scaled 状态的下降原型。
+隔离 Prime95 单线程配置已准备，但启动验证未进入 ECM；实际二进制版本 31.7.1.0 与参考源码 31.6b1 不同。
+目前仍没有可比较的 CPU Stage2 时间，完整 Stage2 计时边界和匹配曲线的公平基线继续作为必要验收。

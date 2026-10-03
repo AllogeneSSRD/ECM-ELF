@@ -8995,6 +8995,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if (groot_test && std::atoi(groot_test) != 0) groot_lifetime_check(L);
     const char *workspace_test = std::getenv("NTT_ARENA_WORKSPACE_TEST");
     if (workspace_test && std::atoi(workspace_test) != 0) ntt_workspace_check(g_device);
+    const char *fuse_test = std::getenv("NTT_FUSE_LIFETIME_TEST");
+    if (fuse_test && std::atoi(fuse_test) != 0) {
+        ntt_fuse_lifetime_check(g_device);
+        ntt_fuse_capacity_check(g_device);
+    }
     {
         bool ok1 = false, ok2 = false;
         const double w1 = (double)real_shape_words(P_baby, (int)L.S, &ok1);

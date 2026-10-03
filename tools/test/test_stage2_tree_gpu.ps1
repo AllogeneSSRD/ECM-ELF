@@ -1070,6 +1070,66 @@ try {
     foreach($key in $workspaceSaved.Keys){[Environment]::SetEnvironmentVariable($key,$workspaceSaved[$key],'Process')}
 }
 
+# [23] Actual pass-sized scratch and temporary FuseCtx ownership.
+$fuseSaved=@{}
+foreach($key in @('NTT_FUSE_COMPACT_SCRATCH','NTT_FUSE_LIFETIME_TEST','NTT_FUSE_T','NTT_FUSE_M',
+    'NTT_ARENA_CAP_KB','NTT_ARENA_WORKSPACE_POOL','NTT_ARENA_WORKSPACE_TEST','NTT_S4_GROOT_ONLY',
+    'NTT_S4_GROOT_TEST','NTT_S4_FLAT_TEST','NTT_S4_OFF','NTT_S4_BATCH_MB','NTT_S4_CHUNK_MAX',
+    'NTT_S4_PACK_DIRECT','NTT_S4_FLAT_DIRECT','NTT_S4_CARRY_BATCH','NTT_S4_CARRY_TEST_BAD',
+    'NTT_S4_ORACLE_TEST_BAD','NTT_S4_ASYNC','NTT_S4_DEFER_CARRY','NTT_S4_ORACLE_ASYNC',
+    'NTT_S4_ORACLE_PACK','NTT_S4_HOSTPACK','NTT_S4_OLDTAIL','NTT_S5_ON','NTT_S4_SAMPLE',
+    'NTT_S4_CHECK_EVERY','NTT_S4_CARRY_TRACE','NTT_NAME_MAX','NTT_CARRY_ROUNDS')) {
+    $fuseSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')
+}
+try {
+    $env:NTT_FUSE_T='12';$env:NTT_FUSE_M='4';$env:NTT_FUSE_LIFETIME_TEST='0'
+    $env:NTT_ARENA_CAP_KB='';$env:NTT_ARENA_WORKSPACE_POOL='1';$env:NTT_ARENA_WORKSPACE_TEST='0'
+    $env:NTT_S4_GROOT_ONLY='1';$env:NTT_S4_GROOT_TEST='0';$env:NTT_S4_FLAT_TEST='0';$env:NTT_S4_OFF='0'
+    $env:NTT_S4_BATCH_MB='64';$env:NTT_S4_CHUNK_MAX='64';$env:NTT_S4_PACK_DIRECT='1';$env:NTT_S4_FLAT_DIRECT='1'
+    $env:NTT_S4_CARRY_BATCH='0';$env:NTT_S4_CARRY_TEST_BAD='0';$env:NTT_S4_ORACLE_TEST_BAD='0'
+    $env:NTT_S4_ASYNC='1';$env:NTT_S4_DEFER_CARRY='1';$env:NTT_S4_ORACLE_ASYNC='0';$env:NTT_S4_ORACLE_PACK='1'
+    $env:NTT_S4_HOSTPACK='0';$env:NTT_S4_OLDTAIL='0';$env:NTT_S5_ON='0';$env:NTT_S4_SAMPLE='96'
+    $env:NTT_S4_CHECK_EVERY='8';$env:NTT_S4_CARRY_TRACE='1';$env:NTT_NAME_MAX='1';$env:NTT_CARRY_ROUNDS=''
+    $fuseOutputs=@();$fuseCodes=@();$fuseLedgers=@()
+    foreach($compact in @('0','1')) {
+        $env:NTT_FUSE_COMPACT_SCRATCH=$compact
+        $fuseOutputs+=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096);$fuseCodes+=$LASTEXITCODE
+        $line=[regex]::Match($fuseOutputs[-1],'(?m)^ntt_workspace_stats:.*').Value;$ledger=@{}
+        foreach($field in @('owned_bytes','fuse_base_bytes','fuse_base_peak_bytes','full_bytes','full_peak_bytes')) {
+            $m=[regex]::Match($line,"(?:^| )$field=(\d+)");if($m.Success){$ledger[$field]=[UInt64]$m.Groups[1].Value}
+        }
+        $fuseLedgers+=$ledger
+    }
+    Check 'fuse scratch: wide/compact retain frozen factor and hit set' `
+        (@($fuseCodes|Where-Object{$_ -ne 0}).Count -eq 0 -and
+         @($fuseOutputs|Where-Object{[regex]::Match($_,$resultPattern).Value -ne $resultOld}).Count -eq 0) ''
+    Check 'fuse scratch: ALL polynomial output words and GMP signature are unchanged' `
+        ([regex]::Match($fuseOutputs[0],$carryTracePattern).Success -and
+         [regex]::Match($fuseOutputs[0],$carryTracePattern).Value -eq [regex]::Match($fuseOutputs[1],$carryTracePattern).Value -and
+         [regex]::Match($fuseOutputs[0],$oraclePattern).Groups[9].Value -eq [regex]::Match($fuseOutputs[1],$oraclePattern).Groups[9].Value -and
+         @($fuseOutputs|Where-Object{$_ -cmatch 'FATAL|CRASH|MISMATCH|gmp_check_bad=[1-9]'}).Count -eq 0) ''
+    Check 'fuse scratch: complete arena payload includes mandatory FuseCtx buffers and shrinks' `
+        ($fuseLedgers[0].Count -eq 5 -and $fuseLedgers[1].Count -eq 5 -and
+         $fuseLedgers[0].full_bytes -eq $fuseLedgers[0].owned_bytes+$fuseLedgers[0].fuse_base_bytes -and
+         $fuseLedgers[1].full_bytes -eq $fuseLedgers[1].owned_bytes+$fuseLedgers[1].fuse_base_bytes -and
+         $fuseLedgers[1].fuse_base_peak_bytes -lt $fuseLedgers[0].fuse_base_peak_bytes -and
+         $fuseLedgers[1].full_peak_bytes -lt $fuseLedgers[0].full_peak_bytes) ''
+    $env:NTT_FUSE_LIFETIME_TEST='1';$env:NTT_S4_CHUNK_MAX='0';$env:NTT_S4_CARRY_TRACE='0'
+    foreach($compact in @('0','1')) {
+        $env:NTT_FUSE_COMPACT_SCRATCH=$compact
+        $fixture=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096);$code=$LASTEXITCODE
+        $life=[regex]::Match($fixture,'ntt_fuse_lifetime_check: calls=14 bad=0 allocations=(\d+) frees=(\d+) leaked_bytes=0')
+        Check "fuse lifetime: compact=$compact balances host/device/refusal/early return and cached ownership" `
+            ($code -eq 0 -and $life.Success -and $life.Groups[1].Value -eq $life.Groups[2].Value) "exit=$code"
+        if($compact -eq '1') {
+            Check 'fuse scratch: independent GMP DFT and inverse cover radix/cache/evict/tile-only' `
+                ($code -eq 0 -and $fixture -match 'ntt_fuse_capacity_check: cases=72 words=1585152 bad=0') "exit=$code"
+        }
+    }
+} finally {
+    foreach($key in $fuseSaved.Keys){[Environment]::SetEnvironmentVariable($key,$fuseSaved[$key],'Process')}
+}
+
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }
 exit 0

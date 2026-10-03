@@ -2452,3 +2452,124 @@ Prime95 公平单执行线程基线尚未建立，长期目标未完成。
 不能直接用旧预算减去部分 census 来推断可释放显存或安全缩小预算。
 随后再做 scaled descent 的独立原型，明确 scaled 状态/反转/monic/叶值契约，复用 sibling 父输入变换。
 Prime95 单执行线程、同模数/边界和完整 Stage2 wall 基线仍是长期目标的必要验收。
+
+## 41. 2026-10-03：FuseCtx 所有权修复与按实际 pass 缩小 scratch
+
+### 41.1 先复现，再修复临时表寿命
+
+基于 `0323a95`，继续 §40.5 的 ownership 审计。旧 arena 非空但预算拒绝时，
+`ntt_arena_fuse` 构造没有进入缓存的 FuseCtx；三个乘法入口只在 arena==nullptr 时 release。
+修复前加入单独 base allocation ledger，8 次强制拒绝的 host batch 调用稳定得到
+**32 allocations / 0 frees / leaked_bytes=90112 / bad=8 / exit=3**：
+[red log](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_lifetime_red.log)。
+这是函数返回后的请求 payload 未释放，不依赖 NVML/WDDM 采样；进程结束仍会由驱动回收。
+instrumented red binary SHA256=`F26F4FE34642EB2D977B6849CF402DB33F9B8B44EC846978F36A95E1B4D815C6`。
+早期夹具调用漏传必需 hook 参数导致一次编译失败，补 nullptr 后才进行上述 red 运行。
+
+[FuseCallGuard](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1345) 跟随实际 `arena_borrowed`，
+而不是 arena 指针是否非空。host batch、device batch、single host 三个入口都在 shape planning 前建立 guard，
+正常返回和错误返回均释放临时 plan，缓存借用保持有效；arena release 仍释放其拥有的表。
+[ntt_arena_fuse](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1975) 只给返回的缓存副本标记 borrowed。
+拒绝路径还 pin arena 的最大 tile shared-memory attribute，防止小临时 plan 降低旧缓存 kernel 的许可上限。
+
+### 41.2 scratch 容量来自实际读写范围
+
+[fuse_init](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1266)
+新增 `NTT_FUSE_COMPACT_SCRATCH=1` 默认候选，`=0` 保留 N/2+64 coarse / 64 radix words 对照。
+compact 分别遍历 forward 和 inverse 的 pass 序列：
+forward `S=N>>(L+M)`；inverse `S=1<<(k-L-M)`，L 随 pass 更新。
+coarse scratch 容量取所有 S 的最大值，radix 容量取所有 `2^M` 的最大值；
+tile-only（nms=0）不分配 coarse/radix scratch。
+既不假定所有 pass 都是 M=4，也不重用此前错误的 N/4 上界；M=1 时仍给足 N/2。
+cached pass-table 的构造、驱逐后 fallback 重建和实际 transform 算法保持一致。
+
+### 41.3 统计与正确性夹具
+
+[FuseBaseStats](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1197)
+记录 tblF/tblI/scr/scr2 的成功分配/释放、live/peak 请求字节，包含临时 plan。
+`ntt_workspace_stats` 保留 §40 的三类 owned 字段，另加 fuse_base/full 当前与峰值。
+full 是完整 arena 缓存的实际 device payload：A/B/Q + small + cached pass tables + mandatory FuseCtx buffers；
+不含 entry 管理开销、外部 Stage2 pools、乘法 fallback 临时大缓冲、CUDA/WDDM 额外开销。
+`g_fuse_base` 的峰值范围与 arena full 不同，不可相加；暂未统一所有外部 pool 的全过程账本。
+
+[lifetime fixture](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3920)
+扩展为 14 调用，覆盖 host batch、single host、导出拒绝、device input callback 提前返回、
+缓存 plan 借用与重复调用后释放。宽容量 **52/52**，紧容量 **26/26**，两者 bad=0、leaked_bytes=0。
+[宽 smoke](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_green_0.log)、
+[紧 smoke](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_green_1.log)。
+
+[capacity fixture](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3973)
+使用 GMP 生成三项稀疏输入的完整 DFT，验证 DIF bit-reversed 频谱及 inverse 还原；
+N=128/32768、t=4/8、M=1..4、宽/紧容量，以及 uncached/cached/evicted 三种状态。
+**72 cases / 1585152 words / bad=0**，包括纯 tile 的零 scratch。
+这是独立 GMP 频谱参考加逐字 inverse 检查，不只依赖两条设备路径互相对拍。
+
+最终二进制 SHA256=`375B20AF72FAB791838E23B04ED5C35CB5ED14E7BEDDDF027C2F4B01FC9D9D95`，
+compile 284.8 s、link 3.2 s；[build log](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_scratch_build.log)。
+构建后只删除一行空白中的四个空格，tokens 和行号未改变；前后 source hash 记录于
+[build_source.json](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_owner_20261003/build_source.json)。
+[门禁第 23 组](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:1073)
+加入全字输出、因子、GMP signature、完整 payload 和两种容量的寿命/频谱验证。
+
+### 41.4 门禁与生产验证
+
+完整门禁 **122 passed / 0 failed**，exit=0：
+[gate log](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_scratch_gate.log)。
+另用 Nsight Systems 2026.1.3 对同一小型预算拒绝输入做 before/after，after 设置 compact=0，隔离寿命修复：
+cudaMalloc 均为 240 次，cudaFree **170 → 250 次**，after mandatory base **80 allocations / 80 frees / live=0**。
+新增的 80 次释放对应 20 个临时 FuseCtx 的四个 mandatory buffers；
+[profile comparison](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_owner_20261003/profile_comparison.json)。
+此 profiler 运行只用于 API/寿命证据；未启用需要管理员权限的 CPU sampling，不能用它归因 CPU 准备耗时。
+
+门禁通过后，同一最终二进制在 GPU1/RTX4060 Laptop 上执行 wide/compact/compact/wide：
+M5261、sigma=26、B1=1000、B2=1.94e12、D=1231230、P=115200，batch=64 MiB、arena=6300 MiB。
+workspace pool、root-only Gtree、flat/direct pack 开启；division-tail、carry-batch、异步 oracle 和 S5 关闭。
+[results.csv](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_scratch_ab_20261003/results.csv)、
+[candidate source hashes](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_scratch_ab_20261003/candidate_source.json)、
+[binary/environment provenance](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_scratch_ab_20261003/provenance.json)。
+
+- CLI elapsed 四轮 **189.53 / 188.31 / 195.51 / 191.67 s**；均值 **190.600 → 191.910 s（+0.69%）**。
+  wide 两轮差 2.14 s，compact 两轮差 7.20 s；本轮没有证明加速，也不足以证明其他形状不存在回归。
+- 进程 wall **224.186 / 223.505 / 229.653 / 226.373 s**；均值 **225.2795 → 226.579 s（+0.58%）**。
+  t_reduce 均值 **18.5435 → 18.5645 s**，ntt_seconds **85.611 → 85.820 s**。
+- mandatory FuseCtx payload 峰值 **1007678464 → 128042480 bytes（−87.29%）**；
+  完整 arena 缓存 payload 峰值 **4508828064 → 3629192080 bytes（−19.51%，减少约 838.9 MiB）**。
+  旧三类 owned 峰值仍为 3501149600 bytes，A/B/Q 为 3221225472 bytes，cached pass tables 为 275650688 bytes。
+  A/B/Q 分配均 21 次、grow=7、hits=12731、evictions=0；保守预算显示值仍为 5956.3 MiB，不等于实际 payload。
+- NVML 整卡采样显存峰值 wide 两轮均 **5759 MiB**、compact 两轮均 **4903 MiB（−856 MiB）**。
+  观测进程私有提交峰值 wide **9215/9211 MiB**、compact **8362/8358 MiB**；
+  均值 **9213 → 8360 MiB（−853 MiB，−9.26%）**。此值不是 RSS，可能包含驱动提交，不能全部解释为 host 多项式内存。
+- 四轮 factor=42089、hit_prime=3511、hits=1、bad_factors=0；coeffs=62385796。
+  GMP oracle 均 1609 jobs / 95906 samples，signature=`a7f13ab751eaf263`，pending=0。
+  carry deferred/checked 均 11516，direct chunks=12738，pack launches=24462。
+  输入 **38.81 GiB H2D**、输出 **37.27 GiB D2H** 均未减少；input D2D/temp=0，aliases=0。
+
+[GPU1 约 1 Hz 传感器汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_scratch_ab_20261003/gpu1_summary.json)：
+主循环 mean load **57.88 → 58.34%**，≤5% 样本 **43/239 → 46/242（17.99 → 19.01%）**，
+mean SM clock **1785.06 → 1786.86 MHz**，mean temperature **64.56 → 64.46°C**。
+下降/累积/naming mean load **47.96 → 53.73%**，≤5% 样本 **28/113 → 27/113**。
+阶段边界由 wall timers 近似划分，NVML busy time 不等于 SM occupancy；频繁空闲仍存在。
+
+保留 compact=1 默认，依据是独立数学门禁和两轮重复的容量收益；compact=0 可回退。
+本轮不宣称减少 NTT 算术、通用 mod-N 归约数量或传输量，不宣称速度提升。
+
+### 41.5 下一轮：输出窗口与公平 CPU 基线
+
+按 §40.5 先把源槽范围与紧凑输出 stride 拆开：保持完整 NTT、carry 和 canonical 检查，
+只归约/回传消费者需要的 first/count，再接入 Newton inverse、fold 和 divmod 的低半窗口。
+每个 slice 的窗口映射必须经独立 GMP 任意窗口全字验证；窗口减少后的 samples/signature 需要新的覆盖记录。
+验收先比较完整叶值/因子，再测 window 系数数、D2H、临时输出缓冲和生产 ABBA。
+随后定义 scaled descent 的完整数学状态，再尝试 sibling 父输入变换复用。
+
+Prime95 隔离准备目录为
+[CPU1 preparation](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_cpu1_prepare/preparation.json)。
+外部 p95v3104 目录的可执行文件实际 FileVersion=31.7.1.0，与本仓库参考源码 31.6b1 不同。
+复制 exe 和三份依赖到独立目录，配置 NumWorkers=1、CoresPerWorker=1、HyperthreadLL=0、
+Stage2ExtraThreads=0、UsePrimenet=0、MontgSigma=1、ForceECMStage2Type=1；
+尝试输入 `ECM=1,2,4423,-1,1000,5000000,1,26` 仅用于启动验证，不能和上述 GPU 生产形状比较。
+依赖已加载，但隔离实例未产生 ECM 输出、worktodo 未变化、CPU 时间停在 0.203125 s；启动原因未确定，
+已结束自己的实例并保存
+[startup diagnostic](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_cpu1_prepare/startup_unverified.json)。
+这不是有效 CPU 基线；用户原有 Prime95 实例保持运行。
+仍须验证有效配置与实际执行线程、匹配 N/B1/B2/sigma/曲线类型、排除因子提前终止，
+并建立 GPU 完整 Stage2 wall 与 stage1 分界后才能判断是否超过 Prime95 CPU 单执行线程。

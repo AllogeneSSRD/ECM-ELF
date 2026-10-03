@@ -1173,8 +1173,10 @@ struct FuseCtx {
     unsigned long long *scr = nullptr;                   /* per-pass coarse tables */
     unsigned long long *scr2 = nullptr;                  /* per-pass radix tables */
     size_t scrWords = 0;
+    size_t scr2Words = 64;
     int m_max = FUSE_MAX_M;
     bool ready = false;
+    bool arena_borrowed = false;                         /* this copy must not release arena storage */
     int passes_fwd = 0;
     /* ---- OPTIONAL cache of the per-pass twiddle tables (section 18, slice S3) ------------
        build_pass_table_kernel / build_radix_table_kernel are pure functions of (shape, pass),
@@ -1189,6 +1191,26 @@ struct FuseCtx {
     unsigned long long *passI[FUSE_MAX_PASSES] = {nullptr};
     unsigned long long *radI[FUSE_MAX_PASSES] = {nullptr};
 };
+
+/* Requested payload of the mandatory per-FuseCtx allocations, including temporary plans.
+   Single host-thread accounting, like the rest of this probe's arena and CUDA context state. */
+struct FuseBaseStats {
+    unsigned long long allocations=0, frees=0, live_bytes=0, peak_bytes=0;
+};
+static FuseBaseStats g_fuse_base;
+static void fuse_base_allocate(unsigned long long **p, size_t words)
+{
+    if (!words) { *p=nullptr; return; }
+    CK(cudaMalloc((void **)p,words*8));
+    ++g_fuse_base.allocations; g_fuse_base.live_bytes+=words*8;
+    g_fuse_base.peak_bytes=std::max(g_fuse_base.peak_bytes,g_fuse_base.live_bytes);
+}
+static void fuse_base_free(unsigned long long *&p, size_t words)
+{
+    if (!p) return;
+    CK(cudaFree(p)); p=nullptr;
+    ++g_fuse_base.frees; g_fuse_base.live_bytes-=words*8;
+}
 
 /* minimise the number of outer passes for `rem` stages with m <= m_max.  PRIMARY key: the
    pass count (every pass moves the whole array).  SECONDARY key: the WIDEST FINAL PEEL, so
@@ -1236,8 +1258,13 @@ static unsigned long long fuse_env_ull(const char *name, unsigned long long dflt
     return std::strtoull(s, nullptr, 10);
 }
 
+static bool fuse_compact_scratch()
+{
+    const char *e=std::getenv("NTT_FUSE_COMPACT_SCRATCH");
+    return !e || !*e || std::atoi(e)!=0;
+}
 static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
-                      unsigned long long omega_inv)
+                      unsigned long long omega_inv, bool compact=fuse_compact_scratch())
 {
     c.n = n;
     c.k = k;
@@ -1250,8 +1277,8 @@ static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long lon
     if (c.m_max < 1) c.m_max = 1;
     fuse_plan_stages(c, k - t);
 
-    CK(cudaMalloc(&c.tblF, (size_t)(1ull << t) * sizeof(unsigned long long)));
-    CK(cudaMalloc(&c.tblI, (size_t)(1ull << t) * sizeof(unsigned long long)));
+    fuse_base_allocate(&c.tblF,(size_t)(1ull << t));
+    fuse_base_allocate(&c.tblI,(size_t)(1ull << t));
     if (t > 0) {
         const unsigned int tb = (unsigned int)(((1ull << t) + 255) / 256);
         build_tile_table_kernel<<<tb, 256>>>(c.tblF, k, t, omega);
@@ -1259,12 +1286,25 @@ static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long lon
         build_tile_table_kernel<<<tb, 256>>>(c.tblI, k, t, omega_inv);
         CK(cudaGetLastError());
     }
-    /* per-pass coarse table: S = n >> (L+M) entries.  A radix-2 pass at L=0 is the worst case
-       (S = n/2), so that is what has to be allocated -- a n/4 buffer here silently walked off
-       the end (bad upper half + an illegal access at k=19). */
-    c.scrWords = (size_t)(n >> 1) + 64;
-    CK(cudaMalloc(&c.scr, c.scrWords * sizeof(unsigned long long)));
-    CK(cudaMalloc(&c.scr2, 64 * sizeof(unsigned long long)));
+    /* Size from BOTH actual pass sequences, not an assumed radix. The old N/4 guess broke
+       radix-2; a tile-only plan has no coarse/radix scratch readers at all. */
+    c.scrWords = compact ? 0 : (size_t)(n >> 1) + 64;
+    c.scr2Words = compact ? 0 : 64;
+    if (compact) {
+        int L=0;
+        for (int p=0;p<c.nms;++p) {
+            const int M=c.ms[p];
+            c.scrWords=std::max(c.scrWords,(size_t)(n>>(L+M)));
+            c.scr2Words=std::max(c.scr2Words,(size_t)(1ull<<M)); L+=M;
+        }
+        L=c.outer_stages;
+        for (int p=c.nms-1;p>=0;--p) {
+            const int M=c.ms[p]; L-=M;
+            c.scrWords=std::max(c.scrWords,(size_t)(1ull<<(c.k-L-M)));
+        }
+    }
+    fuse_base_allocate(&c.scr,c.scrWords);
+    fuse_base_allocate(&c.scr2,c.scr2Words);
     /* 2^t words of dynamic shared memory for the tile pass (the twiddle table is in global).
        The carveout hint matters: without it the driver may leave the L1/shared split too
        small for more than one block per SM, and the tile pass is latency bound (its modular
@@ -1292,12 +1332,27 @@ static void fuse_release(FuseCtx &c)
         c.passF[p] = c.radF[p] = c.passI[p] = c.radI[p] = nullptr;
     }
     c.tables_cached = false;
-    if (c.tblF) cudaFree(c.tblF);
-    if (c.tblI) cudaFree(c.tblI);
-    if (c.scr) cudaFree(c.scr);
-    if (c.scr2) cudaFree(c.scr2);
+    fuse_base_free(c.tblF,(size_t)(1ull << c.t));
+    fuse_base_free(c.tblI,(size_t)(1ull << c.t));
+    fuse_base_free(c.scr,c.scrWords);
+    fuse_base_free(c.scr2,c.scr2Words);
     c.tblF = c.tblI = c.scr = c.scr2 = nullptr;
     c.ready = false;
+    c.arena_borrowed = false;
+}
+
+/* A non-null arena can refuse a plan. Cleanup follows the actual owner, on EVERY return. */
+struct FuseCallGuard {
+    FuseCtx &fc;
+    explicit FuseCallGuard(FuseCtx &context):fc(context) {}
+    ~FuseCallGuard() { if (!fc.arena_borrowed) fuse_release(fc); }
+    FuseCallGuard(const FuseCallGuard &)=delete;
+    FuseCallGuard &operator=(const FuseCallGuard &)=delete;
+};
+static size_t fuse_base_words(const FuseCtx &c)
+{
+    return (c.tblF ? (size_t)(1ull<<c.t) : 0) + (c.tblI ? (size_t)(1ull<<c.t) : 0)
+         + (c.scr ? c.scrWords : 0) + (c.scr2 ? c.scr2Words : 0);
 }
 
 /* Build EVERY per-pass twiddle table of this shape once, into its own buffer, and mark the
@@ -1541,6 +1596,7 @@ struct NttArena {
     unsigned long long legacy_mallocs=0, legacy_frees=0;
     unsigned long long alias_snapshots=0, alias_snapshot_bytes=0;
     size_t peak_big_bytes=0, peak_small_bytes=0, peak_table_bytes=0, peak_owned_bytes=0;
+    size_t peak_fuse_base_bytes=0, peak_full_bytes=0;
     /* Deterministic allocation-failure fixture; never set by the production engine. */
     int workspace_fail_alloc=0;
     std::vector<SmallEntry> smalls;
@@ -1608,32 +1664,40 @@ struct NttArena {
 
     void update_peaks()
     {
-        size_t big=workspace.words*8, small=0, table=0;
+        size_t big=workspace.words*8, small=0, table=0, base=0;
         for (const auto &b : bigs) big+=b.words*8;
         for (const auto &b : smalls) small+=b.words*8;
-        for (const auto &f : fuses) table+=(size_t)fuse_table_words(f.fc)*8;
+        for (const auto &f : fuses) { table+=(size_t)fuse_table_words(f.fc)*8; base+=fuse_base_words(f.fc)*8; }
         peak_big_bytes=std::max(peak_big_bytes,big); peak_small_bytes=std::max(peak_small_bytes,small);
         peak_table_bytes=std::max(peak_table_bytes,table);
         peak_owned_bytes=std::max(peak_owned_bytes,big+small+table);
+        peak_fuse_base_bytes=std::max(peak_fuse_base_bytes,base);
+        peak_full_bytes=std::max(peak_full_bytes,big+small+table+base);
     }
 
     void print_workspace_stats() const
     {
-        size_t big=workspace.words*8, small=0, table=0;
+        size_t big=workspace.words*8, small=0, table=0, base=0;
         for (const auto &b : bigs) big+=b.words*8;
         for (const auto &b : smalls) small+=b.words*8;
-        for (const auto &f : fuses) table+=(size_t)fuse_table_words(f.fc)*8;
+        for (const auto &f : fuses) { table+=(size_t)fuse_table_words(f.fc)*8; base+=fuse_base_words(f.fc)*8; }
         std::printf("ntt_workspace_stats: pool=%d hits=%llu grows=%llu mallocs=%llu frees=%llu "
                     "workspace_bytes=%llu big_bytes=%llu small_bytes=%llu table_bytes=%llu "
                     "owned_bytes=%llu big_peak_bytes=%llu small_peak_bytes=%llu table_peak_bytes=%llu "
                     "owned_peak_bytes=%llu aliases=%llu alias_bytes=%llu evictions=%llu evicted_words=%llu "
-                    "legacy_mallocs=%llu legacy_frees=%llu\n",
+                    "legacy_mallocs=%llu legacy_frees=%llu "
+                    "fuse_base_bytes=%llu fuse_base_peak_bytes=%llu full_bytes=%llu full_peak_bytes=%llu\n",
                     (int)workspace_pool, workspace_hits, workspace_grows, workspace_mallocs, workspace_frees,
                     (unsigned long long)(workspace.words*8), (unsigned long long)big, (unsigned long long)small,
                     (unsigned long long)table, (unsigned long long)(big+small+table),
                     (unsigned long long)peak_big_bytes, (unsigned long long)peak_small_bytes,
                     (unsigned long long)peak_table_bytes, (unsigned long long)peak_owned_bytes,
-                    alias_snapshots, alias_snapshot_bytes, tbl_evictions, tbl_words_freed, legacy_mallocs, legacy_frees);
+                    alias_snapshots, alias_snapshot_bytes, tbl_evictions, tbl_words_freed, legacy_mallocs, legacy_frees,
+                    (unsigned long long)base,(unsigned long long)peak_fuse_base_bytes,
+                    (unsigned long long)(big+small+table+base),(unsigned long long)peak_full_bytes);
+        std::printf("ntt_fuse_base_stats: compact=%d allocations=%llu frees=%llu live_bytes=%llu peak_bytes=%llu\n",
+                    (int)fuse_compact_scratch(),g_fuse_base.allocations,g_fuse_base.frees,
+                    g_fuse_base.live_bytes,g_fuse_base.peak_bytes);
     }
 
     /* the words a cached shape's tables occupy: sum over outer passes of (S + 2^M) for the forward
@@ -1915,6 +1979,7 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     for (NttArena::FuseEntry &e : ar->fuses) {
         if (e.n == n && e.k == k && e.omega == omega) {
             out = e.fc;                                  /* pointers are owned by the arena */
+            out.arena_borrowed = true;
             ntt_arena_pin_smem(ar, e.fc.t);
             ++ar->fuse_hits;
             return;
@@ -1929,6 +1994,7 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     if (ar->cap_bytes && ar->bytes + need > ar->cap_bytes) {
         ++ar->overflow;
         fuse_init(out, n, k, omega, omega_inv);      /* over budget: per-call tables */
+        ntt_arena_pin_smem(ar,out.t);
         return;
     }
     fuse_init(e.fc, n, k, omega, omega_inv);
@@ -1939,6 +2005,7 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     ar->update_peaks();
     ++ar->fuse_builds;
     out = ar->fuses.back().fc;
+    out.arena_borrowed = true;
 }
 
 /* device arithmetic selftest kernel: out[i] = gl_mul(x[i], y[i]) */
@@ -3339,6 +3406,7 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
     }
     NttShape sh;
     FuseCtx fc;
+    FuseCallGuard fuse_guard(fc);
     {
         const int rc = ntt_shape_plan(P, S, device, arena, fc, sh);
         if (rc) return rc;
@@ -3378,7 +3446,7 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
     NttArena::BufEntry *ab = ntt_arena_bufs(arena, N, out_slots, nbatch, digits_out == nullptr);
     if (!ab && digits_out) {
         *digits_out=nullptr;
-        if (!arena) fuse_release(fc);
+
         return 3;                         /* an owned fallback would return a freed pointer */
     }
     unsigned long long *dA = nullptr, *dB = nullptr, *dQ = nullptr, *dOut = nullptr,
@@ -3475,7 +3543,7 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         *digits_out = r.digits;
     }
     int rc = 0;
-    if (!arena) fuse_release(fc);
+
     if (own) { cudaFree(dA); cudaFree(dB); cudaFree(dQ); cudaFree(dOut); cudaFree(dRes); }
     return rc;
 }
@@ -3507,6 +3575,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
     }
     NttShape sh;
     FuseCtx fc;
+    FuseCallGuard fuse_guard(fc);
     const double tplan0 = now_s();
     {
         const int rc = ntt_shape_plan(P, S, device, arena, fc, sh, force_bpw);
@@ -3531,13 +3600,13 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
     };
     if (!input && (!preserve(dAin,alias_a) || !preserve(dBin,alias_b))) {
         std::fprintf(stderr, NTT_PROBE_NAME ": device input exceeds its arena allocation\n");
-        if (!arena) fuse_release(fc);
+
         return 3;
     }
     NttArena::BufEntry *ab = ntt_arena_bufs(arena, N, out_slots, nbatch, digits_out == nullptr);
     if (!ab && digits_out) {
         *digits_out=nullptr;
-        if (!arena) fuse_release(fc);
+
         return 3;
     }
     unsigned long long *dA = nullptr, *dB = nullptr, *dQ = nullptr, *dOut = nullptr,
@@ -3557,7 +3626,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
     if (input) {
         const int rc = input->run ? input->run(input->ctx, sh, nbatch, dA, dB) : 2;
         if (rc) {
-            if (!arena) fuse_release(fc);
+
             if (own) { cudaFree(dA); cudaFree(dB); cudaFree(dQ); cudaFree(dOut); cudaFree(dRes); }
             return rc;
         }
@@ -3676,7 +3745,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         return 4;
     }
     if (digits_out) *digits_out = (nchunk == 1) ? r.digits : nullptr;
-    if (!arena) fuse_release(fc);
+
     if (own) { cudaFree(dA); cudaFree(dB); cudaFree(dQ); cudaFree(dOut); cudaFree(dRes); }
     return 0;
 }
@@ -3844,6 +3913,123 @@ static void ntt_workspace_check(int device)
     if (bad) std::exit(3);
 }
 
+int ntt_poly_mul_host(unsigned long long P,int S,int device,bool verbose,int dump,
+    const unsigned long long *a,const unsigned long long *b,
+    std::vector<unsigned long long> *out,std::vector<std::vector<unsigned long long>> *exact,
+    NttMulStats *stats,NttArena *arena);
+static void ntt_fuse_lifetime_check(int device)
+{
+    const unsigned long long P=17;
+    const int S=129;
+    std::vector<unsigned long long> a(P*3,0), b(P*3,0), output;
+    for (size_t i=0;i<P;++i) { a[i*3]=i+1; b[i*3]=2*i+3; }
+    NttArena ar; ar.device=device; ar.cap_bytes=1;
+    const auto live_before=g_fuse_base.live_bytes;
+    const auto allocations_before=g_fuse_base.allocations;
+    const auto frees_before=g_fuse_base.frees;
+    unsigned long long bad=0,calls=0;
+    std::vector<unsigned long long> expected(2*P-1,0);
+    for (size_t k=0;k<expected.size();++k)
+        for (size_t i=0;i<P;++i) if(k>=i && k-i<P) expected[k]+=a[i*3]*b[(k-i)*3];
+    for (int i=0;i<8;++i) {
+        NttMulStats st;
+        const int rc=ntt_poly_mul_batch_host(P,S,device,1,a.data(),b.data(),&output,&st,&ar,nullptr);
+        ++calls;
+        if (rc || output!=expected || g_fuse_base.live_bytes!=live_before || !ar.fuses.empty()) ++bad;
+    }
+    NttMulStats st;
+    for (int i=0;i<2;++i) {
+        const int rc=ntt_poly_mul_host(P,S,device,false,0,a.data(),b.data(),&output,nullptr,&st,&ar);
+        ++calls; if(rc || output!=expected || g_fuse_base.live_bytes!=live_before) ++bad;
+    }
+    unsigned long long *exported=(unsigned long long *)1;
+    int rc=ntt_poly_mul_batch_host(P,S,device,1,a.data(),b.data(),&output,&st,&ar,nullptr,&exported);
+    ++calls; if(rc!=3 || exported || g_fuse_base.live_bytes!=live_before) ++bad;
+    NttInputHook input;
+    input.run=[](void *,const NttShape &,unsigned long long,unsigned long long *,unsigned long long *) { return 7; };
+    rc=ntt_poly_mul_batch_dev(P,S,device,1,nullptr,nullptr,&st,&ar,nullptr,nullptr,0,false,&input);
+    ++calls; if(rc!=7 || g_fuse_base.live_bytes!=live_before) ++bad;
+    ar.cap_bytes=0;
+    rc=ntt_poly_mul_batch_host(P,S,device,1,a.data(),b.data(),&output,&st,&ar,nullptr);
+    ++calls; if(rc || output!=expected || ar.fuses.size()!=1 || g_fuse_base.live_bytes<=live_before) ++bad;
+    const auto cached_allocs=g_fuse_base.allocations, cached_bytes=g_fuse_base.live_bytes;
+    rc=ntt_poly_mul_batch_host(P,S,device,1,a.data(),b.data(),&output,&st,&ar,nullptr);
+    ++calls; if(rc || output!=expected || g_fuse_base.allocations!=cached_allocs || g_fuse_base.live_bytes!=cached_bytes) ++bad;
+    ar.release(); if(g_fuse_base.live_bytes!=live_before) ++bad;
+    std::printf("ntt_fuse_lifetime_check: calls=%llu bad=%llu allocations=%llu frees=%llu leaked_bytes=%llu\n",
+                calls,bad,g_fuse_base.allocations-allocations_before,g_fuse_base.frees-frees_before,
+                g_fuse_base.live_bytes-live_before);
+    if (bad) std::exit(3);
+}
+
+static void fuse_fixture_env(const char *key,const char *value)
+{
+#if defined(_WIN32)
+    _putenv_s(key,value ? value : "");
+#else
+    if(value && *value) setenv(key,value,1); else unsetenv(key);
+#endif
+}
+static void ntt_fuse_capacity_check(int device)
+{
+    CK(cudaSetDevice(device));
+    const char *et=std::getenv("NTT_FUSE_T"), *em=std::getenv("NTT_FUSE_M");
+    const std::string saved_t=et ? et : "", saved_m=em ? em : "";
+    const auto live_before=g_fuse_base.live_bytes;
+    unsigned long long cases=0,words=0,bad=0;
+    const int ks[]={7,15,7},ts[]={4,8,8};
+    for (int shape=0;shape<3;++shape) {
+        const int k=ks[shape]; const unsigned long long n=1ull<<k;
+        const auto om=gl_pow_host(7ull,(GL_P-1)/n), omi=gl_pow_host(om,GL_P-2);
+        const auto nsc=gl_pow_host(n,GL_P-2);
+        std::vector<unsigned long long> original(n,0),ones(n,1),spectrum(n,0),got(n);
+        original[0]=GL_P-1; original[1]=0x8000000000000000ull; original[n-1]=GL_P-2;
+        /* Independent sparse DFT in GMP, stored in DIF bit-reversed order. */
+        mpz_t p,w,wi,u,v,sum,tmp,ca,cb,cc;
+        mpz_inits(p,w,wi,u,v,sum,tmp,ca,cb,cc,nullptr);
+        const unsigned long long prime=GL_P;
+        mpz_import(p,1,-1,8,0,0,&prime); mpz_import(w,1,-1,8,0,0,&om);
+        mpz_import(wi,1,-1,8,0,0,&omi);
+        mpz_import(ca,1,-1,8,0,0,&original[0]); mpz_import(cb,1,-1,8,0,0,&original[1]);
+        mpz_import(cc,1,-1,8,0,0,&original[n-1]); mpz_set_ui(u,1); mpz_set_ui(v,1);
+        for (unsigned long long j=0;j<n;++j) {
+            mpz_mul(sum,cb,u); mpz_add(sum,sum,ca); mpz_mul(tmp,cc,v); mpz_add(sum,sum,tmp); mpz_mod(sum,sum,p);
+            unsigned long long r=0,x=j; for(int bit=0;bit<k;++bit){r=(r<<1)|(x&1);x>>=1;}
+            size_t count=0; mpz_export(&spectrum[r],&count,-1,8,0,0,sum);
+            mpz_mul(u,u,w);mpz_mod(u,u,p);mpz_mul(v,v,wi);mpz_mod(v,v,p);
+        }
+        mpz_clears(p,w,wi,u,v,sum,tmp,ca,cb,cc,nullptr);
+        unsigned long long *data=nullptr,*dones=nullptr;
+        CK(cudaMalloc(&data,n*8));CK(cudaMalloc(&dones,n*8));
+        CK(cudaMemcpy(dones,ones.data(),n*8,cudaMemcpyHostToDevice));
+        fuse_fixture_env("NTT_FUSE_T",std::to_string(ts[shape]).c_str());
+        for (int m=1;m<=FUSE_MAX_M;++m) for(bool compact:{false,true}) {
+            fuse_fixture_env("NTT_FUSE_M",std::to_string(m).c_str());
+            FuseCtx fc; fuse_init(fc,n,k,om,omi,compact);
+            for (int state=0;state<3;++state) {
+                if(state==1) ntt_fuse_cache_tables(fc,om,omi);
+                if(state==2) NttArena::fuse_drop_tables(fc);
+                CK(cudaMemcpy(data,original.data(),n*8,cudaMemcpyHostToDevice));
+                ntt_forward_fused(data,fc,om);
+                CK(cudaMemcpy(got.data(),data,n*8,cudaMemcpyDeviceToHost));
+                for(size_t j=0;j<n;++j){if(got[j]!=spectrum[j]) ++bad;} words+=n;
+                ntt_inverse_fused(data,dones,fc,omi,nsc);
+                CK(cudaMemcpy(got.data(),data,n*8,cudaMemcpyDeviceToHost));
+                for(size_t j=0;j<n;++j){if(got[j]!=original[j]) ++bad;} words+=n;
+                ++cases;
+            }
+            if(compact && fc.nms==0 && (fc.scr || fc.scr2 || fc.scrWords || fc.scr2Words)) ++bad;
+            fuse_release(fc);
+        }
+        CK(cudaFree(data));CK(cudaFree(dones));
+    }
+    fuse_fixture_env("NTT_FUSE_T",saved_t.c_str());fuse_fixture_env("NTT_FUSE_M",saved_m.c_str());
+    if(g_fuse_base.live_bytes!=live_before) ++bad;
+    std::printf("ntt_fuse_capacity_check: cases=%llu words=%llu bad=%llu (GMP DFT, inverse, radix 1..%d, cache/evict/tile-only)\n",
+                cases,words,bad,FUSE_MAX_M);
+    if(bad) std::exit(3);
+}
+
 int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int dump,
                       const unsigned long long *wordsA, const unsigned long long *wordsB,
                       std::vector<unsigned long long> *out_slots_u64,
@@ -3856,6 +4042,7 @@ int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int
     /* THE SHAPE PLAN (shared with the batched entry point, so the two cannot drift) */
     NttShape sh;
     FuseCtx fc;
+    FuseCallGuard fuse_guard(fc);
     {
         const int rc = ntt_shape_plan(P, S, device, arena, fc, sh);
         if (rc) return rc;
@@ -4084,7 +4271,7 @@ int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int
         st->t_ext = hb_t_ext;
         st->t_xchk = hb_t_xchk;
     }
-    if (!arena) fuse_release(fc);          /* the arena owns its twiddle tables and buffers */
+
     if (!ab) { cudaFree(dA); cudaFree(dB); cudaFree(dC); cudaFree(dQ); cudaFree(dOut);
                cudaFree(dRes); }
     return exact_ok ? 0 : 8;
