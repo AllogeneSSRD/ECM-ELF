@@ -1320,6 +1320,20 @@ static const bool g_scaled_check = [] {
     return v && std::atoi(v)!=0;
 }();
 /* Main-loop G trees only need the root; 0 retains the full heap for same-binary A/B. */
+static const bool g_groot_device = [] {
+    const char *v=std::getenv("NTT_GROOT_DEVICE");return v && std::atoi(v)!=0;
+}();
+static const bool g_groot_device_check = [] {
+    const char *v=std::getenv("NTT_GROOT_DEVICE_CHECK");return v && std::atoi(v)!=0;
+}();
+struct GDeviceStats {
+    unsigned long long trees=0, fallbacks=0, levels=0, groups=0, pairs=0, copies=0;
+    unsigned long long leaf_words=0, root_words=0, resident_words=0, trace_words=0;
+    unsigned long long metadata_words=0, metadata_peak_bytes=0, raw_peak_bytes=0;
+    unsigned long long logical_frontier_peak_bytes=0, host_staging_peak_bytes=0;
+    unsigned long long checked_nodes=0, checked_words=0;
+};
+static GDeviceStats g_gdevice;
 static const bool g_s4_groot_only = !opt_off("NTT_S4_GROOT_ONLY");
 struct GRootStats {
     unsigned long long builds = 0, nodes_released = 0, passthrough_moves = 0;
@@ -2863,6 +2877,64 @@ static void s4_launch_pack_batch(const unsigned long long *src, int S, int bpw,
     CK(cudaGetLastError());
 }
 
+/* Gather canonical coefficients from a tight resident frontier directly into the
+   engine's digit buffers. Metadata is in WORD offsets, never polynomial indices. */
+struct S4DeviceBatch {
+    const unsigned long long *src=nullptr,*meta=nullptr;
+    unsigned long long *dst=nullptr;
+    const unsigned long long *host_meta=nullptr;
+    size_t src_words=0,dst_words=0,nbatch=0;
+};
+__global__ void s4_pack_gather_kernel(const unsigned long long *src,
+    const unsigned long long *offsets, size_t m, size_t nc, int W, int bits,
+    int bpw, unsigned long long sw, unsigned long long N, unsigned long long *dst)
+{
+    const size_t gid=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
+    if(gid>=m*nc)return;
+    const size_t slice=gid/nc,coef=gid%nc;
+    const auto *c=src+offsets[slice]+coef*W;
+    auto *d=dst+slice*N+coef*sw;
+    const unsigned long long mask=(1ull<<bpw)-1;
+    for(int k=0;k<(bits+bpw-1)/bpw;++k) {
+        const int bit=k*bpw,w=bit>>6,shift=bit&63;
+        unsigned long long v=c[w]>>shift;
+        if(shift+bpw>64 && w+1<W)v|=c[w+1]<<(64-shift);
+        d[k]=v&mask;
+    }
+}
+struct S4GatherPack {
+    const S4DeviceBatch *batch=nullptr;S4Ctx *C=nullptr;size_t s0=0,ma=0,mb=0;
+    unsigned long long P=0,N=0,sw=0;int bits=0,bpw=0,W=0;
+};
+static int s4_gather_final_input(void *ctx,const NttShape &sh,unsigned long long m,
+    unsigned long long *a,unsigned long long *b)
+{
+    const auto &p=*(const S4GatherPack*)ctx;
+    if(sh.P!=p.P || sh.N!=p.N || sh.S!=p.bits || sh.bpw!=p.bpw ||
+       sh.slot_words!=p.sw || sh.W!=(unsigned long long)p.W)return 3;
+    const double start=now_s();
+    CK(cudaMemsetAsync(a,0,(size_t)m*sh.N*8));
+    CK(cudaMemsetAsync(b,0,(size_t)m*sh.N*8));
+    s4_pack_gather_kernel<<<(unsigned int)((m*p.ma+255)/256),256>>>(p.batch->src,
+        p.batch->meta+p.s0,m,p.ma,p.W,p.bits,p.bpw,p.sw,p.N,a);
+    CK(cudaGetLastError());
+    s4_pack_gather_kernel<<<(unsigned int)((m*p.mb+255)/256),256>>>(p.batch->src,
+        p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
+    CK(cudaGetLastError());
+    p.C->t_packdev+=now_s()-start;
+    return 0;
+}
+__global__ void s4_scatter_result_kernel(const unsigned long long *src,
+    size_t stride,size_t first,size_t count,size_t m,int W,
+    const unsigned long long *offsets,unsigned long long *dst)
+{
+    const size_t gid=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
+    const size_t words=count*(size_t)W;
+    if(gid>=m*words)return;
+    const size_t slice=gid/words,j=gid%words;
+    dst[offsets[slice]+j]=src[(slice*stride+first)*W+j];
+}
+
 struct S4InputPack {
     S4Ctx *C = nullptr;
     unsigned long long P = 0, N = 0, slot_words = 0;
@@ -2910,7 +2982,8 @@ static void poly_mul_batch_modN(PolyLayer &L,
                                 size_t ma, size_t mb, size_t nbatch,
                                 std::vector<unsigned long long> &out, int cat = -1,
                                 NttMulStats *st_out = nullptr,
-                                size_t first = 0, size_t count = (size_t)-1)
+                                size_t first = 0, size_t count = (size_t)-1,
+                                const S4DeviceBatch *resident = nullptr)
 {
     const size_t W = L.W;
     const size_t P = (ma > mb) ? ma : mb;
@@ -2921,9 +2994,30 @@ static void poly_mul_batch_modN(PolyLayer &L,
         std::exit(3);
     }
     const size_t nc=count;
-    out.assign(nbatch * nc * W, 0ull);
+    const bool host_output=!resident || g_s4_carry_trace;
+    if(host_output) out.assign(nbatch*nc*W,0ull);else out.clear();
     if (nbatch == 0) return;
+    if(resident) {
+        if(!resident->src || !resident->dst || resident->src==resident->dst ||
+           !resident->meta || !resident->host_meta || resident->nbatch!=nbatch ||
+           first!=0 || count!=full_nc || g_s4_final_readback || !g_s4_pack_direct) {
+            std::fprintf(stderr,"%s: FATAL: invalid resident batch lifetime/shape\n",NTT_PROBE_NAME);std::exit(3);
+        }
+        for(size_t i=0;i<nbatch;++i) {
+            const auto *o=resident->host_meta;
+            if(o[i]>resident->src_words || ma*W>resident->src_words-o[i] ||
+               o[nbatch+i]>resident->src_words || mb*W>resident->src_words-o[nbatch+i] ||
+               o[2*nbatch+i]>resident->dst_words || nc*W>resident->dst_words-o[2*nbatch+i]) {
+                std::fprintf(stderr,"%s: FATAL: resident offset outside frontier\n",NTT_PROBE_NAME);std::exit(3);
+            }
+        }
+    }
     S4Ctx &C = *L.s4;
+    if(resident && ((resident->src!=C.d_rawA && resident->src!=C.d_rawB) ||
+                   (resident->dst!=C.d_rawA && resident->dst!=C.d_rawB) ||
+                   resident->src_words>C.d_raw_cap || resident->dst_words>C.d_raw_cap)) {
+        std::fprintf(stderr,"%s: FATAL: resident frontier is not owned raw staging\n",NTT_PROBE_NAME);std::exit(3);
+    }
     const unsigned long long out_slots = 2 * P - 1; // FULL shape and canonical assertion
     const unsigned long long output_slots=g_s4_output_window ? count : out_slots;
     const unsigned long long output_first=g_s4_output_window ? first : 0;
@@ -3058,7 +3152,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
     const size_t out_words_max = (size_t)(chunk * output_slots * W);
     if (!g_pin_ev[0]) CK(cudaEventCreateWithFlags(&g_pin_ev[0], cudaEventDisableTiming));
     if (!g_pin_ev[1]) CK(cudaEventCreateWithFlags(&g_pin_ev[1], cudaEventDisableTiming));
-    const bool async_out = (g_s4_async &&
+    const bool async_out = (host_output && g_s4_async &&
                             pin_words(&g_pin_out[0], &g_pin_out_cap[0], out_words_max) != nullptr &&
                             pin_words(&g_pin_out[1], &g_pin_out_cap[1], out_words_max) != nullptr);
     unsigned long long ci = 0, pend_m = 0, pend_s0 = 0;
@@ -3102,7 +3196,29 @@ static void poly_mul_batch_modN(PolyLayer &L,
         NttReduceHook h2 = hook;
         if (hook.out) h2.out = hook.out + (chunk_output ? 0 : (size_t)(s0 * output_slots) * W);
         int r1 = 0;
-        if (host_pack) {
+        if(resident) {
+            if(host_pack) {std::fprintf(stderr,"%s: FATAL: resident multiply cannot use host packing\n",NTT_PROBE_NAME);std::exit(3);}
+            S4GatherPack pack{resident,&C,(size_t)s0,ma,mb,(unsigned long long)P,qN,qsw,(int)L.S,qbpw,(int)W};
+            NttInputHook input{&pack,s4_gather_final_input};
+            const double tp=C.t_packdev;
+            r1=ntt_poly_mul_batch_dev(P,(int)L.S,L.device,m,nullptr,nullptr,&st,L.arena,&h2,
+                nullptr,qbpw,defer_this,&input);
+            // Input pack remains a direct engine write; no temporary packed inputs or D2D.
+            if(!r1) {++C.input_direct;C.input_avoided_bytes+=16ull*m*qN;}
+            C.packed_peak_bytes=std::max(C.packed_peak_bytes,16ull*m*qN);
+            C.pack_launches+=2;
+            C.t_h2d_raw+=C.t_packdev-tp;
+            if(!r1 && st.carry_deferred) {
+                carry_pending=true;carry_pending_m=m;++carry_pending_chunks;
+                ++g_defer_chunks;g_defer_slices+=m;
+                if(g_s4_carry_test_bad && !g_s4_carry_injected) {
+                    CK(cudaMemsetAsync(L.arena->cur.dRes,1,sizeof(unsigned long long)));
+                    g_s4_carry_injected=true;
+                    std::printf("s4_carry_fault: first resident interior diagnostic poisoned P=%llu m=%llu\n",
+                        (unsigned long long)P,m);
+                }
+            }
+        } else if (host_pack) {
             r1 = ntt_poly_mul_batch_host(P, (int)L.S, L.device, m,
                                          wa + s0 * P * W, wb + s0 * P * W,
                                          (s0 == 0) ? &slots : nullptr, &st, L.arena, &h2,
@@ -3225,6 +3341,13 @@ static void poly_mul_batch_modN(PolyLayer &L,
            overlapped" and "the pipeline is drained per chunk".  `out_pending` marks the one chunk
            that has been copied but not yet written into `out`; the end of the call drains it. */
         const size_t out_words = (size_t)(m * output_slots * W);
+        if(resident) {
+            s4_scatter_result_kernel<<<(unsigned int)((m*nc*W+255)/256),256>>>(h2.out,
+                output_slots,host_first,nc,m,(int)W,resident->meta+2*nbatch+s0,resident->dst);
+            CK(cudaGetLastError());
+            if(!host_output) {g_gdevice.resident_words+=out_words;continue;}
+            g_gdevice.trace_words+=out_words;
+        }
         if (!async_out) {
             /* NO PINNED MEMORY: the original blocking readback, so a failed pinning costs speed
                and never correctness (and never a half-filled `out`) */
@@ -3354,7 +3477,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
     g_output_window.reduced_coeffs+=nbatch*output_slots;
     g_output_window.returned_coeffs+=nbatch*count;
     g_output_window.skipped_coeffs+=nbatch*(out_slots-output_slots);
-    g_output_window.d2h_words+=nbatch*output_slots*W;
+    if(host_output) g_output_window.d2h_words+=nbatch*output_slots*W;
     g_output_window.device_peak_bytes=std::max(g_output_window.device_peak_bytes,8ull*C.d_out_cap);
     g_output_window.pinned_peak_bytes=std::max(g_output_window.pinned_peak_bytes,8ull*(g_pin_out_cap[0]+g_pin_out_cap[1]));
     ++g_final_readback.calls;
@@ -3725,6 +3848,190 @@ static void ladder_points(const LadderCtx &C, const std::vector<unsigned long lo
  *  use the same representation as everywhere else (W words, reduced mod N), held one vector
  *  per coefficient for readability.
  * ===================================================================================== */
+
+/* Independent ordinary-coefficient product, used only by small-tree gates. */
+static std::vector<unsigned long long> groot_product_gmp(PolyLayer &L,
+    const std::vector<unsigned long long> &a,const std::vector<unsigned long long> &b)
+{
+    const size_t W=L.W,ma=a.size()/W,mb=b.size()/W;
+    std::vector<unsigned long long> out((ma+mb-1)*W,0),word(W);
+    mpz_t x,y,z;mpz_inits(x,y,z,nullptr);
+    for(size_t k=0;k<ma+mb-1;++k) {
+        mpz_set_ui(z,0);
+        for(size_t i=0;i<ma;++i) if(k>=i && k-i<mb) {
+            words_to_mpz(x,a.data()+i*W,W);words_to_mpz(y,b.data()+(k-i)*W,W);mpz_addmul(z,x,y);
+        }
+        mpz_mod(z,z,L.N);mpz_to_words(word,W,z);std::copy(word.begin(),word.end(),out.begin()+k*W);
+    }
+    mpz_clears(x,y,z,nullptr);return out;
+}
+
+static std::vector<std::vector<unsigned long long>> build_groot_device(
+    PolyLayer &L,const std::vector<std::vector<unsigned long long>> &leaf,
+    std::vector<size_t> &deg,size_t &pad_out,FTreeStats &fs,int cat)
+{
+    const size_t W=L.W,n=leaf.size();size_t pad=1;while(pad<n)pad*=2;
+    const bool check=g_groot_device_check;
+    if(check && n>512) {std::fprintf(stderr,"%s: FATAL: resident GMP check limited to 512 leaves\n",NTT_PROBE_NAME);std::exit(3);}
+    ++g_gdevice.trees;fs.leaves=n;fs.padded=pad;pad_out=pad;
+    deg.assign(2*pad,0);
+    for(size_t i=0;i<n;++i) {
+        if(leaf[i].size()!=2*W) {std::fprintf(stderr,"%s: FATAL: resident tree requires linear leaves\n",NTT_PROBE_NAME);std::exit(3);}
+        deg[pad+i]=1;
+    }
+    for(size_t i=pad;--i;)deg[i]=deg[2*i]+deg[2*i+1];
+    std::vector<std::vector<unsigned long long>> tree(2*pad),expected;
+    if(check) {
+        expected.resize(2*pad);
+        for(size_t i=0;i<pad;++i) {
+            expected[pad+i].assign(W,0);expected[pad+i][0]=1;
+            if(i<n)expected[pad+i]=leaf[i];
+        }
+        for(size_t i=pad;--i;)expected[i]=groot_product_gmp(L,expected[2*i],expected[2*i+1]);
+    }
+    if(!n) {tree[1].assign(W,0);tree[1][0]=1;fs.node_peak_bytes=fs.node_retained_bytes=8*W;return tree;}
+    S4Ctx &C=*L.s4;
+    // Exclusive lease of the existing raw staging pair. Resident calls never upload raw inputs.
+    const size_t need=2*n*W;
+    if(C.d_raw_cap<need) {
+        if(C.d_rawA) {CK(cudaFree(C.d_rawA));CK(cudaFree(C.d_rawB));}
+        C.d_rawA=C.d_rawB=nullptr;C.d_raw_cap=0;
+        CK(cudaMalloc(&C.d_rawA,need*8));CK(cudaMalloc(&C.d_rawB,need*8));C.d_raw_cap=need;
+    }
+    g_gdevice.raw_peak_bytes=std::max(g_gdevice.raw_peak_bytes,16ull*C.d_raw_cap);
+    std::vector<unsigned long long> initial(need);
+    for(size_t i=0;i<n;++i)std::copy(leaf[i].begin(),leaf[i].end(),initial.begin()+2*i*W);
+    g_gdevice.host_staging_peak_bytes=std::max(g_gdevice.host_staging_peak_bytes,8ull*initial.capacity());
+    const double upload=now_s();
+    CK(cudaMemcpy(C.d_rawA,initial.data(),need*8,cudaMemcpyHostToDevice));
+    C.t_h2d_raw+=now_s()-upload;C.raw_words+=need;
+    g_gdevice.leaf_words+=need;
+    std::vector<unsigned long long>().swap(initial);
+    auto *cur=C.d_rawA,*next=C.d_rawB;size_t cur_words=need;
+    std::vector<unsigned long long> offsets(pad);
+    for(size_t i=0;i<pad;++i)offsets[i]=std::min(i,n)*2*W;
+    struct Metadata {
+        unsigned long long *device=nullptr,*pinned=nullptr;size_t capacity=0;
+        ~Metadata(){if(device)CK(cudaFree(device));if(pinned)CK(cudaFreeHost(pinned));}
+    } meta;
+    if(pad>1) {
+        meta.capacity=3*(pad/2);CK(cudaMalloc(&meta.device,meta.capacity*8));
+        if(g_s4_async) {
+            cudaError_t err=cudaHostAlloc(&meta.pinned,meta.capacity*8,cudaHostAllocDefault);
+            if(err!=cudaSuccess){meta.pinned=nullptr;cudaGetLastError();}
+        }
+        g_gdevice.metadata_peak_bytes=std::max(g_gdevice.metadata_peak_bytes,8ull*meta.capacity);
+    }
+    auto validate=[&](size_t base) {
+        if(!check)return;
+        std::vector<unsigned long long> words(cur_words);
+        CK(cudaMemcpy(words.data(),cur,cur_words*8,cudaMemcpyDeviceToHost));
+        for(size_t i=0;i<base;++i) {
+            const size_t d=deg[base+i];++g_gdevice.checked_nodes;g_gdevice.checked_words+=(d+1)*W;
+            if(d && !std::equal(expected[base+i].begin(),expected[base+i].end(),words.begin()+offsets[i])) {
+                std::fprintf(stderr,"%s: FATAL: resident GMP node mismatch node=%llu degree=%llu\n",NTT_PROBE_NAME,
+                    (unsigned long long)(base+i),(unsigned long long)d);std::exit(3);
+            }
+        }
+    };
+    validate(pad);
+    const double start=now_s();
+    static bool poisoned=false;
+    for(size_t base=pad/2; base; base/=2) {
+        const double level_start=now_s();
+        std::vector<unsigned long long> target(base);size_t next_words=0;
+        for(size_t i=0;i<base;++i) {target[i]=next_words;if(deg[base+i])next_words+=(deg[base+i]+1)*W;}
+        if(next_words>C.d_raw_cap) {std::fprintf(stderr,"%s: FATAL: resident next frontier exceeds raw lease\n",NTT_PROBE_NAME);std::exit(3);}
+        g_gdevice.logical_frontier_peak_bytes=std::max(g_gdevice.logical_frontier_peak_bytes,8ull*(cur_words+next_words));
+        std::map<std::pair<size_t,size_t>,std::vector<size_t>> groups;
+        for(size_t i=0;i<base;++i) {
+            const size_t da=deg[2*base+2*i],db=deg[2*base+2*i+1];
+            if(!da && !db)continue;
+            if(!da || !db) {
+                const size_t child=2*i+(da?0:1),d=da?da:db;
+                CK(cudaMemcpyAsync(next+target[i],cur+offsets[child],(d+1)*W*8,cudaMemcpyDeviceToDevice));
+                ++g_gdevice.copies;continue;
+            }
+            groups[{std::min(da,db)+1,std::max(da,db)+1}].push_back(i);
+        }
+        for(const auto &group:groups) {
+            const size_t ma=group.first.first,mb=group.first.second,nb=group.second.size();
+            std::vector<unsigned long long> map(3*nb);
+            for(size_t j=0;j<nb;++j) {
+                const size_t i=group.second[j],left=2*i,right=left+1;
+                const bool swap=deg[2*base+left]>deg[2*base+right];
+                map[j]=offsets[swap?right:left];map[nb+j]=offsets[swap?left:right];map[2*nb+j]=target[i];
+            }
+            // Previous metadata upload is complete when the multiply's final carry check returns.
+            // All scatter reads of DEVICE metadata precede this update in the default stream.
+            if(meta.pinned) {
+                std::copy(map.begin(),map.end(),meta.pinned);
+                CK(cudaMemcpyAsync(meta.device,meta.pinned,map.size()*8,cudaMemcpyHostToDevice));
+            } else CK(cudaMemcpy(meta.device,map.data(),map.size()*8,cudaMemcpyHostToDevice));
+            g_gdevice.metadata_words+=map.size();
+            S4DeviceBatch batch{cur,meta.device,next,map.data(),cur_words,next_words,nb};
+            std::vector<unsigned long long> unused;
+            poly_mul_batch_modN(L,nullptr,nullptr,ma,mb,nb,unused,cat,nullptr,0,ma+mb-1,&batch);
+            ++g_gdevice.groups;g_gdevice.pairs+=nb;fs.muls+=nb;
+            ++L.s4->groups;
+        }
+        const char *fault=std::getenv("NTT_GROOT_DEVICE_TEST_BAD");
+        if(fault && std::atoi(fault) && !poisoned && next_words) {
+            CK(cudaMemsetAsync(next,0xff,8));poisoned=true;
+            std::printf("gdevice_fault: first computed frontier poisoned\n");
+        }
+        std::swap(cur,next);offsets.swap(target);cur_words=next_words;++g_gdevice.levels;validate(base);
+        if(g_s4_batched_progress)
+            std::printf("gdevice_progress: base=%llu groups=%llu t_level=%.3f t_total=%.3f\n",
+                (unsigned long long)base,(unsigned long long)groups.size(),now_s()-level_start,now_s()-start);
+    }
+    tree[1].resize((n+1)*W);
+    const double tr=now_s();CK(cudaMemcpy(tree[1].data(),cur,tree[1].size()*8,cudaMemcpyDeviceToHost));
+    L.t_d2h_coeff+=now_s()-tr;L.d2h_coeff_words+=tree[1].size();g_gdevice.root_words+=tree[1].size();
+    fs.node_peak_bytes=fs.node_retained_bytes=8ull*tree[1].capacity();
+    return tree;
+}
+
+static std::vector<std::vector<unsigned long long>> build_groot_select(
+    PolyLayer &L,const std::vector<std::vector<unsigned long long>> &leaf,
+    std::vector<size_t> &deg,size_t &pad,FTreeStats &fs,int cat,bool keep_children)
+{
+    const char *host=std::getenv("NTT_S4_HOSTPACK");
+    if(g_groot_device && !keep_children && L.s4 && g_s4_pack_direct && !g_s4_final_readback &&
+       !(host && std::atoi(host)))return build_groot_device(L,leaf,deg,pad,fs,cat);
+    if(g_groot_device)++g_gdevice.fallbacks;
+    return build_tree_flat(L,leaf,deg,pad,fs,cat,keep_children);
+}
+
+static void groot_device_fixture(PolyLayer &L)
+{
+    const size_t W=L.W;unsigned long long cases=0,words=0;
+    const auto nodes0=g_gdevice.checked_nodes,words0=g_gdevice.checked_words;
+    mpz_t c,z;mpz_inits(c,z,nullptr);
+    for(size_t n:{0u,1u,2u,3u,5u,7u,8u,9u,17u,23u,257u,511u})for(size_t mode=0;mode<4;++mode) {
+        std::vector<std::vector<unsigned long long>> leaf;
+        std::vector<unsigned long long> expected(W,0),word(W);expected[0]=1;
+        for(size_t i=0;i<n;++i) {
+            if(mode==0){mpz_set_ui(c,1);mpz_set_ui(z,1);}
+            else if(mode==1){mpz_set_ui(c,13+i*17);mpz_set_ui(z,2+i*7);}
+            else if(mode==2){mpz_sub_ui(c,L.N,1);mpz_sub_ui(z,L.N,1);}
+            else {mpz_set_ui(c,i%3==0?0:i%3==1?1:i);mpz_set_ui(z,i%3==2?i+1:0);}
+            mpz_mod(c,c,L.N);mpz_mod(z,z,L.N);
+            std::vector<unsigned long long> f(2*W,0);
+            mpz_to_words(word,W,c);std::copy(word.begin(),word.end(),f.begin());
+            mpz_to_words(word,W,z);std::copy(word.begin(),word.end(),f.begin()+W);
+            leaf.push_back(f);expected=groot_product_gmp(L,expected,f);
+        }
+        FTreeStats fs;std::vector<size_t> degree;size_t pad=0;
+        auto tree=build_groot_select(L,leaf,degree,pad,fs,-1,false);
+        if(tree[1]!=expected || degree[1]!=n) {std::fprintf(stderr,"%s: FATAL: resident fixture root mismatch n=%llu\n",NTT_PROBE_NAME,(unsigned long long)n);std::exit(3);}
+        for(size_t i=2;i<tree.size();++i)if(!tree[i].empty())std::exit(3);
+        ++cases;words+=expected.size();
+    }
+    mpz_clears(c,z,nullptr);
+    std::printf("gdevice_fixture: cases=%llu words=%llu checked_nodes=%llu checked_words=%llu bad=0 (GMP nonmonic, zero/constant-one, empty/single/padded/large trees)\n",
+        cases,words,g_gdevice.checked_nodes-nodes0,g_gdevice.checked_words-words0);
+}
 
 using CPoly = std::vector<std::vector<unsigned long long>>;
 
@@ -8449,7 +8756,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         const double tg0 = now_s();
         std::vector<std::vector<unsigned long long>> gt =
-            build_tree_flat(L, bleaf, bdeg, bpad, bs, BC_GTREE, !g_s4_groot_only);
+            build_groot_select(L, bleaf, bdeg, bpad, bs, BC_GTREE, !g_s4_groot_only);
         if (g_s4_groot_only) {
             const double tr0 = now_s();
             for (const auto &v : bleaf) g_groot.input_released_bytes += 8ull * v.capacity();
@@ -8465,8 +8772,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         g_groot.peak_retained_bytes = std::max(g_groot.peak_retained_bytes, bs.node_retained_bytes);
         g_groot.t_release += bs.t_release;
         g_groot.root_words += gt[1].size();
-        if (g_s4_carry_trace)
-            for (const auto w : gt[1]) g_groot.root_hash = (g_groot.root_hash ^ w) * 1099511628211ull;
+        // Fingerprint every actual G root on both production paths.
+        for (const auto w : gt[1]) g_groot.root_hash = (g_groot.root_hash ^ w) * 1099511628211ull;
         gs.leaves += bs.leaves;
         gs.padded += bs.padded;
         gs.muls += bs.muls;
@@ -9432,6 +9739,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if(scaled_test && std::atoi(scaled_test)!=0) scaled_descent_fixture(L);
     }
     if(!s4_on) stage2_fixture_begin=now_s();
+    const char *gdevice_test=std::getenv("NTT_GROOT_DEVICE_TEST");
+    if(gdevice_test && std::atoi(gdevice_test))groot_device_fixture(L);
     const char *groot_test = std::getenv("NTT_S4_GROOT_TEST");
     if (groot_test && std::atoi(groot_test) != 0) groot_lifetime_check(L);
     const char *workspace_test = std::getenv("NTT_ARENA_WORKSPACE_TEST");
@@ -9445,7 +9754,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=false;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
@@ -9654,6 +9963,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::printf("real_batched_shape: P=%llu giant_points=%llu num_poly_g=%llu loops=%llu "
                     "descent_divmods=%llu\n", BR.P, BR.giant_points, BR.num_poly_g, BR.loops,
                     BR.descent_divmods);
+        std::printf("real_batched_gdevice: enabled=%d trees=%llu fallbacks=%llu levels=%llu groups=%llu pairs=%llu copies=%llu leaf_words=%llu root_words=%llu resident_words=%llu trace_words=%llu metadata_words=%llu metadata_peak_bytes=%llu raw_peak_bytes=%llu logical_frontier_peak_bytes=%llu host_staging_peak_bytes=%llu checked_nodes=%llu checked_words=%llu\n",
+            (int)g_groot_device,g_gdevice.trees,g_gdevice.fallbacks,g_gdevice.levels,g_gdevice.groups,g_gdevice.pairs,g_gdevice.copies,
+            g_gdevice.leaf_words,g_gdevice.root_words,g_gdevice.resident_words,g_gdevice.trace_words,g_gdevice.metadata_words,
+            g_gdevice.metadata_peak_bytes,g_gdevice.raw_peak_bytes,g_gdevice.logical_frontier_peak_bytes,
+            g_gdevice.host_staging_peak_bytes,g_gdevice.checked_nodes,g_gdevice.checked_words);
         std::printf("real_batched_groot: root_only=%d builds=%llu nodes_released=%llu moves=%llu "
                     "node_peak_bytes=%llu retained_peak_bytes=%llu released_bytes=%llu input_released_bytes=%llu "
                     "root_words=%llu trace=%d root_hash=%016llx t_release=%.6f (node capacities, not process peak)\n",

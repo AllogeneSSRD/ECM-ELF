@@ -3791,7 +3791,7 @@ stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 h
 ## 59. 2026-10-03 当前执行路线：scaled descent 与 G-root 驻留
 
 §58为此前S5逐节点设备求余实验的历史记录。现阶段已新增按degree分组的scaled descent，
-入口 [stage2_tree_gpu.cu:6587](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6587)，
+入口 [stage2_tree_gpu.cu:6894](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6894)，
 `NTT_SCALED_DESCENT=1`，S5关闭；普通下降默认继续可作同二进制对照。
 根只建立一次scaled状态，复用fold的finv，各非平凡孩子一次sibling乘法及中间窗口，避免逐节点求逆/求商。
 独立GPU/GMP节点/Horner门禁41/0，既有回归188/0。真实M4423匹配完整Q的ABBA完整Stage2
@@ -3804,3 +3804,25 @@ stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 h
 不要直接以未归约NTT频域乘积代替下一层modN规范系数：64位NTT素数p不同于N。
 下一步数学/生命周期/计时合同、代码原文件行号及原始测量见
 [DEV_GPUOWL_NTT_NOTES§46](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3178)。
+
+
+## 60. 2026-10-03：G-root 驻留阶段通过，继续控制内存与调度
+
+59所述G-root候选已实现，[build_groot_device:3869](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3869)，
+`NTT_GROOT_DEVICE=1`，默认0。仅两个相邻级规范modN frontier，租用现有raw staging；
+初始叶一次上传、最终根一次返回，内部degree分组gather/NTT/carry/reduce/scatter。
+保持projective/degenerate/Gamma合同，F树仍host；不等同Prime95 NO_UNFFT。
+新增门禁49/0、全回归188/0、scaled41/0，83word、padding/非首一/零多项式、回退及首个interior错误均覆盖。
+
+同二进制匹配Q的生产ABBA完整 **107.329019→95.703896s（−10.83%）**，
+Gtrees **39.664→27.752s（−30.03%）**；main H2D/D2H **26.16/19.90→11.37/5.46GiB**。
+整体显存峰值增加124MiB、host观察private峰值均值增加68MiB，局部host树容量节省不能当作整体RAM收益。
+距离既有Prime95 CPU1 90.460s仍慢5.80%（5.243896s），长期目标未完成。
+
+下一轮顺序：复用现有pinned staging或分块leaf上传，消除initial flatten临时123MiB；
+研究raw frontier容量/覆盖的所有权，控制显存增量；在驻留基线上重新门禁/ABBA carry batch，
+必要时Nsight Systems定位真实chunk gap，之后fold规范系数衔接、scaled共享父forward FFT。
+不要将carry readback计时59.64s当纯检查开销；它包含等待GPU工作完成，减少D2H改变了等待归属。
+每一步仍需独立完整结果门禁、同binary总时间和整体内存测量，性能不能仅从拷贝量推断。
+详细源文件行号/合同/四轮数据/原始证据见
+[DEV_GPUOWL_NTT_NOTES§47](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3343)。

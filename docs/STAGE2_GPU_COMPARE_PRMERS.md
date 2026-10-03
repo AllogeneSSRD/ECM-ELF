@@ -408,7 +408,7 @@ CUDA checkpoint升为5，旧v4重新计算。生产M4423/sigma26/B1=1000/choose1
 
 ### 28.11 Prime95 scaled descent 的 CUDA 首次接入（2026-10-03）
 
-[descent_scaled](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6587)
+[descent_scaled](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6894)
 实现根scaled状态及每孩子一次sibling反转多项式乘法，通过 `NTT_SCALED_DESCENT=1` 启用，默认0保留对照。
 参考Prime95原文件的 [root MULHI](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9540)、
 [sibling polymult_several](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9729)。
@@ -433,3 +433,29 @@ M4423/相同完整Q/B1/实际B2的同二进制ABBA，两边OUTPUT_WINDOW=1、CHU
 单独消除全部下降也不足以超过当前CPU基线。
 源码、计时边界、二进制指纹、逐轮结果、NVML原始证据和下一步门禁要求见
 [开发日志§46](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3178)。
+
+
+### 28.12 G-root device 驻留的生产证据（2026-10-03）
+
+[build_groot_device:3869](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3869)
+保留两个相邻级规范modN系数，初始leaf一次H2D、最终root一次D2H；内部按degree分组，
+[gather:2888](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2888) 直接写NTT input scratch，
+[scatter:2927](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2927) 将归约结果写下一层。
+租用S4现有raw pair，保持相同完整NTT/carry/归约/oracle；degree0 padding为虚拟1，非首一projective叶与Gamma不改。
+F树和scaled frontier仍在host；本轮未实现Prime95 NO_UNFFT、共享父FFT或循环短变换。
+NTT素数p不同于ECM模数N，保留规范word避免直接跨层复用未归约谱的错误。
+
+新增独立GMP every-node与实际完整结果门禁49/0，含83word和两种故障注入；既有188/0、scaled41/0。
+同M4423/Q/B1/实际B2的生产ABBA，两边scaled/output-window/chunk-output=1，仅G-root device切换：
+
+- 完整Stage2 **107.329019→95.703896s（−10.83%）**；Gtrees **39.664→27.752s（−30.03%）**。
+- main H2D/D2H **26.16/19.90→11.37/5.46GiB**；metadata H2D另0.036513GiB。
+- 全部根与最终叶指纹一致，NTT/归约量、carry覆盖和GMP抽样计划均相同，因子/命中集合为空。
+- host Gtree局部node容量少162.285MiB，但整体显存 **4945→5069MiB**，host观察private峰值均值
+  **7930.5→7998.5MiB**；本轮是加速，未实现整体内存峰值下降。
+- 相对既有Prime95 CPU1完整90.460s仍慢 **5.80%**，CPU本轮未重跑；D/degree/预算/检查差异同28.11。
+
+小P24路径约慢10%，故 `NTT_GROOT_DEVICE` 保持默认0、显式选择。
+下一轮控制initial leaf staging与raw pair扩容，再测新驻留基线的carry batch/timeline、fold衔接与scaled父FFT复用。
+完整原文件行号、算术/生命周期合同、逐轮计时和原始内存证据见
+[开发日志§47](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3343)。
