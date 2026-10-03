@@ -1530,6 +1530,19 @@ struct NttArena {
         size_t words = 0;
     };
     std::vector<BigEntry> bigs;
+    /* A/B/Q are temporary default-stream scratch. Preserve shape-local dRes below, and
+       retain keyed buffers for calls that export a borrowed digit pointer. */
+    bool workspace_pool = [] {
+        const char *e = std::getenv("NTT_ARENA_WORKSPACE_POOL");
+        return !e || !*e || std::atoi(e) != 0;
+    }();
+    BigEntry workspace;
+    unsigned long long workspace_hits=0, workspace_grows=0, workspace_mallocs=0, workspace_frees=0;
+    unsigned long long legacy_mallocs=0, legacy_frees=0;
+    unsigned long long alias_snapshots=0, alias_snapshot_bytes=0;
+    size_t peak_big_bytes=0, peak_small_bytes=0, peak_table_bytes=0, peak_owned_bytes=0;
+    /* Deterministic allocation-failure fixture; never set by the production engine. */
+    int workspace_fail_alloc=0;
     std::vector<SmallEntry> smalls;
     BufEntry cur;                           /* the composite the caller is handed */
     unsigned long long overflow = 0;      /* shapes that did NOT fit the cap (per-call path) */
@@ -1558,6 +1571,69 @@ struct NttArena {
         (void)cudaGetLastError();             /* clear the sticky error before anything else runs */
         *p = nullptr;
         return false;
+    }
+
+    void drop_workspace()
+    {
+        /* cudaFree waits for queued default-stream readers, including oracle D2H copies.
+           Drop before growth so old/new triples never overlap in device memory. */
+        if (workspace.dA) { CK(cudaFree(workspace.dA)); ++workspace_frees; }
+        if (workspace.dB) { CK(cudaFree(workspace.dB)); ++workspace_frees; }
+        if (workspace.dQ) { CK(cudaFree(workspace.dQ)); ++workspace_frees; }
+        if (workspace.words) bytes -= workspace.words*8 + 16;
+        workspace=BigEntry{};
+    }
+
+    /* Returns the remaining allocation span for an arena-owned device input. Snapshot such
+       inputs before lookup: it can overwrite scratch or evict an older exported keyed buffer. */
+    bool input_span(const unsigned long long *p, size_t &remaining) const
+    {
+        if (!p) return false;
+        const uintptr_t address=(uintptr_t)p;
+        auto contains=[&](const unsigned long long *base, size_t words) {
+            if (!base) return false;
+            const uintptr_t start=(uintptr_t)base;
+            if (address<start || address-start>=words*8) return false;
+            if ((address-start)%8) { remaining=0; return true; }
+            remaining=words-(address-start)/8; return true;
+        };
+        if (contains(workspace.dA,workspace.words/3) || contains(workspace.dB,workspace.words/3) ||
+            contains(workspace.dQ,workspace.words/3)) return true;
+        for (const auto &b : bigs)
+            if (contains(b.dA,b.words/3) || contains(b.dB,b.words/3) || contains(b.dQ,b.words/3)) return true;
+        for (const auto &b : smalls)
+            if (contains(b.dOut,(size_t)(b.out_cap*b.nbatch)) || contains(b.dRes,(size_t)(2*b.nbatch))) return true;
+        return false;
+    }
+
+    void update_peaks()
+    {
+        size_t big=workspace.words*8, small=0, table=0;
+        for (const auto &b : bigs) big+=b.words*8;
+        for (const auto &b : smalls) small+=b.words*8;
+        for (const auto &f : fuses) table+=(size_t)fuse_table_words(f.fc)*8;
+        peak_big_bytes=std::max(peak_big_bytes,big); peak_small_bytes=std::max(peak_small_bytes,small);
+        peak_table_bytes=std::max(peak_table_bytes,table);
+        peak_owned_bytes=std::max(peak_owned_bytes,big+small+table);
+    }
+
+    void print_workspace_stats() const
+    {
+        size_t big=workspace.words*8, small=0, table=0;
+        for (const auto &b : bigs) big+=b.words*8;
+        for (const auto &b : smalls) small+=b.words*8;
+        for (const auto &f : fuses) table+=(size_t)fuse_table_words(f.fc)*8;
+        std::printf("ntt_workspace_stats: pool=%d hits=%llu grows=%llu mallocs=%llu frees=%llu "
+                    "workspace_bytes=%llu big_bytes=%llu small_bytes=%llu table_bytes=%llu "
+                    "owned_bytes=%llu big_peak_bytes=%llu small_peak_bytes=%llu table_peak_bytes=%llu "
+                    "owned_peak_bytes=%llu aliases=%llu alias_bytes=%llu evictions=%llu evicted_words=%llu "
+                    "legacy_mallocs=%llu legacy_frees=%llu\n",
+                    (int)workspace_pool, workspace_hits, workspace_grows, workspace_mallocs, workspace_frees,
+                    (unsigned long long)(workspace.words*8), (unsigned long long)big, (unsigned long long)small,
+                    (unsigned long long)table, (unsigned long long)(big+small+table),
+                    (unsigned long long)peak_big_bytes, (unsigned long long)peak_small_bytes,
+                    (unsigned long long)peak_table_bytes, (unsigned long long)peak_owned_bytes,
+                    alias_snapshots, alias_snapshot_bytes, tbl_evictions, tbl_words_freed, legacy_mallocs, legacy_frees);
     }
 
     /* the words a cached shape's tables occupy: sum over outer passes of (S + 2^M) for the forward
@@ -1595,6 +1671,7 @@ struct NttArena {
                                           unsigned long long keep_nbatch)
     {
         unsigned long long freed = 0;
+        size_t entry_charges = 0;
         for (FuseEntry &e : fuses) {
             if (e.n == keep_n || !e.fc.tables_cached) continue;
             freed += fuse_table_words(e.fc);
@@ -1603,10 +1680,11 @@ struct NttArena {
         for (size_t i = bigs.size(); i-- > 0;) {
             BigEntry &b = bigs[i];
             if (b.n == keep_n && b.nbatch == keep_nbatch) continue;
-            if (b.dA) cudaFree(b.dA);
-            if (b.dB) cudaFree(b.dB);
-            if (b.dQ) cudaFree(b.dQ);
+            if (b.dA) { cudaFree(b.dA); ++legacy_frees; }
+            if (b.dB) { cudaFree(b.dB); ++legacy_frees; }
+            if (b.dQ) { cudaFree(b.dQ); ++legacy_frees; }
             freed += b.words;
+            entry_charges += 16;
             bigs.erase(bigs.begin() + (long)i);
         }
         for (size_t i = smalls.size(); i-- > 0;) {
@@ -1615,9 +1693,10 @@ struct NttArena {
             if (s.dOut) cudaFree(s.dOut);
             if (s.dRes) cudaFree(s.dRes);
             freed += s.words;
+            entry_charges += 16;
             smalls.erase(smalls.begin() + (long)i);
         }
-        if (freed) { ++tbl_evictions; tbl_words_freed += freed; bytes -= freed * 8; }
+        if (freed) { ++tbl_evictions; tbl_words_freed += freed; bytes -= freed * 8 + entry_charges; }
         return freed;
     }
 
@@ -1628,12 +1707,13 @@ struct NttArena {
 
     void release()
     {
+        drop_workspace();
         for (FuseEntry &e : fuses) fuse_release(e.fc);
         fuses.clear();
         for (BigEntry &b : bigs) {
-            if (b.dA) cudaFree(b.dA);
-            if (b.dB) cudaFree(b.dB);
-            if (b.dQ) cudaFree(b.dQ);
+            if (b.dA) { cudaFree(b.dA); ++legacy_frees; }
+            if (b.dB) { cudaFree(b.dB); ++legacy_frees; }
+            if (b.dQ) { cudaFree(b.dQ); ++legacy_frees; }
         }
         bigs.clear();
         for (SmallEntry &b : smalls) {
@@ -1648,7 +1728,7 @@ struct NttArena {
 
 static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
                                           unsigned long long out_slots,
-                                          unsigned long long nbatch = 1)
+                                          unsigned long long nbatch = 1, bool allow_pool = true)
 {
     if (!ar) return nullptr;
     if (nbatch == 0) nbatch = 1;
@@ -1658,7 +1738,40 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
        at N = 2^27 with different out_slots would each have wanted their own 3*N words (3 GB).
        Only dOut (out_slots words) and dRes really depend on out_slots. */
     NttArena::BigEntry *big = nullptr;
+    if (ar->workspace_pool && allow_pool) {
+        if (!nbatch || n>((size_t)-1)/nbatch || n*nbatch>((size_t)-1-16)/24) { ++ar->overflow; return nullptr; }
+        const size_t required=(size_t)(n*nbatch);
+        if (ar->workspace.words/3>=required) { big=&ar->workspace; ++ar->workspace_hits; ++ar->buf_hits; }
+        else {
+            ar->drop_workspace();
+            const size_t need=required*24+16;
+            if (ar->cap_bytes && (need>ar->cap_bytes || ar->bytes>ar->cap_bytes-need))
+                ar->evict_other_shapes(n,nbatch);
+            if (ar->cap_bytes && (need>ar->cap_bytes || ar->bytes>ar->cap_bytes-need)) {
+                ++ar->overflow; return nullptr;
+            }
+            NttArena::BigEntry e;
+            auto allocate=[&](unsigned long long **p, int index) {
+                if (ar->workspace_fail_alloc==index) { *p=nullptr; return false; }
+                ++ar->workspace_mallocs; return NttArena::try_malloc(p,required*8);
+            };
+            if (!allocate(&e.dA,1) || !allocate(&e.dB,2) || !allocate(&e.dQ,3)) {
+                if (e.dA) { CK(cudaFree(e.dA)); ++ar->workspace_frees; }
+                if (e.dB) { CK(cudaFree(e.dB)); ++ar->workspace_frees; }
+                if (e.dQ) { CK(cudaFree(e.dQ)); ++ar->workspace_frees; }
+                ++ar->overflow; return nullptr;
+            }
+            e.n=n; e.nbatch=nbatch; e.words=required*3;
+            ar->workspace=e; ar->bytes+=need; big=&ar->workspace;
+            ++ar->workspace_grows; ++ar->buf_builds; ar->update_peaks();
+        }
+    } else {
+        /* Exported digits retain the keyed-cache lifetime. No shared scratch reader remains
+           after host input snapshots and prior default-stream work have completed. */
+        if (ar->workspace_pool) ar->drop_workspace();
+    }
     for (NttArena::BigEntry &b : ar->bigs)
+        if (!big)
         if (b.n == n && b.nbatch == nbatch) { big = &b; ++ar->buf_hits; break; }
     if (!big) {
         const size_t need = (size_t)(3 * n * nbatch) * sizeof(unsigned long long) + 16;
@@ -1683,12 +1796,13 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         e.nbatch = nbatch;
         /* the three big buffers are the whole cost of a shape, so this is where a real out-of-
            memory shows up first -- and it is a cache, so it degrades instead of aborting */
-        if (!NttArena::try_malloc(&e.dA, n * nbatch * sizeof(unsigned long long)) ||
-            !NttArena::try_malloc(&e.dB, n * nbatch * sizeof(unsigned long long)) ||
-            !NttArena::try_malloc(&e.dQ, n * nbatch * sizeof(unsigned long long))) {
-            if (e.dA) cudaFree(e.dA);
-            if (e.dB) cudaFree(e.dB);
-            if (e.dQ) cudaFree(e.dQ);
+        auto allocate_legacy=[&](unsigned long long **p) {
+            ++ar->legacy_mallocs; return NttArena::try_malloc(p,n*nbatch*sizeof(unsigned long long));
+        };
+        if (!allocate_legacy(&e.dA) || !allocate_legacy(&e.dB) || !allocate_legacy(&e.dQ)) {
+            if (e.dA) { cudaFree(e.dA); ++ar->legacy_frees; }
+            if (e.dB) { cudaFree(e.dB); ++ar->legacy_frees; }
+            if (e.dQ) { cudaFree(e.dQ); ++ar->legacy_frees; }
             ++ar->overflow;
             if (ar->overflow <= 4)
                 std::fprintf(stderr, "%s: arena could NOT allocate N=%llu nbatch=%llu (%.0f MB): "
@@ -1703,6 +1817,7 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         ar->bigs.push_back(e);
         ++ar->buf_builds;
         big = &ar->bigs.back();
+        ar->update_peaks();
     }
     /* The dOut buffer is cached by (N, nbatch) and merely GROWN to the largest out_slots at that
        N.  Keying it by (N, out_slots) -- the second version -- was catastrophic at the real
@@ -1720,9 +1835,12 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
             ++ar->overflow;
             return nullptr;
         }
+        const size_t old_bytes=(size_t)(small->out_cap*nbatch)*8;
         if (small->dOut) cudaFree(small->dOut);
         small->dOut = nullptr;
         small->out_cap = 0;
+        small->words=(size_t)(2*nbatch);
+        ar->bytes-=old_bytes;
         if (!NttArena::try_malloc(&small->dOut, out_slots * nbatch * sizeof(unsigned long long))) {
             /* out_cap is left at 0, so the next call at this (N, nbatch) simply retries the
                growth -- the entry stays valid, only unusable until an allocation succeeds */
@@ -1731,7 +1849,7 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         }
         small->out_cap = out_slots;
         small->words = (size_t)(out_slots * nbatch + 2 * nbatch);
-        ar->bytes += extra;
+        ar->bytes += (size_t)(out_slots*nbatch)*8;
     } else if (!small) {
         const size_t need = (size_t)(out_slots * nbatch + 2 * nbatch) *
                             sizeof(unsigned long long) + 16;
@@ -1766,6 +1884,7 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
     ar->cur.nbatch = nbatch;
     ar->cur.dA = big->dA; ar->cur.dB = big->dB; ar->cur.dQ = big->dQ; ar->cur.dC = nullptr;
     ar->cur.dOut = small->dOut; ar->cur.dRes = small->dRes;
+    ar->update_peaks();
     return &ar->cur;
 }
 
@@ -1817,6 +1936,7 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     ntt_fuse_cache_tables(e.fc, omega, omega_inv);
     ar->bytes += need;
     ar->fuses.push_back(e);
+    ar->update_peaks();
     ++ar->fuse_builds;
     out = ar->fuses.back().fc;
 }
@@ -2506,6 +2626,7 @@ struct NttMulStats {
        the parts below are subtracted, so the total has to be reported next to them */
     double t_total_call = 0.0;
     unsigned long long carry_residual = 0, carry_max_bits = 0;
+    bool carry_deferred = false;            /* actual path, including arena-refused fallback */
     int fuse_t = 0, fuse_nms = 0, fuse_ms[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     bool exact_valid = false;
     /* slice S4: where the per-CALL FIXED cost goes.  t_fwd/t_inv/t_slot already isolate the
@@ -3253,7 +3374,13 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         if (rc) return rc;
     }
     const double t_scan = now_s() - tsc0;
-    NttArena::BufEntry *ab = ntt_arena_bufs(arena, N, out_slots, nbatch);
+    /* Borrowed digits use the original keyed-cache lifetime, never shared scratch. */
+    NttArena::BufEntry *ab = ntt_arena_bufs(arena, N, out_slots, nbatch, digits_out == nullptr);
+    if (!ab && digits_out) {
+        *digits_out=nullptr;
+        if (!arena) fuse_release(fc);
+        return 3;                         /* an owned fallback would return a freed pointer */
+    }
     unsigned long long *dA = nullptr, *dB = nullptr, *dQ = nullptr, *dOut = nullptr,
                        *dRes = nullptr;
     bool own = false;
@@ -3392,7 +3519,27 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         if (rc) return rc;
     }
     const unsigned long long N = sh.N, out_slots = sh.out_slots, W = sh.W;
-    NttArena::BufEntry *ab = ntt_arena_bufs(arena, N, out_slots, nbatch);
+    std::vector<unsigned long long> alias_a, alias_b;
+    auto preserve=[&](const unsigned long long *p, std::vector<unsigned long long> &saved) {
+        size_t remaining=0;
+        if (!arena || !arena->input_span(p,remaining)) return true;
+        if ((size_t)(N*nbatch)>remaining) return false;
+        saved.resize((size_t)(N*nbatch));
+        CK(cudaMemcpy(saved.data(),p,saved.size()*8,cudaMemcpyDeviceToHost));
+        ++arena->alias_snapshots; arena->alias_snapshot_bytes+=saved.size()*8;
+        return true;
+    };
+    if (!input && (!preserve(dAin,alias_a) || !preserve(dBin,alias_b))) {
+        std::fprintf(stderr, NTT_PROBE_NAME ": device input exceeds its arena allocation\n");
+        if (!arena) fuse_release(fc);
+        return 3;
+    }
+    NttArena::BufEntry *ab = ntt_arena_bufs(arena, N, out_slots, nbatch, digits_out == nullptr);
+    if (!ab && digits_out) {
+        *digits_out=nullptr;
+        if (!arena) fuse_release(fc);
+        return 3;
+    }
     unsigned long long *dA = nullptr, *dB = nullptr, *dQ = nullptr, *dOut = nullptr,
                        *dRes = nullptr;
     bool own = false;
@@ -3416,10 +3563,10 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         }
         CK(cudaGetLastError());
     } else {
-        CK(cudaMemcpy(dA, dAin, (size_t)N * nbatch * sizeof(unsigned long long),
-                      cudaMemcpyDeviceToDevice));
-        CK(cudaMemcpy(dB, dBin, (size_t)N * nbatch * sizeof(unsigned long long),
-                      cudaMemcpyDeviceToDevice));
+        CK(cudaMemcpy(dA, alias_a.empty() ? dAin : alias_a.data(), (size_t)N * nbatch * sizeof(unsigned long long),
+                      alias_a.empty() ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice));
+        CK(cudaMemcpy(dB, alias_b.empty() ? dBin : alias_b.data(), (size_t)N * nbatch * sizeof(unsigned long long),
+                      alias_b.empty() ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice));
     }
     const double t_copy = input ? 0.0 : now_s() - tcopy0;
     const unsigned long long max_y = 65535;
@@ -3446,6 +3593,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
        interior chunks' counters before they are read.  Only legal with an arena, because the
        dRes buffer has to outlive this call. */
     const bool defer = defer_carry && (arena != nullptr) && (ab != nullptr) && !own;
+    if (st) st->carry_deferred = defer;
     if (!defer)
         CK(cudaMemset(dRes, 0, 2 * (size_t)nbatch * sizeof(unsigned long long)));
     std::vector<NttPassResult> sub((size_t)nchunk);
@@ -3590,6 +3738,110 @@ int ntt_batch_carry_finish(NttArena *arena, unsigned long long N, unsigned long 
         return 4;
     }
     return 0;
+}
+
+static void ntt_workspace_check(int device)
+{
+    unsigned long long checks=0, bad=0, words=0;
+    auto check=[&](bool ok) { ++checks; if (!ok) ++bad; };
+    {
+        NttArena ar; ar.device=device; ar.workspace_pool=true;
+        auto *first=ntt_arena_bufs(&ar,128,10,4);
+        check(first!=nullptr); if (!first) std::exit(3);
+        auto *a=first->dA; auto *res=first->dRes;
+        unsigned long long poison=77, value=0;
+        CK(cudaMemcpy(res,&poison,8,cudaMemcpyHostToDevice));
+        auto *second=ntt_arena_bufs(&ar,256,10,2);
+        check(second && second->dA==a && second->dRes!=res && ar.workspace_grows==1);
+        auto *again=ntt_arena_bufs(&ar,128,10,4);
+        check(again && again->dA==a && again->dRes==res);
+        CK(cudaMemcpy(&value,res,8,cudaMemcpyDeviceToHost)); check(value==77);
+        size_t span=0; check(ar.input_span(a+3,span) && span==509);
+        const size_t small_charge=ar.bytes-ar.workspace.words*8-16;
+        for (int index=1; index<=3; ++index) {
+            ar.workspace_fail_alloc=index;
+            check(ntt_arena_bufs(&ar,512,20,2)==nullptr);
+            check(ar.workspace.words==0 && ar.bytes==small_charge);
+        }
+        ar.workspace_fail_alloc=0;
+        check(ntt_arena_bufs(&ar,512,20,2)!=nullptr && ar.workspace.words==3072);
+        CK(cudaMemcpy(&value,res,8,cudaMemcpyDeviceToHost)); check(value==77);
+        ar.cap_bytes=ar.bytes;
+        check(ntt_arena_bufs(&ar,4096,20,2)==nullptr && ar.workspace.words==0);
+        ar.release(); check(ar.bytes==0 && ar.bigs.empty() && ar.smalls.empty());
+        ar.release(); check(ar.bytes==0);
+    }
+    const unsigned long long P=3, nb=4;
+    const int S=129;
+    const size_t W=3;
+    std::vector<unsigned long long> a(nb*P*W,0), b(a.size());
+    for (size_t s=0; s<nb; ++s) for (size_t i=0; i<P; ++i) {
+        a[(s*P+i)*W]=i+s+1; a[(s*P+i)*W+2]=1;
+        b[(s*P+i)*W]=2*i+s+4; b[(s*P+i)*W+1]=s+1;
+    }
+    for (bool pool : {false,true}) {
+        NttArena ar; ar.device=device; ar.workspace_pool=pool;
+        std::vector<unsigned long long> output;
+        unsigned long long *exported=nullptr;
+        NttMulStats st;
+        int rc=ntt_poly_mul_batch_host(P,S,device,nb,a.data(),b.data(),&output,&st,&ar,nullptr,&exported);
+        check(rc==0 && exported && ar.workspace.words==0 && !ar.bigs.empty());
+        if (rc || !exported) std::exit(3);
+        std::vector<unsigned long long> expected(nb*st.out_slots,0);
+        mpz_t x,y,sum; mpz_inits(x,y,sum,nullptr);
+        for (size_t s=0; s<nb; ++s) for (size_t k=0; k<2*P-1; ++k) {
+            mpz_set_ui(sum,0);
+            for (size_t i=0; i<P; ++i) if (k>=i && k-i<P) {
+                mpz_import(x,W,-1,8,0,0,&a[(s*P+i)*W]);
+                mpz_import(y,W,-1,8,0,0,&b[(s*P+k-i)*W]);
+                mpz_mul(x,x,y); mpz_add(sum,sum,x);
+            }
+            expected[s*st.out_slots+k]=mpz_fdiv_ui(sum,4294967291ul);
+        }
+        mpz_clears(x,y,sum,nullptr);
+        check(output==expected); words+=expected.size();
+        NttShape sh; FuseCtx fc;
+        check(ntt_shape_plan(P,S,device,&ar,fc,sh)==0 && sh.N==st.N);
+        std::vector<unsigned long long> pa(nb*sh.N,0), pb(pa.size());
+        unsigned long long maxdigit=0;
+        for (size_t s=0; s<nb; ++s)
+            check(ntt_pack_operand(sh,&a[s*P*W],&b[s*P*W],&pa[s*sh.N],&pb[s*sh.N],&maxdigit));
+        /* Crossed inputs test overwrite hazards. Snapshot before either destination write. */
+        auto *src_a=ar.cur.dB, *src_b=ar.cur.dA;
+        CK(cudaMemcpy(src_a,pa.data(),pa.size()*8,cudaMemcpyHostToDevice));
+        CK(cudaMemcpy(src_b,pb.data(),pb.size()*8,cudaMemcpyHostToDevice));
+        const auto aliases_before=ar.alias_snapshots;
+        /* A shorter batch forces eviction of the nb=4 source when the pool grows to nb=3. */
+        ar.cap_bytes=ar.bytes;
+        rc=ntt_poly_mul_batch_dev(P,S,device,3,src_a,src_b,&st,&ar,nullptr,nullptr,sh.bpw);
+        check(rc==0 && ar.alias_snapshots==aliases_before+2);
+        check(pool ? ar.bigs.empty() : ar.bigs.size()==1 && ar.bigs[0].nbatch==3);
+        if (rc) std::exit(3);
+        output.resize(3*st.out_slots);
+        CK(cudaMemcpy(output.data(),ar.cur.dOut,output.size()*8,cudaMemcpyDeviceToHost));
+        expected.resize(output.size()); check(output==expected); words+=output.size();
+        check(st.carry_deferred==false);
+        /* Force owned fallback. Its carry has already been checked, so never defer it. */
+        ar.cap_bytes=1;
+        unsigned long long *di_a=nullptr, *di_b=nullptr;
+        CK(cudaMalloc(&di_a,3*sh.N*8)); CK(cudaMalloc(&di_b,3*sh.N*8));
+        CK(cudaMemcpy(di_a,pa.data(),3*sh.N*8,cudaMemcpyHostToDevice));
+        CK(cudaMemcpy(di_b,pb.data(),3*sh.N*8,cudaMemcpyHostToDevice));
+        rc=ntt_poly_mul_batch_dev(P,S,device,3,di_a,di_b,&st,&ar,nullptr,nullptr,sh.bpw,true);
+        if (st.carry_deferred) { NttMulStats finish; check(ntt_batch_carry_finish(&ar,st.N,3,&finish)==0); }
+        /* Existing cached buffers can still be reused under a reduced cap; evict first. */
+        if (!ar.workspace.words && ar.bigs.empty()) check(rc==0 && !st.carry_deferred);
+        ar.release();
+        rc=ntt_poly_mul_batch_dev(P,S,device,3,di_a,di_b,&st,&ar,nullptr,nullptr,sh.bpw,true);
+        check(rc==0 && !st.carry_deferred && ar.overflow>0);
+        exported=(unsigned long long *)1;
+        rc=ntt_poly_mul_batch_dev(P,S,device,3,di_a,di_b,&st,&ar,nullptr,&exported,sh.bpw);
+        check(rc==3 && exported==nullptr);
+        CK(cudaFree(di_a)); CK(cudaFree(di_b));
+    }
+    std::printf("ntt_workspace_check: checks=%llu words=%llu bad=%llu "
+                "(GMP, capacity reuse, dRes isolation, failure rollback, aliases/exports/fallback)\n",checks,words,bad);
+    if (bad) std::exit(3);
 }
 
 int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int dump,

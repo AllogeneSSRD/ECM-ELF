@@ -256,3 +256,23 @@ poly spectrum 驻留或 MULHI/MULLO。独立 GMP fixture 还覆盖常数项为 1
 arena 仍 **6215.6 MiB**。full 两轮波动 12.04 s，root 两轮 0.46 s，因此不把该比例外推到其他形状。
 主循环约 1 Hz NVML mean load **53.48 → 62.29%**，低负载样本占比 **25.61 → 16.67%**，下降阶段仍有大量间隙。
 这个进展没有减少通用 mod-N 的理论算术、NTT 系数数或回传量，也没有达成与 Prime95 单执行线程的公平速度比较。
+
+### 28.5 2026-10-03：NTT scratch 容量复用与剩余算法差距
+
+后续已接入 [跨 shape 的 A/B/Q 工作区](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1729)，
+默认 `NTT_ARENA_WORKSPACE_POOL=1`，`=0` 同二进制 keyed 对照。
+仅共享 default-stream 临时 scratch，dRes 保持按 shape 隔离，borrowed digits 导出保持 keyed lifetime；
+别名输入在缓存查询前保存，失败回滚和 actual deferred-carry 状态均有门禁。
+完整过程、代码行号和证据见 [开发日志 §40](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:2279)。
+
+完整门禁 **116 passed / 0 failed**。GPU1/M5261 生产 ABBA：
+CLI elapsed 均值 **205.61 → 191.01 s（−7.10%）**，进程 wall **240.762 → 225.590 s（−6.30%）**；
+A/B/Q 分配 **1416 → 21 次**、缓存驱逐 **36 → 0 次**，两次候选均重复缓存账本。
+NVML 整卡采样显存峰值 **5989 → 5759 MiB**；A/B/Q ledger 峰值 **3654.6 → 3072.0 MiB**。
+三类 tracked payload 峰值 **3656.7 → 3339.0 MiB** 不含 FuseCtx 自身的 scratch/tile tables，不能当作总 VRAM。
+主循环低负载样本占比 **18.08 → 18.22%**，频繁空闲仍在；本轮未减少 H2D/D2H、完整 NTT 或归约数量。
+
+这推进了工作集生命周期管理，仍没有实现 Prime95 的 MULHI/MULLO、融合 remainder 或 scaled descent。
+下一轮先明确 fuse 预算拒绝分支的临时对象 owner 和 release，补齐全部表/scratch 账本及重复 fallback 门禁；
+随后在完整 NTT/carry 上实现必要输出窗口，降低归约、回传与输出缓冲，再做 scaled descent 数学原型。
+Prime95 单执行线程、同模数/边界/曲线或输入点的完整 Stage2 基线仍缺，不能据此宣称已超越 Prime95。

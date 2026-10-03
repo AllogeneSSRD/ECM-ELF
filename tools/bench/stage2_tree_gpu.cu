@@ -3125,7 +3125,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
                 C.t_input_copy_host += nst.t_opcopy;
             }
             st = nst;                     /* the caller's stats are the dev path's */
-            if (defer_this) {
+            if (r1 == 0 && nst.carry_deferred) {
                 carry_pending = true; carry_pending_m = m; ++carry_pending_chunks;
                 ++g_defer_chunks; g_defer_slices += m;
                 if (g_s4_carry_test_bad && !g_s4_carry_injected) {
@@ -8993,6 +8993,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     }
     const char *groot_test = std::getenv("NTT_S4_GROOT_TEST");
     if (groot_test && std::atoi(groot_test) != 0) groot_lifetime_check(L);
+    const char *workspace_test = std::getenv("NTT_ARENA_WORKSPACE_TEST");
+    if (workspace_test && std::atoi(workspace_test) != 0) ntt_workspace_check(g_device);
     {
         bool ok1 = false, ok2 = false;
         const double w1 = (double)real_shape_words(P_baby, (int)L.S, &ok1);
@@ -9237,6 +9239,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     L.ntt_calls - nb, L.ntt_launches - nl, L.ntt_seconds - ns,
                     el > 0 ? 100.0 * (L.ntt_seconds - ns) / el : 0.0, arena.mb(),
                     BR.arena_overflow);
+        arena.print_workspace_stats();
         /* WHERE the NTT-attributed time goes, PER CALL (objective 4).  The phase columns are only
            filled when NTT_HOST_BREAK=1 (two clock reads per phase); without it they print 0 and
            only per_call is meaningful.  The point of the line: `ntt_seconds/ntt_calls` at the real

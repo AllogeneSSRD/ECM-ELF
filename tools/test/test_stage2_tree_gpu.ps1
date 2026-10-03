@@ -1004,6 +1004,72 @@ try {
     foreach($key in $grootSaved.Keys){[Environment]::SetEnvironmentVariable($key,$grootSaved[$key],'Process')}
 }
 
+# [22] Capacity-shared scratch preserves every coefficient and every deferred verdict.
+$workspaceSaved=@{}
+foreach($key in @('NTT_ARENA_WORKSPACE_POOL','NTT_ARENA_WORKSPACE_TEST','NTT_S4_GROOT_ONLY','NTT_S4_GROOT_TEST',
+                  'NTT_S4_FLAT_TEST','NTT_S4_OFF','NTT_S4_BATCH_MB','NTT_S4_CHUNK_MAX','NTT_S4_PACK_DIRECT',
+                  'NTT_S4_FLAT_DIRECT','NTT_S4_CARRY_BATCH','NTT_S4_CARRY_TEST_BAD','NTT_S4_ORACLE_TEST_BAD',
+                  'NTT_S4_ASYNC','NTT_S4_DEFER_CARRY','NTT_S4_ORACLE_ASYNC','NTT_S4_ORACLE_PACK',
+                  'NTT_S4_HOSTPACK','NTT_S4_OLDTAIL','NTT_S5_ON','NTT_S4_SAMPLE','NTT_S4_CHECK_EVERY',
+                  'NTT_S4_CARRY_TRACE','NTT_ARENA_CAP_KB','NTT_NAME_MAX','NTT_CARRY_ROUNDS')) {
+    $workspaceSaved[$key]=[Environment]::GetEnvironmentVariable($key,'Process')
+}
+try {
+    $env:NTT_ARENA_WORKSPACE_TEST='0';$env:NTT_S4_GROOT_ONLY='1';$env:NTT_S4_GROOT_TEST='0'
+    $env:NTT_S4_FLAT_TEST='0';$env:NTT_S4_OFF='0';$env:NTT_S4_BATCH_MB='64';$env:NTT_S4_CHUNK_MAX='64'
+    $env:NTT_S4_PACK_DIRECT='1';$env:NTT_S4_FLAT_DIRECT='1';$env:NTT_S4_CARRY_TEST_BAD='0'
+    $env:NTT_S4_ORACLE_TEST_BAD='0';$env:NTT_S4_DEFER_CARRY='1';$env:NTT_S4_ORACLE_PACK='1'
+    $env:NTT_S4_OLDTAIL='0';$env:NTT_S5_ON='0';$env:NTT_S4_SAMPLE='96';$env:NTT_S4_CHECK_EVERY='8'
+    $env:NTT_S4_CARRY_TRACE='1';$env:NTT_ARENA_CAP_KB='';$env:NTT_NAME_MAX='1';$env:NTT_CARRY_ROUNDS=''
+    $workspaceOutputs=@();$workspaceCodes=@()
+    foreach($mode in @('keyed','pool','carry_batch','blocking','hostpack','oracle_async')) {
+        $env:NTT_ARENA_WORKSPACE_POOL=$(if($mode -eq 'keyed'){'0'}else{'1'})
+        $env:NTT_S4_CARRY_BATCH=$(if($mode -eq 'carry_batch'){'1'}else{'0'})
+        $env:NTT_S4_ASYNC=$(if($mode -eq 'blocking'){'0'}else{'1'})
+        $env:NTT_S4_HOSTPACK=$(if($mode -eq 'hostpack'){'1'}else{'0'})
+        $env:NTT_S4_ORACLE_ASYNC=$(if($mode -eq 'oracle_async'){'1'}else{'0'})
+        $workspaceOutputs+=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096);$workspaceCodes+=$LASTEXITCODE
+    }
+    $wsBaseTrace=[regex]::Match($workspaceOutputs[0],$carryTracePattern)
+    $wsBaseOracle=[regex]::Match($workspaceOutputs[0],$oraclePattern)
+    $wsWords=$wsBaseTrace.Success;$wsSamples=$wsBaseOracle.Success
+    foreach($output in $workspaceOutputs) {
+        $wsWords=$wsWords -and [regex]::Match($output,$carryTracePattern).Value -eq $wsBaseTrace.Value
+        $m=[regex]::Match($output,$oraclePattern)
+        $wsSamples=$wsSamples -and $m.Success -and $m.Groups[2].Value -eq $wsBaseOracle.Groups[2].Value -and
+            $m.Groups[5].Value -eq $wsBaseOracle.Groups[5].Value -and $m.Groups[9].Value -eq $wsBaseOracle.Groups[9].Value -and
+            $m.Groups[2].Value -eq $m.Groups[4].Value -and $m.Groups[6].Value -eq '0' -and
+            $output -cnotmatch 'FATAL|CRASH|MISMATCH|gmp_check_bad=[1-9]'
+    }
+    Check 'workspace: every schedule retains frozen factor/hit set' `
+          (@($workspaceCodes|Where-Object{$_ -ne 0}).Count -eq 0 -and
+           @($workspaceOutputs|Where-Object{[regex]::Match($_,$resultPattern).Value -ne $resultOld}).Count -eq 0) "exit=$($workspaceCodes -join '/')"
+    Check 'workspace: ALL polynomial words agree across keyed/pool/carry/transfer schedules' $wsWords ''
+    Check 'workspace: GMP jobs, samples and signature preserved with no pending snapshots' $wsSamples ''
+    Check 'workspace: both pool and keyed controls are exercised without external input aliases' `
+          ($workspaceOutputs[0] -match 'ntt_workspace_stats: pool=0 hits=0 grows=0 mallocs=0 frees=0 workspace_bytes=0' -and
+           $workspaceOutputs[1] -match 'ntt_workspace_stats: pool=1 hits=[1-9]\d* grows=[1-9]\d*' -and
+           @($workspaceOutputs|Where-Object{$_ -notmatch ' aliases=0 alias_bytes=0 '}).Count -eq 0) ''
+    $env:NTT_S4_CARRY_BATCH='0';$env:NTT_S4_HOSTPACK='0';$env:NTT_S4_ASYNC='1';$env:NTT_S4_ORACLE_ASYNC='0'
+    $env:NTT_ARENA_CAP_KB='1';$env:NTT_ARENA_WORKSPACE_POOL='1'
+    $wsFallback=(& $Exe @carryBatchArgs 2>&1 | Out-String -Width 4096);$wsFallbackCode=$LASTEXITCODE
+    Check 'workspace: multi-chunk arena refusal checks carry synchronously and preserves ALL words' `
+          ($wsFallbackCode -eq 0 -and $wsFallback -match 'arena_overflow=[1-9]\d*' -and
+           $wsFallback -match 'real_batched_carrydefer: chunks_deferred=0 finishes=0 deferred_slices=0' -and
+           [regex]::Match($wsFallback,$carryTracePattern).Success -and
+           [regex]::Match($wsFallback,$carryTracePattern).Value -eq $wsBaseTrace.Value -and
+           [regex]::Match($wsFallback,$resultPattern).Value -eq $resultOld -and
+           $wsFallback -cnotmatch 'FATAL|CRASH|MISMATCH|gmp_check_bad=[1-9]') "exit=$wsFallbackCode"
+    $env:NTT_ARENA_CAP_KB='';$env:NTT_ARENA_WORKSPACE_TEST='1';$env:NTT_S4_CHUNK_MAX='0'
+    $wsFixture=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096);$wsFixtureCode=$LASTEXITCODE
+    $m=[regex]::Match($wsFixture,'ntt_workspace_check: checks=(\d+) words=(\d+) bad=0')
+    Check 'workspace: independent GMP covers aliases, exports, allocation rollback and dRes isolation' `
+          ($wsFixtureCode -eq 0 -and $m.Success -and [long]$m.Groups[1].Value -ge 30 -and
+           [long]$m.Groups[2].Value -gt 0 -and $wsFixture -cnotmatch 'FATAL|CRASH|MISMATCH|gmp_check_bad=[1-9]') "exit=$wsFixtureCode"
+} finally {
+    foreach($key in $workspaceSaved.Keys){[Environment]::SetEnvironmentVariable($key,$workspaceSaved[$key],'Process')}
+}
+
 Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail)
 if ($script:fail -gt 0) { exit 1 }
 exit 0

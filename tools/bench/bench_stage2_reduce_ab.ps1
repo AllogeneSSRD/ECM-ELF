@@ -16,9 +16,10 @@ param(
     [UInt64]$D = 1231230,
     [int]$Sigma = 26,
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace')][string]$Target = 'reduction',
     [ValidateRange(1,256)][int]$BatchMB = 32,
     [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
+    [ValidateRange(0,65536)][int]$ArenaMB = 0,
     [string]$Output = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -40,13 +41,16 @@ if ($Target -eq 'pack_direct') { $order = @('pack_copy', 'pack_direct', 'pack_di
 if ($Target -eq 'batch_mb') { $order = @("batch_$BatchMB", "batch_$CandidateBatchMB", "batch_$CandidateBatchMB", "batch_$BatchMB") }
 if ($Target -eq 'flat_direct') { $order = @('flat_copy','flat_direct','flat_direct','flat_copy') }
 if ($Target -eq 'groot') { $order = @('full_gtree','groot','groot','full_gtree') }
+if ($Target -eq 'workspace') { $order = @('keyed_workspace','workspace_pool','workspace_pool','keyed_workspace') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
                 NTT_S4_ORACLE_TEST_BAD='0'; NTT_S4_SAMPLE='96'; NTT_S4_CHECK_EVERY='8';
                 NTT_S4_CARRY_BATCH='0'; NTT_S4_CHUNK_MAX='0'; NTT_S4_CARRY_TEST_BAD='0';
                 NTT_S4_CARRY_TRACE='0'; NTT_S4_PACK_DIRECT='1'; NTT_S4_FLAT_DIRECT='1'; NTT_S4_FLAT_TEST='0';
-                NTT_CARRY_ROUNDS=''; NTT_S4_GROOT_ONLY='1'; NTT_S4_GROOT_TEST='0'; NTT_S4_OFF='0' }
+                NTT_CARRY_ROUNDS=''; NTT_S4_GROOT_ONLY='1'; NTT_S4_GROOT_TEST='0'; NTT_S4_OFF='0';
+                NTT_ARENA_WORKSPACE_POOL='1'; NTT_ARENA_WORKSPACE_TEST='0' }
+if ($ArenaMB -gt 0) { $overrides.NTT_ARENA_CAP_KB = "$([long]$ArenaMB * 1024)" }
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
 $modeControls = @(foreach ($mode in $order) {
@@ -58,6 +62,7 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_S4_PACK_DIRECT=$(if ($Target -eq 'pack_direct' -and $mode -eq 'pack_copy') { '0' } else { '1' });
         NTT_S4_FLAT_DIRECT=$(if ($mode -eq 'flat_copy') { '0' } else { '1' });
         NTT_S4_GROOT_ONLY=$(if ($mode -eq 'full_gtree') { '0' } else { '1' });
+        NTT_ARENA_WORKSPACE_POOL=$(if ($mode -eq 'keyed_workspace') { '0' } else { '1' });
         NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
@@ -84,6 +89,7 @@ try {
         $env:NTT_S4_BATCH_MB = "$batchBudget"
         $env:NTT_S4_FLAT_DIRECT = $flatDirect
         $env:NTT_S4_GROOT_ONLY = $grootOnly
+        $env:NTT_ARENA_WORKSPACE_POOL = $(if ($mode -eq 'keyed_workspace') { '0' } else { '1' })
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -113,6 +119,14 @@ try {
         $flat = [regex]::Match($text, 'real_batched_flatinput: direct_enabled=(\d+) calls=(\d+) borrowed=(\d+) padded=(\d+) alias_clones=(\d+) copy_bytes=(\d+) zero_bytes=(\d+) avoided_copy_bytes=(\d+) avoided_zero_bytes=(\d+) temp_peak_bytes=(\d+) control_peak_bytes=(\d+) t_prepare=([0-9.]+)')
         $groot = [regex]::Match($text, 'real_batched_groot: root_only=(\d+) builds=(\d+) nodes_released=(\d+) moves=(\d+) node_peak_bytes=(\d+) retained_peak_bytes=(\d+) released_bytes=(\d+) input_released_bytes=(\d+) root_words=(\d+) trace=(\d+) root_hash=([0-9a-f]+) t_release=([0-9.]+)')
         $hostPeaks = [regex]::Matches($text, 'host private=(\d+) MB peak=(\d+) MB')
+        $workspaceLine=[regex]::Match($text,'(?m)^ntt_workspace_stats:.*').Value
+        $workspace=@{}
+        foreach($field in @('pool','hits','grows','mallocs','frees','workspace_bytes','big_bytes','small_bytes',
+                           'table_bytes','owned_bytes','big_peak_bytes','small_peak_bytes','table_peak_bytes',
+                           'owned_peak_bytes','aliases','alias_bytes','evictions','evicted_words','legacy_mallocs','legacy_frees')) {
+            $m=[regex]::Match($workspaceLine,"(?:^| )$field=(\d+)")
+            if($m.Success){$workspace[$field]=[UInt64]$m.Groups[1].Value}
+        }
         $naming = [regex]::Match($text, 'batched_naming:.*?t_scan=([0-9.]+) t_ladder=([0-9.]+) t_name=([0-9.]+)')
         $arenaSize = [regex]::Match($text, 'real_batched_breakdown:.*?ntt_seconds=([0-9.]+).*?arena_mb=([0-9.]+)')
         # This is the most recent giant-ladder snapshot, not an exact descent/naming minimum.
@@ -188,6 +202,17 @@ try {
                 [UInt64]$groot.Groups[7].Value -eq 0 -or [UInt64]$groot.Groups[8].Value -eq 0))) {
             throw "G-tree lifecycle accounting failed; inspect $log"
         }
+        if($workspace.Count -ne 20 -or "$($workspace.pool)" -ne $env:NTT_ARENA_WORKSPACE_POOL -or
+           $workspace.big_bytes+$workspace.small_bytes+$workspace.table_bytes -ne $workspace.owned_bytes -or
+           $workspace.workspace_bytes -gt $workspace.big_bytes -or $workspace.owned_bytes -gt $workspace.owned_peak_bytes -or
+           $workspace.big_bytes -gt $workspace.big_peak_bytes -or $workspace.small_bytes -gt $workspace.small_peak_bytes -or
+           $workspace.table_bytes -gt $workspace.table_peak_bytes -or $workspace.aliases -ne 0 -or $workspace.alias_bytes -ne 0 -or
+           ($workspace.pool -eq 1 -and ($workspace.grows -lt 1 -or $workspace.hits -lt 1 -or
+               $workspace.mallocs -ne 3*$workspace.grows -or $workspace.legacy_mallocs -ne 0)) -or
+           ($workspace.pool -eq 0 -and ($workspace.workspace_bytes -ne 0 -or $workspace.hits -ne 0 -or
+               $workspace.grows -ne 0 -or $workspace.mallocs -ne 0 -or $workspace.legacy_mallocs -lt 1))) {
+            throw "workspace ownership/accounting validation failed; inspect $log"
+        }
         $row = [pscustomobject]@{ run=$i+1; mode=$mode; elapsed=[double]$stage.Groups[5].Value;
             wall=[math]::Round($sw.Elapsed.TotalSeconds,3); t_reduce=[double]$reduce.Groups[2].Value;
             coeffs=[UInt64]$reduce.Groups[1].Value; hits=$stage.Groups[1].Value;
@@ -234,6 +259,7 @@ try {
             groot_input_released_bytes=$groot.Groups[8].Value; groot_root_words=$groot.Groups[9].Value;
             groot_release=[double]$groot.Groups[12].Value;
             observed_host_peak_mb=(@($hostPeaks | ForEach-Object {[double]$_.Groups[2].Value}) | Measure-Object -Maximum).Maximum }
+        foreach($field in $workspace.Keys){$row|Add-Member -NotePropertyName ("workspace_"+$field) -NotePropertyValue $workspace[$field]}
         if ($rows.Count -gt 0 -and ($row.groot_builds -ne $rows[0].groot_builds -or
             $row.groot_root_words -ne $rows[0].groot_root_words)) {
             throw "G-tree workload changed; inspect $log"
@@ -281,6 +307,7 @@ try {
                 if ($row.$field -ne $sameMode[0].$field) { throw "repeated $mode changed $field; inspect $log" }
             }
         }
+        if($sameMode.Count){foreach($field in $workspace.Keys){$name="workspace_"+$field;if($row.$name -ne $sameMode[0].$name){throw "workspace workload changed within mode: $field"}}}
         $rows += $row
         $rows | Export-Csv -LiteralPath (Join-Path $Output 'results.csv') -NoTypeInformation -Encoding UTF8
         Write-Host ("  elapsed={0:F2}s wall={1:F2}s t_reduce={2:F3}s coeffs={3}" -f
@@ -334,6 +361,18 @@ try {
                 (($new | Measure-Object groot_retained_peak_bytes -Average).Average / 1MB),
                 ($old | Measure-Object observed_host_peak_mb -Average).Average,
                 ($new | Measure-Object observed_host_peak_mb -Average).Average)
+    Write-Host ("NTT cached payload peak: {0:F1} -> {1:F1} MiB; A/B/Q peak: {2:F1} -> {3:F1} MiB; table peak: {4:F1} -> {5:F1} MiB" -f
+                (($old | Measure-Object workspace_owned_peak_bytes -Average).Average / 1MB),
+                (($new | Measure-Object workspace_owned_peak_bytes -Average).Average / 1MB),
+                (($old | Measure-Object workspace_big_peak_bytes -Average).Average / 1MB),
+                (($new | Measure-Object workspace_big_peak_bytes -Average).Average / 1MB),
+                (($old | Measure-Object workspace_table_peak_bytes -Average).Average / 1MB),
+                (($new | Measure-Object workspace_table_peak_bytes -Average).Average / 1MB))
+    Write-Host ("workspace CUDA allocations: {0:F0} -> {1:F0}; capacity growths: {2:F0}; reuse hits: {3:F0}" -f
+                ($old | Measure-Object workspace_legacy_mallocs -Average).Average,
+                ($new | Measure-Object workspace_mallocs -Average).Average,
+                ($new | Measure-Object workspace_grows -Average).Average,
+                ($new | Measure-Object workspace_hits -Average).Average)
 } finally {
     foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
 }
