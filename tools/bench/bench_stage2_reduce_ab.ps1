@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Same-binary ABBA benchmark of reduction, sampling oracle, carry checks, packing or chunk budget.
+    Same-binary ABBA benchmark of reduction, sampling, packing, chunk budget or scaled descent.
 .DESCRIPTION
     Defaults to the production shape in DEV_GPUOWL_NTT_NOTES.md section 32.  Writes a log
     for each run, provenance.json and results.csv.  The mode, GMP checks, factors/hit primes,
@@ -18,7 +18,7 @@ param(
     [ValidateSet(1,12)][int]$Stage1Extra = 1,
     [string]$ExpectedQHex = '',
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window','chunk_output')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window','chunk_output','scaled_descent')][string]$Target = 'reduction',
     [ValidateRange(1,256)][int]$BatchMB = 32,
     [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
     [ValidateRange(0,65536)][int]$ArenaMB = 0,
@@ -48,6 +48,7 @@ if ($Target -eq 'fuse_scratch') { $order = @('wide_scratch','compact_scratch','c
 if ($Target -eq 'final_readback') { $order = @('whole_readback','chunk_readback','chunk_readback','whole_readback') }
 if ($Target -eq 'output_window') { $order = @('full_output','output_window','output_window','full_output') }
 if ($Target -eq 'chunk_output') { $order = @('whole_output_buffer','chunk_output_buffer','chunk_output_buffer','whole_output_buffer') }
+if ($Target -eq 'scaled_descent') { $order = @('division_descent','scaled_descent','scaled_descent','division_descent') }
 $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_DEFER_CARRY='1'; NTT_S4_HOSTPACK='0'; NTT_S5_ON='0'; NTT_S4_OLDTAIL='1';
                 NTT_S5_REDDUMP='0'; NTT_S4_ORACLE_ASYNC='0'; NTT_S4_ORACLE_RING='4'; NTT_S4_ORACLE_PACK='1';
@@ -59,6 +60,7 @@ $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_FUSE_COMPACT_SCRATCH='1'; NTT_FUSE_LIFETIME_TEST='0';
                 NTT_S4_FINAL_READBACK='0'; NTT_S4_FINAL_READBACK_TEST='0';
                 NTT_S4_OUTPUT_WINDOW='0'; NTT_S4_OUTPUT_WINDOW_TEST='0'; NTT_S4_CHUNK_OUTPUT='0';
+                NTT_SCALED_DESCENT='0'; NTT_SCALED_TEST='0'; NTT_SCALED_CHECK='0'; NTT_S4_DESCENT_CHECK='0';
                 NTT_STAGE1_EXTRA="$Stage1Extra"; NTT_STAGE1_Q_DUMP=$(if($ExpectedQHex -or $Stage1Extra -eq 12){'1'}else{'0'}) }
 if ($ArenaMB -gt 0) { $overrides.NTT_ARENA_CAP_KB = "$([long]$ArenaMB * 1024)" }
 $saved = @{}
@@ -75,8 +77,9 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_ARENA_WORKSPACE_POOL=$(if ($mode -eq 'keyed_workspace') { '0' } else { '1' });
         NTT_FUSE_COMPACT_SCRATCH=$(if ($mode -eq 'wide_scratch') { '0' } else { '1' });
         NTT_S4_FINAL_READBACK=$(if ($mode -eq 'whole_readback') { '1' } else { '0' });
-        NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window') { '1' } else { '0' });
-        NTT_S4_CHUNK_OUTPUT=$(if ($mode -eq 'chunk_output_buffer') { '1' } else { '0' });
+        NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window' -or $Target -eq 'scaled_descent') { '1' } else { '0' });
+        NTT_S4_CHUNK_OUTPUT=$(if ($mode -eq 'chunk_output_buffer' -or $Target -eq 'scaled_descent') { '1' } else { '0' });
+        NTT_SCALED_DESCENT=$(if ($mode -eq 'scaled_descent') { '1' } else { '0' });
         NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
@@ -106,8 +109,9 @@ try {
         $env:NTT_ARENA_WORKSPACE_POOL = $(if ($mode -eq 'keyed_workspace') { '0' } else { '1' })
         $env:NTT_FUSE_COMPACT_SCRATCH = $(if ($mode -eq 'wide_scratch') { '0' } else { '1' })
         $env:NTT_S4_FINAL_READBACK = $(if ($mode -eq 'whole_readback') { '1' } else { '0' })
-        $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window') { '1' } else { '0' })
-        $env:NTT_S4_CHUNK_OUTPUT = $(if ($mode -eq 'chunk_output_buffer') { '1' } else { '0' })
+        $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window' -or $Target -eq 'scaled_descent') { '1' } else { '0' })
+        $env:NTT_S4_CHUNK_OUTPUT = $(if ($mode -eq 'chunk_output_buffer' -or $Target -eq 'scaled_descent') { '1' } else { '0' })
+        $env:NTT_SCALED_DESCENT = $(if ($mode -eq 'scaled_descent') { '1' } else { '0' })
         if ((Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash -ne $binaryHash) {
             throw 'binary changed during A/B; comparison invalid'
         }
@@ -129,6 +133,25 @@ try {
             throw "Stage1 Q/scalar contract failed; inspect $log"
         }
         $stage = [regex]::Match($text, 'stage2:.*?hits=(\d+) bad_factors=(\d+) factors=([^\s]*) hit_primes=([^\s]*) elapsed=([0-9.]+)')
+        $leaves = [regex]::Match($text, 'descent_values: leaves=(\d+) words=(\d+) hash=(\d+)')
+        $shape = [regex]::Match($text, 'real_batched_shape: P=(\d+) giant_points=(\d+) num_poly_g=(\d+) loops=(\d+) descent_divmods=(\d+)')
+        $scaledLine = [regex]::Match($text, '(?m)^scaled_descent:.*').Value
+        $scaled = @{}
+        foreach($field in @('enabled','levels','mul_calls','mul_pairs','copies','zeros','states','words','leaves',
+                            'checked_states','checked_words','frontier_peak_bytes','pack_peak_bytes',
+                            'root_inverse_reused','root_divisions')) {
+            $m=[regex]::Match($scaledLine,"(?:^| )$field=(\d+)")
+            if($mode -eq 'scaled_descent' -and -not $m.Success){throw "missing scaled counter: $field; inspect $log"}
+            $scaled[$field]=$(if($m.Success){[UInt64]$m.Groups[1].Value}else{[UInt64]0})
+        }
+        if($Target -eq 'scaled_descent' -and (-not $leaves.Success -or -not $shape.Success -or
+           ($mode -eq 'scaled_descent' -and ($scaled.enabled -ne 1 -or $scaled.mul_calls -le 0 -or
+             $scaled.leaves -ne [UInt64]$leaves.Groups[1].Value -or $scaled.checked_states -ne 0 -or $scaled.checked_words -ne 0 -or
+             $shape.Groups[5].Value -ne '0' -or
+             ($shape.Groups[4].Value -ne '0' -and $scaled.root_inverse_reused -ne 1))) -or
+           ($mode -ne 'scaled_descent' -and $scaledLine))) {
+            throw "scaled descent path/output contract failed; inspect $log"
+        }
         $reduce = [regex]::Match($text, 's4_multiply_stats:.*?coeffs_reduced=(\d+) t_reduce=([0-9.]+)')
         $arena = [regex]::Match($text, 'real_batched_breakdown:.*?arena_overflow=(\d+)')
         $carry = [regex]::Match($text, 'real_batched_carrydefer: chunks_deferred=(\d+) finishes=(\d+) deferred_slices=(\d+) batch_enabled=(\d+) checked_chunks=(\d+) max_group=(\d+)')
@@ -336,6 +359,13 @@ try {
             groot_input_released_bytes=$groot.Groups[8].Value; groot_root_words=$groot.Groups[9].Value;
             groot_release=[double]$groot.Groups[12].Value;
             observed_host_peak_mb=(@($hostPeaks | ForEach-Object {[double]$_.Groups[2].Value}) | Measure-Object -Maximum).Maximum }
+        $row|Add-Member -NotePropertyName leaf_count -NotePropertyValue $leaves.Groups[1].Value
+        $row|Add-Member -NotePropertyName leaf_words -NotePropertyValue $leaves.Groups[2].Value
+        $row|Add-Member -NotePropertyName leaf_hash -NotePropertyValue $leaves.Groups[3].Value
+        foreach($pair in @(@('shape_p',1),@('shape_giant_points',2),@('shape_num_poly_g',3),@('shape_loops',4))) {
+            $row|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $shape.Groups[$pair[1]].Value
+        }
+        foreach($field in $scaled.Keys){$row|Add-Member -NotePropertyName ("scaled_"+$field) -NotePropertyValue $scaled[$field]}
         foreach($field in $workspace.Keys){$row|Add-Member -NotePropertyName ("workspace_"+$field) -NotePropertyValue $workspace[$field]}
         foreach($field in $fuse.Keys){$row|Add-Member -NotePropertyName ("fuse_"+$field) -NotePropertyValue $fuse[$field]}
         foreach($field in $final.Keys){$row|Add-Member -NotePropertyName ("final_"+$field) -NotePropertyValue $final[$field]}
@@ -354,12 +384,20 @@ try {
         if($row.chunk_calls -ne $row.window_calls){throw "Chunk output logical calls disagree; inspect $log"}
         if($row.window_d2h_words -ne $row.final_copied_words+$row.final_avoided_words -or
            $row.window_calls -ne $row.final_calls) {throw "Output/readback accounting disagrees; inspect $log"}
-        if($rows.Count -gt 0 -and ($row.final_calls -ne $rows[0].final_calls -or
+        if($rows.Count -gt 0) {
+            foreach($field in @('leaf_count','leaf_words','leaf_hash','factors','hit_primes','hits',
+                               'shape_p','shape_giant_points','shape_num_poly_g','shape_loops')) {
+                if($row.$field -ne $rows[0].$field){throw "A/B output changed: $field; inspect $log"}
+            }
+        }
+        # Scaled descent intentionally changes all internal multiply/transfer workloads.
+        # Output equality is required above; per-run ledgers and within-mode repeats remain checked.
+        if($Target -ne 'scaled_descent' -and $rows.Count -gt 0 -and ($row.final_calls -ne $rows[0].final_calls -or
            ($Target -ne 'output_window' -and
             $row.final_copied_words+$row.final_avoided_words -ne $rows[0].final_copied_words+$rows[0].final_avoided_words))) {
             throw "Final readback logical workload changed; inspect $log"
         }
-        if($rows.Count -gt 0 -and ($row.window_source_coeffs -ne $rows[0].window_source_coeffs -or
+        if($Target -ne 'scaled_descent' -and $rows.Count -gt 0 -and ($row.window_source_coeffs -ne $rows[0].window_source_coeffs -or
            $row.window_returned_coeffs -ne $rows[0].window_returned_coeffs)) {
             throw "Output window changed transform source or consumer workload; inspect $log"
         }
@@ -367,7 +405,7 @@ try {
             $row.groot_root_words -ne $rows[0].groot_root_words)) {
             throw "G-tree workload changed; inspect $log"
         }
-        if ($rows.Count -gt 0 -and ($row.flat_calls -ne $rows[0].flat_calls -or
+        if ($Target -ne 'scaled_descent' -and $rows.Count -gt 0 -and ($row.flat_calls -ne $rows[0].flat_calls -or
             [UInt64]$row.flat_copy_bytes+[UInt64]$row.flat_avoided_copy_bytes -ne
             [UInt64]$rows[0].flat_copy_bytes+[UInt64]$rows[0].flat_avoided_copy_bytes -or
             [UInt64]$row.flat_zero_bytes+[UInt64]$row.flat_avoided_zero_bytes -ne
@@ -375,7 +413,7 @@ try {
             $row.flat_control_peak_bytes -ne $rows[0].flat_control_peak_bytes)) {
             throw "flat input logical workload changed; inspect $log"
         }
-        if ($rows.Count -gt 0 -and (($Target -ne 'output_window' -and $row.coeffs -ne $rows[0].coeffs) -or $row.factors -ne $rows[0].factors -or
+        if ($Target -ne 'scaled_descent' -and $rows.Count -gt 0 -and (($Target -ne 'output_window' -and $row.coeffs -ne $rows[0].coeffs) -or $row.factors -ne $rows[0].factors -or
             $row.hit_primes -ne $rows[0].hit_primes -or $row.hits -ne $rows[0].hits -or
             ($Target -ne 'batch_mb' -and (
             ($Target -ne 'output_window' -and ($row.oracle_samples -ne $rows[0].oracle_samples -or
@@ -386,7 +424,7 @@ try {
             $row.h2d_gib -ne $rows[0].h2d_gib -or ($Target -ne 'output_window' -and $row.d2h_gib -ne $rows[0].d2h_gib))) {
             throw "A/B results or coefficient count changed; inspect $log"
         }
-        if ($rows.Count -gt 0 -and
+        if ($Target -ne 'scaled_descent' -and $rows.Count -gt 0 -and
             ([UInt64]$row.d2d_bytes+[UInt64]$row.avoided_bytes -ne
              [UInt64]$rows[0].d2d_bytes+[UInt64]$rows[0].avoided_bytes -or
              ($Target -ne 'batch_mb' -and (
@@ -410,6 +448,7 @@ try {
                 if ($row.$field -ne $sameMode[0].$field) { throw "repeated $mode changed $field; inspect $log" }
             }
         }
+        if($sameMode.Count){foreach($field in $scaled.Keys){$name="scaled_"+$field;if($row.$name -ne $sameMode[0].$name){throw "scaled workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in $workspace.Keys){$name="workspace_"+$field;if($row.$name -ne $sameMode[0].$name){throw "workspace workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in $fuse.Keys){$name="fuse_"+$field;if($row.$name -ne $sameMode[0].$name){throw "fuse workload changed within mode: $field"}}}
         if($sameMode.Count){foreach($field in @('calls','copied_words','avoided_words','host_peak_bytes')){$name="final_"+$field;if($row.$name -ne $sameMode[0].$name){throw "final readback workload changed within mode: $field"}}}
@@ -431,6 +470,14 @@ try {
     $newReduce = ($new | Measure-Object t_reduce -Average).Average
     Write-Host ("ABBA mean: elapsed {0:F2} -> {1:F2}s ({2:F1}%); t_reduce {3:F3} -> {4:F3}s ({5:F1}%)" -f
                 $oldTime, $newTime, (100*($newTime/$oldTime-1)), $oldReduce, $newReduce, (100*($newReduce/$oldReduce-1)))
+    $oldFull = ($old | Measure-Object stage2_full -Average).Average
+    $newFull = ($new | Measure-Object stage2_full -Average).Average
+    Write-Host ("full Stage2 (init + main, excludes Stage1): {0:F6} -> {1:F6}s ({2:F2}%)" -f
+                $oldFull, $newFull, (100*($newFull/$oldFull-1)))
+    Write-Host ("phase means: Gtree {0:F3} -> {1:F3}s; fold {2:F3} -> {3:F3}s; descent {4:F3} -> {5:F3}s" -f
+                ($old | Measure-Object gtrees -Average).Average, ($new | Measure-Object gtrees -Average).Average,
+                ($old | Measure-Object fold -Average).Average, ($new | Measure-Object fold -Average).Average,
+                ($old | Measure-Object descent -Average).Average, ($new | Measure-Object descent -Average).Average)
     Write-Host ("oracle host: {0:F3} -> {1:F3}s; wait {2:F3} -> {3:F3}s; GMP {4:F3} -> {5:F3}s" -f
                 ($old | Measure-Object oracle_host -Average).Average,
                 ($new | Measure-Object oracle_host -Average).Average,

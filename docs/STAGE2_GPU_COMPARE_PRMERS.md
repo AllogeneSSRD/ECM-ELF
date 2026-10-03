@@ -405,3 +405,31 @@ GPU仍多50.18%，尚未超过CPU单逻辑核；不同D/degree/内存预算及�
 CUDA checkpoint升为5，旧v4重新计算。生产M4423/sigma26/B1=1000/choose12完整Q已与实际Prime95导出相等。
 代码原文件行号、轨迹、二进制hash和证据见开发日志§45。
 这次未修改poly Stage2或获得新性能数据，完整135.855210s对CPU90.460s的差距仍待scaled descent等后续优化解决。
+
+### 28.11 Prime95 scaled descent 的 CUDA 首次接入（2026-10-03）
+
+[descent_scaled](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6587)
+实现根scaled状态及每孩子一次sibling反转多项式乘法，通过 `NTT_SCALED_DESCENT=1` 启用，默认0保留对照。
+参考Prime95原文件的 [root MULHI](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9540)、
+[sibling polymult_several](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9729)。
+根复用fold已有finv，非平凡孩子取乘积中间窗口，去掉原逐节点Newton inverse、商和乘回。
+普通系数合同、非二次幂/零度padding/短H/根degree=P边界及全部原文件行号见开发日志§46。
+
+当前仍是host frontier + GPU完整Kronecker线性NTT，没有Prime95的共享父FFT、CIRCULAR或NO_UNFFT。
+NTT素数p不同于ECM模数N，层间仍需carry和modN归约；device驻留应保留归约后的规范word，
+同层两个孩子可共享父forward spectrum。独立GMP逐节点、Horner逐叶门禁 **41/0**，
+2550夹具/54060节点状态/22185叶；原有回归 **188/0**。最终注释整理重编译也重复41/0。
+
+M4423/相同完整Q/B1/实际B2的同二进制ABBA，两边OUTPUT_WINDOW=1、CHUNK_OUTPUT=1：
+
+- 完整Stage2 **125.054669→107.862620s（−13.75%）**；下降 **26.2565→8.6445s（−67.08%）**。
+- main H2D **33.60→26.16GiB**，D2H **24.49→19.90GiB**；全部115200叶指纹一致，无因子。
+- 整卡NVML峰值均4933MiB，private commit观察峰值均值7932.5→7934.0MiB，整体内存收益尚未证实。
+- 与既有匹配Prime95单逻辑CPU完整均值90.460s相比，仍多 **19.24%**；GPU使用D1231230/P115200，
+  CPU使用D1531530/degree138240、AVX-512 FFT256/Memory2048MiB，检查机制不同。
+
+候选Gtrees39.967s/fold17.5445s/giant14.550s几乎未变；下降已只占main约9.2%。
+下一轮优先G-root逐级device驻留，根返回host一次供fold，随后共享scaled父FFT并减少host padding。
+单独消除全部下降也不足以超过当前CPU基线。
+源码、计时边界、二进制指纹、逐轮结果、NVML原始证据和下一步门禁要求见
+[开发日志§46](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3178)。

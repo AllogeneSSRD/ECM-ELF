@@ -1310,6 +1310,15 @@ struct ChunkOutputStats {
     unsigned long long request_peak_bytes=0, whole_peak_bytes=0, retained_peak_bytes=0;
 };
 static ChunkOutputStats g_chunk_output;
+/* Opt-in algorithm candidate: ordinary-coefficient scaled remainder descent. */
+static const bool g_scaled_descent = [] {
+    const char *v=std::getenv("NTT_SCALED_DESCENT");
+    return v && std::atoi(v)!=0;
+}();
+static const bool g_scaled_check = [] {
+    const char *v=std::getenv("NTT_SCALED_CHECK");
+    return v && std::atoi(v)!=0;
+}();
 /* Main-loop G trees only need the root; 0 retains the full heap for same-binary A/B. */
 static const bool g_s4_groot_only = !opt_off("NTT_S4_GROOT_ONLY");
 struct GRootStats {
@@ -6526,8 +6535,217 @@ static void flat_mul_batch(PolyLayer &L, const std::vector<unsigned long long> &
     }
 }
 
-/* Gate-only: exercise real batch multiply with full/short strides and output aliases.
-   A separate GMP convolution checks every returned coefficient, independently of NTT digits. */
+/* Scaled remainder descent: one sibling multiply per nontrivial child.
+   Independent GMP node/Horner checks are opt-in, excluded from clean timings. */
+struct ScaledStats {
+    unsigned long long levels=0, mul_calls=0, mul_pairs=0, copies=0, zeros=0;
+    unsigned long long states=0, words=0, leaves=0, checked_states=0, checked_words=0;
+    unsigned long long frontier_peak_bytes=0, pack_peak_bytes=0, root_inverse_reused=0;
+    unsigned long long root_divisions=0;
+};
+
+/* Independent GMP oracle: original H mod monic F by long division, then a triangular
+   solve of rev_(d-1)(remainder)/rev_d(F). No NTT or scaled child recurrence is used. */
+static std::vector<unsigned long long> scaled_state_gmp(
+    const CPoly &H, const std::vector<unsigned long long> &F, size_t d, PolyLayer &L)
+{
+    const size_t W=L.W;
+    if(F.size()!=(d+1)*W || !poly_is_one(F.data()+d*W,W)) {
+        std::fprintf(stderr,"%s: FATAL: scaled oracle needs a monic node\n",NTT_PROBE_NAME);
+        std::exit(3);
+    }
+    if(!d) return {};
+    CPoly r=H;
+    if(r.size()<d) cp_resize(r,d,W);
+    mpz_t q,f,t,u;
+    mpz_inits(q,f,t,u,nullptr);
+    for(size_t i=r.size();i-- >d;) {
+        words_to_mpz(q,r[i].data(),W);
+        for(size_t j=0;j<=d;++j) {
+            words_to_mpz(f,F.data()+j*W,W);
+            words_to_mpz(t,r[i-d+j].data(),W);
+            mpz_submul(t,q,f);mpz_mod(t,t,L.N);
+            mpz_to_words(r[i-d+j],W,t);
+        }
+    }
+    std::vector<unsigned long long> state(d*W,0);
+    std::vector<unsigned long long> word(W,0);
+    for(size_t i=0;i<d;++i) {
+        words_to_mpz(t,r[d-1-i].data(),W);
+        for(size_t j=1;j<=i;++j) {
+            words_to_mpz(f,F.data()+(d-j)*W,W);
+            words_to_mpz(u,state.data()+(i-j)*W,W);
+            mpz_submul(t,f,u);
+        }
+        mpz_mod(t,t,L.N);mpz_to_words(word,W,t);
+        std::copy(word.begin(),word.end(),state.begin()+i*W);
+    }
+    mpz_clears(q,f,t,u,nullptr);
+    return state;
+}
+
+static void descent_scaled(PolyLayer &L,
+    const std::vector<std::vector<unsigned long long>> &Ft,
+    const std::vector<size_t> &Fdeg, size_t Fpad, const CPoly &H,
+    const CPoly *cached_finv, std::vector<std::vector<unsigned long long>> &values,
+    ScaledStats &st, int cat, bool check)
+{
+    const size_t W=L.W,P=Fdeg[1];
+    if(!L.s4 || !P || Ft.size()<2*Fpad || Fdeg.size()<2*Fpad ||
+       Ft[1].size()!=(P+1)*W || !poly_is_one(Ft[1].data()+P*W,W) || (check && P>512)) {
+        std::fprintf(stderr,"%s: FATAL: invalid scaled descent shape (GMP check limited to 512 leaves)\n",NTT_PROBE_NAME);
+        std::exit(3);
+    }
+    CPoly local_inv, h=H;
+    if(h.size()>P) {
+        h=cp_mod(h,cp_from_flat(Ft[1],P,W),L); ++st.root_divisions;
+    }
+    const CPoly *inv=cached_finv;
+    if(!inv || inv->size()<P) {
+        CPoly rev;
+        cp_resize(rev,P+1,W);
+        for(size_t i=0;i<=P;++i)
+            std::copy_n(Ft[1].data()+(P-i)*W,W,rev[i].begin());
+        local_inv=cp_inv_series(rev,P,L);inv=&local_inv;
+    } else ++st.root_inverse_reused;
+    std::vector<unsigned long long> A(P*W,0),B(P*W,0),root;
+    for(size_t i=0;i<P;++i) {
+        if(P-1-i<h.size()) std::copy(h[P-1-i].begin(),h[P-1-i].end(),A.begin()+i*W);
+        std::copy((*inv)[i].begin(),(*inv)[i].end(),B.begin()+i*W);
+    }
+    flat_mul_batch(L,A,P,B,P,1,root,cat,0,P);
+    ++st.mul_calls;++st.mul_pairs;
+    st.pack_peak_bytes=std::max(st.pack_peak_bytes,8ull*(A.capacity()+B.capacity()+root.capacity()));
+    std::vector<unsigned long long>().swap(A);std::vector<unsigned long long>().swap(B);
+    std::vector<std::vector<unsigned long long>> cur(1);
+    cur[0].swap(root);
+    auto validate=[&](const std::vector<std::vector<unsigned long long>> &front,size_t base) {
+        for(size_t i=0;i<front.size();++i) {
+            const size_t node=base+i,d=Fdeg[node];
+            if(front[i].size()!=d*W) {std::fprintf(stderr,"%s: FATAL: scaled state length\n",NTT_PROBE_NAME);std::exit(3);}
+            ++st.states;st.words+=d*W;
+            if(check) {
+                auto want=scaled_state_gmp(H,Ft[node],d,L);
+                if(front[i]!=want) {std::fprintf(stderr,"%s: FATAL: scaled GMP node mismatch node=%llu degree=%llu\n",NTT_PROBE_NAME,(unsigned long long)node,(unsigned long long)d);std::exit(3);}
+                ++st.checked_states;st.checked_words+=d*W;
+            }
+        }
+    };
+    validate(cur,1);
+    const double t0=now_s();
+    for(size_t base=1;base<Fpad;base*=2) {
+        const double tl0=now_s();
+        const size_t nbase=base*2;
+        std::vector<std::vector<unsigned long long>> next(cur.size()*2);
+        std::map<std::pair<size_t,size_t>,std::vector<std::pair<size_t,size_t>>> groups;
+        for(size_t j=0;j<cur.size();++j) for(size_t side=0;side<2;++side) {
+            const size_t slot=2*j+side,ci=nbase+slot,si=ci^1;
+            const size_t a=Fdeg[ci],b=Fdeg[si];
+            if(a+b!=Fdeg[base+j]) {std::fprintf(stderr,"%s: FATAL: scaled degree conservation\n",NTT_PROBE_NAME);std::exit(3);}
+            if(!a) {++st.zeros;continue;}
+            if(!b) {next[slot]=cur[j];++st.copies;continue;}
+            groups[{a,b}].push_back({j,slot});
+        }
+        for(const auto &g:groups) {
+            const size_t a=g.first.first,b=g.first.second,ma=a+b,mb=b+1,nb=g.second.size();
+            A.assign(nb*ma*W,0);B.assign(nb*mb*W,0);
+            std::vector<unsigned long long> product;
+            for(size_t s=0;s<nb;++s) {
+                const size_t j=g.second[s].first,slot=g.second[s].second,si=(nbase+slot)^1;
+                std::copy(cur[j].begin(),cur[j].end(),A.begin()+s*ma*W);
+                if(Ft[si].size()!=mb*W) {std::fprintf(stderr,"%s: FATAL: scaled sibling length\n",NTT_PROBE_NAME);std::exit(3);}
+                for(size_t q=0;q<mb;++q)
+                    std::copy_n(Ft[si].data()+(b-q)*W,W,B.begin()+(s*mb+q)*W);
+            }
+            flat_mul_batch(L,A,ma,B,mb,nb,product,cat,b,a);
+            ++st.mul_calls;st.mul_pairs+=nb;
+            st.pack_peak_bytes=std::max(st.pack_peak_bytes,8ull*(A.capacity()+B.capacity()+product.capacity()));
+            for(size_t s=0;s<nb;++s)
+                next[g.second[s].second].assign(product.begin()+s*a*W,product.begin()+(s+1)*a*W);
+        }
+        unsigned long long bytes=0;
+        for(const auto &v:cur) bytes+=8ull*v.capacity();
+        for(const auto &v:next) bytes+=8ull*v.capacity();
+        st.frontier_peak_bytes=std::max(st.frontier_peak_bytes,bytes);
+        cur.swap(next);++st.levels;validate(cur,nbase);
+        if(g_s4_batched_progress)
+            std::printf("scaled_progress: level=%llu nodes=%llu groups=%llu t_level=%.3f t_total=%.3f\n",st.levels,(unsigned long long)cur.size(),(unsigned long long)groups.size(),now_s()-tl0,now_s()-t0);
+    }
+    values.assign(P,std::vector<unsigned long long>(W,0));
+    size_t leaf=0;
+    for(size_t i=0;i<Fpad;++i) if(Fdeg[Fpad+i]) {
+        if(Fdeg[Fpad+i]!=1 || leaf>=P) {std::fprintf(stderr,"%s: FATAL: scaled non-linear leaf\n",NTT_PROBE_NAME);std::exit(3);}
+        values[leaf++]=std::move(cur[i]);
+    }
+    if(leaf!=P) {std::fprintf(stderr,"%s: FATAL: scaled leaf count\n",NTT_PROBE_NAME);std::exit(3);}
+    st.leaves+=leaf;
+}
+
+static void scaled_descent_fixture(PolyLayer &L)
+{
+    if(!L.s4) {std::fprintf(stderr,"%s: FATAL: scaled fixture requires S4\n",NTT_PROBE_NAME);std::exit(3);}
+    const size_t W=L.W;
+    ScaledStats sum;
+    unsigned long long cases=0;
+    mpz_t x;mpz_init(x);
+    for(size_t P:{1u,2u,3u,5u,7u,8u,9u,13u,16u,23u}) for(size_t padding=0;padding<3;++padding) {
+        size_t pad=1;while(pad<P) pad*=2;
+        std::vector<std::vector<unsigned long long>> Ft(2*pad);
+        std::vector<size_t> deg(2*pad,0);
+        for(size_t i=0;i<pad;++i) {Ft[pad+i].assign(W,0);Ft[pad+i][0]=1;}
+        for(size_t i=0;i<P;++i) {
+            const size_t slot=padding==0?i:padding==1?pad-P+i:(i*5)%pad;
+            auto &f=Ft[pad+slot];f.assign(2*W,0);
+            mpz_set_ui(x,1+i*17);mpz_neg(x,x);mpz_mod(x,x,L.N);
+            std::vector<unsigned long long> word(W,0);mpz_to_words(word,W,x);
+            std::copy(word.begin(),word.end(),f.begin());f[W]=1;deg[pad+slot]=1;
+        }
+        /* Build the fixture tree with independent GMP convolution. */
+        mpz_t a,b,t;mpz_inits(a,b,t,nullptr);
+        for(size_t node=pad;--node;) {
+            const size_t dl=deg[2*node],dr=deg[2*node+1],d=dl+dr;
+            deg[node]=d;Ft[node].assign((d+1)*W,0);
+            for(size_t i=0;i<=d;++i) {
+                mpz_set_ui(t,0);
+                for(size_t j=0;j<=dl;++j) if(i>=j && i-j<=dr) {
+                    words_to_mpz(a,Ft[2*node].data()+j*W,W);
+                    words_to_mpz(b,Ft[2*node+1].data()+(i-j)*W,W);mpz_addmul(t,a,b);
+                }
+                mpz_mod(t,t,L.N);std::vector<unsigned long long> word(W,0);mpz_to_words(word,W,t);
+                std::copy(word.begin(),word.end(),Ft[node].begin()+i*W);
+            }
+        }
+        CPoly rev;cp_resize(rev,P+1,W);
+        for(size_t i=0;i<=P;++i) std::copy_n(Ft[1].data()+(P-i)*W,W,rev[i].begin());
+        const CPoly inv=cp_inv_series(rev,P+1,L);
+        for(size_t kind=0;kind<5;++kind) {
+            CPoly H;cp_resize(H,kind==4?P+1:P,W);
+            for(size_t i=0;i<H.size();++i) {
+                if(kind==0) mpz_set_ui(x,0);
+                else if(kind==1) mpz_set_ui(x,i==0?1:0);
+                else if(kind==2) mpz_sub_ui(x,L.N,1);
+                else {mpz_set_ui(x,13+i*191);mpz_mod(x,x,L.N);}
+                mpz_to_words(H[i],W,x);
+            }
+            if(kind==1) cp_trim(H);
+            std::vector<std::vector<unsigned long long>> values;
+            descent_scaled(L,Ft,deg,pad,H,kind==0?nullptr:&inv,values,sum,-1,true);
+            /* Each degree-one node's independent remainder is also Horner(H,x). */
+            size_t leaf=0;
+            for(size_t i=0;i<pad;++i) if(deg[pad+i]) {
+                words_to_mpz(a,Ft[pad+i].data(),W);mpz_neg(a,a);mpz_mod(a,a,L.N);mpz_set_ui(t,0);
+                for(size_t k=H.size();k--;) {mpz_mul(t,t,a);words_to_mpz(b,H[k].data(),W);mpz_add(t,t,b);mpz_mod(t,t,L.N);}
+                words_to_mpz(b,values[leaf++].data(),W);
+                if(mpz_cmp(t,b)) {std::fprintf(stderr,"%s: FATAL: scaled Horner mismatch\n",NTT_PROBE_NAME);std::exit(3);}
+            }
+            ++cases;
+        }
+        mpz_clears(a,b,t,nullptr);
+    }
+    mpz_clear(x);
+    std::printf("scaled_fixture: cases=%llu states=%llu words=%llu leaves=%llu reused=%llu root_divisions=%llu bad=0\n",cases,sum.checked_states,sum.checked_words,sum.leaves,sum.root_inverse_reused,sum.root_divisions);
+}
+
 static void s4_flat_input_check(PolyLayer &L, size_t slices = 3)
 {
     /* Regression for a unit carry crossing many warps/blocks.  Compare every digit,
@@ -7896,6 +8114,11 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     const unsigned long long imax = B2 / D + 2;          /* the SAME giant set S2/the CPU ref use */
     const double t_entry = now_s();
     const size_t P = Fdeg[1];                            /* deg F = the baby count = poly_size */
+    const char *s5flag=std::getenv("NTT_S5_ON");
+    if(g_scaled_descent && (!L.s4 || (s5flag && std::atoi(s5flag)!=0))) {
+        std::fprintf(stderr,"%s: FATAL: scaled descent needs S4 and cannot be combined with S5\n",NTT_PROBE_NAME);
+        std::exit(3);
+    }
     BatchedRun R;
     R.P = P;
     R.giant_points = imax;
@@ -8419,6 +8642,13 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                         s5.divmods, s5.generic, s5.linear, s5.copies, s5.zeros, s5.ntt_launches,
                         s5.forest_bytes, s5.frontier_peak_bytes, s5.t_ntt, s5.t_pack, s5.t_generic,
                         s5.t_copy);
+        } else if (L.s4 && g_scaled_descent) {
+            L.cat=BC_DESCENT;
+            ScaledStats st;
+            descent_scaled(L,Ft,Fdeg,Fpad,H,&finv,values,st,BC_DESCENT,g_scaled_check);
+            L.cat=-1;
+            std::printf("scaled_descent: enabled=1 levels=%llu mul_calls=%llu mul_pairs=%llu copies=%llu zeros=%llu states=%llu words=%llu leaves=%llu checked_states=%llu checked_words=%llu frontier_peak_bytes=%llu pack_peak_bytes=%llu root_inverse_reused=%llu root_divisions=%llu\n",
+                st.levels,st.mul_calls,st.mul_pairs,st.copies,st.zeros,st.states,st.words,st.leaves,st.checked_states,st.checked_words,st.frontier_peak_bytes,st.pack_peak_bytes,st.root_inverse_reused,st.root_divisions);
         } else if (L.s4) {
             values.assign((size_t)P, std::vector<unsigned long long>(W, 0ull));
             /* slice S4: the whole descent, level by level and batched (at P = 92160 this is
@@ -8523,6 +8753,11 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
     }
     R.leaf_values = P;
+    if(!dev_leaves) {
+        unsigned long long hash=1469598103934665603ull,words=0;
+        for(const auto &v:values) for(auto word:v) {hash=(hash^word)*1099511628211ull;++words;}
+        std::printf("descent_values: leaves=%llu words=%llu hash=%llu\n",(unsigned long long)values.size(),words,hash);
+    }
     R.t_descent = now_s() - td0;
     /* a phase marker, because the descent is where a long shape can look hung: everything after
        it used to print nothing until the final summary line */
@@ -9193,6 +9428,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if (readback_test && std::atoi(readback_test) != 0) s4_flat_input_check(L,5);
         const char *window_test=std::getenv("NTT_S4_OUTPUT_WINDOW_TEST");
         if(window_test && std::atoi(window_test)!=0) s4_output_window_check(L);
+        const char *scaled_test=std::getenv("NTT_SCALED_TEST");
+        if(scaled_test && std::atoi(scaled_test)!=0) scaled_descent_fixture(L);
     }
     if(!s4_on) stage2_fixture_begin=now_s();
     const char *groot_test = std::getenv("NTT_S4_GROOT_TEST");
@@ -9207,7 +9444,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const double stage2_fixture_seconds=now_s()-stage2_fixture_begin;
     bool stage2_extra_fixtures=false;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
-                           "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST"}) {
+                           "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }

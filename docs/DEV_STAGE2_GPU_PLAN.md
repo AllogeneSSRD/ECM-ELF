@@ -3787,3 +3787,20 @@ stage2: algorithm=tree_gpu_batched curves=1 hits=1 bad_factors=0 factors=42089 h
 * 下一步的量化目标很明确：把设备下降的除法**按形状跨节点批量**（宿主 `descent_batched` 正是按 `(deg cur, deg divisor)` 分组），把 5 ms/除法压回与 48 µs 同量级，才有资格谈替代宿主下降。
 
 门禁：**38/38，exit 0** ✓（块修复与森林复用对三个单块形状逐位无影响）。
+
+## 59. 2026-10-03 当前执行路线：scaled descent 与 G-root 驻留
+
+§58为此前S5逐节点设备求余实验的历史记录。现阶段已新增按degree分组的scaled descent，
+入口 [stage2_tree_gpu.cu:6587](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6587)，
+`NTT_SCALED_DESCENT=1`，S5关闭；普通下降默认继续可作同二进制对照。
+根只建立一次scaled状态，复用fold的finv，各非平凡孩子一次sibling乘法及中间窗口，避免逐节点求逆/求商。
+独立GPU/GMP节点/Horner门禁41/0，既有回归188/0。真实M4423匹配完整Q的ABBA完整Stage2
+125.054669→107.862620s（−13.75%），下降26.2565→8.6445s（−67.08%），仍慢于Prime95 CPU1的90.460s约19.24%。
+
+下一阶段优先 **G-root逐级device驻留**：本轮Gtrees仍39.967s、为main最大相位。
+保持已有projective/degenerate/Gamma叶合同，只替换内部乘法frontier，设备仅保留相邻级，最终根回host一次供fold。
+必须按shape跨节点批量，不回到§58的逐节点调度；门禁要求Groot逐word和完整结果一致，并记录外部frontier容量。
+之后共享scaled父pack/forward FFT，减少sibling host零填充及下降层间往返。
+不要直接以未归约NTT频域乘积代替下一层modN规范系数：64位NTT素数p不同于N。
+下一步数学/生命周期/计时合同、代码原文件行号及原始测量见
+[DEV_GPUOWL_NTT_NOTES§46](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3178)。
