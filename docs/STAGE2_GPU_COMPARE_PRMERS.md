@@ -355,6 +355,8 @@ init11.277 s、main107.943 s，报告完整Stage2 **119.220 s**，无因子。
 
 ### 28.9 2026-10-03：chunk复用与匹配Prime95 Q后的实际差距
 
+本小节记录提交83470ad时的结果；其生产Stage1待修问题已由28.10后续阶段解决。
+
 [poly_mul_batch_modN](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3006)
 改为按outer chunk请求输出设备容量，默认 `NTT_S4_CHUNK_OUTPUT=1`，0保留整批对照。
 各chunk复用C.d_out起点；oracle快照/D2H在同一默认stream中先于下一次覆盖排队。
@@ -391,3 +393,15 @@ GPU仍多50.18%，尚未超过CPU单逻辑核；不同D/degree/内存预算及�
 已验证480cases /10176states /4176真实叶值，无错误；它尚不是CUDA/GMP实现或生产性能证据。
 详细实现行号、计时边界、证据和推进顺序见
 [开发日志 §44](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:2870)。
+
+### 28.10 生产Stage1基线修复（2026-10-03，延续28.9）
+
+28.9记录的GPU choose12接线与Q问题现已修复：原CGBN WMAD乘法只修正radix进位，
+可返回≥N；删除归一化破坏了梯子的加/减范围前提，原生产exe的24个短指数回归有11个Q错误。
+当前 [规范乘法包装](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_kernel.h:351)
+恢复 `[0,N)`，param2乘2也归一化；
+[GPU指数调用](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:2828) 使用现有exponent选择torsion1/12。
+完整生产回归66cases/94Q/0失败，覆盖param0/2/3、TPI4/8/16/32、ini/worker和checkpoint；
+CUDA checkpoint升为5，旧v4重新计算。生产M4423/sigma26/B1=1000/choose12完整Q已与实际Prime95导出相等。
+代码原文件行号、轨迹、二进制hash和证据见开发日志§45。
+这次未修改poly Stage2或获得新性能数据，完整135.855210s对CPU90.460s的差距仍待scaled descent等后续优化解决。

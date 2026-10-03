@@ -3053,6 +3053,8 @@ Prime95的 [first_missing_prime/B2_start relocation](D:/code/MPA-OpenCl/.refacto
 
 ### 44.7 用户提醒后的ini核对：配置解析不等于GPU路径已接通
 
+本节记录上一阶段的历史状态；下一阶段已定位并修复根因、完成GPU接线，见§45。
+
 `ecm.ini` 的 `exponent=lcm|choose12` 和CLI `--exponent` 已存在。
 [队列解析](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:3432)和
 [CLI解析](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:3704)会设置exponent_choose12；
@@ -3083,3 +3085,92 @@ CPU Montgomery/choose12的M4423完整Q通过，shared exponent builder的最小B
 CLI/default/全局ini/worker override，以及checkpoint指数长度变化。
 前述188/0门禁、GPU生产ABBA和完整Q匹配使用stage2_tree_gpu.exe独立ladder；
 它们没有调用生产CGBN Stage1，不证明生产驱动的这个新发现问题已解决。
+
+## 45. 生产CUDA Stage1归一化修复与choose12接线（2026-10-03）
+
+### 45.1 原版复现、最小轨迹与根因
+
+延续§44.7，先对保留的原生产exe（SHA256 `9A8204F99E6D72A1169591CE11B51336201B881A701183C81E85E48F5FC40471`）
+运行新增 [test_gpu_exponent.py](D:/code/MPA-OpenCl/tools/test/test_gpu_exponent.py:1) 的 `--normalization-only`。
+结果24 cases /31完整Q，**13通过、11失败**；
+[red/summary.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage1_diag_20261003/red/summary.json)。
+覆盖M61/1277/4001/4423/5261/8191/9689、B1=2/4/20、8曲线和64位sigma。
+错误在试接choose12前已存在，进程返回0不能证明计算正确。
+
+诊断单独编译TPI16/BITS4608的逐运算探针，GPU1、M4423/sigma26，检查标量2/6/12/24/60。
+六个初始Montgomery值全部与独立整数参考一致；没有证据指向host曲线构造或指数位顺序。
+第一步 `BB=(aZ-aX)^2*R^-1` 已出现≥N的返回值。
+标量12的最后一步，`bZ-bX` 的负差值超出一次加回N可修正的范围，得到radix回绕值；这是首次模N不一致。
+标量24同样复现；2/6/60的最终Q恰好正确，但中间仍存在非规范值。
+[legacy_trace_summary.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage1_diag_20261003/legacy_trace_summary.json)。
+标量12探针的错误完整Q与保留原exe的B1=4/lcm输出完全相同，见
+[provenance.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage1_diag_20261003/provenance.json)。
+
+根因是此前删除归一化时误读了
+[core_mont_wmad.cu:178](D:/code/MPA-OpenCl/cgbn/include/cgbn/core/core_mont_wmad.cu:178)：
+尾部 `c=-fast_propagate_add(c,r)` 修正radix进位，未比较r与N；
+[impl_cuda.cu:1027](D:/code/MPA-OpenCl/cgbn/include/cgbn/impl_cuda.cu:1027) 的mont_mul/mont_sqr也直接转发。
+规范输入的REDC结果可在 `[N,2N)`，并非必然 `<N`。
+原梯子的加法只减一次N、减法只加回一次N，要求输入规范；冗余范围持续传播会破坏这个前提。
+文档 [ECM_CGBN_OPTIMIZATION.md§4](D:/code/MPA-OpenCl/docs/ECM_CGBN_OPTIMIZATION.md:113)
+已纠正，包括撤销旧“删除归一化提速5～7%”作为合法优化的结论。
+
+### 45.2 修复及已有配置接通
+
+[mont_mul_normalized](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_kernel.h:351) 和
+[mont_sqr_normalized](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_kernel.h:358)
+在CGBN乘/平方后条件减N一次，维持所有后续操作的 `[0,N)` 不变量；规范输入下REDC `<2N`，一次足够。
+用于param3原步/SSA步、param0/param2共用Suyama步及实验链步；
+[param2乘2](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_kernel.h:884) 同样补归一化。
+诊断原样恢复后，5个标量全部正确，中间不再出现非规范值：
+[fixed_trace_summary.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage1_diag_20261003/fixed_trace_summary.json)。
+诊断探针不是生产门禁；下面的生产CLI回归才验证实际调用链。
+
+GPU [compute_batch_s](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:263)
+接收现有torsion参数、传入 [缓存builder](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:275)，
+[GPU调用](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:2828) 按已有exponent_choose12选择1/12。
+B1<2时仍保留torsion本身，避免遗漏额外12。日志打印实际torsion。
+生产配置示例：`method=gpu`、`gpu_param=0`、`exponent=choose12`；CLI为
+`--method gpu --gpu-param 0 --exponent choose12`。未新增生产开关。
+CUDA [CHECKPOINT_VERSION](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1.cu:240) 升为5，72字节头布局不变；
+拒绝旧v4，因为其坐标可能已算错，不能靠恢复规范范围修复已发生的分歧。
+
+### 45.3 最终生产回归与实际Prime95完整Q
+
+使用全位宽sm89、全部三个参数化的重新构建生产exe，SHA256
+`5FF1F58A3A072FB37B7EF6E35D3AC2DE5488304D6ACC5D4F32B6555CB2C96E6E`。
+12个CUDA TU并行编译成功，随后因checkpoint版本变化重新编译host CUDA TU并链接，
+[production_build.log](D:/code/MPA-OpenCl/build_cuda_cmake/_stage1_diag_20261003/production_build.log)。
+源码hash及exe hash见上述provenance.json；测试和全部GPU调用仅使用GPU1。
+
+最终 [final/summary.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage1_diag_20261003/final/summary.json)：
+**66 cases /94完整Q /0失败**。独立Python任意精度ladder逐个完整affine Q核对；
+param0使用已有Suyama整数参考，param2使用独立affine Weierstrass群律构造，param3使用其d/2^32曲线常数。
+覆盖TPI4/8/16/32、多个位宽/短指数、8曲线、64位sigma、默认lcm、CLI choose12、B1<2，
+以及全局ini和worker override。ini用ECMSTAGE2任务明确请求输出save，sigma由ini固定。
+合成72字节真实CUDA checkpoint，独立计算相邻prefix点，验证v5 choose12续算完整Q、
+v4含毒化坐标被拒绝并重算，以及lcm→choose12因指数长度不同重算。
+这些checkpoint测试未覆盖定时写盘、硬杀或长任务并发。
+第一版夹具有5个失败：3个ini用普通ECM行未请求save，2个checkpoint日志缺少-v；
+修正夹具后上述66/0通过，未因此修改生产算法。
+原有 [CLI门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_stage1_diag_20261003/cli_gate.log) **9/9**，
+[param2与gmp-ecm门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_stage1_diag_20261003/param2_gate.log)
+M1279/B1=1e3及1e5 **7/7**。
+
+生产CUDA M4423/sigma26/B1=1000/choose12的
+[result.save](D:/code/MPA-OpenCl/build_cuda_cmake/_stage1_diag_20261003/final/cli_choose12/result.save)
+已与§44.3实际Prime9531.7.1.0导出的 [results.txt](D:/code/MPA-OpenCl/build_cuda_cmake/_prime95_q_match_20261003/results.txt)
+完整整数相等（provenance脚本直接比较全文Q，不只比较hash）；规范hex SHA256仍为
+`33cc6c63cec26c39900a7ed4ff551e2c2e0a533422905b538ec4f4aa809f092f`。
+
+### 45.4 对后续Stage2优化的影响和边界
+
+本轮是Stage2性能比较的生产起点正确性修复，未测量归一化修复的Stage1速度、RAM或VRAM收益。
+§44的独立stage2_tree_gpu和NTT源未修改，既有188/0及135.855210s完整Stage2基线继续保留；
+这些数据不是本轮的新测试。尚未达到Prime95 CPU单核90.460s。
+下一主线仍是§44.6的scaled descent：根scaled状态复用finv；每级乘sibling反转多项式、取任意中间窗口，
+替换逐节点Newton inverse/qrev/q·B；先GPU/GMP全节点/叶门禁，再同Q完整生产A/B，随后共享parent spectrum和系数驻留。
+再次减少归一化必须先证明新的lazy范围合同，不能依赖特定Q恰好通过。
+另查到独立配对原型 [cgbn_stage2_kernel.h](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage2_kernel.h:164)
+也直接消费CGBN乘法结果，需单独审计；当前poly Stage2树版不引用这个头，本轮未宣称修复全部仓库CGBN路径。
+OpenCL构建、所有非Mersenne模数及硬杀恢复未在本轮验证。

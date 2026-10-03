@@ -344,6 +344,23 @@ class curve_t {
       }
   }
 
+  // CGBN's WMAD core subtracts N on radix overflow, not on r >= N.
+  // Canonical operands give REDC(a*b) < 2*N; one subtraction restores the
+  // [0,N) invariant required by our additions and borrow/add-back subtractions.
+  // In-place destinations are supported by CGBN and by these wrappers.
+  __device__ FORCE_INLINE void mont_mul_normalized(
+          bn_t &r, const bn_t &a, const bn_t &b,
+          const bn_t &modulus, uint32_t np0) {
+      cgbn_mont_mul(_env, r, a, b, modulus, np0);
+      normalize_addition(r, modulus);
+  }
+
+  __device__ FORCE_INLINE void mont_sqr_normalized(
+          bn_t &r, const bn_t &a, const bn_t &modulus, uint32_t np0) {
+      cgbn_mont_sqr(_env, r, a, modulus, np0);
+      normalize_addition(r, modulus);
+  }
+
   /**
    * Calculate (r * m) / 2^32 mod modulus
    *
@@ -437,23 +454,17 @@ class curve_t {
         assert_normalized(u, modulus);
     }
 
-    // NOTE (2026-09-24, CGBN optimization): NO normalize_addition() after a
-    // cgbn_mont_mul / cgbn_mont_sqr.  CGBN's Montgomery multiply already ends with a
-    // full conditional subtraction (core_mont_wmad.cu:178-189), so its result is < n
-    // and the extra cgbn_compare + conditional cgbn_sub is pure overhead.  Measured
-    // with tools/bench/cgbn_op_probe.cu: that compare+sub costs 43% of a mont_mul at
-    // the 512-bit tier (15% at 1024, 2.6% at 3072, 1.7% at 4096), and this kernel did
-    // 8 of them per bit -> removing them is a double-digit win at small N.
-    // Keep the normalize after cgbn_add/cgbn_sub/cgbn_shift_left (those CAN exceed n).
-    // See docs/ECM_CGBN_OPTIMIZATION.md.
+    // Keep Montgomery products canonical before reusing them in the ladder.
+    // Removing these subtractions produced wrong Q at M4423/B1=4 (scalar 12);
+    // see docs/DEV_GPUOWL_NTT_NOTES.md section 45.
     if (do_add) {                                  // PROBE: CB/DA exist only for the addition
-      cgbn_mont_mul(_env, CB, t, u, modulus, np0); // C*B
-      cgbn_mont_mul(_env, DA, v, w, modulus, np0); // D*A
+      mont_mul_normalized(CB, t, u, modulus, np0); // C*B
+      mont_mul_normalized(DA, v, w, modulus, np0); // D*A
     }
 
     /* Roughly 40% of time is spent in these two calls */
-    cgbn_mont_sqr(_env, AA, w, modulus, np0);    // AA
-    cgbn_mont_sqr(_env, BB, u, modulus, np0);    // BB
+    mont_sqr_normalized(AA, w, modulus, np0);    // AA
+    mont_sqr_normalized(BB, u, modulus, np0);    // BB
     if (VERIFY_NORMALIZED) {
         assert_normalized(CB, modulus);
         assert_normalized(DA, modulus);
@@ -462,7 +473,7 @@ class curve_t {
     }
 
     // q = aX is finalized
-    cgbn_mont_mul(_env, q, AA, BB, modulus, np0); // AA*BB
+    mont_mul_normalized(q, AA, BB, modulus, np0); // AA*BB
         assert_normalized(q, modulus);
 
     if (cgbn_sub(_env, K, AA, BB)) // K = AA-BB
@@ -484,7 +495,7 @@ class curve_t {
     }
 
     // u = aZ is finalized
-    cgbn_mont_mul(_env, u, K, u, modulus, np0); // K(BB+dK)
+    mont_mul_normalized(u, K, u, modulus, np0); // K(BB+dK)
         assert_normalized(u, modulus);
 
     if (do_add) {                     // PROBE: the (w:v) output is the addition's result
@@ -498,10 +509,10 @@ class curve_t {
       }
 
       // w = bX is finalized
-      cgbn_mont_sqr(_env, w, w, modulus, np0); // (DA+CB)^2 mod N
+      mont_sqr_normalized(w, w, modulus, np0); // (DA+CB)^2 mod N
           assert_normalized(w, modulus);
 
-      cgbn_mont_sqr(_env, v, v, modulus, np0); // (DA-CB)^2 mod N
+      mont_sqr_normalized(v, v, modulus, np0); // (DA-CB)^2 mod N
           assert_normalized(v, modulus);
 
       // v = bZ is finalized
@@ -540,13 +551,13 @@ class curve_t {
         cgbn_add(_env, bx, bx, modulus);
 
     // ---- addition half: CB = (bZ+bX)(aZ-aX), DA = (bZ-bX)(aZ+aX) ----
-    cgbn_mont_mul(_env, CB, bz, ax, modulus, np0);
-    cgbn_mont_mul(_env, DA, bx, az, modulus, np0);
+    mont_mul_normalized(CB, bz, ax, modulus, np0);
+    mont_mul_normalized(DA, bx, az, modulus, np0);
 
     // ---- doubling half ----
-    cgbn_mont_sqr(_env, AA, az, modulus, np0);
-    cgbn_mont_sqr(_env, BB, ax, modulus, np0);
-    cgbn_mont_mul(_env, q, AA, BB, modulus, np0);
+    mont_sqr_normalized(AA, az, modulus, np0);
+    mont_sqr_normalized(BB, ax, modulus, np0);
+    mont_mul_normalized(q, AA, BB, modulus, np0);
 
     if (cgbn_sub(_env, K, AA, BB))
         cgbn_add(_env, K, K, modulus);
@@ -556,7 +567,7 @@ class curve_t {
 
     cgbn_add(_env, t, BB, dK);
     normalize_addition(t, modulus);
-    cgbn_mont_mul(_env, u, K, t, modulus, np0);
+    mont_mul_normalized(u, K, t, modulus, np0);
 
     // ---- addition half tail ----
     cgbn_add(_env, w, DA, CB);
@@ -564,8 +575,8 @@ class curve_t {
     if (cgbn_sub(_env, v, DA, CB))
         cgbn_add(_env, v, v, modulus);
 
-    cgbn_mont_sqr(_env, w, w, modulus, np0);
-    cgbn_mont_sqr(_env, v, v, modulus, np0);
+    mont_sqr_normalized(w, w, modulus, np0);
+    mont_sqr_normalized(v, v, modulus, np0);
     cgbn_shift_left(_env, v, v, 1);
     normalize_addition(v, modulus);
   }
@@ -699,11 +710,8 @@ class curve_t {
     fold_sqr(v, v, modulus, k, t);       // (DA-CB)^2
 
     if (const_diff) {
-      /* param2: difference x = 2 -- same shortcut as the batch family.  NOTE the
-         normalize_addition() that the Montgomery variant does NOT need: the fold
-         requires every operand to be < 2^k (CGBN's shift_left inside fold_mul
-         would otherwise drop the top bits), and 2v can reach 2n.  Normalizing is
-         value-preserving mod n, so the stage-1 X is unchanged. */
+      /* param2: difference x = 2.  Both arithmetic domains keep v < N;
+         doubling v can reach 2N, so normalize before the next ladder step. */
       cgbn_shift_left(_env, v, v, 1);
       normalize_addition(v, modulus);
     } else {
@@ -737,9 +745,9 @@ class curve_t {
     if (cgbn_sub(_env, u, u, q)) // u = (aZ - aX)
         cgbn_add(_env, u, u, modulus);
 
-    cgbn_mont_sqr(_env, AA, w, modulus, np0);    // AA
-    cgbn_mont_sqr(_env, BB, u, modulus, np0);    // BB
-    cgbn_mont_mul(_env, q, AA, BB, modulus, np0); // q = AA*BB
+    mont_sqr_normalized(AA, w, modulus, np0);    // AA
+    mont_sqr_normalized(BB, u, modulus, np0);    // BB
+    mont_mul_normalized(q, AA, BB, modulus, np0); // q = AA*BB
 
     if (cgbn_sub(_env, K, AA, BB)) // K = AA-BB
         cgbn_add(_env, K, K, modulus);
@@ -749,7 +757,7 @@ class curve_t {
 
     cgbn_add(_env, u, BB, dK); // BB + dK
     normalize_addition(u, modulus);
-    cgbn_mont_mul(_env, u, K, u, modulus, np0); // u = K(BB+dK)
+    mont_mul_normalized(u, K, u, modulus, np0); // u = K(BB+dK)
 
     if (!do_dadd)
       return;
@@ -771,19 +779,19 @@ class curve_t {
     if (cgbn_sub(_env, DA, u, q)) // (X3 - Z3)
         cgbn_add(_env, DA, DA, modulus);
 
-    cgbn_mont_mul(_env, v, v, CB, modulus, np0); // (X2-Z2)(X3+Z3)
-    cgbn_mont_mul(_env, t, t, DA, modulus, np0); // (X2+Z2)(X3-Z3)
+    mont_mul_normalized(v, v, CB, modulus, np0); // (X2-Z2)(X3+Z3)
+    mont_mul_normalized(t, t, DA, modulus, np0); // (X2+Z2)(X3-Z3)
 
     cgbn_add(_env, CB, t, v); // sum
     normalize_addition(CB, modulus);
     if (cgbn_sub(_env, DA, t, v)) // difference
         cgbn_add(_env, DA, DA, modulus);
 
-    cgbn_mont_sqr(_env, CB, CB, modulus, np0);   // sum^2
-    cgbn_mont_sqr(_env, DA, DA, modulus, np0);   // difference^2
+    mont_sqr_normalized(CB, CB, modulus, np0);   // sum^2
+    mont_sqr_normalized(DA, DA, modulus, np0);   // difference^2
 
-    cgbn_mont_mul(_env, w, ZD, CB, modulus, np0); // X5 = Z1*sum^2
-    cgbn_mont_mul(_env, v, XD, DA, modulus, np0); // Z5 = X1*diff^2
+    mont_mul_normalized(w, ZD, CB, modulus, np0); // X5 = Z1*sum^2
+    mont_mul_normalized(v, XD, DA, modulus, np0); // Z5 = X1*diff^2
   }
 
   /* -------------------------------------------------------------------------
@@ -837,27 +845,27 @@ class curve_t {
     if (cgbn_sub(_env, u, u, q)) // u = (aZ - aX)
         cgbn_add(_env, u, u, modulus);
 
-    cgbn_mont_mul(_env, CB, t, u, modulus, np0); // C*B
-    cgbn_mont_mul(_env, DA, v, w, modulus, np0); // D*A
+    mont_mul_normalized(CB, t, u, modulus, np0); // C*B
+    mont_mul_normalized(DA, v, w, modulus, np0); // D*A
 
-    cgbn_mont_sqr(_env, AA, w, modulus, np0);    // AA
-    cgbn_mont_sqr(_env, BB, u, modulus, np0);    // BB
+    mont_sqr_normalized(AA, w, modulus, np0);    // AA
+    mont_sqr_normalized(BB, u, modulus, np0);    // BB
 
     // q = aX is finalized
-    cgbn_mont_mul(_env, q, AA, BB, modulus, np0); // AA*BB
+    mont_mul_normalized(q, AA, BB, modulus, np0); // AA*BB
 
     if (cgbn_sub(_env, K, AA, BB)) // K = AA-BB = 4XZ
         cgbn_add(_env, K, K, modulus);
 
     // dK = a24 * K  (full width -- a24 is NOT a 32-bit batch parameter here)
-    cgbn_mont_mul(_env, dK, K, a24, modulus, np0);
+    mont_mul_normalized(dK, K, a24, modulus, np0);
         assert_normalized(dK, modulus);
 
     cgbn_add(_env, u, BB, dK); // BB + a24*K
     normalize_addition(u, modulus);   // kept: BB + dK can reach 2n
 
     // u = aZ is finalized
-    cgbn_mont_mul(_env, u, K, u, modulus, np0); // K(BB + a24*K)
+    mont_mul_normalized(u, K, u, modulus, np0); // K(BB + a24*K)
 
     cgbn_add(_env, w, DA, CB); // DA + CB
     normalize_addition(w, modulus);   // kept: DA + CB can reach 2n
@@ -865,17 +873,18 @@ class curve_t {
         cgbn_add(_env, v, v, modulus);
 
     // w = bX is finalized (Z_D = 1: the host normalises the difference point)
-    cgbn_mont_sqr(_env, w, w, modulus, np0); // (DA+CB)^2 mod N
+    mont_sqr_normalized(w, w, modulus, np0); // (DA+CB)^2 mod N
 
-    cgbn_mont_sqr(_env, v, v, modulus, np0); // (DA-CB)^2 mod N
+    mont_sqr_normalized(v, v, modulus, np0); // (DA-CB)^2 mod N
 
     // v = bZ is finalized: x_D * (DA-CB)^2, where x_D = X0/Z0 is the affine x of
     // the ladder difference point (param3 folds the constant 2 in here instead)
     if (const_diff) {
       // param2: x_D = 2 -- same shortcut as the batch family, no multiply at all
       cgbn_shift_left(_env, v, v, 1);
+      normalize_addition(v, modulus);
     } else {
-      cgbn_mont_mul(_env, v, v, xdiff, modulus, np0);
+      mont_mul_normalized(v, v, xdiff, modulus, np0);
     }
         assert_normalized(v, modulus);
   }

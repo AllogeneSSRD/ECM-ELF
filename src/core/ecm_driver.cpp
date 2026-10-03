@@ -255,14 +255,14 @@ private:
     }
 };
 
-// Compute batch product s = prod_{p<=B1} p^{floor(log_p(B1))} = lcm(1..B1).
+// Compute batch product s = torsion * lcm(1..B1).
 // The product tree itself lives in src/core/ecm_stage1_exp.cpp, shared with the
 // CPU Montgomery path (which used to have its own quadratic builder and spent
 // 29 s at B1 = 1e7 before the ladder started); this wrapper only keeps the
 // range/lifetime guards and the double -> integer rounding of B1.
-static bool compute_batch_s(mpz_t s, double B1){
+static bool compute_batch_s(mpz_t s, double B1, unsigned torsion = 1){
     if(B1 < 2.0) {
-        mpz_set_ui(s, 1);
+        mpz_set_ui(s, torsion);
         return true;
     }
     const uint64_t limit64 = (uint64_t)std::floor(B1 + 0.0001);
@@ -272,10 +272,10 @@ static bool compute_batch_s(mpz_t s, double B1){
     /* The exponent is cached on disk (validated on load, see ecm_stage1_exp_cache.h): at
        B1 = 260e6 building it costs ~10 s and every task in a worktodo would repeat that. */
     std::string status;
-    if (!ecm_build_lcm_exponent_cached(s, limit64, 1, ecm_exp_cache_get_dir(), &status)) {
+    if (!ecm_build_lcm_exponent_cached(s, limit64, torsion, ecm_exp_cache_get_dir(), &status)) {
         return false;
     }
-    ecm_ts_fprintf(stdout, "stage1 exponent built: %s\n", status.c_str());
+    ecm_ts_fprintf(stdout, "stage1 exponent built: %s (torsion=%u)\n", status.c_str(), torsion);
     return true;
 }
 
@@ -2825,7 +2825,7 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
 
     mpz_t batch_s;
     mpz_init(batch_s);
-    if (!compute_batch_s(batch_s, B1)) {
+    if (!compute_batch_s(batch_s, B1, opt.exponent_choose12 ? 12u : 1u)) {
         std::cerr << "Failed to compute batch_s" << std::endl;
         mpz_clear(batch_s);
         ecm_clear(params);

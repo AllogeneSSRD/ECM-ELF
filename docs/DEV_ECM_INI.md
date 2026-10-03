@@ -63,10 +63,12 @@
 | `ckpt_seconds` | `600` | 驱动/队列 | `--ckpt` | 任务中途存档间隔（秒），0=不自动存档（Ctrl+C 仍会存）。 |
 
 `exponent=choose12` 的数学含义是 `12*lcm(1..B1)`，`lcm` 是 `lcm(1..B1)`。
-CPU `method=mont` 已实际消费该选项。2026-10-03核对发现，生产GPU批量路径虽然解析了该键，
-但调用的指数builder仍固定torsion=1，尚未实现该选项的GPU接线。
-试接线时还暴露原生产exe的大位宽短指数Q错误；修复和回归完成前不能把该配置当作GPU完整Q对齐保证。
-代码、最小复现和独立参考证据见 [开发日志§44.7](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3054)。
+CPU `method=mont` 和生产CUDA `method=gpu` 均实际消费该选项（GPU接线于2026-10-03完成）。
+与Prime95 `MontgSigma=1` 的Suyama曲线对齐时，使用 `method=gpu`、`gpu_param=0`、`exponent=choose12`，
+还需相同N、sigma及B1。默认 `gpu_param=3` 是另一曲线族，单独选择choose12不会改变曲线族。
+此前GPU固定torsion=1的接线遗漏及宽位数归一化错误已修复；完整Q和ini/worker覆盖验证见
+[开发日志§45](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3089)。
+CUDA checkpoint版本升为5，拒绝可能保存错误状态的旧v4并重新计算。OpenCL构建未在本轮验证。
 
 ### 1.4 GPU 键
 

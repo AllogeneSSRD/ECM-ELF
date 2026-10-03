@@ -237,7 +237,7 @@ static void ecm_build_tier_list_param0(std::vector<uint32_t> &out) {
 // Checkpoint configuration
 #define CHECKPOINT_MAGIC 0x45555047  // EPUG -> "GPUE" in hex (GPU ECM)
 // 小端格式，magic number 0x45555047 在内存中表示为 "GPUE"，用于验证 checkpoint 文件的正确性
-#define CHECKPOINT_VERSION 4         // Incremented to invalidate old checkpoint files
+#define CHECKPOINT_VERSION 5         // v4 may contain incorrect noncanonical ladder state
 
 // support routine copied from  "CGBN/samples/utility/support.h"
 void cgbn_check(cgbn_error_report_t *report, const char *file=NULL, int32_t line=0) {
@@ -814,10 +814,12 @@ int process_results(mpz_t *factors, int *array_found,
  * v4 (2026-09-24): sigma is 64-bit and the curve parametrization is stored, because
  * the Suyama param0 path (gpu_param = 0) uses the same 53-bit sigma generator as the
  * CPU path.  v3 checkpoints are invalidated on purpose (header layout changed).
+ * v5 (2026-10-03): reject v4 states, which may already have diverged after
+ * noncanonical Montgomery products.  The 72-byte header layout is unchanged.
  */
 typedef struct {
   uint32_t magic;            // Magic number for validation
-  uint32_t version;          // Checkpoint format version (4)
+  uint32_t version;          // Checkpoint format version (5)
   uint64_t s_partial;        // Current bit progress
   uint64_t s_num_bits;       // Total bits to process
   int32_t batches_complete;  // Number of completed batches
