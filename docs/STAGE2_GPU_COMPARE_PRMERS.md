@@ -1,5 +1,8 @@
 # ECM GPU Stage 2：本仓库树形实验与 Prime95 Poly 方法对照
 
+> **2026-10-03 正确性更正：**旧 `--real` 的 baby 归一化漏乘 prefix，已修复并用独立 baby/F/已知因子门禁验证。
+> 此前该入口的计时保留为历史观测，不能证明正确 ECM 相对 Prime95 的速度；修复后的基线与 A/B 见开发日志 §50。
+
 **调查日期：2026-10-02；实验追记：2026-10-03**
 **范围：ECM Stage 2；主线是本仓库 CUDA 多项式树实验与 Prime95 Poly 方法。** PrMers Gaussian ECM BSGS 仅作补充对照；PrMers 的 P−1 V-trace 不属于椭圆曲线 Stage 2。
 **方法：**初始调查静态阅读本仓库、Prime95 与 PrMers 源码，以及 docs/DEV_GPUOWL_NTT_NOTES.md；后续实测与代码变更按 §28 逐轮追记，计时边界和验证以对应开发日志为准。Prime95 ECM 源文件实际位于 .refactor/p95v3106b01.source/ecm.cpp（不是 ecm/ 子目录），多项式乘法实现位于同版本 gwnum/polymult.c/.h。
@@ -484,6 +487,9 @@ NTT素数p不同于ECM模数N，保留规范word避免直接跨层复用未归�
 
 ### 28.14 驻留 carry batching 与主机准备空档（2026-10-03）
 
+**后续正确性更正**：开发日志§50发现旧 `--real` baby归一化漏prefix，当前已修复并新增独立输入门禁。
+本节及此前该入口数字仅为历史观测，不能再证明正确ECM相对Prime95的性能；新基线见28.15。
+
 已有 [carry合并:3190](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3190) 在G-root驻留基线上新增门禁26/0，
 完整G-root门禁重跑87/0；生产同binary ABBA保持所有系数、8241个中间carry verdict与GMP抽样，finishes8241→252。
 完整Stage2 **95.619385→95.186768s（少0.432617s/0.452%）**，增加raw pinned70MiB与host观察private峰值22.5MiB，
@@ -500,3 +506,25 @@ no-CUDA-API空档6.43/6.77s、最长约半秒，随后均为123.047MiB叶上传�
 相对既有Prime95 CPU1 90.460s仍慢5.225%，CPU未重跑；生产Stage1×12配置见DEV_ECM_INI:65。
 详细代码行号、测量范围及原始证据见
 [开发日志§49](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3648)。
+
+### 28.15 正确真实入口与段积批量求逆（2026-10-03）
+
+独立CPU/Python证明旧 `--real` baby逆扫描漏prefix，冻结因子59649589127497217/114713漏报；
+Q正确及新旧下降一致未覆盖该输入错误。已修复，并新增全baby/F独立门禁12/0；
+原完整188/0、scaled41/0、G-root87/0在修复后二进制重跑通过。旧入口的Prime95速度推论撤销。
+
+[GfinvBatch:393](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:393)
+对现有16点segment的段积做64段Montgomery批量求逆，保留一个窗口，组合非unit时逐段回退。
+这属于host正规化成本优化；底层仍精确modN系数、完整NTT/carry/reduction，未实现Prime95 NO_UNFFT/CIRCULAR或共享父谱。
+门禁16/0含实际坏组/fallback、尾部/跨窗口、独立已知因子及毒化拒绝；生产Q继续匹配Prime95的12*lcm。
+
+仅切换该优化的修复后生产ABBA：完整Stage2 **99.0950825→96.8483615s（−2.267%）**，
+逆元阶段 **3.8715→1.532s**；102100次invert减到1598组invert，新增GMP limb峰值140.570KiB。
+NVML显存峰值均5027MiB；进程观察private峰值均值反增103.5MB，局部缓存统计不代表整体RAM。
+完整根/叶/因子/Gamma/检查量/NTT工作量一致、bad0；约1Hz full GPU busy77.94%基本不变。
+GFINV_BATCH默认0，生产曲线无坏组，坏组密集性能尚未测量。
+
+相对既有CPU单核90.460s仍慢7.062%；CPU本轮未重跑、D/degree/检查不同，长期目标未达成。
+下一轮按正确输入重测leaf/fold host准备与CUDA外空档，再推进device衔接和共享父NTT。
+完整原代码行号、四轮计时、正确性与内存/采样解释见
+[开发日志§50](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3760)。

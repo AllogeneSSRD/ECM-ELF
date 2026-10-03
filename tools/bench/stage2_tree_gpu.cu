@@ -379,6 +379,127 @@ static void affine_x_gmp(mpz_t out, const mpz_t X, const mpz_t Z, const mpz_t N)
  *  45.0/42.4/43.4 us per point on the OLD scheme). */
 static const size_t S2G_GFINV_SEG = 16;
 
+// Batch inverses of the EXISTING segment products, not of a larger point segment.
+// Only a bounded 64-segment window is retained; no chunk-sized inverse array.
+static const bool g_gfinv_batch = [] {
+    const char *e=std::getenv("NTT_GFINV_BATCH"); return e && std::atoi(e)!=0;
+}();
+struct GfinvStats {
+    unsigned long long requests=0,cache_hits=0,groups=0,segments=0,group_attempts=0,
+        group_failures=0,individual_attempts=0,good=0,nonunits=0,scratch_peak_bytes=0;
+    double t_prepare=0;
+};
+static GfinvStats g_gfinv;
+struct GfinvBatch {
+    static constexpr size_t GROUP=64;
+    const std::vector<unsigned long long> &products;
+    size_t W,base=(size_t)-1,count=0;
+    mpz_srcptr N;
+    bool enabled,unit[GROUP]{};
+    mpz_t prefix[GROUP+1],inverse[GROUP],acc,value;
+    GfinvStats &stats;
+    GfinvBatch(const std::vector<unsigned long long> &p,size_t w,mpz_srcptr n,bool on,
+               GfinvStats &s=g_gfinv):products(p),W(w),N(n),enabled(on),stats(s) {
+        if(enabled) {
+            for(size_t j=0;j<=GROUP;++j)mpz_init(prefix[j]);
+            for(size_t j=0;j<GROUP;++j)mpz_init(inverse[j]);
+            mpz_inits(acc,value,nullptr);
+        }
+    }
+    GfinvBatch(const GfinvBatch &)=delete;
+    GfinvBatch &operator=(const GfinvBatch &)=delete;
+    ~GfinvBatch() {
+        if(enabled) {
+            for(size_t j=0;j<=GROUP;++j)mpz_clear(prefix[j]);
+            for(size_t j=0;j<GROUP;++j)mpz_clear(inverse[j]);
+            mpz_clears(acc,value,nullptr);
+        }
+    }
+    void prepare(size_t index) {
+        const double t0=now_s();base=index/GROUP*GROUP;
+        count=std::min(GROUP,products.size()/W-base);
+        ++stats.groups;stats.segments+=count;
+        mpz_set_ui(prefix[0],1);
+        for(size_t j=0;j<count;++j) {
+            words_to_mpz(value,products.data()+(base+j)*W,W);
+            mpz_mul(prefix[j+1],prefix[j],value);mpz_mod(prefix[j+1],prefix[j+1],N);
+        }
+        ++stats.group_attempts;
+        if(mpz_invert(acc,prefix[count],N)) {
+            // Product is a unit iff every factor is a unit, including composite N.
+            for(size_t j=count;j--;) {
+                mpz_mul(inverse[j],acc,prefix[j]);mpz_mod(inverse[j],inverse[j],N);
+                words_to_mpz(value,products.data()+(base+j)*W,W);
+                mpz_mul(acc,acc,value);mpz_mod(acc,acc,N);unit[j]=true;
+            }
+            stats.good+=count;
+        } else {
+            // Recover the EXACT original per-segment classification, not a group-wide failure.
+            ++stats.group_failures;
+            for(size_t j=0;j<count;++j) {
+                words_to_mpz(value,products.data()+(base+j)*W,W);
+                ++stats.individual_attempts;unit[j]=mpz_invert(inverse[j],value,N)!=0;
+                if(unit[j])++stats.good;else {++stats.nonunits;mpz_set_ui(inverse[j],0);}
+            }
+        }
+        unsigned long long bytes=sizeof(mp_limb_t)*(acc[0]._mp_alloc+value[0]._mp_alloc);
+        for(size_t j=0;j<=GROUP;++j)bytes+=sizeof(mp_limb_t)*prefix[j][0]._mp_alloc;
+        for(size_t j=0;j<GROUP;++j)bytes+=sizeof(mp_limb_t)*inverse[j][0]._mp_alloc;
+        stats.scratch_peak_bytes=std::max(stats.scratch_peak_bytes,bytes);
+        stats.t_prepare+=now_s()-t0;
+    }
+    bool get(mpz_t out,size_t index) {
+        if(!enabled || !W || products.size()%W || index>=products.size()/W) {
+            std::fprintf(stderr,"%s: FATAL: segment inverse cache index outside grid\n",NTT_PROBE_NAME);std::exit(3);
+        }
+        ++stats.requests;
+        if(base==(size_t)-1 || index<base || index>=base+count)prepare(index);else ++stats.cache_hits;
+        const size_t j=index-base;mpz_set(out,inverse[j]);
+        static bool poisoned=false;
+        const char *fault=std::getenv("NTT_GFINV_BATCH_TEST_BAD");
+        if(unit[j] && fault && std::atoi(fault) && !poisoned) {mpz_add_ui(out,out,1);poisoned=true;}
+        return unit[j];
+    }
+};
+
+static void gfinv_batch_fixture(const mpz_t actual,size_t actualW)
+{
+    unsigned long long cases=0,checks=0,nonunits=0;
+    GfinvStats stats;mpz_t N,value,want,got,test;mpz_inits(N,value,want,got,test,nullptr);
+    const size_t sizes[]={0,1,15,16,17,63,64,65,127,129};
+    for(int modulus=0;modulus<3;++modulus) {
+        if(!modulus)mpz_set(N,actual);else mpz_set_ui(N,modulus==1?15:35);
+        const size_t W=modulus?1:actualW;
+        for(size_t size:sizes)for(int pattern=0;pattern<3;++pattern) {
+            std::vector<unsigned long long> words(size*W),tmp;
+            for(size_t j=0;j<size;++j) {
+                mpz_set_ui(value,pattern?2+37*j:1);
+                if(pattern==2 && (j==0 || j==63 || j==64 || j+1==size))mpz_set_ui(value,0);
+                mpz_mod(value,value,N);mpz_to_words(tmp,W,value);
+                std::copy(tmp.begin(),tmp.end(),words.begin()+j*W);
+            }
+            GfinvBatch cache(words,W,N,true,stats);++cases;
+            for(size_t j=0;j<size;++j)for(int repeat=0;repeat<(j%17==0?2:1);++repeat) {
+                words_to_mpz(value,words.data()+j*W,W);
+                const bool expected=mpz_invert(want,value,N)!=0,unit=cache.get(got,j);++checks;
+                if(!expected)++nonunits;
+                if(unit!=expected || (unit && mpz_cmp(want,got)) || (!unit && mpz_sgn(got))) {
+                    std::fprintf(stderr,"%s: FATAL: segment inverse GMP mismatch modulus=%d pattern=%d size=%llu index=%llu\n",
+                        NTT_PROBE_NAME,modulus,pattern,(unsigned long long)size,(unsigned long long)j);std::exit(3);
+                }
+                if(unit) {
+                    mpz_mul(test,value,got);mpz_mod(test,test,N);
+                    if(mpz_cmp_ui(test,1)) {std::fprintf(stderr,"%s: FATAL: segment inverse identity mismatch\n",NTT_PROBE_NAME);std::exit(3);}
+                }
+            }
+        }
+    }
+    std::printf("gfinv_fixture: cases=%llu checks=%llu nonunits=%llu group_failures=%llu cache_hits=%llu scratch_peak_bytes=%llu bad=0\n",
+        cases,checks,nonunits,stats.group_failures,stats.cache_hits,stats.scratch_peak_bytes);
+    mpz_clears(N,value,want,got,test,nullptr);
+}
+
+
 /* dst = -x mod n, W words, for x < n.  Pure word arithmetic: no GMP objects at all, which is
    the whole point of the projective leaf.  x == 0 gives 0 (the old affine path's value for the
    identity). */
@@ -8640,6 +8761,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             ++R.giant_chain_chunks;
         }
         R.t_giant += now_s() - tgp;
+        GfinvBatch segment_inverse(gseg,W,L.N,g_gfinv_batch);
         /* the G trees of the batches that lie inside this point chunk */
         for (unsigned long long b = c0 / P; b < R.num_poly_g && b * P < c1; ++b) {
         const size_t lo = (size_t)(b * (unsigned long long)P);
@@ -8718,7 +8840,12 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 const double t1 = now_s();
                 words_to_mpz(pseg, &gseg[sidx * W], W);
                 const double t2 = now_s();
-                const bool clean = (mpz_invert(invp, pseg, L.N) != 0);
+                bool clean;
+                if(g_gfinv_batch)clean=segment_inverse.get(invp,sidx);
+                else {
+                    ++g_gfinv.requests;++g_gfinv.individual_attempts;
+                    clean=mpz_invert(invp,pseg,L.N)!=0;
+                }
                 const double t3 = now_s();
                 R.t_gin += t2 - t1;
                 R.t_ginv += t3 - t2;
@@ -9785,6 +9912,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if(scaled_test && std::atoi(scaled_test)!=0) scaled_descent_fixture(L);
     }
     if(!s4_on) stage2_fixture_begin=now_s();
+    const char *ginv_test=std::getenv("NTT_GFINV_BATCH_TEST");
+    if(ginv_test && std::atoi(ginv_test))gfinv_batch_fixture(L.N,nw);
     const char *gdevice_test=std::getenv("NTT_GROOT_DEVICE_TEST");
     if(gdevice_test && std::atoi(gdevice_test))groot_device_fixture(L);
     const char *groot_test = std::getenv("NTT_S4_GROOT_TEST");
@@ -9797,10 +9926,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         ntt_fuse_capacity_check(g_device);
     }
     const double stage2_fixture_seconds=now_s()-stage2_fixture_begin;
-    bool stage2_extra_fixtures=false;
+    const char *real_dump=std::getenv("NTT_REAL_F_DUMP");
+    bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
@@ -9895,11 +10025,13 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     }
                     continue;
                 }
-                /* Montgomery's trick, walking BACKWARDS: iprod is 1/(z_j..z_{seg-1}) at each step,
-                   so x_j = X_j * iprod, and then iprod *= z_j moves it one point back. */
+                /* At step j, iprod = 1/(z_0..z_j). Multiply by pv[j] = z_0..z_{j-1}
+                   to get 1/z_j, then update iprod for the shorter prefix. */
                 for (size_t j = seg; j-- > 0;) {
                     words_to_mpz(X, &bx[(lo + j) * nw], nw);
-                    mpz_mul(tmul, X, iprod);
+                    mpz_mul(tmul, iprod, pv[j]);
+                    mpz_mod(tmul, tmul, L.N);
+                    mpz_mul(tmul, X, tmul);
                     mpz_mod(xj, tmul, L.N);
                     mpz_mul(iprod, iprod, zv[j]);
                     mpz_mod(iprod, iprod, L.N);
@@ -9930,6 +10062,27 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         Ft = build_tree_flat(L, leaf, Fdeg, Fpad, fs, BC_FTREE);
         s4_oracle_drain(red);    /* include final F-tree validation in its phase timer */
         fdeg = Fdeg[1];
+        if(real_dump && *real_dump) {
+            if(baby_j.size()>4096) {std::fprintf(stderr,"%s: FATAL: real F dump limited to 4096 babies\n",NTT_PROBE_NAME);std::exit(3);}
+            std::vector<std::string> bx_hex,F_hex;
+            mpz_t x,z,q;mpz_inits(x,z,q,nullptr);
+            auto as_hex=[&](const mpz_t v) {
+                char *s=mpz_get_str(nullptr,16,v);std::string result=s;
+                void (*release)(void*,size_t)=nullptr;mp_get_memory_functions(nullptr,nullptr,&release);
+                release(s,result.size()+1);return result;
+            };
+            for(const auto &v:leaf) {
+                words_to_mpz(x,v.data(),nw);mpz_neg(x,x);mpz_mod(x,x,L.N);bx_hex.push_back(as_hex(x));
+            }
+            for(size_t i=0;i<=fdeg;++i) {words_to_mpz(x,Ft[1].data()+i*nw,nw);F_hex.push_back(as_hex(x));}
+            words_to_mpz(x,qx.data(),nw);words_to_mpz(z,qz.data(),nw);affine_x_gmp(q,x,z,L.N);
+            if(!write_f_dump(real_dump,L.N,a24,q,D,B1,B2,sigma,baby_j,bx_hex,F_hex,fdeg)) {
+                std::fprintf(stderr,"%s: FATAL: cannot write real F dump\n",NTT_PROBE_NAME);std::exit(3);
+            }
+            mpz_clears(x,z,q,nullptr);
+            std::printf("real_F_dump: babies=%llu coefficients=%llu path=%s\n",
+                (unsigned long long)bx_hex.size(),(unsigned long long)F_hex.size(),real_dump);
+        }
         std::printf("ftree_real: leaves=%llu padded=%llu muls=%llu ntt_calls=%llu "
                     "ntt_seconds=%.3f\n", (unsigned long long)fs.leaves,
                     (unsigned long long)fs.padded, (unsigned long long)fs.muls, L.ntt_calls,
@@ -9947,6 +10100,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     Stage2Params SP;
     SP.D = D; SP.B1 = B1; SP.B2 = B2; SP.baby_j = baby_j;
     for (int cv = 0; cv < curves; ++cv) {
+        g_gfinv={};
         if (run_s2) {
             const unsigned long long nb = L.ntt_calls;
             const double ns = L.ntt_seconds;
@@ -10001,6 +10155,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     "main includes GCD, naming and oracle drain; Stage1 excluded; init shared)\n",
                     cv+1,stage2_shape_seconds,stage2_init_seconds,el,stage2_init_seconds+el,
                     stage2_fixture_seconds,(int)(!stage2_extra_fixtures && !run_s2 && curves==1));
+        std::printf("real_batched_gfinv: enabled=%d requests=%llu cache_hits=%llu groups=%llu segments=%llu group_attempts=%llu group_failures=%llu individual_attempts=%llu good=%llu nonunits=%llu scratch_peak_bytes=%llu t_prepare=%.6f\n",
+            (int)g_gfinv_batch,g_gfinv.requests,g_gfinv.cache_hits,g_gfinv.groups,g_gfinv.segments,
+            g_gfinv.group_attempts,g_gfinv.group_failures,g_gfinv.individual_attempts,g_gfinv.good,
+            g_gfinv.nonunits,g_gfinv.scratch_peak_bytes,g_gfinv.t_prepare);
         if (BR.tail.unnamed_hits)
             std::printf("stage2_naming: named_hits=%llu unnamed_hits=%llu (the naming budget "
                         "stopped the culprit scan; hits and bad_factors are complete, the "

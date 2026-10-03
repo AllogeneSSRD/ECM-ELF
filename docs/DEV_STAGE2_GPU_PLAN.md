@@ -1,5 +1,8 @@
 # CUDA stage 2 实现规划（N ≤ 10 000 位，2026-09-30）
 
+> **2026-10-03 正确性更正：**旧 `--real` 的 baby 归一化漏乘 prefix，已修复并用独立 baby/F/已知因子门禁验证。
+> 此前该入口的计时保留为历史观测，不能证明正确 ECM 相对 Prime95 的速度；修复后的基线与 A/B 见开发日志 §50。
+
 > 前置文档：
 > `docs/DEV_GWNUM_FEASIBILITY.md`（gwnum 复用）、`docs/DEV_STAGE2_SELFHOST_FEASIBILITY.md`（自研 stage 2 / polymult 路线）、
 > `docs/ECM_Montgomery_STAGE1.md` §16（2026-09-24 的旧判定：CPU 视角下"移植 polymult 不可行、pairing 只在 B2/B1 ≲ 100 划算"）。
@@ -3848,6 +3851,9 @@ GROOT_DEVICE仍默认0；LEAF_STAGING/COMPACT_RAW在该路径默认1、各自0�
 
 ## 62. 2026-10-03：驻留 carry batch 门禁与 timeline 完成
 
+**后续正确性更正**：§63对应开发日志§50发现并修复 `--real` baby归一化漏prefix。
+本节及更早该入口的计时是历史观测，不再证明正确ECM相对Prime95的性能，修复后重新建立基线。
+
 新增resident carry gate26/0，完整G-root门禁重跑87/0；新增生产ABBA `-Target groot_carry`。
 同binary仅切换carry batch，所有8241个中间chunk仍检查，finishes8241→252。
 完整Stage2 **95.619385→95.186768s（−0.452%，少0.432617s）**；
@@ -3868,3 +3874,24 @@ GPU活动区间并集占比79.62/79.27%，no-CUDA-API idle6.43/6.77s；
 生产Stage1×12用 `method=gpu / gpu_param=0 / exponent=choose12`，探针对齐仍显式EXTRA=12。
 详细代码行号、四轮数据、内存与trace原始证据见
 [DEV_GPUOWL_NTT_NOTES§49](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3648)。
+
+## 63. 2026-10-03：独立真实入口更正与段积批量求逆
+
+独立Python与CPU reference确认旧 `--real` baby归一化逆扫描漏prefix，导致已知因子59649589127497217/114713漏报。
+修复 `Xj*(z0…zj)^−1` 为 `Xj*prefix[j]*(z0…zj)^−1`，撤销旧入口相对Prime95的正确ECM性能推论。
+新增真实入口baby/F全系数独立门禁12/0，含lcm/choose12、M4423/M5261位宽、多segment和冻结完整叶；
+原完整188/0、scaled41/0、G-root87/0重新通过同一修复后二进制。
+
+段积仍16点，host缓存一次64段；每组一次组合invert恢复全部逆元，非unit组逐段回退，窗口有界。
+新门禁16/0覆盖坏组、跨窗口/末段、实际fallback、完整根/叶/returned系数及毒化拒绝。
+新增 `-Target gfinv_batch` 同binary ABBA，保持Stage1 EXTRA12/实际Prime95 Q/G-root/scaled/window及全部检查。
+修复后完整 **99.0950825→96.8483615s（−2.267%）**；main84.4201→82.2245s，
+逆元阶段3.8715→1.532s，102100次invert变1598组invert，新增limb峰值140.570KiB。
+NVML峰值均5027MiB、进程观察private峰值均值7938→8041.5MB；GPU full busy约77.94%基本不变。
+本轮确认求逆与墙钟收益，没有证明RAM或整体idle下降；GFINV_BATCH保留默认0。
+
+正确候选比既有CPU1 full90.460s仍慢6.3884s/7.062%，CPU未重跑且D/degree/检查不同；长期目标未达成。
+下一轮在正确基线上拆分leaf准备与fold主机构造/拷贝，再重采CUDA外gap，推进device leaf/fold及共享父NTT；
+继续跟踪进程RAM，而非只比较局部payload。生产Stage1×12仍用ini `exponent=choose12`，探针显式EXTRA12。
+全部源文件行号、正确性证据、计时/内存边界与四轮原始数据见
+[DEV_GPUOWL_NTT_NOTES§50](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3760)。

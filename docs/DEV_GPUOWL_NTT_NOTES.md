@@ -1,5 +1,8 @@
 # GPUOWL 整数 NTT/FFT 实现说明
 
+> **2026-10-03 正确性更正：**旧 `--real` 的 baby 归一化漏乘 prefix，已修复并用独立 baby/F/已知因子门禁验证。
+> 此前该入口的计时保留为历史观测，不能证明正确 ECM 相对 Prime95 的速度；修复后的基线与 A/B 见开发日志 §50。
+
 本文是 GPUOWL（位于 `.refactor/gpuowl`）GPU 算术路径的开发参考，重点说明
 GF31/GF61 整数 NTT、共享 FFT 内核、进位重构，以及 CUDA 移植时必须保持的语义。
 它不是用户使用手册；构建和运行方法见项目根目录的 `README.md`。
@@ -3647,6 +3650,10 @@ fold仍17.6245s，候选device衔接应先明确H、G-root、quotient/low remain
 
 ## 49. 驻留基线 carry batching：小幅收益与主机准备空档（2026-10-03）
 
+**正确性更正（本节之后发现，见§50）**：本节及此前 `--real` 性能入口的baby批量归一化漏乘prefix。
+完整Q相同、局部GMP乘法正确、新旧叶指纹相同，都不足以证明真实ECM输入正确。
+这些数字保留为历史时间/内存观测，不作为正确ECM相对Prime95的性能结论；§50从修复后基线重新测量。
+
 ### 49.1 实现范围、门禁与比较合同
 
 本轮修改测量/门禁脚本，未改变CUDA树源、共享NTT源或二进制。使用§48同一exe，SHA256
@@ -3749,3 +3756,125 @@ GPU copy区间并集只有 **0.538556 /0.581198s**；大量小D2H的correlated A
 ini配置含义已经在§45修复并核对：`method=gpu`、`gpu_param=0`、`exponent=choose12` 实现生产CUDA Montgomery Stage1
 的 `12*lcm(1..B1)`；需相同N/sigma/B1才对齐Prime95。见 [DEV_ECM_INI:65](D:/code/MPA-OpenCl/docs/DEV_ECM_INI.md:65)。
 Stage2探针仍用显式 `NTT_STAGE1_EXTRA=12`，两者入口不同，不因ini已有键而混淆测量来源。
+
+## 50. segment 批量求逆与真实入口 baby 归一化修复（2026-10-03）
+
+### 50.1 独立参考发现旧入口漏因子，先修复正确性
+
+对§49下一步候选建立门禁时，N=2^128+1/sigma26/B1=1000/B2=1000000/D210的
+`--real` 新旧路径都返回0 hits/空因子；保留的§49 exe（SHA23357AFC…BD5369）也复现。
+CPU tree reference返回 **59649589127497217 /114713**，独立Python从Suyama、lcm Stage1、全部baby/giant点
+直接计算24个乘积，得到同一因子，完整叶hash **7706779146789021619**。
+GPU完整Q `294b8e0c5e3f95b6d6c218e669c557f9` 正确；禁用S4走CPU poly仍失败，batched/slow下降互比却0 mismatches，
+说明局部乘法/下降互比没有覆盖真实输入错误。
+证据：[独立值与GCD](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/factor_probe/independent_values.json)、
+[旧exe复现](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/factor_probe/old_resident.log)、
+[CPU参考](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/factor_probe/cpu.log)、
+[CPU poly复现](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/factor_probe/cpu_poly.log)。
+
+根因是 [baby逆向归一化:10028](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10028)：
+初始iprod=(z0…z_last)^−1，扫描到j时是 **(z0…zj)^−1**，需要再乘 `pv[j]=z0…z_(j−1)` 才得到zj^−1。
+旧代码直接用Xj*iprod；原注释也误称iprod为suffix逆元。引入提交为 `2d4375b`，
+原位置可在 [§49保留源码](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_ab_20261003/measured/stage2_tree_gpu.cu:9898) 中检查。
+现恢复正确prefix因子，再更新iprod*=zj；非unit段原逐点fallback、因子记录不变。
+这是Stage2探针 `--real` 的baby转换；生产CGBN Stage1及ini choose12接线未改。
+
+**因此撤销此前 `--real` 相对Prime95的正确ECM性能推论**：Q一致只能证明Stage1点正确，
+旧计时/传输/内存数据仍是该二进制的实际观测，但F并非真实baby多项式。
+`--check-F` 路径从CPU dump输入并独立核对baby/F，不经过此错误分支；旧188/0不能代替真实入口门禁。
+旧scaled/G-root新旧匹配也只验证了同一错误输入上的等价性。§47–49历史行号对应各节保留的测量源码快照，
+本节当前源码行号用于新实现。
+
+### 50.2 真实入口的独立全系数门禁
+
+新增 [test_stage2_real_baby.py](D:/code/MPA-OpenCl/tools/test/test_stage2_real_baby.py:1)。
+Python独立计算Q、每个baby affine x、完整F；lcm形状还与原CPU tree dump全部字段比较。
+新增 [NTT_REAL_F_DUMP:10065](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10065) 仅门禁时导出真实入口生成的baby与F，
+限4096 baby，置full timer clean=0；常规运行无导出或额外分配。
+覆盖冻结向量、D2310、P2880多256点segment、choose12、M4423生产位宽与M5261；两边segment batching0/1，共 **12/0**。
+冻结因子/114713和独立完整叶hash同时通过；不是仅比较0 hits的新旧路径。
+证据：[独立入口summary](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/real_baby_gate/summary.json)。
+
+### 50.3 有界 segment 逆元缓存
+
+原segment grid保持16点：改变的是段积的host求逆方法，不增加GPU segment链长，不改leaf形式或分段边界。
+[NTT_GFINV_BATCH:384](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:384) 为opt-in，默认0。
+[GfinvBatch:393](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:393) 每个giant chunk只保留一个64段窗口：
+prefix65个、inverse64个、两个GMP临时对象；沿用已有gseg，避免为整个chunk新增逆元矩阵。
+对unit组先计算prefix积、只invert组合积一次，再逆向恢复每段逆元；重复查询同窗口直接复用。
+组合积unit当且仅当每个段积unit，对合数N亦成立。不可逆组恢复原来的逐段mpz_invert，
+精确区分好/坏段，不能把组中所有段都判坏。坏段原affine/degenerate记录保留。
+[使用位置:8764](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8764) 位于chunk的G-tree batch循环外，
+跨batch片段查询共享同一逆元；first_touch/Gamma统计和最终unscale不变。缓存随chunk释放。
+scratch统计为实际GMP limb分配容量，包含保留窗口高水位，不等于进程RAM或VRAM。
+
+[gfinv_batch_fixture:465](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:465) 每次90组合、4761次查询：
+actualN与15/35，长度0/1/15/16/17/63/64/65/127/129，unit/混合/零及边界坏值，重复访问；
+每个结果与独立逐项mpz_invert及乘回1核对。
+[test_stage2_gfinv_batch.py](D:/code/MPA-OpenCl/tools/test/test_stage2_gfinv_batch.py:1) 重新通过 **16/0**：
+三个实际位宽fixture、六个实际Stage2配对与逆元毒化失败；比较完整根/叶/returned系数、projective/Gamma、因子/命中集合。
+N15/35实际非unit段与affine fallback必须非0，冻结用例必须命中独立已知因子；没有把回退/合并空路径当作通过。
+证据：[修复后gate](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/fixed_gate/summary.json)。
+
+### 50.4 修复后的同二进制生产 ABBA
+
+本轮重新构建 sm89 二进制 SHA256 **5209CD6AE67A0F4D34DC7F3546FE4CDD99386DC6596EC082D7794D2816444F84**；
+原完整门禁 **188/0**、scaled **41/0**、G-root **87/0**，以及本节独立入口12/0、批量求逆16/0均在该二进制通过。
+保留 [构建日志](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_fixed_build_20261003.log)、
+[完整门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_full_gate_20261003.log)、
+[scaled summary](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/scaled_gate/summary.json)、
+[G-root summary](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/groot_gate/summary.json)。
+
+新增 [bench_stage2_reduce_ab.ps1:54](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:54)
+`-Target gfinv_batch`，仅切换GFINV_BATCH；两边均已修复baby prefix。
+GPU1 RTX4060 Laptop；M4423/sigma26/B1=1000/EXTRA12，actual B2=2011326186870/D1231230/P115200，
+batch64MiB/arena6300MiB；G-root/scaled/window/chunk-output=1，leaf staging/compact raw=1，carry batch=0，
+GMP sample96/every8，oracle async=0；未使用profile或额外门禁导出。
+Q匹配实际Prime95保存点，hash **33cc6c63cec26c39900a7ed4ff551e2c2e0a533422905b538ec4f4aa809f092f**。
+
+四轮顺序individual/batch/batch/individual，完整Stage2分别为
+**99.446127 /96.872359 /96.824364 /98.744038s**；主循环分别
+**84.812623 /82.260507 /82.188509 /84.027544s**。均exit0、full clean1、overflow0。
+完整均值 **99.0950825→96.8483615s（少2.246721s，−2.267%）**；
+main **84.4200835→82.224508s（少2.1955755s，−2.601%）**；init **14.675000→14.623853s**。
+full包含baby/F-tree和mandatory selftests、main的GCD/naming/oracle drain，排除Stage1；
+整个进程wall **108.4375→106.1985s**，其余为启动/Stage1等，不混用这三个边界。
+
+102100次查询保持相同segment grid与first-touch覆盖；候选 **1598 groups/1598组合求逆、100502 cache hits**，
+实际段102100、good102100、nonunits0、group failures0、individual attempts0；控制individual attempts102100。
+候选prefix/恢复总准备 **1.436888s**，不是仅一次invert的成本。
+gleaves逆元阶段 **3.8715→1.5320s（−60.429%）**；输入转换0.0105→0.007s、输出0.6675→0.6635s；
+后者包含get/copy等，t_prepare是其子集，不把两者相加。
+Gtrees **27.9375→27.9555s**、fold **18.4825→18.4775s**、descent **8.7525→8.8540s**，
+t_reduce **9.8035→9.8080s**；主收益与减少host求逆相符，未证明NTT本身变快。
+
+四轮G-root根hash **105d6128bbf522db**、完整叶hash **9100612758855566221** 一致；
+叶115200/8064000words、giant1633592、Gamma1633592、segment102100、affine fallback0。
+403 launches/1979251 poly_muls/40218760 reduced coeffs、66139 GMP checks/2400 selftests/4 full checks均相同且bad0；
+carry checked/finishes8241，两边没有省略检查。H2D/D2H rounded主账 **11.37/5.46GiB**均未变。
+合数坏组回退正确性由§50.3实际门禁覆盖；本生产曲线没有坏组，不证明坏组密集时仍获益。
+
+### 50.5 内存、GPU占用与下一轮边界
+
+新增窗口实际GMP limb容量峰值 **143944bytes（140.570KiB）**；不含对象本体/allocator开销，不能代替进程RAM。
+NTT/Fuse完整缓存payload **3656064320bytes**、G-root raw **225792000bytes**、raw pinned **129025120bytes**均未变。
+约1Hz GPU1 NVML采样整卡显存峰值均 **5027MiB**；进程观察private峰值控制7906/7970MB、候选8043/8040MB，
+均值 **7938→8041.5MB（+103.5MB）**。这远大于新增limb缓存，当前证据不能将差异全部归于缓存，
+也没有支持进程RAM下降；须进一步测allocator/host对象高水位，而非用局部143944byte替代整体测量。
+full GPU busy均值 **77.938→77.927%**；main **77.560→78.202%**，low≤5%的main采样19/166→15/163。
+相位边界由wall/end推算，约1Hz、不是SM occupancy或精确idle时间；没有证明整体idle显著消失。
+
+原始 [results CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_ab_20261003/results.csv)、
+[完整分析](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_ab_20261003/summary.json)、
+[GPU1采样分析](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_ab_20261003/gpu1_summary.json)、
+[runner/源文件/测量exe快照](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_ab_20261003/measured/stage2_tree_gpu.exe)
+保留供复核，ignored build目录证据未提交Git；tracked门禁和A/B脚本可复现。
+
+相对既有Prime95 CPU单核full **90.460s**，修复后候选仍慢 **6.3883615s/7.062%**。
+CPU本轮未重跑，其D1531530/degree138240、内存/检查与GPU不同；不能据本轮宣称达到长期目标。
+保留GFINV_BATCH默认0，优化组合通过明确开关启用；坏组密集性能和RAM高水位待测。
+下一轮先拆分 [bleaf准备:8770](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8770) 与
+[fold构造:8954](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8954) 的host/GMP/拷贝计时，
+在修复后基线重采Nsight窗口并关联CUDA外空档，再推进device leaf/fold与共享父NTT。
+正确baby入口另有新增prefix乘法成本，后续可研究设备批量归一化，但必须继续比较独立全baby/F和冻结因子；
+不可通过恢复错误输入换取旧计时。
