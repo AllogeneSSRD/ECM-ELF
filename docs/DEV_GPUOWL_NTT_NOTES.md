@@ -1535,8 +1535,8 @@ counter fault 必败与三种路径的完整返回 words signature 一致。最�
 源码定位（本轮工作树）：
 
 - [ntt_poly_probe.cu:527](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:527)：原 carry 诊断核的
-  atomicAdd/atomicMax；[同文件:3395](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3395)：非延后调用重置
-  counters；[同文件:3495](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3495)：统一读回/拒绝错误。
+  atomicAdd/atomicMax；[同文件:3517](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3517)：非延后调用重置
+  counters；[同文件:3617](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3617)：统一读回/拒绝错误。
 - [stage2_tree_gpu.cu:2940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2957)：累计组 finish 与 checked
   计数；[同文件:2969](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2987)：在 tail/非延后/m 变化前
   完成检查；[同文件:2994](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3012)：输入 slot 选择与 H2D
@@ -1625,7 +1625,7 @@ GPU Load 仍是采样忙碌程度，无法代替 SM occupancy，device 身份仍
 `dA/dB`，才开始 forward。临时 packed 输入与 arena scratch 同时占据设备内存；在 N=2^27 / batch=1
 时，两份临时 packed 输入合计 **2 GiB**（不计 raw/output/arena）。
 源码入口：[stage2_tree_gpu.cu:3027](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3044) 分配临时
-packed buffers，[ntt_poly_probe.cu:3366](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3366) 复制 A/B。
+packed buffers，[ntt_poly_probe.cu:3488](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3488) 复制 A/B。
 
 建议下一次实现可切换的 **pack directly into arena**：先在 NTT engine 完成 shape plan 与 arena lookup，
 再回调 packer 写入最终 dA/dB，随后运行原 passes/carry/reduction。不能在 lookup 之前缓存指针并假设它
@@ -1685,9 +1685,9 @@ direct+blocking transfers，核对全体返回 word 的指纹、已知因子/hit
 
 源码定位（本轮工作树）：
 
-- [ntt_poly_probe.cu:3165](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3165)：输入回调契约。
-- [同文件:3341](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3341)：可选 input 参数，旧调用者默认不受影响。
-- [同文件:3376](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3376)：最终 scratch lookup 后调用回调，替代两次 D2D。
+- [ntt_poly_probe.cu:3287](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3287)：输入回调契约。
+- [同文件:3463](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3463)：可选 input 参数，旧调用者默认不受影响。
+- [同文件:3498](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3498)：最终 scratch lookup 后调用回调，替代两次 D2D。
 - [stage2_tree_gpu.cu:2811](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2828)：plan 核对、完整 zero 和原 pack kernel。
 - [同文件:3061](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3079)：direct 不分配临时 packed pool。
 - [同文件:3089](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3107)：S4 接入，统计实际/避免的 input D2D。
@@ -2114,8 +2114,8 @@ NVML/WDDM 的采样显存峰值也不等同 arena 的已分配字节，不能拿
 之后再选 Nsight Compute 的热点 kernel，剖析时间不参与无 profiler 的 ABBA。
 已确认本机工具为 Systems 2026.1.3、Compute 2026.2.1。
 
-显存候选是 [NttArena::BigEntry:1520](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1520) /
-[ntt_arena_bufs:1649](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1649)：
+显存候选是 [NttArena::BigEntry:1644](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1644) /
+[ntt_arena_bufs:1773](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1773)：
 目前 A/B/Q 按 `(N, nbatch)` 保留多组，本质是临时 workspace；可探索跨形状按容量复用。
 先分别记录 big buffers、twiddle tables、small buffers 和外部 pools 的预算，审计 oracle/pack 的跨 stream 读者，
 再用事件保证旧数据消费完成；dRes 的累积账本和真正驻留的 spectrum 不能一并覆盖。
@@ -2264,8 +2264,8 @@ logger 已在 runner 结束的 finally 中停止。按既有 wall timers 近似�
   四轮采样显存峰值都 **5989 MiB**；NVML/WDDM residency 不等于 arena 分配账本。
 
 下一轮优先审计并接入 **按容量复用 NTT A/B/Q workspace**：
-[BigEntry](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1520)、
-[ntt_arena_bufs](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1649)。
+[BigEntry](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1644)、
+[ntt_arena_bufs](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1773)。
 目前按 `(N,nbatch)` 保留并驱逐大缓冲；较小 shape 可以复用容量更大的三块 scratch。
 独立记录 workspace、twiddle cache、small buffers、外部 pools 的当前与峰值预算、增长和驱逐次数。
 `SmallEntry::dRes` 需继续承载按 shape 的 carry 累积，不能随意共用或提前清零。
@@ -2286,29 +2286,29 @@ root-only 目前仍复制原始 bleaf 后再释放；可另设候选移动叶输
 基于 `fff4edf`。之前 A/B/Q 三块 scratch 按 `(N,nbatch)` 缓存，不同 shape 的容量不能互用。
 本轮保留 exact Kronecker NTT、carry 和通用 mod-N 算法，改变 scratch 的缓存方式：
 
-- [NttArena 工作区与计数](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1533)：
+- [NttArena 工作区与计数](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1657)：
   `NTT_ARENA_WORKSPACE_POOL=1` 默认开启；`=0` 保留 keyed 对照。
   工作区记录总 `words=3*capacity`，每块容量不小于本次 `N*nbatch` 即复用，与当前 shape 无关。
-- [容量查询与增长](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1729)：
+- [容量查询与增长](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1853)：
   A/B/Q 一组共享；dOut/dRes 继续按 `(N,nbatch)` 保留，尤其 dRes 不能混用 deferred carry 累积。
   使用容量与实际 shape 分开，传给 kernel 的 N/nbatch 仍是当前请求。
-- [释放与增长顺序](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1576)：
+- [释放与增长顺序](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1700)：
   先释放旧 triple，再分配新 triple，避免同时保留两组三块大缓冲。
   `cudaFree` 等待旧 default-stream 消费者；分配失败释放已成功的部分，预算只在三块全部成功后入账。
   容量预算拒绝/设备分配失败仍走既有 owned per-call fallback。
-- [别名范围检查](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1589)、
-  [device 输入保护](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3522)：
+- [别名范围检查](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1713)、
+  [device 输入保护](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3644)：
   外部输入若指向 arena 自己拥有的 allocation，查询/驱逐前先把两份输入各自保存到 host。
   这样交叉 A/B、workspace 增长和 keyed cache 驱逐都不会破坏输入。范围不足返回错误。
   生产 S4 的 input callback 与 S5 的独立输入不是这些别名；是否发生额外往返由 aliases/alias_bytes 实测。
-- [host 导出接口](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3378)、
-  [device 导出接口](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3537)：
+- [host 导出接口](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3500)、
+  [device 导出接口](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3659)：
   请求 borrowed `digits_out` 时禁止共享 scratch，继续 keyed lifetime。
   若 arena 无法提供这类缓存，返回 3/nullptr，避免旧 fallback 返回已释放的 device 指针。
   导出缓冲仍遵循原有可被后续缓存操作覆盖/驱逐的 borrowed 契约，不是永久拥有的结果。
 
 本轮还修复 arena 拒绝路径的 carry 记账：
-[实际执行标志](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3595) `NttMulStats::carry_deferred`
+[实际执行标志](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3717) `NttMulStats::carry_deferred`
 只在 dRes 确实留给 arena 时为真；
 [上层调用](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3146) 按实际标志安排 finish。
 旧上层按请求的 defer_this 记账，owned fallback 已同步检查却仍可能安排无效的延后 finish。
@@ -2316,11 +2316,11 @@ root-only 目前仍复制原始 bleaf 后再释放；可另设候选移动叶输
 
 ### 40.2 显存统计口径
 
-[update_peaks / print_workspace_stats](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1609)
+[update_peaks / print_workspace_stats](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1733)
 分别统计 A/B/Q、small、实际 cached pass/radix table payload，输出当前和峰值；owned 是这三类之和。
 **这只是部分 payload census，不是全部 NttArena 分配，也不是总 VRAM。**
-[FuseCtx](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1166) 的 tblF/tblI/scr/scr2
-由 [fuse_init](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1239) 分配并持有，当前三类 ledger 未包含它们。
+[FuseCtx](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1291) 的 tblF/tblI/scr/scr2
+由 [fuse_init](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1365) 分配并持有，当前三类 ledger 未包含它们。
 特别是 scrWords=N/2+64，即使 pass tables 缓存或被驱逐，scr 仍保留到整个 FuseCtx release。
 旧 `arena.mb()` 的保守预算也没有逐项精确区分这些对象及每条 entry 管理估算，不能与实际分配等同。
 `owned_peak_bytes` 是各次分配后同时存在的三类之和的最大值，不能把各类独立峰值简单相加。
@@ -2335,7 +2335,7 @@ compile 277.3 s、link 3.3 s；[构建日志](D:/code/MPA-OpenCl/build_cuda_cmak
 [完整门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_workspace_gate_20261003.log)：
 `tools/test/test_stage2_tree_gpu.ps1 -InProcessChecks`，**116 passed / 0 failed**。
 
-[独立 fixture](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3743)：**44 checks / 70 words / bad=0**。
+[独立 fixture](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3865)：**44 checks / 70 words / bad=0**。
 验证跨 N/batch 的同容量复用、不同 shape 的 dRes poison 隔离、三处分配失败回滚/重试、
 预算拒绝、重复 release、借用 digits 导出、交叉输入别名及缓存驱逐。
 实际卷积使用独立 GMP schoolbook 构造每一输出，再比较 GPU 投影。
@@ -2416,10 +2416,10 @@ Prime95 公平单执行线程基线尚未建立，长期目标未完成。
 ### 40.5 下一候选：只归约、回传消费者需要的系数窗口
 
 生产等待期间继续静态审计，发现一个应先处理的旧 ownership 问题：
-[ntt_arena_fuse 预算拒绝](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1930)
+[ntt_arena_fuse 预算拒绝](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:2054)
 在 arena 非空时也会 fuse_init 一个未进入 ar->fuses 的临时 FuseCtx；
-[batch host 收尾](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3478)、
-[batch device 收尾](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3679)
+[batch host 收尾](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3600)、
+[batch device 收尾](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3801)
 仅以 `!arena` 决定 release，因此这个分支缺少临时表释放。
 这是控制流审计发现，尚未测量长时间 fallback 的泄漏量或 OOM；本轮生产 overflow=0，不涉及此分支。
 下一轮先明确 FuseCtx 的实际 owner、补齐临时失败/提前退出 release 与全部表/scratch 账本，
@@ -2438,7 +2438,7 @@ Prime95 公平单执行线程基线尚未建立，长期目标未完成。
   每轮 ag 与 gn 只需要 `[0,nxt)`；
   [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6828)
   qrev 只要 `[0,k)`，q·B 只要余数的 `[0,db)`。处理每 slice 的紧凑 stride，不能只对整批 resize。
-- [NttReduceHook](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3297)、
+- [NttReduceHook](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3419)、
   [s4_reduce_hook](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2177)、
   [s4_reduce_kernel](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1682)
   当前使用 out_slots 同时表示读槽范围与输出 stride，必须拆开。
@@ -2469,15 +2469,15 @@ Prime95 单执行线程、同模数/边界和完整 Stage2 wall 基线仍是长�
 instrumented red binary SHA256=`F26F4FE34642EB2D977B6849CF402DB33F9B8B44EC846978F36A95E1B4D815C6`。
 早期夹具调用漏传必需 hook 参数导致一次编译失败，补 nullptr 后才进行上述 red 运行。
 
-[FuseCallGuard](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1345) 跟随实际 `arena_borrowed`，
+[FuseCallGuard](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1465) 跟随实际 `arena_borrowed`，
 而不是 arena 指针是否非空。host batch、device batch、single host 三个入口都在 shape planning 前建立 guard，
 正常返回和错误返回均释放临时 plan，缓存借用保持有效；arena release 仍释放其拥有的表。
-[ntt_arena_fuse](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1975) 只给返回的缓存副本标记 borrowed。
+[ntt_arena_fuse](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:2096) 只给返回的缓存副本标记 borrowed。
 拒绝路径还 pin arena 的最大 tile shared-memory attribute，防止小临时 plan 降低旧缓存 kernel 的许可上限。
 
 ### 41.2 scratch 容量来自实际读写范围
 
-[fuse_init](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1266)
+[fuse_init](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1392)
 新增 `NTT_FUSE_COMPACT_SCRATCH=1` 默认候选，`=0` 保留 N/2+64 coarse / 64 radix words 对照。
 compact 分别遍历 forward 和 inverse 的 pass 序列：
 forward `S=N>>(L+M)`；inverse `S=1<<(k-L-M)`，L 随 pass 更新。
@@ -2488,20 +2488,20 @@ cached pass-table 的构造、驱逐后 fallback 重建和实际 transform 算�
 
 ### 41.3 统计与正确性夹具
 
-[FuseBaseStats](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1197)
+[FuseBaseStats](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1323)
 记录 tblF/tblI/scr/scr2 的成功分配/释放、live/peak 请求字节，包含临时 plan。
 `ntt_workspace_stats` 保留 §40 的三类 owned 字段，另加 fuse_base/full 当前与峰值。
 full 是完整 arena 缓存的实际 device payload：A/B/Q + small + cached pass tables + mandatory FuseCtx buffers；
 不含 entry 管理开销、外部 Stage2 pools、乘法 fallback 临时大缓冲、CUDA/WDDM 额外开销。
 `g_fuse_base` 的峰值范围与 arena full 不同，不可相加；暂未统一所有外部 pool 的全过程账本。
 
-[lifetime fixture](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3920)
+[lifetime fixture](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:4042)
 扩展为 14 调用，覆盖 host batch、single host、导出拒绝、device input callback 提前返回、
 缓存 plan 借用与重复调用后释放。宽容量 **52/52**，紧容量 **26/26**，两者 bad=0、leaked_bytes=0。
 [宽 smoke](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_green_0.log)、
 [紧 smoke](D:/code/MPA-OpenCl/build_cuda_cmake/_fuse_green_1.log)。
 
-[capacity fixture](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3973)
+[capacity fixture](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:4095)
 使用 GMP 生成三项稀疏输入的完整 DFT，验证 DIF bit-reversed 频谱及 inverse 还原；
 N=128/32768、t=4/8、M=1..4、宽/紧容量，以及 uncached/cached/evicted 三种状态。
 **72 cases / 1585152 words / bad=0**，包括纯 tile 的零 scratch。
@@ -2716,9 +2716,9 @@ stage1=0.006 s、stage2 init=0.009 s、stage2 complete=0.048 s、GCD=0.000 s。
 
 继 §42 删除重复整批读回，本轮对 `first,count` 定义紧凑输出：输入、NTT shape、完整 carry/exactness
 仍按完整乘积执行，只有 mod-N 归约和输出 D2H 按消费者所需范围执行。
-[NttReduceHook](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3364)
+[NttReduceHook](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3486)
 将源槽总数 out_slots 与输出 stride=count 分开；内部 engine chunk 的输出指针按 count 推进。
-[范围检查](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3387)
+[范围检查](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3509)
 使用 first≤out_slots、count≤out_slots−first，避免范围加法溢出；默认 count=~0 表示完整输出。
 count=0 仍调用 hook，允许输出指针为空，不能省去源诊断。
 
@@ -3221,8 +3221,8 @@ CIRCULAR变换或NO_UNFFT层间保留，因此这是scaled算法的第一阶段�
 本实现是把多字系数打包为Kronecker整数，在64位NTT素数p下卷积，然后carry、重组slot并模N归约。
 NTT的p与ECM的N不同，上一层未归约的频域乘积不能直接当下一层规范modN输入。
 层间device驻留应保留归约后的word系数，并在device重打包；同一层两个孩子共用父forward spectrum是另一项可实现的复用。
-原NTT入口 [ntt_poly_mul_batch_dev:3581](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3581)
-及 [ntt_run_passes:3139](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3139)
+原NTT入口 [ntt_poly_mul_batch_dev:3703](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3703)
+及 [ntt_run_passes:3261](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3261)
 目前仍按每个输出slice执行两份forward，再进行pointwise/inverse/carry。
 
 ### 46.2 独立正确性证据
@@ -3640,8 +3640,8 @@ CPU本轮未重跑、D/degree/内存/检查差异同47.4，长期目标仍未完
 必要时Nsight Systems2026区分真正chunk gap与host等待GPU工作；不能将59.70s readback计时全当可删除成本。
 本轮未实现first-level原地压缩、scaled共享父FFT或device fold。
 
-共享父FFT的代码入口已核查：[ntt_run_passes:3139](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3139)
-当前每调用forward A/B；[ntt_inverse_fused:1480](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1480)
+共享父FFT的代码入口已核查：[ntt_run_passes:3261](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3261)
+当前每调用forward A/B；[ntt_inverse_fused:1602](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1602)
 写A、B为const谱，carry使用A/Q。可考虑把共同父输入置于B，仅重新forward两份sibling A，
 但须证明shape/nbatch/slot/bpw一致、arena generation/eviction与input hook不会改B，并处理非平衡/跨chunk/回退。
 [descent_scaled:6940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6991) 目前仍将两个孩子作为独立pair。
@@ -4223,3 +4223,35 @@ carry finishes8241→252（max_group222），诊断每slice16 B，覆盖slice189
 [步骤/公式/原文件行号 §35](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:1548)、[8次量化](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_ab_20261004/quantitative.json)、[trace核对](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/profile_comparison.json)、[26门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_gate_20261004/summary.json)、[CPU对照](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/accept_all.log)、[生产24验收](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/production_accept/summary.json)。ignored证据不随Git提交。
 
 下一候选为固定F前向NTT频谱复用，尚未实现。Prime95ecm.cpp:9282/9287与9295/9302预处理F/reciprocal；隐藏ECMPolyCompress=-1/-2才要求PRE_FFT。M4423 q·F配置bpw19/slot_words467/N_NTT134217728，单cache1 GiB、可省13次F前向变换；收益须扣首次D2D/分配。先只缓存F，并以独立曲线owner、精确shape/version键、free-VRAM及未来workspace增长预算、逐字重算和污染门禁保证正确性。finv首次P+1/后续P前缀不同，不能按相同FFT长度盲目复用。真实多曲线和公平Prime95对照仍待完成，长期优化目标未完成。
+
+## 62. 当前瓶颈与候选排序复核（2026-10-04）
+
+只读复算a178184所用候选Systems SQLite，排除Stage1 chain后近似Stage2 kernel累计61.2954 s：NTT变换30.2007（49.27%），点生成22.8173（37.23%），carry3.7350、模N归约1.9438、pack/scatter1.8928 s；memset另1.4887 s。全trace GPU拷贝约.818 s，host同步Memcpy22.556 s主要包含等待。现有M4423不应继续以旧一般归约54 s或纯PCIe瓶颈为优化排序依据。约10.20 s事件间隙混合CPU准备、提交和依赖，不能全算可删除CPU工作；NTT内部缺有效NCU计数器，不判定纯带宽/算力。
+
+新候选：s2g_xadd的8次Mont可研究通过(X±Z)形式降为6次；ladder每bit13→11。标准公式有共同4倍尺度，可用平方前modular-half保持原坐标尺度；需要完整alias/退化/Γ数值门禁。点kernel池22.82 s，10%改善的排序模型约2.28 s，未实测。平方专用、CIOS/warp协作放后续。D自动模型仍使用RLOOP265.756/RTREE50.537/RGIANT50.655/RGLUE30.339/RSETUP25旧系数，应按当前路径、NTT2幂台阶和总资源重新校准，并评估chain block/拆块。
+
+从当前t12/N_NTT2^27的46个完整前向样本得到kernel平均.0678713 s；固定F省13次仅约.8823 s（71.685 s的1.23%），尚未扣1GiB D2D/分配/其他缓存挤出。这修正了对F缓存收益的优先级判断，没有实现或宣称加速。建议首批6-Mont xADD、D校准和局部F缓存；其次tile/outer按shape调优、pack融合清零、carry融合诊断，再连续F层/device下降及共享scratch不同曲线流水。每个方向的池规模、公式、内存和限制见 [步骤报告§36](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:1616)。
+
+证据 [只读复算](D:/code/MPA-OpenCl/build_cuda_cmake/_optimization_candidates_20261004/analysis.json)。本次没有启动新的GPU任务、修改算子或重编译；生产exe仍ECEE5B97…B90F。分析kernel总和与旧AB矩阵墙钟口径分开，未重复宣称26/27/24门禁为本轮新运行。
+
+## 63. 参考开源CUDA Core NTT并完成warp tile优化（2026-10-04）
+
+用户要求暂不用Tensor Core，先分析 `docs/gpu_ntt_tensor_core_survey.md`，再按优先级实施。基于a178184，固定并核对GPU-NTT d03c5ea、sppark 9e5c795、ICICLE 625532a的公开源码，没有导入或编译外部库。sppark同为Goldilocks、Apache-2.0，warp/shared协作和logN27的3-pass最贴合；其普通/冗余表示不能误称Montgomery。GPU-NTT merge支持logN27，但Data64 Barrett限≤62bit；4-Step当前host最大logN24，转置额外16N流量/8N容量。ICICLE公开frontend MIT，普通CUDA backend另有license，本次没有找到公开通用Goldilocks CUDA内核。固定提交、原文件/行号及数学/资源适配见 [步骤报告§37](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:1688)。
+
+推进顺序：**P1低层warp + 常量根 → P2协作宽outer减少global pass → P3按shape确定性调参 → P4转置融合**。P1已实施；P2–P4仍待实现。P2目标在k27把5个pass降为3/4，理想每少一个pass省16N/变换、三变换卷积省48N字节；两pass/N2^27为12GiB。该流量公式不等于速度预测。
+
+P1从one-word-per-lane原型推进到每lane两个寄存器/完整蝶形。高层shared radix4保持，低6层shuffle，t5低5层，t<5回退。再参考sppark末层不乘单位根，stage0去通用模乘、stage1的±2^48用移位/gl_reduce；此处stage0/1是NTT层，与ECM Stage1无关。t12单slice两forward+inverse通用模乘调用20N→17N，CTA阶段barrier forward6→3、inverse6→4，shared payload少128N字节/卷积；global pass、传输及持久显存不变。源码 [常量根:1132](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1132)、[pair:1169](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1169)、[tile:1191](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1191)。
+
+初版benchmark把NTT_FUSE_TRACE设为PowerShell $null，变成存在的空变量，触发旧C++逐kernel同步；前两次和中断的第三次全部作废。runner已显式Remove-Item并拒绝trace日志。有效warp-only ABBA仅改善.345%，无稳定结论；接续常量根版本用launch bounds限制warp寄存器，属性仅设置选中kernel，并在arena缓存命中保持最大shared容量。最终baseline REG40/36、candidate40/40，全部STACK/LOCAL0；32KiB/512线程容量API允许candidate3 CTA，不等于实测occupancy。
+
+最终同binary GPU1串行 **ABBA+BAAB共8次、4次/模式**，M4423/sigma26/extra12/B1=1000/B2=2011326186870/D1231230/P115200/G15/batch64/arena6300MiB，固定当前驻留与oracle/carry组合。**full73.1216075→72.52802925 s（−.81177%），main57.4541215→56.922694 s（−.92496%）**。两组顺序均值均改善，但最后candidate73.042221 s接近baseline，未建立统计置信度。Systems两次同binary profile的tile15.853348→14.968390 s（−5.58%）、NTT30.120484→29.247852 s（−2.90%）；profile和wall分开，仍无有效NCU计数器。
+
+8次403批/1979251对/40218760系数/2400自检/66139GMP/1126jobs/8241carry覆盖一致；pending0、fallback0、bad0、overflow0、clean1。oracle签名b9cbd2041266767a，实验根sum033a77303713f3a6/xord16047fb14d39b21，最终叶FNV10619321735931855904一致。精确trace H2D6556779952/D2H3037648120/D2D937993280 B保持，GPU1峰5544MiB、arena3486.695MiB保持；本轮没有减少主机边界传输或新增大型buffer。
+
+最终重新跑独立NTT门禁 **12/0**：每模式216组合/6854400字，GMP全部前向bit-reversed频谱和逆变换，batch3/t4..12/M1..4/compact/cache/evict；另每模式4调用/98304字验证模式与shared容量切换。完整Stage2 **188/0** 本轮重跑，冻结因子、普通模数/packing/alias/尾块及故障拒绝通过。
+
+生产wrapper默认 `NTT_FUSE_WARP_TAIL=1`，显式0回退；实验仍默认0。sm89/CUDA13.3编译成功，CUDA252.8 s，exe2691072 bytes，SHA256 **905826a8988e2046831e4ecd57406c46a6d8b0db2ac22551b2d6be03d18b588c**。生产验收 **26/0**，包含默认1及显式0的实际GMP门禁；save/ini/worktodo后缀、失败队列保留、frozen因子和M4423恢复通过。实际save init15.776226/main57.036366/total72.812592 s只作为接入验证，叶FNV与基线一致。编译更新工作区exe，GPU0外部生产未改。
+
+实验exe SHA256 **a7b712cb11aeb2c781fcfed2a4daca6f654d2c67111cc763b08df24c56ff8f37**；NTT源码 **f7c98f0bed2b00661f480f40b447098a0947654b53a5f31b794ebe5bf3d7acd7**，Stage2树引擎仍E89B554D…F19。证据：[8次量化](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_warp_20261004/final_quantitative.json)、[profile](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_warp_20261004/final_profile_comparison.json)、[12项](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_warp_20261004/final_gate/summary.json)、[188项](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_warp_20261004/final_full_gate.log)、[生产26项](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_warp_20261004/production_accept/summary.json)。ignored测量及源码快照保留本地。
+
+下一实现P2先证明6–9层协作outer的合并访问、twiddle和中间置换，保持Goldilocks/canonical/batch/B只读/pointwise合同，控制寄存器与shared，优先不新增全长scratch；逐字GMP→完整门禁→同binary整曲线交叉测量后才选默认。长期性能优化目标仍未完成。

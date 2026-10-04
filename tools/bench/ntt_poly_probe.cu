@@ -1122,8 +1122,74 @@ __device__ __forceinline__ void tile_radix2_stage(unsigned long long *sm, unsign
  * by every block).
  * The stages themselves run as fused radix-4 blocks (see tile_radix4_block): six barriers
  * instead of twelve. */
+/* Low five DIF/DIT stages stay within a contiguous 32-word warp.
+   Every participating warp has all lanes active (TILE >= 32, block is warp aligned).
+   Inverse multiplies the upper lane BEFORE shuffle, avoiding duplicate modular MACs.
+   Independently implemented; warp communication inspired by sppark's narrow NTT. */
+/* For every valid tile, stage 0 has only unity and stage 1 has unity
+   or a primitive fourth root. In Goldilocks those two roots are +/-2^48.
+   Preserve a generic fallback for arbitrary tables; canonical output remains unchanged. */
+__device__ __forceinline__ unsigned long long tile_warp_twiddle(unsigned long long v,
+                                                              unsigned long long w, int st)
+{
+    if(st==0) return v; // the generated table's sole stage-0 entry is always 1
+    if(st==1) {
+        if(w==1) return v;
+        if(w==(1ull<<48)) return gl_reduce(v<<48,v>>16);
+        if(w==GL_P-(1ull<<48)) return gl_sub_dev(0,gl_reduce(v<<48,v>>16));
+    }
+    return gl_mul(v,w);
+}
+
 template <bool INVERSE>
-__global__ void tile_kernel(unsigned long long *a, const unsigned long long *b,
+__device__ __forceinline__ unsigned long long tile_warp5(unsigned long long v,
+                                                        const unsigned long long *tbl)
+{
+    const unsigned int lane=threadIdx.x & 31;
+    #pragma unroll
+    for(int q=0;q<5;++q) {
+        const int st=INVERSE ? q : 4-q;
+        const unsigned int half=1u<<st, j=lane & (half-1);
+        const bool upper=(lane & half)!=0;
+        const unsigned long long w=__ldg(tbl+(half-1)+j);
+        if(INVERSE && upper) v=tile_warp_twiddle(v,w,st);
+        const auto peer=__shfl_xor_sync(0xffffffffu,v,half);
+        if(INVERSE) v=upper ? gl_sub_dev(peer,v) : gl_add_dev(v,peer);
+        else v=upper ? tile_warp_twiddle(gl_sub_dev(peer,v),w,st) : gl_add_dev(v,peer);
+    }
+    return v;
+}
+
+/* One full butterfly per lane. At stage st, lo/hi represent indices
+   2^(st+1)*(lane>>st)+(lane&(2^st-1)) and that index+2^st, inside 64 words.
+   The shuffle transposes the next pair bit with the register (lo/hi) bit.
+   DIF ends at adjacent pairs (2*lane,2*lane+1); DIT reverses these permutations.
+   This keeps every lane's modular multiply useful, unlike a one-word-per-lane mapping. */
+template <bool INVERSE>
+__device__ __forceinline__ void tile_warp6_pair(unsigned long long &lo, unsigned long long &hi,
+                                              const unsigned long long *tbl)
+{
+    const unsigned int lane=threadIdx.x&31;
+    #pragma unroll
+    for(int q=0;q<6;++q) {
+        const int st=INVERSE ? q : 5-q;
+        const unsigned int half=1u<<st, j=lane&(half-1);
+        const auto w=__ldg(tbl+(half-1)+j);
+        const auto u=lo, v=INVERSE ? tile_warp_twiddle(hi,w,st) : hi;
+        lo=gl_add_dev(u,v);
+        hi=INVERSE ? gl_sub_dev(u,v) : tile_warp_twiddle(gl_sub_dev(u,v),w,st);
+        if(INVERSE ? st<5 : st>0) {
+            const unsigned int mask=1u<<(INVERSE ? st : st-1);
+            const bool lower=(lane&mask)==0;
+            const auto peer=__shfl_xor_sync(0xffffffffu,lower ? hi : lo,mask);
+            lo=lower ? lo : peer; hi=lower ? peer : hi;
+        }
+    }
+}
+
+template <bool INVERSE, bool WARP_TAIL=false>
+__global__ __launch_bounds__(FUSE_TILE_THREADS, WARP_TAIL ? 3 : 1)
+void tile_kernel(unsigned long long *a, const unsigned long long *b,
                             unsigned long long n, int k, int t,
                             const unsigned long long *tbl, unsigned long long n_scale,
                             unsigned long long stride)
@@ -1141,6 +1207,50 @@ __global__ void tile_kernel(unsigned long long *a, const unsigned long long *b,
         for (unsigned long long i = threadIdx.x; i < TILE; i += blockDim.x)
             sm[i] = gl_mul(gl_mul(sm[i], b[base + i]), n_scale);
         __syncthreads();
+    }
+    if (WARP_TAIL && t>=5) {
+        const int wt=t>=6 ? 6 : 5;
+        if (!INVERSE) {
+            int st=t-1;
+            for(;st>=wt+1;st-=2) {
+                tile_radix4_block(sm,TILE,st,tbl);
+                __syncthreads();
+            }
+            if(st==wt) tile_radix2_stage<false>(sm,TILE,wt,tbl);
+            /* No shared store or barrier after the warp tail: each lane owns its output. */
+            if(wt==6) {
+                for(unsigned long long i=(threadIdx.x>>5)*64+(threadIdx.x&31);i<TILE;i+=2*blockDim.x) {
+                    auto lo=sm[i], hi=sm[i+32];
+                    tile_warp6_pair<false>(lo,hi,tbl);
+                    const unsigned long long dst=(i&~63ull)+2*(threadIdx.x&31);
+                    a[base+dst]=lo; a[base+dst+1]=hi;
+                }
+            } else for(unsigned long long i=threadIdx.x;i<TILE;i+=blockDim.x)
+                a[base+i]=tile_warp5<false>(sm[i],tbl);
+        } else {
+            if(wt==6) {
+                for(unsigned long long i=(threadIdx.x>>5)*64+(threadIdx.x&31);i<TILE;i+=2*blockDim.x) {
+                    const unsigned long long src=(i&~63ull)+2*(threadIdx.x&31);
+                    auto lo=sm[src], hi=sm[src+1];
+                    tile_warp6_pair<true>(lo,hi,tbl);
+                    /* All input words of this warp have reached registers before any
+                       lane overwrites their permuted shared locations. */
+                    __syncwarp();
+                    sm[i]=lo; sm[i+32]=hi;
+                }
+            } else for(unsigned long long i=threadIdx.x;i<TILE;i+=blockDim.x)
+                sm[i]=tile_warp5<true>(sm[i],tbl);
+            __syncthreads();
+            int st=wt;
+            for(;st+1<t;st+=2) {
+                tile_radix4_block_inv(sm,TILE,st,tbl);
+                __syncthreads();
+            }
+            if(st<t) tile_radix2_stage<true>(sm,TILE,st,tbl);
+            for(unsigned long long i=threadIdx.x;i<TILE;i+=blockDim.x)
+                a[base+i]=sm[i];
+        }
+        return;
     }
     int q = 0;
     if (!INVERSE) {
@@ -1162,6 +1272,21 @@ __global__ void tile_kernel(unsigned long long *a, const unsigned long long *b,
         a[base + i] = sm[i];
 }
 
+/* Set properties only for the selected tile specialization. Every arena hit pins
+   that function to the arena's running maximum, including after a mode change.
+   Avoid registering/resetting two unused kernels on the frequent cache-hit path. */
+static void ntt_tile_attributes(bool warp, int smem, bool preferred=false)
+{
+    const void *fwd=warp ? (const void *)tile_kernel<false,true> : (const void *)tile_kernel<false>;
+    const void *inv=warp ? (const void *)tile_kernel<true,true> : (const void *)tile_kernel<true>;
+    if(preferred) {
+        cudaFuncSetAttribute(fwd,cudaFuncAttributePreferredSharedMemoryCarveout,100);
+        cudaFuncSetAttribute(inv,cudaFuncAttributePreferredSharedMemoryCarveout,100);
+    }
+    CK(cudaFuncSetAttribute(fwd,cudaFuncAttributeMaxDynamicSharedMemorySize,smem));
+    CK(cudaFuncSetAttribute(inv,cudaFuncAttributeMaxDynamicSharedMemorySize,smem));
+}
+
 /* ---- fusion plan: which t, and which M per outer pass -------------------------------- */
 struct FuseCtx {
     unsigned long long n = 0;
@@ -1176,6 +1301,7 @@ struct FuseCtx {
     size_t scr2Words = 64;
     int m_max = FUSE_MAX_M;
     bool ready = false;
+    bool warp_tail = false;                            /* kernel choice, no new tables/buffers */
     bool arena_borrowed = false;                         /* this copy must not release arena storage */
     int passes_fwd = 0;
     /* ---- OPTIONAL cache of the per-pass twiddle tables (section 18, slice S3) ------------
@@ -1272,6 +1398,7 @@ static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long lon
     if (t > k) t = k;
     if (t < 0) t = 0;
     c.t = t;
+    c.warp_tail = fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0;
     c.m_max = (int)fuse_env_ull("NTT_FUSE_M", FUSE_MAX_M);
     if (c.m_max > FUSE_MAX_M) c.m_max = FUSE_MAX_M;
     if (c.m_max < 1) c.m_max = 1;
@@ -1310,14 +1437,7 @@ static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long lon
        small for more than one block per SM, and the tile pass is latency bound (its modular
        multiply chain), so the extra resident blocks are what hides that latency. */
     const int smem = (int)(1ull << t) * (int)sizeof(unsigned long long);
-    cudaFuncSetAttribute(tile_kernel<false>, cudaFuncAttributePreferredSharedMemoryCarveout,
-                         100);
-    cudaFuncSetAttribute(tile_kernel<true>, cudaFuncAttributePreferredSharedMemoryCarveout,
-                         100);
-    CK(cudaFuncSetAttribute(tile_kernel<false>, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                            smem));
-    CK(cudaFuncSetAttribute(tile_kernel<true>, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                            smem));
+    ntt_tile_attributes(c.warp_tail && t>=5,smem,true);
     c.passes_fwd = c.nms + (t > 0 ? 1 : 0);
     c.ready = true;
 }
@@ -1469,7 +1589,9 @@ static void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
         const unsigned int blocks = (unsigned int)(n >> c.t);
         const int smem = (int)(1ull << c.t) * (int)sizeof(unsigned long long);
         dim3 gr(blocks, (unsigned int)nbatch);
-        tile_kernel<false><<<gr, FUSE_TILE_THREADS, smem>>>(d, nullptr, n, c.k, c.t,
+        if(c.warp_tail && c.t>=5)
+            tile_kernel<false,true><<<gr, FUSE_TILE_THREADS, smem>>>(d,nullptr,n,c.k,c.t,c.tblF,0ull,stride);
+        else tile_kernel<false><<<gr, FUSE_TILE_THREADS, smem>>>(d, nullptr, n, c.k, c.t,
                                                             c.tblF, 0ull, stride);
         CK(cudaGetLastError());
         fuse_mark("fwd tile pass", ft0);
@@ -1488,7 +1610,9 @@ static void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b
         const unsigned int blocks = (unsigned int)(n >> c.t);
         const int smem = (int)(1ull << c.t) * (int)sizeof(unsigned long long);
         dim3 gr(blocks, (unsigned int)nbatch);
-        tile_kernel<true><<<gr, FUSE_TILE_THREADS, smem>>>(d, b, n, c.k, c.t, c.tblI,
+        if(c.warp_tail && c.t>=5)
+            tile_kernel<true,true><<<gr, FUSE_TILE_THREADS, smem>>>(d,b,n,c.k,c.t,c.tblI,n_scale,stride);
+        else tile_kernel<true><<<gr, FUSE_TILE_THREADS, smem>>>(d, b, n, c.k, c.t, c.tblI,
                                                            n_scale, stride);
         CK(cudaGetLastError());
         fuse_mark("inv tile pass (+pw+scale)", ft0);
@@ -1959,16 +2083,13 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
    the failure mode of a per-call design that has been made persistent).  The arena therefore
    keeps a running MAXIMUM and pins the attribute to it after every build, so every cached
    shape's launch stays legal. */
-static void ntt_arena_pin_smem(NttArena *ar, int t)
+static void ntt_arena_pin_smem(NttArena *ar, int t, bool warp)
 {
     if (!ar) return;
     const size_t need = (size_t)1 << ((t < 0) ? 0 : t);
     if (need > ar->attr_words) ar->attr_words = need;
     const int smem = (int)(ar->attr_words * sizeof(unsigned long long));
-    CK(cudaFuncSetAttribute(tile_kernel<false>, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                            smem));
-    CK(cudaFuncSetAttribute(tile_kernel<true>, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                            smem));
+    ntt_tile_attributes(warp && t>=5,smem);
 }
 
 /* the FuseCtx of this shape, tables included, built once and shared by every later call */
@@ -1979,8 +2100,9 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     for (NttArena::FuseEntry &e : ar->fuses) {
         if (e.n == n && e.k == k && e.omega == omega) {
             out = e.fc;                                  /* pointers are owned by the arena */
+            out.warp_tail=fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0; /* plan tables are identical */
             out.arena_borrowed = true;
-            ntt_arena_pin_smem(ar, e.fc.t);
+            ntt_arena_pin_smem(ar, e.fc.t,out.warp_tail);
             ++ar->fuse_hits;
             return;
         }
@@ -1994,11 +2116,11 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     if (ar->cap_bytes && ar->bytes + need > ar->cap_bytes) {
         ++ar->overflow;
         fuse_init(out, n, k, omega, omega_inv);      /* over budget: per-call tables */
-        ntt_arena_pin_smem(ar,out.t);
+        ntt_arena_pin_smem(ar,out.t,out.warp_tail);
         return;
     }
     fuse_init(e.fc, n, k, omega, omega_inv);
-    ntt_arena_pin_smem(ar, e.fc.t);                      /* undo fuse_init's own (smaller) set */
+    ntt_arena_pin_smem(ar, e.fc.t,e.fc.warp_tail);                      /* undo fuse_init's own (smaller) set */
     ntt_fuse_cache_tables(e.fc, omega, omega_inv);
     ar->bytes += need;
     ar->fuses.push_back(e);
@@ -3096,8 +3218,8 @@ static void ntt_shape_print(const NttShape &sh, const FuseCtx &fc, bool verbose,
                 "transform_stages=%d ; plan: tile t=%d stages, then outer",
                 sh.passes_total, sh.passes_fwd, sh.passes_fwd, sh.passes_fwd, 1, sh.k, fc.t);
     for (int p = 0; p < fc.nms; ++p) std::printf(" radix-%d", 1 << fc.ms[p]);
-    std::printf(" ; slot assembly reads %.2f of a pass\n",
-                (double)(sh.out_slots * sh.slot_words) / (double)sh.N);
+    std::printf(" ; warp_tail=%d ; slot assembly reads %.2f of a pass\n",
+                (int)(fc.warp_tail && fc.t>=5), (double)(sh.out_slots * sh.slot_words) / (double)sh.N);
     std::printf("  packing: word-aligned slot stride=%llu bits = %llu digits of %d bits "
                 "(coefficients every %llu bits), max operand digit < 2^%d asserted\n",
                 (unsigned long long)sh.slot_stride, (unsigned long long)sh.slot_words, sh.bpw,
@@ -3995,12 +4117,15 @@ static void ntt_fuse_capacity_check(int device)
     const std::string saved_t=et ? et : "", saved_m=em ? em : "";
     const auto live_before=g_fuse_base.live_bytes;
     unsigned long long cases=0,words=0,bad=0;
-    const int ks[]={7,15,7},ts[]={4,8,8};
-    for (int shape=0;shape<3;++shape) {
+    const bool extended=fuse_env_ull("NTT_FUSE_WARP_TEST",0)!=0;
+    const std::vector<int> ks=extended ? std::vector<int>{4,5,6,7,8,11,12,13,15} : std::vector<int>{7,15,7};
+    const std::vector<int> ts=extended ? std::vector<int>{4,5,6,7,8,11,12,12,12} : std::vector<int>{4,8,8};
+    const unsigned long long nbatch=extended ? 3 : 1;
+    for (size_t shape=0;shape<ks.size();++shape) {
         const int k=ks[shape]; const unsigned long long n=1ull<<k;
         const auto om=gl_pow_host(7ull,(GL_P-1)/n), omi=gl_pow_host(om,GL_P-2);
         const auto nsc=gl_pow_host(n,GL_P-2);
-        std::vector<unsigned long long> original(n,0),ones(n,1),spectrum(n,0),got(n);
+        std::vector<unsigned long long> original(n*nbatch,0),ones(n*nbatch,1),spectrum(n*nbatch,0),got(n*nbatch),expected(n*nbatch);
         original[0]=GL_P-1; original[1]=0x8000000000000000ull; original[n-1]=GL_P-2;
         /* Independent sparse DFT in GMP, stored in DIF bit-reversed order. */
         mpz_t p,w,wi,u,v,sum,tmp,ca,cb,cc;
@@ -4016,10 +4141,17 @@ static void ntt_fuse_capacity_check(int device)
             size_t count=0; mpz_export(&spectrum[r],&count,-1,8,0,0,sum);
             mpz_mul(u,u,w);mpz_mod(u,u,p);mpz_mul(v,v,wi);mpz_mod(v,v,p);
         }
+        /* Slice-specific pointwise multiplier exercises inverse B and batch addressing.
+           Forward spectra and inverse results are checked independently, not only roundtrip. */
+        for(unsigned long long sl=0;sl<nbatch;++sl) for(unsigned long long j=0;j<n;++j) {
+            original[sl*n+j]=original[j]; spectrum[sl*n+j]=spectrum[j]; ones[sl*n+j]=sl+1;
+            mpz_import(tmp,1,-1,8,0,0,&original[j]); mpz_mul_ui(tmp,tmp,(unsigned long)(sl+1)); mpz_mod(tmp,tmp,p);
+            size_t count=0; mpz_export(&expected[sl*n+j],&count,-1,8,0,0,tmp);
+        }
         mpz_clears(p,w,wi,u,v,sum,tmp,ca,cb,cc,nullptr);
         unsigned long long *data=nullptr,*dones=nullptr;
-        CK(cudaMalloc(&data,n*8));CK(cudaMalloc(&dones,n*8));
-        CK(cudaMemcpy(dones,ones.data(),n*8,cudaMemcpyHostToDevice));
+        CK(cudaMalloc(&data,n*nbatch*8));CK(cudaMalloc(&dones,n*nbatch*8));
+        CK(cudaMemcpy(dones,ones.data(),n*nbatch*8,cudaMemcpyHostToDevice));
         fuse_fixture_env("NTT_FUSE_T",std::to_string(ts[shape]).c_str());
         for (int m=1;m<=FUSE_MAX_M;++m) for(bool compact:{false,true}) {
             fuse_fixture_env("NTT_FUSE_M",std::to_string(m).c_str());
@@ -4027,17 +4159,47 @@ static void ntt_fuse_capacity_check(int device)
             for (int state=0;state<3;++state) {
                 if(state==1) ntt_fuse_cache_tables(fc,om,omi);
                 if(state==2) NttArena::fuse_drop_tables(fc);
-                CK(cudaMemcpy(data,original.data(),n*8,cudaMemcpyHostToDevice));
-                ntt_forward_fused(data,fc,om);
-                CK(cudaMemcpy(got.data(),data,n*8,cudaMemcpyDeviceToHost));
-                for(size_t j=0;j<n;++j){if(got[j]!=spectrum[j]) ++bad;} words+=n;
-                ntt_inverse_fused(data,dones,fc,omi,nsc);
-                CK(cudaMemcpy(got.data(),data,n*8,cudaMemcpyDeviceToHost));
-                for(size_t j=0;j<n;++j){if(got[j]!=original[j]) ++bad;} words+=n;
+                CK(cudaMemcpy(data,original.data(),n*nbatch*8,cudaMemcpyHostToDevice));
+                ntt_forward_fused(data,fc,om,nbatch);
+                CK(cudaMemcpy(got.data(),data,n*nbatch*8,cudaMemcpyDeviceToHost));
+                for(size_t j=0;j<n*nbatch;++j){if(got[j]!=spectrum[j]) ++bad;} words+=n*nbatch;
+                ntt_inverse_fused(data,dones,fc,omi,nsc,nbatch);
+                CK(cudaMemcpy(got.data(),data,n*nbatch*8,cudaMemcpyDeviceToHost));
+                for(size_t j=0;j<n*nbatch;++j){if(got[j]!=expected[j]) ++bad;} words+=n*nbatch;
                 ++cases;
             }
             if(compact && fc.nms==0 && (fc.scr || fc.scr2 || fc.scrWords || fc.scr2Words)) ++bad;
             fuse_release(fc);
+        }
+        if(extended && k==12) {
+            const std::string saved_w=std::getenv("NTT_FUSE_WARP_TAIL") ? std::getenv("NTT_FUSE_WARP_TAIL") : "";
+            unsigned long long switch_bad=0, switch_words=0;
+            {
+                NttArena ar;
+                for(int mode : {0,1,0,1}) {
+                    fuse_fixture_env("NTT_FUSE_WARP_TAIL",std::to_string(mode).c_str());
+                    fuse_fixture_env("NTT_FUSE_T","12");
+                    FuseCtx large; ntt_arena_fuse(&ar,n,k,om,omi,large);
+                    const auto om32=gl_pow_host(7ull,(GL_P-1)/32);
+                    fuse_fixture_env("NTT_FUSE_T","5");
+                    FuseCtx small; ntt_arena_fuse(&ar,32,5,om32,gl_pow_host(om32,GL_P-2),small);
+                    /* Pin the cached large plan again: small init changes FUNCTION attributes. */
+                    fuse_fixture_env("NTT_FUSE_T","12");
+                    ntt_arena_fuse(&ar,n,k,om,omi,large);
+                    if(large.warp_tail!=(mode!=0)) ++switch_bad;
+                    CK(cudaMemcpy(data,original.data(),n*nbatch*8,cudaMemcpyHostToDevice));
+                    ntt_forward_fused(data,large,om,nbatch);
+                    CK(cudaMemcpy(got.data(),data,n*nbatch*8,cudaMemcpyDeviceToHost));
+                    for(size_t j=0;j<n*nbatch;++j) if(got[j]!=spectrum[j]) ++switch_bad;
+                    ntt_inverse_fused(data,dones,large,omi,nsc,nbatch);
+                    CK(cudaMemcpy(got.data(),data,n*nbatch*8,cudaMemcpyDeviceToHost));
+                    for(size_t j=0;j<n*nbatch;++j) if(got[j]!=expected[j]) ++switch_bad;
+                    switch_words+=2*n*nbatch;
+                }
+            }
+            fuse_fixture_env("NTT_FUSE_WARP_TAIL",saved_w.c_str());
+            bad+=switch_bad;
+            std::printf("ntt_fuse_warp_switch_check: calls=4 words=%llu bad=%llu (cached 12/5/12, 0/1/0/1)\n",switch_words,switch_bad);
         }
         CK(cudaFree(data));CK(cudaFree(dones));
     }
@@ -4045,6 +4207,19 @@ static void ntt_fuse_capacity_check(int device)
     if(g_fuse_base.live_bytes!=live_before) ++bad;
     std::printf("ntt_fuse_capacity_check: cases=%llu words=%llu bad=%llu (GMP DFT, inverse, radix 1..%d, cache/evict/tile-only)\n",
                 cases,words,bad,FUSE_MAX_M);
+    if(extended) {
+        const bool warp=fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0;
+        std::printf("ntt_fuse_warp_check: requested=%d cases=%llu batch=3 t=4,5,6,7,8,11,12 bad=%llu\n",(int)warp,cases,bad);
+        ntt_tile_attributes(warp,32768,true);
+        const void *fwd=warp ? (const void *)tile_kernel<false,true> : (const void *)tile_kernel<false>;
+        const void *inv=warp ? (const void *)tile_kernel<true,true> : (const void *)tile_kernel<true>;
+        cudaFuncAttributes fa,ia; int fb=0,ib=0;
+        CK(cudaFuncGetAttributes(&fa,fwd)); CK(cudaFuncGetAttributes(&ia,inv));
+        CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&fb,fwd,FUSE_TILE_THREADS,32768));
+        CK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&ib,inv,FUSE_TILE_THREADS,32768));
+        std::printf("ntt_fuse_warp_resources: requested=%d fwd_regs=%d inv_regs=%d fwd_local=%zu inv_local=%zu fwd_max_blocks=%d inv_max_blocks=%d block=512 dynamic_shared=32768\n",
+                    (int)warp,fa.numRegs,ia.numRegs,fa.localSizeBytes,ia.localSizeBytes,fb,ib);
+    }
     if(bad) std::exit(3);
 }
 
