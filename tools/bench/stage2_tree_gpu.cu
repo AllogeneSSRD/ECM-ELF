@@ -1536,6 +1536,7 @@ struct GRootStats {
     unsigned long long peak_node_bytes = 0, peak_retained_bytes = 0, released_bytes = 0;
     unsigned long long input_released_bytes = 0, root_words = 0;
     unsigned long long root_hash = 1469598103934665603ull;
+    bool root_hash_complete=true;
     double t_release = 0.0;
 };
 static GRootStats g_groot;
@@ -4198,7 +4199,8 @@ static std::vector<unsigned long long> groot_product_gmp(PolyLayer &L,
 static std::vector<std::vector<unsigned long long>> build_groot_device(
     PolyLayer &L,const std::vector<std::vector<unsigned long long>> &leaf,
     std::vector<size_t> &deg,size_t &pad_out,FTreeStats &fs,int cat,
-    size_t device_n=0,const std::function<void(unsigned long long*)> &fill={})
+    size_t device_n=0,const std::function<void(unsigned long long*)> &fill={},
+    const std::function<void(const unsigned long long*,size_t)> &root_sink={})
 {
     const size_t W=L.W,n=fill?device_n:leaf.size();size_t pad=1;while(pad<n)pad*=2;
     const bool check=g_groot_device_check;
@@ -4346,6 +4348,10 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
             std::printf("gdevice_progress: base=%llu groups=%llu t_level=%.3f t_total=%.3f\n",
                 (unsigned long long)base,(unsigned long long)groups.size(),now_s()-level_start,now_s()-start);
     }
+    if(root_sink) {
+        // The consumer copies before any subsequent call can recycle raw A/B.
+        root_sink(cur,n+1);g_gdevice.root_words+=(n+1)*W;return tree;
+    }
     tree[1].resize((n+1)*W);
     const double tr=now_s();CK(cudaMemcpy(tree[1].data(),cur,tree[1].size()*8,cudaMemcpyDeviceToHost));
     L.t_d2h_coeff+=now_s()-tr;L.d2h_coeff_words+=tree[1].size();g_gdevice.root_words+=tree[1].size();
@@ -4355,11 +4361,12 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
 
 static std::vector<std::vector<unsigned long long>> build_groot_select(
     PolyLayer &L,const std::vector<std::vector<unsigned long long>> &leaf,
-    std::vector<size_t> &deg,size_t &pad,FTreeStats &fs,int cat,bool keep_children)
+    std::vector<size_t> &deg,size_t &pad,FTreeStats &fs,int cat,bool keep_children,
+    const std::function<void(const unsigned long long*,size_t)> &root_sink={})
 {
     const char *host=std::getenv("NTT_S4_HOSTPACK");
     if(g_groot_device && !keep_children && L.s4 && g_s4_pack_direct && !g_s4_final_readback &&
-       !(host && std::atoi(host)))return build_groot_device(L,leaf,deg,pad,fs,cat);
+       !(host && std::atoi(host)))return build_groot_device(L,leaf,deg,pad,fs,cat,0,{},root_sink);
     if(g_groot_device)++g_gdevice.fallbacks;
     return build_tree_flat(L,leaf,deg,pad,fs,cat,keep_children);
 }
@@ -7290,11 +7297,44 @@ static std::vector<unsigned long long> fold_gmp_reference(PolyLayer &L,
 static bool fold_device_flag(const char *key) {
     const char *v=std::getenv(key);return v && std::atoi(v)!=0;
 }
+// Two order-sensitive 64-bit checksums of the canonical root input stream.
+// Indices are global across roots; this is a diagnostic, not a cryptographic hash.
+__host__ __device__ static inline unsigned long long groot_mix64(unsigned long long x) {
+    x^=x>>30;x*=0xbf58476d1ce4e5b9ull;x^=x>>27;x*=0x94d049bb133111ebull;return x^(x>>31);
+}
+__global__ void groot_input_digest_kernel(const unsigned long long *input,size_t count,
+    unsigned long long base,unsigned long long *digest) {
+    unsigned long long sum=0,xorv=0;
+    for(size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;i<count;i+=gridDim.x*(size_t)blockDim.x) {
+        const auto index=base+i,value=input[i];
+        sum+=groot_mix64(value^groot_mix64(index+0x9e3779b97f4a7c15ull));
+        xorv^=groot_mix64(value+groot_mix64(index+0xd1b54a32d192ed03ull));
+    }
+    __shared__ unsigned long long sums[256],xors[256];
+    sums[threadIdx.x]=sum;xors[threadIdx.x]=xorv;__syncthreads();
+    for(unsigned d=128;d;d/=2) {
+        if(threadIdx.x<d){sums[threadIdx.x]+=sums[threadIdx.x+d];xors[threadIdx.x]^=xors[threadIdx.x+d];}
+        __syncthreads();
+    }
+    if(!threadIdx.x){atomicAdd(digest,sums[0]);atomicXor(digest+1,xors[0]);}
+}
+static void groot_input_digest_host(const std::vector<unsigned long long> &input,
+    unsigned long long &words,unsigned long long *digest) {
+    for(const auto value:input) {
+        digest[0]+=groot_mix64(value^groot_mix64(words+0x9e3779b97f4a7c15ull));
+        digest[1]^=groot_mix64(value+groot_mix64(words+0xd1b54a32d192ed03ull));++words;
+    }
+}
+
 struct FoldDeviceStats {
     bool requested=false,enabled=false;
     std::string fallback="none";
     unsigned long long folds=0,muls=0,sub_coeffs=0,peak_bytes=0,h2d_bytes=0,d2h_bytes=0;
     unsigned long long avoided_h2d_bytes=0,avoided_d2h_bytes=0,checked_words=0;
+    bool root_requested=false;
+    unsigned long long root_device_trees=0,root_device_words=0,root_checked_words=0;
+    unsigned long long root_h2d_avoided=0,root_d2h_avoided=0,root_digest_words=0,root_digest[2]={0,0};
+    double root_t_handoff=0;
     double t_setup=0,t_upload=0,t_reverse=0,t_subtract=0,t_readback=0;
 };
 __global__ void fold_reverse_kernel(const unsigned long long *src,size_t top,
@@ -7325,9 +7365,9 @@ __global__ void fold_subtract_kernel(const unsigned long long *a,const unsigned 
 }
 struct FoldDeviceState {
     S4ResidentOwner memory;
-    unsigned long long *map=nullptr,*length=nullptr,*modulus=nullptr;
+    unsigned long long *map=nullptr,*length=nullptr,*modulus=nullptr,*digest=nullptr;
     PolyLayer *layer=nullptr;FoldDeviceStats *stats=nullptr;FoldFlatStats *flat=nullptr;
-    size_t P=0,W=0,hcount=0,f=0,inv=0,h=0,g=0,reverse=0,t=0,q=0,qb=0;
+    size_t P=0,W=0,hcount=0,gcount=0,f=0,inv=0,h=0,g=0,reverse=0,t=0,q=0,qb=0;
     bool active=false,check=false;
     const std::vector<unsigned long long> *host_F=nullptr;
     ~FoldDeviceState(){release();}
@@ -7336,6 +7376,7 @@ struct FoldDeviceState {
         if(map){CK(cudaFree(map));map=nullptr;}
         if(length){CK(cudaFree(length));length=nullptr;}
         if(modulus){CK(cudaFree(modulus));modulus=nullptr;}
+        if(digest){CK(cudaFree(digest));digest=nullptr;}
         active=false;
     }
     bool init(PolyLayer &L,const std::vector<unsigned long long> &F,
@@ -7349,7 +7390,7 @@ struct FoldDeviceState {
            g_s4_carry_trace || (hostpack && std::atoi(hostpack))) {st.fallback="backend";return false;}
         if(!P || F.size()!=(P+1)*W || inverse.size()!=(P+1)*W) {st.fallback="shape";return false;}
         if(check && P>64){std::fprintf(stderr,"FATAL: device fold GMP check limited to P<=64\n");std::exit(3);}
-        const unsigned long long bytes=(9ull*P+8)*W*8+32;
+        const unsigned long long bytes=(9ull*P+8)*W*8+48;
         unsigned long long max_mb=640;
         if(const char *e=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))max_mb=std::strtoull(e,nullptr,10);
         if(max_mb>(~0ull>>20) || bytes>(max_mb<<20)) {st.fallback="budget";return false;}
@@ -7369,6 +7410,7 @@ struct FoldDeviceState {
             CK(error);
         }
         CK(cudaMalloc(&map,24));CK(cudaMalloc(&length,8));CK(cudaMalloc(&modulus,W*8));
+        CK(cudaMalloc(&digest,16));CK(cudaMemsetAsync(digest,0,16));
         f=0;inv=(P+1)*W;h=2*(P+1)*W;g=3*(P+1)*W;reverse=4*(P+1)*W;
         t=0;q=(2*P+1)*W;qb=(3*P+2)*W;
         upload(f,F);upload(inv,inverse);
@@ -7378,12 +7420,48 @@ struct FoldDeviceState {
         return true;
     }
     void upload(size_t offset,const std::vector<unsigned long long> &v) {
+        if(v.empty())return;
         const double begin=now_s();CK(cudaMemcpy(memory.data[0]+offset,v.data(),v.size()*8,cudaMemcpyHostToDevice));
         stats->h2d_bytes+=v.size()*8;stats->t_upload+=now_s()-begin;
     }
+    void digest_root(size_t offset,size_t words) {
+        if(words) {
+            const unsigned blocks=(unsigned)std::min((size_t)1024,(words+255)/256);
+            groot_input_digest_kernel<<<blocks,256>>>(memory.data[0]+offset,words,stats->root_digest_words,digest);
+            CK(cudaGetLastError());stats->root_digest_words+=words;
+        }
+    }
+    void read_digest() {
+        CK(cudaMemcpy(stats->root_digest,digest,16,cudaMemcpyDeviceToHost));stats->d2h_bytes+=16;
+    }
+    void accept_device_root(const unsigned long long *src,size_t count,bool seed_root) {
+        if(!active || !src || count>P+1 || !count ||
+           (src!=layer->s4->d_rawA && src!=layer->s4->d_rawB) || count*W>layer->s4->raw_capacity(src)) {
+            std::fprintf(stderr,"FATAL: root-to-fold source is not a live bounded raw lease\n");std::exit(3);
+        }
+        const bool verify=fold_device_flag("NTT_GROOT_TO_FOLD_CHECK");
+        if(verify && P>64){std::fprintf(stderr,"FATAL: root-to-fold check limited to P<=64\n");std::exit(3);}
+        const double begin=now_s();const size_t dest=seed_root?h:g,words=count*W;
+        std::vector<unsigned long long> expected;
+        if(verify) {
+            expected.resize(words);CK(cudaMemcpy(expected.data(),src,words*8,cudaMemcpyDeviceToHost));
+            stats->d2h_bytes+=words*8;
+        }
+        CK(cudaMemcpyAsync(memory.data[0]+dest,src,words*8,cudaMemcpyDeviceToDevice));
+        if(fold_device_flag("NTT_GROOT_TO_FOLD_TEST_BAD") && !stats->root_device_trees)
+            CK(cudaMemsetAsync(memory.data[0]+dest,0xff,8));
+        if(verify) {
+            auto actual=read(dest,count);stats->root_checked_words+=2*words;
+            if(actual!=expected){std::fprintf(stderr,"FATAL: root-to-fold word mismatch\n");std::exit(3);}
+        }
+        if(seed_root)hcount=count;else gcount=count;
+        digest_root(dest,words);++stats->root_device_trees;stats->root_device_words+=words;
+        stats->root_h2d_avoided+=words*8;stats->root_d2h_avoided+=words*8;
+        stats->root_t_handoff+=now_s()-begin;
+    }
     void seed(const std::vector<unsigned long long> &H) {
         if(H.size()>(P+1)*W || H.size()%W){std::fprintf(stderr,"FATAL: device fold seed shape\n");std::exit(3);}
-        upload(h,H);hcount=H.size()/W;
+        upload(h,H);hcount=H.size()/W;digest_root(h,H.size());
     }
     std::vector<unsigned long long> read(size_t offset,size_t count) {
         std::vector<unsigned long long> v(count*W);const double begin=now_s();
@@ -7407,12 +7485,16 @@ struct FoldDeviceState {
     }
     void step(const std::vector<unsigned long long> &G) {
         if(G.size()>(P+1)*W || G.size()%W){std::fprintf(stderr,"FATAL: device fold G shape\n");std::exit(3);}
+        upload(g,G);digest_root(g,G.size());step_loaded(G.size()/W,check?&G:nullptr);
+    }
+    void step_loaded(size_t ng,const std::vector<unsigned long long> *host_G=nullptr) {
         ++stats->folds;++flat->folds;
         std::vector<unsigned long long> expected;
-        if(check)expected=fold_gmp_reference(*layer,G,read(h,hcount),*host_F);
-        if(G.empty() || !hcount){hcount=0;return;}
-        upload(g,G);
-        const size_t ng=G.size()/W,nT=ng+hcount-1;
+        if(check) {
+            auto G=host_G?*host_G:read(g,ng);expected=fold_gmp_reference(*layer,G,read(h,hcount),*host_F);
+        }
+        if(!ng || !hcount){hcount=0;return;}
+        const size_t nT=ng+hcount-1;
         mul(g,ng,h,hcount,t,nT);
         if(nT<=P) {
             CK(cudaMemcpyAsync(memory.data[0]+h,memory.data[1]+t,nT*W*8,cudaMemcpyDeviceToDevice));hcount=nT;
@@ -7433,7 +7515,7 @@ struct FoldDeviceState {
             if(actual!=expected){std::fprintf(stderr,"FATAL: device fold GMP mismatch P=%llu\n",(unsigned long long)P);std::exit(3);}
         }
     }
-    void finish(std::vector<unsigned long long> &H) {H=read(h,hcount);release();}
+    void finish(std::vector<unsigned long long> &H) {H=read(h,hcount);read_digest();release();}
 };
 
 static void fold_flat_fixture(PolyLayer &L)
@@ -7503,14 +7585,20 @@ static void fold_device_fixture(PolyLayer &L)
             auto H=make(nh,mode==0),G=make(ng,false);
             FoldFlatStats stats;FoldDeviceStats fd;FoldDeviceState state;
             if(!state.init(L,F,inverse,fd,stats)){std::fprintf(stderr,"FATAL: device fold fixture fell back: %s\n",fd.fallback.c_str());std::exit(3);}
-            state.seed(H);
+            state.seed(H);unsigned long long digest_words=0,expected_digest[2]={0,0};
+            groot_input_digest_host(H,digest_words,expected_digest);
             // mode 3 exercises repeated folds and a shorter final G with the same inverse.
             for(size_t round=0;round<(mode==3?3u:1u);++round) {
                 if(round==2)G.resize(std::min(G.size(),2*W));
                 auto expected=fold_gmp_reference(L,G,H,F);
+                groot_input_digest_host(G,digest_words,expected_digest);
                 state.step(G);H=state.read(state.h,state.hcount);
                 if(H!=expected) {std::fprintf(stderr,"%s: FATAL: flat fold GMP mismatch P=%llu mode=%llu round=%llu\n",NTT_PROBE_NAME,(unsigned long long)P,(unsigned long long)mode,(unsigned long long)round);std::exit(3);}
                 ++cases;words+=H.size();
+            }
+            state.read_digest();
+            if(fd.root_digest_words!=digest_words || fd.root_digest[0]!=expected_digest[0] || fd.root_digest[1]!=expected_digest[1]) {
+                std::fprintf(stderr,"FATAL: device root input digest mismatch\n");std::exit(3);
             }
         }
     }
@@ -9342,6 +9430,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     }
     const bool fold_flat_enabled=g_fold_flat && L.s4;
     BatchedRun R;
+    R.fold_device.root_requested=fold_device_flag("NTT_GROOT_TO_FOLD");
     R.fold_flat.enabled=fold_flat_enabled;
     R.P = P;
     R.giant_points = imax;
@@ -9752,6 +9841,13 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         const double tg0 = now_s();
         std::vector<std::vector<unsigned long long>> gt;
+        bool root_handed_off=false;
+        std::function<void(const unsigned long long*,size_t)> root_sink;
+        if(device_fold.active && R.fold_device.root_requested && g_s4_groot_only) {
+            root_sink=[&](const unsigned long long *src,size_t count) {
+                device_fold.accept_device_root(src,count,b==0);root_handed_off=true;
+            };
+        }
         if(device_leaf) {
             auto fill=[&](unsigned long long *out) {
                 const double t=now_s();const size_t first=lo-(clo-1),count=hi-lo;
@@ -9783,8 +9879,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 R.device_leaf.avoided_leaf_h2d_bytes+=16ull*count*W;
                 R.device_leaf.t_fill+=now_s()-t;
             };
-            gt=build_groot_device(L,bleaf,bdeg,bpad,bs,BC_GTREE,hi-lo,fill);
-        } else gt=build_groot_select(L,bleaf,bdeg,bpad,bs,BC_GTREE,!g_s4_groot_only);
+            gt=build_groot_device(L,bleaf,bdeg,bpad,bs,BC_GTREE,hi-lo,fill,root_sink);
+        } else gt=build_groot_select(L,bleaf,bdeg,bpad,bs,BC_GTREE,!g_s4_groot_only,root_sink);
         if (g_s4_groot_only) {
             const double tr0 = now_s();
             for (const auto &v : bleaf) g_groot.input_released_bytes += 8ull * v.capacity();
@@ -9799,20 +9895,25 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         g_groot.peak_node_bytes = std::max(g_groot.peak_node_bytes, bs.node_peak_bytes);
         g_groot.peak_retained_bytes = std::max(g_groot.peak_retained_bytes, bs.node_retained_bytes);
         g_groot.t_release += bs.t_release;
-        g_groot.root_words += gt[1].size();
-        // Fingerprint every actual G root on both production paths.
-        for (const auto w : gt[1]) g_groot.root_hash = (g_groot.root_hash ^ w) * 1099511628211ull;
+        g_groot.root_words += (bdeg[1]+1)*W;
+        // FNV is complete only when every root is materialized. Resident consumers
+        // fingerprint their actual inputs separately on the device.
+        if(root_handed_off)g_groot.root_hash_complete=false;
+        else for (const auto w : gt[1]) g_groot.root_hash = (g_groot.root_hash ^ w) * 1099511628211ull;
         gs.leaves += bs.leaves;
         gs.padded += bs.padded;
         gs.muls += bs.muls;
         if (b == 0) {
-            if(device_fold.active)device_fold.seed(gt[1]);
-            else if(fold_flat_enabled)Hflat=std::move(gt[1]);else H=cp_from_flat(gt[1],bdeg[1],W);
+            if(!root_handed_off) {
+                if(device_fold.active)device_fold.seed(gt[1]);
+                else if(fold_flat_enabled)Hflat=std::move(gt[1]);else H=cp_from_flat(gt[1],bdeg[1],W);
+            }
             continue;
         }
         /* ---- the fold: H <- (G*H) mod F, three full-size multiplies ---- */
         const double tf0 = now_s();
-        if(device_fold.active)device_fold.step(gt[1]);
+        if(root_handed_off)device_fold.step_loaded(device_fold.gcount);
+        else if(device_fold.active)device_fold.step(gt[1]);
         else if(fold_flat_enabled) {
             fold_flat_step(L,gt[1],Hflat,Ft[1],finvflat,R.fold_flat);
         } else {
@@ -10828,7 +10929,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
@@ -11074,6 +11175,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             (int)fd.requested,(int)fd.enabled,fd.fallback.c_str(),fd.folds,fd.muls,fd.sub_coeffs,fd.peak_bytes,
             fd.h2d_bytes,fd.d2h_bytes,fd.avoided_h2d_bytes,fd.avoided_d2h_bytes,fd.checked_words,
             fd.t_setup,fd.t_upload,fd.t_reverse,fd.t_subtract,fd.t_readback);
+        std::printf("real_batched_rootfold: requested=%d trees=%llu words=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu digest_words=%llu digest_sum=%016llx digest_xor=%016llx digest_kind=mixsum_xor_v1 t_handoff=%.6f\n",
+            (int)fd.root_requested,fd.root_device_trees,fd.root_device_words,fd.root_h2d_avoided,fd.root_d2h_avoided,
+            fd.root_checked_words,fd.root_digest_words,fd.root_digest[0],fd.root_digest[1],fd.root_t_handoff);
         std::printf("real_batched_gfinv: enabled=%d requests=%llu cache_hits=%llu groups=%llu segments=%llu group_attempts=%llu group_failures=%llu individual_attempts=%llu good=%llu nonunits=%llu scratch_peak_bytes=%llu t_prepare=%.6f\n",
             (int)g_gfinv_batch,g_gfinv.requests,g_gfinv.cache_hits,g_gfinv.groups,g_gfinv.segments,
             g_gfinv.group_attempts,g_gfinv.group_failures,g_gfinv.individual_attempts,g_gfinv.good,
@@ -11097,11 +11201,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             g_gmemory.pinned_borrow_peak_bytes,g_gmemory.rawA_peak_bytes,g_gmemory.rawB_peak_bytes);
         std::printf("real_batched_groot: root_only=%d builds=%llu nodes_released=%llu moves=%llu "
                     "node_peak_bytes=%llu retained_peak_bytes=%llu released_bytes=%llu input_released_bytes=%llu "
-                    "root_words=%llu trace=%d root_hash=%016llx t_release=%.6f (node capacities, not process peak)\n",
+                    "root_words=%llu trace=%d root_hash=%016llx t_release=%.6f root_hash_complete=%d (node capacities, not process peak)\n",
                     (int)g_s4_groot_only, g_groot.builds, g_groot.nodes_released, g_groot.passthrough_moves,
                     g_groot.peak_node_bytes, g_groot.peak_retained_bytes, g_groot.released_bytes,
                     g_groot.input_released_bytes, g_groot.root_words, (int)g_s4_carry_trace,
-                    g_groot.root_hash, g_groot.t_release);
+                    g_groot.root_hash, g_groot.t_release,(int)g_groot.root_hash_complete);
         std::printf("real_batched_cost: poly_muls=%llu operand_bits=%llu f_tree=%llu g_tree=%llu "
                     "fold=%llu descent=%llu inv=%llu total=%llu\n", L.cost.tot_muls(),
                     L.cost.tot_bits(), L.cost.bits[BC_FTREE], L.cost.bits[BC_GTREE],

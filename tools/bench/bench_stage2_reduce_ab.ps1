@@ -18,7 +18,7 @@ param(
     [ValidateSet(1,12)][int]$Stage1Extra = 1,
     [string]$ExpectedQHex = '',
     [int]$Device = 1,
-    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window','chunk_output','scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')][string]$Target = 'reduction',
+    [ValidateSet('reduction','oracle','oracle_pack','carry_batch','pack_direct','batch_mb','flat_direct','groot','workspace','fuse_scratch','final_readback','output_window','chunk_output','scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')][string]$Target = 'reduction',
     [ValidateRange(1,256)][int]$BatchMB = 32,
     [ValidateRange(1,256)][int]$CandidateBatchMB = 64,
     [ValidateRange(0,65536)][int]$ArenaMB = 0,
@@ -52,6 +52,7 @@ if ($Target -eq 'chunk_output') { $order = @('whole_output_buffer','chunk_output
 if ($Target -eq 'scaled_descent') { $order = @('division_descent','scaled_descent','scaled_descent','division_descent') }
 if ($Target -eq 'groot_device') { $order = @('host_groot','device_groot','device_groot','host_groot') }
 if ($Target -eq 'groot_memory') { $order = @('legacy_gmemory','compact_gmemory','compact_gmemory','legacy_gmemory') }
+if ($Target -eq 'root_fold') { $order = @('host_root','device_root','device_root','host_root') }
 if ($Target -eq 'fold_device') { $order = @('host_fold','device_fold','device_fold','host_fold') }
 if ($Target -eq 'device_gleaf') { $order = @('host_leaf','device_leaf','device_leaf','host_leaf') }
 if ($Target -eq 'small_prime') { $order = @('small_ladder','baby_reuse','baby_reuse','small_ladder') }
@@ -78,13 +79,14 @@ $overrides = @{ NTT_NAME_MAX='1'; NTT_S4_BATCH_MB="$BatchMB"; NTT_S4_ASYNC='1';
                 NTT_S4_MERSENNE='0'; NTT_S4_MERSENNE_TEST='0'; NTT_S4_MERSENNE_TEST_BAD='0';
                 NTT_GIANT_SEED_DEVICE='0'; NTT_GIANT_SEED_CHECK='0'; NTT_GFINV_SEG_EXACT='1'; NTT_GFINV_SEG_CHECK='0';
                 NTT_GFINV_SEG_TEST='0'; NTT_GFINV_SEG_TEST_BAD='0';
+                NTT_GROOT_TO_FOLD='0'; NTT_GROOT_TO_FOLD_CHECK='0'; NTT_GROOT_TO_FOLD_TEST_BAD='0';
                 NTT_FOLD_DEVICE='0'; NTT_FOLD_DEVICE_MAX_MB='640'; NTT_FOLD_DEVICE_CHECK='0';
                 NTT_FOLD_DEVICE_TEST='0'; NTT_FOLD_DEVICE_TEST_BAD='0'; NTT_FOLD_DEVICE_ALLOC_FAIL='0';
                 NTT_FOLD_FLAT='0'; NTT_FOLD_FLAT_TEST='0'; NTT_FOLD_FLAT_TEST_BAD='0';
                 NTT_GFINV_BATCH='0'; NTT_GFINV_BATCH_TEST='0'; NTT_GFINV_BATCH_TEST_BAD='0'; NTT_REAL_F_DUMP='';
                 NTT_STAGE1_EXTRA="$Stage1Extra"; NTT_STAGE1_Q_DUMP=$(if($ExpectedQHex -or $Stage1Extra -eq 12){'1'}else{'0'}) }
 if ($ArenaMB -gt 0) { $overrides.NTT_ARENA_CAP_KB = "$([long]$ArenaMB * 1024)" }
-if ($Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device')) {
+if ($Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) {
     $overrides.NTT_GIANT_CHAIN_MIN="$ChainMin"
     $overrides.NTT_GIANT_CHAIN_BLOCK='64'
     $overrides.NTT_GIANT_LADDER='0'
@@ -94,20 +96,22 @@ if($Target -eq 'mersenne' -and ($order -join ',') -ne 'division,mersenne,mersenn
 if($Target -eq 'small_prime' -and ($order -join ',') -ne 'small_ladder,baby_reuse,baby_reuse,small_ladder'){throw 'Small-prime ABBA order invalid'}
 if($Target -eq 'device_gleaf' -and ($order -join ',') -ne 'host_leaf,device_leaf,device_leaf,host_leaf'){throw 'Device leaf ABBA order invalid'}
 if($Target -eq 'fold_device' -and ($order -join ',') -ne 'host_fold,device_fold,device_fold,host_fold'){throw 'Device fold ABBA order invalid'}
+if($Target -eq 'root_fold' -and ($order -join ',') -ne 'host_root,device_root,device_root,host_root'){throw 'Root fold ABBA order invalid'}
 $saved = @{}
 foreach ($key in $overrides.Keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
 if($Target -eq 'fold_flat' -and ($order -join ',') -ne 'vector_fold,flat_fold,flat_fold,vector_fold'){throw 'flat fold ABBA order invalid'}
 if($Target -eq 'seed_device' -and ($order -join ',') -ne 'host_seed,device_seed,device_seed,host_seed'){throw 'seed ABBA order invalid'}
 $modeControls = @(foreach ($mode in $order) {
     [pscustomobject]@{ mode=$mode;
-        NTT_FOLD_DEVICE=$(if($mode -eq 'device_fold'){'1'}else{'0'});
-        NTT_DEVICE_GLEAF=$(if($mode -eq 'device_leaf' -or $Target -eq 'fold_device'){'1'}else{'0'});
-        NTT_SMALL_PRIME_REUSE=$(if($mode -eq 'baby_reuse' -or $Target -in @('device_gleaf','fold_device')){'1'}else{'0'});
-        NTT_S4_MERSENNE=$(if($mode -eq 'mersenne' -or $Target -in @('small_prime','device_gleaf','fold_device')){'1'}else{'0'});
-        NTT_GIANT_SEED_DEVICE=$(if ($mode -eq 'device_seed' -or $Target -in @('mersenne','small_prime','device_gleaf','fold_device')) {'1'}else{'0'});
+        NTT_GROOT_TO_FOLD=$(if($mode -eq 'device_root'){'1'}else{'0'});
+        NTT_FOLD_DEVICE=$(if($mode -eq 'device_fold' -or $Target -eq 'root_fold'){'1'}else{'0'});
+        NTT_DEVICE_GLEAF=$(if($mode -eq 'device_leaf' -or $Target -in @('fold_device','root_fold')){'1'}else{'0'});
+        NTT_SMALL_PRIME_REUSE=$(if($mode -eq 'baby_reuse' -or $Target -in @('device_gleaf','fold_device','root_fold')){'1'}else{'0'});
+        NTT_S4_MERSENNE=$(if($mode -eq 'mersenne' -or $Target -in @('small_prime','device_gleaf','fold_device','root_fold')){'1'}else{'0'});
+        NTT_GIANT_SEED_DEVICE=$(if ($mode -eq 'device_seed' -or $Target -in @('mersenne','small_prime','device_gleaf','fold_device','root_fold')) {'1'}else{'0'});
         NTT_GFINV_SEG_EXACT='1';
-        NTT_FOLD_FLAT=$(if ($mode -eq 'flat_fold' -or $Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' });
-        NTT_GFINV_BATCH=$(if ($mode -eq 'segment_batch' -or $Target -in @('fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' });
+        NTT_FOLD_FLAT=$(if ($mode -eq 'flat_fold' -or $Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' });
+        NTT_GFINV_BATCH=$(if ($mode -eq 'segment_batch' -or $Target -in @('fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' });
         NTT_S4_OLDTAIL=$(if ($mode -eq 'montgomery') { '1' } else { '0' });
         NTT_S4_ORACLE_ASYNC=$(if ($mode -eq 'oracle_async') { '1' } else { '0' });
         NTT_S4_ORACLE_PACK=$(if ($mode -eq 'gmp_digits') { '0' } else { '1' });
@@ -118,12 +122,12 @@ $modeControls = @(foreach ($mode in $order) {
         NTT_ARENA_WORKSPACE_POOL=$(if ($mode -eq 'keyed_workspace') { '0' } else { '1' });
         NTT_FUSE_COMPACT_SCRATCH=$(if ($mode -eq 'wide_scratch') { '0' } else { '1' });
         NTT_S4_FINAL_READBACK=$(if ($mode -eq 'whole_readback') { '1' } else { '0' });
-        NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' });
-        NTT_S4_CHUNK_OUTPUT=$(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' });
-        NTT_GROOT_DEVICE=$(if ($mode -eq 'device_groot' -or $Target -in @('groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' });
+        NTT_S4_OUTPUT_WINDOW=$(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' });
+        NTT_S4_CHUNK_OUTPUT=$(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' });
+        NTT_GROOT_DEVICE=$(if ($mode -eq 'device_groot' -or $Target -in @('groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' });
         NTT_GROOT_LEAF_STAGING=$(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' });
         NTT_GROOT_COMPACT_RAW=$(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' });
-        NTT_SCALED_DESCENT=$(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' });
+        NTT_SCALED_DESCENT=$(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' });
         NTT_S4_BATCH_MB=$(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { "$CandidateBatchMB" } else { "$BatchMB" }) }
 })
 @{ exe=$Exe; sha256=$binaryHash; args=$runArgs; order=$order; target=$Target; env=$overrides;
@@ -134,11 +138,12 @@ try {
     foreach ($key in $overrides.Keys) { [Environment]::SetEnvironmentVariable($key, $overrides[$key], 'Process') }
     for ($i = 0; $i -lt $order.Count; ++$i) {
         $mode = $order[$i]
-        $env:NTT_FOLD_DEVICE=$(if($mode -eq 'device_fold'){'1'}else{'0'})
-        $algorithm = $(if ($mode -eq 'montgomery') { 'montgomery' } elseif($mode -eq 'mersenne' -or $Target -in @('small_prime','device_gleaf','fold_device')){'mersenne'} else { 'division' })
-        $env:NTT_DEVICE_GLEAF=$(if($mode -eq 'device_leaf' -or $Target -eq 'fold_device'){'1'}else{'0'})
-        $env:NTT_SMALL_PRIME_REUSE=$(if($mode -eq 'baby_reuse' -or $Target -in @('device_gleaf','fold_device')){'1'}else{'0'})
-        $env:NTT_S4_MERSENNE=$(if($mode -eq 'mersenne' -or $Target -in @('small_prime','device_gleaf','fold_device')){'1'}else{'0'})
+        $env:NTT_GROOT_TO_FOLD=$(if($mode -eq 'device_root'){'1'}else{'0'})
+        $env:NTT_FOLD_DEVICE=$(if($mode -eq 'device_fold' -or $Target -eq 'root_fold'){'1'}else{'0'})
+        $algorithm = $(if ($mode -eq 'montgomery') { 'montgomery' } elseif($mode -eq 'mersenne' -or $Target -in @('small_prime','device_gleaf','fold_device','root_fold')){'mersenne'} else { 'division' })
+        $env:NTT_DEVICE_GLEAF=$(if($mode -eq 'device_leaf' -or $Target -in @('fold_device','root_fold')){'1'}else{'0'})
+        $env:NTT_SMALL_PRIME_REUSE=$(if($mode -eq 'baby_reuse' -or $Target -in @('device_gleaf','fold_device','root_fold')){'1'}else{'0'})
+        $env:NTT_S4_MERSENNE=$(if($mode -eq 'mersenne' -or $Target -in @('small_prime','device_gleaf','fold_device','root_fold')){'1'}else{'0'})
         $oracleAsync = $(if ($mode -eq 'oracle_async') { '1' } else { '0' })
         $oraclePack = $(if ($mode -eq 'gmp_digits') { '0' } else { '1' })
         $carryBatch = $(if ($mode -eq 'carry_batch') { '1' } else { '0' })
@@ -146,9 +151,9 @@ try {
         $batchBudget = $(if ($Target -eq 'batch_mb' -and $mode -eq "batch_$CandidateBatchMB") { $CandidateBatchMB } else { $BatchMB })
         $flatDirect = $(if ($mode -eq 'flat_copy') { '0' } else { '1' })
         $grootOnly = $(if ($mode -eq 'full_gtree') { '0' } else { '1' })
-        $env:NTT_FOLD_FLAT = $(if ($mode -eq 'flat_fold' -or $Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' })
-        $env:NTT_GIANT_SEED_DEVICE = $(if ($mode -eq 'device_seed' -or $Target -in @('mersenne','small_prime','device_gleaf','fold_device')) {'1'}else{'0'})
-        $env:NTT_GFINV_BATCH = $(if ($mode -eq 'segment_batch' -or $Target -in @('fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' })
+        $env:NTT_FOLD_FLAT = $(if ($mode -eq 'flat_fold' -or $Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' })
+        $env:NTT_GIANT_SEED_DEVICE = $(if ($mode -eq 'device_seed' -or $Target -in @('mersenne','small_prime','device_gleaf','fold_device','root_fold')) {'1'}else{'0'})
+        $env:NTT_GFINV_BATCH = $(if ($mode -eq 'segment_batch' -or $Target -in @('fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' })
         $env:NTT_S4_OLDTAIL = $(if ($algorithm -eq 'montgomery') { '1' } else { '0' })
         $env:NTT_S4_ORACLE_ASYNC = $oracleAsync
         $env:NTT_S4_ORACLE_PACK = $oraclePack
@@ -160,10 +165,10 @@ try {
         $env:NTT_ARENA_WORKSPACE_POOL = $(if ($mode -eq 'keyed_workspace') { '0' } else { '1' })
         $env:NTT_FUSE_COMPACT_SCRATCH = $(if ($mode -eq 'wide_scratch') { '0' } else { '1' })
         $env:NTT_S4_FINAL_READBACK = $(if ($mode -eq 'whole_readback') { '1' } else { '0' })
-        $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' })
-        $env:NTT_S4_CHUNK_OUTPUT = $(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' })
-        $env:NTT_GROOT_DEVICE = $(if ($mode -eq 'device_groot' -or $Target -in @('groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' })
-        $env:NTT_SCALED_DESCENT = $(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device')) { '1' } else { '0' })
+        $env:NTT_S4_OUTPUT_WINDOW = $(if ($mode -eq 'output_window' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' })
+        $env:NTT_S4_CHUNK_OUTPUT = $(if ($mode -eq 'chunk_output_buffer' -or $Target -in @('scaled_descent','groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' })
+        $env:NTT_GROOT_DEVICE = $(if ($mode -eq 'device_groot' -or $Target -in @('groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' })
+        $env:NTT_SCALED_DESCENT = $(if ($mode -eq 'scaled_descent' -or $Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) { '1' } else { '0' })
         $env:NTT_GROOT_LEAF_STAGING = $(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' })
         $env:NTT_GROOT_COMPACT_RAW = $(if ($mode -eq 'legacy_gmemory') { '0' } else { '1' })
         $residentMode = $env:NTT_GROOT_DEVICE -eq '1'
@@ -226,7 +231,7 @@ try {
             $m=[regex]::Match($foldLine,"(?:^| )$field=([0-9.]+)")
             if($m.Success){$foldFlat[$field]=[double]$m.Groups[1].Value}
         }
-        if($Target -eq 'fold_flat' -and ($foldFlat.Count -ne 9 -or "$($foldFlat.enabled)" -ne $(if($mode -eq 'flat_fold' -or $Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device')){'1'}else{'0'}) -or
+        if($Target -eq 'fold_flat' -and ($foldFlat.Count -ne 9 -or "$($foldFlat.enabled)" -ne $(if($mode -eq 'flat_fold' -or $Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')){'1'}else{'0'}) -or
            $ginv.enabled -ne 1 -or $shape.Groups[4].Value -eq '0' -or
            ($foldFlat.enabled -eq 1 -and ($foldFlat.folds -ne [UInt64]$shape.Groups[4].Value -or
              $foldFlat.muls -le 0 -or $foldFlat.sub_coeffs -le 0 -or $foldFlat.peak_bytes -le 0 -or
@@ -235,10 +240,10 @@ try {
         foreach($field in @('requested','enabled','folds','muls','sub_coeffs','peak_bytes','h2d_bytes','d2h_bytes',
                             'avoided_h2d_bytes','avoided_d2h_bytes','checked_words','setup','upload','reverse','subtract','readback')) {
             $m=[regex]::Match($fdLine,"(?:^| )$field=([0-9.]+)")
-            if($Target -eq 'fold_device' -and -not $m.Success){throw "Missing device fold counter: $field; inspect $log"}
+            if($Target -in @('fold_device','root_fold') -and -not $m.Success){throw "Missing device fold counter: $field; inspect $log"}
             $foldDevice[$field]=$(if($m.Success){[double]$m.Groups[1].Value}else{0.0})
         }
-        if($Target -eq 'fold_device' -and (-not $fdLine -or
+        if($Target -in @('fold_device','root_fold') -and (-not $fdLine -or
            $foldDevice.requested -ne [int]$env:NTT_FOLD_DEVICE -or $foldDevice.enabled -ne [int]$env:NTT_FOLD_DEVICE -or
            $fdLine -notmatch '(?:^| )fallback=none(?: |$)' -or
            ($foldDevice.enabled -eq 1 -and ($foldDevice.folds -ne [UInt64]$shape.Groups[4].Value -or
@@ -248,6 +253,18 @@ try {
             $foldDevice.avoided_h2d_bytes -le 0 -or $foldDevice.avoided_d2h_bytes -le 0)))) {
             throw "Device fold path/accounting failed; inspect $log"
         }
+        $rootLine=[regex]::Match($text,'(?m)^real_batched_rootfold:.*').Value;$rootFold=@{}
+        foreach($field in @('requested','trees','words','avoided_h2d_bytes','avoided_d2h_bytes','checked_words','digest_words','t_handoff')) {
+            $m=[regex]::Match($rootLine,"(?:^| )$field=([0-9.]+)")
+            if($Target -eq 'root_fold' -and -not $m.Success){throw "Missing root-fold counter: $field"}
+            $rootFold[$field]=$(if($m.Success){[double]$m.Groups[1].Value}else{0.0})
+        }
+        foreach($field in @('digest_sum','digest_xor')) {
+            $rootFold[$field]=[regex]::Match($rootLine,"(?:^| )$field=([0-9a-f]{16})(?: |$)").Groups[1].Value
+        }
+        $rootComplete=[regex]::Match($text,'real_batched_groot:.*?root_hash_complete=(\d+)')
+        if($Target -eq 'root_fold' -and -not $rootComplete.Success){throw "Missing G-root FNV completeness; inspect $log"}
+        $rootFold.hash_complete=[int]$rootComplete.Groups[1].Value
         $gleaf=[regex]::Match($text,'real_batched_gleaves: in=([0-9.]+) invert=([0-9.]+) out=([0-9.]+).*gscale=([0-9.]+)')
         $projective=[regex]::Match($text,'real_batched_projective: leaves=(\d+) gamma_points=(\d+) segments=(\d+) affine_fallback_points=(\d+)')
         $gdeviceLine=[regex]::Match($text,'(?m)^real_batched_gdevice:.*').Value;$gdevice=@{}
@@ -257,7 +274,7 @@ try {
             $m=[regex]::Match($gdeviceLine,"(?:^| )$field=(\d+)")
             if($m.Success){$gdevice[$field]=[UInt64]$m.Groups[1].Value}
         }
-        if($Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device') -and ($gdevice.Count -ne 18 -or
+        if($Target -in @('groot_device','groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold') -and ($gdevice.Count -ne 18 -or
            "$($gdevice.enabled)" -ne $env:NTT_GROOT_DEVICE -or $scaled.enabled -ne 1 -or
            $scaled.checked_states -ne 0 -or $scaled.checked_words -ne 0 -or
            ($residentMode -and ($gdevice.trees -le 0 -or $gdevice.fallbacks -ne 0 -or
@@ -273,7 +290,7 @@ try {
             throw "Mersenne reduction selector failed; inspect $log"
         }
         $small=@{}
-        if($Target -in @('small_prime','device_gleaf','fold_device')) {
+        if($Target -in @('small_prime','device_gleaf','fold_device','root_fold')) {
             $line=[regex]::Match($text,'(?m)^small_prime_reuse:.*').Value
             foreach($field in @('requested','available','matched','primes','reused','fallback','checked','bad','avoided_montmuls','avoided_h2d_bytes','avoided_d2h_bytes','cache_bytes','elapsed')) {
                 $m=[regex]::Match($line,"(?:^| )$field=([0-9.]+)")
@@ -291,7 +308,7 @@ try {
             }
         }
         $dleaf=@{}
-        if($Target -in @('device_gleaf','fold_device')) {
+        if($Target -in @('device_gleaf','fold_device','root_fold')) {
             $line=[regex]::Match($text,'(?m)^device_gleaf:.*').Value
             foreach($field in @('requested_chunks','chunks','fallback_chunks','groups','bad_groups','good_segments',
                 'device_trees','device_leaf_words','patch_words','group_d2h_bytes','bad_segment_d2h_bytes',
@@ -315,14 +332,14 @@ try {
             }
         }
         $seed=@{}
-        if($Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device')) {
+        if($Target -in @('seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold')) {
             $line=[regex]::Match($text,'(?m)^real_giant_seed:.*').Value
             foreach($field in @('enabled','exact_segments','chunks','points','avoided_d2h_bytes','avoided_h2d_bytes',
                 'avoided_cpu_modmuls','avoided_montmuls','checked_words','segments','segment_checks','segment_fix_muls','fix_table_peak_bytes')) {
                 $m=[regex]::Match($line,"(?:^| )$field=(\d+)")
                 if($m.Success){$seed[$field]=[UInt64]$m.Groups[1].Value}
             }
-            $expected=$(if($mode -eq 'device_seed' -or $Target -in @('mersenne','small_prime','device_gleaf','fold_device')){'1'}else{'0'})
+            $expected=$(if($mode -eq 'device_seed' -or $Target -in @('mersenne','small_prime','device_gleaf','fold_device','root_fold')){'1'}else{'0'})
             $w=[int][Math]::Ceiling(($NHex.TrimStart('0').Length*4)/64.0)
             if($seed.Count -ne 13 -or "$($seed.enabled)" -ne $expected -or $seed.exact_segments -ne 1 -or
                $seed.checked_words -ne 0 -or $seed.segment_checks -ne 0 -or $seed.fix_table_peak_bytes -le 0 -or
@@ -339,7 +356,7 @@ try {
             $m=[regex]::Match($gmemoryLine,"(?:^| )$field=(\d+)")
             if($m.Success){$gmemory[$field]=[UInt64]$m.Groups[1].Value}
         }
-        if($Target -in @('groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device') -and ($gmemory.Count -ne 11 -or
+        if($Target -in @('groot_memory','groot_carry','gfinv_batch','fold_flat','seed_device','mersenne','small_prime','device_gleaf','fold_device','root_fold') -and ($gmemory.Count -ne 11 -or
            "$($gmemory.compact_raw)" -ne $env:NTT_GROOT_COMPACT_RAW -or "$($gmemory.leaf_staging)" -ne $env:NTT_GROOT_LEAF_STAGING -or
            $gmemory.pinned_words+$gmemory.pageable_words+$dleaf.device_leaf_words -ne $gdevice.leaf_words -or
            $gmemory.rawA_peak_bytes+$gmemory.rawB_peak_bytes -ne $gdevice.raw_peak_bytes -or
@@ -558,6 +575,7 @@ try {
         foreach($field in $dleaf.Keys){$row|Add-Member -NotePropertyName ("device_leaf_"+$field) -NotePropertyValue $dleaf[$field]}
         foreach($field in $small.Keys){$row|Add-Member -NotePropertyName ("small_"+$field) -NotePropertyValue $small[$field]}
         foreach($field in $seed.Keys){$row|Add-Member -NotePropertyName ("seed_"+$field) -NotePropertyValue $seed[$field]}
+        foreach($field in $rootFold.Keys){$row|Add-Member -NotePropertyName ("root_fold_"+$field) -NotePropertyValue $rootFold[$field]}
         foreach($field in $foldDevice.Keys){$row|Add-Member -NotePropertyName ("fold_device_"+$field) -NotePropertyValue $foldDevice[$field]}
         foreach($field in $foldFlat.Keys){$row|Add-Member -NotePropertyName ("fold_flat_"+$field) -NotePropertyValue $foldFlat[$field]}
         foreach($field in $ginv.Keys){$row|Add-Member -NotePropertyName ("gfinv_"+$field) -NotePropertyValue $ginv[$field]}
@@ -592,7 +610,7 @@ try {
         $row|Add-Member -NotePropertyName stage2_init -NotePropertyValue ([double]$fullWall.Groups[2].Value)
         $row|Add-Member -NotePropertyName stage2_shape -NotePropertyValue ([double]$fullWall.Groups[1].Value)
         $mulWork=[regex]::Match($text,'s4_multiply_stats: enabled=1 launches=(\d+) poly_muls=(\d+)')
-        if($Target -eq 'fold_device' -and -not $mulWork.Success){throw 'Missing fold NTT workload'}
+        if($Target -in @('fold_device','root_fold') -and -not $mulWork.Success){throw 'Missing fold NTT workload'}
         $row|Add-Member -NotePropertyName ntt_launches -NotePropertyValue ([long]$mulWork.Groups[1].Value)
         $row|Add-Member -NotePropertyName ntt_pairs -NotePropertyValue ([long]$mulWork.Groups[2].Value)
         if($qHex) {
@@ -609,6 +627,7 @@ try {
         if($rows.Count -gt 0) {
             foreach($field in @('groot_root_hash','leaf_count','leaf_words','leaf_hash','factors','hit_primes','hits',
                                'shape_p','shape_giant_points','shape_num_poly_g','shape_loops')) {
+                if($Target -eq 'root_fold' -and $field -eq 'groot_root_hash'){continue}
                 if($row.$field -ne $rows[0].$field){throw "A/B output changed: $field; inspect $log"}
             }
         }
@@ -643,8 +662,31 @@ try {
             $row.carry_deferred -ne $rows[0].carry_deferred -or $row.carry_slices -ne $rows[0].carry_slices -or
             ($Target -notin @('groot_device','fold_device') -and ($row.raw_async -ne $rows[0].raw_async -or $row.out_async -ne $rows[0].out_async)) -or
             $row.pack_launches -ne $rows[0].pack_launches)) -or
-            ($Target -ne 'groot_device' -and (($Target -notin @('device_gleaf','fold_device') -and $row.h2d_gib -ne $rows[0].h2d_gib) -or ($Target -notin @('output_window','fold_device') -and $row.d2h_gib -ne $rows[0].d2h_gib))))) {
+            ($Target -ne 'groot_device' -and (($Target -notin @('device_gleaf','fold_device') -and $row.h2d_gib -ne $rows[0].h2d_gib) -or ($Target -notin @('output_window','fold_device','root_fold') -and $row.d2h_gib -ne $rows[0].d2h_gib))))) {
             throw "A/B results or coefficient count changed; inspect $log"
+        }
+        if($Target -eq 'root_fold') {
+            $direct=$mode -eq 'device_root';$expectedWords=([double]$row.shape_giant_points+[double]$row.shape_num_poly_g)*[Math]::Ceiling($NHex.TrimStart('0').Length*4/64.0)
+            if($row.fold_device_enabled -ne 1 -or $row.root_fold_requested -ne [int]$env:NTT_GROOT_TO_FOLD -or
+               $row.root_fold_digest_words -ne $expectedWords -or $rootLine -notmatch 'digest_kind=mixsum_xor_v1(?: |$)' -or
+               -not $row.root_fold_digest_sum -or -not $row.root_fold_digest_xor -or $row.root_fold_checked_words -ne 0 -or
+               ($direct -and ($row.root_fold_trees -ne $row.groot_builds -or $row.root_fold_words -ne $expectedWords -or
+                $row.root_fold_avoided_h2d_bytes -ne 8*$expectedWords -or $row.root_fold_avoided_d2h_bytes -ne 8*$expectedWords -or
+                $row.root_fold_hash_complete -ne 0 -or $row.groot_node_peak_bytes -ne 0 -or $row.groot_retained_peak_bytes -ne 0)) -or
+               (-not $direct -and ($row.root_fold_trees -ne 0 -or $row.root_fold_words -ne 0 -or
+                $row.root_fold_avoided_h2d_bytes -ne 0 -or $row.root_fold_avoided_d2h_bytes -ne 0 -or $row.root_fold_hash_complete -ne 1))) {
+                throw "Root-fold path/input checksum contract failed; inspect $log"
+            }
+            if($rows.Count -gt 0 -and ($row.root_fold_digest_sum -ne $rows[0].root_fold_digest_sum -or
+               $row.root_fold_digest_xor -ne $rows[0].root_fold_digest_xor -or $row.root_fold_digest_words -ne $rows[0].root_fold_digest_words -or
+               $row.ntt_launches -ne $rows[0].ntt_launches -or $row.ntt_pairs -ne $rows[0].ntt_pairs -or
+               $row.fold_device_h2d_bytes+$row.root_fold_avoided_h2d_bytes -ne $rows[0].fold_device_h2d_bytes -or
+               $row.fold_device_d2h_bytes -ne $rows[0].fold_device_d2h_bytes -or
+               $row.fold_device_avoided_h2d_bytes -ne $rows[0].fold_device_avoided_h2d_bytes -or
+               $row.fold_device_avoided_d2h_bytes -ne $rows[0].fold_device_avoided_d2h_bytes -or
+               [Math]::Abs($row.d2h_gib+$row.root_fold_avoided_d2h_bytes/1GB-$rows[0].d2h_gib) -gt 0.011)) {
+                throw "Root-fold checksum/workload/transfer delta disagrees; inspect $log"
+            }
         }
         if($Target -eq 'fold_device' -and $rows.Count -gt 0) {
             $expectedCalls=[double]$rows[0].flat_calls-$row.fold_device_muls
@@ -695,6 +737,9 @@ try {
                 'h2d_bytes','d2h_bytes','avoided_h2d_bytes','avoided_d2h_bytes','checked_words')) {
             $name="fold_device_"+$field;if($row.$name -ne $sameMode[0].$name){throw "Device fold workload changed within mode: $field"}
         }}
+        if($sameMode.Count){foreach($field in $rootFold.Keys){if($field -ne 't_handoff'){
+            $name="root_fold_"+$field;if($row.$name -ne $sameMode[0].$name){throw "Root-fold workload changed within mode: $field"}
+        }}}
         if($sameMode.Count){foreach($field in $ginv.Keys){if($field -ne 't_prepare'){
             $name="gfinv_"+$field;if($row.$name -ne $sameMode[0].$name){throw "Segment inverse workload changed within mode: $field"}
         }}}
