@@ -3980,7 +3980,7 @@ CPU本轮未重跑且D/degree/检查不同，不能宣称超越Prime95或完成�
 
 ## 52. 当前 Stage2 的逐步骤量化成本补充（2026-10-04）
 
-按用户要求补充 [当前流程报告§27](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:802)，源码基线bc4a68f，采用§51最终fold-flat候选的同二进制ABBA数据。本阶段仅修改文档和复算源码公式，没有编译、GPU实验或新增实现门禁；下一阶段的实现与实验单列§53。
+按用户要求补充 [当前流程报告§27](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:806)，源码基线bc4a68f，采用§51最终fold-flat候选的同二进制ABBA数据。本阶段仅修改文档和复算源码公式，没有编译、GPU实验或新增实现门禁；下一阶段的实现与实验单列§53。
 
 - 用S=bits(N)、W=ceil(S/64)、P=φ(D)/2、I=floor(B2/D)+2、G=ceil(I/P)统一每阶段计算、周期模型、RAM/显存载荷及累计生成/传输量；周期系数保留为待校准值，没有将乘加次数当机器周期。
 - M4423本例baby实际26709966次Montgomery乘法；giant seed26178817、chain12660336、段积1531492次，giant合计40370645次。seed占giant算术次数64.8462%，不是墙钟占比；seed CPU转域102110次模乘，seed坐标两方向分别57181600bytes。
@@ -3992,7 +3992,7 @@ CPU本轮未重跑且D/degree/检查不同，不能宣称超越Prime95或完成�
 
 ## 53. 精确段积尺度与 device seed 候选（2026-10-04）
 
-本轮先解决device leaf前的Γ尺度合同，再减少seed转域和传输；详细公式、当前量化账及源码行号见[流程报告§28](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:937)。GPU工作在GPU1，GPU0用户Stage1进程未改动。
+本轮先解决device leaf前的Γ尺度合同，再减少seed转域和传输；详细公式、当前量化账及源码行号见[流程报告§28](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:942)。GPU工作在GPU1，GPU0用户Stage1进程未改动。
 
 ### 53.1 实现及确定的工作量变化
 
@@ -4036,3 +4036,41 @@ host private峰均值7762→7758MB，只少4MB；NTT workspace owned/full3356.53
 device seed默认仍0。当前串行预算37.442curves/h，未测不同sigma并行队列；相对旧且D/检查不同、未重跑的CPU90.460s仍慢5.6892s，长期目标未完成。
 下一轮评估Mersenne专用S4系数归约，把N=2^S−1的W²商位乘法改为少数O(W)fold，通用N保留当前路径；当前归约10.24%的Amdahl预算约91.2285s（翻倍）/86.3077s（消除），不是实测。
 并推进GPU组Γ与device leaf：全好组只需U1598个Γ而非E102100个段，组Γ单方向894880bytes，坏组保留原回退；device叶可省3.4079GiB边界但坐标驻留可能多369.14MiB。固定F/finv每个顶层谱1GiB，先评估单谱缓存与共享scratch容量，再考虑不同曲线流水。
+
+## 54. Mersenne 专用S4归约：O(W) fold 替代W²长除法（2026-10-04）
+
+本轮实现上一节的Mersenne候选；详细算法、代码行号、计数、资源和profiler口径见[流程报告§29](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:1055)。GPU1测量；未改GPU0用户Stage1或生产文件。
+
+### 54.1 实现与正确性
+
+NTT_S4_MERSENNE默认0；启用时精确检查N>1且N+1为2幂，bits由S4Reduce当前modulus持有并显式传给launch。专用s4_reduce_kernel<NW,true>原地反复low_S(C)+high_S(C)，最后N映射为0；不引入Montgomery尺度。partial/full limb移位、carry和S<64均按实际live处理，不写死fold次数。保留全source位界检测、输出窗口/stride和旧Montgomery/forensic/S4-off回退。
+
+主要商位乘法数由约mwW²变为0，fold为Σ_vΣ_f max(W,d_vf−floor(S/64))个limb迭代；M4423本例旧W²代理197071924000次乘法，对比最多3次(W+1)fold预算8566595880个limb迭代，单位不同，不等于23倍周期加速。额外分配/PCIe0。
+cuobjdump最终NW128两实例REG均40，STACK6192→3104bytes；这不是独立VRAM载荷或运行occupancy。NCU2026.2.1在GPU1报ERR_NVGPUCTRPERM，无计数器数据，未改权限/时钟。
+
+隔离[exe](D:/code/MPA-OpenCl/build_cuda_cmake/_mersenne_20261004/stage2_tree_gpu.exe) SHA256 **AB915DD0F3E43DD78F5A673310BB9237D49250ADED0E836B35B6557381FC7554**，compile273.9s/link3.2s exit0。
+新[test_stage2_mersenne.py](D:/code/MPA-OpenCl/tools/test/test_stage2_mersenne.py:1) **36/0**；原完整套件显式fast/device seed/fold-flat/exact均1 **188/0**。720cases/20688字独立CPU/GPU→GMP，S2..8192/0/N±1/N²/全一/超宽；实际139窗口/alias+位界故障检查；63/64/65/127/128/521/4423/5261/8191/8192端到端配对，独立affine monic样例、冻结因子、通用N与OLDTAIL/S4-off回退、毒化拒绝通过。
+回退补测两次因测试脚本开启非法S4-off+scaled组合及错误leaf前缀失败；修正脚本后36/0，CUDA/exe未改变。证据：[36/0](D:/code/MPA-OpenCl/build_cuda_cmake/_mersenne_final_gate3_20261004/summary.json)、[188/0](D:/code/MPA-OpenCl/build_cuda_cmake/_mersenne_full_gate_20261004.log)。
+
+### 54.2 生产ABBA与当前预算
+
+runner -Target mersenne明确division/mersenne/mersenne/division；两边除快速归约外组合与§53一致。GPU1 M4423/sigma26/B1=1000/extra12，actual B2=2011326186870/D1231230/P115200/I1633592，batch64MiB/arena6300MiB。
+四轮full **95.780642 /87.739980 /87.638803 /95.585735s**，exit0/fullclean1/overflow0；均值 **95.6831885→87.6893915s（−7.993797s/−8.3544%）**；main79.902341→72.384038/init15.7808475→15.3053535。
+内部归约 **9.847→1.9855s（4.959倍/−79.8365%）**；G树28.2995→22.513/fold14.3225→13.589/下降9.3185→8.3235，giant14.457→14.4585没有改变。
+控制首末差0.194907s、候选两次差0.101177s，无置信区间。Q/Groot/leaf完整hash33cc6c63cec26c39900a7ed4ff551e2c2e0a533422905b538ec4f4aa809f092f/105d6128bbf522db/10619321735931855904一致；403calls/1979251pairs/40218760reduced/66139GMP samples/2400selftests/4full checks/8241carry checked-finishes一致bad0。
+
+候选init17.45%、giant16.49%、G叶3.30%、G树25.67%、finv2.78%、fold15.50%、H消Γ0.80%、下降9.49%、GCD0.20%、残差8.32%；归约 **2.26%嵌套**。残差也包含未单列的小素数分支，不是纯传输/CPU准备。
+host private峰均7766.5→7767MB无下降，NVML均5032MiB，workspace owned/full3356.537/3486.695MiB与24malloc/8grow/8890hit不变；主账H2D/D2H11.37/5.46GiB与window5.683GiB不变。
+1Hz full busy79.51→80.34%、main80.95→82.27%、低≤5%样本21/189→18/174，不是occupancy。串行预算37.624→41.054curves/h（约+9.12%），未测不同sigma并行。
+数值低于旧CPU90.460s约2.7706s，但CPU未重跑、D/degree/检查不同，公平超越和长期目标仍未证明。
+证据：[summary](D:/code/MPA-OpenCl/build_cuda_cmake/_mersenne_ab_20261004/summary.json)、[CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_mersenne_ab_20261004/results.csv)、[NVML](D:/code/MPA-OpenCl/build_cuda_cmake/_mersenne_ab_20261004/gpu1_summary.json)、[源码hash](D:/code/MPA-OpenCl/build_cuda_cmake/_mersenne_ab_20261004/source_verified.json)。ignored证据不随Git，tracked runner/gate可复现。
+
+### 54.3 Systems时间线与下一阶段
+
+Nsight Systems2026.1.3同exe/生产参数CUDA trace成功，CPU采样/context-switch关闭。SQLite有114528个kernel均GPU1，8923个S4 kernel均<bool1>、累计1.9528s；Stage1 chain8.6637s单列排除。Stage1之后首个GPU kernel至最后GPU事件窗口87.6897s，kernel/copy/memset并集68.4649s，约19.2248s未记录本进程GPU工作；省略初始CPU-only设置，不是精确Stage2或整卡idle/occupancy。
+全采集H2D/D2H13570897568/9366472536bytes，GPUcopy时间1.0666/0.7859s。11292个同步cudaMemcpy hostAPI共33.9657s，correlation匹配GPUcopy仅0.2905s/3340194472bytes；差额含等待/调度/staging，不能当纯PCIe时间或全算GPU空闲。cudaDeviceSynchronize36.0066s还包含Stage1/点kernel等待。
+默认NVTX统计无数据，GPUkernel文本报告受工具UTF-8问题影响；直接SQL查询numeric原始事件，不据此猜周期。证据：[nsys报告](D:/code/MPA-OpenCl/build_cuda_cmake/_mersenne_nsys_20261004.nsys-rep)、[查询汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_mersenne_nsys_summary_20261004.json)。
+
+另复算小素数分支K_s=max(0,π(min(B2,D/2))−π(B1))：本例50108点/11544588次Mont、坐标D2H56120960bytes；两轮pre−finv均值6.578s，是小素数及前置杂项的混合计时，已包含在残差，不另相加。对于p≤D/2且coprime D，baby已含j=p，其Z和unit/GCD结果可复用；p|D缺失点和缓存范围不符仍须回退，hit-prime/factor与饱和行为独立门禁。B1≥D/2时没有收益。
+
+下一阶段先验证这项重复点复用，再推进GPU组Γ→device leaf，减少CPU模乘、坐标回读/叶上传和准备；坏组保留原回退，坐标驻留增加约369MiB需预算/实测。固定F单谱缓存约1GiB及保持abR^-1合同的点Montgomery Mersenne专用路径也可研究。归约已只占2.26%，不继续把它当最大瓶颈。不同曲线交错可填补CPU空隙，但应共享scratch并解决context/statistics所有权；不能简单复制两个5GiB进程。生产save/队列和公平CPU对照仍待完成。

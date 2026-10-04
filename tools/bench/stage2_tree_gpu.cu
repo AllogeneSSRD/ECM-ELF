@@ -1596,6 +1596,7 @@ static void s4_oracle_release(S4Reduce &R);
 struct S4Reduce {
     /* the modulus (shared by every shape of the run) */
     int nw = 0;                          /* words of N */
+    int mersenne_bits = 0;               /* verified N=2^S-1, owned by this modulus */
     unsigned long long ninv = 0;         /* -N^-1 mod 2^64 */
     size_t w = 0;                        /* words per coefficient in the tree (W = ceil(S/64)) */
     mpz_t N{};                           /* the actual modulus, for the GMP oracle */
@@ -1891,8 +1892,107 @@ __host__ __device__ __forceinline__ int s4_div_rem(unsigned long long *t, int li
     return repairs;
 }
 
-/* base-2^64 limbs of the slot window -> mod N, on the device.  One thread per coefficient. */
+/* Plain remainder modulo an EXACT Mersenne modulus. Each fold replaces v by
+   low_S(v)+high_S(v), congruent because 2^S == 1. Read high words before overwriting
+   low words: this is safe even at S<64 (q=0). No Montgomery scaling enters here.
+   Input has at least one spare word; trailing words are ignored beyond live. */
 template <int NW>
+__host__ __device__ __forceinline__ int s4_mersenne_rem(unsigned long long *t, int live,
+    int nw, int bits, unsigned long long *out)
+{
+    const int q=bits/64,b=bits%64;
+    const unsigned long long mask=b ? ((1ull<<b)-1) : ~0ull;
+    while(live>0 && t[live-1]==0)--live;
+    int folds=0;
+    while(live>nw || (b && live==nw && (t[nw-1]>>b)!=0)) {
+        const int len=(live-q)>nw ? live-q : nw;
+        unsigned long long carry=0;
+        for(int i=0;i<len;++i) {
+            const int src=i+q;
+            const unsigned long long h0=src<live ? t[src] : 0ull;
+            const unsigned long long h1=(b && src+1<live) ? t[src+1] : 0ull;
+            const unsigned long long hi=b ? ((h0>>b)|(h1<<(64-b))) : h0;
+            const unsigned long long lo=i<nw ? (i==nw-1 ? (t[i]&mask) : t[i]) : 0ull;
+            const unsigned long long sum=lo+hi,next=sum+carry;
+            carry=((sum<lo)||(next<sum)) ? 1ull : 0ull;
+            t[i]=next;
+        }
+        live=len;
+        if(carry)t[live++]=carry;
+        while(live>0 && t[live-1]==0)--live;
+        ++folds;
+    }
+    bool equal=true;
+    for(int i=0;i<nw;++i) {
+        out[i]=i<live ? t[i] : 0ull;
+        if(out[i]!=(i==nw-1 ? mask : ~0ull))equal=false;
+    }
+    if(equal)for(int i=0;i<nw;++i)out[i]=0; // N itself is zero, canonical [0,N)
+    return folds;
+}
+
+static const bool g_s4_mersenne=[] {
+    const char *e=std::getenv("NTT_S4_MERSENNE");return e && std::atoi(e)!=0;
+}();
+
+/* Gate-only GPU primitive, independently checked against ordinary GMP remainders. */
+__global__ void s4_mersenne_fixture_kernel(const unsigned long long *input,int stride,
+    const int *lengths,int cases,int nw,int bits,unsigned long long *out,int *counts)
+{
+    const int k=blockIdx.x*blockDim.x+threadIdx.x;if(k>=cases)return;
+    unsigned long long t[260]={},u[128];
+    for(int i=0;i<lengths[k];++i)t[i]=input[(size_t)k*stride+i];
+    counts[k]=s4_mersenne_rem<128>(t,lengths[k],nw,bits,u);
+    for(int i=0;i<nw;++i)out[(size_t)k*nw+i]=u[i];
+}
+
+static void s4_mersenne_check()
+{
+    mpz_t N,v,want,got;mpz_inits(N,v,want,got,nullptr);
+    unsigned long long cases=0,words=0,bad=0,folds=0,seed=0x493caf523ull;
+    for(int bits : {2,3,31,63,64,65,127,128,129,255,256,4423,5261,8191,8192}) {
+        const int nw=(bits+63)/64,stride=2*nw+4,ncase=48;
+        mpz_set_ui(N,1);mpz_mul_2exp(N,N,bits);mpz_sub_ui(N,N,1);
+        std::vector<unsigned long long> input(ncase*stride),expected(ncase*nw),gpu(expected.size());
+        std::vector<int> lengths(ncase),counts(ncase);
+        for(int k=0;k<ncase;++k) {
+            auto *t=input.data()+(size_t)k*stride;
+            if(k==0)mpz_set_ui(v,0);
+            else if(k<4){mpz_set(v,N);if(k==1)mpz_sub_ui(v,v,1);if(k==3)mpz_add_ui(v,v,1);}
+            else if(k<7){mpz_mul(v,N,N);if(k==4)mpz_sub_ui(v,v,1);if(k==6)mpz_add_ui(v,v,1);}
+            else if(k<10){mpz_set_ui(v,1);mpz_mul_2exp(v,v,2*bits+20);if(k==7)mpz_sub_ui(v,v,1);if(k==9)mpz_add_ui(v,v,1);}
+            else {
+                for(int i=0;i<stride-1;++i){seed=seed*6364136223846793005ull+1;t[i]=seed;}
+                if(k==10)for(int i=0;i<stride-1;++i)t[i]=~0ull;
+                mpz_import(v,stride-1,-1,8,0,0,t);
+            }
+            std::fill(t,t+stride,0ull);size_t len=0;mpz_export(t,&len,-1,8,0,0,v);lengths[k]=(int)len;
+            mpz_mod(want,v,N);mpz_export(expected.data()+(size_t)k*nw,nullptr,-1,8,0,0,want);
+            unsigned long long scratch[260]={},u[128];std::copy(t,t+stride,scratch);
+            const int f=s4_mersenne_rem<128>(scratch,(int)len,nw,bits,u);
+            mpz_import(got,nw,-1,8,0,0,u);if(mpz_cmp(want,got))++bad;
+            folds+=f;
+        }
+        unsigned long long *di=nullptr,*doo=nullptr;int *dl=nullptr,*dc=nullptr;
+        CK(cudaMalloc(&di,input.size()*8));CK(cudaMalloc(&doo,gpu.size()*8));
+        CK(cudaMalloc(&dl,ncase*sizeof(int)));CK(cudaMalloc(&dc,ncase*sizeof(int)));
+        CK(cudaMemcpy(di,input.data(),input.size()*8,cudaMemcpyHostToDevice));
+        CK(cudaMemcpy(dl,lengths.data(),ncase*sizeof(int),cudaMemcpyHostToDevice));
+        s4_mersenne_fixture_kernel<<<1,64>>>(di,stride,dl,ncase,nw,bits,doo,dc);CK(cudaGetLastError());
+        CK(cudaMemcpy(gpu.data(),doo,gpu.size()*8,cudaMemcpyDeviceToHost));
+        CK(cudaMemcpy(counts.data(),dc,ncase*sizeof(int),cudaMemcpyDeviceToHost));
+        CK(cudaFree(di));CK(cudaFree(doo));CK(cudaFree(dl));CK(cudaFree(dc));
+        const char *fault=std::getenv("NTT_S4_MERSENNE_TEST_BAD");if(fault && std::atoi(fault))gpu[0]^=1;
+        for(size_t i=0;i<gpu.size();++i)if(gpu[i]!=expected[i])++bad;
+        cases+=ncase;words+=gpu.size();
+    }
+    mpz_clears(N,v,want,got,nullptr);
+    std::printf("s4_mersenne_check: cases=%llu words=%llu folds=%llu bad=%llu (CPU/GPU vs GMP, S=2..8192)\n",cases,words,folds,bad);
+    if(bad){std::fprintf(stderr,"FATAL: Mersenne remainder GMP mismatch\n");std::exit(3);}
+}
+
+/* base-2^64 limbs of the slot window -> mod N, on the device.  One thread per coefficient. */
+template <int NW, bool MERSENNE=false>
 __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long long n,
                                  int bpw, unsigned long long slot_words,
                                  unsigned long long out_slots, unsigned long long nbatch,
@@ -1902,7 +2002,7 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
                                  unsigned long long slot_bits, unsigned long long *bad,
                                  unsigned long long *s4_dbg, int tail_mont,
                                  int div_shift, unsigned long long div_recip,
-                                 unsigned long long first, unsigned long long count)
+                                 unsigned long long first, unsigned long long count, int mersenne_bits)
 {
     const unsigned long long total = out_slots * nbatch;
     const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
@@ -1940,6 +2040,12 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
         if (nacc > 0) t[limb++] = acc;
     }
     unsigned long long u[NW];
+    if constexpr(MERSENNE) {
+        const int limbs=(int)((slot_words*(unsigned long long)bpw+63)/64);
+        s4_mersenne_rem<NW>(t,limbs,nw,mersenne_bits,u);
+        for(unsigned long long i=0;i<w;++i)out[out_gid*w+i]=i<(unsigned long long)nw ? u[i] : 0ull;
+        return;
+    }
     if (!tail_mont && s4_dbg == nullptr) {
         /* Replace BOTH the L-step elimination and its domain-restoration multiply.  The
            forensic dump explicitly retains the old REDC path because it exposes r*R^-L. */
@@ -2049,13 +2155,17 @@ static void s4_launch_reduce(int nw, int L, unsigned long long nbatch,
                              unsigned long long w, unsigned long long *dout,
                              unsigned long long slot_bits, unsigned long long *dbad,
                              unsigned long long *s4_dbg = nullptr,
-                             unsigned long long first = 0, unsigned long long count = ~0ull)
+                             unsigned long long first = 0, unsigned long long count = ~0ull, int mersenne_bits=0)
 {
     const unsigned int th = 128;
     const unsigned int bl = (unsigned int)((total + th - 1) / th);
-    s4_reduce_kernel<NW><<<bl, th>>>(ddig, n, bpw, slot_words, out_slots, nbatch, dn, ninv, nw,
-                                     L, dy, w, dout, slot_bits, dbad, s4_dbg, s4_tail_mont_mode(),
-                                     g_div_shift, g_div_recip, first, count==~0ull ? out_slots : count);
+    if(mersenne_bits && !s4_tail_mont_mode() && s4_dbg==nullptr)
+        s4_reduce_kernel<NW,true><<<bl,th>>>(ddig,n,bpw,slot_words,out_slots,nbatch,dn,ninv,nw,
+            L,dy,w,dout,slot_bits,dbad,s4_dbg,0,g_div_shift,g_div_recip,first,count==~0ull ? out_slots : count,mersenne_bits);
+    else
+        s4_reduce_kernel<NW><<<bl, th>>>(ddig, n, bpw, slot_words, out_slots, nbatch, dn, ninv, nw,
+            L, dy, w, dout, slot_bits, dbad, s4_dbg, s4_tail_mont_mode(),
+            g_div_shift, g_div_recip, first, count==~0ull ? out_slots : count,0);
 }
 
 /* ---- THE 2-BY-1 DIVISION PRIMITIVE (objective 4, docs/DEV_GPUOWL_NTT_NOTES.md section 31) -----
@@ -2209,6 +2319,10 @@ static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
     R.ninv = ninv;
     R.hn = hn;
     mpz_set(R.N, N);
+    mpz_t plus;mpz_init(plus);mpz_add_ui(plus,N,1);
+    const bool exact_mersenne=mpz_cmp_ui(N,1)>0 && mpz_popcount(plus)==1;
+    R.mersenne_bits=(g_s4_mersenne && exact_mersenne) ? (int)mpz_sizeinbase(N,2) : 0;
+    mpz_clear(plus);
     s4_oracle_reset(R);
     s4_gmp_pack_check();
     CK(cudaMalloc(&R.dn, (size_t)R.nw * sizeof(unsigned long long)));
@@ -2283,8 +2397,12 @@ static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
     }
     s4_div_check(R.hn);
     std::printf("s4_reduce_mode: algorithm=%s nw=%d dshift=%d (NTT_S4_OLDTAIL=%d)\n",
-                s4_tail_mont_mode() ? "montgomery" : "division", R.nw, g_div_shift,
+                s4_tail_mont_mode() ? "montgomery" : (R.mersenne_bits ? "mersenne" : "division"), R.nw, g_div_shift,
                 s4_tail_mont_mode());
+    std::printf("s4_mersenne_mode: requested=%d eligible=%d bits=%d enabled=%d\n",(int)g_s4_mersenne,
+                (int)exact_mersenne,R.mersenne_bits,(int)(R.mersenne_bits && !s4_tail_mont_mode()));
+    const char *fixture=std::getenv("NTT_S4_MERSENNE_TEST");
+    if(fixture && std::atoi(fixture))s4_mersenne_check();
     return 0;
 }
 
@@ -2436,7 +2554,7 @@ static void s4_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
     CK(cudaEventCreate(&S->dt_ev[dts][1]));
     CK(cudaEventRecord(S->dt_ev[dts][0]));
     S2G_DISPATCH(R.nw, s4_launch_reduce, (int)R.nw, S->L, nbatch, out_slots, total, digits, n,
-                 bpw, slot_words, R.dn, R.ninv, S->dy, w, out, slot_bits, R.dbad, nullptr, first, count);
+                 bpw, slot_words, R.dn, R.ninv, S->dy, w, out, slot_bits, R.dbad, nullptr, first, count,R.mersenne_bits);
     CK(cudaGetLastError());
     CK(cudaEventRecord(S->dt_ev[dts][1]));
     S->dt_used[dts] = true;
@@ -2681,7 +2799,7 @@ static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
                   cudaMemcpyHostToDevice));
     S2G_DISPATCH(R.nw, s4_launch_reduce, (int)R.nw, S->L, 1ull, sel_os, sel_os, dd,
                  sel_n, bpw, slot_words, R.dn, R.ninv, S->dy,
-                 (unsigned long long)R.w, dout, S->slot_bits, (unsigned long long *)nullptr, ddbg);
+                 (unsigned long long)R.w, dout, S->slot_bits, (unsigned long long *)nullptr, ddbg,0,~0ull,R.mersenne_bits);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
     CK(cudaMemcpy(got.data(), dout, got.size() * sizeof(unsigned long long),
@@ -5223,7 +5341,7 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
     }
     S2G_DISPATCH(D.red->nw, s4_launch_reduce, (int)D.red->nw, S->L, nbatch, out_slots,
                  out_slots * nbatch, digits, n, bpw, slot_words, D.red->dn, D.red->ninv, S->dy, w,
-                 H.tmp, /*slot_bits=*/S->slot_stride, (unsigned long long *)D.dbad, ddbg);
+                 H.tmp, /*slot_bits=*/S->slot_stride, (unsigned long long *)D.dbad, ddbg,0,~0ull,D.red->mersenne_bits);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
     S->t_reduce += now_s() - t0;
@@ -5366,7 +5484,7 @@ static void s5_reduce_hook(void *ctx, const unsigned long long *digits, unsigned
                 S2G_DISPATCH(D.red->nw, s4_launch_reduce, (int)D.red->nw, S->L, 1ull, 1ull, 1ull,
                              dw, slot_words, bpw, slot_words, D.red->dn, D.red->ninv, S->dy,
                              (unsigned long long)D.red->w, dow, S->slot_bits,
-                             (unsigned long long *)nullptr, (unsigned long long *)nullptr);
+                             (unsigned long long *)nullptr, (unsigned long long *)nullptr,0,~0ull,D.red->mersenne_bits);
                 CK(cudaGetLastError());
                 CK(cudaDeviceSynchronize());
                 std::vector<unsigned long long> o1((size_t)D.red->w, 0ull);
@@ -7538,7 +7656,7 @@ static void s4_output_window_check(PolyLayer &L)
         std::vector<unsigned long long> canary(slices*W+2,0xfeedfacedeadbeefull),got(canary.size());
         CK(cudaMemcpy(dout,canary.data(),canary.size()*8,cudaMemcpyHostToDevice));CK(cudaMemset(dbad,0,8));
         S2G_DISPATCH(R.nw,s4_launch_reduce,(int)R.nw,S->L,slices,source_slots,source_slots*slices,
-                     dd,raw_stride,bpw,sw,R.dn,R.ninv,S->dy,R.w,dout,sb,dbad,nullptr,first,count);
+                     dd,raw_stride,bpw,sw,R.dn,R.ninv,S->dy,R.w,dout,sb,dbad,nullptr,first,count,R.mersenne_bits);
         unsigned long long hb=0;
         CK(cudaMemcpy(&hb,dbad,8,cudaMemcpyDeviceToHost));CK(cudaMemcpy(got.data(),dout,got.size()*8,cudaMemcpyDeviceToHost));
         ++canonical_cases;if(hb!=1) ++bad;
@@ -10222,7 +10340,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
