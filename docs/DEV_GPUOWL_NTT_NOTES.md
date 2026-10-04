@@ -4203,3 +4203,23 @@ Systems2026.1.3另采114640kernels全GPU1，15摘要kernel共.004582046s。H2D65
 [生产验收](D:/code/MPA-OpenCl/build_cuda_cmake/_root_fold_20261004/production_accept/summary.json)、[M4423引擎日志](D:/code/MPA-OpenCl/build_cuda_cmake/_root_fold_20261004/production_accept/m4423_engine.log)。
 
 步骤/公式/当前原文件行号在docs/STAGE2_GPU_CURRENT_PIPELINE.md§34，默认值与部署在ECM_CUDA_STAGE2.md。证据build_cuda_cmake/_root_fold_ab_clean_20261004、_root_fold_ab_repeat_20261004、_root_fold_gate_20261004、_root_fold_nsys_20261004.*、_root_fold_20261004，最终源码/分析/配置哈希与快照保留ignored目录。下一轮优先量化GMP/carry小读回同步与主机准备，其后不同sigma共享scratch流水；需独立Q/Γ/模数/owner状态与总RAM/VRAM预算，不能直接并发调用全局上下文。公平Prime95重跑与跨曲线吞吐仍待证明，长期goal保持active。
+
+## 61. 在完整驻留管线上启用异步 oracle 与 carry 合并（2026-10-04）
+
+基于fcab474，未改变stage2_tree_gpu.cu/ntt_poly_probe.cu算子。早期异步oracle与carry结果不足以支持当前默认值，故在真实M4423/extra12、GPU1上重新测量00/10/01/11四组合，每种两次，镜像顺序00/10/01/11/11/01/10/00。没有编译重叠，GPU0外部生产任务未改。B1=1000/B2=2011326186870/D1231230/P115200/I1633592/G15/batch64/arena6300MiB，实验exe仍为B70818C1…7198。
+
+00 full73.072038/main58.6242905 s；10 full72.3770585/main57.9390495 s；01 full72.455481/main58.084886 s；11 **full71.685022/main57.379686 s**，分别改善 **1.898%/2.123%**。两个样本/模式，结果只覆盖本形状，不能外推所有N/B2。oracle selected/compared1126、66139 GMP样本、8241 carry块、403 NTT批和最终叶10619321735931855904全部一致，错误0。oracle异步模式pending0/fallback0，原检查没有删减。
+
+carry finishes8241→252（max_group222），诊断每slice16 B，覆盖slice1893402不变；实际读取slice1893402→46193，减少29555344 B /7989次。Systems两次trace确认D2H3067203464→3037648120 B、次数14462→6473，同步Memcpy11330→1089=少7989 carry+2252 oracle同步调用；114640 kernels、H2D6556779952 B、D2D937993280 B保持。全部GPU copy约.822→.818 s，host同步等待33.430→22.556 s不能解释成纯PCIe节省。Stage1后近似GPU事件空档11.293→10.195 s（15.09%→13.82%），未插桩八次矩阵才是墙钟依据。
+
+四组合NVML GPU1峰均5544 MiB，arena payload3486.695 MiB不变。组合额外70 MiB raw pinned staging加1.573 MiB oracle环；OS私有提交峰均7557.5→7590.5 MiB，非物理RAM驻留峰。必须将pinned计入不同sigma流水预算。
+
+新增组合门禁 **26/0**：65/127/129/8192位四组合、chunk2强制carry聚合、ring1/8、window0、blocking output、host fold回退和故意污染oracle最后快照/首个carry块必须失败。CPU冻结因子59649589127497217/hit114713，所有baby/giant/F系数与参考一致；最终drain未验证不能成功。新runner污染门禁 **27/0**，原root/fold/leaf runner **22/14/7** 本轮重跑通过。同CUDA算子的既有188/0证据保留，没有声称本轮重新跑188项。
+
+生产wrapper默认oracle_async/carry_batch均1，显式0仍回退；实验exe仍缺省0。sm89/CUDA13.3重编译（CUDA245.1 s），exe2636800 bytes，SHA256 **ecee5b977ca52a38c71e284d55f3179e34674d9da24b85d2709ef8fde376b90f**。生产验收 **24/0**；实际M4423 save恢复init15.007673/main57.193577/total72.201250 s，selected/queued/compared1126、checked8241/finish252，最终叶同上。worktodo B2/skip/num仍选择961–970，失败不推进队列。单次生产接入计时不替代矩阵。
+
+新增runner target `resident_checks` 固定当前驻留开关，记录完整8次组合及实际mode_controls；保持所有payload、结果摘要与检查覆盖门禁，增加checked_chunks<=finishes*max_group。矩阵开始时的runner与后续guard/output修正版分别保存，算子和二进制未改变。最终矩阵footer用保存日志重放通过，main采用stage2_full_wall.main而非遗漏命名/最终drain的旧elapsed；不完整G-root FNV由实际owner输入sum/xor替代，最终叶FNV仍检查。
+
+[步骤/公式/原文件行号 §35](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:1548)、[8次量化](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_ab_20261004/quantitative.json)、[trace核对](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/profile_comparison.json)、[26门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_gate_20261004/summary.json)、[CPU对照](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/accept_all.log)、[生产24验收](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/production_accept/summary.json)。ignored证据不随Git提交。
+
+下一候选为固定F前向NTT频谱复用，尚未实现。Prime95ecm.cpp:9282/9287与9295/9302预处理F/reciprocal；隐藏ECMPolyCompress=-1/-2才要求PRE_FFT。M4423 q·F配置bpw19/slot_words467/N_NTT134217728，单cache1 GiB、可省13次F前向变换；收益须扣首次D2D/分配。先只缓存F，并以独立曲线owner、精确shape/version键、free-VRAM及未来workspace增长预算、逐字重算和污染门禁保证正确性。finv首次P+1/后续P前缀不同，不能按相同FFT长度盲目复用。真实多曲线和公平Prime95对照仍待完成，长期优化目标未完成。

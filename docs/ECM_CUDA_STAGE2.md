@@ -116,11 +116,13 @@ ECMSTAGE2=[AID,]k,b,n,c,save_name[,B2-or-zero][,skip_curves][,num_curves][,"know
 3. giant 树、积累/折叠、scaled 下降、块/叶 GCD 与因子验证。
 4. 排空算术检查，成功后写入结果；关闭进程以释放全部 CUDA 及 host 状态。
 
-采用已有优化默认值：Mersenne 特化、small-prime reuse、device giant seed、批量精确 segment inverse、device giant leaf/root、GPU 驻留 fold、scaled descent、输出窗口/分块。非 Mersenne N 使用原引擎一般模数路径。显式 `NTT_*` 环境变量可以覆盖默认值，仍保留实验自检与 GMP 采样。普通部署无需设置这些变量。
+采用已有优化默认值：Mersenne 特化、small-prime reuse、device giant seed、批量精确 segment inverse、device giant leaf/root、GPU 驻留 fold、scaled descent、输出窗口/分块，以及异步 oracle 和批量 carry 检查。非 Mersenne N 使用原引擎一般模数路径。显式 `NTT_*` 环境变量可以覆盖默认值，仍保留实验自检与 GMP 采样。普通部署无需设置这些变量。
 
 GPU fold 的默认开关是 `NTT_FOLD_DEVICE=1`，独立缓冲预算 `NTT_FOLD_DEVICE_MAX_MB=640`（MiB）；设置 `NTT_FOLD_DEVICE=0` 可恢复原 host flat fold。显存不足、形状/后端不兼容或超过预算时自动使用原路径。申请前还预留 workspace 剩余增长和 1 GiB 空间；预算不是全程序显存硬上限。其额外显存为 `8W(9P+8)+48` bytes，W=`ceil(bits(N)/64)`，P=`φ(D)/2`；M4423/P115200 为约 554 MiB，Γ 校正及下降前释放。并发启动不同队列时应为每条活跃曲线分别计入此容量。算法、传输公式、性能和门禁详见 [步骤报告 §33](STAGE2_GPU_CURRENT_PIPELINE.md#33-gpu-驻留-fold算法访存与验证2026-10-04)。
 
 G根直接交接默认 `NTT_GROOT_TO_FOLD=1`，设置0恢复根先读回再上传的路径；要求 GPU fold owner 和 root-only device G-tree 已启用，否则自动使用旧路径。该交接不新增大型缓冲，当前 owner 公式已含16 B输入摘要。日志中的原始G-root FNV仅在 `root_hash_complete=1` 时完整；直接路径应核对 `real_batched_rootfold` 的sum/xor与最终Γ校正叶值。详见 [步骤报告 §34](STAGE2_GPU_CURRENT_PIPELINE.md#34-g-root-直接交接给-gpu-fold2026-10-04)。
+
+检查调度默认 `NTT_S4_ORACLE_ASYNC=1`、`NTT_S4_CARRY_BATCH=1`，可分别设置0回退。oracle使用默认4槽pinned环，最终返回前全部验证；carry合并同形状中间块的诊断读回，覆盖数量保持。M4423实测增加约70 MiB raw pinned staging和1.573 MiB oracle pinned环，显存峰值保持5544 MiB。此额外RAM应计入多曲线预算；不是只看arena上限。详情见步骤报告§35。
 
 控制台输出每条记录开始/完成和结果文件路径。完整引擎输出默认在 exe/ini 目录的 `stage2_screen.log`；worker 2 为 `stage2_screen_2.log`。配置中的显式 `log_file` 优先；设空值则让引擎直接输出到控制台。
 
@@ -169,5 +171,11 @@ M4423 save 恢复时 owner 启用，14 folds/42 muls，init15.123476/main58.5150
 生产 M4423 save：init15.231398/main58.984101/total74.215499 s，15 roots/114352490 words全部直接交接，14 folds/42 muls；最终叶FNV`10619321735931855904`同基线，GMP/carry/NTT计数和bad0保持。这是部署验收单次计时，非新的A/B。save的Q=(X:1)与实验Stage1的等价投影Q使原始根输入摘要分别为sum`3cf2f49cf1972d5d`、xor`3fafa10f6f7f6f62`，与实验摘要不同；Γ⁻¹校正后叶值一致。跨入口不能把原始根摘要当作仿射结果摘要。
 
 [生产验收](D:/code/MPA-OpenCl/build_cuda_cmake/_root_fold_20261004/production_accept/summary.json)、[M4423引擎日志](D:/code/MPA-OpenCl/build_cuda_cmake/_root_fold_20261004/production_accept/m4423_engine.log)。
+
+### 2026-10-04 异步 oracle / carry 合并默认值更新
+
+当前exe SHA256=`ecee5b977ca52a38c71e284d55f3179e34674d9da24b85d2709ef8fde376b90f`，2636800 bytes；sm89/CUDA13.3，CUDA编译245.1 s。新默认检查调度已经通过生产入口 **24/0**。实际M4423 Stage1 save恢复init15.007673/main57.193577/total72.201250 s，最终叶FNV `10619321735931855904` 与基线相同；oracle1126任务/66139样本全部比较、pending0，carry8241块合并为252次finish，错误0。
+
+性能采用实验exe四组合八次交叉测试：00→11 total73.072038→71.685022 s（−1.898%），main58.6242905→57.379686 s（−2.123%）；本次生产单次时长用于接入验证。两开关可分别设0回退，检查样本/覆盖数保持。相关源码、容量公式与Nsight数据见 [报告§35](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:1548)。[生产验收](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/production_accept/summary.json)、[M4423日志](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/production_accept/m4423_engine.log)。
 
 同二进制两组ABBA共8次：total均75.086909→74.560906 s（观测−0.70%），main−0.42%，初始化未优化且有波动。确定收益为每曲线减少1.704 GiB主机边界传输，G根主机payload为0；显存观测峰保持5544 MiB。详细公式、测量范围及行号见步骤报告§34。

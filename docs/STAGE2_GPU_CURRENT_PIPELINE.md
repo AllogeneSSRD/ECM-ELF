@@ -1,6 +1,6 @@
 # 当前 CUDA ECM Stage2 实现：逐步骤说明
 
-日期：2026-10-03；量化及优化补充：2026-10-04。历史测量基线：`0cfa589`；代码行号已更新到 root-to-fold 引擎，device leaf 性能证据见§31.5–§31.6，独立生产驱动见§32，GPU 驻留 fold 历史基线见§33，本轮根交接见§34。§26–§31 保留各自测量基线。
+日期：2026-10-03；量化及优化补充：2026-10-04。历史测量基线：`0cfa589`；代码行号已更新到 root-to-fold 引擎，device leaf 性能证据见§31.5–§31.6，独立生产驱动见§32，GPU 驻留 fold 历史基线见§33，根交接见§34，本轮组合调度见§35。§26–§31 保留各自测量基线。
 
 本文按一条曲线的实际执行顺序说明算法、输入输出、CPU/GPU 分工和数据生命周期。代码链接均指向当前原文件的一处入口，行号为本基线的一基行号；后续修改源码时行号可能变化。
 
@@ -21,6 +21,8 @@
 `--real` 会自己重算 Stage1 Q；`--check-F` 从 CPU dump 读取 Q、baby/F 参考信息并验证。[run_check_F](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11434) 是独立检查入口，不能用它通过来替代 `--real` 输入生成正确性检查。
 
 ### 1.1 本文采用的优化组合
+
+本轮 `NTT_S4_ORACLE_ASYNC=1`、`NTT_S4_CARRY_BATCH=1` 采用§35经重新测量的组合；§33/34性能仍保留原blocking/per-chunk对照，不把旧等待分项当作当前纯CPU成本。
 
 本轮 `NTT_GROOT_TO_FOLD=1` 在 device fold owner 启用时直接交接根，实验缺省0、生产缺省1，详见§34。
 
@@ -1542,3 +1544,71 @@ A/B 仅对 root_fold 免除 **完整 G-root FNV 等值**，替换为两个输入
 [生产验收](D:/code/MPA-OpenCl/build_cuda_cmake/_root_fold_20261004/production_accept/summary.json)、[M4423引擎日志](D:/code/MPA-OpenCl/build_cuda_cmake/_root_fold_20261004/production_accept/m4423_engine.log)。
 
 下一轮优先评估 GMP/carry 小读回和同步排队，其后处理下降中的主机准备。不同 sigma 流水需要每曲线独立 Q/Γ/H/模数状态、共享大 NTT scratch 的明确调度和 RAM/VRAM 总预算；当前全局上下文不能直接多线程并发调用。当前 M4423 设备峰约 5.4 GiB，两套完整 arena 的直接复制不适合 8 GiB GPU。此轮仅证明单曲线交接，公平 Prime95 CPU 重跑与实际跨曲线吞吐仍待测。
+
+## 35. 驻留管线的异步 oracle + carry 合并（2026-10-04）
+
+本轮基于 `fcab474`，**未修改 CUDA 树或 NTT 算子**。复用已有两个调度开关，在§34完整驻留组合上测试四种组合：00阻塞oracle/逐中间chunk读carry，10异步oracle，01合并carry，11同时开启。早期§33开发日志的异步结果未证明收益，§49旧carry性能还早于归一化修复；不能直接作为当前默认值依据。这里重新测量真实 ECM 输入。
+
+### 35.1 执行与检查顺序
+
+- `NTT_S4_ORACLE_ASYNC=1`：选样方法、位置、样本数与GMP谓词不变。在对应GPU digit/reduced缓冲被复用前，将两组样本排队D2H到独立pinned环槽并记录事件。后续hook非阻塞查询最老槽，ready后在CPU做GMP比较。环满或最终drain才允许等待；槽重用前必须比较完成，成功返回/销毁前要求selected=compared、pending=0。没有把仍会重写的GPU指针交给异步CPU。
+- `NTT_S4_CARRY_BATCH=1`：同一(NTT长度、slice数)的连续interior chunks保留各slice的atomic residual/count和max-bit贡献，合并一次读回。尾块、非deferred块、shape/m变化前以及函数退出先finish，不得先清零或换arena再查。第一与尾chunk原诊断仍保留；实际减少的是读取次数。
+- 合并模式不会跳过GMP或carry检查。任何非零 residual、样本误差或最终未验证快照仍失败；两类故意污染均通过门禁。pinned分配失败使用原阻塞捕获，改变速度不改变谓词。
+
+原文件入口：异步开关与ring [stage2_tree_gpu.cu:1752](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1752)，快照消费 [3000](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3000)，最终drain [3023](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3023)，捕获 [3068](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3068)，carry边界 [3527](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3527)，底层finish [ntt_poly_probe.cu:3784](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3784)。
+
+实验CLI仍两个开关默认0；生产wrapper将两者默认1，设置 `NTT_S4_ORACLE_ASYNC=0`、`NTT_S4_CARRY_BATCH=0` 可分别回退；ring缺省4，允许1–8。
+
+### 35.2 计算、内存、传输公式
+
+检查计算量保持：oracle为同一 `C_sample` 个精确整数重建/模N比较，carry为同一批残留诊断kernel与atomic贡献。`T_full` 不能由删除的同步API等待时长直接推算。
+
+记环槽数K、每槽最大digit/reduced word容量d_k/r_k；host pinned oracle容量 `M_oracle=8Σ(d_k+r_k)` B，额外GPU大型缓冲0。近似上界 `8K*c_max*(slot_words_max+W)`，c_max由sample_limit/小批完整检查确定；默认96与K4的本次实测1649664 B（1.573 MiB）。大样本/不同形状应按实际cap计账。raw H2D staging仍以借用事件保护；carry合并模式交替两个operand-pair槽，额外host容量 `16*m_slot1*P_slot1*W`（实际capacity求和而非仅有效字数）。本次129025120→202425440 B，增加73400320 B /70 MiB。它不是新增VRAM，pinned属于RAM/私有提交并影响物理内存压力。
+
+每carry诊断slice为两个uint64。逐interior读回量 `D0=16Σ_chunks m_c`；合并读回量 `D1=16Σ_groups m_g`，同组m固定，保留第一/尾chunk其他读回。M4423 interior chunks8241→group252，覆盖slice数1893402不变，读取slice数1893402→46193，因此D0=30294432、D1=739088 B，净少29555344 B（28.19 MiB）；次数减少7989（96.94%）。oracle仍读相同样本，两次D2H/job由同步API改为异步API，不减少其数据量。
+
+主要operand/系数数据量与§34相同，owner容量580612528 B、host H2D/D2H摘要4.71/1.34 GiB保持；新组合的全trace D2H少的是carry诊断。所有114640 kernel数量及NTT多项式逻辑工作量保持。此轮不是FFT复用优化。
+
+### 35.3 八次矩阵测量与正确性
+
+GPU1 RTX4060 Laptop8GiB，M4423/sigma26/B1=1000/B2=2011326186870/D1231230/P115200/I1633592/G15，extra12/batch64/arena6300MiB，使用§34同exe SHA256 `b70818c167acab6f7ec57b22386ed88ae78bb6d7f5cad6c589fb215683eb7198`。顺序00/10/01/11/11/01/10/00，无编译或其他自启GPU任务重叠。两个样本/组合，控制分别73.148435/72.995641 s，11分别71.741286/71.628758 s；其他组合见CSV。
+
+- 00 full73.072038/main58.6242905/init14.4477475 s。
+- 10 full72.3770585/main57.9390495 s：full−0.951%，main−1.169%。
+- 01 full72.455481/main58.084886 s：full−0.844%，main−0.920%。
+- **11 full71.685022/main57.379686/init14.3053355 s：full−1.898%，main−2.123%，完整曲线少1.387016 s**。同开关也影响F-tree初始化，init改善约.1424 s；不能把main外计时忽略。观测串行49.27→50.22 curves/h，未验证不同sigma并发吞吐，也没有公平Prime95新加速比。
+- 11 G树21.5495→20.9175 s、下降8.675→8.1155 s，fold10.7215→10.751 s、giant14.206→14.2335 s；收益主要在G树及下降调度。full候选近似非重复占比init20.0%、giant19.9%、G树29.2%、fold15.0%、下降11.3%，其余finv/Γ/GCD等。归约1.974→1.976 s基本不变，属于嵌套计时。
+- oracle host5.728858→1.4520925 s、显式wait5.2785905→0、GMP.296132→.290741 s；pinned增长的t_alloc约1.1156 s，包含该调用可能等待前序GPU，不能当作纯内存分配计算成本。carry total readback50.59946→40.00836 s，其中group17.260625→3.8552035 s；等待有转移，不能把分项节省相加。
+- NVML四组合峰全5544MiB，完整arena payload3486.695MiB、24malloc/8grow/8890hit保持。日志OS私有提交峰00均7557.5、11均7590.5 MiB（原标签MB），增加33 MiB，不是物理RAM驻留峰；应同时考虑70 MiB raw pinned增量和oracle环。full1Hz busy87.43→88.30%、main90.03→91.68%，阶段倒推且不是SM occupancy；low≤5%full样本7/144→7/142。GPU-Z日志已读，设备归属采用GPU1 NVML，GPU0外部生产任务未改。
+
+所有8次403批/1979251对/40218760系数/2400mandatory自检/66139GMP/1126job/8241carry覆盖保持，bad0、selected=compared、pending0、fallback0。异步模式queued1126；抽样签名`b9cbd2041266767a`、Q SHA`33cc6c63...809f092f`、根输入sum`033a77303713f3a6`/xor`d16047fb14d39b21`、最终115200叶/8064000word/FNV`10619321735931855904`一致。
+
+新 [组合门禁](D:/code/MPA-OpenCl/tools/test/test_stage2_resident_checks.py:1) **26/0**：65/127/129/8192位四组合，强制chunk2使合并实际发生，ring1/8、window0、blocking output、host fold预算回退，以及oracle最终快照/首个interior carry污染拒绝。CPU F逐系数、全部baby/giant及冻结因子59649589127497217/hit114713对照通过，root/owner独立逐字与GMP检查开启。新runner污染 **27/0**，原root/fold/leaf runner22/14/7均本轮重新通过。既有同引擎188/0证据保留，未声称本轮重跑188项；本轮没有CUDA算子源码变化。
+
+`-Target resident_checks` 固定最新驻留开关，记录8次实际mode_controls与完整矩阵；跨模式保持Q/结果、NTT/GMP/carry覆盖及所有payload账目。新carry统计门禁增加 `checked_chunks <= finishes*max_group`，防止覆盖数与分组上限自相矛盾。
+
+### 35.4 Systems交叉核对
+
+同binary/输入分别采00和11，114640 kernels全GPU1，两次串行完成。H2D6556779952、D2D937993280 B保持；D2H3067203464→3037648120 B，次数14462→6473，差29555344 B/7989次逐字等于carry公式。同步Memcpy调用11330→1089，差10241=7989+2*1126，恰好为carry合并和oracle两组样本改Async。
+
+同步Memcpy host33.429796852→22.556052346 s，而对应GPU copy.067059330→.037021497 s；全部GPU copy总计约.821800912→.818009074 s基本不变。主要收益来自调度/准备及避免小诊断反复排空，不能解释成10.87 s的PCIe加速。
+
+Stage1后近似窗口74.865202016→73.796982751 s、GPU事件并集63.571711602→63.601756454 s，无本进程GPU事件11.293490414→10.195226297 s（15.09%→13.82%，少1.0983 s）。支持间隙减少，但只是两个插桩运行的近似范围，不是准确Stage2计时/整卡idle，墙钟结论采用未插桩8次矩阵。
+
+本地证据：[矩阵CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_ab_20261004/results.csv)、[量化](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_ab_20261004/quantitative.json)、[NVML](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_ab_20261004/gpu1_summary.json)、[26项门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_gate_20261004/summary.json)、[CPU对照日志](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/accept_all.log)、[两份trace核对](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/profile_comparison.json)。ignored测量及源码快照保留本地，不随Git提交。
+
+生产wrapper已将两开关默认设为1，sm89/CUDA13.3重编译成功（CUDA245.1 s）。新 `ecm_cuda_stage2.exe` 为2636800 bytes，SHA256 `ecee5b977ca52a38c71e284d55f3179e34674d9da24b85d2709ef8fde376b90f`；编译manifest中引擎SHA仍为 `e89b554d462b2e594ecdb39c394cff76c6fc01186a8856a273993d5ef5ed4f19`、NTT SHA仍为 `66cb4ffe1e5dcd8f765ba9059a29a317980223ba106613b3451644ddee2edd51`。生产入口基本21项加CUDA失败保留队列、saved-X已有因子及实际M4423恢复，共 **24/0**。
+
+生产M4423 save恢复init15.007673/main57.193577/total72.201250 s；oracle selected/queued/compared1126、samples66139、pending0/fallback0，carry checked8241/finishes252/max_group222，根15/114352490 words、fold14/42 muls，最终叶FNV `10619321735931855904`一致。save归一化Q的原始根摘要sum`3cf2f49cf1972d5d`/xor`3fafa10f6f7f6f62`与§34生产入口一致；不要求它等于实验射影Q的原始根摘要。本次单次计时只作为生产接入验收。
+
+[生产验收](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/production_accept/summary.json)、[编译manifest](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/build_manifest.json)、[M4423日志](D:/code/MPA-OpenCl/build_cuda_cmake/_resident_checks_20261004/production_accept/m4423_engine.log)。
+
+### 35.5 下一算法候选：固定 F 频谱复用（尚未实现）
+
+Prime95 [ecm.cpp:9282](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9282) 对F做polymult_preprocess，reciprocal同理见[9295](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9295)。默认ECMPolyCompress=1为预转置/压缩等预处理；隐藏−1/−2额外设置POLYMULT_PRE_FFT，增加内存。不能把所有默认预处理都称作完整频谱缓存。
+
+当前GPU [ntt_run_passes:3139](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3139) 在[3182](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3182) 对B前向变换，inverse只写A，B可在首次变换后复制到独立cache。先针对fold的第三乘法q·F做固定F缓存：每条曲线独立、精确shape/input版本键、预算及free-VRAM/future-growth预留检查、default stream先拷再允许scratch复用、拒绝/分配失败回退原路径、退出前释放。必须保留GMP/carry采样，验证缓存复用的逐字频谱与污染拒绝；不能以只匹配最终因子替代门禁。
+
+M4423纯shape公式：slot_bits=2S+ceil(log2(P+1))=8863，最大精确bpw19、slot_words467、N_NTT=nextpow2(2(P+1)*467+1)=134217728。因此一个F频谱需8N_NTT=1073741824 B /1 GiB；14个fold第三乘法的首次构建后可省13次F前向NTT。周期收益模型 `(G−2)*C_fwd(N_NTT)−C_D2D(8N_NTT)−C_alloc`，不是实测承诺。当前5.4GiB设备峰不能当作硬上限，缓存需要实际headroom检测。
+
+finv前缀在首次k=P+1与以后k=P可能不同，不能仅凭相同FFT长度直接复用同一频谱；F先行更易满足正确性和1GiB预算。不同sigma还需不同F/cache/Q/Γ，频谱不能跨曲线共用。共享scratch并发仍要限制累计host F-tree/pinned/owner/cache资源；公平CPU重跑、真实跨曲线吞吐和FFT缓存收益仍未证明，长期优化目标未完成。
