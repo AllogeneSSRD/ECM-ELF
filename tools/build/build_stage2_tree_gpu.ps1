@@ -47,6 +47,7 @@ if (-not $vcvars) { throw "vcvars64.bat not found; install the MSVC build tools"
 $src  = 'tools/bench/stage2_tree_gpu.cu'
 $dep  = 'tools/bench/ntt_poly_probe.cu'          # included by $src: a rebuild trigger too
 $coop = 'tools/bench/ntt_coop_outer.cuh'
+$dmodel = 'tools/bench/stage2_d_model.cuh'
 $inc  = '-I third_party/gmp-zen3/dist/include'
 $gmpLib = 'third_party/gmp-zen3/dist/lib'
 $gmpDll = 'third_party/gmp-zen3/dist/bin/gmp-10.dll'
@@ -63,7 +64,7 @@ Write-Host ("stage2_tree_gpu build: exe={0} arch={1}" -f $exe, $Arch)
 $needCompile = $true
 if (-not $Rebuild -and (Test-Path $obj) -and (Test-Path $exe)) {
     $objTime = (Get-Item $obj).LastWriteTime
-    if ($objTime -gt (Get-Item $src).LastWriteTime -and $objTime -gt (Get-Item $dep).LastWriteTime -and $objTime -gt (Get-Item $coop).LastWriteTime) {
+    if ($objTime -gt (Get-Item $src).LastWriteTime -and $objTime -gt (Get-Item $dep).LastWriteTime -and $objTime -gt (Get-Item $coop).LastWriteTime -and $objTime -gt (Get-Item $dmodel).LastWriteTime) {
         $needCompile = $false
     }
 }

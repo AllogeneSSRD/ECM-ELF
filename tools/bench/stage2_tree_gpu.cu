@@ -10687,60 +10687,7 @@ static bool real_run_words(unsigned long long P, int S, unsigned long long *out_
 /* the D scan's candidate record lives with the scan itself (section 59); the old `DChoice`, which
    only carried a memory footprint, was replaced by a cost+coverage model */
 
-/* Empirical v1 ranking, calibrated on sm89 RTX4060 Laptop/M4423 with xADD6,
-   resident roots/fold, warp tail and unchanged checks. Use the multiply backend's
-   actual N and count partial/unbalanced tree and Newton work; seconds are estimates.
-   Allocation/eviction/headroom checks remain authoritative. */
-struct DPhaseModel {
-    int bits;
-    unsigned long long bound;
-    std::map<unsigned long long,double> unit_cache,tree_cache,inverse_cache;
-    DPhaseModel(int s,unsigned long long b):bits(s),bound(b) {}
-    double unit(unsigned long long p) {
-        auto it=unit_cache.find(p);if(it!=unit_cache.end())return it->second;
-        unsigned long long n=0;
-        const double work=ntt_shape_query(p,bits,&n,nullptr,nullptr,nullptr,nullptr,nullptr)
-                          ? (double)n*std::log2((double)n) : 1e90;
-        unit_cache[p]=work;return work;
-    }
-    double tree(unsigned long long p) {
-        auto it=tree_cache.find(p);if(it!=tree_cache.end())return it->second;
-        double work=0;
-        for(unsigned long long h=1;h<p;h*=2)
-            work+=(double)((p+h)/(2*h))*unit(h+1);
-        tree_cache[p]=work;return work;
-    }
-    double inverse(unsigned long long k) {
-        auto it=inverse_cache.find(k);if(it!=inverse_cache.end())return it->second;
-        double work=0;unsigned long long m=1;
-        while(m<k) {m=std::min(2*m,k);work+=2*unit(m);}
-        inverse_cache[k]=work;return work;
-    }
-    struct Cost {double init,giant,gtrees,fold,descent,inv,accum,glue,total;};
-    Cost cost(unsigned long long d,unsigned long long p) {
-        const auto i=bound/d+2,g=(i+p-1)/p;
-        const double tw=tree(p),iw=inverse(p+1);
-        Cost c{};
-        c.init=3.4253945078511067e-06*p*std::max(1.0,std::log2((double)d)-2.0)+2.6393747066760531e-05*p+1.7447305084417047e-10*tw;
-        c.giant=3.7068770158438959e-07*i*(6.0+22.0*std::log2((double)bound)/64.0);
-        c.gtrees=7.758513401074988e-11*((double)(i/p)*tw+tree(i%p));
-        c.fold=2.1353197194212299e-10*(g-1)*unit(p+1);
-        c.descent=3.9597124012586936e-10*tw;c.inv=1.5652213657735564e-10*iw;c.accum=1.486006614455004e-06*p;c.glue=0.0382151508709496*g;
-        c.total=c.init+c.giant+c.gtrees+c.fold+c.descent+c.inv+c.accum+c.glue;
-        return c;
-    }
-    void print(unsigned long long d,unsigned long long p,unsigned long long owner) {
-        const auto c=cost(d,p);unsigned long long nf=0,nt=0,h=1;
-        while(2*h<p)h*=2;
-        ntt_shape_query(p+1,bits,&nf,nullptr,nullptr,nullptr,nullptr,nullptr);
-        ntt_shape_query(h+1,bits,&nt,nullptr,nullptr,nullptr,nullptr,nullptr);
-        std::printf("d_model_features: D=%llu P=%llu n_fold=%llu n_tree=%llu tree_work=%.0f "
-                    "inverse_work=%.0f init=%.6f giant=%.6f gtrees=%.6f fold=%.6f descent=%.6f "
-                    "inv=%.6f accum=%.6f glue=%.6f total=%.6f owner_bytes=%llu\n",
-                    d,p,nf,nt,tree(p),inverse(p+1),c.init,c.giant,c.gtrees,c.fold,c.descent,
-                    c.inv,c.accum,c.glue,c.total,owner);
-    }
-};
+#include "stage2_d_model.cuh"
 
 static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
@@ -10809,6 +10756,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        a candidate at all. */
     unsigned long long D = D_in, P_baby = 0;
     const bool model_requested=fuse_env_ull("NTT_D_MODEL",0)!=0;
+    const auto outer_mode=fuse_env_ull("NTT_FUSE_COOP_OUTER",0);
+    const bool shape_ntt=outer_mode==2 && d_shape_rates_valid && fuse_shape_policy_supported(12);
     bool calibrated=model_requested && g_xadd6 && g_s4_mersenne && g_groot_device &&
         g_s4_output_window && g_s4_chunk_output && g_s4_groot_only && g_s4_pack_direct &&
         g_s4_oracle_async && g_s4_oracle_pack && g_s4_carry_batch && !g_s4_final_readback &&
@@ -10816,7 +10765,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         B2>=100000000000ull && B2<=2011326186870ull &&
         std::strstr(prop.name,"RTX 4060 Laptop") &&
         fuse_env_ull("NTT_FUSE_T",12)==12 && fuse_env_ull("NTT_FUSE_M",4)==4 &&
-        fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0 && !fuse_env_ull("NTT_FUSE_COOP_OUTER",0) &&
+        fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0 && (outer_mode==0 || shape_ntt) &&
         fuse_env_ull("NTT_S4_BATCH_MB",64)==64 &&
         fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)==64 && fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768)==32768 &&
         fuse_env_ull("NTT_ARENA_WORKSPACE_POOL",1)!=0 &&
@@ -10832,10 +10781,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if(D_in && (phi_u64(D_in)/2==0 || B2/D_in+2<=phi_u64(D_in)/2 ||
                 owner_bytes(phi_u64(D_in)/2)>fold_budget))calibrated=false;
     const double d_scan_begin=now_s();
-    DPhaseModel phase_model((int)L.S,B2);
+    DPhaseModel phase_model((int)L.S,B2,shape_ntt);
+    const char *model_version=calibrated ? (shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
     std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu "
                 "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
-                (int)model_requested,(int)calibrated,calibrated ? "resident_xadd6_v1" : "legacy_56_1",
+                (int)model_requested,(int)calibrated,model_version,
                 (unsigned long long)cap,fold_budget);
     {
         struct DCand {
@@ -10905,9 +10855,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::sort(cands.begin(), cands.end(),
                   [](const DCand &a, const DCand &b) { return a.total < b.total; });
         if(calibrated) std::printf("d_scan: candidates=%llu (47-smooth D <= %llu) ; "
-                                  "model=resident_xadd6_v1 ranked by empirical full Stage2 cost; "
+                                  "model=%s ranked by empirical full Stage2 cost; "
                                   "actual NTT lengths, partial trees/Newton, owner and arena filters\n",
-                                  (unsigned long long)cands.size(),dlim);
+                                  (unsigned long long)cands.size(),dlim,model_version);
         else std::printf("d_scan: candidates=%llu (47-smooth D <= %llu) ; model fitted to the section "
                     "56.1 run (rates: loop=%.3f s per imax*log2, tree=%.1f us per leaf, "
                     "giant=%.2f us per step, glue=%.2f ms per batch) ; ranked by TOTAL COST "
@@ -10986,7 +10936,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 now_s()-d_scan_begin,D);
     if(d_plan_only) {
         std::printf("d_plan_only: D=%llu P=%llu curves_executed=0 model=%s\n",
-                    D,phi_u64(D)/2,calibrated ? "resident_xadd6_v1" : "legacy_56_1");
+                    D,phi_u64(D)/2,model_version);
         return 0;
     }
 

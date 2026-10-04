@@ -15,6 +15,10 @@ import time
 from functools import lru_cache
 
 GL_P=(1<<64)-(1<<32)+1
+# Frozen field-convolution ratios measured before the shape-policy D fit.
+# They weight only the empirical NTT feature, not elapsed time or GPU cycles.
+SHAPE_WEIGHTS={24:0.9386473792217225,25:0.8672913453433596,
+               26:0.885360571656581,27:0.9302319270266772}
 
 def phi(n):
     result=n;p=2
@@ -38,33 +42,34 @@ def shape(p,bits):
     if n>1<<29:raise ValueError('NTT shape refused')
     return n,bpw,sw
 
-def unit(p,bits):
+def unit(p,bits,profile=0):
     n,_,_=shape(p,bits)
-    return n*math.log2(n)
+    k=n.bit_length()-1
+    return n*k*(SHAPE_WEIGHTS.get(k,1.0) if profile==2 else 1.0)
 
 @lru_cache(None)
-def tree(p,bits):
+def tree(p,bits,profile=0):
     total=0;h=1
     while h<p:
-        total+=((p+h)//(2*h))*unit(h+1,bits)
+        total+=((p+h)//(2*h))*unit(h+1,bits,profile)
         h*=2
     return total
 
 @lru_cache(None)
-def inverse(k,bits):
+def inverse(k,bits,profile=0):
     size=1;total=0
     while size<k:
         size=min(2*size,k)
-        total+=2*unit(size,bits)
+        total+=2*unit(size,bits,profile)
     return total
 
-def features(d,b2,bits=4423):
+def features(d,b2,bits=4423,profile=0):
     p=phi(d)//2;i=b2//d+2;g=(i+p-1)//p;q,r=divmod(i,p)
     top_child=(1<<((p-1).bit_length()-1)) if p>1 else 1
-    return dict(D=d,P=p,I=i,G=g,B2=b2,bits=bits,fold_ntt=shape(p+1,bits)[0],tree_ntt=shape(top_child+1,bits)[0],
+    return dict(D=d,P=p,I=i,G=g,B2=b2,bits=bits,profile=profile,fold_ntt=shape(p+1,bits)[0],tree_ntt=shape(top_child+1,bits)[0],
                 baby=p*max(1,math.log2(d)-2),affine=p,
-                ftree=tree(p,bits),gtrees=q*tree(p,bits)+(tree(r,bits) if r else 0),
-                fold=(g-1)*unit(p+1,bits),descent=tree(p,bits),inverse=inverse(p+1,bits),
+                ftree=tree(p,bits,profile),gtrees=q*tree(p,bits,profile)+(tree(r,bits,profile) if r else 0),
+                fold=(g-1)*unit(p+1,bits,profile),descent=tree(p,bits,profile),inverse=inverse(p+1,bits,profile),
                 giant=i*(6+22*math.log2(b2)/64),accum=p,owner_bytes=8*((bits+63)//64)*(9*p+8)+48)
 
 def read_log(path):
@@ -90,18 +95,26 @@ def main():
     p.add_argument('--output',type=Path,required=True);p.add_argument('--d',type=int,nargs='+',required=True)
     p.add_argument('--device',type=int,default=1);p.add_argument('--repeats',type=int,default=2)
     p.add_argument('--b2',type=int,help='Override only the Stage2 upper bound; keep Stage1 Q identical')
+    p.add_argument('--coop-mode',type=int,choices=(0,1,2),default=0,
+                   help='0 original, 1 forced cooperative, 2 measured shape policy')
     p.add_argument('--expected-q-sha256',required=True,help='SHA256 of lowercase affine Q hex from an independent reference')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('Use a fresh output directory')
     prov=json.loads(a.provenance.read_text(encoding='utf-8-sig'));exe=a.exe.resolve()
     base={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     base.update({k:str(v) for k,v in prov['env'].items() if v is not None})
-    base.update({k:str(v) for k,v in next(x for x in prov['mode_controls'] if x['mode']=='6_mont').items() if k!='mode'})
-    base.pop('NTT_FUSE_TRACE',None);base.update(NTT_XADD6_TEST='0',NTT_XADD6_TEST_BAD='0',NTT_D_MODEL='0')
+    control=next(x for x in prov['mode_controls'] if x['mode'] in ('6_mont','shape_outer'))
+    base.update({k:str(v) for k,v in control.items() if k!='mode'})
+    base.pop('NTT_FUSE_TRACE',None);base.update(NTT_XADD6_TEST='0',NTT_XADD6_TEST_BAD='0',NTT_D_MODEL='0',
+        NTT_FUSE_COOP_OUTER=str(a.coop_mode),NTT_FUSE_COOP_TEST='0',NTT_FUSE_COOP_BAD='0')
     cmd0=[str(exe)]+[str(x) for x in prov['args']]
     if a.b2 is not None:cmd0[cmd0.index('--b2')+1]=str(a.b2)
     # Replace only values in the observed argv, retaining the exact N/Q/sigma/bounds.
     b2=int(cmd0[cmd0.index('--b2')+1]);bits=int(cmd0[cmd0.index('--n-hex')+1],16).bit_length()
+    if a.coop_mode==2 and (bits!=4423 or int(cmd0[cmd0.index('--b1')+1])!=1000 or
+        base.get('NTT_FUSE_T')!='12' or base.get('NTT_FUSE_M','4')!='4' or
+        base.get('NTT_FUSE_WARP_TAIL')!='1' or base.get('NTT_FUSE_COMPACT_SCRATCH')!='1'):
+        raise RuntimeError('Shape-policy calibration needs the measured M4423/B1/tile/warp/compact scope')
     rows=[];expected_q=None;sha=hashlib.sha256(exe.read_bytes()).hexdigest()
     for repeat in range(a.repeats):
         for d in (a.d if repeat%2==0 else a.d[::-1]):
@@ -121,7 +134,11 @@ def main():
             qline=q[0]
             if expected_q is None:expected_q=qline
             elif qline!=expected_q:raise RuntimeError('Stage1 Q changed across D')
-            f=features(d,b2,bits)
+            if a.coop_mode==2:
+                if 'RTX 4060 Laptop' not in text or base.get('NTT_FUSE_T')!='12' or \
+                   base.get('NTT_FUSE_WARP_TAIL')!='1' or base.get('NTT_FUSE_COMPACT_SCRATCH')!='1':
+                    raise RuntimeError('Shape-policy fit requires the measured device/tile/warp/compact scope')
+            f=features(d,b2,bits,2 if a.coop_mode==2 else 0)
             fd=re.search(r'real_batched_folddevice:.*enabled=(\d+)',text)
             if not fd or (f['G']>1 and fd[1]!='1'):
                 raise RuntimeError('Multiple G polynomials require GPU resident fold')

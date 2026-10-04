@@ -38,7 +38,7 @@ def main():
     p.add_argument('--fit',type=Path,required=True);p.add_argument('--b2',type=int,required=True)
     p.add_argument('--bits',type=int,default=4423);p.add_argument('--arena-mb',type=int,default=6300)
     p.add_argument('--fold-mb',type=int,default=640);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();rates=json.loads(a.fit.read_text())['rates'];rows=[];count=0
+    a=p.parse_args();fit=json.loads(a.fit.read_text());rates=fit['rates'];profile=fit.get('feature_profile',0);rows=[];count=0
     for d,pb in candidates(200000000):
         count+=1
         owner=8*((a.bits+63)//64)*(9*pb+8)+48
@@ -49,13 +49,13 @@ def main():
         i=a.b2//d+2;g=(i+pb-1)//pb;q,r=divmod(i,pb)
         # G=1 takes a different direct-remainder path, absent from this fit.
         if g<2:continue
-        f=dict(D=d,P=pb,I=i,G=g,baby=pb*max(1,math.log2(d)-2),affine=pb,ftree=tree(pb,a.bits),
-               gtrees=q*tree(pb,a.bits)+(tree(r,a.bits) if r else 0),fold=(g-1)*unit(pb+1,a.bits),
-               descent=tree(pb,a.bits),inverse=inverse(pb+1,a.bits),giant=i*(6+22*math.log2(a.b2)/64),accum=pb)
+        f=dict(D=d,P=pb,I=i,G=g,baby=pb*max(1,math.log2(d)-2),affine=pb,ftree=tree(pb,a.bits,profile),
+               gtrees=q*tree(pb,a.bits,profile)+(tree(r,a.bits,profile) if r else 0),fold=(g-1)*unit(pb+1,a.bits,profile),
+               descent=tree(pb,a.bits,profile),inverse=inverse(pb+1,a.bits,profile),giant=i*(6+22*math.log2(a.b2)/64),accum=pb)
         pred=predict(f,rates)
         rows.append(dict(features=f,prediction=pred,arena_bytes=arena,owner_bytes=owner,fold_ntt=n,tree_ntt=nt))
     rows.sort(key=lambda r:r['prediction']['full'])
-    result={'candidates':count,'admitted':len(rows),'bits':a.bits,'B2':a.b2,'arena_mb':a.arena_mb,'fold_mb':a.fold_mb,'top':rows[:20]}
+    result={'candidates':count,'admitted':len(rows),'bits':a.bits,'B2':a.b2,'feature_profile':profile,'arena_mb':a.arena_mb,'fold_mb':a.fold_mb,'top':rows[:20]}
     a.output.write_text(json.dumps(result,indent=2),encoding='utf-8')
     print(json.dumps({'candidates':count,'admitted':len(rows),'top':[(r['features']['D'],r['features']['P'],r['prediction']['full']) for r in rows[:6]]}))
 

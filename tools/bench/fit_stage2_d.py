@@ -23,20 +23,32 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--measurements',type=Path,required=True)
     p.add_argument('--anchor-csv',type=Path,nargs='*',default=[])
+    p.add_argument('--anchor-mode',choices=('6_mont','shape_outer'),default='6_mont')
     p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();m=json.loads(a.measurements.read_text())
     rows=[r.copy() for r in m['runs'] if r['features']['G']>1]
     if not rows:raise ValueError('Resident fold fit needs measurements with G >= 2')
+    profile=2 if m['env'].get('NTT_FUSE_COOP_OUTER')=='2' else 0
+    if profile==2 and a.anchor_csv and a.anchor_mode!='shape_outer':
+        raise ValueError('Original-NTT xADD anchors cannot enter a shape-policy fit')
     for row in rows:
         cmd=row['command'];b2=int(cmd[cmd.index('--b2')+1]);bits=int(cmd[cmd.index('--n-hex')+1],16).bit_length()
-        row['features']=features(row['features']['D'],b2,bits)
+        row['features']=features(row['features']['D'],b2,bits,profile)
     for path in a.anchor_csv:
+        prov=json.loads((path.parent/'provenance.json').read_text(encoding='utf-8-sig'))
+        if profile==2 and prov['sha256'].lower()!=m['sha256'].lower():
+            raise ValueError('Shape anchors must use the same measured binary')
+        controls=next(r for r in prov['mode_controls'] if r['mode']==a.anchor_mode)
+        if profile==2 and controls.get('NTT_FUSE_COOP_OUTER')!='2':
+            raise ValueError('Shape anchors must enable the same NTT profile')
+        argv=prov['args'];d=int(argv[argv.index('--d')+1]);b2=int(argv[argv.index('--b2')+1])
+        bits=int(argv[argv.index('--n-hex')+1],16).bit_length()
         for row in csv.DictReader(path.open(encoding='utf-8-sig')):
-            if row['mode']!='6_mont':continue
+            if row['mode']!=a.anchor_mode:continue
             rows.append(dict(name=str(path.parent.name)+'/'+row['run'],log=row['log'],
-                             features=features(1231230,2011326186870),phases=parse(read_log(row['log']))))
+                             features=features(d,b2,bits,profile),phases=parse(read_log(row['log']))))
     rates=fit(rows)
-    result={'exe':m['exe'],'sha256':m['sha256'],'device':m['device'],'rates':rates,
+    result={'exe':m['exe'],'sha256':m['sha256'],'device':m['device'],'env':m['env'],'rates':rates,'feature_profile':profile,
             'scope':'RTX4060 Laptop sm89, exact M4423, resident pipeline, xADD6, warp tail, batch64/chain64',
             'equations':FEATURES,'runs':[]}
     for r in rows:

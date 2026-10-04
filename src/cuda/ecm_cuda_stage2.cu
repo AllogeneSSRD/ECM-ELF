@@ -12,6 +12,7 @@ struct ProductionDefaults {
             "NTT_GROOT_TO_FOLD", "NTT_S4_ORACLE_ASYNC", "NTT_S4_CARRY_BATCH",
             "NTT_FUSE_WARP_TAIL", "NTT_XADD6", "NTT_D_MODEL"};
         for (const char *key : keys) set_default(key, "1");
+        set_default("NTT_FUSE_COOP_OUTER", "2");
         set_default("NTT_DEVICE_GLEAF_MAX_MB", "512");
         set_default("NTT_FOLD_DEVICE_MAX_MB", "640");
         set_default("NTT_S4_BATCH_MB", "64");

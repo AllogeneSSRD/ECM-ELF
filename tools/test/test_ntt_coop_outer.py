@@ -28,6 +28,11 @@ def main():
             checks['all_kernel_resources']=len(resources)==8
             checks['no_local_spill']=len(resources)==8 and all(r['local']=='0' and int(r['max_blocks'])>0 for r in resources)
         else:checks['fault_compared']=bool(re.search(r'ntt_fuse_coop_check: .*bad=[1-9]',text))
+    r=subprocess.run([str(a.exe.resolve()),str(a.device),'--policy'],env=env,
+                     stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)
+    text=r.stdout.decode('utf-8',errors='replace');(a.output/'policy.log').write_text(text,encoding='utf-8')
+    checks['shape_policy_exit']=r.returncode==0
+    checks['shape_policy_boundaries_overrides']=bool(re.search(r'ntt_shape_policy_check: calls=88 supported=[01] bad=0',text))
     result=dict(exe=str(a.exe.resolve()),sha256=hashlib.sha256(a.exe.read_bytes()).hexdigest(),
                 device=a.device,checks=checks,resources=resources,passed=sum(checks.values()),failed=sum(not v for v in checks.values()))
     (a.output/'summary.json').write_text(json.dumps(result,indent=2),encoding='utf-8');print(json.dumps(result,indent=2))

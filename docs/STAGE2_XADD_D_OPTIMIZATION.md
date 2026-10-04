@@ -132,19 +132,19 @@ fit内误差约−4.20..+2.35%，leave-D-out约−4.16..+4.18%。之后冻结系
 
 ## 4. 验收、生产接入和下一项 NTT
 
-xADD/D最终实验编译496.8 s、link2.8 s，exe SHA256 `def0019dd87f6c57c97de3c65193e823004b2c1d4829a9fdfce6c69877468d5a`。该二进制复测primitive67/0、完整Stage2 188/0，20项D规划检查通过。最终生产版sm89/CUDA13.3编译成功，CUDA501.7 s，exe4038144 bytes、SHA256 `f85ead72d6e68a5952c5affcd9df1be32002428c08b2376a2f2b396a0e55f7f1`。生产入口30/0，涵盖基础21项、CUDA失败队列保留、已有因子、实际大save、warp/xADD默认和显式回退及自动D两种界；另一次M8 cooperative小界save恢复通过。当前默认xADD6=1、D模型=1、cooperative=0。生产回退开关为`NTT_XADD6=0`与`NTT_D_MODEL=0`，可以独立设置。每条save曲线仍使用自己的sigma/B1/Q，worktodo解析与存档格式保持。
+xADD/D最终实验编译496.8 s、link2.8 s，exe SHA256 `def0019dd87f6c57c97de3c65193e823004b2c1d4829a9fdfce6c69877468d5a`。该二进制复测primitive67/0、完整Stage2 188/0，20项D规划检查通过。P2最终生产版sm89/CUDA13.3编译成功，CUDA501.7 s，exe4038144 bytes、SHA256 `f85ead72d6e68a5952c5affcd9df1be32002428c08b2376a2f2b396a0e55f7f1`。生产入口30/0，涵盖基础21项、CUDA失败队列保留、已有因子、实际大save、warp/xADD默认和显式回退及自动D两种界；另一次M8 cooperative小界save恢复通过。P2收尾时默认xADD6=1、D模型=1、cooperative=0。生产回退开关为`NTT_XADD6=0`与`NTT_D_MODEL=0`，可以独立设置。每条save曲线仍使用自己的sigma/B1/Q，worktodo解析与存档格式保持。之后的尺寸策略和新D系数见[P3报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md)。
 
 最终save恢复：显式D1231230为init14.395585/main53.738988/full68.134574 s；自动大界D1381380为13.269998/48.459621/61.729618 s，选D另.144891 s；小界D330330为3.345562/10.091565/13.437128 s，选D另.150954 s。叶哈希分别为10619321735931855904、4244971527793015097、7549663880496122317。它们是接入验收单次时间，不替代A/B。用户示例仍选择961–970，xxx拒绝并保留队列；冻结因子59649589127497217正确。cooperative实际save启用时旧D系数明确回退，最终小界叶哈希同上。
 
-证据：[最终生产30项](D:/code/MPA-OpenCl/build_cuda_cmake/_xadd6_20261004/production_accept_v2/summary.json)、[cooperative恢复](D:/code/MPA-OpenCl/build_cuda_cmake/_xadd6_20261004/production_accept_v2/coop_accept.json)、[编译来源](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/build_manifest.json)。
+证据：[最终生产30项](D:/code/MPA-OpenCl/build_cuda_cmake/_xadd6_20261004/production_accept_v2/summary.json)、[cooperative恢复](D:/code/MPA-OpenCl/build_cuda_cmake/_xadd6_20261004/production_accept_v2/coop_accept.json)、[F85编译来源快照](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_shape_20261004/production_f85_before_shape/build_manifest.json)。
 
 ## 5. 实现索引
 
 - [halfmod:747](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:747)、[xADD6:769](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:769)、[模板分派:953](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:953)、[GMP fixture:4188](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:4188)。
-- [DPhaseModel:10694](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10694)、[scope:10811](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10811)、[选D计时:10985](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10985)。
+- [DPhaseModel:24](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:24)、[scope:10758](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10758)、[选D计时:10935](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10935)。
 - [采集/整数shape:1](D:/code/MPA-OpenCl/tools/bench/calibrate_stage2_d.py:1)、[拟合:1](D:/code/MPA-OpenCl/tools/bench/fit_stage2_d.py:1)、[离线候选排名:1](D:/code/MPA-OpenCl/tools/bench/plan_stage2_d.py:1)。
 - [xADD门禁:1](D:/code/MPA-OpenCl/tools/test/test_stage2_xadd6.py:1)、[D规划门禁:1](D:/code/MPA-OpenCl/tools/test/test_stage2_d_model.py:1)、[生产默认:6](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6)。
-- [协作outer:9](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:9)、[launch:83](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:83)、[planner:1395](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1395)、[arena key:2117](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:2117)、[cooperative GMP:4248](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:4248)。
+- [协作outer:9](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:9)、[launch:83](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:83)、[planner:1396](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1396)、[arena key:2142](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:2142)、[cooperative GMP:4273](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:4273)。
 
 
 ## 6. Cooperative outer：v1回退、v2收益与P3计划
@@ -170,6 +170,6 @@ v2资源：M5 forward48reg/9984 B shared、inverse46/10752；M6为46/18432与46/
 
 最终生产exe用同一实际Stage1 save、显式D1231230、D模型0、检查保持，串行ABBA四条：69.595031/67.429160/67.296980/68.752405 s。full均值**69.173718→67.363070 s（2.61754%）**，main55.025652→53.2897545 s（约3.15%），init14.148066→14.073315 s。每模式仅2样本，没有置信区间。外部driver第一控制样本有额外开销，不能把它算成NTT收益。根sum3cf2f49cf1972d5d/xor3fafa10f6f7f6f62、最终叶10619321735931855904、403批/1979251pairs/40218760coeffs/2400自检/66139GMP/8241carry全部一致，错误0。
 
-目前cooperative仍缺省0，自动D使用旧NTT权重；手动开启cooperative会回旧D模型。下一步P3先限定已测设备/t12/warp配置，按N选择M6(k24)、M8(k25..27)，其余shape保持原路径，再冻结新二进制重新采集多个D/独立小界holdout。之后才评估生产默认。Tensor Core与多个Stage2并行属后续独立实验，需要精确整数范围、VRAM/RAM预算及实际吞吐证据。
+P2收尾时cooperative仍缺省0，自动D使用旧NTT权重；手动开启cooperative会回旧D模型。P3限定已测设备/t12/warp配置，按N选择M6(k24)、M8(k25..27)，其余shape保持原路径，再冻结新二进制重新采集多个D/独立小界holdout；实施结果见[P3报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md)。Tensor Core与多个Stage2并行属后续独立实验，需要精确整数范围、VRAM/RAM预算及实际吞吐证据。
 
 证据：[纯NTT量化](D:/code/MPA-OpenCl/build_cuda_cmake/_xadd6_20261004/coop_quantitative.json)、[v2门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_coop_v2_final_20261004/gate/summary.json)、[v2旧路径门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_xadd6_20261004/coop_v2_legacy_gate.log)、[生产A/B](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_coop_stage2_ab_20261004/quantitative.json)。v2纯probe SHA256 fd31e39a7fe9c6754fa8f6c2adc49b7f06dfabc1ab14df77a5af3f5ad14bc045；生产A/B使用F85EAD72…F7F1。build目录证据ignored，源码、门禁和构建入口随Git提交。

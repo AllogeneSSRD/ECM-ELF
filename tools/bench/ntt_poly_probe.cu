@@ -57,6 +57,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <map>
 #include <vector>
 
 /* Every CUDA call is checked, and a failure says WHICH call, WHICH line, WHAT the driver
@@ -1392,9 +1393,33 @@ static bool fuse_compact_scratch()
     const char *e=std::getenv("NTT_FUSE_COMPACT_SCRATCH");
     return !e || !*e || std::atoi(e)!=0;
 }
-static int fuse_outer_max(int t,bool &coop)
+static bool fuse_shape_device_supported()
 {
-    coop=fuse_env_ull("NTT_FUSE_COOP_OUTER",0)!=0 && t>=5;
+    // The measured table is specific to this device. Cache properties by device,
+    // rather than assuming the current context is the one seen on the first call.
+    int device=0;CK(cudaGetDevice(&device));
+    static std::map<int,bool> supported;
+    auto it=supported.find(device);
+    if(it!=supported.end())return it->second;
+    cudaDeviceProp prop{};CK(cudaGetDeviceProperties(&prop,device));
+    const bool ok=prop.major==8 && prop.minor==9 && std::strstr(prop.name,"RTX 4060 Laptop");
+    supported.emplace(device,ok);return ok;
+}
+static bool fuse_shape_policy_supported(int t)
+{
+    return t==12 && fuse_env_ull("NTT_FUSE_M",4)==4 &&
+        fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0 && fuse_compact_scratch() &&
+        fuse_shape_device_supported();
+}
+static int fuse_outer_max(int t,int k,bool &coop)
+{
+    const auto mode=fuse_env_ull("NTT_FUSE_COOP_OUTER",0);
+    if(mode==2) {
+        // Deterministic measured policy: small/unmeasured shapes keep M4.
+        // COOP_M is the forced-mode override only; it cannot alter this table.
+        coop=k>=24 && k<=27 && fuse_shape_policy_supported(t);
+        if(coop)return k==24 ? 6 : 8;
+    } else coop=mode!=0 && t>=5;
     const int maximum=coop ? 8 : FUSE_MAX_M;
     const int requested=(int)fuse_env_ull(coop ? "NTT_FUSE_COOP_M" : "NTT_FUSE_M",maximum);
     return std::max(coop ? 5 : 1,std::min(maximum,requested));
@@ -1409,7 +1434,7 @@ static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long lon
     if (t < 0) t = 0;
     c.t = t;
     c.warp_tail = fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0;
-    c.m_max=fuse_outer_max(t,c.coop_outer);
+    c.m_max=fuse_outer_max(t,k,c.coop_outer);
     c.compact_scratch=compact;
     fuse_plan_stages(c, k - t);
 
@@ -2116,7 +2141,7 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     if (!ar) { fuse_init(out, n, k, omega, omega_inv); return; }
     const int requested_t=std::max(0,std::min(k,(int)fuse_env_ull("NTT_FUSE_T",12)));
     bool requested_coop=false;
-    const int requested_m=fuse_outer_max(requested_t,requested_coop);
+    const int requested_m=fuse_outer_max(requested_t,k,requested_coop);
     for (NttArena::FuseEntry &e : ar->fuses) {
         if (e.n == n && e.k == k && e.omega == omega && e.fc.t==requested_t &&
             e.fc.m_max==requested_m && e.fc.coop_outer==requested_coop &&
