@@ -3193,11 +3193,26 @@ static void s4_launch_pack_batch(const unsigned long long *src, int S, int bpw,
 
 /* Gather canonical coefficients from a tight resident frontier directly into the
    engine's digit buffers. Metadata is in WORD offsets, never polynomial indices. */
+// Explicit owner for non-staging resident arithmetic. No borrowed arena/raw
+// pointer can masquerade as an independent lease; each range is bounded below.
+struct S4ResidentOwner {
+    unsigned long long *data[2]={nullptr,nullptr};
+    size_t words[2]={0,0};
+    S4ResidentOwner()=default;
+    S4ResidentOwner(const S4ResidentOwner&)=delete;
+    S4ResidentOwner& operator=(const S4ResidentOwner&)=delete;
+    ~S4ResidentOwner(){release();}
+    void release(){for(int i=0;i<2;++i)if(data[i]){CK(cudaFree(data[i]));data[i]=nullptr;words[i]=0;}}
+    bool owns(const unsigned long long *p,size_t n)const {
+        return (p==data[0] && n<=words[0]) || (p==data[1] && n<=words[1]);
+    }
+};
 struct S4DeviceBatch {
     const unsigned long long *src=nullptr,*meta=nullptr;
     unsigned long long *dst=nullptr;
     const unsigned long long *host_meta=nullptr;
     size_t src_words=0,dst_words=0,nbatch=0;
+    const S4ResidentOwner *owner=nullptr; // nullptr = the original exclusive raw frontier lease
 };
 __global__ void s4_pack_gather_kernel(const unsigned long long *src,
     const unsigned long long *offsets, size_t m, size_t nc, int W, int bits,
@@ -3314,7 +3329,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
     if(resident) {
         if(!resident->src || !resident->dst || resident->src==resident->dst ||
            !resident->meta || !resident->host_meta || resident->nbatch!=nbatch ||
-           first!=0 || count!=full_nc || g_s4_final_readback || !g_s4_pack_direct) {
+           (!resident->owner && (first!=0 || count!=full_nc)) || g_s4_final_readback || !g_s4_pack_direct) {
             std::fprintf(stderr,"%s: FATAL: invalid resident batch lifetime/shape\n",NTT_PROBE_NAME);std::exit(3);
         }
         for(size_t i=0;i<nbatch;++i) {
@@ -3327,7 +3342,12 @@ static void poly_mul_batch_modN(PolyLayer &L,
         }
     }
     S4Ctx &C = *L.s4;
-    if(resident && ((resident->src!=C.d_rawA && resident->src!=C.d_rawB) ||
+    if(resident && resident->owner &&
+       (!resident->owner->owns(resident->src,resident->src_words) ||
+        !resident->owner->owns(resident->dst,resident->dst_words))) {
+        std::fprintf(stderr,"%s: FATAL: resident range is not held by its owner\n",NTT_PROBE_NAME);std::exit(3);
+    }
+    if(resident && !resident->owner && ((resident->src!=C.d_rawA && resident->src!=C.d_rawB) ||
                    (resident->dst!=C.d_rawA && resident->dst!=C.d_rawB) ||
                    resident->src_words>C.raw_capacity(resident->src) || resident->dst_words>C.raw_capacity(resident->dst))) {
         std::fprintf(stderr,"%s: FATAL: resident frontier is not owned raw staging\n",NTT_PROBE_NAME);std::exit(3);
@@ -3654,8 +3674,8 @@ static void poly_mul_batch_modN(PolyLayer &L,
             s4_scatter_result_kernel<<<(unsigned int)((m*nc*W+255)/256),256>>>(h2.out,
                 output_slots,host_first,nc,m,(int)W,resident->meta+2*nbatch+s0,resident->dst);
             CK(cudaGetLastError());
-            if(!host_output) {g_gdevice.resident_words+=out_words;continue;}
-            g_gdevice.trace_words+=out_words;
+            if(!host_output) {if(!resident->owner)g_gdevice.resident_words+=out_words;continue;}
+            if(!resident->owner)g_gdevice.trace_words+=out_words;
         }
         if (!async_out) {
             /* NO PINNED MEMORY: the original blocking readback, so a failed pinning costs speed
@@ -7267,6 +7287,155 @@ static std::vector<unsigned long long> fold_gmp_reference(PolyLayer &L,
     while(out.size()>W && std::all_of(out.end()-W,out.end(),[](unsigned long long x){return x==0;}))out.resize(out.size()-W);
     return out;
 }
+static bool fold_device_flag(const char *key) {
+    const char *v=std::getenv(key);return v && std::atoi(v)!=0;
+}
+struct FoldDeviceStats {
+    bool requested=false,enabled=false;
+    std::string fallback="none";
+    unsigned long long folds=0,muls=0,sub_coeffs=0,peak_bytes=0,h2d_bytes=0,d2h_bytes=0;
+    unsigned long long avoided_h2d_bytes=0,avoided_d2h_bytes=0,checked_words=0;
+    double t_setup=0,t_upload=0,t_reverse=0,t_subtract=0,t_readback=0;
+};
+__global__ void fold_reverse_kernel(const unsigned long long *src,size_t top,
+    size_t count,int W,unsigned long long *out) {
+    const size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
+    if(i<count*(size_t)W)out[i]=src[(top-i/W)*W+i%W];
+}
+// Ordinary canonical subtraction; no Montgomery factor enters the remainder.
+__global__ void fold_subtract_kernel(const unsigned long long *a,const unsigned long long *b,
+    const unsigned long long *n,int W,size_t count,unsigned long long *out,
+    unsigned long long *length) {
+    const size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;if(i>=count)return;
+    a+=i*W;b+=i*W;out+=i*W;
+    unsigned long long borrow=0;
+    for(int j=0;j<W;++j) {
+        const unsigned long long t=a[j]-b[j],b1=a[j]<b[j],v=t-borrow,b2=t<borrow;
+        out[j]=v;borrow=b1|b2;
+    }
+    if(borrow) {
+        unsigned long long carry=0;
+        for(int j=0;j<W;++j) {
+            const unsigned long long t=out[j]+n[j],c1=t<out[j],v=t+carry,c2=v<t;
+            out[j]=v;carry=c1|c2;
+        }
+    }
+    unsigned long long any=0;for(int j=0;j<W;++j)any|=out[j];
+    if(any)atomicMax(length,(unsigned long long)i+1);
+}
+struct FoldDeviceState {
+    S4ResidentOwner memory;
+    unsigned long long *map=nullptr,*length=nullptr,*modulus=nullptr;
+    PolyLayer *layer=nullptr;FoldDeviceStats *stats=nullptr;FoldFlatStats *flat=nullptr;
+    size_t P=0,W=0,hcount=0,f=0,inv=0,h=0,g=0,reverse=0,t=0,q=0,qb=0;
+    bool active=false,check=false;
+    const std::vector<unsigned long long> *host_F=nullptr;
+    ~FoldDeviceState(){release();}
+    void release() {
+        memory.release();
+        if(map){CK(cudaFree(map));map=nullptr;}
+        if(length){CK(cudaFree(length));length=nullptr;}
+        if(modulus){CK(cudaFree(modulus));modulus=nullptr;}
+        active=false;
+    }
+    bool init(PolyLayer &L,const std::vector<unsigned long long> &F,
+              const std::vector<unsigned long long> &inverse,FoldDeviceStats &st,FoldFlatStats &fs) {
+        layer=&L;stats=&st;flat=&fs;st.requested=fold_device_flag("NTT_FOLD_DEVICE");
+        if(!st.requested)return false;
+        const double begin=now_s();W=L.W;P=F.size()/W-1;host_F=&F;
+        check=fold_device_flag("NTT_FOLD_DEVICE_CHECK");
+        const char *hostpack=std::getenv("NTT_S4_HOSTPACK");
+        if(!g_fold_flat || !L.s4 || !L.arena || !g_s4_pack_direct || g_s4_final_readback ||
+           g_s4_carry_trace || (hostpack && std::atoi(hostpack))) {st.fallback="backend";return false;}
+        if(!P || F.size()!=(P+1)*W || inverse.size()!=(P+1)*W) {st.fallback="shape";return false;}
+        if(check && P>64){std::fprintf(stderr,"FATAL: device fold GMP check limited to P<=64\n");std::exit(3);}
+        const unsigned long long bytes=(9ull*P+8)*W*8+32;
+        unsigned long long max_mb=640;
+        if(const char *e=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))max_mb=std::strtoull(e,nullptr,10);
+        if(max_mb>(~0ull>>20) || bytes>(max_mb<<20)) {st.fallback="budget";return false;}
+        unsigned long long qN=0;
+        if(!ntt_shape_query(P+1,(int)L.S,&qN,nullptr,nullptr,nullptr,nullptr,nullptr)) {st.fallback="ntt_shape";return false;}
+        size_t available=0,total=0;CK(cudaMemGetInfo(&available,&total));
+        // Finv has normally already built the largest workspace. Reserve its
+        // possible remaining growth and 1 GiB for coordinates/frontier/context.
+        const size_t target=3ull*qN*8,current=L.arena->workspace.words*8;
+        const size_t growth=target>current?target-current:0;
+        if(bytes>available || available-bytes<growth+(1ull<<30)) {st.fallback="headroom";return false;}
+        if(fold_device_flag("NTT_FOLD_DEVICE_ALLOC_FAIL")){st.fallback="allocation_fixture";return false;}
+        memory.words[0]=5*(P+1)*W;memory.words[1]=(4*P+2)*W;
+        for(int i=0;i<2;++i) {
+            const auto error=cudaMalloc(&memory.data[i],memory.words[i]*8);
+            if(error==cudaErrorMemoryAllocation){cudaGetLastError();memory.release();st.fallback="allocation";return false;}
+            CK(error);
+        }
+        CK(cudaMalloc(&map,24));CK(cudaMalloc(&length,8));CK(cudaMalloc(&modulus,W*8));
+        f=0;inv=(P+1)*W;h=2*(P+1)*W;g=3*(P+1)*W;reverse=4*(P+1)*W;
+        t=0;q=(2*P+1)*W;qb=(3*P+2)*W;
+        upload(f,F);upload(inv,inverse);
+        std::vector<unsigned long long> hn(W);mpz_to_words(hn,W,L.N);
+        CK(cudaMemcpy(modulus,hn.data(),W*8,cudaMemcpyHostToDevice));st.h2d_bytes+=W*8;
+        st.peak_bytes=bytes;st.enabled=active=true;st.t_setup=now_s()-begin;
+        return true;
+    }
+    void upload(size_t offset,const std::vector<unsigned long long> &v) {
+        const double begin=now_s();CK(cudaMemcpy(memory.data[0]+offset,v.data(),v.size()*8,cudaMemcpyHostToDevice));
+        stats->h2d_bytes+=v.size()*8;stats->t_upload+=now_s()-begin;
+    }
+    void seed(const std::vector<unsigned long long> &H) {
+        if(H.size()>(P+1)*W || H.size()%W){std::fprintf(stderr,"FATAL: device fold seed shape\n");std::exit(3);}
+        upload(h,H);hcount=H.size()/W;
+    }
+    std::vector<unsigned long long> read(size_t offset,size_t count) {
+        std::vector<unsigned long long> v(count*W);const double begin=now_s();
+        if(!v.empty())CK(cudaMemcpy(v.data(),memory.data[0]+offset,v.size()*8,cudaMemcpyDeviceToHost));
+        stats->d2h_bytes+=v.size()*8;stats->t_readback+=now_s()-begin;return v;
+    }
+    void mul(size_t a,size_t ma,size_t b,size_t mb,size_t dest,size_t count) {
+        unsigned long long metadata[3]={(unsigned long long)a,(unsigned long long)b,(unsigned long long)dest};
+        CK(cudaMemcpy(map,metadata,24,cudaMemcpyHostToDevice));stats->h2d_bytes+=24;
+        S4DeviceBatch batch{memory.data[0],map,memory.data[1],metadata,memory.words[0],memory.words[1],1,&memory};
+        std::vector<unsigned long long> unused;
+        const double begin=now_s();poly_mul_batch_modN(*layer,nullptr,nullptr,ma,mb,1,unused,BC_FOLD,nullptr,0,count,&batch);
+        flat->t_multiply+=now_s()-begin;++flat->muls;++stats->muls;
+        stats->avoided_h2d_bytes+=16ull*std::max(ma,mb)*W;
+        stats->avoided_d2h_bytes+=8ull*(g_s4_output_window?count:2*std::max(ma,mb)-1)*W;
+    }
+    void reverse_copy(size_t src,size_t top,size_t count) {
+        const double begin=now_s();fold_reverse_kernel<<<(unsigned)((count*W+255)/256),256>>>(
+            memory.data[1]+src,top,count,(int)W,memory.data[0]+reverse);CK(cudaGetLastError());
+        stats->t_reverse+=now_s()-begin;
+    }
+    void step(const std::vector<unsigned long long> &G) {
+        if(G.size()>(P+1)*W || G.size()%W){std::fprintf(stderr,"FATAL: device fold G shape\n");std::exit(3);}
+        ++stats->folds;++flat->folds;
+        std::vector<unsigned long long> expected;
+        if(check)expected=fold_gmp_reference(*layer,G,read(h,hcount),*host_F);
+        if(G.empty() || !hcount){hcount=0;return;}
+        upload(g,G);
+        const size_t ng=G.size()/W,nT=ng+hcount-1;
+        mul(g,ng,h,hcount,t,nT);
+        if(nT<=P) {
+            CK(cudaMemcpyAsync(memory.data[0]+h,memory.data[1]+t,nT*W*8,cudaMemcpyDeviceToDevice));hcount=nT;
+        } else {
+            const size_t k=nT-P;
+            reverse_copy(t,nT-1,k);mul(reverse,k,inv,k,q,k);
+            reverse_copy(q,k-1,k);mul(reverse,k,f,P+1,qb,P);
+            const double begin=now_s();CK(cudaMemsetAsync(length,0,8));
+            fold_subtract_kernel<<<(unsigned)((P+127)/128),128>>>(memory.data[1]+t,memory.data[1]+qb,
+                modulus,(int)W,P,memory.data[0]+h,length);CK(cudaGetLastError());
+            unsigned long long n=0;CK(cudaMemcpy(&n,length,8,cudaMemcpyDeviceToHost));
+            hcount=std::max((size_t)1,(size_t)n);stats->d2h_bytes+=8;stats->sub_coeffs+=P;flat->sub_coeffs+=P;
+            stats->t_subtract+=now_s()-begin;flat->t_subtract+=now_s()-begin;
+        }
+        if(fold_device_flag("NTT_FOLD_DEVICE_TEST_BAD"))CK(cudaMemset(memory.data[0]+h,0xff,8));
+        if(check) {
+            auto actual=read(h,hcount);stats->checked_words+=actual.size();
+            if(actual!=expected){std::fprintf(stderr,"FATAL: device fold GMP mismatch P=%llu\n",(unsigned long long)P);std::exit(3);}
+        }
+    }
+    void finish(std::vector<unsigned long long> &H) {H=read(h,hcount);release();}
+};
+
 static void fold_flat_fixture(PolyLayer &L)
 {
     const size_t W=L.W;unsigned long long cases=0,words=0;
@@ -7306,6 +7475,49 @@ static void fold_flat_fixture(PolyLayer &L)
     mpz_clear(z);
     std::printf("fold_flat_fixture: cases=%llu words=%llu bad=0 (GMP schoolbook/monic long division, zero/near-N/short/padded/repeated folds)\n",cases,words);
 }
+
+static void fold_device_fixture(PolyLayer &L)
+{
+    const size_t W=L.W;unsigned long long cases=0,words=0;
+    mpz_t z;mpz_init(z);std::vector<unsigned long long> word(W);
+    for(size_t P:{1u,2u,3u,8u,17u}) {
+        std::vector<unsigned long long> F(W,0);F[0]=1;
+        for(size_t j=0;j<P;++j) {
+            mpz_set_ui(z,j+2);mpz_neg(z,z);mpz_mod(z,z,L.N);mpz_to_words(word,W,z);
+            std::vector<unsigned long long> leaf(2*W);std::copy_n(word.data(),W,leaf.data());leaf[W]=1;
+            F=groot_product_gmp(L,F,leaf);
+        }
+        CPoly rev=cp_from_flat(F,P,W);std::reverse(rev.begin(),rev.end());
+        auto inverse=cp_to_flat(cp_inv_series(rev,P+1,L),W);
+        for(size_t mode=0;mode<4;++mode) {
+            const size_t nh=mode==1?1:mode==2?P:P+1,ng=mode==1?1:P+1;
+            auto make=[&](size_t n,bool zero){
+                std::vector<unsigned long long> v(n*W);
+                for(size_t j=0;j<n;++j) {
+                    if(zero)mpz_set_ui(z,0);
+                    else if(mode==2)mpz_sub_ui(z,L.N,j%3+1);
+                    else {mpz_set_ui(z,17*j+3);mpz_mul_2exp(z,z,(unsigned long)((j*31)%L.S));}
+                    mpz_mod(z,z,L.N);mpz_to_words(word,W,z);std::copy_n(word.data(),W,v.data()+j*W);
+                }return v;
+            };
+            auto H=make(nh,mode==0),G=make(ng,false);
+            FoldFlatStats stats;FoldDeviceStats fd;FoldDeviceState state;
+            if(!state.init(L,F,inverse,fd,stats)){std::fprintf(stderr,"FATAL: device fold fixture fell back: %s\n",fd.fallback.c_str());std::exit(3);}
+            state.seed(H);
+            // mode 3 exercises repeated folds and a shorter final G with the same inverse.
+            for(size_t round=0;round<(mode==3?3u:1u);++round) {
+                if(round==2)G.resize(std::min(G.size(),2*W));
+                auto expected=fold_gmp_reference(L,G,H,F);
+                state.step(G);H=state.read(state.h,state.hcount);
+                if(H!=expected) {std::fprintf(stderr,"%s: FATAL: flat fold GMP mismatch P=%llu mode=%llu round=%llu\n",NTT_PROBE_NAME,(unsigned long long)P,(unsigned long long)mode,(unsigned long long)round);std::exit(3);}
+                ++cases;words+=H.size();
+            }
+        }
+    }
+    mpz_clear(z);
+    std::printf("fold_device_fixture: cases=%llu words=%llu bad=0 (GMP schoolbook/monic long division, zero/near-N/short/padded/repeated folds)\n",cases,words);
+}
+
 
 /* Scaled remainder descent: one sibling multiply per nontrivial child.
    Independent GMP node/Horner checks are opt-in, excluded from clean timings. */
@@ -9012,6 +9224,7 @@ static unsigned long long ladder_product(const std::vector<unsigned long long> &
 struct BatchedRun {
     DeviceGLeafStats device_leaf;
     FoldFlatStats fold_flat;
+    FoldDeviceStats fold_device;
     Stage2Tail tail;
     unsigned long long giant_points = 0, num_poly_g = 0, loops = 0, P = 0;
     unsigned long long descent_divmods = 0, leaf_values = 0, apply_blocks = 0, block_per = 0;
@@ -9244,6 +9457,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         const double tb=now_s();finvflat=cp_to_flat(finv,W);CPoly{}.swap(finv);
         R.fold_flat.t_bridge+=now_s()-tb;
     }
+    FoldDeviceState device_fold;
+    if(fold_flat_enabled && !finvflat.empty())device_fold.init(L,Ft[1],finvflat,R.fold_device,R.fold_flat);
     CPoly H;
     FTreeStats gs;
     /* the giant points are computed in POINT CHUNKS that are a whole number of G-tree batches
@@ -9591,12 +9806,14 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         gs.padded += bs.padded;
         gs.muls += bs.muls;
         if (b == 0) {
-            if(fold_flat_enabled)Hflat=std::move(gt[1]);else H=cp_from_flat(gt[1],bdeg[1],W);
+            if(device_fold.active)device_fold.seed(gt[1]);
+            else if(fold_flat_enabled)Hflat=std::move(gt[1]);else H=cp_from_flat(gt[1],bdeg[1],W);
             continue;
         }
         /* ---- the fold: H <- (G*H) mod F, three full-size multiplies ---- */
         const double tf0 = now_s();
-        if(fold_flat_enabled) {
+        if(device_fold.active)device_fold.step(gt[1]);
+        else if(fold_flat_enabled) {
             fold_flat_step(L,gt[1],Hflat,Ft[1],finvflat,R.fold_flat);
         } else {
         const CPoly G = cp_from_flat(gt[1], bdeg[1], W);
@@ -9648,6 +9865,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         R.t_loop_wall += now_s() - tloop0;
     }
+    if(device_fold.active)device_fold.finish(Hflat);
     if(fold_flat_enabled && !Hflat.empty()) {
         const double tb=now_s();H=cp_from_flat(Hflat,Hflat.size()/W-1,W);
         if(!finvflat.empty())finv=cp_from_flat(finvflat,finvflat.size()/W-1,W);
@@ -10588,6 +10806,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if(!s4_on) stage2_fixture_begin=now_s();
     const char *fold_test=std::getenv("NTT_FOLD_FLAT_TEST");
     if(fold_test && std::atoi(fold_test))fold_flat_fixture(L);
+    const char *fold_device_test=std::getenv("NTT_FOLD_DEVICE_TEST");
+    if(fold_device_test && std::atoi(fold_device_test))fold_device_fixture(L);
     const char *seg_test=std::getenv("NTT_GFINV_SEG_TEST");
     if(seg_test && std::atoi(seg_test))segment_product_fixture(C);
     const char *ginv_test=std::getenv("NTT_GFINV_BATCH_TEST");
@@ -10608,7 +10828,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
@@ -10849,6 +11069,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::printf("real_batched_foldflat: enabled=%d folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu prepare=%.6f multiply=%.6f subtract=%.6f bridge=%.6f\n",
             (int)BR.fold_flat.enabled,BR.fold_flat.folds,BR.fold_flat.muls,BR.fold_flat.sub_coeffs,BR.fold_flat.peak_bytes,
             BR.fold_flat.t_prepare,BR.fold_flat.t_multiply,BR.fold_flat.t_subtract,BR.fold_flat.t_bridge);
+        const auto &fd=BR.fold_device;
+        std::printf("real_batched_folddevice: requested=%d enabled=%d fallback=%s folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu h2d_bytes=%llu d2h_bytes=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu setup=%.6f upload=%.6f reverse=%.6f subtract=%.6f readback=%.6f\n",
+            (int)fd.requested,(int)fd.enabled,fd.fallback.c_str(),fd.folds,fd.muls,fd.sub_coeffs,fd.peak_bytes,
+            fd.h2d_bytes,fd.d2h_bytes,fd.avoided_h2d_bytes,fd.avoided_d2h_bytes,fd.checked_words,
+            fd.t_setup,fd.t_upload,fd.t_reverse,fd.t_subtract,fd.t_readback);
         std::printf("real_batched_gfinv: enabled=%d requests=%llu cache_hits=%llu groups=%llu segments=%llu group_attempts=%llu group_failures=%llu individual_attempts=%llu good=%llu nonunits=%llu scratch_peak_bytes=%llu t_prepare=%.6f\n",
             (int)g_gfinv_batch,g_gfinv.requests,g_gfinv.cache_hits,g_gfinv.groups,g_gfinv.segments,
             g_gfinv.group_attempts,g_gfinv.group_failures,g_gfinv.individual_attempts,g_gfinv.good,

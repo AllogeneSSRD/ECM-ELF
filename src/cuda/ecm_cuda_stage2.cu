@@ -7,10 +7,11 @@ struct ProductionDefaults {
     ProductionDefaults() {
         const char *keys[] = {"NTT_S4_MERSENNE", "NTT_SMALL_PRIME_REUSE",
             "NTT_GIANT_SEED_DEVICE", "NTT_GFINV_SEG_EXACT", "NTT_GFINV_BATCH",
-            "NTT_FOLD_FLAT", "NTT_GROOT_DEVICE", "NTT_SCALED_DESCENT",
+            "NTT_FOLD_FLAT", "NTT_FOLD_DEVICE", "NTT_GROOT_DEVICE", "NTT_SCALED_DESCENT",
             "NTT_S4_OUTPUT_WINDOW", "NTT_S4_CHUNK_OUTPUT", "NTT_DEVICE_GLEAF"};
         for (const char *key : keys) set_default(key, "1");
         set_default("NTT_DEVICE_GLEAF_MAX_MB", "512");
+        set_default("NTT_FOLD_DEVICE_MAX_MB", "640");
         set_default("NTT_S4_BATCH_MB", "64");
         set_default("NTT_S4_SAMPLE", "96");
         set_default("NTT_S4_CHECK_EVERY", "8");

@@ -1161,7 +1161,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench/bench_stage2_red
 - [test_stage2_tree_gpu.ps1:387](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:387)：新门禁 [14]；
   [bench_stage2_reduce_ab.ps1:14](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:14)：生产 A/B 默认参数。
 - **固定多项式/截断积的下一处入口：**
-  [stage2_tree_gpu.cu:6054](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6078) 的 `divmod_batch`。
+  [stage2_tree_gpu.cu:6074](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6098) 的 `divmod_batch`。
   先记录每层 reciprocal 重建次数、输入变换次数、打包/复制字节与需要的系数区间，验证固定 F/倒数可在
   现有 arena 预算内驻留，再加入显式 MULHI/MULLO/FMA 或 sibling 多输出接口。Prime95 的参照位置是
   [ecm.cpp:9470](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9470) 的折叠高半积及
@@ -1229,7 +1229,7 @@ GPU Load 是采样忙闲比例，不是 CUDA SM occupancy；一秒采样不能�
 本轮 runner 尚未记录绝对 run start/end，因此上述边界由 provenance 开始时间和逐轮 wall 累加推断，
 并有打印、验证、CSV 导出等小间隙误差；是阶段级定位，不能据此认定某个同步调用就是具体低谷的根因。
 已为以后 runner 增加每轮 `started/ended`，不改变本次四轮的二进制与测量。另注意
-[stage2_tree_gpu.cu:7400](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7424) 的 `batched_progress t`
+[stage2_tree_gpu.cu:7612](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7636) 的 `batched_progress t`
 只是 `giant+gtrees+fold`，不含 `gleaves/loop_host`，不能作为主循环的绝对墙钟时间。
 
 **下一步先分解、再消除 GPU 等待：**
@@ -1242,12 +1242,12 @@ GPU Load 是采样忙闲比例，不是 CUDA SM occupancy；一秒采样不能�
    先增加 wait/copy/GMP 分项与绝对阶段标记；若 CPU 对拍造成断供，再把采样快照异步复制到 bounded pinned
    ring，延后 CPU 对拍，在 buffer 复用前保证快照已经入队、run teardown 前 drain，保留同样的样本与错误门禁。
 2. **分段求逆后的 giant leaf 准备仍在 host。**
-   [同文件:7211](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7235) 到
-   [同文件:7362](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7386) 在 G 树开始前完成 GMP segment inverse、
+   [同文件:7211](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7255) 到
+   [同文件:7362](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7598) 在 G 树开始前完成 GMP segment inverse、
    退化 affine 分支和 bleaf 构造；已使用 projective leaf + 分段求逆，不应再建议重复实现批量逆元。
    可评估 CPU 准备下一 block 与 GPU 当前 tree/fold 重叠，但 Gamma、退化记录和临时 arena 所有权必须独立。
 3. **减少 host 往返与折叠 CPU 操作。**
-   [同文件:7376](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7400) 的 fold 对 `T/qrev/q/qb/H` 做主机
+   [同文件:7376](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7612) 的 fold 对 `T/qrev/q/qb/H` 做主机
    vector 复制、反转和 GMP 系数减法；设备驻留 F/finv、低/高截断积与设备减法可同时减少工作和断供。
    后续与 §32.4 的 sibling 变换复用合并设计，按阶段显存预算推进，保持 32 MB 对照。
 
@@ -1450,16 +1450,16 @@ async 始终 0，并由各轮日志及 runner 验证。不能跨 §32/§33 的�
    对照 `ORACLE_ASYNC=0/1`，并记录 bulk-output D2H 入队与 CPU reap 的先后。`t_wait` 测量主线程等待
    设备完成；设备此时可能仍在执行归约。把等待移到后续输出复制可以改变计时归属，不能直接把约 11 s
    视为可删除的 GPU idle 或端到端收益。队列继续 opt-in，只有生产总墙钟通过才默认启用。
-2. **推进 fold 的固定多项式驻留。**[stage2_tree_gpu.cu:7716](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7740)
-   计算 T，随后 host 构造 reversed T、截断 finv 和 q；[同文件:7731](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7755)
-   再乘 F，最后 [同文件:7734](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7758) 逐系数 GMP 减法。
+2. **推进 fold 的固定多项式驻留。**[stage2_tree_gpu.cu:7928](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7952)
+   计算 T，随后 host 构造 reversed T、截断 finv 和 q；[同文件:7731](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7967)
+   再乘 F，最后 [同文件:7734](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7970) 逐系数 GMP 减法。
    先给 F/finv 分配模数生命周期的设备缓存，再按形状增加截断乘法和设备减法接口；显存预算继续以
    当前约 5.8 GB arena 和 32 MB batch 为约束，不能把全部树的变换无界缓存。
 3. **G 树与下降按形状复用 sibling 输入变换。**保持现有跨节点批处理，减少相同被除数/固定除数的
    重复 forward transforms；结合 §32.4 中 Prime95 MULHI/MULLO/FMAs 的契约设计，不重复启用已知很慢的
    S5 逐节点路径。先对每种 shape 统计可复用次数与缓存字节，再实现 bounded reuse。
 4. **giant leaf 的主机工作单独重叠。**现有 projective leaves + segment inverses 已减少求逆次数；
-   [同文件:7622](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7646) 的 GMP segment inverse 与退化 affine
+   [同文件:7622](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7858) 的 GMP segment inverse 与退化 affine
    处理仍在 G 树入队前。下一 block 的准备需要独立 Gamma/退化记录/leaf 缓冲所有权；保持因子和
    hit-prime 门禁，在固定 D 下测量，再做 D 调优。
 
@@ -1542,7 +1542,7 @@ counter fault 必败与三种路径的完整返回 words signature 一致。最�
   完成检查；[同文件:2994](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3011)：输入 slot 选择与 H2D
   reuse event；[同文件:3118](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3135)：出口 pending 兜底。
 - [同文件:3133](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3150)：测试专用完整 output signature；
-  [同文件:8895](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9001)：组数、检查覆盖与 staging 统计。
+  [同文件:8895](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9213)：组数、检查覆盖与 staging 统计。
 - [test_stage2_tree_gpu.ps1:535](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:535)：新增累计检查门禁；
   [bench_stage2_reduce_ab.ps1:35](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:35)：carry ABBA 模式。
 
@@ -1615,7 +1615,7 @@ GPU Load 仍是采样忙碌程度，无法代替 SM occupancy，device 身份仍
 [smoke CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_carry_batch_smoke_final/results.csv)。
 计时修正位置：[stage2_tree_gpu.cu:3062](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3079) 累计每个
 非延后 readback、[同文件:3147](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3164) 只通过 st 记一次，
-[同文件:8901](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9007) 输出全程 ledger。
+[同文件:8901](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9219) 输出全程 ledger。
 本轮最终设置：carry batch=0、oracle async=0、limb oracle=1；没有提交 Git。
 
 ### 35.5 下一轮优先项：先消除 packing 临时设备副本
@@ -1691,7 +1691,7 @@ direct+blocking transfers，核对全体返回 word 的指纹、已知因子/hit
 - [stage2_tree_gpu.cu:2810](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2827)：plan 核对、完整 zero 和原 pack kernel。
 - [同文件:3061](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3078)：direct 不分配临时 packed pool。
 - [同文件:3089](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3106)：S4 接入，统计实际/避免的 input D2D。
-- [同文件:8955](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9062)：全程 input ledger。
+- [同文件:8955](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9275)：全程 input ledger。
 - [test_stage2_tree_gpu.ps1:632](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:632)：gate [18]。
 - [bench_stage2_reduce_ab.ps1:144](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:144)：生产验证零副本路径确实执行。
 
@@ -1989,7 +1989,7 @@ direct 生产预算，需显式传 `-BatchMB 64`，不可把 runner 的固定预
 PowerShell 语法解析和 `git -c core.whitespace=cr-at-eol diff --check` 通过。
 测量仅使用 GPU1；本轮没有提交 Git。
 
-后续优先排查 [flat_mul_batch:6282](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6306)：
+后续优先排查 [flat_mul_batch:6282](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6326)：
 现在无论 ma/mb 是否已等于 P 都创建两份零填充 wa/wb 再 copy；已经满足步长的输入有机会直接借用，
 只为短输入构造 padding。这个改动必须保证异步 pinned memcpy 时源仍有效，保留短输入 stride 契约，
 若 out 与 A/B 别名则需要保留拷贝，避免 out.assign 破坏借用源；
@@ -2002,7 +2002,7 @@ PowerShell 语法解析和 `git -c core.whitespace=cr-at-eol diff --check` 通�
 
 ### 38.1 输入生命周期与统计范围
 
-起点 `8b5b57f`。实现位于 [flat_mul_batch:6292](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6316)。
+起点 `8b5b57f`。实现位于 [flat_mul_batch:6292](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6336)。
 原路径总是分配两个 nbatch×P×W 的零填充向量，再复制每个 slice。
 现在 ma/mb 已等于 P、且该输入向量不与 out 别名时，直接借用 const 指针；短输入仍逐 slice 填充。
 out 与 A/B 同一向量时必须先克隆，因为内部 multiply 会先 out.assign，不能借用被覆盖的源。
@@ -2010,14 +2010,14 @@ out 与 A/B 同一向量时必须先克隆，因为内部 multiply 会先 out.as
 Newton 两次 multiply、qrev 和 q·B 四个调用点均经过此接口。
 
 默认 `NTT_S4_FLAT_DIRECT=1`；设为 0 恢复两份副本，便于同二进制 ABBA。
-[real_batched_flatinput:9100](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9273) 记录所有 flat 调用的
+[real_batched_flatinput:9100](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9488) 记录所有 flat 调用的
 borrowed/padded/alias 数量、实际/避免的 copy 和 zero 字节、临时 host padding 峰值及 t_prepare。
 峰值只包括 wa/wb 的 capacity，**不是进程 RAM 峰值，也不是 VRAM**；t_prepare 只覆盖分配/清零/复制，
 不含 NTT 和向量析构。NTT、chunk、H2D/D2H 和 oracle cadence 的工作量保持一致。
 
 ### 38.2 新边界门禁揭示旧进位错误
 
-[s4_flat_input_check:6360](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6384) 用独立 GMP 完整卷积核对
+[s4_flat_input_check:6360](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6404) 用独立 GMP 完整卷积核对
 16 个 full/short stride、A/B/双方 out 别名案例，每个输入系数取 N−(i+1)。
 129-bit 模数的五种复制/借用/阻塞/批量 carry/hostpack 调度原本都通过；
 5261-bit、83-word 的同类案例在 **FLAT_DIRECT=0 复制控制**上仍失败。
@@ -2166,9 +2166,9 @@ Prime95 MULHI/MULLO、scaled 表示和多输出共享输入的契约复核见
 
 ### 39.3 先缩短只消费根节点的 G 树寿命
 
-[build_tree_flat](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3332) 增加 `keep_children` 契约。
+[build_tree_flat](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3352) 增加 `keep_children` 契约。
 默认保留完整树，供 F 树及需要下降的尾部 G 树使用。
-[run_batched 的逐块 G 构造](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8072) 只消费 `gt[1]`，
+[run_batched 的逐块 G 构造](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8284) 只消费 `gt[1]`，
 启用 `NTT_S4_GROOT_ONLY=1` 时：
 
 - 不预分配内部常数节点的 coefficient payload；保留 padding 叶子的常数 1。
@@ -2186,7 +2186,7 @@ Prime95 MULHI/MULLO、scaled 表示和多输出共享输入的契约复核见
 以及 tree/descent 的恒等判断加 degree=0 条件。
 [poly_is_one](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1071) 只检查一个 coefficient，
 `X+1` 或常数项为 1 的高次多项式不能因此当作常数 1。
-[GMP fixture](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6546) 独立逐叶卷积并计算 `H(-c)`，
+[GMP fixture](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6566) 独立逐叶卷积并计算 `H(-c)`，
 覆盖 full/root-only、S4/CPU fallback、空树/单叶/非二次幂树以及 slow/batched descent。
 性能与内存实测见下面的门禁和生产 ABBA，不从时间线推导因果或加速比例。
 
@@ -2431,12 +2431,12 @@ Prime95 公平单执行线程基线尚未建立，长期目标未完成。
 - [poly_mul_batch_modN](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2883)
   目前归约/回传 `2*max(ma,mb)-1` 个槽，最终消费者只复制 `ma+mb-1` 个实际系数。
   先定义 `first,count` 的紧凑输出契约，默认 full，对照开关恢复当前行为。
-- [fold](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8108)：qrev 只需要 `[0,k)`，
+- [fold](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8320)：qrev 只需要 `[0,k)`，
   q·F 只需要 `[0,P)` 来计算余数；G·H 仍要满足反转商输入和低半余数的完整需求。
   不因只读低半而缩短当前 Kronecker NTT，否则高项回绕会污染输出。
-- [inv_series_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6664)
+- [inv_series_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6684)
   每轮 ag 与 gn 只需要 `[0,nxt)`；
-  [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6801)
+  [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6821)
   qrev 只要 `[0,k)`，q·B 只要余数的 `[0,db)`。处理每 slice 的紧凑 stride，不能只对整批 resize。
 - [NttReduceHook](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3297)、
   [s4_reduce_hook](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2176)、
@@ -2582,7 +2582,7 @@ Stage2ExtraThreads=0、UsePrimenet=0、MontgSigma=1、ForceECMStage2Type=1；
 ### 42.1 新发现改变实施顺序
 
 基于 `1540061`，原计划推进 §40.5 的输出窗口。审计发现
-[poly_mul_batch_modN 的 chunk 收尾](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3231)
+[poly_mul_batch_modN 的 chunk 收尾](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3246)
 已完成所有 slice 的回传、pending event 同步和最终 out 写入；
 但原函数末尾又分配 `nbatch*out_slots*W` 个 host words，将 C.d_out 整批 cudaMemcpy D2H 后再次写 out。
 chunk 与整批路径使用相同 device 结果，第二次复制没有新数学输入。
@@ -2594,7 +2594,7 @@ chunk 与整批路径使用相同 device 结果，第二次复制没有新数学
 
 [NTT_S4_FINAL_READBACK](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1302)
 默认 0，1 恢复末尾整批回传。
-[末尾分支](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3314)
+[末尾分支](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3329)
 保留 shape lookup、错误退出、完整 NTT/carry、exactness、canonical 和 GMP oracle。
 最终全字指纹移到两个分支之后，覆盖实际交给消费者的结果；旧指纹位于整批 overwrite 之前。
 control 的额外 allocation/copy/host scatter 时间现在计入 ntt_seconds，t_total_call 延长到分支完成，
@@ -2602,7 +2602,7 @@ control 的额外 allocation/copy/host scatter 时间现在计入 ntt_seconds，
 新增 finalreadback ledger 单独记录所有 S4 调用（包含 F-tree）的 copied/avoided words、host temporary payload 峰值和 host copy time；
 现有 coeffback 仍是主 batched 区间的 chunk-only 流量，两个统计范围不能直接相加为 full Stage2 流量。
 
-[五 slice 夹具](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6487)
+[五 slice 夹具](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6507)
 复用独立 GMP convolution，短/长 operand stride、A/B/both output alias 均验证每个返回字。
 chunk=2 强制 2/2/1；pinned、blocking、host pack、预算拒绝各跑两种开关，
 并核对最终字指纹、oracle jobs/samples/signature/pending 与复制/跳过容量守恒。
@@ -2738,10 +2738,10 @@ count=0 仍调用 hook，允许输出指针为空，不能省去源诊断。
 新增 outputwindow 账本覆盖全部 S4（含 F-tree），并区分 source/reduced/returned/skipped coefficients、
 D2H words 与实际保留 device/pinned buffer 容量峰值；这些容量不是 NVML/进程总峰值。
 
-消费者为 [CPoly Newton inverse](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3835)、
-[batched Newton inverse](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6829) 的 ag/gn 前缀 nxt，
-[batched division](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6925) 的 qrev 前缀 k、q·B 前缀 db，
-以及 [fold](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8264) 的 qrev 前缀 k、q·F 前缀 P。
+消费者为 [CPoly Newton inverse](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3855)、
+[batched Newton inverse](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6849) 的 ag/gn 前缀 nxt，
+[batched division](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6945) 的 qrev 前缀 k、q·B 前缀 db，
+以及 [fold](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8476) 的 qrev 前缀 k、q·F 前缀 P。
 G·H 和建树保持完整实际乘积需求。CPoly 的短实际乘积先返回 min(requested,actual)，
 再显式补零；空窗口不进入 cp_from_flat(count−1)。batched 输出不再依赖对整批 resize/truncate 修正 stride。
 
@@ -2779,7 +2779,7 @@ GPU 二叉树 padding 在 degree=138240 时升至262144，可能引入额外工�
 新增 [gate §25](D:/code/MPA-OpenCl/tools/test/test_stage2_tree_gpu.ps1:1200)
 在 pinned/blocking/host/refused/keyed/copy/whole-readback/oldtail 八种路径分别运行 full/window，
 每种都要求独立 GMP、最终全字指纹相同和非空 oracle 全部完成；另核对冻结多 chunk 因子/hit 集合。
-[夹具原码](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6615)
+[夹具原码](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6635)
 139 cases：非零 first、count=0/1、非幂次长度、5 slices 的2/2/1 tail、不同输入 stride、A/B/both 输出别名、
 常数 inverse 的短乘积补零，及2次窗口外 canonical 故障注入（含空窗口）。
 64-bit N 比较1105 words；额外83-limb N 比较91715 words，且独立 GMP 树/下降夹具
@@ -2853,7 +2853,7 @@ GPU-Z 文件最后记录为2026-10-03 00:55:41，已不是本轮实时数据；�
 先将 H 乘倒数取 MULHI；
 [sibling MULHI](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9705)
 左右孩子分别乘另一孩子的 F，通过 polymult_several 共享父输入，保留 plan/FFT 表示。
-当前 [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6925)
+当前 [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6945)
 每个分组重新求逆、qrev、q·B、主机相减；窗口只减少各乘法的归约输出，未移除这些乘法。
 
 下一原型可用一个明确的普通系数契约验证 scaled 递推。设 monic F=A·B，
@@ -2891,7 +2891,7 @@ oracle位置与完成数，以及两种 window、四种 transfer/fallback 路径
 实现：[开关和账本](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1323)、
 [分配容量](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3023)、
 [每 chunk 输出地址](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3111)、
-[同 stream 回传](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3253)。
+[同 stream 回传](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3268)。
 最终exe SHA256=`AF6624AD3AFB2D7B79153337E6A95A34BBB4CC35EC7AEB17BA2B3CDA0A255B90`；
 Stage2源码SHA256=`4EC54F337FD5D0600670B60CDA16BFE54C8A21DF40CE14ACFB4ECE2882B015C3`，
 NTT源码未变，SHA256=`66CB4FFE1E5DCD8F765BA9059A29A317980223BA106613B3451644DDEE2EDD51`。
@@ -2906,10 +2906,10 @@ total=init+main；Stage1 和之前的通用 GPU/Montgomery启动检查排除。
 任选门禁夹具会被计入 init，但 clean=0；额外S2参考运行或多次重复curve也标clean=0，
 init标注为共享初始化，避免重复curve被误认作独立曲线总耗时。
 clean仅描述程序内的夹具/S2/重复curve配置，不保证外部CPU/GPU独占。
-代码：[baby index 计时](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9221)、
-[Q之后起算](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9324)、
-[初始化终点](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9599)、
-[完整Stage2输出](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9653)。
+代码：[baby index 计时](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9434)、
+[Q之后起算](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9539)、
+[初始化终点](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9815)、
+[完整Stage2输出](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9871)。
 
 ### 44.3 复核既有指数约定：相同 sigma/B1 不等于相同 Q
 
@@ -2938,8 +2938,8 @@ CPU记录还要在当前环境重复；上一轮原有Prime95的后台竞争已�
 [q_gpu_matched.json](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/q_gpu_matched.json)、
 [GPU原始Q日志](D:/code/MPA-OpenCl/build_cuda_cmake/_chunk_output_20261003/q_gpu.log)。
 该Q smoke只用于数学输入核对，计时不是性能基线。
-代码：[额外乘数](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9280)、
-[完整Q诊断](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9307)、
+代码：[额外乘数](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9495)、
+[完整Q诊断](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9522)、
 [A/B输入合同](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:126)。
 `12·lcm`约定此前已写在 [Montgomery Stage1文档](D:/code/MPA-OpenCl/docs/ECM_Montgomery_STAGE1.md:145)
 和 [ini选项](D:/code/MPA-OpenCl/docs/DEV_ECM_INI.md:60)。本轮补的是实验探针的Q对齐及实际exe全字验证，
@@ -3043,8 +3043,8 @@ CPU RAM预算2048 MiB和GPU arena6300 MiB是不同资源预算，未作等内存
 
 本形状candidate的Gtrees约42.29 s、fold19.24 s、descent29.01 s，仍有33.60/32.27 GiB主循环往返。
 下一步用已有finv构造根scaled状态，再以父状态乘sibling反转多项式、取中间区间，
-替换 [descent_batched](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:4003)
-调用的逐节点 [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6947)。
+替换 [descent_batched](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:4023)
+调用的逐节点 [divmod_batch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6967)。
 预计减少Newton inverse /qrev/q·B乘法和host相减；收益必须生产测量，不能把29秒全算作可移除。
 实现顺序：普通系数/GMP全节点及全叶正确性→batched NTT任意窗口→device驻留与sibling spectrum共享。
 Prime95对应 [root MULHI](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:9540)、
@@ -3185,8 +3185,8 @@ OpenCL构建、所有非Mersenne模数及硬杀恢复未在本轮验证。
 上一轮减少了局部输出容量，仍未减少逐节点求余的乘法次数。本轮实现 scaled remainder descent，
 新增可选 `NTT_SCALED_DESCENT=1`，0继续走原 `descent_batched`。入口和开关位于
 [stage2_tree_gpu.cu:1328](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1345)、
-[scaled分派:9001](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9149)，
-核心 [descent_scaled:6940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6964)。
+[scaled分派:9001](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9362)，
+核心 [descent_scaled:6940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6984)。
 S4_OFF或S5同时启用会在入口明确拒绝，避免静默运行另一算法。
 
 Prime95 原文件对应：
@@ -3227,9 +3227,9 @@ NTT的p与ECM的N不同，上一层未归约的频域乘积不能直接当下一
 
 ### 46.2 独立正确性证据
 
-[scaled_state_gmp:6902](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6926)
+[scaled_state_gmp:6902](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6946)
 用原H对每个节点F进行GMP首一长除法，再三角递推求scaled状态；不使用NTT或孩子传播公式。
-[scaled_descent_fixture:7037](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7061)
+[scaled_descent_fixture:7037](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7081)
 独立GMP卷积构造树，逐节点逐word比较，再以独立Horner核对每个真实叶值。
 150种单进程夹具：P=1/2/3/5/7/8/9/13/16/23，右/左/交错padding，零H、短常数H、N−1、
 模式H、degree恰为P的H；含root inverse复用及根求余两条路径。
@@ -3240,7 +3240,7 @@ N15/35复合模数，以及64/129/521位模数；窗口开/关，pinned/blocking
 `NTT_S4_CHUNK_MAX=2` 强制多chunk及尾部。实际Stage2覆盖短H、degree=P、冻结因子、sharpness、
 非二次幂树和多轮fold。候选每个节点与GMP逐word一致，全部真实叶与原division descent指纹一致，
 因子/命中素数相等，且 `NTT_S4_DESCENT_CHECK=1` 的slow参考逐叶比较为0差异。
-生产比较使用 [descent_values:9112](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9285)
+生产比较使用 [descent_values:9112](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9500)
 的所有叶word FNV64指纹；指纹是紧凑一致性证据，不能替代独立逐word门禁。
 每节点GMP检查限定≤512叶，fixture/check令full timer clean=0，生产测速关闭两者。
 
@@ -3327,7 +3327,7 @@ D1531530/degree138240；GPU D/degree/预算/检查机制不同，保留这些条
 scaled保持显式开关，现有普通下降和S5调用约定保留。根据本轮实测重新排序下一步：
 
 1. **优先G-root逐级device驻留**：Gtrees39.967s已为main最大相位，仅需根的G树适合保存cur/next，避免整棵G树留在device。
-   从现有 [build_tree_flat调用:8805](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8911) 建立同二进制对照，
+   从现有 [build_tree_flat调用:8805](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9123) 建立同二进制对照，
    先保持host现有projective/degenerate叶及Gamma合同，只替换内部乘法frontier；根返回host一次供fold。
    门禁覆盖非首一projective叶、degree0 padding、partial尾树、Groot every-word hash和最终叶/因子，单独记录外部分配容量。
 2. 在scaled中共用两个孩子的父输入pack/上传/forward spectrum，保留各孩子独立乘积和carry链。
@@ -3351,13 +3351,13 @@ Stage2探针匹配使用 `NTT_STAGE1_EXTRA=12`，与生产ini开关的作用域�
 ### 47.1 改动范围、算术与生命周期
 
 本轮实现 `NTT_GROOT_DEVICE=1`（默认0），作用于只保留根的G多项式树。
-[入口选择 build_groot_select:4041](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:4058)
+[入口选择 build_groot_select:4041](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:4078)
 要求S4开启、direct pack、groot-only、final_readback=0且非hostpack；不满足时使用既有host树并计fallback。
-[生产调用:8805](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8911)
+[生产调用:8805](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9123)
 保持giant生成、projective叶 `[-Xi,Zi]`、退化时affine回退及Gamma合同；F树仍保留host子节点供scaled descent。
 本轮没有把未归约NTT频域数据当成下一层modN输入，也没有修改FFT长度、NTT passes或长除法尾部。
 
-[build_groot_device:3890](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3907)
+[build_groot_device:3890](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3927)
 将真实叶规范word系数紧凑上传一次，维护cur/next两个相邻级。
 节点degree与word offsets在host计算；degree0 padding视为多项式1、不存device payload。
 只有一个非零度孩子时D2D继承；两个真实孩子按 `(min(degL,degR)+1,max(degL,degR)+1)` 分组批量相乘。
@@ -3385,7 +3385,7 @@ metadata每树只分配一份device array，容量 `3*(pad/2)` word；pinned hos
 
 ### 47.2 传输统计与正确性门禁
 
-[统计输出:10012](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10266)
+[统计输出:10012](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10484)
 新增树/组/对/继承数、leaf/root/resident/trace/metadata words及局部容量。
 `NTT_S4_CARRY_TRACE=1` 为逐系数对拍额外返回resident输出，生产trace关闭。
 chunk输出账本满足：`window.d2h_words + gdevice.resident_words = final.copied_words + final.avoided_words`。
@@ -3400,7 +3400,7 @@ frontier/host staging/arena/pinned容量均为局部payload，不等于进程RAM
 其中22个fixture进程累计1056个根夹具、75240个根系数；18个eligible fixture进程对162648个节点检查，
 节点计数包含虚拟degree0恒等节点；它们无device payload，身份由degree/复制合同表达。
 checked_words是逻辑节点word数（含虚拟1），不是实际检查D2H量。实际Stage2逐节点检查另计。
-[groot_product_gmp:3874](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3891)
+[groot_product_gmp:3874](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3911)
 以独立GMP普通卷积构造每节点参考，候选对每真实节点全部word比较；最多512叶，生产检查关闭。
 
 夹具n=0/1/2/3/5/7/8/9/17/23/257/511，含非首一、不可逆/零leading、N−1、零与形式常数多项式。
@@ -3528,14 +3528,14 @@ NTT_S4_OUTPUT_WINDOW=1 / NTT_S4_CHUNK_OUTPUT=1`，其余采用上述production m
 将共享d_raw_cap改为A/B独立word capacity。普通host输入仍各申请raw_words，但只扩不足的一份，不缩已有缓冲；
 [resident边界检查:3042](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3059)
 按src/dst实际指针对应容量检查，层间A/B交换时不能用一个共同上限。
-`NTT_GROOT_COMPACT_RAW=1` 在 [build_groot_device:3890](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3907)
+`NTT_GROOT_COMPACT_RAW=1` 在 [build_groot_device:3890](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3927)
 让A容纳2*n*W的最大leaf层、B只需首个parent层。dense leaf prefix的任意层payload为
 `(n + nonempty_nodes)*W`，nonempty_nodes逐层不增，因此B的首次需要就是其全部后续层的上界。
 虚拟degree0节点不分配payload；n=0直接返回恒等根，n=1不需要parent，后续普通fold可再扩B。
 每一级仍保留实际next_words检查，不在输入/输出别名上冒险复用，也不改变degree分组/NTT形状。
 
 `NTT_GROOT_LEAF_STAGING=1` 复用现有 [g_pin_out:1276](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1293)
-及完成事件。在 [leaf上传:3926](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3943)
+及完成事件。在 [leaf上传:3926](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3963)
 确认可用slot至少放2*W word后，按现有capacity分块将leaf填入pinned buffer，Async H2D并记录同一slot事件。
 交替用两份slot；覆写前等待最后的D2H或本轮H2D消费。进入首个resident multiply之前再等待所有本轮使用slot，
 因为trace路径可能在multiply入口grow/free输出staging；n=1没有multiply，也必须显式完成leaf H2D。
@@ -3545,7 +3545,7 @@ NTT_S4_OUTPUT_WINDOW=1 / NTT_S4_CHUNK_OUTPUT=1`，其余采用上述production m
 `NTT_GROOT_LEAF_CHUNK=3` 是门禁专用限制，每次至多3叶，强制交替/反复复用slot；非0令full timer clean=0。
 生产chunk=0，使用已有buffer能容纳的最大叶片段。没有修改NTT引擎源、归约kernel、GMP oracle和carry检查。
 
-[real_batched_gmemory:10017](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10271)
+[real_batched_gmemory:10017](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10489)
 记录compact/staging开关、pinned/pageable words、pinned树/片段、fallback/legacy树和各raw容量。
 恒等式 `pinned_words + pageable_words = gdevice.leaf_words`；rawA_peak+rawB_peak等于tree租用raw pair峰值。
 `gdevice.host_staging_peak_bytes`仅统计额外pageable initial vector；borrow_peak是已存在pinned空间的实际使用payload，
@@ -3644,7 +3644,7 @@ CPU本轮未重跑、D/degree/内存/检查差异同47.4，长期目标仍未完
 当前每调用forward A/B；[ntt_inverse_fused:1480](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1480)
 写A、B为const谱，carry使用A/Q。可考虑把共同父输入置于B，仅重新forward两份sibling A，
 但须证明shape/nbatch/slot/bpw一致、arena generation/eviction与input hook不会改B，并处理非平衡/跨chunk/回退。
-[descent_scaled:6940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6964) 目前仍将两个孩子作为独立pair。
+[descent_scaled:6940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6984) 目前仍将两个孩子作为独立pair。
 fold仍17.6245s，候选device衔接应先明确H、G-root、quotient/low remainder与oracle snapshot的生命周期，
 避免为持久H另加大量VRAM却没有端到端收益。只降低下降的8.629s并不足以解释全部剩余瓶颈。
 
@@ -3659,10 +3659,10 @@ fold仍17.6245s，候选device衔接应先明确H、G-root、quotient/low remain
 本轮修改测量/门禁脚本，未改变CUDA树源、共享NTT源或二进制。使用§48同一exe，SHA256
 `23357AFC1B1E0588B54C7BAEF414C415217ADF368F0BB2F08506414C27BD5369`；两份CUDA源hash同§48.2。
 已有 [carry开关:1374](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1391) 默认0。
-[finish_carry:3190](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3207) 将相同arena形状的中间chunk计数合并，
-[边界:3220](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3237) 在非deferred/尾chunk、m变化前结束，
+[finish_carry:3190](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3222) 将相同arena形状的中间chunk计数合并，
+[边界:3220](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3252) 在非deferred/尾chunk、m变化前结束，
 函数退出亦收尾；保留每个chunk的atomic检查贡献，不能在计数器被reset后再检查。
-[raw上传:3262](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3279) 的候选交替两份pinned raw staging，增加host容量。
+[raw上传:3262](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3294) 的候选交替两份pinned raw staging，增加host容量。
 G-root的resident gather/scatter、metadata、leaf staging生命周期仍须满足§47/48。
 
 [门禁脚本:16](D:/code/MPA-OpenCl/tools/test/test_stage2_groot_device.py:16) 新增 `--carry-only`，新增26进程门禁 **26/0**：
@@ -3726,7 +3726,7 @@ main H2D/D2H仍11.37/5.46GiB（旧摘要舍入，metadata另计）；resident/wi
 idle **7.134315 /7.258367s**，与同步API重叠 **0.523923 /0.371137s**，
 不在任何CUDA runtime API内 **6.429800 /6.767648s**。没有证明batch减少整体idle。
 两边最长五个gap约 **501–547 /504–537ms**，随后均为 **129024000byte H2D（123.046875MiB）**：
-与 [resident叶上传:3938](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3955) payload吻合。
+与 [resident叶上传:3938](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3975) payload吻合。
 GPU copy区间并集只有 **0.538556 /0.581198s**；大量小D2H的correlated API时间仍包含等待GPU计算，
 不能把copy API长耗时直接解释成PCIe传输成本。无CPU调用栈，不能将全部no-API gap指定为某一个CPU函数。
 
@@ -3743,14 +3743,14 @@ GPU copy区间并集只有 **0.538556 /0.581198s**；大量小D2H的correlated A
 按证据重新排优先级：
 
 1. **segment批量求逆**：当前 [SEG=16:380](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:381)，
-   [每段mpz_invert:8721](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8827) 在生产102100段约3.45s，
+   [每段mpz_invert:8721](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9039) 在生产102100段约3.45s，
    gleaves总计约4.05s。优先研究在相同segment grid上对段积做Montgomery批量求逆，保持first_touch/Gamma精确覆盖；
    组合积不invertible时逐段回退，保留degenerate点和因子记录。不会改变GPU segment kernel的依赖链长度。
    新路径必须有部分坏段、跨batch边界、末段、完整叶与因子门禁；3.45s是当前成本，不是承诺净节省。
 2. 拆分leaf准备/flatten、fold的CPoly构造和GMP减法计时；将长gap与阶段关联后再推进device leaf/fold。
-   [bleaf分配:8648](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8754)、
-   [fold:8827](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8933)、
-   [cp_coeff_sub:4131](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:4148) 是具体入口；没有调用栈证据就不做精确空档归因。
+   [bleaf分配:8648](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8966)、
+   [fold:8827](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9145)、
+   [cp_coeff_sub:4131](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:4168) 是具体入口；没有调用栈证据就不做精确空档归因。
 3. shared-parent FFT/scaled下降仍有价值，但优先处理已测主机准备段；carry batch默认0，保留新resident生产A/B目标。
 
 ini配置含义已经在§45修复并核对：`method=gpu`、`gpu_param=0`、`exponent=choose12` 实现生产CUDA Montgomery Stage1
@@ -3772,10 +3772,10 @@ GPU完整Q `294b8e0c5e3f95b6d6c218e669c557f9` 正确；禁用S4走CPU poly仍失
 [CPU参考](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/factor_probe/cpu.log)、
 [CPU poly复现](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/factor_probe/cpu_poly.log)。
 
-根因是 [baby逆向归一化:10028](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10282)：
+根因是 [baby逆向归一化:10028](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10500)：
 初始iprod=(z0…z_last)^−1，扫描到j时是 **(z0…zj)^−1**，需要再乘 `pv[j]=z0…z_(j−1)` 才得到zj^−1。
 旧代码直接用Xj*iprod；原注释也误称iprod为suffix逆元。引入提交为 `2d4375b`，
-原位置可在 [§49保留源码](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_ab_20261003/measured/stage2_tree_gpu.cu:10079) 中检查。
+原位置可在 [§49保留源码](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_ab_20261003/measured/stage2_tree_gpu.cu:10297) 中检查。
 现恢复正确prefix因子，再更新iprod*=zj；非unit段原逐点fallback、因子记录不变。
 这是Stage2探针 `--real` 的baby转换；生产CGBN Stage1及ini choose12接线未改。
 
@@ -3789,7 +3789,7 @@ GPU完整Q `294b8e0c5e3f95b6d6c218e669c557f9` 正确；禁用S4走CPU poly仍失
 
 新增 [test_stage2_real_baby.py](D:/code/MPA-OpenCl/tools/test/test_stage2_real_baby.py:1)。
 Python独立计算Q、每个baby affine x、完整F；lcm形状还与原CPU tree dump全部字段比较。
-新增 [NTT_REAL_F_DUMP:10065](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10319) 仅门禁时导出真实入口生成的baby与F，
+新增 [NTT_REAL_F_DUMP:10065](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10537) 仅门禁时导出真实入口生成的baby与F，
 限4096 baby，置full timer clean=0；常规运行无导出或额外分配。
 覆盖冻结向量、D2310、P2880多256点segment、choose12、M4423生产位宽与M5261；两边segment batching0/1，共 **12/0**。
 冻结因子/114713和独立完整叶hash同时通过；不是仅比较0 hits的新旧路径。
@@ -3804,7 +3804,7 @@ prefix65个、inverse64个、两个GMP临时对象；沿用已有gseg，避免�
 对unit组先计算prefix积、只invert组合积一次，再逆向恢复每段逆元；重复查询同窗口直接复用。
 组合积unit当且仅当每个段积unit，对合数N亦成立。不可逆组恢复原来的逐段mpz_invert，
 精确区分好/坏段，不能把组中所有段都判坏。坏段原affine/degenerate记录保留。
-[使用位置:8764](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8870) 位于chunk的G-tree batch循环外，
+[使用位置:8764](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9082) 位于chunk的G-tree batch循环外，
 跨batch片段查询共享同一逆元；first_touch/Gamma统计和最终unscale不变。缓存随chunk释放。
 scratch统计为实际GMP limb分配容量，包含保留窗口高水位，不等于进程RAM或VRAM。
 
@@ -3873,8 +3873,8 @@ full GPU busy均值 **77.938→77.927%**；main **77.560→78.202%**，low≤5%�
 相对既有Prime95 CPU单核full **90.460s**，修复后候选仍慢 **6.3883615s/7.062%**。
 CPU本轮未重跑，其D1531530/degree138240、内存/检查与GPU不同；不能据本轮宣称达到长期目标。
 保留GFINV_BATCH默认0，优化组合通过明确开关启用；坏组密集性能和RAM高水位待测。
-下一轮先拆分 [bleaf准备:8770](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8876) 与
-[fold构造:8954](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9061) 的host/GMP/拷贝计时，
+下一轮先拆分 [bleaf准备:8770](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9088) 与
+[fold构造:8954](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9274) 的host/GMP/拷贝计时，
 在修复后基线重采Nsight窗口并关联CUDA外空档，再推进device leaf/fold与共享父NTT。
 正确baby入口另有新增prefix乘法成本，后续可研究设备批量归一化，但必须继续比较独立全baby/F和冻结因子；
 不可通过恢复错误输入换取旧计时。
@@ -3892,12 +3892,12 @@ CPU本轮未重跑，其D1531530/degree138240、内存/检查与GPU不同；不�
 ### 51.2 实现、所有权与统计口径
 
 新增 [NTT_FOLD_FLAT:384](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:385)，默认0。
-[fold_flat_step:7024](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7048) 保持三次现有 GPU 乘法及窗口，
+[fold_flat_step:7024](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7068) 保持三次现有 GPU 乘法及窗口，
 不增加另一套 NTT/归约。H 跨 G 批次连续保存；首个 G 根 move；Ft 根借用，finv 展平一次。
 ra/rbi 在 qF 前释放；qrev 原地反转用作 q；每轮复用两 GMP 临时数做相同模减法。
 T/finv 不 trim，余式 trim 规则与旧路径一致，防止零高项改变声明 degree 或 inverse 长度。
 下降前恢复 H 和完整 finv，候选必须保持 `root_inverse_reused=1`。
-[S4关闭回退:8725](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8831) 令实际 enabled=0、走原 CPoly，
+[S4关闭回退:8725](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9043) 令实际 enabled=0、走原 CPoly，
 避免无 S4 时调用解引用 `L.s4` 的 flat multiply。
 
 `real_batched_foldflat` 报 folds/muls/sub_coeffs/peak_bytes 和 prepare/multiply/subtract/bridge；
@@ -3962,7 +3962,7 @@ full low≤5%样本27/200→17/190，是粗GPUbusy采样，不是SMoccupancy或�
 证据：[final summary](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/summary.json)、
 [CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/results.csv)、
 [GPU1采样](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/gpu1_summary.json)、
-[最终源码/exe/runner/分析快照](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/measured/stage2_tree_gpu.cu:7048)。
+[最终源码/exe/runner/分析快照](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/measured/stage2_tree_gpu.cu:7068)。
 所有测量源文件hash在运行后复核一致；ignored目录证据不随Git提交，tracked gate/runner可复现。
 
 ### 51.5 后续性能目标
@@ -4161,3 +4161,21 @@ sm89真实编译成功：build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe�
 M4423额外实际恢复：B1=1000/B2=2011326186870/D1231230/P115200/G15，GPU1/batch64/arena6300MiB；init14.808017/main60.308395/full75.116411s，driver曲线75.719930s，单次验证不算优化AB。Q SHA33cc6c63...809f092f与最终leaf hash10619321735931855904同§57；403批/1979251对/40218760归约coeffs、2400自检/66139GMP/4full checks保持bad0。原始Groot hash acd84d2595022e3e不同于§57：Q由Stage1投影表示转换成归一化(X:1)，projective leaf scale改变；Gamma^-1校正后叶值逐字同旧基线，不能对原始Groot跨输入表示作等值门禁。
 
 使用与全部限制见docs/ECM_CUDA_STAGE2.md、步骤报告§32，证据build_cuda_cmake/_production_stage2/acceptance/summary.json及各日志。只在GPU1执行，GPU0外部Stage1未改；公平Prime95重跑和真实跨曲线流水仍未完成。本阶段不恢复或完成原来已暂停的长期goal。
+
+## 59. 恢复优化：GPU 驻留 fold（2026-10-04）
+
+用户恢复新一轮优化后，在79c649e上推进F/finv/H及中间多项式驻留。新NTT_FOLD_DEVICE实验缺省0，生产wrapper缺省1，MAX_MB640；超预算、显存headroom或后端不满足时回退host flat。S4ResidentOwner持有两块独立显存，resident batch只接受owner确实持有的有界范围；原G-root raw lease及完整窗口限制保留。新增owner允许截断输出窗口，复用原NTT/carry/GMP流程，不改变数学工作量。
+
+算法：固定F/finv各上传一次；第一G根seed H；每个后续G根上传后，T=GH、逆序高项×finv求qrev、逆序qrev×F取低P项、ordinary canonical减法模N生成H。GPU逆序/减法/长度归约；除法每次仅读8字节长度。最后H读回后释放owner，接原Γ^-1/scaled下降/GCD。当前G-root仍先读回CPU再上传，不是全程GPU输入；host F/finv与下降仍保留。
+
+21项新门禁/0失败：65/127/129位，30个独立GMP schoolbook/monic long-division fixture，zero/near-N/短/重复fold、冻结因子、window0/1、预算与注入分配失败、pack-copy/trace回退、故意污染H拒绝。188项原回归/0失败，CPU F/giant/冻结因子端到端对照通过。首次生产A/B数值和算术统计一致，但旧runner要求raw_async/out_async等值而失败；新owner省42次host batch，每项确实少42。修复为精确差額合同，仍保留403批/1979251pairs/40218760coeffs/66139GMP样本与b9cbd2041266767a抽样签名。14项runner污染门禁及原leaf runner7项通过；日志重放只验证合同，不计性能。
+
+最终无CPU编译重叠ABBA：GPU1 M4423/sigma26/Q实际Prime95 choose12一致，B1=1000/B2=2011326186870/D1231230/P115200/I1633592/G15，batch64/arena6300MiB，同exe SHA cb72a2d0d2a57a665d1e8bd894fe5f410778f23b963d2bebeb7b9faa53d5e44f。完整顺序76.613115/74.221700/74.199262/76.613500s，full均值**76.6133075→74.210481s（−3.1363%）**，main61.223926→58.7900895s，init15.3893815→15.4203915s未优化；fold13.2055→10.6725s（−19.18%），G树21.8355→21.790、giant14.1855→14.205、下降8.0535→8.084s。串行46.99→48.51curves/h，不是并发吞吐。更早完整ABBA76.397928→74.090262s前两次与CPU编译重叠，两模式各一次；只作重复参考。所有Q/Groot105d6128bbf522db/leaf10619321735931855904、carry/GMP及bad0/clean1/overflow0一致。
+
+资源和精确传输：owner容量8W(9P+8)+32=580612512bytes/553.715MiB；旧fold H2D5313302400/D2H3506936160bytes被省，新owner实际H2D1043846608/D2H64512112bytes，净减少**7711879840bytes/7.182GiB**。全S4输出ledger新owner单列，原G-root统计不混入。GPU峰1Hz NVML4988→5544MiB，host observed private峰均7513→7578.5MB（未降RAM）。NTT完整缓存峰3486.695MiB、24malloc/8grow/8890hit、host padding控制123MiB保持；输出pinned容量246.1→123MiB。额外owner在下降前释放，不能把MAX640/arena6300解释成总显存硬cap。
+
+Systems2026.1.3另采：114625kernels全部GPU1，28reverse .013165195s+14subtract .044685393s+42resident scatter；H2D11741055664→7471599872、D2H7424447416→3982023368bytes，净变化逐字吻合公式，D2D不变。Stage1后近似窗口76.927277→72.975641s，事件并集64.086358→63.501751，无本进程GPU事件12.840919→9.473890s（16.69%→12.98%）。不是整卡idle/exactStage2范围；NVMLfull mean busy84.40→86.38%、main89.27→89.84%。同步cudaMemcpy host33.854→34.059s仍含等待，真实copy GPU合计1.489→.954s，不能把2.4s收益全部归于PCIe。当前GPU-Z日志亦读取，设备归属采用明确GPU1 NVML。
+
+生产重编译成功：build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe，2740224bytes，SHA **2ba0000aabc6d7609165b8ed8cf69c6b53fd13ae191d95255121c5f3f4fb5d2d**，CUDA214.8s。新defaults的24验收/0失败：21个save/ini/worktodo基本验收，CUDA失败队列保留、saved-X已有因子、大形状恢复。用户可选B2/skip/num后缀仍精确选择961–970；字面xxx作为无效因子拒绝。M4423实际save恢复init15.123476/main58.515049/full73.638524s，owner启用且全部数值检查通过；单次接入验证不算ABBA，投影Groot仍允许因(X:1)表示不同而变化，最终Γ校正叶哈希同原基线。
+
+步骤/公式/行号见docs/STAGE2_GPU_CURRENT_PIPELINE.md§33，部署见ECM_CUDA_STAGE2.md。证据位于build_cuda_cmake/_fold_device_ab_clean_20261004、_fold_device_gate_20261004、_fold_device_nsys_20261004.*及_fold_device_20261004/production_accept；源/工具/分析快照随本地证据保存，ignored不随git提交。下一步G-root直接GPU交接、减少GMP/carry细粒度同步、不同sigma共享scratch流水；当前goal保持active，公平CPU重跑与实际多曲线流水尚未证明。GPU0外部Stage1未改。

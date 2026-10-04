@@ -116,7 +116,9 @@ ECMSTAGE2=[AID,]k,b,n,c,save_name[,B2-or-zero][,skip_curves][,num_curves][,"know
 3. giant 树、积累/折叠、scaled 下降、块/叶 GCD 与因子验证。
 4. 排空算术检查，成功后写入结果；关闭进程以释放全部 CUDA 及 host 状态。
 
-采用已有优化默认值：Mersenne 特化、small-prime reuse、device giant seed、批量精确 segment inverse、device giant leaf/root、flat fold、scaled descent、输出窗口/分块。非 Mersenne N 使用原引擎一般模数路径。显式 `NTT_*` 环境变量可以覆盖默认值，仍保留实验自检与 GMP 采样。普通部署无需设置这些变量。
+采用已有优化默认值：Mersenne 特化、small-prime reuse、device giant seed、批量精确 segment inverse、device giant leaf/root、GPU 驻留 fold、scaled descent、输出窗口/分块。非 Mersenne N 使用原引擎一般模数路径。显式 `NTT_*` 环境变量可以覆盖默认值，仍保留实验自检与 GMP 采样。普通部署无需设置这些变量。
+
+GPU fold 的默认开关是 `NTT_FOLD_DEVICE=1`，独立缓冲预算 `NTT_FOLD_DEVICE_MAX_MB=640`（MiB）；设置 `NTT_FOLD_DEVICE=0` 可恢复原 host flat fold。显存不足、形状/后端不兼容或超过预算时自动使用原路径。申请前还预留 workspace 剩余增长和 1 GiB 空间；预算不是全程序显存硬上限。其额外显存为 `8W(9P+8)+32` bytes，W=`ceil(bits(N)/64)`，P=`φ(D)/2`；M4423/P115200 为约 554 MiB，Γ 校正及下降前释放。并发启动不同队列时应为每条活跃曲线分别计入此容量。算法、传输公式、性能和门禁详见 [步骤报告 §33](STAGE2_GPU_CURRENT_PIPELINE.md#33-gpu-驻留-fold算法访存与验证2026-10-04)。
 
 控制台输出每条记录开始/完成和结果文件路径。完整引擎输出默认在 exe/ini 目录的 `stage2_screen.log`；worker 2 为 `stage2_screen_2.log`。配置中的显式 `log_file` 优先；设空值则让引擎直接输出到控制台。
 
@@ -129,8 +131,8 @@ ECMSTAGE2=[AID,]k,b,n,c,save_name[,B2-or-zero][,skip_curves][,num_curves][,"know
 ## 实现位置
 
 - 存档文本和校验和解析：[ecm_cuda_stage2_main.cpp:106](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:106)；可选队列字段：[同文件:301](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:301)；配置和调度：[同文件:443](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:443)。
-- 生产默认值：[ecm_cuda_stage2.cu:6](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6)；独立引擎封装：[同文件:35](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:35)。
-- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10214](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10214)，跳过 Stage1 的分支位于 [10480](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10480)。
+- 生产默认值：[ecm_cuda_stage2.cu:6](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6)；独立引擎封装：[同文件:36](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:36)。
+- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10432](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10432)，跳过 Stage1 的分支位于 [10698](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10698)。
 - 已有表达式、ini 和队列工具：`src/core/ecm_expr.cpp`、`ecm_queue_config.cpp`、`ecm_worktodo.cpp`。
 - 独立编译脚本：[build_ecm_cuda_stage2.ps1](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)。
 
@@ -151,3 +153,9 @@ ECMSTAGE2=[AID,]k,b,n,c,save_name[,B2-or-zero][,skip_curves][,num_curves][,"know
 恢复时 Q 被表示为 `(X:1)`，原实验 Stage1 ladder 输出另一个等价投影表示，因此 **未除去投影比例的 G-root 哈希可能不同**。本次原始 G-root 哈希为 `acd84d2595022e3e`，实验基线为 `105d6128bbf522db`；引擎在 fold 后用 Γ⁻¹ 消除该比例，校正后的最终叶值逐字哈希一致。比较跨入口数值时应核对仿射 Q 与校正后的叶值，不能以原始投影 G-root 哈希判错。
 
 可复查证据：[验证汇总](D:/code/MPA-OpenCl/build_cuda_cmake/_production_stage2/acceptance/summary.json)、[用户示例选择](D:/code/MPA-OpenCl/build_cuda_cmake/_production_stage2/acceptance/user_example.log)、[占位因子拒绝](D:/code/MPA-OpenCl/build_cuda_cmake/_production_stage2/acceptance/user_example_xxx.log)、[M4423 完整日志](D:/code/MPA-OpenCl/build_cuda_cmake/_production_stage2/acceptance/m4423_engine.log)、[JSONL 结果](D:/code/MPA-OpenCl/build_cuda_cmake/_production_stage2/acceptance/m4423_results.jsonl)。测量文件位于 ignored build 目录，不随源码提交。
+
+### 2026-10-04 GPU fold 默认值更新
+
+新版 exe SHA256=`2ba0000aabc6d7609165b8ed8cf69c6b53fd13ae191d95255121c5f3f4fb5d2d`，2740224 bytes；同目录保留 `gmp-10.dll`。基本生产入口21项验收、CUDA失败保留队列、saved-X因子及M4423实际恢复共 **24/0**。用户 worktodo 的 B2/skip/num 选择与已有因子解析重新验证通过；驱动及存档格式本轮未改。
+
+M4423 save 恢复时 owner 启用，14 folds/42 muls，init15.123476/main58.515049/total73.638524 s，最终叶哈希 `10619321735931855904` 与原基线一致。该单次验证用于确认部署接入；性能结论采用实验 exe 的同二进制 ABBA（76.61→74.21 s），不能把两种入口的单次时间直接解释为加速比。[新版生产验收](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_device_20261004/production_accept/summary.json)、[大存档引擎日志](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_device_20261004/production_accept/m4423_engine.log)。
