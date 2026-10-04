@@ -95,6 +95,7 @@
 #include <set>
 #include <algorithm>
 #include <array>
+#include <functional>
 
 /* ===================================================================================== *
  *  a crash must never look like a silent exit again.  The real-shape failures of section
@@ -1035,6 +1036,22 @@ static void s2g_launch_segprod(int nw, unsigned long long npts, unsigned long lo
     const unsigned int th = 64;
     const unsigned int bl = (unsigned int)((nseg + th - 1) / th);
     s2g_segprod_kernel<NW><<<bl, th>>>(dn, ninv, nw, dz, npts, seg, nseg, out, fix);
+}
+
+/* Actual returned X/Z words -> the same projective [-X,Z] linear leaf as the
+   CPU path. No domain conversion: Gamma is a product of these exact Z words. */
+__global__ void s2g_projective_leaf_kernel(const unsigned long long *n,int nw,
+    const unsigned long long *x,const unsigned long long *z,size_t first,size_t count,
+    unsigned long long *out)
+{
+    const size_t k=blockIdx.x*(size_t)blockDim.x+threadIdx.x;if(k>=count)return;
+    const auto *xx=x+(first+k)*nw,*zz=z+(first+k)*nw;
+    bool zero=true;for(int j=0;j<nw;++j)if(xx[j])zero=false;
+    unsigned long long borrow=0;
+    for(int j=0;j<nw;++j) {
+        const unsigned long long t=n[j]-xx[j],b1=n[j]<xx[j],v=t-borrow,b2=t<borrow;
+        borrow=b1|b2;out[(2*k)*nw+j]=zero?0:v;out[(2*k+1)*nw+j]=zz[j];
+    }
 }
 
 /* ===================================================================================== *
@@ -4160,27 +4177,20 @@ static std::vector<unsigned long long> groot_product_gmp(PolyLayer &L,
 
 static std::vector<std::vector<unsigned long long>> build_groot_device(
     PolyLayer &L,const std::vector<std::vector<unsigned long long>> &leaf,
-    std::vector<size_t> &deg,size_t &pad_out,FTreeStats &fs,int cat)
+    std::vector<size_t> &deg,size_t &pad_out,FTreeStats &fs,int cat,
+    size_t device_n=0,const std::function<void(unsigned long long*)> &fill={})
 {
-    const size_t W=L.W,n=leaf.size();size_t pad=1;while(pad<n)pad*=2;
+    const size_t W=L.W,n=fill?device_n:leaf.size();size_t pad=1;while(pad<n)pad*=2;
     const bool check=g_groot_device_check;
     if(check && n>512) {std::fprintf(stderr,"%s: FATAL: resident GMP check limited to 512 leaves\n",NTT_PROBE_NAME);std::exit(3);}
     ++g_gdevice.trees;fs.leaves=n;fs.padded=pad;pad_out=pad;
     deg.assign(2*pad,0);
     for(size_t i=0;i<n;++i) {
-        if(leaf[i].size()!=2*W) {std::fprintf(stderr,"%s: FATAL: resident tree requires linear leaves\n",NTT_PROBE_NAME);std::exit(3);}
+        if(!fill && leaf[i].size()!=2*W) {std::fprintf(stderr,"%s: FATAL: resident tree requires linear leaves\n",NTT_PROBE_NAME);std::exit(3);}
         deg[pad+i]=1;
     }
     for(size_t i=pad;--i;)deg[i]=deg[2*i]+deg[2*i+1];
     std::vector<std::vector<unsigned long long>> tree(2*pad),expected;
-    if(check) {
-        expected.resize(2*pad);
-        for(size_t i=0;i<pad;++i) {
-            expected[pad+i].assign(W,0);expected[pad+i][0]=1;
-            if(i<n)expected[pad+i]=leaf[i];
-        }
-        for(size_t i=pad;--i;)expected[i]=groot_product_gmp(L,expected[2*i],expected[2*i+1]);
-    }
     if(!n) {tree[1].assign(W,0);tree[1][0]=1;fs.node_peak_bytes=fs.node_retained_bytes=8*W;return tree;}
     S4Ctx &C=*L.s4;
     // Exclusive lease of the existing raw staging pair. Resident calls never upload raw inputs.
@@ -4197,7 +4207,8 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
     bool available[2]={false,false},used[2]={false,false};
     if(g_groot_leaf_staging && g_s4_async)for(int k=0;k<2;++k)
         available[k]=g_pin_out[k] && g_pin_out_cap[k]>=2*W && g_pin_ev[k];
-    if(available[0] || available[1]) {
+    if(fill)fill(C.d_rawA);
+    else if(available[0] || available[1]) {
         ++g_gmemory.pinned_trees;size_t offset=0,turn=0;
         while(offset<n) {
             size_t k=turn++&1;if(!available[k])k^=1;
@@ -4222,8 +4233,21 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
         g_gdevice.host_staging_peak_bytes=std::max(g_gdevice.host_staging_peak_bytes,8ull*initial.capacity());
         CK(cudaMemcpy(C.d_rawA,initial.data(),need*8,cudaMemcpyHostToDevice));g_gmemory.pageable_words+=need;
     }
-    C.t_h2d_raw+=now_s()-upload;C.raw_words+=need;
+    if(!fill){C.t_h2d_raw+=now_s()-upload;C.raw_words+=need;}
     g_gdevice.leaf_words+=need;
+    if(check) {
+        std::vector<unsigned long long> device_leaf;
+        if(fill){device_leaf.resize(need);CK(cudaMemcpy(device_leaf.data(),C.d_rawA,need*8,cudaMemcpyDeviceToHost));}
+        expected.resize(2*pad);
+        for(size_t i=0;i<pad;++i) {
+            expected[pad+i].assign(W,0);expected[pad+i][0]=1;
+            if(i<n) {
+                if(fill)expected[pad+i].assign(device_leaf.begin()+2*i*W,device_leaf.begin()+2*(i+1)*W);
+                else expected[pad+i]=leaf[i];
+            }
+        }
+        for(size_t i=pad;--i;)expected[i]=groot_product_gmp(L,expected[2*i],expected[2*i+1]);
+    }
     auto *cur=C.d_rawA,*next=C.d_rawB;size_t cur_words=need;
     std::vector<unsigned long long> offsets(pad);
     for(size_t i=0;i<pad;++i)offsets[i]=std::min(i,n)*2*W;
@@ -8465,13 +8489,93 @@ static void ladder_points_ws(S3Workspace &W, const std::vector<unsigned long lon
    `per_block` points per thread; `check` also computes the chunk the old way and compares the
    affine x values (the ladder and the chain give different projective representatives of the
    same point, so the affine value is the only thing that can be compared). */
+struct DeviceGLeafStats {
+    unsigned long long requested_chunks=0,chunks=0,fallback_chunks=0,groups=0,bad_groups=0,
+        good_segments=0,device_trees=0,device_leaf_words=0,patch_words=0,
+        group_d2h_bytes=0,bad_segment_d2h_bytes=0,bad_point_d2h_bytes=0,
+        avoided_point_d2h_bytes=0,avoided_segment_d2h_bytes=0,avoided_leaf_h2d_bytes=0,
+        coord_peak_bytes=0,group_peak_bytes=0,checked_groups=0,checked_leaf_words=0;
+    double t_prepare=0,t_invert=0,t_fill=0;
+};
+static bool device_gleaf_flag(const char *name) {
+    const char *e=std::getenv(name);return e && std::atoi(e)!=0;
+}
+/* Own chain outputs or borrow the ladder workspace until ALL trees in this chunk finish.
+   Neither pointer aliases S4 raw frontiers. Bad-group coordinates are sparse host objects. */
+struct ResidentGiant {
+    static constexpr size_t GROUP=64,SEG=S2G_GFINV_SEG;
+    unsigned long long *x=nullptr,*z=nullptr,*segments=nullptr,*groups_device=nullptr,*group_fix=nullptr;
+    size_t n=0,w=0;bool own=false;
+    std::vector<unsigned char> group_good;
+    std::vector<std::vector<unsigned long long>> bad_x,bad_z;
+    ~ResidentGiant() {
+        if(own){if(x)CK(cudaFree(x));if(z)CK(cudaFree(z));}
+        if(segments)CK(cudaFree(segments));if(groups_device)CK(cudaFree(groups_device));
+        if(group_fix)CK(cudaFree(group_fix));
+    }
+    const unsigned long long *coord(size_t q,bool use_z) const {
+        const size_t group=q/(GROUP*SEG),local=q%(GROUP*SEG);
+        const auto &v=(use_z?bad_z:bad_x)[group];
+        if(local*w+w>v.size()){std::fprintf(stderr,"FATAL: sparse giant coordinate outside bad group\n");std::exit(3);}
+        return v.data()+local*w;
+    }
+    bool good(size_t segment) const {return group_good[segment/GROUP]!=0;}
+    void prepare(S3Workspace &ws,PolyLayer &L,std::vector<unsigned long long> &gseg,
+        mpz_t Ginv,unsigned long long &gamma_points,unsigned long long &projective_segments,DeviceGLeafStats &st) {
+        const double begin=now_s();const size_t ns=(n+SEG-1)/SEG,ng=(ns+GROUP-1)/GROUP;
+        const auto bad_before=st.bad_point_d2h_bytes,seg_before=st.bad_segment_d2h_bytes;
+        ++st.chunks;st.groups+=ng;st.coord_peak_bytes=std::max(st.coord_peak_bytes,16ull*n*w);
+        group_good.assign(ng,0);bad_x.resize(ng);bad_z.resize(ng);
+        CK(cudaMalloc(&groups_device,ng*w*8));CK(cudaMalloc(&group_fix,(GROUP+1)*w*8));
+        std::vector<unsigned long long> fix((GROUP+1)*w),word(w),products(ng*w);
+        mpz_t R,p,v,inv;mpz_inits(R,p,v,inv,nullptr);words_to_mpz(R,ws.C->hmone.data(),w);mpz_set_ui(p,1);
+        for(size_t j=0;j<=GROUP;++j) {
+            mpz_to_words(word,w,p);std::copy(word.begin(),word.end(),fix.begin()+j*w);
+            mpz_mul(p,p,R);mpz_mod(p,p,L.N);
+        }
+        CK(cudaMemcpy(group_fix,fix.data(),fix.size()*8,cudaMemcpyHostToDevice));
+        S2G_DISPATCH((int)w,s2g_launch_segprod,(int)w,ns,GROUP,ws.C->ninv,ws.dn,segments,groups_device,group_fix);
+        CK(cudaGetLastError());CK(cudaMemcpy(products.data(),groups_device,products.size()*8,cudaMemcpyDeviceToHost));
+        st.group_d2h_bytes+=products.size()*8;st.group_peak_bytes=std::max(st.group_peak_bytes,8ull*(ng+GROUP+1)*w);
+        std::vector<unsigned long long> all_segments;
+        if(device_gleaf_flag("NTT_DEVICE_GLEAF_CHECK")) {
+            all_segments.resize(ns*w);CK(cudaMemcpy(all_segments.data(),segments,all_segments.size()*8,cudaMemcpyDeviceToHost));
+        }
+        for(size_t h=0;h<ng;++h) {
+            const size_t lo=h*GROUP,hi=std::min(ns,lo+GROUP);
+            words_to_mpz(p,products.data()+h*w,w);
+            if(!all_segments.empty()) {
+                mpz_set_ui(v,1);
+                for(size_t k=lo;k<hi;++k){words_to_mpz(inv,all_segments.data()+k*w,w);mpz_mul(v,v,inv);mpz_mod(v,v,L.N);}
+                if(mpz_cmp(p,v)){std::fprintf(stderr,"FATAL: GPU Gamma group GMP mismatch\n");std::exit(3);}++st.checked_groups;
+            }
+            const double ti=now_s();const bool unit=mpz_invert(inv,p,L.N)!=0;st.t_invert+=now_s()-ti;
+            if(unit) {
+                group_good[h]=1;mpz_mul(Ginv,Ginv,inv);mpz_mod(Ginv,Ginv,L.N);
+                gamma_points+=std::min(n,hi*SEG)-lo*SEG;projective_segments+=hi-lo;st.good_segments+=hi-lo;
+            } else {
+                ++st.bad_groups;CK(cudaMemcpy(gseg.data()+lo*w,segments+lo*w,(hi-lo)*w*8,cudaMemcpyDeviceToHost));
+                st.bad_segment_d2h_bytes+=(hi-lo)*w*8;
+                const size_t first=lo*SEG,count=std::min(n,hi*SEG)-first;
+                bad_x[h].resize(count*w);bad_z[h].resize(count*w);
+                CK(cudaMemcpy(bad_x[h].data(),x+first*w,count*w*8,cudaMemcpyDeviceToHost));
+                CK(cudaMemcpy(bad_z[h].data(),z+first*w,count*w*8,cudaMemcpyDeviceToHost));
+                st.bad_point_d2h_bytes+=count*w*16;
+            }
+        }
+        st.avoided_point_d2h_bytes+=16ull*n*w-(st.bad_point_d2h_bytes-bad_before);
+        st.avoided_segment_d2h_bytes+=8ull*ns*w-(st.bad_segment_d2h_bytes-seg_before);
+        mpz_clears(R,p,v,inv,nullptr);st.t_prepare+=now_s()-begin;
+    }
+};
+
 static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, unsigned long long D,
                               unsigned long long clo, unsigned long long chi,
                               unsigned long long per_block, std::vector<unsigned long long> &gx,
                               std::vector<unsigned long long> &gz, bool check,
                               unsigned long long &seed_points,
                               std::vector<unsigned long long> *gseg = nullptr,
-                              unsigned long long seg = 16)
+                              unsigned long long seg = 16,ResidentGiant *resident=nullptr)
 {
     const size_t nw = C.nw;
     const unsigned long long npts = chi - clo + 1;
@@ -8569,10 +8673,11 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
                  ddz, ddsx, ddsz, desx, desz, ox, oz,g_giant_seed_device?2:1);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
-    gx.assign((size_t)npts * nw, 0ull);
-    gz.assign((size_t)npts * nw, 0ull);
-    CK(cudaMemcpy(gx.data(), ox, gx.size() * 8, cudaMemcpyDeviceToHost));
-    CK(cudaMemcpy(gz.data(), oz, gz.size() * 8, cudaMemcpyDeviceToHost));
+    if(!resident || check || g_gfinv_seg_check) {
+        gx.assign((size_t)npts*nw,0);gz.assign((size_t)npts*nw,0);
+        CK(cudaMemcpy(gx.data(),ox,gx.size()*8,cudaMemcpyDeviceToHost));
+        CK(cudaMemcpy(gz.data(),oz,gz.size()*8,cudaMemcpyDeviceToHost));
+    } else {std::vector<unsigned long long>().swap(gx);std::vector<unsigned long long>().swap(gz);}
     /* the per-segment z-products, while the point buffers are still on the device (section 42) */
     unsigned long long *dsp = nullptr;
     if (gseg) {
@@ -8589,8 +8694,8 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
         }
         CK(cudaGetLastError());
         CK(cudaDeviceSynchronize());
-        CK(cudaMemcpy(gseg->data(), dsp, gseg->size() * 8, cudaMemcpyDeviceToHost));
-        cudaFree(dsp);
+        if(!resident || g_gfinv_seg_check)CK(cudaMemcpy(gseg->data(),dsp,gseg->size()*8,cudaMemcpyDeviceToHost));
+        if(!resident)cudaFree(dsp);
         if(g_gfinv_seg_check) {
             if(seg!=S2G_GFINV_SEG){std::fprintf(stderr,"FATAL: segment check grid mismatch\n");std::exit(3);}
             std::vector<unsigned long long> expected;
@@ -8602,7 +8707,8 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
     if(!g_giant_seed_device) {
         cudaFree(ddsx);cudaFree(ddsz);cudaFree(desx);cudaFree(desz);cudaFree(ddx);cudaFree(ddz);
     }
-    cudaFree(ox);cudaFree(oz);
+    if(resident){resident->x=ox;resident->z=oz;resident->segments=dsp;resident->n=npts;resident->w=nw;resident->own=true;}
+    else {cudaFree(ox);cudaFree(oz);}
     /* THE CHECK: the same chunk through the ladder, compared on the AFFINE x value (the chain and
        the ladder hold different projective representatives of the same point, so X and Z cannot
        be compared -- X/Z mod N can, and that is the only quantity the caller uses). */
@@ -8904,6 +9010,7 @@ static unsigned long long ladder_product(const std::vector<unsigned long long> &
     return (unsigned long long)nh;
 }
 struct BatchedRun {
+    DeviceGLeafStats device_leaf;
     FoldFlatStats fold_flat;
     Stage2Tail tail;
     unsigned long long giant_points = 0, num_poly_g = 0, loops = 0, P = 0;
@@ -9205,29 +9312,67 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
            computes it on the device out of the Montgomery images it already produced, the
            ladder path computes the very same product on the host.  Both are the product of the
            z values AS RETURNED, which is exactly the scale the projective leaves carry. */
+        ResidentGiant resident;
+        const char *hp=std::getenv("NTT_S4_HOSTPACK"),*mb=std::getenv("NTT_DEVICE_GLEAF_MAX_MB");
+        const unsigned long long maxbytes=(mb?std::strtoull(mb,nullptr,10):512ull)*1048576ull;
+        const bool requested=device_gleaf_flag("NTT_DEVICE_GLEAF");
+        if(requested)++R.device_leaf.requested_chunks;
+        const bool device_leaf=requested && g_groot_device && g_s4_groot_only && L.s4 &&
+            g_s4_pack_direct && !g_s4_final_readback && !(hp && std::atoi(hp)) && g_gfinv_seg_exact &&
+            16ull*npts*W<=maxbytes;
+        if(requested && !device_leaf)++R.device_leaf.fallback_chunks;
         gseg.assign(((size_t)npts + S2G_GFINV_SEG - 1) / S2G_GFINV_SEG * (size_t)C.nw, 0ull);
         if (force_ladder || npts < chain_min) {
             gjs.resize(chi - clo + 1);
             for (size_t i = clo; i <= chi; ++i) gjs[i - clo] = (unsigned long long)i * D;
-            ladder_points_ws(ws, gjs, gx, gz);
-            gfinv_segprod_host(gseg, (size_t)npts, (size_t)C.nw, gz, L.N);
+            if(device_leaf) {
+                ws.need_pts(npts);CK(cudaMemcpy(ws.djs,gjs.data(),npts*8,cudaMemcpyHostToDevice));
+                S2G_DISPATCH((int)W,s2g_launch_ladder,(int)W,(int)npts,ws.dn,C.ninv,ws.dqx,ws.dqz,ws.da24,ws.dmone,ws.djs,ws.dx,ws.dz);
+                CK(cudaGetLastError());++ws.ladder_calls;ws.ladder_points_total+=npts;
+                resident.x=ws.dx;resident.z=ws.dz;resident.n=npts;resident.w=W;
+                CK(cudaMalloc(&resident.segments,gseg.size()*8));ws.need_segfix(S2G_GFINV_SEG);
+                S2G_DISPATCH((int)W,s2g_launch_segprod,(int)W,npts,S2G_GFINV_SEG,C.ninv,ws.dn,ws.dz,resident.segments,ws.dsegfix);
+                CK(cudaGetLastError());
+                if(g_gfinv_seg_check) {
+                    gx.resize(npts*W);gz.resize(npts*W);
+                    CK(cudaMemcpy(gx.data(),ws.dx,gx.size()*8,cudaMemcpyDeviceToHost));
+                    CK(cudaMemcpy(gz.data(),ws.dz,gz.size()*8,cudaMemcpyDeviceToHost));
+                    std::vector<unsigned long long> expected;gfinv_segprod_host(expected,npts,W,gz,L.N);
+                    CK(cudaMemcpy(gseg.data(),resident.segments,gseg.size()*8,cudaMemcpyDeviceToHost));
+                    if(expected!=gseg){std::fprintf(stderr,"FATAL: ladder device segment GMP mismatch\n");std::exit(3);}
+                } else {std::vector<unsigned long long>().swap(gx);std::vector<unsigned long long>().swap(gz);}
+            } else {
+                ladder_points_ws(ws,gjs,gx,gz);gfinv_segprod_host(gseg,npts,W,gz,L.N);
+            }
         } else {
             unsigned long long seed_points = 0;
             giant_chunk_chain(L, C, ws, D, (unsigned long long)clo, (unsigned long long)chi,
                               chain_block, gx, gz, chain_check, seed_points, &gseg,
-                              S2G_GFINV_SEG);
+                              S2G_GFINV_SEG,device_leaf?&resident:nullptr);
             R.giant_seed_points += seed_points;
             ++R.giant_chain_chunks;
         }
         R.t_giant += now_s() - tgp;
+        if(device_leaf) {
+            const double t=now_s(),ti=R.device_leaf.t_invert;resident.prepare(ws,L,gseg,Ginv,proj_gamma_points,proj_segments,R.device_leaf);
+            R.t_gleaves+=now_s()-t;R.t_ginv+=R.device_leaf.t_invert-ti;
+        }
         GfinvBatch segment_inverse(gseg,W,L.N,g_gfinv_batch);
         /* the G trees of the batches that lie inside this point chunk */
         for (unsigned long long b = c0 / P; b < R.num_poly_g && b * P < c1; ++b) {
         const size_t lo = (size_t)(b * (unsigned long long)P);
         size_t hi = lo + P;
         if (hi > (size_t)imax) hi = (size_t)imax;
-        std::vector<std::vector<unsigned long long>> bleaf(hi - lo,
-                                                           std::vector<unsigned long long>(2 * W, 0ull));
+        std::vector<std::vector<unsigned long long>> bleaf;
+        if(!device_leaf)bleaf.assign(hi-lo,std::vector<unsigned long long>(2*W,0));
+        std::map<size_t,std::vector<unsigned long long>> patches;
+        auto leaf_at=[&](size_t i)->std::vector<unsigned long long>& {
+            if(!device_leaf)return bleaf[i];
+            auto &v=patches[i];if(v.empty())v.assign(2*W,0);return v;
+        };
+        auto coord_at=[&](size_t i,bool z)->const unsigned long long* {
+            return device_leaf?resident.coord(i,z):(z?gz:gx).data()+i*W;
+        };
         std::vector<size_t> bdeg;
         size_t bpad = 0;
         FTreeStats bs;
@@ -9296,6 +9441,9 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                                  (unsigned long long)lhi);
                     std::exit(3);
                 }
+                if(device_leaf && resident.good(sidx)) {
+                    proj_points+=nb;la=lend;continue; // Gamma counted once by the exact whole group
+                }
                 const double t1 = now_s();
                 words_to_mpz(pseg, &gseg[sidx * W], W);
                 const double t2 = now_s();
@@ -9319,10 +9467,11 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                         proj_gamma_points += seglen;
                         ++proj_segments;
                     }
-                    for (size_t q = la; q < lend; ++q) {
-                        words_neg_mod_n(bleaf[q + lbase - lo], 0, &gx[q * W], C.hn.data(), W);
-                        std::copy(&gz[q * W], &gz[q * W] + (long)W,
-                                  bleaf[q + lbase - lo].begin() + (long)W);
+                    if(device_leaf)proj_points+=nb;
+                    else for (size_t q = la; q < lend; ++q) {
+                        words_neg_mod_n(leaf_at(q + lbase - lo), 0, coord_at(q,false), C.hn.data(), W);
+                        std::copy(coord_at(q,true), coord_at(q,true) + (long)W,
+                                  leaf_at(q + lbase - lo).begin() + (long)W);
                         ++proj_points;
                     }
                     R.t_gout += now_s() - t3;
@@ -9336,7 +9485,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 proj_fallbacks += nb;
                 for (size_t j = 0; j < nb; ++j) {
                     const size_t q = la + j;
-                    words_to_mpz(zv[j], &gz[q * W], W);
+                    words_to_mpz(zv[j], coord_at(q,true), W);
                     if (mpz_sgn(zv[j]) == 0) { seg_clean = false; break; }
                     mpz_mul(pv[j + 1], pv[j], zv[j]);
                     mpz_mod(pv[j + 1], pv[j + 1], L.N);
@@ -9345,8 +9494,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 if (!seg_clean) {
                     for (size_t j = 0; j < nb; ++j) {
                         const size_t q = la + j, bi = q + lbase - lo;
-                        words_to_mpz(X, &gx[q * W], W);
-                        words_to_mpz(Z, &gz[q * W], W);
+                        words_to_mpz(X, coord_at(q,false), W);
+                        words_to_mpz(Z, coord_at(q,true), W);
                         if (!affine_x_gmp_checked(ax, X, Z, L.N)) {
                             ++R.giant_degenerate;
                             mpz_gcd(gq, Z, L.N);
@@ -9355,8 +9504,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                         mpz_neg(neg, ax);
                         mpz_mod(neg, neg, L.N);
                         mpz_to_words(w, W, neg);
-                        std::copy(w.begin(), w.end(), bleaf[bi].begin());
-                        bleaf[bi][W] = 1;
+                        std::copy(w.begin(), w.end(), leaf_at(bi).begin());
+                        leaf_at(bi)[W] = 1;
                     }
                     R.t_gout += now_s() - t3;
                     la = lend;
@@ -9368,14 +9517,14 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                     mpz_mod(zinv, zinv, L.N);        /* Z_j^-1 */
                     mpz_mul(pinv, pinv, zv[j]);
                     mpz_mod(pinv, pinv, L.N);        /* inverse of the shorter product */
-                    words_to_mpz(X, &gx[q * W], W);
+                    words_to_mpz(X, coord_at(q,false), W);
                     mpz_mul(ax, X, zinv);
                     mpz_mod(ax, ax, L.N);
                     mpz_neg(neg, ax);
                     mpz_mod(neg, neg, L.N);          /* the leaf (X - x_i) = [ -x_i, 1 ] */
                     mpz_to_words(w, W, neg);
-                    std::copy(w.begin(), w.end(), bleaf[bi].begin());
-                    bleaf[bi][W] = 1;
+                    std::copy(w.begin(), w.end(), leaf_at(bi).begin());
+                    leaf_at(bi)[W] = 1;
                 }
                 R.t_gout += now_s() - t3;
                 la = lend;
@@ -9387,8 +9536,40 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             R.t_gleaves += now_s() - tgl0;
         }
         const double tg0 = now_s();
-        std::vector<std::vector<unsigned long long>> gt =
-            build_groot_select(L, bleaf, bdeg, bpad, bs, BC_GTREE, !g_s4_groot_only);
+        std::vector<std::vector<unsigned long long>> gt;
+        if(device_leaf) {
+            auto fill=[&](unsigned long long *out) {
+                const double t=now_s();const size_t first=lo-(clo-1),count=hi-lo;
+                s2g_projective_leaf_kernel<<<(unsigned)((count+127)/128),128>>>(ws.dn,(int)W,resident.x,resident.z,first,count,out);
+                CK(cudaGetLastError());
+                for(auto it=patches.begin();it!=patches.end();) {
+                    const size_t start=it->first;size_t next=start;std::vector<unsigned long long> words;
+                    while(it!=patches.end() && it->first==next) {words.insert(words.end(),it->second.begin(),it->second.end());++it;++next;}
+                    CK(cudaMemcpy(out+2*start*W,words.data(),words.size()*8,cudaMemcpyHostToDevice));
+                    R.device_leaf.patch_words+=words.size();
+                }
+                if(device_gleaf_flag("NTT_DEVICE_GLEAF_TEST_BAD")){CK(cudaMemset(out,0xff,8));}
+                if(device_gleaf_flag("NTT_DEVICE_GLEAF_CHECK")) {
+                    std::vector<unsigned long long> x(count*W),z(count*W),actual(count*2*W),expected(2*W);
+                    CK(cudaMemcpy(x.data(),resident.x+first*W,x.size()*8,cudaMemcpyDeviceToHost));
+                    CK(cudaMemcpy(z.data(),resident.z+first*W,z.size()*8,cudaMemcpyDeviceToHost));
+                    CK(cudaMemcpy(actual.data(),out,actual.size()*8,cudaMemcpyDeviceToHost));
+                    for(size_t i=0;i<count;++i) {
+                        const auto patch=patches.find(i);
+                        if(patch!=patches.end())expected=patch->second;
+                        else {words_neg_mod_n(expected,0,x.data()+i*W,C.hn.data(),W);std::copy(z.data()+i*W,z.data()+(i+1)*W,expected.begin()+W);}
+                        if(!std::equal(expected.begin(),expected.end(),actual.begin()+2*i*W)) {
+                            std::fprintf(stderr,"FATAL: device giant leaf CPU mismatch\n");std::exit(3);
+                        }
+                    }
+                    R.device_leaf.checked_leaf_words+=actual.size();
+                }
+                ++R.device_leaf.device_trees;R.device_leaf.device_leaf_words+=count*2*W;
+                R.device_leaf.avoided_leaf_h2d_bytes+=16ull*count*W;
+                R.device_leaf.t_fill+=now_s()-t;
+            };
+            gt=build_groot_device(L,bleaf,bdeg,bpad,bs,BC_GTREE,hi-lo,fill);
+        } else gt=build_groot_select(L,bleaf,bdeg,bpad,bs,BC_GTREE,!g_s4_groot_only);
         if (g_s4_groot_only) {
             const double tr0 = now_s();
             for (const auto &v : bleaf) g_groot.input_released_bytes += 8ull * v.capacity();
@@ -9941,6 +10122,12 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     /* close the books (section 41): pre + loop_wall + post must equal the caller's `elapsed` */
     R.t_post_loop = now_s() - R.t_post_loop;
     /* the device-side counters: how much of the orchestration actually happened once */
+    const auto &dl=R.device_leaf;
+    std::printf("device_gleaf: requested_chunks=%llu chunks=%llu fallback_chunks=%llu groups=%llu bad_groups=%llu good_segments=%llu device_trees=%llu device_leaf_words=%llu patch_words=%llu group_d2h_bytes=%llu bad_segment_d2h_bytes=%llu bad_point_d2h_bytes=%llu avoided_point_d2h_bytes=%llu avoided_segment_d2h_bytes=%llu avoided_leaf_h2d_bytes=%llu coord_peak_bytes=%llu group_peak_bytes=%llu checked_groups=%llu checked_leaf_words=%llu t_prepare=%.6f t_invert=%.6f t_fill=%.6f\n",
+        dl.requested_chunks,dl.chunks,dl.fallback_chunks,dl.groups,dl.bad_groups,dl.good_segments,dl.device_trees,
+        dl.device_leaf_words,dl.patch_words,dl.group_d2h_bytes,dl.bad_segment_d2h_bytes,dl.bad_point_d2h_bytes,
+        dl.avoided_point_d2h_bytes,dl.avoided_segment_d2h_bytes,dl.avoided_leaf_h2d_bytes-dl.patch_words*8,
+        dl.coord_peak_bytes,dl.group_peak_bytes,dl.checked_groups,dl.checked_leaf_words,dl.t_prepare,dl.t_invert,dl.t_fill);
     R.ladder_calls = ws.ladder_calls;
     R.ladder_points = ws.ladder_points_total;
     R.prod_launches = ws.prod_launches;
@@ -10406,7 +10593,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
