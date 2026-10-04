@@ -76,8 +76,8 @@ Write-Host ("stage2 tree GPU check: {0}" -f $tag)
 Write-Host ("sandbox: {0}" -f $Sandbox)
 
 $refArgs = @('--n', $N, '--sigma', "$Sigma", '--b1', "$B1", '--b2', "$B2", '--d', "$D")
-$cpuOut = (& $ref @refArgs 2>&1 | Out-String)
-$cpuOutDump = (& $ref @refArgs --dump-F $cpu) 2>&1 | Out-String
+$cpuOut = (& $ref @refArgs 2>&1 | Out-String -Width 4096)
+$cpuOutDump = (& $ref @refArgs --dump-F $cpu) 2>&1 | Out-String -Width 4096
 if (-not (Test-Path $cpu)) { throw "the CPU reference did not write $cpu" }
 $cpuSummary = [regex]::Match($cpuOutDump, 'stage2: algorithm=tree .*')
 if (-not $cpuSummary.Success) { $cpuSummary = [regex]::Match($cpuOut, 'stage2: algorithm=tree .*') }
@@ -94,7 +94,7 @@ if ($ChainCheck) { $env:NTT_GIANT_CHAIN_MIN = '0'; $env:NTT_GIANT_CHAIN_CHECK = 
 else { Remove-Item Env:\NTT_GIANT_CHAIN_MIN -ErrorAction SilentlyContinue
        Remove-Item Env:\NTT_GIANT_CHAIN_CHECK -ErrorAction SilentlyContinue }
 if ($HostPack) { $env:NTT_S4_HOSTPACK = '1' } else { Remove-Item Env:\NTT_S4_HOSTPACK -ErrorAction SilentlyContinue }
-$gpuOut = (& $gpu @gpuArgs 2>&1 | Out-String)
+$gpuOut = (& $gpu @gpuArgs 2>&1 | Out-String -Width 4096)
 $gpuOut.Trim() -split "`n" | ForEach-Object { Write-Host ("  gpu: " + $_.TrimEnd()) }
 $gpuCode = $LASTEXITCODE
 

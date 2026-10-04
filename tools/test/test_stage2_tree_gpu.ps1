@@ -75,6 +75,19 @@ Write-Host ""
 # The acceptance script takes -N/-Sigma/-B1/-B2/-D/-Device and a -Evaluate switch that also
 # walks the stage-2 tail (giant points, remainder tree, gcd).  It has no -Exe parameter: it
 # locates the exe itself, so we only pass shapes and the device.
+function RunGpuCapture([string[]]$gpuRunArgs) {
+    # PS 5.1 turns redirected native stderr into ErrorRecord objects. Fixtures deliberately
+    # print arena refusal diagnostics; capture them and let the existing exit/output checks
+    # decide success, while retaining Stop for the surrounding PowerShell operations.
+    $previousErrors = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $captured = (& $Exe @gpuRunArgs 2>&1 | Out-String -Width 4096)
+        $nativeCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousErrors }
+    return @{ out=$captured; code=$nativeCode }
+}
+
 function RunCheck([string[]]$extra) {
     $prev = $ErrorActionPreference
     $nttBefore=@{}
@@ -92,9 +105,9 @@ function RunCheck([string[]]$extra) {
                     $checkArgs[$key]=$extra[++$i]
                 } else { $checkArgs[$key]=$true }
             }
-            $o = (& $Check @checkArgs *>&1 | Out-String)
+            $o = (& $Check @checkArgs *>&1 | Out-String -Width 4096)
         } else {
-            $o = (& powershell -NoProfile -ExecutionPolicy Bypass -File $Check -Device $Device @extra 2>&1 | Out-String)
+            $o = (& powershell -NoProfile -ExecutionPolicy Bypass -File $Check -Device $Device @extra 2>&1 | Out-String -Width 4096)
         }
         $c = $LASTEXITCODE
     } finally {
@@ -1061,7 +1074,7 @@ try {
            [regex]::Match($wsFallback,$resultPattern).Value -eq $resultOld -and
            $wsFallback -cnotmatch 'FATAL|CRASH|MISMATCH|gmp_check_bad=[1-9]') "exit=$wsFallbackCode"
     $env:NTT_ARENA_CAP_KB='';$env:NTT_ARENA_WORKSPACE_TEST='1';$env:NTT_S4_CHUNK_MAX='0'
-    $wsFixture=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096);$wsFixtureCode=$LASTEXITCODE
+    $wsCapture=RunGpuCapture $fallbackArgs;$wsFixture=$wsCapture.out;$wsFixtureCode=$wsCapture.code
     $m=[regex]::Match($wsFixture,'ntt_workspace_check: checks=(\d+) words=(\d+) bad=0')
     Check 'workspace: independent GMP covers aliases, exports, allocation rollback and dRes isolation' `
           ($wsFixtureCode -eq 0 -and $m.Success -and [long]$m.Groups[1].Value -ge 30 -and
@@ -1117,7 +1130,7 @@ try {
     $env:NTT_FUSE_LIFETIME_TEST='1';$env:NTT_S4_CHUNK_MAX='0';$env:NTT_S4_CARRY_TRACE='0'
     foreach($compact in @('0','1')) {
         $env:NTT_FUSE_COMPACT_SCRATCH=$compact
-        $fixture=(& $Exe @fallbackArgs 2>&1 | Out-String -Width 4096);$code=$LASTEXITCODE
+        $fuseCapture=RunGpuCapture $fallbackArgs;$fixture=$fuseCapture.out;$code=$fuseCapture.code
         $life=[regex]::Match($fixture,'ntt_fuse_lifetime_check: calls=14 bad=0 allocations=(\d+) frees=(\d+) leaked_bytes=0')
         Check "fuse lifetime: compact=$compact balances host/device/refusal/early return and cached ownership" `
             ($code -eq 0 -and $life.Success -and $life.Groups[1].Value -eq $life.Groups[2].Value) "exit=$code"

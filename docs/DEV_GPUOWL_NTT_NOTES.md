@@ -3977,3 +3977,62 @@ CPU本轮未重跑且D/degree/检查不同，不能宣称超越Prime95或完成�
 先评估共享GPU scratch、交错GPU队列与另一曲线CPU准备、curve/context所有权；当前全局可变状态不支持直接多线程重入。
 单曲线串行成本换算35.518→37.269curves/h（+4.93%）只是预算，不是不同sigma/save实际吞吐测量。
 真实并行队列必须核对每条曲线完整输出和实际curves/hour，不用重复同一Q/F的`--curves K`作证明。
+
+## 52. 当前 Stage2 的逐步骤量化成本补充（2026-10-04）
+
+按用户要求补充 [当前流程报告§27](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:802)，源码基线bc4a68f，采用§51最终fold-flat候选的同二进制ABBA数据。本阶段仅修改文档和复算源码公式，没有编译、GPU实验或新增实现门禁；下一阶段的实现与实验单列§53。
+
+- 用S=bits(N)、W=ceil(S/64)、P=φ(D)/2、I=floor(B2/D)+2、G=ceil(I/P)统一每阶段计算、周期模型、RAM/显存载荷及累计生成/传输量；周期系数保留为待校准值，没有将乘加次数当机器周期。
+- M4423本例baby实际26709966次Montgomery乘法；giant seed26178817、chain12660336、段积1531492次，giant合计40370645次。seed占giant算术次数64.8462%，不是墙钟占比；seed CPU转域102110次模乘，seed坐标两方向分别57181600bytes。
+- 最新完整96.594317s：init16.40%、giant15.11%、G叶3.14%、G树29.50%、finv2.66%、fold14.77%、H缩放0.77%、下降9.75%、块积/GCD0.18%、残差7.72%。归约10.15%为嵌套项；init子阶段也单列并标明不可重复相加。
+- F树固定逻辑载荷1308016640bytes；G树累计乘法输出16420181680bytes，但device frontier/raw峰值225792000bytes。fold上传/读回模型5313302400/3506936160bytes；累计流量、同时存活载荷、观察进程峰值分别说明。
+- 给出固定N/D下B2外推及device leaf/fold、归约与多曲线共享空间的预算。本阶段完成时链式Gamma尺度尚未独立验证，静态计数不作为正确性证据；后续§53补充修正与动态验证。
+
+数值依据为[最终summary](D:/code/MPA-OpenCl/build_cuda_cmake/_fold_flat_ab_final_20261003/summary.json)及两次候选原日志，逐项代码来源与行号在报告中列出。§25保留上一轮历史计时，§27明确作为最新候选规划基线。
+
+## 53. 精确段积尺度与 device seed 候选（2026-10-04）
+
+本轮先解决device leaf前的Γ尺度合同，再减少seed转域和传输；详细公式、当前量化账及源码行号见[流程报告§28](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:937)。GPU工作在GPU1，GPU0用户Stage1进程未改动。
+
+### 53.1 实现及确定的工作量变化
+
+旧GPU段积为实际Z普通积Γ乘R^{−(m−1)}；当前默认追加一次Mont(p,R^m)恢复Γ，m1直接返回。cached表8W(s+1)，本例9520bytes；新增102100次Mont，段积合计1633592次。NTT_GFINV_SEG_EXACT默认1，诊断0保留旧单位因子。旧完整叶指纹不同不等于旧ECM因子无效，也不等同于之前Stage1/baby归一化bug。
+
+NTT_GIANT_SEED_DEVICE=1让ladder保留image输出，chain借用workspace交错seed对（stride2），省掉普通输出转换、seed D2H/CPU乘R/6数组上传。五chunk/51055seed，分别省102110次GPU Mont和CPU模乘；两个方向各57181600bytes，合109.065MiB；避免30次独立cudaMalloc/free对。旧seed六数组最大逻辑载荷12097120bytes，whole-process峰值不能据此直接相减。
+
+host/device精确模式giant Mont总次数40472745/40370635；当前device只比旧尺度基线40370645少10次，补偿的算术成本必须计入。全部giant坐标读回、CPU叶生成和叶上传仍在；不是完整device leaf，ox/oz/dsp仍逐chunk分配释放。
+
+### 53.2 隔离构建、独立门禁与runner修复
+
+最终[隔离exe](D:/code/MPA-OpenCl/build_cuda_cmake/_seed_device_20261004/stage2_tree_gpu.exe) SHA256 **D185D317F9797700529655FA51F2738E5DBBC9F259C332BF56DF59752614A557**。
+新增[test_stage2_device_seed.py](D:/code/MPA-OpenCl/tools/test/test_stage2_device_seed.py:1) **31/0**；原完整套件同一exe、显式device seed/fold-flat/exact均1 **188/0**。
+
+独立GMP段积fixture64/129/4423/5261位，每宽91case/1022完整段比较；实际链全段普通gz乘积、每个seed坐标字普通输出再乘R均检查。Python独立affine monic H验证单位元64/127位、冻结、M4423extra12/M5261完整叶指纹；冻结59649589127497217/114713与7706779146789021619恢复一致。坏段N15/35、tail、ladder回退、毒化拒绝通过。生产ABBA是同模式完整指纹一致，不声称独立逐字导出生产全系数；g=N饱和块仍待验证。
+
+原PS5门禁初次因预期stderr在Stop策略提前退出，第二次186/2来自Out-String折行；新RunGpuCapture仅在预期stderr捕获期间恢复Continue并记录exit code，check输出宽4096，保留原有断言，最终188/0。
+证据：[31/0](D:/code/MPA-OpenCl/build_cuda_cmake/_seed_device_final_gate_20261004/summary.json)、[188/0](D:/code/MPA-OpenCl/build_cuda_cmake/_seed_device_full_gate_final_20261004.log)、[构建](D:/code/MPA-OpenCl/build_cuda_cmake/_seed_device_build_20261004.log)。
+
+### 53.3 同二进制生产ABBA与资源
+
+新增runner -Target seed_device：host/device/device/host，明确模式及实际日志断言；两边fold-flat/Gfinv batch/exact/device Groot/scaled/window/chunk均1，carrybatch/oracleasync0、sample96/every8。
+GPU1 M4423/sigma26/B1=1000/extra12，actual B2=2011326186870，D=1231230/P=115200/I=1633592/G=15，batch64MiB/arena6300MiB、chain L=64。
+四轮full **97.716019 /96.343413 /95.955048 /96.611685s**；exit0/fullclean1/overflow0。
+
+均值完整 **97.163852→96.1492305s（−1.0146215s/−1.0442%）**；main81.042852→80.396682；init16.1209995→15.7525485。
+giant **14.6195→14.462s（−0.1575s/−1.0773%）**；G树28.490→28.493、fold14.5495→14.485、下降9.6645→9.4365。
+控制首末差1.104334s，init也未改却变快，无置信区间；确证工作量/边界减少，计时仅支持小幅趋势，不将完整1.01秒都归于seed。
+内部归约9.8285→9.8415s无加速证据；候选阶段占比init16.38%、giant15.04%、G叶3.03%、G树29.63%、finv2.52%、fold15.07%、H消Γ0.70%、下降9.81%、GCD0.18%、残差7.63%；归约10.24%嵌套。
+
+Q hash33cc6c63cec26c39900a7ed4ff551e2c2e0a533422905b538ec4f4aa809f092f匹配实际Prime95点；Groot105d6128bbf522db；精确leaf **10619321735931855904**四轮一致，旧9100612758855566221变化预期。
+403calls/1979251pairs/40218760reduced、66139GMP samples/2400selftests/4full checks、carrychecked/finishes8241一致bad0。
+host private峰均值7762→7758MB，只少4MB；NTT workspace owned/full3356.537/3486.695MiB相同，workspace24malloc/8grow/8890hit不覆盖省下的seed独立分配。
+1Hz NVML峰5048→5032MiB、fullbusy77.45→80.80%、main79.26→82.19%，full低≤5%样本18/193→16/191；不是SM occupancy或精确idle时长。
+主传输账rounded11.37/5.46GiB相同（未覆盖全部seed边界）；新增独立账确认109.065MiB。windowD2H5.683GiB、flat copy/zero2.4837/3.4821GiB均未改。
+
+证据：[summary](D:/code/MPA-OpenCl/build_cuda_cmake/_seed_device_ab_20261004/summary.json)、[CSV](D:/code/MPA-OpenCl/build_cuda_cmake/_seed_device_ab_20261004/results.csv)、[GPU1](D:/code/MPA-OpenCl/build_cuda_cmake/_seed_device_ab_20261004/gpu1_summary.json)、[源码hash复核](D:/code/MPA-OpenCl/build_cuda_cmake/_seed_device_ab_20261004/source_verified.json)。运行后源码/exe hash复核一致，快照measured；ignored证据不随Git提交，tracked runner/gate可复现。
+
+### 53.4 下轮优先级与长期目标
+
+device seed默认仍0。当前串行预算37.442curves/h，未测不同sigma并行队列；相对旧且D/检查不同、未重跑的CPU90.460s仍慢5.6892s，长期目标未完成。
+下一轮评估Mersenne专用S4系数归约，把N=2^S−1的W²商位乘法改为少数O(W)fold，通用N保留当前路径；当前归约10.24%的Amdahl预算约91.2285s（翻倍）/86.3077s（消除），不是实测。
+并推进GPU组Γ与device leaf：全好组只需U1598个Γ而非E102100个段，组Γ单方向894880bytes，坏组保留原回退；device叶可省3.4079GiB边界但坐标驻留可能多369.14MiB。固定F/finv每个顶层谱1GiB，先评估单谱缓存与共享scratch容量，再考虑不同曲线流水。

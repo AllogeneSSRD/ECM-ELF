@@ -385,6 +385,24 @@ static const bool g_fold_flat = [] {
     const char *e=std::getenv("NTT_FOLD_FLAT");
     return e && *e && std::atoi(e)!=0;
 }();
+// Exact product of the actual returned Z words, not a Montgomery image product.
+static const bool g_gfinv_seg_exact = [] {
+    const char *e=std::getenv("NTT_GFINV_SEG_EXACT");return !e || std::atoi(e)!=0;
+}();
+static const bool g_gfinv_seg_check = [] {
+    const char *e=std::getenv("NTT_GFINV_SEG_CHECK");return e && std::atoi(e)!=0;
+}();
+static const bool g_giant_seed_device = [] {
+    const char *e=std::getenv("NTT_GIANT_SEED_DEVICE");return e && std::atoi(e)!=0;
+}();
+static const bool g_giant_seed_check = [] {
+    const char *e=std::getenv("NTT_GIANT_SEED_CHECK");return e && std::atoi(e)!=0;
+}();
+struct GiantSeedStats {
+    unsigned long long chunks=0,points=0,avoided_d2h_bytes=0,avoided_h2d_bytes=0;
+    unsigned long long avoided_cpu_modmuls=0,avoided_montmuls=0,checked_words=0;
+    unsigned long long segments=0,segment_checks=0,segment_fix_muls=0,fix_table_peak_bytes=0;
+} g_giant_seed;
 static const bool g_gfinv_batch = [] {
     const char *e=std::getenv("NTT_GFINV_BATCH"); return e && std::atoi(e)!=0;
 }();
@@ -782,7 +800,7 @@ __global__ void s2g_ladder_kernel(const unsigned long long *n, unsigned long lon
                                   const unsigned long long *qx, const unsigned long long *qz,
                                   const unsigned long long *a24, const unsigned long long *mone,
                                   const unsigned long long *js, int npts,
-                                  unsigned long long *out_x, unsigned long long *out_z)
+                                  unsigned long long *out_x, unsigned long long *out_z, bool normal_output)
 {
     const int t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= npts) return;
@@ -793,13 +811,15 @@ __global__ void s2g_ladder_kernel(const unsigned long long *n, unsigned long lon
        same arithmetic, point by point, with a different work assignment. */
     for (int i = t; i < npts; i += gridDim.x * blockDim.x) {
         s2g_ladder<NW>(js[i], qx, qz, a24, n, ninv, nw, mone, rx, rz);
-        for (int j = 0; j < NW; ++j) one[j] = 0;
-        one[0] = 1;
-        s2g_mont_mul<NW>(nx, rx, one, n, ninv, nw);       /* X = X_m * R^-1 */
-        s2g_mont_mul<NW>(nz, rz, one, n, ninv, nw);       /* Z = Z_m * R^-1 */
+        if(normal_output) {
+            for (int j = 0; j < NW; ++j) one[j] = 0;
+            one[0] = 1;
+            s2g_mont_mul<NW>(nx, rx, one, n, ninv, nw);
+            s2g_mont_mul<NW>(nz, rz, one, n, ninv, nw);
+        }
         for (int j = 0; j < nw; ++j) {
-            out_x[(size_t)i * nw + j] = nx[j];
-            out_z[(size_t)i * nw + j] = nz[j];
+            out_x[(size_t)i * nw + j] = normal_output ? nx[j] : rx[j];
+            out_z[(size_t)i * nw + j] = normal_output ? nz[j] : rz[j];
         }
     }
 }
@@ -870,7 +890,7 @@ static void s2g_launch_ladder(int nw, int npts, const unsigned long long *dn,
                               unsigned long long ninv, const unsigned long long *dqx,
                               const unsigned long long *dqz, const unsigned long long *da24,
                               const unsigned long long *dmone, const unsigned long long *djs,
-                              unsigned long long *dx, unsigned long long *dz)
+                              unsigned long long *dx, unsigned long long *dz, bool normal_output=true)
 {
     const unsigned int th = 64;
     /* the same kernel, launched once per <= g_ladder_cap points (grid-stride inside).
@@ -887,7 +907,7 @@ static void s2g_launch_ladder(int nw, int npts, const unsigned long long *dn,
         const int m = ((npts - p0) < g_ladder_cap) ? (npts - p0) : g_ladder_cap;
         const unsigned int bl = (unsigned int)((m + th - 1) / th);
         s2g_ladder_kernel<NW><<<bl, th>>>(dn, ninv, nw, dqx, dqz, da24, dmone, djs + p0, m,
-                                          dx + (size_t)p0 * nw, dz + (size_t)p0 * nw);
+                                          dx + (size_t)p0 * nw, dz + (size_t)p0 * nw, normal_output);
     }
 }
 
@@ -914,7 +934,8 @@ __global__ void s2g_chain_kernel(const unsigned long long *dn, unsigned long lon
                                  const unsigned long long *esx, const unsigned long long *esz,
                                  unsigned long long npts, unsigned long long per_block,
                                  unsigned long long blocks,
-                                 unsigned long long *out_x, unsigned long long *out_z)
+                                 unsigned long long *out_x, unsigned long long *out_z,
+                                 size_t seed_stride)
 {
     const unsigned long long t = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
     if (t >= blocks) return;
@@ -923,10 +944,10 @@ __global__ void s2g_chain_kernel(const unsigned long long *dn, unsigned long lon
     const unsigned long long end = ((start + per_block) < npts) ? (start + per_block) : npts;
     unsigned long long xa[NW], za[NW], xb[NW], zb[NW], xc[NW], zc[NW];
     for (int j = 0; j < nw; ++j) {
-        xa[j] = dsx[(size_t)t * nw + j];
-        za[j] = dsz[(size_t)t * nw + j];
-        xb[j] = esx[(size_t)t * nw + j];
-        zb[j] = esz[(size_t)t * nw + j];
+        xa[j] = dsx[(size_t)t * seed_stride * nw + j];
+        za[j] = dsz[(size_t)t * seed_stride * nw + j];
+        xb[j] = esx[(size_t)t * seed_stride * nw + j];
+        zb[j] = esz[(size_t)t * seed_stride * nw + j];
     }
     for (int j = 0; j < nw; ++j) {
         out_x[(size_t)start * nw + j] = xa[j];
@@ -958,20 +979,21 @@ static void s2g_launch_chain(int nw, unsigned long long blocks, unsigned long lo
                              const unsigned long long *ddz, const unsigned long long *dsx,
                              const unsigned long long *dsz, const unsigned long long *esx,
                              const unsigned long long *esz, unsigned long long *ox,
-                             unsigned long long *oz)
+                             unsigned long long *oz, size_t seed_stride=1)
 {
     const unsigned int th = 64;
     const unsigned int bl = (unsigned int)((blocks + th - 1) / th);
     s2g_chain_kernel<NW><<<bl, th>>>(dn, ninv, nw, ddx, ddz, dsx, dsz, esx, esz, npts, per_block,
-                                    blocks, ox, oz);
+                                    blocks, ox, oz, seed_stride);
 }
 
 /* ===================================================================================== *
  *  THE SEGMENT PRODUCTS OF THE GIANT z-COORDINATES (objective 4, section 42)
  *
  *  One thread per segment of `seg` consecutive giant points; ONE Montgomery multiplication per
- *  point, in the MONTGOMERY DOMAIN the chain already hands back (the product of images is the
- *  image of the product, so no conversion and no extra constant is needed).  The host then asks
+ *  point after the first. The uncorrected result is Gamma/R^(m-1), where Gamma is the
+ *  ordinary product of the actual returned Z WORDS. Default correction by Mont(p,R^m)
+ *  returns exactly Gamma, including short tails; legacy mode is diagnostic only. The host asks
  *  ONE question per segment -- is this product invertible mod N? -- and the answer decides
  *  whether the segment's leaves can be written in the PROJECTIVE form [ -X, Z ] (two word-level
  *  operations, no GMP at all) instead of being converted to affine [ -x, 1 ] with a modular
@@ -982,7 +1004,7 @@ template <int NW>
 __global__ void s2g_segprod_kernel(const unsigned long long *dn, unsigned long long ninv, int nw,
                                    const unsigned long long *dz, unsigned long long npts,
                                    unsigned long long seg, unsigned long long nseg,
-                                   unsigned long long *out)
+                                   unsigned long long *out, const unsigned long long *fix)
 {
     const unsigned long long s = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
     if (s >= nseg) return;
@@ -995,18 +1017,24 @@ __global__ void s2g_segprod_kernel(const unsigned long long *dn, unsigned long l
         s2g_mont_mul<NW>(tmp, p, dz + (size_t)j * nw, dn, ninv, nw);
         for (int i = 0; i < nw; ++i) p[i] = tmp[i];
     }
+    const size_t m=(size_t)(end-start);
+    if(fix && m>1) {
+        s2g_mont_mul<NW>(tmp,p,fix+m*nw,dn,ninv,nw);
+        for(int i=0;i<nw;++i)p[i]=tmp[i];
+    }
     for (int i = 0; i < nw; ++i) out[(size_t)s * nw + i] = p[i];
 }
 
 template <int NW>
 static void s2g_launch_segprod(int nw, unsigned long long npts, unsigned long long seg,
                                unsigned long long ninv, const unsigned long long *dn,
-                               const unsigned long long *dz, unsigned long long *out)
+                               const unsigned long long *dz, unsigned long long *out, const unsigned long long *fix=nullptr)
 {
+    if(!npts)return;
     const unsigned long long nseg = (npts + seg - 1) / seg;
     const unsigned int th = 64;
     const unsigned int bl = (unsigned int)((nseg + th - 1) / th);
-    s2g_segprod_kernel<NW><<<bl, th>>>(dn, ninv, nw, dz, npts, seg, nseg, out);
+    s2g_segprod_kernel<NW><<<bl, th>>>(dn, ninv, nw, dz, npts, seg, nseg, out, fix);
 }
 
 /* ===================================================================================== *
@@ -8167,6 +8195,8 @@ struct S3Workspace {
     unsigned long long *djs = nullptr;
     unsigned long long *dx = nullptr, *dz = nullptr;
     unsigned long long *dvals = nullptr, *dprod = nullptr;
+    unsigned long long *dsegfix=nullptr;
+    size_t segfix_cap=0;
     size_t js_cap = 0, pt_cap = 0, val_cap = 0, prod_cap = 0;
     unsigned long long ladder_calls = 0, ladder_points_total = 0, prod_launches = 0;
     size_t bytes = 0;
@@ -8183,6 +8213,7 @@ struct S3Workspace {
         if (dz) cudaFree(dz);
         if (dvals) cudaFree(dvals);
         if (dprod) cudaFree(dprod);
+        if (dsegfix) cudaFree(dsegfix);
     }
     void init(const LadderCtx &c)
     {
@@ -8199,6 +8230,24 @@ struct S3Workspace {
         CK(cudaMemcpy(da24, c.ha24.data(), nw * 8, cudaMemcpyHostToDevice));
         CK(cudaMemcpy(dmone, c.hmone.data(), nw * 8, cudaMemcpyHostToDevice));
         bytes = 5 * nw * 8;
+    }
+    void need_segfix(size_t seg)
+    {
+        if(seg<=segfix_cap)return;
+        const size_t nw=C->nw;
+        std::vector<unsigned long long> powers((seg+1)*nw,0),word(nw);
+        mpz_t N,R,p;mpz_inits(N,R,p,nullptr);
+        words_to_mpz(N,C->hn.data(),nw);words_to_mpz(R,C->hmone.data(),nw);
+        mpz_set_ui(p,1);
+        for(size_t m=0;m<=seg;++m) {
+            mpz_to_words(word,nw,p);std::copy(word.begin(),word.end(),powers.begin()+m*nw);
+            mpz_mul(p,p,R);mpz_mod(p,p,N);
+        }
+        mpz_clears(N,R,p,nullptr);
+        if(dsegfix){CK(cudaFree(dsegfix));bytes-=(segfix_cap+1)*nw*8;}
+        dsegfix=nullptr;CK(cudaMalloc(&dsegfix,powers.size()*8));
+        CK(cudaMemcpy(dsegfix,powers.data(),powers.size()*8,cudaMemcpyHostToDevice));
+        segfix_cap=seg;bytes+=powers.size()*8;
     }
     void need_pts(size_t n)
     {
@@ -8228,6 +8277,47 @@ struct S3Workspace {
         prod_cap = n;
     }
 };
+
+static void segment_product_fixture(const LadderCtx &C)
+{
+    S3Workspace ws;ws.init(C);const size_t nw=C.nw;
+    mpz_t N,R,ri,p,z,want,tmp;mpz_inits(N,R,ri,p,z,want,tmp,nullptr);
+    words_to_mpz(N,C.hn.data(),nw);words_to_mpz(R,C.hmone.data(),nw);
+    if(!mpz_invert(ri,R,N)){std::fprintf(stderr,"FATAL: R not invertible\n");std::exit(3);}
+    unsigned long long cases=0,checks=0,legacy_different=0,state=0x982dded45;
+    for(size_t n : {0u,1u,2u,15u,16u,17u,31u,32u,33u,63u,64u,65u,127u})
+    for(size_t seg : {1u,2u,3u,7u,16u,17u,32u}) {
+        ++cases;ws.need_segfix(seg);
+        if(!n){S2G_DISPATCH((int)nw,s2g_launch_segprod,(int)nw,0,seg,C.ninv,ws.dn,nullptr,nullptr,ws.dsegfix);continue;}
+        const size_t ns=(n+seg-1)/seg;std::vector<unsigned long long> input(n*nw),a(ns*nw),b(ns*nw),word(nw);
+        for(size_t i=0;i<n;++i) {
+            for(size_t j=0;j<nw;++j){state=state*6364136223846793005ull+1;word[j]=state;}
+            words_to_mpz(z,word.data(),nw);mpz_mod(z,z,N);
+            if(i%19==0)mpz_set_ui(z,0);else if(i%19==1)mpz_sub_ui(z,N,1);else if(i%19==2)mpz_set_ui(z,1);
+            mpz_to_words(word,nw,z);std::copy(word.begin(),word.end(),input.begin()+i*nw);
+        }
+        unsigned long long *din=nullptr,*dout=nullptr;CK(cudaMalloc(&din,input.size()*8));CK(cudaMalloc(&dout,a.size()*8));
+        CK(cudaMemcpy(din,input.data(),input.size()*8,cudaMemcpyHostToDevice));
+        S2G_DISPATCH((int)nw,s2g_launch_segprod,(int)nw,n,seg,C.ninv,ws.dn,din,dout,ws.dsegfix);
+        CK(cudaGetLastError());CK(cudaMemcpy(a.data(),dout,a.size()*8,cudaMemcpyDeviceToHost));
+        S2G_DISPATCH((int)nw,s2g_launch_segprod,(int)nw,n,seg,C.ninv,ws.dn,din,dout,nullptr);
+        CK(cudaGetLastError());CK(cudaMemcpy(b.data(),dout,b.size()*8,cudaMemcpyDeviceToHost));
+        CK(cudaFree(din));CK(cudaFree(dout));
+        const char *fault=std::getenv("NTT_GFINV_SEG_TEST_BAD");if(fault && std::atoi(fault))a[0]^=1;
+        for(size_t j=0;j<ns;++j) {
+            const size_t lo=j*seg,hi=std::min(n,lo+seg);mpz_set_ui(p,1);
+            for(size_t i=lo;i<hi;++i){words_to_mpz(z,input.data()+i*nw,nw);mpz_mul(p,p,z);mpz_mod(p,p,N);}
+            words_to_mpz(z,a.data()+j*nw,nw);
+            if(mpz_cmp(p,z)){std::fprintf(stderr,"FATAL: segment fixture GMP mismatch n=%llu seg=%llu\n",(unsigned long long)n,(unsigned long long)seg);std::exit(3);}
+            mpz_powm_ui(tmp,ri,(unsigned long)(hi-lo-1),N);mpz_mul(want,p,tmp);mpz_mod(want,want,N);
+            words_to_mpz(z,b.data()+j*nw,nw);
+            if(mpz_cmp(want,z)){std::fprintf(stderr,"FATAL: legacy segment formula mismatch\n");std::exit(3);}
+            if(mpz_cmp(p,z))++legacy_different;++checks;
+        }
+    }
+    mpz_clears(N,R,ri,p,z,want,tmp,nullptr);
+    std::printf("segment_product_fixture: cases=%llu checks=%llu legacy_different=%llu bad=0\n",cases,checks,legacy_different);
+}
 
 /* (X_i, Z_i) = [js[i]]Q through the SAME ladder kernel as S1/S2, with the buffers reused */
 static void ladder_points_ws(S3Workspace &W, const std::vector<unsigned long long> &js,
@@ -8284,12 +8374,39 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
     js.push_back(D);                                    /* the difference point x_D */
     seed_points = (unsigned long long)js.size();
     std::vector<unsigned long long> lx, lz;
-    ladder_points_ws(W, js, lx, lz);
+    if(g_giant_seed_device) {
+        W.need_pts(js.size());
+        CK(cudaMemcpy(W.djs,js.data(),js.size()*8,cudaMemcpyHostToDevice));
+        S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,(int)js.size(),W.dn,C.ninv,
+                    W.dqx,W.dqz,W.da24,W.dmone,W.djs,W.dx,W.dz,false);
+        CK(cudaGetLastError());
+        ++W.ladder_calls;W.ladder_points_total+=js.size();
+        ++g_giant_seed.chunks;g_giant_seed.points+=js.size();
+        g_giant_seed.avoided_d2h_bytes+=16ull*nw*js.size();
+        g_giant_seed.avoided_h2d_bytes+=16ull*nw*js.size();
+        g_giant_seed.avoided_cpu_modmuls+=2*js.size();
+        g_giant_seed.avoided_montmuls+=2*js.size();
+        if(g_giant_seed_check) {
+            lx.resize(js.size()*nw);lz.resize(js.size()*nw);
+            CK(cudaMemcpy(lx.data(),W.dx,lx.size()*8,cudaMemcpyDeviceToHost));
+            CK(cudaMemcpy(lz.data(),W.dz,lz.size()*8,cudaMemcpyDeviceToHost));
+            std::vector<unsigned long long> cx,cz,expect(nw);
+            ladder_points(C,js,cx,cz); // independent normal-output endpoint, not W's lease
+            for(size_t i=0;i<js.size();++i)for(int z=0;z<2;++z) {
+                words_to_mpz(X,(z?cz:cx).data()+i*nw,nw);mpz_mul(X,X,Rm);mpz_mod(X,X,L.N);
+                mpz_to_words(expect,nw,X);
+                if(!std::equal(expect.begin(),expect.end(),(z?lz:lx).begin()+i*nw)) {
+                    std::fprintf(stderr,"%s: FATAL: device seed GMP image mismatch point=%llu\n",NTT_PROBE_NAME,(unsigned long long)i);std::exit(3);
+                }
+                g_giant_seed.checked_words+=nw;
+            }
+        }
+    } else ladder_points_ws(W, js, lx, lz);
     /* the seeds and the difference point as MONTGOMERY IMAGES (x*R mod N) */
-    std::vector<unsigned long long> hdsx((size_t)blocks * nw, 0ull), hdsz((size_t)blocks * nw, 0ull),
-                                     hesx((size_t)blocks * nw, 0ull), hesz((size_t)blocks * nw, 0ull),
-                                     hdx(nw, 0ull), hdz(nw, 0ull);
-    {
+    std::vector<unsigned long long> hdsx,hdsz,hesx,hesz,hdx,hdz;
+    if(!g_giant_seed_device) {
+        hdsx.resize((size_t)blocks*nw);hdsz.resize((size_t)blocks*nw);
+        hesx.resize((size_t)blocks*nw);hesz.resize((size_t)blocks*nw);hdx.resize(nw);hdz.resize(nw);
         std::vector<unsigned long long> tmpw(nw, 0ull);
         auto img = [&](std::vector<unsigned long long> &dst, size_t off, size_t e, bool use_z) {
             words_to_mpz(X, use_z ? &lz[e * nw] : &lx[e * nw], nw);
@@ -8310,22 +8427,28 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
     unsigned long long *ddsx = nullptr, *ddsz = nullptr, *desx = nullptr, *desz = nullptr,
                        *ddx = nullptr, *ddz = nullptr, *ox = nullptr, *oz = nullptr;
     const size_t nseed = (size_t)blocks * nw;
+    if(g_giant_seed_device) {
+        ddsx=W.dx;ddsz=W.dz;desx=W.dx+nw;desz=W.dz+nw;
+        ddx=W.dx+2*nseed;ddz=W.dz+2*nseed;
+    } else {
     CK(cudaMalloc(&ddsx, nseed * 8));
     CK(cudaMalloc(&ddsz, nseed * 8));
     CK(cudaMalloc(&desx, nseed * 8));
     CK(cudaMalloc(&desz, nseed * 8));
     CK(cudaMalloc(&ddx, nw * 8));
     CK(cudaMalloc(&ddz, nw * 8));
-    CK(cudaMalloc(&ox, (size_t)npts * nw * 8));
-    CK(cudaMalloc(&oz, (size_t)npts * nw * 8));
+
     CK(cudaMemcpy(ddsx, hdsx.data(), nseed * 8, cudaMemcpyHostToDevice));
     CK(cudaMemcpy(ddsz, hdsz.data(), nseed * 8, cudaMemcpyHostToDevice));
     CK(cudaMemcpy(desx, hesx.data(), nseed * 8, cudaMemcpyHostToDevice));
     CK(cudaMemcpy(desz, hesz.data(), nseed * 8, cudaMemcpyHostToDevice));
     CK(cudaMemcpy(ddx, hdx.data(), nw * 8, cudaMemcpyHostToDevice));
     CK(cudaMemcpy(ddz, hdz.data(), nw * 8, cudaMemcpyHostToDevice));
+    }
+    CK(cudaMalloc(&ox, (size_t)npts * nw * 8));
+    CK(cudaMalloc(&oz, (size_t)npts * nw * 8));
     S2G_DISPATCH((int)nw, s2g_launch_chain, (int)nw, blocks, npts, per_block, C.ninv, W.dn, ddx,
-                 ddz, ddsx, ddsz, desx, desz, ox, oz);
+                 ddz, ddsx, ddsz, desx, desz, ox, oz,g_giant_seed_device?2:1);
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
     gx.assign((size_t)npts * nw, 0ull);
@@ -8338,14 +8461,30 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
         const unsigned long long nseg = (npts + seg - 1) / seg;
         gseg->assign((size_t)nseg * nw, 0ull);
         CK(cudaMalloc(&dsp, (size_t)nseg * nw * 8));
-        S2G_DISPATCH((int)nw, s2g_launch_segprod, (int)nw, npts, seg, C.ninv, W.dn, oz, dsp);
+        if(g_gfinv_seg_exact)W.need_segfix((size_t)seg);
+        S2G_DISPATCH((int)nw, s2g_launch_segprod, (int)nw, npts, seg, C.ninv, W.dn, oz, dsp,
+                    g_gfinv_seg_exact?W.dsegfix:nullptr);
+        g_giant_seed.segments+=nseg;
+        if(g_gfinv_seg_exact) {
+            g_giant_seed.segment_fix_muls+=nseg-((npts%seg)==1?1:0);
+            g_giant_seed.fix_table_peak_bytes=std::max(g_giant_seed.fix_table_peak_bytes,8ull*(W.segfix_cap+1)*nw);
+        }
         CK(cudaGetLastError());
         CK(cudaDeviceSynchronize());
         CK(cudaMemcpy(gseg->data(), dsp, gseg->size() * 8, cudaMemcpyDeviceToHost));
         cudaFree(dsp);
+        if(g_gfinv_seg_check) {
+            if(seg!=S2G_GFINV_SEG){std::fprintf(stderr,"FATAL: segment check grid mismatch\n");std::exit(3);}
+            std::vector<unsigned long long> expected;
+            gfinv_segprod_host(expected,(size_t)npts,nw,gz,L.N);
+            if(expected!=*gseg){std::fprintf(stderr,"%s: FATAL: segment product GMP mismatch\n",NTT_PROBE_NAME);std::exit(3);}
+            g_giant_seed.segment_checks+=nseg;
+        }
     }
-    cudaFree(ddsx); cudaFree(ddsz); cudaFree(desx); cudaFree(desz);
-    cudaFree(ddx); cudaFree(ddz); cudaFree(ox); cudaFree(oz);
+    if(!g_giant_seed_device) {
+        cudaFree(ddsx);cudaFree(ddsz);cudaFree(desx);cudaFree(desz);cudaFree(ddx);cudaFree(ddz);
+    }
+    cudaFree(ox);cudaFree(oz);
     /* THE CHECK: the same chunk through the ladder, compared on the AFFINE x value (the chain and
        the ladder hold different projective representatives of the same point, so X and Z cannot
        be compared -- X/Z mod N can, and that is the only quantity the caller uses). */
@@ -10063,6 +10202,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if(!s4_on) stage2_fixture_begin=now_s();
     const char *fold_test=std::getenv("NTT_FOLD_FLAT_TEST");
     if(fold_test && std::atoi(fold_test))fold_flat_fixture(L);
+    const char *seg_test=std::getenv("NTT_GFINV_SEG_TEST");
+    if(seg_test && std::atoi(seg_test))segment_product_fixture(C);
     const char *ginv_test=std::getenv("NTT_GFINV_BATCH_TEST");
     if(ginv_test && std::atoi(ginv_test))gfinv_batch_fixture(L.N,nw);
     const char *gdevice_test=std::getenv("NTT_GROOT_DEVICE_TEST");
@@ -10081,7 +10222,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
@@ -10251,7 +10392,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     Stage2Params SP;
     SP.D = D; SP.B1 = B1; SP.B2 = B2; SP.baby_j = baby_j;
     for (int cv = 0; cv < curves; ++cv) {
-        g_gfinv={};
+        g_gfinv={};g_giant_seed={};
         if (run_s2) {
             const unsigned long long nb = L.ntt_calls;
             const double ns = L.ntt_seconds;
@@ -10364,6 +10505,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::printf("real_batched_projective: leaves=%llu gamma_points=%llu segments=%llu "
                     "affine_fallback_points=%llu\n", BR.proj_points, BR.proj_gamma_points,
                     BR.proj_segments, BR.proj_fallbacks);
+        std::printf("real_giant_seed: enabled=%d exact_segments=%d chunks=%llu points=%llu avoided_d2h_bytes=%llu avoided_h2d_bytes=%llu avoided_cpu_modmuls=%llu avoided_montmuls=%llu checked_words=%llu segments=%llu segment_checks=%llu segment_fix_muls=%llu fix_table_peak_bytes=%llu\n",
+                    (int)g_giant_seed_device,(int)g_gfinv_seg_exact,g_giant_seed.chunks,g_giant_seed.points,
+                    g_giant_seed.avoided_d2h_bytes,g_giant_seed.avoided_h2d_bytes,g_giant_seed.avoided_cpu_modmuls,
+                    g_giant_seed.avoided_montmuls,g_giant_seed.checked_words,g_giant_seed.segments,
+                    g_giant_seed.segment_checks,g_giant_seed.segment_fix_muls,g_giant_seed.fix_table_peak_bytes);
         std::printf("real_giant_chain: chunks=%llu seed_points=%llu chunks_per_ladder=%llu\n",
                     BR.giant_chain_chunks, BR.giant_seed_points,
                     BR.giant_chain_chunks ? 0ull : 1ull);
