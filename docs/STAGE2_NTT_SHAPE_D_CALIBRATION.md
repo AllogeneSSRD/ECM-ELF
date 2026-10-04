@@ -93,6 +93,8 @@ DPhaseModel抽出为共用header；独立CPU探针直接包含生产模型和实
 
 ## 5. 下一阶段：Tensor Core 与多曲线吞吐
 
+后续实验已完成独立132bit整数MMA与真实tile：35/0门禁，锁定CTA256后k24..26前向慢约18.3%、逆向慢约5.6%、roundtrip慢约10.9%；CUDA+TC双流也比CUDA+CUDA慢约9.1%，Systems重叠约47μs。保留实验工具，生产3CF38065…19F0E保持。公式、源码行号、留出尺寸、容量和剖析见[Tensor实验报告](D:/code/MPA-OpenCl/docs/STAGE2_TENSOR_GOLDILOCKS_EXPERIMENT.md)。下面保留本阶段收尾时的设计依据。
+
 Tensor Core候选先做独立精确整数probe，再决定是否接入tile/outer。固定参考 `Terminus-IMRC/tensor-core-ntt` 提交 `6f407daa8a4cef96331511ae86b922b520d7aa33`：其16×16矩阵将64bit拆成8个byte，按byte对调用整数MMA；现有归约器构造函数明确拒绝≥63bit模数。因此模板名modulus_bits=64并不代表支持本项目q=2⁶⁴−2³²+1。[矩阵实现](https://github.com/Terminus-IMRC/tensor-core-ntt/blob/6f407daa8a4cef96331511ae86b922b520d7aa33/include/polyarith/cuda/ntt.cuh#L71)、[归约器限制](https://github.com/Terminus-IMRC/tensor-core-ntt/blob/6f407daa8a4cef96331511ae86b922b520d7aa33/include/polyarith/modular.cuh#L326)。本阶段只阅读，没有导入/编译参考库。
 
 可尝试u8×u8→s32 MMA的小矩阵NTT。若一个输出累加K=16个64bit乘积，各byte对角的最大值16·8·255²=8323200，低于INT32上界；但完整和最多132bit，不能用128bit截断。重构到low64/high64/top4bits后，可利用2⁶⁴≡2³²−1、2¹²⁸≡−2³² (mod q)精确归约。全0、q−1、最高位、carry边界、随机dense和独立GMP频谱/逆向都需覆盖。

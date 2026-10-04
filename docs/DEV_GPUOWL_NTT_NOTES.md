@@ -4284,3 +4284,15 @@ v1纯NTT M8慢15.86%，未提升默认；v2复用twiddle/coarse power并修复sh
 Systems单次池NTT29.388810→27.812577 s、point约19.24 s保持，近似Stage2无本进程事件9.77→9.57 s，占14.31→14.41%；不是整卡idle。全范围传输字节/次数保持，同步copy host等待远大于相关GPU copy。Compute尝试实际ERR_NVGPUCTRPERM，未获得有效occupancy/带宽/cycle；没有改变权限。
 
 生产3CF38065…19F0E、4042752 bytes、CUDA593.7 s，默认outer2，入口32/0；原F85快照保留。具体样本、公式、系数、剖析范围、实际save时间、source/line和回退见[尺寸策略/D报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md)。下一阶段独立整数Tensor Core Goldilocks探针，之后再评估整NTT接入；多曲线吞吐需独立状态和共享workspace预算，尚未实施。
+
+## 67. 精确整数 Tensor Core tile 与双流吞吐实验（2026-10-05）
+
+实现独立u8整数MMA/132bit Goldilocks归约，并将低4层DFT16接入真实t12 tile布局；production header/默认/入口保持P3。GMP门禁35/0，1920 cases/1536000矩阵word加614400top检查，以及2560 cases/11228160 tile与保护word；故意损坏被拒绝，LOCAL0/live0。初版shared radix4 caller遗漏CTA屏障导致CTA512/t10,t12随机错误，补每个helper调用后的barrier后通过，调试日志已移除。回归fixture保留真实调用边界。
+
+最终probe SHA2DD2C230…8B52A，sm89/CUDA13.3，2797056 bytes，构建34.24s；同binary serial ABBA+BAAB，CTA128/256/512、forward/inverse/roundtrip。锁定最佳TC256后独立复测k24并留出k25/26：前向慢18.23–18.30%，逆向慢5.55–5.60%，roundtrip慢10.90–10.93%。自然序DFT16的约1–3%收益未延续到真实tile，未接入生产。
+
+双任务CUDA+TC并发比CUDA+CUDA并发慢9.13–9.17%；Systems同exe目标128kernel、除warm每模式12pair，C+TC平均overlap47.342μs、pair span6.025034ms（.786%），主要顺序执行。该trace不证明同SM同时issue。32KiB shared下CUDA40reg/CTA512可3块；TC74/76reg，CTA256可3块、CTA512仅1块，这是容量API上限。无有效NCU硬件计数器。
+
+令L为NTTword数、T=2^t：单probe逻辑显存16L+112T+4088 B，双任务乘2；k24/t12为256.441MiB与512.883MiB，context/driver另计，未测NVML总峰。每tile pass L/2次warp MMA、1024L byte MAC、L次132bit归约；主global forward16L/inverse24L B不变。host参考/初始化H2D仅112T+4080 B；性能probe由GPU周期填充，event内host传输0，每次在计时外比较全部L输出。真实曲线传输口径见此前报告。
+
+生产仍868c449/3CF38065…19F0E，14依赖复核通过。下一优先级为CUDA stage2/3单位根移位特化，再定位P3约9.57s的host提交/准备空隙；多曲线需要独立状态与共享NTT workspace lease和RAM/VRAM预算。当前两个独立tile任务不能折算curves/h。详细公式、原文件/line、样本、证据和复现命令见[Tensor实验报告](D:/code/MPA-OpenCl/docs/STAGE2_TENSOR_GOLDILOCKS_EXPERIMENT.md)。长期Prime95对照目标继续。

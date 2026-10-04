@@ -1001,3 +1001,11 @@ Tensor Core batching
 
 7. Amazingqaq, `Tensnor-core-NTT`  
    https://github.com/Amazingqaq/Tensnor-core-NTT
+
+# 19. 本仓库 Goldilocks 64bit 实验结果（2026-10-05）
+
+在固定Terminus提交6f407daa基础上研究byte-MMA映射，独立实现完整132bit累加与q=2^64−2^32+1归约；参考库≥63bit模数限制仍需注意。没有导入外部源码。sm89/GMP门禁35/0通过，覆盖矩阵输出/top、真实tile频谱/逆向/stride/B只读和故障拒绝。
+
+单独DFT16自然序接口约1–3%改善；真实t12 tile CTA256在独立k24..26复测前向慢约18.3%、逆向慢约5.6%、roundtrip慢约10.9%。两个独立CUDA+Tensor任务双流比CUDA+CUDA双流慢约9.1%，Systems只约47μs kernel overlap。byte拆分、64个MMA、carry/归约、寄存器和排列成本须进入比较；生产保留优化CUDA tile。
+
+这些是单算子测量，Tensor峰值与CUDA峰值不能相加推导Stage2收益。当前方案保留为实验，后续优先CUDA低层单位根特化；若继续Tensor，先减少固定根矩阵的byte-MMA数量。完整数学、资源/传输公式、固定SHA、源码行号、样本与并发边界见[Tensor实验报告](D:/code/MPA-OpenCl/docs/STAGE2_TENSOR_GOLDILOCKS_EXPERIMENT.md)。
