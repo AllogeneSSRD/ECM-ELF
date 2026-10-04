@@ -3385,7 +3385,7 @@ metadata每树只分配一份device array，容量 `3*(pad/2)` word；pinned hos
 
 ### 47.2 传输统计与正确性门禁
 
-[统计输出:10012](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10265)
+[统计输出:10012](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10266)
 新增树/组/对/继承数、leaf/root/resident/trace/metadata words及局部容量。
 `NTT_S4_CARRY_TRACE=1` 为逐系数对拍额外返回resident输出，生产trace关闭。
 chunk输出账本满足：`window.d2h_words + gdevice.resident_words = final.copied_words + final.avoided_words`。
@@ -3545,7 +3545,7 @@ NTT_S4_OUTPUT_WINDOW=1 / NTT_S4_CHUNK_OUTPUT=1`，其余采用上述production m
 `NTT_GROOT_LEAF_CHUNK=3` 是门禁专用限制，每次至多3叶，强制交替/反复复用slot；非0令full timer clean=0。
 生产chunk=0，使用已有buffer能容纳的最大叶片段。没有修改NTT引擎源、归约kernel、GMP oracle和carry检查。
 
-[real_batched_gmemory:10017](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10270)
+[real_batched_gmemory:10017](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10271)
 记录compact/staging开关、pinned/pageable words、pinned树/片段、fallback/legacy树和各raw容量。
 恒等式 `pinned_words + pageable_words = gdevice.leaf_words`；rawA_peak+rawB_peak等于tree租用raw pair峰值。
 `gdevice.host_staging_peak_bytes`仅统计额外pageable initial vector；borrow_peak是已存在pinned空间的实际使用payload，
@@ -3772,7 +3772,7 @@ GPU完整Q `294b8e0c5e3f95b6d6c218e669c557f9` 正确；禁用S4走CPU poly仍失
 [CPU参考](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/factor_probe/cpu.log)、
 [CPU poly复现](D:/code/MPA-OpenCl/build_cuda_cmake/_gfinv_20261003/factor_probe/cpu_poly.log)。
 
-根因是 [baby逆向归一化:10028](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10281)：
+根因是 [baby逆向归一化:10028](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10282)：
 初始iprod=(z0…z_last)^−1，扫描到j时是 **(z0…zj)^−1**，需要再乘 `pv[j]=z0…z_(j−1)` 才得到zj^−1。
 旧代码直接用Xj*iprod；原注释也误称iprod为suffix逆元。引入提交为 `2d4375b`，
 原位置可在 [§49保留源码](D:/code/MPA-OpenCl/build_cuda_cmake/_gcarry_ab_20261003/measured/stage2_tree_gpu.cu:10079) 中检查。
@@ -3789,7 +3789,7 @@ GPU完整Q `294b8e0c5e3f95b6d6c218e669c557f9` 正确；禁用S4走CPU poly仍失
 
 新增 [test_stage2_real_baby.py](D:/code/MPA-OpenCl/tools/test/test_stage2_real_baby.py:1)。
 Python独立计算Q、每个baby affine x、完整F；lcm形状还与原CPU tree dump全部字段比较。
-新增 [NTT_REAL_F_DUMP:10065](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10318) 仅门禁时导出真实入口生成的baby与F，
+新增 [NTT_REAL_F_DUMP:10065](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10319) 仅门禁时导出真实入口生成的baby与F，
 限4096 baby，置full timer clean=0；常规运行无导出或额外分配。
 覆盖冻结向量、D2310、P2880多256点segment、choose12、M4423生产位宽与M5261；两边segment batching0/1，共 **12/0**。
 冻结因子/114713和独立完整叶hash同时通过；不是仅比较0 hits的新旧路径。
@@ -4147,3 +4147,17 @@ GPU1 M4423/Q实际Prime95一致、extra12、B1=1000/B2=2011326186870/D1231230/P1
 同exe另采Systems2026.1.3 exit0，114541kernels全部GPU1；相对前轮加5Γ/15叶，新增GPU合计.249525s。H2D11741055664、D2H7424447416bytes，减少1829441040/1885904160bytes，合计**3.460185GiB**精确吻合静态公式。D2D不变。Stage1后近似窗口76.9273s、事件并集64.0864s，无本进程GPU事件12.8409s/16.69%，相对前轮17.5249s少约4.684s；不是整卡idle或exact Stage2 range。同步cudaMemcpy host33.854s、匹配GPUcopy仅.1246s，仍包含等待而非纯PCIe瓶颈。
 
 证据位于build_cuda_cmake/_gleaf_ab_final_20261004与_gleaf_nsys_20261004.*，源码/runner/gates/分析脚本快照和hash已保存；GPU0生产Stage1未改。下一轮优先device fold及F/finv驻留合同，再推进不同sigma共享scratch流水、生产save/队列和公平CPU重跑；长期目标保持，当前未证明全部完成。
+
+## 58. 独立 ecm_cuda_stage2 生产入口与可选 worktodo（2026-10-04）
+
+按用户要求从现有实验版本建立基础生产驱动。新文件 src/core/ecm_cuda_stage2_main.cpp、ecm_cuda_stage2.h、src/cuda/ecm_cuda_stage2.cu、tools/build/build_ecm_cuda_stage2.ps1；CMake提供可选ECM_BUILD_CUDA_STAGE2目标。CUDA wrapper直接包含原引擎，run_real增加可选仿射saved Q与尾部结果返回，原实验CLI保持。save路径不生成prime powers、不跑Stage1、不重复choose12；param0 only，N<=8192bits，校验和按生产writer合同验证。
+
+ini复用已有worktodo/finished/tmp_dir/log_file/device及Worker章节，加stage2_b2/d/batch_mb/arena_mb/results_file；每条记录新进程顺序运行，隔离全局owner/counters。任务成功写JSONL/finished后移除，失败保留。修复原ecm_worktodo_advance忽略first_line的问题；Stage2用一个worktodo一个独占消费者，未宣称支持共享队列并发写。中断无Stage2checkpoint，重跑可能重复，未实现PrimeNet。
+
+用户补充Prime95可选后缀后，补齐filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"]。对照本地commonc.c:2937/2973以及ecm.cpp:9895，缺省B2/skip/num=0，num0执行余下全部；B2=0本入口使用显式CLI/ini，不复刻Prime95自动B2模型。用户示例B2=26000000000/skip960/num10选择961–970；字面xxx作为因子会报invalid known factor，队列不变。
+
+sm89真实编译成功：build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe，2.5MiB，SHA256 c63249542418de3cc6af2bb93b443ec39eca053a29b95d3df125eefcf31b4860，附gmp-10.dll。第一次host compile遇中文注释在MSVC默认代码页下破坏词法；脚本增加/utf-8后编译通过，最终CUDA241.3s、host各2.8–4.8s。源码与编译配置哈希在build_manifest.json。最终26验收/0失败，包含optional suffix、quotedfactor区分、worker覆盖、save/checksum/格式错误、数量不足、实际CPU因子、不同sigma各自Q、队列成功/输入及CUDA失败保留、保存X已有因子直接完成、共享队列工具对错行拒绝及worker保留。
+
+M4423额外实际恢复：B1=1000/B2=2011326186870/D1231230/P115200/G15，GPU1/batch64/arena6300MiB；init14.808017/main60.308395/full75.116411s，driver曲线75.719930s，单次验证不算优化AB。Q SHA33cc6c63...809f092f与最终leaf hash10619321735931855904同§57；403批/1979251对/40218760归约coeffs、2400自检/66139GMP/4full checks保持bad0。原始Groot hash acd84d2595022e3e不同于§57：Q由Stage1投影表示转换成归一化(X:1)，projective leaf scale改变；Gamma^-1校正后叶值逐字同旧基线，不能对原始Groot跨输入表示作等值门禁。
+
+使用与全部限制见docs/ECM_CUDA_STAGE2.md、步骤报告§32，证据build_cuda_cmake/_production_stage2/acceptance/summary.json及各日志。只在GPU1执行，GPU0外部Stage1未改；公平Prime95重跑和真实跨曲线流水仍未完成。本阶段不恢复或完成原来已暂停的长期goal。

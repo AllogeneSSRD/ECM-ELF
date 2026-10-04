@@ -10213,7 +10213,8 @@ static bool real_run_words(unsigned long long P, int S, unsigned long long *out_
 
 static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
-                    bool choose_d, bool run_s2, int curves)
+                    bool choose_d, bool run_s2, int curves,
+                    const char *saved_qx_hex = nullptr, Stage2Tail *saved_result = nullptr)
 {
     PolyLayer L;
     L.device = g_device;
@@ -10475,26 +10476,40 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     mpz_to_words(ha24, nw, tmp);
     if (mont_selftest(hn, nw, ninv, L.N, R) != 0) return 1;
 
-    /* ---- Q = [lcm(1..B1)] P0 through the device ladder chain ---- */
-    std::vector<unsigned long long> pps = prime_powers_u64(B1);
-    unsigned long long stage1_extra=1;
-    if(const char *e=std::getenv("NTT_STAGE1_EXTRA")) {
-        if(*e) stage1_extra=std::strtoull(e,nullptr,10);
-    }
-    if(stage1_extra!=1 && stage1_extra!=12) {
-        std::fprintf(stderr,"%s: NTT_STAGE1_EXTRA must be 1 or 12\n",NTT_PROBE_NAME);
-        return 2;
-    }
-    if(stage1_extra!=1) pps.push_back(stage1_extra);
+    /* A Stage1 text save contains ordinary affine X. Do not regenerate the
+       exponent or apply the optional Stage1 torsion multiplier on resume. */
     std::vector<unsigned long long> qx(nw), qz(nw);
-    mpz_to_words(qx, nw, ax);
-    mpz_to_words(qz, nw, az);
-    {
-        LadderCtx chain_ctx;
-        const double tc0 = now_s();
-        ladder_product(hn, nw, ninv, L.N, a24, R, pps, qx, qz, ha24, hmone, chain_ctx);
-        std::printf("real_setup: sigma=%llu suyama=ok prime_powers=%llu ladder_chain_seconds="
-                    "%.3f stage1_extra=%llu\n", sigma, (unsigned long long)pps.size(), now_s() - tc0,stage1_extra);
+    if (saved_qx_hex) {
+        if (mpz_set_str(tmp, saved_qx_hex, 16) != 0 || mpz_sgn(tmp) < 0 ||
+            mpz_cmp(tmp, L.N) >= 0) {
+            std::fprintf(stderr, "%s: invalid saved affine X\n", NTT_PROBE_NAME);
+            return 2;
+        }
+        mpz_to_words(qx, nw, tmp);
+        qz[0] = 1;
+        std::printf("stage1_save_resume: sigma=%llu B1=%llu normalized_Z=1 stage1_skipped=1\n",
+                    sigma, B1);
+    } else {
+        /* ---- Q = [lcm(1..B1)] P0 through the device ladder chain ---- */
+        std::vector<unsigned long long> pps = prime_powers_u64(B1);
+        unsigned long long stage1_extra=1;
+        if(const char *e=std::getenv("NTT_STAGE1_EXTRA")) {
+            if(*e) stage1_extra=std::strtoull(e,nullptr,10);
+        }
+        if(stage1_extra!=1 && stage1_extra!=12) {
+            std::fprintf(stderr,"%s: NTT_STAGE1_EXTRA must be 1 or 12\n",NTT_PROBE_NAME);
+            return 2;
+        }
+        if(stage1_extra!=1) pps.push_back(stage1_extra);
+        mpz_to_words(qx, nw, ax);
+        mpz_to_words(qz, nw, az);
+        {
+            LadderCtx chain_ctx;
+            const double tc0 = now_s();
+            ladder_product(hn, nw, ninv, L.N, a24, R, pps, qx, qz, ha24, hmone, chain_ctx);
+            std::printf("real_setup: sigma=%llu suyama=ok prime_powers=%llu ladder_chain_seconds="
+                        "%.3f stage1_extra=%llu\n", sigma, (unsigned long long)pps.size(), now_s() - tc0,stage1_extra);
+        }
     }
     {
         mpz_t X, Z;
@@ -10818,6 +10833,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             if (std::find(BR.tail.factors.begin(), BR.tail.factors.end(), s) ==
                 BR.tail.factors.end())
                 BR.tail.factors.push_back(s);
+        if (saved_result) *saved_result = BR.tail;
         const double el = now_s() - t0;
         std::string fs2, ps2;
         for (size_t i = 0; i < BR.tail.factors.size(); ++i) { if (i) fs2 += ","; fs2 += BR.tail.factors[i]; }
@@ -11622,6 +11638,7 @@ static int run_selftest(void)
     return fails ? 1 : 0;
 }
 
+#ifndef STAGE2_TREE_GPU_NO_MAIN
 int main(int argc, char **argv)
 {
     s2g_install_crash_handler();          /* first: a crash must never print nothing */
@@ -11691,4 +11708,6 @@ int main(int argc, char **argv)
         return 2;
     }
     return run_check_F(check_F, gpu_dump, evaluate, evaluate_batched);
-}
+}
+#endif // STAGE2_TREE_GPU_NO_MAIN
+

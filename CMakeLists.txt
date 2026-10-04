@@ -224,6 +224,35 @@ set(ECM_CUDA_ARCHITECTURES "80" CACHE STRING
 if(ECM_ENABLE_CUDA)
     enable_language(CUDA)
 
+    option(ECM_BUILD_CUDA_STAGE2 "Build standalone Stage1-save CUDA Stage2 driver" OFF)
+    if(ECM_BUILD_CUDA_STAGE2)
+        if(NOT WIN32)
+            message(FATAL_ERROR "The minimal ecm_cuda_stage2 process/queue driver currently requires Windows")
+        endif()
+        add_executable(ecm_cuda_stage2
+            src/cuda/ecm_cuda_stage2.cu
+            src/core/ecm_cuda_stage2_main.cpp
+            src/core/ecm_expr.cpp
+            src/core/ecm_worktodo.cpp
+            src/core/ecm_queue_config.cpp)
+        target_include_directories(ecm_cuda_stage2 PRIVATE ${GMP_INCLUDE_DIR})
+        target_link_libraries(ecm_cuda_stage2 PRIVATE ${GMP_LIBRARY})
+        set_target_properties(ecm_cuda_stage2 PROPERTIES
+            CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+            CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON
+            CUDA_ARCHITECTURES "${ECM_CUDA_ARCHITECTURES}")
+        target_compile_options(ecm_cuda_stage2 PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:-O3>
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>
+            $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
+        if(EXISTS "${ECM_WINDOWS_GMP_ROOT}/bin/gmp-10.dll")
+            add_custom_command(TARGET ecm_cuda_stage2 POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ECM_WINDOWS_GMP_ROOT}/bin/gmp-10.dll"
+                    "$<TARGET_FILE_DIR:ecm_cuda_stage2>")
+        endif()
+    endif()
+
     set(CGBN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/cgbn/include")
 
     add_executable(ecm_cuda

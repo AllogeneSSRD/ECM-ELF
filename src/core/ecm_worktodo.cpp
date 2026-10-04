@@ -534,7 +534,6 @@ bool ecm_worktodo_advance(const std::string &path, const std::string &first_line
 
 bool ecm_worktodo_advance(const std::string &path, int worker, const std::string &first_line,
                           WorktodoAction action) {
-    (void)first_line;  // We re-scan for the first task line instead of trusting the caller.
     std::ifstream in(path);
     if (!in.is_open()) {
         return false;
@@ -556,8 +555,13 @@ bool ecm_worktodo_advance(const std::string &path, int worker, const std::string
         if (!worker_matches(section, worker)) {
             continue;                       // another worker's line
         }
-        // This is the first task line of our section. It should equal `first_line`;
-        // if the file changed under us, still act on the line we actually found.
+        // Never remove a different task if the queue changed during computation.
+        std::string current = lines[i], expected = first_line;
+        strip_bom(current);
+        strip_bom(expected);
+        trim(current);
+        trim(expected);
+        if (current != expected) return false;
         if (action == WorktodoAction::Remove) {
             lines.erase(lines.begin() + static_cast<std::vector<std::string>::difference_type>(i));
         } else {
