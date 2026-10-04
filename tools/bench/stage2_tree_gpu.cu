@@ -8963,11 +8963,52 @@ struct BatchedRun {
     bool dbg_progress = false;              /* one phase line per G-tree batch (long shapes) */
 };
 
+/* Baby normalization proves unit Zs by batch inversion and computes every nonunit gcd.
+   Keep that proof for this curve, not coordinates. Exact input keys and actual sorted baby
+   indices prevent reuse across a different Q, curve, modulus, bounds, or incomplete baby set. */
+static bool small_prime_flag(const char *name) {
+    const char *e=std::getenv(name);return e && std::atoi(e)!=0;
+}
+struct SmallPrimeBabyCache {
+    LadderCtx key;
+    unsigned long long D=0,B1=0,B2=0;
+    std::vector<unsigned long long> js;
+    std::vector<std::pair<size_t,std::string>> nonunit;
+    bool ready=false;
+    void begin(const LadderCtx &C,unsigned long long d,unsigned long long b1,unsigned long long b2,
+               const std::vector<unsigned long long> &indices) {
+        key=C;D=d;B1=b1;B2=b2;js=indices;nonunit.clear();ready=false;
+    }
+    void record(size_t index,const mpz_t gcd) {
+        char *v=mpz_get_str(nullptr,10,gcd);nonunit.emplace_back(index,v);
+        void (*release)(void*,size_t)=nullptr;mp_get_memory_functions(nullptr,nullptr,&release);
+        release(v,std::strlen(v)+1);
+    }
+    bool matches(const LadderCtx &C,const Stage2Params &SP) const {
+        return ready && D==SP.D && B1==SP.B1 && B2==SP.B2 && js==SP.baby_j &&
+            key.nw==C.nw && key.ninv==C.ninv && key.hn==C.hn && key.hqx==C.hqx &&
+            key.hqz==C.hqz && key.ha24==C.ha24 && key.hmone==C.hmone;
+    }
+    void gcd_at(size_t index,mpz_t g) const {
+        const auto it=std::lower_bound(nonunit.begin(),nonunit.end(),index,
+            [](const auto &v,size_t i){return v.first<i;});
+        if(it!=nonunit.end() && it->first==index)mpz_set_str(g,it->second.c_str(),10);
+        else mpz_set_ui(g,1);
+    }
+    size_t payload_bytes() const {
+        size_t v=js.capacity()*8+(key.hn.capacity()+key.hqx.capacity()+key.hqz.capacity()+
+            key.ha24.capacity()+key.hmone.capacity())*8+nonunit.capacity()*sizeof(nonunit[0]);
+        for(const auto &e:nonunit)v+=e.second.capacity()+1;
+        return v; // capacity ledger, not process private bytes or allocator overhead
+    }
+};
+
 /* the batched structure itself.  Ft/Fdeg/Fpad is the F product tree (heap, degrees, padded
    leaf count) that run_check_F already built and verified coefficient by coefficient. */
 static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Params &SP,
                               const std::vector<std::vector<unsigned long long>> &Ft,
-                              const std::vector<size_t> &Fdeg, size_t Fpad)
+                              const std::vector<size_t> &Fdeg, size_t Fpad,
+                              const SmallPrimeBabyCache *baby_cache=nullptr)
 {
     const size_t W = L.W;
     const unsigned long long D = SP.D, B1 = SP.B1, B2 = SP.B2;
@@ -8994,30 +9035,55 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     S3Workspace ws;
     ws.init(C);
 
-    /* ---- 0. primes p <= D/2 need no giant step (exactly as the CPU reference: the candidate
-       set {i*D +- j, i >= 1} cannot reach them).  One batched ladder + one gcd each. ------- */
+    /* ---- 0. Small primes cannot be reached by iD+-j for i>=1. Reuse only the
+       exact baby normalization proof; missing p (including p|D) uses the original ladder. */
     {
-        const unsigned long long half = (D < 2) ? 1 : D / 2;
-        std::vector<unsigned long long> smalljs;
-        for (unsigned long long p = 2; p <= half; ++p) {
-            if (p <= B1 || p > B2) continue;
-            if (!is_prime_u64(p)) continue;
+        const double ts=now_s();
+        const bool requested=small_prime_flag("NTT_SMALL_PRIME_REUSE");
+        const bool matched=requested && baby_cache && baby_cache->matches(C,SP);
+        const bool check=small_prime_flag("NTT_SMALL_PRIME_CHECK");
+        const unsigned long long half=(D<2)?1:D/2;
+        std::vector<unsigned long long> smalljs,missing;
+        std::vector<size_t> cached;
+        size_t cursor=0;
+        unsigned long long reused=0,avoided_mont=0,checked=0,bad=0;
+        for(unsigned long long p=2;p<=half;++p) {
+            if(p<=B1 || p>B2 || !is_prime_u64(p))continue;
             smalljs.push_back(p);
+            if(matched)while(cursor<baby_cache->js.size() && baby_cache->js[cursor]<p)++cursor;
+            const bool covered=matched && cursor<baby_cache->js.size() && baby_cache->js[cursor]==p;
+            cached.push_back(covered?cursor:~size_t(0));
+            if(covered) {
+                ++reused;unsigned long long bits=0,v=p;while(v){++bits;v>>=1;}
+                avoided_mont+=13*bits-6;
+            } else missing.push_back(p);
         }
-        R.small_primes = smalljs.size();
-        if (!smalljs.empty()) {
-            std::vector<unsigned long long> sx, sz;
-            ladder_points_ws(ws, smalljs, sx, sz);
-            for (size_t k = 0; k < smalljs.size(); ++k) {
-                mpz_t z;
-                mpz_init(z);
-                words_to_mpz(z, &sz[k * W], W);
-                mpz_gcd(pg, z, L.N);
-                if (mpz_cmp_ui(pg, 1) > 0 && mpz_cmp(pg, L.N) < 0)
-                    s3_record(R.tail, pg, smalljs[k], L.N);
-                mpz_clear(z);
+        R.small_primes=smalljs.size();
+        std::vector<unsigned long long> sx,sz,cx,cz;
+        ladder_points_ws(ws,missing,sx,sz);
+        if(check && reused)ladder_points_ws(ws,smalljs,cx,cz);
+        mpz_t z,expected;mpz_inits(z,expected,nullptr);
+        size_t fallback=0;
+        for(size_t k=0;k<smalljs.size();++k) {
+            if(cached[k]!=~size_t(0)) {
+                baby_cache->gcd_at(cached[k],pg);
+                if(check) {
+                    words_to_mpz(z,cz.data()+k*W,W);mpz_gcd(expected,z,L.N);
+                    if(small_prime_flag("NTT_SMALL_PRIME_TEST_BAD") && checked==0)mpz_add_ui(expected,expected,1);
+                    if(mpz_cmp(pg,expected))++bad;
+                    ++checked;
+                }
+            } else {
+                words_to_mpz(z,sz.data()+fallback++*W,W);mpz_gcd(pg,z,L.N);
             }
+            if(mpz_cmp_ui(pg,1)>0 && mpz_cmp(pg,L.N)<0)s3_record(R.tail,pg,smalljs[k],L.N);
         }
+        mpz_clears(z,expected,nullptr);
+        std::printf("small_prime_reuse: requested=%d available=%d matched=%d primes=%llu reused=%llu fallback=%llu checked=%llu bad=%llu avoided_montmuls=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu cache_bytes=%llu elapsed=%.6f\n",
+            (int)requested,(int)(baby_cache && baby_cache->ready),(int)matched,R.small_primes,reused,
+            (unsigned long long)missing.size(),checked,bad,avoided_mont,reused*8,reused*16*W,
+            (unsigned long long)(baby_cache?baby_cache->payload_bytes():0),now_s()-ts);
+        if(bad){std::fprintf(stderr,"FATAL: small-prime baby GCD proof mismatch\n");std::exit(3);}
     }
 
     /* ---- 1. THE GIANT POINTS, ONE BATCH AT A TIME -------------------------------------
@@ -10340,7 +10406,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
@@ -10367,6 +10433,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        shares a factor with N, i.e. points that are the identity modulo that factor.  Collected
        here (the batched run does not exist yet) and merged into the reported factor set below. */
     std::vector<std::string> baby_deg;
+    SmallPrimeBabyCache small_cache;
+    const bool reuse_small=small_prime_flag("NTT_SMALL_PRIME_REUSE");
+    if(reuse_small)small_cache.begin(C,D,B1,B2,baby_j);
     {
         const double t0 = now_s();
         std::vector<unsigned long long> bx, bz;
@@ -10417,9 +10486,13 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     for (size_t j = 0; j < seg; ++j) {
                         words_to_mpz(X, &bx[(lo + j) * nw], nw);
                         words_to_mpz(Z, &bz[(lo + j) * nw], nw);
+                        /* The established affine helper accepts Z=0 as leaf x=0. Its GCD
+                           proof is N, not 1; retain saturation without changing leaf semantics. */
+                        if(reuse_small && mpz_sgn(Z)==0)small_cache.record(lo+j,L.N);
                         if (!affine_x_gmp_checked(xj, X, Z, L.N)) {
                             ++noninv;
                             mpz_gcd(gq, Z, L.N);
+                            if(reuse_small)small_cache.record(lo+j,gq);
                             char *gs = mpz_get_str(nullptr, 10, gq);
                             baby_deg.push_back(gs);
                             void (*ff)(void *, size_t) = nullptr;
@@ -10505,6 +10578,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 L.bind_L, L.bind_bpw, L.bind_bound_bits, mpz_log2d_p(),
                 exact_ok_terms(L.bind_L, L.bind_bpw) ? "OK" : "VIOLATED");
 
+    if(reuse_small) {
+        small_cache.ready=std::is_sorted(small_cache.js.begin(),small_cache.js.end()) &&
+            std::adjacent_find(small_cache.js.begin(),small_cache.js.end())==small_cache.js.end();
+        if(small_prime_flag("NTT_SMALL_PRIME_CACHE_STALE"))++small_cache.D;
+    }
     const double stage2_init_seconds=stage2_shape_seconds+now_s()-stage2_init_begin;
     /* ---- the tails ---- */
     Stage2Params SP;
@@ -10543,7 +10621,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const unsigned long long rw0 = L.s4 ? L.s4->raw_words : 0ull;
         const unsigned long long pl0 = L.s4 ? L.s4->pack_launches : 0ull;
         const double t0 = now_s();
-        BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad);
+        BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad,reuse_small?&small_cache:nullptr);
         s4_oracle_drain(red);    /* validation must finish BEFORE elapsed and success */
         /* merge the factors that degenerate BABY points revealed (objective 3): each already
            divides N by construction, and they are deduplicated against what the naming stage
