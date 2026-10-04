@@ -1002,6 +1002,8 @@ __global__ void outer_inv_kernel(unsigned long long *a, unsigned long long n, in
     }
 }
 
+#include "ntt_coop_outer.cuh"
+
 /* ONE fused RADIX-4 BLOCK of two consecutive tile stages, held in registers.
  *
  * Why: the tile pass is LATENCY bound, not ALU bound -- replacing its one twiddle multiply
@@ -1301,6 +1303,7 @@ struct FuseCtx {
     size_t scr2Words = 64;
     int m_max = FUSE_MAX_M;
     bool ready = false;
+    bool coop_outer = false, compact_scratch = true;
     bool warp_tail = false;                            /* kernel choice, no new tables/buffers */
     bool arena_borrowed = false;                         /* this copy must not release arena storage */
     int passes_fwd = 0;
@@ -1389,6 +1392,13 @@ static bool fuse_compact_scratch()
     const char *e=std::getenv("NTT_FUSE_COMPACT_SCRATCH");
     return !e || !*e || std::atoi(e)!=0;
 }
+static int fuse_outer_max(int t,bool &coop)
+{
+    coop=fuse_env_ull("NTT_FUSE_COOP_OUTER",0)!=0 && t>=5;
+    const int maximum=coop ? 8 : FUSE_MAX_M;
+    const int requested=(int)fuse_env_ull(coop ? "NTT_FUSE_COOP_M" : "NTT_FUSE_M",maximum);
+    return std::max(coop ? 5 : 1,std::min(maximum,requested));
+}
 static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
                       unsigned long long omega_inv, bool compact=fuse_compact_scratch())
 {
@@ -1399,9 +1409,8 @@ static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long lon
     if (t < 0) t = 0;
     c.t = t;
     c.warp_tail = fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0;
-    c.m_max = (int)fuse_env_ull("NTT_FUSE_M", FUSE_MAX_M);
-    if (c.m_max > FUSE_MAX_M) c.m_max = FUSE_MAX_M;
-    if (c.m_max < 1) c.m_max = 1;
+    c.m_max=fuse_outer_max(t,c.coop_outer);
+    c.compact_scratch=compact;
     fuse_plan_stages(c, k - t);
 
     fuse_base_allocate(&c.tblF,(size_t)(1ull << t));
@@ -1416,7 +1425,7 @@ static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long lon
     /* Size from BOTH actual pass sequences, not an assumed radix. The old N/4 guess broke
        radix-2; a tile-only plan has no coarse/radix scratch readers at all. */
     c.scrWords = compact ? 0 : (size_t)(n >> 1) + 64;
-    c.scr2Words = compact ? 0 : 64;
+    c.scr2Words = compact ? 0 : (c.coop_outer ? (size_t)(1ull<<c.m_max) : 64);
     if (compact) {
         int L=0;
         for (int p=0;p<c.nms;++p) {
@@ -1572,6 +1581,9 @@ static void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
         }
         const unsigned int g = (unsigned int)fuse_grid(groups, gpb);
         dim3 gr(g, (unsigned int)nbatch);
+        if(c.coop_outer && M>=5)
+            launch_outer_coop<false>(M,d,n,L,scr,scr2,nbatch,stride);
+        else {
         switch (M) {
             case 1: outer_fwd_kernel<1><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
             case 2: outer_fwd_kernel<2><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
@@ -1580,6 +1592,7 @@ static void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
             case 5: outer_fwd_kernel<5><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
             case 6: outer_fwd_kernel<6><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
             default: std::fprintf(stderr, NTT_PROBE_NAME ": bad outer radix M=%d\n", M); std::exit(3);
+        }
         }
         CK(cudaGetLastError());
         fuse_mark("fwd outer pass", ft0);
@@ -1637,6 +1650,9 @@ static void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b
         }
         const unsigned int g = (unsigned int)fuse_grid(groups, gpb);
         dim3 gr(g, (unsigned int)nbatch);
+        if(c.coop_outer && M>=5)
+            launch_outer_coop<true>(M,d,n,s0,scr,scr2,nbatch,stride);
+        else {
         switch (M) {
             case 1: outer_inv_kernel<1><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
             case 2: outer_inv_kernel<2><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
@@ -1645,6 +1661,7 @@ static void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b
             case 5: outer_inv_kernel<5><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
             case 6: outer_inv_kernel<6><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
             default: std::fprintf(stderr, NTT_PROBE_NAME ": bad outer radix M=%d\n", M); std::exit(3);
+        }
         }
         CK(cudaGetLastError());
         fuse_mark("inv outer pass", ft0);
@@ -2097,8 +2114,13 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
                            unsigned long long omega_inv, FuseCtx &out)
 {
     if (!ar) { fuse_init(out, n, k, omega, omega_inv); return; }
+    const int requested_t=std::max(0,std::min(k,(int)fuse_env_ull("NTT_FUSE_T",12)));
+    bool requested_coop=false;
+    const int requested_m=fuse_outer_max(requested_t,requested_coop);
     for (NttArena::FuseEntry &e : ar->fuses) {
-        if (e.n == n && e.k == k && e.omega == omega) {
+        if (e.n == n && e.k == k && e.omega == omega && e.fc.t==requested_t &&
+            e.fc.m_max==requested_m && e.fc.coop_outer==requested_coop &&
+            e.fc.compact_scratch==fuse_compact_scratch()) {
             out = e.fc;                                  /* pointers are owned by the arena */
             out.warp_tail=fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0; /* plan tables are identical */
             out.arena_borrowed = true;
@@ -2111,7 +2133,7 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     e.n = n;
     e.k = k;
     e.omega = omega;
-    const size_t need = (size_t)(n + n / 2 + 4 * FUSE_MAX_PASSES * 64) *
+    const size_t need = (size_t)(n + n / 2 + 4 * FUSE_MAX_PASSES * (requested_coop ? 256 : 64)) *
                         sizeof(unsigned long long);
     if (ar->cap_bytes && ar->bytes + need > ar->cap_bytes) {
         ++ar->overflow;
@@ -4220,6 +4242,110 @@ static void ntt_fuse_capacity_check(int device)
         std::printf("ntt_fuse_warp_resources: requested=%d fwd_regs=%d inv_regs=%d fwd_local=%zu inv_local=%zu fwd_max_blocks=%d inv_max_blocks=%d block=512 dynamic_shared=32768\n",
                     (int)warp,fa.numRegs,ia.numRegs,fa.localSizeBytes,ia.localSizeBytes,fb,ib);
     }
+    if(bad) std::exit(3);
+}
+
+static void ntt_fuse_coop_check(int device)
+{
+    CK(cudaSetDevice(device));
+    const char *et=std::getenv("NTT_FUSE_T"), *em=std::getenv("NTT_FUSE_COOP_M");
+    const std::string saved_t=et ? et : "", saved_m=em ? em : "";
+    const auto live_before=g_fuse_base.live_bytes;
+    unsigned long long cases=0,words=0,bad=0;
+    const bool extended=true;
+    const std::string saved_coop=std::getenv("NTT_FUSE_COOP_OUTER") ? std::getenv("NTT_FUSE_COOP_OUTER") : "";
+    fuse_fixture_env("NTT_FUSE_COOP_OUTER","1");
+    const std::vector<int> ks=extended ? std::vector<int>{13,14,15,17} : std::vector<int>{7,15,7};
+    const std::vector<int> ts=extended ? std::vector<int>{5,5,5,8} : std::vector<int>{4,8,8};
+    const unsigned long long nbatch=extended ? 3 : 1;
+    for (size_t shape=0;shape<ks.size();++shape) {
+        const int k=ks[shape]; const unsigned long long n=1ull<<k;
+        const auto om=gl_pow_host(7ull,(GL_P-1)/n), omi=gl_pow_host(om,GL_P-2);
+        const auto nsc=gl_pow_host(n,GL_P-2);
+        std::vector<unsigned long long> original(n*nbatch,0),ones(n*nbatch,1),spectrum(n*nbatch,0),got(n*nbatch),expected(n*nbatch);
+        original[0]=GL_P-1; original[1]=0x8000000000000000ull; original[n-1]=GL_P-2;
+        /* Independent sparse DFT in GMP, stored in DIF bit-reversed order. */
+        mpz_t p,w,wi,u,v,sum,tmp,ca,cb,cc;
+        mpz_inits(p,w,wi,u,v,sum,tmp,ca,cb,cc,nullptr);
+        const unsigned long long prime=GL_P;
+        mpz_import(p,1,-1,8,0,0,&prime); mpz_import(w,1,-1,8,0,0,&om);
+        mpz_import(wi,1,-1,8,0,0,&omi);
+        mpz_import(ca,1,-1,8,0,0,&original[0]); mpz_import(cb,1,-1,8,0,0,&original[1]);
+        mpz_import(cc,1,-1,8,0,0,&original[n-1]); mpz_set_ui(u,1); mpz_set_ui(v,1);
+        for (unsigned long long j=0;j<n;++j) {
+            mpz_mul(sum,cb,u); mpz_add(sum,sum,ca); mpz_mul(tmp,cc,v); mpz_add(sum,sum,tmp); mpz_mod(sum,sum,p);
+            unsigned long long r=0,x=j; for(int bit=0;bit<k;++bit){r=(r<<1)|(x&1);x>>=1;}
+            size_t count=0; mpz_export(&spectrum[r],&count,-1,8,0,0,sum);
+            mpz_mul(u,u,w);mpz_mod(u,u,p);mpz_mul(v,v,wi);mpz_mod(v,v,p);
+        }
+        /* Slice-specific pointwise multiplier exercises inverse B and batch addressing.
+           Forward spectra and inverse results are checked independently, not only roundtrip. */
+        for(unsigned long long sl=0;sl<nbatch;++sl) for(unsigned long long j=0;j<n;++j) {
+            original[sl*n+j]=original[j]; spectrum[sl*n+j]=spectrum[j]; ones[sl*n+j]=sl+1;
+            mpz_import(tmp,1,-1,8,0,0,&original[j]); mpz_mul_ui(tmp,tmp,(unsigned long)(sl+1)); mpz_mod(tmp,tmp,p);
+            size_t count=0; mpz_export(&expected[sl*n+j],&count,-1,8,0,0,tmp);
+        }
+        mpz_clears(p,w,wi,u,v,sum,tmp,ca,cb,cc,nullptr);
+        unsigned long long *data=nullptr,*dones=nullptr;
+        CK(cudaMalloc(&data,n*nbatch*8));CK(cudaMalloc(&dones,n*nbatch*8));
+        CK(cudaMemcpy(dones,ones.data(),n*nbatch*8,cudaMemcpyHostToDevice));
+        fuse_fixture_env("NTT_FUSE_T",std::to_string(ts[shape]).c_str());
+        for (int m=5;m<=8;++m) for(bool compact:{false,true}) {
+            fuse_fixture_env("NTT_FUSE_COOP_M",std::to_string(m).c_str());
+            FuseCtx fc; fuse_init(fc,n,k,om,omi,compact);
+            for (int state=0;state<3;++state) {
+                if(state==1) ntt_fuse_cache_tables(fc,om,omi);
+                if(state==2) NttArena::fuse_drop_tables(fc);
+                CK(cudaMemcpy(data,original.data(),n*nbatch*8,cudaMemcpyHostToDevice));
+                ntt_forward_fused(data,fc,om,nbatch);
+                CK(cudaMemcpy(got.data(),data,n*nbatch*8,cudaMemcpyDeviceToHost));
+                if(fuse_env_ull("NTT_FUSE_COOP_BAD",0) && shape==0 && m==5 && !compact && state==0)got[0]^=1;
+                for(size_t j=0;j<n*nbatch;++j){if(got[j]!=spectrum[j]) ++bad;} words+=n*nbatch;
+                ntt_inverse_fused(data,dones,fc,omi,nsc,nbatch);
+                CK(cudaMemcpy(got.data(),data,n*nbatch*8,cudaMemcpyDeviceToHost));
+                for(size_t j=0;j<n*nbatch;++j){if(got[j]!=expected[j]) ++bad;} words+=n*nbatch;
+                ++cases;
+            }
+            if(compact && fc.nms==0 && (fc.scr || fc.scr2 || fc.scrWords || fc.scr2Words)) ++bad;
+            fuse_release(fc);
+        }
+        if(extended && k==17) {
+            const std::string saved_w=std::getenv("NTT_FUSE_WARP_TAIL") ? std::getenv("NTT_FUSE_WARP_TAIL") : "";
+            unsigned long long switch_bad=0, switch_words=0;
+            {
+                NttArena ar;
+                for(int mode : {0,1,0,1}) {
+                    fuse_fixture_env("NTT_FUSE_COOP_OUTER",std::to_string(mode).c_str());
+                    fuse_fixture_env("NTT_FUSE_T","5");
+                    FuseCtx large; ntt_arena_fuse(&ar,n,k,om,omi,large);
+                    const auto om32=gl_pow_host(7ull,(GL_P-1)/32);
+                    fuse_fixture_env("NTT_FUSE_T","5");
+                    FuseCtx small; ntt_arena_fuse(&ar,32,5,om32,gl_pow_host(om32,GL_P-2),small);
+                    /* Pin the cached large plan again: small init changes FUNCTION attributes. */
+                    fuse_fixture_env("NTT_FUSE_T","5");
+                    ntt_arena_fuse(&ar,n,k,om,omi,large);
+                    if(large.coop_outer!=(mode!=0)) ++switch_bad;
+                    CK(cudaMemcpy(data,original.data(),n*nbatch*8,cudaMemcpyHostToDevice));
+                    ntt_forward_fused(data,large,om,nbatch);
+                    CK(cudaMemcpy(got.data(),data,n*nbatch*8,cudaMemcpyDeviceToHost));
+                    for(size_t j=0;j<n*nbatch;++j) if(got[j]!=spectrum[j]) ++switch_bad;
+                    ntt_inverse_fused(data,dones,large,omi,nsc,nbatch);
+                    CK(cudaMemcpy(got.data(),data,n*nbatch*8,cudaMemcpyDeviceToHost));
+                    for(size_t j=0;j<n*nbatch;++j) if(got[j]!=expected[j]) ++switch_bad;
+                    switch_words+=2*n*nbatch;
+                }
+            }
+            fuse_fixture_env("NTT_FUSE_WARP_TAIL",saved_w.c_str());
+            bad+=switch_bad;
+            std::printf("ntt_fuse_coop_switch_check: calls=4 words=%llu bad=%llu (cached mode 0/1/0/1)\n",switch_words,switch_bad);
+        }
+        CK(cudaFree(data));CK(cudaFree(dones));
+    }
+    fuse_fixture_env("NTT_FUSE_T",saved_t.c_str());fuse_fixture_env("NTT_FUSE_COOP_M",saved_m.c_str());
+    if(g_fuse_base.live_bytes!=live_before) ++bad;
+    std::printf("ntt_fuse_coop_check: cases=%llu words=%llu bad=%llu (GMP DFT, inverse, radix 5..%d, cache/evict)\n",
+                cases,words,bad,8);
+    fuse_fixture_env("NTT_FUSE_COOP_OUTER",saved_coop.c_str());
     if(bad) std::exit(3);
 }
 

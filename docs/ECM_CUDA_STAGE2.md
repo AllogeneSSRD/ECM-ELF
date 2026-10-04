@@ -138,7 +138,7 @@ NTT tile 默认 `NTT_FUSE_WARP_TAIL=1`，低6层使用warp寄存器交换与常�
 
 - 存档文本和校验和解析：[ecm_cuda_stage2_main.cpp:106](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:106)；可选队列字段：[同文件:301](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:301)；配置和调度：[同文件:443](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:443)。
 - 生产默认值：[ecm_cuda_stage2.cu:6](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6)；独立引擎封装：[同文件:38](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:38)。
-- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10533](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10533)，跳过 Stage1 的分支位于 [10799](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10799)。
+- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10745](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10745)，跳过 Stage1 的分支位于 [11054](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11054)。
 - 已有表达式、ini 和队列工具：`src/core/ecm_expr.cpp`、`ecm_queue_config.cpp`、`ecm_worktodo.cpp`。
 - 独立编译脚本：[build_ecm_cuda_stage2.ps1](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)。
 
@@ -184,8 +184,17 @@ M4423 save 恢复时 owner 启用，14 folds/42 muls，init15.123476/main58.5150
 
 ### 2026-10-04 NTT warp tile默认值更新
 
-当前工作区 [ecm_cuda_stage2.exe](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe) 为2691072 bytes，SHA256=`905826a8988e2046831e4ecd57406c46a6d8b0db2ac22551b2d6be03d18b588c`；sm89/CUDA13.3，CUDA编译252.8 s。[编译manifest](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/build_manifest.json) 记录共用NTT源码F7C98F0B…ACD7，Stage2树引擎E89B554D…F19未变。已启用warp tile默认1，显式环境变量0仍生效。
+该轮工作区 [ecm_cuda_stage2.exe](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe) 为2691072 bytes，SHA256=`905826a8988e2046831e4ecd57406c46a6d8b0db2ac22551b2d6be03d18b588c`；sm89/CUDA13.3，CUDA编译252.8 s。[编译manifest](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/build_manifest.json) 记录共用NTT源码F7C98F0B…ACD7，Stage2树引擎E89B554D…F19未变。已启用warp tile默认1，显式环境变量0仍生效。
 
 生产入口重新验收 **26/0**：基本21项、CUDA失败保留队列、saved-X已有因子、实际M4423 save恢复，以及默认1/显式0的GMP频谱、逆变换和容量切换检查。worktodo B2/skip/num仍选择用户示例961–970；xxx拒绝且队列保留。实际M4423存档恢复init15.776226/main57.036366/total72.812592 s，最终115200叶/8064000字/FNV `10619321735931855904` 与基线一致，oracle1126 jobs/66139样本全部比较，carry8241/252、pending0、错误0。
 
 性能结论采用实验同binary串行ABBA+BAAB共8次，完整Stage2均值 **73.121608→72.528029 s（−.81%）**，main−.925%；独立Systems中tile−5.58%、NTT−2.90%。样本数少且存在波动，不能将生产单次时长作为A/B，也不保证其他形状收益。算法传输量和GPU1峰5544MiB保持。[生产26项](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_warp_20261004/production_accept/summary.json)、[M4423日志](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_warp_20261004/production_accept/m4423_engine.log)、[性能量化](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_warp_20261004/final_quantitative.json)。编译及验收只更新本工作区，GPU0外部生产运行未改。
+
+
+### 2026-10-04 xADD6 / D重标定 / cooperative NTT v2
+
+当前工作区[生产exe](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe)为4038144 bytes、sm89/CUDA13.3，SHA256 `f85ead72d6e68a5952c5affcd9df1be32002428c08b2376a2f2b396a0e55f7f1`。生产默认NTT_XADD6=1、NTT_D_MODEL=1；分别设0回退。新D系数只在RTX4060 Laptop/M4423/B1=1000/当前驻留与检查配置生效，大界自动D1381380、小界D330330；其他scope回原模型，显式D优先。CPU选D单列d_scan_wall，不含于stage2_full_wall。
+
+最终入口30/0，包含默认/回退、自动D大小界、实际M4423恢复、用户B2/skip/num的961–970选择、xxx拒绝/队列保留和冻结因子。显式D1231230实际save full68.134574 s；自动大界61.729618、小界13.437128 s，均为验收单次。cooperative另一次实际save通过。性能结论使用固定工作量xADD8次A/B（6.26%）及cooperative4次A/B（2.62%），不同D比较另报。
+
+NTT_FUSE_COOP_OUTER仍缺省0；手动1启用M8实验，旧D拟合会回退；下一轮按NTT尺寸选M并重新标定后再评估默认。所有开关继续保留算术自检/采样与最终drain。原语、D/NTT公式、统计范围及源码见[详细报告](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md)。[最终30项](D:/code/MPA-OpenCl/build_cuda_cmake/_xadd6_20261004/production_accept_v2/summary.json)、[编译manifest](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/build_manifest.json)。

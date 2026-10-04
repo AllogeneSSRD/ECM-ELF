@@ -1,0 +1,138 @@
+"""Collect serial Stage2 phase measurements at explicit D values using a verified A/B environment.
+
+Does not modify ini/worktodo or choose a production default. An output directory must be fresh.
+Every curve keeps mandatory arithmetic checks; different D values have different leaf/sample sets.
+"""
+import argparse
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import subprocess
+import time
+from functools import lru_cache
+
+GL_P=(1<<64)-(1<<32)+1
+
+def phi(n):
+    result=n;p=2
+    while p*p<=n:
+        if n%p==0:
+            while n%p==0:n//=p
+            result-=result//p
+        p+=1
+    if n>1:result-=result//n
+    return result
+
+@lru_cache(None)
+def shape(p,bits):
+    # Integer reproduction of choose_cfg's exact bound, used for the offline fit.
+    # The integrated selector must query the real C++ backend; its plan gate compares these.
+    slot=2*bits+max(1,(p-1).bit_length())
+    for bpw in range(62,0,-1):
+        sw=(slot+bpw-1)//bpw
+        if p*sw*((1<<bpw)-1)**2<GL_P:break
+    n=1<<(2*p*sw).bit_length()
+    if n>1<<29:raise ValueError('NTT shape refused')
+    return n,bpw,sw
+
+def unit(p,bits):
+    n,_,_=shape(p,bits)
+    return n*math.log2(n)
+
+@lru_cache(None)
+def tree(p,bits):
+    total=0;h=1
+    while h<p:
+        total+=((p+h)//(2*h))*unit(h+1,bits)
+        h*=2
+    return total
+
+@lru_cache(None)
+def inverse(k,bits):
+    size=1;total=0
+    while size<k:
+        size=min(2*size,k)
+        total+=2*unit(size,bits)
+    return total
+
+def features(d,b2,bits=4423):
+    p=phi(d)//2;i=b2//d+2;g=(i+p-1)//p;q,r=divmod(i,p)
+    top_child=(1<<((p-1).bit_length()-1)) if p>1 else 1
+    return dict(D=d,P=p,I=i,G=g,B2=b2,bits=bits,fold_ntt=shape(p+1,bits)[0],tree_ntt=shape(top_child+1,bits)[0],
+                baby=p*max(1,math.log2(d)-2),affine=p,
+                ftree=tree(p,bits),gtrees=q*tree(p,bits)+(tree(r,bits) if r else 0),
+                fold=(g-1)*unit(p+1,bits),descent=tree(p,bits),inverse=inverse(p+1,bits),
+                giant=i*(6+22*math.log2(b2)/64),accum=p,owner_bytes=8*((bits+63)//64)*(9*p+8)+48)
+
+def read_log(path):
+    b=Path(path).read_bytes()
+    return b.decode('utf-16' if b[:2] in (b'\xff\xfe',b'\xfe\xff') else 'utf-8-sig',errors='replace')
+
+def parse(text):
+    wall=re.search(r'stage2_full_wall:.*?init=([\d.]+) main=([\d.]+) total=([\d.]+).*clean=(\d+)',text)
+    if not wall or wall[4]!='1':raise RuntimeError('Missing clean full Stage2 timing')
+    split=re.search(r'real_batched_split: (.*)',text)
+    baby=re.search(r'real_baby: points=(\d+) ladder=([\d.]+) s affine=([\d.]+) s degenerate=(\d+)',text)
+    if not split or not baby or baby[4]!='0':raise RuntimeError('Missing nondegenerate phase timing')
+    row=dict(re.findall(r'(\w+)=([\d.]+)',split[1]))
+    row={k:float(v) for k,v in row.items()}
+    row.update(init=float(wall[1]),main=float(wall[2]),full=float(wall[3]),baby=float(baby[2]),affine=float(baby[3]))
+    row['ftree']=max(0,row['init']-row['baby']-row['affine'])
+    row['residual']=row['main']-sum(row[k] for k in ('giant','gtrees','fold','descent','inv','accum','name'))
+    return row
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--exe',type=Path,required=True);p.add_argument('--provenance',type=Path,required=True)
+    p.add_argument('--output',type=Path,required=True);p.add_argument('--d',type=int,nargs='+',required=True)
+    p.add_argument('--device',type=int,default=1);p.add_argument('--repeats',type=int,default=2)
+    p.add_argument('--b2',type=int,help='Override only the Stage2 upper bound; keep Stage1 Q identical')
+    p.add_argument('--expected-q-sha256',required=True,help='SHA256 of lowercase affine Q hex from an independent reference')
+    a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
+    if any(out.iterdir()):raise RuntimeError('Use a fresh output directory')
+    prov=json.loads(a.provenance.read_text(encoding='utf-8-sig'));exe=a.exe.resolve()
+    base={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
+    base.update({k:str(v) for k,v in prov['env'].items() if v is not None})
+    base.update({k:str(v) for k,v in next(x for x in prov['mode_controls'] if x['mode']=='6_mont').items() if k!='mode'})
+    base.pop('NTT_FUSE_TRACE',None);base.update(NTT_XADD6_TEST='0',NTT_XADD6_TEST_BAD='0',NTT_D_MODEL='0')
+    cmd0=[str(exe)]+[str(x) for x in prov['args']]
+    if a.b2 is not None:cmd0[cmd0.index('--b2')+1]=str(a.b2)
+    # Replace only values in the observed argv, retaining the exact N/Q/sigma/bounds.
+    b2=int(cmd0[cmd0.index('--b2')+1]);bits=int(cmd0[cmd0.index('--n-hex')+1],16).bit_length()
+    rows=[];expected_q=None;sha=hashlib.sha256(exe.read_bytes()).hexdigest()
+    for repeat in range(a.repeats):
+        for d in (a.d if repeat%2==0 else a.d[::-1]):
+            cmd=cmd0.copy();cmd[cmd.index('--d')+1]=str(d);cmd[cmd.index('--device')+1]=str(a.device)
+            name=f'{repeat+1}_{d}';log=out/(name+'.log');start=time.perf_counter()
+            print('RUN',name,flush=True)
+            if hashlib.sha256(exe.read_bytes()).hexdigest()!=sha:raise RuntimeError('Binary changed')
+            with log.open('wb') as f:r=subprocess.run(cmd,env=base,stdout=f,stderr=subprocess.STDOUT,timeout=900)
+            text=read_log(log)
+            if r.returncode:raise RuntimeError(f'{name} exit={r.returncode}; see {log}')
+            if '[trace]' in text:raise RuntimeError('Synchronized trace invalidates timing')
+            for token in ('gmp_selftest_bad=0','gmp_check_bad=0','pending=0','clean=1','point_arithmetic: xadd6=1'):
+                if token not in text:raise RuntimeError('Missing '+token)
+            q=re.search(r'real_setup_Q_full: hex=([0-9a-f]+)',text)
+            if not q or hashlib.sha256(q[1].encode()).hexdigest()!=a.expected_q_sha256.lower():
+                raise RuntimeError('Stage1 Q differs from independent reference')
+            qline=q[0]
+            if expected_q is None:expected_q=qline
+            elif qline!=expected_q:raise RuntimeError('Stage1 Q changed across D')
+            f=features(d,b2,bits)
+            fd=re.search(r'real_batched_folddevice:.*enabled=(\d+)',text)
+            if not fd or (f['G']>1 and fd[1]!='1'):
+                raise RuntimeError('Multiple G polynomials require GPU resident fold')
+            oracle=re.search(r's4_oracle_stats:.*selected=(\d+) queued=(\d+) compared=(\d+) samples=(\d+) pending=(\d+)',text)
+            if not oracle or oracle[1]!=oracle[3] or oracle[1]!=oracle[2] or oracle[5]!='0':
+                raise RuntimeError('Oracle coverage incomplete')
+            phases=parse(text)
+            rows.append(dict(name=name,command=cmd,seconds=time.perf_counter()-start,phases=phases,features=f,log=str(log)))
+            controls={k:v for k,v in base.items() if k.startswith('NTT_')}
+            (out/'measurements.json').write_text(json.dumps(dict(exe=str(exe),sha256=sha,device=a.device,env=controls|{'NTT_FUSE_TRACE':None},Q_line=expected_q,runs=rows),indent=2),encoding='utf-8')
+            print(name,'full=',phases['full'],flush=True)
+    return 0
+
+if __name__=='__main__':raise SystemExit(main())

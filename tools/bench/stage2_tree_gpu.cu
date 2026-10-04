@@ -740,10 +740,32 @@ __device__ __forceinline__ void s2g_xdbl(unsigned long long *rx, unsigned long l
     s2g_mont_mul<NW>(rz, t1, t2, n, ninv, nw);
 }
 
+/* r = a/2 mod odd N, canonical a<N. Add N when odd BEFORE shifting;
+   the carry out of the top limb belongs to the (nw+1)-limb sum, even when N
+   almost fills the radix. Linear in the Montgomery image too. In-place safe. */
+template <int NW>
+__device__ __forceinline__ void s2g_halfmod(unsigned long long *r,
+                                            const unsigned long long *a,
+                                            const unsigned long long *n, int nw)
+{
+    const bool odd=(a[0]&1ull)!=0;
+    unsigned long long carry=0;
+    for(int i=0;i<nw;++i) {
+        const auto v=a[i], add=odd ? n[i] : 0ull;
+        const auto s=v+add, c1=(s<v) ? 1ull : 0ull;
+        const auto u=s+carry, c2=(u<s) ? 1ull : 0ull;
+        r[i]=u; carry=c1+c2;
+    }
+    for(int i=nw-1;i>=0;--i) {
+        const auto v=r[i];
+        r[i]=(v>>1)|(carry<<63); carry=v&1ull;
+    }
+}
+
 /* r = p + q with diff = p - q: the reference's xadd, in Montgomery images.
    The output is written only at the end, so the ladder may alias it with p and q (the
    reference documents exactly this trap: writing r.X early corrupted Z3). */
-template <int NW>
+template <int NW, bool XADD6=false>
 __device__ __forceinline__ void s2g_xadd(unsigned long long *rx, unsigned long long *rz,
                                          const unsigned long long *px, const unsigned long long *pz,
                                          const unsigned long long *qx, const unsigned long long *qz,
@@ -752,6 +774,23 @@ __device__ __forceinline__ void s2g_xadd(unsigned long long *rx, unsigned long l
                                          int nw)
 {
     unsigned long long a[NW], b[NW], tx[NW], tz[NW];
+    if(XADD6) {
+        // u=(Xp+Zp)*(Xq-Zq), v=(Xp-Zp)*(Xq+Zq), all in Montgomery images.
+        s2g_addmod<NW>(a,px,pz,n,nw); s2g_submod<NW>(b,px,pz,n,nw);
+        s2g_addmod<NW>(tx,qx,qz,n,nw); s2g_submod<NW>(tz,qx,qz,n,nw);
+        s2g_mont_mul<NW>(a,a,tz,n,ninv,nw);
+        s2g_mont_mul<NW>(b,b,tx,n,ninv,nw);
+        s2g_addmod<NW>(tx,a,b,n,nw); s2g_submod<NW>(tz,a,b,n,nw);
+        // Halves recover the old coordinate scale exactly; the Z sign is squared.
+        s2g_halfmod<NW>(tx,tx,n,nw); s2g_halfmod<NW>(tz,tz,n,nw);
+        s2g_mont_mul<NW>(tx,tx,tx,n,ninv,nw);
+        s2g_mont_mul<NW>(tz,tz,tz,n,ninv,nw);
+        s2g_mont_mul<NW>(a,dz,tx,n,ninv,nw);
+        s2g_mont_mul<NW>(b,dx,tz,n,ninv,nw);
+        // Delay both writes, including when the output aliases the difference.
+        for(int i=0;i<nw;++i) {rx[i]=a[i];rz[i]=b[i];}
+        return;
+    }
     s2g_mont_mul<NW>(a, px, qx, n, ninv, nw);
     s2g_mont_mul<NW>(b, pz, qz, n, ninv, nw);
     s2g_submod<NW>(a, a, b, n, nw);                /* X_P X_Q - Z_P Z_Q */
@@ -766,7 +805,7 @@ __device__ __forceinline__ void s2g_xadd(unsigned long long *rx, unsigned long l
 }
 
 /* the reference's ladder(): MSB first, the difference point is p itself */
-template <int NW>
+template <int NW, bool XADD6=false>
 __device__ void s2g_ladder(unsigned long long k, const unsigned long long *px,
                            const unsigned long long *pz, const unsigned long long *a24,
                            const unsigned long long *n, unsigned long long ninv, int nw,
@@ -784,10 +823,10 @@ __device__ void s2g_ladder(unsigned long long k, const unsigned long long *px,
     s2g_xdbl<NW>(r1x, r1z, px, pz, a24, n, ninv, nw);
     for (int i = top - 1; i >= 0; --i) {
         if (((k >> i) & 1ull) != 0) {
-            s2g_xadd<NW>(r0x, r0z, r0x, r0z, r1x, r1z, px, pz, n, ninv, nw);
+            s2g_xadd<NW,XADD6>(r0x, r0z, r0x, r0z, r1x, r1z, px, pz, n, ninv, nw);
             s2g_xdbl<NW>(r1x, r1z, r1x, r1z, a24, n, ninv, nw);
         } else {
-            s2g_xadd<NW>(r1x, r1z, r0x, r0z, r1x, r1z, px, pz, n, ninv, nw);
+            s2g_xadd<NW,XADD6>(r1x, r1z, r0x, r0z, r1x, r1z, px, pz, n, ninv, nw);
             s2g_xdbl<NW>(r0x, r0z, r0x, r0z, a24, n, ninv, nw);
         }
     }
@@ -796,7 +835,7 @@ __device__ void s2g_ladder(unsigned long long k, const unsigned long long *px,
 
 /* one thread per point: (X, Z) = [j]Q, written back in the NORMAL domain so the host sees the
    same pair the CPU ladder produces */
-template <int NW>
+template <int NW, bool XADD6=false>
 __global__ void s2g_ladder_kernel(const unsigned long long *n, unsigned long long ninv, int nw,
                                   const unsigned long long *qx, const unsigned long long *qz,
                                   const unsigned long long *a24, const unsigned long long *mone,
@@ -811,7 +850,7 @@ __global__ void s2g_ladder_kernel(const unsigned long long *n, unsigned long lon
        one launch may have to cover more points than it has threads.  The stride version is the
        same arithmetic, point by point, with a different work assignment. */
     for (int i = t; i < npts; i += gridDim.x * blockDim.x) {
-        s2g_ladder<NW>(js[i], qx, qz, a24, n, ninv, nw, mone, rx, rz);
+        s2g_ladder<NW,XADD6>(js[i], qx, qz, a24, n, ninv, nw, mone, rx, rz);
         if(normal_output) {
             for (int j = 0; j < NW; ++j) one[j] = 0;
             one[0] = 1;
@@ -838,6 +877,30 @@ __global__ void s2g_mont_test_kernel(const unsigned long long *a, const unsigned
        upper bound, chosen from the word-count dispatch) */
     s2g_mont_mul<NW>(r, a + (size_t)t * nw, b + (size_t)t * nw, n, ninv, nw);
     for (int i = 0; i < nw; ++i) out[(size_t)t * nw + i] = r[i];
+}
+
+/* Optional algebra gate: arbitrary canonical coordinates, including nonunits and
+   zero Z, and independent p/q/difference/cross-output aliases. Both template variants
+   are checked against GMP's old polynomial coordinates, without projective division. */
+template <int NW, bool XADD6>
+__global__ void s2g_xadd_test_kernel(const unsigned long long *input,
+                                     const unsigned long long *n, unsigned long long ninv,
+                                     int nw,int cases,unsigned long long *output)
+{
+    const int t=blockIdx.x*blockDim.x+threadIdx.x;
+    if(t>=cases*5) return;
+    const int c=t/5, alias=t%5;
+    const auto *s=input+(size_t)c*6*nw;
+    unsigned long long px[NW],pz[NW],qx[NW],qz[NW],dx[NW],dz[NW],tx[NW],tz[NW];
+    for(int i=0;i<nw;++i) {px[i]=s[i];pz[i]=s[nw+i];qx[i]=s[2*nw+i];
+                          qz[i]=s[3*nw+i];dx[i]=s[4*nw+i];dz[i]=s[5*nw+i];}
+    auto *rx=alias==1 || alias==4 ? px : alias==2 ? qx : alias==3 ? dx : tx;
+    auto *rz=alias==1 ? pz : alias==2 || alias==4 ? qz : alias==3 ? dz : tz;
+    s2g_xadd<NW,XADD6>(rx,rz,px,pz,qx,qz,dx,dz,n,ninv,nw);
+    auto *out=output+(size_t)t*3*nw;
+    for(int i=0;i<nw;++i) {out[i]=rx[i];out[nw+i]=rz[i];}
+    // Out-of-place here; candidate xADD also exercises in-place modular halves.
+    s2g_halfmod<NW>(out+2*nw,s,n,nw);
 }
 
 /* the word-count dispatch: six instantiations cover every N up to 8192 bits */
@@ -868,6 +931,16 @@ static void s2g_launch_mont_test(int nw, int cases, const unsigned long long *da
     s2g_mont_test_kernel<NW><<<bl, th>>>(da, db, dn, ninv, nw, cases, dout);
 }
 
+template <int NW>
+static void s2g_launch_xadd_test(int nw,int cases,const unsigned long long *in,
+                                 const unsigned long long *n,unsigned long long ninv,
+                                 unsigned long long *out,bool candidate)
+{
+    const unsigned int th=64,bl=(cases*5+th-1)/th;
+    if(candidate) s2g_xadd_test_kernel<NW,true><<<bl,th>>>(in,n,ninv,nw,cases,out);
+    else s2g_xadd_test_kernel<NW,false><<<bl,th>>>(in,n,ninv,nw,cases,out);
+}
+
 /* ONE ladder launch must stay SHORT.  A ladder is a serial 5261-bit chain (~2*S steps), so on
    the real shape a single launch over a whole 207k-point chunk is a ~12-second kernel -- and a
    kernel that long gets the process KILLED with no diagnostic at all: the display driver's
@@ -876,9 +949,12 @@ static void s2g_launch_mont_test(int nw, int cases, const unsigned long long *da
    Event Log shows nvlddmkm id 13/153 at exactly those moments.  The cap makes every launch
    bounded; the grid-stride loop keeps the same total work and the same result.  Override with
    NTT_LADDER_CAP (0 or unset = the default), e.g. NTT_LADDER_CAP=2048 for a slower/safer run. */
+static bool g_xadd6 = false; // experiment control; production wrapper supplies the default
 static int g_ladder_cap = 8192;
 static void ladder_cap_init(void)
 {
+    const char *xadd=std::getenv("NTT_XADD6");
+    g_xadd6=xadd && *xadd && std::atoi(xadd)!=0;
     const char *e = std::getenv("NTT_LADDER_CAP");
     if (e && *e) g_ladder_cap = std::atoi(e);
     if (g_ladder_cap <= 0) g_ladder_cap = 8192;
@@ -907,7 +983,10 @@ static void s2g_launch_ladder(int nw, int npts, const unsigned long long *dn,
     for (int p0 = 0; p0 < npts; p0 += g_ladder_cap) {
         const int m = ((npts - p0) < g_ladder_cap) ? (npts - p0) : g_ladder_cap;
         const unsigned int bl = (unsigned int)((m + th - 1) / th);
-        s2g_ladder_kernel<NW><<<bl, th>>>(dn, ninv, nw, dqx, dqz, da24, dmone, djs + p0, m,
+        if(g_xadd6)
+            s2g_ladder_kernel<NW,true><<<bl,th>>>(dn,ninv,nw,dqx,dqz,da24,dmone,djs+p0,m,
+                                                dx+(size_t)p0*nw,dz+(size_t)p0*nw,normal_output);
+        else s2g_ladder_kernel<NW><<<bl, th>>>(dn, ninv, nw, dqx, dqz, da24, dmone, djs + p0, m,
                                           dx + (size_t)p0 * nw, dz + (size_t)p0 * nw, normal_output);
     }
 }
@@ -928,7 +1007,7 @@ static void s2g_launch_ladder(int nw, int npts, const unsigned long long *dn,
  *  Montgomery domain -- the only consumer is the host's affine_x = X/Z mod N, which is invariant
  *  under projective scaling, so no inversion and no conversion is needed.
  * ===================================================================================== */
-template <int NW>
+template <int NW, bool XADD6=false>
 __global__ void s2g_chain_kernel(const unsigned long long *dn, unsigned long long ninv, int nw,
                                  const unsigned long long *ddx, const unsigned long long *ddz,
                                  const unsigned long long *dsx, const unsigned long long *dsz,
@@ -961,7 +1040,7 @@ __global__ void s2g_chain_kernel(const unsigned long long *dn, unsigned long lon
         }
     for (unsigned long long k = start + 2; k < end; ++k) {
         /* x_k = x_{k-1} + x_1, with the difference x_{k-2}: p = x_{k-1}, q = x_D, diff = x_{k-2} */
-        s2g_xadd<NW>(xc, zc, xb, zb, ddx, ddz, xa, za, dn, ninv, nw);
+        s2g_xadd<NW,XADD6>(xc, zc, xb, zb, ddx, ddz, xa, za, dn, ninv, nw);
         for (int j = 0; j < nw; ++j) {
             out_x[(size_t)k * nw + j] = xc[j];
             out_z[(size_t)k * nw + j] = zc[j];
@@ -984,7 +1063,10 @@ static void s2g_launch_chain(int nw, unsigned long long blocks, unsigned long lo
 {
     const unsigned int th = 64;
     const unsigned int bl = (unsigned int)((blocks + th - 1) / th);
-    s2g_chain_kernel<NW><<<bl, th>>>(dn, ninv, nw, ddx, ddz, dsx, dsz, esx, esz, npts, per_block,
+    if(g_xadd6)
+        s2g_chain_kernel<NW,true><<<bl,th>>>(dn,ninv,nw,ddx,ddz,dsx,dsz,esx,esz,npts,per_block,
+                                           blocks,ox,oz,seed_stride);
+    else s2g_chain_kernel<NW><<<bl, th>>>(dn, ninv, nw, ddx, ddz, dsx, dsz, esx, esz, npts, per_block,
                                     blocks, ox, oz, seed_stride);
 }
 
@@ -4047,6 +4129,8 @@ static void hex_of_words(std::string &out, const unsigned long long *w, size_t W
 static int mont_selftest(const std::vector<unsigned long long> &hn, size_t nw,
                          unsigned long long ninv, const mpz_t N, const mpz_t R)
 {
+    std::printf("point_arithmetic: xadd6=%d xadd_mont_muls=%d coordinate_scale=legacy_exact\n",
+                (int)g_xadd6,g_xadd6 ? 6 : 8);
     const int cases = 2048;
     std::vector<unsigned long long> ha((size_t)cases * nw, 0ull), hb((size_t)cases * nw, 0ull);
     uint64_t s = 0x2468ace13579bdfull;
@@ -4098,6 +4182,77 @@ static int mont_selftest(const std::vector<unsigned long long> &hn, size_t nw,
     std::printf("mont_selftest: cases=%d mismatches=%llu first_bad=%llu "
                 "(device Mont(a,b) vs GMP a*b*R^-1 mod N, nw=%llu)\n",
                 cases, bad, first, (unsigned long long)nw);
+    return bad ? 1 : 0;
+}
+
+static int xadd_selftest(const std::vector<unsigned long long> &hn,size_t nw,
+                          unsigned long long ninv,const mpz_t N,const mpz_t R)
+{
+    const char *flag=std::getenv("NTT_XADD6_TEST");
+    if(!flag || !*flag || !std::atoi(flag)) return 0;
+    const int cases=128; // 64 ordinary-domain inputs + their 64 Montgomery images
+    std::vector<unsigned long long> input((size_t)cases*6*nw),got((size_t)cases*5*3*nw);
+    mpz_t x,rinv,a[6],tx,tz,v,half,observed;
+    mpz_inits(x,rinv,tx,tz,v,half,observed,nullptr);
+    for(auto &item:a) mpz_init(item);
+    mpz_invert(rinv,R,N);
+    uint64_t seed=0x85c529913ba8c742ull;
+    for(int c=0;c<cases/2;++c) for(int j=0;j<6;++j) {
+        std::vector<unsigned long long> w(nw);
+        for(auto &word:w) {seed=seed*6364136223846793005ull+1442695040888963407ull;word=seed;}
+        words_to_mpz(x,w.data(),nw);mpz_mod(x,x,N);
+        if(c<8) {
+            switch((c+j)%8) {
+                case 0:mpz_set_ui(x,0);break;
+                case 1:mpz_set_ui(x,1);break;
+                case 2:mpz_sub_ui(x,N,1);break;
+                case 3:mpz_sub_ui(x,N,2);break;
+                case 4:mpz_fdiv_q_2exp(x,N,1);break;
+                case 5:mpz_fdiv_q_2exp(x,N,1);mpz_add_ui(x,x,1);break;
+                case 6:mpz_set_ui(x,3);mpz_mod(x,x,N);break;
+                default:break;
+            }
+        }
+        mpz_to_words(w,nw,x);
+        std::copy(w.begin(),w.end(),input.begin()+((size_t)c*6+j)*nw);
+        mpz_mul(x,x,R);mpz_mod(x,x,N);mpz_to_words(w,nw,x);
+        std::copy(w.begin(),w.end(),input.begin()+((size_t)(c+cases/2)*6+j)*nw);
+    }
+    unsigned long long *di=nullptr,*dn=nullptr,*dout=nullptr;
+    CK(cudaMalloc(&di,input.size()*8));CK(cudaMalloc(&dn,nw*8));CK(cudaMalloc(&dout,got.size()*8));
+    CK(cudaMemcpy(di,input.data(),input.size()*8,cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(dn,hn.data(),nw*8,cudaMemcpyHostToDevice));
+    unsigned long long bad=0,first=0;
+    auto mont=[&](mpz_t dst,const mpz_t u,const mpz_t w) {
+        mpz_mul(dst,u,w);mpz_mul(dst,dst,rinv);mpz_mod(dst,dst,N);
+    };
+    for(int candidate=0;candidate<2;++candidate) {
+        S2G_DISPATCH((int)nw,s2g_launch_xadd_test,(int)nw,cases,di,dn,ninv,dout,candidate!=0);
+        CK(cudaGetLastError());CK(cudaDeviceSynchronize());
+        const char *fault=std::getenv("NTT_XADD6_TEST_BAD");
+        if(candidate && fault && std::atoi(fault)) CK(cudaMemset(dout,0xff,8));
+        CK(cudaMemcpy(got.data(),dout,got.size()*8,cudaMemcpyDeviceToHost));
+        for(int c=0;c<cases;++c) {
+            for(int j=0;j<6;++j) words_to_mpz(a[j],input.data()+((size_t)c*6+j)*nw,nw);
+            mont(tx,a[0],a[2]);mont(v,a[1],a[3]);mpz_sub(tx,tx,v);mpz_mod(tx,tx,N);
+            mont(tx,tx,tx);mont(tx,a[5],tx);
+            mont(tz,a[0],a[3]);mont(v,a[1],a[2]);mpz_sub(tz,tz,v);mpz_mod(tz,tz,N);
+            mont(tz,tz,tz);mont(tz,a[4],tz);
+            mpz_set(half,a[0]);if(mpz_odd_p(half)) mpz_add(half,half,N);mpz_fdiv_q_2exp(half,half,1);
+            for(int alias=0;alias<5;++alias) for(int coord=0;coord<3;++coord) {
+                words_to_mpz(observed,got.data()+(((size_t)c*5+alias)*3+coord)*nw,nw);
+                if(mpz_cmp(observed,coord==0 ? tx : coord==1 ? tz : half)!=0) {
+                    if(!bad) first=((candidate*cases+c)*5+alias)*3+coord;
+                    ++bad;
+                }
+            }
+        }
+    }
+    CK(cudaFree(di));CK(cudaFree(dn));CK(cudaFree(dout));
+    for(auto &item:a) mpz_clear(item);
+    mpz_clears(x,rinv,tx,tz,v,half,observed,nullptr);
+    std::printf("xadd6_selftest: cases=%d aliases=5 domains=2 modes=2 coordinates=%d halves=%d bad=%llu first_bad=%llu nw=%llu\n",
+                cases*5*2,cases*5*2*2,cases*5*2,bad,first,(unsigned long long)nw);
     return bad ? 1 : 0;
 }
 
@@ -9210,7 +9365,7 @@ static std::vector<unsigned long long> prime_powers_u64(unsigned long long B1)
    never needs the normal domain, only the caller does).  This replaces 25 launches with 7 tiny
    pageable-memory copies each, which measured 12.693 s of EVERY real curve -- the copies, not
    the arithmetic, were the whole cost (section 26.6). */
-template <int NW>
+template <int NW, bool XADD6=false>
 __global__ void s2g_ladder_chain_kernel(const unsigned long long *dps, int npps,
                                         unsigned long long ninv, int nw,
                                         const unsigned long long *dn,
@@ -9222,7 +9377,7 @@ __global__ void s2g_ladder_chain_kernel(const unsigned long long *dps, int npps,
     unsigned long long x[NW], z[NW], rx[NW], rz[NW];
     for (int i = 0; i < nw; ++i) { x[i] = qx[i]; z[i] = qz[i]; }
     for (int s = 0; s < npps; ++s) {
-        s2g_ladder<NW>(dps[s], x, z, da24, dn, ninv, nw, dmone, rx, rz);
+        s2g_ladder<NW,XADD6>(dps[s], x, z, da24, dn, ninv, nw, dmone, rx, rz);
         for (int i = 0; i < nw; ++i) { x[i] = rx[i]; z[i] = rz[i]; }
     }
     for (int i = 0; i < nw; ++i) { qx[i] = x[i]; qz[i] = z[i]; }
@@ -9235,7 +9390,9 @@ static void s2g_launch_ladder_chain(int nw, const unsigned long long *dps, int n
                                     const unsigned long long *dmone,
                                     unsigned long long *qx, unsigned long long *qz)
 {
-    s2g_ladder_chain_kernel<NW><<<1, 1>>>(dps, npps, ninv, nw, dn, da24, dmone, qx, qz);
+    if(g_xadd6)
+        s2g_ladder_chain_kernel<NW,true><<<1,1>>>(dps,npps,ninv,nw,dn,da24,dmone,qx,qz);
+    else s2g_ladder_chain_kernel<NW><<<1, 1>>>(dps, npps, ninv, nw, dn, da24, dmone, qx, qz);
 }
 
 static unsigned long long ladder_product(const std::vector<unsigned long long> &hn, size_t nw,
@@ -10530,10 +10687,65 @@ static bool real_run_words(unsigned long long P, int S, unsigned long long *out_
 /* the D scan's candidate record lives with the scan itself (section 59); the old `DChoice`, which
    only carried a memory footprint, was replaced by a cost+coverage model */
 
+/* Empirical v1 ranking, calibrated on sm89 RTX4060 Laptop/M4423 with xADD6,
+   resident roots/fold, warp tail and unchanged checks. Use the multiply backend's
+   actual N and count partial/unbalanced tree and Newton work; seconds are estimates.
+   Allocation/eviction/headroom checks remain authoritative. */
+struct DPhaseModel {
+    int bits;
+    unsigned long long bound;
+    std::map<unsigned long long,double> unit_cache,tree_cache,inverse_cache;
+    DPhaseModel(int s,unsigned long long b):bits(s),bound(b) {}
+    double unit(unsigned long long p) {
+        auto it=unit_cache.find(p);if(it!=unit_cache.end())return it->second;
+        unsigned long long n=0;
+        const double work=ntt_shape_query(p,bits,&n,nullptr,nullptr,nullptr,nullptr,nullptr)
+                          ? (double)n*std::log2((double)n) : 1e90;
+        unit_cache[p]=work;return work;
+    }
+    double tree(unsigned long long p) {
+        auto it=tree_cache.find(p);if(it!=tree_cache.end())return it->second;
+        double work=0;
+        for(unsigned long long h=1;h<p;h*=2)
+            work+=(double)((p+h)/(2*h))*unit(h+1);
+        tree_cache[p]=work;return work;
+    }
+    double inverse(unsigned long long k) {
+        auto it=inverse_cache.find(k);if(it!=inverse_cache.end())return it->second;
+        double work=0;unsigned long long m=1;
+        while(m<k) {m=std::min(2*m,k);work+=2*unit(m);}
+        inverse_cache[k]=work;return work;
+    }
+    struct Cost {double init,giant,gtrees,fold,descent,inv,accum,glue,total;};
+    Cost cost(unsigned long long d,unsigned long long p) {
+        const auto i=bound/d+2,g=(i+p-1)/p;
+        const double tw=tree(p),iw=inverse(p+1);
+        Cost c{};
+        c.init=3.4253945078511067e-06*p*std::max(1.0,std::log2((double)d)-2.0)+2.6393747066760531e-05*p+1.7447305084417047e-10*tw;
+        c.giant=3.7068770158438959e-07*i*(6.0+22.0*std::log2((double)bound)/64.0);
+        c.gtrees=7.758513401074988e-11*((double)(i/p)*tw+tree(i%p));
+        c.fold=2.1353197194212299e-10*(g-1)*unit(p+1);
+        c.descent=3.9597124012586936e-10*tw;c.inv=1.5652213657735564e-10*iw;c.accum=1.486006614455004e-06*p;c.glue=0.0382151508709496*g;
+        c.total=c.init+c.giant+c.gtrees+c.fold+c.descent+c.inv+c.accum+c.glue;
+        return c;
+    }
+    void print(unsigned long long d,unsigned long long p,unsigned long long owner) {
+        const auto c=cost(d,p);unsigned long long nf=0,nt=0,h=1;
+        while(2*h<p)h*=2;
+        ntt_shape_query(p+1,bits,&nf,nullptr,nullptr,nullptr,nullptr,nullptr);
+        ntt_shape_query(h+1,bits,&nt,nullptr,nullptr,nullptr,nullptr,nullptr);
+        std::printf("d_model_features: D=%llu P=%llu n_fold=%llu n_tree=%llu tree_work=%.0f "
+                    "inverse_work=%.0f init=%.6f giant=%.6f gtrees=%.6f fold=%.6f descent=%.6f "
+                    "inv=%.6f accum=%.6f glue=%.6f total=%.6f owner_bytes=%llu\n",
+                    d,p,nf,nt,tree(p),inverse(p+1),c.init,c.giant,c.gtrees,c.fold,c.descent,
+                    c.inv,c.accum,c.glue,c.total,owner);
+    }
+};
+
 static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
                     bool choose_d, bool run_s2, int curves,
-                    const char *saved_qx_hex = nullptr, Stage2Tail *saved_result = nullptr)
+                    const char *saved_qx_hex = nullptr, Stage2Tail *saved_result = nullptr, bool d_plan_only = false)
 {
     PolyLayer L;
     L.device = g_device;
@@ -10556,7 +10768,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const char *envr = std::getenv("NTT_ARENA_RESERVE_MB");
         if (envr && *envr) reserve = (size_t)std::strtoull(envr, nullptr, 10) << 20;
     }
-    const size_t cap = (freeb > reserve) ? (freeb - reserve) : (freeb / 2);
+    size_t cap = (freeb > reserve) ? (freeb - reserve) : (freeb / 2);
+    // Planning must respect the user arena cap as well as live free VRAM.
+    const auto user_cap=fuse_env_ull("NTT_ARENA_CAP_KB",0);
+    if(user_cap) cap=std::min(cap,(size_t)user_cap*1024);
     std::printf("stage2_real: device=%d (%s) N_bits=%ld sigma=%llu B1=%llu B2=%llu "
                 "requested_D=%llu choose_d=%d\n", g_device, prop.name, (long)L.S, sigma, B1, B2,
                 D_in, choose_d ? 1 : 0);
@@ -10572,24 +10787,12 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
          * the F TREE, the Newton inverse, the remainder DESCENT and the block ACCUMULATION are all
            proportional to P = phi(D)/2, which GROWS with D.
 
-       There is therefore an interior optimum, and it must be weighted by what a curve actually
-       covers: stage 2 tests the residues +-j (mod D) for j <= P, i.e. the phi(D) UNITS of D, so the
-       fraction of the (B1,B2] primes it can see is phi(D)/D.  A D with many small prime factors is
-       a WORSE curve per unit of B2 -- that is the trade Prime95's `efficiency` score and its
-       "Curve is worth 2.63 ... curves" line make explicit (section 18) and we had no equivalent of.
-
-       THERE IS NO COVERAGE TRADE -- EVERY CANDIDATE COVERS ESSENTIALLY ALL OF (B1,B2], and the first
-       version of this model got that wrong in a way worth recording here, because the measurement
-       caught it immediately.  It weighted each candidate by phi(D)/D, the density of the UNITS among
-       the D residues (0.18 for D=570570), which ranked the prime power D=19^4=130321 (phi/D=0.947)
-       far above the baseline -- and the run it produced was 2x SLOWER (measured 127.00 s against
-       62.93 s at B2=1e11).  The error: a PRIME p > D that does not divide D is automatically
-       COPRIME to D, so its residue p mod D is always one of the units, and the baby set
-       {+-j : j <= P, gcd(j,D) = 1} is EXACTLY the set of units.  Every prime in (B1,B2] larger than
-       D is therefore covered whatever phi(D)/D is; the primes that can be missed are those in
-       (P, D], whose count is pi(D)-pi(P) ~ 1e4 against pi(1e11) ~ 4e9, i.e. a fraction ~1e-5.
-       So the choice is a PURE COST question -- minimise (loop + tree + giant + glue) -- and the
-       table reports the missed-prime estimate as information only.
+       D balances giant steps against the baby/F tree, inverse and descent. The baby set
+       is j<=D/2 with gcd(j,D)=1; its +/- residues enumerate the units. A prime p>D is
+       automatically coprime to D. phi(D)/D is residue density, not prime-coverage probability.
+       Different D still changes the lower-bound/overshoot geometry, so rank by measured
+       cost without claiming identical prime sets. The calibrated resident model above
+       handles actual NTT lengths; the legacy rates below remain the unsupported-scope fallback.
 
        THE MODEL IS FITTED TO MEASURED PHASE TIMES, NOT GUESSED.  The reference is the production
        run of section 56.1 (D=570570, P=51840, imax=3400110, giant_points=3400110):
@@ -10605,6 +10808,35 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        Memory feasibility stays a HARD filter: a candidate whose shapes do not fit the arena is not
        a candidate at all. */
     unsigned long long D = D_in, P_baby = 0;
+    const bool model_requested=fuse_env_ull("NTT_D_MODEL",0)!=0;
+    bool calibrated=model_requested && g_xadd6 && g_s4_mersenne && g_groot_device &&
+        g_s4_output_window && g_s4_chunk_output && g_s4_groot_only && g_s4_pack_direct &&
+        g_s4_oracle_async && g_s4_oracle_pack && g_s4_carry_batch && !g_s4_final_readback &&
+        L.S==4423 && mpz_popcount(L.N)==4423 && curves==1 && B1==1000 &&
+        B2>=100000000000ull && B2<=2011326186870ull &&
+        std::strstr(prop.name,"RTX 4060 Laptop") &&
+        fuse_env_ull("NTT_FUSE_T",12)==12 && fuse_env_ull("NTT_FUSE_M",4)==4 &&
+        fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0 && !fuse_env_ull("NTT_FUSE_COOP_OUTER",0) &&
+        fuse_env_ull("NTT_S4_BATCH_MB",64)==64 &&
+        fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)==64 && fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768)==32768 &&
+        fuse_env_ull("NTT_ARENA_WORKSPACE_POOL",1)!=0 &&
+        fuse_env_ull("NTT_S4_SAMPLE",96)==96 && fuse_env_ull("NTT_S4_CHECK_EVERY",8)==8;
+    for(const char *key:{"NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE","NTT_GFINV_SEG_EXACT",
+                         "NTT_GFINV_BATCH","NTT_FOLD_FLAT","NTT_FOLD_DEVICE","NTT_DEVICE_GLEAF",
+                         "NTT_GROOT_TO_FOLD","NTT_SCALED_DESCENT"})
+        if(!fuse_env_ull(key,0))calibrated=false;
+    if(fuse_env_ull("NTT_S4_HOSTPACK",0) || !fuse_compact_scratch() ||
+       !fuse_env_ull("NTT_S4_FLAT_DIRECT",1))calibrated=false;
+    const auto fold_budget=fuse_env_ull("NTT_FOLD_DEVICE_MAX_MB",640)*1024*1024;
+    auto owner_bytes=[&](unsigned long long p){return 8ull*nw*(9*p+8)+48;};
+    if(D_in && (phi_u64(D_in)/2==0 || B2/D_in+2<=phi_u64(D_in)/2 ||
+                owner_bytes(phi_u64(D_in)/2)>fold_budget))calibrated=false;
+    const double d_scan_begin=now_s();
+    DPhaseModel phase_model((int)L.S,B2);
+    std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu "
+                "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
+                (int)model_requested,(int)calibrated,calibrated ? "resident_xadd6_v1" : "legacy_56_1",
+                (unsigned long long)cap,fold_budget);
     {
         struct DCand {
             unsigned long long D = 0, P = 0, imax = 0, batches = 0;
@@ -10626,6 +10858,12 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             c.giant = (RGIANT / RIM) * (double)c.imax;
             c.glue = (RGLUE / RB) * (double)c.batches;
             c.total = c.loop + c.tree + c.giant + c.glue + RSETUP;
+            if(calibrated) {
+                if(c.P==0 || c.imax<=c.P || owner_bytes(c.P)>fold_budget) {c.total=1e100;return;}
+                const auto e=phase_model.cost(c.D,c.P);
+                c.loop=e.gtrees+e.fold;c.tree=e.init+e.descent+e.inv+e.accum;
+                c.giant=e.giant;c.glue=e.glue;c.total=e.total;
+            }
             const double span = (B2 > B1) ? (double)(B2 - B1) : 1.0;
             c.rate = span / (c.total > 1e-9 ? c.total : 1e-9);
         };
@@ -10666,7 +10904,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         }
         std::sort(cands.begin(), cands.end(),
                   [](const DCand &a, const DCand &b) { return a.total < b.total; });
-        std::printf("d_scan: candidates=%llu (47-smooth D <= %llu) ; model fitted to the section "
+        if(calibrated) std::printf("d_scan: candidates=%llu (47-smooth D <= %llu) ; "
+                                  "model=resident_xadd6_v1 ranked by empirical full Stage2 cost; "
+                                  "actual NTT lengths, partial trees/Newton, owner and arena filters\n",
+                                  (unsigned long long)cands.size(),dlim);
+        else std::printf("d_scan: candidates=%llu (47-smooth D <= %llu) ; model fitted to the section "
                     "56.1 run (rates: loop=%.3f s per imax*log2, tree=%.1f us per leaf, "
                     "giant=%.2f us per step, glue=%.2f ms per batch) ; ranked by TOTAL COST "
                     "(coverage is ~1 for every candidate: a prime p > D is coprime to D, so its "
@@ -10679,21 +10921,24 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             if (shown >= 14 && best.D) break;
             if (checked++ > 4000 && best.D) break;
             unsigned long long tw = 0;
+            if(calibrated && (owner_bytes(c.P)>fold_budget || c.total>=1e80))continue;
             if (!real_run_words(c.P, (int)L.S, &tw, nullptr, nullptr)) continue;
             c.total_words = tw;
             c.fits = ((double)tw * 8.0 <= (double)cap);
             if (!c.fits) continue;
             if (!best.D || c.total < best.total) best = c;
             if (shown < 14) {
-                /* the missed-prime estimate: only (P, D] can be missed, and pi(x) ~ x/ln x */
-                const double missed = (double)c.D / std::log((double)c.D) -
-                                      (double)c.P / std::log((double)(c.P > 2 ? c.P : 3));
+                // i>=1 and j<=D/2: the first giant covers from about D/2.
+                // This is a rough lower-bound diagnostic, not a coverage weight.
+                auto pi_est=[](double x){return x>2 ? x/std::log(x) : x>=2 ? 1.0 : 0.0;};
+                const double missed=std::max(0.0,pi_est((double)c.D/2)-pi_est((double)B1));
                 std::printf("d_scan_choice: D=%llu P=phi/2=%llu imax=%llu batches=%llu "
-                            "units=%.4f missed_primes~%.0f fit=%.0f MB | loop=%.1f tree=%.1f "
+                            "units=%.4f below_first_giant~%.0f fit=%.0f MB | loop=%.1f tree=%.1f "
                             "giant=%.1f glue=%.1f total=%.1f rate=%.3g vals/s\n",
                             c.D, c.P, c.imax, c.batches, c.units, missed,
                             (double)tw * 8.0 / 1048576.0, c.loop, c.tree, c.giant, c.glue, c.total,
                             c.rate);
+                if(calibrated)phase_model.print(c.D,c.P,owner_bytes(c.P));
                 ++shown;
             }
         }
@@ -10704,7 +10949,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             r.P = phi_u64(D_in) / 2;
             model(r);
             unsigned long long tw = 0;
-            const bool okm = real_run_words(r.P, (int)L.S, &tw, nullptr, nullptr);
+            const bool okm = real_run_words(r.P, (int)L.S, &tw, nullptr, nullptr) && tw*8<=cap;
+            if(calibrated)phase_model.print(r.D,r.P,owner_bytes(r.P));
             std::printf("d_scan_reference: D=%llu P=%llu imax=%llu batches=%llu units=%.4f "
                         "fit=%s | loop=%.1f tree=%.1f giant=%.1f glue=%.1f total=%.1f "
                         "rate=%.3g vals/s\n",
@@ -10736,6 +10982,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         }
     }
     P_baby = phi_u64(D) / 2;
+    std::printf("d_scan_wall: seconds=%.6f selected_D=%llu (excluded from stage2_full_wall)\n",
+                now_s()-d_scan_begin,D);
+    if(d_plan_only) {
+        std::printf("d_plan_only: D=%llu P=%llu curves_executed=0 model=%s\n",
+                    D,phi_u64(D)/2,calibrated ? "resident_xadd6_v1" : "legacy_56_1");
+        return 0;
+    }
+
     /* the baby set: j COPRIME TO D, j <= D/2, ascending (the CPU reference's own rule).  Not
        "coprime to N": the first version of this filtered by gcd(N,j) and produced 1155 points
        for D=2310 instead of 240. */
@@ -10794,6 +11048,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     mpz_mod(tmp, tmp, L.N);
     mpz_to_words(ha24, nw, tmp);
     if (mont_selftest(hn, nw, ninv, L.N, R) != 0) return 1;
+    if (xadd_selftest(hn,nw,ninv,L.N,R) != 0) return 1;
 
     /* A Stage1 text save contains ordinary affine X. Do not regenerate the
        exponent or apply the optional Stage1 torsion multiplier on resume. */
@@ -10919,6 +11174,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if (groot_test && std::atoi(groot_test) != 0) groot_lifetime_check(L);
     const char *workspace_test = std::getenv("NTT_ARENA_WORKSPACE_TEST");
     if (workspace_test && std::atoi(workspace_test) != 0) ntt_workspace_check(g_device);
+    if(fuse_env_ull("NTT_FUSE_COOP_TEST",0))ntt_fuse_coop_check(g_device);
     const char *fuse_test = std::getenv("NTT_FUSE_LIFETIME_TEST");
     if (fuse_test && std::atoi(fuse_test) != 0) {
         ntt_fuse_lifetime_check(g_device);
@@ -10927,7 +11183,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const double stage2_fixture_seconds=now_s()-stage2_fixture_begin;
     const char *real_dump=std::getenv("NTT_REAL_F_DUMP");
     bool stage2_extra_fixtures=real_dump && *real_dump;
-    for(const char *key : {"NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
+    for(const char *key : {"NTT_FUSE_COOP_TEST","NTT_FUSE_COOP_BAD","NTT_XADD6_TEST","NTT_XADD6_TEST_BAD","NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
                            "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
         const char *v=std::getenv(key);
@@ -11512,6 +11768,7 @@ static int run_check_F(const char *path, const char *gpu_dump_path, bool evaluat
     mpz_to_words(hmone, nw, R);
 
     if (mont_selftest(hn, nw, ninv, L.N, R) != 0) return 1;
+    if (xadd_selftest(hn,nw,ninv,L.N,R) != 0) return 1;
 
     /* ---- slice S4: ONE arena + ONE device reduction for the WHOLE run -------------------
        The arena is created here (not only for the batched engine) so the F tree, the simple
@@ -11981,7 +12238,7 @@ int main(int argc, char **argv)
     const char *check_F = nullptr, *gpu_dump = nullptr;
     const char *real_n = nullptr;
     bool selftest = false, evaluate = false, evaluate_batched = false;
-    bool real = false, real_hex = false, choose_d = false, real_s2 = false;
+    bool real = false, real_hex = false, choose_d = false, real_s2 = false, d_plan_only = false;
     unsigned long long r_sigma = 26, r_b1 = 1000, r_b2 = 1000000, r_d = 0;
     int r_curves = 1;
     for (int i = 1; i < argc; ++i) {
@@ -12005,6 +12262,7 @@ int main(int argc, char **argv)
         else if (!std::strcmp(a, "--b2")) r_b2 = (unsigned long long)std::strtod(next(), nullptr);
         else if (!std::strcmp(a, "--d")) r_d = (unsigned long long)std::strtod(next(), nullptr);
         else if (!std::strcmp(a, "--choose-d")) choose_d = true;
+        else if (!std::strcmp(a, "--d-plan-only")) d_plan_only = true;
         else if (!std::strcmp(a, "--s2")) real_s2 = true;
         else if (!std::strcmp(a, "--curves")) r_curves = std::atoi(next());
         else {
@@ -12013,7 +12271,7 @@ int main(int argc, char **argv)
                          "[--evaluate] [--evaluate-batched] [--device N]\n"
                          "       stage2_tree_gpu --selftest [--device N]\n"
                          "       stage2_tree_gpu --real --n <decimal>|--n-hex <hex> "
-                         "[--sigma S] [--b1 B1] [--b2 B2] [--d D | --choose-d] [--s2] "
+                         "[--sigma S] [--b1 B1] [--b2 B2] [--d D | --choose-d] [--d-plan-only] [--s2] "
                          "[--curves K] [--device N]\n");
             return 2;
         }
@@ -12029,7 +12287,7 @@ int main(int argc, char **argv)
             std::fprintf(stderr, "%s: --real needs --d <D> or --choose-d\n", NTT_PROBE_NAME);
             return 2;
         }
-        return run_real(real_n, real_hex, r_sigma, r_b1, r_b2, r_d, choose_d, real_s2, r_curves);
+        return run_real(real_n, real_hex, r_sigma, r_b1, r_b2, r_d, choose_d, real_s2, r_curves,nullptr,nullptr,d_plan_only);
     }
     if (!check_F) {
         std::fprintf(stderr, "%s: --check-F <file> is required (write one with "
