@@ -10,6 +10,7 @@ param(
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
     [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'runtime',
     [ValidateSet(0,4)][int]$OuterUnrollU = 0,
+    [switch]$HostOnly,
     [switch]$Rebuild
 )
 $ErrorActionPreference = 'Stop'
@@ -22,6 +23,7 @@ $sources = @('src/cuda/ecm_cuda_stage2.cu', 'src/core/ecm_cuda_stage2_main.cpp',
     'src/core/ecm_expr.cpp', 'src/core/ecm_worktodo.cpp', 'src/core/ecm_queue_config.cpp')
 $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
     'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
+    'src/core/ecm_stage2_factorize.h',
     'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h',
     'tools/bench/stage2_tree_gpu.cu', 'tools/bench/stage2_d_model.cuh', 'tools/bench/ntt_poly_probe.cu', 'tools/bench/ntt_coop_outer.cuh', 'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh',
     'tools/bench/stage2_baby_device.cuh', 'tools/bench/stage2_baby_host.cuh', 'tools/bench/stage2_point_mersenne.cuh', 'tools/bench/ntt_carry_partial.cuh',
@@ -38,6 +40,24 @@ foreach ($dep in $deps) {
     $signature += "$dep=$($sourceHashes[$dep])"
 }
 $signatureText = $signature -join "`n"
+$cudaDeps = @('src/cuda/ecm_cuda_stage2.cu','src/core/ecm_cuda_stage2.h','src/core/ecm_stage2_geometry.h',
+    'src/cuda/ecm_stage2_tune.cuh') + @($deps | Where-Object { $_ -like 'tools/bench/*' })
+if ($HostOnly) {
+    $previous = Get-Content -LiteralPath (Join-Path $Build 'build_manifest.json') -Raw | ConvertFrom-Json
+    if ($previous.architecture -ne $Arch -or $previous.gl_fixed_mode -ne $glMode -or
+        $previous.outer_unroll_u -ne $OuterUnrollU -or $previous.sources[4] -ne $signature[4]) {
+        throw 'HostOnly requires identical CUDA architecture, backend, schedule and toolkit'
+    }
+    foreach ($dep in $cudaDeps) {
+        if ($previous.source_hashes.$dep -ne $sourceHashes[$dep]) { throw "HostOnly CUDA dependency changed: $dep" }
+    }
+    $cudaObject = Join-Path $objDir 'ecm_cuda_stage2.obj'
+    if (-not (Test-Path -LiteralPath $cudaObject)) { throw 'HostOnly CUDA object missing' }
+    if ($previous.objects -and $previous.objects.ecm_cuda_stage2 -ne (Get-FileHash $cudaObject).Hash) {
+        throw 'HostOnly CUDA object changed'
+    }
+    $cudaObjectHash = (Get-FileHash $cudaObject).Hash
+}
 $fresh = -not $Rebuild -and (Test-Path $exe) -and (Test-Path $signaturePath) -and
     ([IO.File]::ReadAllText((Resolve-Path $signaturePath)) -eq $signatureText)
 if (-not $fresh) {
@@ -47,6 +67,10 @@ if (-not $fresh) {
         $obj = Join-Path $objDir "$stem.obj"
         $log = Join-Path $objDir "$stem.log"
         $objects += $obj
+        if ($HostOnly -and $src -eq 'src/cuda/ecm_cuda_stage2.cu') {
+            Write-Host 'reuse CUDA object: matching compiled dependencies and toolkit'
+            continue
+        }
         $line = "call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -DNTT_OUTER_UNROLL_U=$OuterUnrollU " +
             "-I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 " +
             "-c `"$src`" -o `"$obj`" > `"$log`" 2>&1"
@@ -68,9 +92,15 @@ if (-not $fresh) {
             throw "Source changed during build: $dep"
         }
     }
+    if ($HostOnly -and (Get-FileHash $cudaObject).Hash -ne $cudaObjectHash) { throw 'Reused CUDA object changed during host build' }
     [IO.File]::WriteAllText((Join-Path (Resolve-Path $objDir) 'build_signature.txt'), $signatureText)
 } else { Write-Host 'Source/toolkit/architecture signature unchanged; executable reused.' }
 Copy-Item -LiteralPath 'third_party/gmp-zen3/dist/bin/gmp-10.dll' -Destination $Build -Force
+$objectHashes = [ordered]@{}
+foreach ($src in $sources) {
+    $stem = [IO.Path]::GetFileNameWithoutExtension($src)
+    $objectHashes[$stem] = (Get-FileHash -LiteralPath (Join-Path $objDir "$stem.obj")).Hash
+}
 $manifest = [ordered]@{
     exe = (Resolve-Path $exe).Path
     sha256 = (Get-FileHash $exe -Algorithm SHA256).Hash
@@ -80,6 +110,8 @@ $manifest = [ordered]@{
     outer_unroll_u = $OuterUnrollU
     sources = $signature
     source_hashes = $sourceHashes
+    objects = $objectHashes
+    host_only = [bool]$HostOnly
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 (Join-Path $Build 'build_manifest.json')
 Write-Host ("built {0} ({1:N1} MB)" -f $exe, ((Get-Item $exe).Length / 1MB))

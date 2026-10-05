@@ -1932,3 +1932,13 @@ GPU1/生产893/默认检查，S2203/4423/8191的CPU/GMP有效lcm保存点，52�
 新geometry通过实际shape query供数，owner实际准入复用公式；独立--plan-only返回D/P/I/G和模块容量诊断，不执行曲线/推进队列。arena payload v2修正旧FuseCtx估算准入与实际table减账不一致，删除数组每entry虚拟16B，溢出保护保持；旧phase标定因缓存策略变化暂禁，输出legacy估计。
 
 --tune ntt当前固定后端/k16..27/batch1/选定配置，event计时两forward+融合product/scale/inverse；全部输出逐次GMP参考检查，预算过滤、设备/原始样本/SHA指纹与原子JSONL发布接入。独立native386d…a87f44已编译，23原始依赖冻结；原生产893保持。未运行新CLI/GPU曲线/门禁，尚未接入Auto B2及完整成本模型。[第一轮实现与后续范围](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_TUNE_IMPLEMENTATION.md)。
+
+## 58. 因子语料及第一轮实际运行验证（2026-10-05）
+
+新SQLite/GP工具完成目录导入、完整群阶/精确点阶、lcm/choose12标准单素数界限前沿、result复合因子拆解与两项界限同时改善时的默认sigma更新。当前3322因子/250分析/108观察，生产基线20条和b9af候选20条同save配对全通过；另有真实更新/复合拆解回归。有效GPU Stage1保存点与独立CPU参考一致，GPU1覆盖原M223..8171和三个余因子，目标6..17digits。数学界限与引擎实际几何/退化点发现单独记录。
+
+主程序--factorize-hits默认关闭，启用后附proven prime/重数/GP日志/完成状态，保留raw因素，GP失败可离线重试，耗时单列。新candidate保持独立，未晋升生产893。12长度NTT tune全部正确，plan-only/超预算不覆盖旧profile已验证；域卷积吞吐不替代完整Stage2模型。后续仍按P2阶段/Stage1成本→P3收益规划推进。[完整说明、数据快照和复现命令](D:/code/MPA-OpenCl/docs/STAGE2_FACTOR_DATASET.md)。
+
+## 59. 工作因子库只保留最优sigma（2026-10-05）
+
+按用户确认移除历史表，仅mersennes/factors。每因子一条最佳sigma及完整群阶/点阶分解，B1/B2均不增大且一项严格减小时才替换。数据增长取决于因子数，不取决于扫描曲线数；无因子/失败/导入记录不持久化。迁移保留1155指数/3322因子/33最佳sigma，核心值一致，工作库1140→288KiB。历史快照不变，当前schema和命令以[README](D:/code/MPA-OpenCl/tools/ecm_dataset/README.md)为准；本轮未重跑GPU或GP测试。

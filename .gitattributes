@@ -8,3 +8,8 @@
 # 可选：统一换行（跨平台）
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Dataset snapshots include SHA256 of their raw bytes; checkout must preserve
+# their line endings, including CSV CRLF and JSONL LF.
+data/ecm_stage2_snapshot_20261005/** -text
+tools/ecm_dataset/*.sqlite -text -diff

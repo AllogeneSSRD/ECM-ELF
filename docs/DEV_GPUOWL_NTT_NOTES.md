@@ -4428,3 +4428,21 @@ FuseCtx拆出无分配describe，准入base+tables用实际调度payload，统�
 --tune ntt在同一固定后端调用两forward+融合product/scale/inverse，k16..27/batch1/选定配置/一次预热+指定重复；events外GMP参考核验所有L输出。按用户payload预算和free减768MiB过滤形状，逐样本JSONL保存设备/配置/原始时间，CNG SHA256核验exe/manifest；成功原子发布，失败留partial。它不含packing/carry/模N归约/传输，不直接作为完整Stage2模型。
 
 独立native编译CUDA310.5s/main4.2s/其他2.5+3.1+2.9s/link成功，SHA386d2e1b…a87f44、sm89/PTX3/outer0，23原始依赖含builder冻结。内核行尾保持，原生产893保持。本轮未运行CLI/GPU tune/曲线/门禁，无新性能或算术通过结论。完整活跃显存清单、跨位宽/路径phase、Stage1摊销、Auto B2与profile消费仍待推进。[命令、源码line、公式、构建及限制](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_TUNE_IMPLEMENTATION.md)。
+
+## 84. 生产因子数据集、复合拆解与NTT运行验证（2026-10-05）
+
+按当前目标建立SQLite语料：HTML导入1154指数/3321因子，逐项pow(2,e,f)=1；另加M256独立记录，当前1155指数/3322因子，digital为十进制位数。sigma/界限/阶初始NULL，250完成GP群阶/点阶分解、485项界限、108观察、40正式配对运行，32因子默认已填。PARAM0沿用Stage1 GP模型，增加ellorder及minimal证明；标准单素数semismooth界限使用点阶、lcm/choose12单独计算，保留不可支配前沿。
+
+GPU1生产Stage1生成7个全M223/431/1367/2657/4933/6977/8171保存点，另3个经过真实Stage1 GCD剥离的余因子；CPU normalized X/checksum逐项一致。生产893正/目标负20条全部预期，b9af候选同save20条raw因子逐项一致，必需检查全通过；目标覆盖6..17digits。47条真实Stage2结果/日志/save原文及SHA便携归档，CPU合成fixture另列不混入。
+
+新候选--factorize-hits可用GP分解raw composite，证明素性+GMP重构，保留raw/result并附prime_factors/multiplicity/complete或unresolved，GP时间独立计。真实288431454463=196687*1466449拆解正确；46个配对raw拆解完整。数据库实际原生回归sigma6/(29,563)→sigma9/(9,227)更新成功，重复导入新增0。Python单元5/5、原生更新3/3、CPU前端fixture2/2；独立审计1182点阶标量/313素数/20保存点及native拆解通过。
+
+确认退化giant也会暴露复合residual order：M1367/sigma17/f10937点阶2760，B1=2后残阶1380，D210时i46令giant为无穷远，正/目标负均额外找到10937。数学单素数界限不是本引擎最小请求B1/B2证明，运行界限单列；负对照离目标4D避开扫描尾部。
+
+b9af/sm89/PTX3/outer0/24 raw依赖冻结；builder增加受CUDA依赖/object/SHA保护的HostOnly，生产893及外部GPU0未修改。12长度k16..27的NTT域卷积tune（每项3样本+1预热）全部L输出正确，k27 median111.750145ms/8.9485iter/s/2072.133MiB。plan-only与全部超预算保护旧profile2/2。未宣称大规模性能提升，Auto B2尚需完整phase/Stage1成本和收益规划。[实现、公式、生产数据、来源行号及复现](D:/code/MPA-OpenCl/docs/STAGE2_FACTOR_DATASET.md)。
+
+## 85. 因子库按用户要求精简为两表（2026-10-05）
+
+每因子只保留一个最优sigma，只有B1/B2均不增大且至少一个严格减小时替换；相等或不可比较丢弃候选。工作库仅mersennes/factors，完整群阶/点阶和分解直接放因子行，数学界限即时计算；删除sources/analyses/frontier/observations/production_runs及历史字段。导入流式处理，无因子跳过，不保存导入、失败或运行日志；choose12只输出派生界限，最优比较沿用lcm。
+
+迁移保留1155指数/3322因子/33最优sigma，核心列事务内逐项一致，一次性旧库备份后VACUUM：1140→288KiB（−74.7%）。所有CLI/runner/export/audit及现有回归脚本同步两表；旧快照/实验日志原样保留，runner旧plan指纹需旧代码或重新准备。仅执行实际数据库迁移，未新增或运行测试/GPU曲线。[使用和迁移](D:/code/MPA-OpenCl/tools/ecm_dataset/README.md)。

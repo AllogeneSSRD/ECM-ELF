@@ -7,6 +7,7 @@
 #include "ecm_queue_config.h"
 #include "ecm_worktodo.h"
 #include "ecm_stage2_fingerprint.h"
+#include "ecm_stage2_factorize.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -208,6 +209,10 @@ struct Options {
     std::string tune, tune_file;
     int tune_first = 16, tune_last = 27, tune_repeats = 5;
     uint64_t tune_memory_mb = 1024;
+    bool factorize_hits = false;
+    bool has_gp = false, has_factor_timeout = false;
+    std::string gp = "gp.exe";
+    unsigned factor_timeout = 30;
 };
 Options arguments(int argc, char **argv) {
     Options o;
@@ -237,6 +242,14 @@ Options arguments(int argc, char **argv) {
         }
         else if (a == "--dry-run") o.dry = true;
         else if (a == "--plan-only") o.plan_only = true;
+        else if (a == "--factorize-hits") o.factorize_hits = true;
+        else if (a == "--gp") { o.gp = value(); o.has_gp = true; }
+        else if (a == "--factor-timeout") {
+            const auto seconds = num();
+            if (!seconds || seconds > 600) throw std::runtime_error("factor-timeout must be 1..600 seconds");
+            o.factor_timeout = static_cast<unsigned>(seconds);
+            o.has_factor_timeout = true;
+        }
         else if (a == "--tune") o.tune = value();
         else if (a == "--tune-file") { o.tune_file = value(); o.tune_options = true; }
         else if (a == "--length-log2") {
@@ -271,6 +284,9 @@ Options arguments(int argc, char **argv) {
 struct Settings {
     uint64_t b2 = 0, d = 0, batch = 64, arena = 0;
     std::string results;
+    bool factorize_hits = false;
+    std::string gp;
+    uint64_t factor_timeout = 30;
 };
 Settings stage2_ini(const fs::path &path, int worker) {
     std::ifstream in(path);
@@ -297,6 +313,12 @@ Settings stage2_ini(const fs::path &path, int worker) {
     };
     get("STAGE2_B2", s.b2); get("STAGE2_D", s.d);
     get("STAGE2_BATCH_MB", s.batch); get("STAGE2_ARENA_MB", s.arena);
+    uint64_t factorize=0; get("STAGE2_FACTORIZE_HITS",factorize);
+    if(factorize>1)throw std::runtime_error("stage2_factorize_hits must be 0 or 1");
+    s.factorize_hits=factorize!=0;
+    get("STAGE2_FACTOR_TIMEOUT",s.factor_timeout);
+    if(!s.factor_timeout || s.factor_timeout>600)throw std::runtime_error("stage2_factor_timeout must be 1..600");
+    if(global.count("STAGE2_GP"))s.gp=global["STAGE2_GP"];
     if (global.count("STAGE2_RESULTS_FILE")) s.results = global["STAGE2_RESULTS_FILE"];
     return s;
 }
@@ -394,6 +416,10 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     arg(L"--record-offset", r.offset); arg(L"--record-hash", r.hash); arg(L"--record-index", r.index);
     arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
     cmd += L" --results " + quote(results.wstring());
+    if (o.factorize_hits) {
+        cmd += L" --factorize-hits --gp " + quote(fs::path(o.gp).wstring());
+        arg(L"--factor-timeout", o.factor_timeout);
+    }
     STARTUPINFOW si{}; si.cb = sizeof(si);
     Handle logfile;
     if (!log.empty()) {
@@ -445,6 +471,13 @@ int curve_worker(const Options &o) {
     }
     if (code || result.empty()) return code ? code : 1;
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    double factor_seconds = 0;
+    if (o.factorize_hits) {
+        const auto begin = std::chrono::steady_clock::now();
+        result += ',' + ecm_stage2::factor_details(result, n.z, fs::path(o.gp), o.factor_timeout,
+                                                   fs::path(o.results).parent_path() / "factor_details");
+        factor_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+    }
     const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     append(o.results, "{\"status\":" + json_string(status) + ",\"save\":" + json_string(o.save) +
@@ -453,6 +486,8 @@ int curve_worker(const Options &o) {
         ",\"N_hex\":" + json_string(r.n) + ",\"sigma\":" + std::to_string(r.sigma) +
         ",\"B1\":" + std::to_string(r.b1) + ",\"B2\":" + std::to_string(o.b2) +
         ",\"requested_D\":" + std::to_string(o.d) + ",\"seconds\":" + std::to_string(seconds) +
+        ",\"factorization_seconds\":" + std::to_string(factor_seconds) +
+        ",\"param\":0" +
         ",\"timestamp_ms\":" + std::to_string(timestamp) + "," + result + "}");
     return 0;
 }
@@ -462,6 +497,7 @@ void help() {
         "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results FILE\n"
         "         --log FILE --dry-run --help\n"
+        "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
         "         --plan-only (queries device memory and D; runs no curve)\n"
         "Tune: --tune ntt --device N [--length-log2 16:27] [--tune-repeats 5]\n"
         "      [--tune-memory-mb 1024] [--tune-file stage2_tune.jsonl]\n"
@@ -486,6 +522,9 @@ int driver(Options o) {
     if (!ecm_queue_config_load(ini.string(), o.worker, cfg) && !o.ini.empty())
         throw std::runtime_error("cannot read explicit ini: " + ini.string());
     Settings s = stage2_ini(ini, o.worker);
+    if(s.factorize_hits)o.factorize_hits=true;
+    if(!o.has_gp && !s.gp.empty())o.gp=s.gp;
+    if(!o.has_factor_timeout)o.factor_timeout=static_cast<unsigned>(s.factor_timeout);
     const fs::path base = ini.parent_path();
     const fs::path worktodo = o.worktodo.empty() ? absolute_from(base, cfg.worktodo) : absolute_from(cwd, o.worktodo);
     const fs::path finished = absolute_from(base, cfg.finished);
@@ -551,7 +590,7 @@ int driver(Options o) {
     Handle lock;
     if (queue) {
         if (!fs::exists(worktodo)) throw std::runtime_error("worktodo not found: " + worktodo.string());
-            if (!o.dry && !o.plan_only) {
+        if (!o.dry && !o.plan_only) {
             // One production consumer per queue file also serializes the shared
             // atomic rewrite across worker sections. Use separate queues for
             // concurrent processes in this minimal driver.

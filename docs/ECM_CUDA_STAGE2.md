@@ -274,3 +274,15 @@ D138标定均值full56.643870s：init26.59%，baby14.08%、CPUaffine6.10%、F树
 NTT tune要求固定后端构建（例如`-GlBackend ptx`），接受`--length-log2 16:27`、`--tune-repeats 5`、`--tune-memory-mb 1024`、`--tune-file FILE.jsonl`。当前batch1/选定配置，一次iter为两forward加融合product/scale/inverse；不含packing/carry/模N归约/传输。每次核验全部L输出；超预算长度跳过，成功后原子发布JSONL profile，失败保留partial。
 
 arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到明确标注的legacy估计。原生产目录与893二进制保持；新功能仅在独立实验构建内，本轮仅编译，无新增运行/门禁/性能结果。`--auto-b2`仍未实现，B2原有语义保持。[构建、命令、source-line、公式与限制](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_TUNE_IMPLEMENTATION.md)。
+
+## 2026-10-05 后续验证与可选复合因子拆解
+
+独立b9af候选已运行12长度NTT tune、plan-only与失败profile保护；20条同save生产基线/候选配对全部通过。仍保留生产893默认，尚未标定大B1/B2完整成本，`--auto-b2`未接入。
+
+候选支持`--factorize-hits [--gp gp.exe] [--factor-timeout 30]`；INI使用`stage2_factorize_hits=1`、`stage2_gp=绝对路径`、`stage2_factor_timeout=30`，CLI显式GP/timeout优先。保留原始`factors`，附加`prime_factors`、逐raw的`factor_analysis`素数/重数/证明/GP日志及`factorization_complete`。GP失败/超时标记unresolved，可离线重试；`seconds`不含可选GP时间，新增`factorization_seconds`单列。该功能默认关闭，需安装PARI/GP。
+
+新增Python/SQLite数据集工具，导入本地梅森数因子表、计算PARAM0群阶/点阶分解和标准单素数B1/B2前沿、导入原生result并在两项界限都改善时更新默认sigma。无因子记录和复合因子的每个proven prime均保留。数据集的B2=0表示Stage1-only，不能直接当原生零B2配置。[完整使用说明、47条真实Stage2证据及限制](D:/code/MPA-OpenCl/docs/STAGE2_FACTOR_DATASET.md)。
+
+## 2026-10-05 因子数据库精简
+
+工作库现在只有mersennes/factors，每因子只保留一个最优sigma及其完整群阶/点阶分解。B1/B2都不增大且至少一项严格减小时替换，不保存其他sigma、运行/导入/分析历史。原生主程序result格式保持，离线ingest流式更新核心记录；旧七表库需migrate_dataset.py一次性迁移。[当前工具说明](D:/code/MPA-OpenCl/tools/ecm_dataset/README.md)。
