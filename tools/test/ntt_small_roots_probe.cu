@@ -143,9 +143,15 @@ static int tile_check()
 }
 static int root_bench(int k,int t,int operation,int candidate)
 {
+#if NTT_GL_FIXED_MODE >= 0
+    if(candidate==4)return 2; // This candidate compares runtime reducer modes.
+#endif
     TileBuffers state(k,t,operation);root_attributes((1u<<t)*8);cudaEvent_t start,end;CK(cudaEventCreate(&start));CK(cudaEventCreate(&end));int run=0;
     for(int mode:{0,1,1,0,1,0,0,1}) {
-        fuse_fixture_env("NTT_GL_SHORT_REDUCE",mode && candidate==4 ? "1" : "0");ntt_gl_reduce_configure();
+#if NTT_GL_FIXED_MODE < 0
+        fuse_fixture_env("NTT_GL_SHORT_REDUCE",mode && candidate==4 ? "1" : "0");
+#endif
+        ntt_gl_reduce_configure();
         const int method=mode && candidate!=4 ? candidate : 0;
         double seconds=0;Word wrong=0;
         for(int repeat=0;repeat<4;++repeat) {
@@ -155,7 +161,7 @@ static int root_bench(int k,int t,int operation,int candidate)
             CK(cudaEventRecord(end));CK(cudaEventSynchronize(end));float ms=0;CK(cudaEventElapsedTime(&ms,start,end));if(repeat)seconds+=ms/1000.0;
             wrong=state.check();if(wrong)return 3;
         }
-        std::printf("small_root_bench: run=%d mode=%d candidate=%d k=%d t=%d operation=%d N=%llu threads=512 seconds=%.9f bad=%llu\n",++run,mode,candidate,k,t,operation,state.n,seconds/3,wrong);
+        std::printf("small_root_bench: run=%d mode=%d candidate=%d k=%d t=%d operation=%d N=%llu threads=512 seconds=%.9f bad=%llu fixed=%d\n",++run,mode,candidate,k,t,operation,state.n,seconds/3,wrong,NTT_GL_FIXED_MODE);
     }
     CK(cudaEventDestroy(start));CK(cudaEventDestroy(end));return 0;
 }

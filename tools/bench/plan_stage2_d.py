@@ -39,14 +39,14 @@ def main():
     p.add_argument('--bits',type=int,default=4423);p.add_argument('--arena-mb',type=int,default=6300)
     p.add_argument('--fold-mb',type=int,default=640);p.add_argument('--output',type=Path,required=True)
     p.add_argument('--baby-mb',type=int,default=512,help='GPU baby temporary payload budget for profile 4')
-    a=p.parse_args();fit=json.loads(a.fit.read_text());rates=fit['rates'];profile=fit.get('feature_profile',0);rows=[];count=0
-    if profile==5:load_fixed_ptx_weights(fit['ntt_weights'])
+    a=p.parse_args();fit=json.loads(a.fit.read_text(encoding='utf-8'));rates=fit['rates'];profile=fit.get('feature_profile',0);rows=[];count=0
+    if profile in (5,6):load_fixed_ptx_weights(fit['ntt_weights'])
     for d,pb in candidates(200000000):
         count+=1
         owner=8*((a.bits+63)//64)*(9*pb+8)+48
         if owner>a.fold_mb*(1<<20):continue
         baby_bytes=0
-        if profile in (4,5):
+        if profile in (4,5,6):
             baby_count=pb;nodes=0
             for _ in range(8):baby_count=(baby_count+1)//2;nodes+=baby_count
             baby_bytes=8*((3*pb+5)*((a.bits+63)//64)+pb+nodes*((a.bits+63)//64))+baby_count

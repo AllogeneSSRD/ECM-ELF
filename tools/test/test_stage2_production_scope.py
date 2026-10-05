@@ -16,9 +16,12 @@ def main():
     p.add_argument('--ptx-reduce',type=int,choices=(0,1))
     p.add_argument('--fixed-mode',type=int,choices=(0,1,3))
     p.add_argument('--fixed-ptx-model',action='store_true',help='Expect calibrated profile5 in a fixed3 native build')
+    p.add_argument('--point-fold-model',action='store_true',help='Expect profile6 for point1, profile5 for point0')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
-    if a.fixed_ptx_model and (a.fixed_mode!=3 or not a.baby_device):
+    fixed_model=a.fixed_ptx_model or a.point_fold_model
+    if fixed_model and (a.fixed_mode!=3 or not a.baby_device):
         p.error('Fixed PTX model scope requires fixed-mode3 and GPU baby')
+    if a.fixed_ptx_model and a.point_fold_model:p.error('Choose one model expectation')
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();save=a.save.resolve();sha=hashlib.sha256(exe.read_bytes()).hexdigest()
     save_bytes=save.read_bytes();save_sha=hashlib.sha256(save_bytes).hexdigest()
@@ -26,6 +29,7 @@ def main():
     for byte in line:fingerprint=((fingerprint^byte)*1099511628211)&((1<<64)-1)
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_ARENA_CAP_KB='6451200',NTT_NO_PROGRESS='1',NTT_BABY_DEVICE=str(a.baby_device))
+    env['NTT_POINT_MERSENNE']='1' if a.point_fold_model else '0'
     if a.shift_scale is not None:env['NTT_GL_SHIFT_SCALE']=str(a.shift_scale)
     if a.ptx_reduce is not None:env['NTT_GL_PTX_REDUCE']=str(a.ptx_reduce)
     rows=[]
@@ -37,15 +41,18 @@ def main():
         fixed_overrides={'NTT_FUSE_COOP_OUTER':'0','NTT_FUSE_M':'3','NTT_FUSE_WARP_TAIL':'0',
                          'NTT_FUSE_COMPACT_SCRATCH':'0','NTT_GL_SHIFT_SCALE':'1',
                          'NTT_BABY_DEVICE':'0','NTT_XADD6':'0'}
-        if a.fixed_ptx_model:overrides+=tuple(fixed_overrides)
+        if fixed_model:overrides+=tuple(fixed_overrides)
+        if a.point_fold_model:
+            fixed_overrides['NTT_POINT_MERSENNE']='0';overrides+=('NTT_POINT_MERSENNE',)
         for override in overrides:
             name=f'{flag}_{override or "default"}';log=out/(name+'.log');result=out/(name+'.jsonl')
             ee=env|{'NTT_GL_SHORT_REDUCE':str(flag)}
             if override:ee[override]=fixed_overrides.get(override,'0' if override=='NTT_BABY_DEVICE_MAX_MB' else '1')
-            enabled=int(override is None and (not a.baby_device or flag==1) and not a.shift_scale and
-                        (not actual_ptx or a.fixed_ptx_model) and
-                        (a.fixed_mode is None or a.fixed_ptx_model))
-            version=('resident_fixed_ptx_v1' if a.fixed_ptx_model else 'resident_baby_v1' if a.baby_device else 'resident_short_v1' if flag else 'resident_shape_v1') if enabled else 'legacy_56_1'
+            enabled=int(override in (None,'NTT_POINT_MERSENNE') and (not a.baby_device or flag==1) and not a.shift_scale and
+                        (not actual_ptx or fixed_model) and
+                        (a.fixed_mode is None or fixed_model))
+            version=('resident_point_fold_v1' if a.point_fold_model and ee['NTT_POINT_MERSENNE']=='1' else
+                     'resident_fixed_ptx_v1' if fixed_model else 'resident_baby_v1' if a.baby_device else 'resident_short_v1' if flag else 'resident_shape_v1') if enabled else 'legacy_56_1'
             cmd=[str(exe),'--curve-worker','--save',str(save),'--record-offset','0',
                  '--record-hash',str(fingerprint),'--record-index','1','--b2','100000000000',
                  '--d','330330','--device',str(a.device),'--results',str(result)]

@@ -701,8 +701,9 @@ __device__ __forceinline__ void s2g_mont_mul(unsigned long long *r,
         }
         t[i + nw] = c;                 /* untouched before this iteration (SOS invariant) */
     }
+    unsigned long long out[NW];
     const int mersenne_bits=g_s2g_point_mersenne_bits;
-    if(mersenne_bits){s2g_mersenne_mont_reduce<NW>(r,t,n,nw,mersenne_bits);return;}
+    if(mersenne_bits){s2g_mersenne_mont_reduce<NW>(r,t,n,nw,mersenne_bits,out);return;}
     for (int i = 0; i < nw; ++i) {
         const unsigned long long m = t[i] * ninv;
         unsigned long long c = 0;
@@ -720,7 +721,6 @@ __device__ __forceinline__ void s2g_mont_mul(unsigned long long *r,
             ++k;
         }
     }
-    unsigned long long out[NW];
     for (int i = 0; i < nw; ++i) out[i] = t[nw + i];
     if (t[2 * nw] != 0 || s2g_ge_n(out, n, nw)) s2g_sub_n(out, n, nw);
     for (int i = 0; i < nw; ++i) r[i] = out[i];
@@ -10800,10 +10800,12 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const bool gl_short=(ntt_gl_reduce_requested_mode()&1u)!=0;
     const bool gl_shift_scale=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
     const bool gl_ptx=NTT_GL_FIXED_MODE==3 || fuse_env_ull("NTT_GL_PTX_REDUCE",0)!=0;
-    // Point-fold timings are not part of any existing calibrated profile.
-    if(fuse_env_ull("NTT_POINT_MERSENNE",0))calibrated=false;
+    const bool point_requested=fuse_env_ull("NTT_POINT_MERSENNE",0)!=0;
     // Only the measured immutable PTX/GPU baby backend has profile5 rates.
     const bool fixed_ptx=NTT_GL_FIXED_MODE==3 && d_fixed_ptx_rates_valid && gl_short && shape_ntt && baby_requested;
+    const bool point_fold=point_requested && fixed_ptx && d_point_fold_rates_valid &&
+        L.S==4423 && mpz_popcount(L.N)==4423;
+    if(point_requested && !point_fold)calibrated=false;
     if(gl_shift_scale || (gl_ptx && !fixed_ptx) || (NTT_GL_FIXED_MODE>=0 && !fixed_ptx))calibrated=false;
     if(gl_short && !(shape_ntt && (fixed_ptx ? d_fixed_ptx_rates_valid : d_short_rates_valid)))calibrated=false;
     if(baby_requested && !(gl_short && shape_ntt && (fixed_ptx ? d_fixed_ptx_rates_valid : d_baby_rates_valid) && baby_cap))calibrated=false;
@@ -10816,8 +10818,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 owner_bytes(phi_u64(D_in)/2)>fold_budget ||
                 (baby_requested && d_baby_payload_bytes(phi_u64(D_in)/2,nw)>baby_cap)))calibrated=false;
     const double d_scan_begin=now_s();
-    DPhaseModel phase_model((int)L.S,B2,fixed_ptx ? 5 : baby_requested ? 4 : gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
-    const char *model_version=calibrated ? (fixed_ptx ? "resident_fixed_ptx_v1" : baby_requested ? "resident_baby_v1" : gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
+    DPhaseModel phase_model((int)L.S,B2,point_fold ? 6 : fixed_ptx ? 5 : baby_requested ? 4 : gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
+    const char *model_version=calibrated ? (point_fold ? "resident_point_fold_v1" : fixed_ptx ? "resident_fixed_ptx_v1" : baby_requested ? "resident_baby_v1" : gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
     std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu gl_short=%d gl_shift_scale=%d gl_ptx=%d "
                 "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
                 (int)model_requested,(int)calibrated,model_version,

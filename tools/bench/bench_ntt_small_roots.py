@@ -11,6 +11,8 @@ def main():
     a.output.mkdir(parents=True,exist_ok=True)
     if any(a.output.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();manifest=json.loads((exe.parent/'manifest.json').read_text(encoding='utf-8-sig'))
+    fixed=manifest.get('gl_fixed_mode',-1)
+    if fixed>=0 and 4 in a.methods:raise ValueError('Reducer A/B method4 requires a runtime build')
     repo=Path(__file__).resolve().parents[2];sha=hashlib.sha256(exe.read_bytes()).hexdigest()
     def verify():
         assert hashlib.sha256(exe.read_bytes()).hexdigest()==sha==manifest['sha256'].lower()
@@ -26,10 +28,13 @@ def main():
                 verify();started=time.monotonic();r=subprocess.run(cmd,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=180)
                 text=r.stdout.decode('utf-8',errors='replace');(a.output/(name+'.log')).write_text(text,encoding='utf-8');verify()
                 assert r.returncode==0,(name,r.returncode,text[-1000:])
+                if fixed>=0:
+                    assert f'ntt_gl_reduce_mode: device={a.device} short={fixed&1} ptx={fixed>>1} fixed={fixed}' in text,name
                 rows=[dict(re.findall(r'(\w+)=([^\s]+)',line)) for line in re.findall(r'small_root_bench: (.*)',text)]
                 assert [int(r['mode']) for r in rows]==[0,1,1,0,1,0,0,1] and [int(r['run']) for r in rows]==list(range(1,9)),name
                 assert all(r['bad']=='0' and int(r['candidate'])==method and int(r['operation'])==operation and int(r['k'])==size and
                            int(r['N'])==1<<size and int(r['t'])==a.tile_bits and int(r['threads'])==512 for r in rows),name
+                if fixed>=0:assert all(int(r['fixed'])==fixed for r in rows),name
                 memory=re.search(r'small_root_memory: requested_peak_bytes=(\d+) live_bytes=0',text);assert memory,name
                 seconds={str(m):[float(r['seconds']) for r in rows if int(r['mode'])==m] for m in (0,1)}
                 means={m:statistics.mean(v) for m,v in seconds.items()}

@@ -17,6 +17,9 @@ struct ProductionDefaults {
 #else
         set_default("NTT_GL_SHORT_REDUCE", "1");
 #endif
+#if defined(NTT_GL_FIXED_MODE) && NTT_GL_FIXED_MODE == 3
+        set_default("NTT_POINT_MERSENNE", "1");
+#endif
         set_default("NTT_FUSE_COOP_OUTER", "2");
         set_default("NTT_DEVICE_GLEAF_MAX_MB", "512");
         set_default("NTT_FOLD_DEVICE_MAX_MB", "640");

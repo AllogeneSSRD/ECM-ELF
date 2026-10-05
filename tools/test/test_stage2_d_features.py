@@ -16,6 +16,7 @@ def main():
     p.add_argument('--short-fit',type=Path)
     p.add_argument('--baby-fit',type=Path)
     p.add_argument('--fixed-ptx-fit',type=Path)
+    p.add_argument('--point-fold-fit',type=Path)
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
     if any(a.output.iterdir()):raise ValueError('Use a fresh output directory')
     fits={0:json.loads(a.old_fit.read_text(encoding='utf-8')),2:json.loads(a.shape_fit.read_text(encoding='utf-8'))}
@@ -30,6 +31,10 @@ def main():
         fits[5]=json.loads(a.fixed_ptx_fit.read_text(encoding='utf-8'))
         assert fits[5]['feature_profile']==5
         load_fixed_ptx_weights(fits[5]['ntt_weights'])
+    if a.point_fold_fit:
+        fits[6]=json.loads(a.point_fold_fit.read_text(encoding='utf-8'))
+        assert fits[6]['feature_profile']==6
+        load_fixed_ptx_weights(fits[6]['ntt_weights'])
     sha=hashlib.sha256(a.exe.read_bytes()).hexdigest();checks=[]
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     for profile in fits:
@@ -49,7 +54,7 @@ def main():
                 for key,field in (('init','init'),('giant','giant'),('gtrees','gtrees'),('fold','fold'),
                                   ('descent','descent'),('inv','inv'),('accum','accum'),('glue','residual'),('total','full')):
                     assert abs(float(row[key])-prediction[field])<=.000001,(name,key,row[key],prediction[field])
-                if profile in (4,5):
+                if profile in (4,5,6):
                     count=f['P'];nodes=0
                     for _ in range(8):count=(count+1)//2;nodes+=count
                     expected=8*((3*f['P']+5)*70+f['P']+nodes*70)+count

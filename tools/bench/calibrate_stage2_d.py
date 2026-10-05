@@ -51,6 +51,25 @@ def load_fixed_ptx_weights(data):
     FIXED_PTX_WEIGHTS=values
     tree.cache_clear();inverse.cache_clear()
 
+def verify_fixed_ntt_sources(weights,sources):
+    """Point profile 6 may reuse profile 5's NTT component, only with identical code."""
+    measured=json.loads(Path(weights['measurements']).read_text(encoding='utf-8'))
+    source=measured['manifests']['ptx']['sources']
+    for name in ('tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh',
+                 'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh'):
+        if sources.get(name,'').lower()!=source[name].lower():
+            raise ValueError('Curve arithmetic sources differ from frozen NTT weights: '+name)
+
+def verify_point_profile(profile,env,text,bits):
+    """A requested mode and its observed exact-modulus dispatch must agree."""
+    requested=int(env.get('NTT_POINT_MERSENNE','0'))
+    if profile==6:
+        if requested!=1 or bits!=4423 or \
+           'point_mersenne_mode: requested=1 enabled=1 bits=4423 nw=70' not in text:
+            raise ValueError('Point-fold fit needs observed exact M4423 Montgomery fold')
+    elif requested!=0 or re.search(r'point_mersenne_mode:.*enabled=1\b',text):
+        raise ValueError('Point-fold arithmetic cannot reuse a historical feature profile')
+
 def command_bits(cmd):
     if '--n-hex' in cmd:return int(cmd[cmd.index('--n-hex')+1],16).bit_length()
     if '--save' in cmd:
@@ -91,8 +110,8 @@ def shape(p,bits):
 def unit(p,bits,profile=0):
     n,_,_=shape(p,bits)
     k=n.bit_length()-1
-    if profile==5 and FIXED_PTX_WEIGHTS is None:raise ValueError('Fixed PTX weights not loaded')
-    weights=FIXED_PTX_WEIGHTS if profile==5 else SHORT_WEIGHTS if profile in (3,4) else SHAPE_WEIGHTS if profile==2 else {}
+    if profile in (5,6) and FIXED_PTX_WEIGHTS is None:raise ValueError('Fixed PTX weights not loaded')
+    weights=FIXED_PTX_WEIGHTS if profile in (5,6) else SHORT_WEIGHTS if profile in (3,4) else SHAPE_WEIGHTS if profile==2 else {}
     return n*k*weights.get(k,1.0)
 
 @lru_cache(None)
@@ -147,6 +166,8 @@ def main():
                    help='0 original, 1 forced cooperative, 2 measured shape policy')
     p.add_argument('--short-reduce',type=int,choices=(0,1),default=0)
     p.add_argument('--baby-device',type=int,choices=(0,1),default=0)
+    p.add_argument('--point-mersenne',type=int,choices=(0,1),default=0,
+                   help='1 calibrates separate point-fold profile 6; 0 preserves historical profiles')
     p.add_argument('--fixed-ptx-weights',type=Path,help='Frozen k16..27 full-convolution weights for fixed mode3')
     p.add_argument('--source-manifest',type=Path,help='Verify raw compiled dependencies before and after each curve')
     p.add_argument('--expected-q-sha256',required=True,help='SHA256 of lowercase affine Q hex from an independent reference')
@@ -158,6 +179,8 @@ def main():
         if prov.get('gl_fixed_mode')!=3 or not a.baby_device or not a.short_reduce or a.coop_mode!=2:
             raise ValueError('Fixed PTX calibration needs verified fixed3/GPU baby/short/shape')
         load_fixed_ptx_weights(frozen_weights)
+    if a.point_mersenne and (not frozen_weights or not a.source_manifest):
+        raise ValueError('Point-fold calibration requires frozen NTT weights and compiled source manifest')
     base={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     base.update({k:str(v) for k,v in prov['env'].items() if v is not None})
     wanted='short_fold' if a.short_reduce else 'shape_outer' if a.coop_mode==2 else '6_mont'
@@ -169,7 +192,7 @@ def main():
     if frozen_weights:base.update(NTT_GL_PTX_REDUCE='1',NTT_GL_SHIFT_SCALE='0')
     base.pop('NTT_FUSE_TRACE',None);base.update(NTT_XADD6_TEST='0',NTT_XADD6_TEST_BAD='0',NTT_D_MODEL='0',
         NTT_FUSE_COOP_OUTER=str(a.coop_mode),NTT_FUSE_COOP_TEST='0',NTT_FUSE_COOP_BAD='0',
-        NTT_GL_SHORT_REDUCE=str(a.short_reduce))
+        NTT_GL_SHORT_REDUCE=str(a.short_reduce),NTT_POINT_MERSENNE=str(a.point_mersenne))
     if a.baby_device:
         if not a.short_reduce or a.coop_mode!=2:raise ValueError('GPU baby fit requires short reducer and shape policy')
         base.update(NTT_BABY_DEVICE='1',NTT_BABY_DEVICE_CHECK='0',NTT_BABY_DEVICE_TEST='0',
@@ -190,7 +213,8 @@ def main():
         raise RuntimeError('Shape-policy calibration needs the measured M4423/B1/tile/warp/compact scope')
     rows=[];expected_q=None;sha=hashlib.sha256(exe.read_bytes()).hexdigest()
     if sha!=prov['sha256'].lower():raise RuntimeError('Binary differs from provenance')
-    manifest=json.loads(a.source_manifest.read_text()) if a.source_manifest else None
+    manifest=json.loads(a.source_manifest.read_text(encoding='utf-8-sig')) if a.source_manifest else None
+    if frozen_weights and manifest:verify_fixed_ntt_sources(frozen_weights,manifest['sources'])
     repo=Path(__file__).resolve().parents[2]
     def verify():
         if hashlib.sha256(exe.read_bytes()).hexdigest()!=sha:raise RuntimeError('Binary changed')
@@ -237,7 +261,8 @@ def main():
                     raise RuntimeError('Shape-policy fit requires the measured device/tile/warp/compact scope')
             if a.baby_device and f'baby_device: requested=1 enabled=1' not in text:
                 raise RuntimeError('GPU baby fell back; cannot fit GPU preparation costs')
-            profile=5 if frozen_weights else 4 if a.baby_device else 3 if a.short_reduce else 2 if a.coop_mode==2 else 0
+            profile=6 if a.point_mersenne else 5 if frozen_weights else 4 if a.baby_device else 3 if a.short_reduce else 2 if a.coop_mode==2 else 0
+            verify_point_profile(profile,base,text,bits)
             f=features(d,b2,bits,profile)
             fd=re.search(r'real_batched_folddevice:.*enabled=(\d+)',text)
             if not fd or (f['G']>1 and fd[1]!='1'):

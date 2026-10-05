@@ -1,4 +1,4 @@
-"""CPU-only provenance rejection gates for a fixed PTX D fit."""
+"""CPU-only provenance rejection gates for fixed PTX and point-fold D fits."""
 import argparse
 import copy
 import hashlib
@@ -20,7 +20,8 @@ def main():
     original=json.loads(a.measurements.read_text(encoding='utf-8'))
     anchor=json.loads(a.anchors.read_text(encoding='utf-8'))
     expected=json.loads(a.fit.read_text(encoding='utf-8'))
-    assert original['feature_profile']==expected['feature_profile']==5
+    profile=original['feature_profile']
+    assert profile==expected['feature_profile'] and profile in (5,6)
     rows=[]
 
     def run(name,m,an,accepted=False):
@@ -73,6 +74,26 @@ def main():
         raw=a.output/(target+'_wrong_backend_raw.log')
         raw.write_text(text.replace('ptx=1 fixed=3','ptx=1 fixed=-1'),encoding='utf-8')
         data['runs'][0]['log']=str(raw);run(target+'_wrong_raw_backend',m,an)
+    an=copy.deepcopy(anchor);an['feature_profile']=4
+    run('anchor_wrong_profile',original,an)
+    # Neither profile may silently absorb a change to the point arithmetic.
+    m=copy.deepcopy(original);an=copy.deepcopy(anchor)
+    for data in (m,an):data['env']['NTT_POINT_MERSENNE']='0' if profile==6 else '1'
+    run('wrong_point_control',m,an)
+    if profile==6:
+        m=copy.deepcopy(original);an=copy.deepcopy(anchor)
+        for data in (m,an):data['feature_profile']=5
+        run('point_claims_historical_fit',m,an)
+    for target in ('measurement','anchor'):
+        m=copy.deepcopy(original);an=copy.deepcopy(anchor);data=m if target=='measurement' else an
+        text=Path(data['runs'][0]['log']).read_text(encoding='utf-8')
+        if profile==6:
+            assert 'point_mersenne_mode: requested=1 enabled=1 bits=4423 nw=70' in text
+            text=text.replace('point_mersenne_mode: requested=1 enabled=1',
+                              'point_mersenne_mode: requested=1 enabled=0')
+        else:text+='\npoint_mersenne_mode: requested=1 enabled=1 bits=4423 nw=70\n'
+        raw=a.output/(target+'_wrong_point_raw.log');raw.write_text(text,encoding='utf-8')
+        data['runs'][0]['log']=str(raw);run(target+'_wrong_raw_point',m,an)
     (a.output/'summary.json').write_text(json.dumps(dict(passed=len(rows),failed=0,runs=rows,
         fit_sha256=hashlib.sha256(a.fit.read_bytes()).hexdigest()),indent=2),encoding='utf-8')
     print('TOTAL',len(rows),'input gates passed / 0 failed')

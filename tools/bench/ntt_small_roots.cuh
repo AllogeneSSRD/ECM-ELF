@@ -39,7 +39,12 @@ __device__ __forceinline__ unsigned long long small_root_value(unsigned long lon
 __device__ __forceinline__ unsigned long long small_root_reduce(unsigned long long lo,
     unsigned long long hi)
 {
+#if NTT_GL_FIXED_MODE == 3
+    // Re-evaluate the root specialization against the actual fixed PTX backend.
+    return gl_reduce128_ptx(lo,hi);
+#else
     return gl_reduce128_short(lo,hi);
+#endif
 }
 template<bool INV,bool FAST=false>
 __device__ __forceinline__ unsigned long long small_root_index(unsigned long long v,

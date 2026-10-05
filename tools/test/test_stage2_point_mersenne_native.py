@@ -14,6 +14,7 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--device',type=int,default=1)
     p.add_argument('--real-save',type=Path,required=True,help='Previously validated production M4423 save for model scope checks')
+    p.add_argument('--calibrated-point-model',action='store_true',help='Expect separate profile6 in the exact real-save scope')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();sha=hashlib.sha256(exe.read_bytes()).hexdigest()
@@ -55,7 +56,9 @@ def main():
         r=subprocess.run(cmd,env=clean|{'NTT_POINT_MERSENNE':str(mode)},capture_output=True,timeout=180)
         (out/(name+'_driver.log')).write_bytes(r.stdout+r.stderr);assert r.returncode==0,name
         text=(out/(name+'_engine.log')).read_text(encoding='utf-8',errors='replace')
-        want='d_model: requested=1 enabled=1 version=resident_fixed_ptx_v1' if mode==0 else 'd_model: requested=1 enabled=0 version=legacy_56_1'
+        want='d_model: requested=1 enabled=1 version=resident_fixed_ptx_v1' if mode==0 else \
+             'd_model: requested=1 enabled=1 version=resident_point_fold_v1' if a.calibrated_point_model else \
+             'd_model: requested=1 enabled=0 version=legacy_56_1'
         assert want in text and f'point_mersenne_mode: requested={mode} enabled={mode}' in text
         assert 'hash=1689529688547722991' in text and 'gmp_check_bad=0' in text and 'pending=0' in text
         result=json.loads((out/(name+'.jsonl')).read_text(encoding='utf-8').splitlines()[-1]);assert result['bad_factors']==0 and result['factors']==[]

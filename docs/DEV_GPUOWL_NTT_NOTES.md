@@ -4368,3 +4368,16 @@ native C19E2F57…72E1C、18源码冻结、CUDA354.5s；同save/D八条内部ful
 ## 76. Mersenne点模乘：共用SOS乘积、线性折叠/旋转（2026-10-05）
 
 新实验NTT_POINT_MERSENNE默认0，精确N=2^s−1才启用，结果仍abR⁻¹。主导MAC2W²→W²，不增加点/NTT持久数组；设备状态4B。原语109/0、局部8次快46.07%；actual native18/0、入口21/0。完整内部8条46.997380→39.800719s（−15.31%），另生产DCF对照4条−19.49%，Q/叶/oracle/检查覆盖保持。新fit未完成，请求该路径拒绝旧D模型；生产仍DCF。编译强制inline主动终止、整函数outline小批次负结果均保留，最终只outline O(W)归约。profile点池17.960→8.574s，CPU准备/多曲线lease/公平Prime95仍需推进。[数学、全部样本、容量与source/line](D:/code/MPA-OpenCl/docs/STAGE2_POINT_MERSENNE_MONTGOMERY.md)。
+
+
+## 77. 点折叠scratch复用、独立D标定与发布（2026-10-05）
+
+caller/callee复用原out，真实NW128七个内核STACK各少1024B；chain REG64→56，ladder xADD6 REG58→64，容量/实际occupancy区别保留。scratch旧1/新1四条full 39.379050→39.074898s，只有2/版本、不宣称稳定.77%收益。原语109/0、native18/0。
+
+新profile6 resident_point_fold_v1：共用未改NTT四源的冻结12权重，六条多D+四锚点重新拟合点/各phase，27/0输入门禁，独立小界390390相对510510少7.20%。四预算首选D保持旧值，不宣称额外换D收益。集成CPU模型96/0、planner9/0、selector96/0、native点18/0、入口30/0。最终DCF/新893八条串行ABBA+BAAB full 48.8331495→39.0421205s，少20.04996%，Q/叶/oracle/因子/检查保持。
+
+生产更新893F6E90…01F69D，19源码冻结，发布路径21/0；旧DCF及18源码备份。fixedPTX默认point1，0可回旧Mont/profile5；generic N fallback，runtime构建默认point0。没有新VRAM/PCIe实测峰，公式与原始资源/全部样本/source-line见[报告](D:/code/MPA-OpenCl/docs/STAGE2_POINT_FOLD_D_CALIBRATION.md)。长期CPU准备/多曲线lease/公平Prime95仍待推进。
+
+## 78. 固定PTX下低层单位根重新评估（2026-10-05）
+
+独立probe编译PTX3，根移位方法3也用PTX归约，不再与旧四fold基线混合。九raw依赖、36/0原语/频谱/逆向/tile边界/只读/故障/资源门禁；k24/25/26九组各八次交叉。roundtrip慢7.60/7.48/7.54%，REG40/LOCAL0/32KiB shared与对照相同，容量API3CTA/SM。旧2.2%局部收益不能叠加，候选不接生产；生产NTT代码和权重保持。下一项outer根乘积与shared/barrier，再考虑pass融合。[完整负结果、公式与source-line](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SMALL_ROOTS_FIXED_PTX.md)。

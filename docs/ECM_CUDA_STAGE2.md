@@ -234,3 +234,10 @@ D138标定均值full56.643870s：init26.59%，baby14.08%、CPUaffine6.10%、F树
 上述实验进度已由新D和实际save入口验收推进到发布。生产现默认NTT_BABY_DEVICE=1；显式0恢复CPU baby及相应原模型。profile4 resident_baby_v1要求已测short/尺寸策略/设备/N/B1/检查配置；其余scope和预算/诊断回退按实际路径处理，显式D仍优先。
 
 当前发布exe SHA256 `a1910cb47d4a4d567fed441a9f5002f1b0ba1675c376c095035ee01c1456ec6a`，17项源码依赖及快照核验，原E013已备份。生产save/ini/worktodo33/0，新旧scope80/0、30/0，原生planner9/0；owner512未拟合D完整曲线通过。同exe、同save、固定D1381380四次ABBA均值53.569084→50.520226秒（快5.69%，每模式2条，无CI），leaf/oracle/因子和必需检查一致。大界D1381380、小界330330、owner512时1141140，当前首选D保持；新模型反映GPU准备成本而非额外换D提速。源码与详细证据见[GPU baby D标定报告](D:/code/MPA-OpenCl/docs/STAGE2_GPU_BABY_D_CALIBRATION.md)。
+
+
+## 2026-10-05 固定PTX、点折叠与新D生产状态
+
+当前工作区生产为893F6E90…01F69D，19源码冻结，旧DCF已备份。使用-GlBackend ptx重建：fixedPTX默认NTT_POINT_MERSENNE=1；精确N=2^s−1使用保持Montgomery坐标的乘积折叠/旋转，通用N自动fallback。设0恢复原SOS/REDC；匹配的M4423/RTX4060/check/budget范围下point1选profile6 resident_point_fold_v1、point0选profile5，其他scope沿用保护。runtime/short/fold构建缺省point0。保存点、worktodo/ini接口保持。
+
+完整native入口30/0、发布路径21/0；同Q/B2/D与检查8次串行交叉，旧DCF48.8331495→新39.0421205s，少20.05%，每版本4条/无CI。大界D1381380、小界390390、owner512时1141140、baby128时600600，首选D与固定PTX前一阶段保持。NTT低层单位根在固定PTX下变慢，未接生产。[本轮公式/容量/占比/源码与证据](D:/code/MPA-OpenCl/docs/STAGE2_POINT_FOLD_D_CALIBRATION.md)、[NTT候选负结果](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SMALL_ROOTS_FIXED_PTX.md)。

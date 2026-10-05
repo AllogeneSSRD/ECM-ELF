@@ -26,12 +26,13 @@ def main():
     manifest=json.loads((exe.parent/'build_manifest.json').read_text(encoding='utf-8-sig'))
     deps={m[1]:m[2].lower() for line in manifest['sources'] if (m:=re.fullmatch(r'([^=]+\.(?:cu|cuh|cpp|h|ps1))=([A-Fa-f0-9]{64})',line))}
     assert digest==manifest['sha256'].lower() and len(deps)>=17
-    fit=json.loads(a.fit.read_text());profile=fit['feature_profile'];assert profile in (4,5)
-    if profile==5:
-        assert len(deps)==18 and manifest['gl_fixed_mode']==3
+    fit=json.loads(a.fit.read_text(encoding='utf-8'));profile=fit['feature_profile'];assert profile in (4,5,6)
+    if profile in (5,6):
+        assert len(deps)==(19 if profile==6 else 18) and manifest['gl_fixed_mode']==3
         load_fixed_ptx_weights(fit['ntt_weights'])
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_ARENA_CAP_KB='6451200',NTT_NO_PROGRESS='1',NTT_BABY_DEVICE='1')
+    env['NTT_POINT_MERSENNE']='1' if profile==6 else '0'
     rows=[]
     cases=[('large',0,2011326186870,{},a.large_plan),('small',0,100000000000,{},a.small_plan),
            ('fold512',0,2011326186870,{'NTT_FOLD_DEVICE_MAX_MB':'512'},a.budget_plan)]
@@ -57,12 +58,12 @@ def main():
                 if child.poll() is None:child.terminate()
                 child.wait(timeout=10)
         verify();text=log.read_text(encoding='utf-8',errors='replace')
-        version='resident_fixed_ptx_v1' if profile==5 else 'resident_baby_v1'
+        version='resident_point_fold_v1' if profile==6 else 'resident_fixed_ptx_v1' if profile==5 else 'resident_baby_v1'
         assert f'd_model: requested=1 enabled=1 version={version}' in text,(name,text[-1500:])
         assert 'stage2_full_wall:' not in text and not result.exists(),(name,'worker completed unexpectedly')
         decision=re.search(r'd_scan_wall: seconds=([\d.]+) selected_D=(\d+)',text);assert decision,name
         selected=int(decision[2]);want=d
-        if plan_path:want=json.loads(plan_path.read_text())['top'][0]['features']['D']
+        if plan_path:want=json.loads(plan_path.read_text(encoding='utf-8'))['top'][0]['features']['D']
         assert selected==want,(name,selected,want)
         f=features(selected,b2,4423,profile);pred=predict(f,fit['rates'])
         candidates=[dict(re.findall(r'(\w+)=([^ ]+)',s)) for s in re.findall(r'd_model_features: (.*)',text)]

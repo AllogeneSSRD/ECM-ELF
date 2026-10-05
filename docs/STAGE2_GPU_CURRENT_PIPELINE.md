@@ -1890,3 +1890,12 @@ GlBackend可选编译将Goldilocks归约固定，移除每次mode load/判断，
 ## 50. Mersenne点模乘：共用SOS乘积、线性折叠/旋转（2026-10-05）
 
 新实验NTT_POINT_MERSENNE默认0，精确N=2^s−1才启用，结果仍abR⁻¹。主导MAC2W²→W²，不增加点/NTT持久数组；设备状态4B。原语109/0、局部8次快46.07%；actual native18/0、入口21/0。完整内部8条46.997380→39.800719s（−15.31%），另生产DCF对照4条−19.49%，Q/叶/oracle/检查覆盖保持。新fit未完成，请求该路径拒绝旧D模型；生产仍DCF。编译强制inline主动终止、整函数outline小批次负结果均保留，最终只outline O(W)归约。profile点池17.960→8.574s，CPU准备/多曲线lease/公平Prime95仍需推进。[数学、全部样本、容量与source/line](D:/code/MPA-OpenCl/docs/STAGE2_POINT_MERSENNE_MONTGOMERY.md)。
+
+
+## 51. 点折叠scratch复用与D发布（2026-10-05）
+
+原out由caller共享给线性归约，真实NW128七种点内核stack各少1024B。profile6按六条多D+四锚点独立重拟，冻结NTT权重来源不变；预算首选D未变。模型96/0、输入27/0、planner9/0、selector96/0、点native18/0、入口30/0。DCF/893完整八条同Q/D/检查48.8331495→39.0421205s，少20.05%；发布默认fixedPTX point1，0回旧Mont/profile5，generic fallback。生产893F6E90…01F69D/19原始依赖，旧版备份，发布路径21/0。[公式/占比/容量/全样本/source-line](D:/code/MPA-OpenCl/docs/STAGE2_POINT_FOLD_D_CALIBRATION.md)。
+
+## 52. NTT单位根固定PTX留出（2026-10-05）
+
+独立方法3在实际PTX3下36/0门禁通过；k24..26每长度forward/inverse/roundtrip八次交叉，roundtrip慢约7.5%，资源与baseline相同。候选不接生产；旧四fold上的收益不适用于新后端。下一项outer根乘积/同步成本，CPU准备与多曲线workspace lease继续保留。[独立负结果与source-line](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SMALL_ROOTS_FIXED_PTX.md)。

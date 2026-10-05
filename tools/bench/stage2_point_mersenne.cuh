@@ -5,11 +5,11 @@
 template<int NW>
 __device__ __noinline__ void s2g_mersenne_mont_reduce(
     unsigned long long *r, const unsigned long long *t,
-    const unsigned long long *n, int nw, int bits)
+    const unsigned long long *n, int nw, int bits, unsigned long long *out)
 {
     // ab < N^2. The first fold is <2N, hence one subtraction suffices.
     const int word=bits/64,shift=bits%64;
-    unsigned long long out[NW],carry=0;
+    unsigned long long carry=0;
     for(int i=0;i<nw;++i){
         const unsigned long long low=(i==nw-1 && shift) ? t[i]&n[i] : t[i];
         const unsigned long long high=shift ? (t[i+word]>>shift)|(t[i+word+1]<<(64-shift)) : t[i+word];
@@ -53,5 +53,6 @@ __device__ __forceinline__ void s2g_mersenne_mont_mul(
         }
         t[i+nw]=carry;
     }
-    s2g_mersenne_mont_reduce<NW>(r,t,n,nw,bits);
+    unsigned long long out[NW];
+    s2g_mersenne_mont_reduce<NW>(r,t,n,nw,bits,out);
 }

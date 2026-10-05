@@ -15,7 +15,7 @@ $reference=Join-Path $Build 'stage2_point_reference.cuh'
 $referenceBody=$body.Substring($begin,$end-$begin)
 # The reference is the production SOS/REDC body with its optional selector removed.
 $referenceBody=$referenceBody.Replace('__device__ __constant__ int g_s2g_point_mersenne_bits=0;','').Replace('#include "stage2_point_mersenne.cuh"','')
-$referenceBody=$referenceBody.Replace('    const int mersenne_bits=g_s2g_point_mersenne_bits;','').Replace('    if(mersenne_bits){s2g_mersenne_mont_reduce<NW>(r,t,n,nw,mersenne_bits);return;}','')
+$referenceBody=$referenceBody.Replace('    const int mersenne_bits=g_s2g_point_mersenne_bits;','').Replace('    if(mersenne_bits){s2g_mersenne_mont_reduce<NW>(r,t,n,nw,mersenne_bits,out);return;}','')
 [IO.File]::WriteAllText((Join-Path $repo $reference),$referenceBody,[Text.UTF8Encoding]::new($false))
 $exe=Join-Path $Build 'stage2_point_mersenne_probe.exe'
 $log=Join-Path $Build 'build.log'
