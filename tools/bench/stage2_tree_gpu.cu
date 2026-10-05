@@ -675,6 +675,9 @@ __device__ __forceinline__ void s2g_submod(unsigned long long *r, const unsigned
     }
 }
 
+__device__ __constant__ int g_s2g_point_mersenne_bits=0;
+#include "stage2_point_mersenne.cuh"
+
 /* r = a*b*R^-1 mod N, R = 2^(64*nw), a,b < N.  Schoolbook product + Montgomery reduction
    (SOS/REDC).  The result is < 2N, so ONE conditional subtraction of N finishes it.
    ninv = -N^-1 mod 2^64 (N odd).  Checked against GMP for every shape at startup. */
@@ -698,6 +701,8 @@ __device__ __forceinline__ void s2g_mont_mul(unsigned long long *r,
         }
         t[i + nw] = c;                 /* untouched before this iteration (SOS invariant) */
     }
+    const int mersenne_bits=g_s2g_point_mersenne_bits;
+    if(mersenne_bits){s2g_mersenne_mont_reduce<NW>(r,t,n,nw,mersenne_bits);return;}
     for (int i = 0; i < nw; ++i) {
         const unsigned long long m = t[i] * ninv;
         unsigned long long c = 0;
@@ -4129,6 +4134,13 @@ static void hex_of_words(std::string &out, const unsigned long long *w, size_t W
 static int mont_selftest(const std::vector<unsigned long long> &hn, size_t nw,
                          unsigned long long ninv, const mpz_t N, const mpz_t R)
 {
+    const bool requested=fuse_env_ull("NTT_POINT_MERSENNE",0)!=0;
+    const int bits=(int)mpz_sizeinbase(N,2);
+    const bool exact_shape=bits>=2 && mpz_popcount(N)==(mp_bitcnt_t)bits && (size_t)((bits+63)/64)==nw;
+    const int enabled_bits=requested && exact_shape ? bits : 0;
+    CK(cudaMemcpyToSymbol(g_s2g_point_mersenne_bits,&enabled_bits,sizeof(enabled_bits)));
+    std::printf("point_mersenne_mode: requested=%d enabled=%d bits=%d nw=%llu reduction=fold_rotate\n",
+                (int)requested,enabled_bits!=0,bits,(unsigned long long)nw);
     std::printf("point_arithmetic: xadd6=%d xadd_mont_muls=%d coordinate_scale=legacy_exact\n",
                 (int)g_xadd6,g_xadd6 ? 6 : 8);
     const int cases = 2048;
@@ -10788,6 +10800,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const bool gl_short=(ntt_gl_reduce_requested_mode()&1u)!=0;
     const bool gl_shift_scale=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
     const bool gl_ptx=NTT_GL_FIXED_MODE==3 || fuse_env_ull("NTT_GL_PTX_REDUCE",0)!=0;
+    // Point-fold timings are not part of any existing calibrated profile.
+    if(fuse_env_ull("NTT_POINT_MERSENNE",0))calibrated=false;
     // Only the measured immutable PTX/GPU baby backend has profile5 rates.
     const bool fixed_ptx=NTT_GL_FIXED_MODE==3 && d_fixed_ptx_rates_valid && gl_short && shape_ntt && baby_requested;
     if(gl_shift_scale || (gl_ptx && !fixed_ptx) || (NTT_GL_FIXED_MODE>=0 && !fixed_ptx))calibrated=false;
