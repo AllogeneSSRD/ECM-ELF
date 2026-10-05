@@ -1497,7 +1497,7 @@ static int fuse_outer_max(int t,int k,bool &coop)
     const int requested=(int)fuse_env_ull(coop ? "NTT_FUSE_COOP_M" : "NTT_FUSE_M",maximum);
     return std::max(coop ? 5 : 1,std::min(maximum,requested));
 }
-static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
+static void fuse_describe(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
                       unsigned long long omega_inv, bool compact=fuse_compact_scratch())
 {
     ntt_gl_reduce_configure();
@@ -1512,17 +1512,6 @@ static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long lon
     c.compact_scratch=compact;
     fuse_plan_stages(c, k - t);
 
-    fuse_base_allocate(&c.tblF,(size_t)(1ull << t));
-    fuse_base_allocate(&c.tblI,(size_t)(1ull << t));
-    if (t > 0) {
-        const unsigned int tb = (unsigned int)(((1ull << t) + 255) / 256);
-        build_tile_table_kernel<<<tb, 256>>>(c.tblF, k, t, omega);
-        CK(cudaGetLastError());
-        build_tile_table_kernel<<<tb, 256>>>(c.tblI, k, t, omega_inv);
-        CK(cudaGetLastError());
-    }
-    /* Size from BOTH actual pass sequences, not an assumed radix. The old N/4 guess broke
-       radix-2; a tile-only plan has no coarse/radix scratch readers at all. */
     c.scrWords = compact ? 0 : (size_t)(n >> 1) + 64;
     c.scr2Words = compact ? 0 : (c.coop_outer ? (size_t)(1ull<<c.m_max) : 64);
     if (compact) {
@@ -1537,6 +1526,36 @@ static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long lon
             const int M=c.ms[p]; L-=M;
             c.scrWords=std::max(c.scrWords,(size_t)(1ull<<(c.k-L-M)));
         }
+    }
+    c.passes_fwd = c.nms + (t > 0 ? 1 : 0);
+}
+
+// Exact payload of the two cached table sequences, also usable before allocation.
+static unsigned long long fuse_planned_table_words(const FuseCtx &c)
+{
+    unsigned long long w=0; int L=0;
+    for(int p=0;p<c.nms;++p) { const int M=c.ms[p]; w+=(c.n>>(L+M))+(1ull<<M); L+=M; }
+    L=c.outer_stages;
+    for(int p=c.nms-1;p>=0;--p) { const int M=c.ms[p]; L-=M; w+=(1ull<<(c.k-L-M))+(1ull<<M); }
+    return w;
+}
+static size_t fuse_planned_base_words(const FuseCtx &c)
+{
+    return 2*(size_t)(1ull<<c.t)+c.scrWords+c.scr2Words;
+}
+static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
+                      unsigned long long omega_inv, bool compact=fuse_compact_scratch())
+{
+    fuse_describe(c,n,k,omega,omega_inv,compact);
+    const int t=c.t;
+    fuse_base_allocate(&c.tblF,(size_t)(1ull << t));
+    fuse_base_allocate(&c.tblI,(size_t)(1ull << t));
+    if (t > 0) {
+        const unsigned int tb = (unsigned int)(((1ull << t) + 255) / 256);
+        build_tile_table_kernel<<<tb, 256>>>(c.tblF, k, t, omega);
+        CK(cudaGetLastError());
+        build_tile_table_kernel<<<tb, 256>>>(c.tblI, k, t, omega_inv);
+        CK(cudaGetLastError());
     }
     fuse_base_allocate(&c.scr,c.scrWords);
     fuse_base_allocate(&c.scr2,c.scr2Words);
@@ -1793,7 +1812,7 @@ static void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b
 struct NttArena {
     int device = -1;
     size_t cap_bytes = 0;                 /* 0 = unlimited */
-    size_t bytes = 0;
+    size_t bytes = 0; // exact arena-owned CUDA payload; accounting v2
     unsigned int *carry_scratch=nullptr;
     size_t carry_scratch_bytes=0,carry_scratch_peak=0;
     unsigned long long carry_fused_calls=0,carry_skipped_calls=0,carry_refusals=0,carry_grows=0;
@@ -1901,7 +1920,7 @@ struct NttArena {
         if (workspace.dA) { CK(cudaFree(workspace.dA)); ++workspace_frees; }
         if (workspace.dB) { CK(cudaFree(workspace.dB)); ++workspace_frees; }
         if (workspace.dQ) { CK(cudaFree(workspace.dQ)); ++workspace_frees; }
-        if (workspace.words) bytes -= workspace.words*8 + 16;
+        if (workspace.words) bytes -= workspace.words*8;
         workspace=BigEntry{};
     }
 
@@ -1942,6 +1961,8 @@ struct NttArena {
 
     void print_workspace_stats() const
     {
+        std::printf("ntt_arena_accounting: version=2 payload_bytes=%llu cap_bytes=%llu\n",
+                    (unsigned long long)bytes,(unsigned long long)cap_bytes);
         std::printf("ntt_carry_check_stats: requested=%d fused_calls=%llu skipped_calls=%llu refusals=%llu grows=%llu scratch_bytes=%llu scratch_peak_bytes=%llu\n",
                     (int)ntt_carry_check_requested(),carry_fused_calls,carry_skipped_calls,carry_refusals,carry_grows,
                     (unsigned long long)carry_scratch_bytes,(unsigned long long)carry_scratch_peak);
@@ -1972,13 +1993,7 @@ struct NttArena {
        and again for the inverse, exactly as ntt_fuse_cache_tables allocates them */
     static unsigned long long fuse_table_words(const FuseCtx &c)
     {
-        if (!c.tables_cached) return 0;
-        unsigned long long w = 0;
-        int L = 0;
-        for (int p = 0; p < c.nms; ++p) { const int M = c.ms[p]; w += (c.n >> (L + M)) + (1ull << M); L += M; }
-        L = c.outer_stages;
-        for (int p = c.nms - 1; p >= 0; --p) { const int M = c.ms[p]; L -= M; w += (1ull << (c.k - L - M)) + (1ull << M); }
-        return w;
+        return c.tables_cached ? fuse_planned_table_words(c) : 0;
     }
 
     static void fuse_drop_tables(FuseCtx &c)
@@ -2006,7 +2021,6 @@ struct NttArena {
         // Only shape-local dRes below retains diagnostics across interior chunks.
         drop_carry_scratch();
         unsigned long long freed = 0;
-        size_t entry_charges = 0;
         for (FuseEntry &e : fuses) {
             if (e.n == keep_n || !e.fc.tables_cached) continue;
             freed += fuse_table_words(e.fc);
@@ -2019,7 +2033,6 @@ struct NttArena {
             if (b.dB) { cudaFree(b.dB); ++legacy_frees; }
             if (b.dQ) { cudaFree(b.dQ); ++legacy_frees; }
             freed += b.words;
-            entry_charges += 16;
             bigs.erase(bigs.begin() + (long)i);
         }
         for (size_t i = smalls.size(); i-- > 0;) {
@@ -2028,10 +2041,9 @@ struct NttArena {
             if (s.dOut) cudaFree(s.dOut);
             if (s.dRes) cudaFree(s.dRes);
             freed += s.words;
-            entry_charges += 16;
             smalls.erase(smalls.begin() + (long)i);
         }
-        if (freed) { ++tbl_evictions; tbl_words_freed += freed; bytes -= freed * 8 + entry_charges; }
+        if (freed) { ++tbl_evictions; tbl_words_freed += freed; bytes -= freed * 8; }
         return freed;
     }
 
@@ -2068,6 +2080,9 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
 {
     if (!ar) return nullptr;
     if (nbatch == 0) nbatch = 1;
+    if (!n || n>((size_t)-1)/24/nbatch || out_slots>((size_t)-1)/8/nbatch-2) {
+        ++ar->overflow; return nullptr;
+    }
     /* The three BUFFER-SIZE-INDEPENDENT buffers are cached by (N, nbatch) alone.  Keying them by
        (N, out_slots) -- as the first S4 version did -- multiplies the arena by the number of
        distinct out_slots that share one N, and at the real shape the fold's several multiplies
@@ -2075,12 +2090,12 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
        Only dOut (out_slots words) and dRes really depend on out_slots. */
     NttArena::BigEntry *big = nullptr;
     if (ar->workspace_pool && allow_pool) {
-        if (!nbatch || n>((size_t)-1)/nbatch || n*nbatch>((size_t)-1-16)/24) { ++ar->overflow; return nullptr; }
+        if (!nbatch || n>((size_t)-1)/nbatch || n*nbatch>((size_t)-1)/24) { ++ar->overflow; return nullptr; }
         const size_t required=(size_t)(n*nbatch);
         if (ar->workspace.words/3>=required) { big=&ar->workspace; ++ar->workspace_hits; ++ar->buf_hits; }
         else {
             ar->drop_workspace();
-            const size_t need=required*24+16;
+            const size_t need=required*24;
             if (ar->cap_bytes && (need>ar->cap_bytes || ar->bytes>ar->cap_bytes-need))
                 ar->evict_other_shapes(n,nbatch);
             if (ar->cap_bytes && (need>ar->cap_bytes || ar->bytes>ar->cap_bytes-need)) {
@@ -2110,15 +2125,15 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         if (!big)
         if (b.n == n && b.nbatch == nbatch) { big = &b; ++ar->buf_hits; break; }
     if (!big) {
-        const size_t need = (size_t)(3 * n * nbatch) * sizeof(unsigned long long) + 16;
+        const size_t need = (size_t)(3 * n * nbatch) * sizeof(unsigned long long);
         /* BEFORE REFUSING, EVICT EVERYTHING THE ARENA CACHES FOR OTHER SHAPES (see the NttArena
            comment).  The table caches alone were not enough: at P=115200 the fold's shape needed
            3072 MB while the arena still held 5627 MB of earlier shapes' BIG buffers, so the run
            fell back to per-call cudaMalloc and died with "out of memory" (measured).  The hot
            shape keeps its own entry, and every evicted shape is rebuilt on demand. */
-        if (ar->cap_bytes && ar->bytes + need > ar->cap_bytes)
+        if (ar->cap_bytes && (need>ar->cap_bytes || ar->bytes>ar->cap_bytes-need))
             ar->evict_other_shapes(n, nbatch);
-        if (ar->cap_bytes && ar->bytes + need > ar->cap_bytes) {
+        if (ar->cap_bytes && (need>ar->cap_bytes || ar->bytes>ar->cap_bytes-need)) {
             ++ar->overflow;
             if (ar->overflow <= 4)
                 std::fprintf(stderr, "%s: arena refuses N=%llu nbatch=%llu (needs %.0f MB, has "
@@ -2167,7 +2182,7 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         /* grow: the extra words are charged to the cap before anything is allocated */
         const size_t extra = (size_t)((out_slots - small->out_cap) * nbatch) *
                              sizeof(unsigned long long);
-        if (ar->cap_bytes && ar->bytes + extra > ar->cap_bytes) {
+        if (ar->cap_bytes && (extra>ar->cap_bytes || ar->bytes>ar->cap_bytes-extra)) {
             ++ar->overflow;
             return nullptr;
         }
@@ -2188,8 +2203,8 @@ static NttArena::BufEntry *ntt_arena_bufs(NttArena *ar, unsigned long long n,
         ar->bytes += (size_t)(out_slots*nbatch)*8;
     } else if (!small) {
         const size_t need = (size_t)(out_slots * nbatch + 2 * nbatch) *
-                            sizeof(unsigned long long) + 16;
-        if (ar->cap_bytes && ar->bytes + need > ar->cap_bytes) {
+                            sizeof(unsigned long long);
+        if (ar->cap_bytes && (need>ar->cap_bytes || ar->bytes>ar->cap_bytes-need)) {
             ++ar->overflow;
             return nullptr;
         }
@@ -2265,9 +2280,9 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     e.n = n;
     e.k = k;
     e.omega = omega;
-    const size_t need = (size_t)(n + n / 2 + 4 * FUSE_MAX_PASSES * (requested_coop ? 256 : 64)) *
-                        sizeof(unsigned long long);
-    if (ar->cap_bytes && ar->bytes + need > ar->cap_bytes) {
+    fuse_describe(e.fc,n,k,omega,omega_inv);
+    const size_t need=(fuse_planned_base_words(e.fc)+fuse_planned_table_words(e.fc))*8;
+    if (ar->cap_bytes && (need>ar->cap_bytes || ar->bytes>ar->cap_bytes-need)) {
         ++ar->overflow;
         fuse_init(out, n, k, omega, omega_inv);      /* over budget: per-call tables */
         ntt_arena_pin_smem(ar,out.t,out.warp_tail);
@@ -4139,7 +4154,7 @@ static void ntt_workspace_check(int device)
         check(again && again->dA==a && again->dRes==res);
         CK(cudaMemcpy(&value,res,8,cudaMemcpyDeviceToHost)); check(value==77);
         size_t span=0; check(ar.input_span(a+3,span) && span==509);
-        const size_t small_charge=ar.bytes-ar.workspace.words*8-16;
+        const size_t small_charge=ar.bytes-ar.workspace.words*8;
         for (int index=1; index<=3; ++index) {
             ar.workspace_fail_alloc=index;
             check(ntt_arena_bufs(&ar,512,20,2)==nullptr);

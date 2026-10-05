@@ -43,6 +43,40 @@ struct ProductionDefaults {
 #define STAGE2_TREE_GPU_NO_MAIN
 #include "../../tools/bench/stage2_tree_gpu.cu"
 #include "../core/ecm_cuda_stage2.h"
+#include "ecm_stage2_tune.cuh"
+
+int ecm_cuda_stage2_tune_ntt(int device,int min_log2,int max_log2,int repeats,
+                            uint64_t memory,void (*report)(const char*,void*),void *context)
+{
+    return stage2_tune::run(device,min_log2,max_log2,repeats,memory,report,context);
+}
+
+int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b2,
+                        uint64_t d,int device,void (*report)(const char*,void*),void *context)
+{
+    if(!report || !n_hex || device<0 || !b1 || b2<=b1 ||
+       b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
+    g_device=device;
+    ecm_stage2::Plan p;
+    const int code=run_real(n_hex,true,sigma,b1,b2,d,d==0,false,1,nullptr,nullptr,true,&p);
+    if(code)return code;
+    const auto &g=p.geometry;
+    std::ostringstream json;json<<std::setprecision(17)
+        <<"{\"type\":\"stage2_plan\",\"schema\":1,\"curves_executed\":0,\"bits\":"<<g.bits
+        <<",\"words\":"<<g.words<<",\"B1\":"<<p.b1<<",\"B2\":"<<p.b2<<",\"D\":"<<p.d
+        <<",\"P\":"<<g.p<<",\"I\":"<<p.giant_points<<",\"G\":"<<p.batches
+        <<",\"fold_length\":"<<g.fold_length<<",\"tree_length\":"<<g.tree_length
+        <<",\"fold_big_bytes\":"<<g.fold_big_bytes<<",\"arena_estimate_bytes\":"<<g.arena_estimate_bytes
+        <<",\"owner_bytes\":"<<g.fold_owner_bytes<<",\"baby_payload_bytes\":"<<p.baby_bytes
+        <<",\"free_bytes\":"<<p.free_bytes<<",\"arena_cap_bytes\":"<<p.arena_cap_bytes
+        <<",\"owner_budget_bytes\":"<<p.owner_budget_bytes
+        <<",\"owner_budget_fits\":"<<(p.owner_budget_fits ? "true" : "false")
+        <<",\"arena_estimate_fits\":"<<(p.arena_estimate_fits ? "true" : "false")
+        <<",\"residency_guaranteed\":false,\"process_peak_estimated\":false,\"accounting_version\":2"
+        <<",\"model\":"<<stage2_tune::quote(p.model)<<",\"calibrated\":"<<(p.calibrated ? "true" : "false")
+        <<",\"stage2_seconds_estimate\":"<<p.estimated_seconds<<"}";
+    report(json.str().c_str(),context);return 0;
+}
 
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,

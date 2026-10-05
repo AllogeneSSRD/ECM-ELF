@@ -4410,3 +4410,21 @@ NTT固定PTX下探针扫默认/1/2/4，各13/0；u1八个outer实例SASS与默�
 默认640边界同D1531530/P138240、owner664.46MiB，1024/640 ABBA均值110.947313/119.803767s；回退多7.983%，恢复驻留省7.392%，各2条/无CI。小big对M4423 B2=8e12用时109.11→317.56s，但整卡观察最大used5444.6→2284.6MiB；模块峰不相加为进程峰。全批整卡200ms观察used最大5444.62MiB、host日志peak commit最大7912MiB，均非物理RAM/进程显存保证峰。
 
 新增可指定big/small-big/owner/small-owner/arena的实验工具，另48条自定义512/640/0预算规划核验，不冒充性能测量。发现arena账本旧table估算约6149MiB与NTT实际payload约3187MiB不同，优先统一cache/evict计账；owner q/qb、g/reverse别名为未验证候选，理论9P→8P/7P使664.46→590.63/516.80MiB。本轮不改生产内核/默认，carry新D标定、多曲线lease和公平Prime95仍待推进。[完整公式/源码行号/表图/CSV/审计](D:/code/MPA-OpenCl/docs/STAGE2_B2_MEMORY_BUDGET_SCALING.md)。
+
+## 82. Auto B2与tune源码调查及设计（2026-10-05）
+
+用户确认默认优化Prime95式总流程收益，读取save时仍计入估算Stage1成本。Prime95采用Kruppa相对曲线价值/(Stage1+Stage2+GCD成本)，对每个B2再选择D/实现；EcmStage2RatioAdjust是自动校正成本的乘数，并非目标T2/T1。N通过FFT长度、工作区和逆元/GCD成本进入，内存改变可行形状和F树重建成本。
+
+PRPLL位于.refactor/gpuowl；tune测带块间检查乘法的热PRP迭代，输出us/iter，TuneEntry保留cost/maxExp前沿，运行时选最快支持配置。本项目应分别保存域卷积iter/s、位宽/操作/驻留路径相关的完整调用时间，以及完整Stage2 phase模型。已有k16..27固定PTX卷积fixture与采集/拟合/规划工具可复用；现有profile6仅M4423/B1=1000/RTX4060特定范围，预算矩阵不当作三位宽最优D标定。
+
+计划P0共享规划接口及arena真实计账/阶段活跃内存，P1最小NTT tune，P2跨位宽与驻留/回退phase标定并取得Stage1摊销成本，P3联合B2/D/path规划接入CLI/INI/worktodo，P4按profile反馈。显式非零B2固定，零仅开启auto后触发；save TIME是日期而非Stage1耗时。报告包含原源码line、公式、拟议接口、缓存指纹和验收指标。本轮只调查与文档，不编译、不测试、不运行新GPU曲线。[完整设计](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_TUNE_DESIGN.md)。
+
+## 83. Auto B2/tune第一轮基础实现（2026-10-05）
+
+新增共享整数geometry/owner/Plan，真实ntt_shape_query供数；run_real的plan-only在baby/曲线运算前返回，独立CLI接入--plan-only读取save/队列但不推进。模块几何/预算/未标定秒数JSON明确residency_guaranteed=false、process_peak_estimated=false，B2仍需显式有效值。
+
+FuseCtx拆出无分配describe，准入base+tables用实际调度payload，统计/evict复用同一table words。big/small删除每entry虚拟16B，carry实际计账保持，容量/cap溢出保护统一，打印accounting v2。新缓存策略拒绝旧窄范围phase rates，d_model_scope=cache_payload_v2_unmeasured，暂用legacy估计，不宣称重新标定。
+
+--tune ntt在同一固定后端调用两forward+融合product/scale/inverse，k16..27/batch1/选定配置/一次预热+指定重复；events外GMP参考核验所有L输出。按用户payload预算和free减768MiB过滤形状，逐样本JSONL保存设备/配置/原始时间，CNG SHA256核验exe/manifest；成功原子发布，失败留partial。它不含packing/carry/模N归约/传输，不直接作为完整Stage2模型。
+
+独立native编译CUDA310.5s/main4.2s/其他2.5+3.1+2.9s/link成功，SHA386d2e1b…a87f44、sm89/PTX3/outer0，23原始依赖含builder冻结。内核行尾保持，原生产893保持。本轮未运行CLI/GPU tune/曲线/门禁，无新性能或算术通过结论。完整活跃显存清单、跨位宽/路径phase、Stage1摊销、Auto B2与profile消费仍待推进。[命令、源码line、公式、构建及限制](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_TUNE_IMPLEMENTATION.md)。

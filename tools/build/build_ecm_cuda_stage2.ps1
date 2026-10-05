@@ -21,6 +21,7 @@ if (-not $vcvars) { throw 'vcvars64.bat not found' }
 $sources = @('src/cuda/ecm_cuda_stage2.cu', 'src/core/ecm_cuda_stage2_main.cpp',
     'src/core/ecm_expr.cpp', 'src/core/ecm_worktodo.cpp', 'src/core/ecm_queue_config.cpp')
 $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
+    'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
     'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h',
     'tools/bench/stage2_tree_gpu.cu', 'tools/bench/stage2_d_model.cuh', 'tools/bench/ntt_poly_probe.cu', 'tools/bench/ntt_coop_outer.cuh', 'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh',
     'tools/bench/stage2_baby_device.cuh', 'tools/bench/stage2_baby_host.cuh', 'tools/bench/stage2_point_mersenne.cuh', 'tools/bench/ntt_carry_partial.cuh',
@@ -31,7 +32,11 @@ $exe = Join-Path $Build 'ecm_cuda_stage2.exe'
 $signaturePath = Join-Path $objDir 'build_signature.txt'
 $glMode = @{runtime=-1;fold=0;short=1;ptx=3}[$GlBackend]
 $signature = @("arch=$Arch", "gl_backend=$GlBackend", "gl_fixed_mode=$glMode", "outer_unroll_u=$OuterUnrollU", (& nvcc --version | Out-String).Trim())
-foreach ($dep in $deps) { $signature += "$dep=$((Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash)" }
+$sourceHashes = [ordered]@{}
+foreach ($dep in $deps) {
+    $sourceHashes[$dep] = (Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash
+    $signature += "$dep=$($sourceHashes[$dep])"
+}
 $signatureText = $signature -join "`n"
 $fresh = -not $Rebuild -and (Test-Path $exe) -and (Test-Path $signaturePath) -and
     ([IO.File]::ReadAllText((Resolve-Path $signaturePath)) -eq $signatureText)
@@ -58,6 +63,11 @@ if (-not $fresh) {
         "$objArgs -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$linkLog`" 2>&1"
     & cmd.exe /c $line
     if ($LASTEXITCODE -ne 0) { Get-Content $linkLog -Tail 40; throw 'link failed' }
+    foreach ($dep in $deps) {
+        if ((Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash -ne $sourceHashes[$dep]) {
+            throw "Source changed during build: $dep"
+        }
+    }
     [IO.File]::WriteAllText((Join-Path (Resolve-Path $objDir) 'build_signature.txt'), $signatureText)
 } else { Write-Host 'Source/toolkit/architecture signature unchanged; executable reused.' }
 Copy-Item -LiteralPath 'third_party/gmp-zen3/dist/bin/gmp-10.dll' -Destination $Build -Force
@@ -69,6 +79,7 @@ $manifest = [ordered]@{
     gl_fixed_mode = $glMode
     outer_unroll_u = $OuterUnrollU
     sources = $signature
+    source_hashes = $sourceHashes
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 (Join-Path $Build 'build_manifest.json')
 Write-Host ("built {0} ({1:N1} MB)" -f $exe, ((Get-Item $exe).Length / 1MB))

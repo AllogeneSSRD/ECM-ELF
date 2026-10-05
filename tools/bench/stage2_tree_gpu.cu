@@ -87,6 +87,7 @@
 #define NTT_PROBE_NAME "stage2_tree_gpu"
 #define NTT_POLY_PROBE_NO_MAIN 1
 #include "ntt_poly_probe.cu"
+#include "../../src/core/ecm_stage2_geometry.h"
 
 #include <string>
 #include <utility>
@@ -7557,7 +7558,7 @@ struct FoldDeviceState {
            g_s4_carry_trace || (hostpack && std::atoi(hostpack))) {st.fallback="backend";return false;}
         if(!P || F.size()!=(P+1)*W || inverse.size()!=(P+1)*W) {st.fallback="shape";return false;}
         if(check && P>64){std::fprintf(stderr,"FATAL: device fold GMP check limited to P<=64\n");std::exit(3);}
-        const unsigned long long bytes=(9ull*P+8)*W*8+48;
+        const unsigned long long bytes=ecm_stage2::owner_bytes(P,W);
         unsigned long long max_mb=640;
         if(const char *e=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))max_mb=std::strtoull(e,nullptr,10);
         if(max_mb>(~0ull>>20) || bytes>(max_mb<<20)) {st.fallback="budget";return false;}
@@ -10677,24 +10678,21 @@ static unsigned long long real_shape_words(unsigned long long P, int S, bool *ok
 
 /* the two transform lengths a D actually needs: the fold/inverse at (P+1) coefficients and the
    tree's own top nodes at (P/2+1) */
-static bool real_run_words(unsigned long long P, int S, unsigned long long *out_words,
-                           unsigned long long *n_fold, unsigned long long *n_tree)
+static bool real_run_geometry(unsigned long long p,int bits,ecm_stage2::Geometry &g)
 {
-    bool ok1 = false, ok2 = false;
-    const unsigned long long w1 = real_shape_words(P + 1, S, &ok1);
-    const unsigned long long w2 = real_shape_words(P / 2 + 1, S, &ok2);
-    if (!ok1 || !ok2) return false;
-    unsigned long long a = 0, b = 0, sb = 0, ob = 0;
-    int bp = 0;
-    ntt_shape_query(P + 1, S, &a, &bp, &sb, &b, &ob, &ob);
-    ntt_shape_query(P / 2 + 1, S, &b, &bp, nullptr, nullptr, nullptr, nullptr);
-    if (n_fold) *n_fold = a;
-    if (n_tree) *n_tree = b;
-    /* the run also caches EVERY SMALLER N (the tree's lower levels and the descent): their sum
-       is bounded by 2x the tree's own entry, so that is the second term.  Counting only two
-       entries (the first version) under-estimated the footprint by ~2x and made the run fall
-       back to per-call cudaMalloc at the largest shape, where the allocation then failed. */
-    *out_words = w1 + 2 * w2;
+    return ecm_stage2::geometry(p,bits,[](unsigned long long m,int s,
+        unsigned long long *n,unsigned long long *out) {
+        return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
+    },g);
+}
+static bool real_run_words(unsigned long long P,int S,unsigned long long *out_words,
+                           unsigned long long *n_fold,unsigned long long *n_tree)
+{
+    ecm_stage2::Geometry g;
+    if(!real_run_geometry(P,S,g))return false;
+    *out_words=g.arena_estimate_bytes/8;
+    if(n_fold)*n_fold=g.fold_length;
+    if(n_tree)*n_tree=g.tree_length;
     return true;
 }
 
@@ -10706,7 +10704,8 @@ static bool real_run_words(unsigned long long P, int S, unsigned long long *out_
 static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
                     bool choose_d, bool run_s2, int curves,
-                    const char *saved_qx_hex = nullptr, Stage2Tail *saved_result = nullptr, bool d_plan_only = false)
+                    const char *saved_qx_hex = nullptr, Stage2Tail *saved_result = nullptr, bool d_plan_only = false,
+                    ecm_stage2::Plan *plan_result = nullptr)
 {
     PolyLayer L;
     L.device = g_device;
@@ -10778,7 +10777,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const auto baby_budget=fuse_env_ull("NTT_BABY_DEVICE_MAX_MB",512)*1024*1024;
     const auto baby_live_cap=freeb>64ull*1024*1024 ? freeb-64ull*1024*1024 : 0ull;
     const auto baby_cap=std::min((unsigned long long)baby_budget,(unsigned long long)baby_live_cap);
-    bool calibrated=model_requested && s4_on && !s4_tail_mont_mode() && g_xadd6 && g_s4_mersenne && g_groot_device &&
+    // Frozen phase rates were measured under the legacy cache admission ledger.
+    // Payload accounting v2 needs a new calibration before those rates can be enabled.
+    const bool cache_rates_valid=false;
+    bool calibrated=model_requested && cache_rates_valid && s4_on && !s4_tail_mont_mode() && g_xadd6 && g_s4_mersenne && g_groot_device &&
         g_s4_output_window && g_s4_chunk_output && g_s4_groot_only && g_s4_pack_direct &&
         g_s4_oracle_async && g_s4_oracle_pack && g_s4_carry_batch && !g_s4_final_readback &&
         L.S==4423 && mpz_popcount(L.N)==4423 && curves==1 && B1==1000 &&
@@ -10816,11 +10818,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                                          "NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL"})
         if(fuse_env_ull(key,0))calibrated=false;
     const auto fold_budget=fuse_env_ull("NTT_FOLD_DEVICE_MAX_MB",640)*1024*1024;
-    auto owner_bytes=[&](unsigned long long p){return 8ull*nw*(9*p+8)+48;};
+    auto owner_bytes=[&](unsigned long long p){return ecm_stage2::owner_bytes(p,nw);};
     if(D_in && (phi_u64(D_in)/2==0 || B2/D_in+2<=phi_u64(D_in)/2 ||
                 owner_bytes(phi_u64(D_in)/2)>fold_budget ||
                 (baby_requested && d_baby_payload_bytes(phi_u64(D_in)/2,nw)>baby_cap)))calibrated=false;
+    if(model_requested && !cache_rates_valid)
+        std::printf("d_model_scope: calibrated=0 reason=cache_payload_v2_unmeasured\n");
     const double d_scan_begin=now_s();
+    double selected_seconds=0;
     DPhaseModel phase_model((int)L.S,B2,point_fold ? 6 : fixed_ptx ? 5 : baby_requested ? 4 : gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
     const char *model_version=calibrated ? (point_fold ? "resident_point_fold_v1" : fixed_ptx ? "resident_fixed_ptx_v1" : baby_requested ? "resident_baby_v1" : gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
     std::printf("ntt_outer_schedule: unroll_u=%d (0=compiler-default, 4=experimental ILP)\n",NTT_OUTER_UNROLL_U);
@@ -10956,11 +10961,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 return 3;
             }
             D = best.D;
+            selected_seconds=best.total;
             std::printf("d_scan_decision: D=%llu P=phi(D)/2=%llu (the CHEAPEST admissible shape by "
                         "the fitted cost model -- NOT the largest D that fits, which is what this "
                         "flag used to pick; see the header comment)\n", D, best.P);
         } else {
             P_baby = phi_u64(D) / 2;
+            DCand explicit_plan; explicit_plan.D=D; explicit_plan.P=P_baby;
+            model(explicit_plan); selected_seconds=explicit_plan.total;
             bool ok1 = false, ok2 = false;
             const unsigned long long w1 = real_shape_words(P_baby, (int)L.S, &ok1);
             const unsigned long long w2 = real_shape_words(P_baby / 2 + 1, (int)L.S, &ok2);
@@ -10976,6 +10984,17 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     P_baby = phi_u64(D) / 2;
     std::printf("d_scan_wall: seconds=%.6f selected_D=%llu (excluded from stage2_full_wall)\n",
                 now_s()-d_scan_begin,D);
+    if(plan_result) {
+        ecm_stage2::Plan &p=*plan_result;
+        if(!real_run_geometry(P_baby,(int)L.S,p.geometry))return 3;
+        p.d=D; p.b1=B1; p.b2=B2; p.giant_points=B2/D+2;
+        p.batches=p.giant_points/P_baby+(p.giant_points%P_baby!=0);
+        p.free_bytes=freeb; p.arena_cap_bytes=cap; p.owner_budget_bytes=fold_budget;
+        p.baby_bytes=d_baby_payload_bytes(P_baby,nw);
+        p.owner_budget_fits=p.geometry.fold_owner_bytes<=fold_budget;
+        p.arena_estimate_fits=p.geometry.arena_estimate_bytes<=cap;
+        p.estimated_seconds=selected_seconds; p.calibrated=calibrated; p.model=model_version;
+    }
     if(d_plan_only) {
         std::printf("d_plan_only: D=%llu P=%llu curves_executed=0 model=%s\n",
                     D,phi_u64(D)/2,model_version);

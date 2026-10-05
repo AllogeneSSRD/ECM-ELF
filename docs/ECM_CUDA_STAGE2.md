@@ -262,3 +262,15 @@ D138标定均值full56.643870s：init26.59%，baby14.08%、CPUaffine6.10%、F树
 新增`tools/bench/bench_stage2_budget_scaling.py`，通过真实C++ packing query过滤D形状，并验证actual big_peak；可设置`--big-mb`、`--small-big-mb`、`--owner-mb`、`--small-owner-mb`、`--arena-mb`。`--prepare-only`生成CPU/GMP一致的三位数保存点和规划；`--resume`按已有plan继续，改变预算需新输出目录。工具固定本机GPU1/RTX4060 Laptop，所有曲线保留必需检查，不更改ini/worktodo或生产默认。
 
 本轮52接受曲线/49正式测量审计通过。M4423即使owner回退，D增长时仍alpha约0.54；owner驻留但D固定，alpha可趋近1。同D跨640MiB预算边界，驻留110.95s/回退119.80s（每模式2条，无CI）。报告包含完整矩阵、公式、模块容量、独立整卡/主机commit采样、数据搬运、source行号及可复现命令：[B2/位数/预算实验](D:/code/MPA-OpenCl/docs/STAGE2_B2_MEMORY_BUDGET_SCALING.md)。
+
+## 2026-10-05 Auto B2与tune设计（尚未实现）
+
+已完成Prime95/PRPLL源码调查和[设计报告](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_TUNE_DESIGN.md)。用户确认Auto B2默认最大化总流程相对收益，包含估算的Stage1成本；先提供NTT吞吐量及按位宽/路径的完整成本标定。拟议的`--auto-b2`、`--tune`和新增预算键目前不可使用。当前B2=0仍回到现有配置，最终无有效B2会报错；非零CLI/worktodo/INI优先级保持。
+
+## 2026-10-05 第一轮实现：plan-only与NTT tune
+
+新实验构建已接入`--plan-only`及`--tune ntt`。plan-only使用同一引擎D搜索，读save/队列但不执行曲线、不推进队列；返回模块容量和未标定的时长估计，不能把模块容量相加作为进程峰。
+
+NTT tune要求固定后端构建（例如`-GlBackend ptx`），接受`--length-log2 16:27`、`--tune-repeats 5`、`--tune-memory-mb 1024`、`--tune-file FILE.jsonl`。当前batch1/选定配置，一次iter为两forward加融合product/scale/inverse；不含packing/carry/模N归约/传输。每次核验全部L输出；超预算长度跳过，成功后原子发布JSONL profile，失败保留partial。
+
+arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到明确标注的legacy估计。原生产目录与893二进制保持；新功能仅在独立实验构建内，本轮仅编译，无新增运行/门禁/性能结果。`--auto-b2`仍未实现，B2原有语义保持。[构建、命令、source-line、公式与限制](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_TUNE_IMPLEMENTATION.md)。

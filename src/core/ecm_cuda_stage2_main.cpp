@@ -6,6 +6,7 @@
 #include "ecm_expr.h"
 #include "ecm_queue_config.h"
 #include "ecm_worktodo.h"
+#include "ecm_stage2_fingerprint.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -203,6 +204,10 @@ struct Options {
     bool has_d = false, has_batch = false, has_arena = false;
     bool child = false;
     uint64_t offset = 0, hash = 0, index = 0;
+    bool plan_only = false, tune_options = false;
+    std::string tune, tune_file;
+    int tune_first = 16, tune_last = 27, tune_repeats = 5;
+    uint64_t tune_memory_mb = 1024;
 };
 Options arguments(int argc, char **argv) {
     Options o;
@@ -231,6 +236,29 @@ Options arguments(int argc, char **argv) {
             if (a == "--device") o.device = static_cast<int>(n); else o.worker = static_cast<int>(n);
         }
         else if (a == "--dry-run") o.dry = true;
+        else if (a == "--plan-only") o.plan_only = true;
+        else if (a == "--tune") o.tune = value();
+        else if (a == "--tune-file") { o.tune_file = value(); o.tune_options = true; }
+        else if (a == "--length-log2") {
+            o.tune_options = true;
+            const auto range = value();
+            const auto colon = range.find(':');
+            const auto first = u64(range.substr(0, colon), "length-log2");
+            const auto last = colon == range.npos ? first : u64(range.substr(colon + 1), "length-log2");
+            if (first < 16 || last > 27 || first > last)
+                throw std::runtime_error("length-log2 must be 16..27 or FIRST:LAST");
+            o.tune_first = static_cast<int>(first); o.tune_last = static_cast<int>(last);
+        }
+        else if (a == "--tune-repeats") {
+            o.tune_options = true; const auto n = num();
+            if (!n || n > 1000) throw std::runtime_error("tune-repeats must be 1..1000");
+            o.tune_repeats = static_cast<int>(n);
+        }
+        else if (a == "--tune-memory-mb") {
+            o.tune_options = true; o.tune_memory_mb = num();
+            if (!o.tune_memory_mb || o.tune_memory_mb > 1048576)
+                throw std::runtime_error("invalid tune memory budget in MiB");
+        }
         else if (a == "--once") o.once = true;
         else if (a == "--curve-worker") o.child = true;
         else if (a == "--record-offset") o.offset = num();
@@ -434,6 +462,10 @@ void help() {
         "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results FILE\n"
         "         --log FILE --dry-run --help\n"
+        "         --plan-only (queries device memory and D; runs no curve)\n"
+        "Tune: --tune ntt --device N [--length-log2 16:27] [--tune-repeats 5]\n"
+        "      [--tune-memory-mb 1024] [--tune-file stage2_tune.jsonl]\n"
+        "      Requires a fixed Goldilocks backend; measures field convolution only.\n"
         "Queue: ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
         "INI: worktodo, finished, tmp_dir, log_file, device; stage2_b2, stage2_d,\n"
         "     stage2_batch_mb, stage2_arena_mb, stage2_results_file; [Worker #N].\n"
@@ -443,6 +475,11 @@ void help() {
 int driver(Options o) {
     if (o.help) { help(); return 0; }
     if (o.child) return curve_worker(o);
+    if (o.tune.empty() && o.tune_options) throw std::runtime_error("tune options require --tune ntt");
+    if (!o.tune.empty() && (o.tune != "ntt" || !o.save.empty() || !o.worktodo.empty() ||
+        o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once))
+        throw std::runtime_error("--tune ntt is independent of save/queue/curve planning options");
+    if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
     const fs::path cwd = fs::current_path();
     const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.ini" : absolute_from(cwd, o.ini);
     EcmQueueConfig cfg;
@@ -467,12 +504,54 @@ int driver(Options o) {
     if (!batch || batch > 1048576 || arena > 1048576) throw std::runtime_error("invalid Stage2 memory budget in MB");
     _putenv_s("NTT_S4_BATCH_MB", std::to_string(batch).c_str());
     if (arena) _putenv_s("NTT_ARENA_CAP_KB", std::to_string(arena * 1024).c_str());
+    if (!o.tune.empty()) {
+        const fs::path destination = absolute_from(cwd, o.tune_file.empty() ? "stage2_tune.jsonl" : o.tune_file);
+        auto same_path = [&](const fs::path &other) {
+            std::error_code error;
+            if (fs::equivalent(destination, other, error) && !error) return true;
+            return upper(destination.lexically_normal().string()) == upper(other.lexically_normal().string());
+        };
+        if (upper(destination.extension().string()) != ".JSONL")
+            throw std::runtime_error("tune-file must use the .jsonl extension");
+        if (same_path(executable()) || same_path(ini) || same_path(worktodo) || same_path(finished) ||
+            same_path(results) || (!log.empty() && same_path(log)))
+            throw std::runtime_error("tune-file must differ from executable, config, queue and result files");
+        if (!destination.parent_path().empty()) fs::create_directories(destination.parent_path());
+        const fs::path partial(destination.string() + ".partial." + std::to_string(GetCurrentProcessId()));
+        std::ofstream output(partial, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("cannot write tune-file: " + partial.string());
+        const auto binary_hash = ecm_stage2::sha256_file(executable());
+        const auto manifest = executable().parent_path() / "build_manifest.json";
+        const auto manifest_hash = fs::is_regular_file(manifest) ? ecm_stage2::sha256_file(manifest) : "";
+        output << "{\"type\":\"profile\",\"schema\":1,\"unit\":\"field_convolution\",\"binary_sha256\":"
+               << json_string(binary_hash) << ",\"build_manifest_sha256\":" << json_string(manifest_hash)
+               << ",\"min_log2\":" << o.tune_first << ",\"max_log2\":" << o.tune_last
+               << ",\"repeats\":" << o.tune_repeats << "}\n";
+        auto sink = [](const char *json, void *ctx) {
+            auto &out = *static_cast<std::ofstream *>(ctx);
+            out << json << '\n'; out.flush();
+            if (!out) throw std::runtime_error("tune profile write failed");
+            std::cout << json << std::endl;
+        };
+        const int code = ecm_cuda_stage2_tune_ntt(device, o.tune_first, o.tune_last, o.tune_repeats,
+                                                 o.tune_memory_mb * 1048576, sink, &output);
+        if (code) throw std::runtime_error("tune failed or measured no shapes; partial profile retained: " + partial.string());
+        if (binary_hash != ecm_stage2::sha256_file(executable()) ||
+            (!manifest_hash.empty() && manifest_hash != ecm_stage2::sha256_file(manifest)))
+            throw std::runtime_error("tune binary/build manifest changed; partial profile retained");
+        output.flush(); if (!output) throw std::runtime_error("tune profile flush failed");
+        output.close(); if (!output) throw std::runtime_error("tune profile close failed");
+        if (!MoveFileExW(partial.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            throw std::runtime_error("cannot publish tune profile; partial profile retained: " + partial.string());
+        std::cout << "tune_complete: profile=" << destination.string() << std::endl;
+        return 0;
+    }
     const bool queue = o.save.empty();
     if (queue && o.selection) throw std::runtime_error("queue curve selection comes from ECMSTAGE2; use --save for overrides");
     Handle lock;
     if (queue) {
         if (!fs::exists(worktodo)) throw std::runtime_error("worktodo not found: " + worktodo.string());
-        if (!o.dry) {
+            if (!o.dry && !o.plan_only) {
             // One production consumer per queue file also serializes the shared
             // atomic rewrite across worker sections. Use separate queues for
             // concurrent processes in this minimal driver.
@@ -515,12 +594,20 @@ int driver(Options o) {
             std::cout << "curve_start: record=" << r.index << " sigma=" << r.sigma << " B1=" << r.b1
                       << " checksum=" << (r.checksum ? "verified" : "absent") << std::endl;
             if (o.dry) continue;
+            if (o.plan_only) {
+                std::string result;
+                const int code = ecm_cuda_stage2_plan(r.n.c_str(), r.sigma, r.b1, b2, d, device,
+                    [](const char *json, void *ctx) { *static_cast<std::string *>(ctx) = json; }, &result);
+                if (code || result.empty()) throw std::runtime_error("Stage2 planning failed");
+                std::cout << result << std::endl;
+                continue;
+            }
             if (child_run(o, save, r, b2, d, device, results, log))
                 throw std::runtime_error("curve failed; queue retained; inspect " + log.string());
             ++completed;
             std::cout << "curve_done: record=" << r.index << " sigma=" << r.sigma << std::endl;
         }
-        if (!queue || o.dry) break;
+        if (!queue || o.dry || o.plan_only) break;
         std::string current;
         if (!ecm_worktodo_first_line(worktodo.string(), o.worker, current) || current != task_line)
             throw std::runtime_error("task completed but worktodo changed; queue retained");
@@ -529,7 +616,8 @@ int driver(Options o) {
             throw std::runtime_error("task completed but worktodo changed or could not be advanced");
         if (o.once) break;
     }
-    std::cout << (o.dry ? "dry_run_complete" : "stage2_complete") << ": curves=" << completed << '\n';
+    std::cout << (o.plan_only ? "plan_complete" : o.dry ? "dry_run_complete" : "stage2_complete")
+              << ": curves=" << completed << '\n';
     return 0;
 }
 } // namespace s2prod
