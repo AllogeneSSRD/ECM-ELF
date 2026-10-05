@@ -15,13 +15,15 @@ p.add_argument('--exe',type=Path,default=repo/'build_cuda_cmake/stage2_tree_gpu.
 p.add_argument('--ref',type=Path,default=repo/'build_cuda_cmake/stage2_tree_ref.exe')
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--device',type=int,default=1)
+p.add_argument('--baby-device',type=int,choices=(0,1),default=0)
 a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
 if any(out.iterdir()):raise RuntimeError('Use a fresh directory')
 spec=importlib.util.spec_from_file_location('mont_ref',repo/'tools/stat/suyama_mont_ref.py')
 oracle=importlib.util.module_from_spec(spec);spec.loader.exec_module(oracle)
 base={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
 base.update(NTT_S4_OLDTAIL='0',NTT_GROOT_DEVICE='1',NTT_SCALED_DESCENT='1',NTT_S4_OUTPUT_WINDOW='1',
-            NTT_S4_CHUNK_OUTPUT='1',NTT_NO_PROGRESS='1',NTT_NAME_MAX='0',NTT_STAGE1_Q_DUMP='1')
+            NTT_S4_CHUNK_OUTPUT='1',NTT_NO_PROGRESS='1',NTT_NAME_MAX='0',NTT_STAGE1_Q_DUMP='1',
+            NTT_BABY_DEVICE=str(a.baby_device),NTT_BABY_DEVICE_CHECK=str(a.baby_device))
 rows=[]
 
 def read(path):
@@ -67,6 +69,8 @@ for name,n,b1,b2,d,extra in (
                             capture_output=True,text=True,timeout=240,cwd=out)
         text=proc.stdout+proc.stderr;(out/(name+'_'+batch+'.log')).write_text(text,encoding='utf-8')
         assert proc.returncode==0 and dump.exists(),(name,batch,proc.returncode)
+        if a.baby_device or 'baby_device:' in text:
+            assert f'baby_device: requested={a.baby_device} enabled={a.baby_device}' in text
         data,gb,gf=read(dump)
         assert int(data['N_hex'],16)==n and int(data['Q_hex'],16)==q and int(data['a24_hex'],16)==a24
         assert gb==baby and gf==f,(name,batch,'real baby/F differ from independent reference')

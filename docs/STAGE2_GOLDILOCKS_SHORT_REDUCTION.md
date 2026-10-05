@@ -146,7 +146,7 @@ Stage1 chain之后的kernel池：NTT **28.545614→19.095016 s（减少33.107%�
 
 ## 9. D 模型保护与发布边界
 
-旧`resident_xadd6_v1`和`resident_shape_v1`按四fold归约测量，不能用在新NTT成本上。已在实际selector增加模式保护：[stage2_tree_gpu.cu:10782](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10782)。短归约开启时`calibrated=false`，两个旧profile均回`legacy_56_1`；显式D优先和原预算逻辑保持。日志增加`gl_short`字段：[10791](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10791)。原模式和缺省模式仍可使用匹配的旧模型。
+旧`resident_xadd6_v1`和`resident_shape_v1`按四fold归约测量，不能用在新NTT成本上。已在实际selector增加模式保护：[stage2_tree_gpu.cu:10782](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10784)。短归约开启时`calibrated=false`，两个旧profile均回`legacy_56_1`；显式D优先和原预算逻辑保持。日志增加`gl_short`字段：[10791](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10793)。原模式和缺省模式仍可使用匹配的旧模型。
 
 上述性能binary在该保护之前冻结，所有测量都显式D1231230、`NTT_D_MODEL=0`；最终保护只改host selector/诊断，没有修改GPU归约或测量计算路径。最终单独重编译并验证保护，不能把最终exe SHA冒充为已测的17bf版本。
 

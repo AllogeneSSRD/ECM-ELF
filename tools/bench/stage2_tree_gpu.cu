@@ -9568,6 +9568,8 @@ struct SmallPrimeBabyCache {
     }
 };
 
+#include "stage2_baby_host.cuh"
+
 /* the batched structure itself.  Ft/Fdeg/Fpad is the F product tree (heap, degrees, padded
    leaf count) that run_check_F already built and verified coefficient by coefficient. */
 static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Params &SP,
@@ -10760,7 +10762,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const bool model_requested=fuse_env_ull("NTT_D_MODEL",0)!=0;
     const auto outer_mode=fuse_env_ull("NTT_FUSE_COOP_OUTER",0);
     const bool shape_ntt=outer_mode==2 && d_shape_rates_valid && fuse_shape_policy_supported(12);
-    bool calibrated=model_requested && s4_on && !s4_tail_mont_mode() && g_xadd6 && g_s4_mersenne && g_groot_device &&
+    bool calibrated=model_requested && !fuse_env_ull("NTT_BABY_DEVICE",0) && s4_on && !s4_tail_mont_mode() && g_xadd6 && g_s4_mersenne && g_groot_device &&
         g_s4_output_window && g_s4_chunk_output && g_s4_groot_only && g_s4_pack_direct &&
         g_s4_oracle_async && g_s4_oracle_pack && g_s4_carry_batch && !g_s4_final_readback &&
         L.S==4423 && mpz_popcount(L.N)==4423 && curves==1 && B1==1000 &&
@@ -11117,6 +11119,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if(fold_test && std::atoi(fold_test))fold_flat_fixture(L);
     const char *fold_device_test=std::getenv("NTT_FOLD_DEVICE_TEST");
     if(fold_device_test && std::atoi(fold_device_test))fold_device_fixture(L);
+    if(fuse_env_ull("NTT_BABY_DEVICE_TEST",0))device_baby_fixture(nw);
     const char *seg_test=std::getenv("NTT_GFINV_SEG_TEST");
     if(seg_test && std::atoi(seg_test))segment_product_fixture(C);
     const char *ginv_test=std::getenv("NTT_GFINV_BATCH_TEST");
@@ -11136,7 +11139,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const double stage2_fixture_seconds=now_s()-stage2_fixture_begin;
     const char *real_dump=std::getenv("NTT_REAL_F_DUMP");
     bool stage2_extra_fixtures=real_dump && *real_dump;
-    for(const char *key : {"NTT_FUSE_COOP_TEST","NTT_FUSE_COOP_BAD","NTT_XADD6_TEST","NTT_XADD6_TEST_BAD","NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
+    for(const char *key : {"NTT_BABY_DEVICE_TEST","NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL","NTT_FUSE_COOP_TEST","NTT_FUSE_COOP_BAD","NTT_XADD6_TEST","NTT_XADD6_TEST_BAD","NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
                            "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
         const char *v=std::getenv(key);
@@ -11173,10 +11176,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::vector<unsigned long long> bx, bz;
         unsigned long long noninv = 0;              /* printed as real_baby: ... degenerate= */
         const double tb0 = now_s();
-        ladder_points(C, baby_j, bx, bz);
-        const double tb1 = now_s();
         std::vector<std::vector<unsigned long long>> leaf(baby_j.size());
-        {
+        DeviceBabyStats bs;
+        const bool baby_requested=fuse_env_ull("NTT_BABY_DEVICE",0)!=0;
+        const bool baby_used=baby_requested && device_baby_generate(C,L.N,baby_j,leaf,
+            reuse_small?&small_cache:nullptr,baby_deg,noninv,bs);
+        if(!baby_used)ladder_points(C,baby_j,bx,bz);
+        const double tb1=baby_used?tb0+bs.ladder_seconds:now_s();
+        if(!baby_used) {
             mpz_t X, Z, xj, neg, gq;
             mpz_inits(X, Z, xj, neg, gq, nullptr);
             std::vector<unsigned long long> w(nw, 0ull);
@@ -11267,6 +11274,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                             (unsigned long long)baby_j.size());
             mpz_clears(X, Z, xj, neg, gq, nullptr);
         }
+        std::printf("baby_device: requested=%d enabled=%d points=%llu groups=%llu bad_groups=%llu "
+                    "payload_bytes=%llu root_d2h_bytes=%llu leaf_d2h_bytes=%llu coordinate_d2h_bytes=%llu "
+                    "seed_h2d_bytes=%llu checked_words=%llu invert=%.6f total=%.6f\n",
+                    (int)baby_requested,(int)baby_used,(unsigned long long)bs.points,(unsigned long long)bs.groups,
+                    (unsigned long long)bs.bad_groups,(unsigned long long)bs.payload_bytes,
+                    (unsigned long long)bs.root_d2h_bytes,(unsigned long long)bs.leaf_d2h_bytes,
+                    (unsigned long long)bs.coordinate_d2h_bytes,(unsigned long long)bs.seed_h2d_bytes,
+                    (unsigned long long)bs.checked_words,bs.invert_seconds,bs.total_seconds);
         std::printf("ladder: baby_points=%llu (device x_j; there is no CPU reference at this "
                     "shape, see the report)\n", (unsigned long long)baby_j.size());
         /* the setup pieces that live OUTSIDE `elapsed` had no timer at all (section 25): they are

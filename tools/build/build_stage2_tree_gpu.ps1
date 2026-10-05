@@ -49,6 +49,8 @@ $dep  = 'tools/bench/ntt_poly_probe.cu'          # included by $src: a rebuild t
 $coop = 'tools/bench/ntt_coop_outer.cuh'
 $dmodel = 'tools/bench/stage2_d_model.cuh'
 $goldReduce = 'tools/bench/ntt_goldilocks_reduce.cuh'
+$babyDevice = 'tools/bench/stage2_baby_device.cuh'
+$babyHost = 'tools/bench/stage2_baby_host.cuh'
 $inc  = '-I third_party/gmp-zen3/dist/include'
 $gmpLib = 'third_party/gmp-zen3/dist/lib'
 $gmpDll = 'third_party/gmp-zen3/dist/bin/gmp-10.dll'
@@ -65,7 +67,7 @@ Write-Host ("stage2_tree_gpu build: exe={0} arch={1}" -f $exe, $Arch)
 $needCompile = $true
 if (-not $Rebuild -and (Test-Path $obj) -and (Test-Path $exe)) {
     $objTime = (Get-Item $obj).LastWriteTime
-    if ($objTime -gt (Get-Item $src).LastWriteTime -and $objTime -gt (Get-Item $dep).LastWriteTime -and $objTime -gt (Get-Item $coop).LastWriteTime -and $objTime -gt (Get-Item $dmodel).LastWriteTime -and $objTime -gt (Get-Item $goldReduce).LastWriteTime) {
+    if (-not (@($src,$dep,$coop,$dmodel,$goldReduce,$babyDevice,$babyHost) | Where-Object { (Get-Item $_).LastWriteTime -ge $objTime })) {
         $needCompile = $false
     }
 }

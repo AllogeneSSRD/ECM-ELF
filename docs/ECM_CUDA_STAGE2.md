@@ -140,7 +140,7 @@ NTT tile 默认 `NTT_FUSE_WARP_TAIL=1`，低6层使用warp寄存器交换与常�
 
 - 存档文本和校验和解析：[ecm_cuda_stage2_main.cpp:106](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:106)；可选队列字段：[同文件:301](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:301)；配置和调度：[同文件:443](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:443)。
 - 生产默认值：[ecm_cuda_stage2.cu:6](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6)；独立引擎封装：[同文件:39](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:39)。
-- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10692](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10692)，跳过 Stage1 的分支位于 [11009](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11009)。
+- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10692](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10694)，跳过 Stage1 的分支位于 [11009](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11011)。
 - 已有表达式、ini 和队列工具：`src/core/ecm_expr.cpp`、`ecm_queue_config.cpp`、`ecm_worktodo.cpp`。
 - 独立编译脚本：[build_ecm_cuda_stage2.ps1](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)。
 
@@ -223,3 +223,7 @@ M4423 save 恢复时 owner 启用，14 folds/42 muls，init15.123476/main58.5150
 D138标定均值full56.643870s：init26.59%，baby14.08%、CPUaffine6.10%、F树剩余6.41%；main73.41%，G树23.96%、giant18.28%、下降13.46%、fold10.69%。owner609.086MiB，NTT arena完整payload3341481200B，主workspace3GiB；host输出窗口实际回读2838813040B，不等于所有曲线D2H，没有新NVML全进程峰。具体计算量、内存与传输公式及各阶段误差见[短归约 D 标定与生产报告](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)。
 
 下一轮优先GPU baby批量规范化。原Systems最大2.784s间隙在X/Z回读后、下次copy提交前，与CPUaffine准备关联；trace无CPU栈，仍为源码推断。giant叶是[-X,Z]，baby F树要求[-X/Z,1]，须增加设备prefix/逆元传播并保留坏Z的GCD/因子语义；先仅回读P个常数再接设备叶frontend。之后复测gl_mod规范化/低层根；多曲线仍需独立状态与workspace lease及RAM/VRAM预算，公平Prime95新对照待做。
+
+## 2026-10-05 GPU baby 实验进度
+
+实验源码新增GPU baby归一化，生产E013二进制保持上一发布状态，该二进制尚不包含新功能。新编译源码可显式设置NTT_BABY_DEVICE=1，默认0；暂时须固定D做性能比较，请求该路径会拒绝旧CPU baby成本模型。八次完整曲线均值57.302417→53.294626秒（快6.99%），host/因子/cache与独立baby/F检查通过。生产默认提升仍需新D和实际save入口验收。详见[GPU baby 归一化报告](D:/code/MPA-OpenCl/docs/STAGE2_GPU_BABY_NORMALIZATION.md)。
