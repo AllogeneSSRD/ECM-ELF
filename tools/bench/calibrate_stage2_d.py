@@ -54,7 +54,7 @@ def shape(p,bits):
 def unit(p,bits,profile=0):
     n,_,_=shape(p,bits)
     k=n.bit_length()-1
-    weights=SHORT_WEIGHTS if profile==3 else SHAPE_WEIGHTS if profile==2 else {}
+    weights=SHORT_WEIGHTS if profile in (3,4) else SHAPE_WEIGHTS if profile==2 else {}
     return n*k*weights.get(k,1.0)
 
 @lru_cache(None)
@@ -108,6 +108,8 @@ def main():
     p.add_argument('--coop-mode',type=int,choices=(0,1,2),default=0,
                    help='0 original, 1 forced cooperative, 2 measured shape policy')
     p.add_argument('--short-reduce',type=int,choices=(0,1),default=0)
+    p.add_argument('--baby-device',type=int,choices=(0,1),default=0)
+    p.add_argument('--source-manifest',type=Path,help='Verify raw compiled dependencies before and after each curve')
     p.add_argument('--expected-q-sha256',required=True,help='SHA256 of lowercase affine Q hex from an independent reference')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('Use a fresh output directory')
@@ -123,6 +125,12 @@ def main():
     base.pop('NTT_FUSE_TRACE',None);base.update(NTT_XADD6_TEST='0',NTT_XADD6_TEST_BAD='0',NTT_D_MODEL='0',
         NTT_FUSE_COOP_OUTER=str(a.coop_mode),NTT_FUSE_COOP_TEST='0',NTT_FUSE_COOP_BAD='0',
         NTT_GL_SHORT_REDUCE=str(a.short_reduce))
+    if a.baby_device:
+        if not a.short_reduce or a.coop_mode!=2:raise ValueError('GPU baby fit requires short reducer and shape policy')
+        base.update(NTT_BABY_DEVICE='1',NTT_BABY_DEVICE_CHECK='0',NTT_BABY_DEVICE_TEST='0',
+                    NTT_BABY_DEVICE_TEST_BAD='0',NTT_BABY_DEVICE_ALLOC_FAIL='0',NTT_BABY_DEVICE_MAX_MB='512')
+    else:
+        base['NTT_BABY_DEVICE']='0'
     if a.short_reduce and a.coop_mode!=2:
         raise ValueError('Short-reducer fit requires measured shape policy mode 2')
     cmd0=[str(exe)]+[str(x) for x in prov['args']]
@@ -135,15 +143,24 @@ def main():
         raise RuntimeError('Shape-policy calibration needs the measured M4423/B1/tile/warp/compact scope')
     rows=[];expected_q=None;sha=hashlib.sha256(exe.read_bytes()).hexdigest()
     if sha!=prov['sha256'].lower():raise RuntimeError('Binary differs from provenance')
+    manifest=json.loads(a.source_manifest.read_text()) if a.source_manifest else None
+    repo=Path(__file__).resolve().parents[2]
+    def verify():
+        if hashlib.sha256(exe.read_bytes()).hexdigest()!=sha:raise RuntimeError('Binary changed')
+        if manifest:
+            if manifest['sha256'].lower()!=sha:raise RuntimeError('Source manifest binary differs')
+            for rel,want in manifest['sources'].items():
+                if hashlib.sha256((repo/rel).read_bytes()).hexdigest()!=want.lower():raise RuntimeError('Compiled source changed: '+rel)
+    verify()
     for repeat in range(a.repeats):
         for d in (a.d if repeat%2==0 else a.d[::-1]):
             cmd=cmd0.copy();cmd[cmd.index('--d')+1]=str(d);cmd[cmd.index('--device')+1]=str(a.device)
             name=f'{repeat+1}_{d}';log=out/(name+'.log');start=time.perf_counter()
             print('RUN',name,flush=True)
-            if hashlib.sha256(exe.read_bytes()).hexdigest()!=sha:raise RuntimeError('Binary changed')
+            verify()
             with log.open('wb') as f:r=subprocess.run(cmd,env=base,stdout=f,stderr=subprocess.STDOUT,timeout=900)
             text=read_log(log)
-            if hashlib.sha256(exe.read_bytes()).hexdigest()!=sha:raise RuntimeError('Binary changed during run')
+            verify()
             if r.returncode:raise RuntimeError(f'{name} exit={r.returncode}; see {log}')
             if '[trace]' in text:raise RuntimeError('Synchronized trace invalidates timing')
             if (a.short_reduce or 'ntt_gl_reduce_mode:' in text) and \
@@ -161,7 +178,9 @@ def main():
                 if 'RTX 4060 Laptop' not in text or base.get('NTT_FUSE_T')!='12' or \
                    base.get('NTT_FUSE_WARP_TAIL')!='1' or base.get('NTT_FUSE_COMPACT_SCRATCH')!='1':
                     raise RuntimeError('Shape-policy fit requires the measured device/tile/warp/compact scope')
-            f=features(d,b2,bits,3 if a.short_reduce else 2 if a.coop_mode==2 else 0)
+            if a.baby_device and f'baby_device: requested=1 enabled=1' not in text:
+                raise RuntimeError('GPU baby fell back; cannot fit GPU preparation costs')
+            f=features(d,b2,bits,4 if a.baby_device else 3 if a.short_reduce else 2 if a.coop_mode==2 else 0)
             fd=re.search(r'real_batched_folddevice:.*enabled=(\d+)',text)
             if not fd or (f['G']>1 and fd[1]!='1'):
                 raise RuntimeError('Multiple G polynomials require GPU resident fold')
@@ -171,7 +190,9 @@ def main():
             phases=parse(text)
             rows.append(dict(name=name,command=cmd,seconds=time.perf_counter()-start,phases=phases,features=f,log=str(log)))
             controls={k:v for k,v in base.items() if k.startswith('NTT_')}
-            (out/'measurements.json').write_text(json.dumps(dict(exe=str(exe),sha256=sha,device=a.device,env=controls|{'NTT_FUSE_TRACE':None},Q_line=expected_q,runs=rows),indent=2),encoding='utf-8')
+            (out/'measurements.json').write_text(json.dumps(dict(exe=str(exe),sha256=sha,device=a.device,
+                sources=manifest['sources'] if manifest else {},env=controls|{'NTT_FUSE_TRACE':None},
+                Q_line=expected_q,runs=rows),indent=2),encoding='utf-8')
             print(name,'full=',phases['full'],flush=True)
     return 0
 

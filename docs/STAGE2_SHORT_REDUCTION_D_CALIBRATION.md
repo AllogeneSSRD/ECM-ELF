@@ -4,9 +4,9 @@
 
 ## 1. 实现与范围
 
-保留三个独立模型：profile0 为原 NTT、profile2 为尺寸策略加旧归约、profile3 为尺寸策略加短归约。新系数见 [stage2_d_model.cuh:27](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:27)，新尺寸权重见 [32](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:32)，实际 backend 查询和权重应用见 [50](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:50)。模型不修改 NTT 精确性条件、打包位宽或显存形状。
+保留三个独立模型：profile0 为原 NTT、profile2 为尺寸策略加旧归约、profile3 为尺寸策略加短归约。新系数见 [stage2_d_model.cuh:27](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:27)，新尺寸权重见 [40](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:40)，实际 backend 查询和权重应用见 [65](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:65)。模型不修改 NTT 精确性条件、打包位宽或显存形状。
 
-实际选择器在 [stage2_tree_gpu.cu:10782](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10784) 匹配归约后端；短归约仅在已标定尺寸策略 scope 中使用新模型。旧归约仍使用对应旧系数；短归约加 outer0、强制 outer1、不同设备/N/B1/检查配置等均回 `legacy_56_1`。显式 D 优先，G≥2、owner 和 arena 过滤保持。
+实际选择器在 [stage2_tree_gpu.cu:10788](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10788) 匹配归约后端；短归约仅在已标定尺寸策略 scope 中使用新模型。旧归约仍使用对应旧系数；短归约加 outer0、强制 outer1、不同设备/N/B1/检查配置等均回 `legacy_56_1`。显式 D 优先，G≥2、owner 和 arena 过滤保持。
 
 标定 scope：精确 N=2^4423−1、B1=1000、B2=1e11..2011326186870、单曲线、RTX4060 Laptop、t12/M4 策略入口、warp/compact、xADD6、resident roots/fold、batch64/chain64、sample96/check_every8，以及已测的 pool/oracle/carry 配置。这里的 M4 是配置入口，尺寸策略实际在 k24 选 M6、k25..27 选 M8。
 
@@ -105,7 +105,7 @@ D1381380 的 ALL S4 输出窗口逻辑returned_coeffs=36615543，包括保留在
 
 生产 wrapper 已加入 `NTT_GL_SHORT_REDUCE=1` 默认，实验入口无环境仍为0；显式环境0继续回旧归约。源码见 [ecm_cuda_stage2.cu:13](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:13)。生产验收与同binary A/B通过后已提升默认，原产物保留。
 
-额外发现并复现原scope守卫只检查requested Mersenne标志：显式OLDTAIL=1仍启用拟合模型，而 [s4_launch_reduce:2262](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2262) 实际选择Montgomery尾部。已在 [10763](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10763) 要求实际S4启用开关且OLDTAIL=0，匹配真正执行的S4路径。S4启用开关提前到 [10758](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10760)，并由后续对象构建复用。旧决策记录保留在 [before日志](D:/code/MPA-OpenCl/build_cuda_cmake/_short_d_20261005/oldtail_scope_before.log)。
+额外发现并复现原scope守卫只检查requested Mersenne标志：显式OLDTAIL=1仍启用拟合模型，而 [s4_launch_reduce:2262](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2262) 实际选择Montgomery尾部。已在 [10763](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10763) 要求实际S4启用开关且OLDTAIL=0，匹配真正执行的S4路径。S4启用开关提前到 [10760](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10760)，并由后续对象构建复用。旧决策记录保留在 [before日志](D:/code/MPA-OpenCl/build_cuda_cmake/_short_d_20261005/oldtail_scope_before.log)。
 
 初版增补误检查尚未建立的L.s4指针，生产守卫门禁28通过/2失败：两种正常归约均被错误回退，四种负配置正确回退。按初始化顺序修正为上述同一启用开关；失败候选及日志保留，未发布、未用于性能计时。候选目录 [production_wrong_pointer](D:/code/MPA-OpenCl/build_cuda_cmake/_short_d_20261005/production_wrong_pointer/build_manifest.json)，失败记录 [production_scope](D:/code/MPA-OpenCl/build_cuda_cmake/_short_d_20261005/production_scope/summary.json)。
 
@@ -126,7 +126,7 @@ D1381380 的 ALL S4 输出窗口逻辑returned_coeffs=36615543，包括保留在
 
 对上一轮 short1 / D1231230 Systems SQLite 重新分解事件并集：总无本进程GPU事件间隙9.513572 s，其中copy→copy 7.625119 s /6401段；最大2.784113 s发生在两个64512000 B X/Z回读后、下一次560 B H2D之前。下一copy的runtime API仅112μs，直到空隙末尾才提交，不能将2.78s解释为其GPU copy耗时。
 
-源码 [stage2_tree_gpu.cu:11176](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11176) 的baby ladder之后，CPU执行256点分段prefix/product inversion、反向传播和负仿射叶物化，再构建F树。结合数据形状，最大空隙与这一准备阶段关联；原 trace 未捕获CPU栈，属于源码推断，不是已测迁移收益。[关联定位数据](D:/code/MPA-OpenCl/build_cuda_cmake/_short_d_20261005/previous_gap_locations.json)。
+源码 [stage2_tree_gpu.cu:11186](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11186) 的baby ladder之后，CPU执行256点分段prefix/product inversion、反向传播和负仿射叶物化，再构建F树。结合数据形状，最大空隙与这一准备阶段关联；原 trace 未捕获CPU栈，属于源码推断，不是已测迁移收益。[关联定位数据](D:/code/MPA-OpenCl/build_cuda_cmake/_short_d_20261005/previous_gap_locations.json)。
 
 下一轮优先复用 giant 的设备段积/组逆元/叶生成方法处理baby，维持非可逆Z的GCD因子记录、Z=0语义、small-prime cache和检查覆盖。X/Z读回量为16PW B，D1231230约123.047MiB，D1381380约135.352MiB；目标减少这些回读和CPU大整数模乘，实际节省要以新同binary A/B确认。随后继续gl_mod直接规范化和新后端上的低层根复测。
 

@@ -11,6 +11,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--exe',type=Path,required=True);p.add_argument('--save',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--device',type=int,default=1)
+    p.add_argument('--baby-device',type=int,choices=(0,1),default=0)
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();save=a.save.resolve();sha=hashlib.sha256(exe.read_bytes()).hexdigest()
@@ -18,15 +19,18 @@ def main():
     line=save_bytes.split(b'\n',1)[0];fingerprint=14695981039346656037
     for byte in line:fingerprint=((fingerprint^byte)*1099511628211)&((1<<64)-1)
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
-    env.update(NTT_ARENA_CAP_KB='6451200',NTT_NO_PROGRESS='1')
+    env.update(NTT_ARENA_CAP_KB='6451200',NTT_NO_PROGRESS='1',NTT_BABY_DEVICE=str(a.baby_device))
     rows=[]
     for flag in (1,0):
-        for override in (None,'NTT_S4_OLDTAIL','NTT_S4_OFF'):
+        overrides=(None,'NTT_S4_OLDTAIL','NTT_S4_OFF')
+        if a.baby_device:overrides+=('NTT_BABY_DEVICE_ALLOC_FAIL','NTT_BABY_DEVICE_CHECK',
+                                   'NTT_BABY_DEVICE_TEST','NTT_BABY_DEVICE_TEST_BAD','NTT_BABY_DEVICE_MAX_MB')
+        for override in overrides:
             name=f'{flag}_{override or "default"}';log=out/(name+'.log');result=out/(name+'.jsonl')
             ee=env|{'NTT_GL_SHORT_REDUCE':str(flag)}
-            if override:ee[override]='1'
-            enabled=int(override is None)
-            version=('resident_short_v1' if flag else 'resident_shape_v1') if enabled else 'legacy_56_1'
+            if override:ee[override]='0' if override=='NTT_BABY_DEVICE_MAX_MB' else '1'
+            enabled=int(override is None and (not a.baby_device or flag==1))
+            version=('resident_baby_v1' if a.baby_device else 'resident_short_v1' if flag else 'resident_shape_v1') if enabled else 'legacy_56_1'
             cmd=[str(exe),'--curve-worker','--save',str(save),'--record-offset','0',
                  '--record-hash',str(fingerprint),'--record-index','1','--b2','100000000000',
                  '--d','330330','--device',str(a.device),'--results',str(result)]

@@ -1,6 +1,6 @@
 # ECM CUDA Stage2：GPU baby 批量归一化（2026-10-05）
 
-本轮接续 [短归约 D 标定与生产发布](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)。目标是减少 baby 阶段 CPU 大整数准备和 X/Z 回读，保留原单首项 F 树、非单位 Z 因子记录及 small-prime cache 合同。当前实验开关 `NTT_BABY_DEVICE=1`；生产默认尚未提升。
+本轮接续 [短归约 D 标定与生产发布](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)。目标是减少 baby 阶段 CPU 大整数准备和 X/Z 回读，保留原单首项 F 树、非单位 Z 因子记录及 small-prime cache 合同。本报告记录A5实验阶段的开关 `NTT_BABY_DEVICE=1` 与默认未提升状态；后续D重标定和A191生产默认提升见[发布报告](D:/code/MPA-OpenCl/docs/STAGE2_GPU_BABY_D_CALIBRATION.md)。以下测量仍属于本报告冻结A5版本。
 
 ## 1. 原路径与替换范围
 

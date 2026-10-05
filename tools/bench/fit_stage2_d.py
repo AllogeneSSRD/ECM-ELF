@@ -23,14 +23,17 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--measurements',type=Path,required=True)
     p.add_argument('--anchor-csv',type=Path,nargs='*',default=[])
+    p.add_argument('--anchor-measurements',type=Path,nargs='*',default=[],help='Verified same-binary phase measurements with identical controls')
     p.add_argument('--anchor-mode',choices=('6_mont','shape_outer','short_fold'),default='6_mont')
     p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();m=json.loads(a.measurements.read_text())
     rows=[r.copy() for r in m['runs'] if r['features']['G']>1]
     if not rows:raise ValueError('Resident fold fit needs measurements with G >= 2')
-    profile=3 if m['env'].get('NTT_GL_SHORT_REDUCE')=='1' else 2 if m['env'].get('NTT_FUSE_COOP_OUTER')=='2' else 0
-    if profile==3 and m['env'].get('NTT_FUSE_COOP_OUTER')!='2':
+    profile=4 if m['env'].get('NTT_BABY_DEVICE')=='1' else 3 if m['env'].get('NTT_GL_SHORT_REDUCE')=='1' else 2 if m['env'].get('NTT_FUSE_COOP_OUTER')=='2' else 0
+    if profile in (3,4) and m['env'].get('NTT_FUSE_COOP_OUTER')!='2':
         raise ValueError('Short-reducer fit requires shape policy mode 2')
+    if profile==4 and (m['env'].get('NTT_GL_SHORT_REDUCE')!='1' or a.anchor_csv):
+        raise ValueError('GPU baby fit requires short reducer; CPU baby CSV anchors are forbidden')
     if profile==2 and a.anchor_csv and a.anchor_mode!='shape_outer':
         raise ValueError('Original-NTT xADD anchors cannot enter a shape-policy fit')
     if profile==3 and a.anchor_csv and a.anchor_mode!='short_fold':
@@ -38,6 +41,31 @@ def main():
     for row in rows:
         cmd=row['command'];b2=int(cmd[cmd.index('--b2')+1]);bits=int(cmd[cmd.index('--n-hex')+1],16).bit_length()
         row['features']=features(row['features']['D'],b2,bits,profile)
+        if profile==4:
+            text=read_log(row['log'])
+            for token in ('baby_device: requested=1 enabled=1','gmp_selftest_bad=0',
+                          'gmp_check_bad=0','pending=0','clean=1',m['Q_line']):
+                if token not in text:raise ValueError('Invalid GPU baby measurement: '+token)
+            if parse(text)!=row['phases']:raise ValueError('Measurement phases differ from raw log')
+    for path in a.anchor_measurements:
+        anchor=json.loads(path.read_text())
+        clean=lambda env:{k:str(v) for k,v in env.items() if v is not None}
+        if (anchor['sha256'].lower()!=m['sha256'].lower() or anchor['device']!=m['device'] or
+            anchor['Q_line']!=m['Q_line'] or clean(anchor['env'])!=clean(m['env']) or
+            anchor.get('sources')!=m.get('sources')):
+            raise ValueError('Measurement anchors differ in binary/device/Q/controls/sources')
+        for row in anchor['runs']:
+            cmd=row['command'];d=int(cmd[cmd.index('--d')+1]);b2=int(cmd[cmd.index('--b2')+1])
+            bits=int(cmd[cmd.index('--n-hex')+1],16).bit_length();f=features(d,b2,bits,profile)
+            if f['G']<2:raise ValueError('Anchor is outside resident fold scope')
+            text=read_log(row['log'])
+            for token in ('gmp_selftest_bad=0','gmp_check_bad=0','pending=0','clean=1',m['Q_line']):
+                if token not in text:raise ValueError('Invalid measurement anchor: '+token)
+            if profile==4 and 'baby_device: requested=1 enabled=1' not in text:
+                raise ValueError('CPU baby or fallback anchor cannot enter GPU baby fit')
+            phases=parse(text)
+            if phases!=row['phases']:raise ValueError('Anchor phase data differs from raw log')
+            rows.append(dict(name=path.parent.name+'/'+row['name'],log=row['log'],command=cmd,features=f,phases=phases))
     for path in a.anchor_csv:
         prov=json.loads((path.parent/'provenance.json').read_text(encoding='utf-8-sig'))
         if profile in (2,3) and prov['sha256'].lower()!=m['sha256'].lower():

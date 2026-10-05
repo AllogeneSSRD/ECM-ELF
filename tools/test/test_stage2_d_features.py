@@ -14,6 +14,7 @@ def main():
     p.add_argument('--exe',type=Path,required=True);p.add_argument('--old-fit',type=Path,required=True)
     p.add_argument('--shape-fit',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
     p.add_argument('--short-fit',type=Path)
+    p.add_argument('--baby-fit',type=Path)
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
     if any(a.output.iterdir()):raise ValueError('Use a fresh output directory')
     fits={0:json.loads(a.old_fit.read_text(encoding='utf-8')),2:json.loads(a.shape_fit.read_text(encoding='utf-8'))}
@@ -21,6 +22,9 @@ def main():
     if a.short_fit:
         fits[3]=json.loads(a.short_fit.read_text(encoding='utf-8'))
         assert fits[3]['feature_profile']==3
+    if a.baby_fit:
+        fits[4]=json.loads(a.baby_fit.read_text(encoding='utf-8'))
+        assert fits[4]['feature_profile']==4
     sha=hashlib.sha256(a.exe.read_bytes()).hexdigest();checks=[]
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     for profile in fits:
@@ -40,6 +44,11 @@ def main():
                 for key,field in (('init','init'),('giant','giant'),('gtrees','gtrees'),('fold','fold'),
                                   ('descent','descent'),('inv','inv'),('accum','accum'),('glue','residual'),('total','full')):
                     assert abs(float(row[key])-prediction[field])<=.000001,(name,key,row[key],prediction[field])
+                if profile==4:
+                    count=f['P'];nodes=0
+                    for _ in range(8):count=(count+1)//2;nodes+=count
+                    expected=8*((3*f['P']+5)*70+f['P']+nodes*70)+count
+                    assert f'd_model_baby_payload: bytes={expected}' in text,(name,'baby budget')
                 assert hashlib.sha256(a.exe.read_bytes()).hexdigest()==sha
                 checks.append({'name':name,'total':float(row['total'])})
     result=dict(exe=str(a.exe.resolve()),sha256=sha,passed=len(checks),failed=0,checks=checks)

@@ -28,6 +28,7 @@ def main():
     p.add_argument('--device',type=int,default=1)
     p.add_argument('--coop-mode',type=int,choices=(0,2),default=0)
     p.add_argument('--short-reduce',type=int,choices=(0,1),default=0)
+    p.add_argument('--baby-device',type=int,choices=(0,1),default=0)
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
     if any(a.output.iterdir()):raise ValueError('Use a fresh output directory')
     prov=json.loads(a.provenance.read_text(encoding='utf-8-sig'))
@@ -37,9 +38,11 @@ def main():
     env.update({k:str(v) for k,v in next(r for r in prov['mode_controls'] if r['mode']==wanted).items() if k!='mode'})
     env.pop('NTT_FUSE_TRACE',None)
     env.update(NTT_D_MODEL='1',NTT_XADD6_TEST='0',NTT_XADD6_TEST_BAD='0',
-               NTT_GL_SHORT_REDUCE=str(a.short_reduce),NTT_FUSE_COOP_OUTER=str(a.coop_mode))
+               NTT_GL_SHORT_REDUCE=str(a.short_reduce),NTT_FUSE_COOP_OUTER=str(a.coop_mode),
+               NTT_BABY_DEVICE=str(a.baby_device))
     if a.short_reduce and a.coop_mode!=2:raise ValueError('Short model requires shape policy')
-    profile=3 if a.short_reduce else 2 if a.coop_mode==2 else 0
+    if a.baby_device and not a.short_reduce:raise ValueError('GPU baby model requires short reducer')
+    profile=4 if a.baby_device else 3 if a.short_reduce else 2 if a.coop_mode==2 else 0
     argv=[str(a.exe.resolve()),*map(str,prov['args']),'--d-plan-only']
     sha=hashlib.sha256(a.exe.read_bytes()).hexdigest();checks=[]
 
@@ -55,7 +58,7 @@ def main():
         line=re.search(r'd_model: requested=(\d+) enabled=(\d+) version=(\S+)',text)
         assert line and line[2]==str(int(enabled)),(name,line)
         if enabled:
-            assert line[3]=={0:'resident_xadd6_v1',2:'resident_shape_v1',3:'resident_short_v1'}[profile],(name,line)
+            assert line[3]=={0:'resident_xadd6_v1',2:'resident_shape_v1',3:'resident_short_v1',4:'resident_baby_v1'}[profile],(name,line)
         assert 'real_baby:' not in text and 'prime_powers=' not in text and 'stage2_full_wall:' not in text
         wall=re.search(r'd_scan_wall: seconds=([\d.]+)',text)
         if code==0:
@@ -92,6 +95,11 @@ def main():
     run('fallback_bound',b2=99999999999,enabled=False)
     run('fallback_G1',d=1231230,b2=100000000000,enabled=False)
     if a.short_reduce:run('fallback_outer0',overrides={'NTT_FUSE_COOP_OUTER':'0'},enabled=False)
+    if a.baby_device:
+        for key,value in (('NTT_BABY_DEVICE_MAX_MB','0'),('NTT_BABY_DEVICE_ALLOC_FAIL','1'),
+                          ('NTT_BABY_DEVICE_CHECK','1'),('NTT_BABY_DEVICE_TEST','1'),
+                          ('NTT_BABY_DEVICE_TEST_BAD','1'),('NTT_GL_SHORT_REDUCE','0')):
+            run('fallback_'+key,overrides={key:value},enabled=False)
     run('arena_refused',overrides={'NTT_ARENA_CAP_KB':'8'},code=3)
     result=dict(exe=str(a.exe.resolve()),sha256=sha,device=a.device,passed=len(checks),failed=0,checks=checks)
     (a.output/'summary.json').write_text(json.dumps(result,indent=2),encoding='utf-8')

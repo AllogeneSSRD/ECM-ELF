@@ -10762,7 +10762,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const bool model_requested=fuse_env_ull("NTT_D_MODEL",0)!=0;
     const auto outer_mode=fuse_env_ull("NTT_FUSE_COOP_OUTER",0);
     const bool shape_ntt=outer_mode==2 && d_shape_rates_valid && fuse_shape_policy_supported(12);
-    bool calibrated=model_requested && !fuse_env_ull("NTT_BABY_DEVICE",0) && s4_on && !s4_tail_mont_mode() && g_xadd6 && g_s4_mersenne && g_groot_device &&
+    const bool baby_requested=fuse_env_ull("NTT_BABY_DEVICE",0)!=0;
+    const auto baby_budget=fuse_env_ull("NTT_BABY_DEVICE_MAX_MB",512)*1024*1024;
+    const auto baby_live_cap=freeb>64ull*1024*1024 ? freeb-64ull*1024*1024 : 0ull;
+    const auto baby_cap=std::min((unsigned long long)baby_budget,(unsigned long long)baby_live_cap);
+    bool calibrated=model_requested && s4_on && !s4_tail_mont_mode() && g_xadd6 && g_s4_mersenne && g_groot_device &&
         g_s4_output_window && g_s4_chunk_output && g_s4_groot_only && g_s4_pack_direct &&
         g_s4_oracle_async && g_s4_oracle_pack && g_s4_carry_batch && !g_s4_final_readback &&
         L.S==4423 && mpz_popcount(L.N)==4423 && curves==1 && B1==1000 &&
@@ -10783,13 +10787,18 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     // Empirical rates must match the selected arithmetic and NTT policy.
     const bool gl_short=fuse_env_ull("NTT_GL_SHORT_REDUCE",NTT_GL_SHORT_REDUCE_DEFAULT)!=0;
     if(gl_short && !(shape_ntt && d_short_rates_valid))calibrated=false;
+    if(baby_requested && !(gl_short && shape_ntt && d_baby_rates_valid && baby_cap))calibrated=false;
+    if(baby_requested)for(const char *key:{"NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST",
+                                         "NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL"})
+        if(fuse_env_ull(key,0))calibrated=false;
     const auto fold_budget=fuse_env_ull("NTT_FOLD_DEVICE_MAX_MB",640)*1024*1024;
     auto owner_bytes=[&](unsigned long long p){return 8ull*nw*(9*p+8)+48;};
     if(D_in && (phi_u64(D_in)/2==0 || B2/D_in+2<=phi_u64(D_in)/2 ||
-                owner_bytes(phi_u64(D_in)/2)>fold_budget))calibrated=false;
+                owner_bytes(phi_u64(D_in)/2)>fold_budget ||
+                (baby_requested && d_baby_payload_bytes(phi_u64(D_in)/2,nw)>baby_cap)))calibrated=false;
     const double d_scan_begin=now_s();
-    DPhaseModel phase_model((int)L.S,B2,gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
-    const char *model_version=calibrated ? (gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
+    DPhaseModel phase_model((int)L.S,B2,baby_requested ? 4 : gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
+    const char *model_version=calibrated ? (baby_requested ? "resident_baby_v1" : gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
     std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu gl_short=%d "
                 "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
                 (int)model_requested,(int)calibrated,model_version,
@@ -10816,7 +10825,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             c.glue = (RGLUE / RB) * (double)c.batches;
             c.total = c.loop + c.tree + c.giant + c.glue + RSETUP;
             if(calibrated) {
-                if(c.P==0 || c.imax<=c.P || owner_bytes(c.P)>fold_budget) {c.total=1e100;return;}
+                if(c.P==0 || c.imax<=c.P || owner_bytes(c.P)>fold_budget ||
+                   (baby_requested && d_baby_payload_bytes(c.P,nw)>baby_cap)) {c.total=1e100;return;}
                 const auto e=phase_model.cost(c.D,c.P);
                 c.loop=e.gtrees+e.fold;c.tree=e.init+e.descent+e.inv+e.accum;
                 c.giant=e.giant;c.glue=e.glue;c.total=e.total;
