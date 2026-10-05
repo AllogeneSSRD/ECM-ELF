@@ -2,6 +2,8 @@
 
 日期：2026-10-05。延续 [设计](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_TUNE_DESIGN.md) 的P2/P3。当前交付包括分阶段成本模型、有限实测范围内的离线B2/D/path联合搜索，以及可选 `--factor-only` 优化。原生 `--auto-b2`、INI/worktodo自动值接入、大B1标定、总显存租约和并行曲线吞吐量策略仍待推进。
 
+后续阶段：原生 CLI/INI/worktodo 已在独立4acc候选接入并验证，见 [原生 Auto B2](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_NATIVE.md)。新二进制重新标定的2203/4423盲测未达10%时长门限，因此当前运行 profile 仅发布8191 bits；本文保留 d77f 阶段的历史数据与结论。
+
 ## 1. 实现入口
 
 - [measure_ecm_costs.py](D:/code/MPA-OpenCl/tools/bench/measure_ecm_costs.py)：串行采集GPU1的Stage1批次摊销、Stage2各阶段、驻留/回退和原始日志。独立参考检查在计时外；中断后仅允许相同身份/配置继续。

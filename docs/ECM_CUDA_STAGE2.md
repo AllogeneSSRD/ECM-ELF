@@ -290,3 +290,9 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 ## 2026-10-05 实验factor-only与成本规划
 
 独立d77f构建支持--factor-only，INI stage2_factor_only=1；跳过可选prime-witness命名，raw因子可能为复合数，配合--factorize-hits可继续拆解。result增加requested_factor_only，hits=0不代表无因子。默认命名与生产893保持。当前Auto B2只有离线工具plan_auto_b2.py在实测scope内规划，原生--auto-b2尚不可使用。[84条曲线验证、Stage1摊销、性能长尾及命令](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_PHASE_CALIBRATION.md)。
+
+## 2026-10-05 原生 Auto B2 接入
+
+独立4acc候选可使用`--auto-b2 --cost-profile FILE`，INI使用`stage2_auto_b2=1`、`stage2_cost_profile=FILE`；仅最终有效B2=0触发自动选择，非零CLI/worktodo/INI保持固定。实际worker联合选择B2/D/owner路径并记录auto_plan，保留原请求；`--plan-only`仅规划、不写result/推进队列。可设置Stage1 batch或每曲线秒数、Stage2 ratio、B2区间、arena与owner预算。
+
+当前运行profile精确绑定GPU1/4acc/PTX3/outer0/accounting2，只发布独立盲测通过的M8191/B1=1000/lcm、30亿～60亿/三D/arena4096/两path范围。2203/4423成本精度未达10%门限，auto拒绝且保留手动运行方式；高B1/泛型N/G1/choose12未覆盖。33调用/213断言与4条auto/manual/queue实际曲线通过；最佳落在下界，非通用生产默认。完整命令及INI样例见[原生 Auto B2 使用与验收](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_NATIVE.md)。

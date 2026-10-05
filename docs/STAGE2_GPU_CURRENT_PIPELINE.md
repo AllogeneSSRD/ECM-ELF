@@ -1948,3 +1948,9 @@ GPU1/生产893/默认检查，S2203/4423/8191的CPU/GMP有效lcm保存点，52�
 三宽度Stage1 batch1/12实测与117点CPU参考通过；84条Stage2曲线覆盖D30030/60060/120120、owner640/0和30/60/45亿B2。模型按真实256MiB分块和32768点chain/ladder切换拟合，36条新blind完整engine误差最大7.48%，候选排名三个宽度均匹配实测最快；不外推cold总时长、G1/高B1/泛型模数。离线Auto B2 K/(T1+T2)原型已经规划并原生复核，但最佳落在下边界，需要扩区间并接入原生CLI/INI/队列，仍非完成的生产Auto B2。
 
 新独立d77f增加--factor-only/INI，真实因子命名长尾ABBA约2.59倍改善，raw因子和叶哈希保持；默认/生产893不改。NsightSystems样本活动window79% GPU busy，copy API大部分不是DMA；Compute计数器权限被驱动拒绝。后续优先seed/chain门槛与进程/小层同步吞吐优化。[模型和审计](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_PHASE_CALIBRATION.md)。
+
+## 61. 原生收益选择与profile精度门限（2026-10-05）
+
+4acc独立候选实现--auto-b2、INI stage2_auto_b2/成本参数和worktodo有效零B2；实际curve worker按设备可用显存、真实packing、实测B1/位宽/arena/D/path联合最大化K/(T1+T2)。非零B2固定，结果附原请求与实际auto_plan，plan-only无队列副作用。profile文件限1MiB/读锁/SHA，精确binary/device/runtime/backend身份与已登记配置检查；没有总显存lease。
+
+重新标定及36条blind共84条clean、472264 GMP系数。M8191各path最大误差≤3.06%；2203/4423新blind最大约21～25%，自动导出排除这些范围，未放宽10%门限。原生验收33调用/213断言及4条实际GPU曲线通过，auto/manual/队列叶哈希与因子相同，成功/失败事务行为验证。默认选择实测下界30亿，仍需低B2/G1/高B1和小位宽可靠标定，非通用Auto B2。完整命令、范围与源码见[原生实现](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_NATIVE.md)。

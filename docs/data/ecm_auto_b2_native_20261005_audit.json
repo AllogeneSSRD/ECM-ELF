@@ -1,0 +1,128 @@
+{
+  "passed": true,
+  "study_stage1_batches": 18,
+  "independently_verified_stage1_points": 117,
+  "fitting_stage2": 36,
+  "diagnostic_b2_stage2": 12,
+  "blind_stage2": 36,
+  "clean_curves": 84,
+  "independent_gmp_coefficients": 472264,
+  "blind_error_percent": [
+    -2.8170841802154345,
+    25.125325117150844
+  ],
+  "blind_max_abs_percent": 25.125325117150844,
+  "matched_leaf_groups": 21,
+  "ranking": [
+    {
+      "bits": 2203,
+      "selected": [
+        60060,
+        640
+      ],
+      "actual_fastest": [
+        60060,
+        640
+      ],
+      "selected_median_seconds": 0.9785415,
+      "fastest_median_seconds": 0.9785415,
+      "selected_slowdown_percent": 0.0
+    },
+    {
+      "bits": 4423,
+      "selected": [
+        60060,
+        640
+      ],
+      "actual_fastest": [
+        60060,
+        640
+      ],
+      "selected_median_seconds": 2.291851,
+      "fastest_median_seconds": 2.291851,
+      "selected_slowdown_percent": 0.0
+    },
+    {
+      "bits": 8191,
+      "selected": [
+        60060,
+        640
+      ],
+      "actual_fastest": [
+        60060,
+        640
+      ],
+      "selected_median_seconds": 5.853644,
+      "fastest_median_seconds": 5.853644,
+      "selected_slowdown_percent": 0.0
+    }
+  ],
+  "validation_scopes": [
+    {
+      "bits": 2203,
+      "owner_mb": 640,
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 25.125325117150844,
+      "passed": false
+    },
+    {
+      "bits": 2203,
+      "owner_mb": 0,
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 21.384231937576704,
+      "passed": false
+    },
+    {
+      "bits": 4423,
+      "owner_mb": 640,
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 23.229798636909283,
+      "passed": false
+    },
+    {
+      "bits": 4423,
+      "owner_mb": 0,
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 20.951059764507328,
+      "passed": false
+    },
+    {
+      "bits": 8191,
+      "owner_mb": 640,
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 3.0579330183456266,
+      "passed": true
+    },
+    {
+      "bits": 8191,
+      "owner_mb": 0,
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 2.4017778925313316,
+      "passed": true
+    }
+  ],
+  "validated_ranking": [
+    {
+      "bits": 8191,
+      "selected": [
+        60060,
+        640
+      ],
+      "actual_fastest": [
+        60060,
+        640
+      ],
+      "selected_slowdown_percent": 0.0
+    }
+  ],
+  "profile_sha256": "91cd7dbf3f455de27e93456aa177f2c6628772d547f6cab2e51f54af60d91dfc",
+  "study_sha256": "d2cc5475edfe0bae047d20c2cb7b816dd5cefd049281959b974372eb42294768",
+  "blind_sha256": "3fb363e44959395c3b2cb033bd8bbfd55bfc219447271c514073831a0ecff7cb",
+  "auditor_sha256": "a78914390716fdaaf4b85bdb6271919dd34e28138b36cad54d89f7981a3f3d29"
+}

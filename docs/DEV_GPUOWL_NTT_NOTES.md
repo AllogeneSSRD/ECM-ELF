@@ -4456,3 +4456,11 @@ P2/P3第一轮实际执行：GPU1/M2203/4423/8191/B1=1000/lcm，Stage1 batch1/12
 离线plan_auto_b2联合B2/D/owner，K/(T1+T2)含Stage1进程摊销和cold中位数，原生plan-only复核几何/组件预算。M4423选择下边界30亿/D60060，range_limited=true，未宣称通用最优；原生--auto-b2/INI/worktodo尚待接入。
 
 Systems2026 GPU1进程树trace：GPU活动并集1.714s/首尾2.172s=78.95%；cudaMemcpy API957ms而DMA约32ms，含等待不全是PCIe。两个ladder kernel约469ms/28.8% GPU时间，S4本例70ms；候选转向seed/chain阈值、小层launch/启动/并发。Compute2026返回ERR_NVGPUCTRPERM，应用正常结束但未得计数器报告，未改驱动。[完整模型、范围、命令、证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_PHASE_CALIBRATION.md)。
+
+## 87. 原生 Auto B2 与独立范围发布（2026-10-05）
+
+独立4acc二进制接入--auto-b2/--cost-profile、Stage1 batch/显式成本、ratio与owner/B2范围；INI stage2_auto_b2和零B2队列消费。主程序直接查询实际NTT packing，在每个curve worker现场选择B2/D/驻留路径；K/(T1+T2)计Stage1摊销，结果保留requested_B2/D及auto_plan/规划耗时。非零B2保持固定，显式CLI auto+非零B2拒绝；profile绑定binarySHA/UUID/SM/runtime/driver/backend/accounting/naming，配置冲突、损坏与范围外拒绝。arena准入及free−768MiB保留，process_peak_guaranteed=false，尚无总显存lease。
+
+重新标定18 Stage1批/117独立核验点、36 Stage2拟合+12留出+36盲测，84/0、472264 GMP抽样系数、21组leaf一致。虽然60亿留出各scope均≤10%，45亿blind对M2203驻留/回退最大25.125/21.384%，M4423为23.230/20.951%；M8191仅3.058/2.402%。三宽度最快D60060/owner640排名均正确，但不替代成本精度。导出器只发布M8191两scope，失败范围保留数据且auto明确拒绝；未放宽门限。按D分率的一次诊断未解决小位宽偏差，原因待交叉顺序/状态采样验证。
+
+原生33调用/213断言、4条实际auto/manual/queue曲线通过，leaf均7271918632011950804、raw因子一致。plan-only不推进，worker失败留queue/不写成功result，成功保留原任务到finished；相对INI profile路径、非零queue B2忽略auto profile验证。默认实测范围内选择下界B2=30亿/D60060，range_limited=true。当前仅精确M8191/B1=1000/lcm、arena4096、三D/两path，非通用生产Auto B2；小位宽、高B1/choose12、低B2/G1、在线反馈/并发及NTT优化仍继续。[命令、公式、源码line与可移植证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_NATIVE.md)。

@@ -45,6 +45,35 @@ struct ProductionDefaults {
 #include "../core/ecm_cuda_stage2.h"
 #include "ecm_stage2_tune.cuh"
 
+bool ecm_cuda_stage2_shape_query(uint64_t p,int bits,uint64_t *length,uint64_t *output_slots)
+{
+    if(!p || p>(1ull<<28) || bits<2 || bits>8192)return false;
+    unsigned long long n=0,out=0;
+    if(!ntt_shape_query(p,bits,&n,nullptr,nullptr,nullptr,nullptr,&out))return false;
+    if(length)*length=n;if(output_slots)*output_slots=out;return true;
+}
+
+int ecm_cuda_stage2_device_info(int device,EcmStage2DeviceInfo *info,const char *expected_uuid)
+{
+    if(!info || device<0)return 2;
+    *info=EcmStage2DeviceInfo{};
+    cudaDeviceProp prop{};size_t free=0,total=0;
+    if(cudaGetDeviceProperties(&prop,device)!=cudaSuccess)return 2;
+    const char *hex="0123456789abcdef";
+    for(int i=0;i<16;++i){const unsigned char b=(unsigned char)prop.uuid.bytes[i];info->uuid_hex[2*i]=hex[b>>4];info->uuid_hex[2*i+1]=hex[b&15];}
+    if(expected_uuid && std::strcmp(expected_uuid,info->uuid_hex))return 3;
+    if(cudaSetDevice(device)!=cudaSuccess || cudaMemGetInfo(&free,&total)!=cudaSuccess)return 2;
+    info->free_bytes=free;info->total_bytes=total;info->major=prop.major;info->minor=prop.minor;
+    if(cudaRuntimeGetVersion(&info->runtime)!=cudaSuccess || cudaDriverGetVersion(&info->driver)!=cudaSuccess)return 2;
+#ifdef NTT_GL_FIXED_MODE
+    info->fixed_mode=NTT_GL_FIXED_MODE;
+#endif
+#ifdef NTT_OUTER_UNROLL_U
+    info->outer_unroll_u=NTT_OUTER_UNROLL_U;
+#endif
+    return 0;
+}
+
 int ecm_cuda_stage2_tune_ntt(int device,int min_log2,int max_log2,int repeats,
                             uint64_t memory,void (*report)(const char*,void*),void *context)
 {

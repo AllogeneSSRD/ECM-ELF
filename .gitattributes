@@ -21,6 +21,9 @@ tools/bench/measure_ecm_costs.py text eol=lf
 tools/bench/plan_auto_b2.py text eol=lf
 tools/bench/validate_ecm_costs.py text eol=lf
 tools/bench/audit_ecm_costs.py text eol=lf
+tools/bench/export_ecm_cost_profile.py text eol=lf
+tools/test/test_stage2_auto_b2_native.py text eol=lf
+docs/data/ecm_auto_b2_native_20261005* -text
 docs/data/ecm_auto_b2_phase_20261005* -text
 docs/data/ecm_factor_only_20261005* -text
 docs/data/ecm_phase_20261005* -text

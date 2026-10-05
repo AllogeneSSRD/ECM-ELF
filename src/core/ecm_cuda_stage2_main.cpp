@@ -8,9 +8,11 @@
 #include "ecm_worktodo.h"
 #include "ecm_stage2_fingerprint.h"
 #include "ecm_stage2_factorize.h"
+#include "ecm_stage2_cost_profile.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -214,7 +216,16 @@ struct Options {
     bool has_gp = false, has_factor_timeout = false;
     std::string gp = "gp.exe";
     unsigned factor_timeout = 30;
+    bool auto_b2=false,cost_device_info=false;
+    std::string cost_profile;
+    uint64_t auto_min=0,auto_max=0,owner_mb=640,stage1_batch=1;
+    double stage1_seconds=0,ratio_adjust=1;
+    bool has_owner=false,has_stage1_seconds=false,has_stage1_batch=false,has_ratio=false;
 };
+double positive(const std::string &s,const char *name) {
+    size_t used=0;const double value=std::stod(s,&used);
+    if(used!=s.size()||!std::isfinite(value)||value<=0)throw std::runtime_error(std::string(name)+" must be finite and positive");return value;
+}
 Options arguments(int argc, char **argv) {
     Options o;
     for (int i = 1; i < argc; ++i) {
@@ -245,6 +256,15 @@ Options arguments(int argc, char **argv) {
         else if (a == "--plan-only") o.plan_only = true;
         else if (a == "--factorize-hits") o.factorize_hits = true;
         else if (a == "--factor-only") o.factor_only = true;
+        else if (a == "--auto-b2") o.auto_b2=true;
+        else if (a == "--cost-profile") o.cost_profile=value();
+        else if (a == "--cost-device-info") o.cost_device_info=true;
+        else if (a == "--auto-min-b2") o.auto_min=num();
+        else if (a == "--auto-max-b2") o.auto_max=num();
+        else if (a == "--owner-budget-mb") {o.owner_mb=num();o.has_owner=true;if(o.owner_mb>1048576)throw std::runtime_error("invalid owner budget");}
+        else if (a == "--stage1-batch") {o.stage1_batch=num();o.has_stage1_batch=true;if(!o.stage1_batch||o.stage1_batch>1048576)throw std::runtime_error("invalid Stage1 batch");}
+        else if (a == "--stage1-seconds-per-curve") {o.stage1_seconds=positive(value(),"Stage1 seconds");o.has_stage1_seconds=true;}
+        else if (a == "--stage2-ratio-adjust") {o.ratio_adjust=positive(value(),"Stage2 ratio adjust");o.has_ratio=true;}
         else if (a == "--gp") { o.gp = value(); o.has_gp = true; }
         else if (a == "--factor-timeout") {
             const auto seconds = num();
@@ -290,6 +310,10 @@ struct Settings {
     bool factor_only = false;
     std::string gp;
     uint64_t factor_timeout = 30;
+    bool auto_b2=false,has_owner=false;
+    std::string cost_profile;
+    uint64_t auto_min=0,auto_max=0,owner_mb=640,stage1_batch=1;
+    double stage1_seconds=0,ratio_adjust=1;
 };
 Settings stage2_ini(const fs::path &path, int worker) {
     std::ifstream in(path);
@@ -322,6 +346,15 @@ Settings stage2_ini(const fs::path &path, int worker) {
     uint64_t factor_only=0; get("STAGE2_FACTOR_ONLY",factor_only);
     if(factor_only>1)throw std::runtime_error("stage2_factor_only must be 0 or 1");
     s.factor_only=factor_only!=0;
+    uint64_t auto_b2=0;get("STAGE2_AUTO_B2",auto_b2);
+    if(auto_b2>1)throw std::runtime_error("stage2_auto_b2 must be 0 or 1");s.auto_b2=auto_b2!=0;
+    if(global.count("STAGE2_COST_PROFILE"))s.cost_profile=global["STAGE2_COST_PROFILE"];
+    get("STAGE2_AUTO_MIN_B2",s.auto_min);get("STAGE2_AUTO_MAX_B2",s.auto_max);
+    if(global.count("STAGE2_FOLD_MB")){get("STAGE2_FOLD_MB",s.owner_mb);s.has_owner=true;}
+    if(s.owner_mb>1048576)throw std::runtime_error("invalid stage2_fold_mb");
+    get("STAGE1_BATCH",s.stage1_batch);if(!s.stage1_batch||s.stage1_batch>1048576)throw std::runtime_error("invalid stage1_batch");
+    if(global.count("STAGE1_SECONDS_PER_CURVE"))s.stage1_seconds=positive(global["STAGE1_SECONDS_PER_CURVE"],"Stage1 seconds");
+    if(global.count("STAGE2_RATIO_ADJUST"))s.ratio_adjust=positive(global["STAGE2_RATIO_ADJUST"],"Stage2 ratio adjust");
     get("STAGE2_FACTOR_TIMEOUT",s.factor_timeout);
     if(!s.factor_timeout || s.factor_timeout>600)throw std::runtime_error("stage2_factor_timeout must be 1..600");
     if(global.count("STAGE2_GP"))s.gp=global["STAGE2_GP"];
@@ -427,6 +460,14 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         arg(L"--factor-timeout", o.factor_timeout);
     }
     if (o.factor_only) cmd += L" --factor-only";
+    if (o.auto_b2 && !b2) {
+        auto real=[](double value){std::wostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(17)<<value;return out.str();};
+        cmd += L" --auto-b2 --cost-profile " + quote(fs::path(o.cost_profile).wstring());
+        arg(L"--arena-mb",o.arena);arg(L"--owner-budget-mb",o.owner_mb);arg(L"--stage1-batch",o.stage1_batch);
+        if(o.auto_min)arg(L"--auto-min-b2",o.auto_min);if(o.auto_max)arg(L"--auto-max-b2",o.auto_max);
+        if(o.stage1_seconds)cmd+=L" --stage1-seconds-per-curve "+real(o.stage1_seconds);
+        cmd+=L" --stage2-ratio-adjust "+real(o.ratio_adjust);
+    }
     STARTUPINFOW si{}; si.cb = sizeof(si);
     Handle logfile;
     if (!log.empty()) {
@@ -449,10 +490,59 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     if (!GetExitCodeProcess(pi.hProcess, &code)) throw std::runtime_error("cannot read curve exit status");
     return code == 0 ? 0 : 1;
 }
-int curve_worker(const Options &o) {
+std::string select_auto(Options &o,const Record &r,bool apply=true) {
+    namespace c=ecm_stage2::cost;
+    if(o.cost_profile.empty())throw std::runtime_error("Auto B2 requires --cost-profile FILE");
+    Handle guard;guard.value=CreateFileW(fs::path(o.cost_profile).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(guard.value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock cost profile for reading");
+    const std::string hash=ecm_stage2::sha256_file(fs::path(o.cost_profile));
+    const auto profile=c::Profile::load(fs::path(o.cost_profile));
+    if(profile.binary!=ecm_stage2::sha256_file(executable()))throw std::runtime_error("cost profile binary fingerprint mismatch; recalibration required");
+    // Bind only the measured configuration; explicit conflicting environment fails.
+    auto require=[](const char *key,uint64_t expected,uint64_t fallback) {
+        const char *value=std::getenv(key);const uint64_t actual=value?ecm_stage2::cost::integer(value):fallback;
+        if(actual!=expected)throw std::runtime_error(std::string("cost profile configuration mismatch: ")+key);
+    };
+    for(const char *key:{"NTT_XADD6","NTT_BABY_DEVICE","NTT_POINT_MERSENNE","NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE",
+        "NTT_GFINV_SEG_EXACT","NTT_GFINV_BATCH","NTT_FOLD_FLAT","NTT_FOLD_DEVICE","NTT_GROOT_DEVICE","NTT_SCALED_DESCENT",
+        "NTT_S4_OUTPUT_WINDOW","NTT_S4_CHUNK_OUTPUT","NTT_DEVICE_GLEAF","NTT_GROOT_TO_FOLD","NTT_S4_ORACLE_ASYNC",
+        "NTT_S4_CARRY_BATCH","NTT_FUSE_WARP_TAIL"})require(key,1,1);
+    for(const char *key:{"NTT_GIANT_LADDER","NTT_GL_SHIFT_SCALE","NTT_CARRY_CHECK_FUSED","NTT_S4_HOSTPACK","NTT_S4_FINAL_READBACK"})require(key,0,0);
+    require("NTT_FUSE_COOP_OUTER",2,2);require("NTT_FUSE_T",12,12);require("NTT_FUSE_M",4,4);
+    require("NTT_S4_BATCH_MB",64,64);require("NTT_DEVICE_GLEAF_MAX_MB",512,512);
+    require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",32768,32768);
+    require("NTT_S4_SAMPLE",96,96);require("NTT_S4_CHECK_EVERY",8,8);
+    require("NTT_ARENA_WORKSPACE_POOL",1,1);require("NTT_FUSE_COMPACT_SCRATCH",1,1);
+    require("NTT_S4_FLAT_DIRECT",1,1);require("NTT_GROOT_COMPACT_RAW",1,1);
+    if(o.factor_only)_putenv_s("NTT_NAME_HITS","0");
+    const char *naming=std::getenv("NTT_NAME_HITS");
+    if(naming)require("NTT_NAME_HITS",profile.naming,profile.naming);
+    else _putenv_s("NTT_NAME_HITS",profile.naming?"1":"0");
+    if(!profile.naming)o.factor_only=true;
+    Big n;mpz_set_str(n.z,r.n.c_str(),16);const int bits=(int)mpz_sizeinbase(n.z,2);
+    if(bits<2||bits>8192||mpz_popcount(n.z)!=(mp_bitcnt_t)bits)throw std::runtime_error("cost profile requires exact Mersenne input");
+    uint64_t arena=o.arena;
+    if(!arena)if(const char *v=std::getenv("NTT_ARENA_CAP_KB")) {
+        const auto kb=c::integer(v);if(!kb||kb%1024)throw std::runtime_error("cost profile requires an explicit whole-MiB arena scope");arena=kb/1024;
+    }
+    if(std::none_of(profile.scopes.begin(),profile.scopes.end(),[&](const c::Scope &s){return s.bits==(uint64_t)bits&&s.b1==r.b1&&(!arena||s.arena_mb==arena);}))
+        throw std::runtime_error("no measured bit-width/B1/arena scope");
+    EcmStage2DeviceInfo device;
+    if(ecm_cuda_stage2_device_info(o.device,&device,profile.uuid.c_str()))throw std::runtime_error("cannot query matching Auto B2 device");
+    c::Request request;request.bits=bits;request.b1=r.b1;request.d=o.d;request.arena_mb=arena;request.owner_mb=o.owner_mb;
+    request.b2min=o.auto_min;request.b2max=o.auto_max;request.batch=o.stage1_batch;request.t1=o.stage1_seconds;request.adjust=o.ratio_adjust;
+    const auto plan=c::choose(profile,request,device);o.b2=plan.b2;o.d=plan.d;o.arena=plan.arena_mb;o.owner_mb=plan.owner_mb;
+    if(apply){
+        _putenv_s("NTT_ARENA_CAP_KB",std::to_string(o.arena*1024).c_str());
+        _putenv_s("NTT_FOLD_DEVICE_MAX_MB",std::to_string(o.owner_mb).c_str());
+        _putenv_s("NTT_D_MODEL","0");
+    }
+    return c::json(plan,hash);
+}
+int curve_worker(Options o) {
     if (o.factor_only && _putenv_s("NTT_NAME_HITS", "0"))
         throw std::runtime_error("cannot disable optional prime-witness naming");
-    if (o.save.empty() || o.results.empty() || !o.index || o.device < 0 || !o.b2)
+    if (o.save.empty() || o.results.empty() || !o.index || o.device < 0 || (!o.b2 && !o.auto_b2))
         throw std::runtime_error("incomplete internal curve-worker arguments");
     std::ifstream in(o.save, std::ios::binary);
     if (!in) throw std::runtime_error("cannot reread save");
@@ -461,9 +551,13 @@ int curve_worker(const Options &o) {
     if (!std::getline(in, line) || fingerprint(line) != o.hash)
         throw std::runtime_error("save changed after planning");
     const Record r = parse_record(line);
-    if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
     std::string result;
+    const uint64_t requested_d=o.d,requested_b2=o.b2;
     const auto start = std::chrono::steady_clock::now();
+    std::string auto_json;
+    if(!o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
+    const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+    if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
     Big n, x, gcd;
     mpz_set_str(n.z, r.n.c_str(), 16); mpz_set_str(x.z, r.x.c_str(), 16);
     mpz_gcd(gcd.z, x.z, n.z);
@@ -494,10 +588,13 @@ int curve_worker(const Options &o) {
         ",\"worker\":" + std::to_string(o.worker) + ",\"device\":" + std::to_string(o.device) +
         ",\"N_hex\":" + json_string(r.n) + ",\"sigma\":" + std::to_string(r.sigma) +
         ",\"B1\":" + std::to_string(r.b1) + ",\"B2\":" + std::to_string(o.b2) +
-        ",\"requested_D\":" + std::to_string(o.d) + ",\"seconds\":" + std::to_string(seconds) +
+        ",\"requested_D\":" + std::to_string(requested_d) + ",\"seconds\":" + std::to_string(seconds) +
         ",\"factorization_seconds\":" + std::to_string(factor_seconds) +
         ",\"param\":0" +
         ",\"requested_factor_only\":" + std::string(o.factor_only ? "true" : "false") +
+        ",\"auto_b2\":" + std::string(auto_json.empty() ? "false" : "true") +
+        ",\"requested_B2\":" + std::to_string(requested_b2) + ",\"auto_planning_seconds\":" + std::to_string(auto_seconds) +
+        (auto_json.empty() ? "" : ",\"auto_plan\":" + auto_json) +
         ",\"timestamp_ms\":" + std::to_string(timestamp) + "," + result + "}");
     return 0;
 }
@@ -509,6 +606,10 @@ void help() {
         "         --log FILE --dry-run --help\n"
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
         "         --factor-only (skip optional prime-witness naming; raw factors may be composite)\n"
+        "Auto B2: --auto-b2 --cost-profile FILE [--stage1-batch N]\n"
+        "         [--stage1-seconds-per-curve S] [--stage2-ratio-adjust R]\n"
+        "         [--auto-min-b2 B2 --auto-max-b2 B2] [--owner-budget-mb MB]\n"
+        "         Requires a matching measured runtime profile; no extrapolation.\n"
         "         --plan-only (queries device memory and D; runs no curve)\n"
         "Tune: --tune ntt --device N [--length-log2 16:27] [--tune-repeats 5]\n"
         "      [--tune-memory-mb 1024] [--tune-file stage2_tune.jsonl]\n"
@@ -522,9 +623,18 @@ void help() {
 int driver(Options o) {
     if (o.help) { help(); return 0; }
     if (o.child) return curve_worker(o);
+    if(o.auto_b2&&o.b2)throw std::runtime_error("explicit --auto-b2 conflicts with nonzero --b2");
+    if(o.cost_device_info) {
+        if(!o.save.empty()||!o.worktodo.empty()||!o.tune.empty()||o.auto_b2||o.plan_only||o.dry||o.b2)
+            throw std::runtime_error("--cost-device-info is independent of curve/queue options");
+        EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(o.device<0?0:o.device,&info))throw std::runtime_error("cannot query cost-profile device");
+        std::cout<<"{\"type\":\"cost_device\",\"uuid_hex\":\""<<info.uuid_hex<<"\",\"major\":"<<info.major<<",\"minor\":"<<info.minor
+            <<",\"runtime\":"<<info.runtime<<",\"driver\":"<<info.driver<<",\"fixed_mode\":"<<info.fixed_mode<<",\"outer_unroll_u\":"<<info.outer_unroll_u
+            <<",\"free_bytes\":"<<info.free_bytes<<",\"total_bytes\":"<<info.total_bytes<<"}"<<std::endl;return 0;
+    }
     if (o.tune.empty() && o.tune_options) throw std::runtime_error("tune options require --tune ntt");
     if (!o.tune.empty() && (o.tune != "ntt" || !o.save.empty() || !o.worktodo.empty() ||
-        o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once))
+        o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once || o.auto_b2 || !o.cost_profile.empty()))
         throw std::runtime_error("--tune ntt is independent of save/queue/curve planning options");
     if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
     const fs::path cwd = fs::current_path();
@@ -535,9 +645,18 @@ int driver(Options o) {
     Settings s = stage2_ini(ini, o.worker);
     if(s.factorize_hits)o.factorize_hits=true;
     if(s.factor_only)o.factor_only=true;
+    o.auto_b2=o.auto_b2||s.auto_b2;
+    if(!o.auto_min)o.auto_min=s.auto_min;if(!o.auto_max)o.auto_max=s.auto_max;
+    if(!o.has_owner){if(s.has_owner)o.owner_mb=s.owner_mb;else if(const char *v=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))o.owner_mb=ecm_stage2::cost::integer(v);}
+    if(o.owner_mb>1048576)throw std::runtime_error("invalid owner budget");
+    if(!o.has_stage1_batch)o.stage1_batch=s.stage1_batch;
+    if(!o.has_stage1_seconds)o.stage1_seconds=s.stage1_seconds;
+    if(!o.has_ratio)o.ratio_adjust=s.ratio_adjust;
     if(!o.has_gp && !s.gp.empty())o.gp=s.gp;
     if(!o.has_factor_timeout)o.factor_timeout=static_cast<unsigned>(s.factor_timeout);
     const fs::path base = ini.parent_path();
+    if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
+    else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
     const fs::path worktodo = o.worktodo.empty() ? absolute_from(base, cfg.worktodo) : absolute_from(cwd, o.worktodo);
     const fs::path finished = absolute_from(base, cfg.finished);
     const fs::path tmp = absolute_from(base, cfg.tmp_dir);
@@ -550,8 +669,10 @@ int driver(Options o) {
     else if (!cfg.log_file.empty()) log = absolute_from(base, cfg.log_file);
     const int device = o.device < 0 ? cfg.device : o.device;
     const uint64_t d = o.has_d ? o.d : s.d;
+    o.device=device;o.d=d;
     if (device < 0 || (d && (d < 6 || d % 2))) throw std::runtime_error("device must be >=0; D must be even and >=6");
     const uint64_t batch = o.has_batch ? o.batch : s.batch, arena = o.has_arena ? o.arena : s.arena;
+    o.arena=arena;
     if (!batch || batch > 1048576 || arena > 1048576) throw std::runtime_error("invalid Stage2 memory budget in MB");
     _putenv_s("NTT_S4_BATCH_MB", std::to_string(batch).c_str());
     if (arena) _putenv_s("NTT_ARENA_CAP_KB", std::to_string(arena * 1024).c_str());
@@ -631,21 +752,24 @@ int driver(Options o) {
             expected_n = number(n.z);
             save = absolute_from(tmp, task.save_name);
         } else save = absolute_from(cwd, o.save);
+        if(o.auto_b2&&!b2&&o.cost_profile.empty())throw std::runtime_error("Auto B2 requires --cost-profile FILE");
         const auto plan = records(save, skip, count);
         for (const auto &r : plan) {
-            if (b2 <= r.b1 || b2 > static_cast<uint64_t>(INT64_MAX) - 8192)
+            if ((!(o.auto_b2&&!b2)&&b2 <= r.b1) || b2 > static_cast<uint64_t>(INT64_MAX) - 8192)
                 throw std::runtime_error("B2 must exceed every saved B1 and fit the engine's signed index range");
             if (!expected_n.empty() && r.n != expected_n) throw std::runtime_error("worktodo N differs from save N");
             if (queue && r.b1 != plan.front().b1) throw std::runtime_error("queue saves must have the same B1");
         }
         std::cout << "stage2_plan: save=" << save.string() << " curves=" << plan.size()
                   << " B2=" << b2 << " D=" << d << " device=" << device << " worker=" << o.worker
+                  << " auto_b2=" << (o.auto_b2&&!b2 ? 1 : 0)
                   << " log=" << log.string() << " results=" << results.string() << '\n';
         for (const auto &r : plan) {
             std::cout << "curve_start: record=" << r.index << " sigma=" << r.sigma << " B1=" << r.b1
                       << " checksum=" << (r.checksum ? "verified" : "absent") << std::endl;
             if (o.dry) continue;
             if (o.plan_only) {
+                if(o.auto_b2&&!b2){Options local=o;local.b2=0;std::cout<<select_auto(local,r,false)<<std::endl;continue;}
                 std::string result;
                 const int code = ecm_cuda_stage2_plan(r.n.c_str(), r.sigma, r.b1, b2, d, device,
                     [](const char *json, void *ctx) { *static_cast<std::string *>(ctx) = json; }, &result);
