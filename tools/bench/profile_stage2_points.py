@@ -17,6 +17,7 @@ def main():
     p.add_argument('--d', type=int, required=True)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--point-mersenne',type=int,choices=(0,1),default=0)
+    p.add_argument('--carry-check-fused',type=int,choices=(0,1),default=0)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--analyze-existing', action='store_true', help='Validate and analyze the existing command/log/trace without relaunching')
     p.add_argument('--nsys', type=Path, default=Path('C:/Program Files/NVIDIA Corporation/Nsight Systems 2026.1.3/target-windows-x64/nsys.exe'))
@@ -37,6 +38,7 @@ def main():
     verify()
     env = {k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_NO_PROGRESS='1', NTT_ARENA_CAP_KB='6451200', NTT_D_MODEL='0', NTT_STAGE1_Q_DUMP='1',NTT_POINT_MERSENNE=str(a.point_mersenne))
+    env['NTT_CARRY_CHECK_FUSED']=str(a.carry_check_fused)
     command = [str(exe), '--save', str(save), '--b2', str(a.b2), '--d', str(a.d), '--device', str(a.device), '--results', str(out/'results.jsonl'), '--log', str(out/'engine.log')]
     assert not any(any(c in token for c in '&|<>%!^\r\n"') for token in command)
     wrapper = out/'run.cmd'
@@ -54,6 +56,10 @@ def main():
     for token in ('stage1_skipped=1', 'gmp_check_bad=0', 'gmp_selftest_bad=0', 'pending=0', 'clean=1', 'fixed=3', 'point_arithmetic: xadd6=1'):
         assert token in text, token
     if a.point_mersenne: assert 'point_mersenne_mode: requested=1 enabled=1' in text
+    if a.carry_check_fused or 'tools/bench/ntt_carry_partial.cuh' in sources:
+        stats=dict(re.findall(r'(\w+)=(\d+)',re.search(r'ntt_carry_check_stats: (.*)',text)[1]))
+        assert int(stats['requested'])==a.carry_check_fused
+        assert int(stats['fused_calls'])>0 if a.carry_check_fused else int(stats['fused_calls'])==0
     q = re.search(r'real_setup_Q_full: hex=([0-9a-f]+)', text)[1]
     saved_x = re.search(rb'\bX=(?:0x)?([0-9a-fA-F]+)', save.read_bytes().splitlines()[0])[1].decode().lower().lstrip('0') or '0'
     assert q == saved_x

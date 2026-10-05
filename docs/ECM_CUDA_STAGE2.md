@@ -247,3 +247,10 @@ D138标定均值full56.643870s：init26.59%，baby14.08%、CPUaffine6.10%、F树
 生产编译脚本新增 `-OuterUnrollU 0|4`，默认0。4在cooperative outer中展开四组独立蝶形，无新增数据数组或传输，REG/代码体积增加；仅建议在独立实验目录编译并给出显式D。新调度尚未标定，实际宽度4会回退legacy D模型，不能沿用profile6经验速率。
 
 完整卷积k24..27独立重复少0.70–0.78%，但真实保存点八条Stage2均值少0.367%、两个顺序组方向不同，尚未建立稳定整曲线收益，因此生产exe仍893、默认调度0。native算术/实际scope18/0，save/ini/worktodo基本入口21/0。复现、全部样本、资源代价、计算量/访存公式及source-line见[outer ILP报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_OUTER_ILP.md)。
+
+
+## 2026-10-05 可选NTT进位/诊断融合
+
+从当前源码独立构建（-GlBackend ptx -OuterUnrollU 0）后，设环境变量NTT_CARRY_CHECK_FUSED=1启用大batch进位/检查融合；未设置默认0。scratch由arena拥有、复用、计入硬预算，公式8ceil(L/256)mB，真实曲线峰4MiB；小调用及预算/分配失败沿用原检查。deferred错误累积与所有必需GMP/oracle检查保留，save/worktodo/ini接口保持。
+
+请求此实验模式会禁用旧经验D profile，请使用显式--d做对照。同binary真实保存点八条预热后交叉full38.2264815→37.9273095s（少0.783%），main少0.940%；每模式4条、无CI。原语/实际NTT/deferred故障/预算回退与native两模式各18/0通过。当前生产exe仍893、实验开关默认0；新NTT成本权重与多D留出完成后再决定默认发布。[公式、source-line、命令、全部样本](D:/code/MPA-OpenCl/docs/STAGE2_NTT_CARRY_CHECK_FUSION.md)。

@@ -16,7 +16,7 @@ $code=$LASTEXITCODE;$watch.Stop()
 if($code -ne 0){Get-Content $log -Tail 35;throw 'Goldilocks Tensor Core probe build failed'}
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
 $deps=@('tools/test/ntt_tensor_goldilocks_probe.cu','tools/bench/ntt_tensor_goldilocks.cuh',
-    'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/build/build_ntt_tensor_probe.ps1')
+    'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/bench/ntt_carry_partial.cuh','tools/build/build_ntt_tensor_probe.ps1')
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash}
 [ordered]@{exe=(Resolve-Path $exe).Path;sha256=(Get-FileHash -LiteralPath $exe).Hash;
     architecture=$Arch;build_seconds=$watch.Elapsed.TotalSeconds;toolkit=(& nvcc --version | Out-String).Trim();

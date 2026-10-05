@@ -4389,3 +4389,14 @@ NTT固定PTX下探针扫默认/1/2/4，各13/0；u1八个outer实例SASS与默�
 新增编译选项OuterUnrollU0/4，默认0，无热运行时分派；宽度4保护旧D经验模型，实际macro声明并核验。native48BD8842…0360EF/19raw源，CUDA330.0s；点/两种真实scope18/0，基础save/ini/worktodo21/0。八条同Q/B2/D/point1/check交叉full38.5948055→38.4531660s，名义少0.367%；前组少0.808%，后组慢0.079%，未建立整曲线稳定加速，**不提升生产默认**，保留实验候选。Q/叶/oracle/因子/覆盖保持。
 
 接入后宏0/4再各13/0，k25..27快约0.7%，k24首次baseline漂移单独报告；新默认0/新4/native4各八实例SASS分别匹配原0/原4/原4。生产893字节保持，未重新拟合未提升候选D。详细源文件line、公式、全部样本、资源代价、保留决策及复现见[本轮报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_OUTER_ILP.md)。后续跨层融合/根同步，以及CPU准备与workspace lease；公平Prime95目标仍未完成。
+
+
+## 80. NTT进位/残余诊断融合（2026-10-05）
+
+接续已完成的xADD6、点折叠与profile6，默认outer0。本轮把块诊断放入原cone，保持carry recurrence/长mask传播和deferred additive/max verdict。每块写8B摘要，finish每slice一块；省8LmB全digit扫描，新增scratch8ceil(L/256)mB，原两launch仍两launch，H2D/D2H算法payload增量0。实际峰4MiB计入arena硬预算，小调用Lm<2²⁰及cap/alloc失败回原检查，flag默认0。
+
+原语180cases/657000words及最终R1..10共12配置×18shape×2模式bad0；实际NTT runner16cases/122850words含历史错误保持、reset、cap/allocator回退、release；transform13/0，native flag0/1各18/0并证明默认profile5/6保持、候选拒绝旧D。内核错误4被公开CLI映射为2，首轮收尾脚本错误期待4已保留并纠正，实际故障exit2；强制分配失败真实小界保持leaf/GMP/因子。
+
+独立真实batch形状carry+check少16–19%，大数组R5少22–23%、R6少18%；小独立两级诊断负结果保留。native8A789739…7955DA/20raw依赖，CUDA295.2s。两条预指定warmup后完整八条同binary ABBA+BAAB，full38.2264815→37.9273095s（少0.78263%），main少0.93976%，两组少约0.672/0.893%，每模式4条/无CI。Q/leaf/oracle/因子/397S4/1836241poly/36615543coeff/2400selftest/60474GMP/3full_checks保持。
+
+同exe各一次Systems合计carry+check3.353941344→2.786565885s（少16.9167%），cone本身变慢、末端扫描节约更大；不能单用t_check下降算收益。H2D主体7.151GB保持，D2H仅多4次共32B、来源未定位；自身GPU空隙14.153→13.505%不是整卡idle证明。生产893保持，实验NTT_CARRY_CHECK_FUSED=1保护旧D，下一步新12shape权重、多D/独立留出后再决定默认。CPU准备、workspace lease、多曲线和公平Prime95仍待推进。[全部样本、公式、source-line与审计](D:/code/MPA-OpenCl/docs/STAGE2_NTT_CARRY_CHECK_FUSION.md)。

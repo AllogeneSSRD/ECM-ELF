@@ -1905,3 +1905,12 @@ GlBackend可选编译将Goldilocks归约固定，移除每次mode load/判断，
 合作outer的u循环展开4组，完整卷积k24..27独立重复少0.70–0.78%；默认与unroll1八实例GPU指令相同，后者启动波动不记收益。u4 M8 forward REG48→78，M6可驻留capacity5→4；shared/LOCAL0与MAC/pass/payload保持。源码默认NTT_OUTER_UNROLL_U0，native builder可选-OuterUnrollU4，候选停用旧D经验profile，必须用显式D做公平对照。
 
 native48BD…0360EF/19源，原生点/实际scope18/0，基本入口21/0。八条full38.594806→38.453166s名义少0.367%，两顺序组方向不同，未证明整曲线稳定收益，生产893保持。接入宏0/4各13/0且默认0/候选4/native4各八SASS实例匹配对应旧探针；叶/oracle/因子/强制检查保持。[完整报告、公式、source-line与复现](D:/code/MPA-OpenCl/docs/STAGE2_NTT_OUTER_ILP.md)。下一项关注更大规模的跨层融合/根同步收益及CPU准备空隙，多曲线需要共享workspace lease。
+
+
+## 54. NTT进位与必需诊断融合（2026-10-05）
+
+源码可选NTT_CARRY_CHECK_FUSED=1，默认0。既有carry cone的最终digit直接生成warp/block摘要，独占8B/CTA再按slice finish，保持长mask精确传播和此前错误累积。用L=每slice NTT长度、m=batch、T=ceil(L/256)，新增显存8TmB，诊断逻辑访问8Lm→16TmB；NTT模乘/pass、输出排列、两launch和verdict readback保持。只在Lm≥2²⁰使用，arena预算不足/分配失败fallback；真实最大4MiB已计账。
+
+原语180cases/657000words、12组R/bpw×18shape×两模式bad0；实际runner16cases/122850words，transform13/0，native两模式各18/0及故障/真实分配回退。R5 REG35→39/R6 39→40/shared64B，finish REG24/shared96B，真实STACK0/LOCAL0。完整八条预热后ABBA+BAAB均值38.2264815→37.9273095s（少0.783%），main少0.940%，Q/叶/oracle/因子/全部必需覆盖保持。Systems carry+check少16.9%，PCIe主体量保持；自身事件空隙仍约13.5%，不代表整卡闲置。
+
+native8A78…7955DA/20源码，生产893与默认0保持。请求新检查模式拒绝旧D profile，固定D实验；下一步先冻结新NTT权重并多D/独立holdout再决定提升。CPU准备和多曲线共享workspace lease仍需推进。[详细算法、公式、全部样本与代码原文件line](D:/code/MPA-OpenCl/docs/STAGE2_NTT_CARRY_CHECK_FUSION.md)。

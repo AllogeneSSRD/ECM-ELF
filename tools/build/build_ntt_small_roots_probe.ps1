@@ -12,7 +12,7 @@ $exe=Join-Path $Build 'ntt_small_roots_probe.exe';$log=Join-Path $Build 'build.l
 $fixedMode=@{runtime=-1;fold=0;short=1;ptx=3}[$GlBackend]
 $deps=@('tools/test/ntt_small_roots_probe.cu','tools/bench/ntt_small_roots.cuh',
     'tools/test/ntt_tensor_goldilocks_probe.cu','tools/bench/ntt_tensor_goldilocks.cuh',
-    'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/build/build_ntt_small_roots_probe.ps1')
+    'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/bench/ntt_carry_partial.cuh','tools/build/build_ntt_small_roots_probe.ps1')
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash}
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$fixedMode -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 tools/test/ntt_small_roots_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
 $watch=[Diagnostics.Stopwatch]::StartNew();& cmd.exe /c $line;$code=$LASTEXITCODE;$watch.Stop()

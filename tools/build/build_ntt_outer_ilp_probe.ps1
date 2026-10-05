@@ -14,7 +14,7 @@ New-Item -ItemType Directory -Force $Build | Out-Null
 if(Test-Path (Join-Path $Build 'manifest.json')){throw 'Use a fresh build directory'}
 $deps=@('tools/test/ntt_coop_outer_probe.cu','tools/bench/ntt_poly_probe.cu',
         'tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh',
-        'tools/bench/ntt_goldilocks_ptx.cuh','tools/build/build_ntt_outer_ilp_probe.ps1')
+        'tools/bench/ntt_goldilocks_ptx.cuh','tools/bench/ntt_carry_partial.cuh','tools/build/build_ntt_outer_ilp_probe.ps1')
 $original=[ordered]@{};$generated=[ordered]@{}
 $encoding=New-Object System.Text.UTF8Encoding($false)
 foreach($dep in $deps){

@@ -926,6 +926,11 @@ __global__ void carry_cone_kernel(const unsigned long long *c, unsigned long lon
     cout[i] = (x + incoming) & mask;
 }
 
+#include "ntt_carry_partial.cuh"
+static bool ntt_carry_check_requested() {
+    const char *e=std::getenv("NTT_CARRY_CHECK_FUSED");return e && std::atoi(e)!=0;
+}
+
 /* ---- twiddle tables ---------------------------------------------------------------- */
 
 /* tile table: stage s at [2^s - 1, 2^(s+1) - 1), entry j = root^(j * 2^(k-1-s)) */
@@ -1789,6 +1794,30 @@ struct NttArena {
     int device = -1;
     size_t cap_bytes = 0;                 /* 0 = unlimited */
     size_t bytes = 0;
+    unsigned int *carry_scratch=nullptr;
+    size_t carry_scratch_bytes=0,carry_scratch_peak=0;
+    unsigned long long carry_fused_calls=0,carry_skipped_calls=0,carry_refusals=0,carry_grows=0;
+    void drop_carry_scratch() {
+        if(carry_scratch) { CK(cudaFree(carry_scratch));bytes-=carry_scratch_bytes; }
+        carry_scratch=nullptr;carry_scratch_bytes=0;
+    }
+    unsigned int *carry_workspace(unsigned long long n,unsigned long long batch) {
+        if(!ntt_carry_check_requested())return nullptr;
+        if(!batch || n>((size_t)-1)/batch || n*batch<(1ull<<20)) { ++carry_skipped_calls;return nullptr; }
+        const size_t blocks=(size_t)((n+255)/256);
+        if(blocks>((size_t)-1)/8/batch) { ++carry_refusals;return nullptr; }
+        const size_t need=blocks*(size_t)batch*8;
+        const char *fail=std::getenv("NTT_CARRY_CHECK_ALLOC_FAIL");
+        if(fail && std::atoi(fail)) { ++carry_refusals;return nullptr; }
+        if(need>carry_scratch_bytes) {
+            if(cap_bytes && (need>cap_bytes || bytes-carry_scratch_bytes>cap_bytes-need)) { ++carry_refusals;return nullptr; }
+            drop_carry_scratch();
+            if(cudaMalloc((void**)&carry_scratch,need)!=cudaSuccess) { (void)cudaGetLastError();carry_scratch=nullptr;++carry_refusals;return nullptr; }
+            carry_scratch_bytes=need;bytes+=need;++carry_grows;
+            carry_scratch_peak=std::max(carry_scratch_peak,need);update_peaks();
+        }
+        ++carry_fused_calls;return carry_scratch;
+    }
     size_t attr_words = 0;                /* the shared-memory ceiling pinned on the tile
                                              kernels (see ntt_arena_pin_smem) */
     unsigned long long fuse_hits = 0, fuse_builds = 0, buf_hits = 0, buf_builds = 0;
@@ -1900,7 +1929,7 @@ struct NttArena {
 
     void update_peaks()
     {
-        size_t big=workspace.words*8, small=0, table=0, base=0;
+        size_t big=workspace.words*8, small=carry_scratch_bytes, table=0, base=0;
         for (const auto &b : bigs) big+=b.words*8;
         for (const auto &b : smalls) small+=b.words*8;
         for (const auto &f : fuses) { table+=(size_t)fuse_table_words(f.fc)*8; base+=fuse_base_words(f.fc)*8; }
@@ -1913,7 +1942,10 @@ struct NttArena {
 
     void print_workspace_stats() const
     {
-        size_t big=workspace.words*8, small=0, table=0, base=0;
+        std::printf("ntt_carry_check_stats: requested=%d fused_calls=%llu skipped_calls=%llu refusals=%llu grows=%llu scratch_bytes=%llu scratch_peak_bytes=%llu\n",
+                    (int)ntt_carry_check_requested(),carry_fused_calls,carry_skipped_calls,carry_refusals,carry_grows,
+                    (unsigned long long)carry_scratch_bytes,(unsigned long long)carry_scratch_peak);
+        size_t big=workspace.words*8, small=carry_scratch_bytes, table=0, base=0;
         for (const auto &b : bigs) big+=b.words*8;
         for (const auto &b : smalls) small+=b.words*8;
         for (const auto &f : fuses) { table+=(size_t)fuse_table_words(f.fc)*8; base+=fuse_base_words(f.fc)*8; }
@@ -1970,6 +2002,9 @@ struct NttArena {
     unsigned long long evict_other_shapes(unsigned long long keep_n,
                                           unsigned long long keep_nbatch)
     {
+        // This default-stream scratch is never exported and contains no deferred verdict.
+        // Only shape-local dRes below retains diagnostics across interior chunks.
+        drop_carry_scratch();
         unsigned long long freed = 0;
         size_t entry_charges = 0;
         for (FuseEntry &e : fuses) {
@@ -2007,6 +2042,7 @@ struct NttArena {
 
     void release()
     {
+        drop_carry_scratch();
         drop_workspace();
         for (FuseEntry &e : fuses) fuse_release(e.fc);
         fuses.clear();
@@ -3385,12 +3421,13 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     std::vector<unsigned long long> *hfb,
                                     std::vector<unsigned long long> *hPre,
                                     std::vector<unsigned long long> *hPost,
-                                    bool need_hout = true, bool defer_res = false)
+                                    bool need_hout = true, bool defer_res = false, NttArena *arena=nullptr)
 {
     NttPassResult r;
     const unsigned long long N = sh.N, out_slots = sh.out_slots;
     const unsigned int threads = 256;
     const unsigned int blocks = (unsigned int)((N + threads - 1) / threads);
+    unsigned int *carry_partial=arena ? arena->carry_workspace(N,nbatch) : nullptr;
     const unsigned long long inv_n = ((~0ull) / N) + 1;   /* 2^64 / N: exact exponent mod */
 
     /* ---- forward, pointwise product, inverse ----
@@ -3452,6 +3489,20 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     unsigned long long *dDig = dA;
     if (carry_rounds <= FUSE_MAX_CARRY_ROUNDS) {
         const dim3 gr(blocks, (unsigned int)nbatch);
+        if(carry_partial) {
+            switch(carry_rounds) {
+            case 1: carry_cone_check_kernel<1><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            case 2: carry_cone_check_kernel<2><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            case 3: carry_cone_check_kernel<3><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            case 4: carry_cone_check_kernel<4><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            case 5: carry_cone_check_kernel<5><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            case 6: carry_cone_check_kernel<6><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            case 7: carry_cone_check_kernel<7><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            case 8: carry_cone_check_kernel<8><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            case 9: carry_cone_check_kernel<9><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            default: carry_cone_check_kernel<10><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);break;
+            }
+        } else {
         switch (carry_rounds) {
             case 1: carry_cone_kernel<1><<<gr, threads>>>(dA, dQ, N, sh.bpw, N); break;
             case 2: carry_cone_kernel<2><<<gr, threads>>>(dA, dQ, N, sh.bpw, N); break;
@@ -3463,6 +3514,7 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
             case 8: carry_cone_kernel<8><<<gr, threads>>>(dA, dQ, N, sh.bpw, N); break;
             case 9: carry_cone_kernel<9><<<gr, threads>>>(dA, dQ, N, sh.bpw, N); break;
             default: carry_cone_kernel<10><<<gr, threads>>>(dA, dQ, N, sh.bpw, N); break;
+        }
         }
         CK(cudaGetLastError());
         dDig = dQ;
@@ -3476,7 +3528,8 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
             }
         }
         const dim3 gr(blocks, (unsigned int)nbatch);
-        carry_cone_kernel<1><<<gr, threads>>>(dA, dQ, N, sh.bpw, N);
+        if(carry_partial)carry_cone_check_kernel<1><<<gr,threads>>>(dA,dQ,N,sh.bpw,N,carry_partial);
+        else carry_cone_kernel<1><<<gr, threads>>>(dA, dQ, N, sh.bpw, N);
         CK(cudaGetLastError());
         dDig = dQ;
     }
@@ -3527,7 +3580,8 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     CK(cudaEventRecord(ev_c0));
     {
         const dim3 gr(blocks, (unsigned int)nbatch);
-        carry_residual_kernel<<<gr, threads>>>(dDig, N, sh.bpw, dRes, N);
+        if(carry_partial)carry_partial_finish_kernel<<<(unsigned int)nbatch,threads>>>(carry_partial,blocks,dRes);
+        else carry_residual_kernel<<<gr, threads>>>(dDig, N, sh.bpw, dRes, N);
     }
     CK(cudaGetLastError());
     CK(cudaEventRecord(ev_c1));
@@ -3735,7 +3789,7 @@ int ntt_poly_mul_batch_host(unsigned long long P, int S, int device, unsigned lo
         const unsigned long long m = ((nbatch - s0) < max_y) ? (nbatch - s0) : max_y;
         NttPassResult rr = ntt_run_passes(sh, fc, dA + s0 * N, dB + s0 * N, dQ + s0 * N,
                                           dOut + s0 * out_slots, dRes + 2 * s0, m, 0,
-                                          nullptr, nullptr, nullptr, nullptr, want_hout);
+                                          nullptr, nullptr, nullptr, nullptr, want_hout, false, ab ? arena : nullptr);
         if (want_hout)
             std::copy(rr.hOut.begin(), rr.hOut.end(), r.hOut.begin() + (long)(s0 * out_slots));
         std::copy(rr.hRes.begin(), rr.hRes.end(), r.hRes.begin() + (long)(2 * s0));
@@ -3929,7 +3983,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
         const unsigned long long m = ((nbatch - s0) < max_y) ? (nbatch - s0) : max_y;
         NttPassResult rr = ntt_run_passes(sh, fc, dA + s0 * N, dB + s0 * N, dQ + s0 * N,
                                           dOut + s0 * out_slots, dRes + 2 * s0, m, 0,
-                                          nullptr, nullptr, nullptr, nullptr, want_hout, true);
+                                          nullptr, nullptr, nullptr, nullptr, want_hout, true, ab ? arena : nullptr);
         sub[(size_t)ci] = rr;
         if (!rr.hOut.empty())
             std::copy(rr.hOut.begin(), rr.hOut.end(), r.hOut.begin() + (long)(s0 * out_slots));
@@ -4519,7 +4573,7 @@ int ntt_poly_mul_host(unsigned long long P, int S, int device, bool verbose, int
     /* ---- the device passes (shared runner; nbatch == 1) --------------------------------- */
     std::vector<unsigned long long> hfa, hfb, hPre, hPost;
     const NttPassResult pr = ntt_run_passes(sh, fc, dA, dB, dQ, dOut, dRes, 1,
-                                           dump, &hfa, &hfb, &hPre, &hPost);
+                                           dump, &hfa, &hfb, &hPre, &hPost, true, false, ab ? arena : nullptr);
     const double t_fwd = pr.t_fwd, t_inv = pr.t_inv, t_slot = pr.t_slot;
     const std::vector<unsigned long long> &hOut = pr.hOut;
     const unsigned long long *dDig = pr.digits;

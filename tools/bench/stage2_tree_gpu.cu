@@ -10807,6 +10807,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         L.S==4423 && mpz_popcount(L.N)==4423;
     // Outer ILP changes NTT timings; frozen profiles require the original schedule.
     if(NTT_OUTER_UNROLL_U!=0)calibrated=false;
+    if(ntt_carry_check_requested())calibrated=false;
     if(point_requested && !point_fold)calibrated=false;
     if(gl_shift_scale || (gl_ptx && !fixed_ptx) || (NTT_GL_FIXED_MODE>=0 && !fixed_ptx))calibrated=false;
     if(gl_short && !(shape_ntt && (fixed_ptx ? d_fixed_ptx_rates_valid : d_short_rates_valid)))calibrated=false;
