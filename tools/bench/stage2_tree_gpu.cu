@@ -10785,9 +10785,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if(fuse_env_ull("NTT_S4_HOSTPACK",0) || !fuse_compact_scratch() ||
        !fuse_env_ull("NTT_S4_FLAT_DIRECT",1))calibrated=false;
     // Empirical rates must match the selected arithmetic and NTT policy.
-    const bool gl_short=fuse_env_ull("NTT_GL_SHORT_REDUCE",NTT_GL_SHORT_REDUCE_DEFAULT)!=0;
+    const bool gl_short=(ntt_gl_reduce_requested_mode()&1u)!=0;
     const bool gl_shift_scale=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
-    const bool gl_ptx=fuse_env_ull("NTT_GL_PTX_REDUCE",0)!=0;
+    const bool gl_ptx=NTT_GL_FIXED_MODE==3 || fuse_env_ull("NTT_GL_PTX_REDUCE",0)!=0;
     // Existing empirical weights predate these arithmetic specializations.
     if(gl_shift_scale || gl_ptx)calibrated=false;
     if(gl_short && !(shape_ntt && d_short_rates_valid))calibrated=false;

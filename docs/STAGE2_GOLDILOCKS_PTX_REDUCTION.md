@@ -27,7 +27,7 @@ CC 的 carry/borrow 语义以及不跨函数调用保存的规则来自 [NVIDIA 
 
 - [任意128位 PTX 归约](D:/code/MPA-OpenCl/tools/bench/ntt_goldilocks_ptx.cuh:6)。
 - [额外的显式64×64乘积探针](D:/code/MPA-OpenCl/tools/bench/ntt_goldilocks_ptx.cuh:40)：保留为独立实验，真实 NTT 采用原 `a*b/__umul64hi` 加 PTX 归约。
-- [真实 NTT 配置](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:101)、[归约分派](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:151)：device mode0=原四fold、1=普通短归约、3=PTX短归约。
+- [真实 NTT 配置](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:129)、[归约分派](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:174)：device mode0=原四fold、1=普通短归约、3=PTX短归约。
 - [D保护](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10790)：请求新算术时旧经验成本不启用，实际日志输出 `gl_ptx`。
 - [GMP/依赖链探针](D:/code/MPA-OpenCl/tools/test/ntt_goldilocks_ptx_probe.cu:1)、[驱动](D:/code/MPA-OpenCl/tools/bench/bench_ntt_goldilocks_ptx.py:1)。
 - [真实NTT交叉测量](D:/code/MPA-OpenCl/tools/bench/bench_ntt_scale.py:1)、[完整Stage2交叉测量](D:/code/MPA-OpenCl/tools/bench/bench_stage2_save_reduce.py:16)。
@@ -123,3 +123,8 @@ python tools/bench/bench_stage2_save_reduce.py --exe build_cuda_cmake/gl_ptx_nat
 ```
 
 继续优先消除热kernel重复mode分派，再按最新算术重标定D。point Montgomery的依赖MAC、CPU准备、多曲线共享workspace lease仍需分别推进。之前Tensor真tile/双流为负结果，本轮没有重新证明Tensor并行issue；也没有完成同n_ECM/Q/B1/B2/覆盖/线程的Prime95新对照，长期目标继续。
+
+
+## 后续：编译期固定后端
+
+同日继续完成热分派移除，新增可选GlBackend编译参数；固定PTX实际native与A191八条交叉51.365461→49.575260 s（改善3.4852%），结果/覆盖一致。原文保留此前runtime阶段的独立样本；当前实现索引已更新到最新源码行号。[固定后端报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_FIXED_BACKEND.md)。

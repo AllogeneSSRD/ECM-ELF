@@ -93,24 +93,51 @@ namespace {
 #ifndef NTT_GL_SHORT_REDUCE_DEFAULT
 #define NTT_GL_SHORT_REDUCE_DEFAULT 0
 #endif
+#ifndef NTT_GL_FIXED_MODE
+#define NTT_GL_FIXED_MODE -1
+#endif
+#if NTT_GL_FIXED_MODE != -1 && NTT_GL_FIXED_MODE != 0 && NTT_GL_FIXED_MODE != 1 && NTT_GL_FIXED_MODE != 3
+#error "NTT_GL_FIXED_MODE must be -1 (runtime), 0 (fold), 1 (short), or 3 (PTX)"
+#endif
+#if NTT_GL_FIXED_MODE == -1
 // Volatile keeps the mode load local to each reduction. Hoisting one mode
 // register across the entire warp tile made its forward kernel spill8 bytes.
 __device__ __constant__ volatile unsigned int ntt_gl_short_reduce_device=0;
+#endif
+// An immutable backend removes the mode load and branches from every device
+// multiply. Reject contradictory environment controls instead of mislabelling
+// an A/B sample. Missing controls inherit the compiled backend.
+static unsigned int ntt_gl_reduce_requested_mode()
+{
+    const char *env=std::getenv("NTT_GL_SHORT_REDUCE");
+    const char *ptx=std::getenv("NTT_GL_PTX_REDUCE");
+    const unsigned int default_short=NTT_GL_FIXED_MODE < 0 ? NTT_GL_SHORT_REDUCE_DEFAULT : NTT_GL_FIXED_MODE&1;
+    const unsigned int default_ptx=NTT_GL_FIXED_MODE < 0 ? 0 : NTT_GL_FIXED_MODE>>1;
+    const unsigned int short_enabled=env ? (std::strtoull(env,nullptr,10)!=0) : default_short;
+    const unsigned int ptx_enabled=ptx ? (std::strtoull(ptx,nullptr,10)!=0) : default_ptx;
+    const unsigned int mode=short_enabled ? 1u | (ptx_enabled ? 2u : 0u) : 0u;
+#if NTT_GL_FIXED_MODE != -1
+    if(mode!=NTT_GL_FIXED_MODE) {
+        std::fprintf(stderr,"ntt_gl_backend_conflict: compiled=%d requested=%u\n",NTT_GL_FIXED_MODE,mode);
+        std::exit(2);
+    }
+#endif
+    return mode;
+}
 // The current engine owns one CUDA context per device and has no concurrent
 // host calls/context resets. Both modes have identical mathematical results.
 static void ntt_gl_reduce_configure()
 {
-    const char *env=std::getenv("NTT_GL_SHORT_REDUCE");
-    const unsigned int short_enabled=env ? (std::strtoull(env,nullptr,10)!=0) : NTT_GL_SHORT_REDUCE_DEFAULT;
-    const char *ptx=std::getenv("NTT_GL_PTX_REDUCE");
-    const unsigned int enabled=short_enabled ? 1u | ((ptx && std::strtoull(ptx,nullptr,10)!=0) ? 2u : 0u) : 0u;
+    const unsigned int enabled=ntt_gl_reduce_requested_mode();
     int device=0;CK(cudaGetDevice(&device));
     static std::map<int,unsigned int> configured;
     const auto it=configured.find(device);
     if(it!=configured.end() && it->second==enabled)return;
+#if NTT_GL_FIXED_MODE == -1
     CK(cudaMemcpyToSymbol(ntt_gl_short_reduce_device,&enabled,sizeof(enabled)));
+#endif
     configured[device]=enabled;
-    std::printf("ntt_gl_reduce_mode: device=%d short=%u ptx=%u\n",device,enabled&1u,enabled>>1);
+    std::printf("ntt_gl_reduce_mode: device=%d short=%u ptx=%u fixed=%d\n",device,enabled&1u,enabled>>1,NTT_GL_FIXED_MODE);
 }
 
 /* Modular reduction, device and host (this is the whole arithmetic core, so it is shared
@@ -148,9 +175,15 @@ __host__ __device__ inline unsigned long long gl_reduce(unsigned long long lo,
                                                         unsigned long long hi)
 {
 #ifdef __CUDA_ARCH__
+#if NTT_GL_FIXED_MODE == 3
+    return gl_reduce128_ptx(lo,hi);
+#elif NTT_GL_FIXED_MODE == 1
+    return gl_reduce128_short(lo,hi);
+#elif NTT_GL_FIXED_MODE == -1
     const auto mode=ntt_gl_short_reduce_device;
     if(mode&2u)return gl_reduce128_ptx(lo,hi);
     if(mode&1u)return gl_reduce128_short(lo,hi);
+#endif
 #endif
     for (int iter = 0; iter < 4; ++iter) {
         /* exact: lo + hi*(2^32-1) = lo + (hi<<32) - hi, split into (lo', hi') */

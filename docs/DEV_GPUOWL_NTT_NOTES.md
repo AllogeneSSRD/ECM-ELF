@@ -4349,3 +4349,10 @@ NTT_BABY_DEVICE默认0，实验显式1启用；现有D模型在请求新路径�
 以任意128位短归约证明为基础，PTX CC直接传播borrow/carry、32bit predicate规范化。原语200144任意128位和200144模乘/每法、256条GMP依赖序列/每法通过，11/0；真实NTT新旧cooperative/shared/warp/GMP/cache/lifecycle/fault8组/0。依赖chain快12.55%；内部纯卷积快8.7–9.3%，但新分派拖慢普通短基线，冻结旧探针交叉实际k24..27快6.76/3.59/4.04/2.66%。
 
 native C19E2F57…72E1C、18源码冻结、CUDA354.5s；同save/D八条内部full 50.922277→49.382666s，快3.0235%。另A191/新PTX old-new-new-old 51.214982→50.778877s，快0.8515%，两条/后端无CI。叶/oracle/因子/检查一致，scope192/0，实际native warp GMP与frozen因子2/0。算法数据payload增量0；未重采NVML/PCIe峰。PTX默认0，生产A191保持，请求新算术回legacy D；需冻结新权重/多D/holdout后决定发布，并继续消除每次模乘分派开销。[详细数学、源文件line、样本和资源](D:/code/MPA-OpenCl/docs/STAGE2_GOLDILOCKS_PTX_REDUCTION.md)。长期性能目标仍未完成。
+
+
+## 74. NTT固定后端消除热分派（2026-10-05）
+
+新增NTT_GL_FIXED_MODE（runtime−1/fold0/short1/PTX3）及两构建入口GlBackend，签名绑定后端，矛盾环境配置拒绝exit2，实际PTX保护旧D模型。相同数学/data/check，固定版本去掉每次归约mode load/判断。固定short/PTX独立GMP/scale/cooperative/legacy/cache/fault/config16/0，当前runtime再编译门禁8/0；所选warpREG40、M8 REG48/46/LOCAL0，占用率不变。
+
+纯卷积相对冻结runtime/PTX1，k24..27快2.26/5.33/4.67/8.10%。固定PTX native18源码冻结，8条A191/new ABBA+BAAB full 51.365461→49.575260s，快3.4852%，覆盖/叶/oracle/因子一致；selector48/0，实际native frozen因子/warp与两种冲突通过。算法payload增量0B，未采集新的NVML/PCIe峰；生产A191保持。下一阶段冻结全部尺寸权重、多D重新拟合与独立holdout，再评估发布。[source/line、公式、全部样本](D:/code/MPA-OpenCl/docs/STAGE2_NTT_FIXED_BACKEND.md)。

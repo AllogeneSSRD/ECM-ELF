@@ -1873,3 +1873,8 @@ NTT_BABY_DEVICE默认0，实验显式1启用；现有D模型在请求新路径�
 ## 47. Goldilocks 显式进位链（2026-10-05）
 
 新增NTT_GL_PTX_REDUCE，short1下将任意128位归约换为显式32bit CC链，默认0。依赖链快12.55%，真实完整卷积相对冻结旧探针快2.66–6.76%；内部A/B基线有新分派开销，数据分开报告。完整native八条内部 50.922277→49.382666s，另A191真实交叉 51.214982→50.778877s；检查覆盖与结果一致。scope192/0、native warp/frozen因子2/0，18源码冻结。数组/传输payload保持，生产A191未更新；PTX请求保护旧D模型，待重新标定和编译特化。[完整报告与当前source/line](D:/code/MPA-OpenCl/docs/STAGE2_GOLDILOCKS_PTX_REDUCTION.md)。
+
+
+## 48. 固定NTT后端（2026-10-05）
+
+GlBackend可选编译将Goldilocks归约固定，移除每次mode load/判断，保留runtime A/B；环境冲突拒绝，PTX实际后端保护D scope。固定short/PTX门禁16/0、runtime8/0，所选kernel寄存器/占用率不变。k24..27相对旧runtime/PTX1纯卷积快2.26/5.33/4.67/8.10%；8条完整Stage2相对生产A191 51.365461→49.575260s，快3.4852%，检查覆盖相同。native selector48/0及普通因子/warp/冲突通过。算法数据payload保持；生产A191未发布替换，下一步新后端D拟合与holdout。[完整说明与source/line](D:/code/MPA-OpenCl/docs/STAGE2_NTT_FIXED_BACKEND.md)。

@@ -8,6 +8,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_ecm_cuda_s
 param(
     [string]$Build = 'build_cuda_cmake/production_stage2',
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
+    [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'runtime',
     [switch]$Rebuild
 )
 $ErrorActionPreference = 'Stop'
@@ -27,7 +28,8 @@ $objDir = Join-Path $Build '_objects'
 New-Item -ItemType Directory -Force $objDir | Out-Null
 $exe = Join-Path $Build 'ecm_cuda_stage2.exe'
 $signaturePath = Join-Path $objDir 'build_signature.txt'
-$signature = @("arch=$Arch", (& nvcc --version | Out-String).Trim())
+$glMode = @{runtime=-1;fold=0;short=1;ptx=3}[$GlBackend]
+$signature = @("arch=$Arch", "gl_backend=$GlBackend", "gl_fixed_mode=$glMode", (& nvcc --version | Out-String).Trim())
 foreach ($dep in $deps) { $signature += "$dep=$((Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash)" }
 $signatureText = $signature -join "`n"
 $fresh = -not $Rebuild -and (Test-Path $exe) -and (Test-Path $signaturePath) -and
@@ -39,7 +41,7 @@ if (-not $fresh) {
         $obj = Join-Path $objDir "$stem.obj"
         $log = Join-Path $objDir "$stem.log"
         $objects += $obj
-        $line = "call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch " +
+        $line = "call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode " +
             "-I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 " +
             "-c `"$src`" -o `"$obj`" > `"$log`" 2>&1"
         $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -62,6 +64,8 @@ $manifest = [ordered]@{
     exe = (Resolve-Path $exe).Path
     sha256 = (Get-FileHash $exe -Algorithm SHA256).Hash
     architecture = $Arch
+    gl_backend = $GlBackend
+    gl_fixed_mode = $glMode
     sources = $signature
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 (Join-Path $Build 'build_manifest.json')
