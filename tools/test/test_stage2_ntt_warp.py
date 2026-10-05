@@ -13,11 +13,14 @@ def main():
     parser.add_argument('--exe', required=True)
     parser.add_argument('--device', type=int, default=1)
     parser.add_argument('--output', required=True)
+    parser.add_argument('--short-reduce', type=int, choices=(0, 1))
     args = parser.parse_args()
     exe = Path(args.exe).resolve()
     out = Path(args.output).resolve()
     out.mkdir(parents=True, exist_ok=True)
     base_env = {k: v for k, v in os.environ.items() if not k.startswith('NTT_')}
+    if args.short_reduce is not None:
+        base_env['NTT_GL_SHORT_REDUCE'] = str(args.short_reduce)
     rows = []
     for enabled in ('0', '1'):
         env = dict(base_env, NTT_FUSE_WARP_TAIL=enabled, NTT_FUSE_WARP_TEST='1',
@@ -40,11 +43,14 @@ def main():
             'no_local_spill': bool(re.search(
                 rf'ntt_fuse_warp_resources: requested={enabled} fwd_regs=\d+ inv_regs=\d+ fwd_local=0 inv_local=0 fwd_max_blocks=[1-9] inv_max_blocks=[1-9]', text)),
         }
+        if args.short_reduce is not None:
+            checks['selected_goldilocks_mode'] = (
+                f'ntt_gl_reduce_mode: device={args.device} short={args.short_reduce}' in text)
         rows.append({'warp_tail': int(enabled), 'returncode': run.returncode, 'checks': checks,
                      'command': cmd, 'ntt_env': {k: v for k, v in env.items() if k.startswith('NTT_')}})
         print(f'warp_tail={enabled}: ' + ', '.join(f'{k}={v}' for k, v in checks.items()), flush=True)
     result = {'exe': str(exe), 'sha256': hashlib.sha256(exe.read_bytes()).hexdigest(),
-              'device': args.device, 'runs': rows,
+              'device': args.device, 'short_reduce': args.short_reduce, 'runs': rows,
               'passed': sum(sum(r['checks'].values()) for r in rows),
               'failed': sum(sum(not v for v in r['checks'].values()) for r in rows)}
     (out / 'summary.json').write_text(json.dumps(result, indent=2), encoding='utf-8')

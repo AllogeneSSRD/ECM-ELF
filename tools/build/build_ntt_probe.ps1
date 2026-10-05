@@ -43,6 +43,7 @@ if (-not $vcvars) { throw "vcvars64.bat not found; install the MSVC build tools"
 
 $src = 'tools/bench/ntt_poly_probe.cu'
 $coop = 'tools/bench/ntt_coop_outer.cuh'
+$goldReduce = 'tools/bench/ntt_goldilocks_reduce.cuh'
 $inc = @(
     '-I third_party/gmp-zen3/dist/include'
 ) -join ' '
@@ -61,7 +62,7 @@ Write-Host ("ntt probe build: exe={0} arch={1}" -f $exe, $Arch)
 $needCompile = $true
 if (-not $Rebuild -and (Test-Path $obj) -and (Test-Path $exe)) {
     $objTime = (Get-Item $obj).LastWriteTime
-    if ($objTime -gt (Get-Item $src).LastWriteTime -and $objTime -gt (Get-Item $coop).LastWriteTime) { $needCompile = $false }
+    if ($objTime -gt (Get-Item $src).LastWriteTime -and $objTime -gt (Get-Item $coop).LastWriteTime -and $objTime -gt (Get-Item $goldReduce).LastWriteTime) { $needCompile = $false }
 }
 
 if ($needCompile) {

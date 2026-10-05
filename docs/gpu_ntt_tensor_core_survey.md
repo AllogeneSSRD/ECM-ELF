@@ -1009,3 +1009,9 @@ Tensor Core batching
 单独DFT16自然序接口约1–3%改善；真实t12 tile CTA256在独立k24..26复测前向慢约18.3%、逆向慢约5.6%、roundtrip慢约10.9%。两个独立CUDA+Tensor任务双流比CUDA+CUDA双流慢约9.1%，Systems只约47μs kernel overlap。byte拆分、64个MMA、carry/归约、寄存器和排列成本须进入比较；生产保留优化CUDA tile。
 
 这些是单算子测量，Tensor峰值与CUDA峰值不能相加推导Stage2收益。当前方案保留为实验，后续优先CUDA低层单位根特化；若继续Tensor，先减少固定根矩阵的byte-MMA数量。完整数学、资源/传输公式、固定SHA、源码行号、样本与并发边界见[Tensor实验报告](D:/code/MPA-OpenCl/docs/STAGE2_TENSOR_GOLDILOCKS_EXPERIMENT.md)。
+
+# 20. 接续 CUDA 算术：Goldilocks 短归约（2026-10-05）
+
+低层根移位特化引出的任意128位短归约，已扩展到全部device Goldilocks算术。完整纯NTT同binary快34.06%–36.63%，对旧probe独立参考快31.88%–34.72%；真实Stage2八条固定D/Q交叉测量69.778377→59.482459s（14.76%），对旧Stage2两条独立参考均值67.173660s快11.45%。检查和内存/传输合同保持，未使用MMA。新后端完整Stage2188/0、最终D保护36/0和shared/warp14/0通过，旧D系数在short1下回退，尚未提升生产默认。
+
+Systems NTT池28.55→19.10s，point仍约19.2s，无本进程事件间隙约9.5s保持。下一优先级为新D拟合/holdout、CPU准备/提交和剩余CUDA算术；再次比较Tensor时须以新CUDA后端为对照。来源、数学证明、原文件line、负候选、分派开销和全部证据见[短归约报告](D:/code/MPA-OpenCl/docs/STAGE2_GOLDILOCKS_SHORT_REDUCTION.md)。

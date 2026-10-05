@@ -88,6 +88,28 @@ namespace {
 /* The one prime.  Everything below is normalised into [0, p). */
 #define GL_P 0xFFFFFFFF00000001ull
 
+#include "ntt_goldilocks_reduce.cuh"
+#ifndef NTT_GL_SHORT_REDUCE_DEFAULT
+#define NTT_GL_SHORT_REDUCE_DEFAULT 0
+#endif
+// Volatile keeps the mode load local to each reduction. Hoisting one mode
+// register across the entire warp tile made its forward kernel spill8 bytes.
+__device__ __constant__ volatile unsigned int ntt_gl_short_reduce_device=0;
+// The current engine owns one CUDA context per device and has no concurrent
+// host calls/context resets. Both modes have identical mathematical results.
+static void ntt_gl_reduce_configure()
+{
+    const char *env=std::getenv("NTT_GL_SHORT_REDUCE");
+    const unsigned int enabled=env ? (std::strtoull(env,nullptr,10)!=0) : NTT_GL_SHORT_REDUCE_DEFAULT;
+    int device=0;CK(cudaGetDevice(&device));
+    static std::map<int,unsigned int> configured;
+    const auto it=configured.find(device);
+    if(it!=configured.end() && it->second==enabled)return;
+    CK(cudaMemcpyToSymbol(ntt_gl_short_reduce_device,&enabled,sizeof(enabled)));
+    configured[device]=enabled;
+    std::printf("ntt_gl_reduce_mode: device=%d short=%u\n",device,enabled);
+}
+
 /* Modular reduction, device and host (this is the whole arithmetic core, so it is shared
    and unit-tested against GMP before any kernel runs).
  *
@@ -122,6 +144,9 @@ namespace {
 __host__ __device__ inline unsigned long long gl_reduce(unsigned long long lo,
                                                         unsigned long long hi)
 {
+#ifdef __CUDA_ARCH__
+    if(ntt_gl_short_reduce_device)return gl_reduce128_short(lo,hi);
+#endif
     for (int iter = 0; iter < 4; ++iter) {
         /* exact: lo + hi*(2^32-1) = lo + (hi<<32) - hi, split into (lo', hi') */
         const unsigned long long hl = hi << 32;
@@ -1427,6 +1452,7 @@ static int fuse_outer_max(int t,int k,bool &coop)
 static void fuse_init(FuseCtx &c, unsigned long long n, int k, unsigned long long omega,
                       unsigned long long omega_inv, bool compact=fuse_compact_scratch())
 {
+    ntt_gl_reduce_configure();
     c.n = n;
     c.k = k;
     int t = (int)fuse_env_ull("NTT_FUSE_T", 12);
@@ -2138,6 +2164,7 @@ static void ntt_arena_pin_smem(NttArena *ar, int t, bool warp)
 static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned long long omega,
                            unsigned long long omega_inv, FuseCtx &out)
 {
+    ntt_gl_reduce_configure();
     if (!ar) { fuse_init(out, n, k, omega, omega_inv); return; }
     const int requested_t=std::max(0,std::min(k,(int)fuse_env_ull("NTT_FUSE_T",12)));
     bool requested_coop=false;
@@ -2212,6 +2239,7 @@ __global__ void dft_direct_kernel(const unsigned long long *x, unsigned long lon
 /* --------------------------------------------------------------------------------- */
 static int gl_selftest()
 {
+    ntt_gl_reduce_configure();
     mpz_t p, a, b, z, want, got;
     mpz_inits(p, a, b, z, want, got, nullptr);
     const unsigned long long glp = GL_P;

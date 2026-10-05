@@ -141,10 +141,10 @@ xADD/D最终实验编译496.8 s、link2.8 s，exe SHA256 `def0019dd87f6c57c97de3
 ## 5. 实现索引
 
 - [halfmod:747](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:747)、[xADD6:769](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:769)、[模板分派:953](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:953)、[GMP fixture:4188](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:4188)。
-- [DPhaseModel:24](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:24)、[scope:10758](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10758)、[选D计时:10935](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10935)。
+- [DPhaseModel:24](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:24)、[scope:10758](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10758)、[选D计时:10938](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10938)。
 - [采集/整数shape:1](D:/code/MPA-OpenCl/tools/bench/calibrate_stage2_d.py:1)、[拟合:1](D:/code/MPA-OpenCl/tools/bench/fit_stage2_d.py:1)、[离线候选排名:1](D:/code/MPA-OpenCl/tools/bench/plan_stage2_d.py:1)。
 - [xADD门禁:1](D:/code/MPA-OpenCl/tools/test/test_stage2_xadd6.py:1)、[D规划门禁:1](D:/code/MPA-OpenCl/tools/test/test_stage2_d_model.py:1)、[生产默认:6](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6)。
-- [协作outer:9](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:9)、[launch:83](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:83)、[planner:1396](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1396)、[arena key:2142](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:2142)、[cooperative GMP:4273](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:4273)。
+- [协作outer:9](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:9)、[launch:83](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:83)、[planner:1421](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1421)、[arena key:2169](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:2169)、[cooperative GMP:4301](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:4301)。
 
 
 ## 6. Cooperative outer：v1回退、v2收益与P3计划

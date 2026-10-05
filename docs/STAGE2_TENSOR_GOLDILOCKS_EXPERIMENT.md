@@ -105,7 +105,7 @@ tile Tensor forward/inverse寄存器 **74/76**，LOCAL0；生产CUDA两个方向
 
 首次真实tile实现有随机数值错误，集中于CTA512/t10、t12；原生产tile对照正确。按diagnose流程提出并区分shared时序、低层置换、packed roots/scale三个假设，最小日志显示t12全1样本index1024应为0却有0x40/0x60等变化。
 
-根因：复用的 `tile_radix4_block` / inverse helper将CTA屏障交给caller；新wrapper遗漏了每次调用后的 `__syncthreads()`。原生产caller已有屏障。仅补caller屏障后所有原fixture通过；CTA512/t10/t12 fixture保留，调试日志移到ignored debug证据目录并从最终源码删除。预防方式是明确helper的caller同步合同，并继续保留真实tile调用层的回归覆盖。[修复屏障:164](D:/code/MPA-OpenCl/tools/bench/ntt_tensor_goldilocks.cuh:164)、[inverse:174](D:/code/MPA-OpenCl/tools/bench/ntt_tensor_goldilocks.cuh:174)、[生产caller:1219](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1219)。
+根因：复用的 `tile_radix4_block` / inverse helper将CTA屏障交给caller；新wrapper遗漏了每次调用后的 `__syncthreads()`。原生产caller已有屏障。仅补caller屏障后所有原fixture通过；CTA512/t10/t12 fixture保留，调试日志移到ignored debug证据目录并从最终源码删除。预防方式是明确helper的caller同步合同，并继续保留真实tile调用层的回归覆盖。[修复屏障:164](D:/code/MPA-OpenCl/tools/bench/ntt_tensor_goldilocks.cuh:164)、[inverse:174](D:/code/MPA-OpenCl/tools/bench/ntt_tensor_goldilocks.cuh:174)、[生产caller:1244](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1244)。
 
 脚本另外核对exe/构建source SHA、完成行数、case/word计数、资源条目和LOCAL0；bench校验实际shape/operation/order，mixed限定forward。初期CRLF日志解析把`bad=0\r`误判，改用非空白字段解析后重跑；没有放宽数值比较。
 
@@ -167,7 +167,7 @@ python tools\bench\bench_ntt_tensor_goldilocks.py --exe build_cuda_cmake\ntt_ten
 python tools\bench\bench_ntt_tensor_goldilocks.py --exe build_cuda_cmake\ntt_tensor_probe\ntt_tensor_goldilocks_probe.exe --device 1 --kind mixed --sizes 24 25 --threads 256 --output build_cuda_cmake\tc_mixed_new
 ```
 
-`--kind matrix`的sizes是log2 batches，缺省16；tile/mixed缺省24。mixed仅forward，其他operation会拒绝；tile支持0forward/1inverse(B)/2roundtrip。原始CLI有同名模式，参数由[main:461](D:/code/MPA-OpenCl/tools/test/ntt_tensor_goldilocks_probe.cu:461)解析。工具的数学reference/填充/校验不进入event。
+`--kind matrix`的sizes是log2 batches，缺省16；tile/mixed缺省24。mixed仅forward，其他operation会拒绝；tile支持0forward/1inverse(B)/2roundtrip。原始CLI有同名模式，参数由[main:462](D:/code/MPA-OpenCl/tools/test/ntt_tensor_goldilocks_probe.cu:462)解析。工具的数学reference/填充/校验不进入event。
 
 本机证据：[35项](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_tensor_20261004/release_gate/summary.json)、[matrix sweep](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_tensor_20261004/release_matrix_sweep/measurements.json)、[tile sweep](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_tensor_20261004/release_tile_sweep/measurements.json)、[tile holdout](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_tensor_20261004/release_tile_holdout/measurements.json)、[mixed sweep](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_tensor_20261004/release_mixed_sweep/measurements.json)、[mixed holdout](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_tensor_20261004/release_mixed_holdout/measurements.json)、[trace分析](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_tensor_20261004/release_profile_analysis.json)、[Systems原始trace](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_tensor_20261004/release_nsys_mixed_24_256.nsys-rep)。build/测量/调试快照为ignored，随Git保存的是源码、driver与此报告。
 

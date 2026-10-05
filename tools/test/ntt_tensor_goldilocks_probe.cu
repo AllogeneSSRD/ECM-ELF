@@ -458,6 +458,7 @@ template<class Kernel>static void tile_resources(const char *name,Kernel kernel,
     std::printf("tc_gold_tile_resources: kernel=%s threads=%d regs=%d local=%zu dynamic_shared=32768 max_blocks=%d\n",
         name,threads,a.numRegs,a.localSizeBytes,blocks);
 }
+#ifndef NTT_TENSOR_GOLDILOCKS_PROBE_NO_MAIN
 int main(int argc,char **argv)
 {
     const int device=argc>1 ? std::atoi(argv[1]) : 1;const char *mode=argc>2 ? argv[2] : "--check";
@@ -496,3 +497,4 @@ int main(int argc,char **argv)
     std::printf("tc_gold_memory: requested_peak_bytes=%llu live_bytes=%llu\n",peak_bytes,live_bytes);
     return code ? code : live_bytes ? 4 : 0;
 }
+#endif

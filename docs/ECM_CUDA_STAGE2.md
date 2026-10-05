@@ -140,7 +140,7 @@ NTT tile 默认 `NTT_FUSE_WARP_TAIL=1`，低6层使用warp寄存器交换与常�
 
 - 存档文本和校验和解析：[ecm_cuda_stage2_main.cpp:106](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:106)；可选队列字段：[同文件:301](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:301)；配置和调度：[同文件:443](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:443)。
 - 生产默认值：[ecm_cuda_stage2.cu:6](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6)；独立引擎封装：[同文件:39](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:39)。
-- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10692](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10692)，跳过 Stage1 的分支位于 [11004](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11004)。
+- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10692](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10692)，跳过 Stage1 的分支位于 [11007](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11007)。
 - 已有表达式、ini 和队列工具：`src/core/ecm_expr.cpp`、`ecm_queue_config.cpp`、`ecm_worktodo.cpp`。
 - 独立编译脚本：[build_ecm_cuda_stage2.ps1](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)。
 

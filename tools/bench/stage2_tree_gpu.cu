@@ -10776,6 +10776,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if(!fuse_env_ull(key,0))calibrated=false;
     if(fuse_env_ull("NTT_S4_HOSTPACK",0) || !fuse_compact_scratch() ||
        !fuse_env_ull("NTT_S4_FLAT_DIRECT",1))calibrated=false;
+    // Old empirical rates were measured with the four-fold Goldilocks reducer.
+    const bool gl_short=fuse_env_ull("NTT_GL_SHORT_REDUCE",NTT_GL_SHORT_REDUCE_DEFAULT)!=0;
+    if(gl_short)calibrated=false;
     const auto fold_budget=fuse_env_ull("NTT_FOLD_DEVICE_MAX_MB",640)*1024*1024;
     auto owner_bytes=[&](unsigned long long p){return 8ull*nw*(9*p+8)+48;};
     if(D_in && (phi_u64(D_in)/2==0 || B2/D_in+2<=phi_u64(D_in)/2 ||
@@ -10783,10 +10786,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const double d_scan_begin=now_s();
     DPhaseModel phase_model((int)L.S,B2,shape_ntt);
     const char *model_version=calibrated ? (shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
-    std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu "
+    std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu gl_short=%d "
                 "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
                 (int)model_requested,(int)calibrated,model_version,
-                (unsigned long long)cap,fold_budget);
+                (unsigned long long)cap,fold_budget,(int)gl_short);
     {
         struct DCand {
             unsigned long long D = 0, P = 0, imax = 0, batches = 0;

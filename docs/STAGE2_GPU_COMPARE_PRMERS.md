@@ -262,7 +262,7 @@ arena 仍 **6215.6 MiB**。full 两轮波动 12.04 s，root 两轮 0.46 s，因�
 
 ### 28.5 2026-10-03：NTT scratch 容量复用与剩余算法差距
 
-后续已接入 [跨 shape 的 A/B/Q 工作区](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1729)，
+后续已接入 [跨 shape 的 A/B/Q 工作区](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1755)，
 默认 `NTT_ARENA_WORKSPACE_POOL=1`，`=0` 同二进制 keyed 对照。
 仅共享 default-stream 临时 scratch，dRes 保持按 shape 隔离，borrowed digits 导出保持 keyed lifetime；
 别名输入在缓存查询前保存，失败回滚和 actual deferred-carry 状态均有门禁。
@@ -283,12 +283,12 @@ Prime95 单执行线程、同模数/边界/曲线或输入点的完整 Stage2 �
 ### 28.6 2026-10-03：完整 FuseCtx 账本与实际 scratch 容量
 
 已修复预算拒绝后临时 FuseCtx 的释放：
-[FuseCallGuard](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1345)
+[FuseCallGuard](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1370)
 按实际 owner 覆盖 host/device batch、single host 和提前返回，缓存借用仍由 arena 释放。
-[fuse_init](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1266)
+[fuse_init](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1291)
 遍历 forward/inverse 实际 pass 取最大 scratch 容量，默认 `NTT_FUSE_COMPACT_SCRATCH=1`，`=0` 保留宽容量对照。
 M=1 仍给足 N/2；纯 tile 不分配没有消费者的 coarse/radix scratch。
-[base ledger](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1197)
+[base ledger](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1222)
 和 arena full 字段补齐此前遗漏的 mandatory tile tables/scratch；full 仍不包含外部 Stage2 pools 与驱动开销。
 
 完整门禁 **122 passed / 0 failed**，包括独立 GMP DFT 的 **72 cases / 1585152 words** 和宽/紧容量寿命守恒。
@@ -329,7 +329,7 @@ first/count 窗口一起定义，再减少必要归约/回传；scaled descent �
 
 ### 28.8 2026-10-03：输出窗口已接入，总速度收益未获证明
 
-[NttReduceHook](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3364)
+[NttReduceHook](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:3392)
 支持 first/count，完整输入/NTT/carry 保持，输出 slice stride 使用 count。
 [设备归约](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1685)
 先检查全部源槽 canonical 上界，再跳过窗口外 mod-N MAC；
