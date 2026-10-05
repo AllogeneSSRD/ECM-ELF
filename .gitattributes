@@ -13,3 +13,16 @@
 # their line endings, including CSV CRLF and JSONL LF.
 data/ecm_stage2_snapshot_20261005/** -text
 tools/ecm_dataset/*.sqlite -text -diff
+
+# New cost-model modules and published evidence are SHA-fingerprinted.
+tools/bench/ecm_cost_model.py text eol=lf
+tools/bench/fit_ecm_costs.py text eol=lf
+tools/bench/measure_ecm_costs.py text eol=lf
+tools/bench/plan_auto_b2.py text eol=lf
+tools/bench/validate_ecm_costs.py text eol=lf
+tools/bench/audit_ecm_costs.py text eol=lf
+docs/data/ecm_auto_b2_phase_20261005* -text
+docs/data/ecm_factor_only_20261005* -text
+docs/data/ecm_phase_20261005* -text
+docs/data/ecm_phase_nsys_20261005* -text
+docs/data/ecm_phase_ncu_20261005* -text

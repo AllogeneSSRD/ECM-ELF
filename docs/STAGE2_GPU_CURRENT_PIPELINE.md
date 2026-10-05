@@ -1942,3 +1942,9 @@ GPU1/生产893/默认检查，S2203/4423/8191的CPU/GMP有效lcm保存点，52�
 ## 59. 工作因子库只保留最优sigma（2026-10-05）
 
 按用户确认移除历史表，仅mersennes/factors。每因子一条最佳sigma及完整群阶/点阶分解，B1/B2均不增大且一项严格减小时才替换。数据增长取决于因子数，不取决于扫描曲线数；无因子/失败/导入记录不持久化。迁移保留1155指数/3322因子/33最佳sigma，核心值一致，工作库1140→288KiB。历史快照不变，当前schema和命令以[README](D:/code/MPA-OpenCl/tools/ecm_dataset/README.md)为准；本轮未重跑GPU或GP测试。
+
+## 60. v2完整阶段成本与离线收益规划（2026-10-05）
+
+三宽度Stage1 batch1/12实测与117点CPU参考通过；84条Stage2曲线覆盖D30030/60060/120120、owner640/0和30/60/45亿B2。模型按真实256MiB分块和32768点chain/ladder切换拟合，36条新blind完整engine误差最大7.48%，候选排名三个宽度均匹配实测最快；不外推cold总时长、G1/高B1/泛型模数。离线Auto B2 K/(T1+T2)原型已经规划并原生复核，但最佳落在下边界，需要扩区间并接入原生CLI/INI/队列，仍非完成的生产Auto B2。
+
+新独立d77f增加--factor-only/INI，真实因子命名长尾ABBA约2.59倍改善，raw因子和叶哈希保持；默认/生产893不改。NsightSystems样本活动window79% GPU busy，copy API大部分不是DMA；Compute计数器权限被驱动拒绝。后续优先seed/chain门槛与进程/小层同步吞吐优化。[模型和审计](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_PHASE_CALIBRATION.md)。

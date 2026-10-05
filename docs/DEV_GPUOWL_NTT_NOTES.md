@@ -4446,3 +4446,13 @@ b9af/sm89/PTX3/outer0/24 raw依赖冻结；builder增加受CUDA依赖/object/SHA
 每因子只保留一个最优sigma，只有B1/B2均不增大且至少一个严格减小时替换；相等或不可比较丢弃候选。工作库仅mersennes/factors，完整群阶/点阶和分解直接放因子行，数学界限即时计算；删除sources/analyses/frontier/observations/production_runs及历史字段。导入流式处理，无因子跳过，不保存导入、失败或运行日志；choose12只输出派生界限，最优比较沿用lcm。
 
 迁移保留1155指数/3322因子/33最优sigma，核心列事务内逐项一致，一次性旧库备份后VACUUM：1140→288KiB（−74.7%）。所有CLI/runner/export/audit及现有回归脚本同步两表；旧快照/实验日志原样保留，runner旧plan指纹需旧代码或重新准备。仅执行实际数据库迁移，未新增或运行测试/GPU曲线。[使用和迁移](D:/code/MPA-OpenCl/tools/ecm_dataset/README.md)。
+
+## 86. v2阶段成本、Stage1摊销及factor-only长尾（2026-10-05）
+
+P2/P3第一轮实际执行：GPU1/M2203/4423/8191/B1=1000/lcm，Stage1 batch1/12各预热+2样本，18批/117保存点独立CPU一致。Stage2 D30030/60060/120120、arena4096、owner640/0：36拟合+12诊断，再冻结预测36条B2=45亿blind；84/0，472264 GMP抽样系数/21组叶哈希一致。统一giant率漏掉32768阈值（chain/ladder及短尾分块）造成18%误差，按真实256MiB/P整数分块、独立路径率和chain固定项修正后blind−7.479..+5.991%，三个宽度都选实测最快D60060/owner640。只覆盖这些engine范围，cold波动、G1/高B1/更广D仍未标定。
+
+新d77f独立HostOnly构建复用CUDA对象，24 raw依赖冻结；--factor-only/INI stage2_factor_only=1关闭可选命名、保留raw factor及必需检查，默认命名保持。旧b9af同binary ABBA真实M8191因子338193759479，命名16.148/16.123s→6.237/6.232s，原始因子/leaf hash一致，约2.59倍；并非所有曲线普遍加速。首个采集程序误假定M8191不出因子，后按proper divisor验收，保留原失败日志。
+
+离线plan_auto_b2联合B2/D/owner，K/(T1+T2)含Stage1进程摊销和cold中位数，原生plan-only复核几何/组件预算。M4423选择下边界30亿/D60060，range_limited=true，未宣称通用最优；原生--auto-b2/INI/worktodo尚待接入。
+
+Systems2026 GPU1进程树trace：GPU活动并集1.714s/首尾2.172s=78.95%；cudaMemcpy API957ms而DMA约32ms，含等待不全是PCIe。两个ladder kernel约469ms/28.8% GPU时间，S4本例70ms；候选转向seed/chain阈值、小层launch/启动/并发。Compute2026返回ERR_NVGPUCTRPERM，应用正常结束但未得计数器报告，未改驱动。[完整模型、范围、命令、证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_PHASE_CALIBRATION.md)。

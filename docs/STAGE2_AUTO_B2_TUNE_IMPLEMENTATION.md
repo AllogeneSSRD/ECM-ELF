@@ -147,3 +147,9 @@ plan-only在有效M223保存点上返回D210/P24/I584/G25，curves_executed=0，
 另外完成生产基线20条/新候选20条同保存点配对，raw factors全部一致，必需检查全通过；覆盖原M223..8171及三个实际余因子模数，B1=2..1543、B2=1777..1134149。未覆盖生产大B1/大B2显存压力或完整成本标定，不据此恢复旧D rates或晋升新生产默认。当前plan仍calibrated=false。
 
 [因子数据集与实现报告](D:/code/MPA-OpenCl/docs/STAGE2_FACTOR_DATASET.md) 包含SQLite/群阶和点阶界限、真实复合因子拆解、数据库更新回归、完整测量/指纹和命令。Auto B2仍待P2完整phase/Stage1成本与P3收益规划；当前数据用于正确性语料和初步NTT速度基线。
+
+## 9. P2/P3第一轮实际成本与收益原型（2026-10-05）
+
+新增阶段测量、路径模型、独立blind、审计与离线B2/D/owner收益工具。v2/sm89/PTX3/三宽度/B1=1000，Stage1 117点独立核对，84条Stage2检查通过；giant模型显式区分32768阈值及真实分块后新blind最大误差7.48%，候选排序三个宽度均命中当前实测最快。命名配置纳入模型，new --factor-only长尾示例约2.59倍，独立d77f构建冻结。
+
+仍需低端/大B1/G1/广D与cache压力标定、总显存租约、原生Auto B2/队列接入及反馈。本批范围内的离线planner选择B2下边界，range_limited=true；没有替代原生产默认。详细命令、时间口径、算法路径和性能证据见[本轮报告](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_PHASE_CALIBRATION.md)。

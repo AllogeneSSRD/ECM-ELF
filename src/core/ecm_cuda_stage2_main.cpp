@@ -210,6 +210,7 @@ struct Options {
     int tune_first = 16, tune_last = 27, tune_repeats = 5;
     uint64_t tune_memory_mb = 1024;
     bool factorize_hits = false;
+    bool factor_only = false;
     bool has_gp = false, has_factor_timeout = false;
     std::string gp = "gp.exe";
     unsigned factor_timeout = 30;
@@ -243,6 +244,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--dry-run") o.dry = true;
         else if (a == "--plan-only") o.plan_only = true;
         else if (a == "--factorize-hits") o.factorize_hits = true;
+        else if (a == "--factor-only") o.factor_only = true;
         else if (a == "--gp") { o.gp = value(); o.has_gp = true; }
         else if (a == "--factor-timeout") {
             const auto seconds = num();
@@ -285,6 +287,7 @@ struct Settings {
     uint64_t b2 = 0, d = 0, batch = 64, arena = 0;
     std::string results;
     bool factorize_hits = false;
+    bool factor_only = false;
     std::string gp;
     uint64_t factor_timeout = 30;
 };
@@ -316,6 +319,9 @@ Settings stage2_ini(const fs::path &path, int worker) {
     uint64_t factorize=0; get("STAGE2_FACTORIZE_HITS",factorize);
     if(factorize>1)throw std::runtime_error("stage2_factorize_hits must be 0 or 1");
     s.factorize_hits=factorize!=0;
+    uint64_t factor_only=0; get("STAGE2_FACTOR_ONLY",factor_only);
+    if(factor_only>1)throw std::runtime_error("stage2_factor_only must be 0 or 1");
+    s.factor_only=factor_only!=0;
     get("STAGE2_FACTOR_TIMEOUT",s.factor_timeout);
     if(!s.factor_timeout || s.factor_timeout>600)throw std::runtime_error("stage2_factor_timeout must be 1..600");
     if(global.count("STAGE2_GP"))s.gp=global["STAGE2_GP"];
@@ -420,6 +426,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         cmd += L" --factorize-hits --gp " + quote(fs::path(o.gp).wstring());
         arg(L"--factor-timeout", o.factor_timeout);
     }
+    if (o.factor_only) cmd += L" --factor-only";
     STARTUPINFOW si{}; si.cb = sizeof(si);
     Handle logfile;
     if (!log.empty()) {
@@ -443,6 +450,8 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     return code == 0 ? 0 : 1;
 }
 int curve_worker(const Options &o) {
+    if (o.factor_only && _putenv_s("NTT_NAME_HITS", "0"))
+        throw std::runtime_error("cannot disable optional prime-witness naming");
     if (o.save.empty() || o.results.empty() || !o.index || o.device < 0 || !o.b2)
         throw std::runtime_error("incomplete internal curve-worker arguments");
     std::ifstream in(o.save, std::ios::binary);
@@ -488,6 +497,7 @@ int curve_worker(const Options &o) {
         ",\"requested_D\":" + std::to_string(o.d) + ",\"seconds\":" + std::to_string(seconds) +
         ",\"factorization_seconds\":" + std::to_string(factor_seconds) +
         ",\"param\":0" +
+        ",\"requested_factor_only\":" + std::string(o.factor_only ? "true" : "false") +
         ",\"timestamp_ms\":" + std::to_string(timestamp) + "," + result + "}");
     return 0;
 }
@@ -498,6 +508,7 @@ void help() {
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results FILE\n"
         "         --log FILE --dry-run --help\n"
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
+        "         --factor-only (skip optional prime-witness naming; raw factors may be composite)\n"
         "         --plan-only (queries device memory and D; runs no curve)\n"
         "Tune: --tune ntt --device N [--length-log2 16:27] [--tune-repeats 5]\n"
         "      [--tune-memory-mb 1024] [--tune-file stage2_tune.jsonl]\n"
@@ -523,6 +534,7 @@ int driver(Options o) {
         throw std::runtime_error("cannot read explicit ini: " + ini.string());
     Settings s = stage2_ini(ini, o.worker);
     if(s.factorize_hits)o.factorize_hits=true;
+    if(s.factor_only)o.factor_only=true;
     if(!o.has_gp && !s.gp.empty())o.gp=s.gp;
     if(!o.has_factor_timeout)o.factor_timeout=static_cast<unsigned>(s.factor_timeout);
     const fs::path base = ini.parent_path();

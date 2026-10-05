@@ -286,3 +286,7 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 ## 2026-10-05 因子数据库精简
 
 工作库现在只有mersennes/factors，每因子只保留一个最优sigma及其完整群阶/点阶分解。B1/B2都不增大且至少一项严格减小时替换，不保存其他sigma、运行/导入/分析历史。原生主程序result格式保持，离线ingest流式更新核心记录；旧七表库需migrate_dataset.py一次性迁移。[当前工具说明](D:/code/MPA-OpenCl/tools/ecm_dataset/README.md)。
+
+## 2026-10-05 实验factor-only与成本规划
+
+独立d77f构建支持--factor-only，INI stage2_factor_only=1；跳过可选prime-witness命名，raw因子可能为复合数，配合--factorize-hits可继续拆解。result增加requested_factor_only，hits=0不代表无因子。默认命名与生产893保持。当前Auto B2只有离线工具plan_auto_b2.py在实测scope内规划，原生--auto-b2尚不可使用。[84条曲线验证、Stage1摊销、性能长尾及命令](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_PHASE_CALIBRATION.md)。

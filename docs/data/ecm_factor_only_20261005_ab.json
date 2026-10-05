@@ -1,0 +1,46 @@
+{
+  "rows": [
+    {
+      "name_hits": 1,
+      "engine_total": 16.148278,
+      "process_seconds": 16.865373300010106,
+      "factors": [
+        "338193759479"
+      ],
+      "hits": 0,
+      "leaf_hash": "8604703069727795349"
+    },
+    {
+      "name_hits": 0,
+      "engine_total": 6.236735,
+      "process_seconds": 6.73774469998898,
+      "factors": [
+        "338193759479"
+      ],
+      "hits": 0,
+      "leaf_hash": "8604703069727795349"
+    },
+    {
+      "name_hits": 0,
+      "engine_total": 6.231613,
+      "process_seconds": 6.941313099989202,
+      "factors": [
+        "338193759479"
+      ],
+      "hits": 0,
+      "leaf_hash": "8604703069727795349"
+    },
+    {
+      "name_hits": 1,
+      "engine_total": 16.122666,
+      "process_seconds": 16.642679299984593,
+      "factors": [
+        "338193759479"
+      ],
+      "hits": 0,
+      "leaf_hash": "8604703069727795349"
+    }
+  ],
+  "binary_sha256": "b9afdb49ce858bf4cc0811c836e6b275b7ce0b01eee3235f94ca37aaa6890cda",
+  "save_sha256": "b3e32fd9e5a9fe822e0c968c52faa27f78aa1c31287b16c026a463047bd79ca1"
+}
