@@ -4400,3 +4400,13 @@ NTT固定PTX下探针扫默认/1/2/4，各13/0；u1八个outer实例SASS与默�
 独立真实batch形状carry+check少16–19%，大数组R5少22–23%、R6少18%；小独立两级诊断负结果保留。native8A789739…7955DA/20raw依赖，CUDA295.2s。两条预指定warmup后完整八条同binary ABBA+BAAB，full38.2264815→37.9273095s（少0.78263%），main少0.93976%，两组少约0.672/0.893%，每模式4条/无CI。Q/leaf/oracle/因子/397S4/1836241poly/36615543coeff/2400selftest/60474GMP/3full_checks保持。
 
 同exe各一次Systems合计carry+check3.353941344→2.786565885s（少16.9167%），cone本身变慢、末端扫描节约更大；不能单用t_check下降算收益。H2D主体7.151GB保持，D2H仅多4次共32B、来源未定位；自身GPU空隙14.153→13.505%不是整卡idle证明。生产893保持，实验NTT_CARRY_CHECK_FUSED=1保护旧D，下一步新12shape权重、多D/独立留出后再决定默认。CPU准备、workspace lease、多曲线和公平Prime95仍待推进。[全部样本、公式、source-line与审计](D:/code/MPA-OpenCl/docs/STAGE2_NTT_CARRY_CHECK_FUSION.md)。
+
+## 81. B2/位数与独立显存预算实验（2026-10-05）
+
+按用户选择先测2203/4423/8191bits，GPU1，B1=1000/sigma26/lcm；三个Stage1点CPU/GMP逐字核验。冻结生产893/19原始源，point1/GPUbaby/PTX3/outer0/carry0，禁经验D，用legacy排序作策略控制。big上限3072/768MiB为外部shape过滤＋actual big_peak核验，arena6300固定；owner1024/128独立变化。基础48＋640边界4，共52接受曲线（3warmup/49测量），审计52/0，同S/B2/D的leaf/因子/S4工作/GMP-oracle覆盖一致，arena overflow0。采样中断第18条排除重跑、两个运行工具版本保留；完成曲线6个NVML利用率缺失点为空，显存读数保持。
+
+两个关键反例：M4423 owner128全回退且D能增长时，前三段alpha0.552/0.547/0.537；小big全驻留但D390390/P37440固定时，高两段alpha0.925/0.975。因此驻留不保证sqrt，回退不强制线性；主要看D/P是否饱和和固定开销。固定D1021020三B2 ABBA驻留均值15.457714/25.280504/59.024554s，回退15.747537/26.384395/63.897976s；说明性批次拟合T≈9.911+1.751G vs9.507+1.938G，三横坐标不当生产标定。
+
+默认640边界同D1531530/P138240、owner664.46MiB，1024/640 ABBA均值110.947313/119.803767s；回退多7.983%，恢复驻留省7.392%，各2条/无CI。小big对M4423 B2=8e12用时109.11→317.56s，但整卡观察最大used5444.6→2284.6MiB；模块峰不相加为进程峰。全批整卡200ms观察used最大5444.62MiB、host日志peak commit最大7912MiB，均非物理RAM/进程显存保证峰。
+
+新增可指定big/small-big/owner/small-owner/arena的实验工具，另48条自定义512/640/0预算规划核验，不冒充性能测量。发现arena账本旧table估算约6149MiB与NTT实际payload约3187MiB不同，优先统一cache/evict计账；owner q/qb、g/reverse别名为未验证候选，理论9P→8P/7P使664.46→590.63/516.80MiB。本轮不改生产内核/默认，carry新D标定、多曲线lease和公平Prime95仍待推进。[完整公式/源码行号/表图/CSV/审计](D:/code/MPA-OpenCl/docs/STAGE2_B2_MEMORY_BUDGET_SCALING.md)。

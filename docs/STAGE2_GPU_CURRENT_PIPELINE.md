@@ -1914,3 +1914,9 @@ native48BD…0360EF/19源，原生点/实际scope18/0，基本入口21/0。八�
 原语180cases/657000words、12组R/bpw×18shape×两模式bad0；实际runner16cases/122850words，transform13/0，native两模式各18/0及故障/真实分配回退。R5 REG35→39/R6 39→40/shared64B，finish REG24/shared96B，真实STACK0/LOCAL0。完整八条预热后ABBA+BAAB均值38.2264815→37.9273095s（少0.783%），main少0.940%，Q/叶/oracle/因子/全部必需覆盖保持。Systems carry+check少16.9%，PCIe主体量保持；自身事件空隙仍约13.5%，不代表整卡闲置。
 
 native8A78…7955DA/20源码，生产893与默认0保持。请求新检查模式拒绝旧D profile，固定D实验；下一步先冻结新NTT权重并多D/独立holdout再决定提升。CPU准备和多曲线共享workspace lease仍需推进。[详细算法、公式、全部样本与代码原文件line](D:/code/MPA-OpenCl/docs/STAGE2_NTT_CARRY_CHECK_FUSION.md)。
+
+## 55. B2与两类显存预算的独立关系（2026-10-05）
+
+GPU1/生产893/默认检查，S2203/4423/8191的CPU/GMP有效lcm保存点，52接受运行（3预热/49测量）审计52/0。外部big shape上限3072/768MiB，固定arena6300，独立owner1024/128；另同D的1024/640边界ABBA。该big上限不是新GPU allocator硬限，owner和NTT缓存各有独立预算，统计峰不相加为进程峰。
+
+驻留状态不能单独决定B2指数：M4423非驻留但D增长仍alpha≈0.54；小big驻留但D固定后alpha≈0.93/0.98。固定D说明性模型为固定开销＋G批次项，回退增加每批成本。664.46MiB owner跨640边界回退多约7.98%，各2样本无CI。NTT actual full_peak≈3187MiB与arena账本≈6149MiB含义不同；当前table预算计账/evict值得统一，owner临时数组别名仅列未验证候选。生产算法/默认保持，实验工具允许自定义各预算并保留来源/真实几何/检查。[完整报告和便携数据](D:/code/MPA-OpenCl/docs/STAGE2_B2_MEMORY_BUDGET_SCALING.md)。

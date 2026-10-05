@@ -254,3 +254,11 @@ D138标定均值full56.643870s：init26.59%，baby14.08%、CPUaffine6.10%、F树
 从当前源码独立构建（-GlBackend ptx -OuterUnrollU 0）后，设环境变量NTT_CARRY_CHECK_FUSED=1启用大batch进位/检查融合；未设置默认0。scratch由arena拥有、复用、计入硬预算，公式8ceil(L/256)mB，真实曲线峰4MiB；小调用及预算/分配失败沿用原检查。deferred错误累积与所有必需GMP/oracle检查保留，save/worktodo/ini接口保持。
 
 请求此实验模式会禁用旧经验D profile，请使用显式--d做对照。同binary真实保存点八条预热后交叉full38.2264815→37.9273095s（少0.783%），main少0.940%；每模式4条、无CI。原语/实际NTT/deferred故障/预算回退与native两模式各18/0通过。当前生产exe仍893、实验开关默认0；新NTT成本权重与多D留出完成后再决定默认发布。[公式、source-line、命令、全部样本](D:/code/MPA-OpenCl/docs/STAGE2_NTT_CARRY_CHECK_FUSION.md)。
+
+## 2026-10-05 分离大工作区与fold owner预算的实验工具
+
+`NTT_FOLD_DEVICE_MAX_MB` 可独立限制owner（默认640MiB，0触发预算回退）；现有`--arena-mb`限制缓存/规划口径，包含旧保守table计账，并不等于实际NTT payload或全进程显存上限。生产暂没有单独big allocator硬限。
+
+新增`tools/bench/bench_stage2_budget_scaling.py`，通过真实C++ packing query过滤D形状，并验证actual big_peak；可设置`--big-mb`、`--small-big-mb`、`--owner-mb`、`--small-owner-mb`、`--arena-mb`。`--prepare-only`生成CPU/GMP一致的三位数保存点和规划；`--resume`按已有plan继续，改变预算需新输出目录。工具固定本机GPU1/RTX4060 Laptop，所有曲线保留必需检查，不更改ini/worktodo或生产默认。
+
+本轮52接受曲线/49正式测量审计通过。M4423即使owner回退，D增长时仍alpha约0.54；owner驻留但D固定，alpha可趋近1。同D跨640MiB预算边界，驻留110.95s/回退119.80s（每模式2条，无CI）。报告包含完整矩阵、公式、模块容量、独立整卡/主机commit采样、数据搬运、source行号及可复现命令：[B2/位数/预算实验](D:/code/MPA-OpenCl/docs/STAGE2_B2_MEMORY_BUDGET_SCALING.md)。

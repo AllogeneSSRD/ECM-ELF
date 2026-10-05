@@ -1,0 +1,384 @@
+{
+  "exe_sha256": "893f6e907c17803ed90b09b98ffbf6b85e08b7deb1335a9d6c6efd1f8a01f69d",
+  "gpu_uuid": "GPU-8a67b1f8-ef1c-3177-a822-813a7ac2224d",
+  "runs": 52,
+  "warmup": 3,
+  "policy_runs": 33,
+  "fixed_runs": 12,
+  "local_exponents": [
+    {
+      "bits": 2203,
+      "config": "large_resident",
+      "B2_low": 80000000000,
+      "B2_high": 260000000000,
+      "alpha": 0.5453097026396919,
+      "D_low": 330330,
+      "D_high": 570570,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 2203,
+      "config": "large_resident",
+      "B2_low": 260000000000,
+      "B2_high": 800000000000,
+      "alpha": 0.5432465464493615,
+      "D_low": 570570,
+      "D_high": 1021020,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 2203,
+      "config": "large_owner128",
+      "B2_low": 80000000000,
+      "B2_high": 260000000000,
+      "alpha": 0.5365173991949483,
+      "D_low": 330330,
+      "D_high": 570570,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 2203,
+      "config": "large_owner128",
+      "B2_low": 260000000000,
+      "B2_high": 800000000000,
+      "alpha": 0.5959118700205656,
+      "D_low": 570570,
+      "D_high": 1021020,
+      "resident_low": 1,
+      "resident_high": 0
+    },
+    {
+      "bits": 2203,
+      "config": "small_big",
+      "B2_low": 80000000000,
+      "B2_high": 260000000000,
+      "alpha": 0.5431991962918735,
+      "D_low": 330330,
+      "D_high": 570570,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 2203,
+      "config": "small_big",
+      "B2_low": 260000000000,
+      "B2_high": 800000000000,
+      "alpha": 0.5735652829653203,
+      "D_low": 570570,
+      "D_high": 746130,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 4423,
+      "config": "large_resident",
+      "B2_low": 80000000000,
+      "B2_high": 260000000000,
+      "alpha": 0.5554073552568543,
+      "D_low": 330330,
+      "D_high": 570570,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 4423,
+      "config": "large_resident",
+      "B2_low": 260000000000,
+      "B2_high": 800000000000,
+      "alpha": 0.5515725591491839,
+      "D_low": 570570,
+      "D_high": 1021020,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 4423,
+      "config": "large_resident",
+      "B2_low": 800000000000,
+      "B2_high": 2600000000000,
+      "alpha": 0.5361958146570943,
+      "D_low": 1021020,
+      "D_high": 1531530,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 4423,
+      "config": "large_resident",
+      "B2_low": 2600000000000,
+      "B2_high": 8000000000000,
+      "alpha": 0.7380487380016013,
+      "D_low": 1531530,
+      "D_high": 1531530,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 4423,
+      "config": "large_owner128",
+      "B2_low": 80000000000,
+      "B2_high": 260000000000,
+      "alpha": 0.5516999160821087,
+      "D_low": 330330,
+      "D_high": 570570,
+      "resident_low": 0,
+      "resident_high": 0
+    },
+    {
+      "bits": 4423,
+      "config": "large_owner128",
+      "B2_low": 260000000000,
+      "B2_high": 800000000000,
+      "alpha": 0.547193377817788,
+      "D_low": 570570,
+      "D_high": 1021020,
+      "resident_low": 0,
+      "resident_high": 0
+    },
+    {
+      "bits": 4423,
+      "config": "large_owner128",
+      "B2_low": 800000000000,
+      "B2_high": 2600000000000,
+      "alpha": 0.5369103604167645,
+      "D_low": 1021020,
+      "D_high": 1531530,
+      "resident_low": 0,
+      "resident_high": 0
+    },
+    {
+      "bits": 4423,
+      "config": "large_owner128",
+      "B2_low": 2600000000000,
+      "B2_high": 8000000000000,
+      "alpha": 0.7615600486069998,
+      "D_low": 1531530,
+      "D_high": 1531530,
+      "resident_low": 0,
+      "resident_high": 0
+    },
+    {
+      "bits": 4423,
+      "config": "small_big",
+      "B2_low": 80000000000,
+      "B2_high": 260000000000,
+      "alpha": 0.6120801865726007,
+      "D_low": 330330,
+      "D_high": 390390,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 4423,
+      "config": "small_big",
+      "B2_low": 260000000000,
+      "B2_high": 800000000000,
+      "alpha": 0.7923374468227402,
+      "D_low": 390390,
+      "D_high": 390390,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 4423,
+      "config": "small_big",
+      "B2_low": 800000000000,
+      "B2_high": 2600000000000,
+      "alpha": 0.9253635659370959,
+      "D_low": 390390,
+      "D_high": 390390,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 4423,
+      "config": "small_big",
+      "B2_low": 2600000000000,
+      "B2_high": 8000000000000,
+      "alpha": 0.9753465367992729,
+      "D_low": 390390,
+      "D_high": 390390,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 8191,
+      "config": "large_resident",
+      "B2_low": 80000000000,
+      "B2_high": 260000000000,
+      "alpha": 0.47989116664009646,
+      "D_low": 330330,
+      "D_high": 570570,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 8191,
+      "config": "large_resident",
+      "B2_low": 260000000000,
+      "B2_high": 800000000000,
+      "alpha": 0.5924279770281144,
+      "D_low": 570570,
+      "D_high": 746130,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 8191,
+      "config": "large_owner128",
+      "B2_low": 80000000000,
+      "B2_high": 260000000000,
+      "alpha": 0.4828668286885152,
+      "D_low": 330330,
+      "D_high": 570570,
+      "resident_low": 0,
+      "resident_high": 0
+    },
+    {
+      "bits": 8191,
+      "config": "large_owner128",
+      "B2_low": 260000000000,
+      "B2_high": 800000000000,
+      "alpha": 0.5909918792595862,
+      "D_low": 570570,
+      "D_high": 746130,
+      "resident_low": 0,
+      "resident_high": 0
+    },
+    {
+      "bits": 8191,
+      "config": "small_big",
+      "B2_low": 80000000000,
+      "B2_high": 260000000000,
+      "alpha": 0.7515378433218516,
+      "D_low": 210210,
+      "D_high": 210210,
+      "resident_low": 1,
+      "resident_high": 1
+    },
+    {
+      "bits": 8191,
+      "config": "small_big",
+      "B2_low": 260000000000,
+      "B2_high": 800000000000,
+      "alpha": 0.9037128555673332,
+      "D_low": 210210,
+      "D_high": 210210,
+      "resident_low": 1,
+      "resident_high": 1
+    }
+  ],
+  "fixed_means": [
+    {
+      "config": "large_resident",
+      "B2": 260000000000,
+      "D": 1021020,
+      "P": 92160,
+      "batches": 3,
+      "seconds": 15.457714,
+      "min_seconds": 15.446695,
+      "max_seconds": 15.468733,
+      "owner_enabled": 1
+    },
+    {
+      "config": "large_resident",
+      "B2": 800000000000,
+      "D": 1021020,
+      "P": 92160,
+      "batches": 9,
+      "seconds": 25.280504,
+      "min_seconds": 25.273013,
+      "max_seconds": 25.287995,
+      "owner_enabled": 1
+    },
+    {
+      "config": "large_resident",
+      "B2": 2600000000000,
+      "D": 1021020,
+      "P": 92160,
+      "batches": 28,
+      "seconds": 59.024554,
+      "min_seconds": 59.001167,
+      "max_seconds": 59.047941,
+      "owner_enabled": 1
+    },
+    {
+      "config": "large_owner128",
+      "B2": 260000000000,
+      "D": 1021020,
+      "P": 92160,
+      "batches": 3,
+      "seconds": 15.747537000000001,
+      "min_seconds": 15.738237,
+      "max_seconds": 15.756837,
+      "owner_enabled": 0
+    },
+    {
+      "config": "large_owner128",
+      "B2": 800000000000,
+      "D": 1021020,
+      "P": 92160,
+      "batches": 9,
+      "seconds": 26.384394999999998,
+      "min_seconds": 26.350503,
+      "max_seconds": 26.418287,
+      "owner_enabled": 0
+    },
+    {
+      "config": "large_owner128",
+      "B2": 2600000000000,
+      "D": 1021020,
+      "P": 92160,
+      "batches": 28,
+      "seconds": 63.897976,
+      "min_seconds": 63.717608,
+      "max_seconds": 64.078344,
+      "owner_enabled": 0
+    }
+  ],
+  "fixed_batch_linear_fit": {
+    "large_resident": {
+      "intercept_seconds": 9.911208540117414,
+      "seconds_per_batch": 1.750728659491194,
+      "r_squared": 0.9997651922635846
+    },
+    "large_owner128": {
+      "intercept_seconds": 9.507162262230917,
+      "seconds_per_batch": 1.9377105303326811,
+      "r_squared": 0.9995961584104696
+    }
+  },
+  "owner640_boundary": [
+    {
+      "config": "large_resident",
+      "seconds": 110.9473125,
+      "samples_seconds": [
+        111.444409,
+        110.450216
+      ],
+      "owner_enabled": 1,
+      "B2": 8000000000000,
+      "D": 1531530,
+      "P": 138240
+    },
+    {
+      "config": "large_owner640",
+      "seconds": 119.8037665,
+      "samples_seconds": [
+        119.963008,
+        119.644525
+      ],
+      "owner_enabled": 0,
+      "B2": 8000000000000,
+      "D": 1531530,
+      "P": 138240
+    }
+  ],
+  "maximum_observed_card_mib": 5444.6171875,
+  "maximum_logged_host_peak_commit_mib": 7912,
+  "all_arena_overflows": 0,
+  "scope": "Unreplicated policy grid; fixed-D ABBA two samples per mode per B2; no CI. Card maxima are 200ms observations, not process peaks."
+}
