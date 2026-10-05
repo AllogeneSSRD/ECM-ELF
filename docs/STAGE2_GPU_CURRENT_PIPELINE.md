@@ -1899,3 +1899,9 @@ GlBackend可选编译将Goldilocks归约固定，移除每次mode load/判断，
 ## 52. NTT单位根固定PTX留出（2026-10-05）
 
 独立方法3在实际PTX3下36/0门禁通过；k24..26每长度forward/inverse/roundtrip八次交叉，roundtrip慢约7.5%，资源与baseline相同。候选不接生产；旧四fold上的收益不适用于新后端。下一项outer根乘积/同步成本，CPU准备与多曲线workspace lease继续保留。[独立负结果与source-line](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SMALL_ROOTS_FIXED_PTX.md)。
+
+## 53. NTT outer ILP 编译候选（2026-10-05）
+
+合作outer的u循环展开4组，完整卷积k24..27独立重复少0.70–0.78%；默认与unroll1八实例GPU指令相同，后者启动波动不记收益。u4 M8 forward REG48→78，M6可驻留capacity5→4；shared/LOCAL0与MAC/pass/payload保持。源码默认NTT_OUTER_UNROLL_U0，native builder可选-OuterUnrollU4，候选停用旧D经验profile，必须用显式D做公平对照。
+
+native48BD…0360EF/19源，原生点/实际scope18/0，基本入口21/0。八条full38.594806→38.453166s名义少0.367%，两顺序组方向不同，未证明整曲线稳定收益，生产893保持。接入宏0/4各13/0且默认0/候选4/native4各八SASS实例匹配对应旧探针；叶/oracle/因子/强制检查保持。[完整报告、公式、source-line与复现](D:/code/MPA-OpenCl/docs/STAGE2_NTT_OUTER_ILP.md)。下一项关注更大规模的跨层融合/根同步收益及CPU准备空隙，多曲线需要共享workspace lease。

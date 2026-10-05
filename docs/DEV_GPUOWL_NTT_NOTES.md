@@ -4381,3 +4381,11 @@ caller/callee复用原out，真实NW128七个内核STACK各少1024B；chain REG6
 ## 78. 固定PTX下低层单位根重新评估（2026-10-05）
 
 独立probe编译PTX3，根移位方法3也用PTX归约，不再与旧四fold基线混合。九raw依赖、36/0原语/频谱/逆向/tile边界/只读/故障/资源门禁；k24/25/26九组各八次交叉。roundtrip慢7.60/7.48/7.54%，REG40/LOCAL0/32KiB shared与对照相同，容量API3CTA/SM。旧2.2%局部收益不能叠加，候选不接生产；生产NTT代码和权重保持。下一项outer根乘积与shared/barrier，再考虑pass融合。[完整负结果、公式与source-line](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SMALL_ROOTS_FIXED_PTX.md)。
+
+## 79. outer 蝶形 ILP 展开与完整曲线留出（2026-10-05）
+
+NTT固定PTX下探针扫默认/1/2/4，各13/0；u1八个outer实例SASS与默认相同，其首轮2.50%不能归因于代码。u2多数回退；u4完整卷积k24..27独立重复快0.78/0.75/0.70/0.77%，k23非合作控制持平。M8 forward REG48→78，M6 capacity5→4，LOCAL0/shared保持，静态代码约翻倍；算法MAC/pass/array/传输payload保持，不代表实际occupancy保持。
+
+新增编译选项OuterUnrollU0/4，默认0，无热运行时分派；宽度4保护旧D经验模型，实际macro声明并核验。native48BD8842…0360EF/19raw源，CUDA330.0s；点/两种真实scope18/0，基础save/ini/worktodo21/0。八条同Q/B2/D/point1/check交叉full38.5948055→38.4531660s，名义少0.367%；前组少0.808%，后组慢0.079%，未建立整曲线稳定加速，**不提升生产默认**，保留实验候选。Q/叶/oracle/因子/覆盖保持。
+
+接入后宏0/4再各13/0，k25..27快约0.7%，k24首次baseline漂移单独报告；新默认0/新4/native4各八实例SASS分别匹配原0/原4/原4。生产893字节保持，未重新拟合未提升候选D。详细源文件line、公式、全部样本、资源代价、保留决策及复现见[本轮报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_OUTER_ILP.md)。后续跨层融合/根同步，以及CPU准备与workspace lease；公平Prime95目标仍未完成。

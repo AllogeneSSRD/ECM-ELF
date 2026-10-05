@@ -15,9 +15,14 @@ def main():
     p.add_argument('--device',type=int,default=1)
     p.add_argument('--real-save',type=Path,required=True,help='Previously validated production M4423 save for model scope checks')
     p.add_argument('--calibrated-point-model',action='store_true',help='Expect separate profile6 in the exact real-save scope')
+    p.add_argument('--outer-unroll-u',type=int,choices=(0,4),default=0,
+                   help='Experimental NTT schedule requires legacy D fallback for both point modes')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();sha=hashlib.sha256(exe.read_bytes()).hexdigest()
+    manifest=json.loads((exe.parent/'build_manifest.json').read_text(encoding='utf-8-sig'))
+    assert manifest.get('outer_unroll_u',0)==a.outer_unroll_u
+    assert not (a.outer_unroll_u and a.calibrated_point_model)
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_NO_PROGRESS='1',NTT_XADD6_TEST='1')
     runs=[]
@@ -32,6 +37,7 @@ def main():
             (out/(name+'_driver.log')).write_bytes(r.stdout+r.stderr)
             assert r.returncode==0,(name,r.stderr[-2000:])
             text=(out/(name+'_engine.log')).read_text(encoding='utf-8',errors='replace')
+            if a.outer_unroll_u:assert f'ntt_outer_schedule: unroll_u={a.outer_unroll_u}' in text
             for token in (f'point_mersenne_mode: requested={mode} enabled={mode} bits={bits}', 'mont_selftest: cases=2048 mismatches=0','xadd6_selftest: cases=1280','bad=0 first_bad=0','stage1_skipped=1','gmp_check_bad=0','clean=0'):
                 assert token in text,(name,token)
             result=json.loads((out/(name+'.jsonl')).read_text(encoding='utf-8').splitlines()[-1]);assert result['bad_factors']==0
@@ -56,10 +62,12 @@ def main():
         r=subprocess.run(cmd,env=clean|{'NTT_POINT_MERSENNE':str(mode)},capture_output=True,timeout=180)
         (out/(name+'_driver.log')).write_bytes(r.stdout+r.stderr);assert r.returncode==0,name
         text=(out/(name+'_engine.log')).read_text(encoding='utf-8',errors='replace')
-        want='d_model: requested=1 enabled=1 version=resident_fixed_ptx_v1' if mode==0 else \
+        want='d_model: requested=1 enabled=0 version=legacy_56_1' if a.outer_unroll_u else \
+             'd_model: requested=1 enabled=1 version=resident_fixed_ptx_v1' if mode==0 else \
              'd_model: requested=1 enabled=1 version=resident_point_fold_v1' if a.calibrated_point_model else \
              'd_model: requested=1 enabled=0 version=legacy_56_1'
         assert want in text and f'point_mersenne_mode: requested={mode} enabled={mode}' in text
+        if a.outer_unroll_u:assert f'ntt_outer_schedule: unroll_u={a.outer_unroll_u}' in text
         assert 'hash=1689529688547722991' in text and 'gmp_check_bad=0' in text and 'pending=0' in text
         result=json.loads((out/(name+'.jsonl')).read_text(encoding='utf-8').splitlines()[-1]);assert result['bad_factors']==0 and result['factors']==[]
         runs.append(dict(name=name,command=cmd,result=result));print(name,'passed',flush=True)

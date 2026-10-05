@@ -4,6 +4,12 @@
    registers per thread. The offset axis stays contiguous in global memory.
    Forward is the original DIF; inverse is the original DIT. No permutation,
    additional full-length buffer, pointwise operation or normalization here. */
+#ifndef NTT_OUTER_UNROLL_U
+#define NTT_OUTER_UNROLL_U 0
+#endif
+#if NTT_OUTER_UNROLL_U != 0 && NTT_OUTER_UNROLL_U != 4
+#error "NTT_OUTER_UNROLL_U must be 0 (compiler default) or 4 (experimental ILP)"
+#endif
 template <int M, bool INVERSE>
 __global__ __launch_bounds__(256, M==8 ? 2 : 3)
 void outer_coop_kernel(unsigned long long *a, unsigned long long n, int stage,
@@ -40,6 +46,9 @@ void outer_coop_kernel(unsigned long long *a, unsigned long long n, int stage,
         const unsigned long long base_root=base_roots[(INVERSE ? i*V : (i&1)*V)+v];
         if(d>=ROWS) {
             // Every row has work. Compute w once for u, use it for all groups.
+#if NTT_OUTER_UNROLL_U == 4
+#pragma unroll 4
+#endif
             for(int u=row;u<d;u+=ROWS) {
                 const auto w=gl_mul(base_root,roots[off+u]);
                 for(int group=0;group<R/(2*d);++group) {

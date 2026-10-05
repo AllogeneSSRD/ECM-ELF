@@ -241,3 +241,9 @@ D138标定均值full56.643870s：init26.59%，baby14.08%、CPUaffine6.10%、F树
 当前工作区生产为893F6E90…01F69D，19源码冻结，旧DCF已备份。使用-GlBackend ptx重建：fixedPTX默认NTT_POINT_MERSENNE=1；精确N=2^s−1使用保持Montgomery坐标的乘积折叠/旋转，通用N自动fallback。设0恢复原SOS/REDC；匹配的M4423/RTX4060/check/budget范围下point1选profile6 resident_point_fold_v1、point0选profile5，其他scope沿用保护。runtime/short/fold构建缺省point0。保存点、worktodo/ini接口保持。
 
 完整native入口30/0、发布路径21/0；同Q/B2/D与检查8次串行交叉，旧DCF48.8331495→新39.0421205s，少20.05%，每版本4条/无CI。大界D1381380、小界390390、owner512时1141140、baby128时600600，首选D与固定PTX前一阶段保持。NTT低层单位根在固定PTX下变慢，未接生产。[本轮公式/容量/占比/源码与证据](D:/code/MPA-OpenCl/docs/STAGE2_POINT_FOLD_D_CALIBRATION.md)、[NTT候选负结果](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SMALL_ROOTS_FIXED_PTX.md)。
+
+## 2026-10-05 NTT outer 调度实验选项
+
+生产编译脚本新增 `-OuterUnrollU 0|4`，默认0。4在cooperative outer中展开四组独立蝶形，无新增数据数组或传输，REG/代码体积增加；仅建议在独立实验目录编译并给出显式D。新调度尚未标定，实际宽度4会回退legacy D模型，不能沿用profile6经验速率。
+
+完整卷积k24..27独立重复少0.70–0.78%，但真实保存点八条Stage2均值少0.367%、两个顺序组方向不同，尚未建立稳定整曲线收益，因此生产exe仍893、默认调度0。native算术/实际scope18/0，save/ini/worktodo基本入口21/0。复现、全部样本、资源代价、计算量/访存公式及source-line见[outer ILP报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_OUTER_ILP.md)。
