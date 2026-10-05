@@ -4335,3 +4335,10 @@ NTT_BABY_DEVICE默认0，实验显式1启用；现有D模型在请求新路径�
 模型64/0、输入8/0、生产save/ini/worktodo33/0、旧scope30/0、新scope80/0、原生planner9/0、未拟合D114真实曲线56.421647秒均通过。A1910CB4…56EC6A，17原始依赖+快照核验；CUDA590.2秒，完整构建611.875秒。生产save固定D同exe ABBA均值53.569084→50.520226秒（快5.69%），每模式2条/无CI，叶/oracle/因子与检查合同保持。生产默认baby1，0可回原CPU路径；E013产物已备份。新D本次没有改变三个预算/边界的首选，不能声称额外换D收益。
 
 详细公式、全部时长、scope/失败输入记录、容量与传输、原始证据及源码行见[报告](D:/code/MPA-OpenCl/docs/STAGE2_GPU_BABY_D_CALIBRATION.md)。全新A191未重采NVML/PCIe峰；A5 point池18.542850秒经范围重查已排除Stage1。后续仍为剩余CPU准备、point/NTT内核、workspace lease及公平Prime95对照，长期目标未完成。
+
+
+## 72. 逆 NTT 的 2 幂归一化候选（2026-10-05）
+
+接续已发布 xADD6/D/short/baby，使用 Goldilocks 的 2^(-k) 特性，将 inverse pointwise/scale 中每系数的一次模乘改为移位/模减，k1..32 且精确 scale 才启用；自定义 scale 回旧路径。纯完整卷积 k24..27 同 binary 八次交叉改善0.299–0.418%，各 short 原语263357 GMP word，新旧 cooperative/shared/warp 频谱、逆向、cached switch/lifecycle 和故障拒绝均通过8组检查。
+
+独立 native A374FDB7…07CB3，17原始依赖冻结，CUDA288.4s；同 save/D 八条 full 51.770018→51.965438s，候选均值慢0.3775%，没有建立整曲线稳定加速。scope0/1各96/0，实际frozen因子2/0，叶/oracle/检查合同保持。默认scale0，生产A191保持；请求scale1时D经验模型回legacy，固定D实验。公式、原文件line、完整样本和容量/传输说明见[本轮报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_INVERSE_SCALE_OPTIMIZATION.md)。下一轮优先NTT乘积/短归约指令和point MAC，持续性能目标未完成。

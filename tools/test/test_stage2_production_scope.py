@@ -12,6 +12,7 @@ def main():
     p.add_argument('--exe',type=Path,required=True);p.add_argument('--save',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--device',type=int,default=1)
     p.add_argument('--baby-device',type=int,choices=(0,1),default=0)
+    p.add_argument('--shift-scale',type=int,choices=(0,1))
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();save=a.save.resolve();sha=hashlib.sha256(exe.read_bytes()).hexdigest()
@@ -20,6 +21,7 @@ def main():
     for byte in line:fingerprint=((fingerprint^byte)*1099511628211)&((1<<64)-1)
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_ARENA_CAP_KB='6451200',NTT_NO_PROGRESS='1',NTT_BABY_DEVICE=str(a.baby_device))
+    if a.shift_scale is not None:env['NTT_GL_SHIFT_SCALE']=str(a.shift_scale)
     rows=[]
     for flag in (1,0):
         overrides=(None,'NTT_S4_OLDTAIL','NTT_S4_OFF')
@@ -29,7 +31,7 @@ def main():
             name=f'{flag}_{override or "default"}';log=out/(name+'.log');result=out/(name+'.jsonl')
             ee=env|{'NTT_GL_SHORT_REDUCE':str(flag)}
             if override:ee[override]='0' if override=='NTT_BABY_DEVICE_MAX_MB' else '1'
-            enabled=int(override is None and (not a.baby_device or flag==1))
+            enabled=int(override is None and (not a.baby_device or flag==1) and not a.shift_scale)
             version=('resident_baby_v1' if a.baby_device else 'resident_short_v1' if flag else 'resident_shape_v1') if enabled else 'legacy_56_1'
             cmd=[str(exe),'--curve-worker','--save',str(save),'--record-offset','0',
                  '--record-hash',str(fingerprint),'--record-index','1','--b2','100000000000',
@@ -53,6 +55,8 @@ def main():
                     'no_completed_curve':'stage2_full_wall:' not in text,
                     'no_result':not result.exists(),
                     'save_unchanged':hashlib.sha256(save.read_bytes()).hexdigest()==save_sha}
+            if a.shift_scale is not None:
+                checks['scale_control']=f'gl_shift_scale={a.shift_scale}' in text
             rows.append(dict(name=name,command=cmd,env={k:v for k,v in ee.items() if k.startswith('NTT_')},
                              checks=checks,controlled_stop=True,exit=child.returncode))
             print(name,checks,flush=True)

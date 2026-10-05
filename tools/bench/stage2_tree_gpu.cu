@@ -10786,6 +10786,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        !fuse_env_ull("NTT_S4_FLAT_DIRECT",1))calibrated=false;
     // Empirical rates must match the selected arithmetic and NTT policy.
     const bool gl_short=fuse_env_ull("NTT_GL_SHORT_REDUCE",NTT_GL_SHORT_REDUCE_DEFAULT)!=0;
+    const bool gl_shift_scale=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
+    // Existing empirical weights predate inverse-scale specialization.
+    if(gl_shift_scale)calibrated=false;
     if(gl_short && !(shape_ntt && d_short_rates_valid))calibrated=false;
     if(baby_requested && !(gl_short && shape_ntt && d_baby_rates_valid && baby_cap))calibrated=false;
     if(baby_requested)for(const char *key:{"NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST",
@@ -10799,10 +10802,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const double d_scan_begin=now_s();
     DPhaseModel phase_model((int)L.S,B2,baby_requested ? 4 : gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
     const char *model_version=calibrated ? (baby_requested ? "resident_baby_v1" : gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
-    std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu gl_short=%d "
+    std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu gl_short=%d gl_shift_scale=%d "
                 "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
                 (int)model_requested,(int)calibrated,model_version,
-                (unsigned long long)cap,fold_budget,(int)gl_short);
+                (unsigned long long)cap,fold_budget,(int)gl_short,(int)gl_shift_scale);
     {
         struct DCand {
             unsigned long long D = 0, P = 0, imax = 0, batches = 0;

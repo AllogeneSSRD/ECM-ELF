@@ -1863,3 +1863,8 @@ NTT_BABY_DEVICE默认0，实验显式1启用；现有D模型在请求新路径�
 六条多D加四GPU锚点，独立B2=1e11 holdout每条330330快于510510；大界仍1381380、小界330330、owner512仍1141140。仅限制baby128MiB则候选600600，只验证了planner。native模型与整数features64/0、输入8/0、生产入口33/0、旧scope30/0、新scope80/0、原生planner9/0；owner512未拟合D真实56.421647秒、同参考叶值。
 
 发布A1910CB4…56EC6A，17原始依赖哈希与快照核验。完整存档同exe固定D ABBA **53.569084→50.520226秒，快5.69%**（2样本/模式，无CI）；新路径affine2.096→.2405秒。default/rollback和叶/oracle/因子合同保持。E013已备份，GPU0外部生产保持。源码、B2/N/W/P/I/G公式、完整时长和生命周期说明见[本轮报告](D:/code/MPA-OpenCl/docs/STAGE2_GPU_BABY_D_CALIBRATION.md)。该模型未增加设备数组/传输，本轮未重采整进程VRAM/host-private峰，不能将owner512当作总VRAM限制。后续继续point/NTT、CPU准备和多曲线lease；公平Prime95对照仍待完成。
+
+
+## 46. 逆 NTT 归一化的移位候选（2026-10-05）
+
+新增默认关闭的 NTT_GL_SHIFT_SCALE，精确 k/scale 判断后每 inverse slice 删除 N 次通用 Goldilocks 模乘；没有新增数组、完整 pass 或生产数据传输。纯完整卷积 k24..27 八次交叉快约0.30–0.42%；同 save/D 原生整曲线八次 51.770018→51.965438s，尚未证明稳定改善。原语/GMP频谱/逆向/cache/lifecycle/故障门禁通过，实际scope192/0、frozen因子2/0；生产A191保持，新请求拒绝旧D经验模型。数学、全部样本、容量/传输合同及最新source/line见[逆归一化报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_INVERSE_SCALE_OPTIMIZATION.md)。

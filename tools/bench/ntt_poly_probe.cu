@@ -1220,7 +1220,7 @@ __global__ __launch_bounds__(FUSE_TILE_THREADS, WARP_TAIL ? 3 : 1)
 void tile_kernel(unsigned long long *a, const unsigned long long *b,
                             unsigned long long n, int k, int t,
                             const unsigned long long *tbl, unsigned long long n_scale,
-                            unsigned long long stride)
+                            unsigned long long stride, bool shift_scale=false)
 {
     const size_t sl = (size_t)blockIdx.y * stride;
     a += sl; if (b) b += sl;
@@ -1232,8 +1232,13 @@ void tile_kernel(unsigned long long *a, const unsigned long long *b,
     __syncthreads();
     if (INVERSE) {
         /* pointwise product + 1/N, both elementwise: fusing them here saves two passes */
-        for (unsigned long long i = threadIdx.x; i < TILE; i += blockDim.x)
-            sm[i] = gl_mul(gl_mul(sm[i], b[base + i]), n_scale);
+        if(shift_scale && gl_scale_is_inverse_pow2(n_scale,k)) {
+            for (unsigned long long i = threadIdx.x; i < TILE; i += blockDim.x)
+                sm[i] = gl_scale_inverse_pow2(gl_mul(sm[i], b[base + i]), k);
+        } else {
+            for (unsigned long long i = threadIdx.x; i < TILE; i += blockDim.x)
+                sm[i] = gl_mul(gl_mul(sm[i], b[base + i]), n_scale);
+        }
         __syncthreads();
     }
     if (WARP_TAIL && t>=5) {
@@ -1674,10 +1679,11 @@ static void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b
         const unsigned int blocks = (unsigned int)(n >> c.t);
         const int smem = (int)(1ull << c.t) * (int)sizeof(unsigned long long);
         dim3 gr(blocks, (unsigned int)nbatch);
+        const bool shift_scale=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
         if(c.warp_tail && c.t>=5)
-            tile_kernel<true,true><<<gr, FUSE_TILE_THREADS, smem>>>(d,b,n,c.k,c.t,c.tblI,n_scale,stride);
+            tile_kernel<true,true><<<gr, FUSE_TILE_THREADS, smem>>>(d,b,n,c.k,c.t,c.tblI,n_scale,stride,shift_scale);
         else tile_kernel<true><<<gr, FUSE_TILE_THREADS, smem>>>(d, b, n, c.k, c.t, c.tblI,
-                                                           n_scale, stride);
+                                                           n_scale, stride,shift_scale);
         CK(cudaGetLastError());
         fuse_mark("inv tile pass (+pw+scale)", ft0);
     }
