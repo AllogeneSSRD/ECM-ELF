@@ -10788,10 +10788,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const bool gl_short=(ntt_gl_reduce_requested_mode()&1u)!=0;
     const bool gl_shift_scale=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
     const bool gl_ptx=NTT_GL_FIXED_MODE==3 || fuse_env_ull("NTT_GL_PTX_REDUCE",0)!=0;
-    // Existing empirical weights predate these arithmetic specializations.
-    if(gl_shift_scale || gl_ptx)calibrated=false;
-    if(gl_short && !(shape_ntt && d_short_rates_valid))calibrated=false;
-    if(baby_requested && !(gl_short && shape_ntt && d_baby_rates_valid && baby_cap))calibrated=false;
+    // Only the measured immutable PTX/GPU baby backend has profile5 rates.
+    const bool fixed_ptx=NTT_GL_FIXED_MODE==3 && d_fixed_ptx_rates_valid && gl_short && shape_ntt && baby_requested;
+    if(gl_shift_scale || (gl_ptx && !fixed_ptx) || (NTT_GL_FIXED_MODE>=0 && !fixed_ptx))calibrated=false;
+    if(gl_short && !(shape_ntt && (fixed_ptx ? d_fixed_ptx_rates_valid : d_short_rates_valid)))calibrated=false;
+    if(baby_requested && !(gl_short && shape_ntt && (fixed_ptx ? d_fixed_ptx_rates_valid : d_baby_rates_valid) && baby_cap))calibrated=false;
     if(baby_requested)for(const char *key:{"NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST",
                                          "NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL"})
         if(fuse_env_ull(key,0))calibrated=false;
@@ -10801,8 +10802,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 owner_bytes(phi_u64(D_in)/2)>fold_budget ||
                 (baby_requested && d_baby_payload_bytes(phi_u64(D_in)/2,nw)>baby_cap)))calibrated=false;
     const double d_scan_begin=now_s();
-    DPhaseModel phase_model((int)L.S,B2,baby_requested ? 4 : gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
-    const char *model_version=calibrated ? (baby_requested ? "resident_baby_v1" : gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
+    DPhaseModel phase_model((int)L.S,B2,fixed_ptx ? 5 : baby_requested ? 4 : gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
+    const char *model_version=calibrated ? (fixed_ptx ? "resident_fixed_ptx_v1" : baby_requested ? "resident_baby_v1" : gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
     std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu gl_short=%d gl_shift_scale=%d gl_ptx=%d "
                 "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
                 (int)model_requested,(int)calibrated,model_version,

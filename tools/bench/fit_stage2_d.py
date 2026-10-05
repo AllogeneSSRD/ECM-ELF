@@ -3,7 +3,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
-from calibrate_stage2_d import features,parse,read_log
+from calibrate_stage2_d import features,parse,read_log,command_bits,load_fixed_ptx_weights
 
 FEATURES={'baby':'baby','affine':'affine','ftree':'ftree','giant':'giant','gtrees':'gtrees',
           'fold':'fold','descent':'descent','inv':'inverse','accum':'accum','residual':'G'}
@@ -30,41 +30,64 @@ def main():
     rows=[r.copy() for r in m['runs'] if r['features']['G']>1]
     if not rows:raise ValueError('Resident fold fit needs measurements with G >= 2')
     profile=4 if m['env'].get('NTT_BABY_DEVICE')=='1' else 3 if m['env'].get('NTT_GL_SHORT_REDUCE')=='1' else 2 if m['env'].get('NTT_FUSE_COOP_OUTER')=='2' else 0
-    if profile in (3,4) and m['env'].get('NTT_FUSE_COOP_OUTER')!='2':
+    if m.get('feature_profile')==5:
+        if profile!=4 or m.get('gl_fixed_mode')!=3 or m['env'].get('NTT_GL_PTX_REDUCE')!='1':
+            raise ValueError('Fixed PTX fit needs verified fixed3/GPU baby controls')
+        load_fixed_ptx_weights(m['ntt_weights']);profile=5
+        measured=json.loads(Path(m['ntt_weights']['measurements']).read_text(encoding='utf-8'))
+        source=measured['manifests']['ptx']['sources']
+        for name in ('tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh',
+                     'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh'):
+            if m.get('sources',{}).get(name,'').lower()!=source[name].lower():
+                raise ValueError('Curve arithmetic sources differ from frozen NTT weights: '+name)
+    elif m['env'].get('NTT_GL_PTX_REDUCE')=='1' or m.get('gl_fixed_mode',-1)!=-1:
+        raise ValueError('New arithmetic cannot reuse a historical feature profile')
+    if profile in (3,4,5) and m['env'].get('NTT_FUSE_COOP_OUTER')!='2':
         raise ValueError('Short-reducer fit requires shape policy mode 2')
-    if profile==4 and (m['env'].get('NTT_GL_SHORT_REDUCE')!='1' or a.anchor_csv):
+    if profile in (4,5) and (m['env'].get('NTT_GL_SHORT_REDUCE')!='1' or a.anchor_csv):
         raise ValueError('GPU baby fit requires short reducer; CPU baby CSV anchors are forbidden')
     if profile==2 and a.anchor_csv and a.anchor_mode!='shape_outer':
         raise ValueError('Original-NTT xADD anchors cannot enter a shape-policy fit')
     if profile==3 and a.anchor_csv and a.anchor_mode!='short_fold':
         raise ValueError('Short-reducer fit needs short_fold anchors')
     for row in rows:
-        cmd=row['command'];b2=int(cmd[cmd.index('--b2')+1]);bits=int(cmd[cmd.index('--n-hex')+1],16).bit_length()
-        row['features']=features(row['features']['D'],b2,bits,profile)
-        if profile==4:
+        cmd=row['command'];b2=int(cmd[cmd.index('--b2')+1]);bits=command_bits(cmd)
+        observed_d=int(cmd[cmd.index('--d')+1])
+        calculated=features(observed_d,b2,bits,profile)
+        if profile==5 and row['features']!=calculated:
+            raise ValueError('Fixed PTX features differ from actual curve command')
+        row['features']=calculated
+        if profile in (4,5):
             text=read_log(row['log'])
             for token in ('baby_device: requested=1 enabled=1','gmp_selftest_bad=0',
                           'gmp_check_bad=0','pending=0','clean=1',m['Q_line']):
                 if token not in text:raise ValueError('Invalid GPU baby measurement: '+token)
             if parse(text)!=row['phases']:raise ValueError('Measurement phases differ from raw log')
+            if profile==5 and f"ntt_gl_reduce_mode: device={m['device']} short=1 ptx=1 fixed=3" not in text:
+                raise ValueError('Measurement is not the fixed PTX backend')
     for path in a.anchor_measurements:
         anchor=json.loads(path.read_text())
         clean=lambda env:{k:str(v) for k,v in env.items() if v is not None}
         if (anchor['sha256'].lower()!=m['sha256'].lower() or anchor['device']!=m['device'] or
             anchor['Q_line']!=m['Q_line'] or clean(anchor['env'])!=clean(m['env']) or
-            anchor.get('sources')!=m.get('sources')):
+            anchor.get('sources')!=m.get('sources') or anchor.get('ntt_weights')!=m.get('ntt_weights') or
+            anchor.get('gl_fixed_mode',-1)!=m.get('gl_fixed_mode',-1)):
             raise ValueError('Measurement anchors differ in binary/device/Q/controls/sources')
         for row in anchor['runs']:
             cmd=row['command'];d=int(cmd[cmd.index('--d')+1]);b2=int(cmd[cmd.index('--b2')+1])
-            bits=int(cmd[cmd.index('--n-hex')+1],16).bit_length();f=features(d,b2,bits,profile)
+            bits=command_bits(cmd);f=features(d,b2,bits,profile)
             if f['G']<2:raise ValueError('Anchor is outside resident fold scope')
             text=read_log(row['log'])
             for token in ('gmp_selftest_bad=0','gmp_check_bad=0','pending=0','clean=1',m['Q_line']):
                 if token not in text:raise ValueError('Invalid measurement anchor: '+token)
-            if profile==4 and 'baby_device: requested=1 enabled=1' not in text:
+            if profile in (4,5) and 'baby_device: requested=1 enabled=1' not in text:
                 raise ValueError('CPU baby or fallback anchor cannot enter GPU baby fit')
             phases=parse(text)
+            if profile==5 and f"ntt_gl_reduce_mode: device={m['device']} short=1 ptx=1 fixed=3" not in text:
+                raise ValueError('Anchor is not the fixed PTX backend')
             if phases!=row['phases']:raise ValueError('Anchor phase data differs from raw log')
+            if profile==5 and row['features']!=f:
+                raise ValueError('Fixed PTX anchor features differ from actual curve command')
             rows.append(dict(name=path.parent.name+'/'+row['name'],log=row['log'],command=cmd,features=f,phases=phases))
     for path in a.anchor_csv:
         prov=json.loads((path.parent/'provenance.json').read_text(encoding='utf-8-sig'))
@@ -98,7 +121,8 @@ def main():
     rates=fit(rows)
     result={'exe':m['exe'],'sha256':m['sha256'],'device':m['device'],'env':m['env'],'rates':rates,'feature_profile':profile,
             'scope':'RTX4060 Laptop sm89, exact M4423, resident pipeline, xADD6, warp tail, batch64/chain64',
-            'equations':FEATURES,'runs':[]}
+            'equations':FEATURES,'runs':[], 'ntt_weights':m.get('ntt_weights'),
+            'gl_fixed_mode':m.get('gl_fixed_mode',-1)}
     for r in rows:
         pred=predict(r['features'],rates)
         held=[x for x in rows if x['features']['D']!=r['features']['D']]

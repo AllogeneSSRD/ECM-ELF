@@ -14,6 +14,8 @@ def main():
     p.add_argument('--short', type=Path, required=True)
     p.add_argument('--ptx', type=Path, required=True)
     p.add_argument('--runtime', type=Path)
+    p.add_argument('--reference-short', type=Path,
+                   help='Frozen pre-PTX runtime short probe with --bench-scale and raw sources/')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--sizes', type=int, nargs='+', default=[16, 24, 25, 26, 27])
@@ -25,6 +27,8 @@ def main():
     exes = {'short': a.short.resolve(), 'ptx': a.ptx.resolve()}
     if a.runtime:
         exes['runtime'] = a.runtime.resolve()
+    if a.reference_short:
+        exes['reference_short'] = a.reference_short.resolve()
     manifests = {key: json.loads((exe.parent/'manifest.json').read_text(encoding='utf-8-sig'))
                  for key, exe in exes.items()}
     assert manifests['short']['gl_fixed_mode'] == 1
@@ -43,7 +47,7 @@ def main():
         m = manifests[key]
         assert hashlib.sha256(exe.read_bytes()).hexdigest() == m['sha256'].lower()
         for name, want in m['sources'].items():
-            base = exe.parent/'sources' if key == 'runtime' else repo
+            base = exe.parent/'sources' if key in ('runtime','reference_short') else repo
             assert hashlib.sha256((base/name).read_bytes()).hexdigest() == want.lower(), (key, name)
 
     def save():
@@ -52,6 +56,8 @@ def main():
     def run(key, name, args, extra=None, code=0):
         verify(key)
         control = {'NTT_GL_SHORT_REDUCE': '1', 'NTT_GL_PTX_REDUCE': '1'} if key == 'runtime' else {}
+        if key == 'reference_short':
+            control = {'NTT_GL_SHORT_REDUCE': '1', 'NTT_GL_PTX_REDUCE': '0'}
         r = subprocess.run([str(exes[key]), str(a.device), *args], env=env | control | (extra or {}),
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
         text = r.stdout.decode('utf-8', errors='replace')
@@ -99,19 +105,22 @@ def main():
     pairs = [('short', 'ptx')]
     if a.runtime:
         pairs.append(('runtime', 'ptx'))
+    if a.reference_short:
+        pairs.append(('reference_short', 'ptx'))
     for base, candidate in pairs:
         for k in a.sizes:
             rows = []
             for seq, key in enumerate([base, candidate, candidate, base], 1):
                 text = run(key, f'{base}_vs_{candidate}_k{k}_{seq}_{key}',
-                           ['--bench-ptx' if key == 'runtime' else '--bench-fixed', str(k)])
-                prefix = 'ntt_ptx_bench' if key == 'runtime' else 'ntt_fixed_bench'
+                           ['--bench-scale' if key == 'reference_short' else '--bench-ptx' if key == 'runtime' else '--bench-fixed', str(k)])
+                prefix = 'ntt_scale_bench' if key == 'reference_short' else 'ntt_ptx_bench' if key == 'runtime' else 'ntt_fixed_bench'
                 parsed = [dict(re.findall(r'(\w+)=(\S+)', line))
                           for line in re.findall(prefix+r': (.*)', text)]
                 assert [int(r['run']) for r in parsed] == list(range(1, 9))
                 assert all(r['bad'] == '0' and int(r['k']) == k and int(r['N']) == 1 << k for r in parsed)
-                selected = [r for r in parsed if key != 'runtime' or r['ptx'] == '1']
-                assert all(int(r['backend']) == (1 if key == 'short' else 3) for r in selected if key != 'runtime')
+                selected = [r for r in parsed if (key != 'runtime' or r['ptx'] == '1') and
+                            (key != 'reference_short' or r['shift'] == '0')]
+                assert all(int(r['backend']) == (1 if key == 'short' else 3) for r in selected if key in ('short','ptx'))
                 rows.extend(dict(r, backend_name=key, process=seq) for r in selected)
             assert len({(r['passes_fwd'], r['selected_M'], r['selected_coop']) for r in rows}) == 1
             means = {key: statistics.mean(float(r['seconds']) for r in rows if r['backend_name'] == key)

@@ -99,3 +99,8 @@ tools/build/build_ecm_cuda_stage2.ps1 -Build build_cuda_cmake/fixed_ptx_native -
 完整Stage2交叉驱动要求baseline有 `frozen_manifest.json`、两侧有对应 `sources/` 原始快照，candidate构建manifest为fixed_mode3；验证每条运行前后exe/save/source哈希。日常runtime构建和默认开关保持，固定后端是独立可选编译。fold0逻辑保留，但本阶段独立编译门禁覆盖的是short1/PTX3/runtime。
 
 当前仍生产A191。候选固定PTX默认不会沿用旧D模型；下一阶段按§4重新标定后，才评估自动D及生产发布。长期Prime95和多曲线吞吐目标尚未完成。
+
+
+## 7. 后续发布状态（2026-10-05）
+
+固定PTX已完成新D标定、独立holdout、原生入口与发布包验收，生产由A191更新为DCF；最终8条A/B为49.9000155→48.33592125s（−3.1345%）。本报告之前的测量和当时发布状态保留。详细证据与最新source/line见[固定PTX D报告](D:/code/MPA-OpenCl/docs/STAGE2_FIXED_PTX_D_CALIBRATION.md)。

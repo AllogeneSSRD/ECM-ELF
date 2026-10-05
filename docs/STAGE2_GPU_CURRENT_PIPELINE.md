@@ -1878,3 +1878,10 @@ NTT_BABY_DEVICE默认0，实验显式1启用；现有D模型在请求新路径�
 ## 48. 固定NTT后端（2026-10-05）
 
 GlBackend可选编译将Goldilocks归约固定，移除每次mode load/判断，保留runtime A/B；环境冲突拒绝，PTX实际后端保护D scope。固定short/PTX门禁16/0、runtime8/0，所选kernel寄存器/占用率不变。k24..27相对旧runtime/PTX1纯卷积快2.26/5.33/4.67/8.10%；8条完整Stage2相对生产A191 51.365461→49.575260s，快3.4852%，检查覆盖相同。native selector48/0及普通因子/warp/冲突通过。算法数据payload保持；生产A191未发布替换，下一步新后端D拟合与holdout。[完整说明与source/line](D:/code/MPA-OpenCl/docs/STAGE2_NTT_FIXED_BACKEND.md)。
+
+
+## 49. 固定PTX D重标定与生产发布（2026-10-05）
+
+固定PTX/GPU baby新profile5 resident_fixed_ptx_v1：冻结12个NTT权重、6条多D和4条固定D锚点，旧profile数值保持。独立小界留出390390相对510510快约6.4%；390390与330330近似持平，不宣称.16%微小收益。大界仍1381380，小界390390，owner512预算1141140，baby128预算600600；硬预算和路径scope先于预测。
+
+输入22/0、C++模型80/0、实际planner9/0、selector90/0、native完整入口30/0、发布路径22/0分别验收。最终同Q/D默认检查8条串行交叉A191→DCF 49.9000155→48.33592125s，减少3.1345%；叶/oracle/因子与检查覆盖一致。生产目录现为DCF70B11…289D4，18原始依赖冻结；A191及17源码已备份。重建发布需-GlBackend ptx，builder默认runtime保留。公式/容量/传输/阶段占比、样本和source/line见[本轮报告](D:/code/MPA-OpenCl/docs/STAGE2_FIXED_PTX_D_CALIBRATION.md)。后续先测point MAC/CPU准备，多曲线需workspace lease；公平Prime95目标仍待完成。

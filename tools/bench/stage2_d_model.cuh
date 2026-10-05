@@ -37,6 +37,19 @@ static constexpr DPhaseRates d_baby_rates={
     3.7066724433274104e-07,7.5968462945472818e-11,2.5768004089294959e-10,
     4.5033088482375454e-10,2.4903937851620365e-10,1.5104078895629704e-06,
     0.035801215481171531};
+// Fixed PTX fit: six D curves plus four fixed-D anchors, save Q verified.
+// Twelve frozen convolution weights; independent B2 holdouts excluded.
+static constexpr bool d_fixed_ptx_rates_valid=true;
+static constexpr DPhaseRates d_fixed_ptx_rates={
+    3.3879008043088555e-06,1.8697002101155637e-06,1.7275480513992264e-10,
+    3.7676813705981749e-07,7.58971125562758e-11,2.6138928941619862e-10,
+    4.1422432018647603e-10,2.0318074545241819e-10,1.2423239031467308e-06,
+    0.088798126218851692};
+static constexpr double d_fixed_ptx_weights[]={
+    0.64179829738066763,0.62148890553636571,0.59528834315532697,
+    0.56151356265523122,0.55182990504274188,0.54979932983403246,
+    0.63729435005048307,0.77229265985042306,0.54521273992154429,
+    0.51914554071123042,0.52326150053667642,0.54879133892829246};
 static constexpr double d_short_weights[]={
     0.79292702306276752,0.73558124224990329,0.7235194676663127,
     0.63928649882602806,0.63130908855801504,0.62116086613938892,
@@ -51,19 +64,19 @@ static unsigned long long d_baby_payload_bytes(unsigned long long p,unsigned lon
 }
 struct DPhaseModel {
     int bits;
-    int profile; // 0 original, 2 shape policy, 3 short reducer, 4 GPU baby plus short reducer
+    int profile; // 0 original, 2 shape policy, 3 short reducer, 4 GPU baby plus short reducer, 5 fixed PTX/GPU baby
     const DPhaseRates &rates;
     unsigned long long bound;
     std::map<unsigned long long,double> unit_cache,tree_cache,inverse_cache;
     DPhaseModel(int s,unsigned long long b,int selected=0):bits(s),profile(selected),
-        rates(selected==4 ? d_baby_rates : selected==3 ? d_short_rates : selected==2 ? d_shape_rates : d_original_rates),bound(b) {}
+        rates(selected==5 ? d_fixed_ptx_rates : selected==4 ? d_baby_rates : selected==3 ? d_short_rates : selected==2 ? d_shape_rates : d_original_rates),bound(b) {}
     double unit(unsigned long long p) {
         auto it=unit_cache.find(p);if(it!=unit_cache.end())return it->second;
         unsigned long long n=0;
         double work=ntt_shape_query(p,bits,&n,nullptr,nullptr,nullptr,nullptr,nullptr)
                           ? (double)n*std::log2((double)n) : 1e90;
-        if(profile==3 || profile==4) {
-            for(int k=16;k<=27;++k)if(n==(1ull<<k)){work*=d_short_weights[k-16];break;}
+        if(profile==3 || profile==4 || profile==5) {
+            for(int k=16;k<=27;++k)if(n==(1ull<<k)){work*=profile==5 ? d_fixed_ptx_weights[k-16] : d_short_weights[k-16];break;}
         } else if(profile==2) {
             // Frozen pure-convolution ratios for the measured deterministic table.
             // Weights change the empirical feature, never the exactness/memory shape.

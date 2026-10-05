@@ -4356,3 +4356,10 @@ native C19E2F57…72E1C、18源码冻结、CUDA354.5s；同save/D八条内部ful
 新增NTT_GL_FIXED_MODE（runtime−1/fold0/short1/PTX3）及两构建入口GlBackend，签名绑定后端，矛盾环境配置拒绝exit2，实际PTX保护旧D模型。相同数学/data/check，固定版本去掉每次归约mode load/判断。固定short/PTX独立GMP/scale/cooperative/legacy/cache/fault/config16/0，当前runtime再编译门禁8/0；所选warpREG40、M8 REG48/46/LOCAL0，占用率不变。
 
 纯卷积相对冻结runtime/PTX1，k24..27快2.26/5.33/4.67/8.10%。固定PTX native18源码冻结，8条A191/new ABBA+BAAB full 51.365461→49.575260s，快3.4852%，覆盖/叶/oracle/因子一致；selector48/0，实际native frozen因子/warp与两种冲突通过。算法payload增量0B，未采集新的NVML/PCIe峰；生产A191保持。下一阶段冻结全部尺寸权重、多D重新拟合与独立holdout，再评估发布。[source/line、公式、全部样本](D:/code/MPA-OpenCl/docs/STAGE2_NTT_FIXED_BACKEND.md)。
+
+
+## 75. 固定PTX D重标定与生产发布（2026-10-05）
+
+固定PTX/GPU baby新profile5 resident_fixed_ptx_v1：冻结12个NTT权重、6条多D和4条固定D锚点，旧profile数值保持。独立小界留出390390相对510510快约6.4%；390390与330330近似持平，不宣称.16%微小收益。大界仍1381380，小界390390，owner512预算1141140，baby128预算600600；硬预算和路径scope先于预测。
+
+输入22/0、C++模型80/0、实际planner9/0、selector90/0、native完整入口30/0、发布路径22/0分别验收。最终同Q/D默认检查8条串行交叉A191→DCF 49.9000155→48.33592125s，减少3.1345%；叶/oracle/因子与检查覆盖一致。生产目录现为DCF70B11…289D4，18原始依赖冻结；A191及17源码已备份。重建发布需-GlBackend ptx，builder默认runtime保留。公式/容量/传输/阶段占比、样本和source/line见[本轮报告](D:/code/MPA-OpenCl/docs/STAGE2_FIXED_PTX_D_CALIBRATION.md)。后续先测point MAC/CPU准备，多曲线需workspace lease；公平Prime95目标仍待完成。
