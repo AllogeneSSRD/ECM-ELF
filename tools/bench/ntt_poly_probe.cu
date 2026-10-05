@@ -89,6 +89,7 @@ namespace {
 #define GL_P 0xFFFFFFFF00000001ull
 
 #include "ntt_goldilocks_reduce.cuh"
+#include "ntt_goldilocks_ptx.cuh"
 #ifndef NTT_GL_SHORT_REDUCE_DEFAULT
 #define NTT_GL_SHORT_REDUCE_DEFAULT 0
 #endif
@@ -100,14 +101,16 @@ __device__ __constant__ volatile unsigned int ntt_gl_short_reduce_device=0;
 static void ntt_gl_reduce_configure()
 {
     const char *env=std::getenv("NTT_GL_SHORT_REDUCE");
-    const unsigned int enabled=env ? (std::strtoull(env,nullptr,10)!=0) : NTT_GL_SHORT_REDUCE_DEFAULT;
+    const unsigned int short_enabled=env ? (std::strtoull(env,nullptr,10)!=0) : NTT_GL_SHORT_REDUCE_DEFAULT;
+    const char *ptx=std::getenv("NTT_GL_PTX_REDUCE");
+    const unsigned int enabled=short_enabled ? 1u | ((ptx && std::strtoull(ptx,nullptr,10)!=0) ? 2u : 0u) : 0u;
     int device=0;CK(cudaGetDevice(&device));
     static std::map<int,unsigned int> configured;
     const auto it=configured.find(device);
     if(it!=configured.end() && it->second==enabled)return;
     CK(cudaMemcpyToSymbol(ntt_gl_short_reduce_device,&enabled,sizeof(enabled)));
     configured[device]=enabled;
-    std::printf("ntt_gl_reduce_mode: device=%d short=%u\n",device,enabled);
+    std::printf("ntt_gl_reduce_mode: device=%d short=%u ptx=%u\n",device,enabled&1u,enabled>>1);
 }
 
 /* Modular reduction, device and host (this is the whole arithmetic core, so it is shared
@@ -145,7 +148,9 @@ __host__ __device__ inline unsigned long long gl_reduce(unsigned long long lo,
                                                         unsigned long long hi)
 {
 #ifdef __CUDA_ARCH__
-    if(ntt_gl_short_reduce_device)return gl_reduce128_short(lo,hi);
+    const auto mode=ntt_gl_short_reduce_device;
+    if(mode&2u)return gl_reduce128_ptx(lo,hi);
+    if(mode&1u)return gl_reduce128_short(lo,hi);
 #endif
     for (int iter = 0; iter < 4; ++iter) {
         /* exact: lo + hi*(2^32-1) = lo + (hi<<32) - hi, split into (lo', hi') */

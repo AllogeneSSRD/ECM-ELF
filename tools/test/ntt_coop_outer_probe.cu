@@ -21,7 +21,7 @@ __global__ void sparse_result(const unsigned long long *a,unsigned long long n,
     const auto i=blockIdx.x*(unsigned long long)blockDim.x+threadIdx.x;
     if(i<n && a[i]!=(i<5 ? want[i] : 0))atomicAdd(bad,1ull);
 }
-static void benchmark(int device,int k,bool automatic=false,bool short_reduce=false,bool shift_scale=false)
+static void benchmark(int device,int k,bool automatic=false,bool short_reduce=false,bool shift_scale=false,bool ptx_reduce=false)
 {
     if(k<16 || k>27){std::fprintf(stderr,"benchmark k must be 16..27\n");std::exit(2);}
     const auto n=1ull<<k,om=gl_pow_host(7,(GL_P-1)/n),omi=gl_pow_host(om,GL_P-2),scale=gl_pow_host(n,GL_P-2);
@@ -39,9 +39,10 @@ static void benchmark(int device,int k,bool automatic=false,bool short_reduce=fa
     fuse_fixture_env("NTT_FUSE_T","12");fuse_fixture_env("NTT_FUSE_M","4");fuse_fixture_env("NTT_FUSE_WARP_TAIL","1");
     int run=0;
     for(int mode:{0,1,1,0,1,0,0,1}) {
-        fuse_fixture_env("NTT_FUSE_COOP_OUTER",std::to_string(short_reduce || shift_scale ? 2 : mode && automatic ? 2 : mode).c_str());
+        fuse_fixture_env("NTT_FUSE_COOP_OUTER",std::to_string(short_reduce || shift_scale || ptx_reduce ? 2 : mode && automatic ? 2 : mode).c_str());
         if(short_reduce)fuse_fixture_env("NTT_GL_SHORT_REDUCE",std::to_string(mode).c_str());
         if(shift_scale){fuse_fixture_env("NTT_GL_SHORT_REDUCE","1");fuse_fixture_env("NTT_GL_SHIFT_SCALE",std::to_string(mode).c_str());}
+        if(ptx_reduce){fuse_fixture_env("NTT_GL_SHORT_REDUCE","1");fuse_fixture_env("NTT_GL_PTX_REDUCE",std::to_string(mode).c_str());}
         FuseCtx fc;ntt_arena_fuse(&arena,n,k,om,omi,fc);
         double seconds=0;unsigned long long wrong=0;
         for(int repeat=0;repeat<4;++repeat) {
@@ -54,8 +55,8 @@ static void benchmark(int device,int k,bool automatic=false,bool short_reduce=fa
             CK(cudaMemcpy(&wrong,bad,8,cudaMemcpyDeviceToHost));if(wrong)std::exit(3);
         }
         std::printf("%s: run=%d %s=%d k=%d N=%llu passes_fwd=%d seconds=%.9f bad=%llu policy=%d selected_M=%d selected_coop=%d\n",
-                    shift_scale ? "ntt_scale_bench" : short_reduce ? "ntt_reduce_bench" : "ntt_coop_bench",
-                    ++run,shift_scale ? "shift" : short_reduce ? "short" : "coop",mode,k,n,fc.passes_fwd,seconds/3,wrong,(int)automatic,fc.m_max,(int)fc.coop_outer);
+                    ptx_reduce ? "ntt_ptx_bench" : shift_scale ? "ntt_scale_bench" : short_reduce ? "ntt_reduce_bench" : "ntt_coop_bench",
+                    ++run,ptx_reduce ? "ptx" : shift_scale ? "shift" : short_reduce ? "short" : "coop",mode,k,n,fc.passes_fwd,seconds/3,wrong,(int)automatic,fc.m_max,(int)fc.coop_outer);
     }
     arena.release();CK(cudaEventDestroy(start));CK(cudaEventDestroy(end));
     CK(cudaFree(a));CK(cudaFree(b));CK(cudaFree(want));CK(cudaFree(bad));
@@ -135,6 +136,7 @@ int main(int argc,char **argv)
 {
     const int device=argc>1 ? std::atoi(argv[1]) : 1;
     CK(cudaSetDevice(device));
+    if(argc>2 && !std::strcmp(argv[2],"--bench-ptx")) {benchmark(device,argc>3 ? std::atoi(argv[3]) : 27,true,false,false,true);return 0;}
     if(argc>2 && !std::strcmp(argv[2],"--scale-check")) {ntt_gl_reduce_configure();return scale_check();}
     if(argc>2 && !std::strcmp(argv[2],"--bench-scale")) {benchmark(device,argc>3 ? std::atoi(argv[3]) : 27,true,false,true);return 0;}
     if(argc>2 && !std::strcmp(argv[2],"--bench")) {benchmark(device,argc>3 ? std::atoi(argv[3]) : 27);return 0;}

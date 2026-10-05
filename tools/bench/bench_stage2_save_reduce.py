@@ -13,7 +13,7 @@ def main():
     p.add_argument('--output',type=Path,required=True);p.add_argument('--device',type=int,default=1)
     p.add_argument('--b2',type=int,default=2011326186870);p.add_argument('--d',type=int,default=1381380)
     p.add_argument('--runs',type=int,choices=(4,8),default=4)
-    p.add_argument('--toggle',choices=('short','baby','scale'),default='short')
+    p.add_argument('--toggle',choices=('short','baby','scale','ptx'),default='short')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     if a.d<=0:raise ValueError('The arithmetic comparison requires a fixed positive D')
@@ -29,9 +29,9 @@ def main():
         for name,want in sources.items():assert hashlib.sha256((repo/name).read_bytes()).hexdigest()==want,name
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_NO_PROGRESS='1',NTT_ARENA_CAP_KB='6451200')
-    toggle={'baby':'NTT_BABY_DEVICE','scale':'NTT_GL_SHIFT_SCALE','short':'NTT_GL_SHORT_REDUCE'}[a.toggle]
-    if a.toggle in ('baby','scale'):env['NTT_GL_SHORT_REDUCE']='1'
-    if a.toggle=='scale':env['NTT_D_MODEL']='0'
+    toggle={'baby':'NTT_BABY_DEVICE','scale':'NTT_GL_SHIFT_SCALE','ptx':'NTT_GL_PTX_REDUCE','short':'NTT_GL_SHORT_REDUCE'}[a.toggle]
+    if a.toggle in ('baby','scale','ptx'):env['NTT_GL_SHORT_REDUCE']='1'
+    if a.toggle in ('scale','ptx'):env['NTT_D_MODEL']='0'
     order=[0,1,1,0] if a.runs==4 else [0,1,1,0,1,0,0,1]
     data=dict(exe=str(exe),sha256=sha,save=str(save),save_sha256=save_sha,sources=sources,
               script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),env=env|{toggle:'per run'},toggle=a.toggle,
@@ -48,7 +48,7 @@ def main():
             r=subprocess.run(cmd,env=env|{toggle:str(mode)},stdout=output,stderr=subprocess.STDOUT,timeout=300)
         verify();text=engine.read_text(encoding='utf-8',errors='replace') if engine.exists() else ''
         assert r.returncode==0,(name,r.returncode,text[-1500:])
-        for token in ('stage1_skipped=1',f'ntt_gl_reduce_mode: device={a.device} short={1 if a.toggle in ("baby","scale") else mode}',
+        for token in ('stage1_skipped=1',f'ntt_gl_reduce_mode: device={a.device} short={1 if a.toggle in ("baby","scale","ptx") else mode}',
                       'point_arithmetic: xadd6=1','gmp_selftest_bad=0','gmp_check_bad=0','pending=0','clean=1'):
             assert token in text,(name,token)
         assert '[trace]' not in text and 'prime_powers=' not in text
@@ -57,6 +57,10 @@ def main():
             assert 'small_prime_reuse: requested=1 available=1 matched=1' in text
         if a.toggle=='scale':
             assert f'gl_shift_scale={mode}' in text,(name,'scale control')
+            assert 'baby_device: requested=1 enabled=1' in text
+        if a.toggle=='ptx':
+            assert f'ntt_gl_reduce_mode: device={a.device} short=1 ptx={mode}' in text
+            assert f'gl_ptx={mode}' in text and 'gl_shift_scale=0' in text
             assert 'baby_device: requested=1 enabled=1' in text
         wall=re.search(r'stage2_full_wall:.*?init=([\d.]+) main=([\d.]+) total=([\d.]+)',text)
         oracle=re.search(r's4_oracle_stats:.*selected=(\d+) queued=(\d+) compared=(\d+) samples=(\d+) pending=(\d+).*signature=(\S+)',text)
@@ -68,7 +72,7 @@ def main():
         else:assert signature==reference,(name,signature,reference)
         item=dict(name=name,short=mode,command=cmd,driver_seconds=time.monotonic()-started,
                   mode=mode,init=float(wall[1]),main=float(wall[2]),full=float(wall[3]),leaf=leaf[1],oracle_signature=oracle[6])
-        if a.toggle in ('baby','scale'):
+        if a.toggle in ('baby','scale','ptx'):
             item.pop('short');item['baby_stats']=re.search(r'baby_device: (.*)',text)[1]
             times=re.search(r'real_baby:.*ladder=([\d.]+) s affine=([\d.]+) s',text)
             assert times;item.update(baby_ladder=float(times[1]),baby_affine=float(times[2]))

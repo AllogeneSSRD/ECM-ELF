@@ -16,6 +16,7 @@ def main():
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--sizes', type=int, nargs='*', default=[16, 24, 25, 26, 27])
     p.add_argument('--gate-only', action='store_true')
+    p.add_argument('--toggle', choices=('scale','ptx'), default='scale')
     a = p.parse_args()
     if any(k < 16 or k > 27 for k in a.sizes):
         raise ValueError('k must be 16..27')
@@ -33,7 +34,7 @@ def main():
 
     env = {k: v for k, v in os.environ.items() if not k.startswith('NTT_')}
     env['NTT_GL_SHORT_REDUCE'] = '1'
-    data = dict(manifest=manifest, device=a.device, checks={}, runs=[],
+    data = dict(manifest=manifest, device=a.device, toggle=a.toggle, checks={}, runs=[],
                 script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                 timing='8 ABBA+BAAB runs, warm+3 event samples/run, full convolution; all N outputs checked outside events')
 
@@ -50,14 +51,23 @@ def main():
         assert r.returncode == code, (name, r.returncode, text[-1500:])
         return text
 
-    for short in (0, 1):
-        text = run(f'primitive_{short}', ['--scale-check'], {'NTT_GL_SHORT_REDUCE': str(short)})
-        m = re.search(r'ntt_scale_check: words=(\d+) bad=0', text)
-        assert m and int(m[1]) > 262144
-        data['checks'][f'primitive_short{short}'] = int(m[1])
-        save()
+    if a.toggle=='scale':
+        for short in (0, 1):
+            text = run(f'primitive_{short}', ['--scale-check'], {'NTT_GL_SHORT_REDUCE': str(short)})
+            m = re.search(r'ntt_scale_check: words=(\d+) bad=0', text)
+            assert m and int(m[1]) > 262144
+            data['checks'][f'primitive_short{short}'] = int(m[1])
+            save()
+    else:
+        for mode in (0,1):
+            text = run(f'primitive_{mode}', ['--gl-selftest'], {'NTT_GL_PTX_REDUCE':str(mode)})
+            assert f'ntt_gl_reduce_mode: device={a.device} short=1 ptx={mode}' in text
+            assert '200000 device cases' in text and not re.search(r'bad=[1-9]',text)
+            data['checks'][f'primitive_ptx{mode}']=True
+            save()
+    control='NTT_GL_PTX_REDUCE' if a.toggle=='ptx' else 'NTT_GL_SHIFT_SCALE'
     for shift in (0, 1):
-        extra = {'NTT_GL_SHIFT_SCALE': str(shift)}
+        extra = {control: str(shift)}
         text = run(f'coop_{shift}', [], extra)
         assert 'ntt_fuse_coop_check: cases=96 words=27131904 bad=0' in text
         assert 'ntt_fuse_coop_switch_check: calls=4 words=3145728 bad=0' in text
@@ -69,17 +79,20 @@ def main():
         text = run(f'legacy_{shift}', ['--legacy'], extra)
         assert not re.search(r'bad=[1-9]', text)
         assert 'ntt_fuse_warp_check:' in text and 'ntt_fuse_capacity_check:' in text
+        assert not re.search(r'(?:fwd|inv)_local=[1-9]',text)
         data['checks'][f'legacy_shift{shift}'] = True
         save()
     if not a.gate_only:
         for k in a.sizes:
-            text = run(f'bench_k{k}', ['--bench-scale', str(k)])
+            text = run(f'bench_k{k}', ['--bench-ptx' if a.toggle=='ptx' else '--bench-scale', str(k)])
+            prefix='ntt_ptx_bench' if a.toggle=='ptx' else 'ntt_scale_bench'
+            field='ptx' if a.toggle=='ptx' else 'shift'
             rows = [dict(re.findall(r'(\w+)=([^\s]+)', line))
-                    for line in re.findall(r'ntt_scale_bench: (.*)', text)]
-            assert [int(r['shift']) for r in rows] == [0, 1, 1, 0, 1, 0, 0, 1]
+                    for line in re.findall(prefix+r': (.*)', text)]
+            assert [int(r[field]) for r in rows] == [0, 1, 1, 0, 1, 0, 0, 1]
             assert [int(r['run']) for r in rows] == list(range(1, 9))
             assert all(r['bad'] == '0' and int(r['k']) == k and int(r['N']) == 1 << k for r in rows)
-            means = {str(mode): statistics.mean(float(r['seconds']) for r in rows if int(r['shift']) == mode)
+            means = {str(mode): statistics.mean(float(r['seconds']) for r in rows if int(r[field]) == mode)
                      for mode in (0, 1)}
             item = dict(k=k, means=means, gain_percent=100*(means['0']-means['1'])/means['0'], raw=rows)
             data['runs'].append(item)

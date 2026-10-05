@@ -14,7 +14,7 @@ if($code -ne 0){Get-Content $log -Tail 35;throw 'Small roots probe build failed'
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
 $deps=@('tools/test/ntt_small_roots_probe.cu','tools/bench/ntt_small_roots.cuh',
     'tools/test/ntt_tensor_goldilocks_probe.cu','tools/bench/ntt_tensor_goldilocks.cuh',
-    'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh','tools/build/build_ntt_small_roots_probe.ps1')
+    'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/build/build_ntt_small_roots_probe.ps1')
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash}
 [ordered]@{exe=(Resolve-Path $exe).Path;sha256=(Get-FileHash -LiteralPath $exe).Hash;
     architecture=$Arch;build_seconds=$watch.Elapsed.TotalSeconds;toolkit=(& nvcc --version | Out-String).Trim();sources=$hashes} |

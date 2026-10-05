@@ -4342,3 +4342,10 @@ NTT_BABY_DEVICE默认0，实验显式1启用；现有D模型在请求新路径�
 接续已发布 xADD6/D/short/baby，使用 Goldilocks 的 2^(-k) 特性，将 inverse pointwise/scale 中每系数的一次模乘改为移位/模减，k1..32 且精确 scale 才启用；自定义 scale 回旧路径。纯完整卷积 k24..27 同 binary 八次交叉改善0.299–0.418%，各 short 原语263357 GMP word，新旧 cooperative/shared/warp 频谱、逆向、cached switch/lifecycle 和故障拒绝均通过8组检查。
 
 独立 native A374FDB7…07CB3，17原始依赖冻结，CUDA288.4s；同 save/D 八条 full 51.770018→51.965438s，候选均值慢0.3775%，没有建立整曲线稳定加速。scope0/1各96/0，实际frozen因子2/0，叶/oracle/检查合同保持。默认scale0，生产A191保持；请求scale1时D经验模型回legacy，固定D实验。公式、原文件line、完整样本和容量/传输说明见[本轮报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_INVERSE_SCALE_OPTIMIZATION.md)。下一轮优先NTT乘积/短归约指令和point MAC，持续性能目标未完成。
+
+
+## 73. 显式进位链 Goldilocks 归约（2026-10-05）
+
+以任意128位短归约证明为基础，PTX CC直接传播borrow/carry、32bit predicate规范化。原语200144任意128位和200144模乘/每法、256条GMP依赖序列/每法通过，11/0；真实NTT新旧cooperative/shared/warp/GMP/cache/lifecycle/fault8组/0。依赖chain快12.55%；内部纯卷积快8.7–9.3%，但新分派拖慢普通短基线，冻结旧探针交叉实际k24..27快6.76/3.59/4.04/2.66%。
+
+native C19E2F57…72E1C、18源码冻结、CUDA354.5s；同save/D八条内部full 50.922277→49.382666s，快3.0235%。另A191/新PTX old-new-new-old 51.214982→50.778877s，快0.8515%，两条/后端无CI。叶/oracle/因子/检查一致，scope192/0，实际native warp GMP与frozen因子2/0。算法数据payload增量0；未重采NVML/PCIe峰。PTX默认0，生产A191保持，请求新算术回legacy D；需冻结新权重/多D/holdout后决定发布，并继续消除每次模乘分派开销。[详细数学、源文件line、样本和资源](D:/code/MPA-OpenCl/docs/STAGE2_GOLDILOCKS_PTX_REDUCTION.md)。长期性能目标仍未完成。

@@ -1868,3 +1868,8 @@ NTT_BABY_DEVICE默认0，实验显式1启用；现有D模型在请求新路径�
 ## 46. 逆 NTT 归一化的移位候选（2026-10-05）
 
 新增默认关闭的 NTT_GL_SHIFT_SCALE，精确 k/scale 判断后每 inverse slice 删除 N 次通用 Goldilocks 模乘；没有新增数组、完整 pass 或生产数据传输。纯完整卷积 k24..27 八次交叉快约0.30–0.42%；同 save/D 原生整曲线八次 51.770018→51.965438s，尚未证明稳定改善。原语/GMP频谱/逆向/cache/lifecycle/故障门禁通过，实际scope192/0、frozen因子2/0；生产A191保持，新请求拒绝旧D经验模型。数学、全部样本、容量/传输合同及最新source/line见[逆归一化报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_INVERSE_SCALE_OPTIMIZATION.md)。
+
+
+## 47. Goldilocks 显式进位链（2026-10-05）
+
+新增NTT_GL_PTX_REDUCE，short1下将任意128位归约换为显式32bit CC链，默认0。依赖链快12.55%，真实完整卷积相对冻结旧探针快2.66–6.76%；内部A/B基线有新分派开销，数据分开报告。完整native八条内部 50.922277→49.382666s，另A191真实交叉 51.214982→50.778877s；检查覆盖与结果一致。scope192/0、native warp/frozen因子2/0，18源码冻结。数组/传输payload保持，生产A191未更新；PTX请求保护旧D模型，待重新标定和编译特化。[完整报告与当前source/line](D:/code/MPA-OpenCl/docs/STAGE2_GOLDILOCKS_PTX_REDUCTION.md)。

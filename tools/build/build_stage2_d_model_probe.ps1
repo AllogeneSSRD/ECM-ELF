@@ -10,7 +10,7 @@ $exe=Join-Path $Build 'stage2_d_model_probe.exe'
 $log=Join-Path $Build 'build.log'
 $deps=@('tools/test/stage2_d_model_probe.cu','tools/bench/stage2_d_model.cuh',
     'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh',
-    'tools/bench/ntt_goldilocks_reduce.cuh','tools/build/build_stage2_d_model_probe.ps1')
+    'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/build/build_stage2_d_model_probe.ps1')
 $sourceHashes=[ordered]@{}
 foreach($dep in $deps){$sourceHashes[$dep]=(Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash}
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -I third_party/gmp-zen3/dist/include -Xcompiler /wd4819 tools/test/stage2_d_model_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
