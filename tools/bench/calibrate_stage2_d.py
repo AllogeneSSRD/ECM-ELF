@@ -19,6 +19,15 @@ GL_P=(1<<64)-(1<<32)+1
 # They weight only the empirical NTT feature, not elapsed time or GPU cycles.
 SHAPE_WEIGHTS={24:0.9386473792217225,25:0.8672913453433596,
                26:0.885360571656581,27:0.9302319270266772}
+# Frozen before any short-reducer D fit: shape weights times same-binary
+# short/long convolution ratios (8 ABBA+BAAB rows per size, GPU1, 2026-10-05).
+# Unmeasured smaller sizes retain weight 1; this is an empirical ranking feature.
+SHORT_WEIGHTS={16:0.7929270230627675,17:0.7355812422499033,
+               18:0.7235194676663127,19:0.6392864988260281,
+               20:0.631309088558015,21:0.6211608661393889,
+               22:0.6778661412185687,23:0.8096173502640038,
+               24:0.5948253971194828,25:0.5687842601012635,
+               26:0.5722769388206116,27:0.6134229919008334}
 
 def phi(n):
     result=n;p=2
@@ -45,7 +54,8 @@ def shape(p,bits):
 def unit(p,bits,profile=0):
     n,_,_=shape(p,bits)
     k=n.bit_length()-1
-    return n*k*(SHAPE_WEIGHTS.get(k,1.0) if profile==2 else 1.0)
+    weights=SHORT_WEIGHTS if profile==3 else SHAPE_WEIGHTS if profile==2 else {}
+    return n*k*weights.get(k,1.0)
 
 @lru_cache(None)
 def tree(p,bits,profile=0):
@@ -97,16 +107,24 @@ def main():
     p.add_argument('--b2',type=int,help='Override only the Stage2 upper bound; keep Stage1 Q identical')
     p.add_argument('--coop-mode',type=int,choices=(0,1,2),default=0,
                    help='0 original, 1 forced cooperative, 2 measured shape policy')
+    p.add_argument('--short-reduce',type=int,choices=(0,1),default=0)
     p.add_argument('--expected-q-sha256',required=True,help='SHA256 of lowercase affine Q hex from an independent reference')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise RuntimeError('Use a fresh output directory')
     prov=json.loads(a.provenance.read_text(encoding='utf-8-sig'));exe=a.exe.resolve()
     base={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     base.update({k:str(v) for k,v in prov['env'].items() if v is not None})
-    control=next(x for x in prov['mode_controls'] if x['mode'] in ('6_mont','shape_outer'))
+    wanted='short_fold' if a.short_reduce else 'shape_outer' if a.coop_mode==2 else '6_mont'
+    control=next((x for x in prov['mode_controls'] if x['mode']==wanted),None)
+    if control is None and not a.short_reduce:
+        control=next(x for x in prov['mode_controls'] if x['mode']=='6_mont')
+    if control is None:raise ValueError('Provenance has no matching reducer control')
     base.update({k:str(v) for k,v in control.items() if k!='mode'})
     base.pop('NTT_FUSE_TRACE',None);base.update(NTT_XADD6_TEST='0',NTT_XADD6_TEST_BAD='0',NTT_D_MODEL='0',
-        NTT_FUSE_COOP_OUTER=str(a.coop_mode),NTT_FUSE_COOP_TEST='0',NTT_FUSE_COOP_BAD='0')
+        NTT_FUSE_COOP_OUTER=str(a.coop_mode),NTT_FUSE_COOP_TEST='0',NTT_FUSE_COOP_BAD='0',
+        NTT_GL_SHORT_REDUCE=str(a.short_reduce))
+    if a.short_reduce and a.coop_mode!=2:
+        raise ValueError('Short-reducer fit requires measured shape policy mode 2')
     cmd0=[str(exe)]+[str(x) for x in prov['args']]
     if a.b2 is not None:cmd0[cmd0.index('--b2')+1]=str(a.b2)
     # Replace only values in the observed argv, retaining the exact N/Q/sigma/bounds.
@@ -116,6 +134,7 @@ def main():
         base.get('NTT_FUSE_WARP_TAIL')!='1' or base.get('NTT_FUSE_COMPACT_SCRATCH')!='1'):
         raise RuntimeError('Shape-policy calibration needs the measured M4423/B1/tile/warp/compact scope')
     rows=[];expected_q=None;sha=hashlib.sha256(exe.read_bytes()).hexdigest()
+    if sha!=prov['sha256'].lower():raise RuntimeError('Binary differs from provenance')
     for repeat in range(a.repeats):
         for d in (a.d if repeat%2==0 else a.d[::-1]):
             cmd=cmd0.copy();cmd[cmd.index('--d')+1]=str(d);cmd[cmd.index('--device')+1]=str(a.device)
@@ -124,8 +143,12 @@ def main():
             if hashlib.sha256(exe.read_bytes()).hexdigest()!=sha:raise RuntimeError('Binary changed')
             with log.open('wb') as f:r=subprocess.run(cmd,env=base,stdout=f,stderr=subprocess.STDOUT,timeout=900)
             text=read_log(log)
+            if hashlib.sha256(exe.read_bytes()).hexdigest()!=sha:raise RuntimeError('Binary changed during run')
             if r.returncode:raise RuntimeError(f'{name} exit={r.returncode}; see {log}')
             if '[trace]' in text:raise RuntimeError('Synchronized trace invalidates timing')
+            if (a.short_reduce or 'ntt_gl_reduce_mode:' in text) and \
+               f'ntt_gl_reduce_mode: device={a.device} short={a.short_reduce}' not in text:
+                raise RuntimeError('Actual Goldilocks reducer differs from requested mode')
             for token in ('gmp_selftest_bad=0','gmp_check_bad=0','pending=0','clean=1','point_arithmetic: xadd6=1'):
                 if token not in text:raise RuntimeError('Missing '+token)
             q=re.search(r'real_setup_Q_full: hex=([0-9a-f]+)',text)
@@ -138,7 +161,7 @@ def main():
                 if 'RTX 4060 Laptop' not in text or base.get('NTT_FUSE_T')!='12' or \
                    base.get('NTT_FUSE_WARP_TAIL')!='1' or base.get('NTT_FUSE_COMPACT_SCRATCH')!='1':
                     raise RuntimeError('Shape-policy fit requires the measured device/tile/warp/compact scope')
-            f=features(d,b2,bits,2 if a.coop_mode==2 else 0)
+            f=features(d,b2,bits,3 if a.short_reduce else 2 if a.coop_mode==2 else 0)
             fd=re.search(r'real_batched_folddevice:.*enabled=(\d+)',text)
             if not fd or (f['G']>1 and fd[1]!='1'):
                 raise RuntimeError('Multiple G polynomials require GPU resident fold')

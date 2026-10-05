@@ -1,4 +1,4 @@
-"""Check that old empirical D rates are disabled for the new Goldilocks reducer.
+"""Check reducer-specific empirical D rates and unsupported-mode fallback.
 
 Uses the observed fixed-D A/B environment, selects one device, and executes only
 the planner. No curve, save, ini or work queue is modified.
@@ -18,6 +18,8 @@ def main():
     p.add_argument('--provenance',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--device',type=int,default=1)
+    p.add_argument('--short-calibrated',action='store_true')
+    p.add_argument('--default-short',type=int,choices=(0,1),default=0)
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();sha=hashlib.sha256(exe.read_bytes()).hexdigest()
@@ -30,9 +32,13 @@ def main():
     control=next(r for r in prov['mode_controls'] if r['NTT_XADD6']=='1' and r['NTT_FUSE_COOP_OUTER']=='2')
     env.update({k:str(v) for k,v in control.items() if k!='mode'})
     env.pop('NTT_FUSE_TRACE',None);rows=[]
+    short_enabled=int(a.short_calibrated)
+    short_version='resident_short_v1' if a.short_calibrated else 'legacy_56_1'
+    default_enabled=short_enabled if a.default_short else 1
+    default_version=short_version if a.default_short else 'resident_shape_v1'
     for flag,requested,outer,enabled,version in (
-        (0,1,2,1,'resident_shape_v1'),(1,1,2,0,'legacy_56_1'),
-        (None,1,2,1,'resident_shape_v1'),(1,0,2,0,'legacy_56_1'),
+        (0,1,2,1,'resident_shape_v1'),(1,1,2,short_enabled,short_version),
+        (None,1,2,default_enabled,default_version),(1,0,2,0,'legacy_56_1'),
         (0,1,0,1,'resident_xadd6_v1'),(1,1,0,0,'legacy_56_1')):
         ee=env|{'NTT_D_MODEL':str(requested),'NTT_FUSE_COOP_OUTER':str(outer)}
         if flag is None:ee.pop('NTT_GL_SHORT_REDUCE',None)
@@ -46,7 +52,7 @@ def main():
         checks={'exit':r.returncode==0,
             'selector':bool(line) and (line[1],line[2])==(str(requested),str(enabled)),
             'version':bool(line) and line[3]==version,
-            'gl_short':bool(line) and line[4]==str(flag or 0),
+            'gl_short':bool(line) and line[4]==str(a.default_short if flag is None else flag),
             'explicit_D':bool(re.search(r'd_plan_only: D=1231230 P=115200 curves_executed=0',text)),
             'no_curve':'stage2_full_wall:' not in text and 'real_baby:' not in text}
         rows.append(dict(name=name,command=cmd,checks=checks));print(name,checks,flush=True)

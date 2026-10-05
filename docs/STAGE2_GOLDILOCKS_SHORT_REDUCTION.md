@@ -146,7 +146,7 @@ Stage1 chain之后的kernel池：NTT **28.545614→19.095016 s（减少33.107%�
 
 ## 9. D 模型保护与发布边界
 
-旧`resident_xadd6_v1`和`resident_shape_v1`按四fold归约测量，不能用在新NTT成本上。已在实际selector增加模式保护：[stage2_tree_gpu.cu:10780](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10780)。短归约开启时`calibrated=false`，两个旧profile均回`legacy_56_1`；显式D优先和原预算逻辑保持。日志增加`gl_short`字段：[10789](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10789)。原模式和缺省模式仍可使用匹配的旧模型。
+旧`resident_xadd6_v1`和`resident_shape_v1`按四fold归约测量，不能用在新NTT成本上。已在实际selector增加模式保护：[stage2_tree_gpu.cu:10782](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10782)。短归约开启时`calibrated=false`，两个旧profile均回`legacy_56_1`；显式D优先和原预算逻辑保持。日志增加`gl_short`字段：[10791](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10791)。原模式和缺省模式仍可使用匹配的旧模型。
 
 上述性能binary在该保护之前冻结，所有测量都显式D1231230、`NTT_D_MODEL=0`；最终保护只改host selector/诊断，没有修改GPU归约或测量计算路径。最终单独重编译并验证保护，不能把最终exe SHA冒充为已测的17bf版本。
 
@@ -163,3 +163,7 @@ Stage1 chain之后的kernel池：NTT **28.545614→19.095016 s（减少33.107%�
 3. **缩短剩余CUDA算术。** `gl_mod(x)`的128位高半恒0，数学上只需至多一次减q，可尝试直接规范化，减少无须调用完整归约时的模式加载。再以全局短归约为对照复测低层根方法3；此前2.2%的收益尚不支持叠加或默认接入。
 4. **多曲线吞吐和Tensor布局另做预算。** 当前单曲线主workspace3GiB、总arena3.11GiB以外还有S4/点/驻留owner及context；历史单曲线时GPU1的NVML总峰约5.4GiB，粗估两份会超过8GiB。该总峰不是进程分配账本。需要共享workspace lease、独立曲线状态、明确pinned/普通RAM上限，再测curves/h。此前Tensor真实tile为负结果，尚未证明同SM同时issue；独立tile任务的吞吐尚不能换算整曲线吞吐。
 5. **新Prime95公平对照继续。** 同N、Stage1 Q、B1/B2、覆盖/检查口径和线程配置重新测；旧90.460s记录不足以证明本轮相对CPU的加速。当前报告证明了GPU自身的改进，长期目标仍在推进。
+
+## 2026-10-05 后续发布状态
+
+短归约重新标定D并完成独立留出验证，生产默认已提升short1；旧归约0保留。实际生产入口33/0、S4后端选择器30/0，同exe/save固定D1381380 ABBA均值65.014116→56.834263 s（快12.58%）。本报告前面的默认关闭/旧产物数据是历史阶段记录。最新SHA、源文件行号、scope、容量和门禁边界见[短归约 D 标定与生产报告](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)。

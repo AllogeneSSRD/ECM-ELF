@@ -21,20 +21,35 @@ static constexpr DPhaseRates d_shape_rates={
     3.7060720495287843e-07,7.6212904428508932e-11,2.1330650275351144e-10,
     4.1921666198041151e-10,1.6365593523959591e-10,1.4263335239938989e-06,
     0.031158481644502741};
+// Short-reducer fit: six D curves plus four same-binary short anchors.
+// Pure-convolution weights frozen before fitting; independent B2 holdout excluded.
+static constexpr bool d_short_rates_valid=true;
+static constexpr DPhaseRates d_short_rates={
+    3.4263623776208791e-06,2.6265051185028743e-05,2.3193561077716357e-10,
+    3.719097111026145e-07,7.6762604042216047e-11,2.5730236195427515e-10,
+    4.622033504014322e-10,2.38168142424563e-10,1.5229012671594509e-06,
+    0.035282306705375549};
+static constexpr double d_short_weights[]={
+    0.79292702306276752,0.73558124224990329,0.7235194676663127,
+    0.63928649882602806,0.63130908855801504,0.62116086613938892,
+    0.6778661412185687,0.80961735026400383,0.59482539711948279,
+    0.56878426010126348,0.57227693882061159,0.61342299190083338};
 struct DPhaseModel {
     int bits;
-    bool shape_ntt;
+    int profile; // 0 original, 2 shape policy, 3 shape policy plus short reducer
     const DPhaseRates &rates;
     unsigned long long bound;
     std::map<unsigned long long,double> unit_cache,tree_cache,inverse_cache;
-    DPhaseModel(int s,unsigned long long b,bool shape=false):bits(s),shape_ntt(shape),
-        rates(shape ? d_shape_rates : d_original_rates),bound(b) {}
+    DPhaseModel(int s,unsigned long long b,int selected=0):bits(s),profile(selected),
+        rates(selected==3 ? d_short_rates : selected==2 ? d_shape_rates : d_original_rates),bound(b) {}
     double unit(unsigned long long p) {
         auto it=unit_cache.find(p);if(it!=unit_cache.end())return it->second;
         unsigned long long n=0;
         double work=ntt_shape_query(p,bits,&n,nullptr,nullptr,nullptr,nullptr,nullptr)
                           ? (double)n*std::log2((double)n) : 1e90;
-        if(shape_ntt) {
+        if(profile==3) {
+            for(int k=16;k<=27;++k)if(n==(1ull<<k)){work*=d_short_weights[k-16];break;}
+        } else if(profile==2) {
             // Frozen pure-convolution ratios for the measured deterministic table.
             // Weights change the empirical feature, never the exactness/memory shape.
             double weight=1.0;

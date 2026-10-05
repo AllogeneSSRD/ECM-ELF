@@ -23,30 +23,50 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--measurements',type=Path,required=True)
     p.add_argument('--anchor-csv',type=Path,nargs='*',default=[])
-    p.add_argument('--anchor-mode',choices=('6_mont','shape_outer'),default='6_mont')
+    p.add_argument('--anchor-mode',choices=('6_mont','shape_outer','short_fold'),default='6_mont')
     p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();m=json.loads(a.measurements.read_text())
     rows=[r.copy() for r in m['runs'] if r['features']['G']>1]
     if not rows:raise ValueError('Resident fold fit needs measurements with G >= 2')
-    profile=2 if m['env'].get('NTT_FUSE_COOP_OUTER')=='2' else 0
+    profile=3 if m['env'].get('NTT_GL_SHORT_REDUCE')=='1' else 2 if m['env'].get('NTT_FUSE_COOP_OUTER')=='2' else 0
+    if profile==3 and m['env'].get('NTT_FUSE_COOP_OUTER')!='2':
+        raise ValueError('Short-reducer fit requires shape policy mode 2')
     if profile==2 and a.anchor_csv and a.anchor_mode!='shape_outer':
         raise ValueError('Original-NTT xADD anchors cannot enter a shape-policy fit')
+    if profile==3 and a.anchor_csv and a.anchor_mode!='short_fold':
+        raise ValueError('Short-reducer fit needs short_fold anchors')
     for row in rows:
         cmd=row['command'];b2=int(cmd[cmd.index('--b2')+1]);bits=int(cmd[cmd.index('--n-hex')+1],16).bit_length()
         row['features']=features(row['features']['D'],b2,bits,profile)
     for path in a.anchor_csv:
         prov=json.loads((path.parent/'provenance.json').read_text(encoding='utf-8-sig'))
-        if profile==2 and prov['sha256'].lower()!=m['sha256'].lower():
+        if profile in (2,3) and prov['sha256'].lower()!=m['sha256'].lower():
             raise ValueError('Shape anchors must use the same measured binary')
         controls=next(r for r in prov['mode_controls'] if r['mode']==a.anchor_mode)
-        if profile==2 and controls.get('NTT_FUSE_COOP_OUTER')!='2':
+        if profile in (2,3) and controls.get('NTT_FUSE_COOP_OUTER')!='2':
             raise ValueError('Shape anchors must enable the same NTT profile')
+        if profile==3 and controls.get('NTT_GL_SHORT_REDUCE')!='1':
+            raise ValueError('Short anchors must enable the short reducer')
         argv=prov['args'];d=int(argv[argv.index('--d')+1]);b2=int(argv[argv.index('--b2')+1])
         bits=int(argv[argv.index('--n-hex')+1],16).bit_length()
+        if profile==3:
+            anchor_env={k:str(v) for k,v in prov['env'].items() if v is not None}
+            anchor_env.update({k:str(v) for k,v in controls.items() if k!='mode'})
+            for key,value in m['env'].items():
+                if value is not None and anchor_env.get(key)!=str(value):
+                    raise ValueError('Anchor configuration differs: '+key)
+            if int(argv[argv.index('--device')+1])!=m['device']:
+                raise ValueError('Anchor device differs')
         for row in csv.DictReader(path.open(encoding='utf-8-sig')):
             if row['mode']!=a.anchor_mode:continue
+            text=read_log(row['log'])
+            if profile==3:
+                for token in (f"ntt_gl_reduce_mode: device={m['device']} short=1",'gmp_selftest_bad=0',
+                              'gmp_check_bad=0','pending=0','point_arithmetic: xadd6=1'):
+                    if token not in text:raise ValueError('Invalid short anchor: '+token)
+                if m['Q_line'] not in text:raise ValueError('Anchor Stage1 Q differs')
             rows.append(dict(name=str(path.parent.name)+'/'+row['run'],log=row['log'],
-                             features=features(d,b2,bits,profile),phases=parse(read_log(row['log']))))
+                             features=features(d,b2,bits,profile),phases=parse(text)))
     rates=fit(rows)
     result={'exe':m['exe'],'sha256':m['sha256'],'device':m['device'],'env':m['env'],'rates':rates,'feature_profile':profile,
             'scope':'RTX4060 Laptop sm89, exact M4423, resident pipeline, xADD6, warp tail, batch64/chain64',

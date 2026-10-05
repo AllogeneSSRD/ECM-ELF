@@ -2,7 +2,7 @@
 
 `ecm_cuda_stage2.exe` 从已经完成 Stage1 的文本 save 读取曲线，调用当前实验版 CUDA 多项式 Stage2。它不计算 Stage1，也不会重新乘以 12。`exponent=lcm|choose12` 由生成存档的 Stage1 决定；恢复时原样使用存档中的 Q。
 
-最新优化采用xADD6、warp tile及NTT_FUSE_COOP_OUTER=2的尺寸策略；已测scope分别使用匹配NTT的D系数。显式outer=0可回退，其他设备/shape仍按原planner执行。详细范围、公式、测量和最终产物见[P3报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md)及本文最后的发布记录；前面的历次发布数据保留各轮口径。
+最新生产默认启用xADD6、warp tile、NTT_FUSE_COOP_OUTER=2尺寸策略及NTT_GL_SHORT_REDUCE=1短归约。已测scope使用匹配的resident_short_v1 D模型；显式short=0回旧归约和resident_shape_v1。未支持配置回原planner，显式D优先。详细范围、计算量、容量、传输和发布产物见[短归约 D 标定与生产报告](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)；前面的历次发布数据保留各轮口径。
 
 ## 编译与直接读档
 
@@ -140,7 +140,7 @@ NTT tile 默认 `NTT_FUSE_WARP_TAIL=1`，低6层使用warp寄存器交换与常�
 
 - 存档文本和校验和解析：[ecm_cuda_stage2_main.cpp:106](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:106)；可选队列字段：[同文件:301](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:301)；配置和调度：[同文件:443](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:443)。
 - 生产默认值：[ecm_cuda_stage2.cu:6](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6)；独立引擎封装：[同文件:39](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:39)。
-- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10692](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10692)，跳过 Stage1 的分支位于 [11007](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11007)。
+- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10692](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10692)，跳过 Stage1 的分支位于 [11009](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11009)。
 - 已有表达式、ini 和队列工具：`src/core/ecm_expr.cpp`、`ecm_queue_config.cpp`、`ecm_worktodo.cpp`。
 - 独立编译脚本：[build_ecm_cuda_stage2.ps1](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)。
 
@@ -212,4 +212,14 @@ M4423 save 恢复时 owner 启用，14 folds/42 muls，init15.123476/main58.5150
 
 产物：[生产exe](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe)、[manifest](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/build_manifest.json)、[32项验收](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_shape_20261004/production_accept_final/summary.json)、[来源复核](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_shape_20261004/production_provenance.json)。构建/日志及旧F85快照留在ignored目录；源码、门禁、工具和报告提交Git。
 
-固定工作量八次A/B full降2.49%、main降3.25%，NTT arena payload峰少约300MiB；该收益不与P2的2.62%叠加。独立NTT10/0、模型64/0及最终入口32/0通过。公式、scope、拟合误差和来源行号见[P3报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md)。
+固定工作量八次A/B full降2.49%、main降3.25%，NTT arena payload峰少约300MiB；该收益不与P2的2.62%叠加。独立NTT10/0、模型32/0及最终入口32/0通过。公式、scope、拟合误差和来源行号见[P3报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md)。
+
+## 2026-10-05 短归约匹配 D 模型与生产发布
+
+短归约后重新冻结k16..27卷积权重，六条多D曲线加四条同binary锚点拟合profile3；独立B2=1e11留出验证330330每条快于510510，绝对秒数仍低估5.99–11.76%，未回调拟合。大界D1381380、小界D330330，owner512MiB时大界D1141140。真实NTT backend/C++模型与整数features **48/0**，实验planner **22/0**、归约scope **36/0**、shared/warp NTT **14/0**；三个自动D真实曲线均GMP bad0/pending0/clean1。模型不增加GPU数组/传输。
+
+生产33/0、最终实际S4后端选择器30/0；后者为早停决策门禁，不冒充完成曲线。额外修正OLDTAIL/S4_OFF scope，并将同一S4启用快照提前；错误指针初版28/2失败候选保留且未发布。最终E0139328…BE331，4127232 bytes，CUDA571.1 s；15原始依赖及快照核验。生产save固定D1381380四条ABBA：64.647779、56.586517、57.082008、65.380452 s，均值**65.014116→56.834263 s（快12.58%）**，每模式2条、无CI，叶/oracle/因子一致。生产short默认1，显式0回旧归约与resident_shape；实验仍默认0。旧3CF产物已保留。
+
+D138标定均值full56.643870s：init26.59%，baby14.08%、CPUaffine6.10%、F树剩余6.41%；main73.41%，G树23.96%、giant18.28%、下降13.46%、fold10.69%。owner609.086MiB，NTT arena完整payload3341481200B，主workspace3GiB；host输出窗口实际回读2838813040B，不等于所有曲线D2H，没有新NVML全进程峰。具体计算量、内存与传输公式及各阶段误差见[短归约 D 标定与生产报告](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)。
+
+下一轮优先GPU baby批量规范化。原Systems最大2.784s间隙在X/Z回读后、下次copy提交前，与CPUaffine准备关联；trace无CPU栈，仍为源码推断。giant叶是[-X,Z]，baby F树要求[-X/Z,1]，须增加设备prefix/逆元传播并保留坏Z的GCD/因子语义；先仅回读P个常数再接设备叶frontend。之后复测gl_mod规范化/低层根；多曲线仍需独立状态与workspace lease及RAM/VRAM预算，公平Prime95新对照待做。

@@ -81,7 +81,7 @@ Compute 2026.2.1尝试采集outer_coop_kernel时退出1，实际错误为ERR_NVG
 
 独立NTT门禁10/0，包含88项自动策略边界/override检查、原96组合/27131904字GMP前向及逆向、cached模式切换4次/3145728字、故障拒绝/资源LOCAL0。旧warp0/1各216组合/6854400字、4次切换/98304字和14次生命周期/leaked0复测通过。[NTT门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_shape_20261004/gate/summary.json)、[旧路径](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_shape_20261004/legacy_gate.log)。
 
-DPhaseModel抽出为共用header；独立CPU探针直接包含生产模型和实际NTT shape backend，2 profiles×2 bounds×8 D共64/0，比较精确N、owner、tree/inverse特征及各阶段/total估计，与整数Python特征和冻结fit一致。CPU探针不执行曲线、不分配GPU。[模型64项](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_shape_20261004/model_gate/summary.json)。
+DPhaseModel抽出为共用header；独立CPU探针直接包含生产模型和实际NTT shape backend，2 profiles×2 bounds×8 D共32/0，比较精确N、owner、tree/inverse特征及各阶段/total估计，与整数Python特征和冻结fit一致。CPU探针不执行曲线、不分配GPU。[模型32项](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_shape_20261004/model_gate/summary.json)。
 
 最终生产sm89/CUDA13.3编译成功，CUDA593.7 s，exe4042752 bytes、SHA256 `3cf38065e5f88347063f365ac85468475a6624f6e98b52804834d9aef3219f0e`。14项源依赖哈希复核通过，NTT CU/cooperative header与计时实验相同；最终header重构/新D系数/生产wrapper另有生产验证。入口**32/0**：基础21项、CUDA失败队列保留、saved-X已有因子、实际M4423显式D、warp/xADD默认与显式回退、默认模式2自动D大小界，以及outer0恢复原resident模型/outer1强制实验回旧模型。三种outer模式的小界叶摘要一致。第一次验收因准备样本遗漏N/A assignment-id而触发finished文本断言，已按原样本在全新目录重跑32项；源码未因此修改。
 
@@ -108,7 +108,11 @@ Nsight Systems用于查看kernel/copy事件并集和CPU提交间隙；无本进�
 ## 6. 实现索引
 
 - [设备scope:1421](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1421)、[尺寸策略:1439](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:1439)、[arena cache key:2164](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:2164)。
-- [D模型与两组系数:12](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:12)、[weighted unit:32](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:32)、[成本:63](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:63)、[scope与版本:10759](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10759)、[CPU选D计时:10938](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10938)。
-- [整数features:66](D:/code/MPA-OpenCl/tools/bench/calibrate_stage2_d.py:66)、[fit锚点校验:31](D:/code/MPA-OpenCl/tools/bench/fit_stage2_d.py:31)、[排名:1](D:/code/MPA-OpenCl/tools/bench/plan_stage2_d.py:1)、[同exe Stage2 A/B:1](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:1)。
-- [策略/纯卷积probe:24](D:/code/MPA-OpenCl/tools/test/ntt_coop_outer_probe.cu:24)、[策略88项:62](D:/code/MPA-OpenCl/tools/test/ntt_coop_outer_probe.cu:62)、[GMP门禁:1](D:/code/MPA-OpenCl/tools/test/test_ntt_coop_outer.py:1)、[共用模型探针:1](D:/code/MPA-OpenCl/tools/test/stage2_d_model_probe.cu:1)、[模型64项:1](D:/code/MPA-OpenCl/tools/test/test_stage2_d_features.py:1)。
+- [D模型与两组系数:12](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:12)、[weighted unit:45](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:45)、[成本:78](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:78)、[scope与版本:10761](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10761)、[CPU选D计时:10940](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10940)。
+- [整数features:76](D:/code/MPA-OpenCl/tools/bench/calibrate_stage2_d.py:76)、[fit锚点校验:31](D:/code/MPA-OpenCl/tools/bench/fit_stage2_d.py:31)、[排名:1](D:/code/MPA-OpenCl/tools/bench/plan_stage2_d.py:1)、[同exe Stage2 A/B:1](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:1)。
+- [策略/纯卷积probe:24](D:/code/MPA-OpenCl/tools/test/ntt_coop_outer_probe.cu:24)、[策略88项:62](D:/code/MPA-OpenCl/tools/test/ntt_coop_outer_probe.cu:62)、[GMP门禁:1](D:/code/MPA-OpenCl/tools/test/test_ntt_coop_outer.py:1)、[共用模型探针:1](D:/code/MPA-OpenCl/tools/test/stage2_d_model_probe.cu:1)、[模型32项:1](D:/code/MPA-OpenCl/tools/test/test_stage2_d_features.py:1)。
 - [生产默认:15](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:15)、[生产构建:1](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)、[模型探针构建:1](D:/code/MPA-OpenCl/tools/build/build_stage2_d_model_probe.ps1:1)。
+
+## 2026-10-05 后续发布状态
+
+短归约重新标定D并完成独立留出验证，生产默认已提升short1；旧归约0保留。实际生产入口33/0、S4后端选择器30/0，同exe/save固定D1381380 ABBA均值65.014116→56.834263 s（快12.58%）。本报告前面的默认关闭/旧产物数据是历史阶段记录。最新SHA、源文件行号、scope、容量和门禁边界见[短归约 D 标定与生产报告](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)。

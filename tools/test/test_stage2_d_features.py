@@ -13,13 +13,17 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--exe',type=Path,required=True);p.add_argument('--old-fit',type=Path,required=True)
     p.add_argument('--shape-fit',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--short-fit',type=Path)
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
     if any(a.output.iterdir()):raise ValueError('Use a fresh output directory')
     fits={0:json.loads(a.old_fit.read_text(encoding='utf-8')),2:json.loads(a.shape_fit.read_text(encoding='utf-8'))}
     assert fits[2]['feature_profile']==2
+    if a.short_fit:
+        fits[3]=json.loads(a.short_fit.read_text(encoding='utf-8'))
+        assert fits[3]['feature_profile']==3
     sha=hashlib.sha256(a.exe.read_bytes()).hexdigest();checks=[]
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
-    for profile in (0,2):
+    for profile in fits:
         for b2 in (100000000000,2011326186870):
             for d in (210,330330,510510,570570,1141140,1231230,1381380,1411410):
                 f=features(d,b2,4423,profile);prediction=predict(f,fits[profile]['rates'])

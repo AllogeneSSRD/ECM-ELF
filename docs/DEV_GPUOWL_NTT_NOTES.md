@@ -3789,7 +3789,7 @@ GPU完整Q `294b8e0c5e3f95b6d6c218e669c557f9` 正确；禁用S4走CPU poly仍失
 
 新增 [test_stage2_real_baby.py](D:/code/MPA-OpenCl/tools/test/test_stage2_real_baby.py:1)。
 Python独立计算Q、每个baby affine x、完整F；lcm形状还与原CPU tree dump全部字段比较。
-新增 [NTT_REAL_F_DUMP:10065](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10829) 仅门禁时导出真实入口生成的baby与F，
+新增 [NTT_REAL_F_DUMP:10065](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10831) 仅门禁时导出真实入口生成的baby与F，
 限4096 baby，置full timer clean=0；常规运行无导出或额外分配。
 覆盖冻结向量、D2310、P2880多256点segment、choose12、M4423生产位宽与M5261；两边segment batching0/1，共 **12/0**。
 冻结因子/114713和独立完整叶hash同时通过；不是仅比较0 hits的新旧路径。
@@ -4279,7 +4279,7 @@ v1纯NTT M8慢15.86%，未提升默认；v2复用twiddle/coarse power并修复sh
 
 按NTT长度选择outer：RTX4060 Laptop/sm89/t12/warp/compact/M4 scope，k24用M6、k25..27用M8，其他shape回原planner。模式2不在线搜索；模式0回退，模式1保留强制实验。八次串行ABBA+BAAB固定D/Q与检查：full68.813051→67.098667 s（−2.49%），main55.397621→53.599529（−3.25%），init未改善；NTT arena完整payload峰减少314552032 B（约300MiB），主A/B/Q仍3GiB。没有测本轮NVML总峰，S4传输量保持。此前P2的2.62%也以原M4为对照，不能与2.49%相加。
 
-新D系数以六条多D曲线+四条fixed-D锚点拟合，旧NTT/新策略各自匹配；最终独立B2=1e11 holdout330330每条快于510510，但秒数预测偏低8.23–10.27%。新默认大界D1381380、小界D330330；经验scope与G/owner/arena过滤保持。共用header+实际backend CPU64/0，独立NTT10/0含88项策略检查，旧warp0/1复测通过。
+新D系数以六条多D曲线+四条fixed-D锚点拟合，旧NTT/新策略各自匹配；最终独立B2=1e11 holdout330330每条快于510510，但秒数预测偏低8.23–10.27%。新默认大界D1381380、小界D330330；经验scope与G/owner/arena过滤保持。共用header+实际backend CPU32/0，独立NTT10/0含88项策略检查，旧warp0/1复测通过。
 
 Systems单次池NTT29.388810→27.812577 s、point约19.24 s保持，近似Stage2无本进程事件9.77→9.57 s，占14.31→14.41%；不是整卡idle。全范围传输字节/次数保持，同步copy host等待远大于相关GPU copy。Compute尝试实际ERR_NVGPUCTRPERM，未获得有效occupancy/带宽/cycle；没有改变权限。
 
@@ -4306,3 +4306,13 @@ Systems单次池NTT29.388810→27.812577 s、point约19.24 s保持，近似Stage
 工作量/自检/GMP/根/叶摘要保持；arena完整峰3341512288B和workspace3GiB保持，private均7314/7318MiB。Systems NTT28.545614→19.095016s、point约19.2s保持；无本进程GPU事件间隙约9.5s保持，占比14.25%→16.44%。copy全量字节/次数保持；host copy等待降低不等于PCIe带宽提升。GPU1采样均113739个kernel，GPU0用户运行未动。
 
 旧D模型在short1下明确回legacy，日志gl_short；最终guard编译609.1/link4.3s、SHA48A183D1…2C846，实际scope36/0与最终shared/warp14/0通过。性能17BF4813…E58A2版本先冻结再加host保护，记录分开。NTT_GL_SHORT_REDUCE缺省0；生产3CF38065…19F0E保持，新D拟合/holdout后再提升。接续新D、CPU准备/提交间隙及gl_mod直接规范化/新后端对照下的单位根复测；多曲线仍需lease及RAM/VRAM预算，Prime95公平新对照待做。[详细数学/公式/原文件line/数据](D:/code/MPA-OpenCl/docs/STAGE2_GOLDILOCKS_SHORT_REDUCTION.md)。
+
+## 69. 短归约 D 重标定与生产默认（2026-10-05）
+
+短归约后重新冻结k16..27卷积权重，六条多D曲线加四条同binary锚点拟合profile3；独立B2=1e11留出验证330330每条快于510510，绝对秒数仍低估5.99–11.76%，未回调拟合。大界D1381380、小界D330330，owner512MiB时大界D1141140。真实NTT backend/C++模型与整数features **48/0**，实验planner **22/0**、归约scope **36/0**、shared/warp NTT **14/0**；三个自动D真实曲线均GMP bad0/pending0/clean1。模型不增加GPU数组/传输。
+
+生产33/0、最终实际S4后端选择器30/0；后者为早停决策门禁，不冒充完成曲线。额外修正OLDTAIL/S4_OFF scope，并将同一S4启用快照提前；错误指针初版28/2失败候选保留且未发布。最终E0139328…BE331，4127232 bytes，CUDA571.1 s；15原始依赖及快照核验。生产save固定D1381380四条ABBA：64.647779、56.586517、57.082008、65.380452 s，均值**65.014116→56.834263 s（快12.58%）**，每模式2条、无CI，叶/oracle/因子一致。生产short默认1，显式0回旧归约与resident_shape；实验仍默认0。旧3CF产物已保留。
+
+D138标定均值full56.643870s：init26.59%，baby14.08%、CPUaffine6.10%、F树剩余6.41%；main73.41%，G树23.96%、giant18.28%、下降13.46%、fold10.69%。owner609.086MiB，NTT arena完整payload3341481200B，主workspace3GiB；host输出窗口实际回读2838813040B，不等于所有曲线D2H，没有新NVML全进程峰。具体计算量、内存与传输公式及各阶段误差见[短归约 D 标定与生产报告](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)。
+
+下一轮优先GPU baby批量规范化。原Systems最大2.784s间隙在X/Z回读后、下次copy提交前，与CPUaffine准备关联；trace无CPU栈，仍为源码推断。giant叶是[-X,Z]，baby F树要求[-X/Z,1]，须增加设备prefix/逆元传播并保留坏Z的GCD/因子语义；先仅回读P个常数再接设备叶frontend。之后复测gl_mod规范化/低层根；多曲线仍需独立状态与workspace lease及RAM/VRAM预算，公平Prime95新对照待做。

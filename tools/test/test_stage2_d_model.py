@@ -26,14 +26,20 @@ def main():
     p.add_argument('--budget-plan',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--device',type=int,default=1)
+    p.add_argument('--coop-mode',type=int,choices=(0,2),default=0)
+    p.add_argument('--short-reduce',type=int,choices=(0,1),default=0)
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True)
     if any(a.output.iterdir()):raise ValueError('Use a fresh output directory')
     prov=json.loads(a.provenance.read_text(encoding='utf-8-sig'))
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update({k:str(v) for k,v in prov['env'].items() if v is not None})
-    env.update({k:str(v) for k,v in next(r for r in prov['mode_controls'] if r['mode']=='6_mont').items() if k!='mode'})
+    wanted='short_fold' if a.short_reduce else 'shape_outer' if a.coop_mode==2 else '6_mont'
+    env.update({k:str(v) for k,v in next(r for r in prov['mode_controls'] if r['mode']==wanted).items() if k!='mode'})
     env.pop('NTT_FUSE_TRACE',None)
-    env.update(NTT_D_MODEL='1',NTT_XADD6_TEST='0',NTT_XADD6_TEST_BAD='0')
+    env.update(NTT_D_MODEL='1',NTT_XADD6_TEST='0',NTT_XADD6_TEST_BAD='0',
+               NTT_GL_SHORT_REDUCE=str(a.short_reduce),NTT_FUSE_COOP_OUTER=str(a.coop_mode))
+    if a.short_reduce and a.coop_mode!=2:raise ValueError('Short model requires shape policy')
+    profile=3 if a.short_reduce else 2 if a.coop_mode==2 else 0
     argv=[str(a.exe.resolve()),*map(str,prov['args']),'--d-plan-only']
     sha=hashlib.sha256(a.exe.read_bytes()).hexdigest();checks=[]
 
@@ -48,6 +54,8 @@ def main():
         assert r.returncode==code,(name,r.returncode,text[-1200:])
         line=re.search(r'd_model: requested=(\d+) enabled=(\d+) version=(\S+)',text)
         assert line and line[2]==str(int(enabled)),(name,line)
+        if enabled:
+            assert line[3]=={0:'resident_xadd6_v1',2:'resident_shape_v1',3:'resident_short_v1'}[profile],(name,line)
         assert 'real_baby:' not in text and 'prime_powers=' not in text and 'stage2_full_wall:' not in text
         wall=re.search(r'd_scan_wall: seconds=([\d.]+)',text)
         if code==0:
@@ -69,19 +77,21 @@ def main():
         text,_=run('features_'+str(d),d=d)
         lines=re.findall(r'd_model_features: (.*)',text)
         row=next(dict(re.findall(r'(\w+)=([^ ]+)',s)) for s in lines if s.startswith('D='+str(d)+' '))
-        f=features(d,2011326186870)
+        f=features(d,2011326186870,4423,profile)
         for key,field in (('P','P'),('n_fold','fold_ntt'),('n_tree','tree_ntt'),('tree_work','ftree'),('inverse_work','inverse'),('owner_bytes','owner_bytes')):
-            assert float(row[key])==f[field],(d,key,row[key],f[field])
+            assert abs(float(row[key])-f[field])<=.501,(d,key,row[key],f[field])
     for name,over in (('legacy',{'NTT_D_MODEL':'0'}),('old_xadd',{'NTT_XADD6':'0'}),
         ('old_tile',{'NTT_FUSE_WARP_TAIL':'0'}),('oracle_pack',{'NTT_S4_ORACLE_PACK':'0'}),
         ('no_pool',{'NTT_ARENA_WORKSPACE_POOL':'0'}),('sample',{'NTT_S4_SAMPLE':'95'}),
         ('carry',{'NTT_S4_CARRY_BATCH':'0'}),('chain',{'NTT_GIANT_CHAIN_BLOCK':'32'}),
-        ('coop',{'NTT_FUSE_COOP_OUTER':'1'})):
+        ('coop',{'NTT_FUSE_COOP_OUTER':'1'}),('old_tail',{'NTT_S4_OLDTAIL':'1'}),
+        ('cpu_reduce',{'NTT_S4_OFF':'1'})):
         run('fallback_'+name,overrides=over,enabled=False)
     run('fallback_B1',arguments={'--b1':1001},enabled=False)
     run('fallback_N',arguments={'--n-hex':hex((1<<257)-1)[2:]},enabled=False)
     run('fallback_bound',b2=99999999999,enabled=False)
     run('fallback_G1',d=1231230,b2=100000000000,enabled=False)
+    if a.short_reduce:run('fallback_outer0',overrides={'NTT_FUSE_COOP_OUTER':'0'},enabled=False)
     run('arena_refused',overrides={'NTT_ARENA_CAP_KB':'8'},code=3)
     result=dict(exe=str(a.exe.resolve()),sha256=sha,device=a.device,passed=len(checks),failed=0,checks=checks)
     (a.output/'summary.json').write_text(json.dumps(result,indent=2),encoding='utf-8')

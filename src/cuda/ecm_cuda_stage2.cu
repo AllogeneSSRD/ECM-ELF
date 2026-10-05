@@ -10,7 +10,7 @@ struct ProductionDefaults {
             "NTT_FOLD_FLAT", "NTT_FOLD_DEVICE", "NTT_GROOT_DEVICE", "NTT_SCALED_DESCENT",
             "NTT_S4_OUTPUT_WINDOW", "NTT_S4_CHUNK_OUTPUT", "NTT_DEVICE_GLEAF",
             "NTT_GROOT_TO_FOLD", "NTT_S4_ORACLE_ASYNC", "NTT_S4_CARRY_BATCH",
-            "NTT_FUSE_WARP_TAIL", "NTT_XADD6", "NTT_D_MODEL"};
+            "NTT_FUSE_WARP_TAIL", "NTT_XADD6", "NTT_D_MODEL", "NTT_GL_SHORT_REDUCE"};
         for (const char *key : keys) set_default(key, "1");
         set_default("NTT_FUSE_COOP_OUTER", "2");
         set_default("NTT_DEVICE_GLEAF_MAX_MB", "512");

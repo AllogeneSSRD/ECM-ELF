@@ -10755,10 +10755,12 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        Memory feasibility stays a HARD filter: a candidate whose shapes do not fit the arena is not
        a candidate at all. */
     unsigned long long D = D_in, P_baby = 0;
+    const char *env4 = std::getenv("NTT_S4_OFF");
+    const bool s4_on = !(env4 && *env4 && std::atoi(env4) != 0);
     const bool model_requested=fuse_env_ull("NTT_D_MODEL",0)!=0;
     const auto outer_mode=fuse_env_ull("NTT_FUSE_COOP_OUTER",0);
     const bool shape_ntt=outer_mode==2 && d_shape_rates_valid && fuse_shape_policy_supported(12);
-    bool calibrated=model_requested && g_xadd6 && g_s4_mersenne && g_groot_device &&
+    bool calibrated=model_requested && s4_on && !s4_tail_mont_mode() && g_xadd6 && g_s4_mersenne && g_groot_device &&
         g_s4_output_window && g_s4_chunk_output && g_s4_groot_only && g_s4_pack_direct &&
         g_s4_oracle_async && g_s4_oracle_pack && g_s4_carry_batch && !g_s4_final_readback &&
         L.S==4423 && mpz_popcount(L.N)==4423 && curves==1 && B1==1000 &&
@@ -10776,16 +10778,16 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if(!fuse_env_ull(key,0))calibrated=false;
     if(fuse_env_ull("NTT_S4_HOSTPACK",0) || !fuse_compact_scratch() ||
        !fuse_env_ull("NTT_S4_FLAT_DIRECT",1))calibrated=false;
-    // Old empirical rates were measured with the four-fold Goldilocks reducer.
+    // Empirical rates must match the selected arithmetic and NTT policy.
     const bool gl_short=fuse_env_ull("NTT_GL_SHORT_REDUCE",NTT_GL_SHORT_REDUCE_DEFAULT)!=0;
-    if(gl_short)calibrated=false;
+    if(gl_short && !(shape_ntt && d_short_rates_valid))calibrated=false;
     const auto fold_budget=fuse_env_ull("NTT_FOLD_DEVICE_MAX_MB",640)*1024*1024;
     auto owner_bytes=[&](unsigned long long p){return 8ull*nw*(9*p+8)+48;};
     if(D_in && (phi_u64(D_in)/2==0 || B2/D_in+2<=phi_u64(D_in)/2 ||
                 owner_bytes(phi_u64(D_in)/2)>fold_budget))calibrated=false;
     const double d_scan_begin=now_s();
-    DPhaseModel phase_model((int)L.S,B2,shape_ntt);
-    const char *model_version=calibrated ? (shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
+    DPhaseModel phase_model((int)L.S,B2,gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
+    const char *model_version=calibrated ? (gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
     std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu gl_short=%d "
                 "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
                 (int)model_requested,(int)calibrated,model_version,
@@ -11088,8 +11090,6 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     }
     S4Ctx s4;
     S4Reduce red;
-    const char *env4 = std::getenv("NTT_S4_OFF");
-    const bool s4_on = !(env4 && *env4 && std::atoi(env4) != 0);
     {
         const char *es = std::getenv("NTT_S4_SAMPLE");
         if (es && *es) g_s4_sample_limit = std::atoll(es);
