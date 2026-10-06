@@ -263,3 +263,6 @@ python tools/bench/measure_ecm_costs.py --stage2 $exe `
 ```
 
 新目录用于新采集。中断后用同一输出和同样controls加`--resume`，去掉首次导入用的`--reuse-stage1`；所有binary/工具/源码SHA仍须匹配，不要仅因观察超时重新开始。生产893和旧已发布profile保持，当前实验没有新的生产耗时/自动选择通过结论。
+
+
+补充审计（采集进行中）：新增 `ecm_cost_coverage.py` 从controls重建完整计划，并逐case核对实际观测和存储计划。删除计划与观测中的同一项、用重复case替代缺失case（总行数不变）、重复冷Stage1观测替代另一次重复均会拒绝。盲测与冻结case也要求身份集合及次数完全一致，不只比较每scope数量。审计重新根据训练I核对replay标签，每个scope至少有一个独立工作形状样本；exporter拒绝只有重放的scope。新增7项覆盖负例/回归通过；旧174/198条完整study也通过计划核对，旧306条证据重审仍是integrity/ranking通过、accuracy失败，没有改变既有失败结论。

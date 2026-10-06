@@ -6,6 +6,7 @@ from pathlib import Path
 import statistics
 from ecm_cost_model import fit, predict, observed, PHASE_FEATURES, giant_work, FEATURE_PROFILE,features,scope_id
 from calibrate_stage2_d import parse
+from ecm_cost_coverage import check_study_coverage
 
 
 def sha(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -58,6 +59,7 @@ def main():
                    help='Fit each measured D independently; pooled_d reproduces the historical multiple-G model')
     a=p.parse_args();study=json.loads(a.measurements.read_text(encoding='utf-8'))
     if not study.get('complete'): raise ValueError('Study has not completed')
+    coverage=check_study_coverage(study)
     if study['controls'].get('feature_profile')!=FEATURE_PROFILE:raise ValueError('Recalibrate with exact-tree/G1 feature profile 7')
     chain_min=study['controls']['chain_min']
     for row in study['stage2']:
@@ -70,7 +72,8 @@ def main():
         source_sha256=sha(a.measurements),source=str(a.measurements.resolve()),
         feature_profile=FEATURE_PROFILE,chain_min=chain_min,scope_model='exact_tree_g1_full_phase_v2',fit_estimator=a.estimator,fit_scope=a.fit_scope,
         benefit_model='kruppa_p95_v1',name_hits=study['controls']['name_hits'],stage1=[],stage2=[],
-        fitter_sha256=sha(__file__),model_code_sha256=sha(Path(__file__).with_name('ecm_cost_model.py')))
+        fitter_sha256=sha(__file__),model_code_sha256=sha(Path(__file__).with_name('ecm_cost_model.py')),
+        schedule_coverage=coverage,coverage_code_sha256=sha(Path(__file__).with_name('ecm_cost_coverage.py')))
     for bits in study['controls']['bits']:
         for batch in study['controls']['stage1_batch']:
             samples=[r for r in study['stage1'] if r['bits']==bits and r['batch']==batch and not r['warmup']]

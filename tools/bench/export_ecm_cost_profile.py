@@ -36,7 +36,7 @@ def main():
     scopes=[s for s in model['stage2'] if s['usable']]
     if 'validation_scopes' in audit:
         passed={s['id'] for s in audit['validation_scopes'] if s['passed'] and
-                s['samples']==s['expected_samples'] and s['max_abs_percent'] is not None and s['max_abs_percent']<=10}
+                s['samples']==s['expected_samples'] and s.get('independent_samples',0)>0 and s['max_abs_percent'] is not None and s['max_abs_percent']<=10}
         ranks={bits:all(r['selected_value_loss_percent']<=5 for r in audit['validated_ranking'] if r['bits']==bits)
                for bits in {r['bits'] for r in audit['validated_ranking']}}
         scopes=[s for s in scopes if s['id']==scope_id(s) and s['id'] in passed and ranks.get(s['bits'],False) and

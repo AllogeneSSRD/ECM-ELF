@@ -1977,3 +1977,6 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 ## 65. G2及B2连续覆盖计划（2026-10-06，进行中）
 
 标定/拟合/验证工具现支持G2与G>=3过渡区，整数端点衔接G1与large范围；不把高G率直接外插到G2。Stage1证据可验证地复用，Stage2按新binary重新测量，相同I重放单列。666条完整矩阵正在GPU1采集，8项CPU回归通过；没有新的可用cprof、生产B1/choose12/泛型/总内存lease仍未覆盖。[计划和来源](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。
+
+
+补充§65：新增完整case身份/重复次数审计及独立验证覆盖要求，7项CPU回归通过；complete标记、相同行数或仅重放不能让profile通过。当前666矩阵继续采集，尚无完整新审计结论。

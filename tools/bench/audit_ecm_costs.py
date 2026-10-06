@@ -7,6 +7,7 @@ import statistics
 from bench_stage2_budget_scaling import fields
 from ecm_cost_model import giant_work,predict,features,admits,kruppa_value,FEATURE_PROFILE
 from calibrate_stage2_d import parse
+from ecm_cost_coverage import check_study_coverage,check_blind_coverage,check_replay_labels,independent_scope_counts
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -44,6 +45,7 @@ def main():
     p.add_argument('--profile',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();study=json.loads(a.study.read_text());blind=json.loads(a.blind.read_text());model=json.loads(a.profile.read_text())
     if not study['complete'] or not blind['complete']:raise ValueError('Incomplete evidence')
+    schedule=check_study_coverage(study)
     if 'stage1_provenance' in study:
         prior=study['stage1_provenance'];previous=json.loads(Path(prior['path']).read_text(encoding='utf-8'))
         if sha(prior['path'])!=prior['sha256'] or not previous['complete'] or prior['identity']!=previous['identity'] or prior['controls']!=previous['controls']:
@@ -67,9 +69,14 @@ def main():
                 raise ValueError('Prior observations were changed or removed')
     if model['schema']!=2 or model['feature_profile']!=FEATURE_PROFILE:raise ValueError('Unsupported cost version')
     if model['model_code_sha256']!=sha(Path(__file__).with_name('ecm_cost_model.py')):raise ValueError('Cost implementation changed')
+    if 'coverage_code_sha256' in model and model['coverage_code_sha256']!=sha(Path(__file__).with_name('ecm_cost_coverage.py')):
+        raise ValueError('Calibration coverage policy changed; refit and audit')
     if blind['profile_sha256']!=sha(a.profile) or model['source_sha256']!=sha(a.study):raise ValueError('Profile identity changed')
     if sha(a.blind.parent/'predictions.json')!=blind['prediction_sha256']:raise ValueError('Frozen predictions changed')
     frozen=json.loads((a.blind.parent/'predictions.json').read_text());minimum=model['chain_min']
+    validation_cases=check_blind_coverage(frozen,blind['runs'])
+    check_replay_labels(study,frozen['cases'])
+    independent_counts=independent_scope_counts(frozen['cases'])
     for key in ('binary_sha256','model_code_sha256','shuffle_seed','build_manifest_sha256','tools'):
         if key in frozen and blind.get(key)!=frozen[key]:raise ValueError('Blind collector identity changed: '+key)
     for row in study['stage1']:
@@ -111,7 +118,8 @@ def main():
         errors=[abs(r['engine_error_percent']) for r in rows]
         validation.append(dict(id=s['id'],bits=s['bits'],owner_mb=s['owner_mb'],regime=s['regime'],
             samples=len(rows),expected_samples=expected,max_abs_percent=max(errors) if errors else None,
-            passed=bool(s['usable'] and expected and len(rows)==expected and max(errors)<=10)))
+            independent_samples=independent_counts[s['id']],
+            passed=bool(s['usable'] and expected and independent_counts[s['id']] and len(rows)==expected and max(errors)<=10)))
     ready={s['id'] for s in validation if s['passed']}
     all_errors=[r['engine_error_percent'] for r in blind['runs']]
     independent=[r['engine_error_percent'] for r in blind['runs'] if not r['case']['kind'].endswith('_replay')]
@@ -122,6 +130,7 @@ def main():
                     all(r['selected_value_loss_percent']<=5 for r in ranks))
     result=dict(schema=2,passed=accuracy_passed and ranking_passed,integrity_passed=True,
         accuracy_passed=accuracy_passed,ranking_passed=ranking_passed,
+        schedule_coverage=schedule,validated_case_count=validation_cases,
         study_stage1_batches=len(study['stage1']),
         independently_verified_stage1_points=sum(r['batch'] for r in study['stage1']),
         fitting_stage2=sum(r['kind']=='train' for r in study['stage2']),

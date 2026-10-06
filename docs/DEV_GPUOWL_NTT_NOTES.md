@@ -4519,3 +4519,6 @@ Auto B2精度/排名仍未通过，未生成新cprof或修改生产。下一轮�
 新增整数case生成，G1末端D(P−1)−1、G2到D(2P−1)−1、bridge接到large最小B2−1；三个D不留整数间隙。g2/bridge按D独立拟合，独立验证覆盖GI/chunk/chain邻点，相同I重放不冒充blind。Stage1复用只保留原18批/117点，不复用旧Stage2时长；审计保护SHA/配置/原记录及GPU1/lcm合同。
 
 8cee/默认等待已启动666条全新Stage2（540train/126holdout，三宽度三D及owner640/0），预计63scope；工具CPU覆盖4项和拟合4项通过，实测逐条门禁执行中。尚未完成拟合/全范围验证，不发部分profile、不替换生产。计划、命令和后续见[报告§9](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。
+
+
+补充§93：完整覆盖审计从controls重建666计划、核对逐case及Stage1重复身份，不信complete标记或相同总数量；盲测集合不可重复替代，replay标签重新核对，每scope至少有独立样本。7项CPU负例/回归通过，旧174/198完整study兼容；旧306证据仍精度失败。666标定进程保持，不重启或修改其源文件。
