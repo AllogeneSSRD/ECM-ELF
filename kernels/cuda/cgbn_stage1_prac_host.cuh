@@ -58,18 +58,19 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
             else if (strcmp(cap, "168") == 0) mode = ECM_DOMAIN_PRAC_168;
             else if (*cap && strcmp(cap, "0") != 0) throw std::runtime_error("ECM_PRAC_REG_TARGET must be 0, 168 or 255");
         }
-        bool compact = false, outlined = false, single_add = false;
+        bool compact = false, outlined = false, single_add = false, single_compact = false;
         if (const char *variant = getenv("ECM_PRAC_VARIANT")) {
             if (strcmp(variant, "compact") == 0) compact = true;
             else if (strcmp(variant, "outline-add") == 0) outlined = true;
             else if (strcmp(variant, "single-add") == 0) single_add = true;
+            else if (strcmp(variant, "single-compact") == 0) single_add = single_compact = true;
             else if (*variant && strcmp(variant, "baseline") != 0)
-                throw std::runtime_error("ECM_PRAC_VARIANT must be baseline, compact, outline-add or single-add");
+                throw std::runtime_error("ECM_PRAC_VARIANT must be baseline, compact, outline-add, single-add or single-compact");
         }
         if (single_add) {
             if (!prac) throw std::runtime_error("single-add variant requires PRAC");
-            if (mode == ECM_DOMAIN_PRAC_NATURAL) mode = ECM_DOMAIN_PRAC_SINGLE_ADD;
-            else if (mode == ECM_DOMAIN_PRAC_168) mode = ECM_DOMAIN_PRAC_SINGLE_ADD_168;
+            if (mode == ECM_DOMAIN_PRAC_NATURAL) mode = single_compact ? ECM_DOMAIN_PRAC_SINGLE_COMPACT : ECM_DOMAIN_PRAC_SINGLE_ADD;
+            else if (mode == ECM_DOMAIN_PRAC_168) mode = single_compact ? ECM_DOMAIN_PRAC_SINGLE_COMPACT_168 : ECM_DOMAIN_PRAC_SINGLE_ADD_168;
             else throw std::runtime_error("single-add variant requires register policy 255 or 168");
         }
         if (outlined) {
@@ -176,9 +177,9 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
                 prac ? "prac" : "resident-ladder");
         if (prac) {
             outputf(OUTPUT_ALWAYS, "GPU: PRAC register policy=%s\n",
-                (mode == ECM_DOMAIN_PRAC_NATURAL || mode == ECM_DOMAIN_PRAC_COMPACT || mode == ECM_DOMAIN_PRAC_OUTLINE_ADD || mode == ECM_DOMAIN_PRAC_SINGLE_ADD) ? "natural (255)" :
-                (mode == ECM_DOMAIN_PRAC_168 || mode == ECM_DOMAIN_PRAC_COMPACT_168 || mode == ECM_DOMAIN_PRAC_OUTLINE_ADD_168 || mode == ECM_DOMAIN_PRAC_SINGLE_ADD_168) ? "168 (4608/TPI16)" : "per-tier");
-            outputf(OUTPUT_ALWAYS, "GPU: PRAC variant=%s\n", single_add ? "single-add (one inline xADD site)" : outlined ? "outline-add (shared xADD)" : compact ? "compact (2-temporary DBL)" : "baseline");
+                (mode == ECM_DOMAIN_PRAC_NATURAL || mode == ECM_DOMAIN_PRAC_COMPACT || mode == ECM_DOMAIN_PRAC_OUTLINE_ADD || mode == ECM_DOMAIN_PRAC_SINGLE_ADD || mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT) ? "natural (255)" :
+                (mode == ECM_DOMAIN_PRAC_168 || mode == ECM_DOMAIN_PRAC_COMPACT_168 || mode == ECM_DOMAIN_PRAC_OUTLINE_ADD_168 || mode == ECM_DOMAIN_PRAC_SINGLE_ADD_168 || mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168) ? "168 (4608/TPI16)" : "per-tier");
+            outputf(OUTPUT_ALWAYS, "GPU: PRAC variant=%s\n", single_compact ? "single-compact (one inline xADD site, 2-temporary DBL)" : single_add ? "single-add (one inline xADD site)" : outlined ? "outline-add (shared xADD)" : compact ? "compact (2-temporary DBL)" : "baseline");
         }
         outputf(OUTPUT_ALWAYS, "GPU: sigma=%llu, CGBN<%u,%u>, curves=%u, blocks=%u, blocks/SM=%d, control=%zu bytes\n",
                 (unsigned long long)*sigma, tpi, bits, curves, blocks, occupied, control_bytes);

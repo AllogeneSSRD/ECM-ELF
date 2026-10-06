@@ -13,8 +13,17 @@ from ecm_prac_plan import P95_RATIOS, prac_counts, primes
 from test_cuda_prac_windows import add, double, multiply
 
 
-def chain(p,r,seed,a24,n,single):
-    a=seed;b=double(seed,a24,n);c=seed
+def double_compact(point,a24,n):
+    # Follow the candidate's AA/BB -> X, E, a24*E, BB+a24*E, Z schedule.
+    # Values are ordinary normalized integers here, not native Montgomery limbs.
+    x,z=point;a=(x+z)**2%n;b=(x-z)**2%n
+    ox=a*b%n;a=(a-b)%n;oz=a24*a%n;b=(b+oz)%n;oz=a*b%n
+    return ox,oz
+
+
+def chain(p,r,seed,a24,n,single,compact=False):
+    dbl_point=double_compact if compact else double
+    a=seed;b=dbl_point(seed,a24,n);c=seed
     e=p-r;d=r-e;trace=[];rules=Counter();dbl=1;dadd=0
     while True:
         finish=d==e
@@ -29,7 +38,7 @@ def chain(p,r,seed,a24,n,single):
             if finish:a=t;break
             if rule==0:c,b=b,t;d-=e
             else:
-                a=double(a,a24,n);dbl+=1
+                a=dbl_point(a,a24,n);dbl+=1
                 if rule==1:b=t;d=(d-e)//2
                 else:
                     if rule==2:b=c;d//=2
@@ -41,7 +50,7 @@ def chain(p,r,seed,a24,n,single):
             else:
                 if rule==1:b,c=c,b
                 if rule==3:a,b=b,a
-                c=add(a,c,b,n);a=double(a,a24,n);dbl+=1
+                c=add(a,c,b,n);a=dbl_point(a,a24,n);dbl+=1
                 if rule==1:b,c=c,b;d=(d-e)//2
                 elif rule==2:d//=2
                 else:a,b=b,a;e//=2
@@ -77,7 +86,8 @@ def main():
         a24=pow(v-u,3,n)*(3*u+v)*pow(16*pow(u,3,n)*v%n,-1,n)%n
         for p,r in sorted(pairs):
             baseline=chain(p,r,seed,a24,n,False);single=chain(p,r,seed,a24,n,True)
-            assert baseline==single,(sigma,p,r,'point roles/projective bytes/counts differ')
+            combined=chain(p,r,seed,a24,n,True,True)
+            assert baseline==single==combined,(sigma,p,r,'point roles/projective bytes/counts differ')
             assert single[2]==prac_counts(p,r)
             oracle=multiply(sigma,p,n)
             assert single[0][0]*oracle[1]%n==oracle[0]*single[0][1]%n
@@ -85,7 +95,9 @@ def main():
     assert all(coverage[k]>0 for k in ('0','1','2','3','final'))
     source=Path('kernels/cuda/cgbn_stage1_prac_single_add.cuh')
     report=dict(prime_d_pairs=len(pairs),sigmas=2,chains=2*len(pairs),point_role_steps=steps,
+        models=['baseline','single-add','single-compact'],model_chain_evaluations=6*len(pairs),
         rule_coverage=dict(coverage),modulus_bits=127,source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        arithmetic_source_sha256=hashlib.sha256(Path('kernels/cuda/cgbn_stage1_prac_kernel.cuh').read_bytes()).hexdigest(),
         scope='CPU point-role model; exact baseline intermediate/final XZ and independent ladder; not native GPU verification',passed=True)
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8');print(json.dumps(report))

@@ -4,7 +4,7 @@
 // Normalize every odd-prime rule to T = ADD(A, B, C), including the final ADD.
 // All point coordinates stay in fixed bn variables; no dynamic bn pointers and
 // no device-call ABI. The two T coordinates are the candidate's added liveness.
-template<class P>
+template<class P, bool COMPACT>
 __device__ FORCE_INLINE void prac_odd_single_add(curve_t<P> &c,
     typename curve_t<P>::bn_t &ax, typename curve_t<P>::bn_t &az,
     typename curve_t<P>::bn_t &bx, typename curve_t<P>::bn_t &bz,
@@ -13,7 +13,7 @@ __device__ FORCE_INLINE void prac_odd_single_add(curve_t<P> &c,
     uint32_t np0, uint32_t p, uint32_t initial_d) {
     typename curve_t<P>::bn_t tx, tz;
     cgbn_set(c._env, cx, ax); cgbn_set(c._env, cz, az);
-    prac_dbl<P>(c, bx, bz, ax, az, a24, n, np0);
+    prac_dbl<P, COMPACT>(c, bx, bz, ax, az, a24, n, np0);
     uint32_t e = p - initial_d, d = initial_d - e;
     for (;;) {
         const bool finish = d == e;
@@ -44,7 +44,7 @@ __device__ FORCE_INLINE void prac_odd_single_add(curve_t<P> &c,
             cgbn_set(c._env, bx, tx); cgbn_set(c._env, bz, tz);
             d -= e;
         } else {
-            prac_dbl<P>(c, ax, az, ax, az, a24, n, np0);
+            prac_dbl<P, COMPACT>(c, ax, az, ax, az, a24, n, np0);
             if (rule == 1) {
                 // Same parity: C survives, B becomes A+B, A doubles.
                 cgbn_set(c._env, bx, tx); cgbn_set(c._env, bz, tz);

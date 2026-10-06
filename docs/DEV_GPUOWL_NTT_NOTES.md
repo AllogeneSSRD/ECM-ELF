@@ -4574,3 +4574,17 @@ GPU1/N4423/4608/TPI16/TPB128，固定tail32/W8053的48样本与10m/260m普通前
 候选text少约35.85%/35.70%，自然寄存器172→170但硬件分配仍176；cap168不变。四管理员NCU均19passes/导出成功、同grid192和tail32，驻留2/3/2/3；cap168 no_instruction比值2.480815→0.622256、issue active26.689→33.527%，local累计sector字节代理37.03→64.04MiB、以L1命中为主，非显存容量/DRAM/PCIe。自然local load0，避免outline ABI巨大local成本。比值不是墙钟占比，改善不是驻留数增加。两矩阵忙时SM1800MHz、无降频证据。
 
 保留显式长片候选，不提升为默认/最佳吞吐。下一项减少点搬移/存活值，争取168自然分配并避免额外spill；同时候选body目前公共include造成全TU重编，可先隔离body改善迭代编译时间，须保持非候选SASS一致。默认TPI/TPB128/寄存器/100ms不变，4423/TPI32仍仅显式对照。详见[数据、公式、源码行、复现及采用决定](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_SINGLE_ADD_20261006.md:1)。
+
+## 99. Stage1 PRAC single xADD + compact DBL（2026-10-06）
+
+基线49d2dc7。新增single-compact MODE12/13，仅4608/TPI16 natural/cap168；统一ADD的点角色不变，seed/循环/p2的DBL选两临时量normalized 3M+2S。候选body移入专用TU，公共头仅声明；七TU六并发critical path691.8s，候选四实例205.9s。exe SHA6e07c486…73d41；baseline4/5及旧single-add10/11完整SASS（含调度编码）与上一版一致。仅body改动的未来构建时间尚未独立实测。
+
+CPU8533 prime/d×两sigma，17066数学输入链、三模型51198求值/264538角色步骤一致；不是GPU证明。GPU184/3568完整Q/save通过；1352窗口Q、8恢复Q、20拒绝、128跨策略/切片完整XZ逐字节通过（包含48跨切片，不重复累计）。oracle184miss/1168hit，每份输出仍核验。只读审计初次调用漏--input，CLI拒绝后修正，未重跑GPU门禁。
+
+GPU1/N4423/4608/TPI16/TPB128，同tail32/W8053，三C384/768/1536×三variant×两register×两片长×两次反序，共72样本均缓存命中。组合cap168短片比旧single-add减少0.684%/0.623%/0.396%，比baseline仍增加0.232%/0.410%/0.233%；长片与旧single-add基本相当，自然策略略慢。
+
+另52普通前缀（10m/260m、50/100ms、resident及三PRAC两register、两次反序）均指数/PRAC缓存命中，正常sample limit退出、无强制终止/最终save。组合cap168/50ms为5.078480/132.901355 s/curve，比旧single-add少0.400%/0.403%，比baseline5.060764/132.429740仍多0.350%/0.356%；100ms相对baseline少2.496%/3.264%，相对旧single-add仅少0.303%/0.059%。未提高最佳吞吐；均短时投影，不发布Auto B2 T1。
+
+自然仍170寄存器、硬件分配176/驻留2；cap168 stack96→88、spill56/44→48/40，驻留仍3。四管理员NCU全部19passes/导出exit0，同tail/grid192。cap168 local累计sector字节代理64.02→55.02MiB（−14.06%）、以L1命中为主；wait几乎相同，eligible/issue active未提高。local代理不是显存容量/DRAM/PCIe，stall比值不是墙钟占比。忙采样全部SM1800MHz，温度固定55～62°C/前缀60～66°C，无降频证据。
+
+保留显式候选，不改默认/生产推荐。下一项优先为单点链专用ADD：利用输出T不别名任一输入，将v暂存T.x以减少临时bn；不能替换公共别名安全ADD，先严格门禁，再检验168门槛与吞吐。详见[全部数据、公式、源码行与复现](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_SINGLE_COMPACT_20261006.md:1)。

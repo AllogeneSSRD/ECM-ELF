@@ -125,6 +125,7 @@ def main():
     p.add_argument('--production',action='store_true',help='Also verify 16-record B1=10m/260m subproducts using existing caches')
     p.add_argument('--outline-add',action='store_true',help='Also gate the shared xADD candidate at 4608/TPI16')
     p.add_argument('--single-add',action='store_true',help='Also gate the single inline xADD site at 4608/TPI16')
+    p.add_argument('--single-compact',action='store_true',help='Also gate single inline xADD plus compact DBL at 4608/TPI16')
     p.add_argument('--production-counts',type=int,nargs='+',default=[16],help='Production window lengths, each 1..32')
     p.add_argument('--production-chunks',type=int,nargs='+',default=[0],help='Per-launch record counts, 0 means unsplit')
     a=p.parse_args();exe=a.exe.resolve(strict=True);cache=(a.cache or exe.parent).resolve();root=a.output.resolve()
@@ -137,6 +138,7 @@ def main():
         if n==4423:configs += [('compact',16,255),('compact',16,168)]
         if n==4423 and a.outline_add:configs += [('outline-add',16,255),('outline-add',16,168)]
         if n==4423 and a.single_add:configs += [('single-add',16,255),('single-add',16,168)]
+        if n==4423 and a.single_compact:configs += [('single-compact',16,255),('single-compact',16,168)]
         for variant,tpi,registers in configs:
             for exponent in ('lcm','choose12'):
                 for position in ('prefix','middle','tail'):
@@ -154,6 +156,7 @@ def main():
             configs = [('baseline',255),('baseline',168),('compact',255),('compact',168)]
             if a.outline_add:configs += [('outline-add',255),('outline-add',168)]
             if a.single_add:configs += [('single-add',255),('single-add',168)]
+            if a.single_compact:configs += [('single-compact',255),('single-compact',168)]
             for variant,registers in configs:
                 for count in a.production_counts:
                     for chunk in a.production_chunks:
@@ -170,7 +173,7 @@ def main():
     # A real candidate checkpoint remains byte-identical during window runs and
     # can subsequently resume via the baseline kernel at the same TPI.
     settings=('(2^4423-1)',1000,8,4611686018427511360,'choose12')
-    checkpoint_variant='single-add' if a.single_add else 'compact'
+    checkpoint_variant='single-compact' if a.single_compact else 'single-add' if a.single_add else 'compact'
     folder=root/'checkpoint_isolation'
     text=run(exe,folder,*settings,'prac',a.device,sample=0.000001,tpi=16,registers=168,variant=checkpoint_variant)
     assert 'sample limit reached' in text and len(list(folder.glob('.ecm_ckpt_*')))==1
@@ -198,19 +201,25 @@ def main():
         failures += [({'ECM_PRAC_VARIANT':'single-add','ECM_STAGE1_TPI':'32'},'policy is unavailable'),
                      ({'ECM_PRAC_VARIANT':'single-add','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
                      ({'ECM_PRAC_VARIANT':'single-add','ECM_GPU_STAGE1_ALGO':'resident'},'requires ECM_GPU_STAGE1_ALGO=prac')]
+    if a.single_compact:
+        failures += [({'ECM_PRAC_VARIANT':'single-compact','ECM_STAGE1_TPI':'32'},'policy is unavailable'),
+                     ({'ECM_PRAC_VARIANT':'single-compact','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
+                     ({'ECM_PRAC_VARIANT':'single-compact','ECM_GPU_STAGE1_ALGO':'resident'},'requires ECM_GPU_STAGE1_ALGO=prac')]
     for i,(settings,message) in enumerate(failures):rejected(exe,root/f'reject{i}',cache,settings,message,a.device)
     unsupported_tier_cases=0
-    if a.single_add:
-        for bits in (2203,8191):
-            rejected(exe,root/f'reject_single_n{bits}',cache,{'ECM_PRAC_VARIANT':'single-add'},
-                'policy is unavailable',a.device,bits=bits)
-            unsupported_tier_cases+=1
+    for variant,enabled in [('single-add',a.single_add),('single-compact',a.single_compact)]:
+        if enabled:
+            for bits in (2203,8191):
+                rejected(exe,root/f'reject_{variant}_n{bits}',cache,{'ECM_PRAC_VARIANT':variant},
+                    'policy is unavailable',a.device,bits=bits)
+                unsupported_tier_cases+=1
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),results=results,
         window_Q_compared=sum(r['Q_compared'] for r in results),resume_Q_compared=8,
         rejection_cases=len(failures)+unsupported_tier_cases,production_windows=a.production,
         production_counts=a.production_counts if a.production else [],
         production_chunks=a.production_chunks if a.production else [],
         bitwise_slice_checks=bitwise_slice_checks,outline_add=a.outline_add,single_add=a.single_add,
+        single_compact=a.single_compact,
         checkpoint_variant=checkpoint_variant,cpu_oracle_cache=multiply.cache_info()._asdict(),passed=True)
     (root/'summary.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k!='results'}),flush=True)

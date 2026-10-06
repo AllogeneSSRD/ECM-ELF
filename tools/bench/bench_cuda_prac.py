@@ -133,7 +133,7 @@ def main():
     parser.add_argument('--device', type=int, default=1)
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--prac-registers', type=int, choices=[0, 168, 255], default=0)
-    parser.add_argument('--prac-variant', choices=['baseline', 'compact', 'outline-add', 'single-add'], default='baseline')
+    parser.add_argument('--prac-variant', choices=['baseline', 'compact', 'outline-add', 'single-add', 'single-compact'], default='baseline')
     parser.add_argument('--prac-target-ms', type=float, default=100)
     parser.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     parser.add_argument('--exp-cache', type=Path, help='Shared validated B1/PRAC cache; defaults to exe directory')
