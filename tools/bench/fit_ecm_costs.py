@@ -16,6 +16,12 @@ def phase_key(phase,f):
     return tuple(f.get(k,0) for k in keys)
 
 
+def fit_groups(ds,regime,fit_scope):
+    # NTT throughput changes at length boundaries. A common N*log(N) rate
+    # across D is an optional historical model, not a measured transfer rule.
+    return [[d] for d in sorted(ds)] if regime=='g1' or fit_scope=='per_d' else [sorted(ds)]
+
+
 def fit_phase_medians(rows):
     """Estimate typical phase costs; retain every raw sample in the evidence.
 
@@ -48,6 +54,8 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--max-error-percent',type=float,default=10)
     p.add_argument('--estimator',choices=('least_squares','phase_medians'),default='least_squares')
+    p.add_argument('--fit-scope',choices=('per_d','pooled_d'),default='per_d',
+                   help='Fit each measured D independently; pooled_d reproduces the historical multiple-G model')
     a=p.parse_args();study=json.loads(a.measurements.read_text(encoding='utf-8'))
     if not study.get('complete'): raise ValueError('Study has not completed')
     if study['controls'].get('feature_profile')!=FEATURE_PROFILE:raise ValueError('Recalibrate with exact-tree/G1 feature profile 7')
@@ -60,7 +68,7 @@ def main():
         if row['features']!=features(row['D'],row['B2'],row['bits'],chain_min):raise ValueError('Measured feature version/configuration differs')
     model=dict(schema=2,identity=study['identity'],device=study['device'],accounting_version=2,
         source_sha256=sha(a.measurements),source=str(a.measurements.resolve()),
-        feature_profile=FEATURE_PROFILE,chain_min=chain_min,scope_model='exact_tree_g1_full_phase_v2',fit_estimator=a.estimator,
+        feature_profile=FEATURE_PROFILE,chain_min=chain_min,scope_model='exact_tree_g1_full_phase_v2',fit_estimator=a.estimator,fit_scope=a.fit_scope,
         benefit_model='kruppa_p95_v1',name_hits=study['controls']['name_hits'],stage1=[],stage2=[],
         fitter_sha256=sha(__file__),model_code_sha256=sha(Path(__file__).with_name('ecm_cost_model.py')))
     for bits in study['controls']['bits']:
@@ -76,13 +84,11 @@ def main():
                 rows=[r for r in study['stage2'] if r['bits']==bits and r['owner_mb']==owner and r['regime']==regime]
                 train=[r for r in rows if r['kind']=='train'];hold=[r for r in rows if r['kind']=='holdout']
                 if not train:continue
-                rates=(fit_phase_medians if a.estimator=='phase_medians' else fit)(train)
-                ds=sorted({r['D'] for r in train});groups=[[d] for d in ds] if regime=='g1' else [ds]
+                estimator=fit_phase_medians if a.estimator=='phase_medians' else fit
+                groups=fit_groups({r['D'] for r in train},regime,a.fit_scope)
                 for group in groups:
                     local=[r for r in rows if r['D'] in group];local_train=[r for r in train if r['D'] in group];checks=[]
-                    # G1 admission already fixes one D/P. Its setup/selftest and
-                    # local-inverse costs must not be scaled from another P.
-                    local_rates=(fit_phase_medians if a.estimator=='phase_medians' else fit)(local_train) if regime=='g1' else rates
+                    local_rates=estimator(local_train)
                     for row in hold:
                         if row['D'] not in group:continue
                         predicted,_=predict(bits,row['D'],row['B2'],local_rates,chain_min)
@@ -95,8 +101,8 @@ def main():
                         p_min=min(r['features']['P'] for r in local),p_max=max(r['features']['P'] for r in local),
                         g_min=min(r['features']['G'] for r in local),g_max=max(r['features']['G'] for r in local),
                         cold_overhead_seconds=statistics.median(cold),cold_overhead_range=[min(cold),max(cold)],
-                        arena_mb=study['controls']['arena_mb'],training=len(local_train) if regime=='g1' else len(train),admission_training=len(local_train),
-                        holdout=checks,usable=usable,rate_fit_scope='width_owner_regime_D' if regime=='g1' else 'width_owner_regime',
+                        arena_mb=study['controls']['arena_mb'],training=len(local_train),admission_training=len(local_train),
+                        holdout=checks,usable=usable,rate_fit_scope='width_owner_regime_D' if len(group)==1 else 'width_owner_regime',
                         training_raw_error_percent=[100*(predict(bits,r['D'],r['B2'],local_rates,chain_min)[0]['full']/r['phases']['full']-1) for r in local_train])
                     scope['id']=scope_id(scope);model['stage2'].append(scope)
     a.output.parent.mkdir(parents=True,exist_ok=True)

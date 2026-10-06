@@ -4,6 +4,7 @@ Keeps production arithmetic checks; preparation/reference work is outside timing
 Use a fresh output directory or --resume with identical binaries and source hashes.
 """
 import argparse
+import copy
 import hashlib
 import importlib.util
 import json
@@ -41,11 +42,14 @@ def main():
     p.add_argument('--resident-mb',type=int,default=640)
     p.add_argument('--name-hits',type=int,choices=(0,1),default=0,help='Optional prime-witness naming; default factor-only')
     p.add_argument('--resume',action='store_true')
+    p.add_argument('--extend-study',type=Path,help='Copy a completed compatible study into a fresh directory; preserve its provenance and raw observations')
+    p.add_argument('--holdout-all-d',action='store_true',help='Measure the independent holdout at every declared D')
     p.add_argument('--shuffle-seed',type=int,help='Randomize Stage2 order, preserving reproducibility')
     p.add_argument('--monitor-state',action='store_true',help='Sample GPU1 and system CPU state outside reference work')
     p.add_argument('--g1',action='store_true',help='Also measure quarter/half/three-quarter/full G=1 roots and a 3/8 holdout')
     p.add_argument('--chain-min',type=int,default=32768,help='Measured runtime giant chain crossover policy')
     a = p.parse_args()
+    if a.resume and a.extend_study:p.error('Use either resume or extend-study')
     training_b2=a.train_b2 or [a.b2]
     if (not set(a.bits)<= {2203,4423,8191} or a.repeats<1 or a.b2<=1000 or
         a.holdout_b2<=1000 or a.arena_mb<1 or a.resident_mb<1 or
@@ -76,11 +80,28 @@ def main():
     controls=dict(bits=a.bits,d=a.d,b2=a.b2,holdout_b2=a.holdout_b2,repeats=a.repeats,
         stage1_batch=a.stage1_batch,arena_mb=a.arena_mb,resident_mb=a.resident_mb,name_hits=a.name_hits,
         train_b2=training_b2,shuffle_seed=a.shuffle_seed,monitor_state=a.monitor_state,g1=a.g1,
-        feature_profile=FEATURE_PROFILE,chain_min=a.chain_min)
+        feature_profile=FEATURE_PROFILE,chain_min=a.chain_min,holdout_all_d=a.holdout_all_d)
     study_path=out/'measurements.json'
     if a.resume:
         data=json.loads(study_path.read_text(encoding='utf-8'))
         if data['identity']!=identity or data['controls']!=controls: raise ValueError('Resume identity/controls changed')
+    elif a.extend_study:
+        previous=json.loads(a.extend_study.read_text(encoding='utf-8'))
+        if not previous.get('complete'):raise ValueError('Cannot extend an incomplete study')
+        for key in ('stage1_sha256','stage2_sha256','sources'):
+            if previous['identity'][key]!=identity[key]:raise ValueError('Extended study build differs: '+key)
+        for key in ('bits','d','repeats','stage1_batch','arena_mb','resident_mb','name_hits','train_b2','holdout_b2','g1','feature_profile','chain_min'):
+            if previous['controls'].get(key)!=controls[key]:raise ValueError('Extended study configuration differs: '+key)
+        for row in previous['stage2']:
+            if digest(row['log'])!=row['log_sha256'] or parse(Path(row['log']).read_text(encoding='utf-8'))!=row['phases']:
+                raise ValueError('Prior Stage2 observation changed')
+        for row in previous['stage1']:
+            command=row['command'];saved=Path(command[command.index('-save')+1])
+            if digest(saved)!=row['save_sha256']:raise ValueError('Prior verified Stage1 save changed')
+        data=copy.deepcopy(previous)
+        data['prior_collection']=dict(path=str(a.extend_study.resolve()),sha256=digest(a.extend_study),
+            identity=previous['identity'],controls=previous['controls'],stage1_records=len(previous['stage1']),stage2_records=len(previous['stage2']))
+        data.update(identity=identity,controls=controls,complete=False)
     else:
         data=dict(schema=1,identity=identity,controls=controls,stage1=[],stage2=[],saves={})
     def persist(): study_path.write_text(json.dumps(data,indent=2),encoding='utf-8')
@@ -168,7 +189,8 @@ def main():
             for d in a.d:
                 for b2 in training_b2:
                     for owner in (a.resident_mb,0): cases.append((bits,d,b2,owner,rep,'train'))
-            for owner in (a.resident_mb,0): cases.append((bits,a.d[len(a.d)//2],a.holdout_b2,owner,rep,'holdout'))
+            for d in (a.d if a.holdout_all_d else [a.d[len(a.d)//2]]):
+                for owner in (a.resident_mb,0):cases.append((bits,d,a.holdout_b2,owner,rep,'holdout'))
             if a.g1:
                 for d in a.d:
                     points=phi(d)//2

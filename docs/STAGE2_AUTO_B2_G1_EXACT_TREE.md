@@ -97,3 +97,64 @@ python tools/bench/validate_ecm_costs.py --profile run/new_g1_profile.json `
 命令用于复现诊断；使用全新输出目录。采集会验证候选旁的冻结原始源码manifest，当前工具改动会改变工具SHA，因此新数据不能冒充本批。通过完整门禁后才可export，再进行新版原生实际曲线/INI/队列验收。
 
 [候选模型](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_g1_20261006_profile.json)、[失败审计](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_g1_20261006_audit.json)、[原始日志/Stage1保存点/冻结源码与工具/诊断证据](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_g1_20261006_evidence.json)。该证据保留16率原型与失败拟合，不提供新版 `.cprof`。既有4acc二进制及其2026-10-06多端点v1 profile仍是上一阶段通过验收的组合，不能把旧profile交给新5f4c候选。
+
+
+## 7. 分 D 标定与完整范围验证（2026-10-06）
+
+本轮修正一个拟合假设：相同位宽、owner 路径中的不同 D 会使用不同 NTT 长度，不能仅按 N log N 共用一个秒数率。现在 `fit_ecm_costs.py` 默认 `--fit-scope per_d`，每个位宽/owner/regime/D 独立拟合；`pooled_d` 保留旧多 G 方法供追溯。运行格式、17 个率、成本特征版本 7 和收益函数不变：
+
+\[
+S(B_2,D,path)=\frac{K(B_1,B_2)}{T_{1,process}/batch+adjust\,(T_{2,engine}+T_{cold})}.
+\]
+
+它估计总流程相对收益，没有把读取 save 时的 Stage1 成本归零，也没有将 pure NTT iter/s 当作完整 Stage2 秒数。
+
+### 7.1 数据与实现
+
+新增 `measure_ecm_costs.py --holdout-all-d`，所有声明的 D 都测独立留出 B2；旧工具只测中间 D，拆开 scope 后其他 D 没有留出证据，不能直接发布。`--extend-study` 允许在新目录复制兼容的完整 study 并补充观测，保留原 JSON SHA、identity、controls 和原始记录。审计要求原来的 18 批 Stage1、174 条 Stage2 逐字段不变。源 study、输入和原日志不会覆盖。
+
+同 5f4c 冻结二进制补测 24 条 B2=37.5 亿留出。联合 study 为 144 条 train、54 条 holdout，18 批 Stage1/117 个已独立核验点沿用。分 D 后声明 27 个 Stage2 scope（18 个多 G、9 个 G1），留出门禁 26/27 通过；M8191/D120120/owner640 的一条 8.751583 秒样本误差 −31.525%，保留失败。
+
+独立验证工具不再跳过 holdout 失败的 scope；采用冻结 seed 的随机顺序，查询 GPU UUID，验证 frozen build 源码/工具身份，强制 CUDA_LAUNCH_BLOCKING=0。profile 含 G1 时必须指定 `--g1`，避免悄悄漏测。后续新增 save SHA 预检查与 `--check-inputs-only`：修改一个字节就会在设备查询前拒绝；此门禁执行 GPU 曲线数为 0。实际盲测使用新增预检查前已冻结的 collector，其原始代码和 SHA 同样保留。
+
+### 7.2 完整结果及发布状态
+
+新冻结验证 108 条：90 条独立 B2/边界/chain 邻点，18 条满根重放。累计成本证据 306 条全部算术检查通过、1,233,976 个独立 GMP 系数检查、108 组叶指纹一致。这里 174 条原始观测沿用，仅本轮新增 24+108=132 条成本曲线；没有把旧数据重新算成新执行。
+
+收益排名六组全部通过：M2203、M4423、M8191 各含 Stage1 batch1/12；五组损失为 0，M8191/batch1 的选中实测收益损失为 0.178660%。计算依据仍是 engine + 冻结 cold + 实测 Stage1，尚不是完整连续生产吞吐验收，也不是对所有 B2 的全局最优证明。
+
+**精度仍失败：27 个 scope 中 21 个通过，108 条中 8 条误差超过 10%，最大绝对误差 46.594917%。** 最大样本 M8191/D120120/B2=1,383,422,040 为 10.167326 秒，另一次同输入约 5.54 秒。附加下降、G 树等待仍会破坏秒数预测。没有删去失败范围、放宽门槛或发布部分 cprof；exporter 明确报完整精度/排名门禁失败且不创建输出。本轮没有新的原生实际 auto/manual/INI/queue 验收，没有替换生产 exe 或旧 4acc/v1 profile。
+
+[候选模型](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_per_d_20261006_profile.json)、[完整审计](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_per_d_20261006_audit.json)、[完整原始证据及冻结工具](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_per_d_20261006_evidence.json)。
+
+### 7.3 等待与显存诊断
+
+外部观察只覆盖最后 29 条附近的过程窗口（584 个 200ms 样本），根据日志修改时间及 child wall 近似对齐。最大误差曲线窗口观察 SM 210..1800MHz、9 个低于 1000MHz 的样本、GPU 利用率 0..100%、clock reason 原始掩码 1/36；系统 CPU 约 11.2..28.9%。这些是相关证据，不能把低时钟直接认定为长尾原因，也不能据全机 CPU 占用排除单线程调度。
+
+追加两个 Nsight Systems trace：上述 G1 邻点 full=5.347643 秒，多 G/B2=52.5 亿 full=6.389195 秒，均未复现长尾。自己的全部 GPU 事件窗口分别有 1.125514/1.208655 秒无自身活动（20.84%/18.78%）；包括启动检查与尾部，不等于整卡空闲比例或精确 Stage2 利用率。实际全部 H2D/D2H DMA分别约 0.0763/0.0358 和 0.0919/0.0501 秒。
+
+重建设备 malloc 同时存活峰分别为 948,285,992 / 1,031,262,480 B；pinned 主机峰为 66,817,544 / 90,442,504 B。这些不含 driver/context/module/static，也不是整进程峰值或可相加的独立容量清单。Nsight 工具现从二进制旁原始 frozen sources 检查构建，避免工作树已改动时误核对另一版本源码。
+
+上下文复用两版真实对照均无收益，执行路径已撤回；第二版 12 条曲线计数/输出通过但吞吐下降约 11.93%。[实验细节和冻结源码](D:/code/MPA-OpenCl/docs/STAGE2_CONTEXT_REUSE.md)。这没有改变成本模型的逐曲线进程合同。
+
+### 7.4 复现及后续
+
+```powershell
+$old = 'build_cuda_cmake/_auto_b2_g1_20261006'
+$new = 'run/new_per_d'
+$exe = "$old/native_latency/ecm_cuda_stage2.exe"
+python tools/bench/measure_ecm_costs.py --stage2 $exe `
+  --save-dir "$old/study_latency" --output "$new/study" `
+  --extend-study "$old/study_latency/measurements.json" `
+  --train-b2 3000000000 6000000000 --holdout-b2 3750000000 `
+  --holdout-all-d --g1 --chain-min 8192 --monitor-state --shuffle-seed 20261009
+python tools/bench/fit_ecm_costs.py --measurements "$new/study/measurements.json" `
+  --estimator phase_medians --fit-scope per_d --output "$new/profile.json"
+python tools/bench/validate_ecm_costs.py --profile "$new/profile.json" `
+  --stage2 $exe --save-dir "$new/study" --output "$new/blind" `
+  --b2 5250000000 --repeats 2 --g1 --shuffle-seed 20261010
+```
+
+每次使用新目录。三个位宽和所有已声明 D/path 都须保持验证。先定位并减少大位宽下降/G 树的额外等待，再冻结完整精度与收益验证；随后才能导出 v2 cprof 并运行原生 auto/manual/INI/queue 验收。G2 桥接、生产 B1、choose12、泛型模数、总显存/RAM 准入及更广 NTT 标定仍未完成。
+
+源码：[分 D 分组](D:/code/MPA-OpenCl/tools/bench/fit_ecm_costs.py:19)、[旧 study 扩展及所有 D 留出](D:/code/MPA-OpenCl/tools/bench/measure_ecm_costs.py:45)、[原观测保护](D:/code/MPA-OpenCl/tools/bench/audit_ecm_costs.py:47)、[输入身份及完整 scope 验证](D:/code/MPA-OpenCl/tools/bench/validate_ecm_costs.py:24)、[拒绝不合格发布](D:/code/MPA-OpenCl/tools/bench/export_ecm_cost_profile.py:35)、[原始构建的剖析核对](D:/code/MPA-OpenCl/tools/bench/profile_stage2_points.py:38)。CPU 拟合回归 4 项通过；输入正/负检查与发布负例均未执行 GPU 曲线。

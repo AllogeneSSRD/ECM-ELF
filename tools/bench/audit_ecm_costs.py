@@ -44,11 +44,23 @@ def main():
     p.add_argument('--profile',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();study=json.loads(a.study.read_text());blind=json.loads(a.blind.read_text());model=json.loads(a.profile.read_text())
     if not study['complete'] or not blind['complete']:raise ValueError('Incomplete evidence')
+    if 'prior_collection' in study:
+        prior=study['prior_collection'];previous=json.loads(Path(prior['path']).read_text(encoding='utf-8'))
+        if sha(prior['path'])!=prior['sha256'] or not previous['complete']:
+            raise ValueError('Prior calibration provenance changed')
+        if prior['identity']!=previous['identity'] or prior['controls']!=previous['controls']:
+            raise ValueError('Prior calibration identity changed')
+        for kind in ('stage1','stage2'):
+            count=prior[kind+'_records']
+            if count!=len(previous[kind]) or study[kind][:count]!=previous[kind]:
+                raise ValueError('Prior observations were changed or removed')
     if model['schema']!=2 or model['feature_profile']!=FEATURE_PROFILE:raise ValueError('Unsupported cost version')
     if model['model_code_sha256']!=sha(Path(__file__).with_name('ecm_cost_model.py')):raise ValueError('Cost implementation changed')
     if blind['profile_sha256']!=sha(a.profile) or model['source_sha256']!=sha(a.study):raise ValueError('Profile identity changed')
     if sha(a.blind.parent/'predictions.json')!=blind['prediction_sha256']:raise ValueError('Frozen predictions changed')
     frozen=json.loads((a.blind.parent/'predictions.json').read_text());minimum=model['chain_min']
+    for key in ('binary_sha256','model_code_sha256','shuffle_seed','build_manifest_sha256','tools'):
+        if key in frozen and blind.get(key)!=frozen[key]:raise ValueError('Blind collector identity changed: '+key)
     for row in study['stage1']:
         c=row['command']
         if sha(Path(c[c.index('-save')+1]))!=row['save_sha256']:raise ValueError('Verified Stage1 save changed')

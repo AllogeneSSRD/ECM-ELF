@@ -314,3 +314,10 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 新版auto额外拒绝CUDA_LAUNCH_BLOCKING=1，避免使用异步标定率预测强制同步配置。同步、pinned读回、双进程及全局tile11均未证明收益；pinned原型撤回，生产tile12及单进程逐curve方式保持。并发实验确认结果一致、采样VRAM/RAM及预算负门禁，不等于生产并发/总显存lease已经实现。Auto B2 v2仍无通过完整门禁的运行profile。
 
 新bench_stage2_variants.py可对照tile/shared radix等现有开关，bench_stage2_concurrency.py用于有预算防护的两点语料试验，analyze_stage2_trace.py重建同时malloc峰与API等待。均不自动更新生产配置/成本profile。详见[最新实测与后续](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_WAIT_NTT.md)。
+
+
+## 2026-10-06 分 D 标定工具及发布限制
+
+新版离线拟合默认 `--fit-scope per_d`，成本采集可用 `--holdout-all-d` 和 `--extend-study FILE` 补齐所有D的留出点，扩展到新目录并保留原观测。验证工具 `--check-inputs-only` 可先核对build/profile/save身份，执行GPU曲线数为0。最新六组收益排名通过，但27个scope中仍6个未通过完整秒数精度；没有新的v2 cprof，不可将候选JSON直接用于生产auto。
+
+实验 `--reuse-context` 路径已撤回，当前源码不提供该选项；实验exe及脚本在冻结证据中。现有通过验收的4acc/v1组合保持，详见[最新完整结果](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)及[上下文实验](D:/code/MPA-OpenCl/docs/STAGE2_CONTEXT_REUSE.md)。

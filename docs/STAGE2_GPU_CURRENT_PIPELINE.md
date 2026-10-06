@@ -1960,3 +1960,10 @@ GPU1/生产893/默认检查，S2203/4423/8191的CPU/GMP有效lcm保存点，52�
 同4acc采用30/60亿训练、37.5亿留出、52.5亿新blind及随机交叉。典型阶段中位数拟合保留全部等待样本；120条clean/761568 GMP系数/30组leaf，blind最大6.986%，三宽度六path恢复发布。37调用/255断言、8条实际auto/manual/queue验证；M4423选择慢于实测最快1.893%，不宣称全部精确最优。profile仍仅B1=1000/lcm、三精确位宽/三D/arena4096范围。
 
 GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿射点对照零失配，M8191/30亿full少39.78%；小输入默认阈值策略仍需更小I/边界与退化点。G1执行已验证但inverse移入scaled descent、owner无同样活跃条件，需要单独成本。当前经验树工作特征还多算单边复制；精确pair census与84条runtime全部吻合，后续同步修正Python/native并重新标定。并发/总显存lease与NTT launch优化继续。[完整报告](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_MULTIANCHOR.md)。
+
+
+## 63. Auto B2 分 D 成本与验证（2026-10-06）
+
+成本拟合按位宽/owner/regime/D分开，避免不同NTT长度共用一个经验率。扩展study保留旧数据身份，所有D独立留出；blind随机冻结并覆盖全部scope，输入save SHA可在GPU查询前预检。306条成本曲线算术通过，六组总流程收益排名最大损失0.178660%，但秒数精度仍失败（21/27 scope、最坏46.594917%）；未发布v2运行profile。当前可用的发布组合仍是4acc和多端点v1，不适配新的5f4c源码候选。
+
+上下文复用无稳定收益，执行路径撤回、快照保留；没有改变逐曲线启动合同。下一步处理大位宽下降/G树等待，再验收完整profile及实际auto/manual/INI/queue；G2、生产B1、choose12、泛型和总内存预算仍待扩展。[源码行、命令、审计与内存证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。

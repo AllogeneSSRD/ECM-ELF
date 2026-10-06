@@ -25,6 +25,20 @@ def fixture():
 
 
 class CostFitTests(unittest.TestCase):
+    def test_per_d_groups_do_not_share_rates(self):
+        ds={120120,30030,60060}
+        self.assertEqual(fit_ecm_costs.fit_groups(ds,'multiple','per_d'),[[30030],[60060],[120120]])
+        self.assertEqual(fit_ecm_costs.fit_groups(ds,'multiple','pooled_d'),[[30030,60060,120120]])
+        self.assertEqual(fit_ecm_costs.fit_groups(ds,'g1','pooled_d'),[[30030],[60060],[120120]])
+        rows=fixture()
+        for row in rows:
+            row['D']=row['features']['D']
+            row['phases']['baby']*=row['D']/30030
+        for group in fit_ecm_costs.fit_groups(ds,'multiple','per_d'):
+            local=[r for r in rows if r['D'] in group]
+            rate=fit_ecm_costs.fit_phase_medians(local)['baby']
+            self.assertTrue(math.isclose(rate,1e-7*group[0]/30030,rel_tol=1e-12))
+
     def test_small_ladder_latency_floor(self):
         rows=[]
         for count in (300,600,1200,2400):

@@ -35,10 +35,19 @@ def main():
     sources = raw_sources if isinstance(raw_sources, dict) else {s.split('=',1)[0]:s.split('=',1)[1].lower() for s in raw_sources if '=' in s and (root/s.split('=',1)[0]).is_file()}
     exe_sha = hashlib.sha256(exe.read_bytes()).hexdigest()
     save_sha = hashlib.sha256(save.read_bytes()).hexdigest()
+    frozen_manifest=exe.parent/'frozen_sources_manifest.json'
+    source_root=root
+    if frozen_manifest.exists():
+        frozen=json.loads(frozen_manifest.read_text(encoding='utf-8'))
+        assert frozen['binary_sha256']==exe_sha, 'Frozen build binary differs'
+        assert {n:d.lower() for n,d in frozen['sources'].items()}=={n:d.lower() for n,d in sources.items()}, 'Frozen dependencies differ'
+        source_root=exe.parent/'sources'
+    manifest_sha=hashlib.sha256(frozen_manifest.read_bytes()).hexdigest() if frozen_manifest.exists() else None
     def verify():
         assert hashlib.sha256(exe.read_bytes()).hexdigest() == exe_sha == build['sha256'].lower()
         assert hashlib.sha256(save.read_bytes()).hexdigest() == save_sha
-        for name, digest in sources.items(): assert hashlib.sha256((root/name).read_bytes()).hexdigest() == digest.lower(), name
+        if manifest_sha:assert hashlib.sha256(frozen_manifest.read_bytes()).hexdigest()==manifest_sha, 'Frozen manifest changed'
+        for name, digest in sources.items(): assert hashlib.sha256((source_root/name).read_bytes()).hexdigest() == digest.lower(), name
     verify()
     env = {k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_NO_PROGRESS='1', NTT_ARENA_CAP_KB='6451200', NTT_D_MODEL='0', NTT_STAGE1_Q_DUMP='1',NTT_POINT_MERSENNE=str(a.point_mersenne))
@@ -87,7 +96,7 @@ def main():
     if not a.analyze_existing or not trace.with_suffix('.sqlite').is_file():
         with (out/'export.log').open('wb') as log:
             subprocess.run(export, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=120)
-    manifest = dict(exe=str(exe), sha256=exe_sha, save=str(save), save_sha256=save_sha, sources=sources, command=command, env={k:v for k,v in env.items() if k.startswith('NTT_')}, profile=profile, export=export, Q_sha256=hashlib.sha256(q.encode()).hexdigest(), leaf=re.search(r'descent_values: (.*)',text)[1], full_wall=re.search(r'stage2_full_wall: (.*)',text)[1], oracle=re.search(r's4_oracle_stats: (.*)',text)[1])
+    manifest = dict(exe=str(exe), sha256=exe_sha, save=str(save), save_sha256=save_sha, sources=sources,source_root=str(source_root),frozen_manifest_sha256=manifest_sha,collector_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), command=command, env={k:v for k,v in env.items() if k.startswith('NTT_')}, profile=profile, export=export, Q_sha256=hashlib.sha256(q.encode()).hexdigest(), leaf=re.search(r'descent_values: (.*)',text)[1], full_wall=re.search(r'stage2_full_wall: (.*)',text)[1], oracle=re.search(r's4_oracle_stats: (.*)',text)[1])
     (out/'manifest.json').write_text(json.dumps(manifest, indent=2))
     c = sqlite3.connect('file:'+trace.with_suffix('.sqlite').as_posix()+'?mode=ro', uri=True)
     c.row_factory = sqlite3.Row; c.text_factory = lambda b:b.decode('utf-8','replace')

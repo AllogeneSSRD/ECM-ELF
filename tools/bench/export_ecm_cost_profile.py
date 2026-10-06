@@ -29,9 +29,9 @@ def main():
         raise ValueError('Unsupported phase model')
     if model['identity']['stage2_sha256']!=sha(a.stage2):raise ValueError('Profile/binary mismatch; measure the new binary first')
     if model['model_code_sha256']!=sha(Path(__file__).with_name('ecm_cost_model.py')):raise ValueError('Cost model changed; refit/validate')
-    if audit.get('schema')!=2 or not audit['passed'] or audit['profile_sha256']!=sha(a.profile) or audit['study_sha256']!=model['source_sha256']:
+    if audit.get('schema')!=2 or audit['profile_sha256']!=sha(a.profile) or audit['study_sha256']!=model['source_sha256']:
         raise ValueError('Audit/profile identity mismatch')
-    if not audit.get('integrity_passed') or not audit.get('accuracy_passed') or not audit.get('ranking_passed'):
+    if not audit.get('passed') or not audit.get('integrity_passed') or not audit.get('accuracy_passed') or not audit.get('ranking_passed'):
         raise ValueError('Complete scope accuracy and ranking gates are required')
     scopes=[s for s in model['stage2'] if s['usable']]
     if 'validation_scopes' in audit:
