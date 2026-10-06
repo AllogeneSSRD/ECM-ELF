@@ -19,7 +19,7 @@ def phase_key(phase,f):
 def fit_groups(ds,regime,fit_scope):
     # NTT throughput changes at length boundaries. A common N*log(N) rate
     # across D is an optional historical model, not a measured transfer rule.
-    return [[d] for d in sorted(ds)] if regime=='g1' or fit_scope=='per_d' else [sorted(ds)]
+    return [[d] for d in sorted(ds)] if regime in ('g1','g2','bridge') or fit_scope=='per_d' else [sorted(ds)]
 
 
 def fit_phase_medians(rows):
@@ -80,7 +80,7 @@ def main():
                 process_range=[min(r['amortized_process_seconds'] for r in samples),max(r['amortized_process_seconds'] for r in samples)],
                 gpu_range=[min(r['amortized_gpu_seconds'] for r in samples),max(r['amortized_gpu_seconds'] for r in samples)],samples=len(samples)))
         for owner in (study['controls']['resident_mb'],0):
-            for regime in ('multiple','g1'):
+            for regime in ('multiple','g1','g2','bridge'):
                 rows=[r for r in study['stage2'] if r['bits']==bits and r['owner_mb']==owner and r['regime']==regime]
                 train=[r for r in rows if r['kind']=='train'];hold=[r for r in rows if r['kind']=='holdout']
                 if not train:continue

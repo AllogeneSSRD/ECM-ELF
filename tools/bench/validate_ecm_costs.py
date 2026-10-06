@@ -10,6 +10,7 @@ import time
 from ecm_cost_model import predict,admits,FEATURE_PROFILE
 from calibrate_stage2_d import parse
 from bench_stage2_budget_scaling import fields
+from ecm_cost_cases import validation_points
 
 
 def sha(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -56,23 +57,20 @@ def main():
         # Failed holdout scopes remain in independent validation and the audit.
         # Skipping them would make the declared profile coverage incomplete.
         for d in scope['d_values']:
-            if scope['regime']=='g1':
-                if not a.g1:continue
-                from calibrate_stage2_d import phi
-                points=phi(d)//2
-                targets={d*(5*points//8-2):'blind',d*(points-3):'boundary_blind',d*(points-2):'root_replay'}
-                for count in (chain_min-1,chain_min,chain_min+1):
-                    if 2<=count<=points:targets.setdefault(d*(count-2),'crossover_blind')
-            else:targets={a.b2:'blind'}
-            for b2,kind in sorted(targets.items()):
+            for b2,kind in validation_points(scope,d,chain_min,a.b2):
                 prediction,f=predict(scope['bits'],d,b2,scope['rates'],chain_min)
                 if not admits(scope,f):raise ValueError('Blind point outside exact scope: '+scope['id'])
+                base_kind=kind
+                # Same I means replayed point geometry even when B2 differs by
+                # a few units inside its D-wide interval. Do not call it blind.
+                if kind!='root_replay' and any(r['kind']=='train' and r['bits']==scope['bits'] and r['D']==d and
+                    r['owner_mb']==scope['owner_mb'] and r['features']['I']==f['I'] for r in study['stage2']):kind='shape_replay'
                 for rep in range(a.repeats):
                     cases.append(dict(bits=scope['bits'],D=d,B2=b2,owner_mb=scope['owner_mb'],rep=rep,kind=kind,
-                        scope_id=scope['id'],prediction=prediction,features=f,arena_mb=scope['arena_mb'],cold_overhead=scope['cold_overhead_seconds']))
+                        base_kind=base_kind,scope_id=scope['id'],prediction=prediction,features=f,arena_mb=scope['arena_mb'],cold_overhead=scope['cold_overhead_seconds']))
     random.Random(a.shuffle_seed).shuffle(cases)
     if not cases:raise ValueError('No validation cases')
-    tool_names=('validate_ecm_costs.py','ecm_cost_model.py','calibrate_stage2_d.py','bench_stage2_budget_scaling.py')
+    tool_names=('validate_ecm_costs.py','ecm_cost_model.py','calibrate_stage2_d.py','bench_stage2_budget_scaling.py','ecm_cost_cases.py')
     data=dict(schema=1,profile_sha256=profile_sha,model_code_sha256=sha(Path(__file__).with_name('ecm_cost_model.py')),
         binary_sha256=sha(a.stage2),shuffle_seed=a.shuffle_seed,build_manifest_sha256=sha(manifest_path),
         tools={n:sha(Path(__file__).with_name(n)) for n in tool_names},cases=cases,runs=[])

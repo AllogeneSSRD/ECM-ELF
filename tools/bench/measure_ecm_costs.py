@@ -18,6 +18,7 @@ import time
 from calibrate_stage2_d import parse,phi
 from ecm_cost_model import features,FEATURE_PROFILE
 from bench_stage2_budget_scaling import fields, Nvml
+from ecm_cost_cases import low_cases
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -47,8 +48,14 @@ def main():
     p.add_argument('--shuffle-seed',type=int,help='Randomize Stage2 order, preserving reproducibility')
     p.add_argument('--monitor-state',action='store_true',help='Sample GPU1 and system CPU state outside reference work')
     p.add_argument('--g1',action='store_true',help='Also measure quarter/half/three-quarter/full G=1 roots and a 3/8 holdout')
+    p.add_argument('--g2',action='store_true',help='Also measure G=2 including both interval endpoints and chain crossover')
+    p.add_argument('--bridge',action='store_true',help='Fill G>=3 up to the lowest large-B2 anchor; implies g1/g2 and all-D holdout')
+    p.add_argument('--reuse-stage1',type=Path,help='Reuse unchanged verified Stage1 observations only, preserving prior evidence; Stage2 is measured afresh')
     p.add_argument('--chain-min',type=int,default=32768,help='Measured runtime giant chain crossover policy')
     a = p.parse_args()
+    if a.bridge:a.g1=a.g2=a.holdout_all_d=True
+    if a.g2:a.g1=True
+    if a.reuse_stage1 and (a.extend_study or a.resume):p.error('reuse-stage1 requires a fresh study')
     if a.resume and a.extend_study:p.error('Use either resume or extend-study')
     training_b2=a.train_b2 or [a.b2]
     if (not set(a.bits)<= {2203,4423,8191} or a.repeats<1 or a.b2<=1000 or
@@ -73,14 +80,14 @@ def main():
     identity=dict(stage1_sha256=digest(exe1),stage2_sha256=digest(exe2),
         build_manifest_sha256=digest(exe2.parent/'build_manifest.json'),sources=manifest['sources'],
         tools={name:digest(ROOT/name) for name in ('tools/bench/measure_ecm_costs.py',
-          'tools/bench/calibrate_stage2_d.py','tools/bench/bench_stage2_budget_scaling.py','tools/stat/suyama_mont_ref.py','tools/bench/ecm_cost_model.py')})
+          'tools/bench/calibrate_stage2_d.py','tools/bench/bench_stage2_budget_scaling.py','tools/stat/suyama_mont_ref.py','tools/bench/ecm_cost_model.py','tools/bench/ecm_cost_cases.py')})
     if a.monitor_state:
         identity['tools']['tools/bench/diagnose_ecm_cost_drift.py']=digest(ROOT/'tools/bench/diagnose_ecm_cost_drift.py')
         identity['tools']['tools/bench/ecm_cost_model.py']=digest(ROOT/'tools/bench/ecm_cost_model.py')
     controls=dict(bits=a.bits,d=a.d,b2=a.b2,holdout_b2=a.holdout_b2,repeats=a.repeats,
         stage1_batch=a.stage1_batch,arena_mb=a.arena_mb,resident_mb=a.resident_mb,name_hits=a.name_hits,
         train_b2=training_b2,shuffle_seed=a.shuffle_seed,monitor_state=a.monitor_state,g1=a.g1,
-        feature_profile=FEATURE_PROFILE,chain_min=a.chain_min,holdout_all_d=a.holdout_all_d)
+        feature_profile=FEATURE_PROFILE,chain_min=a.chain_min,holdout_all_d=a.holdout_all_d,g2=a.g2,bridge=a.bridge)
     study_path=out/'measurements.json'
     if a.resume:
         data=json.loads(study_path.read_text(encoding='utf-8'))
@@ -104,6 +111,18 @@ def main():
         data.update(identity=identity,controls=controls,complete=False)
     else:
         data=dict(schema=1,identity=identity,controls=controls,stage1=[],stage2=[],saves={})
+    if a.reuse_stage1:
+        prior=json.loads(a.reuse_stage1.read_text(encoding='utf-8'))
+        if not prior.get('complete') or prior['identity']['stage1_sha256']!=identity['stage1_sha256']:
+            raise ValueError('Stage1 reuse requires completed evidence for the identical Stage1 binary')
+        for key in ('bits','stage1_batch','repeats'):
+            if prior['controls'][key]!=controls[key]:raise ValueError('Stage1 reuse configuration changed: '+key)
+        for row in prior['stage1']:
+            cmd=row['command'];saved=Path(cmd[cmd.index('-save')+1])
+            if digest(saved)!=row['save_sha256']:raise ValueError('Prior verified Stage1 save changed')
+        data['stage1']=copy.deepcopy(prior['stage1'])
+        data['stage1_provenance']=dict(path=str(a.reuse_stage1.resolve()),sha256=digest(a.reuse_stage1),
+            identity=prior['identity'],controls=prior['controls'],records=len(prior['stage1']))
     def persist(): study_path.write_text(json.dumps(data,indent=2),encoding='utf-8')
     spec=importlib.util.spec_from_file_location('mont_ref',ROOT/'tools/stat/suyama_mont_ref.py')
     ref=importlib.util.module_from_spec(spec);spec.loader.exec_module(ref)
@@ -188,17 +207,19 @@ def main():
         for rep in range(a.repeats):
             for d in a.d:
                 for b2 in training_b2:
-                    for owner in (a.resident_mb,0): cases.append((bits,d,b2,owner,rep,'train'))
+                    for owner in (a.resident_mb,0): cases.append((bits,d,b2,owner,rep,'train','multiple'))
             for d in (a.d if a.holdout_all_d else [a.d[len(a.d)//2]]):
-                for owner in (a.resident_mb,0):cases.append((bits,d,a.holdout_b2,owner,rep,'holdout'))
-            if a.g1:
+                for owner in (a.resident_mb,0):cases.append((bits,d,a.holdout_b2,owner,rep,'holdout','multiple'))
+            if a.g1 or a.g2 or a.bridge:
                 for d in a.d:
-                    points=phi(d)//2
-                    for count in (points//4,points//2,3*points//4,points):
-                        cases.append((bits,d,d*(count-2),0,rep,'train'))
-                    cases.append((bits,d,d*(3*points//8-2),0,rep,'holdout'))
+                    for regime,b2,kind in low_cases(d,min(training_b2),a.chain_min,a.g1,a.g2,a.bridge):
+                        for owner in ([0] if regime=='g1' else [a.resident_mb,0]):
+                            cases.append((bits,d,b2,owner,rep,kind,regime))
     if a.shuffle_seed is not None:random.Random(a.shuffle_seed).shuffle(cases)
-    for bits,d,b2,owner,rep,kind in cases:
+    data['planned_stage2_cases']=[dict(bits=bits,D=d,B2=b2,owner_mb=owner,rep=rep,kind=kind,regime=regime)
+        for bits,d,b2,owner,rep,kind,regime in cases]
+    persist()
+    for bits,d,b2,owner,rep,kind,regime in cases:
         name=f's2_m{bits}_d{d}_b{b2}_o{owner}_r{rep}_{kind}'
         if any(r['name']==name for r in data['stage2']): continue
         where=out/name;where.mkdir(exist_ok=True);result=where/'result.jsonl';log=where/'engine.log'
@@ -223,7 +244,7 @@ def main():
             raise ValueError('Exact tree schedule differs from runtime')
         phases=parse(text)
         row=dict(name=name,kind=kind,bits=bits,B1=1000,B2=b2,D=d,owner_mb=owner,rep=rep,process_seconds=seconds,
-            phases=phases,features=f,regime='g1' if f['G']==1 else 'multiple',fold=fold,accounting=account,state=last_state,
+            phases=phases,features=f,regime=regime,fold=fold,accounting=account,state=last_state,
             ntt=fields(text,'ntt_workspace_stats'),split=fields(text,'real_batched_split'),
             oracle=fields(text,'s4_oracle_stats'),result=raw,command=cmd,log=str(log),log_sha256=digest(log))
         data['stage2'].append(row);persist()

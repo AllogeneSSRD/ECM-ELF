@@ -4512,3 +4512,10 @@ Auto B2精度/排名仍未通过，未生成新cprof或修改生产。下一轮�
 再32条串行/双进程及0/4镜像对照全部一致。本批并发收益14.70%/5.95%，但旧批−6.02%，不发默认并发；GPU采样峰1384.617→2537.234MiB、自身private最大约1605.852→3055.801MiB，仍非完整峰/lease保证。整体104条完整批次检查通过、760628系数检查，另两条无效优先级干预单列。
 
 修复规划网格遗漏：G跳变kP+1、giant尾段kC+chain_min及I平台末端。CPU先红后绿，mock旧B2=4231858536→正确4224350129；真实packing合成fixture同选端点，非生产成本profile。最终114检查/9真实curve，实际I=140671/140672/140673的chain chunks1/2/2；配置非0 auto拒绝，mode3失败留queue。两次HostOnly保留CUDAobject，最终8ceed31f…22774/25源依赖冻结，生产893保持。详见[公式、来源行号与全部证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。
+
+
+## 93. G2与B2连续区间工具（2026-10-06，标定进行中）
+
+新增整数case生成，G1末端D(P−1)−1、G2到D(2P−1)−1、bridge接到large最小B2−1；三个D不留整数间隙。g2/bridge按D独立拟合，独立验证覆盖GI/chunk/chain邻点，相同I重放不冒充blind。Stage1复用只保留原18批/117点，不复用旧Stage2时长；审计保护SHA/配置/原记录及GPU1/lcm合同。
+
+8cee/默认等待已启动666条全新Stage2（540train/126holdout，三宽度三D及owner640/0），预计63scope；工具CPU覆盖4项和拟合4项通过，实测逐条门禁执行中。尚未完成拟合/全范围验证，不发部分profile、不替换生产。计划、命令和后续见[报告§9](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。

@@ -15,7 +15,7 @@ def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def ranking(rows,model):
     scopes={s['id']:s for s in model['stage2']};result=[]
     for bits in sorted({r['case']['bits'] for r in rows}):
-        samples=[r for r in rows if r['case']['bits']==bits and r['case']['kind']!='root_replay']
+        samples=[r for r in rows if r['case']['bits']==bits and not r['case']['kind'].endswith('_replay')]
         if not samples:continue
         grouped={}
         for row in samples:
@@ -44,6 +44,17 @@ def main():
     p.add_argument('--profile',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();study=json.loads(a.study.read_text());blind=json.loads(a.blind.read_text());model=json.loads(a.profile.read_text())
     if not study['complete'] or not blind['complete']:raise ValueError('Incomplete evidence')
+    if 'stage1_provenance' in study:
+        prior=study['stage1_provenance'];previous=json.loads(Path(prior['path']).read_text(encoding='utf-8'))
+        if sha(prior['path'])!=prior['sha256'] or not previous['complete'] or prior['identity']!=previous['identity'] or prior['controls']!=previous['controls']:
+            raise ValueError('Stage1 source provenance changed')
+        if study['stage1']!=previous['stage1'] or prior['records']!=len(previous['stage1']) or study['identity']['stage1_sha256']!=previous['identity']['stage1_sha256']:
+            raise ValueError('Stage1 observations were changed')
+        if study['device']['uuid']!=previous['device']['uuid']:raise ValueError('Reused Stage1 hardware differs')
+        for row in study['stage1']:
+            cmd=row['command']
+            if row['B1']!=1000 or row['torsion']!=1 or cmd[cmd.index('--exponent')+1]!='lcm' or cmd[cmd.index('-d')+1]!='1':
+                raise ValueError('Reused Stage1 does not match the measured lcm/GPU1 contract')
     if 'prior_collection' in study:
         prior=study['prior_collection'];previous=json.loads(Path(prior['path']).read_text(encoding='utf-8'))
         if sha(prior['path'])!=prior['sha256'] or not previous['complete']:
@@ -80,6 +91,10 @@ def main():
             g1_count+=1;desc=fields(text,'scaled_descent');root=int(desc['root_divisions'])
             if int(desc['root_inverse_reused'])!=0 or root!=int(f['I']==f['P']):raise ValueError('G1 inverse/root dispatch differs')
             root_count+=root
+        else:
+            desc=fields(text,'scaled_descent')
+            if int(desc['root_inverse_reused'])!=1 or int(desc['root_divisions'])!=0:
+                raise ValueError('Multiple-G cached inverse/root dispatch differs')
         key=(c['bits'],c['D'],c['B2']);leaf=fields(text,'descent_values')['hash']
         if key in leaves and leaves[key]!=leaf:raise ValueError('Path/repetition changed leaf fingerprint')
         leaves[key]=leaf;checks+=1;coeffs+=int(fields(text,'s4_multiply_stats')['gmp_checked'])
@@ -99,7 +114,7 @@ def main():
             passed=bool(s['usable'] and expected and len(rows)==expected and max(errors)<=10)))
     ready={s['id'] for s in validation if s['passed']}
     all_errors=[r['engine_error_percent'] for r in blind['runs']]
-    independent=[r['engine_error_percent'] for r in blind['runs'] if r['case']['kind']!='root_replay']
+    independent=[r['engine_error_percent'] for r in blind['runs'] if not r['case']['kind'].endswith('_replay')]
     ranks=ranking(blind['runs'],model)
     accuracy_passed=bool(validation) and all(s['passed'] for s in validation)
     expected_ranks={(s['bits'],s['batch']) for s in model['stage1']}
@@ -111,7 +126,9 @@ def main():
         independently_verified_stage1_points=sum(r['batch'] for r in study['stage1']),
         fitting_stage2=sum(r['kind']=='train' for r in study['stage2']),
         diagnostic_b2_stage2=sum(r['kind']=='holdout' for r in study['stage2']),
-        validation_stage2=len(blind['runs']),blind_stage2=len(independent),root_replays=len(all_errors)-len(independent),
+        validation_stage2=len(blind['runs']),blind_stage2=len(independent),replayed_stage2=len(all_errors)-len(independent),
+        root_replays=sum(r['case']['kind']=='root_replay' for r in blind['runs']),
+        shape_replays=sum(r['case']['kind']=='shape_replay' for r in blind['runs']),
         clean_curves=checks,independent_gmp_coefficients=coeffs,g1_curves=g1_count,g1_root_reductions=root_count,
         matched_leaf_groups=len(leaves),validation_error_percent=[min(all_errors),max(all_errors)],
         blind_error_percent=[min(independent),max(independent)],blind_max_abs_percent=max(map(abs,independent)),

@@ -227,3 +227,39 @@ Remove-Item Env:NTT_CUDA_WAIT_MODE
 源码：[当前上下文等待控制](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:454)、[Auto配置保护](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:527)、[真实执行前绑定](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:597)、[关键平台及分块边界](D:/code/MPA-OpenCl/src/core/ecm_stage2_cost_profile.h:134)、[完整CPU进程计量](D:/code/MPA-OpenCl/tools/bench/bench_stage2_host_wait.py:56)、[实际配置/边界/队列门禁](D:/code/MPA-OpenCl/tools/test/test_stage2_cuda_wait.py:41)。
 
 [汇总](D:/code/MPA-OpenCl/docs/data/ecm_stage2_host_wait_20261006_summary.json)、[全部原始日志/存档/冻结源码及失败实验](D:/code/MPA-OpenCl/docs/data/ecm_stage2_host_wait_20261006_evidence.json)。GPU0外部生产未操作，未发布新运行profile或修改生产exe。
+
+
+## 9. G2与低/高B2过渡区标定（2026-10-06，采集中）
+
+本轮补齐区间生成和标定/验证工具，完整实测尚在运行；没有通过成本精度门禁或发布新的运行profile。原先G1范围截至 `D*(P-2)`，高B2从30亿起，中间有未测范围。新增 `ecm_cost_cases.py` 用整数点数生成各D的相邻范围：
+
+```text
+G1：原quarter-P起点 .. D*(P-1)-1
+G2：D*(P-1) .. D*(2P-1)-1
+bridge：D*(2P-1) .. min(large_training_B2)-1
+multiple：现有large B2范围
+```
+
+G1的完整根现在同时采平台起点与末端；G2含首点、四分之一/半/完整第二根及末端。chain阈值位于所选区间时加入阈值−2/0/+2训练点。bridge有两端、整数几何中点及独立留出点，填到large训练最小B2之前。三个D逐整数相邻不留D−1的小间隙；这仅描述计划覆盖，尚不能作为已验证的可用范围。
+
+`measure_ecm_costs.py --g2` 会同时启用G1，`--bridge`同时启用G1/G2和所有D留出。各regime保留独立标签，G1只有owner0，其余同时测resident640/0。fitter对g1/g2/bridge强制按D分别拟合，不合并为高G已有率，不修改特征版本7及17率模型。原生cprof按P/G/B2准入，不需要增加运行格式字段；通过完整审计之后才能导出。
+
+独立验证新增G2内部/最后非满根点、bridge内部及G分组边界、后续giant chunk及tail-chain阈值邻点。所有声明scope都进入验证，holdout失败不跳过。与训练相同I的工作形状即使B2有少量差别也单列shape_replay，root_replay保留；它们仍进入每scope精度门禁，收益排名和独立blind计数排除重放。审计另核对多G的cached inverse复用及无根长除法。
+
+新增 `--reuse-stage1 STUDY` 只复制完整、相同Stage1 binary和配置的原始观测，保存原study SHA、identity、controls与逐记录内容；不带入旧Stage2秒数。源保存点SHA仍检查，三条sigma26输入还在新计时前重新与CPU参考核对。审计要求原Stage1记录完全相同、GPU UUID相同、B1=1000/lcm/GPU1合同一致。此标定只覆盖lcm，未扩展choose12或生产B1。
+
+当前8cee冻结二进制上安排666条全新Stage2：G1 126、G2 252、bridge 180、large multiple108；其中540训练、126留出，三位宽2203/4423/8191、D30030/60060/120120、arena4096、owner640/0、两重复、固定随机seed20261011、默认CUDA等待方式。18批/117点Stage1原证据复用，不宣称重新运行。预期形成63个完整scope；耗时精度或排名失败仍不得发布部分子集。
+
+4项纯整数覆盖回归通过（各regime端点、实际G分类、旧G1兼容及chunk验证点），既有4项拟合回归通过。实测已覆盖四个regime，逐条采集保留必需GMP/oracle检查、树计数和fold路径；这属于进行中证据，不能替代完整审计。采集结束后仍须拟合、冻结新预测、完成全范围独立验证与原生auto/manual/INI/queue验收。[冻结计划及进度快照](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_bridge_20261006_plan.json)。
+
+```powershell
+$exe = 'build_cuda_cmake/_auto_b2_host_wait_20261006/native_final/ecm_cuda_stage2.exe'
+python tools/bench/measure_ecm_costs.py --stage2 $exe `
+  --save-dir build_cuda_cmake/_auto_b2_per_d_20261006/study `
+  --output run/new_bridge/study --train-b2 3000000000 6000000000 `
+  --holdout-b2 3750000000 --bridge --chain-min 8192 `
+  --shuffle-seed 20261011 --monitor-state `
+  --reuse-stage1 build_cuda_cmake/_auto_b2_per_d_20261006/study/measurements.json
+```
+
+新目录用于新采集。中断后用同一输出和同样controls加`--resume`，去掉首次导入用的`--reuse-stage1`；所有binary/工具/源码SHA仍须匹配，不要仅因观察超时重新开始。生产893和旧已发布profile保持，当前实验没有新的生产耗时/自动选择通过结论。

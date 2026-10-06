@@ -1972,3 +1972,8 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 ## 64. CPU等待和Auto B2真实边界（2026-10-06）
 
 可选等待flags降低三宽度完整进程CPU时间30%..64%，未消除长尾、未改默认。两进程本批更快而旧批较慢，保留全部结果，尚无稳定并发策略或总内存lease。Auto搜索补齐每个giant分块尾段的chain切换、G跳变及关键I的平台末端，CPU回归和真实packing计划验证；真实邻点chain chunks1/2/2。最终114项检查/9条实际curve通过，全批次104条/760628系数检查。新源码候选8cee仍须完整重标定，旧profile不可复用；当前发布组合仍4acc/v1。[实施与全部限制](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。
+
+
+## 65. G2及B2连续覆盖计划（2026-10-06，进行中）
+
+标定/拟合/验证工具现支持G2与G>=3过渡区，整数端点衔接G1与large范围；不把高G率直接外插到G2。Stage1证据可验证地复用，Stage2按新binary重新测量，相同I重放单列。666条完整矩阵正在GPU1采集，8项CPU回归通过；没有新的可用cprof、生产B1/choose12/泛型/总内存lease仍未覆盖。[计划和来源](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。
