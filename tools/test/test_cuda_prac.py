@@ -7,6 +7,7 @@ backend. No production-size Stage1 completion is required for these gates.
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -23,13 +24,14 @@ def rows(folder):
     return result
 
 
-def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, expect_records=True, tpi=0, registers=None, variant='baseline'):
+def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, expect_records=True, tpi=0, registers=None, variant='baseline', target_ms=100):
     folder.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, ECM_GPU_STAGE1_ALGO=algo, ECM_GPU_STAGE1_SAMPLE_SECONDS=str(sample))
     # Exercise native cold planning without changing the user's shared plan cache.
     env['ECM_PRAC_PLAN_CACHE'] = str(folder / 'plan_cache')
     env['ECM_STAGE1_TPI'] = str(tpi)
     env['ECM_PRAC_VARIANT'] = variant
+    env['ECM_PRAC_TARGET_MS'] = str(target_ms)
     for key in tuple(env):
         if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
     if registers is not None: env['ECM_PRAC_REG_TARGET'] = str(registers)
@@ -47,6 +49,8 @@ def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, 
     text = proc.stdout.decode('utf-8', errors='replace')
     (folder / ('sample.log' if sample else 'run.log')).write_text(text, encoding='utf-8')
     if not sample and expect_records and not rows(folder): raise RuntimeError(f'No Stage1 Q records: {folder}\n{text[-1500:]}')
+    if algo == 'prac' and expect_records:
+        assert f'PRAC slice target={float(target_ms):.3f} ms' in text, 'PRAC target was not selected'
     return text
 
 
@@ -80,6 +84,33 @@ def result_edges(exe, root, device):
     return results
 
 
+def target_edges(exe, root, device):
+    """Accepted upper bound and changing the target across a real checkpoint."""
+    settings = ('(2^4423-1)', 1000, 8, 26, 'lcm')
+    reference = root / 'reference'
+    run(exe, reference, *settings, 'cpu', device)
+    expected = rows(reference)
+    assert len(expected) == 8
+    results = []
+    for target in (50, 500):
+        folder = root / f'target{target}'
+        run(exe, folder, *settings, 'prac', device, registers=168, target_ms=target)
+        assert rows(folder) == expected, f'Target {target}: full Q mismatch'
+        results.append(dict(case='accepted_target', target_ms=target, Q=8, passed=True))
+    folder = root / 'resume_changed_target'
+    text = run(exe, folder, *settings, 'prac', device, sample=0.000001,
+               registers=168, target_ms=100)
+    assert 'sample limit reached' in text and not rows(folder)
+    assert len(list(folder.glob('.ecm_ckpt_*'))) == 1
+    text = run(exe, folder, *settings, 'prac', device, registers=168, target_ms=10)
+    assert 'checkpoint resumed' in text and rows(folder) == expected
+    assert not list(folder.glob('.ecm_ckpt_*'))
+    results.append(dict(case='resume_changed_target', sample_target_ms=100,
+                        resume_target_ms=10, Q=8, passed=True))
+    print('PASS target bounds and checkpoint target 100 -> 10', flush=True)
+    return results
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--exe', type=Path, default=Path('build_cuda_cmake/prac/ecm_cuda.exe'))
@@ -91,19 +122,23 @@ def main():
     ap.add_argument('--registers', type=int, choices=[0, 168, 255],
                     default=int(os.environ.get('ECM_PRAC_REG_TARGET', '0')))
     ap.add_argument('--variant', choices=['baseline', 'compact'], default='baseline')
+    ap.add_argument('--target-ms', type=float, default=100)
+    ap.add_argument('--curves', type=int, default=8, help='Batch size for primary N and sigma62 cases; checkpoint cases retain 16')
     args = ap.parse_args(); exe = args.exe.resolve(strict=True); root = args.output.resolve()
+    if not math.isfinite(args.target_ms) or not 10 <= args.target_ms <= 500 or args.curves < 1:
+        ap.error('Finite target in 10..500 ms and positive curves required')
     if args.registers == 168 and (args.bits != [4423] or args.tpi == 32):
         ap.error('168-register variant requires --bits 4423 and TPI16/default')
     if args.variant == 'compact' and (args.bits != [4423] or args.tpi == 32 or args.registers == 0):
         ap.error('compact requires --bits 4423, TPI16/default and registers 168/255')
     root.mkdir(parents=True, exist_ok=False)
     results = []
-    cases = [(f'M{n}', f'(2^{n}-1)', 1000, 8, 26, t) for n in args.bits for t in ('lcm', 'choose12')]
+    cases = [(f'M{n}', f'(2^{n}-1)', 1000, args.curves, 26, t) for n in args.bits for t in ('lcm', 'choose12')]
     if 2203 in args.bits:
         cases += [('sigma64', '(2^2203-1)', 10000, 8, 9007199254740881, 'choose12')]
         cases += [(f'boundary{b}', '(2^2203-1)', b, 4, 26, t) for b in (2, 3, 5) for t in ('lcm', 'choose12')]
     if 4423 in args.bits:
-        cases += [('sigma62', '(2^4423-1)', 1000, 8, 4611686018427511360, 'lcm')]
+        cases += [('sigma62', '(2^4423-1)', 1000, args.curves, 4611686018427511360, 'lcm')]
     if args.registers != 168 and args.variant != 'compact':
         cases += [('composite', '((2^127-1)*(2^521-1))', 1000, 8, 26, 'lcm')]
     for label, expr, b1, curves, sigma, exponent in cases:
@@ -116,7 +151,7 @@ def main():
             forced = args.tpi if expr in ('(2^2203-1)', '(2^4423-1)') else 0
             text = run(exe, folder, expr, b1, curves, sigma, exponent, algo, args.device,
                        tpi=forced, registers=args.registers if algo == 'prac' else 0,
-                       variant=args.variant if algo == 'prac' else 'baseline')
+                       variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms)
             if forced and algo != 'ladder': assert f'CGBN<{forced},' in text, 'Wrong TPI selected'
             actual = rows(folder)
             assert actual == expected, f'{label}/{algo}: full-Q save mismatch; inspect {folder}'
@@ -133,7 +168,7 @@ def main():
             folder = root / 'checkpoint' / f'{algo}_corrupt{int(corrupt)}'
             text = run(exe, folder, *settings, algo, args.device, sample=0.000001, tpi=args.tpi,
                        registers=args.registers if algo == 'prac' else 0,
-                       variant=args.variant if algo == 'prac' else 'baseline')
+                       variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms)
             assert 'sample limit reached' in text and not rows(folder), 'Partial Stage1 was published'
             files = list(folder.glob('.ecm_ckpt_*'))
             assert len(files) == 1, f'Missing checkpoint: {folder}'
@@ -144,7 +179,7 @@ def main():
                     payload = bytearray(cache.read_bytes()); payload[-1] ^= 1; cache.write_bytes(payload)
             text = run(exe, folder, *settings, algo, args.device, tpi=args.tpi,
                        registers=args.registers if algo == 'prac' else 0,
-                       variant=args.variant if algo == 'prac' else 'baseline')
+                       variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms)
             assert ('mismatch/corruption' if corrupt else 'checkpoint resumed') in text
             if corrupt and algo == 'prac': assert 'PRAC plan built' in text, 'Corrupt plan cache was accepted'
             assert rows(folder) == expected, f'{algo}: resume/corruption full Q mismatch'
@@ -152,9 +187,17 @@ def main():
             results.append(dict(case='checkpoint', algorithm=algo, corruption=corrupt, Q=len(expected), passed=True))
             print(f'PASS checkpoint/{algo}/corrupt={corrupt}: full Q matches', flush=True)
     results.extend(result_edges(exe, root / 'results', args.device))
+    results.extend(target_edges(exe, root / 'targets', args.device))
+    for invalid in ('0', 'nan', '501', '10x', ''):
+        folder = root / 'invalid_target' / (invalid or 'empty')
+        text = run(exe, folder, '(2^4423-1)', 1000, 8, 26, 'lcm', 'prac', args.device,
+                   expect_records=False, target_ms=invalid, registers=0)
+        assert 'ECM_PRAC_TARGET_MS must be finite and in [10,500]' in text
+        assert not rows(folder) and not list(folder.glob('.ecm_ckpt_*'))
+        results.append(dict(case='invalid_target', value=invalid, Q=0, passed=True))
     metadata = dict(exe=str(exe), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),
                     prac_registers=args.registers, bits=args.bits, device=args.device,
-                    requested_tpi=args.tpi, variant=args.variant,
+                    requested_tpi=args.tpi, variant=args.variant, target_ms=args.target_ms, curves=args.curves,
                     Q_comparisons=sum(r['Q'] for r in results), results=results)
     (root / 'summary.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
 

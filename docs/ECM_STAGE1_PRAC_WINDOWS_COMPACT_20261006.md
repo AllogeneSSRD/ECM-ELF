@@ -2,6 +2,8 @@
 
 日期：2026-10-06。上一阶段：[TPI/寄存器与 Nsight 报告](D:/code/MPA-OpenCl/docs/ECM_STAGE1_TPI_REGISTER_TUNING_20261006.md:1)。本阶段以该轮提交 `02e7422` 为基线，继续检验生产 B1 的短时投影与 4608/TPI16 寄存器压力。
 
+后续：[固定相同子乘积的切片、尾部硬件计数和生产目标参数](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_FIXED_SLICING_20261006.md:1)。本报告保留该轮 SHA6588996b 的历史数据；代码行号若有后续移动，应结合记录的版本阅读。
+
 ## 1. 实验身份
 
 设备为 GPU1，RTX 4060 Laptop，24 SM，sm89；TPB128，param0，Montgomery 构建。B1 为 10,000,000 / 260,000,000，性能采样均使用 sigma=26、`exponent=lcm`。默认算法仍为原 ladder，默认 TPI/档位仍按现有规则选择。

@@ -119,8 +119,10 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--production',action='store_true',help='Also verify 16-record B1=10m/260m subproducts using existing caches')
     p.add_argument('--production-counts',type=int,nargs='+',default=[16],help='Production window lengths, each 1..32')
+    p.add_argument('--production-chunks',type=int,nargs='+',default=[0],help='Per-launch record counts, 0 means unsplit')
     a=p.parse_args();exe=a.exe.resolve(strict=True);cache=(a.cache or exe.parent).resolve();root=a.output.resolve()
     if any(not 1 <= count <= 32 for count in a.production_counts):p.error('Production window counts must be 1..32')
+    if any(not 0 <= chunk <= min(a.production_counts) for chunk in a.production_chunks):p.error('Chunks must be in 0..smallest production count')
     root.mkdir(parents=True,exist_ok=False);results=[]
     for n in (2203,4423,8191):
         configs=[('baseline',0,255)]
@@ -137,14 +139,22 @@ def main():
             folder=root/f'boundary_b{b1}_{position}'
             r=sample(exe,folder,4423,b1,8,a.device,16,168,'compact',position,16,0.001,1,cache,True,sigma=sigma,exponent=exponent)
             r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
+    slicing_signatures={};bitwise_slice_checks=0
     if a.production:
         for b1 in (10000000,260000000):
-            for variant,registers in [('baseline',255),('compact',255),('compact',168)]:
+            for variant,registers in [('baseline',255),('baseline',168),('compact',255),('compact',168)]:
                 for count in a.production_counts:
-                    for position in ('prefix','middle','tail'):
-                        folder=root/f'production_b{b1}_{variant}_reg{registers}_c{count}_{position}'
-                        r=sample(exe,folder,4423,b1,8,a.device,16,registers,variant,position,count,0.001,1,cache,True)
-                        r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
+                    for chunk in a.production_chunks:
+                        for position in ('prefix','middle','tail'):
+                            folder=root/f'production_b{b1}_{variant}_reg{registers}_c{count}_chunk{chunk}_{position}'
+                            r=sample(exe,folder,4423,b1,8,a.device,16,registers,variant,position,count,0.001,1,cache,True,chunk=chunk)
+                            signature=hashlib.sha256((folder/'window_q.csv').read_bytes()).hexdigest()
+                            key=(b1,variant,registers,count,position)
+                            if key in slicing_signatures:
+                                assert signature==slicing_signatures[key], 'Slicing changed projective output bytes'
+                                bitwise_slice_checks+=1
+                            else:slicing_signatures[key]=signature
+                            r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
     # A real compact checkpoint remains byte-identical during window runs and
     # can subsequently resume via the baseline kernel at the same TPI.
     settings=('(2^4423-1)',1000,8,4611686018427511360,'choose12')
@@ -162,6 +172,8 @@ def main():
               ({'ECM_PRAC_WINDOW_COUNT':'-1'},'invalid ECM_PRAC_WINDOW_COUNT'),
               ({'ECM_GPU_STAGE1_SAMPLE_SECONDS':'nan'},'sample seconds must be finite'),
               ({'ECM_GPU_STAGE1_SAMPLE_SECONDS':'0'},'sample seconds must be finite'),
+              ({'ECM_PRAC_WINDOW_CHUNK':'-1'},'invalid ECM_PRAC_WINDOW_CHUNK'),
+              ({'ECM_PRAC_WINDOW_CHUNK':'5'},'chunk must not exceed selected count'),
               ({'ECM_PRAC_VARIANT':'compact','ECM_STAGE1_TPI':'32'},'policy is unavailable'),
               ({'ECM_PRAC_VARIANT':'compact','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
               ({'ECM_GPU_STAGE1_ALGO':'ladder'},'requires ECM_GPU_STAGE1_ALGO=prac')]
@@ -169,7 +181,9 @@ def main():
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),results=results,
         window_Q_compared=sum(r['Q_compared'] for r in results),resume_Q_compared=8,
         rejection_cases=len(failures),production_windows=a.production,
-        production_counts=a.production_counts if a.production else [],passed=True)
+        production_counts=a.production_counts if a.production else [],
+        production_chunks=a.production_chunks if a.production else [],
+        bitwise_slice_checks=bitwise_slice_checks,passed=True)
     (root/'summary.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k!='results'}),flush=True)
 

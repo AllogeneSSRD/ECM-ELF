@@ -4,7 +4,7 @@
 
 struct PracWindow {
     std::string position;
-    uint64_t first = 0, count = 0;
+    uint64_t first = 0, count = 0, chunk = 0;
     uint32_t warmup = 2;
     double seconds = 6;
     bool dump = false;
@@ -32,6 +32,9 @@ static PracWindow prac_window_settings(bool prac, uint64_t records) {
     uint64_t count = prac_window_integer("ECM_PRAC_WINDOW_COUNT", 16);
     if (!count || count > 32 || !records) throw std::runtime_error("PRAC window count must be 1..32");
     w.count = std::min(count, records);
+    w.chunk = prac_window_integer("ECM_PRAC_WINDOW_CHUNK", 0);
+    if (!w.chunk) w.chunk = w.count;
+    if (w.chunk > w.count) throw std::runtime_error("PRAC window chunk must not exceed selected count");
     if (w.position == "middle") w.first = (records - w.count) / 2;
     else if (w.position == "tail") w.first = records - w.count;
     uint64_t warmup = prac_window_integer("ECM_PRAC_WINDOW_WARMUP", 2);
@@ -68,23 +71,36 @@ static int prac_window_run(const PracWindow &w, const EcmPracPlan &plan,
         w.position.c_str(), (unsigned long long)w.first, (unsigned long long)w.count,
         plan.primes[size_t(w.first)].p, plan.primes[size_t(w.first + w.count - 1)].p,
         (unsigned long long)work, (unsigned long long)plan.work, w.warmup);
+    const uint64_t launches_per_round = (w.count + w.chunk - 1) / w.chunk;
+    outputf(OUTPUT_ALWAYS, "GPU: PRAC_WINDOW_SLICING chunk=%llu launches_per_round=%llu; same contiguous subproduct, restore once per round\n",
+        (unsigned long long)w.chunk, (unsigned long long)launches_per_round);
     auto wall_begin = std::chrono::steady_clock::now();
     uint64_t rounds = 0, measured = 0;
-    double kernel_ms = 0, next_print = 0;
+    double kernel_ms = 0, measured_wall_ms = 0, next_print = 0;
     double wall = 0;
     do {
+        auto round_begin = std::chrono::steady_clock::now();
         // Restore exactly the same non-degenerate input point each round. This
         // copy is outside event timing and cannot become repeated scalar growth.
         CUDA_CHECK(cudaMemcpy(gpu.data, seed.get(), bytes, cudaMemcpyDeviceToDevice));
-        CUDA_CHECK(cudaEventRecord(gpu.begin));
-        kernel<<<blocks, TPB_DEFAULT>>>(gpu.report, scalar_bits, w.first, w.count,
-            gpu.control, gpu.data, curves, 0, np0);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaEventRecord(gpu.end)); CUDA_CHECK(cudaEventSynchronize(gpu.end));
-        CGBN_CHECK(gpu.report);
-        float ms = 0; CUDA_CHECK(cudaEventElapsedTime(&ms, gpu.begin, gpu.end));
+        double ms = 0;
+        for (uint64_t offset = 0; offset < w.count; offset += w.chunk) {
+            uint64_t length = std::min(w.chunk, w.count - offset);
+            CUDA_CHECK(cudaEventRecord(gpu.begin));
+            kernel<<<blocks, TPB_DEFAULT>>>(gpu.report, scalar_bits, w.first + offset, length,
+                gpu.control, gpu.data, curves, 0, np0);
+            CUDA_CHECK(cudaGetLastError());
+            CUDA_CHECK(cudaEventRecord(gpu.end)); CUDA_CHECK(cudaEventSynchronize(gpu.end));
+            CGBN_CHECK(gpu.report);
+            float slice_ms = 0; CUDA_CHECK(cudaEventElapsedTime(&slice_ms, gpu.begin, gpu.end));
+            ms += slice_ms;
+        }
         ++rounds;
-        if (rounds > w.warmup) { kernel_ms += ms; ++measured; }
+        if (rounds > w.warmup) {
+            kernel_ms += ms; ++measured;
+            measured_wall_ms += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - round_begin).count();
+        }
         wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_begin).count();
         if (measured && kernel_ms > 0 && wall >= next_print) {
             double projected = double(plan.work) * kernel_ms / (double(work) * measured) / 1000 / curves;
@@ -98,6 +114,9 @@ static int prac_window_run(const PracWindow &w, const EcmPracPlan &plan,
     outputf(OUTPUT_ALWAYS, "GPU: PRAC_WINDOW_DONE rounds=%llu measured=%llu kernel_ms=%.6f work=%llu projected=%.6f s/curve wall=%.6f seed_bytes=%zu restore_bytes=%llu\n",
         (unsigned long long)rounds, (unsigned long long)measured, kernel_ms,
         (unsigned long long)work, projected, wall, bytes, (unsigned long long)(bytes * rounds));
+    outputf(OUTPUT_ALWAYS, "GPU: PRAC_WINDOW_COST measured_wall_ms=%.6f measured_launches=%llu boundary_logical_bytes_per_round=%llu\n",
+        measured_wall_ms, (unsigned long long)(launches_per_round * measured),
+        (unsigned long long)(uint64_t(6) * curves * (bits / 8) * launches_per_round));
     if (w.dump) {
         uint32_t dummy;
         auto export_kernel = cgbn_stage1_domain_dispatch(bits, &dummy, ECM_DOMAIN_EXPORT, requested_tpi);

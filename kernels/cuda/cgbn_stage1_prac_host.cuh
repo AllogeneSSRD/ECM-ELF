@@ -170,6 +170,17 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
                 (unsigned long long)*sigma, tpi, bits, curves, blocks, occupied, control_bytes);
         if (window.enabled()) return prac_window_run(window, plan, gpu, kernel, s_bits,
             bits, tpi, requested_tpi, curves, *sigma, B1, np0, blocks, data, gputime);
+        double target_ms = 100;
+        if (prac) {
+            if (const char *value = getenv("ECM_PRAC_TARGET_MS")) {
+                char *end = nullptr;
+                target_ms = std::strtod(value, &end);
+                if (end == value || *end || !std::isfinite(target_ms) || target_ms < 10 || target_ms > 500)
+                    throw std::runtime_error("ECM_PRAC_TARGET_MS must be finite and in [10,500]");
+            }
+            outputf(OUTPUT_ALWAYS, "GPU: PRAC slice target=%.3f ms, adaptive bounds=%.3f..%.3f ms\n",
+                target_ms, target_ms * 0.8, target_ms * 1.2);
+        }
         uint64_t completed_work = 0;
         if (prac) for (uint64_t i = 0; i < h.next; ++i) completed_work += uint64_t(plan.primes[size_t(i)].work) * plan.primes[size_t(i)].repetitions;
         else completed_work = h.next - 1;
@@ -205,8 +216,9 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
                 // Weighted work, not prime count: prime sizes/chains vary over the run.
                 print_progress(100.0 * completed_work / total_work, completed_work, work, per_curve, elapsed * 1000, remaining, true,
                                prac ? "M-equiv" : "bits");
-                outputf(OUTPUT_NORMAL, "GPU: %s slice next=%llu/%llu, kernel=%.6f s, projected=%.6f s/curve\n",
-                        prac ? "PRAC" : "resident", (unsigned long long)h.next, (unsigned long long)total, kernel_seconds, per_curve);
+                outputf(OUTPUT_NORMAL, "GPU: %s slice next=%llu/%llu, kernel=%.6f s, projected=%.6f s/curve, length=%llu, slice-ms=%.3f\n",
+                        prac ? "PRAC" : "resident", (unsigned long long)h.next, (unsigned long long)total, kernel_seconds, per_curve,
+                        (unsigned long long)length, double(ms));
                 last_print = elapsed;
             }
             auto now = std::chrono::steady_clock::now();
@@ -222,8 +234,8 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
                 outputf(OUTPUT_ALWAYS, "GPU: sample limit reached; incomplete Stage1 saved only as checkpoint\n");
                 return ECM_ERROR; // Driver must not publish an incomplete final Stage1 save.
             }
-            if (ms < 80) chunk = std::max<uint64_t>(chunk + 1, chunk * 11 / 10);
-            else if (ms > 120) chunk = std::max<uint64_t>(1, chunk * 9 / 10);
+            if (ms < target_ms * 0.8) chunk = std::max<uint64_t>(chunk + 1, chunk * 11 / 10);
+            else if (ms > target_ms * 1.2) chunk = std::max<uint64_t>(1, chunk * 9 / 10);
         }
         uint32_t dummy;
         launch(cgbn_stage1_domain_dispatch(bits, &dummy, ECM_DOMAIN_EXPORT, requested_tpi), 0, 0);

@@ -35,6 +35,10 @@ def main():
     p.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     p.add_argument('--registers', type=int, choices=[0, 168, 255], default=255)
     p.add_argument('--variant', choices=['baseline', 'compact'], default='baseline')
+    p.add_argument('--window', choices=['prefix', 'middle', 'tail'])
+    p.add_argument('--window-count', type=int, default=32)
+    p.add_argument('--window-chunk', type=int, default=0)
+    p.add_argument('--window-warmup', type=int, default=2)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--seconds', type=float, default=6)
     p.add_argument('--launch-skip', type=int, default=2)
@@ -59,6 +63,12 @@ def main():
                 'ECM_GPU_STAGE1_SAMPLE_SECONDS', 'ECM_PRAC_VARIANT', 'ECM_PRAC_PLAN_CACHE')
     for key in tuple(env):
         if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
+    if a.window:
+        if a.algorithm != 'prac' or not 1 <= a.window_count <= 32 or not 0 <= a.window_chunk <= a.window_count or not 0 <= a.window_warmup <= 32:
+            p.error('Window capture requires PRAC, count 1..32, chunk 0..count, warmup 0..32')
+        env.update(ECM_PRAC_WINDOW=a.window, ECM_PRAC_WINDOW_COUNT=str(a.window_count),
+                   ECM_PRAC_WINDOW_CHUNK=str(a.window_chunk), ECM_PRAC_WINDOW_WARMUP=str(a.window_warmup))
+        env_keys += ('ECM_PRAC_WINDOW', 'ECM_PRAC_WINDOW_COUNT', 'ECM_PRAC_WINDOW_CHUNK', 'ECM_PRAC_WINDOW_WARMUP')
     env.pop('ECM_GPU_DUMP', None)
     app = [str(exe), '-gpu', '-d', str(a.device), '--gpu-param', '0', '-sigma', '0:26',
            '-gpucurves', str(a.curves), '--ckpt', '0', '--exp-cache', str(a.exp_cache.resolve()),
@@ -87,10 +97,11 @@ def main():
     command = prefix + ['C:/Windows/System32/cmd.exe', '/d', '/c', str(app_wrapper)]
     (root / 'command.json').write_text(json.dumps(dict(command=command, profiler=a.tool,
         binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(), environment={k:env[k] for k in env_keys},
-        measurement='profile only; replay/instrumentation changes timing'), indent=2)+'\n', encoding='utf-8')
+        measurement='profile only; replay/instrumentation changes timing',
+        input_scope='reset-point subproduct window' if a.window else 'ordinary production prefix'), indent=2)+'\n', encoding='utf-8')
     if a.prepare_only:
         wrapper = root / 'profile.cmd'
-        settings = 'set ECM_GPU_DUMP=\nset ECM_PRAC_WINDOW=\nset ECM_PRAC_WINDOW_COUNT=\nset ECM_PRAC_WINDOW_WARMUP=\nset ECM_PRAC_WINDOW_DUMP=\n' + ''.join('set '+k+'='+env[k]+'\n' for k in env_keys)
+        settings = 'set ECM_GPU_DUMP=\nset ECM_PRAC_WINDOW=\nset ECM_PRAC_WINDOW_COUNT=\nset ECM_PRAC_WINDOW_CHUNK=\nset ECM_PRAC_WINDOW_WARMUP=\nset ECM_PRAC_WINDOW_DUMP=\n' + ''.join('set '+k+'='+env[k]+'\n' for k in env_keys)
         wrapper.write_text('@echo off\ncd /d "'+str(root)+'"\n'+settings+
             ' '.join('"'+x+'"' for x in command)+' > "'+str(root/'run.log')+'" 2>&1\nexit /b %errorlevel%\n', encoding='utf-8')
         # Elevation is explicit; this prepared file never starts a privileged process itself.

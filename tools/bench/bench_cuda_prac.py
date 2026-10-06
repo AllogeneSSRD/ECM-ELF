@@ -20,6 +20,7 @@ import time
 PROGRESS = re.compile(r'GPU: \[[^\]]+\].*?([\d.]+)%.*?~([\d.]+) s/curve.*?elapsed ([\d.]+)s')
 PRECISE = re.compile(r'GPU: (PRAC|resident) slice next=(\d+)/(\d+).*?projected=([\d.]+) s/curve')
 GEOMETRY = re.compile(r'CGBN<(\d+),(\d+)>, curves=(\d+), blocks=(\d+), blocks/SM=(\d+)')
+SLICE_COST = re.compile(r'length=(\d+), slice-ms=([\d.]+)')
 
 
 def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict:
@@ -31,6 +32,8 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
     variant = getattr(args, 'prac_variant', 'baseline') if algo == 'prac' else 'baseline'
     env['ECM_PRAC_VARIANT'] = variant
     env['ECM_PRAC_PLAN_CACHE'] = str(args.exp_cache)
+    target_ms = getattr(args, 'prac_target_ms', 100)
+    env['ECM_PRAC_TARGET_MS'] = str(target_ms)
     for key in tuple(env):
         if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
     env.pop('ECM_GPU_DUMP', None)
@@ -41,7 +44,7 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
                '-savea', 'completed.save', str(b1), '0']
     log = folder / 'run.log'
     launched = time.monotonic()
-    samples = []; precise = []; offset = 0; pending = ''; first = None; killed = False
+    samples = []; precise = []; slice_costs = []; offset = 0; pending = ''; first = None; killed = False
     print(f'START algo={algo} variant={variant} reg={args.prac_registers} n={bits} B1={b1} C={args.curves} TPI={args.tpi} device={args.device}', flush=True)
     with (folder / 'n.txt').open('rb') as source, log.open('wb') as out:
         process = subprocess.Popen(command, cwd=folder, env=env, stdin=source,
@@ -63,6 +66,9 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
                     if match and samples:
                         precise.append(dict(next=int(match[2]), total=int(match[3]),
                                             s_per_curve=float(match[4]), elapsed=samples[-1]['elapsed']))
+                    match = SLICE_COST.search(line)
+                    if match and samples:
+                        slice_costs.append(dict(length=int(match[1]), milliseconds=float(match[2]), elapsed=samples[-1]['elapsed']))
                 finished = process.poll() is not None
                 if finished: break
                 now = time.monotonic()
@@ -86,6 +92,7 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
     result = dict(algorithm=algo, bits=bits, B1=b1, curves=args.curves, device=args.device,
                   requested_tpi=args.tpi,
                   exponent=args.exponent, prac_registers=args.prac_registers, prac_variant=variant,
+                  prac_target_ms=target_ms if algo=='prac' else None,
                   projected_s_per_curve=median,
                   rate_min=min(r['s_per_curve'] for r in tail), rate_max=max(r['s_per_curve'] for r in tail),
                   partial_run=True, sample_count=len(tail), elapsed=chosen[-1]['elapsed'],
@@ -94,6 +101,9 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
                   log=str(log), command=command, exit_code=process.returncode, terminated=killed,
                   final_save_present=completed_records > 0, final_save_records=completed_records)
     text = log.read_text(encoding='utf-8', errors='replace')
+    if algo == 'prac' and f'PRAC slice target={target_ms:.3f} ms' not in text:
+        raise RuntimeError(f'Binary did not select requested PRAC slice target: {log}')
+    result['slice_costs'] = slice_costs
     geometry = GEOMETRY.search(text)
     if geometry:
         result['geometry'] = dict(zip(('tpi', 'container_bits', 'curves', 'grid_blocks', 'resident_blocks_per_sm'),
@@ -122,6 +132,7 @@ def main():
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--prac-registers', type=int, choices=[0, 168, 255], default=0)
     parser.add_argument('--prac-variant', choices=['baseline', 'compact'], default='baseline')
+    parser.add_argument('--prac-target-ms', type=float, default=100)
     parser.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     parser.add_argument('--exp-cache', type=Path, help='Shared validated B1/PRAC cache; defaults to exe directory')
     parser.add_argument('--exponent', choices=['lcm', 'choose12'], default='lcm')
@@ -129,6 +140,7 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.warmup < args.seconds or args.curves < 1 or args.repeats < 1:
         parser.error('Expected 0 <= warmup < seconds and positive curves/repeats')
+    if not 10 <= args.prac_target_ms <= 500:parser.error('PRAC target must be in 10..500 ms')
     if args.tpi and 'ladder' in args.algorithms:
         parser.error('TPI overrides require --algorithms resident prac (the original ladder is unchanged)')
     if args.prac_variant == 'compact' and (args.bits != [4423] or args.tpi == 32 or args.prac_registers == 0):
