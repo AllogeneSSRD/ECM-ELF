@@ -4464,3 +4464,11 @@ Systems2026 GPU1进程树trace：GPU活动并集1.714s/首尾2.172s=78.95%；cud
 重新标定18 Stage1批/117独立核验点、36 Stage2拟合+12留出+36盲测，84/0、472264 GMP抽样系数、21组leaf一致。虽然60亿留出各scope均≤10%，45亿blind对M2203驻留/回退最大25.125/21.384%，M4423为23.230/20.951%；M8191仅3.058/2.402%。三宽度最快D60060/owner640排名均正确，但不替代成本精度。导出器只发布M8191两scope，失败范围保留数据且auto明确拒绝；未放宽门限。按D分率的一次诊断未解决小位宽偏差，原因待交叉顺序/状态采样验证。
 
 原生33调用/213断言、4条实际auto/manual/queue曲线通过，leaf均7271918632011950804、raw因子一致。plan-only不推进，worker失败留queue/不写成功result，成功保留原任务到finished；相对INI profile路径、非零queue B2忽略auto profile验证。默认实测范围内选择下界B2=30亿/D60060，range_limited=true。当前仅精确M8191/B1=1000/lcm、arena4096、三D/两path，非通用生产Auto B2；小位宽、高B1/choose12、低B2/G1、在线反馈/并发及NTT优化仍继续。[命令、公式、源码line与可移植证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_NATIVE.md)。
+
+## 88. 多端点/交叉采样恢复三宽度范围，chain拐点实测（2026-10-06）
+
+同4acc先48条交叉诊断，重复通常相差0～2.5%，旧率仍高估约10～37%；30/60亿诊断拟合使45亿误差约5%以内。新增多train-B2、固定seed随机顺序与GPU/系统CPU状态采样；18 Stage1批/117独立核验点，72 Stage2拟合+12留出，再冻结预测36条52.5亿新blind。固定工作特征重复中位数后拟合典型阶段成本，原始秒级descent等等待全保留，不当平均长尾保证；两个CPU回归先红后绿。120/0、761568 GMP系数、30组leaf一致；六scope全部≤10%，blind−6.986..+5.279%。M4423排名慢1.893%仍≤5%，另两宽度匹配最快。新profile fbe661…6ffd恢复2203/4423/8191、B1=1000/lcm/arena4096/三D两path，原生37调用/255断言与8条实际auto/manual/queue通过。M2203选内点3459335879，但不是全局最优证明。
+
+同binary D120120/B2=10亿(G1)/30亿(G3)，三个宽度ABBA共24性能+6独立仿射对照，99912点mismatches0。30亿giant减少83.52/82.98/70.69%；M8191full9.844801→5.928964s(−39.78%)。M4423full对照有长尾，不能把其48.46%当普遍加速；没改默认32768，下一步补更小I/边界/退化点，并把阈值策略纳入profile与原生规划。
+
+G1实际执行通过但Auto B2尚未纳入：预先inverse不做，scaled descent却会自行生成长度P的逆元，不能直接删除逆元成本。另84条runtime Gdevice pairs全部匹配精确n−1/I−G计数，旧floor((n+h)/(2h))多算padding单边复制，应改floor((n+h−1)/(2h))并重新标定Python/native模型，同时计复制/launch。原测量工具原码冻结，采样器NVML clock标签及异常清理随后小修正，原始数据仍可核验。[最新报告、命令与完整证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_MULTIANCHOR.md)。

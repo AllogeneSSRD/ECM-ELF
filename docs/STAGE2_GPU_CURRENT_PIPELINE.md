@@ -1954,3 +1954,9 @@ GPU1/生产893/默认检查，S2203/4423/8191的CPU/GMP有效lcm保存点，52�
 4acc独立候选实现--auto-b2、INI stage2_auto_b2/成本参数和worktodo有效零B2；实际curve worker按设备可用显存、真实packing、实测B1/位宽/arena/D/path联合最大化K/(T1+T2)。非零B2固定，结果附原请求与实际auto_plan，plan-only无队列副作用。profile文件限1MiB/读锁/SHA，精确binary/device/runtime/backend身份与已登记配置检查；没有总显存lease。
 
 重新标定及36条blind共84条clean、472264 GMP系数。M8191各path最大误差≤3.06%；2203/4423新blind最大约21～25%，自动导出排除这些范围，未放宽10%门限。原生验收33调用/213断言及4条实际GPU曲线通过，auto/manual/队列叶哈希与因子相同，成功/失败事务行为验证。默认选择实测下界30亿，仍需低B2/G1/高B1和小位宽可靠标定，非通用Auto B2。完整命令、范围与源码见[原生实现](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_NATIVE.md)。
+
+## 62. 多B2标定与小点数chain收益（2026-10-06）
+
+同4acc采用30/60亿训练、37.5亿留出、52.5亿新blind及随机交叉。典型阶段中位数拟合保留全部等待样本；120条clean/761568 GMP系数/30组leaf，blind最大6.986%，三宽度六path恢复发布。37调用/255断言、8条实际auto/manual/queue验证；M4423选择慢于实测最快1.893%，不宣称全部精确最优。profile仍仅B1=1000/lcm、三精确位宽/三D/arena4096范围。
+
+GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿射点对照零失配，M8191/30亿full少39.78%；小输入默认阈值策略仍需更小I/边界与退化点。G1执行已验证但inverse移入scaled descent、owner无同样活跃条件，需要单独成本。当前经验树工作特征还多算单边复制；精确pair census与84条runtime全部吻合，后续同步修正Python/native并重新标定。并发/总显存lease与NTT launch优化继续。[完整报告](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_MULTIANCHOR.md)。

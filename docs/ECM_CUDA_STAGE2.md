@@ -296,3 +296,9 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 独立4acc候选可使用`--auto-b2 --cost-profile FILE`，INI使用`stage2_auto_b2=1`、`stage2_cost_profile=FILE`；仅最终有效B2=0触发自动选择，非零CLI/worktodo/INI保持固定。实际worker联合选择B2/D/owner路径并记录auto_plan，保留原请求；`--plan-only`仅规划、不写result/推进队列。可设置Stage1 batch或每曲线秒数、Stage2 ratio、B2区间、arena与owner预算。
 
 当前运行profile精确绑定GPU1/4acc/PTX3/outer0/accounting2，只发布独立盲测通过的M8191/B1=1000/lcm、30亿～60亿/三D/arena4096/两path范围。2203/4423成本精度未达10%门限，auto拒绝且保留手动运行方式；高B1/泛型N/G1/choose12未覆盖。33调用/213断言与4条auto/manual/queue实际曲线通过；最佳落在下界，非通用生产默认。完整命令及INI样例见[原生 Auto B2 使用与验收](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_NATIVE.md)。
+
+## 2026-10-06 三位宽成本profile与chain对照
+
+最新`docs/data/ecm_auto_b2_multianchor_20261006_gpu1.cprof`适配同4acc二进制，恢复M2203/M4423/M8191、B1=1000/lcm、30亿～60亿/三D/arena4096/两path，六个scope新盲测最大6.99%，原生37调用/255断言及8条实际曲线通过。命令与INI接口保持，只需替换profile路径；高B1/泛型N/G1/choose12仍须扩展。
+
+同binary强制chain在I8327/24977更快，99912仿射点零失配；可以用`NTT_GIANT_CHAIN_MIN=0`配显式B2/D复现实测，但与当前auto成本配置冲突，自动模式会拒绝。默认阈值尚未调整。详情、原始样本及G1/树成本修正方向见[最新标定与阈值实验](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_MULTIANCHOR.md)。

@@ -26,13 +26,14 @@ def main():
     p.add_argument('--exe',type=Path,required=True);p.add_argument('--profile',type=Path,required=True)
     p.add_argument('--model',type=Path,required=True);p.add_argument('--save-dir',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--expected-bits',type=int,nargs='+',default=[8191],help='Widths expected to pass independent profile publication')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();profile=a.profile.resolve();binary_sha=sha(exe);profile_sha=sha(profile)
     model=json.loads(a.model.read_text(encoding='utf-8'))
     if model['identity']['stage2_sha256']!=binary_sha:raise ValueError('Binary/model mismatch')
     runtime_bits={int(line.split()[1]) for line in profile.read_text().splitlines() if line.startswith('scope ')}
-    if runtime_bits!={8191}:raise ValueError('This acceptance matrix expects the current validated 8191-bit profile')
+    if runtime_bits!=set(a.expected_bits):raise ValueError('Published widths do not match the required acceptance scope')
     save=a.save_dir.resolve()/'m8191.save';save_sha=sha(save)
     ini=out/'manual.ini';ini.write_text('[gpu]\ndevice=1\n[stage2]\nstage2_factor_only=1\n',encoding='utf-8')
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
@@ -86,7 +87,15 @@ def main():
     invoke('missing_profile',['--save',save,'--auto-b2','--plan-only'],False,reason='requires --cost-profile')
     invoke('legacy_zero',['--save',save,'--b2',0,'--plan-only'],False,reason='B2 must exceed')
     for bits in (2203,4423):
-        invoke('excluded_'+str(bits),['--save',a.save_dir.resolve()/f'm{bits}.save','--auto-b2','--cost-profile',profile,'--plan-only'],False,reason='no measured')
+        args=['--save',a.save_dir.resolve()/f'm{bits}.save','--auto-b2','--cost-profile',profile,'--plan-only']
+        if bits not in runtime_bits:
+            invoke('excluded_'+str(bits),args,False,reason='no measured')
+        else:
+            plan=invoke('included_'+str(bits),args)[0];plans[str(bits)]=plan
+            scope=next(s for s in model['stage2'] if s['bits']==bits and s['owner_resident']==plan['owner_resident'])
+            phases,f=predict(bits,plan['D'],plan['B2'],scope['rates'])
+            check((plan['P'],plan['I'],plan['G'],plan['fold_length'])==(f['P'],f['I'],f['G'],f['fold_ntt']),str(bits)+': native geometry')
+            for key,value in plan['phases'].items():check(math.isclose(value,phases[key],rel_tol=1e-12,abs_tol=1e-12),str(bits)+': native phase '+key)
     for name,n,b1 in [('bad_b1','(2^8191-1)',1001),('generic_n','(2^8191-3)',1000)]:
         fixture=out/(name+'.save');fixture.write_text(f'METHOD=ECM; PARAM=0; SIGMA=26; B1={b1}; N={n}; X=3;\n')
         invoke(name,['--save',fixture,'--auto-b2','--cost-profile',profile,'--plan-only'],False,
@@ -140,6 +149,21 @@ def main():
     check(len(set(leaves.values()))==1,'same-binary auto/manual/queue leaf equality')
     check(all(row['factors']==actual['actual_auto']['factors'] for row in actual.values()),'same-binary factor equality')
     check(finished.read_text()==line+line.replace(',0,0,1,',f',{b2},0,1,'),'finished keeps original tasks')
+    for bits in sorted(runtime_bits-{8191}):
+        selected=plans[str(bits)];pair=[];hashes=[]
+        for mode in ('auto','fixed'):
+            name=f'actual_m{bits}_{mode}';result=out/(name+'.jsonl');log=out/(name+'.log')
+            args=['--save',a.save_dir.resolve()/f'm{bits}.save']
+            if mode=='auto':args+=['--auto-b2','--cost-profile',profile]
+            else:args+=['--b2',selected['B2'],'--d',selected['D'],'--arena-mb',selected['arena_mb']]
+            invoke(name,[*args,'--factor-only','--results',result,'--log',log],
+                extra_env={'NTT_FOLD_DEVICE_MAX_MB':str(selected['owner_runtime_mb']),'NTT_D_MODEL':'0'})
+            row=json.loads(result.read_text());text=log.read_text()
+            check(row['bad_factors']==0 and row['B2']==selected['B2'] and row['auto_b2']==(mode=='auto'),name+': arithmetic/result')
+            check(all(t in text for t in ('gmp_selftest_bad=0','gmp_check_bad=0','pending=0','clean=1')),name+': required checks')
+            check(all(1<int(f)<(1<<bits)-1 and pow(2,bits,int(f))==1 for f in row['factors']),name+': divisors')
+            actual[name]=row;pair.append(row['factors']);hashes.append(fields(text,'descent_values')['hash']);leaves[name]=hashes[-1]
+        check(pair[0]==pair[1] and hashes[0]==hashes[1],f'M{bits}: auto/manual equality')
     summary=dict(passed=True,checks=checks,calls=len(rows),binary_sha256=binary_sha,profile_sha256=profile_sha,
         save_sha256=save_sha,plans=plans,actual=actual,leaf_hashes=leaves,cases=rows)
     (out/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')

@@ -2,6 +2,8 @@
 
 日期：2026-10-05。延续 [设计](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_TUNE_DESIGN.md) 和 [阶段成本标定](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_PHASE_CALIBRATION.md)。本阶段已实现并运行原生 Auto B2；当前发布的成本 profile 仅覆盖 **GPU1 / 精确 M8191 / B1=1000 / lcm / 指定后端与预算范围**。这仍不是任意生产 B1、模数和设备可直接使用的通用自动选择器。
 
+2026-10-06更新：同4acc二进制的多端点重标定已发布三个宽度/六路径范围，独立盲测最大误差6.99%，见 [最新范围与chain实验](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_MULTIANCHOR.md)。本页保留10月5日的原生接口验收与当时profile记录。
+
 ## 1. 当前可用构建与命令
 
 独立可执行文件：`build_cuda_cmake/_auto_b2_native_20261005/native/ecm_cuda_stage2.exe`，SHA256 `4acc15d26593eb9d8e66ff8f62ad8a64e12a18b04a4d01966dc1399580c4d9e2`。sm89、固定 Goldilocks PTX3、outer-unroll=0，25 个原始依赖冻结在同目录 `sources/`。完整 CUDA 编译约374.4秒，最终主程序编译约5.2秒。成本 profile 与二进制精确绑定；重新编译后必须重新标定。
