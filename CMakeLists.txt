@@ -287,6 +287,12 @@ if(ECM_ENABLE_CUDA)
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu
+        kernels/cuda/cgbn_stage1_prac_kernels.cu
+        kernels/cuda/cgbn_stage1_prac_small.cu
+        kernels/cuda/cgbn_stage1_prac_tpi16.cu
+        kernels/cuda/cgbn_stage1_prac_tpi32.cu
+        kernels/cuda/cgbn_stage1_prac_alternate32.cu
+        src/core/ecm_prac_plan.cpp
         kernels/cuda/cgbn_stage1_kernels_tpi4.cu
         kernels/cuda/cgbn_stage1_kernels_tpi8.cu
         kernels/cuda/cgbn_stage1_kernels_tpi16.cu
@@ -309,6 +315,8 @@ if(ECM_ENABLE_CUDA)
         kernels/cuda/cgbn_stage1_kernels_param2_tpi32.cu
     )
 
+    set_target_properties(ecm_cuda PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+                                              CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
     target_include_directories(ecm_cuda PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src

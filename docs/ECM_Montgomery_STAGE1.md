@@ -1,5 +1,7 @@
 # ECM Montgomery Stage-1（Suyama sigma，SIMD 优先）开发文档
 
+> **PRAC 后续（2026-10-06）**：§12 的旧脚本存在素数幂重复加权、单种子搜索及 B/C 状态交换错误，旧否定结论已撤回。[可行性报告](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_FEASIBILITY_20261006.md:1) 给出正确成本；[CUDA 实施报告](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_IMPLEMENTATION_20261006.md:1) 记录 opt-in PRAC/驻留 ladder、独立检查点、实际寄存器、Q 门禁和生产 B1 预计 s/curve。
+
 > 状态：**设计阶段（grilling 进行中）**。本文档按"事实 → 决策 → 实现 → 存档格式"顺序累积记录；
 > 每一条决策都会写清**理由**与**被否掉的选项**，因为这类曲线族/sigma 语义的坑一旦踩错，
 > 后面所有对齐工作都会白做。

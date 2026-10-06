@@ -49,6 +49,8 @@ int ecm_backend_prepare(size_t n_log2, int verbose, int device_index,
                  carries a full sigma (the CPU path uses the same 53-bit random
                  generator); the batch case (gpu_param = 3) requires sigma + curves
                  <= 2^32 and rejects larger values.
+     B1/torsion: integer lcm bound and multiplier (1 or 12), used by CUDA PRAC;
+                 OpenCL ignores these and continues to consume s.
      gpu_param : curve parametrization, 3 = gmp-ecm batch (historical GPU path) or
                  0 = Suyama param0 (Prime95 sigma_type=1 / gmp-ecm -param 0, the
                  same curves the CPU path runs).  0 is CUDA-only for now: the
@@ -58,6 +60,7 @@ int ecm_backend_stage1(mpz_t *factors, int *array_found,
                        uint32_t curves, uint64_t *sigma,
                        unsigned long checkpoint_interval_ms,
                        float *gputime, int verbose, int gpu_param,
+                       uint64_t B1, uint32_t torsion,
                        const char *gpu_mul_path, const char *gpu_sqr_path,
                        const char *gpu_add_path, const char *gpu_sub_path,
                        const char *gpu_special_mult_path);

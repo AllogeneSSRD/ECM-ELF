@@ -1,15 +1,21 @@
 # X-only scalar multiplication for fixed public scalars: can anything beat 1 doubling + 1 addition per bit?
 
+> **Follow-up, 2026-10-06:** [PRAC/Lucas feasibility](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_FEASIBILITY_20261006.md:1) reports exact Stage1 prime multiplicities, ten-seed Prime95 search, and legal scalar relations. The param0 work-count reduction is 11.2–13.6% for B1=10³..10⁶, pending GPU benchmarks. The exact lcm bit length at B1=100000 is 144344; the older 144352 below was incorrect.
+
 **Scope.** Targets a CUDA ECM stage-1 kernel computing [s]P, s = lcm(1..B1), B1 = 1e5
-(bits(s) = 144352, not 144000 — see §9), on a Montgomery curve in x-only XZ
+(bits(s) = 144344, not 144000 — see §9), on a Montgomery curve in x-only XZ
 coordinates, fixed public scalar (no SIMT divergence), CGBN field ops with S = M.
 
-**Verdict up front.** No. For x-only Montgomery arithmetic with a fixed affine
-difference, 1 doubling + 1 differential addition per bit is not merely what the
-plain ladder happens to cost — it is the structural floor, and every published
-alternative (PRAC/Lucas chains, co-Z, windowed, double-base) is *worse* in this
-cost model. The single real lever is the constant multiply inside the doubling,
-which you already exploit. Details, exact counts, and citations below.
+**2026-10-06 scope correction.** The historical conclusions below primarily price
+the cheap param3 ladder. They do not establish a structural lower bound for the
+current Suyama param0 kernel (`6M+4S`). A general projective differential chain
+must be evaluated with its own DBL/DADD costs and measured register overhead.
+With `S=M`, its nominal break-even condition against param0 is `5d+6a<10`, where
+`d` and `a` are DBL and DADD counts per scalar bit. The Fibonacci bound counts
+chain steps including doublings; it is not a lower bound on DADD alone.
+Ordinary w-NAF still cannot be transplanted without providing the required
+difference points. See the current [Stage1/CGBN review](D:/code/MPA-OpenCl/docs/ECM_STAGE1_CGBN_PERFORMANCE_REVIEW_20261006.md:1)
+for candidate priorities and the limits of the older measurements below.
 
 ---
 
@@ -250,8 +256,10 @@ difference is affine, total M-units/bit, and speedup vs baseline 8.10 (your unit
   (there is no `prac.c`; no `prac_chain`/`prac_chain2`), GMP-ECM tries 10 α values
   `{1/φ, …}` and keeps the cheapest, and drives stage 1 as: plain doublings for 2^k,
   plain ×3 for 3^k, then `prac()` per prime, then repeated `prac()` per prime power.
-  Prime95's PRAC is `lucas_mul()` in **`gwnum/ecmstag1.c`**, not `ecm.cpp` (whose
-  `ecm.cpp` only holds an unreferenced `int PRAC_SEARCH = 7;`).
+  **Source correction, 2026-10-06:** in the local Prime95 31.06 source, active
+  `lucas_mul()` is in [ecm.cpp:2711](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/ecm.cpp:2711),
+  with the ten-seed search in `ell_mul()` at line 2857. The earlier assertion
+  that `ecm.cpp` only contained an unreferenced `PRAC_SEARCH` was incorrect.
 - GMP-ECM's own `lucas.c` (P+1) notes:
   > "we used to use several (4) values of 'val', but: (1) the code to estimate the best
   > value was buggy; (2) even after fixing the bug, the overhead to choose the best value
@@ -373,6 +381,11 @@ is the *unattainable* "delete all additions" bound, and §2–§3 show the attai
 ---
 
 ## 6. Verdict
+
+> **Historical verdict, superseded for param0 on 2026-10-06:** the broad
+> optimality and DADD-only lower-bound claims below are withdrawn. The current
+> param0 analysis gives 11.2–13.6% less nominal field work for three-point PRAC;
+> GPU speed remains unmeasured. See the linked follow-up at the top of this file.
 
 1. **No correct x-only algorithm achieves >1.2× over 8.1 M-units/bit in this setting.**
    The plain ladder is optimal, and the reason is structural, not incidental: x-only
@@ -513,8 +526,9 @@ asserted structure field rather than a comment.
 
 ## 9. Two factual corrections to your framing
 
-- **bitlength(s) for B1 = 1e5 is 144352, not ~144000.** Independently reproduced by sieving
-  prime powers; b(10^3)=1438, b(10^4)=14447, b(10^5)=144352, b(10^6)=1442099 (Bernstein's
+- **Correction (2026-10-06): bitlength(lcm(1..100000)) is 144344.** The earlier
+  144352 was incorrect. Exact integer calculations give b(10^3)=1438,
+  b(10^4)=14447, b(10^5)=144344, b(10^6)=1442099 (Bernstein's
   2009 slides state 1442099 for B1=10^6). The reason is ψ(B1) ≈ B1, so
   b ≈ B1/ln 2 ≈ 1.4427·B1. Your 144000 is 0.24% low — harmless, but the scaling law is
   b ≈ 1.4427·B1, not anything logarithmic.
@@ -543,9 +557,11 @@ Flagging these because they were in the premise and would propagate into your co
   the *projective*-difference one; `mdadd-1987-m` (3M+2S) is the *affine* one.
 - **There is no `prac.c` in GMP-ECM** and no `prac_chain`/`prac_chain2`. `prac()` and
   `lucas_cost()` are static in **`ecm.c`**; `pp1_mul_prac()` is public in `lucas.c`.
-- **Prime95 has no `lucas_mul` in `ecm.cpp`.** The working PRAC is `lucas_mul()` in
-  **`gwnum/ecmstag1.c`**; `ecm.cpp` only defines an apparently unreferenced
-  `int PRAC_SEARCH = 7;` (I could not establish its semantics — do not assert it).
+- **Correction for the local Prime95 31.06 source (2026-10-06):**
+  `.refactor/p95v3106b01.source/ecm.cpp` does define `lucas_mul()` at line 2711.
+  `ell_mul()` at line 2857 tries ten ratio seeds; `lucas_cost_several()` at line
+  2847 searches nearby `d` values. `PracSearch` is read at line 6904 and clamped
+  to 1..50. The earlier assertion about this local source was incorrect.
 - Meloni's paper is **WAIFI 2007, "New point addition formulae for ECC applications",
   LNCS 4547:189–201** — not a longer "co-Z … XZ-only scalar multiplication" title.
 

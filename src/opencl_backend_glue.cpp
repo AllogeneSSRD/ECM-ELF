@@ -52,6 +52,7 @@ extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
                                   uint32_t curves, uint64_t *sigma,
                                   unsigned long checkpoint_interval_ms,
                                   float *gputime, int verbose, int gpu_param,
+                                  uint64_t B1, uint32_t torsion,
                                   const char *gpu_mul_path, const char *gpu_sqr_path,
                                   const char *gpu_add_path, const char *gpu_sub_path,
                                   const char *gpu_special_mult_path) {
@@ -60,6 +61,7 @@ extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
        parametrization's fixed shape (P = (2:1), difference x = 2, a24 = the 32-bit d).
        Refuse loudly instead of silently running a different curve family than the user
        asked for -- docs §20.5. */
+    (void)B1; (void)torsion;
     if (gpu_param == 0 || gpu_param == 2) {
         ecm_ts_fprintf(stderr,
                        "ERROR: gpu_param = %d (%s) is not implemented for the OpenCL backend.\n"

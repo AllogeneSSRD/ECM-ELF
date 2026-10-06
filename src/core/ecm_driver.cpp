@@ -2904,6 +2904,7 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
     const int ret = ecm_backend_stage1(factors, array_found, N, params->batch_s, curves,
                                        &firstsigma64, params->gpu_checkpoint_interval_ms,
                                        &gputime, params->verbose, params->gpu_param,
+                                       (uint64_t)std::floor(B1 + 0.0001), opt.exponent_choose12 ? 12u : 1u,
                                        params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
                                        params->gpu_sqr_path[0] ? params->gpu_sqr_path : nullptr,
                                        params->gpu_add_path[0] ? params->gpu_add_path : nullptr,
@@ -2965,14 +2966,15 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
     ecm_clear(params);
 
     out->ret = ret;
-    out->firstsigma = firstsigma;
+    out->firstsigma = (uint32_t)(firstsigma64 & 0xFFFFFFFFull);
+    out->firstsigma64 = firstsigma64;
     out->factors = factors;
     out->array_found = array_found;
     /* GPU batches use the contiguous convention: curve i has sigma = firstsigma + i
        (the same rule as -sigma / -gpucurves). */
     out->sigmas = (uint64_t *)malloc(sizeof(uint64_t) * (curves ? curves : 1));
     if (out->sigmas != nullptr) {
-        for (uint32_t i = 0; i < curves; i++) out->sigmas[i] = (uint64_t)firstsigma + i;
+        for (uint32_t i = 0; i < curves; i++) out->sigmas[i] = firstsigma64 + i;
     }
     return ret;
 }
@@ -4192,7 +4194,7 @@ int main(int argc, char **argv){
        就是空指针解引用 (0xC0000005, Windows 还会弹一个模态崩溃框, 把管道卡死)。
        队列路径早就用 has_factors 判过了, 这里漏了; 触发条件包括 SIMD 批量报错、
        用户中止 (SIGINT/checkpoint abort) 等任何 stage-1 非正常结束。 */
-    const bool cli_has_factors = (result.factors != nullptr && result.array_found != nullptr);
+    const bool cli_has_factors = (result.ret != ECM_ERROR && result.factors != nullptr && result.array_found != nullptr);
 
     /* Effective parametrization of THIS run, for the --go group-order helper: the CPU
        Montgomery engine and the Edwards engine both use Suyama sigma = param 0 (their saves

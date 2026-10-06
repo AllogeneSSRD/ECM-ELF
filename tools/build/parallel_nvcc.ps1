@@ -107,7 +107,7 @@ New-Item -ItemType Directory -Force $logDir | Out-Null
 
 # --- decide what to compile -------------------------------------------------
 $newestSource = Get-Date "1970-01-01"
-foreach ($pat in @("kernels\cuda\*", "include\*", "CMakeLists.txt", "kernels\*.h")) {
+foreach ($pat in @("kernels\cuda\*", "include\*", "CMakeLists.txt", "kernels\*.h", "src\core\ecm_prac_plan.h")) {
     $p = Join-Path $repo $pat
     Get-Item $p -ErrorAction SilentlyContinue | ForEach-Object {
         if ($_.LastWriteTime -gt $newestSource) { $newestSource = $_.LastWriteTime }

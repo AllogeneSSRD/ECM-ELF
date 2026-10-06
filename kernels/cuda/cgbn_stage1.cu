@@ -77,7 +77,7 @@ static bool stdout_is_tty() {
 
 static void print_progress(double pct, uint64_t s_partial, uint64_t this_batch,
                            double per_curve_s, double elapsed_ms, double remaining_s,
-                           bool newline) {
+                           bool newline, const char *unit = "bits") {
     const int bar_width = 40;
     int filled = (int)(bar_width * (pct / 100.0));
     if (filled < 0) filled = 0;
@@ -99,18 +99,18 @@ static void print_progress(double pct, uint64_t s_partial, uint64_t this_batch,
         // Redirected / log mode: a full timestamped line, mirrored to screen.log
         // via the outputf → ecm_ts_vfprintf path. No ANSI colour in the log.
         outputf(OUTPUT_ALWAYS,
-                "GPU: [%s] %.1f%%  %llu, +%llu bits (~%.2f s/curve)  elapsed %.1fs  remaining %.1fs\n",
+                "GPU: [%s] %.1f%%  %llu, +%llu %s (~%.2f s/curve)  elapsed %.1fs  remaining %.1fs\n",
                 bar, pct,
-                (unsigned long long)s_partial, (unsigned long long)this_batch,
+                (unsigned long long)s_partial, (unsigned long long)this_batch, unit,
                 per_curve_s, elapsed_s, remaining_s);
     } else {
         // Interactive terminal: in-place update, coloured (ANSI; colour is
         // configurable via ecm.ini progress_color).
         fprintf(stdout,
-                "\r%sGPU: [%s] %.1f%%  %llu, +%llu bits (~%.2f s/curve)  elapsed %.1fs  remaining %.1fs%s",
+                "\r%sGPU: [%s] %.1f%%  %llu, +%llu %s (~%.2f s/curve)  elapsed %.1fs  remaining %.1fs%s",
                 ecm_log_progress_color_code(),
                 bar, pct,
-                (unsigned long long)s_partial, (unsigned long long)this_batch,
+                (unsigned long long)s_partial, (unsigned long long)this_batch, unit,
                 per_curve_s, elapsed_s, remaining_s,
                 ecm_log_progress_color_reset());
         fflush(stdout);
@@ -302,6 +302,8 @@ int findfactor(mpz_t factor, const mpz_t N, const mpz_t x_final, const mpz_t z_f
     }
 
     mpz_gcd(factor, z_final, N);
+    if (mpz_cmp_ui(factor, 1) <= 0 || mpz_cmp(factor, N) >= 0)
+        return ECM_ERROR; // A whole-modulus gcd has no valid affine output/factor.
     return ECM_FACTOR_FOUND_STEP1;
 }
 
@@ -733,8 +735,8 @@ static
 int process_results(mpz_t *factors, int *array_found,
                     const mpz_t N,
                     const uint32_t *data, uint32_t cgbn_bits,
-                    int curves, uint32_t sigma, uint32_t words_per_curve,
-                    int p1_word, int p2_word) {
+                    int curves, uint64_t sigma, uint32_t words_per_curve,
+                    int p1_word, int p2_word, int curve_param) {
   mpz_t x_final, z_final, modulo;
   mpz_init(modulo);
   mpz_init(x_final);
@@ -778,14 +780,21 @@ int process_results(mpz_t *factors, int *array_found,
     }
 
     array_found[i] = findfactor(factors[i], N, x_final, z_final);
+    if (array_found[i] == ECM_ERROR) {
+      ++errors;
+      array_found[i] = ECM_NO_FACTOR_FOUND;
+      outputf(OUTPUT_ERROR, "GPU: degenerate final denominator on curve %zu (sigma %d:%llu); refusing final save\n",
+              i, curve_param, (unsigned long long)(sigma + i));
+      continue;
+    }
     if (array_found[i] != ECM_NO_FACTOR_FOUND) {
       youpi = array_found[i];
       /* NOTE: the project's logger is plain vfprintf(), so gmp-ecm's %Zd is NOT
          supported -- it used to print a literal 'd' and drop the value.  Render the
          factor explicitly. */
       char *fac_str = mpz_get_str(NULL, 10, factors[i]);
-      outputf (OUTPUT_NORMAL, "GPU: factor %s found in Step 1 with curve %ld (sigma %d:%lu)\n",
-          fac_str ? fac_str : "?", i, ECM_PARAM_BATCH_32BITS_D, sigma + i);
+      outputf (OUTPUT_NORMAL, "GPU: factor %s found in Step 1 with curve %zu (sigma %d:%llu)\n",
+          fac_str ? fac_str : "?", i, curve_param, (unsigned long long)(sigma + i));
       free(fac_str);
     }
   }
@@ -800,7 +809,7 @@ int process_results(mpz_t *factors, int *array_found,
             errors);
 #endif
 
-  if (errors > 2)
+  if (errors > 0)
       return ECM_ERROR;
 
   return youpi;
@@ -1132,12 +1141,28 @@ int ecm_cuda_tier_occupancy(int param0, int param2, uint32_t bits,
     return 1;
 }
 
+#include "cgbn_stage1_prac_host.cuh"
+
 int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
              uint32_t curves, uint64_t *sigma_ptr,
              unsigned long checkpoint_interval_ms,
-             float *gputime, int verbose, int gpu_param)
+             float *gputime, int verbose, int gpu_param, uint64_t B1, uint32_t torsion)
 {
+  const char *algorithm = getenv("ECM_GPU_STAGE1_ALGO");
+  if (algorithm && *algorithm && strcmp(algorithm, "ladder") != 0) {
+    if (strcmp(algorithm, "prac") != 0 && strcmp(algorithm, "resident") != 0) {
+      outputf(OUTPUT_ERROR, "GPU: ECM_GPU_STAGE1_ALGO must be ladder, resident or prac\n");
+      return ECM_ERROR;
+    }
+    if (gpu_param != 0 || ECM_MERS_FOLD) {
+      outputf(OUTPUT_ERROR, "GPU: resident/PRAC requires param0 and a Montgomery build\n");
+      return ECM_ERROR;
+    }
+    return cgbn_stage1_resident(factors, array_found, N, s, curves, sigma_ptr,
+                               checkpoint_interval_ms, gputime, B1, torsion,
+                               strcmp(algorithm, "prac") == 0);
+  }
   uint64_t sigma64 = (sigma_ptr != NULL) ? *sigma_ptr : 0;
 
   /* -------------------------------------------------------------------------
@@ -1786,8 +1811,8 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
 
   cudaEventElapsedTime (gputime, global_start, stop);
 
-  youpi = process_results(factors, array_found, N, data, BITS, curves, sigma32,
-                          words_per_curve, p1_word, p2_word);
+  youpi = process_results(factors, array_found, N, data, BITS, curves, sigma64,
+                          words_per_curve, p1_word, p2_word, gpu_param);
 
   // clean up
   CUDA_CHECK(cudaFree(gpu_s_bits));

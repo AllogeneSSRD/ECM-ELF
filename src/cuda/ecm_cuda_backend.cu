@@ -10,7 +10,7 @@
 */
 
 #include "ecm_backend.h"
-#include "cgbn_stage1_cuda.h"   /* 9-arg cgbn_ecm_stage1 */
+#include "cgbn_stage1_cuda.h"   /* native cgbn_ecm_stage1 */
 #include "cuda_ecm_shim.h"      /* OUTPUT_*, outputf/test_verbose/ecm_cuda_set_verbose */
 #include "cudacommon.h"         /* kernel_info declaration */
 #include "opencl_ecm_log.h"     /* ecm_ts_vfprintf / ecm_ts_fprintf */
@@ -293,6 +293,7 @@ extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
                                   uint32_t curves, uint64_t *sigma,
                                   unsigned long checkpoint_interval_ms,
                                   float *gputime, int verbose, int gpu_param,
+                                  uint64_t B1, uint32_t torsion,
                                   const char *gpu_mul_path, const char *gpu_sqr_path,
                                   const char *gpu_add_path, const char *gpu_sub_path,
                                   const char *gpu_special_mult_path) {
@@ -301,5 +302,5 @@ extern "C" int ecm_backend_stage1(mpz_t *factors, int *array_found,
 
     ecm_cuda_set_verbose(verbose);
     return cgbn_ecm_stage1(factors, array_found, N, s, curves, sigma,
-                           checkpoint_interval_ms, gputime, verbose, gpu_param);
+                           checkpoint_interval_ms, gputime, verbose, gpu_param, B1, torsion);
 }
