@@ -321,3 +321,10 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 新版离线拟合默认 `--fit-scope per_d`，成本采集可用 `--holdout-all-d` 和 `--extend-study FILE` 补齐所有D的留出点，扩展到新目录并保留原观测。验证工具 `--check-inputs-only` 可先核对build/profile/save身份，执行GPU曲线数为0。最新六组收益排名通过，但27个scope中仍6个未通过完整秒数精度；没有新的v2 cprof，不可将候选JSON直接用于生产auto。
 
 实验 `--reuse-context` 路径已撤回，当前源码不提供该选项；实验exe及脚本在冻结证据中。现有通过验收的4acc/v1组合保持，详见[最新完整结果](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)及[上下文实验](D:/code/MPA-OpenCl/docs/STAGE2_CONTEXT_REUSE.md)。
+
+
+## 2026-10-06 可选CPU等待及Auto网格边界
+
+独立8cee候选可在手动固定B2时用环境变量NTT_CUDA_WAIT_MODE=0/1/2/4（Auto/Spin/Yield/BlockingSync），只绑定实际worker当前设备；未设置保留原等待方式。BlockingSync已验证CPU资源消耗更低，但并非稳定时间加速；没有新增INI键，原auto profile拒绝未标定的非0模式，NTT tune未绑定这个开关。
+
+规划器补齐后续giant分块的chain阈值和关键I平台末端，真实packing计划及1/2/2实际giant分块门禁通过。无新校准cprof、没有晋升生产exe；新binary需完整校准和原生验收。[最新源码行、使用与实验](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。

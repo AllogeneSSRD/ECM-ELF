@@ -158,3 +158,72 @@ python tools/bench/validate_ecm_costs.py --profile "$new/profile.json" `
 每次使用新目录。三个位宽和所有已声明 D/path 都须保持验证。先定位并减少大位宽下降/G 树的额外等待，再冻结完整精度与收益验证；随后才能导出 v2 cprof 并运行原生 auto/manual/INI/queue 验收。G2 桥接、生产 B1、choose12、泛型模数、总显存/RAM 准入及更广 NTT 标定仍未完成。
 
 源码：[分 D 分组](D:/code/MPA-OpenCl/tools/bench/fit_ecm_costs.py:19)、[旧 study 扩展及所有 D 留出](D:/code/MPA-OpenCl/tools/bench/measure_ecm_costs.py:45)、[原观测保护](D:/code/MPA-OpenCl/tools/bench/audit_ecm_costs.py:47)、[输入身份及完整 scope 验证](D:/code/MPA-OpenCl/tools/bench/validate_ecm_costs.py:24)、[拒绝不合格发布](D:/code/MPA-OpenCl/tools/bench/export_ecm_cost_profile.py:35)、[原始构建的剖析核对](D:/code/MPA-OpenCl/tools/bench/profile_stage2_points.py:38)。CPU 拟合回归 4 项通过；输入正/负检查与发布负例均未执行 GPU 曲线。
+
+
+## 8. CPU 等待与 Auto B2 调度边界（2026-10-06）
+
+### 8.1 重放结果和 CPU 等待方式
+
+继续相同输入的时长重放，长尾并非总在下降：M8191/D120120/B2=1,383,422,040 的两次 G 树 0.208→4.866 秒，下降仍约1.49秒；另一个输入下降增加时，GMP校验墙钟也由约0.05秒增至约1秒。调用计数、叶和校验选择一致。这要求区分 CPU 调度、CUDA 等待和功耗状态，不能直接将所有增加的墙钟归为 NTT 运算或 DMA。
+
+新增 `bench_stage2_host_wait.py` 使用同binary、相同有效sigma26保存点和ABBA对照。进程优先级实验先发现本机driver升到Above Normal时，curve worker仍为Normal；失败采集和原工具保留，不能当成成功干预。改为直接启动原内部worker、校验原offset/FNV/hash后，16条真实曲线确认目标优先级实际生效，但没有消除长尾；多G形状提高优先级后中位慢16.426%，没有发布优先级策略。
+
+新增可选 `NTT_CUDA_WAIT_MODE=0|1|2|4`：Auto / Spin / Yield / BlockingSync。未设置时执行原行为；只在真实curve worker的当前目标设备上下文中设置并核对flags，其他非调度flags保留。CUDA13返回的MapHost位是隐式位，设置时须去除，再检查返回状态。BlockingSync允许CPU线程在设备等待期间阻塞；Auto在常见条件下会忙等。[NVIDIA Runtime API](https://docs.nvidia.com/cuda/archive/13.0.2/cuda-runtime-api/group__CUDART__DEVICE.html)。它与 `CUDA_LAUNCH_BLOCKING=1` 不同，后者串行化CUDA调用。本轮只提供手动固定B2的可选模式，原Auto B2 profile要求模式0，拒绝非0的未标定配置；没有新增INI键或修改默认等待策略。
+
+两次HostOnly构建复用受SHA/依赖/架构/toolkit核验的相同CUDA object，无新CUDA算术编译。等待版binary为22763e…359a；边界修正版为 `8ceed31fb144e37a5abe028e3a00595862fda0860c31a301cc57739f32f22774`，位于 `build_cuda_cmake/_auto_b2_host_wait_20261006/native_final`，25个原始依赖冻结。生产893不替换。
+
+先16条M8191等待模式ABBA，再24条三位宽ABBA，G1与多G、D120120/B1=1000/arena4096/owner0均输出和校验一致。后者在进程退出后利用Popen仍持有的原句柄查询完整GetProcessTimes，不靠PID重开或将200ms样本拼成完整CPU时间。Windows以100ns单位返回，仍有调度计账粒度。
+
+完整进程CPU中位数（同一GPU、每模式每形状两次）：
+
+- M2203：G1 1.210938→0.843750秒（−30.32%），多G 1.468750→0.859375秒（−41.49%）。
+- M4423：G1 2.320313→1.210938秒（−47.81%），多G 2.859375→1.390625秒（−51.37%）。
+- M8191：G1 5.968750→2.359375秒（−60.47%），多G 7.023438→2.554688秒（−63.63%）。
+
+这些是worker整个生命周期的user+kernel CPU时间，含启动；不是Stage2的GPU周期数。G1 B2=1,383,422,040，多G B2=5,250,000,000，三种宽度均固定相同D。CPU消耗减少已实测，但墙钟不稳定：三宽度相应完整engine中位变化约+1.40/+3.29、+1.26/−0.075、+11.26/+26.98%，另一组M8191又出现较快中位。全部长尾保留，未宣称时间加速或解决精度失败。
+
+### 8.2 CPU 等待与串行/双进程的交叉试验
+
+新增 `bench_stage2_concurrency.py --cuda-wait-modes 0 4`，镜像顺序为 serial0/parallel0/parallel4/serial4/serial4/parallel4/parallel0/serial0。两轮16批、32条实际曲线使用两条独立核验的sigma26/27存档，M8191/D30030/B1=1000/B2=52.5亿/arena512/owner0；输入、叶、因子及全部检查一致。
+
+本批中位吞吐：Auto等待串行0.067395、双进程0.077301 curve/s（+14.70%）；Blocking等待串行0.074074、双进程0.078480（+5.95%）。同为双进程，Blocking只比Auto约快1.53%。较早同形状测量双进程比串行慢6.02%；这批串行出现长尾且较慢。四样本/单元不足以证明稳定生产吞吐收益，不能选择本次正结果忽略旧负结果；没有发布默认并发或内存lease。
+
+200ms同次采样后求峰：串行整卡used最大1384.617MiB，双进程2537.234MiB；自身进程private合计最大约1605.852/3055.801MiB，working-set合计约312.500/621.238MiB。private是commit，working set包含共享页，整卡used含baseline和driver；不是唯一物理RAM或完整峰保证。仍只对已测D30030以每worker2GiB VRAM/RAM作试验防护，并外留768MiB显存/2GiB RAM，不扩充为任意输入保证。
+
+### 8.3 Auto B2 搜索边界修复
+
+原网格只加入起始 `chain_min` 和 `kP`。实际调度为：
+
+\[
+I=\lfloor B_2/D\rfloor+2,\quad P=\varphi(D)/2,\quad W=\lceil bits/64\rceil,
+\quad C=P\left\lceil\frac{\max(P,\lfloor256MiB/(16W)\rfloor)}P\right\rceil.
+\]
+
+G在 `I=kP+1` 时增加；giant每C点重新划分尾段，尾段在 `I=kC+chain_min` 转为chain。旧搜索遗漏后续分块的这个边界。一个I对应的B2平台末端为 `D*(I-1)-1`，原来只加入平台起点及±1，也会漏掉该末端。
+
+新搜索加入kP及kP+1、kC及kC+1、有效的kC+chain_min，并加入每个关键I平台末端，按用户范围剪裁、检查乘法/加法边界；之后仍经过每scope的B2/P/G/路径/内存准入。不扩大未测范围，不改变17率或收益函数，也不声称覆盖全部全局最优点。
+
+CPU合成率回归先红后绿：W128/P2880/C132480/min8192，阈值I=140672；旧选择B2=4,231,858,536，新选择阈值平台末端B2=4,224,350,129。mock packing不是CUDA门禁。实际native plan-only使用真实NTT packing的独立合成率fixture也选择同一端点；该fixture没有通过成本标定，不可作为生产cprof。
+
+再执行真实边界邻点 I=140671/140672/140673：B2分别4,224,290,070 / 4,224,320,100 / 4,224,350,130，实际giant chain chunks为1/2/2，与Python特征及真实kernel一致，树pairs/groups/copies及必需检查通过。
+
+最终114项配置/搜索/队列检查、9条实际曲线通过，含模式0/1/2/4；未标定mode4的auto plan拒绝、非法mode3的worker失败且保留原queue/不写result。首个queue fixture错把描述文字放进known factors列，在worker之前被正确拒绝；失败目录与原工具保留，修正为空字段后重跑。较早92项/7条也是实际执行，但属于重复门禁，不新增独立覆盖。
+
+本阶段完整批次共104条算术通过、760,628次独立GMP抽样系数检查（重复执行也计入）；未完成对照的首次priority采集另外执行两条，保留但不计为完整性能样本。所有新优化仍未替代完整Auto B2精度/排名和生产B1/choose12/泛型/内存租约验收。
+
+### 8.4 使用与来源
+
+仅在上述独立候选中，手动固定B2可比较：
+
+```powershell
+$env:NTT_CUDA_WAIT_MODE = '4'
+PATH_TO_NATIVE_FINAL/ecm_cuda_stage2.exe --save m8191.save --b2 5250000000 `
+  --d 30030 --device 1 --arena-mb 512 --factor-only
+Remove-Item Env:NTT_CUDA_WAIT_MODE
+```
+
+该变量针对Stage2 curve入口，未给NTT tune附加等待模式。默认/生产旧exe不提供此新开关；模式1/2只有接口及算术检查，没有吞吐标定。CPU更低也不代表墙钟必然更短。继续定位WDDM/完成通知等等待，再进行完整新版profile和原生生产接口验收。
+
+源码：[当前上下文等待控制](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:454)、[Auto配置保护](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:527)、[真实执行前绑定](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:597)、[关键平台及分块边界](D:/code/MPA-OpenCl/src/core/ecm_stage2_cost_profile.h:134)、[完整CPU进程计量](D:/code/MPA-OpenCl/tools/bench/bench_stage2_host_wait.py:56)、[实际配置/边界/队列门禁](D:/code/MPA-OpenCl/tools/test/test_stage2_cuda_wait.py:41)。
+
+[汇总](D:/code/MPA-OpenCl/docs/data/ecm_stage2_host_wait_20261006_summary.json)、[全部原始日志/存档/冻结源码及失败实验](D:/code/MPA-OpenCl/docs/data/ecm_stage2_host_wait_20261006_evidence.json)。GPU0外部生产未操作，未发布新运行profile或修改生产exe。

@@ -6,7 +6,7 @@ bool ecm_cuda_stage2_shape_query(uint64_t p,int bits,uint64_t *n,uint64_t *out) 
     uint64_t size=1;while(size<2*p*(uint64_t)bits)size*=2;
     if(n)*n=size;if(out)*out=2*p-1;return true;
 }
-int main() {
+void test_cases() {
     namespace c=ecm_stage2::cost;using ecm_stage2::Word;
     auto check=[](bool ok,const char *name){if(!ok)throw std::runtime_error(name);};
     c::Work work{2203};
@@ -34,5 +34,21 @@ int main() {
     p.scopes[1].covered.fill(0);r.b2min=r.b2max=3000000000;rejected=false;
     try{c::choose(p,r,dev);}catch(const std::runtime_error&){rejected=true;}
     check(rejected,"unmeasured giant route rejected");
+    // A giant tail switches to chain at C + chain_min, not only chain_min.
+    // Synthetic rates isolate that real dispatch discontinuity.
+    auto edge_profile=p;edge_profile.stage1={{8191,1000,1,1,0.1}};
+    auto edge_scope=low;edge_scope.bits=8191;edge_scope.gmin=2;edge_scope.gmax=1000;
+    const Word width=(8191+63)/64,points=edge_scope.pmax;
+    const Word capacity=std::max(points,(256ull<<20)/(16*width));
+    const Word chunk=points*((capacity+points-1)/points),threshold=chunk+edge_profile.chain_min;
+    edge_scope.b2min=30030*(threshold-3);edge_scope.b2max=30030*(threshold+edge_profile.chain_min+100-2);
+    edge_scope.rate.fill(0);edge_scope.rate[9]=1;edge_scope.rate[11]=100;edge_scope.covered.fill(1);
+    edge_profile.scopes={edge_scope};c::Request edge_request;edge_request.bits=8191;edge_request.b1=1000;edge_request.owner_mb=0;
+    const auto switched=c::choose(edge_profile,edge_request,dev);
+    const Word expected=30030*(threshold-1)-1;
+    std::cout<<"chain edge: selected="<<switched.b2<<" expected="<<expected<<'\n';
+    check(switched.i==threshold&&switched.b2==expected,"giant tail-chain boundary and plateau end");
     std::cout<<"cost native CPU: exact pairs, union, G1 inverse/root, gap and route coverage passed\n";
 }
+
+int main(){try{test_cases();return 0;}catch(const std::exception &e){std::cerr<<e.what()<<"\n";return 1;}}

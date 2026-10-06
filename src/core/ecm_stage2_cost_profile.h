@@ -131,11 +131,25 @@ inline Choice choose(const Profile &profile,const Request &r,const EcmStage2Devi
             grid.insert(std::max(low,std::min(high,value)));}}
     const auto initial=grid;
     for(const auto *s:scopes)for(Word d:s->d) {
-        if(r.d&&r.d!=d)continue;const Word p=phi(d)/2;
+        if(r.d&&r.d!=d)continue;const Word p=phi(d)/2,w=((Word)r.bits+63)/64;
+        const Word capacity=std::max(p,(256ull<<20)/(16*w)),chunk=p*((capacity+p-1)/p),max_points=hi/d+2;
         auto edge=[&](Word points){if(points<2||points-2>hi/d)return;const Word b=d*(points-2);
-            for(int delta=-1;delta<=1;++delta){const Word v=delta<0?(b?b-1:0):b+(Word)delta;if(v>=lo&&v<=hi)grid.insert(v);}};
+            auto add=[&](Word value){if(value>=lo&&value<=hi)grid.insert(value);};
+            if(b)add(b-1);add(b);if(b<hi)add(b+1);
+            // Include the upper end of this I plateau, not just its beginning.
+            // The bound avoids overflow and stays inside the requested interval.
+            add(hi-b<d-1?hi:b+d-1);};
         edge(profile.chain_min);
-        for(Word b:initial){const Word g=(b/d+2)/p;for(Word k=g>0?g-1:0;k<=g+1;++k)if(k<=hi/d/p+2)edge(k*p);}
+        for(Word b:initial){
+            const Word i=b/d+2,g=i/p,block=i/chunk;
+            // G increments after kP; a full-root point itself still has G=k.
+            for(Word k=g>0?g-1:0;k<=g+1;++k)if(k<=max_points/p){edge(k*p);edge(k*p+1);}
+            // Each giant coordinate chunk restarts its tail's ladder/chain policy.
+            for(Word k=block>0?block-1:0;k<=block+1;++k)if(k<=max_points/chunk){
+                const Word base=k*chunk;edge(base);edge(base+1);
+                if(profile.chain_min<=chunk&&profile.chain_min<=max_points-base)edge(base+profile.chain_min);
+            }
+        }
     }
     Work work{r.bits};Choice best;Word candidates=0;
     const Word reserve=768ull<<20;

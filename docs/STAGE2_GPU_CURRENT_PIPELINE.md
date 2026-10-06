@@ -1967,3 +1967,8 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 成本拟合按位宽/owner/regime/D分开，避免不同NTT长度共用一个经验率。扩展study保留旧数据身份，所有D独立留出；blind随机冻结并覆盖全部scope，输入save SHA可在GPU查询前预检。306条成本曲线算术通过，六组总流程收益排名最大损失0.178660%，但秒数精度仍失败（21/27 scope、最坏46.594917%）；未发布v2运行profile。当前可用的发布组合仍是4acc和多端点v1，不适配新的5f4c源码候选。
 
 上下文复用无稳定收益，执行路径撤回、快照保留；没有改变逐曲线启动合同。下一步处理大位宽下降/G树等待，再验收完整profile及实际auto/manual/INI/queue；G2、生产B1、choose12、泛型和总内存预算仍待扩展。[源码行、命令、审计与内存证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。
+
+
+## 64. CPU等待和Auto B2真实边界（2026-10-06）
+
+可选等待flags降低三宽度完整进程CPU时间30%..64%，未消除长尾、未改默认。两进程本批更快而旧批较慢，保留全部结果，尚无稳定并发策略或总内存lease。Auto搜索补齐每个giant分块尾段的chain切换、G跳变及关键I的平台末端，CPU回归和真实packing计划验证；真实邻点chain chunks1/2/2。最终114项检查/9条实际curve通过，全批次104条/760628系数检查。新源码候选8cee仍须完整重标定，旧profile不可复用；当前发布组合仍4acc/v1。[实施与全部限制](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。

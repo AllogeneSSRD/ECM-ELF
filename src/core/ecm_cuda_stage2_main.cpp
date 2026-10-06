@@ -2,6 +2,7 @@
 // child exit; a fresh child isolates the experimental engine's per-curve globals.
 #define NOMINMAX
 #include <windows.h>
+#include <cuda_runtime_api.h>
 #include "ecm_cuda_stage2.h"
 #include "ecm_expr.h"
 #include "ecm_queue_config.h"
@@ -447,6 +448,26 @@ struct Handle {
     HANDLE value = INVALID_HANDLE_VALUE;
     ~Handle() { if (value != INVALID_HANDLE_VALUE && value) CloseHandle(value); }
 };
+// Optional diagnostic for the calling process's CUDA context. Use the same
+// linked runtime as the CUDA translation unit.
+// The schedule bits affect CPU waits, not kernel ordering or arithmetic.
+void configure_cuda_wait(int device) {
+    const char *value=std::getenv("NTT_CUDA_WAIT_MODE");
+    if(!value)return;
+    const uint64_t mode=ecm_stage2::cost::integer(value);
+    if(mode!=0&&mode!=1&&mode!=2&&mode!=4)
+        throw std::runtime_error("NTT_CUDA_WAIT_MODE must be 0(auto), 1(spin), 2(yield), or 4(blocking)");
+    auto check=[](cudaError_t error){if(error!=cudaSuccess)throw std::runtime_error(std::string("CUDA wait configuration failed: ")+cudaGetErrorString(error));};
+    check(cudaSetDevice(device));
+    unsigned before=0,after=0;check(cudaGetDeviceFlags(&before));
+    // MapHost (bit 3) is implicit in CUDA 13's returned flags and must not be
+    // passed to cudaSetDeviceFlags. Preserve all other non-schedule flags.
+    check(cudaSetDeviceFlags((before&~15u)|static_cast<unsigned>(mode)));check(cudaGetDeviceFlags(&after));
+    if((after&7u)!=mode||(after&~7u)!=(before&~7u))
+        throw std::runtime_error("CUDA wait flags did not match requested context state");
+    std::cout<<"stage2_cuda_wait: device="<<device<<" requested="<<mode
+             <<" before="<<before<<" after="<<after<<std::endl;
+}
 int child_run(const Options &o, const fs::path &save, const Record &r,
               uint64_t b2, uint64_t d, int device, const fs::path &results, const fs::path &log) {
     const fs::path exe = executable();
@@ -503,6 +524,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
         const char *value=std::getenv(key);const uint64_t actual=value?ecm_stage2::cost::integer(value):fallback;
         if(actual!=expected)throw std::runtime_error(std::string("cost profile configuration mismatch: ")+key);
     };
+    require("NTT_CUDA_WAIT_MODE",0,0);
     for(const char *key:{"NTT_XADD6","NTT_BABY_DEVICE","NTT_POINT_MERSENNE","NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE",
         "NTT_GFINV_SEG_EXACT","NTT_GFINV_BATCH","NTT_FOLD_FLAT","NTT_FOLD_DEVICE","NTT_GROOT_DEVICE","NTT_SCALED_DESCENT",
         "NTT_S4_OUTPUT_WINDOW","NTT_S4_CHUNK_OUTPUT","NTT_DEVICE_GLEAF","NTT_GROOT_TO_FOLD","NTT_S4_ORACLE_ASYNC",
@@ -572,6 +594,7 @@ int curve_worker(Options o) {
         std::cout << "saved_X_factor: " << number(gcd.z, 10) << '\n';
     } else {
         if (!mpz_cmp(gcd.z, n.z)) throw std::runtime_error("saved X=0 gives no usable Stage1 point");
+        configure_cuda_wait(o.device);
         code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
             [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result);
     }

@@ -48,3 +48,6 @@ docs/data/ecm_phase_nsys_20261005* -text
 docs/data/ecm_phase_ncu_20261005* -text
 docs/data/ecm_stage2_context_20261006* -text
 docs/data/ecm_auto_b2_per_d_20261006* -text
+docs/data/ecm_stage2_host_wait_20261006* -text
+tools/bench/bench_stage2_host_wait.py text eol=lf
+tools/test/test_stage2_cuda_wait.py text eol=lf

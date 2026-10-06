@@ -91,7 +91,9 @@ def main():
     p.add_argument('--output',type=Path,required=True);p.add_argument('--bits',type=int,default=8191)
     p.add_argument('--b2',type=int,default=5250000000);p.add_argument('--repeats',type=int,default=2)
     p.add_argument('--vram-budget-mb',type=int,default=4096);p.add_argument('--host-budget-mb',type=int,default=4096)
+    p.add_argument('--cuda-wait-modes',type=int,nargs=2,choices=(0,2,4),help='Cross serial/parallel with two wait modes in mirrored order')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
+    if a.cuda_wait_modes and len(set(a.cuda_wait_modes))!=2:raise ValueError('Use two distinct CUDA wait modes')
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     if a.bits not in (2203,4423,8191) or not 3000000000<=a.b2<=6000000000 or a.repeats<1:raise ValueError('Outside this bounded trial matrix')
     exe=a.exe.resolve();binary=sha(exe);study=json.loads(a.study.read_text(encoding='utf-8'))
@@ -136,12 +138,18 @@ def main():
     data=dict(schema=1,kind='same_corpus_serial_parallel_abba',identity=identity,device=device,admission=admission,
         controls=dict(bits=a.bits,B2=a.b2,D=30030,arena_mb=512,owner_mb=0,chain_min=8192,
                       sigmas=[int(re.search(rb'SIGMA=([^;]+)',r)[1]) for r in records],sequence=[1,2,2,1],repeats=a.repeats),batches=[])
+    if a.cuda_wait_modes:
+        m0,m1=a.cuda_wait_modes
+        sequence=[(1,m0),(2,m0),(2,m1),(1,m1),(1,m1),(2,m1),(2,m0),(1,m0)]
+    else:sequence=[(k,None) for k in (1,2,2,1)]
+    data['controls']['cuda_wait_sequence']=sequence
     dest=out/'measurements.json'
     def persist():dest.write_text(json.dumps(data,indent=2),encoding='utf-8')
     persist();state=State();reference={}
     for rep in range(a.repeats):
-        for pos,parallel in enumerate((1,2,2,1)):
-            name=f'r{rep}_p{pos}_workers{parallel}';roots=[];children=[];files=[];samples=[];errors=[];stop=threading.Event()
+        for pos,(parallel,mode) in enumerate(sequence):
+            name=f'r{rep}_p{pos}_workers{parallel}'+(f'_wait{mode}' if mode is not None else '')
+            roots=[];children=[];files=[];samples=[];errors=[];stop=threading.Event()
             def observe():
                 try:
                     while not stop.is_set():
@@ -153,7 +161,8 @@ def main():
                     tag=name+f'_curve{i}';log=out/(tag+'.log');result=out/(tag+'.jsonl');driver=out/(tag+'_driver.log')
                     cmd=[str(exe),'--ini',str(ini),'--save',str(save),'--device','1','--b2',str(a.b2),
                          '--d','30030','--arena-mb','512','--factor-only','--results',str(result),'--log',str(log)]
-                    f=driver.open('wb');files.append(f);child=subprocess.Popen(cmd,stdout=f,stderr=subprocess.STDOUT,env=env)
+                    batch_env=env|({'NTT_CUDA_WAIT_MODE':str(mode)} if mode is not None else {})
+                    f=driver.open('wb');files.append(f);child=subprocess.Popen(cmd,stdout=f,stderr=subprocess.STDOUT,env=batch_env)
                     roots.append(child.pid);children.append(child);curve_rows.append(dict(index=i,command=cmd,log=str(log),result=str(result)))
                     if parallel==1:child.wait(timeout=300)
                 for child in children:child.wait(timeout=300)
@@ -173,6 +182,10 @@ def main():
                     result['B2']!=a.b2 or int(result['N_hex'],16)!=n):raise ValueError('Actual input differs from verified corpus')
                 if result['bad_factors'] or any(not 1<int(f)<n or n%int(f) for f in result['factors']):raise ValueError('Invalid factor')
                 if not all(t in text for t in ('gmp_selftest_bad=0','gmp_check_bad=0','pending=0','clean=1')):raise ValueError('Missing arithmetic checks')
+                if mode is not None:
+                    wait=fields(text,'stage2_cuda_wait')
+                    if int(wait['device'])!=1 or int(wait['requested'])!=mode or int(wait['after'])&7!=mode:raise ValueError('Unexpected CUDA wait context')
+                    r['cuda_wait']=wait
                 if int(fields(text,'real_batched_breakdown')['arena_overflow']):raise ValueError('Arena fallback changed the comparison')
                 leaf=fields(text,'descent_values')['hash'];key=(leaf,result['factors'])
                 if r['index'] in reference and reference[r['index']]!=key:raise ValueError('Concurrency changed output')
@@ -182,15 +195,17 @@ def main():
             if not samples or not any(len(s['own_memory']['processes'])>=2*parallel for s in samples):raise ValueError('Own worker RAM was not observed')
             gpu_peak=max(s['used'] for s in samples);ram_peak=max(s['own_memory']['private_bytes'] for s in samples)
             working_peak=max(s['own_memory']['working_set_bytes'] for s in samples)
-            data['batches'].append(dict(name=name,rep=rep,workers=parallel,curves=curve_rows,process_seconds=elapsed,
+            data['batches'].append(dict(name=name,rep=rep,workers=parallel,cuda_wait_mode=mode,curves=curve_rows,process_seconds=elapsed,
                 curves_per_second=2/elapsed,sampled_gpu_peak_bytes=gpu_peak,sampled_own_private_peak_bytes=ram_peak,
                 sampled_own_working_set_peak_bytes=working_peak,
                 samples=samples,monitor_errors=errors));persist()
             print(name,'wall',round(elapsed,6),'curves/s',round(2/elapsed,6),'GPU MiB',round(gpu_peak/(1<<20),2),
                   'own private MiB',round(ram_peak/(1<<20),2),flush=True)
-    med={str(k):statistics.median(r['curves_per_second'] for r in data['batches'] if r['workers']==k) for k in (1,2)}
-    data['summary']=dict(median_curves_per_second=med,throughput_increase_percent=100*(med['2']/med['1']-1),
-                        arithmetic_curves=sum(len(r['curves']) for r in data['batches']),memory_is_sampled=True)
+    def comparison(mode):
+        med={str(k):statistics.median(r['curves_per_second'] for r in data['batches'] if r['workers']==k and r['cuda_wait_mode']==mode) for k in (1,2)}
+        return dict(median_curves_per_second=med,throughput_increase_percent=100*(med['2']/med['1']-1))
+    data['summary']=(dict(per_wait_mode={str(mode):comparison(mode) for mode in a.cuda_wait_modes}) if a.cuda_wait_modes else comparison(None))
+    data['summary'].update(arithmetic_curves=sum(len(r['curves']) for r in data['batches']),memory_is_sampled=True)
     data['complete']=True;persist();print(json.dumps(data['summary'],indent=2))
 
 
