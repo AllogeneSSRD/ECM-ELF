@@ -20,6 +20,8 @@ CONFIGS = {
     'cap168': ('prac', 'baseline', 168),
     'compact': ('prac', 'compact', 255),
     'compact168': ('prac', 'compact', 168),
+    'outline': ('prac', 'outline-add', 255),
+    'outline168': ('prac', 'outline-add', 168),
 }
 
 
@@ -28,7 +30,7 @@ def main():
     p.add_argument('--exe', type=Path, default=Path('build_cuda_cmake/prac/ecm_cuda.exe'))
     p.add_argument('--b1', nargs='+', type=int, default=[10_000_000, 260_000_000])
     p.add_argument('--curves', nargs='+', type=int, default=[1536])
-    p.add_argument('--configs', nargs='+', choices=list(CONFIGS), default=list(CONFIGS))
+    p.add_argument('--configs', nargs='+', choices=list(CONFIGS), default=['resident', 'natural', 'cap168', 'compact', 'compact168'])
     p.add_argument('--target-ms', nargs='+', type=float, default=[100])
     p.add_argument('--seconds', type=float, default=15)
     p.add_argument('--warmup', type=float, default=5)

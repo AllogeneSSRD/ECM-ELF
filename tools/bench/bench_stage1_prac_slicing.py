@@ -19,6 +19,7 @@ def main():
     p.add_argument('--count',type=int,default=32)
     p.add_argument('--window',choices=['prefix','middle','tail'],default='tail')
     p.add_argument('--registers',type=int,nargs='+',choices=[168,255],default=[255,168])
+    p.add_argument('--variants',nargs='+',choices=['baseline','compact','outline-add'],default=['baseline'])
     p.add_argument('--seconds',type=float,default=6)
     p.add_argument('--warmup',type=int,default=2)
     p.add_argument('--repeats',type=int,default=2)
@@ -35,7 +36,7 @@ def main():
     gpu_info=subprocess.run(['nvidia-smi','-i',str(a.device),'--query-gpu=index,uuid,name',
         '--format=csv,noheader'],capture_output=True,text=True,timeout=15)
     report['gpu_identity']=gpu_info.stdout.strip();report['gpu_identity_exit_code']=gpu_info.returncode
-    configs=[(r,c) for r in a.registers for c in a.chunks]
+    configs=[(v,r,c) for v in a.variants for r in a.registers for c in a.chunks]
     signatures={}
     with (root/'gpu.csv').open('wb') as log,(root/'gpu.err').open('wb') as err:
         monitor=subprocess.Popen(['nvidia-smi','-i',str(a.device),
@@ -45,17 +46,17 @@ def main():
             for repeat in range(a.repeats):
                 for b1 in a.b1:
                     for curves in (a.curves if repeat%2==0 else list(reversed(a.curves))):
-                        for registers,chunk in (configs if repeat%2==0 else list(reversed(configs))):
-                            folder=root/f'b{b1}_c{curves}_reg{registers}_chunk{chunk}_r{repeat}'
-                            row=sample(exe,folder,4423,b1,curves,a.device,16,registers,'baseline',
+                        for variant,registers,chunk in (configs if repeat%2==0 else list(reversed(configs))):
+                            folder=root/f'b{b1}_c{curves}_{variant}_reg{registers}_chunk{chunk}_r{repeat}'
+                            row=sample(exe,folder,4423,b1,curves,a.device,16,registers,variant,
                                 a.window,a.count,a.seconds,a.warmup,cache,chunk=chunk)
                             signature=tuple(row[k] for k in ('first','count','p_first','p_last','work','full_work','sigma','exponent'))
                             key=(b1,curves)
                             if signatures.setdefault(key,signature)!=signature:raise RuntimeError('Compared subproducts differ')
                             row['repeat']=repeat;report['results'].append(row)
                             groups={}
-                            for x in report['results']:groups.setdefault((x['B1'],x['curves'],x['registers'],x['chunk']),[]).append(x)
-                            report['aggregates']=[dict(B1=k[0],curves=k[1],registers=k[2],chunk=k[3],repeats=len(v),
+                            for x in report['results']:groups.setdefault((x['B1'],x['curves'],x['registers'],x['chunk'],x['variant']),[]).append(x)
+                            report['aggregates']=[dict(B1=k[0],curves=k[1],registers=k[2],chunk=k[3],variant=k[4],repeats=len(v),
                                 projected_s_per_curve=statistics.median(x['projected_s_per_curve'] for x in v),
                                 wall_projected_s_per_curve=statistics.median(x['wall_projected_s_per_curve'] for x in v),
                                 min=min(x['projected_s_per_curve'] for x in v),max=max(x['projected_s_per_curve'] for x in v)) for k,v in groups.items()]

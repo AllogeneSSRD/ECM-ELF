@@ -103,6 +103,8 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
     text = log.read_text(encoding='utf-8', errors='replace')
     if algo == 'prac' and f'PRAC slice target={target_ms:.3f} ms' not in text:
         raise RuntimeError(f'Binary did not select requested PRAC slice target: {log}')
+    if algo == 'prac' and f'PRAC variant={variant}' not in text:
+        raise RuntimeError(f'Binary did not select requested PRAC variant: {log}')
     result['slice_costs'] = slice_costs
     geometry = GEOMETRY.search(text)
     if geometry:
@@ -131,7 +133,7 @@ def main():
     parser.add_argument('--device', type=int, default=1)
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--prac-registers', type=int, choices=[0, 168, 255], default=0)
-    parser.add_argument('--prac-variant', choices=['baseline', 'compact'], default='baseline')
+    parser.add_argument('--prac-variant', choices=['baseline', 'compact', 'outline-add'], default='baseline')
     parser.add_argument('--prac-target-ms', type=float, default=100)
     parser.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     parser.add_argument('--exp-cache', type=Path, help='Shared validated B1/PRAC cache; defaults to exe directory')
@@ -143,8 +145,8 @@ def main():
     if not 10 <= args.prac_target_ms <= 500:parser.error('PRAC target must be in 10..500 ms')
     if args.tpi and 'ladder' in args.algorithms:
         parser.error('TPI overrides require --algorithms resident prac (the original ladder is unchanged)')
-    if args.prac_variant == 'compact' and (args.bits != [4423] or args.tpi == 32 or args.prac_registers == 0):
-        parser.error('compact requires --bits 4423, TPI16/default and registers 168/255')
+    if args.prac_variant != 'baseline' and (args.bits != [4423] or args.tpi == 32 or args.prac_registers == 0):
+        parser.error('Experimental point variants require --bits 4423, TPI16/default and registers 168/255')
     exe = args.exe.resolve(strict=True)
     args.exp_cache = (args.exp_cache or exe.parent).resolve()
     root = (args.output or Path('docs/data') / ('prac_cuda_' + dt.datetime.now().strftime('%Y%m%d_%H%M%S'))).resolve()

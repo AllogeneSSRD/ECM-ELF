@@ -25,6 +25,9 @@ def ncu(path):
         keys += ['gpu__time_duration.sum', 'sm__throughput.avg.pct_of_peak_sustained_elapsed',
                  'gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed',
                  'sm__warps_active.avg.pct_of_peak_sustained_active']
+        keys += [k for k in names if k.startswith(('launch__', 'l1tex__')) and
+                 any(s in k for s in ('local_mem', 'mem_local_op_ld', 'mem_local_op_st'))]
+        keys = list(dict.fromkeys(keys))
         kernels.append(dict(kernel=data['Kernel Name'], device=data['Device'],
             grid=data['Grid Size'], block=data['Block Size'],
             metrics={k: dict(value=data[k], unit=units[names.index(k)]) for k in keys if k in data}))
@@ -78,7 +81,7 @@ def nsys(path, mode):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('input', type=Path, help='NCU --csv --page raw export, or NSYS SQLite export')
-    p.add_argument('--mode', type=int, choices=[2, 3, 4, 5, 6, 7], default=4)
+    p.add_argument('--mode', type=int, choices=[2, 3, 4, 5, 6, 7, 8, 9], default=4)
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()
     result = ncu(a.input) if a.input.suffix.lower() == '.csv' else nsys(a.input, a.mode)

@@ -101,12 +101,15 @@ def rejected(exe, folder, cache, settings, message, device):
         ECM_PRAC_VARIANT='baseline',ECM_STAGE1_TPI='0',ECM_PRAC_WINDOW='tail',
         ECM_PRAC_WINDOW_COUNT='4',ECM_PRAC_WINDOW_WARMUP='1',ECM_PRAC_WINDOW_DUMP='1',
         ECM_GPU_STAGE1_SAMPLE_SECONDS='0.001',ECM_PRAC_PLAN_CACHE=str(cache))
-    env.update(settings); env.pop('ECM_GPU_DUMP',None)
+    for key in ('ECM_PRAC_WINDOW_CHUNK','ECM_PRAC_TARGET_MS','ECM_GPU_DUMP'):
+        env.pop(key,None)
+    env.update(settings)
     cmd = [str(exe),'-gpu','-d',str(device),'--gpu-param','0','-sigma','0:26','-gpucurves','8',
         '--ckpt','0','--exp-cache',str(cache),'-savea','completed.save','1000','0']
     proc = subprocess.run(cmd,input=b'(2^4423-1)\n',env=env,cwd=folder,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
     text=proc.stdout.decode('utf-8',errors='replace');(folder/'run.log').write_text(text,encoding='utf-8')
-    assert proc.returncode==1 and message in text and 'PRAC_WINDOW_DONE' not in text
+    assert proc.returncode==1 and message in text and 'PRAC_WINDOW_DONE' not in text, (
+        f'{folder}: exit={proc.returncode}, expected rejection={message!r}; see run.log')
     assert not list(folder.glob('.ecm_ckpt_*')) and not (folder/'window_q.csv').exists()
     assert not rows(folder)
 
@@ -118,6 +121,7 @@ def main():
     p.add_argument('--device',type=int,default=1)
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--production',action='store_true',help='Also verify 16-record B1=10m/260m subproducts using existing caches')
+    p.add_argument('--outline-add',action='store_true',help='Also gate the shared xADD candidate at 4608/TPI16')
     p.add_argument('--production-counts',type=int,nargs='+',default=[16],help='Production window lengths, each 1..32')
     p.add_argument('--production-chunks',type=int,nargs='+',default=[0],help='Per-launch record counts, 0 means unsplit')
     a=p.parse_args();exe=a.exe.resolve(strict=True);cache=(a.cache or exe.parent).resolve();root=a.output.resolve()
@@ -128,6 +132,7 @@ def main():
         configs=[('baseline',0,255)]
         if n in (2203,4423):configs += [('baseline',32,255)]
         if n==4423:configs += [('compact',16,255),('compact',16,168)]
+        if n==4423 and a.outline_add:configs += [('outline-add',16,255),('outline-add',16,168)]
         for variant,tpi,registers in configs:
             for exponent in ('lcm','choose12'):
                 for position in ('prefix','middle','tail'):
@@ -142,7 +147,9 @@ def main():
     slicing_signatures={};bitwise_slice_checks=0
     if a.production:
         for b1 in (10000000,260000000):
-            for variant,registers in [('baseline',255),('baseline',168),('compact',255),('compact',168)]:
+            configs = [('baseline',255),('baseline',168),('compact',255),('compact',168)]
+            if a.outline_add:configs += [('outline-add',255),('outline-add',168)]
+            for variant,registers in configs:
                 for count in a.production_counts:
                     for chunk in a.production_chunks:
                         for position in ('prefix','middle','tail'):
@@ -177,13 +184,17 @@ def main():
               ({'ECM_PRAC_VARIANT':'compact','ECM_STAGE1_TPI':'32'},'policy is unavailable'),
               ({'ECM_PRAC_VARIANT':'compact','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
               ({'ECM_GPU_STAGE1_ALGO':'ladder'},'requires ECM_GPU_STAGE1_ALGO=prac')]
+    if a.outline_add:
+        failures += [({'ECM_PRAC_VARIANT':'outline-add','ECM_STAGE1_TPI':'32'},'policy is unavailable'),
+                     ({'ECM_PRAC_VARIANT':'outline-add','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
+                     ({'ECM_PRAC_VARIANT':'outline-add','ECM_GPU_STAGE1_ALGO':'resident'},'requires ECM_GPU_STAGE1_ALGO=prac')]
     for i,(settings,message) in enumerate(failures):rejected(exe,root/f'reject{i}',cache,settings,message,a.device)
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),results=results,
         window_Q_compared=sum(r['Q_compared'] for r in results),resume_Q_compared=8,
         rejection_cases=len(failures),production_windows=a.production,
         production_counts=a.production_counts if a.production else [],
         production_chunks=a.production_chunks if a.production else [],
-        bitwise_slice_checks=bitwise_slice_checks,passed=True)
+        bitwise_slice_checks=bitwise_slice_checks,outline_add=a.outline_add,passed=True)
     (root/'summary.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k!='results'}),flush=True)
 

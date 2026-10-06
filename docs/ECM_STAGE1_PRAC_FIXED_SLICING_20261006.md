@@ -14,7 +14,7 @@ GPU1：RTX 4060 Laptop，24 SM，sm89，TPB128。param0、Montgomery、sigma=26�
 
 恢复窗口是初始点上的局部子乘积，不是真实完成前缀后的生产点。所有“s/curve”均为工作量投影；没有等待完整生产 B1 曲线完成，不自动发布为 Auto B2 成本。
 
-本轮 N4423 默认及性能矩阵均为 4608/TPI16。此前 N4423/TPI32 是显式对照实例，不是默认分档改变。容器需满足 Nbits+6；正常容器2560..8192使用TPI16，9216..16384使用TPI32，因此N8191会选9216/TPI32。当前TPB128与历史TPB256不同；寄存器上限不会自动改变TPB。参见 [容器选择](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:83)、[TPB默认](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_kernel.h:104)、[寄存器驻留约束](D:/code/MPA-OpenCl/docs/ECM_STAGE1_TPI_REGISTER_TUNING_20261006.md:32)。
+本轮 N4423 默认及性能矩阵均为 4608/TPI16。此前 N4423/TPI32 是显式对照实例，不是默认分档改变。容器需满足 Nbits+6；正常容器2560..8192使用TPI16，9216..16384使用TPI32，因此N8191会选9216/TPI32。当前TPB128与历史TPB256不同；寄存器上限不会自动改变TPB。参见 [容器选择](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:87)、[TPB默认](D:/code/MPA-OpenCl/CMakeLists.txt:433)、[寄存器驻留约束](D:/code/MPA-OpenCl/docs/ECM_STAGE1_TPI_REGISTER_TUNING_20261006.md:32)。
 
 ## 2. 控制变量
 

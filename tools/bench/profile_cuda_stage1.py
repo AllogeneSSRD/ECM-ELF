@@ -34,7 +34,8 @@ def main():
     p.add_argument('--curves', type=int, default=768)
     p.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     p.add_argument('--registers', type=int, choices=[0, 168, 255], default=255)
-    p.add_argument('--variant', choices=['baseline', 'compact'], default='baseline')
+    p.add_argument('--variant', choices=['baseline', 'compact', 'outline-add'], default='baseline')
+    p.add_argument('--target-ms', type=float, default=100)
     p.add_argument('--window', choices=['prefix', 'middle', 'tail'])
     p.add_argument('--window-count', type=int, default=32)
     p.add_argument('--window-chunk', type=int, default=0)
@@ -42,6 +43,7 @@ def main():
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--seconds', type=float, default=6)
     p.add_argument('--launch-skip', type=int, default=2)
+    p.add_argument('--memory', action='store_true', help='Include NCU memory workload counters for call/local-memory studies')
     p.add_argument('--exp-cache', type=Path, required=True)
     p.add_argument('--ncu', type=Path, default=Path('C:/Program Files/NVIDIA Corporation/Nsight Compute 2026.2.1/target/windows-desktop-win7-x64/ncu.exe'))
     p.add_argument('--nsys', type=Path, default=Path('C:/Program Files/NVIDIA Corporation/Nsight Systems 2026.1.3/target-windows-x64/nsys.exe'))
@@ -55,12 +57,14 @@ def main():
         collect(root, metadata['profiler'], a.ncu,
                 int(exit_file.read_text().strip()) if exit_file.exists() else None)
         return
+    if not 10 <= a.target_ms <= 500:
+        p.error('PRAC target must be in 10..500 ms')
     root.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, ECM_GPU_STAGE1_ALGO=a.algorithm, ECM_PRAC_REG_TARGET=str(a.registers),
                ECM_STAGE1_TPI=str(a.tpi), ECM_GPU_STAGE1_SAMPLE_SECONDS=str(a.seconds), ECM_PRAC_VARIANT=a.variant,
-               ECM_PRAC_PLAN_CACHE=str(a.exp_cache.resolve()))
+               ECM_PRAC_PLAN_CACHE=str(a.exp_cache.resolve()), ECM_PRAC_TARGET_MS=str(a.target_ms))
     env_keys = ('ECM_GPU_STAGE1_ALGO', 'ECM_PRAC_REG_TARGET', 'ECM_STAGE1_TPI',
-                'ECM_GPU_STAGE1_SAMPLE_SECONDS', 'ECM_PRAC_VARIANT', 'ECM_PRAC_PLAN_CACHE')
+                'ECM_GPU_STAGE1_SAMPLE_SECONDS', 'ECM_PRAC_VARIANT', 'ECM_PRAC_PLAN_CACHE', 'ECM_PRAC_TARGET_MS')
     for key in tuple(env):
         if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
     if a.window:
@@ -80,6 +84,12 @@ def main():
                   '--launch-count', '1', '--section', 'SpeedOfLight', '--section', 'Occupancy',
                   '--section', 'SchedulerStats', '--section', 'WarpStateStats',
                   '--export', str(root / 'trace')]
+        if a.memory:
+            prefix += ['--metrics', ','.join((
+                'l1tex__t_sectors_pipe_lsu_mem_local_op_ld.sum',
+                'l1tex__t_sectors_pipe_lsu_mem_local_op_st.sum',
+                'l1tex__t_sector_pipe_lsu_mem_local_op_ld_hit_rate.pct',
+                'l1tex__t_sector_pipe_lsu_mem_local_op_st_hit_rate.pct'))]
         report = root / 'trace.ncu-rep'
     else:
         prefix = [str(a.nsys), 'profile', '--trace=cuda', '--sample=none', '--cpuctxsw=none',

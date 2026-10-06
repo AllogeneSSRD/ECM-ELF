@@ -4,7 +4,8 @@
 
 enum { ECM_DOMAIN_INIT = 0, ECM_DOMAIN_EXPORT = 1, ECM_DOMAIN_LADDER = 2,
        ECM_DOMAIN_PRAC = 3, ECM_DOMAIN_PRAC_NATURAL = 4, ECM_DOMAIN_PRAC_168 = 5,
-       ECM_DOMAIN_PRAC_COMPACT = 6, ECM_DOMAIN_PRAC_COMPACT_168 = 7 };
+       ECM_DOMAIN_PRAC_COMPACT = 6, ECM_DOMAIN_PRAC_COMPACT_168 = 7,
+       ECM_DOMAIN_PRAC_OUTLINE_ADD = 8, ECM_DOMAIN_PRAC_OUTLINE_ADD_168 = 9 };
 cgbn_stage1_kernel_fn cgbn_stage1_domain_dispatch(uint32_t bits, uint32_t *tpi, int mode,
                                                 uint32_t requested_tpi = 0);
 
@@ -59,9 +60,32 @@ __device__ FORCE_INLINE void prac_add(curve_t<P> &c,
     cgbn_set(c._env, ox, v); cgbn_set(c._env, oz, u);
 }
 
+// One shared xADD body trades repeated instruction text for the CUDA call ABI.
+// Keep the alias-safe arithmetic above identical to the baseline.
+template<class P>
+__device__ __noinline__ void prac_add_outlined(curve_t<P> &c,
+    typename curve_t<P>::bn_t &ox, typename curve_t<P>::bn_t &oz,
+    const typename curve_t<P>::bn_t &x1, const typename curve_t<P>::bn_t &z1,
+    const typename curve_t<P>::bn_t &x2, const typename curve_t<P>::bn_t &z2,
+    const typename curve_t<P>::bn_t &xd, const typename curve_t<P>::bn_t &zd,
+    const typename curve_t<P>::bn_t &n, uint32_t np0) {
+    prac_add(c, ox, oz, x1, z1, x2, z2, xd, zd, n, np0);
+}
+
+template<class P, bool OUTLINE>
+__device__ FORCE_INLINE void prac_add_selected(curve_t<P> &c,
+    typename curve_t<P>::bn_t &ox, typename curve_t<P>::bn_t &oz,
+    const typename curve_t<P>::bn_t &x1, const typename curve_t<P>::bn_t &z1,
+    const typename curve_t<P>::bn_t &x2, const typename curve_t<P>::bn_t &z2,
+    const typename curve_t<P>::bn_t &xd, const typename curve_t<P>::bn_t &zd,
+    const typename curve_t<P>::bn_t &n, uint32_t np0) {
+    if constexpr (OUTLINE) prac_add_outlined(c, ox, oz, x1, z1, x2, z2, xd, zd, n, np0);
+    else prac_add(c, ox, oz, x1, z1, x2, z2, xd, zd, n, np0);
+}
+
 template<class P, int MODE>
-__global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMAIN_PRAC_COMPACT) ? 255 :
-                         (MODE == ECM_DOMAIN_PRAC_168 || MODE == ECM_DOMAIN_PRAC_COMPACT_168) ? 168 : P::REG_TARGET) kernel_suyama_domain(
+__global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMAIN_PRAC_COMPACT || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD) ? 255 :
+                         (MODE == ECM_DOMAIN_PRAC_168 || MODE == ECM_DOMAIN_PRAC_COMPACT_168 || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD_168) ? 168 : P::REG_TARGET) kernel_suyama_domain(
     cgbn_error_report_t *report, uint64_t total, uint64_t start, uint64_t length,
     uint32_t *control, uint32_t *data, uint32_t count, uint32_t unused, uint32_t np0) {
     (void)unused;
@@ -100,6 +124,7 @@ __global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMA
             cgbn_store(c._env, mem + 5, bx); cgbn_store(c._env, mem + 6, bz);
         } else {
             constexpr bool compact = MODE == ECM_DOMAIN_PRAC_COMPACT || MODE == ECM_DOMAIN_PRAC_COMPACT_168;
+            constexpr bool outlined = MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD_168;
             bn cx, cz;
             auto *primes = reinterpret_cast<const EcmPracPrime *>(control);
             for (uint64_t i = start; i < start + length; ++i) {
@@ -115,7 +140,7 @@ __global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMA
                             cgbn_swap(c._env, ax, bx); cgbn_swap(c._env, az, bz);
                         }
                         if (uint64_t(d) * 100 <= uint64_t(e) * 296) {
-                            prac_add(c, cx, cz, ax, az, bx, bz, cx, cz, n, np0);
+                            prac_add_selected<P, outlined>(c, cx, cz, ax, az, bx, bz, cx, cz, n, np0);
                             cgbn_swap(c._env, bx, cx); cgbn_swap(c._env, bz, cz);
                             d -= e;
                         } else {
@@ -123,7 +148,7 @@ __global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMA
                             int rule = ((d & 1) == (e & 1)) ? 1 : !(d & 1) ? 2 : 3;
                             if (rule == 1) { cgbn_swap(c._env, bx, cx); cgbn_swap(c._env, bz, cz); }
                             if (rule == 3) { cgbn_swap(c._env, ax, bx); cgbn_swap(c._env, az, bz); }
-                            prac_add(c, cx, cz, ax, az, cx, cz, bx, bz, n, np0);
+                            prac_add_selected<P, outlined>(c, cx, cz, ax, az, cx, cz, bx, bz, n, np0);
                             prac_dbl<P, compact>(c, ax, az, ax, az, a24, n, np0);
                             if (rule == 1) {
                                 cgbn_swap(c._env, bx, cx); cgbn_swap(c._env, bz, cz); d = (d - e) / 2;
@@ -131,7 +156,7 @@ __global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMA
                             else { cgbn_swap(c._env, ax, bx); cgbn_swap(c._env, az, bz); e /= 2; }
                         }
                     }
-                    prac_add(c, ax, az, bx, bz, ax, az, cx, cz, n, np0);
+                    prac_add_selected<P, outlined>(c, ax, az, bx, bz, ax, az, cx, cz, n, np0);
                 }
             }
         }
@@ -161,6 +186,14 @@ static cgbn_stage1_kernel_fn domain_kernel(int mode) {
     case ECM_DOMAIN_PRAC_COMPACT_168:
         if constexpr (P::BITS == 4608 && P::TPI == 16)
             return kernel_suyama_domain<P, ECM_DOMAIN_PRAC_COMPACT_168>;
+        else return nullptr;
+    case ECM_DOMAIN_PRAC_OUTLINE_ADD:
+        if constexpr (P::BITS == 4608 && P::TPI == 16)
+            return kernel_suyama_domain<P, ECM_DOMAIN_PRAC_OUTLINE_ADD>;
+        else return nullptr;
+    case ECM_DOMAIN_PRAC_OUTLINE_ADD_168:
+        if constexpr (P::BITS == 4608 && P::TPI == 16)
+            return kernel_suyama_domain<P, ECM_DOMAIN_PRAC_OUTLINE_ADD_168>;
         else return nullptr;
     default: return nullptr;
     }

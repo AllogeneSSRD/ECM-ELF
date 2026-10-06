@@ -30,6 +30,7 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
         ECM_PRAC_WINDOW_WARMUP=str(warmup), ECM_PRAC_WINDOW_DUMP='1' if dump else '0',
         ECM_GPU_STAGE1_SAMPLE_SECONDS=str(seconds), ECM_PRAC_PLAN_CACHE=str(cache))
     env.pop('ECM_GPU_DUMP', None)
+    env.pop('ECM_PRAC_TARGET_MS', None)  # Fixed window chunks are independent of production feedback.
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob('.ecm_ckpt_*')}
     command = [str(exe), '-gpu', '-d', str(device), '--gpu-param', '0', '-sigma', f'0:{sigma}',
         '-gpucurves', str(curves), '--ckpt', '0', '--exponent', exponent,
@@ -43,6 +44,8 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
     info, done, geometry = INFO.search(text), DONE.search(text), GEOMETRY.search(text)
     if not info or not done or not geometry or proc.returncode != 1:
         raise RuntimeError(f'Incomplete window measurement: {folder}\n{text[-2000:]}')
+    if f'PRAC variant={variant}' not in text:
+        raise RuntimeError('Requested window variant was not selected')
     if 'checkpoint resumed' in text or 'Stage1 PRAC completed' in text:
         raise RuntimeError('Window entered a production checkpoint/completion path')
     after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob('.ecm_ckpt_*')}
@@ -97,7 +100,7 @@ def main():
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     p.add_argument('--registers', type=int, nargs='+', choices=[0, 168, 255], default=[255, 168])
-    p.add_argument('--variants', nargs='+', choices=['baseline', 'compact'], default=['baseline', 'compact'])
+    p.add_argument('--variants', nargs='+', choices=['baseline', 'compact', 'outline-add'], default=['baseline', 'compact'])
     p.add_argument('--windows', nargs='+', choices=['prefix', 'middle', 'tail'], default=['prefix', 'middle', 'tail'])
     p.add_argument('--count', type=int, default=16)
     p.add_argument('--chunks', type=int, nargs='+', default=[0], help='Per-launch counts; 0 means one launch per window')
@@ -110,10 +113,10 @@ def main():
     if not 1 <= a.count <= 32 or not 0 <= a.warmup <= 32 or not 0 < a.seconds <= 600 or a.curves < 1 or a.repeats < 1:
         p.error('Invalid count, warmup, seconds, curves or repeats')
     if any(not 0 <= c <= a.count for c in a.chunks):p.error('Chunks must be in 0..count')
-    if ('compact' in a.variants or 168 in a.registers) and (a.bits != [4423] or a.tpi == 32):
-        p.error('compact/168 require --bits 4423 and TPI16/default')
-    if 'compact' in a.variants and 0 in a.registers:
-        p.error('compact requires registers 168/255')
+    if (any(v != 'baseline' for v in a.variants) or 168 in a.registers) and (a.bits != [4423] or a.tpi == 32):
+        p.error('Experimental point variants/168 require --bits 4423 and TPI16/default')
+    if any(v != 'baseline' for v in a.variants) and 0 in a.registers:
+        p.error('Experimental point variants require registers 168/255')
     cache = (a.exp_cache or exe.parent).resolve(); root = a.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
     report = dict(schema=1, exe=str(exe), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),

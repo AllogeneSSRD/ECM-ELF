@@ -51,6 +51,7 @@ def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, 
     if not sample and expect_records and not rows(folder): raise RuntimeError(f'No Stage1 Q records: {folder}\n{text[-1500:]}')
     if algo == 'prac' and expect_records:
         assert f'PRAC slice target={float(target_ms):.3f} ms' in text, 'PRAC target was not selected'
+        assert f'PRAC variant={variant}' in text, 'PRAC variant was not selected'
     return text
 
 
@@ -121,7 +122,7 @@ def main():
     ap.add_argument('--bits', type=int, nargs='+', choices=[2203, 4423, 8191], default=[2203, 4423, 8191])
     ap.add_argument('--registers', type=int, choices=[0, 168, 255],
                     default=int(os.environ.get('ECM_PRAC_REG_TARGET', '0')))
-    ap.add_argument('--variant', choices=['baseline', 'compact'], default='baseline')
+    ap.add_argument('--variant', choices=['baseline', 'compact', 'outline-add'], default='baseline')
     ap.add_argument('--target-ms', type=float, default=100)
     ap.add_argument('--curves', type=int, default=8, help='Batch size for primary N and sigma62 cases; checkpoint cases retain 16')
     args = ap.parse_args(); exe = args.exe.resolve(strict=True); root = args.output.resolve()
@@ -129,8 +130,8 @@ def main():
         ap.error('Finite target in 10..500 ms and positive curves required')
     if args.registers == 168 and (args.bits != [4423] or args.tpi == 32):
         ap.error('168-register variant requires --bits 4423 and TPI16/default')
-    if args.variant == 'compact' and (args.bits != [4423] or args.tpi == 32 or args.registers == 0):
-        ap.error('compact requires --bits 4423, TPI16/default and registers 168/255')
+    if args.variant != 'baseline' and (args.bits != [4423] or args.tpi == 32 or args.registers == 0):
+        ap.error('Experimental point variants require --bits 4423, TPI16/default and registers 168/255')
     root.mkdir(parents=True, exist_ok=False)
     results = []
     cases = [(f'M{n}', f'(2^{n}-1)', 1000, args.curves, 26, t) for n in args.bits for t in ('lcm', 'choose12')]
@@ -139,7 +140,7 @@ def main():
         cases += [(f'boundary{b}', '(2^2203-1)', b, 4, 26, t) for b in (2, 3, 5) for t in ('lcm', 'choose12')]
     if 4423 in args.bits:
         cases += [('sigma62', '(2^4423-1)', 1000, args.curves, 4611686018427511360, 'lcm')]
-    if args.registers != 168 and args.variant != 'compact':
+    if args.registers != 168 and args.variant == 'baseline':
         cases += [('composite', '((2^127-1)*(2^521-1))', 1000, 8, 26, 'lcm')]
     for label, expr, b1, curves, sigma, exponent in cases:
         reference = root / f'{label}_{exponent}' / 'cpu'
