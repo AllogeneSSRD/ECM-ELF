@@ -71,6 +71,11 @@ def summarize(study, model):
             raise ValueError('Exclusive phase deltas do not sum to full time: ' + fast['name'])
         actual = statistics.median(r['phases']['full'] for r in rows)
         errors = [100 * (prediction['full'] / r['phases']['full'] - 1) for r in rows]
+        # For one deterministic prediction x and two times a <= b, the best
+        # possible worst relative error is (b-a)/(b+a), at x=2ab/(a+b).
+        # More repetitions cannot make two already incompatible bands overlap.
+        fastest, slowest = fast['phases']['full'], slow['phases']['full']
+        error_floor = 100 * (slowest-fastest) / (slowest+fastest)
         report = dict(bits=bits, D=d, B2=b2, owner_mb=owner, kind=kind, regime=regime,
                       scope_id=scope['id'], repeats=len(rows),
                       full_seconds=distribution(r['phases']['full'] for r in rows),
@@ -78,6 +83,8 @@ def summarize(study, model):
                       delta_seconds=delta, exclusive_phase_deltas_seconds=phase_deltas,
                       timing_roundoff_seconds=roundoff,
                       predicted_seconds=prediction['full'], raw_error_percent=errors,
+                      best_possible_raw_max_abs_percent=error_floor,
+                      single_prediction_10_percent_possible=error_floor <= 10,
                       diagnostic_median_error_percent=100 * (prediction['full'] / actual - 1),
                       fast_name=fast['name'], slow_name=slow['name'],
                       samples=[dict(name=r['name'], process_seconds=r['process_seconds'],
@@ -105,6 +112,8 @@ def summarize(study, model):
                 holdout_failed=[s for s in scopes if not s['release_holdout_passed']],
                 repeated_point_spread=distribution(r['slow_over_fast'] for r in repeats),
                 points_over_10_percent_repeat_spread=sum(r['slow_over_fast'] > 1.1 for r in repeats),
+                points_incompatible_with_single_prediction_10_percent=sum(not r['single_prediction_10_percent_possible'] for r in repeats),
+                holdout_points_incompatible_with_single_prediction_10_percent=sum(r['kind'] == 'holdout' and not r['single_prediction_10_percent_possible'] for r in repeats),
                 scopes=scopes, repeated_points=repeats)
 
 

@@ -1,0 +1,1243 @@
+{
+  "schema": 1,
+  "status": "complete_ranking_passed_accuracy_failed",
+  "audit": {
+    "schema": 2,
+    "passed": false,
+    "integrity_passed": true,
+    "accuracy_passed": false,
+    "ranking_passed": true,
+    "schedule_coverage": {
+      "stage2_observations": 666,
+      "stage1_batches": 18
+    },
+    "validated_case_count": 468,
+    "study_stage1_batches": 18,
+    "independently_verified_stage1_points": 117,
+    "fitting_stage2": 540,
+    "diagnostic_b2_stage2": 126,
+    "validation_stage2": 468,
+    "blind_stage2": 408,
+    "replayed_stage2": 60,
+    "root_replays": 18,
+    "shape_replays": 42,
+    "clean_curves": 1134,
+    "independent_gmp_coefficients": 3430016,
+    "g1_curves": 198,
+    "g1_root_reductions": 54,
+    "matched_leaf_groups": 312,
+    "validation_error_percent": [
+      -60.138171238705155,
+      13.717604109535975
+    ],
+    "blind_error_percent": [
+      -60.138171238705155,
+      13.717604109535975
+    ],
+    "blind_max_abs_percent": 60.138171238705155,
+    "validation_scopes": [
+      {
+        "id": "2203:1000:4096:640:35:70:3000000000:6000000000:30030",
+        "bits": 2203,
+        "owner_mb": 640,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 0.40132330555968654,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:640:9:18:3000000000:6000000000:60060",
+        "bits": 2203,
+        "owner_mb": 640,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 2.861040546776472,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:640:3:5:3000000000:6000000000:120120",
+        "bits": 2203,
+        "owner_mb": 640,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 3.2745819465835435,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:640:2:2:86456370:172942769:30030",
+        "bits": 2203,
+        "owner_mb": 640,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 9.675414017247807,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:640:2:2:345885540:691831139:60060",
+        "bits": 2203,
+        "owner_mb": 640,
+        "regime": "g2",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 7.958255371045109,
+        "independent_samples": 12,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:640:2:2:1383662280:2767444679:120120",
+        "bits": 2203,
+        "owner_mb": 640,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 1.9867399256108476,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:640:3:35:172942770:2999999999:30030",
+        "bits": 2203,
+        "owner_mb": 640,
+        "regime": "bridge",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 16.060099532326532,
+        "independent_samples": 12,
+        "passed": false
+      },
+      {
+        "id": "2203:1000:4096:640:3:9:691831140:2999999999:60060",
+        "bits": 2203,
+        "owner_mb": 640,
+        "regime": "bridge",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 7.19464043747452,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:640:3:3:2767444680:2999999999:120120",
+        "bits": 2203,
+        "owner_mb": 640,
+        "regime": "bridge",
+        "samples": 4,
+        "expected_samples": 4,
+        "max_abs_percent": 0.7291633451129265,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:35:70:3000000000:6000000000:30030",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 1.7128947588826993,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:9:18:3000000000:6000000000:60060",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 1.9714441833199148,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:3:5:3000000000:6000000000:120120",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 0.7310661298489673,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:1:1:21561540:86456369:30030",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "g1",
+        "samples": 6,
+        "expected_samples": 6,
+        "max_abs_percent": 6.737361538474429,
+        "independent_samples": 4,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:1:1:86366280:345885539:60060",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "g1",
+        "samples": 6,
+        "expected_samples": 6,
+        "max_abs_percent": 12.711761966389512,
+        "independent_samples": 4,
+        "passed": false
+      },
+      {
+        "id": "2203:1000:4096:0:1:1:345705360:1383662279:120120",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "g1",
+        "samples": 12,
+        "expected_samples": 12,
+        "max_abs_percent": 5.847398650752178,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:2:2:86456370:172942769:30030",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 4.987311957531526,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:2:2:345885540:691831139:60060",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "g2",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 6.492682123782156,
+        "independent_samples": 12,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:2:2:1383662280:2767444679:120120",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 6.160250184982907,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:3:35:172942770:2999999999:30030",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "bridge",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 10.274151538602228,
+        "independent_samples": 12,
+        "passed": false
+      },
+      {
+        "id": "2203:1000:4096:0:3:9:691831140:2999999999:60060",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "bridge",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 7.891195176035315,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "2203:1000:4096:0:3:3:2767444680:2999999999:120120",
+        "bits": 2203,
+        "owner_mb": 0,
+        "regime": "bridge",
+        "samples": 4,
+        "expected_samples": 4,
+        "max_abs_percent": 4.751124016568609,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:640:35:70:3000000000:6000000000:30030",
+        "bits": 4423,
+        "owner_mb": 640,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 0.56087638600546,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:640:9:18:3000000000:6000000000:60060",
+        "bits": 4423,
+        "owner_mb": 640,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 6.359445260510821,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:640:3:5:3000000000:6000000000:120120",
+        "bits": 4423,
+        "owner_mb": 640,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 2.734594481142527,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:640:2:2:86456370:172942769:30030",
+        "bits": 4423,
+        "owner_mb": 640,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 2.870973383119513,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:640:2:2:345885540:691831139:60060",
+        "bits": 4423,
+        "owner_mb": 640,
+        "regime": "g2",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 2.350472365089218,
+        "independent_samples": 12,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:640:2:2:1383662280:2767444679:120120",
+        "bits": 4423,
+        "owner_mb": 640,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 3.2662580021308174,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:640:3:35:172942770:2999999999:30030",
+        "bits": 4423,
+        "owner_mb": 640,
+        "regime": "bridge",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 7.857109731710321,
+        "independent_samples": 12,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:640:3:9:691831140:2999999999:60060",
+        "bits": 4423,
+        "owner_mb": 640,
+        "regime": "bridge",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 7.301073290717108,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:640:3:3:2767444680:2999999999:120120",
+        "bits": 4423,
+        "owner_mb": 640,
+        "regime": "bridge",
+        "samples": 4,
+        "expected_samples": 4,
+        "max_abs_percent": 2.7496909826483007,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:35:70:3000000000:6000000000:30030",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 0.31802680191143073,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:9:18:3000000000:6000000000:60060",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 4.2057768283888075,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:3:5:3000000000:6000000000:120120",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 2.111931609057627,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:1:1:21561540:86456369:30030",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "g1",
+        "samples": 6,
+        "expected_samples": 6,
+        "max_abs_percent": 6.918755798152143,
+        "independent_samples": 4,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:1:1:86366280:345885539:60060",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "g1",
+        "samples": 6,
+        "expected_samples": 6,
+        "max_abs_percent": 5.055293103733172,
+        "independent_samples": 4,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:1:1:345705360:1383662279:120120",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "g1",
+        "samples": 12,
+        "expected_samples": 12,
+        "max_abs_percent": 2.1981570490974267,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:2:2:86456370:172942769:30030",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 5.2135444886631355,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:2:2:345885540:691831139:60060",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "g2",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 4.451851252067285,
+        "independent_samples": 12,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:2:2:1383662280:2767444679:120120",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 1.7359622763177596,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:3:35:172942770:2999999999:30030",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "bridge",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 6.752299640647186,
+        "independent_samples": 12,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:3:9:691831140:2999999999:60060",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "bridge",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 3.8931798612411805,
+        "independent_samples": 8,
+        "passed": true
+      },
+      {
+        "id": "4423:1000:4096:0:3:3:2767444680:2999999999:120120",
+        "bits": 4423,
+        "owner_mb": 0,
+        "regime": "bridge",
+        "samples": 4,
+        "expected_samples": 4,
+        "max_abs_percent": 2.4820704132628935,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "8191:1000:4096:640:35:70:3000000000:6000000000:30030",
+        "bits": 8191,
+        "owner_mb": 640,
+        "regime": "multiple",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 35.7234850364073,
+        "independent_samples": 14,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:640:9:18:3000000000:6000000000:60060",
+        "bits": 8191,
+        "owner_mb": 640,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 45.402250030341676,
+        "independent_samples": 2,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:640:3:5:3000000000:6000000000:120120",
+        "bits": 8191,
+        "owner_mb": 640,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 2.222679196196553,
+        "independent_samples": 2,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:640:2:2:86456370:172942769:30030",
+        "bits": 8191,
+        "owner_mb": 640,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 22.98304151461822,
+        "independent_samples": 8,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:640:2:2:345885540:691831139:60060",
+        "bits": 8191,
+        "owner_mb": 640,
+        "regime": "g2",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 37.418647946889536,
+        "independent_samples": 12,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:640:2:2:1383662280:2767444679:120120",
+        "bits": 8191,
+        "owner_mb": 640,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 43.108190438831514,
+        "independent_samples": 8,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:640:3:35:172942770:2999999999:30030",
+        "bits": 8191,
+        "owner_mb": 640,
+        "regime": "bridge",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 34.35300231228271,
+        "independent_samples": 12,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:640:3:9:691831140:2999999999:60060",
+        "bits": 8191,
+        "owner_mb": 640,
+        "regime": "bridge",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 14.634187841069535,
+        "independent_samples": 8,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:640:3:3:2767444680:2999999999:120120",
+        "bits": 8191,
+        "owner_mb": 640,
+        "regime": "bridge",
+        "samples": 4,
+        "expected_samples": 4,
+        "max_abs_percent": 1.7955684517964365,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "8191:1000:4096:0:35:70:3000000000:6000000000:30030",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "multiple",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 46.87365471217927,
+        "independent_samples": 14,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:0:9:18:3000000000:6000000000:60060",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 4.0362635015424475,
+        "independent_samples": 2,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:0:3:5:3000000000:6000000000:120120",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "multiple",
+        "samples": 2,
+        "expected_samples": 2,
+        "max_abs_percent": 8.566809997171799,
+        "independent_samples": 2,
+        "passed": true
+      },
+      {
+        "id": "8191:1000:4096:0:1:1:21561540:86456369:30030",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "g1",
+        "samples": 6,
+        "expected_samples": 6,
+        "max_abs_percent": 2.361590334554209,
+        "independent_samples": 4,
+        "passed": true
+      },
+      {
+        "id": "8191:1000:4096:0:1:1:86366280:345885539:60060",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "g1",
+        "samples": 6,
+        "expected_samples": 6,
+        "max_abs_percent": 37.33385376368209,
+        "independent_samples": 4,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:0:1:1:345705360:1383662279:120120",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "g1",
+        "samples": 12,
+        "expected_samples": 12,
+        "max_abs_percent": 28.48281141153398,
+        "independent_samples": 8,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:0:2:2:86456370:172942769:30030",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 60.138171238705155,
+        "independent_samples": 8,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:0:2:2:345885540:691831139:60060",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "g2",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 48.83440848726694,
+        "independent_samples": 12,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:0:2:2:1383662280:2767444679:120120",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "g2",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 14.688822655306645,
+        "independent_samples": 8,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:0:3:35:172942770:2999999999:30030",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "bridge",
+        "samples": 14,
+        "expected_samples": 14,
+        "max_abs_percent": 42.855074673349534,
+        "independent_samples": 12,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:0:3:9:691831140:2999999999:60060",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "bridge",
+        "samples": 8,
+        "expected_samples": 8,
+        "max_abs_percent": 1.5227267794325594,
+        "independent_samples": 8,
+        "passed": false
+      },
+      {
+        "id": "8191:1000:4096:0:3:3:2767444680:2999999999:120120",
+        "bits": 8191,
+        "owner_mb": 0,
+        "regime": "bridge",
+        "samples": 4,
+        "expected_samples": 4,
+        "max_abs_percent": 23.643737484780715,
+        "independent_samples": 2,
+        "passed": false
+      }
+    ],
+    "ranking": [
+      {
+        "bits": 2203,
+        "stage1_batch": 1,
+        "selected": [
+          60060,
+          5250000000,
+          640,
+          "2203:1000:4096:640:9:18:3000000000:6000000000:60060"
+        ],
+        "actual_best": [
+          60060,
+          5250000000,
+          640,
+          "2203:1000:4096:640:9:18:3000000000:6000000000:60060"
+        ],
+        "selected_actual_score": 2.297656566480892,
+        "best_actual_score": 2.297656566480892,
+        "selected_value_loss_percent": 0.0,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 2203,
+        "stage1_batch": 12,
+        "selected": [
+          60060,
+          1383662280,
+          0,
+          "2203:1000:4096:0:3:9:691831140:2999999999:60060"
+        ],
+        "actual_best": [
+          60060,
+          1383602220,
+          0,
+          "2203:1000:4096:0:3:9:691831140:2999999999:60060"
+        ],
+        "selected_actual_score": 3.6578130576223797,
+        "best_actual_score": 3.6811137630065662,
+        "selected_value_loss_percent": 0.632979768741393,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 4423,
+        "stage1_batch": 1,
+        "selected": [
+          30030,
+          691831140,
+          0,
+          "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+        ],
+        "actual_best": [
+          30030,
+          691831140,
+          0,
+          "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+        ],
+        "selected_actual_score": 1.8328784203449804,
+        "best_actual_score": 1.8328784203449804,
+        "selected_value_loss_percent": 0.0,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 4423,
+        "stage1_batch": 12,
+        "selected": [
+          30030,
+          691831140,
+          0,
+          "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+        ],
+        "actual_best": [
+          30030,
+          691831140,
+          0,
+          "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+        ],
+        "selected_actual_score": 2.540801896805805,
+        "best_actual_score": 2.540801896805805,
+        "selected_value_loss_percent": 0.0,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 8191,
+        "stage1_batch": 1,
+        "selected": [
+          30030,
+          691831140,
+          640,
+          "8191:1000:4096:640:3:35:172942770:2999999999:30030"
+        ],
+        "actual_best": [
+          30030,
+          172882710,
+          0,
+          "8191:1000:4096:0:2:2:86456370:172942769:30030"
+        ],
+        "selected_actual_score": 1.0252933520439504,
+        "best_actual_score": 1.025354121241367,
+        "selected_value_loss_percent": 0.005926654621823957,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 8191,
+        "stage1_batch": 12,
+        "selected": [
+          30030,
+          172882710,
+          0,
+          "8191:1000:4096:0:2:2:86456370:172942769:30030"
+        ],
+        "actual_best": [
+          30030,
+          172882710,
+          0,
+          "8191:1000:4096:0:2:2:86456370:172942769:30030"
+        ],
+        "selected_actual_score": 1.2953879430276998,
+        "best_actual_score": 1.2953879430276998,
+        "selected_value_loss_percent": 0.0,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      }
+    ],
+    "validated_ranking": [
+      {
+        "bits": 2203,
+        "stage1_batch": 1,
+        "selected": [
+          60060,
+          5250000000,
+          640,
+          "2203:1000:4096:640:9:18:3000000000:6000000000:60060"
+        ],
+        "actual_best": [
+          60060,
+          5250000000,
+          640,
+          "2203:1000:4096:640:9:18:3000000000:6000000000:60060"
+        ],
+        "selected_actual_score": 2.297656566480892,
+        "best_actual_score": 2.297656566480892,
+        "selected_value_loss_percent": 0.0,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 2203,
+        "stage1_batch": 12,
+        "selected": [
+          60060,
+          1383662280,
+          0,
+          "2203:1000:4096:0:3:9:691831140:2999999999:60060"
+        ],
+        "actual_best": [
+          60060,
+          1383602220,
+          0,
+          "2203:1000:4096:0:3:9:691831140:2999999999:60060"
+        ],
+        "selected_actual_score": 3.6578130576223797,
+        "best_actual_score": 3.6811137630065662,
+        "selected_value_loss_percent": 0.632979768741393,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 4423,
+        "stage1_batch": 1,
+        "selected": [
+          30030,
+          691831140,
+          0,
+          "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+        ],
+        "actual_best": [
+          30030,
+          691831140,
+          0,
+          "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+        ],
+        "selected_actual_score": 1.8328784203449804,
+        "best_actual_score": 1.8328784203449804,
+        "selected_value_loss_percent": 0.0,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 4423,
+        "stage1_batch": 12,
+        "selected": [
+          30030,
+          691831140,
+          0,
+          "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+        ],
+        "actual_best": [
+          30030,
+          691831140,
+          0,
+          "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+        ],
+        "selected_actual_score": 2.540801896805805,
+        "best_actual_score": 2.540801896805805,
+        "selected_value_loss_percent": 0.0,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 8191,
+        "stage1_batch": 1,
+        "selected": [
+          30030,
+          86396310,
+          0,
+          "8191:1000:4096:0:1:1:21561540:86456369:30030"
+        ],
+        "actual_best": [
+          30030,
+          86396310,
+          0,
+          "8191:1000:4096:0:1:1:21561540:86456369:30030"
+        ],
+        "selected_actual_score": 0.8926882130040051,
+        "best_actual_score": 0.8926882130040051,
+        "selected_value_loss_percent": 0.0,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      },
+      {
+        "bits": 8191,
+        "stage1_batch": 12,
+        "selected": [
+          30030,
+          86396310,
+          0,
+          "8191:1000:4096:0:1:1:21561540:86456369:30030"
+        ],
+        "actual_best": [
+          30030,
+          86396310,
+          0,
+          "8191:1000:4096:0:1:1:21561540:86456369:30030"
+        ],
+        "selected_actual_score": 1.117194234861509,
+        "best_actual_score": 1.117194234861509,
+        "selected_value_loss_percent": 0.0,
+        "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+      }
+    ],
+    "profile_sha256": "c83a955ef08f8b3e6284df90a74a2d6be8679464acbd4638b20097807904178e",
+    "study_sha256": "b73946725378d032fb4f935427a040037d6dd25cca33ab03dcb990ce823961b4",
+    "blind_sha256": "ac209f38cb0f1ec1053a9e6e808bd0fd71ee1d1ce47950f7a18f3508311bd20a",
+    "auditor_sha256": "3d29af40aa0345ad3628df0445e980752b2b8f95e8cb191b0c8b3f72b84bf518"
+  },
+  "calibration_complete": true,
+  "validation_complete": true,
+  "validation_exit_code": 0,
+  "validation_seed": 20261012,
+  "runtime_profile_published": false,
+  "native_v2_auto_manual_ini_queue_acceptance_run": false,
+  "archive_manifest": "docs/data/ecm_auto_b2_bridge_20261006_raw.json",
+  "archive_sha256": "6ae459f9dc3c8898d4a7394a1e655aa9499b855170aac78b3109bfc676ea7974",
+  "archive_verified_entries": 3510,
+  "archive_hash_mismatches": 0,
+  "receipts": {
+    "calibration": "build_manifest.json",
+    "validation": "frozen_sources_manifest.json",
+    "note": "These are different receipts; binary and all 25 raw dependencies match."
+  },
+  "export_gate": {
+    "returncode": 1,
+    "profile_created": false,
+    "error": "Complete scope accuracy and ranking gates are required",
+    "log": "D:\\code\\MPA-OpenCl\\build_cuda_cmake\\_auto_b2_bridge_20261006\\export_rejection.log",
+    "log_sha256": "5c43f027fdb16bd2124a9e6229a84c47e4c19ba5b4db66722acccf813200ee73"
+  },
+  "variance_diagnostic": {
+    "schema": 1,
+    "kind": "repeat_variance_diagnostic",
+    "complete": true,
+    "discarded_runs": 0,
+    "refitted": false,
+    "changes_release_gate": false,
+    "state_is_causal_evidence": false,
+    "schedule_coverage": {
+      "stage2_observations": 666,
+      "stage1_batches": 18
+    },
+    "total_curves": 666,
+    "exact_repeated_points": 333,
+    "scope_count": 63,
+    "holdout_passed": 57,
+    "holdout_failed": [
+      {
+        "id": "8191:1000:4096:640:3:5:3000000000:6000000000:120120",
+        "bits": 8191,
+        "D": [
+          120120
+        ],
+        "owner_mb": 640,
+        "regime": "multiple",
+        "release_holdout_passed": false,
+        "holdout_raw_max_abs_percent": 39.46908204289736,
+        "diagnostic_holdout_median_max_abs_percent": 24.61023976606719,
+        "worst_repeat_ratio": 1.6506751469256429
+      },
+      {
+        "id": "8191:1000:4096:640:2:2:1383662280:2767444679:120120",
+        "bits": 8191,
+        "D": [
+          120120
+        ],
+        "owner_mb": 640,
+        "regime": "g2",
+        "release_holdout_passed": false,
+        "holdout_raw_max_abs_percent": 26.269302581528486,
+        "diagnostic_holdout_median_max_abs_percent": 15.811750995531959,
+        "worst_repeat_ratio": 1.3305526048502299
+      },
+      {
+        "id": "8191:1000:4096:0:9:18:3000000000:6000000000:60060",
+        "bits": 8191,
+        "D": [
+          60060
+        ],
+        "owner_mb": 0,
+        "regime": "multiple",
+        "release_holdout_passed": false,
+        "holdout_raw_max_abs_percent": 17.153820804449115,
+        "diagnostic_holdout_median_max_abs_percent": 9.459858111025598,
+        "worst_repeat_ratio": 1.2181807393458248
+      },
+      {
+        "id": "8191:1000:4096:0:1:1:345705360:1383662279:120120",
+        "bits": 8191,
+        "D": [
+          120120
+        ],
+        "owner_mb": 0,
+        "regime": "g1",
+        "release_holdout_passed": false,
+        "holdout_raw_max_abs_percent": 48.93164435957908,
+        "diagnostic_holdout_median_max_abs_percent": 32.02792150137779,
+        "worst_repeat_ratio": 1.9895451220537366
+      },
+      {
+        "id": "8191:1000:4096:0:2:2:1383662280:2767444679:120120",
+        "bits": 8191,
+        "D": [
+          120120
+        ],
+        "owner_mb": 0,
+        "regime": "g2",
+        "release_holdout_passed": false,
+        "holdout_raw_max_abs_percent": 35.08669425832143,
+        "diagnostic_holdout_median_max_abs_percent": 21.172459679796408,
+        "worst_repeat_ratio": 1.5456661959199733
+      },
+      {
+        "id": "8191:1000:4096:0:3:9:691831140:2999999999:60060",
+        "bits": 8191,
+        "D": [
+          60060
+        ],
+        "owner_mb": 0,
+        "regime": "bridge",
+        "release_holdout_passed": false,
+        "holdout_raw_max_abs_percent": 27.363873918785497,
+        "diagnostic_holdout_median_max_abs_percent": 16.776271332762416,
+        "worst_repeat_ratio": 1.3412684779467343
+      }
+    ],
+    "repeated_point_spread": {
+      "count": 333,
+      "min": 1.0000395210054143,
+      "median": 1.0103238570942057,
+      "max": 2.4018931244049724,
+      "mean": 1.0363312671108789
+    },
+    "points_over_10_percent_repeat_spread": 20,
+    "points_incompatible_with_single_prediction_10_percent": 11,
+    "holdout_points_incompatible_with_single_prediction_10_percent": 5,
+    "identity": {
+      "study": "D:\\code\\MPA-OpenCl\\build_cuda_cmake\\_auto_b2_bridge_20261006\\study\\measurements.json",
+      "study_sha256": "b73946725378d032fb4f935427a040037d6dd25cca33ab03dcb990ce823961b4",
+      "profile": "D:\\code\\MPA-OpenCl\\build_cuda_cmake\\_auto_b2_bridge_20261006\\profile.json",
+      "profile_sha256": "c83a955ef08f8b3e6284df90a74a2d6be8679464acbd4638b20097807904178e",
+      "tool_sha256": "1d7d8fab8ae65ce28524264701c926688da2beea495e8dd84b25c5a7a951b4d8"
+    }
+  },
+  "incompatible_repeated_points": [
+    {
+      "bits": 8191,
+      "D": 30030,
+      "B2": 3000000000,
+      "owner_mb": 0,
+      "kind": "train",
+      "regime": "multiple",
+      "slow_over_fast": 1.3113804853052602,
+      "best_possible_raw_max_abs_percent": 13.471623875207058,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 60060,
+      "B2": 491891400,
+      "owner_mb": 640,
+      "kind": "train",
+      "regime": "g2",
+      "slow_over_fast": 1.7243443819326207,
+      "best_possible_raw_max_abs_percent": 26.587842078128855,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 60060,
+      "B2": 518798280,
+      "owner_mb": 0,
+      "kind": "train",
+      "regime": "g2",
+      "slow_over_fast": 1.2301452920412912,
+      "best_possible_raw_max_abs_percent": 10.319744317224961,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 60060,
+      "B2": 691831139,
+      "owner_mb": 640,
+      "kind": "train",
+      "regime": "g2",
+      "slow_over_fast": 2.4018931244049724,
+      "best_possible_raw_max_abs_percent": 41.20920537884853,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 60060,
+      "B2": 998344416,
+      "owner_mb": 0,
+      "kind": "holdout",
+      "regime": "bridge",
+      "slow_over_fast": 1.3412684779467343,
+      "best_possible_raw_max_abs_percent": 14.576221444113187,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 60060,
+      "B2": 2999999999,
+      "owner_mb": 640,
+      "kind": "train",
+      "regime": "bridge",
+      "slow_over_fast": 1.256335610675462,
+      "best_possible_raw_max_abs_percent": 11.360704031025099,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 60060,
+      "B2": 3000000000,
+      "owner_mb": 640,
+      "kind": "train",
+      "regime": "multiple",
+      "slow_over_fast": 1.2414890175433526,
+      "best_possible_raw_max_abs_percent": 10.773598070447921,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 120120,
+      "B2": 518678160,
+      "owner_mb": 0,
+      "kind": "holdout",
+      "regime": "g1",
+      "slow_over_fast": 1.9895451220537366,
+      "best_possible_raw_max_abs_percent": 33.10019021803377,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 120120,
+      "B2": 1902460560,
+      "owner_mb": 0,
+      "kind": "holdout",
+      "regime": "g2",
+      "slow_over_fast": 1.5456661959199733,
+      "best_possible_raw_max_abs_percent": 21.435103973746887,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 120120,
+      "B2": 1902460560,
+      "owner_mb": 640,
+      "kind": "holdout",
+      "regime": "g2",
+      "slow_over_fast": 1.3305526048502299,
+      "best_possible_raw_max_abs_percent": 14.183443195502228,
+      "single_prediction_10_percent_possible": false
+    },
+    {
+      "bits": 8191,
+      "D": 120120,
+      "B2": 3750000000,
+      "owner_mb": 640,
+      "kind": "holdout",
+      "regime": "multiple",
+      "slow_over_fast": 1.6506751469256429,
+      "best_possible_raw_max_abs_percent": 24.547525096778514,
+      "single_prediction_10_percent_possible": false
+    }
+  ],
+  "production_binary_sha256": "893f6e907c17803ed90b09b98ffbf6b85e08b7deb1335a9d6c6efd1f8a01f69d",
+  "note": "All declared scopes remain in the audit. No reduced subset was exported. Ranking compares the frozen independent grid, not a proof of globally optimal B2 or a native production acceptance."
+}

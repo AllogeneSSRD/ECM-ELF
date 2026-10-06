@@ -1,0 +1,978 @@
+{
+  "schema": 2,
+  "passed": false,
+  "integrity_passed": true,
+  "accuracy_passed": false,
+  "ranking_passed": true,
+  "schedule_coverage": {
+    "stage2_observations": 666,
+    "stage1_batches": 18
+  },
+  "validated_case_count": 468,
+  "study_stage1_batches": 18,
+  "independently_verified_stage1_points": 117,
+  "fitting_stage2": 540,
+  "diagnostic_b2_stage2": 126,
+  "validation_stage2": 468,
+  "blind_stage2": 408,
+  "replayed_stage2": 60,
+  "root_replays": 18,
+  "shape_replays": 42,
+  "clean_curves": 1134,
+  "independent_gmp_coefficients": 3430016,
+  "g1_curves": 198,
+  "g1_root_reductions": 54,
+  "matched_leaf_groups": 312,
+  "validation_error_percent": [
+    -60.138171238705155,
+    13.717604109535975
+  ],
+  "blind_error_percent": [
+    -60.138171238705155,
+    13.717604109535975
+  ],
+  "blind_max_abs_percent": 60.138171238705155,
+  "validation_scopes": [
+    {
+      "id": "2203:1000:4096:640:35:70:3000000000:6000000000:30030",
+      "bits": 2203,
+      "owner_mb": 640,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 0.40132330555968654,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:640:9:18:3000000000:6000000000:60060",
+      "bits": 2203,
+      "owner_mb": 640,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 2.861040546776472,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:640:3:5:3000000000:6000000000:120120",
+      "bits": 2203,
+      "owner_mb": 640,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 3.2745819465835435,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:640:2:2:86456370:172942769:30030",
+      "bits": 2203,
+      "owner_mb": 640,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 9.675414017247807,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:640:2:2:345885540:691831139:60060",
+      "bits": 2203,
+      "owner_mb": 640,
+      "regime": "g2",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 7.958255371045109,
+      "independent_samples": 12,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:640:2:2:1383662280:2767444679:120120",
+      "bits": 2203,
+      "owner_mb": 640,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 1.9867399256108476,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:640:3:35:172942770:2999999999:30030",
+      "bits": 2203,
+      "owner_mb": 640,
+      "regime": "bridge",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 16.060099532326532,
+      "independent_samples": 12,
+      "passed": false
+    },
+    {
+      "id": "2203:1000:4096:640:3:9:691831140:2999999999:60060",
+      "bits": 2203,
+      "owner_mb": 640,
+      "regime": "bridge",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 7.19464043747452,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:640:3:3:2767444680:2999999999:120120",
+      "bits": 2203,
+      "owner_mb": 640,
+      "regime": "bridge",
+      "samples": 4,
+      "expected_samples": 4,
+      "max_abs_percent": 0.7291633451129265,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:35:70:3000000000:6000000000:30030",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 1.7128947588826993,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:9:18:3000000000:6000000000:60060",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 1.9714441833199148,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:3:5:3000000000:6000000000:120120",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 0.7310661298489673,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:1:1:21561540:86456369:30030",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "g1",
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 6.737361538474429,
+      "independent_samples": 4,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:1:1:86366280:345885539:60060",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "g1",
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 12.711761966389512,
+      "independent_samples": 4,
+      "passed": false
+    },
+    {
+      "id": "2203:1000:4096:0:1:1:345705360:1383662279:120120",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "g1",
+      "samples": 12,
+      "expected_samples": 12,
+      "max_abs_percent": 5.847398650752178,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:2:2:86456370:172942769:30030",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 4.987311957531526,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:2:2:345885540:691831139:60060",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "g2",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 6.492682123782156,
+      "independent_samples": 12,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:2:2:1383662280:2767444679:120120",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 6.160250184982907,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:3:35:172942770:2999999999:30030",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "bridge",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 10.274151538602228,
+      "independent_samples": 12,
+      "passed": false
+    },
+    {
+      "id": "2203:1000:4096:0:3:9:691831140:2999999999:60060",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "bridge",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 7.891195176035315,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "2203:1000:4096:0:3:3:2767444680:2999999999:120120",
+      "bits": 2203,
+      "owner_mb": 0,
+      "regime": "bridge",
+      "samples": 4,
+      "expected_samples": 4,
+      "max_abs_percent": 4.751124016568609,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:640:35:70:3000000000:6000000000:30030",
+      "bits": 4423,
+      "owner_mb": 640,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 0.56087638600546,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:640:9:18:3000000000:6000000000:60060",
+      "bits": 4423,
+      "owner_mb": 640,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 6.359445260510821,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:640:3:5:3000000000:6000000000:120120",
+      "bits": 4423,
+      "owner_mb": 640,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 2.734594481142527,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:640:2:2:86456370:172942769:30030",
+      "bits": 4423,
+      "owner_mb": 640,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 2.870973383119513,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:640:2:2:345885540:691831139:60060",
+      "bits": 4423,
+      "owner_mb": 640,
+      "regime": "g2",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 2.350472365089218,
+      "independent_samples": 12,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:640:2:2:1383662280:2767444679:120120",
+      "bits": 4423,
+      "owner_mb": 640,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 3.2662580021308174,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:640:3:35:172942770:2999999999:30030",
+      "bits": 4423,
+      "owner_mb": 640,
+      "regime": "bridge",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 7.857109731710321,
+      "independent_samples": 12,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:640:3:9:691831140:2999999999:60060",
+      "bits": 4423,
+      "owner_mb": 640,
+      "regime": "bridge",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 7.301073290717108,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:640:3:3:2767444680:2999999999:120120",
+      "bits": 4423,
+      "owner_mb": 640,
+      "regime": "bridge",
+      "samples": 4,
+      "expected_samples": 4,
+      "max_abs_percent": 2.7496909826483007,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:35:70:3000000000:6000000000:30030",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 0.31802680191143073,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:9:18:3000000000:6000000000:60060",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 4.2057768283888075,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:3:5:3000000000:6000000000:120120",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 2.111931609057627,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:1:1:21561540:86456369:30030",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "g1",
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 6.918755798152143,
+      "independent_samples": 4,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:1:1:86366280:345885539:60060",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "g1",
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 5.055293103733172,
+      "independent_samples": 4,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:1:1:345705360:1383662279:120120",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "g1",
+      "samples": 12,
+      "expected_samples": 12,
+      "max_abs_percent": 2.1981570490974267,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:2:2:86456370:172942769:30030",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 5.2135444886631355,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:2:2:345885540:691831139:60060",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "g2",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 4.451851252067285,
+      "independent_samples": 12,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:2:2:1383662280:2767444679:120120",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 1.7359622763177596,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:3:35:172942770:2999999999:30030",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "bridge",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 6.752299640647186,
+      "independent_samples": 12,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:3:9:691831140:2999999999:60060",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "bridge",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 3.8931798612411805,
+      "independent_samples": 8,
+      "passed": true
+    },
+    {
+      "id": "4423:1000:4096:0:3:3:2767444680:2999999999:120120",
+      "bits": 4423,
+      "owner_mb": 0,
+      "regime": "bridge",
+      "samples": 4,
+      "expected_samples": 4,
+      "max_abs_percent": 2.4820704132628935,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "8191:1000:4096:640:35:70:3000000000:6000000000:30030",
+      "bits": 8191,
+      "owner_mb": 640,
+      "regime": "multiple",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 35.7234850364073,
+      "independent_samples": 14,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:640:9:18:3000000000:6000000000:60060",
+      "bits": 8191,
+      "owner_mb": 640,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 45.402250030341676,
+      "independent_samples": 2,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:640:3:5:3000000000:6000000000:120120",
+      "bits": 8191,
+      "owner_mb": 640,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 2.222679196196553,
+      "independent_samples": 2,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:640:2:2:86456370:172942769:30030",
+      "bits": 8191,
+      "owner_mb": 640,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 22.98304151461822,
+      "independent_samples": 8,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:640:2:2:345885540:691831139:60060",
+      "bits": 8191,
+      "owner_mb": 640,
+      "regime": "g2",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 37.418647946889536,
+      "independent_samples": 12,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:640:2:2:1383662280:2767444679:120120",
+      "bits": 8191,
+      "owner_mb": 640,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 43.108190438831514,
+      "independent_samples": 8,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:640:3:35:172942770:2999999999:30030",
+      "bits": 8191,
+      "owner_mb": 640,
+      "regime": "bridge",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 34.35300231228271,
+      "independent_samples": 12,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:640:3:9:691831140:2999999999:60060",
+      "bits": 8191,
+      "owner_mb": 640,
+      "regime": "bridge",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 14.634187841069535,
+      "independent_samples": 8,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:640:3:3:2767444680:2999999999:120120",
+      "bits": 8191,
+      "owner_mb": 640,
+      "regime": "bridge",
+      "samples": 4,
+      "expected_samples": 4,
+      "max_abs_percent": 1.7955684517964365,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "8191:1000:4096:0:35:70:3000000000:6000000000:30030",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "multiple",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 46.87365471217927,
+      "independent_samples": 14,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:0:9:18:3000000000:6000000000:60060",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 4.0362635015424475,
+      "independent_samples": 2,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:0:3:5:3000000000:6000000000:120120",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "multiple",
+      "samples": 2,
+      "expected_samples": 2,
+      "max_abs_percent": 8.566809997171799,
+      "independent_samples": 2,
+      "passed": true
+    },
+    {
+      "id": "8191:1000:4096:0:1:1:21561540:86456369:30030",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "g1",
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 2.361590334554209,
+      "independent_samples": 4,
+      "passed": true
+    },
+    {
+      "id": "8191:1000:4096:0:1:1:86366280:345885539:60060",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "g1",
+      "samples": 6,
+      "expected_samples": 6,
+      "max_abs_percent": 37.33385376368209,
+      "independent_samples": 4,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:0:1:1:345705360:1383662279:120120",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "g1",
+      "samples": 12,
+      "expected_samples": 12,
+      "max_abs_percent": 28.48281141153398,
+      "independent_samples": 8,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:0:2:2:86456370:172942769:30030",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 60.138171238705155,
+      "independent_samples": 8,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:0:2:2:345885540:691831139:60060",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "g2",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 48.83440848726694,
+      "independent_samples": 12,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:0:2:2:1383662280:2767444679:120120",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "g2",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 14.688822655306645,
+      "independent_samples": 8,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:0:3:35:172942770:2999999999:30030",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "bridge",
+      "samples": 14,
+      "expected_samples": 14,
+      "max_abs_percent": 42.855074673349534,
+      "independent_samples": 12,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:0:3:9:691831140:2999999999:60060",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "bridge",
+      "samples": 8,
+      "expected_samples": 8,
+      "max_abs_percent": 1.5227267794325594,
+      "independent_samples": 8,
+      "passed": false
+    },
+    {
+      "id": "8191:1000:4096:0:3:3:2767444680:2999999999:120120",
+      "bits": 8191,
+      "owner_mb": 0,
+      "regime": "bridge",
+      "samples": 4,
+      "expected_samples": 4,
+      "max_abs_percent": 23.643737484780715,
+      "independent_samples": 2,
+      "passed": false
+    }
+  ],
+  "ranking": [
+    {
+      "bits": 2203,
+      "stage1_batch": 1,
+      "selected": [
+        60060,
+        5250000000,
+        640,
+        "2203:1000:4096:640:9:18:3000000000:6000000000:60060"
+      ],
+      "actual_best": [
+        60060,
+        5250000000,
+        640,
+        "2203:1000:4096:640:9:18:3000000000:6000000000:60060"
+      ],
+      "selected_actual_score": 2.297656566480892,
+      "best_actual_score": 2.297656566480892,
+      "selected_value_loss_percent": 0.0,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 2203,
+      "stage1_batch": 12,
+      "selected": [
+        60060,
+        1383662280,
+        0,
+        "2203:1000:4096:0:3:9:691831140:2999999999:60060"
+      ],
+      "actual_best": [
+        60060,
+        1383602220,
+        0,
+        "2203:1000:4096:0:3:9:691831140:2999999999:60060"
+      ],
+      "selected_actual_score": 3.6578130576223797,
+      "best_actual_score": 3.6811137630065662,
+      "selected_value_loss_percent": 0.632979768741393,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 4423,
+      "stage1_batch": 1,
+      "selected": [
+        30030,
+        691831140,
+        0,
+        "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+      ],
+      "actual_best": [
+        30030,
+        691831140,
+        0,
+        "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+      ],
+      "selected_actual_score": 1.8328784203449804,
+      "best_actual_score": 1.8328784203449804,
+      "selected_value_loss_percent": 0.0,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 4423,
+      "stage1_batch": 12,
+      "selected": [
+        30030,
+        691831140,
+        0,
+        "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+      ],
+      "actual_best": [
+        30030,
+        691831140,
+        0,
+        "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+      ],
+      "selected_actual_score": 2.540801896805805,
+      "best_actual_score": 2.540801896805805,
+      "selected_value_loss_percent": 0.0,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 8191,
+      "stage1_batch": 1,
+      "selected": [
+        30030,
+        691831140,
+        640,
+        "8191:1000:4096:640:3:35:172942770:2999999999:30030"
+      ],
+      "actual_best": [
+        30030,
+        172882710,
+        0,
+        "8191:1000:4096:0:2:2:86456370:172942769:30030"
+      ],
+      "selected_actual_score": 1.0252933520439504,
+      "best_actual_score": 1.025354121241367,
+      "selected_value_loss_percent": 0.005926654621823957,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 8191,
+      "stage1_batch": 12,
+      "selected": [
+        30030,
+        172882710,
+        0,
+        "8191:1000:4096:0:2:2:86456370:172942769:30030"
+      ],
+      "actual_best": [
+        30030,
+        172882710,
+        0,
+        "8191:1000:4096:0:2:2:86456370:172942769:30030"
+      ],
+      "selected_actual_score": 1.2953879430276998,
+      "best_actual_score": 1.2953879430276998,
+      "selected_value_loss_percent": 0.0,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    }
+  ],
+  "validated_ranking": [
+    {
+      "bits": 2203,
+      "stage1_batch": 1,
+      "selected": [
+        60060,
+        5250000000,
+        640,
+        "2203:1000:4096:640:9:18:3000000000:6000000000:60060"
+      ],
+      "actual_best": [
+        60060,
+        5250000000,
+        640,
+        "2203:1000:4096:640:9:18:3000000000:6000000000:60060"
+      ],
+      "selected_actual_score": 2.297656566480892,
+      "best_actual_score": 2.297656566480892,
+      "selected_value_loss_percent": 0.0,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 2203,
+      "stage1_batch": 12,
+      "selected": [
+        60060,
+        1383662280,
+        0,
+        "2203:1000:4096:0:3:9:691831140:2999999999:60060"
+      ],
+      "actual_best": [
+        60060,
+        1383602220,
+        0,
+        "2203:1000:4096:0:3:9:691831140:2999999999:60060"
+      ],
+      "selected_actual_score": 3.6578130576223797,
+      "best_actual_score": 3.6811137630065662,
+      "selected_value_loss_percent": 0.632979768741393,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 4423,
+      "stage1_batch": 1,
+      "selected": [
+        30030,
+        691831140,
+        0,
+        "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+      ],
+      "actual_best": [
+        30030,
+        691831140,
+        0,
+        "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+      ],
+      "selected_actual_score": 1.8328784203449804,
+      "best_actual_score": 1.8328784203449804,
+      "selected_value_loss_percent": 0.0,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 4423,
+      "stage1_batch": 12,
+      "selected": [
+        30030,
+        691831140,
+        0,
+        "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+      ],
+      "actual_best": [
+        30030,
+        691831140,
+        0,
+        "4423:1000:4096:0:3:35:172942770:2999999999:30030"
+      ],
+      "selected_actual_score": 2.540801896805805,
+      "best_actual_score": 2.540801896805805,
+      "selected_value_loss_percent": 0.0,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 8191,
+      "stage1_batch": 1,
+      "selected": [
+        30030,
+        86396310,
+        0,
+        "8191:1000:4096:0:1:1:21561540:86456369:30030"
+      ],
+      "actual_best": [
+        30030,
+        86396310,
+        0,
+        "8191:1000:4096:0:1:1:21561540:86456369:30030"
+      ],
+      "selected_actual_score": 0.8926882130040051,
+      "best_actual_score": 0.8926882130040051,
+      "selected_value_loss_percent": 0.0,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    },
+    {
+      "bits": 8191,
+      "stage1_batch": 12,
+      "selected": [
+        30030,
+        86396310,
+        0,
+        "8191:1000:4096:0:1:1:21561540:86456369:30030"
+      ],
+      "actual_best": [
+        30030,
+        86396310,
+        0,
+        "8191:1000:4096:0:1:1:21561540:86456369:30030"
+      ],
+      "selected_actual_score": 1.117194234861509,
+      "best_actual_score": 1.117194234861509,
+      "selected_value_loss_percent": 0.0,
+      "score_basis": "engine_plus_frozen_cold_and_measured_stage1"
+    }
+  ],
+  "profile_sha256": "c83a955ef08f8b3e6284df90a74a2d6be8679464acbd4638b20097807904178e",
+  "study_sha256": "b73946725378d032fb4f935427a040037d6dd25cca33ab03dcb990ce823961b4",
+  "blind_sha256": "ac209f38cb0f1ec1053a9e6e808bd0fd71ee1d1ce47950f7a18f3508311bd20a",
+  "auditor_sha256": "3d29af40aa0345ad3628df0445e980752b2b8f95e8cb191b0c8b3f72b84bf518"
+}

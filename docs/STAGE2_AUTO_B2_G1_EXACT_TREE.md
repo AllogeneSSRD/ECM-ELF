@@ -229,7 +229,9 @@ Remove-Item Env:NTT_CUDA_WAIT_MODE
 [汇总](D:/code/MPA-OpenCl/docs/data/ecm_stage2_host_wait_20261006_summary.json)、[全部原始日志/存档/冻结源码及失败实验](D:/code/MPA-OpenCl/docs/data/ecm_stage2_host_wait_20261006_evidence.json)。GPU0外部生产未操作，未发布新运行profile或修改生产exe。
 
 
-## 9. G2与低/高B2过渡区标定（2026-10-06，采集中）
+## 9. G2与低/高B2过渡区标定（2026-10-06）
+
+以下计划段保留采集启动时状态；完整校准和验证现已结束，最终结论见§9.2。
 
 本轮补齐区间生成和标定/验证工具，完整实测尚在运行；没有通过成本精度门禁或发布新的运行profile。原先G1范围截至 `D*(P-2)`，高B2从30亿起，中间有未测范围。新增 `ecm_cost_cases.py` 用整数点数生成各D的相邻范围：
 
@@ -296,3 +298,33 @@ python tools/bench/summarize_ecm_cost_variance.py `
 当前为完整校准结束、独立验证运行中，尚未发布新v2 profile。生产B1、choose12、泛型/余因子和总VRAM/RAM租约仍待实现与验证。
 
 [校准阶段证据快照](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_bridge_20261006_calibration.json)包含666条原始阶段/工作特征/日志SHA、完整校准身份、63范围状态及20组最大重复差诊断；[冻结模型](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_bridge_20261006_profile.json)包含所有63个scope，不是可运行cprof。快照的validation_running描述生成时状态；后续完整审计应单独记录。
+
+### 9.2 全范围验证结束，排名通过、精度失败（2026-10-06）
+
+468条冻结验证全部完成，原进程正常exit0且complete=true。666条校准加468条验证共1134条曲线，完整计划/身份、原始日志SHA、树pairs/groups/copies、giant route、G1根除法和多G逆元复用审计通过；3,430,016次GMP系数抽样检查通过，312组相同输入的leaf指纹一致。18批/117点Stage1沿用原证据。408条验证为独立工作形状，60条重放仍参加精度检查，收益排名排除重放。
+
+63个完整scope中42个通过耗时门槛：2203位18/21，4423位21/21，8191位3/21。全部验证误差范围−60.138171%..+13.717604%，因此accuracy_passed=false。六组完整独立网格收益排名（3位宽×Stage1 batch1/12）均通过，最大实际收益损失0.632980%，其余分别为0或约0.005927%；**这不是连续B2全局最优证明，也不是新版native auto/manual/INI/queue验收**。
+
+全审计passed=false，exporter实际执行后按完整精度/排名要求拒绝，未生成cprof。没有仅导出4423位或通过的42个scope，生产893未替换。旧4acc/v1组合的使用范围保持；不能把本次JSON模型传给它。
+
+#### 固定预测的可达精度下界
+
+对同一模型输入的两次耗时 \(0<a\le b\)，最优单值预测为 \(x=2ab/(a+b)\)，其最小最坏相对误差为：
+
+\[
+\delta_{\min}=\min_x\max\{|x/a-1|,|x/b-1|\}=\frac{b-a}{b+a}.
+\]
+
+逐次±10%要求两时间之比不超过 \(1.1/0.9=1.222222\)。完整333组校准重复中11组不满足，其中5组是留出点。G1留出4.782074/9.514152秒的误差下界约33.10%，任何固定点预测都无法同时满足原10%门槛。新增诊断脚本记录该下界，不改变原审计标准。**仅增加重复或改变拟合器不能让这批已保留的矛盾时间带通过**；奇数次重复能降低一个慢样本对典型速率的污染，仍需要先处理等待波动，或另行设计长期平均成本与单曲线时间区间的验证合同。
+
+该G1对照的归约launches/poly_muls/coeffs均相同（79/38905/453274），设备t_reduce为0.084/0.083秒、t_reduce_host同为0.013秒。其4.73秒full差不能由这些已记录的归约计时解释；这里没有记录全部NTT/GPU时间，不能推断其他内核全部无差异。整进程GPU采样均值约35.53%/60.33%，慢样本SM最低225MHz；另一个accum长尾SM最低210MHz。采样含冷启动，低时钟与长尾相关，未证明因果。
+
+此前8191/D60060/B2=2078935270/owner640的两条独立验证均被高估约13.7%。阶段对比显示G树预测0.913545秒、实测0.581/0.578秒；训练中B2=1440657287的G树两重复为1.312/0.409秒，二重复中位等于平均，长尾污染传入预测。这与随机验证等待是两种需要分别处理的误差来源。
+
+#### 可复查证据与后续
+
+[完整审计](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_bridge_20261006_audit.json)、[最终证据与拒绝导出记录](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_bridge_20261006_evidence.json)、[原始数据ZIP](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_bridge_20261006_raw.zip)、[逐文件SHA清单](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_bridge_20261006_raw.json)。ZIP有3510个源文件/日志/存档/测量记录，15,250,313 bytes，逐项解压SHA核验0差异；SHA256为 `6ae459f9dc3c8898d4a7394a1e655aa9499b855170aac78b3109bfc676ea7974`。exe不内嵌，清单明确记录其SHA和本地位置；原审计记录保留绝对路径，复查时须按清单恢复原工作区结构。
+
+新归档工具 [archive_ecm_cost_evidence.py](D:/code/MPA-OpenCl/tools/bench/archive_ecm_cost_evidence.py:25)要求完整采集及integrity通过，允许记录precision失败，核对所有输入后生成ZIP。校准的build_manifest_sha256对应build_manifest.json，验证同名字段对应frozen_sources_manifest.json；归档分别核对两文件，并核对相同binary/全部25个依赖，不能把两文件的不同SHA当成源码变化。
+
+后续优先捕获未被profiling改变的异常时间线，区分CPU准备、CUDA API完成等待与真实GPU执行。再改进重复采样与时间不确定性处理，完成新全范围验证；生产B1/choose12/泛型、总VRAM/RAM准入和原生生产接口验收仍未完成。本轮没有更改精度门槛或宣称通用Auto B2完成。
