@@ -1980,3 +1980,5 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 
 
 补充§65：新增完整case身份/重复次数审计及独立验证覆盖要求，7项CPU回归通过；complete标记、相同行数或仅重放不能让profile通过。当前666矩阵继续采集，尚无完整新审计结论。
+
+补充§65（校准结束）：666条全新Stage2已正常结束并通过完整计划重建；63个scope中57个留出通过，6个8191位范围精度失败。正在GPU1执行冻结的468条全范围验证，408新形状/60重放；尚未发布v2 cprof。只读重复诊断保留全部样本，长尾已分解到descent/inverse/accum等位置，尚未确定具体等待根因。[数据与实现状态](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。

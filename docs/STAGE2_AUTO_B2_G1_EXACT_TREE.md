@@ -266,3 +266,33 @@ python tools/bench/measure_ecm_costs.py --stage2 $exe `
 
 
 补充审计（采集进行中）：新增 `ecm_cost_coverage.py` 从controls重建完整计划，并逐case核对实际观测和存储计划。删除计划与观测中的同一项、用重复case替代缺失case（总行数不变）、重复冷Stage1观测替代另一次重复均会拒绝。盲测与冻结case也要求身份集合及次数完全一致，不只比较每scope数量。审计重新根据训练I核对replay标签，每个scope至少有一个独立工作形状样本；exporter拒绝只有重放的scope。新增7项覆盖负例/回归通过；旧174/198条完整study也通过计划核对，旧306条证据重审仍是integrity/ranking通过、accuracy失败，没有改变既有失败结论。
+
+### 9.1 完整校准与冻结独立验证（2026-10-06）
+
+上述采集进程已正常退出（exit=0），`complete=true`，完整计划重建确认666条Stage2和18批原Stage1证据。540条训练、126条留出全部保留。按固定工作特征的阶段中位数拟合63个scope（18 multiple、9 G1、18 G2、18 bridge），57个留出通过10%门槛。6个失败scope均为8191位：D120120的resident multiple/G2和owner0 G1/G2，以及D60060的owner0 multiple/bridge。最坏留出误差−48.931644%，本轮不能导出生产cprof。
+
+模型与8个拟合/验证/审计依赖冻结在 `build_cuda_cmake/_auto_b2_bridge_20261006/fit_validation_sources/`。GPU1独立验证已启动，固定seed20261012，全部63个scope参与，计划468条（408条独立形状、18条root replay、42条shape replay）。留出失败scope仍参与；完整精度、收益排名和算术审计尚未结束。
+
+新增只读诊断 [summarize_ecm_cost_variance.py](D:/code/MPA-OpenCl/tools/bench/summarize_ecm_cost_variance.py:36)，核对计划、逐日志SHA与阶段分解，按完全相同的bits/D/B2/owner/kind/regime配对。333组slow/fast中位1.010324，20组超过1.1，最大2.401893；所有666条均保留。脚本同时报告原始误差和诊断中位误差，不重拟合、不删除样本、不修改发布门槛。
+
+重复时间差已定位到多个阶段：
+
+- M8191/D60060/B2=691831139/owner640：full差5.217099秒，descent差5.222秒，其余小差互相抵消。
+- M8191/D120120/B2=518678160/owner0留出：full 4.782074/9.514152秒，差4.732078；descent差4.772秒。
+- M8191/D120120/B2=3750000000/owner640留出：full 6.012395/9.924511秒；accum差3.517秒，giant差0.260秒。
+- M8191/D120120/B2=1902460560/owner640留出：full差1.902557秒，inverse差1.894秒。
+
+G1长尾对照oracle host_total为0.148360/0.148890秒，没有随full额外增长4.7秒；不能据此把等待归因于GMP抽样。整进程NVML/CPU采样含冷启动，不能证明具体API、PCIe、WDDM或外部调度为根因。full/init/main各打印六位小数，诊断另记录约2微秒以内的分解舍入差。
+
+复现诊断（执行零条GPU曲线）：
+
+```powershell
+python tools/bench/summarize_ecm_cost_variance.py `
+  --study build_cuda_cmake/_auto_b2_bridge_20261006/study/measurements.json `
+  --profile build_cuda_cmake/_auto_b2_bridge_20261006/profile.json `
+  --output build_cuda_cmake/_auto_b2_bridge_20261006/variance.json
+```
+
+当前为完整校准结束、独立验证运行中，尚未发布新v2 profile。生产B1、choose12、泛型/余因子和总VRAM/RAM租约仍待实现与验证。
+
+[校准阶段证据快照](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_bridge_20261006_calibration.json)包含666条原始阶段/工作特征/日志SHA、完整校准身份、63范围状态及20组最大重复差诊断；[冻结模型](D:/code/MPA-OpenCl/docs/data/ecm_auto_b2_bridge_20261006_profile.json)包含所有63个scope，不是可运行cprof。快照的validation_running描述生成时状态；后续完整审计应单独记录。
