@@ -14,7 +14,8 @@ import random
 import subprocess
 import threading
 import time
-from calibrate_stage2_d import features, parse
+from calibrate_stage2_d import parse,phi
+from ecm_cost_model import features,FEATURE_PROFILE
 from bench_stage2_budget_scaling import fields, Nvml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,12 +43,15 @@ def main():
     p.add_argument('--resume',action='store_true')
     p.add_argument('--shuffle-seed',type=int,help='Randomize Stage2 order, preserving reproducibility')
     p.add_argument('--monitor-state',action='store_true',help='Sample GPU1 and system CPU state outside reference work')
+    p.add_argument('--g1',action='store_true',help='Also measure quarter/half/three-quarter/full G=1 roots and a 3/8 holdout')
+    p.add_argument('--chain-min',type=int,default=32768,help='Measured runtime giant chain crossover policy')
     a = p.parse_args()
     training_b2=a.train_b2 or [a.b2]
     if (not set(a.bits)<= {2203,4423,8191} or a.repeats<1 or a.b2<=1000 or
         a.holdout_b2<=1000 or a.arena_mb<1 or a.resident_mb<1 or
         any(b<=1000 or b>2**63-8192 for b in training_b2) or len(set(training_b2))!=len(training_b2) or
-        a.holdout_b2 in training_b2 or any(d<6 or d%2 for d in a.d) or any(b<1 or b>96 for b in a.stage1_batch)):
+        a.holdout_b2 in training_b2 or not 0<=a.chain_min<=100000000 or
+        (a.g1 and any(phi(d)//2<12 for d in a.d)) or any(d<6 or d%2 for d in a.d) or any(b<1 or b>96 for b in a.stage1_batch)):
         p.error('Invalid calibration ranges/configuration')
     out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()) and not a.resume: p.error('Use a fresh output directory')
@@ -65,13 +69,14 @@ def main():
     identity=dict(stage1_sha256=digest(exe1),stage2_sha256=digest(exe2),
         build_manifest_sha256=digest(exe2.parent/'build_manifest.json'),sources=manifest['sources'],
         tools={name:digest(ROOT/name) for name in ('tools/bench/measure_ecm_costs.py',
-          'tools/bench/calibrate_stage2_d.py','tools/bench/bench_stage2_budget_scaling.py','tools/stat/suyama_mont_ref.py')})
+          'tools/bench/calibrate_stage2_d.py','tools/bench/bench_stage2_budget_scaling.py','tools/stat/suyama_mont_ref.py','tools/bench/ecm_cost_model.py')})
     if a.monitor_state:
         identity['tools']['tools/bench/diagnose_ecm_cost_drift.py']=digest(ROOT/'tools/bench/diagnose_ecm_cost_drift.py')
         identity['tools']['tools/bench/ecm_cost_model.py']=digest(ROOT/'tools/bench/ecm_cost_model.py')
     controls=dict(bits=a.bits,d=a.d,b2=a.b2,holdout_b2=a.holdout_b2,repeats=a.repeats,
         stage1_batch=a.stage1_batch,arena_mb=a.arena_mb,resident_mb=a.resident_mb,name_hits=a.name_hits,
-        train_b2=training_b2,shuffle_seed=a.shuffle_seed,monitor_state=a.monitor_state)
+        train_b2=training_b2,shuffle_seed=a.shuffle_seed,monitor_state=a.monitor_state,g1=a.g1,
+        feature_profile=FEATURE_PROFILE,chain_min=a.chain_min)
     study_path=out/'measurements.json'
     if a.resume:
         data=json.loads(study_path.read_text(encoding='utf-8'))
@@ -84,7 +89,7 @@ def main():
     nvml=Nvml();data['device']=dict(uuid='GPU-8a67b1f8-ef1c-3177-a822-813a7ac2224d',name=nvml.name)
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_NO_PROGRESS='1',NTT_D_MODEL='0',NTT_STAGE1_Q_DUMP='1',NTT_CARRY_CHECK_FUSED='0',NTT_POINT_MERSENNE='1',
-               NTT_NAME_HITS=str(a.name_hits))
+               NTT_NAME_HITS=str(a.name_hits),NTT_GIANT_CHAIN_MIN=str(a.chain_min))
     state=None;last_state={}
     if a.monitor_state:
         from diagnose_ecm_cost_drift import State
@@ -164,6 +169,12 @@ def main():
                 for b2 in training_b2:
                     for owner in (a.resident_mb,0): cases.append((bits,d,b2,owner,rep,'train'))
             for owner in (a.resident_mb,0): cases.append((bits,a.d[len(a.d)//2],a.holdout_b2,owner,rep,'holdout'))
+            if a.g1:
+                for d in a.d:
+                    points=phi(d)//2
+                    for count in (points//4,points//2,3*points//4,points):
+                        cases.append((bits,d,d*(count-2),0,rep,'train'))
+                    cases.append((bits,d,d*(3*points//8-2),0,rep,'holdout'))
     if a.shuffle_seed is not None:random.Random(a.shuffle_seed).shuffle(cases)
     for bits,d,b2,owner,rep,kind in cases:
         name=f's2_m{bits}_d{d}_b{b2}_o{owner}_r{rep}_{kind}'
@@ -182,12 +193,15 @@ def main():
         raw=json.loads(result.read_text(encoding='utf-8'))
         if raw['bad_factors'] or any(not 1<int(f)<(1<<bits)-1 or pow(2,bits,int(f))!=1 for f in raw['factors']):
             raise ValueError('Stage2 reported an invalid proper divisor')
-        fold=fields(text,'real_batched_folddevice');account=fields(text,'ntt_arena_accounting')
-        if account['version']!='2' or bool(int(fold['enabled']))!=(owner>0): raise ValueError('Unexpected accounting/path')
-        if not owner and fold['fallback']!='budget': raise ValueError('Fallback was not forced by owner budget')
+        f=features(d,b2,bits,a.chain_min);fold=fields(text,'real_batched_folddevice');account=fields(text,'ntt_arena_accounting')
+        if account['version']!='2' or bool(int(fold['enabled']))!=(owner>0 and f['G']>1): raise ValueError('Unexpected accounting/path')
+        if not owner and f['G']>1 and fold['fallback']!='budget': raise ValueError('Fallback was not forced by owner budget')
+        gt=fields(text,'real_batched_gdevice')
+        if (int(gt['pairs']),int(gt['groups']),int(gt['copies']))!=(f['g_tree_pairs'],f['gtrees_groups'],f['g_tree_copies']):
+            raise ValueError('Exact tree schedule differs from runtime')
         phases=parse(text)
         row=dict(name=name,kind=kind,bits=bits,B1=1000,B2=b2,D=d,owner_mb=owner,rep=rep,process_seconds=seconds,
-            phases=phases,features=features(d,b2,bits),fold=fold,accounting=account,state=last_state,
+            phases=phases,features=f,regime='g1' if f['G']==1 else 'multiple',fold=fold,accounting=account,state=last_state,
             ntt=fields(text,'ntt_workspace_stats'),split=fields(text,'real_batched_split'),
             oracle=fields(text,'s4_oracle_stats'),result=raw,command=cmd,log=str(log),log_sha256=digest(log))
         data['stage2'].append(row);persist()

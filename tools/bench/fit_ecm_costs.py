@@ -4,11 +4,16 @@ import hashlib
 import json
 from pathlib import Path
 import statistics
-from ecm_cost_model import fit, predict, observed, PHASE_FEATURES, giant_work
+from ecm_cost_model import fit, predict, observed, PHASE_FEATURES, giant_work, FEATURE_PROFILE,features,scope_id
 from calibrate_stage2_d import parse
 
 
 def sha(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def phase_key(phase,f):
+    keys=('descent','local_inverse','root_reduction') if phase=='descent' else ('gtrees','gtrees_groups','gtrees_copy_words') if phase=='gtrees' else (PHASE_FEATURES[phase],)
+    return tuple(f.get(k,0) for k in keys)
 
 
 def fit_phase_medians(rows):
@@ -22,17 +27,17 @@ def fit_phase_medians(rows):
     grouped={phase:{} for phase in (*PHASE_FEATURES,'giant')}
     for row,sample in zip(rows,samples):
         for phase,feature in PHASE_FEATURES.items():
-            grouped[phase].setdefault(row['features'][feature],[]).append(sample[phase])
-        w=giant_work(row['features']);key=(w['chain'],w['chain_chunks'],w['ladder'])
+            grouped[phase].setdefault(phase_key(phase,row['features']),[]).append(sample[phase])
+        w=giant_work(row['features']);key=(w['chain'],w['chain_chunks'],w['ladder'],w['ladder_launches'])
         grouped['giant'].setdefault(key,[]).append(sample['giant'])
     adjusted=[]
     for row in rows:
         phases=dict(row['phases'])
         for phase,feature in PHASE_FEATURES.items():
-            value=statistics.median(grouped[phase][row['features'][feature]])
+            value=statistics.median(grouped[phase][phase_key(phase,row['features'])])
             if phase=='glue':phases['residual']=value;phases['name']=0
             else:phases[phase]=value
-        w=giant_work(row['features']);phases['giant']=statistics.median(grouped['giant'][(w['chain'],w['chain_chunks'],w['ladder'])])
+        w=giant_work(row['features']);phases['giant']=statistics.median(grouped['giant'][(w['chain'],w['chain_chunks'],w['ladder'],w['ladder_launches'])])
         adjusted.append(dict(row,phases=phases))
     return fit(adjusted)
 
@@ -45,14 +50,17 @@ def main():
     p.add_argument('--estimator',choices=('least_squares','phase_medians'),default='least_squares')
     a=p.parse_args();study=json.loads(a.measurements.read_text(encoding='utf-8'))
     if not study.get('complete'): raise ValueError('Study has not completed')
+    if study['controls'].get('feature_profile')!=FEATURE_PROFILE:raise ValueError('Recalibrate with exact-tree/G1 feature profile 7')
+    chain_min=study['controls']['chain_min']
     for row in study['stage2']:
         if sha(row['log'])!=row['log_sha256']: raise ValueError('Raw log changed')
         if parse(Path(row['log']).read_text(encoding='utf-8'))!=row['phases']:
             raise ValueError('Stored phases differ from raw log')
         if row['accounting']['version']!='2': raise ValueError('Cannot mix accounting versions')
-    model=dict(schema=1,identity=study['identity'],device=study['device'],accounting_version=2,
+        if row['features']!=features(row['D'],row['B2'],row['bits'],chain_min):raise ValueError('Measured feature version/configuration differs')
+    model=dict(schema=2,identity=study['identity'],device=study['device'],accounting_version=2,
         source_sha256=sha(a.measurements),source=str(a.measurements.resolve()),
-        feature_profile=0,scope_model='per_width_per_owner_full_phase_v1',fit_estimator=a.estimator,
+        feature_profile=FEATURE_PROFILE,chain_min=chain_min,scope_model='exact_tree_g1_full_phase_v2',fit_estimator=a.estimator,
         benefit_model='kruppa_p95_v1',name_hits=study['controls']['name_hits'],stage1=[],stage2=[],
         fitter_sha256=sha(__file__),model_code_sha256=sha(Path(__file__).with_name('ecm_cost_model.py')))
     for bits in study['controls']['bits']:
@@ -64,24 +72,33 @@ def main():
                 process_range=[min(r['amortized_process_seconds'] for r in samples),max(r['amortized_process_seconds'] for r in samples)],
                 gpu_range=[min(r['amortized_gpu_seconds'] for r in samples),max(r['amortized_gpu_seconds'] for r in samples)],samples=len(samples)))
         for owner in (study['controls']['resident_mb'],0):
-            train=[r for r in study['stage2'] if r['bits']==bits and r['owner_mb']==owner and r['kind']=='train']
-            hold=[r for r in study['stage2'] if r['bits']==bits and r['owner_mb']==owner and r['kind']=='holdout']
-            rates=(fit_phase_medians if a.estimator=='phase_medians' else fit)(train);checks=[]
-            for row in hold:
-                predicted,_=predict(bits,row['D'],row['B2'],rates)
-                checks.append(dict(name=row['name'],actual=row['phases']['full'],predicted=predicted['full'],
-                                   error_percent=100*(predicted['full']/row['phases']['full']-1)))
-            usable=bool(checks) and max(abs(r['error_percent']) for r in checks)<=a.max_error_percent
-            all_rows=train+hold
-            cold=[r['process_seconds']-r['phases']['full'] for r in train]
-            model['stage2'].append(dict(bits=bits,owner_mb=owner,owner_resident=owner>0,rates=rates,
-                B1=1000,d_values=sorted({r['D'] for r in train}),
-                b2_min=min(r['B2'] for r in all_rows),b2_max=max(r['B2'] for r in all_rows),
-                p_min=min(r['features']['P'] for r in all_rows),p_max=max(r['features']['P'] for r in all_rows),
-                g_min=min(r['features']['G'] for r in all_rows),g_max=max(r['features']['G'] for r in all_rows),
-                cold_overhead_seconds=statistics.median(cold),cold_overhead_range=[min(cold),max(cold)],
-                arena_mb=study['controls']['arena_mb'],training=len(train),holdout=checks,usable=usable,
-                training_raw_error_percent=[100*(predict(bits,r['D'],r['B2'],rates)[0]['full']/r['phases']['full']-1) for r in train]))
+            for regime in ('multiple','g1'):
+                rows=[r for r in study['stage2'] if r['bits']==bits and r['owner_mb']==owner and r['regime']==regime]
+                train=[r for r in rows if r['kind']=='train'];hold=[r for r in rows if r['kind']=='holdout']
+                if not train:continue
+                rates=(fit_phase_medians if a.estimator=='phase_medians' else fit)(train)
+                ds=sorted({r['D'] for r in train});groups=[[d] for d in ds] if regime=='g1' else [ds]
+                for group in groups:
+                    local=[r for r in rows if r['D'] in group];local_train=[r for r in train if r['D'] in group];checks=[]
+                    # G1 admission already fixes one D/P. Its setup/selftest and
+                    # local-inverse costs must not be scaled from another P.
+                    local_rates=(fit_phase_medians if a.estimator=='phase_medians' else fit)(local_train) if regime=='g1' else rates
+                    for row in hold:
+                        if row['D'] not in group:continue
+                        predicted,_=predict(bits,row['D'],row['B2'],local_rates,chain_min)
+                        checks.append(dict(name=row['name'],actual=row['phases']['full'],predicted=predicted['full'],
+                            error_percent=100*(predicted['full']/row['phases']['full']-1)))
+                    usable=bool(checks) and max(abs(r['error_percent']) for r in checks)<=a.max_error_percent
+                    cold=[r['process_seconds']-r['phases']['full'] for r in local_train]
+                    scope=dict(bits=bits,owner_mb=owner,owner_resident=owner>0,rates=local_rates,regime=regime,
+                        B1=1000,d_values=group,b2_min=min(r['B2'] for r in local),b2_max=max(r['B2'] for r in local),
+                        p_min=min(r['features']['P'] for r in local),p_max=max(r['features']['P'] for r in local),
+                        g_min=min(r['features']['G'] for r in local),g_max=max(r['features']['G'] for r in local),
+                        cold_overhead_seconds=statistics.median(cold),cold_overhead_range=[min(cold),max(cold)],
+                        arena_mb=study['controls']['arena_mb'],training=len(local_train) if regime=='g1' else len(train),admission_training=len(local_train),
+                        holdout=checks,usable=usable,rate_fit_scope='width_owner_regime_D' if regime=='g1' else 'width_owner_regime',
+                        training_raw_error_percent=[100*(predict(bits,r['D'],r['B2'],local_rates,chain_min)[0]['full']/r['phases']['full']-1) for r in local_train])
+                    scope['id']=scope_id(scope);model['stage2'].append(scope)
     a.output.parent.mkdir(parents=True,exist_ok=True)
     a.output.write_text(json.dumps(model,indent=2),encoding='utf-8')
     print(json.dumps({'stage1_scopes':len(model['stage1']),'stage2_scopes':[

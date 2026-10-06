@@ -4472,3 +4472,13 @@ Systems2026 GPU1进程树trace：GPU活动并集1.714s/首尾2.172s=78.95%；cud
 同binary D120120/B2=10亿(G1)/30亿(G3)，三个宽度ABBA共24性能+6独立仿射对照，99912点mismatches0。30亿giant减少83.52/82.98/70.69%；M8191full9.844801→5.928964s(−39.78%)。M4423full对照有长尾，不能把其48.46%当普遍加速；没改默认32768，下一步补更小I/边界/退化点，并把阈值策略纳入profile与原生规划。
 
 G1实际执行通过但Auto B2尚未纳入：预先inverse不做，scaled descent却会自行生成长度P的逆元，不能直接删除逆元成本。另84条runtime Gdevice pairs全部匹配精确n−1/I−G计数，旧floor((n+h)/(2h))多算padding单边复制，应改floor((n+h−1)/(2h))并重新标定Python/native模型，同时计复制/launch。原测量工具原码冻结，采样器NVML clock标签及异常清理随后小修正，原始数据仍可核验。[最新报告、命令与完整证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_MULTIANCHOR.md)。
+
+## 89. Auto B2精确树/G1候选及独立验证失败（2026-10-06）
+
+Python feature7与原生cprof v2对齐：真实tree pairs=n−1/I−G，另计分组/复制字；G1将长度P的局部inverse归入descent，满根单列余式工作，owner不驻留。搜索实测scope并集、拒绝间隙/未测giant路径；profile绑定chain_min，候选8192，计ladder每8192点调用的延迟底座。G1率按已固定D/P拟合，不从大P缩放startup；固定P inverse列共线，不声称单独测得逆元秒数。
+
+仅HostOnly构建17率5f4c…edc4，25 raw依赖冻结，生产893与CUDA源码未改。18批Stage1/117点核验，174 Stage2标定/holdout+108验证（90独立、18满根重放），282条算术检查通过、1086916独立GMP系数、102组leaf一致。5个Python CPU回归及17率CPU mock solver通过，非GPU packing门禁。
+
+15scope仅8个≤10%；最大盲测49.710%，M4423/batch1收益损失11.182%、M8191/batch1损失11.855%超过5%。证据身份/算术通过与精度/排名分别记录，完整passed=false，export拒绝并未生成cprof，不发布缩小子集或替换生产。新版实际auto/manual/queue验收尚未运行，原4acc+多端点v1通过组合仍保留。
+
+M4423同输入额外约1s定位G树/carry readback；M8191同满根descent0.36→1.41s，训练/重放全部保留。最小8重放正常，但大/小交叉8重放中15.574904s长尾再次出现（通常10.57～10.89s），期间GPU利用率0、SM短暂390/420MHz；只能作为状态相关证据。3个Systems trace未复现大长尾，API等待不等于DMA；尚未确定根因或宣称修复。完整报告、源码line和自含证据见[精确树/G1报告](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。后续继续时间线诊断、全部范围新盲测，补G2/生产B1/choose12/总租约及并发/NTT优化。

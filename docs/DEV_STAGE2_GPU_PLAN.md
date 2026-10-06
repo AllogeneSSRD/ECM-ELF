@@ -3895,3 +3895,9 @@ NVML峰值均5027MiB、进程观察private峰值均值7938→8041.5MB；GPU full
 继续跟踪进程RAM，而非只比较局部payload。生产Stage1×12仍用ini `exponent=choose12`，探针显式EXTRA12。
 全部源文件行号、正确性证据、计时/内存边界与四轮原始数据见
 [DEV_GPUOWL_NTT_NOTES§50](D:/code/MPA-OpenCl/docs/DEV_GPUOWL_NTT_NOTES.md:3760)。
+
+## 64. 2026-10-06：Auto B2 G1/精确树候选，发布门禁未通过
+
+原生cprof v2与Python feature7实现精确树、G1局部inverse/满根余式、scope并集与profile chain策略；小ladder按实际8192点launch计延迟底座。独立5f4c候选282曲线算术检查通过，90条独立验证+18重放仍有49.710%最大耗时误差及>11%排名损失，完整audit失败，未export/替换生产/宣称默认可用。
+
+已保留全部失败与旧采集工具。16条最小/交叉重放定位状态长尾，3个Systems正常trace尚不能证明根因。下一步继续定位CPU/驱动/GPU等待并重做完整门禁，补G2/生产B1和显存租约，再推进并发与NTT优化。详情见[报告与源码line](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。

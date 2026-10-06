@@ -27,6 +27,12 @@ docs/data/ecm_auto_b2_native_20261005* -text
 tools/bench/diagnose_ecm_cost_drift.py text eol=lf
 tools/bench/bench_stage2_chain_threshold.py text eol=lf
 tools/test/test_ecm_cost_fit.py text eol=lf
+tools/test/test_ecm_cost_geometry.py text eol=lf
+tools/test/test_ecm_cost_native.cpp text eol=lf
+tools/bench/profile_stage2_points.py text eol=lf
+src/core/ecm_stage2_cost_profile.h text eol=lf
+src/core/ecm_cuda_stage2_main.cpp text eol=lf
+docs/data/ecm_auto_b2_g1_20261006* -text
 docs/data/ecm_auto_b2_multianchor_20261006* -text
 docs/data/ecm_giant_chain_crossover_20261006* -text
 docs/data/ecm_auto_b2_phase_20261005* -text

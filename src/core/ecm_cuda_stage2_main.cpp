@@ -510,7 +510,8 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     for(const char *key:{"NTT_GIANT_LADDER","NTT_GL_SHIFT_SCALE","NTT_CARRY_CHECK_FUSED","NTT_S4_HOSTPACK","NTT_S4_FINAL_READBACK"})require(key,0,0);
     require("NTT_FUSE_COOP_OUTER",2,2);require("NTT_FUSE_T",12,12);require("NTT_FUSE_M",4,4);
     require("NTT_S4_BATCH_MB",64,64);require("NTT_DEVICE_GLEAF_MAX_MB",512,512);
-    require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",32768,32768);
+    require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",profile.chain_min,profile.chain_min);
+    require("NTT_LADDER_CAP",8192,8192);
     require("NTT_S4_SAMPLE",96,96);require("NTT_S4_CHECK_EVERY",8,8);
     require("NTT_ARENA_WORKSPACE_POOL",1,1);require("NTT_FUSE_COMPACT_SCRATCH",1,1);
     require("NTT_S4_FLAT_DIRECT",1,1);require("NTT_GROOT_COMPACT_RAW",1,1);
@@ -533,6 +534,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     request.b2min=o.auto_min;request.b2max=o.auto_max;request.batch=o.stage1_batch;request.t1=o.stage1_seconds;request.adjust=o.ratio_adjust;
     const auto plan=c::choose(profile,request,device);o.b2=plan.b2;o.d=plan.d;o.arena=plan.arena_mb;o.owner_mb=plan.owner_mb;
     if(apply){
+        _putenv_s("NTT_GIANT_CHAIN_MIN",std::to_string(profile.chain_min).c_str());
         _putenv_s("NTT_ARENA_CAP_KB",std::to_string(o.arena*1024).c_str());
         _putenv_s("NTT_FOLD_DEVICE_MAX_MB",std::to_string(o.owner_mb).c_str());
         _putenv_s("NTT_D_MODEL","0");

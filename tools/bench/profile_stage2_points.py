@@ -18,6 +18,10 @@ def main():
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--point-mersenne',type=int,choices=(0,1),default=0)
     p.add_argument('--carry-check-fused',type=int,choices=(0,1),default=0)
+    p.add_argument('--chain-min',type=int,default=None)
+    p.add_argument('--owner-mb',type=int,default=None)
+    p.add_argument('--arena-mb',type=int,default=None)
+    p.add_argument('--factor-only',action='store_true')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--analyze-existing', action='store_true', help='Validate and analyze the existing command/log/trace without relaunching')
     p.add_argument('--nsys', type=Path, default=Path('C:/Program Files/NVIDIA Corporation/Nsight Systems 2026.1.3/target-windows-x64/nsys.exe'))
@@ -39,7 +43,17 @@ def main():
     env = {k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_NO_PROGRESS='1', NTT_ARENA_CAP_KB='6451200', NTT_D_MODEL='0', NTT_STAGE1_Q_DUMP='1',NTT_POINT_MERSENNE=str(a.point_mersenne))
     env['NTT_CARRY_CHECK_FUSED']=str(a.carry_check_fused)
+    if a.chain_min is not None:
+        if not 0<=a.chain_min<=100000000:raise ValueError('Invalid chain minimum')
+        env['NTT_GIANT_CHAIN_MIN']=str(a.chain_min)
+    if a.owner_mb is not None:
+        if a.owner_mb<0:raise ValueError('Invalid owner budget')
+        env['NTT_FOLD_DEVICE_MAX_MB']=str(a.owner_mb)
     command = [str(exe), '--save', str(save), '--b2', str(a.b2), '--d', str(a.d), '--device', str(a.device), '--results', str(out/'results.jsonl'), '--log', str(out/'engine.log')]
+    if a.arena_mb is not None:
+        if a.arena_mb<=0:raise ValueError('Invalid arena budget')
+        command+=['--arena-mb',str(a.arena_mb)]
+    if a.factor_only:command+=['--factor-only']
     assert not any(any(c in token for c in '&|<>%!^\r\n"') for token in command)
     wrapper = out/'run.cmd'
     wrapper_bytes=('@echo off\r\n'+' '.join('"'+x+'"' for x in command)+' > "'+str(out/'app.log')+'" 2>&1\r\nexit /b %errorlevel%\r\n').encode()
@@ -64,7 +78,11 @@ def main():
     saved_x = re.search(rb'\bX=(?:0x)?([0-9a-fA-F]+)', save.read_bytes().splitlines()[0])[1].decode().lower().lstrip('0') or '0'
     assert q == saved_x
     result = json.loads((out/'results.jsonl').read_text(encoding='utf-8').splitlines()[-1])
-    assert result['bad_factors'] == 0 and result['factors'] == []
+    assert result['bad_factors'] == 0
+    if a.factor_only:
+        n=int(result['N_hex'],16)
+        assert all(1<int(f)<n and n%int(f)==0 for f in result['factors'])
+    else:assert result['factors'] == []
     export = [str(a.nsys), 'export', '--type=sqlite', '--force-overwrite=true', '--output', str(trace)+'.sqlite', str(trace)+'.nsys-rep']
     if not a.analyze_existing or not trace.with_suffix('.sqlite').is_file():
         with (out/'export.log').open('wb') as log:

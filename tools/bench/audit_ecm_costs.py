@@ -1,100 +1,112 @@
-"""Audit phase/holdout evidence and publish a compact portable validation summary."""
+"""Audit exact-tree/G1 evidence, per-scope accuracy, and relative-value ranking."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import statistics
 from bench_stage2_budget_scaling import fields
-from ecm_cost_model import giant_work,predict
+from ecm_cost_model import giant_work,predict,features,admits,kruppa_value,FEATURE_PROFILE
 from calibrate_stage2_d import parse
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def ranking(rows,model):
+    scopes={s['id']:s for s in model['stage2']};result=[]
+    for bits in sorted({r['case']['bits'] for r in rows}):
+        samples=[r for r in rows if r['case']['bits']==bits and r['case']['kind']!='root_replay']
+        if not samples:continue
+        grouped={}
+        for row in samples:
+            c=row['case'];key=(c['D'],c['B2'],c['owner_mb'],c['scope_id'])
+            grouped.setdefault(key,[]).append(row)
+        for batch in (1,12):
+            t1=next(s['process_seconds_per_curve'] for s in model['stage1'] if s['bits']==bits and s['batch']==batch)
+            actual={};predicted={}
+            for key,runs in grouped.items():
+                d,b2,owner,sid=key;s=scopes[sid];k=kruppa_value(s['B1'],b2)
+                engine=statistics.median(r['actual']['full'] for r in runs)
+                nominal=runs[0]['case']['prediction']['full']
+                actual[key]=k/(t1+engine+s['cold_overhead_seconds'])
+                predicted[key]=k/(t1+nominal+s['cold_overhead_seconds'])
+            selected=max(predicted,key=predicted.get);best=max(actual,key=actual.get)
+            result.append(dict(bits=bits,stage1_batch=batch,selected=list(selected),actual_best=list(best),
+                selected_actual_score=actual[selected],best_actual_score=actual[best],
+                selected_value_loss_percent=100*(1-actual[selected]/actual[best]),
+                score_basis='engine_plus_frozen_cold_and_measured_stage1'))
+    return result
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--study',type=Path,required=True);p.add_argument('--blind',type=Path,required=True)
     p.add_argument('--profile',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();study=json.loads(a.study.read_text(encoding='utf-8'))
-    blind=json.loads(a.blind.read_text(encoding='utf-8'));model=json.loads(a.profile.read_text(encoding='utf-8'))
+    a=p.parse_args();study=json.loads(a.study.read_text());blind=json.loads(a.blind.read_text());model=json.loads(a.profile.read_text())
     if not study['complete'] or not blind['complete']:raise ValueError('Incomplete evidence')
+    if model['schema']!=2 or model['feature_profile']!=FEATURE_PROFILE:raise ValueError('Unsupported cost version')
+    if model['model_code_sha256']!=sha(Path(__file__).with_name('ecm_cost_model.py')):raise ValueError('Cost implementation changed')
     if blind['profile_sha256']!=sha(a.profile) or model['source_sha256']!=sha(a.study):raise ValueError('Profile identity changed')
-    if sha(a.blind.parent/'predictions.json')!=blind['prediction_sha256']:raise ValueError('Blind predictions changed')
+    if sha(a.blind.parent/'predictions.json')!=blind['prediction_sha256']:raise ValueError('Frozen predictions changed')
+    frozen=json.loads((a.blind.parent/'predictions.json').read_text());minimum=model['chain_min']
     for row in study['stage1']:
-        command=row['command'];save=Path(command[command.index('-save')+1])
-        if sha(save)!=row['save_sha256']:raise ValueError('Verified Stage1 output changed')
-    leaves={};checks=0;points=0
+        c=row['command']
+        if sha(Path(c[c.index('-save')+1]))!=row['save_sha256']:raise ValueError('Verified Stage1 save changed')
+    leaves={};checks=coeffs=g1_count=root_count=0
     for row in study['stage2']+blind['runs']:
-        text=Path(row['log']).read_text(encoding='utf-8')
+        text=Path(row['log']).read_text()
         if sha(row['log'])!=row['log_sha256']:raise ValueError('Raw log changed')
-        if not all(t in text for t in ('gmp_selftest_bad=0','gmp_check_bad=0','pending=0','clean=1')):
-            raise ValueError('Mandatory arithmetic check missing')
-        phases=row.get('phases',row.get('actual'))
-        if parse(text)!=phases:raise ValueError('Phase evidence mismatch')
-        case=row.get('case',row);f=row.get('features',case['features'])
-        seeds=fields(text,'real_giant_seed');work=giant_work(f)
-        if int(seeds['chunks'])!=work['chain_chunks']:raise ValueError('Modeled giant route differs from runtime')
-        key=(case['bits'],case['D'],case['B2']);leaf=fields(text,'descent_values')['hash']
-        if key in leaves and leaves[key]!=leaf:raise ValueError('Path/rep changed leaf fingerprint')
-        leaves[key]=leaf;checks+=1
-        values=fields(text,'s4_multiply_stats');points+=int(values['gmp_checked'])
-    ranks=[]
-    for bits in study['controls']['bits']:
-        rows=[r for r in blind['runs'] if r['case']['bits']==bits]
-        grouped={}
-        for row in rows:
-            key=(row['case']['D'],row['case']['owner_mb']);grouped.setdefault(key,[]).append(row['actual']['full'])
-        actual={key:statistics.median(vals) for key,vals in grouped.items()}
-        predicted={}
-        for scope in model['stage2']:
-            if scope['bits']!=bits:continue
-            for d in scope['d_values']:
-                stages,_=predict(bits,d,rows[0]['case']['B2'],scope['rates']);predicted[(d,scope['owner_mb'])]=stages['full']
-        selected=min(predicted,key=predicted.get);best=min(actual,key=actual.get)
-        ranks.append(dict(bits=bits,selected=list(selected),actual_fastest=list(best),
-            selected_median_seconds=actual[selected],fastest_median_seconds=actual[best],
-            selected_slowdown_percent=100*(actual[selected]/actual[best]-1)))
-    errors=[r['engine_error_percent'] for r in blind['runs']]
-    # Arithmetic evidence and prediction readiness are separate. Never publish
-    # a noisy scope merely because another width passes the accuracy target.
+        if not all(t in text for t in ('gmp_selftest_bad=0','gmp_check_bad=0','pending=0','clean=1')):raise ValueError('Missing arithmetic check')
+        if parse(text)!=row.get('phases',row.get('actual')):raise ValueError('Phase decomposition changed')
+        c=row.get('case',row);f=row.get('features',c.get('features'))
+        if f!=features(c['D'],c['B2'],c['bits'],minimum):raise ValueError('Feature identity mismatch')
+        work=giant_work(f);seed=fields(text,'real_giant_seed')
+        if int(seed['chunks'])!=work['chain_chunks']:raise ValueError('Actual giant route differs')
+        gt=fields(text,'real_batched_gdevice')
+        if (int(gt['pairs']),int(gt['groups']),int(gt['copies']))!=(f['g_tree_pairs'],f['gtrees_groups'],f['g_tree_copies']):raise ValueError('Tree schedule differs')
+        if f['G']==1:
+            g1_count+=1;desc=fields(text,'scaled_descent');root=int(desc['root_divisions'])
+            if int(desc['root_inverse_reused'])!=0 or root!=int(f['I']==f['P']):raise ValueError('G1 inverse/root dispatch differs')
+            root_count+=root
+        key=(c['bits'],c['D'],c['B2']);leaf=fields(text,'descent_values')['hash']
+        if key in leaves and leaves[key]!=leaf:raise ValueError('Path/repetition changed leaf fingerprint')
+        leaves[key]=leaf;checks+=1;coeffs+=int(fields(text,'s4_multiply_stats')['gmp_checked'])
     validation=[]
-    for scope in model['stage2']:
-        rows=[r for r in blind['runs'] if r['case']['bits']==scope['bits'] and
-              r['case']['owner_mb']==scope['owner_mb'] and r['case']['D'] in scope['d_values']]
-        expected=len(scope['d_values'])*len({r['case']['rep'] for r in blind['runs']})
-        maximum=max((abs(r['engine_error_percent']) for r in rows),default=float('inf'))
-        validation.append(dict(bits=scope['bits'],owner_mb=scope['owner_mb'],
-            samples=len(rows),expected_samples=expected,max_abs_percent=maximum if rows else None,
-            passed=bool(scope['usable'] and len(rows)==expected and maximum<=10)))
-    validated_ranks=[]
-    for bits in study['controls']['bits']:
-        owners={s['owner_mb'] for s in validation if s['bits']==bits and s['passed']}
-        if not owners:continue
-        rows=[r for r in blind['runs'] if r['case']['bits']==bits and r['case']['owner_mb'] in owners]
-        grouped={}
-        for row in rows:
-            grouped.setdefault((row['case']['D'],row['case']['owner_mb']),[]).append(row['actual']['full'])
-        actual={key:statistics.median(vals) for key,vals in grouped.items()}
-        predicted={}
-        for scope in model['stage2']:
-            if scope['bits']!=bits or scope['owner_mb'] not in owners:continue
-            for d in scope['d_values']:
-                predicted[(d,scope['owner_mb'])]=predict(bits,d,rows[0]['case']['B2'],scope['rates'])[0]['full']
-        selected=min(predicted,key=predicted.get);best=min(actual,key=actual.get)
-        validated_ranks.append(dict(bits=bits,selected=list(selected),actual_fastest=list(best),
-            selected_slowdown_percent=100*(actual[selected]/actual[best]-1)))
-    result=dict(passed=True,study_stage1_batches=len(study['stage1']),
+    scopes={s['id']:s for s in model['stage2']}
+    for row in blind['runs']:
+        c=row['case'];s=scopes[c['scope_id']]
+        if not admits(s,c['features']) or c not in frozen['cases']:raise ValueError('Blind case outside frozen scope')
+        pred,_=predict(c['bits'],c['D'],c['B2'],s['rates'],minimum)
+        if pred!=c['prediction']:raise ValueError('Frozen prediction differs from model')
+    for s in model['stage2']:
+        rows=[r for r in blind['runs'] if r['case']['scope_id']==s['id']]
+        expected=sum(c['scope_id']==s['id'] for c in frozen['cases'])
+        errors=[abs(r['engine_error_percent']) for r in rows]
+        validation.append(dict(id=s['id'],bits=s['bits'],owner_mb=s['owner_mb'],regime=s['regime'],
+            samples=len(rows),expected_samples=expected,max_abs_percent=max(errors) if errors else None,
+            passed=bool(s['usable'] and expected and len(rows)==expected and max(errors)<=10)))
+    ready={s['id'] for s in validation if s['passed']}
+    all_errors=[r['engine_error_percent'] for r in blind['runs']]
+    independent=[r['engine_error_percent'] for r in blind['runs'] if r['case']['kind']!='root_replay']
+    ranks=ranking(blind['runs'],model)
+    accuracy_passed=bool(validation) and all(s['passed'] for s in validation)
+    expected_ranks={(s['bits'],s['batch']) for s in model['stage1']}
+    ranking_passed=({(r['bits'],r['stage1_batch']) for r in ranks}==expected_ranks and
+                    all(r['selected_value_loss_percent']<=5 for r in ranks))
+    result=dict(schema=2,passed=accuracy_passed and ranking_passed,integrity_passed=True,
+        accuracy_passed=accuracy_passed,ranking_passed=ranking_passed,
+        study_stage1_batches=len(study['stage1']),
         independently_verified_stage1_points=sum(r['batch'] for r in study['stage1']),
         fitting_stage2=sum(r['kind']=='train' for r in study['stage2']),
-        diagnostic_b2_stage2=sum(r['kind']=='holdout' for r in study['stage2']),blind_stage2=len(blind['runs']),
-        clean_curves=checks,independent_gmp_coefficients=points,
-        blind_error_percent=[min(errors),max(errors)],blind_max_abs_percent=max(map(abs,errors)),
-        matched_leaf_groups=len(leaves),ranking=ranks,validation_scopes=validation,
-        validated_ranking=validated_ranks,profile_sha256=sha(a.profile),
-        study_sha256=sha(a.study),blind_sha256=sha(a.blind),auditor_sha256=sha(__file__))
-    a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(result,indent=2),encoding='utf-8')
-    print(json.dumps(result,indent=2))
+        diagnostic_b2_stage2=sum(r['kind']=='holdout' for r in study['stage2']),
+        validation_stage2=len(blind['runs']),blind_stage2=len(independent),root_replays=len(all_errors)-len(independent),
+        clean_curves=checks,independent_gmp_coefficients=coeffs,g1_curves=g1_count,g1_root_reductions=root_count,
+        matched_leaf_groups=len(leaves),validation_error_percent=[min(all_errors),max(all_errors)],
+        blind_error_percent=[min(independent),max(independent)],blind_max_abs_percent=max(map(abs,independent)),
+        validation_scopes=validation,ranking=ranks,
+        validated_ranking=ranking([r for r in blind['runs'] if r['case']['scope_id'] in ready],model),
+        profile_sha256=sha(a.profile),study_sha256=sha(a.study),blind_sha256=sha(a.blind),auditor_sha256=sha(__file__))
+    a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2))
 
 
 if __name__=='__main__':main()

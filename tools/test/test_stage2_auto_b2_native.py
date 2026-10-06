@@ -14,7 +14,7 @@ import sys
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools/bench'))
-from ecm_cost_model import predict,kruppa_value
+from ecm_cost_model import predict,kruppa_value,features,admits
 from bench_stage2_budget_scaling import fields
 
 
@@ -38,6 +38,7 @@ def main():
     ini=out/'manual.ini';ini.write_text('[gpu]\ndevice=1\n[stage2]\nstage2_factor_only=1\n',encoding='utf-8')
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_NO_PROGRESS='1',NTT_CARRY_CHECK_FUSED='0',NTT_STAGE1_Q_DUMP='1')
+    env['NTT_GIANT_CHAIN_MIN']=str(model['chain_min'])
     rows=[];checks=0
     def check(condition,label):
         nonlocal checks
@@ -64,8 +65,9 @@ def main():
         ('fixed_d',['--d',120120],1,None),
         ('fixed_interval',['--auto-min-b2',4500000000,'--auto-max-b2',4500000000],1,None)]:
         plan=auto(name,extra)[0];plans[name]=plan
-        scope=next(s for s in model['stage2'] if s['bits']==8191 and s['owner_resident']==plan['owner_resident'])
-        phases,f=predict(8191,plan['D'],plan['B2'],scope['rates'])
+        f=features(plan['D'],plan['B2'],8191,model['chain_min'])
+        scope=next(s for s in model['stage2'] if s['usable'] and s['owner_resident']==plan['owner_resident'] and admits(s,f))
+        phases,f=predict(8191,plan['D'],plan['B2'],scope['rates'],model['chain_min'])
         check((plan['P'],plan['I'],plan['G'],plan['fold_length'])==(f['P'],f['I'],f['G'],f['fold_ntt']),name+': geometry')
         for key,value in plan['phases'].items():check(math.isclose(value,phases[key],rel_tol=1e-12,abs_tol=1e-12),name+': phase '+key)
         check(math.isclose(plan['T2'],adjust*(phases['full']+scope['cold_overhead_seconds']),rel_tol=1e-12),name+': T2')
@@ -73,11 +75,11 @@ def main():
         check(math.isclose(plan['score'],plan['K']/(plan['T1']+plan['T2']),rel_tol=1e-12),name+': score')
         check(plan['profile_sha256']==profile_sha and not plan['process_peak_guaranteed'],name+': identity/admission')
         if t1 is not None:check(plan['T1']==t1 and plan['T1_source']=='explicit_seconds',name+': explicit T1')
-    check(plans['default']['D']==60060 and plans['default']['B2']==3000000000 and plans['default']['range_limited'],'nominal winner')
+    check(plans['default']['schema']==2 and plans['default']['feature_profile']==7 and plans['default']['chain_min']==model['chain_min'],'versioned feature/policy')
     check(not plans['fallback']['owner_resident'] and plans['fallback']['owner_runtime_mb']==0,'owner budget zero')
     check(plans['fixed_d']['D']==120120 and plans['fixed_interval']['B2']==4500000000,'overrides')
     failures=[('small_arena',['--arena-mb',512],'no measured'),
-        ('outside_b2',['--auto-min-b2',2000000000],'outside measured'),
+        ('outside_b2',['--auto-min-b2',1],'outside measured'),
         ('bad_d',['--d',300],'no measured'),('bad_batch',['--stage1-batch',2],'no matching Stage1'),
         ('nan_ratio',['--stage2-ratio-adjust','nan'],'finite and positive'),
         ('zero_t1',['--stage1-seconds-per-curve',0],'finite and positive')]
@@ -92,8 +94,9 @@ def main():
             invoke('excluded_'+str(bits),args,False,reason='no measured')
         else:
             plan=invoke('included_'+str(bits),args)[0];plans[str(bits)]=plan
-            scope=next(s for s in model['stage2'] if s['bits']==bits and s['owner_resident']==plan['owner_resident'])
-            phases,f=predict(bits,plan['D'],plan['B2'],scope['rates'])
+            f=features(plan['D'],plan['B2'],bits,model['chain_min'])
+            scope=next(s for s in model['stage2'] if s['usable'] and s['owner_resident']==plan['owner_resident'] and admits(s,f))
+            phases,f=predict(bits,plan['D'],plan['B2'],scope['rates'],model['chain_min'])
             check((plan['P'],plan['I'],plan['G'],plan['fold_length'])==(f['P'],f['I'],f['G'],f['fold_ntt']),str(bits)+': native geometry')
             for key,value in plan['phases'].items():check(math.isclose(value,phases[key],rel_tol=1e-12,abs_tol=1e-12),str(bits)+': native phase '+key)
     for name,n,b1 in [('bad_b1','(2^8191-1)',1001),('generic_n','(2^8191-3)',1000)]:
@@ -103,6 +106,7 @@ def main():
     text=profile.read_text();identity=next(line for line in text.splitlines() if line.startswith('identity '))
     tokens=identity.split();stage1_line=next(line for line in text.splitlines() if line.startswith('stage1 '))
     mutations={
+        'old_profile_format':text.replace('ECM_STAGE2_COST_PROFILE 2','ECM_STAGE2_COST_PROFILE 1',1),
         'wrong_binary':text.replace(tokens[1],'0'*64,1),
         'wrong_uuid':text.replace(tokens[2],'0'*32,1),
         'wrong_driver':text.replace(identity,' '.join(tokens[:6]+['1']+tokens[7:]),1),
@@ -110,9 +114,21 @@ def main():
         'duplicate':text.replace('END ',identity+'\nEND ',1),
         'nan_profile':text.replace(stage1_line,' '.join(stage1_line.split()[:-1]+['nan']),1),
     }
+    leading=stage1_line.split();leading[1]='0'+leading[1]
+    mutations['canonical_duplicate']=text.replace('END ', ' '.join(leading)+'\nEND ',1)
+    g1_line=next(line for line in text.splitlines() if line.startswith('scope ') and line.split()[9]=='1')
+    parts=g1_line.split();parts[4]='1'
+    mutations['g1_owner_conflict']=text.replace(g1_line,' '.join(parts),1)
     for name,value in mutations.items():
         bad=out/(name+'.cprof');bad.write_text(value)
         invoke(name,['--save',save,'--auto-b2','--cost-profile',bad,'--plan-only'],False)
+    g1=next(s for s in model['stage2'] if s['bits']==8191 and s['regime']=='g1' and s['usable'])
+    middle=(g1['b2_min']+g1['b2_max'])//2
+    g1_plan=auto('g1_forced',['--d',g1['d_values'][0],'--auto-min-b2',middle,'--auto-max-b2',middle])[0]
+    check(g1_plan['G']==1 and g1_plan['local_inverse_work']>0 and g1_plan['phases']['inv']==0 and not g1_plan['owner_resident'],'G1 local inverse dispatch')
+    endpoint=auto('g1_root_boundary',['--d',g1['d_values'][0],'--auto-min-b2',g1['b2_max'],'--auto-max-b2',g1['b2_max']])[0]
+    check(endpoint['I']==endpoint['P'] and endpoint['root_reduction_work']>0,'G1 full-root boundary')
+    auto('unmeasured_gap',['--auto-min-b2',2000000000,'--auto-max-b2',2000000000],success=False,reason='no feasible')
     # A private queue verifies transactions, without touching production files.
     queue=out/'worktodo.txt';finished=out/'finished.txt';qini=out/'queue.ini'
     qini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=worktodo.txt\nfinished=finished.txt\ntmp_dir='+

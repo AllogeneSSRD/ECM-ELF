@@ -15,8 +15,8 @@ import subprocess
 import threading
 import time
 from bench_stage2_budget_scaling import Nvml,fields
-from calibrate_stage2_d import features,parse
-from ecm_cost_model import predict
+from calibrate_stage2_d import parse
+from ecm_cost_model import predict,features,admits
 
 
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -74,8 +74,10 @@ def main():
             block=[dict(bits=bits,D=d,B2=b,owner_mb=owner,rep=rep) for bits in a.bits for d in a.d for b in a.b2 for owner in a.owners]
             random.Random(a.seed+rep).shuffle(block);cases.extend(block)
         for case in cases:
-            scope=next(s for s in model['stage2'] if s['bits']==case['bits'] and s['owner_mb']==case['owner_mb'])
-            phases,f=predict(case['bits'],case['D'],case['B2'],scope['rates'])
+            minimum=model.get('chain_min',32768)
+            f=features(case['D'],case['B2'],case['bits'],minimum)
+            scope=next(s for s in model['stage2'] if s['owner_mb']==case['owner_mb'] and admits(s,f))
+            phases,f=predict(case['bits'],case['D'],case['B2'],scope['rates'],minimum)
             case.update(prediction=phases,features=f,arena_mb=scope['arena_mb'])
         data=dict(schema=1,kind='diagnostic_replay',identity=identity,controls=controls,cases=cases,runs=[])
         (out/'frozen_cases.json').write_text(json.dumps(data,indent=2))
@@ -84,6 +86,7 @@ def main():
     persist();state=State()
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_NO_PROGRESS='1',NTT_D_MODEL='0',NTT_CARRY_CHECK_FUSED='0',NTT_STAGE1_Q_DUMP='1',NTT_POINT_MERSENNE='1')
+    env['NTT_GIANT_CHAIN_MIN']=str(model.get('chain_min',32768))
     ini=out/'manual.ini';ini.write_text('[gpu]\ndevice=1\n',encoding='utf-8')
     for index,case in enumerate(data['cases']):
         name=f'{index:02d}_m{case["bits"]}_d{case["D"]}_b{case["B2"]}_o{case["owner_mb"]}_r{case["rep"]}'
