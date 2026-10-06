@@ -12,7 +12,7 @@
 
 编译档位为 512、1024、2560、4608、9216；param2 关闭；Montgomery 构建；**TPB=128**。并行编译 6 个 TU，最长 TU 为 native TPI16，372.2 s，随后完成主机编译与链接。实验档位不能替代覆盖全部位宽的生产安装版。
 
-仓库默认分档依然是容器 2560～8192 位使用 TPI16、9216～16384 位使用 TPI32，见 [原分档](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_kernel.h:1178)。N=2^4423−1 默认使用 **4608/TPI16**。本轮另行实例化 2560/TPI32、4608/TPI32；只有显式设置 `ECM_STAGE1_TPI=32` 的新 resident/PRAC 路径才使用它们。
+仓库默认分档依然是容器 2560～8192 位使用 TPI16、9216～16384 位使用 TPI32，见 [原分档](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_kernel.h:1178)。N=2^4423−1 默认使用 **4608/TPI16**。选容器须覆盖 N bits+6：N=8191 bit 会选择 9216/TPI32。此边界不能仅按 N>8192 理解。本轮另行实例化 2560/TPI32、4608/TPI32；只有显式设置 `ECM_STAGE1_TPI=32` 的新 resident/PRAC 路径才使用它们。
 
 TPB 的仓库默认已于 2026-09-25 从 256 改为 128，见 [配置背景](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_kernel.h:100) 和 [CMake 默认值](D:/code/MPA-OpenCl/CMakeLists.txt:433)。调节寄存器预算不会改变 TPB。
 
@@ -25,7 +25,7 @@ TPB 的仓库默认已于 2026-09-25 从 256 改为 128，见 [配置背景](D:/
 寄存器允许驻留 blocks/SM ≈ floor(65536 / (T × 实际分配寄存器/线程))
 ```
 
-最后一个公式须考虑分配粒度、warp/thread/block 上限及 shared memory；程序报告值由 CUDA occupancy API 给出，[调用位置](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:146)。**提交的 grid 不等于同时驻留的 block**。
+最后一个公式须考虑分配粒度、warp/thread/block 上限及 shared memory；程序报告值由 CUDA occupancy API 给出，[调用位置](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:160)。**提交的 grid 不等于同时驻留的 block**。
 
 T=128 时，TPI16 的 C=384/768/1536 与 TPI32 的 C=192/384/768 分别提交相同的 48/96/192 blocks，即平均 2/4/8 blocks/SM。比较吞吐量时使用曲线/秒，不能只比较较小批次的完成时间。
 
@@ -36,8 +36,8 @@ T=128 时，TPI16 的 C=384/768/1536 与 TPI32 的 C=192/384/768 分别提交相
 - [实验 TPI 实例](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_alternate32.cu:9)：相同容器、相同公式，只改变协作线程数。
 - [分派](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernels.cu:10)：请求 0 保留正常分档；请求 32 才尝试两个新增实例。
 - [主机策略](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:55)：`ECM_PRAC_REG_TARGET=0|168|255`；`ECM_STAGE1_TPI=0|16|32`。先选正常的最小容器，再验证请求策略，缺失实例明确报错，不悄悄改成更大容器。
-- [寄存器实例](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:51)：0 沿用 per-tier；255 允许 natural 分配；168 仅提供 **4608/TPI16 PRAC**，其他档位不支持。
-- [检查点兼容性](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:109)：记录实际 TPI，跨 TPI 恢复拒绝；寄存器预算不改变数学状态，可在相同 TPI 间恢复。
+- [寄存器实例](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:63)：0 沿用 per-tier；255 允许 natural 分配；168 仅提供 **4608/TPI16 PRAC**，其他档位不支持。
+- [检查点兼容性](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:117)：记录实际 TPI，跨 TPI 恢复拒绝；寄存器预算不改变数学状态，可在相同 TPI 间恢复。
 
 原 ladder 不接受这些实验 TPI 覆盖。原有默认算法保持 ladder；新路径显式选择 `ECM_GPU_STAGE1_ALGO=resident|prac`。
 
@@ -136,7 +136,7 @@ TPI32 不意味着物理工作位宽恰好等于容器宽。CGBN 的 [LIMBS、UN
 | 4608/32 | resident | 90 | 64 | 0 / 0 |
 | 4608/32 | PRAC natural | 109 | 64 | 0 / 0 |
 
-本轮编译原始证据在本地 `build_cuda_cmake/prac/par_nvcc/`，不提交构建日志。
+本轮编译原始证据在本地 `build_cuda_cmake/prac/before_compact_20261006/par_nvcc/`，不提交构建日志。
 
 ## 6. Nsight Compute：管理员采集
 
@@ -258,3 +258,5 @@ python tools/bench/summarize_stage1_profile.py docs/data/my_stage1_ncu/metrics.c
 ```
 
 `--tool nsys` 可生成 Systems 报告；使用 NSYS `export --type sqlite` 后，由 [汇总脚本](D:/code/MPA-OpenCl/tools/bench/summarize_stage1_profile.py:50) 分析指定模板 MODE=2/3/4/5。kernel 时间用区间并集计算，避免重叠重复相加。原始报告、CSV、SQLite、检查点和采样 save 均留在已排除的 `docs/data/`，仅提交方法及汇总文档。
+
+后续窗口校准和 compact DBL 候选记录：[PRAC 窗口与算术实验](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_WINDOWS_COMPACT_20261006.md:1)。本文性能数字保留原二进制与采样范围，源码链接更新到当前对应入口。

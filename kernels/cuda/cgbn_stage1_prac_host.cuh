@@ -44,6 +44,7 @@ static bool resident_checkpoint_write(const std::string &path, ResidentCheckpoin
     return std::rename(temporary.c_str(), path.c_str()) == 0;
 #endif
 }
+#include "cgbn_stage1_prac_window.cuh"
 static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_srcptr s,
     uint32_t curves, uint64_t *sigma, unsigned long checkpoint_ms, float *gputime,
     uint64_t B1, uint32_t torsion, bool prac) {
@@ -56,6 +57,18 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
             if (strcmp(cap, "255") == 0) mode = ECM_DOMAIN_PRAC_NATURAL;
             else if (strcmp(cap, "168") == 0) mode = ECM_DOMAIN_PRAC_168;
             else if (*cap && strcmp(cap, "0") != 0) throw std::runtime_error("ECM_PRAC_REG_TARGET must be 0, 168 or 255");
+        }
+        bool compact = false;
+        if (const char *variant = getenv("ECM_PRAC_VARIANT")) {
+            if (strcmp(variant, "compact") == 0) compact = true;
+            else if (*variant && strcmp(variant, "baseline") != 0)
+                throw std::runtime_error("ECM_PRAC_VARIANT must be baseline or compact");
+        }
+        if (compact) {
+            if (!prac) throw std::runtime_error("compact variant requires PRAC");
+            if (mode == ECM_DOMAIN_PRAC_NATURAL) mode = ECM_DOMAIN_PRAC_COMPACT;
+            else if (mode == ECM_DOMAIN_PRAC_168) mode = ECM_DOMAIN_PRAC_COMPACT_168;
+            else throw std::runtime_error("compact variant requires register policy 255 or 168");
         }
         uint32_t requested_tpi = 0;
         if (const char *env = getenv("ECM_STAGE1_TPI")) {
@@ -93,6 +106,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         else exponent.reset(allocate_and_set_s_bits(s, &s_bits));
         const uint64_t total = prac ? plan.primes.size() : s_bits;
         const uint64_t total_work = prac ? plan.work : s_bits - 1;
+        const PracWindow window = prac_window_settings(prac, total);
         const size_t bytes = size_t(7) * curves * (bits / 8);
         ResidentCheckpoint h{0x31524d444d434545ull, B1, ecm_prac_hash_mpz(s), ecm_prac_hash_mpz(N),
             prac ? plan.identity : ecm_prac_hash_mpz(s), prac ? 0ull : 1ull, total, *sigma,
@@ -100,7 +114,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         std::string path = std::string(get_checkpoint_filename(N)) + (prac ? ".prac-v1" : ".resident-v1");
         std::vector<uint32_t> data(bytes / sizeof(uint32_t));
         bool resumed = false;
-        {
+        if (!window.enabled()) {
             std::ifstream in(path, std::ios::binary); ResidentCheckpoint old{};
             if (in.read(reinterpret_cast<char *>(&old), sizeof(old))) {
                 bool compatible = old.magic == h.magic && old.version == h.version && old.b1 == h.b1 &&
@@ -146,9 +160,16 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occupied, kernel, TPB_DEFAULT, 0));
         outputf(OUTPUT_ALWAYS, "GPU: parametrization = Suyama param0; algorithm=%s; resident Montgomery domain\n",
                 prac ? "prac" : "resident-ladder");
-        if (prac) outputf(OUTPUT_ALWAYS, "GPU: PRAC register policy=%s\n", mode == ECM_DOMAIN_PRAC_NATURAL ? "natural (255)" : mode == ECM_DOMAIN_PRAC_168 ? "168 (4608/TPI16)" : "per-tier");
+        if (prac) {
+            outputf(OUTPUT_ALWAYS, "GPU: PRAC register policy=%s\n",
+                (mode == ECM_DOMAIN_PRAC_NATURAL || mode == ECM_DOMAIN_PRAC_COMPACT) ? "natural (255)" :
+                (mode == ECM_DOMAIN_PRAC_168 || mode == ECM_DOMAIN_PRAC_COMPACT_168) ? "168 (4608/TPI16)" : "per-tier");
+            outputf(OUTPUT_ALWAYS, "GPU: PRAC variant=%s\n", compact ? "compact (2-temporary DBL)" : "baseline");
+        }
         outputf(OUTPUT_ALWAYS, "GPU: sigma=%llu, CGBN<%u,%u>, curves=%u, blocks=%u, blocks/SM=%d, control=%zu bytes\n",
                 (unsigned long long)*sigma, tpi, bits, curves, blocks, occupied, control_bytes);
+        if (window.enabled()) return prac_window_run(window, plan, gpu, kernel, s_bits,
+            bits, tpi, requested_tpi, curves, *sigma, B1, np0, blocks, data, gputime);
         uint64_t completed_work = 0;
         if (prac) for (uint64_t i = 0; i < h.next; ++i) completed_work += uint64_t(plan.primes[size_t(i)].work) * plan.primes[size_t(i)].repetitions;
         else completed_work = h.next - 1;

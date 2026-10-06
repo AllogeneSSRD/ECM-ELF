@@ -23,12 +23,15 @@ def rows(folder):
     return result
 
 
-def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, expect_records=True, tpi=0, registers=None):
+def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, expect_records=True, tpi=0, registers=None, variant='baseline'):
     folder.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, ECM_GPU_STAGE1_ALGO=algo, ECM_GPU_STAGE1_SAMPLE_SECONDS=str(sample))
     # Exercise native cold planning without changing the user's shared plan cache.
     env['ECM_PRAC_PLAN_CACHE'] = str(folder / 'plan_cache')
     env['ECM_STAGE1_TPI'] = str(tpi)
+    env['ECM_PRAC_VARIANT'] = variant
+    for key in tuple(env):
+        if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
     if registers is not None: env['ECM_PRAC_REG_TARGET'] = str(registers)
     env.pop('ECM_GPU_DUMP', None)
     args = [str(exe), '-sigma', f'0:{sigma}', '-gpucurves', str(curves), '--ckpt', '0',
@@ -87,9 +90,12 @@ def main():
     ap.add_argument('--bits', type=int, nargs='+', choices=[2203, 4423, 8191], default=[2203, 4423, 8191])
     ap.add_argument('--registers', type=int, choices=[0, 168, 255],
                     default=int(os.environ.get('ECM_PRAC_REG_TARGET', '0')))
+    ap.add_argument('--variant', choices=['baseline', 'compact'], default='baseline')
     args = ap.parse_args(); exe = args.exe.resolve(strict=True); root = args.output.resolve()
     if args.registers == 168 and (args.bits != [4423] or args.tpi == 32):
         ap.error('168-register variant requires --bits 4423 and TPI16/default')
+    if args.variant == 'compact' and (args.bits != [4423] or args.tpi == 32 or args.registers == 0):
+        ap.error('compact requires --bits 4423, TPI16/default and registers 168/255')
     root.mkdir(parents=True, exist_ok=False)
     results = []
     cases = [(f'M{n}', f'(2^{n}-1)', 1000, 8, 26, t) for n in args.bits for t in ('lcm', 'choose12')]
@@ -98,7 +104,7 @@ def main():
         cases += [(f'boundary{b}', '(2^2203-1)', b, 4, 26, t) for b in (2, 3, 5) for t in ('lcm', 'choose12')]
     if 4423 in args.bits:
         cases += [('sigma62', '(2^4423-1)', 1000, 8, 4611686018427511360, 'lcm')]
-    if args.registers != 168:
+    if args.registers != 168 and args.variant != 'compact':
         cases += [('composite', '((2^127-1)*(2^521-1))', 1000, 8, 26, 'lcm')]
     for label, expr, b1, curves, sigma, exponent in cases:
         reference = root / f'{label}_{exponent}' / 'cpu'
@@ -109,7 +115,8 @@ def main():
             folder = root / f'{label}_{exponent}' / algo
             forced = args.tpi if expr in ('(2^2203-1)', '(2^4423-1)') else 0
             text = run(exe, folder, expr, b1, curves, sigma, exponent, algo, args.device,
-                       tpi=forced, registers=args.registers if algo == 'prac' else 0)
+                       tpi=forced, registers=args.registers if algo == 'prac' else 0,
+                       variant=args.variant if algo == 'prac' else 'baseline')
             if forced and algo != 'ladder': assert f'CGBN<{forced},' in text, 'Wrong TPI selected'
             actual = rows(folder)
             assert actual == expected, f'{label}/{algo}: full-Q save mismatch; inspect {folder}'
@@ -125,7 +132,8 @@ def main():
         for corrupt in (False, True):
             folder = root / 'checkpoint' / f'{algo}_corrupt{int(corrupt)}'
             text = run(exe, folder, *settings, algo, args.device, sample=0.000001, tpi=args.tpi,
-                       registers=args.registers if algo == 'prac' else 0)
+                       registers=args.registers if algo == 'prac' else 0,
+                       variant=args.variant if algo == 'prac' else 'baseline')
             assert 'sample limit reached' in text and not rows(folder), 'Partial Stage1 was published'
             files = list(folder.glob('.ecm_ckpt_*'))
             assert len(files) == 1, f'Missing checkpoint: {folder}'
@@ -135,7 +143,8 @@ def main():
                     cache = next((folder / 'plan_cache').glob('*.bin'))
                     payload = bytearray(cache.read_bytes()); payload[-1] ^= 1; cache.write_bytes(payload)
             text = run(exe, folder, *settings, algo, args.device, tpi=args.tpi,
-                       registers=args.registers if algo == 'prac' else 0)
+                       registers=args.registers if algo == 'prac' else 0,
+                       variant=args.variant if algo == 'prac' else 'baseline')
             assert ('mismatch/corruption' if corrupt else 'checkpoint resumed') in text
             if corrupt and algo == 'prac': assert 'PRAC plan built' in text, 'Corrupt plan cache was accepted'
             assert rows(folder) == expected, f'{algo}: resume/corruption full Q mismatch'
@@ -145,7 +154,7 @@ def main():
     results.extend(result_edges(exe, root / 'results', args.device))
     metadata = dict(exe=str(exe), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),
                     prac_registers=args.registers, bits=args.bits, device=args.device,
-                    requested_tpi=args.tpi,
+                    requested_tpi=args.tpi, variant=args.variant,
                     Q_comparisons=sum(r['Q'] for r in results), results=results)
     (root / 'summary.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
 

@@ -17,7 +17,7 @@
 - [ecm_backend.h:52](D:/code/MPA-OpenCl/include/ecm_backend.h:52)：后端接口显式携带整数 B1 与 torsion=1/12，不能从标量反推来源。
 - [ecm_driver.cpp:2904](D:/code/MPA-OpenCl/src/core/ecm_driver.cpp:2904)：驱动传递 B1 与 `--exponent lcm|choose12` 的乘数。
 - [cgbn_stage1.cu:1152](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1.cu:1152)：读取 `ECM_GPU_STAGE1_ALGO`；非法值、param2/3 或 fold 构建明确拒绝新路径。
-- [cgbn_stage1_prac_host.cuh:47](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:47)：档位选择、计划、分片、检查点和结果处理。
+- [cgbn_stage1_prac_host.cuh:48](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:48)：档位选择、计划、分片、检查点和结果处理。
 
 新路径接受 `2 <= B1 <= UINT32_MAX`、合法 64 位 sigma 批次范围，使用覆盖 `nbits(N)+CARRY_BITS` 的现有 param0 档位。没有为 param2、param3、OpenCL 或 fold 编写 PRAC 算术。
 
@@ -60,13 +60,13 @@
 
 现有 CPU `set_p_2p_suyama` 生成 `N,a24,xdiff,AX,AZ,BX,BZ` 的 7-word 曲线记录。整批坐标与控制数组各上传一次。INIT 将六个域元素转成 Montgomery 形式，N 保持普通模数。
 
-源代码：[主机初始化及上传](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:122)、[INIT/EXPORT](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:63)。
+源代码：[主机初始化及上传](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:134)、[INIT/EXPORT](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:75)。
 
 ### 4.2 驻留 ladder
 
 保持原 MSB-first 位序、P/2P 初始状态、交换规则和融合 `double_add_v2_suyama`。片间只加载/保存 Montgomery 坐标。原路径每片六次入域、四次出域，驻留路径消除重复转换。
 
-见 [cgbn_stage1_prac_kernel.cuh:75](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:75)。本轮未加入指数字缓存或修改融合公式；实际对照差异还包含编译布局、占用率变化。
+见 [cgbn_stage1_prac_kernel.cuh:87](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:87)。本轮未加入指数字缓存或修改融合公式；实际对照差异还包含编译布局、占用率变化。
 
 ### 4.3 PRAC 单素数乘法
 
@@ -77,11 +77,11 @@
 5. d=e=1 时，以 C 为差点做最终 DADD，结果写回 A。
 6. 完成该素数所有 repetitions，再执行下一条描述。
 
-见 [素数循环](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:93)。非减法三条规则用固定角色交换，共享 ADD+DBL 实现，避免动态索引点数组和多个展开体。见 [规则实现](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:109)。
+见 [素数循环](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:106)。非减法三条规则用固定角色交换，共享 ADD+DBL 实现，避免动态索引点数组和多个展开体。见 [规则实现](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:121)。
 
 DBL=3M+2S，DADD=4M+2S。各用三个域临时量；DADD 覆盖输出前读完两个输入和差点 X/Z，允许别名。乘方/乘法保留 normalized 包装及条件减 N。
 
-源代码：[DBL](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:12)、[DADD](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:28)。
+源代码：[DBL](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:13)、[DADD](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:40)。
 
 ### 4.4 分片及计时
 
@@ -91,21 +91,21 @@ CUDA events 计每片纯 kernel 时间；50 片窗口取 `work/ms` 的算术平�
 
 `projected seconds/curve = total_work / (1000 × mean(work/ms) × curves)`。
 
-见 [计时和投影](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:164)。`kernel=` 为累计 event 时间；`execution-wall=` 包含主机片间调度、检查点、最终出域/传输。两者均不包括前置指数/计划生成、曲线准备、首次上传/INIT，也不包括后置 CPU 仿射化/save。端到端时间需另外计量。
+见 [计时和投影](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:185)。`kernel=` 为累计 event 时间；`execution-wall=` 包含主机片间调度、检查点、最终出域/传输。两者均不包括前置指数/计划生成、曲线准备、首次上传/INIT，也不包括后置 CPU 仿射化/save。端到端时间需另外计量。
 
 ### 4.5 收尾
 
-EXPORT 还原六个域元素，回传整批 7-word 数据；现有 `process_results` 用 A 的 X/Z 检查因子并仿射化，驱动写兼容 save。完成且非错误时删检查点。见 [主机收尾](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:207)。
+EXPORT 还原六个域元素，回传整批 7-word 数据；现有 `process_results` 用 A 的 X/Z 检查因子并仿射化，驱动写兼容 save。完成且非错误时删检查点。见 [主机收尾](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:228)。
 
 ## 5. 检查点与部分运行
 
 独立文件后缀 `.prac-v1` / `.resident-v1`，不读取原 ladder v5。112-byte header 含算法/域、B1/t、模数和标量 hash、计划身份、档位/TPI、批量、64 位 sigma、下一条 prime/bit offset、长度和校验和。载荷保持 Montgomery 域；先写临时文件再替换。FNV 检测意外损坏，不是认证。
 
-源代码：[格式和写入](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:16)、[恢复验证](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:102)。
+源代码：[格式和写入](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:16)、[恢复验证](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:117)。
 
 `ECM_GPU_STAGE1_SAMPLE_SECONDS>0` 使新路径在片边界到时后写检查点并返回不完整状态，不发布完整 Stage1 Q。原路径由采样工具终止其独立子进程。驱动可能预创建空 save，必须按 SIGMA/X 记录数判断完成，不能按文件存在判断。
 
-源代码：[停止点](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:193)、[bench_cuda_prac.py](D:/code/MPA-OpenCl/tools/bench/bench_cuda_prac.py:1)。
+源代码：[停止点](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:217)、[bench_cuda_prac.py](D:/code/MPA-OpenCl/tools/bench/bench_cuda_prac.py:1)。
 
 ## 6. 工作量、内存、显存和传输
 
@@ -162,7 +162,7 @@ sm89、CUDA 13.3。ptxas spill bytes 是编译统计，不是一次迭代确定�
 
 `ECM_PRAC_REG_TARGET=255` 对中档宽度编译独立内核，在同一 exe 中 A/B。小档及现有自然寄存器的大档复用原 PRAC 实例。255 是上限，实际数由 ptxas 决定。日志报告所选 kernel 的实际 blocks/SM。
 
-源代码：[maxnreg](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:51)、[实例分派](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:130)、[策略选择](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:55)。
+源代码：[maxnreg](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:63)、[实例分派](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_kernel.cuh:143)、[策略选择](D:/code/MPA-OpenCl/kernels/cuda/cgbn_stage1_prac_host.cuh:55)。
 
 ## 8. 性能证据
 
@@ -277,3 +277,5 @@ python tools/test/test_cuda_prac.py --device 1 --output docs/data/my_prac_gate
 5. Lucas 扩展后置；此前离线额外收益小，当前主要限制已是寄存器压力。
 
 默认算法变更需要更多实证；本轮已提供同二进制对照、独立检查点和短时采样能力。
+
+后续窗口校准和 compact DBL 候选记录：[PRAC 窗口与算术实验](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_WINDOWS_COMPACT_20261006.md:1)。本文性能数字保留原二进制与采样范围，源码链接更新到当前对应入口。

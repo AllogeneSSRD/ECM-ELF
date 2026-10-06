@@ -28,6 +28,11 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
     env = dict(os.environ, ECM_GPU_STAGE1_ALGO=algo)
     env['ECM_PRAC_REG_TARGET'] = str(args.prac_registers)
     env['ECM_STAGE1_TPI'] = str(args.tpi)
+    variant = getattr(args, 'prac_variant', 'baseline') if algo == 'prac' else 'baseline'
+    env['ECM_PRAC_VARIANT'] = variant
+    env['ECM_PRAC_PLAN_CACHE'] = str(args.exp_cache)
+    for key in tuple(env):
+        if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
     env.pop('ECM_GPU_DUMP', None)
     env['ECM_GPU_STAGE1_SAMPLE_SECONDS'] = str(args.seconds) if algo != 'ladder' else '0'
     command = [str(exe), '-gpu', '-d', str(args.device), '--gpu-param', '0',
@@ -37,7 +42,7 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
     log = folder / 'run.log'
     launched = time.monotonic()
     samples = []; precise = []; offset = 0; pending = ''; first = None; killed = False
-    print(f'START algo={algo} n={bits} B1={b1} C={args.curves} TPI={args.tpi} device={args.device}', flush=True)
+    print(f'START algo={algo} variant={variant} reg={args.prac_registers} n={bits} B1={b1} C={args.curves} TPI={args.tpi} device={args.device}', flush=True)
     with (folder / 'n.txt').open('rb') as source, log.open('wb') as out:
         process = subprocess.Popen(command, cwd=folder, env=env, stdin=source,
                                    stdout=out, stderr=subprocess.STDOUT)
@@ -80,7 +85,8 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
                                 for line in completed_save.read_text(encoding='utf-8').splitlines())
     result = dict(algorithm=algo, bits=bits, B1=b1, curves=args.curves, device=args.device,
                   requested_tpi=args.tpi,
-                  exponent=args.exponent, prac_registers=args.prac_registers, projected_s_per_curve=median,
+                  exponent=args.exponent, prac_registers=args.prac_registers, prac_variant=variant,
+                  projected_s_per_curve=median,
                   rate_min=min(r['s_per_curve'] for r in tail), rate_max=max(r['s_per_curve'] for r in tail),
                   partial_run=True, sample_count=len(tail), elapsed=chosen[-1]['elapsed'],
                   progress_percent=samples[-1]['pct'] if samples else None,
@@ -115,6 +121,7 @@ def main():
     parser.add_argument('--device', type=int, default=1)
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--prac-registers', type=int, choices=[0, 168, 255], default=0)
+    parser.add_argument('--prac-variant', choices=['baseline', 'compact'], default='baseline')
     parser.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     parser.add_argument('--exp-cache', type=Path, help='Shared validated B1/PRAC cache; defaults to exe directory')
     parser.add_argument('--exponent', choices=['lcm', 'choose12'], default='lcm')
@@ -124,6 +131,8 @@ def main():
         parser.error('Expected 0 <= warmup < seconds and positive curves/repeats')
     if args.tpi and 'ladder' in args.algorithms:
         parser.error('TPI overrides require --algorithms resident prac (the original ladder is unchanged)')
+    if args.prac_variant == 'compact' and (args.bits != [4423] or args.tpi == 32 or args.prac_registers == 0):
+        parser.error('compact requires --bits 4423, TPI16/default and registers 168/255')
     exe = args.exe.resolve(strict=True)
     args.exp_cache = (args.exp_cache or exe.parent).resolve()
     root = (args.output or Path('docs/data') / ('prac_cuda_' + dt.datetime.now().strftime('%Y%m%d_%H%M%S'))).resolve()

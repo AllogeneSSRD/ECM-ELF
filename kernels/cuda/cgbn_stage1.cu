@@ -1150,6 +1150,13 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
              float *gputime, int verbose, int gpu_param, uint64_t B1, uint32_t torsion)
 {
   const char *algorithm = getenv("ECM_GPU_STAGE1_ALGO");
+  const char *window = getenv("ECM_PRAC_WINDOW");
+  const char *variant = getenv("ECM_PRAC_VARIANT");
+  if (((window && *window) || (variant && *variant && strcmp(variant, "baseline") != 0)) &&
+      (!algorithm || strcmp(algorithm, "prac") != 0)) {
+    outputf(OUTPUT_ERROR, "GPU: PRAC window/variant requires ECM_GPU_STAGE1_ALGO=prac\n");
+    return ECM_ERROR;
+  }
   if (algorithm && *algorithm && strcmp(algorithm, "ladder") != 0) {
     if (strcmp(algorithm, "prac") != 0 && strcmp(algorithm, "resident") != 0) {
       outputf(OUTPUT_ERROR, "GPU: ECM_GPU_STAGE1_ALGO must be ladder, resident or prac\n");

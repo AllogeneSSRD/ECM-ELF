@@ -17,6 +17,7 @@ def main():
     p.add_argument('--tpis', nargs='+', type=int, choices=[16, 32], default=[16, 32])
     p.add_argument('--algorithms', nargs='+', choices=['resident', 'prac'], default=['resident', 'prac'])
     p.add_argument('--prac-registers', type=int, choices=[0, 168, 255], default=255)
+    p.add_argument('--prac-variant', choices=['baseline', 'compact'], default='baseline')
     p.add_argument('--repeats', type=int, default=2)
     p.add_argument('--seconds', type=float, default=12)
     p.add_argument('--warmup', type=float, default=4)
@@ -26,6 +27,8 @@ def main():
     p.add_argument('--exponent', choices=['lcm', 'choose12'], default='lcm')
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()
+    if a.prac_variant == 'compact' and (a.bits != [4423] or a.tpis != [16] or a.prac_registers == 0):
+        p.error('compact requires --bits 4423 --tpis 16 and registers 168/255')
     if any(c < 2 or c % 2 for c in a.curves16) or not 0 <= a.warmup < a.seconds or a.repeats < 1:
         p.error('Positive even curve counts, repetitions, and 0 <= warmup < seconds required')
     exe = a.exe.resolve(strict=True); a.exp_cache = (a.exp_cache or exe.parent).resolve()
@@ -48,7 +51,7 @@ def main():
                             for x in report['results']:
                                 key = (x['bits'], x['B1'], x['algorithm'], x['requested_tpi'], x['curves'])
                                 grouped.setdefault(key, []).append(x['projected_s_per_curve'])
-                            report['aggregates'] = [dict(bits=k[0], B1=k[1], algorithm=k[2], tpi=k[3], curves=k[4],
+                            report['aggregates'] = [dict(bits=k[0], B1=k[1], algorithm=k[2], tpi=k[3], curves=k[4], prac_variant=a.prac_variant,
                                 repeats=len(v), projected_s_per_curve=statistics.median(v),
                                 curves_per_second=1/statistics.median(v), min=min(v), max=max(v)) for k,v in grouped.items()]
                             (root / 'summary.json').write_text(json.dumps(report, indent=2)+'\n', encoding='utf-8')
