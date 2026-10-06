@@ -141,7 +141,9 @@ tools/ecm_worktodo/worktodo_p95_stage2.txt
 # gwnum probe build artifacts (the probe itself and its recorded output are tracked)
 /tools/gwnum_probe/bin/
 vc140.pdb
-/data/ecm_stage2_snapshot_20261005
+# Local datasets, experiment logs, and evidence archives (kept on disk).
+/data/
+/docs/data/
 /tools/ecm_dataset/ecm_stage2_dataset.sqlite
 /tools/ecm_dataset/ecm_stage2_dataset.sqlite-*
 *.bak

@@ -1,4 +1,0 @@
-==WARNING== Unable to load or parse the kernel demangled names config file C:\Users\Elysia\AppData\Roaming\NVIDIA Corporation\ncu-kernel-renames.yaml.
-bad file: C:\Users\Elysia\AppData\Roaming\NVIDIA Corporation\ncu-kernel-renames.yaml==PROF== Connected to process 62716 (D:\code\MPA-OpenCl\build_cuda_cmake\_auto_b2_phase_20261005\native\ecm_cuda_stage2.exe)
-==ERROR== ERR_NVGPUCTRPERM - The user does not have permission to access NVIDIA GPU Performance Counters on the target device 1. For instructions on enabling permissions and to get more information see https://developer.nvidia.com/ERR_NVGPUCTRPERM
-==PROF== Disconnected from process 62716
