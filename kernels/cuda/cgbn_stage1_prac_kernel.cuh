@@ -5,7 +5,8 @@
 enum { ECM_DOMAIN_INIT = 0, ECM_DOMAIN_EXPORT = 1, ECM_DOMAIN_LADDER = 2,
        ECM_DOMAIN_PRAC = 3, ECM_DOMAIN_PRAC_NATURAL = 4, ECM_DOMAIN_PRAC_168 = 5,
        ECM_DOMAIN_PRAC_COMPACT = 6, ECM_DOMAIN_PRAC_COMPACT_168 = 7,
-       ECM_DOMAIN_PRAC_OUTLINE_ADD = 8, ECM_DOMAIN_PRAC_OUTLINE_ADD_168 = 9 };
+       ECM_DOMAIN_PRAC_OUTLINE_ADD = 8, ECM_DOMAIN_PRAC_OUTLINE_ADD_168 = 9,
+       ECM_DOMAIN_PRAC_SINGLE_ADD = 10, ECM_DOMAIN_PRAC_SINGLE_ADD_168 = 11 };
 cgbn_stage1_kernel_fn cgbn_stage1_domain_dispatch(uint32_t bits, uint32_t *tpi, int mode,
                                                 uint32_t requested_tpi = 0);
 
@@ -83,9 +84,11 @@ __device__ FORCE_INLINE void prac_add_selected(curve_t<P> &c,
     else prac_add(c, ox, oz, x1, z1, x2, z2, xd, zd, n, np0);
 }
 
+#include "cgbn_stage1_prac_single_add.cuh"
+
 template<class P, int MODE>
-__global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMAIN_PRAC_COMPACT || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD) ? 255 :
-                         (MODE == ECM_DOMAIN_PRAC_168 || MODE == ECM_DOMAIN_PRAC_COMPACT_168 || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD_168) ? 168 : P::REG_TARGET) kernel_suyama_domain(
+__global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMAIN_PRAC_COMPACT || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD || MODE == ECM_DOMAIN_PRAC_SINGLE_ADD) ? 255 :
+                         (MODE == ECM_DOMAIN_PRAC_168 || MODE == ECM_DOMAIN_PRAC_COMPACT_168 || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD_168 || MODE == ECM_DOMAIN_PRAC_SINGLE_ADD_168) ? 168 : P::REG_TARGET) kernel_suyama_domain(
     cgbn_error_report_t *report, uint64_t total, uint64_t start, uint64_t length,
     uint32_t *control, uint32_t *data, uint32_t count, uint32_t unused, uint32_t np0) {
     (void)unused;
@@ -131,6 +134,9 @@ __global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMA
                 EcmPracPrime entry = primes[i];
                 for (uint32_t repeat = 0; repeat < entry.repetitions; ++repeat) {
                     if (entry.p == 2) { prac_dbl<P, compact>(c, ax, az, ax, az, a24, n, np0); continue; }
+                    if constexpr (MODE == ECM_DOMAIN_PRAC_SINGLE_ADD || MODE == ECM_DOMAIN_PRAC_SINGLE_ADD_168) {
+                        prac_odd_single_add<P>(c, ax, az, bx, bz, cx, cz, a24, n, np0, entry.p, entry.d);
+                    } else {
                     cgbn_set(c._env, cx, ax); cgbn_set(c._env, cz, az);
                     prac_dbl<P, compact>(c, bx, bz, ax, az, a24, n, np0);
                     uint32_t e = entry.p - entry.d, d = entry.d - e;
@@ -157,6 +163,7 @@ __global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMA
                         }
                     }
                     prac_add_selected<P, outlined>(c, ax, az, bx, bz, ax, az, cx, cz, n, np0);
+                    }
                 }
             }
         }

@@ -4562,3 +4562,15 @@ GPU1、N4423/4608/TPI16/TPB128，固定tail32相同1193ADD+179DBL/W8053，C384/7
 四份管理员NCU成功19/19/20/20passes，grid192/TPB128、同tail32；分配寄存器176/168/192/168，驻留2/3/2/3。local load+store sector×32字节代理baseline0.65/37.02MiB、候选约108.83/108.85GiB，load多为L1命中。它是累计local请求，不是显存容量/DRAM/PCIe字节；spill0仍有大量ABI local访问。no_instruction也未改善，issue active提高不能代表子乘积效率提高，stall比值不能作墙钟占比。计时与重放串行分离，忙时SM1800MHz，无降频证据。
 
 不采用outline-add为默认或生产推荐，保留显式实验与证据。下一候选优先减少重复内联调用点、固定点角色，避免通用引用跨device-call；额外临时量/寄存器仍需门禁与同子乘积验证。当前默认TPI分档、寄存器和100ms目标保持原配置；4423/TPI32仅显式对照，TPB当前128而非历史256。[全部量化结果、公式、源码行与复现](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_OUTLINED_ADD_20261006.md:1)。
+
+## 98. Stage1 PRAC 单点inline xADD：长片改善（2026-10-06）
+
+基线a11f895。新增显式single-add MODE10/11，仅4608/TPI16 natural/cap168：四种规则及终结归一到一次inline ADD调用，固定点角色加输出T，保持normalized 4M+2S、原DBL、计划、切片和checkpoint语义。七TU六并发critical path720.7s，候选TU110.3s；exe SHA8aeb7854…652ef。baseline MODE4/5完整SASS指令行与上一版完全相同。
+
+CPU模型8533 prime/d×两sigma，共17066链/264538角色步骤与baseline完整中间/终结XZ及独立ladder一致；不是GPU证明。同二进制GPU完整184/3568条Q/save门禁通过；生产窗口1064Q、恢复8Q、15拒绝、92跨策略/切片逐字节检查通过（包括36跨切片，不累计两次）。独立CPU oracle缓存184miss/880hit，每份GPU点仍检查。
+
+GPU1/N4423/4608/TPI16/TPB128，固定tail32/W8053的48样本与10m/260m普通前缀36样本全部完成、复用指数/PRAC缓存。cap168/C768及1536长片墙钟投影少15.875%/19.540%；C1536短片反而多0.572%。普通100ms目标候选少2.554%/2.798%，50ms却多0.755%/0.748%。本批最佳仍baseline cap168/50ms，5.061943/132.441969 s/curve；均为短时投影，不发布Auto B2 T1。
+
+候选text少约35.85%/35.70%，自然寄存器172→170但硬件分配仍176；cap168不变。四管理员NCU均19passes/导出成功、同grid192和tail32，驻留2/3/2/3；cap168 no_instruction比值2.480815→0.622256、issue active26.689→33.527%，local累计sector字节代理37.03→64.04MiB、以L1命中为主，非显存容量/DRAM/PCIe。自然local load0，避免outline ABI巨大local成本。比值不是墙钟占比，改善不是驻留数增加。两矩阵忙时SM1800MHz、无降频证据。
+
+保留显式长片候选，不提升为默认/最佳吞吐。下一项减少点搬移/存活值，争取168自然分配并避免额外spill；同时候选body目前公共include造成全TU重编，可先隔离body改善迭代编译时间，须保持非候选SASS一致。默认TPI/TPB128/寄存器/100ms不变，4423/TPI32仍仅显式对照。详见[数据、公式、源码行、复现及采用决定](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_SINGLE_ADD_20261006.md:1)。

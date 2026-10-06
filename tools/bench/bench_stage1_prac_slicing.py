@@ -19,7 +19,7 @@ def main():
     p.add_argument('--count',type=int,default=32)
     p.add_argument('--window',choices=['prefix','middle','tail'],default='tail')
     p.add_argument('--registers',type=int,nargs='+',choices=[168,255],default=[255,168])
-    p.add_argument('--variants',nargs='+',choices=['baseline','compact','outline-add'],default=['baseline'])
+    p.add_argument('--variants',nargs='+',choices=['baseline','compact','outline-add','single-add'],default=['baseline'])
     p.add_argument('--seconds',type=float,default=6)
     p.add_argument('--warmup',type=int,default=2)
     p.add_argument('--repeats',type=int,default=2)

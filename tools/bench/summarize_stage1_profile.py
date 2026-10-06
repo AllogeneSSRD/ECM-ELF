@@ -81,7 +81,7 @@ def nsys(path, mode):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('input', type=Path, help='NCU --csv --page raw export, or NSYS SQLite export')
-    p.add_argument('--mode', type=int, choices=[2, 3, 4, 5, 6, 7, 8, 9], default=4)
+    p.add_argument('--mode', type=int, choices=[2, 3, 4, 5, 6, 7, 8, 9, 10, 11], default=4)
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()
     result = ncu(a.input) if a.input.suffix.lower() == '.csv' else nsys(a.input, a.mode)

@@ -34,7 +34,7 @@ def main():
     p.add_argument('--curves', type=int, default=768)
     p.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     p.add_argument('--registers', type=int, choices=[0, 168, 255], default=255)
-    p.add_argument('--variant', choices=['baseline', 'compact', 'outline-add'], default='baseline')
+    p.add_argument('--variant', choices=['baseline', 'compact', 'outline-add', 'single-add'], default='baseline')
     p.add_argument('--target-ms', type=float, default=100)
     p.add_argument('--window', choices=['prefix', 'middle', 'tail'])
     p.add_argument('--window-count', type=int, default=32)

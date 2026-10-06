@@ -122,7 +122,7 @@ def main():
     ap.add_argument('--bits', type=int, nargs='+', choices=[2203, 4423, 8191], default=[2203, 4423, 8191])
     ap.add_argument('--registers', type=int, choices=[0, 168, 255],
                     default=int(os.environ.get('ECM_PRAC_REG_TARGET', '0')))
-    ap.add_argument('--variant', choices=['baseline', 'compact', 'outline-add'], default='baseline')
+    ap.add_argument('--variant', choices=['baseline', 'compact', 'outline-add', 'single-add'], default='baseline')
     ap.add_argument('--target-ms', type=float, default=100)
     ap.add_argument('--curves', type=int, default=8, help='Batch size for primary N and sigma62 cases; checkpoint cases retain 16')
     args = ap.parse_args(); exe = args.exe.resolve(strict=True); root = args.output.resolve()

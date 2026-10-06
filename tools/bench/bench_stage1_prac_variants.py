@@ -22,6 +22,8 @@ CONFIGS = {
     'compact168': ('prac', 'compact', 168),
     'outline': ('prac', 'outline-add', 255),
     'outline168': ('prac', 'outline-add', 168),
+    'single': ('prac', 'single-add', 255),
+    'single168': ('prac', 'single-add', 168),
 }
 
 

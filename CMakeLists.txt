@@ -292,6 +292,7 @@ if(ECM_ENABLE_CUDA)
         kernels/cuda/cgbn_stage1_prac_tpi16.cu
         kernels/cuda/cgbn_stage1_prac_tpi32.cu
         kernels/cuda/cgbn_stage1_prac_alternate32.cu
+        kernels/cuda/cgbn_stage1_prac_single_add.cu
         src/core/ecm_prac_plan.cpp
         kernels/cuda/cgbn_stage1_kernels_tpi4.cu
         kernels/cuda/cgbn_stage1_kernels_tpi8.cu

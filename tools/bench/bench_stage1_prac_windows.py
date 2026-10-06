@@ -100,7 +100,7 @@ def main():
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     p.add_argument('--registers', type=int, nargs='+', choices=[0, 168, 255], default=[255, 168])
-    p.add_argument('--variants', nargs='+', choices=['baseline', 'compact', 'outline-add'], default=['baseline', 'compact'])
+    p.add_argument('--variants', nargs='+', choices=['baseline', 'compact', 'outline-add', 'single-add'], default=['baseline', 'compact'])
     p.add_argument('--windows', nargs='+', choices=['prefix', 'middle', 'tail'], default=['prefix', 'middle', 'tail'])
     p.add_argument('--count', type=int, default=16)
     p.add_argument('--chunks', type=int, nargs='+', default=[0], help='Per-launch counts; 0 means one launch per window')

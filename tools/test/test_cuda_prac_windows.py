@@ -2,6 +2,7 @@
 """Check reset-window partial products against an independent integer Montgomery ladder."""
 import argparse
 import csv
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -30,6 +31,7 @@ def add(p, q, difference, n):
     return difference[1] * (u + v)**2 % n, difference[0] * (u - v)**2 % n
 
 
+@lru_cache(maxsize=1024)
 def multiply(sigma, scalar, n):
     u = (sigma*sigma - 5) % n; v = 4*sigma % n
     point = pow(u, 3, n), pow(v, 3, n)
@@ -95,7 +97,7 @@ def verify(cache, folder, result):
     return len(actual)
 
 
-def rejected(exe, folder, cache, settings, message, device):
+def rejected(exe, folder, cache, settings, message, device, bits=4423):
     folder.mkdir()
     env = dict(os.environ, ECM_GPU_STAGE1_ALGO='prac',ECM_PRAC_REG_TARGET='255',
         ECM_PRAC_VARIANT='baseline',ECM_STAGE1_TPI='0',ECM_PRAC_WINDOW='tail',
@@ -106,7 +108,7 @@ def rejected(exe, folder, cache, settings, message, device):
     env.update(settings)
     cmd = [str(exe),'-gpu','-d',str(device),'--gpu-param','0','-sigma','0:26','-gpucurves','8',
         '--ckpt','0','--exp-cache',str(cache),'-savea','completed.save','1000','0']
-    proc = subprocess.run(cmd,input=b'(2^4423-1)\n',env=env,cwd=folder,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
+    proc = subprocess.run(cmd,input=f'(2^{bits}-1)\n'.encode('ascii'),env=env,cwd=folder,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
     text=proc.stdout.decode('utf-8',errors='replace');(folder/'run.log').write_text(text,encoding='utf-8')
     assert proc.returncode==1 and message in text and 'PRAC_WINDOW_DONE' not in text, (
         f'{folder}: exit={proc.returncode}, expected rejection={message!r}; see run.log')
@@ -122,6 +124,7 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--production',action='store_true',help='Also verify 16-record B1=10m/260m subproducts using existing caches')
     p.add_argument('--outline-add',action='store_true',help='Also gate the shared xADD candidate at 4608/TPI16')
+    p.add_argument('--single-add',action='store_true',help='Also gate the single inline xADD site at 4608/TPI16')
     p.add_argument('--production-counts',type=int,nargs='+',default=[16],help='Production window lengths, each 1..32')
     p.add_argument('--production-chunks',type=int,nargs='+',default=[0],help='Per-launch record counts, 0 means unsplit')
     a=p.parse_args();exe=a.exe.resolve(strict=True);cache=(a.cache or exe.parent).resolve();root=a.output.resolve()
@@ -133,6 +136,7 @@ def main():
         if n in (2203,4423):configs += [('baseline',32,255)]
         if n==4423:configs += [('compact',16,255),('compact',16,168)]
         if n==4423 and a.outline_add:configs += [('outline-add',16,255),('outline-add',16,168)]
+        if n==4423 and a.single_add:configs += [('single-add',16,255),('single-add',16,168)]
         for variant,tpi,registers in configs:
             for exponent in ('lcm','choose12'):
                 for position in ('prefix','middle','tail'):
@@ -149,6 +153,7 @@ def main():
         for b1 in (10000000,260000000):
             configs = [('baseline',255),('baseline',168),('compact',255),('compact',168)]
             if a.outline_add:configs += [('outline-add',255),('outline-add',168)]
+            if a.single_add:configs += [('single-add',255),('single-add',168)]
             for variant,registers in configs:
                 for count in a.production_counts:
                     for chunk in a.production_chunks:
@@ -162,13 +167,14 @@ def main():
                                 bitwise_slice_checks+=1
                             else:slicing_signatures[key]=signature
                             r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
-    # A real compact checkpoint remains byte-identical during window runs and
+    # A real candidate checkpoint remains byte-identical during window runs and
     # can subsequently resume via the baseline kernel at the same TPI.
     settings=('(2^4423-1)',1000,8,4611686018427511360,'choose12')
+    checkpoint_variant='single-add' if a.single_add else 'compact'
     folder=root/'checkpoint_isolation'
-    text=run(exe,folder,*settings,'prac',a.device,sample=0.000001,tpi=16,registers=168,variant='compact')
+    text=run(exe,folder,*settings,'prac',a.device,sample=0.000001,tpi=16,registers=168,variant=checkpoint_variant)
     assert 'sample limit reached' in text and len(list(folder.glob('.ecm_ckpt_*')))==1
-    r=sample(exe,folder,4423,1000,8,a.device,16,168,'compact','tail',4,0.001,1,cache,True,sigma=settings[3],exponent='choose12')
+    r=sample(exe,folder,4423,1000,8,a.device,16,168,checkpoint_variant,'tail',4,0.001,1,cache,True,sigma=settings[3],exponent='choose12')
     r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
     run(exe,root/'checkpoint_reference',*settings,'cpu',a.device)
     text=run(exe,folder,*settings,'prac',a.device,tpi=16,registers=255,variant='baseline')
@@ -188,13 +194,24 @@ def main():
         failures += [({'ECM_PRAC_VARIANT':'outline-add','ECM_STAGE1_TPI':'32'},'policy is unavailable'),
                      ({'ECM_PRAC_VARIANT':'outline-add','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
                      ({'ECM_PRAC_VARIANT':'outline-add','ECM_GPU_STAGE1_ALGO':'resident'},'requires ECM_GPU_STAGE1_ALGO=prac')]
+    if a.single_add:
+        failures += [({'ECM_PRAC_VARIANT':'single-add','ECM_STAGE1_TPI':'32'},'policy is unavailable'),
+                     ({'ECM_PRAC_VARIANT':'single-add','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
+                     ({'ECM_PRAC_VARIANT':'single-add','ECM_GPU_STAGE1_ALGO':'resident'},'requires ECM_GPU_STAGE1_ALGO=prac')]
     for i,(settings,message) in enumerate(failures):rejected(exe,root/f'reject{i}',cache,settings,message,a.device)
+    unsupported_tier_cases=0
+    if a.single_add:
+        for bits in (2203,8191):
+            rejected(exe,root/f'reject_single_n{bits}',cache,{'ECM_PRAC_VARIANT':'single-add'},
+                'policy is unavailable',a.device,bits=bits)
+            unsupported_tier_cases+=1
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),results=results,
         window_Q_compared=sum(r['Q_compared'] for r in results),resume_Q_compared=8,
-        rejection_cases=len(failures),production_windows=a.production,
+        rejection_cases=len(failures)+unsupported_tier_cases,production_windows=a.production,
         production_counts=a.production_counts if a.production else [],
         production_chunks=a.production_chunks if a.production else [],
-        bitwise_slice_checks=bitwise_slice_checks,outline_add=a.outline_add,passed=True)
+        bitwise_slice_checks=bitwise_slice_checks,outline_add=a.outline_add,single_add=a.single_add,
+        checkpoint_variant=checkpoint_variant,cpu_oracle_cache=multiply.cache_info()._asdict(),passed=True)
     (root/'summary.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k!='results'}),flush=True)
 
