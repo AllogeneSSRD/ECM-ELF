@@ -3901,3 +3901,11 @@ NVML峰值均5027MiB、进程观察private峰值均值7938→8041.5MB；GPU full
 原生cprof v2与Python feature7实现精确树、G1局部inverse/满根余式、scope并集与profile chain策略；小ladder按实际8192点launch计延迟底座。独立5f4c候选282曲线算术检查通过，90条独立验证+18重放仍有49.710%最大耗时误差及>11%排名损失，完整audit失败，未export/替换生产/宣称默认可用。
 
 已保留全部失败与旧采集工具。16条最小/交叉重放定位状态长尾，3个Systems正常trace尚不能证明根因。下一步继续定位CPU/驱动/GPU等待并重做完整门禁，补G2/生产B1和显存租约，再推进并发与NTT优化。详情见[报告与源码line](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。
+
+## 65. 2026-10-06：等待与并发负结果，NTT拐点
+
+同步、pinned读回与双进程并发均无收益；pinned原型已从生产CUDA源码撤回，保留冻结代码/20×3门禁/全部失败数据。串行/双进程16曲线验证结果一致，双进程吞吐下降6.024%，采样GPU总used峰1384.617→2537.234MiB，自身private合计峰1602.137→3041.629MiB，未启用并发默认或声称总lease。
+
+8个正常Systems trace按allocation生命周期得同时device payload峰514.502MiB，非进程完整峰。NTT tune发现t11/k23局部快9.89%，但k24失去shared radix策略慢52.84%；完整t11曲线不快。继续优先验证小L shared radix、context复用与全部Auto B2精度门禁，不用局部iter/s代替完整收益。详见[源码、公式、内存、全部原始证据](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_WAIT_NTT.md)。
+
+补充：shared radix三组24条初探全部结果一致。M8强制模式先有约1.70%小幅中位收益，但增加约42MiB NTT峰；直接默认与M6的ABBA两轮出现M6 11.389/13.154s长尾，中位慢2.114%，未发布策略/删除样本。下一项优先连续save的context复用，需缓存、资源释放与队列门禁，继续定位异常等待。

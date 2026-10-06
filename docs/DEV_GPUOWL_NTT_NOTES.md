@@ -4482,3 +4482,17 @@ Python feature7与原生cprof v2对齐：真实tree pairs=n−1/I−G，另计�
 15scope仅8个≤10%；最大盲测49.710%，M4423/batch1收益损失11.182%、M8191/batch1损失11.855%超过5%。证据身份/算术通过与精度/排名分别记录，完整passed=false，export拒绝并未生成cprof，不发布缩小子集或替换生产。新版实际auto/manual/queue验收尚未运行，原4acc+多端点v1通过组合仍保留。
 
 M4423同输入额外约1s定位G树/carry readback；M8191同满根descent0.36→1.41s，训练/重放全部保留。最小8重放正常，但大/小交叉8重放中15.574904s长尾再次出现（通常10.57～10.89s），期间GPU利用率0、SM短暂390/420MHz；只能作为状态相关证据。3个Systems trace未复现大长尾，API等待不等于DMA；尚未确定根因或宣称修复。完整报告、源码line和自含证据见[精确树/G1报告](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。后续继续时间线诊断、全部范围新盲测，补G2/生产B1/choose12/总租约及并发/NTT优化。
+
+## 90. 等待、并发及NTT tile拐点实测（2026-10-06）
+
+8个Systems同输入重放正常10.190～10.221s，尚未捕获异常trace。新增生命周期/关联API分析器：device malloc同时峰514.502MiB，381alloc/free结束0；pinned主机峰23.542MiB，不含driver/context/RAM其他分配。最大XZ缓冲按P向上取整C=132480，两buffer258.75MiB，256MiB只是点预算。API等待不是DMA时间，正常trace不能解释长尾根因。
+
+同5f4c同步开关16曲线：多G中位12.458→13.712s、小输入仍有5.893s尾部。新增CUDA_LAUNCH_BLOCKING=0的auto配置守卫；4次合成率plan-only确认旧允许0/1、新拒绝1，非成本/算术验收。95f89 pinned原型完整编译498.8s，20/0×3真实NTT门禁/761769字，16条ABBA仍慢0.55%/4.97%，长尾仍在；原型/额外测试已移到冻结实验快照，生产CUDA源码撤回。33c25f候选仅HostOnly复用原CUDA；生产893不变。
+
+两条已独立验证Stage1 save sigma26/27的串行/双进程ABBA两轮，共16条算术与逐曲线leaf/factor一致。D30030/arena512/owner0/52.5亿：吞吐0.083034→0.078032curve/s（−6.024%）；样本GPU峰1384.617→2537.234MiB，自身进程private合计峰1602.137→3041.629MiB，working set310.672→621.547MiB。RAM从同次当前值求和，非单进程峰值之和；采样非峰保证。每worker2GiB VRAM/RAM估量只作试验防护，低VRAM/低RAM均启动curve前拒绝，无生产lease/并发默认。
+
+6轮NTT tune（tile12/11/13/13/11/12），k16..27各5样本+预热，全L输出检查全部bad0。k23 t11快9.89%，k24却慢52.84%，因为t12触发auto shared radix3 forward passes，t11回M4的5passes，不能全归因tile smem。另16条真实tile ABBA：G1 t11慢0.675%，多G慢9.965%且有长尾；NTT peak仅少3.249MiB，全局t12保持。
+
+Auto B2精度/排名仍未通过，未生成新cprof或修改生产。下一轮优先较小L的shared radix实测，及连续save复用context（须缓存/释放/队列门禁）；新算法全部重新标定/验证。完整指标、源码line、公式和证据见[等待/并发/NTT报告](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_WAIT_NTT.md)。
+
+补充：shared radix三组24条初探全部结果一致。M8强制模式先有约1.70%小幅中位收益，但增加约42MiB NTT峰；直接默认与M6的ABBA两轮出现M6 11.389/13.154s长尾，中位慢2.114%，未发布策略/删除样本。下一项优先连续save的context复用，需缓存、资源释放与队列门禁，继续定位异常等待。

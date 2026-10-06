@@ -512,6 +512,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     require("NTT_S4_BATCH_MB",64,64);require("NTT_DEVICE_GLEAF_MAX_MB",512,512);
     require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",profile.chain_min,profile.chain_min);
     require("NTT_LADDER_CAP",8192,8192);
+    require("CUDA_LAUNCH_BLOCKING",0,0);
     require("NTT_S4_SAMPLE",96,96);require("NTT_S4_CHECK_EVERY",8,8);
     require("NTT_ARENA_WORKSPACE_POOL",1,1);require("NTT_FUSE_COMPACT_SCRATCH",1,1);
     require("NTT_S4_FLAT_DIRECT",1,1);require("NTT_GROOT_COMPACT_RAW",1,1);

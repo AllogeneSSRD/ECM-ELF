@@ -33,6 +33,12 @@ tools/bench/profile_stage2_points.py text eol=lf
 src/core/ecm_stage2_cost_profile.h text eol=lf
 src/core/ecm_cuda_stage2_main.cpp text eol=lf
 docs/data/ecm_auto_b2_g1_20261006* -text
+tools/bench/ntt_poly_probe.cu text eol=lf
+tools/test/ntt_carry_fused_probe.cu text eol=lf
+docs/data/ecm_stage2_wait_20261006* -text
+tools/bench/analyze_stage2_trace.py text eol=lf
+tools/bench/bench_stage2_variants.py text eol=lf
+tools/bench/bench_stage2_concurrency.py text eol=lf
 docs/data/ecm_auto_b2_multianchor_20261006* -text
 docs/data/ecm_giant_chain_crossover_20261006* -text
 docs/data/ecm_auto_b2_phase_20261005* -text

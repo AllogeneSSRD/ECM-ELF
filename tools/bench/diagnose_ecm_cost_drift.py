@@ -53,6 +53,8 @@ def main():
     p.add_argument('--b2',type=int,nargs='+',default=[3000000000,4500000000,6000000000])
     p.add_argument('--owners',type=int,nargs='+',default=[640,0]);p.add_argument('--repeats',type=int,default=2)
     p.add_argument('--seed',type=int,default=20261006);p.add_argument('--resume',action='store_true')
+    p.add_argument('--launch-blocking',type=int,choices=(0,1),nargs='+',default=[0],
+                   help='Same-binary diagnostic controls; 1 serializes CUDA calls and is not a production default')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if not a.resume and any(out.iterdir()):raise ValueError('Use a fresh output directory')
     if a.repeats<1 or len(set(a.bits))!=len(a.bits) or len(set(a.d))!=len(a.d):raise ValueError('Invalid/duplicate diagnostic matrix')
@@ -62,7 +64,8 @@ def main():
     saves={bits:Path(study['saves'][str(bits)]['path']) for bits in a.bits}
     for bits,path in saves.items():
         if sha(path)!=study['saves'][str(bits)]['sha256']:raise ValueError('Verified save changed')
-    controls=dict(bits=a.bits,d=a.d,b2=a.b2,owners=a.owners,repeats=a.repeats,seed=a.seed)
+    if len(set(a.launch_blocking))!=len(a.launch_blocking):raise ValueError('Duplicate wait mode')
+    controls=dict(bits=a.bits,d=a.d,b2=a.b2,owners=a.owners,repeats=a.repeats,seed=a.seed,launch_blocking=a.launch_blocking)
     identity=dict(binary_sha256=binary,profile_sha256=profile_sha,study_sha256=study_sha,tool_sha256=sha(__file__))
     destination=out/'measurements.json'
     if a.resume:
@@ -71,7 +74,8 @@ def main():
     else:
         cases=[]
         for rep in range(a.repeats):
-            block=[dict(bits=bits,D=d,B2=b,owner_mb=owner,rep=rep) for bits in a.bits for d in a.d for b in a.b2 for owner in a.owners]
+            block=[dict(bits=bits,D=d,B2=b,owner_mb=owner,rep=rep,launch_blocking=mode)
+                   for bits in a.bits for d in a.d for b in a.b2 for owner in a.owners for mode in a.launch_blocking]
             random.Random(a.seed+rep).shuffle(block);cases.extend(block)
         for case in cases:
             minimum=model.get('chain_min',32768)
@@ -89,7 +93,7 @@ def main():
     env['NTT_GIANT_CHAIN_MIN']=str(model.get('chain_min',32768))
     ini=out/'manual.ini';ini.write_text('[gpu]\ndevice=1\n',encoding='utf-8')
     for index,case in enumerate(data['cases']):
-        name=f'{index:02d}_m{case["bits"]}_d{case["D"]}_b{case["B2"]}_o{case["owner_mb"]}_r{case["rep"]}'
+        name=f'{index:02d}_m{case["bits"]}_d{case["D"]}_b{case["B2"]}_o{case["owner_mb"]}_r{case["rep"]}_lb{case["launch_blocking"]}'
         if any(r['name']==name for r in data['runs']):continue
         log=out/(name+'.log');result=out/(name+'.jsonl')
         if log.exists() or result.exists():raise ValueError('Unaccounted run output; inspect before resuming')
@@ -105,7 +109,9 @@ def main():
              '--factor-only','--results',str(result),'--log',str(log)]
         child=None;start=time.perf_counter()
         try:
-            child=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env|{'NTT_FOLD_DEVICE_MAX_MB':str(case['owner_mb'])})
+            child=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                                   env=env|{'NTT_FOLD_DEVICE_MAX_MB':str(case['owner_mb']),
+                                            'CUDA_LAUNCH_BLOCKING':str(case['launch_blocking'])})
             stdout,stderr=child.communicate(timeout=180)
         except subprocess.TimeoutExpired:
             subprocess.run(['taskkill','/PID',str(child.pid),'/T','/F'],capture_output=True)

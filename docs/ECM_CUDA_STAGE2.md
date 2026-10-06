@@ -308,3 +308,9 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 新源码使用cprof v2，支持实测G1区间、精确树调度、按profile绑定chain_min及实测区间并集。独立5f4c候选算术通过，但完整耗时/排名验证失败，暂未生成可用v2 profile；不能将旧4acc/v1 profile用于新二进制。当前通过验收的用法仍是上节4acc+多端点v1组合。离线plan_auto_b2.py新版要求--runtime-profile并调用原生plan-only，使用相同binary/profile格式。
 
 失败数据、边界处理、完整门禁及后续诊断见[Auto B2 G1报告](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。
+
+## 2026-10-06 等待/并发/NTT后续
+
+新版auto额外拒绝CUDA_LAUNCH_BLOCKING=1，避免使用异步标定率预测强制同步配置。同步、pinned读回、双进程及全局tile11均未证明收益；pinned原型撤回，生产tile12及单进程逐curve方式保持。并发实验确认结果一致、采样VRAM/RAM及预算负门禁，不等于生产并发/总显存lease已经实现。Auto B2 v2仍无通过完整门禁的运行profile。
+
+新bench_stage2_variants.py可对照tile/shared radix等现有开关，bench_stage2_concurrency.py用于有预算防护的两点语料试验，analyze_stage2_trace.py重建同时malloc峰与API等待。均不自动更新生产配置/成本profile。详见[最新实测与后续](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_WAIT_NTT.md)。

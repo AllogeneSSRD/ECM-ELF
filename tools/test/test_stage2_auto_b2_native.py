@@ -85,6 +85,7 @@ def main():
         ('zero_t1',['--stage1-seconds-per-curve',0],'finite and positive')]
     for name,extra,reason in failures:auto(name,extra,success=False,reason=reason)
     auto('changed_kernel',success=False,extra_env={'NTT_GIANT_CHAIN_MIN':'1'},reason='configuration mismatch')
+    auto('launch_blocking',success=False,extra_env={'CUDA_LAUNCH_BLOCKING':'1'},reason='configuration mismatch')
     invoke('explicit_conflict',['--save',save,'--auto-b2','--b2',3000000000,'--plan-only'],False,reason='conflicts')
     invoke('missing_profile',['--save',save,'--auto-b2','--plan-only'],False,reason='requires --cost-profile')
     invoke('legacy_zero',['--save',save,'--b2',0,'--plan-only'],False,reason='B2 must exceed')
