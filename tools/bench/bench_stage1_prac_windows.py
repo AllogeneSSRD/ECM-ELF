@@ -99,7 +99,7 @@ def main():
     p.add_argument('--curves', type=int, default=1536)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
-    p.add_argument('--registers', type=int, nargs='+', choices=[0, 168, 255], default=[255, 168])
+    p.add_argument('--registers', type=int, nargs='+', choices=[0, 128, 168, 255], default=[255, 168])
     p.add_argument('--variants', nargs='+', choices=['baseline', 'compact', 'outline-add', 'single-add', 'single-compact'], default=['baseline', 'compact'])
     p.add_argument('--windows', nargs='+', choices=['prefix', 'middle', 'tail'], default=['prefix', 'middle', 'tail'])
     p.add_argument('--count', type=int, default=16)
@@ -113,6 +113,8 @@ def main():
     if not 1 <= a.count <= 32 or not 0 <= a.warmup <= 32 or not 0 < a.seconds <= 600 or a.curves < 1 or a.repeats < 1:
         p.error('Invalid count, warmup, seconds, curves or repeats')
     if any(not 0 <= c <= a.count for c in a.chunks):p.error('Chunks must be in 0..count')
+    if 128 in a.registers and (a.bits != [4423] or a.tpi == 32 or a.variants != ['single-compact']):
+        p.error('128-register policy requires --bits 4423, TPI16/default and only single-compact')
     if (any(v != 'baseline' for v in a.variants) or 168 in a.registers) and a.bits != [4423]:
         p.error('Experimental point variants/168 require --bits 4423')
     if a.tpi == 32 and (any(v not in ('baseline','single-compact') for v in a.variants) or

@@ -18,6 +18,7 @@ from bench_stage1_prac_windows import sample as window_sample
 CONFIGS = {
     'shared16': (16,'single-compact',255),
     'shared16cap168': (16,'single-compact',168),
+    'shared16cap128': (16,'single-compact',128),
     'shared32': (32,'single-compact',255),
     'shared32cap168': (32,'single-compact',168),
     'baseline32': (32,'baseline',255),
@@ -33,7 +34,8 @@ def main():
     p.add_argument('--exe',type=Path,required=True)
     p.add_argument('--mode',choices=['windows','prefix'],required=True)
     p.add_argument('--curves16',type=int,nargs='+',default=[384,768,1536])
-    p.add_argument('--configs',nargs='+',choices=list(CONFIGS),default=list(CONFIGS))
+    p.add_argument('--configs',nargs='+',choices=list(CONFIGS),
+                   default=['shared16','shared16cap168','shared32','shared32cap168','baseline32'])
     p.add_argument('--b1',type=int,nargs='+',default=[10000000,260000000])
     p.add_argument('--chunks',type=int,nargs='+',default=[4,32])
     p.add_argument('--target-ms',type=float,default=50)

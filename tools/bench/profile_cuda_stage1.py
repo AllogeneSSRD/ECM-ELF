@@ -33,7 +33,7 @@ def main():
     p.add_argument('--b1', type=int, default=10000000)
     p.add_argument('--curves', type=int, default=768)
     p.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
-    p.add_argument('--registers', type=int, choices=[0, 168, 255], default=255)
+    p.add_argument('--registers', type=int, choices=[0, 128, 168, 255], default=255)
     p.add_argument('--variant', choices=['baseline', 'compact', 'outline-add', 'single-add', 'single-compact'], default='baseline')
     p.add_argument('--target-ms', type=float, default=100)
     p.add_argument('--window', choices=['prefix', 'middle', 'tail'])
@@ -59,6 +59,8 @@ def main():
         return
     if not 10 <= a.target_ms <= 500:
         p.error('PRAC target must be in 10..500 ms')
+    if a.registers == 128 and (a.bits != 4423 or a.tpi == 32 or a.variant != 'single-compact' or a.algorithm != 'prac'):
+        p.error('128-register policy requires N4423, TPI16/default and PRAC single-compact')
     root.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, ECM_GPU_STAGE1_ALGO=a.algorithm, ECM_PRAC_REG_TARGET=str(a.registers),
                ECM_STAGE1_TPI=str(a.tpi), ECM_GPU_STAGE1_SAMPLE_SECONDS=str(a.seconds), ECM_PRAC_VARIANT=a.variant,

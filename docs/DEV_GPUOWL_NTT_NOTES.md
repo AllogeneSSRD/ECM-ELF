@@ -4644,3 +4644,17 @@ CPU17066输入链/六模型102396求值、264538角色步骤及804 normalized Mo
 四管理员NCU全部exit0/导出0，同grid192/TPB128/tail32；TPI16为19passes，三个32为18（初次审计写死19，核对原日志后修正，不重新采集）。shared16cap/shared32/shared32cap/base32的平均活跃warp11.035/14.202/14.129/14.074，eligible0.483/0.708/0.712/0.778，issue33.843/39.431/38.707/40.593%。TPI32更多warp/更高issue但每warp一条curve，16为两条；槽位代理约22.07vs14.13。short_scoreboard0.326/1.200/1.070/0.402，不能全归因shuffle。local load全0、累计local代理0.6486..0.6615MiB，无新增spill证据；DRAM throughput0.000044%..0.000210% of peak，无该窗口DRAM饱和证据。stall非墙钟占比，local非VRAM/DRAM/PCIe，不乘passes。
 
 40项Stage1工具/源码及实际CGBN核心SHA留档。忙采样SM均1800MHz，设备MiB采样最大固定323/前缀317，非完整进程峰。保留显式32候选/复现工具，生产选择仍16。下一项同16共享算法下测试cap128（预期4blocks且增加spill），按门禁/配对/NCU决定；后续紧凑normalized容器/Montgomery核心先证明边界再减少MAC。[全部矩阵、公式、原文件行、SHA与采用边界](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_SHARED_DBL_TPI32_20261007.md:1)。
+
+## 104. Stage1 TPI16 cap128：中等批量改善，最佳吞吐仍为cap168（2026-10-07）
+
+基线6682b74。新增4608/TPI16/single-compact MODE14、显式128寄存器上限；不改变TPB128、默认分派、数学主体或其他TPI/variant范围。host拒绝128搭配其他variant，dispatcher拒绝32/其他容器。修正168配置日志原先固定写TPI16的描述，使已有显式32实验不再被误标。
+
+七个相关TU并行重编，实际critical path为TPI16的735.7s、候选240.8s，串行合计1451.8s，最后仅链接；公共头改变使本次超过六分钟，保留真实耗时。exe SHAd1a5b647…6d7370。新128实例实际128寄存器/stack208、静态spill stores808/loads972bytes，28248指令/text451968bytes；旧16 MODE10–13和32 MODE12/13完整SASS及资源全部不变，private数学头a0f3…2bafc不变。静态spill字节不是运行累计量或显存容量。
+
+CPU17066链/102396模型求值/264538角色步骤和804归一化、4824公共别名对照通过。GPU完整Q3568/27类，其中cap128主案例及恢复1184 Q；窗口224结果/1792 Q/16恢复Q/29拒绝通过，MODE14实际19窗口/152 Q、容量4。176同TPI完整XZ含66跨切片，另109跨TPI完整XZ逐字节通过。40源/工具SHA冻结；计时不编译/导出大SASS/运行profiler。
+
+三策略natural255/cap168/cap128，C384/768/1536，同二进制36固定tail32（chunk4/32）+36普通前缀（10m/260m、50ms、两个反序）全部完成。固定cap128相对同C cap168吞吐：384为−7.964%/−8.040%，768为+4.367%/+4.615%，1536为−2.435%/−1.864%。普通前缀384两个B1约−8.03%，768为+3.375%/+3.338%，1536为−1.639%/−2.317%。本批最佳仍cap168/C1536/50ms，5.004494/130.967987 s/curve，与上一轮0.02%内相近，不宣称新增最佳收益；均短时投影，不认证完整Auto B2 T1。
+
+四管理员NCU采集/导出exit0，C1536两份19passes、C768两份18passes。168→128硬件分配168→128、容量3→4。C1536活跃warp11.023639→14.262034，但issue33.829546→33.264519%；C768活跃9.337548→13.516335，issue31.021973→32.444758%。动态local sectors字节代理C1536为0.659180→14745.923218MiB，C768为0.327271→7372.517822MiB；128 load/store cache命中约98.2%/94.9%。大量访问支持spill代价，不能当作新增14GiB显存/DRAM/PCIe，不能乘pass；DRAM peak四份0.000032%..0.000152%，L1TEX约22.96%..25.92%，没有饱和证据。stall比值不作墙钟比例或唯一因果解释。
+
+cap128仅作为本机N4423/C768受限批量的显式可选策略，最佳仍168。下一轮优先测试与3blocks/SM×8curve/block×24SM=576curve容量配合的C576/1152/1728/2304；用实际计时验证尾波假设。随后评估private disjoint xADD输出Z复用中间U，须证明别名/归一化且核对编译器是否已合并。[完整报告、原文件行、数据和复现](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_SHARED_DBL_CAP128_20261007.md:1)。

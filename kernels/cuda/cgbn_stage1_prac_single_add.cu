@@ -18,6 +18,8 @@ cgbn_stage1_kernel_fn cgbn_stage1_domain_single_add(uint32_t bits, uint32_t *tpi
             return kernel_suyama_domain<cgbn_params_t<16, 4608>, ECM_DOMAIN_PRAC_SINGLE_COMPACT>;
         if (mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168)
             return kernel_suyama_domain<cgbn_params_t<16, 4608>, ECM_DOMAIN_PRAC_SINGLE_COMPACT_168>;
+        if (mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT_128)
+            return kernel_suyama_domain<cgbn_params_t<16, 4608>, ECM_DOMAIN_PRAC_SINGLE_COMPACT_128>;
     }
 #endif
     *tpi = 0; return nullptr;

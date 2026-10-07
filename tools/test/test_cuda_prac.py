@@ -52,6 +52,8 @@ def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, 
     if algo == 'prac' and expect_records:
         assert f'PRAC slice target={float(target_ms):.3f} ms' in text, 'PRAC target was not selected'
         assert f'PRAC variant={variant}' in text, 'PRAC variant was not selected'
+        if registers == 128:
+            assert 'PRAC register policy=128 (4608/TPI16 single-compact)' in text, '128-register candidate was not selected'
     return text
 
 
@@ -120,7 +122,7 @@ def main():
     ap.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0,
                     help='Force TPI for the 2203/4423-bit cases and checkpoint gates')
     ap.add_argument('--bits', type=int, nargs='+', choices=[2203, 4423, 8191], default=[2203, 4423, 8191])
-    ap.add_argument('--registers', type=int, choices=[0, 168, 255],
+    ap.add_argument('--registers', type=int, choices=[0, 128, 168, 255],
                     default=int(os.environ.get('ECM_PRAC_REG_TARGET', '0')))
     ap.add_argument('--variant', choices=['baseline', 'compact', 'outline-add', 'single-add', 'single-compact'], default='baseline')
     ap.add_argument('--target-ms', type=float, default=100)
@@ -129,10 +131,12 @@ def main():
     if not math.isfinite(args.target_ms) or not 10 <= args.target_ms <= 500 or args.curves < 1:
         ap.error('Finite target in 10..500 ms and positive curves required')
     alternate_compact = args.tpi == 32 and args.variant == 'single-compact'
+    if args.registers == 128 and (args.bits != [4423] or args.tpi == 32 or args.variant != 'single-compact'):
+        ap.error('128-register policy requires --bits 4423, TPI16/default and single-compact')
     if args.registers == 168 and (args.bits != [4423] or (args.tpi == 32 and not alternate_compact)):
         ap.error('168-register policy requires --bits 4423 and TPI16/default, or TPI32 single-compact')
     if args.variant != 'baseline' and (args.bits != [4423] or (args.tpi == 32 and not alternate_compact) or args.registers == 0):
-        ap.error('Point variants require --bits 4423, registers 168/255; TPI32 supports only single-compact')
+        ap.error('Point variants require --bits 4423 and explicit registers; TPI32 supports only single-compact 168/255')
     root.mkdir(parents=True, exist_ok=False)
     results = []
     cases = [(f'M{n}', f'(2^{n}-1)', 1000, args.curves, 26, t) for n in args.bits for t in ('lcm', 'choose12')]

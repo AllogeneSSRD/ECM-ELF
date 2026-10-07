@@ -7,7 +7,8 @@ enum { ECM_DOMAIN_INIT = 0, ECM_DOMAIN_EXPORT = 1, ECM_DOMAIN_LADDER = 2,
        ECM_DOMAIN_PRAC_COMPACT = 6, ECM_DOMAIN_PRAC_COMPACT_168 = 7,
        ECM_DOMAIN_PRAC_OUTLINE_ADD = 8, ECM_DOMAIN_PRAC_OUTLINE_ADD_168 = 9,
        ECM_DOMAIN_PRAC_SINGLE_ADD = 10, ECM_DOMAIN_PRAC_SINGLE_ADD_168 = 11,
-       ECM_DOMAIN_PRAC_SINGLE_COMPACT = 12, ECM_DOMAIN_PRAC_SINGLE_COMPACT_168 = 13 };
+       ECM_DOMAIN_PRAC_SINGLE_COMPACT = 12, ECM_DOMAIN_PRAC_SINGLE_COMPACT_168 = 13,
+       ECM_DOMAIN_PRAC_SINGLE_COMPACT_128 = 14 };
 cgbn_stage1_kernel_fn cgbn_stage1_domain_dispatch(uint32_t bits, uint32_t *tpi, int mode,
                                                 uint32_t requested_tpi = 0);
 
@@ -97,7 +98,8 @@ __device__ FORCE_INLINE void prac_odd_single_add(curve_t<P> &c,
 
 template<class P, int MODE>
 __global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMAIN_PRAC_COMPACT || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD || MODE == ECM_DOMAIN_PRAC_SINGLE_ADD || MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT) ? 255 :
-                         (MODE == ECM_DOMAIN_PRAC_168 || MODE == ECM_DOMAIN_PRAC_COMPACT_168 || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD_168 || MODE == ECM_DOMAIN_PRAC_SINGLE_ADD_168 || MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168) ? 168 : P::REG_TARGET) kernel_suyama_domain(
+                         (MODE == ECM_DOMAIN_PRAC_168 || MODE == ECM_DOMAIN_PRAC_COMPACT_168 || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD_168 || MODE == ECM_DOMAIN_PRAC_SINGLE_ADD_168 || MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168) ? 168 :
+                         MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT_128 ? 128 : P::REG_TARGET) kernel_suyama_domain(
     cgbn_error_report_t *report, uint64_t total, uint64_t start, uint64_t length,
     uint32_t *control, uint32_t *data, uint32_t count, uint32_t unused, uint32_t np0) {
     (void)unused;
@@ -136,7 +138,8 @@ __global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMA
             cgbn_store(c._env, mem + 5, bx); cgbn_store(c._env, mem + 6, bz);
         } else {
             constexpr bool compact = MODE == ECM_DOMAIN_PRAC_COMPACT || MODE == ECM_DOMAIN_PRAC_COMPACT_168 ||
-                                     MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT || MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168;
+                                     MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT || MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168 ||
+                                     MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT_128;
             constexpr bool outlined = MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD || MODE == ECM_DOMAIN_PRAC_OUTLINE_ADD_168;
             bn cx, cz;
             auto *primes = reinterpret_cast<const EcmPracPrime *>(control);
@@ -145,7 +148,8 @@ __global__ void __maxnreg__((MODE == ECM_DOMAIN_PRAC_NATURAL || MODE == ECM_DOMA
                 for (uint32_t repeat = 0; repeat < entry.repetitions; ++repeat) {
                     if (entry.p == 2) { prac_dbl<P, compact>(c, ax, az, ax, az, a24, n, np0); continue; }
                     if constexpr (MODE == ECM_DOMAIN_PRAC_SINGLE_ADD || MODE == ECM_DOMAIN_PRAC_SINGLE_ADD_168 ||
-                                  MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT || MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168) {
+                                  MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT || MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168 ||
+                                  MODE == ECM_DOMAIN_PRAC_SINGLE_COMPACT_128) {
                         prac_odd_single_add<P, compact>(c, ax, az, bx, bz, cx, cz, a24, n, np0, entry.p, entry.d);
                     } else {
                     cgbn_set(c._env, cx, ax); cgbn_set(c._env, cz, az);

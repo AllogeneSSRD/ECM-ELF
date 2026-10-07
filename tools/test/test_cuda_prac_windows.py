@@ -127,10 +127,12 @@ def main():
     p.add_argument('--single-add',action='store_true',help='Also gate the single inline xADD site at 4608/TPI16')
     p.add_argument('--single-compact',action='store_true',help='Also gate single inline xADD plus compact DBL at 4608/TPI16')
     p.add_argument('--single-compact-tpi32',action='store_true',help='Also gate explicit 4608/TPI32 single-compact; requires --single-compact')
+    p.add_argument('--single-compact-reg128',action='store_true',help='Also gate 4608/TPI16 single-compact at register cap128; requires --single-compact')
     p.add_argument('--production-counts',type=int,nargs='+',default=[16],help='Production window lengths, each 1..32')
     p.add_argument('--production-chunks',type=int,nargs='+',default=[0],help='Per-launch record counts, 0 means unsplit')
     a=p.parse_args();exe=a.exe.resolve(strict=True);cache=(a.cache or exe.parent).resolve();root=a.output.resolve()
     if a.single_compact_tpi32 and not a.single_compact:p.error('--single-compact-tpi32 requires --single-compact')
+    if a.single_compact_reg128 and not a.single_compact:p.error('--single-compact-reg128 requires --single-compact')
     if any(not 1 <= count <= 32 for count in a.production_counts):p.error('Production window counts must be 1..32')
     if any(not 0 <= chunk <= min(a.production_counts) for chunk in a.production_chunks):p.error('Chunks must be in 0..smallest production count')
     root.mkdir(parents=True,exist_ok=False);results=[]
@@ -142,6 +144,7 @@ def main():
         if n==4423 and a.single_add:configs += [('single-add',16,255),('single-add',16,168)]
         if n==4423 and a.single_compact:configs += [('single-compact',16,255),('single-compact',16,168)]
         if n==4423 and a.single_compact_tpi32:configs += [('single-compact',32,255),('single-compact',32,168)]
+        if n==4423 and a.single_compact_reg128:configs += [('single-compact',16,128)]
         for variant,tpi,registers in configs:
             for exponent in ('lcm','choose12'):
                 for position in ('prefix','middle','tail'):
@@ -161,6 +164,7 @@ def main():
             if a.single_add:configs += [('single-add',16,255),('single-add',16,168)]
             if a.single_compact:configs += [('single-compact',16,255),('single-compact',16,168)]
             if a.single_compact_tpi32:configs += [('single-compact',32,255),('single-compact',32,168)]
+            if a.single_compact_reg128:configs += [('single-compact',16,128)]
             for variant,tpi,registers in configs:
                 for count in a.production_counts:
                     for chunk in a.production_chunks:
@@ -178,10 +182,11 @@ def main():
     # can subsequently resume via the baseline kernel at the same TPI.
     settings=('(2^4423-1)',1000,8,4611686018427511360,'choose12')
     checkpoint_variant='single-compact' if a.single_compact else 'single-add' if a.single_add else 'compact'
+    checkpoint_registers=128 if a.single_compact_reg128 else 168
     folder=root/'checkpoint_isolation'
-    text=run(exe,folder,*settings,'prac',a.device,sample=0.000001,tpi=16,registers=168,variant=checkpoint_variant)
+    text=run(exe,folder,*settings,'prac',a.device,sample=0.000001,tpi=16,registers=checkpoint_registers,variant=checkpoint_variant)
     assert 'sample limit reached' in text and len(list(folder.glob('.ecm_ckpt_*')))==1
-    r=sample(exe,folder,4423,1000,8,a.device,16,168,checkpoint_variant,'tail',4,0.001,1,cache,True,sigma=settings[3],exponent='choose12')
+    r=sample(exe,folder,4423,1000,8,a.device,16,checkpoint_registers,checkpoint_variant,'tail',4,0.001,1,cache,True,sigma=settings[3],exponent='choose12')
     r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
     run(exe,root/'checkpoint_reference',*settings,'cpu',a.device)
     text=run(exe,folder,*settings,'prac',a.device,tpi=16,registers=255,variant='baseline')
@@ -218,6 +223,10 @@ def main():
         failures += [({'ECM_PRAC_VARIANT':'single-compact','ECM_STAGE1_TPI':'8'},'ECM_STAGE1_TPI must be 0, 16 or 32'),
                      ({'ECM_PRAC_VARIANT':'single-compact','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
                      ({'ECM_PRAC_VARIANT':'single-compact','ECM_GPU_STAGE1_ALGO':'resident'},'requires ECM_GPU_STAGE1_ALGO=prac')]
+    if a.single_compact_reg128:
+        failures += [({'ECM_PRAC_REG_TARGET':'128','ECM_PRAC_VARIANT':variant},'128-register policy requires single-compact variant')
+                     for variant in ('baseline','compact','outline-add','single-add')]
+        failures += [({'ECM_PRAC_REG_TARGET':'128','ECM_PRAC_VARIANT':'single-compact','ECM_STAGE1_TPI':'32'},'policy is unavailable')]
     for i,(settings,message) in enumerate(failures):rejected(exe,root/f'reject{i}',cache,settings,message,a.device)
     unsupported_tier_cases=0
     for variant,enabled in [('single-add',a.single_add),('single-compact',a.single_compact)]:
@@ -231,6 +240,11 @@ def main():
             rejected(exe,root/f'reject_single-compact_t32_n{bits}',cache,
                 {'ECM_PRAC_VARIANT':'single-compact','ECM_STAGE1_TPI':'32'},'policy is unavailable',a.device,bits=bits)
             unsupported_tier_cases+=1
+    if a.single_compact_reg128:
+        for bits in (2203,8191):
+            rejected(exe,root/f'reject_single-compact_reg128_n{bits}',cache,
+                {'ECM_PRAC_VARIANT':'single-compact','ECM_PRAC_REG_TARGET':'128'},'policy is unavailable',a.device,bits=bits)
+            unsupported_tier_cases+=1
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),results=results,
         window_Q_compared=sum(r['Q_compared'] for r in results),resume_Q_compared=16 if a.single_compact_tpi32 else 8,
         rejection_cases=len(failures)+unsupported_tier_cases,production_windows=a.production,
@@ -239,6 +253,7 @@ def main():
         bitwise_slice_checks=bitwise_slice_checks,outline_add=a.outline_add,single_add=a.single_add,
         single_compact=a.single_compact,
         single_compact_tpi32=a.single_compact_tpi32,
+        single_compact_reg128=a.single_compact_reg128,checkpoint_registers=checkpoint_registers,
         checkpoint_variant=checkpoint_variant,cpu_oracle_cache=multiply.cache_info()._asdict(),passed=True)
     (root/'summary.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k!='results'}),flush=True)
