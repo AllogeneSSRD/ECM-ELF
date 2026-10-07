@@ -35,6 +35,7 @@ def main():
     p.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     p.add_argument('--registers', type=int, choices=[0, 128, 168, 255], default=255)
     p.add_argument('--variant', choices=['baseline', 'compact', 'outline-add', 'single-add', 'single-compact'], default='baseline')
+    p.add_argument('--constants', choices=['none','runtime','np0','m4423'], default='none')
     p.add_argument('--target-ms', type=float, default=100)
     p.add_argument('--window', choices=['prefix', 'middle', 'tail'])
     p.add_argument('--window-count', type=int, default=32)
@@ -61,11 +62,14 @@ def main():
         p.error('PRAC target must be in 10..500 ms')
     if a.registers == 128 and (a.bits != 4423 or a.tpi == 32 or a.variant != 'single-compact' or a.algorithm != 'prac'):
         p.error('128-register policy requires N4423, TPI16/default and PRAC single-compact')
+    if a.constants != 'none' and (a.bits != 4423 or a.tpi == 32 or a.variant != 'single-compact' or a.algorithm != 'prac' or a.registers != 168):
+        p.error('Constants policy requires N4423, TPI16/default, PRAC single-compact and cap168')
     root.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, ECM_GPU_STAGE1_ALGO=a.algorithm, ECM_PRAC_REG_TARGET=str(a.registers),
+               ECM_PRAC_CONSTANTS=a.constants,
                ECM_STAGE1_TPI=str(a.tpi), ECM_GPU_STAGE1_SAMPLE_SECONDS=str(a.seconds), ECM_PRAC_VARIANT=a.variant,
                ECM_PRAC_PLAN_CACHE=str(a.exp_cache.resolve()), ECM_PRAC_TARGET_MS=str(a.target_ms))
-    env_keys = ('ECM_GPU_STAGE1_ALGO', 'ECM_PRAC_REG_TARGET', 'ECM_STAGE1_TPI',
+    env_keys = ('ECM_GPU_STAGE1_ALGO', 'ECM_PRAC_REG_TARGET', 'ECM_PRAC_CONSTANTS', 'ECM_STAGE1_TPI',
                 'ECM_GPU_STAGE1_SAMPLE_SECONDS', 'ECM_PRAC_VARIANT', 'ECM_PRAC_PLAN_CACHE', 'ECM_PRAC_TARGET_MS')
     for key in tuple(env):
         if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
@@ -82,7 +86,7 @@ def main():
     if a.tool == 'ncu':
         prefix = [str(a.ncu), '--clock-control', 'none', '--cache-control', 'none',
                   '--rename-kernels', '0', '--check-exit-code', '0',
-                  '--kernel-name', 'regex:kernel_suyama_domain', '--launch-skip', str(a.launch_skip),
+                  '--kernel-name', 'regex:kernel_suyama_', '--launch-skip', str(a.launch_skip),
                   '--launch-count', '1', '--section', 'SpeedOfLight', '--section', 'Occupancy',
                   '--section', 'SchedulerStats', '--section', 'WarpStateStats',
                   '--export', str(root / 'trace')]

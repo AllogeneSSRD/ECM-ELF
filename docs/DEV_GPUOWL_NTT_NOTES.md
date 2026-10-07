@@ -4688,3 +4688,22 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 保留私有显式复用及独立模型，默认与已测最佳策略不变。下一项为host严格guard的Montgomery常数传播：梅森N低word全1，因此np0=1；WMAD第75/114行q使用shuffle(accumulator)*np0，可检验去除依赖标量乘法。源码每curve该求值次数TPI*S，主MAC代理4S²，非退休指令/周期，不直接预估速度。
 
 特别核对CGBN load实际映射lane*LIMBS+limb，每线程连续word，不能使用limb*TPI+lane。N4423 word0..137=ffffffff、138=7f、139起零；TPI16 L9仅lane15含尾部，TPI32 L5在lane27含尾部、28..31为零且有16padding槽。M2203/4423/8191相关形状逐word整数重建准确，np0=1，同位宽N−2拒绝精确梅森guard；尚未实现常量CUDA候选。初始化可按lane设值，但后续CGBN shuffle运算不能按lane做不一致分支。内联volatile PTX MAD不保证常量自动减少Q*N机器指令，继续先静态结果、再同机生产短时反序A/B。[完整报告、源码行、SHA与证据](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_ADD_OUTPUTZ_20261007.md:1)。
+
+
+## 107. Stage1 Montgomery 常量：约2.7%新增吞吐，本阶段结题（2026-10-07）
+
+基线f194874。新增独立TU的MODE15 runtime对照、MODE16固定np0=1、MODE17固定M4423+np0=1，同二进制显式ECM_PRAC_CONSTANTS切换；仅所选4608/TPI16、single-compact/cap168。np0严格要求低word全1，m4423额外要求精确2^4423−1，拒绝其他TPI/容器/variant/register组合。保持TPB128、默认分派、W=6A+5D、R=2^4608、7bn data和checkpoint ABI；原INIT/EXPORT保留。
+
+三TU并行编译关键路径131.2秒，最后仅链接；exe SHA6d67460a…602a2854。原normal TPI16/single-add对象和公共/私有数学头不变。仅归一化Function入口名后runtime与原MODE13的55571行完整SASS、调度编码及资源完全相同。np0静态指令27784→27248（−1.929%），IMAD12452→12182；m4423为27960条、寄存器162→156，LDG39→30。STACK48/LOCAL0三者相同；静态LDL/STL不单独当spill证明。
+
+独立word REDC414正例、144word布局重建和64强制错误np0反例通过。三完整Q门禁各3568/27类，总10704，实际新候选主案例/恢复3552。新增窗口76结果/608 Q、32恢复Q、非梅森B1=2的24 Q、14拒绝全部通过；63完整XZ CSV检查含3 checkpoint窗口，检查重叠不累加。checkpoint轮换none→runtime→np0→m4423→none保持域/ABI兼容。首轮仅因非法resident配置的更早入口报错文字与测试预期不同失败，修正断言后完整重跑，无CUDA数学修改。
+
+46源码/工具/CGBN SHA冻结。GPU1/N4423/TPB128/C768、1536、2304，四策略、两个反序，48固定tail32（260m/chunk4和32/6s）+48普通前缀（10m/260m/50ms/15s/排除5s）全部完成。独立审计预期矩阵、原始日志、几何、缓存、正常退出及投影重建；计时不编译/导出大SASS/profile。前缀均checkpoint-only，无最终save/强制终止。忙采样SM1800MHz，温度固定55..70/前缀62..73°C，设备memory.used采样最大331/321MiB，非进程峰。
+
+同轮C2304 none前缀4.962103/129.847945 s/curve，np0为4.831269/126.492224，曲线吞吐+2.708%/+2.653%；耗时投影−2.637%/−2.584%，勿混写。m4423为4.823346/126.287030，吞吐+2.877%/+2.820%，比np0只多0.164%/0.162%；固定tail/chunk32反而比np0低3.095%。固定np0三批量两chunk墙钟吞吐均+2.544%..+3.552%，两个各自配对重复全正。runtime控制前缀−0.021%..+0.016%、固定−0.116%..+0.099%，没有TU隔离的实质回退证据。
+
+四管理员NCU采集/导出exit0，真实均20passes，同C2304/grid288/tail32/chunk32。none/runtime/np0实际162/分配168、m4423实际156/分配160，容量全部3。活跃warp11.341/11.383/11.316/11.410，eligible0.491/0.493/0.487/0.510，issue33.873/34.014/33.795/34.742%。np0未提高occupancy，收益支持减少算术工作量；wait未下降。m4423 short_scoreboard改善但no_instruction增至0.926520，较高issue未稳定转化吞吐；不是直接Icache miss证据。local LD均0，累计sector字节代理约0.974..0.998MiB，不是VRAM/DRAM/PCIe、不乘passes。DRAM peak0.000049%..0.000112%，无该窗口带宽饱和证据；stall不当墙钟占比，也不排除完整CPU准备瓶颈。
+
+数据分配仍7*C*4608/8，C2304为8.859375MiB；window seed同量，普通生产无seed。计划10m/260m分别10.140671/216.611633MiB不变；m4423仅kernel边界逻辑6bn→5bn，不减少初始H2D/restore。主WMAD MAC代理每curve每M为82944，原np0乘法源码求值2304，两者都非退休指令/周期。原始日志继续保存在已忽略的docs/data。
+
+采用建议：本机N4423优先显式TPI16/C2304/single-compact/cap168/50ms/np0；m4423保留可选，不普遍推广，不改生产默认。按用户要求完成本轮后结题，不启动下一轮；不声称所有Stage1已达理论上限。完整曲线总墙钟与Auto B2完整T1未在本轮认证。[完整矩阵、NCU、公式、代码行及结题建议](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_CONSTANTS_20261007.md:1)。

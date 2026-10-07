@@ -31,6 +31,8 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
     env['ECM_STAGE1_TPI'] = str(args.tpi)
     variant = getattr(args, 'prac_variant', 'baseline') if algo == 'prac' else 'baseline'
     env['ECM_PRAC_VARIANT'] = variant
+    constants = getattr(args, 'prac_constants', 'none') if algo == 'prac' else 'none'
+    env['ECM_PRAC_CONSTANTS'] = constants
     env['ECM_PRAC_PLAN_CACHE'] = str(args.exp_cache)
     target_ms = getattr(args, 'prac_target_ms', 100)
     env['ECM_PRAC_TARGET_MS'] = str(target_ms)
@@ -45,7 +47,7 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
     log = folder / 'run.log'
     launched = time.monotonic()
     samples = []; precise = []; slice_costs = []; offset = 0; pending = ''; first = None; killed = False
-    print(f'START algo={algo} variant={variant} reg={args.prac_registers} n={bits} B1={b1} C={args.curves} TPI={args.tpi} device={args.device}', flush=True)
+    print(f'START algo={algo} variant={variant} constants={constants} reg={args.prac_registers} n={bits} B1={b1} C={args.curves} TPI={args.tpi} device={args.device}', flush=True)
     with (folder / 'n.txt').open('rb') as source, log.open('wb') as out:
         process = subprocess.Popen(command, cwd=folder, env=env, stdin=source,
                                    stdout=out, stderr=subprocess.STDOUT)
@@ -105,6 +107,9 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
         raise RuntimeError(f'Binary did not select requested PRAC slice target: {log}')
     if algo == 'prac' and f'PRAC variant={variant}' not in text:
         raise RuntimeError(f'Binary did not select requested PRAC variant: {log}')
+    if constants != 'none' and f'PRAC constants policy={constants};' not in text:
+        raise RuntimeError(f'Binary did not select requested constants policy: {log}')
+    result['constants'] = constants
     result['slice_costs'] = slice_costs
     geometry = GEOMETRY.search(text)
     if geometry:
@@ -134,6 +139,7 @@ def main():
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--prac-registers', type=int, choices=[0, 128, 168, 255], default=0)
     parser.add_argument('--prac-variant', choices=['baseline', 'compact', 'outline-add', 'single-add', 'single-compact'], default='baseline')
+    parser.add_argument('--prac-constants', choices=['none', 'runtime', 'np0', 'm4423'], default='none')
     parser.add_argument('--prac-target-ms', type=float, default=100)
     parser.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     parser.add_argument('--exp-cache', type=Path, help='Shared validated B1/PRAC cache; defaults to exe directory')
@@ -150,6 +156,9 @@ def main():
     if args.prac_variant != 'baseline' and (args.bits != [4423] or
             (args.tpi == 32 and args.prac_variant != 'single-compact') or args.prac_registers == 0):
         parser.error('Point variants require --bits 4423 and explicit registers; TPI32 supports only single-compact 168/255')
+    if args.prac_constants != 'none' and (args.bits != [4423] or args.tpi == 32 or
+            args.prac_variant != 'single-compact' or args.prac_registers != 168 or args.algorithms != ['prac']):
+        parser.error('Constants require --bits 4423, TPI16/default, single-compact, registers 168 and only prac')
     exe = args.exe.resolve(strict=True)
     args.exp_cache = (args.exp_cache or exe.parent).resolve()
     root = (args.output or Path('docs/data') / ('prac_cuda_' + dt.datetime.now().strftime('%Y%m%d_%H%M%S'))).resolve()

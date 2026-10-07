@@ -1,5 +1,6 @@
 // Included by the Stage1 host TU after curve construction/result/checkpoint helpers.
 #include "cgbn_stage1_prac_kernel.cuh"
+#include "cgbn_stage1_prac_constants.h"
 #include "ecm_stage1_exp_cache.h"
 #include <chrono>
 #include <memory>
@@ -106,6 +107,30 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
             if (kernel) { bits = tier; break; }
         }
         if (!kernel) throw std::runtime_error("no resident/PRAC kernel covers N in this build");
+        const char *constants = "none";
+        if (const char *env = getenv("ECM_PRAC_CONSTANTS")) {
+            if (!*env || strcmp(env, "none") == 0) { /* Existing policy. */ }
+            else if (strcmp(env, "runtime") == 0 || strcmp(env, "np0") == 0 || strcmp(env, "m4423") == 0)
+                constants = env;
+            else throw std::runtime_error("ECM_PRAC_CONSTANTS must be none, runtime, np0 or m4423");
+        }
+        if (strcmp(constants, "none") != 0) {
+            if (!prac || mode != ECM_DOMAIN_PRAC_SINGLE_COMPACT_168)
+                throw std::runtime_error("PRAC constants require single-compact variant and register policy 168");
+            if (bits != 4608 || requested_tpi == 32)
+                throw std::runtime_error("PRAC constants require the selected 4608/TPI16 tier");
+            if (strcmp(constants, "m4423") == 0) {
+                mpz_t next; mpz_init(next); mpz_add_ui(next, N, 1);
+                const bool exact = nbits == 4423 && mpz_popcount(next) == 1;
+                mpz_clear(next);
+                if (!exact) throw std::runtime_error("PRAC m4423 constants require N exactly 2^4423-1");
+                mode = ECM_DOMAIN_PRAC_CONSTANT_M4423;
+            } else if (strcmp(constants, "np0") == 0) {
+                if (uint32_t(mpz_get_ui(N)) != 0xffffffffu)
+                    throw std::runtime_error("PRAC np0 constants require N mod 2^32 = 0xffffffff");
+                mode = ECM_DOMAIN_PRAC_CONSTANT_NP0;
+            } else mode = ECM_DOMAIN_PRAC_CONSTANT_RUNTIME;
+        }
         kernel = cgbn_stage1_domain_dispatch(bits, &tpi, mode, requested_tpi);
         if (!kernel) throw std::runtime_error("requested Stage1 TPI/register policy is unavailable for the selected tier");
         if (verify_size_of_n(N, bits) != ECM_NO_FACTOR_FOUND) return ECM_ERROR;
@@ -182,14 +207,17 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         if (prac) {
             outputf(OUTPUT_ALWAYS, "GPU: PRAC register policy=%s\n",
                 (mode == ECM_DOMAIN_PRAC_NATURAL || mode == ECM_DOMAIN_PRAC_COMPACT || mode == ECM_DOMAIN_PRAC_OUTLINE_ADD || mode == ECM_DOMAIN_PRAC_SINGLE_ADD || mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT) ? "natural (255)" :
-                (mode == ECM_DOMAIN_PRAC_168 || mode == ECM_DOMAIN_PRAC_COMPACT_168 || mode == ECM_DOMAIN_PRAC_OUTLINE_ADD_168 || mode == ECM_DOMAIN_PRAC_SINGLE_ADD_168 || mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168) ? "168 (4608 candidate)" :
+                (mode == ECM_DOMAIN_PRAC_168 || mode == ECM_DOMAIN_PRAC_COMPACT_168 || mode == ECM_DOMAIN_PRAC_OUTLINE_ADD_168 || mode == ECM_DOMAIN_PRAC_SINGLE_ADD_168 || mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT_168 ||
+                 mode == ECM_DOMAIN_PRAC_CONSTANT_RUNTIME || mode == ECM_DOMAIN_PRAC_CONSTANT_NP0 || mode == ECM_DOMAIN_PRAC_CONSTANT_M4423) ? "168 (4608 candidate)" :
                 mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT_128 ? "128 (4608/TPI16 single-compact)" : "per-tier");
             outputf(OUTPUT_ALWAYS, "GPU: PRAC variant=%s\n", single_compact ? "single-compact (one inline xADD site, 2-temporary DBL)" : single_add ? "single-add (one inline xADD site)" : outlined ? "outline-add (shared xADD)" : compact ? "compact (2-temporary DBL)" : "baseline");
+            outputf(OUTPUT_ALWAYS, "GPU: PRAC constants policy=%s; np0=%u\n", constants, np0);
         }
         outputf(OUTPUT_ALWAYS, "GPU: sigma=%llu, CGBN<%u,%u>, curves=%u, blocks=%u, blocks/SM=%d, control=%zu bytes\n",
                 (unsigned long long)*sigma, tpi, bits, curves, blocks, occupied, control_bytes);
         if (window.enabled()) return prac_window_run(window, plan, gpu, kernel, s_bits,
-            bits, tpi, requested_tpi, curves, *sigma, B1, np0, blocks, data, gputime);
+            bits, tpi, requested_tpi, curves, *sigma, B1, np0, blocks, data, gputime,
+            mode == ECM_DOMAIN_PRAC_CONSTANT_M4423 ? 5 : 6);
         double target_ms = 100;
         if (prac) {
             if (const char *value = getenv("ECM_PRAC_TARGET_MS")) {

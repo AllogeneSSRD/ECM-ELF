@@ -41,6 +41,7 @@ def main():
     p.add_argument('--bits', type=int, default=4608)
     p.add_argument('--tpi', type=int, default=16)
     p.add_argument('--modes', type=int, nargs='+', default=[4,5,8,9])
+    p.add_argument('--kernel-family', choices=['kernel_suyama_domain','kernel_suyama_constants'], default='kernel_suyama_domain')
     p.add_argument('--cuobjdump', type=Path, default=Path('C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.3/bin/cuobjdump.exe'))
     a = p.parse_args(); obj = a.object.resolve(strict=True)
     object_hash = hashlib.sha256(obj.read_bytes()).hexdigest()
@@ -54,7 +55,7 @@ def main():
     functions = inventory(root/'all.sass')
     kernels = []
     for mode in a.modes:
-        matches = [f for f in functions if f'ILj{a.tpi}ELj{a.bits}EELi{mode}EE' in f['function'] and 'kernel_suyama_domain' in f['function']]
+        matches = [f for f in functions if f'ILj{a.tpi}ELj{a.bits}EELi{mode}EE' in f['function'] and a.kernel_family in f['function']]
         if len(matches)!=1: raise ValueError(f'Expected exactly one requested MODE{mode}')
         kernels.append(dict(mode=mode,**matches[0]))
     callees = [f for f in functions if 'prac_add_outlined' in f['function']]

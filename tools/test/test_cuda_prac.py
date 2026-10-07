@@ -24,13 +24,14 @@ def rows(folder):
     return result
 
 
-def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, expect_records=True, tpi=0, registers=None, variant='baseline', target_ms=100):
+def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, expect_records=True, tpi=0, registers=None, variant='baseline', target_ms=100, constants='none'):
     folder.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, ECM_GPU_STAGE1_ALGO=algo, ECM_GPU_STAGE1_SAMPLE_SECONDS=str(sample))
     # Exercise native cold planning without changing the user's shared plan cache.
     env['ECM_PRAC_PLAN_CACHE'] = str(folder / 'plan_cache')
     env['ECM_STAGE1_TPI'] = str(tpi)
     env['ECM_PRAC_VARIANT'] = variant
+    env['ECM_PRAC_CONSTANTS'] = constants if algo == 'prac' else 'none'
     env['ECM_PRAC_TARGET_MS'] = str(target_ms)
     for key in tuple(env):
         if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
@@ -52,6 +53,8 @@ def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, 
     if algo == 'prac' and expect_records:
         assert f'PRAC slice target={float(target_ms):.3f} ms' in text, 'PRAC target was not selected'
         assert f'PRAC variant={variant}' in text, 'PRAC variant was not selected'
+        if constants != 'none':
+            assert f'PRAC constants policy={constants};' in text, 'Constants policy was not selected'
         if registers == 128:
             assert 'PRAC register policy=128 (4608/TPI16 single-compact)' in text, '128-register candidate was not selected'
     return text
@@ -127,6 +130,7 @@ def main():
     ap.add_argument('--variant', choices=['baseline', 'compact', 'outline-add', 'single-add', 'single-compact'], default='baseline')
     ap.add_argument('--target-ms', type=float, default=100)
     ap.add_argument('--curves', type=int, default=8, help='Batch size for primary N and sigma62 cases; checkpoint cases retain 16')
+    ap.add_argument('--constants', choices=['none','runtime','np0','m4423'], default='none')
     args = ap.parse_args(); exe = args.exe.resolve(strict=True); root = args.output.resolve()
     if not math.isfinite(args.target_ms) or not 10 <= args.target_ms <= 500 or args.curves < 1:
         ap.error('Finite target in 10..500 ms and positive curves required')
@@ -137,6 +141,8 @@ def main():
         ap.error('168-register policy requires --bits 4423 and TPI16/default, or TPI32 single-compact')
     if args.variant != 'baseline' and (args.bits != [4423] or (args.tpi == 32 and not alternate_compact) or args.registers == 0):
         ap.error('Point variants require --bits 4423 and explicit registers; TPI32 supports only single-compact 168/255')
+    if args.constants != 'none' and (args.bits != [4423] or args.tpi == 32 or args.registers != 168 or args.variant != 'single-compact'):
+        ap.error('Constants policy requires --bits 4423, TPI16/default, registers 168 and single-compact')
     root.mkdir(parents=True, exist_ok=False)
     results = []
     cases = [(f'M{n}', f'(2^{n}-1)', 1000, args.curves, 26, t) for n in args.bits for t in ('lcm', 'choose12')]
@@ -157,7 +163,7 @@ def main():
             forced = args.tpi if expr in ('(2^2203-1)', '(2^4423-1)') else 0
             text = run(exe, folder, expr, b1, curves, sigma, exponent, algo, args.device,
                        tpi=forced, registers=args.registers if algo == 'prac' else 0,
-                       variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms)
+                       variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms, constants=args.constants)
             if forced and algo != 'ladder': assert f'CGBN<{forced},' in text, 'Wrong TPI selected'
             actual = rows(folder)
             assert actual == expected, f'{label}/{algo}: full-Q save mismatch; inspect {folder}'
@@ -174,7 +180,7 @@ def main():
             folder = root / 'checkpoint' / f'{algo}_corrupt{int(corrupt)}'
             text = run(exe, folder, *settings, algo, args.device, sample=0.000001, tpi=args.tpi,
                        registers=args.registers if algo == 'prac' else 0,
-                       variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms)
+                       variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms, constants=args.constants)
             assert 'sample limit reached' in text and not rows(folder), 'Partial Stage1 was published'
             files = list(folder.glob('.ecm_ckpt_*'))
             assert len(files) == 1, f'Missing checkpoint: {folder}'
@@ -185,7 +191,7 @@ def main():
                     payload = bytearray(cache.read_bytes()); payload[-1] ^= 1; cache.write_bytes(payload)
             text = run(exe, folder, *settings, algo, args.device, tpi=args.tpi,
                        registers=args.registers if algo == 'prac' else 0,
-                       variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms)
+                       variant=args.variant if algo == 'prac' else 'baseline', target_ms=args.target_ms, constants=args.constants)
             assert ('mismatch/corruption' if corrupt else 'checkpoint resumed') in text
             if corrupt and algo == 'prac': assert 'PRAC plan built' in text, 'Corrupt plan cache was accepted'
             assert rows(folder) == expected, f'{algo}: resume/corruption full Q mismatch'
@@ -203,7 +209,7 @@ def main():
         results.append(dict(case='invalid_target', value=invalid, Q=0, passed=True))
     metadata = dict(exe=str(exe), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),
                     prac_registers=args.registers, bits=args.bits, device=args.device,
-                    requested_tpi=args.tpi, variant=args.variant, target_ms=args.target_ms, curves=args.curves,
+                    requested_tpi=args.tpi, variant=args.variant, constants=args.constants, target_ms=args.target_ms, curves=args.curves,
                     Q_comparisons=sum(r['Q'] for r in results), results=results)
     (root / 'summary.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
 

@@ -56,7 +56,7 @@ static int prac_window_run(const PracWindow &w, const EcmPracPlan &plan,
     ResidentResources &gpu, cgbn_stage1_kernel_fn kernel, uint64_t scalar_bits,
     uint32_t bits, uint32_t tpi, uint32_t requested_tpi, uint32_t curves,
     uint64_t sigma, uint64_t b1, uint32_t np0, uint32_t blocks,
-    std::vector<uint32_t> &data, float *gputime) {
+    std::vector<uint32_t> &data, float *gputime, uint32_t boundary_bn_count) {
     const size_t bytes = data.size() * sizeof(uint32_t);
     uint64_t work = 0;
     for (uint64_t i = w.first; i < w.first + w.count; ++i)
@@ -116,7 +116,7 @@ static int prac_window_run(const PracWindow &w, const EcmPracPlan &plan,
         (unsigned long long)work, projected, wall, bytes, (unsigned long long)(bytes * rounds));
     outputf(OUTPUT_ALWAYS, "GPU: PRAC_WINDOW_COST measured_wall_ms=%.6f measured_launches=%llu boundary_logical_bytes_per_round=%llu\n",
         measured_wall_ms, (unsigned long long)(launches_per_round * measured),
-        (unsigned long long)(uint64_t(6) * curves * (bits / 8) * launches_per_round));
+        (unsigned long long)(uint64_t(boundary_bn_count) * curves * (bits / 8) * launches_per_round));
     if (w.dump) {
         uint32_t dummy;
         auto export_kernel = cgbn_stage1_domain_dispatch(bits, &dummy, ECM_DOMAIN_EXPORT, requested_tpi);

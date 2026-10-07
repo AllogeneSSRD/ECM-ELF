@@ -18,12 +18,13 @@ COST = re.compile(r'PRAC_WINDOW_COST measured_wall_ms=([\d.]+) measured_launches
 
 
 def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
-           position, count, seconds, warmup, cache, dump=False, sigma=26, exponent='lcm', chunk=0):
+           position, count, seconds, warmup, cache, dump=False, sigma=26, exponent='lcm', chunk=0, constants='none'):
     folder.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     for key in tuple(env):
         if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
     env.update(ECM_GPU_STAGE1_ALGO='prac', ECM_PRAC_REG_TARGET=str(registers),
+        ECM_PRAC_CONSTANTS=constants,
         ECM_PRAC_VARIANT=variant, ECM_STAGE1_TPI=str(tpi),
         ECM_PRAC_WINDOW=position, ECM_PRAC_WINDOW_COUNT=str(count),
         ECM_PRAC_WINDOW_CHUNK=str(chunk),
@@ -35,7 +36,7 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
     command = [str(exe), '-gpu', '-d', str(device), '--gpu-param', '0', '-sigma', f'0:{sigma}',
         '-gpucurves', str(curves), '--ckpt', '0', '--exponent', exponent,
         '--exp-cache', str(cache), '-v', '-savea', 'completed.save', str(b1), '0']
-    print(f'START window={position} chunk={chunk or count} n={bits} B1={b1} C={curves} reg={registers} variant={variant}', flush=True)
+    print(f'START window={position} chunk={chunk or count} n={bits} B1={b1} C={curves} reg={registers} variant={variant} constants={constants}', flush=True)
     start = time.monotonic()
     proc = subprocess.run(command, input=f'(2^{bits}-1)\n'.encode('ascii'), env=env, cwd=folder,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=seconds + 180)
@@ -46,6 +47,8 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
         raise RuntimeError(f'Incomplete window measurement: {folder}\n{text[-2000:]}')
     if f'PRAC variant={variant}' not in text:
         raise RuntimeError('Requested window variant was not selected')
+    if constants != 'none' and f'PRAC constants policy={constants};' not in text:
+        raise RuntimeError('Requested window constants policy was not selected')
     if 'checkpoint resumed' in text or 'Stage1 PRAC completed' in text:
         raise RuntimeError('Window entered a production checkpoint/completion path')
     after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob('.ecm_ckpt_*')}
@@ -69,7 +72,7 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
     if (tpi and selected['tpi'] != tpi) or selected['curves'] != curves:
         raise RuntimeError('Wrong window geometry')
     result = dict(bits=bits, B1=b1, curves=curves, device=device, requested_tpi=tpi,
-        registers=registers, variant=variant, position=position, requested_count=count,
+        registers=registers, variant=variant, constants=constants, position=position, requested_count=count,
         first=int(info[2]), count=int(info[3]), p_first=int(info[4]), p_last=int(info[5]),
         requested_chunk=chunk, chunk=actual_chunk, launches_per_round=launches_per_round,
         measured_launches=launches_per_round*int(measured), total_launches=launches_per_round*int(rounds),
@@ -101,6 +104,7 @@ def main():
     p.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0)
     p.add_argument('--registers', type=int, nargs='+', choices=[0, 128, 168, 255], default=[255, 168])
     p.add_argument('--variants', nargs='+', choices=['baseline', 'compact', 'outline-add', 'single-add', 'single-compact'], default=['baseline', 'compact'])
+    p.add_argument('--constants', choices=['none', 'runtime', 'np0', 'm4423'], default='none')
     p.add_argument('--windows', nargs='+', choices=['prefix', 'middle', 'tail'], default=['prefix', 'middle', 'tail'])
     p.add_argument('--count', type=int, default=16)
     p.add_argument('--chunks', type=int, nargs='+', default=[0], help='Per-launch counts; 0 means one launch per window')
@@ -122,6 +126,9 @@ def main():
         p.error('TPI32 point candidates/168 support only single-compact; baseline requires registers 0/255')
     if any(v != 'baseline' for v in a.variants) and 0 in a.registers:
         p.error('Experimental point variants require registers 168/255')
+    if a.constants != 'none' and (a.bits != [4423] or a.tpi == 32 or
+            a.variants != ['single-compact'] or a.registers != [168]):
+        p.error('Constants require --bits 4423, TPI16/default, only single-compact and registers 168')
     cache = (a.exp_cache or exe.parent).resolve(); root = a.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
     report = dict(schema=1, exe=str(exe), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),
@@ -134,7 +141,7 @@ def main():
                     for variant, registers, chunk in (configs if repeat % 2 == 0 else list(reversed(configs))):
                         folder = root/f'n{n}_b{b}_{position}_{variant}_reg{registers}_chunk{chunk}_r{repeat}'
                         row = sample(exe, folder, n, b, a.curves, a.device, a.tpi, registers,
-                            variant, position, a.count, a.seconds, a.warmup, cache,chunk=chunk)
+                            variant, position, a.count, a.seconds, a.warmup, cache,chunk=chunk,constants=a.constants)
                         report['results'].append(row)
                         grouped = {}
                         for x in report['results']:
