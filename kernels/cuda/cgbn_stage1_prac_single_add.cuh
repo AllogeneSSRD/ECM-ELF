@@ -43,9 +43,12 @@ __device__ FORCE_INLINE void prac_odd_single_add(curve_t<P> &c,
     prac_dbl<P, COMPACT>(c, bx, bz, ax, az, a24, n, np0);
     uint32_t e = p - initial_d, d = initial_d - e;
     for (;;) {
-        const bool finish = d == e;
-        int rule = 0;
-        if (!finish) {
+        // In the compact candidate, carry the final state through the ADD in
+        // rule itself (4), rather than a separate live finish flag. Preserve
+        // the old single-add control flow for same-binary comparisons.
+        const bool finish = !COMPACT && d == e;
+        int rule = COMPACT && d == e ? 4 : 0;
+        if (COMPACT ? rule != 4 : !finish) {
             if (d < e) {
                 uint32_t tmp = d; d = e; e = tmp;
                 cgbn_swap(c._env, ax, bx); cgbn_swap(c._env, az, bz);
@@ -64,7 +67,7 @@ __device__ FORCE_INLINE void prac_odd_single_add(curve_t<P> &c,
             prac_add_disjoint(c, tx, tz, ax, az, bx, bz, cx, cz, n, np0);
         else
             prac_add(c, tx, tz, ax, az, bx, bz, cx, cz, n, np0);
-        if (finish) {
+        if (COMPACT ? rule == 4 : finish) {
             cgbn_set(c._env, ax, tx); cgbn_set(c._env, az, tz);
             break;
         }

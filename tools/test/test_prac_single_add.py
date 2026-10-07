@@ -22,22 +22,25 @@ def double_compact(point,a24,n):
     return ox,oz
 
 
-def chain(p,r,seed,a24,n,single,compact=False,disjoint=False):
+def chain(p,r,seed,a24,n,single,compact=False,disjoint=False,sentinel=False):
+    assert not sentinel or (single and compact and disjoint)
     dbl_point=double_compact if compact else double
     add_point=add_disjoint if disjoint else add
     a=seed;b=dbl_point(seed,a24,n);c=seed
     e=p-r;d=r-e;trace=[];rules=Counter();dbl=1;dadd=0
     while True:
-        finish=d==e
-        if not finish and d<e:d,e=e,d;a,b=b,a
-        rule=0 if finish or 100*d<=296*e else 1 if d%2==e%2 else 2 if d%2==0 else 3
-        rules['final' if finish else str(rule)]+=1
+        finish=not sentinel and d==e
+        rule=4 if sentinel and d==e else 0
+        if (rule!=4 if sentinel else not finish):
+            if d<e:d,e=e,d;a,b=b,a
+            if 100*d>296*e:rule=1 if d%2==e%2 else 2 if d%2==0 else 3
+        rules['final' if (rule==4 if sentinel else finish) else str(rule)]+=1
         dadd+=1
         if single:
             if rule==3:a,b=b,a
             if rule in (2,3):b,c=c,b
             t=add_point(a,b,c,n)
-            if finish:a=t;break
+            if (rule==4 if sentinel else finish):a=t;break
             if rule==0:c,b=b,t;d-=e
             else:
                 a=dbl_point(a,a24,n);dbl+=1
@@ -90,7 +93,8 @@ def main():
             baseline=chain(p,r,seed,a24,n,False);single=chain(p,r,seed,a24,n,True)
             combined=chain(p,r,seed,a24,n,True,True)
             distinct=chain(p,r,seed,a24,n,True,True,True)
-            assert baseline==single==combined==distinct,(sigma,p,r,'point roles/projective bytes/counts differ')
+            sent=chain(p,r,seed,a24,n,True,True,True,True)
+            assert baseline==single==combined==distinct==sent,(sigma,p,r,'point roles/projective bytes/counts differ')
             assert single[2]==prac_counts(p,r)
             oracle=multiply(sigma,p,n)
             assert single[0][0]*oracle[1]%n==oracle[0]*single[0][1]%n
@@ -98,7 +102,7 @@ def main():
     assert all(coverage[k]>0 for k in ('0','1','2','3','final'))
     source=Path('kernels/cuda/cgbn_stage1_prac_single_add.cuh')
     report=dict(prime_d_pairs=len(pairs),sigmas=2,chains=2*len(pairs),point_role_steps=steps,
-        models=['baseline','single-add','single-compact-v1','single-compact-disjoint'],model_chain_evaluations=8*len(pairs),
+        models=['baseline','single-add','single-compact-v1','single-compact-disjoint','single-compact-sentinel'],model_chain_evaluations=10*len(pairs),
         rule_coverage=dict(coverage),modulus_bits=127,source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         arithmetic_source_sha256=hashlib.sha256(Path('kernels/cuda/cgbn_stage1_prac_kernel.cuh').read_bytes()).hexdigest(),
         scope='CPU point-role model; exact baseline intermediate/final XZ and independent ladder; not native GPU verification',passed=True)

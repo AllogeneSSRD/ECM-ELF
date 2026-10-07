@@ -4596,3 +4596,17 @@ GPU1/N4423/4608/TPI16/TPB128，同tail32/W8053，三C384/768/1536×三variant×�
 CPU804 Montgomery正例、4824公共别名对照通过；故意覆盖差分点786错误，不能推广新ADD契约。四个≥127bit梅森配置的−1平方raw REDC≥N，不能因容器余量省归一化。17066数学输入链/四模型68264求值/264538角色步骤全部一致。原生GPU184/3568完整Q/save，1352窗口Q/8恢复Q/20拒绝，以及128完整XZ逐字节检查（含48跨切片）通过。
 
 支持“编译器已经复用V与输出”的假设，无新性能矩阵或NCU采集，无吞吐改善结论。保留私有显式候选，不改默认/最佳推荐；下一项为finish/rule终结哨兵合并，先静态检验再决定时长矩阵。4423默认4608/TPI16，TPI32仍仅显式对照；TPB128、寄存器限制影响blocks/SM，不自动改变TPB。[源码、SHA、全部证据与复现](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_DISJOINT_ADD_20261007.md:1)。
+
+## 101. Stage1 PRAC 终结哨兵：小幅提高已测最佳吞吐（2026-10-07）
+
+基线2ff2875/bcfa。仅single-compact MODE12/13将finish合入rule=4，旧single-add MODE10/11完整SASS/资源不变，normal TPI16/host/dispatcher对象SHA不变。单TU165.5秒、仅链接；exe SHA464f1248…d2b88。自然170→174寄存器，硬件仍176/2blocks；cap168 stack88→80、spill48/40→36/28，仍3blocks。未达到自然168门槛。
+
+CPU17066输入链/五模型85330求值、264538角色步骤全部一致；804 Montgomery正例/4824公共别名对照通过。GPU184/3568完整Q/save、1352窗口Q/8恢复Q/20拒绝、128完整XZ逐字节（含48跨切片）通过。归一化/运算计数/计划/切片和checkpoint语义不改。
+
+新跨版本配对工具冻结before/after SHA，并以after中的未改baseline作第三对照；反序并逐次核对SHA/缓存/几何。72固定窗口（三C384/768/1536×两reg×短4/长32×三身份×两重复）完整：自然相对before墙钟少2.014%..2.212%，cap少0.417%..0.792%；cap短片比baseline少0.329%..0.417%。长片比baseline17%..20%主要继承旧单点ADD，不全归因本轮。
+
+24普通前缀及12额外50ms确认全部结束；50ms每身份/B1四重复，N4423/C1536/cap168/lcm的10m/260m新候选5.050395/132.178987 s/curve，比before少0.598%/0.574%，比baseline5.063071/132.510655少0.250%/0.250%。100ms比before仅少0.324%/0.062%，不能提高本批最佳。均短时投影，不发布Auto B2 T1；108计时矩阵无遗漏/重复、缓存全命中、前缀正常采样limit/checkpoint-only退出。
+
+五管理员NCU均19passes/导出成功，同tail32/grid192/TPB128。cap local累计sector字节代理55.025879→37.039062MiB（−32.688%）、主要L1命中；eligible几乎不变、issue32.848→33.118%，wait少，但no_instruction/short_scoreboard增加。自然eligible/issue略提高，仍176分配/2blocks。不能把local下降当总时间改善，代理非VRAM/DRAM/PCIe，不乘重放pass。忙采样SM均1800MHz；固定/前缀/确认设备MiB采样最大323/317/317，非进程完整峰。首份collect-only漏--exp-cache后补参导出原报告，未重新采集。
+
+v3成为本机/该N/该C/该策略的暂定最佳实验选择，默认配置不改，不推广完整曲线/其他宽度。下一项共享私有seed/loop DBL体，先静态检验与点角色门禁，防止编译器重新拆分/增加spill；公共p2作为后续独立因素。[全部数据、来源行、SHA、复现与采用边界](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_RULE_SENTINEL_20261007.md:1)。
