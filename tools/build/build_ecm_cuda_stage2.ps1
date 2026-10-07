@@ -7,8 +7,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_ecm_cuda_s
 #>
 param(
     [string]$Build = 'build_cuda_cmake/production_stage2',
+    [ValidateSet('production','development')][string]$Engine = 'production',
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
-    [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'runtime',
+    [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'ptx',
     [ValidateSet(0,4)][int]$OuterUnrollU = 0,
     [ValidateRange(1,64)][int]$SplitCompile = 1,
     [switch]$HostOnly,
@@ -20,43 +21,53 @@ Set-Location $repo
 $vcvars = (Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue |
            Select-Object -First 1).FullName
 if (-not $vcvars) { throw 'vcvars64.bat not found' }
-$sources = @('src/cuda/ecm_cuda_stage2.cu', 'src/core/ecm_cuda_stage2_main.cpp',
+if ($Engine -eq 'production' -and ($GlBackend -ne 'ptx' -or $OuterUnrollU -ne 0)) {
+    throw 'Production requires -GlBackend ptx -OuterUnrollU 0; use -Engine development for comparisons'
+}
+$cudaSource = if ($Engine -eq 'production') { 'src/cuda/ecm_cuda_stage2.cu' } else { 'tools/bench/ecm_cuda_stage2_dev.cu' }
+$cudaStem = [IO.Path]::GetFileNameWithoutExtension($cudaSource)
+$sources = @($cudaSource, 'src/core/ecm_cuda_stage2_main.cpp',
     'src/core/ecm_expr.cpp', 'src/core/ecm_worktodo.cpp', 'src/core/ecm_queue_config.cpp')
 $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
-    'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
+    'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_logging.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
     'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h',
-    'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h',
+    'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h', 'tools/build/build_ecm_cuda_stage2.ps1')
+if ($Engine -eq 'production') {
+    $deps += @(Get-ChildItem -LiteralPath 'src/cuda/stage2' -File -Filter '*.cuh' |
+        Sort-Object Name | ForEach-Object { 'src/cuda/stage2/' + $_.Name })
+} else {
+    $deps += @(
     'tools/bench/stage2_tree_gpu.cu', 'tools/bench/stage2_d_model.cuh', 'tools/bench/ntt_poly_probe.cu', 'tools/bench/ntt_coop_outer.cuh', 'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh',
     'tools/bench/stage2_baby_device.cuh', 'tools/bench/stage2_baby_host.cuh', 'tools/bench/stage2_point_mersenne.cuh', 'tools/bench/ntt_carry_partial.cuh',
-    'tools/bench/stage2_giant_base_host.cuh',
-    'tools/build/build_ecm_cuda_stage2.ps1')
+    'tools/bench/stage2_giant_base_host.cuh')
+}
 $objDir = Join-Path $Build '_objects'
 New-Item -ItemType Directory -Force $objDir | Out-Null
 $exe = Join-Path $Build 'ecm_cuda_stage2.exe'
 $signaturePath = Join-Path $objDir 'build_signature.txt'
 $glMode = @{runtime=-1;fold=0;short=1;ptx=3}[$GlBackend]
-$signature = @("arch=$Arch", "gl_backend=$GlBackend", "gl_fixed_mode=$glMode", "outer_unroll_u=$OuterUnrollU", (& nvcc --version | Out-String).Trim(), "split_compile=$SplitCompile")
+$signature = @("arch=$Arch", "gl_backend=$GlBackend", "gl_fixed_mode=$glMode", "outer_unroll_u=$OuterUnrollU", (& nvcc --version | Out-String).Trim(), "split_compile=$SplitCompile", "engine=$Engine")
 $sourceHashes = [ordered]@{}
 foreach ($dep in $deps) {
     $sourceHashes[$dep] = (Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash
     $signature += "$dep=$($sourceHashes[$dep])"
 }
 $signatureText = $signature -join "`n"
-$cudaDeps = @('src/cuda/ecm_cuda_stage2.cu','src/core/ecm_cuda_stage2.h','src/core/ecm_stage2_geometry.h',
-    'src/cuda/ecm_stage2_tune.cuh') + @($deps | Where-Object { $_ -like 'tools/bench/*' })
+$cudaDeps = @($cudaSource,'src/core/ecm_cuda_stage2.h','src/core/ecm_stage2_geometry.h','src/core/ecm_stage2_logging.h',
+    'src/cuda/ecm_stage2_tune.cuh') + @($deps | Where-Object { $_ -like 'tools/bench/*' -or $_ -like 'src/cuda/stage2/*' })
 if ($HostOnly) {
     $previous = Get-Content -LiteralPath (Join-Path $Build 'build_manifest.json') -Raw | ConvertFrom-Json
     $previousSplit = if ($previous.split_compile) { $previous.split_compile } else { 1 }
-    if ($previous.architecture -ne $Arch -or $previous.gl_fixed_mode -ne $glMode -or
+    if ($previous.engine -ne $Engine -or $previous.architecture -ne $Arch -or $previous.gl_fixed_mode -ne $glMode -or
         $previous.outer_unroll_u -ne $OuterUnrollU -or $previousSplit -ne $SplitCompile -or $previous.sources[4] -ne $signature[4]) {
         throw 'HostOnly requires identical CUDA architecture, backend, schedule and toolkit'
     }
     foreach ($dep in $cudaDeps) {
         if ($previous.source_hashes.$dep -ne $sourceHashes[$dep]) { throw "HostOnly CUDA dependency changed: $dep" }
     }
-    $cudaObject = Join-Path $objDir 'ecm_cuda_stage2.obj'
+    $cudaObject = Join-Path $objDir "$cudaStem.obj"
     if (-not (Test-Path -LiteralPath $cudaObject)) { throw 'HostOnly CUDA object missing' }
-    if ($previous.objects -and $previous.objects.ecm_cuda_stage2 -ne (Get-FileHash $cudaObject).Hash) {
+    if ($previous.objects -and $previous.objects.$cudaStem -ne (Get-FileHash $cudaObject).Hash) {
         throw 'HostOnly CUDA object changed'
     }
     $cudaObjectHash = (Get-FileHash $cudaObject).Hash
@@ -70,7 +81,7 @@ if (-not $fresh) {
         $obj = Join-Path $objDir "$stem.obj"
         $log = Join-Path $objDir "$stem.log"
         $objects += $obj
-        if ($HostOnly -and $src -eq 'src/cuda/ecm_cuda_stage2.cu') {
+        if ($HostOnly -and $src -eq $cudaSource) {
             Write-Host 'reuse CUDA object: matching compiled dependencies and toolkit'
             continue
         }
@@ -109,6 +120,7 @@ $manifest = [ordered]@{
     exe = (Resolve-Path $exe).Path
     sha256 = (Get-FileHash $exe -Algorithm SHA256).Hash
     architecture = $Arch
+    engine = $Engine
     gl_backend = $GlBackend
     gl_fixed_mode = $glMode
     outer_unroll_u = $OuterUnrollU

@@ -2004,3 +2004,8 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 当前开发源码的save/队列/shape支持16384位，点/归约分派256，constant除数表256；旧S5的Horner/sub/two-minus分为128/256容量。默认scaled、配对开关及8192点launch cap保持；Auto B2仍只接受已标定≤8192位范围。最终46457e的27原生宽位数、1实际INI/queue、2超限拒绝、18默认回归和30独立点乘调用通过；有效点由CPU和独立GMP-ECM共同确认，synthetic满16384梅森只作算术覆盖。
 
 旧S5 P=1检查与NTT最低term bit不一致已修复，完整叶指纹门禁保留；两次原失败/source版本均归档。W=256下owner640MiB容量P≤36407；XZ每点4096B，点分块65536再按P向上对齐，预算不是全进程峰。128档资源仍有codegen变化，需要整曲线性能对照，尚未发布宽位数生产。下一阶段推进独立cu与日志控制，再测新chain/短尾和G树/fold/下降的准备、NTT热shape；旧Auto B2不能套新binary。[详细公式、原文件行、当前边界和证据](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。
+
+
+## 70. 独立生产闭包与可控日志（2026-10-07–08）
+
+生产候选独立CU和src/cuda/stage2辅助文件，开发wrapper保留实验树；生产固定PTX3/outer0、xADD6及配对GPU seed，非单位/容量回退保持。五级CLI/INI日志默认batches只输出曲线/主阶段/批次，不改变stderr、JSON或检查。原生28/0、实际chain/短尾跨版本12/0、补充入口6/0与4/0完成；32正式样本/8预热的叶、factor、覆盖一致。M4423大界38.89675→38.88363秒近似持平，generic8193/16384慢0.78%/1.28%，不能凭kernel211→164或S4 stack减半宣称加速。管理员Systems满16384位D30030/P2880/I32768形状tracked设备峰639.76MiB、最终live0，事件间隙约1.06秒；不是任意B2完整显存或整卡idle认证。审计及归档完成，发布893保持。下一项owner临时多项式别名、generic宽位数回退诊断、最终chain策略和NTT热shape；新Auto成本与并发lease尚待推进。[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。

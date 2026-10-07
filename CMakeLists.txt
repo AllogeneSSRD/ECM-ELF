@@ -236,6 +236,7 @@ if(ECM_ENABLE_CUDA)
             src/core/ecm_worktodo.cpp
             src/core/ecm_queue_config.cpp)
         target_include_directories(ecm_cuda_stage2 PRIVATE ${GMP_INCLUDE_DIR})
+        target_compile_definitions(ecm_cuda_stage2 PRIVATE NTT_GL_FIXED_MODE=3 NTT_OUTER_UNROLL_U=0)
         target_link_libraries(ecm_cuda_stage2 PRIVATE ${GMP_LIBRARY})
         set_target_properties(ecm_cuda_stage2 PROPERTIES
             CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON

@@ -4722,3 +4722,8 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 统一入口/规划上限并增加256-limb点、S4归约/除数表和旧S5数组分派；旧档仍使用原容量，8192点ladder cap独立保留。最终46457e候选CUDA编译264.0秒、26raw依赖冻结；有效CPU/GMP Stage1保存点的完整原生27/0（含1个明确synthetic案例）、实际宽队列1条、2拒绝、默认18/0、独立wide点乘30调用及故障检出通过。单位案例18组完整monic叶指纹与CPU定义一致，非单位base/giant分别检出2621/1019并验证回退。
 
 保留初版22项后的S5哈希缺失和第二版23项后的P=1检查失败。诊断读回后输出哈希；S5 guard统一minimum term bit，旧48b/M4423也能复现该断言，新候选修复并完整重跑。静态128-limb stack保持但9/18同名kernel REG改变；本阶段无正式性能样本/宽位数总VRAM峰认证，不替换生产893。独立精简cu、日志控制、最终chain策略及大界性能/容量仍待推进。[完整实现、公式、source/line、门禁与归档](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。
+
+
+## 111. Stage2独立生产CU与日志控制（2026-10-07–08）
+
+实际生产实现移入src/cuda/ecm_cuda_stage2.cu，NTT闭包在src/cuda/stage2；development包装原实验引擎。生产选择PTX3/outer0/xADD6/配对GPU seed，移除Stage1重算、旧S5及REDC尾部，必要回退保留。五级日志接入CLI/Worker INI，默认batch无内部树层。候选25raw依赖、原生28/0、跨版本chain/短尾12/0、补充CPU/GPU入口6/0与4/0通过；32条正式A/B和8预热完成。M4423大界均值近似持平，generic8193/16384分别慢0.78%/1.28%，不宣称零回退或发布加速。管理员Systems满16384位形状tracked设备峰639.76MiB/最终live0；真实完整VRAM与大形状范围仍未认证。最终审计/归档完成，发布893保持；下一项owner q/qb复用及宽泛型回退诊断，成本/最终短尾/多曲线lease待推进。所有数据、范围、源码行及复现统一维护[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。

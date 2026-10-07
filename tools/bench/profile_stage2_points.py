@@ -7,6 +7,10 @@ from pathlib import Path
 import re
 import sqlite3
 import subprocess
+import sys
+
+if hasattr(sys, 'set_int_max_str_digits'):
+    sys.set_int_max_str_digits(0)  # Bounded 16384-bit native factor records.
 
 
 def main():
@@ -27,6 +31,8 @@ def main():
     p.add_argument('--owner-mb',type=int,default=None)
     p.add_argument('--arena-mb',type=int,default=None)
     p.add_argument('--factor-only',action='store_true')
+    p.add_argument('--log-level', choices=('quiet','curve','phases','batches','debug'),
+                   help='New production logger; profiling requires debug. Omit for historical binaries.')
     p.add_argument('--cuda-event-trace',action='store_true',help='Collect CUDA event completion/correlation; diagnostic overhead may change scheduling')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--analyze-existing', action='store_true', help='Validate and analyze the existing command/log/trace without relaunching')
@@ -80,6 +86,9 @@ def main():
         if a.arena_mb<=0:raise ValueError('Invalid arena budget')
         command+=['--arena-mb',str(a.arena_mb)]
     if a.factor_only:command+=['--factor-only']
+    if a.log_level is not None:
+        if a.log_level!='debug':raise ValueError('Profiling needs debug arithmetic and identity logs')
+        command+=['--log-level',a.log_level]
     assert not any(any(c in token for c in '&|<>%!^\r\n"') for token in command)
     wrapper = out/'run.cmd'
     wrapper_bytes=('@echo off\r\n'+' '.join('"'+x+'"' for x in command)+' > "'+str(out/'app.log')+'" 2>&1\r\nexit /b %errorlevel%\r\n').encode()
@@ -96,18 +105,20 @@ def main():
     text = (out/'engine.log').read_text(encoding='utf-8',errors='replace')
     for token in ('stage1_skipped=1', 'gmp_check_bad=0', 'gmp_selftest_bad=0', 'pending=0', 'clean=1', 'fixed=3', 'point_arithmetic: xadd6=1'):
         assert token in text, token
-    if a.point_mersenne: assert 'point_mersenne_mode: requested=1 enabled=1' in text
-    if a.carry_check_fused or 'tools/bench/ntt_carry_partial.cuh' in sources:
+    result = json.loads((out/'results.jsonl').read_text(encoding='utf-8').splitlines()[-1])
+    n=int(result['N_hex'],16)
+    if a.point_mersenne:
+        enabled=int(n>1 and (n & (n+1))==0)
+        assert 'point_mersenne_mode: requested=1 enabled='+str(enabled) in text
+    if a.carry_check_fused or any(n.endswith('/ntt_carry_partial.cuh') for n in sources):
         stats=dict(re.findall(r'(\w+)=(\d+)',re.search(r'ntt_carry_check_stats: (.*)',text)[1]))
         assert int(stats['requested'])==a.carry_check_fused
         assert int(stats['fused_calls'])>0 if a.carry_check_fused else int(stats['fused_calls'])==0
     q = re.search(r'real_setup_Q_full: hex=([0-9a-f]+)', text)[1]
     saved_x = re.search(rb'\bX=(?:0x)?([0-9a-fA-F]+)', save.read_bytes().splitlines()[0])[1].decode().lower().lstrip('0') or '0'
     assert q == saved_x
-    result = json.loads((out/'results.jsonl').read_text(encoding='utf-8').splitlines()[-1])
     assert result['bad_factors'] == 0
     if a.factor_only:
-        n=int(result['N_hex'],16)
         assert all(1<int(f)<n and n%int(f)==0 for f in result['factors'])
     else:assert result['factors'] == []
     export = [str(a.nsys), 'export', '--type=sqlite', '--force-overwrite=true', '--output', str(trace)+'.sqlite', str(trace)+'.nsys-rep']

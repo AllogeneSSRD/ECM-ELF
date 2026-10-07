@@ -329,7 +329,7 @@ S4423/B2=8e12网格驻留样本（第34条，非边界重复均值），owner传
 
 1. 先统一缓存计账、真实payload和淘汰减账的公式，覆盖cache hit/grow/evict/rebuild/release及cap边界；当前约6149MiB账本不等于约3187MiB实际NTT payload。然后把big shape上限作为独立planner参数接入，并明确是否也禁止per-call超限分配。精确计账可能减少提前拒绝/淘汰，但GPU还要容纳owner/坐标/raw/output，不能据账本差值直接承诺大一档NTT一定装得下。
 2. 为不同 S、big上限、驻留/回退路径分别标定 D；当前 legacy排序仅作实验控制。模型应允许在 owner 预算不足时继续增加 D，比较搬运代价与减少 G 的收益，不能把“非驻留”直接判定为无效候选。
-3. 优先核验 owner 临时多项式别名：[step_loaded](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7657) 的 q 在反转复制后不再需要原值，qb可考虑复用q；g在首次乘入t后不再用于数学计算，reverse可考虑复用g。单项复用理论容量 `9P+8→8P+8`，两项都成立则 `7P+8`，分别省 `8WP`、`16WP B`。在本轮P=138240/W=70形状上，664.46 MiB理论降至590.63或516.80 MiB，可以落回640 MiB预算。这只是源码live-range候选，**尚未实现或验证**；必须先证明异步pack、oracle snapshots、digest和诊断读取已结束，再做独立GMP/故障和真实曲线对照，同时更新所有owner容量与D规划公式。它也与NTT大工作区争显存，需观察同时存活的分配序列。
+3. 优先核验owner临时多项式别名。当前[生产step_loaded](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5276)的q在反转复制后不再用于数学计算，可考虑qb复用q；g在首次乘入t后不再用于数学计算，可考虑reverse复用g。按[实际布局](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5192)，q槽为(P+1)W、qb为PW，单独q/qb复用使9P+8→8P+8，省8WP B；g和reverse各为(P+1)W，单独复用使9P+8→8P+7，省8W(P+1) B；两项同时成立则为7P+7，省8W(2P+1) B。修正此前把两类槽位都近似按P计算的7P+8公式。本轮P=138240/W=70形状，664.457MiB理论变为590.629（q/qb）或516.801MiB（两项），可回到640MiB预算；当前M4423大界P126720已有驻留，不应仅凭节省容量预告时间收益。**尚未实现或验证**，必须先证明异步pack、oracle snapshots、digest和诊断读取已结束，再进行GMP/故障与真实曲线对照，并更新所有owner容量和D规划公式；同时核验NTT工作区与owner实际同时存活的分配。
 4. 后续 B2 采样需同时记录 D/P/L/G/驻留原因，并按 D饱和、NTT长度跳档和owner回退分段分析；同一幂指数不能覆盖所有区间。
 
 本轮新增实验和报告，不修改生产内核或发布默认。

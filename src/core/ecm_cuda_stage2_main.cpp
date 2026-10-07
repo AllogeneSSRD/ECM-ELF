@@ -11,6 +11,7 @@
 #include "ecm_stage2_factorize.h"
 #include "ecm_stage2_cost_profile.h"
 #include "ecm_stage2_geometry.h"
+#include "ecm_stage2_logging.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -205,6 +206,7 @@ struct Options {
     std::string ini, save, worktodo, results, log;
     uint64_t b2 = 0, d = 0, skip = 0, curves = 0, batch = 0, arena = 0;
     int device = -1, worker = 1;
+    int log_level = -1;
     bool dry = false, once = false, selection = false, help = false;
     bool has_d = false, has_batch = false, has_arena = false;
     bool child = false;
@@ -243,6 +245,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--worktodo") o.worktodo = value();
         else if (a == "--results") o.results = value();
         else if (a == "--log") o.log = value();
+        else if (a == "--log-level") o.log_level = stage2_log::parse(value());
         else if (a == "--b2") o.b2 = num();
         else if (a == "--d") { o.d = num(); o.has_d = true; }
         else if (a == "--skip-curves") { o.skip = num(); o.selection = true; }
@@ -308,6 +311,7 @@ Options arguments(int argc, char **argv) {
 struct Settings {
     uint64_t b2 = 0, d = 0, batch = 64, arena = 0;
     std::string results;
+    int log_level = -1;
     bool factorize_hits = false;
     bool factor_only = false;
     std::string gp;
@@ -341,6 +345,7 @@ Settings stage2_ini(const fs::path &path, int worker) {
         if (global.count(key)) target = u64(global[key], key);
     };
     get("STAGE2_B2", s.b2); get("STAGE2_D", s.d);
+    if(global.count("STAGE2_LOG_LEVEL"))s.log_level=stage2_log::parse(global["STAGE2_LOG_LEVEL"]);
     get("STAGE2_BATCH_MB", s.batch); get("STAGE2_ARENA_MB", s.arena);
     uint64_t factorize=0; get("STAGE2_FACTORIZE_HITS",factorize);
     if(factorize>1)throw std::runtime_error("stage2_factorize_hits must be 0 or 1");
@@ -466,7 +471,7 @@ void configure_cuda_wait(int device) {
     check(cudaSetDeviceFlags((before&~15u)|static_cast<unsigned>(mode)));check(cudaGetDeviceFlags(&after));
     if((after&7u)!=mode||(after&~7u)!=(before&~7u))
         throw std::runtime_error("CUDA wait flags did not match requested context state");
-    std::cout<<"stage2_cuda_wait: device="<<device<<" requested="<<mode
+    if(stage2_log::enabled(stage2_log::debug))std::cout<<"stage2_cuda_wait: device="<<device<<" requested="<<mode
              <<" before="<<before<<" after="<<after<<std::endl;
 }
 int child_run(const Options &o, const fs::path &save, const Record &r,
@@ -476,6 +481,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     auto arg = [&](const wchar_t *key, uint64_t n) { cmd += L" "; cmd += key; cmd += L" "; cmd += std::to_wstring(n); };
     arg(L"--record-offset", r.offset); arg(L"--record-hash", r.hash); arg(L"--record-index", r.index);
     arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
+    arg(L"--log-level", static_cast<uint64_t>(o.log_level));
     cmd += L" --results " + quote(results.wstring());
     if (o.factorize_hits) {
         cmd += L" --factorize-hits --gp " + quote(fs::path(o.gp).wstring());
@@ -569,6 +575,10 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     return c::json(plan,hash);
 }
 int curve_worker(Options o) {
+    if(o.log_level<0)o.log_level=ecm_cuda_stage2_default_log_level();
+    if(ecm_cuda_stage2_set_log_level(o.log_level))throw std::runtime_error("engine rejected log level (development requires debug)");
+    stage2_log::level=o.log_level;
+    if(ecm_cuda_stage2_check_configuration())throw std::runtime_error("Stage2 engine configuration rejected");
     if (o.factor_only && _putenv_s("NTT_NAME_HITS", "0"))
         throw std::runtime_error("cannot disable optional prime-witness naming");
     if (o.save.empty() || o.results.empty() || !o.index || o.device < 0 || (!o.b2 && !o.auto_b2))
@@ -595,7 +605,7 @@ int curve_worker(Options o) {
     if (mpz_cmp_ui(gcd.z, 1) > 0 && mpz_cmp(gcd.z, n.z) < 0) {
         status = "factor_in_saved_X";
         result = "\"hits\":1,\"bad_factors\":0,\"factors\":[" + json_string(number(gcd.z, 10)) + "]";
-        std::cout << "saved_X_factor: " << number(gcd.z, 10) << '\n';
+        if(stage2_log::enabled(stage2_log::curve))std::cout << "saved_X_factor: " << number(gcd.z, 10) << '\n';
     } else {
         if (!mpz_cmp(gcd.z, n.z)) throw std::runtime_error("saved X=0 gives no usable Stage1 point");
         configure_cuda_wait(o.device);
@@ -633,7 +643,8 @@ void help() {
         "  ecm_cuda_stage2 --save FILE --b2 B2 [--curves N] [--skip-curves N]\n"
         "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results FILE\n"
-        "         --log FILE --dry-run --help\n"
+        "         --log FILE --log-level quiet|curve|phases|batches|debug (0..4)\n"
+        "         Production default: batches; development: debug only. --dry-run --help\n"
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
         "         --factor-only (skip optional prime-witness naming; raw factors may be composite)\n"
         "Auto B2: --auto-b2 --cost-profile FILE [--stage1-batch N]\n"
@@ -646,7 +657,7 @@ void help() {
         "      Requires a fixed Goldilocks backend; measures field convolution only.\n"
         "Queue: ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
         "INI: worktodo, finished, tmp_dir, log_file, device; stage2_b2, stage2_d,\n"
-        "     stage2_batch_mb, stage2_arena_mb, stage2_results_file; [Worker #N].\n"
+        "     stage2_batch_mb, stage2_arena_mb, stage2_results_file, stage2_log_level; [Worker #N].\n"
         "D=0 chooses automatically; count/curves=0 means all remaining.\n"
         "Missing implicit INI uses defaults. No Stage1 computation or checkpointing.\n";
 }
@@ -673,6 +684,10 @@ int driver(Options o) {
     if (!ecm_queue_config_load(ini.string(), o.worker, cfg) && !o.ini.empty())
         throw std::runtime_error("cannot read explicit ini: " + ini.string());
     Settings s = stage2_ini(ini, o.worker);
+    if(o.log_level<0)o.log_level=s.log_level<0?ecm_cuda_stage2_default_log_level():s.log_level;
+    if(ecm_cuda_stage2_set_log_level(o.log_level))throw std::runtime_error("engine rejected log level (development requires debug)");
+    stage2_log::level=o.log_level;
+    if(ecm_cuda_stage2_check_configuration())throw std::runtime_error("Stage2 engine configuration rejected");
     if(s.factorize_hits)o.factorize_hits=true;
     if(s.factor_only)o.factor_only=true;
     o.auto_b2=o.auto_b2||s.auto_b2;
@@ -775,7 +790,7 @@ int driver(Options o) {
             std::string err;
             skip = fields.skip; count = fields.count;
             if (!o.b2 && fields.b2) b2 = fields.b2;
-            std::cout << "queue_fields: filename=" << task.save_name << " B2=" << fields.b2
+            if(stage2_log::enabled(stage2_log::phases) || o.dry)std::cout << "queue_fields: filename=" << task.save_name << " B2=" << fields.b2
                       << " skip_curves=" << skip << " num_curves=" << count << std::endl;
             Big n;
             if (!ecm_compute_stage2_n(task, n.z, err)) throw std::runtime_error("worktodo N: " + err);
@@ -790,12 +805,12 @@ int driver(Options o) {
             if (!expected_n.empty() && r.n != expected_n) throw std::runtime_error("worktodo N differs from save N");
             if (queue && r.b1 != plan.front().b1) throw std::runtime_error("queue saves must have the same B1");
         }
-        std::cout << "stage2_plan: save=" << save.string() << " curves=" << plan.size()
+        if(stage2_log::enabled(stage2_log::phases) || o.dry)std::cout << "stage2_plan: save=" << save.string() << " curves=" << plan.size()
                   << " B2=" << b2 << " D=" << d << " device=" << device << " worker=" << o.worker
                   << " auto_b2=" << (o.auto_b2&&!b2 ? 1 : 0)
                   << " log=" << log.string() << " results=" << results.string() << '\n';
         for (const auto &r : plan) {
-            std::cout << "curve_start: record=" << r.index << " sigma=" << r.sigma << " B1=" << r.b1
+            if(stage2_log::enabled(stage2_log::curve) || o.dry)std::cout << "curve_start: record=" << r.index << " sigma=" << r.sigma << " B1=" << r.b1
                       << " checksum=" << (r.checksum ? "verified" : "absent") << std::endl;
             if (o.dry) continue;
             if (o.plan_only) {
@@ -810,7 +825,7 @@ int driver(Options o) {
             if (child_run(o, save, r, b2, d, device, results, log))
                 throw std::runtime_error("curve failed; queue retained; inspect " + log.string());
             ++completed;
-            std::cout << "curve_done: record=" << r.index << " sigma=" << r.sigma << std::endl;
+            if(stage2_log::enabled(stage2_log::curve))std::cout << "curve_done: record=" << r.index << " sigma=" << r.sigma << std::endl;
         }
         if (!queue || o.dry || o.plan_only) break;
         std::string current;
@@ -821,7 +836,7 @@ int driver(Options o) {
             throw std::runtime_error("task completed but worktodo changed or could not be advanced");
         if (o.once) break;
     }
-    std::cout << (o.plan_only ? "plan_complete" : o.dry ? "dry_run_complete" : "stage2_complete")
+    if(stage2_log::enabled(stage2_log::curve) || o.dry)std::cout << (o.plan_only ? "plan_complete" : o.dry ? "dry_run_complete" : "stage2_complete")
               << ": curves=" << completed << '\n';
     return 0;
 }

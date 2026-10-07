@@ -1,10 +1,10 @@
 # 独立 CUDA ECM Stage2 生产入口
 
-`ecm_cuda_stage2.exe` 从已经完成 Stage1 的文本 save 读取曲线，调用当前实验版 CUDA 多项式 Stage2。它不计算 Stage1，也不会重新乘以 12。`exponent=lcm|choose12` 由生成存档的 Stage1 决定；恢复时原样使用存档中的 Q。
+`ecm_cuda_stage2.exe` 从已经完成 Stage1 的文本 save 读取曲线，执行 CUDA 多项式 Stage2。它不计算 Stage1，也不会重新乘以 12。`exponent=lcm|choose12` 由生成存档的 Stage1 决定；恢复时原样使用存档中的 Q。
 
-截至2026-10-07，已发布生产基线仍是893：固定PTX3 Goldilocks、xADD6、Mersenne点乘折叠、GPU baby、驻留fold及尺寸策略；其发布与完整A/B见[点折叠与D报告](D:/code/MPA-OpenCl/docs/STAGE2_POINT_FOLD_D_CALIBRATION.md:69)。下面带日期的段落保留历次实现记录，不应把早期的“尚未实现”当作当前状态。
+截至2026-10-08，已发布生产基线仍是893：固定PTX3 Goldilocks、xADD6、Mersenne点乘折叠、GPU baby、驻留fold及尺寸策略；其发布与完整A/B见[点折叠与D报告](D:/code/MPA-OpenCl/docs/STAGE2_POINT_FOLD_D_CALIBRATION.md:69)。下面带日期的段落保留历次实现记录，不应把早期的“尚未实现”当作当前状态。
 
-开发候选已加入默认关闭的 `NTT_GIANT_SEED_PAIR=1`，缓存 `[D]Q` 并从一个ladder同时产生相邻起点；不可逆base回退原算法。CPU base候选还可用 `NTT_GIANT_BASE_CPU=1` 单点GMP预计算，详见同报告§8。候选成本尚未重标定，不能套旧Auto B2 profile，详见[giant seed算法、容量与验证](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:178)。已发布893入口仍最多8192位；当前开发源码扩展到16384位，验收与发布边界见本文末尾专节。独立精简生产cu与可控日志粒度尚待实现。
+开发引擎保留默认关闭的 `NTT_GIANT_SEED_PAIR=1` 和可选CPU base。当前独立生产源码选择配对GPU seed，缓存 `[D]Q` 并从一个ladder同时产生相邻起点；不可逆base回退原算法。成本尚未重标定，不能套旧Auto B2 profile，详见[giant seed算法、容量与验证](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:178)。已发布893入口仍最多8192位；当前源码支持16384位，独立CU与日志控制已接入候选，验收和发布边界见末尾专节。
 
 16384位扩展已经覆盖save/队列和规划限制、256-limb点/归约分派、除数constant容量以及旧S5局部数组。代码见[save读取](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:144)、[规划上限](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:8)、[模板分派](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:932)、[除数表](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2001)、[S5分派](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:5457)。8192的ladder launch cap是点数而非位宽，继续保留其watchdog合同；大界生产容量/性能仍需独立验收。
 
@@ -15,10 +15,11 @@ Auto B2已有经验证的4acc/v1窄范围组合；后续全范围验证虽然算
 在仓库根目录执行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_ecm_cuda_stage2.ps1 -Arch sm_89
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_ecm_cuda_stage2.ps1 `
+  -Build build_cuda_cmake/stage2_candidate -Engine production -Arch sm_89 -SplitCompile 6
 ```
 
-输出在 `build_cuda_cmake\production_stage2\`，包括 `ecm_cuda_stage2.exe`、`gmp-10.dll`、源文件与工具链哈希清单 `build_manifest.json`。可以把 exe 和 DLL 一起复制到生产目录。需要 MSVC、CUDA nvcc 和仓库内 GMP；此脚本不编译 Stage1/CGBN，也不依赖 OpenCL。
+示例输出在 `build_cuda_cmake\stage2_candidate\`，包括 `ecm_cuda_stage2.exe`、`gmp-10.dll`、源文件与工具链哈希清单 `build_manifest.json`。省略 `-Build` 的历史默认目录仍为 `production_stage2`，实验时显式指定新目录。脚本默认独立production/PTX3/outer0；需要MSVC、CUDA nvcc和仓库内GMP，此脚本不编译Stage1/CGBN，也不依赖OpenCL。
 
 ```powershell
 .\ecm_cuda_stage2.exe --save D:\saves\m4423_260e6.save --b2 20e11 --device 1
@@ -124,7 +125,7 @@ ECMSTAGE2=[AID,]k,b,n,c,save_name[,B2-or-zero][,skip_curves][,num_curves][,"know
 3. giant 树、积累/折叠、scaled 下降、块/叶 GCD 与因子验证。
 4. 排空算术检查，成功后写入结果；关闭进程以释放全部 CUDA 及 host 状态。
 
-采用已有优化默认值：Mersenne 特化、small-prime reuse、device giant seed、批量精确 segment inverse、device giant leaf/root、GPU 驻留 fold、scaled descent、输出窗口/分块，以及异步 oracle 和批量 carry 检查。非 Mersenne N 使用原引擎一般模数路径。显式 `NTT_*` 环境变量可以覆盖默认值，仍保留实验自检与 GMP 采样。普通部署无需设置这些变量。
+采用已有优化组合：Mersenne特化、small-prime reuse、device giant seed、批量精确segment inverse、device giant leaf/root、GPU驻留fold、scaled descent、输出窗口/分块，以及异步oracle和批量carry检查。非Mersenne N使用通用模数路径。当前独立production候选固定主要算法选项，冲突的 `NTT_*` 值会拒绝；算法A/B使用 `-Engine development`。下文显式0回退开关属于历史893/开发引擎的接口；生产候选通过预算/分配条件自动回退，具体控制见末节。
 
 GPU fold 的默认开关是 `NTT_FOLD_DEVICE=1`，独立缓冲预算 `NTT_FOLD_DEVICE_MAX_MB=640`（MiB）；设置 `NTT_FOLD_DEVICE=0` 可恢复原 host flat fold。显存不足、形状/后端不兼容或超过预算时自动使用原路径。申请前还预留 workspace 剩余增长和 1 GiB 空间；预算不是全程序显存硬上限。其额外显存为 `8W(9P+8)+48` bytes，W=`ceil(bits(N)/64)`，P=`φ(D)/2`；M4423/P115200 为约 554 MiB，Γ 校正及下降前释放。并发启动不同队列时应为每条活跃曲线分别计入此容量。算法、传输公式、性能和门禁详见 [步骤报告 §33](STAGE2_GPU_CURRENT_PIPELINE.md#33-gpu-驻留-fold算法访存与验证2026-10-04)。
 
@@ -134,7 +135,7 @@ G根直接交接默认 `NTT_GROOT_TO_FOLD=1`，设置0恢复根先读回再上�
 
 NTT tile 默认 `NTT_FUSE_WARP_TAIL=1`，低6层使用warp寄存器交换与常量根约减；显式设0回退原shared实现，实验exe仍默认0。当前收益验证覆盖sm89/GPU1及报告中的M4423负载，其他架构/形状需重新测量；不增加大型buffer。算法、源码行号与8次对照见 [步骤报告§37](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:1688)。性能测量前应删除 `NTT_FUSE_TRACE` 环境变量（PowerShell：`Remove-Item Env:NTT_FUSE_TRACE -ErrorAction SilentlyContinue`）；该诊断开关按变量存在性启用，设0或空值仍会逐kernel同步。
 
-控制台输出每条记录开始/完成和结果文件路径。完整引擎输出默认在 exe/ini 目录的 `stage2_screen.log`；worker 2 为 `stage2_screen_2.log`。配置中的显式 `log_file` 优先；设空值则让引擎直接输出到控制台。
+控制台与引擎输出受当前候选的 `--log-level` / `stage2_log_level` 控制，默认batches。引擎输出默认在exe/ini目录的 `stage2_screen.log`；worker 2为 `stage2_screen_2.log`。配置中的显式 `log_file` 优先；设空值则让引擎直接输出到控制台。历史893没有日志等级功能。
 
 每条成功曲线追加一个 JSONL 结果，默认 `stage2_results.jsonl` 或 `stage2_results_N.jsonl`，包含状态、save/记录编号与指纹、N、sigma、B1/B2、设备/worker、请求 D、时长、hits、bad_factors 和十进制 factors。自动 D 的实际选择及树哈希保存在完整引擎日志中。
 
@@ -145,12 +146,12 @@ NTT tile 默认 `NTT_FUSE_WARP_TAIL=1`，低6层使用warp寄存器交换与常�
 ## 实现位置
 
 - 存档文本和校验和解析：[ecm_cuda_stage2_main.cpp:106](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:106)；可选队列字段：[同文件:301](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:301)；配置和调度：[同文件:443](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:443)。
-- 生产默认值：[ecm_cuda_stage2.cu:6](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6)；独立引擎封装：[同文件:39](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:39)。
-- 共用运算引擎与 save Q 接口：[stage2_tree_gpu.cu:10694](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10694)，跳过 Stage1 的分支位于 [11021](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11021)。
+- 独立生产默认值与实现：[ecm_cuda_stage2.cu](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1)；生产API：[同文件:9073](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9073)；算法配置检查：[同文件:9105](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9105)。
+- 开发驱动：[ecm_cuda_stage2_dev.cu](D:/code/MPA-OpenCl/tools/bench/ecm_cuda_stage2_dev.cu:1)；开发运算引擎：[stage2_tree_gpu.cu](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10896)。
 - 已有表达式、ini 和队列工具：`src/core/ecm_expr.cpp`、`ecm_queue_config.cpp`、`ecm_worktodo.cpp`。
 - 独立编译脚本：[build_ecm_cuda_stage2.ps1](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)。
 
-本入口只包装现有实验算法。性能与显存模型见 [当前 Stage2 步骤报告](STAGE2_GPU_CURRENT_PIPELINE.md)，生产 large-N 的实际预算应以运行日志为准。
+已发布893包装实验引擎，当前源码已拆出独立production闭包。性能与显存模型见 [当前 Stage2 步骤报告](STAGE2_GPU_CURRENT_PIPELINE.md)，large-N的实际预算应以运行日志为准。
 
 ## 本轮验证（2026-10-04）
 
@@ -384,6 +385,8 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 
 ### 复现和下一生产阶段
 
+以下命令属于58db21f当时的构建脚本；重建已测46457e应恢复其冻结26-source闭包和原脚本。当前脚本已区分production/development，按下节命令生成的新binary不是46457e。
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
   -Build build_cuda_cmake/reproduce_wide -Arch sm_89 -GlBackend ptx `
@@ -395,4 +398,82 @@ python tools/test/test_stage2_wide_native.py --exe build_cuda_cmake/reproduce_wi
   --fixtures run/wide_fixtures/fixtures.json --output run/wide_gate
 ```
 
-本轮仅推进位宽功能和检查边界；[生产包装CU](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:44)仍包含实验树文件。后续优先：独立生产CU/保留已测最佳算法；可控curve/主要phase/batch日志；完成chain门槛和短尾选择；旧位宽及宽位数的大界性能/容量对照。G树/fold/下降和主机准备仍是性能重点。新二进制重新标定Auto B2，旧profile不能直接复用。
+该宽位数阶段收尾时，[冻结生产包装CU](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_wide_20261007/native_r2/sources/src/cuda/ecm_cuda_stage2.cu:44)仍包含实验树文件。其后独立生产CU及日志控制见下一节；chain策略、大界性能、容量和成本标定继续按实际验收推进。G树/fold/下降和主机准备仍是性能重点，新二进制不能直接复用旧Auto B2 profile。
+
+## 2026-10-07–08 独立生产源码与日志等级候选
+
+### 源码和算法边界
+
+[生产CU](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1)拥有实际Stage2实现；NTT和辅助头文件在 `src/cuda/stage2/`，编译闭包不再包含 `tools/bench/`。开发版改由 [ecm_cuda_stage2_dev.cu](D:/code/MPA-OpenCl/tools/bench/ecm_cuda_stage2_dev.cu:1)包含原实验引擎，原始 `stage2_tree_gpu.cu` 保持原字节。
+
+生产运行路径选择固定PTX3/outer0、tile12/原尺寸策略、xADD6、精确梅森点乘和系数归约、通用N长除法、GPU baby、驻留fold/scaled下降与原检查调度。新增默认配对GPU seed；base非单位时仍回原seed，预算/分配失败仍有CPU baby、host fold等必要回退。C64/32768点chain门槛保留，最终短尾策略尚未重新标定。CPU base在大界没有稳定总墙钟收益，本次保留于开发版。
+
+生产源移除了Stage1重算/prime-power链、未分批Stage2尾部、旧S5 device descent、旧batched descent运行路径、REDC尾部恢复以及probe CLI。独立慢速/GMP参考和算术fixture继续用于诊断；通用模数与非单位回退继续存在。部分NTT诊断模板和未用host辅助仍可进一步整理，不能把本次拆分理解为所有历史代码均已清零。
+
+[配置检查](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9105)拒绝改变上述主要生产算法的环境变量，如 `NTT_XADD6=0`、`NTT_S5_ON=1`、`NTT_S4_OLDTAIL=1`、`NTT_GIANT_SEED_PAIR=0`、`NTT_GIANT_BASE_CPU=1` 或 `NTT_FUSE_T=11`。owner、arena、batch和gleaf容量继续可调；诊断、故障注入和必需检查保留。实验A/B使用development构建。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+  -Build build_cuda_cmake/stage2_prod_candidate -Engine production -SplitCompile 6
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+  -Build build_cuda_cmake/stage2_dev -Engine development -GlBackend ptx -SplitCompile 6
+```
+
+脚本默认production/PTX3/outer0；production拒绝其他后端/outer展开。manifest与HostOnly绑定engine、CUDA source、依赖、split选项、toolkit和对象SHA；不能跨engine复用对象。CMake的Stage2目标同样固定PTX3/outer0。旧构建签名缺少engine时不能通过新的HostOnly检查。
+
+### 日志合同
+
+[日志实现](D:/code/MPA-OpenCl/src/core/ecm_stage2_logging.h:1)按五档过滤正常stdout；CLI为 `--log-level`，INI为 `stage2_log_level`，支持以下名字或对应数字：
+
+- `quiet=0`：正常曲线运行不输出进度。
+- `curve=1`：每条曲线开始/完成、结果概要和总时长。
+- `phases=2`：增加主要阶段、形状、预算和汇总统计。
+- `batches=3`：增加 `batched_progress: batch=n/G`，生产默认。
+- `debug=4`：全部诊断，包含内部 `tree_level`、`descent_progress` 和算术覆盖。
+
+CLI覆盖选定Worker INI，再覆盖全局INI，最后使用engine默认。等级传给实际curve子进程，控制台和引擎日志都生效。`--log FILE`仍控制引擎输出位置；错误继续写stderr。plan/tune的JSON是命令数据，在quiet下仍输出；dry-run仍给出所选记录。开发引擎只接受debug，保留原实验日志与开关。
+
+日志等级不控制GMP/oracle/carry检查、结果发布或队列事务。默认batch输出没有内部树层的base/groups行。使用示例：
+
+```ini
+stage2_log_level=batches
+[Worker #2]
+stage2_log_level=curve
+```
+
+### 已完成验收与当前发布边界
+
+`native_r2`独立生产候选SHA256=`19ec8a4b9e0f598e08f8ff1ccb81c330edfa55135dad26fbd7054d3651fa491c`，25个raw依赖冻结；CUDA编译117.9秒，开发构建265.8秒，均使用sm89/CUDA13.3/split6。这些是本轮构建记录，不是吞吐对照。exe为3012096B，冻结wide开发基线为5048320B。cuobjdump实际kernel数164/211，生产无旧S5 kernel、无八模乘ladder/chain实例；代码缩小不能直接换算运行加速。通用S4的128/256实例STACK由6192/12336降到3104/6176B、REG46→40，已选chain/ladder资源保持；LOCAL0不代表没有动态local访问。
+
+[独立生产原生验收工具](D:/code/MPA-OpenCl/tools/test/test_stage2_production_native.py:1)首轮 **28/0**：14条正常曲线、实际16384-bit INI/queue一条、plan-only一条、五等级下oracle损坏五条、六个算法冲突和一个非法等级拒绝。使用上节CPU/GMP-ECM一致的有效save，单位案例检查完整24-leaf monic指纹，非单位案例检出1019/2621；含2/66点尾段、owner预算/分配与baby分配回退。quiet输出为空，Worker quiet覆盖全局debug；配置拒绝保持queue且不发布result。五个损坏输入均在各等级检出FATAL，不发布result。
+
+[候选原生证据](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_production_20261007/native_gate_r0/summary.json)、[资源比较](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_production_20261007/resource_comparison.json)。28项小形状使用实际默认门槛，主要走直接ladder，不能冒充默认配对chain验证。另用 [比较工具](D:/code/MPA-OpenCl/tools/bench/bench_stage2_production.py:1) 与冻结46457e开发基线完成 **12/0跨版本门禁**：五个有效宽save各两侧，D30030/P2880/I32768；以及generic16384的I66305完整块＋65点尾段。单位案例逐个比较chain仿射坐标，所有案例的完整叶向量指纹、proper factors及S4检查覆盖一致，非单位base回退保持。
+
+尾段实际采用66240点chain＋65点ladder。初版采集器误要求66305点全部出现于chain诊断，保留原拒绝、原始数据和采集器；修正按实际chunk推导覆盖数量后，恢复已成功完成的baseline原始输出，只继续运行候选尾段。没有改算法、删失败样本或重跑挑选更快结果。此12条包含额外全点CPU比较，不计正式性能样本。[链与短尾原始证据](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_production_20261007/chain_gate/measurements.json)。
+
+补充 [入口/构建隔离工具](D:/code/MPA-OpenCl/tools/test/test_stage2_production_protocol.py:1)：**CPU拒绝6/0、GPU入口4/0**。16385位save/queue在执行前拒绝，队列及result合同保持；production拒绝其他后端/outer4，HostOnly拒绝跨engine。实际default日志验证production=batches、development=debug，CLI debug覆盖Worker quiet并传到curve子进程，固定D210的独立叶指纹保持。quiet tune测L=65536、重复2次，每次检查全部输出，JSON/profile照常发布；这是field卷积协议检查，不是Stage2性能样本。
+
+补充工具的首次CPU检查因继承了PS7模块目录，使Windows PowerShell5.1找不到Get-FileHash；只调整构建检查子进程的PSModulePath后完整重跑。首次GPU队列检查未固定D，实际选择D420/P48却比较D210/P24指纹；工具加显式D210后重跑。原日志/工具保留，生产数学代码和检查强度未因此改变。
+
+### 整曲线对照与容量范围（2026-10-08）
+
+冻结开发基线46457e与独立生产19ec两侧均使用pair1/CPUbase0/C64/chain_min32768/PTX3/outer0、owner640MiB/arena6300MiB，必需检查保持。每种输入先两条预热，再执行完整ABBA＋BAAB；所有样本保留，每侧4条，无置信区间。比较的是源码拆分与生产选择，不把此前pair算法收益再次计入。
+
+- **M4423大界**：同有效sigma26/B1=1000/lcm save、B2=2011326186870、D1381380、I1456028，总均值 **38.89674775→38.883629秒**，减少0.0337%，近似持平。前/后两组分别少0.7793%和慢0.7082%，没有稳定加速证据。NTT模块峰两侧3186.685MiB，owner609.086MiB；这些模块记录不能相加当作进程峰。[全部10条含预热数据](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_production_20261007/whole_ab/measurements.json)。
+- **generic8193**：有效sigma26/B1=20 save、D30030/P2880/I32768/B2=983962980，**5.442896→5.48538925秒，慢0.7807%**；NTT模块223.905MiB，owner25.518MiB。
+- **M16381**：相同D/P/I/B2、有效B1=20 save，**11.284361→11.305103秒，慢0.1838%**；NTT模块421.875MiB，owner50.641MiB。
+- **generic16384**：相同D/P/I/B2、有效B1=20 save，**23.60487375→23.90637225秒，慢1.2773%**；前/后两组均回退，分别1.3589%/1.1958%。NTT模块及owner同上，不能据stack减少宣称吞吐提升。[全部30条含预热数据](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_production_20261007/wide_ab/measurements.json)。
+
+本阶段共 **32条正式计时、8条预热**；12条额外全点诊断、28项原生验收、补充协议与profiler分别记账。所有正式输入的完整叶指纹、factor集合、实际D/I、save/Q记录身份和GMP/S4检查覆盖跨版本一致。宽位数性能范围只覆盖上述D30030形状，没有认证任意B2或更大的16k packing形状，也没有建立相对发布893的净收益结论。
+
+管理员Nsight Systems2026对generic16384同D/P/I候选采集及导出均exit0，仅GPU1；非插桩性能结论采用上面的正式A/B。按malloc/free生命周期重建：tracked设备payload峰 **670834216B（639.757MiB）**，347次分配/347次释放、最终live=0。主机pinned峰37751304B（36.002MiB），末尾仍31989760B全局缓存，由进程退出回收；不能把pinned计为显存或声称所有主机分配显式释放。这些不是包含module/context/driver和local backing的进程完整VRAM或物理RAM峰。[分配与等待审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_production_20261007/nsys_wide/audit.json)。
+
+自身GPU事件近似窗口23.8643秒，事件并集22.8013秒，无本进程事件间隙1.0631秒（约4.45%），不是整卡idle比例。该trace含启动自检/收尾：generic S4池7.1454秒、点ladder4.6566秒、chain4.6345秒、paired seed2.4968秒；不能将这些数直接套到M4423大B2的阶段比例。H2D474901264B/688次，D2H271100320B/1084次，GPU copy分别0.03754/0.02240秒；host API仍可等待此前排队工作。静态LOCAL0没有否定实际local访问，本轮没有新增NCU动态计数器结论。
+
+### 审计、发布决定与下一项
+
+[最终独立审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_production_20261007/final_audit.json)重建完整矩阵、原始log/result和工具SHA、25/27/26源闭包及对象、实际输入/覆盖、chain与ladder分派、原始拒绝、管理员trace及分配生命周期。源码、保存点、日志、工具和trace在ignored阶段目录归档，逐文件SHA见同目录evidence_manifest.json；不提交data/build目录。
+
+提交时逐文件核对Git blob与raw编译依赖。新生产源/头采用LF；ecm_expr.cpp、ecm_queue_config.cpp、ecm_expr.h固定已有CRLF原始字节，原实验树继续保持混合换行。仅保留字节，不改这些主机函数；不能用Git自动归一化后的文本冒充已测raw来源。
+
+**候选功能验收通过，性能无回退尚未成立；发布893保持。** 最终chain/短尾策略、较大宽形状容量、相对893的净收益、NTT诊断/未用辅助清理及新D/Auto B2成本仍待完成。现有cprof不适配19ec与配对默认。下一项优先证明并实现owner的q/qb别名复用，同时保留generic宽位数回退为后续性能诊断输入；再定位G树/fold/下降的准备、同步和热NTT形状。多曲线仍需私有状态及总RAM/VRAM lease，不能直接并发调用当前全局状态。

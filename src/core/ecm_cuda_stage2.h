@@ -1,6 +1,12 @@
 #pragma once
 #include <cstdint>
 
+// Production defaults to batch progress (3); development keeps full diagnostics
+// (4). Lower levels never disable mandatory arithmetic/error checks.
+int ecm_cuda_stage2_default_log_level();
+int ecm_cuda_stage2_set_log_level(int level);
+int ecm_cuda_stage2_check_configuration();
+
 // One normalized param0 Stage1 point per process. The callback is invoked only
 // after Stage2 and its arithmetic checks have completed successfully.
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
