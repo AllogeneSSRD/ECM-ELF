@@ -41,6 +41,7 @@ tools/bench/stage2_tree_gpu.cu -text diff whitespace=cr-at-eol
 tools/bench/bench_stage2_seed_pair.py text eol=lf
 tools/test/test_stage2_seed_pair_native.py text eol=lf
 tools/bench/profile_stage2_seed_ncu.py text eol=lf
+tools/bench/stage2_giant_base_host.cuh text eol=lf
 tools/test/ntt_carry_fused_probe.cu text eol=lf
 docs/data/ecm_stage2_wait_20261006* -text
 tools/bench/analyze_stage2_trace.py text eol=lf

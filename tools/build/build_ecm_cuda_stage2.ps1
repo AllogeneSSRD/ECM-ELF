@@ -27,6 +27,7 @@ $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
     'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h',
     'tools/bench/stage2_tree_gpu.cu', 'tools/bench/stage2_d_model.cuh', 'tools/bench/ntt_poly_probe.cu', 'tools/bench/ntt_coop_outer.cuh', 'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh',
     'tools/bench/stage2_baby_device.cuh', 'tools/bench/stage2_baby_host.cuh', 'tools/bench/stage2_point_mersenne.cuh', 'tools/bench/ntt_carry_partial.cuh',
+    'tools/bench/stage2_giant_base_host.cuh',
     'tools/build/build_ecm_cuda_stage2.ps1')
 $objDir = Join-Path $Build '_objects'
 New-Item -ItemType Directory -Force $objDir | Out-Null

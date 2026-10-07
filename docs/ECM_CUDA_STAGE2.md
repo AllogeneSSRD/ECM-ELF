@@ -4,9 +4,9 @@
 
 截至2026-10-07，已发布生产基线仍是893：固定PTX3 Goldilocks、xADD6、Mersenne点乘折叠、GPU baby、驻留fold及尺寸策略；其发布与完整A/B见[点折叠与D报告](D:/code/MPA-OpenCl/docs/STAGE2_POINT_FOLD_D_CALIBRATION.md:69)。下面带日期的段落保留历次实现记录，不应把早期的“尚未实现”当作当前状态。
 
-开发候选已加入默认关闭的 `NTT_GIANT_SEED_PAIR=1`，缓存 `[D]Q` 并从一个ladder同时产生相邻起点；不可逆base回退原算法。候选成本尚未重标定，不能套旧Auto B2 profile，详见[giant seed算法、容量与验证](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:178)。当前生产入口仍支持最多8192位；独立精简生产cu、16384位与可控日志粒度是下一生产阶段的要求，尚未完成。
+开发候选已加入默认关闭的 `NTT_GIANT_SEED_PAIR=1`，缓存 `[D]Q` 并从一个ladder同时产生相邻起点；不可逆base回退原算法。CPU base候选还可用 `NTT_GIANT_BASE_CPU=1` 单点GMP预计算，详见同报告§8。候选成本尚未重标定，不能套旧Auto B2 profile，详见[giant seed算法、容量与验证](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:178)。当前生产入口仍支持最多8192位；独立精简生产cu、16384位与可控日志粒度是下一生产阶段的要求，尚未完成。
 
-16384位扩展须同时处理save/队列和规划限制、256-limb点/归约分派、除数constant容量以及非模板fold局部数组；不能只放宽CLI。当前限制见[save读取](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:143)、[规划](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:34)、[模板分派](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:918)、[除数表](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1995)、[fold数组](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:5363)。宽位数还需有效保存点、部分top limb、Mersenne/泛型和显存预算的实际验收。8192的ladder launch cap是点数而非位宽，应独立保留其watchdog合同。
+16384位扩展须同时处理save/队列和规划限制、256-limb点/归约分派、除数constant容量以及非模板fold局部数组；不能只放宽CLI。当前限制见[save读取](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:143)、[规划](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:34)、[模板分派](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:923)、[除数表](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2000)、[fold数组](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:5370)。宽位数还需有效保存点、部分top limb、Mersenne/泛型和显存预算的实际验收。8192的ladder launch cap是点数而非位宽，应独立保留其watchdog合同。
 
 Auto B2已有经验证的4acc/v1窄范围组合；后续全范围验证虽然算术和收益排名通过，但耗时精度失败，没有导出新cprof。[当前发布边界](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md:302)。
 

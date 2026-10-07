@@ -400,6 +400,9 @@ static const bool g_giant_seed_device = [] {
 static const bool g_giant_seed_pair = [] {
     const char *e=std::getenv("NTT_GIANT_SEED_PAIR");return e && std::atoi(e)!=0;
 }();
+static const bool g_giant_base_cpu = [] {
+    const char *e=std::getenv("NTT_GIANT_BASE_CPU");return e && std::atoi(e)!=0;
+}();
 static const bool g_giant_seed_check = [] {
     const char *e=std::getenv("NTT_GIANT_SEED_CHECK");return e && std::atoi(e)!=0;
 }();
@@ -408,6 +411,8 @@ struct GiantSeedStats {
     unsigned long long avoided_cpu_modmuls=0,avoided_montmuls=0,checked_words=0;
     unsigned long long segments=0,segment_checks=0,segment_fix_muls=0,fix_table_peak_bytes=0;
     unsigned long long base_builds=0,base_nonunits=0,paired_chunks=0,paired_ladders=0;
+    unsigned long long base_cpu_builds=0,base_gpu_builds=0,base_h2d_bytes=0,base_checked_words=0;
+    double base_cpu_seconds=0,base_build_seconds=0;
     unsigned long long scalar_h2d_avoided=0,base_d2h_bytes=0;
 } g_giant_seed;
 static const bool g_gfinv_batch = [] {
@@ -4340,6 +4345,8 @@ struct LadderCtx {
     unsigned long long ninv = 0;
     size_t nw = 0;
 };
+
+#include "stage2_giant_base_host.cuh"
 
 /* (X_i, Z_i) = [js[i]]Q on the device, written back in the NORMAL domain */
 static void ladder_points(const LadderCtx &C, const std::vector<unsigned long long> &js,
@@ -8930,20 +8937,45 @@ struct S3Workspace {
     bool need_giant_base(unsigned long long d,mpz_srcptr modulus)
     {
         if(giant_base_d==d)return giant_base_unit;
-        const size_t nw=C->nw;
+        const double begin=now_s();const size_t nw=C->nw;
         if(!giant_base){CK(cudaMalloc(&giant_base,16*nw));bytes+=16*nw;}
-        need_pts(1);
-        CK(cudaMemcpy(djs,&d,8,cudaMemcpyHostToDevice));
-        S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,1,dn,C->ninv,dqx,dqz,da24,dmone,
-                     djs,giant_base,giant_base+nw,false);
-        CK(cudaGetLastError());++ladder_calls;++ladder_points_total;
-        std::vector<unsigned long long> z(nw);
-        CK(cudaMemcpy(z.data(),giant_base+nw,8*nw,cudaMemcpyDeviceToHost));
-        mpz_t value,gcd;mpz_inits(value,gcd,nullptr);
-        words_to_mpz(value,z.data(),nw);mpz_gcd(gcd,value,modulus);
-        giant_base_unit=mpz_cmp_ui(gcd,1)==0;giant_base_d=d;
-        mpz_clears(value,gcd,nullptr);
-        ++g_giant_seed.base_builds;g_giant_seed.base_d2h_bytes+=8*nw;
+        if(g_giant_base_cpu) {
+            std::vector<unsigned long long> base;
+            const double cpu_begin=now_s();
+            giant_base_unit=stage2_giant_base_gmp(nw,d,modulus,C->hqx.data(),C->hqz.data(),
+                                                 C->ha24.data(),C->hmone.data(),base);
+            g_giant_seed.base_cpu_seconds+=now_s()-cpu_begin;
+            ++g_giant_seed.base_cpu_builds;
+            CK(cudaMemcpy(giant_base,base.data(),16*nw,cudaMemcpyHostToDevice));
+            g_giant_seed.base_h2d_bytes+=16*nw;
+            if(g_giant_seed_check) {
+                // Exact Montgomery words, also for nonunit/infinity bases.
+                need_pts(1);CK(cudaMemcpy(djs,&d,8,cudaMemcpyHostToDevice));
+                S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,1,dn,C->ninv,dqx,dqz,da24,dmone,
+                             djs,dx,dz,false);
+                CK(cudaGetLastError());++ladder_calls;++ladder_points_total;
+                std::vector<unsigned long long> checked(2*nw);
+                CK(cudaMemcpy(checked.data(),dx,8*nw,cudaMemcpyDeviceToHost));
+                CK(cudaMemcpy(checked.data()+nw,dz,8*nw,cudaMemcpyDeviceToHost));
+                if(checked!=base) {
+                    std::fprintf(stderr,"FATAL: CPU giant base GMP/GPU image mismatch\n");std::exit(3);
+                }
+                g_giant_seed.base_checked_words+=2*nw;
+            }
+        } else {
+            need_pts(1);CK(cudaMemcpy(djs,&d,8,cudaMemcpyHostToDevice));
+            S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,1,dn,C->ninv,dqx,dqz,da24,dmone,
+                         djs,giant_base,giant_base+nw,false);
+            CK(cudaGetLastError());++ladder_calls;++ladder_points_total;
+            std::vector<unsigned long long> z(nw);
+            CK(cudaMemcpy(z.data(),giant_base+nw,8*nw,cudaMemcpyDeviceToHost));
+            mpz_t value,gcd;mpz_inits(value,gcd,nullptr);
+            words_to_mpz(value,z.data(),nw);mpz_gcd(gcd,value,modulus);
+            giant_base_unit=mpz_cmp_ui(gcd,1)==0;mpz_clears(value,gcd,nullptr);
+            ++g_giant_seed.base_gpu_builds;g_giant_seed.base_d2h_bytes+=8*nw;
+        }
+        giant_base_d=d;++g_giant_seed.base_builds;
+        g_giant_seed.base_build_seconds+=now_s()-begin;
         if(!giant_base_unit)++g_giant_seed.base_nonunits;
         return giant_base_unit; // Preserve the original factor path for nonunits/infinity.
     }
@@ -11646,6 +11678,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     (int)g_giant_seed_pair,g_giant_seed.base_builds,g_giant_seed.base_nonunits,
                     g_giant_seed.paired_chunks,g_giant_seed.paired_ladders,
                     g_giant_seed.scalar_h2d_avoided,g_giant_seed.base_d2h_bytes);
+        std::printf("real_giant_base: cpu_requested=%d cpu_builds=%llu gpu_builds=%llu h2d_bytes=%llu checked_words=%llu cpu_seconds=%.6f build_seconds=%.6f\n",
+                    (int)g_giant_base_cpu,g_giant_seed.base_cpu_builds,g_giant_seed.base_gpu_builds,
+                    g_giant_seed.base_h2d_bytes,g_giant_seed.base_checked_words,
+                    g_giant_seed.base_cpu_seconds,g_giant_seed.base_build_seconds);
         std::printf("real_giant_chain: chunks=%llu seed_points=%llu chunks_per_ladder=%llu\n",
                     BR.giant_chain_chunks, BR.giant_seed_points,
                     BR.giant_chain_chunks ? 0ull : 1ull);

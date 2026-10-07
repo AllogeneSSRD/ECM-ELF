@@ -535,6 +535,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",profile.chain_min,profile.chain_min);
     require("NTT_GIANT_CHAIN_SMALL_BLOCK",0,0); // Not covered by current v2 cost profiles.
     require("NTT_GIANT_SEED_PAIR",0,0); // Paired/rebased seeds require new measured costs.
+    require("NTT_GIANT_BASE_CPU",0,0);
     require("NTT_LADDER_CAP",8192,8192);
     require("CUDA_LAUNCH_BLOCKING",0,0);
     require("NTT_S4_SAMPLE",96,96);require("NTT_S4_CHECK_EVERY",8,8);

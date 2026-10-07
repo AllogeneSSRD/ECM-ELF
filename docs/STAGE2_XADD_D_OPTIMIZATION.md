@@ -183,11 +183,11 @@ P2收尾时cooperative仍缺省0，自动D使用旧NTT权重；手动开启coope
 
 原实现为每段独立求 `[iD]Q`、`[(i+1)D]Q`，还为每个坐标 chunk 求一次 `[D]Q`。新候选先在 GPU 缓存 `H=[D]Q`，再在 H 上执行标量 i 的 ladder。其末端本来同时持有 `[i]H` 与 `[i+1]H`，保留两者即可提供一段的两个起点；每段不再执行两次 ladder，标量也不再带 D 因子。
 
-- [双输出 kernel](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1009)；[有界 launch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1047)仍按 ladder cap 分批，维持 watchdog 边界。
-- [曲线私有 base 生命周期](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8930)：按 workspace/Q/D 缓存，每条曲线只构建一次。D 改变时重新构建，workspace 析构释放。无跨 sigma 共享。
+- [双输出 kernel](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1014)；[有界 launch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1052)仍按 ladder cap 分批，维持 watchdog 边界。
+- [曲线私有 base 生命周期](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8937)：按 workspace/Q/D 缓存，每条曲线只构建一次。D 改变时重新构建，workspace 析构释放。无跨 sigma 共享。
 - CPU 读取 H 的 Z 并计算 gcd；不可逆或 infinity 时，整个 seed chunk 回退原算法，不在新 base 上继续放大非单位尺度。真实 `N=103×65537`、sigma26/B1=2 的 lcm 保存点，CPU 已证明 gcd(Z_H,N)=103；实际候选回退并保持原因子103。
-- [交接](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9157)保持原 `2B+1` 个 Montgomery `(X,Z)` seed 的交错布局、末尾差分点、单点尾段以及后续 chain/段积/G树接口。代表元的尺度会改变，跨算法不能要求叶 hash 相等；同算法重复必须相等。
-- `NTT_GIANT_SEED_PAIR=1` 默认关闭，并要求设备 seed 路径。旧 D profile和 native Auto B2 配置明确拒绝复用，见[设备模型范围](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10918)、[原生配置门禁](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:537)。本阶段没有发布新 cprof。
+- [交接](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9189)保持原 `2B+1` 个 Montgomery `(X,Z)` seed 的交错布局、末尾差分点、单点尾段以及后续 chain/段积/G树接口。代表元的尺度会改变，跨算法不能要求叶 hash 相等；同算法重复必须相等。
+- `NTT_GIANT_SEED_PAIR=1` 默认关闭，并要求设备 seed 路径。旧 D profile和 native Auto B2 配置明确拒绝复用，见[设备模型范围](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10950)、[原生配置门禁](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:537)。本阶段没有发布新 cprof。
 
 ### 7.2 计算、数据与容量公式
 
@@ -262,7 +262,7 @@ C8 的 full 均值减少：2203位分别6.44%/15.45%，4423位6.31%/17.66%，819
 
 ### 7.6 收尾与下一阶段
 
-[最终审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/final_audit.json)重新检查完整ABBA/BAAB计划、原始log/result SHA、每条实际输入和检查、全部计时重解析、采集器初版/修正版身份、两类profiler报告、25项编译依赖。当前源文件raw bytes与冻结编译来源完全一致；原生产893不变。证据打包在ignored `build_cuda_cmake/_stage2_seed_pair_20261007/evidence.zip`，同目录 `evidence_manifest.json` 记录逐文件与压缩包SHA；不加入用户已排除的data目录。
+[最终审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/final_audit.json)重新检查完整ABBA/BAAB计划、原始log/result SHA、每条实际输入和检查、全部计时重解析、采集器初版/修正版身份、两类profiler报告、25项编译依赖。该配对seed阶段收尾于ca94c13时，源文件raw bytes与冻结编译来源完全一致；原生产893不变。证据打包在ignored `build_cuda_cmake/_stage2_seed_pair_20261007/evidence.zip`，同目录 `evidence_manifest.json` 记录逐文件与压缩包SHA；不加入用户已排除的data目录。
 
 优先项：
 
@@ -270,3 +270,69 @@ C8 的 full 均值减少：2203位分别6.44%/15.45%，4423位6.31%/17.66%，819
 2. **按实际点数/位宽校准C和尾段分派**。配对减少seed代价，旧C8/64拐点失效；覆盖完整块、短尾、退化base后才决定默认策略。
 3. **准备/等待及NTT热shape**。G树/fold/下降仍合计约66.6%的大界full；绝对事件间隙未消失，须区分主机准备、同步等待和kernel local/NTT成本，再考虑批处理或多曲线重叠，先约束RAM/VRAM总预算。
 4. **生产16384位、独立精简cu、日志粒度**。逐项处理入口/几何、256-limb分派、除数表和非模板fold数组，使用有效宽位数保存点验收。稳定算法之后重新标定Auto B2成本；当前无新cprof，seed_pair仍默认0，未发布新的生产二进制。
+
+## 8. 单点 `[D]Q` 的CPU GMP预计算（2026-10-07）
+
+### 8.1 算法、作用范围与成本
+
+§7中的配对seed减少了重复ladder，但在GPU以单线程生成一次base H仍占较大固定延迟。本轮在配对算法内增加 `NTT_GIANT_BASE_CPU=1`，只把这一点交给CPU GMP。配对seed、chain、坐标、段积和全部NTT仍由原GPU路径执行；同时要求 `NTT_GIANT_SEED_PAIR=1`。两个开关均默认0，原生产893未替换。
+
+[CPU helper](D:/code/MPA-OpenCl/tools/bench/stage2_giant_base_host.cuh:1)从曲线已有的Montgomery images解码Q/a24，以普通域GMP求 `[D]Q`，再编码回相同radix。使用原八乘xADD公式，其尺度与xADD6严格相同；不做点的仿射归一化。所有点坐标输入读完后才写输出，保持ladder别名安全。唯一求逆是已知为单位的Montgomery radix，不求点Z的逆。
+
+记 W=ceil(Nbits/64)，L=floor(log2D)，D≥6。本helper每次base用 **10+13L次GMP乘法、11+12L次模约简**，外加一次radix inverse、一次gcd及导入/导出。五次乘法/约简来自三项解码和两项编码；初始化一次xDBL为5乘，后续每bit为xADD8+xDBL共13乘。GPU原base采用xADD6，为5+11L次点模乘。CPU算术次数较多，实际时间取决于GMP的大整数算法和单线程GPU的依赖/访存，不能仅按次数或GPU峰值估算周期。
+
+[base生命周期与交接](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8937)仍按每条曲线/Q/D缓存；Z的gcd非1时保留完整原seed回退。诊断 `NTT_GIANT_SEED_CHECK=1` 额外运行GPU base并逐字比较 **2W个Montgomery words**，涵盖单位和非单位base；这些额外kernel/读回只进入独立门禁，不进入clean计时。`real_giant_base`分别报告CPU/GPU构建次数、CPU算术时间、含传输/分配的构建墙钟、上传量和检查覆盖。
+
+- 设备缓存两侧仍是 **16W bytes**，没有减少NTT或主体坐标显存。helper输出与转换向量合计24W bytes；GMP整数与算法内部scratch另计，不能把向量payload当作进程RAM峰值。
+- 普通CPU路径一次上传 **16W bytes**，不再上传8B的D或读取8W bytes的Z。该base接口的双向总payload实际多 **8W−8 bytes**，但少一个GPU kernel和一次同步读回。它是固定延迟优化，不是主体PCIe传输量优化。
+- 与GPU base相同的projective images使后续叶指纹应逐字一致，本轮明确要求跨CPU/GPU base也保持相同leaf，而不仅是proper factor集合。
+- 新binary需重新标定成本，native Auto B2对CPU开关也明确拒绝旧profile。没有导出新cprof；16384位入口/设备分派仍待下一阶段。
+
+### 8.2 三位宽同二进制计时
+
+独立native SHA256 `48b322a885c09afbc129958048545dd0f20bba8773dd34998aae4a21254abd11`，PTX3/outer0/sm89/CUDA13.3；CUDA编译469.8秒，[编译与26项raw依赖](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/native/build_manifest.json)冻结。提前固定[实验计划](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/experiment_plan.json)，两侧都开启pair，仅切CPU/GPU base。
+
+[矩阵](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/matrix/measurements.json)为GPU1、三精确Mersenne位宽/B1=1000/lcm/sigma26、D30030、I4096/24977、C8/64、owner0/arena4096；**强制CHAIN_MIN=0**，每case ABBA+BAAB，各4条/模式，共96条正式计时、2预热、12独立seed/段积/全点门禁。全部必需算术、实际输入、base/cache覆盖和跨base精确leaf检查通过。默认32768点阈值以下仍走直接ladder，不能只设pair/CPU开关就套用这里的短输入结果；最终默认链长/阈值策略尚须单独验收。
+
+全部正式样本的base构建中位数：2203位 **9.696→0.309ms**，4423位 **35.708→0.7915ms**，8191位 **117.4415→1.9445ms**。其中CPU算术分别约0.272/0.737/1.8775ms；独立Python探针的19.39ms不是native GMP成本。新路径的固定构建时间已减少约96.8%..98.3%，其收益只计一次/曲线。
+
+完整Stage2的有限样本结果：
+
+- M8191/C8：4096点full **1.83425825→1.7272515秒（−5.83379%）**；24977点 **2.6082225→2.4943505秒（−4.36589%）**。giant分别少23.24%/17.25%。
+- M8191/C64：full分别少4.07%/4.39%；M2203四种shape少2.73%..4.87%。
+- M4423三种shape full少0.73%..4.89%，但24977点/C64 **反而慢1.25%**；该case giant仍少17.74%。全样本保留，说明NTT/准备/等待波动可盖过约35ms的固定节省。
+
+以上无置信区间，不宣称所有输入或生产B1的总时长稳定改善；不把本轮比例与§7的比例相加。
+
+### 8.3 实际门禁与8192位泛型边界
+
+[原生门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/native_gate_r1/summary.json) **30/0**：每个配对CPU base都额外逐字对照GPU base；有效CPU lcm Stage1保存点、短尾、原有known-factor和nonunit base回退全部通过，所有case的raw proper factor集合也与原路径相同。
+
+新增 `N=2^8192−143` 满limb泛型输入，CPU独立证明65个giant Z均为单位，GPU完整seed/段积/仿射比较通过。另保留 `N=2^8192−17` 的非单位giant案例：Stage1和H本身为单位，但CPU在 `[43D]Q` 得gcd1019，实际两侧也返回1019及另外proper factors。
+
+首次把后一案例用于全仿射比较，在原mode0尚未执行CPU base时因21个非单位点失败。不能把这类点当成可逆仿射坐标；[独立诊断](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/generic_boundary_diagnosis.json)保留原错误/输入/log SHA。该案例改按known-factor/nonunit检查并保留，另加入单位案例做全点比较；没有修改算法、删计时或用单位案例替换掉非单位覆盖。此30项不构成16384位验收。
+
+### 8.4 大界无稳定总时长收益；管理员Systems确认计算移除
+
+[大B2对照](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/large_b2/measurements.json)保持M4423/B1=1000/lcm/sigma26、B2=2011326186870/D1381380/I1456028/C64、owner640/arena6300、同48b二进制，2预热、8正式ABBA+BAAB、1完整门禁：
+
+- base构建中位 **51.9165→1.068ms**，giant均值 **2.73775→2.689秒（−1.78066%）**。
+- full均值 **36.5268005→36.51862775秒**，差仅8.17ms/0.02237%；原范围36.460569..36.613161秒，CPU36.474773..36.600646秒，**未建立稳定总墙钟收益**。不能把base约50ms的节省直接加到整曲线预测或把较小输入的5.8%推广到大界。
+- 六chunk只构建一次CPU base，全部1456028个仿射点零失配；额外GPU base逐字140words、seed6371120words和91002段积检查通过。NTT模块full_peak两侧均3341481200B、legacy_mallocs=0，跨CPU/GPU的精确leaf一致。
+
+管理员[Systems GPU base](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/nsys_gpu/summary.json)/[CPU base](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/nsys_cpu/summary.json)使用M8191/D30030/I4096/C8/owner0/arena4096。两侧均pair1，只切base CPU0/1；进程exit0，曲线算术/输入和Q/leaf身份核验通过：
+
+- 原有base grid1 ladder **0.116356秒消失**；baby grid45 ladder两侧0.450814/0.450808秒，配对seed0.285158/0.283606秒、其后段积/chain基本不变。资源仍REG72的配对kernel；本轮不改GPU算术kernel。
+- 自身GPU事件window **1.871349→1.752383秒**；无本进程GPU事件绝对间隙 **0.391826→0.390781秒**，仍基本不动。百分比20.94→22.30%因计算减少而上升，不能解释为GPU占用回归或整卡空闲结论。
+- [生命周期审计GPU](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/nsys_gpu/audit.json)/[CPU](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/nsys_cpu/audit.json) tracked device峰值同为260177136B、末尾live0；pinned host峰值同为21223944B。
+- 实际H2D增 **2040B**，D2H少 **1024B/一次copy**，D2D不变，净增1016B正好符合8W−8公式。不能称主体传输削减。本轮没有重新采集NCU；§7的GPU local/依赖证据保留，不能根据Systems local=0推翻它。
+
+[默认后端回归](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/default_point_gate/summary.json) **18/0**，原实际save模型范围指纹保持。全阶段为104条正式计时、4预热、13独立全点门禁、30项原生门禁、18项默认门禁、2条管理员profile，分别记账。
+
+### 8.5 收尾判断与下一阶段
+
+[最终审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_cpu_base_20261007/final_audit.json)核对26项当前raw编译依赖、全计划/样本/log/result SHA及计时重解析、CPU/GPU base覆盖、跨base精确leaf、实际profile kernel数量和传输差额；所有门禁通过。证据和采集器快照在ignored `build_cuda_cmake/_stage2_cpu_base_20261007/evidence.zip`，逐文件/压缩包SHA见同目录 `evidence_manifest.json`。原始非单位检查失败也保留，没有修改算法或删除样本来通过门禁。开发standalone构建的header增量依赖同步加入。
+
+CPU base作为可选延迟优化保留，**默认仍关闭，生产893未替换**。大界剩余收益重点仍为G树/fold/下降和准备等待；本轮不改变旧Auto B2精度门限或发布成本文件。
+
+下一阶段先把生产的 **16384位支持、独立精简cu与日志控制** 做成实际可验收结果，同时对比原默认、配对CPU seed及C8短尾策略，选择最终保留的算法。8192位泛型通过不能替代256-limb设备分派/归约/数组/几何和宽位数存档验收；8192-point ladder cap独立保留。此后再针对NTT热shape采集管理员NCU，避免继续把单个固定延迟的局部收益当作大界主要提升来源。

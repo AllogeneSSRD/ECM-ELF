@@ -41,6 +41,7 @@ def main():
     p.add_argument('--owner-mb', type=int, default=0)
     p.add_argument('--arena-mb', type=int, default=4096)
     p.add_argument('--repeats', type=int, default=2)
+    p.add_argument('--cpu-base-ab', action='store_true', help='Compare GPU/CPU base with paired seeds enabled on both sides')
     p.add_argument('--resume-gates', action='store_true', help='Verify a finished timing matrix and continue interrupted gates')
     a = p.parse_args()
     if a.points is None:
@@ -123,8 +124,10 @@ def main():
                 cases.append(dict(bits=b, points=b2 // a.d + 2, block=block, B2=b2))
     if not cases:
         p.error('Select at least one point count, B2 or chunk tail')
-    data = dict(schema=1, kind='giant_seed_pair_abba', identity=identity, device=device,
-        controls=dict(D=a.d, arena_mb=a.arena_mb, owner_mb=a.owner_mb, sequence=['original', 'paired', 'paired', 'original'],
+    modes = ('gpu_base', 'cpu_base') if a.cpu_base_ab else ('original', 'paired')
+    data = dict(schema=1, kind='giant_cpu_base_abba' if a.cpu_base_ab else 'giant_seed_pair_abba', identity=identity, device=device,
+        controls=dict(D=a.d, arena_mb=a.arena_mb, owner_mb=a.owner_mb, sequence=[modes[0], modes[1], modes[1], modes[0]],
+                      cpu_base_ab=a.cpu_base_ab,
                       repeats=a.repeats, base_nonunit_fallback=True),
         cases=cases, warmups=[], runs=[], gates=[])
     path = out / 'measurements.json'
@@ -145,7 +148,7 @@ def main():
             raise ValueError('Retain the exact original collector before correcting it')
         for case in cases:
             timed = [r for r in previous['runs'] if r['case'] == case]
-            if len(timed) != 4 * a.repeats or sorted(r['mode'] for r in timed) != ['original'] * (2*a.repeats) + ['paired'] * (2*a.repeats):
+            if len(timed) != 4 * a.repeats or sorted(r['mode'] for r in timed) != sorted([modes[0]] * (2*a.repeats) + [modes[1]] * (2*a.repeats)):
                 raise ValueError('Timing matrix incomplete; refusing to hide missing trials')
         for row in previous['runs'] + previous['warmups'] + previous['gates']:
             if sha(row['log']) != row['log_sha256'] or sha(out / (row['name'] + '.jsonl')) != row['result_sha256']:
@@ -163,7 +166,7 @@ def main():
     ini = out / 'manual.ini'
     ini.write_text('[gpu]\ndevice=1\n', encoding='utf-8')
     persist()
-    reference, factor_sets = {}, {}
+    reference, factor_sets, common_leaf = {}, {}, {}
 
     def run(case, mode, index, category='runs'):
         verify()
@@ -173,7 +176,9 @@ def main():
         log, result = out / (name + '.log'), out / (name + '.jsonl')
         cmd = [str(exe), '--ini', str(ini), '--save', str(saves[b]), '--device', '1', '--b2', str(b2),
                '--d', str(a.d), '--arena-mb', str(a.arena_mb), '--factor-only', '--log', str(log), '--results', str(result)]
-        variant = dict(NTT_GIANT_SEED_PAIR='1' if mode == 'paired' else '0', NTT_GIANT_CHAIN_BLOCK=str(block),
+        pair_enabled, cpu_enabled = mode != 'original', mode == 'cpu_base'
+        variant = dict(NTT_GIANT_SEED_PAIR='1' if pair_enabled else '0',
+            NTT_GIANT_BASE_CPU='1' if cpu_enabled else '0', NTT_GIANT_CHAIN_BLOCK=str(block),
             NTT_GIANT_CHAIN_CHECK='1' if gate else '0', NTT_GIANT_SEED_CHECK='1' if gate else '0',
             NTT_GFINV_SEG_CHECK='1' if gate else '0')
         start = time.perf_counter()
@@ -202,12 +207,18 @@ def main():
         seed, pair = fields(text, 'real_giant_seed'), fields(text, 'real_giant_seed_pair')
         if int(seed['chunks']) != len(sizes) or int(seed['points']) != 2 * expected_ladders + len(sizes):
             raise ValueError('Actual seed schedule differs')
-        if mode == 'paired':
+        base = fields(text, 'real_giant_base') if 'real_giant_base:' in text else {}
+        if pair_enabled:
             if (int(pair['base_builds']) != 1 or int(pair['base_nonunits']) or
                     int(pair['chunks']) != len(sizes) or int(pair['paired_ladders']) != expected_ladders or
                     int(pair['scalar_h2d_avoided']) != int(seed['points']) * 8 or
-                    int(pair['base_d2h_bytes']) != 8 * ((b + 63) // 64)):
+                    int(pair['base_d2h_bytes']) != (0 if cpu_enabled else 8 * ((b + 63) // 64))):
                 raise ValueError('Paired path or cache not used as requested')
+            if a.cpu_base_ab and (int(base['cpu_builds']) != int(cpu_enabled) or
+                    int(base['gpu_builds']) != int(not cpu_enabled) or
+                    int(base['h2d_bytes']) != (16*((b+63)//64) if cpu_enabled else 0) or
+                    int(base['checked_words']) != (2*((b+63)//64) if cpu_enabled and gate else 0)):
+                raise ValueError('CPU/GPU base or exact word comparison not used as requested')
         elif any(int(pair[k]) for k in ('base_builds', 'chunks', 'paired_ladders', 'scalar_h2d_avoided', 'base_d2h_bytes')):
             raise ValueError('Disabled paired path performed work')
         affine = [dict(re.findall(r'(\w+)=([^\s]+)', s)) for s in re.findall(r'giant_chain_check: (.*)', text)]
@@ -223,12 +234,15 @@ def main():
             raise ValueError('Same-policy output changed')
         reference[key] = (leaf, r['factors'])
         common = (b, b2, block)
+        if a.cpu_base_ab and common in common_leaf and common_leaf[common] != leaf:
+            raise ValueError('CPU/GPU base changed exact projective representative')
+        common_leaf[common] = leaf
         if common in factor_sets and factor_sets[common] != r['factors']:
             raise ValueError('Proper factor set changed')
         factor_sets[common] = r['factors']
         verify()
         record = dict(name=name, case=case, mode=mode, category=category, command=cmd, process_seconds=elapsed,
-            phases=None if gate else parse(text), seed=seed, pair=pair, affine=affine, leaf_hash=leaf, factors=r['factors'],
+            phases=None if gate else parse(text), seed=seed, pair=pair, base=base, affine=affine, leaf_hash=leaf, factors=r['factors'],
             log=str(log), log_sha256=sha(log), result_sha256=sha(result),
             ntt=fields(text, 'ntt_workspace_stats'), multiply=fields(text, 's4_multiply_stats'))
         data[category].append(record)
@@ -243,17 +257,18 @@ def main():
             case = row['case']
             reference[(case['bits'], case['B2'], case['block'], row['mode'])] = (row['leaf_hash'], row['factors'])
             factor_sets[(case['bits'], case['B2'], case['block'])] = row['factors']
+            common_leaf[(case['bits'], case['B2'], case['block'])] = row['leaf_hash']
     else:
-        for mode in ('original', 'paired'):
+        for mode in modes:
             run(cases[0], mode, 0, 'warmups')
         for case in cases:
             for rep in range(a.repeats):
-                sequence = data['controls']['sequence'] if rep % 2 == 0 else ['paired', 'original', 'original', 'paired']
+                sequence = data['controls']['sequence'] if rep % 2 == 0 else [modes[1], modes[0], modes[0], modes[1]]
                 for i, mode in enumerate(sequence):
                     run(case, mode, rep * 4 + i)
     for case in cases:
         if not any(r['case'] == case for r in data['gates']):
-            run(case, 'paired', 0, 'gates')
+            run(case, modes[1], 0, 'gates')
     comparisons = []
     for case in cases:
         rows = [r for r in data['runs'] if r['case'] == case]
@@ -261,8 +276,8 @@ def main():
                             median=statistics.median(r['phases'][k] for r in rows if r['mode'] == m),
                             minimum=min(r['phases'][k] for r in rows if r['mode'] == m),
                             maximum=max(r['phases'][k] for r in rows if r['mode'] == m))
-                     for k in ('full', 'giant')} for m in ('original', 'paired')}
-        gains = {k: 100 * (1 - stats['paired'][k]['mean'] / stats['original'][k]['mean']) for k in ('full', 'giant')}
+                     for k in ('full', 'giant')} for m in modes}
+        gains = {k: 100 * (1 - stats[modes[1]][k]['mean'] / stats[modes[0]][k]['mean']) for k in ('full', 'giant')}
         comparisons.append(dict(case=case, stats=stats, mean_reduction_percent=gains))
     data.update(comparisons=comparisons, complete=True)
     persist()

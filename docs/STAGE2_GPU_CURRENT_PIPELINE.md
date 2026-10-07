@@ -1993,3 +1993,7 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 默认关闭候选先缓存H=[D]Q，每段一次ladder同时得到[i]H与[i+1]H，减少重复ladder并去掉标量D因子；base Z不可逆时回原路径。GPU1三位宽96条正式计时、12条seed/segment/affine门禁及26项原生门禁通过；M8191/C8的4096/24977点full少17.41%/20.90%。完整块＋4096尾段在C64对照少12.20%，不等于最终短尾分派策略已完成。原生产893不变，Auto B2旧成本拒绝复用。代码、计算量/数据/容量公式、全部样本与收尾状态集中维护在[点算术报告§7](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:178)；16384位/独立生产cu/日志粒度要求见[生产入口当前状态](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md:5)。
 
 收尾：M4423/B2=2011326186870/D1381380/C64/owner640/arena6300同binary ABBA+BAAB，full38.910573→36.717601秒（−5.64%），giant4.921→2.7455秒（−44.21%），完整1456028个giant仿射点零失配。另有默认点后端18/0门禁。管理员Systems显示seed计算减少而绝对无本进程GPU事件间隙约0.42秒仍在；NCU捕获真实seed kernel，local sectors约少84.5%但long scoreboard仍突出。下一步优先单点H的CPU GMP计算、C/尾段策略以及G树/fold/下降的准备和NTT成本；生产16384位等要求尚未完成。全部证据和身份审计见上述报告§7.4–7.6。
+
+## 68. 单点base的CPU GMP路径（2026-10-07）
+
+默认关闭CPU base在pair算法内保持相同Montgomery代表元，并额外诊断逐字对照GPU。104条正式计时、13独立全点门禁、30项原生（含满8192位泛型/非单位）及18项默认回归通过。M8191短输入在强制chain下full再少约4.1%..5.8%；大界base52→1.1ms、giant少49ms，但full36.5268→36.5186秒，未建立稳定收益。管理员Systems确认base kernel移除，约0.39秒绝对准备间隙仍在，显式设备峰值不变；传输净多1016B，非主体传输优化。原生产893和默认阈值保持，无新cprof。下一阶段优先16384位/独立生产cu/日志控制及最终链长策略；全部公式/identity/原始样本/失败解释见[点算术报告§8](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:274)。

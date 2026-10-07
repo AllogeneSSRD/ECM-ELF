@@ -54,6 +54,7 @@ $goldPtx = 'tools/bench/ntt_goldilocks_ptx.cuh'
 $babyDevice = 'tools/bench/stage2_baby_device.cuh'
 $babyHost = 'tools/bench/stage2_baby_host.cuh'
 $pointMersenne = 'tools/bench/stage2_point_mersenne.cuh'
+$giantBaseHost = 'tools/bench/stage2_giant_base_host.cuh'
 $carryCheck = 'tools/bench/ntt_carry_partial.cuh'
 $inc  = '-I third_party/gmp-zen3/dist/include'
 $gmpLib = 'third_party/gmp-zen3/dist/lib'
@@ -71,7 +72,7 @@ Write-Host ("stage2_tree_gpu build: exe={0} arch={1}" -f $exe, $Arch)
 $needCompile = $true
 if (-not $Rebuild -and (Test-Path $obj) -and (Test-Path $exe)) {
     $objTime = (Get-Item $obj).LastWriteTime
-    if (-not (@($src,$dep,$coop,$dmodel,$geometry,$goldReduce,$goldPtx,$babyDevice,$babyHost,$pointMersenne,$carryCheck) | Where-Object { (Get-Item $_).LastWriteTime -ge $objTime })) {
+    if (-not (@($src,$dep,$coop,$dmodel,$geometry,$goldReduce,$goldPtx,$babyDevice,$babyHost,$pointMersenne,$giantBaseHost,$carryCheck) | Where-Object { (Get-Item $_).LastWriteTime -ge $objTime })) {
         $needCompile = $false
     }
 }

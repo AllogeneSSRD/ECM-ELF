@@ -28,6 +28,7 @@ def main():
     p.add_argument('--exe', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--factor-evidence', type=Path, required=True)
+    p.add_argument('--cpu-base', type=int, choices=(0, 1), default=0)
     a = p.parse_args()
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -63,6 +64,23 @@ def main():
     n = (1 << 128) + 1
     r = ref.stage1(26, 20, n)
     cases.append(dict(name='generic129', N=n, X=r['x'], sigma=26, B1=20, B2=13230, D=210, block=64, cpu_stage1=True))
+    if a.cpu_base:
+        n = (1 << 8192) - 17
+        r = ref.stage1(26, 20, n)
+        if r['gcd'] != 1:
+            raise ValueError('Full-width generic Stage1 fixture failed')
+        _, z = ref.ladder(43 * 210, r['x'], 1, r['a24'], n)
+        if math.gcd(z, n) != 1019:
+            raise ValueError('Full-width nonunit giant fixture changed')
+        cases.append(dict(name='generic8192_nonunit', N=n, X=r['x'], sigma=26, B1=20,
+                          B2=13230, D=210, block=64, cpu_stage1=True,
+                          known_factors=['1019'], expected_giant_nonunits=True))
+        n = (1 << 8192) - 143
+        r = ref.stage1(26, 20, n)
+        if r['gcd'] != 1 or any(math.gcd(ref.ladder(i * 210, r['x'], 1, r['a24'], n)[1], n) != 1 for i in range(1, 66)):
+            raise ValueError('Full-width unit giant fixture changed')
+        cases.append(dict(name='generic8192_unit', N=n, X=r['x'], sigma=26, B1=20,
+                          B2=13230, D=210, block=64, cpu_stage1=True))
     n = 103 * 65537
     r = ref.stage1(26, 2, n)
     hx, hz = ref.ladder(210, r['x'], 1, r['a24'], n)
@@ -83,7 +101,8 @@ def main():
         cases.append(dict(name='factor_' + str(old['index']), save=old['save'], save_sha256=old['save_sha256'],
             N=int(record['N_hex'], 16), sigma=record['sigma'], B1=record['B1'], B2=record['B2'], D=record['requested_D'],
             block=8, known_factors=old['expected_factors'], cpu_stage1=True))
-    data = dict(identity=identity, reference_sha256=sha(root / 'tools/stat/suyama_mont_ref.py'), cases=cases, runs=[])
+    data = dict(identity=identity, reference_sha256=sha(root / 'tools/stat/suyama_mont_ref.py'),
+                cpu_base=a.cpu_base, cases=cases, runs=[])
     dest = out / 'summary.json'
 
     def persist():
@@ -94,7 +113,7 @@ def main():
     env = {k: v for k, v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_NO_PROGRESS='1', NTT_D_MODEL='0', NTT_GIANT_CHAIN_MIN='0',
         NTT_GIANT_SEED_CHECK='1', NTT_GFINV_SEG_CHECK='1', NTT_FOLD_DEVICE_MAX_MB='0',
-        NTT_POINT_MERSENNE='1', CUDA_LAUNCH_BLOCKING='0')
+        NTT_POINT_MERSENNE='1', NTT_GIANT_BASE_CPU=str(a.cpu_base), CUDA_LAUNCH_BLOCKING='0')
     persist()
     for case in cases:
         results = []
@@ -122,6 +141,11 @@ def main():
             if not all(token in text for token in ('gmp_selftest_bad=0', 'gmp_check_bad=0', 'pending=0')):
                 raise ValueError('Missing arithmetic checks')
             seed, pair = fields(text, 'real_giant_seed'), fields(text, 'real_giant_seed_pair')
+            base = fields(text, 'real_giant_base') if 'real_giant_base:' in text else {}
+            if a.cpu_base and (int(base['cpu_builds']) != mode or int(base['gpu_builds']) or
+                    int(base['checked_words']) != (2*((case['N'].bit_length()+63)//64) if mode else 0) or
+                    int(pair['base_d2h_bytes'])):
+                raise ValueError('CPU base/exact GPU image comparison coverage incomplete')
             if int(seed['chunks']) == 0:
                 raise ValueError('Fixture bypassed actual seed path')
             if mode and case.get('expected_base_nonunit'):
@@ -133,6 +157,8 @@ def main():
                 affine = [dict(re.findall(r'(\w+)=([^\s]+)', row)) for row in re.findall(r'giant_chain_check: (.*)', text)]
                 if len(affine) != int(seed['chunks']) or any(int(row['mismatches']) for row in affine):
                     raise ValueError('Full affine comparison failed')
+            if case.get('expected_giant_nonunits') and int(fields(text, 'real_giant_degenerate')['points']) == 0:
+                raise ValueError('Expected nonunit giant path was not exercised')
             if int(seed['checked_words']) != 2 * ((case['N'].bit_length()+63)//64) * int(seed['points']):
                 raise ValueError('Seed comparison coverage incomplete')
             if seed['segments'] != seed['segment_checks']:
@@ -140,7 +166,7 @@ def main():
             for factor in case.get('known_factors', []) + ([str(case['expected_factor'])] if 'expected_factor' in case else []):
                 if not any(int(f) % int(factor) == 0 for f in r['factors']):
                     raise ValueError('Known factor no longer covered: ' + factor)
-            row = dict(name=name, mode=mode, command=cmd, result=r, seed=seed, pair=pair, log=str(log), log_sha256=sha(log))
+            row = dict(name=name, mode=mode, command=cmd, result=r, seed=seed, pair=pair, base=base, log=str(log), log_sha256=sha(log))
             data['runs'].append(row)
             results.append(r['factors'])
             verify()
