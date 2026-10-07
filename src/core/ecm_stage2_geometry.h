@@ -5,6 +5,8 @@
 // never a sum of simultaneous process allocations or a promise of residency.
 namespace ecm_stage2 {
 using Word = unsigned long long;
+constexpr int max_input_bits = 16384;
+constexpr int max_words = max_input_bits / 64;
 // Points per sequential chain thread; the CUDA block itself has 64 threads.
 // A disabled short policy preserves the base value, including large chunks.
 inline Word giant_chain_block(Word points, Word base, Word short_block, Word short_max) {
@@ -31,7 +33,7 @@ struct Geometry {
 // query(coefficients, bits, &length, &output_slots) is the actual NTT backend.
 template<class Query> bool geometry(Word p, int bits, Query query, Geometry &g) {
     g=Geometry{};
-    if (!p || p==std::numeric_limits<Word>::max() || bits<2 || bits>8192) return false;
+    if (!p || p==std::numeric_limits<Word>::max() || bits<2 || bits>max_input_bits) return false;
     Word nf=0, nt=0, of=0, ot=0, wf=0, wt=0, total=0;
     if (!query(p+1,bits,&nf,&of) || !query(p/2+1,bits,&nt,&ot) ||
         !multiply(nf,3,wf) || !add(wf,of,wf) ||

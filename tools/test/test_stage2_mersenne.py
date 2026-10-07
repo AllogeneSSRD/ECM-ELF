@@ -119,7 +119,7 @@ def independent_values(n, b1, b2, d, extra):
 run('primitive_all_widths', (1<<127)-1, NTT_S4_MERSENNE='1', NTT_S4_MERSENNE_TEST='1',
     NTT_S4_OUTPUT_WINDOW_TEST='1', NTT_S4_FLAT_TEST='1')
 fixture=(out/'primitive_all_widths.log').read_text(encoding='utf-8')
-assert re.search(r's4_mersenne_check: cases=720 words=\d+ folds=\d+ bad=0',fixture)
+assert re.search(r's4_mersenne_check: cases=912 words=\d+ folds=\d+ bad=0',fixture)
 assert re.search(r's4_output_window_check:.*canonical_cases=2 bad=0',fixture)
 rows.append(dict(case='complete_primitive_GMP',passed=True))
 for name,n,b1,b2,d,extra,independent in (

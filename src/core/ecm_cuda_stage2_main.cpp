@@ -10,6 +10,7 @@
 #include "ecm_stage2_fingerprint.h"
 #include "ecm_stage2_factorize.h"
 #include "ecm_stage2_cost_profile.h"
+#include "ecm_stage2_geometry.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -140,8 +141,8 @@ Record parse_record(std::string line) {
     Big n, x, z, chk, factor;
     std::string err;
     if (!ecm_parse_expression(fields["N"], n.z, &err)) throw std::runtime_error("N: " + err);
-    if (mpz_cmp_ui(n.z, 3) <= 0 || !mpz_odd_p(n.z) || mpz_sizeinbase(n.z, 2) > 8192)
-        throw std::runtime_error("N must be odd, >3 and at most 8192 bits");
+    if (mpz_cmp_ui(n.z, 3) <= 0 || !mpz_odd_p(n.z) || mpz_sizeinbase(n.z, 2) > ecm_stage2::max_input_bits)
+        throw std::runtime_error("N must be odd, >3 and at most 16384 bits");
     if (mpz_set_str(x.z, fields["X"].c_str(), 0) || mpz_sgn(x.z) < 0 || mpz_cmp(x.z, n.z) >= 0)
         throw std::runtime_error("X must be an integer in [0,N), decimal or 0x hex");
     if (fields.count("Z") && (mpz_set_str(z.z, fields["Z"].c_str(), 0) || mpz_cmp_ui(z.z, 1)))
@@ -409,7 +410,7 @@ QueueSelection queue_fields(std::string line) {
     q.task.raw_line = line;
     q.task.k = cols[idx]; q.task.b = cols[idx + 1]; q.task.c = cols[idx + 3];
     const uint64_t exponent = u64(cols[idx + 2], "worktodo exponent");
-    if (exponent > 8192) throw std::runtime_error("worktodo exponent exceeds supported input range");
+    if (exponent > ecm_stage2::max_input_bits) throw std::runtime_error("worktodo exponent exceeds supported input range");
     q.task.n = static_cast<unsigned long>(exponent);
     q.task.save_name = cols[idx + 4];
     if (q.task.save_name.empty()) throw std::runtime_error("worktodo save filename is empty");

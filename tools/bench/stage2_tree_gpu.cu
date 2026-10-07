@@ -919,7 +919,7 @@ __global__ void s2g_xadd_test_kernel(const unsigned long long *input,
     s2g_halfmod<NW>(out+2*nw,s,n,nw);
 }
 
-/* the word-count dispatch: six instantiations cover every N up to 8192 bits */
+/* the word-count dispatch: seven instantiations cover every N up to 16384 bits */
 #define S2G_DISPATCH(NWD, FN, ...)                                                      \
     do {                                                                                \
         const int _nwd = (NWD);                                                         \
@@ -929,9 +929,10 @@ __global__ void s2g_xadd_test_kernel(const unsigned long long *input,
         else if (_nwd <= 32) { FN<32>(__VA_ARGS__); }                                   \
         else if (_nwd <= 64) { FN<64>(__VA_ARGS__); }                                   \
         else if (_nwd <= 128) { FN<128>(__VA_ARGS__); }                                 \
+        else if (_nwd <= 256) { FN<256>(__VA_ARGS__); }                                 \
         else {                                                                          \
             std::fprintf(stderr, "%s: N has %d words (%d bits); the ladder supports up " \
-                                 "to 128 words (8192 bits)\n",                          \
+                                 "to 256 words (16384 bits)\n",                          \
                          NTT_PROBE_NAME, _nwd, _nwd * 64);                              \
             std::exit(2);                                                               \
         }                                                                               \
@@ -1997,7 +1998,7 @@ static void s4_dbad_resolve(S4Reduce &R, bool wait = false)
 static std::vector<unsigned long long> g_div_hns;
 static unsigned long long g_div_recip = 0;
 static int g_div_shift = 0, g_div_nw = 0;
-__device__ __constant__ unsigned long long g_div_dns[128];
+__device__ __constant__ unsigned long long g_div_dns[ecm_stage2::max_words];
 
 __host__ __device__ __forceinline__ void s2g_mul64(unsigned long long, unsigned long long,
                                                 unsigned long long &, unsigned long long &);
@@ -2111,13 +2112,14 @@ static const bool g_s4_mersenne=[] {
 }();
 
 /* Gate-only GPU primitive, independently checked against ordinary GMP remainders. */
+template <int NW>
 __global__ void s4_mersenne_fixture_kernel(const unsigned long long *input,int stride,
     const int *lengths,int cases,int nw,int bits,unsigned long long *out,int *counts)
 {
     const int k=blockIdx.x*blockDim.x+threadIdx.x;if(k>=cases)return;
-    unsigned long long t[260]={},u[128];
+    unsigned long long t[2*NW+4]={},u[NW];
     for(int i=0;i<lengths[k];++i)t[i]=input[(size_t)k*stride+i];
-    counts[k]=s4_mersenne_rem<128>(t,lengths[k],nw,bits,u);
+    counts[k]=s4_mersenne_rem<NW>(t,lengths[k],nw,bits,u);
     for(int i=0;i<nw;++i)out[(size_t)k*nw+i]=u[i];
 }
 
@@ -2125,7 +2127,7 @@ static void s4_mersenne_check()
 {
     mpz_t N,v,want,got;mpz_inits(N,v,want,got,nullptr);
     unsigned long long cases=0,words=0,bad=0,folds=0,seed=0x493caf523ull;
-    for(int bits : {2,3,31,63,64,65,127,128,129,255,256,4423,5261,8191,8192}) {
+    for(int bits : {2,3,31,63,64,65,127,128,129,255,256,4423,5261,8191,8192,8193,16381,16383,16384}) {
         const int nw=(bits+63)/64,stride=2*nw+4,ncase=48;
         mpz_set_ui(N,1);mpz_mul_2exp(N,N,bits);mpz_sub_ui(N,N,1);
         std::vector<unsigned long long> input(ncase*stride),expected(ncase*nw),gpu(expected.size());
@@ -2143,8 +2145,9 @@ static void s4_mersenne_check()
             }
             std::fill(t,t+stride,0ull);size_t len=0;mpz_export(t,&len,-1,8,0,0,v);lengths[k]=(int)len;
             mpz_mod(want,v,N);mpz_export(expected.data()+(size_t)k*nw,nullptr,-1,8,0,0,want);
-            unsigned long long scratch[260]={},u[128];std::copy(t,t+stride,scratch);
-            const int f=s4_mersenne_rem<128>(scratch,(int)len,nw,bits,u);
+            unsigned long long scratch[2*ecm_stage2::max_words+4]={},u[ecm_stage2::max_words];std::copy(t,t+stride,scratch);
+            const int f=nw<=128 ? s4_mersenne_rem<128>(scratch,(int)len,nw,bits,u)
+                : s4_mersenne_rem<256>(scratch,(int)len,nw,bits,u);
             mpz_import(got,nw,-1,8,0,0,u);if(mpz_cmp(want,got))++bad;
             folds+=f;
         }
@@ -2153,7 +2156,9 @@ static void s4_mersenne_check()
         CK(cudaMalloc(&dl,ncase*sizeof(int)));CK(cudaMalloc(&dc,ncase*sizeof(int)));
         CK(cudaMemcpy(di,input.data(),input.size()*8,cudaMemcpyHostToDevice));
         CK(cudaMemcpy(dl,lengths.data(),ncase*sizeof(int),cudaMemcpyHostToDevice));
-        s4_mersenne_fixture_kernel<<<1,64>>>(di,stride,dl,ncase,nw,bits,doo,dc);CK(cudaGetLastError());
+        if(nw<=128)s4_mersenne_fixture_kernel<128><<<1,64>>>(di,stride,dl,ncase,nw,bits,doo,dc);
+        else s4_mersenne_fixture_kernel<256><<<1,64>>>(di,stride,dl,ncase,nw,bits,doo,dc);
+        CK(cudaGetLastError());
         CK(cudaMemcpy(gpu.data(),doo,gpu.size()*8,cudaMemcpyDeviceToHost));
         CK(cudaMemcpy(counts.data(),dc,ncase*sizeof(int),cudaMemcpyDeviceToHost));
         CK(cudaFree(di));CK(cudaFree(doo));CK(cudaFree(dl));CK(cudaFree(dc));
@@ -2162,7 +2167,7 @@ static void s4_mersenne_check()
         cases+=ncase;words+=gpu.size();
     }
     mpz_clears(N,v,want,got,nullptr);
-    std::printf("s4_mersenne_check: cases=%llu words=%llu folds=%llu bad=%llu (CPU/GPU vs GMP, S=2..8192)\n",cases,words,folds,bad);
+    std::printf("s4_mersenne_check: cases=%llu words=%llu folds=%llu bad=%llu (CPU/GPU vs GMP, S=2..16384)\n",cases,words,folds,bad);
     if(bad){std::fprintf(stderr,"FATAL: Mersenne remainder GMP mismatch\n");std::exit(3);}
 }
 
@@ -2404,7 +2409,7 @@ __host__ __device__ __forceinline__ unsigned long long s2g_udiv_2by1(unsigned lo
    code; the 64-bit values cross the GMP boundary through mpz_import/mpz_export, so no assumption
    about the width of `unsigned long` is involved. */
 /* Test the SAME host/device long-division helper against GMP on full multiword remainders.
-   Synthetic moduli exercise shift=0/63, nw=1/128, saturated quotient estimates and the
+   Synthetic moduli exercise shift=0/63, nw=1/128/129/256, saturated quotient estimates and the
    add-back branch; those events are too rare for random product coefficients alone. */
 static void s4_div_check(const std::vector<unsigned long long> &actual)
 {
@@ -2413,8 +2418,8 @@ static void s4_div_check(const std::vector<unsigned long long> &actual)
     mpz_set_ui(radix, 1);
     mpz_mul_2exp(radix, radix, 64);
     unsigned long long cases = 0, bad = 0, repairs = 0, seed = 0x89abcdef01234567ull;
-    const int widths[] = {1, 2, 3, 8, 83, 128};
-    for (int fixture = 0; fixture < 19; ++fixture) {
+    const int widths[] = {1, 2, 3, 8, 83, 128, 129, 256};
+    for (int fixture = 0; fixture < 1+3*(int)(sizeof(widths)/sizeof(widths[0])); ++fixture) {
         const int nw = (fixture == 0) ? (int)actual.size() : widths[(fixture - 1) / 3];
         std::vector<unsigned long long> hn((size_t)nw), ns((size_t)nw);
         for (int i = 0; i < nw; ++i) {
@@ -2442,7 +2447,7 @@ static void s4_div_check(const std::vector<unsigned long long> &actual)
         unsigned long long recip = 0;
         mpz_export(&recip, nullptr, -1, 8, 0, 0, q);
         for (int c = 0; c < 32; ++c) {
-            unsigned long long t[260] = {}, out[128] = {};
+            unsigned long long t[2*ecm_stage2::max_words+4] = {}, out[ecm_stage2::max_words] = {};
             if (c < 3) { mpz_set(num, den); if (c == 0) mpz_sub_ui(num, num, 1);
                           if (c == 2) mpz_add_ui(num, num, 1); }
             else if (c == 3) {
@@ -2463,7 +2468,8 @@ static void s4_div_check(const std::vector<unsigned long long> &actual)
             std::memset(t, 0, sizeof(t));
             size_t limbs = 0;
             mpz_export(t, &limbs, -1, 8, 0, 0, num);
-            const int rc = s4_div_rem<128>(t, (int)limbs, ns.data(), nw, shift, recip, out);
+            const int rc = nw<=128 ? s4_div_rem<128>(t, (int)limbs, ns.data(), nw, shift, recip, out)
+                : s4_div_rem<256>(t, (int)limbs, ns.data(), nw, shift, recip, out);
             mpz_mod(want, num, den);
             mpz_import(got, (size_t)nw, -1, 8, 0, 0, out);
             ++cases;
@@ -2477,7 +2483,7 @@ static void s4_div_check(const std::vector<unsigned long long> &actual)
     }
     mpz_clears(den, num, want, got, norm, q, dtop, radix, nullptr);
     std::printf("s4_div_check: cases=%llu bad=%llu repairs=%llu (full remainder vs GMP, "
-                "widths=1..128 shifts=0..63)\n", cases, bad, repairs);
+                "widths=1..256 shifts=0..63)\n", cases, bad, repairs);
     if (bad || repairs == 0) {
         std::fprintf(stderr, "%s: FATAL: long division failed its GMP/borrow-repair fixtures\n",
                      NTT_PROBE_NAME);
@@ -2649,8 +2655,8 @@ static S4Reduce::Shape *s4_shape_init(S4Reduce &R, unsigned long long P,
     mpz_clears(Cmax, Rl, prod, nullptr);
     /* the device array is 2*NW+4 limbs with NW the dispatched template width: the digit->limb
        conversion must fit nlimb+1 of them and the elimination loop reaches L+nw+2 */
-    int nwmax = 128;
-    for (int v : {4, 8, 16, 32, 64, 128}) if (R.nw <= v) { nwmax = v; break; }
+    int nwmax = ecm_stage2::max_words;
+    for (int v : {4, 8, 16, 32, 64, 128, 256}) if (R.nw <= v) { nwmax = v; break; }
     const long long need = (S->nlimb + 1) > (L + R.nw + 2) ? (S->nlimb + 1) : (L + R.nw + 2);
     if (need > 2 * nwmax + 4) {
         std::fprintf(stderr, "%s: FATAL: the reduction needs %lld limbs but the %d-word "
@@ -5342,6 +5348,7 @@ __global__ void s5_check_linear_kernel(const unsigned long long *src, unsigned l
    s = 1.  The first version scaled it by the child index (`s * sa * W`), which made the second
    child of every node evaluate a NEIGHBOURING node's polynomial instead of its own parent's
    (section 44). */
+template <int NW>
 __global__ void s5_eval_linear_kernel(const unsigned long long *src, unsigned long long src_off,
                                       unsigned long long sa, int W,
                                       const unsigned long long *fA, const unsigned long long *foff,
@@ -5367,17 +5374,17 @@ __global__ void s5_eval_linear_kernel(const unsigned long long *src, unsigned lo
        multiplication by R^2 is the only conversion needed, and NO conversion at the end (the
        first version converted with `one = 1`, which is a multiplication by R^-1 applied to a
        value that was already plain). */
-    unsigned long long x[128], h[128], zero[128], r2[128];
+    unsigned long long x[NW], h[NW], zero[NW], r2[NW];
     for (int j = 0; j < nw; ++j) { zero[j] = 0ull; r2[j] = R2[j]; }
-    s2g_submod<128>(x, zero, fA + foff[child], n, nw);       /* x = -root = the baby point */
-    s2g_mont_mul<128>(x, x, r2, n, ninv, nw);                /* x -> x*R */
+    s2g_submod<NW>(x, zero, fA + foff[child], n, nw);       /* x = -root = the baby point */
+    s2g_mont_mul<NW>(x, x, r2, n, ninv, nw);                /* x -> x*R */
     bool started = false;
     for (unsigned long long i = sa; i-- > 0;) {
         if (!started) {
             for (int j = 0; j < nw; ++j) h[j] = c[i * (unsigned long long)W + j];
             started = true;
         } else {
-            s2g_mont_mul<128>(h, h, x, n, ninv, nw);         /* h = h*x, both plain */
+            s2g_mont_mul<NW>(h, h, x, n, ninv, nw);         /* h = h*x, both plain */
             const unsigned long long *a = c + i * (unsigned long long)W;
             unsigned long long carry = 0;
             for (int j = 0; j < nw; ++j) {                    /* h += a  (mod N, exact carry) */
@@ -5399,6 +5406,7 @@ __global__ void s5_eval_linear_kernel(const unsigned long long *src, unsigned lo
    subtraction anywhere in the kernel (section 44).  The domain is plain on both sides: the
    frontier rows come from the host or from the S4 reduction, and s5_mul_batch's output is the
    reduced plain product, so nothing here needs R at all. */
+template <int NW>
 __global__ void s5_sub_kernel(const unsigned long long *A, unsigned long long a_off, int la,
                               const unsigned long long *B, unsigned long long b_off, int lb,
                               int rows, const unsigned long long *n, unsigned long long ninv,
@@ -5408,11 +5416,11 @@ __global__ void s5_sub_kernel(const unsigned long long *A, unsigned long long a_
     if (gid >= (unsigned long long)rows * (unsigned long long)nw) return;
     const int i = (int)(gid / (unsigned long long)nw);
     (void)ninv;
-    unsigned long long r[128];
+    unsigned long long r[NW];
     if (i >= la) {
         for (int j = 0; j < nw; ++j) r[j] = 0ull;
     } else {
-        s2g_submod<128>(r, A + a_off + (size_t)i * nw, B + b_off + (size_t)(i % lb) * nw, n, nw);
+        s2g_submod<NW>(r, A + a_off + (size_t)i * nw, B + b_off + (size_t)(i % lb) * nw, n, nw);
     }
     for (int j = 0; j < nw; ++j) dst[(size_t)i * dstride + j] = r[j];
 }
@@ -5423,6 +5431,7 @@ __global__ void s5_sub_kernel(const unsigned long long *A, unsigned long long a_
    instead (the first version) makes the Newton step compute a different series: measured through
    `NTT_S5_DIVDUMP=1`, the inverse's constant term was right and its coefficient 1 was
    `2 - rb1` instead of `-rb1`, i.e. `s5_divstage: g=1 ... g0=1`. */
+template <int NW>
 __global__ void s5_two_minus_kernel(const unsigned long long *a, unsigned long long *out,
                                     unsigned long long total, const unsigned long long *n,
                                     unsigned long long ninv, int nw)
@@ -5430,10 +5439,10 @@ __global__ void s5_two_minus_kernel(const unsigned long long *a, unsigned long l
     const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
     if (gid >= total) return;
     (void)ninv;
-    unsigned long long lhs[128], r[128];
+    unsigned long long lhs[NW], r[NW];
     for (int j = 0; j < nw; ++j) lhs[j] = 0ull;
     if (gid == 0) lhs[0] = 2ull;                 /* only the constant coefficient carries the 2 */
-    s2g_submod<128>(r, lhs, a + gid * (unsigned long long)nw, n, nw);
+    s2g_submod<NW>(r, lhs, a + gid * (unsigned long long)nw, n, nw);
     for (int j = 0; j < nw; ++j) out[gid * (unsigned long long)nw + j] = r[j];
 }
 
@@ -5445,6 +5454,30 @@ __global__ void s5_two_minus_kernel(const unsigned long long *a, unsigned long l
    `ra` call -- the top k coefficients of a dividend with la > k of them -- was wrong, and it
    quietly fed the quotient chain the dividend's LOW coefficients instead of its high ones. */
 #define S5_GRID(n) ((unsigned int)(((n) + 255) / 256)), 256
+static void s5_launch_eval_linear(const unsigned long long *src,unsigned long long src_off,
+    unsigned long long sa,int W,const unsigned long long *fA,const unsigned long long *foff,
+    unsigned long long child,const unsigned long long *n,unsigned long long ninv,int nw,
+    const unsigned long long *R2,unsigned long long *dst,unsigned long long dstride)
+{
+    if(nw<=128)s5_eval_linear_kernel<128><<<1,256>>>(src,src_off,sa,W,fA,foff,child,n,ninv,nw,R2,dst,dstride);
+    else s5_eval_linear_kernel<256><<<1,256>>>(src,src_off,sa,W,fA,foff,child,n,ninv,nw,R2,dst,dstride);
+}
+static void s5_launch_sub(const unsigned long long *A,unsigned long long a_off,int la,
+    const unsigned long long *B,unsigned long long b_off,int lb,int rows,
+    const unsigned long long *n,unsigned long long ninv,int nw,unsigned long long *dst,
+    unsigned long long dstride)
+{
+    const unsigned blocks=(unsigned)(((unsigned long long)rows*nw+255)/256);
+    if(nw<=128)s5_sub_kernel<128><<<blocks,256>>>(A,a_off,la,B,b_off,lb,rows,n,ninv,nw,dst,dstride);
+    else s5_sub_kernel<256><<<blocks,256>>>(A,a_off,la,B,b_off,lb,rows,n,ninv,nw,dst,dstride);
+}
+static void s5_launch_two_minus(const unsigned long long *a,unsigned long long *out,
+    unsigned long long total,const unsigned long long *n,unsigned long long ninv,int nw)
+{
+    const unsigned blocks=(unsigned)((total+255)/256);
+    if(nw<=128)s5_two_minus_kernel<128><<<blocks,256>>>(a,out,total,n,ninv,nw);
+    else s5_two_minus_kernel<256><<<blocks,256>>>(a,out,total,n,ninv,nw);
+}
 __global__ void s5_rev_pack_kernel(unsigned long long *dst, const unsigned long long *src,
                                    unsigned long long src_off, unsigned long long n,
                                    unsigned long long src_len, int W)
@@ -6065,7 +6098,8 @@ static void s5_mul_batch(S5Dev &D, const unsigned long long *Asrc, unsigned long
        inside its own reduction window and no window sees a neighbour's bits, so there is nothing
        to pull back.  See the S5Shape comment for [A1]/[A2]/[A3]; the three checks below are the
        same statement, measured against the values this call is about to use. */
-    const unsigned long long qsb2 = 2ull * (unsigned long long)S + ceil_log2_u64(P);
+    /* The NTT planner reserves at least one term bit, including P=1. */
+    const unsigned long long qsb2 = 2ull * (unsigned long long)S + (unsigned long long)std::max(1,ceil_log2_u64(P));
     if (qsb2 != sh.slot_bits) {
         std::fprintf(stderr, "%s: FATAL: the S5 shape disagrees with its own derivation "
                              "(slot_bits=%llu vs %llu)\n", NTT_PROBE_NAME, sh.slot_bits, qsb2);
@@ -6459,7 +6493,7 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
         s5_mul_batch(D, at, 0, nxt, gpad, 0, nxt, 1, 0, nxt, ag, st, -1);
         st.newton_muls += (2 * len == nxt) ? 2 : 2;
         unsigned long long *h = D.palloc((size_t)nxt * W);
-        s5_two_minus_kernel<<<(unsigned int)((nxt + th - 1) / th), th>>>(
+        s5_launch_two_minus(
             ag, h, nxt, D.red->dn, D.red->ninv, D.red->nw);
         CK(cudaGetLastError());
         /* g = (gpad*h) mod X^nxt, written into the OTHER full-length buffer */
@@ -6504,7 +6538,7 @@ static void s5_divmod_one(S5Dev &D, const unsigned long long *Asrc, unsigned lon
        site simply missed the factor. */
     {
         const unsigned long long rows = db;
-        s5_sub_kernel<<<S5_GRID((unsigned long long)rows * (unsigned long long)D.red->nw)>>>(
+        s5_launch_sub(
             Asub, 0, (int)la, qb, 0, (int)wantb, (int)db,
             D.red->dn, D.red->ninv, D.red->nw, dst, (unsigned long long)W);
         CK(cudaGetLastError());
@@ -7022,7 +7056,7 @@ static int descent_batched_dev(PolyLayer &L, const LadderCtx &C,
                             /* the linear branch: a mod (X - x_j) = a(x_j), Horner on the device.
                                One launch per CHILD, one row written. */
                             ++st.n_horner; ++st.n_launch_horner;
-                            s5_eval_linear_kernel<<<S5_GRID(1)>>>(
+                            s5_launch_eval_linear(
                                 dbound, (unsigned long long)(e.rowoff * W), e.ncoef, (int)W,
                                 F.dA, D.dfoff,
                                 (unsigned long long)child, L.s4->red->dn, L.s4->red->ninv,
@@ -10534,7 +10568,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
     }
     R.leaf_values = P;
-    if(!dev_leaves) {
+    /* A diagnostic S5 readback is also a complete plain-domain leaf vector. */
+    if(!dev_leaves || R.s5_readback) {
         unsigned long long hash=1469598103934665603ull,words=0;
         for(const auto &v:values) for(auto word:v) {hash=(hash^word)*1099511628211ull;++words;}
         std::printf("descent_values: leaves=%llu words=%llu hash=%llu\n",(unsigned long long)values.size(),words,hash);

@@ -32,7 +32,7 @@ void words(Word*p,int nw,const mpz_t v){std::fill(p,p+nw,0);size_t z;mpz_export(
 int main(int argc,char**argv){
     if(argc!=9){fprintf(stderr,"bits count repeats mode alias threads device fault\n");return 2;}
     int bits=atoi(argv[1]),count=atoi(argv[2]),repeats=atoi(argv[3]),mode=atoi(argv[4]),alias=atoi(argv[5]),threads=atoi(argv[6]),device=atoi(argv[7]),fault=atoi(argv[8]);
-    if(bits<2||bits>8192||count<1||count>131072||repeats<1||repeats>64||mode<0||mode>1||alias<0||alias>2||threads<32||threads>256)return 2;
+    if(bits<2||bits>16384||count<1||count>131072||repeats<1||repeats>64||mode<0||mode>1||alias<0||alias>2||threads<32||threads>256)return 2;
     int nw=(bits+63)/64;size_t bytes=(size_t)count*nw*8;
     CK(cudaSetDevice(device));
     mpz_t n,a,b,rinv,t,ref;mpz_inits(n,a,b,rinv,t,ref,nullptr);
@@ -65,7 +65,8 @@ int main(int argc,char**argv){
         else if(nw<=16)launch<16>(mode,da,db,dn,dout,nw,bits,count,repeats,alias,fault,threads,ninv);
         else if(nw<=32)launch<32>(mode,da,db,dn,dout,nw,bits,count,repeats,alias,fault,threads,ninv);
         else if(nw<=64)launch<64>(mode,da,db,dn,dout,nw,bits,count,repeats,alias,fault,threads,ninv);
-        else launch<128>(mode,da,db,dn,dout,nw,bits,count,repeats,alias,fault,threads,ninv);
+        else if(nw<=128)launch<128>(mode,da,db,dn,dout,nw,bits,count,repeats,alias,fault,threads,ninv);
+        else launch<256>(mode,da,db,dn,dout,nw,bits,count,repeats,alias,fault,threads,ninv);
         CK(cudaGetLastError());
     };
     for(int i=0;i<3;++i)run();CK(cudaDeviceSynchronize());

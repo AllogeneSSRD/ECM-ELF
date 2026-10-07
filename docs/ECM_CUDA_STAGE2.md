@@ -4,9 +4,9 @@
 
 截至2026-10-07，已发布生产基线仍是893：固定PTX3 Goldilocks、xADD6、Mersenne点乘折叠、GPU baby、驻留fold及尺寸策略；其发布与完整A/B见[点折叠与D报告](D:/code/MPA-OpenCl/docs/STAGE2_POINT_FOLD_D_CALIBRATION.md:69)。下面带日期的段落保留历次实现记录，不应把早期的“尚未实现”当作当前状态。
 
-开发候选已加入默认关闭的 `NTT_GIANT_SEED_PAIR=1`，缓存 `[D]Q` 并从一个ladder同时产生相邻起点；不可逆base回退原算法。CPU base候选还可用 `NTT_GIANT_BASE_CPU=1` 单点GMP预计算，详见同报告§8。候选成本尚未重标定，不能套旧Auto B2 profile，详见[giant seed算法、容量与验证](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:178)。当前生产入口仍支持最多8192位；独立精简生产cu、16384位与可控日志粒度是下一生产阶段的要求，尚未完成。
+开发候选已加入默认关闭的 `NTT_GIANT_SEED_PAIR=1`，缓存 `[D]Q` 并从一个ladder同时产生相邻起点；不可逆base回退原算法。CPU base候选还可用 `NTT_GIANT_BASE_CPU=1` 单点GMP预计算，详见同报告§8。候选成本尚未重标定，不能套旧Auto B2 profile，详见[giant seed算法、容量与验证](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:178)。已发布893入口仍最多8192位；当前开发源码扩展到16384位，验收与发布边界见本文末尾专节。独立精简生产cu与可控日志粒度尚待实现。
 
-16384位扩展须同时处理save/队列和规划限制、256-limb点/归约分派、除数constant容量以及非模板fold局部数组；不能只放宽CLI。当前限制见[save读取](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:143)、[规划](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:34)、[模板分派](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:923)、[除数表](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2000)、[fold数组](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:5370)。宽位数还需有效保存点、部分top limb、Mersenne/泛型和显存预算的实际验收。8192的ladder launch cap是点数而非位宽，应独立保留其watchdog合同。
+16384位扩展已经覆盖save/队列和规划限制、256-limb点/归约分派、除数constant容量以及旧S5局部数组。代码见[save读取](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:144)、[规划上限](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:8)、[模板分派](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:932)、[除数表](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2001)、[S5分派](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:5457)。8192的ladder launch cap是点数而非位宽，继续保留其watchdog合同；大界生产容量/性能仍需独立验收。
 
 Auto B2已有经验证的4acc/v1窄范围组合；后续全范围验证虽然算术和收益排名通过，但耗时精度失败，没有导出新cprof。[当前发布边界](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md:302)。
 
@@ -50,7 +50,7 @@ CHECKSUM = (B1 × sigma × N × X) mod 4294967291
 
 没有校验和的兼容文本存档可以读入，启动信息会显示 `checksum=absent`。校验和只检验记录一致性，不能证明 Stage1 算法正确，也不能识别历史归一化错误生成的坐标。
 
-限制：N 为奇数、`3<N`、最多 8192 位；sigma 是精确解析的 uint64 且至少 6；`B1≥2`、`B2>B1`。不支持 param2/param3、Edwards 存档、Prime95 二进制存档，以及尚未完成 Stage1 的 `.ckpt`/二进制 checkpoint。发现不支持的字段或不匹配的校验和时停止。
+限制：N 为奇数、`3<N`；已发布893最多8192位，当前开发构建最多16384位；sigma 是精确解析的 uint64 且至少 6；`B1≥2`、`B2>B1`。不支持 param2/param3、Edwards 存档、Prime95 二进制存档，以及尚未完成 Stage1 的 `.ckpt`/二进制 checkpoint。发现不支持的字段或不匹配的校验和时停止。
 
 若保存的 X 已暴露 `1<gcd(X,N)<N`，直接记录 `factor_in_saved_X`，无需再次执行 Stage2。X=0 不能作为有效恢复点，会报错。
 
@@ -334,3 +334,65 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 独立8cee候选可在手动固定B2时用环境变量NTT_CUDA_WAIT_MODE=0/1/2/4（Auto/Spin/Yield/BlockingSync），只绑定实际worker当前设备；未设置保留原等待方式。BlockingSync已验证CPU资源消耗更低，但并非稳定时间加速；没有新增INI键，原auto profile拒绝未标定的非0模式，NTT tune未绑定这个开关。
 
 规划器补齐后续giant分块的chain阈值和关键I平台末端，真实packing计划及1/2/2实际giant分块门禁通过。无新校准cprof、没有晋升生产exe；新binary需完整校准和原生验收。[最新源码行、使用与实验](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md)。
+
+
+## 2026-10-07 16384位开发扩展与验收
+
+### 范围和实现
+
+本节是开发候选的功能验收，原发布包893仍保持8192位上限。手动B2支持扩展到16384位；Auto B2的已标定位宽范围保持≤8192，未提供16k成本profile。[自动选择的精确梅森/位宽检查](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:551)继续拒绝未覆盖范围。更宽的算术支持不意味着已标定自动B2或已发布独立生产内核。
+
+1. [共享上限](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:8)定义`max_input_bits=16384`、`max_words=256`，用于实际几何、shape query、save与worktodo入口。奇数、有效X、checksum、B1/B2和param0检查保持；16385位在执行前拒绝。
+2. [点/归约模板分派](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:923)增加`<256>`，包含baby、ladder、paired seed、chain、段积和accum。原≤128-limb输入仍分派原容量；没有将所有旧数组扩到256。
+3. [设备除数表](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2001)从128到256个64bit words，增加1024B constant payload；[归约形状guard](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2658)按256模板检查`nlimb+1`与`L+nw+2`实际访问范围，局部数组容量`2NW+4`。
+4. [Mersenne原语](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:2115)的fixture分为128/256模板；部分高limb与整limb都覆盖。点乘保持Montgomery域，radix为`2^(64W)`；梅森位宽不是64倍数时仍需radix旋转，不能直接拿普通余数替代。
+5. [旧S5的Horner、subtract和two-minus](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:5351)局部数组改为128/256两档。生产默认的scaled descent策略保持；旧路径用于回归和诊断。S5诊断已读回完整叶值时，[输出叶哈希](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10572)；没有为默认设备路径添加无条件全量D2H。
+6. 修复旧S5的P=1断言：形状规划采用`slot_bits=2S+max(1,ceil(log2m))`，验证处原先漏掉`max(1,...)`。旧48b二进制在M4423也会拒绝，证明并非16k特有；[断言](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6102)现与规划一致，仍执行stride/容量/精确性检查，不改变NTT布局。
+
+[构建脚本](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:13)新增`-SplitCompile 1..64`，缺省1；选项、toolkit、raw依赖与对象SHA写入manifest，HostOnly不能跨该选项复用CUDA对象。本轮用6线程split优化；它不是多条Stage2并行或GPU算法开关。
+
+### 容量、运算和搬运影响
+
+约定模数为N，`S=bit_length(N)`，`W=ceil(S/64)`；P是baby数量，I是giant数量，`m`是一次NTT的共同operand系数数，`Lntt`是实际变换长度。不要混用N与NTT length。
+
+- 点的XZ payload为`16W×点数`B；配对base仍`16W`B，CPU base的接口双向净增仍`8W−8`B，W=256时为2040B。点的位宽扩大没有减少主体传输。
+- [giant坐标分块](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9901)仍按256MiB和`16W`B/点向P的整数倍上取整：`C=P ceil(max(P,floor(256MiB/(16W)))/P)`。满256-limb的未对齐容量65536点，向P对齐后可超过256MiB；不是全进程硬限。
+- [owner容量](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:23)仍`8W(9P+8)+48`B。W=256时默认640MiB最多容纳P=36407；同P约是W=128的两倍。P=24时为458800B；此值不包含坐标、F/G树、NTT工作区或driver/context。
+- packing继续采用`slot_bits=2S+max(1,ceil(log2m))`，`slot_words=ceil(slot_bits/bpw)`，`Lntt=nextpow2(2m×slot_words+1)`，并验证`m×slot_words×(2^bpw−1)^2<q`。NTT三主数组为`24Lntt`B，表和小缓冲另计；位宽翻倍会跨离散长度拐点，不能按统一倍数推算全曲线时间。
+- 点模乘的原SOS/REDC主乘累加量近似`2W²`，梅森乘积加折叠近似`W²+O(W)`；W=128→256时平方项约四倍。六模乘xADD、长除法尾部和NTT调度算法均保持，不能把更大范围称为本轮性能提升。
+- 256实例的private stack显著大于旧档；cuobjdump的LOCAL=0不是“无local访存”，stack不是整个显存峰。后续需要NCU动态请求和实际分配生命周期，不能把模块自己的peak简单相加。
+
+### 有效保存点和检查合同
+
+[原生验收工具](D:/code/MPA-OpenCl/tools/test/test_stage2_wide_native.py:1)在CPU构造param0/sigma26/B1=20/lcm Stage1，并与独立GMP-ECM输出的完整X比较，随后保存native checksum。五个有效输入是`2^8193−3`、`2^16381−1`、`2^16384−15`、`1019(2^16374−3)`、`2621(2^16372−5)`。前面三个为该测试的单位坐标案例；后两个独立验证giant/base的非单位与proper factor回退。满16384位梅森另用synthetic X=2仅检查算术，不能作为有效生产Stage1 save。
+
+有效单位案例独立从定义计算全部24个baby处的`Π_i(x_baby−x_giant_i) mod N`，按完整W-word叶向量比较FNV；同时GPU完整giant affine对照、seed逐字和段积检查。非单位案例不能要求Z求逆，分别要求已知proper factor1019/2621及CPU/GPU base回退一致。检查日志不是正式性能样本。
+
+最终候选SHA256为`46457e5abd068982b2190a690c5a94d16e92728069dae15a546f6aced62d1939`，sm89/PTX3/outer0/CUDA13.3，26个raw编译依赖及对象来源冻结；最终CUDA编译264.0秒，四host对象7.1/2.9/3.9/3.7秒。初版176.2秒、第二版174.8秒也保留，不将本轮编译波动解释为GPU性能变化。
+
+- [完整原生宽位数门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_wide_20261007/native_gate_r2/summary.json)：**27/0**，其中26条有效Stage1 save调用、1条明确标记的synthetic满limb梅森算术调用。包含原CPU路径、当前默认、GPU/CPU配对，I=2/65/66尾段、old Montgomery tail、scaled及两种旧S5下降。18组单位案例的完整monic叶向量FNV与CPU定义一致，giant affine/seed/段积逐项检查通过。
+- 同一工具另过实际16384-bit **INI/worktodo队列1条**：`ECMSTAGE2=1,2,16384,-15,"three.save",13230,1,1`只取第2条并推进finished，完整叶指纹一致；plan-only返回bits=16384/words=256、执行0曲线。16385位save与队列两个负例在执行前拒绝，结果不发布、队列不改。
+- 每条保留Montgomery 2048、GMP/oracle以及长除法800个fixture（含129/256-limb、dshift=0/63、quotient修正/借位回补）检查；Mersenne扩展912个fixture通过。计数是每次重复执行的诊断，不能全部相加当成独立数学样本。
+- [独立点乘探针](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_wide_20261007/point_probe/summary.json)：8193/16321/16381/16383/16384位×SOS/折叠×三输出别名，共**30次调用通过**；每组64对输入、3步GMP递推，另一次故障注入正确exit1。standalone探针也增加256模板分派，不能仅放宽参数校验。
+- [原有默认后端18/0](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_wide_20261007/default_point_gate/summary.json)，另在旧48b与新候选读取完全相同M4423 save/B2/D与S5-no-linear配置，旧断言失败、新完整device/slow叶比较零差异。
+
+[静态资源比较](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_wide_20261007/native_r2/resource_comparison.json)中256模板：ladder REG64/STACK32784B，paired xADD6 REG74/STACK22544B，chain xADD6 REG64/STACK26640B，generic S4 REG46/STACK12336B、梅森S4 REG40/STACK6176B，S5 Horner REG42/STACK14352B。128-limb的18个同名kernel中stack保持，但9个寄存器数改变（含诊断kernel），例如chain6 56→64、paired6 72→74。因此**没有认证旧位宽零性能回退**，生产发布前要做完整曲线对照；不能仅因数学分派未改就宣称机器码/吞吐不变。
+
+[最终审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_wide_20261007/final_audit.json)重建全部27项身份、检查raw编译依赖/保存点/log/result SHA、独立叶指纹、两次原始失败、队列/拒绝和primitive/default门禁。原始保存点、工具、源码、失败及资源报告归档在ignored `build_cuda_cmake/_stage2_wide_20261007/evidence.zip`，逐文件SHA见同目录`evidence_manifest.json`；不提交data或build目录。**本阶段正式性能样本0，没有宽位数大B2时间/总VRAM峰值结论，也没有替换发布包893。**
+
+原失败证据保留：初版22项后因S5设备叶值未输出哈希停止，应用exit0；第二版23项后强制通用Newton在P=1断言拒绝。前者补诊断读回后的哈希，后者修正与NTT规划一致的guard；两次均新建输出目录重跑，没有删除失败案例或只按退出码/因子判断正确。
+
+### 复现和下一生产阶段
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+  -Build build_cuda_cmake/reproduce_wide -Arch sm_89 -GlBackend ptx `
+  -OuterUnrollU 0 -SplitCompile 6
+python tools/test/test_stage2_wide_native.py --prepare-only --output run/wide_fixtures
+# runtime验收要求exe旁的frozen_sources_manifest.json和26个原始sources副本；
+# raw SHA必须与build_manifest一致，不能把当前改过的源码当成旧binary来源。
+python tools/test/test_stage2_wide_native.py --exe build_cuda_cmake/reproduce_wide/ecm_cuda_stage2.exe `
+  --fixtures run/wide_fixtures/fixtures.json --output run/wide_gate
+```
+
+本轮仅推进位宽功能和检查边界；[生产包装CU](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:44)仍包含实验树文件。后续优先：独立生产CU/保留已测最佳算法；可控curve/主要phase/batch日志；完成chain门槛和短尾选择；旧位宽及宽位数的大界性能/容量对照。G树/fold/下降和主机准备仍是性能重点。新二进制重新标定Auto B2，旧profile不能直接复用。

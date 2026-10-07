@@ -1997,3 +1997,10 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 ## 68. 单点base的CPU GMP路径（2026-10-07）
 
 默认关闭CPU base在pair算法内保持相同Montgomery代表元，并额外诊断逐字对照GPU。104条正式计时、13独立全点门禁、30项原生（含满8192位泛型/非单位）及18项默认回归通过。M8191短输入在强制chain下full再少约4.1%..5.8%；大界base52→1.1ms、giant少49ms，但full36.5268→36.5186秒，未建立稳定收益。管理员Systems确认base kernel移除，约0.39秒绝对准备间隙仍在，显式设备峰值不变；传输净多1016B，非主体传输优化。原生产893和默认阈值保持，无新cprof。下一阶段优先16384位/独立生产cu/日志控制及最终链长策略；全部公式/identity/原始样本/失败解释见[点算术报告§8](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:274)。
+
+
+## 69. 16384位手动Stage2的开发路径（2026-10-07）
+
+当前开发源码的save/队列/shape支持16384位，点/归约分派256，constant除数表256；旧S5的Horner/sub/two-minus分为128/256容量。默认scaled、配对开关及8192点launch cap保持；Auto B2仍只接受已标定≤8192位范围。最终46457e的27原生宽位数、1实际INI/queue、2超限拒绝、18默认回归和30独立点乘调用通过；有效点由CPU和独立GMP-ECM共同确认，synthetic满16384梅森只作算术覆盖。
+
+旧S5 P=1检查与NTT最低term bit不一致已修复，完整叶指纹门禁保留；两次原失败/source版本均归档。W=256下owner640MiB容量P≤36407；XZ每点4096B，点分块65536再按P向上对齐，预算不是全进程峰。128档资源仍有codegen变化，需要整曲线性能对照，尚未发布宽位数生产。下一阶段推进独立cu与日志控制，再测新chain/短尾和G树/fold/下降的准备、NTT热shape；旧Auto B2不能套新binary。[详细公式、原文件行、当前边界和证据](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。

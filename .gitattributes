@@ -64,3 +64,4 @@ tools/test/test_ecm_cost_cases.py text eol=lf
 docs/data/ecm_auto_b2_bridge_20261006* -text
 tools/bench/ecm_cost_coverage.py text eol=lf
 tools/test/test_ecm_cost_coverage.py text eol=lf
+tools/test/test_stage2_wide_native.py text eol=lf

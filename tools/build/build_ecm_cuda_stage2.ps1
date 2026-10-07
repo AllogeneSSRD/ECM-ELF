@@ -10,6 +10,7 @@ param(
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
     [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'runtime',
     [ValidateSet(0,4)][int]$OuterUnrollU = 0,
+    [ValidateRange(1,64)][int]$SplitCompile = 1,
     [switch]$HostOnly,
     [switch]$Rebuild
 )
@@ -34,7 +35,7 @@ New-Item -ItemType Directory -Force $objDir | Out-Null
 $exe = Join-Path $Build 'ecm_cuda_stage2.exe'
 $signaturePath = Join-Path $objDir 'build_signature.txt'
 $glMode = @{runtime=-1;fold=0;short=1;ptx=3}[$GlBackend]
-$signature = @("arch=$Arch", "gl_backend=$GlBackend", "gl_fixed_mode=$glMode", "outer_unroll_u=$OuterUnrollU", (& nvcc --version | Out-String).Trim())
+$signature = @("arch=$Arch", "gl_backend=$GlBackend", "gl_fixed_mode=$glMode", "outer_unroll_u=$OuterUnrollU", (& nvcc --version | Out-String).Trim(), "split_compile=$SplitCompile")
 $sourceHashes = [ordered]@{}
 foreach ($dep in $deps) {
     $sourceHashes[$dep] = (Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash
@@ -45,8 +46,9 @@ $cudaDeps = @('src/cuda/ecm_cuda_stage2.cu','src/core/ecm_cuda_stage2.h','src/co
     'src/cuda/ecm_stage2_tune.cuh') + @($deps | Where-Object { $_ -like 'tools/bench/*' })
 if ($HostOnly) {
     $previous = Get-Content -LiteralPath (Join-Path $Build 'build_manifest.json') -Raw | ConvertFrom-Json
+    $previousSplit = if ($previous.split_compile) { $previous.split_compile } else { 1 }
     if ($previous.architecture -ne $Arch -or $previous.gl_fixed_mode -ne $glMode -or
-        $previous.outer_unroll_u -ne $OuterUnrollU -or $previous.sources[4] -ne $signature[4]) {
+        $previous.outer_unroll_u -ne $OuterUnrollU -or $previousSplit -ne $SplitCompile -or $previous.sources[4] -ne $signature[4]) {
         throw 'HostOnly requires identical CUDA architecture, backend, schedule and toolkit'
     }
     foreach ($dep in $cudaDeps) {
@@ -73,6 +75,7 @@ if (-not $fresh) {
             continue
         }
         $line = "call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -DNTT_OUTER_UNROLL_U=$OuterUnrollU " +
+            "--split-compile=$SplitCompile " +
             "-I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 " +
             "-c `"$src`" -o `"$obj`" > `"$log`" 2>&1"
         $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -109,6 +112,7 @@ $manifest = [ordered]@{
     gl_backend = $GlBackend
     gl_fixed_mode = $glMode
     outer_unroll_u = $OuterUnrollU
+    split_compile = $SplitCompile
     sources = $signature
     source_hashes = $sourceHashes
     objects = $objectHashes

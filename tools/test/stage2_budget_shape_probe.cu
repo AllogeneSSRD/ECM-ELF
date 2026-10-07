@@ -8,7 +8,7 @@ int main(int argc,char **argv) {
     unsigned long long p=0;int bits=0;
     while(std::scanf("%llu %d",&p,&bits)==2) {
         unsigned long long nf=0,nt=0;
-        if(!p || bits<2 || bits>8192 || !ntt_shape_query(p+1,bits,&nf,nullptr,nullptr,nullptr,nullptr,nullptr) ||
+        if(!p || bits<2 || bits>16384 || !ntt_shape_query(p+1,bits,&nf,nullptr,nullptr,nullptr,nullptr,nullptr) ||
            !ntt_shape_query(p/2+1,bits,&nt,nullptr,nullptr,nullptr,nullptr,nullptr))return 2;
         const auto big=24*nf,arena=8*(3*nf+2*p+1+2*(3*nt+2*(p/2+1)-1));
         std::printf("budget_shape: P=%llu bits=%d n_fold=%llu n_tree=%llu big_bytes=%llu arena_est_bytes=%llu\n",p,bits,nf,nt,big,arena);

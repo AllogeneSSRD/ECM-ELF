@@ -47,7 +47,7 @@ struct ProductionDefaults {
 
 bool ecm_cuda_stage2_shape_query(uint64_t p,int bits,uint64_t *length,uint64_t *output_slots)
 {
-    if(!p || p>(1ull<<28) || bits<2 || bits>8192)return false;
+    if(!p || p>(1ull<<28) || bits<2 || bits>ecm_stage2::max_input_bits)return false;
     unsigned long long n=0,out=0;
     if(!ntt_shape_query(p,bits,&n,nullptr,nullptr,nullptr,nullptr,&out))return false;
     if(length)*length=n;if(output_slots)*output_slots=out;return true;
