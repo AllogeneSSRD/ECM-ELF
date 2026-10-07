@@ -148,3 +148,4 @@ vc140.pdb
 /tools/ecm_dataset/ecm_stage2_dataset.sqlite-*
 *.bak
 *.sqlite
+tools/ecm_dataset/1000.bat

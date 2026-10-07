@@ -23,7 +23,9 @@ def main():
     p.add_argument('--exe',type=Path,required=True);p.add_argument('--study',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--bits',type=int,nargs='+',default=[2203,4423,8191])
     p.add_argument('--b2',type=int,nargs='+',default=[1000000000,3000000000]);p.add_argument('--d',type=int,default=120120)
+    p.add_argument('--chain-block',type=int,default=64,help='Points per chain thread; CUDA launch still uses 64 threads per block')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
+    if not 4<=a.chain_block<=1<<20:raise ValueError('Chain block must match the native 4..2^20 range')
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();binary=sha(exe);study=json.loads(a.study.read_text());study_sha=sha(a.study)
     if study['identity']['stage2_sha256']!=binary:raise ValueError('Binary/study mismatch')
@@ -32,7 +34,7 @@ def main():
     for bits,save in saves.items():
         if sha(save)!=study['saves'][str(bits)]['sha256']:raise ValueError('Verified save changed')
     data=dict(schema=1,binary_sha256=binary,study_sha256=study_sha,tool_sha256=sha(__file__),
-        controls=dict(bits=a.bits,b2=a.b2,D=a.d,sequence=['ladder','chain','chain','ladder'],chain_block=64,owner_mb=640),
+        controls=dict(bits=a.bits,b2=a.b2,D=a.d,sequence=['ladder','chain','chain','ladder'],chain_block=a.chain_block,owner_mb=640),
         gpu=gpu.name,runs=[],gates=[],comparisons=[])
     path=out/'measurements.json'
     def persist():path.write_text(json.dumps(data,indent=2))
@@ -45,7 +47,7 @@ def main():
         cmd=[str(exe),'--ini',str(ini),'--save',str(saves[bits]),'--device','1','--b2',str(b2),'--d',str(a.d),
              '--arena-mb','4096','--factor-only','--results',str(result),'--log',str(log)]
         controls={'NTT_GIANT_CHAIN_MIN':'0' if mode=='chain' else str(2**63-1),
-                  'NTT_GIANT_CHAIN_BLOCK':'64','NTT_GIANT_CHAIN_CHECK':'1' if gate else '0'}
+                  'NTT_GIANT_CHAIN_BLOCK':str(a.chain_block),'NTT_GIANT_CHAIN_CHECK':'1' if gate else '0'}
         start=time.perf_counter();r=subprocess.Popen(cmd,env=env|controls,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         try:stdout,stderr=r.communicate(timeout=300)
         except subprocess.TimeoutExpired:
@@ -61,7 +63,7 @@ def main():
         gate_info=None
         if gate:
             gate_info=fields(text,'giant_chain_check')
-            if int(gate_info['points'])!=f['I'] or int(gate_info['mismatches']):raise ValueError('Affine chain/ladder point gate failed')
+            if int(gate_info['points'])!=f['I'] or int(gate_info['per_block'])!=a.chain_block or int(gate_info['mismatches']):raise ValueError('Affine chain/ladder point gate failed')
         if sha(exe)!=binary or sha(a.study)!=study_sha or sha(__file__)!=data['tool_sha256']:raise ValueError('Frozen inputs changed')
         phases=parse(text);record=dict(name=name,bits=bits,B2=b2,D=a.d,mode=mode,gate=gate,
             process_seconds=elapsed,phases=phases,features=f,factors=row['factors'],

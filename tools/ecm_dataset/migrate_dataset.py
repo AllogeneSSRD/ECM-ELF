@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import sqlite3
-from dataset import DEFAULT_DB, CORE_COLUMNS, SCHEMA_SQL, digest
+from dataset import DATABASE_BUSY_TIMEOUT_SECONDS, DEFAULT_DB, CORE_COLUMNS, SCHEMA_SQL, digest
 
 LEGACY_TABLES = {'sources','mersennes','factors','analyses','frontier','observations','production_runs'}
 
@@ -11,7 +11,7 @@ LEGACY_TABLES = {'sources','mersennes','factors','analyses','frontier','observat
 def migrate(path):
     path = Path(path).resolve()
     if not path.is_file(): raise FileNotFoundError(path)
-    db = sqlite3.connect(path, timeout=30)
+    db = sqlite3.connect(path, timeout=DATABASE_BUSY_TIMEOUT_SECONDS)
     try:
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         columns = tuple(r[1] for r in db.execute('PRAGMA table_info(factors)'))

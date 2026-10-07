@@ -4,7 +4,7 @@ import csv
 import json
 from pathlib import Path
 import sqlite3
-from dataset import ROOT, digest
+from dataset import DATABASE_BUSY_TIMEOUT_SECONDS, ROOT, digest
 
 TABLES = ('mersennes', 'factors')
 
@@ -24,7 +24,8 @@ def main():
         parser.error('Use a new empty output directory to preserve previous snapshots')
     args.output.mkdir(parents=True, exist_ok=True)
     sha = digest(args.db)
-    db = sqlite3.connect(args.db.resolve().as_uri()+'?mode=ro', uri=True)
+    db = sqlite3.connect(args.db.resolve().as_uri()+'?mode=ro', uri=True,
+                         timeout=DATABASE_BUSY_TIMEOUT_SECONDS)
     db.row_factory = sqlite3.Row
     counts = {}
     for table in TABLES:

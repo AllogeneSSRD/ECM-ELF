@@ -18,7 +18,9 @@ def digest(path):
 
 
 DEFAULT_DB = ROOT/'tools/ecm_dataset/ecm_stage2_dataset.sqlite'
+B2_RATIO = 5000
 SCHEMA_VERSION = 2
+DATABASE_BUSY_TIMEOUT_SECONDS = 3600
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS mersennes(
   exponent INTEGER PRIMARY KEY,expression TEXT NOT NULL,digital INTEGER NOT NULL);
@@ -34,17 +36,24 @@ CORE_COLUMNS = ('exponent','value','digital','primality_verified','sigma','b1','
 
 def connect(path=DEFAULT_DB):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path, timeout=30)
-    db.row_factory = sqlite3.Row
-    db.execute('PRAGMA foreign_keys=ON')
-    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if tables and (tables != {'mersennes','factors'} or
-                   tuple(r[1] for r in db.execute('PRAGMA table_info(factors)')) != CORE_COLUMNS):
+    db = sqlite3.connect(path, timeout=DATABASE_BUSY_TIMEOUT_SECONDS)
+    try:
+        db.row_factory = sqlite3.Row
+        db.execute(f'PRAGMA busy_timeout={DATABASE_BUSY_TIMEOUT_SECONDS * 1000}')
+        db.execute('PRAGMA foreign_keys=ON')
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if tables and (tables != {'mersennes','factors'} or
+                       tuple(r[1] for r in db.execute('PRAGMA table_info(factors)')) != CORE_COLUMNS):
+            raise ValueError('Legacy/unsupported schema; migrate first with migrate_dataset.py --db PATH')
+        db.execute('PRAGMA journal_mode=WAL')
+        if not tables:
+            db.executescript(SCHEMA_SQL)
+        if db.execute('PRAGMA user_version').fetchone()[0] != SCHEMA_VERSION:
+            db.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
+        return db
+    except Exception:
         db.close()
-        raise ValueError('Legacy/unsupported schema; migrate first with migrate_dataset.py --db PATH')
-    db.executescript(SCHEMA_SQL)
-    db.execute('PRAGMA user_version=2')
-    return db
+        raise
 
 
 def ensure_factor(db, n, factor):
@@ -145,8 +154,17 @@ def factor_integer(gp, n, timeout=30):
     return parts
 
 
-def store_best(db, n, factor, result):
-    """Store at most one sigma; replace only when both lcm bounds dominate."""
+def bound_score(pair):
+    """Product score, treating Stage1-only B2=0 as B1 squared."""
+    b1, b2 = pair
+    return B2_RATIO * b1 + max(b1, b2)
+
+
+def store_best(db, n, factor, result, scan_policy=False):
+    """Store one sigma using the requested scan replacement policy."""
+    policy = 'either' if scan_policy is True else 'dominance' if scan_policy is False else scan_policy
+    if policy not in ('dominance', 'strict', 'normal', 'either'):
+        raise ValueError('Unknown sigma selection policy')
     # All durable comparisons use lcm. choose12 is a derived view of point order.
     _, pairs = bounds([(int(p), int(e)) for p, e in json.loads(result['point_factorization'])], 1)
     with db:
@@ -156,9 +174,25 @@ def store_best(db, n, factor, result):
         if current is None: raise ValueError('Factor must exist before storing its sigma')
         if current['sigma'] is not None:
             old = (int(current['b1']), int(current['b2']))
-            pairs = [pair for pair in pairs if pair[0] <= old[0] and pair[1] <= old[1] and pair != old]
-            if not pairs:
-                return False
+            if policy == 'strict':
+                pairs = [pair for pair in pairs if pair[0] < old[0] and pair[1] < old[1]]
+            elif policy == 'normal':
+                pairs = [pair for pair in pairs if bound_score(pair) < bound_score(old) and
+                         ((pair[0] < old[0] and pair[1] < old[1]) or pair[1] < 100000 * pair[0])]
+                pairs = [min(pairs, key=lambda pair: (bound_score(pair), pair))] if pairs else []
+            elif policy == 'either':
+                pair = min(pairs)
+                both_decrease = pair[0] < old[0] and pair[1] < old[1]
+                either_decreases = pair[0] < old[0] or pair[1] < old[1]
+                pairs = [pair] if both_decrease or (either_decreases and pair[1] < 100000 * pair[0]) else []
+            else:
+                pairs = [pair for pair in pairs if pair[0] <= old[0] and pair[1] <= old[1] and pair != old]
+        elif policy != 'dominance':
+            pairs = [pair for pair in pairs if pair[1] < 100000 * pair[0]]
+            if policy == 'normal' and pairs:
+                pairs = [min(pairs, key=lambda pair: (bound_score(pair), pair))]
+        if not pairs:
+            return False
         b1, b2 = min(pairs)
         db.execute("""UPDATE factors SET primality_verified=1,sigma=?,b1=?,b2=?,group_order=?,
                    group_factorization=?,point_order=?,point_factorization=? WHERE exponent=? AND value=?""",
@@ -167,7 +201,8 @@ def store_best(db, n, factor, result):
     return True
 
 
-def analyze(db, n, factor, sigma, gp, torsion=1, timeout=30, retry=False, prepared=None):
+def analyze(db, n, factor, sigma, gp, torsion=1, timeout=30, retry=False, prepared=None,
+            scan_policy=False):
     if not 1 <= n <= 9999: raise ValueError('exponent must be 1..9999')
     if sigma < 6 or sigma > (1 << 64)-1: raise ValueError('sigma outside PARAM0 range')
     if torsion not in (1,12): raise ValueError('torsion must be 1 or 12')
@@ -196,7 +231,7 @@ def analyze(db, n, factor, sigma, gp, torsion=1, timeout=30, retry=False, prepar
                           point_factorization=json.dumps([[str(p),e] for p,e in pf]))
             # A proven prime stays proven even when its new sigma is not better.
             with db: db.execute('UPDATE factors SET primality_verified=1 WHERE exponent=? AND value=?',(n,str(f)))
-            result['updated'] = store_best(db,n,f,result)
+            result['updated'] = store_best(db,n,f,result,scan_policy=scan_policy)
         s1,pairs = bounds([(int(p),int(e)) for p,e in json.loads(result['point_factorization'])],torsion)
         result.update(stage1_min_b1=str(s1),bounds=[[str(a),str(b)] for a,b in pairs])
     except (ValueError,TypeError,subprocess.TimeoutExpired) as error:

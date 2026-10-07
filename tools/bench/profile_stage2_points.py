@@ -19,9 +19,13 @@ def main():
     p.add_argument('--point-mersenne',type=int,choices=(0,1),default=0)
     p.add_argument('--carry-check-fused',type=int,choices=(0,1),default=0)
     p.add_argument('--chain-min',type=int,default=None)
+    p.add_argument('--chain-block',type=int,default=None,help='Explicit chain points per thread; 4..2^20')
+    p.add_argument('--short-chain-block',type=int,default=None,help='Opt-in short-chunk points per thread: 0 or 4..64')
+    p.add_argument('--short-chain-max',type=int,default=None,help='Exclusive short-chunk point limit, at most 2^20')
     p.add_argument('--owner-mb',type=int,default=None)
     p.add_argument('--arena-mb',type=int,default=None)
     p.add_argument('--factor-only',action='store_true')
+    p.add_argument('--cuda-event-trace',action='store_true',help='Collect CUDA event completion/correlation; diagnostic overhead may change scheduling')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--analyze-existing', action='store_true', help='Validate and analyze the existing command/log/trace without relaunching')
     p.add_argument('--nsys', type=Path, default=Path('C:/Program Files/NVIDIA Corporation/Nsight Systems 2026.1.3/target-windows-x64/nsys.exe'))
@@ -55,6 +59,15 @@ def main():
     if a.chain_min is not None:
         if not 0<=a.chain_min<=100000000:raise ValueError('Invalid chain minimum')
         env['NTT_GIANT_CHAIN_MIN']=str(a.chain_min)
+    if a.chain_block is not None:
+        if not 4<=a.chain_block<=1<<20:raise ValueError('Invalid chain block')
+        env['NTT_GIANT_CHAIN_BLOCK']=str(a.chain_block)
+    if a.short_chain_block is not None:
+        if a.short_chain_block!=0 and not 4<=a.short_chain_block<=64:raise ValueError('Invalid short chain block')
+        env['NTT_GIANT_CHAIN_SMALL_BLOCK']=str(a.short_chain_block)
+    if a.short_chain_max is not None:
+        if not 0<=a.short_chain_max<=1<<20:raise ValueError('Invalid short chain maximum')
+        env['NTT_GIANT_CHAIN_SMALL_MAX']=str(a.short_chain_max)
     if a.owner_mb is not None:
         if a.owner_mb<0:raise ValueError('Invalid owner budget')
         env['NTT_FOLD_DEVICE_MAX_MB']=str(a.owner_mb)
@@ -70,6 +83,7 @@ def main():
     else: wrapper.write_bytes(wrapper_bytes)
     trace = out/'trace'
     profile = [str(a.nsys), 'profile', '--trace=cuda,nvtx', '--sample=none', '--cpuctxsw=none', '--cuda-memory-usage=true', '--force-overwrite=true', '-o', str(trace), 'C:/Windows/System32/cmd.exe', '/d', '/c', str(wrapper)]
+    if a.cuda_event_trace:profile.insert(2,'--cuda-event-trace=true')
     if not a.analyze_existing:
         with (out/'profile.log').open('wb') as log:
             subprocess.run(profile, cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)

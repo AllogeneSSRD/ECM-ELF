@@ -118,12 +118,12 @@ python tools/ecm_dataset/ecm_dataset.py --db run/custom.sqlite summary
 
 ```powershell
 python tools/ecm_dataset/scan_sigma.py --exponent-range 200:1000 --sigma-range 6:100 `
-  --max-factor-digits 17 --gp $gp
+  --policy normal --max-factor-digits 17 --gp $gp
 ```
 
 两个区间的起止值都包含在内；也可传单值，例如 `--exponent-range 223`。允许exponent 1～9999、sigma 6～2^64−1。只扫描数据库已有的因子，先执行 `init` 导入目录。
 
-默认扫描范围内全部因子。建议首次显式限制 `--max-factor-digits 17`，避免大因子的群阶计算耗时过长。`--min-factor-digits` 默认1；`--timeout` 默认30秒，是每个因子/sigma的GP调用超时。自定义数据库用 `--db PATH`。
+默认扫描范围内全部因子。建议首次显式限制 `--max-factor-digits 17`，避免大因子的群阶计算耗时过长。`--min-factor-digits` 默认1；`--timeout` 默认30秒，是每个因子/sigma的GP调用超时。自定义数据库用 `--db PATH`。数据库启用 WAL，连接遇到锁最多等待一小时；扫描会在计算前取完待处理因子，避免长时间持有读取游标。
 
 ```powershell
 python tools/ecm_dataset/scan_sigma.py --db run/custom.sqlite `
@@ -131,7 +131,13 @@ python tools/ecm_dataset/scan_sigma.py --db run/custom.sqlite `
   --max-factor-digits 17 --timeout 60 --progress-seconds 5 --gp $gp
 ```
 
-逐因子、逐sigma升序扫描；每次改善立即提交，不保存扫描历史或失败候选。控制台输出预计任务数、已处理数量、更新/不变/缓存/失败/超时计数及进度；进度在GP调用完成后输出。相等或不可比较界限保留原sigma，结果可能依赖此前已保留的记录，不宣称是耗时意义下的全局最优。
+逐因子、逐sigma升序扫描；`--policy` 可选择：
+
+- `normal`（默认）：比较分数 `B1 × max(B1, B2)`，只在分数严格减小时替换。普通 Stage2 候选即比较 `B1 × B2`；数据库中表示 Stage1-only 的 `B2=0` 按 `B1²` 计。若只有一项减小，还须满足 `B2 < 100000 × B1`。
+- `strict`：只有 B1、B2 都严格减小时才替换，不要求比例界限。当前 B2 已为 0 时不会再替换。
+- `either`：沿用旧扫描规则，只要任一项严格减小即可替换；两项都减小时不要求比例界限，否则须满足 `B2 < 100000 × B1`。连续使用此规则可能使最终两项都比早期记录大。
+
+首次保存时，三个模式都要求 `B2 < 100000 × B1`。每次改善立即提交，不保存扫描历史或失败候选。控制台输出预计任务数、已处理数量、更新/不变/缓存/失败/超时计数及进度；进度在GP调用完成后输出。所选模式包含在开始事件中。结果可能依赖扫描顺序，不宣称是耗时意义下的全局最优。
 
 Ctrl+C中断时已提交的最优记录仍保留。没有自动扫描进度表；继续时指定剩余范围，或重跑原范围（不增历史行，但丢弃的sigma会重新计算）。脚本不运行GPU。
 
@@ -203,7 +209,7 @@ python tools/ecm_dataset/run_production_dataset.py --output run/new_candidate `
 - `digital` 是十进制位数，不是 bit length；大整数在 SQLite 中以 TEXT 保存。
 - `group_order` 是整个曲线群阶，`point_order` 是当前 sigma 初始点的精确阶；B1/B2 界限由点阶推导。
 - 数据库 `(B1, B2=0)` 表示 **Stage1-only**。这不是原生程序的零 B2 配置/Auto B2 语义，不应直接转为 Stage2 命令。
-- 每个因子只保留一个 sigma。新 B1、B2 都不大于旧值且至少一个严格变小时才替换；相等、变差或一优一劣均保留旧记录。首次从一个候选的可行界限中按 B1、B2 升序选一对。
+- 每个因子只保留一个 sigma。普通导入中，新 B1、B2 都不大于旧值且至少一个严格变小时才替换；相等、变差或一优一劣均保留旧记录。`scan_sigma.py` 使用上面选择的扫描模式。首次从候选可行界限中选一对，扫描时先过滤 B2/B1 比例。
 - 最优比较使用 lcm；choose12 界限从保留的点阶即时计算，不单独持久化。
 - 推导界限针对标准单素数 semismooth 模型。引擎扫描尾部及退化点可能暴露额外因子，实际运行 B1/B2 仅留在程序 result 中，不写入核心数据库。
 - 保存完整正/负结果不等于无偏随机曲线样本；不能直接用这批精心选择的曲线估计成功概率或决定生产 Auto B2。

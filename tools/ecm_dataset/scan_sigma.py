@@ -21,6 +21,8 @@ def main():
     p.add_argument('--db', default=DEFAULT_DB)
     p.add_argument('--exponent-range', type=interval, required=True, metavar='FIRST:LAST')
     p.add_argument('--sigma-range', type=interval, required=True, metavar='FIRST:LAST')
+    p.add_argument('--policy', choices=('normal','strict','either'), default='normal',
+                   help='Sigma replacement rule (default: normal)')
     p.add_argument('--gp', nargs='?', const=None, help='GP path/name; omitted or bare --gp searches PATH')
     p.add_argument('--timeout', type=float, default=30, help='Seconds per factor/sigma GP call')
     p.add_argument('--min-factor-digits', type=int, default=1)
@@ -48,16 +50,16 @@ def main():
     start = last_progress = time.monotonic()
     def report(kind, **extra):
         print(json.dumps(dict(type=kind,**stats,elapsed_seconds=time.monotonic()-start,**extra)),flush=True)
-    report('start',exponent_range=[elo,ehi],sigma_range=[slo,shi],database=str(args.db))
+    report('start',exponent_range=[elo,ehi],sigma_range=[slo,shi],policy=args.policy,database=str(args.db))
     interrupted = False; failure = None
     try:
-        # The query selects only immutable keys/digits; updates cannot alter its membership/order.
-        rows = db.execute('SELECT exponent,value FROM factors WHERE '+where+
-                          ' ORDER BY exponent,length(value),value',values)
+        # Release the read cursor before long GP work and concurrent database writes.
+        rows = list(db.execute('SELECT exponent,value FROM factors WHERE '+where+
+                               ' ORDER BY exponent,length(value),value',values))
         for row in rows:
             exponent,factor = row['exponent'],int(row['value'])
             for sigma in range(slo,shi+1):
-                result = analyze(db,exponent,factor,sigma,gp,timeout=args.timeout)
+                result = analyze(db,exponent,factor,sigma,gp,timeout=args.timeout,scan_policy=args.policy)
                 stats['completed'] += 1
                 if result['status'] == 'complete':
                     stats['updated' if result['updated'] else 'unchanged'] += 1

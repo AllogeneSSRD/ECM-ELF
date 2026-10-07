@@ -533,6 +533,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     require("NTT_FUSE_COOP_OUTER",2,2);require("NTT_FUSE_T",12,12);require("NTT_FUSE_M",4,4);
     require("NTT_S4_BATCH_MB",64,64);require("NTT_DEVICE_GLEAF_MAX_MB",512,512);
     require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",profile.chain_min,profile.chain_min);
+    require("NTT_GIANT_CHAIN_SMALL_BLOCK",0,0); // Not covered by current v2 cost profiles.
     require("NTT_LADDER_CAP",8192,8192);
     require("CUDA_LAUNCH_BLOCKING",0,0);
     require("NTT_S4_SAMPLE",96,96);require("NTT_S4_CHECK_EVERY",8,8);

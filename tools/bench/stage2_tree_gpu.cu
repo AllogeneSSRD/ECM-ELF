@@ -9763,6 +9763,19 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             if (v > 1u << 20) v = 1u << 20;
             return v;
         }();
+        /* Opt-in short-chunk policy: more independent chains, shorter serial
+           xADD loops. The global block remains unchanged for large chunks. */
+        static const unsigned long long short_chain_block = [] {
+            const char *e = std::getenv("NTT_GIANT_CHAIN_SMALL_BLOCK");
+            unsigned long long v = (e && *e) ? std::strtoull(e, nullptr, 10) : 0ull;
+            if(v && v < 4)v=4;
+            return std::min(v,64ull);
+        }();
+        static const unsigned long long short_chain_max = [] {
+            const char *e = std::getenv("NTT_GIANT_CHAIN_SMALL_MAX");
+            unsigned long long v = (e && *e) ? std::strtoull(e, nullptr, 10) : 8192ull;
+            return std::min(v,1ull<<20);
+        }();
         static const bool force_ladder = [] {
             const char *e = std::getenv("NTT_GIANT_LADDER");
             return e && *e && std::atoi(e) != 0;
@@ -9798,6 +9811,11 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             16ull*npts*W<=maxbytes;
         if(requested && !device_leaf)++R.device_leaf.fallback_chunks;
         gseg.assign(((size_t)npts + S2G_GFINV_SEG - 1) / S2G_GFINV_SEG * (size_t)C.nw, 0ull);
+        const unsigned long long effective_chain_block=ecm_stage2::giant_chain_block(
+            npts,chain_block,short_chain_block,short_chain_max);
+        if(short_chain_block)std::printf("giant_chain_policy: npts=%llu route=%s base_block=%llu block=%llu short_block=%llu short_max=%llu\n",
+            npts,(force_ladder || npts<chain_min)?"ladder":"chain",chain_block,
+            (force_ladder || npts<chain_min)?0ull:effective_chain_block,short_chain_block,short_chain_max);
         if (force_ladder || npts < chain_min) {
             gjs.resize(chi - clo + 1);
             for (size_t i = clo; i <= chi; ++i) gjs[i - clo] = (unsigned long long)i * D;
@@ -9823,7 +9841,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         } else {
             unsigned long long seed_points = 0;
             giant_chunk_chain(L, C, ws, D, (unsigned long long)clo, (unsigned long long)chi,
-                              chain_block, gx, gz, chain_check, seed_points, &gseg,
+                              effective_chain_block, gx, gz, chain_check, seed_points, &gseg,
                               S2G_GFINV_SEG,device_leaf?&resident:nullptr);
             R.giant_seed_points += seed_points;
             ++R.giant_chain_chunks;
@@ -10790,6 +10808,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0 && (outer_mode==0 || shape_ntt) &&
         fuse_env_ull("NTT_S4_BATCH_MB",64)==64 &&
         fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)==64 && fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768)==32768 &&
+        fuse_env_ull("NTT_GIANT_CHAIN_SMALL_BLOCK",0)==0 &&
         fuse_env_ull("NTT_ARENA_WORKSPACE_POOL",1)!=0 &&
         fuse_env_ull("NTT_S4_SAMPLE",96)==96 && fuse_env_ull("NTT_S4_CHECK_EVERY",8)==8;
     for(const char *key:{"NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE","NTT_GFINV_SEG_EXACT",

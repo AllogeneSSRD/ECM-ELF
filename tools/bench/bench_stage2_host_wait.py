@@ -10,6 +10,7 @@ import ctypes
 from ctypes import wintypes as w
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import statistics
@@ -89,13 +90,25 @@ def main():
     p.add_argument('--exe',type=Path,required=True);p.add_argument('--study',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--bits',type=int,nargs='+',default=[8191])
     p.add_argument('--d',type=int,default=120120);p.add_argument('--b2',type=int,nargs='+',default=[1383422040,5250000000])
-    p.add_argument('--repeats',type=int,default=2);p.add_argument('--variant',choices=('priority','oracle','cuda_wait'),default='priority')
+    p.add_argument('--repeats',type=int,default=2);p.add_argument('--variant',choices=('priority','oracle','cuda_wait','replay'),default='priority')
+    p.add_argument('--tail-seconds',type=float,help='Explicit diagnostic full-wall threshold for identical replay runs; never a cost release gate')
+    p.add_argument('--replay-order',choices=('blocked','interleaved'),help='Replay defaults to alternating input shapes each repetition')
+    p.add_argument('--baseline-measurements',type=Path,help='Completed identical replay for fixed per-shape tail thresholds')
+    p.add_argument('--tail-ratio',type=float,help='Tail threshold = frozen baseline median times this ratio; diagnostic only')
+    p.add_argument('--compare-entry',action='store_true',help='Explicitly permit driver/worker entry as the sole changed baseline control')
     p.add_argument('--wait-mode',type=int,choices=(2,4),default=4,help='cuda_wait compares Auto with Yield(2) or BlockingSync(4)')
     p.add_argument('--entry',choices=('driver','worker'),default='worker',
         help='Direct worker minimises the protocol; driver priority is not inherited by its child on this host')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('Use a fresh directory')
     if a.repeats<1 or not set(a.bits)<={2203,4423,8191}:raise ValueError('Invalid corpus')
+    if a.tail_seconds is not None and (a.variant!='replay' or not math.isfinite(a.tail_seconds) or a.tail_seconds<=0):
+        raise ValueError('A positive finite tail threshold requires --variant replay')
+    if a.replay_order is not None and a.variant!='replay':raise ValueError('Replay order requires --variant replay')
+    if bool(a.baseline_measurements)!=(a.tail_ratio is not None):raise ValueError('Use baseline measurements and tail ratio together')
+    if a.compare_entry and not a.baseline_measurements:raise ValueError('Entry comparison requires a frozen baseline')
+    if a.tail_ratio is not None and (a.variant!='replay' or a.tail_seconds is not None or not math.isfinite(a.tail_ratio) or a.tail_ratio<=1):
+        raise ValueError('A finite tail ratio >1 requires replay and conflicts with tail seconds')
     exe=a.exe.resolve();study=json.loads(a.study.read_text(encoding='utf-8'))
     build=json.loads((exe.parent/'frozen_sources_manifest.json').read_text(encoding='utf-8'))
     if not study['complete'] or build['binary_sha256']!=sha(exe):raise ValueError('Unverified study/build')
@@ -104,8 +117,26 @@ def main():
         'bench_stage2_budget_scaling.py','calibrate_stage2_d.py','ecm_cost_model.py')
     identity=dict(binary_sha256=sha(exe),calibration_binary_sha256=study['identity']['stage2_sha256'],study_sha256=sha(a.study),tools={n:sha(Path(__file__).with_name(n)) for n in names},
         save_sha256={str(bits):study['saves'][str(bits)]['sha256'] for bits in a.bits})
+    thresholds={}
+    if a.baseline_measurements:
+        baseline=json.loads(a.baseline_measurements.read_text(encoding='utf-8'))
+        if (not baseline.get('complete') or baseline['variant']!='replay' or
+            baseline['identity']['binary_sha256']!=identity['binary_sha256'] or
+            baseline['identity']['study_sha256']!=identity['study_sha256'] or
+            any(baseline['controls'][k]!=v for k,v in dict(D=a.d,arena_mb=4096,owner_mb=0,chain_min=8192).items()) or
+            (baseline['controls']['entry']!=a.entry and not a.compare_entry)):
+            raise ValueError('Baseline must match the actual replay input/execution contract')
+        identity['baseline_sha256']=sha(a.baseline_measurements)
+        for bits in a.bits:
+            for b2 in a.b2:
+                rows=[r for r in baseline['runs'] if (r['case']['bits'],r['case']['B2'])==(bits,b2)]
+                if not rows:raise ValueError('Baseline is missing a requested shape')
+                for r in rows:
+                    if sha(r['log'])!=r['log_sha256']:raise ValueError('Baseline log changed')
+                thresholds[bits,b2]=statistics.median(r['phases']['full'] for r in rows)*a.tail_ratio
     def verify():
         if sha(exe)!=identity['binary_sha256'] or sha(a.study)!=identity['study_sha256']:raise ValueError('Input changed')
+        if a.baseline_measurements and sha(a.baseline_measurements)!=identity['baseline_sha256']:raise ValueError('Frozen baseline changed')
         for bits,saved in saves.items():
             if sha(saved)!=identity['save_sha256'][str(bits)]:raise ValueError('Verified save changed')
         for n,digest in identity['tools'].items():
@@ -121,9 +152,15 @@ def main():
     # Both oracle configurations preserve the same selected coefficient checks.
     # Priority trials retain the native async default through an explicit value.
     cases=[dict(bits=bits,B2=b2,rep=rep,value=value) for bits in a.bits for b2 in a.b2
-        for rep in range(a.repeats) for value in (0,1,1,0)]
+        for rep in range(a.repeats) for value in ((0,) if a.variant=='replay' else (0,1,1,0))]
+    if a.variant=='replay' and a.replay_order!='blocked':
+        cases=[dict(bits=bits,B2=b2,rep=rep,value=0) for rep in range(a.repeats) for bits in a.bits for b2 in a.b2]
     data=dict(schema=1,kind='host_wait_diagnostic',identity=identity,device=info,variant=a.variant,
-        controls=dict(D=a.d,arena_mb=4096,owner_mb=0,chain_min=8192,entry=a.entry,sequence=[0,1,1,0],repeats=a.repeats,wait_mode=a.wait_mode),cases=cases,runs=[])
+        controls=dict(D=a.d,arena_mb=4096,owner_mb=0,chain_min=8192,entry=a.entry,sequence=[0] if a.variant=='replay' else [0,1,1,0],repeats=a.repeats,wait_mode=a.wait_mode,tail_seconds=a.tail_seconds,
+            replay_order=(a.replay_order or 'interleaved') if a.variant=='replay' else None,tail_ratio=a.tail_ratio,
+            baseline_measurements=str(a.baseline_measurements.resolve()) if a.baseline_measurements else None,
+            entry_is_controlled_variable=a.compare_entry,
+            frozen_shape_thresholds=[dict(bits=k[0],B2=k[1],seconds=v) for k,v in thresholds.items()]),cases=cases,runs=[])
     dest=out/'measurements.json'
     def persist():dest.write_text(json.dumps(data,indent=2),encoding='utf-8')
     persist();reference={};ini=out/'manual.ini';ini.write_text('[gpu]\ndevice=1\n',encoding='utf-8')
@@ -189,6 +226,14 @@ def main():
     for bits in a.bits:
         for b2 in a.b2:
             rows=[r for r in data['runs'] if (r['case']['bits'],r['case']['B2'])==(bits,b2)]
+            if a.variant=='replay':
+                threshold=thresholds.get((bits,b2),a.tail_seconds)
+                data['comparisons'].append(dict(bits=bits,B2=b2,identical_configurations=True,
+                    samples=len(rows),median_full_seconds=statistics.median(r['phases']['full'] for r in rows),
+                    full_range=[min(r['phases']['full'] for r in rows),max(r['phases']['full'] for r in rows)],
+                    tail_seconds=threshold,
+                    tail_runs=[r['name'] for r in rows if threshold is not None and r['phases']['full']>threshold]))
+                continue
             med={str(v):statistics.median(r['phases']['full'] for r in rows if r['case']['value']==v) for v in (0,1)}
             data['comparisons'].append(dict(bits=bits,B2=b2,median_full_seconds=med,change_percent=100*(med['1']/med['0']-1)))
     data['complete']=True;persist();print(json.dumps(data['comparisons'],indent=2))

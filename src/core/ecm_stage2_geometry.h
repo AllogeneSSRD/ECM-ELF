@@ -5,6 +5,11 @@
 // never a sum of simultaneous process allocations or a promise of residency.
 namespace ecm_stage2 {
 using Word = unsigned long long;
+// Points per sequential chain thread; the CUDA block itself has 64 threads.
+// A disabled short policy preserves the base value, including large chunks.
+inline Word giant_chain_block(Word points, Word base, Word short_block, Word short_max) {
+    return short_block && points < short_max && short_block < base ? short_block : base;
+}
 inline bool add(Word a, Word b, Word &out) {
     if (a > std::numeric_limits<Word>::max()-b) return false;
     out=a+b; return true;
