@@ -4610,3 +4610,19 @@ CPU17066输入链/五模型85330求值、264538角色步骤全部一致；804 Mo
 五管理员NCU均19passes/导出成功，同tail32/grid192/TPB128。cap local累计sector字节代理55.025879→37.039062MiB（−32.688%）、主要L1命中；eligible几乎不变、issue32.848→33.118%，wait少，但no_instruction/short_scoreboard增加。自然eligible/issue略提高，仍176分配/2blocks。不能把local下降当总时间改善，代理非VRAM/DRAM/PCIe，不乘重放pass。忙采样SM均1800MHz；固定/前缀/确认设备MiB采样最大323/317/317，非进程完整峰。首份collect-only漏--exp-cache后补参导出原报告，未重新采集。
 
 v3成为本机/该N/该C/该策略的暂定最佳实验选择，默认配置不改，不推广完整曲线/其他宽度。下一项共享私有seed/loop DBL体，先静态检验与点角色门禁，防止编译器重新拆分/增加spill；公共p2作为后续独立因素。[全部数据、来源行、SHA、复现与采用边界](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_RULE_SENTINEL_20261007.md:1)。
+
+## 102. Stage1 PRAC 共享 seed/loop DBL：达到168寄存器分配档（2026-10-07）
+
+基线829b8e3/v3。仅single-compact MODE12/13的私有奇素数链用rule5将seed DBL与规则1..3 DBL合为一个inline调用点，固定bn变量，不增加设备调用ABI。seed后恢复(A,B,C)=(P,2P,P)，d/e及ADD/DBL/MAC计数、归一化、计划、切片/checkpoint语义一致。旧single-add MODE10/11完整SASS/资源不变；normal TPI16/host/dispatcher对象SHA不变。专用TU171.1秒、最终仅链接；exe SHAfe2b74c7…90ef5。
+
+自然MODE12 text577536→444032bytes（约−23%），实际174→161寄存器/stack48/spill0；cap MODE13 text576896→444544、实际168→162、stack80→48、spill36/28→0/0。NCU确认两者硬件分配168/容量3blocks：自然由176/2跨档，cap仍3。TPB当前默认128（2026-09-25从256调整），寄存器限制不自动改变TPB。4423-bit默认4608/TPI16；此前4423/TPI32只显式覆盖。容器需要N bits+6，8191-bit输入也选9216/TPI32。
+
+CPU17066输入链/六模型102396求值、264538规则步骤全部一致；804 normalized Montgomery正例/4824公共别名对照通过。GPU184/3568完整Q/save、1352窗口Q/8恢复Q/20拒绝、128完整XZ逐字节（含48跨切片）全部通过；只读审计重新核对原始XZ SHA/bytes。
+
+120计时样本（72固定tail32：三C×两reg×两chunk×三身份×两反序；48前缀：两B1×两reg×两目标×三身份×两反序）完整，无缺项/重复。SHA/缓存/几何/原始日志逐条通过，前缀正常sampling limit/checkpoint-only，无强制终止或最终save。C1536自然固定短/长比before墙钟少8.506%/5.870%，但C384增加0.090%/0.154%，C768长片增加1.790%，不省略回退。cap各批量有改善，C1536短/长比before少0.869%/3.111%；长片比baseline21.747%包含继承的单点ADD收益。
+
+普通前缀本批最佳C1536/cap168/50ms：10m/260m为5.005864/130.988540 s/curve，相对同批before5.049758/132.172455少0.869%/0.896%，相对baseline5.063091/132.484001少1.130%/1.129%。自然50ms比before少约8.6%但仍慢于新cap；不能将此当作最佳提升8.6%。100ms没有提高最佳；均短时投影，不发布Auto B2 T1。
+
+五管理员NCU均19passes/exit0/导出0，同tail32/grid192/TPB128。cap local load sectors688128→0、store525212→21468，累计local字节代理37.028198→0.655151MiB（约−98.23%）；实际spill消失，容量仍3。eligible0.460015→0.482076、issue33.138→33.807%，wait/no_instruction/short_scoreboard下降。自然eligible0.365985→0.490585、issue31.267→33.417%，但wait/no_instruction/short_scoreboard增加；不以单一指标解释吞吐。local代理非VRAM/DRAM/PCIe、不乘pass，stall非墙钟占比。忙采样SM全1800MHz；设备MiB采样最大固定323/前缀317，非完整进程峰。
+
+v4成为此机/宽度/批量的暂定最佳显式实验候选，默认不改。下一项扩展显式4608/TPI32，用C192/384/768匹配TPI16 C384/768/1536提交grid，分别核对资源、驻留容量与吞吐；不将匹配grid当作相等实际blocks/SM。[全部数据、公式、原文件行、SHA及采用边界](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_SHARED_DBL_20261007.md:1)。

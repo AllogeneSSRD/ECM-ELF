@@ -73,6 +73,41 @@ def cached_pairs(path,count=32):
         return pairs
 
 
+def chain_shared_dbl(p,r,seed,a24,n):
+    # Independent rule5 state machine. B/T remain absent until initialization;
+    # Python reads would fail if seed processing accidentally used either one.
+    a=seed;c=seed;b=None;t=None;e=p-r;d=r-e;rule=5
+    trace=[];rules=Counter();dbl=0;dadd=0;seed_count=0
+    while True:
+        if rule!=5:
+            assert b is not None
+            rule=4 if d==e else 0
+            if rule!=4:
+                if d<e:d,e=e,d;a,b=b,a
+                if 100*d>296*e:
+                    rule=1 if d%2==e%2 else 2 if d%2==0 else 3
+                    if rule==3:a,b=b,a
+                    if rule in (2,3):b,c=c,b
+            rules['final' if rule==4 else str(rule)]+=1
+            t=add_disjoint(a,b,c,n);dadd+=1
+            if rule==4:a=t;break
+        if rule==0:
+            assert t is not None
+            c,b=b,t;d-=e
+        else:
+            a=double_compact(a,a24,n);dbl+=1
+            if rule==5:
+                b,a=a,c;seed_count+=1;rule=0;continue
+            if rule==1:b=t;d=(d-e)//2
+            else:
+                if rule==2:b=c;d//=2
+                else:b,a=a,c;e//=2
+                c=t
+        trace.append((d,e,a,b,c));rule=0
+    assert d==e==1 and seed_count==1
+    return a,trace,(dbl,dadd),rules
+
+
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--cache',type=Path,default=Path('build_cuda_cmake/prac'))
@@ -94,7 +129,8 @@ def main():
             combined=chain(p,r,seed,a24,n,True,True)
             distinct=chain(p,r,seed,a24,n,True,True,True)
             sent=chain(p,r,seed,a24,n,True,True,True,True)
-            assert baseline==single==combined==distinct==sent,(sigma,p,r,'point roles/projective bytes/counts differ')
+            shared=chain_shared_dbl(p,r,seed,a24,n)
+            assert baseline==single==combined==distinct==sent==shared,(sigma,p,r,'point roles/projective bytes/counts differ')
             assert single[2]==prac_counts(p,r)
             oracle=multiply(sigma,p,n)
             assert single[0][0]*oracle[1]%n==oracle[0]*single[0][1]%n
@@ -102,7 +138,7 @@ def main():
     assert all(coverage[k]>0 for k in ('0','1','2','3','final'))
     source=Path('kernels/cuda/cgbn_stage1_prac_single_add.cuh')
     report=dict(prime_d_pairs=len(pairs),sigmas=2,chains=2*len(pairs),point_role_steps=steps,
-        models=['baseline','single-add','single-compact-v1','single-compact-disjoint','single-compact-sentinel'],model_chain_evaluations=10*len(pairs),
+        models=['baseline','single-add','single-compact-v1','single-compact-disjoint','single-compact-sentinel','single-compact-shared-dbl'],model_chain_evaluations=12*len(pairs),
         rule_coverage=dict(coverage),modulus_bits=127,source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         arithmetic_source_sha256=hashlib.sha256(Path('kernels/cuda/cgbn_stage1_prac_kernel.cuh').read_bytes()).hexdigest(),
         scope='CPU point-role model; exact baseline intermediate/final XZ and independent ladder; not native GPU verification',passed=True)

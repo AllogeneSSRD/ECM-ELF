@@ -28,6 +28,75 @@ __device__ FORCE_INLINE void prac_add_disjoint(curve_t<P> &c,
     cgbn_set(c._env, oz, u);
 }
 
+// Compact candidate: rule5 initializes B=2P through the same in-place DBL
+// used by rules1..3. C preserves P until that initialization finishes. Neither
+// B nor T is read in rule5; both are assigned before the first ordinary rule.
+// This is a fixed-variable inline state machine, not a device-call ABI.
+template<class P>
+__device__ FORCE_INLINE void prac_odd_shared_dbl(curve_t<P> &c,
+    typename curve_t<P>::bn_t &ax, typename curve_t<P>::bn_t &az,
+    typename curve_t<P>::bn_t &bx, typename curve_t<P>::bn_t &bz,
+    typename curve_t<P>::bn_t &cx, typename curve_t<P>::bn_t &cz,
+    const typename curve_t<P>::bn_t &a24, const typename curve_t<P>::bn_t &n,
+    uint32_t np0, uint32_t p, uint32_t initial_d) {
+    typename curve_t<P>::bn_t tx, tz;
+    cgbn_set(c._env, cx, ax); cgbn_set(c._env, cz, az);
+    uint32_t e = p - initial_d, d = initial_d - e;
+    int rule = 5;
+    #pragma unroll 1
+    for (;;) {
+        if (rule != 5) {
+            rule = d == e ? 4 : 0;
+            if (rule != 4) {
+                if (d < e) {
+                    uint32_t tmp = d; d = e; e = tmp;
+                    cgbn_swap(c._env, ax, bx); cgbn_swap(c._env, az, bz);
+                }
+                if (uint64_t(d) * 100 > uint64_t(e) * 296) {
+                    rule = ((d & 1) == (e & 1)) ? 1 : !(d & 1) ? 2 : 3;
+                    if (rule == 3) {
+                        cgbn_swap(c._env, ax, bx); cgbn_swap(c._env, az, bz);
+                    }
+                    if (rule == 2 || rule == 3) {
+                        cgbn_swap(c._env, bx, cx); cgbn_swap(c._env, bz, cz);
+                    }
+                }
+            }
+            prac_add_disjoint(c, tx, tz, ax, az, bx, bz, cx, cz, n, np0);
+            if (rule == 4) {
+                cgbn_set(c._env, ax, tx); cgbn_set(c._env, az, tz);
+                break;
+            }
+        }
+        if (rule == 0) {
+            cgbn_set(c._env, cx, bx); cgbn_set(c._env, cz, bz);
+            cgbn_set(c._env, bx, tx); cgbn_set(c._env, bz, tz);
+            d -= e;
+        } else {
+            // One source call handles both the seed and ordinary doubling.
+            prac_dbl<P, true>(c, ax, az, ax, az, a24, n, np0);
+            if (rule == 5) {
+                cgbn_set(c._env, bx, ax); cgbn_set(c._env, bz, az);
+                cgbn_set(c._env, ax, cx); cgbn_set(c._env, az, cz);
+            } else if (rule == 1) {
+                cgbn_set(c._env, bx, tx); cgbn_set(c._env, bz, tz);
+                d = (d - e) / 2;
+            } else {
+                if (rule == 2) {
+                    cgbn_set(c._env, bx, cx); cgbn_set(c._env, bz, cz);
+                    d /= 2;
+                } else {
+                    cgbn_set(c._env, bx, ax); cgbn_set(c._env, bz, az);
+                    cgbn_set(c._env, ax, cx); cgbn_set(c._env, az, cz);
+                    e /= 2;
+                }
+                cgbn_set(c._env, cx, tx); cgbn_set(c._env, cz, tz);
+            }
+        }
+        rule = 0;
+    }
+}
+
 // Normalize every odd-prime rule to T = ADD(A, B, C), including the final ADD.
 // All point coordinates stay in fixed bn variables; no dynamic bn pointers and
 // no device-call ABI. The two T coordinates are the candidate's added liveness.
@@ -38,6 +107,10 @@ __device__ FORCE_INLINE void prac_odd_single_add(curve_t<P> &c,
     typename curve_t<P>::bn_t &cx, typename curve_t<P>::bn_t &cz,
     const typename curve_t<P>::bn_t &a24, const typename curve_t<P>::bn_t &n,
     uint32_t np0, uint32_t p, uint32_t initial_d) {
+    if constexpr (COMPACT) {
+        prac_odd_shared_dbl(c, ax, az, bx, bz, cx, cz, a24, n, np0, p, initial_d);
+        return;
+    }
     typename curve_t<P>::bn_t tx, tz;
     cgbn_set(c._env, cx, ax); cgbn_set(c._env, cz, az);
     prac_dbl<P, COMPACT>(c, bx, bz, ax, az, a24, n, np0);
