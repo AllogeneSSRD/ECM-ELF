@@ -4588,3 +4588,11 @@ GPU1/N4423/4608/TPI16/TPB128，同tail32/W8053，三C384/768/1536×三variant×�
 自然仍170寄存器、硬件分配176/驻留2；cap168 stack96→88、spill56/44→48/40，驻留仍3。四管理员NCU全部19passes/导出exit0，同tail/grid192。cap168 local累计sector字节代理64.02→55.02MiB（−14.06%）、以L1命中为主；wait几乎相同，eligible/issue active未提高。local代理不是显存容量/DRAM/PCIe，stall比值不是墙钟占比。忙采样全部SM1800MHz，温度固定55～62°C/前缀60～66°C，无降频证据。
 
 保留显式候选，不改默认/生产推荐。下一项优先为单点链专用ADD：利用输出T不别名任一输入，将v暂存T.x以减少临时bn；不能替换公共别名安全ADD，先严格门禁，再检验168门槛与吞吐。详见[全部数据、公式、源码行与复现](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_SINGLE_COMPACT_20261006.md:1)。
+
+## 100. Stage1 PRAC 输出不别名 ADD：编译器已完成复用（2026-10-07）
+
+基线8eda457。single-compact MODE12/13私有ADD改用输出T.x暂存V，内部bn从3到2，保持normalized 4M+2S；严格要求输出与全部输入分离，公共alias-safe ADD不改。只重编专用TU实测197.8秒、最终仅链接；exe SHAbcfa5aa8…45d0。MODE10/11/12/13完整SASS（包括指令/调度编码）逐行相同；normal TPI16/host/dispatcher对象SHA同构建前快照。自然仍170寄存器/176分配，cap168 stack88/spill48/40不变，未达到新驻留档。
+
+CPU804 Montgomery正例、4824公共别名对照通过；故意覆盖差分点786错误，不能推广新ADD契约。四个≥127bit梅森配置的−1平方raw REDC≥N，不能因容器余量省归一化。17066数学输入链/四模型68264求值/264538角色步骤全部一致。原生GPU184/3568完整Q/save，1352窗口Q/8恢复Q/20拒绝，以及128完整XZ逐字节检查（含48跨切片）通过。
+
+支持“编译器已经复用V与输出”的假设，无新性能矩阵或NCU采集，无吞吐改善结论。保留私有显式候选，不改默认/最佳推荐；下一项为finish/rule终结哨兵合并，先静态检验再决定时长矩阵。4423默认4608/TPI16，TPI32仍仅显式对照；TPB128、寄存器限制影响blocks/SM，不自动改变TPB。[源码、SHA、全部证据与复现](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_DISJOINT_ADD_20261007.md:1)。

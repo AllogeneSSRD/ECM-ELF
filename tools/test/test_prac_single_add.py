@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'stat'))
 from ecm_prac_plan import P95_RATIOS, prac_counts, primes
 from test_cuda_prac_windows import add, double, multiply
+from test_prac_disjoint_add import add_disjoint
 
 
 def double_compact(point,a24,n):
@@ -21,8 +22,9 @@ def double_compact(point,a24,n):
     return ox,oz
 
 
-def chain(p,r,seed,a24,n,single,compact=False):
+def chain(p,r,seed,a24,n,single,compact=False,disjoint=False):
     dbl_point=double_compact if compact else double
+    add_point=add_disjoint if disjoint else add
     a=seed;b=dbl_point(seed,a24,n);c=seed
     e=p-r;d=r-e;trace=[];rules=Counter();dbl=1;dadd=0
     while True:
@@ -34,7 +36,7 @@ def chain(p,r,seed,a24,n,single,compact=False):
         if single:
             if rule==3:a,b=b,a
             if rule in (2,3):b,c=c,b
-            t=add(a,b,c,n)
+            t=add_point(a,b,c,n)
             if finish:a=t;break
             if rule==0:c,b=b,t;d-=e
             else:
@@ -87,7 +89,8 @@ def main():
         for p,r in sorted(pairs):
             baseline=chain(p,r,seed,a24,n,False);single=chain(p,r,seed,a24,n,True)
             combined=chain(p,r,seed,a24,n,True,True)
-            assert baseline==single==combined,(sigma,p,r,'point roles/projective bytes/counts differ')
+            distinct=chain(p,r,seed,a24,n,True,True,True)
+            assert baseline==single==combined==distinct,(sigma,p,r,'point roles/projective bytes/counts differ')
             assert single[2]==prac_counts(p,r)
             oracle=multiply(sigma,p,n)
             assert single[0][0]*oracle[1]%n==oracle[0]*single[0][1]%n
@@ -95,7 +98,7 @@ def main():
     assert all(coverage[k]>0 for k in ('0','1','2','3','final'))
     source=Path('kernels/cuda/cgbn_stage1_prac_single_add.cuh')
     report=dict(prime_d_pairs=len(pairs),sigmas=2,chains=2*len(pairs),point_role_steps=steps,
-        models=['baseline','single-add','single-compact'],model_chain_evaluations=6*len(pairs),
+        models=['baseline','single-add','single-compact-v1','single-compact-disjoint'],model_chain_evaluations=8*len(pairs),
         rule_coverage=dict(coverage),modulus_bits=127,source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         arithmetic_source_sha256=hashlib.sha256(Path('kernels/cuda/cgbn_stage1_prac_kernel.cuh').read_bytes()).hexdigest(),
         scope='CPU point-role model; exact baseline intermediate/final XZ and independent ladder; not native GPU verification',passed=True)
