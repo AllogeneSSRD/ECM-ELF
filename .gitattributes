@@ -34,6 +34,13 @@ src/core/ecm_stage2_cost_profile.h text eol=lf
 src/core/ecm_cuda_stage2_main.cpp text eol=lf
 docs/data/ecm_auto_b2_g1_20261006* -text
 tools/bench/ntt_poly_probe.cu text eol=lf
+
+# This existing CUDA TU is stored with CRLF. Preserve its raw compilation
+# fingerprint instead of normalizing every line when a small patch is staged.
+tools/bench/stage2_tree_gpu.cu -text diff whitespace=cr-at-eol
+tools/bench/bench_stage2_seed_pair.py text eol=lf
+tools/test/test_stage2_seed_pair_native.py text eol=lf
+tools/bench/profile_stage2_seed_ncu.py text eol=lf
 tools/test/ntt_carry_fused_probe.cu text eol=lf
 docs/data/ecm_stage2_wait_20261006* -text
 tools/bench/analyze_stage2_trace.py text eol=lf

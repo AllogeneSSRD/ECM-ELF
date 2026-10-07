@@ -2,7 +2,13 @@
 
 `ecm_cuda_stage2.exe` 从已经完成 Stage1 的文本 save 读取曲线，调用当前实验版 CUDA 多项式 Stage2。它不计算 Stage1，也不会重新乘以 12。`exponent=lcm|choose12` 由生成存档的 Stage1 决定；恢复时原样使用存档中的 Q。
 
-最新生产默认启用xADD6、warp tile、NTT_FUSE_COOP_OUTER=2尺寸策略及NTT_GL_SHORT_REDUCE=1短归约。已测scope使用匹配的resident_short_v1 D模型；显式short=0回旧归约和resident_shape_v1。未支持配置回原planner，显式D优先。详细范围、计算量、容量、传输和发布产物见[短归约 D 标定与生产报告](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)；前面的历次发布数据保留各轮口径。
+截至2026-10-07，已发布生产基线仍是893：固定PTX3 Goldilocks、xADD6、Mersenne点乘折叠、GPU baby、驻留fold及尺寸策略；其发布与完整A/B见[点折叠与D报告](D:/code/MPA-OpenCl/docs/STAGE2_POINT_FOLD_D_CALIBRATION.md:69)。下面带日期的段落保留历次实现记录，不应把早期的“尚未实现”当作当前状态。
+
+开发候选已加入默认关闭的 `NTT_GIANT_SEED_PAIR=1`，缓存 `[D]Q` 并从一个ladder同时产生相邻起点；不可逆base回退原算法。候选成本尚未重标定，不能套旧Auto B2 profile，详见[giant seed算法、容量与验证](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:178)。当前生产入口仍支持最多8192位；独立精简生产cu、16384位与可控日志粒度是下一生产阶段的要求，尚未完成。
+
+16384位扩展须同时处理save/队列和规划限制、256-limb点/归约分派、除数constant容量以及非模板fold局部数组；不能只放宽CLI。当前限制见[save读取](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:143)、[规划](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:34)、[模板分派](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:918)、[除数表](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1995)、[fold数组](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:5363)。宽位数还需有效保存点、部分top limb、Mersenne/泛型和显存预算的实际验收。8192的ladder launch cap是点数而非位宽，应独立保留其watchdog合同。
+
+Auto B2已有经验证的4acc/v1窄范围组合；后续全范围验证虽然算术和收益排名通过，但耗时精度失败，没有导出新cprof。[当前发布边界](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md:302)。
 
 ## 编译与直接读档
 

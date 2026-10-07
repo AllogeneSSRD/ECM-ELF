@@ -19,12 +19,14 @@ def main():
                    help='Experimental NTT schedule requires legacy D fallback for both point modes')
     p.add_argument('--carry-check-fused',type=int,choices=(0,1),default=0,
                    help='Experimental fused carry diagnostics require legacy D fallback')
+    p.add_argument('--payload-accounting-v2',action='store_true',
+                   help='Current payload ledger disables legacy cache-rate profiles for both point modes')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('Use a fresh output directory')
     exe=a.exe.resolve();sha=hashlib.sha256(exe.read_bytes()).hexdigest()
     manifest=json.loads((exe.parent/'build_manifest.json').read_text(encoding='utf-8-sig'))
     assert manifest.get('outer_unroll_u',0)==a.outer_unroll_u
-    assert not ((a.outer_unroll_u or a.carry_check_fused) and a.calibrated_point_model)
+    assert not ((a.outer_unroll_u or a.carry_check_fused or a.payload_accounting_v2) and a.calibrated_point_model)
     root=Path(__file__).resolve().parents[2]
     sources={r[1]:r[2].lower() for line in manifest['sources']
              if (r:=re.fullmatch(r'([^=]+\.(?:cu|cuh|cpp|h|ps1))=([A-Fa-f0-9]{64})',line))}
@@ -73,7 +75,7 @@ def main():
         r=subprocess.run(cmd,env=clean|{'NTT_POINT_MERSENNE':str(mode)},capture_output=True,timeout=180)
         (out/(name+'_driver.log')).write_bytes(r.stdout+r.stderr);assert r.returncode==0,name
         text=(out/(name+'_engine.log')).read_text(encoding='utf-8',errors='replace')
-        want='d_model: requested=1 enabled=0 version=legacy_56_1' if (a.outer_unroll_u or a.carry_check_fused) else \
+        want='d_model: requested=1 enabled=0 version=legacy_56_1' if (a.outer_unroll_u or a.carry_check_fused or a.payload_accounting_v2) else \
              'd_model: requested=1 enabled=1 version=resident_fixed_ptx_v1' if mode==0 else \
              'd_model: requested=1 enabled=1 version=resident_point_fold_v1' if a.calibrated_point_model else \
              'd_model: requested=1 enabled=0 version=legacy_56_1'

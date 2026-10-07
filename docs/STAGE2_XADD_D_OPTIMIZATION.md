@@ -173,3 +173,100 @@ v2资源：M5 forward48reg/9984 B shared、inverse46/10752；M6为46/18432与46/
 P2收尾时cooperative仍缺省0，自动D使用旧NTT权重；手动开启cooperative会回旧D模型。P3限定已测设备/t12/warp配置，按N选择M6(k24)、M8(k25..27)，其余shape保持原路径，再冻结新二进制重新采集多个D/独立小界holdout；实施结果见[P3报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md)。Tensor Core与多个Stage2并行属后续独立实验，需要精确整数范围、VRAM/RAM预算及实际吞吐证据。
 
 证据：[纯NTT量化](D:/code/MPA-OpenCl/build_cuda_cmake/_xadd6_20261004/coop_quantitative.json)、[v2门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_coop_v2_final_20261004/gate/summary.json)、[v2旧路径门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_xadd6_20261004/coop_v2_legacy_gate.log)、[生产A/B](D:/code/MPA-OpenCl/build_cuda_cmake/_ntt_coop_stage2_ab_20261004/quantitative.json)。v2纯probe SHA256 fd31e39a7fe9c6754fa8f6c2adc49b7f06dfabc1ab14df77a5af3f5ad14bc045；生产A/B使用F85EAD72…F7F1。build目录证据ignored，源码、门禁和构建入口随Git提交。
+
+
+## 7. Giant 相邻 seed：复用 `[D]Q` 与 ladder 双输出（2026-10-07）
+
+### 7.1 已复现的问题与本轮算法
+
+上一轮的小批次策略把每线程链长从64降至8，在4096点等短输入上有效，但完整坐标块后接4096点尾段时，seed 数量增加会抵消收益。GPU1、M8191/B1=1000/lcm/sigma26、D120120、I4096，本轮重放原 fe709 同二进制 ABBA，full 均值中位4.548666→4.347248秒（4.43%）；该对照仅复现原短链策略，不属于下面配对 seed 的收益。
+
+原实现为每段独立求 `[iD]Q`、`[(i+1)D]Q`，还为每个坐标 chunk 求一次 `[D]Q`。新候选先在 GPU 缓存 `H=[D]Q`，再在 H 上执行标量 i 的 ladder。其末端本来同时持有 `[i]H` 与 `[i+1]H`，保留两者即可提供一段的两个起点；每段不再执行两次 ladder，标量也不再带 D 因子。
+
+- [双输出 kernel](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1009)；[有界 launch](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:1047)仍按 ladder cap 分批，维持 watchdog 边界。
+- [曲线私有 base 生命周期](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8930)：按 workspace/Q/D 缓存，每条曲线只构建一次。D 改变时重新构建，workspace 析构释放。无跨 sigma 共享。
+- CPU 读取 H 的 Z 并计算 gcd；不可逆或 infinity 时，整个 seed chunk 回退原算法，不在新 base 上继续放大非单位尺度。真实 `N=103×65537`、sigma26/B1=2 的 lcm 保存点，CPU 已证明 gcd(Z_H,N)=103；实际候选回退并保持原因子103。
+- [交接](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9157)保持原 `2B+1` 个 Montgomery `(X,Z)` seed 的交错布局、末尾差分点、单点尾段以及后续 chain/段积/G树接口。代表元的尺度会改变，跨算法不能要求叶 hash 相等；同算法重复必须相等。
+- `NTT_GIANT_SEED_PAIR=1` 默认关闭，并要求设备 seed 路径。旧 D profile和 native Auto B2 配置明确拒绝复用，见[设备模型范围](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10918)、[原生配置门禁](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:537)。本阶段没有发布新 cprof。
+
+### 7.2 计算、数据与容量公式
+
+记 W=ceil(Nbits/64)，C 为每线程的连续点数，第 q 个 chunk 有 n_q 点、B_q=ceil(n_q/C) 段，段起点 `i_b=clo_q+bC`。下面只计算 seed，假定标量非零、xADD6启用；一次 xDBL 用5次模乘，xADD 用6次模乘，标量 s 的旧 ladder 用 `5+11 floor(log2 s)` 次模乘。
+
+原 seed 模乘数为：
+
+\[
+M_{old}=\sum_q\left[5+11\lfloor\log_2D\rfloor+
+\sum_b\{10+11\lfloor\log_2(i_bD)\rfloor+
+11\lfloor\log_2((i_b+\epsilon_b)D)\rfloor\}\right],
+\]
+
+其中 epsilon_b=1，只有单点尾段为0。候选单位 base 路径为：
+
+\[
+M_{pair}=5+11\lfloor\log_2D\rfloor+
+\sum_q\sum_b[5+11\lfloor\log_2i_b\rfloor].
+\]
+
+后续 chain 的 `6 Σ_qΣ_b max(0,min(C,n_q-bC)-2)` 次模乘保持。精确 Mersenne 点乘每次主导 SOS 工作约 W² 个 limb MAC；以上公式减少模乘次数，不改变单次模乘后端。不能直接把模乘数比例当作墙钟比例：并行度、依赖、local 访存和 launch 都参与实际时间。
+
+- 缓存新增 **16W bytes** 设备 payload；首次每曲线上传 D 共8B、读取 Z 共8W bytes并在 CPU 做 gcd。M8191 的缓存为2048B、Z读回1024B。
+- 每个配对 chunk 不再上传 `(2B_q+1)` 个64bit索引，少 `8 Σ_q(2B_q+1)` bytes；扣除首次 D 上传后才是该接口净减少量。不是坐标或主体 PCIe 流量下降。
+- seed 输出仍为 `16W(2B_q+1)` bytes，原 workspace 容量和坐标输出保持。候选目前仍构造原 js 主机向量以保留检查/回退合同；尚未减少这部分 CPU 数据生成或临时显存。
+- 新 kernel 的 local/register 资源不包含在上述 payload 中。模块峰值不能相加成进程峰值，需结合实际分配生命周期和 profiler。
+
+### 7.3 当前证据与状态
+
+实际候选 native SHA256 `d53f2de116271586f956dfd51d11652e8d60c22b6cb6d5c3419dba412b7d7930`，PTX3/outer0/sm89/CUDA13.3；CUDA编译509.4s。[编译 receipt](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/native/build_manifest.json)及同目录 sources/raw SHA快照保留。原生产893字节未变。测试工具会在每条曲线前后验证 binary、save、依赖和采集工具身份。
+
+[正式矩阵](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/matrix/measurements.json)：M2203/4423/8191、B1=1000/lcm/sigma26、D30030、I4096/24977、C8/64、owner0/arena4096。12种形状，每种原/配对各4条，ABBA再BAAB，共96条计时、2条预热；每种另做完整 seed、segment、affine 门禁，共12条。全部必需算术检查通过；同策略叶指纹及跨策略 proper factor 集合保持。每模式4条，未提供置信区间。
+
+C8 的 full 均值减少：2203位分别6.44%/15.45%，4423位6.31%/17.66%，8191位17.41%/20.90%。M8191/I24977 的 giant 为1.37575→0.668秒（51.44%），full为3.306406→2.615402秒（20.90%）。C64 full收益范围0.88%..13.75%，小输入噪声及固定开销不可忽略；没有据此更改全局链长。
+
+[块尾对照](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/chunk_tail/measurements.json)：M8191/D30030/C64，I8192与I136576（132480完整块＋4096尾段），各原/配对4条及一个独立全点门禁。完整块尾场景 full 减少12.20%，giant减少30.68%；base_builds=1证明跨两个 chunk 使用同一 base。这里两侧强制 chain/C64，不等于已经验证默认 ladder尾段与自适应C8的最终策略。
+
+[原生门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/native_gate/summary.json)26/0：CPU独立生成的 lcm Stage1点、2/65/66点尾段、M127/521/1279、generic129、真实 nonunit base、此前两个独立 CPU 已验证的 known-factor save。覆盖 seed/段积/全点比较、proper factor 和不可逆 base 回退。它不构成16384位或任意模数的完整验收。
+
+采集工具：[A/B及身份核验](D:/code/MPA-OpenCl/tools/bench/bench_stage2_seed_pair.py:1)、[实际原生门禁](D:/code/MPA-OpenCl/tools/test/test_stage2_seed_pair_native.py:1)。初版两次收尾被拒，原因分别是错误要求诊断 clean=1，以及将 clean=0 诊断传入正式计时 parser；原日志保留，未改变算法检查或任何计时。矩阵的 collector_initial.py、collector_continuation_r1.py和continuation身份明确记录修正。继续门禁前重新核验完整96条的计划、分组、原始 SHA及原始计时，未删除样本或重跑挑选更快结果。
+
+### 7.4 大 B2 同二进制对照与默认路径回归
+
+[大界对照](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/large_b2/measurements.json)使用 GPU1 RTX4060 Laptop、M4423/B1=1000/lcm/sigma26、精确 B2=2011326186870、D1381380、I1456028、C64、owner640MiB/arena6300MiB。两侧使用同一个 d53 二进制，仅切换 seed_pair，ABBA+BAAB各4条，预热另列，全部必需GMP/oracle检查保留：
+
+- full 均值 **38.9105725→36.7176005秒，减少5.63593%**；相应 curves/s 增加5.97254%。原范围38.784093..39.054437秒，候选36.527450..37.096580秒。样本数量有限，不作跨设备/生产B1的普遍收益承诺。
+- giant 均值 **4.9210→2.7455秒，减少44.20849%**。候选6个坐标chunk只构建一次base；22751个配对ladder省去364064B标量H2D，新base为1120B、Z读回560B。主体NTT/坐标传输没有等比例减少。
+- 两侧NTT模块 `full_peak_bytes=3341481200`（3186.684MiB），legacy_mallocs=0；此为模块容量统计，不是进程峰值。不能与历史生产39.04秒相减再计算一次独立收益。
+- 另做一个计时外完整门禁：六个chunk的 **1456028个仿射点全部比较，零失配**，45508个seed和91002个段积检查通过。约270秒的诊断运行不进入上述均值；同策略叶指纹一致。
+
+候选大界阶段均值用于判断剩余工作：G树12.5795秒（34.26%）、fold5.65425秒（15.40%）、下降6.21075秒（16.91%）、baby3.723秒（10.14%）、F树约2.61819秒（7.13%）、giant2.7455秒（7.48%）、inverse1.652秒（4.50%）。这些是引擎阶段墙钟，包含各阶段准备/等待，不能都归为纯NTT kernel时间。`init/main` 与这些子项有包含关系，不相加；F树由init扣除baby/affine估算，init其余开销包含在估算内。
+
+[默认点后端门禁](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/default_point_gate_r1/summary.json) **18/0**：七位宽/两种模式的Mont2048及xADD1280 primitive检查、generic128/130分派、两个实际M4423 save模型范围检查。初次误用了另一条有效Q，因固定旧leaf指纹不匹配被拒；保留失败目录，恢复原 `_fixed_d_20261005/native_accept/m4423.save` 身份后通过，没有放宽leaf检查。新 `--payload-accounting-v2` 仅把已有ledger使旧D profile失效这一事实纳入门禁预期，不改变算法。primitive的X=2 fixture不宣称是有效Stage1存档。
+
+本阶段合计 **120条正式计时、6条预热、15条单独的全点门禁**；另有26项配对原生门禁、18项默认后端门禁和4条管理员profile曲线，按类别独立记录，不合并成同一种性能样本。初版采集器和错误锚点导致的拒绝记录也保留。
+
+### 7.5 管理员 Nsight Systems / Compute 的硬件证据
+
+两种profiler均通过管理员隐藏进程启动并正常退出，针对GPU1、M8191/D30030/I4096/C8、owner0/arena4096、同d53和同save。profile曲线检查通过，但profile会改变执行，性能结论采用上面的无profile A/B。
+
+[Systems原路径](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/nsys_original/summary.json)与[配对路径](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/nsys_paired/summary.json)：原seed ladder grid17为0.776943秒；候选一次base ladder grid1为0.116387秒，加paired seed grid8为0.283781秒，合计0.400168秒。baby ladder约0.4506秒、后续chain约0.0655秒和段积约0.0709秒基本不变，符合减少seed计算的解释。
+
+- 自身GPU事件window为2.276861→1.892554秒，无本进程GPU事件间隙 **0.422103→0.414444秒**；绝对间隙基本未变，百分比18.54→21.90%因有效计算缩短而上升。不能解释为整卡空闲比例或证明所有间隙来自CPU计算。
+- 设备分配生命周期审计峰值 **260175088→260177136B**，正好多2048B；tracked device end_live=0。pinned host峰值两侧均21223944B。该trace范围含启动/自检/收尾，非单一Stage2计时窗口；动态local流量不等于这些显式malloc容量。
+
+[NCU原seed](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/ncu_original/summary.json)明确跳过baby ladder，捕获grid17/block64；[候选seed](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/ncu_paired/summary.json)捕获唯一paired grid8/block64。18-pass replay，clock-control/cache-control均none，[原始指标摘录](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/ncu_selected.json)：
+
+- 寄存器64→72/thread；achieved warp occupancy约4.11→4.16%，issue active约15.33→14.62%。这是小grid样本，不能仅根据寄存器数归因于occupancy限制。
+- local load sectors **3627452056→561401456**，store sectors **2133572511→329772239**，分别减少84.52%/84.54%。这不是DRAM或PCIe字节，也不按18次replay相乘。
+- long-scoreboard/issue-active为3.7320→4.0305，wait约1.4733→1.5090，依赖访存/执行等待仍突出。配对kernel采集时长774.390→284.813ms不含候选base计算，不能直接称完整seed或Stage2收益。
+- Systems的 `localMemoryPerThread=0` 不证明没有local访存；NCU明确显示大量local操作，下一轮应以硬件计数器和完整A/B判断局部数组改写。
+
+### 7.6 收尾与下一阶段
+
+[最终审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_seed_pair_20261007/final_audit.json)重新检查完整ABBA/BAAB计划、原始log/result SHA、每条实际输入和检查、全部计时重解析、采集器初版/修正版身份、两类profiler报告、25项编译依赖。当前源文件raw bytes与冻结编译来源完全一致；原生产893不变。证据打包在ignored `build_cuda_cmake/_stage2_seed_pair_20261007/evidence.zip`，同目录 `evidence_manifest.json` 记录逐文件与压缩包SHA；不加入用户已排除的data目录。
+
+优先项：
+
+1. **单点base的CPU GMP预计算**。GPU一个线程求H花0.116秒，独立Python数学探针20次中位约0.01939秒，提示CPU方案值得实现并A/B。Python数字不是native GMP时间或已实现收益；需保留单位检查、正确Montgomery转换/尺度和非单位回退，再比较总墙钟。
+2. **按实际点数/位宽校准C和尾段分派**。配对减少seed代价，旧C8/64拐点失效；覆盖完整块、短尾、退化base后才决定默认策略。
+3. **准备/等待及NTT热shape**。G树/fold/下降仍合计约66.6%的大界full；绝对事件间隙未消失，须区分主机准备、同步等待和kernel local/NTT成本，再考虑批处理或多曲线重叠，先约束RAM/VRAM总预算。
+4. **生产16384位、独立精简cu、日志粒度**。逐项处理入口/几何、256-limb分派、除数表和非模板fold数组，使用有效宽位数保存点验收。稳定算法之后重新标定Auto B2成本；当前无新cprof，seed_pair仍默认0，未发布新的生产二进制。

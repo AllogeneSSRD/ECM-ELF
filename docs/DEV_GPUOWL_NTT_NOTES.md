@@ -4707,3 +4707,7 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 数据分配仍7*C*4608/8，C2304为8.859375MiB；window seed同量，普通生产无seed。计划10m/260m分别10.140671/216.611633MiB不变；m4423仅kernel边界逻辑6bn→5bn，不减少初始H2D/restore。主WMAD MAC代理每curve每M为82944，原np0乘法源码求值2304，两者都非退休指令/周期。原始日志继续保存在已忽略的docs/data。
 
 采用建议：本机N4423优先显式TPI16/C2304/single-compact/cap168/50ms/np0；m4423保留可选，不普遍推广，不改生产默认。按用户要求完成本轮后结题，不启动下一轮；不声称所有Stage1已达理论上限。完整曲线总墙钟与Auto B2完整T1未在本轮认证。[完整矩阵、NCU、公式、代码行及结题建议](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_CONSTANTS_20261007.md:1)。
+
+## 108. Stage2配对giant seed：大B2总时长减少5.64%（2026-10-07）
+
+默认关闭的seed_pair候选缓存[D]Q并复用ladder双输出；真实非单位base回退旧算法。GPU1三位宽、块尾、大界共120条正式计时，15条完整仿射/seed/段积门禁；另26项配对和18项默认后端门禁通过。M4423/B2≈2.01e12同binary full38.91→36.72秒，giant少44.21%。管理员Systems/NCU确认seed计算/local访存减少，但准备间隙和依赖等待仍在。主题报告统一维护[算法、公式、证据与下一步](D:/code/MPA-OpenCl/docs/STAGE2_XADD_D_OPTIMIZATION.md:178)；生产893保持，16384位/独立cu/日志粒度和新Auto B2标定仍待推进。

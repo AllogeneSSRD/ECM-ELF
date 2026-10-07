@@ -397,6 +397,9 @@ static const bool g_gfinv_seg_check = [] {
 static const bool g_giant_seed_device = [] {
     const char *e=std::getenv("NTT_GIANT_SEED_DEVICE");return e && std::atoi(e)!=0;
 }();
+static const bool g_giant_seed_pair = [] {
+    const char *e=std::getenv("NTT_GIANT_SEED_PAIR");return e && std::atoi(e)!=0;
+}();
 static const bool g_giant_seed_check = [] {
     const char *e=std::getenv("NTT_GIANT_SEED_CHECK");return e && std::atoi(e)!=0;
 }();
@@ -404,6 +407,8 @@ struct GiantSeedStats {
     unsigned long long chunks=0,points=0,avoided_d2h_bytes=0,avoided_h2d_bytes=0;
     unsigned long long avoided_cpu_modmuls=0,avoided_montmuls=0,checked_words=0;
     unsigned long long segments=0,segment_checks=0,segment_fix_muls=0,fix_table_peak_bytes=0;
+    unsigned long long base_builds=0,base_nonunits=0,paired_chunks=0,paired_ladders=0;
+    unsigned long long scalar_h2d_avoided=0,base_d2h_bytes=0;
 } g_giant_seed;
 static const bool g_gfinv_batch = [] {
     const char *e=std::getenv("NTT_GFINV_BATCH"); return e && std::atoi(e)!=0;
@@ -994,6 +999,65 @@ static void s2g_launch_ladder(int nw, int npts, const unsigned long long *dn,
                                                 dx+(size_t)p0*nw,dz+(size_t)p0*nw,normal_output);
         else s2g_ladder_kernel<NW><<<bl, th>>>(dn, ninv, nw, dqx, dqz, da24, dmone, djs + p0, m,
                                           dx + (size_t)p0 * nw, dz + (size_t)p0 * nw, normal_output);
+    }
+}
+
+/* H=[D]Q is already a Montgomery pair. A ladder on H ends with the two
+   adjacent points [i]H and [i+1]H; retain both instead of running it twice.
+   This deliberately leaves the original ladder/kernel unchanged for A/B. */
+template <int NW, bool XADD6>
+__global__ void s2g_seed_pair_kernel(const unsigned long long *n,unsigned long long ninv,int nw,
+                                    const unsigned long long *hx,const unsigned long long *hz,
+                                    const unsigned long long *a24,const unsigned long long *mone,
+                                    unsigned long long clo,unsigned long long npts,
+                                    unsigned long long per_block,unsigned long long blocks,
+                                    unsigned long long offset,unsigned long long count,
+                                    unsigned long long *ox,unsigned long long *oz)
+{
+    const unsigned long long local=blockIdx.x*(unsigned long long)blockDim.x+threadIdx.x;
+    if(local>=count)return;
+    const unsigned long long b=offset+local,k=clo+b*per_block;
+    unsigned long long ax[NW],az[NW],bx[NW],bz[NW];
+    if(k==0) {
+        for(int j=0;j<nw;++j){ax[j]=mone[j];az[j]=0;bx[j]=hx[j];bz[j]=hz[j];}
+    } else {
+        int top=63;while(((k>>top)&1ull)==0)--top;
+        for(int j=0;j<nw;++j){ax[j]=hx[j];az[j]=hz[j];}
+        s2g_xdbl<NW>(bx,bz,hx,hz,a24,n,ninv,nw);
+        for(int bit=top-1;bit>=0;--bit) {
+            if((k>>bit)&1ull) {
+                s2g_xadd<NW,XADD6>(ax,az,ax,az,bx,bz,hx,hz,n,ninv,nw);
+                s2g_xdbl<NW>(bx,bz,bx,bz,a24,n,ninv,nw);
+            } else {
+                s2g_xadd<NW,XADD6>(bx,bz,ax,az,bx,bz,hx,hz,n,ninv,nw);
+                s2g_xdbl<NW>(ax,az,ax,az,a24,n,ninv,nw);
+            }
+        }
+    }
+    const bool single=b*per_block+1>=npts;
+    for(int j=0;j<nw;++j) {
+        ox[(size_t)(2*b)*nw+j]=ax[j];oz[(size_t)(2*b)*nw+j]=az[j];
+        ox[(size_t)(2*b+1)*nw+j]=single?ax[j]:bx[j];
+        oz[(size_t)(2*b+1)*nw+j]=single?az[j]:bz[j];
+        if(b==0){ox[(size_t)(2*blocks)*nw+j]=hx[j];oz[(size_t)(2*blocks)*nw+j]=hz[j];}
+    }
+}
+
+template <int NW>
+static void s2g_launch_seed_pair(int nw,unsigned long long clo,unsigned long long npts,
+                               unsigned long long per_block,unsigned long long blocks,
+                               const unsigned long long *dn,unsigned long long ninv,
+                               const unsigned long long *hx,const unsigned long long *hz,
+                               const unsigned long long *a24,const unsigned long long *mone,
+                               unsigned long long *ox,unsigned long long *oz)
+{
+    for(unsigned long long offset=0;offset<blocks;offset+=g_ladder_cap) {
+        const unsigned long long count=std::min(blocks-offset,(unsigned long long)g_ladder_cap);
+        const unsigned int th=64,bl=(unsigned int)((count+th-1)/th);
+        if(g_xadd6)s2g_seed_pair_kernel<NW,true><<<bl,th>>>(dn,ninv,nw,hx,hz,a24,mone,
+            clo,npts,per_block,blocks,offset,count,ox,oz);
+        else s2g_seed_pair_kernel<NW,false><<<bl,th>>>(dn,ninv,nw,hx,hz,a24,mone,
+            clo,npts,per_block,blocks,offset,count,ox,oz);
     }
 }
 
@@ -8804,6 +8868,9 @@ struct S3Workspace {
                        *dmone = nullptr;
     unsigned long long *djs = nullptr;
     unsigned long long *dx = nullptr, *dz = nullptr;
+    unsigned long long *giant_base=nullptr;
+    unsigned long long giant_base_d=0;
+    bool giant_base_unit=false;
     unsigned long long *dvals = nullptr, *dprod = nullptr;
     unsigned long long *dsegfix=nullptr;
     size_t segfix_cap=0;
@@ -8821,6 +8888,7 @@ struct S3Workspace {
         if (djs) cudaFree(djs);
         if (dx) cudaFree(dx);
         if (dz) cudaFree(dz);
+        if (giant_base) cudaFree(giant_base);
         if (dvals) cudaFree(dvals);
         if (dprod) cudaFree(dprod);
         if (dsegfix) cudaFree(dsegfix);
@@ -8858,6 +8926,26 @@ struct S3Workspace {
         dsegfix=nullptr;CK(cudaMalloc(&dsegfix,powers.size()*8));
         CK(cudaMemcpy(dsegfix,powers.data(),powers.size()*8,cudaMemcpyHostToDevice));
         segfix_cap=seg;bytes+=powers.size()*8;
+    }
+    bool need_giant_base(unsigned long long d,mpz_srcptr modulus)
+    {
+        if(giant_base_d==d)return giant_base_unit;
+        const size_t nw=C->nw;
+        if(!giant_base){CK(cudaMalloc(&giant_base,16*nw));bytes+=16*nw;}
+        need_pts(1);
+        CK(cudaMemcpy(djs,&d,8,cudaMemcpyHostToDevice));
+        S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,1,dn,C->ninv,dqx,dqz,da24,dmone,
+                     djs,giant_base,giant_base+nw,false);
+        CK(cudaGetLastError());++ladder_calls;++ladder_points_total;
+        std::vector<unsigned long long> z(nw);
+        CK(cudaMemcpy(z.data(),giant_base+nw,8*nw,cudaMemcpyDeviceToHost));
+        mpz_t value,gcd;mpz_inits(value,gcd,nullptr);
+        words_to_mpz(value,z.data(),nw);mpz_gcd(gcd,value,modulus);
+        giant_base_unit=mpz_cmp_ui(gcd,1)==0;giant_base_d=d;
+        mpz_clears(value,gcd,nullptr);
+        ++g_giant_seed.base_builds;g_giant_seed.base_d2h_bytes+=8*nw;
+        if(!giant_base_unit)++g_giant_seed.base_nonunits;
+        return giant_base_unit; // Preserve the original factor path for nonunits/infinity.
     }
     void need_pts(size_t n)
     {
@@ -9066,11 +9154,19 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
     std::vector<unsigned long long> lx, lz;
     if(g_giant_seed_device) {
         W.need_pts(js.size());
-        CK(cudaMemcpy(W.djs,js.data(),js.size()*8,cudaMemcpyHostToDevice));
-        S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,(int)js.size(),W.dn,C.ninv,
-                    W.dqx,W.dqz,W.da24,W.dmone,W.djs,W.dx,W.dz,false);
+        const bool paired=g_giant_seed_pair && W.need_giant_base(D,L.N);
+        if(paired) {
+            S2G_DISPATCH((int)nw,s2g_launch_seed_pair,(int)nw,clo,npts,per_block,blocks,
+                         W.dn,C.ninv,W.giant_base,W.giant_base+nw,W.da24,W.dmone,W.dx,W.dz);
+            ++g_giant_seed.paired_chunks;g_giant_seed.paired_ladders+=blocks;
+            g_giant_seed.scalar_h2d_avoided+=js.size()*8;
+        } else {
+            CK(cudaMemcpy(W.djs,js.data(),js.size()*8,cudaMemcpyHostToDevice));
+            S2G_DISPATCH((int)nw,s2g_launch_ladder,(int)nw,(int)js.size(),W.dn,C.ninv,
+                         W.dqx,W.dqz,W.da24,W.dmone,W.djs,W.dx,W.dz,false);
+        }
         CK(cudaGetLastError());
-        ++W.ladder_calls;W.ladder_points_total+=js.size();
+        ++W.ladder_calls;W.ladder_points_total+=paired?blocks:js.size();
         ++g_giant_seed.chunks;g_giant_seed.points+=js.size();
         g_giant_seed.avoided_d2h_bytes+=16ull*nw*js.size();
         g_giant_seed.avoided_h2d_bytes+=16ull*nw*js.size();
@@ -9082,7 +9178,17 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
             CK(cudaMemcpy(lz.data(),W.dz,lz.size()*8,cudaMemcpyDeviceToHost));
             std::vector<unsigned long long> cx,cz,expect(nw);
             ladder_points(C,js,cx,cz); // independent normal-output endpoint, not W's lease
+            mpz_t old_z,new_z;mpz_inits(old_z,new_z,nullptr);
             for(size_t i=0;i<js.size();++i)for(int z=0;z<2;++z) {
+                if(paired) {
+                    if(z)continue; // Projective scale differs; compare x by cross products.
+                    words_to_mpz(X,cx.data()+i*nw,nw);words_to_mpz(new_z,lz.data()+i*nw,nw);
+                    mpz_mul(X,X,new_z);mpz_mod(X,X,L.N);
+                    words_to_mpz(Z,lx.data()+i*nw,nw);words_to_mpz(old_z,cz.data()+i*nw,nw);
+                    mpz_mul(Z,Z,old_z);mpz_mod(Z,Z,L.N);
+                    if(mpz_cmp(X,Z)!=0){std::fprintf(stderr,"FATAL: paired seed GMP projective mismatch point=%llu\n",(unsigned long long)i);std::exit(3);}
+                    g_giant_seed.checked_words+=2*nw;continue;
+                }
                 words_to_mpz(X,(z?cz:cx).data()+i*nw,nw);mpz_mul(X,X,Rm);mpz_mod(X,X,L.N);
                 mpz_to_words(expect,nw,X);
                 if(!std::equal(expect.begin(),expect.end(),(z?lz:lx).begin()+i*nw)) {
@@ -9090,6 +9196,7 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
                 }
                 g_giant_seed.checked_words+=nw;
             }
+            mpz_clears(old_z,new_z,nullptr);
         }
     } else ladder_points_ws(W, js, lx, lz);
     /* the seeds and the difference point as MONTGOMERY IMAGES (x*R mod N) */
@@ -10808,7 +10915,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0 && (outer_mode==0 || shape_ntt) &&
         fuse_env_ull("NTT_S4_BATCH_MB",64)==64 &&
         fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)==64 && fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768)==32768 &&
-        fuse_env_ull("NTT_GIANT_CHAIN_SMALL_BLOCK",0)==0 &&
+        fuse_env_ull("NTT_GIANT_CHAIN_SMALL_BLOCK",0)==0 && !g_giant_seed_pair &&
         fuse_env_ull("NTT_ARENA_WORKSPACE_POOL",1)!=0 &&
         fuse_env_ull("NTT_S4_SAMPLE",96)==96 && fuse_env_ull("NTT_S4_CHECK_EVERY",8)==8;
     for(const char *key:{"NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE","NTT_GFINV_SEG_EXACT",
@@ -11535,6 +11642,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     g_giant_seed.avoided_d2h_bytes,g_giant_seed.avoided_h2d_bytes,g_giant_seed.avoided_cpu_modmuls,
                     g_giant_seed.avoided_montmuls,g_giant_seed.checked_words,g_giant_seed.segments,
                     g_giant_seed.segment_checks,g_giant_seed.segment_fix_muls,g_giant_seed.fix_table_peak_bytes);
+        std::printf("real_giant_seed_pair: requested=%d base_builds=%llu base_nonunits=%llu chunks=%llu paired_ladders=%llu scalar_h2d_avoided=%llu base_d2h_bytes=%llu\n",
+                    (int)g_giant_seed_pair,g_giant_seed.base_builds,g_giant_seed.base_nonunits,
+                    g_giant_seed.paired_chunks,g_giant_seed.paired_ladders,
+                    g_giant_seed.scalar_h2d_avoided,g_giant_seed.base_d2h_bytes);
         std::printf("real_giant_chain: chunks=%llu seed_points=%llu chunks_per_ladder=%llu\n",
                     BR.giant_chain_chunks, BR.giant_seed_points,
                     BR.giant_chain_chunks ? 0ull : 1ull);
@@ -12338,4 +12449,4 @@ int main(int argc, char **argv)
     return run_check_F(check_F, gpu_dump, evaluate, evaluate_batched);
 }
 #endif // STAGE2_TREE_GPU_NO_MAIN
-
+

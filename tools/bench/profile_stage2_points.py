@@ -19,6 +19,7 @@ def main():
     p.add_argument('--point-mersenne',type=int,choices=(0,1),default=0)
     p.add_argument('--carry-check-fused',type=int,choices=(0,1),default=0)
     p.add_argument('--chain-min',type=int,default=None)
+    p.add_argument('--seed-pair',type=int,choices=(0,1),default=0)
     p.add_argument('--chain-block',type=int,default=None,help='Explicit chain points per thread; 4..2^20')
     p.add_argument('--short-chain-block',type=int,default=None,help='Opt-in short-chunk points per thread: 0 or 4..64')
     p.add_argument('--short-chain-max',type=int,default=None,help='Exclusive short-chunk point limit, at most 2^20')
@@ -59,6 +60,7 @@ def main():
     if a.chain_min is not None:
         if not 0<=a.chain_min<=100000000:raise ValueError('Invalid chain minimum')
         env['NTT_GIANT_CHAIN_MIN']=str(a.chain_min)
+    env['NTT_GIANT_SEED_PAIR']=str(a.seed_pair)
     if a.chain_block is not None:
         if not 4<=a.chain_block<=1<<20:raise ValueError('Invalid chain block')
         env['NTT_GIANT_CHAIN_BLOCK']=str(a.chain_block)
