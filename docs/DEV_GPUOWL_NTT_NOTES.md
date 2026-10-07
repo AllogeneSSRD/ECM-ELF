@@ -4626,3 +4626,21 @@ CPU17066输入链/六模型102396求值、264538规则步骤全部一致；804 n
 五管理员NCU均19passes/exit0/导出0，同tail32/grid192/TPB128。cap local load sectors688128→0、store525212→21468，累计local字节代理37.028198→0.655151MiB（约−98.23%）；实际spill消失，容量仍3。eligible0.460015→0.482076、issue33.138→33.807%，wait/no_instruction/short_scoreboard下降。自然eligible0.365985→0.490585、issue31.267→33.417%，但wait/no_instruction/short_scoreboard增加；不以单一指标解释吞吐。local代理非VRAM/DRAM/PCIe、不乘pass，stall非墙钟占比。忙采样SM全1800MHz；设备MiB采样最大固定323/前缀317，非完整进程峰。
 
 v4成为此机/宽度/批量的暂定最佳显式实验候选，默认不改。下一项扩展显式4608/TPI32，用C192/384/768匹配TPI16 C384/768/1536提交grid，分别核对资源、驻留容量与吞吐；不将匹配grid当作相等实际blocks/SM。[全部数据、公式、原文件行、SHA及采用边界](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_SHARED_DBL_20261007.md:1)。
+
+## 103. Stage1 共享 DBL 的 TPI32 配对：资源下降但吞吐回退（2026-10-07）
+
+基线9f5d485。仅增加显式4608/TPI32/single-compact MODE12/13、register255/168；默认N4423→4608/TPI16/TPB128不改，不扩大旧single-add/compact/outline范围。候选/dispatcher两个TU194.4/9.5秒并发，最终仅链接；exe SHA2a7db11e…89232。私有header仅澄清B由seed、T由普通ADD定义的注释，公共算术SHA不变；host/normal TPI16对象SHA不变，原四个TPI16候选完整SASS和资源与v4全部相同。
+
+TPI32 natural/cap实际寄存器111/109，stack64/spill0，静态指令14528/14072、text232448/225152bytes；TPI16仍161/162、stack48/spill0。NCU确认TPI32分配112/容量4blocks，TPI16分配168/容量3；没有依据将静态条数下降当作吞吐提高。
+
+CPU17066输入链/六模型102396求值、264538角色步骤及804 normalized Montgomery/4824公共别名对照通过。GPU完整Q/save natural184、cap168/C192共1840，各27类，其中强制32候选主案例/恢复56/608 Q；其他数字包括ladder/resident/公共边界对照。窗口1648 Q、16恢复Q、22拒绝、206结果通过。158同TPI完整XZ逐字节（含60跨切片）一致；另73跨TPI16/32同输入的完整XZ一致。初次跨TPI数量预期72漏一checkpoint窗口，读取分组后修正，不重跑GPU。
+
+新配对工具记录actual C/TPI/grid/驻留容量，以曲线吞吐比较，TPI16 C384/768/1536对应TPI32 C192/384/768，grid48/96/192。60固定tail32（五配置×三grid×短4/长32×两反序）和60前缀（两B1×五配置×三grid×两反序，50ms）全部完成，SHA/缓存/几何/原始日志及矩阵通过。普通前缀正常采样limit/checkpoint-only，无强制终止或最终save。
+
+前缀cap168匹配TPI32相对TPI16：10m三档吞吐−35.150%/−24.794%/−29.443%，260m−35.148%/−24.813%/−29.448%；自然同样回退。固定C1536短/长cap32吞吐−29.520%/−27.248%。本批最佳仍TPI16/C1536/cap168/50ms，10m/260m为5.004845/130.985920 s/curve，与v4相近；没有新增最佳收益。32-baseline也比32共享候选快，不能照搬16的角色复用收益。均短时投影，不发布Auto B2 T1。
+
+核对CGBN实际架构：sm89默认XMP_WMAD（软件核心，不是Tensor Core），不是因SASS有IMAD指令就选core_mont_imad。B4608有144有效limb；TPI16 L9/S144，TPI32 L5/S160、16填充槽位。bn2mont明确使用更大R，分别2^4608/2^5120；N/显式容器不变，export后XZ仍一致。实际WMAD两limb循环八条主MAC链合计8L项，每线程4tL²、每curve4(tL)²，分别82944/102400，源码主MAC求值量增加23.4568%；不是退休SASS条数/周期，也不能等同全部回退原因。
+
+四管理员NCU全部exit0/导出0，同grid192/TPB128/tail32；TPI16为19passes，三个32为18（初次审计写死19，核对原日志后修正，不重新采集）。shared16cap/shared32/shared32cap/base32的平均活跃warp11.035/14.202/14.129/14.074，eligible0.483/0.708/0.712/0.778，issue33.843/39.431/38.707/40.593%。TPI32更多warp/更高issue但每warp一条curve，16为两条；槽位代理约22.07vs14.13。short_scoreboard0.326/1.200/1.070/0.402，不能全归因shuffle。local load全0、累计local代理0.6486..0.6615MiB，无新增spill证据；DRAM throughput0.000044%..0.000210% of peak，无该窗口DRAM饱和证据。stall非墙钟占比，local非VRAM/DRAM/PCIe，不乘passes。
+
+40项Stage1工具/源码及实际CGBN核心SHA留档。忙采样SM均1800MHz，设备MiB采样最大固定323/前缀317，非完整进程峰。保留显式32候选/复现工具，生产选择仍16。下一项同16共享算法下测试cap128（预期4blocks且增加spill），按门禁/配对/NCU决定；后续紧凑normalized容器/Montgomery核心先证明边界再减少MAC。[全部矩阵、公式、原文件行、SHA与采用边界](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_SHARED_DBL_TPI32_20261007.md:1)。

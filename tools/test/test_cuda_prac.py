@@ -128,10 +128,11 @@ def main():
     args = ap.parse_args(); exe = args.exe.resolve(strict=True); root = args.output.resolve()
     if not math.isfinite(args.target_ms) or not 10 <= args.target_ms <= 500 or args.curves < 1:
         ap.error('Finite target in 10..500 ms and positive curves required')
-    if args.registers == 168 and (args.bits != [4423] or args.tpi == 32):
-        ap.error('168-register variant requires --bits 4423 and TPI16/default')
-    if args.variant != 'baseline' and (args.bits != [4423] or args.tpi == 32 or args.registers == 0):
-        ap.error('Experimental point variants require --bits 4423, TPI16/default and registers 168/255')
+    alternate_compact = args.tpi == 32 and args.variant == 'single-compact'
+    if args.registers == 168 and (args.bits != [4423] or (args.tpi == 32 and not alternate_compact)):
+        ap.error('168-register policy requires --bits 4423 and TPI16/default, or TPI32 single-compact')
+    if args.variant != 'baseline' and (args.bits != [4423] or (args.tpi == 32 and not alternate_compact) or args.registers == 0):
+        ap.error('Point variants require --bits 4423, registers 168/255; TPI32 supports only single-compact')
     root.mkdir(parents=True, exist_ok=False)
     results = []
     cases = [(f'M{n}', f'(2^{n}-1)', 1000, args.curves, 26, t) for n in args.bits for t in ('lcm', 'choose12')]

@@ -113,8 +113,11 @@ def main():
     if not 1 <= a.count <= 32 or not 0 <= a.warmup <= 32 or not 0 < a.seconds <= 600 or a.curves < 1 or a.repeats < 1:
         p.error('Invalid count, warmup, seconds, curves or repeats')
     if any(not 0 <= c <= a.count for c in a.chunks):p.error('Chunks must be in 0..count')
-    if (any(v != 'baseline' for v in a.variants) or 168 in a.registers) and (a.bits != [4423] or a.tpi == 32):
-        p.error('Experimental point variants/168 require --bits 4423 and TPI16/default')
+    if (any(v != 'baseline' for v in a.variants) or 168 in a.registers) and a.bits != [4423]:
+        p.error('Experimental point variants/168 require --bits 4423')
+    if a.tpi == 32 and (any(v not in ('baseline','single-compact') for v in a.variants) or
+                        (168 in a.registers and 'baseline' in a.variants)):
+        p.error('TPI32 point candidates/168 support only single-compact; baseline requires registers 0/255')
     if any(v != 'baseline' for v in a.variants) and 0 in a.registers:
         p.error('Experimental point variants require registers 168/255')
     cache = (a.exp_cache or exe.parent).resolve(); root = a.output.resolve()

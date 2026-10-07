@@ -145,8 +145,9 @@ def main():
     if not 10 <= args.prac_target_ms <= 500:parser.error('PRAC target must be in 10..500 ms')
     if args.tpi and 'ladder' in args.algorithms:
         parser.error('TPI overrides require --algorithms resident prac (the original ladder is unchanged)')
-    if args.prac_variant != 'baseline' and (args.bits != [4423] or args.tpi == 32 or args.prac_registers == 0):
-        parser.error('Experimental point variants require --bits 4423, TPI16/default and registers 168/255')
+    if args.prac_variant != 'baseline' and (args.bits != [4423] or
+            (args.tpi == 32 and args.prac_variant != 'single-compact') or args.prac_registers == 0):
+        parser.error('Point variants require --bits 4423, registers 168/255; TPI32 supports only single-compact')
     exe = args.exe.resolve(strict=True)
     args.exp_cache = (args.exp_cache or exe.parent).resolve()
     root = (args.output or Path('docs/data') / ('prac_cuda_' + dt.datetime.now().strftime('%Y%m%d_%H%M%S'))).resolve()

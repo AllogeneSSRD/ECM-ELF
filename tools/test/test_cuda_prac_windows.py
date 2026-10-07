@@ -126,9 +126,11 @@ def main():
     p.add_argument('--outline-add',action='store_true',help='Also gate the shared xADD candidate at 4608/TPI16')
     p.add_argument('--single-add',action='store_true',help='Also gate the single inline xADD site at 4608/TPI16')
     p.add_argument('--single-compact',action='store_true',help='Also gate single inline xADD plus compact DBL at 4608/TPI16')
+    p.add_argument('--single-compact-tpi32',action='store_true',help='Also gate explicit 4608/TPI32 single-compact; requires --single-compact')
     p.add_argument('--production-counts',type=int,nargs='+',default=[16],help='Production window lengths, each 1..32')
     p.add_argument('--production-chunks',type=int,nargs='+',default=[0],help='Per-launch record counts, 0 means unsplit')
     a=p.parse_args();exe=a.exe.resolve(strict=True);cache=(a.cache or exe.parent).resolve();root=a.output.resolve()
+    if a.single_compact_tpi32 and not a.single_compact:p.error('--single-compact-tpi32 requires --single-compact')
     if any(not 1 <= count <= 32 for count in a.production_counts):p.error('Production window counts must be 1..32')
     if any(not 0 <= chunk <= min(a.production_counts) for chunk in a.production_chunks):p.error('Chunks must be in 0..smallest production count')
     root.mkdir(parents=True,exist_ok=False);results=[]
@@ -139,6 +141,7 @@ def main():
         if n==4423 and a.outline_add:configs += [('outline-add',16,255),('outline-add',16,168)]
         if n==4423 and a.single_add:configs += [('single-add',16,255),('single-add',16,168)]
         if n==4423 and a.single_compact:configs += [('single-compact',16,255),('single-compact',16,168)]
+        if n==4423 and a.single_compact_tpi32:configs += [('single-compact',32,255),('single-compact',32,168)]
         for variant,tpi,registers in configs:
             for exponent in ('lcm','choose12'):
                 for position in ('prefix','middle','tail'):
@@ -153,18 +156,19 @@ def main():
     slicing_signatures={};bitwise_slice_checks=0
     if a.production:
         for b1 in (10000000,260000000):
-            configs = [('baseline',255),('baseline',168),('compact',255),('compact',168)]
-            if a.outline_add:configs += [('outline-add',255),('outline-add',168)]
-            if a.single_add:configs += [('single-add',255),('single-add',168)]
-            if a.single_compact:configs += [('single-compact',255),('single-compact',168)]
-            for variant,registers in configs:
+            configs = [('baseline',16,255),('baseline',16,168),('compact',16,255),('compact',16,168)]
+            if a.outline_add:configs += [('outline-add',16,255),('outline-add',16,168)]
+            if a.single_add:configs += [('single-add',16,255),('single-add',16,168)]
+            if a.single_compact:configs += [('single-compact',16,255),('single-compact',16,168)]
+            if a.single_compact_tpi32:configs += [('single-compact',32,255),('single-compact',32,168)]
+            for variant,tpi,registers in configs:
                 for count in a.production_counts:
                     for chunk in a.production_chunks:
                         for position in ('prefix','middle','tail'):
-                            folder=root/f'production_b{b1}_{variant}_reg{registers}_c{count}_chunk{chunk}_{position}'
-                            r=sample(exe,folder,4423,b1,8,a.device,16,registers,variant,position,count,0.001,1,cache,True,chunk=chunk)
+                            folder=root/f'production_b{b1}_{variant}_t{tpi}_reg{registers}_c{count}_chunk{chunk}_{position}'
+                            r=sample(exe,folder,4423,b1,8,a.device,tpi,registers,variant,position,count,0.001,1,cache,True,chunk=chunk)
                             signature=hashlib.sha256((folder/'window_q.csv').read_bytes()).hexdigest()
-                            key=(b1,variant,registers,count,position)
+                            key=(b1,variant,tpi,registers,count,position)
                             if key in slicing_signatures:
                                 assert signature==slicing_signatures[key], 'Slicing changed projective output bytes'
                                 bitwise_slice_checks+=1
@@ -183,6 +187,15 @@ def main():
     text=run(exe,folder,*settings,'prac',a.device,tpi=16,registers=255,variant='baseline')
     assert 'checkpoint resumed' in text and rows(folder)==rows(root/'checkpoint_reference')
     assert not list(folder.glob('.ecm_ckpt_*'))
+    if a.single_compact_tpi32:
+        folder=root/'checkpoint_isolation_tpi32'
+        text=run(exe,folder,*settings,'prac',a.device,sample=0.000001,tpi=32,registers=168,variant='single-compact')
+        assert 'sample limit reached' in text and len(list(folder.glob('.ecm_ckpt_*')))==1
+        r=sample(exe,folder,4423,1000,8,a.device,32,168,'single-compact','tail',4,0.001,1,cache,True,sigma=settings[3],exponent='choose12')
+        r['Q_compared']=verify(cache,folder,r);r['passed']=True;results.append(r)
+        text=run(exe,folder,*settings,'prac',a.device,tpi=32,registers=255,variant='baseline')
+        assert 'checkpoint resumed' in text and rows(folder)==rows(root/'checkpoint_reference')
+        assert not list(folder.glob('.ecm_ckpt_*'))
     failures=[({'ECM_PRAC_WINDOW':'bad'},'must be prefix, middle or tail'),
               ({'ECM_PRAC_WINDOW_COUNT':'0'},'count must be 1..32'),
               ({'ECM_PRAC_WINDOW_COUNT':'-1'},'invalid ECM_PRAC_WINDOW_COUNT'),
@@ -202,7 +215,7 @@ def main():
                      ({'ECM_PRAC_VARIANT':'single-add','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
                      ({'ECM_PRAC_VARIANT':'single-add','ECM_GPU_STAGE1_ALGO':'resident'},'requires ECM_GPU_STAGE1_ALGO=prac')]
     if a.single_compact:
-        failures += [({'ECM_PRAC_VARIANT':'single-compact','ECM_STAGE1_TPI':'32'},'policy is unavailable'),
+        failures += [({'ECM_PRAC_VARIANT':'single-compact','ECM_STAGE1_TPI':'8'},'ECM_STAGE1_TPI must be 0, 16 or 32'),
                      ({'ECM_PRAC_VARIANT':'single-compact','ECM_PRAC_REG_TARGET':'0'},'register policy 255 or 168'),
                      ({'ECM_PRAC_VARIANT':'single-compact','ECM_GPU_STAGE1_ALGO':'resident'},'requires ECM_GPU_STAGE1_ALGO=prac')]
     for i,(settings,message) in enumerate(failures):rejected(exe,root/f'reject{i}',cache,settings,message,a.device)
@@ -213,13 +226,19 @@ def main():
                 rejected(exe,root/f'reject_{variant}_n{bits}',cache,{'ECM_PRAC_VARIANT':variant},
                     'policy is unavailable',a.device,bits=bits)
                 unsupported_tier_cases+=1
+    if a.single_compact_tpi32:
+        for bits in (2203,8191):
+            rejected(exe,root/f'reject_single-compact_t32_n{bits}',cache,
+                {'ECM_PRAC_VARIANT':'single-compact','ECM_STAGE1_TPI':'32'},'policy is unavailable',a.device,bits=bits)
+            unsupported_tier_cases+=1
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),results=results,
-        window_Q_compared=sum(r['Q_compared'] for r in results),resume_Q_compared=8,
+        window_Q_compared=sum(r['Q_compared'] for r in results),resume_Q_compared=16 if a.single_compact_tpi32 else 8,
         rejection_cases=len(failures)+unsupported_tier_cases,production_windows=a.production,
         production_counts=a.production_counts if a.production else [],
         production_chunks=a.production_chunks if a.production else [],
         bitwise_slice_checks=bitwise_slice_checks,outline_add=a.outline_add,single_add=a.single_add,
         single_compact=a.single_compact,
+        single_compact_tpi32=a.single_compact_tpi32,
         checkpoint_variant=checkpoint_variant,cpu_oracle_cache=multiply.cache_info()._asdict(),passed=True)
     (root/'summary.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k!='results'}),flush=True)

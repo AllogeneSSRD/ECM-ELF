@@ -30,7 +30,8 @@ __device__ FORCE_INLINE void prac_add_disjoint(curve_t<P> &c,
 
 // Compact candidate: rule5 initializes B=2P through the same in-place DBL
 // used by rules1..3. C preserves P until that initialization finishes. Neither
-// B nor T is read in rule5; both are assigned before the first ordinary rule.
+// B nor T is read in rule5. The seed defines B; each ordinary ADD defines T
+// before that rule commits its point updates.
 // This is a fixed-variable inline state machine, not a device-call ABI.
 template<class P>
 __device__ FORCE_INLINE void prac_odd_shared_dbl(curve_t<P> &c,
