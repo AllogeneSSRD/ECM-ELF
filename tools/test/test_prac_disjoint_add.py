@@ -75,6 +75,20 @@ def run(env, coordinates, outputs, disjoint):
     return (b[ox],b[oz]),dict(env.counts)
 
 
+def run_output_reuse(env, coordinates, outputs):
+    # Model each early output write independently of the old local-u schedule.
+    # Only (6,7) satisfies the private contract; aliased calls are negative controls.
+    b=list(coordinates)+[0,0];ox,oz=outputs;env.counts.clear()
+    t=env.add(b[0],b[1]);b[oz]=env.sub(b[2],b[3]);b[oz]=env.mul(b[oz],t)
+    t=env.sub(b[0],b[1]);b[ox]=env.add(b[2],b[3]);b[ox]=env.mul(b[ox],t)
+    t=env.add(b[oz],b[ox]);b[oz]=env.sub(b[oz],b[ox])
+    t=env.square(t);b[oz]=env.square(b[oz])
+    b[ox]=env.mul(b[5],t);b[oz]=env.mul(b[4],b[oz])
+    assert env.counts['mul']==4 and env.counts['sqr']==2
+    assert 0<=b[ox]<env.n and 0<=b[oz]<env.n
+    return (b[ox],b[oz]),dict(env.counts)
+
+
 def reference(values, n):
     x1,z1,x2,z2,xd,zd=values
     u=(x1+z1)*(x2-z2)%n;v=(x1-z1)*(x2+z2)%n
@@ -90,7 +104,7 @@ def main():
     aliases=[(6,7),(0,1),(2,3),(4,5),(0,3),(4,1)]
     totals=Counter();results=[]
     for n,bits in moduli:
-        env=Montgomery(n,bits);counts=Counter();cases=0;negative_differences=0
+        env=Montgomery(n,bits);counts=Counter();cases=0;negative_differences=0;reuse_negative=0
         edges=[(0,)*6,(1,)*6,(n-1,)*6,(n-1,0,0,n-1,1,1),
                (0,n-1,n-1,0,n-1,n-1),tuple(x%n for x in (2,3,5,7,11,13))]
         vectors=edges+[tuple(rng.randrange(n) for _ in range(6)) for _ in range(128)]
@@ -99,13 +113,18 @@ def main():
             expected=tuple(env.encode(x) for x in reference(values,n))
             actual,c=run(env,coordinates,(6,7),True)
             assert actual==expected,(n.bit_length(),values,'disjoint Montgomery outputs')
+            reused,reuse_counts=run_output_reuse(env,coordinates,(6,7))
+            assert reused==actual and reuse_counts==c,(n.bit_length(),values,'output-Z schedule/counts')
             counts.update(c);cases+=1
             for pair in aliases:
                 baseline,_=run(env,coordinates,pair,False)
                 assert baseline==expected,(n.bit_length(),pair,'public alias-safe baseline')
             bad,_=run(env,coordinates,(4,5),True)
             negative_differences+=bad!=expected
+            bad,_=run_output_reuse(env,coordinates,(4,5))
+            reuse_negative+=bad!=expected
         assert negative_differences>0,'Aliased difference must demonstrate contract violation'
+        assert reuse_negative>0,'Output-Z reuse must reject the difference-alias contract'
         # Production-like Mersenne headroom can give raw REDC >= N even with R >> N.
         witness=env.encode(n-1);raw=env.raw(witness,witness)
         if n.bit_length()>=127:
@@ -113,9 +132,11 @@ def main():
         totals.update(counts)
         results.append(dict(modulus_bits=n.bit_length(),container_bits=bits,cases=cases,
             public_alias_pairs=len(aliases),invalid_difference_alias_mismatches=negative_differences,
+            output_reuse_cases=cases,output_reuse_invalid_difference_alias_mismatches=reuse_negative,
             minus_one_raw_REDC_exceeds_N=raw>=n,counts=dict(counts),passed=True))
     source=Path('kernels/cuda/cgbn_stage1_prac_single_add.cuh')
-    report=dict(passed=True,cases=sum(r['cases'] for r in results),results=results,
+    report=dict(passed=True,cases=sum(r['cases'] for r in results),
+        output_reuse_cases=sum(r['output_reuse_cases'] for r in results),results=results,
         counts=dict(totals),source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         scope='Independent normalized-integer Montgomery/alias model; not native GPU proof')
     a.output.parent.mkdir(parents=True,exist_ok=True)

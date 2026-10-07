@@ -4674,3 +4674,17 @@ GPU1/24SM，同一single-compact/cap168，TPI16 C576/1152/1536/1728/2304对应TP
 local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；不当显存容量/DRAM/PCIe，不乘pass。DRAM peak0.000086%..0.000129%，L1TEX24.70%..41.44%，不否定完整CPU准备阶段瓶颈。wait/no_instruction/mathpipe在大batch未下降，stall ratios不当墙钟比例。忙采样SM全部1800MHz，温度固定57..72/前缀64..73°C，设备memory.used采样最大331/321MiB，非进程峰。
 
 16/C2304/cap168/50ms成为GPU1/N4423当前布局最佳显式配置，默认TPI/TPB/批量不改。curve data1536→2304为5.90625→8.859375MiB、+50%，固定seed同样增长，普通前缀无window seed；260m计划216.611633MiB不变，每curve算术/逻辑边界量不变。收益约1%而非用理想组填充率推算7%；下一项private disjoint xADD输出Z复用U，先完整SASS/资源和别名门禁，再决定性能采样。[详细数据、公式、原文件行及复现](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_ALIGNED_BATCH_20261007.md:1)。
+
+## 106. Stage1 私有xADD输出Z复用：机器码不变（2026-10-07）
+
+基线d126e60/d1a5b647。single-compact的private disjoint ADD将U放入输出oz，仅留t一个内部bn，保持4M+2S、归一化、输入/输出互不别名契约。公共alias-safe ADD不改；16 MODE12/13/14和显式32 MODE12/13使用新布局。计划W=6A+5D、容器、Montgomery R、显存数组与host/device传输公式不变；不能将源码少一个576bytes bn算成真实寄存器/显存节省。
+
+新增独立早写输出的Montgomery/别名模型，804正例与旧布局结果、运算和修正计数一致；4824公共别名对照通过，故意覆盖差分点新旧均786错误。17066链/102396模型求值/264538角色步骤通过；旧角色模型检查链角色，新模型检查本轮早写输出，不混称为原生证明。
+
+单候选TU实测286.6秒，最后仅链接。exe SHAe1f547f2…169c048，candidate object b2d90fba…81bf89b，private body 93dbf512…029eee1。七个entry完整SASS（含调度编码）和资源全部与基线相同：16自然161/48stack/0spill、cap168162/48/0、cap128128/208/spill808store972load；32自然111/64/0、cap168109/64/0，旧10/11同样不变。normal TPI16/host/dispatcher对象、公算术头、compile_commands/缓存SHA不变。否定继续仅用源码临时变量数推断降寄存器；没有新的吞吐矩阵或NCU，不重写上一轮4.960886/129.855046投影为本轮实测。
+
+五完整Q门禁各27类：16自然C8共184、cap168 C384共3568、cap128 C384共3568、32自然C8共184、cap168 C192共1840，合计9344，其中实际候选主案例与恢复3088。窗口188结果/1504 Q/16恢复Q/24拒绝，B1=10m/260m三个位置count32/chunk7/32通过。140同TPI完整XZ字节检查含54跨切片，49跨TPI，全部188新窗口与冻结基线原始CSV逐字节一致；这些检查重叠，不累加为独立案例。CPUoracle184 miss/1320 hit。
+
+保留私有显式复用及独立模型，默认与已测最佳策略不变。下一项为host严格guard的Montgomery常数传播：梅森N低word全1，因此np0=1；WMAD第75/114行q使用shuffle(accumulator)*np0，可检验去除依赖标量乘法。源码每curve该求值次数TPI*S，主MAC代理4S²，非退休指令/周期，不直接预估速度。
+
+特别核对CGBN load实际映射lane*LIMBS+limb，每线程连续word，不能使用limb*TPI+lane。N4423 word0..137=ffffffff、138=7f、139起零；TPI16 L9仅lane15含尾部，TPI32 L5在lane27含尾部、28..31为零且有16padding槽。M2203/4423/8191相关形状逐word整数重建准确，np0=1，同位宽N−2拒绝精确梅森guard；尚未实现常量CUDA候选。初始化可按lane设值，但后续CGBN shuffle运算不能按lane做不一致分支。内联volatile PTX MAD不保证常量自动减少Q*N机器指令，继续先静态结果、再同机生产短时反序A/B。[完整报告、源码行、SHA与证据](D:/code/MPA-OpenCl/docs/ECM_STAGE1_PRAC_ADD_OUTPUTZ_20261007.md:1)。

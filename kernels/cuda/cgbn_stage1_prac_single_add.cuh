@@ -2,7 +2,7 @@
 #define CGBN_STAGE1_PRAC_SINGLE_ADD_CUH
 
 // Private to the single-site candidate. Both outputs must be distinct from
-// every input (and each other): ox holds V before xd/zd are consumed. The only
+// every input (and each other): ox/oz hold V/U before xd/zd are consumed. The only
 // call below uses fresh tx/tz, never point-coordinate or modulus aliases.
 // Do not substitute this for the public, alias-safe prac_add.
 template<class P>
@@ -12,20 +12,19 @@ __device__ FORCE_INLINE void prac_add_disjoint(curve_t<P> &c,
     const typename curve_t<P>::bn_t &x2, const typename curve_t<P>::bn_t &z2,
     const typename curve_t<P>::bn_t &xd, const typename curve_t<P>::bn_t &zd,
     const typename curve_t<P>::bn_t &n, uint32_t np0) {
-    typename curve_t<P>::bn_t t, u;
+    typename curve_t<P>::bn_t t;
     cgbn_add(c._env, t, x1, z1); c.normalize_addition(t, n);
-    if (cgbn_sub(c._env, u, x2, z2)) cgbn_add(c._env, u, u, n);
-    c.mont_mul_normalized(u, u, t, n, np0);
+    if (cgbn_sub(c._env, oz, x2, z2)) cgbn_add(c._env, oz, oz, n);
+    c.mont_mul_normalized(oz, oz, t, n, np0);
     if (cgbn_sub(c._env, t, x1, z1)) cgbn_add(c._env, t, t, n);
     cgbn_add(c._env, ox, x2, z2); c.normalize_addition(ox, n);
     c.mont_mul_normalized(ox, ox, t, n, np0);
-    cgbn_add(c._env, t, u, ox); c.normalize_addition(t, n);
-    if (cgbn_sub(c._env, u, u, ox)) cgbn_add(c._env, u, u, n);
+    cgbn_add(c._env, t, oz, ox); c.normalize_addition(t, n);
+    if (cgbn_sub(c._env, oz, oz, ox)) cgbn_add(c._env, oz, oz, n);
     c.mont_sqr_normalized(t, t, n, np0);
-    c.mont_sqr_normalized(u, u, n, np0);
+    c.mont_sqr_normalized(oz, oz, n, np0);
     c.mont_mul_normalized(ox, zd, t, n, np0);
-    c.mont_mul_normalized(u, xd, u, n, np0);
-    cgbn_set(c._env, oz, u);
+    c.mont_mul_normalized(oz, xd, oz, n, np0);
 }
 
 // Compact candidate: rule5 initializes B=2P through the same in-place DBL
