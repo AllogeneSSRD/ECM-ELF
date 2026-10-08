@@ -94,3 +94,13 @@ tools/test/ntt_outer_v_probe.cu text eol=lf
 tools/build/build_ntt_outer_v_probe.ps1 text eol=lf
 tools/bench/bench_ntt_outer_v.py text eol=lf
 tools/bench/bench_stage2_outer_v.py text eol=lf
+
+tools/bench/ntt_goldilocks_addsub.cuh text eol=lf
+tools/test/ntt_addsub_probe.cu text eol=lf
+tools/build/build_ntt_addsub_probe.ps1 text eol=lf
+tools/bench/prepare_ntt_addsub.py text eol=lf
+tools/bench/bench_ntt_addsub.py text eol=lf
+tools/test/ntt_addsub_batch_probe.cu text eol=lf
+tools/build/build_ntt_addsub_batch_probe.ps1 text eol=lf
+tools/bench/bench_ntt_addsub_batch.py text eol=lf
+tools/bench/audit_ntt_addsub.py text eol=lf

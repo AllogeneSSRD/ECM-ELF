@@ -739,3 +739,7 @@ Compute实际捕获唯一reverse：device1/grid34650/block256、0.611008ms、REG
 ## 2026-10-08 接续：outer V收窄开发候选
 
 开发同二进制已加入M7/V16、M8/V8及独立mask；资源API确认shared容量2→5/4CTA，REG48/46与LOCAL0保持。17个独立probe调用、12条原生gate通过；两轮k27完整卷积快6.38%/6.41%。8条正式整曲线37.564333→37.461348秒（少0.274%），两组慢0.094%/快0.640%，不提升生产默认。管理员Systems实际outer4.395095→4.137593秒（少5.859%），但tile增加约0.10秒、无自身事件仍约6秒；传输字节保持。失败编译、跨构建SASS不相同及初次管理员启动失败均保留；候选较大16k容量/硬件occupancy、新D/cprof和生产移植未完成。公式、全部样本、工具、审计与后续选择统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:195)。下一项考察tile算术和GPU下降frontier。
+
+## 2026-10-08 接续：canonical减法隔离候选
+
+四mask独立门禁及两轮完整NTT计时完成，仅减法在k25..27少1.70%..2.62%，小长度第二轮不稳定；实际N11/batch990的独立GMP/末slice故障及两轮交叉计时确认完整卷积少3.458%/3.474%，REG40/LOCAL0保持。尚未接入实际开发/生产别名，无native整曲线、候选NCU或新D/Auto B2认证；发布893保持。下一轮推进sub-only开发编译选择、成本scope保护与宽位数/固定D完整曲线验收。数学、所有原始样本和首次Windows GMP长指数参考失败统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:262)。

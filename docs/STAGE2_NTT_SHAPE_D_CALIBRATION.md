@@ -258,3 +258,65 @@ python tools/bench/bench_stage2_outer_v.py @nativeArgs --mode timing --gate run/
 ```
 
 Systems复现使用[现有工具](D:/code/MPA-OpenCl/tools/bench/profile_stage2_points.py:1)新增`--outer-narrow 0|3`，其他参数采用本批capture_systems.ps1；管理员串行运行，保持point1/pair1/baseCPU0/C64/min32768/Gamma1/root1/owner640/reuse3/arena6300/factor-only，最后对两个实际trace做离线分析。
+
+## 2026-10-08 canonical Goldilocks add/sub：隔离算术与实际 batch 形状
+
+### 范围与数学合同
+
+接续outer V实验，先减少tile整数指令。新增[canonical PTX原语](D:/code/MPA-OpenCl/tools/bench/ntt_goldilocks_addsub.cuh:1)仅接受`0≤a,b<q`，`q=2^64−2^32+1`，输出仍在`[0,q)`。本阶段**尚未修改开发/生产NTT实际别名或发布包**；[生成器](D:/code/MPA-OpenCl/tools/bench/prepare_ntt_addsub.py:1)从冻结来源复制隔离项目，编译期mask bit0替换减法、bit1替换加法。不存在逐蝶形的运行时选择。outer V保持原布局0、PTX归约3、u展开0、warp tail1。
+
+减法用32bit低/高字的完整CC链求`d=a−b mod 2^64`及borrow mask。无借位时输出d；借位时从d减`epsilon=2^32−1`，即`a−b+q`。加法先求64bit和及carry，再求`s−q`及borrow；当`carry−borrow≥0`时选后者，否则选s。由于`a+b<2q`，一次修正足够。所有CC生产/消费在同一个asm块内，未借用sppark partially-reduced输入合同。
+
+实际原别名在[开发NTT](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:278)与[独立生产NTT](D:/code/MPA-OpenCl/src/cuda/stage2/ntt_runtime.cuh:278)。隔离项目的三处文件修改均有唯一匹配和逐字节逆变换证明；编译器宏值由每次实际stdout再次确认。独立项目、实际exe、sources和GMP依赖哈希绑定，不能用当前源码代替先前编译来源。
+
+### 正确性与静态指令
+
+[原语探针](D:/code/MPA-OpenCl/tools/test/ntt_addsub_probe.cu:1)对每个操作/实现比较1,000,210对canonical输入，包含0/q−1/最高位、carry/borrow边界与百万随机对；四种64轮依赖链另各256字对照GMP。正常exit0、末尾减法毒化exit3已重新确认，与原始日志逐字节相同。三个设备数组payload共24,005,040B、释放后live0，不是整进程显存峰。
+
+实际SASS四个原语kernel都占40条静态指令（含NOP）；排除NOP后，加法32→31、减法28→27，各只减少**一条**。不能将五条PTX算作五条SASS，也不能按静态chain总数比较吞吐：编译器对四种chain的展开次数不同。
+
+四种mask的独立NTT门禁共68次进程调用，每mask17次，分别覆盖96组合/27,131,904字GMP正逆、四次cached切换/3,145,728字、24组dense与17-word stride padding/2,951,568字，以及故障、非法mask、资源、策略和GL检查。dense门禁仍覆盖outer V四档；性能测量只用V0，不能混写。
+
+默认warp tile四种mask均REG40/LOCAL0；仅加法mask2的inverse实例有STACK8，其余默认warp实例STACK0。旧warp0实例也有寄存器差异，未据此声称全部资源或整个机器码相同。减法候选的批量probe warp forward静态非NOP1687→1640、inverse1936→1908；这些包括多个控制流分支，**不是每次调用的动态退休指令或周期**。本阶段没有候选NCU硬件计数。
+
+### 单batch完整卷积：两轮、保留慢样本
+
+每轮4条全长预热，随后`k=23..27`各16次进程；四mask按固定Latin顺序`0,1,3,2,1,2,0,3,2,3,1,0,3,0,2,1`，每进程8组、每组1预热＋3个CUDA event测量。两轮合计160正式进程/8全长预热；每个进程均比较全部N输出，bad0。每个长度/实现每轮只有4个进程，内部24个event不能算成24条独立曲线，没有置信区间。
+
+仅减法mask1的耗时减少比例，依次列第一/第二轮：
+
+- `2^23`：+1.057% / −0.684%。
+- `2^24`：+0.970% / −0.991%。
+- `2^25`：+2.620% / +1.698%。
+- `2^26`：+2.135% / +1.838%。
+- `2^27`：+2.371% / +2.481%；均值112.362→109.697ms、112.381→109.593ms（四舍五入，原始精度见quantitative）。
+
+第二轮小长度有mask1约8.656ms/13.077ms的慢进程，全部保留，未以正常样本替换均值。仅加法mask2所有长度/两轮均变慢约0.51%..3.48%；两者同时替换mask3没有超过仅减法的大长度收益，小长度亦不稳定。因此后续只推进减法候选，不将“add/sub同时替换”作为默认。
+
+### N=2^11/batch990：独立GMP与两轮交叉计时
+
+[批量探针](D:/code/MPA-OpenCl/tools/test/ntt_addsub_batch_probe.cu:1)复用实际tile模板。每slice都有三个非零输入系数，slice按三种不同边界输入循环；前向参考用GMP独立计算root和bit-reversed频谱，乘积五项用GMP求值。不是把只有第一个slice非零的全局稀疏数组误用作批量输入。其余系数和padding也全部比较。
+
+mask0/1各测试batch1/3/990、连续及stride=N+17共六种形状；每形状检查forward、inverse含pointwise/scale、完整卷积全部输出，正常进程各18行。另在最后slice的第五个系数写入毒化，两边均只检出一个错误、exit3。资源API均REG40/LOCAL0/static shared0/dynamic shared16384、容量3CTA/SM，与已采实际热点形状一致；这仍不是候选实际active-warp测量。
+
+首次批量参考被门禁拒绝，两侧仍是原始算法：Windows的`unsigned long`只有32bit，`mpz_powm_ui`截断了root的长指数。改为`mpz_import`＋`mpz_powm`的大整数指数后，在新目录重编并完整通过；失败源码、二进制及bad=5,093,256日志保留。没有修改GPU算术来匹配错误参考。
+
+每轮两进程预热，再固定ABBA＋BAAB八正式；每进程每phase1预热＋24测量，输入重置和完整结果比较位于event外。两轮合计16正式/4预热，没有编译或profiler与正式计时重叠：
+
+- forward：202.379→195.232µs、202.432→195.297µs，少3.531%/3.525%。
+- inverse含pointwise与scale：258.805→251.040µs、258.837→251.147µs，少3.000%/2.971%。
+- 完整卷积：657.376→634.645µs、657.632→634.784µs，少3.458%/3.474%；四个ABBA/BAAB分组均同向。
+
+这些是隔离实际形状的kernel/event成本，不含Stage2组包、carry、mod-N归约、GCD或启动成本，不能当整曲线收益。
+
+### 工作量、容量与下一阶段
+
+对`N_ntt=2^k`、batch=b，单次完整NTT的逻辑蝶形数为`b*N_ntt*k/2`；两次forward＋一次inverse卷积的逻辑add/sub各`3*b*N_ntt*k/2`。替换只改变实现，不减少该数学工作量、变换pass、逻辑主数组读写或PCIe接口量；原语的一条静态SASS差不能机械乘该公式当动态周期节约。
+
+候选不新增NTT持久数组。批量probe为校验分配的两份数据及reference/error payload为`16*b*stride + 48*N_ntt + 128 B`，batch990连续32,538,752B，padding版32,808,032B；另有原NTT arena/table，不包含在这个探针payload字段中，也不当作进程峰。计时不包含reference上传。原语/NTT正确性检查增加的拷贝不能当生产传输变化。
+
+**减法候选值得接入开发引擎做下一轮完整曲线验证。** 需编译期选择、实际mask日志、旧D/Auto B2 scope保护、默认与候选的冻结来源、宽位数/块尾/退化回退门禁，以及固定D交叉整曲线A/B。尚无开发native整曲线A/B、生产移植、新D/cprof或较大16k容量认证。GPU下降frontier仍是另一主要候选，不以这轮约2%..3%的局部收益替代减少CPU准备的目标。
+
+证据根目录为ignored `build_cuda_cmake/_stage2_addsub_20261008`。[独立审计工具](D:/code/MPA-OpenCl/tools/bench/audit_ntt_addsub.py:1)从原始日志重新核对顺序/所有输出、完整来源、event均值、两轮全部样本、批量padding/毒化、原语及tile SASS计数；[quantitative.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_addsub_20261008/quantitative.json)保留分组和逐文件SHA。归档/提交凭据在该目录另存，发布893保持。
+
+复现时使用新目录；四mask探针先运行`prepare_ntt_addsub.py --mask 0..3 --output <project>`，再在对应project根目录调用其中冻结的`tools/build/build_ntt_outer_v_probe.ps1 -Build <absolute-build>`。将四个build保存为study的`ntt_m0..3`，对应project保存为`project_m0..3`，运行`bench_ntt_addsub.py --study <study> --mode gate|timing --output <new-output>`，timing另指定已完成`--gate <gate/measurements.json>`。批量probe用`build_ntt_addsub_batch_probe.ps1 -SourceBuild <ntt_m0|1> -Mask 0|1 -Build <new-build>`；随后`bench_ntt_addsub_batch.py --baseline <mask0-exe> --candidate <mask1-exe> --mode gate|timing --output <new-output>`，timing同样要求gate。所有实验固定GPU1。

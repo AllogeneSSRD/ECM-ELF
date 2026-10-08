@@ -2046,3 +2046,7 @@ N27单batch的tile/M7/M8正逆及N11/batch990的tile正逆8项管理员NCU已完
 ## 77. outer V收窄同二进制实验（2026-10-08）
 
 开发同二进制已加入M7/V16、M8/V8及独立mask；资源API确认shared容量2→5/4CTA，REG48/46与LOCAL0保持。17个独立probe调用、12条原生gate通过；两轮k27完整卷积快6.38%/6.41%。8条正式整曲线37.564333→37.461348秒（少0.274%），两组慢0.094%/快0.640%，不提升生产默认。管理员Systems实际outer4.395095→4.137593秒（少5.859%），但tile增加约0.10秒、无自身事件仍约6秒；传输字节保持。失败编译、跨构建SASS不相同及初次管理员启动失败均保留；候选较大16k容量/硬件occupancy、新D/cprof和生产移植未完成。公式、全部样本、工具、审计与后续选择统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:195)。下一项考察tile算术和GPU下降frontier。
+
+## 78. canonical减法的NTT与batch990隔离验证（2026-10-08）
+
+原语GMP/故障、四mask68次NTT门禁及两轮单batch完整卷积完成：sub-only k25..27少1.70%..2.62%，小长度第二轮反向；add-only两轮均负。新增实际N11/batch990的六种连续/stride形状全输出GMP及末slice毒化，两轮完整卷积少3.458%/3.474%，REG40/LOCAL0/3CTA保持。新增工具仅在隔离项目编译时改别名，当前开发/生产算法未接入，无整曲线提速或新D/Auto成本结论。首次Windows GMP指数截断参考失败保留，原语各只少一条非NOP SASS，不当作动态周期。下一项接入sub-only开发候选并固定D完整验收，GPU下降frontier继续待推进。[完整公式、所有样本、来源与复现](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:262)。

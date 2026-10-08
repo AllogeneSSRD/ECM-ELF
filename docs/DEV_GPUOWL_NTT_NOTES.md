@@ -4764,3 +4764,7 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 ## 118. Stage2 outer V收窄：局部改善、整曲线收益未稳定（2026-10-08）
 
 开发同二进制已加入M7/V16、M8/V8及独立mask；资源API确认shared容量2→5/4CTA，REG48/46与LOCAL0保持。17个独立probe调用、12条原生gate通过；两轮k27完整卷积快6.38%/6.41%。8条正式整曲线37.564333→37.461348秒（少0.274%），两组慢0.094%/快0.640%，不提升生产默认。管理员Systems实际outer4.395095→4.137593秒（少5.859%），但tile增加约0.10秒、无自身事件仍约6秒；传输字节保持。失败编译、跨构建SASS不相同及初次管理员启动失败均保留；候选较大16k容量/硬件occupancy、新D/cprof和生产移植未完成。公式、全部样本、工具、审计与后续选择统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:195)。下一项考察tile算术和GPU下降frontier。
+
+## 119. Stage2 canonical减法隔离验证（2026-10-08）
+
+四mask编译期隔离探针及68次NTT门禁完成，原语各百万对canonical输入/依赖链GMP及故障通过。add/sub原语各仅少一条非NOP SASS；默认warp REG40/LOCAL0，add-only inverse STACK8差异保留。两轮160正式/8预热，sub-only在k25..27完整卷积少1.70%..2.62%，k23/24第二轮受慢样本影响反向；add-only两轮全负。真实N11/batch990形状六种布局GMP/末slice毒化通过，两轮16正式/4预热完整卷积少3.458%/3.474%，四个顺序组同向。首次Windows GMP长指数截断参考被拒绝，保留后改mpz指数重编；算术/默认/发布893未修改，无native整曲线或候选NCU结论。下一项只接入减法的开发编译选择与成本scope保护，补宽位数及固定D整曲线，再推进GPU下降frontier。全部公式、样本、资源、失败和复现继续维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:262)。
