@@ -336,3 +336,7 @@ powershell -File tools\test\test_gui_gpu_curves.ps1   # 真 worker 压卡：功�
 > —— 该目录的缓存带着项目固定设置（`ECM_ENABLE_CUDA=ON`、`ECM_CUDA_ARCHITECTURES=89`、
 > `ECM_TIERS`、GMP 路径、GUI/TOOLS 开关），用"默认参数"重配会**清空缓存**并让该目录之后无法配置。
 > 要重建/补配请用仓库规范脚本 `tools/build/local_build.ps1`（它带全部固定参数）。
+
+## CUDA Stage2 发布候选打包
+
+`tools/build/release_stage2.ps1` 构建单架构独立Stage2，并打包GMP、共用INI模板和使用说明；默认sm_89/split6，输出 `dist/cuda-stage2-sm89`。`-Stage1Exe` 可选附带已验收的Stage1程序，不会替它重新编译或验证。完整多架构Stage1仍使用 `release_build.ps1`。配置迁移、队列续跑和退出合同见 `docs/ECM_CUDA_STAGE2_RELEASE.md`。

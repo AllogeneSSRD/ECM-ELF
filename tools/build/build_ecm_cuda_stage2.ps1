@@ -31,7 +31,7 @@ $cudaStem = [IO.Path]::GetFileNameWithoutExtension($cudaSource)
 $sources = @($cudaSource, 'src/core/ecm_cuda_stage2_main.cpp',
     'src/core/ecm_expr.cpp', 'src/core/ecm_worktodo.cpp', 'src/core/ecm_queue_config.cpp')
 $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
-    'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_logging.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
+    'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_logging.h', 'src/core/ecm_stage2_queue_state.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
     'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h',
     'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h', 'tools/build/build_ecm_cuda_stage2.ps1')
 if ($Engine -eq 'production') {

@@ -144,6 +144,7 @@ vc140.pdb
 # Local datasets, experiment logs, and evidence archives (kept on disk).
 /data/
 /docs/data/
+/dist/
 /tools/ecm_dataset/ecm_stage2_dataset.sqlite
 /tools/ecm_dataset/ecm_stage2_dataset.sqlite-*
 *.bak

@@ -113,3 +113,7 @@ tools/bench/audit_stage2_frontier.py text eol=lf
 tools/test/test_stage2_production_frontier.py text eol=lf
 tools/bench/bench_stage2_capacity.py text eol=lf
 tools/bench/audit_stage2_frontier_production.py text eol=lf
+
+# Release UX state and packaging source fingerprints.
+src/core/ecm_stage2_queue_state.h text eol=lf
+tools/build/release_stage2.ps1 text eol=lf

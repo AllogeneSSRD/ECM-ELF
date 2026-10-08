@@ -152,3 +152,20 @@ GUI 只**读**下面两个队列键，用来显示 Prime95 交接通知条（`do
 `ecm_queue_config_write_default()` 在 ini 不存在时写出一份带中英文注释的模板，键的顺序与
 本文第 1、2 节一致（`progress_log_seconds`、`p95_*` 都在其中）。它**只写一次**：
 `--gpu-info` 之类的查询路径只读不建，避免在你没打算跑队列时突然多出一个配置文件。
+
+
+## 独立 CUDA Stage2 的共享配置（2026-10-08 发布体验候选）
+
+`ecm_cuda.exe` 与 `ecm_cuda_stage2.exe` 可共用一份INI。上文Stage1键保持兼容；Stage2专用解析器位于 `src/core/ecm_cuda_stage2_main.cpp`，其键名不区分大小写，普通分组标题同样只是标签。
+
+- Stage1使用 `worktodo/finished/log_file`；Stage2使用 `stage2_worktodo/stage2_finished/stage2_log_file`，不再继承这三个Stage1路径。旧Stage2配置应迁移至专用键。
+- 共享 `device/tmp_dir/verbose`；Stage2可通过 `stage2_device/stage2_save_dir` 覆盖设备与存档目录。
+- 队列续跑进度用 `stage2_progress_file`，默认队列路径加worker后缀及 `.progress`。仅队列自动续跑，不保存Stage2内部计算状态。
+- `verbose` 维持可读运行日志；`stage2_debug_log=true` 单独开启诊断，写入 `stage2_debug_log_file`。共用 `debug_log` 为兼容开关，专用键优先。Stage1目前不消费这两个新增调试键。
+- `stage2_log_level` 保留兼容控制台等级覆盖；debug映射为开启独立诊断文件。普通文件保留批次统计，不因控制台简洁而丢失。
+- Stage2 INI相对路径以INI目录为基准；Stage1保持exe目录规则。推荐共用INI放在两个exe旁。
+- `[Worker #N]` 覆盖全局键；显式日志/结果路径不自动加worker后缀，应为并行进程配置不同文件名和队列。
+
+完整默认值、优先级、错误和中断合同见[发布候选说明](ECM_CUDA_STAGE2_RELEASE.md)，可直接复制[共享模板](../config/ecm.ini.example)。发布脚本不会覆盖已有INI或队列。
+
+后续TODO：考虑向后兼容，合并两个可执行文件，并配置Stage1完成后继续Stage2或交给Prime95/独立Stage2程序消费；交接确认、进度归属及防重复消费另行设计。

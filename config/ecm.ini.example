@@ -1,0 +1,58 @@
+# Shared configuration for ecm_cuda.exe and ecm_cuda_stage2.exe.
+# Group headings are labels. Only [Worker #N] creates an override scope.
+# Stage1 relative paths use the executable directory; Stage2 INI paths use
+# the INI directory. Keep this file next to both executables for shared paths.
+
+[queue]
+# Stage1 queue / finished / readable log
+worktodo = worktodo.txt
+finished = worktodo.finished.txt
+log_file = screen.log
+tmp_dir = .
+verbose = true
+
+[method]
+method = gpu
+
+[gpu]
+device = 0
+gpu_param = 0
+exponent = lcm
+
+[stage2]
+# Independent Stage2 consumer. Never point it at an active Stage1 queue.
+stage2_worktodo = stage2_worktodo.txt
+stage2_finished = stage2_worktodo.finished.txt
+stage2_log_file = stage2_screen.log
+stage2_results_file = stage2_results.jsonl
+# Empty: <stage2_worktodo path>[_worker].progress (queue resume metadata).
+stage2_progress_file =
+# Empty: use shared tmp_dir. Optional stage2_device overrides shared device.
+stage2_save_dir =
+# stage2_device = 1
+
+# Explicit task B2 overrides this default. CLI --b2 overrides both.
+# 0 requires a nonzero task B2. Auto B2 is unavailable for the current
+# arithmetic candidate until a matching cost profile has been calibrated.
+stage2_b2 = 0
+stage2_auto_b2 = 0
+stage2_d = 0
+stage2_batch_mb = 64
+stage2_arena_mb = 0
+stage2_fold_mb = 640
+
+# verbose=true: phase milestones; false: curve summaries.
+# Optional compatibility override: quiet|curve|phases|batches.
+# stage2_log_level = phases
+# Separate diagnostics; verbose alone never enables these.
+stage2_debug_log = false
+stage2_debug_log_file = stage2_debug.log
+stage2_factorize_hits = 0
+stage2_factor_only = 0
+
+# Worker-specific paths must remain distinct when explicitly overridden.
+# [Worker #2]
+# device = 1
+# stage2_log_file = stage2_screen_2.log
+# stage2_results_file = stage2_results_2.jsonl
+# stage2_debug_log_file = stage2_debug_2.log

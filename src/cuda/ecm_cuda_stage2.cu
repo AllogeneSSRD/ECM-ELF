@@ -7231,6 +7231,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     /* 1/F: the Newton inverse of the REVERSED, MONIC F, to the length a full-size mod-F
        reduction needs (deg T = 2P => k = P+1).  Computed ONCE and reused by every fold --
        the reference's cost model has no such term, so it is charged to its own category. */
+    stage2_log::phase("Prepare polynomial inverse");
     CPoly finv;
     const CPoly Fpoly = fold_flat_enabled ? CPoly{} : cp_from_flat(Ft[1], Fdeg[1], W);
     const double ti0 = now_s();
@@ -7266,6 +7267,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         pts_per_chunk = P * ((k + P - 1) / P);
     }
     // One continuous interval includes chunk-local destruction between iterations.
+    stage2_log::phase("Giant points, G trees and fold");
     const double t_loop_begin = now_s();
     R.t_pre_loop = t_loop_begin - t_entry;
     for (unsigned long long c0 = 0; c0 < imax; c0 += pts_per_chunk) {
@@ -7690,6 +7692,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     }
     R.t_post_loop=now_s();
     R.t_loop_wall = R.t_post_loop - t_loop_begin;
+    stage2_log::phase("Normalize fold and descend F tree");
     ScaledRootDeviceStats root_device;
     ScaledFrontierDevice frontier;
     frontier.requested=true;
@@ -7900,6 +7903,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         stage2_log::print(stage2_log::phases, "batched_phase: descent_done t=%.1f s divmods=%llu\n", R.t_descent,
                     R.descent_divmods);
 
+    stage2_log::phase("Accumulate leaf products and GCD");
     /* ---- 4. accumulate prod_j H(x_j) mod N ON THE DEVICE, one gcd per block ------------ */
     const double ta0 = now_s();
     const size_t BLOCK = 64;                            /* small, so a hit localises to <=64 */
@@ -8222,6 +8226,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
 {
     PolyLayer L;
     L.device = g_device;
+    stage2_log::phase("Plan Stage2 bounds and memory");
     if (n_is_hex) { if (mpz_set_str(L.N, n_str, 16) != 0) { std::fprintf(stderr, "%s: bad hex N\n", NTT_PROBE_NAME); return 2; } }
     else if (mpz_set_str(L.N, n_str, 10) != 0) { std::fprintf(stderr, "%s: bad decimal N\n", NTT_PROBE_NAME); return 2; }
     if (mpz_odd_p(L.N) == 0) { std::fprintf(stderr, "%s: N must be odd\n", NTT_PROBE_NAME); return 2; }
@@ -8724,6 +8729,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        shares a factor with N, i.e. points that are the identity modulo that factor.  Collected
        here (the batched run does not exist yet) and merged into the reported factor set below. */
     std::vector<std::string> baby_deg;
+    stage2_log::phase("Generate and normalize baby points");
     SmallPrimeBabyCache small_cache;
     const bool reuse_small=small_prime_flag("NTT_SMALL_PRIME_REUSE");
     if(reuse_small)small_cache.begin(C,D,B1,B2,baby_j);
@@ -8845,6 +8851,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         stage2_log::print(stage2_log::phases, "real_baby: points=%llu ladder=%.3f s affine=%.3f s degenerate=%llu\n",
                     (unsigned long long)baby_j.size(), tb1 - tb0, now_s() - tb1, noninv);
         FTreeStats fs;
+        stage2_log::phase("Build baby-point F tree");
         Ft = build_tree_flat(L, leaf, Fdeg, Fpad, fs, BC_FTREE);
         s4_oracle_drain(red);    /* include final F-tree validation in its phase timer */
         fdeg = Fdeg[1];
@@ -8907,6 +8914,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const unsigned long long pl0 = L.s4 ? L.s4->pack_launches : 0ull;
         const double t0 = now_s();
         BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad,reuse_small?&small_cache:nullptr);
+        stage2_log::phase("Validate arithmetic and finalize factors");
         s4_oracle_drain(red);    /* validation must finish BEFORE elapsed and success */
         /* merge the factors that degenerate BABY points revealed (objective 3): each already
            divides N by construction, and they are deduplicated against what the naming stage

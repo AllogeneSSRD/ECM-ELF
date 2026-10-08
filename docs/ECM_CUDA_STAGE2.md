@@ -12,6 +12,10 @@ Auto B2已有经验证的4acc/v1窄范围组合；后续全范围验证虽然算
 
 当前驻留下降根已接入独立生产源码，功能、搬运及完整计时总账验收通过，生产整曲线收益尚未稳定；末尾“生产接入与完整收尾计时”记录该生产候选状态；更新的NTT实验与GPU驻留下降frontier验收见末尾接续段、NTT专题及[步骤报告§80](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:2060)。各带日期段落是当时的测量快照，发布包893与旧Auto B2成本范围仍保持。
 
+## 2026-10-08 发布体验候选
+
+当前源码新增队列数量截断、逐曲线自动续跑、任务输入错误跳过、两次Ctrl+C退出策略，以及控制台/普通日志/独立调试日志分流。Stage1与Stage2共用INI，但Stage2队列、finished和日志使用专用stage2_*键，旧共同路径键不再自动作为Stage2输出路径。详见[发布候选使用说明](ECM_CUDA_STAGE2_RELEASE.md)和[共用模板](../config/ecm.ini.example)。这是构建候选，尚未运行本轮队列/中断/GPU回归验收；历史发布893保持。
+
 ## 编译与直接读档
 
 在仓库根目录执行：
@@ -29,7 +33,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_ecm_cuda_s
 .\ecm_cuda_stage2.exe --save D:\saves\m4423_260e6.save --b2 20e11 --dry-run
 ```
 
-`--curves 0` 或省略它：执行跳过后的所有记录；`--skip-curves` 默认 0。记录按非空、非注释行编号，从 1 开始。`--dry-run` 检查配置、所选存档和队列匹配，不启动 CUDA、不写结果、不推进队列。
+请求数量超过可用记录数时截断并警告；`--curves 0` 或省略它：执行跳过后的所有记录；`--skip-curves` 默认 0。记录按非空、非注释行编号，从 1 开始。`--dry-run` 检查配置、所选存档和队列匹配，不启动 CUDA、不写结果、不推进队列。
 
 `--device` 是 CUDA 设备编号。例子使用设备 1，实际部署应按机器选择。默认取 ini 的 `device`，没有配置时为 0。`sm_89` 是当前 RTX 40 系列编译配置，其他设备应重新选择编译架构。
 
@@ -65,12 +69,17 @@ CHECKSUM = (B1 × sigma × N × X) mod 4294967291
 [queue]
 worktodo=worktodo.txt
 finished=worktodo.finished.txt
+log_file=screen.log
 tmp_dir=saves
 
 [gpu]
 device=1
 
 [stage2]
+stage2_worktodo=stage2_worktodo.txt
+stage2_finished=stage2_worktodo.finished.txt
+stage2_log_file=stage2_screen.log
+stage2_debug_log=false
 stage2_b2=20e11
 stage2_d=0
 stage2_batch_mb=64
@@ -78,7 +87,7 @@ stage2_arena_mb=0
 stage2_results_file=stage2_results.jsonl
 ```
 
-可复用现有 ini，Stage1 的 method/exponent/gpu_param 等字段不会改变恢复点。基础版本使用共同字段 `worktodo`、`finished`、`tmp_dir`、`log_file`、`device`，以及上述 `stage2_*` 字段。配置中的相对路径以 ini 目录为基准；CLI 的相对路径以当前工作目录为基准。
+可复用现有 ini，Stage1 的 method/exponent/gpu_param 等字段不会改变恢复点。发布体验候选共享 `tmp_dir`、`device`、`verbose` 默认值；队列、finished和日志仅使用 `stage2_worktodo`、`stage2_finished`、`stage2_log_file`，避免两个程序冲突。历史版本使用共同路径键，迁移时需复制到专用键。配置中的相对路径以 ini 目录为基准；CLI 的相对路径以当前工作目录为基准。
 
 `[Worker #N]` 覆盖该 worker 的全局配置。ini 和 worktodo 都通过 `--worker N` 选择，默认 1；其他普通分组标题仅用于阅读。
 
@@ -86,7 +95,7 @@ stage2_results_file=stage2_results.jsonl
 
 CLI 可覆盖：`--b2`、`--d`、`--device`、`--batch-mb`、`--arena-mb`、`--worktodo`、`--results`、`--log`。B2 优先级为 **CLI > worktodo 非零 B2 > ini stage2_b2**。不猜测 B2；无法获得有效上界时停止。
 
-## worktodo.txt
+## Stage2 worktodo 队列
 
 ```text
 # N = 2^4423-1，读取 saves\m4423_260e6.save 中前 2 条曲线
@@ -110,9 +119,9 @@ ECMSTAGE2=[AID,]k,b,n,c,save_name[,B2-or-zero][,skip_curves][,num_curves][,"know
 
 三个数字后缀按位置从左到右提供，可省略尾部字段：B2 缺省/0 使用 CLI 或 ini；skip 缺省/0 从首条记录开始；num_curves 缺省/0 执行跳过后的全部记录。要指定 skip 或数量而不指定 B2，需要用 0 占住 B2 位置。带引号的已知因子字段可以跟在任意一个数字后缀后，也可直接跟在文件名后。此规则对应 Prime95 [commonc.c:2937](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/commonc.c:2937) 与 [可选字段解析](D:/code/MPA-OpenCl/.refactor/p95v3106b01.source/commonc.c:2973)。B2=0 的自动选界在本基础入口中由 CLI/ini 的显式值替代。
 
-例如 `ECMSTAGE2=1,2,3701,-1,"m3701_260e6.save",26000000000,960,10` 解析为 B2=26000000000，跳过记录 1–960，执行记录 **961–970，共 10 条**，与存档文件名中的 B1 无关。
+例如 `ECMSTAGE2=1,2,3701,-1,"m3701_260e6.save",26000000000,960,10` 解析为 B2=26000000000，跳过记录 1–960，最多执行记录 **961–970，共 10 条**，不足时仅执行可用条目，与存档文件名中的 B1 无关。
 
-队列 N 使用已有 `k*b^n+c` 与已知因子精确除法实现，必须等于每条所选存档的 N。`"xxx"` 可以被识别为最后的已知因子字段，但不是有效数值因子；实际运行须省略它或替换为真实因子。B1 从记录读取，不依赖文件名；一条任务内所选记录的 B1 必须相同。保存文件的相对路径以 `tmp_dir` 为基准。基本队列入口只接受 `ECMSTAGE2=`，`ECM=`/`ECM2=` 是 Stage1 任务，不能代替 Stage2 存档任务。
+队列 N 使用已有 `k*b^n+c` 与已知因子精确除法实现，必须等于每条所选存档的 N。`"xxx"` 可以被识别为最后的已知因子字段，但不是有效数值因子；实际运行须省略它或替换为真实因子。B1 从记录读取，不依赖文件名；一条任务内所选记录的 B1 必须相同。保存文件的相对路径以 `stage2_save_dir`（缺省共享 `tmp_dir`）为基准。基本队列入口只接受 `ECMSTAGE2=`，`ECM=`/`ECM2=` 是 Stage1 任务，不能代替 Stage2 存档任务。
 
 没有 worker 标题的任务属于 worker 1。默认连续处理指定 worker 的全部任务，队列为空后退出；`--once` 只处理其第一条任务，不是只处理一条曲线。`--dry-run` 预览其第一条任务。队列模式的曲线数量和跳过数以任务为准，禁止通过 CLI `--curves`/`--skip-curves` 覆盖。
 
@@ -137,13 +146,13 @@ G根直接交接默认 `NTT_GROOT_TO_FOLD=1`，设置0恢复根先读回再上�
 
 NTT tile 默认 `NTT_FUSE_WARP_TAIL=1`，低6层使用warp寄存器交换与常量根约减；显式设0回退原shared实现，实验exe仍默认0。当前收益验证覆盖sm89/GPU1及报告中的M4423负载，其他架构/形状需重新测量；不增加大型buffer。算法、源码行号与8次对照见 [步骤报告§37](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:1688)。性能测量前应删除 `NTT_FUSE_TRACE` 环境变量（PowerShell：`Remove-Item Env:NTT_FUSE_TRACE -ErrorAction SilentlyContinue`）；该诊断开关按变量存在性启用，设0或空值仍会逐kernel同步。
 
-控制台与引擎输出受当前候选的 `--log-level` / `stage2_log_level` 控制，默认batches。引擎输出默认在exe/ini目录的 `stage2_screen.log`；worker 2为 `stage2_screen_2.log`。配置中的显式 `log_file` 优先；设空值则让引擎直接输出到控制台。历史893没有日志等级功能。
+控制台默认按 `verbose=true` 显示阶段及曲线摘要，长阶段每30秒刷新一行；普通文件日志追加保留阶段/批次统计。`stage2_debug_log=true` 独立开启调试细节到 `stage2_debug_log_file`。`--log-level` / `stage2_log_level` 保留兼容覆盖，debug映射至独立调试文件。普通日志由 `stage2_log_file` 控制，不继承Stage1的 `log_file`；留空禁用普通文件日志。历史893没有这些发布体验功能。
 
 每条成功曲线追加一个 JSONL 结果，默认 `stage2_results.jsonl` 或 `stage2_results_N.jsonl`，包含状态、save/记录编号与指纹、N、sigma、B1/B2、设备/worker、请求 D、时长、hits、bad_factors 和十进制 factors。自动 D 的实际选择及树哈希保存在完整引擎日志中。
 
 默认仅追查首个命中叶的具体 stage2 素数名字，避免生产形状的诊断扫描耗时过长；所有叶的 GCD/因子提取仍执行。结果中的 factors 是发现的非平凡约数，可能仍是合数，不代表完整分解。`hits=0` 也属于正常成功完成。
 
-当前不提供 Stage2 中途 checkpoint、自动恢复曲线索引、PrimeNet 上报或跨曲线流水线。失败/中断时保留任务及源存档；已经完成的记录可能有结果，再次运行会重做它们并追加新结果。基础版本不保证恰好一次执行。源存档从不改写。
+发布体验候选仅队列自动恢复曲线索引；每条成功结果带随机回执，结果落盘后原子更新进度，中断窗口通过回执对账恢复。直接 `--save` 仍显式重算。第一次Ctrl+C完成当前曲线后退出，第二次立即终止；未完成曲线下次重算。任务输入错误标记后继续，设备/系统/内部故障停止。仍不提供Stage2内部checkpoint、PrimeNet上报或跨曲线流水线，源存档从不改写。续跑时保持队列、save及计算配置不变，具体约束见[发布说明](ECM_CUDA_STAGE2_RELEASE.md#4-逐曲线续跑与退出)。
 
 ## 实现位置
 
@@ -766,3 +775,24 @@ Compute实际捕获唯一reverse：device1/grid34650/block256、0.611008ms、REG
 owner加metadata容量为(56W+24)P+56W+48 B，W=ceil(bits/64)、P=phi(D)/2；F树仍在host，最终叶仍完整D2H后送入既有GCD接口。新组合关闭旧D经验scope；Auto B2在profile I/O前拒绝未标定的selected arithmetic。后续需要对最终组合重标定，而不是重新套旧cprof。
 
 全部算法、源码入口、每条正式样本、量化公式、容量边界、管理员trace和发布限制统一维护[步骤报告§81](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:2162)。四条管理员Systems和最终独立审计已完成：两形状传输差精确匹配公式，tracked设备峰保持、结束live0，pinned峰分别少50.999/47.741MiB，NVML整卡采样峰分别4989/5217MiB。较大泛型点ladder约23.92秒、S4约21.35秒，是该形状下一轮诊断重点；大界仍关注NTT和准备窗口。初次采集器拒绝及修复保留，归档与源码/Git身份核对完成后提交；长期优化目标继续。
+
+
+## 发布体验改进：已确认合同与本轮实现
+
+以下合同已接入本轮源码候选；编译与打包信息见[发布候选说明](ECM_CUDA_STAGE2_RELEASE.md)，本轮未运行功能回归或GPU测试：
+
+- 请求曲线数超过跳过后save可用记录数时，执行全部可用记录，提示请求/可用/实际完成数量；成功后将任务移至finished并继续下一项。存档内容损坏、N不匹配等真正输入错误不属于数量截断。
+- 仅worktodo队列自动续跑。每条曲线成功写入结果后持久化完成进度，重启跳过已完成曲线；中断的当前曲线从头重算。不实现Stage2内部计算状态存档。
+- 直接--save保持命令指定范围，不自动跳过历史已完成记录，保留重算和性能测试的明确语义。
+- 共用一份ecm.ini：Stage1保留现有键，Stage2队列、finished、日志与续跑进度使用stage2_*专用键；设备和save目录可共享默认值。普通分组标题不形成配置隔离，不能仅靠[stage2]标题隔离同名键。优先级、路径基准及迁移规则见发布说明。
+- 队列中的任务输入错误（如存档损坏、N不匹配）标记错误并保留原任务及原因，随后继续下一项；CUDA、显存或设备故障停止运行，保留未完成任务及已完成曲线进度。错误分类应明确，未知内部故障不得当作坏任务静默跳过。
+- 控制台默认显示任务摘要、曲线编号、阶段切换、耗时和结果；长阶段每30秒更新一行进度。文件日志追加记录阶段及批次统计，警告和错误同时写入控制台与日志。
+- verbose保持为可读的运行日志；调试细节由独立配置开关（例如debug_log）显式开启，不因verbose启用而自动输出。Stage2专用键为stage2_debug_log，旧debug等级映射为开启独立调试文件。
+
+- Ctrl+C第一次请求在当前曲线成功写入结果及续跑进度后退出，不再领取新曲线；第二次立即终止。未完成曲线下次从头重算，不标记为任务输入错误。
+
+本轮构建sm_89 Stage2候选，更新共享模板、说明及单架构发布脚本；可选包含既有已验收的Stage1程序，多架构发行包后续生成。
+
+### 后续TODO：统一可执行文件与Stage1后续行为
+
+考虑向后兼容，未来合并ecm_cuda与ecm_cuda_stage2为一个可执行文件，并允许配置Stage1完成后的行为：直接继续Stage2，或生成/交接任务给另一程序消费（例如Prime95或独立CUDA Stage2程序）。统一入口时需兼容现有CLI、INI及任务/存档格式，并明确交接确认与续跑归属，避免重复消费。该项为后续设计TODO，不纳入本轮发布体验改动。
