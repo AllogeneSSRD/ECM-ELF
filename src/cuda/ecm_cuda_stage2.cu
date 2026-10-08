@@ -5161,6 +5161,15 @@ __global__ void fold_subtract_kernel(const unsigned long long *a,const unsigned 
     unsigned long long any=0;for(int j=0;j<W;++j)any|=out[j];
     if(any)atomicMax(length,(unsigned long long)i+1);
 }
+#include "stage2/scale_plain.cuh"
+
+static bool gscale_flag(const char *key)
+{
+    const char *v=std::getenv(key);if(!v)return false;
+    if((v[0]!='0' && v[0]!='1') || v[1]){std::fprintf(stderr,"FATAL: %s must be 0 or 1\n",key);std::exit(3);}
+    return v[0]=='1';
+}
+
 struct FoldDeviceState {
     S4ResidentOwner memory;
     unsigned long long *map=nullptr,*length=nullptr,*modulus=nullptr,*digest=nullptr;
@@ -5321,6 +5330,13 @@ struct FoldDeviceState {
             auto actual=read(h,hcount);stats->checked_words+=actual.size();
             if(actual!=expected){std::fprintf(stderr,"FATAL: device fold GMP mismatch P=%llu\n",(unsigned long long)P);std::exit(3);}
         }
+    }
+    void scale(mpz_srcptr factor,PlainScaleStats &st,bool verify,bool poison) {
+        if(!active || !hcount || q+W>memory.words[1] || h+hcount*W>memory.words[0]) {
+            std::fprintf(stderr,"FATAL: Gamma device owner lease invalid\n");std::exit(3);
+        }
+        s2g_plain_scale(W,hcount,memory.data[0]+h,memory.data[1]+q,modulus,layer->N,factor,st,verify,poison);
+        stats->h2d_bytes+=st.h2d_bytes;stats->d2h_bytes+=st.check_d2h_bytes;
     }
     void finish(std::vector<unsigned long long> &H) {H=read(h,hcount);read_digest();release();}
 };
@@ -6930,6 +6946,7 @@ struct BatchedRun {
     double t_pre_loop = 0.0, t_loop_wall = 0.0, t_post_loop = 0.0, t_gleaves = 0.0;
     /* the one pass over H that removes the projective scale (section 42) */
     double t_gscale = 0.0;
+    PlainScaleStats gscale;
     /* ---- THE PROJECTIVE BOOKKEEPING MUST BE EXACTLY SELF-CONSISTENT ----------------------
        The factor set CANNOT validate Gamma: any invertible Gamma gives the same gcds, so a
        doubled or missing factor would still "pass".  The invariant that can be checked is
@@ -7558,6 +7575,12 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         R.t_loop_wall += now_s() - tloop0;
     }
+    R.gscale.requested=true;
+    const bool gscale_check=gscale_flag("NTT_GSCALE_DEVICE_CHECK"),gscale_bad=gscale_flag("NTT_GSCALE_DEVICE_TEST_BAD");
+    if(gscale_bad && !gscale_check){std::fprintf(stderr,"FATAL: Gamma poison requires full GMP check\n");std::exit(3);}
+    if(R.gscale.requested && device_fold.active && device_fold.hcount && mpz_cmp_ui(Ginv,1)!=0) {
+        device_fold.scale(Ginv,R.gscale,gscale_check,gscale_bad);R.t_gscale=R.gscale.seconds;
+    } else if(R.gscale.requested)R.gscale.fallback=!device_fold.active?"owner":!device_fold.hcount?"empty":"unit";
     if(device_fold.active)device_fold.finish(Hflat);
     if(fold_flat_enabled && !Hflat.empty()) {
         const double tb=now_s();H=cp_from_flat(Hflat,Hflat.size()/W-1,W);
@@ -7572,7 +7595,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
        polynomial the old monic leaves produced -- not approximately: every step of the tree is
        reduced mod N coefficient by coefficient, so the scaling is exact in that ring, and
        gcd(v, N) is unchanged by an invertible factor either way. */
-    if (mpz_cmp_ui(Ginv, 1) != 0 && !H.empty()) {
+    if (!R.gscale.enabled && mpz_cmp_ui(Ginv, 1) != 0 && !H.empty()) {
         const double tg0 = now_s();
         mpz_t c;
         mpz_init(c);
@@ -8496,6 +8519,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if(!s4_on) stage2_fixture_begin=now_s();
     const char *fold_test=std::getenv("NTT_FOLD_FLAT_TEST");
     if(fold_test && std::atoi(fold_test))fold_flat_fixture(L);
+    gscale_flag("NTT_GSCALE_DEVICE_CHECK");gscale_flag("NTT_GSCALE_DEVICE_TEST_BAD");
     const char *fold_device_test=std::getenv("NTT_FOLD_DEVICE_TEST");
     if(fold_device_test && std::atoi(fold_device_test))fold_device_fixture(L);
     if(fuse_env_ull("NTT_BABY_DEVICE_TEST",0))device_baby_fixture(nw);
@@ -8520,7 +8544,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_BABY_DEVICE_TEST","NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL","NTT_FUSE_COOP_TEST","NTT_FUSE_COOP_BAD","NTT_XADD6_TEST","NTT_XADD6_TEST_BAD","NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
@@ -8813,6 +8837,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     BR.giant_points ? 1e6 * BR.t_ginv / (double)BR.giant_points : 0.0,
                     BR.giant_points ? 1e6 * BR.t_gout / (double)BR.giant_points : 0.0,
                     BR.t_gscale);
+        stage2_log::print(stage2_log::phases,"real_gscale_device: requested=%d enabled=%d coefficients=%llu h2d_bytes=%llu check_d2h_bytes=%llu checked_words=%llu seconds=%.6f fallback=%s\n",
+            (int)BR.gscale.requested,(int)BR.gscale.enabled,BR.gscale.coefficients,BR.gscale.h2d_bytes,
+            BR.gscale.check_d2h_bytes,BR.gscale.checked_words,BR.gscale.seconds,BR.gscale.fallback);
         /* section 42: the projective leaves and the segment products that cover them must match
            EXACTLY (asserted in run_batched); the number is reported so a drift is visible */
         stage2_log::print(stage2_log::debug, "real_batched_projective: leaves=%llu gamma_points=%llu segments=%llu "
@@ -9134,6 +9161,8 @@ int ecm_cuda_stage2_check_configuration() {
         {"NTT_POINT_MERSENNE", "1"},
         {"NTT_GIANT_SEED_DEVICE", "1"},
         {"NTT_GIANT_SEED_PAIR", "1"},
+        {"NTT_GSCALE_DEVICE", "1"},
+        {"NTT_GSCALE_DEVICE_TEST", "0"},
         {"NTT_GFINV_SEG_EXACT", "1"},
         {"NTT_GFINV_BATCH", "1"},
         {"NTT_SMALL_PRIME_REUSE", "1"},

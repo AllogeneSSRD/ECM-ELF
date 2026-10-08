@@ -1,8 +1,10 @@
-"""Prepare / collect administrator NCU for a real generic16384 S4 launch.
+"""Prepare / collect administrator NCU for S4 or resident Gamma correction.
 
 Skip the first S4 arithmetic selftest and select the next exact NW256/plain
 kernel. The saved input and complete output / check coverage are bound to a
 completed unprofiled reference matrix. Replay timing is diagnostic only.
+With --kind gscale, use a completed same-binary M4423 Gamma matrix and bind
+its one real NW128 launch, including the actual coefficient-derived grid.
 """
 import argparse
 import csv
@@ -28,23 +30,35 @@ def main():
     p.add_argument('--exe', type=Path, required=True)
     p.add_argument('--reference', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--kind', choices=('reduce','gscale'), default='reduce',
+                   help='Generic S4 or the one resident Gamma correction kernel')
     p.add_argument('--collect-only', action='store_true')
     p.add_argument('--ncu', type=Path, default=Path('C:/Program Files/NVIDIA Corporation/Nsight Compute 2026.2.1/target/windows-desktop-win7-x64/ncu.exe'))
     a = p.parse_args(); exe = a.exe.resolve(); out = a.output.resolve()
     ref = read(a.reference)
     if not ref['complete']: raise ValueError('unprofiled reference is incomplete')
-    case = next(c for c in ref['cases'] if c['name'] == 'generic16384')
+    case = next(c for c in ref['cases'] if c['name'] == ('m4423_large' if a.kind=='gscale' else 'generic16384'))
     identity = helper.freeze(exe)
-    key = next((k for k, v in ref['identity'].items() if v['binary_sha256'] == identity['binary_sha256']), None)
-    if key is None: raise ValueError('binary not in the reference matrix')
-    expected = next(r for r in ref['runs'] if r['case'] == case['name'] and r['key'] == key)
+    if a.kind=='gscale':
+        if ref['identity']!=identity:raise ValueError('Gamma binary not in reference matrix')
+        key='device'
+        expected=next(r for r in ref['runs'] if r.get('case')==case['name'] and r.get('mode')==1 and r['category']=='timing')
+        if expected['scale']['enabled']!='1':raise ValueError('reference Gamma kernel absent')
+        grid=(int(expected['scale']['coefficients'])+127)//128
+        kernel='_Z22s2g_plain_scale_kernelILi128EE'
+        name_pattern=r's2g_plain_scale_kernel<(?:\(int\))?128>'
+    else:
+        key = next((k for k, v in ref['identity'].items() if v['binary_sha256'] == identity['binary_sha256']), None)
+        if key is None: raise ValueError('binary not in the reference matrix')
+        expected = next(r for r in ref['runs'] if r['case'] == case['name'] and r['key'] == key)
+        grid=5;kernel=KERNEL;name_pattern=r's4_reduce_kernel<(?:\(int\))?256, (?:\(bool\))?(?:0|false)>'
     saved = Path(case['save'])
     if sha(saved) != case['save_sha256']: raise ValueError('reference save changed')
     for name, want in identity['sources'].items():
         if sha(exe.parent / 'sources' / name) != want: raise ValueError('frozen source changed')
     if a.collect_only:
         command = read(out / 'command.json')
-        if command['identity'] != identity or command['reference_sha256'] != sha(a.reference):
+        if command['identity'] != identity or command['reference_sha256'] != sha(a.reference) or command.get('kind','reduce')!=a.kind:
             raise ValueError('capture/reference identity differs')
         for name, field in (('collector_capture.py', 'tool_sha256'), ('helper_capture.py', 'helper_sha256')):
             if sha(out / name) != command[field]:
@@ -58,9 +72,9 @@ def main():
         if len(samples) != 1:
             raise ValueError('capture must contain exactly one real kernel')
         sample = samples[0]
-        if (sample['Grid Size'] != '(5, 1, 1)' or sample['Block Size'] != '(128, 1, 1)'
+        if (sample['Grid Size'] != f'({grid}, 1, 1)' or sample['Block Size'] != '(128, 1, 1)'
                 or sample['Device'] != '1'
-                or not re.search(r's4_reduce_kernel<(?:\(int\))?256, (?:\(bool\))?(?:0|false)>', sample['Kernel Name'])):
+                or not re.search(name_pattern, sample['Kernel Name'])):
             raise ValueError('captured kernel/geometry/device differs from the actual reference launch')
         text = (out / 'engine.log').read_text(encoding='utf-8')
         result = [json.loads(s) for s in (out / 'results.jsonl').read_text().splitlines()]
@@ -69,6 +83,10 @@ def main():
         if result[0]['factors'] != expected['result']['factors'] or fields(text, 'descent_values') != expected['leaf']:
             raise ValueError('complete output fingerprint differs')
         coverage = fields(text, 's4_multiply_stats')
+        if a.kind=='gscale':
+            actual=fields(text,'real_gscale_device')
+            for k in ('enabled','coefficients','h2d_bytes','checked_words','check_d2h_bytes'):
+                if actual[k]!=expected['scale'][k]:raise ValueError('Gamma coverage differs: '+k)
         for k in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):
             if coverage[k] != expected['coverage'][k]: raise ValueError('check coverage differs: ' + k)
         for token in ('gmp_check_bad=0', 'gmp_selftest_bad=0', 'pending=0', 's4_div_check: cases=800 bad=0'):
@@ -77,7 +95,7 @@ def main():
         (out / 'summary.json').write_text(json.dumps(dict(command=command, result=result[0], leaf=expected['leaf'],
             coverage=coverage, report_sha256=sha(out / 'trace.ncu-rep'), metrics_sha256=sha(out / 'metrics.csv'),
             captured_kernel={k: sample[k] for k in ('ID', 'Kernel Name', 'Grid Size', 'Block Size', 'Device')},
-            collector_sha256=sha(__file__), scope='One real NW256 S4 launch, after its startup selftest; replay changes execution, not a full Stage2 performance sample.'), indent=2) + '\n')
+            collector_sha256=sha(__file__), scope=f'One real {a.kind} launch; replay changes execution, not a full Stage2 performance sample.'), indent=2) + '\n')
         print('Collected', out); return
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()): raise ValueError('use a fresh output directory')
@@ -90,10 +108,11 @@ def main():
     if read(exe.parent / 'build_manifest.json').get('engine') == 'production': app += ['--log-level', 'debug']
     env = dict(NTT_D_MODEL='0', NTT_NO_PROGRESS='1', NTT_GIANT_SEED_PAIR='1', NTT_GIANT_BASE_CPU='0',
                NTT_GIANT_CHAIN_BLOCK='64', NTT_GIANT_CHAIN_MIN='32768', NTT_FOLD_DEVICE_MAX_MB='640', CUDA_LAUNCH_BLOCKING='0')
+    if a.kind=='gscale':env.update(NTT_GSCALE_DEVICE='1',NTT_FOLD_OWNER_REUSE='3')
     wrapper = out / 'app.cmd'
     prefix = [str(a.ncu), '--rename-kernels', '0', '--devices', '1', '--target-processes', 'all',
               '--clock-control', 'none', '--cache-control', 'none', '--kernel-name-base', 'mangled',
-              '--kernel-name', 'regex:' + KERNEL, '--launch-skip', '1', '--launch-count', '1']
+              '--kernel-name', 'regex:' + kernel, '--launch-skip', '0' if a.kind=='gscale' else '1', '--launch-count', '1']
     for section in ('LaunchStats', 'SpeedOfLight', 'Occupancy', 'SchedulerStats', 'WarpStateStats', 'InstructionStats', 'MemoryWorkloadAnalysis'):
         prefix += ['--section', section]
     prefix += ['--metrics', 'l1tex__t_sectors_pipe_lsu_mem_local_op_ld.sum,l1tex__t_sectors_pipe_lsu_mem_local_op_st.sum',
@@ -114,8 +133,8 @@ def main():
     (out / 'capture.ps1').write_text(script)
     (out / 'command.json').write_text(json.dumps(dict(identity=identity, reference_sha256=sha(a.reference),
         save_sha256=sha(saved), key=key, command=command, environment=env, tool_sha256=sha(__file__),
-        helper_sha256=sha(HELPER), expected_grid=[5, 1, 1], expected_block=[128, 1, 1],
-        selection='Exact generic256 mangled name; skip index0 selftest grid1, capture index1 real grid5. Candidate order verified in Systems; baseline must match dimensions in actual NCU output.'), indent=2) + '\n')
+        helper_sha256=sha(HELPER), expected_grid=[grid, 1, 1], expected_block=[128, 1, 1],kind=a.kind,
+        selection='Bound mangled template and actual grid/block/device; Gamma has one real launch, S4 skips its startup selftest.'), indent=2) + '\n')
     print(out / 'capture.ps1')
 
 

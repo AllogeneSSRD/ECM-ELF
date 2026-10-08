@@ -25,6 +25,10 @@ def main():
     p.add_argument('--chain-min',type=int,default=None)
     p.add_argument('--seed-pair',type=int,choices=(0,1),default=0)
     p.add_argument('--base-cpu',type=int,choices=(0,1),default=0)
+    p.add_argument('--gscale-device',type=int,choices=(0,1),default=None,
+                   help='Development GPU Gamma correction; omit for older binaries')
+    p.add_argument('--cuda-launch-blocking',type=int,choices=(0,1),default=None,
+                   help='Explicitly bind the capture launch mode instead of inheriting it')
     p.add_argument('--chain-block',type=int,default=None,help='Explicit chain points per thread; 4..2^20')
     p.add_argument('--short-chain-block',type=int,default=None,help='Opt-in short-chunk points per thread: 0 or 4..64')
     p.add_argument('--short-chain-max',type=int,default=None,help='Exclusive short-chunk point limit, at most 2^20')
@@ -71,6 +75,8 @@ def main():
         env['NTT_GIANT_CHAIN_MIN']=str(a.chain_min)
     env['NTT_GIANT_SEED_PAIR']=str(a.seed_pair)
     env['NTT_GIANT_BASE_CPU']=str(a.base_cpu)
+    if a.gscale_device is not None:env['NTT_GSCALE_DEVICE']=str(a.gscale_device)
+    if a.cuda_launch_blocking is not None:env['CUDA_LAUNCH_BLOCKING']=str(a.cuda_launch_blocking)
     if a.chain_block is not None:
         if not 4<=a.chain_block<=1<<20:raise ValueError('Invalid chain block')
         env['NTT_GIANT_CHAIN_BLOCK']=str(a.chain_block)
@@ -110,6 +116,10 @@ def main():
     for token in ('stage1_skipped=1', 'gmp_check_bad=0', 'gmp_selftest_bad=0', 'pending=0', 'clean=1', 'fixed=3', 'point_arithmetic: xadd6=1'):
         assert token in text, token
     result = json.loads((out/'results.jsonl').read_text(encoding='utf-8').splitlines()[-1])
+    if a.gscale_device is not None:
+        scale=dict(re.findall(r'(\w+)=(\S+)',re.search(r'real_gscale_device: (.*)',text)[1]))
+        assert int(scale['requested'])==a.gscale_device, 'Gamma request differs'
+        assert scale['checked_words']=='0' and scale['check_d2h_bytes']=='0', 'Diagnostic GMP copies in capture'
     if a.owner_reuse is not None:
         owner=dict(re.findall(r'(\w+)=(\S+)',re.search(r'real_batched_folddevice: (.*)',text)[1]))
         assert int(owner['reuse'])==a.owner_reuse, 'Actual owner layout differs'

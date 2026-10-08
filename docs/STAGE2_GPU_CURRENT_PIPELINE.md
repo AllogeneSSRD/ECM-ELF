@@ -2019,3 +2019,8 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 ## 72. 泛型S4常量除数寻址：设备归约少约3.34%（2026-10-08）
 
 独立生产拆分后generic16384回退已复现，SASS/ELF/管理员NCU定位到除数从constant偏移0变8后的循环寻址增加。单纯声明排序无效；唯一常量结构将除数置于首字段，MAC/上传/检查保持，REG40不变。40正式/10预热及独立29项原生、12条chain/块尾门禁完成；generic16384 full少0.97%、t_reduce6.989→约6.756秒，两组同向，8193 full少0.66%。真实S4 grid5/block128指令48,478,483→47,640,770，local load sectors不变。M4423大界本批均值慢0.95%、两组方向不同，尚未证明无回退，发布893保持；新Auto成本/较大16k/最终chain/并发lease未完成。全部原始样本、公式、源行、负结果及发布边界统一维护[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md:493)。
+
+
+## 73. 驻留H的GPU Gamma校正（2026-10-08）
+
+最后fold后复用死q槽，Mont(H,Gamma⁻¹R)保持普通域；只增加8W标量H2D，不增owner/NTT持久数组，必要CPU回退保留。开发21/0、原语r1/r2各12/0及大界完整H两条；生产36/0含五级Gamma毒化/实际queue。40正式/10预热，开发大界full少0.82%、生产大界少1.20%，各两组同向；三宽生产少0.80%/1.32%/0.57%。管理员Systems目标准备空隙0.753→0.131秒，设备tracked/pinned峰不变、200ms NVML峰均4989MiB；真实Compute校正约18ms但local请求仍多，不作为新主瓶颈。发布893/旧Auto成本保持，下一项下降根部桥接/组包与热NTT、最终短尾/较大16k/新成本/总内存lease。完整数学、公式、源行、全部样本、原始拒绝和复现继续维护[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md:537)。

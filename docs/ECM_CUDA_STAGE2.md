@@ -532,3 +532,76 @@ M4423/D1381380/P126720/B2≈2.01e12：owner609.09→473.73MiB（−135.35MiB）�
 **发布893保持，候选尚未认证完整无回退。** 宽泛型减少寻址的收益已有重复和计数器证据；大界下降/逆元的波动仍须定位，随后推进G树/fold/下降准备与热NTT、最终chain策略、较大16k容量、新D/Auto B2成本和总RAM/VRAM lease。本轮不改变Auto B2门槛或导出新cprof。
 
 本阶段独立审计从全部原始log/result重建40正式样本、10预热、12条chain诊断、29项原生门禁及3次管理员NCU采集，另列声明排序中断矩阵。审计核对对象/25个当前raw依赖与Git暂存字节、输入/完整输出/检查覆盖、采集及收集工具快照、实际kernel选择与三路计数器；证据及逐文件SHA归档于同阶段目录evidence.zip/evidence_manifest.json。build/data继续忽略。复现工具与候选已入阶段提交，发布exe字节保持893。
+
+
+## 2026-10-08 驻留 H 的 GPU Gamma 校正
+
+### 准备瓶颈与算法
+
+接续上一节的93c592候选，先定位fold结束到scaled descent的准备。独立初始Systems trace（GPU1、原有效M4423/B1=1000/lcm、D1381380/P126720/I1456028/G12）记录自身GPU事件span37.888747秒、并集30.783450秒、无自身事件7.105296秒。最大0.842465秒间隙位于fold收尾到下降首个大上传；日志flat→CPoly桥接0.116445秒、CPU Gamma校正约0.689秒，与它接近。正常trace匹配event的API完成后延迟最大约173微秒，不能解释约7秒间隙；这不排除未捕获的Windows长尾，也不是整卡idle证明。F逆元已从finvflat恢复复用，不是重复计算逆元。
+
+原[CPU校正](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7598)对每个H系数执行GMP乘法/mod N。令f=Gamma⁻¹（已有Ginv，不能再次求逆）、W=ceil(bits(N)/64)、R=2^(64W)：一次在CPU编码fR mod N，随后[新内核](D:/code/MPA-OpenCl/src/cuda/stage2/scale_plain.cuh:6)执行Mont(H_i,fR)=H_i f mod N，输入/输出始终为普通域。radix取实际W，不是模板容量NW，也不是2^bits(N)。沿用已验证的s2g_mont_mul；精确梅森沿用乘积折叠/radix旋转，泛型用SOS/REDC，奇数及canonical系数合同保持。
+
+[FoldDeviceState::scale](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5334)在最后fold完成后、finish读回/释放之前使用result allocation里已闲置的q槽保存W-word标量，H仍在独立source allocation中原地更新。此前NTT gather、oracle独立快照和reverse/subtract按default stream排序，不让S4输入与输出别名。新乘法完成后同步，再走原finish读回、bridge及下降。没有增加NTT乘法、S4归约或改变root输入digest。
+
+生产[调用](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7578)固定请求GPU；owner未活跃（包括G1、预算/分配回退）、空H或f=1时保留原CPU/无操作路径。成功GPU校正后跳过CPU整系数循环。开发保留NTT_GSCALE_DEVICE=0/1，默认0；生产只接受1，不保留CPU/GPU算法选择分支，CPU仅为必要回退。NTT_GSCALE_DEVICE_CHECK=1逐系数检查完整H；TEST_BAD会真正改写一个设备输出word，必须同时打开检查。原语TEST开关只在开发引擎使用。
+
+### 计算、容量与搬运
+
+用C表示活跃H系数数，多轮fold正常C<=P；每系数一条线程、block128，grid=ceil(C/128)，一条GPU校正launch。梅森主乘累加约C·W²+O(CW)，泛型约2C·W²+O(CW)；标量编码另有一次GMP移位/mod N。不能将这些数量直接换成GPU周期或将CPU与GPU的MAC速度等同。
+
+正常路径无额外cudaMalloc或持久NTT/owner数组，owner仍8W(7P+7)+48B。标量H2D额外8W B，H的原最终D2H量8WC B保持；owner传输统计包含标量，逻辑avoided计数不增加。主机临时scalar/hn向量payload16W B，加GMP临时空间；该数不是进程RAM峰。新kernel对H的接口读取/写入各8WC B，模数/标量读取有重复，实际cache/DRAM字节应由计数器测量，不能只用接口payload代替动态访问。
+
+当前sm89/CUDA13.3编译的NW=4/8/16/32/64/128/256七档均REG40，STACK分别112/208/400/784/1552/3088/6160B，即本构建24NW+16B/线程；SHARED/LOCAL均0。STACK仍可形成local访存和driver backing，不能把LOCAL=0或无新增cudaMalloc写成显存零成本，也不能将C·STACK当作进程显存峰。
+
+诊断完整H检查另读回before/after各8WC B、主机两向量payload16WC B；毒化另D2H8B/H2D8B。这些诊断运行不是正式样本。M4423大界C126720/W70，正常只新增560B上传；完整H检查8,870,400 words，额外135.352MiB诊断D2H及相同向量payload。
+
+### 数学、入口和正式计时
+
+开发[门禁/同二进制工具](D:/code/MPA-OpenCl/tools/bench/bench_stage2_gscale.py:1)首轮21/0：五个CPU/GMP共同验证的宽save，两侧完整leaf/factor/NTT-S4覆盖一致；单位例完整monic叶与独立定义一致，非单位1019/2621保持回退。完整H逐word对照GMP，G1/短尾、预算/分配回退、真实设备毒化、不带检查的毒化与非法flag均覆盖。另两条大界诊断完整检查126720个H系数，CPU/GPU完整leaf一致；补充六条32,768点宽形状诊断（gate-wide），校正后的整个H与GMP逐word一致，跨模式完整leaf保持。
+
+原语补测12条运行，六个有效61/509/521/1279/2203/8191位CPU/GMP Stage1保存点，各point模式0/1；与宽输入合起来覆盖全部七档模板容量。每次原语fixture有12个scalar/count组合，因子0/1/N−1/7、count1/2/129，数据含0/1/N−1和确定性随机数。最初509位候选因Stage1 Z不可逆在准备阶段拒绝，GPU曲线0；保留primitive_r0原文件/工具/拒绝记录，r1确定性选合法奇数offset并核对GMP坐标，没有修改算术。
+
+独立生产66bb451cf3be2d4eac9f20306908e253f5f9eeea5457d03f602d90963c5a78aa编译CUDA114.7秒/split6；26raw依赖冻结，不依赖tools/bench。扩展[原生门禁](D:/code/MPA-OpenCl/tools/test/test_stage2_production_native.py:1)用--gscale-check，36/0，包括完整H、宽save、非单位、必要回退、实际INI/queue/plan、五级日志下oracle及Gamma毒化拒绝；生产旧CPU算法覆盖设置及开发原语TEST设置在队列事务之前拒绝。这是检查项数，不是36条完成的GPU曲线。
+
+同二进制开发大界每侧一条预热＋8正式ABBA+BAAB，保持PTX3/outer0、pair1/CPUbase0/C64/min32768、owner640/reuse3/arena6300、factor-only及默认必需检查。full38.63585175→38.318530秒，减少0.8213%，两组分别少1.2353%/0.4017%。GPU校正正式0.018213..0.019313秒，上传560B、额外诊断D2H0。下降均值6.99775→7.326秒、inverse1.96825→2.03975秒，其他phase接近；局部CPU节省没有全部转化成整曲线收益，不叠加前面各轮百分比。
+
+独立生产93c592→66bb451宽输入，每case2预热＋8正式ABBA+BAAB、相同配置/默认检查/debug日志。generic8193 full5.4490465→5.40522475秒（−0.8042%），M16381 11.44266175→11.29162375秒（−1.3200%），generic16384 23.72155075→23.586632秒（−0.5688%）。完整leaf/factor与NTT/S4覆盖保持；这批形状的收益不能外推任意B2/位宽或替代较大16k显存容量验收。
+
+宽输入的两组减少比例分别为generic8193的0.5829%/1.0257%、M16381的1.4215%/1.2180%、generic16384的0.5663%/0.5712%。对应CPU/GPU gscale均值（日志毫秒精度）为0.05125/0.004、0.1485/0.008、0.14875/0.015秒。生产大界另2预热＋8正式ABBA+BAAB：full38.5815745→38.11755575秒（−1.2027%），两组少1.4950%/0.9067%；CPU gscale0.83525秒，GPU约0.018秒。开发同二进制CPU gscale均值0.83725秒；与初始trace的约0.689秒属于不同批次，不用它们混算加速。
+
+开发与生产合计40正式/10预热，全部样本保留；诊断、失败准备及profiler单列，不混入性能均值。开发原语r1为12/0；完善源/辅助工具及GMP保存点身份绑定后，最终工具r2又12/0。首轮gate及正式矩阵使用各自原始collector快照，不把修改后的工具SHA替换进旧记录。当前生产164个既有kernel的REG/STACK/SHARED/LOCAL全部保持，新增7个plain-scale模板；这是资源比较，不是完整SASS或周期等价证明。
+
+### 管理员Systems/Compute与准备空隙
+
+同开发binary的CPU0/GPU1依次独立采集，PTX3/outer0、pair1/CPUbase0/C64/min32768、owner640/reuse3/arena6300、默认检查、CUDA_LAUNCH_BLOCKING=0。两次Systems2026.1.3 capture/export/collector exit0；不在采集中编译或分析另一个trace。按GPU1/kernel/memcpy/memset事件和SQLite实际字节量核对，fold最后16B digest读回结束到下降第一个70,963,200B上传的自身事件间隙0.752876493→0.130642568秒，少0.622234秒；候选其前有一次plain-scale，实际grid990/block128、17.975964ms。CPU/GPU capture日志gscale0.608/0.018秒、bridge0.101604/0.091005秒，与移除该CPU准备的判断吻合。它是定位证据，不是第二套无插桩正式提速。
+
+整个自身事件span38.107019→36.587057秒、并集30.853124→30.864237秒、无自身事件7.253895→5.722820秒（19.04%→15.64%）；其他准备和调度也有变化，不能把整段1.531秒差全部归因Gamma。候选仍有约0.326秒、0.236秒的其他准备间隙。event-sync完成后API内延迟最大0.267/0.140ms；仅覆盖已匹配的正常event，不作为未捕获长尾的结论。
+
+实际H2D4866/7,151,041,091B→4867/7,151,041,651B，恰好多一次560B；D2H两侧6131/3,209,120,312B，D2D40/841,498,560B。两个tracked设备payload峰均4,531,652,368B（4321.720474MiB），各486 alloc/free，end_live0；pinned峰358,886,600B（342.260933MiB）及末端缓存357,255,360B保持。NVML200ms两侧221/212条GPU1记录，采样整卡峰均4989MiB，包含driver/context/private backing；不是连续或任意形状的进程峰保证。没有把NTT/owner/pinned模块峰相加。
+
+管理员Compute2026.2.1用扩展[采集器](D:/code/MPA-OpenCl/tools/bench/profile_stage2_reduce_ncu.py:1)的--kind gscale，从已完成同binary矩阵绑定实际NW128、grid990/block128/device1和完整输入/leaf/检查覆盖，16-pass kernel replay、clock/cache control none。实际17.992800ms，REG40/分配40、active warp43.516（90.66%）、issue16.21%。local load/store分别168,566,024/166,345,753 sectors，lg_throttle/issue_active49.2453、long_scoreboard12.6640，GPU DRAM throughput24.50% peak。sector×32仅是累计local访问代理，不是DRAM/PCIe/显存容量；不乘16passes，stall ratio也不是墙钟占比。replay警告备份设备数据到系统内存，采集时间/内存不能用于生产容量认证，完整leaf与覆盖已在collect中核对。
+
+首次NCU prepare因生成的锚定regex含caret被wrapper安全guard拒绝，GPU曲线0；保留ncu_gscale初版工具/拒绝。r1移除不必要caret、保留模板绑定，并再次验证实际kernel/维度/设备，capture/collect正常。没有绕过安全guard或以没有实际kernel的报告通过。
+
+本轮证据在ignored build_cuda_cmake/_stage2_prepare_20261008，开发/生产源码、工具、输入、原始门禁、全部矩阵和trace分别冻结。发布893保持，没有新Auto B2成本文件；候选支持手动B2/16384位，但较大16k、最终短尾、D/Auto成本及整个发布资格仍须推进。
+
+下一轮优先将下降根部的H反转/组包与已缓存finv结合，考察能否在owner释放前完成根乘法，减少当前H读回、flat→CPoly桥接和重新上传；先证明生命周期及完整普通域叶值，不重复求F逆元。再按真实热长度、batch和树层次优化tile/outer。新Gamma内核只占本批约0.05%全曲线，不优先继续微调它；旧pinned/context/global tile11负结果保持，多曲线仍需私有状态与总RAM/VRAM lease。
+
+复现：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+  -Build build_cuda_cmake/gscale_dev -Engine development -GlBackend ptx -SplitCompile 6
+python tools/bench/bench_stage2_gscale.py --exe build_cuda_cmake/gscale_dev/ecm_cuda_stage2.exe `
+  --fixtures build_cuda_cmake/_stage2_wide_20261007/fixtures_r2/fixtures.json `
+  --mode gate --output run/gscale_gate
+python tools/bench/bench_stage2_gscale.py --exe build_cuda_cmake/gscale_dev/ecm_cuda_stage2.exe `
+  --fixtures build_cuda_cmake/_stage2_wide_20261007/fixtures_r2/fixtures.json `
+  --save build_cuda_cmake/_fixed_d_20261005/native_accept/m4423.save `
+  --mode timing --output run/gscale_timing
+```
+
+生产编译用-Engine production，原生验收用test_stage2_production_native.py --gscale-check；跨生产比较用bench_stage2_production.py。各输出使用新目录；profiler由管理员启动，prepare先绑定完成矩阵，再用生成的capture.ps1采集，--collect-only验证。原始save必须保留自身CPU/GMP来源，不能用任意X代替性能输入。
+
+本阶段[独立最终审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_prepare_20261008/final_audit.json)重新解析所有原始result/log、正式顺序与检查覆盖，核对28/26个开发/生产raw依赖、对象、原始工具及拒绝记录、actual profiler kernel、传输和生命周期；complete=true。源码/工具/输入/日志/矩阵/trace归档于同目录evidence.zip及evidence_manifest.json，exe/obj/DLL通过外部SHA绑定，不内嵌。发布893字节保持；阶段结题不等于长期Stage2优化或整个发布资格完成。

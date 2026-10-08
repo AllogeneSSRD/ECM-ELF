@@ -80,3 +80,6 @@ docs/data/ecm_auto_b2_bridge_20261006* -text
 tools/bench/ecm_cost_coverage.py text eol=lf
 tools/test/test_ecm_cost_coverage.py text eol=lf
 tools/test/test_stage2_wide_native.py text eol=lf
+
+tools/bench/bench_stage2_gscale.py text eol=lf
+src/cuda/stage2/scale_plain.cuh text eol=lf
