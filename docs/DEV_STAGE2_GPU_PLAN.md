@@ -375,7 +375,7 @@ cufft_kron_probe bench 671088000 12 1
 | `kernels/cuda/cgbn_stage2_cuda.h` / `cgbn_stage2.cu` | 宿主机：Suyama a24 与起点、`s = lcm(1..B1)` 位数组、候选素数分类、np0、显存预算、每曲线一次 gcd |
 | `kernels/cuda/cgbn_stage2_kernels_tpi4.cu` / `_tpi8.cu` | tier 实例化（192/256/384/512 @ TPI=4，768/1024/2048 @ TPI=8） |
 | `tools/bench/stage2_gpu_probe.cu` | 独立探针（不碰生产路径）：冻结向量、存档驱动、`--tiers`、`--selftest` |
-| `tools/build/build_stage2_probe.ps1` | 四个 TU 的**并行**构建（见 §9.4） |
+| `tools/build/test/build_stage2_probe.ps1` | 四个 TU 的**并行**构建（见 §9.4） |
 | `tools/test/test_stage2_gpu.ps1` | 31 项回归（套件入口 `stage2-gpu`） |
 
 **算法**：与 CPU 参考（`stage2_ref.cpp --algorithm pairing`）逐项一致 —— baby[j] = [j]Q（j ≤ D/2）、giant[i] = [iD]Q（i ≤ B2/D+2）、素数 p ∈ (B1, B2] 按 `j = min(p mod D, D − p mod D)`、`i = (p ∓ j)/D` 配对，累乘 `X_i Z_j − X_j Z_i`；**p ≤ D/2 的素数不需要算术**：baby[p] = [p]Q 已在表里，累乘 `baby[p].Z` 即可（与参考的"直接 gcd R.Z"等价）。最后宿主机把每曲线各段的累加子乘起来做一次 gcd。
@@ -422,7 +422,7 @@ stage2gpu: curves=1 hits=1 factors=59649589127497217 ... bad_factors=0
 
 ### 9.4 构建（并行）
 
-探针不在 CMake 目标里，所以 `tools/build/parallel_nvcc.ps1`（走 CMake 的 `compile_commands.json`）看不到它 ⇒ 新增 `tools/build/build_stage2_probe.ps1`：四个 TU 各自独立编译（默认 4 并发）、各自一份日志、头文件变更令全部失效、只有链接是串行。实测 **CPU 累计 333.3 s / 墙钟 191.7 s ≈ 1.7×**（两个 tier 实例化 TU 各 121 s 与 192 s 是大头，探针与宿主机 TU 只要 ~8 s），二次构建（只改宿主机 TU）9.5 s。
+探针不在 CMake 目标里，所以 `tools/build/internal/parallel_nvcc.ps1`（走 CMake 的 `compile_commands.json`）看不到它 ⇒ 新增 `tools/build/test/build_stage2_probe.ps1`：四个 TU 各自独立编译（默认 4 并发）、各自一份日志、头文件变更令全部失效、只有链接是串行。实测 **CPU 累计 333.3 s / 墙钟 191.7 s ≈ 1.7×**（两个 tier 实例化 TU 各 121 s 与 192 s 是大头，探针与宿主机 TU 只要 ~8 s），二次构建（只改宿主机 TU）9.5 s。
 
 两个沙箱/环境的坑记在这里，省下一次重踩：① 后台 job 里 `Start-Process -NoNewWindow` 被拒（改在 job 内直接 `cmd /c`）；② **PowerShell job 的工作目录是用户 profile，不是调用者目录** —— 相对路径的源码/`-I`/日志会全部失效，必须先在 job 里 `Set-Location` 到仓库根。
 
@@ -1235,11 +1235,11 @@ mpz_mod(want, hi2, p2);                        /* ✗ 又用 want */
 
 ### 18.1 S1/S2 完成：GPU 的 F 与 CPU 参考**逐系数相同**，且冻结因子与命中素数一致（2026-09-30）
 
-**产物**：`tools/bench/stage2_tree_gpu.cu`（~1460 行，新）、`tools/build/build_stage2_tree_gpu.ps1`、`tools/build/check_stage2_tree_gpu.ps1`（一键验收）、`tools/test/test_stage2_tree_gpu.ps1`（我写的套件门禁，13 项）；`ntt_poly_probe.cu` 抽出 `ntt_poly_mul_host()` 并让探针**调用**它（树文件 `#include` 那个文件，所有内核**只有一份实现**）；`stage2_tree_ref.cpp` 加 `--dump-F`（stdout 除 `elapsed=` 外逐字节不变）。
+**产物**：`tools/bench/stage2_tree_gpu.cu`（~1460 行，新）、`tools/build/dev/build_stage2_tree_gpu.ps1`、`tools/build/test/check_stage2_tree_gpu.ps1`（一键验收）、`tools/test/test_stage2_tree_gpu.ps1`（我写的套件门禁，13 项）；`ntt_poly_probe.cu` 抽出 `ntt_poly_mul_host()` 并让探针**调用**它（树文件 `#include` 那个文件，所有内核**只有一份实现**）；`stage2_tree_ref.cpp` 加 `--dump-F`（stdout 除 `elapsed=` 外逐字节不变）。
 
 **系数表示**（已记在该文件头）：`m*W` 个 u64 的扁平数组，`W=ceil(bits(N)/64)`，**系数优先**（`poly[i*W+t]` = 第 i 个系数的第 t 个 limb，LE），每个系数归约进 `[0,N)`。选它是因为**与 NTT 乘法的输入布局逐位相同**（S=bits(N) ⇒ 热路径零转换），且系数连续便于 S2 的逐系数运算；不平衡节点零填充到 `P=max(m1,m2)`，并且**每次调用都重新推导并断言** `L·(2^bpw−1)² < p`（L=P·slot_words），**绝不从探针的形状继承**。
 
-**验收证据（我自己复跑 `tools/build/check_stage2_tree_gpu.ps1` 与套件门禁）**：
+**验收证据（我自己复跑 `tools/build/test/check_stage2_tree_gpu.ps1` 与套件门禁）**：
 
 ```
 mont_selftest: cases=2048 mismatches=0 first_bad=0        （设备 Montgomery 乘 vs GMP a*b*R^-1 mod N）
@@ -3513,7 +3513,7 @@ D=2310: s5_pack lines=1404  with mismatches=0     ← 包括 P=113/129 的大形
 
 ### 54.8 一个构建系统的坑：obj 比源新 ≠ obj 含最新源
 
-`tools/build/build_stage2_tree_gpu.ps1` 的增量判据是"obj 比 `stage2_tree_gpu.cu`（和它 include 的 `ntt_poly_probe.cu`）新就跳过编译"。我在**上一次编译还没读完源文件时**改了该文件，于是 obj 的 mtime（编译结束时）晚于源的 mtime（我编辑时）⇒ 脚本判"up to date"，**复用了不含我改动的 obj**（实测：新加的 `s5_shape_attest` 与 `*_bytes` 标签都不见了）。**教训**：这种 make 式判据在"编译期间改源"时会给出**静默的错答案**；改完源要重编，用 `-Rebuild` 强制，并且**用新诊断的第一行来证明它在 exe 里**（本轮就是这么发现的）。
+`tools/build/dev/build_stage2_tree_gpu.ps1` 的增量判据是"obj 比 `stage2_tree_gpu.cu`（和它 include 的 `ntt_poly_probe.cu`）新就跳过编译"。我在**上一次编译还没读完源文件时**改了该文件，于是 obj 的 mtime（编译结束时）晚于源的 mtime（我编辑时）⇒ 脚本判"up to date"，**复用了不含我改动的 obj**（实测：新加的 `s5_shape_attest` 与 `*_bytes` 标签都不见了）。**教训**：这种 make 式判据在"编译期间改源"时会给出**静默的错答案**；改完源要重编，用 `-Rebuild` 强制，并且**用新诊断的第一行来证明它在 exe 里**（本轮就是这么发现的）。
 
 ### 54.9 本轮状态与下一步
 

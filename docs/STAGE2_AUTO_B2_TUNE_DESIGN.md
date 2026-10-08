@@ -353,7 +353,7 @@ INI 可拟议 `stage2_auto_b2`、`stage2_tune_file`、`stage1_seconds_per_curve`
 
 先输出联合计划/排名，再接 CLI/INI/worktodo；显式B2兼容、混合save B1处理、无profile、溢出、资源变化和G=1路径都应有明确合同。G=1使用不同直接余式路径，目前resident fit排除它，不能用G−1=0简单套旧模型。
 
-接入时复用生产build入口和清单：[build_stage2_tree_gpu.ps1](D:/code/MPA-OpenCl/tools/build/build_stage2_tree_gpu.ps1:47)、[独立生产builder](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)。将新增规划/profile依赖纳入构建来源，而不把某台设备的tune结果硬编码为所有设备默认。
+接入时复用生产build入口和清单：[build_stage2_tree_gpu.ps1](D:/code/MPA-OpenCl/tools/build/dev/build_stage2_tree_gpu.ps1:47)、[独立生产builder](D:/code/MPA-OpenCl/tools/build/build_stage2_local.ps1:1)。将新增规划/profile依赖纳入构建来源，而不把某台设备的tune结果硬编码为所有设备默认。
 
 ### P4：反馈与扩展
 

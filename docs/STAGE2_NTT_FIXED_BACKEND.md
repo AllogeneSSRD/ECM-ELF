@@ -17,7 +17,7 @@
 - [后端合同与配置校验](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:95)、[有效模式](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:110)。
 - [编译期归约选择](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:174)，固定 PTX 的设备路径不引用 mode symbol。
 - [生产入口缺省配置](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:15)、[实际 D 后端匹配](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10788)。
-- [NTT 构建](D:/code/MPA-OpenCl/tools/build/build_ntt_coop_probe.ps1:1)、[独立 native 构建](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:9)。
+- [NTT 构建](D:/code/MPA-OpenCl/tools/build/test/build_ntt_coop_probe.ps1:1)、[独立 native 构建](D:/code/MPA-OpenCl/tools/build/build_stage2_local.ps1:9)。
 - [固定后端完整卷积探针](D:/code/MPA-OpenCl/tools/test/ntt_coop_outer_probe.cu:24)、[交叉驱动](D:/code/MPA-OpenCl/tools/bench/bench_ntt_fixed_backend.py:1)。
 - [完整 Stage2 交叉驱动](D:/code/MPA-OpenCl/tools/bench/bench_stage2_fixed_backend.py:1)、[固定后端 D scope 门禁](D:/code/MPA-OpenCl/tools/test/test_stage2_production_scope.py:19)。
 
@@ -90,10 +90,10 @@ GPU1 RTX4060 Laptop/sm89/CUDA13.3，串行。固定 short/PTX 各自通过：200
 ## 6. 复现与发布状态
 
 ```powershell
-tools/build/build_ntt_coop_probe.ps1 -Build build_cuda_cmake/fixed_short -GlBackend short
-tools/build/build_ntt_coop_probe.ps1 -Build build_cuda_cmake/fixed_ptx -GlBackend ptx
+tools/build/test/build_ntt_coop_probe.ps1 -Build build_cuda_cmake/fixed_short -GlBackend short
+tools/build/test/build_ntt_coop_probe.ps1 -Build build_cuda_cmake/fixed_ptx -GlBackend ptx
 python tools/bench/bench_ntt_fixed_backend.py --short build_cuda_cmake/fixed_short/ntt_coop_outer_probe.exe --ptx build_cuda_cmake/fixed_ptx/ntt_coop_outer_probe.exe --output <fresh-directory> --device 1
-tools/build/build_ecm_cuda_stage2.ps1 -Build build_cuda_cmake/fixed_ptx_native -GlBackend ptx
+tools/build/build_stage2_local.ps1 -Build build_cuda_cmake/fixed_ptx_native -GlBackend ptx
 ```
 
 完整Stage2交叉驱动要求baseline有 `frozen_manifest.json`、两侧有对应 `sources/` 原始快照，candidate构建manifest为fixed_mode3；验证每条运行前后exe/save/source哈希。日常runtime构建和默认开关保持，固定后端是独立可选编译。fold0逻辑保留，但本阶段独立编译门禁覆盖的是short1/PTX3/runtime。

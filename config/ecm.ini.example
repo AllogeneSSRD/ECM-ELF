@@ -6,246 +6,518 @@
 # MiB=2^20 B; arena+fold+batch != process_peak
 
 # STAGE1
-# <path>; d=worktodo.txt
-# 指定 Stage1 读取的任务队列。程序按当前 worker 领取任务；完成后将原任务移入 finished。Stage2 使用独立的 stage2_worktodo，不要让两个程序同时消费同一文件。
+# <path>; default=worktodo.txt
+# Stage1 task queue for the current worker. Completed assignments move to finished. Stage2 uses
+# stage2_worktodo; each queue must have only one consumer.
+# 指定 Stage1 读取的任务队列。程序按当前 worker 领取任务；完成后将原任务移入 finished。Stage2 使用独立
+# 的 stage2_worktodo，不要让两个程序同时消费同一文件。
 worktodo = worktodo.txt
-# <path>; d=worktodo.finished.txt
+# <path>; default=worktodo.finished.txt
+# Stage1 completed-task record, containing original assignments and results. This is not an
+# intermediate curve checkpoint.
 # 指定 Stage1 已完成任务的记录文件。用于保留原任务行和处理结果，不是曲线计算的中间存档。
 finished = worktodo.finished.txt
-# <path>; d=screen.log; empty=off; worker(N>1)=_N
-# 指定 Stage1 普通运行日志，程序追加写入。留空关闭文件日志；未显式指定文件名时，worker 2 等自动使用 screen_2.log 这类带编号的文件名。
+# <path>; default=screen.log; empty=off; worker(N>1)=_N
+# Append normal Stage1 output to this file. Empty disables file logging. When no filename is
+# explicitly set, workers add a numeric suffix, such as screen_2.log.
+# 指定 Stage1 普通运行日志，程序追加写入。留空关闭文件日志；未显式指定文件名时，worker 2 等自动使用
+# screen_2.log 这类带编号的文件名。
 # log_file = screen.log
-# <path>; d=.
-# 指定 Stage1 曲线存档的输出目录。Stage2 未设置 stage2_save_dir 时也在此目录查找任务引用的 save；此键不是 Stage2 全部临时显存或内存的预算。
+# <path>; default=.
+# Output directory for Stage1 curve saves. Stage2 also searches here when stage2_save_dir is unset.
+# This is not a Stage2 RAM or VRAM budget.
+# 指定 Stage1 曲线存档的输出目录。Stage2 未设置 stage2_save_dir 时也在此目录查找任务引用的 save；此键
+# 不是 Stage2 全部临时显存或内存的预算。
 tmp_dir = .
-# <path>; d=""; empty=off
+# <path>; default=""; empty=off
+# First destination for Stage1 save synchronization. Empty disables this destination; sync_mode
+# controls the files and synchronization policy.
 # 指定第一个 Stage1 存档同步目录。留空不启用该目标；同步范围和方式由 sync_mode 决定。
 save_sync_dir_1 =
-# <path>; d=""; empty=off
+# <path>; default=""; empty=off
+# Second destination for Stage1 save synchronization. Both destinations may be enabled; empty disables
+# only this destination.
 # 指定第二个 Stage1 存档同步目录。可同时向两个目标同步；留空只关闭此目标，不影响第一个目标。
 save_sync_dir_2 =
-# [incremental|full]; d=incremental
-# 控制 Stage1 任务完成后的存档同步。incremental 仅同步本次任务期间更新的文件；full 同步全部符合条件的存档。程序启动时仍执行一次完整同步。
+# [incremental|full]; default=incremental
+# Save synchronization after a Stage1 assignment: incremental copies files updated during that
+# assignment; full copies all eligible saves. Startup always performs a full synchronization.
+# 控制 Stage1 任务完成后的存档同步。incremental 仅同步本次任务期间更新的文件；full 同步全部符合条件的
+# 存档。程序启动时仍执行一次完整同步。
 sync_mode = incremental
-# <path>; d=""; empty=off
-# 指定 Prime95 的 worktodo.txt 路径。启用后，将 Stage1 生成的 ECMSTAGE2 任务追加到同目录的 worktodo.add，由 Prime95 自行导入；留空关闭交接。save 文件本身还需能被 Prime95 访问。
+# <path>; default=""; empty=off
+# Path to Prime95 worktodo.txt. Stage1 appends generated ECMSTAGE2 assignments to worktodo.add in the
+# same directory for Prime95 to import. Empty disables handoff. Prime95 must also be able to access
+# the save files.
+# 指定 Prime95 的 worktodo.txt 路径。启用后，将 Stage1 生成的 ECMSTAGE2 任务追加到同目录的
+# worktodo.add，由 Prime95 自行导入；留空关闭交接。save 文件本身还需能被 Prime95 访问。
 p95_worktodo_path =
-# [<n>|<n>,...|<a>-<b>|auto]; d=""; empty=no_worker_header
-# 选择接收交接任务的 Prime95 worker，可指定单个编号、编号列表或区间；程序在候选 worker 中选择队列较短者。auto 从同目录 prime.txt 读取 NumWorkers；留空追加时不写 worker 段头，按 Prime95 的默认 worker 处理。
+# [<n>|<n>,...|<a>-<b>|auto]; default=""; empty=no_worker_header
+# Prime95 workers eligible to receive handoffs: one ID, a comma list, or ranges. The shortest eligible
+# queue is selected. auto reads NumWorkers from prime.txt in the same directory. Empty omits the
+# worker header and uses Prime95's default worker.
+# 选择接收交接任务的 Prime95 worker，可指定单个编号、编号列表或区间；程序在候选 worker 中选择队列较短
+# 者。auto 从同目录 prime.txt 读取 NumWorkers；留空追加时不写 worker 段头，按 Prime95 的默认 worker 处
+# 理。
 p95_add_workers =
-# [0|1]; d=1
-# 控制交接任务是否保留 PrimeNet assignment ID。1 保留未被判定失效的 AID，0 一律去掉；已在 Prime95 日志中确认失效的 AID 会去掉，以免任务再次被丢弃。
+# [0|1]; default=1
+# Keep PrimeNet assignment IDs in handoffs: 1 retains IDs not known to be invalid; 0 strips all IDs.
+# IDs confirmed invalid by Prime95 logs are always removed to prevent repeated rejection.
+# 控制交接任务是否保留 PrimeNet assignment ID。1 保留未被判定失效的 AID，0 一律去掉；已在 Prime95 日志
+# 中确认失效的 AID 会去掉，以免任务再次被丢弃。
 p95_keep_aid = true
-# [0|1]; d=1
-# 控制是否补投被 Prime95 因失效 AID 删除的交接任务。1 根据交接记录和 Prime95 日志检查并去掉 AID 补投，0 关闭自动补投；只对程序能够确认的已交接任务生效。
+# [0|1]; default=1
+# Recover handoffs deleted by Prime95 because of invalid assignment IDs. 1 checks handoff records and
+# Prime95 logs, then reposts confirmed lost assignments without an ID; 0 disables recovery. Only
+# confirmed prior handoffs qualify.
+# 控制是否补投被 Prime95 因失效 AID 删除的交接任务。1 根据交接记录和 Prime95 日志检查并去掉 AID 补投，
+# 0 关闭自动补投；只对程序能够确认的已交接任务生效。
 p95_recover_lost = true
-# [none|red|green|yellow|blue|magenta|cyan|white|grey]; d=cyan
+# [none|red|green|yellow|blue|magenta|cyan|white|grey]; default=cyan
+# Color of the Stage1 console progress bar. none disables color. This does not change ordinary file
+# logs or arithmetic.
 # 选择 Stage1 控制台进度文字颜色。none 关闭着色；此设置不改变普通文件日志内容或计算方式。
 progress_color = cyan
-# <x:R,finite>; d=60; unit=s; x>0:period(x); x=0:off; x<0:each_line; 100%:always
-# 控制 Stage1 进度行写入日志文件的间隔，单位为秒。正数按间隔记录，0 不记录中间进度，负数记录每次进度更新；完成时的 100% 行仍会记录。此键不限制控制台刷新频率。
+# <x:R,finite>; default=60; unit=s; x>0:period(x); x=0:off; x<0:each_line; 100%:always
+# Interval in seconds between Stage1 progress entries in file logs. Positive values limit frequency; 0
+# suppresses intermediate progress; negative values log every refresh. Completion at 100% is still
+# logged. Console refresh frequency is unchanged.
+# 控制 Stage1 进度行写入日志文件的间隔，单位为秒。正数按间隔记录，0 不记录中间进度，负数记录每次进度更
+# 新；完成时的 100% 行仍会记录。此键不限制控制台刷新频率。
 progress_log_seconds = 60
-# [0|1]; d=1; S2:1=phases;0=curve; debug:independent
-# 控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由 stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。
+# [0|1]; default=1; S2:1=phases;0=curve; debug:independent
+# Normal console detail. In Stage2, true shows phase transitions and false keeps curve summaries;
+# stage2_debug_log independently controls debug logging. Stage1 uses the selected backend's normal
+# verbosity behavior.
+# 控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由
+# stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。
 verbose = true
-# [gpu|edwards|mont]; d=gpu; empty=default; [opencl]=>gpu; [atkin-morain]=>edwards; [montgomery|suyama]=>mont
-# 选择 Stage1 计算方法。gpu 使用当前可执行文件链接的 GPU 后端：ecm_cuda 使用 CUDA，ecm 使用 OpenCL；edwards 和 mont 使用对应的 CPU 曲线实现。改为 gpu 不会在同一可执行文件内切换 CUDA 与 OpenCL。
+# [gpu|edwards|mont]; default=gpu; empty=default; [opencl]=>gpu; [atkin-morain]=>edwards; [montgomery|suyama]=>mont
+# Stage1 arithmetic method. gpu uses the backend linked into the executable: CUDA in ecm_cuda, OpenCL
+# in ecm. edwards and mont select the corresponding CPU implementations. This setting cannot switch an
+# executable between CUDA and OpenCL.
+# 选择 Stage1 计算方法。gpu 使用当前可执行文件链接的 GPU 后端：ecm_cuda 使用 CUDA，ecm 使用 OpenCL；
+# edwards 和 mont 使用对应的 CPU 曲线实现。改为 gpu 不会在同一可执行文件内切换 CUDA 与 OpenCL。
 method = gpu
-# [auto|simd|gmp]; d=auto; empty=default; simd=>AVX512-IFMA; [avx512]=>simd; [scalar|mpn]=>gmp
-# 选择 CPU Edwards/Montgomery 的大整数乘法后端。auto 自动选择，simd 使用受支持的 AVX512-IFMA 路径，gmp 使用 GMP；GPU Stage1 不使用此设置。
+# [auto|simd|gmp]; default=auto; empty=default; simd=>AVX512-IFMA; [avx512]=>simd; [scalar|mpn]=>gmp
+# CPU Edwards/Montgomery big-integer backend: auto selects automatically, simd uses supported
+# AVX512-IFMA operations, and gmp uses GMP. GPU Stage1 ignores this setting.
+# 选择 CPU Edwards/Montgomery 的大整数乘法后端。auto 自动选择，simd 使用受支持的 AVX512-IFMA 路径，gmp
+# 使用 GMP；GPU Stage1 不使用此设置。
 backend = auto
-# [auto|mersenne|montgomery]; d=auto; empty=default; mersenne=>N=2^p-1; [mers|on|fold]=>mersenne; [mont|off|cios]=>montgomery
-# 选择 CPU SIMD 的模约减方法。auto 按输入数选择，mersenne 适用于 N=2^p-1，montgomery 使用通用 Montgomery 约减；GPU Stage1 不使用此设置。通常保持 auto。
+# [auto|mersenne|montgomery]; default=auto; empty=default; mersenne=>N=2^p-1; [mers|on|fold]=>mersenne; [mont|off|cios]=>montgomery
+# CPU SIMD reduction method: auto selects for the input, mersenne requires N=2^p-1, and montgomery
+# uses general Montgomery reduction. Usually leave auto. GPU Stage1 ignores this setting.
+# 选择 CPU SIMD 的模约减方法。auto 按输入数选择，mersenne 适用于 N=2^p-1，montgomery 使用通用
+# Montgomery 约减；GPU Stage1 不使用此设置。通常保持 auto。
 field = auto
-# <x:Z,0..2^32-1>; d=0; zero=auto
-# 设置 CPU Stage1 的线程数。0 自动选择；只影响 CPU 计算路径，不改变 CUDA 的线程块大小或每个大整数使用的线程数。
+# <x:Z,0..2^32-1>; default=0; zero=auto
+# CPU Stage1 thread count; 0 selects automatically. Applies only to CPU arithmetic and does not set
+# CUDA threads per block or threads per integer.
+# 设置 CPU Stage1 的线程数。0 自动选择；只影响 CPU 计算路径，不改变 CUDA 的线程块大小或每个大整数使用
+# 的线程数。
 stage1_threads = 0
-# [none|auto|<n>,...|<a>-<b>]; d=""; empty=OS; n<logical_CPU_count
-# 设置 CPU Stage1 计算线程的亲和性，可用逻辑 CPU 编号列表或区间；线程依次循环使用列表中的 CPU。空值、none 或 auto 均不主动绑定，由操作系统调度。当前 Windows 实现只对单处理器组内编号 0..63 生效，其他平台不执行此绑定；编号还须对应实际可用的逻辑 CPU。
+# [none|auto|<n>,...|<a>-<b>]; default=""; empty=OS; n<logical_CPU_count
+# Logical CPU IDs or ranges for CPU Stage1 threads, assigned round-robin. Empty, none, or auto leaves
+# scheduling to the OS. The current Windows implementation supports only IDs 0..63 in one processor
+# group; other platforms do not apply this binding. Use IDs available on the machine.
+# 设置 CPU Stage1 计算线程的亲和性，可用逻辑 CPU 编号列表或区间；线程依次循环使用列表中的 CPU。空值、
+# none 或 auto 均不主动绑定，由操作系统调度。当前 Windows 实现只对单处理器组内编号 0..63 生效，其他平
+# 台不执行此绑定；编号还须对应实际可用的逻辑 CPU。
 affinity =
-# <pattern>; d=m{n}_{b1}.save; empty=default; tokens:{n},{b1}; suffix:_<B1>.save
-# 设置 CPU Montgomery 存档的名称模式，{n} 表示输入指数，{b1} 表示 B1。留空恢复默认模式；此键不改变其他计算后端自己的文件命名规则。
+# <pattern>; default=m{n}_{b1}.save; empty=default; tokens:{n},{b1}; suffix:_<B1>.save
+# CPU Montgomery save filename pattern: {n} is the Mersenne exponent and {b1} is B1. Empty restores
+# the default pattern. Other backends retain their own naming rules.
+# 设置 CPU Montgomery 存档的名称模式，{n} 表示输入指数，{b1} 表示 B1。留空恢复默认模式；此键不改变其他
+# 计算后端自己的文件命名规则。
 save_name_pattern = m{n}_{b1}.save
-# [off|none|0|-|<dir>]; d=""; empty=exe_dir; path_base=process_CWD(nonempty); [off|none|0|-]:disabled; case:sensitive
-# 指定 Stage1 指数缓存目录，复用相同 B1 和指数模式的预计算结果。留空使用可执行文件目录；off、none、0 或 - 关闭缓存。显式相对目录以进程当前工作目录为基准；很小的 B1 可能直接计算而不写缓存。
+# [off|none|0|-|<dir>]; default=""; empty=exe_dir; path_base=process_CWD(nonempty); [off|none|0|-]:disabled; case:sensitive
+# Directory for the precomputed Stage1 scalar cache, reused for matching B1 and exponent mode. Empty
+# uses the executable directory; off, none, 0, or - disables caching. Explicit relative paths use the
+# current working directory. Small B1 values may be computed without writing a cache.
+# 指定 Stage1 指数缓存目录，复用相同 B1 和指数模式的预计算结果。留空使用可执行文件目录；off、none、0
+# 或 - 关闭缓存。显式相对目录以进程当前工作目录为基准；很小的 B1 可能直接计算而不写缓存。
 exp_cache =
-# [0|3..12]; d=0; zero=12; recommended; runtime:x=0|x>=2; dict=2^(x-2)
-# 设置 CPU Edwards 的 NAF 窗口。0 使用内置窗口；增大窗口通常减少主循环加法，但预计算字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA PRAC 不使用此设置。
+# [0|3..12]; default=0; zero=12; recommended; runtime:x=0|x>=2; dict=2^(x-2)
+# CPU Edwards NAF window. 0 uses the built-in choice. Larger windows usually reduce loop additions,
+# while the precomputed dictionary grows as 2^(w-2), increasing memory and setup time. Typical values
+# are 3..12. CUDA PRAC ignores this setting.
+# 设置 CPU Edwards 的 NAF 窗口。0 使用内置窗口；增大窗口通常减少主循环加法，但预计算字典按 2^(w-2) 增
+# 长，会增加内存和准备时间。通常使用 3..12；CUDA PRAC 不使用此设置。
 naf_w = 0
-# [lcm|choose12]; d=lcm; empty=default; lcm:lcm(1..B1); choose12:12*lcm(1..B1); [1|gmp|gmp-ecm]=>lcm; [12|prime95]=>choose12
-# 选择 Stage1 使用的指数。lcm 为 lcm(1..B1)，choose12 为 12*lcm(1..B1)，用于需要额外乘 12 的流程；该设置改变计算结果，接续 Stage2 时应与所用曲线和存档约定一致。
+# [lcm|choose12]; default=lcm; empty=default; lcm:lcm(1..B1); choose12:12*lcm(1..B1); [1|gmp|gmp-ecm]=>lcm; [12|prime95]=>choose12
+# Stage1 scalar: lcm uses lcm(1..B1); choose12 uses 12*lcm(1..B1) when extra multiplication by 12 is
+# required. This changes the output point. Keep the convention consistent with the curve and save
+# consumed by Stage2.
+# 选择 Stage1 使用的指数。lcm 为 lcm(1..B1)，choose12 为 12*lcm(1..B1)，用于需要额外乘 12 的流程；该设
+# 置改变计算结果，接续 Stage2 时应与所用曲线和存档约定一致。
 exponent = lcm
-# <x:Z,0..2^64-1>; d=0; zero=random; curve(i):sigma+i; Suyama:x>=6; P95:sigma+curves<=2^63-1
-# 指定曲线起始 sigma；0 由程序随机选择。在采用连续 sigma 的批处理中，后续曲线使用 sigma+i；各曲线后端仍有自己的有效范围。ECM/ECM2 任务行给出非零 sigma 时覆盖此键，否则使用此键；不带 sigma 字段的 ECMSTAGE2 任务也使用此键。
+# <x:Z,0..2^64-1>; default=0; zero=random; curve(i):sigma+i; Suyama:x>=6; P95:sigma+curves<=2^63-1
+# Initial curve sigma. 0 chooses a random value within the backend's valid range; consecutive curves
+# use sigma+i. A nonzero sigma in an ECM/ECM2 assignment overrides this setting; otherwise this
+# setting is used. ECMSTAGE2 assignments without a sigma field also use it.
+# 指定曲线起始 sigma；0 由程序随机选择。在采用连续 sigma 的批处理中，后续曲线使用 sigma+i；各曲线后端
+# 仍有自己的有效范围。ECM/ECM2 任务行给出非零 sigma 时覆盖此键，否则使用此键；不带 sigma 字段的
+# ECMSTAGE2 任务也使用此键。
 sigma = 0
-# <dir>; d=""; empty=off
-# 保留旧配置兼容性，设置非空值只产生旧选项提示，不启用新的 Prime95 交接流程。需要交接 ECMSTAGE2 任务时使用 p95_worktodo_path。
+# <dir>; default=""; empty=off
+# Legacy compatibility setting. A nonempty value only produces an optional hint; it does not enable
+# the current Prime95 handoff mechanism. Use p95_worktodo_path to hand off ECMSTAGE2 work.
+# 保留旧配置兼容性，设置非空值只产生旧选项提示，不启用新的 Prime95 交接流程。需要交接 ECMSTAGE2 任务时
+# 使用 p95_worktodo_path。
 p95_dir =
-# <x:R,finite,x>=0>; d=600; unit=s; zero=periodic_off; Ctrl+C:save; x<0=>0
-# 设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C 请求保存。实际写盘时机受当前计算后端的安全检查点限制。
+# <x:R,finite,x>=0>; default=600; unit=s; zero=periodic_off; Ctrl+C:save; x<0=>0
+# Stage1 checkpoint interval in seconds. 0 disables periodic checkpoints; negative values act as 0.
+# Normal stop or Ctrl+C can still request a checkpoint. Actual writes wait for the backend's safe
+# checkpoint boundary.
+# 设置 Stage1 定期写检查点的间隔，单位为秒。0 关闭定期检查点，负数按 0 处理；仍可通过正常停止或 Ctrl+C
+# 请求保存。实际写盘时机受当前计算后端的安全检查点限制。
 ckpt_seconds = 600
-# <x:Z,0..device_count-1>; d=0
-# 选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对应各可执行文件实际使用的 GPU 后端设备列表。
+# <x:Z,0..device_count-1>; default=0
+# Zero-based GPU device ID for Stage1. Stage2 inherits it unless stage2_device is explicitly set. IDs
+# refer to the device list exposed by the executable's actual GPU backend.
+# 选择 GPU 设备编号，从 0 开始。用于 Stage1；Stage2 未显式指定 stage2_device 时也继承此编号。编号对应
+# 各可执行文件实际使用的 GPU 后端设备列表。
 device = 0
-# [0|2|3]; d=3; release=0; first_run=0; OpenCL:3; S2_save:0; invalid=>3
-# 选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。内置默认值为 3，但首次启动和发布模板有意写入 0；旧 INI 不会自动改值。
+# [0|2|3]; default=3; release=0; first_run=0; OpenCL:3; S2_save:0; invalid=>3
+# GPU Stage1 curve parametrization. The current CUDA Stage2 consumes param0 saves; use 0 for that
+# handoff. OpenCL uses param3. The built-in default is 3, while first-run and release templates
+# deliberately write 0. Existing INI files are not changed automatically.
+# 选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径
+# 使用参数 3。内置默认值为 3，但首次启动和发布模板有意写入 0；旧 INI 不会自动改值。
 gpu_param = 0
-# [1|2|4|8|16|32]; d=8; limbs%effective_TPI=0; CUDA:ignored
-# 设置 OpenCL 每个大整数使用的线程数，需满足有效 TPI 与整数 limb 数的布局约束。CUDA 后端自行按位宽选择 TPI，不使用此键；不要用它调整 CUDA 的线程块大小。
+# [1|2|4|8|16|32]; default=8; limbs%effective_TPI=0; CUDA:ignored
+# OpenCL threads per integer, subject to limb-layout constraints. CUDA selects TPI by operand width
+# and ignores this key. This is not the CUDA block size.
+# 设置 OpenCL 每个大整数使用的线程数，需满足有效 TPI 与整数 limb 数的布局约束。CUDA 后端自行按位宽选择
+# TPI，不使用此键；不要用它调整 CUDA 的线程块大小。
 tpi = 8
-# <x:Z,x>=0>; d=0; zero=auto; x<=device_kernel_limit; CUDA:ignored
-# 设置 OpenCL 工作组大小，0 由后端自动选择。显式值必须满足当前设备和内核的限制；CUDA 后端不使用此设置。
+# <x:Z,x>=0>; default=0; zero=auto; x<=device_kernel_limit; CUDA:ignored
+# OpenCL work-group size. 0 lets the backend select automatically; explicit values must satisfy device
+# and kernel limits. CUDA ignores this setting.
+# 设置 OpenCL 工作组大小，0 由后端自动选择。显式值必须满足当前设备和内核的限制；CUDA 后端不使用此设置
+# 。
 wg_size = 0
-# [auto|<id>|<alias>]; d=""; empty=auto; CUDA:ignored
-# 指定 OpenCL 模乘内核的标识或别名。空值或 auto 由后端选择；用于已知内核的比较和调优，通常保持自动。CUDA 后端忽略此键。
+# [auto|<id>|<alias>]; default=""; empty=auto; CUDA:ignored
+# OpenCL modular-multiplication kernel ID or alias. Empty or auto lets the backend choose. Intended
+# for comparing or debugging known kernels; automatic selection is normally suitable. CUDA ignores
+# this key.
+# 指定 OpenCL 模乘内核的标识或别名。空值或 auto 由后端选择；用于已知内核的比较和调优，通常保持自动。
+# CUDA 后端忽略此键。
 kernel_mul =
-# [auto|<id>|<alias>]; d=""; empty=auto; CUDA:ignored
+# [auto|<id>|<alias>]; default=""; empty=auto; CUDA:ignored
+# OpenCL modular-squaring kernel ID or alias. Empty or auto lets the backend choose; automatic
+# selection is normally suitable. CUDA ignores this key.
 # 指定 OpenCL 模平方内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
 kernel_sqr =
-# [auto|<id>|<alias>]; d=""; empty=auto; CUDA:ignored
+# [auto|<id>|<alias>]; default=""; empty=auto; CUDA:ignored
+# OpenCL modular-addition kernel ID or alias. Empty or auto lets the backend choose; automatic
+# selection is normally suitable. CUDA ignores this key.
 # 指定 OpenCL 模加内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
 kernel_add =
-# [auto|<id>|<alias>]; d=""; empty=auto; CUDA:ignored
+# [auto|<id>|<alias>]; default=""; empty=auto; CUDA:ignored
+# OpenCL modular-subtraction kernel ID or alias. Empty or auto lets the backend choose; automatic
+# selection is normally suitable. CUDA ignores this key.
 # 指定 OpenCL 模减内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
 kernel_sub =
-# [auto|<id>|<alias>]; d=""; empty=auto; CUDA:ignored
+# [auto|<id>|<alias>]; default=""; empty=auto; CUDA:ignored
+# OpenCL special-multiplication kernel ID or alias. Empty or auto lets the backend choose; automatic
+# selection is normally suitable. CUDA ignores this key.
 # 指定 OpenCL 特殊乘法内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
 kernel_special_mult =
 
 # STAGE2
-# <path>; d=stage2_worktodo.txt; empty=invalid
-# 指定 Stage2 读取的 ECMSTAGE2 任务队列。程序仅执行 save 中可用的曲线并报告数量不足；任务完成后继续下一项。队列及其进度文件只应由一个消费进程使用。
+# <path>; default=stage2_worktodo.txt; empty=invalid
+# ECMSTAGE2 queue consumed by Stage2. Only curves available in the save are processed; shortages are
+# reported. Processing continues with the next assignment after completion. Only one process may
+# consume a queue and its progress file.
+# 指定 Stage2 读取的 ECMSTAGE2 任务队列。程序仅执行 save 中可用的曲线并报告数量不足；任务完成后继续下
+# 一项。队列及其进度文件只应由一个消费进程使用。
 stage2_worktodo = stage2_worktodo.txt
-# <path>; d=stage2_worktodo.finished.txt; empty=invalid
-# 指定 Stage2 完成或输入错误任务的记录文件。保存原任务、结果状态及提交回执，用于队列完成后的对账；不能与 Stage1 finished 或活动队列共用路径。
+# <path>; default=stage2_worktodo.finished.txt; empty=invalid
+# Record of completed Stage2 assignments and assignments with invalid input. Stores original tasks,
+# result status, and commit receipts for reconciliation. Must not share a path with Stage1 finished or
+# an active queue.
+# 指定 Stage2 完成或输入错误任务的记录文件。保存原任务、结果状态及提交回执，用于队列完成后的对账；不能
+# 与 Stage1 finished 或活动队列共用路径。
 stage2_finished = stage2_worktodo.finished.txt
-# <path>; d=stage2_screen.log; empty=off; worker(N>1)=_N
-# 指定 Stage2 普通运行日志，追加记录阶段、批次、警告和结束统计。留空关闭普通文件日志，控制台仍输出；未显式指定时，多 worker 自动给默认文件名加编号后缀。
+# <path>; default=stage2_screen.log; empty=off; worker(N>1)=_N
+# Append normal Stage2 phases, batches, warnings, and final statistics. Empty disables this file log;
+# console output remains. Default filenames gain a worker suffix unless an explicit filename is
+# supplied.
+# 指定 Stage2 普通运行日志，追加记录阶段、批次、警告和结束统计。留空关闭普通文件日志，控制台仍输出；未
+# 显式指定时，多 worker 自动给默认文件名加编号后缀。
 # stage2_log_file = stage2_screen.log
-# <path>; d=stage2_results.jsonl; empty=default; worker(N>1)=_N
-# 指定 Stage2 成功曲线结果的 JSONL 文件，包含因子信息和续跑回执。留空使用默认文件名；不要在未完成队列续跑期间单独删除或替换它，否则会失去回执对账依据。
+# <path>; default=stage2_results.jsonl; empty=default; worker(N>1)=_N
+# JSONL results for successful Stage2 curves, including factors and resume receipts. Empty uses the
+# default filename. Do not independently delete or replace it while resuming an unfinished queue; it
+# is needed to reconcile completed curves.
+# 指定 Stage2 成功曲线结果的 JSONL 文件，包含因子信息和续跑回执。留空使用默认文件名；不要在未完成队列
+# 续跑期间单独删除或替换它，否则会失去回执对账依据。
 # stage2_results_file = stage2_results.jsonl
-# <path>; d=stage2_debug.log; empty=default; worker(N>1)=_N
-# 指定 Stage2 独立调试日志文件，仅在 stage2_debug_log 开启时写入。留空恢复默认文件名；默认名称按 worker 加后缀，显式指定时按原路径使用。
+# <path>; default=stage2_debug.log; empty=default; worker(N>1)=_N
+# Separate Stage2 debug log, written only when stage2_debug_log is enabled. Empty restores the default
+# filename. Default names gain a worker suffix; explicit paths are used unchanged.
+# 指定 Stage2 独立调试日志文件，仅在 stage2_debug_log 开启时写入。留空恢复默认文件名；默认名称按
+# worker 加后缀，显式指定时按原路径使用。
 # stage2_debug_log_file = stage2_debug.log
-# <path>; d=""; empty=queue_path+worker_suffix+.progress; queue_only; empty!=off
-# 指定 Stage2 队列续跑状态文件。空值自动使用队列路径加 worker 后缀和 .progress，并不关闭续跑；记录已完成曲线编号和回执，不保存当前曲线的 Stage2 中间计算。重启时只重算尚未确认完成的曲线。
+# <path>; default=""; empty=queue_path+worker_suffix+.progress; queue_only; empty!=off
+# Stage2 queue resume state. Empty derives the path from the queue plus worker suffix and .progress;
+# it does not disable resume. Stores completed curve indices and receipts, without checkpointing
+# arithmetic within a curve. Restart recomputes only curves not confirmed complete.
+# 指定 Stage2 队列续跑状态文件。空值自动使用队列路径加 worker 后缀和 .progress，并不关闭续跑；记录已完
+# 成曲线编号和回执，不保存当前曲线的 Stage2 中间计算。重启时只重算尚未确认完成的曲线。
 stage2_progress_file =
-# <dir>; d=""; empty=tmp_dir
-# 指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路径。程序读取并验证源 save，不修改其内容。
+# <dir>; default=""; empty=tmp_dir
+# Directory searched for saves referenced by Stage2 assignments. Empty inherits tmp_dir; absolute save
+# paths in assignments are used directly. Source saves are read and validated without modification.
+# 指定 Stage2 查找任务所引用 save 的目录。留空继承共享 tmp_dir；任务给出绝对 save 路径时直接使用该路径
+# 。程序读取并验证源 save，不修改其内容。
 stage2_save_dir =
-# [true|false|1|0|yes|no|on|off]; d=false
-# 控制是否将 Stage2 调试细节写入独立日志。true 开启，false 关闭；verbose=true 不会自动开启调试日志，开启本选项也不把全部调试输出刷到控制台。
+# [true|false|1|0|yes|no|on|off]; default=false
+# Write Stage2 debug details to a separate log: true enables and false disables. verbose=true does not
+# enable debug logging; enabling this option does not send all debug details to the console.
+# 控制是否将 Stage2 调试细节写入独立日志。true 开启，false 关闭；verbose=true 不会自动开启调试日志，开
+# 启本选项也不把全部调试输出刷到控制台。
 stage2_debug_log = false
-# <x:Z,0..2^31-1>; d=@device
-# 单独指定 Stage2 的 CUDA 设备编号，从 0 开始。未配置时继承共享 device；继承状态不等于可以在 INI 中显式填写 -1。
+# <x:Z,0..2^31-1>; default=@device
+# Override Stage2's zero-based CUDA device ID. Unset inherits device. The internal inheritance
+# sentinel does not mean -1 is accepted as an explicit INI value.
+# 单独指定 Stage2 的 CUDA 设备编号，从 0 开始。未配置时继承共享 device；继承状态不等于可以在 INI 中显
+# 式填写 -1。
 # stage2_device = 0
-# [quiet|curve|phases|batches|debug|0..4]; d=@verbose?phases:curve; production:debug=>batches+debug_file; normal_file:batches
-# 兼容旧配置的控制台日志等级：quiet、curve、phases、batches、debug 分别对应 0..4。未配置时由 verbose 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和 stage2_debug_log。
+# [quiet|curve|phases|batches|debug|0..4]; default=@verbose?phases:curve; production:debug=>batches+debug_file; normal_file:batches
+# Legacy console level: quiet, curve, phases, batches, and debug map to 0..4. Unset follows verbose.
+# In production, debug enables the separate debug log while normal console detail remains capped at
+# batches. Usually use verbose and stage2_debug_log.
+# 兼容旧配置的控制台日志等级：quiet、curve、phases、batches、debug 分别对应 0..4。未配置时由 verbose
+# 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和
+# stage2_debug_log。
 # stage2_log_level = phases
-# <x:Z,x=0|B1<x<=2^63-1-8192>; d=0; zero=task_or_CLI_or_AutoB2
-# 设置未在命令行或任务行给出非零 B2 时使用的 Stage2 上界。0 表示继续从其他来源选择；显式 B2 必须大于存档的 B1。增大 B2 通常增加搜索范围、运行时间及显存需求；命令行非零 B2 优先于任务行，任务行优先于此键。
+# <x:Z,x=0|B1<x<=2^63-1-8192>; default=0; zero=task_or_CLI_or_AutoB2
+# Stage2 upper bound when neither CLI nor task supplies a nonzero B2. 0 defers to other sources.
+# Explicit B2 must exceed the save's B1. Larger B2 usually increases coverage, time, and VRAM demand.
+# Precedence: nonzero CLI B2, then task B2, then this key.
+# 设置未在命令行或任务行给出非零 B2 时使用的 Stage2 上界。0 表示继续从其他来源选择；显式 B2 必须大于存
+# 档的 B1。增大 B2 通常增加搜索范围、运行时间及显存需求；命令行非零 B2 优先于任务行，任务行优先于此键
+# 。
 stage2_b2 = 0
-# <x:Z,x=0|x>=6,x%2=0>; d=0; zero=auto; engine_shape_valid
-# 手动指定 Stage2 算法步长 D。0 自动选形；非零值除满足偶数且不小于 6 外，还必须满足当前引擎的布局限制。D 会改变树规模、批次数和内存需求，通常保持自动。
+# <x:Z,x=0|x>=6,x%2=0>; default=0; zero=auto; engine_shape_valid
+# Manual Stage2 step D. 0 selects the shape automatically. Explicit values must be even, at least 6,
+# and satisfy the engine's layout constraints. D affects tree size, batch count, and memory demand;
+# automatic selection is normally suitable.
+# 手动指定 Stage2 算法步长 D。0 自动选形；非零值除满足偶数且不小于 6 外，还必须满足当前引擎的布局限制
+# 。D 会改变树规模、批次数和内存需求，通常保持自动。
 stage2_d = 0
-# <x:Z,1..2^20>; d=64; unit=MiB
-# 设置 Stage2 S4 批次的工作缓冲预算，单位为 MiB。增大预算可能减少分批开销，但会占用更多显存；它只约束对应批次缓冲，不是整个进程的显存上限。
+# <x:Z,1..2^20>; default=64; unit=MiB
+# Stage2 S4 batch-buffer budget in MiB. Larger budgets may reduce batching overhead but consume more
+# VRAM. This limits the corresponding buffers, not total process VRAM.
+# 设置 Stage2 S4 批次的工作缓冲预算，单位为 MiB。增大预算可能减少分批开销，但会占用更多显存；它只约束
+# 对应批次缓冲，不是整个进程的显存上限。
 stage2_batch_mb = 64
-# <x:Z,0..2^20>; d=0; unit=MiB; zero=auto_or_env
-# 设置 Stage2 大工作区预算，单位为 MiB，用于规划可用的 NTT 工作形状。0 由运行环境或自动规划决定，不表示不使用显存；过小可能迫使较小工作形状或使任务无法运行。表、坐标和其他模块仍可能另占显存。
+# <x:Z,0..2^20>; default=0; unit=MiB; zero=auto_or_env
+# Stage2 large-workspace budget in MiB, used to plan available NTT shapes. 0 uses environment settings
+# or automatic planning, not zero VRAM. Too little may force smaller shapes or prevent execution.
+# Tables, coordinates, and other modules may allocate additional VRAM.
+# 设置 Stage2 大工作区预算，单位为 MiB，用于规划可用的 NTT 工作形状。0 由运行环境或自动规划决定，不表
+# 示不使用显存；过小可能迫使较小工作形状或使任务无法运行。表、坐标和其他模块仍可能另占显存。
 stage2_arena_mb = 0
-# <x:Z,0..2^20>; d=640; unit=MiB; zero=off; CLI>INI>NTT_FOLD_DEVICE_MAX_MB>default
-# 设置 fold 累积结果驻留 GPU 的预算，单位为 MiB。0 关闭这部分驻留；所需空间超过预算时可退回分批路径，可能显著增加处理和传输开销。此预算与大工作区、批次缓冲分别控制，不是总显存限制。
+# <x:Z,0..2^20>; default=640; unit=MiB; zero=off; CLI>INI>NTT_FOLD_DEVICE_MAX_MB>default
+# Budget in MiB for keeping fold accumulators on the GPU. 0 disables this residency. Exceeding the
+# budget may fall back to batching, substantially increasing processing and transfer costs.
+# Independent of arena and batch budgets; not a total VRAM limit.
+# 设置 fold 累积结果驻留 GPU 的预算，单位为 MiB。0 关闭这部分驻留；所需空间超过预算时可退回分批路径，
+# 可能显著增加处理和传输开销。此预算与大工作区、批次缓冲分别控制，不是总显存限制。
 stage2_fold_mb = 640
-# [0|1]; d=0
-# 控制是否调用 PARI/GP 进一步分解命中的因子。1 开启，0 只保留 Stage2 已得到并验证的因子结果；进一步分解可能增加曲线结束后的时间，需要可用的 stage2_gp。
+# [0|1]; default=0
+# Invoke PARI/GP to further decompose found factors: 1 enables; 0 keeps only factors extracted and
+# verified by Stage2. Decomposition can add time after curve computation and requires a working
+# stage2_gp.
+# 控制是否调用 PARI/GP 进一步分解命中的因子。1 开启，0 只保留 Stage2 已得到并验证的因子结果；进一步分
+# 解可能增加曲线结束后的时间，需要可用的 stage2_gp。
 stage2_factorize_hits = 0
-# [0|1]; d=0
-# 控制是否跳过命中结果的素数归因诊断，即查找哪些 Stage2 素数对应此次命中。1 跳过此诊断，仍执行因子提取与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 stage2_factorize_hits。
+# [0|1]; default=0
+# Skip diagnostic prime attribution, which identifies Stage2 primes responsible for a hit. 1 skips
+# attribution while retaining factor extraction and validation; 0 follows the engine's diagnostic
+# policy. This does not disable decomposition or change stage2_factorize_hits.
+# 控制是否跳过命中结果的素数归因诊断，即查找哪些 Stage2 素数对应此次命中。1 跳过此诊断，仍执行因子提取
+# 与验证；0 使用引擎默认诊断策略。此键不表示关闭因子分解，也不改变 stage2_factorize_hits。
 stage2_factor_only = 0
-# [0|1]; d=0
-# 控制是否在各处都未指定非零 B2 时自动选择 B2。1 按包含 Stage1 成本的总流程单位时间收益选取，0 关闭；需要与设备、位宽、B1 和内存范围匹配的成本标定。当前发布候选尚无可用的生产标定，应显式提供 B2；开启开关不会自动完成标定。
+# [0|1]; default=0
+# Choose B2 automatically when no source specifies a nonzero value. 1 optimizes total workflow benefit
+# per unit time, including Stage1 cost; 0 disables. Requires calibration matching the device, bit
+# width, B1, and memory range. The current release candidate lacks production calibration; provide
+# explicit B2. Enabling this switch does not perform calibration.
+# 控制是否在各处都未指定非零 B2 时自动选择 B2。1 按包含 Stage1 成本的总流程单位时间收益选取，0 关闭；
+# 需要与设备、位宽、B1 和内存范围匹配的成本标定。当前发布候选尚无可用的生产标定，应显式提供 B2；开启开
+# 关不会自动完成标定。
 stage2_auto_b2 = 0
-# <exe>; d=gp.exe; empty=gp.exe; path_base=CreateProcess/PATH
-# 指定进一步分解因子使用的 PARI/GP 可执行文件。默认 gp.exe 按 Windows 程序搜索规则查找；也可填写完整路径。仅在 stage2_factorize_hits 开启时需要它；此 INI 键不使用数据集脚本的 --gp 环境变量回退规则。
+# <exe>; default=gp.exe; empty=gp.exe; path_base=CreateProcess/PATH
+# PARI/GP executable used for further factor decomposition. gp.exe follows Windows executable search
+# rules; a full path is also accepted. Required only when stage2_factorize_hits is enabled. This INI
+# key does not use the dataset scripts' --gp environment-variable fallback.
+# 指定进一步分解因子使用的 PARI/GP 可执行文件。默认 gp.exe 按 Windows 程序搜索规则查找；也可填写完整路
+# 径。仅在 stage2_factorize_hits 开启时需要它；此 INI 键不使用数据集脚本的 --gp 环境变量回退规则。
 stage2_gp = gp.exe
-# <x:Z,1..600>; d=30; unit=s
-# 设置每次 PARI/GP 因子分解调用的超时时间，单位为秒。仅影响附加的因子分解，不限制 Stage2 曲线计算时长；超时不表示原 Stage2 算法未找到因子。
+# <x:Z,1..600>; default=30; unit=s
+# Timeout in seconds for each PARI/GP factor-decomposition call. Limits only optional decomposition,
+# not Stage2 curve computation. A timeout does not invalidate a factor already found by Stage2.
+# 设置每次 PARI/GP 因子分解调用的超时时间，单位为秒。仅影响附加的因子分解，不限制 Stage2 曲线计算时长
+# ；超时不表示原 Stage2 算法未找到因子。
 stage2_factor_timeout = 30
-# <path>; d=""; empty=none
-# 指定 Auto B2 使用的实测成本 profile。留空不提供 profile；启用 Auto B2 时，程序检查设备与已标定位宽、B1、工作区及算法配置是否匹配，不将其他设备的 profile 当作通用估计。
+# <path>; default=""; empty=none
+# Measured cost profile for Auto B2. Empty supplies no profile. Auto B2 checks the device, calibrated
+# bit width, B1, workspace, and algorithm settings; profiles from other devices are not treated as
+# generic estimates.
+# 指定 Auto B2 使用的实测成本 profile。留空不提供 profile；启用 Auto B2 时，程序检查设备与已标定位宽、
+# B1、工作区及算法配置是否匹配，不将其他设备的 profile 当作通用估计。
 stage2_cost_profile =
-# <x:Z,x=0|measured_min<=x<=measured_max>; d=0; zero=profile_bound; min<=max
-# 限制 Auto B2 搜索的最小 B2。0 使用 profile 的实测下界；非零值必须在已标定范围内且不超过最大 B2。此键不覆盖命令行或任务行已经指定的 B2。
+# <x:Z,x=0|measured_min<=x<=measured_max>; default=0; zero=profile_bound; min<=max
+# Minimum B2 searched by Auto B2. 0 uses the profile's measured lower bound. Explicit values must be
+# within calibration and no greater than the maximum. Does not override B2 supplied by CLI or task.
+# 限制 Auto B2 搜索的最小 B2。0 使用 profile 的实测下界；非零值必须在已标定范围内且不超过最大 B2。此键
+# 不覆盖命令行或任务行已经指定的 B2。
 stage2_auto_min_b2 = 0
-# <x:Z,x=0|measured_min<=x<=measured_max>; d=0; zero=profile_bound; min<=max
-# 限制 Auto B2 搜索的最大 B2。0 使用 profile 的实测上界；非零值必须在已标定范围内且不小于最小 B2。不能靠提高此值让模型外推到未测量的范围。
+# <x:Z,x=0|measured_min<=x<=measured_max>; default=0; zero=profile_bound; min<=max
+# Maximum B2 searched by Auto B2. 0 uses the profile's measured upper bound. Explicit values must be
+# within calibration and no smaller than the minimum. Raising it does not permit extrapolation beyond
+# measured data.
+# 限制 Auto B2 搜索的最大 B2。0 使用 profile 的实测上界；非零值必须在已标定范围内且不小于最小 B2。不能
+# 靠提高此值让模型外推到未测量的范围。
 stage2_auto_max_b2 = 0
-# <x:Z,1..2^20>; d=1
-# 指定 Auto B2 成本估算对应的 Stage1 批次曲线数。它用于选择或核对 Stage1 的成本条件，不会让 Stage2 驱动启动该批 Stage1 计算，也不改变任务要处理的曲线数。
+# <x:Z,1..2^20>; default=1
+# Stage1 batch curve count associated with Auto B2 cost estimation. Selects or checks Stage1 cost
+# conditions; it neither starts a Stage1 batch from Stage2 nor changes the assignment's curve count.
+# 指定 Auto B2 成本估算对应的 Stage1 批次曲线数。它用于选择或核对 Stage1 的成本条件，不会让 Stage2 驱
+# 动启动该批 Stage1 计算，也不改变任务要处理的曲线数。
 stage1_batch = 1
-# <x:R,finite,x>0>; d=@profile; unit=s/curve
-# 手动提供 Auto B2 的 Stage1 每曲线耗时，单位为秒/曲线，必须为正数。未配置时从匹配的 profile 获取；即使当前读取既有 save，默认优化目标仍计入 Stage1 成本。此键用于成本模型，不是实际运行时限。
+# <x:R,finite,x>0>; default=@profile; unit=s/curve
+# Manual positive Stage1 time estimate in seconds per curve for Auto B2. Unset uses a matching
+# profile. The default objective includes Stage1 cost even when reading existing saves. This is a
+# cost-model input, not a runtime limit.
+# 手动提供 Auto B2 的 Stage1 每曲线耗时，单位为秒/曲线，必须为正数。未配置时从匹配的 profile 获取；即
+# 使当前读取既有 save，默认优化目标仍计入 Stage1 成本。此键用于成本模型，不是实际运行时限。
 # stage1_seconds_per_curve = <seconds>
-# <x:R,finite,x>0>; d=1; T2_model=x*(engine+cold)
-# 将 Auto B2 模型中的 Stage2 时间乘以该系数。1 不调整，大于 1 表示估计 Stage2 更贵，小于 1 表示更便宜；通常会相应影响所选 B2。此键只调整选形成本，不会让 GPU 按比例变快或变慢。
+# <x:R,finite,x>0>; default=1; T2_model=x*(engine+cold)
+# Multiplier applied to Stage2 time in the Auto B2 model. 1 leaves it unchanged; greater than 1
+# estimates higher cost, less than 1 lower cost, usually changing selected B2. Adjusts planning cost,
+# not actual GPU speed.
+# 将 Auto B2 模型中的 Stage2 时间乘以该系数。1 不调整，大于 1 表示估计 Stage2 更贵，小于 1 表示更便宜
+# ；通常会相应影响所选 B2。此键只调整选形成本，不会让 GPU 按比例变快或变慢。
 stage2_ratio_adjust = 1
 
 [GUI]
-# <x:Z,1..64>; d=1
-# 设置 GUI 管理的 worker 数量。每个 worker 使用对应的 [Worker #N] 设置；此键不会修改 worktodo 中每项任务的曲线数。并行运行时应给各 worker 配置独立队列和输出路径。
+# <x:Z,1..64>; default=1
+# Number of workers managed by the GUI, each using its [Worker #N] settings. Does not change task
+# curve counts in worktodo. Concurrent workers should have separate queues and output paths.
+# 设置 GUI 管理的 worker 数量。每个 worker 使用对应的 [Worker #N] 设置；此键不会修改 worktodo 中每项任
+# 务的曲线数。并行运行时应给各 worker 配置独立队列和输出路径。
 NumWorkers = 1
-# <exe>; d=""; empty=beside_GUI_then_PATH
-# 指定 GUI 启动 worker 使用的程序路径。留空先查找 GUI 同目录的默认 worker 程序，再按程序搜索路径查找；可用此键选择已构建的 Stage1 可执行文件。
+# <exe>; default=""; empty=beside_GUI_then_PATH
+# Worker executable launched by the GUI. Empty first searches for the default worker beside the GUI,
+# then the executable search path. Use this to select a built Stage1 executable.
+# 指定 GUI 启动 worker 使用的程序路径。留空先查找 GUI 同目录的默认 worker 程序，再按程序搜索路径查找；
+# 可用此键选择已构建的 Stage1 可执行文件。
 exe =
-# <xml-stem>; d=english
-# 选择 GUI 界面语言，值为 localization 目录下语言 XML 文件的文件名主体，不带 .xml。找不到所需资源或字体不能显示该语言时，按 GUI 的回退规则使用可显示的界面。
+# <xml-stem>; default=english
+# GUI language, specified by the language XML filename stem in localization, without .xml. Missing
+# resources or unavailable glyphs follow the GUI's display fallback rules.
+# 选择 GUI 界面语言，值为 localization 目录下语言 XML 文件的文件名主体，不带 .xml。找不到所需资源或字
+# 体不能显示该语言时，按 GUI 的回退规则使用可显示的界面。
 language = english
-# <dir>; d=""; empty=GUI_exe_dir/localization
-# 指定 GUI 语言 XML 文件目录。留空使用 GUI 可执行文件旁的 localization 目录；从开发构建目录运行时还会尝试源码中的语言资源目录。
+# <dir>; default=""; empty=GUI_exe_dir/localization
+# Directory containing GUI language XML files. Empty uses localization beside the GUI executable.
+# Development builds also try the source-tree language resources.
+# 指定 GUI 语言 XML 文件目录。留空使用 GUI 可执行文件旁的 localization 目录；从开发构建目录运行时还会
+# 尝试源码中的语言资源目录。
 localization_dir =
-# <ttf|ttc>; d=""; empty=auto
-# 指定 GUI 使用的 .ttf 或 .ttc 字体文件。留空由程序按界面语言选择系统字体；需要中文界面时应使用包含中文字形的字体。
+# <ttf|ttc>; default=""; empty=auto
+# GUI .ttf or .ttc font file. Empty selects a system font for the interface language. A Chinese
+# interface requires a font with Chinese glyphs.
+# 指定 GUI 使用的 .ttf 或 .ttc 字体文件。留空由程序按界面语言选择系统字体；需要中文界面时应使用包含中
+# 文字形的字体。
 font =
-# [auto|<x:R,6..96>]; d=auto; x<6=>auto; auto=15*DPI
-# 设置 GUI 字号，单位为像素，可使用小数。auto 或空值按 15*DPI 比例自动选择；小于 6 或非有限数恢复自动，大于 96 按 96 处理。手动字号不会再按自动规则选择大小。
+# [auto|<x:R,6..96>]; default=auto; x<6=>auto; auto=15*DPI
+# GUI font size in pixels; fractional values are accepted. auto or empty selects 15*DPI scale. Values
+# below 6 or nonfinite values restore auto; values above 96 clamp to 96. Manual sizes bypass automatic
+# sizing.
+# 设置 GUI 字号，单位为像素，可使用小数。auto 或空值按 15*DPI 比例自动选择；小于 6 或非有限数恢复自动
+# ，大于 96 按 96 处理。手动字号不会再按自动规则选择大小。
 font_size = auto
-# [0|1]; d=1; off:0|off|false|no; case:sensitive
-# 控制字体是否对齐像素网格。1 开启，0 关闭；小数字号或不同 DPI 下可比较显示清晰度。兼容 off、false、no 关闭，其他值按开启处理，字符串区分大小写。
+# [0|1]; default=1; off:0|off|false|no; case:sensitive
+# Snap glyphs to the pixel grid: 1 enables, 0 disables. Compare clarity at fractional sizes or
+# different DPI scales. off, false, and no also disable; other values enable. String matching is
+# case-sensitive.
+# 控制字体是否对齐像素网格。1 开启，0 关闭；小数字号或不同 DPI 下可比较显示清晰度。兼容 off、false、no
+# 关闭，其他值按开启处理，字符串区分大小写。
 font_snap = true
-# <x:Z,1..60>; d=10; unit=Hz
-# 设置 GUI 刷新频率，单位为 Hz。提高可使图表和状态显示更平滑，但增加界面刷新开销；不改变 GPU 计算迭代频率。
+# <x:Z,1..60>; default=10; unit=Hz
+# GUI refresh frequency in Hz. Higher values can smooth charts and status updates at additional UI
+# cost. Does not change GPU computation frequency.
+# 设置 GUI 刷新频率，单位为 Hz。提高可使图表和状态显示更平滑，但增加界面刷新开销；不改变 GPU 计算迭代
+# 频率。
 refresh_hz = 10
-# <x:Z,100..2^31-1>; d=500; unit=ms
-# 设置 GPU 监控查询间隔，单位为毫秒，最小为 100。增大可减少 NVML 查询频率；此键只影响监控数据更新，不控制计算 kernel 的调度。
+# <x:Z,100..2^31-1>; default=500; unit=ms
+# GPU monitoring interval in milliseconds, at least 100. Larger values reduce NVML polling frequency.
+# Affects monitoring updates only, not compute-kernel scheduling.
+# 设置 GPU 监控查询间隔，单位为毫秒，最小为 100。增大可减少 NVML 查询频率；此键只影响监控数据更新，不
+# 控制计算 kernel 的调度。
 gpu_poll_ms = 500
-# [idle|below_normal|normal|above_normal|high]; d=below_normal
-# 设置 GUI 启动的 worker 进程优先级。below_normal 为默认，较低优先级便于同时使用电脑；此键不是 GPU 独占或显卡占用率设置。
+# [idle|below_normal|normal|above_normal|high]; default=below_normal
+# Priority of worker processes launched by the GUI. below_normal is the default; lower priority makes
+# concurrent desktop use easier. This is not a GPU exclusivity or utilization setting.
+# 设置 GUI 启动的 worker 进程优先级。below_normal 为默认，较低优先级便于同时使用电脑；此键不是 GPU 独
+# 占或显卡占用率设置。
 priority = below_normal
-# <x:Z>,<y:Z>,<w:Z>,<h:Z>; d=120,80,1500,900; w,h>0
-# 保存 GUI 主窗口的位置和大小，依次为 x,y,宽,高。GUI 正常退出时会更新；通常无需手动编辑，宽和高应为正数。
+# <x:Z>,<y:Z>,<w:Z>,<h:Z>; default=120,80,1500,900; w,h>0
+# Saved main-window geometry: x,y,width,height. Updated on normal GUI exit; manual editing is usually
+# unnecessary. Width and height should be positive.
+# 保存 GUI 主窗口的位置和大小，依次为 x,y,宽,高。GUI 正常退出时会更新；通常无需手动编辑，宽和高应为正
+# 数。
 window = 120,80,1500,900
-# <escaped_blob>; d=""; empty=default
-# 保存 GUI 面板停靠布局的转义数据。留空使用默认布局；由 GUI 自动写回，手动修改不完整数据可能使布局无法恢复。
+# <escaped_blob>; default=""; empty=default
+# Escaped GUI docking-layout data. Empty uses the default layout; the GUI writes it automatically.
+# Incomplete manual edits may prevent layout restoration.
+# 保存 GUI 面板停靠布局的转义数据。留空使用默认布局；由 GUI 自动写回，手动修改不完整数据可能使布局无法
+# 恢复。
 dock_layout =
-# <x:Z,x>=0>; d=0; GUI_managed; current=4
-# 保存已写入布局的版本编号，由 GUI 管理。版本早于当前默认布局时会重建布局；此键不是用户选择 GUI 功能版本的开关。
+# <x:Z,x>=0>; default=0; GUI_managed; current=4
+# Version of the saved docking layout, managed by the GUI. Older layouts are rebuilt using the current
+# default. This does not select a GUI feature version.
+# 保存已写入布局的版本编号，由 GUI 管理。版本早于当前默认布局时会重建布局；此键不是用户选择 GUI 功能版
+# 本的开关。
 dock_layout_ver = 0
-# [workers|detail|gen]; d=workers
-# 选择 GUI 启动时优先显示的面板。workers 为 worker 列表，detail 为详情，gen 为任务生成器；不改变是否自动启动 worker。
+# [workers|detail|gen]; default=workers
+# Panel initially shown by the GUI: workers opens the worker list, detail the details panel, and gen
+# the task generator. Does not change worker autostart behavior.
+# 选择 GUI 启动时优先显示的面板。workers 为 worker 列表，detail 为详情，gen 为任务生成器；不改变是否自
+# 动启动 worker。
 start_tab = workers
-# [ask|stop|kill]; d=ask
-# 控制关闭 GUI 时如何处理运行中的 worker。ask 先询问，stop 直接请求正常停止并等待检查点，kill 立即终止；强制终止时未写入的计算进度可能丢失。
+# [ask|stop|kill]; default=ask
+# Behavior when closing the GUI with active workers: ask prompts, stop requests a graceful stop and
+# waits for checkpoints, kill terminates immediately. Forced termination may lose progress not yet
+# checkpointed.
+# 控制关闭 GUI 时如何处理运行中的 worker。ask 先询问，stop 直接请求正常停止并等待检查点，kill 立即终止
+# ；强制终止时未写入的计算进度可能丢失。
 exit_confirm = ask
-# <x:Z,1000..3600000>; d=300000; unit=ms
-# 设置 GUI 请求正常停止后等待的最长时间，单位为毫秒。检测到新检查点或进程自行退出时可提前结束；到期仍未退出时强制终止。应为当前 Stage1 检查点耗时留出余量。
+# <x:Z,1000..3600000>; default=300000; unit=ms
+# Maximum wait in milliseconds after requesting a graceful worker stop. A new checkpoint or process
+# exit may end the wait early; workers still running at the deadline are terminated. Allow enough time
+# for current Stage1 checkpoint writes.
+# 设置 GUI 请求正常停止后等待的最长时间，单位为毫秒。检测到新检查点或进程自行退出时可提前结束；到期仍
+# 未退出时强制终止。应为当前 Stage1 检查点耗时留出余量。
 graceful_stop_ms = 300000
-# <path>; d=results.json.txt; empty=GUI_exe_dir/results.json.txt
-# 指定 GUI 汇总命中结果的 JSONL 文件。留空使用 GUI 可执行文件目录下的 results.json.txt；这是 GUI 的结果汇总文件，与 Stage2 用于续跑对账的 stage2_results_file 分开。
+# <path>; default=results.json.txt; empty=GUI_exe_dir/results.json.txt
+# GUI factor-results JSONL file. Empty uses results.json.txt in the GUI executable directory. This
+# summary is separate from stage2_results_file, which provides Stage2 resume receipts.
+# 指定 GUI 汇总命中结果的 JSONL 文件。留空使用 GUI 可执行文件目录下的 results.json.txt；这是 GUI 的结
+# 果汇总文件，与 Stage2 用于续跑对账的 stage2_results_file 分开。
 results_json = results.json.txt
-# <path>; d=results.txt; empty=GUI_exe_dir/results.txt
-# 指定 GUI 汇总结果的可读文本文件，由 JSONL 结果派生。留空使用 GUI 可执行文件目录下的 results.txt；需要长期保留结果时同时妥善保存 JSONL 来源。
+# <path>; default=results.txt; empty=GUI_exe_dir/results.txt
+# Readable GUI result summary derived from JSONL. Empty uses results.txt in the GUI executable
+# directory. Preserve the source JSONL as well for long-term result storage.
+# 指定 GUI 汇总结果的可读文本文件，由 JSONL 结果派生。留空使用 GUI 可执行文件目录下的 results.txt；需
+# 要长期保留结果时同时妥善保存 JSONL 来源。
 results_txt = results.txt
 
 # [Worker #2]

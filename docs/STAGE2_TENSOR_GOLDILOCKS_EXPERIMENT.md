@@ -161,7 +161,7 @@ Nsight Systems2026.1.3独立采集同exe/k24/t12/TC256，128个目标kernel组�
 复现入口（仓库根目录，选择空的新输出目录）：
 
 ```powershell
-.\tools\build\build_ntt_tensor_probe.ps1 -Build build_cuda_cmake\ntt_tensor_probe -Arch sm_89
+.\tools\build\test\build_ntt_tensor_probe.ps1 -Build build_cuda_cmake\ntt_tensor_probe -Arch sm_89
 python tools\test\test_ntt_tensor_goldilocks.py --exe build_cuda_cmake\ntt_tensor_probe\ntt_tensor_goldilocks_probe.exe --device 1 --output build_cuda_cmake\tc_gate_new
 python tools\bench\bench_ntt_tensor_goldilocks.py --exe build_cuda_cmake\ntt_tensor_probe\ntt_tensor_goldilocks_probe.exe --device 1 --kind tile --sizes 24 25 26 --threads 256 --operations 0 1 2 --output build_cuda_cmake\tc_tile_new
 python tools\bench\bench_ntt_tensor_goldilocks.py --exe build_cuda_cmake\ntt_tensor_probe\ntt_tensor_goldilocks_probe.exe --device 1 --kind mixed --sizes 24 25 --threads 256 --output build_cuda_cmake\tc_mixed_new

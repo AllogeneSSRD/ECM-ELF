@@ -133,7 +133,7 @@ local sectors×32是累计缓存访问代理，不是唯一数据、显存容量
 
 ```powershell
 python tools/test/test_prac_single_add.py --output docs/data/my_single_compact_roles.json
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/parallel_nvcc.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/internal/parallel_nvcc.ps1 `
   -BuildDir build_cuda_cmake/prac -Only 'cgbn_stage1_prac.*\.cu$|cgbn_stage1\.cu$' -Jobs 6
 python tools/test/test_cuda_prac.py --bits 4423 --tpi 16 --registers 255 `
   --variant single-compact --device 1 --output docs/data/my_single_compact_q

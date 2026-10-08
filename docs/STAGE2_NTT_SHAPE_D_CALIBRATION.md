@@ -111,7 +111,7 @@ Nsight Systems用于查看kernel/copy事件并集和CPU提交间隙；无本进�
 - [D模型与两组系数:12](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:12)、[weighted unit:60](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:60)、[成本:93](D:/code/MPA-OpenCl/tools/bench/stage2_d_model.cuh:93)、[scope与版本:10763](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10763)、[CPU选D计时:10952](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10952)。
 - [整数features:76](D:/code/MPA-OpenCl/tools/bench/calibrate_stage2_d.py:76)、[fit锚点校验:31](D:/code/MPA-OpenCl/tools/bench/fit_stage2_d.py:31)、[排名:1](D:/code/MPA-OpenCl/tools/bench/plan_stage2_d.py:1)、[同exe Stage2 A/B:1](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:1)。
 - [策略/纯卷积probe:24](D:/code/MPA-OpenCl/tools/test/ntt_coop_outer_probe.cu:24)、[策略88项:62](D:/code/MPA-OpenCl/tools/test/ntt_coop_outer_probe.cu:62)、[GMP门禁:1](D:/code/MPA-OpenCl/tools/test/test_ntt_coop_outer.py:1)、[共用模型探针:1](D:/code/MPA-OpenCl/tools/test/stage2_d_model_probe.cu:1)、[模型32项:1](D:/code/MPA-OpenCl/tools/test/test_stage2_d_features.py:1)。
-- [生产默认:15](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:15)、[生产构建:1](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)、[模型探针构建:1](D:/code/MPA-OpenCl/tools/build/build_stage2_d_model_probe.ps1:1)。
+- [生产默认:15](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:15)、[生产构建:1](D:/code/MPA-OpenCl/tools/build/build_stage2_local.ps1:1)、[模型探针构建:1](D:/code/MPA-OpenCl/tools/build/test/build_stage2_d_model_probe.ps1:1)。
 
 ## 2026-10-05 后续发布状态
 
@@ -179,7 +179,7 @@ $repoRoot = (Get-Location).Path
 $rootPhase = Join-Path $repoRoot 'build_cuda_cmake/_stage2_root_prod_20261008'
 $probe = Join-Path $repoRoot 'build_cuda_cmake/_stage2_ntt_reproduce'
 python tools/bench/prepare_stage2_ntt_range.py --exe "$rootPhase/production_r3/ecm_cuda_stage2.exe" --output "$probe/project"
-& "$probe/project/tools/build/build_ecm_cuda_stage2.ps1" -Build "$probe/native" -Engine production -GlBackend ptx -SplitCompile 6
+& "$probe/project/tools/build/build_stage2_local.ps1" -Build "$probe/native" -Engine production -GlBackend ptx -SplitCompile 6
 Set-Location $repoRoot
 python tools/bench/verify_stage2_ntt_range.py --exe "$probe/native/ecm_cuda_stage2.exe" --project "$probe/project"
 $captureArgs = @('--exe', "$probe/native/ecm_cuda_stage2.exe", '--range-project', "$probe/project", '--reference', "$rootPhase/cross_timing_final_r3/measurements.json", '--systems', "$rootPhase/nsys_root_1", '--output', "$probe/capture")
@@ -210,7 +210,7 @@ $captureJob = Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Pass
 
 ### 独立门禁与完整卷积
 
-[probe](D:/code/MPA-OpenCl/tools/test/ntt_outer_v_probe.cu:1)直接包含实际开发header，[构建脚本](D:/code/MPA-OpenCl/tools/build/build_ntt_outer_v_probe.ps1:1)冻结8份依赖并核验编译前后SHA，固定PTX3/u0。probe_r2 SHA150f73ea…490df1，编译19.9秒。
+[probe](D:/code/MPA-OpenCl/tools/test/ntt_outer_v_probe.cu:1)直接包含实际开发header，[构建脚本](D:/code/MPA-OpenCl/tools/build/test/build_ntt_outer_v_probe.ps1:1)冻结8份依赖并核验编译前后SHA，固定PTX3/u0。probe_r2 SHA150f73ea…490df1，编译19.9秒。
 
 [串行工具](D:/code/MPA-OpenCl/tools/bench/bench_ntt_outer_v.py:1)完成17个调用：四mask各96组GMP正/逆谱、27,131,904 words及4次cached切换、3,145,728 words；每mask故意损坏被拒绝。新增24组dense GMP谱/逆结果、2,951,568 words，含独立slice、17word padding、stride及同一计划内0/3/1/2/0/3切换；dense故障拒绝。四个非法mask拒绝、资源、88项policy和200000次device算术自检均通过。
 
@@ -248,10 +248,10 @@ $captureJob = Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Pass
 复现（新输出目录，Python 3，GPU1）：
 
 ```powershell
-& tools/build/build_ntt_outer_v_probe.ps1 -Build build_cuda_cmake/new_outer_v_probe
+& tools/build/test/build_ntt_outer_v_probe.ps1 -Build build_cuda_cmake/new_outer_v_probe
 python tools/bench/bench_ntt_outer_v.py --exe build_cuda_cmake/new_outer_v_probe/ntt_outer_v_probe.exe --mode gate --output run/new_outer_v_gate
 python tools/bench/bench_ntt_outer_v.py --exe build_cuda_cmake/new_outer_v_probe/ntt_outer_v_probe.exe --mode timing --gate run/new_outer_v_gate/summary.json --output run/new_outer_v_timing
-& tools/build/build_ecm_cuda_stage2.ps1 -Engine development -Build build_cuda_cmake/new_outer_v_native -GlBackend ptx -SplitCompile 6
+& tools/build/build_stage2_local.ps1 -Engine development -Build build_cuda_cmake/new_outer_v_native -GlBackend ptx -SplitCompile 6
 $nativeArgs = @('--exe', 'build_cuda_cmake/new_outer_v_native/ecm_cuda_stage2.exe', '--save', 'build_cuda_cmake/_fixed_d_20261005/native_accept/m4423.save', '--reference', 'build_cuda_cmake/_stage2_root_prod_20261008/cross_timing_final_r3/measurements.json')
 python tools/bench/bench_stage2_outer_v.py @nativeArgs --mode gate --fixtures build_cuda_cmake/_stage2_wide_20261007/fixtures_r2/fixtures.json --output run/new_outer_v_native_gate
 python tools/bench/bench_stage2_outer_v.py @nativeArgs --mode timing --gate run/new_outer_v_native_gate/measurements.json --output run/new_outer_v_native_timing
@@ -319,7 +319,7 @@ mask0/1各测试batch1/3/990、连续及stride=N+17共六种形状；每形状�
 
 证据根目录为ignored `build_cuda_cmake/_stage2_addsub_20261008`。[独立审计工具](D:/code/MPA-OpenCl/tools/bench/audit_ntt_addsub.py:1)从原始日志重新核对顺序/所有输出、完整来源、event均值、两轮全部样本、批量padding/毒化、原语及tile SASS计数；[quantitative.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_addsub_20261008/quantitative.json)保留分组和逐文件SHA。归档/提交凭据在该目录另存，发布893保持。
 
-复现时使用新目录；四mask探针先运行`prepare_ntt_addsub.py --mask 0..3 --output <project>`，再在对应project根目录调用其中冻结的`tools/build/build_ntt_outer_v_probe.ps1 -Build <absolute-build>`。将四个build保存为study的`ntt_m0..3`，对应project保存为`project_m0..3`，运行`bench_ntt_addsub.py --study <study> --mode gate|timing --output <new-output>`，timing另指定已完成`--gate <gate/measurements.json>`。批量probe用`build_ntt_addsub_batch_probe.ps1 -SourceBuild <ntt_m0|1> -Mask 0|1 -Build <new-build>`；随后`bench_ntt_addsub_batch.py --baseline <mask0-exe> --candidate <mask1-exe> --mode gate|timing --output <new-output>`，timing同样要求gate。所有实验固定GPU1。
+复现时使用新目录；四mask探针先运行`prepare_ntt_addsub.py --mask 0..3 --output <project>`，再在对应project根目录调用其中冻结的`tools/build/test/build_ntt_outer_v_probe.ps1 -Build <absolute-build>`。将四个build保存为study的`ntt_m0..3`，对应project保存为`project_m0..3`，运行`bench_ntt_addsub.py --study <study> --mode gate|timing --output <new-output>`，timing另指定已完成`--gate <gate/measurements.json>`。批量probe用`build_ntt_addsub_batch_probe.ps1 -SourceBuild <ntt_m0|1> -Mask 0|1 -Build <new-build>`；随后`bench_ntt_addsub_batch.py --baseline <mask0-exe> --candidate <mask1-exe> --mode gate|timing --output <new-output>`，timing同样要求gate。所有实验固定GPU1。
 
 ## 2026-10-08 canonical减法接入开发引擎
 
@@ -327,7 +327,7 @@ mask0/1各测试batch1/3/990、连续及stride=N+17共六种形状；每形状�
 
 接续已提交54e99b8的隔离验证。[开发NTT别名](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:287)现有编译期`NTT_GL_ADD_SUB_MASK=0..3`，默认0，bit0=sub、bit1=add；每蝶形没有运行时判断。仅非零构建包含canonical PTX头，因此其他默认0探针不增加该头的实际编译依赖。隔离生成器识别已接入的相同别名，不重复插入。生产NTT/CU未移植这个候选。
 
-[原生builder](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:14)增加`-AddSubMask`并绑定source signature、编译命令、manifest和HostOnly检查；开发冻结闭包29个raw文件、5对象。production只接受0；不把实验选择加入生产算法分支。两份development/PTX3/u0/split6构建同时编译，CUDA约366.3/365.8秒，编译期间未计时曲线。
+[原生builder](D:/code/MPA-OpenCl/tools/build/build_stage2_local.ps1:14)增加`-AddSubMask`并绑定source signature、编译命令、manifest和HostOnly检查；开发冻结闭包29个raw文件、5对象。production只接受0；不把实验选择加入生产算法分支。两份development/PTX3/u0/split6构建同时编译，CUDA约366.3/365.8秒，编译期间未计时曲线。
 
 [run_real](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11142)对非零mask关闭旧D经验scope，并输出实际编译mask；[Auto B2](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:525)对非零构建在profile I/O前拒绝，避免套旧成本。cache payload v2目前本就使两边D模型回legacy；因此本轮不能声称“baseline已校准而candidate才回退”，新增算术guard保护后续标定。共享CLI默认mask0保持旧行为；发布893未替换。
 

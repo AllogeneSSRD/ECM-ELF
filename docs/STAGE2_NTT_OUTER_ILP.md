@@ -27,7 +27,7 @@ k24实际采用M6合作outer，12个外层stage分两pass，含tile共3个forwar
 
 ## 3. 独立探针和来源合同
 
-[builder](D:/code/MPA-OpenCl/tools/build/build_ntt_outer_ilp_probe.ps1:1) 复制实际NTT源码，仅给u循环加入指定pragma并给入口加入实际宽度/设备声明，固定PTX3。原始六依赖、生成五源及binary编译前后hash核验；默认0表示原编译器调度，1/2/4表示指定展开宽度。原始数学文件在这次sweep期间没有修改。旧u0初版未测量，修正输出目录解析后的u0_v2才是所有对照基线。
+[builder](D:/code/MPA-OpenCl/tools/build/test/build_ntt_outer_ilp_probe.ps1:1) 复制实际NTT源码，仅给u循环加入指定pragma并给入口加入实际宽度/设备声明，固定PTX3。原始六依赖、生成五源及binary编译前后hash核验；默认0表示原编译器调度，1/2/4表示指定展开宽度。原始数学文件在这次sweep期间没有修改。旧u0初版未测量，修正输出目录解析后的u0_v2才是所有对照基线。
 
 [完整卷积工具](D:/code/MPA-OpenCl/tools/bench/bench_ntt_outer_ilp.py:1) 核验生成文件只能包含上述两项差异；每候选先运行原有cooperative/GMP门禁。每个长度/候选独立四进程ABBA，每进程8个run，每run一warm加三个CUDA event样本，初始化/CPU参考/全L个输出比较在event外。16个run/版本属于两个进程，没有将它们当成16条独立曲线，没有CI。
 
@@ -53,11 +53,11 @@ u0/u1所有M的forward/inverse REG48/46。u2的M7/8 forward升至55/56，inverse
 
 ## 5. 原生接入与 D 保护
 
-[可选pragma](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:7) 使用编译期 `NTT_OUTER_UNROLL_U=0|4`，默认0；没有每次模乘的运行时分派。[native builder](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:12) 新增 `-OuterUnrollU`，编译签名与manifest绑定实际选择，修改选择不能复用旧object。
+[可选pragma](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:7) 使用编译期 `NTT_OUTER_UNROLL_U=0|4`，默认0；没有每次模乘的运行时分派。[native builder](D:/code/MPA-OpenCl/tools/build/build_stage2_local.ps1:12) 新增 `-OuterUnrollU`，编译签名与manifest绑定实际选择，修改选择不能复用旧object。
 
 [实际D guard](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10809) 在宽度4下禁用已有经验profile；[调度日志](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10825) 明确实际编译宽度。默认0继续原profile5/6 scope。候选固定D测量，未将旧12权重冒充新标定，也未改变所有profile数值。[原生point/scope门禁](D:/code/MPA-OpenCl/tools/test/test_stage2_point_mersenne_native.py:23) 核验manifest、实际日志及两种点模式的legacy回退。
 
-复现候选：`tools/build/build_ecm_cuda_stage2.ps1 -Build build_cuda_cmake/reproduce_outer_u4 -Arch sm_89 -GlBackend ptx -OuterUnrollU 4 -Rebuild`；固定保存点运行时显式 `--d 1381380`。宽度4暂未有新成本模型，自动D会使用legacy，不应将其选择结果当成优化后的D校准。
+复现候选：`tools/build/build_stage2_local.ps1 -Build build_cuda_cmake/reproduce_outer_u4 -Arch sm_89 -GlBackend ptx -OuterUnrollU 4 -Rebuild`；固定保存点运行时显式 `--d 1381380`。宽度4暂未有新成本模型，自动D会使用legacy，不应将其选择结果当成优化后的D校准。
 
 完整曲线工具为 [bench_stage2_ntt_outer.py](D:/code/MPA-OpenCl/tools/bench/bench_stage2_ntt_outer.py:1)，与冻结893/19源对照，只允许outer调度、D guard/声明和builder三文件变化。恢复相同M4423/B1=1000/sigma26 Q，B2=2011326186870/D1381380，两侧point1/XADD6/PTX3/检查保持。
 

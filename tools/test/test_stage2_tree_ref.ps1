@@ -69,10 +69,10 @@ if (-not $Ref) { $Ref = Join-Path $repoRoot 'build_cuda_cmake\stage2_ref.exe' }
 if (-not $Driver) { $Driver = Join-Path $repoRoot 'build_cuda_cmake\ecm_cuda.exe' }
 
 # A host-only reference with no CMake target: missing means "not built yet", which is a
-# skip, not a failure (build it with tools\build\build_stage2_tree_ref.ps1).
+# skip, not a failure (build it with tools\build\test\build_stage2_tree_ref.ps1).
 if (-not (Test-Path $Exe)) {
     Write-Host ("SKIP: stage2_tree_ref.exe not found at " + $Exe +
-                " (build it with tools\build\build_stage2_tree_ref.ps1)")
+                " (build it with tools\build\test\build_stage2_tree_ref.ps1)")
     exit 0
 }
 if (-not $Sandbox) { $Sandbox = Join-Path $repoRoot ('tools\test\_run\stage2tree_' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }

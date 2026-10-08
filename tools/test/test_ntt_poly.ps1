@@ -62,7 +62,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not $Exe) { $Exe = Join-Path $repoRoot 'build_cuda_cmake\ntt_poly_probe.exe' }
 if (-not $CufftExe) { $CufftExe = Join-Path $repoRoot 'build_cuda_cmake\cufft_kron_probe.exe' }
 if (-not (Test-Path $Exe)) {
-    Write-Host "[skip] ntt_poly_probe.exe not found (build with tools\build\build_ntt_probe.ps1)" -ForegroundColor Yellow
+    Write-Host "[skip] ntt_poly_probe.exe not found (build with tools\build\test\build_ntt_probe.ps1)" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "passed: 0   failed: 0"
     exit 0

@@ -43,7 +43,7 @@ def main():
         if proc.returncode!=expected or token not in dest.read_text(encoding='utf-8',errors='replace'):raise ValueError(name+' wrong rejection/result')
         report['runs'].append(dict(name=name,command=command,exit=proc.returncode,token=token,log_sha256=sha(dest)))
         (out/'measurements.json').write_text(json.dumps(report,indent=2)+'\n');verify()
-    builder=ROOT/'tools/build/build_ecm_cuda_stage2.ps1'
+    builder=ROOT/'tools/build/build_stage2_local.ps1'
     for mask in [0,2,3,4]:
         dest=out/f'invalid_production_m{mask}'
         command=['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(builder),'-Engine','production','-AddSubMask',str(mask),'-Build',str(dest)]

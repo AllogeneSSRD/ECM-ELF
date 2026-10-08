@@ -12,6 +12,7 @@
 #include "ecm_stage2_cost_profile.h"
 #include "ecm_stage2_geometry.h"
 #include "ecm_stage2_logging.h"
+#include "ecm_stage2_console.h"
 #include "ecm_stage2_queue_state.h"
 #include <algorithm>
 #include <chrono>
@@ -436,7 +437,8 @@ void configure_cuda_wait(int device) {
              <<" before="<<before<<" after="<<after<<std::endl;
 }
 int child_run(const Options &o, const fs::path &save, const Record &r,
-              uint64_t b2, uint64_t d, int device, const fs::path &results, const fs::path &log) {
+              uint64_t b2, uint64_t d, int device, const fs::path &results, const fs::path &log,
+              uint64_t batch, const Settings &ini_settings) {
     const fs::path exe = executable();
     std::wstring cmd = quote(exe.wstring()) + L" --curve-worker --save " + quote(save.wstring());
     auto arg = [&](const wchar_t *key, uint64_t n) { cmd += L" "; cmd += key; cmd += L" "; cmd += std::to_wstring(n); };
@@ -497,17 +499,22 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     auto next=begin+std::chrono::seconds(30);
     std::string phase="Starting curve",stdout_pending,stderr_pending;
     bool heartbeat=false,stop_reported=false;
+    stage2_console::Summary console_summary(batch,ini_settings.arena,ini_settings.owner_mb);
+    auto console_line=[&](const std::string &text,bool error=false) {
+        if(heartbeat){std::cout<<'\n';heartbeat=false;}
+        (error?std::cerr:std::cout)<<text<<std::endl;
+    };
     auto line=[&](const std::string &text,bool error) {
         if(output.is_open()){output<<text<<'\n';output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");}
+        const auto summary=error?stage2_console::Projection{}:console_summary.observe(text);
+        if(stage2_log::enabled(stage2_log::phases))
+            for(const auto &entry:summary.lines)console_line(entry);
         const bool milestone=text.compare(0,14,"stage2_phase: ")==0;
         const bool result=text.compare(0,15,"stage2_result: ")==0;
         if(milestone){phase=text.substr(14);const auto timing=phase.find(" previous=");if(timing!=phase.npos)phase.resize(timing);}
-        if(error || (stage2_log::enabled(stage2_log::phases)&&milestone) ||
+        if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&milestone) ||
            (stage2_log::enabled(stage2_log::curve)&&result) ||
-           stage2_log::enabled(stage2_log::batches) || text.find("WARNING")!=text.npos) {
-            if(heartbeat){std::cout<<'\n';heartbeat=false;}
-            (error?std::cerr:std::cout)<<text<<std::endl;
-        }
+           stage2_log::enabled(stage2_log::batches) || text.find("WARNING")!=text.npos))console_line(text,error);
     };
     auto drain=[&](HANDLE pipe,std::string &pending,bool error) {
         DWORD available=0;
@@ -548,6 +555,8 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     drain(out_read.value,stdout_pending,false);drain(err_read.value,stderr_pending,true);
     if(!stdout_pending.empty())line(stdout_pending,false);
     if(!stderr_pending.empty())line(stderr_pending,true);
+    if(stage2_log::enabled(stage2_log::phases))
+        for(const auto &entry:console_summary.finish().lines)console_line(entry);
     if(heartbeat)std::cout<<std::endl;
     DWORD code=1;
     if(!GetExitCodeProcess(pi.hProcess,&code))throw std::runtime_error("cannot read curve exit status");
@@ -966,7 +975,7 @@ int driver(Options o) {
                 state.pending=stage2_queue::token();state.save(progress);o.receipt=state.pending;
             }
             const auto begin=std::chrono::steady_clock::now();
-            if(child_run(o,save,r,b2,d,device,results,log))
+            if(child_run(o,save,r,b2,d,device,results,log,batch,s))
                 throw std::runtime_error("curve failed; queue and completed progress retained; inspect "+log.string());
             if(persist) {
                 if(!stage2_queue::result_written(results,state.pending))throw std::runtime_error("successful worker has no durable result receipt; queue retained");

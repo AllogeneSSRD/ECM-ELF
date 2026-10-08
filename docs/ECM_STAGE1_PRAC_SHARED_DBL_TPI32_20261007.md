@@ -147,7 +147,7 @@ stack64/48是每线程静态记录，不等于spill大小或进程显存峰；�
 ## 7. 复现
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/parallel_nvcc.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/internal/parallel_nvcc.ps1 `
   -BuildDir build_cuda_cmake/prac -Only 'cgbn_stage1_prac_(single_add|kernels)\.cu$' -Jobs 6
 python tools/test/test_cuda_prac.py --exe build_cuda_cmake/prac/ecm_cuda.exe `
   --bits 4423 --tpi 32 --registers 168 --variant single-compact --curves 192 `

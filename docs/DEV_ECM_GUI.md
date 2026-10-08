@@ -832,7 +832,7 @@ set(ECM_IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui" CACHE PATH "...")
 **推荐**（不用先开 VS 开发者命令行）：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_gui.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\dev\build_gui.ps1
 # 常用变体
 ... build_gui.ps1 -Selftest                     # 编译 + 跑 --selftest
 ... build_gui.ps1 -Clean -Selftest              # 从零重建
@@ -857,7 +857,7 @@ CMake Error: Generator: build tool execution failed, command was: nmake -f Makef
 
 ```powershell
 # 1) 用脚本（推荐）
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_gui.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\dev\build_gui.ps1
 # 2) 或者自己进开发者环境再手动跑（与脚本等价）
 & "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
 cmake -S . -B build_gui -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DECM_BUILD_TOOLS=OFF `

@@ -84,7 +84,12 @@ def main():
         generator_sha256=sha(__file__),helper_sha256=sha(helper),support={n:sha(out/n) for n in support},
         scope='Host-only profiling hooks. Not a production release or GPU equivalence proof; SASS/resources and complete actual curve checks are still required.')
     (out/'instrumentation.json').write_text(json.dumps(receipt,indent=2)+'\n')
-    print(out/'tools/build/build_ecm_cuda_stage2.ps1')
+    # Copy the frozen closure unchanged, including its historical script layout.
+    builders=[name for name in ('tools/build/build_stage2_local.ps1',
+              'tools/build/build_ecm_cuda_stage2.ps1') if name in frozen['sources']]
+    if len(builders)!=1:
+        raise ValueError('frozen builder missing or ambiguous')
+    print(out/builders[0])
 
 
 if __name__ == '__main__':main()

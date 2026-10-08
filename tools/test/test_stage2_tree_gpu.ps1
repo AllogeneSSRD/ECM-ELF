@@ -20,7 +20,7 @@
       [5] no regressions in the two existing NTT/tree suites
 
     This wrapper drives the acceptance script the slice shipped with
-    (tools/build/check_stage2_tree_gpu.ps1) and asserts on its output, so there is one place
+    (tools/build/test/check_stage2_tree_gpu.ps1) and asserts on its output, so there is one place
     that defines acceptance and one place that gates it.  Uses device 1 (device 0 normally
     runs production stage 1).  Skips cleanly when the exe or the script is missing.
 
@@ -54,10 +54,10 @@ function Check([string]$name, $ok, [string]$detail = "") {
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not $Exe) { $Exe = Join-Path $repoRoot 'build_cuda_cmake\stage2_tree_gpu.exe' }
-if (-not $Check) { $Check = Join-Path $repoRoot 'tools\build\check_stage2_tree_gpu.ps1' }
+if (-not $Check) { $Check = Join-Path $repoRoot 'tools\build\test\check_stage2_tree_gpu.ps1' }
 
 if (-not (Test-Path $Exe)) {
-    Write-Host "[skip] stage2_tree_gpu.exe not found -- build it with tools\build\build_stage2_tree_gpu.ps1" -ForegroundColor Yellow
+    Write-Host "[skip] stage2_tree_gpu.exe not found -- build it with tools\build\dev\build_stage2_tree_gpu.ps1" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "passed: 0   failed: 0"
     exit 0

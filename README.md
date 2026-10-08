@@ -2,6 +2,8 @@
 
 [English](README.en.md) | 中文
 
+CUDA Stage1/Stage2 的本机与开发构建入口、默认参数及 BAT 用法见 [构建说明](tools/build/README.md)。
+
 椭圆曲线因子分解（ECM）**多后端 stage-1 引擎**：**OpenCL**（Windows / Linux / macOS / Android; param 3)，**CUDA**（CGBN；param 0 Suyama 与 param 3 batch）、**GMP** & **AVX-512 IFMA**（Edwards / Montgomery, x86 CPU 8 curves/线程），三者共用同一个 driver / 参数解析 / 检查点 / 存档逻辑，在链接期切换实现。
 
 程序兼容 **GPM-ECM** & **Prime95** 的 savefile 格式, 支持 checkpoint, 自定义算子 (Montgomery 乘/平方与模加/模减)；另含队列管理器（worktodo / 存档同步 / 断点续跑）与 Prime95 stage-2 交接工具 `ecm_p95feeder`。
@@ -614,16 +616,16 @@ cmake --build build_cuda_cmake --target ecm_cuda
 ### 并行编译（强烈推荐）
 
 **本仓库的 CUDA kernel 按位宽实例化，全量串行编译在开发机上要约 36 分钟**（`cmake --build` 用的是
-NMake Makefiles 生成器，本身是串行的）。因此提供 `tools/build/parallel_nvcc.ps1`：它从
+NMake Makefiles 生成器，本身是串行的）。因此提供 `tools/build/internal/parallel_nvcc.ps1`：它从
 `compile_commands.json` 取出每个 `.cu` 的**原始 nvcc 命令行**并发启动，再调一次 `cmake --build`
 只做 host TU 与链接。
 
 ```powershell
 # 全量并行编译 + 链接（构建目录需已配置过；缺 compile_commands.json 时加 -Reconfigure）
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
 
 # 只重编某个 kernel 家族（改了一个 TU 时最省时间）
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake -Only suyama
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_cuda_cmake -Only suyama
 
 # 常用参数：-Jobs N（默认 min(6, CPU)）、-Only <正则>、-SkipUpToDate、-NoBuild（只编不链接）
 ```

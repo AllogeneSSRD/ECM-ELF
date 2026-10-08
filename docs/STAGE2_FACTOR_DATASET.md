@@ -198,7 +198,7 @@ PARI/GP     e8d7ddfb09c5c61bd58f0d645f6cd664253c4eb1f9b532aaa6bd191625b9a3cf
 首轮SQLite  ace4c63cf0a1927bb6d1d49d51205fceb732305f50dd20e607ed39e81fb61c18
 ```
 
-新候选在 `build_cuda_cmake/_factor_dataset_20261005/native/ecm_cuda_stage2.exe`，sm89/PTX3/outer0、24个原始构建依赖冻结；生产893二进制保持。 [HostOnly](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:45) 在CUDA依赖/架构/后端/toolkit和已有object指纹一致时仅重编host并重链接，不是无条件复用旧CUDA对象。
+新候选在 `build_cuda_cmake/_factor_dataset_20261005/native/ecm_cuda_stage2.exe`，sm89/PTX3/outer0、24个原始构建依赖冻结；生产893二进制保持。 [HostOnly](D:/code/MPA-OpenCl/tools/build/build_stage2_local.ps1:45) 在CUDA依赖/架构/后端/toolkit和已有object指纹一致时仅重编host并重链接，不是无条件复用旧CUDA对象。
 
 本轮验证：数据库单元5/5；真实更新/去重3/3；CPU前端fixture2/2；plan/失败profile保护2/2；正式GPU矩阵40/40；12长度NTT全部正确；独立数据库/阶/保存点/原生拆解审计通过。
 

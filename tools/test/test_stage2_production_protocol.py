@@ -121,7 +121,7 @@ def main():
             raise ValueError('oversized queue transaction changed')
         call('development_quiet', [dev, *common, '--dry-run', '--log-level', 'quiet'], 2,
              'development requires debug')
-        builder = ROOT / 'tools/build/build_ecm_cuda_stage2.ps1'
+        builder = ROOT / 'tools/build/build_stage2_local.ps1'
         for name, options in [('backend', ['-GlBackend', 'fold']), ('outer', ['-OuterUnrollU', '4'])]:
             destination = out / name
             call('production_reject_' + name, ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',

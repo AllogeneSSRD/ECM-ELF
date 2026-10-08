@@ -100,7 +100,7 @@ cap128的活跃warp增加得到验证，动态local访问也与静态spill一致
 ## 5. 复现
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/parallel_nvcc.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/internal/parallel_nvcc.ps1 `
   -BuildDir build_cuda_cmake/prac -Only 'cgbn_stage1(_prac_[^.]+)?\.cu$' -Jobs 6
 python tools/test/test_cuda_prac.py --exe build_cuda_cmake/prac/ecm_cuda.exe `
   --bits 4423 --tpi 16 --registers 128 --variant single-compact --curves 384 `

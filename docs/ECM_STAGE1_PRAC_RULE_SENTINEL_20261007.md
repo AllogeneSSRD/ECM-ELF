@@ -136,7 +136,7 @@ stack/spill是每线程静态编译记录，不能简单乘C当作进程峰值�
 ## 7. 复现
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/parallel_nvcc.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/internal/parallel_nvcc.ps1 `
   -BuildDir build_cuda_cmake/prac -Only 'cgbn_stage1_prac_single_add\.cu$' -Jobs 6
 
 python tools/bench/compare_stage1_sass.py `

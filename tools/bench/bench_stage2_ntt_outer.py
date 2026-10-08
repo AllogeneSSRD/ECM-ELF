@@ -33,6 +33,7 @@ def main():
         sources[u]={r[1]:r[2].lower() for line in m['sources']
             if (r:=re.fullmatch(r'([^=]+\.(?:cu|cuh|cpp|h|ps1))=([A-Fa-f0-9]{64})',line))}
         assert len(sources[u])==19
+    # Historical 19-file snapshots retain the old builder path and raw fingerprints.
     # Permit only the scheduling option, reporting, D guard and build signature.
     changes={name for name in sources[0] if sources[0][name]!=sources[4][name]}
     assert set(sources[0])==set(sources[4])

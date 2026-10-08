@@ -16,7 +16,7 @@
 从仓库根目录编译固定 PTX 后端：
 
 ```powershell
-tools/build/build_ecm_cuda_stage2.ps1 `
+tools/build/build_stage2_local.ps1 `
   -Build build_cuda_cmake/_auto_b2_tune_20261005/native `
   -Arch sm_89 -GlBackend ptx -Rebuild
 ```

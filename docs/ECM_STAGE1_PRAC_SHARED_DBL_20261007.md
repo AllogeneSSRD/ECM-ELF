@@ -160,7 +160,7 @@ stack48 bytes不是spill48 bytes；本轮两策略spill均0，但仍有静态sta
 
 ```powershell
 python tools/test/test_prac_single_add.py --output docs/data/shared_roles.json
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/parallel_nvcc.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/internal/parallel_nvcc.ps1 `
   -BuildDir build_cuda_cmake/prac -Only 'cgbn_stage1_prac_single_add\.cu$' -Jobs 6
 
 python tools/bench/bench_stage1_prac_versions.py `

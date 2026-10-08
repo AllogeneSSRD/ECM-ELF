@@ -62,6 +62,7 @@ struct ProductionDefaults {
 
 #include <string>
 #include <utility>
+#include <initializer_list>
 #include <vector>
 #include <map>
 #include <set>
@@ -5792,7 +5793,7 @@ static void s4_flat_input_check(PolyLayer &L, size_t slices = 3)
     mpz_t av, bv, sum, term;
     mpz_inits(av, bv, sum, term, nullptr);
     const size_t W = L.W;
-    for (const auto dims : {std::pair<size_t,size_t>{3,3}, {2,5}, {5,2}, {1,4}, {4,1}}) {
+    for (const auto dims : std::initializer_list<std::pair<size_t,size_t>>{{3,3}, {2,5}, {5,2}, {1,4}, {4,1}}) {
         const size_t ma = dims.first, mb = dims.second, nb = slices, nc = ma + mb - 1;
         std::vector<unsigned long long> a(nb*ma*W), b(nb*mb*W), expected(nb*nc*W);
         auto fill = [&](std::vector<unsigned long long> &v) {
@@ -5841,7 +5842,7 @@ static void s4_output_window_check(PolyLayer &L)
     unsigned long long cases=0,words=0,bad=0,canonical_cases=0;
     mpz_t av,bv,term,sum,inv;
     mpz_inits(av,bv,term,sum,inv,nullptr);
-    for(const auto dims : {std::pair<size_t,size_t>{3,3},{2,5},{5,2},{1,4},{4,1},{1,1}}) {
+    for(const auto dims : std::initializer_list<std::pair<size_t,size_t>>{{3,3},{2,5},{5,2},{1,4},{4,1},{1,1}}) {
         const size_t ma=dims.first,mb=dims.second,nc=ma+mb-1;
         std::vector<unsigned long long> a(nb*ma*W),b(nb*mb*W);
         for(int operand=0;operand<2;++operand) {
@@ -5910,7 +5911,7 @@ static void s4_output_window_check(PolyLayer &L)
     unsigned long long *dd=nullptr,*dout=nullptr,*dbad=nullptr;
     CK(cudaMalloc(&dd,digits.size()*8));CK(cudaMalloc(&dout,(slices*W+2)*8));CK(cudaMalloc(&dbad,8));
     CK(cudaMemcpy(dd,digits.data(),digits.size()*8,cudaMemcpyHostToDevice));
-    for(const auto window : {std::pair<unsigned long long,unsigned long long>{7,1},{0,0}}) {
+    for(const auto window : std::initializer_list<std::pair<unsigned long long,unsigned long long>>{{7,1},{0,0}}) {
         const unsigned long long first=window.first,count=window.second;
         std::vector<unsigned long long> canary(slices*W+2,0xfeedfacedeadbeefull),got(canary.size());
         CK(cudaMemcpy(dout,canary.data(),canary.size()*8,cudaMemcpyHostToDevice));CK(cudaMemset(dbad,0,8));

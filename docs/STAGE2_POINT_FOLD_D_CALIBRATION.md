@@ -12,7 +12,7 @@
 
 原点折叠 callee 有 `out[C]`，caller 的通用 REDC 也有 `out[C]`。两条归约路径互斥；SOS完整消费输入后才调用归约，输出可以和输入别名。现在 caller 提前声明原 `out`，callee接收它的指针，折叠、条件减模和循环旋转的数学保持。
 
-实现：[点折叠 helper](D:/code/MPA-OpenCl/tools/bench/stage2_point_mersenne.cuh:1)、[实际 SOS/归约调用](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:681)。独立probe从实际源文件提取通用 SOS/REDC，删除新分派得到参考；没有另写一份通用乘法。[probe builder](D:/code/MPA-OpenCl/tools/build/build_stage2_point_mersenne_probe.ps1:1)。
+实现：[点折叠 helper](D:/code/MPA-OpenCl/tools/bench/stage2_point_mersenne.cuh:1)、[实际 SOS/归约调用](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:681)。独立probe从实际源文件提取通用 SOS/REDC，删除新分派得到参考；没有另写一份通用乘法。[probe builder](D:/code/MPA-OpenCl/tools/build/test/build_stage2_point_mersenne_probe.ps1:1)。
 
 cuobjdump 对两份真实 native exe 的 NW128 实例核验：
 
@@ -70,7 +70,7 @@ profile6输入门禁27/0，与历史26/0分开；包括点控制改变、原始l
 
 已发布到 [production_stage2/ecm_cuda_stage2.exe](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe)，SHA同893；旧DCF与原始18份源码已备份到previous_production。发布路径再次基本入口21/0，自动D完整曲线已在同字节native完成。[发布记录](D:/code/MPA-OpenCl/build_cuda_cmake/_point_scratch_20261005/publication.json)、[发布路径21](D:/code/MPA-OpenCl/build_cuda_cmake/_point_scratch_20261005/published_accept/summary.json)。本轮只更新工作区生产编译，不修改外部GIMPS生产目录。
 
-复现需 `tools/build/build_ecm_cuda_stage2.ps1 -Build build_cuda_cmake/reproduce_point_fold -Arch sm_89 -GlBackend ptx -Rebuild`；再用 `--save YOUR_STAGE1.save --b2 2011326186870 --device 1 --results results.jsonl`。环境 `NTT_POINT_MERSENNE=0` 回旧Montgomery路径/profile5；generic N自动fallback。没有取消任何强制GMP/oracle检查。
+复现需 `tools/build/build_stage2_local.ps1 -Build build_cuda_cmake/reproduce_point_fold -Arch sm_89 -GlBackend ptx -Rebuild`；再用 `--save YOUR_STAGE1.save --b2 2011326186870 --device 1 --results results.jsonl`。环境 `NTT_POINT_MERSENNE=0` 回旧Montgomery路径/profile5；generic N自动fallback。没有取消任何强制GMP/oracle检查。
 
 ## 6. 随后的 NTT 优化
 

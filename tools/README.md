@@ -3,8 +3,11 @@
 本目录按**用途**分子目录。历史上所有脚本都堆在 `tools/` 根下，现按下面分类整理；
 根目录不再放散落脚本。
 
+CUDA 的 Stage1/Stage2 开发、本机生产与发布生产统一从 `build/` 的六组 PS1/BAT 入口启动，全部默认并行编译，发布入口自动拆分（Stage1）和打包 ZIP，详见 [构建说明](build/README.md)。探针、开发辅助及内部编译/发布实现分别位于 `build/test/`、`build/dev/`、`build/internal/`。
+
 ```
 tools/
+├── build/      Stage1/Stage2 开发、本机与发布入口；辅助脚本按 dev/test/internal 分类
 ├── gen/        内核/参数代码生成器（Python，单源 → .cl/.py 产物）
 ├── refactor/   一次性迁移/重构/校验脚本（Python，历史工程脚本）
 ├── bench/      基准与 A/B 脚本（.cpp/.c/.ps1）
@@ -90,9 +93,9 @@ tools/
 | `test_stage2_ref.ps1` | **M1 参考 stage 2 验收**（CPU/GMP，无需显卡，但需要构建里的 `stage2_ref.exe` **和** `ecm_cuda.exe`）：① `--selftest` 的仿射 oracle 逐点对拍（xDBL/xADD/ladder 在模 M61 上与 `(x,y)` 仿射算术一致）；② 存档约定（`--save` 写出的 `x=X/Z` 必须与 `--print-stage1-x` 一致，"同一曲线两条输入路径给同一结论"）；③ 冻结的确定性命中：`N=2^128+1`、σ=26、B1=1e3、B2=1e6、D=210 ⇒ **必须**找到 59649589127497217，且两条独立算法（brute 与 pairing）命中集必须一致；④ 边界锐利性：B2=114000 必须**什么也找不到**（34 项检查）|
 | `test_go_group_order.ps1` | **`--go` 参数化群阶 + 最小 B1/B2 推导验收**（无需显卡，需要 PARI/GP；gp 缺失时**跳过**（退出 0），因此没有 PARI 的机器不会因此变红）：用 PARI 的 `FindGroupOrder(p, s, param)` 对 param 0/1/2/3 各自独立复算曲线阶，断言驱动打印的 `largest_prime` / `min_b1_stage1` / `min_b1_stage2` / `min_b2_stage2` 与之逐项一致；并断言 **param 0 与 param 3 给出的不是同一条曲线**（修复前 `--go` 会把 param 3 的阶报给 param 0，把 largest_prime 从 114713 变成 2666737705477 而不报错）（12 项检查）|
 | `test_cufft_kron.ps1` | **M0 cuFFT/Kronecker 验收**（需要空闲显卡，默认用 device 1 以免打扰 device 0 上的 stage-1 任务；无 CUDA 设备时跳过）：① `check 1200` 与 `check 1000008` 的**逐位**结果必须等于 GMP（工具自己重建分块数组与 `mpz_mul` 比对，所以 `ok=1` 是全等而不是哈希）；② `poly <P> <S>` 的**每一个系数**必须等于 GMP 教科书乘法（按 32 位素数 4294967291 投影比对，因为 10323 位的系数装不进 uint64），P=64/128/512 三档 + 槽宽下界 `slot ≥ 2S`。**不断言时间**（性能门槛属于规划文档，wall-clock 断言必然 flaky）（13 项检查）|
-| `test_stage2_gpu.ps1` | **M1 CUDA/CGBN stage 2 验收**（需要空闲显卡 + `stage2_gpu_probe.exe`（由 `tools/build/build_stage2_probe.ps1` 构建，缺了就跳过）+ `stage2_ref.exe` + `ecm_cuda.exe`）：① 本构建的 tier 表（升序、129 位 N 落在 192、每 tier ≥6 位余量）；② 探针自检 10 项（冻结向量、B2=114000 什么都不找到、segs=4 同解、199 曲线扫描）；③ **与 CPU 参考逐项对拍**（同参数/锐利性/199 曲线扫描的因子集合必须相同，`bad_factors=0`）；④ **真实驱动 stage-1 存档驱动 stage 2** 找到同一因子，且必须打印 `stage1_point=save`（证明没悄悄回退到 ladder），ladder 与存档两条路径同解；⑤ D<2 / B1≥B2 / 越界 device 干净失败（31 项检查）|
+| `test_stage2_gpu.ps1` | **M1 CUDA/CGBN stage 2 验收**（需要空闲显卡 + `stage2_gpu_probe.exe`（由 `tools/build/test/build_stage2_probe.ps1` 构建，缺了就跳过）+ `stage2_ref.exe` + `ecm_cuda.exe`）：① 本构建的 tier 表（升序、129 位 N 落在 192、每 tier ≥6 位余量）；② 探针自检 10 项（冻结向量、B2=114000 什么都不找到、segs=4 同解、199 曲线扫描）；③ **与 CPU 参考逐项对拍**（同参数/锐利性/199 曲线扫描的因子集合必须相同，`bad_factors=0`）；④ **真实驱动 stage-1 存档驱动 stage 2** 找到同一因子，且必须打印 `stage1_point=save`（证明没悄悄回退到 ladder），ladder 与存档两条路径同解；⑤ D<2 / B1≥B2 / 越界 device 干净失败（31 项检查）|
 | `test_stage2_tree_ref.ps1` | **M3 树版 stage 2 验收**（CPU/GMP，无需显卡；`stage2_tree_ref.exe` 缺失时跳过）：① `--selftest` 12 项（poly_mul 对拍逐点求值、divmod 重构 `q*b+r`、`F(x_j)==0`、余式树对拍 Horner 的**素数模与复合模数**两种）；② 冻结向量找到 `59649589127497217` 且 `hit_primes=114713` 与配对参考一致；③ 锐利性 `B2=114000` 为空；④ `--naive-check` 多个形状 0 mismatch；⑤ **真实驱动 save 驱动**与 ladder 路径输出逐字段相同；⑥ 成本计费（`operand_bits` 四路分解、product-tree 模型对**实测**树成本校验、分批结构与 `P=φ(D)/2`）；⑦ 健全性与 CLI（62 项检查）|
-| `stage2_tree_gpu` 的环境开关 | `stage2_tree_gpu.exe`（`tools/build/build_stage2_tree_gpu.ps1`）用**环境变量**选诊断/限流，均默认关闭或取默认值：`NTT_NAME_MAX=n` **命名（诊断）扫描的上限**：一个"命中叶子"的候选扫描是 `2*(B2/D)` 次素性测试 + 一次确认 ladder，B2=1e11 时全量约 **26 小时**，所以计时运行必须限流（限流后 `hits`/`hit_primes` 是**部分**列表，**因子集合不受影响** —— 见 `docs/DEV_STAGE2_GPU_PLAN.md` §26.3/§27.3）；`NTT_LADDER_CAP`（每次 ladder 启动的点数上限，防 TDR）；`NTT_S4_SAMPLE`/`NTT_S4_DESCENT_CHECK`/`NTT_S4_DESCENT_TRACE`（设备归约与下降的 GMP 抽样/双路对拍）；`NTT_NO_PROGRESS`；`NTT_ARENA_S2`。**`--b1/--b2/--d/--sigma` 现在按 `strtod` 解析**（`1e11` 就是 1e11；旧版 `strtoull` 会把它读成 1，而且整条命令看起来完全正常 —— §27.2），并且 `real_shape:` 会回显 `B1=`/`B2=` 以便一眼核对。**对拍前的第一件事是核对 `N_bits=` / `B1` / `B2` / `D` / `sigma` 五项**（§25）。|
+| `stage2_tree_gpu` 的环境开关 | `stage2_tree_gpu.exe`（`tools/build/dev/build_stage2_tree_gpu.ps1`）用**环境变量**选诊断/限流，均默认关闭或取默认值：`NTT_NAME_MAX=n` **命名（诊断）扫描的上限**：一个"命中叶子"的候选扫描是 `2*(B2/D)` 次素性测试 + 一次确认 ladder，B2=1e11 时全量约 **26 小时**，所以计时运行必须限流（限流后 `hits`/`hit_primes` 是**部分**列表，**因子集合不受影响** —— 见 `docs/DEV_STAGE2_GPU_PLAN.md` §26.3/§27.3）；`NTT_LADDER_CAP`（每次 ladder 启动的点数上限，防 TDR）；`NTT_S4_SAMPLE`/`NTT_S4_DESCENT_CHECK`/`NTT_S4_DESCENT_TRACE`（设备归约与下降的 GMP 抽样/双路对拍）；`NTT_NO_PROGRESS`；`NTT_ARENA_S2`。**`--b1/--b2/--d/--sigma` 现在按 `strtod` 解析**（`1e11` 就是 1e11；旧版 `strtoull` 会把它读成 1，而且整条命令看起来完全正常 —— §27.2），并且 `real_shape:` 会回显 `B1=`/`B2=` 以便一眼核对。**对拍前的第一件事是核对 `N_bits=` / `B1` / `B2` / `D` / `sigma` 五项**（§25）。|
 | `test_gui_all.ps1` | **一键跑完整套件**：25 个入口（headless 自测/单测 + 上面所有真窗口脚本）按顺序跑，逐项打印 `passed/failed` 与耗时，汇总表 + 每项完整日志写到 `tools/test/_run/suite_<时间戳>/`，任一失败非零退出。`-SkipGpu` 跳过需要显卡的项、`-Only '*smoke*'` 挑着跑、`-List` 只列清单、`-KeepGoing` 失败后继续；**每项有超时**（默认 900 s，超时算失败），并且**开始/结束/每项之后都清掉 `tools/test/_run` 下遗留的 ecm_gui/fake worker/ecm_cuda 进程**（只杀沙箱副本，绝不动真实构建或生产目录）|
 | `ecm_edwards_save_test.cpp` | Prime95 ECM_VERSION=6 存档读写；与真实 `e0000347` 字节级比对 |
 | `ecm_edwards_checkpoint_test.cpp` | 分块标量乘的中止/恢复等价性（Qx/Qz 一致） |
@@ -217,7 +220,7 @@ python tools\ecm_worktodo\ecm.py --input sorted.csv --emit-cli todo.ps1 --emit-c
 | `dump_tmp.cpp` | 用驱动自己的 reader 解析 `.tmp` 打印 `Qx/Qz`，用于跨后端比对最终点 |
 | `crashloop.cmd` | 中止路径崩溃复现（逐次记 exit code，可看出 `0xC0000005`；§15.11 的回归） |
 | `enc_diag.py` | 文件编码体检：UTF-8 是否有效、CJK/乱码字符数、与 `HEAD` 版本对比 |
-| `ensure_bom.ps1` | **BOM 守卫（构建前自动跑）**：把 `kernels/`、`src/` 下每个源文件与 git HEAD 的 BOM 状态比对并恢复（`-NoFix` 只报告）。与 `bench/fix_bom.py` 的区别：后者是"含非 ASCII 就补 BOM"的钝器（会给本来就无 BOM 的文件制造 diff），前者只在**编辑往返把 BOM 抹掉**时修回去。`tools/build/local_build.ps1` 已内置调用（2026-09-26：`cgbn_stage1.cu` 的 BOM 被抹掉 ⇒ nvcc 按 GBK 读 ⇒ `#define CHECKPOINT_VERSION` 被中文注释吃掉） |
+| `ensure_bom.ps1` | **BOM 守卫（构建前自动跑）**：把 `kernels/`、`src/` 下每个源文件与 git HEAD 的 BOM 状态比对并恢复（`-NoFix` 只报告）。与 `bench/fix_bom.py` 的区别：后者是"含非 ASCII 就补 BOM"的钝器（会给本来就无 BOM 的文件制造 diff），前者只在**编辑往返把 BOM 抹掉**时修回去。`tools/build/build_stage1_local.ps1` 已内置调用（2026-09-26：`cgbn_stage1.cu` 的 BOM 被抹掉 ⇒ nvcc 按 GBK 读 ⇒ `#define CHECKPOINT_VERSION` 被中文注释吃掉） |
 
 ## gwnum_probe/ — prime95 gwnum 的 IBDWT FFT 实测（2026-09-30）
 
@@ -232,7 +235,7 @@ python tools\ecm_worktodo\ecm.py --input sorted.csv --emit-cli todo.ps1 --emit-c
 | `stage2_ref.cpp` | **ECM stage 2 参考实现（正确性优先）**：两种独立算法（brute 每素数 ladder + gcd；pairing 经典 BSGS 累加 `X_i·Z_j − X_j·Z_i`）+ `--selftest`（xDBL/xADD/ladder 对拍仿射算术；2^128+1 的冻结确定性命中 σ=26/B1=1e3/B2=1e6/D=210 ⇒ 因子 59649589127497217）。可读 `--save`（用驱动写的 stage-1 存档驱动 stage 2）、`--print-stage1-x`（与存档 X 对拍）。见 `docs/DEV_STAGE2_GPU_PLAN.md` §7 |
 | `stage2_tree_ref.cpp` | **树版 stage 2 的 CPU/GMP 参考（M3 的 oracle）**：baby 点乘积树 → `F(X)=Π(X−x_j)` → 余式树多点求值（Bernstein）→ 累乘 → gcd，且**分批结构**（G 树 + `H=G·H mod F`）的成本单独计费。冻结向量/锐利性/199 曲线扫描与配对参考逐项一致（`hit_primes=114713` 两边相同），`--naive-check` 对拍 Horner、`--save` 用真实驱动存档、`--model-only` 只算形状不执行。它的树成本递归**与真正执行过的乘法逐项核对通过**，因此 §10.5 的成本模型以它为准（我们的 Python 脚本低计 1.25×）。见 `docs/DEV_STAGE2_GPU_PLAN.md` §13/§15 |
 | `stage2_shape_model.py` | **Route B 成本模型（可重算）**：`poly_size(D)=φ(D)/2`（已用 Prime95 公布的三个 `(D, poly_size)` 对验证）、F/G 树 + fold + 下降的操作数位分解、`--choose-d`（含显存上限）、`--verify` 自检、`--via-ref`（改用被验证过的 `stage2_tree_ref --model-only` 取数）。它推翻了"树版工作量与 D 无关"的旧结论：**总工作量 ∝ 1/D** ⇒ GPU 应取"显存装得下的最大 D"。见 §10.5–§10.7/§15 |
-| `stage2_gpu_probe.cu` | **CUDA/CGBN stage 2（M1）的独立探针**：链接 `kernels/cuda/cgbn_stage2*.cu`，把同一套配对算法跑在 GPU 上。`--selftest`（冻结向量、B2=114000 锐利性、segs、199 曲线扫描）、`--tiers`（本构建的 tier 表）、`--save`（用驱动真实 stage-1 存档驱动，否则在设备上跑 stage-1 ladder）。用 `tools/build/build_stage2_probe.ps1` 并行构建；实测冻结向量 0.171 s（tier 192、78330 个候选素数全对），与 CPU 参考因子集合逐项一致。见 `docs/DEV_STAGE2_GPU_PLAN.md` §9 |
+| `stage2_gpu_probe.cu` | **CUDA/CGBN stage 2（M1）的独立探针**：链接 `kernels/cuda/cgbn_stage2*.cu`，把同一套配对算法跑在 GPU 上。`--selftest`（冻结向量、B2=114000 锐利性、segs、199 曲线扫描）、`--tiers`（本构建的 tier 表）、`--save`（用驱动真实 stage-1 存档驱动，否则在设备上跑 stage-1 ladder）。用 `tools/build/test/build_stage2_probe.ps1` 并行构建；实测冻结向量 0.171 s（tier 192、78330 个候选素数全对），与 CPU 参考因子集合逐项一致。见 `docs/DEV_STAGE2_GPU_PLAN.md` §9 |
 | `probe_output.txt` | 3 次重复的原始输出（证据）。关键结论：3571 位时 AVX-512 反而比 FMA3 慢 ~40%（FFT 长度 256 vs 160）；通用模数慢 ~3×；≤13000 位不可能多线程收益 |
 | `polymult_probe.cpp` | **stage 2 引擎探针**：驱动 `polymult64.lib` 量 `polymult_fft_size` / `polymult_safety_margin` / `polymult_mem_required`（P=720 时 1440 / 2.478 / 284 KB）与 `EXTRA_BITS` 安全余量循环。**已知状态（2026-09-30）**：能拿到全部规划几何，但**第一次 `polymult` 调用不返回**——已按 Prime95 的顺序处理了四个坑（`gwset_using_polymult` 顺序、`polymult_default_tuning` 必调否则死循环、`set_max_num_threads` 必须在首次乘法前、`polymult_launch_helpers` 是行并行线程来源），仍卡在 `polymult_launch_helpers`。结论与背景见 `docs/DEV_STAGE2_SELFHOST_FEASIBILITY.md` |
 | `grab_window.ps1` | **窗口截图**（GUI 无头验收的补充）：`-ProcessName ecm_gui -Class ecm_gui -Out shot.png`。按窗口类找顶层窗、用 `PrintWindow(PW_RENDERFULLCONTENT)` 抓客户区存 PNG（D3D11 窗口不加该 flag 会抓到空帧）。人不在屏幕前时用它看界面。**同时开着生产 GUI 时必须加 `-ProcId <pid>`**：不加就抓"第一个有窗口的 ecm_gui 进程"，抓到的可能是用户自己的窗口（2026-09-29 实测：抓回来的图是生产窗口的 1052×629，而测试自己的窗口是 1600×1000，像素断言会去量错的界面还照样通过） |
@@ -314,11 +317,11 @@ powershell -File tools\test\test_gui_gpu_curves.ps1   # 真 worker 压卡：功�
 | 截图 | `powershell -File tools\diag\grab_window.ps1 -ProcessName ecm_gui -Out shot.png`（按窗口类抓图；D3D11 窗口用 `PrintWindow(PW_RENDERFULLCONTENT)`，否则抓到空帧）。**同时开着生产 GUI 时加 `-ProcId <pid>`**，否则可能抓到用户自己的窗口 |
 | 界面文案 | `src/gui/localization/*.xml`（UTF-8 无 BOM），`english.xml` 是基线，缺键回退英文；GUI 里 `Language → Reload localization` 热重载 |
 | 字体 | 不打包字体：运行时挑系统字体（CJK → `msyh.ttc` 等；拉丁 → `segoeui` 等），字号 `[GUI] font_size = auto` = `15 px × DPI`（150 % 屏 = **22.5 px**，不凑整；也可写小数如 `23.5`，范围 6–96），`[GUI] font_snap = 1` 让字形推进量对齐整像素（拉丁小字更锐）。**画不出当前语言的字体不会被使用**：`[GUI] font` 指定了也先救回系统 CJK 字体，实在没有就切回英文界面（绝不显示 `???`）；运行中在 Language 菜单切语言会**重新挑字体**。ImGui 1.92+ 动态图集：**不要**再传 `GetGlyphRangesChineseFull()`；ImGui 只有灰度抗锯齿（无 ClearType），想更清楚请调大 `font_size` |
-| 构建 | **一条命令**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_gui.ps1`（自动找 `vcvars64.bat`、必要时 configure、构建 4 个目标；加 `-Selftest` 顺带自测，`-Clean` 从零重建，`-Reconfigure` 换依赖路径后重配）。**注意**：GUI 的构建目录是 **NMake Makefiles**，所以直接在普通 PowerShell 里跑 `cmake --build build_gui --target ecm_gui` 必定失败（`nmake` 只存在于 VS 开发者环境）—— 要么用这个脚本，要么先 `call vcvars64.bat` |
-| 构建（driver / OpenCL） | driver 与 OpenCL 目标用另一个通用包装脚本：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_dev.ps1 -BuildDir build_cuda_cmake -Targets ecm_cuda`（同样自动找 `vcvars64.bat`、有 `-Reconfigure`、默认 60 min 超时、结束打印产物与大小/时间）。`-Targets` 一次一个值（命令行传数组会被 `-File` 拼成一个字符串） |
-| 构建（树版 CPU 参考） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_tree_ref.ps1`：纯主机 TU，用 `cl` + 仓库自带 GMP 独立编译（**不进 CMake 目标、不触发 reconfigure**），产物 `build_cuda_cmake\stage2_tree_ref.exe` |
+| 构建 | **一条命令**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\dev\build_gui.ps1`（自动找 `vcvars64.bat`、必要时 configure、构建 4 个目标；加 `-Selftest` 顺带自测，`-Clean` 从零重建，`-Reconfigure` 换依赖路径后重配）。**注意**：GUI 的构建目录是 **NMake Makefiles**，所以直接在普通 PowerShell 里跑 `cmake --build build_gui --target ecm_gui` 必定失败（`nmake` 只存在于 VS 开发者环境）—— 要么用这个脚本，要么先 `call vcvars64.bat` |
+| 构建（driver / OpenCL） | driver 与 OpenCL 目标用另一个通用包装脚本：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\dev\build_dev.ps1 -BuildDir build_cuda_cmake -Targets ecm_cuda`（同样自动找 `vcvars64.bat`、有 `-Reconfigure`、默认 60 min 超时、结束打印产物与大小/时间）。`-Targets` 一次一个值（命令行传数组会被 `-File` 拼成一个字符串） |
+| 构建（树版 CPU 参考） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\test\build_stage2_tree_ref.ps1`：纯主机 TU，用 `cl` + 仓库自带 GMP 独立编译（**不进 CMake 目标、不触发 reconfigure**），产物 `build_cuda_cmake\stage2_tree_ref.exe` |
 | 崩溃/挂住 | 探针崩溃时 Windows 弹窗会挂住父进程 ⇒ 用 `tools\test\run_with_timeout.ps1`（硬超时 + 杀进程树 + 返回 124）；成因与三层防御（含 `DontShowUI` 注册表项、`SetErrorMode` 代码片段、以及五个引号/杀进程的坑）见 [../docs/DEV_WINDOWS_CRASH_HANDLING.md](../docs/DEV_WINDOWS_CRASH_HANDLING.md) |
-| 构建（bench 探针，并行） | 不在 CMake 目标里的 `.cu` 探针（`stage2_gpu_probe.exe`）用 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_probe.ps1`：四个 TU 各自独立编译（默认 `-Jobs 4`）、各自一份日志写到 `<Build>\_s2probe\`、头文件变更令全部失效、只有链接串行。实测 CPU 累计 333 s / 墙钟 192 s ≈ **1.7×**；`-Jobs 1` 串行、`-Rebuild` 忽略新鲜度检查。**两个坑**：① 后台 job 里 `Start-Process -NoNewWindow` 会被沙箱拒（脚本改成 job 内直接 `cmd /c`）；② PowerShell job 的工作目录是**用户 profile**，相对路径全部失效，必须先 `Set-Location` 到仓库根 |
+| 构建（bench 探针，并行） | 不在 CMake 目标里的 `.cu` 探针（`stage2_gpu_probe.exe`）用 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\test\build_stage2_probe.ps1`：四个 TU 各自独立编译（默认 `-Jobs 4`）、各自一份日志写到 `<Build>\_s2probe\`、头文件变更令全部失效、只有链接串行。实测 CPU 累计 333 s / 墙钟 192 s ≈ **1.7×**；`-Jobs 1` 串行、`-Rebuild` 忽略新鲜度检查。**两个坑**：① 后台 job 里 `Start-Process -NoNewWindow` 会被沙箱拒（脚本改成 job 内直接 `cmd /c`）；② PowerShell job 的工作目录是**用户 profile**，相对路径全部失效，必须先 `Set-Location` 到仓库根 |
 | 跑测试脚本的参数 | GUI 类脚本传 `-Exe <ecm_gui.exe>`，**driver 类脚本（`test_worker_sections.ps1`）传 `-Exe <ecm_cuda.exe>`** —— 传错不会报错，只会让 `ecm_gui.exe -ini … --worker 1` 开出一个什么都不做的窗口（GUI 现在会对 `--worker` 打警告）。用 `test_gui_all.ps1` 跑就不会踩到：每项都声明了要哪种 exe |
 | worker exe 前提 | GUI 用 `<exe> -ini <ini> --worker N` 启动 worker，所以 **worker 可执行文件必须支持 `--worker`**（即 D1/D2 之后的构建）。旧构建会走单跑路径并打印 `No input number on stdin`，GUI 会把它诊断成 `DIAGNOSIS: … older than the D1/D2 driver changes` 并显示在状态栏/日志/表格红 `!`。一条命令自查：`([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes('<path>\ecm_cuda.exe'))).Contains('--worker')` |
 | DPI | GUI 是 per-monitor DPI aware（物理像素）；外部脚本比较窗口坐标时要乘 `GetDpiForWindow()/96`，字号按同一比例走 |
@@ -332,13 +335,13 @@ powershell -File tools\test\test_gui_gpu_curves.ps1   # 真 worker 压卡：功�
 - `ecm_report/` — 进度数据库与图表（`import_ecm.py` / `download_ecm.py`）
 - `log_parser/` — `screen.log` 等日志解析
 
-> **构建警告（2026-09-30 实测）**：不要对 `build_cuda_cmake` 用 `tools/build/build_dev.ps1 -Reconfigure`
+> **构建警告（2026-09-30 实测）**：不要对 `build_cuda_cmake` 用 `tools/build/dev/build_dev.ps1 -Reconfigure`
 > —— 该目录的缓存带着项目固定设置（`ECM_ENABLE_CUDA=ON`、`ECM_CUDA_ARCHITECTURES=89`、
 > `ECM_TIERS`、GMP 路径、GUI/TOOLS 开关），用"默认参数"重配会**清空缓存**并让该目录之后无法配置。
-> 要重建/补配请用仓库规范脚本 `tools/build/local_build.ps1`（它带全部固定参数）。
+> 要重建/补配请用仓库规范脚本 `tools/build/build_stage1_local.ps1`（它带全部固定参数）。
 
 ## CUDA Stage2 发布候选打包
 
-`tools/build/release_stage2.ps1` 构建单架构独立Stage2，并打包GMP、共用INI模板和使用说明；默认sm_89/split6，输出 `dist/cuda-stage2-sm89`。`-Stage1Exe` 可选附带已验收的Stage1程序，不会替它重新编译或验证。完整多架构Stage1仍使用 `release_build.ps1`。配置迁移、队列续跑和退出合同见 `docs/ECM_CUDA_STAGE2_RELEASE.md`。
+`tools/build/build_stage2_release.ps1` 并行编译生产Stage2并打包目录/ZIP，默认sm_89/split6，输出 `dist/cuda-stage2-sm89`；`-Archs` 可批量发布独立架构。`-Stage1Exe` 可选附带已验收的Stage1程序，不替它编译或验证。完整多架构Stage1使用 `tools/build/build_stage1_release.ps1`，自动并行编译、拆分和打包。两者均有根目录同名BAT。配置迁移、队列续跑和退出合同见 `docs/ECM_CUDA_STAGE2_RELEASE.md`。
 
 全部 INI 键的符号默认值、范围和用途见 [ECM_INI_REFERENCE.md](../docs/ECM_INI_REFERENCE.md)；定义修改与生成命令见 [DEV_ECM_CONFIG_SCHEMA.md](../docs/DEV_ECM_CONFIG_SCHEMA.md)。发布包附带这两份说明。

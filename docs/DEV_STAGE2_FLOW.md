@@ -347,7 +347,7 @@ ntt_poly_probe.exe poly 92160 5261 1 1     # 期望 ok=1，4097 MB，≈ 0.128
 powershell -File tools\bench\ntt_vs_cufft.ps1 -Real
 
 # GPU 树版（S1–S3）
-tools\build\check_stage2_tree_gpu.ps1      # 一键验收：F 逐系数 + e2e + 锐利性 + 三口径一致
+tools\build\test\check_stage2_tree_gpu.ps1      # 一键验收：F 逐系数 + e2e + 锐利性 + 三口径一致
 
 # 成本模型（不跑 GPU）
 python tools\bench\stage2_shape_model.py --b2 1.94e12 --bits 5261 --d 1411410

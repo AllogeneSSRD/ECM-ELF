@@ -1141,7 +1141,12 @@ int ecm_cuda_tier_occupancy(int param0, int param2, uint32_t bits,
     return 1;
 }
 
+#ifndef ECM_CUDA_ENABLE_PRAC
+#define ECM_CUDA_ENABLE_PRAC 0
+#endif
+#if ECM_CUDA_ENABLE_PRAC
 #include "cgbn_stage1_prac_host.cuh"
+#endif
 
 int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
@@ -1162,6 +1167,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       outputf(OUTPUT_ERROR, "GPU: ECM_GPU_STAGE1_ALGO must be ladder, resident or prac\n");
       return ECM_ERROR;
     }
+#if ECM_CUDA_ENABLE_PRAC
     if (gpu_param != 0 || ECM_MERS_FOLD) {
       outputf(OUTPUT_ERROR, "GPU: resident/PRAC requires param0 and a Montgomery build\n");
       return ECM_ERROR;
@@ -1169,6 +1175,11 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     return cgbn_stage1_resident(factors, array_found, N, s, curves, sigma_ptr,
                                checkpoint_interval_ms, gputime, B1, torsion,
                                strcmp(algorithm, "prac") == 0);
+#else
+    outputf(OUTPUT_ERROR, "GPU: resident/PRAC kernels are not built; rebuild with "
+                         "-EnablePrac or -DECM_CUDA_ENABLE_PRAC=ON\n");
+    return ECM_ERROR;
+#endif
   }
   uint64_t sigma64 = (sigma_ptr != NULL) ? *sigma_ptr : 0;
 

@@ -667,7 +667,7 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(...)   
    中文注释行尾吃掉换行 ⇒ `#define CHECKPOINT_VERSION` 被并进注释 ⇒ 报
    "identifier CHECKPOINT_VERSION is undefined"（**定义明明在文件里**，极具误导性）。
    ⇒ 现在有守卫：`tools/diag/ensure_bom.ps1` 与 git HEAD 比对每个 `kernels/`、`src/` 源文件的 BOM 状态并恢复，
-   `tools/build/local_build.ps1` 每次 configure 前自动跑（`-NoFix` 只报告）。**改完 .cu/.h 先跑一次它**。
+   `tools/build/build_stage1_local.ps1` 每次 configure 前自动跑（`-NoFix` 只报告）。**改完 .cu/.h 先跑一次它**。
 2. **CGBN 的 host 侧需要 GMP**：`gmp.h` 必须**先于** `cgbn.h` 包含，否则 `cgbn_cpu.h` 直接 `#error You must use GMP for now`。
 3. **`cgbn_load` 要非 const 指针**：`cgbn_mem_t<BITS>*`（`const` 版本匹配不上，报错会列出候选签名）。
 4. **设备端 `switch` + 模板 + CGBN 会让 nvcc 的 device 拆分通道出错**：改成模板参数 + `if constexpr` 风格的
@@ -827,11 +827,11 @@ cmake -S . -B build_cuda_dev -DECM_TPB=128 -DECM_MAX_ROTATION=1 -DECM_MAXRREG=0 
 cmake --build build_cuda_dev --config Release --target ecm_cuda
 
 # 8) 并行编译 kernel TU（§8.8）：把 6 个 TU 的 nvcc 并发跑，再让 nmake 只做 host+链接
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_nm16 -Only tpi16
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_nm16 -Only tpi16
 
 # 9) 寄存器预算 A/B（§5.7）：受限档构建 + 两个变体 exe 留在构建目录里（gmp-10.dll 必须同目录！）
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_nm16 -Reconfigure
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_nm16 -Reconfigure
 #   A = 按表（tier 4608 的 suyama 是 129 寄存器 ⇒ 3 块/SM）
 Copy-Item build_nm16\ecm_cuda.exe build_nm16\ecm_u.exe -Force
 #   B = 全档位强制 128（⇒ 4 块/SM，代价 48 B spill）
@@ -902,14 +902,14 @@ foreach ($c in 576,768,1152,1920) {
      MSBuild 的 CUDA 13.3.targets 直接报 `MSB5021: 正在终止"cmd"及其子进程，以便取消生成` ✓，
      Ninja 在 configure 阶段卡死、jom 的 `try_compile` 失败也符合同一模式 ✓；
      而**直接调用 nvcc 的路径（NMake、以及我用 `cmd /c <bat>` 逐个编译）都正常** ✓✓。
-     ⇒ **可用的并行化做法**（第 7 轮已实现：`tools/build/parallel_nvcc.ps1`）：写一个"并行编译脚本"——把 6 个 kernel TU 的 nvcc
+     ⇒ **可用的并行化做法**（第 7 轮已实现：`tools/build/internal/parallel_nvcc.ps1`）：写一个"并行编译脚本"——把 6 个 kernel TU 的 nvcc
      命令行**从 PowerShell 直接并发启动**，再调 `cmake --build` 只做链接 ✓。
 
       ```powershell
       # 并行编译 kernel TU 并链接（构建目录需已配置过；缺 compile_commands.json 时加 -Reconfigure）
-      powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
+      powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
       # 只重编某一个 kernel 家族（改完一个 TU 时最省时间）
-      powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_nm16 -Only tpi16
+      powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_nm16 -Only tpi16
       ```
 
       每个 TU 的日志写在 `<BuildDir>\par_nvcc\`；脚本打印每个 TU 的墙钟时间、串行时间之和与加速比，
@@ -1074,14 +1074,14 @@ foreach ($c in 576,768,1152,1920) {
 ⚠ `ECM_CUDA_EMBED_PTX=OFF` 的代价：**不能 JIT 到更新的架构**（在别的架构上会报
 `no kernel image is available`）。跨机分发时用 `-DECM_CUDA_EMBED_PTX=ON` 或下面的发布流程。
 
-**② 发布用 `build_cuda_release` + `tools/build/release_split.ps1`**：
+**② 发布用 `build_cuda_release` + `tools/build/internal/split_stage1_release.ps1`**：
 
 ```powershell
 cmake -S . -B build_cuda_release -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ^
       -DECM_CUDA_FULL_BUILD=ON -DECM_CUDA_ARCHITECTURES="75;86;89;90;100;120" ^
       -DECM_CUDA_PTX_ARCH=75 -DECM_CUDA_COMPRESS=OFF -DECM_TPB=128 -DECM_MAX_ROTATION=1 ...
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_release
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\release_split.ps1 -BuildDir build_cuda_release -OutDir dist\cuda
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_cuda_release
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\split_stage1_release.ps1 -BuildDir build_cuda_release -OutDir dist\cuda
 ```
 
 `ECM_CUDA_PTX_ARCH=<arch>`（本轮新增）：**只给一个架构嵌 PTX**，其余走 `-real`（纯 SASS）。
@@ -1253,7 +1253,7 @@ SASS 静态统计（`cuobjdump -arch sm_89 -sass`，`kernel_double_add_suyama<TP
 .\.bench_tmp\cgbn\mers_fold.exe 7 4096 100 1 edge
 
 # B) 折叠构建（受限 tier，约 2 分钟）
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\local_build.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage1_local.ps1 `
     -BuildDir build_cuda_fold -Tiers "1024,3328,4608,5120" -Extra "-DECM_MERS_FOLD=1"
 
 # C) 正确性 + 守卫 + 吞吐（约 3 分钟；-SkipSlow 跳过吞吐段）
@@ -1265,11 +1265,11 @@ build_cuda_cmake\ecm_cuda.exe -gpu -d 1 --gpu-param 0 -sigma 300000 -gpucurves 3
 build_cuda_fold\ecm_cuda.exe  -gpu -d 1 --gpu-param 0 -sigma 300000 -gpucurves 384 -savea f.save 1e5 0 < n.txt
 
 # E) 寄存器杠杆排除（0 spill 也慢 13%）
-powershell ... -File tools\build\local_build.ps1 -BuildDir build_cuda_fold -Tiers "5120" `
+powershell ... -File tools\build\build_stage1_local.ps1 -BuildDir build_cuda_fold -Tiers "5120" `
     -Extra "-DECM_MERS_FOLD=1 -DECM_REG_TARGET_FORCE=255"
 
 # F) 对齐探针（结果错，只看时间）
-powershell ... -File tools\build\local_build.ps1 -BuildDir build_cuda_fold -Tiers "5120" `
+powershell ... -File tools\build\build_stage1_local.ps1 -BuildDir build_cuda_fold -Tiers "5120" `
     -Extra "-DECM_MERS_FOLD=1 -DECM_MERS_FOLD_PROBE_ALIGN=1"
 ```
 
@@ -1389,12 +1389,12 @@ CGBN 的字分布是**连续块**（`impl_cuda.cu` 的 `cgbn_load`：`thread*LIM
 
 ```powershell
 # 折叠族用自己的 TPB 构建（本轮的推荐配置）
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\local_build.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage1_local.ps1 `
     -BuildDir build_cuda_fold -Tiers "1024,3328,4608,5120" -Extra "-DECM_MERS_FOLD=1 -DECM_TPB=256"
 # 验收（含 768 曲线吞吐 A/B；全绿）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_cuda_mers_fold.ps1
 # 对比 basic 的 TPB 旋钮（两族都受益，值得在生产形状上复测）
-powershell ... -File tools\build\local_build.ps1 -BuildDir build_cuda_tpb512 -Tiers "4608,5120" -Extra "-DECM_TPB=512"
+powershell ... -File tools\build\build_stage1_local.ps1 -BuildDir build_cuda_tpb512 -Tiers "4608,5120" -Extra "-DECM_TPB=512"
 ```
 
 ---

@@ -147,7 +147,7 @@ T ≈ C_setup(S,P) + I·C_point(S) + G·C_G(S,P)
 
 另加预先定义的 640 MiB 边界：4423 bits、B2=8×10¹²、D=1531530/P=138240，owner 所需约 664.46 MiB；同 D 按1024/640/640/1024运行，直接跨过用户提出的默认边界。基础网格每点一次，固定 D 和边界每模式每点两次，不报告置信区间，也不把小于波动的差值当稳定收益。
 
-[运行工具](D:/code/MPA-OpenCl/tools/bench/bench_stage2_budget_scaling.py:1)、[真实形状查询](D:/code/MPA-OpenCl/tools/test/stage2_budget_shape_probe.cu:1)、[查询构建](D:/code/MPA-OpenCl/tools/build/build_stage2_budget_shape_probe.ps1:1)、[640边界扩展](D:/code/MPA-OpenCl/tools/bench/extend_stage2_budget_boundary.py:1)、[结果分析](D:/code/MPA-OpenCl/tools/bench/analyze_stage2_budget_scaling.py:1)。路径参数可替换为其他冻结版本；需要对应的19原始依赖及 manifest。
+[运行工具](D:/code/MPA-OpenCl/tools/bench/bench_stage2_budget_scaling.py:1)、[真实形状查询](D:/code/MPA-OpenCl/tools/test/stage2_budget_shape_probe.cu:1)、[查询构建](D:/code/MPA-OpenCl/tools/build/test/build_stage2_budget_shape_probe.ps1:1)、[640边界扩展](D:/code/MPA-OpenCl/tools/bench/extend_stage2_budget_boundary.py:1)、[结果分析](D:/code/MPA-OpenCl/tools/bench/analyze_stage2_budget_scaling.py:1)。路径参数可替换为其他冻结版本；需要对应的19原始依赖及 manifest。
 
 可复用工具允许单独指定 `--big-mb`、`--small-big-mb`、`--owner-mb`、`--small-owner-mb` 和 `--arena-mb`；值以MiB计。默认值即本轮三策略。`--prepare-only` 先完成CPU/GMP保存点和真实形状核验，不执行完整Stage2；`--resume` 按既有plan继续，新的预算参数不会改写已冻结plan。修改预算须使用新目录。历史策略名large_resident/large_owner128在自定义预算下仅为配置标识，是否驻留应读enabled/fallback。640边界扩展是本轮默认形状的专用控制，只对其48条基础矩阵使用。
 
@@ -156,7 +156,7 @@ T ≈ C_setup(S,P) + I·C_point(S) + G·C_G(S,P)
 [预算参数门禁](D:/code/MPA-OpenCl/tools/test/check_stage2_budget_options.py:1) 另验5种无效参数均exit2、48规划全部满足预算，且只改owner预算时D/几何保持原矩阵值。此门禁不启动性能曲线。
 
 ```powershell
-tools/build/build_stage2_budget_shape_probe.ps1 -Build build_cuda_cmake/budget_probe
+tools/build/test/build_stage2_budget_shape_probe.ps1 -Build build_cuda_cmake/budget_probe
 python tools/bench/bench_stage2_budget_scaling.py `
   --exe build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe `
   --sources build_cuda_cmake/_point_scratch_20261005/native_calibrated/sources `
@@ -400,7 +400,7 @@ GPU事件span37.96294/37.22524秒，并集30.80479/30.79711秒，无本进程事
 ```powershell
 $dev = 'build_cuda_cmake/owner_dev/ecm_cuda_stage2.exe'
 $fixtures = 'build_cuda_cmake/_stage2_wide_20261007/fixtures_r2/fixtures.json'
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_local.ps1 `
   -Build build_cuda_cmake/owner_dev -Engine development -GlBackend ptx -SplitCompile 6
 python tools/test/test_stage2_owner_reuse.py --mode layout --output run/owner_layout
 python tools/test/test_stage2_owner_reuse.py --mode gate --exe $dev `

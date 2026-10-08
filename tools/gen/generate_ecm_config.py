@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import unicodedata
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = ROOT / "config/ecm_options.json"
@@ -63,10 +64,38 @@ def load_schema():
         seen.add(key)
     for entry in schema["options"] + schema["aliases"]:
         description = entry.get("description")
-        if not isinstance(description, list) or not description or any(
-                not isinstance(p, str) or not p.strip() or "\n" in p for p in description):
-            raise ValueError(f"missing/invalid user description: {entry['owner']}.{entry['key']}")
+        if not isinstance(description, list) or len(description) != 2 or any(
+                not isinstance(p, str) or not p.strip() for p in description):
+            raise ValueError(f"description must contain English then Chinese: {entry['owner']}.{entry['key']}")
     return schema
+
+
+def description_lines(entry, width=100):
+    """Preserve explicit newlines and wrap prose by display columns (CJK=2).
+
+    Description entries are ordered English first, then Chinese. Wrap each
+    entry separately so translations never share an INI comment/Markdown line.
+    """
+    def columns(value):
+        return sum(0 if unicodedata.combining(c) else
+                   2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in value)
+
+    for paragraph in entry["description"]:
+        for explicit_line in paragraph.splitlines():
+            current = ""
+            # Keep identifiers/English words intact; Chinese permits character breaks.
+            tokens = re.findall(r"[^\s\u2e80-\u9fff\uff00-\uffef]+|[\u2e80-\u9fff\uff00-\uffef]|\s+", explicit_line)
+            for token in tokens:
+                if columns(current + token) > width and current.strip():
+                    yield current.rstrip()
+                    current = ""
+                # Split even an unusually long URL/identifier to bound the line width.
+                for char in token.lstrip() if not current else token:
+                    if columns(current + char) > width:
+                        yield current.rstrip()
+                        current = ""
+                    current += char
+            yield current.rstrip()
 
 
 def assignment(o, key=None):
@@ -187,7 +216,7 @@ def annotation(o):
         default = int(default)
     if "implicit" in o:
         default = "@" + o["implicit"]
-    parts = [f"d={text(default) if default != '' else chr(34)*2}"]
+    parts = [f"default={text(default) if default != '' else chr(34)*2}"]
     for prop in ("unit", "empty", "zero", "path_base"):
         if prop in o:
             parts.append(f"{prop}={o[prop]}")
@@ -226,7 +255,7 @@ def template(schema, release):
             if o.get("parser_override") == "integer_bool":
                 value = int(value)
             out.append("# " + o["domain"] + "; " + annotation(o))
-            out.extend("# " + paragraph for paragraph in o["description"])
+            out.extend("# " + line for line in description_lines(o))
             prefix = "# " if o.get("template_comment") or o.get("worker_suffix") else ""
             out.append(f"{prefix}{o['key']} = {text(value)}".rstrip())
         out.append("")
@@ -235,15 +264,20 @@ def template(schema, release):
 
 
 def reference(schema):
-    out = ["# ecm.ini", "", "<!-- GENERATED: config/ecm_options.json; do not edit. -->", "",
-           "在 `ecm.ini` 中添加或修改下面的配置行。Stage1、Stage2 和 GUI 共用此文件，各选项的适用范围在分组中注明。",
+    out = ["# ecm.ini Reference / ecm.ini 配置参考", "", "<!-- GENERATED: config/ecm_options.json; do not edit. -->", "",
+           "Add or edit the configuration lines below in `ecm.ini`. Stage1, Stage2, and the GUI share this file; each group identifies the applicable settings.<br>",
+           "在 `ecm.ini` 中添加或修改下面的配置行。Stage1、Stage2 和 GUI 共用此文件，各选项的适用范围在分组中注明。", "",
+           "Configuration lines use symbolic notation; the accompanying descriptions explain purpose, value effects, and when to adjust a setting.<br>",
            "配置行保留符号写法，后面的文字说明用途、取值效果和需要调整的情况。", "",
-           "## 记号与通用规则", "", "```text", "<x> = 值; [x] = 可选; [a|b] = 任选其一; a..b = 含端点的范围",
-           'd = 内置默认值; "" = 空值; @x = 继承或派生值',
+           "## Notation and general rules / 记号与通用规则", "", "```text",
+           "<x> = value; [x] = optional; [a|b] = one of; a..b = inclusive range",
+           "<x> = 值; [x] = 可选; [a|b] = 任选其一; a..b = 含端点的范围",
+           'default = built-in default; "" = empty; @x = inherited or derived value',
+           'default = 内置默认值; "" = 空值; @x = 继承或派生值',
            "Z = integer; R = real; N = worker_index (1..1000000)",
            "S1 = Stage1; S2 = Stage2; GUI = ecm_gui; P95 = Prime95",
            "MiB = 2^20 B; s = seconds; ms = milliseconds",
-           "key=<domain>; d=<default>; [unit=<unit>]; [empty=<policy>]",
+           "key=<domain>; default=<default>; [unit=<unit>]; [empty=<policy>]",
            "INI: key=value; comment=[#|;]...; inline_comment=unsupported; path_quotes=none",
            "key_case: S1=sensitive; S2=insensitive; GUI=sensitive",
            "bool(S1,S2): [true|false|yes|no|on|off|1|0]; case=insensitive",
@@ -260,20 +294,26 @@ def reference(schema):
            "S1.INI => queue_mode; single_run => CLI",
            "AutoB2(current_release)=uncalibrated; required=explicit_B2",
            "memory: arena+fold+batch != process_peak; budget!=total_VRAM_cap", "```", "",
-           "只把 `key=value` 写入 INI，`d`、`unit` 等为说明记号，不是额外配置键。`release` 和 `first_run` 表示模板有意采用的值，可能与内置默认值不同；已有 INI 不会自动改为模板值。", "",
+           "Write only `key=value` to the INI. `default`, `unit`, and similar annotations are not additional keys. `release` and `first_run` identify deliberate template values that may differ from built-in defaults; existing INI files are not updated automatically.<br>",
+           "只把 `key=value` 写入 INI，`default`、`unit` 等为说明记号，不是额外配置键。`release` 和 `first_run` 表示模板有意采用的值，可能与内置默认值不同；已有 INI 不会自动改为模板值。", "",
+           "Place shared keys before the first section header and worker overrides under `[Worker #N]`. CLI programs treat only worker headers as scopes; other headers are labels and do not leave an active worker scope. The GUI reads actual sections. Use `#` comments to group shared keys for compatibility.<br>",
            "公共键放在任何分区标题之前；专用 worker 值放在 `[Worker #N]` 下。命令行程序只把 worker 标题当作作用域，其他标题仅是标签，也不会退出已有 worker 作用域；GUI 则按真实分区读取。为兼容两者，公共键应使用 `#` 注释分组。", "",
+           "The last duplicate key in each layer wins; worker settings override global settings, and CLI overrides INI. Boolean keys accept the forms above, but Stage2 integer switches accept only `0|1`. Do not quote INI paths or append inline comments to configuration values.<br>",
            "同一层重复键以最后一次出现为准，worker 设置覆盖全局，命令行覆盖 INI。布尔键可以使用上列布尔写法，但标为整数开关的 Stage2 键只接受 `0|1`。路径不要加引号，不支持在配置行末尾追加注释。", "",
+           "Stage1 relative paths normally use the executable directory. Stage2 INI paths use the INI directory; CLI paths use the current working directory. Individual keys document any exceptions. Concurrent processes need separate queues, progress files, and output paths.<br>",
            "Stage1 相对路径通常以可执行文件目录为基准；Stage2 的 INI 相对路径以 INI 目录为基准，命令行相对路径以当前工作目录为基准。各键另有约定时见该项说明。多进程并行运行应使用独立队列、进度及输出路径。", ""]
-    for owner, title in (("stage1", "Stage1 与共享选项 / 全局或 [Worker #N]"), ("stage2", "Stage2 / 全局或 [Worker #N]"),
-                         ("gui", "GUI / [GUI]"), ("worker", "GUI worker / [Worker #N]")):
+    for owner, title in (("stage1", "Stage1 and shared settings / Stage1 与共享选项 — global or [Worker #N] / 全局或 [Worker #N]"),
+                         ("stage2", "Stage2 — global or [Worker #N] / 全局或 [Worker #N]"),
+                         ("gui", "GUI settings / GUI 配置 — [GUI]"), ("worker", "GUI worker settings / GUI worker 配置 — [Worker #N]")):
         out += ["## " + title, ""]
         for o in schema["options"]:
             if o["owner"] == owner:
                 out += ["### " + o["key"], "", "```text",
                         o["key"] + "=" + o["domain"] + "; " + annotation(o), "```", ""]
-                for paragraph in o["description"]:
-                    out += [paragraph, ""]
-    out += ["## 兼容别名", "", "旧名称仍可读取，新配置建议使用对应的正式键。直接别名沿用正式键的取值规则，不另设默认值；转换开关按下面列出的映射处理。", ""]
+                out += ["<br>\n".join(description_lines(o)), ""]
+    out += ["## Compatibility aliases / 兼容别名", "",
+            "Legacy names remain readable; use canonical keys in new configurations. Direct aliases share the canonical value rules and have no separate defaults; conversion switches use the mappings below.<br>",
+            "旧名称仍可读取，新配置建议使用对应的正式键。直接别名沿用正式键的取值规则，不另设默认值；转换开关按下面列出的映射处理。", ""]
     for a in schema["aliases"]:
         line = a["key"] + " => " + a["target"]
         if a.get("transform") == "nonzero":
@@ -285,13 +325,11 @@ def reference(schema):
         if a.get("fallback_only"):
             line += "; only_if(target=absent)"
         out += ["### " + a["key"], "", "```text", line, "```", ""]
-        for paragraph in a["description"]:
-            out += [paragraph, ""]
-    out += ["## 维护入口", "", "- [schema](../config/ecm_options.json)",
-            "- [generator](../tools/gen/generate_ecm_config.py)",
-            "- [runtime](../src/core/ecm_ini.h)",
-            "- [bindings/defaults](../src/core/generated/ecm_config_generated.h)",
-            "- [maintenance](DEV_ECM_CONFIG_SCHEMA.md)", ""]
+        out += ["<br>\n".join(description_lines(a)), ""]
+    out += ["## Repository maintenance / 源码仓库维护", "",
+            "`config/ecm_options.json` -> `tools/gen/generate_ecm_config.py`", "",
+            "See `docs/DEV_ECM_CONFIG_SCHEMA.md` in the source repository; release packages include only this configuration reference.<br>",
+            "维护流程见源码仓库的 `docs/DEV_ECM_CONFIG_SCHEMA.md`；发布包仅附本配置说明。", ""]
     return "\n".join(out)
 
 

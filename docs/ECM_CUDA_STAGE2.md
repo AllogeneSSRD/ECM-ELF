@@ -21,7 +21,7 @@ Auto B2已有经验证的4acc/v1窄范围组合；后续全范围验证虽然算
 在仓库根目录执行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_ecm_cuda_stage2.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_local.ps1 `
   -Build build_cuda_cmake/stage2_candidate -Engine production -Arch sm_89 -SplitCompile 6
 ```
 
@@ -160,7 +160,7 @@ NTT tile 默认 `NTT_FUSE_WARP_TAIL=1`，低6层使用warp寄存器交换与常�
 - 独立生产默认值与实现：[ecm_cuda_stage2.cu](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1)；生产API：[同文件:9073](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9073)；算法配置检查：[同文件:9105](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9105)。
 - 开发驱动：[ecm_cuda_stage2_dev.cu](D:/code/MPA-OpenCl/tools/bench/ecm_cuda_stage2_dev.cu:1)；开发运算引擎：[stage2_tree_gpu.cu](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10896)。
 - 已有表达式、ini 和队列工具：`src/core/ecm_expr.cpp`、`ecm_queue_config.cpp`、`ecm_worktodo.cpp`。
-- 独立编译脚本：[build_ecm_cuda_stage2.ps1](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:1)。
+- 独立编译脚本：[build_ecm_cuda_stage2.ps1](D:/code/MPA-OpenCl/tools/build/build_stage2_local.ps1:1)。
 
 已发布893包装实验引擎，当前源码已拆出独立production闭包。性能与显存模型见 [当前 Stage2 步骤报告](STAGE2_GPU_CURRENT_PIPELINE.md)，large-N的实际预算应以运行日志为准。
 
@@ -361,7 +361,7 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 5. [旧S5的Horner、subtract和two-minus](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:5351)局部数组改为128/256两档。生产默认的scaled descent策略保持；旧路径用于回归和诊断。S5诊断已读回完整叶值时，[输出叶哈希](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10572)；没有为默认设备路径添加无条件全量D2H。
 6. 修复旧S5的P=1断言：形状规划采用`slot_bits=2S+max(1,ceil(log2m))`，验证处原先漏掉`max(1,...)`。旧48b二进制在M4423也会拒绝，证明并非16k特有；[断言](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:6102)现与规划一致，仍执行stride/容量/精确性检查，不改变NTT布局。
 
-[构建脚本](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:13)新增`-SplitCompile 1..64`，缺省1；选项、toolkit、raw依赖与对象SHA写入manifest，HostOnly不能跨该选项复用CUDA对象。本轮用6线程split优化；它不是多条Stage2并行或GPU算法开关。
+[构建脚本](D:/code/MPA-OpenCl/tools/build/build_stage2_local.ps1:13)新增`-SplitCompile 1..64`，缺省1；选项、toolkit、raw依赖与对象SHA写入manifest，HostOnly不能跨该选项复用CUDA对象。本轮用6线程split优化；它不是多条Stage2并行或GPU算法开关。
 
 ### 容量、运算和搬运影响
 
@@ -399,7 +399,7 @@ arena已改为真实payload计账v2，旧窄范围D标定暂时禁用并回到�
 以下命令属于58db21f当时的构建脚本；重建已测46457e应恢复其冻结26-source闭包和原脚本。当前脚本已区分production/development，按下节命令生成的新binary不是46457e。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_local.ps1 `
   -Build build_cuda_cmake/reproduce_wide -Arch sm_89 -GlBackend ptx `
   -OuterUnrollU 0 -SplitCompile 6
 python tools/test/test_stage2_wide_native.py --prepare-only --output run/wide_fixtures
@@ -424,9 +424,9 @@ python tools/test/test_stage2_wide_native.py --exe build_cuda_cmake/reproduce_wi
 [配置检查](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9105)拒绝改变上述主要生产算法的环境变量，如 `NTT_XADD6=0`、`NTT_S5_ON=1`、`NTT_S4_OLDTAIL=1`、`NTT_GIANT_SEED_PAIR=0`、`NTT_GIANT_BASE_CPU=1` 或 `NTT_FUSE_T=11`。owner、arena、batch和gleaf容量继续可调；诊断、故障注入和必需检查保留。实验A/B使用development构建。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_local.ps1 `
   -Build build_cuda_cmake/stage2_prod_candidate -Engine production -SplitCompile 6
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_local.ps1 `
   -Build build_cuda_cmake/stage2_dev -Engine development -GlBackend ptx -SplitCompile 6
 ```
 
@@ -602,7 +602,7 @@ M4423/D1381380/P126720/B2≈2.01e12：owner609.09→473.73MiB（−135.35MiB）�
 复现：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_local.ps1 `
   -Build build_cuda_cmake/gscale_dev -Engine development -GlBackend ptx -SplitCompile 6
 python tools/bench/bench_stage2_gscale.py --exe build_cuda_cmake/gscale_dev/ecm_cuda_stage2.exe `
   --fixtures build_cuda_cmake/_stage2_wide_20261007/fixtures_r2/fixtures.json `
@@ -664,7 +664,7 @@ Systems2026.1.3对照独立于正式矩阵。大界H2D从4867次/7,151,041,651B�
 复现（每次输出使用新目录）：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_local.ps1 `
   -Build build_cuda_cmake/scaled_root_dev -Engine development -GlBackend ptx -SplitCompile 6
 python tools/bench/bench_stage2_gscale.py --target scaled-root `
   --exe build_cuda_cmake/scaled_root_dev/ecm_cuda_stage2.exe `

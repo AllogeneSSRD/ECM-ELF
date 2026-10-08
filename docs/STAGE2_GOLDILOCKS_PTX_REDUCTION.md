@@ -114,11 +114,11 @@ selector两侧各96/0，模式1拒绝沿用旧经验模型；是观察决策后�
 ## 6. 复现和后续
 
 ```powershell
-tools/build/build_ntt_goldilocks_ptx_probe.ps1 -Build build_cuda_cmake/gl_ptx_primitive
+tools/build/test/build_ntt_goldilocks_ptx_probe.ps1 -Build build_cuda_cmake/gl_ptx_primitive
 python tools/bench/bench_ntt_goldilocks_ptx.py --exe build_cuda_cmake/gl_ptx_primitive/ntt_goldilocks_ptx_probe.exe --output <fresh-directory> --device 1
-tools/build/build_ntt_coop_probe.ps1 -Build build_cuda_cmake/gl_ptx_ntt
+tools/build/test/build_ntt_coop_probe.ps1 -Build build_cuda_cmake/gl_ptx_ntt
 python tools/bench/bench_ntt_scale.py --exe build_cuda_cmake/gl_ptx_ntt/ntt_coop_outer_probe.exe --output <fresh-directory> --toggle ptx --device 1
-tools/build/build_ecm_cuda_stage2.ps1 -Build build_cuda_cmake/gl_ptx_native
+tools/build/build_stage2_local.ps1 -Build build_cuda_cmake/gl_ptx_native
 python tools/bench/bench_stage2_save_reduce.py --exe build_cuda_cmake/gl_ptx_native/ecm_cuda_stage2.exe --save <Stage1-save> --output <fresh-directory> --toggle ptx --device 1 --d 1381380 --runs 8
 ```
 

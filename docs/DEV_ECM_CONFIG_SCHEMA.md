@@ -13,7 +13,7 @@ python tools/gen/generate_ecm_config.py
 python tools/gen/generate_ecm_config.py --check
 
 # 普通构建使用原生 CMake 检查，不需要 Python
-cmake -P tools/build/check_ecm_config.cmake
+cmake -P tools/build/internal/check_ecm_config.cmake
 ```
 
 生成物提交到 Git，程序运行时不读取 JSON、不依赖 Python。生成文件头均有标记，应修改定义后重新生成。
@@ -31,12 +31,21 @@ cmake -P tools/build/check_ecm_config.cmake
 
 ## 选项定义
 
-每条 option 包含 `owner/key/field/type/default/parser/domain/fx/description`。`domain` 是符号取值范围，`fx` 是内部用途标签；`description` 为面向用户的中文说明段落列表。
+每条 option 包含 `owner/key/field/type/default/parser/domain/fx/description`。`domain` 是符号取值范围，`fx` 是内部用途标签；`description` 为面向用户的双语说明列表，先英文、后中文，两种语言分别占一个元素。
 可增加 `minimum/maximum/unit/empty/zero/implicit/effective_default/present/rules`。
 
 `description` 按 `.refactor/undoc.txt`、`.refactor/undoc zh-Hans.txt` 的说明方式编写：先说明用户能控制什么，再解释各值的实际效果、空值或 0 的行为，以及适用条件或调整代价。避免只写内部模块名或缩写。默认值和范围继续从已有字段生成，不在说明中另建一份键表。
 
-每个正式键与兼容别名必须有非空说明，生成器拒绝缺失说明的条目。参考文档为“配置行 + 说明段落”；INI 模板把同一说明生成为 `#` 注释。嵌入 C++ 的模板按 UTF-8 字节生成 ASCII 字符串字面量，避免编译器本地代码页改变中文注释。
+每个正式键与兼容别名必须有非空说明，生成器拒绝缺失说明的条目。说明字符串可用 JSON 的 `\n` 显式换行；生成器保留换行，并按每行 100 个显示列自动折行，中文全角字符计 2 列。英文尽量在词间换行，中文可在字符间换行；语言边界始终另起一行。
+
+参考文档为“配置行 + 英文说明 + 中文说明”，Markdown 用 `<br>` 保留每个物理换行；INI 模板将每行分别生成为 `#` 注释。嵌入 C++ 的模板按 UTF-8 字节生成 ASCII 字符串字面量，避免编译器本地代码页改变中文注释。选项语义或默认值变更时同时维护两种语言。
+
+```json
+"description": [
+  "English description.\nOptional explicit second line.",
+  "中文说明。\n可选的显式第二行。"
+]
+```
 
 - `default`：C++ 配置结构的初始化值。
 - `implicit`：缺省时的派生策略，例如继承设备、从 profile 取时间；此时内部哨兵不表示有效的显式输入。

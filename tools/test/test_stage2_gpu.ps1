@@ -74,7 +74,7 @@ if (-not $Ref) { $Ref = Join-Path $repoRoot 'build_cuda_cmake\stage2_ref.exe' }
 if (-not $Driver) { $Driver = Join-Path $repoRoot 'build_cuda_cmake\ecm_cuda.exe' }
 
 if (-not (Test-Path $Exe)) {
-    Write-Host "FAIL: stage2_gpu_probe.exe not found (build it with tools\\build\\build_stage2_probe.ps1)" -ForegroundColor Red
+    Write-Host "FAIL: stage2_gpu_probe.exe not found (build it with tools\\build\\test\\build_stage2_probe.ps1)" -ForegroundColor Red
     exit 2
 }
 $gmpDll = Join-Path $repoRoot 'third_party\gmp-zen3\dist\bin\gmp-10.dll'

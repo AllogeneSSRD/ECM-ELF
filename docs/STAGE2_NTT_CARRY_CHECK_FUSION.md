@@ -40,7 +40,7 @@
 
 ## 4. 独立实验与负结果保留
 
-[primitive builder](D:/code/MPA-OpenCl/tools/build/build_ntt_carry_partial_probe.ps1:1) 从实际源码逐字提取原 residual 和 cone，编译原/候选。同一探针八次 ABBA+BAAB，每次三次 warmup、20次 CUDA event重复，所有输出逐字比较及 CPU参考在 event外；没有 CI。
+[primitive builder](D:/code/MPA-OpenCl/tools/build/test/build_ntt_carry_partial_probe.ps1:1) 从实际源码逐字提取原 residual 和 cone，编译原/候选。同一探针八次 ABBA+BAAB，每次三次 warmup、20次 CUDA event重复，所有输出逐字比较及 CPU参考在 event外；没有 CI。
 
 [原始测量](D:/code/MPA-OpenCl/build_cuda_cmake/_carry_partial_20261005/cone_shapes/measurements.json) 使用 R5/bpw26，实际 batch形状 k11×990 /k12×495 /k16×30 /k17×15，两步均值 ms分别0.247770→0.20815225 /0.24834575→0.204787 /0.24106225→0.195699 /0.24091925→0.19522575，减少15.99/17.54/18.82/18.97%。k24/26/27、m1为2.1280515→1.637837 /8.385573→6.52318725 /16.7945715→13.07456ms，减少23.04/22.21/22.15%。
 
@@ -56,7 +56,7 @@ R6/bpw26，k24/26/27两步为2.49498875→2.03174375 /9.851456→8.10668575 /19.
 
 [实际 NTT runner fixture](D:/code/MPA-OpenCl/tools/test/ntt_carry_fused_probe.cu:1) 使用GPU生成稀疏多项式，经实际完整NTT乘法，验证122850个输出；16cases/bad0。覆盖同arena模式切换、复用、三次deferred检查、上一 interior错误在后续良好调用后仍exit4、nondeferred reset、allocator/cap回退、小调用/乘法overflow拒绝、release计账清零。预期错误输出是故障注入结果，不是失败门禁。
 
-候选 native SHA256 `8a789739a355b0185ea48f5f50aeeef692482d7b3341ff1c3382b1d8857955da`，CUDA编译295.2s，20个raw构建依赖。复现构建：`tools/build/build_ecm_cuda_stage2.ps1 -Build build_cuda_cmake/reproduce_carry_fused -Arch sm_89 -GlBackend ptx -OuterUnrollU 0 -Rebuild`。运行前设 `NTT_CARRY_CHECK_FUSED=1`，显式 `--d 1381380`。
+候选 native SHA256 `8a789739a355b0185ea48f5f50aeeef692482d7b3341ff1c3382b1d8857955da`，CUDA编译295.2s，20个raw构建依赖。复现构建：`tools/build/build_stage2_local.ps1 -Build build_cuda_cmake/reproduce_carry_fused -Arch sm_89 -GlBackend ptx -OuterUnrollU 0 -Rebuild`。运行前设 `NTT_CARRY_CHECK_FUSED=1`，显式 `--d 1381380`。
 
 [完整比较工具](D:/code/MPA-OpenCl/tools/bench/bench_stage2_carry_check.py:1) 固定同exe、M4423/B1=1000/sigma26保存点、B2=2011326186870/D1381380、point1/unroll0/PTX3、默认全部检查；清理继承的NTT开关。预先指定两条完全验收的warmup（0/1），再八条0/1/1/0/1/0/0/1，全部日志保存；warmup不进入均值，不事后删除不利样本。每条执行前后验证20原始依赖、冻结副本、exe、driver及save hash。
 

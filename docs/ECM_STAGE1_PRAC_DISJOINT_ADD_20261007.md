@@ -85,7 +85,7 @@ CPU 模型不是原生 GPU 正确性的证明。证据：`stage1_disjoint_add_mo
 只重编专用 `.cu`：实测197.8秒，随后 CMake 仅链接。上一轮迁移 body 后，单 TU 迭代时间首次得到独立实测；此次没有重编其他六个 CUDA TU。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/parallel_nvcc.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/internal/parallel_nvcc.ps1 `
   -BuildDir build_cuda_cmake/prac -Only 'cgbn_stage1_prac_single_add\.cu$' -Jobs 6
 
 python tools/test/test_prac_disjoint_add.py --output docs/data/disjoint_model.json

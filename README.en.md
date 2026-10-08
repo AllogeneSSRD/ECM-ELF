@@ -2,6 +2,8 @@
 
 [中文](README.md) | English
 
+See the [CUDA build entry points](tools/build/README.md) for Stage1/Stage2 local and development PS1/BAT launchers and defaults.
+
 A **multi-backend stage-1 engine** for the Elliptic Curve Method (ECM): **OpenCL** (Windows / Linux / macOS / Android; param 3), **CUDA** (CGBN; param 0 Suyama and param 3 batch), and **GMP** & **AVX-512 IFMA** (Edwards / Montgomery, x86 CPU, 8 curves per thread). They share one driver / argument parser / checkpoint / save logic and swap the implementation at link time.
 
 The programs are compatible with **GMP-ECM** & **Prime95** savefile formats, support checkpoints and custom operators (Montgomery mul/sqr and modular add/sub), and add a queue manager (worktodo / save sync / resume) plus the Prime95 stage-2 handoff tool `ecm_p95feeder`.
@@ -467,16 +469,16 @@ The first two are the formal two-step build; the last two are for troubleshootin
 
 **The CUDA kernels are instantiated per bit width, and a full serial build takes ~36 minutes**
 (`cmake --build` uses the NMake Makefiles generator, which is serial). Use
-`tools/build/parallel_nvcc.ps1`: it reads the **exact nvcc command lines** for every `.cu` out of
+`tools/build/internal/parallel_nvcc.ps1`: it reads the **exact nvcc command lines** for every `.cu` out of
 `compile_commands.json`, launches them concurrently, then calls `cmake --build` once so nmake only
 builds the host TUs and links.
 
 ```powershell
 # full parallel build + link (build dir must be configured; add -Reconfigure if needed)
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_cuda_cmake
 
 # rebuild only one kernel family (fastest when you touched a single TU)
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\parallel_nvcc.ps1 -BuildDir build_cuda_cmake -Only suyama
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\internal\parallel_nvcc.ps1 -BuildDir build_cuda_cmake -Only suyama
 
 # other options: -Jobs N (default min(6, CPU)), -Only <regex>, -SkipUpToDate, -NoBuild
 ```

@@ -3,10 +3,10 @@ project(main)
 
 # Config source, generated bindings, templates and reference must agree.
 # This native hash guard avoids a Python dependency for ordinary builds.
-include(${CMAKE_CURRENT_SOURCE_DIR}/tools/build/check_ecm_config.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/tools/build/internal/check_ecm_config.cmake)
 add_custom_target(ecm_config_check ALL
     COMMAND ${CMAKE_COMMAND} "-DECM_CONFIG_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/build/check_ecm_config.cmake"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/build/internal/check_ecm_config.cmake"
     COMMENT "Checking generated ECM configuration")
 
 # MSVC Debug CRT (MDd) has an incompatibility with GMP's custom allocator
@@ -264,6 +264,7 @@ if(ECM_ENABLE_CUDA)
     endif()
 
     set(CGBN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/cgbn/include")
+    option(ECM_CUDA_ENABLE_PRAC "Build experimental resident/PRAC Stage1 kernels (slow template compilation)" OFF)
 
     add_executable(ecm_cuda
         # Shared, backend-neutral host TUs (same files `ecm` uses)
@@ -297,14 +298,6 @@ if(ECM_ENABLE_CUDA)
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu
-        kernels/cuda/cgbn_stage1_prac_kernels.cu
-        kernels/cuda/cgbn_stage1_prac_small.cu
-        kernels/cuda/cgbn_stage1_prac_tpi16.cu
-        kernels/cuda/cgbn_stage1_prac_tpi32.cu
-        kernels/cuda/cgbn_stage1_prac_alternate32.cu
-        kernels/cuda/cgbn_stage1_prac_single_add.cu
-        kernels/cuda/cgbn_stage1_prac_constants.cu
-        src/core/ecm_prac_plan.cpp
         kernels/cuda/cgbn_stage1_kernels_tpi4.cu
         kernels/cuda/cgbn_stage1_kernels_tpi8.cu
         kernels/cuda/cgbn_stage1_kernels_tpi16.cu
@@ -326,6 +319,27 @@ if(ECM_ENABLE_CUDA)
         kernels/cuda/cgbn_stage1_kernels_param2_tpi16.cu
         kernels/cuda/cgbn_stage1_kernels_param2_tpi32.cu
     )
+
+    if(ECM_CUDA_ENABLE_PRAC)
+        target_sources(ecm_cuda PRIVATE
+            kernels/cuda/cgbn_stage1_prac_kernels.cu
+            kernels/cuda/cgbn_stage1_prac_small.cu
+            kernels/cuda/cgbn_stage1_prac_tpi16.cu
+            kernels/cuda/cgbn_stage1_prac_tpi32.cu
+            kernels/cuda/cgbn_stage1_prac_tpi32_9216_10240.cu
+            kernels/cuda/cgbn_stage1_prac_tpi32_11264_12288.cu
+            kernels/cuda/cgbn_stage1_prac_tpi32_13312_14336.cu
+            kernels/cuda/cgbn_stage1_prac_tpi32_15360_16384.cu
+            kernels/cuda/cgbn_stage1_prac_alternate32.cu
+            kernels/cuda/cgbn_stage1_prac_single_add.cu
+            kernels/cuda/cgbn_stage1_prac_constants.cu
+            src/core/ecm_prac_plan.cpp)
+    endif()
+    target_compile_definitions(ecm_cuda PRIVATE ECM_CUDA_ENABLE_PRAC=$<BOOL:${ECM_CUDA_ENABLE_PRAC}>)
+    # CGBN uses uint32_t without including stdint.h. CUDA 12.6 does not provide
+    # that transitive include; keep the compatibility fix in our tracked build.
+    target_compile_options(ecm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--pre-include=stdint.h>)
+    message(STATUS "ecm_cuda: experimental resident/PRAC kernels ${ECM_CUDA_ENABLE_PRAC}")
 
     set_target_properties(ecm_cuda PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
                                               CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
@@ -594,11 +608,14 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
         target_compile_options(ecm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--ptxas-options=-v>)
     endif()
 
-    # Copy GMP runtime DLL next to ecm_cuda.exe (same as `ecm`).
-    if(MSVC AND EXISTS "${OPENSSL_ROOT_DIR}/bin/gmp-10.dll")
+    # Keep the runtime from the same prefix as the selected GMP import library.
+    # OPENSSL_ROOT_DIR may point at a different (generic vs Zen3) GMP build.
+    get_filename_component(_ecm_cuda_gmp_lib_dir "${GMP_LIBRARY}" DIRECTORY)
+    get_filename_component(_ecm_cuda_gmp_dll "${_ecm_cuda_gmp_lib_dir}/../bin/gmp-10.dll" ABSOLUTE)
+    if(MSVC AND EXISTS "${_ecm_cuda_gmp_dll}")
         add_custom_command(TARGET ecm_cuda POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${OPENSSL_ROOT_DIR}/bin/gmp-10.dll"
+                "${_ecm_cuda_gmp_dll}"
                 "$<TARGET_FILE_DIR:ecm_cuda>"
             COMMENT "Copying GMP DLL to ecm_cuda output dir")
     endif()

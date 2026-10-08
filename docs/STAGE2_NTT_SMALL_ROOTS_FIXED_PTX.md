@@ -22,7 +22,7 @@ warp6-pair每lane持有两个word，每层做一个有效蝶形。st2/3候选每
 
 - [small_root_reduce](D:/code/MPA-OpenCl/tools/bench/ntt_small_roots.cuh:39)：fixed3下直接用gl_reduce128_ptx，runtime保持原short方法3。避免候选仍用旧C++ short而对照用PTX的混合。
 - [独立tile/原语probe](D:/code/MPA-OpenCl/tools/test/ntt_small_roots_probe.cu:1)：fixed后端不再在每个benchmark run强制short0；runtime reducer A/B方法4对fixed构建拒绝。正逆、roundtrip、只读数组与padding合同保持。
-- [builder](D:/code/MPA-OpenCl/tools/build/build_ntt_small_roots_probe.ps1:1)：新增GlBackend及编译前后九份raw source hash，manifest记录实际固定模式；默认runtime。
+- [builder](D:/code/MPA-OpenCl/tools/build/test/build_ntt_small_roots_probe.ps1:1)：新增GlBackend及编译前后九份raw source hash，manifest记录实际固定模式；默认runtime。
 - [计时工具](D:/code/MPA-OpenCl/tools/bench/bench_ntt_small_roots.py:1)：核验实际fixed3声明、每行模式和来源。每形状/operation同binary顺序0/1/1/0/1/0/0/1，各四run，每run一warm加三event样本；填充/初始化/GMP参考/全输出比较在event外。
 
 首先完整原语和tile门禁，资源LOCAL0且容量API给出可驻留CTA才进入计时。k24是主要测量长度，k25/26为独立长度复测；forward、inverse与roundtrip分别报告。这些是tile局部延迟，不等价于完整卷积或完整Stage2收益。

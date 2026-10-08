@@ -43,7 +43,7 @@ NTT形状、poly mul数、S4 Kronecker算法不因该原语改变。不能将本
 
 probe NW128旧/新寄存器40/42，stack均6160B、spill store/load均0。两者线程局部源码数组容量相同，零spill不等于零线程私有存储，也不证明实际occupancy相同。此资源数据来自probe，不能代替真实ladder内核资源。
 
-证据：[原语109](D:/code/MPA-OpenCl/build_cuda_cmake/_point_mersenne_20261005/primitive_gate/summary.json)、[局部8条](D:/code/MPA-OpenCl/build_cuda_cmake/_point_mersenne_20261005/primitive_ab/summary.json)、[probe编译资源](D:/code/MPA-OpenCl/build_cuda_cmake/_point_mersenne_20261005/probe/build.log)。[probe源码](D:/code/MPA-OpenCl/tools/test/stage2_point_mersenne_probe.cu:1)、[编译与提取](D:/code/MPA-OpenCl/tools/build/build_stage2_point_mersenne_probe.ps1:1)、[门禁/计时](D:/code/MPA-OpenCl/tools/test/test_stage2_point_mersenne.py:1)。
+证据：[原语109](D:/code/MPA-OpenCl/build_cuda_cmake/_point_mersenne_20261005/primitive_gate/summary.json)、[局部8条](D:/code/MPA-OpenCl/build_cuda_cmake/_point_mersenne_20261005/primitive_ab/summary.json)、[probe编译资源](D:/code/MPA-OpenCl/build_cuda_cmake/_point_mersenne_20261005/probe/build.log)。[probe源码](D:/code/MPA-OpenCl/tools/test/stage2_point_mersenne_probe.cu:1)、[编译与提取](D:/code/MPA-OpenCl/tools/build/test/build_stage2_point_mersenne_probe.ps1:1)、[门禁/计时](D:/code/MPA-OpenCl/tools/test/test_stage2_point_mersenne.py:1)。
 
 ## 4. 运行约束与容量
 
@@ -91,7 +91,7 @@ native路径门禁18/0：七个Mersenne位宽61/127/521/607/1279/2203/4423 × �
 当前生产仍DCF，实验默认关闭；新路径未拟合D，不覆盖旧生产文件。重建与固定D实验：
 
 ```powershell
-tools/build/build_ecm_cuda_stage2.ps1 -Build build_cuda_cmake/point_fold_native -Arch sm_89 -GlBackend ptx -Rebuild
+tools/build/build_stage2_local.ps1 -Build build_cuda_cmake/point_fold_native -Arch sm_89 -GlBackend ptx -Rebuild
 $env:NTT_POINT_MERSENNE='1'
 build_cuda_cmake/point_fold_native/ecm_cuda_stage2.exe --save YOUR_STAGE1.save --b2 2011326186870 --d 1381380 --device 1 --results results.jsonl
 ```

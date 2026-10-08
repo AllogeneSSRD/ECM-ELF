@@ -1142,7 +1142,7 @@ constant memory 中（128 words，覆盖当前 dispatch），不改变 `S4Reduce
   batch=32 MB、async/defer=1、S5=0。比较旧/新同二进制的 elapsed、进程 wall、t_reduce、归约系数数目、
   arena overflow、因子/hit 集合与错误计数；收益只来自这组结果，不能由 MAC 数直接宣布。
 
-构建使用 `tools/build/build_stage2_tree_gpu.ps1 -Rebuild`，CUDA 编译与链接 exit=0。运行
+构建使用 `tools/build/dev/build_stage2_tree_gpu.ps1 -Rebuild`，CUDA 编译与链接 exit=0。运行
 `tools/test/test_stage2_tree_gpu.ps1 -Device 1`，**56 passed / 0 failed**；原有 50 条门禁和新增 6 条均通过。
 64/128-bit shift=0 设备边界运行也均 exit=0，所有 GMP 检查错误为 0。
 
@@ -1505,7 +1505,7 @@ runner 新增 `-Target carry_batch`（per-chunk/batch/batch/per-chunk），prove
 ### 35.2 构建与门禁记录
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_tree_gpu.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/dev/build_stage2_tree_gpu.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/test/test_stage2_tree_gpu.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench/bench_stage2_reduce_ab.ps1 `
   -Target carry_batch -Output build_cuda_cmake/_carry_batch_ab_20261002
@@ -4152,7 +4152,7 @@ GPU1 M4423/Q实际Prime95一致、extra12、B1=1000/B2=2011326186870/D1231230/P1
 
 ## 58. 独立 ecm_cuda_stage2 生产入口与可选 worktodo（2026-10-04）
 
-按用户要求从现有实验版本建立基础生产驱动。新文件 src/core/ecm_cuda_stage2_main.cpp、ecm_cuda_stage2.h、src/cuda/ecm_cuda_stage2.cu、tools/build/build_ecm_cuda_stage2.ps1；CMake提供可选ECM_BUILD_CUDA_STAGE2目标。CUDA wrapper直接包含原引擎，run_real增加可选仿射saved Q与尾部结果返回，原实验CLI保持。save路径不生成prime powers、不跑Stage1、不重复choose12；param0 only，N<=8192bits，校验和按生产writer合同验证。
+按用户要求从现有实验版本建立基础生产驱动。新文件 src/core/ecm_cuda_stage2_main.cpp、ecm_cuda_stage2.h、src/cuda/ecm_cuda_stage2.cu、tools/build/build_stage2_local.ps1；CMake提供可选ECM_BUILD_CUDA_STAGE2目标。CUDA wrapper直接包含原引擎，run_real增加可选仿射saved Q与尾部结果返回，原实验CLI保持。save路径不生成prime powers、不跑Stage1、不重复choose12；param0 only，N<=8192bits，校验和按生产writer合同验证。
 
 ini复用已有worktodo/finished/tmp_dir/log_file/device及Worker章节，加stage2_b2/d/batch_mb/arena_mb/results_file；每条记录新进程顺序运行，隔离全局owner/counters。任务成功写JSONL/finished后移除，失败保留。修复原ecm_worktodo_advance忽略first_line的问题；Stage2用一个worktodo一个独占消费者，未宣称支持共享队列并发写。中断无Stage2checkpoint，重跑可能重复，未实现PrimeNet。
 

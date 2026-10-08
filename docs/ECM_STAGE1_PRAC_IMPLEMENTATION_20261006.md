@@ -230,12 +230,12 @@ v2 到最终 exe 只修改主机结果处理和 sigma 输出，没有修改被�
 ### 10.1 独立构建
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/local_build.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage1_local.ps1 `
   -BuildDir build_cuda_cmake/prac -Arch 89 -Jobs 6 `
   -Tiers '512,1024,2560,4608,9216' -Extra '-DECM_NO_PARAM2=1'
 ```
 
-PRAC 按 small/TPI16/TPI32 拆 TU，由 [parallel_nvcc.ps1](D:/code/MPA-OpenCl/tools/build/parallel_nvcc.ps1:1) 并行编译，C++/CUDA17。首轮 CUDA 编译关键路径 207.8 s；增加 natural 实例后增量关键路径 371.2 s，另加 host/link。
+PRAC 按 small/TPI16/TPI32 拆 TU，由 [parallel_nvcc.ps1](D:/code/MPA-OpenCl/tools/build/internal/parallel_nvcc.ps1:1) 并行编译，C++/CUDA17。首轮 CUDA 编译关键路径 207.8 s；增加 natural 实例后增量关键路径 371.2 s，另加 host/link。
 
 当前实验 exe 仅含这五档；源码保留其他现有档位分派。本轮没有覆盖安装目录生产 exe。
 

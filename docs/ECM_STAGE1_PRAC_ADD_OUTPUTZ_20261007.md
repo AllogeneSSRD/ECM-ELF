@@ -45,7 +45,7 @@ GPU1为RTX4060 Laptop、24SM、sm89。实际编译命令为compute_89/sm_89；�
 
 ## 5. 构建与静态结果
 
-使用tools/build/parallel_nvcc.ps1只重编 `cgbn_stage1_prac_single_add.cu`，实测286.6秒，CMake随后仅链接，没有重编其他CUDA或host TU。新exe SHA256为 `e1f547f2c203679be3f0ddf762c04b85e5f2d643fdc9dbd7ce80bedee169c048`，候选对象SHA为 `b2d90fba5efd349a15dc0489a32ea1ee228177a413531a51a8b76b04481bf89b`，私有body SHA为 `93dbf512e0abf3737177a3b43e9c3417c2bbfcca9e06d76fe291574fd029eee1`。
+使用tools/build/internal/parallel_nvcc.ps1只重编 `cgbn_stage1_prac_single_add.cu`，实测286.6秒，CMake随后仅链接，没有重编其他CUDA或host TU。新exe SHA256为 `e1f547f2c203679be3f0ddf762c04b85e5f2d643fdc9dbd7ce80bedee169c048`，候选对象SHA为 `b2d90fba5efd349a15dc0489a32ea1ee228177a413531a51a8b76b04481bf89b`，私有body SHA为 `93dbf512e0abf3737177a3b43e9c3417c2bbfcca9e06d76fe291574fd029eee1`。
 
 七个候选entry的**完整函数文本（含指令及调度编码）与资源均相同**。这支持编译器已将U与输出Z合并的假设，不证明整个可执行文件每一部分完全一致。正常TPI16、host、dispatcher对象，以及公共算术头、compile_commands和CMakeCache SHA与构建前快照相同。
 
@@ -105,7 +105,7 @@ GPU1为RTX4060 Laptop、24SM、sm89。实际编译命令为compute_89/sm_89；�
 ## 8. 复现
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/parallel_nvcc.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/internal/parallel_nvcc.ps1 `
   -BuildDir build_cuda_cmake/prac -Only 'cgbn_stage1_prac_single_add\.cu$' -Jobs 6
 python tools/test/test_prac_disjoint_add.py --output docs/data/outputz_model.json
 python tools/test/test_prac_single_add.py --output docs/data/outputz_roles.json

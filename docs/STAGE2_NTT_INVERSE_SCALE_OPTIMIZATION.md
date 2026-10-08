@@ -104,11 +104,11 @@ warp forward/inverse 均 REG40/STACK0/LOCAL0；普通 shared forward/inverse REG
 ## 7. 复现与接续
 
 ```powershell
-tools/build/build_ntt_coop_probe.ps1 -Build build_cuda_cmake/ntt_scale_probe
+tools/build/test/build_ntt_coop_probe.ps1 -Build build_cuda_cmake/ntt_scale_probe
 python tools/bench/bench_ntt_scale.py --exe build_cuda_cmake/ntt_scale_probe/ntt_coop_outer_probe.exe --output build_cuda_cmake/ntt_scale_results --device 1
 
 # 新目录构建，不覆盖已发布产物
-tools/build/build_ecm_cuda_stage2.ps1 -Build build_cuda_cmake/ntt_scale_native
+tools/build/build_stage2_local.ps1 -Build build_cuda_cmake/ntt_scale_native
 python tools/bench/bench_stage2_save_reduce.py --exe build_cuda_cmake/ntt_scale_native/ecm_cuda_stage2.exe --save <Stage1-save> --output <fresh-directory> --device 1 --toggle scale --d 1381380 --runs 8
 ```
 

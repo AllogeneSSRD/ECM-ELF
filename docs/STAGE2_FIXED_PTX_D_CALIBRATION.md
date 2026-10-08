@@ -134,7 +134,7 @@ CPU模型80/0：profile0/2/3/4/5 × 两个B2 × 八个D，与独立整数Python 
 当前发布：[ecm_cuda_stage2.exe](D:/code/MPA-OpenCl/build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe)。编译脚本默认仍runtime；重建这个发布后端需要明确 `-GlBackend ptx`，仅设置环境变量不等价于编译特化。
 
 ```powershell
-tools/build/build_ecm_cuda_stage2.ps1 -Build build_cuda_cmake/reproduce_fixed_ptx -Arch sm_89 -GlBackend ptx -Rebuild
+tools/build/build_stage2_local.ps1 -Build build_cuda_cmake/reproduce_fixed_ptx -Arch sm_89 -GlBackend ptx -Rebuild
 build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe --save YOUR_STAGE1.save --b2 2011326186870 --device 1 --results results.jsonl
 ```
 

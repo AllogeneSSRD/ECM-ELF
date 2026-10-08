@@ -22,7 +22,7 @@
 #       [-CudaExe <montgomery build>] [-FoldExe <ECM_MERS_FOLD=1 build>] [-SkipSlow]
 #
 # The fold build must carry the tiers it is asked for: M991 -> 1024, M3217 -> 3328,
-# M4999 -> 5120 (tools\build\local_build.ps1 -BuildDir build_cuda_fold `
+# M4999 -> 5120 (tools\build\build_stage1_local.ps1 -BuildDir build_cuda_fold `
 #   -Tiers "1024,3328,4608,5120" -Extra "-DECM_MERS_FOLD=1")
 # ---------------------------------------------------------------------------
 param(
