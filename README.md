@@ -746,6 +746,8 @@ adb shell run-as com.example.ecm ls -la code_cache/opencl_cache/
 
 ### GPU-ECM `param` 与调试
 
+INI 全部配置键的默认值、可选范围和用途见 [ecm.ini 符号配置说明](docs/ECM_INI_REFERENCE.md)，包含 Stage1、Stage2、GUI 和旧别名；修改方式见 [统一配置生成维护](docs/DEV_ECM_CONFIG_SCHEMA.md)。
+
 | 文档 | 简介 |
 |------|------|
 | [docs/DEBUG_PARAMETERS_GUIDE.md](docs/DEBUG_PARAMETERS_GUIDE.md) | `cgbn_ecm_stage1` / batch 参数、`gpu_ecm()` 调试输出 |

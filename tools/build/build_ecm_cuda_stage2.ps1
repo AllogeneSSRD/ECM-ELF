@@ -20,6 +20,8 @@ $ErrorActionPreference = 'Stop'
 if (-not $PSBoundParameters.ContainsKey('AddSubMask') -and $Engine -eq 'production') { $AddSubMask = 1 }
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repo
+& cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'check_ecm_config.cmake')
+if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
 $vcvars = (Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue |
            Select-Object -First 1).FullName
 if (-not $vcvars) { throw 'vcvars64.bat not found' }
@@ -33,7 +35,11 @@ $sources = @($cudaSource, 'src/core/ecm_cuda_stage2_main.cpp',
 $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
     'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_logging.h', 'src/core/ecm_stage2_queue_state.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
     'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h',
-    'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h', 'tools/build/build_ecm_cuda_stage2.ps1')
+    'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h', 'src/core/ecm_ini.h',
+    'src/core/generated/ecm_config_generated.h', 'src/core/generated/ecm_ini_template.h',
+    'config/ecm_options.json', 'config/ecm_config.generated.json',
+    'tools/gen/generate_ecm_config.py', 'tools/build/check_ecm_config.cmake',
+    'tools/build/build_ecm_cuda_stage2.ps1')
 if ($Engine -eq 'production') {
     $deps += @(Get-ChildItem -LiteralPath 'src/cuda/stage2' -File -Filter '*.cuh' |
         Sort-Object Name | ForEach-Object { 'src/cuda/stage2/' + $_.Name })

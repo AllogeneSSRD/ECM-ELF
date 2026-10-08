@@ -884,30 +884,30 @@ struct Stage1RunOptions {
        one copy each, which is exactly the duplication this cleanup removed). */
     int      backend = 0;            // 0=auto 1=simd(强制,无 ISA 则报错) 2=gmp(标量)
     int      backend_auto_pick = -1; // 实际选中的: 1=simd 2=gmp (打印用)
-    uint32_t stage1_threads = 0;     // 0 = auto (min(#tasks, #cores)); 1 = 顺序
+    uint32_t stage1_threads = ecm_config::defaults::stage1_stage1_threads;     // 0 = auto (min(#tasks, #cores)); 1 = 顺序
     /* SIMD 域的归约方式 (两条 CPU 路径共用): IFMA_FIELD_AUTO (N=2^k-1 时用 Mersenne
        折叠, madds/模乘减半) | IFMA_FIELD_MONT (强制 Montgomery) | IFMA_FIELD_MERS. */
     int      field = IFMA_FIELD_AUTO;
     long long stage1_t0_ms = 0;      // 进度条计时起点
     uint32_t  stage1_curves = 0;     // 进度条总数
     std::vector<unsigned> affinity_cpus;   // 亲核性 (空 = 不绑定)
-    int naf_w = 0;                   // Edwards 专属: 0 = ecm_edwards_cpu 的默认窗口
+    int naf_w = ecm_config::defaults::stage1_naf_w;                   // Edwards 专属: 0 = ecm_edwards_cpu 的默认窗口
     /* Montgomery 专属: 指数约定. false = lcm(1..B1) (gmp-ecm -param 0, 本项目验收口径);
        true = 12*lcm(1..B1) (Prime95 choose12, 交给 Prime95 做 stage 2 时用). */
     bool exponent_choose12 = false;
     /* Save-file name pattern of the CPU paths (ini: save_name_pattern).  {n} = Mersenne
        exponent for N = 2^k-1 (else the bit length), {b1} = compact bound.  The reading
        side extracts B1 from the last '_' token, so keep that shape. */
-    std::string save_name_pattern = "m{n}_{b1}.save";
+    std::string save_name_pattern = ecm_config::defaults::stage1_save_name_pattern;
     int verbose = 0;
-    int device_index = 0;
+    int device_index = ecm_config::defaults::stage1_device;
     /* Curve parametrization of the GPU stage-1 path (ini: gpu_param, CLI: --gpu-param):
        3 = gmp-ecm batch (historical GPU path, save carries PARAM=3);
        2 = param2, gmp-ecm's "batch 2" 6-torsion family (save carries PARAM=2, which
            gmp-ecm reads back but Prime95 cannot; ~11% faster per curve than param0 at
            the same success rate -- docs/ECM_CGBN_OPTIMIZATION.md §5.6);
        0 = Suyama param0 (same curves as the CPU --method mont path, param0 save). */
-    int gpu_param = 3;
+    int gpu_param = ecm_config::defaults::stage1_gpu_param;
     unsigned long ckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
     std::string gpu_mul_path, gpu_sqr_path, gpu_add_path, gpu_sub_path, gpu_special_mult_path;
     bool sigma_fixed = false;
@@ -3272,8 +3272,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     }
     // Several workers appending to one screen.log interleave their lines, so workers
     // 2..N get their own default log unless the ini set log_file explicitly.
-    if (worker > 1 && !cfg.log_file_explicit && cfg.log_file == "screen.log") {
-        cfg.log_file = "screen_" + std::to_string(worker) + ".log";
+    if (worker > 1 && !cfg.log_file_explicit && cfg.log_file == ecm_config::defaults::stage1_log_file) {
+        cfg.log_file = ecm_config::worker_file(ecm_config::defaults::stage1_log_file,worker);
         ecm_ts_fprintf(stdout,
                        "note: log_file not set in %s; worker %d logs to %s instead of "
                        "screen.log (per-worker default)\n",
@@ -3630,8 +3630,8 @@ int main(int argc, char **argv){
        aliases. */
     int  backend = 0;                 // 0=auto 1=simd 2=gmp
     int  field = IFMA_FIELD_AUTO;     // IFMA_FIELD_AUTO|MERS|MONT
-    uint32_t stage1_threads = 0;      // 0 = auto
-    int  naf_w = 0;                   // Edwards NAF window; 0 = built-in default
+    uint32_t stage1_threads = ecm_config::defaults::stage1_stage1_threads;      // 0 = auto
+    int  naf_w = ecm_config::defaults::stage1_naf_w;                   // Edwards NAF window; 0 = built-in default
     bool exponent_choose12 = false;   // mont exponent: false = lcm, true = 12*lcm
     std::string affinity_spec;        // --affinity, same syntax as the ini key
     uint32_t gpucurves = 0;
@@ -3640,9 +3640,9 @@ int main(int argc, char **argv){
     bool sigma_fixed = false;
     uint32_t fixed_sigma = 0;
     uint64_t fixed_sigma64 = 0;
-    int gpu_device_index = 0;
+    int gpu_device_index = ecm_config::defaults::stage1_device;
     bool device_set = false;        /* -d given: wins over the ini's `device` */
-    int gpu_param_cli = 3;          /* --gpu-param 0|3 (0 = Suyama param0) */
+    int gpu_param_cli = ecm_config::defaults::stage1_gpu_param;          /* --gpu-param 0|3 (0 = Suyama param0) */
     bool gpu_param_set = false;
     int sigma_param_claim = -1;     /* "-sigma i:s" -> i (gmp-ecm: selects -param i) */
     bool sigma_param_set = false;
@@ -3979,7 +3979,7 @@ int main(int argc, char **argv){
         std::string ini = ini_path.empty() ? (exe_dir + "/ecm.ini")
                                            : resolve_rel_local(exe_dir, ini_path);
         int eff_device = gpu_device_index;
-        int eff_param = gpu_param_set ? gpu_param_cli : 3;
+        int eff_param = gpu_param_set ? gpu_param_cli : ecm_config::defaults::stage1_gpu_param;
         const char *ini_used = nullptr;
         EcmQueueConfig info_cfg;
         if (ecm_queue_config_load(ini, worker_index, info_cfg)) {
@@ -4156,7 +4156,7 @@ int main(int argc, char **argv){
         const std::string d = get_exe_dir_local();
         ecm_exp_cache_set_dir(d.empty() ? "." : d);
     }
-    opt.gpu_param = gpu_param_set ? gpu_param_cli : 3;
+    opt.gpu_param = gpu_param_set ? gpu_param_cli : ecm_config::defaults::stage1_gpu_param;
     opt.ckpt_ms = ckpt_ms;
     opt.gpu_mul_path = gpu_mul_path;
     opt.gpu_sqr_path = gpu_sqr_path;

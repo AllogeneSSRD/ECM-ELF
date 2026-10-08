@@ -32,6 +32,8 @@ ECMSTAGE2=1,2,3701,-1,"m3701_260e6.save",26000000000,960,10
 
 默认读取 exe 同目录 `ecm.ini`。模板为 `ecm.ini.example`；已有 INI 不会被打包脚本覆盖。隐式 INI 不存在使用内置默认，显式指定但不可读则报错。
 
+全部键的默认值、可选范围、空值语义及用途见 [配置说明](ECM_INI_REFERENCE.md)，采用 `key=<domain>; d=<default>` 配置行加逐项中文说明，包括 Stage1、Stage2、GUI 和旧别名。说明采用 undoc 式用途与取值效果描述，直接解释如何调整。仓库维护时修改 `config/ecm_options.json` 后运行生成器；流程见 [统一配置维护](DEV_ECM_CONFIG_SCHEMA.md)。用户自己的 `ecm.ini` 仍可直接编辑。
+
 Stage1 继续使用 `worktodo`、`finished`、`log_file`。Stage2 不再继承这三个键，改用：
 
 - `stage2_worktodo`：默认 `stage2_worktodo.txt`。
@@ -50,6 +52,8 @@ Stage1 继续使用 `worktodo`、`finished`、`log_file`。Stage2 不再继承�
 Stage2 INI 相对路径以 INI 目录为基准，CLI 相对路径以当前工作目录为基准；Stage1 保持原有 exe 目录规则。推荐将共用 INI 放在两个 exe 同目录，避免外部 INI 的不同路径基准产生歧义。
 
 普通 `[queue]`、`[gpu]`、`[stage2]` 标题仅供阅读，不能隔离同名键。只有 `[Worker #N]` 定义覆盖范围。Stage1 键名保持原有大小写规则；Stage2 专用解析器不区分键名大小写。CLI > worker 专用键 > 全局键 > 内置默认；B2 为 CLI 非零值 > 任务非零值 > `stage2_b2`。只有未指定非零 B2 时才考虑 Auto B2。
+
+上述普通标题规则仅适用于命令行驱动，GUI 把所有标题当作真实分区。发布模板使用注释分组，保证公共键也能被 GUI 读取；公共键应放在任何分区之前。
 
 ## 3. 数量不足与任务错误
 
@@ -102,13 +106,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\release_stage2.p
 
 ## 8. 本轮构建记录与源码入口
 
-2026-10-08完成sm_89/split6独立production构建及主机端收尾重链；最终exe为2,993,152 bytes，SHA256为 `92fd5c6b7efef55bebc8f4e07c77f29025198d2dca31ac808187d428691c91f9`。最终LF源码构建：CUDA编译104.4秒，主机端驱动编译11.5秒；此前也完成一次哈希匹配的主机端单独重链。包位于 `dist/cuda-stage2-sm89`，完整源/对象/工具链清单在构建目录 `build_cuda_cmake/release_ux_sm89/build_manifest.json`，包清单为 `package_manifest.json`。未替换历史production_stage2发布程序，未启动GPU任务，未运行功能/性能回归。
+2026-10-08首次发布体验候选（配置统一重构前）完成sm_89/split6独立production构建及主机端收尾重链；exe为2,993,152 bytes，SHA256为 `92fd5c6b7efef55bebc8f4e07c77f29025198d2dca31ac808187d428691c91f9`。最终LF源码构建：CUDA编译104.4秒，主机端驱动编译11.5秒；此前也完成一次哈希匹配的主机端单独重链。
 
-- 严格队列读取与save选择：[驱动](../src/core/ecm_cuda_stage2_main.cpp#L186)。
-- Stage2专用INI解析：[Settings及解析器](../src/core/ecm_cuda_stage2_main.cpp#L349)。
-- 结果落盘与子进程日志/中断管理：[append与child_run](../src/core/ecm_cuda_stage2_main.cpp#L497)。
-- 曲线结果回执：[curve_worker](../src/core/ecm_cuda_stage2_main.cpp#L731)。
-- 队列进度绑定、恢复与提交：[调度循环](../src/core/ecm_cuda_stage2_main.cpp#L1022)。
+同日完成配置统一重构后，Stage2通过 `-HostOnly` 复用匹配的CUDA对象并重新编译、链接：exe为2,995,712 bytes，SHA256为 `8d27c4107a7c6ccfddf83a67c040163cf7de2eef37f7b80ea98dfd161d51a389`。最终主机端编译：驱动9.2秒、表达式3.8秒、队列4.8秒、配置4.3秒。GUI编译/链接通过，exe为1,136,128 bytes。生成器 `--check`、原生CMake配置检查通过，未运行功能或GPU回归。
+
+随后按 undoc 风格为 83 个正式键和 17 个兼容别名补齐用户说明，参考文档与 INI 注释从同一 `description` 生成。当前 Stage2 包再次通过主机端编译/链接，exe为2,995,712 bytes，SHA256为 `69645f9b904c10a0d95e8ee54289873e3a3e8d2bf90911d59b71144159478a89`；编译耗时为驱动7.2秒、表达式3.4秒、队列4.0秒、配置3.6秒。中文首次启动模板以 UTF-8 字节嵌入，未运行功能或GPU回归。
+
+包位于 `dist/cuda-stage2-sm89`，完整源/对象/工具链清单在 `build_cuda_cmake/release_ux_sm89/build_manifest.json`，包清单为 `package_manifest.json`；配置定义、生成器、生成清单和头文件纳入源码哈希。
+
+- 严格队列读取与save选择：[records](../src/core/ecm_cuda_stage2_main.cpp#L170)、[queue_fields](../src/core/ecm_cuda_stage2_main.cpp#L347)。
+- Stage2专用INI解析：[生成Settings与共享解析](../src/core/ecm_cuda_stage2_main.cpp#L315)、[统一配置定义](../config/ecm_options.json)。
+- 结果落盘与子进程日志/中断管理：[append与child_run](../src/core/ecm_cuda_stage2_main.cpp#L386)。
+- 曲线结果回执：[curve_worker](../src/core/ecm_cuda_stage2_main.cpp#L620)。
+- 队列进度绑定、恢复与提交：[调度循环](../src/core/ecm_cuda_stage2_main.cpp#L911)。
 - 原子进度与回执对账：[ecm_stage2_queue_state.h](../src/core/ecm_stage2_queue_state.h)。
 - 可读日志与独立诊断：[ecm_stage2_logging.h](../src/core/ecm_stage2_logging.h)。
 - 单架构发布打包：[release_stage2.ps1](../tools/build/release_stage2.ps1)。

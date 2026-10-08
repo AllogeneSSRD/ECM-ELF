@@ -9,6 +9,17 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
+# Config schema/generator outputs carry raw SHA256; keep checkout bytes stable.
+config/ecm_options.json text eol=lf
+config/ecm_config.generated.json text eol=lf
+config/ecm.ini.default text eol=lf
+config/ecm.ini.example text eol=lf
+docs/ECM_INI_REFERENCE.md text eol=lf
+tools/gen/generate_ecm_config.py text eol=lf
+tools/build/check_ecm_config.cmake text eol=lf
+src/core/ecm_ini.h text eol=lf
+src/core/generated/*.h text eol=lf
+
 # Dataset snapshots include SHA256 of their raw bytes; checkout must preserve
 # their line endings, including CSV CRLF and JSONL LF.
 data/ecm_stage2_snapshot_20261005/** -text

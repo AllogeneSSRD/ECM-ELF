@@ -1,5 +1,6 @@
 #include "app.h"
 #include "platform.h"
+#include "../core/generated/ecm_config_generated.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"   // ImGui::DockBuilder* for the initial layout
@@ -18,7 +19,7 @@ namespace ecmgui {
 
 // Bumped whenever the default layout changes: an ini carrying an older number gets
 // the new default layout instead of keeping the old arrangement.
-static const int kLayoutVersion = 4;
+static const int kLayoutVersion = ecm_config::layout_version;
 
 namespace {
 
@@ -161,7 +162,8 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
         status_ = "new ini: " + ini_path_;
     }
 
-    loc_dir_ = ini_.get("GUI", "localization_dir");
+    const auto gui=ecm_config::read_gui(ecm_config::section_entries(ini_.lines(),"GUI"));
+    loc_dir_ = gui.localization_dir;
     if (loc_dir_.empty()) {
         loc_dir_ = default_localization_dir();
         // Running from a build directory: fall back to the source tree layout.
@@ -172,7 +174,7 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
         }
     }
 
-    language_ = language.empty() ? ini_.get("GUI", "language", "english") : language;
+    language_ = language.empty() ? gui.language : language;
     // NOTE: "the UI language cannot be drawn" is handled in ONE place now -- the font
     // layer (apply_ui_font in main_win32.cpp) tests the font it actually loaded and, if
     // the language is not drawable, calls fall_back_to_english() before the first frame
@@ -188,72 +190,32 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
         status_ = buf;
     }
 
-    refresh_hz_ = ini_.get_int("GUI", "refresh_hz", 10);
-    if (refresh_hz_ < 1) refresh_hz_ = 1;
-    if (refresh_hz_ > 60) refresh_hz_ = 60;
-    gpu_poll_ms_ = ini_.get_int("GUI", "gpu_poll_ms", 500);
-    if (gpu_poll_ms_ < 100) gpu_poll_ms_ = 100;
-    priority_ = ini_.get("GUI", "priority", "below_normal");
-
-    int rect[4] = {win_x_, win_y_, win_w_, win_h_};
-    if (parse_int_list(ini_.get("GUI", "window"), rect, 4)) {
-        win_x_ = rect[0];
-        win_y_ = rect[1];
-        win_w_ = rect[2];
-        win_h_ = rect[3];
-    }
-    layout_blob_loaded_ = unescape_blob(ini_.get("GUI", "dock_layout"));
-
-    num_workers_ = ini_.get_int("GUI", "NumWorkers", 1);
-    if (num_workers_ < 1) num_workers_ = 1;
-    if (num_workers_ > 64) num_workers_ = 64;
-    worker_exe_ = ini_.get("GUI", "exe");
+    refresh_hz_=gui.refresh_hz;
+    gpu_poll_ms_=gui.gpu_poll_ms;
+    priority_=gui.priority;
+    win_x_=gui.window[0];win_y_=gui.window[1];win_w_=gui.window[2];win_h_=gui.window[3];
+    layout_blob_loaded_=unescape_blob(gui.dock_layout);
+    num_workers_=gui.NumWorkers;
+    worker_exe_=gui.exe;
     // Font: 0 = auto (the host scales 15 px by the window DPI), or an explicit pixel
     // size; `font` names a .ttf/.ttc, empty lets the host pick (CJK font for a CJK
     // language, else a Latin system font). A FRACTIONAL size is allowed on purpose:
     // at 150 % the automatic size is 22.5 px, and rounding it changes how crisp the
     // text looks, so the user can try e.g. 23.5 or 24.
-    {
-        const std::string fs = ini_.get("GUI", "font_size", "auto");
-        if (fs != "auto" && !fs.empty()) {
-            try {
-                font_size_px_ = std::stof(fs);
-            } catch (...) {
-                font_size_px_ = 0.0f;      // unparsable -> auto
-            }
-        }
-        if (font_size_px_ < 6.0f) font_size_px_ = 0.0f;
-        if (font_size_px_ > 96.0f) font_size_px_ = 96.0f;
-        font_path_ = ini_.get("GUI", "font");
-        const std::string snap = ini_.get("GUI", "font_snap", "1");
-        font_snap_ = !(snap == "0" || snap == "off" || snap == "false" || snap == "no");
-    }
-    // Exit policy: what happens when the window is closed while workers run.
-    //   ask  (default) : confirmation modal, then checkpoint, then exit
-    //   stop           : no modal (scripts/unattended), still checkpoint, then exit
-    //   kill           : terminate immediately (the old behaviour)
-    exit_confirm_ = ini_.get("GUI", "exit_confirm", "ask");
-    if (exit_confirm_ != "stop" && exit_confirm_ != "kill") exit_confirm_ = "ask";
-    {
-        const std::string v = ini_.get("GUI", "graceful_stop_ms", "300000");
-        try {
-            long long ms = std::stoll(v);
-            if (ms < 1000) ms = 1000;
-            if (ms > 3600000) ms = 3600000;
-            graceful_stop_ms_ = static_cast<unsigned long long>(ms);
-        } catch (...) {
-            graceful_stop_ms_ = 300000;
-        }
-    }
+    font_size_px_=gui.font_size;
+    font_path_=gui.font;
+    font_snap_=gui.font_snap;
+    exit_confirm_=gui.exit_confirm;
+    graceful_stop_ms_=static_cast<unsigned long long>(gui.graceful_stop_ms);
     // Result files: [GUI] results_json / results_txt, defaulting next to the exe. The
     // JSONL is append-only (the durable record), results.txt is derived from it.
-    results_json_ = ini_.get("GUI", "results_json");
+    results_json_ = gui.results_json;
     if (results_json_.empty()) {
-        results_json_ = path_join(exe_dir(), "results.json.txt");
+        results_json_ = path_join(exe_dir(), ecm_config::defaults::gui_results_json);
     }
-    results_txt_ = ini_.get("GUI", "results_txt");
+    results_txt_ = gui.results_txt;
     if (results_txt_.empty()) {
-        results_txt_ = path_join(exe_dir(), "results.txt");
+        results_txt_ = path_join(exe_dir(), ecm_config::defaults::gui_results_txt);
     }
     // Prime95 handoff: the GUI reads these two [queue] keys itself so the notice strip can
     // say "not configured" before any worker runs, and so the two "open" buttons know
@@ -396,18 +358,24 @@ void App::rebuild_workers() {
         const std::string sec = "Worker #" + std::to_string(i);
         WorkerView w;
         w.index = i;
-        w.name = ini_.get(sec, "name", "Worker #" + std::to_string(i));
-        w.device = ini_.get_int(sec, "device", ini_.get_int("", "device", 0));
-        w.method = ini_.get(sec, "method", ini_.get("", "method", "gpu"));
-        w.gpucurves = ini_.get_int(sec, "gpucurves", ini_.get_int("", "gpucurves", 0));
-        w.worktodo = ini_.get(sec, "worktodo", ini_.get("", "worktodo", "worktodo.txt"));
-        w.log_file = ini_.get(sec, "log_file", ini_.get("", "log_file", "screen.log"));
-        if (i > 1 && !ini_.has(sec, "log_file") && !ini_.has("", "log_file")) {
-            // Mirror the driver's per-worker default (D1).
-            w.log_file = "screen_" + std::to_string(i) + ".log";
+        auto worker_entries=ecm_config::section_entries(ini_.lines(),sec);
+        if(!ini_.has(sec,"gpucurves") && ini_.has("","gpucurves"))
+            ecm_config::replace_entry(worker_entries,"gpucurves",ini_.get("","gpucurves"));
+        const auto worker=ecm_config::read_worker(worker_entries);
+        w.name=worker.name;
+        if(!ini_.has(sec,"name")) {
+            const auto token=w.name.find("{N}");
+            if(token!=w.name.npos)w.name.replace(token,3,std::to_string(i));
         }
-        w.extra_args = ini_.get(sec, "extra_args");
-        w.autostart = ini_.get_int(sec, "autostart", 0) != 0;
+        w.device=ini_.get_int(sec,"device",ini_.get_int("","device",ecm_config::defaults::stage1_device));
+        w.method=ini_.get(sec,"method",ini_.get("","method",ecm_config::defaults::stage1_method));
+        w.gpucurves=worker.gpucurves;
+        w.worktodo=ini_.get(sec,"worktodo",ini_.get("","worktodo",ecm_config::defaults::stage1_worktodo));
+        w.log_file=ini_.get(sec,"log_file",ini_.get("","log_file",ecm_config::defaults::stage1_log_file));
+        if(i>1&&!ini_.has(sec,"log_file")&&!ini_.has("","log_file"))
+            w.log_file=ecm_config::worker_file(ecm_config::defaults::stage1_log_file,i);
+        w.extra_args=worker.extra_args;
+        w.autostart=worker.autostart!=0;
         w.effective_config = effective_config_text(i);
 
         WorkerSpawn spawn;
@@ -825,7 +793,7 @@ void App::draw() {
     // stored blob predates the current layout version -- so an ini written by an older
     // build (or by the "everything stacked" first run) gets repaired instead of pinned.
     if (!layout_built_ && frame_counter_ >= 2 &&
-        (ini_.get_int("GUI", "dock_layout_ver", 0) < kLayoutVersion ||
+        (ini_.get_int("GUI", "dock_layout_ver", ecm_config::defaults::gui_dock_layout_ver) < kLayoutVersion ||
          ImGui::DockBuilderGetNode(dockspace_id) == nullptr)) {
         build_default_layout(dockspace_id);
     }
@@ -1143,7 +1111,7 @@ void App::build_default_layout(unsigned int dockspace_id) {
     // apply), so being able to open the GUI straight on it is worth one ini key -- and it is
     // also what lets a test measure the panel's controls, because a non-selected tab is
     // skipped by ImGui and reports no geometry.
-    std::string tab = ini_.get("GUI", "start_tab", "workers");
+    std::string tab = ini_.get("GUI", "start_tab", ecm_config::defaults::gui_start_tab);
     for (char &c : tab) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     const char *tab_id = (tab == "gen" || tab == "generator") ? "###gen"
                        : (tab == "detail") ? "###detail"
@@ -1544,7 +1512,7 @@ std::string App::genWorktodoPath() const {
     // worker executable's directory (what the driver does with a relative value). An absolute
     // value must NOT be prefixed again -- measured 2026-09-29 in the test sandbox:
     // "D:\...\sandbox\D:\...\sandbox\worktodo.txt" was displayed and would have been written.
-    return path_resolve(worker_dir(), ini_.get("", "worktodo", "worktodo.txt"));
+    return path_resolve(worker_dir(), ini_.get("", "worktodo", ecm_config::defaults::stage1_worktodo));
 }
 
 std::string App::p95WorktodoPath() const {

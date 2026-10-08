@@ -21,6 +21,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+& cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'check_ecm_config.cmake')
+if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
 function Resolve-RepoPath([string]$Value) {
     if ([IO.Path]::IsPathRooted($Value)) { return [IO.Path]::GetFullPath($Value) }
     return [IO.Path]::GetFullPath((Join-Path $repo $Value))
@@ -62,13 +64,15 @@ if (-not (Test-Path -LiteralPath $queue)) {
 }
 Copy-Item -LiteralPath (Join-Path $repo 'docs/ECM_CUDA_STAGE2_RELEASE.md') -Destination (Join-Path $OutDir 'README.md') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'docs/DEV_ECM_INI.md') -Destination $OutDir -Force
+Copy-Item -LiteralPath (Join-Path $repo 'docs/ECM_INI_REFERENCE.md') -Destination $OutDir -Force
+Copy-Item -LiteralPath (Join-Path $repo 'docs/DEV_ECM_CONFIG_SCHEMA.md') -Destination $OutDir -Force
 if ($Stage1Exe) {
     $Stage1Exe = Resolve-RepoPath $Stage1Exe
     if (-not (Test-Path -LiteralPath $Stage1Exe)) { throw 'Qualified Stage1 executable not found' }
     Copy-Item -LiteralPath $Stage1Exe -Destination (Join-Path $OutDir 'ecm_cuda.exe') -Force
 }
 $hashes = [ordered]@{}
-foreach ($name in @('ecm_cuda_stage2.exe','gmp-10.dll','ecm.ini.example','README.md','stage2_build_manifest.json')) {
+foreach ($name in @('ecm_cuda_stage2.exe','gmp-10.dll','ecm.ini.example','README.md','DEV_ECM_INI.md','ECM_INI_REFERENCE.md','DEV_ECM_CONFIG_SCHEMA.md','stage2_build_manifest.json')) {
     $hashes[$name] = (Get-FileHash -LiteralPath (Join-Path $OutDir $name) -Algorithm SHA256).Hash
 }
 if ($Stage1Exe) { $hashes['ecm_cuda.exe'] = (Get-FileHash -LiteralPath $Stage1Exe -Algorithm SHA256).Hash }

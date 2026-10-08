@@ -15,30 +15,6 @@
 namespace ecmgui {
 namespace {
 
-void trim(std::string &s) {
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) {
-        s.pop_back();
-    }
-    std::size_t b = 0;
-    while (b < s.size() && (s[b] == ' ' || s[b] == '\t')) ++b;
-    if (b) s.erase(0, b);
-}
-
-void strip_bom(std::string &s) {
-    if (s.size() >= 3 && static_cast<unsigned char>(s[0]) == 0xEF &&
-        static_cast<unsigned char>(s[1]) == 0xBB && static_cast<unsigned char>(s[2]) == 0xBF) {
-        s.erase(0, 3);
-    }
-}
-
-// "[GUI]" -> "GUI"; returns false when the line is not a section header.
-bool parse_section(const std::string &t, std::string &name) {
-    if (t.size() < 3 || t.front() != '[' || t.back() != ']') return false;
-    name = t.substr(1, t.size() - 2);
-    trim(name);
-    return !name.empty();
-}
-
 bool replace_file_atomic(const std::string &tmp, const std::string &dst, std::string &err) {
 #ifdef _WIN32
     if (!MoveFileExA(tmp.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING)) {
@@ -58,55 +34,9 @@ bool replace_file_atomic(const std::string &tmp, const std::string &dst, std::st
 } // namespace
 
 bool IniFile::load(const std::string &path, std::string &err) {
-    path_ = path;
-    lines_.clear();
-    loaded_ = false;
-    dirty_ = false;
-
-    std::ifstream in(path, std::ios::in | std::ios::binary);
-    if (!in.is_open()) {
-        err = "cannot open " + path;
-        return false;
-    }
-    std::string section;
-    std::string l;
-    bool first = true;
-    while (std::getline(in, l)) {
-        if (!l.empty() && l.back() == '\r') l.pop_back();
-        if (first) {
-            strip_bom(l);
-            first = false;
-        }
-        Line line;
-        line.raw = l;
-        std::string t = l;
-        trim(t);
-        std::string sec;
-        if (t.empty()) {
-            line.kind = Line::Kind::Blank;
-        } else if (t[0] == '#' || t[0] == ';') {
-            line.kind = Line::Kind::Comment;
-        } else if (parse_section(t, sec)) {
-            line.kind = Line::Kind::Section;
-            line.section = sec;
-            section = sec;
-        } else {
-            const std::size_t eq = t.find('=');
-            if (eq == std::string::npos) {
-                line.kind = Line::Kind::Other;
-            } else {
-                line.kind = Line::Kind::KeyValue;
-                line.section = section;
-                line.key = t.substr(0, eq);
-                line.value = t.substr(eq + 1);
-                trim(line.key);
-                trim(line.value);
-            }
-        }
-        lines_.push_back(line);
-    }
-    loaded_ = true;
-    return true;
+    path_=path;lines_.clear();loaded_=false;dirty_=false;
+    if(!ecm_config::read_ini(path,lines_)){err="cannot open "+path;return false;}
+    loaded_=true;return true;
 }
 
 void IniFile::reset(const std::string &path) {

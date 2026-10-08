@@ -1,4 +1,5 @@
 #pragma once
+#include "../core/generated/ecm_config_generated.h"
 
 // Application state and panels of ecm_gui (milestone M1: skeleton).
 //
@@ -64,7 +65,7 @@ struct WorkerView {
     int index = 1;                    // [Worker #N] number (also --worker N)
     std::string name;                 // [Worker #N] name= (GUI-only key)
     int device = 0;                   // effective device= after section override
-    std::string method = "gpu";
+    std::string method = ecm_config::defaults::stage1_method;
     int gpucurves = 0;
     std::string worktodo;
     std::string log_file;
@@ -305,21 +306,21 @@ private:
     std::vector<WorkerView> workers_;
     std::string ini_path_;
     std::string loc_dir_;
-    std::string language_ = "english";
+    std::string language_ = ecm_config::defaults::gui_language;
     std::string status_;
     std::string layout_blob_loaded_;
     std::string worker_exe_;              // [GUI] exe= (empty = auto)
-    float font_size_px_ = 0.0f;           // [GUI] font_size= (0 = auto)
-    bool font_snap_ = true;               // [GUI] font_snap= (PixelSnapH)
+    float font_size_px_ = ecm_config::defaults::gui_font_size;           // [GUI] font_size= (0 = auto)
+    bool font_snap_ = ecm_config::defaults::gui_font_snap;               // [GUI] font_snap= (PixelSnapH)
     std::string font_path_;               // [GUI] font= (empty = pick automatically)
     bool font_reload_requested_ = false;  // language changed: re-apply the font
     bool font_metrics_traced_ = false;
     std::vector<int> gpu_hist_reported_;   // per device: sample count at the last trace
     int selected_worker_ = 0;
-    int refresh_hz_ = 10;
-    int gpu_poll_ms_ = 500;
-    std::string priority_ = "below_normal";
-    int num_workers_ = 1;
+    int refresh_hz_ = ecm_config::defaults::gui_refresh_hz;
+    int gpu_poll_ms_ = ecm_config::defaults::gui_gpu_poll_ms;
+    std::string priority_ = ecm_config::defaults::gui_priority;
+    int num_workers_ = ecm_config::defaults::gui_NumWorkers;
     bool layout_dirty_ = false;
     bool autostart_done_ = false;
     bool quit_requested_ = false;
@@ -328,9 +329,9 @@ private:
     ExitPhase exit_phase_ = ExitPhase::Idle;
     unsigned long long exit_deadline_ms_ = 0;
     // [GUI] exit_confirm = ask | stop | kill (default ask)
-    std::string exit_confirm_ = "ask";
+    std::string exit_confirm_ = ecm_config::defaults::gui_exit_confirm;
     // [GUI] graceful_stop_ms: how long to wait for a fresh checkpoint before terminating.
-    unsigned long long graceful_stop_ms_ = 300000;
+    unsigned long long graceful_stop_ms_ = ecm_config::defaults::gui_graceful_stop_ms;
     bool layout_built_ = false;          // default dock layout applied this run
     std::string start_tab_id_;           // [GUI] start_tab -> window id of the wanted tab
     bool start_tab_applied_ = false;     // the selection was applied (see draw())
@@ -340,7 +341,7 @@ private:
     std::function<void(const std::string &)> trace_;
     std::vector<std::string> pending_trace_;
     // Main window rectangle (Win32 owns it; we persist it in [GUI] window=).
-    int win_x_ = 120, win_y_ = 80, win_w_ = 1500, win_h_ = 900;
+    int win_x_ = ecm_config::defaults::gui_window[0], win_y_ = ecm_config::defaults::gui_window[1], win_w_ = ecm_config::defaults::gui_window[2], win_h_ = ecm_config::defaults::gui_window[3];
 };
 
 } // namespace ecmgui

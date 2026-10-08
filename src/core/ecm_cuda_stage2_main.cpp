@@ -70,41 +70,8 @@ void set64(mpz_t z, uint64_t n) {
     mpz_add_ui(z, z, static_cast<unsigned long>(n & 0xffffffffu));
 }
 // Exact decimal/scientific input: no double rounding for sigma or B2.
-uint64_t u64(std::string s, const char *label) {
-    s = trim(s);
-    auto bad = [&]() { return std::runtime_error(std::string("invalid ") + label + ": " + s); };
-    if (s.empty() || s.size() > 128 || s[0] == '-') throw bad();
-    if (s[0] == '+') s.erase(0, 1);
-    int exp = 0;
-    const auto e = s.find_first_of("eE");
-    if (e != s.npos) {
-        const std::string es = s.substr(e + 1);
-        size_t pos = 0;
-        try { exp = std::stoi(es, &pos); } catch (...) { throw bad(); }
-        if (pos != es.size() || exp < -1000 || exp > 1000) throw bad();
-        s.resize(e);
-    }
-    std::string digits;
-    bool dot = false;
-    int fractional = 0;
-    for (char c : s) {
-        if (c == '.' && !dot) { dot = true; continue; }
-        if (c < '0' || c > '9') throw bad();
-        digits += c;
-        if (dot) ++fractional;
-    }
-    if (digits.empty()) throw bad();
-    Big v, scale, maximum;
-    if (mpz_set_str(v.z, digits.c_str(), 10)) throw bad();
-    const int power = exp - fractional;
-    mpz_ui_pow_ui(scale.z, 10, static_cast<unsigned long>(std::abs(power)));
-    if (power < 0) {
-        if (!mpz_divisible_p(v.z, scale.z)) throw bad();
-        mpz_divexact(v.z, v.z, scale.z);
-    } else mpz_mul(v.z, v.z, scale.z);
-    set64(maximum.z, UINT64_MAX);
-    if (mpz_cmp(v.z, maximum.z) > 0) throw bad();
-    return std::stoull(number(v.z, 10));
+uint64_t u64(std::string s,const char *label) {
+    return ecm_config::unsigned_integer(std::move(s),label);
 }
 std::string json_string(const std::string &s) {
     std::string out = "\"";
@@ -254,17 +221,16 @@ struct Options {
     bool factorize_hits = false;
     bool factor_only = false;
     bool has_gp = false, has_factor_timeout = false;
-    std::string gp = "gp.exe";
-    unsigned factor_timeout = 30;
+    std::string gp = ecm_config::defaults::stage2_stage2_gp;
+    unsigned factor_timeout = static_cast<unsigned>(ecm_config::defaults::stage2_stage2_factor_timeout);
     bool auto_b2=false,cost_device_info=false;
     std::string cost_profile;
-    uint64_t auto_min=0,auto_max=0,owner_mb=640,stage1_batch=1;
-    double stage1_seconds=0,ratio_adjust=1;
+    uint64_t auto_min=0,auto_max=0,owner_mb=ecm_config::defaults::stage2_stage2_fold_mb,stage1_batch=ecm_config::defaults::stage2_stage1_batch;
+    double stage1_seconds=ecm_config::defaults::stage2_stage1_seconds_per_curve,ratio_adjust=ecm_config::defaults::stage2_stage2_ratio_adjust;
     bool has_owner=false,has_stage1_seconds=false,has_stage1_batch=false,has_ratio=false;
 };
 double positive(const std::string &s,const char *name) {
-    size_t used=0;const double value=std::stod(s,&used);
-    if(used!=s.size()||!std::isfinite(value)||value<=0)throw std::runtime_error(std::string(name)+" must be finite and positive");return value;
+    return ecm_config::positive(s,name);
 }
 Options arguments(int argc, char **argv) {
     Options o;
@@ -304,14 +270,14 @@ Options arguments(int argc, char **argv) {
         else if (a == "--cost-device-info") o.cost_device_info=true;
         else if (a == "--auto-min-b2") o.auto_min=num();
         else if (a == "--auto-max-b2") o.auto_max=num();
-        else if (a == "--owner-budget-mb") {o.owner_mb=num();o.has_owner=true;if(o.owner_mb>1048576)throw std::runtime_error("invalid owner budget");}
-        else if (a == "--stage1-batch") {o.stage1_batch=num();o.has_stage1_batch=true;if(!o.stage1_batch||o.stage1_batch>1048576)throw std::runtime_error("invalid Stage1 batch");}
+        else if (a == "--owner-budget-mb") {o.owner_mb=num();o.has_owner=true;if(o.owner_mb>ecm_config::limits::stage2_stage2_fold_mb_maximum)throw std::runtime_error("invalid owner budget");}
+        else if (a == "--stage1-batch") {o.stage1_batch=num();o.has_stage1_batch=true;if(!o.stage1_batch||o.stage1_batch>ecm_config::limits::stage2_stage1_batch_maximum)throw std::runtime_error("invalid Stage1 batch");}
         else if (a == "--stage1-seconds-per-curve") {o.stage1_seconds=positive(value(),"Stage1 seconds");o.has_stage1_seconds=true;}
         else if (a == "--stage2-ratio-adjust") {o.ratio_adjust=positive(value(),"Stage2 ratio adjust");o.has_ratio=true;}
         else if (a == "--gp") { o.gp = value(); o.has_gp = true; }
         else if (a == "--factor-timeout") {
             const auto seconds = num();
-            if (!seconds || seconds > 600) throw std::runtime_error("factor-timeout must be 1..600 seconds");
+            if (!seconds || seconds > ecm_config::limits::stage2_stage2_factor_timeout_maximum) throw std::runtime_error("factor-timeout must be 1..600 seconds");
             o.factor_timeout = static_cast<unsigned>(seconds);
             o.has_factor_timeout = true;
         }
@@ -346,88 +312,11 @@ Options arguments(int argc, char **argv) {
     }
     return o;
 }
-struct Settings {
-    uint64_t b2 = 0, d = 0, batch = 64, arena = 0;
-    std::string results, worktodo, finished, log, progress, debug_file, save_dir;
-    bool has_worktodo=false, has_finished=false, has_log=false, debug_log=false;
-    int device=-1;
-    int log_level = -1;
-    bool factorize_hits = false;
-    bool factor_only = false;
-    std::string gp;
-    uint64_t factor_timeout = 30;
-    bool auto_b2=false,has_owner=false;
-    std::string cost_profile;
-    uint64_t auto_min=0,auto_max=0,owner_mb=640,stage1_batch=1;
-    double stage1_seconds=0,ratio_adjust=1;
-};
-Settings stage2_ini(const fs::path &path, int worker) {
-    std::ifstream in(path);
-    std::map<std::string, std::string> global, local;
-    std::string line;
-    int scope = 0;
-    while (std::getline(in, line)) {
-        line = trim(line);
-        if (comment(line)) continue;
-        if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
-        bool bracket = false;
-        const int section = ecm_worktodo_parse_worker_header(line, &bracket);
-        if (section) { scope = section; continue; }
-        if (bracket) continue;
-        const auto eq = line.find('=');
-        if (eq == line.npos || (scope && scope != worker)) continue;
-        const auto key = upper(trim(line.substr(0, eq)));
-        (scope ? local : global)[key] = trim(line.substr(eq + 1));
-    }
-    for (const auto &kv : local) global[kv.first] = kv.second;
-    Settings s;
-    auto get = [&](const char *key, uint64_t &target) {
-        if (global.count(key)) target = u64(global[key], key);
-    };
-    auto text = [&](const char *key, std::string &v, bool *present=nullptr) {
-        if(global.count(key)){v=global[key];if(present)*present=true;}
-    };
-    text("STAGE2_WORKTODO",s.worktodo,&s.has_worktodo);
-    text("STAGE2_FINISHED",s.finished,&s.has_finished);
-    text("STAGE2_LOG_FILE",s.log,&s.has_log);
-    text("STAGE2_PROGRESS_FILE",s.progress);
-    text("STAGE2_DEBUG_LOG_FILE",s.debug_file);
-    text("STAGE2_SAVE_DIR",s.save_dir);
-    auto boolean = [&](const char *key, bool fallback) {
-        if(!global.count(key))return fallback;
-        const auto v=upper(global[key]);
-        if(v=="TRUE"||v=="YES"||v=="1"||v=="ON")return true;
-        if(v=="FALSE"||v=="NO"||v=="0"||v=="OFF")return false;
-        throw std::runtime_error(std::string(key)+" must be true or false");
-    };
-    s.debug_log=global.count("STAGE2_DEBUG_LOG")?boolean("STAGE2_DEBUG_LOG",false):boolean("DEBUG_LOG",false);
-    if(global.count("STAGE2_DEVICE")) {
-        const auto v=u64(global["STAGE2_DEVICE"],"stage2_device");
-        if(v>INT_MAX)throw std::runtime_error("invalid stage2_device");s.device=static_cast<int>(v);
-    }
-    get("STAGE2_B2", s.b2); get("STAGE2_D", s.d);
-    if(global.count("STAGE2_LOG_LEVEL"))s.log_level=stage2_log::parse(global["STAGE2_LOG_LEVEL"]);
-    get("STAGE2_BATCH_MB", s.batch); get("STAGE2_ARENA_MB", s.arena);
-    uint64_t factorize=0; get("STAGE2_FACTORIZE_HITS",factorize);
-    if(factorize>1)throw std::runtime_error("stage2_factorize_hits must be 0 or 1");
-    s.factorize_hits=factorize!=0;
-    uint64_t factor_only=0; get("STAGE2_FACTOR_ONLY",factor_only);
-    if(factor_only>1)throw std::runtime_error("stage2_factor_only must be 0 or 1");
-    s.factor_only=factor_only!=0;
-    uint64_t auto_b2=0;get("STAGE2_AUTO_B2",auto_b2);
-    if(auto_b2>1)throw std::runtime_error("stage2_auto_b2 must be 0 or 1");s.auto_b2=auto_b2!=0;
-    if(global.count("STAGE2_COST_PROFILE"))s.cost_profile=global["STAGE2_COST_PROFILE"];
-    get("STAGE2_AUTO_MIN_B2",s.auto_min);get("STAGE2_AUTO_MAX_B2",s.auto_max);
-    if(global.count("STAGE2_FOLD_MB")){get("STAGE2_FOLD_MB",s.owner_mb);s.has_owner=true;}
-    if(s.owner_mb>1048576)throw std::runtime_error("invalid stage2_fold_mb");
-    get("STAGE1_BATCH",s.stage1_batch);if(!s.stage1_batch||s.stage1_batch>1048576)throw std::runtime_error("invalid stage1_batch");
-    if(global.count("STAGE1_SECONDS_PER_CURVE"))s.stage1_seconds=positive(global["STAGE1_SECONDS_PER_CURVE"],"Stage1 seconds");
-    if(global.count("STAGE2_RATIO_ADJUST"))s.ratio_adjust=positive(global["STAGE2_RATIO_ADJUST"],"Stage2 ratio adjust");
-    get("STAGE2_FACTOR_TIMEOUT",s.factor_timeout);
-    if(!s.factor_timeout || s.factor_timeout>600)throw std::runtime_error("stage2_factor_timeout must be 1..600");
-    if(global.count("STAGE2_GP"))s.gp=global["STAGE2_GP"];
-    if (global.count("STAGE2_RESULTS_FILE")) s.results = global["STAGE2_RESULTS_FILE"];
-    return s;
+using Settings=ecm_config::Stage2Values;
+Settings stage2_ini(const fs::path &path,int worker) {
+    std::vector<ecm_config::IniLine> lines;
+    ecm_config::read_ini(path.string(),lines);
+    return ecm_config::read_stage2(ecm_config::cli_entries(lines,worker,true));
 }
 std::vector<std::string> csv(const std::string &s, std::vector<bool> *quotes = nullptr) {
     std::vector<std::string> out;
@@ -861,7 +750,7 @@ int driver(Options o) {
     o.auto_b2=o.auto_b2||s.auto_b2;
     if(!o.auto_min)o.auto_min=s.auto_min;if(!o.auto_max)o.auto_max=s.auto_max;
     if(!o.has_owner){if(s.has_owner)o.owner_mb=s.owner_mb;else if(const char *v=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))o.owner_mb=ecm_stage2::cost::integer(v);}
-    if(o.owner_mb>1048576)throw std::runtime_error("invalid owner budget");
+    if(o.owner_mb>ecm_config::limits::stage2_stage2_fold_mb_maximum)throw std::runtime_error("invalid owner budget");
     if(!o.has_stage1_batch)o.stage1_batch=s.stage1_batch;
     if(!o.has_stage1_seconds)o.stage1_seconds=s.stage1_seconds;
     if(!o.has_ratio)o.ratio_adjust=s.ratio_adjust;
@@ -870,18 +759,18 @@ int driver(Options o) {
     const fs::path base = ini.parent_path();
     if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
     else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
-    const fs::path worktodo = o.worktodo.empty() ? absolute_from(base, s.has_worktodo?s.worktodo:"stage2_worktodo.txt") : absolute_from(cwd, o.worktodo);
-    const fs::path finished = absolute_from(base, s.has_finished?s.finished:"stage2_worktodo.finished.txt");
+    const fs::path worktodo = o.worktodo.empty() ? absolute_from(base, s.worktodo) : absolute_from(cwd, o.worktodo);
+    const fs::path finished = absolute_from(base, s.finished);
     const fs::path tmp = absolute_from(base, s.save_dir.empty()?cfg.tmp_dir:s.save_dir);
     const std::string suffix = o.worker == 1 ? "" : "_" + std::to_string(o.worker);
     const fs::path results = !o.results.empty() ? absolute_from(cwd, o.results) :
-        absolute_from(base, s.results.empty() ? "stage2_results" + suffix + ".jsonl" : s.results);
+        absolute_from(base, s.results.empty() ? ecm_config::worker_file(ecm_config::defaults::stage2_stage2_results_file,o.worker) : s.results);
     fs::path log;
     if (!o.log.empty()) log = absolute_from(cwd, o.log);
-    else if (!s.has_log) log = absolute_from(base, "stage2_screen" + suffix + ".log");
+    else if (!s.has_log) log = absolute_from(base, ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,o.worker));
     else if (!s.log.empty()) log = absolute_from(base, s.log);
     if(o.debug_log) {
-        if(o.debug_file.empty())o.debug_file=absolute_from(base,s.debug_file.empty()?"stage2_debug"+suffix+".log":s.debug_file).string();
+        if(o.debug_file.empty())o.debug_file=absolute_from(base,s.debug_file.empty()?ecm_config::worker_file(ecm_config::defaults::stage2_stage2_debug_log_file,o.worker):s.debug_file).string();
         else o.debug_file=absolute_from(cwd,o.debug_file).string();
     }
     const fs::path progress=s.progress.empty()?fs::path(worktodo.string()+suffix+".progress"):absolute_from(base,s.progress);
@@ -891,7 +780,7 @@ int driver(Options o) {
     if (device < 0 || (d && (d < 6 || d % 2))) throw std::runtime_error("device must be >=0; D must be even and >=6");
     const uint64_t batch = o.has_batch ? o.batch : s.batch, arena = o.has_arena ? o.arena : s.arena;
     o.arena=arena;
-    if (!batch || batch > 1048576 || arena > 1048576) throw std::runtime_error("invalid Stage2 memory budget in MB");
+    if (batch < ecm_config::limits::stage2_stage2_batch_mb_minimum || batch > ecm_config::limits::stage2_stage2_batch_mb_maximum || arena > ecm_config::limits::stage2_stage2_arena_mb_maximum) throw std::runtime_error("invalid Stage2 memory budget in MB");
     _putenv_s("NTT_FOLD_DEVICE_MAX_MB",std::to_string(o.owner_mb).c_str());
     _putenv_s("NTT_S4_BATCH_MB", std::to_string(batch).c_str());
     if (arena) _putenv_s("NTT_ARENA_CAP_KB", std::to_string(arena * 1024).c_str());

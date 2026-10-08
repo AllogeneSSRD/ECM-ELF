@@ -17,19 +17,13 @@
 
 #include <string>
 #include <vector>
+#include "../core/ecm_ini.h"
 
 namespace ecmgui {
 
 class IniFile {
 public:
-    struct Line {
-        enum class Kind { Blank, Comment, Section, KeyValue, Other };
-        Kind kind = Kind::Blank;
-        std::string raw;       // the line as it will be written back (no newline)
-        std::string section;   // owning section ("" = global) for KeyValue
-        std::string key;       // for KeyValue
-        std::string value;     // for KeyValue
-    };
+    using Line = ecm_config::IniLine;
 
     // Reads `path`. Returns false and fills `err` when the file cannot be opened.
     bool load(const std::string &path, std::string &err);

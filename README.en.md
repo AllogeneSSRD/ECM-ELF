@@ -583,6 +583,8 @@ The sections below index subdirectory docs by topic. **This README is an entry p
 
 ### GPU-ECM `param` and debugging
 
+See the [symbolic ecm.ini reference](docs/ECM_INI_REFERENCE.md) for defaults, supported values, and effects of Stage1, Stage2, GUI, and legacy keys. The [configuration maintenance guide](docs/DEV_ECM_CONFIG_SCHEMA.md) describes the shared definition and generation workflow.
+
 | Document | Summary |
 |------|------|
 | [docs/DEBUG_PARAMETERS_GUIDE.md](docs/DEBUG_PARAMETERS_GUIDE.md) | `cgbn_ecm_stage1` / batch params, `gpu_ecm()` debug output |

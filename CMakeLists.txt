@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
 project(main)
 
+# Config source, generated bindings, templates and reference must agree.
+# This native hash guard avoids a Python dependency for ordinary builds.
+include(${CMAKE_CURRENT_SOURCE_DIR}/tools/build/check_ecm_config.cmake)
+add_custom_target(ecm_config_check ALL
+    COMMAND ${CMAKE_COMMAND} "-DECM_CONFIG_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/build/check_ecm_config.cmake"
+    COMMENT "Checking generated ECM configuration")
+
 # MSVC Debug CRT (MDd) has an incompatibility with GMP's custom allocator
 # and our timestamped-log mutex contention pattern. Use Release CRT (/MD)
 # for all configurations to avoid crashes. Debug symbols still available.
@@ -10,7 +18,8 @@ if(MSVC)
     add_compile_definitions($<$<CONFIG:Debug>:_HAS_ITERATOR_DEBUGGING=0>)
 endif()
 
-# set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(OpenCL REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -652,3 +661,10 @@ else()
     add_subdirectory(src/gui)
     message(STATUS "gui: ecm_gui enabled (ImGui from ${ECM_IMGUI_DIR})")
 endif()
+
+# Explicit targets must run the guard too (not only the default ALL build).
+foreach(_ecm_config_target ecm ecm_cuda ecm_cuda_stage2 ecm_gui)
+    if(TARGET ${_ecm_config_target})
+        add_dependencies(${_ecm_config_target} ecm_config_check)
+    endif()
+endforeach()

@@ -1,4 +1,5 @@
 #include "ecm_worktodo.h"
+#include "ecm_ini.h"
 
 #include <algorithm>
 #include <cctype>
@@ -437,34 +438,7 @@ bool ecm_compute_ecm2_n(const Ecm2Task &task, mpz_t N, std::string &err) {
 }
 
 int ecm_worktodo_parse_worker_header(const std::string &line, bool *is_bracket_line) {
-    if (is_bracket_line) *is_bracket_line = false;
-    if (line.size() < 3 || line.front() != '[' || line.back() != ']') {
-        return 0;
-    }
-    if (is_bracket_line) *is_bracket_line = true;
-    const std::string body = line.substr(1, line.size() - 2);
-    std::size_t p = 0;
-    const char *kw = "worker";
-    while (p < body.size() && std::isspace(static_cast<unsigned char>(body[p]))) p++;
-    for (const char *k = kw; *k; ++k, ++p) {
-        if (p >= body.size() ||
-            std::tolower(static_cast<unsigned char>(body[p])) != *k) {
-            return 0;
-        }
-    }
-    while (p < body.size() && std::isspace(static_cast<unsigned char>(body[p]))) p++;
-    if (p >= body.size() || body[p] != '#') return 0;
-    p++;
-    while (p < body.size() && std::isspace(static_cast<unsigned char>(body[p]))) p++;
-    if (p >= body.size() || !std::isdigit(static_cast<unsigned char>(body[p]))) return 0;
-    int n = 0;
-    while (p < body.size() && std::isdigit(static_cast<unsigned char>(body[p]))) {
-        n = n * 10 + (body[p] - '0');
-        if (n > 1000000) return 0;          // absurd index -> not our header
-        p++;
-    }
-    while (p < body.size() && std::isspace(static_cast<unsigned char>(body[p]))) p++;
-    return (p == body.size()) ? n : 0;
+    return ecm_config::worker_header(line,is_bracket_line);
 }
 
 namespace {
