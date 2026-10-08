@@ -65,7 +65,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()): raise ValueError('use a fresh output directory')
     identity = freeze(exe)
-    relative = 'tools/bench/stage2_tree_gpu.cu'
+    relative = 'tools/bench/stage2_tree_gpu.cu' if 'tools/bench/stage2_tree_gpu.cu' in identity['sources'] else 'src/cuda/ecm_cuda_stage2.cu'
     source = exe.parent / 'sources' / relative
     if sha(source) != identity['sources'][relative]: raise ValueError('frozen source changed')
     text = source.read_text()

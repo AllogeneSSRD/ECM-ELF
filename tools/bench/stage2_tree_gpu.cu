@@ -9803,7 +9803,8 @@ struct BatchedRun {
        affine conversion of every giant point, section 31.4/38). */
     double t_pre_loop = 0.0, t_loop_wall = 0.0, t_post_loop = 0.0, t_gleaves = 0.0;
     /* the one pass over H that removes the projective scale (section 42) */
-    double t_gscale = 0.0;
+    double t_gscale = 0.0, t_post_prepare = 0.0;
+    double t_post_end = 0.0, t_return_finalize = 0.0;
     PlainScaleStats gscale;
     /* ---- THE PROJECTIVE BOOKKEEPING MUST BE EXACTLY SELF-CONSISTENT ----------------------
        The factor set CANNOT validate Gamma: any invertible Gamma gives the same gcds, so a
@@ -10011,9 +10012,10 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         if (k < P) k = P;
         pts_per_chunk = P * ((k + P - 1) / P);
     }
+    // One continuous interval includes chunk-local destruction between iterations.
+    const double t_loop_begin = now_s();
+    R.t_pre_loop = t_loop_begin - t_entry;
     for (unsigned long long c0 = 0; c0 < imax; c0 += pts_per_chunk) {
-        if (c0 == 0) R.t_pre_loop = now_s() - t_entry;
-        const double tloop0 = now_s();
         const unsigned long long c1 = ((imax - c0) < pts_per_chunk) ? imax : (c0 + pts_per_chunk);
         const size_t clo = (size_t)(c0 + 1), chi = (size_t)c1;
         const double tgp = now_s();
@@ -10432,8 +10434,9 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                         L.arena ? L.arena->overflow : 0ull);
         }
         }
-        R.t_loop_wall += now_s() - tloop0;
     }
+    R.t_post_loop=now_s();
+    R.t_loop_wall = R.t_post_loop - t_loop_begin;
     ScaledRootDeviceStats root_device;
     std::vector<unsigned long long> prepared_root;
     root_device.requested=gscale_flag("NTT_SCALED_ROOT_DEVICE");
@@ -10512,7 +10515,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     R.proj_segments = proj_segments;
     R.proj_fallbacks = proj_fallbacks;
     mpz_clear(Ginv);
-    R.t_post_loop = now_s();
+    R.t_post_prepare = now_s()-R.t_post_loop;
 
     /* ---- 3. ONE descent of H against the F tree: H(x_j) at every baby point ------------ */
     const double td0 = now_s();
@@ -10933,8 +10936,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 R.hit_blocks, R.hit_leaves, R.named_searches, R.candidates_tested, R.unnamed,
                 R.t_scan, R.t_ladder, R.t_name, name_max());
     mpz_clears(g, pg, nullptr);
-    /* close the books (section 41): pre + loop_wall + post must equal the caller's `elapsed` */
-    R.t_post_loop = now_s() - R.t_post_loop;
+    // The caller extends post through local destruction, final oracle drain
+    // and result merging. Keep its measured endpoint separate from subphases.
     /* the device-side counters: how much of the orchestration actually happened once */
     const auto &dl=R.device_leaf;
     std::printf("device_gleaf: requested_chunks=%llu chunks=%llu fallback_chunks=%llu groups=%llu bad_groups=%llu good_segments=%llu device_trees=%llu device_leaf_words=%llu patch_words=%llu group_d2h_bytes=%llu bad_segment_d2h_bytes=%llu bad_point_d2h_bytes=%llu avoided_point_d2h_bytes=%llu avoided_segment_d2h_bytes=%llu avoided_leaf_h2d_bytes=%llu coord_peak_bytes=%llu group_peak_bytes=%llu checked_groups=%llu checked_leaf_words=%llu t_prepare=%.6f t_invert=%.6f t_fill=%.6f\n",
@@ -10953,6 +10956,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         R.arena_overflow = L.arena->overflow;
         R.arena_mb = L.arena->mb();
     }
+    R.t_post_end = now_s();
+    R.t_post_loop = R.t_post_end - R.t_post_loop;
     return R;
 }
 
@@ -11761,6 +11766,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 BR.tail.factors.push_back(s);
         if (saved_result) *saved_result = BR.tail;
         const double el = now_s() - t0;
+        BR.t_return_finalize = t0 + el - BR.t_post_end;
+        BR.t_post_loop += BR.t_return_finalize;
         std::string fs2, ps2;
         for (size_t i = 0; i < BR.tail.factors.size(); ++i) { if (i) fs2 += ","; fs2 += BR.tail.factors[i]; }
         for (size_t i = 0; i < BR.tail.hit_primes.size(); ++i) { if (i) ps2 += ","; ps2 += std::to_string(BR.tail.hit_primes[i]); }
@@ -11823,6 +11830,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
            part of the loop body that no phase timer owned is the host affine conversion of the
            giant points (`gleaves`).  loop_host = loop_wall - giant - gtrees - fold - gleaves is
            then everything else the host does inside the loop with the device idle. */
+        std::printf("real_batched_prepare: post_fold_to_descent=%.6f gamma=%.6f return_finalize=%.6f\n",BR.t_post_prepare,BR.t_gscale,BR.t_return_finalize);
         std::printf("real_batched_wall: pre=%.3f loop_wall=%.3f post=%.3f sum=%.3f (elapsed=%.2f) "
                     "| gleaves=%.3f loop_host=%.3f\n", BR.t_pre_loop, BR.t_loop_wall, BR.t_post_loop,
                     BR.t_pre_loop + BR.t_loop_wall + BR.t_post_loop, el, BR.t_gleaves,
@@ -12373,6 +12381,8 @@ static int run_check_F(const char *path, const char *gpu_dump_path, bool evaluat
         BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad);
         s4_oracle_drain(red);
         const double elapsed = now_s() - t0;
+        BR.t_return_finalize = t0 + elapsed - BR.t_post_end;
+        BR.t_post_loop += BR.t_return_finalize;
         L.arena = nullptr;
         const unsigned long long ntt_calls_b = L.ntt_calls - ntt_before;
         const double ntt_s_b = L.ntt_seconds - ntt_s_before;

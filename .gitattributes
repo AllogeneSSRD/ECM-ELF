@@ -84,3 +84,4 @@ tools/test/test_stage2_wide_native.py text eol=lf
 tools/bench/bench_stage2_gscale.py text eol=lf
 src/cuda/stage2/scale_plain.cuh text eol=lf
 tools/test/test_stage2_scaled_root_reverse.py text eol=lf
+tools/test/test_stage2_production_root.py text eol=lf

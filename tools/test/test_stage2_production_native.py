@@ -29,6 +29,7 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--device',type=int,default=1)
     p.add_argument('--gscale-check',action='store_true',help='Check every resident corrected H word and Gamma corruption at all log levels')
+    p.add_argument('--root-check',action='store_true',help='Check the complete resident root, GMP scaled states and five-level root corruption rejection')
     a=p.parse_args();exe=a.exe.resolve();out=a.output.resolve()
     out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('use a fresh gate directory')
@@ -50,6 +51,7 @@ def main():
     clean={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     clean['CUDA_LAUNCH_BLOCKING']='0'
     if a.gscale_check:clean['NTT_GSCALE_DEVICE_CHECK']='1'
+    if a.root_check:clean.update(NTT_SCALED_ROOT_CHECK='1',NTT_SCALED_CHECK='1')
     ini=out/'manual.ini';ini.write_text('[gpu]\ndevice='+str(a.device)+'\n',encoding='utf-8')
     report=dict(identity=identity,runs=[],protocols=[],rejections=[],complete=False,formal_performance_samples=0)
     def persist():
@@ -91,6 +93,16 @@ def main():
                 if scale['requested']!='1':raise ValueError('production GPU Gamma policy absent')
                 if scale['enabled']=='1' and int(scale['checked_words'])!=int(scale['coefficients'])*((n.bit_length()+63)//64):raise ValueError('full corrected H not checked')
                 row['gscale']=scale
+            if a.root_check:
+                root_stats=fields(text,'scaled_root_device');scaled=fields(text,'scaled_descent')
+                if root_stats['requested']!='1':raise ValueError('production resident root policy absent')
+                if root_stats['enabled']=='1' and int(root_stats['checked_words'])!=int(root_stats['coefficients'])*((n.bit_length()+63)//64):raise ValueError('complete root check missing')
+                if scaled['checked_states']!=scaled['states'] or scaled['checked_words']!=scaled['words']:raise ValueError('GMP scaled node coverage incomplete')
+                ledger=fields(text,'real_batched_wall')
+                elapsed=float(re.search(r'real_batched_wall:.*\(elapsed=([0-9.]+)\)',text)[1])
+                if abs(float(ledger['sum'])-elapsed)>0.03:raise ValueError('post-fold wall ledger not closed')
+                if abs(float(ledger['sum'])-float(fields(text,'stage2_full_wall')['main']))>0.003:raise ValueError('precise main ledger not closed')
+                row.update(root=root_stats,scaled=scaled,ledger=ledger)
         # Checks above run at every verbosity; corruption gates below prove their verdicts survive filtering.
         if level=='quiet' and (text.strip() or stdout.strip()):raise ValueError('quiet leaked progress')
         if level!='debug' and re.search(r'^(tree_level|descent_progress|mont_selftest|s4_div_check):',text,re.M):
@@ -126,6 +138,13 @@ def main():
             text=log.read_text(encoding='utf-8')
             if result.exists() or 'Gamma device GMP mismatch' not in text:raise ValueError('filtered Gamma corruption accepted')
             row['log_sha256']=sha(log);report['rejections'].append(row);persist()
+    if a.root_check:
+        for level in ('quiet','curve','phases','batches','debug'):
+            result=out/('bad_root_'+level+'.jsonl');log=out/('bad_root_'+level+'.log')
+            row,_=call('bad_root_'+level,['--save',full['save'],'--b2','13230','--d','210','--device',str(a.device),
+                '--results',str(result),'--log',str(log),'--log-level',level],{'NTT_SCALED_ROOT_TEST_BAD':'1'},code=2)
+            if result.exists() or 'scaled root device mismatch' not in log.read_text():raise ValueError('filtered root corruption accepted')
+            row['log_sha256']=sha(log);report['rejections'].append(row);persist()
     # Real wide queue: optional B2/skip/count selects only record 2; Worker logging overrides global.
     saves=out/'three.save';line=Path(full['save']).read_text();saves.write_text(line*3)
     queue=out/'worktodo.txt';task='ECMSTAGE2=1,2,16384,-15,"three.save",13230,1,1'
@@ -147,11 +166,18 @@ def main():
                       ('NTT_GIANT_SEED_PAIR','0'),('NTT_GIANT_BASE_CPU','1'),('NTT_FUSE_T','11'),
                       ('NTT_FOLD_OWNER_REUSE','0')]
     if a.gscale_check:obsolete += [('NTT_GSCALE_DEVICE','0'),('NTT_GSCALE_DEVICE_TEST','1')]
+    if a.root_check:obsolete += [('NTT_SCALED_ROOT_DEVICE','0'),('NTT_SCALED_ROOT_TEST','1'),('NTT_SCALED_ROOT_CHECK','2'),('NTT_SCALED_ROOT_TEST_BAD','2')]
     for key,value in obsolete:
         queue.write_text(task+'\n');before=queue.read_bytes();result=out/(key+'.jsonl')
         row,text=call(key,['--ini',str(qini),'--once','--results',str(result)],{key:value},code=2)
         if queue.read_bytes()!=before or result.exists() or 'requires '+key not in text:raise ValueError('unsafe configuration transaction')
         report['rejections'].append(row);persist()
+    if a.root_check:
+        for bad,check in (('NTT_SCALED_ROOT_TEST_BAD','NTT_SCALED_ROOT_CHECK'),('NTT_GSCALE_DEVICE_TEST_BAD','NTT_GSCALE_DEVICE_CHECK')):
+            queue.write_text(task+'\n');before=queue.read_bytes();result=out/(bad+'_unchecked.jsonl')
+            row,text=call(bad+'_unchecked',['--ini',str(qini),'--once','--results',str(result)],{bad:'1',check:'0'},code=2)
+            if queue.read_bytes()!=before or result.exists() or 'requires '+check not in text:raise ValueError('unchecked poison entered queue transaction')
+            report['rejections'].append(row);persist()
     row,text=call('bad_level',['--log-level','verbose'],code=2)
     if 'log level must' not in text:raise ValueError('invalid verbosity accepted')
     report['rejections'].append(row)

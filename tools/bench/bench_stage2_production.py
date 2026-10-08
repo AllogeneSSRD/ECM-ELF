@@ -46,6 +46,7 @@ def main():
     p.add_argument('--case',choices=('generic8193','m16381','generic16384'),
                    help='Restrict timing-wide to one predeclared valid input for diagnosis; default tests all three')
     p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--resident-root',action='store_true',help='Require the candidate resident root and closed post-fold ledger; baseline may predate the feature')
     p.add_argument('--resume-gates',action='store_true',help='Preserve verified gate rows and recover a completed raw invocation after a collector-only rejection')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()) and not a.resume_gates:raise ValueError('use a fresh output directory')
@@ -154,8 +155,19 @@ def main():
             chain_points=sum(v for v in parts if v>=32768)
             if sum(int(v['points']) for v in affine)!=chain_points or any(int(v['mismatches']) for v in affine):raise ValueError('chain affine check incomplete')
         coverage=fields(text,'s4_multiply_stats')
+        root_stats=fields(text,'scaled_root_device') if 'scaled_root_device:' in text else {}
+        ledger=fields(text,'real_batched_wall')
+        preparation=fields(text,'real_batched_prepare') if 'real_batched_prepare:' in text else {}
+        if a.resident_root and key=='candidate':
+            if root_stats.get('requested')!='1':raise ValueError('candidate root policy missing')
+            if c['unit'] and root_stats.get('enabled')!='1':raise ValueError('candidate resident root did not execute')
+            if root_stats.get('checked_words')!='0' or root_stats.get('check_d2h_bytes')!='0':raise ValueError('diagnostic root copies in cross-build matrix')
+            elapsed=float(re.search(r'real_batched_wall:.*\(elapsed=([0-9.]+)\)',text)[1])
+            if abs(float(ledger['sum'])-elapsed)>0.03:raise ValueError('candidate wall ledger not closed')
+            if abs(float(ledger['sum'])-float(fields(text,'stage2_full_wall')['main']))>0.003:raise ValueError('candidate precise main ledger not closed')
+            if float(preparation.get('return_finalize','-1'))<0:raise ValueError('candidate finalization interval missing')
         row=dict(name=name,case=c['name'],key=key,category=category,command=cmd,environment={k:v for k,v in use.items() if k.startswith('NTT_') or k=='CUDA_LAUNCH_BLOCKING'},
-                 result=r,leaf=fields(text,'descent_values'),pair=pair,base=base,coverage=coverage,
+                 result=r,leaf=fields(text,'descent_values'),pair=pair,base=base,coverage=coverage,root=root_stats,ledger=ledger,preparation=preparation,
                  wall=fields(text,'stage2_full_wall'),phases=fields(text,'real_batched_split'),log=str(log),log_sha256=sha(log),result_sha256=sha(result),recovered_raw=recovered)
         if category=='gate' and c['unit']:row['affine_chain_points']=chain_points;row['ladder_tail_points']=c['points']-chain_points
         data['runs'].append(row);persist();print(name,row['wall']['total'],'s',flush=True)
@@ -176,7 +188,14 @@ def main():
         summaries={}
         for c in cases:
             means={key:statistics.mean(float(r['wall']['total']) for r in data['runs'] if r['case']==c['name'] and r['key']==key and r['category']=='timing') for key in exes}
-            summaries[c['name']]=dict(full_mean_seconds=means,reduction_percent=100*(1-means['candidate']/means['baseline']))
+            timed=[r for r in data['runs'] if r['case']==c['name'] and r['category']=='timing']
+            if [r['key'] for r in timed]!=sequence:raise ValueError('formal sequence changed')
+            group_reductions=[]
+            for lo in (0,4):
+                sub=timed[lo:lo+4]
+                gm={k:statistics.mean(float(r['wall']['total']) for r in sub if r['key']==k) for k in exes}
+                group_reductions.append(100*(1-gm['candidate']/gm['baseline']))
+            summaries[c['name']]=dict(full_mean_seconds=means,reduction_percent=100*(1-means['candidate']/means['baseline']),groups_reduction_percent=group_reductions)
         data['summary']=summaries if a.mode=='timing-wide' else summaries[cases[0]['name']]
     verify();data.update(complete=True,passed=len(data['runs']),failed=0);persist()
     print(json.dumps(data.get('summary',dict(passed=data['passed']))),flush=True)

@@ -1,4 +1,4 @@
-"""Prepare / collect administrator NCU for S4 or resident Gamma correction.
+"""Prepare / collect administrator NCU for S4, Gamma or resident root preparation.
 
 Skip the first S4 arithmetic selftest and select the next exact NW256/plain
 kernel. The saved input and complete output / check coverage are bound to a
@@ -39,7 +39,18 @@ def main():
     if not ref['complete']: raise ValueError('unprofiled reference is incomplete')
     case = next(c for c in ref['cases'] if c['name'] == ('generic16384' if a.kind=='reduce' else 'm4423_large'))
     identity = helper.freeze(exe)
-    if a.kind in ('gscale','root-reverse'):
+    if a.kind=='root-reverse':
+        if ref['identity'].get('binary_sha256')==identity['binary_sha256']:
+            if ref['identity']!=identity:raise ValueError('root binary identity changed')
+            key='device';expected=next(r for r in ref['runs'] if r.get('case')==case['name'] and r.get('mode')==1 and r['category']=='timing')
+        else:
+            key=next((k for k,v in ref['identity'].items() if v['binary_sha256']==identity['binary_sha256']),None)
+            if key is None:raise ValueError('root binary not in reference matrix')
+            expected=next(r for r in ref['runs'] if r['case']==case['name'] and r['key']==key and r['category']=='timing')
+        if expected['root']['enabled']!='1':raise ValueError('reference resident root absent')
+        grid=(int(expected['root']['coefficients'])*((int(expected['result']['N_hex'],16).bit_length()+63)//64)+255)//256
+        kernel='_Z26scaled_root_reverse_kernel';name_pattern=r'scaled_root_reverse_kernel'
+    elif a.kind=='gscale':
         if ref['identity']!=identity:raise ValueError('Gamma binary not in reference matrix')
         key='device'
         expected=next(r for r in ref['runs'] if r.get('case')==case['name'] and r.get('mode')==1 and r['category']=='timing')
@@ -47,11 +58,6 @@ def main():
         grid=(int(expected['scale']['coefficients'])+127)//128
         kernel='_Z22s2g_plain_scale_kernelILi128EE'
         name_pattern=r's2g_plain_scale_kernel<(?:\(int\))?128>'
-        if a.kind=='root-reverse':
-            if ref.get('target')!='scaled-root' or expected['root']['enabled']!='1':raise ValueError('reference resident root absent')
-            grid=(int(expected['root']['coefficients'])*((int(expected['result']['N_hex'],16).bit_length()+63)//64)+255)//256
-            kernel='_Z26scaled_root_reverse_kernel'
-            name_pattern=r'scaled_root_reverse_kernel'
     else:
         key = next((k for k, v in ref['identity'].items() if v['binary_sha256'] == identity['binary_sha256']), None)
         if key is None: raise ValueError('binary not in the reference matrix')

@@ -10,6 +10,8 @@
 
 Auto B2已有经验证的4acc/v1窄范围组合；后续全范围验证虽然算术和收益排名通过，但耗时精度失败，没有导出新cprof。[当前发布边界](D:/code/MPA-OpenCl/docs/STAGE2_AUTO_B2_G1_EXACT_TREE.md:302)。
 
+当前驻留下降根已接入独立生产源码，功能、搬运及完整计时总账验收通过，生产整曲线收益尚未稳定；末尾“生产接入与完整收尾计时”记录本阶段状态。各带日期段落是当时的测量快照，发布包893与旧Auto B2成本范围仍保持。
+
 ## 编译与直接读档
 
 在仓库根目录执行：
@@ -661,3 +663,69 @@ python tools/bench/bench_stage2_gscale.py --target scaled-root `
   --save build_cuda_cmake/_fixed_d_20261005/native_accept/m4423.save `
   --mode timing --output run/scaled_root_timing
 ```
+
+## 2026-10-08 驻留下降根生产接入与完整收尾计时（候选验收）
+
+### 实现与当前证据
+
+生产 [scaled_root_reverse_kernel](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5133) 和 [FoldDeviceState::scaled_root](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5356) 已接入独立CU；沿用上一节的普通域根公式、死G/reverse与T槽、24B元数据和必要回退。生产固定请求驻留根，不提供旧根算法的选择开关；开发保留同二进制0/1对照。生产仍无tools/bench编译依赖，五级日志/错误及队列合同保持。
+
+初版production_r0为ed977be379d1369523aff8a6ded08984bb728f7fab70b0fa3d0fda873939e7c1，CUDA126.0秒/split6；26raw依赖、5对象冻结。初版原生47/0，追加六个CPU/GMP Stage1位宽后完整53/0；小规模完整根和独立GMP scaled节点、非单位1019/2621、短2/66、预算/分配回退、五级实际毒化和queue保护通过。反转映射216/0、593,024 words，取自实际冻结生产CU；原有171个kernel静态REG/STACK/SHARED/LOCAL保持，新增反转REG18/其余0，不能据此声称整个机器码或周期保持。
+
+初版跨生产chain/短尾诊断12/0，包含完整块加65点尾段；该矩阵带完整仿射检查，属于正确性证据。补充小门禁在该诊断期间执行，均非正式性能样本。开发计时回归被主动中断并保留不完整记录，后续改为串行重跑；没有把它纳入已完成门禁。正式大界矩阵在候选预热后被计时总账门禁拒绝，正式样本0，不能发布本阶段提速比例。
+
+### 完整计时边界
+
+`post`从最后fold循环结束后、Gamma与根准备之前开始；新增`real_batched_prepare.post_fold_to_descent`覆盖该准备窗口，根乘法继续记入descent。两个子项有重叠，不应相加成互斥阶段；整曲线仍用stage2_full_wall。
+
+首条M4423候选预热原始日志显示pre2.327＋loop21.156＋post6.728＝30.211秒，而调用方elapsed30.25秒（精确main30.247563）。全叶指纹4244971527793015097及必需算术检查通过；collector按原0.03秒门限拒绝。原计时终点位于run_batched返回之前，漏掉了局部资源析构、最终oracle drain和结果合并等返回窗口；本次oracle累计drain仅0.000739秒，不能解释全部差额。未放宽门限，也未删掉失败预热。
+
+修正为在run_batched返回之前保存post终点，再在调用方同一main终点测量`return_finalize`并加入post；开发的两个调用点及生产调用点一致。该值是整个返回/最终化窗口，不把它全部称为cudaFree时间；无需依赖C++ NRVO。第一修正版production_r1完成M4423复现，逐word检查8,870,400根word通过，return_finalize=0.022120秒，但pre/loop/post仍与调用方相差约0.02秒。源码另有chunk内临时对象在原单块timer结束后析构；第二修正将整个giant循环改为一个连续计时区间，和pre/post共用边界，再重新编译验收。上述带诊断复现不作为性能样本。 增加与stage2_full_wall.main六位小数值比较的0.003秒门禁，初版缺0.036563秒、第一修正版仍缺0.018456秒均被该精确边界拒绝；保留原elapsed两位小数的0.03秒检查。[完整根检查工具](D:/code/MPA-OpenCl/tools/test/test_stage2_production_root.py:1)绑定完成的正式矩阵，逐word对照独立CPU组包后的旧NTT/S4根，核对额外1次乘法与P个归约系数；大规模算术共用NTT/S4，不能称为全根独立GMP证明。
+
+连续区间最终候选production_r3 SHA256=fbfc9d24ae6ec6c8baf420258cfc13d750893d3d2e2999adf9e78d62caf7ab9f，CUDA134.4秒/split6、26raw依赖；development_r2 SHAd4116c5163d39b8bbda69fa7343e6e9b6155cbacc165497af9dfd9d6ae37c555，CUDA282.0秒、28raw依赖，均5对象且原始字节冻结。生产CU新字段曾引入一个CRLF，按既有LF规则规范化后另编final候选，未用修改后的文件冒充旧构建来源。初版与最终版172个kernel的完整cuobjdump SASS输出逐字节相同（每份341,269,914B）；这是计时修正未改变GPU指令的证据，不是host机器码、周期或性能证明。
+
+最终大界诊断完整8,870,400根word通过，pre＋loop＋post=31.024秒，精确main=31.024070秒，差额0.000070秒；return_finalize=0.016387秒。3毫秒精确门禁通过；新增诊断根乘法计数也保持预期。最终生产七档原生53/0、开发回归33/0和反转映射216/0已完成，包含精确计时总账；跨生产chain/短尾12/0也已完成；32正式/8预热矩阵已按串行计划完成，结果见下一节。这条带完整根检查的诊断不作为性能样本。
+
+### 正式计时与完整根补查
+
+最终生产66bb451→fbfc9d24；每形状先baseline/candidate各一条预热，再8正式ABBA+BAAB，合计32正式/8预热。PTX3/outer0/pair1/CPUbase0/C64/min32768/owner640/reuse3/arena6300/factor-only/debug及默认检查保持，计时期间没有编译、profiler或重型trace分析。每版每形状4条正式，每组每版2条；没有置信区间，所有样本保留。
+
+- M4423大界：full均值37.82075925→37.73831500秒，减少0.21799%；两组分别增加0.32797% / 减少0.75310%。
+- generic8193：full均值5.40173025→5.40615025秒，增加0.08183%；两组分别减少0.08831% / 增加0.25281%。
+- m16381：full均值11.30973900→11.25109200秒，减少0.51855%；两组分别减少0.80979% / 减少0.22699%。
+- generic16384：full均值23.56061150→23.53559075秒，减少0.10620%；两组分别减少0.00155% / 减少0.21073%。
+
+大界为M4423/B1=1000/lcm/sigma26、D1381380/P126720/I1456028/G12；三宽为有效B1=20/sigma26保存点、D30030/P2880/I32768。完整叶指纹、因子及NTT/S4工作量与默认检查覆盖保持。大界和generic8193两组方向相反，其他两形状的差异也很小；本阶段没有建立普遍稳定整曲线提速，不能用上一节开发同binary约1.20%替代生产结果。
+
+原始样本和固定顺序分别见[大界矩阵](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_root_prod_20261008/cross_timing_final_r3/measurements.json)和[宽位矩阵](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_root_prod_20261008/cross_timing-wide_final_r3/measurements.json)。完整根工具绑定这两个完成矩阵，4/0，分别检查8,870,400 / 371,520 / 737,280 / 737,280 words，共10,716,480；最终叶值/因子保持，额外一条根乘法、一次S4 launch及P个归约系数逐项核对。它们是诊断，不混入正式计时；大规模root算术仍共用NTT/S4，小规模逐节点另有独立GMP证明。
+
+### 管理员profiler、容量与热NTT形状
+
+Systems2026.1.3两侧顺序capture/export、Compute2026.2.1 capture/collect均exit0；原验收进程真正退出、全部32正式/8预热及4根诊断完成后才启动采集。所有capture完成后再进行离线trace分析，工具/输入/binary/完整输出和检查覆盖均绑定冻结来源。
+
+实际H2D 4867次/7,151,041,651B→4866次/7,009,115,275B，少141,926,376B；D2H 6131次/3,209,120,312B→6130次/3,138,157,112B，少70,963,200B，分别精确对应16PW−24和8CW。D2D两侧40次/841,498,560B保持；reverse/scatter是kernel，不伪记为DMA。H2D累计0.542662→0.531460秒、D2H0.251822→0.246066秒，接口搬运节约并不等于相同数目的CPU等待或整曲线节约。
+
+两侧tracked设备payload峰均4,531,652,368B（4321.720474MiB）、486alloc/free、end_live0；pinned峰358,886,600B（342.260933MiB），末端缓存357,255,360B保持并由进程退出回收。200ms NVML 216/213条GPU1样本，整卡采样峰均4989MiB；模块/driver/context/local backing与其他进程不在malloc payload内，采样也不是连续峰值保证。没有将模块容量相加作为进程峰值。
+
+自身GPU事件span37.596170→37.088031秒、并集30.869870→30.844228秒、无自身事件6.726300→6.243802秒（17.89%→16.84%）。这是诊断采集窗口，不作另一套正式提速或整卡idle证明；正常匹配event-sync的API内完成后延迟最大约0.163/0.169ms，覆盖6023/6006次API，不能解释或排除未捕获的长尾。
+
+Compute实际捕获唯一reverse：device1/grid34650/block256、0.611008ms、REG18/分配24、active warp76.80%、DRAM232.54GB/s、local load/store sectors0。16-pass replay、clock/cache control none，保留系统RAM备份警告；该时间/备份容量不用于生产速度或容量认证。完整leaf/factor和S4覆盖与已完成正式参考保持。
+
+候选Systems tile累计7.991461秒、两类outer_coop合计4.386704秒。新增只读形状统计从原始demangled名字、grid和dynamic shared重建110组，绑定实际冻结launcher：tile的N=gridX·(dynamicSharedMemory/8)，cooperative outer的N=gridX·2^M·V（M8取V16，其余V32），nbatch=gridY；这是有源码依据的几何推导，不声称捕获了kernel参数或树phase。Nsight实际名字含(int)/(bool)注解，采集前用已完成trace的表结构/单行元数据纠正parser并保留原SHA，不改任何正式样本。
+
+- N=2^27/batch1/t12：tile forward74次/1.015524秒，inverse37次/0.685929秒；M8与M7 outer正逆合计2.728562秒。它是重要热形状，但不是全部NTT成本。
+- N=2^11/batch990/t11：tile forward2560次/0.511074秒，inverse1280次/0.326817秒；需要独立批量形状门禁，不能只测最大N的单batch。
+
+完整形状记录见同阶段ntt_hot_shapes.json。累计kernel时间包含启动检查/收尾，不能直接归属某棵树或与重叠phase墙钟相加。
+
+独立审计已重建全部原始门禁/样本、真实D/P/I和输入身份、两组统计、计时总账、四个完整根、26/28个raw来源与对象、管理员capture及生命周期。初次审计错误要求开发CPU对照也有逐节点GMP覆盖；保留拒绝与工具，最终严格核验17条实际开启完整GMP节点检查的开发调用，其余CPU对照的checked计数为0，并核对完整leaf与诊断额外乘法。没有削弱算术门禁或重新挑选样本。
+
+
+
+### 后续与发布边界
+
+本阶段功能与搬运验收通过，未建立普遍稳定整曲线提速。证据保存在ignored build_cuda_cmake/_stage2_root_prod_20261008；初版、失败预热、主动中断、首次审计拒绝与工具快照保留。[最终独立审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_root_prod_20261008/final_audit.json)绑定全部原始证据，evidence.zip/evidence_manifest.json保存来源、输入、日志、矩阵和trace的逐文件SHA；exe/obj/DLL在磁盘通过外部SHA绑定。Git提交前另外核对当前26/28个raw编译来源与暂存blob的逐字节身份。发布893保持，没有新Auto B2成本或较大16k形状认证；阶段验收不等于长期优化目标或完整发布资格完成。
+
+下一阶段先对实际N=2^27/batch1的M7/M8与正逆tile、N=2^11/batch990的tile进行管理员NCU诊断，按带宽/依赖/同步证据选择候选。另一个源码可行候选是将scaled下降frontier继续保留在GPU：两份owner的较小allocation容纳3PW words，可放当前frontier的PW和本层兄弟F输入最多2PW，另一份写下一层；需新增最多24P B metadata、严格预算及必要回退。若第l层真正乘法的A长度总和为M_l、输出系数总和为J_l，则相对当前根路径可省H2D 8W∑M_l减新增metadata、D2H 8W∑J_l；这是生命周期/接口量推导，尚未实现或测量。应由实际下降准备成本决定其相对NTT的优先级。
+
+完成本阶段后优先实际热点NTT。上一阶段大界trace中tile约7.99秒、两类outer_coop共约4.39秒；根反转仅约0.6毫秒。按实际length/batch/正逆变换分布选择候选，不重复全局tile11或仅凭单batch field最快配置推广。较大宽形状应使用精确P=phi(D)/2：D300300给P28800，W256 owner约393.764MiB；D600600给P57600、owner约787.514MiB，不能误当作640MiB以内驻留。上述两档仅为公式计算，尚未实际大形状运行/峰值认证。
