@@ -42,7 +42,7 @@ def main():
     p.add_argument('--outer-narrow',type=int,choices=(0,1,2,3),default=None,
                    help='Development cooperative V mask; omit for historical binaries')
     p.add_argument('--add-sub-mask',type=int,choices=(0,1,2,3),default=None,
-                   help='Verify compiled development arithmetic and its actual curve log')
+                   help='Verify compiled arithmetic and its actual curve log; production requires mask1')
     p.add_argument('--arena-mb',type=int,default=None)
     p.add_argument('--factor-only',action='store_true')
     p.add_argument('--log-level', choices=('quiet','curve','phases','batches','debug'),
@@ -58,7 +58,9 @@ def main():
     exe = a.exe.resolve(); save = a.save.resolve()
     build = json.loads((exe.parent / 'build_manifest.json').read_text(encoding='utf-8-sig'))
     if a.add_sub_mask is not None:
-        assert build.get('engine')=='development' and build.get('add_sub_mask')==a.add_sub_mask, 'Compiled arithmetic differs'
+        engine=build.get('engine')
+        assert engine in ('development','production') and build.get('add_sub_mask')==a.add_sub_mask, 'Compiled arithmetic differs'
+        assert engine!='production' or a.add_sub_mask==1, 'Production requires canonical subtraction'
     raw_sources = build['sources']
     sources = raw_sources if isinstance(raw_sources, dict) else {s.split('=',1)[0]:s.split('=',1)[1].lower() for s in raw_sources if '=' in s and (root/s.split('=',1)[0]).is_file()}
     exe_sha = hashlib.sha256(exe.read_bytes()).hexdigest()

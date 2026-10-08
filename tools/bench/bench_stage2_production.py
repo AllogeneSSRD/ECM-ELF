@@ -47,6 +47,7 @@ def main():
                    help='Restrict timing-wide to one predeclared valid input for diagnosis; default tests all three')
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--resident-root',action='store_true',help='Require the candidate resident root and closed post-fold ledger; baseline may predate the feature')
+    p.add_argument('--resident-frontier',action='store_true',help='Require the candidate fixed canonical subtraction and resident scaled descent; baseline may predate them')
     p.add_argument('--resume-gates',action='store_true',help='Preserve verified gate rows and recover a completed raw invocation after a collector-only rejection')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()) and not a.resume_gates:raise ValueError('use a fresh output directory')
@@ -55,6 +56,7 @@ def main():
     exes={k:v.resolve() for k,v in [('baseline',a.baseline),('candidate',a.candidate)]}
     identity={k:freeze(v) for k,v in exes.items()}
     if read(exes['candidate'].parent/'build_manifest.json').get('engine')!='production':raise ValueError('candidate is not production')
+    if a.resident_frontier and read(exes['candidate'].parent/'build_manifest.json').get('add_sub_mask')!=1:raise ValueError('candidate subtraction differs')
     tool_sha=sha(__file__)
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_D_MODEL='0',NTT_GIANT_SEED_PAIR='1',NTT_GIANT_BASE_CPU='0',
@@ -88,7 +90,7 @@ def main():
                     B2=2011326186870,points=1456028,unit=True,factor=0)]
         sequence=['baseline','candidate','candidate','baseline','candidate','baseline','baseline','candidate']
         categories=['warmup','timing']
-    data=dict(identity=identity,tool_sha256=tool_sha,mode=a.mode,cases=cases,sequence=sequence,runs=[],complete=False)
+    data=dict(identity=identity,tool_sha256=tool_sha,mode=a.mode,cases=cases,sequence=sequence,runs=[],complete=False,resident_frontier=a.resident_frontier)
     if a.resume_gates:
         initial=read(out/'measurements.json')
         if initial['complete'] or initial['identity']!=identity or initial['cases']!=cases or initial['sequence']!=sequence:
@@ -166,9 +168,13 @@ def main():
             if abs(float(ledger['sum'])-elapsed)>0.03:raise ValueError('candidate wall ledger not closed')
             if abs(float(ledger['sum'])-float(fields(text,'stage2_full_wall')['main']))>0.003:raise ValueError('candidate precise main ledger not closed')
             if float(preparation.get('return_finalize','-1'))<0:raise ValueError('candidate finalization interval missing')
+        front=fields(text,'scaled_frontier_device') if 'scaled_frontier_device:' in text else {}
+        if a.resident_frontier and key=='candidate':
+            if front.get('requested')!='1' or c['unit'] and front.get('enabled')!='1':raise ValueError('candidate frontier policy missing')
+            if front.get('check_d2h_bytes')!='0' or 'ntt_addsub_arithmetic: mask=1' not in text:raise ValueError('candidate diagnostics/arithmetic differ')
         row=dict(name=name,case=c['name'],key=key,category=category,command=cmd,environment={k:v for k,v in use.items() if k.startswith('NTT_') or k=='CUDA_LAUNCH_BLOCKING'},
                  result=r,leaf=fields(text,'descent_values'),pair=pair,base=base,coverage=coverage,root=root_stats,ledger=ledger,preparation=preparation,
-                 wall=fields(text,'stage2_full_wall'),phases=fields(text,'real_batched_split'),log=str(log),log_sha256=sha(log),result_sha256=sha(result),recovered_raw=recovered)
+                 wall=fields(text,'stage2_full_wall'),phases=fields(text,'real_batched_split'),frontier=front,log=str(log),log_sha256=sha(log),result_sha256=sha(result),recovered_raw=recovered)
         if category=='gate' and c['unit']:row['affine_chain_points']=chain_points;row['ladder_tail_points']=c['points']-chain_points
         data['runs'].append(row);persist();print(name,row['wall']['total'],'s',flush=True)
     def read_lines(path):

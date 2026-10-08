@@ -2,7 +2,7 @@
 
 日期：2026-10-03；量化及优化补充：2026-10-04。历史测量基线：`0cfa589`；代码行号已更新到当前尺寸策略 NTT 引擎，device leaf 性能证据见§31.5–§31.6，独立生产驱动见§32，GPU 驻留 fold 历史基线见§33，根交接见§34，组合调度见§35，当前瓶颈与候选排序见§36，开源 NTT 适配见§37，xADD6与D见§38，cooperative v2见§39，尺寸策略与新D标定见§40。§26–§31 保留各自测量基线。
 
-> **当前状态入口（2026-10-08）：**先读§69–§80及[独立生产说明](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。当前生产候选的实现位于 `src/cuda/ecm_cuda_stage2.cu` 和 `src/cuda/stage2/`；实验引擎继续位于 `tools/bench/`。已发布893最多8192位，候选支持16384位；驻留下降根生产候选已完成功能/搬运验收，但整曲线提速尚未稳定。以下早期流程图、默认开关和CPU/GPU分工属于各自历史基线：正常驻留路径已包含GPU baby、device leaf、fold、Gamma及根准备，不能将旧图中的CPU步骤当作当前执行位置。各阶段时长与模块容量按对应日期和形状读取。
+> **当前状态入口（2026-10-08）：**先读§69–§81及[独立生产说明](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。当前生产候选的实现位于 `src/cuda/ecm_cuda_stage2.cu` 和 `src/cuda/stage2/`；实验引擎继续位于 `tools/bench/`。已发布893最多8192位，候选支持16384位；§80为已完成的开发frontier验收，§81记录canonical减法和frontier的独立生产接入。以下早期流程图、默认开关和CPU/GPU分工属于各自历史基线：正常驻留路径已包含GPU baby、device leaf、fold、Gamma及根准备，不能将旧图中的CPU步骤当作当前执行位置。各阶段时长与模块容量按对应日期和形状读取。
 
 本文按一条曲线的实际执行顺序说明算法、输入输出、CPU/GPU 分工和数据生命周期。代码链接均指向当前原文件的一处入口，行号为本基线的一基行号；后续修改源码时行号可能变化。
 
@@ -2157,3 +2157,100 @@ D2H公式包含取消的根PW读回与新增最终叶PW读回，两者相消；`
 证据目录为ignored `build_cuda_cmake/_stage2_frontier_20261008`。正式矩阵的exe/source/input身份冻结，evidence.zip/evidence_manifest.json保留原始源、工具、输入、日志、矩阵与trace的逐文件SHA；exe/obj/DLL外部按SHA绑定。提交前另核对全部raw编译来源与暂存Git blob，混合换行TU不规范化。根data/与docs/data/保持忽略。
 
 复现使用新的输出目录，先以builder `-Engine development -GlBackend ptx -OuterUnrollU 0 -AddSubMask 1 -SplitCompile 6`构建。`bench_stage2_frontier.py --exe <new-exe> --reference <sub-native-complete-timing> --fixtures <wide-fixtures> --save <valid-m4423-save> --mode controls|gate|timing|timing-wide --output <fresh-output>`；两种timing模式还要求`--gate <completed-gate/measurements.json>`。完整原始输入路径、串行runner与管理员capture命令保存在本轮证据目录；不可覆盖原输出或在运行中修改collector。采集同一exe时使用`profile_stage2_points.py --add-sub-mask 1 --scaled-frontier-device 0|1`并沿用上述固定配置；正式计时结束后再执行管理员capture。审计入口为`audit_stage2_frontier.py --study <study> --profiles`，要求本节完整目录布局和实际终止证据。
+
+
+## 81. canonical减法与驻留下降frontier的独立生产接入（2026-10-08）
+
+### 81.1 固定算法、来源与回退
+
+接续76150b0已完成的开发验收，生产[NTT别名](D:/code/MPA-OpenCl/src/cuda/stage2/ntt_runtime.cuh:1)固定采用canonical减法，新增头只含已验证的减法，不编入add-only/both候选；原canonical输入/输出合同保持。生产构建必须mask1，开发仍可编译0..3用于对照。每个蝶形不增加运行时算法分支。PowerShell builder缺省production mask1，CMake的同一target也对host/CUDA同时定义mask1，避免仅CUDA更新后host沿用旧Auto成本。实际构建/运行证据来自PowerShell builder；本轮未另做完整CMake构建。
+
+生产[frontier](D:/code/MPA-OpenCl/src/cuda/stage2/scaled_frontier.cuh:1)与§80开发数学实现逐字节对应，仅修改文件说明和日志接口；[生产入口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5671)固定请求驻留下降，不提供旧下降算法的选择开关。预算、free VRAM/headroom、allocation失败、无fold owner及不可逆输入等必要回退保留。F仍在host，最终完整叶仍回到既有GCD接口；不能称为整个Stage2树全程驻留。
+
+生产exe为5f743abd18ffc81317d96d68d454806b2616d896e279895313454135b321cede，CUDA115.5秒/split6，28个raw依赖/5对象，闭包没有tools/bench来源。新增reverse gather后173个kernel；默认warp tile正逆REG40/STACK0/LOCAL0，reverse gather REG38/STACK0/LOCAL0。资源相同不等于全部GPU机器码或周期相同。生产CU的20处修改可逆回上一生产实际冻结来源，两个新header另核对已验收开发算法。
+
+旧D经验成本在本生产组合中停用，使用legacy选择；Auto B2在profile I/O前拒绝未标定的减法算术，错误说明为selected arithmetic。不能直接沿用旧cprof，也不把读取save时的Stage1沉没成本改成新的默认收益目标。
+
+### 81.2 计算、容量和验证范围
+
+数学NTT/S4工作量、分组和窗口保持；容量及接口公式沿用§80.2–80.3。W=ceil(bits/64)、P=phi(D)/2，owner加frontier metadata为(56W+24)P+56W+48 B。独立预算和free/headroom仍同时约束准入，不把模块峰相加当进程峰。
+
+[生产原生门禁](D:/code/MPA-OpenCl/tools/test/test_stage2_production_native.py:1)62项通过，包含18条实际调用、2项入口协议及42项拒绝；150组独立GMP frontier fixture、全部小形状下降节点、预算/分配/pageable回退、五级日志与实际毒化、INI/queue和16384位输入保持。开发/生产交叉13条通过，完整66240点chain加65点短尾、全叶指纹/因子/必需检查量一致。控制门禁9项通过，含production拒绝mask0/2/3/4、对象身份、HostOnly及旧Auto成本保护。初轮控制采集器漏开debug造成拒绝，保留失败后仅修复采集器日志级别，未修改CUDA算法。
+
+较大16k测试预先声明D300300/P28800/I32768、B2=300300*(32768-2)，有效B1=20/sigma26保存点，M16381和generic16384两种模数各做旧/新生产对照；generic16384另做owner0回退。合计6条容量/正确性曲线，均非正式速度样本。另4个零曲线plan分别检查D300300/P28800和D600600/P57600。W256下前者组合413582384B（394.422897MiB），后者827150384B（788.832077MiB），后者超过640MiB，只作规划边界，不执行该大形状、不承诺其NTT能分配。
+
+### 81.3 固定D正式计时与收尾状态
+
+独立旧生产fbfc9d24与本候选5f743abd比较；这是跨binary组合验收，不能将开发减法1.64%和开发frontier5.11%相加。固定PTX3/outer策略2/V0/u0、pair1/CPUbase0/C64/min32768、owner640/reuse3/arena6300、Gamma/root、factor-only和默认必需检查。四种形状各2预热、8正式ABBA+BAAB；所有样本保留，计时与编译、profiler和重型离线分析串行。
+
+全部32正式/8预热已完成，每版每形状四条曲线，无置信区间；完整叶指纹/因子和六项NTT/S4检查量保持，main账闭合误差≤0.003秒。以下百分比为耗时减少，负值为变慢。
+
+- **m4423_large**：full 40.08503825→39.28909825秒，减少1.98563%；两组-2.20604%／+6.83711%。descent 7.15575→5.21725秒。
+  baseline四条：42.169343, 43.850124, 37.160510, 37.160176。
+  candidate四条：41.548201, 46.368890, 34.628132, 34.611170。
+- **generic8193**：full 5.35734800→5.30145800秒，减少1.04324%；两组+1.54277%／+0.54281%。descent 0.39250→0.32700秒。
+  baseline四条：5.364465, 5.359879, 5.359115, 5.345933。
+  candidate四条：5.294382, 5.264510, 5.281192, 5.365748。
+- **m16381**：full 11.85013950→11.44867875秒，减少3.38781%；两组+1.56046%／+5.05832%。descent 0.52700→0.39500秒。
+  baseline四条：11.305735, 11.331778, 13.471170, 11.291875。
+  candidate四条：11.130340, 11.153923, 12.155164, 11.355288。
+- **generic16384**：full 25.42590250→25.93716150秒，减少-2.01078%；两组+4.96773%／-9.72622%。descent 1.65450→1.99225秒。
+  baseline四条：24.815866, 28.586240, 23.556853, 24.744651。
+  candidate四条：25.403812, 25.345419, 27.829532, 25.169883。
+
+大界首组基线42–44秒、候选42–46秒，后组分别约37.16/34.62秒；所有样本保留，不选后组替代整体。generic16384两侧均有长尾、两组相反，候选本批descent也增加；没有本轮正式期间的时钟/温度/CPU栈证据，不能指定WDDM或热降频为原因。M16381基线13.471170秒等慢样本使均值收益大于首组，不推广稳定3.39%。本批没有证明普遍整曲线提速，也没有证明generic16384无回退；发布893保持。
+
+原始样本见[大界](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_frontier_prod_20261008/cross_timing_r0/measurements.json)与[三宽](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_frontier_prod_20261008/cross_timing_wide_r0/measurements.json)。较大16k容量与管理员Systems/NVML收尾后补充诊断；这些不会替代上述正式结果。
+
+
+### 81.4 较大16k容量和必要回退
+
+4个plan与6条实际曲线均完成，资格验证runner正常exit0。实际几何D300300/P28800/I32768/B2=9839629800，两种模数W256。两侧所有曲线的big_peak_bytes均3221225472B（3072MiB），full_peak_bytes均3337725896B（3183.103462MiB）；这是NTT模块峰，不是完整进程VRAM。两种owner640候选均启用frontier、metadata691200B、组合413582384B，完整叶hash/因子/六项必需检查量与各自旧生产一致；generic16384 owner0候选正确回退，完整结果与旧生产一致。
+
+每版每scope仅一条容量诊断，不能据以下秒数宣称加速：M16381 owner640为35.030234→32.961205；generic16384 owner640为72.912880→66.462356；generic16384 owner0为73.297336→70.494561。有效save/Q来自独立CPU/GMP-ECM fixture，不以不同模数的绝对秒数构造位宽伸缩关系。
+
+本批较大泛型基线t_reduce21.353秒，约占full72.913秒的29.3%；较大M16381候选t_reduce0.795秒。前者是通用长除法、后者是精确梅森专用fold，不能把两种模数的性能差写成新frontier优化收益。t_reduce是包装器记录的设备时间分项，最终还需Systems核对实际kernel；它也提示后续通用宽模数的归约与NTT需分别诊断。
+
+D600600/P57600两种plan均curves_executed0，组合827150384B超过640MiB。未执行这一大形状，也没有任意B2/16k输入或全进程显存上限认证。容量原始记录为[summary.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_frontier_prod_20261008/capacity_r0/summary.json)。
+
+### 81.5 管理员Systems、真实传输与生命周期
+
+四条Systems2026.1.3 capture/export及管理员runner均exit0，GPU1，正式/容量runner真正退出后才开始；每条采集与其导出串行，全部采集终止后再进行独立trace审计。完整保存点、叶指纹、factor及默认NTT/S4覆盖绑定已完成矩阵。以下为单次插桩诊断，不替代§81.3正式均值。
+
+**M4423大界：
+
+- Host-to-Device：4866次/7009115275B→1517次/3544881147B；GPU DMA累计0.530569→0.267521秒。
+- Device-to-Host：6130次/3138157112B→4421次/1934076472B；GPU DMA累计0.245217→0.153057秒。
+- Device-to-Device：40次/841498560B→42次/843792320B；GPU DMA累计0.007434→0.007449秒。
+- tile/outer几何206组/56598次保持。tile 8.002987→7.738913秒，cooperative outer 4.407655→4.346314秒；新增reverse gather 0.119897秒。
+- tracked device payload峰4531652368→4531652368B（4321.720474→4321.720474MiB），alloc/free 486/486→487/487，end_live 0→0B。
+- tracked pinned payload峰358886600→305410344B（342.260933→291.262001MiB），alloc/free 139/133→137/131，end_live 357255360→302206240B。
+- 自身GPU事件span 36.500841→34.878782秒、并集30.882991→30.128808秒，无自身事件5.617850→4.749973秒（15.39102%→13.61852%）。不是整卡idle或另一组正式提速。
+- 200ms NVML 227/217条样本，整卡memory.used采样峰4989/4989MiB，含冷context/driver等；不是连续进程峰认证。
+- H2D净少3464234128B、D2H净少1204080640B、D2D多2293760B，全部精确匹配独立degree/window公式。
+
+**generic16384较大形状：
+
+- Host-to-Device：3731次/5275502509B→1037次/2744569725B；GPU DMA累计0.399598→0.206175秒。
+- Device-to-Host：2939次/2408666104B→1568次/1525240824B；GPU DMA累计0.186698→0.116471秒。
+- Device-to-Device：8次/68698112B→13次/70008832B；GPU DMA累计0.000562→0.000574秒。
+- tile/outer几何182组/18639次保持。tile 2.182739→2.105243秒，cooperative outer 1.153330→1.140908秒；新增reverse gather 0.368301秒。
+- tracked device payload峰4167056440→4167056440B（3974.014702→3974.014702MiB），alloc/free 413/413→414/414，end_live 0→0B。
+- tracked pinned payload峰309002504→258942216B（294.687752→246.946541MiB），alloc/free 121/115→119/113，end_live 303046656→252719104B。
+- 自身GPU事件span 67.733517→65.244319秒、并集63.185517→62.603195秒，无自身事件4.548000→2.641124秒（6.71455%→4.04805%）。不是整卡idle或另一组正式提速。
+- 200ms NVML 366/354条样本，整卡memory.used采样峰5217/5217MiB，含冷context/driver等；不是连续进程峰认证。
+- H2D净少2530932784B、D2H净少883425280B、D2D多1310720B，全部精确匹配独立degree/window公式。
+
+device payload结束均为0。pinned末端仍有全局缓存，进程退出回收，不写成全部host分配显式释放；这些payload峰不包括完整进程RAM、driver/context/module或local backing。没有把模块容量相加作为进程峰，也没有用NVML减payload来推算某项资源的精确成本。
+
+较大泛型candidate的ladder/chain/seed-pair分别23.915539/4.633046/2.482885秒，S4 reduce21.354739秒；对应baseline24.059766/4.623982/2.488857与21.353491秒。tile/outer仅约2.105/1.141秒，故这个形状后续先诊断通用宽位数点算术和S4依赖/MAC。大界则tile/outer约7.739/4.346秒、S4约1.753秒，另有4.750秒无自身GPU事件；按形状分别确定优先级，不推广一个统一瓶颈。累计kernel包含启动自检/收尾，不能与有重叠的host阶段直接相加。
+
+首次采集旧生产成功，candidate在GPU启动前被采集器拒绝：explicit arithmetic marker原仅允许development。保留失败目录/原采集器/PID和exit，修复仅放行production固定mask1并继续核对实际宏与曲线日志。旧生产trace经SHA/命令核对后保留，续跑剩余三条；每条实际collector单独快照，独立审计验证新旧collector只差identity检查与帮助文字，不用新工具SHA冒充旧采集。没有修改CUDA算法、重跑或挑选正式样本。
+
+### 81.6 审计、复现和下一阶段
+
+[独立审计工具](D:/code/MPA-OpenCl/tools/bench/audit_stage2_frontier_production.py:1)从原始日志/result/SQLite重建62原生、9控制、13交叉、32正式/8预热、4 plan/6容量曲线、28raw来源/5对象、173项资源、源码逆变换及各profiler来源/exit；验证两形状NTT几何、精确DMA公式、设备/pinned生命周期和实际NVML样本。最终quantitative.json为complete=true，413个阶段文件和48个外部来源按SHA绑定；证据根为ignored build_cuda_cmake/_stage2_frontier_prod_20261008，evidence.zip/evidence_manifest.json保存源/工具/输入/失败/日志/矩阵/trace，native exe/obj/DLL在磁盘按SHA绑定。编译来源及所有改动文件另冻结，并在提交前核对暂存Git blob。
+
+本阶段完成功能、传输与上述有限容量验收；生产固定组合尚未证明普遍稳定加速，因此发布893保持。下一阶段优先通用宽模数的点算术/S4硬件诊断，并按大界时间线继续准备/组包和NTT优化。最终叶D2H及再H2D依然存在，可先评估在owner存活期直接消费叶状态，但需明确block-product输入借用寿命、完整叶指纹/命中诊断及峰值；不能只移动释放点而引入悬空指针。最终chain/短尾策略、新D/Auto B2成本和跨曲线私有状态/总RAM与VRAM租约仍未完成。
+
+复现使用新目录：生产builder -Engine production -GlBackend ptx -OuterUnrollU 0 -SplitCompile 6（缺省AddSubMask1）；test_stage2_production_native.py增加--gscale-check --root-check --frontier-check；test_stage2_production_frontier.py对照完成的开发gate；bench_stage2_production.py使用--resident-root --resident-frontier并分别运行timing/timing-wide；bench_stage2_capacity.py只作容量诊断。精确输入/argv、串行runner与管理员capture在本阶段归档保留。审计命令audit_stage2_frontier_production.py --study <study> --profiles要求本阶段完整目录布局及真正终止凭据。没有新增本阶段NCU硬件计数或完整CMake构建证据。

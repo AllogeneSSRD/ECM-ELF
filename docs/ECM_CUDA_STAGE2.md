@@ -753,3 +753,16 @@ Compute实际捕获唯一reverse：device1/grid34650/block256、0.611008ms、REG
 ## 2026-10-08 接续：GPU驻留下降frontier开发验收
 
 开发候选复用fold owner推进scaled各层状态，新增24P B metadata并将其计入owner组合预算；最终叶仍读回现有GCD接口。15控制/26原生门禁、32正式/8预热及管理员Systems/独立审计完成。M4423大界full36.523048→34.657866秒（少5.10686%，两组同向）、descent少29.68689%；M16381 full慢1.12090%且两组反向，宽位数不宣称普遍稳定提速。实际H2D/D2H分别少3.226319/1.121387GiB，与公式精确一致；tracked设备峰保持、pinned峰少50.999MiB，无自身GPU事件5.942→4.031秒只是诊断。生产CU/发布893尚未移植；新Auto成本/较大16k容量/最终尾段/并发租约仍待推进。算法、预算、全部样本、原始拒绝及复现统一维护[步骤报告§80](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:2060)。
+
+
+## 2026-10-08 canonical减法与GPU下降frontier的独立生产组合
+
+生产CU/NTT已接入canonical减法与驻留scaled各层状态；PowerShell生产构建缺省AddSubMask1，CMake同一target也绑定host/CUDA的mask1。生产只保留减法候选，frontier固定请求，预算/分配/无owner/不可逆等必要回退保留；五级日志及INI/queue合同保持。编译闭包28raw依赖/5对象，没有tools/bench来源；候选5f743abd18ffc81317d96d68d454806b2616d896e279895313454135b321cede，CUDA115.5秒/split6。实际验收由PowerShell构建完成，本轮未另做完整CMake构建。
+
+原生62项、算术/构建控制9项、开发/生产交叉13条全部通过。另4个零曲线plan和6条较大16k容量/正确性曲线完成：D300300/P28800/I32768、M16381/generic16384、owner640及泛型owner0；NTT big峰3072MiB，两种驻留候选owner加metadata394.422897MiB，完整结果和默认检查量保持。这不是任意B2/16k或全进程峰值认证。D600600/P57600组合788.832077MiB超过640MiB，只做plan。
+
+32正式/8预热固定D跨生产A/B全部保留：M4423 full均值40.08503825→39.28909825秒（少1.98563%，两组反向）；generic8193少1.04324%；M16381少3.38781%但受基线慢样本影响；generic16384慢2.01078%且两组反向。不能把此前开发减法1.64%与开发frontier5.11%相加，也不能只挑大界后组6.84%作为整轮结果。未证明普遍提速或泛型16384无回退，发布893保持。
+
+owner加metadata容量为(56W+24)P+56W+48 B，W=ceil(bits/64)、P=phi(D)/2；F树仍在host，最终叶仍完整D2H后送入既有GCD接口。新组合关闭旧D经验scope；Auto B2在profile I/O前拒绝未标定的selected arithmetic。后续需要对最终组合重标定，而不是重新套旧cprof。
+
+全部算法、源码入口、每条正式样本、量化公式、容量边界、管理员trace和发布限制统一维护[步骤报告§81](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:2162)。四条管理员Systems和最终独立审计已完成：两形状传输差精确匹配公式，tracked设备峰保持、结束live0，pinned峰分别少50.999/47.741MiB，NVML整卡采样峰分别4989/5217MiB。较大泛型点ladder约23.92秒、S4约21.35秒，是该形状下一轮诊断重点；大界仍关注NTT和准备窗口。初次采集器拒绝及修复保留，归档与源码/Git身份核对完成后提交；长期优化目标继续。

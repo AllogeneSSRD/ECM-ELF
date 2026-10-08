@@ -90,6 +90,7 @@ namespace {
 
 #include "ntt_goldilocks_reduce.cuh"
 #include "ntt_goldilocks_ptx.cuh"
+#include "ntt_goldilocks_sub.cuh"
 #ifndef NTT_GL_SHORT_REDUCE_DEFAULT
 #define NTT_GL_SHORT_REDUCE_DEFAULT 0
 #endif
@@ -277,7 +278,7 @@ __device__ __forceinline__ unsigned long long gl_mod_dev(unsigned long long x)
 /* device-only aliases used inside kernels */
 __device__ __forceinline__ unsigned long long gl_sub_dev(unsigned long long a, unsigned long long b)
 {
-    return gl_sub(a, b);
+    return gl_sub_canonical_ptx(a, b);
 }
 
 __device__ __forceinline__ unsigned long long gl_add_dev(unsigned long long a, unsigned long long b)

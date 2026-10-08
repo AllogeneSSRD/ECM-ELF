@@ -23,7 +23,7 @@ def main():
     identity=[]
     for mask,exe in enumerate(exes):
         build=read(exe.parent/'build_manifest.json')
-        if build['add_sub_mask']!=mask or build['engine']!='development' or sha(exe)!=build['sha256'].lower():raise ValueError('build settings')
+        if build['add_sub_mask']!=mask or build['engine'] not in (('development',) if mask==0 else ('development','production')) or sha(exe)!=build['sha256'].lower():raise ValueError('build settings')
         objects={name:sha(exe.parent/'_objects'/(name+'.obj')) for name in build['objects']}
         if objects!={k:v.lower() for k,v in build['objects'].items()}:raise ValueError('object identity')
         identity.append(dict(binary_sha256=sha(exe),manifest_sha256=sha(exe.parent/'build_manifest.json'),objects=objects))
@@ -44,7 +44,7 @@ def main():
         report['runs'].append(dict(name=name,command=command,exit=proc.returncode,token=token,log_sha256=sha(dest)))
         (out/'measurements.json').write_text(json.dumps(report,indent=2)+'\n');verify()
     builder=ROOT/'tools/build/build_ecm_cuda_stage2.ps1'
-    for mask in [1,2,3,4]:
+    for mask in [0,2,3,4]:
         dest=out/f'invalid_production_m{mask}'
         command=['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(builder),'-Engine','production','-AddSubMask',str(mask),'-Build',str(dest)]
         run(f'production_m{mask}',command,1,'Production requires' if mask<4 else 'AddSubMask')
@@ -53,9 +53,9 @@ def main():
         '-GlBackend','ptx','-SplitCompile','6','-AddSubMask','1','-HostOnly','-Build',str(exes[0].parent)],1,'HostOnly requires identical CUDA')
     ini=out/'manual.ini';ini.write_text('device=1\n')
     for mask,exe in enumerate(exes):
-        common=[str(exe),'--ini',str(ini),'--save',str(a.save.resolve()),'--device','1']
+        common=[str(exe),'--ini',str(ini),'--save',str(a.save.resolve()),'--device','1','--log-level','debug']
         run(f'auto_m{mask}',common+['--auto-b2','--plan-only','--cost-profile',str(out/'absent.cprof')],2,
-            'no calibrated cost profile for experimental NTT add/sub' if mask else 'cannot lock cost profile for reading')
+            'no calibrated cost profile for selected NTT add/sub' if mask else 'cannot lock cost profile for reading')
         run(f'dplan_m{mask}',common+['--plan-only','--b2','2011326186870','--d','1381380','--arena-mb','6300'],0,
             f'ntt_addsub_arithmetic: mask={mask}')
         text=(out/f'dplan_m{mask}.log').read_text();plans=[json.loads(s) for s in text.splitlines() if s.startswith('{')]

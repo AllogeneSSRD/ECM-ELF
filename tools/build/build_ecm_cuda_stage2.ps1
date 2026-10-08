@@ -17,13 +17,14 @@ param(
     [switch]$Rebuild
 )
 $ErrorActionPreference = 'Stop'
+if (-not $PSBoundParameters.ContainsKey('AddSubMask') -and $Engine -eq 'production') { $AddSubMask = 1 }
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repo
 $vcvars = (Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue |
            Select-Object -First 1).FullName
 if (-not $vcvars) { throw 'vcvars64.bat not found' }
-if ($Engine -eq 'production' -and ($GlBackend -ne 'ptx' -or $OuterUnrollU -ne 0 -or $AddSubMask -ne 0)) {
-    throw 'Production requires -GlBackend ptx -OuterUnrollU 0 -AddSubMask 0; use -Engine development for comparisons'
+if ($Engine -eq 'production' -and ($GlBackend -ne 'ptx' -or $OuterUnrollU -ne 0 -or $AddSubMask -ne 1)) {
+    throw 'Production requires -GlBackend ptx -OuterUnrollU 0 -AddSubMask 1; use -Engine development for comparisons'
 }
 $cudaSource = if ($Engine -eq 'production') { 'src/cuda/ecm_cuda_stage2.cu' } else { 'tools/bench/ecm_cuda_stage2_dev.cu' }
 $cudaStem = [IO.Path]::GetFileNameWithoutExtension($cudaSource)

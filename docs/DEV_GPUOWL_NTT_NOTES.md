@@ -4780,3 +4780,10 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 开发候选复用fold owner保存scaled各层状态，GPU gather/reverse直接打包父状态及兄弟F；新增24P B metadata，无新增持久多项式数组，保留预算/分配/非单位/无owner等必要回退。15控制、26原生门禁及32正式/8预热完成，完整叶/GMP节点/chain＋短尾与默认检查保持。M4423大界full36.523048→34.657866秒（少5.10686%，两组同向），descent6.38750→4.49125秒（少29.68689%）。generic16384 full少4.11318%但超出descent差额，8193均值受基线长尾影响，M16381慢1.12090%且两组相反，不能推广普遍收益。
 
 管理员Systems与独立审计确认实际H2D少3464234128B、D2H少1204080640B、D2D多2293760B，精确匹配公式；206组tile/outer几何/56598次调用保持，tracked设备峰4321.720MiB不变、结束live0，pinned峰少50.999MiB。无自身GPU事件5.942→4.031秒只是单次诊断，不是整卡idle。源/工具/输入/失败/矩阵/trace归档，生产CU/发布893尚未移植；下一项独立生产整理、较大16k真实容量/宽性能、新D/Auto成本与总预算lease。完整算法、source/line、公式、全部样本和复现统一维护[步骤报告§80](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:2060)。
+
+
+## 122. Stage2减法/frontier的独立生产组合（2026-10-08）
+
+接续76150b0，独立生产固定canonical减法与GPU scaled frontier，保留必要回退及五级日志，28raw依赖/5对象无bench来源。原生62/0、控制9/0、开发交叉13/0、较大16k实际6条与plan4条完成。32正式/8预热大界均值少1.99%但两组反向，generic16384慢2.01%且两组反向；不推广开发5.11%或相加局部百分比，发布893保持。D300300/P28800/W256组合394.423MiB实际驻留，NTT big3072MiB；D600600仅plan，组合788.832MiB超过640MiB。通用大位宽S4仍重要，新Auto成本/最终尾段/总RAM与VRAM lease未完成。完整来源、全部样本、容量与收尾统一维护[步骤报告§81](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:2162)。
+
+本阶段四条管理员Systems和独立审计已完成：两形状DMA差精确吻合公式，tracked设备峰保持/end0，pinned分别少50.999/47.741MiB；NVML采样峰4989/5217MiB不作连续进程峰保证。较大泛型ladder约23.92秒、S4约21.35秒，大界tile/outer约7.74/4.35秒，下一阶段按模数/形状分别诊断。初次生产marker采集器拒绝保留并仅修复identity检查。发布893保持，长期目标继续。

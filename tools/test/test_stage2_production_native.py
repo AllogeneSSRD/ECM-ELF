@@ -30,12 +30,14 @@ def main():
     p.add_argument('--device',type=int,default=1)
     p.add_argument('--gscale-check',action='store_true',help='Check every resident corrected H word and Gamma corruption at all log levels')
     p.add_argument('--root-check',action='store_true',help='Check the complete resident root, GMP scaled states and five-level root corruption rejection')
+    p.add_argument('--frontier-check',action='store_true',help='Check resident descent nodes, budget/allocation fallbacks and five-level corruption rejection')
     a=p.parse_args();exe=a.exe.resolve();out=a.output.resolve()
     out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()):raise ValueError('use a fresh gate directory')
     mf=exe.parent/'build_manifest.json';build=json.loads(mf.read_text(encoding='utf-8-sig'))
     if build.get('engine')!='production' or build['gl_fixed_mode']!=3 or build['outer_unroll_u']!=0:
         raise ValueError('wrong production build')
+    if a.frontier_check and build.get('add_sub_mask')!=1:raise ValueError('frontier production must select canonical subtraction')
     if any(name.startswith('tools/bench/') for name in build['source_hashes']):
         raise ValueError('production depends on experiment sources')
     prepared=json.loads(a.fixtures.read_text(encoding='utf-8'))
@@ -52,6 +54,7 @@ def main():
     clean['CUDA_LAUNCH_BLOCKING']='0'
     if a.gscale_check:clean['NTT_GSCALE_DEVICE_CHECK']='1'
     if a.root_check:clean.update(NTT_SCALED_ROOT_CHECK='1',NTT_SCALED_CHECK='1')
+    if a.frontier_check:clean['NTT_SCALED_FRONTIER_CHECK']='1'
     ini=out/'manual.ini';ini.write_text('[gpu]\ndevice='+str(a.device)+'\n',encoding='utf-8')
     report=dict(identity=identity,runs=[],protocols=[],rejections=[],complete=False,formal_performance_samples=0)
     def persist():
@@ -88,6 +91,14 @@ def main():
             if case['unit'] and leaf['hash']!=case['expected_leaf_hash'][str(count)]:
                 raise ValueError('independent complete monic fingerprint mismatch')
             row['leaf']=leaf
+            if a.frontier_check:
+                front=fields(text,'scaled_frontier_device');scaled=fields(text,'scaled_descent')
+                if front['requested']!='1':raise ValueError('production frontier policy absent')
+                if front['enabled']=='1':
+                    if int(front['metadata_bytes'])!=24*24 or int(front['leaf_d2h_bytes'])!=8*24*((n.bit_length()+63)//64):raise ValueError('production frontier component accounting')
+                if scaled['checked_states']!=scaled['states'] or scaled['checked_words']!=scaled['words']:raise ValueError('production all-node GMP checks missing')
+                row['frontier']=front
+                if 'ntt_addsub_arithmetic: mask=1' not in text:raise ValueError('production subtraction policy absent')
             if a.gscale_check:
                 scale=fields(text,'real_gscale_device')
                 if scale['requested']!='1':raise ValueError('production GPU Gamma policy absent')
@@ -122,6 +133,17 @@ def main():
     for kind,extra in [('owner_budget',{'NTT_FOLD_DEVICE_MAX_MB':'0'}),
                        ('owner_alloc',{'NTT_FOLD_DEVICE_ALLOC_FAIL':'1'}),
                        ('baby_alloc',{'NTT_BABY_DEVICE_ALLOC_FAIL':'1'})]:run(full,kind,extra=extra)
+    if a.frontier_check:
+        run(full,'frontier_fixtures',extra={'NTT_SCALED_TEST':'1'})
+        text=(out/'frontier_fixtures.log').read_text()
+        if 'scaled_frontier_fixture: cases=150 bad=0' not in text:raise ValueError('complete production frontier fixtures missing')
+        for name,extra,enabled,fallback in [
+            ('frontier_pageable',{'NTT_S4_ASYNC':'0'},'1',None),
+            ('frontier_budget',{'NTT_SCALED_FRONTIER_MAX_MB':'0'},'0','budget'),
+            ('frontier_alloc',{'NTT_SCALED_FRONTIER_ALLOC_FAIL':'1'},'0','allocation_fixture')]:
+            run(full,name,extra=extra)
+            actual=report['runs'][-1]['frontier']
+            if actual['enabled']!=enabled or fallback and actual['fallback']!=fallback:raise ValueError('wrong production frontier fallback '+name)
     for level in ('quiet','curve','phases','batches'):run(full,'verbosity_'+level,level=level)
     for level in ('quiet','curve','phases','batches','debug'):
         result=out/('bad_'+level+'.jsonl');log=out/('bad_'+level+'.log')
@@ -145,6 +167,13 @@ def main():
                 '--results',str(result),'--log',str(log),'--log-level',level],{'NTT_SCALED_ROOT_TEST_BAD':'1'},code=2)
             if result.exists() or 'scaled root device mismatch' not in log.read_text():raise ValueError('filtered root corruption accepted')
             row['log_sha256']=sha(log);report['rejections'].append(row);persist()
+    if a.frontier_check:
+        for level in ('quiet','curve','phases','batches','debug'):
+            result=out/('bad_frontier_'+level+'.jsonl');log=out/('bad_frontier_'+level+'.log')
+            row,_=call('bad_frontier_'+level,['--save',full['save'],'--b2','13230','--d','210','--device',str(a.device),
+                '--results',str(result),'--log',str(log),'--log-level',level],{'NTT_SCALED_FRONTIER_TEST_BAD':'1'},code=2)
+            if result.exists() or 'scaled frontier GMP node mismatch' not in log.read_text():raise ValueError('filtered frontier corruption accepted')
+            row['log_sha256']=sha(log);report['rejections'].append(row);persist()
     # Real wide queue: optional B2/skip/count selects only record 2; Worker logging overrides global.
     saves=out/'three.save';line=Path(full['save']).read_text();saves.write_text(line*3)
     queue=out/'worktodo.txt';task='ECMSTAGE2=1,2,16384,-15,"three.save",13230,1,1'
@@ -167,13 +196,16 @@ def main():
                       ('NTT_FOLD_OWNER_REUSE','0')]
     if a.gscale_check:obsolete += [('NTT_GSCALE_DEVICE','0'),('NTT_GSCALE_DEVICE_TEST','1')]
     if a.root_check:obsolete += [('NTT_SCALED_ROOT_DEVICE','0'),('NTT_SCALED_ROOT_TEST','1'),('NTT_SCALED_ROOT_CHECK','2'),('NTT_SCALED_ROOT_TEST_BAD','2')]
+    if a.frontier_check:obsolete += [('NTT_SCALED_FRONTIER_DEVICE','0'),('NTT_SCALED_FRONTIER_TEST','1'),('NTT_SCALED_FRONTIER_CHECK','2'),('NTT_SCALED_FRONTIER_TEST_BAD','2'),('NTT_SCALED_FRONTIER_ALLOC_FAIL','2')]
     for key,value in obsolete:
         queue.write_text(task+'\n');before=queue.read_bytes();result=out/(key+'.jsonl')
         row,text=call(key,['--ini',str(qini),'--once','--results',str(result)],{key:value},code=2)
         if queue.read_bytes()!=before or result.exists() or 'requires '+key not in text:raise ValueError('unsafe configuration transaction')
         report['rejections'].append(row);persist()
     if a.root_check:
-        for bad,check in (('NTT_SCALED_ROOT_TEST_BAD','NTT_SCALED_ROOT_CHECK'),('NTT_GSCALE_DEVICE_TEST_BAD','NTT_GSCALE_DEVICE_CHECK')):
+        poison_pairs=[('NTT_SCALED_ROOT_TEST_BAD','NTT_SCALED_ROOT_CHECK'),('NTT_GSCALE_DEVICE_TEST_BAD','NTT_GSCALE_DEVICE_CHECK')]
+        if a.frontier_check:poison_pairs.append(('NTT_SCALED_FRONTIER_TEST_BAD','NTT_SCALED_FRONTIER_CHECK'))
+        for bad,check in poison_pairs:
             queue.write_text(task+'\n');before=queue.read_bytes();result=out/(bad+'_unchecked.jsonl')
             row,text=call(bad+'_unchecked',['--ini',str(qini),'--once','--results',str(result)],{bad:'1',check:'0'},code=2)
             if queue.read_bytes()!=before or result.exists() or 'requires '+check not in text:raise ValueError('unchecked poison entered queue transaction')
