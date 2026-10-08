@@ -56,7 +56,9 @@ $ini = Join-Path $OutDir 'ecm.ini'
 if (-not (Test-Path -LiteralPath $ini)) { Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.ini.example') -Destination $ini }
 $queue = Join-Path $OutDir 'stage2_worktodo.txt'
 if (-not (Test-Path -LiteralPath $queue)) {
-    [IO.File]::WriteAllText($queue, '# Add ECMSTAGE2=k,b,n,c,filename[,B2-or-zero][,skip_curves][,num_curves][,`"known-factors`"].`r`n', (New-Object Text.UTF8Encoding $false))
+    $queueHeader = '# Add ECMSTAGE2=k,b,n,c,filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"].'
+    $queueHeader += [Environment]::NewLine
+    [IO.File]::WriteAllText($queue, $queueHeader, (New-Object Text.UTF8Encoding $false))
 }
 Copy-Item -LiteralPath (Join-Path $repo 'docs/ECM_CUDA_STAGE2_RELEASE.md') -Destination (Join-Path $OutDir 'README.md') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'docs/DEV_ECM_INI.md') -Destination $OutDir -Force
