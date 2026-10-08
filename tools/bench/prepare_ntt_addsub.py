@@ -27,6 +27,10 @@ def main():
             changes=[(b'#include "ntt_goldilocks_ptx.cuh"',b'#include "ntt_goldilocks_ptx.cuh"\n#include "ntt_goldilocks_addsub.cuh"'),
                 (b'    return gl_sub(a, b);',b'#if (NTT_GL_ADD_SUB_MASK & 1)\n    return gl_sub_canonical_ptx(a,b);\n#else\n    return gl_sub(a, b);\n#endif'),
                 (b'    return gl_add(a, b);',b'#if (NTT_GL_ADD_SUB_MASK & 2)\n    return gl_add_canonical_ptx(a,b);\n#else\n    return gl_add(a, b);\n#endif')]
+            if b'#include "ntt_goldilocks_addsub.cuh"' in raw:
+                # Native development aliases now have the identical compile-time selection.
+                if not all(new in raw for _,new in changes[1:]):raise ValueError('unexpected native aliases')
+                changes=[]
         if name=='tools/test/ntt_outer_v_probe.cu':
             changes=[(b'for(int mask:{0,1,3,2,1,2,0,3,2,3,1,0,3,0,2,1})',b'for(int mask:{0,0,0,0,0,0,0,0})'),
                 (b'    int device=argc>1 ? std::atoi(argv[1]) : 1;CK(cudaSetDevice(device));',

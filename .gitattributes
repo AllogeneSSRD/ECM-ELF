@@ -104,3 +104,6 @@ tools/test/ntt_addsub_batch_probe.cu text eol=lf
 tools/build/build_ntt_addsub_batch_probe.ps1 text eol=lf
 tools/bench/bench_ntt_addsub_batch.py text eol=lf
 tools/bench/audit_ntt_addsub.py text eol=lf
+tools/bench/bench_stage2_addsub.py text eol=lf
+tools/test/check_stage2_addsub_controls.py text eol=lf
+tools/bench/audit_stage2_addsub.py text eol=lf

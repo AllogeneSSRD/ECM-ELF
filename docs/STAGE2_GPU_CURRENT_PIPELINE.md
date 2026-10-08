@@ -2,7 +2,7 @@
 
 日期：2026-10-03；量化及优化补充：2026-10-04。历史测量基线：`0cfa589`；代码行号已更新到当前尺寸策略 NTT 引擎，device leaf 性能证据见§31.5–§31.6，独立生产驱动见§32，GPU 驻留 fold 历史基线见§33，根交接见§34，组合调度见§35，当前瓶颈与候选排序见§36，开源 NTT 适配见§37，xADD6与D见§38，cooperative v2见§39，尺寸策略与新D标定见§40。§26–§31 保留各自测量基线。
 
-> **当前状态入口（2026-10-08）：**先读§69–§75及[独立生产说明](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。当前生产候选的实现位于 `src/cuda/ecm_cuda_stage2.cu` 和 `src/cuda/stage2/`；实验引擎继续位于 `tools/bench/`。已发布893最多8192位，候选支持16384位；驻留下降根生产候选已完成功能/搬运验收，但整曲线提速尚未稳定。以下早期流程图、默认开关和CPU/GPU分工属于各自历史基线：正常驻留路径已包含GPU baby、device leaf、fold、Gamma及根准备，不能将旧图中的CPU步骤当作当前执行位置。各阶段时长与模块容量按对应日期和形状读取。
+> **当前状态入口（2026-10-08）：**先读§69–§79及[独立生产说明](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。当前生产候选的实现位于 `src/cuda/ecm_cuda_stage2.cu` 和 `src/cuda/stage2/`；实验引擎继续位于 `tools/bench/`。已发布893最多8192位，候选支持16384位；驻留下降根生产候选已完成功能/搬运验收，但整曲线提速尚未稳定。以下早期流程图、默认开关和CPU/GPU分工属于各自历史基线：正常驻留路径已包含GPU baby、device leaf、fold、Gamma及根准备，不能将旧图中的CPU步骤当作当前执行位置。各阶段时长与模块容量按对应日期和形状读取。
 
 本文按一条曲线的实际执行顺序说明算法、输入输出、CPU/GPU 分工和数据生命周期。代码链接均指向当前原文件的一处入口，行号为本基线的一基行号；后续修改源码时行号可能变化。
 
@@ -2050,3 +2050,8 @@ N27单batch的tile/M7/M8正逆及N11/batch990的tile正逆8项管理员NCU已完
 ## 78. canonical减法的NTT与batch990隔离验证（2026-10-08）
 
 原语GMP/故障、四mask68次NTT门禁及两轮单batch完整卷积完成：sub-only k25..27少1.70%..2.62%，小长度第二轮反向；add-only两轮均负。新增实际N11/batch990的六种连续/stride形状全输出GMP及末slice毒化，两轮完整卷积少3.458%/3.474%，REG40/LOCAL0/3CTA保持。新增工具仅在隔离项目编译时改别名，当前开发/生产算法未接入，无整曲线提速或新D/Auto成本结论。首次Windows GMP指数截断参考失败保留，原语各只少一条非NOP SASS，不当作动态周期。下一项接入sub-only开发候选并固定D完整验收，GPU下降frontier继续待推进。[完整公式、所有样本、来源与复现](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:262)。
+
+
+## 79. canonical减法原生验收与当前下一步（2026-10-08）
+
+开发引擎已接入编译期NTT_GL_ADD_SUB_MASK，默认0、仅非零包含canonical头，生产拒绝非零；非零构建关闭旧D算术scope并在profile I/O前拒绝Auto B2。29raw依赖/5对象冻结，26正确性/9控制通过，完整块66240点＋65点尾段及独立GMP节点覆盖保持。32正式/8预热，M4423大界37.6165975→36.9992900秒（少1.64105%，两组同向），generic8193/M16381少0.47387%/0.52742%；generic16384少0.07022%但两组反向，收益未确立。管理员Systems真实tile7.978363→7.714584秒（少3.306%），全部503组kernel几何/次数、PCIe次数/字节及设备/pinned峰保持，约6.2秒准备间隙仍在。独立审计/归档完成，保留sub-only开发候选，默认0/生产CU/发布893未替换；下一项GPU下降frontier减少CPU组包与中间回读，较大16k、新D/Auto成本及总预算lease未完成。完整范围、源行、所有样本与复现统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:324)。

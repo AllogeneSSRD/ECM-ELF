@@ -90,6 +90,15 @@ namespace {
 
 #include "ntt_goldilocks_reduce.cuh"
 #include "ntt_goldilocks_ptx.cuh"
+#ifndef NTT_GL_ADD_SUB_MASK
+#define NTT_GL_ADD_SUB_MASK 0
+#endif
+#if NTT_GL_ADD_SUB_MASK < 0 || NTT_GL_ADD_SUB_MASK > 3
+#error "NTT_GL_ADD_SUB_MASK must be 0..3 (bit0=sub, bit1=add)"
+#endif
+#if NTT_GL_ADD_SUB_MASK != 0
+#include "ntt_goldilocks_addsub.cuh"
+#endif
 #ifndef NTT_GL_SHORT_REDUCE_DEFAULT
 #define NTT_GL_SHORT_REDUCE_DEFAULT 0
 #endif
@@ -277,12 +286,20 @@ __device__ __forceinline__ unsigned long long gl_mod_dev(unsigned long long x)
 /* device-only aliases used inside kernels */
 __device__ __forceinline__ unsigned long long gl_sub_dev(unsigned long long a, unsigned long long b)
 {
+#if (NTT_GL_ADD_SUB_MASK & 1)
+    return gl_sub_canonical_ptx(a,b);
+#else
     return gl_sub(a, b);
+#endif
 }
 
 __device__ __forceinline__ unsigned long long gl_add_dev(unsigned long long a, unsigned long long b)
 {
+#if (NTT_GL_ADD_SUB_MASK & 2)
+    return gl_add_canonical_ptx(a,b);
+#else
     return gl_add(a, b);
+#endif
 }
 
 /* host copy (see gl_mul_host) -- used to build omega, 1/N and the inverse root */

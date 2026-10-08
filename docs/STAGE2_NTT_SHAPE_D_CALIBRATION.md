@@ -320,3 +320,58 @@ mask0/1各测试batch1/3/990、连续及stride=N+17共六种形状；每形状�
 证据根目录为ignored `build_cuda_cmake/_stage2_addsub_20261008`。[独立审计工具](D:/code/MPA-OpenCl/tools/bench/audit_ntt_addsub.py:1)从原始日志重新核对顺序/所有输出、完整来源、event均值、两轮全部样本、批量padding/毒化、原语及tile SASS计数；[quantitative.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_addsub_20261008/quantitative.json)保留分组和逐文件SHA。归档/提交凭据在该目录另存，发布893保持。
 
 复现时使用新目录；四mask探针先运行`prepare_ntt_addsub.py --mask 0..3 --output <project>`，再在对应project根目录调用其中冻结的`tools/build/build_ntt_outer_v_probe.ps1 -Build <absolute-build>`。将四个build保存为study的`ntt_m0..3`，对应project保存为`project_m0..3`，运行`bench_ntt_addsub.py --study <study> --mode gate|timing --output <new-output>`，timing另指定已完成`--gate <gate/measurements.json>`。批量probe用`build_ntt_addsub_batch_probe.ps1 -SourceBuild <ntt_m0|1> -Mask 0|1 -Build <new-build>`；随后`bench_ntt_addsub_batch.py --baseline <mask0-exe> --candidate <mask1-exe> --mode gate|timing --output <new-output>`，timing同样要求gate。所有实验固定GPU1。
+
+## 2026-10-08 canonical减法接入开发引擎
+
+### 编译选择、成本scope与来源
+
+接续已提交54e99b8的隔离验证。[开发NTT别名](D:/code/MPA-OpenCl/tools/bench/ntt_poly_probe.cu:287)现有编译期`NTT_GL_ADD_SUB_MASK=0..3`，默认0，bit0=sub、bit1=add；每蝶形没有运行时判断。仅非零构建包含canonical PTX头，因此其他默认0探针不增加该头的实际编译依赖。隔离生成器识别已接入的相同别名，不重复插入。生产NTT/CU未移植这个候选。
+
+[原生builder](D:/code/MPA-OpenCl/tools/build/build_ecm_cuda_stage2.ps1:14)增加`-AddSubMask`并绑定source signature、编译命令、manifest和HostOnly检查；开发冻结闭包29个raw文件、5对象。production只接受0；不把实验选择加入生产算法分支。两份development/PTX3/u0/split6构建同时编译，CUDA约366.3/365.8秒，编译期间未计时曲线。
+
+[run_real](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11142)对非零mask关闭旧D经验scope，并输出实际编译mask；[Auto B2](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:525)对非零构建在profile I/O前拒绝，避免套旧成本。cache payload v2目前本就使两边D模型回legacy；因此本轮不能声称“baseline已校准而candidate才回退”，新增算术guard保护后续标定。共享CLI默认mask0保持旧行为；发布893未替换。
+
+两处stage2_tree_gpu.cu改动仅host guard/log，通过逐字节逆变换恢复原文件，混合换行未规范化。canonical PTX头与先前已通过百万对GMP/故障验证的编译快照逐字节相同。原生macro0/1使用同一套raw来源，差异由编译命令和实际worker日志确认；不能将相同来源误写成同二进制A/B。
+
+### 原生正确性与资源
+
+[原生矩阵](D:/code/MPA-OpenCl/tools/bench/bench_stage2_addsub.py:1)26次gate全部通过：M4423大界两条；三种unit位宽8193/16381/16384各2/65/66点；两种16384位不可逆回退；generic16384/D30030的66,305点（66,240点完整链＋65点ladder短尾）。小形状共22次调用，各含150组scaled GMP fixture与全部下降节点比较；unit叶hash另对独立CPU/GMP-ECM保存点的完整monic定义。大界全叶hash、因子和默认NTT/S4检查量与原生产参考一致。两条大块诊断开启全仿射/seed/段积核对，约212秒，属于正确性成本，未混入正式时间。
+
+资源导出223个kernel。默认warp tile正逆均REG40/STACK0/LOCAL0；10个其他实例的资源字段改变，包括旧warp0 forward50→52/inverse40→38、M5 cooperative inverse46→48，以及旧outer M2/M3/M4/M5/M6的部分实例。M6旧inverse STACK512→504，不能声称全部stack零或所有资源保持；相同静态资源也不是指令/周期等价。后续实际trace需核对本轮执行的形状。
+
+[控制门禁](D:/code/MPA-OpenCl/tools/test/check_stage2_addsub_controls.py:1)9项通过：production拒绝1/2/3、拒绝非法4、HostOnly拒绝混用mask、两种Auto B2路径及两个零曲线D规划。candidate明确拒绝未标定算术；baseline仍走原profile读取失败。所有对象/二进制前后SHA保持。首次控制采集因PowerShell5继承错误PSModulePath而无法找到Get-FileHash，保留已通过的四项与原失败日志；采集器重设为系统模块目录后，在新输出目录完整重跑。未改编译源码或放宽拒绝检查。
+
+### 正式计时、实际诊断与决策
+
+本阶段证据位于ignored `build_cuda_cmake/_stage2_sub_native_20261008`。两份development构建SHA256分别为baseline `9aa509480c98c566fee4b61f872b0afb7110812c7711c6ebdaae2537876e920e`、sub-only `82f50c2a26e8bf2e266984191e63287d6e3448ffe8e26f9e206766fa9b667a8b`。固定PTX3/outer策略2、V0、u0、pair1/CPUbase0/C64/min32768、owner640/reuse3/arena6300、GPU Gamma/root及默认必需检查；全部正式计时串行，未与编译、profiler或重型trace分析重叠。这里outer策略2指cooperative后端，文中旧记录的outer0/u0需按对应字段区分，不能混淆为关闭cooperative。
+
+32正式/8预热，四种输入各先预热0/1，再按ABBA＋BAAB八条正式。所有样本保留，每版每形状仅四条独立曲线，没有置信区间：
+
+- M4423大界，B1=1000/lcm/sigma26、D1381380/P126720/I1456028/B2=2011326186870：full均值37.6165975→36.9992900秒，少1.64105%；两组少1.55618%/1.72513%。
+- generic8193，有效B1=20/sigma26、D30030/P2880/I32768：5.44383725→5.41804050秒，少0.47387%；两组少0.39256%/0.55472%。
+- M16381，同宽矩阵几何：11.27921800→11.21972875秒，少0.52742%；两组少0.06652%/0.98493%。
+- generic16384，同宽矩阵几何：23.72091350→23.70425600秒，少0.07022%；两组慢0.03572%/快0.17611%，未建立稳定收益。
+
+两边完整叶指纹、factor、D/I及六项NTT/S4工作量/检查覆盖均一致，main精确账闭合误差≤0.003秒。宽矩阵使用不同模数，不能将位宽间绝对秒数当作同一N的伸缩实验。大界通过原生产参考，其他小门禁通过独立CPU/GMP定义；完整输出hash不是大规模逐系数独立GMP证明。
+
+### 工作量、显存与后续
+
+减法替换不改变卷积长度、batch、pass、逻辑蝶形数或PCIe接口量：单NTT逻辑蝶形为b·L·log2(L)/2，典型两forward＋一inverse的逻辑add/sub各为3b·L·log2(L)/2。候选没有新持久设备数组；owner仍为8W(7P+7)+48B，W=ceil(bits/64)、P=phi(D)/2。大界W70/P126720的owner为496746368B（473.734253MiB）；这是模块payload，不能与历史模块峰相加当进程峰。静态SASS省一条不能乘上述公式宣称动态周期节约。
+
+本轮决策是保留sub-only开发候选，后续GPU下降frontier以它作为明确的新实验基线；默认mask0和独立生产算法保持，尚不推广add-only/both或outer V收窄。满16384位本批收益接近噪声，不能承诺普遍1.64%提速。最终生产移植要结合宽泛型和大形状复验。新D/Auto B2成本、较大16k形状容量、最终chain/短尾及多曲线总RAM/VRAM lease仍未完成。实际Systems、最终审计及归档记录见下面的收尾补充。
+
+### 实际Systems、审计与归档收尾
+
+GPU1管理员Systems2026.1.3顺序采集m0/m1，capture/export/collector均exit0；每侧完整leaf4244971527793015097、factor、有效save/Q及六项NTT/S4覆盖与该mask的正式矩阵一致，没有额外全量GMP读回。原始SQLite按完整demangled名字、gridXYZ/blockXYZ及dynamic shared核对：503组、102408次kernel完全一致；短名报告将不同实例合并，不能用其单条分组数量推导算法分派改变。
+
+- tile：两边23877次，7.978363202→7.714583644秒，少3.30619%（0.263780秒）。
+- cooperative outer：两边954次，4.369867188→4.335140000秒，少0.79470%。
+- H2D两边4866次/7009115275B；D2H6130次/3138157112B；D2D40次/841498560B，次数与字节完全保持。
+- 自身GPU事件span37.103305723→36.641967014秒，并集30.806552417→30.454416745秒，无自身事件6.296753306→6.187550269秒（16.97087%→16.88651%）。仍有约6.2秒准备/衔接窗口，不等于整卡idle，也不能把其变化全归因减法。
+- 按实际malloc/free生命周期，两侧设备tracked payload峰4531652368B（4321.720474MiB），最终live0；pinned峰358886600B（342.260933MiB），末端357255360B由进程退出回收。这不是含driver/context/module的全显存峰，也不是进程RAM峰。没有新增本轮NVML采样或候选NCU计数。
+
+Systems是单次插桩诊断，不替代前述未插桩32正式样本；约0.264秒tile改善不能解释全部full差。静态资源10/223实例变化保持披露，默认warp资源一致也不证明动态周期或完整SASS等价。
+
+[独立审计工具](D:/code/MPA-OpenCl/tools/bench/audit_stage2_addsub.py:1)从原始日志重建门禁、所有正式/预热顺序、两组均值、完整输出/覆盖、成本保护及计时闭合；另核对29个raw依赖/5对象、两处混合换行修改逆变换、实际profile来源/命令结果、全部kernel几何/调用次数、PCIe字节和设备/pinned生命周期。最终quantitative.json为complete=true，保留首次控制环境失败和收尾前审计快照。归档evidence.zip/evidence_manifest.json保存原始来源、工具、输入、日志、矩阵和trace及逐文件SHA，exe/obj/DLL外部绑定。提交前后另核对raw源码与Git blob，根data/docs/data继续忽略；没有替换发布893。
+
+复现先在新目录分别用builder `-Engine development -GlBackend ptx -OuterUnrollU 0 -AddSubMask 0|1 -SplitCompile 6`构建，使用`bench_stage2_addsub.py --baseline <m0-exe> --candidate <m1-exe> --reference <root-production-complete-matrix> --fixtures <wide-fixtures> --save <valid-m4423-save> --mode gate|timing|timing-wide --output <fresh-output>`，timing要求`--gate <completed-gate/measurements.json>`。输入、reference/fixtures及三个mode必须来自同一冻结组合。管理员profile工具增加`--add-sub-mask 0|1`验证实际编译选择；原生矩阵串行结束后再采集。审计命令为`audit_stage2_addsub.py --study <study> --profiles`，study目录布局及capture精确命令保存在本轮归档。

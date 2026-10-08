@@ -39,6 +39,8 @@ def main():
                    help='Development owner layout; omit for historical binaries')
     p.add_argument('--outer-narrow',type=int,choices=(0,1,2,3),default=None,
                    help='Development cooperative V mask; omit for historical binaries')
+    p.add_argument('--add-sub-mask',type=int,choices=(0,1,2,3),default=None,
+                   help='Verify compiled development arithmetic and its actual curve log')
     p.add_argument('--arena-mb',type=int,default=None)
     p.add_argument('--factor-only',action='store_true')
     p.add_argument('--log-level', choices=('quiet','curve','phases','batches','debug'),
@@ -53,6 +55,8 @@ def main():
     if any(out.iterdir()) and not a.analyze_existing: raise ValueError('Use an empty output directory')
     exe = a.exe.resolve(); save = a.save.resolve()
     build = json.loads((exe.parent / 'build_manifest.json').read_text(encoding='utf-8-sig'))
+    if a.add_sub_mask is not None:
+        assert build.get('engine')=='development' and build.get('add_sub_mask')==a.add_sub_mask, 'Compiled arithmetic differs'
     raw_sources = build['sources']
     sources = raw_sources if isinstance(raw_sources, dict) else {s.split('=',1)[0]:s.split('=',1)[1].lower() for s in raw_sources if '=' in s and (root/s.split('=',1)[0]).is_file()}
     exe_sha = hashlib.sha256(exe.read_bytes()).hexdigest()
@@ -125,6 +129,8 @@ def main():
     result = json.loads((out/'results.jsonl').read_text(encoding='utf-8').splitlines()[-1])
     if a.outer_narrow is not None:
         assert f'ntt_outer_offsets: narrow_mask={a.outer_narrow}' in text, 'Outer offset request differs'
+    if a.add_sub_mask is not None:
+        assert f'ntt_addsub_arithmetic: mask={a.add_sub_mask}' in text, 'Actual arithmetic differs'
     if a.gscale_device is not None:
         scale=dict(re.findall(r'(\w+)=(\S+)',re.search(r'real_gscale_device: (.*)',text)[1]))
         assert int(scale['requested'])==a.gscale_device, 'Gamma request differs'
@@ -156,6 +162,7 @@ def main():
         with (out/'export.log').open('wb') as log:
             subprocess.run(export, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=120)
     manifest = dict(exe=str(exe), sha256=exe_sha, save=str(save), save_sha256=save_sha, sources=sources,source_root=str(source_root),frozen_manifest_sha256=manifest_sha,collector_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), command=command, env={k:v for k,v in env.items() if k.startswith('NTT_')}, profile=profile, export=export, Q_sha256=hashlib.sha256(q.encode()).hexdigest(), leaf=re.search(r'descent_values: (.*)',text)[1], full_wall=re.search(r'stage2_full_wall: (.*)',text)[1], oracle=re.search(r's4_oracle_stats: (.*)',text)[1])
+    if a.add_sub_mask is not None:manifest['compiled_add_sub_mask']=a.add_sub_mask
     (out/'manifest.json').write_text(json.dumps(manifest, indent=2))
     c = sqlite3.connect('file:'+trace.with_suffix('.sqlite').as_posix()+'?mode=ro', uri=True)
     c.row_factory = sqlite3.Row; c.text_factory = lambda b:b.decode('utf-8','replace')

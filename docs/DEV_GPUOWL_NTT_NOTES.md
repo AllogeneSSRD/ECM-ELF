@@ -4768,3 +4768,8 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 ## 119. Stage2 canonical减法隔离验证（2026-10-08）
 
 四mask编译期隔离探针及68次NTT门禁完成，原语各百万对canonical输入/依赖链GMP及故障通过。add/sub原语各仅少一条非NOP SASS；默认warp REG40/LOCAL0，add-only inverse STACK8差异保留。两轮160正式/8预热，sub-only在k25..27完整卷积少1.70%..2.62%，k23/24第二轮受慢样本影响反向；add-only两轮全负。真实N11/batch990形状六种布局GMP/末slice毒化通过，两轮16正式/4预热完整卷积少3.458%/3.474%，四个顺序组同向。首次Windows GMP长指数截断参考被拒绝，保留后改mpz指数重编；算术/默认/发布893未修改，无native整曲线或候选NCU结论。下一项只接入减法的开发编译选择与成本scope保护，补宽位数及固定D整曲线，再推进GPU下降frontier。全部公式、样本、资源、失败和复现继续维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:262)。
+
+
+## 120. Stage2 canonical减法原生验收（2026-10-08）
+
+开发引擎已接入编译期NTT_GL_ADD_SUB_MASK，默认0、仅非零包含canonical头，生产拒绝非零；非零构建关闭旧D算术scope并在profile I/O前拒绝Auto B2。29raw依赖/5对象冻结，26正确性/9控制通过，完整块66240点＋65点尾段及独立GMP节点覆盖保持。32正式/8预热，M4423大界37.6165975→36.9992900秒（少1.64105%，两组同向），generic8193/M16381少0.47387%/0.52742%；generic16384少0.07022%但两组反向，收益未确立。管理员Systems真实tile7.978363→7.714584秒（少3.306%），全部503组kernel几何/次数、PCIe次数/字节及设备/pinned峰保持，约6.2秒准备间隙仍在。独立审计/归档完成，保留sub-only开发候选，默认0/生产CU/发布893未替换；下一项GPU下降frontier减少CPU组包与中间回读，较大16k、新D/Auto成本及总预算lease未完成。完整范围、源行、所有样本与复现统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:324)。

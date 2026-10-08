@@ -11,6 +11,7 @@ param(
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
     [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'ptx',
     [ValidateSet(0,4)][int]$OuterUnrollU = 0,
+    [ValidateSet(0,1,2,3)][int]$AddSubMask = 0,
     [ValidateRange(1,64)][int]$SplitCompile = 1,
     [switch]$HostOnly,
     [switch]$Rebuild
@@ -21,8 +22,8 @@ Set-Location $repo
 $vcvars = (Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue |
            Select-Object -First 1).FullName
 if (-not $vcvars) { throw 'vcvars64.bat not found' }
-if ($Engine -eq 'production' -and ($GlBackend -ne 'ptx' -or $OuterUnrollU -ne 0)) {
-    throw 'Production requires -GlBackend ptx -OuterUnrollU 0; use -Engine development for comparisons'
+if ($Engine -eq 'production' -and ($GlBackend -ne 'ptx' -or $OuterUnrollU -ne 0 -or $AddSubMask -ne 0)) {
+    throw 'Production requires -GlBackend ptx -OuterUnrollU 0 -AddSubMask 0; use -Engine development for comparisons'
 }
 $cudaSource = if ($Engine -eq 'production') { 'src/cuda/ecm_cuda_stage2.cu' } else { 'tools/bench/ecm_cuda_stage2_dev.cu' }
 $cudaStem = [IO.Path]::GetFileNameWithoutExtension($cudaSource)
@@ -37,7 +38,7 @@ if ($Engine -eq 'production') {
         Sort-Object Name | ForEach-Object { 'src/cuda/stage2/' + $_.Name })
 } else {
     $deps += @(
-    'tools/bench/stage2_tree_gpu.cu', 'tools/bench/stage2_d_model.cuh', 'tools/bench/ntt_poly_probe.cu', 'tools/bench/ntt_coop_outer.cuh', 'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh',
+    'tools/bench/stage2_tree_gpu.cu', 'tools/bench/stage2_d_model.cuh', 'tools/bench/ntt_poly_probe.cu', 'tools/bench/ntt_coop_outer.cuh', 'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/bench/ntt_goldilocks_addsub.cuh',
     'tools/bench/stage2_baby_device.cuh', 'tools/bench/stage2_baby_host.cuh', 'tools/bench/stage2_point_mersenne.cuh', 'tools/bench/ntt_carry_partial.cuh',
     'tools/bench/stage2_giant_base_host.cuh','src/cuda/stage2/scale_plain.cuh')
 }
@@ -46,7 +47,7 @@ New-Item -ItemType Directory -Force $objDir | Out-Null
 $exe = Join-Path $Build 'ecm_cuda_stage2.exe'
 $signaturePath = Join-Path $objDir 'build_signature.txt'
 $glMode = @{runtime=-1;fold=0;short=1;ptx=3}[$GlBackend]
-$signature = @("arch=$Arch", "gl_backend=$GlBackend", "gl_fixed_mode=$glMode", "outer_unroll_u=$OuterUnrollU", (& nvcc --version | Out-String).Trim(), "split_compile=$SplitCompile", "engine=$Engine")
+$signature = @("arch=$Arch", "gl_backend=$GlBackend", "gl_fixed_mode=$glMode", "outer_unroll_u=$OuterUnrollU", (& nvcc --version | Out-String).Trim(), "split_compile=$SplitCompile", "engine=$Engine", "add_sub_mask=$AddSubMask")
 $sourceHashes = [ordered]@{}
 foreach ($dep in $deps) {
     $sourceHashes[$dep] = (Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash
@@ -58,8 +59,9 @@ $cudaDeps = @($cudaSource,'src/core/ecm_cuda_stage2.h','src/core/ecm_stage2_geom
 if ($HostOnly) {
     $previous = Get-Content -LiteralPath (Join-Path $Build 'build_manifest.json') -Raw | ConvertFrom-Json
     $previousSplit = if ($previous.split_compile) { $previous.split_compile } else { 1 }
+    $previousAddSub = if ($null -ne $previous.add_sub_mask) { $previous.add_sub_mask } else { 0 }
     if ($previous.engine -ne $Engine -or $previous.architecture -ne $Arch -or $previous.gl_fixed_mode -ne $glMode -or
-        $previous.outer_unroll_u -ne $OuterUnrollU -or $previousSplit -ne $SplitCompile -or $previous.sources[4] -ne $signature[4]) {
+        $previous.outer_unroll_u -ne $OuterUnrollU -or $previousAddSub -ne $AddSubMask -or $previousSplit -ne $SplitCompile -or $previous.sources[4] -ne $signature[4]) {
         throw 'HostOnly requires identical CUDA architecture, backend, schedule and toolkit'
     }
     foreach ($dep in $cudaDeps) {
@@ -85,7 +87,7 @@ if (-not $fresh) {
             Write-Host 'reuse CUDA object: matching compiled dependencies and toolkit'
             continue
         }
-        $line = "call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -DNTT_OUTER_UNROLL_U=$OuterUnrollU " +
+        $line = "call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -DNTT_OUTER_UNROLL_U=$OuterUnrollU -DNTT_GL_ADD_SUB_MASK=$AddSubMask " +
             "--split-compile=$SplitCompile " +
             "-I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 " +
             "-c `"$src`" -o `"$obj`" > `"$log`" 2>&1"
@@ -124,6 +126,7 @@ $manifest = [ordered]@{
     gl_backend = $GlBackend
     gl_fixed_mode = $glMode
     outer_unroll_u = $OuterUnrollU
+    add_sub_mask = $AddSubMask
     split_compile = $SplitCompile
     sources = $signature
     source_hashes = $sourceHashes

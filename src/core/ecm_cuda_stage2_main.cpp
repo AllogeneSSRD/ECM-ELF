@@ -25,6 +25,10 @@
 #include <string>
 #include <vector>
 
+#ifndef NTT_GL_ADD_SUB_MASK
+#define NTT_GL_ADD_SUB_MASK 0
+#endif
+
 namespace s2prod {
 namespace fs = std::filesystem;
 struct Big {
@@ -520,6 +524,9 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
 }
 std::string select_auto(Options &o,const Record &r,bool apply=true) {
     namespace c=ecm_stage2::cost;
+#if NTT_GL_ADD_SUB_MASK != 0
+    throw std::runtime_error("Auto B2 has no calibrated cost profile for experimental NTT add/sub arithmetic");
+#endif
     if(o.cost_profile.empty())throw std::runtime_error("Auto B2 requires --cost-profile FILE");
     Handle guard;guard.value=CreateFileW(fs::path(o.cost_profile).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(guard.value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock cost profile for reading");
