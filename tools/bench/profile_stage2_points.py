@@ -37,6 +37,8 @@ def main():
     p.add_argument('--owner-mb',type=int,default=None)
     p.add_argument('--owner-reuse',type=int,choices=(0,1,2,3),default=None,
                    help='Development owner layout; omit for historical binaries')
+    p.add_argument('--outer-narrow',type=int,choices=(0,1,2,3),default=None,
+                   help='Development cooperative V mask; omit for historical binaries')
     p.add_argument('--arena-mb',type=int,default=None)
     p.add_argument('--factor-only',action='store_true')
     p.add_argument('--log-level', choices=('quiet','curve','phases','batches','debug'),
@@ -94,6 +96,8 @@ def main():
         env['NTT_FOLD_DEVICE_MAX_MB']=str(a.owner_mb)
     if a.owner_reuse is not None:
         env['NTT_FOLD_OWNER_REUSE']=str(a.owner_reuse)
+    if a.outer_narrow is not None:
+        env['NTT_OUTER_NARROW']=str(a.outer_narrow)
     command = [str(exe), '--save', str(save), '--b2', str(a.b2), '--d', str(a.d), '--device', str(a.device), '--results', str(out/'results.jsonl'), '--log', str(out/'engine.log')]
     if a.arena_mb is not None:
         if a.arena_mb<=0:raise ValueError('Invalid arena budget')
@@ -119,6 +123,8 @@ def main():
     for token in ('stage1_skipped=1', 'gmp_check_bad=0', 'gmp_selftest_bad=0', 'pending=0', 'clean=1', 'fixed=3', 'point_arithmetic: xadd6=1'):
         assert token in text, token
     result = json.loads((out/'results.jsonl').read_text(encoding='utf-8').splitlines()[-1])
+    if a.outer_narrow is not None:
+        assert f'ntt_outer_offsets: narrow_mask={a.outer_narrow}' in text, 'Outer offset request differs'
     if a.gscale_device is not None:
         scale=dict(re.findall(r'(\w+)=(\S+)',re.search(r'real_gscale_device: (.*)',text)[1]))
         assert int(scale['requested'])==a.gscale_device, 'Gamma request differs'

@@ -11138,6 +11138,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         L.S==4423 && mpz_popcount(L.N)==4423;
     // Outer ILP changes NTT timings; frozen profiles require the original schedule.
     if(NTT_OUTER_UNROLL_U!=0)calibrated=false;
+    if(outer_narrow_mask()!=0)calibrated=false;
     if(ntt_carry_check_requested())calibrated=false;
     if(point_requested && !point_fold)calibrated=false;
     if(gl_shift_scale || (gl_ptx && !fixed_ptx) || (NTT_GL_FIXED_MODE>=0 && !fixed_ptx))calibrated=false;
@@ -11158,6 +11159,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     DPhaseModel phase_model((int)L.S,B2,point_fold ? 6 : fixed_ptx ? 5 : baby_requested ? 4 : gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
     const char *model_version=calibrated ? (point_fold ? "resident_point_fold_v1" : fixed_ptx ? "resident_fixed_ptx_v1" : baby_requested ? "resident_baby_v1" : gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
     std::printf("ntt_outer_schedule: unroll_u=%d (0=compiler-default, 4=experimental ILP)\n",NTT_OUTER_UNROLL_U);
+    std::printf("ntt_outer_offsets: narrow_mask=%d (bit0=M7/V16, bit1=M8/V8)\n",outer_narrow_mask());
     std::printf("d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu gl_short=%d gl_shift_scale=%d gl_ptx=%d "
                 "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
                 (int)model_requested,(int)calibrated,model_version,

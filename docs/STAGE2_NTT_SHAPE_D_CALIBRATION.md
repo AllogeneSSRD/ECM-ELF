@@ -191,3 +191,70 @@ $captureJob = Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Pass
 等待该进程终止、检查capture/exit.txt为0后，执行`python tools/bench/profile_stage2_ntt_ncu.py @captureArgs --collect-only`。采集依赖GPU1空闲及管理员计数器权限；不能和编译/正式计时并行。工具为当前冻结模板/几何设计，改变V或launcher后须同步核验形状公式，不能直接套用旧grid推导N。
 
 本批独立[审计脚本](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_ntt_hot_20261008/audit_phase.py)、[审计结果](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_ntt_hot_20261008/final_audit.json)和[evidence manifest](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_ntt_hot_20261008/evidence_manifest.json)共同绑定源/对象、原始SASS、8份报告/CSV、正式参考和保留的失败。归档包含文本/输入/原始剖析证据；exe、对象和动态库在原路径保留并单独登记SHA，提交身份在归档后另记commit_identity.json。
+
+## 2026-10-08 outer V 收窄：同二进制候选
+
+### 实现、工作量与容量
+
+接续上述管理员诊断。[开发header](D:/code/MPA-OpenCl/tools/bench/ntt_coop_outer.cuh:14)给kernel增加编译期V参数，host launcher按`NTT_OUTER_NARROW=0..3`选择：0原布局、1仅M7/V16、2仅M8/V8、3同时收窄。没有在每个蝶形内增加运行时选择；M5/M6保持原V32。V不影响根表及变换计划，可在同一个cached arena内切换。生产header尚未修改。
+
+记R=2^M、N为单slice NTT长度、b为batch数。两种布局的每pass主数组读写仍16Nb B，蝶形模乘MNb/2、合成根乘积(R−1)Nb/R、coarse平方(M−1)Nb/R均保持。CTA数由Nb/(RV)变为两倍；每CTA barrier从M7的11→12、M8的13→14。radix表的逻辑加载量8(R−1)Nb/(RV)也加倍，N=2^27/b1时每pass额外M7约31.75MiB、M8约63.75MiB；实际DRAM事务受缓存影响，不能将这些公式当成硬件带宽测量。
+
+声明shared为8[RV+(R−1)+128+(inverse?M:2)V] B，编译按16B对齐。实际资源API核验：
+
+- M7 forward/inverse：35,328/36,608→18,688/19,328B，最大active CTA容量2→5。
+- M8 forward/inverse：36,096/36,864→19,584/19,968B，容量2→4。
+- 四种正向均REG48、逆向REG46；LOCAL0。这是容量上限，尚无候选实测active warp或stall。
+
+没有新增host/pinned/NTT workspace数据数组，allocator payload和接口传输的理论增量0；开发binary多了四个kernel实例，代码/模块容量不为0。本阶段没有新的进程NVML峰或实际PCIe量认证。
+
+### 独立门禁与完整卷积
+
+[probe](D:/code/MPA-OpenCl/tools/test/ntt_outer_v_probe.cu:1)直接包含实际开发header，[构建脚本](D:/code/MPA-OpenCl/tools/build/build_ntt_outer_v_probe.ps1:1)冻结8份依赖并核验编译前后SHA，固定PTX3/u0。probe_r2 SHA150f73ea…490df1，编译19.9秒。
+
+[串行工具](D:/code/MPA-OpenCl/tools/bench/bench_ntt_outer_v.py:1)完成17个调用：四mask各96组GMP正/逆谱、27,131,904 words及4次cached切换、3,145,728 words；每mask故意损坏被拒绝。新增24组dense GMP谱/逆结果、2,951,568 words，含独立slice、17word padding、stride及同一计划内0/3/1/2/0/3切换；dense故障拒绝。四个非法mask拒绝、资源、88项policy和200000次device算术自检均通过。
+
+两轮k23..27完整有限域卷积，每长度16run、每run1warm＋3event样本；四mask每轮各4run，初始化/GMP参考/全N结果检查在event外，全部输出bad0。这里的run均值不是独立ECM曲线，也没有置信区间。
+
+- k25仅M8收窄：两轮均值快2.7434%／2.7237%；同时收窄快2.7253%／2.7339%。
+- k26仅M8：快2.5932%／2.6257%；同时收窄快2.6738%／2.6271%。
+- k27仅M7：快4.0926%／4.2150%；仅M8快2.3612%／2.4679%；同时收窄快6.3811%／6.4077%。
+- k24的两个mask都不作用于M6，波动约−0.002..+0.066%；k23不执行合作outer，仍出现约±2.4%的顺序/状态差，全部保留，不作为算法收益。
+
+来源位于ignored build_cuda_cmake/_stage2_outer_v_20261008，timing_r0/r1分别保留完整64行/长度。一次跨构建SASS比较显示8个默认outer函数正文并不逐字节相同，保留baseline_outer_sass.json；不能因REG相同或源代码等价声称旧生产baseline机器码保持。本轮局部和原生对照都使用同一个binary中的0/3模式。
+
+### 原生接入与验证边界
+
+开发[成本保护和配置日志](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:11139)在mask非0时禁止沿用旧D经验profile，显式D优先；没有新的Auto B2成本认证。[原生工具](D:/code/MPA-OpenCl/tools/bench/bench_stage2_outer_v.py:1)冻结28份源码/5对象，并与原生产正式矩阵的完整输入、leaf及六项默认检查覆盖核对。
+
+开发候选SHA848ea580…94472f，CUDA262.0秒/split6。12条原生gate完成：大界M4423两模式，以及generic8193/M16381/generic16384/已知因子/非单位五个有效save各两模式；小形状每条另有150个scaled fixture和完整GMP下降节点检查。宽小形状不一定执行M7/M8收窄，不能用它们替代较大16k候选性能或容量验收。
+
+整曲线采用同save、B1=1000/lcm/sigma26、B2=2011326186870、显式D1381380、owner640/reuse3、arena6300、GPU Gamma/驻留根、默认NTT/S4检查；先各一次预热，再ABBA＋BAAB。8条正式full依次37.690016／37.825909／37.167210／37.233030／37.786032／37.844180／37.490107／37.066242秒，mask顺序0/3/3/0/3/0/0/3。均值37.56433325→37.46134825秒（减少0.27416%），两组分别慢0.09353%／快0.63983%，尚未建立稳定整曲线收益；全部样本保留，没有置信区间。完整leaf4244971527793015097、因子及六项默认NTT/S4覆盖保持，精确main计时总账差不超过3ms。
+
+### 实际曲线 Systems 与决策
+
+管理员Systems2026.1.3在全部计时结束后串行捕获0/3，capture/export正常完成、单GPU1。实际demangled模板包含V，独立审计从grid·2^M·V恢复N/batch，核对全部合作outer形状的调用次数保持、M7/M8 grid加倍和shared/REG。N27/b1四类实际grid32768→65536，shared为前述四个候选值，证明候选确实用于真实热形状。
+
+合作outer累计4.395095→4.137593秒（少0.257502秒／5.85885%）；tile7.994454→8.094780秒，仍为最大NTT单项。N27四类outer合计约2.747671→2.526593秒，其中M7 forward0.847447→0.749971、inverse0.464501→0.406768；M8 forward0.934563→0.885174、inverse0.501160→0.484680秒。这是诊断trace中的累计kernel时间，不作为另一个正式整曲线提速比例或因果分解。
+
+自身GPU事件span36.888666→36.842774秒，并集30.852613→30.769642秒，无自身事件6.036054→6.073131秒（16.36%→16.48%）。CPU准备/同步空隙仍存在；tile/carry等也有波动，不能把收益被抵消全部归因为某一个CPU阶段。H2D4866次/7,009,115,275B、D2H6130次/3,138,157,112B、D2D40次/841,498,560B两侧相同，符合只改变kernel组织的预期；不能声称消除了PCIe传输。
+
+**保留开发实验，不提升生产默认。** 局部卷积和真实outer累计成本有改善，但整曲线稳定收益未证实。下一项优先tile canonical add/sub的指令减少，以及GPU下降frontier减少host准备；旧u展开/全局tile11负结果仍有效。不为这个未提升候选拟合新D/cprof，生产header、发布893保持。候选较大16k容量、实际NCU active warp/stall和未来生产移植仍须独立验证。
+
+[完整量化](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_outer_v_20261008/quantitative.json)、[独立审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_outer_v_20261008/final_audit.json)、[原生矩阵](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_outer_v_20261008/native_timing_r0/measurements.json)及evidence.zip/manifest绑定冻结源码、对象、输入、原始结果和trace。首次probe编译因误用完整变换的stride接口被拒绝，后改为直接调用真实strided outer/tile并检查padding；失败源码和日志保留。首次sandbox管理员启动失败没有采集，改用获准的提升权限启动后才完成两侧；原失败与实际PID/启动时间登记保留。
+
+收尾将collector记录的环境字段精简为NTT_*和CUDA_LAUNCH_BLOCKING，保留原采集器源码及精确两处输出表达式差异证明；输入、运行控制、算术/时序字段和原始日志均未改变。没有用修改后的工具SHA冒充原采集器身份，独立审计重新绑定各自版本。
+
+复现（新输出目录，Python 3，GPU1）：
+
+```powershell
+& tools/build/build_ntt_outer_v_probe.ps1 -Build build_cuda_cmake/new_outer_v_probe
+python tools/bench/bench_ntt_outer_v.py --exe build_cuda_cmake/new_outer_v_probe/ntt_outer_v_probe.exe --mode gate --output run/new_outer_v_gate
+python tools/bench/bench_ntt_outer_v.py --exe build_cuda_cmake/new_outer_v_probe/ntt_outer_v_probe.exe --mode timing --gate run/new_outer_v_gate/summary.json --output run/new_outer_v_timing
+& tools/build/build_ecm_cuda_stage2.ps1 -Engine development -Build build_cuda_cmake/new_outer_v_native -GlBackend ptx -SplitCompile 6
+$nativeArgs = @('--exe', 'build_cuda_cmake/new_outer_v_native/ecm_cuda_stage2.exe', '--save', 'build_cuda_cmake/_fixed_d_20261005/native_accept/m4423.save', '--reference', 'build_cuda_cmake/_stage2_root_prod_20261008/cross_timing_final_r3/measurements.json')
+python tools/bench/bench_stage2_outer_v.py @nativeArgs --mode gate --fixtures build_cuda_cmake/_stage2_wide_20261007/fixtures_r2/fixtures.json --output run/new_outer_v_native_gate
+python tools/bench/bench_stage2_outer_v.py @nativeArgs --mode timing --gate run/new_outer_v_native_gate/measurements.json --output run/new_outer_v_native_timing
+```
+
+Systems复现使用[现有工具](D:/code/MPA-OpenCl/tools/bench/profile_stage2_points.py:1)新增`--outer-narrow 0|3`，其他参数采用本批capture_systems.ps1；管理员串行运行，保持point1/pair1/baseCPU0/C64/min32768/Gamma1/root1/owner640/reuse3/arena6300/factor-only，最后对两个实际trace做离线分析。

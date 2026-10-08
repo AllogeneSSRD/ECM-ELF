@@ -10,14 +10,16 @@
 #if NTT_OUTER_UNROLL_U != 0 && NTT_OUTER_UNROLL_U != 4
 #error "NTT_OUTER_UNROLL_U must be 0 (compiler default) or 4 (experimental ILP)"
 #endif
-template <int M, bool INVERSE>
+template <int M, bool INVERSE, int V=(M==8 ? 16 : 32)>
 __global__ __launch_bounds__(256, M==8 ? 2 : 3)
 void outer_coop_kernel(unsigned long long *a, unsigned long long n, int stage,
                        const unsigned long long *coarse, const unsigned long long *radix,
                        unsigned long long stride)
 {
-    constexpr int R=1<<M, V=M==8 ? 16 : 32, ROWS=256/V;
+    constexpr int R=1<<M, ROWS=256/V;
     static_assert(M>=5 && M<=8,"cooperative radix supports 5..8 stages");
+    static_assert(V==32 || (M==7 && V==16) || (M==8 && (V==8 || V==16)),
+                  "unsupported cooperative offset width");
     __shared__ unsigned long long x[R*V], roots[R-1];
     // Later stages share d<ROWS roots across radix groups. Cache only those
     // roots (at most 128 words), instead of duplicating gl_mul per butterfly.
@@ -88,13 +90,29 @@ void outer_coop_kernel(unsigned long long *a, unsigned long long n, int stage,
     for(int r=row;r<R;r+=ROWS)a[(unsigned long long)r*S]=x[r*V+v];
 }
 
+// Development-only experiment. V changes CTA ownership, not transform tables;
+// plans can reuse the same arena while switching this mask between launches.
+static int outer_narrow_mask()
+{
+    const char *value=std::getenv("NTT_OUTER_NARROW");
+    if(!value || !*value)return 0;
+    char *end=nullptr;const long mask=std::strtol(value,&end,10);
+    if(!end || *end || mask<0 || mask>3) {
+        std::fprintf(stderr,NTT_PROBE_NAME ": NTT_OUTER_NARROW must be 0..3\n");
+        std::exit(3);
+    }
+    return (int)mask;
+}
+
 template <bool INVERSE>
 static void launch_outer_coop(int m,unsigned long long *a,unsigned long long n,int stage,
                               const unsigned long long *coarse,const unsigned long long *radix,
                               unsigned long long nbatch,unsigned long long stride)
 {
     const auto S=INVERSE ? (1ull<<stage) : (n>>(stage+m));
-    const int v=m==8 ? 16 : 32;
+    const int mask=outer_narrow_mask();
+    const bool narrow=(m==7 && (mask&1)) || (m==8 && (mask&2));
+    const int v=(m==8 ? 16 : 32)/(narrow ? 2 : 1);
     if(m<5 || m>8 || S<(unsigned long long)v) {
         std::fprintf(stderr,NTT_PROBE_NAME ": invalid cooperative outer M=%d S=%llu\n",m,S);
         std::exit(3);
@@ -103,7 +121,13 @@ static void launch_outer_coop(int m,unsigned long long *a,unsigned long long n,i
     switch(m) {
     case 5:outer_coop_kernel<5,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);break;
     case 6:outer_coop_kernel<6,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);break;
-    case 7:outer_coop_kernel<7,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);break;
-    case 8:outer_coop_kernel<8,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);break;
+    case 7:
+        if(narrow)outer_coop_kernel<7,INVERSE,16><<<grid,256>>>(a,n,stage,coarse,radix,stride);
+        else outer_coop_kernel<7,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);
+        break;
+    case 8:
+        if(narrow)outer_coop_kernel<8,INVERSE,8><<<grid,256>>>(a,n,stage,coarse,radix,stride);
+        else outer_coop_kernel<8,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);
+        break;
     }
 }

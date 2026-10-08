@@ -2041,3 +2041,8 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 ## 76. 实际热NTT诊断与下一候选（2026-10-08）
 
 N27单batch的tile/M7/M8正逆及N11/batch990的tile正逆8项管理员NCU已完成，独立审计核对完整输出和默认检查。隔离host range避开直接筛选引入的前序约151秒开销；原失败/中断保留。诊断exe与原计时exe不同，全部172个GPU SASS指令/调度编码及资源在只规范化匿名TU ID后相同，不宣称raw hash、host或周期等价。tile已有96–99% active warp/REG40/local0；outer只有约33%，shared限2CTA、REG容量5CTA。下一候选先保持radix/pass和数学工作量、收窄V使主shared由32降16KiB；公式预测容量5/4CTA尚待实测，更多CTA/同步/root加载可能抵消收益。tile另考察canonical add/sub整数指令；新D/Auto成本与多曲线内存lease仍待推进。完整8项值、失败解释和工具见[NTT形状报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:121)。
+
+
+## 77. outer V收窄同二进制实验（2026-10-08）
+
+开发同二进制已加入M7/V16、M8/V8及独立mask；资源API确认shared容量2→5/4CTA，REG48/46与LOCAL0保持。17个独立probe调用、12条原生gate通过；两轮k27完整卷积快6.38%/6.41%。8条正式整曲线37.564333→37.461348秒（少0.274%），两组慢0.094%/快0.640%，不提升生产默认。管理员Systems实际outer4.395095→4.137593秒（少5.859%），但tile增加约0.10秒、无自身事件仍约6秒；传输字节保持。失败编译、跨构建SASS不相同及初次管理员启动失败均保留；候选较大16k容量/硬件occupancy、新D/cprof和生产移植未完成。公式、全部样本、工具、审计与后续选择统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:195)。下一项考察tile算术和GPU下降frontier。

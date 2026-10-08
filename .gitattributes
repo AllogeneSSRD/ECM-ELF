@@ -89,3 +89,8 @@ tools/bench/profile_stage2_ntt_ncu.py text eol=lf
 tools/bench/prepare_stage2_ntt_range.py text eol=lf
 tools/bench/stage2_ntt_profile_range.cuh text eol=lf
 tools/bench/verify_stage2_ntt_range.py text eol=lf
+
+tools/test/ntt_outer_v_probe.cu text eol=lf
+tools/build/build_ntt_outer_v_probe.ps1 text eol=lf
+tools/bench/bench_ntt_outer_v.py text eol=lf
+tools/bench/bench_stage2_outer_v.py text eol=lf

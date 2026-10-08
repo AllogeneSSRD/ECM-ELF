@@ -4759,3 +4759,8 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 ## 117. Stage2实际热NTT的管理员诊断（2026-10-08）
 
 驻留根生产阶段已提交930dc3a。本轮完成N27/batch1的tile和M7/M8正逆、N11/batch990的tile正逆共8项实际曲线NCU，完整leaf/factor/默认检查覆盖与原正式参考一致。三种直接筛选造成前序F树约151秒开销，均保留中断记录；隔离host profiler range修复为0.238秒。诊断44f0149b与原生产exe不同，仅匿名TU ID规范化后172个GPU kernel的完整SASS/调度编码和资源一致；原始比较拒绝也保留。tile active warp96–99%/REG40/local0，outer约33%且shared限2CTA、寄存器允许5CTA，故下一项优先V轴收窄（保持M/pass/数学MAC，主shared减半），再考察canonical add/sub指令。未建立新生产提速、没有新cprof或替换893；全部实际指标、范围、源码和复现统一维护[NTT形状报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:121)。
+
+
+## 118. Stage2 outer V收窄：局部改善、整曲线收益未稳定（2026-10-08）
+
+开发同二进制已加入M7/V16、M8/V8及独立mask；资源API确认shared容量2→5/4CTA，REG48/46与LOCAL0保持。17个独立probe调用、12条原生gate通过；两轮k27完整卷积快6.38%/6.41%。8条正式整曲线37.564333→37.461348秒（少0.274%），两组慢0.094%/快0.640%，不提升生产默认。管理员Systems实际outer4.395095→4.137593秒（少5.859%），但tile增加约0.10秒、无自身事件仍约6秒；传输字节保持。失败编译、跨构建SASS不相同及初次管理员启动失败均保留；候选较大16k容量/硬件occupancy、新D/cprof和生产移植未完成。公式、全部样本、工具、审计与后续选择统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:195)。下一项考察tile算术和GPU下降frontier。
