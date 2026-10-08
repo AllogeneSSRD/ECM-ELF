@@ -7599,8 +7599,21 @@ static void groot_input_digest_host(const std::vector<unsigned long long> &input
     }
 }
 
+// Development A/B: 0=original, 1=q/qb, 2=G/reverse, 3=both.
+static int fold_owner_reuse_option() {
+    const char *v=std::getenv("NTT_FOLD_OWNER_REUSE");
+    if(!v)return 0;
+    return v[0]>='0' && v[0]<='3' && !v[1] ? v[0]-'0' : -1;
+}
+static unsigned fold_owner_reuse() {
+    const int mode=fold_owner_reuse_option();
+    if(mode<0){std::fprintf(stderr,"FATAL: NTT_FOLD_OWNER_REUSE must be 0..3\n");std::exit(3);}
+    return (unsigned)mode;
+}
 struct FoldDeviceStats {
     bool requested=false,enabled=false;
+    unsigned reuse=0;
+    unsigned long long layout_bytes=0,saved_bytes=0;
     std::string fallback="none";
     unsigned long long folds=0,muls=0,sub_coeffs=0,peak_bytes=0,h2d_bytes=0,d2h_bytes=0;
     unsigned long long avoided_h2d_bytes=0,avoided_d2h_bytes=0,checked_words=0;
@@ -7654,7 +7667,7 @@ struct FoldDeviceState {
     }
     bool init(PolyLayer &L,const std::vector<unsigned long long> &F,
               const std::vector<unsigned long long> &inverse,FoldDeviceStats &st,FoldFlatStats &fs) {
-        layer=&L;stats=&st;flat=&fs;st.requested=fold_device_flag("NTT_FOLD_DEVICE");
+        layer=&L;stats=&st;flat=&fs;st.requested=fold_device_flag("NTT_FOLD_DEVICE");st.reuse=fold_owner_reuse();
         if(!st.requested)return false;
         const double begin=now_s();W=L.W;P=F.size()/W-1;host_F=&F;
         check=fold_device_flag("NTT_FOLD_DEVICE_CHECK");
@@ -7663,7 +7676,11 @@ struct FoldDeviceState {
            g_s4_carry_trace || (hostpack && std::atoi(hostpack))) {st.fallback="backend";return false;}
         if(!P || F.size()!=(P+1)*W || inverse.size()!=(P+1)*W) {st.fallback="shape";return false;}
         if(check && P>64){std::fprintf(stderr,"FATAL: device fold GMP check limited to P<=64\n");std::exit(3);}
-        const unsigned long long bytes=ecm_stage2::owner_bytes(P,W);
+        ecm_stage2::FoldOwnerLayout layout;
+        if(!ecm_stage2::fold_owner_layout(P,W,st.reuse,layout)) {
+            std::fprintf(stderr,"FATAL: device fold owner layout overflow\n");std::exit(3);
+        }
+        const unsigned long long bytes=layout.bytes;st.layout_bytes=bytes;
         unsigned long long max_mb=640;
         if(const char *e=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))max_mb=std::strtoull(e,nullptr,10);
         if(max_mb>(~0ull>>20) || bytes>(max_mb<<20)) {st.fallback="budget";return false;}
@@ -7676,7 +7693,7 @@ struct FoldDeviceState {
         const size_t growth=target>current?target-current:0;
         if(bytes>available || available-bytes<growth+(1ull<<30)) {st.fallback="headroom";return false;}
         if(fold_device_flag("NTT_FOLD_DEVICE_ALLOC_FAIL")){st.fallback="allocation_fixture";return false;}
-        memory.words[0]=5*(P+1)*W;memory.words[1]=(4*P+2)*W;
+        memory.words[0]=layout.source_words;memory.words[1]=layout.result_words;
         for(int i=0;i<2;++i) {
             const auto error=cudaMalloc(&memory.data[i],memory.words[i]*8);
             if(error==cudaErrorMemoryAllocation){cudaGetLastError();memory.release();st.fallback="allocation";return false;}
@@ -7684,12 +7701,13 @@ struct FoldDeviceState {
         }
         CK(cudaMalloc(&map,24));CK(cudaMalloc(&length,8));CK(cudaMalloc(&modulus,W*8));
         CK(cudaMalloc(&digest,16));CK(cudaMemsetAsync(digest,0,16));
-        f=0;inv=(P+1)*W;h=2*(P+1)*W;g=3*(P+1)*W;reverse=4*(P+1)*W;
-        t=0;q=(2*P+1)*W;qb=(3*P+2)*W;
+        f=layout.f;inv=layout.inv;h=layout.h;g=layout.g;reverse=layout.reverse;
+        t=layout.t;q=layout.q;qb=layout.qb;
         upload(f,F);upload(inv,inverse);
         std::vector<unsigned long long> hn(W);mpz_to_words(hn,W,L.N);
         CK(cudaMemcpy(modulus,hn.data(),W*8,cudaMemcpyHostToDevice));st.h2d_bytes+=W*8;
-        st.peak_bytes=bytes;st.enabled=active=true;st.t_setup=now_s()-begin;
+        st.peak_bytes=bytes;st.saved_bytes=ecm_stage2::owner_bytes(P,W)-bytes;
+        st.enabled=active=true;st.t_setup=now_s()-begin;
         return true;
     }
     void upload(size_t offset,const std::vector<unsigned long long> &v) {
@@ -7768,12 +7786,18 @@ struct FoldDeviceState {
         }
         if(!ng || !hcount){hcount=0;return;}
         const size_t nT=ng+hcount-1;
+        // Digest and both gather kernels read G on the default stream before
+        // reverse_copy overwrites it. Oracle slots hold independent digit/result
+        // snapshots from the arena; no deferred CPU check borrows owner G.
         mul(g,ng,h,hcount,t,nT);
         if(nT<=P) {
             CK(cudaMemcpyAsync(memory.data[0]+h,memory.data[1]+t,nT*W*8,cudaMemcpyDeviceToDevice));hcount=nT;
         } else {
             const size_t k=nT-P;
             reverse_copy(t,nT-1,k);mul(reverse,k,inv,k,q,k);
+            // reverse_copy consumes all k<=P+1 quotient coefficients first;
+            // the following gather reads reverse/F in allocation 0 and scatters
+            // qb into allocation 1. qb may reuse q, never t or an input range.
             reverse_copy(q,k-1,k);mul(reverse,k,f,P+1,qb,P);
             const double begin=now_s();CK(cudaMemsetAsync(length,0,8));
             fold_subtract_kernel<<<(unsigned)((P+127)/128),128>>>(memory.data[1]+t,memory.data[1]+qb,
@@ -10875,7 +10899,7 @@ static bool real_run_geometry(unsigned long long p,int bits,ecm_stage2::Geometry
     return ecm_stage2::geometry(p,bits,[](unsigned long long m,int s,
         unsigned long long *n,unsigned long long *out) {
         return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
-    },g);
+    },g,fold_owner_reuse());
 }
 static bool real_run_words(unsigned long long P,int S,unsigned long long *out_words,
                            unsigned long long *n_fold,unsigned long long *n_tree)
@@ -10974,7 +10998,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const bool cache_rates_valid=false;
     bool calibrated=model_requested && cache_rates_valid && s4_on && !s4_tail_mont_mode() && g_xadd6 && g_s4_mersenne && g_groot_device &&
         g_s4_output_window && g_s4_chunk_output && g_s4_groot_only && g_s4_pack_direct &&
-        g_s4_oracle_async && g_s4_oracle_pack && g_s4_carry_batch && !g_s4_final_readback &&
+        g_s4_oracle_async && g_s4_oracle_pack && g_s4_carry_batch && !g_s4_final_readback && fold_owner_reuse()==0 &&
         L.S==4423 && mpz_popcount(L.N)==4423 && curves==1 && B1==1000 &&
         B2>=100000000000ull && B2<=2011326186870ull &&
         std::strstr(prop.name,"RTX 4060 Laptop") &&
@@ -11011,7 +11035,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                                          "NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL"})
         if(fuse_env_ull(key,0))calibrated=false;
     const auto fold_budget=fuse_env_ull("NTT_FOLD_DEVICE_MAX_MB",640)*1024*1024;
-    auto owner_bytes=[&](unsigned long long p){return ecm_stage2::owner_bytes(p,nw);};
+    auto owner_bytes=[&](unsigned long long p){return ecm_stage2::owner_bytes(p,nw,fold_owner_reuse());};
     if(D_in && (phi_u64(D_in)/2==0 || B2/D_in+2<=phi_u64(D_in)/2 ||
                 owner_bytes(phi_u64(D_in)/2)>fold_budget ||
                 (baby_requested && d_baby_payload_bytes(phi_u64(D_in)/2,nw)>baby_cap)))calibrated=false;
@@ -11642,10 +11666,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             (int)BR.fold_flat.enabled,BR.fold_flat.folds,BR.fold_flat.muls,BR.fold_flat.sub_coeffs,BR.fold_flat.peak_bytes,
             BR.fold_flat.t_prepare,BR.fold_flat.t_multiply,BR.fold_flat.t_subtract,BR.fold_flat.t_bridge);
         const auto &fd=BR.fold_device;
-        std::printf("real_batched_folddevice: requested=%d enabled=%d fallback=%s folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu h2d_bytes=%llu d2h_bytes=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu setup=%.6f upload=%.6f reverse=%.6f subtract=%.6f readback=%.6f\n",
+        std::printf("real_batched_folddevice: requested=%d enabled=%d fallback=%s folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu h2d_bytes=%llu d2h_bytes=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu setup=%.6f upload=%.6f reverse=%.6f subtract=%.6f readback=%.6f reuse=%u layout_bytes=%llu saved_bytes=%llu\n",
             (int)fd.requested,(int)fd.enabled,fd.fallback.c_str(),fd.folds,fd.muls,fd.sub_coeffs,fd.peak_bytes,
             fd.h2d_bytes,fd.d2h_bytes,fd.avoided_h2d_bytes,fd.avoided_d2h_bytes,fd.checked_words,
-            fd.t_setup,fd.t_upload,fd.t_reverse,fd.t_subtract,fd.t_readback);
+            fd.t_setup,fd.t_upload,fd.t_reverse,fd.t_subtract,fd.t_readback,fd.reuse,fd.layout_bytes,fd.saved_bytes);
         std::printf("real_batched_rootfold: requested=%d trees=%llu words=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu digest_words=%llu digest_sum=%016llx digest_xor=%016llx digest_kind=mixsum_xor_v1 t_handoff=%.6f\n",
             (int)fd.root_requested,fd.root_device_trees,fd.root_device_words,fd.root_h2d_avoided,fd.root_d2h_avoided,
             fd.root_checked_words,fd.root_digest_words,fd.root_digest[0],fd.root_digest[1],fd.root_t_handoff);

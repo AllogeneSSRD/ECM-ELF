@@ -129,7 +129,8 @@ def main():
     report['protocols'].append(row)
     # Obsolete algorithm overrides fail before any queue transaction or result publication.
     for key,value in [('NTT_XADD6','0'),('NTT_S5_ON','1'),('NTT_S4_OLDTAIL','1'),
-                      ('NTT_GIANT_SEED_PAIR','0'),('NTT_GIANT_BASE_CPU','1'),('NTT_FUSE_T','11')]:
+                      ('NTT_GIANT_SEED_PAIR','0'),('NTT_GIANT_BASE_CPU','1'),('NTT_FUSE_T','11'),
+                      ('NTT_FOLD_OWNER_REUSE','0')]:
         queue.write_text(task+'\n');before=queue.read_bytes();result=out/(key+'.jsonl')
         row,text=call(key,['--ini',str(qini),'--once','--results',str(result)],{key:value},code=2)
         if queue.read_bytes()!=before or result.exists() or 'requires '+key not in text:raise ValueError('unsafe configuration transaction')

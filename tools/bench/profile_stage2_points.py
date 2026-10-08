@@ -29,6 +29,8 @@ def main():
     p.add_argument('--short-chain-block',type=int,default=None,help='Opt-in short-chunk points per thread: 0 or 4..64')
     p.add_argument('--short-chain-max',type=int,default=None,help='Exclusive short-chunk point limit, at most 2^20')
     p.add_argument('--owner-mb',type=int,default=None)
+    p.add_argument('--owner-reuse',type=int,choices=(0,1,2,3),default=None,
+                   help='Development owner layout; omit for historical binaries')
     p.add_argument('--arena-mb',type=int,default=None)
     p.add_argument('--factor-only',action='store_true')
     p.add_argument('--log-level', choices=('quiet','curve','phases','batches','debug'),
@@ -81,6 +83,8 @@ def main():
     if a.owner_mb is not None:
         if a.owner_mb<0:raise ValueError('Invalid owner budget')
         env['NTT_FOLD_DEVICE_MAX_MB']=str(a.owner_mb)
+    if a.owner_reuse is not None:
+        env['NTT_FOLD_OWNER_REUSE']=str(a.owner_reuse)
     command = [str(exe), '--save', str(save), '--b2', str(a.b2), '--d', str(a.d), '--device', str(a.device), '--results', str(out/'results.jsonl'), '--log', str(out/'engine.log')]
     if a.arena_mb is not None:
         if a.arena_mb<=0:raise ValueError('Invalid arena budget')
@@ -106,6 +110,9 @@ def main():
     for token in ('stage1_skipped=1', 'gmp_check_bad=0', 'gmp_selftest_bad=0', 'pending=0', 'clean=1', 'fixed=3', 'point_arithmetic: xadd6=1'):
         assert token in text, token
     result = json.loads((out/'results.jsonl').read_text(encoding='utf-8').splitlines()[-1])
+    if a.owner_reuse is not None:
+        owner=dict(re.findall(r'(\w+)=(\S+)',re.search(r'real_batched_folddevice: (.*)',text)[1]))
+        assert int(owner['reuse'])==a.owner_reuse, 'Actual owner layout differs'
     n=int(result['N_hex'],16)
     if a.point_mersenne:
         enabled=int(n>1 and (n & (n+1))==0)

@@ -96,7 +96,7 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
         <<",\"P\":"<<g.p<<",\"I\":"<<p.giant_points<<",\"G\":"<<p.batches
         <<",\"fold_length\":"<<g.fold_length<<",\"tree_length\":"<<g.tree_length
         <<",\"fold_big_bytes\":"<<g.fold_big_bytes<<",\"arena_estimate_bytes\":"<<g.arena_estimate_bytes
-        <<",\"owner_bytes\":"<<g.fold_owner_bytes<<",\"baby_payload_bytes\":"<<p.baby_bytes
+        <<",\"owner_bytes\":"<<g.fold_owner_bytes<<",\"owner_reuse\":"<<fold_owner_reuse()<<",\"baby_payload_bytes\":"<<p.baby_bytes
         <<",\"free_bytes\":"<<p.free_bytes<<",\"arena_cap_bytes\":"<<p.arena_cap_bytes
         <<",\"owner_budget_bytes\":"<<p.owner_budget_bytes
         <<",\"owner_budget_fits\":"<<(p.owner_budget_fits ? "true" : "false")
@@ -135,4 +135,9 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
 
 int ecm_cuda_stage2_default_log_level() { return 4; }
 int ecm_cuda_stage2_set_log_level(int level) { return level == 4 ? 0 : 2; }
-int ecm_cuda_stage2_check_configuration() { return 0; }
+int ecm_cuda_stage2_check_configuration() {
+    if(fold_owner_reuse_option()<0) {
+        std::fprintf(stderr,"NTT_FOLD_OWNER_REUSE must be 0..3\n");return 2;
+    }
+    return 0;
+}

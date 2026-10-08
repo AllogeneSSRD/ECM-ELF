@@ -329,9 +329,85 @@ S4423/B2=8e12网格驻留样本（第34条，非边界重复均值），owner传
 
 1. 先统一缓存计账、真实payload和淘汰减账的公式，覆盖cache hit/grow/evict/rebuild/release及cap边界；当前约6149MiB账本不等于约3187MiB实际NTT payload。然后把big shape上限作为独立planner参数接入，并明确是否也禁止per-call超限分配。精确计账可能减少提前拒绝/淘汰，但GPU还要容纳owner/坐标/raw/output，不能据账本差值直接承诺大一档NTT一定装得下。
 2. 为不同 S、big上限、驻留/回退路径分别标定 D；当前 legacy排序仅作实验控制。模型应允许在 owner 预算不足时继续增加 D，比较搬运代价与减少 G 的收益，不能把“非驻留”直接判定为无效候选。
-3. 优先核验owner临时多项式别名。当前[生产step_loaded](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5276)的q在反转复制后不再用于数学计算，可考虑qb复用q；g在首次乘入t后不再用于数学计算，可考虑reverse复用g。按[实际布局](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5192)，q槽为(P+1)W、qb为PW，单独q/qb复用使9P+8→8P+8，省8WP B；g和reverse各为(P+1)W，单独复用使9P+8→8P+7，省8W(P+1) B；两项同时成立则为7P+7，省8W(2P+1) B。修正此前把两类槽位都近似按P计算的7P+8公式。本轮P=138240/W=70形状，664.457MiB理论变为590.629（q/qb）或516.801MiB（两项），可回到640MiB预算；当前M4423大界P126720已有驻留，不应仅凭节省容量预告时间收益。**尚未实现或验证**，必须先证明异步pack、oracle snapshots、digest和诊断读取已结束，再进行GMP/故障与真实曲线对照，并更新所有owner容量和D规划公式；同时核验NTT工作区与owner实际同时存活的分配。
+3. 优先核验owner临时多项式别名。当前[生产step_loaded](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5286)的q在反转复制后不再用于数学计算，可考虑qb复用q；g在首次乘入t后不再用于数学计算，可考虑reverse复用g。按[实际布局](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5201)，q槽为(P+1)W、qb为PW，单独q/qb复用使9P+8→8P+8，省8WP B；g和reverse各为(P+1)W，单独复用使9P+8→8P+7，省8W(P+1) B；两项同时成立则为7P+7，省8W(2P+1) B。修正此前把两类槽位都近似按P计算的7P+8公式。本轮P=138240/W=70形状，664.457MiB理论变为590.629（q/qb）或516.801MiB（两项），可回到640MiB预算；当前M4423大界P126720已有驻留，不应仅凭节省容量预告时间收益。**2026-10-08已实现开发候选，验收与性能范围见§9**。实现前先证明异步pack、oracle snapshots、digest和诊断读取已结束，再进行GMP/故障与真实曲线对照，并更新所有owner容量和D规划公式；同时核验NTT工作区与owner实际同时存活的分配。
 4. 后续 B2 采样需同时记录 D/P/L/G/驻留原因，并按 D饱和、NTT长度跳档和owner回退分段分析；同一幂指数不能覆盖所有区间。
 
 本轮新增实验和报告，不修改生产内核或发布默认。
 
 文中源行号链接指当前工作区对应实现的位置；实测版本以冻结生产19源码和manifest为准。较新工作区NTT文件另含默认关闭的carry融合候选，本轮没有编译或启用该候选。
+
+## 9. Owner 两类临时槽位复用（2026-10-08）
+
+### 9.1 生命周期与实际布局
+
+[共享布局函数](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:31)统一给出offset、两个allocation的word数和含metadata的payload；预算准入、D几何、plan-only与实际分配使用同一公式，所有乘加有溢出检查。开发引擎的 `NTT_FOLD_OWNER_REUSE=0/1/2/3` 分别为原布局、q/qb、G/reverse、两项；只接受单字符0..3。生产候选固定两项，不提供历史布局执行分支。旧Auto B2 profile没有新layout成本scope，明确拒绝别名配置。
+
+令P为F多项式次数，W=ceil(bits(N)/64)，每word为8B。source allocation保存F/inv/H/G/reverse；result allocation保存T/q/qb。原容量是5(P+1)W与(4P+2)W，新容量是4(P+1)W与(3P+2)W；加模数W word及map24B、length8B、digest16B后：
+
+```text
+original = 8W(9P+8)+48 B
+q/qb     = 8W(8P+8)+48 B
+G/reverse= 8W(8P+7)+48 B
+both     = 8W(7P+7)+48 B
+saved    = 8W(2P+1) B
+```
+
+[生产step_loaded](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5286)中，G的root digest与NTT [gather](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:3276)先读取，随后reverse(T)覆盖G槽；q的k<=P+1个系数先反转到source，再让qb的P个系数覆盖q槽。两次转换都按同一default stream排序；source与result仍是两个不同allocation，S4不能原地读写同一个NTT输入池。
+
+[异步oracle](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:3105)保存独立digits/result pinned快照及event，不持有G或q的借用；可选GMP fold参考在覆盖前构建独立输入。无新同步、算术kernel、乘法或传输操作。若原本已驻留，只减少owner容量，不能据此承诺速度收益；若因此避免host fold，实际传输/准备路径才会改变。
+
+W=70/P126720的owner实测638673328→496746368B，即609.086349→473.734253MiB，少135.352097MiB（22.22%）。P138240理论664.457443→516.800659MiB，可满足640MiB的owner单项预算；NTT工作区和剩余headroom仍需分别准入。W=256的640MiB理论P上限36407→46810，不保证更大NTT档位能实际分配。模块容量不能相加当作进程显存峰。
+
+### 9.2 数学与入口验收
+
+[复现工具](D:/code/MPA-OpenCl/tools/test/test_stage2_owner_reuse.py:1)的CPU probe编译真实C++头，与Python独立bigint公式比较：666/0，含四种mask、W=1..256、P=1/2/3/8/17/24/2880/126720/138240、确定性随机及首个64-bit溢出边界。
+
+开发native gate为39/0：27条实际曲线、4条plan、8条拒绝；五个CPU/GMP-ECM一致的有效宽save各四mask，单位案例完整monic叶指纹、root digest一致，非单位检出1019/2621并保持回退。每个正常fixture调用有30个独立GMP fold例，覆盖zero/near-N、短/填充、重复、k=P+1；另含2/66点短尾、预算0/分配失败、copied pack、同步oracle与ring1。三种fold/root/oracle毒化均拒绝发布结果，五种非法mask在执行前拒绝。
+
+保留两次采集器拒绝：先错误解析 `P=phi(D)/2=24`；后错误要求I=2的无fold输入也初始化owner。修正日志解析与实际生命周期断言，没有改数学或减弱指纹/故障检查。第二次保留20条已验收记录，续跑短尾与其余项；原短尾输出和初版工具/测量记录均保留。上述曲线含诊断，均非正式性能样本。
+
+证据位于ignored `build_cuda_cmake/_stage2_owner_20261008/` 的layout_r0、gate_r0、gate_r1及各冻结构建；性能与生产集成记录见下面各节。
+
+### 9.3 同二进制预算边界 A/B
+
+GPU1/RTX4060 Laptop，固定PTX3/outer0、pair1/CPUbase0/C64/min32768、arena6300MiB；使用原独立验证M4423 save（sigma26/B1=1000/lcm，SHA `0fe48106563dc727c092f4baf7b4c0f2f3bd57ce3bae9fd9f8a5989f2ec324d4`），B2=2011326186870/D1381380/P126720/I1456028/G12。每个预算先0/3各一条预热，再ABBA+BAAB；16正式样本、4预热全部保留，不给置信区间，不在计时中编译或profile。开发exe SHA `7dbfa2c597768d4edcd784e59b41fccbdee157cfbb8a10d5b2f5433653c8b502`，27项raw源已冻结。
+
+- **owner640MiB：两侧都驻留**。full均值38.5807355→38.3537335秒，少0.5884%；两组分别少1.2232%、慢0.0542%。容量确实减少，尚无稳定吞吐加速证据。
+- **owner512MiB：原布局fallback=budget，新布局驻留**。full均值41.31912375→38.4978525秒，少6.8280%；两组分别少6.9890%、6.6668%。这一形状通过避免回退取得实际收益；不是任意B2/位宽的普遍6.83%。
+
+每条完整叶指纹均为4244971527793015097，与上一阶段独立生产对照相同；factor集合、D/I、save身份、NTT乘法/归约数量、必需GMP/S4检查覆盖一致，pending0。mask不改变数学工作量，改变的是owner布局和预算选择的驻留路径。原/新驻留owner的H2D141928872B、D2H70963304B接口量一致，不能把节省135.35MiB显存写成相同数目的PCIe节省。预算回退的全进程传输变化须另看trace，逻辑avoided计数不代替PCIe实测。
+
+全部原始driver/engine/result与矩阵在[timing_r0](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_owner_20261008/timing_r0/measurements.json)。相同binary/mask对照不会混入生产源码拆分的已知宽泛型回退；本轮不宣称已解决generic16384原1.28%回退或相对发布893的净收益。
+
+### 9.4 生命周期与硬件诊断
+
+管理员Nsight Systems2026.1.3在GPU1对同binary/mask0与3分别采集，owner640MiB、其余配置与大界A/B一致；capture/export均exit0。按PID/context/address关联malloc/free，tracked设备payload峰4673579328→4531652368B（4457.072571→4321.720474MiB），恰好少141926960B，与owner公式一致。两侧均486次设备分配/486次释放、end_live0。这是本次被跟踪的malloc payload峰，排除module/context/driver与local backing，不是完整进程VRAM认证。
+
+pinned主机峰两侧358886600B（342.260933MiB），末尾仍340.705261MiB全局缓存，进程退出回收；没有减少此项RAM，也不能宣称全部host分配显式释放。原始trace、manifest及独立[audit0](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_owner_20261008/nsys_reuse0/audit.json)/[audit3](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_owner_20261008/nsys_reuse3/audit.json)分别保存。
+
+H2D两侧4866次/7151041091B；D2H为6130次/3209120304B与6131次/3209120312B，多1次8B；D2D两侧40次/841498560B。PCIe GPU copy约0.544+0.252秒，只是DMA事件执行时间；API可等待此前GPU工作。源码别名不增加copy操作，不能把+8B具体归因于某项调度而无进一步correlation证据。以上trace是已驻留对照，不用于量化512MiB回退路径的全进程传输节省。
+
+GPU事件span37.96294/37.22524秒，并集30.80479/30.79711秒，无本进程事件7.15814/6.42813秒（18.86%/17.27%）；不是整卡idle。候选采集中有CPU分析baseline trace并行运行，这些间隙仅诊断，不作为加速或等待减少证据。trace内tile_kernel约7.977/7.968秒（23877次）、两组outer_coop约4.38秒、s4_reduce约1.752秒（7984次）。含启动自检及收尾，不能直接当作某个Stage2子阶段比例；NTT tile和主机准备/同步仍是后续重点。没有新增NCU cycle/DRAM/occupancy结论。
+
+### 9.5 独立生产候选与下一项
+
+生产CUDA编译119.3秒（split6），候选SHA `de9830b0a9f7a6efa56d62f685e1d8f32704be7c56330ce303f3ef7c98cc6a6e`，25个raw依赖冻结。固定mask3，旧mask覆盖只能使用development；budget/backend/nonunit等必要回退保留。原生生产门禁29/0，含14条实际曲线、实际宽INI/queue、plan、五级oracle毒化、七项算法冲突与非法日志等级；新增mask0拒绝。生产16384位D210/P24 plan实报owner358448B/reuse3，与实际分配公式一致，curves_executed0。对上一阶段19ec生产源的cuobjdump比较，164个kernel的REG/STACK/SHARED/LOCAL全部保持；规范化匿名TU标识只为匹配名字，这不是SASS或周期等价证明。
+
+发布893保持。宽泛型原1.28%回退、较大16k形状容量/最终chain策略及新Auto B2成本仍未完成。下一轮先定位G树/fold/下降中host pack、metadata、oracle capture与等待，再在实际热NTT长度/层次上推进kernel候选；每项采用同binary对照和独立数学检查。多曲线需私有状态及总RAM/VRAM lease，不能直接并发调用全局状态，也不重复启用已无收益的pinned/context方案。
+
+复现本轮（使用新的输出目录；依赖上述已独立生成的有效fixtures/anchor，旧binary使用各自冻结来源）：
+
+```powershell
+$dev = 'build_cuda_cmake/owner_dev/ecm_cuda_stage2.exe'
+$fixtures = 'build_cuda_cmake/_stage2_wide_20261007/fixtures_r2/fixtures.json'
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+  -Build build_cuda_cmake/owner_dev -Engine development -GlBackend ptx -SplitCompile 6
+python tools/test/test_stage2_owner_reuse.py --mode layout --output run/owner_layout
+python tools/test/test_stage2_owner_reuse.py --mode gate --exe $dev `
+  --fixtures $fixtures --output run/owner_gate
+python tools/test/test_stage2_owner_reuse.py --mode timing --exe $dev `
+  --fixtures $fixtures --save build_cuda_cmake/_fixed_d_20261005/native_accept/m4423.save `
+  --output run/owner_timing
+```
+
+本阶段[独立最终审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_owner_20261008/final_audit.json)重解析全部矩阵/日志/result/检查覆盖，复核输入、对象、27/25个raw依赖、原始采集器拒绝、管理员trace和生命周期。证据归档于同目录evidence.zip/逐文件SHA清单；build/data继续忽略。生产候选功能通过，但宽形状无回退/新成本/相对发布版净收益尚未认证，不以本阶段替代整个长期优化目标。

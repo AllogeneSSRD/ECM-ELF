@@ -477,3 +477,14 @@ stage2_log_level=curve
 提交时逐文件核对Git blob与raw编译依赖。新生产源/头采用LF；ecm_expr.cpp、ecm_queue_config.cpp、ecm_expr.h固定已有CRLF原始字节，原实验树继续保持混合换行。仅保留字节，不改这些主机函数；不能用Git自动归一化后的文本冒充已测raw来源。
 
 **候选功能验收通过，性能无回退尚未成立；发布893保持。** 最终chain/短尾策略、较大宽形状容量、相对893的净收益、NTT诊断/未用辅助清理及新D/Auto B2成本仍待完成。现有cprof不适配19ec与配对默认。下一项优先证明并实现owner的q/qb别名复用，同时保留generic宽位数回退为后续性能诊断输入；再定位G树/fold/下降的准备、同步和热NTT形状。多曲线仍需私有状态及总RAM/VRAM lease，不能直接并发调用当前全局状态。
+
+
+## 2026-10-08 Owner临时槽位复用候选
+
+[生产布局](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5184)固定q/qb与G/reverse复用，共享overflow-checked公式 `8W(7P+7)+48 B` 用于实际分配/预算/plan；development可用 `NTT_FOLD_OWNER_REUSE=0/1/2/3` 同binary比较。生产不提供旧布局执行开关，容量/非单位等必要回退保持。详细生命周期、公式、源行、全部样本和复现命令统一维护[预算报告§9](D:/code/MPA-OpenCl/docs/STAGE2_B2_MEMORY_BUDGET_SCALING.md:339)。
+
+M4423/D1381380/P126720/B2≈2.01e12：owner609.09→473.73MiB（−135.35MiB）。640MiB已驻留A/B均值少0.59%，两组方向不同，无稳定加速证据；512MiB原布局回退、新布局驻留，41.3191→38.4979秒（−6.83%），两组同向。16正式样本/4预热，完整叶指纹/因子/检查覆盖保持；收益范围是开发同binary预算边界，不是新生产相对893的发布加速。
+
+候选生产de9830…98cc6a6e，CUDA119.3秒/25raw来源；CPU布局666/0、开发native39/0、独立生产native29/0。实际16384位plan实报reuse3/owner358448B。164个kernel资源记录保持，非周期证明。管理员Systems重建设备malloc峰4457.07→4321.72MiB，486alloc/free、end_live0；主机pinned峰342.26MiB保持。这些是被跟踪payload，不是完整进程VRAM/RAM峰。
+
+当前发布893保持。新trace中NTT tile约7.97秒、无本进程GPU事件约6–7秒；不能全部解释为PCIe，不能用profile间隙差作速度证据。下一项按G树/fold/下降定位host pack/metadata/oracle/同步，并诊断generic16384已知1.28%回退；最终chain、更大宽形状、新D/Auto B2成本与多曲线RAM/VRAM lease继续推进。

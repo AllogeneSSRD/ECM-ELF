@@ -2009,3 +2009,8 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 ## 70. 独立生产闭包与可控日志（2026-10-07–08）
 
 生产候选独立CU和src/cuda/stage2辅助文件，开发wrapper保留实验树；生产固定PTX3/outer0、xADD6及配对GPU seed，非单位/容量回退保持。五级CLI/INI日志默认batches只输出曲线/主阶段/批次，不改变stderr、JSON或检查。原生28/0、实际chain/短尾跨版本12/0、补充入口6/0与4/0完成；32正式样本/8预热的叶、factor、覆盖一致。M4423大界38.89675→38.88363秒近似持平，generic8193/16384慢0.78%/1.28%，不能凭kernel211→164或S4 stack减半宣称加速。管理员Systems满16384位D30030/P2880/I32768形状tracked设备峰639.76MiB、最终live0，事件间隙约1.06秒；不是任意B2完整显存或整卡idle认证。审计及归档完成，发布893保持。下一项owner临时多项式别名、generic宽位数回退诊断、最终chain策略和NTT热shape；新Auto成本与并发lease尚待推进。[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。
+
+
+## 71. Owner q/qb与G/reverse复用（2026-10-08）
+
+共享布局8W(7P+7)+48B接入开发四档mask及生产固定两项。CPU666/0、开发native39/0、生产native29/0；M4423大界owner609.09→473.73MiB，640MiB驻留均值少0.59%但不稳定，512MiB避免回退少6.83%（16正式/4预热、完整输出/覆盖保持）。管理员Systems tracked设备峰少135.35MiB、486alloc/free/end0；pinned保持，不当完整VRAM/RAM峰。独立生产de983候选未发布，893保持，宽泛型1.28%回退与新Auto成本未解决。下一项NTT热shape及G树/fold/下降准备/等待；多曲线仍需私有状态和总预算lease。详细公式、源行、原始拒绝、性能范围和复现统一维护[预算报告§9](D:/code/MPA-OpenCl/docs/STAGE2_B2_MEMORY_BUDGET_SCALING.md:339)。

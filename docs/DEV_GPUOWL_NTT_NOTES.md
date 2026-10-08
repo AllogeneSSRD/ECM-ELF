@@ -4727,3 +4727,8 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 ## 111. Stage2独立生产CU与日志控制（2026-10-07–08）
 
 实际生产实现移入src/cuda/ecm_cuda_stage2.cu，NTT闭包在src/cuda/stage2；development包装原实验引擎。生产选择PTX3/outer0/xADD6/配对GPU seed，移除Stage1重算、旧S5及REDC尾部，必要回退保留。五级日志接入CLI/Worker INI，默认batch无内部树层。候选25raw依赖、原生28/0、跨版本chain/短尾12/0、补充CPU/GPU入口6/0与4/0通过；32条正式A/B和8预热完成。M4423大界均值近似持平，generic8193/16384分别慢0.78%/1.28%，不宣称零回退或发布加速。管理员Systems满16384位形状tracked设备峰639.76MiB/最终live0；真实完整VRAM与大形状范围仍未认证。最终审计/归档完成，发布893保持；下一项owner q/qb复用及宽泛型回退诊断，成本/最终短尾/多曲线lease待推进。所有数据、范围、源码行及复现统一维护[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。
+
+
+## 112. Stage2 owner别名复用（2026-10-08）
+
+共享布局8W(7P+7)+48B接入开发四档mask及生产固定两项。CPU666/0、开发native39/0、生产native29/0；M4423大界owner609.09→473.73MiB，640MiB驻留均值少0.59%但不稳定，512MiB避免回退少6.83%（16正式/4预热、完整输出/覆盖保持）。管理员Systems tracked设备峰少135.35MiB、486alloc/free/end0；pinned保持，不当完整VRAM/RAM峰。独立生产de983候选未发布，893保持，宽泛型1.28%回退与新Auto成本未解决。下一项NTT热shape及G树/fold/下降准备/等待；多曲线仍需私有状态和总预算lease。详细公式、源行、原始拒绝、性能范围和复现统一维护[预算报告§9](D:/code/MPA-OpenCl/docs/STAGE2_B2_MEMORY_BUDGET_SCALING.md:339)。

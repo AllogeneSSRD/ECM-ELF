@@ -37,6 +37,7 @@ struct ProductionDefaults {
         set_default("NTT_GIANT_BASE_CPU", "0");
         set_default("NTT_DEVICE_GLEAF_MAX_MB", "512");
         set_default("NTT_FOLD_DEVICE_MAX_MB", "640");
+        set_default("NTT_FOLD_OWNER_REUSE", "3");
         set_default("NTT_S4_BATCH_MB", "64");
         set_default("NTT_S4_SAMPLE", "96");
         set_default("NTT_S4_CHECK_EVERY", "8");
@@ -5112,8 +5113,12 @@ static void groot_input_digest_host(const std::vector<unsigned long long> &input
     }
 }
 
+// Production retains only the validated q/qb and G/reverse reuse policy.
+static constexpr unsigned kFoldOwnerReuse=3;
 struct FoldDeviceStats {
     bool requested=false,enabled=false;
+    unsigned reuse=kFoldOwnerReuse;
+    unsigned long long layout_bytes=0,saved_bytes=0;
     std::string fallback="none";
     unsigned long long folds=0,muls=0,sub_coeffs=0,peak_bytes=0,h2d_bytes=0,d2h_bytes=0;
     unsigned long long avoided_h2d_bytes=0,avoided_d2h_bytes=0,checked_words=0;
@@ -5176,7 +5181,11 @@ struct FoldDeviceState {
            g_s4_carry_trace || (hostpack && std::atoi(hostpack))) {st.fallback="backend";return false;}
         if(!P || F.size()!=(P+1)*W || inverse.size()!=(P+1)*W) {st.fallback="shape";return false;}
         if(check && P>64){std::fprintf(stderr,"FATAL: device fold GMP check limited to P<=64\n");std::exit(3);}
-        const unsigned long long bytes=ecm_stage2::owner_bytes(P,W);
+        ecm_stage2::FoldOwnerLayout layout;
+        if(!ecm_stage2::fold_owner_layout(P,W,kFoldOwnerReuse,layout)) {
+            std::fprintf(stderr,"FATAL: device fold owner layout overflow\n");std::exit(3);
+        }
+        const unsigned long long bytes=layout.bytes;st.layout_bytes=bytes;
         unsigned long long max_mb=640;
         if(const char *e=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))max_mb=std::strtoull(e,nullptr,10);
         if(max_mb>(~0ull>>20) || bytes>(max_mb<<20)) {st.fallback="budget";return false;}
@@ -5189,7 +5198,7 @@ struct FoldDeviceState {
         const size_t growth=target>current?target-current:0;
         if(bytes>available || available-bytes<growth+(1ull<<30)) {st.fallback="headroom";return false;}
         if(fold_device_flag("NTT_FOLD_DEVICE_ALLOC_FAIL")){st.fallback="allocation_fixture";return false;}
-        memory.words[0]=5*(P+1)*W;memory.words[1]=(4*P+2)*W;
+        memory.words[0]=layout.source_words;memory.words[1]=layout.result_words;
         for(int i=0;i<2;++i) {
             const auto error=cudaMalloc(&memory.data[i],memory.words[i]*8);
             if(error==cudaErrorMemoryAllocation){cudaGetLastError();memory.release();st.fallback="allocation";return false;}
@@ -5197,11 +5206,12 @@ struct FoldDeviceState {
         }
         CK(cudaMalloc(&map,24));CK(cudaMalloc(&length,8));CK(cudaMalloc(&modulus,W*8));
         CK(cudaMalloc(&digest,16));CK(cudaMemsetAsync(digest,0,16));
-        f=0;inv=(P+1)*W;h=2*(P+1)*W;g=3*(P+1)*W;reverse=4*(P+1)*W;
-        t=0;q=(2*P+1)*W;qb=(3*P+2)*W;
+        f=layout.f;inv=layout.inv;h=layout.h;g=layout.g;reverse=layout.reverse;
+        t=layout.t;q=layout.q;qb=layout.qb;
         upload(f,F);upload(inv,inverse);
         std::vector<unsigned long long> hn(W);mpz_to_words(hn,W,L.N);
         CK(cudaMemcpy(modulus,hn.data(),W*8,cudaMemcpyHostToDevice));st.h2d_bytes+=W*8;
+        st.saved_bytes=ecm_stage2::owner_bytes(P,W,0)-bytes;
         st.peak_bytes=bytes;st.enabled=active=true;st.t_setup=now_s()-begin;
         return true;
     }
@@ -5281,12 +5291,16 @@ struct FoldDeviceState {
         }
         if(!ng || !hcount){hcount=0;return;}
         const size_t nT=ng+hcount-1;
+        // Digest and gather read G before reverse overwrites its slot, on the
+        // same default stream. Diagnostic GMP inputs are already independent.
         mul(g,ng,h,hcount,t,nT);
         if(nT<=P) {
             CK(cudaMemcpyAsync(memory.data[0]+h,memory.data[1]+t,nT*W*8,cudaMemcpyDeviceToDevice));hcount=nT;
         } else {
             const size_t k=nT-P;
             reverse_copy(t,nT-1,k);mul(reverse,k,inv,k,q,k);
+            // Reverse reads all k<=P+1 q coefficients before qb overwrites q.
+            // Oracle slots hold independent digit/result snapshots.
             reverse_copy(q,k-1,k);mul(reverse,k,f,P+1,qb,P);
             const double begin=now_s();CK(cudaMemsetAsync(length,0,8));
             fold_subtract_kernel<<<(unsigned)((P+127)/128),128>>>(memory.data[1]+t,memory.data[1]+qb,
@@ -8004,7 +8018,7 @@ static bool real_run_geometry(unsigned long long p,int bits,ecm_stage2::Geometry
     return ecm_stage2::geometry(p,bits,[](unsigned long long m,int s,
         unsigned long long *n,unsigned long long *out) {
         return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
-    },g);
+    },g,kFoldOwnerReuse);
 }
 static bool real_run_words(unsigned long long P,int S,unsigned long long *out_words,
                            unsigned long long *n_fold,unsigned long long *n_tree)
@@ -8140,7 +8154,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                                          "NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL"})
         if(fuse_env_ull(key,0))calibrated=false;
     const auto fold_budget=fuse_env_ull("NTT_FOLD_DEVICE_MAX_MB",640)*1024*1024;
-    auto owner_bytes=[&](unsigned long long p){return ecm_stage2::owner_bytes(p,nw);};
+    auto owner_bytes=[&](unsigned long long p){return ecm_stage2::owner_bytes(p,nw,kFoldOwnerReuse);};
     if(D_in && (phi_u64(D_in)/2==0 || B2/D_in+2<=phi_u64(D_in)/2 ||
                 owner_bytes(phi_u64(D_in)/2)>fold_budget ||
                 (baby_requested && d_baby_payload_bytes(phi_u64(D_in)/2,nw)>baby_cap)))calibrated=false;
@@ -8735,10 +8749,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             (int)BR.fold_flat.enabled,BR.fold_flat.folds,BR.fold_flat.muls,BR.fold_flat.sub_coeffs,BR.fold_flat.peak_bytes,
             BR.fold_flat.t_prepare,BR.fold_flat.t_multiply,BR.fold_flat.t_subtract,BR.fold_flat.t_bridge);
         const auto &fd=BR.fold_device;
-        stage2_log::print(stage2_log::phases, "real_batched_folddevice: requested=%d enabled=%d fallback=%s folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu h2d_bytes=%llu d2h_bytes=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu setup=%.6f upload=%.6f reverse=%.6f subtract=%.6f readback=%.6f\n",
+        stage2_log::print(stage2_log::phases, "real_batched_folddevice: requested=%d enabled=%d fallback=%s folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu h2d_bytes=%llu d2h_bytes=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu setup=%.6f upload=%.6f reverse=%.6f subtract=%.6f readback=%.6f reuse=%u layout_bytes=%llu saved_bytes=%llu\n",
             (int)fd.requested,(int)fd.enabled,fd.fallback.c_str(),fd.folds,fd.muls,fd.sub_coeffs,fd.peak_bytes,
             fd.h2d_bytes,fd.d2h_bytes,fd.avoided_h2d_bytes,fd.avoided_d2h_bytes,fd.checked_words,
-            fd.t_setup,fd.t_upload,fd.t_reverse,fd.t_subtract,fd.t_readback);
+            fd.t_setup,fd.t_upload,fd.t_reverse,fd.t_subtract,fd.t_readback,fd.reuse,fd.layout_bytes,fd.saved_bytes);
         stage2_log::print(stage2_log::phases, "real_batched_rootfold: requested=%d trees=%llu words=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu checked_words=%llu digest_words=%llu digest_sum=%016llx digest_xor=%016llx digest_kind=mixsum_xor_v1 t_handoff=%.6f\n",
             (int)fd.root_requested,fd.root_device_trees,fd.root_device_words,fd.root_h2d_avoided,fd.root_d2h_avoided,
             fd.root_checked_words,fd.root_digest_words,fd.root_digest[0],fd.root_digest[1],fd.root_t_handoff);
@@ -9059,7 +9073,7 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
         <<",\"P\":"<<g.p<<",\"I\":"<<p.giant_points<<",\"G\":"<<p.batches
         <<",\"fold_length\":"<<g.fold_length<<",\"tree_length\":"<<g.tree_length
         <<",\"fold_big_bytes\":"<<g.fold_big_bytes<<",\"arena_estimate_bytes\":"<<g.arena_estimate_bytes
-        <<",\"owner_bytes\":"<<g.fold_owner_bytes<<",\"baby_payload_bytes\":"<<p.baby_bytes
+        <<",\"owner_bytes\":"<<g.fold_owner_bytes<<",\"owner_reuse\":"<<kFoldOwnerReuse<<",\"baby_payload_bytes\":"<<p.baby_bytes
         <<",\"free_bytes\":"<<p.free_bytes<<",\"arena_cap_bytes\":"<<p.arena_cap_bytes
         <<",\"owner_budget_bytes\":"<<p.owner_budget_bytes
         <<",\"owner_budget_fits\":"<<(p.owner_budget_fits ? "true" : "false")
@@ -9118,6 +9132,7 @@ int ecm_cuda_stage2_check_configuration() {
         {"NTT_SMALL_PRIME_REUSE", "1"},
         {"NTT_FOLD_FLAT", "1"},
         {"NTT_FOLD_DEVICE", "1"},
+        {"NTT_FOLD_OWNER_REUSE", "3"},
         {"NTT_GROOT_DEVICE", "1"},
         {"NTT_SCALED_DESCENT", "1"},
         {"NTT_S4_OUTPUT_WINDOW", "1"},
