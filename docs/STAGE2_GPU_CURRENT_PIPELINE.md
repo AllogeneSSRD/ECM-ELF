@@ -2024,3 +2024,8 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 ## 73. 驻留H的GPU Gamma校正（2026-10-08）
 
 最后fold后复用死q槽，Mont(H,Gamma⁻¹R)保持普通域；只增加8W标量H2D，不增owner/NTT持久数组，必要CPU回退保留。开发21/0、原语r1/r2各12/0及大界完整H两条；生产36/0含五级Gamma毒化/实际queue。40正式/10预热，开发大界full少0.82%、生产大界少1.20%，各两组同向；三宽生产少0.80%/1.32%/0.57%。管理员Systems目标准备空隙0.753→0.131秒，设备tracked/pinned峰不变、200ms NVML峰均4989MiB；真实Compute校正约18ms但local请求仍多，不作为新主瓶颈。发布893/旧Auto成本保持，下一项下降根部桥接/组包与热NTT、最终短尾/较大16k/新成本/总内存lease。完整数学、公式、源行、全部样本、原始拒绝和复现继续维护[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md:537)。
+
+
+## 74. 驻留H/finv的下降根准备（2026-10-08，开发候选）
+
+复用死G/reverse及T槽，在owner释放前完成反转/补零与既有NTT/S4根乘法；省掉H读回和两份根操作数上传，不增持久数组。46项引擎检查、216项映射边界检查和32正式/8预热完成：M4423大界本批full少1.20%、两组同向，三宽少0.22%/0.32%/0.10%，不外推。管理员Systems实际少135.35MiB H2D和67.68MiB D2H、tracked/pinned峰保持；Compute反转约0.61ms，不是新主瓶颈。生产CU/发布893未接入，下一项统计边界整理和生产移植/门禁，再推进热NTT；新Auto成本、较大16k和总内存lease仍待完成。[完整合同、源行、公式与原始证据](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md:609)。

@@ -605,3 +605,59 @@ python tools/bench/bench_stage2_gscale.py --exe build_cuda_cmake/gscale_dev/ecm_
 生产编译用-Engine production，原生验收用test_stage2_production_native.py --gscale-check；跨生产比较用bench_stage2_production.py。各输出使用新目录；profiler由管理员启动，prepare先绑定完成矩阵，再用生成的capture.ps1采集，--collect-only验证。原始save必须保留自身CPU/GMP来源，不能用任意X代替性能输入。
 
 本阶段[独立最终审计](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_prepare_20261008/final_audit.json)重新解析所有原始result/log、正式顺序与检查覆盖，核对28/26个开发/生产raw依赖、对象、原始工具及拒绝记录、actual profiler kernel、传输和生命周期；complete=true。源码/工具/输入/日志/矩阵/trace归档于同目录evidence.zip及evidence_manifest.json，exe/obj/DLL通过外部SHA绑定，不内嵌。发布893字节保持；阶段结题不等于长期Stage2优化或整个发布资格完成。
+
+## 2026-10-08 驻留 H/finv 的下降根准备（开发候选）
+
+### 路径与合同
+
+接续 b52eea0 的 GPU Gamma 校正，新增开发开关 `NTT_SCALED_ROOT_DEVICE=0/1`，默认0。当前独立生产 CU 和发布893尚未接入这一候选。本轮用同二进制、相同Gamma设备路径比较根准备，不混用两次编译的GPU代码。
+
+令W=ceil(bits(N)/64)、P=deg F、C=H的活跃系数数。下降根仍为 `prefix_P(rev_(P-1)(H) * (rev_P(F))^-1)`，普通域不变，缓存finv已存在，没有再次求逆。只有owner活跃、0<C<=P、scaled descent启用且Gamma已经在GPU校正（或Gamma=1）时使用新路径；G1/根仍需除法、预算/分配/后端回退和CPU Gamma保留原路径。
+
+[反转内核](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7621)按word映射，H不足P个系数时高位补零；输出复用最后fold后闲置的G/reverse槽。随后[FoldDeviceState::scaled_root](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7846)用已有S4ResidentOwner/S4DeviceBatch，从source allocation中反转H和finv前P项直接gather到NTT，乘积prefix P写入独立result allocation中闲置T槽。三项word-offset元数据上传24B，输入/输出不别名、边界及owner租约仍由原S4入口检查。
+
+[收尾选择](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:10448)读回P项根状态，再读已有digest、释放owner；正常不再读回H或恢复H/finv的CPoly。完整GMP节点/传统下降检查开启时，额外保留H供oracle使用。根状态交给[descent_scaled](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:8029)，跳过原根组包/乘法，随后子层算法保持。根乘法仍计入descent的mul_calls/mul_pairs及t_descent；`scaled_root_device.seconds`包含本次反转、NTT/S4、根读回及诊断（如果开启）。旧real_batched_wall的pre/loop/post边界仍不包含所有下降前准备，不能代替stage2_full_wall，也不能与子阶段直接相加。生产移植前应整理这项统计边界。
+
+### 容量、计算与搬运
+
+没有新增持久CUDA数组，owner仍为8W(7P+7)+48B，生命周期延长到根输出读回完成。NTT根乘法次数、长度和S4输出窗口保持。新增反转读取8CW B、写入8PW B，O(PW)个word映射；resident输出scatter还读/写各8PW B。这些是GPU接口payload，不是DRAM计数或CUDA D2D API字节量。
+
+正常路径原H读回8CW B、原根操作数上传16PW B被移除；根结果8PW B读回两侧均保留。净节省H2D为16PW−24B，D2H为8CW B。根主机向量payload8PW B仍存在，原finvflat在根准备时暂时保留8W(P+1)B、随后释放；H/finv的CPoly恢复、H副本及根A/B主机组包被跳过。不能把这些模块payload简单相加当作进程RAM峰，vector描述符、allocator、pinned cache与其他阶段还有各自生命周期。
+
+`NTT_SCALED_ROOT_CHECK=1`读回完整H和finv，CPU独立反转/补零，再走原NTT/S4根乘法并逐word比较整个根，额外输入诊断D2H为8W(C+P)B且多一次根乘法。小规模另用NTT_SCALED_CHECK对所有节点做独立GMP长除法/三角求解；大规模完整根比较共享既有NTT/S4算术，不能称为全根独立GMP计算。TEST_BAD真实异或一个设备根word，另D2H/H2D各8B，必须带CHECK；所有诊断排除正式计时。
+
+### 验证与固定顺序计时
+
+开发候选SHA256为215f7cfe9fee3183272a94717a42903fdbfd6d897d4d69f32ee6dd3fef218a7c；CUDA编译265.5秒/split6，28个raw依赖和5个对象冻结。追加Auto B2范围检查后复用已验证CUDA对象重编译host；[旧成本配置](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:547)拒绝启用新根准备，没有生成新成本文件。
+
+[同二进制工具](D:/code/MPA-OpenCl/tools/bench/bench_stage2_gscale.py:1)增加--target scaled-root：33项初始门禁，11个有效CPU/GMP Stage1输入覆盖七档模板，包括已知非单位因子1019/2621、短2/66、预算/分配回退、实际根毒化和非法flag；小规模完整scaled节点及独立monic叶值通过。大界另2条完整根比较，检查126720项/8,870,400 words；四种owner mask补查5条，三宽32768点形状补查6条，合计46个引擎检查项。诊断多出的1次S4 launch/1对poly_mul/P个归约系数在工具和最终审计中单独核对；不要求它们与无诊断侧的计数相同。
+
+[反转映射工具](D:/code/MPA-OpenCl/tools/test/test_stage2_scaled_root_reverse.py:1)从实际编译冻结的CU抽取内核体，单独验证216例/593,024 words：W=1/8/9/20/35/70/128/129/256，P=1/2/3/17/129，短/满H、零数据、同一分配内不相交输入输出及保护区。它证明映射/补零边界，不替代完整引擎算术或生产资源检查。
+
+正式矩阵共32样本/8预热，每case2预热后8条ABBA+BAAB，默认必需检查、PTX3/outer0/pair1/CPUbase0/C64/min32768/owner640/reuse3/arena6300/factor-only。完整叶指纹、factor和NTT/S4检查覆盖保持，全部样本保留。M4423/B1=1000/lcm/sigma26、D1381380/P126720/I1456028/G12：full37.73597125→37.28418250秒（本批少1.1972%），两组少0.7785%/1.6149%。descent均值6.9655→6.68625秒（已计入GPU根准备），候选根准备均值0.184037秒；inverse1.921→1.89975、F树6.781→6.752也有变化，不能把整个full差全部归因局部搬运。
+
+宽有效输入B1=20/sigma26、D30030/P2880/I32768：generic8193 full5.40459925→5.39263450秒（少0.2214%，两组0.1824%/0.2603%）；M16381 11.28936775→11.25344300秒（少0.3182%，两组0.0597%/0.5761%）；generic16384 23.50315325→23.47909875秒（少0.1023%，两组0.0631%/0.1415%）。宽形状的收益很小，不外推任意B2/硬件或作为较大16k容量认证。
+
+### 管理员profiler与后续
+
+Systems2026.1.3对照独立于正式矩阵。大界H2D从4867次/7,151,041,651B变为4866次/7,009,115,275B，恰少141,926,376B=16PW−24；D2H从6131次/3,209,120,312B变为6130次/3,138,157,112B，恰少70,963,200B=8CW。D2D两侧40次/841,498,560B保持，新增scatter是kernel，不计为DMA API。H2D/D2H DMA累计时间分别0.543515→0.531658、0.251965→0.246535秒，不能与CPU准备时间混为一项。
+
+两侧tracked设备payload峰均4,531,652,368B（4321.72MiB）、486次alloc/free、end-live0；pinned峰358,886,600B（342.26MiB）保持。200ms NVML分别217/213条GPU1样本，整卡采样峰均4989MiB，含driver/context，不是连续进程峰认证。自身事件span37.434867→36.961554秒、并集30.852007→30.836865秒、无自身事件6.582860→6.124688秒（17.58%→16.57%）；这是诊断采集，不作为另一个正式提速百分比，也不是整卡idle证明。
+
+候选Systems实际反转一次，grid34650/block256、REG18、0.558319ms。Compute2026.2.1选择同一真实kernel/维度/设备，16-pass replay、clock/cache control none，完整输出与参考保持；反转0.606720ms、REG18/分配24、active warp76.61%、DRAM234.51GB/s、local load/store sectors均0。replay备份设备到系统RAM，时间/峰不能替代生产容量。反转只占约0.002% full，不值得优先继续微调。
+
+本次重编译开发kernel218→219；除新增反转REG18/STACK0/SHARED0/LOCAL0，既有block-product NW256 REG56→48、NW64 REG48→56，STACK保持8208/2064。没有修改它们的源码，但不能声称既有资源完全不变；同二进制A/B避免把这些codegen变化计入根算法收益。
+
+证据统一在ignored build_cuda_cmake/_stage2_scaled_root_20261008。原始collector、全部正式/诊断输出、输入、冻结源码/对象身份及profiler分别保存；最终审计final_audit.json和evidence_manifest.json核对原始字节与覆盖。下一步整理准备计时边界并移植到独立生产CU、做生产门禁/对照；再优先热点NTT（本trace tile约7.99秒、两类outer_coop共约4.39秒），而非0.6ms反转。较大16k、最终chain/短尾、新D/Auto成本与并发总RAM/VRAM lease仍未完成，发布893保持。
+
+复现（每次输出使用新目录）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_ecm_cuda_stage2.ps1 `
+  -Build build_cuda_cmake/scaled_root_dev -Engine development -GlBackend ptx -SplitCompile 6
+python tools/bench/bench_stage2_gscale.py --target scaled-root `
+  --exe build_cuda_cmake/scaled_root_dev/ecm_cuda_stage2.exe `
+  --fixtures build_cuda_cmake/_stage2_scaled_root_20261008/fixtures.json `
+  --save build_cuda_cmake/_fixed_d_20261005/native_accept/m4423.save `
+  --mode timing --output run/scaled_root_timing
+```

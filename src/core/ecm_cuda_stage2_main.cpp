@@ -544,6 +544,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     require("NTT_GIANT_SEED_PAIR",0,0); // Paired/rebased seeds require new measured costs.
     require("NTT_GIANT_BASE_CPU",0,0);
     require("NTT_GSCALE_DEVICE",0,0); // GPU Gamma correction requires new costs.
+    require("NTT_SCALED_ROOT_DEVICE",0,0); // Resident root preparation needs new costs.
     require("NTT_FOLD_OWNER_REUSE",0,0); // Owner aliases need a matching layout/cost scope.
     require("NTT_LADDER_CAP",8192,8192);
     require("CUDA_LAUNCH_BLOCKING",0,0);

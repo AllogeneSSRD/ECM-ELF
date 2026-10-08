@@ -27,6 +27,8 @@ def main():
     p.add_argument('--base-cpu',type=int,choices=(0,1),default=0)
     p.add_argument('--gscale-device',type=int,choices=(0,1),default=None,
                    help='Development GPU Gamma correction; omit for older binaries')
+    p.add_argument('--scaled-root-device',type=int,choices=(0,1),default=None,
+                   help='Development resident scaled root; omit for older binaries')
     p.add_argument('--cuda-launch-blocking',type=int,choices=(0,1),default=None,
                    help='Explicitly bind the capture launch mode instead of inheriting it')
     p.add_argument('--chain-block',type=int,default=None,help='Explicit chain points per thread; 4..2^20')
@@ -76,6 +78,7 @@ def main():
     env['NTT_GIANT_SEED_PAIR']=str(a.seed_pair)
     env['NTT_GIANT_BASE_CPU']=str(a.base_cpu)
     if a.gscale_device is not None:env['NTT_GSCALE_DEVICE']=str(a.gscale_device)
+    if a.scaled_root_device is not None:env['NTT_SCALED_ROOT_DEVICE']=str(a.scaled_root_device)
     if a.cuda_launch_blocking is not None:env['CUDA_LAUNCH_BLOCKING']=str(a.cuda_launch_blocking)
     if a.chain_block is not None:
         if not 4<=a.chain_block<=1<<20:raise ValueError('Invalid chain block')
@@ -120,6 +123,10 @@ def main():
         scale=dict(re.findall(r'(\w+)=(\S+)',re.search(r'real_gscale_device: (.*)',text)[1]))
         assert int(scale['requested'])==a.gscale_device, 'Gamma request differs'
         assert scale['checked_words']=='0' and scale['check_d2h_bytes']=='0', 'Diagnostic GMP copies in capture'
+    if a.scaled_root_device is not None:
+        root_stats=dict(re.findall(r'(\w+)=(\S+)',re.search(r'scaled_root_device: (.*)',text)[1]))
+        assert int(root_stats['requested'])==int(root_stats['enabled'])==a.scaled_root_device, 'Resident root differs'
+        assert root_stats['checked_words']=='0' and root_stats['check_d2h_bytes']=='0', 'Root diagnostics in capture'
     if a.owner_reuse is not None:
         owner=dict(re.findall(r'(\w+)=(\S+)',re.search(r'real_batched_folddevice: (.*)',text)[1]))
         assert int(owner['reuse'])==a.owner_reuse, 'Actual owner layout differs'

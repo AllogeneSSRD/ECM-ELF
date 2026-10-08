@@ -7610,6 +7610,21 @@ static unsigned fold_owner_reuse() {
     if(mode<0){std::fprintf(stderr,"FATAL: NTT_FOLD_OWNER_REUSE must be 0..3\n");std::exit(3);}
     return (unsigned)mode;
 }
+struct ScaledRootDeviceStats {
+    bool requested=false,enabled=false;
+    size_t coefficients=0;
+    unsigned long long h2d_bytes=0,d2h_bytes=0,check_d2h_bytes=0,checked_words=0;
+    unsigned long long avoided_h2d_bytes=0,avoided_h_readback_bytes=0;
+    double seconds=0;
+    const char *fallback="none";
+};
+__global__ void scaled_root_reverse_kernel(const unsigned long long *src,size_t count,
+    size_t degree,int W,unsigned long long *dst) {
+    const size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
+    if(i>=degree*(size_t)W)return;
+    const size_t c=degree-1-i/W;
+    dst[i]=c<count?src[c*W+i%W]:0ull;
+}
 struct FoldDeviceStats {
     bool requested=false,enabled=false;
     unsigned reuse=0;
@@ -7828,6 +7843,48 @@ struct FoldDeviceState {
         s2g_plain_scale(W,hcount,memory.data[0]+h,memory.data[1]+q,modulus,layer->N,factor,st,verify,poison);
         stats->h2d_bytes+=st.h2d_bytes;stats->d2h_bytes+=st.check_d2h_bytes;
     }
+    void scaled_root(std::vector<unsigned long long> &root,ScaledRootDeviceStats &st,
+                     bool verify,bool poison) {
+        if(!active || !hcount || hcount>P || reverse+P*W>memory.words[0] ||
+           inv+P*W>memory.words[0] || t+P*W>memory.words[1]) {
+            std::fprintf(stderr,"FATAL: scaled root owner lease invalid\n");std::exit(3);
+        }
+        const double begin=now_s();
+        std::vector<unsigned long long> expected;
+        if(verify) {
+            // Independent host packing of the entire H and cached inverse;
+            // arithmetic remains the validated S4 path. Small gates also use
+            // the independent GMP triangular oracle in descent_scaled.
+            auto hc=read(h,hcount),ic=read(inv,P);
+            st.check_d2h_bytes+=(hcount+P)*W*8ull;
+            std::vector<unsigned long long> a(P*W,0);
+            for(size_t i=0;i<P;++i)if(P-1-i<hcount)
+                std::copy_n(hc.data()+(P-1-i)*W,W,a.data()+i*W);
+            flat_mul_batch(*layer,a,P,ic,P,1,expected,BC_DESCENT,0,P);
+        }
+        // G/reverse is dead after the final fold; H and finv are disjoint.
+        scaled_root_reverse_kernel<<<(unsigned)((P*W+255)/256),256>>>(
+            memory.data[0]+h,hcount,P,(int)W,memory.data[0]+reverse);
+        CK(cudaGetLastError());
+        unsigned long long metadata[3]={(unsigned long long)reverse,(unsigned long long)inv,(unsigned long long)t};
+        CK(cudaMemcpy(map,metadata,24,cudaMemcpyHostToDevice));stats->h2d_bytes+=24;st.h2d_bytes=24;
+        S4DeviceBatch batch{memory.data[0],map,memory.data[1],metadata,memory.words[0],memory.words[1],1,&memory};
+        std::vector<unsigned long long> unused;
+        poly_mul_batch_modN(*layer,nullptr,nullptr,P,P,1,unused,BC_DESCENT,nullptr,0,P,&batch);
+        if(poison) {
+            unsigned long long v=0;CK(cudaMemcpy(&v,memory.data[1]+t,8,cudaMemcpyDeviceToHost));
+            v^=1;CK(cudaMemcpy(memory.data[1]+t,&v,8,cudaMemcpyHostToDevice));
+            stats->d2h_bytes+=8;stats->h2d_bytes+=8;st.check_d2h_bytes+=8;st.h2d_bytes+=8;
+        }
+        root.resize(P*W);CK(cudaMemcpy(root.data(),memory.data[1]+t,P*W*8,cudaMemcpyDeviceToHost));
+        stats->d2h_bytes+=P*W*8;st.d2h_bytes=P*W*8;
+        if(verify) {
+            st.checked_words=root.size();
+            if(root!=expected){std::fprintf(stderr,"FATAL: scaled root device mismatch\n");std::exit(3);}
+        }
+        st.enabled=true;st.coefficients=P;st.avoided_h2d_bytes=16ull*P*W;
+        st.avoided_h_readback_bytes=8ull*hcount*W;st.seconds=now_s()-begin;
+    }
     void finish(std::vector<unsigned long long> &H) {H=read(h,hcount);read_digest();release();}
 };
 
@@ -7973,7 +8030,7 @@ static void descent_scaled(PolyLayer &L,
     const std::vector<std::vector<unsigned long long>> &Ft,
     const std::vector<size_t> &Fdeg, size_t Fpad, const CPoly &H,
     const CPoly *cached_finv, std::vector<std::vector<unsigned long long>> &values,
-    ScaledStats &st, int cat, bool check)
+    ScaledStats &st, int cat, bool check, std::vector<unsigned long long> *prepared_root=nullptr)
 {
     const size_t W=L.W,P=Fdeg[1];
     if(!L.s4 || !P || Ft.size()<2*Fpad || Fdeg.size()<2*Fpad ||
@@ -7981,6 +8038,12 @@ static void descent_scaled(PolyLayer &L,
         std::fprintf(stderr,"%s: FATAL: invalid scaled descent shape (GMP check limited to 512 leaves)\n",NTT_PROBE_NAME);
         std::exit(3);
     }
+    std::vector<unsigned long long> A,B,root;
+    if(prepared_root) {
+        if(prepared_root->size()!=P*W){std::fprintf(stderr,"FATAL: prepared scaled root length\n");std::exit(3);}
+        root.swap(*prepared_root);++st.root_inverse_reused;++st.mul_calls;++st.mul_pairs;
+        st.pack_peak_bytes=8ull*root.capacity();
+    } else {
     CPoly local_inv, h=H;
     if(h.size()>P) {
         h=cp_mod(h,cp_from_flat(Ft[1],P,W),L); ++st.root_divisions;
@@ -7993,7 +8056,7 @@ static void descent_scaled(PolyLayer &L,
             std::copy_n(Ft[1].data()+(P-i)*W,W,rev[i].begin());
         local_inv=cp_inv_series(rev,P,L);inv=&local_inv;
     } else ++st.root_inverse_reused;
-    std::vector<unsigned long long> A(P*W,0),B(P*W,0),root;
+    A.assign(P*W,0);B.assign(P*W,0);
     for(size_t i=0;i<P;++i) {
         if(P-1-i<h.size()) std::copy(h[P-1-i].begin(),h[P-1-i].end(),A.begin()+i*W);
         std::copy((*inv)[i].begin(),(*inv)[i].end(),B.begin()+i*W);
@@ -8002,6 +8065,7 @@ static void descent_scaled(PolyLayer &L,
     ++st.mul_calls;++st.mul_pairs;
     st.pack_peak_bytes=std::max(st.pack_peak_bytes,8ull*(A.capacity()+B.capacity()+root.capacity()));
     std::vector<unsigned long long>().swap(A);std::vector<unsigned long long>().swap(B);
+    }
     std::vector<std::vector<unsigned long long>> cur(1);
     cur[0].swap(root);
     auto validate=[&](const std::vector<std::vector<unsigned long long>> &front,size_t base) {
@@ -10370,19 +10434,39 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         R.t_loop_wall += now_s() - tloop0;
     }
+    ScaledRootDeviceStats root_device;
+    std::vector<unsigned long long> prepared_root;
+    root_device.requested=gscale_flag("NTT_SCALED_ROOT_DEVICE");
+    const bool root_check=gscale_flag("NTT_SCALED_ROOT_CHECK"),root_bad=gscale_flag("NTT_SCALED_ROOT_TEST_BAD");
+    if(root_bad && !root_check){std::fprintf(stderr,"FATAL: scaled root poison requires full root check\n");std::exit(3);}
     R.gscale.requested=gscale_flag("NTT_GSCALE_DEVICE");
     const bool gscale_check=gscale_flag("NTT_GSCALE_DEVICE_CHECK"),gscale_bad=gscale_flag("NTT_GSCALE_DEVICE_TEST_BAD");
     if(gscale_bad && !gscale_check){std::fprintf(stderr,"FATAL: Gamma poison requires full GMP check\n");std::exit(3);}
     if(R.gscale.requested && device_fold.active && device_fold.hcount && mpz_cmp_ui(Ginv,1)!=0) {
         device_fold.scale(Ginv,R.gscale,gscale_check,gscale_bad);R.t_gscale=R.gscale.seconds;
     } else if(R.gscale.requested)R.gscale.fallback=!device_fold.active?"owner":!device_fold.hcount?"empty":"unit";
-    if(device_fold.active)device_fold.finish(Hflat);
+    if(root_device.requested && device_fold.active && device_fold.hcount && device_fold.hcount<=P &&
+       g_scaled_descent && (R.gscale.enabled || mpz_cmp_ui(Ginv,1)==0)) {
+        device_fold.scaled_root(prepared_root,root_device,root_check,root_bad);
+        const char *dc=std::getenv("NTT_S4_DESCENT_CHECK");
+        if(g_scaled_check || (dc && std::atoi(dc)))Hflat=device_fold.read(device_fold.h,device_fold.hcount);
+        device_fold.read_digest();device_fold.release();
+    } else {
+        if(root_device.requested)root_device.fallback=!device_fold.active?"owner":!g_scaled_descent?"backend":
+            device_fold.hcount>P?"root_division":!device_fold.hcount?"empty":"gamma_cpu";
+        if(device_fold.active)device_fold.finish(Hflat);
+    }
+    std::printf("scaled_root_device: requested=%d enabled=%d coefficients=%llu h2d_bytes=%llu d2h_bytes=%llu check_d2h_bytes=%llu checked_words=%llu avoided_h2d_bytes=%llu avoided_h_readback_bytes=%llu seconds=%.6f fallback=%s\n",
+        (int)root_device.requested,(int)root_device.enabled,(unsigned long long)root_device.coefficients,
+        root_device.h2d_bytes,root_device.d2h_bytes,root_device.check_d2h_bytes,root_device.checked_words,
+        root_device.avoided_h2d_bytes,root_device.avoided_h_readback_bytes,root_device.seconds,root_device.fallback);
     if(fold_flat_enabled && !Hflat.empty()) {
         const double tb=now_s();H=cp_from_flat(Hflat,Hflat.size()/W-1,W);
-        if(!finvflat.empty())finv=cp_from_flat(finvflat,finvflat.size()/W-1,W);
+        if(!root_device.enabled && !finvflat.empty())finv=cp_from_flat(finvflat,finvflat.size()/W-1,W);
         std::vector<unsigned long long>().swap(Hflat);std::vector<unsigned long long>().swap(finvflat);
         R.fold_flat.t_bridge+=now_s()-tb;
     }
+    if(root_device.enabled)std::vector<unsigned long long>().swap(finvflat);
     /* ---- UNDO THE PROJECTIVE SCALE (section 42) ------------------------------------------
        The projective leaves multiplied the tree by Gamma, and the fold carries a constant
        straight through (H <- (G*H) mod F scales by the same constant), so H left the loop as
@@ -10507,7 +10591,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         } else if (L.s4 && g_scaled_descent) {
             L.cat=BC_DESCENT;
             ScaledStats st;
-            descent_scaled(L,Ft,Fdeg,Fpad,H,&finv,values,st,BC_DESCENT,g_scaled_check);
+            descent_scaled(L,Ft,Fdeg,Fpad,H,&finv,values,st,BC_DESCENT,g_scaled_check,root_device.enabled?&prepared_root:nullptr);
             L.cat=-1;
             std::printf("scaled_descent: enabled=1 levels=%llu mul_calls=%llu mul_pairs=%llu copies=%llu zeros=%llu states=%llu words=%llu leaves=%llu checked_states=%llu checked_words=%llu frontier_peak_bytes=%llu pack_peak_bytes=%llu root_inverse_reused=%llu root_divisions=%llu\n",
                 st.levels,st.mul_calls,st.mul_pairs,st.copies,st.zeros,st.states,st.words,st.leaves,st.checked_states,st.checked_words,st.frontier_peak_bytes,st.pack_peak_bytes,st.root_inverse_reused,st.root_divisions);
@@ -10621,7 +10705,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         for(const auto &v:values) for(auto word:v) {hash=(hash^word)*1099511628211ull;++words;}
         std::printf("descent_values: leaves=%llu words=%llu hash=%llu\n",(unsigned long long)values.size(),words,hash);
     }
-    R.t_descent = now_s() - td0;
+    R.t_descent = now_s() - td0 + root_device.seconds;
     /* a phase marker, because the descent is where a long shape can look hung: everything after
        it used to print nothing until the final summary line */
     if (R.dbg_progress)
@@ -11412,6 +11496,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const char *fold_test=std::getenv("NTT_FOLD_FLAT_TEST");
     if(fold_test && std::atoi(fold_test))fold_flat_fixture(L);
     gscale_flag("NTT_GSCALE_DEVICE");gscale_flag("NTT_GSCALE_DEVICE_CHECK");gscale_flag("NTT_GSCALE_DEVICE_TEST_BAD");
+    gscale_flag("NTT_SCALED_ROOT_DEVICE");gscale_flag("NTT_SCALED_ROOT_CHECK");gscale_flag("NTT_SCALED_ROOT_TEST_BAD");
     if(gscale_flag("NTT_GSCALE_DEVICE_TEST"))s2g_plain_scale_fixture(L.N,nw);
     const char *fold_device_test=std::getenv("NTT_FOLD_DEVICE_TEST");
     if(fold_device_test && std::atoi(fold_device_test))fold_device_fixture(L);
@@ -11437,7 +11522,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_BABY_DEVICE_TEST","NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL","NTT_FUSE_COOP_TEST","NTT_FUSE_COOP_BAD","NTT_XADD6_TEST","NTT_XADD6_TEST_BAD","NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GSCALE_DEVICE_TEST","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GSCALE_DEVICE_TEST","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }
