@@ -4773,3 +4773,10 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 ## 120. Stage2 canonical减法原生验收（2026-10-08）
 
 开发引擎已接入编译期NTT_GL_ADD_SUB_MASK，默认0、仅非零包含canonical头，生产拒绝非零；非零构建关闭旧D算术scope并在profile I/O前拒绝Auto B2。29raw依赖/5对象冻结，26正确性/9控制通过，完整块66240点＋65点尾段及独立GMP节点覆盖保持。32正式/8预热，M4423大界37.6165975→36.9992900秒（少1.64105%，两组同向），generic8193/M16381少0.47387%/0.52742%；generic16384少0.07022%但两组反向，收益未确立。管理员Systems真实tile7.978363→7.714584秒（少3.306%），全部503组kernel几何/次数、PCIe次数/字节及设备/pinned峰保持，约6.2秒准备间隙仍在。独立审计/归档完成，保留sub-only开发候选，默认0/生产CU/发布893未替换；下一项GPU下降frontier减少CPU组包与中间回读，较大16k、新D/Auto成本及总预算lease未完成。完整范围、源行、所有样本与复现统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:324)。
+
+
+## 121. Stage2 GPU驻留下降frontier：大界full少5.11%（2026-10-08）
+
+开发候选复用fold owner保存scaled各层状态，GPU gather/reverse直接打包父状态及兄弟F；新增24P B metadata，无新增持久多项式数组，保留预算/分配/非单位/无owner等必要回退。15控制、26原生门禁及32正式/8预热完成，完整叶/GMP节点/chain＋短尾与默认检查保持。M4423大界full36.523048→34.657866秒（少5.10686%，两组同向），descent6.38750→4.49125秒（少29.68689%）。generic16384 full少4.11318%但超出descent差额，8193均值受基线长尾影响，M16381慢1.12090%且两组相反，不能推广普遍收益。
+
+管理员Systems与独立审计确认实际H2D少3464234128B、D2H少1204080640B、D2D多2293760B，精确匹配公式；206组tile/outer几何/56598次调用保持，tracked设备峰4321.720MiB不变、结束live0，pinned峰少50.999MiB。无自身GPU事件5.942→4.031秒只是单次诊断，不是整卡idle。源/工具/输入/失败/矩阵/trace归档，生产CU/发布893尚未移植；下一项独立生产整理、较大16k真实容量/宽性能、新D/Auto成本与总预算lease。完整算法、source/line、公式、全部样本和复现统一维护[步骤报告§80](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:2060)。

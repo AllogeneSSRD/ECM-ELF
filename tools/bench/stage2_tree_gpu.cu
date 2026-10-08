@@ -3377,6 +3377,7 @@ struct S4DeviceBatch {
     const unsigned long long *host_meta=nullptr;
     size_t src_words=0,dst_words=0,nbatch=0;
     const S4ResidentOwner *owner=nullptr; // nullptr = the original exclusive raw frontier lease
+    bool reverse_b=false; // scaled sibling input stays in ordinary host order
 };
 __global__ void s4_pack_gather_kernel(const unsigned long long *src,
     const unsigned long long *offsets, size_t m, size_t nc, int W, int bits,
@@ -3386,6 +3387,24 @@ __global__ void s4_pack_gather_kernel(const unsigned long long *src,
     if(gid>=m*nc)return;
     const size_t slice=gid/nc,coef=gid%nc;
     const auto *c=src+offsets[slice]+coef*W;
+    auto *d=dst+slice*N+coef*sw;
+    const unsigned long long mask=(1ull<<bpw)-1;
+    for(int k=0;k<(bits+bpw-1)/bpw;++k) {
+        const int bit=k*bpw,w=bit>>6,shift=bit&63;
+        unsigned long long v=c[w]>>shift;
+        if(shift+bpw>64 && w+1<W)v|=c[w+1]<<(64-shift);
+        d[k]=v&mask;
+    }
+}
+// Separate reverse specialization leaves the original forward gather unchanged.
+__global__ void s4_pack_gather_reverse_kernel(const unsigned long long *src,
+    const unsigned long long *offsets,size_t m,size_t nc,int W,int bits,
+    int bpw,unsigned long long sw,unsigned long long N,unsigned long long *dst)
+{
+    const size_t gid=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
+    if(gid>=m*nc)return;
+    const size_t slice=gid/nc,coef=gid%nc;
+    const auto *c=src+offsets[slice]+(nc-1-coef)*W;
     auto *d=dst+slice*N+coef*sw;
     const unsigned long long mask=(1ull<<bpw)-1;
     for(int k=0;k<(bits+bpw-1)/bpw;++k) {
@@ -3411,8 +3430,12 @@ static int s4_gather_final_input(void *ctx,const NttShape &sh,unsigned long long
     s4_pack_gather_kernel<<<(unsigned int)((m*p.ma+255)/256),256>>>(p.batch->src,
         p.batch->meta+p.s0,m,p.ma,p.W,p.bits,p.bpw,p.sw,p.N,a);
     CK(cudaGetLastError());
-    s4_pack_gather_kernel<<<(unsigned int)((m*p.mb+255)/256),256>>>(p.batch->src,
-        p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
+    if(p.batch->reverse_b)
+        s4_pack_gather_reverse_kernel<<<(unsigned int)((m*p.mb+255)/256),256>>>(p.batch->src,
+            p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
+    else
+        s4_pack_gather_kernel<<<(unsigned int)((m*p.mb+255)/256),256>>>(p.batch->src,
+            p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
     CK(cudaGetLastError());
     p.C->t_packdev+=now_s()-start;
     return 0;
@@ -7844,7 +7867,7 @@ struct FoldDeviceState {
         stats->h2d_bytes+=st.h2d_bytes;stats->d2h_bytes+=st.check_d2h_bytes;
     }
     void scaled_root(std::vector<unsigned long long> &root,ScaledRootDeviceStats &st,
-                     bool verify,bool poison) {
+                     bool verify,bool poison,bool keep_resident=false) {
         if(!active || !hcount || hcount>P || reverse+P*W>memory.words[0] ||
            inv+P*W>memory.words[0] || t+P*W>memory.words[1]) {
             std::fprintf(stderr,"FATAL: scaled root owner lease invalid\n");std::exit(3);
@@ -7876,8 +7899,10 @@ struct FoldDeviceState {
             v^=1;CK(cudaMemcpy(memory.data[1]+t,&v,8,cudaMemcpyHostToDevice));
             stats->d2h_bytes+=8;stats->h2d_bytes+=8;st.check_d2h_bytes+=8;st.h2d_bytes+=8;
         }
-        root.resize(P*W);CK(cudaMemcpy(root.data(),memory.data[1]+t,P*W*8,cudaMemcpyDeviceToHost));
-        stats->d2h_bytes+=P*W*8;st.d2h_bytes=P*W*8;
+        if(!keep_resident || verify) {
+            root.resize(P*W);CK(cudaMemcpy(root.data(),memory.data[1]+t,P*W*8,cudaMemcpyDeviceToHost));
+            stats->d2h_bytes+=P*W*8;st.d2h_bytes=P*W*8;
+        } else root.clear();
         if(verify) {
             st.checked_words=root.size();
             if(root!=expected){std::fprintf(stderr,"FATAL: scaled root device mismatch\n");std::exit(3);}
@@ -8130,6 +8155,8 @@ static void descent_scaled(PolyLayer &L,
     st.leaves+=leaf;
 }
 
+#include "stage2_scaled_frontier.cuh"
+
 static void scaled_descent_fixture(PolyLayer &L)
 {
     if(!L.s4) {std::fprintf(stderr,"%s: FATAL: scaled fixture requires S4\n",NTT_PROBE_NAME);std::exit(3);}
@@ -8179,6 +8206,23 @@ static void scaled_descent_fixture(PolyLayer &L)
             if(kind==1) cp_trim(H);
             std::vector<std::vector<unsigned long long>> values;
             descent_scaled(L,Ft,deg,pad,H,kind==0?nullptr:&inv,values,sum,-1,true);
+            if(gscale_flag("NTT_SCALED_FRONTIER_TEST")) {
+                FoldDeviceState owner;FoldDeviceStats device_stats;FoldFlatStats flat_stats;
+                const auto inverse=cp_to_flat(inv,W);
+                if(!owner.init(L,Ft[1],inverse,device_stats,flat_stats)) {
+                    std::fprintf(stderr,"FATAL: scaled frontier fixture owner unavailable\n");std::exit(3);
+                }
+                CPoly reduced=H;
+                if(reduced.size()>P)reduced=cp_mod(reduced,cp_from_flat(Ft[1],P,W),L);
+                owner.seed(cp_to_flat(reduced,W));
+                ScaledFrontierDevice frontier;frontier.requested=true;
+                if(!frontier.init(owner)){std::fprintf(stderr,"FATAL: scaled frontier fixture lease unavailable\n");std::exit(3);}
+                ScaledRootDeviceStats root_stats;std::vector<unsigned long long> root;
+                owner.scaled_root(root,root_stats,true,false,true);
+                ScaledStats checked;std::vector<std::vector<unsigned long long>> actual;
+                frontier.run(L,Ft,deg,pad,H,actual,checked,-1,true);
+                if(actual!=values){std::fprintf(stderr,"FATAL: scaled frontier fixture leaves disagree\n");std::exit(3);}
+            }
             /* Each degree-one node's independent remainder is also Horner(H,x). */
             size_t leaf=0;
             for(size_t i=0;i<pad;++i) if(deg[pad+i]) {
@@ -8193,6 +8237,7 @@ static void scaled_descent_fixture(PolyLayer &L)
     }
     mpz_clear(x);
     std::printf("scaled_fixture: cases=%llu states=%llu words=%llu leaves=%llu reused=%llu root_divisions=%llu bad=0\n",cases,sum.checked_states,sum.checked_words,sum.leaves,sum.root_inverse_reused,sum.root_divisions);
+    if(gscale_flag("NTT_SCALED_FRONTIER_TEST"))std::printf("scaled_frontier_fixture: cases=%llu bad=0 (all nodes GMP; zero/constant/near-N/over-degree; three padding layouts)\n",cases);
 }
 
 static void s4_flat_input_check(PolyLayer &L, size_t slices = 3)
@@ -10438,6 +10483,13 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     R.t_post_loop=now_s();
     R.t_loop_wall = R.t_post_loop - t_loop_begin;
     ScaledRootDeviceStats root_device;
+    ScaledFrontierDevice frontier;
+    frontier.requested=gscale_flag("NTT_SCALED_FRONTIER_DEVICE");
+    const bool frontier_check=gscale_flag("NTT_SCALED_FRONTIER_CHECK");
+    if(frontier_check && P>512){std::fprintf(stderr,"FATAL: scaled frontier GMP check limited to 512 leaves\n");std::exit(3);}
+    if(gscale_flag("NTT_SCALED_FRONTIER_TEST_BAD") && !(frontier_check || g_scaled_check)) {
+        std::fprintf(stderr,"FATAL: scaled frontier poison requires GMP check\n");std::exit(3);
+    }
     std::vector<unsigned long long> prepared_root;
     root_device.requested=gscale_flag("NTT_SCALED_ROOT_DEVICE");
     const bool root_check=gscale_flag("NTT_SCALED_ROOT_CHECK"),root_bad=gscale_flag("NTT_SCALED_ROOT_TEST_BAD");
@@ -10450,13 +10502,15 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     } else if(R.gscale.requested)R.gscale.fallback=!device_fold.active?"owner":!device_fold.hcount?"empty":"unit";
     if(root_device.requested && device_fold.active && device_fold.hcount && device_fold.hcount<=P &&
        g_scaled_descent && (R.gscale.enabled || mpz_cmp_ui(Ginv,1)==0)) {
-        device_fold.scaled_root(prepared_root,root_device,root_check,root_bad);
+        if(frontier.requested)frontier.init(device_fold);
+        device_fold.scaled_root(prepared_root,root_device,root_check,root_bad,frontier.enabled);
         const char *dc=std::getenv("NTT_S4_DESCENT_CHECK");
-        if(g_scaled_check || (dc && std::atoi(dc)))Hflat=device_fold.read(device_fold.h,device_fold.hcount);
-        device_fold.read_digest();device_fold.release();
+        if(g_scaled_check || frontier_check || (dc && std::atoi(dc)))Hflat=device_fold.read(device_fold.h,device_fold.hcount);
+        device_fold.read_digest();if(!frontier.enabled)device_fold.release();
     } else {
         if(root_device.requested)root_device.fallback=!device_fold.active?"owner":!g_scaled_descent?"backend":
             device_fold.hcount>P?"root_division":!device_fold.hcount?"empty":"gamma_cpu";
+        if(frontier.requested)frontier.fallback="root_unavailable";
         if(device_fold.active)device_fold.finish(Hflat);
     }
     std::printf("scaled_root_device: requested=%d enabled=%d coefficients=%llu h2d_bytes=%llu d2h_bytes=%llu check_d2h_bytes=%llu checked_words=%llu avoided_h2d_bytes=%llu avoided_h_readback_bytes=%llu seconds=%.6f fallback=%s\n",
@@ -10522,7 +10576,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     std::printf("descent_begin: P=%llu levels=%d last_state=(%s)\n", (unsigned long long)P,
                 (int)ceil_log2_u64((unsigned long long)Fpad), g_last_state);
     s2g_state("the batched descent");            /* a driver kill here leaves this behind */
-    ws.need_vals((size_t)P);
+    if(!frontier.enabled)ws.need_vals((size_t)P);
     std::vector<std::vector<unsigned long long>> values;
     bool dev_leaves = false;
     {
@@ -10594,7 +10648,11 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         } else if (L.s4 && g_scaled_descent) {
             L.cat=BC_DESCENT;
             ScaledStats st;
-            descent_scaled(L,Ft,Fdeg,Fpad,H,&finv,values,st,BC_DESCENT,g_scaled_check,root_device.enabled?&prepared_root:nullptr);
+            if(frontier.enabled) {
+                frontier.run(L,Ft,Fdeg,Fpad,H,values,st,BC_DESCENT,g_scaled_check || frontier_check);
+                frontier.release();device_fold.release();
+            } else descent_scaled(L,Ft,Fdeg,Fpad,H,&finv,values,st,BC_DESCENT,g_scaled_check,root_device.enabled?&prepared_root:nullptr);
+            frontier.print();
             L.cat=-1;
             std::printf("scaled_descent: enabled=1 levels=%llu mul_calls=%llu mul_pairs=%llu copies=%llu zeros=%llu states=%llu words=%llu leaves=%llu checked_states=%llu checked_words=%llu frontier_peak_bytes=%llu pack_peak_bytes=%llu root_inverse_reused=%llu root_divisions=%llu\n",
                 st.levels,st.mul_calls,st.mul_pairs,st.copies,st.zeros,st.states,st.words,st.leaves,st.checked_states,st.checked_words,st.frontier_peak_bytes,st.pack_peak_bytes,st.root_inverse_reused,st.root_divisions);
@@ -11140,6 +11198,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if(NTT_OUTER_UNROLL_U!=0)calibrated=false;
     if(outer_narrow_mask()!=0)calibrated=false;
     if(NTT_GL_ADD_SUB_MASK!=0)calibrated=false;
+    if(gscale_flag("NTT_SCALED_FRONTIER_DEVICE"))calibrated=false;
     if(ntt_carry_check_requested())calibrated=false;
     if(point_requested && !point_fold)calibrated=false;
     if(gl_shift_scale || (gl_ptx && !fixed_ptx) || (NTT_GL_FIXED_MODE>=0 && !fixed_ptx))calibrated=false;
@@ -11506,6 +11565,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     if(fold_test && std::atoi(fold_test))fold_flat_fixture(L);
     gscale_flag("NTT_GSCALE_DEVICE");gscale_flag("NTT_GSCALE_DEVICE_CHECK");gscale_flag("NTT_GSCALE_DEVICE_TEST_BAD");
     gscale_flag("NTT_SCALED_ROOT_DEVICE");gscale_flag("NTT_SCALED_ROOT_CHECK");gscale_flag("NTT_SCALED_ROOT_TEST_BAD");
+    gscale_flag("NTT_SCALED_FRONTIER_DEVICE");gscale_flag("NTT_SCALED_FRONTIER_CHECK");
+    gscale_flag("NTT_SCALED_FRONTIER_TEST");gscale_flag("NTT_SCALED_FRONTIER_TEST_BAD");gscale_flag("NTT_SCALED_FRONTIER_ALLOC_FAIL");
     if(gscale_flag("NTT_GSCALE_DEVICE_TEST"))s2g_plain_scale_fixture(L.N,nw);
     const char *fold_device_test=std::getenv("NTT_FOLD_DEVICE_TEST");
     if(fold_device_test && std::atoi(fold_device_test))fold_device_fixture(L);
@@ -11531,7 +11592,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     bool stage2_extra_fixtures=real_dump && *real_dump;
     for(const char *key : {"NTT_BABY_DEVICE_TEST","NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL","NTT_FUSE_COOP_TEST","NTT_FUSE_COOP_BAD","NTT_XADD6_TEST","NTT_XADD6_TEST_BAD","NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
-                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GSCALE_DEVICE_TEST","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
+                           "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_SCALED_FRONTIER_CHECK","NTT_SCALED_FRONTIER_TEST","NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_ALLOC_FAIL","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GSCALE_DEVICE_TEST","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
     }

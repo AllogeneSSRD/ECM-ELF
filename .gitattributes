@@ -107,3 +107,6 @@ tools/bench/audit_ntt_addsub.py text eol=lf
 tools/bench/bench_stage2_addsub.py text eol=lf
 tools/test/check_stage2_addsub_controls.py text eol=lf
 tools/bench/audit_stage2_addsub.py text eol=lf
+tools/bench/stage2_scaled_frontier.cuh text eol=lf
+tools/bench/bench_stage2_frontier.py text eol=lf
+tools/bench/audit_stage2_frontier.py text eol=lf

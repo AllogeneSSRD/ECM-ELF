@@ -56,6 +56,7 @@ $babyHost = 'tools/bench/stage2_baby_host.cuh'
 $pointMersenne = 'tools/bench/stage2_point_mersenne.cuh'
 $giantBaseHost = 'tools/bench/stage2_giant_base_host.cuh'
 $plainScale = 'src/cuda/stage2/scale_plain.cuh'
+$scaledFrontier = 'tools/bench/stage2_scaled_frontier.cuh'
 $carryCheck = 'tools/bench/ntt_carry_partial.cuh'
 $inc  = '-I third_party/gmp-zen3/dist/include'
 $gmpLib = 'third_party/gmp-zen3/dist/lib'
@@ -73,7 +74,7 @@ Write-Host ("stage2_tree_gpu build: exe={0} arch={1}" -f $exe, $Arch)
 $needCompile = $true
 if (-not $Rebuild -and (Test-Path $obj) -and (Test-Path $exe)) {
     $objTime = (Get-Item $obj).LastWriteTime
-    if (-not (@($src,$dep,$coop,$dmodel,$geometry,$goldReduce,$goldPtx,$babyDevice,$babyHost,$pointMersenne,$giantBaseHost,$carryCheck,$plainScale) | Where-Object { (Get-Item $_).LastWriteTime -ge $objTime })) {
+    if (-not (@($src,$dep,$coop,$dmodel,$geometry,$goldReduce,$goldPtx,$babyDevice,$babyHost,$pointMersenne,$giantBaseHost,$carryCheck,$plainScale,$scaledFrontier) | Where-Object { (Get-Item $_).LastWriteTime -ge $objTime })) {
         $needCompile = $false
     }
 }

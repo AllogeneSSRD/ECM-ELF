@@ -2,7 +2,7 @@
 
 日期：2026-10-03；量化及优化补充：2026-10-04。历史测量基线：`0cfa589`；代码行号已更新到当前尺寸策略 NTT 引擎，device leaf 性能证据见§31.5–§31.6，独立生产驱动见§32，GPU 驻留 fold 历史基线见§33，根交接见§34，组合调度见§35，当前瓶颈与候选排序见§36，开源 NTT 适配见§37，xADD6与D见§38，cooperative v2见§39，尺寸策略与新D标定见§40。§26–§31 保留各自测量基线。
 
-> **当前状态入口（2026-10-08）：**先读§69–§79及[独立生产说明](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。当前生产候选的实现位于 `src/cuda/ecm_cuda_stage2.cu` 和 `src/cuda/stage2/`；实验引擎继续位于 `tools/bench/`。已发布893最多8192位，候选支持16384位；驻留下降根生产候选已完成功能/搬运验收，但整曲线提速尚未稳定。以下早期流程图、默认开关和CPU/GPU分工属于各自历史基线：正常驻留路径已包含GPU baby、device leaf、fold、Gamma及根准备，不能将旧图中的CPU步骤当作当前执行位置。各阶段时长与模块容量按对应日期和形状读取。
+> **当前状态入口（2026-10-08）：**先读§69–§80及[独立生产说明](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md)。当前生产候选的实现位于 `src/cuda/ecm_cuda_stage2.cu` 和 `src/cuda/stage2/`；实验引擎继续位于 `tools/bench/`。已发布893最多8192位，候选支持16384位；驻留下降根生产候选已完成功能/搬运验收，但整曲线提速尚未稳定。以下早期流程图、默认开关和CPU/GPU分工属于各自历史基线：正常驻留路径已包含GPU baby、device leaf、fold、Gamma及根准备，不能将旧图中的CPU步骤当作当前执行位置。各阶段时长与模块容量按对应日期和形状读取。
 
 本文按一条曲线的实际执行顺序说明算法、输入输出、CPU/GPU 分工和数据生命周期。代码链接均指向当前原文件的一处入口，行号为本基线的一基行号；后续修改源码时行号可能变化。
 
@@ -2055,3 +2055,105 @@ N27单batch的tile/M7/M8正逆及N11/batch990的tile正逆8项管理员NCU已完
 ## 79. canonical减法原生验收与当前下一步（2026-10-08）
 
 开发引擎已接入编译期NTT_GL_ADD_SUB_MASK，默认0、仅非零包含canonical头，生产拒绝非零；非零构建关闭旧D算术scope并在profile I/O前拒绝Auto B2。29raw依赖/5对象冻结，26正确性/9控制通过，完整块66240点＋65点尾段及独立GMP节点覆盖保持。32正式/8预热，M4423大界37.6165975→36.9992900秒（少1.64105%，两组同向），generic8193/M16381少0.47387%/0.52742%；generic16384少0.07022%但两组反向，收益未确立。管理员Systems真实tile7.978363→7.714584秒（少3.306%），全部503组kernel几何/次数、PCIe次数/字节及设备/pinned峰保持，约6.2秒准备间隙仍在。独立审计/归档完成，保留sub-only开发候选，默认0/生产CU/发布893未替换；下一项GPU下降frontier减少CPU组包与中间回读，较大16k、新D/Auto成本及总预算lease未完成。完整范围、源行、所有样本与复现统一维护[NTT专题](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:324)。
+
+
+## 80. GPU驻留scaled下降frontier（2026-10-08，开发候选）
+
+### 80.1 算法、接口和所有权
+
+接续f89f90b的sub-only开发基线，本轮默认关闭`NTT_SCALED_FRONTIER_DEVICE=0/1`。[下降实现](D:/code/MPA-OpenCl/tools/bench/stage2_scaled_frontier.cuh:3)借用最后fold的两块owner，不借用可能被NTT淘汰的arena/raw指针；[根准备](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:7870)允许保留结果在设备，正常路径不再把P·W根状态读回主机。进入下降前读取原G根digest；诊断需要的H单独读取，在复用dead owner前结束。
+
+每层保持原ordinary-coefficient scaled递推：父状态长度a+b，兄弟F次数b、长度b+1，乘积窗口`[b,b+a)`生成子状态a项。host仅保留degree/offset与相同(a,b)的分组；GPU gather读取同一个父状态供两个子节点复用，不再在CPU复制两份。兄弟F保持普通系数顺序，host连续上传；[独立reverse gather](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:3433)在打包NTT digits时反向读取，无额外反转数组或pass。输出通过原S4窗口归约/scatter进入另一块owner，再交换当前/下一层角色。零次数节点不计算；兄弟为空时设备到设备复制当前状态。只在结束时读回完整P项叶值，保持完整hash、现有GCD/naming接口；本轮尚未消除最终叶D2H和积块前的叶H2D。
+
+所有owner输入与输出均通过原S4ResidentOwner::owns及metadata范围检查；输入/输出为不同cudaMalloc，未做原地NTT。原默认forward gather保留，reverse另一个kernel，实际资源REG38/STACK0/LOCAL0。默认warp tile正逆仍REG40/STACK0/LOCAL0；没有据此声称所有机器码不变。原语、NTT、carry及S4必需检查保持。
+
+### 80.2 显存预算和主机缓冲
+
+记W=ceil(bits/64)、P=phi(D)/2。每层当前状态总长PW words，下一层也是PW；真正乘法的兄弟F总输入≤2PW。当前owner在`[0,PW)`放状态，`[PW,3PW)`流式放本组F，另一owner写下一层。两块既有allocation最少各3PW words，满足所有四种fold alias布局；不增加持久多项式数组。新增三段uint64 offset metadata容量为3P words，即24P B。
+
+reuse3下，owner加metadata为：
+
+```
+M_owner = 8W(7P+7)+48 B
+M_frontier_metadata = 24P B
+M_combined = (56W+24)P + 56W+48 B
+P_max(M,W) = floor((M−56W−48)/(56W+24))
+```
+
+[准入](D:/code/MPA-OpenCl/tools/bench/stage2_scaled_frontier.cuh:16)比较owner实际布局加metadata与`NTT_FOLD_DEVICE_MAX_MB`，可用`NTT_SCALED_FRONTIER_MAX_MB`进一步收紧此组合预算；还检查当前真实free VRAM、可能的最大NTT workspace增长及1GiB headroom。溢出、后端不支持、owner不存在、budget/headroom或allocation失败均保留CPU frontier回退；`NTT_SCALED_FRONTIER_ALLOC_FAIL=1`只用于分配回退门禁。不是全进程内存峰模型。
+
+本例W70/P126720：metadata3041280B，owner496746368B，组合499787648B（476.634644MiB），476MiB应回退、477MiB可继续准入，最终仍须满足free/headroom。640MiB组合预算的P公式上限W70为170153、W256为46732；这是布局上限，不是NTT大形状或完整16384位显存认证。
+
+F上传优先借用现有两个pinned output槽，覆写前等待其对应event，上传后记录event并在借用结束时完成所有H2D；不新增pinned allocation。没有可用槽时创建本组紧凑pageable F staging，保持正确性。`host_staging_peak_bytes`只记该F staging，`pinned_borrow_peak_bytes`为借用payload；均不是进程RAM峰。最后叶读回另有8PW B临时flat及8PW B逻辑values，FTree与offset/group容器仍留在host，不能声称全部树已在GPU。`logical_frontier_peak_bytes`只计当前/下一状态共16PW B，不包括F scratch；实际owner allocation按上式计账。
+
+### 80.3 计算量与接口量
+
+每层l真实乘法的parent输入系数总数记A_l=Σ_s(a_s+b_s)，兄弟输入B_l=Σ_s(b_s+1)，子输出J_l=Σ_s a_s，真实乘法对数n_l。保持相同分组、NTT length/batch、两forward＋一inverse及S4 MAC数。对长度L、batch n，逻辑NTT蝶形仍为n·L·log2(L)/2；本轮收益目标是组包/调度和搬运，不减少上述数学运算。
+
+当前host基线按ma=a+b补齐两操作数，因此本轮预测：
+
+```
+F H2D = 8W Σ_l B_l
+metadata H2D = 24 Σ_l n_l
+H2D净减少 = 8W Σ_l(2A_l−B_l) − 24 Σ_l n_l
+D2H净减少（根＋下降）= 8W Σ_l J_l
+额外D2D = 8W Σ_(单边copy子节点) degree(child)
+```
+
+D2H公式包含取消的根PW读回与新增最终叶PW读回，两者相消；`avoided_state_d2h_bytes`本身为原窗口总输出，不应另加一次根节省。`avoided_parent_h2d_bytes`只记父状态逻辑量，未计原B padding，因此小于预测净H2D减少。上述公式针对默认output-window、无额外GMP诊断、相同D/形状；trace将核验实际copy接口，逻辑计数不代替PCIe测量。
+
+本例P126720/W70：F H2D1346005920B、metadata H2D6082512B、最终叶D2H70963200B；预测净H2D少3464234128B、净D2H少1204080640B、额外D2D2293760B。Σpairs253438，下降含根共31次分组调用/253439个多项式乘法，17层、2次单边copy、8702个zero节点，与原scaled遍历一致。
+
+### 80.4 原生验证及性能进度
+
+本轮native_r0 SHA256 `8f657df03931eeccbb1e2b2f13bb0f24aaabc40edb788f17a3f14c62de159d3a`，development/PTX3/u0/sub-only、split6；CUDA254.6秒，30raw依赖/5对象冻结，224个kernel资源导出。stage2_tree_gpu.cu的16处修改可逐字节逆变换恢复f89f90b来源，混合换行保持；生产CU/NTT未移植，发布893保持。开发builder与旧tree builder均增加新header重编依赖；旧Auto B2要求frontier关闭，新D scope也拒绝沿用旧成本。
+
+初轮10控制全部通过：150组独立GMP全节点/三种padding/zero/constant/near-N/over-degree fixture，pageable上传、full output window、budget/allocation/owner/root回退，以及实际毒化检出、无检查毒化拒绝和非法flag拒绝。毒化worker以FATAL停止，公开CLI返回2，未发布完成结果。
+
+首次原生gate在三条成功后由采集器拒绝I=2/G=1的frontier enabled=0；该形状按既有实现没有fold owner，root与frontier均正确回退，完整叶和GMP节点已通过。保留原始collector/log/未完成report，改为声明这一回退，在新目录重跑全矩阵；未改CUDA或放宽算术检查。新目录native_gate_r1的26次原生调用已全部完成：大界两条、三种unit位宽各2/65/66点、两种不可逆回退各两条，以及generic16384的66240点完整chain＋65点ladder尾段两条。I=2/G=1保持明确的root_unavailable回退；小形状全部下降节点GMP与完整独立monic叶指纹通过，完整块另检查affine/seed/segment，不把约211秒诊断成本混入正式计时。
+
+新增controls_r1完整15项通过，保留初轮10项而不重复累计为独立门禁。三种旧owner布局reuse0/1/2均开启完整GMP节点；大界476MiB预算回退、477MiB驻留，与499787648B组合预算一致。原始控制调用的墙钟只作验收记录，不作为加速样本。正式32条／8预热、Systems及最终独立审计均已完成，结果见下节。
+
+### 80.5 同二进制固定D完整曲线计时
+
+同一native_r0用frontier0/1运行，两边均为development/PTX3/sub-only1、outer策略2/V0/u0、pair1/CPUbase0、C64/min32768、owner640/reuse3、arena6300、Gamma/root1和默认必需检查。正式矩阵与编译、profiler及重型trace分析串行；各形状先预热0/1，再ABBA＋BAAB，共32正式／8预热，每侧每形状四条，全部保留、无置信区间。保存点/输入/工具/编译闭包均冻结；每条完整叶指纹、factor、六项NTT/S4工作量与检查覆盖一致，主墙钟分解闭合误差≤0.003秒。
+
+大界为M4423、有效B1=1000/lcm/sigma26、D1381380/P126720/I1456028/B2=2011326186870；宽矩阵为有效B1=20/sigma26保存点、D30030/P2880/I32768。宽矩阵模数不同，绝对秒数不能作为同一N的位宽伸缩实验。
+
+- **m4423_large**：full均值36.52304825→34.65786575秒，减少5.10686%（负值为变慢）；两组减少5.56812%／4.64254%。descent均值6.38750→4.49125秒（原日志分项精度较低）。
+  baseline四条：36.745747, 36.543057, 36.414146, 36.389243；candidate四条：34.629871, 34.578128, 34.614639, 34.808825。
+- **generic8193**：full均值5.84606975→5.28325300秒，减少9.62727%（负值为变慢）；两组减少1.34094%／16.65038%。descent均值0.39675→0.32675秒（原日志分项精度较低）。
+  baseline四条：5.389719, 5.337680, 7.332186, 5.324694；candidate四条：5.318295, 5.265256, 5.282055, 5.267406。
+- **m16381**：full均值11.67217800→11.80301150秒，减少-1.12090%（负值为变慢）；两组减少0.51616%／-2.73222%。descent均值0.51300→0.39450秒（原日志分项精度较低）。
+  baseline四条：11.239904, 11.919487, 12.248346, 11.280975；candidate四条：11.925083, 11.114769, 11.142043, 13.030151。
+- **generic16384**：full均值24.54436300→23.53481025秒，减少4.11318%（负值为变慢）；两组减少5.08567%／3.12683%。descent均值1.63975→1.51050秒（原日志分项精度较低）。
+  baseline四条：24.361843, 25.074091, 24.785690, 23.955828；candidate四条：23.271675, 23.650112, 23.922436, 23.295018。
+
+大界两组同向，下降少1.89625秒／29.68689%，full少1.86518秒／5.10686%，本例支持下降驻留带来完整曲线收益。generic8193基线7.332186秒长尾使总体9.62727%明显高于首组1.34094%，不能推广为稳定约10%。M16381候选13.030151秒等波动使总体慢1.12090%、两组相反，尚无完整曲线稳定收益。generic16384虽两组同向，但full少1.00955秒远大于descent少0.12925秒，不能把全部full变化归因本轮下降路径。没有删除慢样本、事后改门槛或用中位数替换正式均值。
+
+原始矩阵见[大界](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_frontier_20261008/native_timing_r0/measurements.json)和[三宽](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_frontier_20261008/native_timing_wide_r0/measurements.json)。独立审计另重建逐样本、中位诊断和阶段均值；这些诊断不替代已声明的均值/分组结果。
+
+### 80.6 实际Systems、峰值与发布边界
+
+正式计时父进程已正常exit0、两矩阵complete=true后，GPU1管理员Systems2026.1.3顺序采集frontier0/1；capture/export/collector与管理员启动器均exit0。采集完成后才做离线分析，实际exe/source/save/完整leaf/factor和默认检查量绑定正式矩阵。按完整demangled名字/gridXYZ/blockXYZ/dynamic shared核对，206组tile/outer几何、56598次调用完全一致；这些是该过滤器覆盖的NTT变换kernel，不把短名分组当完整kernel身份。
+
+- H2D：4866次／7009115275B→1517次／3544881147B，少3349次及3464234128B（3.226319GiB）。
+- D2H：6130次／3138157112B→4421次／1934076472B，少1709次及1204080640B（1.121387GiB）。
+- D2D：40次／841498560B→42次／843792320B，多2次／2293760B，恰好对应两次单边子节点copy。
+- 以上三个字节差均精确吻合§80.3独立几何公式。H2D GPU事件0.531156→0.268821秒、D2H0.246191→0.152410秒；DMA少约0.356秒，不等于整曲线少1.865秒。CPU组包、staging与完成等待仍须按各自口径区分。
+- tile累计7.723880→7.739856秒、cooperative outer4.345885→4.346726秒，基本保持；新reverse gather累计0.119773秒。没有本轮新NCU计数或整个GPU机器码不变的结论。
+- 自身GPU事件span36.419636→34.159387秒，并集30.477329→30.128876秒，无自身事件5.942307→4.030510秒（16.3162%→11.7991%），绝对少1.911797秒。单次插桩诊断支持准备/衔接窗口减少，不作为另一套正式加速样本或整卡idle证明。
+
+按真实malloc/free生命周期，两侧tracked设备payload峰均4531652368B／4321.720474MiB；baseline486alloc/free，candidate487alloc/free，结束live均0。新增metadata真实分配并释放，但本形状没有抬高同时峰值；不能将模块容量直接相加或推广到任意B2/位宽。pinned峰358886600→305410344B（342.260933→291.262001MiB），少50.998932MiB；末端全局缓存357255360→302206240B，进程退出回收。未测完整进程RAM或新增NVML峰，driver/context/module/local backing不在此设备payload峰内。
+
+[独立审计](D:/code/MPA-OpenCl/tools/bench/audit_stage2_frontier.py:1)从原始日志重建15控制、26原生门禁、所有32正式/8预热、完整输入/输出/因子/检查量与计时闭合；重新计算phi(D)、逐层degree/pairs/window及接口公式，核对30raw来源/5对象、16处原文件逐字节逆变换、224项资源、实际profile命令/exit、全部所选NTT几何、DMA和设备/pinned生命周期。最终[quantitative.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_frontier_20261008/quantitative.json)为complete=true。初轮I=2/G=1采集器拒绝保留，未修改CUDA或放宽算术门禁；原始失败/初轮控制与审计快照均进入证据归档，不混作正式样本。
+
+本阶段保留默认关闭的开发候选，**不替换发布893，不声称所有位宽普遍加速**。当前生产CU尚未移植frontier/sub-only。新frontier Auto B2 guard和D scope保护已写入源码；本二进制编译sub-only1，实际auto入口会先被已有算术guard拒绝，不能声称已单独动态验证frontier guard或标定新成本。最终叶D2H/后续H2D、较大16k形状容量、最终chain/短尾及跨曲线私有状态/总RAM/VRAM租约仍未完成。
+
+后续先将已证明的大界驻留下降候选整理为独立生产实现，补齐较大16k的真实形状/预算边界及宽位数性能复验；再按新时间线推进剩余约4秒准备/衔接和tile/outer算术热点。新D与Auto B2必须对最终组合重新标定，不能直接套旧cprof。多曲线只能在独立Q/Gamma/owner和共享workspace租约明确后推进。
+
+### 80.7 复现和证据
+
+证据目录为ignored `build_cuda_cmake/_stage2_frontier_20261008`。正式矩阵的exe/source/input身份冻结，evidence.zip/evidence_manifest.json保留原始源、工具、输入、日志、矩阵与trace的逐文件SHA；exe/obj/DLL外部按SHA绑定。提交前另核对全部raw编译来源与暂存Git blob，混合换行TU不规范化。根data/与docs/data/保持忽略。
+
+复现使用新的输出目录，先以builder `-Engine development -GlBackend ptx -OuterUnrollU 0 -AddSubMask 1 -SplitCompile 6`构建。`bench_stage2_frontier.py --exe <new-exe> --reference <sub-native-complete-timing> --fixtures <wide-fixtures> --save <valid-m4423-save> --mode controls|gate|timing|timing-wide --output <fresh-output>`；两种timing模式还要求`--gate <completed-gate/measurements.json>`。完整原始输入路径、串行runner与管理员capture命令保存在本轮证据目录；不可覆盖原输出或在运行中修改collector。采集同一exe时使用`profile_stage2_points.py --add-sub-mask 1 --scaled-frontier-device 0|1`并沿用上述固定配置；正式计时结束后再执行管理员capture。审计入口为`audit_stage2_frontier.py --study <study> --profiles`，要求本节完整目录布局和实际终止证据。
