@@ -488,3 +488,47 @@ M4423/D1381380/P126720/B2≈2.01e12：owner609.09→473.73MiB（−135.35MiB）�
 候选生产de9830…98cc6a6e，CUDA119.3秒/25raw来源；CPU布局666/0、开发native39/0、独立生产native29/0。实际16384位plan实报reuse3/owner358448B。164个kernel资源记录保持，非周期证明。管理员Systems重建设备malloc峰4457.07→4321.72MiB，486alloc/free、end_live0；主机pinned峰342.26MiB保持。这些是被跟踪payload，不是完整进程VRAM/RAM峰。
 
 当前发布893保持。新trace中NTT tile约7.97秒、无本进程GPU事件约6–7秒；不能全部解释为PCIe，不能用profile间隙差作速度证据。下一项按G树/fold/下降定位host pack/metadata/oracle/同步，并诊断generic16384已知1.28%回退；最终chain、更大宽形状、新D/Auto B2成本与多曲线RAM/VRAM lease继续推进。
+
+
+## 2026-10-08 泛型 S4 常量除数寻址回退诊断
+
+### 复现与硬件依据
+
+本轮接续独立生产拆分后的generic16384回退，不改变NTT算法、检查频率或owner策略。GPU1/RTX4060 Laptop/sm89/CUDA13.3，使用原CPU/GMP-ECM共同确认的有效泛型save：N=2^16384−15、sigma26/B1=20/lcm，D30030/P2880/I32768/B2=983962980、pair1/CPUbase0/C64/min32768、arena6300/owner640MiB。
+
+先对冻结46457e开发基线与19ec独立生产复现（两侧原owner布局0）：2预热、8正式ABBA+BAAB，完整输出/检查覆盖保持。full均值23.587151→23.92329175秒，慢1.4251%；设备归约6.696–6.697→6.989秒，host归约约0.024–0.028秒。增加的约0.292秒占本批full差额约87%，说明此形状应先检查设备S4，不能继续用“大B2的CPU准备瓶颈”解释所有位宽。
+
+[管理员NCU工具](D:/code/MPA-OpenCl/tools/bench/profile_stage2_reduce_ncu.py:1)以精确NW256/generic mangled名跳过index0/grid1启动自检，捕获index1真实F树归约grid5/block128；实际CSV再次核对唯一kernel、device1及几何。16-pass replay，clock/cache control均none；完整curve仍核验输入、leaf、factor及全部检查覆盖。NCU执行时间仅诊断，不替代无插桩A/B。首版prepare因旧build manifest缺engine字段在wrapper生成前拒绝，原工具保留；改为可选字段后重建采集目录，没有放宽算术检查。
+
+旧开发→独立生产的该launch：REG46→40，执行指令47,640,889→48,478,483（+1.76%）；local load sectors均16,832,378，local store16,845,464→16,833,145，long-scoreboard/issue-active2.306980→2.427157。采集时长8.406720→8.798464ms。更小stack/REG并没有证明更快，也没有证明local动态访存消失。
+
+### 变更及计算量、存储与传输
+
+两侧SASS的除法MAC都展开4项。拆分前除数从constant bank3偏移0读取；独立生产中前置point模式标量使除数偏移8，循环多出ULDC基址、UMOV及UIMAD寻址。仅移动声明顺序的候选4ce74ff未改变这段SASS，已停止其矩阵：保留2预热、2正式及被中断的原始输出，complete=false，不算完整性能结论。
+
+[生产常量结构](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:653)将256-word除数数组放在唯一常量结构首字段，point_mersenne_bits放在其后。数组offset有static_assert；[归约上传](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:2411)仍只写nw个word，[point模式上传](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:4097)用offsetof只写标量，避免互相覆盖。生产只保留这个布局，开发源码没有添加第二套算法或运行开关。
+
+令W=ceil(bits(N)/64)、m为归约输入trim后实际limbs，商位数J=max(0,m−W+1)。长除法仍执行W·J次64×64乘减，通常m≈2W，数量仍约W²；加回修正、2-by-1估商及pack均保持。本轮仅消除每个4-limb主循环块的额外寻址，主循环将ULDC/UMOV/UIMAD三条换成USHF一条，约省2·floor(W/4)·J个寻址指令位置/系数；短尾、修正及warp分歧按实际SASS与动态计数器执行。这个近似不能当作CUDA周期公式，不能将指令数直接按峰值吞吐换成曲线时间。
+
+固定最大容量的有效constant payload仍为8·256+4=2052B，结构按8B对齐为2056B；没有增加GPU malloc、局部数组、NTT工作区或主机pinned缓冲。每次N初始化上传8W B除数与4B point模式，接口字节量及同步合同保持。核对164个kernel的REG/STACK/SHARED/LOCAL全部一致。NW128 Mersenne S4的指令序列完全相同；NW128 ladder的57,904条指令仅5处point标量地址0→0x800，不能据此声称周期完全等价。
+
+### 无插桩整曲线 A/B
+
+冻结owner阶段生产de983与结构候选93c592fca16acb622a5d4b40cb03363cadf80a69ffc97306b6fcf378813e0dfc比较；两侧均固定owner reuse3，同检查/日志debug、PTX3/outer0、pair1/CPUbase0/C64/min32768。每case2预热＋8正式ABBA+BAAB，计时期间不编译、profile或分析trace；全部样本保留。新CUDA编译116.6秒/split6，25个raw依赖冻结。
+
+- generic8193：full5.48038525→5.444167秒（−0.6609%）；两组少0.5168%/0.8052%。t_reduce四条各保持1.116→1.085秒（约−2.78%）。
+- generic16384：full23.92861075→23.69737775秒（−0.9663%）；两组少1.0381%/0.8944%。t_reduce6.989→6.755–6.756秒（约−3.34%），host计时接近。没有重新对当前候选和46457e做同批正式对照，不用不同批绝对秒数宣称拆分回退已全部消除。
+- M16381：full11.416966→11.3746615秒（−0.3705%），t_reduce均0.251秒；它不使用这段长除法，不能将该差额归因于寻址优化。
+- M4423大界（原有效B1=1000/lcm save、B2=2011326186870/D1381380/P126720/I1456028/G12）：full38.49004275→38.85724875秒（+0.9540%）。第一组少0.1498%，第二组慢2.0643%；完整范围37.929863..39.469711秒。giant2.64325→2.6445、G树12.66875→12.6795、fold5.60975→5.621秒，下降6.96175→7.2575、inverse1.9335→1.9835秒；这些是包含准备/等待的phase墙钟，非纯kernel。设备S4约1.782–1.783→1.783–1.802秒。不能据阶段接近断言大界无回退，也不删除39.469711秒样本。
+
+此候选矩阵32正式/8预热，均完整leaf指纹、factor、实际D/I、save/Q身份、NTT乘法/归约数量及GMP检查覆盖一致。前述回退复现另8正式/2预热；声明排序的中断矩阵另列，不混进均值。数据位于ignored build_cuda_cmake/_stage2_diag_20261008/ 的repro_generic16384、struct_wide_ab、struct_large_ab。
+
+### 候选NCU、门禁与发布边界
+
+结构候选捕获同一个实际NW256 S4 launch：REG40保持，执行指令降到47,640,770、thread指令438,503,331→431,057,723、local load仍16,832,378 sectors，local store16,847,502，long-scoreboard2.350604；采集8.481216ms。这支持多余constant基址寻址是设备回退的重要来源；没有降低MAC次数或local load数量，剩余串行依赖/local访问仍需优化。三个原始ncu-rep、CSV、命令、源/工具SHA及完整应用输出均保留。
+
+原生生产门禁29/0已完成，含有效宽save、非单位1019/2621、短尾、容量/分配回退、五级oracle故障及queue拒绝。默认chain/完整块＋短尾跨版本门禁12/0完成：五个有效宽save两侧及66,305点完整块＋65点尾段；单位案例逐点仿射比较，非单位保持proper factors与回退。12条额外诊断不计入正式性能样本。
+
+**发布893保持，候选尚未认证完整无回退。** 宽泛型减少寻址的收益已有重复和计数器证据；大界下降/逆元的波动仍须定位，随后推进G树/fold/下降准备与热NTT、最终chain策略、较大16k容量、新D/Auto B2成本和总RAM/VRAM lease。本轮不改变Auto B2门槛或导出新cprof。
+
+本阶段独立审计从全部原始log/result重建40正式样本、10预热、12条chain诊断、29项原生门禁及3次管理员NCU采集，另列声明排序中断矩阵。审计核对对象/25个当前raw依赖与Git暂存字节、输入/完整输出/检查覆盖、采集及收集工具快照、实际kernel选择与三路计数器；证据及逐文件SHA归档于同阶段目录evidence.zip/evidence_manifest.json。build/data继续忽略。复现工具与候选已入阶段提交，发布exe字节保持893。

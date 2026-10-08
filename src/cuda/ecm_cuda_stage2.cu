@@ -650,7 +650,15 @@ __device__ __forceinline__ void s2g_submod(unsigned long long *r, const unsigned
     }
 }
 
-__device__ __constant__ int g_s2g_point_mersenne_bits=0;
+/* One symbol makes the indexed divisor the first field, independently of the
+   compiler's ordering of separate constant symbols. The point flag is updated
+   separately; normalized-divisor uploads must never overwrite it. */
+struct S2GDeviceConstants {
+    unsigned long long divisor[ecm_stage2::max_words];
+    int point_mersenne_bits;
+};
+static_assert(offsetof(S2GDeviceConstants, divisor)==0, "divisor must lead constant storage");
+__device__ __constant__ S2GDeviceConstants g_s2g_device_constants={};
 #include "stage2/stage2_point_mersenne.cuh"
 
 /* r = a*b*R^-1 mod N, R = 2^(64*nw), a,b < N.  Schoolbook product + Montgomery reduction
@@ -677,7 +685,7 @@ __device__ __forceinline__ void s2g_mont_mul(unsigned long long *r,
         t[i + nw] = c;                 /* untouched before this iteration (SOS invariant) */
     }
     unsigned long long out[NW];
-    const int mersenne_bits=g_s2g_point_mersenne_bits;
+    const int mersenne_bits=g_s2g_device_constants.point_mersenne_bits;
     if(mersenne_bits){s2g_mersenne_mont_reduce<NW>(r,t,n,nw,mersenne_bits,out);return;}
     for (int i = 0; i < nw; ++i) {
         const unsigned long long m = t[i] * ninv;
@@ -1957,8 +1965,6 @@ static void s4_dbad_resolve(S4Reduce &R, bool wait = false)
 static std::vector<unsigned long long> g_div_hns;
 static unsigned long long g_div_recip = 0;
 static int g_div_shift = 0, g_div_nw = 0;
-__device__ __constant__ unsigned long long g_div_dns[ecm_stage2::max_words];
-
 __host__ __device__ __forceinline__ void s2g_mul64(unsigned long long, unsigned long long,
                                                 unsigned long long &, unsigned long long &);
 __host__ __device__ __forceinline__ unsigned long long s2g_udiv_2by1(
@@ -2186,7 +2192,7 @@ __global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long
         return;
     }
         const int limbs = (int)((slot_words * (unsigned long long)bpw + 63) / 64);
-        const int rc = s4_div_rem<NW>(t, limbs, g_div_dns, nw, div_shift, div_recip, u);
+        const int rc = s4_div_rem<NW>(t, limbs, g_s2g_device_constants.divisor, nw, div_shift, div_recip, u);
         if (rc < 0 && bad != nullptr) atomicAdd(bad, 1ull);
         for (unsigned long long i = 0; i < w; ++i)
             out[out_gid * w + i] = (i < (unsigned long long)nw) ? u[i] : 0ull;
@@ -2402,7 +2408,7 @@ static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
             g_div_hns[(size_t)i] = (sh == 0)
                 ? v : ((v << sh) | (i > 0 ? (R.hn[(size_t)i - 1] >> (64 - sh)) : 0ull));
         }
-        CK(cudaMemcpyToSymbol(g_div_dns, g_div_hns.data(),
+        CK(cudaMemcpyToSymbol(g_s2g_device_constants, g_div_hns.data(),
                               (size_t)R.nw * sizeof(unsigned long long)));
         const unsigned long long d = g_div_hns[(size_t)R.nw - 1];
         mpz_t num, den, q, t64;
@@ -4088,7 +4094,8 @@ static int mont_selftest(const std::vector<unsigned long long> &hn, size_t nw,
     const int bits=(int)mpz_sizeinbase(N,2);
     const bool exact_shape=bits>=2 && mpz_popcount(N)==(mp_bitcnt_t)bits && (size_t)((bits+63)/64)==nw;
     const int enabled_bits=requested && exact_shape ? bits : 0;
-    CK(cudaMemcpyToSymbol(g_s2g_point_mersenne_bits,&enabled_bits,sizeof(enabled_bits)));
+    CK(cudaMemcpyToSymbol(g_s2g_device_constants,&enabled_bits,sizeof(enabled_bits),
+                          offsetof(S2GDeviceConstants, point_mersenne_bits)));
     stage2_log::print(stage2_log::debug, "point_mersenne_mode: requested=%d enabled=%d bits=%d nw=%llu reduction=fold_rotate\n",
                 (int)requested,enabled_bits!=0,bits,(unsigned long long)nw);
     stage2_log::print(stage2_log::debug, "point_arithmetic: xadd6=%d xadd_mont_muls=%d coordinate_scale=legacy_exact\n",

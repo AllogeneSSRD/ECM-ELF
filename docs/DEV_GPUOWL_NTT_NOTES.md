@@ -4732,3 +4732,8 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 ## 112. Stage2 owner别名复用（2026-10-08）
 
 共享布局8W(7P+7)+48B接入开发四档mask及生产固定两项。CPU666/0、开发native39/0、生产native29/0；M4423大界owner609.09→473.73MiB，640MiB驻留均值少0.59%但不稳定，512MiB避免回退少6.83%（16正式/4预热、完整输出/覆盖保持）。管理员Systems tracked设备峰少135.35MiB、486alloc/free/end0；pinned保持，不当完整VRAM/RAM峰。独立生产de983候选未发布，893保持，宽泛型1.28%回退与新Auto成本未解决。下一项NTT热shape及G树/fold/下降准备/等待；多曲线仍需私有状态和总预算lease。详细公式、源行、原始拒绝、性能范围和复现统一维护[预算报告§9](D:/code/MPA-OpenCl/docs/STAGE2_B2_MEMORY_BUDGET_SCALING.md:339)。
+
+
+## 113. 泛型S4常量除数寻址：设备归约少约3.34%（2026-10-08）
+
+独立生产拆分后generic16384回退已复现，SASS/ELF/管理员NCU定位到除数从constant偏移0变8后的循环寻址增加。单纯声明排序无效；唯一常量结构将除数置于首字段，MAC/上传/检查保持，REG40不变。40正式/10预热及独立29项原生、12条chain/块尾门禁完成；generic16384 full少0.97%、t_reduce6.989→约6.756秒，两组同向，8193 full少0.66%。真实S4 grid5/block128指令48,478,483→47,640,770，local load sectors不变。M4423大界本批均值慢0.95%、两组方向不同，尚未证明无回退，发布893保持；新Auto成本/较大16k/最终chain/并发lease未完成。全部原始样本、公式、源行、负结果及发布边界统一维护[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md:493)。

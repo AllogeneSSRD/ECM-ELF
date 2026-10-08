@@ -43,11 +43,14 @@ def main():
     p.add_argument('--mode',choices=('gate','timing','timing-wide'),required=True)
     p.add_argument('--fixtures',type=Path)
     p.add_argument('--save',type=Path)
+    p.add_argument('--case',choices=('generic8193','m16381','generic16384'),
+                   help='Restrict timing-wide to one predeclared valid input for diagnosis; default tests all three')
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--resume-gates',action='store_true',help='Preserve verified gate rows and recover a completed raw invocation after a collector-only rejection')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if any(out.iterdir()) and not a.resume_gates:raise ValueError('use a fresh output directory')
     if a.resume_gates and a.mode!='gate':raise ValueError('timing matrices cannot use gate recovery')
+    if a.case and a.mode!='timing-wide':raise ValueError('--case requires timing-wide')
     exes={k:v.resolve() for k,v in [('baseline',a.baseline),('candidate',a.candidate)]}
     identity={k:freeze(v) for k,v in exes.items()}
     if read(exes['candidate'].parent/'build_manifest.json').get('engine')!='production':raise ValueError('candidate is not production')
@@ -75,6 +78,7 @@ def main():
                     N_hex=c['N_hex'],B1=c['B1'],sigma=26) for c in prepared['fixtures']
                if c['name'] in ('generic8193','m16381','generic16384')]
         if len(cases)!=3:raise ValueError('wide timing needs all three valid unit fixtures')
+        if a.case:cases=[c for c in cases if c['name']==a.case]
         sequence=['baseline','candidate','candidate','baseline','candidate','baseline','baseline','candidate']
         categories=['warmup','timing']
     else:
@@ -115,7 +119,8 @@ def main():
         if any(row['name']==name for row in data['runs']):return
         cmd=[str(exes[key]),'--ini',str(ini),'--save',c['save'],'--b2',str(c['B2']),'--d',str(c['D']),
              '--device','1','--arena-mb','6300','--results',str(result),'--log',str(log),'--factor-only']
-        if key=='candidate':cmd+=['--log-level','debug']
+        if read(exes[key].parent/'build_manifest.json').get('engine')=='production':
+            cmd+=['--log-level','debug']
         use=env.copy()
         if category=='gate':use.update(NTT_GFINV_SEG_CHECK='1',NTT_GIANT_SEED_CHECK='1',NTT_GIANT_CHAIN_CHECK='1' if c['unit'] else '0')
         recovered=a.resume_gates and log.is_file() and result.is_file()
