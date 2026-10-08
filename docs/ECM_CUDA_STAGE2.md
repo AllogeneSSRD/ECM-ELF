@@ -729,3 +729,8 @@ Compute实际捕获唯一reverse：device1/grid34650/block256、0.611008ms、REG
 下一阶段先对实际N=2^27/batch1的M7/M8与正逆tile、N=2^11/batch990的tile进行管理员NCU诊断，按带宽/依赖/同步证据选择候选。另一个源码可行候选是将scaled下降frontier继续保留在GPU：两份owner的较小allocation容纳3PW words，可放当前frontier的PW和本层兄弟F输入最多2PW，另一份写下一层；需新增最多24P B metadata、严格预算及必要回退。若第l层真正乘法的A长度总和为M_l、输出系数总和为J_l，则相对当前根路径可省H2D 8W∑M_l减新增metadata、D2H 8W∑J_l；这是生命周期/接口量推导，尚未实现或测量。应由实际下降准备成本决定其相对NTT的优先级。
 
 完成本阶段后优先实际热点NTT。上一阶段大界trace中tile约7.99秒、两类outer_coop共约4.39秒；根反转仅约0.6毫秒。按实际length/batch/正逆变换分布选择候选，不重复全局tile11或仅凭单batch field最快配置推广。较大宽形状应使用精确P=phi(D)/2：D300300给P28800，W256 owner约393.764MiB；D600600给P57600、owner约787.514MiB，不能误当作640MiB以内驻留。上述两档仅为公式计算，尚未实际大形状运行/峰值认证。
+
+
+## 2026-10-08 接续：实际热NTT诊断完成
+
+驻留根阶段已提交930dc3a。上述后续热形状NCU已完成：8个实际kernel、完整输出/检查与GPU指令身份独立核验通过；直接skip/invocation筛选的异常开销与隔离host range修复均保留。tile active warp96–99%、REG40/local0；M7/M8 outer active warp约33%、shared容量2CTA而REG允许5CTA。下一候选优先收窄outer的V轴保持radix/pass与数学MAC，再评估tile canonical add/sub指令；尚未测量其性能收益。[诊断、全部硬件值和复现工具](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:121)。发布893和旧Auto B2成本保持。

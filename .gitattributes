@@ -85,3 +85,7 @@ tools/bench/bench_stage2_gscale.py text eol=lf
 src/cuda/stage2/scale_plain.cuh text eol=lf
 tools/test/test_stage2_scaled_root_reverse.py text eol=lf
 tools/test/test_stage2_production_root.py text eol=lf
+tools/bench/profile_stage2_ntt_ncu.py text eol=lf
+tools/bench/prepare_stage2_ntt_range.py text eol=lf
+tools/bench/stage2_ntt_profile_range.cuh text eol=lf
+tools/bench/verify_stage2_ntt_range.py text eol=lf

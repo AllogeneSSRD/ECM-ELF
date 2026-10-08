@@ -2036,3 +2036,8 @@ GIANT同binary ABBA在D120120、I8327/24977证明chain较ladder更快，99912仿
 ## 75. Stage2驻留下降根生产接入与完整收尾计时（2026-10-08，候选验收）
 
 独立生产CU已接入驻留根并修复chunk析构/返回最终化计时；生产53/0、开发33/0（17条完整GMP节点）、跨版本12/0、反转216/0及4条完整根10,716,480 words通过。32正式/8预热完成，大界均值少0.22%但两组相反，三宽变化为慢0.08%/快0.52%/快0.11%，没有普遍稳定提速结论。管理员Systems确认少135.35MiB H2D/67.68MiB D2H、tracked/pinned峰保持，Compute反转0.611ms。独立审计完成、初版失败/首次审计拒绝保留；发布893/旧成本保持，下一项实际热NTT诊断及device下降frontier候选。该阶段的公式、原始失败与后续结果统一维护[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md:667)，功能与搬运验收通过，稳定整曲线收益尚未证明；长期优化继续。
+
+
+## 76. 实际热NTT诊断与下一候选（2026-10-08）
+
+N27单batch的tile/M7/M8正逆及N11/batch990的tile正逆8项管理员NCU已完成，独立审计核对完整输出和默认检查。隔离host range避开直接筛选引入的前序约151秒开销；原失败/中断保留。诊断exe与原计时exe不同，全部172个GPU SASS指令/调度编码及资源在只规范化匿名TU ID后相同，不宣称raw hash、host或周期等价。tile已有96–99% active warp/REG40/local0；outer只有约33%，shared限2CTA、REG容量5CTA。下一候选先保持radix/pass和数学工作量、收窄V使主shared由32降16KiB；公式预测容量5/4CTA尚待实测，更多CTA/同步/root加载可能抵消收益。tile另考察canonical add/sub整数指令；新D/Auto成本与多曲线内存lease仍待推进。完整8项值、失败解释和工具见[NTT形状报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:121)。

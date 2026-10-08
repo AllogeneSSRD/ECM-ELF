@@ -116,3 +116,78 @@ Nsight Systems用于查看kernel/copy事件并集和CPU提交间隙；无本进�
 ## 2026-10-05 后续发布状态
 
 短归约重新标定D并完成独立留出验证，生产默认已提升short1；旧归约0保留。实际生产入口33/0、S4后端选择器30/0，同exe/save固定D1381380 ABBA均值65.014116→56.834263 s（快12.58%）。本报告前面的默认关闭/旧产物数据是历史阶段记录。最新SHA、源文件行号、scope、容量和门禁边界见[短归约 D 标定与生产报告](D:/code/MPA-OpenCl/docs/STAGE2_SHORT_REDUCTION_D_CALIBRATION.md)。
+
+
+## 2026-10-08 实际热形状的管理员 NCU 诊断（已完成）
+
+驻留根生产移植已提交930dc3a；其生产整曲线收益尚不稳定，不能沿用开发版约1.20%的比例。[完整验收与最新来源](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md:667)。本阶段保持fbfc9d24基线、有效M4423/B1=1000/sigma26/lcm save、D1381380/P126720/I1456028/B2=2011326186870，先采实际热点计数，尚未改变NTT数学或发布包893。
+
+### 目标与异常筛选开销
+
+从同binary已完成Systems trace核对冻结launcher、mangled名字及单stream/direct launch序列：tile长度由gridX·dynamicShared/8、outer由gridX·2^M·V重建，M8取V16，其余V32。选择来自实际几何，不声称捕获kernel实参或精确树phase。
+
+- N=2^11/batch990的tile正/逆：grid(1,990,1)、block512、dynamic shared16384B。
+- N=2^27/batch1的M7/M8正/逆outer：四项grid32768/block256，dynamic shared0，static shared另核对。
+- N=2^27/batch1的tile正/逆：grid32768/block512、dynamic shared32768B。
+
+初版r0用匹配名字的launch-skip，已完成4个报告，但等待第1053次forward tile时，前序F树首层150.842秒、调用统计forward2.350秒/inverse0.002秒；与正常前序不相容。r2用全kernel skip-before-match也把baby前序约4秒拉长至38.115秒；r3用kernel-id的精确invocation仍复现首层151.027秒/forward2.363秒。三条不完整任务均核对PID/启动时间及自身进程树后终止；原始源、命令、日志、4个报告和中断证明保留，r1仅准备未启动。没有将这些前序时间解释为Stage2生产回退或发布性能数据。证据支持筛选方式引入开销，尚未定位NCU内部机制。
+
+### 隔离 host range 构建
+
+[生成器](D:/code/MPA-OpenCl/tools/bench/prepare_stage2_ntt_range.py:1)复制fbfc9d24冻结闭包，仅在tile/cooperative host launch前后插入[profiler API范围](D:/code/MPA-OpenCl/tools/bench/stage2_ntt_profile_range.cuh:1)，由S2_NCU_TARGET选中上述几何的第一次调用，调用cudaProfilerStart/Stop各一次。两处原header可逐字节撤销插入恢复基线；新增header仅host代码。真实生产源码和发布包未修改。
+
+隔离44f0149b候选CUDA编译114.8秒/split6；27个依赖、5对象。该binary不同于正式计时基线，不能冒充同binary验证。须先用[完整GPU等价工具](D:/code/MPA-OpenCl/tools/bench/verify_stage2_ntt_range.py:1)对两个实际exe分别导出cuobjdump，核对全部GPU SASS和resource。首次原始字节检查拒绝：仅生成目录引起匿名TU ID从8701b53f变为9ae733aa；原失败凭据与工具保留。最终只规范化这个已识别符号ID，172个kernel的完整指令文本、指令编码、调度编码及全部资源逐字节相同；两个原始SASS文件各341,269,914B，原始SHA仍分别保存，未写成raw hash相同。资源计数相同或插入可撤销均不能单独替代完整比较。完整GPU指令等价仍不证明host代码/周期或生产耗时等价。
+
+[采集工具](D:/code/MPA-OpenCl/tools/bench/profile_stage2_ntt_ncu.py:1)要求上述范围项目及GPU等价凭据，Compute2026.2.1管理员串行8项，仅GPU1；profile-from-start off、kernel名字过滤、launch-count1、clock/cache control none。先验证异常的大tile前序是否恢复，再补齐8项。collect严格核对实际template、device/grid/block、dynamic/static shared和REG，Start/Stop各一次，完整leaf/factor与原未插桩正式矩阵的默认NTT/S4覆盖。replay及系统RAM备份警告保留，不混入正式A/B或当作容量认证。
+
+原始及失败证据在ignored build_cuda_cmake/_stage2_ntt_hot_20261008。8项capture/export及collect均完成，父进程正常exit0；独立审计重新核对原始报告/CSV、8个实际几何、源/对象、完整输出和默认检查覆盖，通过。原2026-10-04及10-05的默认、时间和NCU权限失败是历史快照。
+
+
+### 八个实际 kernel 的硬件结果
+
+每项16-pass kernel replay，clock/cache control none，保留系统RAM备份警告。下列时长/带宽为诊断采集，不替代未插桩A/B，也不保证实际运行缓存状态。尤其N=2^11/batch990的数据可能受L2和重复回放影响。
+
+- N27 tile forward：12.998592ms，DRAM165.13GB/s、64.56% peak；SM throughput81.18%、active warp98.96%、issue active63.17%。
+- N27 tile inverse：16.974016ms，DRAM189.75GB/s、74.19% peak；SM75.26%、active warp99.46%、issue61.51%。
+- N27 M7 forward：11.058752ms，DRAM194.77GB/s、76.15% peak；SM62.28%、active warp32.94%、issue53.10%。
+- N27 M7 inverse：11.190304ms，DRAM192.49GB/s、75.26% peak；SM63.05%、active warp32.95%、issue51.49%。
+- N27 M8 forward：11.951232ms，DRAM179.56GB/s、70.20% peak；SM64.46%、active warp32.97%、issue54.65%。
+- N27 M8 inverse：12.069536ms，DRAM177.84GB/s、69.53% peak；SM65.45%、active warp32.99%、issue53.17%。
+- N11/b990 tile forward：197.888µs，DRAM60.00GB/s、26.82% peak；SM79.24%、active warp96.22%、issue64.19%。
+- N11/b990 tile inverse：261.088µs，DRAM113.81GB/s、50.86% peak；SM73.21%、active warp96.87%、issue62.58%。
+
+四个tile均REG40/allocated40，寄存器容量3CTA/SM；t12 shared容量3CTA，t11 shared容量5CTA，已实测接近满active warp。四个outer forward REG48、inverse REG46/allocated48，寄存器容量5CTA/SM、shared容量仅2CTA/SM。八项local load/store sectors均0；没有证据支持先减local数组或提高tile occupancy。
+
+原始stall单位也保留：tile的math-pipe-throttle per-issue-active ratio约4.59..5.27 inst，wait约1.84..2.23；outer wait约1.67..1.75，long-scoreboard约1.12..1.65，barrier约0.58..1.01。它们不是时间百分比，也不能相加成阶段墙钟。SM throughput是该指标定义下的利用率，不等于所有运算单元统一的利用率。完整数据见[quantitative.json](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_ntt_hot_20261008/quantitative.json)及8份raw metrics.csv。
+
+显式range的首个F树层0.238秒，与之前筛选造成的150.842/151.027秒形成实际回归检查；前序开销问题被修复，不解释为Stage2算法提速。完整leaf4244971527793015097、因子及默认S4/NTT覆盖逐项与原正式参考一致；diagnostic binary与基线不是同一个exe，结论依赖上述完整GPU指令比较和实际输出核验。
+
+### 据此调整下一候选
+
+1. **先试outer的V轴收窄**：当前M7/V32、M8/V16的主shared数组均32KiB，使CTA容量卡在2。候选M7/V16、M8/V8保持radix M和NTT pass数、DIF/DIT顺序、主数组读写与数学工作量；每CTA数据减半、grid加倍。静态公式预计M7 forward/inverse约18,688/19,328B、M8约19,584/19,968B，加1024B/CTA driver reserve，shared容量可能分别到5/4CTA。仍需实际REG/容量API验证；多一个小d同步层、更多CTA及辅助root加载可能抵消收益，不据公式承诺加速。
+2. **tile减少整数指令**：当前warp已接近满载、math-pipe压力较大，优先比较canonical Goldilocks add/sub的PTX与现有C++ SASS，再考虑固定t特化。仓库冻结sppark的[gl64_t.cuh](D:/code/MPA-OpenCl/.refactor/ntt_sources_20261004/sppark-9e5c7951d4ff4992f78af26f48d3c9230b8c4136/ff/gl64_t.cuh:67)可供算法参考，但其partially-reduced合同不能直接搬入本项目canonical路径，CC链必须在单asm块内自洽。
+3. 每个候选先独立GMP/全输出/缓存切换及资源门禁，再测试真实length/batch和完整Stage2固定D交叉A/B。旧全局tile11、单位根PTX重测和单纯u展开的负/不稳定结果仍保持。NTT策略变更后需重新标定D与Auto B2；本阶段没有新cprof或发布包。
+
+本阶段完成的是可复用的实际热形状诊断及瓶颈定位，尚未实现上述V轴/算术候选。GPU frontier驻留、较大16k容量、最终chain/短尾和多曲线RAM/VRAM lease继续属于长期工作。
+
+### 复现与证据归档
+
+在仓库根目录执行以下PowerShell命令。`python`指可用的Python 3；`reproduce`目录必须尚不存在，避免覆盖原证据。基线exe须连同其冻结sources、manifest和对象保留。Systems/reference取自已完成的同基线采集及正式计时矩阵。
+
+```powershell
+$repoRoot = (Get-Location).Path
+$rootPhase = Join-Path $repoRoot 'build_cuda_cmake/_stage2_root_prod_20261008'
+$probe = Join-Path $repoRoot 'build_cuda_cmake/_stage2_ntt_reproduce'
+python tools/bench/prepare_stage2_ntt_range.py --exe "$rootPhase/production_r3/ecm_cuda_stage2.exe" --output "$probe/project"
+& "$probe/project/tools/build/build_ecm_cuda_stage2.ps1" -Build "$probe/native" -Engine production -GlBackend ptx -SplitCompile 6
+Set-Location $repoRoot
+python tools/bench/verify_stage2_ntt_range.py --exe "$probe/native/ecm_cuda_stage2.exe" --project "$probe/project"
+$captureArgs = @('--exe', "$probe/native/ecm_cuda_stage2.exe", '--range-project', "$probe/project", '--reference', "$rootPhase/cross_timing_final_r3/measurements.json", '--systems', "$rootPhase/nsys_root_1", '--output', "$probe/capture")
+python tools/bench/profile_stage2_ntt_ncu.py @captureArgs
+$captureScript = (Resolve-Path "$probe/capture/capture_all.ps1").Path
+$captureJob = Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $captureScript)
+```
+
+等待该进程终止、检查capture/exit.txt为0后，执行`python tools/bench/profile_stage2_ntt_ncu.py @captureArgs --collect-only`。采集依赖GPU1空闲及管理员计数器权限；不能和编译/正式计时并行。工具为当前冻结模板/几何设计，改变V或launcher后须同步核验形状公式，不能直接套用旧grid推导N。
+
+本批独立[审计脚本](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_ntt_hot_20261008/audit_phase.py)、[审计结果](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_ntt_hot_20261008/final_audit.json)和[evidence manifest](D:/code/MPA-OpenCl/build_cuda_cmake/_stage2_ntt_hot_20261008/evidence_manifest.json)共同绑定源/对象、原始SASS、8份报告/CSV、正式参考和保留的失败。归档包含文本/输入/原始剖析证据；exe、对象和动态库在原路径保留并单独登记SHA，提交身份在归档后另记commit_identity.json。

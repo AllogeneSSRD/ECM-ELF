@@ -4754,3 +4754,8 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 ## 116. Stage2驻留下降根生产接入与完整收尾计时（2026-10-08，候选验收）
 
 独立生产CU已接入驻留根并修复chunk析构/返回最终化计时；生产53/0、开发33/0（17条完整GMP节点）、跨版本12/0、反转216/0及4条完整根10,716,480 words通过。32正式/8预热完成，大界均值少0.22%但两组相反，三宽变化为慢0.08%/快0.52%/快0.11%，没有普遍稳定提速结论。管理员Systems确认少135.35MiB H2D/67.68MiB D2H、tracked/pinned峰保持，Compute反转0.611ms。独立审计完成、初版失败/首次审计拒绝保留；发布893/旧成本保持，下一项实际热NTT诊断及device下降frontier候选。该阶段的公式、原始失败与后续结果统一维护[生产入口报告](D:/code/MPA-OpenCl/docs/ECM_CUDA_STAGE2.md:667)，功能与搬运验收通过，稳定整曲线收益尚未证明；长期优化继续。
+
+
+## 117. Stage2实际热NTT的管理员诊断（2026-10-08）
+
+驻留根生产阶段已提交930dc3a。本轮完成N27/batch1的tile和M7/M8正逆、N11/batch990的tile正逆共8项实际曲线NCU，完整leaf/factor/默认检查覆盖与原正式参考一致。三种直接筛选造成前序F树约151秒开销，均保留中断记录；隔离host profiler range修复为0.238秒。诊断44f0149b与原生产exe不同，仅匿名TU ID规范化后172个GPU kernel的完整SASS/调度编码和资源一致；原始比较拒绝也保留。tile active warp96–99%/REG40/local0，outer约33%且shared限2CTA、寄存器允许5CTA，故下一项优先V轴收窄（保持M/pass/数学MAC，主shared减半），再考察canonical add/sub指令。未建立新生产提速、没有新cprof或替换893；全部实际指标、范围、源码和复现统一维护[NTT形状报告](D:/code/MPA-OpenCl/docs/STAGE2_NTT_SHAPE_D_CALIBRATION.md:121)。
