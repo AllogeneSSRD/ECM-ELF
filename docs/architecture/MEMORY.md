@@ -45,6 +45,20 @@ cap 淘汰按实际策略处理 carry、cold 表和 keyed buffers，保留 conte
 
 重复请求只有完整保留状态固定后才压缩；压缩计数覆盖重复次数，但 observer 只看实际模拟的事件。不能拼接分别压缩的 NTT/S4 回调来计算联合峰。
 
+## NTT/S4 联合组件
+
+`workspace_memory` 使用同一请求程序交织 NTT/S4 事件：形状常量与自检先于输出/raw 增长，随后执行 NTT 分块，再申请首次 canonical counter。G 树租约包围树请求，在 fold 前释放 metadata；inverse/fold 边界按策略释放 raw/output。重复批次仅在两套完整容量状态都固定时压缩，最终按生产声明顺序释放。
+
+查询返回联合 `peak_bytes` 及该时刻的 `ntt_at_peak`、`s4_at_peak`，这两项属于同一瞬间，可以相加核对联合值。各自的 `ntt_peak_bytes`、`s4_peak_bytes` 仍为不同时间的组件峰，不能相加称为联合峰。`simulated_events` 只计实际模拟事件，压缩跳过的块数另列；它不是整条曲线的分配次数。
+
+该模型当前只覆盖条件驻留路径的 NTT/S4，输出 `process_peak_complete=false`、`admission_model=false`。NTT cap 拒绝时返回有效成功前缀和 `finished=false`，不把后续按次分配回退当作已覆盖。giant、fold/frontier owner、自检之外的其他设备分配、驱动开销及冷 trim 仍未联动；自动 D 尚未根据这个组件结果放行。
+
+CPU验证使用合成形状/表布局，1152组输入检查压缩与逐次执行、各组件最终容量和峰值、逐事件收支、拒绝前缀以及策略不一致，455270项断言通过。它验证模型组合与压缩，不证明生产 fuse 描述或 CUDA 实际分配成功。证据：`data/experiments/stage2_workspace_memory_20261009/cpu_v2/`；入口：`src/core/ecm_stage2_workspace_memory.h` 的 `workspace_memory_plan`。
+
+生产描述查询另覆盖8组：不同D、raw/output trim、两缓冲复用、keyed缓存、32 MiB cap拒绝和G1不支持。输入为M6011余因子5872 bits、B1=20、sigma=26，通常B2=2.6×10¹²；arena6300/fold640/batch256 MiB，设备为4060 Laptop、CUDA13.3、sm89。D=1141140/P=103680的旧静态 `arena_estimate_bytes` 为9219.58 MiB，联合NTT/S4峰为3588.26 MiB；这些是规划计算值，不是实测进程峰，更不包含fold owner或giant。查询中的NTT/S4各自峰与原组件查询一致，拒绝前缀和G1未覆盖状态正确保留。
+
+该轮完整构建通过；新exe SHA256=`b1efdba90c099f3d9cf4412ed701369885fd721be882889b5d8fde11caa226cd`。一条M503余因子318-bit、B1=20、sigma=26、B2=2.6×10¹⁰、D180180曲线验证中，mandatory GMP自检2016 cases和检查3032项均bad=0，结果无hit/bad_factor；它不是完整准入/性能验证。生产查询证据在 `data/experiments/stage2_workspace_memory_20261009/native_plans/results.json`，曲线证据在同目录的 `smoke.log`、`smoke.result.jsonl`。
+
 ## S4 容量与树租约
 
 S4 持有 raw A/B、归约输出、临时 pack、模数、按完整 shape 缓存的常量及 canonical counter。每个新形状的 96 窗口自检瞬时申请 8·96·slot_words 和 8·96·W bytes，然后释放；它发生在该次输出/NTT增长前，旧 NTT 缓存仍可能存活。

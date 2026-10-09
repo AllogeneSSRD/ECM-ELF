@@ -51,7 +51,7 @@ $sources = @($cudaSource, 'src/core/ecm_cuda_stage2_main.cpp',
     'src/core/ecm_expr.cpp', 'src/core/ecm_worktodo.cpp', 'src/core/ecm_queue_config.cpp')
 $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
     'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h', 'src/core/ecm_stage2_ntt_memory.h', 'src/core/ecm_stage2_giant_memory.h', 'src/core/ecm_stage2_s4_memory.h', 'src/core/ecm_stage2_s4_program.h', 'src/core/ecm_stage2_modulus.h', 'src/core/ecm_stage2_logging.h', 'src/core/ecm_stage2_console.h', 'src/core/ecm_stage2_queue_state.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
-    'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h', 'src/core/ecm_stage2_tune_format.h',
+    'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h', 'src/core/ecm_stage2_tune_format.h', 'src/core/ecm_stage2_workspace_memory.h',
     'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h', 'src/core/ecm_ini.h',
     'src/core/generated/ecm_config_generated.h', 'src/core/generated/ecm_ini_template.h',
     'config/ecm_options.json', 'config/ecm_config.generated.json',
@@ -83,7 +83,7 @@ $signature += "gmp=$Gmp"
 foreach ($name in $gmpHashes.Keys) { $signature += "gmp/$name=$($gmpHashes[$name])" }
 $signatureText = $signature -join "`n"
 $cudaDeps = @($cudaSource,'src/core/ecm_cuda_stage2.h','src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h','src/core/ecm_stage2_ntt_memory.h','src/core/ecm_stage2_giant_memory.h','src/core/ecm_stage2_s4_memory.h','src/core/ecm_stage2_s4_program.h','src/core/ecm_stage2_modulus.h','src/core/ecm_stage2_logging.h',
-    'src/cuda/ecm_stage2_tune.cuh') + @($deps | Where-Object { $_ -like 'tools/bench/*' -or $_ -like 'src/cuda/stage2/*' })
+    'src/cuda/ecm_stage2_tune.cuh','src/core/ecm_stage2_workspace_memory.h') + @($deps | Where-Object { $_ -like 'tools/bench/*' -or $_ -like 'src/cuda/stage2/*' })
 if ($HostOnly) {
     $previous = Get-Content -LiteralPath (Join-Path $Build 'build_manifest.json') -Raw | ConvertFrom-Json
     $previousSplit = if ($previous.split_compile) { $previous.split_compile } else { 1 }
@@ -127,9 +127,15 @@ if (-not $fresh) {
         $line = "$($vc.Setup) && `"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -DNTT_OUTER_UNROLL_U=$OuterUnrollU -DNTT_GL_ADD_SUB_MASK=$AddSubMask " +
             "--split-compile=$SplitCompile " +
             "-I `"$Gmp/include`" -Xcompiler /utf-8 -Xcompiler /wd4819 " +
-            "-c `"$src`" -o `"$obj`" > `"$log`" 2>&1"
+            "-c `"$src`" -o `"$obj`""
         $sw = [Diagnostics.Stopwatch]::StartNew()
-        & cmd.exe /c $line
+        # Keep setup and compilation on separate lines. Capture via a pipe:
+        # direct cmd file redirection crashes NVCC's compiler probe in some
+        # restricted Windows execution environments, even on an empty source.
+        $commandFile = Join-Path $objDir "$stem.compile.cmd"
+        $compileCommand = $line.Substring(($vc.Setup + ' && ').Length)
+        [IO.File]::WriteAllText($commandFile, "@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$compileCommand`r`n", [Text.UTF8Encoding]::new($false))
+        & cmd.exe /d /c $commandFile 2>&1 | Out-File -LiteralPath $log -Encoding utf8
         $code = $LASTEXITCODE
         $sw.Stop()
         $compileSeconds += $sw.Elapsed.TotalSeconds
@@ -147,8 +153,11 @@ if (-not $fresh) {
     Write-Host '== link ecm_cuda_stage2.exe =='
     $linkTimer = [Diagnostics.Stopwatch]::StartNew()
     $line = "$($vc.Setup) && `"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$Arch " +
-        "$objArgs -L `"$Gmp/lib`" -lgmp -o `"$exe`" > `"$linkLog`" 2>&1"
-    & cmd.exe /c $line
+        "$objArgs -L `"$Gmp/lib`" -lgmp -o `"$exe`""
+    $commandFile = Join-Path $objDir 'link.cmd'
+    $linkCommand = $line.Substring(($vc.Setup + ' && ').Length)
+    [IO.File]::WriteAllText($commandFile, "@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$linkCommand`r`n", [Text.UTF8Encoding]::new($false))
+    & cmd.exe /d /c $commandFile 2>&1 | Out-File -LiteralPath $linkLog -Encoding utf8
     if ($LASTEXITCODE -ne 0) { Get-Content $linkLog -Tail 40; throw 'link failed' }
     $linkTimer.Stop()
     Write-Host ("  ok   link ({0:N1}s)" -f $linkTimer.Elapsed.TotalSeconds)

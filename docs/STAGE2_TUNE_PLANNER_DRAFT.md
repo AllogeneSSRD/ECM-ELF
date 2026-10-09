@@ -25,6 +25,18 @@
 
 ## 后续实现与验证
 
+### NTT/S4 联合组件进展
+
+同一执行器已交织NTT和S4事件，保留selftest→output/raw→NTT→canonical的顺序，按树租约和阶段边界释放，并要求两边完整状态共同稳定才压缩。组件已接入plan-only，输出联合峰和峰时分项；不作为完整曲线准入、不改变默认D。
+
+合成描述CPU矩阵：1152 cases、455270 assertions；压缩/未压缩联合峰一致，各组件最终容量与原模型一致。原组件回归：NTT681389 checks；S4 299592 checks、2136 events、192 tree leases，bad=0。证据均在 `data/experiments/stage2_workspace_memory_20261009/`。
+
+构建诊断的最小源码对照表明：直接cmd日志文件重定向触发NVCC编译器探测崩溃，管道捕获通过；此前把问题仅归于命令传递的假设不成立。构建脚本改为独立命令文件和管道收集，新增C++/CUDA compile-only回归通过。受限环境完整CUDA编译仍遇到ptxas INVALID_HANDLE，相同参数以常规权限完整构建通过，约105秒；不改GPU设置。固定旧实验exe保持不变。
+
+真实描述的8组native plan通过，覆盖不同D、trim、BQ、keyed、拒绝前缀及G1不支持；新测试入口为 `tools/test/test_stage2_joint_workspace_plan.py`，原workspace-plan测试保留。5872 bits、B1=20、sigma26、B2=2.6e12、D1141140/P103680，arena6300/fold640/batch256：旧静态估计9219.58 MiB，NTT/S4联合组件3588.26 MiB。未包括fold/giant，不能直接作为准入。
+
+一条M503余因子318-bit、D180180、B2=2.6e10曲线通过，自检2016、GMP检查3032、bad=0，hits=0。新exe SHA256=`b1efdba90c099f3d9cf4412ed701369885fd721be882889b5d8fde11caa226cd`，日志/结果在 `data/experiments/stage2_workspace_memory_20261009/`。未宣称性能收益或自动D已改变。
+
 - [ ] 完成联合生命周期准入，覆盖自检、树租约、S4、NTT工作池、owner、giant与下降边界，以及非驻留回退。保持实时free/headroom检查。
 - [ ] 增加有版本的实测数据reader，明确设备、后端、算术路径及测量输入适用范围；路径与二进制信息放实验审计，运行tune数据只保留必要性能与资格字段。
 - [ ] 引入无因子完整ECM基准、普通/承载配对测量与D候选网格，将等级映射到完整测量计划。
