@@ -391,3 +391,40 @@ data/request_fixture.exe
 
 完整MemoryPlan下一步仍需模拟缓存淘汰/冷回收、分配先后及所有非NTT缓冲的同时
 存活状态，再将D/P、giant chunk预算和新成本共同用于候选选择。
+
+## NTT arena 分配器模拟
+
+生产`--plan-only`新增`ntt_memory.version=1`，从上面的请求program按原分配顺序
+计算共享大池、keyed digits/verdict、table/base与cap淘汰。大池增长前释放旧池；
+其他shape的外层表被淘汰后base仍保留，下次命中不会重新缓存表。pool关闭时
+使用keyed三缓冲。carry检查临时缓冲按pass内部最多65535 slices计费。
+
+- `valid`：模型计算有效，包括正常预算拒绝的成功前缀。
+- `finished`：全部条件请求已走完。不能据此认定完整Stage2驻留。
+- `peak_bytes/final_payload/checkpoints`：NTT owned峰、末态、压缩block末态。
+- `stopped_at`：首次fuse/big/digits cap拒绝位置；成功或不支持G1为null。
+- `cold_trim_modeled/fallback_modeled/process_peak_complete/admission_model`始终
+  false。当前无非NTT/真实free生命周期，不替换原D或Auto B2准入。
+
+纯CPU门禁直接提取当前生产分配器源码、将CUDA申请/释放替换为opaque ledger，
+使用合成fuse descriptor逐次核对状态和峰；还编译运行原独立dense topology
+回归。不会初始化CUDA或执行GPU工作，输出目录需全新：
+
+```powershell
+python tools/test/test_stage2_ntt_memory.py --output data/ntt_memory_cpu
+```
+
+默认使用本机VS18的`vcvars64.bat`，可用`--vcvars <path>`覆盖。保留提取源码、
+各源码SHA、编译/运行日志及检查JSON。该门禁验证分配规则和重复压缩，不能
+验证device-dependent descriptor、NTT算术、cudaMalloc物理失败或驱动开销。
+
+实际descriptor的规划查询（仅初始化CUDA、执行曲线0）继续使用：
+
+```powershell
+python tools/test/test_stage2_workspace_plan.py --exe <exe> --save <save> --carrier-exponent 8011 --device 1 --output data/ntt_memory_plan
+```
+
+它覆盖40个pool/reuse/chunk/D组合，核对新模型的scope、成功前缀、拒绝位置，
+以及无淘汰时与独立保留容量计算一致。完整owned生命周期与物理free门禁仍
+需后续补齐。用户已恢复4060lp默认1800 MHz/55 W；后续正式计时保持该基线，
+不与旧约79 W/2385 MHz样本混合。

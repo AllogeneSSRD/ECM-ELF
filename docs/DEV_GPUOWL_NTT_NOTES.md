@@ -4967,3 +4967,35 @@ binary SHA `4f42b75e213adfcc509cedee3210002cb3ca5ae6c5d9a3bc13464c82f3863ab4`。
 详见[报告第21节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#21-预测式全流程乘法请求-programmemoryplan-的输入合同)。
 下一轮按此program模拟cache淘汰/重建/冷回收与所有非NTT设备缓冲生命周期，
 逐checkpoint对照owned台账，再接D/P/point预算联合选择与新Auto B2成本。
+
+## 132. NTT arena 有序分配器模拟与预算拒绝定位（2026-10-09）
+
+接续`061cf17`。新增`src/core/ecm_stage2_ntt_memory.h`，按五阶段program模拟
+fuse先建、大池先释放后增长、keyed digits/verdict、cap淘汰保留base，以及
+carry内部分片。相同chunk/block达到完整allocation state不变后按计数增量
+压缩重复，不随B2线性展开。冷context接口可复用实际first-largest规则，但
+尚未接非NTT/物理free，所以生产plan明确`cold_trim_modeled=false`。
+
+`--plan-only`新增`ntt_memory.version=1`，提供组件末态/峰、block checkpoint、
+cache计数及`stopped_at`。cap拒绝可`valid=true,finished=false`，仅表示正确
+计算了成功前缀；不是准入。`process_peak_complete/admission_model`仍false，
+未修改算术内核、发布默认、普通D或Auto B2。正常曲线不运行此模拟。
+
+CPU直接提取当前生产arena代码、模拟分配API：681389检查0 bad、GPU调用0；
+原dense topology回归70010检查0 bad。实际device descriptor的40组plan query
+及6个边界通过，全部曲线0。合成descriptor门禁只覆盖分配规则；本轮没有
+GPU算术运行、物理OOM验证或正式计时。两处fixture错误期望与沙箱编译失败
+记录保留，不算通过；超大batch carry已按65535内部分片修正。
+
+M8011承载、B2=2.6e12、batch256/arena6300 MiB：D138三缓冲在inverse跨
+N=2^28拒绝，D153在F树顶就拒绝；两缓冲分别走完5260/4231子调用，预测NTT
+峰4612.617836/4613.356461 MiB。D138 cap4600仍走完5260，1次cap淘汰释放
+80467208 B，预测峰4538.652817 MiB；表减少、base保留，尚未计时或验证完整
+驻留，不能把NTT峰当成整个进程峰。B2=9e18仍仅模拟6个block。
+
+production v3：44源，compile83.1/build86.0 s，binary SHA
+`8b06bd35bdb8fa02ed9fcd9cbc106de8a042308e3c7d824356d9c2b3b0e49441`。
+详见[报告第22节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#22-有序-ntt-arena-分配器模拟预算淘汰与成功前缀)。
+后续计时遵循用户恢复的4060lp默认1800 MHz/55 W，旧高功耗数据保持原条件。
+下一轮接非NTT生命周期、fold/frontier cold trim与owned逐checkpoint门禁，
+再统一普通D/Auto B2准入和新条件下的完整成本排序；完整MemoryPlan仍未完成。

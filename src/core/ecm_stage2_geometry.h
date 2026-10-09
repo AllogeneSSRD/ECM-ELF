@@ -194,10 +194,12 @@ template<class Query> bool geometry(Word p, int bits, Query query, Geometry &g, 
     return g.fold_owner_bytes!=std::numeric_limits<Word>::max();
 }
 struct RequestPlan;
+struct NttMemoryPlan;
 struct Plan {
     Geometry geometry;
     TreeWorkspacePlan tree_workspace;
     std::shared_ptr<RequestPlan> requests;
+    std::shared_ptr<NttMemoryPlan> ntt_memory;
     Word tree_batch_bytes=0, tree_chunk_max=0;
     bool tree_physical_chunks=false;
     bool tree_payload_model_supported=false;

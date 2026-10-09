@@ -16,6 +16,47 @@ from bench_stage2_production import fields, freeze, sha
 from calibrate_stage2_d import phi
 
 
+def verify_ntt_memory(plan):
+    """Check scope, successful-prefix accounting and no-eviction equivalence."""
+    memory, request = plan['ntt_memory'], plan['request_program']
+    if memory['version'] != 1 or memory['process_peak_complete'] or memory['admission_model'] or memory['cold_trim_modeled'] or memory['fallback_modeled']:
+        raise ValueError('wrong NTT allocator model scope')
+    if memory['cap_bytes'] != plan['arena_cap_bytes'] or memory['pool'] != plan['tree_workspace']['pool']:
+        raise ValueError('allocator policy differs from native plan')
+    payload = memory['final_payload']
+    if payload['total_bytes'] != sum(payload[k] for k in ('big_bytes','digit_bytes','table_bytes','base_bytes')):
+        raise ValueError('final allocator components do not balance')
+    if memory['peak_bytes'] < payload['total_bytes'] or (memory['cap_bytes'] and memory['peak_bytes'] > memory['cap_bytes']):
+        raise ValueError('invalid owned arena prefix peak')
+    if not request['valid']:
+        if memory['valid'] or memory['finished']:
+            raise ValueError('unsupported topology accepted by allocator model')
+        return
+    if not memory['valid'] or not memory['supported']:
+        raise ValueError('supported allocator program rejected')
+    counters = memory['counters']
+    chunks = sum(p['chunks'] for p in request['phases'])
+    if memory['finished']:
+        if memory['stopped_at'] is not None or memory['reason'] != 'ok' or counters['calls'] != chunks or len(memory['checkpoints']) != len(request['blocks']):
+            raise ValueError('completed allocator sequence differs from request program')
+        if not counters['cap_evictions'] and not memory['carry_check']:
+            if memory['peak_bytes'] != request['ntt_retained_bytes'] or payload['total_bytes'] != request['ntt_retained_bytes']:
+                raise ValueError('no-eviction state differs from independent retention calculation')
+            if counters['fuse_builds'] != len(request['cache_shapes']) or counters['fuse_hits']+counters['fuse_builds'] != counters['calls']:
+                raise ValueError('no-eviction fuse reuse differs from request count')
+    else:
+        stop = memory['stopped_at']
+        if memory['reason'] not in ('fuse_cap_refusal','big_cap_refusal','digits_cap_refusal') or not stop or not 0 < counters['calls'] <= chunks:
+            raise ValueError('wrong successful-prefix cap refusal')
+        block = request['blocks'][stop['block']]
+        r = block['requests'][stop['request_index']]
+        if not 0 <= stop['repeat_index'] < block['repeat'] or any(stop[k] != r[k] for k in ('ma','mb','pairs')) or not stop['N'] or not stop['slices']:
+            raise ValueError('cap refusal location differs from request program')
+    for point in memory['checkpoints']:
+        if point['peak_bytes'] < point['payload']['total_bytes'] or point['peak_bytes'] > memory['peak_bytes']:
+            raise ValueError('invalid allocator checkpoint peak')
+
+
 def dense_groups(p):
     pad = 1 << (p-1).bit_length()
     degree = [0]*pad+[1]*p+[0]*(pad-p)
@@ -129,6 +170,7 @@ def main():
                 if len(candidates) != 1:
                     raise ValueError('expected one native JSON plan')
                 plan = candidates[0]
+                verify_ntt_memory(plan)
                 buffers = 2 if pool and reuse else 3
                 degree = phi(d)//2
                 tree_coeffs = max((b for _,b,_ in groups_by_d[d]),default=1)
