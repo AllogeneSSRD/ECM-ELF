@@ -14,6 +14,7 @@ import threading
 import time
 
 from bench_stage2_production import fields, freeze, read, sha
+from stage2_memory_ledger import parse as parse_memory_ledger
 
 
 def main():
@@ -41,6 +42,7 @@ def main():
     p.add_argument('--single-arm', choices=('three_buffer', 'two_buffer'), help='Exploratory check of one workspace layout, without claiming a cross-layout comparison')
     p.add_argument('--require-resident', action='store_true', help='Require device fold, scaled root and frontier instead of accepting their fallbacks')
     p.add_argument('--trim-phase-raw', action='store_true', help='Reclaim dead raw staging at inverse/fold and fold/descent boundaries in both arms')
+    p.add_argument('--memory-ledger', action='store_true', help='Track every successful engine cudaMalloc/free, including transient allocations; diagnostics only')
     a = p.parse_args()
     valid_exponent = 2 <= a.carrier_exponent <= 16384 or (a.comparison != 'carrier' and a.carrier_exponent == 0)
     if a.d <= 0 or a.b2 <= 0 or not valid_exponent or min(a.arena_mb, a.fold_mb, a.batch_mb,a.baby_mb) <= 0:
@@ -88,6 +90,7 @@ def main():
                NTT_GIANT_CHAIN_BLOCK='64', NTT_GIANT_CHAIN_MIN='32768',
                NTT_NO_PROGRESS='1', NTT_BABY_DEVICE_MAX_MB=str(a.baby_mb), CUDA_LAUNCH_BLOCKING='0')
     env['NTT_PHASE_TRIM_RAW'] = '1' if a.trim_phase_raw else '0'
+    env['NTT_MEMORY_LEDGER'] = '1' if a.memory_ledger else '0'
     if a.workspace_fixture:
         env['NTT_ARENA_WORKSPACE_TEST'] = '1'
     if a.mode == 'check':
@@ -111,6 +114,7 @@ def main():
                 projection_only=a.projection_only, workspace_fixture=a.workspace_fixture, single_arm=a.single_arm,
                 require_resident=a.require_resident,
                 trim_phase_raw=a.trim_phase_raw,
+                memory_ledger=a.memory_ledger,memory_parser_sha256=sha(Path(__file__).with_name('stage2_memory_ledger.py')),
                 budgets_mib=dict(arena=a.arena_mb,fold=a.fold_mb,batch=a.batch_mb,baby=a.baby_mb),
                 oracle_sha256=sha(a.fixtures) if a.fixtures else None)
     if a.comparison == 'plan':
@@ -139,6 +143,8 @@ def main():
     def verify():
         if sha(save) != save_sha or sha(__file__) != tool_sha:
             raise ValueError('save or collector changed during the matrix')
+        if sha(Path(__file__).with_name('stage2_memory_ledger.py'))!=data['memory_parser_sha256']:
+            raise ValueError('memory ledger parser changed during the matrix')
         if a.fixtures and (sha(a.fixtures) != data['oracle_sha256'] or sha(prepared['reference']) != prepared['reference_sha256']):
             raise ValueError('independent fixture/reference changed')
         if (sha(exe) != identity['binary_sha256'] or sha(exe.parent / 'build_manifest.json') != identity['build_sha256'] or
@@ -256,6 +262,10 @@ def main():
                          leaf=fields(text, 'target_descent_values') if a.mode == 'check' else None,
                          log=str(log), log_sha256=sha(log), debug_log=str(debug),
                          debug_sha256=sha(debug), result_sha256=sha(result))
+            if a.memory_ledger:
+                entry['memory_ledger'] = parse_memory_ledger(text)
+                if a.workspace_fixture and fields(text,'stage2_memory_ledger_check')['bad']!='0':
+                    raise ValueError('memory ledger fixture failed')
             if a.comparison in ('workspace-bq', 'plan', 'chunk','phase-output','owner-cache'):
                 entry['layout'] = fields(text, 'ntt_workspace_layout')
                 if entry['layout']['reuse_bq_requested'] != use['NTT_WORKSPACE_REUSE_BQ']:

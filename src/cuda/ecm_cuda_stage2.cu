@@ -57,6 +57,7 @@ struct ProductionDefaults {
 } production_defaults;
 }
 
+#include "stage2/device_memory_ledger.cuh"
 #include "stage2/ntt_runtime.cuh"
 #include "../core/ecm_stage2_geometry.h"
 #include "../core/ecm_stage2_modulus.h"
@@ -4317,6 +4318,7 @@ static void ladder_points(const LadderCtx &C, const std::vector<unsigned long lo
                           std::vector<unsigned long long> &outx,
                           std::vector<unsigned long long> &outz)
 {
+    stage2_memory::PersistentScope persistent_ladder_cache;
     const size_t nw = C.nw, n = js.size();
     outx.assign(n * nw, 0ull);
     outz.assign(n * nw, 0ull);
@@ -7293,6 +7295,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
        reduction needs (deg T = 2P => k = P+1).  Computed ONCE and reused by every fold --
        the reference's cost model has no such term, so it is charged to its own category. */
     stage2_log::phase("Prepare polynomial inverse");
+    stage2_memory::snapshot("before_inverse");
     CPoly finv;
     const CPoly Fpoly = fold_flat_enabled ? CPoly{} : cp_from_flat(Ft[1], Fdeg[1], W);
     const double ti0 = now_s();
@@ -7307,6 +7310,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         L.cat = -1;
     }
     R.t_inv = now_s() - ti0;
+    stage2_memory::snapshot("after_inverse");
     std::vector<unsigned long long> Hflat,finvflat;
     if(fold_flat_enabled && !finv.empty()) {
         const double tb=now_s();finvflat=cp_to_flat(finv,W);CPoly{}.swap(finv);
@@ -7325,6 +7329,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             (unsigned long long)freed,(unsigned long long)output,now_s()-begin);
     }
     if(fold_flat_enabled && !finvflat.empty())device_fold.init(L,Ft[1],finvflat,R.fold_device,R.fold_flat);
+    stage2_memory::snapshot("after_fold_admission");
     CPoly H;
     FTreeStats gs;
     /* the giant points are computed in POINT CHUNKS that are a whole number of G-tree batches
@@ -7765,6 +7770,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     R.t_post_loop=now_s();
     R.t_loop_wall = R.t_post_loop - t_loop_begin;
     stage2_log::phase("Normalize fold and descend F tree");
+    stage2_memory::snapshot("after_giant_loop");
     ScaledRootDeviceStats root_device;
     ScaledFrontierDevice frontier;
     frontier.requested=true;
@@ -7793,6 +7799,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 (unsigned long long)freed,(unsigned long long)output,now_s()-begin);
         }
         frontier.init(device_fold);
+        stage2_memory::snapshot("after_frontier_admission");
         device_fold.scaled_root(prepared_root,root_device,root_check,root_bad,frontier.enabled);
         const char *dc=std::getenv("NTT_S4_DESCENT_CHECK");
         if(g_scaled_check || frontier_check || (dc && std::atoi(dc)))Hflat=device_fold.read(device_fold.h,device_fold.hcount);
@@ -8003,6 +8010,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                     R.descent_divmods);
 
     stage2_log::phase("Accumulate leaf products and GCD");
+    stage2_memory::snapshot("after_descent");
     /* ---- 4. accumulate prod_j H(x_j) mod N ON THE DEVICE, one gcd per block ------------ */
     const double ta0 = now_s();
     const size_t BLOCK = 64;                            /* small, so a hit localises to <=64 */
@@ -8325,6 +8333,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
 {
     PolyLayer L;
     L.device = g_device;
+    stage2_memory::Session memory_session; // Destroyed after all curve-local device owners.
     stage2_log::phase("Plan Stage2 bounds and memory");
     std::string modulus_error;
     if(!L.configure(n_str,n_is_hex?16:10,carrier_exponent,modulus_error)) {
@@ -8939,6 +8948,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        here (the batched run does not exist yet) and merged into the reported factor set below. */
     std::vector<std::string> baby_deg;
     stage2_log::phase("Generate and normalize baby points");
+    stage2_memory::snapshot("before_baby");
     SmallPrimeBabyCache small_cache;
     const bool reuse_small=small_prime_flag("NTT_SMALL_PRIME_REUSE");
     if(reuse_small)small_cache.begin(C,D,B1,B2,baby_j);
@@ -9061,6 +9071,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     (unsigned long long)baby_j.size(), tb1 - tb0, now_s() - tb1, noninv);
         FTreeStats fs;
         stage2_log::phase("Build baby-point F tree");
+        stage2_memory::snapshot("before_ftree");
         Ft = build_tree_flat(L, leaf, Fdeg, Fpad, fs, BC_FTREE);
         s4_oracle_drain(red);    /* include final F-tree validation in its phase timer */
         fdeg = Fdeg[1];

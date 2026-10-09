@@ -4883,3 +4883,25 @@ NTT全峰仍4613.356 MiB；候选owner930.241 MiB，2秒采样设备峰6278→72
 本D未确立全局最优，production B1与新Auto B2成本仍待校准；发布默认未改。
 下一步完整生命周期MemoryPlan与D成本联合规划，同方向资料继续更新
 [报告§18](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。
+
+## 129. 完整设备payload台账发现giant chunk预算拐点（2026-10-09）
+
+接续§128/e5155c7，新增默认关闭NTT_MEMORY_LEDGER：统一记录production源码闭包
+所有成功cudaMalloc/free，保存live、区间峰、全程峰及峰时的逐site组成。涵盖
+NTT/S4、owner、点/seed、归约/诊断与临时分配；不含driver context/module、
+其它进程或pinned host，不能作为完整物理VRAM峰。常规日志与算术/驻留默认不变。
+
+7995-bit目标/M8011、B2=2.6e12，D153控制/驻留候选owned峰5628.891/6559.132 MiB，
+差值恰为owner930.241 MiB；D138两臂均驻留、cache eviction0，峰同为6654.276 MiB。
+较小D反而多95.143 MiB：256 MiB giant点预算按P向上整批，D138变2P坐标487.266 MiB，
+D153最低1P坐标265.781 MiB。下一项验证向下整批、最低1P策略，D138仅坐标可少
+243.633 MiB，但增加chunk准备次数，尚无新正式加速结论或默认变更。
+
+内置ledger20项、Python守恒/拒绝10项、8组native两臂完整叶子、5条正常回退与
+carry污染拒绝通过；当前collector两臂及默认关闭两臂另通过。第一版把616 B静态
+ladder缓存误判为泄漏，已保留失败记录并显式标记persistent；真实高位宽final全0。
+本轮所有时间均检查口径，不替代§128正式ABBA+BAAB收益。
+
+完整预测式MemoryPlan、legacy准入替换和Auto B2新成本仍未完成；按新台账核对
+各阶段公式，再推进D/point chunk/预算联合规划。同方向详见
+[报告§19](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。

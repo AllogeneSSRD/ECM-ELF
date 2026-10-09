@@ -4223,6 +4223,9 @@ int ntt_batch_carry_finish(NttArena *arena, unsigned long long N, unsigned long 
 
 static void ntt_workspace_check(int device)
 {
+#ifdef ECM_STAGE2_MEMORY_LEDGER
+    stage2_memory::fixture();
+#endif
     unsigned long long checks=0, bad=0, words=0;
     auto check=[&](bool ok) { ++checks; if (!ok) ++bad; };
     for(bool reuse_bq : {false,true}) {

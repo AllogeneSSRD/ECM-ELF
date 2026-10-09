@@ -297,3 +297,26 @@ Auto B2拒绝该未标定策略，未加入INI/发布默认。
 `ntt_arena_accounting`输出独立组件重算的`calculated_bytes/mismatch`。旧版
 `owned_subset_*`量偏大，不与新版直接作显存收益对比；NTT自身`full_peak_bytes`、
 计时、驻留及数学结果均不受此观测错误影响。
+
+## 完整设备分配生命周期台账
+
+`--memory-ledger`使两臂均设置`NTT_MEMORY_LEDGER=1`（默认0）。统一记录源码闭包
+成功的cudaMalloc/free，包含临时分配、持久ladder缓存和容量重建；峰值保存当时
+同时存活的allocation-site组成。final允许显式persistent缓存，其余必须释放；
+unknown free、live/interval/global peak组成与申请/释放守恒均门禁检查。
+
+这是**本实现owned CUDA payload**，不含driver context/module开销、其它GPU进程、
+pinned host或驱动分配粒度，不能叫完整物理VRAM峰，也不代替真实free准入。
+插桩有额外CPU记账/debug I/O成本，默认关闭，不将检查时间用于正式性能结论。
+常规控制台不增加日志；原阶段/模块峰与台账存在重叠，不求和。
+
+```powershell
+python tools/bench/bench_stage2_carrier.py --comparison owner-cache --exe <exe> --save <save> --carrier-exponent 8011 --b2 2600000000000 --d 1381380 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --memory-ledger --mode check --projection-only --output data/ledger_check
+python tools/bench/analyze_stage2_memory_ledger.py --input data/ledger_check/measurements.json --output docs/benchmarks/ledger.json --figure docs/figures/ledger
+python tools/test/test_stage2_memory_ledger.py --exe <exe> --matrix data/ledger_check/measurements.json --output data/ledger_gate.json
+```
+
+门禁可同时接受多份完成矩阵；`--fallback-dir`接受phase/chunk回退门禁目录。
+`stage2_memory_ledger.py`为共享解析器，采集器记录其SHA并检查运行中未变化。
+台账来源指向冻结binary的文件/行号；跟踪设备申请API的源码闭包审计不包含
+CUDA运行时内部开销。预测式MemoryPlan与普通D/Auto B2联合准入仍在推进。
