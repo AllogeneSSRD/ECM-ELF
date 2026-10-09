@@ -72,9 +72,8 @@ static constexpr double d_short_weights[]={
 // Explicit temporary payload only: coordinates/output/constants/indices/tree/mask.
 // Runtime free-memory and actual allocations remain authoritative.
 static unsigned long long d_baby_payload_bytes(unsigned long long p,unsigned long long w) {
-    unsigned long long count=p,nodes=0;
-    for(int i=0;i<8;++i){count=(count+1)/2;nodes+=count;}
-    return 8*((3*p+5)*w+p+nodes*w)+count;
+    ecm_stage2::BabyMemoryLayout layout;
+    return ecm_stage2::baby_memory_layout(p,w,layout)?layout.bytes:~0ull;
 }
 struct DPhaseModel {
     int bits;

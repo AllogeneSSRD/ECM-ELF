@@ -99,13 +99,17 @@ S3 workspace=8[5W+(2W+1)c+W(v+r)+W(f+1)·[f>0]+2Wh] bytes。
 
 ### Giant 与工作区共同时间线
 
-`curve_workspace_memory` 在同一执行器中联动NTT、S4、fold/frontier和giant。S3五个常量与小素数留下的seed容量在F树之后、inverse之前申请；inverse后trim和fold准入结束，再生成首个point chunk。chain的seed、base、坐标、segment按生产顺序申请，legacy seed在group缓冲申请前释放。ladder坐标借用S3 seed数组，不再次计账。
+`curve_workspace_memory` version=2在同一执行器中联动初始化、NTT、S4、fold/frontier和giant。基础Montgomery自检在S4初始化之前申请并释放；S4模数申请后生成baby点，其临时缓冲在F树前全部释放。S3五个常量与小素数留下的seed容量在F树之后、inverse之前申请；inverse后trim和fold准入结束，再生成首个point chunk。chain的seed、base、坐标、segment按生产顺序申请，legacy seed在group缓冲申请前释放。ladder坐标借用S3 seed数组，不再次计账。
 
 一个point chunk可以覆盖多棵G树及相应fold。其坐标、segment与group必须保留到最后一棵树消费完成，然后释放；S3的seed/base/segfix容量则跨chunk保留。满chunk与短尾分别选chain/ladder，短尾可以增大seed容量。驻留下降完成后先释放frontier/fold，再申请P个叶值及积缓冲，最后销毁S3、S4和NTT。
 
-重复G树只在完整point chunk两端的四套分配状态相同后跳过，且跳过数量受剩余完整chunk数量约束；不能跳过不同路线的短尾。`point_chunks`、`points_consumed`包括跳过的进度，`simulated_events`只包含实际模拟事件。查询返回四项同一时刻的`*_at_peak`，可相加核对`peak_bytes`；独立`giant_peak_bytes`不具备这个相加口径。`giant_final_bytes`是积缓冲申请后、S3销毁前的容量。
+重复G树只在完整point chunk两端的四套持久分配状态相同后跳过，且跳过数量受剩余完整chunk数量约束；初始化临时量在此前已释放，不能跳过不同路线的短尾。`point_chunks`、`points_consumed`包括跳过的进度，`simulated_events`只包含实际模拟事件。查询返回五项同一时刻的`*_at_peak`，可相加核对`peak_bytes`；独立`giant_peak_bytes`、`initial_peak_bytes`不具备这个相加口径。`giant_final_bytes`是积缓冲申请后、S3销毁前的容量。
 
-该查询仍为条件组件模型：不包含更早baby/context/基础自检的设备瞬时量，也不模拟动态headroom、cold trim、物理分配失败和owner回退后的完整时间线。预算拒绝保留有效前缀，`finished=false`。不能据此改变完整曲线准入门限。
+基础自检的四个数组共8W(3·2048+1) bytes。baby点的第i层节点数为⌈P/2ⁱ⌉，T=Σᵢ₌₁⁸⌈P/2ⁱ⌉；baby payload=8[(3P+5)W+P+TW]+⌈P/256⌉ bytes。五个常量、indices、X/Z、积树、叶输出和byte mask按生产顺序分配、逆声明顺序释放。生产caller与规划共用`baby_memory_layout`，位宽/乘积溢出时拒绝。baby预算不足时查询返回有效前缀、`finished=false`，不模拟persistent ladder回退；会增加设备分配的初始化诊断使该查询不可用，不影响实际诊断运行。
+
+查询还给出启动时free的估计需求。baby需求是当时S4 payload+baby+64 MiB；fold/frontier需求是对应准入前的owned payload+新owner/metadata+NTT大工作区尚需增长量+1 GiB。这两个owner公式采用生产相同的目标transform和物理buffer数量。`required_free_bytes`取上述需求及联合峰+reserve的最大值；`initial_free_snapshot_fits`只表示完整正常模型在本次启动free快照下满足这个估计。
+
+该查询仍不保证完整物理准入：未模拟动态设备free、cold trim、物理分配失败、诊断及owner回退后的完整时间线，也不包含驱动/库隐式分配。`process_peak_complete=false`、`admission_model=false`保留；原生实时headroom和失败处理必须继续执行。
 
 验证使用sm89/CUDA13.3/GMP Zen3，exe SHA256=`a90cb1ca1045f1fdc3dd5ae906d949483e091bf68668fd6ae8471615b2ac3beb`，4060 Laptop设备1；未修改频率或功耗，不报告速度收益。CPU矩阵包括1152组原联合模型和3456组giant组合，共3392047项检查；压缩与逐步执行一致，超大B2案例只执行10个块。生产S3源码提取和transient容量fixture核对2051组、39573个分配/释放事件。14组真实形状查询覆盖point floor、强制ladder、非驻留giant、chain→ladder短尾、trim/BQ/keyed及拒绝前缀。
 
@@ -113,9 +117,13 @@ M503余因子318 bits、B1=20、sigma26、B2=2.6×10¹⁰、D180180的普通、�
 
 M6011余因子5872 bits、B1=20、sigma26、B2=2.6×10¹²、D1141140/P103680、arena6300/fold640/batch256 MiB：四组件联合规划峰4406.441 MiB，point floor为4251.702 MiB，B/Q复用为3382.441 MiB。这些是同配置的规划计算，不能作为实测进程峰或性能排名。证据在`data/experiments/stage2_giant_timeline_20261009/`：`cpu/result.json`、`native_allocator/checks.json`、`native_plans_v3/results.json`、`curves.json`及`runtime_ledgers_v2/results.json`。
 
+初始化验证：50组P/W、1500个源码提取分配/释放事件、4556项检查通过；故意扩大native baby树8 bytes被拒绝。联合CPU矩阵含3456组初始化组合，共6097043项检查，压缩与逐步执行、逐事件收支、预留空间公式一致。16个native plan包含baby预算拒绝和初始化诊断不可用。最终构建sm89/CUDA13.3/GMP Zen3，exe SHA256=`4a734f4cab13ae3b4f76d5b65bc3921cd94c826ec427cc30c14323bc018bf466`；同一M503设置的普通/承载/预算回退三条完整曲线通过，前两条的预测联合峰与owned账本峰完全一致，回退只核对成功前缀和S3容量。原始证据为`data/experiments/stage2_initial_timeline_20261009/`下的`native_allocator_v2/result.json`、`cpu_headroom/result.json`、`headroom_plans/results.json`及`headroom_ledgers/results.json`。
+
+相同5872-bit大D输入另完成1条整曲线：初始化模型二进制SHA256=`747753d0e09e0b09f181ca04b5a61cf6e42cb8968c50bb7d9f1913cd2102cbe3`，4060 Laptop设备1、固定1800 MHz，未调整功耗（运行采样约48.54 W，非恒定实测功率）。规划与实际owned峰同为4,620,488,216 bytes（4406.441 MiB），GMP自检2208 cases、检查43253项、bad=0，hits/bad_factors=0。单样本Stage2 total=96.761609 s（shape+init+main，排除Stage1），不是性能比较。证据为同目录`wide_curves.json`、`wide_plans/results.json`、`wide_ledgers/results.json`和`wide.debug.log`。最终仅增加headroom估计字段的二进制查询同输入`required_free_bytes`=5174.441 MiB、free快照满足；point floor需求5127.139 MiB、B/Q需求4150.441 MiB，不能按峰最低直接推断最快。
+
 ## 现有查询与验证
 
-plan-only 提供真实 packing、精确非空树组、请求顺序以及 NTT/S4/owner/giant 的条件联合结果；当前输出明确不保证 full process peak、准入和全部 fallback。完整准入还需补齐初始化、其他owner及回退，并保留实时 free/headroom 查询。
+plan-only 提供真实 packing、精确非空树组、请求顺序以及初始化/NTT/S4/owner/giant的条件联合结果与free快照需求；当前输出明确不保证full physical process peak、完整准入和全部fallback。候选筛选必须保持条件适用性和实时free/headroom查询。
 
 当前 NTT 事件模型的 CPU 账本从生产分配语句生成：173 cases、47,936 events、168,166 assertions，失配 0；故意改变表释放顺序会拒绝。40 个 native plan 查询和 10 条短 GPU 曲线通过组件/路由及算术核对。CPU opaque allocator 不验证 CUDA 物理分配失败、驱动驻留或完整进程峰。
 
@@ -130,5 +138,6 @@ M8011/80111、carrier8011、B1=20、B2=2.6e12、D1381380/P126720、batch256、ar
 - [ecm_stage2_s4_memory.h](../../src/core/ecm_stage2_s4_memory.h)：S4 逐项容量；[s4_program_plan](../../src/core/ecm_stage2_s4_program.h#L50)：请求/租约联动。
 - [ecm_stage2_giant_memory.h](../../src/core/ecm_stage2_giant_memory.h#L9)：giant 容量与保留状态。
 - [ecm_stage2_giant_state.h](../../src/core/ecm_stage2_giant_state.h#L17)：giant有序分配、point chunk租约及末阶段容量。
+- [ecm_stage2_initial_memory.h](../../src/core/ecm_stage2_initial_memory.h)：共享baby布局、基础自检及初始化时间线。
 - [plan-only 接入](../../src/cuda/ecm_cuda_stage2.cu#L8762)、[工作区工具说明](../../tools/bench/README_STAGE2_CARRIER_PLAN.md)。
 - [性能](../performance/STAGE2.md)、[TODO](../TODO.md)。

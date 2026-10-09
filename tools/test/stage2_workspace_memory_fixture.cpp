@@ -17,7 +17,7 @@ static bool layout(Word n,NttFuseMemoryLayout &d) {
 }
 int main() {
     try {
-        Word cases=0,compressed_cases=0,noncoincident=0,giant_cases=0,giant_compressed=0;
+        Word cases=0,compressed_cases=0,noncoincident=0,giant_cases=0,giant_compressed=0,initial_cases=0;
         for(int bits:{31,127,521})for(Word p:{2ull,3ull,5ull,8ull,13ull,32ull})
         for(unsigned mask=0;mask<32;++mask)for(Word tail:{0ull,1ull}) {
             RequestProgram program;check(request_program(p,9*p+tail,program));
@@ -91,6 +91,34 @@ int main() {
                 GiantMemoryPlan gm;check(giant_memory_plan(p,points,op.words,trees*p,gp.component,gm));
                 check(ga.giant_peak_bytes==gm.peak_bytes && gb.giant_peak_bytes==gm.peak_bytes);
                 check(ga.giant_final_bytes==gm.accumulation_bytes && gb.giant_final_bytes==gm.accumulation_bytes);
+                InitialMemoryPolicy ip{p,op.words,1ull<<30};
+                WorkspaceMemoryPlan ia,ib;Word initial=0,fold_need=0,frontier_need=0;
+                owner=ntt=s4=giant=total=peak=0;
+                S4ShapeDescriptor target;check(shape(p+1,bits,target));
+                const Word future_growth=np.pool?0:8*sp.buffers*target.n;
+                check(workspace_memory_plan(joint,bits,shape,layout,np,sp,ia,false,
+                    [&](const WorkspaceMemoryEvent &e) {
+                        const bool fold_begin=e.owner_event && e.allocation && !owner;
+                        Word &v=e.initial_event?initial:e.giant_event?giant:e.owner_event?owner:e.ntt?ntt:s4;
+                        if(e.allocation)v+=e.bytes;else {check(v>=e.bytes);v-=e.bytes;}
+                        check(ntt==e.ntt_live && s4==e.s4_live && owner==e.owner_live &&
+                              giant==e.giant_live && initial==e.initial_live);
+                        total=ntt+s4+owner+giant+initial;check(total==e.total);peak=std::max(peak,total);
+                        if(fold_begin)fold_need=total-e.bytes+owner_bytes(p,op.words,op.reuse)+future_growth+(1ull<<30);
+                        if(e.owner_event && e.allocation && owner==owner_bytes(p,op.words,op.reuse)+24*p)
+                            frontier_need=total+future_growth+(1ull<<30);
+                    },&op,&gp,&ip));
+                check(workspace_memory_plan(joint,bits,shape,layout,np,sp,ib,true,{},&op,&gp,&ip));
+                check(ia.valid && ia.finished && ib.valid && ib.finished && !total);
+                check(ia.peak_bytes==peak && ia.peak_bytes==ib.peak_bytes && ia.final_bytes==ib.final_bytes);
+                BabyMemoryLayout baby;check(baby_memory_layout(p,op.words,baby));
+                check(ia.montgomery_bytes==8*op.words*(3*2048+1) && ia.baby_bytes==baby.bytes);
+                check(ia.initial_peak_bytes==std::max(ia.montgomery_bytes,ia.baby_bytes));
+                check(ia.peak_bytes==std::max(ga.peak_bytes,std::max(ia.montgomery_bytes,baby.bytes+8*op.words)));
+                check(ia.ntt_at_peak+ia.s4_at_peak+ia.owner_at_peak+ia.giant_at_peak+ia.initial_at_peak==ia.peak_bytes);
+                check(ia.baby_headroom_bytes==baby.bytes+8*op.words+(64ull<<20));
+                check(ia.fold_headroom_bytes==fold_need && ia.frontier_headroom_bytes==frontier_need);
+                ++initial_cases;
                 if(gb.skipped_blocks)++giant_compressed;
                 ++giant_cases;
             }
@@ -124,8 +152,14 @@ int main() {
         check(workspace_memory_plan(program,127,shape,layout,np,sp,huge,true,{},&op,&gp));
         check(huge.valid && huge.finished && huge.points_consumed==gp.points && huge.executed_blocks<40);
         check(huge.point_chunks==ceil_ratio(gp.points,gp.chunk_points) && huge.skipped_blocks>1000000000ull);
+        InitialMemoryPolicy ip{13,2,0};
+        check(workspace_memory_plan(program,127,shape,layout,np,sp,huge,true,{},&op,&gp,&ip));
+        check(huge.valid && !huge.finished && !std::strcmp(huge.reason,"baby_budget_refusal") && !huge.executed_blocks);
+        ip.baby_budget_bytes=1ull<<30;ip.diagnostic=true;
+        check(workspace_memory_plan(program,127,shape,layout,np,sp,huge,true,{},&op,&gp,&ip));
+        check(!huge.valid && !huge.finished && !std::strcmp(huge.reason,"diagnostic_initial_workspace_not_modeled"));
         std::cout<<"{\"cases\":"<<cases<<",\"checks\":"<<checks<<",\"compressed_cases\":"<<compressed_cases
             <<",\"noncoincident_peaks\":"<<noncoincident<<",\"giant_cases\":"<<giant_cases
-            <<",\"giant_compressed\":"<<giant_compressed<<",\"huge_executed_blocks\":"<<huge.executed_blocks<<",\"gpu_calls\":0}\n";
+            <<",\"giant_compressed\":"<<giant_compressed<<",\"initial_cases\":"<<initial_cases<<",\"gpu_calls\":0}\n";
     } catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

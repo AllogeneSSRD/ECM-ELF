@@ -26,10 +26,13 @@ static bool device_baby_generate(const LadderCtx &C,const mpz_t N,
 {
     const double begin=now_s();const size_t n=indices.size(),w=C.nw;
     if(!n)return false;
-    size_t counts[9]={n},offset[9]={},words=0;
-    for(int l=1;l<=8;++l){counts[l]=(counts[l-1]+1)/2;offset[l]=words;words+=counts[l]*w;}
+    ecm_stage2::BabyMemoryLayout layout;
+    if(!ecm_stage2::baby_memory_layout(n,w,layout)) {
+        std::fprintf(stderr,"FATAL: baby device layout overflow\n");std::exit(3);
+    }
+    const auto &counts=layout.counts;const auto &offset=layout.offset;const auto words=layout.tree_words;
     const size_t groups=counts[8];
-    const size_t bytes=8*((3*n+5)*w+n+words)+groups;
+    const size_t bytes=(size_t)layout.bytes;
     st.points=n;st.groups=groups;st.payload_bytes=bytes;
     size_t free_bytes=0,total_bytes=0;CK(cudaMemGetInfo(&free_bytes,&total_bytes));
     const auto limit=fuse_env_ull("NTT_BABY_DEVICE_MAX_MB",512)*1024*1024;

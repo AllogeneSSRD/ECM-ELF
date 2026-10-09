@@ -3,6 +3,7 @@
 #include "ecm_stage2_s4_program.h"
 #include "ecm_stage2_owner_memory.h"
 #include "ecm_stage2_giant_state.h"
+#include "ecm_stage2_initial_memory.h"
 #include <optional>
 
 namespace ecm_stage2 {
@@ -16,6 +17,8 @@ struct WorkspaceMemoryEvent {
     bool owner_event=false;
     Word giant_live=0;
     bool giant_event=false;
+    Word initial_live=0;
+    bool initial_event=false;
 };
 struct WorkspaceMemoryPlan {
     bool valid=false,finished=false;
@@ -24,6 +27,8 @@ struct WorkspaceMemoryPlan {
     Word ntt_at_peak=0,s4_at_peak=0,final_bytes=0,released_bytes=0;
     Word owner_at_peak=0,owner_peak_bytes=0,fold_bytes=0,frontier_bytes=0;
     Word giant_at_peak=0,giant_peak_bytes=0,giant_final_bytes=0,point_chunks=0,points_consumed=0;
+    Word initial_at_peak=0,initial_peak_bytes=0,montgomery_bytes=0,baby_bytes=0;
+    Word baby_headroom_bytes=0,fold_headroom_bytes=0,frontier_headroom_bytes=0;
     Word executed_blocks=0,skipped_blocks=0,simulated_events=0;
     NttMemoryPayload ntt_final;
     S4MemoryPayload s4_final;
@@ -32,7 +37,8 @@ template<class Query,class Describe> bool workspace_memory_plan(
         const RequestProgram &program,int bits,Query query,Describe describe,
         NttMemoryPolicy ntt_policy,S4ProgramPolicy s4_policy,WorkspaceMemoryPlan &plan,
         bool compress=true,std::function<void(const WorkspaceMemoryEvent &)> observe={},
-        const OwnerMemoryPolicy *owner_policy=nullptr,const GiantTimelinePolicy *giant_policy=nullptr) {
+        const OwnerMemoryPolicy *owner_policy=nullptr,const GiantTimelinePolicy *giant_policy=nullptr,
+        const InitialMemoryPolicy *initial_policy=nullptr) {
     plan=WorkspaceMemoryPlan{};
     if(!program.supported || bits<2 || bits>max_input_bits)return true;
     const unsigned buffers=ntt_policy.pool && ntt_policy.reuse_bq?2:3;
@@ -42,6 +48,7 @@ template<class Query,class Describe> bool workspace_memory_plan(
     NttMemoryState ntt(ntt_policy);S4MemoryState s4;
     OwnerMemoryState owner(owner_policy?*owner_policy:OwnerMemoryPolicy{});
     GiantMemoryState giant(giant_policy?*giant_policy:GiantTimelinePolicy{});
+    InitialMemoryState initial(initial_policy?*initial_policy:InitialMemoryPolicy{});
     if(owner_policy && (!owner_policy->p || owner_policy->words!=(Word)((bits+63)/64))) {
         plan.reason="inconsistent_owner_policy";return false;
     }
@@ -49,33 +56,61 @@ template<class Query,class Describe> bool workspace_memory_plan(
        (owner_policy && giant_policy->p!=owner_policy->p))) {
         plan.reason="inconsistent_giant_policy";return false;
     }
+    if(initial_policy && (initial_policy->words!=(Word)((bits+63)/64) ||
+       (owner_policy && initial_policy->p!=owner_policy->p))) {
+        plan.reason="inconsistent_initial_policy";return false;
+    }
     bool overflow=false;
-    auto event=[&](bool from_ntt,bool allocation,Word bytes,bool from_owner=false,bool from_giant=false) {
+    auto event=[&](bool from_ntt,bool allocation,Word bytes,bool from_owner=false,bool from_giant=false,bool from_initial=false) {
         Word total=0;
         if(!add(ntt.live.total,s4.live.total,total) || !add(total,owner.live,total) || !add(total,giant.live,total) ||
+           !add(total,initial.live,total) ||
            !add(plan.simulated_events,1,plan.simulated_events)){overflow=true;return;}
         if(total>plan.peak_bytes) {
             plan.peak_bytes=total;plan.ntt_at_peak=ntt.live.total;plan.s4_at_peak=s4.live.total;
             plan.owner_at_peak=owner.live;
             plan.giant_at_peak=giant.live;
+            plan.initial_at_peak=initial.live;
         }
-        if(observe)observe({from_ntt,allocation,bytes,ntt.live.total,s4.live.total,total,owner.live,from_owner,giant.live,from_giant});
+        if(observe)observe({from_ntt,allocation,bytes,ntt.live.total,s4.live.total,total,owner.live,from_owner,
+            giant.live,from_giant,initial.live,from_initial});
     };
     ntt.observe=[&](const NttMemoryEvent &e){event(true,e.allocation,e.bytes);};
     s4.observe=[&](const S4MemoryEvent &e){event(false,e.allocation,e.bytes);};
     owner.observe=[&](const OwnerMemoryEvent &e){event(false,e.allocation,e.bytes,true);};
     giant.observe=[&](const GiantMemoryEvent &e){event(false,e.allocation,e.bytes,false,true);};
+    initial.observe=[&](const InitialMemoryEvent &e){event(false,e.allocation,e.bytes,false,false,true);};
     auto save=[&]() {
         plan.ntt_final=ntt.live;plan.s4_final=s4.live;
         plan.ntt_peak_bytes=ntt.peak;plan.s4_peak_bytes=s4.peak;
         plan.owner_peak_bytes=owner.peak;plan.fold_bytes=owner.fold_bytes;plan.frontier_bytes=owner.frontier_bytes;
         plan.giant_peak_bytes=giant.peak;plan.giant_final_bytes=giant.live;
         plan.point_chunks=giant.chunks;plan.points_consumed=giant.consumed_points;
+        plan.initial_peak_bytes=initial.peak;plan.montgomery_bytes=initial.montgomery_bytes;plan.baby_bytes=initial.baby_bytes;
         return add(ntt.live.total,s4.live.total,plan.final_bytes) && add(plan.final_bytes,owner.live,plan.final_bytes) &&
             add(plan.final_bytes,giant.live,plan.final_bytes);
     };
     auto fail=[&](const char *why){plan.reason=why;save();return false;};
+    if(initial_policy && !initial.startup()) {
+        plan.reason=initial.reason;save();return !std::strcmp(initial.reason,"diagnostic_initial_workspace_not_modeled");
+    }
     if(!s4.init((bits+63)/64))return fail(s4.reason);
+    if(initial_policy && !initial.baby()) {
+        plan.reason=initial.reason;save();plan.valid=!std::strcmp(initial.reason,"baby_budget_refusal");return plan.valid;
+    }
+    if(initial_policy && (!add(s4.live.total,initial.baby_bytes,plan.baby_headroom_bytes) ||
+       !add(plan.baby_headroom_bytes,64ull<<20,plan.baby_headroom_bytes)))return fail("payload_overflow");
+    auto future_headroom=[&](Word allocation,Word &need) {
+        S4ShapeDescriptor shape;Word target=0,total=0;
+        if(!owner_policy || !query(owner_policy->p+1,bits,shape) ||
+           !multiply(shape.n,8*buffers,target) || !add(ntt.live.total,s4.live.total,total) ||
+           !add(total,owner.live,total) || !add(total,giant.live,total) || !add(total,initial.live,total))return false;
+        const Word current=ntt_policy.pool?ntt.live.big:0;
+        const Word growth=target>current?target-current:0;
+        // Same future-growth and 1 GiB reserve used by the native owner gates.
+        // This is the required initial free payload, not a live driver query.
+        return add(total,allocation,need) && add(need,growth,need) && add(need,1ull<<30,need);
+    };
     bool giant_started=false,descent_started=false;
     auto trim=[&]() {return (!s4_policy.trim_raw || s4.raw_release()) &&
         (!s4_policy.trim_output || s4.output_release());};
@@ -83,12 +118,17 @@ template<class Query,class Describe> bool workspace_memory_plan(
         if(!block.repeat)return fail("zero_repeat");
         if(block.tree_leaves && !giant_started) {
             giant_started=true;if(!trim())return fail(s4.reason);
+            if(owner_policy && !future_headroom(owner_bytes(owner_policy->p,owner_policy->words,owner_policy->reuse),
+                                                 plan.fold_headroom_bytes))return fail("invalid_fold_headroom_shape");
             if(owner_policy && !owner.fold_begin()) {
                 plan.reason=owner.reason;save();plan.valid=!std::strcmp(owner.reason,"fold_budget_refusal");return plan.valid;
             }
         }
         if(!block.requests.empty() && block.requests.front().phase==RequestDescent && !descent_started) {
             descent_started=true;if(!trim())return fail(s4.reason);
+            Word metadata=0;
+            if(owner_policy && (!multiply(owner_policy->p,24,metadata) ||
+               !future_headroom(metadata,plan.frontier_headroom_bytes)))return fail("invalid_frontier_headroom_shape");
             if(owner_policy && !owner.frontier_begin()) {
                 plan.reason=owner.reason;save();plan.valid=!std::strcmp(owner.reason,"frontier_budget_refusal");return plan.valid;
             }

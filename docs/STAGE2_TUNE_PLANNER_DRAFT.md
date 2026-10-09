@@ -55,7 +55,19 @@ CPU joint矩阵3456 giant cases和1152原cases，共3392047 assertions；超大B
 
 构建96.4秒，exe SHA256=`a90cb1ca1045f1fdc3dd5ae906d949483e091bf68668fd6ae8471615b2ac3beb`。当前4070 Ti设备0忙，验证使用空闲4060 Laptop设备1，无功耗/频率变更。证据目录`data/experiments/stage2_giant_timeline_20261009/`。native查询collector首次引用了不存在的JSON键，修正为现有`I`字段后14例通过，失败输出保留；fallback retained-capacity初次假设叶值在下降后分配与native不符，按当前`!frontier.enabled`路径修正检查，原证据保留。
 
-- [ ] 完成联合生命周期准入，补齐初始化瞬时量、其他设备分配、动态headroom与非驻留回退。保持实时free查询。
+### 初始化与free快照需求
+
+共享`baby_memory_layout`替代caller和D模型的重复容量计算，显式检查溢出。基础mont selftest在S4之前完成；S4模数之后才生成baby，临时量在F树之前释放。`curve_workspace_memory`升为version2、五个峰时分项；baby预算0返回有效拒绝前缀，增加初始化分配的诊断返回不可用。条件模型未成为完整准入，不改变生产自动D或承载默认。
+
+联动执行器记录baby预留64 MiB、fold/frontier各自未来NTT增长+1 GiB所需的启动free。`required_free_bytes`同时包含联合峰+reserve；`initial_free_snapshot_fits`只是正常成功路径的静态估计。继续保留实际cudaMemGetInfo、cudaMalloc失败及回退，不要求先把全部失败路径精确建模才推进正常路径的tune筛选。
+
+CPU50 cases/1500 native events/4556 checks、错误tree extent+8 mutation拒绝通过；联合初始化3456 cases，总6097043 checks，headroom公式由逐事件边界独立核对。16个native plan和最终binary三条短曲线通过。首个fixture漏了string include导致编译失败，修正后通过；失败输出保留。最终exe SHA256=`4a734f4cab13ae3b4f76d5b65bc3921cd94c826ec427cc30c14323bc018bf466`，完整构建96.6秒，所有编译源hash与当前实现相同。
+
+另一个冻结初始化binary SHA256=`747753d0e09e0b09f181ca04b5a61cf6e42cb8968c50bb7d9f1913cd2102cbe3`完成5872-bit、B1=20、sigma26、B2=2.6e12、D1141140/P103680、arena6300/fold640/batch256曲线；固定1800 MHz，设备1，无设置变更，单条wall96.761609秒。预测/owned账本峰都为4,620,488,216 bytes，mandatory2208、GMP43253、bad=0、hits0。短普通/承载曲线也核对峰一致，fallback不做完整joint峰断言。证据`data/experiments/stage2_initial_timeline_20261009/`，包含每次build对应的frozen sources、查询、原始日志和分配账本。
+
+下一步直接接入完整ECM tune、版本化reader及正常可驻留候选选择；继续保留现有无数据/不适用的兼容路径，不将单条相同峰验证当作所有输入的物理准入证明。
+
+- [ ] 在正常路径联合模型的条件范围内接入候选筛选，保留实时free检查；扩大验证，并补齐动态headroom与非驻留回退模型。
 - [ ] 增加有版本的实测数据reader，明确设备、后端、算术路径及测量输入适用范围；路径与二进制信息放实验审计，运行tune数据只保留必要性能与资格字段。
 - [ ] 引入无因子完整ECM基准、普通/承载配对测量与D候选网格，将等级映射到完整测量计划。
 - [ ] 将选型连接到显式B2主路径和Auto B2；当前静态准入及手动承载均未由本轮改动替代。

@@ -8427,6 +8427,19 @@ static bool real_run_words(unsigned long long P,int S,unsigned long long *out_wo
 
 #include "stage2/stage2_d_model.cuh"
 
+static bool initial_memory_diagnostics_requested()
+{
+    for(const char *key:{"NTT_XADD6_TEST","NTT_S4_MERSENNE_TEST","NTT_BABY_DEVICE_TEST",
+        "NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_ALLOC_FAIL","NTT_S4_FLAT_TEST",
+        "NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST","NTT_SCALED_TEST",
+        "NTT_S3_PRODUCTS_TEST","NTT_FOLD_FLAT_TEST","NTT_FOLD_DEVICE_TEST",
+        "NTT_GFINV_SEG_TEST","NTT_GFINV_BATCH_TEST","NTT_GROOT_DEVICE_TEST",
+        "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_COOP_TEST",
+        "NTT_FUSE_LIFETIME_TEST","NTT_GSCALE_DEVICE_CHECK"})
+        if(fuse_env_ull(key,0))return true;
+    return false;
+}
+
 static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
                     bool choose_d, bool run_s2, int curves,
@@ -8861,6 +8874,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         else if(!p.giant_memory->valid)p.curve_workspace_memory->reason=p.giant_memory->reason;
         else {
             const ecm_stage2::GiantTimelinePolicy timeline{P_baby,p.giant_points,nw,p.giant_memory->chunk_points,giant_policy};
+            const ecm_stage2::InitialMemoryPolicy initial_policy{P_baby,nw,baby_budget,baby_requested,
+                initial_memory_diagnostics_requested()};
             if(!ecm_stage2::workspace_memory_plan(p.requests->program,(int)L.S,
                 [](unsigned long long m,int s,ecm_stage2::S4ShapeDescriptor &q) {
                     int bpw=0;const bool ok=ntt_shape_query(m,s,&q.n,&bpw,&q.slot_bits,&q.slot_words,nullptr,&q.slots);
@@ -8869,7 +8884,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     int k=0;for(auto size=n;size>1;size>>=1)++k;
                     FuseCtx description;fuse_describe(description,n,k,0,0);
                     return ecm_stage2::ntt_fuse_memory_layout(description,layout);
-                },memory_policy,s4_policy,*p.curve_workspace_memory,true,{},&owner_policy,&timeline))return 3;
+                },memory_policy,s4_policy,*p.curve_workspace_memory,true,{},&owner_policy,&timeline,&initial_policy))return 3;
         }
         p.free_bytes=freeb; p.arena_cap_bytes=cap; p.owner_budget_bytes=fold_budget;
         p.baby_bytes=d_baby_payload_bytes(P_baby,nw);
@@ -9891,12 +9906,23 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
     }
     if(p.curve_workspace_memory) {
         const auto &m=*p.curve_workspace_memory;
-        json<<",\"curve_workspace_memory\":{\"version\":1,\"valid\":"<<(m.valid?"true":"false")
+        const auto reserve=fuse_env_ull("NTT_ARENA_RESERVE_MB",768)*1048576ull;
+        unsigned long long required_free=0;
+        const bool required_valid=ecm_stage2::add(m.peak_bytes,reserve,required_free);
+        required_free=std::max(required_free,std::max(m.baby_headroom_bytes,
+            std::max(m.fold_headroom_bytes,m.frontier_headroom_bytes)));
+        json<<",\"curve_workspace_memory\":{\"version\":2,\"valid\":"<<(m.valid?"true":"false")
             <<",\"finished\":"<<(m.finished?"true":"false")<<",\"reason\":"<<stage2_tune::quote(m.reason)
-            <<",\"components\":[\"ntt\",\"s4\",\"fold_frontier\",\"giant\"],\"process_peak_complete\":false,\"admission_model\":false"
+            <<",\"components\":[\"ntt\",\"s4\",\"fold_frontier\",\"giant\",\"initial\"],\"process_peak_complete\":false,\"admission_model\":false"
             <<",\"headroom_modeled\":false,\"fallback_modeled\":false,\"cold_trim_modeled\":false"
             <<",\"peak_bytes\":"<<m.peak_bytes<<",\"ntt_at_peak\":"<<m.ntt_at_peak<<",\"s4_at_peak\":"<<m.s4_at_peak
             <<",\"owner_at_peak\":"<<m.owner_at_peak<<",\"giant_at_peak\":"<<m.giant_at_peak
+            <<",\"initial_at_peak\":"<<m.initial_at_peak<<",\"initial_peak_bytes\":"<<m.initial_peak_bytes
+            <<",\"montgomery_bytes\":"<<m.montgomery_bytes<<",\"baby_bytes\":"<<m.baby_bytes
+            <<",\"baby_headroom_bytes\":"<<m.baby_headroom_bytes<<",\"fold_headroom_bytes\":"<<m.fold_headroom_bytes
+            <<",\"frontier_headroom_bytes\":"<<m.frontier_headroom_bytes<<",\"required_free_bytes\":"<<required_free
+            <<",\"reserve_bytes\":"<<reserve
+            <<",\"initial_free_snapshot_fits\":"<<(m.valid && m.finished && required_valid && required_free<=p.free_bytes?"true":"false")
             <<",\"giant_peak_bytes\":"<<m.giant_peak_bytes<<",\"giant_final_bytes\":"<<m.giant_final_bytes
             <<",\"point_chunks\":"<<m.point_chunks<<",\"points_consumed\":"<<m.points_consumed
             <<",\"final_bytes\":"<<m.final_bytes<<",\"released_bytes\":"<<m.released_bytes

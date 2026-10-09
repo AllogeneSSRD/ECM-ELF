@@ -20,6 +20,8 @@ def main():
     parser.add_argument('--curves', type=Path, required=True)
     parser.add_argument('--plans', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--joint-peak', action='store_true',
+                        help='Also require complete normal no-hit curve peak equality (plan version >=2)')
     args = parser.parse_args()
     curves = json.loads(args.curves.read_text(encoding='utf-8'))
     plans = json.loads(args.plans.read_text(encoding='utf-8'))
@@ -38,7 +40,8 @@ def main():
         debug = Path(command[command.index('--debug-log-file') + 1])
         ledger = parse(debug.read_text(encoding='utf-8-sig'))
         sites = workspace_sites(source.read_text(encoding='utf-8'))
-        gm = by_name[curve['name']]['giant_memory']
+        plan = by_name[curve['name']]
+        gm = plan['giant_memory']
         predicted = {'before_inverse': gm['initial_bytes'],
                      'after_giant_loop': gm['after_giant_bytes'],
                      'after_frontier_admission': gm['after_giant_bytes'],
@@ -64,12 +67,26 @@ def main():
         mandatory = {'before_inverse', 'after_giant_loop', 'after_descent', 'after_block_products'}
         if not mandatory <= checked.keys():
             raise ValueError('missing required curve checkpoints')
-        rows.append(dict(name=curve['name'],debug_sha256=sha(debug),checked_live_bytes=checked,
-                         owned_process_peak_bytes=int(ledger['final']['peak_bytes'])))
+        row=dict(name=curve['name'],debug_sha256=sha(debug),checked_live_bytes=checked,
+                 owned_process_peak_bytes=int(ledger['final']['peak_bytes']))
+        if args.joint_peak:
+            model=plan['curve_workspace_memory']
+            if 'enabled=1 ' in curve['fold'] and 'enabled=1 ' in curve['frontier']:
+                if model['version']<2 or not model['valid'] or not model['finished']:
+                    raise ValueError('joint peak comparison requires covered initial and resident timeline')
+                if curve['record']['hits'] or curve['record']['bad_factors']:
+                    raise ValueError('joint peak check currently requires the normal no-hit topology')
+                if row['owned_process_peak_bytes']!=model['peak_bytes']:
+                    raise ValueError(f"{curve['name']}: predicted joint peak differs from runtime owned peak")
+                row['verified_joint_peak_bytes']=model['peak_bytes']
+            elif model['finished']:
+                raise ValueError('refused owner path unexpectedly claims a finished joint model')
+        rows.append(row)
     result = dict(complete=True,curves_sha256=sha(args.curves),plans_sha256=sha(args.plans),
                   cases=rows,gpu_calls=0)
     (out/'results.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
-    print(f'PASS: {len(rows)} completed curves, giant retained capacities, closed device ledgers')
+    print(f'PASS: {len(rows)} completed curves, giant retained capacities, closed device ledgers, '
+          f"joint peak checks={sum('verified_joint_peak_bytes' in row for row in rows)}")
 
 
 if __name__ == '__main__':

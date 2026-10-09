@@ -27,7 +27,9 @@ def main():
         ('giant_floor',1141140,a.b2,6300,{'NTT_GIANT_CHUNK_FLOOR':'1'}),
         ('giant_ladder',1141140,a.b2,6300,{'NTT_GIANT_LADDER':'1'}),
         ('giant_nonresident',1141140,a.b2,6300,{'NTT_DEVICE_GLEAF_MAX_MB':'0'}),
-        ('giant_ladder_tail',1141140,1141140*(207360+32000-2),6300,{})]:
+        ('giant_ladder_tail',1141140,1141140*(207360+32000-2),6300,{}),
+        ('baby_budget',1141140,a.b2,6300,{'NTT_BABY_DEVICE_MAX_MB':'0'}),
+        ('initial_diagnostic',1141140,a.b2,6300,{'NTT_XADD6_TEST':'1'})]:
         command=[str(a.exe.resolve()),'--ini',str(a.ini.resolve()),'--save',str(a.save.resolve()),
                  '--device',str(a.device),'--b2',str(b2),'--d',str(d),'--curves','1',
                  '--arena-mb',str(cap),'--batch-mb','256','--owner-budget-mb',
@@ -68,10 +70,16 @@ def main():
             assert joint['peak_bytes']<=resident['peak_bytes']<=joint['peak_bytes']+resident['owner_peak_bytes']
         curve=plan['curve_workspace_memory']
         assert not curve['admission_model'] and not curve['process_peak_complete']
-        assert curve['peak_bytes']==sum(curve[k+'_at_peak'] for k in ('ntt','s4','owner','giant'))
+        assert curve['version']==2
+        assert curve['peak_bytes']==sum(curve[k+'_at_peak'] for k in ('ntt','s4','owner','giant','initial'))
         if name in ('single','refusal','owner_budget','frontier_budget'):
             assert curve['valid']==resident['valid'] and curve['finished']==resident['finished']
             assert curve['reason']==resident['reason']
+        elif name=='baby_budget':
+            assert curve['valid'] and not curve['finished'] and curve['reason']=='baby_budget_refusal'
+            assert not curve['points_consumed'] and not curve['point_chunks']
+        elif name=='initial_diagnostic':
+            assert not curve['valid'] and not curve['finished'] and curve['reason']=='diagnostic_initial_workspace_not_modeled'
         else:
             gm=plan['giant_memory']
             assert curve['valid'] and curve['finished'] and not curve['released_bytes']
@@ -80,8 +88,14 @@ def main():
             assert curve['point_chunks']==gm['point_chunks']
             assert curve['points_consumed']==plan['I']
             assert resident['peak_bytes']<=curve['peak_bytes']<=resident['peak_bytes']+gm['peak_bytes']
+            assert curve['montgomery_bytes']==8*plan['words']*(3*2048+1)
+            assert curve['baby_bytes']==plan['baby_payload_bytes']
+            assert curve['initial_peak_bytes']==max(curve['montgomery_bytes'],curve['baby_bytes'])
+            assert curve['required_free_bytes']==max(curve['peak_bytes']+curve['reserve_bytes'],
+                curve['baby_headroom_bytes'],curve['fold_headroom_bytes'],curve['frontier_headroom_bytes'])
+            assert curve['initial_free_snapshot_fits']==(curve['required_free_bytes']<=plan['free_bytes'])
         rows.append(dict(name=name,command=command,environment=env,plan=plan))
     (out/'results.json').write_text(json.dumps(dict(complete=True,cases=rows),indent=2)+'\n',encoding='utf-8')
-    print('PASS: 14 real native workspace plans, joint giant/owner lifetimes, budgets, refusal, unsupported G1')
+    print('PASS: 16 real native workspace plans, joint initial/giant/owner lifetimes, budgets, diagnostics, unsupported G1')
 
 if __name__=='__main__':main()
