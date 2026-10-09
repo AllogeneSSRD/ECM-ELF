@@ -1270,6 +1270,8 @@ struct S4Ctx {
     unsigned long long chunk_plan_chunks=0, chunk_plan_legacy_chunks=0;
     unsigned long long chunk_plan_request_peak=0, chunk_plan_subset_peak=0;
     unsigned long long chunk_plan_over_budget=0;
+    ecm_stage2::TreeWorkspacePlan phase_requests[BC_NCAT];
+    unsigned long long phase_big_live_peak[BC_NCAT]{}, phase_subset_peak[BC_NCAT]{};
     long long sample_limit = 4096;      /* a full GMP check below this many coefficients */
     bool selftested = false;
     /* OBJECTIVE 4 (section 33): the DEVICE-side operand packing.  Before this, every batched
@@ -3541,6 +3543,13 @@ static void poly_mul_batch_modN(PolyLayer &L,
     const bool chunk_output=g_s4_chunk_output && !g_s4_final_readback;
     const size_t allocation_need=std::max((size_t)1,
         (size_t)(chunk_output ? chunk : nbatch)*output_slots*W);
+    const int memory_category=cat>=0?cat:L.cat;
+    if(memory_category>=0 && memory_category<BC_NCAT) {
+        auto &p=C.phase_requests[memory_category];
+        ++p.groups;p.pairs+=nbatch;p.chunks+=nbatch/chunk+(nbatch%chunk!=0);
+        p.big_peak_bytes=std::max(p.big_peak_bytes,8ull*buffers*qN*chunk);
+        p.output_peak_bytes=std::max(p.output_peak_bytes,8ull*allocation_need);
+    }
     if(allocation_need>C.d_out_cap) {
         if(C.d_out) { CK(cudaFree(C.d_out)); C.d_out=nullptr; C.d_out_cap=0; }
         CK(cudaMalloc(&C.d_out,allocation_need*sizeof(unsigned long long)));
@@ -3758,6 +3767,12 @@ static void poly_mul_batch_modN(PolyLayer &L,
             owned+=8ull*fuse_base_words(entry.fc);
         owned+=8ull*(C.d_out_cap+C.d_rawA_cap+C.d_rawB_cap+2*C.d_pack_cap);
         C.chunk_plan_subset_peak=std::max(C.chunk_plan_subset_peak,owned);
+        if(memory_category>=0 && memory_category<BC_NCAT) {
+            unsigned long long big=L.arena?8ull*L.arena->workspace.words:0;
+            if(L.arena)for(const auto &entry:L.arena->bigs)big+=8ull*entry.words;
+            C.phase_big_live_peak[memory_category]=std::max(C.phase_big_live_peak[memory_category],big);
+            C.phase_subset_peak[memory_category]=std::max(C.phase_subset_peak[memory_category],owned);
+        }
         /* Readbacks of ALL non-deferred chunks, not only the final overwritten `st`.
            Interior deferred chunks contribute zero here and are charged by finish_carry. */
         chunk_d2h_acc += st.t_check_d2h;
@@ -8275,8 +8290,8 @@ static unsigned long long real_shape_words(unsigned long long P, int S, bool *ok
     return NttWorkspacePolicy{}.big_buffer_count() * N + os;
 }
 
-/* the two transform lengths a D actually needs: the fold/inverse at (P+1) coefficients and the
-   tree's own top nodes at (P/2+1) */
+/* Fold/inverse at P+1; tree's largest nonempty child comes from its padded
+   topology, and is not generally P/2. */
 static bool real_run_geometry(unsigned long long p,int bits,ecm_stage2::Geometry &g)
 {
     return ecm_stage2::geometry(p,bits,[](unsigned long long m,int s,
@@ -8576,8 +8591,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             DCand explicit_plan; explicit_plan.D=D; explicit_plan.P=P_baby;
             model(explicit_plan); selected_seconds=explicit_plan.total;
             bool ok1 = false, ok2 = false;
-            const unsigned long long w1 = real_shape_words(P_baby, (int)L.S, &ok1);
-            const unsigned long long w2 = real_shape_words(P_baby / 2 + 1, (int)L.S, &ok2);
+            const unsigned long long w1 = real_shape_words(P_baby+1, (int)L.S, &ok1);
+            const unsigned long long w2 = real_shape_words(ecm_stage2::tree_operand_coefficients(P_baby), (int)L.S, &ok2);
             stage2_log::print(stage2_log::debug, "d_budget: free=%.0f MB reserve=%.0f MB cap=%.0f MB ; D=%llu "
                         "P=phi(D)/2=%llu largest_transform=%.0f MB total_needed=%.0f MB "
                         "fits=%d%s\n", freeb / 1048576.0, reserve / 1048576.0,
@@ -8594,6 +8609,18 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         ecm_stage2::Plan &p=*plan_result;
         p.target_bits=L.target_bits();p.carrier_exponent=L.carrier_exponent;
         if(!real_run_geometry(P_baby,(int)L.S,p.geometry))return 3;
+        const bool host_pack=fuse_env_ull("NTT_S4_HOSTPACK",0)!=0;
+        p.tree_payload_model_supported=s4_on && !host_pack && g_s4_pack_direct &&
+            !g_s4_final_readback && g_s4_output_window && g_s4_chunk_output;
+        const auto batch_override=fuse_env_ull("NTT_S4_BATCH_MB",0);
+        p.tree_batch_bytes=(batch_override?batch_override:(!host_pack && g_s4_pack_direct?g_s4_batch_budget_mb:32))<<20;
+        p.tree_physical_chunks=fuse_env_ull("NTT_S4_WORKSPACE_BUDGET",0)!=0;
+        p.tree_chunk_max=g_s4_chunk_max;
+        if(!ecm_stage2::tree_workspace_plan(P_baby,(int)L.S,[](unsigned long long m,int s,
+            unsigned long long *n,unsigned long long *out) {
+                return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
+            },p.tree_batch_bytes,(unsigned)p.geometry.workspace_buffers,p.tree_physical_chunks,
+            p.tree_chunk_max,p.tree_workspace))return 3;
         p.d=D; p.b1=B1; p.b2=B2; p.giant_points=B2/D+2;
         p.batches=p.giant_points/P_baby+(p.giant_points%P_baby!=0);
         p.free_bytes=freeb; p.arena_cap_bytes=cap; p.owner_budget_bytes=fold_budget;
@@ -8801,6 +8828,65 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         ++cases;if(ecm_stage2::chunk_request_bytes(1,1,1,4,bytes))++bad;
         stage2_log::print(stage2_log::debug,"s4_chunk_budget_check: cases=%llu bad=%llu\n",cases,bad);
         if(bad)return 3;
+        // Independent dense padded-tree oracle for the closed-form planner.
+        // Enumerates children just as the real tree does; no geometry helper
+        // is used to construct the expected groups or largest operand.
+        cases=bad=0;
+        std::vector<size_t> sizes;
+        for(size_t p=1;p<=127;++p)sizes.push_back(p);
+        for(size_t p:{511u,512u,513u,1023u,1024u,1025u,65535u,65536u,65537u,131071u,131072u,131073u})sizes.push_back(p);
+        for(size_t p:sizes) {
+            size_t pad=1;while(pad<p)pad*=2;
+            std::vector<size_t> degree(2*pad,0);
+            for(size_t i=0;i<p;++i)degree[pad+i]=1;
+            for(size_t i=pad;--i;)degree[i]=degree[2*i]+degree[2*i+1];
+            using Group=std::tuple<unsigned long long,unsigned long long,unsigned long long>;
+            std::vector<Group> expected,actual;unsigned long long top=p==1?1:0;
+            for(size_t base=pad/2;base;base/=2) {
+                std::map<std::pair<size_t,size_t>,size_t> groups;
+                for(size_t i=0;i<base;++i) {
+                    size_t a=degree[2*base+2*i],b=degree[2*base+2*i+1];
+                    if(!a || !b)continue;
+                    auto key=std::make_pair(std::min(a,b)+1,std::max(a,b)+1);
+                    ++groups[key];top=std::max(top,(unsigned long long)key.second);
+                }
+                for(const auto &g:groups)expected.emplace_back(g.first.first,g.first.second,g.second);
+            }
+            ++cases;
+            if(!ecm_stage2::tree_multiply_groups(p,[&](auto a,auto b,auto n){actual.emplace_back(a,b,n);return true;}) ||
+               actual!=expected || ecm_stage2::tree_operand_coefficients(p)!=top)++bad;
+            for(unsigned buffers:{2u,3u})for(bool physical:{false,true}) {
+                ecm_stage2::TreeWorkspacePlan plan;const unsigned long long budget=4096;
+                auto query=[](auto m,int,auto *n,auto *out) {
+                    *n=1;while(*n<4*m)*n*=2;*out=2*m-1;return true;
+                };
+                unsigned long long pairs=0,chunks=0,big=0,output=0,digits_bytes=0,keyed=0;
+                std::map<std::pair<unsigned long long,unsigned long long>,unsigned long long> retained,large;
+                for(const auto &g:expected) {
+                    const auto a=std::get<0>(g),b=std::get<1>(g),nb=std::get<2>(g);
+                    unsigned long long n=1;while(n<4*b)n*=2;const auto slots=2*b-1;
+                    unsigned long long c=1;
+                    for(auto test=nb;test;test/=2)if(8*test*((physical?buffers:3)*n+slots+(physical?2:0))<=budget){c=test;break;}
+                    pairs+=nb;chunks+=(nb+c-1)/c;
+                    big=std::max(big,8ull*buffers*n*c);output=std::max(output,8ull*(a+b-1)*c);
+                    for(size_t offset=0;offset<nb;offset+=c) {
+                        auto count=std::min(c,nb-offset);retained[{n,count}]=8ull*(slots+2)*count;large[{n,count}]=24ull*n*count;
+                    }
+                }
+                for(const auto &e:retained)digits_bytes+=e.second;
+                for(const auto &e:large)keyed+=e.second;
+                ++cases;
+                if(!ecm_stage2::tree_workspace_plan(p,64,query,budget,buffers,physical,0,plan) ||
+                   plan.groups!=expected.size() || plan.pairs!=pairs || plan.chunks!=chunks ||
+                   plan.big_peak_bytes!=big || plan.output_peak_bytes!=output ||
+                   plan.digit_retained_bytes!=digits_bytes || plan.keyed_big_retained_bytes!=keyed)++bad;
+            }
+        }
+        ecm_stage2::TreeWorkspacePlan invalid;
+        ++cases;if(ecm_stage2::tree_multiply_groups(~0ull,[](auto,auto,auto){return true;}))++bad;
+        ++cases;if(ecm_stage2::tree_workspace_plan(3,64,[](auto,int,auto *n,auto *out){*n=~0ull;*out=3;return true;},4096,2,false,0,invalid))++bad;
+        stage2_log::print(stage2_log::debug,"s4_tree_memory_check: cases=%llu bad=%llu (dense padded-tree oracle, exact groups/chunks/retention)\n",cases,bad);
+        if(bad)return 3;
     }
     if(fuse_env_ull("NTT_FUSE_COOP_TEST",0))ntt_fuse_coop_check(g_device);
     const char *fuse_test = std::getenv("NTT_FUSE_LIFETIME_TEST");
@@ -8819,8 +8905,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     }
     {
         bool ok1 = false, ok2 = false;
-        const double w1 = (double)real_shape_words(P_baby, (int)L.S, &ok1);
-        const double w2 = (double)real_shape_words(P_baby / 2 + 1, (int)L.S, &ok2);
+        const auto tree_coefficients=ecm_stage2::tree_operand_coefficients(P_baby);
+        const double w1 = (double)real_shape_words(P_baby+1, (int)L.S, &ok1);
+        const double w2 = (double)real_shape_words(tree_coefficients, (int)L.S, &ok2);
         stage2_log::print(stage2_log::phases, "mem_budget: free=%.0f MB total=%.0f MB reserve=%.0f MB arena_cap=%.0f MB ; "
                     "P=%llu => largest transform (the fold, operand %llu coeffs) = %.0f MB ; "
                     "tree top (operand %llu coeffs) = %.0f MB ; the arena holds one entry per "
@@ -8828,7 +8915,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     "(same kernels and same result, slower) -- arena_overflow counts those\n",
                     freeb / 1048576.0, totalb / 1048576.0, reserve / 1048576.0,
                     arena.cap_bytes / 1048576.0, P_baby, P_baby + 1,
-                    w1 * 8.0 / 1048576.0, P_baby / 2 + 1, w2 * 8.0 / 1048576.0);
+                    w1 * 8.0 / 1048576.0, tree_coefficients, w2 * 8.0 / 1048576.0);
     }
 
     /* ---- the baby points and F, exactly as the dump path does ---- */
@@ -9313,6 +9400,15 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                             S->calls ? 1e6 * S->t_hooksample / (double)S->calls : 0.0,
                             S->t_hookd2h, S->t_hooksample);
             }
+            for(int category=0;category<BC_NCAT;++category) {
+                const char *names[]={"ftree","gtrees","fold","descent","inverse"};
+                const auto &p=s4.phase_requests[category];
+                stage2_log::print(stage2_log::debug,
+                    "s4_phase_memory: phase=%s groups=%llu pairs=%llu chunks=%llu request_big_peak_bytes=%llu "
+                    "request_output_peak_bytes=%llu live_big_peak_bytes=%llu owned_subset_peak_bytes=%llu process_peak_complete=0\n",
+                    names[category],p.groups,p.pairs,p.chunks,p.big_peak_bytes,p.output_peak_bytes,
+                    s4.phase_big_live_peak[category],s4.phase_subset_peak[category]);
+            }
             stage2_log::print(stage2_log::debug,
                 "s4_chunk_plan: workspace_budget=%d calls=%llu changed_calls=%llu chunks=%llu legacy_chunks=%llu "
                 "request_peak_bytes=%llu owned_subset_observed_peak_bytes=%llu single_over_budget_calls=%llu "
@@ -9388,13 +9484,24 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
         <<",\"words\":"<<g.words<<",\"workspace_buffers\":"<<g.workspace_buffers<<",\"B1\":"<<p.b1<<",\"B2\":"<<p.b2<<",\"D\":"<<p.d
         <<",\"P\":"<<g.p<<",\"I\":"<<p.giant_points<<",\"G\":"<<p.batches
         <<",\"fold_length\":"<<g.fold_length<<",\"tree_length\":"<<g.tree_length
+        <<",\"tree_operand_coefficients\":"<<g.tree_operand_coeffs
         <<",\"fold_big_bytes\":"<<g.fold_big_bytes<<",\"arena_estimate_bytes\":"<<g.arena_estimate_bytes
+        <<",\"arena_estimate_kind\":\"legacy_additive\""
         <<",\"owner_bytes\":"<<g.fold_owner_bytes<<",\"owner_reuse\":"<<kFoldOwnerReuse<<",\"baby_payload_bytes\":"<<p.baby_bytes
         <<",\"free_bytes\":"<<p.free_bytes<<",\"arena_cap_bytes\":"<<p.arena_cap_bytes
         <<",\"owner_budget_bytes\":"<<p.owner_budget_bytes
         <<",\"owner_budget_fits\":"<<(p.owner_budget_fits ? "true" : "false")
         <<",\"arena_estimate_fits\":"<<(p.arena_estimate_fits ? "true" : "false")
-        <<",\"residency_guaranteed\":false,\"process_peak_estimated\":false,\"accounting_version\":2"
+        <<",\"residency_guaranteed\":false,\"process_peak_estimated\":false,\"accounting_version\":2,\"geometry_version\":3"
+        <<",\"tree_workspace\":{\"pool\":"<<(NttWorkspacePolicy{}.workspace_pool?"true":"false")
+        <<",\"supported\":"<<(p.tree_payload_model_supported?"true":"false")
+        <<",\"no_eviction_model\":true,\"process_peak_complete\":false,\"batch_bytes\":"<<p.tree_batch_bytes
+        <<",\"physical_chunks\":"<<(p.tree_physical_chunks?"true":"false")<<",\"chunk_max\":"<<p.tree_chunk_max
+        <<",\"groups\":"<<p.tree_workspace.groups<<",\"pairs\":"<<p.tree_workspace.pairs<<",\"chunks\":"<<p.tree_workspace.chunks
+        <<",\"shared_big_peak_bytes\":"<<p.tree_workspace.big_peak_bytes
+        <<",\"digit_retained_bytes\":"<<p.tree_workspace.digit_retained_bytes
+        <<",\"keyed_big_retained_bytes\":"<<p.tree_workspace.keyed_big_retained_bytes
+        <<",\"output_peak_bytes\":"<<p.tree_workspace.output_peak_bytes<<"}"
         <<",\"model\":"<<stage2_tune::quote(p.model)<<",\"calibrated\":"<<(p.calibrated ? "true" : "false")
         <<",\"stage2_seconds_estimate\":"<<p.estimated_seconds<<"}";
     report(json.str().c_str(),context);return 0;

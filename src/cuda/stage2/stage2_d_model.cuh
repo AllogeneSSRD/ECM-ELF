@@ -130,10 +130,9 @@ struct DPhaseModel {
         return c;
     }
     void print(unsigned long long d,unsigned long long p,unsigned long long owner) {
-        const auto c=cost(d,p);unsigned long long nf=0,nt=0,h=1;
-        while(2*h<p)h*=2;
+        const auto c=cost(d,p);unsigned long long nf=0,nt=0;
         ntt_shape_query(p+1,bits,&nf,nullptr,nullptr,nullptr,nullptr,nullptr);
-        ntt_shape_query(h+1,bits,&nt,nullptr,nullptr,nullptr,nullptr,nullptr);
+        ntt_shape_query(ecm_stage2::tree_operand_coefficients(p),bits,&nt,nullptr,nullptr,nullptr,nullptr,nullptr);
         stage2_log::print(stage2_log::debug, "d_model_features: D=%llu P=%llu n_fold=%llu n_tree=%llu tree_work=%.0f "
                     "inverse_work=%.0f init=%.6f giant=%.6f gtrees=%.6f fold=%.6f descent=%.6f "
                     "inv=%.6f accum=%.6f glue=%.6f total=%.6f owner_bytes=%llu\n",
@@ -141,4 +140,3 @@ struct DPhaseModel {
                     c.inv,c.accum,c.glue,c.total,owner);
     }
 };
-

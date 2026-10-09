@@ -232,3 +232,35 @@ python tools/bench/analyze_stage2_carrier_bench.py --input data/output_trim_timi
 - 正式计时为ABBA+BAAB、每臂n=4。不要加`--require-resident`拒绝作为基线的合法回退；
   实际owner/root/frontier字段分别保留。小规模驻留门禁可使用该参数。
 - Auto B2拒绝未经标定的输出释放策略；未加入INI/发布默认。
+
+## 树形状与共享容量模型
+
+原生`--plan-only`新增`geometry_version=3`和`tree_workspace`。最大树operand为
+`h+1`，`h`是严格小于P的最大二次幂；它不是一般意义上的`P/2+1`。
+同一组shape/chunk整数合同用于计划和S4分块，完整树的partial group及最后short
+chunk都计入。实际调用输出每阶段一行`s4_phase_memory`（debug级）。
+
+`tree_workspace`是**单棵树、无缓存淘汰**的组件模型：
+
+- `shared_big_peak_bytes`：开启pool时A/B[/Q]的最大`8*buffers*N*slices`；关闭pool时
+  此字段仅是最大单请求，使用`keyed_big_retained_bytes`查看三缓冲按key保留合计。
+- `digit_retained_bytes`：每个`(N,slices)`保留最大的digits输出及两个carry诊断字。
+- `output_peak_bytes`：按实际短operand结果长度和chunk计算的S4输出峰。
+- `supported`要求S4/device pack、output window/chunk output有效；host pack、最终
+  readback等控制路径不在此模型scope。`pool`明确指出是否启用共享池。
+- 不包含表/fuse base、其它阶段保留缓存、raw/坐标/owner或失败回退；
+  `process_peak_complete=false`，不能把这些字段相加作为全进程预算或驻留承诺。
+
+`arena_estimate_bytes`仍是用于旧准入的保守求和，现明确标为
+`arena_estimate_kind=legacy_additive`；只修正了其树尺寸，没有将组件下界冒充完整
+MemoryPlan，也没有改用旧Auto B2 profile为新布局排序。
+
+```powershell
+python tools/test/test_stage2_workspace_plan.py --exe <ecm_cuda_stage2.exe> --save <stage1.save> --carrier-exponent 8011 --output data/tree_plan_gate
+python tools/test/test_stage2_workspace_plan.py --exe <ecm_cuda_stage2.exe> --save <stage1.save> --carrier-exponent 8011 --d 1531530 --runtime-check <completed_same_build_check/measurements.json> --output data/tree_plan_runtime_gate
+```
+
+首条默认检查5个D、2种分块策略、4种pool/reuse组合；Python独立构造dense padded
+tree，并通过native二次幂anchor查询每种NTT长度。第二条另外比较真实F树的group、
+pair、chunk、请求大池/输出峰和物理pool峰；不接受构建/输入身份不匹配或回退。
+`--workspace-fixture`新增dense tree整数门禁，覆盖131072附近及溢出。

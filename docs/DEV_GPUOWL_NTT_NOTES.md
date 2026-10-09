@@ -4841,3 +4841,22 @@ GPU用量峰6442→7296 MiB；不称为总显存减少。frontier admission额�
 pool关闭/三缓冲/arena拒绝及carry污染门禁通过；当前门禁脚本重新运行通过。
 详见[同方向报告§16](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。
 下一阶段继续统一实际shape/chunk与生命周期MemoryPlan，再标定D/Auto B2完整成本。
+
+## 127. padded树顶尺寸、共享容量模型与阶段观测（2026-10-09）
+
+接续§126/9c60b75，修正geometry及内存日志的树顶operand：严格小于P的最大
+二次幂h+1，不能一般用P/2+1。D1531530/P138240的tree NTT由旧估算2^27修正
+为实际2^28。新增O(log P)精确multiply group枚举、单树pool/keyed big、按形状
+保留digits/verdict及chunk output模型；共用真实shape/chunk查询。新增每阶段
+一行debug容量观测，严格限定为NTT+S4同时存活子集。
+
+697项dense树整数门禁、40组原生计划/18个anchor、大小F树实际容量核对、独立
+小规模CPU参考、满16384-bit承载/generic8193-bit及6项回退/carry控制通过。
+D153真实F树20groups/138239pairs/248chunks、4096 MiB大池与计划精确一致。
+完整138240叶投影相同，但输出释放后owner仍差8.241 MiB余量，fold/frontier
+回退；两条检查full104.85/104.09 s、clean=0，不作为正式性能提升。
+
+原arena求和明确标为legacy_additive，修正树尺寸但尚未替换完整准入；完整
+MemoryPlan与新D/Auto B2成本继续推进，未改算术内核、驻留余量或发布默认。
+代码行号、公式、作用域、原始证据/构建身份及复现统一维护
+[同方向报告§17](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。

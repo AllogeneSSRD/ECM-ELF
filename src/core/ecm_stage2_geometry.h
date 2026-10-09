@@ -1,5 +1,8 @@
 #pragma once
 #include <limits>
+#include <algorithm>
+#include <map>
+#include <utility>
 
 // Shared integer geometry. These are component payloads/planning estimates,
 // never a sum of simultaneous process allocations or a promise of residency.
@@ -72,9 +75,77 @@ inline Word owner_bytes(Word p, Word w, unsigned reuse=0) {
     FoldOwnerLayout l;
     return fold_owner_layout(p,w,reuse,l) ? l.bytes : std::numeric_limits<Word>::max();
 }
+// The tree pads leaves to the next power of two; its largest nonempty
+// child has degree h, where h is the largest power of two strictly below p.
+// P/2 is only correct when P itself is a power of two.
+inline Word tree_operand_coefficients(Word p) {
+    if(p<=1)return p;
+    Word h=1;
+    while(h<=(p-1)/2)h*=2;
+    return h+1;
+}
+// Exact nonempty multiply groups, in the same order as the device tree's
+// (min length, max length) map. Zero-degree children are copies, not NTTs.
+template<class Visit> bool tree_multiply_groups(Word p, Visit visit) {
+    if(p==std::numeric_limits<Word>::max())return false;
+    for(Word h=1;h<p;) {
+        const Word pairs=p/h/2, r=p-h*(2*pairs);
+        if(r>h && !visit(r-h+1,h+1,Word(1)))return false;
+        if(pairs && !visit(h+1,h+1,pairs))return false;
+        if(h>(p-1)/2)break;
+        h*=2;
+    }
+    return true;
+}
+struct TreeWorkspacePlan {
+    Word groups=0, pairs=0, chunks=0, big_peak_bytes=0;
+    Word digit_retained_bytes=0, keyed_big_retained_bytes=0, output_peak_bytes=0;
+};
+// No-eviction payload contract for ONE product tree. Shared A/B[/Q] uses
+// max(N*slices), while shape-local digits/verdicts retain a key per (N,slices).
+// Includes the short last chunk. Tables/base, other phases and every fallback
+// allocation are deliberately separate; this is not a process admission test.
+template<class Query> bool tree_workspace_plan(Word p,int bits,Query query,
+        Word budget,unsigned buffers,bool physical,Word chunk_max,
+        TreeWorkspacePlan &plan) {
+    plan=TreeWorkspacePlan{};
+    if(!p || bits<2 || bits>max_input_bits || (buffers!=2 && buffers!=3))return false;
+    std::map<std::pair<Word,Word>,Word> digits;
+    std::map<std::pair<Word,Word>,Word> bigs;
+    const Word w=(bits+63)/64;
+    bool ok=tree_multiply_groups(p,[&](Word ma,Word mb,Word nb) {
+        Word n=0,slots=0,request=0,out=0,coeffs=0,expected_slots=0;
+        if(!add(mb,mb-1,expected_slots) || !query(mb,bits,&n,&slots) || !n || slots!=expected_slots ||
+           !add(ma,mb-1,coeffs))return false;
+        Word c=chunk_slices(n,slots,nb,budget,physical?buffers:3,physical);
+        if(chunk_max)c=std::min(c,chunk_max);
+        if(!add(plan.groups,1,plan.groups) || !add(plan.pairs,nb,plan.pairs) ||
+           !add(plan.chunks,nb/c+(nb%c!=0),plan.chunks) ||
+           !multiply(n,c,request) || !multiply(request,8*buffers,request) ||
+           !multiply(coeffs,c,out) || !multiply(out,8*w,out))return false;
+        plan.big_peak_bytes=std::max(plan.big_peak_bytes,request);
+        plan.output_peak_bytes=std::max(plan.output_peak_bytes,out);
+        for(Word slices:{c,nb%c})if(slices) {
+            Word bytes=0;
+            if(!add(slots,2,bytes) || !multiply(bytes,slices,bytes) ||
+               !multiply(bytes,8,bytes))return false;
+            auto &entry=digits[{n,slices}];entry=std::max(entry,bytes);
+            if(!multiply(n,slices,bytes) || !multiply(bytes,24,bytes))return false;
+            bigs[{n,slices}]=bytes;
+        }
+        return true;
+    });
+    if(!ok)return false;
+    for(const auto &entry:digits)
+        if(!add(plan.digit_retained_bytes,entry.second,plan.digit_retained_bytes))return false;
+    for(const auto &entry:bigs)
+        if(!add(plan.keyed_big_retained_bytes,entry.second,plan.keyed_big_retained_bytes))return false;
+    return true;
+}
 struct Geometry {
     Word p=0, bits=0, words=0, fold_length=0, tree_length=0;
     Word workspace_buffers=3;
+    Word tree_operand_coeffs=0;
     Word fold_big_bytes=0, arena_estimate_bytes=0, fold_owner_bytes=0;
 };
 // query(coefficients, bits, &length, &output_slots) is the actual NTT backend.
@@ -84,12 +155,14 @@ template<class Query> bool geometry(Word p, int bits, Query query, Geometry &g, 
     if (!p || p==std::numeric_limits<Word>::max() || bits<2 || bits>max_input_bits ||
         (workspace_buffers!=2 && workspace_buffers!=3)) return false;
     Word nf=0, nt=0, of=0, ot=0, wf=0, wt=0, total=0;
-    if (!query(p+1,bits,&nf,&of) || !query(p/2+1,bits,&nt,&ot) ||
+    const Word tree_coeffs=tree_operand_coefficients(p);
+    if (!query(p+1,bits,&nf,&of) || !query(tree_coeffs,bits,&nt,&ot) ||
         !multiply(nf,workspace_buffers,wf) || !add(wf,of,wf) ||
         !multiply(nt,workspace_buffers,wt) || !add(wt,ot,wt) || !multiply(wt,2,wt) ||
         !add(wf,wt,total) || !multiply(total,8,total)) return false;
     g.p=p; g.bits=bits; g.words=(bits+63)/64; g.fold_length=nf; g.tree_length=nt;
     g.workspace_buffers=workspace_buffers;
+    g.tree_operand_coeffs=tree_coeffs;
     g.arena_estimate_bytes=total;
     if (!multiply(nf,8*workspace_buffers,g.fold_big_bytes)) return false;
     g.fold_owner_bytes=owner_bytes(p,g.words,owner_reuse);
@@ -97,6 +170,10 @@ template<class Query> bool geometry(Word p, int bits, Query query, Geometry &g, 
 }
 struct Plan {
     Geometry geometry;
+    TreeWorkspacePlan tree_workspace;
+    Word tree_batch_bytes=0, tree_chunk_max=0;
+    bool tree_physical_chunks=false;
+    bool tree_payload_model_supported=false;
     Word target_bits=0, carrier_exponent=0;
     Word d=0, b1=0, b2=0, giant_points=0, batches=0;
     Word free_bytes=0, arena_cap_bytes=0, owner_budget_bytes=0, baby_bytes=0;
