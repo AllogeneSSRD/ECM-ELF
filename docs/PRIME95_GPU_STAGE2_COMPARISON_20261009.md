@@ -274,3 +274,9 @@ python tools/log_parser/plot_prime95_gpu.py `
   源文件SHA256、134次曲线、任务核对及全部CPU/GPU分组。
 
 原始数据与图片保存在已有忽略目录内；报告及通用分析脚本可纳入版本控制。
+
+## 后续研究
+
+[梅森承载与D/P、显存联合规划](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)
+补充了target/carrier分离证明、GMP-ECM参考、Auto B2布局口径差异和NTT台阶的
+并存显存下界，并给出实施顺序；未新增GPU性能实测。
