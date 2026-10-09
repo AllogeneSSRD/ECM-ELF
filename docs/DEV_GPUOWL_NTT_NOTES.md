@@ -4935,3 +4935,35 @@ chain_min=0的配置拒绝均保留，不计成功。18条native检查、5条正
 下一步全生命周期MemoryPlan须覆盖point/seed/segment/group与NTT/owner缓存的
 同时存活量、chunk启动与grid阶跃成本，再接普通D/Auto B2及production B1校准。
 当前仍为实验策略，不修改`legacy_additive`准入；完整规划工作未结束。
+
+## 131. 预测式五阶段请求 program 与无淘汰 NTT 合同（2026-10-09）
+
+接续`033d71f`。新增`src/core/ecm_stage2_requests.h`，曲线执行前由P/I生成F树、
+Newton inverse、完整/残G树与fold、scaled root/frontier请求。中间重复G树/fold
+压缩为block，顺序签名以模2^64线性变换二分幂合成。生产`--plan-only`增加
+`request_program.version=1`、5 phase计数、compressed blocks、实际backend NTT
+shape和descriptor表/base的无淘汰保留容量；不再只描述一棵F树。
+
+`NTT_REQUEST_AUDIT`默认0，bench `--request-audit`仅用于debug核对；旧Auto B2
+profile拒绝插桩。发布算术、配置默认、普通D与Auto B2准入均不改变。请求合同
+要求全驻留、fold余式长度P、cached inverse和scaled下降，无额外诊断乘法；
+G1 local inverse/root division明确`valid=false`。短余式、退化/回退尚未建模。
+`process_peak_complete=false,admission_model=false`，本轮不宣称新性能收益。
+
+CPU独立dense C++门禁70010项0 bad；40组native规划与独立全流程topology吻合。
+M37/M67/M16384、generic8193、8011-bit D138/D153共12次check的五phase计数、
+每phase/跨phase顺序及保留容量通过；独立小CPU完整叶子与前binary通用/高位宽
+完整目标叶子相同。12条owned台账、5条正常回退、carry污染拒绝、10 parser项通过。
+首版G1缺local inverse已改为明确不支持；fixture溢出期望的修正不计性能收益。
+
+D138：188条compressed请求表示474组、2262396个乘积、5260个NTT子调用；
+预测/实测NTT峰均4612.617836 MiB。D153：172条compressed请求表示379组、
+2112427个乘积、4231个子调用；预测/实测均4613.356461 MiB，有3次cold trim。
+D138 G树请求大池仅2048 MiB，但inverse已增长到4096 MiB，后续仍持有4096 MiB。
+两臂point Q虽不同，整个NTT请求顺序相同；完整显存峰需纳入跨phase保留量。
+
+production v2：CUDA13.3/sm89/PTX3/addsub1/outer0/split8，43源冻结，build86.4 s。
+binary SHA `4f42b75e213adfcc509cedee3210002cb3ca5ae6c5d9a3bc13464c82f3863ab4`。
+详见[报告第21节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#21-预测式全流程乘法请求-programmemoryplan-的输入合同)。
+下一轮按此program模拟cache淘汰/重建/冷回收与所有非NTT设备缓冲生命周期，
+逐checkpoint对照owned台账，再接D/P/point预算联合选择与新Auto B2成本。

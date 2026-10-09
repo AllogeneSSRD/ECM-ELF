@@ -44,6 +44,7 @@ def main():
     p.add_argument('--require-resident', action='store_true', help='Require device fold, scaled root and frontier instead of accepting their fallbacks')
     p.add_argument('--trim-phase-raw', action='store_true', help='Reclaim dead raw staging at inverse/fold and fold/descent boundaries in both arms')
     p.add_argument('--memory-ledger', action='store_true', help='Track every successful engine cudaMalloc/free, including transient allocations; diagnostics only')
+    p.add_argument('--request-audit', action='store_true', help='Audit ordered multiplication requests; diagnostics only')
     a = p.parse_args()
     valid_exponent = 2 <= a.carrier_exponent <= 16384 or (a.comparison != 'carrier' and a.carrier_exponent == 0)
     if a.d <= 0 or a.b2 <= 0 or not valid_exponent or min(a.arena_mb, a.fold_mb, a.batch_mb,a.baby_mb) <= 0:
@@ -52,6 +53,8 @@ def main():
         p.error('invalid point budget')
     if a.workspace_fixture and a.mode != 'check':
         p.error('--workspace-fixture requires --mode check')
+    if a.request_audit and a.mode != 'check':
+        p.error('--request-audit requires --mode check; instrumentation is outside formal timing')
     if a.single_arm and (a.mode != 'check' or a.comparison != 'workspace-bq'):
         p.error('--single-arm requires a workspace-bq check')
     if a.comparison == 'plan':
@@ -95,6 +98,7 @@ def main():
                NTT_NO_PROGRESS='1', NTT_BABY_DEVICE_MAX_MB=str(a.baby_mb), CUDA_LAUNCH_BLOCKING='0')
     env['NTT_PHASE_TRIM_RAW'] = '1' if a.trim_phase_raw else '0'
     env['NTT_MEMORY_LEDGER'] = '1' if a.memory_ledger else '0'
+    env['NTT_REQUEST_AUDIT'] = '1' if a.request_audit else '0'
     if a.workspace_fixture:
         env['NTT_ARENA_WORKSPACE_TEST'] = '1'
     if a.mode == 'check':

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <utility>
+#include <memory>
 
 // Shared integer geometry. These are component payloads/planning estimates,
 // never a sum of simultaneous process allocations or a promise of residency.
@@ -192,9 +193,11 @@ template<class Query> bool geometry(Word p, int bits, Query query, Geometry &g, 
     g.fold_owner_bytes=owner_bytes(p,g.words,owner_reuse);
     return g.fold_owner_bytes!=std::numeric_limits<Word>::max();
 }
+struct RequestPlan;
 struct Plan {
     Geometry geometry;
     TreeWorkspacePlan tree_workspace;
+    std::shared_ptr<RequestPlan> requests;
     Word tree_batch_bytes=0, tree_chunk_max=0;
     bool tree_physical_chunks=false;
     bool tree_payload_model_supported=false;

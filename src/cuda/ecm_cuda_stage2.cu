@@ -61,6 +61,7 @@ struct ProductionDefaults {
 #include "stage2/giant_chunk_plan.cuh"
 #include "stage2/ntt_runtime.cuh"
 #include "../core/ecm_stage2_geometry.h"
+#include "../core/ecm_stage2_requests.h"
 #include "../core/ecm_stage2_modulus.h"
 
 #include <string>
@@ -1273,6 +1274,7 @@ struct S4Ctx {
     unsigned long long chunk_plan_request_peak=0, chunk_plan_subset_peak=0;
     unsigned long long chunk_plan_over_budget=0;
     ecm_stage2::TreeWorkspacePlan phase_requests[BC_NCAT];
+    ecm_stage2::RequestSignature request_signatures[BC_NCAT],request_signature;
     unsigned long long phase_big_live_peak[BC_NCAT]{}, phase_subset_peak[BC_NCAT]{};
     unsigned long long phase_ntt_peak[BC_NCAT]{};
     long long sample_limit = 4096;      /* a full GMP check below this many coefficients */
@@ -3552,6 +3554,14 @@ static void poly_mul_batch_modN(PolyLayer &L,
         ++p.groups;p.pairs+=nbatch;p.chunks+=nbatch/chunk+(nbatch%chunk!=0);
         p.big_peak_bytes=std::max(p.big_peak_bytes,8ull*buffers*qN*chunk);
         p.output_peak_bytes=std::max(p.output_peak_bytes,8ull*allocation_need);
+        if(fuse_env_ull("NTT_REQUEST_AUDIT",0)) {
+            static_assert(BC_FTREE==ecm_stage2::RequestFtree && BC_GTREE==ecm_stage2::RequestGtrees &&
+                BC_FOLD==ecm_stage2::RequestFold && BC_DESCENT==ecm_stage2::RequestDescent &&
+                BC_FINV==ecm_stage2::RequestInverse && BC_NCAT==ecm_stage2::RequestPhaseCount,"phase topology");
+            const ecm_stage2::MultiplyRequest r{(unsigned)memory_category,ma,mb,nbatch,first,count};
+            C.request_signatures[memory_category].append(r,qN,out_slots,chunk);
+            C.request_signature.append(r,qN,out_slots,chunk);
+        }
     }
     if(allocation_need>C.d_out_cap) {
         if(C.d_out) { CK(cudaFree(C.d_out)); C.d_out=nullptr; C.d_out_cap=0; }
@@ -8654,6 +8664,17 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             },NttWorkspacePolicy{}.workspace_pool,p.tree_workspace))return 3;
         p.d=D; p.b1=B1; p.b2=B2; p.giant_points=B2/D+2;
         p.batches=p.giant_points/P_baby+(p.giant_points%P_baby!=0);
+        p.requests=std::make_shared<ecm_stage2::RequestPlan>();
+        if(!ecm_stage2::request_plan(P_baby,p.giant_points,(int)L.S,
+            [](unsigned long long m,int s,unsigned long long *n,unsigned long long *out) {
+                return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
+            },[](unsigned long long n,unsigned long long &table,unsigned long long &base) {
+                int k=0;for(auto size=n;size>1;size>>=1)++k;
+                FuseCtx description;fuse_describe(description,n,k,0,0);
+                table=8ull*fuse_planned_table_words(description);
+                base=8ull*fuse_planned_base_words(description);return true;
+            },p.tree_batch_bytes,(unsigned)p.geometry.workspace_buffers,p.tree_physical_chunks,
+            p.tree_chunk_max,NttWorkspacePolicy{}.workspace_pool,*p.requests))return 3;
         p.free_bytes=freeb; p.arena_cap_bytes=cap; p.owner_budget_bytes=fold_budget;
         p.baby_bytes=d_baby_payload_bytes(P_baby,nw);
         p.owner_budget_fits=p.geometry.fold_owner_bytes<=fold_budget;
@@ -9441,7 +9462,13 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     "request_output_peak_bytes=%llu live_big_peak_bytes=%llu owned_subset_peak_bytes=%llu ntt_payload_peak_bytes=%llu process_peak_complete=0 subset_accounting_version=2\n",
                     names[category],p.groups,p.pairs,p.chunks,p.big_peak_bytes,p.output_peak_bytes,
                     s4.phase_big_live_peak[category],s4.phase_subset_peak[category],s4.phase_ntt_peak[category]);
+                if(fuse_env_ull("NTT_REQUEST_AUDIT",0))stage2_log::print(stage2_log::debug,
+                    "stage2_request_audit: version=1 phase=%s multiplier=%llu addend=%llu\n",
+                    names[category],s4.request_signatures[category].multiplier,s4.request_signatures[category].addend);
             }
+            if(fuse_env_ull("NTT_REQUEST_AUDIT",0))stage2_log::print(stage2_log::debug,
+                "stage2_request_audit: version=1 phase=all multiplier=%llu addend=%llu\n",
+                s4.request_signature.multiplier,s4.request_signature.addend);
             stage2_log::print(stage2_log::debug,
                 "s4_chunk_plan: workspace_budget=%d calls=%llu changed_calls=%llu chunks=%llu legacy_chunks=%llu "
                 "request_peak_bytes=%llu owned_subset_observed_peak_bytes=%llu single_over_budget_calls=%llu "
@@ -9543,8 +9570,48 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
         if(!first_cache)json<<',';first_cache=false;
         json<<"{\"N\":"<<entry.first<<",\"table_bytes\":"<<entry.second.table<<",\"base_bytes\":"<<entry.second.base<<'}';
     }
-    json<<"]}"
-        <<",\"model\":"<<stage2_tune::quote(p.model)<<",\"calibrated\":"<<(p.calibrated ? "true" : "false")
+    json<<"]}";
+    if(p.requests) {
+        const auto &requests=*p.requests;const auto &payload=requests.retained;
+        json<<",\"request_program\":{\"version\":1,\"valid\":"<<(requests.valid?"true":"false")
+            <<",\"supported\":"<<(requests.valid && p.tree_payload_model_supported?"true":"false")
+            <<",\"contract\":"<<stage2_tune::quote(requests.program.reason)
+            <<",\"residency_required\":true,\"full_fold_degree_required\":true"
+            <<",\"no_eviction_model\":true,\"process_peak_complete\":false,\"admission_model\":false"
+            <<",\"multiplier\":"<<requests.signature.multiplier<<",\"addend\":"<<requests.signature.addend
+            <<",\"shared_big_peak_bytes\":"<<payload.big_peak_bytes
+            <<",\"digit_retained_bytes\":"<<payload.digit_retained_bytes
+            <<",\"keyed_big_retained_bytes\":"<<payload.keyed_big_retained_bytes
+            <<",\"output_peak_bytes\":"<<payload.output_peak_bytes
+            <<",\"table_retained_bytes\":"<<payload.table_retained_bytes
+            <<",\"base_retained_bytes\":"<<payload.base_retained_bytes
+            <<",\"ntt_retained_bytes\":"<<payload.ntt_retained_bytes<<",\"phases\":[";
+        for(unsigned i=0;i<ecm_stage2::RequestPhaseCount;++i) {
+            if(i)json<<',';const auto &phase=requests.phases[i];const auto &sig=requests.signatures[i];
+            json<<"{\"phase\":"<<stage2_tune::quote(ecm_stage2::request_phase_name(i))
+                <<",\"groups\":"<<phase.groups<<",\"pairs\":"<<phase.pairs<<",\"chunks\":"<<phase.chunks
+                <<",\"request_big_peak_bytes\":"<<phase.big_peak_bytes
+                <<",\"request_output_peak_bytes\":"<<phase.output_peak_bytes
+                <<",\"multiplier\":"<<sig.multiplier<<",\"addend\":"<<sig.addend<<'}';
+        }
+        json<<"],\"cache_shapes\":[";bool first=true;
+        for(const auto &entry:payload.caches) {
+            if(!first)json<<',';first=false;
+            json<<"{\"N\":"<<entry.first<<",\"table_bytes\":"<<entry.second.table<<",\"base_bytes\":"<<entry.second.base<<'}';
+        }
+        json<<"],\"blocks\":[";first=true;
+        for(const auto &block:requests.program.blocks) {
+            if(!first)json<<',';first=false;json<<"{\"repeat\":"<<block.repeat<<",\"requests\":[";bool first_request=true;
+            for(const auto &r:block.requests) {
+                if(!first_request)json<<',';first_request=false;
+                json<<"{\"phase\":"<<r.phase<<",\"ma\":"<<r.ma<<",\"mb\":"<<r.mb
+                    <<",\"pairs\":"<<r.pairs<<",\"first\":"<<r.first<<",\"count\":"<<r.count<<'}';
+            }
+            json<<"]}";
+        }
+        json<<"]}";
+    }
+    json<<",\"model\":"<<stage2_tune::quote(p.model)<<",\"calibrated\":"<<(p.calibrated ? "true" : "false")
         <<",\"stage2_seconds_estimate\":"<<p.estimated_seconds<<"}";
     report(json.str().c_str(),context);return 0;
 }

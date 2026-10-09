@@ -351,3 +351,43 @@ python tools/bench/bench_stage2_carrier.py --comparison giant-chunk --exe <exe> 
 unit参考，可继续验证fold/frontier失败、pool关闭、三缓冲、arena拒绝与carry污染。
 正式计时关闭台账及额外叶子/seed检查，保留必要算术检查；ABBA+BAAB每臂n=4。
 该策略默认0，尚未进入INI/发布默认；旧Auto B2 profile拒绝新取整和非默认点预算。
+
+## 全流程乘法请求模型
+
+生产`--plan-only`新增`request_program.version=1`，在执行曲线前生成F树、Newton
+inverse、G树/fold、scaled root/frontier的有序请求。重复G树/fold压缩为block，
+不随B2线性展开。`blocks`明确记录phase、ma/mb、pairs及输出first/count。
+`phases`给出group/pair/chunk计数与请求大池/输出峰；NTT shape来自实际backend，
+表/base来自分配器descriptor。`ntt_retained_bytes`是此请求合同的**无淘汰NTT保留
+容量**，不包含点、raw、owner、归约/selftest临时分配、CUDA context等。
+
+合同要求驻留batched路径、cached inverse、fold余式长度保持P及无额外诊断乘法。
+单批G树（I<=P）的local inverse/root division尚未纳入，明确输出`valid=false`。
+数据依赖的余式截短、非单位退化和回退不由此模型保证。输出始终标记
+`process_peak_complete=false,admission_model=false`，未替换普通D/Auto B2准入。
+
+`--request-audit`设置`NTT_REQUEST_AUDIT=1`（默认0），每个阶段及跨阶段输出
+`stage2_request_audit`的有序形状签名。只写debug日志；正式计时/旧Auto B2 profile
+不接受该插桩。签名为模2^64的polynomial rolling hash，不代替冻结SHA与算术门禁。
+
+```powershell
+python tools/bench/bench_stage2_carrier.py --comparison giant-chunk --exe <exe> --save <save> --carrier-exponent 8011 --b2 2600000000000 --d 1381380 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --memory-ledger --request-audit --mode check --projection-only --require-resident --output data/request_check
+python tools/test/test_stage2_request_program.py --exe <exe> --matrix data/request_check/measurements.json --output data/request_gate
+```
+
+可额外传`--plan-matrix <test_stage2_workspace_plan.py输出的checks.json>`，逐一核对
+不同pool/reuse/chunk策略的native计划与独立dense topology。运行门禁比较五阶段
+计数、每阶段/跨阶段顺序、无淘汰保留容量，并要求全驻留且无arena拒绝。计划和
+运行日志、save、collector、result、构建身份均校验；不以诊断时间宣称加速。
+
+`tools/test/stage2_request_program_fixture.cpp`为不初始化CUDA的C++门禁，使用
+独立dense padded树/下降oracle核对压缩program，覆盖小P、二次幂边界、高P、
+巨大重复、两/三缓冲及溢出。用C++17编译器编译运行；Windows可在VS开发终端执行：
+
+```powershell
+cl /std:c++17 /EHsc /O2 /utf-8 tools/test/stage2_request_program_fixture.cpp /Fe:data/request_fixture.exe /Fo:data/request_fixture.obj
+data/request_fixture.exe
+```
+
+完整MemoryPlan下一步仍需模拟缓存淘汰/冷回收、分配先后及所有非NTT缓冲的同时
+存活状态，再将D/P、giant chunk预算和新成本共同用于候选选择。
