@@ -12,6 +12,7 @@ def main():
     p.add_argument('--input', type=Path, required=True)
     p.add_argument('--output-prefix', type=Path, required=True)
     p.add_argument('--canvas', type=Path)
+    p.add_argument('--gpu-label', default='CUDA GPU (full Stage2)')
     args = p.parse_args()
     import matplotlib
     matplotlib.use('Agg')
@@ -19,6 +20,10 @@ def main():
     from matplotlib.ticker import MultipleLocator
     import numpy as np
     a = json.loads(args.input.read_text(encoding='utf-8'))
+    source_caption = ('Source: frozen Prime95 screen/result snapshots; GPU study '
+                      + str(a.get('GPU_created_utc', 'see input metadata'))[:10]
+                      + '; GPU exe ' + a.get('GPU_executable_sha256', 'see input metadata')[:12]
+                      + '; ' + args.gpu_label)
     pairs = [r for r in a['exact_pairs'] if r['gpu_variant']=='cofactor']
     bounds = sorted({r['B2'] for r in pairs})
     widths = sorted({r['bits'] for r in pairs})
@@ -41,19 +46,19 @@ def main():
         x=np.arange(len(rows))
         for offset,color,label,values,errs in [
             (-.19,cpu_color,'Prime95 CPU (init + main + GCD)',[r['cpu']['mean'] for r in rows],[r['cpu']['stdev'] or 0 for r in rows]),
-            (.19,gpu_color,'CUDA GPU (full Stage2, 55 W)',[r['gpu']['mean_seconds'] for r in rows],[r['gpu']['std_seconds'] or 0 for r in rows])]:
+            (.19,gpu_color,args.gpu_label,[r['gpu']['mean_seconds'] for r in rows],[r['gpu']['std_seconds'] or 0 for r in rows])]:
             bars=ax.bar(x+offset,values,.36,color=color,label=label,yerr=errs,capsize=3)
             label_pad=max(max(r['cpu']['max'],r['gpu']['max_seconds']) for r in rows)*.025
             for bar,val,err in zip(bars,values,errs): ax.text(bar.get_x()+bar.get_width()/2,val+err+label_pad,f'{val:.2f}',ha='center',va='bottom',fontsize=9)
         ax.set_xticks(x,[f'{r["B2"]:.1e}' for r in rows])
         ax.set_xlabel('Nominal B2 tier')
         ax.set_ylabel('Mean complete Stage2 time (s)')
-        ax.set_title(f'Exact same cofactor N: {bits} bits; CPU n='+','.join(str(r['samples']) for r in rows)+'; GPU n=3')
+        ax.set_title(f'Exact same cofactor N: {bits} bits; CPU n='+','.join(str(r['samples']) for r in rows)+'; GPU n='+','.join(str(r['gpu']['samples']) for r in rows))
         ax.set_ylim(0,max(max(r['cpu']['max'],r['gpu']['max_seconds']) for r in rows)*1.22)
         ax.grid(axis='y',alpha=.22);ax.set_axisbelow(True)
     axes[0,0].legend(fontsize=8,loc='upper left')
     fig.suptitle('CPU / GPU Stage2 comparison — exact N, nominal B2 matched',fontsize=13)
-    fig.text(.01,-.035,'Source: Prime95 screen.log + results.json.txt (2026-10-09), GPU completed study (2026-10-08). Error bars: sample SD.\nCPU B1=100000; GPU B1=20. CPU rounds actual B2 up by 3.1–7.3%; sigma and native phase boundaries differ.',fontsize=9)
+    fig.text(.01,-.035,source_caption + '. Error bars: sample SD.\nCPU B1=100000; GPU B1=20. CPU rounds actual B2 up; sigma and native phase boundaries differ.',fontsize=9)
     fig.tight_layout();save(fig,'exact_times')
 
     fig,axes=plt.subplots(1,len(bounds),figsize=(15,4.5),sharey=True)
@@ -71,7 +76,7 @@ def main():
     axes[0].set_ylabel('Mean complete Stage2 time (s, log scale)')
     axes[0].legend(loc='upper left',fontsize=7.4)
     fig.suptitle('Width scaling — hollow CPU points are context, not paired speedups',fontsize=13)
-    fig.text(.01,-.035,'Source: 100 complete CPU curves, 44 exact-N groups; GPU 81 timed cofactor curves. 2026-10-08/09.\nAll x coordinates use recovered integer bit length. Equal exponent or similar bit length does not establish equal N.',fontsize=9)
+    fig.text(.01,-.035,source_caption + '.\nAll x coordinates use recovered integer bit length. Equal exponent or similar bit length does not establish equal N.',fontsize=9)
     fig.tight_layout();save(fig,'N_scaling')
 
     fig,ax=plt.subplots(figsize=(9,4.3))
@@ -83,9 +88,9 @@ def main():
     ax.axhline(1,color='#777777',ls='--',lw=1)
     ax.set_xticks(range(len(bounds)),[f'{b:.1e}' for b in bounds]);ax.set_xlabel('Nominal B2 tier')
     ax.set_ylabel('GPU speedup = mean CPU time / mean GPU time')
-    ax.set_title('Above 1: GPU faster; below 1: CPU faster (55 W GPU baseline)')
+    ax.set_title('Above 1: GPU faster; below 1: CPU faster')
     ax.legend();ax.grid(alpha=.18)
-    fig.text(.01,-.025,'Source: the six exact-cofactor comparisons; 2026-10-08/09. Ratios of sample means; no B2/power correction applied.',fontsize=9)
+    fig.text(.01,-.025,source_caption + '. Ratios of sample means; no B2/power correction applied.',fontsize=9)
     fig.tight_layout();save(fig,'speedup')
 
     ordered=sorted(pairs,key=lambda r:(r['bits'],r['B2']))
@@ -118,16 +123,20 @@ def main():
     axes[1].set_xticks(range(len(ordered)),labels);axes[1].set_xlabel('Exact cofactor N / nominal B2 tier')
     fig.suptitle('Where time goes — native phase shares (boundaries differ between implementations)',fontsize=13)
     fig.subplots_adjust(hspace=.67,bottom=.23,top=.92)
-    fig.text(.01,.01,'Source: six exact-cofactor groups, 2026-10-08/09. Each panel sums to 100%; CPU PolyG includes work GPU reports separately.\nPolyF up/down extrapolations are not stacked. GPU S4 reduction is nested in several phases, not another additive segment.',fontsize=9)
+    fig.text(.01,.01,source_caption + '. Each panel sums to 100%; CPU PolyG includes work GPU reports separately.\nPolyF up/down extrapolations are not stacked. GPU S4 reduction is nested in several phases, not another additive segment.',fontsize=9)
     save(fig,'phases_percent')
     if args.canvas:
-        write_canvas(a,args.canvas)
+        write_canvas(a,args.canvas,args.gpu_label)
         outputs.append(str(args.canvas.resolve()))
     print(json.dumps(outputs,ensure_ascii=False,indent=2))
 
 
-def write_canvas(a,path):
-    data=dict(counts=a['counts'],pairs=[dict(bits=r['bits'],p=r['exponent'],b2=r['B2'],
+def write_canvas(a,path,gpu_label='CUDA GPU'):
+    data=dict(counts=a['counts'],cpu_counts=a.get('cpu_counts',{}),
+        gpu_label=gpu_label,gpu_date=(a.get('GPU_created_utc') or 'not recorded')[:10],
+        gpu_executable=a.get('GPU_executable_sha256','not recorded'),
+        gpu_condition=a['semantics'].get('gpu_power','not recorded'),
+        pairs=[dict(bits=r['bits'],p=r['exponent'],b2=r['B2'],
         cpu=r['cpu']['mean'],cpu_sd=r['cpu']['stdev'],cpu_n=r['samples'],gpu=r['gpu']['mean_seconds'],
         gpu_sd=r['gpu']['std_seconds'],gpu_n=r['gpu']['samples'],ratio=r['gpu_speedup'],
         overshoot=r['cpu_B2_overshoot_percent'],cpu_D=r['CPU_D'],cpu_P=r['CPU_degree'],
@@ -146,36 +155,32 @@ export default function ECMComparison() {
  const labels=exact.map(r=>`${r.bits} bits (M${r.p} cofactor)`);
  return <Stack gap={20} style={{padding:24,maxWidth:1180,margin:"0 auto"}}>
   <H1>ECM Stage2：Prime95 CPU / CUDA GPU</H1>
-  <Text tone="secondary">2026-10-08/09 · Ryzen AI 9 HX 370 / RTX 4060 Laptop · 原始日志、结果 JSON 与完整 GPU 测量</Text>
-  <Grid columns={4} gap={20}><Stat value="100" label="完整 CPU Stage2 曲线"/><Stat value="34" label="命中因子提前结束，不计均值"/><Stat value="134/134" label="实际输入 N 已恢复"/><Stat value="6" label="相同余因子 N / B2 档位"/></Grid>
-  <Callout tone="neutral" title="约 2k bits 时 GPU 更快；约 8k bits 时 Prime95 更快">
-   1939 bits：GPU 1.38–2.30×；7995 bits：GPU 0.42–0.76×。速度比 = CPU 秒数 / GPU 秒数，大于 1 表示 GPU 更快。
+  <Text tone="secondary">GPU 测量日期：{DATA.gpu_date} · 原始日志、结果 JSON 与完整 GPU 测量</Text>
+  <Grid columns={3} gap={20}><Stat value={DATA.counts.eligible_CPU_curves} label="完整 CPU Stage2 曲线"/><Stat value={DATA.counts.recovered_moduli} label="实际输入 N 已恢复"/><Stat value={DATA.counts.exact_cofactor_pairs} label="相同余因子 N / B2 档位"/></Grid>
+  <Callout tone="neutral" title="只比较相同整数 N 和请求 B2 档位">
+   速度比 = CPU 秒数 / GPU 秒数，大于 1 表示 GPU 更快；具体结果随输入、选形和显卡条件变化，见当前档位的明细。
   </Callout>
   <Row gap={12}><Text weight="semibold">B2 档位</Text><Select value={tier} onChange={setTier} options={[{value:"26000000000",label:"2.6 × 10¹⁰"},{value:"260000000000",label:"2.6 × 10¹¹"},{value:"2600000000000",label:"2.6 × 10¹²"}]}/></Row>
   <H2>相同整数 N：完整 Stage2 耗时均值</H2>
-  <Text size="small" tone="secondary">横轴：实际余因子位宽（bits，分类）；纵轴：平均耗时（秒）。图例区分 CPU / GPU；源数据：CPU 2026-10-09、GPU 2026-10-08。</Text>
-  <BarChart categories={labels} series={[{name:"Prime95 CPU (init + main + GCD)",data:exact.map(r=>r.cpu),tone:"warning"},{name:"CUDA GPU (full Stage2, 55 W)",data:exact.map(r=>r.gpu),tone:"info"}]} height={310} valueSuffix=" s" showValues/>
+  <Text size="small" tone="secondary">横轴：实际余因子位宽（bits，分类）；纵轴：平均耗时（秒）。GPU 源数据日期：{DATA.gpu_date}。</Text>
+  <BarChart categories={labels} series={[{name:"Prime95 CPU (init + main + GCD)",data:exact.map(r=>r.cpu),tone:"warning"},{name:DATA.gpu_label,data:exact.map(r=>r.gpu),tone:"info"}]} height={310} valueSuffix=" s" showValues/>
   <Table headers={["实际 N","CPU 均值 ± SD / s","CPU n","GPU 均值 ± SD / s","GPU n","GPU 速度比"]} rows={exact.map(r=>[`${r.bits} bits`,`${fmt(r.cpu)} ± ${fmt(r.cpu_sd??0)}`,r.cpu_n,`${fmt(r.gpu)} ± ${fmt(r.gpu_sd??0)}`,r.gpu_n,`${r.ratio.toFixed(2)}×`])}/>
   <Grid columns={2} gap={24}>
    <Stack gap={10}><H2>原生初始化与主阶段占比</H2><Text size="small" tone="secondary">横轴：实现与位宽；纵轴：完整 Stage2 百分比。各组均值；两实现计时边界不同，不能当作相同内核成本。</Text>
     <BarChart categories={exact.flatMap(r=>[`${r.bits} CPU`,`${r.bits} GPU`])} series={[{name:"Native init",data:exact.flatMap(r=>[r.cpu_init,r.gpu_init]),tone:"info"},{name:"Native main + GCD",data:exact.flatMap(r=>[r.cpu_main,r.gpu_main]),tone:"neutral"}]} normalized height={250}/>
    </Stack>
    <Stack gap={10}><H2>选形差异</H2><Table headers={["位宽","CPU D / P","GPU D / P","GPU G"]} rows={exact.map(r=>[r.bits,`${r.cpu_D.join(",")} / ${r.cpu_P.join(",")}`,`${r.gpu_D} / ${r.gpu_P}`,r.gpu_G])}/>
-    <Text>7995 bits / 最大 B2：CPU 12 个 PolyG、11 个 PolyH；GPU 42 个 G 多项式、41 次 fold。计数概念存在实现差异，仍显示 GPU 批次压力。</Text>
+    <Text>GPU G 是当前日志记录的 G 多项式数量。不同实现的操作边界及批次数定义有差异，不能将其直接等同于 CPU 的 PolyG/PolyH 计数。</Text>
    </Stack>
   </Grid>
-  <Callout tone="neutral" title="归约域是重要算法差异，尚未独立量化收益">
-   Prime95 参考源码对目标余因子 N 剥离已知因子，但 gwsetup 仍使用原始梅森形式。GPU 本轮余因子使用通用 division 归约。
-   应研究“以完整梅森数承载算术、以真实 N 做求逆/GCD”的实现；直接改为完整梅森输入会重新引入已知因子及非单位回退。
-  </Callout>
   <Divider/>
   <H2>全位宽 CPU 记录：仅作上下文</H2>
   <Text tone="secondary">B2 当前档位的全部精确 N 分组。除已配对行外，不能与相同指数的 GPU 时间计算速度比。</Text>
   <Table headers={["原指数 p","实际 N bits","CPU 完整 S2 / s","样本 n","现有 GPU 是否有同 N"]} rows={groups.map(r=>[r.p,r.bits,fmt(r.seconds),r.n,r.matched?"相同整数 N":"未匹配"])} striped/>
   <H2>比较边界</H2>
-  <Text>CPU B1=100000，GPU B1=20；sigma 不同；CPU 实际 B2 比档位高约 3.1–7.3%。CPU 使用主线程及 3 个 polymult helper，并有 PRP 日志活动；GPU 数据采于 55 W，未与修复后的功耗混合。1939 bits 两个较大 B2 的 CPU CV 约 15–24%，需保留误差范围。</Text>
-  <Text>功耗修复后只有 7995 bits / B2=2.6e11 有 3 次对照：GPU 34.920 s；CPU 29.620 s，GPU 速度比 0.85×。其余档位没有修复后数据，未外推。</Text>
-  <Text size="small" tone="secondary">明细与行号：仓库 data/prime95_ecm_20261009/comparison/exact_pairs.csv、modulus_runs.csv；报告：docs/performance/STAGE2.md。最后一条曲线的停机后 Resuming 消息已排除，不影响已完成计时。</Text>
+  <Text>只核对相同整数 N 和请求 B2 档位；B1、sigma、实际 B2、硬件和后台负载可能不同。数据保留各格样本数及样本标准差，不按功率或频率比例修正。</Text>
+  <Text>GPU 条件：{DATA.gpu_condition}</Text>
+  <Text size="small" tone="secondary">GPU exe SHA256：{DATA.gpu_executable}。明细、冻结来源与行号见生成此看板的 comparison.json 及旁边的 exact_pairs.csv、modulus_runs.csv；性能报告：docs/performance/STAGE2.md。</Text>
  </Stack>;
 }
 '''

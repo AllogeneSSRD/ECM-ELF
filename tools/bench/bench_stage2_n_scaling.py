@@ -393,7 +393,7 @@ def main():
     p.add_argument('--sigma', type=int, default=26)
     p.add_argument('--repeats', type=int, default=3)
     p.add_argument('--full-controls', action='store_true')
-    p.add_argument('--device', type=int, choices=(1,), default=1)
+    p.add_argument('--device', type=int, default=1, help='NVML/CUDA index of the RTX 4060 Laptop; use 0 after removing the other GPU')
     p.add_argument('--arena-mb', type=int, default=6300)
     p.add_argument('--fold-mb', type=int, default=640)
     p.add_argument('--batch-mb', type=int, default=256)
@@ -401,16 +401,16 @@ def main():
     p.add_argument('--resume', action='store_true')
     p.add_argument('--timeout', type=int, default=1800)
     a = p.parse_args()
-    if (a.b1 < 2 or a.sigma < 6 or a.repeats < 2 or min(a.b2) <= a.b1
+    if (a.device < 0 or a.b1 < 2 or a.sigma < 6 or a.repeats < 2 or min(a.b2) <= a.b1
             or not a.exponents or len(set(a.exponents)) != len(a.exponents)
             or len(set(a.b2)) != len(a.b2)):
-        p.error('Need unique exponents/B2, B1>=2, sigma>=6, repeats>=2, B2>B1')
+        p.error('Need device>=0, unique exponents/B2, B1>=2, sigma>=6, repeats>=2, B2>B1')
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     monitor = Monitor(a.device)
     try:
         if 'RTX 4060 Laptop' not in monitor.identity['name']:
-            raise ValueError('Expected RTX 4060 Laptop GPU1')
+            raise ValueError('Expected RTX 4060 Laptop at the selected device index')
         plan = read(out / 'measurements.json') if a.resume else prepare(a, out, monitor)
         if not a.prepare_only:
             run(a, out, monitor, plan)

@@ -162,6 +162,7 @@ def main():
     p.add_argument('--results', type=Path, required=True)
     p.add_argument('--gpu-analysis', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--gpu-power-note', default='GPU settings and power telemetry must be read from the frozen study; no power correction applied')
     args = p.parse_args()
     args.output = args.output.resolve()
     for source in (args.cpu_analysis, args.results, args.gpu_analysis):
@@ -223,6 +224,8 @@ def main():
     result = dict(schema_version=1,generated_utc=datetime.now(timezone.utc).isoformat(),
                   sources=dict(**source_meta,results=result_source,screen=cpu['source_log']), clocks=clocks,
                   cpu_counts=cpu['counts'], GPU_device=gpu['device'], GPU_memory=gpu['memory'],
+                  GPU_created_utc=gpu.get('created_utc'), GPU_completed_utc=gpu.get('completed_utc'),
+                  GPU_executable_sha256=gpu['executable_sha256'], GPU_counts=gpu.get('counts'),
                   counts=dict(tasks=len(tasks), recovered_moduli=sum(r['N_hex'] is not None for r in runs),
                               eligible_CPU_curves=sum(r['benchmark_eligible'] for r in runs),
                               CPU_groups=len(groups), exact_pairs=len(pairs),
@@ -231,7 +234,7 @@ def main():
                                  gpu_seconds='stage2_full_wall.total; excludes S1/automatic D scan/process startup',
                                  speedup='CPU seconds / GPU seconds; >1 means GPU faster',
                                  match='exact N integer and nominal B2 tier; B1/sigma/actual B2/hardware differ',
-                                 gpu_power='55 W baseline; no extrapolation from repaired 90 W point'),
+                                 gpu_power=args.gpu_power_note),
                   warnings=warnings, tasks=tasks, runs=runs, groups=groups, exact_pairs=pairs,
                   GPU_summary=gpu['summary'])
     (args.output/'results.snapshot.jsonl').write_bytes(raw)

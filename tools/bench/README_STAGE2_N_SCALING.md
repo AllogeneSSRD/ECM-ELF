@@ -7,7 +7,7 @@
 - Python 3；测量脚本使用标准库。分析需要 NumPy，绘图需要 Matplotlib。
 - 与当前源码一致的生产 Stage2 程序，以及它旁边的 `build_manifest.json`、`gmp-10.dll`。
 - GMP-ECM：用于独立校验 Stage1 点，路径可用 `--gmp-ecm` 指定。
-- 本轮 runner 明确限定 GPU1 / RTX 4060 Laptop / `sm_89`，防止占用 GPU0 的其他生产任务。
+- runner 限定 RTX 4060 Laptop / `sm_89`，通过 `--device` 显式选卡，默认1。移除其他显卡后4060可能变为GPU0，应指定 `--device 0`；准备和续跑记录并核对UUID及设备编号，不能仅凭旧编号选卡。
 
 ## 1. 构建与准备
 
@@ -19,7 +19,7 @@
 
 python tools/bench/bench_stage2_n_scaling.py `
   --exe build_cuda_cmake/n_scaling/native/ecm_cuda_stage2.exe `
-  --output data/n_scaling_study --full-controls --prepare-only
+  --output data/experiments/n_scaling_study --full-controls --prepare-only
 ```
 
 默认指数 `503 1009 2003 3001 4001 5003 6011 7001 8011`；默认 B2 为 `26000000000 260000000000 2600000000000`，即 `260e8 260e9 260e10`。默认 B1=20，每个余因子/B2 测三遍。可用 `--exponents`、`--b2`、`--b1`、`--repeats` 覆盖。
@@ -39,7 +39,7 @@ python tools/bench/bench_stage2_n_scaling.py `
 ## 2. 执行和继续
 
 ```powershell
-python tools/bench/bench_stage2_n_scaling.py --output data/n_scaling_study --resume
+python tools/bench/bench_stage2_n_scaling.py --output data/experiments/n_scaling_study --resume
 ```
 
 `--resume` 使用原计划，不重新读取数据库，也不使用新传入的 B1/B2、预算和指数列表覆盖它；改变实验设置应重新准备新目录。二进制、DLL、INI、保存点哈希变化时拒绝继续。
@@ -58,7 +58,7 @@ python tools/bench/bench_stage2_n_scaling.py --output data/n_scaling_study --res
 
 ```powershell
 python tools/bench/analyze_stage2_n_scaling.py `
-  --study data/n_scaling_study --output data/benchmarks/stage2_n_scaling
+  --study data/experiments/n_scaling_study --output data/benchmarks/stage2_n_scaling
 
 python tools/bench/plot_stage2_n_scaling.py `
   --summary data/benchmarks/stage2_n_scaling_summary.csv `
@@ -74,5 +74,28 @@ python tools/bench/plot_stage2_n_scaling.py `
 互斥分区为 baby点/归一化、F树及其余初始化/检查、inverse、giant点、G树、fold、G叶准备/回退、下降、叶乘积/GCD、其余记账残差。baby秒数取 `real_baby.ladder+affine`；F树及初始化项取 `init-baby`；其他项补齐完整墙钟。它们不是纯GPU kernel分区，G叶项包含设备准备、CPU和传输。`ntt_seconds`和`s4.t_reduce`嵌套在这些阶段内部，不能加入100%堆积图。毫秒级日志取整限制了极短阶段的百分比精度。
 
 按现有日志边界，设备叶填充及patch上传在G树构建回调内，计入G树；`gleaves`记录构树之前的驻留准备、归一化及非单位回退。图中的模块时间不应重新按操作名称归类后再相加。
+
+## 4. 对比已有完整扫描
+
+准备新目录后，先核对新旧 `measurements.json` 的输入整数、B1、sigma、save/Q 哈希、预算、DLL 和运行顺序。原始实验无需 Git 跟踪，必须保留；旧数据不重新生成或覆盖。绘图和分析沿用本页脚本。
+
+```powershell
+python tools/bench/analyze_stage2_n_scaling.py `
+  --study data/experiments/new_study --output data/benchmarks/new_study `
+  --baseline-analysis data/benchmarks/previous_study_analysis.json
+
+python tools/bench/plot_stage2_n_scaling.py `
+  --summary data/benchmarks/new_study_summary.csv `
+  --output data/figures/new_study --tick 1000 `
+  --version-comparison data/benchmarks/new_study_comparison.json `
+  --cpu-comparison data/experiments/prime95_comparison_current/comparison.json `
+  --previous-label "GPU previous (55 W)" --current-label "GPU current (1800 MHz)"
+```
+
+`--baseline-analysis` 要求两轮全部完成、每格样本数相同、N/B1/sigma/save/Q 与请求预算一致，GPU名称和UUID相同，输出 `_comparison.{json,csv}`。重启或移除其他显卡后允许同一UUID的设备编号改变，两个编号独立保留。D/P/G 可随实现改变，独立记录；因子比较忽略输出次序。时间变化为 `100·(current/previous−1)%`，速度比为 `previous/current`。同时记录模块容量和阶段秒数差额。
+
+`--version-comparison` 生成 `_versions_times`、`_versions_speedup`、`_versions_clocks`、`_versions_phase_delta` 的 PNG/SVG。阶段差额按互斥墙钟分区，正值表示增加、负值表示减少；所有分区之和必须等于完整时间差。可选 `--cpu-comparison` 使用 [Prime95 比较器](../log_parser/README_PRIME95_ECM_BENCH.md) 对当前 GPU 分析生成的精确 N 配对，仅画匹配点。CPU 未匹配目标不进入速度比。
+
+输入及预算相同不代表频率、功率或后台负载相同。必须依据原始遥测与实际设置注明约束；固定55W与固定1800MHz属于不同条件，耗时差不能直接归因于软件，不按频率或功率比例修正。
 
 拟合 `T=C(S/1000)^alpha(B2/2.6e10)^beta`，另按B2独立拟合N指数；报告数据内误差和按原exponent整组留出的误差。默认另拟合 `S>=1000` 子集，避免固定启动开销主导最小两个点。公式只是指定硬件、版本、预算和测量区间内的经验近似；NTT长度、自动D、owner回退及模数类型改变时，不能无条件外推。

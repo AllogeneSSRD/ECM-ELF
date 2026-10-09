@@ -33,6 +33,71 @@ def dump_csv(path, rows):
         writer.writerows(rows)
 
 
+def compare_analyses(current, baseline, baseline_path, output):
+    """Compare the same frozen input matrix; allow implementation shape changes."""
+    if not baseline.get('complete') or not current.get('complete'):
+        raise ValueError('Version comparison requires two completed studies')
+    for key in ('B1', 'memory', 'bounds', 'dll_sha256'):
+        if current[key] != baseline[key]:
+            raise ValueError('Version comparison scope differs: ' + key)
+    for field in ('uuid', 'name'):
+        if (not current['device'].get(field) or
+                current['device'][field] != baseline['device'].get(field)):
+            raise ValueError('Version comparison GPU identity differs: ' + field)
+    key = lambda row: (row['variant'], row['exponent'])
+    before = {key(row): row for row in baseline['inputs']}
+    after = {key(row): row for row in current['inputs']}
+    if before.keys() != after.keys():
+        raise ValueError('Version comparison input matrix differs')
+    for identity, case in after.items():
+        for field in ('N_hex', 'B1', 'sigma', 'save_sha256', 'Q_sha256'):
+            if case[field] != before[identity][field]:
+                raise ValueError(f'Frozen input differs: {identity} {field}')
+    group_key = lambda row: (row['variant'], row['exponent'], row['B2'])
+    old_rows = {group_key(row): row for row in baseline['summary']}
+    new_rows = {group_key(row): row for row in current['summary']}
+    if old_rows.keys() != new_rows.keys():
+        raise ValueError('Version comparison timing matrix differs')
+    comparisons = []
+    for identity, new in sorted(new_rows.items()):
+        old = old_rows[identity]
+        if old['samples'] != new['samples']:
+            raise ValueError('Version comparison sample count differs')
+        row = {field: new[field] for field in ('variant', 'exponent', 'bits', 'B1', 'sigma', 'B2', 'samples')}
+        row.update(previous_seconds=old['mean_seconds'], current_seconds=new['mean_seconds'],
+                   previous_std_seconds=old['std_seconds'], current_std_seconds=new['std_seconds'],
+                   speedup=old['mean_seconds'] / new['mean_seconds'],
+                   time_change_percent=100 * (new['mean_seconds'] / old['mean_seconds'] - 1),
+                   shape_changed=any(old[field] != new[field] for field in ('D', 'P', 'G')),
+                   factors_equal=sorted(filter(None, old['factors'].split(';'))) ==
+                                 sorted(filter(None, new['factors'].split(';'))))
+        for field in ('D', 'P', 'G', 'fold_ntt_length', 'tree_top_ntt_length', 'fold_enabled',
+                      'ntt_full_peak_mib', 'fold_peak_mib', 'observed_gpu_used_max', 'arena_overflow',
+                      'sm_clock_mean', 'power_mean', 'temperature_max'):
+            row['previous_' + field] = old[field]
+            row['current_' + field] = new[field]
+        for field in ('d_model_calibrated', 'd_model_reason'):
+            row['previous_' + field] = old.get(field)
+            row['current_' + field] = new.get(field)
+        for field in new:
+            if field.endswith('_seconds') and field in old and isinstance(new[field], (int, float)):
+                row[field + '_delta'] = new[field] - old[field]
+        comparisons.append(row)
+    report = dict(schema=1, previous_analysis=str(baseline_path.resolve()),
+                  previous_analysis_sha256=sha(baseline_path),
+                  previous_executable_sha256=baseline['executable_sha256'],
+                  current_executable_sha256=current['executable_sha256'],
+                  previous_device=baseline['device'], current_device=current['device'],
+                  exact_inputs_verified=True, equal_scope_verified=True,
+                  semantics='speedup=previous/current; time_change_percent=100*(current/previous-1); '
+                            'identical inputs and requested budgets, same GPU UUID (indices may differ), separate sessions; '
+                            'GPU clock/power/background load are not asserted equal; '
+                            'default implementation routes and auto D may differ; no clock/power normalization',
+                  rows=comparisons)
+    Path(str(output) + '_comparison.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+    dump_csv(str(output) + '_comparison.csv', comparisons)
+
+
 def fit_power(rows, min_bits, joint=False):
     import numpy as np
     selected = [r for r in rows if r['bits'] >= min_bits]
@@ -66,6 +131,7 @@ def main():
     p.add_argument('--study', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True, help='Filename prefix, e.g. data/benchmarks/stage2_n_20261008')
     p.add_argument('--allow-partial', action='store_true')
+    p.add_argument('--baseline-analysis', type=Path, help='Completed previous analysis with identical frozen inputs and scope')
     a = p.parse_args()
     study = a.study.resolve()
     data = json.loads((study / 'measurements.json').read_text(encoding='utf-8'))
@@ -125,6 +191,7 @@ def main():
                    fold_enabled=int(owner['enabled']), fold_fallback=owner['fallback'],
                    reduction=reduction.get('algorithm'), point_mersenne=int(point.get('enabled', 0)),
                    d_model_calibrated=model.get('calibrated'),
+                   d_model_reason=model.get('reason'),
                    s4_reduce_seconds=float(run['s4']['t_reduce']),
                    s4_coefficients=int(run['s4']['coeffs_reduced']),
                    poly_muls=int(run['s4']['poly_muls']), s4_launches=int(run['s4']['launches']),
@@ -170,6 +237,7 @@ def main():
         record['range_percent'] = 100 * (max(times) - min(times)) / record['mean_seconds']
         for key in ('D', 'P', 'giant_points', 'G', 'fold_ntt_length', 'tree_top_ntt_length', 'packing_bpw',
                     'reduction', 'point_mersenne', 'fold_enabled', 'fold_fallback', 'leaf_hash',
+                    'd_model_calibrated', 'd_model_reason',
                     's4_coefficients', 'poly_muls', 's4_launches', 'gmp_checked', 'factor_count', 'factors',
                     'device_gleaf_bad_groups', 'device_gleaf_good_segments', 'device_gleaf_patch_words',
                     'device_gleaf_bad_point_d2h_bytes', 'gfinv_nonunits', 'giant_base_nonunits', 'arena_overflow'):
@@ -238,6 +306,9 @@ def main():
                   input_manifest_sha256=sha(study / 'measurements.json'),
                   analysis_sha256=sha(__file__))
     Path(str(output) + '_analysis.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+    if a.baseline_analysis:
+        baseline = json.loads(a.baseline_analysis.read_text(encoding='utf-8'))
+        compare_analyses(report, baseline, a.baseline_analysis, output)
     print(json.dumps(dict(counts=report['counts'], warnings=warnings, fits={k: {a: b for a, b in v.items() if a != 'predictions'}
                         for k, v in fits.items() if k != 'per_B2_at_least_1000_bits'}), indent=2))
 

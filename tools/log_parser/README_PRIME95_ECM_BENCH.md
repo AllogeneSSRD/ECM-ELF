@@ -87,10 +87,10 @@ python tools/log_parser/compare_prime95_gpu.py `
   --cpu-analysis data/prime95_ecm_20261009/completed/analysis.json `
   --results D:/code/GIMPS/p95v3104b05.win64/results.json.txt `
   --gpu-analysis data/benchmarks/stage2_n_scaling_20261008_analysis.json `
-  --output data/prime95_ecm_20261009/comparison
+  --output data/experiments/prime95_ecm_comparison
 
 python tools/log_parser/plot_prime95_gpu.py `
-  --input data/prime95_ecm_20261009/comparison/comparison.json `
+  --input data/experiments/prime95_ecm_comparison/comparison.json `
   --output-prefix data/figures/prime95_gpu_stage2_20261009
 ```
 
@@ -98,6 +98,10 @@ python tools/log_parser/plot_prime95_gpu.py `
 速度比、阶段百分比的PNG/SVG。绘图需要NumPy/Matplotlib；可选
 `--canvas <绝对路径.canvas.tsx>` 生成自包含交互看板。
 比较器拒绝GPU未完成快照，输出目录必须位于各输入目录之外。
+
+复用已有 CPU 测量时，`--results` 指向原比较目录的 `results.snapshot.jsonl`，`--cpu-analysis` 使用同批冻结的 `analysis.json` 及旁边的 `screen.snapshot.log`。不要将持续变化的实时结果与旧 CPU 快照混配。对新 GPU 扫描使用新输出目录，原始 CPU/GPU 结果保持不变。
+
+比较器可用 `--gpu-power-note "..."` 记录本批频率/功率设置与遥测限制；绘图可用 `--gpu-label "CUDA GPU (1800 MHz)"` 标注当前条件。图表从比较元数据读取 GPU 测量日期和 exe 身份，不将新扫描标为旧版55W样本。旧/新 GPU 与 Prime95 的合并图见 [N 扫描工具](../bench/README_STAGE2_N_SCALING.md)。
 
 日志曲线GCD/因子终结之后的 `Resuming.` 停机消息不再把该完整曲线标为恢复执行。
 本轮详细口径及结果见 `docs/performance/STAGE2.md`。
