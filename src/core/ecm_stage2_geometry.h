@@ -100,6 +100,9 @@ template<class Visit> bool tree_multiply_groups(Word p, Visit visit) {
 struct TreeWorkspacePlan {
     Word groups=0, pairs=0, chunks=0, big_peak_bytes=0;
     Word digit_retained_bytes=0, keyed_big_retained_bytes=0, output_peak_bytes=0;
+    Word table_retained_bytes=0,base_retained_bytes=0,ntt_retained_bytes=0;
+    struct Cache {Word table=0,base=0;};
+    std::map<Word,Cache> caches;
 };
 // No-eviction payload contract for ONE product tree. Shared A/B[/Q] uses
 // max(N*slices), while shape-local digits/verdicts retain a key per (N,slices).
@@ -141,6 +144,27 @@ template<class Query> bool tree_workspace_plan(Word p,int bits,Query query,
     for(const auto &entry:bigs)
         if(!add(plan.keyed_big_retained_bytes,entry.second,plan.keyed_big_retained_bytes))return false;
     return true;
+}
+// Complete NTT retention for the supported single-tree/no-eviction contract.
+// Fuse payloads come from the allocator's descriptor (including device policy),
+// not from a second copy of its pass/radix formula. Other phases remain separate.
+template<class Query,class Describe> bool tree_cache_plan(Word p,int bits,Query query,
+        Describe describe,bool pool,TreeWorkspacePlan &plan) {
+    plan.caches.clear();plan.table_retained_bytes=plan.base_retained_bytes=0;
+    if(!tree_multiply_groups(p,[&](Word,Word mb,Word) {
+        Word n=0,out=0;
+        if(!query(mb,bits,&n,&out))return false;
+        if(plan.caches.count(n))return true;
+        typename TreeWorkspacePlan::Cache cache;
+        if(!describe(n,cache.table,cache.base) ||
+           !add(plan.table_retained_bytes,cache.table,plan.table_retained_bytes) ||
+           !add(plan.base_retained_bytes,cache.base,plan.base_retained_bytes))return false;
+        plan.caches.emplace(n,cache);return true;
+    }))return false;
+    Word total=pool?plan.big_peak_bytes:plan.keyed_big_retained_bytes;
+    if(!add(total,plan.digit_retained_bytes,total) || !add(total,plan.table_retained_bytes,total) ||
+       !add(total,plan.base_retained_bytes,total))return false;
+    plan.ntt_retained_bytes=total;return true;
 }
 struct Geometry {
     Word p=0, bits=0, words=0, fold_length=0, tree_length=0;

@@ -28,11 +28,11 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     identity, ref_sha, tool_sha = freeze(exe), sha(ref), sha(__file__)
     data = json.loads(ref.read_text(encoding='utf-8'))
-    if (not data['complete'] or data['mode'] != 'check' or data['comparison'] not in ('chunk','phase-output') or
+    if (not data['complete'] or data['mode'] != 'check' or data['comparison'] not in ('chunk','phase-output','owner-cache') or
         not data['oracle'] or not data['oracle']['unit'] or identity != data['identity']):
         raise ValueError('matching completed chunk/output-lifetime check with independent unit oracle required')
     row = next(r for r in data['runs'] if r['key'] ==
-               ('trimmed_output' if data['comparison']=='phase-output' else 'workspace_chunk'))
+               ({'phase-output':'trimmed_output','owner-cache':'trimmed_cache'}.get(data['comparison'],'workspace_chunk')))
     expected = {k: str(v) for k, v in data['oracle']['expected_leaf'].items()}
     save = Path(data['input']['save'])
     if row['leaf'] != expected or sha(save) != data['input']['save_sha256']:

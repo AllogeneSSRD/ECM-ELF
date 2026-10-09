@@ -151,6 +151,14 @@ def main():
                 for key,value in want.items():
                     if tree[key]!=value:
                         raise ValueError(f'{name}: tree.{key}={tree[key]} expected {value}')
+                cache = {v['N']:v for v in tree['cache_shapes']}
+                if set(cache)!={lengths[b] for _,b,_ in groups_by_d[d]}:
+                    raise ValueError('cache shapes differ from exact tree requests')
+                table = sum(v['table_bytes'] for v in cache.values())
+                base = sum(v['base_bytes'] for v in cache.values())
+                retained = (want['shared_big_peak_bytes'] if pool else want['keyed_big_retained_bytes'])+want['digit_retained_bytes']+table+base
+                if tree['table_retained_bytes']!=table or tree['base_retained_bytes']!=base or tree['ntt_retained_bytes']!=retained:
+                    raise ValueError('NTT retention differs from cache/physical payload ledger')
                 if sha(exe) != identity['binary_sha256'] or sha(save) != save_sha or sha(__file__) != tool_sha:
                     raise ValueError('build, input or collector changed')
                 rows.append(dict(name=name, command=command,
@@ -187,6 +195,8 @@ def main():
                         raise ValueError(f'actual F-tree {actual} differs from plan')
                 if int(record['live_big_peak_bytes'])!=tree['shared_big_peak_bytes'] or int(run['workspace']['legacy_mallocs']):
                     raise ValueError('runtime tree pool has fallback or different physical peak')
+                if int(record['ntt_payload_peak_bytes'])!=tree['ntt_retained_bytes']:
+                    raise ValueError('actual F-tree NTT retention differs from complete component plan')
                 verified.append(dict(name=run['name'],record=record))
             data['runtime'] = dict(path=str(a.runtime_check),sha256=sha(a.runtime_check),verified=verified)
         data['complete'] = True

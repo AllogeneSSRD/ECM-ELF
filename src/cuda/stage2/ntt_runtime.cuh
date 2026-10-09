@@ -1898,6 +1898,7 @@ struct NttArena : NttWorkspacePolicy {
     size_t workspace_bq_saved_peak=0;
     size_t peak_big_bytes=0, peak_small_bytes=0, peak_table_bytes=0, peak_owned_bytes=0;
     size_t peak_fuse_base_bytes=0, peak_full_bytes=0;
+    unsigned long long phase_fuse_evictions=0,phase_fuse_evicted_bytes=0;
     /* Deterministic allocation-failure fixture; never set by the production engine. */
     int workspace_fail_alloc=0;
     std::vector<SmallEntry> smalls;
@@ -1963,6 +1964,33 @@ struct NttArena : NttWorkspacePolicy {
         return false;
     }
 
+    struct Payload {
+        size_t big=0,digits=0,table=0,base=0,total=0;
+    };
+    Payload payload() const {
+        Payload p;p.big=workspace.words*8;p.digits=carry_scratch_bytes;
+        for(const auto &b:bigs)p.big+=b.words*8;
+        for(const auto &s:smalls)p.digits+=s.words*8;
+        for(const auto &f:fuses) {
+            p.table+=(size_t)fuse_table_words(f.fc)*8;
+            p.base+=fuse_base_words(f.fc)*8;
+        }
+        p.total=p.big+p.digits+p.table+p.base;return p;
+    }
+    // Only use at a completed phase boundary. No digits/verdicts, big scratch
+    // or owner pointers are touched. Drop the largest cold context first to
+    // minimise the number of shapes rebuilt later; preserve the next hot N.
+    size_t drop_cold_fuse(unsigned long long keep_n) {
+        size_t chosen=fuses.size(),largest=0;
+        for(size_t i=0;i<fuses.size();++i)if(fuses[i].n!=keep_n) {
+            const size_t live=(fuse_table_words(fuses[i].fc)+fuse_base_words(fuses[i].fc))*8;
+            if(live>largest){largest=live;chosen=i;}
+        }
+        if(chosen==fuses.size())return 0;
+        fuse_release(fuses[chosen].fc); // cudaFree waits for all default-stream table readers.
+        fuses.erase(fuses.begin()+(long)chosen);bytes-=largest;
+        ++phase_fuse_evictions;phase_fuse_evicted_bytes+=largest;return largest;
+    }
     void update_peaks()
     {
         size_t big=workspace.words*8, small=carry_scratch_bytes, table=0, base=0;
@@ -1983,8 +2011,11 @@ struct NttArena : NttWorkspacePolicy {
                     (int)workspace_reuse_bq,(int)workspace.q_alias_b,(unsigned long long)workspace.capacity,
                     workspace.words ? (workspace.q_alias_b ? 2 : 3) : 0,workspace_bq_calls,
                     (unsigned long long)workspace_bq_saved_peak);
-        stage2_log::print(stage2_log::debug, "ntt_arena_accounting: version=2 payload_bytes=%llu cap_bytes=%llu\n",
-                    (unsigned long long)bytes,(unsigned long long)cap_bytes);
+        const auto measured=payload();
+        stage2_log::print(stage2_log::debug, "ntt_arena_accounting: version=2 payload_bytes=%llu cap_bytes=%llu calculated_bytes=%llu mismatch=%d\n",
+                    (unsigned long long)bytes,(unsigned long long)cap_bytes,(unsigned long long)measured.total,(int)(bytes!=measured.total));
+        stage2_log::print(stage2_log::debug,"ntt_phase_cache_stats: evictions=%llu evicted_bytes=%llu\n",
+            phase_fuse_evictions,phase_fuse_evicted_bytes);
         stage2_log::print(stage2_log::debug, "ntt_carry_check_stats: requested=%d fused_calls=%llu skipped_calls=%llu refusals=%llu grows=%llu scratch_bytes=%llu scratch_peak_bytes=%llu\n",
                     (int)ntt_carry_check_requested(),carry_fused_calls,carry_skipped_calls,carry_refusals,carry_grows,
                     (unsigned long long)carry_scratch_bytes,(unsigned long long)carry_scratch_peak);
@@ -2331,6 +2362,25 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
     ++ar->fuse_builds;
     out = ar->fuses.back().fc;
     out.arena_borrowed = true;
+}
+
+// Recheck REAL free VRAM after every release. Logical payload freed and driver
+// free-byte increments need not be equal (allocation granularity/other users).
+static void ntt_trim_fuse_headroom(NttArena *arena,unsigned long long keep_n,
+    size_t required,const char *boundary,size_t &available)
+{
+    if(!arena || available>=required)return;
+    const double begin=now_s();const size_t before=available;
+    size_t released=0,contexts=0,total=0;
+    while(available<required) {
+        const size_t freed=arena->drop_cold_fuse(keep_n);
+        if(!freed)break;
+        released+=freed;++contexts;CK(cudaMemGetInfo(&available,&total));
+    }
+    stage2_log::print(stage2_log::debug,
+        "stage2_cache_trim: boundary=%s keep_n=%llu required_bytes=%llu before_bytes=%llu after_bytes=%llu released_bytes=%llu contexts=%llu seconds=%.6f fits=%d\n",
+        boundary,keep_n,(unsigned long long)required,(unsigned long long)before,(unsigned long long)available,
+        (unsigned long long)released,(unsigned long long)contexts,now_s()-begin,(int)(available>=required));
 }
 
 /* device arithmetic selftest kernel: out[i] = gl_mul(x[i], y[i]) */
@@ -4301,6 +4351,31 @@ static void ntt_workspace_check(int device)
         CK(cudaMemcpy(output.data(),ar.cur.dOut,output.size()*8,cudaMemcpyDeviceToHost));
         check(output==expected);words+=output.size();
         CK(cudaFree(di_a)); CK(cudaFree(di_b));
+    }
+    {
+        NttArena ar;ar.device=device;ar.workspace_pool=true;ar.workspace_reuse_bq=true;
+        auto *buf=ntt_arena_bufs(&ar,128,10,4);check(buf!=nullptr);
+        auto *verdict=buf->dRes;const unsigned long long marker=77;
+        CK(cudaMemcpy(verdict,&marker,8,cudaMemcpyHostToDevice));
+        NttShape sh;FuseCtx fc;unsigned long long keep=0;
+        for(unsigned long long p:{3ull,17ull,65ull}) {
+            check(ntt_shape_plan(p,129,device,&ar,fc,sh)==0);keep=sh.N;
+            check(ar.bytes==ar.payload().total);
+        }
+        const auto before=ar.bytes;size_t removed=0;
+        while(const auto freed=ar.drop_cold_fuse(keep)) {
+            removed+=freed;check(ar.bytes==ar.payload().total);
+            check(std::any_of(ar.fuses.begin(),ar.fuses.end(),[&](const auto &e){return e.n==keep;}));
+        }
+        check(removed>0 && before-ar.bytes==removed && ar.fuses.size()==1 && ar.drop_cold_fuse(keep)==0);
+        unsigned long long value=0;CK(cudaMemcpy(&value,verdict,8,cudaMemcpyDeviceToHost));check(value==marker);
+        const size_t p=17,w=3;std::vector<unsigned long long> a(p*w,0),b(a.size()),out,expected(2*p-1,0);
+        for(size_t i=0;i<p;++i){a[i*w]=i+1;b[i*w]=2*i+1;}
+        for(size_t i=0;i<p;++i)for(size_t j=0;j<p;++j)expected[i+j]+=a[i*w]*b[j*w];
+        NttMulStats stats;
+        check(ntt_poly_mul_batch_host(p,129,device,1,a.data(),b.data(),&out,&stats,&ar,nullptr)==0 && out==expected);
+        check(ar.fuses.size()==2 && ar.bytes==ar.payload().total);
+        ar.release();check(ar.payload().total==0 && ar.bytes==0);
     }
     stage2_log::print(stage2_log::debug, "ntt_workspace_check: checks=%llu words=%llu bad=%llu "
                 "(GMP, two/three buffers, capacity reuse, dRes/deferred isolation, failure rollback, aliases/exports/fallback)\n",checks,words,bad);

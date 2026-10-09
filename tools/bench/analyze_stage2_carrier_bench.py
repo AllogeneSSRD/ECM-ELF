@@ -34,12 +34,14 @@ def main():
     keys = {'carrier': ('generic', 'carrier'), 'workspace-bq': ('three_buffer', 'two_buffer'),
             'plan': ('baseline_d', 'candidate_d'),
             'chunk': ('legacy_chunk','workspace_chunk'),
-            'phase-output': ('retained_output','trimmed_output')}[comparison]
+            'phase-output': ('retained_output','trimmed_output'),
+            'owner-cache': ('kept_cache','trimmed_cache')}[comparison]
     arm_labels = {'carrier': ['Generic target N', 'Mersenne carrier M'],
                   'workspace-bq': ['Three buffers A/B/Q', 'Two buffers A/(B=Q)'],
                   'plan': [f'D={data["input"]["D"]}', f'D={data["input"].get("candidate_D", 0)}'],
                   'chunk': ['Legacy three-buffer estimate','Physical workspace estimate'],
-                  'phase-output': ['Retained S4 output','Reclaimed S4 output']}[comparison]
+                  'phase-output': ['Retained S4 output','Reclaimed S4 output'],
+                  'owner-cache': ['Keep cached shapes','Reclaim cold shapes for owner']}[comparison]
     sequence = [keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1)]
     if [r['key'] for r in timed] != sequence:
         raise ValueError('formal ABBA+BAAB sequence changed')
@@ -60,8 +62,13 @@ def main():
         for metric in ('workspace_big_peak_mib', 'workspace_full_peak_mib', 'owner_peak_mib'):
             arm[metric] = {k: v/(1 << 20) for k, v in arm[metric].items()}
         arm['misc_seconds'] = arm['wall']['total']['mean']-arm['wall']['init']['mean']-sum(v['mean'] for v in arm['phases'].values())
-        if comparison in ('workspace-bq', 'plan','chunk','phase-output'):
+        if comparison in ('workspace-bq', 'plan','chunk','phase-output','owner-cache'):
             arm['layout'] = rows[0]['layout']
+        if comparison == 'owner-cache':
+            arm['cache_trim'] = [r['cache_trim'] for r in rows]
+            arm['cache_stats'] = [r['cache_stats'] for r in rows]
+            arm['phase_memory'] = [r['phase_memory'] for r in rows]
+            arm['coverage'] = rows[0]['coverage']
         if comparison == 'phase-output':
             arm['phase_trim'] = rows[0]['phase_trim']
             arm['coverage'] = rows[0]['coverage']
@@ -147,7 +154,8 @@ def main():
                           'workspace-bq': 'Workspace layout (same arithmetic backend)',
                           'plan': 'Fixed D (same arithmetic, two-buffer pool and budgets)',
                           'chunk': 'Chunk policy (same D, two-buffer pool and budgets)',
-                          'phase-output': 'Phase output lifetime (same D and budgets)'}[comparison])
+                          'phase-output': 'Phase output lifetime (same D and budgets)',
+                          'owner-cache': 'Cold cache admission (same D and budgets)'}[comparison])
             ax.spines[['top', 'right']].set_visible(False)
         axes[0].set_ylabel('Mean complete Stage2 wall time (s)')
         axes[0].set_ylim(0, max(r['wall']['total']['mean'] for r in result['arms'].values())*1.17)
@@ -172,14 +180,14 @@ def main():
         for ext in ('png', 'svg'):
             fig.savefig(a.figure_prefix.with_suffix('.'+ext), dpi=170)
         plt.close(fig)
-        if comparison in ('workspace-bq', 'plan','chunk','phase-output'):
+        if comparison in ('workspace-bq', 'plan','chunk','phase-output','owner-cache'):
             fig, ax = plt.subplots(figsize=(8.8, 5.3), layout='constrained')
             metrics = [('workspace_big_peak_mib', 'Big buffers', '#366c93'),
                        ('workspace_full_peak_mib', 'Whole NTT workspace', '#7b9b8b'),
                        ('sampled_device_memory_peak_mib', 'Sampled GPU usage (2 s)', '#bb8250')]
             if comparison == 'chunk':
                 metrics.append(('owned_subset_observed_peak_mib','Observed NTT + S4 subset','#8a789b'))
-            if comparison == 'phase-output':
+            if comparison in ('phase-output','owner-cache'):
                 metrics.append(('owner_peak_mib','Resident fold owner','#8a789b'))
             for mi, (metric, label, color) in enumerate(metrics):
                 for ai, (_, arm) in enumerate(result['arms'].items()):

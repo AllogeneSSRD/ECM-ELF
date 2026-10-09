@@ -1272,6 +1272,7 @@ struct S4Ctx {
     unsigned long long chunk_plan_over_budget=0;
     ecm_stage2::TreeWorkspacePlan phase_requests[BC_NCAT];
     unsigned long long phase_big_live_peak[BC_NCAT]{}, phase_subset_peak[BC_NCAT]{};
+    unsigned long long phase_ntt_peak[BC_NCAT]{};
     long long sample_limit = 4096;      /* a full GMP check below this many coefficients */
     bool selftested = false;
     /* OBJECTIVE 4 (section 33): the DEVICE-side operand packing.  Before this, every batched
@@ -3763,8 +3764,6 @@ static void poly_mul_batch_modN(PolyLayer &L,
         // Includes all live arena payload/base and retained S4 raw/pack/output;
         // excludes reduction constants/oracle, points, trees and resident owners.
         unsigned long long owned=L.arena ? L.arena->bytes : 0;
-        if(L.arena) for(const auto &entry:L.arena->fuses)
-            owned+=8ull*fuse_base_words(entry.fc);
         owned+=8ull*(C.d_out_cap+C.d_rawA_cap+C.d_rawB_cap+2*C.d_pack_cap);
         C.chunk_plan_subset_peak=std::max(C.chunk_plan_subset_peak,owned);
         if(memory_category>=0 && memory_category<BC_NCAT) {
@@ -3772,6 +3771,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
             if(L.arena)for(const auto &entry:L.arena->bigs)big+=8ull*entry.words;
             C.phase_big_live_peak[memory_category]=std::max(C.phase_big_live_peak[memory_category],big);
             C.phase_subset_peak[memory_category]=std::max(C.phase_subset_peak[memory_category],owned);
+            C.phase_ntt_peak[memory_category]=std::max(C.phase_ntt_peak[memory_category],(unsigned long long)(L.arena?L.arena->bytes:0));
         }
         /* Readbacks of ALL non-deferred chunks, not only the final overwritten `st`.
            Interior deferred chunks contribute zero here and are charged by finish_carry. */
@@ -5307,6 +5307,8 @@ struct FoldDeviceState {
         const size_t target=(size_t)buffers*qN*8,current=L.arena->workspace.words*8;
         const size_t growth=target>current?target-current:0;
         const size_t future_reserve=1ull<<30;
+        if(fold_device_flag("NTT_OWNER_TRIM_FUSE"))
+            ntt_trim_fuse_headroom(L.arena,qN,bytes+growth+future_reserve,"inverse_to_fold",available);
         const bool fits=bytes<=available && available-bytes>=growth+future_reserve;
         stage2_log::print(stage2_log::debug,
             "fold_device_headroom: available_bytes=%llu owner_bytes=%llu physical_buffers=%u target_big_bytes=%llu current_big_bytes=%llu growth_bytes=%llu future_reserve_bytes=%llu fits=%d\n",
@@ -8611,7 +8613,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if(!real_run_geometry(P_baby,(int)L.S,p.geometry))return 3;
         const bool host_pack=fuse_env_ull("NTT_S4_HOSTPACK",0)!=0;
         p.tree_payload_model_supported=s4_on && !host_pack && g_s4_pack_direct &&
-            !g_s4_final_readback && g_s4_output_window && g_s4_chunk_output;
+            !g_s4_final_readback && g_s4_output_window && g_s4_chunk_output && !ntt_carry_check_requested();
         const auto batch_override=fuse_env_ull("NTT_S4_BATCH_MB",0);
         p.tree_batch_bytes=(batch_override?batch_override:(!host_pack && g_s4_pack_direct?g_s4_batch_budget_mb:32))<<20;
         p.tree_physical_chunks=fuse_env_ull("NTT_S4_WORKSPACE_BUDGET",0)!=0;
@@ -8621,6 +8623,15 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
             },p.tree_batch_bytes,(unsigned)p.geometry.workspace_buffers,p.tree_physical_chunks,
             p.tree_chunk_max,p.tree_workspace))return 3;
+        if(!ecm_stage2::tree_cache_plan(P_baby,(int)L.S,[](unsigned long long m,int s,
+            unsigned long long *n,unsigned long long *out) {
+                return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
+            },[](unsigned long long n,unsigned long long &table,unsigned long long &base) {
+                int k=0;for(auto size=n;size>1;size>>=1)++k;
+                FuseCtx description;fuse_describe(description,n,k,0,0);
+                table=8ull*fuse_planned_table_words(description);
+                base=8ull*fuse_planned_base_words(description);return true;
+            },NttWorkspacePolicy{}.workspace_pool,p.tree_workspace))return 3;
         p.d=D; p.b1=B1; p.b2=B2; p.giant_points=B2/D+2;
         p.batches=p.giant_points/P_baby+(p.giant_points%P_baby!=0);
         p.free_bytes=freeb; p.arena_cap_bytes=cap; p.owner_budget_bytes=fold_budget;
@@ -9405,9 +9416,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 const auto &p=s4.phase_requests[category];
                 stage2_log::print(stage2_log::debug,
                     "s4_phase_memory: phase=%s groups=%llu pairs=%llu chunks=%llu request_big_peak_bytes=%llu "
-                    "request_output_peak_bytes=%llu live_big_peak_bytes=%llu owned_subset_peak_bytes=%llu process_peak_complete=0\n",
+                    "request_output_peak_bytes=%llu live_big_peak_bytes=%llu owned_subset_peak_bytes=%llu ntt_payload_peak_bytes=%llu process_peak_complete=0 subset_accounting_version=2\n",
                     names[category],p.groups,p.pairs,p.chunks,p.big_peak_bytes,p.output_peak_bytes,
-                    s4.phase_big_live_peak[category],s4.phase_subset_peak[category]);
+                    s4.phase_big_live_peak[category],s4.phase_subset_peak[category],s4.phase_ntt_peak[category]);
             }
             stage2_log::print(stage2_log::debug,
                 "s4_chunk_plan: workspace_budget=%d calls=%llu changed_calls=%llu chunks=%llu legacy_chunks=%llu "
@@ -9501,7 +9512,16 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
         <<",\"shared_big_peak_bytes\":"<<p.tree_workspace.big_peak_bytes
         <<",\"digit_retained_bytes\":"<<p.tree_workspace.digit_retained_bytes
         <<",\"keyed_big_retained_bytes\":"<<p.tree_workspace.keyed_big_retained_bytes
-        <<",\"output_peak_bytes\":"<<p.tree_workspace.output_peak_bytes<<"}"
+        <<",\"output_peak_bytes\":"<<p.tree_workspace.output_peak_bytes
+        <<",\"table_retained_bytes\":"<<p.tree_workspace.table_retained_bytes
+        <<",\"base_retained_bytes\":"<<p.tree_workspace.base_retained_bytes
+        <<",\"ntt_retained_bytes\":"<<p.tree_workspace.ntt_retained_bytes<<",\"cache_shapes\":[";
+    bool first_cache=true;
+    for(const auto &entry:p.tree_workspace.caches) {
+        if(!first_cache)json<<',';first_cache=false;
+        json<<"{\"N\":"<<entry.first<<",\"table_bytes\":"<<entry.second.table<<",\"base_bytes\":"<<entry.second.base<<'}';
+    }
+    json<<"]}"
         <<",\"model\":"<<stage2_tune::quote(p.model)<<",\"calibrated\":"<<(p.calibrated ? "true" : "false")
         <<",\"stage2_seconds_estimate\":"<<p.estimated_seconds<<"}";
     report(json.str().c_str(),context);return 0;

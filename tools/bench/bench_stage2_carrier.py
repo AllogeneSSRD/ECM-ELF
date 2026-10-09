@@ -21,7 +21,7 @@ def main():
     p.add_argument('--exe', type=Path, required=True)
     p.add_argument('--save', type=Path, required=True)
     p.add_argument('--carrier-exponent', type=int, default=0)
-    p.add_argument('--comparison', choices=('carrier', 'workspace-bq', 'plan', 'chunk','phase-output'), default='carrier')
+    p.add_argument('--comparison', choices=('carrier', 'workspace-bq', 'plan', 'chunk','phase-output','owner-cache'), default='carrier')
     p.add_argument('--b2', type=int, required=True)
     p.add_argument('--d', type=int, required=True)
     p.add_argument('--candidate-d', type=int, help='Second fixed D for a two-buffer plan timing comparison; budgets and arithmetic stay fixed')
@@ -98,7 +98,8 @@ def main():
     keys = {'carrier': ('generic', 'carrier'), 'workspace-bq': ('three_buffer', 'two_buffer'),
             'plan': ('baseline_d', 'candidate_d'),
             'chunk': ('legacy_chunk', 'workspace_chunk'),
-            'phase-output': ('retained_output','trimmed_output')}[a.comparison]
+            'phase-output': ('retained_output','trimmed_output'),
+            'owner-cache': ('kept_cache','trimmed_cache')}[a.comparison]
     sequence = tuple(keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1))
     matrix = ([('check', k) for k in ((a.single_arm,) if a.single_arm else keys)] if a.mode == 'check'
               else [('warmup', k) for k in keys] +
@@ -159,10 +160,13 @@ def main():
             use = env.copy()
             if a.comparison == 'workspace-bq':
                 use['NTT_WORKSPACE_REUSE_BQ'] = '1' if key == 'two_buffer' else '0'
-            elif a.comparison in ('plan','chunk','phase-output'):
+            elif a.comparison in ('plan','chunk','phase-output','owner-cache'):
                 use['NTT_WORKSPACE_REUSE_BQ'] = '1'
             if a.comparison == 'phase-output':
                 use['NTT_PHASE_TRIM_OUTPUT'] = '1' if key == 'trimmed_output' else '0'
+            if a.comparison == 'owner-cache':
+                use['NTT_PHASE_TRIM_OUTPUT'] = '1'
+                use['NTT_OWNER_TRIM_FUSE'] = '1' if key == 'trimmed_cache' else '0'
             if a.comparison == 'chunk':
                 use['NTT_S4_WORKSPACE_BUDGET'] = '1' if key == 'workspace_chunk' else '0'
             exponent = a.carrier_exponent if a.comparison != 'carrier' or key == 'carrier' else 0
@@ -252,12 +256,23 @@ def main():
                          leaf=fields(text, 'target_descent_values') if a.mode == 'check' else None,
                          log=str(log), log_sha256=sha(log), debug_log=str(debug),
                          debug_sha256=sha(debug), result_sha256=sha(result))
-            if a.comparison in ('workspace-bq', 'plan', 'chunk','phase-output'):
+            if a.comparison in ('workspace-bq', 'plan', 'chunk','phase-output','owner-cache'):
                 entry['layout'] = fields(text, 'ntt_workspace_layout')
                 if entry['layout']['reuse_bq_requested'] != use['NTT_WORKSPACE_REUSE_BQ']:
                     raise ValueError('workspace policy differs from requested arm')
                 if (int(entry['layout']['alias_calls']) > 0) != (key != 'three_buffer'):
                     raise ValueError('workspace alias execution differs from requested arm')
+            if a.comparison == 'owner-cache':
+                entry['cache_trim'] = [fields(line,'stage2_cache_trim') for line in text.splitlines()
+                    if line.startswith('stage2_cache_trim:')]
+                entry['cache_stats'] = fields(text,'ntt_phase_cache_stats')
+                entry['arena_accounting'] = fields(text,'ntt_arena_accounting')
+                entry['phase_memory'] = [fields(line,'s4_phase_memory') for line in text.splitlines()
+                    if line.startswith('s4_phase_memory:')]
+                if entry['arena_accounting']['mismatch']!='0' or any(v['subset_accounting_version']!='2' for v in entry['phase_memory']):
+                    raise ValueError('actual arena/subset accounting differs from validated contract')
+                if key=='kept_cache' and int(entry['cache_stats']['evictions']):
+                    raise ValueError('control unexpectedly evicted phase caches')
             if a.comparison == 'phase-output':
                 entry['phase_trim'] = [fields(line,'stage2_phase_trim') for line in text.splitlines()
                     if line.startswith('stage2_phase_trim:')]
@@ -295,7 +310,7 @@ def main():
             for field in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):
                 if len({r['coverage'][field] for r in data['runs']}) != 1:
                     raise ValueError('arithmetic coverage changed between layouts: ' + field)
-        if a.comparison in ('plan','chunk','phase-output'):
+        if a.comparison in ('plan','chunk','phase-output','owner-cache'):
             for key in keys:
                 rows = [r for r in data['runs'] if r['key'] == key]
                 for field in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):

@@ -248,7 +248,8 @@ chunk都计入。实际调用输出每阶段一行`s4_phase_memory`（debug级�
 - `output_peak_bytes`：按实际短operand结果长度和chunk计算的S4输出峰。
 - `supported`要求S4/device pack、output window/chunk output有效；host pack、最终
   readback等控制路径不在此模型scope。`pool`明确指出是否启用共享池。
-- 不包含表/fuse base、其它阶段保留缓存、raw/坐标/owner或失败回退；
+- `table_retained_bytes`、`base_retained_bytes`按NTT长度去重；`ntt_retained_bytes`
+  包含单树完整NTT保留容量（详见下节），不包含其它阶段遗留缓存、raw/坐标/owner或失败回退；
   `process_peak_complete=false`，不能把这些字段相加作为全进程预算或驻留承诺。
 
 `arena_estimate_bytes`仍是用于旧准入的保守求和，现明确标为
@@ -264,3 +265,35 @@ python tools/test/test_stage2_workspace_plan.py --exe <ecm_cuda_stage2.exe> --sa
 tree，并通过native二次幂anchor查询每种NTT长度。第二条另外比较真实F树的group、
 pair、chunk、请求大池/输出峰和物理pool峰；不接受构建/输入身份不匹配或回退。
 `--workspace-fixture`新增dense tree整数门禁，覆盖131072附近及溢出。
+
+## 驻留准入前回收冷 NTT 缓存
+
+`NTT_OWNER_TRIM_FUSE=1`（默认0）在fold/frontier的1 GiB headroom检查失败时，
+回收其它NTT长度的完整fuse上下文（表+base），保留检查的目标N。每次先选容量
+最大的冷上下文，同步释放后重新查询真实free；达到申请+growth+原余量即停止。
+之后请求相同shape时按原分配器重建一次。它不删除digits/verdict、大池或owner，
+不降低余量；没有足够冷缓存时仍正常回退。日志`stage2_cache_trim`记录边界、
+前后free、实际释放、context数、耗时；`ntt_phase_cache_stats`记录累计回收。
+
+```powershell
+python tools/bench/bench_stage2_carrier.py --comparison owner-cache --exe <ecm_cuda_stage2.exe> --save <stage1.save> --carrier-exponent 8011 --b2 2600000000000 --d 1531530 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --mode check --projection-only --output data/owner_cache_check
+python tools/bench/bench_stage2_carrier.py --comparison owner-cache --exe <ecm_cuda_stage2.exe> --save <stage1.save> --carrier-exponent 8011 --b2 2600000000000 --d 1531530 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --mode timing --telemetry --output data/owner_cache_timing
+```
+
+两臂均为BQ1、output trim1及相同raw/分块/预算；只改变冷缓存策略0/1，key为
+`kept_cache/trimmed_cache`。正式ABBA+BAAB每臂n=4，保持必要算术检查。M37独立
+参考同时用于分配失败、pool/三缓冲/arena拒绝与carry污染门禁。原workspace
+fixture另验证冷缓存释放、保留目标、完整payload/dRes隔离和原shape重建。
+Auto B2拒绝该未标定策略，未加入INI/发布默认。
+
+单树计划`tree_workspace`现在包含`cache_shapes`、`table_retained_bytes`、
+`base_retained_bytes`、`ntt_retained_bytes`，cache描述直接来自分配器当前device
+策略。无eviction且没有其它阶段遗留/额外carry scratch时，这是单树完整NTT
+保留容量；仍不是进程峰或全生命周期MemoryPlan。原生门禁另外和真实F树
+`ntt_payload_peak_bytes`对照。
+
+**统计更正**：此前NTT+S4子集观测把已包含在arena `bytes`中的fuse base又加一次。
+修复后`s4_phase_memory`新增`subset_accounting_version=2`；
+`ntt_arena_accounting`输出独立组件重算的`calculated_bytes/mismatch`。旧版
+`owned_subset_*`量偏大，不与新版直接作显存收益对比；NTT自身`full_peak_bytes`、
+计时、驻留及数学结果均不受此观测错误影响。

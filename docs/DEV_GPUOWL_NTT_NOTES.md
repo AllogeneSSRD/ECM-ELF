@@ -4860,3 +4860,26 @@ D153真实F树20groups/138239pairs/248chunks、4096 MiB大池与计划精确一�
 MemoryPlan与新D/Auto B2成本继续推进，未改算术内核、驻留余量或发布默认。
 代码行号、公式、作用域、原始证据/构建身份及复现统一维护
 [同方向报告§17](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。
+
+## 128. 驻留前回收冷NTT上下文：固定高D完整时间减少10.96%（2026-10-09）
+
+接续§127/f3c03df，单树计划加入由真实分配器描述的table/base缓存容量；48组
+原生plan及大小F树实际核对通过。另修复旧NTT+S4子集重复加base的统计错误，
+新字段subset_accounting_version=2；旧子集数据不得用于精确显存节省对照，
+NTT full峰/时间/算术结果不受影响。
+
+新增默认关闭NTT_OWNER_TRIM_FUSE：仅在fold/frontier边界实际free不足时，回收
+目标N以外最大的完整fuse上下文，逐次重查free，维持原1 GiB余量。后续shape
+首次使用重建。7995-bit目标/M8011、B1=20/B2=2.6e12、D1531530，固定同二进制
+与预算/BQ/raw/output释放，原分块；ABBA+BAAB每臂n=4，完整104.220889→92.798225 s
+（−10.96005%，两组−10.74977/−11.16935%）。fold省4.722 s、descent省3.964 s，
+归约事件仍4.93 s。回收3个上下文72.397 MiB，使fold/root/frontier全部驻留。
+
+NTT全峰仍4613.356 MiB；候选owner930.241 MiB，2秒采样设备峰6278→7210 MiB，
+这是缓存/驻留/传输取舍，不是全程显存降低。算术工作和强制覆盖相同；独立
+小CPU参考、非单位/已知因子、16384-bit承载/generic8193、完整138240目标叶子
+以及6项回退/carry门禁通过；workspace fixture144、dense树697、chunk580均0错误。
+
+本D未确立全局最优，production B1与新Auto B2成本仍待校准；发布默认未改。
+下一步完整生命周期MemoryPlan与D成本联合规划，同方向资料继续更新
+[报告§18](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。

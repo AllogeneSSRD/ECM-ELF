@@ -33,6 +33,8 @@ struct ScaledFrontierDevice {
         const size_t target=8ull*buffers*qn,current=8ull*owner.layer->arena->workspace.words;
         const size_t growth=target>current?target-current:0;
         const size_t future_reserve=1ull<<30;
+        if(gscale_flag("NTT_OWNER_TRIM_FUSE"))
+            ntt_trim_fuse_headroom(owner.layer->arena,qn,bytes+growth+future_reserve,"fold_to_descent",available);
         const bool fits=bytes<=available && available-bytes>=growth+future_reserve;
         stage2_log::print(stage2_log::debug,
             "frontier_device_headroom: available_bytes=%llu metadata_bytes=%llu physical_buffers=%u target_big_bytes=%llu current_big_bytes=%llu growth_bytes=%llu future_reserve_bytes=%llu fits=%d\n",
