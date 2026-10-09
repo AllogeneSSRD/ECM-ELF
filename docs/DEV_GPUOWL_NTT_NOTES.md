@@ -5067,3 +5067,23 @@ production v3为45编译源闭包，compile69.0/build85.4 s，binary SHA
 [报告第24节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#24-按块数分配乘积缓冲容量与生命周期优化)。
 继续接S4/raw/reducer/metadata及NTT、fold/frontier的同时存活状态，验证cold trim
 与真实free/reserve后再统一D/Auto B2；GPU1保持用户默认设置，不调整功耗/频率。
+
+## 135. S4分配事件模型与CPU生命周期门禁（2026-10-09）
+
+接续联合MemoryPlan。新增`ecm_stage2_s4_memory.h`：raw A/B独立保留容量、
+output/legacy pack、模数/全三项shape key常数、96窗口自检临时缓冲、canonical
+计数器、G树metadata短租约。每次申请/释放输出完整live事件，按真实先释放再增长
+顺序取S4组件峰；不把独立模块峰相加。尚未接入production plan/D/Auto B2，
+未改变GPU算术或第134节被计时的编译源闭包，不宣称性能收益。
+
+新CPU门禁提取生产allocator/lookup/selftest/metadata语句，以opaque CUDA句柄
+逐事件核对。最终cpu_v7：8场景、192树租约、2136独立事件，299592累计断言
+0 bad/0 GPU；覆盖w1/7/126/256、两种raw策略、奇数/单叶/63–65边界、保留增长、
+显式释放、packing key及析构。错误128窗口模型副本被峰值核对拒绝，即使最终
+live相同。日志、正常/错误binary与源码SHA留在忽略目录，失败初版未覆盖。
+
+M8011真实最大shape的892 digits/w126，自检瞬时输入+输出781824 B，常数1008 B；
+P126720树metadata1.5 MiB。只有按真实请求顺序与旧NTT缓存/owner同时计费才可
+用于准入。当前模型不含物理失败、pinned/context/events、NTT/giant/fold/frontier。
+下一步扩展program的输入路由/树边界，再组合生命周期并核对真实owned台账。
+公式、生产文件/line及复现见[报告第25节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#25-s4分配事件模型保留容量自检瞬时量与树租约)。

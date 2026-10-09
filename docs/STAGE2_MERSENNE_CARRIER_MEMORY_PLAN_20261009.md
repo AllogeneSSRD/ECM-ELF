@@ -2983,3 +2983,108 @@ matrix SHA256 `c84b06a4a5ffec25b36766ab344bfdd0da95a9bb78bb4eaf6be14a448442d4f6`
 分配释放顺序接入第21–23节program；同步实际cold trim和free/reserve准入。
 然后统一普通D与Auto B2候选，并在新的默认55 W基线上校准Q、驻留、表重建和
 NTT阶跃的完整流程成本。本轮块产品缓冲优化不会完成这些准入与成本工作。
+
+## 25. S4分配事件模型：保留容量、自检瞬时量与树租约
+
+接续第21–24节联合MemoryPlan工作。本节实现可被联合模拟器调用的S4状态组件，
+尚未接入`--plan-only`、D选择或Auto B2，**不是完整准入模型或新的GPU加速**。
+生产算术/分配路径及第24节已计时的45份编译源闭包没有变化。
+
+### 25.1 状态与事件接口
+
+[ecm_stage2_s4_memory.h](D:/code/MPA-OpenCl/src/core/ecm_stage2_s4_memory.h:23)
+维护raw A/B、归约输出、legacy pack A/B、模数、逐形状常数、canonical计数器、
+自检输入/输出、G树metadata。payload字段以bytes计，reserve入参为64-bit words。
+每次成功申请/释放后调用`observe(S4MemoryEvent)`，携带本次字节数和完整live状态；
+`peak`只取同一时刻S4 live总量的最大值。没有将上述字段各自峰值相加。
+
+- [raw_reserve](D:/code/MPA-OpenCl/src/core/ecm_stage2_s4_memory.h:61)：A/B分别保留历史
+  容量；依次处理A、B，增长时先释放对应旧数组再申请新数组。较小请求不缩容。
+  依据[生产S4Ctx](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1294)。
+- [output_reserve](D:/code/MPA-OpenCl/src/core/ecm_stage2_s4_memory.h:68)：至少1 word，
+  独立保留容量；依据[生产output增长](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:3568)。
+  reserve本身不决定chunk/whole-batch或输出window，调用者须提供实际策略后的words。
+- [pack_reserve](D:/code/MPA-OpenCl/src/core/ecm_stage2_s4_memory.h:72)：仅供legacy临时
+  pack路径；增长时先释放两份旧数组，再申请两份新数组。
+  依据[生产pack增长](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:3724)。
+- [shape](D:/code/MPA-OpenCl/src/core/ecm_stage2_s4_memory.h:79)：key为
+  `(slot_bits,slot_words,bpw)`全三项，不能仅按bits合并。新key先申请`8*w`常数，
+  再申请96窗口自检输入、输出，最后依次释放自检输入、输出。
+  依据[find](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1900)、
+  [常数申请](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:2584)、
+  [96窗口自检](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:2792)、
+  [DD/DOUT申请](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:2892)。
+  实际乘法在[形状准备](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:3469)之后才增长
+  S4输出并调用NTT；旧NTT缓存此时可能仍存活，不能将自检移动到“空工作区”计费。
+- `canonical_counter()`首次实际hook申请8 B；自检的该kernel参数为null，不申请计数器。
+  依据[hook](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:2627)。
+- [tree_begin/tree_end](D:/code/MPA-OpenCl/src/core/ecm_stage2_s4_memory.h:105)：非空G树
+  借用raw A/B，但另申请dense padded metadata；结束时仅释放metadata。包含单叶树
+  无metadata的租约，拒绝嵌套租约。依据[raw租用](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:4442)、
+  [Metadata RAII](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:4494)。
+- [close](D:/code/MPA-OpenCl/src/core/ecm_stage2_s4_memory.h:119)：按逐shape常数→模数→
+  canonical→output→raw A/B→pack A/B释放。
+  [声明顺序](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8941)决定red先于s4析构；
+  对应[reducer析构](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1887)及
+  [ctx析构](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1330)。
+
+### 25.2 字节公式与作用域
+
+记`w=ceil(S_bits/64)`；raw容量为`cA,cB` words，输出容量为`cO` words，pack两份
+容量为`cPA,cPB` words，已创建shape数为`k`。各事件边界的S4同时存活字节数为：
+
+```text
+S4_live = 8*(cA+cB+cO+cPA+cPB)
+        + modulus_bytes + 8*w*k + canonical_bytes
+        + selftest_digits_bytes + selftest_output_bytes + tree_metadata_bytes
+modulus_bytes = 8*w (init至close之间)
+canonical_bytes = 0 | 8
+selftest_digits_bytes = 96*slot_words*8 (短租约)
+selftest_output_bytes = 96*w*8 (短租约)
+tree_metadata_bytes = 24*(next_pow2(n)/2), n>1; 0, n=1
+tree_raw_A_request = 2*n*w words
+tree_raw_B_request = (n+ceil(n/2))*w words, compact && n>1
+                   0, compact && n=1
+                   2*n*w words, legacy
+S4_peak = max_over_events(S4_live)
+```
+
+树raw两项是最低请求量，实际容量取各自历史max，直到显式release。metadata只在
+树租约内与其相加。按第24节M8011的最大shape实际日志，slot_bits=16039、bpw18、
+slot_words892、w126：自检两份临时缓冲合计781824 B（0.745605 MiB），每shape常数
+1008 B。P126720树的pad131072，metadata为1572864 B（1.5 MiB）。
+这些都是组件需求公式，不能加到其他模块各自峰值上充当全流程峰值。
+
+接口只描述正常成功申请的整数事件；拒绝无效位宽/shape、溢出及嵌套树租约。
+未模拟物理cudaMalloc失败恢复、driver/context、CUDA events、pinned host、诊断
+额外缓冲、NTT、giant、fold/frontier owner。shape合法性仅核对packing窗口，不是
+GMP归约或真实NTT算法的合法性证明；真实descriptor仍须来自`ntt_shape_query`。
+
+### 25.3 CPU门禁与已验证边界
+
+[test_stage2_s4_memory.py](D:/code/MPA-OpenCl/tools/test/test_stage2_s4_memory.py:43)
+直接提取当前生产S4Ctx、output/pack增长、find、模数/shape常数、自检DD/DOUT、
+canonical及metadata申请/析构。CUDA allocator替换为不解引用的CPU opaque句柄，
+记录每次申请/释放的大小、顺序和同时存活量。
+[fixture](D:/code/MPA-OpenCl/tools/test/stage2_s4_memory_fixture.cpp:69)逐事件与模型核对。
+生产算术、kernel、GPU查询均未链接或执行。
+
+最终`data/stage2_s4_memory_20261009/cpu_v7/checks.json`通过：8个场景、192次树租约、
+2136个独立分配/释放事件；累计299592项断言（包含重复核对已有事件）0 bad、0 GPU。
+w为1/7/126/256，compact/legacy各一臂；n为1/2/3/63/64/65/127/129，反复增长、
+小请求保留、显式phase释放、同bits不同packing key、重复key、不对称raw、最终
+析构均覆盖。场景中shape是合成packing布局，不宣称这些shape通过GPU算术验证。
+
+额外编译忽略目录中的错误模型副本：将96窗口误写128，最终live相同，但临时峰
+被`S4 peak bytes differ`拒绝（return1）。这证明门禁会检查瞬时自检，而非只检查
+末态容量。失败的初版提取/编译目录cpu_v1/v2/v3保留，未覆盖或计为通过。
+runner记录源码、提取片段、生成CPP、正常/错误binary SHA，运行末尾重核源码未变。
+
+```powershell
+python tools/test/test_stage2_s4_memory.py --output data/s4_memory_cpu
+```
+
+输出目录须为空。MSVC仅编译CPU fixture，不需CUDA运行时或管理员GPU采集权限。
+当前没有新增GPU A/B，因该组件尚未被生产执行路径使用。下一阶段须在请求program
+中明确host/resident输入路由和tree租约边界，将S4事件与NTT申请、cold trim、
+giant及owner准入交错；再用真实owned台账核对边界/峰值，才可统一D与Auto B2。

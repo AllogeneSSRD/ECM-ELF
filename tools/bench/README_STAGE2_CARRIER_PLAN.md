@@ -501,3 +501,22 @@ sanitizer；不要把这个开发门禁弹窗视为生产程序需要网络。�
 checks.json、各子matrix、源码/build/save/tool SHA及所有日志保留，失败不覆盖。
 M8011/P126720/w126实际产品少119.913025 MiB，但完整owned峰仍在giant阶段；
 不把阶段容量收益称为全流程峰值下降、少传输或少MAC。参见报告第24节。
+
+## S4分配事件CPU门禁
+
+`ecm_stage2_s4_memory.h`是S4组件状态，并未接入production plan/D/Auto B2。
+raw A/B各自保留容量；output/legacy pack、模数/shape、自检短租约、canonical、
+G树metadata按每次申请/释放记录live。其peak不能加到独立NTT/giant/owner峰上。
+
+```powershell
+python tools/test/test_stage2_s4_memory.py --output data/s4_memory_cpu
+```
+
+要求空输出目录和MSVC C++17。runner提取当前生产allocator/lookup/selftest/
+metadata，CUDA分配改为CPU opaque台账，无CUDA运行时/算术/kernel/GPU查询。
+8场景覆盖w1/7/126/256、compact/legacy、单叶/奇数/63–65边界与保留/释放；
+核对192树租约、2136分配/释放事件及瞬时峰。shape为合成packing布局，不能
+代替真实`ntt_shape_query`或GMP算术门禁。错误128窗口模型副本必须被拒绝；
+所有源码/提取片段/生成CPP/正常与错误binary SHA记录在checks.json。
+当前组件只覆盖成功分配事件，不含物理失败、pinned/context/events或其他模块；
+后续组合真实申请顺序后才用于联合准入。参见报告第25节。
