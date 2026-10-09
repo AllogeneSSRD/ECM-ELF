@@ -2944,7 +2944,7 @@ CPU记录还要在当前环境重复；上一轮原有Prime95的后台竞争已�
 [完整Q诊断](D:/code/MPA-OpenCl/tools/bench/stage2_tree_gpu.cu:9770)、
 [A/B输入合同](D:/code/MPA-OpenCl/tools/bench/bench_stage2_reduce_ab.ps1:130)。
 `12·lcm`约定此前已写在 [Montgomery Stage1文档](D:/code/MPA-OpenCl/docs/ECM_Montgomery_STAGE1.md:145)
-和 [ini选项](D:/code/MPA-OpenCl/docs/DEV_ECM_INI.md:60)。本轮补的是实验探针的Q对齐及实际exe全字验证，
+和 [ini选项](D:/code/MPA-OpenCl/docs/DEV_ECM_INI.md)。本轮补的是实验探针的Q对齐及实际exe全字验证，
 不是新增生产指数约定。生产CPU Montgomery已通过 `exponent=choose12` 选择此约定；
 GPU批量路径的实际接线问题见§44.7。探针独立运行、不读取ecm.ini，其环境开关不作为新的生产配置。
 
@@ -3756,7 +3756,7 @@ GPU copy区间并集只有 **0.538556 /0.581198s**；大量小D2H的correlated A
 3. shared-parent FFT/scaled下降仍有价值，但优先处理已测主机准备段；carry batch默认0，保留新resident生产A/B目标。
 
 ini配置含义已经在§45修复并核对：`method=gpu`、`gpu_param=0`、`exponent=choose12` 实现生产CUDA Montgomery Stage1
-的 `12*lcm(1..B1)`；需相同N/sigma/B1才对齐Prime95。见 [DEV_ECM_INI:65](D:/code/MPA-OpenCl/docs/DEV_ECM_INI.md:65)。
+的 `12*lcm(1..B1)`；需相同N/sigma/B1才对齐Prime95。见 [INI配置入口](D:/code/MPA-OpenCl/docs/DEV_ECM_INI.md)。
 Stage2探针仍用显式 `NTT_STAGE1_EXTRA=12`，两者入口不同，不因ini已有键而混淆测量来源。
 
 ## 50. segment 批量求逆与真实入口 baby 归一化修复（2026-10-03）
@@ -5087,3 +5087,39 @@ P126720树metadata1.5 MiB。只有按真实请求顺序与旧NTT缓存/owner同�
 用于准入。当前模型不含物理失败、pinned/context/events、NTT/giant/fold/frontier。
 下一步扩展program的输入路由/树边界，再组合生命周期并核对真实owned台账。
 公式、生产文件/line及复现见[报告第25节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#25-s4分配事件模型保留容量自检瞬时量与树租约)。
+
+## 136. S4请求程序、输入来源与原生owned边界验证（2026-10-09）
+
+接续第135节。request_program版本2显式记录host/tree_raw/fold_owner/frontier_owner
+及每块tree_leaves，含无multiply的单叶尾树。保留旧算术签名，新增实际来源/
+树RAII/逆与fold边界签名（NTT_REQUEST_AUDIT，仅check）。`s4_program_plan`按
+真实NTT descriptor、chunk/output/trim策略驱动第135节状态；重复块达到保留状态
+固定点后压缩计数/签名。接入`--plan-only`的s4_memory.version1，依旧条件化组件，
+未接D/Auto B2，也不是完整显存准入；需要实际fold/root/frontier驻留和完整fold degree。
+
+最终CPU：S4组件299592断言/2136事件，完整程序576场景/42624事件/117093断言，
+NTT681389、dense/input/旧算术签名70010，全部0 bad/0 GPU；错误128窗口被拒绝。
+40组native计划及G1拒绝/超大B2压缩两例通过，曲线0。GPU最终gpu_v3为12条曲线，
+包括P63/64/65单叶尾和generic8193；来源/边界顺序一致，36个S4 owned边界逐字段
+匹配，完整叶子/因子/GMP通过。M8011两条叶子/因子与旧binary完全一致。
+
+M8011 w126/P126720：S4 after_inverse383230520 B、after_giant702562904 B、
+after_descent127759976 B；事件模型峰704135768 B，474请求/5260 chunks/15树租约，
+25shape/2400自检窗。完整owned峰仍6977513600 B；本轮没有数学/性能改善声明。
+98.485606/99.215525 s为诊断曲线，不能与第134节94 s正式样本比较。
+
+初次large未trim output/cold cache时available1914699776 B，小于owner894143424+
+future reserve1073741824 B，少50.721619 MiB，真实驻留回退；gpu_v2保留失败，
+十条小曲线另独立验证。gpu_v3启用已验证的output/raw/cold trim，全部完成。
+这说明未来规划必须包含真实free/reserve和缓存状态，不能仅以模块预算为准入。
+
+production v2 compile88.6/build104.8 s、47源闭包，binary SHA
+`93cbd52e364a583b77e788da2f7bdffa1ea5eca6d610c3be1218d26a0601b227`。
+最终源码/工具/输入/原始日志SHA证据在忽略目录`data/stage2_s4_program_20261009/`。
+[报告第26节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#26-s4请求程序输入路由树边界与原生计划查询)
+含公式、准确生产line、失败及适用边界。下一步给NTT补可交错事件，再合并owner/
+giant及cold trim/free/reserve，核对完整同时峰后才能统一D/Auto B2。
+
+本轮最终审计核对47份当前/冻结编译源、工具及原始证据SHA；历史章节中已经缺失的
+忽略目录build_cuda_cmake实验附件单独列入final_audit.json，不视为已验证的原始证据。
+当前阶段证据和源码链接不适用这一历史附件例外。

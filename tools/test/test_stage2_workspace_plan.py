@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools/bench'))
 from bench_stage2_production import fields, freeze, sha
 from calibrate_stage2_d import phi
+from test_stage2_request_program import verify_s4_memory
 
 
 def verify_giant_memory(plan):
@@ -226,6 +227,7 @@ def main():
                 plan = candidates[0]
                 verify_ntt_memory(plan)
                 verify_giant_memory(plan)
+                verify_s4_memory(plan)
                 buffers = 2 if pool and reuse else 3
                 degree = phi(d)//2
                 tree_coeffs = max((b for _,b,_ in groups_by_d[d]),default=1)

@@ -87,8 +87,9 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     source = ROOT/'src/cuda/ecm_cuda_stage2.cu'
     template = Path(__file__).with_name('stage2_s4_memory_fixture.cpp')
-    headers = ('ecm_stage2_s4_memory.h', 'ecm_stage2_requests.h', 'ecm_stage2_geometry.h')
-    files = [source, template, Path(__file__).resolve(), *(ROOT/'src/core'/h for h in headers)]
+    program_template = Path(__file__).with_name('stage2_s4_program_fixture.cpp')
+    headers = ('ecm_stage2_s4_memory.h', 'ecm_stage2_s4_program.h', 'ecm_stage2_requests.h', 'ecm_stage2_geometry.h')
+    files = [source, template, program_template, Path(__file__).resolve(), *(ROOT/'src/core'/h for h in headers)]
     identities = {str(f.relative_to(ROOT)):sha(f) for f in files}
     result = dict(complete=False, sources=identities, gpu_calls=0, scope='s4_component_allocation_events')
     try:
@@ -149,6 +150,26 @@ def main():
         result['mutation'] = dict(expected_failure=True, returncode=bad_run.returncode,
             reason=bad_run.stderr.decode('utf-8').strip(), header_sha256=sha(mutant),
             generated_sha256=sha(mutant_cpp), binary_sha256=sha(out/'mutant.exe'))
+        program_cpp = out/'program.cpp'
+        program_cpp.write_text(program_template.read_text(encoding='utf-8').replace(
+            '"../../src/core/ecm_stage2_s4_program.h"',
+            '"'+(ROOT/'src/core/ecm_stage2_s4_program.h').as_posix()+'"'), encoding='utf-8')
+        program_cmd = out/'compile_program.cmd'
+        program_cmd.write_text(cmd.read_text(encoding='utf-8').replace(str(generated),str(program_cpp))
+            .replace('fixture.exe','program.exe').replace('fixture.obj','program.obj'), encoding='utf-8')
+        program_build = subprocess.run(['cmd.exe','/d','/c',str(program_cmd)], capture_output=True, timeout=180, env=env)
+        (out/'program_compile.log').write_bytes(program_build.stdout+program_build.stderr)
+        if program_build.returncode:
+            raise ValueError('program fixture failed to compile')
+        program_run = subprocess.run([str(out/'program.exe')], capture_output=True, timeout=120, env=env)
+        (out/'program.log').write_bytes(program_run.stdout+program_run.stderr)
+        if program_run.returncode:
+            raise ValueError('program fixture failed; see program.log')
+        result['program'] = json.loads(program_run.stdout)
+        if result['program']['bad'] or result['program']['gpu_calls']:
+            raise ValueError('invalid CPU-only program result')
+        result['program_binary_sha256']=sha(out/'program.exe')
+        result['program_generated_sha256']=sha(program_cpp)
         if {str(f.relative_to(ROOT)):sha(f) for f in files} != identities:
             raise ValueError('source changed during check')
         result.update(complete=True, elapsed_seconds=time.monotonic()-begin,

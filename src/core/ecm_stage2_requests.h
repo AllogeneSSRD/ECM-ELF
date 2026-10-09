@@ -14,13 +14,22 @@ inline const char *request_phase_name(unsigned phase) {
     const char *names[]={"ftree","gtrees","fold","descent","inverse"};
     return phase<RequestPhaseCount?names[phase]:"invalid";
 }
+enum RequestInput : unsigned { RequestHost,RequestTreeRaw,RequestFoldOwner,RequestFrontierOwner,RequestInputCount };
+inline const char *request_input_name(unsigned input) {
+    const char *names[]={"host","tree_raw","fold_owner","frontier_owner"};
+    return input<RequestInputCount?names[input]:"invalid";
+}
 struct MultiplyRequest {
     unsigned phase=0;
     Word ma=0,mb=0,pairs=0,first=0,count=0;
+    unsigned input=RequestHost;
 };
 struct RequestBlock {
     Word repeat=1;
     std::vector<MultiplyRequest> requests;
+    // A resident G-tree lease wraps only the leading G-tree requests. It is
+    // meaningful even for a single leaf with no multiply requests.
+    Word tree_leaves=0;
 };
 struct RequestProgram {
     std::vector<RequestBlock> blocks;
@@ -47,18 +56,20 @@ struct RequestSignature {
     }
 };
 inline bool append_tree_requests(Word p,unsigned phase,RequestBlock &block) {
+    if(phase==RequestGtrees)block.tree_leaves=p;
     return tree_multiply_groups(p,[&](Word a,Word b,Word nb) {
         Word count=0;if(!add(a,b-1,count))return false;
-        block.requests.push_back({phase,a,b,nb,0,count});return true;
+        block.requests.push_back({phase,a,b,nb,0,count,
+            phase==RequestGtrees?RequestTreeRaw:RequestHost});return true;
     });
 }
 inline bool append_fold_requests(Word p,Word ng,Word h,RequestBlock &block) {
     Word nt=0;if(!ng || !h || !add(ng,h-1,nt))return false;
-    block.requests.push_back({RequestFold,ng,h,1,0,nt});
+    block.requests.push_back({RequestFold,ng,h,1,0,nt,RequestFoldOwner});
     if(nt>p) {
         const Word k=nt-p;
-        block.requests.push_back({RequestFold,k,k,1,0,k});
-        block.requests.push_back({RequestFold,k,p+1,1,0,p});
+        block.requests.push_back({RequestFold,k,k,1,0,k,RequestFoldOwner});
+        block.requests.push_back({RequestFold,k,p+1,1,0,p,RequestFoldOwner});
     }
     return true;
 }
@@ -102,7 +113,7 @@ inline bool request_program(Word p,Word giant_points,RequestProgram &program) {
         program.blocks.push_back(std::move(last));
     }
     RequestBlock descent;
-    descent.requests.push_back({RequestDescent,p,p,1,0,p});
+    descent.requests.push_back({RequestDescent,p,p,1,0,p,RequestFoldOwner});
     // Dense left-packed padded degrees, without materializing O(P) nodes.
     // Map key/order exactly matches the scaled frontier's (child, sibling).
     Word pad=1;while(pad<p)pad*=2;
@@ -113,7 +124,7 @@ inline bool request_program(Word p,Word giant_points,RequestProgram &program) {
         if(r>half) {++groups[{half,r-half}];++groups[{r-half,half}];}
         for(const auto &entry:groups) {
             const Word a=entry.first.first,b=entry.first.second;
-            descent.requests.push_back({RequestDescent,a+b,b+1,entry.second,b,a});
+            descent.requests.push_back({RequestDescent,a+b,b+1,entry.second,b,a,RequestFrontierOwner});
         }
     }
     program.blocks.push_back(std::move(descent));

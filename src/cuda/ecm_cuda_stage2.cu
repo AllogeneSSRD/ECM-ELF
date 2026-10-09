@@ -64,6 +64,7 @@ struct ProductionDefaults {
 #include "../core/ecm_stage2_requests.h"
 #include "../core/ecm_stage2_ntt_memory.h"
 #include "../core/ecm_stage2_giant_memory.h"
+#include "../core/ecm_stage2_s4_program.h"
 #include "../core/ecm_stage2_modulus.h"
 
 #include <string>
@@ -1277,6 +1278,7 @@ struct S4Ctx {
     unsigned long long chunk_plan_over_budget=0;
     ecm_stage2::TreeWorkspacePlan phase_requests[BC_NCAT];
     ecm_stage2::RequestSignature request_signatures[BC_NCAT],request_signature;
+    ecm_stage2::RequestSignature s4_program_signature;
     unsigned long long phase_big_live_peak[BC_NCAT]{}, phase_subset_peak[BC_NCAT]{};
     unsigned long long phase_ntt_peak[BC_NCAT]{};
     long long sample_limit = 4096;      /* a full GMP check below this many coefficients */
@@ -3563,6 +3565,10 @@ static void poly_mul_batch_modN(PolyLayer &L,
             const ecm_stage2::MultiplyRequest r{(unsigned)memory_category,ma,mb,nbatch,first,count};
             C.request_signatures[memory_category].append(r,qN,out_slots,chunk);
             C.request_signature.append(r,qN,out_slots,chunk);
+            auto routed=r;
+            routed.input=!resident?ecm_stage2::RequestHost:!resident->owner?ecm_stage2::RequestTreeRaw:
+                resident->reverse_b?ecm_stage2::RequestFrontierOwner:ecm_stage2::RequestFoldOwner;
+            ecm_stage2::s4_signature_request(C.s4_program_signature,routed,qN,out_slots,chunk);
         }
     }
     if(allocation_need>C.d_out_cap) {
@@ -4434,6 +4440,11 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
     if(!n) {tree[1].assign(W,0);tree[1][0]=1;fs.node_peak_bytes=fs.node_retained_bytes=8*W;return tree;}
     S4Ctx &C=*L.s4;
     // Exclusive lease of the existing raw staging pair. Resident calls never upload raw inputs.
+    struct LeaseAudit {
+        S4Ctx &ctx;size_t leaves;bool enabled;
+        ~LeaseAudit(){if(enabled)ecm_stage2::s4_signature_boundary(ctx.s4_program_signature,ecm_stage2::S4TreeEnd,leaves);}
+    } lease_audit{C,n,fuse_env_ull("NTT_REQUEST_AUDIT",0)!=0};
+    if(lease_audit.enabled)ecm_stage2::s4_signature_boundary(C.s4_program_signature,ecm_stage2::S4TreeBegin,n);
     const size_t need=2*n*W;
     size_t next_need=0;
     for(size_t i=pad/2;pad>1 && i<pad;++i)if(deg[i])next_need+=(deg[i]+1)*W;
@@ -7380,6 +7391,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     }
     R.t_inv = now_s() - ti0;
     stage2_memory::snapshot("after_inverse");
+    if(L.s4 && fuse_env_ull("NTT_REQUEST_AUDIT",0))
+        ecm_stage2::s4_signature_boundary(L.s4->s4_program_signature,ecm_stage2::S4InverseDone);
     std::vector<unsigned long long> Hflat,finvflat;
     if(fold_flat_enabled && !finv.empty()) {
         const double tb=now_s();finvflat=cp_to_flat(finv,W);CPoly{}.swap(finv);
@@ -7869,6 +7882,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         device_fold.scale(Ginv,R.gscale,gscale_check,gscale_bad);R.t_gscale=R.gscale.seconds;
     } else if(R.gscale.requested)R.gscale.fallback=!device_fold.active?"owner":!device_fold.hcount?"empty":"unit";
     if(device_fold.active && device_fold.hcount && device_fold.hcount<=P && (R.gscale.enabled || mpz_cmp_ui(Ginv,1)==0)) {
+        if(L.s4 && fuse_env_ull("NTT_REQUEST_AUDIT",0))
+            ecm_stage2::s4_signature_boundary(L.s4->s4_program_signature,ecm_stage2::S4FoldDone);
         if(gscale_flag("NTT_PHASE_TRIM_RAW") || gscale_flag("NTT_PHASE_TRIM_OUTPUT")) {
             const double begin=now_s();
             const size_t freed=gscale_flag("NTT_PHASE_TRIM_RAW")?L.s4->raw_release():0;
@@ -8754,6 +8769,23 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 base=8ull*fuse_planned_base_words(description);return true;
             },p.tree_batch_bytes,p.tree_physical_chunks,p.tree_chunk_max,memory_policy,*p.ntt_memory))return 3;
         p.giant_memory=std::make_shared<ecm_stage2::GiantMemoryPlan>();
+        p.s4_memory=std::make_shared<ecm_stage2::S4ProgramPlan>();
+        ecm_stage2::S4ProgramPolicy s4_policy;
+        s4_policy.batch_bytes=p.tree_batch_bytes;s4_policy.chunk_max=p.tree_chunk_max;
+        s4_policy.buffers=(unsigned)p.geometry.workspace_buffers;s4_policy.physical_chunks=p.tree_physical_chunks;
+        s4_policy.output_window=g_s4_output_window;s4_policy.chunk_output=g_s4_chunk_output;
+        s4_policy.compact_raw=g_groot_compact_raw;
+        s4_policy.trim_raw=gscale_flag("NTT_PHASE_TRIM_RAW");s4_policy.trim_output=gscale_flag("NTT_PHASE_TRIM_OUTPUT");
+        p.s4_memory->policy=s4_policy;
+        const bool resident_policy=p.tree_payload_model_supported && g_groot_device && g_s4_groot_only &&
+            fold_device_flag("NTT_FOLD_FLAT") && fold_device_flag("NTT_FOLD_DEVICE") &&
+            !opt_off("NTT_SCALED_FRONTIER_DEVICE");
+        if(!resident_policy)p.s4_memory->reason="unsupported_resident_policy";
+        else if(!ecm_stage2::s4_program_plan(p.requests->program,(int)L.S,
+            [](unsigned long long m,int s,ecm_stage2::S4ShapeDescriptor &q) {
+                int bpw=0;const bool ok=ntt_shape_query(m,s,&q.n,&bpw,&q.slot_bits,&q.slot_words,nullptr,&q.slots);
+                q.bpw=(unsigned)bpw;return ok;
+            },s4_policy,*p.s4_memory))return 3;
         ecm_stage2::GiantMemoryPolicy giant_policy;
         giant_policy.compact_products=s3_compact_products_requested();
         giant_policy.chain_block=std::min(1ull<<20,std::max(4ull,fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)));
@@ -9595,6 +9627,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             if(fuse_env_ull("NTT_REQUEST_AUDIT",0))stage2_log::print(stage2_log::debug,
                 "stage2_request_audit: version=1 phase=all multiplier=%llu addend=%llu\n",
                 s4.request_signature.multiplier,s4.request_signature.addend);
+            if(fuse_env_ull("NTT_REQUEST_AUDIT",0))stage2_log::print(stage2_log::debug,
+                "stage2_s4_program_audit: version=1 multiplier=%llu addend=%llu\n",
+                s4.s4_program_signature.multiplier,s4.s4_program_signature.addend);
             stage2_log::print(stage2_log::debug,
                 "s4_chunk_plan: workspace_budget=%d calls=%llu changed_calls=%llu chunks=%llu legacy_chunks=%llu "
                 "request_peak_bytes=%llu owned_subset_observed_peak_bytes=%llu single_over_budget_calls=%llu "
@@ -9699,7 +9734,7 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
     json<<"]}";
     if(p.requests) {
         const auto &requests=*p.requests;const auto &payload=requests.retained;
-        json<<",\"request_program\":{\"version\":1,\"valid\":"<<(requests.valid?"true":"false")
+        json<<",\"request_program\":{\"version\":2,\"valid\":"<<(requests.valid?"true":"false")
             <<",\"supported\":"<<(requests.valid && p.tree_payload_model_supported?"true":"false")
             <<",\"contract\":"<<stage2_tune::quote(requests.program.reason)
             <<",\"residency_required\":true,\"full_fold_degree_required\":true"
@@ -9727,11 +9762,12 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
         }
         json<<"],\"blocks\":[";first=true;
         for(const auto &block:requests.program.blocks) {
-            if(!first)json<<',';first=false;json<<"{\"repeat\":"<<block.repeat<<",\"requests\":[";bool first_request=true;
+            if(!first)json<<',';first=false;json<<"{\"repeat\":"<<block.repeat<<",\"tree_leaves\":"<<block.tree_leaves<<",\"requests\":[";bool first_request=true;
             for(const auto &r:block.requests) {
                 if(!first_request)json<<',';first_request=false;
                 json<<"{\"phase\":"<<r.phase<<",\"ma\":"<<r.ma<<",\"mb\":"<<r.mb
-                    <<",\"pairs\":"<<r.pairs<<",\"first\":"<<r.first<<",\"count\":"<<r.count<<'}';
+                    <<",\"pairs\":"<<r.pairs<<",\"first\":"<<r.first<<",\"count\":"<<r.count
+                    <<",\"input\":"<<stage2_tune::quote(ecm_stage2::request_input_name(r.input))<<'}';
             }
             json<<"]}";
         }
@@ -9774,6 +9810,38 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
             json<<"{\"repeat\":"<<checkpoint.repeat<<",\"peak_bytes\":"<<checkpoint.peak_bytes<<",\"payload\":";
             payload(checkpoint.live);json<<",\"counters\":";counters(checkpoint.counters);json<<'}';
         }
+        json<<"]}";
+    }
+    if(p.s4_memory) {
+        const auto &m=*p.s4_memory;const auto &v=m.policy;
+        auto payload=[&](const ecm_stage2::S4MemoryPayload &x) {
+            json<<"{\"raw_a_bytes\":"<<x.raw_a<<",\"raw_b_bytes\":"<<x.raw_b
+                <<",\"output_bytes\":"<<x.output<<",\"pack_a_bytes\":"<<x.pack_a<<",\"pack_b_bytes\":"<<x.pack_b
+                <<",\"modulus_bytes\":"<<x.modulus<<",\"shape_constant_bytes\":"<<x.shape_constants
+                <<",\"canonical_bytes\":"<<x.canonical_counter<<",\"selftest_digits_bytes\":"<<x.selftest_digits
+                <<",\"selftest_output_bytes\":"<<x.selftest_output<<",\"tree_metadata_bytes\":"<<x.tree_metadata
+                <<",\"total_bytes\":"<<x.total<<'}';
+        };
+        json<<",\"s4_memory\":{\"version\":1,\"valid\":"<<(m.valid?"true":"false")
+            <<",\"reason\":"<<stage2_tune::quote(m.reason)
+            <<",\"scope\":\"conditional_resident_s4\",\"residency_required\":true,\"full_fold_degree_required\":true"
+            <<",\"process_peak_complete\":false,\"admission_model\":false,\"fallback_modeled\":false"
+            <<",\"multiplier\":"<<m.signature.multiplier<<",\"addend\":"<<m.signature.addend
+            <<",\"peak_bytes\":"<<m.peak_bytes<<",\"shape_count\":"<<m.shape_count
+            <<",\"executed_blocks\":"<<m.executed_blocks<<",\"skipped_blocks\":"<<m.skipped_blocks
+            <<",\"policy\":{\"batch_bytes\":"<<v.batch_bytes<<",\"chunk_max\":"<<v.chunk_max<<",\"buffers\":"<<v.buffers
+            <<",\"physical_chunks\":"<<(v.physical_chunks?"true":"false")
+            <<",\"output_window\":"<<(v.output_window?"true":"false")<<",\"chunk_output\":"<<(v.chunk_output?"true":"false")
+            <<",\"compact_raw\":"<<(v.compact_raw?"true":"false")<<",\"trim_raw\":"<<(v.trim_raw?"true":"false")
+            <<",\"trim_output\":"<<(v.trim_output?"true":"false")<<"},\"counters\":{\"requests\":"<<m.counters.requests
+            <<",\"chunks\":"<<m.counters.chunks<<",\"trees\":"<<m.counters.trees
+            <<",\"allocations\":"<<m.counters.allocations<<",\"frees\":"<<m.counters.frees<<"},\"after_inverse\":";
+        payload(m.after_inverse);json<<",\"after_giant\":";payload(m.after_giant);
+        json<<",\"final_payload\":";payload(m.final_payload);json<<",\"released_payload\":";payload(m.released_payload);
+        json<<",\"shapes\":[";bool first=true;
+        for(const auto &entry:m.descriptors){if(!first)json<<',';first=false;const auto &q=entry.second;
+            json<<"{\"operand\":"<<entry.first<<",\"N\":"<<q.n<<",\"slots\":"<<q.slots
+                <<",\"slot_bits\":"<<q.slot_bits<<",\"slot_words\":"<<q.slot_words<<",\"bpw\":"<<q.bpw<<'}';}
         json<<"]}";
     }
     if(p.giant_memory) {

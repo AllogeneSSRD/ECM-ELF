@@ -102,6 +102,15 @@ public:
         return live.canonical_counter || allocate(live.canonical_counter,8,"reducer.canonical");
     }
     Word shape_count()const{return (Word)shapes.size();}
+    bool same_allocations(const S4MemoryState &other)const {
+        return words==other.words && tree_active==other.tree_active && shapes==other.shapes &&
+            live.raw_a==other.live.raw_a && live.raw_b==other.live.raw_b &&
+            live.output==other.live.output && live.pack_a==other.live.pack_a && live.pack_b==other.live.pack_b &&
+            live.modulus==other.live.modulus && live.shape_constants==other.live.shape_constants &&
+            live.canonical_counter==other.live.canonical_counter &&
+            live.selftest_digits==other.live.selftest_digits && live.selftest_output==other.live.selftest_output &&
+            live.tree_metadata==other.live.tree_metadata;
+    }
     bool tree_begin(Word n,bool compact_raw) {
         if(!words || !n || tree_active)return fail("invalid_tree_lease");
         Word a=0,b=0,pad=1,parents=n>1?n/2+(n%2!=0):0;

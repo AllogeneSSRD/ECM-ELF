@@ -19,7 +19,8 @@ static void dense_tree(Word p,unsigned phase,Requests &out) {
         std::map<std::pair<Word,Word>,Word> groups;
         for(Word i=base;i<2*base;++i)if(d[2*i] && d[2*i+1])
             ++groups[{std::min(d[2*i],d[2*i+1])+1,std::max(d[2*i],d[2*i+1])+1}];
-        for(const auto &g:groups)out.push_back({phase,g.first.first,g.first.second,g.second,0,g.first.first+g.first.second-1});
+        for(const auto &g:groups)out.push_back({phase,g.first.first,g.first.second,g.second,0,g.first.first+g.first.second-1,
+            phase==RequestGtrees?RequestTreeRaw:RequestHost});
     }
 }
 static Requests dense_program(Word p,Word I) {
@@ -35,14 +36,14 @@ static Requests dense_program(Word p,Word I) {
         if(!H)H=g+1;
         else {
             const Word product=g+H;
-            out.push_back({RequestFold,g+1,H,1,0,product});
+            out.push_back({RequestFold,g+1,H,1,0,product,RequestFoldOwner});
             if(product>p) {
                 const Word q=product-p;
-                out.push_back({RequestFold,q,q,1,0,q});out.push_back({RequestFold,q,p+1,1,0,p});H=p;
+                out.push_back({RequestFold,q,q,1,0,q,RequestFoldOwner});out.push_back({RequestFold,q,p+1,1,0,p,RequestFoldOwner});H=p;
             } else H=product;
         }
     }
-    out.push_back({RequestDescent,p,p,1,0,p});
+    out.push_back({RequestDescent,p,p,1,0,p,RequestFoldOwner});
     const auto d=degrees(p);const Word pad=d.size()/2;
     for(Word base=1;base<pad;base*=2) {
         std::map<std::pair<Word,Word>,Word> groups;
@@ -50,12 +51,12 @@ static Requests dense_program(Word p,Word I) {
             const Word a=d[2*i],b=d[2*i+1];if(a && b){++groups[{a,b}];++groups[{b,a}];}
         }
         for(const auto &g:groups) {const Word a=g.first.first,b=g.first.second;
-            out.push_back({RequestDescent,a+b,b+1,g.second,b,a});}
+            out.push_back({RequestDescent,a+b,b+1,g.second,b,a,RequestFrontierOwner});}
     }
     return out;
 }
 static bool equal(const MultiplyRequest &a,const MultiplyRequest &b) {
-    return a.phase==b.phase && a.ma==b.ma && a.mb==b.mb && a.pairs==b.pairs && a.first==b.first && a.count==b.count;
+    return a.phase==b.phase && a.ma==b.ma && a.mb==b.mb && a.pairs==b.pairs && a.first==b.first && a.count==b.count && a.input==b.input;
 }
 int main() {
     try {

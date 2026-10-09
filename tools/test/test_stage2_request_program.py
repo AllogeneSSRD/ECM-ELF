@@ -15,6 +15,7 @@ from functools import lru_cache
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools/bench'))
 from bench_stage2_production import fields, freeze, sha
+from stage2_memory_ledger import parse as parse_memory_ledger
 
 PHASES = ('ftree','gtrees','fold','descent','inverse')
 
@@ -98,10 +99,128 @@ def verify_topology(plan):
     expected = dense_program(plan['P'],plan['I'])
     if actual!=expected:
         raise ValueError('predictive request order differs from independent dense topology')
+    if request['version']>=2:
+        blocks=request['blocks']
+        for i,block in enumerate(blocks):
+            leaves=(plan['I']%plan['P'] if i==len(blocks)-2 and plan['I']%plan['P'] else plan['P']) if 0<i<len(blocks)-1 else 0
+            if block['tree_leaves']!=leaves:raise ValueError('tree lease leaves differ from dense topology')
+            for r in block['requests']:
+                source='host' if r['phase'] in (0,4) else 'tree_raw' if r['phase']==1 else 'fold_owner' if r['phase']==2 or r['first']==0 else 'frontier_owner'
+                if r['input']!=source:raise ValueError('resident/host input route differs')
     for i,phase in enumerate(request['phases']):
         if phase['phase']!=PHASES[i] or phase['groups']!=sum(r[0]==i for r in expected) or phase['pairs']!=sum(r[3] for r in expected if r[0]==i):
             raise ValueError('phase aggregate differs from independent topology')
     return request
+
+
+def verify_s4_memory(plan):
+    """Independent integer event simulator; S4 component only, never admission."""
+    m=plan['s4_memory']
+    if m['version']!=1 or m['process_peak_complete'] or m['admission_model'] or m['fallback_modeled']:
+        raise ValueError('wrong S4 component scope')
+    if not m['valid']:
+        if m['reason'] not in ('unsupported_request_program','unsupported_resident_policy'):raise ValueError('unexpected S4 rejection')
+        return None
+    verify_topology(plan)
+    v=m['policy'];w=(plan['bits']+63)//64;desc={s['operand']:s for s in m['shapes']}
+    fields=('raw_a','raw_b','output','pack_a','pack_b','modulus','shape_constant','canonical','selftest_digits','selftest_output','tree_metadata')
+    live={name:0 for name in fields};peak=0;allocations=frees=requests=chunks=trees=0;keys=set();sig=[1,0]
+    def record():
+        nonlocal peak
+        peak=max(peak,sum(live.values()))
+    def allocate(name,n):
+        nonlocal allocations
+        if not n:return
+        live[name]+=n;allocations+=1;record()
+    def release(name,n=None):
+        nonlocal frees
+        n=live[name] if n is None else n
+        if n:live[name]-=n;frees+=1;record()
+    def reserve(name,n):
+        if n>live[name]:release(name);allocate(name,n)
+    def snapshot():return {name+'_bytes':n for name,n in live.items()}|{'total_bytes':sum(live.values())}
+    def words(values):
+        for value in values:
+            sig[0]=(sig[0]*0x9e3779b185ebca87)&((1<<64)-1)
+            sig[1]=(sig[1]*0x9e3779b185ebca87+value)&((1<<64)-1)
+    def boundary(kind,n=0):words((0x5334424f554e4400,kind,n))
+    def trim():
+        if v['trim_raw']:release('raw_a');release('raw_b')
+        if v['trim_output']:release('output')
+    allocate('modulus',8*w)
+    blocks=plan['request_program']['blocks']
+    for bi,block in enumerate(blocks):
+        if bi==1:
+            if snapshot()!=m['after_inverse']:raise ValueError('S4 inverse checkpoint differs')
+            boundary(1);trim()
+        if bi+1==len(blocks):
+            if snapshot()!=m['after_giant']:raise ValueError('S4 giant checkpoint differs')
+            boundary(4);trim()
+        if block['repeat']>128:raise ValueError('dense S4 gate requires bounded G repeats')
+        for _ in range(block['repeat']):
+            leaves=block['tree_leaves'];tree=bool(leaves)
+            if tree:
+                trees+=1;boundary(2,leaves);reserve('raw_a',16*leaves*w)
+                reserve('raw_b',8*w*(leaves+(leaves+1)//2) if v['compact_raw'] and leaves>1 else 0 if v['compact_raw'] else 16*leaves*w)
+                pad=1<<(leaves-1).bit_length()
+                if pad>1:allocate('tree_metadata',24*(pad//2))
+            for r in block['requests']:
+                if tree and r['phase']!=1:release('tree_metadata');boundary(3,leaves);tree=False
+                operand=max(r['ma'],r['mb']);q=desc[operand]
+                if q['slots']!=2*operand-1 or q['slot_words']!=(q['slot_bits']+q['bpw']-1)//q['bpw']:
+                    raise ValueError('invalid native S4 descriptor')
+                c=1
+                test=r['pairs']
+                while test:
+                    words_per=(v['buffers'] if v['physical_chunks'] else 3)*q['N']+q['slots']+(2 if v['physical_chunks'] else 0)
+                    if 8*test*words_per<=v['batch_bytes']:c=test;break
+                    test//=2
+                if v['chunk_max']:c=min(c,v['chunk_max'])
+                key=(q['slot_bits'],q['slot_words'],q['bpw'])
+                if key not in keys:
+                    keys.add(key);allocate('shape_constant',8*w)
+                    allocate('selftest_digits',96*q['slot_words']*8);allocate('selftest_output',96*w*8)
+                    release('selftest_digits');release('selftest_output')
+                reserve('output',max(1,(c if v['chunk_output'] else r['pairs'])*(r['count'] if v['output_window'] else q['slots'])*w)*8)
+                if r['input']=='host':reserve('raw_a',8*c*operand*w);reserve('raw_b',8*c*operand*w)
+                if not live['canonical']:allocate('canonical',8)
+                requests+=1;chunks+=(r['pairs']+c-1)//c
+                words((0x5334524551554553,r['phase'],r['ma'],r['mb'],r['pairs'],r['first'],r['count'],q['N'],q['slots'],c,
+                    ('host','tree_raw','fold_owner','frontier_owner').index(r['input'])))
+            if tree:release('tree_metadata');boundary(3,leaves)
+    if snapshot()!=m['final_payload'] or len(keys)!=m['shape_count']:raise ValueError('S4 final state differs')
+    for _ in keys:release('shape_constant',8*w)
+    for field in ('modulus','canonical','output','raw_a','raw_b','pack_a','pack_b'):release(field)
+    if snapshot()!=m['released_payload'] or peak!=m['peak_bytes']:raise ValueError('S4 peak/destruction differs')
+    if m['counters']!=dict(requests=requests,chunks=chunks,trees=trees,allocations=allocations,frees=frees):
+        raise ValueError('S4 counters differ')
+    if sig!=[m['multiplier'],m['addend']]:raise ValueError('S4 ordering signature differs')
+    return m
+
+
+def verify_s4_ledger(exe,run,prediction,identity):
+    """Actual allocation sites at three boundaries; no component peak claim."""
+    source=exe.parent/'sources/src/cuda/ecm_cuda_stage2.cu'
+    if sha(source)!=identity['sources']['src/cuda/ecm_cuda_stage2.cu']:
+        raise ValueError('compiled ledger source differs')
+    text=source.read_text(encoding='utf-8')
+    needles=dict(raw_a='CK(cudaMalloc(&d_rawA,',raw_b='CK(cudaMalloc(&d_rawB,',
+        output='CK(cudaMalloc(&C.d_out,',pack_a='CK(cudaMalloc(&C.d_packA,',pack_b='CK(cudaMalloc(&C.d_packB,',
+        modulus='CK(cudaMalloc(&R.dn,',shape_constant='CK(cudaMalloc(&S->dy,',canonical='CK(cudaMalloc(&R.dbad,',
+        selftest_digits='CK(cudaMalloc(&dd, dig.size()',selftest_output='CK(cudaMalloc(&dout, (size_t)(cases * R.w)',
+        tree_metadata='CK(cudaMalloc(&meta.device,')
+    sites={}
+    for field,needle in needles.items():
+        if text.count(needle)!=1:raise ValueError('allocation anchor not unique: '+field)
+        sites[field+'_bytes']='ecm_cuda_stage2.cu:'+str(text[:text.index(needle)].count('\n')+1)
+    ledger=parse_memory_ledger(Path(run['debug_log']).read_text(encoding='utf-8'))
+    result=[]
+    for snapshot,key in [('after_inverse','after_inverse'),('after_giant_loop','after_giant'),('after_descent','final_payload')]:
+        live={s['site']:int(s['bytes']) for s in ledger['sites'] if s['scope']=='live' and s['snapshot']==snapshot}
+        actual={field:live.get(site,0) for field,site in sites.items()};actual['total_bytes']=sum(actual.values())
+        if actual!=prediction[key]:raise ValueError('native S4 owned checkpoint differs: '+snapshot)
+        result.append(dict(snapshot=snapshot,payload=actual))
+    return result
 
 
 def main():
@@ -175,6 +294,12 @@ def main():
                     raise ValueError('expected one native plan')
                 plan = plans[0]
                 request = verify_topology(plan)
+                s4=verify_s4_memory(plan)
+                if not s4:raise ValueError('resident run lacks S4 model')
+                audit=fields(text,'stage2_s4_program_audit')
+                if any(int(audit[k])!=s4[k] for k in ('multiplier','addend')):
+                    raise ValueError('native S4 route/boundary order differs')
+                s4_ledgers=verify_s4_ledger(exe,run,s4,identity) if source.get('memory_ledger') else []
                 memories = native_records(text,'s4_phase_memory')
                 signatures = native_records(text,'stage2_request_audit')
                 for phase in request['phases']:
@@ -200,7 +325,7 @@ def main():
                     raise ValueError('evidence, build or checker changed')
                 rows.append(dict(matrix=str(path.resolve()),matrix_sha256=matrix_sha,run=run['name'],command=command,
                                  plan=plan,log_sha256=sha(log),native_phases=memories,native_signatures=signatures,
-                                 native_ntt_full_peak_bytes=peak))
+                                 native_ntt_full_peak_bytes=peak,native_s4_signature=audit,s4_ledger_checkpoints=s4_ledgers))
                 print(path.parent.name,run['name'],'OK',flush=True)
         data['complete'] = True
     except Exception as exc:

@@ -354,7 +354,7 @@ unit参考，可继续验证fold/frontier失败、pool关闭、三缓冲、arena
 
 ## 全流程乘法请求模型
 
-生产`--plan-only`新增`request_program.version=1`，在执行曲线前生成F树、Newton
+生产`--plan-only`当前为`request_program.version=2`（初版为1），在执行曲线前生成F树、Newton
 inverse、G树/fold、scaled root/frontier的有序请求。重复G树/fold压缩为block，
 不随B2线性展开。`blocks`明确记录phase、ma/mb、pairs及输出first/count。
 `phases`给出group/pair/chunk计数与请求大池/输出峰；NTT shape来自实际backend，
@@ -504,7 +504,8 @@ M8011/P126720/w126实际产品少119.913025 MiB，但完整owned峰仍在giant�
 
 ## S4分配事件CPU门禁
 
-`ecm_stage2_s4_memory.h`是S4组件状态，并未接入production plan/D/Auto B2。
+`ecm_stage2_s4_memory.h`是S4组件状态，现由`s4_program_plan`接入production
+`--plan-only`；仍未接入D/Auto B2。
 raw A/B各自保留容量；output/legacy pack、模数/shape、自检短租约、canonical、
 G树metadata按每次申请/释放记录live。其peak不能加到独立NTT/giant/owner峰上。
 
@@ -519,4 +520,28 @@ metadata，CUDA分配改为CPU opaque台账，无CUDA运行时/算术/kernel/GPU
 代替真实`ntt_shape_query`或GMP算术门禁。错误128窗口模型副本必须被拒绝；
 所有源码/提取片段/生成CPP/正常与错误binary SHA记录在checks.json。
 当前组件只覆盖成功分配事件，不含物理失败、pinned/context/events或其他模块；
-后续组合真实申请顺序后才用于联合准入。参见报告第25节。
+后续组合真实申请顺序后才用于联合准入。参见报告第25–26节。
+
+## S4请求来源与组件计划
+
+`request_program.version=2`保留旧六项算术字段和签名，新增每请求input
+`host|tree_raw|fold_owner|frontier_owner`及每块`tree_leaves`，含无乘法的单叶尾树。
+`s4_memory.version=1`使用真实NTT descriptor，预测inverse/giant/descent边界的
+S4保留容量、组件瞬时峰及申请/释放计数，按固定保留状态压缩重复块。
+它要求实际fold/root/frontier驻留与full-fold-degree；G1及不支持的生产策略
+返回valid=false/reason。其peak不含NTT/owner/giant或物理free，admission_model=false。
+
+CPU门禁另核对576个完整程序场景、42624事件和2^55点压缩例；native计划门禁
+独立验证输入来源、树租约、descriptor及组件事件。原生诊断签名由实际resident
+指针识别输入，`--request-audit`只用于check；不放入正式timing。
+
+```powershell
+python tools/test/test_stage2_s4_program.py --exe <exe> --fixtures <fixtures.json> --device 1 --output data/s4_program_gpu
+python tools/test/test_stage2_s4_program.py --exe <exe> --fixtures <fixtures.json> --large-save <m8011-save> --large-reference <old-complete-measurements.json> --device 1 --output data/s4_program_large_gpu
+```
+
+前者10曲线，覆盖P63/64/65的单叶尾及generic8193，比较保留/回收output；后者
+追加M8011两臂产品容量曲线，共12曲线，大规模启用既有output/raw/cold trim。
+通过`test_stage2_request_program.py`重查询相同计划，比较算术与S4来源/边界顺序、
+三处S4 owned逐字段台账及完整叶子/因子。大规模与旧binary已完成的完整叶子
+摘要和因子再作对照。要求新目录，失败不覆盖；是诊断门禁，不是性能样本。
