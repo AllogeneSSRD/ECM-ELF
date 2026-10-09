@@ -428,3 +428,38 @@ python tools/test/test_stage2_workspace_plan.py --exe <exe> --save <save> --carr
 以及无淘汰时与独立保留容量计算一致。完整owned生命周期与物理free门禁仍
 需后续补齐。用户已恢复4060lp默认1800 MHz/55 W；后续正式计时保持该基线，
 不与旧约79 W/2385 MHz样本混合。
+
+## Giant组件生命周期规划
+
+production `--plan-only`新增`giant_memory.version=1`：`initial_bytes`、
+`after_giant_bytes`、`accumulation_bytes`、组件`peak_bytes`与最多两个chunk状态。
+`repeat`压缩满chunk；尾块独立计算chain/ladder、seed容量和驻留预算。
+`coordinate_bytes`是逻辑X/Z规模，ladder借用工作区时不另加owner；
+`prepare_bytes/tree_bytes`是该组件对应阶段的同时存活量。
+它不含NTT、S4、fold/frontier或物理free检查，`process_peak_complete/admission_model`
+固定false，不能将其peak与其他模块peak相加，也不改变D或Auto B2准入。
+`small_prime_cache_assumed`说明正常baby证明cache匹配的条件；诊断额外workspace
+返回`valid=false`及reason。
+
+CPU门禁直接提取生产S3 allocator，CUDA申请只记opaque台账，无GPU调用：
+
+```powershell
+python tools/test/test_stage2_giant_memory.py --output data/giant_memory_cpu
+```
+
+可重复添加`--ledger-matrix <measurements.json>`核对已完成owned台账：检查旧binary、
+冻结源码与日志SHA，按旧源码行号提取allocation site，比较4个live边界及giant阶段
+同时存活峰成分。要求实际resident chunk无回退，不以matrix的require_resident标签
+代替运行证据。`--regression-source <frozen-pre-fix.cu>`编译旧S3并要求其bytes统计
+触发已释放容量重复计费，作为预期失败保存。
+
+原生策略门禁只初始化CUDA查询计划，曲线0：
+
+```powershell
+python tools/test/test_stage2_giant_memory_plan.py --exe <exe> --save <save> --carrier-exponent 8011 --device 1 --output data/giant_memory_plan
+```
+
+覆盖floor、chain→ladder尾块、forced ladder、驻留预算回退、超大B2及诊断不支持；
+同时确认生产入口仍拒绝旧seed、关闭small-prime复用和短chain实验切换。
+40组既有`test_stage2_workspace_plan.py`也独立验证该组件公式。
+本阶段未运行GPU算术门禁、物理OOM或正式计时；这些计划查询不能代替完整运行验证。

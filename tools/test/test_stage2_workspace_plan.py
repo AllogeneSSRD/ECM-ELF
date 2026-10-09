@@ -16,6 +16,57 @@ from bench_stage2_production import fields, freeze, sha
 from calibrate_stage2_d import phi
 
 
+def verify_giant_memory(plan):
+    """Independent component formula; do not add its peak to the NTT peak."""
+    m = plan['giant_memory']
+    if m['version'] != 1 or m['process_peak_complete'] or m['admission_model']:
+        raise ValueError('wrong giant component scope')
+    if not m['valid']:
+        if m['reason'] not in ('diagnostic_workspace_not_modeled','small_prime_interval_not_modeled'):
+            raise ValueError('unexpected unsupported giant model')
+        return
+    v = m['policy']
+    p, n, w = plan['P'], plan['I'], (plan['bits']+63)//64
+    q, cap, segfix, base = m['chunk_points'], v['initial_points'], 0, False
+    if not q or q % p or m['point_chunks'] != (n+q-1)//q:
+        raise ValueError('wrong giant chunk geometry')
+    def workspace(values=0):
+        return 8*(5*w+cap*(1+2*w)+2*values*w+((segfix+1)*w if segfix else 0)+(2*w if base else 0))
+    if workspace() != m['initial_bytes']:
+        raise ValueError('wrong initial giant workspace')
+    peak, count, points = workspace(), 0, 0
+    for c in m['chunks']:
+        x = c['points']
+        chain = not v['force_ladder'] and x >= v['chain_min']
+        block = v['short_block'] if v['short_block'] and x < v['short_max'] and v['short_block'] < v['chain_block'] else v['chain_block']
+        chains = (x+block-1)//block
+        seeds = 2*chains+1 if chain else x
+        cap = max(cap,seeds)
+        base |= chain and v['seed_device'] and v['seed_pair']
+        ns = (x+v['segment']-1)//v['segment']
+        coordinate = 16*x*w
+        resident = v['resident_requested'] and v['resident_eligible'] and v['exact_segments'] and coordinate <= v['resident_limit_bytes']
+        segment = 8*ns*w if chain or resident else 0
+        if segment and v['exact_segments']:
+            segfix = max(segfix,v['segment'])
+        ng = (ns+v['group']-1)//v['group'] if resident else 0
+        groups = 8*(ng+v['group']+1)*w if resident else 0
+        legacy = 8*(4*chains+2)*w if chain and not v['seed_device'] else 0
+        prepare = workspace()+(coordinate if chain else 0)+segment+legacy
+        tree = workspace()+((coordinate if chain else 0)+segment+groups if resident else 0)
+        expected = dict(route='chain' if chain else 'ladder',block=block if chain else 0,seeds=seeds,
+                        resident=resident,segments=ns,groups=ng,point_capacity=cap,workspace_bytes=workspace(),
+                        coordinate_bytes=coordinate,segment_bytes=segment,group_bytes=groups,
+                        legacy_seed_bytes=legacy,prepare_bytes=prepare,tree_bytes=tree)
+        if any(c[k] != value for k,value in expected.items()):
+            raise ValueError('giant component differs from independent formula')
+        peak = max(peak,prepare,tree)
+        count += c['repeat']
+        points += x*c['repeat']
+    if count != m['point_chunks'] or points != n or len(m['chunks'])>2 or workspace()!=m['after_giant_bytes'] or workspace(p)!=m['accumulation_bytes'] or cap!=m['final_point_capacity'] or max(peak,workspace(p))!=m['peak_bytes']:
+        raise ValueError('wrong retained giant capacity or compressed chunk sequence')
+
+
 def verify_ntt_memory(plan):
     """Check scope, successful-prefix accounting and no-eviction equivalence."""
     memory, request = plan['ntt_memory'], plan['request_program']
@@ -171,6 +222,7 @@ def main():
                     raise ValueError('expected one native JSON plan')
                 plan = candidates[0]
                 verify_ntt_memory(plan)
+                verify_giant_memory(plan)
                 buffers = 2 if pool and reuse else 3
                 degree = phi(d)//2
                 tree_coeffs = max((b for _,b,_ in groups_by_d[d]),default=1)

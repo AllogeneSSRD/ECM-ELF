@@ -63,6 +63,7 @@ struct ProductionDefaults {
 #include "../core/ecm_stage2_geometry.h"
 #include "../core/ecm_stage2_requests.h"
 #include "../core/ecm_stage2_ntt_memory.h"
+#include "../core/ecm_stage2_giant_memory.h"
 #include "../core/ecm_stage2_modulus.h"
 
 #include <string>
@@ -6585,6 +6586,7 @@ struct S3Workspace {
         CK(cudaMalloc(&djs, n * 8));
         CK(cudaMalloc(&dx, n * nw * 8));
         CK(cudaMalloc(&dz, n * nw * 8));
+        bytes -= pt_cap * 8 + 2 * pt_cap * nw * 8;
         bytes += n * 8 + 2 * n * nw * 8;
         pt_cap = n;
     }
@@ -6597,6 +6599,7 @@ struct S3Workspace {
         const size_t nw = C->nw;
         CK(cudaMalloc(&dvals, n * nw * 8));
         CK(cudaMalloc(&dprod, n * nw * 8));
+        bytes -= 2 * val_cap * nw * 8;
         bytes += 2 * n * nw * 8;
         val_cap = n;
         prod_cap = n;
@@ -8689,6 +8692,52 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 table=8ull*fuse_planned_table_words(description);
                 base=8ull*fuse_planned_base_words(description);return true;
             },p.tree_batch_bytes,p.tree_physical_chunks,p.tree_chunk_max,memory_policy,*p.ntt_memory))return 3;
+        p.giant_memory=std::make_shared<ecm_stage2::GiantMemoryPlan>();
+        ecm_stage2::GiantMemoryPolicy giant_policy;
+        giant_policy.chain_block=std::min(1ull<<20,std::max(4ull,fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)));
+        giant_policy.short_block=fuse_env_ull("NTT_GIANT_CHAIN_SMALL_BLOCK",0);
+        if(giant_policy.short_block)giant_policy.short_block=std::min(64ull,std::max(4ull,giant_policy.short_block));
+        giant_policy.short_max=std::min(1ull<<20,fuse_env_ull("NTT_GIANT_CHAIN_SMALL_MAX",8192));
+        giant_policy.chain_min=fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768);
+        giant_policy.force_ladder=fold_device_flag("NTT_GIANT_LADDER");
+        giant_policy.seed_device=g_giant_seed_device;giant_policy.seed_pair=g_giant_seed_pair;
+        giant_policy.exact_segments=g_gfinv_seg_exact;
+        giant_policy.resident_requested=device_gleaf_flag("NTT_DEVICE_GLEAF");
+        giant_policy.resident_eligible=g_groot_device && g_s4_groot_only && s4_on &&
+            g_s4_pack_direct && !g_s4_final_readback && !host_pack;
+        const auto leaf_mb=fuse_env_ull("NTT_DEVICE_GLEAF_MAX_MB",512);
+        const auto point_kb=fuse_env_ull("NTT_GIANT_POINT_BUDGET_KB",262144);
+        const bool diagnostic=fold_device_flag("NTT_GIANT_CHAIN_CHECK") || g_giant_seed_check ||
+            g_gfinv_seg_check || small_prime_flag("NTT_SMALL_PRIME_CHECK") ||
+            small_prime_flag("NTT_SMALL_PRIME_CACHE_STALE");
+        // Conditional on the normal baby proof cache matching this curve. The
+        // actual small-prime loop then ladders only primes dividing D. Without
+        // reuse, count its bounded interval directly, never use a guessed cap.
+        const bool reuse_small=small_prime_flag("NTT_SMALL_PRIME_REUSE");
+        const auto half=D/2,lo=std::min(B1,half),hi=std::min(B2,half);
+        bool small_supported=true;
+        if(reuse_small) {
+            auto rest=D;
+            for(unsigned long long q=2;q<=rest/q;++q)if(rest%q==0) {
+                if(q>lo && q<=hi)++giant_policy.initial_points;
+                do{rest/=q;}while(rest%q==0);
+            }
+            if(rest>1 && rest>lo && rest<=hi)++giant_policy.initial_points;
+        } else if(hi>lo) {
+            if(hi-lo>10000000ull)small_supported=false;
+            else for(auto q=lo+1;q<=hi;++q)if(is_prime_u64(q))++giant_policy.initial_points;
+        }
+        unsigned long long point_bytes=0;
+        if(diagnostic || !small_supported) {
+            p.giant_memory->reason=diagnostic?"diagnostic_workspace_not_modeled":"small_prime_interval_not_modeled";
+        } else if(!ecm_stage2::multiply(leaf_mb,1048576,giant_policy.resident_limit_bytes) ||
+                  !ecm_stage2::multiply(point_kb,1024,point_bytes))return 3;
+        else {
+            const auto giant_chunk=stage2_giant_chunk::plan(P_baby,nw,point_bytes,
+                fold_device_flag("NTT_GIANT_CHUNK_FLOOR"));
+            if(!giant_chunk.valid || !ecm_stage2::giant_memory_plan(P_baby,p.giant_points,nw,
+                giant_chunk.points,giant_policy,*p.giant_memory))return 3;
+        }
         p.free_bytes=freeb; p.arena_cap_bytes=cap; p.owner_budget_bytes=fold_budget;
         p.baby_bytes=d_baby_payload_bytes(P_baby,nw);
         p.owner_budget_fits=p.geometry.fold_owner_bytes<=fold_budget;
@@ -9661,6 +9710,40 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
             if(!first)json<<',';first=false;
             json<<"{\"repeat\":"<<checkpoint.repeat<<",\"peak_bytes\":"<<checkpoint.peak_bytes<<",\"payload\":";
             payload(checkpoint.live);json<<",\"counters\":";counters(checkpoint.counters);json<<'}';
+        }
+        json<<"]}";
+    }
+    if(p.giant_memory) {
+        const auto &m=*p.giant_memory;const auto &v=m.policy;
+        json<<",\"giant_memory\":{\"version\":1,\"valid\":"<<(m.valid?"true":"false")
+            <<",\"reason\":"<<stage2_tune::quote(m.reason)
+            <<",\"process_peak_complete\":false,\"admission_model\":false"
+            <<",\"small_prime_cache_assumed\":"<<(small_prime_flag("NTT_SMALL_PRIME_REUSE")?"true":"false")
+            <<",\"chunk_points\":"<<m.chunk_points<<",\"point_chunks\":"<<m.point_chunks
+            <<",\"initial_bytes\":"<<m.initial_bytes<<",\"after_giant_bytes\":"<<m.after_giant_bytes
+            <<",\"accumulation_bytes\":"<<m.accumulation_bytes<<",\"peak_bytes\":"<<m.peak_bytes
+            <<",\"final_point_capacity\":"<<m.final_point_capacity
+            <<",\"policy\":{\"chain_block\":"<<v.chain_block<<",\"short_block\":"<<v.short_block
+            <<",\"short_max\":"<<v.short_max<<",\"chain_min\":"<<v.chain_min
+            <<",\"segment\":"<<v.segment<<",\"group\":"<<v.group
+            <<",\"resident_limit_bytes\":"<<v.resident_limit_bytes<<",\"initial_points\":"<<v.initial_points
+            <<",\"force_ladder\":"<<(v.force_ladder?"true":"false")
+            <<",\"seed_device\":"<<(v.seed_device?"true":"false")
+            <<",\"seed_pair\":"<<(v.seed_pair?"true":"false")
+            <<",\"exact_segments\":"<<(v.exact_segments?"true":"false")
+            <<",\"resident_requested\":"<<(v.resident_requested?"true":"false")
+            <<",\"resident_eligible\":"<<(v.resident_eligible?"true":"false")<<"},\"chunks\":[";
+        bool first=true;
+        for(const auto &c:m.chunks) {
+            if(!first)json<<',';first=false;
+            json<<"{\"repeat\":"<<c.repeat<<",\"points\":"<<c.points
+                <<",\"route\":"<<stage2_tune::quote(c.chain?"chain":"ladder")
+                <<",\"resident\":"<<(c.resident?"true":"false")<<",\"block\":"<<c.block
+                <<",\"seeds\":"<<c.seeds<<",\"segments\":"<<c.segments<<",\"groups\":"<<c.groups
+                <<",\"point_capacity\":"<<c.point_capacity<<",\"workspace_bytes\":"<<c.workspace_bytes
+                <<",\"coordinate_bytes\":"<<c.coordinate_bytes<<",\"segment_bytes\":"<<c.segment_bytes
+                <<",\"group_bytes\":"<<c.group_bytes<<",\"legacy_seed_bytes\":"<<c.legacy_seed_bytes
+                <<",\"prepare_bytes\":"<<c.prepare_bytes<<",\"tree_bytes\":"<<c.tree_bytes<<'}';
         }
         json<<"]}";
     }

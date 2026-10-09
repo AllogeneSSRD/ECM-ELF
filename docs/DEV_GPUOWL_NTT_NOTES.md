@@ -4999,3 +4999,29 @@ production v3：44源，compile83.1/build86.0 s，binary SHA
 后续计时遵循用户恢复的4060lp默认1800 MHz/55 W，旧高功耗数据保持原条件。
 下一轮接非NTT生命周期、fold/frontier cold trim与owned逐checkpoint门禁，
 再统一普通D/Auto B2准入和新条件下的完整成本排序；完整MemoryPlan仍未完成。
+
+## 133. Giant生命周期组件与S3容量统计（2026-10-09）
+
+继续联合MemoryPlan方向，新增`ecm_stage2_giant_memory.h`和plan-only的
+`giant_memory.version=1`。模拟真实chunk路由及seed历史最大容量、chain临时X/Z、
+segment/group、base/segfix常量和最终dvals/dprod；ladder借用X/Z只计一次。
+满chunk/尾块最多两个状态，不随B2展开。small-prime初始工作区取实际条件计数，
+正常baby cache匹配为显式条件；诊断额外workspace不支持。
+
+修正S3 `bytes`统计在need_pts/need_vals增长时漏扣已释放旧容量的问题，未改申请
+尺寸、释放顺序、算法或默认。冻结修复前源码在同CPU fixture可靠触发预期失败。
+CPU86068检查0 bad；6份旧owned台账24个live边界、6个giant同时存活峰成分相等。
+原NTT681389与dense topology70010检查保持通过。40组原生计划配置及专用7响应/
+3生产保护拒绝验证通过，全部曲线0；早期验证器失败记录保留。
+
+D138原Q=253440 giant组件峰518.106041 MiB，floor Q=P为259.096764 MiB；
+它们不是全进程峰，不能与NTT峰直接相加。32000点ladder尾块使seed容量升至32000，
+后续保留61.790649 MiB。关闭驻留不会免除chain生成期坐标owner。
+本轮无新算术/正式计时，不改变第20节floor策略变慢、保持默认关闭的结论。
+
+production v1 build85.6 s，binary SHA
+`dbea561a9631b4e321c5a35323fb9460b9153c64196e9eb2ffda4b3db08d983e`。
+细节、公式、身份与复现见[报告第23节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#23-giant组件生命周期保留容量尾块路由与s3统计修正)。
+下一轮合并S4/owner/NTT生命周期，并验证dprod只分配ceil(P/64)而非P的候选，
+D138理论省119.913025 MiB。后续运行保持4060lp默认1800 MHz/55 W；完整联合
+准入与新成本校准尚未完成，本阶段不宣称加速。
