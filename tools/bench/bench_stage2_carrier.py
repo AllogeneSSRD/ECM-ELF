@@ -21,7 +21,7 @@ def main():
     p.add_argument('--exe', type=Path, required=True)
     p.add_argument('--save', type=Path, required=True)
     p.add_argument('--carrier-exponent', type=int, default=0)
-    p.add_argument('--comparison', choices=('carrier', 'workspace-bq', 'plan', 'chunk'), default='carrier')
+    p.add_argument('--comparison', choices=('carrier', 'workspace-bq', 'plan', 'chunk','phase-output'), default='carrier')
     p.add_argument('--b2', type=int, required=True)
     p.add_argument('--d', type=int, required=True)
     p.add_argument('--candidate-d', type=int, help='Second fixed D for a two-buffer plan timing comparison; budgets and arithmetic stay fixed')
@@ -97,7 +97,8 @@ def main():
                        NTT_GIANT_SEED_CHECK='1', NTT_GIANT_CHAIN_CHECK='1')
     keys = {'carrier': ('generic', 'carrier'), 'workspace-bq': ('three_buffer', 'two_buffer'),
             'plan': ('baseline_d', 'candidate_d'),
-            'chunk': ('legacy_chunk', 'workspace_chunk')}[a.comparison]
+            'chunk': ('legacy_chunk', 'workspace_chunk'),
+            'phase-output': ('retained_output','trimmed_output')}[a.comparison]
     sequence = tuple(keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1))
     matrix = ([('check', k) for k in ((a.single_arm,) if a.single_arm else keys)] if a.mode == 'check'
               else [('warmup', k) for k in keys] +
@@ -158,8 +159,10 @@ def main():
             use = env.copy()
             if a.comparison == 'workspace-bq':
                 use['NTT_WORKSPACE_REUSE_BQ'] = '1' if key == 'two_buffer' else '0'
-            elif a.comparison in ('plan','chunk'):
+            elif a.comparison in ('plan','chunk','phase-output'):
                 use['NTT_WORKSPACE_REUSE_BQ'] = '1'
+            if a.comparison == 'phase-output':
+                use['NTT_PHASE_TRIM_OUTPUT'] = '1' if key == 'trimmed_output' else '0'
             if a.comparison == 'chunk':
                 use['NTT_S4_WORKSPACE_BUDGET'] = '1' if key == 'workspace_chunk' else '0'
             exponent = a.carrier_exponent if a.comparison != 'carrier' or key == 'carrier' else 0
@@ -249,12 +252,18 @@ def main():
                          leaf=fields(text, 'target_descent_values') if a.mode == 'check' else None,
                          log=str(log), log_sha256=sha(log), debug_log=str(debug),
                          debug_sha256=sha(debug), result_sha256=sha(result))
-            if a.comparison in ('workspace-bq', 'plan', 'chunk'):
+            if a.comparison in ('workspace-bq', 'plan', 'chunk','phase-output'):
                 entry['layout'] = fields(text, 'ntt_workspace_layout')
                 if entry['layout']['reuse_bq_requested'] != use['NTT_WORKSPACE_REUSE_BQ']:
                     raise ValueError('workspace policy differs from requested arm')
                 if (int(entry['layout']['alias_calls']) > 0) != (key != 'three_buffer'):
                     raise ValueError('workspace alias execution differs from requested arm')
+            if a.comparison == 'phase-output':
+                entry['phase_trim'] = [fields(line,'stage2_phase_trim') for line in text.splitlines()
+                    if line.startswith('stage2_phase_trim:')]
+                released = sum(int(v['output_released_bytes']) for v in entry['phase_trim'])
+                if (released > 0) != (key == 'trimmed_output'):
+                    raise ValueError('phase output release differs from requested arm')
             if a.comparison == 'chunk':
                 entry['chunk_plan'] = fields(text,'s4_chunk_plan')
                 entry['reduce_hook_calls'] = sum(int(fields(line,'s4_reduce_stats')['launches'])
@@ -286,7 +295,7 @@ def main():
             for field in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):
                 if len({r['coverage'][field] for r in data['runs']}) != 1:
                     raise ValueError('arithmetic coverage changed between layouts: ' + field)
-        if a.comparison in ('plan','chunk'):
+        if a.comparison in ('plan','chunk','phase-output'):
             for key in keys:
                 rows = [r for r in data['runs'] if r['key'] == key]
                 for field in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):

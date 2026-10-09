@@ -1303,6 +1303,15 @@ struct S4Ctx {
         d_rawA=d_rawB=nullptr;d_rawA_cap=d_rawB_cap=0;
         return bytes;
     }
+    size_t output_release() {
+        // Only at phase boundaries after the result has been copied to host
+        // or to an independent owner. cudaFree completes queued default-stream
+        // scatter/readback/oracle snapshots; delayed CPU checks own host copies.
+        const size_t bytes=8*d_out_cap;
+        if(d_out)CK(cudaFree(d_out));
+        d_out=nullptr;d_out_cap=0;
+        return bytes;
+    }
     double t_h2d_raw = 0.0, t_packdev = 0.0;
     unsigned long long raw_words = 0, pack_launches = 0;
     /* All S4 device-packed calls, including F-tree/inverse before the main-loop timers. */
@@ -7287,13 +7296,16 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         R.fold_flat.t_bridge+=now_s()-tb;
     }
     FoldDeviceState device_fold;
-    if(fold_flat_enabled && !finvflat.empty() && L.s4 && gscale_flag("NTT_PHASE_TRIM_RAW")) {
+    if(fold_flat_enabled && !finvflat.empty() && L.s4 &&
+       (gscale_flag("NTT_PHASE_TRIM_RAW") || gscale_flag("NTT_PHASE_TRIM_OUTPUT"))) {
         // Newton/F-tree raw inputs are dead. Reclaim them before the owner
         // headroom query; the next G tree will reserve only its own raw shape.
-        const double begin=now_s();const size_t freed=L.s4->raw_release();
+        const double begin=now_s();
+        const size_t freed=gscale_flag("NTT_PHASE_TRIM_RAW")?L.s4->raw_release():0;
+        const size_t output=gscale_flag("NTT_PHASE_TRIM_OUTPUT")?L.s4->output_release():0;
         stage2_log::print(stage2_log::debug,
-            "stage2_phase_trim: raw_released_bytes=%llu seconds=%.6f boundary=inverse_to_fold\n",
-            (unsigned long long)freed,now_s()-begin);
+            "stage2_phase_trim: raw_released_bytes=%llu output_released_bytes=%llu seconds=%.6f boundary=inverse_to_fold\n",
+            (unsigned long long)freed,(unsigned long long)output,now_s()-begin);
     }
     if(fold_flat_enabled && !finvflat.empty())device_fold.init(L,Ft[1],finvflat,R.fold_device,R.fold_flat);
     CPoly H;
@@ -7755,11 +7767,13 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         device_fold.scale(Ginv,R.gscale,gscale_check,gscale_bad);R.t_gscale=R.gscale.seconds;
     } else if(R.gscale.requested)R.gscale.fallback=!device_fold.active?"owner":!device_fold.hcount?"empty":"unit";
     if(device_fold.active && device_fold.hcount && device_fold.hcount<=P && (R.gscale.enabled || mpz_cmp_ui(Ginv,1)==0)) {
-        if(gscale_flag("NTT_PHASE_TRIM_RAW")) {
-            const double begin=now_s();const size_t freed=L.s4->raw_release();
+        if(gscale_flag("NTT_PHASE_TRIM_RAW") || gscale_flag("NTT_PHASE_TRIM_OUTPUT")) {
+            const double begin=now_s();
+            const size_t freed=gscale_flag("NTT_PHASE_TRIM_RAW")?L.s4->raw_release():0;
+            const size_t output=gscale_flag("NTT_PHASE_TRIM_OUTPUT")?L.s4->output_release():0;
             stage2_log::print(stage2_log::debug,
-                "stage2_phase_trim: raw_released_bytes=%llu seconds=%.6f boundary=fold_to_descent\n",
-                (unsigned long long)freed,now_s()-begin);
+                "stage2_phase_trim: raw_released_bytes=%llu output_released_bytes=%llu seconds=%.6f boundary=fold_to_descent\n",
+                (unsigned long long)freed,(unsigned long long)output,now_s()-begin);
         }
         frontier.init(device_fold);
         device_fold.scaled_root(prepared_root,root_device,root_check,root_bad,frontier.enabled);

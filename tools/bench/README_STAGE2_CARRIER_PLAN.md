@@ -208,3 +208,27 @@ python tools/test/test_stage2_chunk_budget.py --exe <ecm_cuda_stage2.exe> --refe
 - `--workspace-fixture`额外运行580例分块整数计算检查，覆盖非二次幂batch、
   两/三缓冲、预算阈值、单块超预算、非法缓冲数和整数溢出。
 - 新策略不使用旧Auto B2成本profile；Auto B2拒绝该开关，直到重新标定。
+
+## 阶段归约输出容量释放实验
+
+`NTT_PHASE_TRIM_OUTPUT=1`（默认0）在Newton的逆多项式已保存在主机之后、驻留下降
+开始之前，同步释放已经失效的S4归约输出并重置容量。后续hook按需重建。与
+`NTT_PHASE_TRIM_RAW`独立；此对照同时启用已有raw释放，两缓冲pool与原分块策略
+在两臂相同，仅输出释放0/1变化。保持1 GiB future reserve与全部必要回退。
+
+```powershell
+python tools/bench/bench_stage2_carrier.py --comparison phase-output --exe build_cuda_cmake/phase_output_stage2/ecm_cuda_stage2.exe --save <stage1.save> --carrier-exponent 8011 --b2 2600000000000 --d 1381380 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --mode check --projection-only --output data/output_trim_check
+python tools/bench/bench_stage2_carrier.py --comparison phase-output --exe build_cuda_cmake/phase_output_stage2/ecm_cuda_stage2.exe --save <stage1.save> --carrier-exponent 8011 --b2 2600000000000 --d 1381380 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --mode timing --telemetry --output data/output_trim_timing
+python tools/bench/analyze_stage2_carrier_bench.py --input data/output_trim_timing/measurements.json --output docs/benchmarks/output_trim_analysis.json --figure-prefix docs/figures/output_trim
+```
+
+- `stage2_phase_trim.output_released_bytes`读取释放时的实际容量，不能用模块全程峰替代。
+- 同步`cudaFree`完成已排队的输出scatter/readback与oracle主机快照；延迟CPU检查
+  持有自己的主机副本。不释放NTT digits、carry诊断、reduce常量或fold/frontier owner。
+- 驻留状态可能因释放发生变化，数学工作路径/检查计数可跨臂不同；每个固定策略
+  内计数须稳定，两臂对照全部目标叶子/因子，保持生产强制检查。
+- `test_stage2_phase_trim.py`与`test_stage2_chunk_budget.py`也接受同构建的已完成
+  `phase-output`小规模独立单位案例参考；用`trimmed_output`臂验证重申请与carry安全。
+- 正式计时为ABBA+BAAB、每臂n=4。不要加`--require-resident`拒绝作为基线的合法回退；
+  实际owner/root/frontier字段分别保留。小规模驻留门禁可使用该参数。
+- Auto B2拒绝未经标定的输出释放策略；未加入INI/发布默认。

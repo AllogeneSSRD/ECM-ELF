@@ -1,7 +1,7 @@
 """Verify native phase reclamation preserves the resident-fallback contract.
 
-Consumes a completed workspace check with an independent unit-case CPU oracle.
-Replays its two-buffer invocation, injecting each allocation fallback. Retains
+Consumes a completed workspace/output-lifetime check with an independent unit-case CPU oracle.
+Replays its candidate invocation, injecting each allocation fallback. Retains
 commands, environments, complete target-leaf checks and frozen identities.
 """
 import argparse
@@ -29,10 +29,11 @@ def main():
     data = json.loads(reference.read_text(encoding='utf-8'))
     identity, tool_sha, ref_sha = freeze(exe), sha(__file__), sha(reference)
     if (not data['complete'] or data['mode'] != 'check' or
-        data['comparison'] != 'workspace-bq' or not data['oracle'] or not data['oracle']['unit'] or
+        data['comparison'] not in ('workspace-bq','phase-output') or not data['oracle'] or not data['oracle']['unit'] or
         identity != data['identity']):
-        raise ValueError('a matching completed workspace check with an independent unit oracle is required')
-    row = next(r for r in data['runs'] if r['key'] == 'two_buffer')
+        raise ValueError('a matching completed workspace/output-lifetime check with an independent unit oracle is required')
+    row = next(r for r in data['runs'] if r['key'] ==
+               ('trimmed_output' if data['comparison']=='phase-output' else 'two_buffer'))
     expected = {k: str(v) for k, v in data['oracle']['expected_leaf'].items()}
     if row['leaf'] != expected or row['environment'].get('NTT_PHASE_TRIM_RAW') != '1':
         raise ValueError('reference must exercise phase reclamation and match its CPU leaf oracle')

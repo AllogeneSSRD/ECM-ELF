@@ -4820,3 +4820,24 @@ ABBA+BAAB每臂n=4，完整Stage2均值96.05695→96.66659 s，**慢0.635%**；
 下一项验证阶段S4归约输出缓冲释放，读取真实边界容量后再判断能否使D138启用驻留；
 维持既有1 GiB future reserve。完整数据、代码行号、复现、阶段/显存图与适用范围见
 [同方向报告§15](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。
+
+## 126. 阶段S4输出释放使较大D启用驻留：完整时间减少11.38%（2026-10-09）
+
+继续§125的生命周期方向：新增默认关闭的`NTT_PHASE_TRIM_OUTPUT=1`，Newton结果已
+保存到主机后、独立fold owner进入下降前，同步释放失效的归约输出，重置容量并
+按需重建；异步oracle保留主机快照，carry/NTT/owner不释放。Auto B2拒绝旧成本scope。
+
+7995-bit目标、M8011、B1=20、B2=2.6e12、D1381380、相同预算/BQ/raw释放，原分块：
+ABBA+BAAB每臂n=4，完整时间95.94724→85.03049 s（−11.3779%），两组−11.2608/−11.4948%。
+实际释放输出121.817/243.634 MiB，使fold/root/frontier由全回退变为全驻留；1 GiB
+future reserve保持不变。fold省5.141 s、descent省3.343 s，归约事件仍约4.873 s。
+数学工作与全部强制检查覆盖相同，完整目标叶子摘要一致。
+
+这是暂存/常驻/传输的取舍：NTT峰仍4612.618 MiB，新增owner852.722 MiB，2秒采样
+GPU用量峰6442→7296 MiB；不称为总显存减少。frontier admission额外余量约49.1 MiB，
+外部占用变化时可能合法回退；尚不推广至所有N/production B1/显存状态或发布默认。
+
+独立小规模CPU参考、generic8193-bit、原生plan、fold/frontier分配失败重申请、
+pool关闭/三缓冲/arena拒绝及carry污染门禁通过；当前门禁脚本重新运行通过。
+详见[同方向报告§16](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。
+下一阶段继续统一实际shape/chunk与生命周期MemoryPlan，再标定D/Auto B2完整成本。

@@ -610,6 +610,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     require("NTT_ARENA_WORKSPACE_POOL",1,1);require("NTT_FUSE_COMPACT_SCRATCH",1,1);
     require("NTT_WORKSPACE_REUSE_BQ",0,0); // Two-buffer layouts require a matching memory/cost profile.
     require("NTT_PHASE_TRIM_RAW",0,0); // Phase reclamation also needs a matching cost scope.
+    require("NTT_PHASE_TRIM_OUTPUT",0,0); // Output reclamation changes residency and timings.
     require("NTT_S4_WORKSPACE_BUDGET",0,0); // Chunk policy needs a matching cost scope.
     require("NTT_S4_FLAT_DIRECT",1,1);require("NTT_GROOT_COMPACT_RAW",1,1);
     if(o.factor_only)_putenv_s("NTT_NAME_HITS","0");
