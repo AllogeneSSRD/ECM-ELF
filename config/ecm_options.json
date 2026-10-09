@@ -1019,6 +1019,21 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_tune_profile",
+      "field": "tune_profile",
+      "type": "string",
+      "default": "",
+      "domain": "<path>",
+      "fx": "Stage2_measured_D_and_carrier_selection",
+      "parser": "strict",
+      "empty": "legacy_selection",
+      "description": [
+        "Full ECM tune TOML profile for choosing D and Mersenne carrier. Empty keeps existing selection. Matches the device, backend, memory policy, target bit width, B1 and B2; unmeasured scopes use the existing path. Explicit nonzero D fixes D; --carrier-exponent, including 0, fixes arithmetic. Carrier candidates must exactly contain saved N as a divisor. This profile does not select B2.",
+        "指定完整 ECM tune 的 TOML 性能配置，用于选择 D 和梅森承载。留空保留现有选型。检查设备、后端、显存策略、目标位宽、B1 与 B2；未测范围使用现有路径。显式非零 D 固定 D；--carrier-exponent（包括 0）固定算术模式。承载候选必须实际被 save 的 N 整除。此配置不用于选择 B2。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_auto_min_b2",
       "field": "auto_min",
       "type": "u64",

@@ -34,7 +34,7 @@ reader 限制 1 MiB，拒绝旧格式、缺失 END、重复键、非法整数、
 
 组件准入不能保证进程峰，输出 `process_peak_guaranteed=false`。当前全流程显存模型边界见 [内存](MEMORY.md)。
 
-## Tune
+## NTT tune
 
 `--tune ntt` 测不同 log₂L 的精确域卷积。参数含 `--length-log2 <a:b>`、`--tune-repeats <n>`、`--tune-memory-mb <MiB>` 与 `--tune-file <path>`；默认重复 5，预热不计中位数。需要固定 Goldilocks 后端。
 
@@ -42,11 +42,38 @@ reader 限制 1 MiB，拒绝旧格式、缺失 END、重复键、非法整数、
 
 `--tune-level <1..10>` 当前用于 NTT 测量：等级 ℓ 的默认长度范围为 log₂L=16…[20+min(ℓ−1,7)]，重复次数为 2ℓ²+1；每个长度另有一次预热。显式 `--length-log2`、`--tune-repeats` 始终覆盖等级预设，与参数顺序无关。未指定等级时保持 16…27、重复5次。内存预算不随等级提高；越界长度记录 `skipped_memory`，不参与性能选择。`effort_level=0` 表示未使用等级预设，实际范围和重复次数以同一 profile 的字段为准。
 
-此 TOML 目前是 NTT 实测输出，尚未作为自动 D/承载或 Auto B2 的运行 reader 输入；不能将 field-convolution 吞吐替代完整 Stage2 成本。完整 ECM 的等级分配、无因子基准及候选选择仍待接入。
+NTT TOML 不参与自动 D/承载或 Auto B2 的运行选择；不能将 field-convolution 吞吐替代完整 Stage2 成本。
 
 iter/s 指每秒完整 field convolution 次数，不是每秒 ECM 曲线，也不含 S4 系数归约、树准备和 GCD。profile 同时记录设备/后端、实际长度、容量、预热/样本和精确性核对。一次 NTT tune 不能单独推导最优 B2。
 
 按位宽校准 Auto B2 还需真实 Stage1 摊销、阶段成本、非满树/根操作、分块和驻留/回退数据。生成拟合、冻结预测、独立验证与收益排名后才能导出运行 profile。
+
+## 完整 Stage2 tune
+
+`--tune ecm` 运行生产 Stage2，默认输出 `stage2_ecm_tune.toml`。每个输入/B2/D/算术组合先独立进程预热一次，再按指定轮数运行独立进程。保存 `stage2_full_wall.total` 的样本、中位数及 MAD，中位数统计不含预热、Stage1准备、进程启动、调优规划及结果发布；阶段字段是各自中位数，存在包含关系，不能相加替代总时长。算术核验完成后才产生测量回执。
+
+默认基准使用已知梅森素数，sigma=26、B1=20，以独立GMP ladder生成归一化Stage1点。该准备不是生产Stage1计时或Auto B2的Stage1标定。`--tune-save FILE` 使用文件第一条有效记录；`--tune-carrier-exponent p` 对该记录同时测普通模数与承载，先验证N∣2ᵖ−1。save模式只声明所测曲线无因子，不宣称目标为素数或其他曲线不会产生因子。发现因子、算术坏计数或附加诊断使计时不干净时，停止调优并保留证据，不发布成功配置。
+
+完整Stage2默认等级为1。等级ℓ：基准位宽数min(13,ℓ+3)，D数min(12,ℓ+2)，B2数1+⌊(ℓ−1)/2⌋，重复2ℓ+1次，单曲线最多64+16(ℓ−1)棵G树。各等级保留前一等级的输入并扩大网格；高等级可能需要很长时间，不是固定秒数预算。
+
+- 位宽依次加入：521、2203、4423、9689、1279、3217、11213、607、2281、4253、127、107、9941。
+- D依次加入：30030、60060、120120、180180、210210、360360、570570、690690、1141140、1381380、1711710、2282280。
+- B2依次加入：2.6×10⁹、2.6×10¹⁰、2.6×10¹¹、2.6×10¹²、8×10¹²。
+- `--tune-exponents p,...`、`--tune-d D,...`、`--tune-b2 B2,...`、`--tune-repeats n`覆盖相应预设；save与exponents互斥。`--tune-max-batches n`覆盖G树数量上限，0解除该耗时限制；它防止高B2搭配很小D产生极长基准，不是算术正确性门限。显存采用有效batch/arena/fold配置；`--tune-memory-mb`只用于NTT。G1、不支持的诊断/非驻留组合和静态free快照不满足的形状记录跳过；没有成功形状则不发布。
+
+TOML格式3按`[profile]`、`[device]`、`[policy]`、`[policy.environment]`、`[ecm.sample_<n>]`、`[summary]`组织；策略每键一行，重复时间用数组。配置只包含性能、校验与适用条件，不含路径、程序或构建摘要。reader兼容格式2的环境串并在内存中规范为命名字段。原始plan、子进程日志和测量回执保留在`data/experiments/ecm_tune_<id>/`，与可编辑性能配置分开。发布前核对设备/策略、完整状态、样本统计及运行期间程序未变化，随后原子替换；失败不覆盖已有配置。
+
+## 实测 D 与承载选择
+
+显式B2任务可配置`--tune-profile FILE.toml`或INI的`stage2_tune_profile`，CLI路径优先。每条生产curve worker和plan-only都使用原生reader。它检查UUID/SM、CUDA runtime/driver、固定后端、outer、add/sub、显存预算及NTT策略；性能配置不依赖二进制摘要。基准不启用独立debug日志，运行启用debug日志时给出未标定原因并保留现有选型；NTT_MEMORY_AUDIT非零时拒绝调优。
+
+候选必须精确匹配目标位宽、普通算术类型、B1/B2及已测D；承载候选重新验证目标N实际整除2ᵖ−1。同位宽匹配是测量成本的适用条件，不是数学正确性的证明。非零显式D固定D；显式`--carrier-exponent`（包括0）固定算术模式。未指定算术时，匹配profile中的普通/合法承载候选参与同一排名。
+
+排名采用实测median+2·MAD，先检查排名较优候选的当前正常驻留联合内存模型。模型须有效、完整，且`required_free_bytes`不超过实时free快照；以联合峰、baby/fold/frontier预留需求计算，不能叠加模块各自峰。通过后把选定D和承载交给生产引擎，因此较大D不会再被legacy additive估计提前排除。引擎继续执行实际free检查、分配错误处理和回退，静态判断不保证物理驻留。无设备/策略匹配、未测范围或没有可用候选时记录原因并保留现有路径；损坏或未完成profile报错。
+
+结果的`tune_plan`保留候选数、选定D/承载、中位数/MAD、所需free与实际free；原始D/承载请求单独保存。此reader目前不拟合未测位宽/B1/B2、不读取NTT吞吐选择ECM参数、不选择B2。Auto B2成本模型仍受前述独立标定合同约束。
+
+GPU频率、功耗和背景负载属于测量条件，应在相同设置下调优和使用；改变设置后重新测量。当前profile的设备/策略匹配不验证这些动态条件。`stage2_plan`中的legacy耗时估计与`tune_selection`中的实测统计分别保留，实测排名使用后者。
 
 ## 标定资格与当前证据
 
@@ -59,6 +86,8 @@ iter/s 指每秒完整 field convolution 次数，不是每秒 ECM 曲线，也�
 ## 入口
 
 - [ecm_stage2_cost_profile.h](../../src/core/ecm_stage2_cost_profile.h#L32)：reader、scope、`Work` 与 `choose`。
+- [ecm_stage2_tune_ecm.h](../../src/core/ecm_stage2_tune_ecm.h)：完整Stage2等级、素数点准备、统计及TOML reader。
+- [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：`run_ecm_tune`、`select_tuned`和`curve_worker`。
 - [驱动资格检查](../../src/core/ecm_cuda_stage2_main.cpp#L576)、[收益公式](../../src/core/ecm_stage2_cost_profile.h#L185)。
 - [measure_ecm_costs.py](../../tools/bench/measure_ecm_costs.py)、[fit_ecm_costs.py](../../tools/bench/fit_ecm_costs.py)、[validate_ecm_costs.py](../../tools/bench/validate_ecm_costs.py)、[audit_ecm_costs.py](../../tools/bench/audit_ecm_costs.py)、[export_ecm_cost_profile.py](../../tools/bench/export_ecm_cost_profile.py)。
 - [当前 TODO](../TODO.md)。

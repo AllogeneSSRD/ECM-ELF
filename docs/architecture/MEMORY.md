@@ -51,7 +51,7 @@ cap 淘汰按实际策略处理 carry、cold 表和 keyed buffers，保留 conte
 
 查询返回联合 `peak_bytes` 及该时刻的 `ntt_at_peak`、`s4_at_peak`，这两项属于同一瞬间，可以相加核对联合值。各自的 `ntt_peak_bytes`、`s4_peak_bytes` 仍为不同时间的组件峰，不能相加称为联合峰。`simulated_events` 只计实际模拟事件，压缩跳过的块数另列；它不是整条曲线的分配次数。
 
-该查询只覆盖条件驻留路径的 NTT/S4，输出 `process_peak_complete=false`、`admission_model=false`。NTT cap 拒绝时返回有效成功前缀和 `finished=false`，不把后续按次分配回退当作已覆盖。包含owner和giant的联合查询见下文；自动 D 尚未根据这些组件结果放行。
+该查询只覆盖条件驻留路径的 NTT/S4，输出 `process_peak_complete=false`、`admission_model=false`。NTT cap 拒绝时返回有效成功前缀和 `finished=false`，不把后续按次分配回退当作已覆盖。实测D/承载选型使用下文包含初始化、owner和giant的曲线联合查询；两组件结果不能单独放行。
 
 CPU验证使用合成形状/表布局，1152组输入检查压缩与逐次执行、各组件最终容量和峰值、逐事件收支、拒绝前缀以及策略不一致，455270项断言通过。它验证模型组合与压缩，不证明生产 fuse 描述或 CUDA 实际分配成功。证据：`data/experiments/stage2_workspace_memory_20261009/cpu_v2/`；入口：`src/core/ecm_stage2_workspace_memory.h` 的 `workspace_memory_plan`。
 
@@ -124,6 +124,8 @@ M6011余因子5872 bits、B1=20、sigma26、B2=2.6×10¹²、D1141140/P103680、
 ## 现有查询与验证
 
 plan-only 提供真实 packing、精确非空树组、请求顺序以及初始化/NTT/S4/owner/giant的条件联合结果与free快照需求；当前输出明确不保证full physical process peak、完整准入和全部fallback。候选筛选必须保持条件适用性和实时free/headroom查询。
+
+`select_tuned`在匹配的完整Stage2性能scope内按实测成本排序，逐候选要求`valid`、`finished`及`initial_free_snapshot_fits`。较大D通过这个条件模型后以显式D传给生产引擎；实际owner仍执行实时free查询及失败回退。未测、不支持或不满足当前free快照时保留现有选型，合同见[Auto B2/tune](AUTO_B2.md)。
 
 当前 NTT 事件模型的 CPU 账本从生产分配语句生成：173 cases、47,936 events、168,166 assertions，失配 0；故意改变表释放顺序会拒绝。40 个 native plan 查询和 10 条短 GPU 曲线通过组件/路由及算术核对。CPU opaque allocator 不验证 CUDA 物理分配失败、驱动驻留或完整进程峰。
 

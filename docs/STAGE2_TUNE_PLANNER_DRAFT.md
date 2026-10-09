@@ -73,3 +73,17 @@ CPU50 cases/1500 native events/4556 checks、错误tree extent+8 mutation拒绝�
 - [ ] 将选型连接到显式B2主路径和Auto B2；当前静态准入及手动承载均未由本轮改动替代。
 - [ ] 先复测5872-bit较大D、7995-bit承载，再覆盖更多位宽/预算与非单位场景；按同设备条件验证候选收益。
 - [ ] 实施完整构建、回归与性能验证，更新权威说明。
+
+### 完整Stage2 tune与实测主路径
+
+完整Stage2等级、命名TOML及有界原生reader已接入。默认13个已知素数，独立GMP准备B1=20/sigma26；save可配对测普通/承载。每形状独立进程预热及重复，只有clean、无因子、mandatory/GMP检查成功且驻留的样本发布；失败保留旧配置与raw。等级同时扩展位宽、D/B2、重复和G树数量上限，0可显式解除耗时上限。格式3策略每键一行，格式2测量环境串可读取；性能文件没有路径、binary或manifest摘要。
+
+默认目录资格检查发现8191不属于梅森素数指数，已替换。13项Lucas–Lehmer和独立Stage1参考通过；该发现前的失败CPU输出保留，所有已运行性能曲线使用521或已核验余因子。CPU reader拒绝21种坏profile，支持UTF8 BOM与旧格式2，验证设备/预算/策略不匹配。最终production CUDA完整构建约105.6秒，命名配置/资格修正经新主机对象构建，CUDA对象按依赖校验复用。
+
+`stage2_tune_profile`/`--tune-profile`已在生产worker与plan-only应用：精确匹配target bits、B1/B2、已测D和算术类型，承载逐候选验证N∣2ᵖ−1；按median+2MAD排序并查询正常驻留联合free需求。D和算术显式覆盖保留，包括carrier=0固定普通模式。无数据/不匹配/不适用保留legacy，破损profile报错；debug日志未标定时回退。
+
+最终exe SHA256=`5eecbb20334cdd492e8c9a71e07e8d662e437ea7eee220cc2380fb65cbb38353`。13素数26条完整GPU catalogue、普通/承载与生产选择13条短曲线、显式覆盖、INI、失败发布保留、预算跳过通过，另16个native联合plan回归通过。5872-bit两D各预热+2正式（6条）完整检查通过，140.972→97.406 s，中位数少30.904%。同CUDA对象的最终驱动以D=0自动选1141140并完整运行97.217 s，worker99.457 s，坏计数0。固定1800MHz、默认55W上限，GPU1、不修改设置；首个小D正式样本有短时host编译并行，不能把本验证替代独立交错标定。
+
+证据`data/experiments/ecm_tune_20261010/`的`native_certified/result.json`、`runtime_named/result.json`、`joint_plans/results.json`、`wide_5872.toml`、`production_wide/result.json`及两binary的frozen source closure。正式状态已同步到AUTO_B2、MEMORY、STAGE2和性能说明。
+
+剩余工作：更多生产B1/位宽/预算下的成本拟合与独立排名验证，正收益承载的生产自动选择完整曲线，NTT测量与阶段成本的预计算组合，Auto B2的新配置/Stage1成本接入，非驻留/G1回退模型。当前精确scope选择不宣称这些范围已完成。

@@ -68,7 +68,11 @@ Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目
 
 `--plan-only` 查询设备和算法/组件形状，不运行曲线、不写成功结果、不推进队列。`--dry-run` 检查输入，不承诺实时显存准入。`--carrier-exponent p` 为梅森承载实验，要求保存的目标 N 整除 2ᵖ−1，当前需显式 B2。
 
-- [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp#L172)：`records`；[队列字段](../../src/core/ecm_cuda_stage2_main.cpp#L355)：`queue_fields`。
+`--tune ecm --tune-level 1`生成完整Stage2性能配置；`--tune-save FILE --tune-carrier-exponent p`可对有效save测普通/承载两种路径。`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号分隔列表，`--tune-repeats`覆盖重复次数。默认配置为`stage2_ecm_tune.toml`，原始证据在工作目录的`data/experiments/`。调优失败不覆盖已有配置；高等级扩大输入与轮数，耗时可能很长。
+
+生产运行用`--tune-profile FILE.toml`或`stage2_tune_profile`加载性能数据，自动选已测范围内的D和合法承载。显式非零D固定D；`--carrier-exponent 0`固定普通模数，显式非零p固定承载。无匹配实测数据时保留现有选型并给出原因；不会仅凭save来自梅森数自动启用承载。完整适用范围和计时边界见[Auto B2/tune](../architecture/AUTO_B2.md)。
+
+- [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp#L175)：`records`；[队列字段](../../src/core/ecm_cuda_stage2_main.cpp#L393)：`queue_fields`。
 - [ecm_stage2_queue_state.h](../../src/core/ecm_stage2_queue_state.h)：原子进度和回执对账。
 - [ecm_stage2_console.h](../../src/core/ecm_stage2_console.h)：阶段和内存摘要。
 - [Stage2 管线](../architecture/STAGE2.md)、[Auto B2](../architecture/AUTO_B2.md)、[构建](BUILD.md)。

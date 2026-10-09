@@ -12,6 +12,7 @@
 #include "ecm_stage2_factorize.h"
 #include "ecm_stage2_cost_profile.h"
 #include "ecm_stage2_tune_format.h"
+#include "ecm_stage2_tune_ecm.h"
 #include "ecm_stage2_geometry.h"
 #include "ecm_stage2_logging.h"
 #include "ecm_stage2_console.h"
@@ -20,6 +21,7 @@
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -212,6 +214,7 @@ struct Options {
     bool debug_log = false;
     uint64_t b2 = 0, d = 0, skip = 0, curves = 0, batch = 0, arena = 0;
     unsigned carrier_exponent=0;
+    bool has_carrier=false;
     int device = -1, worker = 1;
     int log_level = -1;
     bool dry = false, once = false, selection = false, help = false;
@@ -222,7 +225,12 @@ struct Options {
     std::string tune, tune_file;
     int tune_first = 16, tune_last = 27, tune_repeats = 5;
     int tune_level = 0;
-    bool has_tune_lengths = false, has_tune_repeats = false;
+    bool has_tune_lengths = false, has_tune_repeats = false,has_tune_memory=false;
+    bool tune_child=false;
+    std::string tune_save;
+    std::vector<uint64_t> tune_ds,tune_b2s,tune_exponents;
+    unsigned tune_carrier=0;
+    uint64_t tune_max_batches=0;bool has_tune_max_batches=false;
     uint64_t tune_memory_mb = 1024;
     bool factorize_hits = false;
     bool factor_only = false;
@@ -230,7 +238,7 @@ struct Options {
     std::string gp = ecm_config::defaults::stage2_stage2_gp;
     unsigned factor_timeout = static_cast<unsigned>(ecm_config::defaults::stage2_stage2_factor_timeout);
     bool auto_b2=false,cost_device_info=false;
-    std::string cost_profile;
+    std::string cost_profile,tune_profile;
     uint64_t auto_min=0,auto_max=0,owner_mb=ecm_config::defaults::stage2_stage2_fold_mb,stage1_batch=ecm_config::defaults::stage2_stage1_batch;
     double stage1_seconds=ecm_config::defaults::stage2_stage1_seconds_per_curve,ratio_adjust=ecm_config::defaults::stage2_stage2_ratio_adjust;
     bool has_owner=false,has_stage1_seconds=false,has_stage1_batch=false,has_ratio=false;
@@ -262,6 +270,7 @@ Options arguments(int argc, char **argv) {
             const auto p=num();
             if(p && (p<2 || p>ecm_stage2::max_input_bits))throw std::runtime_error("carrier-exponent must be 0 or 2..16384");
             o.carrier_exponent=static_cast<unsigned>(p);
+            o.has_carrier=true;
         }
         else if (a == "--skip-curves") { o.skip = num(); o.selection = true; }
         else if (a == "--curves") { o.curves = num(); o.selection = true; }
@@ -278,6 +287,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--factor-only") o.factor_only = true;
         else if (a == "--auto-b2") o.auto_b2=true;
         else if (a == "--cost-profile") o.cost_profile=value();
+        else if (a == "--tune-profile") o.tune_profile=value();
         else if (a == "--cost-device-info") o.cost_device_info=true;
         else if (a == "--auto-min-b2") o.auto_min=num();
         else if (a == "--auto-max-b2") o.auto_max=num();
@@ -293,6 +303,26 @@ Options arguments(int argc, char **argv) {
             o.has_factor_timeout = true;
         }
         else if (a == "--tune") o.tune = value();
+        else if (a == "--ecm-tune-worker") o.tune_child=true;
+        else if (a == "--tune-save") {o.tune_save=value();o.tune_options=true;}
+        else if (a == "--tune-max-batches") {
+            o.tune_max_batches=num();if(o.tune_max_batches>1048576)throw std::runtime_error("tune-max-batches must be 0..1048576");
+            o.has_tune_max_batches=true;o.tune_options=true;
+        }
+        else if (a == "--tune-carrier-exponent") {
+            const auto p=num();if(p<2 || p>16384)throw std::runtime_error("tune-carrier-exponent must be 2..16384");
+            o.tune_carrier=static_cast<unsigned>(p);o.tune_options=true;
+        }
+        else if (a == "--tune-d" || a == "--tune-b2" || a == "--tune-exponents") {
+            const auto text=value();std::vector<uint64_t> values;size_t start=0;
+            for(;;) {const auto end=text.find(',',start);values.push_back(u64(text.substr(start,end==text.npos?end:end-start),a.c_str()));
+                if(end==text.npos)break;start=end+1;}
+            if(values.size()>64 || std::set<uint64_t>(values.begin(),values.end()).size()!=values.size())throw std::runtime_error("tune grid must contain 1..64 distinct values");
+            if(a=="--tune-d"){for(auto d:values)if(d<6 || d%2 || d>200000000)throw std::runtime_error("tune-d must be even, 6..200000000");o.tune_ds=values;}
+            else if(a=="--tune-b2"){for(auto b:values)if(b<3 || b>(uint64_t)INT64_MAX-8192)throw std::runtime_error("invalid tune-b2");o.tune_b2s=values;}
+            else {for(auto p:values)if(p<2 || p>16384)throw std::runtime_error("invalid tune exponent");o.tune_exponents=values;}
+            o.tune_options=true;
+        }
         else if (a == "--tune-level") {
             const auto level=num();if(level<1 || level>10)throw std::runtime_error("tune-level must be 1..10");
             o.tune_level=static_cast<int>(level);o.tune_options=true;
@@ -314,6 +344,7 @@ Options arguments(int argc, char **argv) {
             o.tune_repeats = static_cast<int>(n);o.has_tune_repeats=true;
         }
         else if (a == "--tune-memory-mb") {
+            o.has_tune_memory=true;
             o.tune_options = true; o.tune_memory_mb = num();
             if (!o.tune_memory_mb || o.tune_memory_mb > 1048576)
                 throw std::runtime_error("invalid tune memory budget in MiB");
@@ -458,7 +489,10 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     auto arg = [&](const wchar_t *key, uint64_t n) { cmd += L" "; cmd += key; cmd += L" "; cmd += std::to_wstring(n); };
     arg(L"--record-offset", r.offset); arg(L"--record-hash", r.hash); arg(L"--record-index", r.index);
     arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
-    if(o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
+    if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
+    if(!o.tune_profile.empty())cmd+=L" --tune-profile "+quote(fs::path(o.tune_profile).wstring());
+    arg(L"--batch-mb",batch);arg(L"--arena-mb",o.arena);arg(L"--owner-budget-mb",o.owner_mb);
+    if(o.tune_child)cmd+=L" --ecm-tune-worker";
     arg(L"--log-level", static_cast<uint64_t>(o.log_level));
     cmd += L" --results " + quote(results.wstring());
     if (o.factorize_hits) {
@@ -652,6 +686,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     }
     return c::json(plan,hash);
 }
+std::string select_tuned(Options &o,const Record &r);
 int curve_worker(Options o) {
     // Children ignore the first console interrupt; the parent owns stop policy.
     SetConsoleCtrlHandler(nullptr,TRUE);
@@ -678,10 +713,15 @@ int curve_worker(Options o) {
         if(!modulus.configure(r.n.c_str(),16,o.carrier_exponent,error))throw std::runtime_error(error);
     }
     std::string result;
+    EcmStage2Metrics tune_metrics;
     const uint64_t requested_d=o.d,requested_b2=o.b2;
+    const unsigned requested_carrier=o.carrier_exponent;
     const auto start = std::chrono::steady_clock::now();
     std::string auto_json;
     if(!o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
+    o.has_d=requested_d!=0;
+    const auto tuned_json=o.tune_child?std::string{}:select_tuned(o,r);
+    if(!tuned_json.empty())std::cout<<tuned_json<<std::endl;
     const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
     Big n, x, gcd;
@@ -697,9 +737,23 @@ int curve_worker(Options o) {
         if (!mpz_cmp(gcd.z, n.z)) throw std::runtime_error("saved X=0 gives no usable Stage1 point");
         configure_cuda_wait(o.device);
         code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
-            [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent);
+            [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent,
+            o.tune_child?&tune_metrics:nullptr);
     }
     if (code || result.empty()) return code ? code : 1;
+    if(o.tune_child) {
+        const auto &m=tune_metrics;
+        if(status!="stage2_completed" || !m.clean || !m.selftest_cases || !m.checked || m.bad ||
+           result.find("\"hits\":0,")!=0 || !ecm_stage2::result_factors(result).empty())
+            throw std::runtime_error("ECM tune requires a clean no-factor curve with arithmetic checks");
+        std::ostringstream out;out<<std::setprecision(17)<<"{\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"giant_points\":"<<m.giant_points
+            <<",\"total_seconds\":"<<m.total_seconds<<",\"init_seconds\":"<<m.init_seconds<<",\"main_seconds\":"<<m.main_seconds
+            <<",\"giant_seconds\":"<<m.giant_seconds<<",\"gtrees_seconds\":"<<m.gtrees_seconds<<",\"fold_seconds\":"<<m.fold_seconds
+            <<",\"descent_seconds\":"<<m.descent_seconds<<",\"inverse_seconds\":"<<m.inverse_seconds<<",\"accum_seconds\":"<<m.accum_seconds
+            <<",\"selftest_cases\":"<<m.selftest_cases<<",\"checked\":"<<m.checked<<",\"bad\":"<<m.bad
+            <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)<<'}';
+        append(o.results,out.str());return 0;
+    }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     double factor_seconds = 0;
     if (o.factorize_hits) {
@@ -719,6 +773,8 @@ int curve_worker(Options o) {
         ",\"carrier_exponent\":" + std::to_string(o.carrier_exponent) +
         ",\"B1\":" + std::to_string(r.b1) + ",\"B2\":" + std::to_string(o.b2) +
         ",\"requested_D\":" + std::to_string(requested_d) + ",\"seconds\":" + std::to_string(seconds) +
+        ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
+        (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
         ",\"factorization_seconds\":" + std::to_string(factor_seconds) +
         ",\"param\":0" +
         ",\"requested_factor_only\":" + std::string(o.factor_only ? "true" : "false") +
@@ -736,6 +792,12 @@ void help() {
         "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results FILE\n"
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
+        "Tune: --tune ntt|ecm --tune-level 1..10 --tune-file FILE.toml --tune-repeats N\n"
+        "      ECM: --tune-exponents p,... or --tune-save FILE [--tune-carrier-exponent p]\n"
+        "           --tune-d D,... --tune-b2 B2,...; one warmup per shape, separate processes.\n"
+        "           --tune-max-batches N limits G trees per curve; 0 removes the effort limit.\n"
+        "Selection: --tune-profile FILE.toml; matches measured B1/B2/width/policy scopes.\n"
+        "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
         "         --log FILE --log-level quiet|curve|phases|batches|debug (0..4)\n"
         "         Production console default: phases; readable file: batches. --dry-run --help\n"
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
@@ -757,22 +819,214 @@ void help() {
         "Queue only: resumes completed curves. Ctrl+C finishes current curve; twice stops now.\n"
         "Missing implicit INI uses defaults. No Stage1 computation or checkpointing.\n";
 }
+ecm_stage2::tune::Fields tune_environment() {
+    std::map<std::string,std::string> env;
+    const auto block=GetEnvironmentStringsA();if(!block)throw std::runtime_error("cannot inspect tune policy");
+    for(const char *p=block;*p;p+=std::strlen(p)+1) {
+        std::string row=p;const auto eq=row.find('=');if(eq==row.npos || row.compare(0,4,"NTT_")!=0)continue;
+        const auto key=row.substr(0,eq),value=row.substr(eq+1);
+        // D is explicit during tune; logging and audits are not runtime knobs.
+        if(key=="NTT_D_MODEL" || key=="NTT_NO_PROGRESS" || key=="NTT_MEMORY_AUDIT" || key=="NTT_REQUEST_AUDIT")continue;
+        if(value.find_first_not_of("0123456789.eE+-")!=value.npos) {
+            FreeEnvironmentStringsA(block);throw std::runtime_error("ECM tune cannot describe nonnumeric policy: "+key);
+        }
+        auto field=key.substr(4);for(char &c:field)c=(char)std::tolower((unsigned char)c);
+        env[field]=value.empty()?"\"\"":value;
+    }
+    FreeEnvironmentStringsA(block);return env;
+}
+// Access known scalar fields in the engine's trusted structured output. Nested
+// records are sliced first; keys are never obtained from external profile text.
+std::string plan_scalar(const std::string &json,const char *key) {
+    const auto marker=std::string("\"")+key+"\":";auto a=json.find(marker);
+    if(a==json.npos)throw std::runtime_error(std::string("plan field missing: ")+key);a+=marker.size();
+    const auto b=json.find_first_of(",}",a);return json.substr(a,b-a);
+}
+std::string curve_memory_record(const std::string &json) {
+    const auto a=json.find("\"curve_workspace_memory\":{");if(a==json.npos)throw std::runtime_error("curve memory model unavailable");
+    return json.substr(a,json.find("\"s4_memory\":",a)-a);
+}
+std::string select_tuned(Options &o,const Record &r) {
+    if(o.tune_profile.empty())return {};
+    namespace t=ecm_stage2::tune;
+    Handle guard;guard.value=CreateFileW(fs::path(o.tune_profile).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(guard.value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock measured ECM tune profile");
+    const auto profile=t::EcmProfile::load(o.tune_profile);
+    EcmStage2DeviceInfo device;if(ecm_cuda_stage2_device_info(o.device,&device))throw std::runtime_error("cannot query tune selection device");
+    auto fallback=[](const char *reason){return std::string("{\"type\":\"tune_selection\",\"selected\":false,\"reason\":")+json_string(reason)+"}";};
+    if(o.debug_log)return fallback("debug_log_not_calibrated");
+    if(!profile.matches(device,o.batch,o.arena,o.owner_mb,tune_environment(),NTT_GL_ADD_SUB_MASK))return fallback("device_or_policy_mismatch");
+    Big target,plus;mpz_set_str(target.z,r.n.c_str(),16);mpz_add_ui(plus.z,target.z,1);
+    const auto bits=mpz_sizeinbase(target.z,2);
+    const std::string kind=json_string(mpz_popcount(plus.z)==1?"mersenne":"generic");
+    struct Candidate {const t::Fields *sample;double rank;};std::vector<Candidate> candidates;
+    for(const auto &s:profile.samples) {
+        const auto carrier=t::uint(s,"carrier_exponent");
+        if(t::uint(s,"target_bits")!=bits || t::uint(s,"b1")!=r.b1 || t::uint(s,"b2")!=o.b2 ||
+           (o.has_d && o.d && t::uint(s,"d")!=o.d) || (o.has_carrier && carrier!=o.carrier_exponent) ||
+           !t::uint(s,"fold_resident") || !t::uint(s,"frontier_resident"))continue;
+        if(!carrier && t::required(s,"modulus_kind")!=kind)continue;
+        if(carrier){ecm_stage2::ModulusContext m;std::string error;if(!m.configure(r.n.c_str(),16,(unsigned)carrier,error))continue;}
+        const auto rank=t::real(s,"median_seconds")+2*t::real(s,"mad_seconds");
+        if(!std::isfinite(rank))throw std::runtime_error("ECM tune rank overflow");
+        candidates.push_back({&s,rank});
+    }
+    // Conservative measured rank avoids a noisy carrier win. No extrapolation
+    // across widths, B1, B2 or unmeasured D. The engine rechecks current memory.
+    std::stable_sort(candidates.begin(),candidates.end(),[](const Candidate &a,const Candidate &b){return a.rank<b.rank;});
+    size_t rejected=0;
+    for(const auto &candidate:candidates) {
+        const auto &s=*candidate.sample;std::string plan;
+        const auto d=t::uint(s,"d");const unsigned carrier=(unsigned)t::uint(s,"carrier_exponent");
+        if(ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,o.b2,d,o.device,
+            [](const char *p,void *ctx){*static_cast<std::string*>(ctx)=p;},&plan,carrier))throw std::runtime_error("tuned candidate planning failed");
+        const auto memory=curve_memory_record(plan);
+        if(plan_scalar(memory,"valid")!="true" || plan_scalar(memory,"finished")!="true" || plan_scalar(memory,"initial_free_snapshot_fits")!="true") {++rejected;continue;}
+        o.d=d;o.carrier_exponent=carrier;
+        std::ostringstream out;out<<std::setprecision(17)<<"{\"type\":\"tune_selection\",\"selected\":true,\"model\":\"measured_exact_scope_v1\",\"D\":"<<d
+            <<",\"carrier_exponent\":"<<carrier<<",\"median_seconds\":"<<t::real(s,"median_seconds")<<",\"mad_seconds\":"<<t::real(s,"mad_seconds")
+            <<",\"rank_seconds\":"<<candidate.rank<<",\"candidates\":"<<candidates.size()<<",\"memory_rejected\":"<<rejected
+            <<",\"required_free_bytes\":"<<plan_scalar(memory,"required_free_bytes")<<",\"free_bytes\":"<<plan_scalar(plan,"free_bytes")
+            <<",\"residency_guaranteed\":false}";return out.str();
+    }
+    return fallback(candidates.empty()?"no_matching_measured_scope":"no_candidate_fits_current_memory");
+}
+void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settings,const fs::path &destination) {
+    namespace t=ecm_stage2::tune;
+    if(const char *audit=std::getenv("NTT_MEMORY_AUDIT"))if(std::atoi(audit)!=0)throw std::runtime_error("ECM tune requires NTT_MEMORY_AUDIT=0; evidence receipts remain enabled");
+    auto effort=t::ecm_effort(o.tune_level?o.tune_level:1);
+    if(!o.tune_ds.empty())effort.d.assign(o.tune_ds.begin(),o.tune_ds.end());
+    if(!o.tune_b2s.empty())effort.b2.assign(o.tune_b2s.begin(),o.tune_b2s.end());
+    if(!o.tune_exponents.empty())effort.exponents.assign(o.tune_exponents.begin(),o.tune_exponents.end());
+    if(o.has_tune_repeats)effort.repeats=o.tune_repeats;
+    if(o.has_tune_max_batches)effort.max_batches=o.tune_max_batches;
+    if(!o.tune_save.empty() && !o.tune_exponents.empty())throw std::runtime_error("choose tune-save or tune-exponents");
+    if(o.tune_carrier && o.tune_save.empty())throw std::runtime_error("paired carrier tune requires --tune-save");
+    struct Input {fs::path save;Record record;unsigned prime=0;};
+    const fs::path evidence=fs::current_path()/"data"/"experiments"/("ecm_tune_"+std::to_string(GetCurrentProcessId())+"_"+std::to_string(GetTickCount64()));
+    fs::create_directories(evidence);std::vector<Input> inputs;
+    if(!o.tune_save.empty()) {
+        const auto save=absolute_from(fs::current_path(),o.tune_save);auto rec=records(save,0,1);
+        if(rec.empty())throw std::runtime_error("tune-save contains no curve");
+        if(o.tune_carrier){ecm_stage2::ModulusContext m;std::string error;if(!m.configure(rec[0].n.c_str(),16,o.tune_carrier,error))throw std::runtime_error(error);}
+        inputs.push_back({save,rec[0],0});
+    } else for(unsigned p:effort.exponents) {
+        std::string n;const auto x=t::prime_point(p,n);const auto save=evidence/("m"+std::to_string(p)+".save");
+        // The input is reproducible by catalogue exponent and sigma. Preparation
+        // and process launch are outside the engine's Stage2 timing boundary.
+        append(save,"METHOD=ECM; PARAM=0; SIGMA=26; B1=20; N=0x"+n+"; X=0x"+x+"; Z=1;");
+        auto rec=records(save,0,1);inputs.push_back({save,rec.at(0),p});
+    }
+    const auto count=inputs.size()*effort.d.size()*effort.b2.size()*(o.tune_carrier?2:1);
+    if(count>4096)throw std::runtime_error("ECM tune grid exceeds 4096 cases");
+    EcmStage2DeviceInfo device;if(ecm_cuda_stage2_device_info(o.device,&device))throw std::runtime_error("cannot query ECM tune device");
+    const auto environment=tune_environment();
+    if(!destination.parent_path().empty())fs::create_directories(destination.parent_path());
+    const fs::path partial(destination.string()+".partial."+std::to_string(GetCurrentProcessId()));
+    std::ofstream output(partial,std::ios::binary|std::ios::trunc);if(!output)throw std::runtime_error("cannot write ECM tune partial");
+    const auto binary=ecm_stage2::sha256_file(executable());
+    const auto manifest=executable().parent_path()/"build_manifest.json";
+    const auto build=fs::is_regular_file(manifest)?ecm_stage2::sha256_file(manifest):"";
+    output<<"# Full ECM Stage2 measurements. Seconds; bytes. Stage1 and process launch excluded.\n"
+        <<"[profile]\nformat = 3\nunit = \"full_stage2\"\nalgorithm_revision = 1\neffort_level = "<<(o.tune_level?o.tune_level:1)
+        <<"\nrepeats = "<<effort.repeats<<"\nwarmups = 1\nmax_batches = "<<effort.max_batches<<"\n\n[device]\nuuid_hex = \""<<device.uuid_hex
+        <<"\"\nsm_major = "<<device.major<<"\nsm_minor = "<<device.minor<<"\ncuda_runtime = "<<device.runtime
+        <<"\ncuda_driver = "<<device.driver<<"\ngl_fixed_mode = "<<device.fixed_mode<<"\nouter_unroll_u = "<<device.outer_unroll_u
+        <<"\nadd_sub_mask = "<<NTT_GL_ADD_SUB_MASK<<"\n\n[policy]\nbatch_mb = "<<batch<<"\narena_mb = "<<arena<<"\nfold_mb = "<<o.owner_mb
+        <<"\n\n[policy.environment]\n";
+    for(const auto &setting:environment)output<<setting.first<<" = "<<setting.second<<'\n';
+    size_t measured=0,skipped=0,case_number=0;
+    const auto old_level=stage2_log::level;stage2_log::level=stage2_log::quiet;
+    try {
+        for(const auto &input:inputs)for(auto b2:effort.b2)for(auto d:effort.d)for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode) {
+            ++case_number;if(stop_requests)throw std::runtime_error("ECM tune interrupted; partial/evidence retained");
+            const unsigned carrier=mode?o.tune_carrier:0;
+            if(b2<=input.record.b1)throw std::runtime_error("tune B2 must exceed saved B1");
+            const auto p=ecm_stage2::cost::phi(d)/2,giant=b2/d+2,g=(giant+p-1)/p;
+            if(effort.max_batches && g>effort.max_batches) {
+                ++skipped;std::cout<<"ecm_tune_skip: case="<<case_number<<'/'<<count<<" D="<<d<<" B2="<<b2<<" G="<<g<<" reason=effort_batch_limit\n";continue;
+            }
+            std::string plan;
+            if(ecm_cuda_stage2_plan(input.record.n.c_str(),input.record.sigma,input.record.b1,b2,d,o.device,
+                [](const char *p,void *ctx){*static_cast<std::string*>(ctx)=p;},&plan,carrier))throw std::runtime_error("ECM tune plan failed");
+            append(evidence/("case_"+std::to_string(case_number)+".plan.jsonl"),plan);
+            const auto memory=curve_memory_record(plan);
+            if(plan_scalar(memory,"valid")!="true" || plan_scalar(memory,"finished")!="true" || plan_scalar(memory,"initial_free_snapshot_fits")!="true") {
+                ++skipped;std::cout<<"ecm_tune_skip: case="<<case_number<<'/'<<count<<" D="<<d<<" B2="<<b2<<" carrier="<<carrier<<" reason=resident_plan_or_memory\n";continue;
+            }
+            std::vector<t::Fields> trials;bool route_failed=false;
+            for(int repeat=0;repeat<=effort.repeats;++repeat) {
+                Options worker=o;worker.tune_child=true;worker.auto_b2=false;worker.factor_only=false;worker.factorize_hits=false;
+                worker.carrier_exponent=carrier;worker.debug_log=false;worker.debug_file.clear();worker.log_level=stage2_log::quiet;
+                const auto stem="case_"+std::to_string(case_number)+"_"+std::to_string(repeat);
+                const auto results=evidence/(stem+".jsonl"),log=evidence/(stem+".log");
+                if(child_run(worker,input.save,input.record,b2,d,o.device,results,log,batch,settings))throw std::runtime_error("ECM tune curve failed; inspect "+log.string());
+                std::ifstream in(results);std::string row,extra;if(!std::getline(in,row) || std::getline(in,extra))throw std::runtime_error("invalid ECM tune receipt");
+                const auto f=t::fields(row);
+                if(t::uint(f,"d")!=d || t::uint(f,"p")!=ecm_stage2::cost::phi(d)/2 || t::uint(f,"giant_points")!=b2/d+2)
+                    throw std::runtime_error("ECM tune executed a different shape");
+                if(!t::uint(f,"fold_resident") || !t::uint(f,"frontier_resident")) {
+                    if(repeat)throw std::runtime_error("ECM tune residency changed between repetitions");
+                    route_failed=true;break;
+                }
+                if(repeat)trials.push_back(f);
+                std::cout<<"ecm_tune_progress: case="<<case_number<<'/'<<count<<" repeat="<<repeat<<'/'<<effort.repeats
+                    <<" D="<<d<<" B2="<<b2<<" carrier="<<carrier<<" total="<<t::real(f,"total_seconds")<<" s"<<(repeat?"":" warmup")<<std::endl;
+                if(stop_requests)throw std::runtime_error("ECM tune interrupted; partial/evidence retained");
+            }
+            if(route_failed){++skipped;std::cout<<"ecm_tune_skip: case="<<case_number<<" reason=runtime_resident_fallback\n";continue;}
+            t::Fields sample=trials.at(0);sample.erase("total_seconds");
+            Big target,plus;mpz_set_str(target.z,input.record.n.c_str(),16);mpz_add_ui(plus.z,target.z,1);
+            sample["target_bits"]=std::to_string(mpz_sizeinbase(target.z,2));
+            sample["arithmetic_bits"]=carrier?std::to_string(carrier):sample["target_bits"];
+            sample["carrier_exponent"]=std::to_string(carrier);
+            sample["modulus_kind"]=json_string(carrier || mpz_popcount(plus.z)==1?"mersenne":"generic");
+            sample["benchmark_kind"]=json_string(input.prime?"known_mersenne_prime":"validated_save");
+            sample["benchmark_exponent"]=std::to_string(input.prime);sample["sigma"]=std::to_string(input.record.sigma);
+            sample["b1"]=std::to_string(input.record.b1);sample["b2"]=std::to_string(b2);
+            sample["required_free_bytes"]=plan_scalar(memory,"required_free_bytes");
+            sample["planned_peak_bytes"]=plan_scalar(memory,"peak_bytes");
+            sample["repeats"]=std::to_string(effort.repeats);
+            std::vector<double> seconds;for(const auto &trial:trials)seconds.push_back(t::real(trial,"total_seconds"));
+            auto numeric=[](double x){std::ostringstream s;s<<std::setprecision(17)<<x;return s.str();};
+            sample["median_seconds"]=numeric(t::median(seconds));sample["mad_seconds"]=numeric(t::mad(seconds));
+            std::string array="[";for(auto x:seconds){if(array.size()>1)array+=", ";array+=numeric(x);}sample["seconds"]=array+"]";
+            for(const char *key:{"init_seconds","main_seconds","giant_seconds","gtrees_seconds","fold_seconds","descent_seconds","inverse_seconds","accum_seconds"}) {
+                std::vector<double> v;for(const auto &trial:trials)v.push_back(t::real(trial,key));sample[key]=numeric(t::median(v));
+            }
+            for(const char *key:{"selftest_cases","checked"}) {auto value=t::uint(sample,key);for(const auto &trial:trials)value=std::min(value,t::uint(trial,key));sample[key]=std::to_string(value);}
+            output<<t::ecm_table(sample,measured++);output.flush();if(!output)throw std::runtime_error("ECM tune write failed");
+        }
+    } catch(...) {stage2_log::level=old_level;throw;}
+    stage2_log::level=old_level;
+    if(!measured)throw std::runtime_error("ECM tune measured no resident shapes; partial/evidence retained");
+    output<<"\n[summary]\ncomplete = 1\nmeasured = "<<measured<<"\nskipped = "<<skipped<<"\nfailed = 0\n";
+    output.flush();if(!output)throw std::runtime_error("ECM tune flush failed");output.close();if(!output)throw std::runtime_error("ECM tune close failed");
+    t::EcmProfile::load(partial);
+    if(binary!=ecm_stage2::sha256_file(executable()) || (!build.empty() && build!=ecm_stage2::sha256_file(manifest)))throw std::runtime_error("ECM tune executable/build changed; partial retained");
+    if(!MoveFileExW(partial.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::runtime_error("cannot publish ECM tune profile");
+    std::cout<<"ecm_tune_complete: measured="<<measured<<" skipped="<<skipped<<" profile="<<destination.string()<<" evidence="<<evidence.string()<<std::endl;
+}
 int driver(Options o) {
     if (o.help) { help(); return 0; }
     if (o.child) return curve_worker(o);
+    if(o.tune_child)throw std::runtime_error("ecm-tune-worker requires the internal curve-worker mode");
     if(o.auto_b2&&o.b2)throw std::runtime_error("explicit --auto-b2 conflicts with nonzero --b2");
     if(o.cost_device_info) {
-        if(!o.save.empty()||!o.worktodo.empty()||!o.tune.empty()||o.auto_b2||o.plan_only||o.dry||o.b2||o.carrier_exponent)
+        if(!o.save.empty()||!o.worktodo.empty()||!o.tune.empty()||o.auto_b2||o.plan_only||o.dry||o.b2||o.has_carrier||!o.tune_profile.empty())
             throw std::runtime_error("--cost-device-info is independent of curve/queue options");
         EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(o.device<0?0:o.device,&info))throw std::runtime_error("cannot query cost-profile device");
         std::cout<<"{\"type\":\"cost_device\",\"uuid_hex\":\""<<info.uuid_hex<<"\",\"major\":"<<info.major<<",\"minor\":"<<info.minor
             <<",\"runtime\":"<<info.runtime<<",\"driver\":"<<info.driver<<",\"fixed_mode\":"<<info.fixed_mode<<",\"outer_unroll_u\":"<<info.outer_unroll_u
             <<",\"free_bytes\":"<<info.free_bytes<<",\"total_bytes\":"<<info.total_bytes<<"}"<<std::endl;return 0;
     }
-    if (o.tune.empty() && o.tune_options) throw std::runtime_error("tune options require --tune ntt");
-    if (!o.tune.empty() && (o.tune != "ntt" || !o.save.empty() || !o.worktodo.empty() ||
-        o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once || o.auto_b2 || !o.cost_profile.empty() || o.carrier_exponent))
-        throw std::runtime_error("--tune ntt is independent of save/queue/curve planning options");
+    if (o.tune.empty() && o.tune_options) throw std::runtime_error("tune options require --tune ntt|ecm");
+    if (!o.tune.empty() && ((o.tune != "ntt" && o.tune!="ecm") || !o.save.empty() || !o.worktodo.empty() ||
+        o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once || o.auto_b2 || !o.cost_profile.empty() || !o.tune_profile.empty() || o.has_carrier))
+        throw std::runtime_error("--tune ntt|ecm is independent of save/queue/curve planning options; ECM accepts --tune-save");
+    if(o.tune=="ntt" && (!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() || !o.tune_exponents.empty() || o.has_tune_max_batches))throw std::runtime_error("ECM tune grid options require --tune ecm");
+    if(o.tune=="ecm" && o.has_tune_lengths)throw std::runtime_error("length-log2 requires --tune ntt");
+    if(o.tune=="ecm" && o.has_tune_memory)throw std::runtime_error("ECM tune uses batch/arena/owner budgets; tune-memory-mb requires --tune ntt");
     if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
     const fs::path cwd = fs::current_path();
     const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.ini" : absolute_from(cwd, o.ini);
@@ -800,6 +1054,8 @@ int driver(Options o) {
     const fs::path base = ini.parent_path();
     if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
     else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
+    if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
+    else if(!s.tune_profile.empty())o.tune_profile=absolute_from(base,s.tune_profile).string();
     const fs::path worktodo = o.worktodo.empty() ? absolute_from(base, s.worktodo) : absolute_from(cwd, o.worktodo);
     const fs::path finished = absolute_from(base, s.finished);
     const fs::path tmp = absolute_from(base, s.save_dir.empty()?cfg.tmp_dir:s.save_dir);
@@ -821,17 +1077,18 @@ int driver(Options o) {
     if (device < 0 || (d && (d < 6 || d % 2))) throw std::runtime_error("device must be >=0; D must be even and >=6");
     const uint64_t batch = o.has_batch ? o.batch : s.batch, arena = o.has_arena ? o.arena : s.arena;
     o.arena=arena;
+    o.batch=batch;
     if (batch < ecm_config::limits::stage2_stage2_batch_mb_minimum || batch > ecm_config::limits::stage2_stage2_batch_mb_maximum || arena > ecm_config::limits::stage2_stage2_arena_mb_maximum) throw std::runtime_error("invalid Stage2 memory budget in MB");
     _putenv_s("NTT_FOLD_DEVICE_MAX_MB",std::to_string(o.owner_mb).c_str());
     _putenv_s("NTT_S4_BATCH_MB", std::to_string(batch).c_str());
     if (arena) _putenv_s("NTT_ARENA_CAP_KB", std::to_string(arena * 1024).c_str());
     if (!o.tune.empty()) {
-        if(o.tune_level) {
+        if(o.tune_level && o.tune=="ntt") {
             const auto effort=ecm_stage2::tune::effort(o.tune_level);
             if(!o.has_tune_lengths){o.tune_first=effort.first;o.tune_last=effort.last;}
             if(!o.has_tune_repeats)o.tune_repeats=effort.repeats;
         }
-        const fs::path destination = absolute_from(cwd, o.tune_file.empty() ? "stage2_tune.toml" : o.tune_file);
+        const fs::path destination = absolute_from(cwd, o.tune_file.empty() ? (o.tune=="ecm"?"stage2_ecm_tune.toml":"stage2_tune.toml") : o.tune_file);
         auto same_path = [&](const fs::path &other) {
             std::error_code error;
             if (fs::equivalent(destination, other, error) && !error) return true;
@@ -841,8 +1098,14 @@ int driver(Options o) {
         if (!toml && upper(destination.extension().string()) != ".JSONL")
             throw std::runtime_error("tune-file must use the .toml or .jsonl extension");
         if (same_path(executable()) || same_path(ini) || same_path(worktodo) || same_path(finished) ||
-            same_path(results) || (!log.empty() && same_path(log)))
+            same_path(results) || same_path(progress) || (!log.empty() && same_path(log)) ||
+            (!o.debug_file.empty() && same_path(fs::path(o.debug_file))) || (!o.tune_save.empty() && same_path(absolute_from(cwd,o.tune_save))) ||
+            (!o.tune_profile.empty() && same_path(fs::path(o.tune_profile))))
             throw std::runtime_error("tune-file must differ from executable, config, queue and result files");
+        if(o.tune=="ecm") {
+            if(!toml)throw std::runtime_error("ECM tune requires a .toml profile");
+            run_ecm_tune(o,batch,arena,s,destination);return 0;
+        }
         if (!destination.parent_path().empty()) fs::create_directories(destination.parent_path());
         const fs::path partial(destination.string() + ".partial." + std::to_string(GetCurrentProcessId()));
         std::ofstream output(partial, std::ios::binary | std::ios::trunc);
@@ -902,6 +1165,7 @@ int driver(Options o) {
     // A common INI may share device/save defaults, never writable queue state.
     const std::vector<fs::path> writable={worktodo,finished,results,log,progress,fs::path(o.debug_file)};
     for(size_t i=0;i<writable.size();++i) {
+        if(!o.tune_profile.empty() && same_path(writable[i],fs::path(o.tune_profile)))throw std::runtime_error("output path conflicts with measured tune profile");
         if(same_path(writable[i],ini)||same_path(writable[i],executable()))throw std::runtime_error("output path conflicts with configuration or executable");
         for(size_t j=0;j<i;++j)if(same_path(writable[i],writable[j]))throw std::runtime_error("queue, finished, progress, result and log paths must be distinct");
     }
@@ -1012,10 +1276,12 @@ int driver(Options o) {
                        " sigma="+std::to_string(r.sigma)+" B1="+std::to_string(r.b1)+" checksum="+(r.checksum?"verified":"absent"));
             if(o.dry)continue;
             if(o.plan_only) {
-                if(o.auto_b2&&!b2){Options local=o;local.b2=0;std::cout<<select_auto(local,r,false)<<std::endl;continue;}
+                Options local=o;local.b2=b2;local.has_d=d!=0;
+                if(o.auto_b2&&!b2){std::cout<<select_auto(local,r,false)<<std::endl;if(o.tune_profile.empty())continue;}
+                const auto tuned=select_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;
                 std::string result;
-                const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,b2,d,device,
-                    [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,o.carrier_exponent);
+                const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,local.b2,local.d,device,
+                    [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,local.carrier_exponent);
                 if(code||result.empty())throw std::runtime_error("Stage2 planning failed");
                 std::cout<<result<<std::endl;continue;
             }

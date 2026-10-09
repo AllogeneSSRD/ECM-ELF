@@ -3,6 +3,7 @@
 // in tools/bench/ecm_cuda_stage2_dev.cu. Keep arithmetic checks and nonunit,
 // allocation and generic-modulus fallbacks when changing production policy.
 #include "../core/ecm_stage2_logging.h"
+#include "../core/ecm_cuda_stage2.h"
 #if !defined(NTT_GL_FIXED_MODE) || NTT_GL_FIXED_MODE != 3
 #error "Production Stage2 requires fixed PTX3 Goldilocks"
 #endif
@@ -6393,6 +6394,7 @@ static long long name_max(void)
 }
 
 struct Stage2Tail {
+    EcmStage2Metrics metrics;
     unsigned long long hits = 0, bad_factors = 0;
     /* hits whose prime was counted but not named (the naming budget stopped the scan): hits and
        bad_factors stay EXACTLY comparable with the CPU reference either way, only the
@@ -7968,6 +7970,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 (int)ceil_log2_u64((unsigned long long)Fpad), g_last_state);
     s2g_state("the batched descent");            /* a driver kill here leaves this behind */
     if(!frontier.enabled)ws.need_vals((size_t)P);
+    R.tail.metrics.frontier_resident=frontier.enabled;
     std::vector<std::vector<unsigned long long>> values;
     bool dev_leaves = false;
     {
@@ -9390,6 +9393,15 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 BR.tail.factors.push_back(s);
         if (saved_result) *saved_result = BR.tail;
         const double el = now_s() - t0;
+        if(saved_result) {
+            auto &m=saved_result->metrics;
+            m.d=D;m.p=P_baby;m.giant_points=imax;
+            m.init_seconds=stage2_init_seconds;m.main_seconds=el;m.total_seconds=stage2_init_seconds+el;
+            m.giant_seconds=BR.t_giant;m.gtrees_seconds=BR.t_gtrees;m.fold_seconds=BR.t_fold;
+            m.descent_seconds=BR.t_descent;m.inverse_seconds=BR.t_inv;m.accum_seconds=BR.t_accum;
+            m.clean=!stage2_extra_fixtures && !run_s2 && curves==1;
+            m.fold_resident=BR.fold_device.enabled;
+        }
         BR.t_return_finalize = t0 + el - BR.t_post_end;
         BR.t_post_loop += BR.t_return_finalize;
         std::string fs2, ps2;
@@ -9697,6 +9709,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                         "full_checks=%llu\n", s4.launches, s4.muls, coeffs, t_red, t_red_host,
                         dt_blocked, sel_cases,
                         sel_bad, checked, check_bad, full);
+            if(saved_result) {
+                saved_result->metrics.selftest_cases=sel_cases;
+                saved_result->metrics.checked=checked;
+                saved_result->metrics.bad=sel_bad+check_bad+canon;
+            }
         }
     }
     mpz_clears(R, tmp, a24, ax, az, nullptr);
@@ -10005,7 +10022,7 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
 
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,
-                       void (*report)(const char *, void *), void *context,unsigned carrier_exponent)
+                       void (*report)(const char *, void *), void *context,unsigned carrier_exponent,EcmStage2Metrics *metrics)
 {
     if(!n_hex || !x_hex || !report || device<0 || b1<2 || b2<=b1 ||
        b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
@@ -10021,6 +10038,7 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
     const int code = run_real(n_hex, true, sigma, b1, b2, d, d == 0,
                               false, 1, x_hex, &tail,false,nullptr,carrier_exponent);
     if (code || tail.bad_factors) return code ? code : 1;
+    if(metrics)*metrics=tail.metrics;
     std::string json = "\"hits\":" + std::to_string(tail.hits) +
         ",\"bad_factors\":" + std::to_string(tail.bad_factors) + ",\"factors\":[";
     for (size_t i = 0; i < tail.factors.size(); ++i) {

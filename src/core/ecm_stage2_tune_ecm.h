@@ -1,0 +1,206 @@
+#pragma once
+#include "ecm_stage2_tune_format.h"
+#include "ecm_stage2_cost_profile.h"
+#include <gmp.h>
+
+namespace ecm_stage2 { namespace tune {
+struct EcmEffort {
+    std::vector<unsigned> exponents;
+    std::vector<Word> d,b2;
+    int repeats=0;
+    Word max_batches=0;
+};
+inline EcmEffort ecm_effort(int level) {
+    if(level<1 || level>10)throw std::runtime_error("tune-level must be 1..10");
+    // Known Mersenne prime exponents. Each level retains all previous inputs.
+    const unsigned primes[]={521,2203,4423,9689,1279,3217,11213,607,2281,4253,127,107,9941};
+    const Word ds[]={30030,60060,120120,180180,210210,360360,570570,690690,1141140,1381380,1711710,2282280};
+    const Word bounds[]={2600000000ull,26000000000ull,260000000000ull,2600000000000ull,8000000000000ull};
+    EcmEffort e;
+    e.exponents.assign(primes,primes+std::min(13,level+3));
+    e.d.assign(ds,ds+std::min(12,level+2));
+    e.b2.assign(bounds,bounds+1+(level-1)/2);
+    e.repeats=2*level+1;e.max_batches=64+16*(level-1);return e;
+}
+struct Mpz {
+    mpz_t v;Mpz(){mpz_init(v);}~Mpz(){mpz_clear(v);}
+    Mpz(const Mpz&)=delete;Mpz& operator=(const Mpz&)=delete;
+};
+struct Point {Mpz x,z;};
+// Small, plain-GMP preparation only; not a production Stage1 implementation or
+// a Stage1 timing calibration. a24=(A+2)/4, Q=[lcm(1..20)]P, sigma=26.
+inline std::string prime_point(unsigned exponent,std::string &n_hex) {
+    const unsigned allowed[]={107,127,521,607,1279,2203,2281,3217,4253,4423,9689,9941,11213};
+    if(std::find(std::begin(allowed),std::end(allowed),exponent)==std::end(allowed))
+        throw std::runtime_error("ECM tune exponent is not in the known-prime catalogue");
+    Mpz n,u,v,t,a24,den,inv,xdiff,scalar;
+    mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,exponent);mpz_sub_ui(n.v,n.v,1);
+    mpz_set_ui(u.v,26*26-5);mpz_set_ui(v.v,4*26);
+    mpz_sub(t.v,v.v,u.v);mpz_powm_ui(a24.v,t.v,3,n.v);
+    mpz_mul_ui(t.v,u.v,3);mpz_add(t.v,t.v,v.v);mpz_mul(a24.v,a24.v,t.v);
+    mpz_powm_ui(den.v,u.v,3,n.v);mpz_mul(den.v,den.v,v.v);mpz_mul_ui(den.v,den.v,16);
+    if(!mpz_invert(inv.v,den.v,n.v))throw std::runtime_error("degenerate benchmark curve");
+    mpz_mul(a24.v,a24.v,inv.v);mpz_mod(a24.v,a24.v,n.v);
+    Point p,r0,r1,sum,doubled;
+    mpz_powm_ui(p.x.v,u.v,3,n.v);mpz_powm_ui(p.z.v,v.v,3,n.v);
+    if(!mpz_invert(inv.v,p.z.v,n.v))throw std::runtime_error("nonunit benchmark point");
+    mpz_mul(xdiff.v,p.x.v,inv.v);mpz_mod(xdiff.v,xdiff.v,n.v);
+    auto set=[](Point &r,const Point &q){mpz_set(r.x.v,q.x.v);mpz_set(r.z.v,q.z.v);};
+    auto dbl=[&](Point &r,const Point &q) {
+        Mpz a,b,e,w;
+        mpz_add(a.v,q.x.v,q.z.v);mpz_mul(a.v,a.v,a.v);mpz_mod(a.v,a.v,n.v);
+        mpz_sub(b.v,q.x.v,q.z.v);mpz_mul(b.v,b.v,b.v);mpz_mod(b.v,b.v,n.v);
+        mpz_sub(e.v,a.v,b.v);mpz_mul(r.x.v,a.v,b.v);mpz_mod(r.x.v,r.x.v,n.v);
+        mpz_mul(w.v,a24.v,e.v);mpz_add(w.v,w.v,b.v);mpz_mul(r.z.v,e.v,w.v);mpz_mod(r.z.v,r.z.v,n.v);
+    };
+    auto plus=[&](Point &r,const Point &a,const Point &b) {
+        Mpz t0,t1,t2,t3;
+        mpz_add(t0.v,a.x.v,a.z.v);mpz_sub(t1.v,b.x.v,b.z.v);mpz_mul(t0.v,t0.v,t1.v);
+        mpz_sub(t2.v,a.x.v,a.z.v);mpz_add(t3.v,b.x.v,b.z.v);mpz_mul(t2.v,t2.v,t3.v);
+        mpz_add(t1.v,t0.v,t2.v);mpz_sub(t3.v,t0.v,t2.v);
+        mpz_mul(r.x.v,t1.v,t1.v);mpz_mod(r.x.v,r.x.v,n.v);
+        mpz_mul(r.z.v,t3.v,t3.v);mpz_mul(r.z.v,r.z.v,xdiff.v);mpz_mod(r.z.v,r.z.v,n.v);
+    };
+    mpz_set_ui(scalar.v,1);for(unsigned i=2;i<=20;++i)mpz_lcm_ui(scalar.v,scalar.v,i);
+    set(r0,p);dbl(r1,p);
+    for(int i=(int)mpz_sizeinbase(scalar.v,2)-2;i>=0;--i) {
+        plus(sum,r0,r1);
+        if(mpz_tstbit(scalar.v,i)){dbl(doubled,r1);set(r0,sum);set(r1,doubled);}
+        else {dbl(doubled,r0);set(r1,sum);set(r0,doubled);}
+    }
+    if(!mpz_invert(inv.v,r0.z.v,n.v))throw std::runtime_error("benchmark Stage1 point is infinity");
+    mpz_mul(t.v,r0.x.v,inv.v);mpz_mod(t.v,t.v,n.v);
+    auto hex=[](mpz_srcptr z){std::string s(mpz_sizeinbase(z,16)+2,'\0');mpz_get_str(&s[0],16,z);s.resize(std::char_traits<char>::length(s.c_str()));return s;};
+    n_hex=hex(n.v);return hex(t.v);
+}
+using Fields=std::map<std::string,std::string>;
+inline Fields legacy_environment(const std::string &text) {
+    if(text.size()<2 || text.front()!='"' || text.back()!='"')throw std::runtime_error("invalid legacy tune environment");
+    Fields result;size_t a=1;
+    while(a<text.size()-1) {
+        const auto b=text.find(';',a),eq=text.find('=',a);
+        if(b==text.npos || eq==text.npos || eq>=b || text.compare(a,4,"NTT_")!=0)throw std::runtime_error("invalid legacy tune setting");
+        auto key=text.substr(a+4,eq-a-4);for(char &c:key)c=(char)std::tolower((unsigned char)c);
+        auto value=text.substr(eq+1,b-eq-1);if(value.empty())value="\"\"";
+        const auto parsed=fields("{\""+key+"\":"+value+"}");
+        if(!result.emplace(key,parsed.at(key)).second)throw std::runtime_error("duplicate legacy tune setting");a=b+1;
+    }
+    return result;
+}
+inline const std::string &required(const Fields &f,const char *key) {
+    auto i=f.find(key);if(i==f.end())throw std::runtime_error(std::string("missing ECM tune field: ")+key);return i->second;
+}
+inline Word uint(const Fields &f,const char *key){return cost::integer(required(f,key));}
+inline double real(const Fields &f,const char *key){return cost::number(required(f,key));}
+inline std::vector<double> array(const std::string &s) {
+    if(s.size()<3 || s.front()!='[' || s.back()!=']')throw std::runtime_error("empty/invalid ECM tune array");
+    std::vector<double> v;size_t a=1;
+    while(a<s.size()-1) {
+        const auto b=s.find(',',a);auto n=s.substr(a,(b==s.npos?s.size()-1:b)-a);
+        const auto first=n.find_first_not_of(" \t");const auto last=n.find_last_not_of(" \t");
+        if(first==n.npos)throw std::runtime_error("invalid ECM tune array item");
+        v.push_back(cost::number(n.substr(first,last-first+1)));
+        if(b==s.npos)break;a=b+1;if(a==s.size()-1)throw std::runtime_error("trailing ECM tune comma");
+    }
+    return v;
+}
+inline double median(std::vector<double> v) {
+    if(v.empty())throw std::runtime_error("empty ECM tune samples");std::sort(v.begin(),v.end());
+    return v.size()%2?v[v.size()/2]:v[v.size()/2-1]+(v[v.size()/2]-v[v.size()/2-1])/2;
+}
+inline double mad(const std::vector<double> &v) {const auto m=median(v);auto a=v;for(auto &x:a)x=std::abs(x-m);return median(a);}
+inline void validate_sample(const Fields &f) {
+    const auto bits=uint(f,"target_bits"),s=uint(f,"arithmetic_bits"),p=uint(f,"carrier_exponent");
+    const auto b1=uint(f,"b1"),b2=uint(f,"b2"),d=uint(f,"d"),leaves=uint(f,"p");
+    if(bits<2 || bits>16384 || s<bits || s>16384 || (p && p!=s) ||
+       b1<2 || b2<=b1 || b2>(Word)INT64_MAX-8192 || d<6 || d%2 || d>200000000 ||
+       leaves!=cost::phi(d)/2 || uint(f,"giant_points")!=b2/d+2 || uint(f,"giant_points")<=leaves ||
+       uint(f,"clean")!=1 || uint(f,"hits") || uint(f,"bad") || !uint(f,"selftest_cases") || !uint(f,"checked") ||
+       uint(f,"fold_resident")>1 || uint(f,"frontier_resident")>1 || !uint(f,"required_free_bytes"))
+        throw std::runtime_error("invalid/unchecked ECM tune scope");
+    const auto kind=required(f,"modulus_kind");
+    if(kind!="\"mersenne\"" && kind!="\"generic\"")throw std::runtime_error("invalid ECM arithmetic kind");
+    if(p && kind!="\"mersenne\"")throw std::runtime_error("carrier must use Mersenne arithmetic");
+    if(!p && bits!=s)throw std::runtime_error("ordinary ECM tune width mismatch");
+    const auto v=array(required(f,"seconds"));
+    if(v.size()!=uint(f,"repeats") || v.size()>1000 || *std::min_element(v.begin(),v.end())<=0 ||
+       std::abs(median(v)-real(f,"median_seconds"))>1e-9*std::max(1.,median(v)) ||
+       std::abs(mad(v)-real(f,"mad_seconds"))>1e-9*std::max(1.,mad(v)))
+        throw std::runtime_error("inconsistent ECM tune repetitions/statistics");
+    for(const char *phase:{"init_seconds","main_seconds","giant_seconds","gtrees_seconds","fold_seconds","descent_seconds","inverse_seconds","accum_seconds"})real(f,phase);
+}
+inline std::string ecm_table(const Fields &f,size_t index) {
+    validate_sample(f);std::ostringstream out;out<<"\n[ecm.sample_"<<index<<"]\n";
+    for(const auto &x:f)out<<x.first<<" = "<<x.second<<'\n';return out.str();
+}
+// Bounded reader for the generated flat TOML subset; no dependency on Python.
+// Additional scalar performance fields are retained for extensions. Required
+// schema, completion, scopes and duplicate keys are checked independently.
+struct EcmProfile {
+    Fields profile,device,policy,environment,summary;
+    std::vector<Fields> samples;
+    static EcmProfile load(const std::filesystem::path &path) {
+        std::error_code error;const auto size=std::filesystem::file_size(path,error);
+        if(error || size>16*1048576)throw std::runtime_error("ECM tune profile missing or exceeds 16MiB");
+        std::ifstream in(path,std::ios::binary);EcmProfile p;Fields *table=nullptr;
+        std::set<std::string> sections;std::string line;
+        auto trim=[](std::string s){const auto a=s.find_first_not_of(" \t\r\n");if(a==s.npos)return std::string{};return s.substr(a,s.find_last_not_of(" \t\r\n")-a+1);};
+        bool first_line=true;
+        while(std::getline(in,line)) {
+            if(first_line && line.compare(0,3,"\xef\xbb\xbf")==0)line.erase(0,3);first_line=false;
+            line=trim(line);if(line.empty() || line[0]=='#')continue;
+            if(line[0]=='[') {
+                if(line.back()!=']')throw std::runtime_error("invalid ECM tune table");
+                const auto name=line.substr(1,line.size()-2);
+                if(!sections.insert(name).second)throw std::runtime_error("duplicate ECM tune table");
+                if(name=="profile")table=&p.profile;else if(name=="device")table=&p.device;
+                else if(name=="policy")table=&p.policy;else if(name=="summary")table=&p.summary;
+                else if(name=="policy.environment")table=&p.environment;
+                else if(name.compare(0,11,"ecm.sample_")==0) {
+                    cost::integer(name.substr(11));if(p.samples.size()>=4096)throw std::runtime_error("too many ECM tune samples");
+                    p.samples.emplace_back();table=&p.samples.back();
+                } else throw std::runtime_error("unsupported ECM tune table");
+            } else {
+                const auto eq=line.find('=');if(!table || eq==line.npos)throw std::runtime_error("invalid ECM tune row");
+                const auto key=trim(line.substr(0,eq)),value=trim(line.substr(eq+1));
+                const auto parsed=fields("{\""+key+"\":"+value+"}");
+                if(!table->emplace(key,parsed.at(key)).second)throw std::runtime_error("duplicate ECM tune key");
+            }
+        }
+        if(!in.eof() || (uint(p.profile,"format")!=2 && uint(p.profile,"format")!=3) || required(p.profile,"unit")!="\"full_stage2\"" ||
+           uint(p.profile,"algorithm_revision")!=1 || uint(p.summary,"complete")!=1 || uint(p.summary,"failed") ||
+           uint(p.summary,"measured")!=p.samples.size() || p.samples.empty())throw std::runtime_error("incomplete/unsupported ECM tune profile");
+        if(uint(p.profile,"effort_level")<1 || uint(p.profile,"effort_level")>10 ||
+           !uint(p.profile,"repeats") || uint(p.profile,"repeats")>1000 || uint(p.profile,"warmups")!=1)
+            throw std::runtime_error("invalid ECM tune effort metadata");
+        if(!cost::hex(required(p.device,"uuid_hex").substr(1,32),32) || required(p.device,"uuid_hex").size()!=34)
+            throw std::runtime_error("invalid ECM tune device");
+        for(const char *key:{"sm_major","sm_minor","cuda_runtime","cuda_driver","gl_fixed_mode","outer_unroll_u","add_sub_mask"})uint(p.device,key);
+        for(const char *key:{"batch_mb","arena_mb","fold_mb"})uint(p.policy,key);
+        if(uint(p.profile,"format")==2) {
+            if(sections.count("policy.environment"))throw std::runtime_error("mixed tune environment schemas");
+            p.environment=legacy_environment(required(p.policy,"environment"));
+        } else {
+            if(!sections.count("policy.environment") || p.policy.count("environment"))throw std::runtime_error("missing/mixed named tune environment");
+            if(uint(p.profile,"max_batches")>1048576)throw std::runtime_error("invalid tune batch limit");
+        }
+        std::set<std::string> scopes;
+        for(const auto &s:p.samples) {
+            validate_sample(s);if(uint(s,"repeats")!=uint(p.profile,"repeats"))throw std::runtime_error("inconsistent ECM profile repetitions");
+            if(uint(p.profile,"format")==3 && uint(p.profile,"max_batches") &&
+                (uint(s,"giant_points")+uint(s,"p")-1)/uint(s,"p")>uint(p.profile,"max_batches"))throw std::runtime_error("ECM sample exceeds declared batch limit");
+            std::string key;
+            for(const char *field:{"target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d"})key+=required(s,field)+":";
+            if(!scopes.insert(key).second)throw std::runtime_error("duplicate ECM tune measurement scope");
+        }
+        return p;
+    }
+    bool matches(const EcmStage2DeviceInfo &d,Word batch,Word arena,Word fold,const Fields &env,unsigned add_sub_mask)const {
+        return required(device,"uuid_hex")==std::string("\"")+d.uuid_hex+"\"" && uint(device,"sm_major")==d.major &&
+            uint(device,"sm_minor")==d.minor && uint(device,"cuda_runtime")==d.runtime && uint(device,"cuda_driver")==d.driver &&
+            uint(device,"gl_fixed_mode")==d.fixed_mode && uint(device,"outer_unroll_u")==d.outer_unroll_u &&
+            uint(device,"add_sub_mask")==add_sub_mask && uint(policy,"batch_mb")==batch && uint(policy,"arena_mb")==arena &&
+            uint(policy,"fold_mb")==fold && environment==env;
+    }
+};
+} }

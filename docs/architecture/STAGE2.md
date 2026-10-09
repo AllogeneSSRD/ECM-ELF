@@ -56,11 +56,11 @@ F(X)=∏ⱼ(X−xⱼ)。giant 叶为齐次形式 ZᵢX−Xᵢ，或等价的已�
 
 ## 当前规划边界
 
-`request_program` 可预测满次数驻留 fold 的乘法顺序、形状、来源和树租约。NTT/S4/giant 模型分别预测本组件正常成功路径；单 G 批次的局部逆/根长除法、完整准入与回退不在其统一保证中。完整生命周期联合规划仍在 [TODO](../TODO.md)。
+`request_program`预测满次数驻留fold的乘法顺序、形状、来源和树租约。初始化/NTT/S4/owner/giant按同一时间线预测条件正常路径的峰与free需求；匹配完整Stage2 tune的数据后，驱动据此选择已测D和合法承载。单G批次、诊断和全部分配失败回退不在其统一保证中；引擎保留实时检查和回退，详见[内存](MEMORY.md)与[实测选型](AUTO_B2.md)。
 
 ## 代码依据
 
-- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7264)、scaled 下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9346)。
+- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7267)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9413)。
 - [模数上下文](../../src/core/ecm_stage2_modulus.h#L28)：`configure`，目标/承载资格。
 - [请求程序](../../src/core/ecm_stage2_requests.h#L76)：`request_program`；[精确树组](../../src/core/ecm_stage2_geometry.h#L93)：`tree_multiply_groups`。
 - [点模乘](../../src/cuda/stage2/stage2_point_mersenne.cuh)、[NTT](NTT.md)、[内存](MEMORY.md)。

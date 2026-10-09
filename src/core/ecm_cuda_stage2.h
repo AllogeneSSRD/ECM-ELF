@@ -11,10 +11,19 @@ int ecm_cuda_stage2_check_configuration();
 // after Stage2 and its arithmetic checks have completed successfully.
 // carrier_exponent=0 keeps arithmetic modulo saved N. An explicit p requires
 // N | (2^p-1); arithmetic uses that carrier, inverses/GCDs still target saved N.
+// Optional structured benchmark evidence, populated after the final oracle drain.
+// Phase timers overlap; total_seconds is the ranking boundary, not their sum.
+struct EcmStage2Metrics {
+    uint64_t d=0,p=0,giant_points=0,selftest_cases=0,checked=0,bad=0;
+    double total_seconds=0,init_seconds=0,main_seconds=0;
+    double giant_seconds=0,gtrees_seconds=0,fold_seconds=0,descent_seconds=0;
+    double inverse_seconds=0,accum_seconds=0;
+    bool clean=false,fold_resident=false,frontier_resident=false;
+};
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,
                        void (*report)(const char *, void *), void *context,
-                       unsigned carrier_exponent=0);
+                       unsigned carrier_exponent=0,EcmStage2Metrics *metrics=nullptr);
 
 // Planning initializes the CUDA context and queries live memory, but performs
 // no curve arithmetic. All time/memory estimates are explicitly labelled.
