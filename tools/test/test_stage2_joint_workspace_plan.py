@@ -21,10 +21,13 @@ def main():
         ('trim',1141140,a.b2,6300,{'NTT_PHASE_TRIM_RAW':'1','NTT_PHASE_TRIM_OUTPUT':'1'}),
         ('bq',1141140,a.b2,6300,{'NTT_WORKSPACE_REUSE_BQ':'1'}),
         ('keyed',2310,a.b2,6300,{'NTT_ARENA_WORKSPACE_POOL':'0'}),
-        ('refusal',1141140,a.b2,32,{}),('single',2310,100,6300,{})]:
+        ('refusal',1141140,a.b2,32,{}),('single',2310,100,6300,{}),
+        ('owner_budget',1141140,a.b2,6300,{}),
+        ('frontier_budget',1141140,a.b2,6300,{'NTT_SCALED_FRONTIER_MAX_MB':'0'})]:
         command=[str(a.exe.resolve()),'--ini',str(a.ini.resolve()),'--save',str(a.save.resolve()),
                  '--device',str(a.device),'--b2',str(b2),'--d',str(d),'--curves','1',
-                 '--arena-mb',str(cap),'--batch-mb','256','--owner-budget-mb','640','--plan-only']
+                 '--arena-mb',str(cap),'--batch-mb','256','--owner-budget-mb',
+                 '0' if name=='owner_budget' else '640','--plan-only']
         proc=subprocess.run(command,env=dict(os.environ,**env),capture_output=True,text=True,
                             encoding='utf-8',errors='replace',timeout=90)
         (out/(name+'.log')).write_text(proc.stdout+proc.stderr,encoding='utf-8')
@@ -44,8 +47,23 @@ def main():
             assert joint['ntt_peak_bytes']==plan['ntt_memory']['peak_bytes']
             assert joint['s4_peak_bytes']==plan['s4_memory']['peak_bytes']
             assert joint['peak_bytes']<=joint['ntt_peak_bytes']+joint['s4_peak_bytes']
+        resident=plan['resident_workspace_memory']
+        assert not resident['admission_model'] and not resident['process_peak_complete']
+        assert not resident['headroom_modeled'] and not resident['fallback_modeled']
+        assert resident['peak_bytes']==resident['ntt_at_peak']+resident['s4_at_peak']+resident['owner_at_peak']
+        if name in ('single','refusal'):
+            assert resident['valid']==joint['valid'] and resident['finished']==joint['finished']
+        elif name in ('owner_budget','frontier_budget'):
+            assert resident['valid'] and not resident['finished']
+            assert resident['reason']==('fold_budget_refusal' if name=='owner_budget' else 'frontier_budget_refusal')
+        else:
+            assert resident['valid'] and resident['finished'] and not resident['released_bytes']
+            assert resident['fold_bytes']==plan['owner_bytes']
+            assert resident['frontier_bytes']==24*plan['P']
+            assert resident['owner_peak_bytes']==resident['fold_bytes']+resident['frontier_bytes']
+            assert joint['peak_bytes']<=resident['peak_bytes']<=joint['peak_bytes']+resident['owner_peak_bytes']
         rows.append(dict(name=name,command=command,environment=env,plan=plan))
     (out/'results.json').write_text(json.dumps(dict(complete=True,cases=rows),indent=2)+'\n',encoding='utf-8')
-    print('PASS: 8 real native workspace plans, joint peak, policies, refusal, unsupported G1')
+    print('PASS: 10 real native workspace plans, joint owner lifetimes, budgets, refusal, unsupported G1')
 
 if __name__=='__main__':main()

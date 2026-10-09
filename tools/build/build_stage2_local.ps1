@@ -51,7 +51,7 @@ $sources = @($cudaSource, 'src/core/ecm_cuda_stage2_main.cpp',
     'src/core/ecm_expr.cpp', 'src/core/ecm_worktodo.cpp', 'src/core/ecm_queue_config.cpp')
 $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
     'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h', 'src/core/ecm_stage2_ntt_memory.h', 'src/core/ecm_stage2_giant_memory.h', 'src/core/ecm_stage2_s4_memory.h', 'src/core/ecm_stage2_s4_program.h', 'src/core/ecm_stage2_modulus.h', 'src/core/ecm_stage2_logging.h', 'src/core/ecm_stage2_console.h', 'src/core/ecm_stage2_queue_state.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
-    'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h', 'src/core/ecm_stage2_tune_format.h', 'src/core/ecm_stage2_workspace_memory.h',
+    'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h', 'src/core/ecm_stage2_tune_format.h', 'src/core/ecm_stage2_workspace_memory.h', 'src/core/ecm_stage2_owner_memory.h',
     'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h', 'src/core/ecm_ini.h',
     'src/core/generated/ecm_config_generated.h', 'src/core/generated/ecm_ini_template.h',
     'config/ecm_options.json', 'config/ecm_config.generated.json',
@@ -83,7 +83,7 @@ $signature += "gmp=$Gmp"
 foreach ($name in $gmpHashes.Keys) { $signature += "gmp/$name=$($gmpHashes[$name])" }
 $signatureText = $signature -join "`n"
 $cudaDeps = @($cudaSource,'src/core/ecm_cuda_stage2.h','src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h','src/core/ecm_stage2_ntt_memory.h','src/core/ecm_stage2_giant_memory.h','src/core/ecm_stage2_s4_memory.h','src/core/ecm_stage2_s4_program.h','src/core/ecm_stage2_modulus.h','src/core/ecm_stage2_logging.h',
-    'src/cuda/ecm_stage2_tune.cuh','src/core/ecm_stage2_workspace_memory.h') + @($deps | Where-Object { $_ -like 'tools/bench/*' -or $_ -like 'src/cuda/stage2/*' })
+    'src/cuda/ecm_stage2_tune.cuh','src/core/ecm_stage2_workspace_memory.h','src/core/ecm_stage2_owner_memory.h') + @($deps | Where-Object { $_ -like 'tools/bench/*' -or $_ -like 'src/cuda/stage2/*' })
 if ($HostOnly) {
     $previous = Get-Content -LiteralPath (Join-Path $Build 'build_manifest.json') -Raw | ConvertFrom-Json
     $previousSplit = if ($previous.split_compile) { $previous.split_compile } else { 1 }

@@ -8797,6 +8797,19 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 FuseCtx description;fuse_describe(description,n,k,0,0);
                 return ecm_stage2::ntt_fuse_memory_layout(description,layout);
             },memory_policy,s4_policy,*p.workspace_memory))return 3;
+        p.resident_workspace_memory=std::make_shared<ecm_stage2::WorkspaceMemoryPlan>();
+        const auto frontier_mb=std::min(fold_budget>>20,fuse_env_ull("NTT_SCALED_FRONTIER_MAX_MB",fold_budget>>20));
+        const ecm_stage2::OwnerMemoryPolicy owner_policy{P_baby,nw,fold_budget,kFoldOwnerReuse,frontier_mb<<20};
+        if(!resident_policy)p.resident_workspace_memory->reason="unsupported_resident_policy";
+        else if(!ecm_stage2::workspace_memory_plan(p.requests->program,(int)L.S,
+            [](unsigned long long m,int s,ecm_stage2::S4ShapeDescriptor &q) {
+                int bpw=0;const bool ok=ntt_shape_query(m,s,&q.n,&bpw,&q.slot_bits,&q.slot_words,nullptr,&q.slots);
+                q.bpw=(unsigned)bpw;return ok;
+            },[](unsigned long long n,ecm_stage2::NttFuseMemoryLayout &layout) {
+                int k=0;for(auto size=n;size>1;size>>=1)++k;
+                FuseCtx description;fuse_describe(description,n,k,0,0);
+                return ecm_stage2::ntt_fuse_memory_layout(description,layout);
+            },memory_policy,s4_policy,*p.resident_workspace_memory,true,{},&owner_policy))return 3;
         ecm_stage2::GiantMemoryPolicy giant_policy;
         giant_policy.compact_products=s3_compact_products_requested();
         giant_policy.chain_block=std::min(1ull<<20,std::max(4ull,fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)));
@@ -9844,6 +9857,19 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
             <<",\"components\":[\"ntt\",\"s4\"],\"process_peak_complete\":false,\"admission_model\":false"
             <<",\"peak_bytes\":"<<m.peak_bytes<<",\"ntt_at_peak\":"<<m.ntt_at_peak<<",\"s4_at_peak\":"<<m.s4_at_peak
             <<",\"ntt_peak_bytes\":"<<m.ntt_peak_bytes<<",\"s4_peak_bytes\":"<<m.s4_peak_bytes
+            <<",\"final_bytes\":"<<m.final_bytes<<",\"released_bytes\":"<<m.released_bytes
+            <<",\"executed_blocks\":"<<m.executed_blocks<<",\"skipped_blocks\":"<<m.skipped_blocks
+            <<",\"simulated_events\":"<<m.simulated_events<<'}';
+    }
+    if(p.resident_workspace_memory) {
+        const auto &m=*p.resident_workspace_memory;
+        json<<",\"resident_workspace_memory\":{\"version\":1,\"valid\":"<<(m.valid?"true":"false")
+            <<",\"finished\":"<<(m.finished?"true":"false")<<",\"reason\":"<<stage2_tune::quote(m.reason)
+            <<",\"components\":[\"ntt\",\"s4\",\"fold_frontier\"],\"process_peak_complete\":false,\"admission_model\":false"
+            <<",\"headroom_modeled\":false,\"fallback_modeled\":false,\"cold_trim_modeled\":false"
+            <<",\"peak_bytes\":"<<m.peak_bytes<<",\"ntt_at_peak\":"<<m.ntt_at_peak<<",\"s4_at_peak\":"<<m.s4_at_peak
+            <<",\"owner_at_peak\":"<<m.owner_at_peak<<",\"owner_peak_bytes\":"<<m.owner_peak_bytes
+            <<",\"fold_bytes\":"<<m.fold_bytes<<",\"frontier_bytes\":"<<m.frontier_bytes
             <<",\"final_bytes\":"<<m.final_bytes<<",\"released_bytes\":"<<m.released_bytes
             <<",\"executed_blocks\":"<<m.executed_blocks<<",\"skipped_blocks\":"<<m.skipped_blocks
             <<",\"simulated_events\":"<<m.simulated_events<<'}';

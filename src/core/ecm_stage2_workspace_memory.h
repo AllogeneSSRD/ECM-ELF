@@ -1,20 +1,24 @@
 #pragma once
 #include "ecm_stage2_ntt_memory.h"
 #include "ecm_stage2_s4_program.h"
+#include "ecm_stage2_owner_memory.h"
 
 namespace ecm_stage2 {
 // Interleave both allocators in native request order. This is the NTT+S4
-// component, not a complete curve admission proof: point/fold/frontier owners,
-// device context and nonresident fallback remain the caller's responsibility.
+// component, optionally including fold/frontier owner events. This is not a
+// complete admission proof: points, context and fallback remain unmodeled.
 struct WorkspaceMemoryEvent {
     bool ntt=false,allocation=false;
     Word bytes=0,ntt_live=0,s4_live=0,total=0;
+    Word owner_live=0;
+    bool owner_event=false;
 };
 struct WorkspaceMemoryPlan {
     bool valid=false,finished=false;
     const char *reason="unsupported_request_program";
     Word peak_bytes=0,ntt_peak_bytes=0,s4_peak_bytes=0;
     Word ntt_at_peak=0,s4_at_peak=0,final_bytes=0,released_bytes=0;
+    Word owner_at_peak=0,owner_peak_bytes=0,fold_bytes=0,frontier_bytes=0;
     Word executed_blocks=0,skipped_blocks=0,simulated_events=0;
     NttMemoryPayload ntt_final;
     S4MemoryPayload s4_final;
@@ -22,7 +26,8 @@ struct WorkspaceMemoryPlan {
 template<class Query,class Describe> bool workspace_memory_plan(
         const RequestProgram &program,int bits,Query query,Describe describe,
         NttMemoryPolicy ntt_policy,S4ProgramPolicy s4_policy,WorkspaceMemoryPlan &plan,
-        bool compress=true,std::function<void(const WorkspaceMemoryEvent &)> observe={}) {
+        bool compress=true,std::function<void(const WorkspaceMemoryEvent &)> observe={},
+        const OwnerMemoryPolicy *owner_policy=nullptr) {
     plan=WorkspaceMemoryPlan{};
     if(!program.supported || bits<2 || bits>max_input_bits)return true;
     const unsigned buffers=ntt_policy.pool && ntt_policy.reuse_bq?2:3;
@@ -30,22 +35,29 @@ template<class Query,class Describe> bool workspace_memory_plan(
         plan.reason="inconsistent_workspace_policy";return false;
     }
     NttMemoryState ntt(ntt_policy);S4MemoryState s4;
+    OwnerMemoryState owner(owner_policy?*owner_policy:OwnerMemoryPolicy{});
+    if(owner_policy && (!owner_policy->p || owner_policy->words!=(Word)((bits+63)/64))) {
+        plan.reason="inconsistent_owner_policy";return false;
+    }
     bool overflow=false;
-    auto event=[&](bool from_ntt,bool allocation,Word bytes) {
+    auto event=[&](bool from_ntt,bool allocation,Word bytes,bool from_owner=false) {
         Word total=0;
-        if(!add(ntt.live.total,s4.live.total,total) ||
+        if(!add(ntt.live.total,s4.live.total,total) || !add(total,owner.live,total) ||
            !add(plan.simulated_events,1,plan.simulated_events)){overflow=true;return;}
         if(total>plan.peak_bytes) {
             plan.peak_bytes=total;plan.ntt_at_peak=ntt.live.total;plan.s4_at_peak=s4.live.total;
+            plan.owner_at_peak=owner.live;
         }
-        if(observe)observe({from_ntt,allocation,bytes,ntt.live.total,s4.live.total,total});
+        if(observe)observe({from_ntt,allocation,bytes,ntt.live.total,s4.live.total,total,owner.live,from_owner});
     };
     ntt.observe=[&](const NttMemoryEvent &e){event(true,e.allocation,e.bytes);};
     s4.observe=[&](const S4MemoryEvent &e){event(false,e.allocation,e.bytes);};
+    owner.observe=[&](const OwnerMemoryEvent &e){event(false,e.allocation,e.bytes,true);};
     auto save=[&]() {
         plan.ntt_final=ntt.live;plan.s4_final=s4.live;
         plan.ntt_peak_bytes=ntt.peak;plan.s4_peak_bytes=s4.peak;
-        return add(ntt.live.total,s4.live.total,plan.final_bytes);
+        plan.owner_peak_bytes=owner.peak;plan.fold_bytes=owner.fold_bytes;plan.frontier_bytes=owner.frontier_bytes;
+        return add(ntt.live.total,s4.live.total,plan.final_bytes) && add(plan.final_bytes,owner.live,plan.final_bytes);
     };
     auto fail=[&](const char *why){plan.reason=why;save();return false;};
     if(!s4.init((bits+63)/64))return fail(s4.reason);
@@ -56,13 +68,20 @@ template<class Query,class Describe> bool workspace_memory_plan(
         if(!block.repeat)return fail("zero_repeat");
         if(block.tree_leaves && !giant_started) {
             giant_started=true;if(!trim())return fail(s4.reason);
+            if(owner_policy && !owner.fold_begin()) {
+                plan.reason=owner.reason;save();plan.valid=!std::strcmp(owner.reason,"fold_budget_refusal");return plan.valid;
+            }
         }
         if(!block.requests.empty() && block.requests.front().phase==RequestDescent && !descent_started) {
             descent_started=true;if(!trim())return fail(s4.reason);
+            if(owner_policy && !owner.frontier_begin()) {
+                plan.reason=owner.reason;save();plan.valid=!std::strcmp(owner.reason,"frontier_budget_refusal");return plan.valid;
+            }
         }
         Word remaining=block.repeat;
         while(remaining) {
             const auto before_ntt=ntt;const auto before_s4=s4;
+            const auto before_owner=owner;
             bool tree=block.tree_leaves!=0;
             if(tree && !s4.tree_begin(block.tree_leaves,s4_policy.compact_raw))return fail(s4.reason);
             for(const auto &r:block.requests) {
@@ -112,13 +131,15 @@ template<class Query,class Describe> bool workspace_memory_plan(
             if(overflow)return fail("payload_overflow");
             if(!add(plan.executed_blocks,1,plan.executed_blocks))return fail("counter_overflow");
             --remaining;
-            if(compress && remaining && ntt.same_allocations(before_ntt) && s4.same_allocations(before_s4)) {
+            if(compress && remaining && ntt.same_allocations(before_ntt) && s4.same_allocations(before_s4) &&
+               owner.same_allocations(before_owner)) {
                 if(!add(plan.skipped_blocks,remaining,plan.skipped_blocks))return fail("counter_overflow");
                 break;
             }
         }
     }
     if(!giant_started || !descent_started)return fail("missing_phase_boundary");
+    if(owner_policy && !owner.close())return fail(owner.reason);
     if(!save())return fail("payload_overflow");
     // run_real destroys reducer/context before NttArena; release in that order.
     if(!s4.close() || !ntt.close())return fail("release_failed");

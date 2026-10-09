@@ -73,7 +73,15 @@ G 树具有 tree_begin/tree_end 租约：raw 容量可保留，树元数据在�
 
 默认复用 q/qb、G/reverse 时，fold owner=8W(7P+7)+48 bytes。两类源/结果槽保持各自所有权；别名只跨已结束的用途，default stream 顺序保证旧读者结束。不同 reuse mask 用共享 `fold_owner_layout` 计算，不复制手工公式。
 
-GPU Gamma 校正与 scaled 根准备复用死槽，不增加持久大数组。进入下降前 owner handoff/释放与 frontier 新分配可能交叠，必须按实际事件计账。frontier 的 logical_peak 只表示算法活跃状态，不包括全量 F 数据、metadata 和驱动；host/pinned staging 单独记录。
+GPU Gamma 校正与 scaled 根准备复用死槽，不增加持久大数组。条件驻留路径在创建frontier metadata时保留fold owner，直至叶值读回；预算/headroom/分配失败则进入兼容回退。frontier的logical_peak只表示算法活跃状态，不包括全量F数据、metadata和驱动；host/pinned staging单独记录。
+
+条件驻留路径的 `resident_workspace_memory` 在同一执行器中加入fold/frontier：inverse后的raw/output trim完成后分配fold源/结果、map24、length8、modulus8W、digest16 bytes；下降前trim完成后分配frontier metadata24P bytes。下降结束先释放metadata，再释放fold；无独立的大型frontier状态分配，状态和上传窗口借用fold槽。
+
+该查询返回联合峰时的 `ntt_at_peak`、`s4_at_peak`、`owner_at_peak`，三项可以核对联合 `peak_bytes`；`owner_peak_bytes`是owner组件自己的峰。fold预算检查在分配前，frontier检查fold+metadata总量，并采用fold与`NTT_SCALED_FRONTIER_MAX_MB`两者较小的预算。拒绝返回有效前缀、`finished=false`；不模拟之后的主机回退。当前仍不模拟动态headroom、cold trim、giant和其他设备分配，明确不是完整准入模型。
+
+源码提取的CPU opaque allocator验证140组P/W/reuse，1960个分配/释放事件、6580项检查通过；故意扩大原生metadata8 bytes会被拒绝。共同状态压缩矩阵1152组、946250项检查通过。10组真实描述查询覆盖预算、trim/BQ/keyed和G1限制；M503余因子318 bits、B1=20、sigma26、B2=2.6×10¹⁰、D180180的普通、承载503和fold预算0三条完整曲线无GMP或因子失配，查询的fold/frontier布局与运行报告一致。该验证不等于CUDA物理分配失败或完整显存准入证明。
+
+本轮exe SHA256=`1d11589c7b1eb673a25f6850f21a7c1e0a2b67f31848e4c169245155f701fe2a`，sm89/CUDA13.3/GMP Zen3，4060 Laptop设备1；测试未改变频率或功耗，不据此报告速度收益。M6011余因子5872 bits、B1=20、sigma26、B2=2.6×10¹²、D1141140/P103680、arena6300/fold640/batch256 MiB的NTT/S4/fold/frontier规划联合峰为4098.979 MiB，仍不含giant。证据：`data/experiments/stage2_owner_memory_20261009/`下的`native_allocator_v2/result.json`、`cpu_v2/result.json`、`native_plans/results.json`、`curves.json`和`runtime_plans/results.json`。入口为`src/core/ecm_stage2_owner_memory.h`、`workspace_memory_plan`及生产plan-only查询。
 
 完整 F 树普通系数数据近似 O(W·P·log₂P) bytes；实际非空子树次数、padding、索引和主机对象容量须按存储布局核对，不能将 padded P 当作所有层真实系数数。
 

@@ -48,6 +48,22 @@ int main() {
             check(a.peak_bytes<=nm.peak_bytes+sm.peak_bytes);
             if(a.peak_bytes<nm.peak_bytes+sm.peak_bytes)++noncoincident;
             if(b.skipped_blocks)++compressed_cases;
+            OwnerMemoryPolicy op{p,(Word)((bits+63)/64),1ull<<30,mask%4};
+            WorkspaceMemoryPlan oa,ob;Word owner=0;ntt=s4=peak=total=0;
+            check(workspace_memory_plan(program,bits,shape,layout,np,sp,oa,false,
+                [&](const WorkspaceMemoryEvent &e) {
+                    Word &v=e.owner_event?owner:e.ntt?ntt:s4;
+                    if(e.allocation)v+=e.bytes;else {check(v>=e.bytes);v-=e.bytes;}
+                    check(ntt==e.ntt_live && s4==e.s4_live && owner==e.owner_live);
+                    total=ntt+s4+owner;check(total==e.total);peak=std::max(peak,total);
+                },&op));
+            check(workspace_memory_plan(program,bits,shape,layout,np,sp,ob,true,{},&op));
+            check(oa.valid && oa.finished && ob.valid && ob.finished && !total && !owner);
+            check(oa.peak_bytes==peak && oa.peak_bytes==ob.peak_bytes && oa.final_bytes==ob.final_bytes);
+            check(oa.ntt_at_peak+oa.s4_at_peak+oa.owner_at_peak==oa.peak_bytes);
+            check(oa.fold_bytes==owner_bytes(p,op.words,op.reuse) && oa.frontier_bytes==24*p);
+            check(oa.owner_peak_bytes==oa.fold_bytes+oa.frontier_bytes);
+            check(oa.peak_bytes<=a.peak_bytes+oa.owner_peak_bytes && oa.peak_bytes>=a.peak_bytes);
             ++cases;
         }
         RequestProgram program;check(request_program(8,80,program));
@@ -59,6 +75,13 @@ int main() {
         np.cap_bytes=0;sp.buffers=2;
         check(!workspace_memory_plan(program,127,shape,layout,np,sp,refusal));
         check(!refusal.valid);
+        sp.buffers=3;
+        OwnerMemoryPolicy op{8,2,1,3};
+        check(workspace_memory_plan(program,127,shape,layout,np,sp,refusal,true,{},&op));
+        check(refusal.valid && !refusal.finished && !std::strcmp(refusal.reason,"fold_budget_refusal"));
+        op.budget_bytes=owner_bytes(8,2,3);
+        check(workspace_memory_plan(program,127,shape,layout,np,sp,refusal,true,{},&op));
+        check(refusal.valid && !refusal.finished && !std::strcmp(refusal.reason,"frontier_budget_refusal"));
         check(compressed_cases>0 && noncoincident>0);
         std::cout<<"{\"cases\":"<<cases<<",\"checks\":"<<checks<<",\"compressed_cases\":"<<compressed_cases
             <<",\"noncoincident_peaks\":"<<noncoincident<<",\"gpu_calls\":0}\n";

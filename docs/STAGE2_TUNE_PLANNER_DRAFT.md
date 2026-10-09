@@ -37,6 +37,14 @@
 
 一条M503余因子318-bit、D180180、B2=2.6e10曲线通过，自检2016、GMP检查3032、bad=0，hits=0。新exe SHA256=`b1efdba90c099f3d9cf4412ed701369885fd721be882889b5d8fde11caa226cd`，日志/结果在 `data/experiments/stage2_workspace_memory_20261009/`。未宣称性能收益或自动D已改变。
 
+### Fold/frontier 联动进展
+
+`OwnerMemoryState`按生产成功路径逐项记录fold两块大缓冲与map/length/modulus/digest、frontier metadata；inverse与descent边界接入同一工作区执行器。预算前缀拒绝与动态headroom/物理分配拒绝分开，后两者尚未模拟。`resident_workspace_memory`加入owner峰时分项，原NTT/S4查询保留。
+
+提取生产分配/释放语句，140 cases、1960 allocation/free events、6580 checks通过；metadata extent故意改变8 bytes被拒绝。联合压缩1152 cases、946250 checks通过。10个native plan及普通/承载503/fold-budget0三条完整曲线通过，规划布局与运行布局字段一致。原始证据在 `data/experiments/stage2_owner_memory_20261009/`。新exe SHA256=`1d11589c7b1eb673a25f6850f21a7c1e0a2b67f31848e4c169245155f701fe2a`，完整生产构建约94.5秒。
+
+5872-bit、D1141140/P103680、B1=20、sigma26、B2=2.6e12、arena6300/fold640/batch256的NTT/S4/owner联合规划峰4098.979 MiB。它不是实测进程峰，未含giant；自动D仍未按该值放行。下一步将点chunk的生成/保留/销毁和S3容量变化接入共同时间线，并覆盖更早的初始化瞬时量，之后才用于准入。
+
 - [ ] 完成联合生命周期准入，覆盖自检、树租约、S4、NTT工作池、owner、giant与下降边界，以及非驻留回退。保持实时free/headroom检查。
 - [ ] 增加有版本的实测数据reader，明确设备、后端、算术路径及测量输入适用范围；路径与二进制信息放实验审计，运行tune数据只保留必要性能与资格字段。
 - [ ] 引入无因子完整ECM基准、普通/承载配对测量与D候选网格，将等级映射到完整测量计划。
