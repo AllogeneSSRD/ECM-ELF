@@ -29,11 +29,11 @@ def main():
     data = json.loads(reference.read_text(encoding='utf-8'))
     identity, tool_sha, ref_sha = freeze(exe), sha(__file__), sha(reference)
     if (not data['complete'] or data['mode'] != 'check' or
-        data['comparison'] not in ('workspace-bq','phase-output','owner-cache') or not data['oracle'] or not data['oracle']['unit'] or
+        data['comparison'] not in ('workspace-bq','phase-output','owner-cache','giant-chunk') or not data['oracle'] or not data['oracle']['unit'] or
         identity != data['identity']):
         raise ValueError('a matching completed workspace/output-lifetime check with an independent unit oracle is required')
     row = next(r for r in data['runs'] if r['key'] ==
-               ({'phase-output':'trimmed_output','owner-cache':'trimmed_cache'}.get(data['comparison'],'two_buffer')))
+               ({'phase-output':'trimmed_output','owner-cache':'trimmed_cache','giant-chunk':'bounded_points'}.get(data['comparison'],'two_buffer')))
     expected = {k: str(v) for k, v in data['oracle']['expected_leaf'].items()}
     if row['leaf'] != expected or row['environment'].get('NTT_PHASE_TRIM_RAW') != '1':
         raise ValueError('reference must exercise phase reclamation and match its CPU leaf oracle')

@@ -4226,6 +4226,9 @@ static void ntt_workspace_check(int device)
 #ifdef ECM_STAGE2_MEMORY_LEDGER
     stage2_memory::fixture();
 #endif
+#ifdef ECM_STAGE2_GIANT_CHUNK_PLAN
+    stage2_giant_chunk::fixture();
+#endif
     unsigned long long checks=0, bad=0, words=0;
     auto check=[&](bool ok) { ++checks; if (!ok) ++bad; };
     for(bool reuse_bq : {false,true}) {

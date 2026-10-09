@@ -30,6 +30,9 @@ def fnv(values, words):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--exponents',type=int,nargs='+',choices=(37,67,29,253,16384),
+                        default=[37,67,29,253,16384])
+    parser.add_argument('--giant-count',type=int,default=65,help='Independent giant points; includes two boundary points')
     a = parser.parse_args()
     out = a.output.resolve()
     if out.exists() and any(out.iterdir()):
@@ -39,12 +42,14 @@ def main():
     spec = importlib.util.spec_from_file_location('carrier_ref', path)
     ref = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ref)
-    d, count, b1 = 210, 65, 2
+    d, count, b1 = 210, a.giant_count, 2
+    if not 3<=count<=1048576:parser.error('--giant-count must be in [3,1048576]')
     cases = []
     # The final target is 2^8192+1, carried by M16384. This exercises maximum
     # limb count and the p%64==0 reduction boundary with a valid Stage1 point.
     for exponent, removed in ((37, 223), (67, 193707721), (29, 233), (253, 23),
                               (16384, (1 << 8192)-1)):
+        if exponent not in a.exponents:continue
         m = (1 << exponent)-1
         if m % removed:
             raise ValueError('carrier/target factorization changed')

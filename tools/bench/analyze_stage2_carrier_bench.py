@@ -29,19 +29,23 @@ def main():
     data = json.loads(a.input.read_text(encoding='utf-8'))
     if not data['complete'] or data['mode'] != 'timing':
         raise ValueError('a complete formal timing matrix is required')
+    if data.get('memory_ledger'):
+        raise ValueError('allocation-ledger runs are diagnostics, not formal timing evidence')
     timed = [r for r in data['runs'] if r['category'] == 'timing']
     comparison = data.get('comparison', 'carrier')
     keys = {'carrier': ('generic', 'carrier'), 'workspace-bq': ('three_buffer', 'two_buffer'),
             'plan': ('baseline_d', 'candidate_d'),
             'chunk': ('legacy_chunk','workspace_chunk'),
             'phase-output': ('retained_output','trimmed_output'),
-            'owner-cache': ('kept_cache','trimmed_cache')}[comparison]
+            'owner-cache': ('kept_cache','trimmed_cache'),
+            'giant-chunk': ('legacy_points','bounded_points')}[comparison]
     arm_labels = {'carrier': ['Generic target N', 'Mersenne carrier M'],
                   'workspace-bq': ['Three buffers A/B/Q', 'Two buffers A/(B=Q)'],
                   'plan': [f'D={data["input"]["D"]}', f'D={data["input"].get("candidate_D", 0)}'],
                   'chunk': ['Legacy three-buffer estimate','Physical workspace estimate'],
                   'phase-output': ['Retained S4 output','Reclaimed S4 output'],
-                  'owner-cache': ['Keep cached shapes','Reclaim cold shapes for owner']}[comparison]
+                  'owner-cache': ['Keep cached shapes','Reclaim cold shapes for owner'],
+                  'giant-chunk': ['Round points up to batches','Round points down to budget']}[comparison]
     sequence = [keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1)]
     if [r['key'] for r in timed] != sequence:
         raise ValueError('formal ABBA+BAAB sequence changed')
@@ -62,13 +66,17 @@ def main():
         for metric in ('workspace_big_peak_mib', 'workspace_full_peak_mib', 'owner_peak_mib'):
             arm[metric] = {k: v/(1 << 20) for k, v in arm[metric].items()}
         arm['misc_seconds'] = arm['wall']['total']['mean']-arm['wall']['init']['mean']-sum(v['mean'] for v in arm['phases'].values())
-        if comparison in ('workspace-bq', 'plan','chunk','phase-output','owner-cache'):
+        if comparison in ('workspace-bq', 'plan','chunk','phase-output','owner-cache','giant-chunk'):
             arm['layout'] = rows[0]['layout']
-        if comparison == 'owner-cache':
+        if comparison in ('owner-cache','giant-chunk'):
             arm['cache_trim'] = [r['cache_trim'] for r in rows]
             arm['cache_stats'] = [r['cache_stats'] for r in rows]
             arm['phase_memory'] = [r['phase_memory'] for r in rows]
             arm['coverage'] = rows[0]['coverage']
+        if comparison=='giant-chunk':
+            arm['point_plan']=rows[0]['point_plan'];arm['point_done']=rows[0]['point_done']
+            arm['device_leaf']=rows[0]['device_leaf'];arm['giant_seed']=rows[0]['giant_seed']
+            arm['coordinate_peak_mib']={k:v/(1<<20) for k,v in summarize(rows,'device_leaf','coord_peak_bytes').items()}
         if comparison == 'phase-output':
             arm['phase_trim'] = rows[0]['phase_trim']
             arm['coverage'] = rows[0]['coverage']
@@ -155,7 +163,8 @@ def main():
                           'plan': 'Fixed D (same arithmetic, two-buffer pool and budgets)',
                           'chunk': 'Chunk policy (same D, two-buffer pool and budgets)',
                           'phase-output': 'Phase output lifetime (same D and budgets)',
-                          'owner-cache': 'Cold cache admission (same D and budgets)'}[comparison])
+                          'owner-cache': 'Cold cache admission (same D and budgets)',
+                          'giant-chunk': 'Point chunk rounding (same D and budgets)'}[comparison])
             ax.spines[['top', 'right']].set_visible(False)
         axes[0].set_ylabel('Mean complete Stage2 wall time (s)')
         axes[0].set_ylim(0, max(r['wall']['total']['mean'] for r in result['arms'].values())*1.17)
@@ -180,15 +189,17 @@ def main():
         for ext in ('png', 'svg'):
             fig.savefig(a.figure_prefix.with_suffix('.'+ext), dpi=170)
         plt.close(fig)
-        if comparison in ('workspace-bq', 'plan','chunk','phase-output','owner-cache'):
+        if comparison in ('workspace-bq', 'plan','chunk','phase-output','owner-cache','giant-chunk'):
             fig, ax = plt.subplots(figsize=(8.8, 5.3), layout='constrained')
             metrics = [('workspace_big_peak_mib', 'Big buffers', '#366c93'),
                        ('workspace_full_peak_mib', 'Whole NTT workspace', '#7b9b8b'),
                        ('sampled_device_memory_peak_mib', 'Sampled GPU usage (2 s)', '#bb8250')]
             if comparison == 'chunk':
                 metrics.append(('owned_subset_observed_peak_mib','Observed NTT + S4 subset','#8a789b'))
-            if comparison in ('phase-output','owner-cache'):
+            if comparison in ('phase-output','owner-cache','giant-chunk'):
                 metrics.append(('owner_peak_mib','Resident fold owner','#8a789b'))
+            if comparison=='giant-chunk':
+                metrics.append(('coordinate_peak_mib','Giant X/Z coordinates','#ad5c76'))
             for mi, (metric, label, color) in enumerate(metrics):
                 for ai, (_, arm) in enumerate(result['arms'].items()):
                     value = arm['telemetry'][metric] if mi == 2 else arm[metric]['mean']

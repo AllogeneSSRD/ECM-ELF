@@ -613,6 +613,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     require("NTT_PHASE_TRIM_OUTPUT",0,0); // Output reclamation changes residency and timings.
     require("NTT_OWNER_TRIM_FUSE",0,0); // Phase cache eviction needs a calibrated lifecycle/cost scope.
     require("NTT_MEMORY_LEDGER",0,0); // Allocation instrumentation is outside production timing profiles.
+    require("NTT_GIANT_CHUNK_FLOOR",0,0);require("NTT_GIANT_POINT_BUDGET_KB",262144,262144);
     require("NTT_S4_WORKSPACE_BUDGET",0,0); // Chunk policy needs a matching cost scope.
     require("NTT_S4_FLAT_DIRECT",1,1);require("NTT_GROOT_COMPACT_RAW",1,1);
     if(o.factor_only)_putenv_s("NTT_NAME_HITS","0");

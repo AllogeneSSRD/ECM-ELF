@@ -320,3 +320,34 @@ python tools/test/test_stage2_memory_ledger.py --exe <exe> --matrix data/ledger_
 `stage2_memory_ledger.py`为共享解析器，采集器记录其SHA并检查运行中未变化。
 台账来源指向冻结binary的文件/行号；跟踪设备申请API的源码闭包审计不包含
 CUDA运行时内部开销。预测式MemoryPlan与普通D/Auto B2联合准入仍在推进。
+
+## Giant点chunk预算取整
+
+`--comparison giant-chunk`使用同binary、固定D与预算，两臂均BQ/raw（显式
+`--trim-phase-raw`）/output释放及冷cache准入，只有`NTT_GIANT_CHUNK_FLOOR`改变：
+`legacy_points=0`保留向上整批，`bounded_points=1`向下整批，至少保留一个P。
+`--giant-point-kb`（默认262144 KiB）传给`NTT_GIANT_POINT_BUDGET_KB`，两臂相同。
+这只是X/Z坐标预算，seed、segment、归约、NTT、fold/frontier另行计费。
+最低1P超预算时`minimum_over_budget=1`，不能宣称完整显存满足该预算。
+
+```powershell
+python tools/bench/bench_stage2_carrier.py --comparison giant-chunk --exe <exe> --save <save> --carrier-exponent 8011 --b2 2600000000000 --d 1381380 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --memory-ledger --mode check --projection-only --require-resident --output data/giant_check
+python tools/bench/bench_stage2_carrier.py --comparison giant-chunk --exe <exe> --save <save> --carrier-exponent 8011 --b2 2600000000000 --d 1381380 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --mode timing --telemetry --require-resident --output data/giant_timing
+python tools/bench/analyze_stage2_carrier_bench.py --input data/giant_timing/measurements.json --output docs/benchmarks/giant_timing.json --figure-prefix docs/figures/giant_timing
+python tools/test/test_stage2_giant_chunk.py --exe <exe> --matrix data/giant_check/measurements.json data/giant_timing/measurements.json --previous-check <previous_high_check.json> --output data/giant_gate.json
+```
+
+采集验证原生`giant_chunk_plan/done`的预算、整批公式、实际chunk与chain/ladder数量；
+workspace fixture包含298项点预算边界与溢出检查。使用`--giant-point-kb 1`可在
+小输入上触发多个ladder chunk和最低工作集超预算。production chain阈值仍固定32768，
+不绕过其配置门禁。可生成真实跨阈值的独立CPU参考：
+
+```powershell
+python tools/bench/prepare_stage2_carrier_inputs.py --exponents 37 --giant-count 32790 --output data/giant_boundary_inputs
+python tools/bench/bench_stage2_carrier.py --comparison giant-chunk --exe <exe> --save data/giant_boundary_inputs/m37_cofactor.save --carrier-exponent 37 --b2 6885480 --d 210 --fixtures data/giant_boundary_inputs/fixtures.json --giant-point-kb 512 --workspace-fixture --trim-phase-raw --memory-ledger --mode check --output data/giant_boundary_check
+```
+
+`test_stage2_phase_trim.py`和`test_stage2_chunk_budget.py`均支持该comparison的独立
+unit参考，可继续验证fold/frontier失败、pool关闭、三缓冲、arena拒绝与carry污染。
+正式计时关闭台账及额外叶子/seed检查，保留必要算术检查；ABBA+BAAB每臂n=4。
+该策略默认0，尚未进入INI/发布默认；旧Auto B2 profile拒绝新取整和非默认点预算。

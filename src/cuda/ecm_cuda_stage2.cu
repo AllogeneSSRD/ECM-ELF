@@ -58,6 +58,7 @@ struct ProductionDefaults {
 }
 
 #include "stage2/device_memory_ledger.cuh"
+#include "stage2/giant_chunk_plan.cuh"
 #include "stage2/ntt_runtime.cuh"
 #include "../core/ecm_stage2_geometry.h"
 #include "../core/ecm_stage2_modulus.h"
@@ -7332,22 +7333,29 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     stage2_memory::snapshot("after_fold_admission");
     CPoly H;
     FTreeStats gs;
-    /* the giant points are computed in POINT CHUNKS that are a whole number of G-tree batches
-       and bounded in memory (2 coordinates x nw words x 8 bytes each): one chunk for the frozen
-       vector (4763 points -> the single ladder launch S3 used), ~17 for the real shape. */
-    const unsigned long long pts_budget_bytes = (unsigned long long)256 << 20;
-    unsigned long long pts_per_chunk = P;
-    {
-        const unsigned long long per_point = 2 * (unsigned long long)C.nw * 8;
-        unsigned long long k = pts_budget_bytes / (per_point ? per_point : 1);
-        if (k < P) k = P;
-        pts_per_chunk = P * ((k + P - 1) / P);
-    }
+    /* Whole G-tree batches, minimum one P. The legacy ceiling may exceed the
+       coordinate budget by one batch; the experimental floor stays within it
+       unless the mandatory one-P working set itself exceeds the budget. */
+    const char *point_kb_env=std::getenv("NTT_GIANT_POINT_BUDGET_KB");
+    const unsigned long long point_kb=point_kb_env?std::strtoull(point_kb_env,nullptr,10):262144ull;
+    const bool point_floor=fold_device_flag("NTT_GIANT_CHUNK_FLOOR");
+    const auto point_plan=stage2_giant_chunk::plan(P,C.nw,
+        point_kb<=std::numeric_limits<unsigned long long>::max()/1024?point_kb*1024:0,point_floor);
+    if(!point_plan.valid){std::fprintf(stderr,"FATAL: invalid giant point chunk budget/shape\n");std::exit(3);}
+    const unsigned long long pts_per_chunk=point_plan.points;
+    const unsigned long long point_chunks=imax/pts_per_chunk+(imax%pts_per_chunk!=0);
+    stage2_log::print(stage2_log::debug,
+        "giant_chunk_plan: floor_requested=%d budget_bytes=%llu P=%llu nw=%llu points=%llu "
+        "coordinate_cap_bytes=%llu minimum_over_budget=%d estimated_chunks=%llu\n",
+        point_floor,point_kb*1024,(unsigned long long)P,(unsigned long long)C.nw,pts_per_chunk,
+        (unsigned long long)point_plan.coordinate_bytes,point_plan.minimum_over_budget,point_chunks);
+    unsigned long long actual_point_chunks=0;
     // One continuous interval includes chunk-local destruction between iterations.
     stage2_log::phase("Giant points, G trees and fold");
     const double t_loop_begin = now_s();
     R.t_pre_loop = t_loop_begin - t_entry;
     for (unsigned long long c0 = 0; c0 < imax; c0 += pts_per_chunk) {
+        ++actual_point_chunks;
         const unsigned long long c1 = ((imax - c0) < pts_per_chunk) ? imax : (c0 + pts_per_chunk);
         const size_t clo = (size_t)(c0 + 1), chi = (size_t)c1;
         const double tgp = now_s();
@@ -7768,6 +7776,9 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
     }
     R.t_post_loop=now_s();
+    stage2_log::print(stage2_log::debug,
+        "giant_chunk_done: chunks=%llu chain_chunks=%llu ladder_chunks=%llu points=%llu\n",
+        actual_point_chunks,R.giant_chain_chunks,actual_point_chunks-R.giant_chain_chunks,imax);
     R.t_loop_wall = R.t_post_loop - t_loop_begin;
     stage2_log::phase("Normalize fold and descend F tree");
     stage2_memory::snapshot("after_giant_loop");

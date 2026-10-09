@@ -4905,3 +4905,33 @@ ladder缓存误判为泄漏，已保留失败记录并显式标记persistent；�
 完整预测式MemoryPlan、legacy准入替换和Auto B2新成本仍未完成；按新台账核对
 各阶段公式，再推进D/point chunk/预算联合规划。同方向详见
 [报告§19](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。
+
+## 130. Giant坐标预算取整：省259 MiB但增加7.35%时间（2026-10-09）
+
+接续`4bb4340`。新增默认0的`NTT_GIANT_CHUNK_FLOOR`及默认262144 KiB的
+`NTT_GIANT_POINT_BUDGET_KB`，共享纯整数whole-P计划函数、0/溢出检查与最低1P
+超预算标记。debug记录计划与实际chain/ladder chunk数，常规控制台不增日志；
+旧Auto B2拒绝未标定策略，INI/发布默认保持。
+
+M8011/80111，target7995/carrier8011 bits，B1=20/sigma26/B2=2.6e12/D1381380，
+arena6300/fold1024/baby640/batch256 MiB，BQ/raw/output与cold-cache准入均开启：
+Q2P→P，point chunks8→15；完整owned峰6654.275513→6395.266235 MiB，减少
+**259.009277 MiB**，7个实际同时存活分配site的差值严格复算。坐标少243.632813 MiB，
+其它来自seed/segment/group。D153的最低1P超过256 MiB，策略不变、峰6559.132324 MiB。
+
+同binary正式ABBA+BAAB每臂n=4：**85.180013→91.442235 s（增加7.351750%）**，
+SD0.108897/0.080435，两个交错组均约+7.3%。增加6.262 s中giant增加5.715 s，
+G树/fold/下降基本不变；数学工作、NTT规模、驻留和GMP覆盖相同。clock忙时均值
+2388.67/2384.62 MHz，不把旧55 W条件套用到本轮。默认保持legacy；floor作为
+显存受限实验选择，需要规划器共同评价时间与内存，不能无条件推广。
+
+原生298项点预算边界/溢出、五种carrier与generic8193、跨生产chain阈值独立CPU
+参考、D138/D153完整叶子检查通过。新chain阈值用真实32790点覆盖，不放宽生产
+配置；两臂路径不同而完整叶子一致。首版fixture期望误用字节ceil的15项失败与
+chain_min=0的配置拒绝均保留，不计成功。18条native检查、5条正常回退及carry
+污染拒绝通过，预算审计含正式样本共10矩阵28条；全部42个编译源冻结。
+
+详见[报告第20节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#20-giant点坐标预算整批取整与完整峰验证)。
+下一步全生命周期MemoryPlan须覆盖point/seed/segment/group与NTT/owner缓存的
+同时存活量、chunk启动与grid阶跃成本，再接普通D/Auto B2及production B1校准。
+当前仍为实验策略，不修改`legacy_additive`准入；完整规划工作未结束。
