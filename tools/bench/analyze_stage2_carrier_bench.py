@@ -1,4 +1,4 @@
-"""Summarize a complete same-binary carrier timing matrix and draw its phases.
+"""Summarize a complete same-binary carrier/workspace matrix and draw its phases.
 
 Only formal timing rows contribute to means. CUDA reduction events are nested
 diagnostics, never added to parent phase totals or allocation peaks.
@@ -30,25 +30,36 @@ def main():
     if not data['complete'] or data['mode'] != 'timing':
         raise ValueError('a complete formal timing matrix is required')
     timed = [r for r in data['runs'] if r['category'] == 'timing']
-    sequence = ['generic', 'carrier', 'carrier', 'generic', 'carrier', 'generic', 'generic', 'carrier']
+    comparison = data.get('comparison', 'carrier')
+    keys = {'carrier': ('generic', 'carrier'), 'workspace-bq': ('three_buffer', 'two_buffer'),
+            'plan': ('baseline_d', 'candidate_d')}[comparison]
+    arm_labels = {'carrier': ['Generic target N', 'Mersenne carrier M'],
+                  'workspace-bq': ['Three buffers A/B/Q', 'Two buffers A/(B=Q)'],
+                  'plan': [f'D={data["input"]["D"]}', f'D={data["input"].get("candidate_D", 0)}']}[comparison]
+    sequence = [keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1)]
     if [r['key'] for r in timed] != sequence:
         raise ValueError('formal ABBA+BAAB sequence changed')
     for r in data['runs']:
         if sha(r['log']) != r['log_sha256'] or sha(r['debug_log']) != r['debug_sha256']:
             raise ValueError('raw log changed: ' + r['name'])
-    result = dict(input_sha256=sha(a.input), source_sha256=sha(__file__), input=data['input'],
+    result = dict(input_sha256=sha(a.input), source_sha256=sha(__file__), input=data['input'],comparison=comparison,
                   identity=data['identity'], summary=data['summary'], arms={})
-    for key in ('generic', 'carrier'):
+    for key in keys:
         rows = [r for r in timed if r['key'] == key]
         arm = dict(n=len(rows), wall={k: summarize(rows, 'wall', k) for k in ('shape', 'init', 'main', 'total')},
                    phases={k: summarize(rows, 'phases', k) for k in ('giant', 'gtrees', 'fold', 'descent', 'inv', 'accum', 'name')},
                    reduction=summarize(rows, 'coverage', 't_reduce'),
+                   workspace_big_peak_mib=summarize(rows, 'workspace', 'big_peak_bytes'),
                    workspace_full_peak_mib=summarize(rows, 'workspace', 'full_peak_bytes'),
                    owner_peak_mib=summarize(rows, 'fold', 'peak_bytes'),
                    modulus=rows[0]['modulus'], samples=[float(r['wall']['total']) for r in rows])
-        for metric in ('workspace_full_peak_mib', 'owner_peak_mib'):
+        for metric in ('workspace_big_peak_mib', 'workspace_full_peak_mib', 'owner_peak_mib'):
             arm[metric] = {k: v/(1 << 20) for k, v in arm[metric].items()}
         arm['misc_seconds'] = arm['wall']['total']['mean']-arm['wall']['init']['mean']-sum(v['mean'] for v in arm['phases'].values())
+        if comparison in ('workspace-bq', 'plan'):
+            arm['layout'] = rows[0]['layout']
+        arm['shape'] = rows[0]['shape']
+        arm['residency'] = {k: [r.get(k) for r in rows] for k in ('fold', 'root', 'frontier')}
         if arm['misc_seconds'] < -0.05:
             raise ValueError('parent phase budgets overlap unexpectedly')
         samples = []
@@ -61,11 +72,13 @@ def main():
                         continue
                     try:
                         samples.append(dict(power_W=float(cells[2]), clock_MHz=float(cells[3]),
-                                            temperature_C=float(cells[4]), utilization_percent=float(cells[5])))
+                                            temperature_C=float(cells[4]), utilization_percent=float(cells[5]),
+                                            memory_used_mib=float(cells[6])))
                     except ValueError:
                         pass
         busy = [s for s in samples if s['utilization_percent'] >= 90]
         arm['telemetry'] = dict(samples=len(samples), busy_samples=len(busy),
+            sampled_device_memory_peak_mib=max(s['memory_used_mib'] for s in samples) if samples else None,
             busy={k: dict(mean=statistics.mean(s[k] for s in busy), min=min(s[k] for s in busy),
                           max=max(s[k] for s in busy)) for k in ('power_W', 'clock_MHz', 'temperature_C')} if busy else {})
         result['arms'][key] = arm
@@ -99,8 +112,10 @@ def main():
             axes[0].errorbar(index, total, yerr=arm['wall']['total']['stdev'], color='#252525', capsize=4)
             axes[0].text(index, total+4, f'{total:.2f} s', ha='center')
         for ax in axes:
-            ax.set_xticks([0, 1], ['Generic target N', 'Mersenne carrier M'])
-            ax.set_xlabel('Arithmetic backend (same saved target N)')
+            ax.set_xticks([0, 1], arm_labels)
+            ax.set_xlabel({'carrier': 'Arithmetic backend (same saved target N)',
+                          'workspace-bq': 'Workspace layout (same arithmetic backend)',
+                          'plan': 'Fixed D (same arithmetic, two-buffer pool and budgets)'}[comparison])
             ax.spines[['top', 'right']].set_visible(False)
         axes[0].set_ylabel('Mean complete Stage2 wall time (s)')
         axes[0].set_ylim(0, max(r['wall']['total']['mean'] for r in result['arms'].values())*1.17)
@@ -115,13 +130,39 @@ def main():
         gpu = re.search(r'stage2_real: device=\d+ \((.*?)\)', text)
         gpu_name = gpu[1] if gpu else 'device '+str(first['result']['device'])
         date = datetime.fromtimestamp(first['result']['timestamp_ms']/1000, timezone.utc).date().isoformat()
-        fig.suptitle(f'{nbits}-bit target in M{data["input"]["carrier_exponent"]} · {gpu_name}\n'
-                     f'B2={data["input"]["B2"]:.1e}, D={data["input"]["D"]} · {date} UTC · ABBA+BAAB, n=4 per arm\n'
+        carrier = data['input']['carrier_exponent']
+        d_label = str(data['input']['D'])+(f' / {data["input"]["candidate_D"]}' if comparison == 'plan' else '')
+        modulus_label = f'{nbits}-bit target'+(f' in M{carrier}' if carrier else ' (generic arithmetic)')
+        fig.suptitle(f'{modulus_label} · {gpu_name}\n'
+                     f'B2={data["input"]["B2"]:.1e}, D={d_label} · {date} UTC · ABBA+BAAB, n=4 per arm\n'
                      'Warmups excluded; error bars = sample SD', fontsize=11)
         a.figure_prefix.parent.mkdir(parents=True, exist_ok=True)
         for ext in ('png', 'svg'):
             fig.savefig(a.figure_prefix.with_suffix('.'+ext), dpi=170)
         plt.close(fig)
+        if comparison in ('workspace-bq', 'plan'):
+            fig, ax = plt.subplots(figsize=(8.8, 5.3), layout='constrained')
+            metrics = [('workspace_big_peak_mib', 'Big buffers', '#366c93'),
+                       ('workspace_full_peak_mib', 'Whole NTT workspace', '#7b9b8b'),
+                       ('sampled_device_memory_peak_mib', 'Sampled GPU usage (2 s)', '#bb8250')]
+            for mi, (metric, label, color) in enumerate(metrics):
+                for ai, (_, arm) in enumerate(result['arms'].items()):
+                    value = arm['telemetry'][metric] if mi == 2 else arm[metric]['mean']
+                    if value is None:
+                        continue
+                    xpos = ai+(mi-1)*.22
+                    ax.bar(xpos, value, width=.21, color=color, label=label if ai == 0 else None)
+                    ax.text(xpos, value+45, f'{value:.0f}', ha='center', fontsize=9)
+            ax.set_xticks([0, 1], arm_labels)
+            ax.set_ylabel('MiB (overlapping series; never summed)')
+            ax.set_title(f'{modulus_label} · B2={data["input"]["B2"]:.1e}, D={d_label}\n'
+                         'Module capacity peaks and sampled device usage', loc='left')
+            ax.margins(y=.2)
+            ax.spines[['top', 'right']].set_visible(False)
+            ax.legend(loc='upper left', frameon=False)
+            for ext in ('png', 'svg'):
+                fig.savefig(a.figure_prefix.parent/(a.figure_prefix.name+'_memory.'+ext), dpi=170)
+            plt.close(fig)
     print(json.dumps(result['summary']))
 
 

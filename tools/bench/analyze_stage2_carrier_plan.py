@@ -20,6 +20,7 @@ SOURCES = (
     'src/cuda/stage2/stage2_d_model.cuh',
     'src/cuda/stage2/stage2_point_mersenne.cuh',
     'tools/bench/calibrate_stage2_d.py',
+    'tools/bench/analyze_stage2_carrier_plan.py',
 )
 
 
@@ -30,7 +31,17 @@ def owner_bytes(p, w, reuse=3):
     return 8 * (source + result + w) + 48
 
 
-def geometry(d, bits, b2, fold_mib, free_mib, reserve_mib, arena_mib):
+def baby_bytes(p, w):
+    # Exact temporary payload from d_baby_payload_bytes, independent of owner.
+    count, nodes = p, 0
+    for _ in range(8):
+        count = (count+1)//2
+        nodes += count
+    return 8*((3*p+5)*w+p+nodes*w)+count
+
+
+def geometry(d, bits, b2, fold_mib, free_mib, reserve_mib, arena_mib,
+             workspace_buffers=3, baby_mib=512):
     p, w = phi(d) // 2, (bits + 63) // 64
     i = b2 // d + 2
     if i <= p:
@@ -42,7 +53,7 @@ def geometry(d, bits, b2, fold_mib, free_mib, reserve_mib, arena_mib):
     padded_nt = shape(child + 1, bits)[0]
     old_arena = 8 * ((3 * nf + 2 * p + 1) +
                      2 * (3 * nt + 2 * (p // 2 + 1) - 1))
-    pool = 24 * nf
+    pool = 8 * workspace_buffers * nf
     owner = owner_bytes(p, w)
     # build_groot_device retains both buffers: 2P and P+ceil(P/2) coefficients.
     raw = 8 * w * (3 * p + (p + 1) // 2)
@@ -60,6 +71,9 @@ def geometry(d, bits, b2, fold_mib, free_mib, reserve_mib, arena_mib):
                 nominal_tree_length=nt, padded_tree_length=padded_nt,
                 legacy_arena_mib=old_arena/MIB,
                 fold_big_mib=pool/MIB, owner_mib=owner/MIB,
+                workspace_buffers=workspace_buffers,
+                baby_mib=baby_bytes(p,w)/MIB,
+                baby_budget_fits=baby_bytes(p,w) <= baby_mib*MIB,
                 legacy_owner_mib=owner_bytes(p, w, reuse=0)/MIB,
                 raw_g_mib=raw/MIB, coord_mib=coords/MIB,
                 giant_chunk_points=chunk, concurrent_lower_mib=lower/MIB,
@@ -95,17 +109,20 @@ def main():
     ap.add_argument('--reserve-mib', type=int, default=768)
     ap.add_argument('--arena-mib', type=int, default=6300)
     ap.add_argument('--fold-mib', type=int, default=640)
+    ap.add_argument('--workspace-buffers', type=int, choices=(2,3), default=3,
+                    help='Physical shared big-buffer count; exported/fallback paths still use 3')
+    ap.add_argument('--baby-mib', type=int, default=512)
     ap.add_argument('--gpu-analysis', type=Path,
                     help='Optional completed N-scaling analysis; auto-use local 20261008 analysis if present')
     ap.add_argument('--output', type=Path, required=True)
     a = ap.parse_args()
     if not 2 <= a.bits <= a.carrier_bits <= 16384 or a.b2 <= 0:
         ap.error('Need 2 <= bits <= carrier-bits <= 16384, B2 > 0')
-    if any(d < 6 or d % 2 for d in a.d) or min(a.free_mib, a.reserve_mib, a.arena_mib, a.fold_mib) < 0:
+    if any(d < 6 or d % 2 for d in a.d) or min(a.free_mib, a.reserve_mib, a.arena_mib, a.fold_mib,a.baby_mib) < 0:
         ap.error('Need even D >= 6 and nonnegative budgets')
     root = Path(__file__).resolve().parents[2]
     rows = [geometry(d, bits, a.b2, a.fold_mib, a.free_mib,
-                     a.reserve_mib, a.arena_mib)
+                     a.reserve_mib, a.arena_mib,a.workspace_buffers,a.baby_mib)
             for bits in sorted({a.bits, a.carrier_bits}) for d in a.d]
     reference = a.gpu_analysis
     if reference is None:
@@ -131,6 +148,7 @@ def main():
                   target_bits=a.bits, carrier_bits=a.carrier_bits,
                   free_mib=a.free_mib, reserve_mib=a.reserve_mib,
                   arena_mib=a.arena_mib, fold_mib=a.fold_mib,
+                  workspace_buffers=a.workspace_buffers,baby_budget_mib=a.baby_mib,
                   note='Offline integer geometry. Lower bound is NOT full VRAM peak; passing does not establish feasibility.',
                   source_sha256={s: hashlib.sha256((root/s).read_bytes()).hexdigest() for s in SOURCES},
                   gpu_analysis_source=str(reference) if reference else None,

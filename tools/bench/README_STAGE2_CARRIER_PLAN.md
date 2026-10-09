@@ -28,6 +28,8 @@ python tools/bench/analyze_stage2_carrier_plan.py --bits 7995 --carrier-bits 801
 - `--d`：一个或多个不小于6的偶数；默认报告中的7个候选。
 - `--free-mib`：默认7106，来自历史日志，**不会查询当前GPU**。
 - `--reserve-mib`、`--arena-mib`、`--fold-mib`：默认768、6300、640。
+- `--workspace-buffers [2|3]`：共享大池的物理缓冲数，默认3；导出与回退仍需3份。
+- `--baby-mib`：GPU baby独立预算，默认512；输出其准确临时payload与预算是否足够。
 - `--gpu-analysis`：可选的已完成位宽扫描分析JSON。未指定时，若本地存在
   `docs/benchmarks/stage2_n_scaling_20261008_analysis.json` 则自动使用；不存在
   仍可计算本次几何，省略跨位宽比较图。
@@ -44,8 +46,9 @@ python tools/bench/analyze_stage2_carrier_plan.py --bits 7995 --carrier-bits 801
 - `P/I/G`：baby多项式度数、巨点数、G树数，使用现有GPU覆盖公式。
 - `fold_length/packing_bpw/slot_words`：fold的NTT长度、digit位宽和每系数digit数。
 - `nominal_tree_length/padded_tree_length`：名义P/2子树与补齐后实际最大子树的NTT。
-- `legacy_arena_mib`：现有保守arena估计，便于与共享池比较。
-- `fold_big_mib`：单次最大fold所需A/B/Q池 `24L`。
+- `legacy_arena_mib`：三缓冲时代的保守arena估计，便于与共享池比较；不随本工具的布局选项改变。
+- `fold_big_mib`：单次最大fold所需物理大池 `8×buffers×L`。
+- `baby_mib/baby_budget_fits`：GPU baby临时payload与独立预算判断；不加入主循环并存下界。
 - `owner_mib/legacy_owner_mib`：当前reuse=3与默认reuse=0布局的占用。
 - `raw_g_mib/coord_mib`：compact G raw A/B与当前256MiB向上取整策略的坐标chunk。
 - `concurrent_lower_mib`：上面四项并存的下界，不含表、S4输出、seed等。
@@ -115,3 +118,59 @@ python tools/bench/analyze_stage2_carrier_bench.py --input data/carrier_timing/m
   不允许重用失败曲线，不允许恢复/筛选正式计时矩阵。
 - 分析器只接受完整ABBA+BAAB矩阵，输出均值、标准差、范围、父阶段和GPU采样。
   S4 `t_reduce`单列为嵌套事件；workspace/owner峰值单列，不相加冒充进程显存峰值。
+
+## 两缓冲工作区实验
+
+实验环境变量`NTT_WORKSPACE_REUSE_BQ=1`令共享大池的Q在inverse完成后复用B；
+默认0。只作用于允许pool且不导出digit指针的调用。导出接口、关闭pool和每调用
+分配的回退路径保留三个独立缓冲。分配器、原生几何和fold/frontier headroom已共用
+物理缓冲数量策略；完整生命周期MemoryPlan和Auto B2新成本尚未接入，测试需要
+显式D/B2。Auto B2拒绝未经校准的两缓冲配置。
+
+在**同一二进制、同一算术后端**上比较环境开关0/1：
+
+```powershell
+python tools/bench/bench_stage2_carrier.py --comparison workspace-bq --exe build_cuda_cmake/workspace_bq_stage2/ecm_cuda_stage2.exe --save data/carrier_small_inputs/m37_cofactor.save --carrier-exponent 37 --b2 13230 --d 210 --fixtures data/carrier_small_inputs/fixtures.json --workspace-fixture --mode check --output data/bq_m37_check
+python tools/bench/bench_stage2_carrier.py --comparison workspace-bq --exe build_cuda_cmake/workspace_bq_stage2/ecm_cuda_stage2.exe --save <stage1.save> --carrier-exponent 8011 --b2 2600000000000 --d 810810 --mode check --projection-only --telemetry --output data/bq_large_check
+python tools/bench/bench_stage2_carrier.py --comparison workspace-bq --exe build_cuda_cmake/workspace_bq_stage2/ecm_cuda_stage2.exe --save <stage1.save> --carrier-exponent 8011 --b2 260000000000 --d 810810 --mode timing --telemetry --output data/bq_timing
+python tools/bench/analyze_stage2_carrier_bench.py --input data/bq_timing/measurements.json --output docs/benchmarks/bq_analysis.json --figure-prefix docs/figures/bq_analysis
+```
+
+- `--carrier-exponent`在两条路径中相同；省略或0代表通用N算术。
+- `--workspace-fixture`只用于check，验证两种布局与pool开/关的容量、失败回滚、
+  交叉A/B/Q输入、导出生命周期、每调用回退、dRes隔离及延迟carry。
+- `--single-arm two_buffer`只允许check，适合三缓冲可能超显存时探索更大D。
+  输出记录这是单路径实验，不能作为两布局A/B性能结论。
+- `--require-resident`要求fold、scaled root、frontier都实际启用；任何回退拒绝矩阵。
+  完成曲线的原始日志、返回值和已解析结果仍保留，`complete=false`不算通过。
+- `--baby-mb`默认512，是baby生成的独立临时显存预算，和fold/arena/batch分开设置。
+- `--trim-phase-raw`在两条路径中同时设置`NTT_PHASE_TRIM_RAW=1`，在Newton完成后、
+  驻留下降前释放已失效的raw A/B。默认关闭；不缩小1 GiB headroom余量，必要回退可
+  重新申请raw。日志单列释放字节和耗时，旧Auto B2成本不接受该策略。
+- 正式timing仍为各一次预热加ABBA+BAAB；两布局的乘法、归约和强制检查覆盖必须相同。
+- 新增`ntt_workspace_layout`记录容量、物理缓冲数、复用调用与省去的Q峰值字节。
+- 分析器兼容先前carrier矩阵。两缓冲模式额外绘制`*_memory.png/svg`，分别展示
+  big、完整NTT模块容量峰值和每2秒采样的设备已用显存；三项互相包含，不能相加。
+  采样的最大值也不等于精确的进程分配峰值。
+
+### 原生规划检查与候选D计时
+
+```powershell
+python tools/test/test_stage2_workspace_plan.py --exe build_cuda_cmake/workspace_bq_headroom_v2_stage2/ecm_cuda_stage2.exe --save <stage1.save> --carrier-exponent 8011 --output data/bq_plan_check
+python tools/test/test_stage2_phase_trim.py --exe build_cuda_cmake/workspace_bq_phase_trim_stage2/ecm_cuda_stage2.exe --reference-check data/stage2_bq_20261009/phase_trim_m37_check/measurements.json --output data/phase_trim_fallback_gate
+python tools/bench/bench_stage2_carrier.py --comparison workspace-bq --exe <ecm_cuda_stage2.exe> --save <stage1.save> --carrier-exponent 8011 --b2 2600000000000 --d 1381380 --fold-mb 1024 --mode check --projection-only --single-arm two_buffer --output data/d1381380_check
+python tools/bench/bench_stage2_carrier.py --comparison plan --exe <ecm_cuda_stage2.exe> --save <stage1.save> --carrier-exponent 8011 --b2 2600000000000 --d 810810 --candidate-d 1381380 --fold-mb 1024 --mode timing --telemetry --output data/d_plan_timing
+python tools/bench/analyze_stage2_carrier_bench.py --input data/d_plan_timing/measurements.json --output docs/benchmarks/d_plan_analysis.json --figure-prefix docs/figures/d_plan
+```
+
+带阶段释放的最终实验构建为`build_cuda_cmake/workspace_bq_phase_trim_stage2/`；
+需要验证此策略时，在check与timing命令中均添加`--trim-phase-raw`，并保持其它预算一致。
+`test_stage2_phase_trim.py`要求同二进制已通过的workspace check，且含独立单位
+案例CPU oracle并开启阶段释放；分别强制fold/frontier分配失败，验证完整目标
+叶子与回退重申请路径。它执行真实小曲线，与只查计划的workspace_plan工具不同。
+
+`plan`只接受timing：固定同一二进制、目标N、carrier、保存点、B2及所有预算，
+两臂均使用两缓冲pool，仅切换D；每臂预热一次，正式ABBA+BAAB，各n=4。调用前
+分别完成每个D的独立正确性检查。不同D的baby集合不同，不能要求叶子摘要相等，
+也不要求跨D乘法计数相同；每个固定D内部的工作与强制检查覆盖必须一致。
+允许并记录实际驻留回退；需要全部驻留时显式增加`--require-resident`。

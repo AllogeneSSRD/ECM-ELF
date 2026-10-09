@@ -4787,3 +4787,16 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 接续76150b0，独立生产固定canonical减法与GPU scaled frontier，保留必要回退及五级日志，28raw依赖/5对象无bench来源。原生62/0、控制9/0、开发交叉13/0、较大16k实际6条与plan4条完成。32正式/8预热大界均值少1.99%但两组反向，generic16384慢2.01%且两组反向；不推广开发5.11%或相加局部百分比，发布893保持。D300300/P28800/W256组合394.423MiB实际驻留，NTT big3072MiB；D600600仅plan，组合788.832MiB超过640MiB。通用大位宽S4仍重要，新Auto成本/最终尾段/总RAM与VRAM lease未完成。完整来源、全部样本、容量与收尾统一维护[步骤报告§81](D:/code/MPA-OpenCl/docs/STAGE2_GPU_CURRENT_PIPELINE.md:2162)。
 
 本阶段四条管理员Systems和独立审计已完成：两形状DMA差精确吻合公式，tracked设备峰保持/end0，pinned分别少50.999/47.741MiB；NVML采样峰4989/5217MiB不作连续进程峰保证。较大泛型ladder约23.92秒、S4约21.35秒，大界tile/outer约7.74/4.35秒，下一阶段按模数/形状分别诊断。初次生产marker采集器拒绝保留并仅修复identity检查。发布893保持，长期目标继续。
+
+
+## 123. Stage2梅森承载余因子（2026-10-09）
+
+研究b5996ee、实现f5b27f8：目标N和算术M=2^p−1分离，验证N|M，求逆/非单位/GCD仍针对N；实验CLI默认关闭。独立CPU单位/非单位/共享因子/满16384-bit承载参考通过。N=M8011/80111、7995-bit、固定D810810/B2=2.6e12同二进制ABBA+BAAB各n=4，full165.179958→113.166372秒（少31.49%），完整77760目标叶摘要一致。7/27既有形状承载后NTT长度会增加，不能推广无条件默认启用；历史CPU不同曲线/B1不作严格加速比。源码、数学合同、论文/Prime95/GMP-ECM依据与构建身份统一维护[承载与规划报告§10](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。
+
+## 124. Stage2 NTT B/Q复用、阶段释放与D候选（2026-10-09）
+
+共享pool在inverse完成后Q复用B，独立capacity/所有权/输入快照及导出三缓冲合同保持；默认关闭。大形状实际少1024 MiB，固定D中档8正式/2预热仅少0.08%，收益未确立。统一分配/几何及fold/frontier headroom的2/3缓冲策略，另默认关闭的阶段raw释放在Newton后与驻留下降前回收临时输入；128项workspace、8组原生plan、独立参考/真实大形状/强制分配回退门禁通过，完整目标叶子与已知因子保持。
+
+7995-bit目标、carrier8011、B1=20/sigma26/B2=2.6e12，同二进制固定全部预算、仅D810810→1381380，ABBA+BAAB各n=4：113.0927225→96.84165325秒（少14.36969%，两组14.32482%/14.41451%）。G树42→15、S4 launch1174→474；候选fold/frontier回退，NTT全峰2162.106→4612.618 MiB，2秒采样设备峰4062→6442 MiB，不相加冒充进程峰。D1141140全驻留n1为98.78秒，说明应按总成本比较驻留/回退。
+
+完整MemoryPlan、新Auto B2成本和默认发布仍待推进；原生arena估计仍把共享fold/tree相加，D1021020估计8194.8 MiB而实际NTT峰4612.0 MiB，无overflow。下一项生命周期ledger，联合D/P、owner、giant/S4 chunk预算，再做新成本scope；所有公式、source/line、失败、样本、图和复现继续维护[专题§11–14](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。

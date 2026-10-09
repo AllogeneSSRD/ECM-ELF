@@ -1,7 +1,7 @@
-"""Same-binary, fixed-D comparison of generic and Mersenne-carrier Stage2.
+"""Same-binary comparison of Stage2 carriers, workspace layouts or fixed-D plans.
 
 Retains every invocation and frozen build/input identities. The check matrix
-compares complete leaf vectors after projection to target N; timing matrices
+compares fingerprints covering all leaves after projection to target N; timing matrices
 disable that extra projection and retain the mandatory arithmetic checks.
 """
 import argparse
@@ -20,13 +20,16 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--exe', type=Path, required=True)
     p.add_argument('--save', type=Path, required=True)
-    p.add_argument('--carrier-exponent', type=int, required=True)
+    p.add_argument('--carrier-exponent', type=int, default=0)
+    p.add_argument('--comparison', choices=('carrier', 'workspace-bq', 'plan'), default='carrier')
     p.add_argument('--b2', type=int, required=True)
     p.add_argument('--d', type=int, required=True)
+    p.add_argument('--candidate-d', type=int, help='Second fixed D for a two-buffer plan timing comparison; budgets and arithmetic stay fixed')
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--arena-mb', type=int, default=6300)
     p.add_argument('--fold-mb', type=int, default=640)
     p.add_argument('--batch-mb', type=int, default=256)
+    p.add_argument('--baby-mb', type=int, default=512)
     p.add_argument('--mode', choices=('check', 'timing'), default='check')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--timeout', type=int, default=1200)
@@ -34,9 +37,27 @@ def main():
     p.add_argument('--fixtures', type=Path, help='Optional independent small-input manifest from prepare_stage2_carrier_inputs.py')
     p.add_argument('--telemetry', action='store_true', help='Sample GPU power/clocks/utilization with read-only nvidia-smi queries every 2 s')
     p.add_argument('--projection-only', action='store_true', help='Check full projected leaves without extra per-point ladder/seed diagnostics; still not a timing sample')
+    p.add_argument('--workspace-fixture', action='store_true', help='Run the independent two/three-buffer allocation, alias, export and deferred-carry fixture in check mode')
+    p.add_argument('--single-arm', choices=('three_buffer', 'two_buffer'), help='Exploratory check of one workspace layout, without claiming a cross-layout comparison')
+    p.add_argument('--require-resident', action='store_true', help='Require device fold, scaled root and frontier instead of accepting their fallbacks')
+    p.add_argument('--trim-phase-raw', action='store_true', help='Reclaim dead raw staging at inverse/fold and fold/descent boundaries in both arms')
     a = p.parse_args()
-    if a.d <= 0 or a.b2 <= 0 or not 2 <= a.carrier_exponent <= 16384:
+    valid_exponent = 2 <= a.carrier_exponent <= 16384 or (a.comparison != 'carrier' and a.carrier_exponent == 0)
+    if a.d <= 0 or a.b2 <= 0 or not valid_exponent or min(a.arena_mb, a.fold_mb, a.batch_mb,a.baby_mb) <= 0:
         p.error('positive fixed D/B2 and a valid carrier exponent are required')
+    if a.workspace_fixture and a.mode != 'check':
+        p.error('--workspace-fixture requires --mode check')
+    if a.single_arm and (a.mode != 'check' or a.comparison != 'workspace-bq'):
+        p.error('--single-arm requires a workspace-bq check')
+    if a.comparison == 'plan':
+        if a.mode != 'timing' or not a.candidate_d or a.candidate_d <= 0 or a.candidate_d == a.d:
+            p.error('plan requires timing and a positive --candidate-d different from --d; validate each D separately first')
+        if a.fixtures:
+            p.error('plan timing uses separately validated D candidates, not a single-D fixture')
+    elif a.candidate_d is not None:
+        p.error('--candidate-d requires --comparison plan')
+    if a.resume_check and a.comparison != 'carrier':
+        p.error('collector recovery currently supports carrier comparisons only')
     exe, save, out = a.exe.resolve(), a.save.resolve(), a.output.resolve()
     if a.resume_check and a.mode != 'check':
         p.error('only check matrices permit collector recovery')
@@ -65,22 +86,32 @@ def main():
     env = {k: v for k, v in os.environ.items() if not k.startswith('NTT_')}
     env.update(NTT_D_MODEL='0', NTT_GIANT_SEED_PAIR='1', NTT_GIANT_BASE_CPU='0',
                NTT_GIANT_CHAIN_BLOCK='64', NTT_GIANT_CHAIN_MIN='32768',
-               NTT_NO_PROGRESS='1', CUDA_LAUNCH_BLOCKING='0')
+               NTT_NO_PROGRESS='1', NTT_BABY_DEVICE_MAX_MB=str(a.baby_mb), CUDA_LAUNCH_BLOCKING='0')
+    env['NTT_PHASE_TRIM_RAW'] = '1' if a.trim_phase_raw else '0'
+    if a.workspace_fixture:
+        env['NTT_ARENA_WORKSPACE_TEST'] = '1'
     if a.mode == 'check':
         env['NTT_TARGET_LEAF_HASH'] = '1'
         if not a.projection_only:
             env.update(NTT_BABY_DEVICE_CHECK='1', NTT_GFINV_SEG_CHECK='1',
                        NTT_GIANT_SEED_CHECK='1', NTT_GIANT_CHAIN_CHECK='1')
-    sequence = ('generic', 'carrier', 'carrier', 'generic',
-                'carrier', 'generic', 'generic', 'carrier')
-    matrix = ([('check', k) for k in ('generic', 'carrier')] if a.mode == 'check'
-              else [('warmup', k) for k in ('generic', 'carrier')] +
+    keys = {'carrier': ('generic', 'carrier'), 'workspace-bq': ('three_buffer', 'two_buffer'),
+            'plan': ('baseline_d', 'candidate_d')}[a.comparison]
+    sequence = tuple(keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1))
+    matrix = ([('check', k) for k in ((a.single_arm,) if a.single_arm else keys)] if a.mode == 'check'
+              else [('warmup', k) for k in keys] +
                    [('timing', k) for k in sequence])
     data = dict(complete=False, identity=identity, tool_sha256=tool_sha,
                 input=dict(save=str(save), save_sha256=save_sha,
                            B2=a.b2, D=a.d, carrier_exponent=a.carrier_exponent),
-                mode=a.mode, matrix=matrix, runs=[], oracle=oracle, projection_only=a.projection_only,
+                mode=a.mode, comparison=a.comparison, matrix=matrix, runs=[], oracle=oracle,
+                projection_only=a.projection_only, workspace_fixture=a.workspace_fixture, single_arm=a.single_arm,
+                require_resident=a.require_resident,
+                trim_phase_raw=a.trim_phase_raw,
+                budgets_mib=dict(arena=a.arena_mb,fold=a.fold_mb,batch=a.batch_mb,baby=a.baby_mb),
                 oracle_sha256=sha(a.fixtures) if a.fixtures else None)
+    if a.comparison == 'plan':
+        data['input']['candidate_D'] = a.candidate_d
     if a.resume_check:
         previous = read(out/'measurements.json')
         if previous['complete'] or any(previous[k] != data[k] for k in ('identity', 'input', 'mode')):
@@ -123,15 +154,22 @@ def main():
                 continue
             log, result = out / (name + '.log'), out / (name + '.jsonl')
             debug = out / (name + '.debug.log')
+            use = env.copy()
+            if a.comparison == 'workspace-bq':
+                use['NTT_WORKSPACE_REUSE_BQ'] = '1' if key == 'two_buffer' else '0'
+            elif a.comparison == 'plan':
+                use['NTT_WORKSPACE_REUSE_BQ'] = '1'
+            exponent = a.carrier_exponent if a.comparison != 'carrier' or key == 'carrier' else 0
+            run_d = a.candidate_d if key == 'candidate_d' else a.d
             command = [str(exe), '--ini', str(ini), '--save', str(save),
-                       '--b2', str(a.b2), '--d', str(a.d), '--device', str(a.device),
-                       '--carrier-exponent', str(a.carrier_exponent if key == 'carrier' else 0),
+                       '--b2', str(a.b2), '--d', str(run_d), '--device', str(a.device),
+                       '--carrier-exponent', str(exponent),
                        '--arena-mb', str(a.arena_mb), '--owner-budget-mb', str(a.fold_mb),
                        '--batch-mb', str(a.batch_mb), '--curves', '1', '--factor-only',
                        '--log-level', 'curve', '--log', str(log), '--results', str(result),
                        '--debug-log-file', str(debug)]
             entry = dict(name=name, category=category, key=key, command=command,
-                         environment={k: v for k, v in env.items() if k.startswith('NTT_') or k == 'CUDA_LAUNCH_BLOCKING'})
+                         environment={k: v for k, v in use.items() if k.startswith('NTT_') or k == 'CUDA_LAUNCH_BLOCKING'})
             retained = a.resume_check and log.exists() and result.exists() and debug.exists()
             pending = data.get('pending', {})
             if retained and (pending.get('command') != command or pending.get('returncode') != 0 or
@@ -162,7 +200,7 @@ def main():
                 if worker:
                     worker.start()
                 try:
-                    proc = subprocess.run(command, env=env, capture_output=True, timeout=a.timeout)
+                    proc = subprocess.run(command, env=use, capture_output=True, timeout=a.timeout)
                 finally:
                     stop.set()
                     if worker:
@@ -185,11 +223,15 @@ def main():
                           'gmp_selftest_bad=0', 'gmp_check_bad=0', 'pending=0'):
                 if token not in text:
                     raise ValueError('required arithmetic check missing: ' + token)
-            if r['B2'] != a.b2 or r['requested_D'] != a.d or r['device'] != a.device or r['bad_factors']:
+            if r['B2'] != a.b2 or r['requested_D'] != run_d or r['device'] != a.device or r['bad_factors']:
                 raise ValueError('result/input mismatch')
+            if r['carrier_exponent'] != exponent:
+                raise ValueError('wrong arithmetic carrier')
             n = int(r['N_hex'], 16)
-            if ((1 << a.carrier_exponent)-1) % n or any(not 1 < int(f) < n or n % int(f) for f in r['factors']):
+            if (a.carrier_exponent and ((1 << a.carrier_exponent)-1) % n) or any(not 1 < int(f) < n or n % int(f) for f in r['factors']):
                 raise ValueError('invalid target/carrier or factor')
+            if a.workspace_fixture and fields(text, 'ntt_workspace_check')['bad'] != '0':
+                raise ValueError('workspace fixture failed')
             if oracle:
                 if n != int(oracle['N_hex'], 16) or r['B1'] != oracle['B1'] or r['sigma'] != oracle['sigma']:
                     raise ValueError('independent reference input differs')
@@ -204,29 +246,53 @@ def main():
                          leaf=fields(text, 'target_descent_values') if a.mode == 'check' else None,
                          log=str(log), log_sha256=sha(log), debug_log=str(debug),
                          debug_sha256=sha(debug), result_sha256=sha(result))
-            if oracle and oracle['unit'] and a.mode == 'check':
-                if entry['leaf'] != {k: str(v) for k, v in oracle['expected_leaf'].items()}:
-                    raise ValueError('independent target-ring monic leaf oracle mismatch')
+            if a.comparison in ('workspace-bq', 'plan'):
+                entry['layout'] = fields(text, 'ntt_workspace_layout')
+                if entry['layout']['reuse_bq_requested'] != use['NTT_WORKSPACE_REUSE_BQ']:
+                    raise ValueError('workspace policy differs from requested arm')
+                if (int(entry['layout']['alias_calls']) > 0) != (key != 'three_buffer'):
+                    raise ValueError('workspace alias execution differs from requested arm')
+            entry['root'] = fields(text, 'scaled_root_device')
+            entry['frontier'] = fields(text, 'scaled_frontier_device')
+            # Retain a completed arithmetic run even if a later residency gate
+            # rejects the matrix. complete=False/error preserve the failure.
             data['runs'].append(entry)
             del data['pending']
             persist()
+            if a.require_resident:
+                for prefix in ('real_batched_folddevice', 'scaled_root_device', 'scaled_frontier_device'):
+                    if fields(text, prefix)['enabled'] != '1':
+                        raise ValueError('required residency fell back: ' + prefix)
+            if oracle and oracle['unit'] and a.mode == 'check':
+                if entry['leaf'] != {k: str(v) for k, v in oracle['expected_leaf'].items()}:
+                    raise ValueError('independent target-ring monic leaf oracle mismatch')
             print(name, entry['wall']['total'], 's', flush=True)
         targets = {(r['result']['N_hex'], r['result']['B1'], r['result']['sigma']) for r in data['runs']}
         factors = {tuple(sorted(r['result']['factors'])) for r in data['runs']}
         if len(targets) != 1 or len(factors) != 1:
             raise ValueError('target input or factor output changed between arms')
+        if a.comparison == 'workspace-bq':
+            for field in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):
+                if len({r['coverage'][field] for r in data['runs']}) != 1:
+                    raise ValueError('arithmetic coverage changed between layouts: ' + field)
+        if a.comparison == 'plan':
+            for key in keys:
+                rows = [r for r in data['runs'] if r['key'] == key]
+                for field in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):
+                    if len({r['coverage'][field] for r in rows}) != 1:
+                        raise ValueError('arithmetic coverage changed within fixed D: ' + key + '/' + field)
         if a.mode == 'check' and (not oracle or oracle['unit']) and len({json.dumps(r['leaf'], sort_keys=True) for r in data['runs']}) != 1:
             raise ValueError('complete target-projected leaf fingerprint mismatch')
         if oracle and not oracle['unit']:
             data['leaf_comparison'] = 'Nonunit fallback X values depend on projective scale; verify target factors instead of equating monic leaf vectors.'
         if a.mode == 'timing':
             timed = [r for r in data['runs'] if r['category'] == 'timing']
-            means = {k: statistics.mean(float(r['wall']['total']) for r in timed if r['key'] == k) for k in ('generic', 'carrier')}
+            means = {k: statistics.mean(float(r['wall']['total']) for r in timed if r['key'] == k) for k in keys}
             groups = []
             for lo in (0, 4):
                 m = {k: statistics.mean(float(r['wall']['total']) for r in timed[lo:lo+4] if r['key'] == k) for k in means}
-                groups.append(100 * (1 - m['carrier'] / m['generic']))
-            data['summary'] = dict(mean_seconds=means, reduction_percent=100*(1-means['carrier']/means['generic']),
+                groups.append(100 * (1 - m[keys[1]] / m[keys[0]]))
+            data['summary'] = dict(mean_seconds=means, reduction_percent=100*(1-means[keys[1]]/means[keys[0]]),
                                    groups_reduction_percent=groups)
         verify()
         data['complete'] = True

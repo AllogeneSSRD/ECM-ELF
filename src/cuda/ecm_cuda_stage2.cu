@@ -1289,6 +1289,16 @@ struct S4Ctx {
             CK(cudaMalloc(&d_rawB,b*8));d_rawB_cap=b;
         }
     }
+    size_t raw_release() {
+        // At the G/fold -> resident-descent boundary, all G-tree roots have
+        // been copied into the independent fold owner. cudaFree completes
+        // queued default-stream readers before invalidating either pointer.
+        const size_t bytes=8*(d_rawA_cap+d_rawB_cap);
+        if(d_rawA)CK(cudaFree(d_rawA));
+        if(d_rawB)CK(cudaFree(d_rawB));
+        d_rawA=d_rawB=nullptr;d_rawA_cap=d_rawB_cap=0;
+        return bytes;
+    }
     double t_h2d_raw = 0.0, t_packdev = 0.0;
     unsigned long long raw_words = 0, pack_launches = 0;
     /* All S4 device-packed calls, including F-tree/inverse before the main-loop timers. */
@@ -5253,9 +5263,16 @@ struct FoldDeviceState {
         size_t available=0,total=0;CK(cudaMemGetInfo(&available,&total));
         // Finv has normally already built the largest workspace. Reserve its
         // possible remaining growth and 1 GiB for coordinates/frontier/context.
-        const size_t target=3ull*qN*8,current=L.arena->workspace.words*8;
+        const unsigned buffers=L.arena->big_buffer_count();
+        const size_t target=(size_t)buffers*qN*8,current=L.arena->workspace.words*8;
         const size_t growth=target>current?target-current:0;
-        if(bytes>available || available-bytes<growth+(1ull<<30)) {st.fallback="headroom";return false;}
+        const size_t future_reserve=1ull<<30;
+        const bool fits=bytes<=available && available-bytes>=growth+future_reserve;
+        stage2_log::print(stage2_log::debug,
+            "fold_device_headroom: available_bytes=%llu owner_bytes=%llu physical_buffers=%u target_big_bytes=%llu current_big_bytes=%llu growth_bytes=%llu future_reserve_bytes=%llu fits=%d\n",
+            (unsigned long long)available,bytes,buffers,(unsigned long long)target,
+            (unsigned long long)current,(unsigned long long)growth,(unsigned long long)future_reserve,(int)fits);
+        if(!fits) {st.fallback="headroom";return false;}
         if(fold_device_flag("NTT_FOLD_DEVICE_ALLOC_FAIL")){st.fallback="allocation_fixture";return false;}
         memory.words[0]=layout.source_words;memory.words[1]=layout.result_words;
         for(int i=0;i<2;++i) {
@@ -7254,6 +7271,14 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         R.fold_flat.t_bridge+=now_s()-tb;
     }
     FoldDeviceState device_fold;
+    if(fold_flat_enabled && !finvflat.empty() && L.s4 && gscale_flag("NTT_PHASE_TRIM_RAW")) {
+        // Newton/F-tree raw inputs are dead. Reclaim them before the owner
+        // headroom query; the next G tree will reserve only its own raw shape.
+        const double begin=now_s();const size_t freed=L.s4->raw_release();
+        stage2_log::print(stage2_log::debug,
+            "stage2_phase_trim: raw_released_bytes=%llu seconds=%.6f boundary=inverse_to_fold\n",
+            (unsigned long long)freed,now_s()-begin);
+    }
     if(fold_flat_enabled && !finvflat.empty())device_fold.init(L,Ft[1],finvflat,R.fold_device,R.fold_flat);
     CPoly H;
     FTreeStats gs;
@@ -7714,6 +7739,12 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         device_fold.scale(Ginv,R.gscale,gscale_check,gscale_bad);R.t_gscale=R.gscale.seconds;
     } else if(R.gscale.requested)R.gscale.fallback=!device_fold.active?"owner":!device_fold.hcount?"empty":"unit";
     if(device_fold.active && device_fold.hcount && device_fold.hcount<=P && (R.gscale.enabled || mpz_cmp_ui(Ginv,1)==0)) {
+        if(gscale_flag("NTT_PHASE_TRIM_RAW")) {
+            const double begin=now_s();const size_t freed=L.s4->raw_release();
+            stage2_log::print(stage2_log::debug,
+                "stage2_phase_trim: raw_released_bytes=%llu seconds=%.6f boundary=fold_to_descent\n",
+                (unsigned long long)freed,now_s()-begin);
+        }
         frontier.init(device_fold);
         device_fold.scaled_root(prepared_root,root_device,root_check,root_bad,frontier.enabled);
         const char *dc=std::getenv("NTT_S4_DESCENT_CHECK");
@@ -8198,7 +8229,7 @@ static unsigned long long phi_u64(unsigned long long n){
     return r;
 }
 
-/* the arena footprint of one transform length: the shared big buffers (3*N words) plus dOut.
+/* Per-entry payload estimate: the policy's physical big buffers plus dOut.
    THE TABLE CACHES ARE NOT COUNTED (section 20): ntt_fuse_cache_tables stores ~N + N/2 words per
    cached shape, but they are a PURE CACHE and NttArena::drop_table_caches evicts the ones belonging
    to other shapes before the arena refuses an allocation, so what a shape must be able to hold is
@@ -8211,7 +8242,7 @@ static unsigned long long real_shape_words(unsigned long long P, int S, bool *ok
     int bpw = 0;
     if (!ntt_shape_query(P, S, &N, &bpw, nullptr, &sw, &ss, &os)) { *ok = false; return 0; }
     *ok = true;
-    return 3 * N + os;
+    return NttWorkspacePolicy{}.big_buffer_count() * N + os;
 }
 
 /* the two transform lengths a D actually needs: the fold/inverse at (P+1) coefficients and the
@@ -8221,7 +8252,7 @@ static bool real_run_geometry(unsigned long long p,int bits,ecm_stage2::Geometry
     return ecm_stage2::geometry(p,bits,[](unsigned long long m,int s,
         unsigned long long *n,unsigned long long *out) {
         return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
-    },g,kFoldOwnerReuse);
+    },g,kFoldOwnerReuse,NttWorkspacePolicy{}.big_buffer_count());
 }
 static bool real_run_words(unsigned long long P,int S,unsigned long long *out_words,
                            unsigned long long *n_fold,unsigned long long *n_tree)
@@ -8724,7 +8755,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     }
     const double stage2_fixture_seconds=now_s()-stage2_fixture_begin;
     const char *real_dump=std::getenv("NTT_REAL_F_DUMP");
-    bool stage2_extra_fixtures=real_dump && *real_dump;
+    bool stage2_extra_fixtures=(real_dump && *real_dump) || fuse_env_ull("NTT_TARGET_LEAF_HASH",0)!=0;
     for(const char *key : {"NTT_BABY_DEVICE_TEST","NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL","NTT_FUSE_COOP_TEST","NTT_FUSE_COOP_BAD","NTT_XADD6_TEST","NTT_XADD6_TEST_BAD","NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
                            "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
                            "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_SCALED_FRONTIER_CHECK","NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_ALLOC_FAIL","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
@@ -9293,7 +9324,7 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
     std::ostringstream json;json<<std::setprecision(17)
         <<"{\"type\":\"stage2_plan\",\"schema\":1,\"curves_executed\":0,\"bits\":"<<g.bits
         <<",\"target_bits\":"<<p.target_bits<<",\"carrier_exponent\":"<<p.carrier_exponent
-        <<",\"words\":"<<g.words<<",\"B1\":"<<p.b1<<",\"B2\":"<<p.b2<<",\"D\":"<<p.d
+        <<",\"words\":"<<g.words<<",\"workspace_buffers\":"<<g.workspace_buffers<<",\"B1\":"<<p.b1<<",\"B2\":"<<p.b2<<",\"D\":"<<p.d
         <<",\"P\":"<<g.p<<",\"I\":"<<p.giant_points<<",\"G\":"<<p.batches
         <<",\"fold_length\":"<<g.fold_length<<",\"tree_length\":"<<g.tree_length
         <<",\"fold_big_bytes\":"<<g.fold_big_bytes<<",\"arena_estimate_bytes\":"<<g.arena_estimate_bytes

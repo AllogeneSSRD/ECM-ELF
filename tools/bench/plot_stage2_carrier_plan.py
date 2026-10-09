@@ -14,6 +14,7 @@ def write_canvas(d, path):
     embedded = {k: d[k] for k in ('target_bits', 'carrier_bits', 'b2', 'free_mib',
                                   'reserve_mib', 'fold_boundaries', 'carrier_cases')}
     embedded['rows'] = [{k: r[k] for k in fields} for r in d['rows']]
+    embedded['workspace_buffers'] = d.get('workspace_buffers', 3)
     source = '''import { Stack, Row, Grid, H1, H2, Text, Pill, Stat, Table, BarChart, Link, useCanvasState, useHostTheme } from "cursor/canvas";
 const data = __DATA__;
 export default function Stage2CarrierPlan() {
@@ -41,7 +42,7 @@ export default function Stage2CarrierPlan() {
     <Text size="small" tone="secondary">横轴：候选 D/P；纵轴：MiB。B2={data.b2.toExponential(1)}。四项布局同时存活，仍遗漏表、S4 输出、seed 等。</Text>
     <BarChart categories={rows.map(r=>`D=${r.D} / P=${r.P}`)} stacked height={360} valueSuffix=" MiB"
       series={[
-        {name:"NTT A/B/Q 池",data:rows.map(r=>r.fold_big_mib)},
+        {name:`NTT 大池 (${data.workspace_buffers}个物理缓冲)`,data:rows.map(r=>r.fold_big_mib)},
         {name:"fold owner",data:rows.map(r=>r.owner_mib)},
         {name:"G raw A/B",data:rows.map(r=>r.raw_g_mib)},
         {name:"giant X/Z",data:rows.map(r=>r.coord_mib)}]}
@@ -81,7 +82,7 @@ def main():
     mem = fig.add_subplot(grid[0, :])
     base = np.zeros(len(rows))
     for field, label, color in [
-        ('fold_big_mib','NTT A/B/Q pool','#386a95'),
+        ('fold_big_mib',f"NTT big pool ({d.get('workspace_buffers',3)} buffers)",'#386a95'),
         ('owner_mib','Fold owner','#d39248'),
         ('raw_g_mib','G raw A/B','#8d9fae'),
         ('coord_mib','Giant X/Z chunk','#bac9b5'),
@@ -97,7 +98,7 @@ def main():
     mem.set_xticks(x, [f"D={r['D']}\nP={r['P']}" for r in rows])
     mem.set_ylabel('Concurrent payload lower bound (MiB)')
     mem.set_xlabel('Candidate D and P, ascending P')
-    mem.set_ylim(0, max(base)*1.18)
+    mem.set_ylim(0, max(max(base),d['free_mib'])*1.18)
     mem.set_title(f"M{d['carrier_bits']} carrier: repeated G-tree/fold allocations", loc='left', fontsize=14)
     mem.legend(ncol=3, fontsize=9, loc='upper left')
     mem.spines[['top','right']].set_visible(False)

@@ -29,9 +29,16 @@ struct ScaledFrontierDevice {
         size_t available=0,total=0;CK(cudaMemGetInfo(&available,&total));
         unsigned long long qn=0;
         if(!ntt_shape_query(p+1,(int)owner.layer->S,&qn,nullptr,nullptr,nullptr,nullptr,nullptr)) {fallback="ntt_shape";return false;}
-        const size_t target=24ull*qn,current=8ull*owner.layer->arena->workspace.words;
+        const unsigned buffers=owner.layer->arena->big_buffer_count();
+        const size_t target=8ull*buffers*qn,current=8ull*owner.layer->arena->workspace.words;
         const size_t growth=target>current?target-current:0;
-        if(bytes>available || available-bytes<growth+(1ull<<30)) {fallback="headroom";return false;}
+        const size_t future_reserve=1ull<<30;
+        const bool fits=bytes<=available && available-bytes>=growth+future_reserve;
+        stage2_log::print(stage2_log::debug,
+            "frontier_device_headroom: available_bytes=%llu metadata_bytes=%llu physical_buffers=%u target_big_bytes=%llu current_big_bytes=%llu growth_bytes=%llu future_reserve_bytes=%llu fits=%d\n",
+            (unsigned long long)available,bytes,buffers,(unsigned long long)target,
+            (unsigned long long)current,(unsigned long long)growth,(unsigned long long)future_reserve,(int)fits);
+        if(!fits) {fallback="headroom";return false;}
         if(gscale_flag("NTT_SCALED_FRONTIER_ALLOC_FAIL")) {fallback="allocation_fixture";return false;}
         const auto error=cudaMalloc(&metadata,(size_t)bytes);
         if(error==cudaErrorMemoryAllocation){cudaGetLastError();metadata=nullptr;fallback="allocation";return false;}
