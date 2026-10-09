@@ -111,7 +111,7 @@ def main():
     source = ROOT/'src/cuda/ecm_cuda_stage2.cu'
     template = Path(__file__).with_name('stage2_giant_memory_fixture.cpp')
     files = [source,template,Path(__file__).resolve(),ROOT/'src/core/ecm_stage2_giant_memory.h',
-             ROOT/'src/core/ecm_stage2_geometry.h', ROOT/'tools/bench/stage2_memory_ledger.py']
+             ROOT/'src/core/ecm_stage2_geometry.h', ROOT/'src/core/ecm_stage2_giant_state.h', ROOT/'tools/bench/stage2_memory_ledger.py']
     identities = {str(p.relative_to(ROOT)):sha(p) for p in files}
     text = source.read_text(encoding='utf-8')
     start = text.index('struct S3Workspace {')
@@ -119,7 +119,8 @@ def main():
     native = text[start:end]
     cpp = out/'fixture.cpp'
     fixture = template.read_text(encoding='utf-8').replace('"../../src/core/ecm_stage2_giant_memory.h"',
-        '"'+(ROOT/'src/core/ecm_stage2_giant_memory.h').as_posix()+'"')
+        '"'+(ROOT/'src/core/ecm_stage2_giant_memory.h').as_posix()+'"').replace(
+        '"../../src/core/ecm_stage2_giant_state.h"','"'+(ROOT/'src/core/ecm_stage2_giant_state.h').as_posix()+'"')
     cpp.write_text(fixture.replace('// @NATIVE_S3@',native),encoding='utf-8')
     command = out/'compile.cmd'
     command.write_text('@echo off\ncall "'+str(args.vcvars)+'" >nul 2>&1\nif errorlevel 1 exit /b 1\n'

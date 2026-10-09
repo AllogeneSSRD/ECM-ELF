@@ -23,7 +23,11 @@ def main():
         ('keyed',2310,a.b2,6300,{'NTT_ARENA_WORKSPACE_POOL':'0'}),
         ('refusal',1141140,a.b2,32,{}),('single',2310,100,6300,{}),
         ('owner_budget',1141140,a.b2,6300,{}),
-        ('frontier_budget',1141140,a.b2,6300,{'NTT_SCALED_FRONTIER_MAX_MB':'0'})]:
+        ('frontier_budget',1141140,a.b2,6300,{'NTT_SCALED_FRONTIER_MAX_MB':'0'}),
+        ('giant_floor',1141140,a.b2,6300,{'NTT_GIANT_CHUNK_FLOOR':'1'}),
+        ('giant_ladder',1141140,a.b2,6300,{'NTT_GIANT_LADDER':'1'}),
+        ('giant_nonresident',1141140,a.b2,6300,{'NTT_DEVICE_GLEAF_MAX_MB':'0'}),
+        ('giant_ladder_tail',1141140,1141140*(207360+32000-2),6300,{})]:
         command=[str(a.exe.resolve()),'--ini',str(a.ini.resolve()),'--save',str(a.save.resolve()),
                  '--device',str(a.device),'--b2',str(b2),'--d',str(d),'--curves','1',
                  '--arena-mb',str(cap),'--batch-mb','256','--owner-budget-mb',
@@ -62,8 +66,22 @@ def main():
             assert resident['frontier_bytes']==24*plan['P']
             assert resident['owner_peak_bytes']==resident['fold_bytes']+resident['frontier_bytes']
             assert joint['peak_bytes']<=resident['peak_bytes']<=joint['peak_bytes']+resident['owner_peak_bytes']
+        curve=plan['curve_workspace_memory']
+        assert not curve['admission_model'] and not curve['process_peak_complete']
+        assert curve['peak_bytes']==sum(curve[k+'_at_peak'] for k in ('ntt','s4','owner','giant'))
+        if name in ('single','refusal','owner_budget','frontier_budget'):
+            assert curve['valid']==resident['valid'] and curve['finished']==resident['finished']
+            assert curve['reason']==resident['reason']
+        else:
+            gm=plan['giant_memory']
+            assert curve['valid'] and curve['finished'] and not curve['released_bytes']
+            assert curve['giant_peak_bytes']==gm['peak_bytes']
+            assert curve['giant_final_bytes']==gm['accumulation_bytes']
+            assert curve['point_chunks']==gm['point_chunks']
+            assert curve['points_consumed']==plan['I']
+            assert resident['peak_bytes']<=curve['peak_bytes']<=resident['peak_bytes']+gm['peak_bytes']
         rows.append(dict(name=name,command=command,environment=env,plan=plan))
     (out/'results.json').write_text(json.dumps(dict(complete=True,cases=rows),indent=2)+'\n',encoding='utf-8')
-    print('PASS: 10 real native workspace plans, joint owner lifetimes, budgets, refusal, unsupported G1')
+    print('PASS: 14 real native workspace plans, joint giant/owner lifetimes, budgets, refusal, unsupported G1')
 
 if __name__=='__main__':main()

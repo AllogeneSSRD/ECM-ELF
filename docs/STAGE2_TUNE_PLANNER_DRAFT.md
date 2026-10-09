@@ -45,7 +45,17 @@
 
 5872-bit、D1141140/P103680、B1=20、sigma26、B2=2.6e12、arena6300/fold640/batch256的NTT/S4/owner联合规划峰4098.979 MiB。它不是实测进程峰，未含giant；自动D仍未按该值放行。下一步将点chunk的生成/保留/销毁和S3容量变化接入共同时间线，并覆盖更早的初始化瞬时量，之后才用于准入。
 
-- [ ] 完成联合生命周期准入，覆盖自检、树租约、S4、NTT工作池、owner、giant与下降边界，以及非驻留回退。保持实时free/headroom检查。
+### Giant 联合时间线进展
+
+`GiantMemoryState`把S3五常量、小素数初始容量、seed/base/segfix、坐标/segment/group和叶值/积按正常成功路径加入统一执行器。S3在混合初始块的首个inverse请求前构造；point chunk生成在fold准入之后、首棵G树之前。chunk跨多棵G树/fold时保留其transient，最后一棵消费完成才释放；压缩仅跳过四组件状态都相同的完整chunk周期，尾部路线变化仍执行。
+
+新增`curve_workspace_memory`查询；旧两种查询保持原scope。模型仍不是完整准入，自动D与承载默认未改变。5872-bit、D1141140、B2=2.6e12、arena6300/fold640/batch256四组件规划峰4406.441 MiB；floor4251.702，BQ3382.441。这些规划值不构成性能证据。
+
+CPU joint矩阵3456 giant cases和1152原cases，共3392047 assertions；超大B2只执行10块。生产S3提取fixture2051 cases、39573逐事件对照通过。14个native plan和三条完整曲线通过；GMP坏计数与坏因子均0，S3四阶段保留容量及closed owned ledger核对通过。fallback下降先申请叶值，在runtime verifier中按实际路径单独核对，不把joint refusal前缀当作回退时间线。
+
+构建96.4秒，exe SHA256=`a90cb1ca1045f1fdc3dd5ae906d949483e091bf68668fd6ae8471615b2ac3beb`。当前4070 Ti设备0忙，验证使用空闲4060 Laptop设备1，无功耗/频率变更。证据目录`data/experiments/stage2_giant_timeline_20261009/`。native查询collector首次引用了不存在的JSON键，修正为现有`I`字段后14例通过，失败输出保留；fallback retained-capacity初次假设叶值在下降后分配与native不符，按当前`!frontier.enabled`路径修正检查，原证据保留。
+
+- [ ] 完成联合生命周期准入，补齐初始化瞬时量、其他设备分配、动态headroom与非驻留回退。保持实时free查询。
 - [ ] 增加有版本的实测数据reader，明确设备、后端、算术路径及测量输入适用范围；路径与二进制信息放实验审计，运行tune数据只保留必要性能与资格字段。
 - [ ] 引入无因子完整ECM基准、普通/承载配对测量与D候选网格，将等级映射到完整测量计划。
 - [ ] 将选型连接到显式B2主路径和Auto B2；当前静态准入及手动承载均未由本轮改动替代。

@@ -1,6 +1,7 @@
 // Runner inserts the production S3 allocator. All allocations are opaque CPU
 // tokens. Arithmetic and kernel launches are stubbed, never tested by this file.
 #include "../../src/core/ecm_stage2_giant_memory.h"
+#include "../../src/core/ecm_stage2_giant_state.h"
 #include <iostream>
 #include <string>
 #include <stdexcept>
@@ -9,13 +10,17 @@
 using namespace ecm_stage2;
 static std::map<void *,Word> heap;
 static Word live=0,peak=0,checks=0;static uintptr_t address=4096;
+struct Event {bool allocation;Word bytes,total;};
+static std::vector<Event> events;
+static Word event_checks=0,timeline_cases=0;
 static void check(bool v) {++checks;if(!v)throw std::runtime_error("check "+std::to_string(checks));}
 template<class T>static int cudaMalloc(T **p,size_t bytes) {
     *p=reinterpret_cast<T *>(address);address+=4096;
-    heap[*p]=bytes;live+=bytes;peak=std::max(peak,live);return 0;
+    heap[*p]=bytes;live+=bytes;peak=std::max(peak,live);events.push_back({true,(Word)bytes,live});return 0;
 }
 static int cudaFree(void *p) {
-    if(!p)return 0;auto it=heap.find(p);check(it!=heap.end());live-=it->second;heap.erase(it);return 0;
+    if(!p)return 0;auto it=heap.find(p);check(it!=heap.end());const Word bytes=it->second;
+    live-=bytes;heap.erase(it);events.push_back({false,bytes,live});return 0;
 }
 template<class... T>static int cudaMemcpy(T...){return 0;}
 static int cudaGetLastError(){return 0;}
@@ -52,8 +57,16 @@ static void workspace_check(const S3Workspace &ws) {
 }
 static void one(Word p,Word n,Word w,Word q,GiantMemoryPolicy policy) {
     compact_products=policy.compact_products;
-    check(heap.empty());live=peak=0;
+    check(heap.empty());live=peak=0;events.clear();
     GiantMemoryPlan plan;check(giant_memory_plan(p,n,w,q,policy,plan));
+    GiantMemoryState timeline({p,n,w,q,policy});std::vector<Event> predicted;
+    timeline.observe=[&](const GiantMemoryEvent &e){predicted.push_back({e.allocation,e.bytes,e.total});};
+    check(timeline.init());
+    while(timeline.consumed_points<n) {
+        check(timeline.chunk_begin());
+        while(timeline.chunk_remaining)check(timeline.tree_done(std::min(p,timeline.chunk_remaining)));
+    }
+    check(timeline.accumulate());
     LadderCtx ctx{size_t(w)};
     {
         S3Workspace ws;ws.init(ctx);ws.need_pts(size_t(policy.initial_points));workspace_check(ws);
@@ -85,6 +98,9 @@ static void one(Word p,Word n,Word w,Word q,GiantMemoryPolicy policy) {
                 }
                 check(chain==c.chain && seeds==c.seeds && resident==c.resident);
                 check(live==c.prepare_bytes);
+                // Native chain frees nonresident segment products before legacy
+                // seeds; resident destructor frees coordinates/segments before groups.
+                if(!resident && (chain || resident)) {CK(cudaFree(temporary.back()));temporary.pop_back();}
                 for(auto ptr:legacy)CK(cudaFree(ptr));
                 if(!resident){for(auto ptr:temporary)CK(cudaFree(ptr));temporary.clear();}
                 else {
@@ -92,8 +108,8 @@ static void one(Word p,Word n,Word w,Word q,GiantMemoryPolicy policy) {
                     alloc(groups,ng*w*8);alloc(groups,(policy.group+1)*w*8);
                 }
                 check(live==c.tree_bytes);
-                for(auto ptr:groups)CK(cudaFree(ptr));
                 for(auto ptr:temporary)CK(cudaFree(ptr));
+                for(auto ptr:groups)CK(cudaFree(ptr));
                 workspace_check(ws);check(live==c.workspace_bytes);
                 offset+=points;
             }
@@ -105,6 +121,13 @@ static void one(Word p,Word n,Word w,Word q,GiantMemoryPolicy policy) {
 #endif
         workspace_check(ws);check(live==plan.accumulation_bytes);
         check(peak==plan.peak_bytes);
+        check(events.size()==predicted.size());
+        for(size_t i=0;i<events.size();++i) {
+            check(events[i].allocation==predicted[i].allocation && events[i].bytes==predicted[i].bytes &&
+                  events[i].total==predicted[i].total);++event_checks;
+        }
+        check(timeline.live==live && timeline.peak==peak);++timeline_cases;
+        check(timeline.close() && !timeline.live);
         // Grow repeatedly and ensure the production bytes counter drops old caps.
         ws.need_pts(size_t(ws.pt_cap+1));workspace_check(ws);
         ws.need_vals(size_t(p+1));workspace_check(ws);
@@ -148,6 +171,7 @@ int main(int argc,char **argv) {
         check(!giant_memory_plan(1,1,257,1,v,huge));check(!giant_memory_plan(17,20,1,18,v,huge));
         check(!giant_memory_plan(1,~Word(0),256,~Word(0),v,huge));
         v.segment=0;check(!giant_memory_plan(1,1,1,1,v,huge));
-        std::cout<<"{\"checks\":"<<checks<<",\"bad\":0,\"gpu_calls\":0}\n";return 0;
+        std::cout<<"{\"checks\":"<<checks<<",\"timeline_cases\":"<<timeline_cases
+            <<",\"allocation_event_checks\":"<<event_checks<<",\"bad\":0,\"gpu_calls\":0}\n";return 0;
     } catch(const std::exception &e) {std::cerr<<e.what()<<'\n';return 1;}
 }

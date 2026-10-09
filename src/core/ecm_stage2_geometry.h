@@ -207,6 +207,7 @@ struct Plan {
     std::shared_ptr<S4ProgramPlan> s4_memory;
     std::shared_ptr<WorkspaceMemoryPlan> workspace_memory;
     std::shared_ptr<WorkspaceMemoryPlan> resident_workspace_memory;
+    std::shared_ptr<WorkspaceMemoryPlan> curve_workspace_memory;
     Word tree_batch_bytes=0, tree_chunk_max=0;
     bool tree_physical_chunks=false;
     bool tree_payload_model_supported=false;

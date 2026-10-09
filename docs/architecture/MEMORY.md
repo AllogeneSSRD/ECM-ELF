@@ -51,7 +51,7 @@ cap 淘汰按实际策略处理 carry、cold 表和 keyed buffers，保留 conte
 
 查询返回联合 `peak_bytes` 及该时刻的 `ntt_at_peak`、`s4_at_peak`，这两项属于同一瞬间，可以相加核对联合值。各自的 `ntt_peak_bytes`、`s4_peak_bytes` 仍为不同时间的组件峰，不能相加称为联合峰。`simulated_events` 只计实际模拟事件，压缩跳过的块数另列；它不是整条曲线的分配次数。
 
-该模型当前只覆盖条件驻留路径的 NTT/S4，输出 `process_peak_complete=false`、`admission_model=false`。NTT cap 拒绝时返回有效成功前缀和 `finished=false`，不把后续按次分配回退当作已覆盖。giant、fold/frontier owner、自检之外的其他设备分配、驱动开销及冷 trim 仍未联动；自动 D 尚未根据这个组件结果放行。
+该查询只覆盖条件驻留路径的 NTT/S4，输出 `process_peak_complete=false`、`admission_model=false`。NTT cap 拒绝时返回有效成功前缀和 `finished=false`，不把后续按次分配回退当作已覆盖。包含owner和giant的联合查询见下文；自动 D 尚未根据这些组件结果放行。
 
 CPU验证使用合成形状/表布局，1152组输入检查压缩与逐次执行、各组件最终容量和峰值、逐事件收支、拒绝前缀以及策略不一致，455270项断言通过。它验证模型组合与压缩，不证明生产 fuse 描述或 CUDA 实际分配成功。证据：`data/experiments/stage2_workspace_memory_20261009/cpu_v2/`；入口：`src/core/ecm_stage2_workspace_memory.h` 的 `workspace_memory_plan`。
 
@@ -97,9 +97,25 @@ S3 workspace=8[5W+(2W+1)c+W(v+r)+W(f+1)·[f>0]+2Wh] bytes。
 
 `giant_memory` 按保留容量和满/尾 chunk 路线预测本组件。非驻留 G 叶并不取消此前 chain 坐标生成峰；小素数处理可能留下初始容量。组件程序最多压缩为满块与尾块，不模拟更早 NTT 拒绝或完整回退。
 
+### Giant 与工作区共同时间线
+
+`curve_workspace_memory` 在同一执行器中联动NTT、S4、fold/frontier和giant。S3五个常量与小素数留下的seed容量在F树之后、inverse之前申请；inverse后trim和fold准入结束，再生成首个point chunk。chain的seed、base、坐标、segment按生产顺序申请，legacy seed在group缓冲申请前释放。ladder坐标借用S3 seed数组，不再次计账。
+
+一个point chunk可以覆盖多棵G树及相应fold。其坐标、segment与group必须保留到最后一棵树消费完成，然后释放；S3的seed/base/segfix容量则跨chunk保留。满chunk与短尾分别选chain/ladder，短尾可以增大seed容量。驻留下降完成后先释放frontier/fold，再申请P个叶值及积缓冲，最后销毁S3、S4和NTT。
+
+重复G树只在完整point chunk两端的四套分配状态相同后跳过，且跳过数量受剩余完整chunk数量约束；不能跳过不同路线的短尾。`point_chunks`、`points_consumed`包括跳过的进度，`simulated_events`只包含实际模拟事件。查询返回四项同一时刻的`*_at_peak`，可相加核对`peak_bytes`；独立`giant_peak_bytes`不具备这个相加口径。`giant_final_bytes`是积缓冲申请后、S3销毁前的容量。
+
+该查询仍为条件组件模型：不包含更早baby/context/基础自检的设备瞬时量，也不模拟动态headroom、cold trim、物理分配失败和owner回退后的完整时间线。预算拒绝保留有效前缀，`finished=false`。不能据此改变完整曲线准入门限。
+
+验证使用sm89/CUDA13.3/GMP Zen3，exe SHA256=`a90cb1ca1045f1fdc3dd5ae906d949483e091bf68668fd6ae8471615b2ac3beb`，4060 Laptop设备1；未修改频率或功耗，不报告速度收益。CPU矩阵包括1152组原联合模型和3456组giant组合，共3392047项检查；压缩与逐步执行一致，超大B2案例只执行10个块。生产S3源码提取和transient容量fixture核对2051组、39573个分配/释放事件。14组真实形状查询覆盖point floor、强制ladder、非驻留giant、chain→ladder短尾、trim/BQ/keyed及拒绝前缀。
+
+M503余因子318 bits、B1=20、sigma26、B2=2.6×10¹⁰、D180180的普通、承载503及fold预算0三条完整曲线：mandatory自检2016 cases，GMP检查3032/2992/3032项，bad=0，hits/bad_factors=0。S3在inverse、giant、下降和积阶段的实际保留容量与预测一致，设备分配账本闭合；回退路径在下降前申请叶值，单独按实际容量核对，不声称其完整联合回退已建模。
+
+M6011余因子5872 bits、B1=20、sigma26、B2=2.6×10¹²、D1141140/P103680、arena6300/fold640/batch256 MiB：四组件联合规划峰4406.441 MiB，point floor为4251.702 MiB，B/Q复用为3382.441 MiB。这些是同配置的规划计算，不能作为实测进程峰或性能排名。证据在`data/experiments/stage2_giant_timeline_20261009/`：`cpu/result.json`、`native_allocator/checks.json`、`native_plans_v3/results.json`、`curves.json`及`runtime_ledgers_v2/results.json`。
+
 ## 现有查询与验证
 
-plan-only 提供真实 packing、精确非空树组、请求顺序以及 NTT/S4/giant 的条件组件结果；当前输出明确不保证 full process peak、准入和全部 fallback。未来联合规划必须使用共同请求/边界，压缩条件同时检查所有组件状态，并保留实时 free/headroom 查询。
+plan-only 提供真实 packing、精确非空树组、请求顺序以及 NTT/S4/owner/giant 的条件联合结果；当前输出明确不保证 full process peak、准入和全部 fallback。完整准入还需补齐初始化、其他owner及回退，并保留实时 free/headroom 查询。
 
 当前 NTT 事件模型的 CPU 账本从生产分配语句生成：173 cases、47,936 events、168,166 assertions，失配 0；故意改变表释放顺序会拒绝。40 个 native plan 查询和 10 条短 GPU 曲线通过组件/路由及算术核对。CPU opaque allocator 不验证 CUDA 物理分配失败、驱动驻留或完整进程峰。
 
@@ -113,5 +129,6 @@ M8011/80111、carrier8011、B1=20、B2=2.6e12、D1381380/P126720、batch256、ar
 - [ecm_stage2_ntt_memory.h](../../src/core/ecm_stage2_ntt_memory.h#L58)：fuse layout；[状态](../../src/core/ecm_stage2_ntt_memory.h#L110)；[event](../../src/core/ecm_stage2_ntt_memory.h#L144)；[plan](../../src/core/ecm_stage2_ntt_memory.h#L363)。
 - [ecm_stage2_s4_memory.h](../../src/core/ecm_stage2_s4_memory.h)：S4 逐项容量；[s4_program_plan](../../src/core/ecm_stage2_s4_program.h#L50)：请求/租约联动。
 - [ecm_stage2_giant_memory.h](../../src/core/ecm_stage2_giant_memory.h#L9)：giant 容量与保留状态。
+- [ecm_stage2_giant_state.h](../../src/core/ecm_stage2_giant_state.h#L17)：giant有序分配、point chunk租约及末阶段容量。
 - [plan-only 接入](../../src/cuda/ecm_cuda_stage2.cu#L8762)、[工作区工具说明](../../tools/bench/README_STAGE2_CARRIER_PLAN.md)。
 - [性能](../performance/STAGE2.md)、[TODO](../TODO.md)。
