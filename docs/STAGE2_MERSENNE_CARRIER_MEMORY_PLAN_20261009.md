@@ -1,7 +1,7 @@
 # GPU ECM Stage2：梅森承载余因子与 D/P、显存联合规划
 
 日期：2026-10-09。源码基线：`3bc9d7f`（Stage2 Benchmark）。
-第1–9节是研究快照；代码链接行号已同步至第24节实现的工作树。
+第1–9节是研究快照；代码链接行号已同步至第27节实现的工作树。
 
 **阶段进展**：已实现默认关闭的`--carrier-exponent`。7995-bit目标、B2=2.6e12、
 固定D的同二进制交错计时从165.18降至113.17 s，减少31.49%；完整叶子摘要与
@@ -33,6 +33,8 @@ S4、owner边界合成完整MemoryPlan，不新增运行加速结论。
 门禁通过。容量收益与完整流程峰值分别核对，未将其作为D/Auto B2完整准入。
 用户已恢复4060lp默认1800 MHz/55 W，后续计时以此为新基线；历史约79 W、
 2385 MHz的计时保留原条件，不能混合作为新基线。
+第25–26节建立S4事件与请求生命周期；第27节将NTT扩展为逐项申请/释放事件，
+并接入原生计划查询。组件验证通过，完整联合MemoryPlan及D/Auto B2接线仍待完成。
 
 ## 1. 结论与实施顺序
 
@@ -473,11 +475,11 @@ Montgomery radix/domain constants for carrier_M
 最主要的修改落点：
 
 - [模数与bit/word初始化](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8439)。
-- [Montgomery常数](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8875)、
-  [曲线构造](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8897)。
-- [saved X检查](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8909)、
+- [Montgomery常数](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8874)、
+  [曲线构造](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8896)。
+- [saved X检查](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8908)、
   [存档checksum](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:136)。
-- [baby批逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9192)、
+- [baby批逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9191)、
   [giant设备分组逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6765)。
 - [giant segment逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7649)、
   [备用segment/仿射路径](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7688)。
@@ -672,7 +674,7 @@ python tools/bench/plot_stage2_carrier_plan.py --input data/stage2_carrier_resea
   与子进程传参同步支持。非零p进入队列进度身份，避免混用不同算术计划。
 - [run_real初始化](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8433)
   以承载M决定S/W、Montgomery常数、NTT打包、S4归约与显存形状。曲线a24在
-  [目标N中构造](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8897)，再编码到M域。
+  [目标N中构造](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8896)，再编码到M域。
 - baby的分组根求逆、host回退与零判断针对N；[GPU baby校验](D:/code/MPA-OpenCl/src/cuda/stage2/stage2_baby_host.cuh:115)
   把设备叶子投影到N后比较，不要求其原始M代表元等于N代表元。
 - [巨点base单位判定](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6814)、
@@ -1094,7 +1096,7 @@ B/Q启用时返回2，其余返回3。NttArena继承该策略；原生形状查�
 - [共享Geometry](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:176)接受2或3个物理
   缓冲，默认3兼容旧调用。其arena估计仍是原有保守求和，不等于进程峰值。
 - [real_shape_words/real_run_geometry](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8395)
-  与分配器共用数量；[计划JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9705)
+  与分配器共用数量；[计划JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9704)
   明示布局，便于计划和实际日志核对。
 - [fold headroom](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5329)及
   [frontier headroom](D:/code/MPA-OpenCl/src/cuda/stage2/scaled_frontier.cuh:27)
@@ -1770,8 +1772,8 @@ python tools/bench/analyze_stage2_carrier_bench.py --input data/stage2_output_tr
 [几何准入](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:183)、
 [计划调用](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8731)、
 [阶段记录](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:3557)、
-[阶段输出](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9619)、
-[计划JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9708)。
+[阶段输出](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9618)、
+[计划JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9707)。
 普通D选择与Auto B2共用geometry，因而都获得正确的树尺寸；未改算术内核、缓存
 分配器、驻留阈值、代价系数或实验开关默认。原生JSON新增`geometry_version=3`；
 `accounting_version=2`仍表示实际arena分配记账版本，两者不是同一字段。
@@ -2482,7 +2484,7 @@ pool关闭时，`B_big=sum_keys 24Ns`，不是共享最大值。S4的请求输�
 
 生产入口的`--plan-only`新增`request_program.version=1`、compressed blocks、
 各阶段group/pair/chunk及大池/输出请求峰、NTT保留组成、顺序签名；
-见[plan JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9735)。
+见[plan JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9734)。
 始终标记`process_peak_complete=false,admission_model=false`。
 
 ### 21.3 原生核对结果与规划启示
@@ -2563,8 +2565,8 @@ profile用于新布局排序，完整规划仍在推进。
 ## 22. 有序 NTT arena 分配器模拟：预算淘汰与成功前缀
 
 接续`061cf17`。五阶段请求program现已驱动纯CPU的分配器状态模型，见
-[NttMemoryState](D:/code/MPA-OpenCl/src/core/ecm_stage2_ntt_memory.h:35)和
-[ntt_memory_plan](D:/code/MPA-OpenCl/src/core/ecm_stage2_ntt_memory.h:204)。
+[NttMemoryState](D:/code/MPA-OpenCl/src/core/ecm_stage2_ntt_memory.h:110)和
+[ntt_memory_plan](D:/code/MPA-OpenCl/src/core/ecm_stage2_ntt_memory.h:363)。
 这是D/P、batch、arena预算联合规划的NTT组成部分；普通D与Auto B2仍使用原
 准入。此阶段没有修改算术内核、发布默认，也没有新增GPU算术或正式计时结论。
 
@@ -2627,7 +2629,7 @@ slices。对每个内部批次`m`，只有`Nm>=2^20`才请求
 相等判断。不是只比较一个total bytes。乘加计数溢出明确失败。buffer lookup还与原分配器一致，按三缓冲的保守size_t
 边界检查输入，即使启用B/Q复用也不放宽该检查；整数边界错误不当作正常cap拒绝。
 
-[cold_trim](D:/code/MPA-OpenCl/src/core/ecm_stage2_ntt_memory.h:166)可以按实际
+[cold_trim](D:/code/MPA-OpenCl/src/core/ecm_stage2_ntt_memory.h:307)可以按实际
 `drop_cold_fuse`的规则释放最大非hot完整context，同大小时保留插入顺序；
 再次请求时会重建base与表。此接口只接受调用者提供的**逻辑payload余量**。
 当前生产plan尚未在fold/frontier边界调用它，因为真实同时存活的非NTT缓冲
@@ -2635,7 +2637,7 @@ slices。对每个内部批次`m`，只有`Nm>=2^20`才请求
 
 `--plan-only`新增`ntt_memory.version=1`，见
 [接入](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8758)和
-[JSON输出](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9776)。
+[JSON输出](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9775)。
 
 - `valid`：成功完成这一条件模型的计算；**预算拒绝前缀也可以valid**。
 - `finished`：模型走完全部请求，未遇到上述cap拒绝。不是完整Stage2能驻留。
@@ -2727,7 +2729,7 @@ reserve准入。还需补齐短余式、G1、回退路径及额外自检合同�
 
 本阶段沿用第19–22节联合规划方向，继续处理非NTT分配。新增
 [纯整数组件模型](D:/code/MPA-OpenCl/src/core/ecm_stage2_giant_memory.h:44)，
-由[生产plan-only入口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8771)读取实际策略，
+由[生产plan-only入口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8770)读取实际策略，
 输出`giant_memory.version=1`。正常曲线不执行此模拟；没有修改算术内核、D排序、
 Auto B2或发布默认。完整MemoryPlan仍未完成。
 
@@ -3025,7 +3027,7 @@ NTT阶跃的完整流程成本。本轮块产品缓冲优化不会完成这些�
   [Metadata RAII](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:4505)。
 - [close](D:/code/MPA-OpenCl/src/core/ecm_stage2_s4_memory.h:128)：按逐shape常数→模数→
   canonical→output→raw A/B→pack A/B释放。
-  [声明顺序](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8973)决定red先于s4析构；
+  [声明顺序](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8972)决定red先于s4析构；
   对应[reducer析构](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1889)及
   [ctx析构](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1332)。
 
@@ -3111,7 +3113,7 @@ inverse_done、tree_begin/end（含leaves）、fold_done；重复块按原滚动
 
 生产`NTT_REQUEST_AUDIT=1`从实际`resident`指针与owner/reverse字段识别来源，
 在G树RAII租约及真实inverse/fold边界记录签名，结束输出
-[stage2_s4_program_audit](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9631)。
+[stage2_s4_program_audit](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9630)。
 G树签名租约对象先于metadata构造，故其tree_end析构在metadata释放之后；
 包含root_sink提前return路径。默认不启用该诊断，正式计时不带它。
 
@@ -3128,8 +3130,8 @@ resident请求借用其已存在的tree/fold/frontier容量。
 不是忽略其存在。组件峰取已执行的代表块内事件峰。CPU超大例P48、I=2^55，
 实际执行6块、跳过750599937895079块，保持树数ceil(I/P)而未展开整个B2。
 
-[plan-only接入](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8772)与
-[JSON接口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9815)提供：
+[plan-only接入](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8771)与
+[JSON接口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9828)提供：
 
 ```text
 s4_memory.version = 1
@@ -3219,5 +3221,134 @@ v2按生产“未显式关闭即启用”的实际语义修正，并在unsupport
 [test_stage2_s4_program.py](D:/code/MPA-OpenCl/tools/test/test_stage2_s4_program.py:17)
 提供小/大GPU复现；CPU及GPU命令见[工具说明](D:/code/MPA-OpenCl/tools/bench/README_STAGE2_CARRIER_PLAN.md)。
 
-下一步给NTT状态增加可交错的申请/释放事件，合并owner/giant阶段及真实cold trim、
+第27节补齐NTT可交错的申请/释放事件。下一步合并owner/giant阶段及真实cold trim、
 free/reserve准入；需要核对全流程owned同时峰后，才让统一计划决定D/P和Auto B2。
+
+## 27. NTT逐项分配事件：真实fuse布局与成功前缀
+
+接续第22节组件模拟和第26节S4程序。本轮补齐NTT内部申请/释放顺序，使其能与
+其他组件的live状态交错。没有修改NTT算术、CUDA内核、运行时申请尺寸或D/Auto B2。
+
+### 27.1 数据合同与真实descriptor
+
+[NttMemoryState](D:/code/MPA-OpenCl/src/core/ecm_stage2_ntt_memory.h:110)新增observer，
+每项成功申请/释放后给出site、pass index、形状、字节数和完整NTT live payload。
+分别表达tile F/I、scratch/radix、pass F/I/rad F/I、workspace A/B/Q、keyed A/B/Q、
+digit output/result与carry。B/Q复用时Q只借用B，没有额外申请或释放事件。
+共享workspace/carry释放的n/slices=0，按site归属；keyed/fuse保留各自形状信息。
+
+[ntt_fuse_memory_layout](D:/code/MPA-OpenCl/src/core/ecm_stage2_ntt_memory.h:58)接收
+生产`fuse_describe`的无分配FuseCtx，生成准确的base和table申请列表；t、pass宽度、
+compact/cooperative策略由真实生产descriptor决定，没有另行猜测默认计划。
+申请顺序为tile F/I→scratch/radix→forward p递增→inverse p递减。释放table时却按
+p递增、passF/radF/passI/radI，之后释放base。申请与释放不能共用同一遍历顺序。
+
+保留总量callback的旧接口，明确输出`grouped=true`及grouped_events；这种fuse
+聚合事件不能计为逐次cudaMalloc。原生`--plan-only`改用精确layout callback，
+`ntt_memory.version=2`新增exact_allocation_events、fuse_layouts及申请/释放计数。
+shape、chunk、缓存、cap拒绝前缀及原有数值字段保持原语义。checkpoint与计数截至
+当前成功前缀末态，**不含未来析构**；组件另有显式close，重复close不会重复释放。
+
+### 27.2 字节公式与事件顺序
+
+记NTT length为N=2^k，tile宽度t，outer各pass宽度m_p；L_p=sum_{j<p}m_j，
+outer总宽度k-t。各独立申请量为：
+
+```text
+tile_F = tile_I = 8 * 2^t
+pass_F[p] = pass_I[p] = 8 * N / 2^(L_p + m_p)
+rad_F[p]  = rad_I[p]  = 8 * 2^m_p
+table = 16 * sum_p (N / 2^(L_p + m_p) + 2^m_p)
+base = 8 * (2^(t+1) + scratch_words + radix_words)
+
+compact:
+  scratch_words = max_p N/2^(L_p+m_p), or 0 if no outer pass
+  radix_words   = max_p 2^m_p, or 0 if no outer pass
+legacy:
+  scratch_words = N/2 + 64
+  radix_words = 64, or 2^m_max for cooperative outer
+
+workspace = 8 * capacity_words * [2 if pool && B/Q reuse, else 3]
+keyed_big(N,batch) = 24 * N * batch
+digit_output = 8 * output_slots * batch
+digit_result = 16 * batch
+carry = 8 * ceil(N/256) * inner_batch
+  inner_batch <= 65535; only requested when N*inner_batch >= 2^20
+
+NTT_live = big + digit + table + base
+NTT_peak = max_over_events NTT_live
+```
+
+大池、digit output和carry扩容均先释放旧申请再申请新容量；digit result在output
+替换期间保留。cap检查仍按生产的增量/整组需求进行，不能因为事件更细就改变准入。
+cap驱逐按生产vector顺序释放cold table、逆插入顺序的keyed big/small，保留base；
+后续命中不会重建被驱逐的table。cold trim按first-largest选择整个cold context，
+释放其table和base，之后再次遇到该N时重新构建。
+
+observer只接收实际模拟的事件；压缩重复段通过计数差额累加，不伪造回调执行。
+联合规划必须在所有组件一起达到固定状态后压缩，不能直接拼接各组件独立压缩结果。
+未来的联合峰应取max_t[NTT(t)+S4(t)+giant(t)+owners(t)+其余owned(t)]，而不是
+各自peak的和。driver/context、其他GPU使用者、页粒度及真实free仍需单独处理。
+
+### 27.3 验证与量化结果
+
+[CPU runner](D:/code/MPA-OpenCl/tools/test/test_stage2_ntt_events.py:30)直接提取生产
+FuseCtx、fuse规划/申请/释放及完整arena代码，只移除6个table build kernel launch，
+将GPU函数和设备属性查询替换为空操作/固定支持分支。申请语句保留，CUDA allocator
+换成不解引用的opaque CPU句柄。GPU查询、NTT数学、物理申请失败和per-call fallback
+均不由该工具证明；fuse cap拒绝时排除fallback transient，只核对arena成功前缀。
+
+[fixture](D:/code/MPA-OpenCl/tools/test/stage2_ntt_events_fixture.cpp:112)逐事件核对
+site/index、申请或释放、字节数、四类live组成及total，不只核对最终容量。覆盖：
+
+- compact/legacy、t=0/5/12、cooperative mode=0/1/2、pool/keyed、B/Q复用、carry；
+  N从8至2^27，含65536 slices跨gridDim.y拆分、output增长、carry增长/预算拒绝。
+- cap驱逐、base保留、cold trim与重建、析构/重复close、错误descriptor；另12组
+  eager原生请求程序独立核对压缩后的申请/释放计数，超大B2仍不展开。
+- 错误副本只反转table释放顺序，被event_order_or_payload拒绝（return1，check907）；
+  即使最终live量及释放总字节相同，也不能通过顺序门禁。
+
+最终CPU结果为173场景、47936事件、168166断言，0 bad/0 GPU。旧allocator门禁
+681389断言及dense/input/算术签名70010断言仍通过。新
+[Python verifier](D:/code/MPA-OpenCl/tools/test/verify_stage2_ntt_events.py:10)从原生layout
+反推outer宽度并独立模拟cap、增长、计数、峰、checkpoint和首次拒绝位置。
+40组native计划全部匹配；与第26节旧计划逐字段比较，原有容量、峰、前缀、checkpoint
+和原有计数全部相同。新的物理申请/释放计数在重复块中正确累加。
+layout未导出m_max，Python对legacy radix按合法配置容量集合校验；逐项实际容量
+仍与独立cache query总量及CPU提取的申请语句匹配。额外请求显式设置COOP_M=8，
+被生产配置保护在运行前拒绝（extra_modes complete=false、0曲线），没有绕过保护，
+也未计入40组成功查询；非默认compact/t/coop组合只由CPU事件fixture验证。
+
+M8011目标7995 bits/承载8011 bits，B1=20、B2=2.6e12、D1381380/P126720/I1882177，
+**计划查询batch=256 MiB、arena cap=6300 MiB、physical chunks=1、pool=1、B/Q=1**：
+
+```text
+NTT big   = 4294967296 B
+NTT digit =    7410584 B
+NTT table =  363878560 B
+NTT base  =  172170992 B
+NTT live/peak = 4838427432 B = 4614.283974 MiB
+calls=2890; fuse_builds=17; fuse_hits=2873; workspace_grows=6
+allocations=324; frees=14; grouped_events=0; cap_evictions=0
+```
+
+这是组件计划查询，batch与第26节生产大曲线不同，不能当作全流程实测峰。
+同D、同batch的三buffer版本在成功前缀峰3760191480 B后遭big_cap_refusal，
+准确报告首次拒绝，而不把这个较小前缀峰解释为“更省显存”。本轮未触发真实OOM。
+
+新binary的10条短GPU曲线通过，包括P63/64/65单叶尾、generic8193；算术/GMP、
+完整叶子和因子跨臂一致，10份实际S4顺序签名、30个owned边界匹配。其10份NTT
+计划另经独立Python事件验证。未重跑大规模性能A/B，**没有新的速度提升结论**。
+证据保留在忽略目录`data/stage2_ntt_events_20261009/`；脚本与文档提交，数据不提交。
+
+production编译93.0 s、完整构建111.9 s，47份编译源闭包：
+
+```text
+binary SHA256   55ea67855f8bbf54057293370bac9b6ac04e62953f037682e2137dc756bb1c97
+build SHA256    c253ebf69108f817f99a0d60c0441a8b042d11b9b4d274ef3b630ff7cc1bfedc
+snapshot SHA256 b5f08494567115f559301ece271dcbbfb43eeb48d1bd289aea511f06b8dde37f
+```
+
+当前plan-only仍标记cold_trim_modeled/fallback_modeled/process_peak_complete/
+admission_model=false。下一步用同一请求驱动NTT和S4状态，再接owner/giant与真实
+cold trim/free/reserve门禁，核对全流程owned峰，之后才统一D/P与Auto B2。

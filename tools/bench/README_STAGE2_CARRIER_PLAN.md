@@ -394,7 +394,7 @@ data/request_fixture.exe
 
 ## NTT arena 分配器模拟
 
-生产`--plan-only`新增`ntt_memory.version=1`，从上面的请求program按原分配顺序
+生产`--plan-only`当前为`ntt_memory.version=2`（初版为1），从上面的请求program按原分配顺序
 计算共享大池、keyed digits/verdict、table/base与cap淘汰。大池增长前释放旧池；
 其他shape的外层表被淘汰后base仍保留，下次命中不会重新缓存表。pool关闭时
 使用keyed三缓冲。carry检查临时缓冲按pass内部最多65535 slices计费。
@@ -402,6 +402,8 @@ data/request_fixture.exe
 - `valid`：模型计算有效，包括正常预算拒绝的成功前缀。
 - `finished`：全部条件请求已走完。不能据此认定完整Stage2驻留。
 - `peak_bytes/final_payload/checkpoints`：NTT owned峰、末态、压缩block末态。
+- `exact_allocation_events/fuse_layouts`：生产descriptor的逐项base/table申请布局；
+  `counters.allocations/frees`截至成功前缀末态，不含未来析构；原生grouped_events=0。
 - `stopped_at`：首次fuse/big/digits cap拒绝位置；成功或不支持G1为null。
 - `cold_trim_modeled/fallback_modeled/process_peak_complete/admission_model`始终
   false。当前无非NTT/真实free生命周期，不替换原D或Auto B2准入。
@@ -412,6 +414,7 @@ data/request_fixture.exe
 
 ```powershell
 python tools/test/test_stage2_ntt_memory.py --output data/ntt_memory_cpu
+python tools/test/test_stage2_ntt_events.py --output data/ntt_events_cpu
 ```
 
 默认使用本机VS18的`vcvars64.bat`，可用`--vcvars <path>`覆盖。保留提取源码、
@@ -423,6 +426,18 @@ python tools/test/test_stage2_ntt_memory.py --output data/ntt_memory_cpu
 ```powershell
 python tools/test/test_stage2_workspace_plan.py --exe <exe> --save <save> --carrier-exponent 8011 --device 1 --output data/ntt_memory_plan
 ```
+
+逐项event runner直接提取真实FuseCtx、fuse规划/申请/释放和arena，仅移除GPU
+launch/query；opaque CPU ledger逐事件核对site/index、字节、顺序和live组成。
+覆盖compact/legacy、t0/5/12、cooperative0/1/2、pool/keyed、B/Q、carry、cap驱逐、
+cold trim重建与析构。最终173场景/47936事件/168166断言0 bad/0 GPU；反转table
+释放顺序的错误副本被拒绝。原有681389 allocator及70010拓扑断言仍通过。
+
+`verify_stage2_ntt_events.py`由workspace-plan工具调用，独立重算descriptor、cap
+前缀、压缩计数、峰和checkpoint。40组native查询通过，原有容量/峰/拒绝位置与
+旧模型完全相同。新binary另有10条短GPU算术曲线与30个S4 owned边界验证，
+不作为新的性能样本。完整MemoryPlan及D/Auto B2仍未接线；NTT组件峰不等于进程峰。
+详见[报告第27节](../../docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#27-ntt逐项分配事件真实fuse布局与成功前缀)。
 
 它覆盖40个pool/reuse/chunk/D组合，核对新模型的scope、成功前缀、拒绝位置，
 以及无淘汰时与独立保留容量计算一致。完整owned生命周期与物理free门禁仍

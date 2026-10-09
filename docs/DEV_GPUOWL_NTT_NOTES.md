@@ -5123,3 +5123,34 @@ giant及cold trim/free/reserve，核对完整同时峰后才能统一D/Auto B2�
 本轮最终审计核对47份当前/冻结编译源、工具及原始证据SHA；历史章节中已经缺失的
 忽略目录build_cuda_cmake实验附件单独列入final_audit.json，不视为已验证的原始证据。
 当前阶段证据和源码链接不适用这一历史附件例外。
+
+## 137. NTT逐项分配事件与真实fuse布局（2026-10-09）
+
+接续第136节/S4提交a2e1199。NttMemoryState新增逐项observer与显式close，
+保留生产大池先free后grow、digits替换时保留verdict、carry、cold table驱逐和
+first-largest完整context回收。保存keyed插入顺序；table申请为forward递增/
+inverse递减，释放却为p递增F/radF/I/radI。B/Q借用没有独立申请或释放。
+
+ntt_fuse_memory_layout读取真实无分配FuseCtx，plan-only ntt_memory升级v2，
+新增exact_allocation_events、fuse_layouts及申请/释放计数。旧总量callback明确
+标记grouped事件，不冒充物理cudaMalloc。组件计数截至成功前缀末态，未含析构；
+cold/free/owner/fallback仍不是完整准入，D/Auto B2未变，CUDA内核和算术未变。
+
+CPU提取真实规划/allocator，173场景、47936事件、168166断言0 bad/0 GPU；
+反转table释放顺序的错误副本被event_order_or_payload拒绝（return1/check907）。
+旧allocator681389/dense70010回归通过。40组native计划经独立Python重算，
+原有容量、峰、拒绝前缀、checkpoint及旧计数与第136节完全相同。新binary10条
+短GPU曲线、30个S4 owned边界、来源签名和完整叶子/因子/GMP通过；10份NTT计划
+另独立验证。未跑大规模性能A/B，没有新增速度提升结论。
+
+M8011固定D1381380、B2=2.6e12，查询batch256 MiB/arena6300 MiB/physical chunks=1/
+pool+BQ时，NTT组件live/peak4838427432 B（4614.283974 MiB），2890 calls、17 fuse、
+324申请/14释放、grouped0；三buffer同参数在big cap处停止。这是条件组件计划，
+不能把较小的拒绝前缀峰解释为更省显存，也不能与各模块峰相加。
+
+production compile93.0/full111.9 s，47源闭包，binary SHA
+`55ea67855f8bbf54057293370bac9b6ac04e62953f037682e2137dc756bb1c97`。
+证据保留于忽略目录data/stage2_ntt_events_20261009；源码、脚本和同方向文档提交。
+[报告第27节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#27-ntt逐项分配事件真实fuse布局与成功前缀)
+包含公式、生产/工具line和范围。下一步同一请求驱动NTT+S4，再组合giant/owner，
+接真实cold trim/free/reserve，核对同时存活全流程峰后用于D/P及Auto B2。

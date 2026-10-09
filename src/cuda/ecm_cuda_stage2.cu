@@ -8762,11 +8762,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if(!ecm_stage2::ntt_memory_plan(p.requests->program,(int)L.S,
             [](unsigned long long m,int s,unsigned long long *n,unsigned long long *out) {
                 return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
-            },[](unsigned long long n,unsigned long long &table,unsigned long long &base) {
+            },[](unsigned long long n,ecm_stage2::NttFuseMemoryLayout &layout) {
                 int k=0;for(auto size=n;size>1;size>>=1)++k;
                 FuseCtx description;fuse_describe(description,n,k,0,0);
-                table=8ull*fuse_planned_table_words(description);
-                base=8ull*fuse_planned_base_words(description);return true;
+                return ecm_stage2::ntt_fuse_memory_layout(description,layout);
             },p.tree_batch_bytes,p.tree_physical_chunks,p.tree_chunk_max,memory_policy,*p.ntt_memory))return 3;
         p.giant_memory=std::make_shared<ecm_stage2::GiantMemoryPlan>();
         p.s4_memory=std::make_shared<ecm_stage2::S4ProgramPlan>();
@@ -9783,14 +9782,16 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
             json<<"{\"calls\":"<<x.calls<<",\"fuse_builds\":"<<x.fuse_builds
                 <<",\"fuse_hits\":"<<x.fuse_hits<<",\"workspace_grows\":"<<x.workspace_grows
                 <<",\"cap_evictions\":"<<x.cap_evictions<<",\"cap_evicted_bytes\":"<<x.cap_evicted_bytes
-                <<",\"carry_grows\":"<<x.carry_grows<<",\"carry_refusals\":"<<x.carry_refusals<<'}';
+                <<",\"carry_grows\":"<<x.carry_grows<<",\"carry_refusals\":"<<x.carry_refusals
+                <<",\"allocations\":"<<x.allocations<<",\"frees\":"<<x.frees<<",\"grouped_events\":"<<x.grouped_events<<'}';
         };
-        json<<",\"ntt_memory\":{\"version\":1,\"valid\":"<<(memory.valid?"true":"false")
+        json<<",\"ntt_memory\":{\"version\":2,\"valid\":"<<(memory.valid?"true":"false")
             <<",\"supported\":"<<(memory.valid && p.tree_payload_model_supported?"true":"false")
             <<",\"finished\":"<<(memory.finished?"true":"false")<<",\"reason\":"<<stage2_tune::quote(memory.reason)
             <<",\"cap_bytes\":"<<memory.policy.cap_bytes<<",\"pool\":"<<(memory.policy.pool?"true":"false")
             <<",\"reuse_bq\":"<<(memory.policy.reuse_bq?"true":"false")
             <<",\"carry_check\":"<<(memory.policy.carry_check?"true":"false")
+            <<",\"exact_allocation_events\":"<<(memory.exact_allocation_events?"true":"false")
             <<",\"cold_trim_modeled\":false,\"fallback_modeled\":false"
             <<",\"process_peak_complete\":false,\"admission_model\":false"
             <<",\"peak_bytes\":"<<memory.peak_bytes<<",\"executed_blocks\":"<<memory.executed_blocks
@@ -9809,6 +9810,18 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
             if(!first)json<<',';first=false;
             json<<"{\"repeat\":"<<checkpoint.repeat<<",\"peak_bytes\":"<<checkpoint.peak_bytes<<",\"payload\":";
             payload(checkpoint.live);json<<",\"counters\":";counters(checkpoint.counters);json<<'}';
+        }
+        json<<"],\"fuse_layouts\":[";first=true;
+        for(const auto &entry:memory.fuse_layouts) {
+            if(!first)json<<',';first=false;
+            json<<"{\"N\":"<<entry.first<<",\"grouped\":"<<(entry.second.grouped?"true":"false");
+            auto allocations=[&](const char *name,const std::vector<ecm_stage2::NttFuseAllocation> &items) {
+                json<<",\""<<name<<"\":[";bool comma=false;
+                for(const auto &a:items) {if(comma)json<<',';comma=true;
+                    json<<"{\"site\":"<<a.site<<",\"index\":"<<a.index<<",\"bytes\":"<<a.bytes<<'}';}
+                json<<']';
+            };
+            allocations("base",entry.second.base);allocations("table",entry.second.table);json<<'}';
         }
         json<<"]}";
     }

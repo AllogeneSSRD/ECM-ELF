@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT/'tools/bench'))
 from bench_stage2_production import fields, freeze, sha
 from calibrate_stage2_d import phi
 from test_stage2_request_program import verify_s4_memory
+from verify_stage2_ntt_events import verify_ntt_events
 
 
 def verify_giant_memory(plan):
@@ -74,7 +75,7 @@ def verify_giant_memory(plan):
 def verify_ntt_memory(plan):
     """Check scope, successful-prefix accounting and no-eviction equivalence."""
     memory, request = plan['ntt_memory'], plan['request_program']
-    if memory['version'] != 1 or memory['process_peak_complete'] or memory['admission_model'] or memory['cold_trim_modeled'] or memory['fallback_modeled']:
+    if memory['version'] not in (1,2) or memory['process_peak_complete'] or memory['admission_model'] or memory['cold_trim_modeled'] or memory['fallback_modeled']:
         raise ValueError('wrong NTT allocator model scope')
     if memory['cap_bytes'] != plan['arena_cap_bytes'] or memory['pool'] != plan['tree_workspace']['pool']:
         raise ValueError('allocator policy differs from native plan')
@@ -110,6 +111,7 @@ def verify_ntt_memory(plan):
     for point in memory['checkpoints']:
         if point['peak_bytes'] < point['payload']['total_bytes'] or point['peak_bytes'] > memory['peak_bytes']:
             raise ValueError('invalid allocator checkpoint peak')
+    verify_ntt_events(plan)
 
 
 def dense_groups(p):
@@ -174,11 +176,15 @@ def main():
         raise ValueError('use a fresh output directory')
     out.mkdir(parents=True, exist_ok=True)
     identity, save_sha, tool_sha = freeze(exe), sha(save), sha(__file__)
+    verifier_sources={str(path.relative_to(ROOT)):sha(path) for path in (
+        Path(__file__).resolve(),Path(__file__).with_name('verify_stage2_ntt_events.py'),
+        Path(__file__).with_name('test_stage2_request_program.py'))}
     ini = out/'manual.ini'
     ini.write_text(f'device={a.device}\n', encoding='utf-8')
     rows = []
     data = dict(complete=False, identity=identity, save=str(save), save_sha256=save_sha,
-                tool_sha256=tool_sha, curves_executed=0, rows=rows)
+                tool_sha256=tool_sha, nttevents_verifier_sha256=sha(Path(__file__).with_name('verify_stage2_ntt_events.py')), curves_executed=0, rows=rows)
+    data['verifier_sources']=verifier_sources
     try:
         groups_by_d = {d:dense_groups(phi(d)//2) for d in a.d}
         coefficients = {2}|{b for groups in groups_by_d.values() for _,b,_ in groups}
@@ -298,6 +304,8 @@ def main():
                     raise ValueError('actual F-tree NTT retention differs from complete component plan')
                 verified.append(dict(name=run['name'],record=record))
             data['runtime'] = dict(path=str(a.runtime_check),sha256=sha(a.runtime_check),verified=verified)
+        if freeze(exe)!=identity or sha(save)!=save_sha or any(sha(ROOT/path)!=want for path,want in verifier_sources.items()):
+            raise ValueError('build, input or verifier changed during plan check')
         data['complete'] = True
     except Exception as exc:
         data['error'] = str(exc)
