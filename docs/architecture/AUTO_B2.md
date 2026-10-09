@@ -38,6 +38,12 @@ reader 限制 1 MiB，拒绝旧格式、缺失 END、重复键、非法整数、
 
 `--tune ntt` 测不同 log₂L 的精确域卷积。参数含 `--length-log2 <a:b>`、`--tune-repeats <n>`、`--tune-memory-mb <MiB>` 与 `--tune-file <path>`；默认重复 5，预热不计中位数。需要固定 Goldilocks 后端。
 
+默认输出 `stage2_tune.toml`：`[profile]` 保存格式、计时单位及测量范围，`[device]` 保存设备/后端适用条件，`[ntt.length_<L>]` 保存该长度的吞吐、样本、容量与核验结果，`[summary]` 保存完成状态。字段逐行排列，数组用于重复样本和 radix；不记录路径、二进制或构建摘要。显式 `.jsonl` 输出仍可用，其 profile 行同样不再含二进制/构建摘要。运行期间仍核对程序和已有构建 manifest 未发生变化，完整成功后才原子替换目标文件，失败留下 partial。
+
+`--tune-level <1..10>` 当前用于 NTT 测量：等级 ℓ 的默认长度范围为 log₂L=16…[20+min(ℓ−1,7)]，重复次数为 2ℓ²+1；每个长度另有一次预热。显式 `--length-log2`、`--tune-repeats` 始终覆盖等级预设，与参数顺序无关。未指定等级时保持 16…27、重复5次。内存预算不随等级提高；越界长度记录 `skipped_memory`，不参与性能选择。`effort_level=0` 表示未使用等级预设，实际范围和重复次数以同一 profile 的字段为准。
+
+此 TOML 目前是 NTT 实测输出，尚未作为自动 D/承载或 Auto B2 的运行 reader 输入；不能将 field-convolution 吞吐替代完整 Stage2 成本。完整 ECM 的等级分配、无因子基准及候选选择仍待接入。
+
 iter/s 指每秒完整 field convolution 次数，不是每秒 ECM 曲线，也不含 S4 系数归约、树准备和 GCD。profile 同时记录设备/后端、实际长度、容量、预热/样本和精确性核对。一次 NTT tune 不能单独推导最优 B2。
 
 按位宽校准 Auto B2 还需真实 Stage1 摊销、阶段成本、非满树/根操作、分块和驻留/回退数据。生成拟合、冻结预测、独立验证与收益排名后才能导出运行 profile。

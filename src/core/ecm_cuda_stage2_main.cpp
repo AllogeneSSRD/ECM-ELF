@@ -11,6 +11,7 @@
 #include "ecm_stage2_fingerprint.h"
 #include "ecm_stage2_factorize.h"
 #include "ecm_stage2_cost_profile.h"
+#include "ecm_stage2_tune_format.h"
 #include "ecm_stage2_geometry.h"
 #include "ecm_stage2_logging.h"
 #include "ecm_stage2_console.h"
@@ -220,6 +221,8 @@ struct Options {
     bool plan_only = false, tune_options = false;
     std::string tune, tune_file;
     int tune_first = 16, tune_last = 27, tune_repeats = 5;
+    int tune_level = 0;
+    bool has_tune_lengths = false, has_tune_repeats = false;
     uint64_t tune_memory_mb = 1024;
     bool factorize_hits = false;
     bool factor_only = false;
@@ -290,6 +293,10 @@ Options arguments(int argc, char **argv) {
             o.has_factor_timeout = true;
         }
         else if (a == "--tune") o.tune = value();
+        else if (a == "--tune-level") {
+            const auto level=num();if(level<1 || level>10)throw std::runtime_error("tune-level must be 1..10");
+            o.tune_level=static_cast<int>(level);o.tune_options=true;
+        }
         else if (a == "--tune-file") { o.tune_file = value(); o.tune_options = true; }
         else if (a == "--length-log2") {
             o.tune_options = true;
@@ -299,12 +306,12 @@ Options arguments(int argc, char **argv) {
             const auto last = colon == range.npos ? first : u64(range.substr(colon + 1), "length-log2");
             if (first < 16 || last > 27 || first > last)
                 throw std::runtime_error("length-log2 must be 16..27 or FIRST:LAST");
-            o.tune_first = static_cast<int>(first); o.tune_last = static_cast<int>(last);
+            o.tune_first = static_cast<int>(first); o.tune_last = static_cast<int>(last);o.has_tune_lengths=true;
         }
         else if (a == "--tune-repeats") {
             o.tune_options = true; const auto n = num();
             if (!n || n > 1000) throw std::runtime_error("tune-repeats must be 1..1000");
-            o.tune_repeats = static_cast<int>(n);
+            o.tune_repeats = static_cast<int>(n);o.has_tune_repeats=true;
         }
         else if (a == "--tune-memory-mb") {
             o.tune_options = true; o.tune_memory_mb = num();
@@ -738,8 +745,8 @@ void help() {
         "         [--auto-min-b2 B2 --auto-max-b2 B2] [--owner-budget-mb MB]\n"
         "         Requires a matching measured runtime profile; no extrapolation.\n"
         "         --plan-only (queries device memory and D; runs no curve)\n"
-        "Tune: --tune ntt --device N [--length-log2 16:27] [--tune-repeats 5]\n"
-        "      [--tune-memory-mb 1024] [--tune-file stage2_tune.jsonl]\n"
+        "Tune: --tune ntt --device N [--tune-level 1..10] [--length-log2 16:27] [--tune-repeats 5]\n"
+        "      [--tune-memory-mb 1024] [--tune-file stage2_tune.toml]\n"
         "      Requires a fixed Goldilocks backend; measures field convolution only.\n"
         "Queue: ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
         "INI: stage2_worktodo, stage2_finished, stage2_progress_file, stage2_log_file;\n"
@@ -819,14 +826,20 @@ int driver(Options o) {
     _putenv_s("NTT_S4_BATCH_MB", std::to_string(batch).c_str());
     if (arena) _putenv_s("NTT_ARENA_CAP_KB", std::to_string(arena * 1024).c_str());
     if (!o.tune.empty()) {
-        const fs::path destination = absolute_from(cwd, o.tune_file.empty() ? "stage2_tune.jsonl" : o.tune_file);
+        if(o.tune_level) {
+            const auto effort=ecm_stage2::tune::effort(o.tune_level);
+            if(!o.has_tune_lengths){o.tune_first=effort.first;o.tune_last=effort.last;}
+            if(!o.has_tune_repeats)o.tune_repeats=effort.repeats;
+        }
+        const fs::path destination = absolute_from(cwd, o.tune_file.empty() ? "stage2_tune.toml" : o.tune_file);
         auto same_path = [&](const fs::path &other) {
             std::error_code error;
             if (fs::equivalent(destination, other, error) && !error) return true;
             return upper(destination.lexically_normal().string()) == upper(other.lexically_normal().string());
         };
-        if (upper(destination.extension().string()) != ".JSONL")
-            throw std::runtime_error("tune-file must use the .jsonl extension");
+        const bool toml=upper(destination.extension().string())==".TOML";
+        if (!toml && upper(destination.extension().string()) != ".JSONL")
+            throw std::runtime_error("tune-file must use the .toml or .jsonl extension");
         if (same_path(executable()) || same_path(ini) || same_path(worktodo) || same_path(finished) ||
             same_path(results) || (!log.empty() && same_path(log)))
             throw std::runtime_error("tune-file must differ from executable, config, queue and result files");
@@ -837,18 +850,23 @@ int driver(Options o) {
         const auto binary_hash = ecm_stage2::sha256_file(executable());
         const auto manifest = executable().parent_path() / "build_manifest.json";
         const auto manifest_hash = fs::is_regular_file(manifest) ? ecm_stage2::sha256_file(manifest) : "";
-        output << "{\"type\":\"profile\",\"schema\":1,\"unit\":\"field_convolution\",\"binary_sha256\":"
-               << json_string(binary_hash) << ",\"build_manifest_sha256\":" << json_string(manifest_hash)
+        if(toml)output << "# ECM Stage2 tuning data. Times in seconds; capacities in bytes.\n"
+            << "[profile]\nformat = 1\nunit = \"field_convolution\"\nmin_log2 = " << o.tune_first
+            << "\nmax_log2 = " << o.tune_last << "\nrepeats = " << o.tune_repeats << "\neffort_level = " << o.tune_level << '\n';
+        else output << "{\"type\":\"profile\",\"schema\":1,\"unit\":\"field_convolution\""
                << ",\"min_log2\":" << o.tune_first << ",\"max_log2\":" << o.tune_last
-               << ",\"repeats\":" << o.tune_repeats << "}\n";
+               << ",\"repeats\":" << o.tune_repeats << ",\"effort_level\":" << o.tune_level << "}\n";
+        struct TuneOutput {std::ofstream &file;bool toml;};
+        TuneOutput tune_output{output,toml};
         auto sink = [](const char *json, void *ctx) {
-            auto &out = *static_cast<std::ofstream *>(ctx);
-            out << json << '\n'; out.flush();
+            auto &writer = *static_cast<TuneOutput *>(ctx);
+            auto &out=writer.file;
+            out << (writer.toml ? ecm_stage2::tune::table(json) : std::string(json)+"\n"); out.flush();
             if (!out) throw std::runtime_error("tune profile write failed");
             std::cout << json << std::endl;
         };
         const int code = ecm_cuda_stage2_tune_ntt(device, o.tune_first, o.tune_last, o.tune_repeats,
-                                                 o.tune_memory_mb * 1048576, sink, &output);
+                                                 o.tune_memory_mb * 1048576, sink, &tune_output);
         if (code) throw std::runtime_error("tune failed or measured no shapes; partial profile retained: " + partial.string());
         if (binary_hash != ecm_stage2::sha256_file(executable()) ||
             (!manifest_hash.empty() && manifest_hash != ecm_stage2::sha256_file(manifest)))
