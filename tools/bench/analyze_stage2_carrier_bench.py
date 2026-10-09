@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import statistics
 
-from bench_stage2_production import sha
+from bench_stage2_production import fields, sha
 
 
 def summarize(rows, section, field):
@@ -32,10 +32,12 @@ def main():
     timed = [r for r in data['runs'] if r['category'] == 'timing']
     comparison = data.get('comparison', 'carrier')
     keys = {'carrier': ('generic', 'carrier'), 'workspace-bq': ('three_buffer', 'two_buffer'),
-            'plan': ('baseline_d', 'candidate_d')}[comparison]
+            'plan': ('baseline_d', 'candidate_d'),
+            'chunk': ('legacy_chunk','workspace_chunk')}[comparison]
     arm_labels = {'carrier': ['Generic target N', 'Mersenne carrier M'],
                   'workspace-bq': ['Three buffers A/B/Q', 'Two buffers A/(B=Q)'],
-                  'plan': [f'D={data["input"]["D"]}', f'D={data["input"].get("candidate_D", 0)}']}[comparison]
+                  'plan': [f'D={data["input"]["D"]}', f'D={data["input"].get("candidate_D", 0)}'],
+                  'chunk': ['Legacy three-buffer estimate','Physical workspace estimate']}[comparison]
     sequence = [keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1)]
     if [r['key'] for r in timed] != sequence:
         raise ValueError('formal ABBA+BAAB sequence changed')
@@ -56,8 +58,31 @@ def main():
         for metric in ('workspace_big_peak_mib', 'workspace_full_peak_mib', 'owner_peak_mib'):
             arm[metric] = {k: v/(1 << 20) for k, v in arm[metric].items()}
         arm['misc_seconds'] = arm['wall']['total']['mean']-arm['wall']['init']['mean']-sum(v['mean'] for v in arm['phases'].values())
-        if comparison in ('workspace-bq', 'plan'):
+        if comparison in ('workspace-bq', 'plan','chunk'):
             arm['layout'] = rows[0]['layout']
+        if comparison == 'chunk':
+            arm['chunk_plan'] = rows[0]['chunk_plan']
+            arm['coverage'] = rows[0]['coverage']
+            arm['reduce_hook_calls'] = rows[0]['reduce_hook_calls']
+            arm['owned_subset_observed_peak_mib'] = {
+                k: v/(1 << 20) for k,v in summarize(rows,'chunk_plan','owned_subset_observed_peak_bytes').items()}
+            shapes = {}
+            for row in rows:
+                text = Path(row['debug_log']).read_text(encoding='utf-8')
+                for line in text.splitlines():
+                    if not line.startswith('s4_reduce_stats:'): continue
+                    shape = fields(line,'s4_reduce_stats')
+                    shapes.setdefault(shape['P'],[]).append(shape)
+            arm['reduction_shapes'] = {}
+            for degree, records in sorted(shapes.items(),key=lambda v:int(v[0])):
+                if len(records) != len(rows): raise ValueError('shape missing from an arm: '+degree)
+                for field in ('launches','coeffs','gmp_checked'):
+                    if len({s[field] for s in records}) != 1:
+                        raise ValueError('shape work changed within an arm: '+degree+'/'+field)
+                arm['reduction_shapes'][degree] = dict(
+                    calls=int(records[0]['launches']), coefficients=int(records[0]['coeffs']),
+                    checked=int(records[0]['gmp_checked']),
+                    mean_kernel_seconds=statistics.mean(float(s['t_reduce']) for s in records))
         arm['shape'] = rows[0]['shape']
         arm['residency'] = {k: [r.get(k) for r in rows] for k in ('fold', 'root', 'frontier')}
         if arm['misc_seconds'] < -0.05:
@@ -115,7 +140,8 @@ def main():
             ax.set_xticks([0, 1], arm_labels)
             ax.set_xlabel({'carrier': 'Arithmetic backend (same saved target N)',
                           'workspace-bq': 'Workspace layout (same arithmetic backend)',
-                          'plan': 'Fixed D (same arithmetic, two-buffer pool and budgets)'}[comparison])
+                          'plan': 'Fixed D (same arithmetic, two-buffer pool and budgets)',
+                          'chunk': 'Chunk policy (same D, two-buffer pool and budgets)'}[comparison])
             ax.spines[['top', 'right']].set_visible(False)
         axes[0].set_ylabel('Mean complete Stage2 wall time (s)')
         axes[0].set_ylim(0, max(r['wall']['total']['mean'] for r in result['arms'].values())*1.17)
@@ -140,18 +166,20 @@ def main():
         for ext in ('png', 'svg'):
             fig.savefig(a.figure_prefix.with_suffix('.'+ext), dpi=170)
         plt.close(fig)
-        if comparison in ('workspace-bq', 'plan'):
+        if comparison in ('workspace-bq', 'plan','chunk'):
             fig, ax = plt.subplots(figsize=(8.8, 5.3), layout='constrained')
             metrics = [('workspace_big_peak_mib', 'Big buffers', '#366c93'),
                        ('workspace_full_peak_mib', 'Whole NTT workspace', '#7b9b8b'),
                        ('sampled_device_memory_peak_mib', 'Sampled GPU usage (2 s)', '#bb8250')]
+            if comparison == 'chunk':
+                metrics.append(('owned_subset_observed_peak_mib','Observed NTT + S4 subset','#8a789b'))
             for mi, (metric, label, color) in enumerate(metrics):
                 for ai, (_, arm) in enumerate(result['arms'].items()):
                     value = arm['telemetry'][metric] if mi == 2 else arm[metric]['mean']
                     if value is None:
                         continue
-                    xpos = ai+(mi-1)*.22
-                    ax.bar(xpos, value, width=.21, color=color, label=label if ai == 0 else None)
+                    xpos = ai+(mi-(len(metrics)-1)/2)*.19
+                    ax.bar(xpos, value, width=.18, color=color, label=label if ai == 0 else None)
                     ax.text(xpos, value+45, f'{value:.0f}', ha='center', fontsize=9)
             ax.set_xticks([0, 1], arm_labels)
             ax.set_ylabel('MiB (overlapping series; never summed)')
@@ -159,7 +187,7 @@ def main():
                          'Module capacity peaks and sampled device usage', loc='left')
             ax.margins(y=.2)
             ax.spines[['top', 'right']].set_visible(False)
-            ax.legend(loc='upper left', frameon=False)
+            fig.legend(loc='outside lower center', ncol=2, frameon=False)
             for ext in ('png', 'svg'):
                 fig.savefig(a.figure_prefix.parent/(a.figure_prefix.name+'_memory.'+ext), dpi=170)
             plt.close(fig)

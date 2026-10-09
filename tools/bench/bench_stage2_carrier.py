@@ -21,7 +21,7 @@ def main():
     p.add_argument('--exe', type=Path, required=True)
     p.add_argument('--save', type=Path, required=True)
     p.add_argument('--carrier-exponent', type=int, default=0)
-    p.add_argument('--comparison', choices=('carrier', 'workspace-bq', 'plan'), default='carrier')
+    p.add_argument('--comparison', choices=('carrier', 'workspace-bq', 'plan', 'chunk'), default='carrier')
     p.add_argument('--b2', type=int, required=True)
     p.add_argument('--d', type=int, required=True)
     p.add_argument('--candidate-d', type=int, help='Second fixed D for a two-buffer plan timing comparison; budgets and arithmetic stay fixed')
@@ -96,7 +96,8 @@ def main():
             env.update(NTT_BABY_DEVICE_CHECK='1', NTT_GFINV_SEG_CHECK='1',
                        NTT_GIANT_SEED_CHECK='1', NTT_GIANT_CHAIN_CHECK='1')
     keys = {'carrier': ('generic', 'carrier'), 'workspace-bq': ('three_buffer', 'two_buffer'),
-            'plan': ('baseline_d', 'candidate_d')}[a.comparison]
+            'plan': ('baseline_d', 'candidate_d'),
+            'chunk': ('legacy_chunk', 'workspace_chunk')}[a.comparison]
     sequence = tuple(keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1))
     matrix = ([('check', k) for k in ((a.single_arm,) if a.single_arm else keys)] if a.mode == 'check'
               else [('warmup', k) for k in keys] +
@@ -157,8 +158,10 @@ def main():
             use = env.copy()
             if a.comparison == 'workspace-bq':
                 use['NTT_WORKSPACE_REUSE_BQ'] = '1' if key == 'two_buffer' else '0'
-            elif a.comparison == 'plan':
+            elif a.comparison in ('plan','chunk'):
                 use['NTT_WORKSPACE_REUSE_BQ'] = '1'
+            if a.comparison == 'chunk':
+                use['NTT_S4_WORKSPACE_BUDGET'] = '1' if key == 'workspace_chunk' else '0'
             exponent = a.carrier_exponent if a.comparison != 'carrier' or key == 'carrier' else 0
             run_d = a.candidate_d if key == 'candidate_d' else a.d
             command = [str(exe), '--ini', str(ini), '--save', str(save),
@@ -246,12 +249,20 @@ def main():
                          leaf=fields(text, 'target_descent_values') if a.mode == 'check' else None,
                          log=str(log), log_sha256=sha(log), debug_log=str(debug),
                          debug_sha256=sha(debug), result_sha256=sha(result))
-            if a.comparison in ('workspace-bq', 'plan'):
+            if a.comparison in ('workspace-bq', 'plan', 'chunk'):
                 entry['layout'] = fields(text, 'ntt_workspace_layout')
                 if entry['layout']['reuse_bq_requested'] != use['NTT_WORKSPACE_REUSE_BQ']:
                     raise ValueError('workspace policy differs from requested arm')
                 if (int(entry['layout']['alias_calls']) > 0) != (key != 'three_buffer'):
                     raise ValueError('workspace alias execution differs from requested arm')
+            if a.comparison == 'chunk':
+                entry['chunk_plan'] = fields(text,'s4_chunk_plan')
+                entry['reduce_hook_calls'] = sum(int(fields(line,'s4_reduce_stats')['launches'])
+                    for line in text.splitlines() if line.startswith('s4_reduce_stats:'))
+                if entry['chunk_plan']['workspace_budget'] != use['NTT_S4_WORKSPACE_BUDGET']:
+                    raise ValueError('chunk policy differs from requested arm')
+                if a.workspace_fixture and fields(text,'s4_chunk_budget_check')['bad'] != '0':
+                    raise ValueError('chunk formula fixture failed')
             entry['root'] = fields(text, 'scaled_root_device')
             entry['frontier'] = fields(text, 'scaled_frontier_device')
             # Retain a completed arithmetic run even if a later residency gate
@@ -275,12 +286,19 @@ def main():
             for field in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):
                 if len({r['coverage'][field] for r in data['runs']}) != 1:
                     raise ValueError('arithmetic coverage changed between layouts: ' + field)
-        if a.comparison == 'plan':
+        if a.comparison in ('plan','chunk'):
             for key in keys:
                 rows = [r for r in data['runs'] if r['key'] == key]
                 for field in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):
                     if len({r['coverage'][field] for r in rows}) != 1:
                         raise ValueError('arithmetic coverage changed within fixed D: ' + key + '/' + field)
+        if a.comparison == 'chunk':
+            for field in ('poly_muls','coeffs_reduced','gmp_selftest_cases'):
+                if len({r['coverage'][field] for r in data['runs']}) != 1:
+                    raise ValueError('mathematical work changed between chunk policies: '+field)
+            for key in keys:
+                if len({r['reduce_hook_calls'] for r in data['runs'] if r['key']==key}) != 1:
+                    raise ValueError('reduction hook coverage changed within arm: '+key)
         if a.mode == 'check' and (not oracle or oracle['unit']) and len({json.dumps(r['leaf'], sort_keys=True) for r in data['runs']}) != 1:
             raise ValueError('complete target-projected leaf fingerprint mismatch')
         if oracle and not oracle['unit']:

@@ -20,6 +20,28 @@ inline bool multiply(Word a, Word b, Word &out) {
     if (b && a > std::numeric_limits<Word>::max()/b) return false;
     out=a*b; return true;
 }
+// Per-request NTT payload only: packed A/B[/Q], digit output and two verdict
+// words per slice. Caches, retained capacities and reduced S4 output are separate.
+inline bool chunk_request_bytes(Word n, Word out_slots, Word slices,
+                                unsigned buffers, Word &bytes) {
+    Word words=0;
+    return n && slices && (buffers==2 || buffers==3) &&
+        multiply(n,buffers,words) && add(words,out_slots,words) &&
+        add(words,2,words) && multiply(words,slices,words) && multiply(words,8,bytes);
+}
+// Preserve the engine's halving sequence (nbatch, nbatch/2, ...), including a
+// mandatory single slice when even one request exceeds the soft chunk budget.
+inline Word chunk_slices(Word n, Word out_slots, Word nbatch, Word budget,
+                         unsigned buffers, bool verdicts=true) {
+    for(Word c=nbatch;c;c/=2) {
+        Word bytes=0, words=0;
+        const bool ok=verdicts ? chunk_request_bytes(n,out_slots,c,buffers,bytes) :
+            (multiply(n,buffers,words) && add(words,out_slots,words) &&
+             multiply(words,c,words) && multiply(words,8,bytes));
+        if(ok && bytes<=budget)return c;
+    }
+    return 1;
+}
 // bit 0 reuses q for qb; bit 1 reuses G for reverse(T)/reverse(q).
 // Both transitions are ordered on the engine's default stream, after the old
 // coefficients have been gathered/digested or reversed. Source/result remain

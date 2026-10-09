@@ -4800,3 +4800,23 @@ local LD全0，累计sector字节代理0.246094/0.661499/0.974854/0.975586MiB；
 7995-bit目标、carrier8011、B1=20/sigma26/B2=2.6e12，同二进制固定全部预算、仅D810810→1381380，ABBA+BAAB各n=4：113.0927225→96.84165325秒（少14.36969%，两组14.32482%/14.41451%）。G树42→15、S4 launch1174→474；候选fold/frontier回退，NTT全峰2162.106→4612.618 MiB，2秒采样设备峰4062→6442 MiB，不相加冒充进程峰。D1141140全驻留n1为98.78秒，说明应按总成本比较驻留/回退。
 
 完整MemoryPlan、新Auto B2成本和默认发布仍待推进；原生arena估计仍把共享fold/tree相加，D1021020估计8194.8 MiB而实际NTT峰4612.0 MiB，无overflow。下一项生命周期ledger，联合D/P、owner、giant/S4 chunk预算，再做新成本scope；所有公式、source/line、失败、样本、图和复现继续维护[专题§11–14](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。
+
+## 125. 物理工作区驱动S4分块：正确性通过，性能门槛未通过（2026-10-09）
+
+继续§124的D/P/显存联合规划：S4新增默认关闭的`NTT_S4_WORKSPACE_BUDGET=1`，
+按分配器实际两/三缓冲数选择chunk；预算额外计入每slice两个carry诊断字。
+添加同时存活的NTT+S4保留容量子集观测，明确不宣称完整进程峰值。
+
+7995-bit目标、M8011承载、B2=2.6e12、D1381380，固定同二进制/预算/BQ/阶段释放：
+ABBA+BAAB每臂n=4，完整Stage2均值96.05695→96.66659 s，**慢0.635%**；
+两组分别慢0.636/0.633%。NTT子调用5260→2890（−45.06%），归约事件4.873→5.3585 s，
+主机归约等待计时12.709→2.257 s，未转化为墙钟收益；该策略不进入发布默认。
+实际NTT big仍4096 MiB，fold/frontier仍回退。
+
+580例整数分块、原有128例workspace生命周期、独立小规模CPU oracle、完整高位宽
+目标叶子、generic8193-bit、8项原生plan检查及pool/三缓冲/arena拒绝/carry污染门禁
+通过。旧Auto B2 profile拒绝新策略，等待新成本标定。
+
+下一项验证阶段S4归约输出缓冲释放，读取真实边界容量后再判断能否使D138启用驻留；
+维持既有1 GiB future reserve。完整数据、代码行号、复现、阶段/显存图与适用范围见
+[同方向报告§15](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)。

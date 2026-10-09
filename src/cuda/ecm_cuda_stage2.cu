@@ -1266,6 +1266,10 @@ struct S4Ctx {
     unsigned long long *d_out = nullptr;
     size_t d_out_cap = 0;
     unsigned long long launches = 0, muls = 0, groups = 0, level_calls = 0;
+    unsigned long long chunk_plan_calls=0, chunk_plan_changed=0;
+    unsigned long long chunk_plan_chunks=0, chunk_plan_legacy_chunks=0;
+    unsigned long long chunk_plan_request_peak=0, chunk_plan_subset_peak=0;
+    unsigned long long chunk_plan_over_budget=0;
     long long sample_limit = 4096;      /* a full GMP check below this many coefficients */
     bool selftested = false;
     /* OBJECTIVE 4 (section 33): the DEVICE-side operand packing.  Before this, every batched
@@ -3508,19 +3512,23 @@ static void poly_mul_batch_modN(PolyLayer &L,
                     effective_mb, (int)(s4_batch_mb != 0), (int)g_s4_pack_direct, (int)host_pack);
         budget_reported = true;
     }
-    unsigned long long chunk = 1;
-    {
-        unsigned long long qN2 = 0;
-        int qbpw2 = 0;
-        if (!ntt_shape_query(P, (int)L.S, &qN2, &qbpw2, nullptr, nullptr, nullptr, nullptr))
-            qN2 = 1;
-        for (unsigned long long c = nbatch; c >= 1; c /= 2) {
-            const unsigned long long bytes =
-                (3 * qN2 * c + out_slots * c) * (unsigned long long)sizeof(unsigned long long);
-            if (bytes <= budget_bytes) { chunk = c; break; }
-        }
-    }
+    const bool workspace_budget=fuse_env_ull("NTT_S4_WORKSPACE_BUDGET",0)!=0;
+    const unsigned buffers=L.arena ? L.arena->big_buffer_count() : 3;
+    unsigned long long legacy_chunk=ecm_stage2::chunk_slices(qN,out_slots,nbatch,budget_bytes,3,false);
+    unsigned long long chunk=workspace_budget ?
+        ecm_stage2::chunk_slices(qN,out_slots,nbatch,budget_bytes,buffers) : legacy_chunk;
     if (g_s4_chunk_max) chunk = std::min(chunk, g_s4_chunk_max);
+    if (g_s4_chunk_max) legacy_chunk = std::min(legacy_chunk, g_s4_chunk_max);
+    ++C.chunk_plan_calls;
+    C.chunk_plan_changed+=(chunk!=legacy_chunk);
+    C.chunk_plan_chunks+=nbatch/chunk+(nbatch%chunk!=0);
+    C.chunk_plan_legacy_chunks+=nbatch/legacy_chunk+(nbatch%legacy_chunk!=0);
+    unsigned long long request_bytes=0;
+    if(!ecm_stage2::chunk_request_bytes(qN,out_slots,chunk,buffers,request_bytes)) {
+        std::fprintf(stderr,"%s: S4 chunk payload overflow\n",NTT_PROBE_NAME);std::exit(3);
+    }
+    C.chunk_plan_request_peak=std::max(C.chunk_plan_request_peak,request_bytes);
+    C.chunk_plan_over_budget+=(request_bytes>budget_bytes);
     const bool chunk_output=g_s4_chunk_output && !g_s4_final_readback;
     const size_t allocation_need=std::max((size_t)1,
         (size_t)(chunk_output ? chunk : nbatch)*output_slots*W);
@@ -3733,6 +3741,14 @@ static void poly_mul_batch_modN(PolyLayer &L,
             if (s0 == 0) slots.clear();   /* the host path filled this; the dev path does not */
         }
         if (r1 != 0) { rc = r1; break; }
+        // Simultaneous owned SUBSET at this boundary, not a sum of module peaks.
+        // Includes all live arena payload/base and retained S4 raw/pack/output;
+        // excludes reduction constants/oracle, points, trees and resident owners.
+        unsigned long long owned=L.arena ? L.arena->bytes : 0;
+        if(L.arena) for(const auto &entry:L.arena->fuses)
+            owned+=8ull*fuse_base_words(entry.fc);
+        owned+=8ull*(C.d_out_cap+C.d_rawA_cap+C.d_rawB_cap+2*C.d_pack_cap);
+        C.chunk_plan_subset_peak=std::max(C.chunk_plan_subset_peak,owned);
         /* Readbacks of ALL non-deferred chunks, not only the final overwritten `st`.
            Interior deferred chunks contribute zero here and are charged by finish_carry. */
         chunk_d2h_acc += st.t_check_d2h;
@@ -8746,7 +8762,32 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const char *groot_test = std::getenv("NTT_S4_GROOT_TEST");
     if (groot_test && std::atoi(groot_test) != 0) groot_lifetime_check(L);
     const char *workspace_test = std::getenv("NTT_ARENA_WORKSPACE_TEST");
-    if (workspace_test && std::atoi(workspace_test) != 0) ntt_workspace_check(g_device);
+    if (workspace_test && std::atoi(workspace_test) != 0) {
+        ntt_workspace_check(g_device);
+        unsigned long long cases=0,bad=0;
+        for(unsigned buffers:{2u,3u})for(unsigned long long n:{128ull,4096ull,1048576ull})
+        for(unsigned long long slots:{1ull,33ull,4095ull})
+        for(unsigned long long batch:{1ull,3ull,65ull,1000ull})
+        for(unsigned long long budget:{1ull,4096ull,1048576ull,268435456ull}) {
+            unsigned long long want=1;
+            for(auto c=batch;c;c/=2)
+                if(8ull*(buffers*n+slots+2)*c<=budget) {want=c;break;}
+            ++cases;
+            if(ecm_stage2::chunk_slices(n,slots,batch,budget,buffers)!=want)++bad;
+            unsigned long long bytes=0;
+            ++cases;
+            if(!ecm_stage2::chunk_request_bytes(n,slots,want,buffers,bytes) ||
+               bytes!=8ull*(buffers*n+slots+2)*want)++bad;
+        }
+        unsigned long long bytes=0;
+        for(auto n:{0ull,~0ull}) {
+            ++cases;if(ecm_stage2::chunk_request_bytes(n,1,1,2,bytes))++bad;
+        }
+        ++cases;if(ecm_stage2::chunk_request_bytes(1,1,~0ull,3,bytes))++bad;
+        ++cases;if(ecm_stage2::chunk_request_bytes(1,1,1,4,bytes))++bad;
+        stage2_log::print(stage2_log::debug,"s4_chunk_budget_check: cases=%llu bad=%llu\n",cases,bad);
+        if(bad)return 3;
+    }
     if(fuse_env_ull("NTT_FUSE_COOP_TEST",0))ntt_fuse_coop_check(g_device);
     const char *fuse_test = std::getenv("NTT_FUSE_LIFETIME_TEST");
     if (fuse_test && std::atoi(fuse_test) != 0) {
@@ -9258,6 +9299,12 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                             S->calls ? 1e6 * S->t_hooksample / (double)S->calls : 0.0,
                             S->t_hookd2h, S->t_hooksample);
             }
+            stage2_log::print(stage2_log::debug,
+                "s4_chunk_plan: workspace_budget=%d calls=%llu changed_calls=%llu chunks=%llu legacy_chunks=%llu "
+                "request_peak_bytes=%llu owned_subset_observed_peak_bytes=%llu single_over_budget_calls=%llu "
+                "process_peak_complete=0\n",(int)(fuse_env_ull("NTT_S4_WORKSPACE_BUDGET",0)!=0),
+                s4.chunk_plan_calls,s4.chunk_plan_changed,s4.chunk_plan_chunks,s4.chunk_plan_legacy_chunks,
+                s4.chunk_plan_request_peak,s4.chunk_plan_subset_peak,s4.chunk_plan_over_budget);
             stage2_log::print(stage2_log::phases, "s4_multiply_stats: enabled=1 launches=%llu poly_muls=%llu "
                         "coeffs_reduced=%llu t_reduce=%.3f t_reduce_host=%.3f ring_waits=%llu "
                         "gmp_selftest_cases=%llu "

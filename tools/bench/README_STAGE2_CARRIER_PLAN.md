@@ -174,3 +174,37 @@ python tools/bench/analyze_stage2_carrier_bench.py --input data/d_plan_timing/me
 分别完成每个D的独立正确性检查。不同D的baby集合不同，不能要求叶子摘要相等，
 也不要求跨D乘法计数相同；每个固定D内部的工作与强制检查覆盖必须一致。
 允许并记录实际驻留回退；需要全部驻留时显式增加`--require-resident`。
+
+## 物理工作区分块实验
+
+`NTT_S4_WORKSPACE_BUDGET=1`将S4分块的NTT请求预算从固定三缓冲改为分配器的
+实际两/三缓冲数量，并计入每slice两个carry诊断字。默认0，保持原分块序列。
+它不改变`batch_mb`为全进程显存限制；NTT表缓存、保留容量、S4归约输出、raw、
+坐标与owner仍分别占显存。一块也超预算时仍执行一块，日志明确记录。
+pool关闭、无arena时按三个缓冲；pool申请失败仍保留三缓冲每调用回退，
+`request_peak_bytes`是请求策略的名义量，不代表失败回退的实际瞬时分配量。
+
+```powershell
+python tools/bench/bench_stage2_carrier.py --comparison chunk --exe build_cuda_cmake/workspace_chunk_stage2/ecm_cuda_stage2.exe --save <stage1.save> --carrier-exponent 8011 --b2 2600000000000 --d 1381380 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --mode check --projection-only --output data/chunk_check
+python tools/bench/bench_stage2_carrier.py --comparison chunk --exe build_cuda_cmake/workspace_chunk_stage2/ecm_cuda_stage2.exe --save <stage1.save> --carrier-exponent 8011 --b2 2600000000000 --d 1381380 --fold-mb 1024 --baby-mb 640 --trim-phase-raw --mode timing --telemetry --output data/chunk_timing
+python tools/bench/analyze_stage2_carrier_bench.py --input data/chunk_timing/measurements.json --output docs/benchmarks/chunk_analysis.json --figure-prefix docs/figures/chunk_analysis
+python tools/test/test_stage2_chunk_budget.py --exe <ecm_cuda_stage2.exe> --reference-check <completed_m37_chunk_check/measurements.json> --output data/chunk_controls
+```
+
+- `chunk`两臂均启用B/Q复用，同D、同carrier、同预算；仅分块开关变化。
+- 两臂数学工作量`poly_muls/coeffs_reduced`和selftest覆盖必须相同；归约launch、
+  GMP抽样数因每调用抽样规则可能变化，各臂内部必须稳定，原始计数分别保留。
+  不关闭强制检查来制造加速；check另对全部目标叶子做投影对照。
+- `s4_chunk_plan.chunks`是外层分块的NTT子调用数；采集器另对各形状
+  `s4_reduce_stats.launches`求和得到`reduce_hook_calls`，记录真实归约hook调用数。
+  `s4_multiply_stats.launches`与`real_batched_breakdown.ntt_launches`都是父批次
+  调用数，不是kernel数；内部grid-y切分可能令hook数多于外层分块数。
+- `owned_subset_observed_peak_bytes`是在每个完成的NTT调用边界，读取实际保留的
+  arena（含fuse base）和S4 raw/pack/output容量所得的同时存活子集峰值；不是模块
+  峰值求和。它不覆盖临时每调用分配、reduction常量/oracle、点/树/owner等；
+  `process_peak_complete=0`，不可作为总进程峰值或显存可行性保证。
+- 门禁使用同构建M37的独立CPU叶子oracle；强制单slice分块，覆盖pool关闭、
+  三缓冲、arena拒绝以及延迟carry污染。污染必须在发布结果前报错退出。
+- `--workspace-fixture`额外运行580例分块整数计算检查，覆盖非二次幂batch、
+  两/三缓冲、预算阈值、单块超预算、非法缓冲数和整数溢出。
+- 新策略不使用旧Auto B2成本profile；Auto B2拒绝该开关，直到重新标定。
