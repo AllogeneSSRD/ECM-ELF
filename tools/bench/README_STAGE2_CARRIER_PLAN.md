@@ -431,10 +431,12 @@ python tools/test/test_stage2_workspace_plan.py --exe <exe> --save <save> --carr
 
 ## Giant组件生命周期规划
 
-production `--plan-only`新增`giant_memory.version=1`：`initial_bytes`、
+production `--plan-only`当前为`giant_memory.version=2`：`initial_bytes`、
 `after_giant_bytes`、`accumulation_bytes`、组件`peak_bytes`与最多两个chunk状态。
 `repeat`压缩满chunk；尾块独立计算chain/ladder、seed容量和驻留预算。
-`coordinate_bytes`是逻辑X/Z规模，ladder借用工作区时不另加owner；
+另提供`value_bytes/product_bytes`和`policy.compact_products/accumulation_block`。
+两缓冲独立保留容量；产品默认按ceil(P/64)且在消费前申请，环境变量
+`NTT_S3_COMPACT_PRODUCTS=0`使用旧P容量。`coordinate_bytes`是逻辑X/Z规模，ladder借用工作区时不另加owner；
 `prepare_bytes/tree_bytes`是该组件对应阶段的同时存活量。
 它不含NTT、S4、fold/frontier或物理free检查，`process_peak_complete/admission_model`
 固定false，不能将其peak与其他模块peak相加，也不改变D或Auto B2准入。
@@ -462,4 +464,40 @@ python tools/test/test_stage2_giant_memory_plan.py --exe <exe> --save <save> --c
 覆盖floor、chain→ladder尾块、forced ladder、驻留预算回退、超大B2及诊断不支持；
 同时确认生产入口仍拒绝旧seed、关闭small-prime复用和短chain实验切换。
 40组既有`test_stage2_workspace_plan.py`也独立验证该组件公式。
-本阶段未运行GPU算术门禁、物理OOM或正式计时；这些计划查询不能代替完整运行验证。
+这些计划查询不能代替完整运行验证；第23节初版未跑GPU算术，第24节产品优化
+另执行以下GPU/GMP/内存安全门禁。没有测试物理OOM。
+
+## 累积乘积缓冲同二进制A/B
+
+`--comparison products`比较`legacy_products/compact_products`；两臂共用固定D、
+目标save和预算，均启用已验证的BQ复用、输出回收和cold trim。可用
+`--trim-phase-raw`保持此前raw回收条件。check模式自动启用45项独立GMP产品fixture，
+`--projection-only`关闭额外逐点诊断但保留完整目标叶子摘要；还比较因子集合及
+两臂算术覆盖，包括非单位输入。`--memory-ledger`核对after_block_products差值
+`8*w*(P-ceil(P/64))`；下降边界在frontier回退时差`8*P*w`，驻留时差0。
+`--frontier-alloc-fail`仅check模式且不能require-resident，触发现有metadata申请
+fixture回退，不制造物理OOM。正式timing不要附带memory-ledger/fixture/projection。
+
+```powershell
+python tools/bench/bench_stage2_carrier.py --exe <exe> --save <save> --carrier-exponent 8011 --comparison products --b2 2600000000000 --d 1381380 --device 1 --fold-mb 1024 --baby-mb 640 --mode check --projection-only --memory-ledger --require-resident --trim-phase-raw --output data/products_check
+python tools/bench/bench_stage2_carrier.py --exe <exe> --save <save> --carrier-exponent 8011 --comparison products --b2 2600000000000 --d 1381380 --device 1 --fold-mb 1024 --baby-mb 640 --mode timing --require-resident --trim-phase-raw --telemetry --output data/products_timing
+```
+
+timing保留两次warmup及ABBA/BAAB八次正式曲线、只读2 s采样；不修改功耗/频率。
+完整GPU门禁覆盖五种carrier、generic8193、63/64/65及G1、frontier回退，输出需新建：
+
+```powershell
+python tools/test/test_stage2_compact_products.py --exe <exe> --fixtures <prepare_stage2_carrier_inputs.py生成的fixtures.json> --device 1 --sanitizer <compute-sanitizer.exe> --output data/products_gates
+```
+
+合计22次两臂曲线+1次memcheck；另一次仅主机端故意错误答案需被GMP拒绝。
+Windows下memcheck子进程使用
+`NV_COMPUTE_SANITIZER_LOCAL_CONNECTION_OVERRIDE=named-pipes`。NVIDIA文档提供该
+本地通信方式：[Compute Sanitizer环境变量](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#environment-variables)。
+默认TCP方式会在目标exe中监听49152，可按Stage2程序名触发防火墙弹窗；新构建
+路径会再次弹窗。本机短曲线对照中，普通启动未观察到socket，默认sanitizer监听
+0.0.0.0:49152，named-pipes无TCP/UDP socket且memcheck通过。正式Stage2不运行
+sanitizer；不要把这个开发门禁弹窗视为生产程序需要网络。脚本不修改防火墙规则。
+checks.json、各子matrix、源码/build/save/tool SHA及所有日志保留，失败不覆盖。
+M8011/P126720/w126实际产品少119.913025 MiB，但完整owned峰仍在giant阶段；
+不把阶段容量收益称为全流程峰值下降、少传输或少MAC。参见报告第24节。

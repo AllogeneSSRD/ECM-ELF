@@ -614,6 +614,8 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     require("NTT_OWNER_TRIM_FUSE",0,0); // Phase cache eviction needs a calibrated lifecycle/cost scope.
     require("NTT_MEMORY_LEDGER",0,0); // Allocation instrumentation is outside production timing profiles.
     require("NTT_REQUEST_AUDIT",0,0); // Request topology instrumentation is outside timing profiles.
+    require("NTT_S3_COMPACT_PRODUCTS",1,1); // Independent product capacity is the production default.
+    require("NTT_S3_PRODUCTS_TEST",0,0);require("NTT_S3_PRODUCTS_TEST_BAD",0,0);
     require("NTT_GIANT_CHUNK_FLOOR",0,0);require("NTT_GIANT_POINT_BUDGET_KB",262144,262144);
     require("NTT_S4_WORKSPACE_BUDGET",0,0); // Chunk policy needs a matching cost scope.
     require("NTT_S4_FLAT_DIRECT",1,1);require("NTT_GROOT_COMPACT_RAW",1,1);

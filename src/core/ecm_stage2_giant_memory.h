@@ -6,20 +6,21 @@
 // free-memory admission, driver overhead or optional diagnostic workspaces.
 namespace ecm_stage2 {
 inline Word ceil_ratio(Word n,Word d) {return n/d+(n%d!=0);}
-inline bool giant_workspace_bytes(Word w,Word points,Word values,Word segfix,
+inline bool giant_workspace_bytes(Word w,Word points,Word values,Word products,Word segfix,
                                   bool base,Word &bytes) {
     Word a=0,b=0,c=0,total=0;
     return w && multiply(5,w,total) && multiply(points,w,a) && multiply(a,2,a) &&
-        add(a,points,a) && add(total,a,total) && multiply(values,w,b) &&
-        multiply(b,2,b) && add(total,b,total) &&
+        add(a,points,a) && add(total,a,total) && add(values,products,b) &&
+        multiply(b,w,b) && add(total,b,total) &&
         (!segfix || (add(segfix,1,c) && multiply(c,w,c) && add(total,c,total))) &&
         (!base || (multiply(w,2,c) && add(total,c,total))) && multiply(total,8,bytes);
 }
 struct GiantMemoryPolicy {
     Word chain_block=64,short_block=0,short_max=8192,chain_min=32768;
-    Word segment=16,group=64,resident_limit_bytes=512ull<<20,initial_points=0;
+    Word segment=16,group=64,resident_limit_bytes=512ull<<20,initial_points=0,accumulation_block=64;
     bool force_ladder=false,seed_device=true,seed_pair=true;
     bool exact_segments=true,resident_requested=true,resident_eligible=true;
+    bool compact_products=true;
 };
 struct GiantMemoryChunk {
     Word repeat=1,points=0,block=0,seeds=0,segments=0,groups=0;
@@ -33,6 +34,7 @@ struct GiantMemoryPlan {
     GiantMemoryPolicy policy;
     Word p=0,giant_points=0,words=0,chunk_points=0,point_chunks=0;
     Word initial_bytes=0,after_giant_bytes=0,accumulation_bytes=0,peak_bytes=0;
+    Word value_bytes=0,product_bytes=0;
     Word final_point_capacity=0;
     std::vector<GiantMemoryChunk> chunks;
 };
@@ -44,9 +46,9 @@ inline bool giant_memory_plan(Word p,Word points,Word w,Word chunk_points,
     plan=GiantMemoryPlan{};plan.policy=policy;plan.p=p;plan.giant_points=points;
     plan.words=w;plan.chunk_points=chunk_points;
     if(!p || !points || !w || w>max_words || !chunk_points || chunk_points%p ||
-       !policy.chain_block || !policy.segment || !policy.group)return false;
+       !policy.chain_block || !policy.segment || !policy.group || !policy.accumulation_block)return false;
     Word capacity=policy.initial_points,segfix=0;bool base=false;
-    if(!giant_workspace_bytes(w,capacity,0,0,false,plan.initial_bytes))return false;
+    if(!giant_workspace_bytes(w,capacity,0,0,0,false,plan.initial_bytes))return false;
     plan.peak_bytes=plan.initial_bytes;
     auto chunk=[&](Word n,Word repeat) {
         GiantMemoryChunk c;c.points=n;c.repeat=repeat;
@@ -76,7 +78,7 @@ inline bool giant_memory_plan(Word p,Word points,Word w,Word chunk_points,
             if(!multiply(chains,4,v) || !add(v,2,v) ||
                !multiply(v,w,v) || !multiply(v,8,c.legacy_seed_bytes))return false;
         }
-        if(!giant_workspace_bytes(w,capacity,0,segfix,base,c.workspace_bytes))return false;
+        if(!giant_workspace_bytes(w,capacity,0,0,segfix,base,c.workspace_bytes))return false;
         // During chain production legacy seeds overlap X/Z and segment outputs;
         // they are released BEFORE resident inversion groups are allocated.
         c.prepare_bytes=c.workspace_bytes;
@@ -95,8 +97,11 @@ inline bool giant_memory_plan(Word p,Word points,Word w,Word chunk_points,
         plan.reason="payload_overflow";return false;
     }
     plan.point_chunks=full+(tail!=0);plan.final_point_capacity=capacity;
-    if(!giant_workspace_bytes(w,capacity,0,segfix,base,plan.after_giant_bytes) ||
-       !giant_workspace_bytes(w,capacity,p,segfix,base,plan.accumulation_bytes)) {
+    const Word products=policy.compact_products?ceil_ratio(p,policy.accumulation_block):p;
+    if(!giant_workspace_bytes(w,capacity,0,0,segfix,base,plan.after_giant_bytes) ||
+       !giant_workspace_bytes(w,capacity,p,products,segfix,base,plan.accumulation_bytes) ||
+       !multiply(p,w,plan.value_bytes) || !multiply(plan.value_bytes,8,plan.value_bytes) ||
+       !multiply(products,w,plan.product_bytes) || !multiply(plan.product_bytes,8,plan.product_bytes)) {
         plan.reason="payload_overflow";return false;
     }
     plan.peak_bytes=std::max(plan.peak_bytes,plan.accumulation_bytes);

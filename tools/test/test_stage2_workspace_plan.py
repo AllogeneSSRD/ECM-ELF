@@ -19,7 +19,7 @@ from calibrate_stage2_d import phi
 def verify_giant_memory(plan):
     """Independent component formula; do not add its peak to the NTT peak."""
     m = plan['giant_memory']
-    if m['version'] != 1 or m['process_peak_complete'] or m['admission_model']:
+    if m['version'] != 2 or m['process_peak_complete'] or m['admission_model']:
         raise ValueError('wrong giant component scope')
     if not m['valid']:
         if m['reason'] not in ('diagnostic_workspace_not_modeled','small_prime_interval_not_modeled'):
@@ -30,8 +30,8 @@ def verify_giant_memory(plan):
     q, cap, segfix, base = m['chunk_points'], v['initial_points'], 0, False
     if not q or q % p or m['point_chunks'] != (n+q-1)//q:
         raise ValueError('wrong giant chunk geometry')
-    def workspace(values=0):
-        return 8*(5*w+cap*(1+2*w)+2*values*w+((segfix+1)*w if segfix else 0)+(2*w if base else 0))
+    def workspace(values=0,products=0):
+        return 8*(5*w+cap*(1+2*w)+(values+products)*w+((segfix+1)*w if segfix else 0)+(2*w if base else 0))
     if workspace() != m['initial_bytes']:
         raise ValueError('wrong initial giant workspace')
     peak, count, points = workspace(), 0, 0
@@ -63,7 +63,10 @@ def verify_giant_memory(plan):
         peak = max(peak,prepare,tree)
         count += c['repeat']
         points += x*c['repeat']
-    if count != m['point_chunks'] or points != n or len(m['chunks'])>2 or workspace()!=m['after_giant_bytes'] or workspace(p)!=m['accumulation_bytes'] or cap!=m['final_point_capacity'] or max(peak,workspace(p))!=m['peak_bytes']:
+    products = (p+v['accumulation_block']-1)//v['accumulation_block'] if v['compact_products'] else p
+    if m['value_bytes']!=8*p*w or m['product_bytes']!=8*products*w:
+        raise ValueError('wrong separate value/product payload')
+    if count != m['point_chunks'] or points != n or len(m['chunks'])>2 or workspace()!=m['after_giant_bytes'] or workspace(p,products)!=m['accumulation_bytes'] or cap!=m['final_point_capacity'] or max(peak,workspace(p,products))!=m['peak_bytes']:
         raise ValueError('wrong retained giant capacity or compressed chunk sequence')
 
 

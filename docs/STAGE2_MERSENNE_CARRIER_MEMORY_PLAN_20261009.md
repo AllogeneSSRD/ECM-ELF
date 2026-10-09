@@ -1,7 +1,7 @@
 # GPU ECM Stage2：梅森承载余因子与 D/P、显存联合规划
 
 日期：2026-10-09。源码基线：`3bc9d7f`（Stage2 Benchmark）。
-第1–9节是研究快照；代码链接行号已同步至第23节实现的工作树。
+第1–9节是研究快照；代码链接行号已同步至第24节实现的工作树。
 
 **阶段进展**：已实现默认关闭的`--carrier-exponent`。7995-bit目标、B2=2.6e12、
 固定D的同二进制交错计时从165.18降至113.17 s，减少31.49%；完整叶子摘要与
@@ -29,6 +29,8 @@ CPU分配器核对及无曲线规划查询通过。非NTT生命周期和真实fr
 第23节接入giant组件生命周期，覆盖保留seed工作区、chain/ladder尾块、segment/group
 与最终累积缓冲，并修正S3扩容统计。已核对历史同时存活分配台账；尚未与NTT、
 S4、owner边界合成完整MemoryPlan，不新增运行加速结论。
+第24节实现按块数、延迟申请累积乘积缓冲，默认启用；GMP、完整叶子和内存安全
+门禁通过。容量收益与完整流程峰值分别核对，未将其作为D/Auto B2完整准入。
 用户已恢复4060lp默认1800 MHz/55 W，后续计时以此为新基线；历史约79 W、
 2385 MHz的计时保留原条件，不能混合作为新基线。
 
@@ -147,10 +149,10 @@ G/H在 M 中与通用 N 路径逐字一致。
 
 代码依据：
 
-- [射影G叶与尺度关系](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7511)。
+- [射影G叶与尺度关系](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7565)。
 - [多项式逆常数项处理](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:4751)、
   [另一逆实现入口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6153)。
-- [Γ逆的最终处理](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7881)。
+- [Γ逆的最终处理](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7935)。
 
 ### 3.3 Prime95 与 GMP-ECM 已怎样处理
 
@@ -192,7 +194,7 @@ GMP-ECM提供更直接的工程参考：
 
 - [PolyLayer](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1340) 只有一个 `N`，
   同时代表运算模数和待分解整数。
-- [run_real初始化](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8363) 直接用输入N
+- [run_real初始化](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8424) 直接用输入N
   决定S/W和所有后续算术。
 - [运行/规划API](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2.h:14)
   未传入原梅森指数或承载信息。
@@ -275,17 +277,17 @@ fold owner / MiB     519.1107             523.2636
 
 ### 5.1 普通固定 B2 路径的校准模型没有启用
 
-[cache_rates_valid=false](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8435)
-以及后面的[calibrated=false](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8466)
+[cache_rates_valid=false](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8496)
+以及后面的[calibrated=false](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8527)
 使冻结阶段速率在当前策略下失效。这是代码明确保留的保护，不能简单去掉条件
 就恢复为“已校准”。
 
 实际使用的
-[legacy_56_1模型](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8487)
+[legacy_56_1模型](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8548)
 按旧参考点估算 `I log P`、P、I和批次数，不反映当前位宽的归约差异及离散NTT跳变。
 
 其owner/baby驻留筛选放在 `if(calibrated)` 分支，见
-[模型分支](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8514)；
+[模型分支](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8575)；
 因此普通路径可能选到运行时退回非驻留fold的候选。运行时仍有owner预算检查，
 见[FoldDeviceState::init](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5313)。
 
@@ -348,7 +350,7 @@ P77760时，名义38881系数的NTT为 `2^26`，真实65537系数子树可为 `2
 见[G树构造](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:4422)。
 
 巨点坐标目标预算硬编码256 MiB，随后**向上**取整到P的整数倍：
-[chunk计算](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7353)。
+[chunk计算](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7407)。
 P77760、W126的chunk含155520点，X/Z共299.00 MiB；256 MiB在这里不是硬上限。
 新规划应显式枚举chunk，或者改成以整棵G树为单位向下取整的有界策略，并评估
 增多的seed/chain初始化成本。
@@ -399,9 +401,9 @@ V_concurrent_lower = 24L + V_owner + V_rawG + V_coords
 该式适用于本次 `I>P` 的重复G树分析。raw G两个容量来自
 [rawA/rawB申请](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:4437)；
 它们由S4状态保留。owner在
-[巨点循环之前](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7346) 申请，
+[巨点循环之前](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7400) 申请，
 坐标由
-[ResidentGiant](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6709) 保有并跨多个G树使用。
+[ResidentGiant](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6725) 保有并跨多个G树使用。
 
 尚未计入：NTT tables/fuse base/small、S4设备输出、seed、segment products、
 索引、oracle相关缓冲等。因此**下界超预算可排除当前布局；下界通过不能证明可行。**
@@ -470,17 +472,17 @@ Montgomery radix/domain constants for carrier_M
 
 最主要的修改落点：
 
-- [模数与bit/word初始化](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8363)。
-- [Montgomery常数](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8781)、
-  [曲线构造](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8803)。
-- [saved X检查](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8815)、
+- [模数与bit/word初始化](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8424)。
+- [Montgomery常数](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8843)、
+  [曲线构造](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8865)。
+- [saved X检查](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8877)、
   [存档checksum](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:136)。
-- [baby批逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9097)、
-  [giant设备分组逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6738)。
-- [giant segment逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7582)、
-  [备用segment/仿射路径](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7621)。
-- [最终block GCD](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8122)、
-  [叶子因子检查](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8208)。
+- [baby批逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9160)、
+  [giant设备分组逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6754)。
+- [giant segment逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7636)、
+  [备用segment/仿射路径](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7675)。
+- [最终block GCD](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8183)、
+  [叶子因子检查](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8269)。
 
 形如 `2^-k`、Montgomery解码、F的常数1求逆属于算术表示，不能把所有
 `mpz_invert(...,L.N)` 机械替换成target_N。
@@ -514,7 +516,7 @@ giant chunk、G树布局、scaled frontier与缓存策略
 
 生命周期至少覆盖：baby生成、F树、inverse、G树/fold循环、fold到frontier交接、
 下降和GCD。尤其
-[fold/frontier交接](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7799)
+[fold/frontier交接](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7853)
 可能继续借用owner，不能在进入descent时一律假设owner已释放。
 
 候选筛选先满足强制工作集，再决定可保留哪些表和缓存。最终仍以运行时申请和
@@ -668,19 +670,19 @@ python tools/bench/plot_stage2_carrier_plan.py --input data/stage2_carrier_resea
 - [公开API](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2.h:14)
   为run/plan增加可省略的承载参数；[命令行解析](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:258)
   与子进程传参同步支持。非零p进入队列进度身份，避免混用不同算术计划。
-- [run_real初始化](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8357)
+- [run_real初始化](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8418)
   以承载M决定S/W、Montgomery常数、NTT打包、S4归约与显存形状。曲线a24在
-  [目标N中构造](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8803)，再编码到M域。
+  [目标N中构造](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8865)，再编码到M域。
 - baby的分组根求逆、host回退与零判断针对N；[GPU baby校验](D:/code/MPA-OpenCl/src/cuda/stage2/stage2_baby_host.cuh:115)
   把设备叶子投影到N后比较，不要求其原始M代表元等于N代表元。
-- [巨点base单位判定](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6787)、
-  [驻留Gamma分组求逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6738)、
+- [巨点base单位判定](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6803)、
+  [驻留Gamma分组求逆](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6754)、
   segment逆、非单位回退和最终block/leaf/candidate GCD均针对N。
   Γ乘积和多项式运算继续在M中计算；Γ逆只需在N中正确。
-- [最终GCD](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8122)
+- [最终GCD](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8183)
   不会重新报告已剥离的M/N因子。NTT、S4、Montgomery内核的独立算术oracle
   仍比较**承载域M**中的精确算术，没有改为仅比较N来放宽内核检查。
-- [目标叶子摘要](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8010)
+- [目标叶子摘要](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8064)
   由`NTT_TARGET_LEAF_HASH=1`开启，按N的limb数输出完整投影序列的64-bit摘要
   （xor/multiply，沿用起始值1469598103934665603、乘数1099511628211）。
   它用于跨后端对照，并不替代独立算术检查或CPU oracle。
@@ -1091,8 +1093,8 @@ B/Q启用时返回2，其余返回3。NttArena继承该策略；原生形状查�
 
 - [共享Geometry](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:176)接受2或3个物理
   缓冲，默认3兼容旧调用。其arena估计仍是原有保守求和，不等于进程峰值。
-- [real_shape_words/real_run_geometry](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8319)
-  与分配器共用数量；[计划JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9607)
+- [real_shape_words/real_run_geometry](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8380)
+  与分配器共用数量；[计划JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9670)
   明示布局，便于计划和实际日志核对。
 - [fold headroom](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:5318)及
   [frontier headroom](D:/code/MPA-OpenCl/src/cuda/stage2/scaled_frontier.cuh:27)
@@ -1137,10 +1139,10 @@ D1381380在fold前仅1658847232 B可用，扣894143424 B owner也不足1 GiB。
 
 新增实验环境开关`NTT_PHASE_TRIM_RAW=1`，默认0，与B/Q独立：
 
-1. [inverse→fold](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7335)：Newton输入已用完，
+1. [inverse→fold](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7389)：Newton输入已用完，
    F/finv已保存在host向量；在申请fold owner前释放raw A/B。下一棵G树根据自己的
    raw形状重新申请，旧Newton容量不再永久保留。
-2. [fold→descent](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7818)：仅当设备owner和
+2. [fold→descent](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7872)：仅当设备owner和
    Gamma校正可供scaled root使用时释放G树raw A/B；最终H、F和finv均由独立owner
    持有。驻留下降的gather读取owner，不依赖这些raw输入。
 
@@ -1400,7 +1402,7 @@ slice而超过它，仍需要arena预算及设备headroom的另行约束。
 [poly_mul_batch_modN](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:3533)，
 不改变NTT精确性、S4模归约、carry分组、oracle和非单位回退算法。
 Auto B2在
-[成本scope守卫](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:618)
+[成本scope守卫](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:620)
 拒绝新分块策略，避免套用旧计时profile。
 
 ### 15.2 观测口径
@@ -1589,8 +1591,8 @@ ledger。应在释放点读取实际`d_out_cap`，确认host finv和异步oracle
 
 [S4Ctx::output_release](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:1315)
 执行同步`cudaFree`，随后将指针和容量清零；后续hook按实际新请求重新申请。
-[Newton之后的释放点](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7335)与
-[下降之前的释放点](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7818)
+[Newton之后的释放点](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7389)与
+[下降之前的释放点](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7872)
 继续遵守原有raw/owner lifetime边界。
 
 异步GMP oracle在
@@ -1766,10 +1768,10 @@ python tools/bench/analyze_stage2_carrier_bench.py --input data/stage2_output_tr
 源码：[树顶及group枚举](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:82)、
 [树容量模型](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:112)、
 [几何准入](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:183)、
-[计划调用](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8655)、
+[计划调用](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8716)、
 [阶段记录](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:3555)、
-[阶段输出](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9524)、
-[计划JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9610)。
+[阶段输出](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9587)、
+[计划JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9673)。
 普通D选择与Auto B2共用geometry，因而都获得正确的树尺寸；未改算术内核、缓存
 分配器、驻留阈值、代价系数或实验开关默认。原生JSON新增`geometry_version=3`；
 `accounting_version=2`仍表示实际arena分配记账版本，两者不是同一字段。
@@ -1927,7 +1929,7 @@ NTT_tree_retained = pooled max big（或keyed big合计）
 该合同包含单树完整NTT模块保留容量，尚未包含之前阶段遗留缓存、raw/点/owner
 或每调用回退。配置不在scope时`supported=false`；它不是完整进程MemoryPlan。
 源码：[cache计划](D:/code/MPA-OpenCl/src/core/ecm_stage2_geometry.h:152)、
-[调用同一描述器](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8660)。
+[调用同一描述器](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8721)。
 
 D1531530、carrier8011、batch256、两缓冲pool/原分块的F树精确计划与两条真实
 运行一致，NTT无eviction或每调用分配：
@@ -2097,7 +2099,7 @@ context、module加载、驱动分配粒度、其它进程与pinned host不在�
 源码：[统一拦截入口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:60)、
 [台账与分配登记](D:/code/MPA-OpenCl/src/cuda/stage2/device_memory_ledger.cuh:21)、
 [快照](D:/code/MPA-OpenCl/src/cuda/stage2/device_memory_ledger.cuh:79)、
-[会话生命周期](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8361)。
+[会话生命周期](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8422)。
 checkpoint覆盖baby前、F树前/后、inverse后、fold准入后、giant循环后、frontier准入
 后、下降后及全部曲线局部owner销毁后的final；frontier未尝试时没有该checkpoint。
 `stage2_memory_ledger`摘要与`stage2_memory_site`组成只走debug通道，常规控制台不变。
@@ -2150,7 +2152,7 @@ D153控制544次申请/544次释放；候选588/588；unknown free=0，最终0 B
 D138和D153驻留候选同为4096 MiB共享大池，但D138的完整owned峰反而高95.143 MiB。
 逐分配site给出原因：giant坐标分别487.265625/265.78125 MiB，fold owner分别
 852.721619/930.241150 MiB，raw/output与seed还同时变化。
-坐标来自[ox/oz申请](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6875)。
+坐标来自[ox/oz申请](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6891)。
 本节测量使用的legacy point chunk规则为整批向上取整；当前可切换实现见第20节：
 
 ```text
@@ -2224,7 +2226,7 @@ Newton、整/残G树、fold、下降的shape/容量/淘汰序列和这些非NTT�
 `NTT_GIANT_POINT_BUDGET_KB`（默认262144 KiB=256 MiB），固定D/P，按完整G树批次
 选择坐标chunk。所有算术内核、chain64/阈值32768、G树批次和驻留准入保持原合同。
 [纯整数计划函数](D:/code/MPA-OpenCl/src/cuda/stage2/giant_chunk_plan.cuh:14)、
-[执行入口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7352)。
+[执行入口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7406)。
 
 ```text
 C = 1024 * NTT_GIANT_POINT_BUDGET_KB
@@ -2244,7 +2246,7 @@ minimum_over_budget   = [16*w*P > C]
 
 原生debug记录`giant_chunk_plan`的预算/P/nw/Q/最低超限/预计chunk数，
 `giant_chunk_done`记录实际chunk数和chain/ladder分支。常规控制台不新增日志。
-[Auto B2 scope](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:617)拒绝未标定
+[Auto B2 scope](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:619)拒绝未标定
 的floor和非默认点预算；尚未加入INI/发布默认或替换`legacy_additive`全流程准入。
 
 ### 20.2 完整同时存活峰：实际减少259.01 MiB
@@ -2278,9 +2280,9 @@ group products                        124992 B  (  0.1192017 MiB)
 sum                                271590912 B
 ```
 
-[坐标与segment申请](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6875)、
-[seed缓冲](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6586)、
-[group准备](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6715)。最大完整chunk n时，
+[坐标与segment申请](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6891)、
+[seed缓冲](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6589)、
+[group准备](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6731)。最大完整chunk n时，
 原始容量公式（另计已有workspace的历史最大保留量）：
 
 ```text
@@ -2480,7 +2482,7 @@ pool关闭时，`B_big=sum_keys 24Ns`，不是共享最大值。S4的请求输�
 
 生产入口的`--plan-only`新增`request_program.version=1`、compressed blocks、
 各阶段group/pair/chunk及大池/输出请求峰、NTT保留组成、顺序签名；
-见[plan JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9637)。
+见[plan JSON](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9700)。
 始终标记`process_peak_complete=false,admission_model=false`。
 
 ### 21.3 原生核对结果与规划启示
@@ -2632,8 +2634,8 @@ slices。对每个内部批次`m`，只有`Nm>=2^20`才请求
 还没有全部进入预测式模型。不能假设逻辑释放bytes等于驱动返回的free增量。
 
 `--plan-only`新增`ntt_memory.version=1`，见
-[接入](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8682)和
-[JSON输出](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9677)。
+[接入](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8743)和
+[JSON输出](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:9740)。
 
 - `valid`：成功完成这一条件模型的计算；**预算拒绝前缀也可以valid**。
 - `finished`：模型走完全部请求，未遇到上述cap拒绝。不是完整Stage2能驻留。
@@ -2721,9 +2723,11 @@ reserve准入。还需补齐短余式、G1、回退路径及额外自检合同�
 
 ## 23. Giant组件生命周期：保留容量、尾块路由与S3统计修正
 
+本节保留version=1实现快照；当前产品容量与默认策略见第24节version=2。
+
 本阶段沿用第19–22节联合规划方向，继续处理非NTT分配。新增
-[纯整数组件模型](D:/code/MPA-OpenCl/src/core/ecm_stage2_giant_memory.h:42)，
-由[生产plan-only入口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8695)读取实际策略，
+[纯整数组件模型](D:/code/MPA-OpenCl/src/core/ecm_stage2_giant_memory.h:44)，
+由[生产plan-only入口](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8756)读取实际策略，
 输出`giant_memory.version=1`。正常曲线不执行此模拟；没有修改算术内核、D排序、
 Auto B2或发布默认。完整MemoryPlan仍未完成。
 
@@ -2752,9 +2756,9 @@ segment大小`s=16`，inversion group大小`g=64`。所有公式为owned payload
 
 最终累积调用`need_vals(P)`，当前仍同时保留`dvals/dprod`各`8*P*w`，因此
 `accumulation_bytes=W_s3+16*P*w`。这是明确的同组件阶段状态，不是全进程峰。
-相关原代码：[S3工作区](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6491)、
-[驻留group](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6691)、
-[chain](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6758)。
+相关原代码：[S3工作区](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6494)、
+[驻留group](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6707)、
+[chain](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6774)。
 
 满chunk重复时分配容量不变，所以只模拟一个满chunk和一个尾chunk，`repeat`记录次数，
 即使`B2=9e18`也只有至多两个组件状态。它是条件组件程序：若早期NTT失败，实际运行
@@ -2794,8 +2798,8 @@ D153/P=138240/Q=138240的giant组件峰296372456 B；同一组件模型也匹配
 `S3Workspace::need_pts/need_vals`原先释放旧缓冲后只向`bytes`加新尺寸，没有扣旧容量，
 导致多次增长后统计虚高。本轮在成功替换后扣除旧点/值容量；申请尺寸、释放顺序、
 保留策略和算术均未改变。
-[点扩容](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6578)、
-[值扩容](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6593)。
+[点扩容](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6581)、
+[值扩容](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6596)。
 
 验证证据保存在忽略目录`data/stage2_giant_memory_20261009/`：
 
@@ -2824,8 +2828,134 @@ snapshot SHA：`55e833b3182f0c71ee67372a47fdb4abb102aa7b3d5db18f1a512b5531312afa
 1. 把S4 raw/output、reducer shape/selftest暂存及G树metadata接入有序请求，再与本组件
    和NTT状态机合成同时存活状态；补fold/frontier申请、释放、cold trim和实际free准入。
 2. 独立验证`dprod`按块数分配：
-   [唯一生产消费者](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6978)只写/读`ceil(P/64)`个乘积，
+   [唯一生产消费者](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6994)只写/读`ceil(P/64)`个乘积，
    当前却分配P个。理论可省`8*w*(P-ceil(P/64))`，D138为119.913025 MiB，
    D153为130.814209 MiB；这是候选容量收益，尚未实现或实测时间收益。
 3. 完整模型通过G1、短余式、诊断/回退合同后，再统一普通D与Auto B2候选准入。
    新55 W基线需重新测全流程成本，包含Q、驻留、表重建和NTT长度拐点。
+
+## 24. 按块数分配乘积缓冲：容量与生命周期优化
+
+接续`d881c8a`。本轮落实第23.4节候选；设备乘积算法、叶子顺序、Montgomery
+表示与GCD流程不变，调整S3的`dprod`容量和申请时机。默认启用
+`NTT_S3_COMPACT_PRODUCTS=1`，环境变量设为0可在同一二进制保留旧申请策略。
+这是内部A/B开关，不新增INI键。全程保持GPU1当前默认设置，不写功耗/频率。
+
+### 24.1 唯一消费者与正确容量
+
+生产累积block固定64。[唯一消费者](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6996)
+先计算`nb=ceil(P/64)`，kernel只向`dprod[b*w+i]`写入，`b<nb,i<w`；主机读回
+也仅`nb*w`个64-bit word。旧`need_vals(P)`却同时申请`dvals/dprod`各P系数。
+
+约定`w=ceil(S_bits/64)`、`C=64`，不计CUDA上下文、驱动或申请粒度：
+
+- `dvals = 8*P*w`字节；必须保留完整叶子值，本轮不缩减。
+- 旧`dprod = 8*P*w`；新`dprod = 8*ceil(P/C)*w`。
+- 累积阶段减少`Δ=8*w*(P-ceil(P/C))`字节。P为64倍数时，dprod减少63/64，
+  但dvals+dprod合计只从`16*P*w`降至`8*P*w*(1+1/64)`。
+- MAC数、launch数、H2D叶子上传与D2H块乘积读回量不变。D2H仍为
+  `8*ceil(P/64)*w`，不能把少申请的字节称为少传输量或少计算量。
+
+[need_vals](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6596)只增长dvals；
+[need_products](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:6616)在消费前独立reserve。
+各缓冲保留各自历史最大容量，增长前释放旧申请。旧模式仍让need_vals同时分配
+两个P缓冲；其`bytes`扣除改为`val_cap+prod_cap`，避免独立扩容后再长值数组时
+漏扣产品容量。正常生产数组增长一次；此额外状态通过CPU扩容门禁覆盖。
+
+当scaled frontier启用，dvals在下降完成后申请，新旧after_descent台账相同。
+frontier回退到host路径时，旧need_vals已在下降前申请未使用的dprod；新模式在
+下降期间省下整个`8*P*w`，累积前再申请较小乘积缓冲。G1与正常分配回退均覆盖。
+[调试观测](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:8107)新增
+`after_block_products`台账边界及`s3_product_workspace`，正常控制台输出不增加。
+
+### 24.2 规划模型同步
+
+`--plan-only`的giant组件升级为`giant_memory.version=2`，新增
+`value_bytes/product_bytes`及`policy.compact_products/accumulation_block`。
+[组件模型](D:/code/MPA-OpenCl/src/core/ecm_stage2_giant_memory.h:100)分别计算两种
+保留容量；累积状态为`W_s3+value_bytes+product_bytes`。
+
+其他giant申请顺序、chain/ladder路由和seed保留容量沿用第23节。
+本模型仍不含S4、NTT、fold/frontier与物理free准入；
+`process_peak_complete=false,admission_model=false`保持。不能把组件peak与NTT
+peak相加，或凭最后一次积累阶段变小就放行更大的D。
+
+### 24.3 正确性与内存安全门禁
+
+最终生产构建`build_cuda_cmake/compact_products_v3_stage2/`；原始证据位于
+忽略目录`data/stage2_compact_products_20261009/`，不提交原始data。
+
+- `cpu_v3`：201958项检查0 bad、GPU调用0；直接提取当前S3源码，核对128种策略、
+  1/7/126/256 words、点/值/产品独立扩容与释放后统计；6份历史台账仍按旧产品
+  布局核对，冻结修复前源码的错误统计作为预期失败。
+- `ntt_regression`：原分配器681389项0 bad、独立dense topology70010项0 bad。
+- `plan_gate_v3`：40组native计划；`giant_plan_v3`：8个native响应（含1个
+  诊断不支持）与3个既有生产算法保护拒绝，曲线0。
+- [GPU门禁脚本](D:/code/MPA-OpenCl/tools/test/test_stage2_compact_products.py)：
+  11组、每组旧/新两臂，覆盖M37/M67/M29/M253/M16384承载、8193-bit通用模数、
+  P=63/64/65、G1以及frontier申请fixture回退。完整目标叶子摘要、因子集合、
+  GMP覆盖、launch/多项式数/归约系数数相同。非单位输入也比较两臂完整叶子；
+  不将其与不同projective scale的独立monic叶子向量强行比较。
+- [独立GMP产品fixture](D:/code/MPA-OpenCl/src/cuda/ecm_cuda_stage2.cu:7016)：
+  5种block×9种长度，共45项、981个块产品。包含0、N−1、非单位值、短尾块、
+  空输入。正确公式为`(∏x_i)*R^{-(k-1)} mod N`，R为Montgomery radix；
+  不是普通乘积。`NTT_S3_PRODUCTS_TEST=1`仅check启用，正常生产不执行。
+  fixture计时纳入`stage2_full_wall.fixture`并令`clean=0`；正式timing collector
+  要求`clean=1`且没有产品fixture。v1/v2诊断check仍保留，未纳入性能统计。
+- 另1条P65运行通过Compute Sanitizer memcheck，`ERROR SUMMARY: 0 errors`。
+  合计23条成功曲线。主机端故意篡改fixture答案的另1次调用被GMP门禁拒绝，
+  不修改设备数据或硬件设置，也不计作成功曲线。
+- 台账核对累积边界差值为Δ；下降边界仅frontier回退时省`8*P*w`。例如
+  G1/P65/w1分别省504/520 B，普通P65为504/0 B，frontier回退P24为184/192 B。
+
+最终完整GPU门禁为`gpu_gates_pipes_final`，Windows的memcheck子进程使用
+`NV_COMPUTE_SANITIZER_LOCAL_CONNECTION_OVERRIDE=named-pipes`。用户看到的防火墙
+规则确实对应v1/v2/v3测试构建；源码无主动网络接口。短曲线观测中，plain启动
+1个活跃PID样本未观察到socket，默认sanitizer的14个活跃样本明确监听
+`0.0.0.0:49152`并建立本地TCP连接；named-pipes的6个活跃样本未见TCP/UDP，
+GMP及memcheck仍通过。因此本轮弹窗归于检查工具的目标进程通信，不是Stage2
+算法联网要求。网络采样只能证明观测窗口，不能证明任意环境下永不出现socket。
+依据[NVIDIA官方通信配置](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html#environment-variables)，
+仅改变检查子进程环境，不改生产程序、全局环境或Windows防火墙规则。
+
+[Auto B2配置保护](D:/code/MPA-OpenCl/src/core/ecm_cuda_stage2_main.cpp:617)新增
+compact=1、fixture=0要求；旧profile仍由binary SHA变化拒绝，不能继承旧校准。
+当前addsub1构建的Auto B2先被既有未校准算术保护拒绝，尚不具备新的成本profile。
+这些保护只防止不匹配配置混入，不宣称完成新联合规划或Auto B2校准。
+
+最终v3构建45份编译源闭包，CUDA compile69.0 s、完整build85.4 s：
+
+```text
+binary SHA256   0080f535a3eda7ec267a8edb927d5c6c76c4893a948d472cbfea4ecc6dced42a
+build SHA256    55b2bf781b7b061f059cc89a786a11a848f93e416a5d963394551012cf901e5c
+snapshot SHA256 ca434f61e18b71fbaa51ef65669df0eb5cfdfa399260f0ba1db6c37690d2aa26
+```
+
+### 24.4 大规模容量与正式计时
+
+M8011/80111余因子为7995 bits，算术承载8011 bits、w=126，B1=20、sigma=26，
+B2=2.6e12、D=1381380、P=126720、I=1882177。各臂固定相同D、Q、batch和预算，
+启用既已验证的BQ复用、输出释放、cold trim、raw阶段释放，不启用floor giant预算。
+
+该组合dprod从127733760降为1995840 B，减少125737920 B（119.913025 MiB）；
+最终S3工作区从271523816降为145785896 B。全流程owned payload峰仍为
+6977513600 B，发生在giant阶段；本轮没有降低该组合的完整显存峰。
+D153/P138240的公式减少130.814209 MiB，未在本轮重新实测，勿当作第二档实测。
+
+`m8011_gate_final_v3`两臂完整台账、叶子、因子与算术覆盖均通过，累积减少字节
+准确等于上述公式，after_descent差0，owned峰均6977513600 B；check分别为
+95.593203/94.833449 s，含额外fixture/叶子投影/台账，**不作为正式加速证据**。
+较早`m8011_gate_v3`仅有pending且实际进程已不在，未计成功；保留后使用新目录
+完整重跑，没有覆盖失败或将遗留pending视为活跃任务。
+
+`m8011_timing`按预先固定的两次warmup+ABBA/BAAB八次正式曲线采集，
+仅有只读2 s GPU采样，关闭fixture、叶子投影、台账及请求插桩；正在运行。
+本次提交只确认容量与正确性收益，不宣称新的耗时改善；完整样本结束后沿本节
+补充均值、波动、阶段差异及实际采样功耗/频率，不与旧高功耗计时混合。
+
+### 24.5 后续工作
+
+继续联合MemoryPlan：S4 raw/output、reducer/selftest形状、G树metadata和fold/frontier
+分配释放顺序接入第21–23节program；同步实际cold trim和free/reserve准入。
+然后统一普通D与Auto B2候选，并在新的默认55 W基线上校准Q、驻留、表重建和
+NTT阶跃的完整流程成本。本轮块产品缓冲优化不会完成这些准入与成本工作。

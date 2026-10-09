@@ -38,14 +38,16 @@ def main():
             'chunk': ('legacy_chunk','workspace_chunk'),
             'phase-output': ('retained_output','trimmed_output'),
             'owner-cache': ('kept_cache','trimmed_cache'),
-            'giant-chunk': ('legacy_points','bounded_points')}[comparison]
+            'giant-chunk': ('legacy_points','bounded_points'),
+            'products': ('legacy_products','compact_products')}[comparison]
     arm_labels = {'carrier': ['Generic target N', 'Mersenne carrier M'],
                   'workspace-bq': ['Three buffers A/B/Q', 'Two buffers A/(B=Q)'],
                   'plan': [f'D={data["input"]["D"]}', f'D={data["input"].get("candidate_D", 0)}'],
                   'chunk': ['Legacy three-buffer estimate','Physical workspace estimate'],
                   'phase-output': ['Retained S4 output','Reclaimed S4 output'],
                   'owner-cache': ['Keep cached shapes','Reclaim cold shapes for owner'],
-                  'giant-chunk': ['Round points up to batches','Round points down to budget']}[comparison]
+                  'giant-chunk': ['Round points up to batches','Round points down to budget'],
+                  'products': ['P product slots','ceil(P/64) product slots']}[comparison]
     sequence = [keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1)]
     if [r['key'] for r in timed] != sequence:
         raise ValueError('formal ABBA+BAAB sequence changed')
@@ -77,6 +79,11 @@ def main():
             arm['point_plan']=rows[0]['point_plan'];arm['point_done']=rows[0]['point_done']
             arm['device_leaf']=rows[0]['device_leaf'];arm['giant_seed']=rows[0]['giant_seed']
             arm['coordinate_peak_mib']={k:v/(1<<20) for k,v in summarize(rows,'device_leaf','coord_peak_bytes').items()}
+        if comparison=='products':
+            arm['products']=rows[0]['products']
+            arm['coverage']=rows[0]['coverage']
+            for row in rows:
+                if row['wall']['clean']!='1':raise ValueError('product fixture included in formal samples')
         if comparison == 'phase-output':
             arm['phase_trim'] = rows[0]['phase_trim']
             arm['coverage'] = rows[0]['coverage']
@@ -164,7 +171,8 @@ def main():
                           'chunk': 'Chunk policy (same D, two-buffer pool and budgets)',
                           'phase-output': 'Phase output lifetime (same D and budgets)',
                           'owner-cache': 'Cold cache admission (same D and budgets)',
-                          'giant-chunk': 'Point chunk rounding (same D and budgets)'}[comparison])
+                          'giant-chunk': 'Point chunk rounding (same D and budgets)',
+                          'products': 'Block product capacity (same D and budgets)'}[comparison])
             ax.spines[['top', 'right']].set_visible(False)
         axes[0].set_ylabel('Mean complete Stage2 wall time (s)')
         axes[0].set_ylim(0, max(r['wall']['total']['mean'] for r in result['arms'].values())*1.17)

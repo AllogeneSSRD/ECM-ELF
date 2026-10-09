@@ -5025,3 +5025,40 @@ production v1 build85.6 s，binary SHA
 下一轮合并S4/owner/NTT生命周期，并验证dprod只分配ceil(P/64)而非P的候选，
 D138理论省119.913025 MiB。后续运行保持4060lp默认1800 MHz/55 W；完整联合
 准入与新成本校准尚未完成，本阶段不宣称加速。
+
+## 134. 块乘积容量与延迟申请；修正Windows检查弹窗（2026-10-09）
+
+接续`d881c8a`。S3的dprod唯一消费者只写/读ceil(P/64)系数，旧need_vals却
+申请P个。现默认`NTT_S3_COMPACT_PRODUCTS=1`：值/产品独立reserve，产品在
+最终累积前申请；设0可同binary恢复旧申请。数学工作、Montgomery表示、kernel、
+传输和GCD不变。products独立增长后再长values的旧模式统计也按实际两种容量扣除。
+`giant_memory.version=2`同步value/product字节及策略，仍非完整进程准入模型。
+
+最终v3 CPU201958项0 bad，6份历史台账通过；NTT681389/dense70010回归保持。
+40组native计划与8响应/3既有算法保护拒绝通过，曲线0。GPU11组两臂+1memcheck
+共23条曲线，覆盖非单位、generic8193、P63/64/65、G1及frontier回退，完整叶子/
+因子/算术覆盖一致。45项GMP fixture验证981块产品，错误主机答案被拒绝。
+fixture记入耗时并令clean=0，正式collector要求clean=1；Auto B2增加新配置保护，
+旧profile仍需重校准，当前addsub1的旧未校准算术保护仍保留。
+
+M8011目标7995 bits、承载8011 bits，w126、B1=20、B2=2.6e12，D138/P126720：
+最终同binary台账实测dprod127733760→1995840 B，省119.913025 MiB；S3末态
+271523816→145785896 B。全流程owned峰均6977513600 B，峰在giant，**没有降低
+该任务的完整峰值**。公式Δ=8*w*(P-ceil(P/64))；D153的130.814209 MiB仅为公式。
+frontier回退期间产品尚未申请，因此after_descent额外省8Pw；驻留路径差0。
+两次大规模check95.593203/94.833449 s含诊断，不计性能收益。新的默认条件正式
+两warmup+ABBA/BAAB八曲线正在采集，结束后继续更新报告同节。
+
+用户反映新测试构建的防火墙弹窗。已核对规则路径为compact_products_v1/v2/v3；
+本机对照确认默认Compute Sanitizer在目标exe监听0.0.0.0:49152，普通短启动未
+观察到socket。采用NVIDIA支持的named-pipes后6个活跃样本无TCP/UDP，完整
+memcheck仍通过。只改检查子进程环境，不改生产联网行为或防火墙规则；这不是
+离线Stage2应当要求的网络许可。正式计时不启动sanitizer。
+
+production v3为45编译源闭包，compile69.0/build85.4 s，binary SHA
+`0080f535a3eda7ec267a8edb927d5c6c76c4893a948d472cbfea4ecc6dced42a`。
+原始证据在忽略目录`data/stage2_compact_products_20261009/`，源码与日志SHA通过
+审核。详细公式、边界、当前限制、通信依据及命令见
+[报告第24节](STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md#24-按块数分配乘积缓冲容量与生命周期优化)。
+继续接S4/raw/reducer/metadata及NTT、fold/frontier的同时存活状态，验证cold trim
+与真实free/reserve后再统一D/Auto B2；GPU1保持用户默认设置，不调整功耗/频率。

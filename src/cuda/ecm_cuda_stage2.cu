@@ -6488,6 +6488,9 @@ static void s2g_launch_block_prod(int nw, int nvals, int per_block,
 
 /* every device buffer the batched engine needs, allocated ONCE for the whole curve: the
    ladder's inputs (uploaded once), its scratch, and the accumulation buffers. */
+static bool s3_compact_products_requested() {
+    const char *e=std::getenv("NTT_S3_COMPACT_PRODUCTS");return !e || std::atoi(e)!=0;
+}
 struct S3Workspace {
     const LadderCtx *C = nullptr;
     unsigned long long *dn = nullptr, *dqx = nullptr, *dqz = nullptr, *da24 = nullptr,
@@ -6593,16 +6596,29 @@ struct S3Workspace {
     void need_vals(size_t n)
     {
         if (n <= val_cap) return;
+        if(s3_compact_products_requested()) {
+            if(dvals)CK(cudaFree(dvals));dvals=nullptr;
+            CK(cudaMalloc(&dvals,n*C->nw*8));
+            bytes-=(size_t)val_cap*C->nw*8;bytes+=n*C->nw*8;val_cap=n;
+            return; // Products are unused during descent; reserve at their consumer.
+        }
         if (dvals) cudaFree(dvals);
         if (dprod) cudaFree(dprod);
         dvals = nullptr; dprod = nullptr;
         const size_t nw = C->nw;
         CK(cudaMalloc(&dvals, n * nw * 8));
         CK(cudaMalloc(&dprod, n * nw * 8));
-        bytes -= 2 * val_cap * nw * 8;
+        bytes -= (val_cap + prod_cap) * nw * 8;
         bytes += 2 * n * nw * 8;
         val_cap = n;
         prod_cap = n;
+    }
+    void need_products(size_t n)
+    {
+        if(n<=prod_cap)return;
+        if(dprod)CK(cudaFree(dprod));dprod=nullptr;
+        CK(cudaMalloc(&dprod,n*C->nw*8));
+        bytes-=prod_cap*C->nw*8;bytes+=n*C->nw*8;prod_cap=n;
     }
 };
 
@@ -6983,6 +6999,7 @@ static void dev_block_products(S3Workspace &W, int nvals, int per_block,
     const int nb = (nvals + per_block - 1) / per_block;
     out.assign((size_t)nb, std::vector<unsigned long long>(nw, 0ull));
     if (nvals == 0) return;
+    W.need_products(s3_compact_products_requested()?(size_t)nb:(size_t)nvals);
     S2G_DISPATCH((int)nw, s2g_launch_block_prod, (int)nw, nvals, per_block, W.dvals, W.dn,
                  C.ninv, W.dprod);
     CK(cudaGetLastError());
@@ -6992,6 +7009,43 @@ static void dev_block_products(S3Workspace &W, int nvals, int per_block,
     for (int b = 0; b < nb; ++b)
         for (size_t i = 0; i < nw; ++i) out[(size_t)b][i] = flat[(size_t)b * nw + i];
     ++W.prod_launches;
+}
+
+// Optional independent GMP oracle for the exact-sized product lease, including
+// partial final blocks and zero/nonunit values. No diagnostic work in normal runs.
+static void block_product_fixture(const LadderCtx &C)
+{
+    S3Workspace ws;ws.init(C);const size_t w=C.nw;
+    mpz_t N,R,ri,x,want,actual,power;mpz_inits(N,R,ri,x,want,actual,power,nullptr);
+    words_to_mpz(N,C.hn.data(),w);words_to_mpz(R,C.hmone.data(),w);
+    if(!mpz_invert(ri,R,N)){std::fprintf(stderr,"FATAL: product fixture radix is not a unit\n");std::exit(3);}
+    unsigned long long cases=0,checked=0;
+    for(int block:{1,2,7,64,128})for(int n:{0,1,2,63,64,65,127,128,129}) {
+        ++cases;ws.need_vals((size_t)n);std::vector<unsigned long long> input((size_t)n*w),word(w);
+        for(int i=0;i<n;++i) {
+            if(i%11==0)mpz_set_ui(x,0);
+            else if(i%11==1)mpz_sub_ui(x,N,1);
+            else {mpz_set_ui(x,(unsigned long)(37*i+1));mpz_mod(x,x,N);}
+            mpz_to_words(word,w,x);std::copy(word.begin(),word.end(),input.begin()+(size_t)i*w);
+        }
+        if(n)CK(cudaMemcpy(ws.dvals,input.data(),input.size()*8,cudaMemcpyHostToDevice));
+        std::vector<std::vector<unsigned long long>> output;dev_block_products(ws,n,block,output);
+        if(fuse_env_ull("NTT_S3_PRODUCTS_TEST_BAD",0) && !output.empty())output[0][0]^=1;
+        if(output.size()!=(size_t)(n/block+(n%block!=0))) {std::fprintf(stderr,"FATAL: product fixture count\n");std::exit(3);}
+        for(size_t b=0;b<output.size();++b) {
+            const int lo=(int)b*block,hi=std::min(n,lo+block);mpz_set_ui(want,1);
+            for(int i=lo;i<hi;++i) {
+                words_to_mpz(x,input.data()+(size_t)i*w,w);mpz_mul(want,want,x);mpz_mod(want,want,N);
+            }
+            mpz_powm_ui(power,ri,(unsigned long)(hi-lo-1),N);mpz_mul(want,want,power);mpz_mod(want,want,N);
+            words_to_mpz(actual,output[b].data(),w);
+            if(mpz_cmp(actual,want)!=0) {std::fprintf(stderr,"FATAL: product fixture GMP mismatch n=%d block=%d index=%llu\n",n,block,(unsigned long long)b);std::exit(3);}
+            ++checked;
+        }
+    }
+    mpz_clears(N,R,ri,x,want,actual,power,nullptr);
+    stage2_log::print(stage2_log::debug,"s3_product_fixture: compact=%d cases=%llu checked=%llu bad=0\n",
+        s3_compact_products_requested(),cases,checked);
 }
 
 /* the reference's record(): keep a factor that really divides N, and its hit prime.
@@ -8050,6 +8104,13 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         dev_block_products(ws, (int)P, (int)BLOCK, bprod);
     }
+    stage2_memory::snapshot("after_block_products");
+    stage2_log::print(stage2_log::debug,
+        "s3_product_workspace: compact=%d values_cap=%llu products_cap=%llu values_bytes=%llu "
+        "products_bytes=%llu workspace_bytes=%llu block=%llu\n",s3_compact_products_requested(),
+        (unsigned long long)ws.val_cap,(unsigned long long)ws.prod_cap,
+        (unsigned long long)ws.val_cap*W*8,(unsigned long long)ws.prod_cap*W*8,
+        (unsigned long long)ws.bytes,(unsigned long long)BLOCK);
     if (R.dbg_progress)
         stage2_log::print(stage2_log::phases, "batched_phase: block_products_done blocks=%llu t=%.1f s\n",
                     (unsigned long long)bprod.size(), now_s() - ta0);
@@ -8694,6 +8755,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             },p.tree_batch_bytes,p.tree_physical_chunks,p.tree_chunk_max,memory_policy,*p.ntt_memory))return 3;
         p.giant_memory=std::make_shared<ecm_stage2::GiantMemoryPlan>();
         ecm_stage2::GiantMemoryPolicy giant_policy;
+        giant_policy.compact_products=s3_compact_products_requested();
         giant_policy.chain_block=std::min(1ull<<20,std::max(4ull,fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)));
         giant_policy.short_block=fuse_env_ull("NTT_GIANT_CHAIN_SMALL_BLOCK",0);
         if(giant_policy.short_block)giant_policy.short_block=std::min(64ull,std::max(4ull,giant_policy.short_block));
@@ -8709,7 +8771,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const auto point_kb=fuse_env_ull("NTT_GIANT_POINT_BUDGET_KB",262144);
         const bool diagnostic=fold_device_flag("NTT_GIANT_CHAIN_CHECK") || g_giant_seed_check ||
             g_gfinv_seg_check || small_prime_flag("NTT_SMALL_PRIME_CHECK") ||
-            small_prime_flag("NTT_SMALL_PRIME_CACHE_STALE");
+            small_prime_flag("NTT_SMALL_PRIME_CACHE_STALE") || fold_device_flag("NTT_S3_PRODUCTS_TEST");
         // Conditional on the normal baby proof cache matching this curve. The
         // actual small-prime loop then ladders only primes dividing D. Without
         // reuse, count its bounded interval directly, never use a guessed cap.
@@ -8901,6 +8963,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         if(scaled_test && std::atoi(scaled_test)!=0) scaled_descent_fixture(L);
     }
     if(!s4_on) stage2_fixture_begin=now_s();
+    if(fuse_env_ull("NTT_S3_PRODUCTS_TEST",0))block_product_fixture(C);
     const char *fold_test=std::getenv("NTT_FOLD_FLAT_TEST");
     if(fold_test && std::atoi(fold_test))fold_flat_fixture(L);
     gscale_flag("NTT_GSCALE_DEVICE_CHECK");gscale_flag("NTT_GSCALE_DEVICE_TEST_BAD");
@@ -9013,7 +9076,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const char *real_dump=std::getenv("NTT_REAL_F_DUMP");
     bool stage2_extra_fixtures=(real_dump && *real_dump) || fuse_env_ull("NTT_TARGET_LEAF_HASH",0)!=0;
     for(const char *key : {"NTT_BABY_DEVICE_TEST","NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL","NTT_FUSE_COOP_TEST","NTT_FUSE_COOP_BAD","NTT_XADD6_TEST","NTT_XADD6_TEST_BAD","NTT_S4_FLAT_TEST","NTT_S4_FINAL_READBACK_TEST","NTT_S4_OUTPUT_WINDOW_TEST",
-                           "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST",
+                           "NTT_S4_GROOT_TEST","NTT_ARENA_WORKSPACE_TEST","NTT_FUSE_LIFETIME_TEST","NTT_S3_PRODUCTS_TEST","NTT_S3_PRODUCTS_TEST_BAD",
                            "NTT_SCALED_TEST","NTT_SCALED_CHECK","NTT_SCALED_FRONTIER_CHECK","NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_ALLOC_FAIL","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_GROOT_DEVICE_TEST","NTT_GROOT_DEVICE_CHECK","NTT_GROOT_DEVICE_TEST_BAD","NTT_GROOT_LEAF_CHUNK","NTT_GFINV_BATCH_TEST","NTT_GFINV_BATCH_TEST_BAD","NTT_FOLD_FLAT_TEST","NTT_FOLD_FLAT_TEST_BAD","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_TEST","NTT_FOLD_DEVICE_CHECK","NTT_FOLD_DEVICE_TEST_BAD","NTT_FOLD_DEVICE_ALLOC_FAIL","NTT_GROOT_TO_FOLD_CHECK","NTT_GROOT_TO_FOLD_TEST_BAD","NTT_GFINV_SEG_TEST","NTT_GFINV_SEG_TEST_BAD","NTT_GFINV_SEG_CHECK","NTT_GIANT_SEED_CHECK","NTT_S4_MERSENNE_TEST","NTT_S4_MERSENNE_TEST_BAD","NTT_SMALL_PRIME_CHECK","NTT_SMALL_PRIME_TEST_BAD","NTT_SMALL_PRIME_CACHE_STALE","NTT_DEVICE_GLEAF_CHECK","NTT_DEVICE_GLEAF_TEST_BAD"}) {
         const char *v=std::getenv(key);
         if(v && std::atoi(v)!=0) stage2_extra_fixtures=true;
@@ -9715,18 +9778,21 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
     }
     if(p.giant_memory) {
         const auto &m=*p.giant_memory;const auto &v=m.policy;
-        json<<",\"giant_memory\":{\"version\":1,\"valid\":"<<(m.valid?"true":"false")
+        json<<",\"giant_memory\":{\"version\":2,\"valid\":"<<(m.valid?"true":"false")
             <<",\"reason\":"<<stage2_tune::quote(m.reason)
             <<",\"process_peak_complete\":false,\"admission_model\":false"
             <<",\"small_prime_cache_assumed\":"<<(small_prime_flag("NTT_SMALL_PRIME_REUSE")?"true":"false")
             <<",\"chunk_points\":"<<m.chunk_points<<",\"point_chunks\":"<<m.point_chunks
             <<",\"initial_bytes\":"<<m.initial_bytes<<",\"after_giant_bytes\":"<<m.after_giant_bytes
             <<",\"accumulation_bytes\":"<<m.accumulation_bytes<<",\"peak_bytes\":"<<m.peak_bytes
+            <<",\"value_bytes\":"<<m.value_bytes<<",\"product_bytes\":"<<m.product_bytes
             <<",\"final_point_capacity\":"<<m.final_point_capacity
             <<",\"policy\":{\"chain_block\":"<<v.chain_block<<",\"short_block\":"<<v.short_block
             <<",\"short_max\":"<<v.short_max<<",\"chain_min\":"<<v.chain_min
             <<",\"segment\":"<<v.segment<<",\"group\":"<<v.group
             <<",\"resident_limit_bytes\":"<<v.resident_limit_bytes<<",\"initial_points\":"<<v.initial_points
+            <<",\"compact_products\":"<<(v.compact_products?"true":"false")
+            <<",\"accumulation_block\":"<<v.accumulation_block
             <<",\"force_ladder\":"<<(v.force_ladder?"true":"false")
             <<",\"seed_device\":"<<(v.seed_device?"true":"false")
             <<",\"seed_pair\":"<<(v.seed_pair?"true":"false")

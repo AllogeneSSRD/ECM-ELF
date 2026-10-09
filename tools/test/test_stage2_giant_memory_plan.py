@@ -33,6 +33,7 @@ def main():
     ini.write_text(f'device={args.device}\n',encoding='utf-8')
     cases = [
         ('legacy_points',1381380,2600000000000,{}),
+        ('legacy_products',1381380,2600000000000,{'NTT_S3_COMPACT_PRODUCTS':'0'}),
         ('bounded_points',1381380,2600000000000,{'NTT_GIANT_CHUNK_FLOOR':'1'}),
         ('ladder_tail',1381380,1381380*(253440+32000-2),{}),
         ('forced_ladder',1381380,2600000000000,{'NTT_GIANT_LADDER':'1'}),

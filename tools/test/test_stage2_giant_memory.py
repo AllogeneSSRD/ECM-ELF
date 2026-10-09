@@ -70,7 +70,9 @@ def check_ledger(matrix_path, fixture):
         q = int(run['point_plan']['points'])
         if int(run['device_leaf']['chunks'])!=(n+q-1)//q or int(run['device_leaf']['device_trees'])!=(n+p-1)//p:
             raise ValueError('resident chunk/tree coverage differs from predicted geometry')
-        proc = subprocess.run([str(fixture),str(p),str(n),str(w),str(q),str(initial)], capture_output=True, timeout=10)
+        # Historical matrices predate compact products. Their caller policy is
+        # part of the frozen evidence, not the default of the current binary.
+        proc = subprocess.run([str(fixture),str(p),str(n),str(w),str(q),str(initial),'0'], capture_output=True, timeout=10)
         if proc.returncode:
             raise ValueError(proc.stderr.decode())
         prediction = json.loads(proc.stdout)
@@ -147,7 +149,7 @@ def main():
             old_start = old_text.index('struct S3Workspace {')
             old_native = old_text[old_start:old_text.index('\n};',old_start)+3]
             old_cpp = out/'regression.cpp'
-            old_cpp.write_text(fixture.replace('// @NATIVE_S3@',old_native),encoding='utf-8')
+            old_cpp.write_text('#define S3_TEST_LEGACY_SOURCE 1\n'+fixture.replace('// @NATIVE_S3@',old_native),encoding='utf-8')
             old_command = out/'compile_regression.cmd'
             old_command.write_text(command.read_text(encoding='utf-8').replace(str(cpp),str(old_cpp))
                 .replace('fixture.exe','regression.exe').replace('fixture.obj','regression.obj'),encoding='utf-8')

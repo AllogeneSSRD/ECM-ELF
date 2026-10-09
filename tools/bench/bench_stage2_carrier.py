@@ -22,7 +22,7 @@ def main():
     p.add_argument('--exe', type=Path, required=True)
     p.add_argument('--save', type=Path, required=True)
     p.add_argument('--carrier-exponent', type=int, default=0)
-    p.add_argument('--comparison', choices=('carrier', 'workspace-bq', 'plan', 'chunk','phase-output','owner-cache','giant-chunk'), default='carrier')
+    p.add_argument('--comparison', choices=('carrier', 'workspace-bq', 'plan', 'chunk','phase-output','owner-cache','giant-chunk','products'), default='carrier')
     p.add_argument('--b2', type=int, required=True)
     p.add_argument('--d', type=int, required=True)
     p.add_argument('--candidate-d', type=int, help='Second fixed D for a two-buffer plan timing comparison; budgets and arithmetic stay fixed')
@@ -44,6 +44,7 @@ def main():
     p.add_argument('--require-resident', action='store_true', help='Require device fold, scaled root and frontier instead of accepting their fallbacks')
     p.add_argument('--trim-phase-raw', action='store_true', help='Reclaim dead raw staging at inverse/fold and fold/descent boundaries in both arms')
     p.add_argument('--memory-ledger', action='store_true', help='Track every successful engine cudaMalloc/free, including transient allocations; diagnostics only')
+    p.add_argument('--frontier-alloc-fail',action='store_true',help='Check the existing frontier allocation fallback in both arms; diagnostics only')
     p.add_argument('--request-audit', action='store_true', help='Audit ordered multiplication requests; diagnostics only')
     a = p.parse_args()
     valid_exponent = 2 <= a.carrier_exponent <= 16384 or (a.comparison != 'carrier' and a.carrier_exponent == 0)
@@ -55,6 +56,10 @@ def main():
         p.error('--workspace-fixture requires --mode check')
     if a.request_audit and a.mode != 'check':
         p.error('--request-audit requires --mode check; instrumentation is outside formal timing')
+    if a.comparison=='products' and a.memory_ledger and a.mode!='check':
+        p.error('product memory ledger comparison requires --mode check')
+    if a.frontier_alloc_fail and (a.mode!='check' or a.require_resident):
+        p.error('--frontier-alloc-fail requires check mode without --require-resident')
     if a.single_arm and (a.mode != 'check' or a.comparison != 'workspace-bq'):
         p.error('--single-arm requires a workspace-bq check')
     if a.comparison == 'plan':
@@ -101,8 +106,10 @@ def main():
     env['NTT_REQUEST_AUDIT'] = '1' if a.request_audit else '0'
     if a.workspace_fixture:
         env['NTT_ARENA_WORKSPACE_TEST'] = '1'
+    if a.frontier_alloc_fail:env['NTT_SCALED_FRONTIER_ALLOC_FAIL']='1'
     if a.mode == 'check':
         env['NTT_TARGET_LEAF_HASH'] = '1'
+        if a.comparison=='products':env['NTT_S3_PRODUCTS_TEST']='1'
         if not a.projection_only:
             env.update(NTT_BABY_DEVICE_CHECK='1', NTT_GFINV_SEG_CHECK='1',
                        NTT_GIANT_SEED_CHECK='1', NTT_GIANT_CHAIN_CHECK='1')
@@ -111,7 +118,8 @@ def main():
             'chunk': ('legacy_chunk', 'workspace_chunk'),
             'phase-output': ('retained_output','trimmed_output'),
             'owner-cache': ('kept_cache','trimmed_cache'),
-            'giant-chunk': ('legacy_points','bounded_points')}[a.comparison]
+            'giant-chunk': ('legacy_points','bounded_points'),
+            'products': ('legacy_products','compact_products')}[a.comparison]
     sequence = tuple(keys[i] for i in (0, 1, 1, 0, 1, 0, 0, 1))
     matrix = ([('check', k) for k in ((a.single_arm,) if a.single_arm else keys)] if a.mode == 'check'
               else [('warmup', k) for k in keys] +
@@ -176,7 +184,7 @@ def main():
             use = env.copy()
             if a.comparison == 'workspace-bq':
                 use['NTT_WORKSPACE_REUSE_BQ'] = '1' if key == 'two_buffer' else '0'
-            elif a.comparison in ('plan','chunk','phase-output','owner-cache','giant-chunk'):
+            elif a.comparison in ('plan','chunk','phase-output','owner-cache','giant-chunk','products'):
                 use['NTT_WORKSPACE_REUSE_BQ'] = '1'
             if a.comparison == 'phase-output':
                 use['NTT_PHASE_TRIM_OUTPUT'] = '1' if key == 'trimmed_output' else '0'
@@ -186,6 +194,9 @@ def main():
             if a.comparison == 'giant-chunk':
                 use.update(NTT_PHASE_TRIM_OUTPUT='1',NTT_OWNER_TRIM_FUSE='1',
                            NTT_GIANT_CHUNK_FLOOR='1' if key=='bounded_points' else '0')
+            if a.comparison == 'products':
+                use.update(NTT_PHASE_TRIM_OUTPUT='1',NTT_OWNER_TRIM_FUSE='1',
+                    NTT_S3_COMPACT_PRODUCTS='1' if key=='compact_products' else '0')
             if a.comparison == 'chunk':
                 use['NTT_S4_WORKSPACE_BUDGET'] = '1' if key == 'workspace_chunk' else '0'
             exponent = a.carrier_exponent if a.comparison != 'carrier' or key == 'carrier' else 0
@@ -279,6 +290,23 @@ def main():
                 entry['memory_ledger'] = parse_memory_ledger(text)
                 if a.workspace_fixture and fields(text,'stage2_memory_ledger_check')['bad']!='0':
                     raise ValueError('memory ledger fixture failed')
+            if a.comparison=='products':
+                products=entry['products']=fields(text,'s3_product_workspace')
+                entry['frontier']=fields(text,'scaled_frontier_device')
+                P=int(entry['shape']['P'].split('=')[-1]);w=(int(entry['shape']['S_bits'])+63)//64
+                compact=key=='compact_products';nb=(P+63)//64 if compact else P
+                if int(products['compact'])!=int(compact) or int(products['block'])!=64 or int(products['values_cap'])!=P or int(products['products_cap'])!=nb or int(products['values_bytes'])!=8*P*w or int(products['products_bytes'])!=8*nb*w:
+                    raise ValueError('product capacity differs from requested allocation policy')
+                if a.mode=='check':
+                    fixture=entry['product_fixture']=fields(text,'s3_product_fixture')
+                    if fixture['bad']!='0' or fixture['cases']!='45' or int(fixture['checked'])<=0:
+                        raise ValueError('independent GMP block product fixture incomplete')
+                    if entry['wall']['clean']!='0' or float(entry['wall']['fixture'])<=0:
+                        raise ValueError('product fixture was not marked outside clean timings')
+                elif entry['wall']['clean']!='1' or 's3_product_fixture:' in text:
+                    raise ValueError('formal product timing contains diagnostic work')
+                if a.frontier_alloc_fail and (entry['frontier']['enabled']!='0' or entry['frontier']['fallback']!='allocation_fixture'):
+                    raise ValueError('frontier allocation fallback did not execute')
             if a.comparison in ('workspace-bq', 'plan', 'chunk','phase-output','owner-cache','giant-chunk'):
                 entry['layout'] = fields(text, 'ntt_workspace_layout')
                 if entry['layout']['reuse_bq_requested'] != use['NTT_WORKSPACE_REUSE_BQ']:
@@ -345,7 +373,7 @@ def main():
         factors = {tuple(sorted(r['result']['factors'])) for r in data['runs']}
         if len(targets) != 1 or len(factors) != 1:
             raise ValueError('target input or factor output changed between arms')
-        if a.comparison == 'workspace-bq':
+        if a.comparison in ('workspace-bq','products'):
             for field in ('launches', 'poly_muls', 'coeffs_reduced', 'gmp_selftest_cases', 'gmp_checked', 'full_checks'):
                 if len({r['coverage'][field] for r in data['runs']}) != 1:
                     raise ValueError('arithmetic coverage changed between layouts: ' + field)
@@ -362,9 +390,29 @@ def main():
             for key in keys:
                 if len({r['reduce_hook_calls'] for r in data['runs'] if r['key']==key}) != 1:
                     raise ValueError('reduction hook coverage changed within arm: '+key)
-        if a.mode == 'check' and (not oracle or oracle['unit']) and len({json.dumps(r['leaf'], sort_keys=True) for r in data['runs']}) != 1:
+        if a.mode == 'check' and (a.comparison=='products' or not oracle or oracle['unit']) and len({json.dumps(r['leaf'], sort_keys=True) for r in data['runs']}) != 1:
             raise ValueError('complete target-projected leaf fingerprint mismatch')
-        if oracle and not oracle['unit']:
+        if a.comparison=='products':
+            if len({tuple(sorted(r['result']['factors'])) for r in data['runs']})!=1:
+                raise ValueError('factor set differs between product allocation policies')
+            if a.memory_ledger:
+                if len(data['runs'])!=2:
+                    raise ValueError('product memory comparison requires the two check arms')
+                baseline,candidate=data['runs']
+                def block_live(row):
+                    return next(int(c['live_bytes']) for c in row['memory_ledger']['checkpoints']
+                                if c['snapshot']=='after_block_products')
+                expected=int(baseline['products']['products_bytes'])-int(candidate['products']['products_bytes'])
+                if block_live(baseline)-block_live(candidate)!=expected:
+                    raise ValueError('simultaneous accumulation payload reduction differs from product capacities')
+                data['product_memory_reduction_bytes']=expected
+                def descent_live(row):
+                    return next(int(c['live_bytes']) for c in row['memory_ledger']['checkpoints'] if c['snapshot']=='after_descent')
+                descent_expected=0 if baseline['frontier']['enabled']=='1' else int(baseline['products']['products_bytes'])
+                if descent_live(baseline)-descent_live(candidate)!=descent_expected:
+                    raise ValueError('descent product allocation lifetime differs from lazy reserve contract')
+                data['product_descent_reduction_bytes']=descent_expected
+        if oracle and not oracle['unit'] and a.comparison!='products':
             data['leaf_comparison'] = 'Nonunit fallback X values depend on projective scale; verify target factors instead of equating monic leaf vectors.'
         if a.mode == 'timing':
             timed = [r for r in data['runs'] if r['category'] == 'timing']
