@@ -233,7 +233,8 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
                   " hit(s) already recorded)");
         }
     }
-    // GPU monitoring: strictly optional, and never blocks the UI (own thread).
+    // GPU monitoring is optional. Initialization is synchronous; periodic driver
+    // queries run on the sampling thread without holding the UI snapshot lock.
     if (!gpu_.start(gpu_poll_ms_)) {
         trace("gpu: NVML unavailable: " + gpu_.reason());
     } else {
@@ -640,12 +641,22 @@ void App::on_imgui_ready() {
     }
 }
 
-void App::capture_layout() {
-    std::size_t len = 0;
-    const char *blob = ImGui::SaveIniSettingsToMemory(&len);
-    if (blob == nullptr) return;
-    ini_.set("GUI", "dock_layout", escape_blob(std::string(blob, len)));
-    ini_.set_int("GUI", "dock_layout_ver", kLayoutVersion);
+void App::discard_saved_layout() {
+    layout_blob_loaded_.clear();
+    ini_.set("GUI", "dock_layout", "");
+    ini_.set_int("GUI", "dock_layout_ver", 0);
+    layout_built_ = false;
+}
+
+void App::capture_layout(bool save_docking_layout) {
+    if (save_docking_layout) {
+        std::size_t len = 0;
+        const char *blob = ImGui::SaveIniSettingsToMemory(&len);
+        if (blob != nullptr) {
+            ini_.set("GUI", "dock_layout", escape_blob(std::string(blob, len)));
+            ini_.set_int("GUI", "dock_layout_ver", kLayoutVersion);
+        }
+    }
     int rect[4] = {win_x_, win_y_, win_w_, win_h_};
     ini_.set("GUI", "window", int_list(rect, 4));
     ini_.set_int("GUI", "NumWorkers", num_workers_);
@@ -655,7 +666,7 @@ void App::capture_layout() {
     ini_.set("GUI", "priority", priority_);
 }
 
-bool App::shutdown(std::string &err) {
+bool App::shutdown(std::string &err, bool save_docking_layout) {
     // Closing the GUI stops the workers (docs/DEV_ECM_GUI.md 5.6), silently: the job
     // objects would kill them when this process exits anyway, so the GUI terminates them
     // explicitly, immediately and without any UI/state noise.
@@ -667,7 +678,7 @@ bool App::shutdown(std::string &err) {
     // Persist whatever the results store still owes the disk.
     std::string r_err;
     if (!results_.flush(r_err)) trace("results: final flush failed: " + r_err);
-    capture_layout();
+    capture_layout(save_docking_layout);
     if (!ini_.save(err)) return false;
     return true;
 }

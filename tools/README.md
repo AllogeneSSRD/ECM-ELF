@@ -5,6 +5,12 @@
 
 CUDA 的 Stage1/Stage2 开发、本机生产与发布生产统一从 `build/` 的六组 PS1/BAT 入口启动，全部默认并行编译，发布入口自动拆分（Stage1）和打包 ZIP，详见 [构建说明](build/README.md)。探针、开发辅助及内部编译/发布实现分别位于 `build/test/`、`build/dev/`、`build/internal/`。
 
+Stage2 位宽/B2 性能测量使用 `bench/bench_stage2_n_scaling.py`，从因子数据库只读生成余因子与完整梅森对照，保存逐遍时间；`analyze_stage2_n_scaling.py` 汇总与拟合，`plot_stage2_n_scaling.py` 生成 PNG/SVG。操作见 [位宽测量工具说明](bench/README_STAGE2_N_SCALING.md)。
+
+Prime95 CPU ECM性能日志使用 `log_parser/analyze_prime95_ecm.py`，支持正在追加的`screen.log`与worktodo快照，按完整曲线汇总计时，保留提前因子、未完成记录及B2调整信息。见[Prime95性能分析说明](log_parser/README_PRIME95_ECM_BENCH.md)。
+
+本机4060 Laptop连接NVIDIA外置显卡后卡在55W的NPCF诊断与一次性修复入口为 `diag/repair_npcf_gpu_selection.ps1`，含独立恢复保护，仅支持已核对的开发机身份。见 [NPCF工具说明](diag/README_NPCF_GPU_SELECTION.md)。
+
 ```
 tools/
 ├── build/      Stage1/Stage2 开发、本机与发布入口；辅助脚本按 dev/test/internal 分类

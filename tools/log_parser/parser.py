@@ -1,7 +1,7 @@
 """ECM (Prime95/mprime) worker log parser.
 
 Segments a screen log into individual ECM *runs*. A run is opened by every
-``ECM on M...: Edwards curve #N`` line and closed by the next ``ECM on`` line
+``ECM on M...: Edwards/Montgomery curve #N`` line and closed by the next ``ECM on`` line
 for the same worker (or end of file). All Stage / memory / FFT lines that fall
 inside that window are attributed to the run.
 """
@@ -15,8 +15,16 @@ LINE_RE = re.compile(
 
 WORKER_NUM_RE = re.compile(r"Worker #(\d+)")
 
+
+def worker_number(label):
+    """Prime95 uses [Worker] when only one worker exists."""
+    if label == "Worker":
+        return 1
+    match = WORKER_NUM_RE.fullmatch(label)
+    return int(match.group(1)) if match else None
+
 ECM_RE = re.compile(
-    r"ECM on M(?P<exp>\d+):\s*Edwards curve #(?P<curve>\d+)\s*"
+    r"ECM on M(?P<exp>\d+):\s*(?P<curve_type>Edwards|Montgomery) curve #(?P<curve>\d+)\s*"
     r"with s=(?P<s>\d+),\s*B1=(?P<b1>\d+),\s*B2=(?P<b2tbd>TBD|\d+)"
 )
 
@@ -49,14 +57,16 @@ STAGE2_GCD_RE = re.compile(
 TS_FMT = "%Y-%m-%d %H:%M:%S"
 
 
-def _new_run(worker_label, worker_num, ts, m, cur_fft):
+def _new_run(worker_label, worker_num, ts, m, cur_fft, line_number):
     return {
         "worker": worker_num,
         "worker_label": worker_label,
         "exponent": int(m.group("exp")),
         "curve": int(m.group("curve")),
+        "curve_type": m.group("curve_type"),
         "s": m.group("s"),
         "b1": int(m.group("b1")),
+        "b2_requested": None if m.group("b2tbd") == "TBD" else int(m.group("b2tbd")),
         "b2": None,
         "worth": None,
         "avail_mem": None,
@@ -71,6 +81,8 @@ def _new_run(worker_label, worker_num, ts, m, cur_fft):
         "s2_fft_type": None,
         "start_ts": ts,
         "end_ts": ts,
+        "start_line": line_number,
+        "end_line": line_number,
         # timestamps used for the gantt breakdown (not exported columns)
         "s1_end_ts": None,
         "s2_start_ts": None,
@@ -95,7 +107,7 @@ def parse_log(text):
     open_run = {}       # worker_num -> run dict
     current_fft = {}    # worker_num -> (type, length)  (worker's live FFT)
 
-    for raw in text.splitlines():
+    for line_number, raw in enumerate(text.splitlines(), 1):
         m = LINE_RE.match(raw.rstrip("\r"))
         if not m:
             continue
@@ -103,11 +115,10 @@ def parse_log(text):
         ts = m.group("ts")
         msg = m.group("msg")
 
-        wnum_m = WORKER_NUM_RE.search(worker_label)
-        if not wnum_m:
+        wnum = worker_number(worker_label)
+        if wnum is None:
             # [Main window] / [Comm window] never produce ECM runs.
             continue
-        wnum = int(wnum_m.group(1))
 
         # FFT change line: update the worker's live FFT. If it's a stage-2
         # "Switching to" inside an open run, record the run's S2 FFT.
@@ -133,7 +144,7 @@ def parse_log(text):
             if wnum in open_run:
                 runs.append(_finalize(open_run.pop(wnum)))
             open_run[wnum] = _new_run(
-                worker_label, wnum, ts, ecm, current_fft.get(wnum)
+                worker_label, wnum, ts, ecm, current_fft.get(wnum), line_number
             )
             continue
 
@@ -142,6 +153,7 @@ def parse_log(text):
             continue
 
         run["end_ts"] = ts
+        run["end_line"] = line_number
 
         b2m = B2_RE.search(msg)
         if b2m:

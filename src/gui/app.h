@@ -124,7 +124,7 @@ public:
     // Called by the imgui backend once the context exists (loads the layout blob).
     void on_imgui_ready();
     // Stops the workers and saves the layout + settings back into the ini.
-    bool shutdown(std::string &err);
+    bool shutdown(std::string &err, bool save_docking_layout = true);
 
     void draw();
     // Drives the worker supervisor (called once per frame from draw()).
@@ -201,6 +201,8 @@ public:
     int window_w() const { return win_w_; }
     int window_h() const { return win_h_; }
     void set_window_rect(int x, int y, int w, int h);
+    // Discard geometry from a minimized/off-screen session before ImGui loads it.
+    void discard_saved_layout();
     int refresh_hz() const { return refresh_hz_; }
 
 private:
@@ -229,7 +231,7 @@ private:
     void draw_results_panel();
     void draw_detail_panel();
     void draw_worker_panes();
-    void capture_layout();
+    void capture_layout(bool save_docking_layout = true);
     // Builds the initial dock layout the first time (or when the stored one predates
     // the dockspace): without it every panel opens stacked at the same spot.
     void build_default_layout(unsigned int dockspace_id);

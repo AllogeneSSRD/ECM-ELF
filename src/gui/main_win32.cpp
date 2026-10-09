@@ -23,6 +23,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <string>
 
 #include <d3d11.h>
@@ -81,6 +82,59 @@ void trace(const char *fmt, ...) {
 }
 
 void cleanup_render_target();   // defined below recreate_swap_chain()
+
+// Windows parks minimized windows at (-32000,-32000). Those coordinates must
+// never become the next startup rectangle. Also recover after a monitor is removed.
+bool recover_window_rect(ecmgui::App &app) {
+    const int x = app.window_x(), y = app.window_y();
+    const int w = app.window_w(), h = app.window_h();
+    const bool malformed = x <= -30000 || y <= -30000 || x >= 30000 || y >= 30000 ||
+                           w < 640 || h < 480 || w > 30000 || h > 30000;
+    RECT caption{};
+    if (!malformed) caption = {x, y, x + w, y + GetSystemMetrics(SM_CYCAPTION) + 16};
+    HMONITOR monitor = malformed ? nullptr : MonitorFromRect(&caption, MONITOR_DEFAULTTONULL);
+    MONITORINFO mi{sizeof(mi)};
+    bool visible = monitor != nullptr && GetMonitorInfoW(monitor, &mi);
+    if (visible) {
+        RECT overlap{};
+        visible = IntersectRect(&overlap, &caption, &mi.rcWork) &&
+                  overlap.right - overlap.left >= 64 && overlap.bottom - overlap.top >= 16;
+    }
+    if (visible) return false;
+
+    // Use the nearest remaining monitor for ordinary off-screen positions, and
+    // the primary monitor for the minimized sentinel or invalid dimensions.
+    monitor = malformed ? MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY)
+                        : MonitorFromRect(&caption, MONITOR_DEFAULTTONEAREST);
+    mi = MONITORINFO{sizeof(mi)};
+    if (!GetMonitorInfoW(monitor, &mi)) return false;
+    const int work_w = mi.rcWork.right - mi.rcWork.left;
+    const int work_h = mi.rcWork.bottom - mi.rcWork.top;
+    const int rw = (std::min)(malformed ? ecm_config::defaults::gui_window[2] : w, work_w);
+    const int rh = (std::min)(malformed ? ecm_config::defaults::gui_window[3] : h, work_h);
+    const int rx = mi.rcWork.left + (work_w - rw) / 2;
+    const int ry = mi.rcWork.top + (work_h - rh) / 2;
+    app.set_window_rect(rx, ry, rw, rh);
+    app.discard_saved_layout();
+    trace("window: recovered %d,%d,%d,%d -> %d,%d,%d,%d; reset dock layout",
+          x, y, w, h, rx, ry, rw, rh);
+    return true;
+}
+
+void remember_normal_window_rect(ecmgui::App &app) {
+    WINDOWPLACEMENT placement{sizeof(placement)};
+    if (!GetWindowPlacement(g_hwnd, &placement)) return;
+    RECT r = placement.rcNormalPosition;
+    // WINDOWPLACEMENT uses workspace coordinates for an ordinary top-level
+    // window; CreateWindow uses screen coordinates (including top/left taskbars).
+    MONITORINFO mi{sizeof(mi)};
+    if (GetMonitorInfoW(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+        OffsetRect(&r, mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
+    }
+    app.set_window_rect(r.left, r.top, r.right - r.left, r.bottom - r.top);
+    trace("window: save normal=%ld,%ld,%ld,%ld minimized=%d", r.left, r.top,
+          r.right - r.left, r.bottom - r.top, IsIconic(g_hwnd) ? 1 : 0);
+}
 
 void create_render_target() {
     ID3D11Texture2D *back = nullptr;
@@ -746,6 +800,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
 
     ecmgui::App app;
+    app.set_trace([](const std::string &line) { trace("%s", line.c_str()); });
     std::string err;
     if (!app.init(ini_path, language, err)) {
         MessageBoxA(nullptr, err.c_str(), "ecm_gui", MB_ICONERROR | MB_OK);
@@ -769,6 +824,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     } app_guard;
 
     ImGui_ImplWin32_EnableDpiAwareness();
+    recover_window_rect(app);
     WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, wnd_proc, 0L, 0L, inst, nullptr, nullptr,
                       nullptr, nullptr, L"ecm_gui", nullptr};
     RegisterClassExW(&wc);
@@ -832,13 +888,12 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     // Order matters: the layout is captured from ImGui (SaveIniSettingsToMemory),
     // so the ini must be written BEFORE the context is destroyed. Destroying it
     // first made the shutdown hang in a null-context dereference.
-    RECT r{};
-    if (GetWindowRect(g_hwnd, &r)) {
-        app.set_window_rect(r.left, r.top, r.right - r.left, r.bottom - r.top);
-    }
+    remember_normal_window_rect(app);
     std::string save_err;
     trace("saving %s", ini_path.c_str());
-    const bool saved = app.shutdown(save_err);
+    // While minimized ImGui may hold a zero-height/collapsed viewport. Preserve
+    // the last usable docking blob rather than persisting that transient layout.
+    const bool saved = app.shutdown(save_err, !IsIconic(g_hwnd));
     if (!saved) trace("save FAILED: %s", save_err.c_str());
     else trace("saved");
 

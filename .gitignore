@@ -151,3 +151,7 @@ vc140.pdb
 *.sqlite
 tools/ecm_dataset/1000.bat
 /build_cuda_test
+docs/GPU_POWER_LIMIT_4060LP_20261008.md
+/tools/diag
+/docs/benchmarks
+/docs/figures

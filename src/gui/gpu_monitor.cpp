@@ -262,15 +262,15 @@ void GpuMonitor::thread_main(int poll_ms) {
     while (!stop_.load()) {
         std::vector<GpuSample> batch;
         std::vector<int> batch_index;
-        {
-            std::lock_guard<std::mutex> lk(mu_);
-            for (std::size_t i = 0; i < devices_.size(); ++i) {
-                GpuSample s;
-                std::string err;
-                if (read_device(static_cast<int>(i), s, err)) {
-                    batch.push_back(s);
-                    batch_index.push_back(static_cast<int>(i));
-                }
+        // devices_ is immutable while this thread runs. Never hold mu_ across a
+        // driver call: the UI also needs it to read devices/history, and a slow
+        // NVML query would otherwise freeze the entire window.
+        for (std::size_t i = 0; i < devices_.size(); ++i) {
+            GpuSample s;
+            std::string err;
+            if (read_device(static_cast<int>(i), s, err)) {
+                batch.push_back(s);
+                batch_index.push_back(static_cast<int>(i));
             }
         }
         if (!batch.empty()) {
