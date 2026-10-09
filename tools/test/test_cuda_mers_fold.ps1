@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # test_cuda_mers_fold.ps1 -- Mersenne fold domain for the CUDA suyama family
 # (ECM_MERS_FOLD build; see kernels/cuda/cgbn_stage1_kernel.h and
-# docs/ECM_CGBN_OPTIMIZATION.md 9).
+# docs/performance/STAGE1.md 9).
 #
 # For N = 2^k - 1 the fold replaces CGBN's Montgomery reduction (the Q*N half of
 # mont_mul) with a fold of the 2*k-bit product.  The arithmetic is exact modular
@@ -161,7 +161,7 @@ if (-not $SkipSlow) {
     # latency-bound, so it only reaches parity/lead when the batch keeps >= 4 blocks per
     # SM resident.  384 curves on the 24-SM 4060 = 2 blocks/SM (fold ~7% behind), 768 =
     # 4 blocks/SM (parity), and with the fold family's own TPB (256) it leads by 3-8%.
-    # docs/ECM_CGBN_OPTIMIZATION.md 9.9.
+    # docs/performance/STAGE1.md 9.9.
     $fF = Join-Path $work 'F_fold.save'; $mF = Join-Path $work 'F_mont.save'
     $tf = @(); $tm = @()
     foreach ($rep in 1, 2) {
@@ -178,7 +178,7 @@ if (-not $SkipSlow) {
         $spd = [Math]::Round(($bestM / $bestF - 1) * 100, 2)
         Write-Host ("  best-of-2: mont {0:N0} ms vs fold {1:N0} ms -> fold is {2}% faster" -f $bestM, $bestF, $spd)
         # The measured state of the art is that the fold is SLOWER end-to-end (-15..-19%,
-        # docs/ECM_CGBN_OPTIMIZATION.md 9.2/9.4): CGBN's mont_mul interleaves its product and
+        # docs/performance/STAGE1.md 9.2/9.4): CGBN's mont_mul interleaves its product and
         # reduction chains, while the fold exposes one serial chain.  So a speedup is NOT
         # expected here; -ExpectFoldFaster flips this into a gate for whoever improves it.
         if ($ExpectFoldFaster) {

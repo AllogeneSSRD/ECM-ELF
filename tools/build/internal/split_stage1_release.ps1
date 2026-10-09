@@ -12,7 +12,7 @@
     let CMake relink the exe with the pruned objects in place (a relink takes seconds).  The
     original objects are restored afterwards, so the build directory stays usable.
 
-    The multi-arch build must be configured like this (docs/ECM_CGBN_OPTIMIZATION.md 8.9):
+    The multi-arch build must be configured like this (docs/performance/STAGE1.md):
 
         cmake -S . -B build_cuda_release -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release `
               -DECM_CUDA_FULL_BUILD=ON -DECM_CUDA_ARCHITECTURES="75;86;89;120" `

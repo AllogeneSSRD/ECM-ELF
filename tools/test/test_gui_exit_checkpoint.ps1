@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     Exit flow of ecm_gui: confirmation modal, and a checkpoint written before the worker
-    is terminated (docs/DEV_ECM_GUI.md section 5.6).
+    is terminated (docs/usage/GUI.md).
 
 .DESCRIPTION
     Requirement (user, 2026-09-28): closing the GUI while workers run must NOT silently

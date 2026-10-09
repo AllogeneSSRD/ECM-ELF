@@ -1,6 +1,6 @@
 #pragma once
 
-// Platform boundary of ecm_gui (docs/DEV_ECM_GUI.md section 3).
+// Platform boundary of ecm_gui (docs/usage/GUI.md).
 //
 // Everything the UI needs that is NOT portable lives behind these declarations:
 // the window/message loop and font/shell helpers (`Platform`, implemented in
@@ -29,7 +29,7 @@ bool has_arg(const std::vector<std::string> &args, const std::string &name);
 std::string arg_value(const std::vector<std::string> &args, const std::string &name);
 
 // Newest mtime (seconds since the Unix epoch, 0 when none) of the driver's checkpoint
-// files in `dir`: "<dir>\.ecm_ckpt_*.dat". Used by the graceful stop (docs/DEV_ECM_GUI.md
+// files in `dir`: "<dir>\.ecm_ckpt_*.dat". Used by the graceful stop (docs/usage/GUI.md
 // 5.6): the GUI may only terminate a worker once a checkpoint newer than the stop request
 // has appeared, otherwise up to one checkpoint interval of work would be lost.
 // `name_out` (optional) receives the file name that was found.
@@ -54,7 +54,7 @@ std::string default_localization_dir();     // <exe dir>/localization
 
 // CJK-capable UI font search. Returns the first existing candidate ("" = none,
 // in which case the UI falls back to the built-in ASCII font and the language is
-// forced back to English -- docs/DEV_ECM_GUI.md 10.3).
+// forced back to English -- docs/usage/GUI.md 10.3).
 std::vector<std::string> cjk_font_candidates();
 std::string find_cjk_font_file();
 // Latin system UI font (Segoe UI, Tahoma, Arial...): the built-in bitmap font is only
@@ -80,7 +80,7 @@ bool run_capture(const std::string &command_line, std::string &out, int &exit_co
 bool browse_for_file(std::string &path, const std::string &title, const std::string &filter);
 
 // ---------------------------------------------------------------------------
-// Worker processes -- milestone M2 (docs/DEV_ECM_GUI.md section 5)
+// Worker processes -- milestone M2 (docs/usage/GUI.md)
 //
 // One worker == one `ecm_cuda.exe -ini <ini> --worker N` process:
 //   * spawned with CREATE_NO_WINDOW, never through cmd.exe;

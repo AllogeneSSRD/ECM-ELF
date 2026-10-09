@@ -3,18 +3,14 @@
     Local Stage1 build for ecm_cuda, using the general Montgomery baseline.
 
 .DESCRIPTION
-    Configures and builds `build_cuda_cmake` with the settings fixed by the project rule
-    (docs/ECM_CGBN_OPTIMIZATION.md 8.9):
+    Configures and builds `build_cuda_cmake`; defaults are described in docs/usage/BUILD.md:
 
-        compression ON      -Xfatbin -compress-all        (-62% device-code size, measured)
-        no PTX              ECM_CUDA_EMBED_PTX=OFF        (-19% more; needs exactly sm_<Arch>)
-        one architecture    sm_89                         (both GPUs of this box are 8.9)
+        compression ON      -Xfatbin -compress-all
+        no PTX              ECM_CUDA_EMBED_PTX=OFF        (needs exactly sm_<Arch>)
+        one architecture    sm_89                         (override with -Arch)
         full kernel set, all tiers, param2 enabled
 
-    Result on this machine: ecm_cuda.exe 70.4 MB -> 10.4 MB.
-
-    The compile step uses tools\build\internal\parallel_nvcc.ps1 (NMake alone is serial: a full kernel
-    build is ~40 min serial vs ~8 min with 6 concurrent nvcc).
+    The compile step uses tools\build\internal\parallel_nvcc.ps1 for independent CUDA TUs.
 
 .PARAMETER BuildDir   Build directory (default build_cuda_cmake, the local test dir).
 .PARAMETER Arch       CUDA architecture (default 89).

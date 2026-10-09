@@ -92,20 +92,20 @@ struct WorkerView {
     bool show_pane = true;
     bool duplicate_device = false;    // another worker uses the same device (warning)
     bool old_driver = false;          // worker exe printed "No input number on stdin"
-    // ---- Prime95 handoff notices (docs/DEV_ECM_GUI.md 18) ---------------------------
+    // ---- Prime95 handoff notices (docs/usage/GUI.md 18) ---------------------------
     // The driver prints one `p95_add:` line per finished task; the notice strip shows the
     // most severe one. A Pending notice (and a non-empty pending file on disk) stays red
     // until a later delivery succeeds.
     P95Notice p95;                    // last notice of this worker
     // Percent the driver reported when it resumed from a checkpoint ("Resuming from
     // checkpoint: 23.8% complete"). A resumed run starts its progress line only after a
-    // long batch gap (see docs/DEV_ECM_GUI.md 7.2), so the GUI shows this instead of an
+    // long batch gap (see docs/usage/GUI.md 7.2), so the GUI shows this instead of an
     // empty bar in the meantime. -1 = no resume seen.
     double resume_pct = -1.0;
     // ---- graceful stop (per worker) ------------------------------------------------
     // A stop request does NOT kill the process right away: the driver checkpoints at its own
     // interval, so the worker is terminated only after a checkpoint newer than the request
-    // appeared (or the deadline passed). See App::request_stop / docs/DEV_ECM_GUI.md 5.6.
+    // appeared (or the deadline passed). See App::request_stop / docs/usage/GUI.md 5.6.
     bool stop_requested = false;
     unsigned long long stop_deadline_ms = 0;
     long long ckpt_baseline = 0;      // newest checkpoint mtime when the stop was requested
@@ -181,7 +181,7 @@ public:
     void stop_all();
     // Shutdown variant: terminate the workers immediately, quietly (no trace per worker,
     // no state/crash accounting, one summary line) -- see the user requirement in
-    // docs/DEV_ECM_GUI.md 5.6.
+    // docs/usage/GUI.md 5.6.
     void stop_all_quietly();
     // Resolves the worker executable: [GUI] exe=, else ecm_cuda.exe next to the GUI,
     // then ecm.exe next to it; falls back to the bare name (PATH lookup).
@@ -209,11 +209,11 @@ private:
     void rebuild_workers();
     void draw_menu_bar();
     // Prominent full-width strip under the menu bar: the Prime95 handoff state in red /
-    // yellow / green / grey, with the two "open" buttons (docs/DEV_ECM_GUI.md 18).
+    // yellow / green / grey, with the two "open" buttons (docs/usage/GUI.md 18).
     // `height` is the row reserved for it and `host_top` the top of the dockspace host,
     // which the strip must stay above -- otherwise the docked panels paint over it.
     void draw_p95_notice(float height, float host_top);
-    // Worktodo generator (M6 scope A, docs/DEV_ECM_GUI.md 19): paste assignments, preview
+    // Worktodo generator (M6 scope A, docs/usage/GUI.md 19): paste assignments, preview
     // the queue the generator would write, then append it with a re-validated mtime.
     void draw_gen_panel();
     // The one line-chart implementation every panel uses (see MetricPlot).

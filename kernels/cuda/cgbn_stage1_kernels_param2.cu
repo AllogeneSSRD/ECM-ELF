@@ -3,7 +3,7 @@
  * The TPI=16 (2560..8192) and TPI=32 (9216..16384) lookups live in
  * cgbn_stage1_kernels_param2_tpi16.cu / cgbn_stage1_kernels_param2_tpi32.cu: they dominated the compile time of this file
  * (745 s / 711 s total, the critical path of the parallel build).  See
- * docs/ECM_CGBN_OPTIMIZATION.md 8.8. */
+ * docs/performance/STAGE1.md 8.8. */
 
 /* cgbn_stage1_kernels_param2.cu -- param2 (gmp-ecm "batch 2", 6-torsion) instantiations.
  *
@@ -16,7 +16,7 @@
  *
  * Measured: 79.15 M curve-bits/s against param0's 71.52 M (M511, 8192 curves, B1=1e5,
  * RTX 4060), +10.7%, matching the 10/9 operator ratio.  See
- * docs/ECM_CGBN_OPTIMIZATION.md section 5.6.
+ * docs/performance/STAGE1.md
  *
  * Grid (identical to cgbn_stage1_kernels_tpi*.cu):
  *   TPI=4  : 128, 192, 256, 384, 512                      always compiled

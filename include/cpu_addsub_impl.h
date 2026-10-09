@@ -23,7 +23,7 @@
 // (no lane divergence).  All K instances share the same modulus N.
 //
 // Historical: vertical SIMD (manual & lookahead) was evaluated at 0.48x/0.20x
-// scalar and abandoned.  See docs/DEV_CPU_ADDSUB_AVX.md.
+// scalar and abandoned.  See docs/architecture/STAGE1.md.
 // ============================================================================
 
 #include <cstdint>

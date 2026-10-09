@@ -8,7 +8,7 @@
 4. 生成有效 Stage1 保存点，调用生产程序进行正对照和目标负对照。
 5. 导入主程序 result，拆解复合因子，仅在界限更优时更新保留的 sigma。
 
-完整数学合同、实验结果和源码位置见 [实现报告](D:/code/MPA-OpenCl/docs/STAGE2_FACTOR_DATASET.md)。这些工具尚不负责自动选择生产 B2。
+核心数据、替换规则和源码位置见 [数据集说明](../../docs/usage/DATASET.md)。这些工具尚不负责自动选择生产 B2。
 
 ## 1. 环境与文件位置
 
@@ -20,7 +20,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `ecm_stage2_dataset.sqlite` | 默认工作数据库，由原 `data/` 迁入 |
+| `ecm_stage2_dataset.sqlite` | 默认工作数据库，Git 忽略 |
 | `ecm_dataset.py` | 日常 CLI：初始化、分析、导入 result、统计、导出因子 CSV |
 | `dataset.py` | 公共库：两表 schema、HTML 解析、GP 调用、即时界限计算和最优 sigma 更新 |
 | `migrate_dataset.py` | 从旧七表迁移到两表，保留已选最优 sigma并回收空间 |
@@ -46,7 +46,7 @@ python tools/ecm_dataset/scan_sigma.py --exponent-range 223 --sigma-range 6:26 -
 
 `--gp gp.exe` 等裸命令名同样按PATH解析。显式路径会清理多余引号；显式路径无效时直接报错，不回退到另一个GP。未配置任何可用GP时提示添加其目录到PATH或传入完整路径。这里没有专用的 `GP_PATH` / `GP_BIN` 环境变量约定。
 
-原目录中的历史快照 `data/ecm_stage2_snapshot_20261005/` 保留，用于追溯旧实验；它不是脚本当前写入的数据库。
+数据库之外的实验快照放在忽略的 `data/`，不是脚本当前写入的工作数据库。
 
 ## 2. 日常使用：初始化、分析和导入
 
@@ -133,9 +133,9 @@ python tools/ecm_dataset/scan_sigma.py --db run/custom.sqlite `
 
 逐因子、逐sigma升序扫描；`--policy` 可选择：
 
-- `normal`（默认）：比较分数 `B1 × max(B1, B2)`，只在分数严格减小时替换。普通 Stage2 候选即比较 `B1 × B2`；数据库中表示 Stage1-only 的 `B2=0` 按 `B1²` 计。若只有一项减小，还须满足 `B2 < 100000 × B1`。
+- `normal`（扫描默认）：比较分数 `5000 × B1 + max(B1, B2)`，只在分数严格减小时替换。数据库中 Stage1-only 的 `B2=0` 在第二项按 `B1` 计。若 B1、B2 没有同时严格减小，还须满足 `B2 < 100000 × B1`。
 - `strict`：只有 B1、B2 都严格减小时才替换，不要求比例界限。当前 B2 已为 0 时不会再替换。
-- `either`：沿用旧扫描规则，只要任一项严格减小即可替换；两项都减小时不要求比例界限，否则须满足 `B2 < 100000 × B1`。连续使用此规则可能使最终两项都比早期记录大。
+- `either`：只要任一项严格减小即可替换；两项都减小时不要求比例界限，否则须满足 `B2 < 100000 × B1`。连续使用此规则可能使最终两项都比早期记录大。
 
 首次保存时，三个模式都要求 `B2 < 100000 × B1`。每次改善立即提交，不保存扫描历史或失败候选。控制台输出预计任务数、已处理数量、更新/不变/缓存/失败/超时计数及进度；进度在GP调用完成后输出。所选模式包含在开始事件中。结果可能依赖扫描顺序，不宣称是耗时意义下的全局最优。
 
@@ -192,17 +192,17 @@ runner 会确认实际 Stage1 GCD 与准备结果一致，剥离后针对新的�
 
 ### 原生复合因子拆解与断点继续
 
-对于支持新接口的 Stage2 构建，可以添加：
+使用支持因子拆解的 Stage2 构建，可以添加：
 
 ```powershell
 python tools/ecm_dataset/run_production_dataset.py --output run/new_candidate `
-  --stage2 build_cuda_cmake/_factor_dataset_20261005/native/ecm_cuda_stage2.exe `
+  --stage2 build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe `
   --factorize-hits --gp $gp
 ```
 
 该目录必须已有由 `--prepare-only` 生成的计划。原生可选拆解附带素数、重数和 GP 证明状态；离线 `ingest` 仍会验证并进行群阶分析。
 
-中断后以同一计划、runner 和二进制添加 `--resume`。脚本拒绝用不同二进制续跑。改脚本（包括本次默认数据库路径迁移）也会改变准备工具指纹；旧计划请用对应旧脚本继续，或在新目录重新准备，不要修改计划中的SHA绕过检查。
+中断后以同一计划、runner 和二进制添加 `--resume`。脚本拒绝用不同二进制续跑。修改脚本也会改变准备工具指纹；身份不符时使用匹配构建继续，或在新目录重新准备，不要修改计划中的SHA绕过检查。
 
 ## 5. 数据含义与“更优”的规则
 
@@ -235,7 +235,7 @@ python tools/ecm_dataset/ecm_dataset.py export --output run/factors.csv
 python tools/ecm_dataset/export_dataset.py --output run/snapshot
 ```
 
-`export_dataset.py` 只读数据库，要求输出目录不存在或为空。只导出核心两表与CSV，不再提供 `--evidence-root`；旧实验快照可以继续单独查看。
+`export_dataset.py` 只读数据库，要求输出目录不存在或为空。只导出核心两表与CSV；实验快照与运行证据单独保存。
 
 本机独立审计入口：
 
@@ -243,7 +243,7 @@ python tools/ecm_dataset/export_dataset.py --output run/snapshot
 python tools/test/audit_ecm_factor_dataset.py --output run/audit.json --gp $gp
 ```
 
-审计涵盖核心因子的整除关系、所保留群阶/点阶的分解乘积、Hasse界、独立 x-only 点阶检查和素性。不再读取历史运行表或要求本机 result/log/save 存在。
+审计涵盖核心因子的整除关系、所保留群阶/点阶的分解乘积、Hasse界、独立 x-only 点阶检查和素性。审计不要求本机 result/log/save 存在。
 
 ## 7. 从旧数据库迁移
 

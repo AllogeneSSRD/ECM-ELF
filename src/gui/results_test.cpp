@@ -1,4 +1,4 @@
-// Unit test for the results store (milestone M5, docs/DEV_ECM_GUI.md section 9).
+// Unit test for the results store (milestone M5, docs/usage/GUI.md).
 // Build: cmake --build <dir> --target ecm_gui_results_test
 // Exit code: 0 = every check passed.
 //

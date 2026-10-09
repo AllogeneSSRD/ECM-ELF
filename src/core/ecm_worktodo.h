@@ -81,7 +81,7 @@ bool ecm_worktodo_advance(const std::string &path, const std::string &first_line
                           WorktodoAction action);
 
 // ---------------------------------------------------------------------------
-// Sections (2026-10, D2 in docs/DEV_ECM_WORKTODO.md + docs/DEV_ECM_GUI.md)
+// Sections (2026-10, D2 in docs/usage/STAGE1.md + docs/usage/GUI.md)
 //
 // One worktodo file can serve several workers, Prime95 style:
 //

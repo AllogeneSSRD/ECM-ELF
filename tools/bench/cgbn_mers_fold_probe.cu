@@ -1,7 +1,7 @@
 // cgbn_mers_fold_probe.cu -- can a GPU ECM stage-1 modmul for a MERSENNE modulus
 // (N = 2^k - 1) beat CGBN's Montgomery multiplication?
 //
-// Background (docs/ECM_CGBN_OPTIMIZATION.md, "Mersenne fold" item):
+// Background (docs/performance/STAGE1.md, "Mersenne fold" item):
 //   * the CPU IFMA stage-1 path has a Mersenne fold domain: for N = 2^k-1 the
 //     Montgomery reduction is replaced by a fold (2^k == 1), which halves the
 //     madds per modular multiply (src/cpu/simd_mont_ifma.cpp, ifma_mersenne_mul);
@@ -65,7 +65,7 @@ struct params_t {
 /* PROBE_ROT=1 also runs fold_rot: the rotating-accumulator transplant of CGBN's own
    `mul` placement (core_mul_wmad.cu:100-123) into mul_wide's accumulation loops.
    IT IS INCORRECT -- 265/324 edge-battery mismatches -- and therefore OFF by default;
-   see docs/ECM_CGBN_OPTIMIZATION.md 9.10.5.  Reason: mul stores the chain carry-out
+   see docs/performance/STAGE1.md 9.10.5.  Reason: mul stores the chain carry-out
    under a RANGE predicate, so on lanes outside that range rl[] keeps a STALE value.
    mul tolerates that (its carries are consumed directly), but mul_wide merges the
    rotated t0/t1 into its ru[]/ra[] carry structure, which then produces a wrong

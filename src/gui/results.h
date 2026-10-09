@@ -1,6 +1,6 @@
 #pragma once
 
-// Hit bookkeeping for ecm_gui (milestone M5, docs/DEV_ECM_GUI.md section 9).
+// Hit bookkeeping for ecm_gui (milestone M5, docs/usage/GUI.md).
 //
 // Two files, on purpose:
 //

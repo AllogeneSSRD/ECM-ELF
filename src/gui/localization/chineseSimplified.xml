@@ -84,7 +84,7 @@
       <Item id="log_file"     name="日志文件"/>
       <Item id="open_saves"   name="打开存档目录"/>
       <Item id="no_output"    name="暂无输出。"/>
-      <Item id="m1_note"      name="列表来自配置。进程管理、实时输出与崩溃重启/熔断在 M2 落地（见 docs/DEV_ECM_GUI.md）。"/>
+      <Item id="m1_note"      name="Worker 由 ecm.ini 配置。进程管理、实时输出和重启限制见 docs/usage/GUI.md。"/>
       <Item id="duplicate_device" name="有另一个 worker 用了同一张显卡。"/>
       <Item id="state_stopped"    name="已停止"/>
       <Item id="state_starting"   name="启动中"/>

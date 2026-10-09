@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     Acceptance test for the Prime95 handoff NOTICE STRIP in the GUI
-    (docs/DEV_ECM_GUI.md 18): red / yellow / green / grey, always visible, and the
+    (docs/usage/GUI.md 18): red / yellow / green / grey, always visible, and the
     "open Prime95 folder" / "open parked file" buttons.
 
 .DESCRIPTION

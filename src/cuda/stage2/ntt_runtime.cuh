@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
- * ntt_poly_probe.cu -- M0 follow-up of docs/DEV_STAGE2_GPU_PLAN.md sections 8.1/8.3/8.4:
+ * ntt_poly_probe.cu -- M0 follow-up of docs/architecture/STAGE2.md sections 8.1/8.3/8.4:
  * the SAME figure of merit as tools/bench/cufft_kron_probe.cu poly mode (ns per
  * operand-bit of a Kronecker polynomial multiply), but the convolution is done by an
  * INTEGER NTT over the Goldilocks prime instead of an fp64 cuFFT.
@@ -797,7 +797,7 @@ static void ntt_inverse(unsigned long long *d, unsigned long long n, int k,
 }
 
 /* =====================================================================================
- * STAGE FUSION (docs/DEV_STAGE2_GPU_PLAN.md section 12) -- the M2 optimisation round.
+ * STAGE FUSION (docs/architecture/STAGE2.md) -- the M2 optimisation round.
  *
  * WHAT COUNTS AS A PASS HERE: one FULL READ *and* one FULL WRITE of the N-word array
  * (2*N*8 bytes of traffic).  The correctness-first first cut launched one kernel per
@@ -1789,7 +1789,7 @@ static void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b
 }
 
 /* ===================================================================================== *
- *  THE MULTIPLY ARENA (docs/DEV_STAGE2_GPU_PLAN.md section 18, slice S3)
+ *  THE MULTIPLY ARENA (docs/architecture/STAGE2.md, slice S3)
  *
  *  ntt_poly_mul_host() was written for a probe: one call, one shape, everything allocated,
  *  built and released again.  Measured cost of that discipline when the tree engine calls it
@@ -3008,7 +3008,7 @@ static void dump_cmp(const char *tag, const std::vector<unsigned long long> &d, 
  *
  * `ntt_poly_mul_host` is this probe's Kronecker / integer-NTT polynomial multiply, extracted
  * so that the CLI's `poly` mode (run_poly, below) and the GPU tree engine
- * (tools/bench/stage2_tree_gpu.cu, M3 slice S1 of docs/DEV_STAGE2_GPU_PLAN.md section 18)
+ * (tools/bench/stage2_tree_gpu.cu, M3 slice S1 of docs/architecture/STAGE2.md)
  * call THE SAME CODE.  Nothing is copy-pasted into the tree: the packing convention, the
  * exactness assertions, the fusion plan, the transform, the carry and the slot assembly below
  * are the single implementation of each, and the tree reaches them by including this file
@@ -3050,7 +3050,7 @@ struct NttMulStats {
     int S = 0, k = 0, bpw = 0;
     int passes_fwd = 0, passes_total = 0, carry_rounds = 0;
     double mem_mb = 0.0, t_fwd = 0.0, t_inv = 0.0, t_slot = 0.0;
-    /* OBJECTIVE 4 (docs/DEV_STAGE2_GPU_PLAN.md section 32): the batched entry point packs its
+    /* OBJECTIVE 4 (docs/architecture/STAGE2.md): the batched entry point packs its
        operands ON THE HOST, scans them for the max coefficient, and ships them to the device --
        none of which any of the timers above covers, because they were written for the other
        entry point.  Measured separately so the "111 us per call that nobody measured" can be
@@ -3485,7 +3485,7 @@ struct NttPassResult {
     double t_fwd = 0.0, t_inv = 0.0, t_slot = 0.0;
     /* the carry-convergence assert below is a WHOLE EXTRA PASS over the digit array (a memset, a
        kernel over N*nbatch digits and a device-to-host copy) and it was untimed, which is why
-       more than half of ntt_seconds had no owner (docs/DEV_STAGE2_GPU_PLAN.md section 34). */
+       more than half of ntt_seconds had no owner (docs/architecture/STAGE2.md). */
     double t_check = 0.0;
     /* ... and THAT total is itself split, because its three parts have three different fixes
        (section 41): the reset memset launch, the kernel itself, and the blocking 16-byte D2H

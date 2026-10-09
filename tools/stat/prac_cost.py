@@ -4,7 +4,7 @@
 Examples:
   python tools/stat/prac_cost.py 1000 10000 100000 --cgbn
   python tools/stat/prac_cost.py 10000 --lucas-codes .refactor/ecm/Lchain_codes.dat
-  python tools/stat/prac_cost.py 1000 --emit-plan docs/data/prac_1000_plan.json
+  python tools/stat/prac_cost.py 1000 --emit-plan data/experiments/prac_1000_plan.json
 
 This is an offline work-count study. Ratios are not GPU timing or cycle counts.
 Every selected plan checks its exact differential scalar relations automatically.

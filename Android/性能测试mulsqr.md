@@ -42,7 +42,7 @@
 
 内核：`mont_mul_unroll_i24.cl`，CIOS + `#pragma unroll`，内乘 `mont_i24_mul_full`（12-bit 分解 + `mul24`/`mad24`）；支持任意 `bits % 24 == 0`（512 固定 22 limbs）。
 
-> **Level 1 优化（mad24 融合）**：详见 [`docs/MONT_UNROLL_I24_MAD24_OPTIMIZATION_CN.md`](../docs/MONT_UNROLL_I24_MAD24_OPTIMIZATION_CN.md)。下表 **「mad24 后」** 为 `kernel_iterations=10000`；**「优化前」** 为同路径初版实现、`kernel_iterations=1000`。
+> **Level 1 优化（mad24 融合）**：详见 [`docs/architecture/OPENCL.md`](../docs/architecture/OPENCL.md)。下表 **「mad24 后」** 为 `kernel_iterations=10000`；**「优化前」** 为同路径初版实现、`kernel_iterations=1000`。
 
 ### 2.1 Level 1 mad24（ulong CIOS）
 
@@ -51,7 +51,7 @@
 | 首轮 | `10000×1`，src 5KiB | 2.38M | 5.77M | 767K | 1.21M |
 | Level2 同会话基线 | `1000×10`，src 11KiB | **2.76M** | **5.95M** | 735K | **1.20M** |
 
-> 跨会话差异分析见 [`docs/MONT_UNROLL_I24_MAD24_OPTIMIZATION_CN.md`](../docs/MONT_UNROLL_I24_MAD24_OPTIMIZATION_CN.md)「跨次跑分」。**同会话内**对比 Level 1/2 时以第二列 ulong 为准。
+> 跨会话差异分析见 [`docs/architecture/OPENCL.md`](../docs/architecture/OPENCL.md)「跨次跑分」。**同会话内**对比 Level 1/2 时以第二列 ulong 为准。
 
 ### 2.2 Level 1–2 同会话对比（`1000×10`，8 内核）
 
@@ -64,7 +64,7 @@
 
 > Level 3（nocopy）已废弃（830 @512 **−21%**）。Level 4（`blsub`）见 §2.4。
 
-详见 [`docs/MONT_UNROLL_I24_MAD24_OPTIMIZATION_CN.md`](../docs/MONT_UNROLL_I24_MAD24_OPTIMIZATION_CN.md)。
+详见 [`docs/architecture/OPENCL.md`](../docs/architecture/OPENCL.md)。
 
 ### 2.4 Level 4 全位宽 bench（`1000×10`，8 内核）
 

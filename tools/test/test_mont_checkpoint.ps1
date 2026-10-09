@@ -1,6 +1,6 @@
 ﻿# ---------------------------------------------------------------------------
 # test_mont_checkpoint.ps1 -- end-to-end mid-stage-1 checkpoint test for the
-# Suyama-sigma Montgomery CPU path (docs/ECM_Montgomery_STAGE1.md 搂17).
+# Suyama-sigma Montgomery CPU path (docs/architecture/STAGE1.md 搂17).
 #
 #   E1 fixed sigma : a run killed mid-ladder and then resumed must produce a .save
 #                    file BYTE-IDENTICAL to one uninterrupted run with the same

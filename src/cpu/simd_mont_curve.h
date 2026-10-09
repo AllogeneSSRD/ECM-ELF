@@ -49,7 +49,7 @@ int mont_soa_stage1_bits(mont_soa_ctx_t *c, const uint8_t *bits, size_t nbits,
                          const uint64_t sigmas[IFMA_LANES], mpz_t *out_x, mpz_t *out_gcd);
 
 /* ---------------------------------------------------------------------------
- * Interruptible batch (mid-stage-1 checkpoints, docs/ECM_Montgomery_STAGE1.md §17).
+ * Interruptible batch (mid-stage-1 checkpoints, docs/architecture/STAGE1.md).
  *
  * Every lane walks the SAME exponent bits in lockstep, so one bit offset
  * describes the whole batch: a paused batch resumes with start_bit and the

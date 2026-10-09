@@ -2,7 +2,7 @@
  * ecm_mont_cpu.h -- Suyama-sigma (Prime95 sigma_type = 1) Montgomery-curve
  * ECM stage 1, scalar reference implementation.
  *
- * Math (all conventions pinned by experiment; see docs/ECM_Montgomery_STAGE1.md):
+ * Math (all conventions pinned by experiment; see docs/architecture/STAGE1.md):
  *   u = sigma^2 - 5              v = 4*sigma
  *   A = (v-u)^3 (3u+v) / (4 u^3 v) - 2        (mod N)   [Montgomery coefficient]
  *   a24 = (A+2)/4                                       [doubling constant]
@@ -78,7 +78,7 @@ int mont_stage1_curve_bits_x(mpz_t factor, mpz_t x, const mpz_t N,
                              uint64_t sigma, const uint8_t *bits, size_t nbits);
 
 /* ---------------------------------------------------------------------------
- * Mid-ladder checkpoint support (docs/ECM_Montgomery_STAGE1.md §17).
+ * Mid-ladder checkpoint support (docs/architecture/STAGE1.md).
  *
  * The ladder invariant at the top of every iteration is
  *

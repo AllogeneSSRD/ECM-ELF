@@ -57,7 +57,7 @@ enum { OP_MONT_MUL, OP_MONT_SQR, OP_NORM, OP_ADD_NORM, OP_CMP, OP_SUB_COND, OP_S
 //   2 = force the accumulating operand to 1
 // Build with -DPROBE_VALUE_MODE=n and compare ns/op.  This matters because every
 // timing probe that lets its state collapse to a degenerate value would otherwise
-// silently measure a cheaper kernel (see docs/ECM_CGBN_OPTIMIZATION.md 5.4).
+// silently measure a cheaper kernel (see docs/performance/STAGE1.md 5.4).
 #ifndef PROBE_VALUE_MODE
 #define PROBE_VALUE_MODE 0
 #endif

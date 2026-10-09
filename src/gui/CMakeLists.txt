@@ -1,4 +1,4 @@
-# ecm_gui -- the graphical front-end (docs/DEV_ECM_GUI.md).
+# ecm_gui -- the graphical front-end (docs/usage/GUI.md).
 #
 # Reached from the root CMakeLists.txt only when
 #   ECM_BUILD_GUI=ON  AND  WIN32  AND  ${ECM_IMGUI_DIR}/imgui.h exists

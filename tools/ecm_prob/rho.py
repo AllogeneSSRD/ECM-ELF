@@ -35,7 +35,7 @@ M_EULER_1 = 0.422784335098467139     # 1 - gamma
 
 # Smoothness corrections for the batch parametrizations (ecm.c:46-56).
 # These are the *additional* factors (relative to Suyama) by which the
-# effective group-order size is scaled.  See docs/ECM_PARAMETERIZATION_ANALYSIS.md
+# effective group-order size is scaled.  See docs/reference/ECM_ALGORITHMS.md
 EXTRA_SMOOTHNESS_SQUARE = 0.416384512396064      # param 1 (d square)
 EXTRA_SMOOTHNESS_32BITS_D = 0.330484606500389    # param 3 (d random 32-bit)
 

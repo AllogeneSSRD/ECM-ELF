@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Smoke test for ecm_gui milestone M1 (docs/DEV_ECM_GUI.md section 14).
+    Smoke test for ecm_gui milestone M1 (docs/usage/GUI.md).
 
 .DESCRIPTION
     Runs the real GUI once, against a sandbox ecm.ini, and checks the two things a

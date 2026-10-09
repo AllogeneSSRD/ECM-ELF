@@ -31,7 +31,7 @@
  * SoA field helpers (add / sub with per-lane canonical reduction)
  *
  * Pass budget per helper -- this is the ladder's non-multiply cost, and it was
- * measured at 18-26% of a ladder bit (docs/ECM_Montgomery_STAGE1.md §11.1), so the
+ * measured at 18-26% of a ladder bit (docs/architecture/STAGE1.md), so the
  * number of passes over the n columns matters:
  *
  *   soa_add : 2 passes (add + candidate in one pass, then one select pass)

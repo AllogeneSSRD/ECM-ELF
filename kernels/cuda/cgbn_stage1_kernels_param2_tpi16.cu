@@ -5,7 +5,7 @@
  * of the parallel build).  The per-tier guards (ECM_TIERS_RESTRICTED / ECM_TIER_<bits>)
  * and the exported symbol name are unchanged, so the dispatcher in cgbn_stage1.cu and
  * the restricted-tier builds keep working as before.
- * See docs/ECM_CGBN_OPTIMIZATION.md 8.8. */
+ * See docs/performance/STAGE1.md 8.8. */
 
 /* cgbn_stage1_kernels_param2.cu -- param2 (gmp-ecm "batch 2", 6-torsion) instantiations.
  *
@@ -18,7 +18,7 @@
  *
  * Measured: 79.15 M curve-bits/s against param0's 71.52 M (M511, 8192 curves, B1=1e5,
  * RTX 4060), +10.7%, matching the 10/9 operator ratio.  See
- * docs/ECM_CGBN_OPTIMIZATION.md section 5.6.
+ * docs/performance/STAGE1.md
  *
  * Grid (identical to cgbn_stage1_kernels_tpi*.cu):
  *   TPI=4  : 128, 192, 256, 384, 512                      always compiled

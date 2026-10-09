@@ -2267,7 +2267,7 @@ static void s4_launch_reduce(int nw, int L, unsigned long long nbatch,
             g_div_shift, g_div_recip, first, count==~0ull ? out_slots : count,0);
 }
 
-/* ---- THE 2-BY-1 DIVISION PRIMITIVE (objective 4, docs/DEV_GPUOWL_NTT_NOTES.md section 31) -----
+/* ---- THE 2-BY-1 DIVISION PRIMITIVE (objective 4, docs/architecture/NTT.md) -----
    The reduction's tail spends 2*nw^2 MACs putting the R factor back, but with L == nw the whole
    reduction can be ONE plain long division of C by N at about nw^2 MACs.  The measurements say that
    is the right thing to want: t_reduce is 21.6 s at the B2=1e11 shape, it does NOT move when the
@@ -6325,7 +6325,7 @@ static unsigned long long powmod_u64(unsigned long long a, unsigned long long e,
  * mpz_probab_prime_p(z, 25): a GMP object created and destroyed, plus 25 Miller-Rabin rounds,
  * for a number that is already known to be < 2^64.  It measured ~150 us per call, which is what
  * made the naming loop (not the algorithm) the pole of the whole run -- see the split timers
- * `t_scan`/`t_ladder` in the `batched_naming:` line, and docs/DEV_STAGE2_GPU_PLAN.md section 26.
+ * `t_scan`/`t_ladder` in the `batched_naming:` line, and docs/architecture/STAGE2.md
  *
  * This version is EXACT, not probabilistic, and much cheaper:
  *   * trial division by every prime <= 101 (there are 26 of them) rejects ~88% of all candidates
@@ -6413,7 +6413,7 @@ struct Stage2Tail {
 
 /* ===================================================================================== *
  *  SLICE S3 -- THE BATCHED STRUCTURE, WITH THE ORCHESTRATION ON THE DEVICE
- *  (docs/DEV_STAGE2_GPU_PLAN.md sections 13.1, 18 and 18.3)
+ *  (docs/architecture/STAGE2.md sections 13.1, 18 and 18.3)
  *
  *  WHAT S2 DID (the simple structure): ONE product tree over all B2/D giant points, one
  *  remainder-tree descent against it, one accumulation.  The CPU cost model says that costs

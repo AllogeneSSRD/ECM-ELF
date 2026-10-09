@@ -4,7 +4,7 @@
     cuFFT + Kronecker probe: is the GPU big-integer / polynomial multiplication CORRECT?
 
 .DESCRIPTION
-    M0 of docs/DEV_STAGE2_GPU_PLAN.md.  Two things are asserted:
+    M0 of docs/architecture/STAGE2.md.  Two things are asserted:
 
       [1] `check <bits>` -- the whole product of two random integers must equal GMP's, bit for
           bit (the tool itself compares chunk arrays reconstructed from the device against
@@ -15,7 +15,7 @@
           does not fit in a uint64).
 
     Timing is printed by the tool but NOT asserted: performance gates belong in the plan
-    (docs/DEV_STAGE2_GPU_PLAN.md 8.3/8.4), and a wall-clock assertion would be flaky.
+    (docs/architecture/STAGE2.md 8.3/8.4), and a wall-clock assertion would be flaky.
 
     Uses device 1 by default (the second, normally idle card) so it does not disturb a stage-1
     job running on device 0.  Skips cleanly when no CUDA device is present.

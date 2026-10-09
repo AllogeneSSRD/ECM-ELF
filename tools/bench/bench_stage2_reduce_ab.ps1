@@ -3,7 +3,7 @@
 .SYNOPSIS
     Same-binary ABBA benchmark of reduction, sampling, packing, chunk budget or scaled descent.
 .DESCRIPTION
-    Defaults to the production shape in DEV_GPUOWL_NTT_NOTES.md section 32.  Writes a log
+    Defaults to the production shape in docs/architecture/NTT.md  Writes a log
     for each run, provenance.json and results.csv.  The mode, GMP checks, factors/hit primes,
     coefficient count and arena overflow are checked before a speed comparison is reported.
     All environment overrides are restored.  Device 1 is used unless explicitly overridden.

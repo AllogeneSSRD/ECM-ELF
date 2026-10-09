@@ -57,7 +57,7 @@ foreach ($B1 in '1e3', '1e5') {
     # A HIT makes the save carry the FOUND FACTOR instead of an x-coordinate, which is
     # correct behaviour but not comparable -- that needs N to be prime.  M_p is composite
     # whenever p is not a Mersenne prime exponent (1021 is NOT one: 2^1021-1 has small
-    # factors, so the run legitimately "hits" -- see docs/ECM_CGBN_OPTIMIZATION.md 6.6).
+    # factors, so the run legitimately "hits" -- see docs/performance/STAGE1.md 6.6).
     if ($ox.Length -lt ($Bits / 8)) {
         Check "B1=$B1 N is prime (no factor hit; X has $($ox.Length) hex digits)" $false
         Write-Host "         pick a Mersenne PRIME exponent for -Bits: 521, 607, 1279, 2203, 3217"

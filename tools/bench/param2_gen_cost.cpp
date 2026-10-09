@@ -1,6 +1,6 @@
 /* param2_gen_cost.cpp -- what does per-curve curve GENERATION cost on the host?
  *
- * Motivating question (docs/ECM_CGBN_OPTIMIZATION.md §5.6): our CUDA stage-1 kernel
+ * Motivating question (docs/performance/STAGE1.md): our CUDA stage-1 kernel
  * prices the *param2*-shaped step at 78.37 M curve-bits/s against param0's 71.01 M
  * (+10.4%), so param2 ("batch 2", the 6-torsion batch family) would be the fastest of
  * the three parametrizations per curve.  But gmp-ecm's get_curve_from_param2()

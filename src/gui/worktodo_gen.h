@@ -1,6 +1,6 @@
 #pragma once
 
-// worktodo generator (docs/DEV_ECM_GUI.md 19, M6 scope A).
+// worktodo generator (docs/usage/GUI.md).
 //
 // The operator pastes PrimeNet assignments (ECM2= lines) and gets back a worktodo queue:
 // parse -> filter -> dedup -> rewrite -> sort -> save-name check -> emit ECMSTAGE2= lines,

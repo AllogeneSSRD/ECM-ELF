@@ -2,8 +2,8 @@
 <#
 .SYNOPSIS
     Acceptance test for the Prime95 handoff: every finished task is appended VERBATIM to
-    the worktodo.add next to Prime95's worktodo.txt (docs/DEV_ECM_GUI.md 18,
-    docs/DEV_ECM_WORKTODO.md 8).
+    the worktodo.add next to Prime95's worktodo.txt (docs/usage/GUI.md 18,
+    docs/usage/STAGE1.md 8).
 
 .DESCRIPTION
     Each scenario runs ONE real queue-mode task (M521, B1=1e3, 1 curve, param0) in a
@@ -221,7 +221,7 @@ Check "abc used worker=0"                   ((Get-Notice $r5b.out 'warn') -match
 
 # ------------------------------------------------------------------ [6] verbatim ---------
 Write-Host "[6] AID + known factors survive byte for byte"
-# 1943118631 really divides 2^677-1 (docs/DEV_ECM_WORKTODO.md), so N_eff is legitimate.
+# 1943118631 really divides 2^677-1 (docs/usage/STAGE1.md), so N_eff is legitimate.
 $verbatim = 'ECMSTAGE2=ABCDEF0123456789ABCDEF0123456789,1,2,677,-1,"m677_1e3.save",0,0,1,"1943118631"'
 $r6 = Invoke-Task -name 'verbatim' -task $verbatim -workerSpec '1' -p95Todo $todoBoth
 $hit6 = ($r6.out -match 'FACTOR FOUND')

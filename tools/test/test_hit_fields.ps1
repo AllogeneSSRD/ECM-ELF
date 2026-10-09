@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     D3 acceptance: the hit line carries factor + curve + sigma + param + method + save
-    (docs/DEV_ECM_GUI.md section 11, D3).
+    (docs/usage/GUI.md, D3).
 
 .DESCRIPTION
     Runs the real driver in QUEUE mode (the mode the GUI uses) on M677 with B1=1e6 and
@@ -27,7 +27,7 @@
     odd)" for every parametrization, while the identical task through the queue manager
     works. The D3 printing cannot be the cause -- both modes fill the same per-curve sigma
     array in the same function, and the queue path passes -- so this is a pre-existing
-    CLI-only defect (docs/DEV_ECM_GUI.md, TODO).
+    CLI-only defect (docs/usage/GUI.md, TODO).
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_hit_fields.ps1

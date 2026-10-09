@@ -58,7 +58,7 @@ export default function Stage2CarrierPlan() {
     </>}
     <H2>实施次序</H2>
     <Text>1. target/carrier 上下文分离，固定 D 完成正确性与归因。2. 共用 MemoryPlan，统一 owner reuse 与真实调用形状。3. tune 后联合选择 backend/D/chunk。4. 研究 short/middle product 和 scratch 复用后再跨到更大 P。</Text>
-    <Link href="D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md">完整报告：证明、公式、源码行号与原论文</Link>
+    <Link href="D:/code/MPA-OpenCl/docs/architecture/MEMORY.md">完整报告：证明、公式、源码行号与原论文</Link>
   </Stack>;
 }
 '''

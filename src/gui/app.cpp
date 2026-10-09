@@ -219,7 +219,7 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
     }
     // Prime95 handoff: the GUI reads these two [queue] keys itself so the notice strip can
     // say "not configured" before any worker runs, and so the two "open" buttons know
-    // where to look (docs/DEV_ECM_GUI.md 18).
+    // where to look (docs/usage/GUI.md 18).
     p95_worktodo_path_ = ini_.get("", "p95_worktodo_path");
     p95_add_workers_ = ini_.get("", "p95_add_workers");
     {
@@ -415,7 +415,7 @@ void App::rebuild_workers() {
         w.proc->set_autostart(w.autostart);
         workers_.push_back(std::move(w));
     }
-    // Duplicate-device warning (docs/DEV_ECM_GUI.md 5.7): the driver cannot see
+    // Duplicate-device warning (docs/usage/GUI.md 5.7): the driver cannot see
     // other workers, so this check only exists here.
     std::map<int, int> seen;
     for (const WorkerView &w : workers_) {
@@ -452,7 +452,7 @@ void App::stop_all() {
 }
 
 void App::stop_all_quietly() {
-    // Exit path (docs/DEV_ECM_GUI.md 5.6). Requirements from the user: closing the GUI
+    // Exit path (docs/usage/GUI.md 5.6). Requirements from the user: closing the GUI
     // must terminate the workers silently -- no restart, no "Error" state, no crash
     // accounting, nothing in the status line, and no waiting around.
     int running = 0;
@@ -555,7 +555,7 @@ void App::tick() {
         }
         w.events.insert(w.events.end(), d.events.begin(), d.events.end());
         w.raw.insert(w.raw.end(), d.raw.begin(), d.raw.end());
-        // Prime95 handoff notices (docs/DEV_ECM_GUI.md 18): keep the newest one per worker
+        // Prime95 handoff notices (docs/usage/GUI.md 18): keep the newest one per worker
         // plus a trace line, so a script can prove what the strip shows.
         for (const P95Notice &notice : d.p95) {
             w.p95 = notice;
@@ -632,7 +632,7 @@ std::string App::effective_config_text(int worker_index) const {
 void App::on_imgui_ready() {
     ImGuiIO &io = ImGui::GetIO();
     // The GUI owns the layout: ImGui must not write its own imgui.ini, the layout
-    // is persisted into [GUI] dock_layout (docs/DEV_ECM_GUI.md 7.1).
+    // is persisted into [GUI] dock_layout (docs/usage/GUI.md 7.1).
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
@@ -667,7 +667,7 @@ void App::capture_layout(bool save_docking_layout) {
 }
 
 bool App::shutdown(std::string &err, bool save_docking_layout) {
-    // Closing the GUI stops the workers (docs/DEV_ECM_GUI.md 5.6), silently: the job
+    // Closing the GUI stops the workers (docs/usage/GUI.md 5.6), silently: the job
     // objects would kill them when this process exits anyway, so the GUI terminates them
     // explicitly, immediately and without any UI/state noise.
     // NOTE: this is TerminateJobObject -- an immediate kill. The driver does NOT get to
@@ -1356,7 +1356,7 @@ void App::draw_menu_bar() {
     ImGui::EndMainMenuBar();
 }
 
-// ---- Prime95 handoff (docs/DEV_ECM_GUI.md 18) ---------------------------------------
+// ---- Prime95 handoff (docs/usage/GUI.md 18) ---------------------------------------
 
 std::string App::p95AddPath() const {
     if (p95_worktodo_path_.empty()) return std::string();
@@ -1516,7 +1516,7 @@ void App::draw_p95_notice(float height, float host_top) {
     }
 }
 
-// ---- worktodo generator (M6 scope A, docs/DEV_ECM_GUI.md 19) -------------------------
+// ---- worktodo generator (M6 scope A, docs/usage/GUI.md 19) -------------------------
 
 std::string App::genWorktodoPath() const {
     // The file the driver's queue reads: the ini's `worktodo` key, resolved against the
@@ -1821,7 +1821,7 @@ void App::draw_gen_panel() {
     ImGui::End();
 }
 
-// ---- one line chart for every panel (docs/DEV_ECM_GUI.md 8) --------------------------
+// ---- one line chart for every panel (docs/usage/GUI.md 8) --------------------------
 // Replaces ImGui::PlotLines, which the user found hard to read ("优化所有折线图使其更美观易读",
 // 2026-09-29). What this adds over PlotLines:
 //   * a rounded card with a dark inset background, so the chart reads as one object;
@@ -2255,7 +2255,7 @@ void App::draw_workers_table() {
             // is more valuable than two buttons that are never both useful).
             if (busy) {
                 if (ImGui::SmallButton((loc_.t("workers", "stop") + tag).c_str())) {
-                    // Graceful: a checkpoint is written first (docs/DEV_ECM_GUI.md 5.6).
+                    // Graceful: a checkpoint is written first (docs/usage/GUI.md 5.6).
                     request_stop(w.index);
                 }
             } else {
@@ -2389,7 +2389,7 @@ void App::draw_gpu_panel() {
         // sampling thread keeps ~2 minutes at the default poll interval).
         const std::vector<GpuSample> hist_raw = gpu_.history(static_cast<int>(i));
         // Physically impossible readings are dropped from the CHART (they are documented in
-        // docs/DEV_ECM_GUI.md 8.1): the 4060 Laptop intermittently reports 590 W against a 55 W
+        // docs/usage/GUI.md 8.1): the 4060 Laptop intermittently reports 590 W against a 55 W
         // enforced limit, and ONE such sample stretched the power range to 0..660 W so the real
         // 1.5..9.4 W curve was drawn as a dead flat line at the bottom (measured 2026-09-29).
         // The same rule already guards the whole-machine total below, and the card's text row
@@ -2479,7 +2479,7 @@ void App::draw_gpu_panel() {
 
     // Whole-machine power: the sum of the newest sample of every card -- the number a
     // user actually wants when asking "is the box at its limit". Physically impossible
-    // readings are excluded (see docs/DEV_ECM_GUI.md 8.1).
+    // readings are excluded (see docs/usage/GUI.md 8.1).
     {
         double total = 0.0;
         int counted = 0;

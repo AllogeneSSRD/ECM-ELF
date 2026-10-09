@@ -64,7 +64,7 @@ def fit_power(rows, min_bits, joint=False):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--study', type=Path, required=True)
-    p.add_argument('--output', type=Path, required=True, help='Filename prefix, e.g. docs/benchmarks/stage2_n_20261008')
+    p.add_argument('--output', type=Path, required=True, help='Filename prefix, e.g. data/benchmarks/stage2_n_20261008')
     p.add_argument('--allow-partial', action='store_true')
     a = p.parse_args()
     study = a.study.resolve()

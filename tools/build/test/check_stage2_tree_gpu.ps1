@@ -45,7 +45,7 @@ param(
     [switch]$Evaluate,
     # NTT_NAME_MAX for the GPU run: 0 (default) names EVERY hit leaf, so `hits`/`hit_primes`
     # are directly comparable with the CPU reference.  A positive value caps the DIAGNOSTIC
-    # candidate scan (docs/DEV_STAGE2_GPU_PLAN.md section 27.3: at B2=1e11 a full scan would
+    # candidate scan (docs/architecture/STAGE2.md: at B2=1e11 a full scan would
     # take ~26 hours), which makes `hits`/`hit_primes` PARTIAL by construction -- the factor
     # set must still be identical, and that is what is asserted instead.
     [int]$NameMax = 0,

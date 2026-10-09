@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    M2 acceptance: the GUI supervises worker processes (docs/DEV_ECM_GUI.md section 14).
+    M2 acceptance: the GUI supervises worker processes (docs/usage/GUI.md).
 
 .DESCRIPTION
     Starts the real ecm_gui with a sandbox ecm.ini that points [GUI] exe= at the fake
@@ -170,7 +170,7 @@ Check "worker 2 crashed -> Restarting" ($log -match 'worker 2: state Restarting'
 Check "worker 2 restarted exactly once" (([regex]::Matches($log, 'worker 2: restart #\d+')).Count -eq 1)
 Check "worker 2 then finished its queue" ($log -match 'worker 2: state QueueEmpty')
 Check "worker 3 is still running when the GUI closes" ($log -match 'worker 3: state Running')
-# Closing asks for a checkpoint first (user requirement, docs/DEV_ECM_GUI.md 5.6). This test
+# Closing asks for a checkpoint first (user requirement, docs/usage/GUI.md 5.6). This test
 # runs with exit_confirm = stop (no modal) and a 3 s checkpoint wait, and its fake workers
 # never write a checkpoint -- so the expected trace is: request -> timeout -> stop, and
 # nothing crash-like in between or after.

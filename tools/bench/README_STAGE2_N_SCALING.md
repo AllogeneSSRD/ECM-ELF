@@ -58,11 +58,11 @@ python tools/bench/bench_stage2_n_scaling.py --output data/n_scaling_study --res
 
 ```powershell
 python tools/bench/analyze_stage2_n_scaling.py `
-  --study data/n_scaling_study --output docs/benchmarks/stage2_n_scaling
+  --study data/n_scaling_study --output data/benchmarks/stage2_n_scaling
 
 python tools/bench/plot_stage2_n_scaling.py `
-  --summary docs/benchmarks/stage2_n_scaling_summary.csv `
-  --output docs/figures/stage2_n_scaling --tick 1000
+  --summary data/benchmarks/stage2_n_scaling_summary.csv `
+  --output data/figures/stage2_n_scaling --tick 1000
 ```
 
 分析输出：逐遍 `_runs.csv`、按输入/B2分组的 `_summary.csv`、包含公式拟合与原始文件哈希的 `_analysis.json`。均值、样本标准差、CV、最小/最大值全部保留；单次对照的标准差留空。重复之间的 D、叶指纹、因子和工作量不一致会列为警告，不会被静默删除。

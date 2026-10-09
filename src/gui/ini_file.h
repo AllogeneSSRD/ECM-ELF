@@ -5,7 +5,7 @@
 // Why this is not the driver's ecm_queue_config_load(): that loader is a one-shot
 // "give me the values" pass which drops the file structure. The GUI has to WRITE
 // the ini as well (window geometry, NumWorkers, autostart, language...), and the
-// rule is (docs/DEV_ECM_GUI.md 4.3):
+// rule is (docs/usage/GUI.md 4.3):
 //
 //   * unknown keys, comments, blank lines and the user's own ordering survive;
 //   * only the VALUE of a key the GUI owns is ever rewritten;

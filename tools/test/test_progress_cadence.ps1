@@ -3,7 +3,7 @@
 .SYNOPSIS
     Acceptance test for the progress cadence: pipe every line, file every N seconds
     (ini key progress_log_seconds), and the 100% line always written
-    (docs/DEV_ECM_GUI.md 7.2).
+    (docs/usage/GUI.md 7.2).
 
 .DESCRIPTION
     One real queue-mode task (M521, B1=1e5, 4 curves, param0, device 0) is run four times

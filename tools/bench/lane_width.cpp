@@ -9,7 +9,7 @@
  * so the ratio stays 4:7 unless something is genuinely fixed per call.  This tool
  * measures both loop shapes back to back in one process, plus the pure-madd roof, and
  * reports per-lane throughput.  If variant B is not faster, widening buys nothing and
- * the field layer really is finished (docs/ECM_Montgomery_STAGE1.md section 15.2).
+ * the field layer really is finished (docs/architecture/STAGE1.md).
  *
  * Both variants run the same double loop (2 rows fused, one b-vector feeding four
  * madds) over n columns of 52-bit limbs; variant B keeps each column as two zmm

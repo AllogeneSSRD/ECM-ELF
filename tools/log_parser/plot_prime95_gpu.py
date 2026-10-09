@@ -175,7 +175,7 @@ export default function ECMComparison() {
   <H2>比较边界</H2>
   <Text>CPU B1=100000，GPU B1=20；sigma 不同；CPU 实际 B2 比档位高约 3.1–7.3%。CPU 使用主线程及 3 个 polymult helper，并有 PRP 日志活动；GPU 数据采于 55 W，未与修复后的功耗混合。1939 bits 两个较大 B2 的 CPU CV 约 15–24%，需保留误差范围。</Text>
   <Text>功耗修复后只有 7995 bits / B2=2.6e11 有 3 次对照：GPU 34.920 s；CPU 29.620 s，GPU 速度比 0.85×。其余档位没有修复后数据，未外推。</Text>
-  <Text size="small" tone="secondary">明细与行号：仓库 data/prime95_ecm_20261009/comparison/exact_pairs.csv、modulus_runs.csv；报告：docs/PRIME95_GPU_STAGE2_COMPARISON_20261009.md。最后一条曲线的停机后 Resuming 消息已排除，不影响已完成计时。</Text>
+  <Text size="small" tone="secondary">明细与行号：仓库 data/prime95_ecm_20261009/comparison/exact_pairs.csv、modulus_runs.csv；报告：docs/performance/STAGE2.md。最后一条曲线的停机后 Resuming 消息已排除，不影响已完成计时。</Text>
  </Stack>;
 }
 '''

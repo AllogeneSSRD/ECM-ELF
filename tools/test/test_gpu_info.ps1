@@ -1,4 +1,4 @@
-# test_gpu_info.ps1 -- `ecm_cuda.exe --gpu-info` (docs/DEV_ECM_GUI.md D4).
+# test_gpu_info.ps1 -- `ecm_cuda.exe --gpu-info` (docs/usage/GUI.md D4).
 #
 # --gpu-info answers "which kernel tier would you run, and how many curves does a full GPU
 # need" WITHOUT running a curve. That is what the worktodo generator (M6) will consume, so

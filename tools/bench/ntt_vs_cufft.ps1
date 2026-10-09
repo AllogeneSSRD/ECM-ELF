@@ -1,31 +1,21 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    M2 acceptance measurement: integer NTT vs fp64 cuFFT on the SAME shapes, one command.
+    Compare integer NTT and fp64 cuFFT probes on the same shapes.
 
 .DESCRIPTION
-    docs/DEV_STAGE2_GPU_PLAN.md section 12.3 defines the M2 gate as ns per operand-bit on
-    the same figure of merit the cuFFT probe established:
+    Both operands' packed-bit count defines the probe metric:
         ns_per_operand_bit = t_total * 1e9 / (2 * P * slot_bits)
-    i.e. the PACKED bits of both operands, which is what both probes print.  (An earlier
-    version of the NTT probe divided by P*S, the payload of ONE operand, which would have
-    flattered it by ~4x -- that is why this script re-derives the number from t_total and
-    slot_bits instead of trusting a printed field, and cross-checks it against the field.)
-
-    Shapes: the small ones for correctness/regression, and the LARGE one that section 10.6
-    says a GPU engine should actually use (take the largest D that fits memory, which puts
-    P around 9e4 rather than Prime95's 1.3e5, and S at the real modulus width).
-
-    Timing is REPEATED and the MEDIAN is reported: the machine has a second GPU that other
-    work uses, and a contended run once produced a 10-minute outlier (section 8.4).
+    The script recomputes this value from total time and slot width and cross-checks
+    the printed metric. Repeated samples report their median. This microbenchmark
+    excludes the complete ECM pipeline; see docs/architecture/NTT.md.
 
 .PARAMETER Shapes
     "P,S" pairs.  Default: 1024,5153 / 8192,5153 / 65536,5153 (S=5153 = the M5153-class
     modulus width the earlier measurements used).
 
 .PARAMETER Real
-    Also measure the real-shape pair from section 10.6/12.3 (P=92160, S=5261), which needs
-    ~2 GB of transform buffers on the 4060.
+    Also measure P=92160, S=5261. Query actual workspace capacity before running.
 
 .EXAMPLE
     powershell -File tools\bench\ntt_vs_cufft.ps1

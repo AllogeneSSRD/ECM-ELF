@@ -7,7 +7,7 @@
  *   mpn_mul_n()/mpn_sqr() + the landed REDC dispatch (mpn_redc_1 / mpn_redc_n).
  * Not mpz_mod, not a toy reimplementation.
  *
- * Gate (docs/ECM_EDWARDS_STAGE1.md §13): >= 2.0x at n52 = 77 (~4000 bit) and
+ * Gate (docs/architecture/STAGE1.md): >= 2.0x at n52 = 77 (~4000 bit) and
  * n52 = 125 (~6500 bit); n52 = 154 (8000 bit) is measured but not gated.
  * Ratios are measured alternating A/B, minimum of `rounds` blocks, because this
  * laptop throttles under sustained load (see §9's retracted w-sweep).

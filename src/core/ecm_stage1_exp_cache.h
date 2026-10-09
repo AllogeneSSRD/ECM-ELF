@@ -4,7 +4,7 @@
  * WHY: at B1 = 260e6 the product is 375 Mbit (47 MB) and building it costs ~10.6 s even after
  * the optimisations in ecm_stage1_exp.cpp (the remaining time is inherent: GMP's FFT multiply
  * of two ~190 Mbit operands alone is 0.87 s, and a product tree over 375 Mbit needs several of
- * those, see docs/ECM_CGBN_OPTIMIZATION.md).  Every queue task repeats that build, so a
+ * those, see docs/performance/STAGE1.md).  Every queue task repeats that build, so a
  * worktodo full of tasks at the same B1 pays it over and over.  Loading a validated cache file
  * costs ~0.3 s instead (hash + import + two divisibility checks).
  *

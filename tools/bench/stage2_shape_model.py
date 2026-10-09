@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""stage2_shape_model.py -- Route B (tree-based stage 2) cost model, in one file.
+"""stage2_shape_model.py -- approximate packed operand-bit model for polynomial Stage2.
 
-Why this exists
----------------
-docs/DEV_STAGE2_GPU_PLAN.md states a per-curve figure of ~1.9e11 operand-bits for M5261
-parameters.  That number was first obtained by BACK-DERIVING it from Prime95's wall time
-(28.6 s at an assumed 0.15 ns/operand-bit) and then, in section 10.5, re-derived forwards
-from the tree structure with pen and paper.  Both agreed, but nobody could re-run either.
+This offline model estimates tree work for selected Prime95 parameter examples.
+It is not the production packing query, lifecycle memory plan, or Auto B2 cost profile.
+Current execution and planning boundaries are in docs/architecture/STAGE2.md and
+docs/architecture/MEMORY.md. Operand-bit work is not a GPU time prediction.
 
-This script is that forward derivation as code, so it can be recomputed, checked against
-Prime95's own published parameters, and re-used to CHOOSE D for a GPU (section 10.6: on a
-GPU we should not copy Prime95's D, because the total work is only logarithmic in D while
-the transform memory is linear in it).
-
-Conventions (identical to section 10.5 and to the bench probes)
---------------------------------------------------------------
+Conventions
+-----------
 * One multiplication of two polynomials with m coefficients of S bits each is charged
   `2 * m * (2S + ceil(log2 m))` operand-bits: the Kronecker packing that keeps carries
   inside a slot (slot width 2S + log2 m) and turns the polynomial product into one big
@@ -29,8 +22,8 @@ The three self-checks in `--verify` are the point of the script:
     meaningless.
  2. the total must land near 1.9e11 operand-bits for the M5261 parameter set, i.e. within
     the uncertainty of the hand derivation (it is a model, not a measurement).
- 3. `--choose-d` must reproduce the ordering of section 10.6: a much smaller D is cheaper
-    in MEMORY and costs only logarithmically in TIME.
+ 3. `--choose-d` checks the model's work/capacity ordering for its built-in examples;
+    this does not establish the runtime-optimal D.
 
 Usage
 -----
@@ -98,7 +91,7 @@ def tree_cost(p, s):
 def model(b2, s, d, num_poly_g=None, top_level_mults=3.0):
     """Per-curve operand-bits for the tree-based stage 2, split by component.
 
-    Structure (from DEV_STAGE2_SELFHOST_FEASIBILITY.md section 1, which cites Prime95's
+    Structure (from docs/reference/ECM_ALGORITHMS.md, which cites Prime95's
     ecm.cpp line numbers).  Note the BATCHING: the giant points are NOT all put into one
     product tree -- they are processed in `num_polyG` batches of `poly_size` points, and
     each batch is folded into one accumulated polynomial.  An earlier version of this

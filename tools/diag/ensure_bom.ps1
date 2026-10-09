@@ -6,7 +6,7 @@
     nvcc's frontend reads a source file that has non-ASCII bytes as ANSI unless the file
     starts with a UTF-8 BOM.  A CJK comment then ends in a lead byte that swallows the
     newline, which comments out the NEXT line of code.  That trap is recorded in
-    docs/ECM_CGBN_OPTIMIZATION.md 6, and in the Mersenne-fold round it bit again: a file
+    docs/performance/STAGE1.md 6, and in the Mersenne-fold round it bit again: a file
     edit round-trip dropped the BOM of kernels/cuda/cgbn_stage1.cu and silently removed
     `#define CHECKPOINT_VERSION` (the build then failed with "identifier is undefined").
 

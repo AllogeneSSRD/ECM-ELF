@@ -1,6 +1,6 @@
 #pragma once
 
-// GPU monitoring through NVML (milestone M4, docs/DEV_ECM_GUI.md section 8).
+// GPU monitoring through NVML (milestone M4, docs/usage/GUI.md).
 //
 // Design decisions:
 //   * NVML is loaded DYNAMICALLY at runtime (LoadLibrary + GetProcAddress) and is

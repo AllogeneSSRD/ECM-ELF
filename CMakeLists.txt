@@ -28,7 +28,7 @@ find_package(OpenSSL REQUIRED)
 #
 # A locally rebuilt GMP with x86_64/zen3 (BMI2 + ADX) mpn kernels is preferred when
 # present: it is 1.17-1.26x faster on stage-1 for >=1000-bit operands (see
-# docs/ECM_EDWARDS_STAGE1.md 搂10.2). Build it with third_party/build_gmp_zen3.sh
+# docs/architecture/STAGE1.md 搂10.2). Build it with third_party/build_gmp_zen3.sh
 # (requires BMI2/ADX: Intel Haswell 2013+, AMD Excavator/Zen+).
 # Override with -DECM_WINDOWS_GMP_ROOT=<prefix> to use a different GMP.
 set(ECM_WINDOWS_GMP_ROOT "" CACHE PATH
@@ -116,7 +116,7 @@ add_executable(ecm
     src/core/ecm_gpu_common.cpp
     src/core/ecm_queue_config.cpp
     src/core/ecm_worktodo.cpp
-    # Prime95 worktodo.add handoff for finished tasks (docs/DEV_ECM_GUI.md 18) plus the
+    # Prime95 worktodo.add handoff for finished tasks (docs/usage/GUI.md 18) plus the
     # p95_worktodo helpers it shares with tools/p95feeder.
     src/core/p95_transfer.cpp
     src/core/p95_worktodo.cpp
@@ -131,7 +131,7 @@ add_executable(ecm
     src/cpu/simd_mont_ifma.cpp
     # Suyama-sigma Montgomery stage 1 (Prime95 sigma_type=1 / gmp-ecm -param 0):
     # scalar MPN path + the 8-lane AVX512-IFMA batch.  See
-    # docs/ECM_Montgomery_STAGE1.md.
+    # docs/architecture/STAGE1.md.
     src/cpu/ecm_mont_cpu.cpp
     src/cpu/simd_mont_curve.cpp
     # Mid-stage-1 checkpoints for both of those paths (internal format).
@@ -145,7 +145,7 @@ add_executable(ecm
 )
 
 # 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
-# (鍩虹嚎 TU 閲岀殑 CPUID 鎺㈡祴) 杩斿洖 1 涔嬪悗, 瑙?docs/ECM_EDWARDS_STAGE1.md 搂13.8銆?
+# (鍩虹嚎 TU 閲岀殑 CPUID 鎺㈡祴) 杩斿洖 1 涔嬪悗, 瑙?docs/architecture/STAGE1.md 搂13.8銆?
 if(MSVC)
     set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp
         src/cpu/simd_mont_curve.cpp
@@ -275,7 +275,7 @@ if(ECM_ENABLE_CUDA)
         src/core/ecm_gpu_common.cpp
         src/core/ecm_queue_config.cpp
         src/core/ecm_worktodo.cpp
-        # Prime95 worktodo.add handoff for finished tasks (docs/DEV_ECM_GUI.md 18).
+        # Prime95 worktodo.add handoff for finished tasks (docs/usage/GUI.md 18).
         src/core/p95_transfer.cpp
         src/core/p95_worktodo.cpp
         src/opencl_ecm_log.cpp
@@ -307,13 +307,13 @@ if(ECM_ENABLE_CUDA)
         kernels/cuda/cgbn_stage1_kernels_suyama.cu
         # param2 ("batch 2", 6-torsion) variants (gpu_param = 2): same kernel body as the
         # Suyama family, instantiated with CONST_DIFF = true (no xdiff multiply).  Separate
-        # TU on purpose -- a runtime flag cost 34% (docs/ECM_CGBN_OPTIMIZATION.md §5.6).
+        # TU on purpose -- a runtime flag cost 34% (docs/performance/STAGE1.md).
         kernels/cuda/cgbn_stage1_kernels_param2.cu
         # The TPI=16 (2560..8192) and TPI=32 (9216..16384) lookups of the two families above,
         # each in its own TU.  They dominate the kernel compile time: with everything in one
         # file the suyama TU alone took 745 s and param2 711 s, which made them the critical
         # path of the parallel build even with 6 concurrent nvcc jobs.  Split 2026-09-25 --
-        # see docs/ECM_CGBN_OPTIMIZATION.md 8.8.
+        # see docs/performance/STAGE1.md 8.8.
         kernels/cuda/cgbn_stage1_kernels_suyama_tpi16.cu
         kernels/cuda/cgbn_stage1_kernels_suyama_tpi32.cu
         kernels/cuda/cgbn_stage1_kernels_param2_tpi16.cu
@@ -432,7 +432,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
         target_compile_definitions(ecm_cuda PRIVATE ECM_CUDA_FULL_BUILD)
     endif()
 
-    # PROBE ONLY (docs/ECM_CGBN_OPTIMIZATION.md §5): make the fused double-and-add run its
+    # PROBE ONLY (docs/performance/STAGE1.md): make the fused double-and-add run its
     # addition half only every k-th bit, to measure the timing ceiling of an add-chain
     # (PRAC / NAF + dictionary) schedule.  k > 1 IS MATHEMATICALLY WRONG -- results will be
     # garbage; it exists to answer "how much would a chain with 1/k add density save?".
@@ -441,7 +441,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
         "PROBE ONLY: run the fused add every k-th bit (k>1 = wrong results, for timing)")
     target_compile_definitions(ecm_cuda PRIVATE ECM_PROBE_ADD_DENSITY=${ECM_PROBE_ADD_DENSITY})
 
-    # PROBE ONLY (docs/ECM_CGBN_OPTIMIZATION.md §5.4): replace the ladder step with a
+    # PROBE ONLY (docs/performance/STAGE1.md): replace the ladder step with a
     # windowed-chain op mix -- one xz doubling per bit plus one REAL differential addition
     # with a PROJECTIVE difference point (4M+2S) every M-th bit.  M=1 is the PRAC-like mix,
     # M=w+1 the ideal width-w NAF density.  RESULTS ARE WRONG (timing only).
@@ -450,7 +450,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
         "PROBE ONLY: chain op mix with one projective-difference add every M bits (wrong results)")
     target_compile_definitions(ecm_cuda PRIVATE ECM_PROBE_CHAIN_W=${ECM_PROBE_CHAIN_W})
 
-    # Kernel launch/occupancy tunables (docs/ECM_CGBN_OPTIMIZATION.md §5.5/§8).  TPB must
+    # Kernel launch/occupancy tunables (docs/performance/STAGE1.md).  TPB must
     # match the launch config in kernels/cuda/cgbn_stage1.cu, hence compile-time.  Defaults
     # are the MEASURED best from the 2026-09-25 sweep (M511/M761, 8192 curves, B1=1e5,
     # param3, GPU 1): the historical 256/4 measured 78.18 M curve-bits/s at M511, 128/1
@@ -486,7 +486,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     # to param3 (71.7 vs 82.0 M) is the op count, not occupancy.  64 is the measured best.
     # NOTE: a per-source-file cap applies to EVERY tier in that file, including the
     # >=2560-bit instantiations whose allocation is unmeasured -- flagged in
-    # docs/ECM_CGBN_OPTIMIZATION.md §8.
+    # docs/performance/STAGE1.md
     # DEFAULT 0: a per-FILE cap also hits that file's >=2560-bit instantiations, which the
     # measurement above shows should stay unconstrained (they want ~141 registers).  The
     # <=2048-bit tiers inside these files are handled by the tier-aware MIN_BLOCKS instead.
@@ -502,7 +502,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
             PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SUYAMA}")
     endif()
 
-    # Tier filter for fast iteration (docs/ECM_CGBN_OPTIMIZATION.md §8).  On this machine
+    # Tier filter for fast iteration (docs/performance/STAGE1.md).  On this machine
     # every parallel generator fails (Ninja hangs in compiler ABI detection, MSBuild's CUDA
     # 13.3 target cancels the build, jom breaks CMake's try_compile), so kernel builds stay
     # serial and a full build costs ~20 min.  -DECM_TIERS=4096,8192 compiles ONLY those
@@ -533,7 +533,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     # cgbn_stage1_kernel.h (56 regs for <=2048-bit tiers, uncapped above); any other
     # value forces one __maxnreg__ target on EVERY tier (255 = explicitly uncapped).
     # NOTE: this is a *kernel* attribute, not a per-file --maxrregcount, which is why
-    # it can be set per bit width; see docs/ECM_CGBN_OPTIMIZATION.md 5.7.
+    # it can be set per bit width; see docs/performance/STAGE1.md 5.7.
     set(ECM_REG_TARGET_FORCE "0" CACHE STRING "force one __maxnreg__ register target for all tiers (0 = per-tier table)")
     if(NOT ECM_REG_TARGET_FORCE STREQUAL "0")
         target_compile_definitions(ecm_cuda PRIVATE ECM_REG_TARGET_FORCE=${ECM_REG_TARGET_FORCE})
@@ -555,7 +555,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     endif()
 
     # PROBE ONLY: price the param2-shaped kernel (5M+4S) on the param0 data path.  Wrong
-    # results, timing only -- see docs/ECM_CGBN_OPTIMIZATION.md §5.6.
+    # results, timing only -- see docs/performance/STAGE1.md
     set(ECM_PARAM2SHAPE "0" CACHE STRING "PROBE ONLY: run the param2-shaped step on the param0 path")
     target_compile_definitions(ecm_cuda PRIVATE ECM_PARAM2SHAPE=${ECM_PARAM2SHAPE})
 
@@ -563,7 +563,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     # Montgomery reduction of every modular multiply is replaced by a fold (2^k == 1), which
     # removes CGBN's Q*N chains -- the GPU analogue of the CPU IFMA fold domain.  Measured
     # -21%..-31% per modular multiply on the 4060 Laptop at 4608/5120/8192 bits
-    # (tools/bench/cgbn_mers_fold_probe.cu, docs/ECM_CGBN_OPTIMIZATION.md §9).
+    # (tools/bench/cgbn_mers_fold_probe.cu, docs/performance/STAGE1.md).
     #
     # This is a WHOLE-BUILD switch: a binary built with -DECM_MERS_FOLD=1 only carries fold
     # kernels, so it REFUSES any N that is not 2^k - 1 and refuses --gpu-param 3
@@ -592,7 +592,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
         message(STATUS "ecm_cuda: undefining NDEBUG for CUDA (sm<=60 CGBN chain-unroll workaround)")
     endif()
 
-    # Register cap for the CGBN stage-1 kernel (docs/ECM_CGBN_OPTIMIZATION.md §8).  The
+    # Register cap for the CGBN stage-1 kernel (docs/performance/STAGE1.md).  The
     # occupancy sweep showed throughput tracks the number of resident blocks, so trading a
     # few registers (spills) for more warps per SM can pay off.  0 = compiler default.
     set(ECM_MAXRREG "0" CACHE STRING "nvcc --maxrregcount for ecm_cuda (0 = default)")
@@ -655,7 +655,7 @@ else()
     message(STATUS "tools: helper targets disabled (ECM_BUILD_TOOLS=OFF)")
 endif()
 # ===========================================================================
-# ecm_gui -- the graphical front-end (docs/DEV_ECM_GUI.md).
+# ecm_gui -- the graphical front-end (docs/usage/GUI.md).
 #
 # Deliberately independent of ECM_BUILD_TOOLS: it is a deliverable, not a helper,
 # and it is Windows-only (Dear ImGui + Win32 + Direct3D 11 + NVML).
@@ -670,7 +670,7 @@ set(ECM_IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui" CACHE PATH
 if(NOT ECM_BUILD_GUI)
     message(STATUS "gui: disabled (ECM_BUILD_GUI=OFF)")
 elseif(NOT WIN32)
-    message(STATUS "gui: skipped (ecm_gui is Windows-only for now; see docs/DEV_ECM_GUI.md M7)")
+    message(STATUS "gui: skipped (ecm_gui is Windows-only for now; see docs/usage/GUI.md)")
 elseif(NOT EXISTS "${ECM_IMGUI_DIR}/imgui.h")
     message(STATUS "gui: skipped -- ${ECM_IMGUI_DIR}/imgui.h not found. Vendor Dear ImGui "
                    "(docking branch) there; see third_party/imgui/README.md")

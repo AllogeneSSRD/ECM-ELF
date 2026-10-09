@@ -181,7 +181,7 @@ int main() {
         check(!d.old_driver, "a queue-manager banner does not flag an old driver");
     }
 
-    // ---- `p95_add:` notices (Prime95 handoff, docs/DEV_ECM_GUI.md 13) -------------
+    // ---- `p95_add:` notices (Prime95 handoff, docs/usage/GUI.md 13) -------------
     // The four shapes the driver emits, including a path with a space and an escaped quote
     // in the free-text reason: the strip must survive both.
     {

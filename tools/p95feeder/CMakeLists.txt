@@ -3,7 +3,7 @@
 # ecm.exe writes its stage-1 results locally only (<tmp_dir>/e{n:07d}_c{k}.tmp); the feeder
 # watches that directory and delivers each finished curve into a running Prime95 instance
 # (a save file e{n:07d} plus an ECM= line under a free [Worker #N] section of
-# worktodo.add).  See docs/ECM_EDWARDS_STAGE1.md 11 and tools/test/test_feeder.ps1.
+# worktodo.add).  See docs/architecture/STAGE1.md 11 and tools/test/test_feeder.ps1.
 #
 # GMP-only: no OpenCL/OpenSSL dependency.  Moved out of the root CMakeLists.txt; the
 # executable stays in the build root (build_vs18\Release\ecm_p95feeder.exe) because

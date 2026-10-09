@@ -96,12 +96,12 @@ function Read-TextShared([string]$path) {
 $enc = New-Object System.Text.UTF8Encoding($false)
 $todo = Join-Path $Sandbox 'worktodo.txt'
 # Save names must end with the B1 token ("m{n}_{b1}.save") -- the driver takes B1 from
-# the last "_" token and rejects the line otherwise (see docs/DEV_ECM_GUI.md section 12).
+# the last "_" token and rejects the line otherwise (see docs/usage/GUI.md).
 [System.IO.File]::WriteAllText($todo, (@(
     '[Worker #1]',
     ('ECMSTAGE2=1,2,991,-1,"m991_1e4.save",0,0,' + $Curves)) -join "`r`n") + "`r`n", $enc)
 
-# PowerShell trap (docs/DEV_ECM_GUI.md section 12): inside an array literal the comma
+# PowerShell trap (docs/usage/GUI.md): inside an array literal the comma
 # binds tighter than '+', so every concatenation MUST be parenthesised -- an unparenthesised
 # '...' + $x + '...' merges the whole rest of the array into that one element. For an ini
 # that is fatal: the merged element starts with '#' and comments out every key.

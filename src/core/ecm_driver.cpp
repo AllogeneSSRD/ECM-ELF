@@ -905,7 +905,7 @@ struct Stage1RunOptions {
        3 = gmp-ecm batch (historical GPU path, save carries PARAM=3);
        2 = param2, gmp-ecm's "batch 2" 6-torsion family (save carries PARAM=2, which
            gmp-ecm reads back but Prime95 cannot; ~11% faster per curve than param0 at
-           the same success rate -- docs/ECM_CGBN_OPTIMIZATION.md §5.6);
+           the same success rate -- docs/performance/STAGE1.md);
        0 = Suyama param0 (same curves as the CPU --method mont path, param0 save). */
     int gpu_param = ecm_config::defaults::stage1_gpu_param;
     unsigned long ckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
@@ -937,7 +937,7 @@ struct Stage1RunResult {
     // null when a path does not know them). Needed because one batch does NOT always
     // share a sigma sequence: the Edwards path draws a random 64-bit sigma per curve,
     // so "firstsigma + i" would be wrong there. Consumers: the hit lines (D3, see
-    // docs/DEV_ECM_GUI.md) and therefore the GUI's results.txt sigma list.
+    // docs/usage/GUI.md) and therefore the GUI's results.txt sigma list.
     uint64_t *sigmas = nullptr;
 };
 
@@ -2088,7 +2088,7 @@ static std::string mont_format_save_name(const std::string &pattern, const mpz_t
 
 /* The same name without the extension: mid-stage-1 checkpoints sit next to the
    save as <stem>_c%07u.ckpt, so a run that dies can be resumed by the identical
-   command line (see docs/ECM_Montgomery_STAGE1.md §17). */
+   command line (see docs/architecture/STAGE1.md). */
 static std::string mont_save_stem(const std::string &pattern, const mpz_t N, double B1) {
     std::string f = mont_format_save_name(pattern, N, B1);
     const size_t dot = f.rfind('.');
@@ -2103,7 +2103,7 @@ static std::string mont_save_stem(const std::string &pattern, const mpz_t N, dou
 // and returns an ECM_* code, so the CLI caller needs no changes.
 //
 //   * s = torsion * lcm(1..B1)   (torsion 1 matches gmp-ecm, 12 matches Prime95;
-//     see docs/ECM_Montgomery_STAGE1.md 4.1)
+//     see docs/architecture/STAGE1.md 4.1)
 //   * 8 curves per AVX512-IFMA batch when available, else the scalar MPN path
 //   * ONE shared save file per task (same N and B1, one self-contained line per
 //     curve -- the reference reader parses METHOD/B1/N from every line, so the
@@ -2256,7 +2256,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     uint8_t *bits = mont_expand_bits(s, &nbits);
     const size_t ckpt_chunk = mont_ckpt_chunk_bits(nbits);
 
-    /* ---- mid-stage-1 checkpoints (docs/ECM_Montgomery_STAGE1.md §17) ----------
+    /* ---- mid-stage-1 checkpoints (docs/architecture/STAGE1.md) ----------
        One text file per curve, <tmp_dir>/<save stem>_c%07u.ckpt, written by the
        worker that owns the curve and read back by the same command line.  The
        interval comes from ckpt_seconds / --ckpt; 0 = no autosave (Ctrl+C still
@@ -2948,7 +2948,7 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
                checksum reason as param0, and SIGMA = the scalar multiplier sigma0+i the
                GPU used.  gmp-ecm reads this back with -param 2; Prime95 cannot read it
                (sigma_type only accepts 0/1/3).  See
-               docs/ECM_CGBN_OPTIMIZATION.md §5.6. */
+               docs/performance/STAGE1.md */
             wrote = opencl_ecm_append_save_lines(resolved_save, N, B1, firstsigma, curves, factors,
                                                  n_expr_param0, 2);
             if (!wrote)
@@ -3071,7 +3071,7 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     }
 
     bool found_factor = false;
-    /* D3 (docs/DEV_ECM_GUI.md): the hit line carries everything a consumer needs to
+    /* D3 (docs/usage/GUI.md): the hit line carries everything a consumer needs to
        build a results record, because each back-end prints its own, mutually
        incompatible hit line ("curve i sigma=M -> factor found" from the CPU paths,
        "GPU: factor ... with curve c (sigma p:s)" from the GPU ones). Fields: the
@@ -3138,7 +3138,7 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
 
     ecm_sync_save_files(exe_dir, sync1, sync2, full_sync, marker);
 
-    /* ── Prime95 handoff (docs/DEV_ECM_GUI.md §18) ──────────────────────────────────
+    /* ── Prime95 handoff (docs/usage/GUI.md) ──────────────────────────────────
        The task is finished and its .save is synchronized, so Prime95's stage 2 can take
        it from worktodo.add. The line goes over VERBATIM -- the AID and the known-factors
        field are what let Prime95 report the eventual factor under the right assignment --
@@ -3305,7 +3305,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     const std::string sync1 = resolve_rel_local(exe_dir, cfg.save_sync_dir_1);
     const std::string sync2 = resolve_rel_local(exe_dir, cfg.save_sync_dir_2);
 
-    /* ── Prime95 handoff (docs/DEV_ECM_GUI.md §18, docs/DEV_ECM_WORKTODO.md §8) ─────
+    /* ── Prime95 handoff (docs/usage/GUI.md, docs/usage/STAGE1.md) ─────
        Every finished task is appended to Prime95's worktodo.add, verbatim, so Prime95's
        stage 2 can continue it. `p95_worktodo_path` empty = the feature is off (the
        historical behaviour: ecm_p95feeder does the Edwards .tmp handoff instead). */
@@ -3623,7 +3623,7 @@ int main(int argc, char **argv){
     bool verbose = false;
     bool use_gpu = false;
     bool use_edwards = false;
-    /* Suyama-sigma Montgomery stage 1 (docs/ECM_Montgomery_STAGE1.md) */
+    /* Suyama-sigma Montgomery stage 1 (docs/architecture/STAGE1.md) */
     bool use_mont = false;
     /* [cpu] the two CPU paths share one backend / one thread count (the ini has a
        single `backend` / `stage1_threads` too); --edwards-* and --mont-* stay as
@@ -3887,7 +3887,7 @@ int main(int argc, char **argv){
             continue;
         }
         // Which worker this process is: selects the [Worker #N] section of BOTH the
-        // ini and the worktodo file (docs/DEV_ECM_GUI.md D1/D2). 1-based, default 1,
+        // ini and the worktodo file (docs/usage/GUI.md D1/D2). 1-based, default 1,
         // so a single-worker setup (no sections, no switch) behaves as before.
         if(a == "--worker" && i+1<argc) {
             try {
@@ -4205,7 +4205,7 @@ int main(int argc, char **argv){
     const int go_param = (opt.use_mont || opt.use_edwards) ? 0 : opt.gpu_param;
 
     if (cli_has_factors) {
-        /* Same D3 fields as the queue path (docs/DEV_ECM_GUI.md): a consumer must not
+        /* Same D3 fields as the queue path (docs/usage/GUI.md): a consumer must not
            have to guess which of the three back-end hit lines it is looking at. */
         const char *cli_method_token =
             opt.use_mont ? "mont" : (opt.use_edwards ? "edwards" : "gpu");

@@ -6,7 +6,7 @@ WHY THIS EXISTS
   The C/C++/SIMD implementation must agree *byte for byte* with a reference before it can
   be trusted; this file is that reference, and it also generates test vectors.  Every
   convention below was pinned by experiment during design (see
-  docs/ECM_Montgomery_STAGE1.md 3.1), not guessed:
+  docs/architecture/STAGE1.md 3.1), not guessed:
 
     curve      : u = sigma^2 - 5, v = 4*sigma
                  A = (v-u)^3 (3u+v) / (4 u^3 v) - 2   (mod N)      [= A+2 -> An/Ad]

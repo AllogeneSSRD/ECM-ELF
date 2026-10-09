@@ -24,7 +24,7 @@ OUT_DIR = TOOL_DIR / "out"
 REP_FILE = OUT_DIR / "d_eff_representative.json"
 
 # ---------------------------------------------------------------------------
-# 理论有效除子（GMP-ECM rho.c 常数；见 docs/ECM_PARAMETERIZATION_ANALYSIS.md §6.3）
+# 理论有效除子（GMP-ECM rho.c 常数；见 docs/reference/ECM_ALGORITHMS.md）
 # ---------------------------------------------------------------------------
 _THEO = math.exp(rho.ECM_EXTRA_SMOOTHNESS)      # Suyama: exp(3.134) ~= 22.97
 THEORETICAL_D = {

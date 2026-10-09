@@ -155,7 +155,7 @@ def factor_integer(gp, n, timeout=30):
 
 
 def bound_score(pair):
-    """Product score, treating Stage1-only B2=0 as B1 squared."""
+    """Weighted bound score; Stage1-only B2=0 contributes B1 to the second term."""
     b1, b2 = pair
     return B2_RATIO * b1 + max(b1, b2)
 

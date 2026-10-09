@@ -126,7 +126,7 @@ def main():
             for bits in sorted({a.bits, a.carrier_bits}) for d in a.d]
     reference = a.gpu_analysis
     if reference is None:
-        historical = root/'docs/benchmarks/stage2_n_scaling_20261008_analysis.json'
+        historical = root/'data/benchmarks/stage2_n_scaling_20261008_analysis.json'
         reference = historical if historical.is_file() else None
     evidence = json.loads(reference.read_text(encoding='utf-8')) if reference else None
     if evidence is not None and not evidence.get('complete'):

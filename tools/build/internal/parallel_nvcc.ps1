@@ -56,7 +56,7 @@
 
 .NOTES
     Logs (one .log per translation unit) are written to <BuildDir>\par_nvcc\.
-    See docs/ECM_CGBN_OPTIMIZATION.md section 8 item 8.
+    See docs/performance/STAGE1.md item 8.
 #>
 param(
     [string]$BuildDir = "build_cuda_cmake",

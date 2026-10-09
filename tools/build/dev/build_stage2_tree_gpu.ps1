@@ -2,15 +2,14 @@
 <#
 .SYNOPSIS
     Build tools/bench/stage2_tree_gpu.cu -- the GPU polynomial layer + F product tree
-    (M3 slice S1, docs/DEV_STAGE2_GPU_PLAN.md section 18).
+    (experimental engine; production pipeline: docs/architecture/STAGE2.md).
 
 .DESCRIPTION
     Same shape as tools/build/test/build_ntt_probe.ps1: ONE translation unit, a plain nvcc compile
     plus a link against the repo's GMP.  It is one TU because the tree deliberately calls the
     multiply that lives in tools/bench/ntt_poly_probe.cu -- it #includes that file with
     NTT_POLY_PROBE_NO_MAIN defined, so there is exactly one copy of every kernel, of the
-    packing convention and of the exactness assertions (section 18 constraint 1: the tree must
-    reuse the verified NTT, never re-implement it).
+    packing convention and of the exactness assertions.
 
     nvcc's output goes to <Build>/_s2tree/stage2_tree_gpu.log so a failure can be read without
     rerunning the build; the object is skipped when it is newer than either source (use

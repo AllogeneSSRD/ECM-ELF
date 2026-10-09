@@ -33,7 +33,7 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
  * Append one text save line per curve for the **Suyama-sigma Montgomery** path
  * (gmp-ecm `-param 0`), in the same field family as the param3 writer above.
  *
- * Differences that matter (see docs/ECM_Montgomery_STAGE1.md 9):
+ * Differences that matter (see docs/architecture/STAGE1.md 9):
  *   * `SIGMA` is **64-bit** here (gmp-ecm generates sigmas beyond 32 bits; the
  *     param3 API above is uint32_t because param3's convention is 32-bit),
  *   * no `PARAM=` key is written (the reference omits it for param 0),

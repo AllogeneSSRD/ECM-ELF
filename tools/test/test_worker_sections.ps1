@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     Acceptance test for D1 (ini [Worker #N] sections) and D2 (worktodo [Worker #N]
-    sections) -- see docs/DEV_ECM_GUI.md section 11 and docs/DEV_ECM_WORKTODO.md.
+    sections) -- see docs/usage/GUI.md and docs/usage/STAGE1.md.
 
 .DESCRIPTION
     Builds a throw-away sandbox with

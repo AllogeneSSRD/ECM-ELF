@@ -13,8 +13,8 @@
 #     Source-file properties are directory-scoped, so each target that compiles those TUs
 #     re-applies them here via set_property(TARGET_DIRECTORY ...) (CMake >= 3.18).
 #
-# The measurements quoted in the comments are from docs/ECM_EDWARDS_STAGE1.md and
-# docs/ECM_Montgomery_STAGE1.md.
+# The measurements quoted in the comments are from docs/architecture/STAGE1.md and
+# docs/architecture/STAGE1.md.
 
 # ---------------------------------------------------------------------------
 # opencl_ecm_addsub: OpenCL add/sub micro-benchmark (main() lives behind
@@ -82,7 +82,7 @@ endif()
 
 # ---------------------------------------------------------------------------
 # simd_mont_gate: M1 gate bench for the AVX512-IFMA batched Montgomery kernel
-# (docs/ECM_EDWARDS_STAGE1.md 13).  src/cpu/simd_mont_ifma.cpp is the ONLY file compiled
+# (docs/architecture/STAGE1.md 13).  src/cpu/simd_mont_ifma.cpp is the ONLY file compiled
 # with /arch:AVX512; the bench TU itself stays at the default baseline and the driver
 # must gate every call on runtime CPUID detection.
 # ---------------------------------------------------------------------------
@@ -229,7 +229,7 @@ endif()
 
 # ---------------------------------------------------------------------------
 # stage2_ref -- ECM stage 2 reference implementation (correctness first).
-# See docs/DEV_STAGE2_GPU_PLAN.md (milestone M1) and tools/test/test_stage2_ref.ps1.
+# See docs/architecture/STAGE2.md and tools/test/test_stage2_ref.ps1.
 add_executable(stage2_ref
     ${CMAKE_CURRENT_SOURCE_DIR}/stage2_ref.cpp
 )

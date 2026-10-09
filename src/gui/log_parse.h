@@ -1,7 +1,7 @@
 #pragma once
 
 // Parsing of the driver's stdout/stderr into the pieces the UI needs
-// (docs/DEV_ECM_GUI.md sections 7.2 / 7.3).
+// (docs/usage/GUI.md sections 7.2 / 7.3).
 //
 // Everything here is a pure function over one line, so it is unit-testable without
 // a GPU, a window or a worker process (see src/gui/log_parse_test.cpp).
@@ -43,7 +43,7 @@ struct ProgressInfo {
     unsigned long long bits = 0;         // "+789 bits"
 };
 
-// One hit as reported by the driver's D3 hit line (docs/DEV_ECM_GUI.md section 11):
+// One hit as reported by the driver's D3 hit line (docs/usage/GUI.md):
 //   factor[i]=<decimal> curve=<i> sigma=<64-bit> param=<p> method=<m> save=<name>
 // Only `factor` is guaranteed: the extra fields are optional on the line, and the CPU
 // back-ends also print their own (different) hit lines, which set `factor` alone.
@@ -58,7 +58,7 @@ struct HitInfo {
 };
 
 // One `p95_add:` notice, i.e. the outcome of handing a finished task to Prime95 through
-// worktodo.add (docs/DEV_ECM_GUI.md section 13). The driver emits exactly four shapes:
+// worktodo.add (docs/usage/GUI.md). The driver emits exactly four shapes:
 //   p95_add: ready workers="1-8" file="<...>" pending=<n>
 //   p95_add: ok worker=<n> added=<n> pending_delivered=<n> file="<...>"
 //   p95_add: warn worker=<n> added=<n> pending_delivered=<n> file="<...>" note="<text>"

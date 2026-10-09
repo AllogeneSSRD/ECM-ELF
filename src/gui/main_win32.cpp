@@ -274,7 +274,7 @@ LRESULT WINAPI wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if ((wParam & 0xfff0) == SC_KEYMENU) return 0;   // disable ALT menu
             break;
         case WM_CLOSE:
-            // Closing the GUI must not kill running workers silently (docs/DEV_ECM_GUI.md
+            // Closing the GUI must not kill running workers silently (docs/usage/GUI.md
             // 5.6): with workers alive the app opens a confirmation modal and asks them to
             // checkpoint first, so the window must stay open (return 0 without closing).
             trace("wnd_proc: WM_CLOSE");
@@ -427,7 +427,7 @@ void apply_ui_font(ecmgui::App &app, float dpi_scale, const char *why) {
     }
     // A font that cannot draw the language would render "???" boxes. The atlas API can
     // answer this exactly (a fallback box has a width too, so measuring text is not
-    // enough -- see docs/DEV_ECM_GUI.md 10.3):
+    // enough -- see docs/usage/GUI.md 10.3):
     //   1. [GUI] font=<path> that cannot draw the language -> rescue with a system CJK
     //      font (the user asked for a font, not for unreadable labels);
     //   2. no font can draw it at all -> fall back to English, never show boxes.
@@ -850,7 +850,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     ImGui_ImplDX11_Init(g_d3d.device, g_d3d.context);
 
     // ---- fonts -----------------------------------------------------------------
-    // Nothing is shipped with the GUI (docs/DEV_ECM_GUI.md 10.3), so the font comes
+    // Nothing is shipped with the GUI (docs/usage/GUI.md 10.3), so the font comes
     // from the system and its size follows the display DPI:
     //   [GUI] font_size = auto | <px>     auto = 15 px * (window DPI / 96)
     //   [GUI] font      = <path to a .ttf/.ttc>   (empty = pick automatically)

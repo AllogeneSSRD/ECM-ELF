@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
     M4 acceptance: the GPU panel's data source (NVML) and its degradation path
-    (docs/DEV_ECM_GUI.md section 14, milestone M4).
+    (docs/usage/GUI.md, milestone M4).
 
 .DESCRIPTION
     Three layers, each independently checkable:

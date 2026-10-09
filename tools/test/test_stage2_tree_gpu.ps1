@@ -7,7 +7,7 @@
     tools/bench/stage2_tree_gpu.cu builds the baby product tree F(X) = prod_j (X - x_j) mod N
     on the GPU, reusing the SAME NTT multiply kernels as tools/bench/ntt_poly_probe.cu
     (extracted into ntt_poly_mul_host(), so there is exactly one implementation of every
-    kernel -- two copies would drift, which is what docs/DEV_STAGE2_GPU_PLAN.md section 14.8
+    kernel -- two copies would drift, which is what docs/architecture/STAGE2.md
     records as a lesson).  The oracle is coefficient-by-coefficient:
 
       [1] the device x-only ladder reproduces the CPU reference's baby points x_j
@@ -125,7 +125,7 @@ $r210 = RunCheck @('-D', '210')
 $r2310 = RunCheck @('-D', '2310')
 $rEval = RunCheck @('-D', '210', '-Evaluate')
 $rSharp = RunCheck @('-D', '210', '-Evaluate', '-B2', '114000')
-# [6] the naming cap must NOT lose a factor (docs/DEV_STAGE2_GPU_PLAN.md sections 26.3/26.5):
+# [6] the naming cap must NOT lose a factor (docs/architecture/STAGE2.md sections 26.3/26.5):
 # with NTT_NAME_MAX=1 the candidate scan stops after the first hit leaf, but every OTHER hit
 # leaf's factor is recorded from its own gcd.  Before that fix the reported factor set depended
 # on the diagnostic scan, so a capped run could report NO factor at all -- and at B2=1e11 a full
@@ -200,7 +200,7 @@ Check "the host-packing oracle still finds the frozen factor (device packer's A/
        $rHostPack.out -match 'hit_primes=114713') $rHostPack.out.Trim()
 Check "the host-packing A/B exits 0" ($rHostPack.code -eq 0) ("exit=" + $rHostPack.code)
 
-# [9] THE S5 DEVICE DESCENT (objective 2, docs/DEV_STAGE2_GPU_PLAN.md sections 49-54): the walk
+# [9] THE S5 DEVICE DESCENT (objective 2, docs/architecture/STAGE2.md sections 49-54): the walk
 # must be aligned with the host's AND every leaf must match it, and only then may NTT_S5_ON be
 # trusted.  No carry-round override is needed any more: the shape planner used to round the bpw
 # DOWN to a divisor of the (often prime) slot width and could land on bpw = 1, whose single-bit
@@ -330,7 +330,7 @@ Check "arena eviction: a large-P run fits a cap below its natural usage (arena_o
 Check "arena eviction: same frozen factor and a clean exit" `
       ($oEv -match 'bad_factors=0 factors=59649589127497217' -and $cEv -eq 0) ("exit=" + $cEv)
 
-# [11] THE DEFERRED CARRY CHECK (section 29 of docs/DEV_GPUOWL_NTT_NOTES.md).  A chunked batched
+# [11] THE DEFERRED CARRY CHECK (section 29 of docs/architecture/NTT.md).  A chunked batched
 # multiply used to pay the probe's carry-residual readback -- a PAGEABLE D2H, i.e. a full pipeline
 # drain -- once per chunk; at the production shape that was 22471 x 1.64 ms = 36.75 s of a 253.53 s
 # run (measured).  Now every chunk except the first and the last leaves the counters on the device
@@ -375,10 +375,10 @@ Check "deferred carry check: the default-budget control run agrees" `
 Check "deferred carry check: no carry-convergence failure was reported" `
       ($oDef -notmatch 'CARRY DID NOT CONVERGE' -and $oDef2 -notmatch 'CARRY DID NOT CONVERGE') ""
 
-# [13] THE 2-BY-1 DIVISION PRIMITIVE (section 31 of docs/DEV_GPUOWL_NTT_NOTES.md).  Groundwork for
+# [13] THE 2-BY-1 DIVISION PRIMITIVE (section 31 of docs/architecture/NTT.md).  Groundwork for
 # objective 4's division reduction: the tail of the device reduction can go from 2*nw^2 MACs to about
 # nw^2 by replacing the final Montgomery multiplication with ONE plain long division of C by N, and a
-# long division needs an exact 2-by-1 quotient digit.  Section 35.1 of docs/DEV_STAGE2_GPU_PLAN.md
+# long division needs an exact 2-by-1 quotient digit.  Section 35.1 of docs/architecture/STAGE2.md
 # records that a previous optimisation in this area was mathematically wrong and was caught by the
 # gate, so the arithmetic is checked BEFORE anything depends on it: the primitive is verified on the
 # host against GMP for 256 numerators per modulus, saturating extreme included, and a mismatch is

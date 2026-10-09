@@ -6,7 +6,7 @@ concatenates only the files from `opencl_ecm_stage1_kernel_source_paths()`.
 
 算子选择/注入/拼装全部在单一文件 `src/opencl_ecm_path_registry.cpp` 中（mont_path /
 addsub_path 已合并进来）。新增/删除算子的完整指南见
-[`docs/DEV_OPERATOR_PATH_REGISTRY.md`](../../docs/DEV_OPERATOR_PATH_REGISTRY.md)。
+[`docs/architecture/OPENCL.md`](../../docs/architecture/OPENCL.md)。
 
 > 注意：拼装时**只加载被选中的算子文件**，因此每个算子 `.cl` 必须自包含——只能依赖
 > `common/` 中始终加载的原语，不能调用其他算子文件里的函数。

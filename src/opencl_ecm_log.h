@@ -24,7 +24,7 @@ const char *ecm_log_progress_color_reset();  // "\033[0m" ("" when none)
 //   < 0 : every progress line (the pre-D4 behaviour)
 // The console/pipe is never rate-limited -- the GUI tails the worker's stdout and needs
 // the ~200 ms cadence -- and a line reporting 100.0% always reaches the file, so a
-// finished task is always visible in the log. See docs/DEV_ECM_GUI.md 7.2.
+// finished task is always visible in the log. See docs/usage/GUI.md 7.2.
 void ecm_log_set_progress_log_seconds(double seconds);
 double ecm_log_progress_log_seconds();
 

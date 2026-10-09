@@ -86,12 +86,12 @@ Prime95会向上调整B2；同一档位的实际B2还可能随曲线轻微变化
 python tools/log_parser/compare_prime95_gpu.py `
   --cpu-analysis data/prime95_ecm_20261009/completed/analysis.json `
   --results D:/code/GIMPS/p95v3104b05.win64/results.json.txt `
-  --gpu-analysis docs/benchmarks/stage2_n_scaling_20261008_analysis.json `
+  --gpu-analysis data/benchmarks/stage2_n_scaling_20261008_analysis.json `
   --output data/prime95_ecm_20261009/comparison
 
 python tools/log_parser/plot_prime95_gpu.py `
   --input data/prime95_ecm_20261009/comparison/comparison.json `
-  --output-prefix docs/figures/prime95_gpu_stage2_20261009
+  --output-prefix data/figures/prime95_gpu_stage2_20261009
 ```
 
 输出比较JSON、逐曲线N恢复CSV、分组CSV、精确配对CSV，以及完整耗时、实际位宽趋势、
@@ -100,4 +100,4 @@ python tools/log_parser/plot_prime95_gpu.py `
 比较器拒绝GPU未完成快照，输出目录必须位于各输入目录之外。
 
 日志曲线GCD/因子终结之后的 `Resuming.` 停机消息不再把该完整曲线标为恢复执行。
-本轮详细口径及结果见 `docs/PRIME95_GPU_STAGE2_COMPARISON_20261009.md`。
+本轮详细口径及结果见 `docs/performance/STAGE2.md`。

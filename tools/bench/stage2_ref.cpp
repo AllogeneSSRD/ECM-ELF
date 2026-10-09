@@ -1,7 +1,7 @@
 /* ---------------------------------------------------------------------------
  * stage2_ref.cpp -- ECM stage 2, CORRECTNESS-FIRST reference implementation.
  *
- * Purpose (docs/DEV_STAGE2_GPU_PLAN.md, milestone M1): prove the algorithm and the
+ * Purpose (docs/architecture/STAGE2.md, milestone M1): prove the algorithm and the
  * save-file conventions before any GPU work.  Three independent checks:
  *
  *   (a) x-only curve arithmetic  vs  naive AFFINE arithmetic over a prime field

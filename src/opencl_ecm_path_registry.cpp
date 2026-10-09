@@ -1256,5 +1256,5 @@ void opencl_ecm_print_available_kernels(FILE *out) {
             showkernel_platform(d->os_mask, d->gpu_vendor_mask)
         );
     }
-    fprintf(out, "\nSee docs/DEV_OPERATOR_PATH_REGISTRY.md for details.\n");
+    fprintf(out, "\nSee docs/architecture/OPENCL.md for details.\n");
 }

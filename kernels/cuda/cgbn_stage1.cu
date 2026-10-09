@@ -548,7 +548,7 @@ uint32_t* set_p_2p_suyama(const mpz_t N, uint32_t curves, uint64_t sigma0,
  *   A  = -(3 x3^4 + 6 x3^2 - 1) / (4 x3^3)        [Montgomery coefficient]
  *   x0 = 2                                         [parametrizations.c:373]
  *
- * Consequences for our kernel (docs/ECM_CGBN_OPTIMIZATION.md §5.6): the ladder difference
+ * Consequences for our kernel (docs/performance/STAGE1.md): the ladder difference
  * is the CONSTANT 2, so the differential addition needs no multiply (the shift), while
  * a24 = (A+2)/4 is a full-width residue -- exactly the 5M+4S shape of
  * cgbn_stage1_kernels_param2.cu.  Measured +10.7% over param0 at M511.
@@ -701,7 +701,7 @@ uint32_t* set_p_2p_param2(const mpz_t N, uint32_t curves, uint32_t sigma0,
          NOTE: stage 1 runs on the curve with coefficient A, NOT on the rescaled
          a/b form of gmp-ecm's FindGroupOrderParam2 comment: an independent
          reference ladder reproduces gmp-ecm's saved x with (A, x0=2) exactly
-         (see docs/ECM_CGBN_OPTIMIZATION.md 5.6). */
+         (see docs/performance/STAGE1.md 5.6). */
       mpz_add_ui(a24, A, 2); mpz_mod(a24, a24, N);
       mpz_set_ui(t, 4);
       if (mpz_invert(t, t, N) == 0) mpz_set_ui(t, 0);
@@ -1199,10 +1199,10 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
    *               Success rate matches Suyama's (D_eff ~20) at ~11% less time per
    *               curve than param0; the catch is that Prime95 cannot read its saves
    *               (sigma_type only accepts 0/1/3).  See
-   *               docs/ECM_CGBN_OPTIMIZATION.md §5.6.
+   *               docs/performance/STAGE1.md
    *
    * NOTE: the selector arrives from the driver (ini gpu_param / CLI --gpu-param);
-   * see docs/ECM_Montgomery_STAGE1.md §20.2 item 4.
+   * see docs/architecture/STAGE1.md.
    * ------------------------------------------------------------------------- */
   if (gpu_param != 0 && gpu_param != 2 && gpu_param != 3) {
       outputf(OUTPUT_ERROR, "GPU: gpu_param=%d is not 0, 2 or 3; using 3\n", gpu_param);
@@ -1583,7 +1583,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
           TPI, BITS, n_log2, BLOCK_COUNT, TPB);
 
   /* ---------------------------------------------------------------------------
-   * Occupancy advisory (docs/ECM_CGBN_OPTIMIZATION.md 5.5/5.7/8.11).
+   * Occupancy advisory (docs/performance/STAGE1.md 5.5/5.7/8.11).
    *
    * BLOCK_COUNT = ceil(curves / (TPB/TPI)), so the batch size - not the GPU - sets how many
    * blocks are in flight.  Two DIFFERENT things live here and only the first one is a real
@@ -1613,7 +1613,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       /* The Mersenne fold family is LATENCY bound (it deletes mont_mul's Q*N chains, so
          there is less independent work to fill the issue slots): it only reaches parity/
          lead when at least 2 blocks per SM stay resident.  Measured (4070 Ti, param0,
-         M5003/M4441, docs/ECM_CGBN_OPTIMIZATION.md 9.9):
+         M5003/M4441, docs/performance/STAGE1.md 9.9):
            TPB=256, 120 blocks = 2 blocks/SM (16 warps): fold 47.1 s/curve  vs basic 49.1
            TPB=256,  60 blocks = 1 block/SM  ( 8 warps): fold 55.7 s/curve  vs basic 50.2
            TPB=128, 240 blocks = 4 blocks/SM (16 warps): fold 51.5 s/curve  vs basic 50.3
@@ -1633,7 +1633,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       if ((long)BLOCK_COUNT < (long)sm_count) {
         /* The suggestion is CURVES, not blocks: `curves = blocks * IPB`.  The old text
            printed sm_count here, which is a block count -- feeding it into `gpucurves`
-           left the GPU under-occupied (docs/DEV_ECM_WORKTODO.md 5.4). */
+           left the GPU under-occupied (docs/usage/STAGE1.md 5.4). */
         outputf(OUTPUT_NORMAL,
                 "GPU: warning: only %d blocks for %d SMs - some SMs idle; raise -gpucurves to "
                 "about %ld (%d curves/block; a multiple of %ld keeps whole waves)\n",

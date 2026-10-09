@@ -12,7 +12,7 @@
     longer timeout fires.  Three defences, and this script is the third:
 
       1. per machine : WER对话框已關 (HKCU\Software\Microsoft\Windows\Windows Error
-                       Reporting\DontShowUI = 1), see docs/DEV_WINDOWS_CRASH_HANDLING.md
+                       Reporting\DontShowUI = 1), see docs/usage/BUILD.md
       2. per process : our own tools call SetErrorMode(SEM_NOGPFAULTERRORBOX) at the top of
                        main (tools/bench/no_crash_dialog.h)
       3. per run     : THIS SCRIPT -- the child gets a wall-clock budget; on expiry the whole

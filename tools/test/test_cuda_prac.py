@@ -120,7 +120,7 @@ def target_edges(exe, root, device):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--exe', type=Path, default=Path('build_cuda_cmake/prac/ecm_cuda.exe'))
-    ap.add_argument('--output', type=Path, default=Path('docs/data/prac_cuda_q_gate'))
+    ap.add_argument('--output', type=Path, default=Path('data/experiments/prac_cuda_q_gate'))
     ap.add_argument('--device', type=int, default=1)
     ap.add_argument('--tpi', type=int, choices=[0, 16, 32], default=0,
                     help='Force TPI for the 2203/4423-bit cases and checkpoint gates')

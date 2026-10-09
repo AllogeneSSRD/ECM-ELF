@@ -4,12 +4,12 @@
  *
  * Context: our fold-domain multiply is schoolbook, 2n^2 madd instructions for n
  * 52-bit limbs, and it runs at 84-96% of this machine's vpmadd52 roof
- * (docs/ECM_Montgomery_STAGE1.md section 11).  n = bits/52, so n is 25 (M1277),
+ * (docs/architecture/STAGE1.md).  n = bits/52, so n is 25 (M1277),
  * 58 (M3001) or 77 (M4001) -- small, which is exactly where sub-quadratic methods
  * historically struggle to pay off.
  *
  * The repo already contains a GPU Karatsuba (kernels/opencl/mont_mul/
- * mont_mul_karatsuba_2048b.cl) and docs/DEV_COOP_KARATSUBA_2048.md explains why it
+ * mont_mul_karatsuba_2048b.cl) and docs/architecture/OPENCL.md explains why it
  * deliberately does NOT use the 3-multiply identity: "the carry corrections need
  * per-limb propagation, complexity and correctness risk far exceed the gain".  That
  * reasoning is about 32-bit-limb CIOS on a GPU.  Here the situation differs:
@@ -150,7 +150,7 @@ static void array_add_mixed(uint64_t *dst, const uint64_t *x, size_t lx,
  * This is the crux of the whole exercise.  A plain column-wise subtract leaves
  * "negative columns" (borrows) inside the accumulator, and the fold tail's carry
  * pass -- `carry = v >> 52` -- then reads a 2^64-sized carry out of them and
- * produces garbage.  That is the same trap docs/DEV_COOP_KARATSUBA_2048.md describes
+ * produces garbage.  That is the same trap docs/architecture/OPENCL.md describes
  * for the GPU version ("the carry corrections need per-limb propagation"). */
 static void ksub(uint64_t *dst, const uint64_t *src, size_t cols, __m512i mask)
 {
@@ -211,7 +211,7 @@ static uint64_t *mul_out(kbump_t *s, const uint64_t *a, const uint64_t *b, size_
        the high bits.  One carry pass here makes the minuend canonical, and the
        sub-products are canonical by construction (each mul_out normalises before
        returning).  This pass is exactly the "carry correction" cost the GPU version
-       in docs/DEV_COOP_KARATSUBA_2048.md refused to pay -- here it is one pass over
+       in docs/architecture/OPENCL.md refused to pay -- here it is one pass over
        2n+4 columns, and it is what the timing below has to cover. */
     ifma_carry_pass(r, 0, cols, zero, mask);
 

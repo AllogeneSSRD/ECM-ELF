@@ -3,7 +3,7 @@
 //   ecm_gui.exe --worker-selftest --fake <path to ecm_gui_fake_worker.exe>
 //
 // It drives WorkerProc against the fake worker scenarios and checks the promises
-// of docs/DEV_ECM_GUI.md section 5: output capture through ONE pipe, ANSI handling,
+// of docs/usage/GUI.md: output capture through ONE pipe, ANSI handling,
 // "queue empty" vs crash classification, restart with backoff, the crash breaker,
 // priority classes, and killing the whole child tree through the Job object.
 //

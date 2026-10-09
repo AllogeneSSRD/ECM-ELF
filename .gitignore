@@ -78,7 +78,7 @@ tools/gen/__pycache__/
 /third_party/zen3_runtime/
 
 # Local Edwards stage-1 saves written by ecm.exe (e{n:07d}_c{curve:06d}[.tmp]);
-# they are consumed by ecm_p95feeder. See docs/ECM_EDWARDS_STAGE1.md §11.
+# they are consumed by ecm_p95feeder. See docs/usage/STAGE1.md.
 /e[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
 /saves/
 /feeder.ini
@@ -108,17 +108,16 @@ tools/gen/__pycache__/
 /build_cpu_nmake
 /build_reltest
 /build_cuda_release
-# Mersenne-fold A/B tree (docs/ECM_CGBN_OPTIMIZATION.md 9): same rule as the other local
-# experiment builds -- ignored, deletable once the fold becomes a runtime kernel family.
+# Local Mersenne-fold experiment builds; see docs/performance/STAGE1.md.
 /build_cuda_fold
 # single-tier fold build (6144 only), kept as build_cuda_fold\ecm_cuda_fold6144.exe
 /build_cuda_fold6144
-# experiment trees from the fold/TPB optimization round (docs/ECM_CGBN_OPTIMIZATION.md 9.9):
+# Local fold/TPB experiment builds:
 # fold at other TPB values, basic with ECM_SBITS_CACHE, basic at TPB 256/512
 /build_cuda_foldt*/
 /build_cuda_sbcache
 /build_cuda_tpb*/
-# goal round 1: fold with the fused hand-written Mersenne core (docs/ECM_CGBN_OPTIMIZATION.md 9.10)
+# Local fused Mersenne-core build.
 /build_cuda_fold_fused
 tools/ecm_worktodo/assignment.csv
 tools/ecm_worktodo/assignment.save.csv
@@ -134,7 +133,7 @@ tools/ecm_worktodo/worktodo_p95_stage2.txt
 /build_cuda_basic_t256
 /build_cuda_fold_t256
 
-# ecm_gui build directory (docs/DEV_ECM_GUI.md)
+# ecm_gui build directory (docs/usage/GUI.md)
 /build_gui
 /third_party
 
@@ -143,6 +142,7 @@ tools/ecm_worktodo/worktodo_p95_stage2.txt
 vc140.pdb
 # Local datasets, experiment logs, and evidence archives (kept on disk).
 /data/
+# Prevent generated data from reappearing in the documentation tree.
 /docs/data/
 /dist/
 /tools/ecm_dataset/ecm_stage2_dataset.sqlite
@@ -151,7 +151,6 @@ vc140.pdb
 *.sqlite
 tools/ecm_dataset/1000.bat
 /build_cuda_test
-docs/GPU_POWER_LIMIT_4060LP_20261008.md
 /tools/diag
-/docs/benchmarks
-/docs/figures
+AGENTS.md
+/docs/paper

@@ -11,7 +11,7 @@
 #      computed exactly the same point).
 # (2) is the strong one: it pins three independent implementations to one result,
 # and any non-canonical-representation / reduction bug makes some curve drift.
-# See docs/ECM_EDWARDS_STAGE1.md new sections: the SIMD CIOS unmasked store and
+# See docs/architecture/STAGE1.md new sections: the SIMD CIOS unmasked store and
 # the scalar mpn_redc_1 return-value misuse.  The historical failing case
 # (M3001 / sigma=20260922 / B1=1e5) is part of the default set, so this script is
 # also the regression test for both bugs.

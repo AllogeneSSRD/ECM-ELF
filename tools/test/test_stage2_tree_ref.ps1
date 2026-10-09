@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     The tree reference is the ORACLE for the stage-2 structure our GPU engine (Route B,
-    docs/DEV_STAGE2_GPU_PLAN.md section 2.2) will implement with an NTT: product tree over
+    docs/architecture/STAGE2.md) will implement with an NTT: product tree over
     the baby points, product tree over the giant points, multipoint evaluation by a
     remainder tree.  Layers checked here:
 

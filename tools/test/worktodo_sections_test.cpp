@@ -1,5 +1,5 @@
 // Self-checking unit test for the SECTION support of ecm_worktodo (D2, see
-// docs/DEV_ECM_WORKTODO.md): the [Worker #N] header syntax, the section-aware
+// docs/usage/STAGE1.md): the [Worker #N] header syntax, the section-aware
 // first_line / advance pair, and list_workers.
 //
 // Compile (from the repo root):

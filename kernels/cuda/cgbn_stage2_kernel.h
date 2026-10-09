@@ -1,6 +1,6 @@
 ﻿/* cgbn_stage2_kernel.h — device side of the CUDA/CGBN ECM stage 2 (pairing / BSGS).
 
-   M1 of docs/DEV_STAGE2_GPU_PLAN.md.  This is the *reference* stage 2
+   M1 of docs/architecture/STAGE2.md.  This is the *reference* stage 2
    (tools/bench/stage2_ref.cpp, algorithm=pairing) moved onto the GPU with the same
    algorithm and the same hit semantics, so the two paths can be compared directly:
 
@@ -80,11 +80,11 @@ struct cgbn_s2_params_t {
   static const uint32_t BITS = bits;  /* CGBN container size */
   /* CGBN's cgbn_context_t reads these four off the parameters type (cgbn_cuda.h:58-62);
      MAX_ROTATION is the limb rotation in the multiply, 1 = measured best/cheapest for the
-     stage-1 family (docs/ECM_CGBN_OPTIMIZATION.md 5.5). */
+     stage-1 family (docs/performance/STAGE1.md 5.5). */
   static const uint32_t MAX_ROTATION = ECM_MAX_ROTATION;
   static const uint32_t SHM_LIMIT = 0;
   static const bool     CONSTANT_TIME = false;
-  /* Same per-tier register budget as the stage-1 family (docs/ECM_CGBN_OPTIMIZATION.md). */
+  /* Same per-tier register budget as the stage-1 family (docs/performance/STAGE1.md). */
   static const uint32_t REG_TARGET = (bits <= 2048u) ? 56u : ((bits <= 5120u) ? 128u : 255u);
 };
 

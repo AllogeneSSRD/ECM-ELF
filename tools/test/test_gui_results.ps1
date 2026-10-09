@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    M5 acceptance: the two result files (docs/DEV_ECM_GUI.md section 9).
+    M5 acceptance: the two result files (docs/usage/GUI.md).
 
 .DESCRIPTION
     Drives the real driver through the GUI twice on the SAME task (M677, B1=1e6, 8

@@ -1174,5 +1174,5 @@ Stage2 的兼容调试开关，仅在未配置 stage2_debug_log 时生效；一�
 
 `config/ecm_options.json` -> `tools/gen/generate_ecm_config.py`
 
-See `docs/DEV_ECM_CONFIG_SCHEMA.md` in the source repository; release packages include only this configuration reference.<br>
-维护流程见源码仓库的 `docs/DEV_ECM_CONFIG_SCHEMA.md`；发布包仅附本配置说明。
+See `docs/architecture/CONFIGURATION.md` in the source repository; release packages include only this configuration reference.<br>
+维护流程见源码仓库的 `docs/architecture/CONFIGURATION.md`；发布包仅附本配置说明。

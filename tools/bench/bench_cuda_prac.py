@@ -161,7 +161,7 @@ def main():
         parser.error('Constants require --bits 4423, TPI16/default, single-compact, registers 168 and only prac')
     exe = args.exe.resolve(strict=True)
     args.exp_cache = (args.exp_cache or exe.parent).resolve()
-    root = (args.output or Path('docs/data') / ('prac_cuda_' + dt.datetime.now().strftime('%Y%m%d_%H%M%S'))).resolve()
+    root = (args.output or Path('data/experiments') / ('prac_cuda_' + dt.datetime.now().strftime('%Y%m%d_%H%M%S'))).resolve()
     root.mkdir(parents=True, exist_ok=True)
     report = dict(schema=1, measurement='partial-progress-projection-not-completed-wall-time',
                   exe=str(exe), binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(), results=[])

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Acceptance test for the worktodo generator (M6 scope A, docs/DEV_ECM_GUI.md 19).
+    Acceptance test for the worktodo generator (M6 scope A, docs/usage/GUI.md 19).
 
 .DESCRIPTION
     The C++ generator in the GUI has to agree with the reference implementation

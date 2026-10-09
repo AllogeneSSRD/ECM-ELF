@@ -3,7 +3,7 @@
  *
  * Sibling of tools/bench/stage2_ref.cpp: that one is the ORACLE for the arithmetic
  * and the save-file conventions, this one is the ORACLE for the *tree* structure
- * that the GPU stage-2 engine (docs/DEV_STAGE2_GPU_PLAN.md, Route B / §2.2) is
+ * that the GPU stage-2 engine (docs/architecture/STAGE2.md, Route B / §2.2) is
  * going to implement with an NTT.  Correctness first, speed last: every polynomial
  * multiplication here is SCHOOLBOOK and every modulus reduction is mpz_mod, so the
  * code is inspectable by hand.  It is NOT fast and is not meant to be.
@@ -34,7 +34,7 @@
  *      runs the production code path.
  *   7. cost accounting: every polynomial multiplication is counted with its operand
  *      sizes and turned into "operand bits moved" with exactly the convention of
- *      docs/DEV_STAGE2_GPU_PLAN.md §10.5:
+ *      docs/architecture/STAGE2.md:
  *          one multiplication of two polynomials with m coefficients of S bits
  *              costs   2 * m * (2S + ceil(log2 m))   bits,   S = sizeinbase(N,2)
  *      For an unbalanced product (m1 != m2) the cost is charged with m = max(m1,m2)
@@ -390,7 +390,7 @@ void record(Result &res, const mpz_t f, uint64_t prime, const mpz_t N)
 
 /* ======================================================================== *
  *  cost accounting -- "operand bits moved", the convention of
- *  docs/DEV_STAGE2_GPU_PLAN.md §10.5.
+ *  docs/architecture/STAGE2.md
  *
  *  The tool's whole reason for existing is that the plan's per-curve figure
  *  (1.9e11 bits for M5261) is currently derived from Prime95's wall clock and
@@ -857,7 +857,7 @@ struct TreeStats {
 
 /* ======================================================================== *
  *  --dump-F <file>: everything the GPU tree engine (tools/bench/stage2_tree_gpu.cu, M3
- *  slice S1 of docs/DEV_STAGE2_GPU_PLAN.md section 18) needs to reproduce THIS F
+ *  slice S1 of docs/architecture/STAGE2.md) needs to reproduce THIS F
  *  independently -- the modulus, the curve's a24, the stage-2 input point Q (the affine x
  *  of [s]P, i.e. exactly what a save file carries), the baby index set with its x_j, and
  *  the coefficients of F.

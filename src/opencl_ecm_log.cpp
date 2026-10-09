@@ -30,7 +30,7 @@ FILE *g_log_mirror = nullptr;
 // The pipe/console still gets every line (~200 ms cadence): the GUI tails the worker's
 // stdout by complete lines and must not wait a minute for the first one. Whatever the
 // cadence, a line reporting 100.0% is always written, so the file always shows the end of
-// a task. See docs/DEV_ECM_GUI.md §7.2.
+// a task. See docs/usage/GUI.md
 double g_progress_log_seconds = 60.0;
 double g_last_progress_log_s = -1.0e18;
 

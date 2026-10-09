@@ -84,7 +84,7 @@
       <Item id="log_file"     name="log file"/>
       <Item id="open_saves"   name="Open saves folder"/>
       <Item id="no_output"    name="No output yet."/>
-      <Item id="m1_note"      name="Config-driven list. Worker processes, live output and restart/breaker logic arrive in M2 (docs/DEV_ECM_GUI.md)."/>
+      <Item id="m1_note"      name="Workers are configured in ecm.ini. Process control, live output and restart limits are described in docs/usage/GUI.md."/>
       <Item id="duplicate_device" name="Another worker uses the same GPU device."/>
       <Item id="state_stopped"    name="Stopped"/>
       <Item id="state_starting"   name="Starting"/>

@@ -29,7 +29,7 @@ localization/
 | 键名 `panel.id` | 代码里写 `loc.t("workers", "col_state")`；找不到时显示 `workers.col_state` 这种字面量，便于定位 |
 | XML 转义 | `&` 写成 `&amp;`、`<` 写成 `&lt;`、`>` 写成 `&gt;`、`"` 写成 `&quot;` |
 | 注释可以放心写 | `<!-- ... -->` 会被解析器忽略，可以留翻译笔记 |
-| 关于字体 | C++ 侧不打包字体：界面语言需要 CJK 时，运行时加载系统字体（Windows：微软雅黑 `msyh.ttc` 等）。找不到系统字体时 GUI 自动回退英文界面（见 `docs/DEV_ECM_GUI.md` §10.3） |
+| 关于字体 | C++ 侧不打包字体：界面语言需要 CJK 时，运行时加载系统字体（Windows：微软雅黑 `msyh.ttc` 等）。找不到系统字体时 GUI 自动回退英文界面（见 `docs/usage/GUI.md`） |
 | 新增文案 | 先在 `english.xml` 里加 `<Item>`，再在代码里用它；漏加会显示 `panel.id` 字面量（自测会报“缺键数量”） |
 
 ## 与代码的关系

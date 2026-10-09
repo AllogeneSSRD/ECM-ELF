@@ -8,7 +8,7 @@
 //       <Panel id="workers">
 //         <Item id="start" name="Start"/>
 //
-// Rules (docs/DEV_ECM_GUI.md 10):
+// Rules (docs/usage/GUI.md 10):
 //   * localization/english.xml is the mandatory baseline: every key must exist
 //     there, and a missing key in another language falls back to it;
 //   * files are UTF-8 (with or without BOM); a non-UTF-8 file is reported instead

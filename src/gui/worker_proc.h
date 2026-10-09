@@ -1,6 +1,6 @@
 #pragma once
 
-// Worker process supervision (milestone M2, docs/DEV_ECM_GUI.md section 5).
+// Worker process supervision (milestone M2, docs/usage/GUI.md).
 //
 // One worker == one `ecm_cuda.exe -ini ecm.ini --worker N` process:
 //   * CreateProcessW with CREATE_NO_WINDOW, never through cmd.exe;

@@ -3,7 +3,7 @@
 #          [-Obj <path to .obj>] [-Kernel <substring of the mangled name>] [-Top 12]
 # Purpose (2026-09-25): check whether a register-capped build pays for occupancy with extra
 # instructions (spills = LDL/STL) and see the inner-loop opcode mix, per
-# docs/ECM_CGBN_OPTIMIZATION.md section 8.
+# docs/performance/STAGE1.md
 param(
     [string]$Obj = 'build_cuda_cmake\CMakeFiles\ecm_cuda.dir\kernels\cuda\cgbn_stage1_kernels_tpi16.cu.obj',
     [string]$Kernel = 'kernel_double_addI13cgbn_params_tILj16ELj8192E',

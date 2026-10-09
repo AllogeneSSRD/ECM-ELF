@@ -1,7 +1,7 @@
 # fix_bom.py -- restore the UTF-8 BOM on files that contain non-ASCII bytes.
 # nvcc/cl read a .cu without a BOM as ANSI(GBK); a Chinese comment then swallows the
 # following newline and the next line (often a #define) disappears into the comment.
-# See docs/ECM_CGBN_OPTIMIZATION.md section 6 item 1.
+# See docs/performance/STAGE1.md item 1.
 import io, os, sys
 
 paths = sys.argv[1:]

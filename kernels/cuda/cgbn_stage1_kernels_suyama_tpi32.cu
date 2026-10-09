@@ -5,14 +5,14 @@
  * of the parallel build).  The per-tier guards (ECM_TIERS_RESTRICTED / ECM_TIER_<bits>)
  * and the exported symbol name are unchanged, so the dispatcher in cgbn_stage1.cu and
  * the restricted-tier builds keep working as before.
- * See docs/ECM_CGBN_OPTIMIZATION.md 8.8. */
+ * See docs/performance/STAGE1.md 8.8. */
 
 /* cgbn_stage1_kernels_suyama.cu — Suyama param0 kernel instantiations.
  *
  * One separate __global__ function per (TPI, BITS) pair, mirroring the param3 set
  * exactly: the two parametrizations differ in the per-bit arithmetic (full-width a24
  * and the difference x-coordinate instead of the 32-bit d and the constant 2), so
- * they are different kernels -- see docs/ECM_Montgomery_STAGE1.md §21 for the answer
+ * they are different kernels -- see docs/architecture/STAGE1.md for the answer
  * to "can param0 and param3 share instantiations?".
  *
  * Grid (identical to cgbn_stage1_kernels_tpi*.cu):

@@ -2,7 +2,7 @@
 #define _CGBN_MERS_FUSED_CORE_H 1
 
 /* cgbn_mers_fused_core.h -- hand-written MERSENNE modular multiplication for the fold
- * domain (N = 2^k - 1), goal round 1, see docs/ECM_CGBN_OPTIMIZATION.md 9.10.
+ * domain (N = 2^k - 1), goal round 1, see docs/performance/STAGE1.md 9.10.
  *
  * WHAT IT IS
  *   CGBN's product accumulation with the fold applied to its OWN internal accumulators.

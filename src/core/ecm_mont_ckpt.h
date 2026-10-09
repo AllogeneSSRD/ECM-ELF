@@ -1,6 +1,6 @@
 /* ---------------------------------------------------------------------------
  * ecm_mont_ckpt.h -- mid-stage-1 checkpoints for the Montgomery (Suyama sigma)
- * CPU paths, scalar mpn *and* AVX512-IFMA batch (docs/ECM_Montgomery_STAGE1.md §17).
+ * CPU paths, scalar mpn *and* AVX512-IFMA batch (docs/architecture/STAGE1.md).
  *
  * Scope, deliberately narrow:
  *   * INTERNAL format.  Only this program writes and reads it; the artifact that

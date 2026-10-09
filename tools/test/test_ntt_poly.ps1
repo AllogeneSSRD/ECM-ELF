@@ -23,7 +23,7 @@
           (two independent transforms, same answer).
 
     Timing is printed but NOT asserted: performance gates belong in
-    docs/DEV_STAGE2_GPU_PLAN.md, and a wall-clock assertion would be flaky.
+    docs/architecture/STAGE2.md, and a wall-clock assertion would be flaky.
 
     Uses device 1 by default (device 0 normally runs production stage 1).  Skips cleanly
     when the probe or a CUDA device is missing.
@@ -101,7 +101,7 @@ Write-Host "[2] the exactness rule L * (2^bpw - 1)^2 < p must hold for every sha
 # product per nonzero digit of each operand, and the arrays are zero beyond the payload.
 # (The earlier version of this check used N * (2^bpw)^2, which is a stricter -- and
 # therefore wrong -- rule: it failed on shapes the probe now proves safe, see
-# docs/DEV_STAGE2_GPU_PLAN.md 14.15.)  slot_words is ceil(slot_bits/bpw), the word-aligned
+# docs/architecture/STAGE2.md 14.15.)  slot_words is ceil(slot_bits/bpw), the word-aligned
 # stride, so it is derivable from the printed fields alone.
 $glPrime = [System.Numerics.BigInteger]::Parse('18446744069414584321')   # NOT $p: PowerShell variables are case-INsensitive, so $p and $P below are the SAME variable
 foreach ($k in $parsed.Keys) {

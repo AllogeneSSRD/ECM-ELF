@@ -4,7 +4,7 @@
     stage2_ref acceptance -- the reference ECM stage 2 (algorithm + correctness first).
 
 .DESCRIPTION
-    Milestone M1 of docs/DEV_STAGE2_GPU_PLAN.md: prove the stage-2 algorithm and the
+    Milestone M1 of docs/architecture/STAGE2.md: prove the stage-2 algorithm and the
     save-file conventions BEFORE any GPU work.  Layers checked here:
 
       [1] the tool's own --selftest: x-only curve arithmetic (xDBL / xADD / ladder)

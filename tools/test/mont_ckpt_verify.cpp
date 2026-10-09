@@ -1,6 +1,6 @@
 /* ---------------------------------------------------------------------------
  * mont_ckpt_verify.cpp -- deterministic verification of the Montgomery mid-stage-1
- * checkpoints (docs/ECM_Montgomery_STAGE1.md §17).
+ * checkpoints (docs/architecture/STAGE1.md).
  *
  * What is proven here, without any wall-clock timing or process killing:
  *

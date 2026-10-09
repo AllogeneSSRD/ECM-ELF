@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
- * cufft_kron_probe.cu -- M0 gate of docs/DEV_STAGE2_GPU_PLAN.md: how fast is ONE
+ * cufft_kron_probe.cu -- M0 gate of docs/architecture/STAGE2.md: how fast is ONE
  * big-integer multiplication of the size a polymult-class stage 2 needs, and is it
  * correct?
  *

@@ -44,7 +44,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// PROBE ONLY -- do not enable in production (docs/ECM_CGBN_OPTIMIZATION.md §5)
+// PROBE ONLY -- do not enable in production (docs/performance/STAGE1.md)
 //
 // ECM_PROBE_ADD_DENSITY = k makes the fused double-and-add execute its *addition* half only
 // once every k-th bit.  THE RESULT IS MATHEMATICALLY WRONG for k > 1: it exists purely to
@@ -57,7 +57,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// PROBE ONLY -- do not enable in production (docs/ECM_CGBN_OPTIMIZATION.md §5.4)
+// PROBE ONLY -- do not enable in production (docs/performance/STAGE1.md)
 //
 // ECM_PROBE_CHAIN_W = M executes, per bit, ONE xz doubling plus one REAL
 // differential addition every M-th bit, where that addition uses a PROJECTIVE
@@ -75,7 +75,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// A/B experiment (docs/ECM_CGBN_OPTIMIZATION.md §8 item 3): scheduling variant of the
+// A/B experiment (docs/performance/STAGE1.md): scheduling variant of the
 // fused step.  ECM_STEP_VARIANT = 1 (default) keeps the historical double_add_v2;
 // 2 selects double_add_v2_ssa, which computes exactly the same arithmetic with explicit
 // prep registers (no write-after-read hazard).  Both must give bit-identical saves.
@@ -85,7 +85,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// PROBE ONLY (docs/ECM_CGBN_OPTIMIZATION.md §5.6): run the *param2-shaped* step (affine
+// PROBE ONLY (docs/performance/STAGE1.md): run the *param2-shaped* step (affine
 // difference folded into a shift, full-width a24) on the param0 data path to price the
 // param2 kernel.  RESULTS ARE WRONG (a24 is truncated to 32 bits); timing only.
 // ---------------------------------------------------------------------------
@@ -96,7 +96,7 @@
 /* TODO test how this changes gpu_throughput_test */
 /* NOTE: >= 512 may not be supported for > 2048 bit kernels */
 //
-// Tunables (docs/ECM_CGBN_OPTIMIZATION.md §5.5/§8).  Both are COMPILE-TIME on purpose:
+// Tunables (docs/performance/STAGE1.md).  Both are COMPILE-TIME on purpose:
 // CGBN's shuffles assume the block really is params::TPB threads wide, so the launch
 // config in kernels/cuda/cgbn_stage1.cu reads the same constant.  Override with
 // -DECM_TPB=<n> / -DECM_MAX_ROTATION=<n> to sweep them.
@@ -134,7 +134,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// MERSENNE FOLD DOMAIN (probe, 2026-09-25: docs/ECM_CGBN_OPTIMIZATION.md §9)
+// MERSENNE FOLD DOMAIN (probe, 2026-09-25: docs/performance/STAGE1.md)
 //
 // For N = 2^k - 1 the Montgomery reduction of every modular multiply can be
 // replaced by a fold: 2^k == 1, so for the 2*k-bit product P = hi*2^k + lo we
@@ -187,7 +187,7 @@
 //   * still not faster -> the fold's serial dependency chain, replacing mont_mul's
 //     eight independent madd chains, is the problem and the direction is closed.
 //
-// See docs/ECM_CGBN_OPTIMIZATION.md 9.6/9.7.
+// See docs/performance/STAGE1.md 9.6/9.7.
 // ---------------------------------------------------------------------------
 #ifndef ECM_MERS_FOLD_PROBE_ALIGN
 #define ECM_MERS_FOLD_PROBE_ALIGN 0
@@ -204,7 +204,7 @@
 // it with -- which is exactly the Mersenne-fold kernel's situation (ncu, user-run:
 // Compute (SM) Throughput -19.7% vs the Montgomery kernel, i.e. idle issue slots
 // rather than a saturated machine).  Default 0 keeps the historical path
-// byte-identical; the A/B is in docs/ECM_CGBN_OPTIMIZATION.md 9.9.
+// byte-identical; the A/B is in docs/performance/STAGE1.md 9.9.
 // ---------------------------------------------------------------------------
 #ifndef ECM_SBITS_CACHE
 #define ECM_SBITS_CACHE 0
@@ -265,7 +265,7 @@ class cgbn_params_t {
      suyama/param2 files contain every tier.  N must be >= 1 for every instantiation, so
      "do not cap" is spelled 255 (= the sm_89 per-thread maximum, i.e. no constraint).
 
-     The table below is measured, not guessed (docs/ECM_CGBN_OPTIMIZATION.md 5.7).
+     The table below is measured, not guessed (docs/performance/STAGE1.md 5.7).
      ptxas -v register counts for the suyama (param0) family, TPB=128:
 
        bits :  2560  3072  3584  4096  4608  5120  5632  6144  7168  8192
@@ -456,7 +456,7 @@ class curve_t {
 
     // Keep Montgomery products canonical before reusing them in the ladder.
     // Removing these subtractions produced wrong Q at M4423/B1=4 (scalar 12);
-    // see docs/DEV_GPUOWL_NTT_NOTES.md section 45.
+    // see docs/architecture/NTT.md
     if (do_add) {                                  // PROBE: CB/DA exist only for the addition
       mont_mul_normalized(CB, t, u, modulus, np0); // C*B
       mont_mul_normalized(DA, v, w, modulus, np0); // D*A
@@ -523,7 +523,7 @@ class curve_t {
   }
 
   /**
-   * A/B experiment (docs/ECM_CGBN_OPTIMIZATION.md §8 item 3): the *same* arithmetic as
+   * A/B experiment (docs/performance/STAGE1.md): the *same* arithmetic as
    * double_add_v2, but written with explicit prep registers so that the source has no
    * write-after-read hazard between the addition half and the doubling half.  In
    * double_add_v2 the prep (aZ+aX, aZ-aX) is kept in the `w`/`u` registers, and the
@@ -721,7 +721,7 @@ class curve_t {
   }
 
   /* -------------------------------------------------------------------------
-   * PROBE ONLY: windowed-chain arithmetic (docs/ECM_CGBN_OPTIMIZATION.md §5.4).
+   * PROBE ONLY: windowed-chain arithmetic (docs/performance/STAGE1.md).
    *
    * One xz doubling per bit, plus -- every M-th bit -- a REAL differential
    * addition whose difference point is PROJECTIVE (EFD dadd-1987-m-3, 4M+2S).
@@ -796,7 +796,7 @@ class curve_t {
 
   /* -------------------------------------------------------------------------
    * Suyama param0 variant of the same fused double-and-add
-   * (docs/ECM_Montgomery_STAGE1.md §19/§20).
+   * (docs/architecture/STAGE1.md).
    *
    * The param3 path above is cheap for TWO reasons, both coming from its fixed
    * shape "P_a = (2:1), P_b = 2P, difference x = 2" (upstream gmp-ecm
@@ -826,7 +826,7 @@ class curve_t {
           // mpres_set_ui(x0, 2, n), parametrizations.c:373): full-width a24 (unlike
           // param3's 32-bit d) with a constant difference (unlike param0's xdiff).
           // 5M+4S per bit instead of param0's 6M+4S -- see
-          // docs/ECM_CGBN_OPTIMIZATION.md §5.6.  Uniform across the warp, so free.
+          // docs/performance/STAGE1.md  Uniform across the warp, so free.
           const bool const_diff = false) {
     // q = xA = aX
     // u = zA = aZ
@@ -1028,7 +1028,7 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add(
  * exactly this combination; param0 has a full-width a24 and a genuine xdiff.  Both live in
  * the same 7-word buffer layout.  CONST_DIFF is a TEMPLATE parameter on purpose: passing
  * it as a runtime flag instead cost 34% of throughput (registers 71 -> 92, docs §5.6).
- * See docs/ECM_CGBN_OPTIMIZATION.md §5.6.
+ * See docs/performance/STAGE1.md
  */
 template<class params, bool CONST_DIFF = false>
 __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(
@@ -1121,7 +1121,7 @@ __global__ void __maxnreg__(params::REG_TARGET) kernel_double_add_suyama(
     }
 #if ECM_PARAM2SHAPE
     // PROBE: force the *param2-shaped* step (full-width a24 + constant difference 2) on
-    // the param0 data path.  Timing only -- docs/ECM_CGBN_OPTIMIZATION.md §5.6.
+    // the param0 data path.  Timing only -- docs/performance/STAGE1.md
     curve.double_add_v2_suyama(aX, aZ, bX, bZ, a24, xdiff, modulus, np0, true);
 #elif ECM_MERS_FOLD
     curve.double_add_v2_suyama_fold(aX, aZ, bX, bZ, a24, xdiff, modulus,
@@ -1227,7 +1227,7 @@ cgbn_stage1_kernel_fn cgbn_stage1_kernel_tpi32(uint32_t BITS, uint32_t *TPI_out)
 /* Suyama param0 variants (method = gpu + gpu_param = 0).  Kept in their own TU so
    the extra template instantiations do not slow down the param3 kernel builds; the
    instantiated grid mirrors the param3 one exactly (see the answer to "can the two
-   share instantiations?" in docs/ECM_Montgomery_STAGE1.md §21). */
+   share instantiations?" in docs/architecture/STAGE1.md). */
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi4(uint32_t BITS, uint32_t *TPI_out);
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi8(uint32_t BITS, uint32_t *TPI_out);
 cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_tpi16(uint32_t BITS, uint32_t *TPI_out);

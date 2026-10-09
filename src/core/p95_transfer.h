@@ -19,7 +19,7 @@
 //
 // Failure policy: a handoff problem NEVER fails the task. The line is parked in a pending
 // file and re-delivered with the next successful delivery; the GUI shows a red notice
-// while that file is non-empty. See docs/DEV_ECM_GUI.md §18 and docs/DEV_ECM_WORKTODO.md §8.
+// while that file is non-empty. See docs/usage/GUI.md and docs/usage/STAGE1.md
 
 #include <cstddef>
 #include <string>

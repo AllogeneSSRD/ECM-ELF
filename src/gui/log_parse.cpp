@@ -276,7 +276,7 @@ ParsedLine parse_line(const std::string &line) {
     // chain below ends with `out.kind = LogKind::Raw`, so setting it here would be lost.
     if (contains(p, "No input number on stdin")) out.old_driver = true;
 
-    // ---- p95_add: notices (Prime95 handoff, docs/DEV_ECM_GUI.md 18) ----------
+    // ---- p95_add: notices (Prime95 handoff, docs/usage/GUI.md 18) ----------
     // Classified as an Event so the notice also reaches the log pane; the notice strip
     // (App::draw_p95_notice) aggregates the fields.
     {
