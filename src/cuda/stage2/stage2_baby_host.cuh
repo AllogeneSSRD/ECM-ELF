@@ -112,8 +112,10 @@ static bool device_baby_generate(const LadderCtx &C,const mpz_t N,
         for(size_t j=0;j<n;++j) {
             words_to_mpz(X,bx.data()+j*w,w);words_to_mpz(Z,bz.data()+j*w,w);
             const bool unit=affine_x_gmp_checked(x,X,Z,N);if(!unit)++check_noninv;
-            mpz_neg(neg,x);mpz_mod(neg,neg,N);mpz_to_words(word,w,neg);
-            if(!std::equal(word.begin(),word.end(),negative.begin()+j*w)) {
+            mpz_neg(neg,x);mpz_mod(neg,neg,N);
+            // Device leaves are canonical in the carrier, not necessarily N.
+            words_to_mpz(p,negative.data()+j*w,w);mpz_mod(p,p,N);
+            if(mpz_cmp(neg,p)) {
                 std::fprintf(stderr,"FATAL: baby device affine GMP mismatch point=%llu\n",(unsigned long long)j);std::exit(3);
             }
             if(cache){mpz_gcd(g,Z,N);cache->gcd_at(j,p);if(mpz_cmp(g,p)){

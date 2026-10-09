@@ -71,6 +71,7 @@ template<class Query> bool geometry(Word p, int bits, Query query, Geometry &g, 
 }
 struct Plan {
     Geometry geometry;
+    Word target_bits=0, carrier_exponent=0;
     Word d=0, b1=0, b2=0, giant_points=0, batches=0;
     Word free_bytes=0, arena_cap_bytes=0, owner_budget_bytes=0, baby_bytes=0;
     double estimated_seconds=0;

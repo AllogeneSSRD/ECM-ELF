@@ -59,6 +59,7 @@ struct ProductionDefaults {
 
 #include "stage2/ntt_runtime.cuh"
 #include "../core/ecm_stage2_geometry.h"
+#include "../core/ecm_stage2_modulus.h"
 
 #include <string>
 #include <utility>
@@ -325,12 +326,14 @@ static void words_to_mpz(mpz_t out, const unsigned long long *w, size_t W)
    letting an arbitrary representative X become a leaf of the giant product. */
 static bool affine_x_gmp_checked(mpz_t out, const mpz_t X, const mpz_t Z, const mpz_t N)
 {
-    if (mpz_cmp_ui(Z, 0) == 0) { mpz_set_ui(out, 0); return true; }
+    if (mpz_cmp_ui(Z, 0) == 0 || (mpz_cmp(Z,N)>=0 && mpz_divisible_p(Z,N))) {
+        mpz_set_ui(out, 0); return true;
+    }
     mpz_t inv;
     mpz_init(inv);
     const bool ok = (mpz_invert(inv, Z, N) != 0);
     if (!ok) {
-        mpz_set(out, X);
+        mpz_mod(out, X, N);
     } else {
         mpz_mul(out, X, inv);
         mpz_mod(out, out, N);
@@ -1302,10 +1305,7 @@ struct S4Ctx {
     }
 };
 
-struct PolyLayer {
-    mpz_t N;
-    size_t W = 0;               /* words per coefficient */
-    size_t S = 0;               /* bits(N) */
+struct PolyLayer : ecm_stage2::ModulusContext {
     int device = 1;
     /* slice S3: the persistent multiply arena (buffers + fusion plan + per-pass twiddle
        tables built once per SHAPE instead of once per call).  nullptr = the original
@@ -1361,8 +1361,8 @@ struct PolyLayer {
     /* the slot assembly + its D2H, skipped when a reduction hook is installed (section 35) */
     double t_hout = 0.0;
 
-    PolyLayer() { mpz_init(N); }
-    ~PolyLayer() { mpz_clear(N); }
+    PolyLayer() = default;
+    ~PolyLayer() = default;
     PolyLayer(const PolyLayer &) = delete;
     PolyLayer &operator=(const PolyLayer &) = delete;
 };
@@ -4256,6 +4256,7 @@ static int xadd_selftest(const std::vector<unsigned long long> &hn,size_t nw,
    very same kernel the baby points were computed with */
 struct LadderCtx {
     std::vector<unsigned long long> hn, hqx, hqz, ha24, hmone;
+    std::vector<unsigned long long> target_n; // host identity only, never uploaded as arithmetic modulus
     unsigned long long ninv = 0;
     size_t nw = 0;
 };
@@ -6658,7 +6659,7 @@ struct ResidentGiant {
                 for(size_t k=lo;k<hi;++k){words_to_mpz(inv,all_segments.data()+k*w,w);mpz_mul(v,v,inv);mpz_mod(v,v,L.N);}
                 if(mpz_cmp(p,v)){std::fprintf(stderr,"FATAL: GPU Gamma group GMP mismatch\n");std::exit(3);}++st.checked_groups;
             }
-            const double ti=now_s();const bool unit=mpz_invert(inv,p,L.N)!=0;st.t_invert+=now_s()-ti;
+            const double ti=now_s();const bool unit=mpz_invert(inv,p,L.target())!=0;st.t_invert+=now_s()-ti;
             if(unit) {
                 group_good[h]=1;mpz_mul(Ginv,Ginv,inv);mpz_mod(Ginv,Ginv,L.N);
                 gamma_points+=std::min(n,hi*SEG)-lo*SEG;projective_segments+=hi-lo;st.good_segments+=hi-lo;
@@ -6707,7 +6708,7 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
     std::vector<unsigned long long> lx, lz;
     if(g_giant_seed_device) {
         W.need_pts(js.size());
-        const bool paired=g_giant_seed_pair && W.need_giant_base(D,L.N);
+        const bool paired=g_giant_seed_pair && W.need_giant_base(D,L.target());
         if(paired) {
             S2G_DISPATCH((int)nw,s2g_launch_seed_pair,(int)nw,clo,npts,per_block,blocks,
                          W.dn,C.ninv,W.giant_base,W.giant_base+nw,W.da24,W.dmone,W.dx,W.dz);
@@ -6736,9 +6737,9 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
                 if(paired) {
                     if(z)continue; // Projective scale differs; compare x by cross products.
                     words_to_mpz(X,cx.data()+i*nw,nw);words_to_mpz(new_z,lz.data()+i*nw,nw);
-                    mpz_mul(X,X,new_z);mpz_mod(X,X,L.N);
+                    mpz_mul(X,X,new_z);mpz_mod(X,X,L.target());
                     words_to_mpz(Z,lx.data()+i*nw,nw);words_to_mpz(old_z,cz.data()+i*nw,nw);
-                    mpz_mul(Z,Z,old_z);mpz_mod(Z,Z,L.N);
+                    mpz_mul(Z,Z,old_z);mpz_mod(Z,Z,L.target());
                     if(mpz_cmp(X,Z)!=0){std::fprintf(stderr,"FATAL: paired seed GMP projective mismatch point=%llu\n",(unsigned long long)i);std::exit(3);}
                     g_giant_seed.checked_words+=2*nw;continue;
                 }
@@ -6852,11 +6853,11 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
             mpz_inits(X1, Z1, nullptr);
             words_to_mpz(X1, &gx[(size_t)i * nw], nw);
             words_to_mpz(Z1, &gz[(size_t)i * nw], nw);
-            affine_x_gmp(X, X1, Z1, L.N);
+            affine_x_gmp(X, X1, Z1, L.target());
             mpz_to_words(a1, nw, X);
             words_to_mpz(X1, &cx[(size_t)i * nw], nw);
             words_to_mpz(Z1, &cz[(size_t)i * nw], nw);
-            affine_x_gmp(X, X1, Z1, L.N);
+            affine_x_gmp(X, X1, Z1, L.target());
             mpz_to_words(a2, nw, X);
             if (a1 != a2) {
                 if (!bad) first = i;
@@ -6879,9 +6880,9 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
                 mpz_inits(Zc, Zl, g, nullptr);
                 words_to_mpz(Zc, &gz[(size_t)i * nw], nw);
                 words_to_mpz(Zl, &cz[(size_t)i * nw], nw);
-                mpz_gcd(g, Zc, L.N);
+                mpz_gcd(g, Zc, L.target());
                 const bool zc_bad = (mpz_cmp_ui(g, 1) > 0);
-                mpz_gcd(g, Zl, L.N);
+                mpz_gcd(g, Zl, L.target());
                 const bool zl_bad = (mpz_cmp_ui(g, 1) > 0);
                 std::fprintf(stderr, "giant_chain_window: i=%llu equal=%d chain_Z_noninvertible=%d "
                                      "ladder_Z_noninvertible=%d\n", i, (a1 == a2) ? 1 : 0,
@@ -7099,7 +7100,7 @@ struct SmallPrimeBabyCache {
     bool matches(const LadderCtx &C,const Stage2Params &SP) const {
         return ready && D==SP.D && B1==SP.B1 && B2==SP.B2 && js==SP.baby_j &&
             key.nw==C.nw && key.ninv==C.ninv && key.hn==C.hn && key.hqx==C.hqx &&
-            key.hqz==C.hqz && key.ha24==C.ha24 && key.hmone==C.hmone;
+            key.hqz==C.hqz && key.ha24==C.ha24 && key.hmone==C.hmone && key.target_n==C.target_n;
     }
     void gcd_at(size_t index,mpz_t g) const {
         const auto it=std::lower_bound(nonunit.begin(),nonunit.end(),index,
@@ -7109,7 +7110,7 @@ struct SmallPrimeBabyCache {
     }
     size_t payload_bytes() const {
         size_t v=js.capacity()*8+(key.hn.capacity()+key.hqx.capacity()+key.hqz.capacity()+
-            key.ha24.capacity()+key.hmone.capacity())*8+nonunit.capacity()*sizeof(nonunit[0]);
+            key.ha24.capacity()+key.hmone.capacity()+key.target_n.capacity())*8+nonunit.capacity()*sizeof(nonunit[0]);
         for(const auto &e:nonunit)v+=e.second.capacity()+1;
         return v; // capacity ledger, not process private bytes or allocator overhead
     }
@@ -7182,15 +7183,15 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             if(cached[k]!=~size_t(0)) {
                 baby_cache->gcd_at(cached[k],pg);
                 if(check) {
-                    words_to_mpz(z,cz.data()+k*W,W);mpz_gcd(expected,z,L.N);
+                    words_to_mpz(z,cz.data()+k*W,W);mpz_gcd(expected,z,L.target());
                     if(small_prime_flag("NTT_SMALL_PRIME_TEST_BAD") && checked==0)mpz_add_ui(expected,expected,1);
                     if(mpz_cmp(pg,expected))++bad;
                     ++checked;
                 }
             } else {
-                words_to_mpz(z,sz.data()+fallback++*W,W);mpz_gcd(pg,z,L.N);
+                words_to_mpz(z,sz.data()+fallback++*W,W);mpz_gcd(pg,z,L.target());
             }
-            if(mpz_cmp_ui(pg,1)>0 && mpz_cmp(pg,L.N)<0)s3_record(R.tail,pg,smalljs[k],L.N);
+            if(mpz_cmp_ui(pg,1)>0 && mpz_cmp(pg,L.target())<0)s3_record(R.tail,pg,smalljs[k],L.target());
         }
         mpz_clears(z,expected,nullptr);
         stage2_log::print(stage2_log::debug, "small_prime_reuse: requested=%d available=%d matched=%d primes=%llu reused=%llu fallback=%llu checked=%llu bad=%llu avoided_montmuls=%llu avoided_h2d_bytes=%llu avoided_d2h_bytes=%llu cache_bytes=%llu elapsed=%.6f\n",
@@ -7387,7 +7388,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             const double t=now_s(),ti=R.device_leaf.t_invert;resident.prepare(ws,L,gseg,Ginv,proj_gamma_points,proj_segments,R.device_leaf);
             R.t_gleaves+=now_s()-t;R.t_ginv+=R.device_leaf.t_invert-ti;
         }
-        GfinvBatch segment_inverse(gseg,W,L.N,g_gfinv_batch);
+        GfinvBatch segment_inverse(gseg,W,L.target(),g_gfinv_batch);
         /* the G trees of the batches that lie inside this point chunk */
         for (unsigned long long b = c0 / P; b < R.num_poly_g && b * P < c1; ++b) {
         const size_t lo = (size_t)(b * (unsigned long long)P);
@@ -7481,7 +7482,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 if(g_gfinv_batch)clean=segment_inverse.get(invp,sidx);
                 else {
                     ++g_gfinv.requests;++g_gfinv.individual_attempts;
-                    clean=mpz_invert(invp,pseg,L.N)!=0;
+                    clean=mpz_invert(invp,pseg,L.target())!=0;
                 }
                 const double t3 = now_s();
                 R.t_gin += t2 - t1;
@@ -7516,20 +7517,20 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 for (size_t j = 0; j < nb; ++j) {
                     const size_t q = la + j;
                     words_to_mpz(zv[j], coord_at(q,true), W);
-                    if (mpz_sgn(zv[j]) == 0) { seg_clean = false; break; }
+                    if (L.target_zero(zv[j])) { seg_clean = false; break; }
                     mpz_mul(pv[j + 1], pv[j], zv[j]);
                     mpz_mod(pv[j + 1], pv[j + 1], L.N);
                 }
-                if (seg_clean && mpz_invert(pinv, pv[nb], L.N) == 0) seg_clean = false;
+                if (seg_clean && mpz_invert(pinv, pv[nb], L.target()) == 0) seg_clean = false;
                 if (!seg_clean) {
                     for (size_t j = 0; j < nb; ++j) {
                         const size_t q = la + j, bi = q + lbase - lo;
                         words_to_mpz(X, coord_at(q,false), W);
                         words_to_mpz(Z, coord_at(q,true), W);
-                        if (!affine_x_gmp_checked(ax, X, Z, L.N)) {
+                        if (!affine_x_gmp_checked(ax, X, Z, L.target())) {
                             ++R.giant_degenerate;
-                            mpz_gcd(gq, Z, L.N);
-                            s3_record(R.tail, gq, 0, L.N, /*count_hit=*/false);
+                            mpz_gcd(gq, Z, L.target());
+                            s3_record(R.tail, gq, 0, L.target(), /*count_hit=*/false);
                         }
                         mpz_neg(neg, ax);
                         mpz_mod(neg, neg, L.N);
@@ -7767,7 +7768,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     {
         mpz_t t;
         mpz_init(t);
-        if (mpz_invert(t, Ginv, L.N) == 0) {
+        if (mpz_invert(t, Ginv, L.target()) == 0) {
             std::fprintf(stderr, "%s: FATAL: the projective scale Gamma is not invertible mod N "
                                  "-- H cannot be unscaled\n", NTT_PROBE_NAME);
             std::exit(3);
@@ -7896,6 +7897,25 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         unsigned long long hash=1469598103934665603ull,words=0;
         for(const auto &v:values) for(auto word:v) {hash=(hash^word)*1099511628211ull;++words;}
         stage2_log::print(stage2_log::debug, "descent_values: leaves=%llu words=%llu hash=%llu\n",(unsigned long long)values.size(),words,hash);
+        if(fuse_env_ull("NTT_TARGET_LEAF_HASH",0)) {
+            // Compare generic/carrier runs in the target ring and target limb width.
+            // This diagnostic never replaces the independent arithmetic oracles.
+            const size_t target_words=(L.target_bits()+63)/64;
+            std::vector<unsigned long long> projected(target_words);
+            mpz_t value;mpz_init(value);
+            unsigned long long digest=1469598103934665603ull,nonzero=0;
+            for(const auto &v:values) {
+                words_to_mpz(value,v.data(),W);mpz_mod(value,value,L.target());
+                nonzero+=mpz_sgn(value)!=0;
+                mpz_to_words(projected,target_words,value);
+                for(auto word:projected)digest=(digest^word)*1099511628211ull;
+            }
+            mpz_clear(value);
+            stage2_log::print(stage2_log::debug,
+                "target_descent_values: target_bits=%llu leaves=%llu words=%llu nonzero=%llu hash=%llu\n",
+                (unsigned long long)L.target_bits(),(unsigned long long)values.size(),
+                (unsigned long long)(values.size()*target_words),nonzero,digest);
+        }
     }
     R.t_descent = now_s() - td0 + root_device.seconds;
     /* a phase marker, because the descent is where a long shape can look hung: everything after
@@ -7988,8 +8008,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     std::vector<std::string> bstr((size_t)bprod.size());
     for (size_t b = 0; b < bprod.size(); ++b) {
         words_to_mpz(bv, bprod[b].data(), W);
-        mpz_gcd(bg, bv, L.N);
-        if (mpz_cmp_ui(bg, 1) > 0 && mpz_cmp(bg, L.N) < 0) {
+        mpz_gcd(bg, bv, L.target());
+        if (mpz_cmp_ui(bg, 1) > 0 && mpz_cmp(bg, L.target()) < 0) {
             ++R.hit_blocks;                             /* a real hit: only NOW do we look at
                                                            the individual leaf values */
             if (dev_leaves && values.empty()) {
@@ -8033,8 +8053,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 words_to_mpz(v, values[j].data(), W);
                 /* `lg` (this leaf's own gcd) is kept SEPARATE from `pg` (a later candidate's
                    gcd), because the fallback below needs the leaf's value after the scan */
-                mpz_gcd(lg, v, L.N);
-                if (mpz_cmp_ui(lg, 1) > 0 && mpz_cmp(lg, L.N) < 0) {
+                mpz_gcd(lg, v, L.target());
+                if (mpz_cmp_ui(lg, 1) > 0 && mpz_cmp(lg, L.target()) < 0) {
                     /* the baby point j = SP.baby_j[j] is the culprit's BABY half:
                        p | H(x_j) => p | (x_j - x_i) for some giant i, so search i */
                     ++R.hit_leaves;
@@ -8074,10 +8094,10 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                             mpz_t z;
                             mpz_init(z);
                             words_to_mpz(z, &cz[k * W], W);
-                            mpz_gcd(pg, z, L.N);
-                            if (mpz_cmp_ui(pg, 1) > 0 && mpz_cmp(pg, L.N) < 0) {
+                            mpz_gcd(pg, z, L.target());
+                            if (mpz_cmp_ui(pg, 1) > 0 && mpz_cmp(pg, L.target()) < 0) {
                                 ++blk_rec;
-                                s3_record(R.tail, pg, cand[k], L.N);
+                                s3_record(R.tail, pg, cand[k], L.target());
                                 named = true;
                             }
                             mpz_clear(z);
@@ -8093,7 +8113,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                            NOTHING, which is a silently lost factor.  `unnamed` counts these and
                            `hits` is left as the number of ATTRIBUTED hits, so `hits`/`hit_primes`
                            stay comparable with the CPU reference. */
-                        s3_record(R.tail, lg, 0, L.N, /*count_hit=*/false);
+                        s3_record(R.tail, lg, 0, L.target(), /*count_hit=*/false);
                         ++R.unnamed;
                     }
                     R.t_name += now_s() - tn0;
@@ -8223,16 +8243,15 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
                     bool choose_d, bool run_s2, int curves,
                     const char *saved_qx_hex = nullptr, Stage2Tail *saved_result = nullptr, bool d_plan_only = false,
-                    ecm_stage2::Plan *plan_result = nullptr)
+                    ecm_stage2::Plan *plan_result = nullptr, unsigned carrier_exponent = 0)
 {
     PolyLayer L;
     L.device = g_device;
     stage2_log::phase("Plan Stage2 bounds and memory");
-    if (n_is_hex) { if (mpz_set_str(L.N, n_str, 16) != 0) { std::fprintf(stderr, "%s: bad hex N\n", NTT_PROBE_NAME); return 2; } }
-    else if (mpz_set_str(L.N, n_str, 10) != 0) { std::fprintf(stderr, "%s: bad decimal N\n", NTT_PROBE_NAME); return 2; }
-    if (mpz_odd_p(L.N) == 0) { std::fprintf(stderr, "%s: N must be odd\n", NTT_PROBE_NAME); return 2; }
-    L.S = (size_t)mpz_sizeinbase(L.N, 2);
-    L.W = words_for_bits(L.S);
+    std::string modulus_error;
+    if(!L.configure(n_str,n_is_hex?16:10,carrier_exponent,modulus_error)) {
+        std::fprintf(stderr,"%s: %s\n",NTT_PROBE_NAME,modulus_error.c_str());return 2;
+    }
     L.cost.S = (long)L.S;
     const size_t nw = L.W;
 
@@ -8252,8 +8271,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     const auto user_cap=fuse_env_ull("NTT_ARENA_CAP_KB",0);
     if(user_cap) cap=std::min(cap,(size_t)user_cap*1024);
     stage2_log::print(stage2_log::phases, "stage2_real: device=%d (%s) N_bits=%ld sigma=%llu B1=%llu B2=%llu "
-                "requested_D=%llu choose_d=%d\n", g_device, prop.name, (long)L.S, sigma, B1, B2,
+                "requested_D=%llu choose_d=%d\n", g_device, prop.name, (long)L.target_bits(), sigma, B1, B2,
                 D_in, choose_d ? 1 : 0);
+    stage2_log::print(stage2_log::phases,
+        "stage2_modulus: target_bits=%llu carrier_bits=%llu carrier_exponent=%u lifted=%d target_divides_carrier=1\n",
+        (unsigned long long)L.target_bits(),(unsigned long long)L.S,L.carrier_exponent,(int)L.lifted());
 
     /* ---- THE D SEARCH (section 59) ----------------------------------------------------------
        `--choose-d` used to take the LARGEST D whose transforms fit memory, on the grounds that
@@ -8509,6 +8531,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 now_s()-d_scan_begin,D);
     if(plan_result) {
         ecm_stage2::Plan &p=*plan_result;
+        p.target_bits=L.target_bits();p.carrier_exponent=L.carrier_exponent;
         if(!real_run_geometry(P_baby,(int)L.S,p.geometry))return 3;
         p.d=D; p.b1=B1; p.b2=B2; p.giant_points=B2/D+2;
         p.batches=p.giant_points/P_baby+(p.giant_points%P_baby!=0);
@@ -8574,7 +8597,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     std::vector<unsigned long long> hn(nw), ha24(nw), hmone(nw);
     mpz_to_words(hn, nw, L.N);
     mpz_to_words(hmone, nw, R);
-    if (suyama_curve(a24, ax, az, sigma, L.N) != 0) {
+    if (suyama_curve(a24, ax, az, sigma, L.target()) != 0) {
         std::fprintf(stderr, "%s: degenerate sigma for this N\n", NTT_PROBE_NAME);
         return 2;
     }
@@ -8589,7 +8612,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     std::vector<unsigned long long> qx(nw), qz(nw);
     if (saved_qx_hex) {
         if (mpz_set_str(tmp, saved_qx_hex, 16) != 0 || mpz_sgn(tmp) < 0 ||
-            mpz_cmp(tmp, L.N) >= 0) {
+            mpz_cmp(tmp, L.target()) >= 0) {
             std::fprintf(stderr, "%s: invalid saved affine X\n", NTT_PROBE_NAME);
             return 2;
         }
@@ -8606,7 +8629,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         mpz_inits(X, Z, nullptr);
         words_to_mpz(X, qx.data(), nw);
         words_to_mpz(Z, qz.data(), nw);
-        affine_x_gmp(tmp, X, Z, L.N);
+        affine_x_gmp(tmp, X, Z, L.target());
         char *s = mpz_get_str(nullptr, 16, tmp);
         stage2_log::print(stage2_log::debug, "real_setup_Q: Q_x_hex=%.64s... (%zu hex digits)\n", s, std::strlen(s));
         const char *qfull=std::getenv("NTT_STAGE1_Q_DUMP");
@@ -8620,6 +8643,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        Baby index enumeration ran before Stage1; account its measured work once separately. */
     const double stage2_init_begin=now_s();
     LadderCtx C;
+    mpz_to_words(C.target_n,nw,L.target());
     C.hn = hn;
     C.nw = nw;
     C.ninv = ninv;
@@ -8742,7 +8766,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         std::vector<std::vector<unsigned long long>> leaf(baby_j.size());
         DeviceBabyStats bs;
         const bool baby_requested=fuse_env_ull("NTT_BABY_DEVICE",0)!=0;
-        const bool baby_used=baby_requested && device_baby_generate(C,L.N,baby_j,leaf,
+        const bool baby_used=baby_requested && device_baby_generate(C,L.target(),baby_j,leaf,
             reuse_small?&small_cache:nullptr,baby_deg,noninv,bs);
         if(!baby_used)ladder_points(C,baby_j,bx,bz);
         const double tb1=baby_used?tb0+bs.ladder_seconds:now_s();
@@ -8777,11 +8801,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 mpz_set_ui(pv[0], 1);
                 for (size_t j = 0; j < seg; ++j) {
                     words_to_mpz(zv[j], &bz[(lo + j) * nw], nw);
-                    if (mpz_sgn(zv[j]) == 0) { clean = false; break; }
+                    if (L.target_zero(zv[j])) { clean = false; break; }
                     mpz_mul(pv[j + 1], pv[j], zv[j]);
                     mpz_mod(pv[j + 1], pv[j + 1], L.N);
                 }
-                if (clean && mpz_invert(iprod, pv[seg], L.N) == 0) clean = false;
+                if (clean && mpz_invert(iprod, pv[seg], L.target()) == 0) clean = false;
                 if (!clean) {
                     /* the affine path, VERBATIM: whatever refuses to invert is a hit, not an
                        accident, and affine_x_gmp_checked records its gcd as a factor */
@@ -8790,10 +8814,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                         words_to_mpz(Z, &bz[(lo + j) * nw], nw);
                         /* The established affine helper accepts Z=0 as leaf x=0. Its GCD
                            proof is N, not 1; retain saturation without changing leaf semantics. */
-                        if(reuse_small && mpz_sgn(Z)==0)small_cache.record(lo+j,L.N);
-                        if (!affine_x_gmp_checked(xj, X, Z, L.N)) {
+                        if(reuse_small && L.target_zero(Z))small_cache.record(lo+j,L.target());
+                        if (!affine_x_gmp_checked(xj, X, Z, L.target())) {
                             ++noninv;
-                            mpz_gcd(gq, Z, L.N);
+                            mpz_gcd(gq, Z, L.target());
                             if(reuse_small)small_cache.record(lo+j,gq);
                             char *gs = mpz_get_str(nullptr, 10, gq);
                             baby_deg.push_back(gs);
@@ -8866,11 +8890,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 release(s,result.size()+1);return result;
             };
             for(const auto &v:leaf) {
-                words_to_mpz(x,v.data(),nw);mpz_neg(x,x);mpz_mod(x,x,L.N);bx_hex.push_back(as_hex(x));
+                words_to_mpz(x,v.data(),nw);mpz_neg(x,x);mpz_mod(x,x,L.target());bx_hex.push_back(as_hex(x));
             }
-            for(size_t i=0;i<=fdeg;++i) {words_to_mpz(x,Ft[1].data()+i*nw,nw);F_hex.push_back(as_hex(x));}
-            words_to_mpz(x,qx.data(),nw);words_to_mpz(z,qz.data(),nw);affine_x_gmp(q,x,z,L.N);
-            if(!write_f_dump(real_dump,L.N,a24,q,D,B1,B2,sigma,baby_j,bx_hex,F_hex,fdeg)) {
+            for(size_t i=0;i<=fdeg;++i) {words_to_mpz(x,Ft[1].data()+i*nw,nw);mpz_mod(x,x,L.target());F_hex.push_back(as_hex(x));}
+            words_to_mpz(x,qx.data(),nw);words_to_mpz(z,qz.data(),nw);affine_x_gmp(q,x,z,L.target());
+            if(!write_f_dump(real_dump,L.target(),a24,q,D,B1,B2,sigma,baby_j,bx_hex,F_hex,fdeg)) {
                 std::fprintf(stderr,"%s: FATAL: cannot write real F dump\n",NTT_PROBE_NAME);std::exit(3);
             }
             mpz_clears(x,z,q,nullptr);
@@ -9256,18 +9280,19 @@ int ecm_cuda_stage2_tune_ntt(int device,int min_log2,int max_log2,int repeats,
 }
 
 int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b2,
-                        uint64_t d,int device,void (*report)(const char*,void*),void *context)
+                        uint64_t d,int device,void (*report)(const char*,void*),void *context,unsigned carrier_exponent)
 {
     if(!report || !n_hex || device<0 || !b1 || b2<=b1 ||
        b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
     if(ecm_cuda_stage2_check_configuration())return 2;
     g_device=device;
     ecm_stage2::Plan p;
-    const int code=run_real(n_hex,true,sigma,b1,b2,d,d==0,false,1,nullptr,nullptr,true,&p);
+    const int code=run_real(n_hex,true,sigma,b1,b2,d,d==0,false,1,nullptr,nullptr,true,&p,carrier_exponent);
     if(code)return code;
     const auto &g=p.geometry;
     std::ostringstream json;json<<std::setprecision(17)
         <<"{\"type\":\"stage2_plan\",\"schema\":1,\"curves_executed\":0,\"bits\":"<<g.bits
+        <<",\"target_bits\":"<<p.target_bits<<",\"carrier_exponent\":"<<p.carrier_exponent
         <<",\"words\":"<<g.words<<",\"B1\":"<<p.b1<<",\"B2\":"<<p.b2<<",\"D\":"<<p.d
         <<",\"P\":"<<g.p<<",\"I\":"<<p.giant_points<<",\"G\":"<<p.batches
         <<",\"fold_length\":"<<g.fold_length<<",\"tree_length\":"<<g.tree_length
@@ -9285,8 +9310,10 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
 
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,
-                       void (*report)(const char *, void *), void *context)
+                       void (*report)(const char *, void *), void *context,unsigned carrier_exponent)
 {
+    if(!n_hex || !x_hex || !report || device<0 || b1<2 || b2<=b1 ||
+       b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
     if(ecm_cuda_stage2_check_configuration())return 2;
     s2g_install_crash_handler();
     s2g_install_terminate();
@@ -9297,7 +9324,7 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     Stage2Tail tail;
     const int code = run_real(n_hex, true, sigma, b1, b2, d, d == 0,
-                              false, 1, x_hex, &tail);
+                              false, 1, x_hex, &tail,false,nullptr,carrier_exponent);
     if (code || tail.bad_factors) return code ? code : 1;
     std::string json = "\"hits\":" + std::to_string(tail.hits) +
         ",\"bad_factors\":" + std::to_string(tail.bad_factors) + ",\"factors\":[";

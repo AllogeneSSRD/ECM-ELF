@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <cuda_runtime_api.h>
 #include "ecm_cuda_stage2.h"
+#include "ecm_stage2_modulus.h"
 #include "ecm_expr.h"
 #include "ecm_queue_config.h"
 #include "ecm_worktodo.h"
@@ -209,6 +210,7 @@ struct Options {
     std::string ini, save, worktodo, results, log, debug_file, receipt;
     bool debug_log = false;
     uint64_t b2 = 0, d = 0, skip = 0, curves = 0, batch = 0, arena = 0;
+    unsigned carrier_exponent=0;
     int device = -1, worker = 1;
     int log_level = -1;
     bool dry = false, once = false, selection = false, help = false;
@@ -253,6 +255,11 @@ Options arguments(int argc, char **argv) {
         else if (a == "--queue-receipt") o.receipt=value();
         else if (a == "--b2") o.b2 = num();
         else if (a == "--d") { o.d = num(); o.has_d = true; }
+        else if (a == "--carrier-exponent") {
+            const auto p=num();
+            if(p && (p<2 || p>ecm_stage2::max_input_bits))throw std::runtime_error("carrier-exponent must be 0 or 2..16384");
+            o.carrier_exponent=static_cast<unsigned>(p);
+        }
         else if (a == "--skip-curves") { o.skip = num(); o.selection = true; }
         else if (a == "--curves") { o.curves = num(); o.selection = true; }
         else if (a == "--batch-mb") { o.batch = num(); o.has_batch = true; }
@@ -444,6 +451,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     auto arg = [&](const wchar_t *key, uint64_t n) { cmd += L" "; cmd += key; cmd += L" "; cmd += std::to_wstring(n); };
     arg(L"--record-offset", r.offset); arg(L"--record-hash", r.hash); arg(L"--record-index", r.index);
     arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
+    if(o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
     arg(L"--log-level", static_cast<uint64_t>(o.log_level));
     cmd += L" --results " + quote(results.wstring());
     if (o.factorize_hits) {
@@ -565,6 +573,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
 
 std::string select_auto(Options &o,const Record &r,bool apply=true) {
     namespace c=ecm_stage2::cost;
+    if(o.carrier_exponent)throw std::runtime_error("Auto B2 needs a calibrated Mersenne-carrier profile; use explicit B2");
 #if NTT_GL_ADD_SUB_MASK != 0
     throw std::runtime_error("Auto B2 has no calibrated cost profile for selected NTT add/sub arithmetic");
 #endif
@@ -647,6 +656,10 @@ int curve_worker(Options o) {
     if (!std::getline(in, line) || fingerprint(line) != o.hash)
         throw std::runtime_error("save changed after planning");
     const Record r = parse_record(line);
+    if(o.carrier_exponent) {
+        ecm_stage2::ModulusContext modulus;std::string error;
+        if(!modulus.configure(r.n.c_str(),16,o.carrier_exponent,error))throw std::runtime_error(error);
+    }
     std::string result;
     const uint64_t requested_d=o.d,requested_b2=o.b2;
     const auto start = std::chrono::steady_clock::now();
@@ -667,7 +680,7 @@ int curve_worker(Options o) {
         if (!mpz_cmp(gcd.z, n.z)) throw std::runtime_error("saved X=0 gives no usable Stage1 point");
         configure_cuda_wait(o.device);
         code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
-            [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result);
+            [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent);
     }
     if (code || result.empty()) return code ? code : 1;
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -686,6 +699,7 @@ int curve_worker(Options o) {
         ",\"record\":" + std::to_string(o.index) + ",\"record_hash\":" + json_string(std::to_string(o.hash)) +
         ",\"worker\":" + std::to_string(o.worker) + ",\"device\":" + std::to_string(o.device) +
         ",\"N_hex\":" + json_string(r.n) + ",\"sigma\":" + std::to_string(r.sigma) +
+        ",\"carrier_exponent\":" + std::to_string(o.carrier_exponent) +
         ",\"B1\":" + std::to_string(r.b1) + ",\"B2\":" + std::to_string(o.b2) +
         ",\"requested_D\":" + std::to_string(requested_d) + ",\"seconds\":" + std::to_string(seconds) +
         ",\"factorization_seconds\":" + std::to_string(factor_seconds) +
@@ -704,6 +718,7 @@ void help() {
         "  ecm_cuda_stage2 --save FILE --b2 B2 [--curves N] [--skip-curves N]\n"
         "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results FILE\n"
+        "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
         "         --log FILE --log-level quiet|curve|phases|batches|debug (0..4)\n"
         "         Production console default: phases; readable file: batches. --dry-run --help\n"
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
@@ -730,7 +745,7 @@ int driver(Options o) {
     if (o.child) return curve_worker(o);
     if(o.auto_b2&&o.b2)throw std::runtime_error("explicit --auto-b2 conflicts with nonzero --b2");
     if(o.cost_device_info) {
-        if(!o.save.empty()||!o.worktodo.empty()||!o.tune.empty()||o.auto_b2||o.plan_only||o.dry||o.b2)
+        if(!o.save.empty()||!o.worktodo.empty()||!o.tune.empty()||o.auto_b2||o.plan_only||o.dry||o.b2||o.carrier_exponent)
             throw std::runtime_error("--cost-device-info is independent of curve/queue options");
         EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(o.device<0?0:o.device,&info))throw std::runtime_error("cannot query cost-profile device");
         std::cout<<"{\"type\":\"cost_device\",\"uuid_hex\":\""<<info.uuid_hex<<"\",\"major\":"<<info.major<<",\"minor\":"<<info.minor
@@ -739,7 +754,7 @@ int driver(Options o) {
     }
     if (o.tune.empty() && o.tune_options) throw std::runtime_error("tune options require --tune ntt");
     if (!o.tune.empty() && (o.tune != "ntt" || !o.save.empty() || !o.worktodo.empty() ||
-        o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once || o.auto_b2 || !o.cost_profile.empty()))
+        o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once || o.auto_b2 || !o.cost_profile.empty() || o.carrier_exponent))
         throw std::runtime_error("--tune ntt is independent of save/queue/curve planning options");
     if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
     const fs::path cwd = fs::current_path();
@@ -894,6 +909,7 @@ int driver(Options o) {
             for(const auto &path:writable)if(same_path(save,path))throw std::runtime_error("save path conflicts with writable queue/log/result state");
             if(!o.dry&&!o.plan_only)fatal_log=log;
             if(o.auto_b2&&!b2&&o.cost_profile.empty())throw std::runtime_error("Auto B2 requires --cost-profile FILE");
+            if(o.carrier_exponent && o.auto_b2 && !b2)throw std::runtime_error("Mersenne carrier requires explicit B2 until cost profiles are calibrated");
             plan=records(save,skip,count);
             for(const auto &r:plan) {
                 if((!(o.auto_b2&&!b2)&&b2<=r.b1)||b2>static_cast<uint64_t>(INT64_MAX)-8192)
@@ -901,6 +917,11 @@ int driver(Options o) {
                 if(!expected_n.empty()&&r.n!=expected_n)throw TaskInputError("worktodo N differs from save N");
                 if(queue&&r.b1!=plan.front().b1)throw TaskInputError("queue saves must have the same B1");
                 if(r.x=="0")throw TaskInputError("saved X=0 gives no usable Stage1 point");
+                if(o.carrier_exponent) {
+                    ecm_stage2::ModulusContext modulus;std::string error;
+                    // An invalid command option must not mark a valid queue row as erroneous.
+                    if(!modulus.configure(r.n.c_str(),16,o.carrier_exponent,error))throw std::runtime_error(error);
+                }
             }
         } catch(const TaskInputError &e) {
             if(!queue || o.dry || o.plan_only)throw;
@@ -928,6 +949,7 @@ int driver(Options o) {
                      << o.auto_b2 << ' ' << o.factor_only << ' ' << o.factorize_hits << ' '
                      << o.arena << ' ' << batch << ' ' << o.owner_mb << ' ' << std::setprecision(17)
                      << o.ratio_adjust << ' ' << o.stage1_seconds << ' ' << o.stage1_batch;
+            if(o.carrier_exponent)identity << " carrier_exponent=" << o.carrier_exponent;
             if(o.auto_b2&&!b2)identity << ' ' << ecm_stage2::sha256_file(o.cost_profile) << ' ' << o.auto_min << ' ' << o.auto_max;
             const auto key=identity.str();
             if(state.load(progress)) {
@@ -965,7 +987,7 @@ int driver(Options o) {
                 if(o.auto_b2&&!b2){Options local=o;local.b2=0;std::cout<<select_auto(local,r,false)<<std::endl;continue;}
                 std::string result;
                 const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,b2,d,device,
-                    [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result);
+                    [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,o.carrier_exponent);
                 if(code||result.empty())throw std::runtime_error("Stage2 planning failed");
                 std::cout<<result<<std::endl;continue;
             }

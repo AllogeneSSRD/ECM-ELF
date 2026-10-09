@@ -279,4 +279,8 @@ python tools/log_parser/plot_prime95_gpu.py `
 
 [梅森承载与D/P、显存联合规划](D:/code/MPA-OpenCl/docs/STAGE2_MERSENNE_CARRIER_MEMORY_PLAN_20261009.md)
 补充了target/carrier分离证明、GMP-ECM参考、Auto B2布局口径差异和NTT台阶的
-并存显存下界，并给出实施顺序；未新增GPU性能实测。
+并存显存下界，并给出实施顺序。后续第一阶段已实现显式梅森承载：同一7995-bit
+目标、保存点、B2=2.6e12、D=810810和二进制，在GPU1上ABBA+BAAB（各n=4）
+完整Stage2从165.180降至113.166 s，减少31.49%；完整目标叶子摘要与算术检查通过。
+这组新A/B用于隔离后端收益；与本报告历史CPU/GPU数据的功耗、曲线和B1条件不同，
+不能直接替换历史样本或据此计算新的CPU/GPU速度比。详见后续报告§10。

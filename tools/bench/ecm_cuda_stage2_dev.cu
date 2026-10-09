@@ -81,8 +81,9 @@ int ecm_cuda_stage2_tune_ntt(int device,int min_log2,int max_log2,int repeats,
 }
 
 int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b2,
-                        uint64_t d,int device,void (*report)(const char*,void*),void *context)
+                        uint64_t d,int device,void (*report)(const char*,void*),void *context,unsigned carrier_exponent)
 {
+    if(carrier_exponent){std::fprintf(stderr,"Mersenne carrier requires the production engine source\n");return 2;}
     if(!report || !n_hex || device<0 || !b1 || b2<=b1 ||
        b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
     g_device=device;
@@ -109,8 +110,9 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
 
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,
-                       void (*report)(const char *, void *), void *context)
+                       void (*report)(const char *, void *), void *context,unsigned carrier_exponent)
 {
+    if(carrier_exponent){std::fprintf(stderr,"Mersenne carrier requires the production engine source\n");return 2;}
     s2g_install_crash_handler();
     s2g_install_terminate();
     ladder_cap_init();
