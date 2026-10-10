@@ -215,3 +215,11 @@ Stage1原handle完整结束，8批36曲线通过普通GMP末点与checksum复核
 runtime工具允许未提供choose12成本文件时明确跳过该模式接受检查，保持其缺失scope拒绝；生产B1通过2计划/13调用/3完整曲线及INI私有队列重启不重复。已有B1=20的choose12文件另实测4计划/15调用/3曲线，报告choose12_verified=true，未用缺失数据作choose12标定。首次调用误写成本文件名在启动GPU前失败，保留目录；改用实际stage1_lcm/stage1_choose12文件后在新目录验收。最终86条Stage2 raw审计160992 mandatory/385444 GMP checks，bad0。
 
 证据`data/experiments/ecm_tune_production_auto_20261010/`：`execution/cache_comparison/`、失败`execution/production_build.log`、`encoding_probe/`、成功`execution_resume/`、`production_runtime/`、`choose12_runtime_final/`及`final_audit/result.json`。原始40曲线tune在`data/experiments/ecm_tune_23416_25986359/`，源码/二进制冻结在`build_cuda_cmake/ecm_model_cache_final_20261010/`。生成配置6文件与diff核对通过；AUTO_B2、性能及TODO同步。剩余完整目标不缩小：更大D/B2与生产位宽/预算、choose12/余因子/实际大batch成本，独立更广收益排名，NTT批量及互斥阶段组合、驱动冷启动和非驻留/G1路径。
+
+### 生产B1大D范围与独立收益复验
+
+确认上一handle对应真实协调器9864/收益子进程36252仍在运行后继续，未重复启动；结束后管理员进程查询确认父子进程退出才启动后续编译。M521/B1=10e6/lcm/sigma26，使用同一有效生产save、batch8真实T1与冻结exe d1d1946e…，GPU1/用户1800MHz/默认55W上限，batch256/arena6300/fold640。三D690690/1141140/1381380、五B2从260e9至2600e9，各暖机1+正式3，60曲线，15scope无跳过；三组留一最大0.459/3.509/2.337%，全部合格。与先前小D范围合并保留25scope，两个B2段之间没有外推。
+
+独立收益25锚点各暖机1+交错正式3，100曲线；Auto从1293决策候选选择2.6e12/D1381380/普通模数，P126720/I1882177/G15。实测4.519360秒/估计4.577495，误差1.286%；全候选最大误差4.505%，收益排名损失0。D690690在同B2实测6.518491，选中D减少30.669%引擎时间；该结论不是承载收益或通用D默认。范围上界平台仍受限，Stage2进程5.128206秒另列，score未包含驱动/冷启动。
+
+最终raw审计160曲线355200 mandatory/818108 GMP检查bad0、无因子、驻留。NVML利用率≥80%的245点SM1545…1800/median1800，power18.97…55.11/median51.78 W；实际频率非严格恒定。证据`data/experiments/ecm_tune_production_large_d_20261010/execution/`与`final_audit/result.json`，原始60调优曲线`ecm_tune_36356_26996765/`，合并profile SHA2aa2fadf…；56源/current/冻结及二进制身份核对一致。正式性能和TODO同步；生产位宽/余因子T1/预算、NTT与互斥阶段组合、冷启动和非驻留/G1仍待完成。本草稿保留。
