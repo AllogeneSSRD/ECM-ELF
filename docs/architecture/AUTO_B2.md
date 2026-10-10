@@ -4,7 +4,7 @@
 
 Auto B2 优化连续生成/处理曲线的单位时间收益，计入 Stage1 成本，即使本次读取 save。它不是有限已有 save 的每条 Stage2 时限选择器，也不是强制某个 T2/T1 比值。
 
-当前有两种Stage2成本来源：完整ECM tune TOML，以及独立标定的旧组件成本 `.cprof`。完整ECM tune可联合选择B2、D和合法梅森承载，要求提供正的Stage1每曲线成本，或加载匹配的完整Stage1实测；没有数据的范围不自动外推。旧组件成本路径保留其二进制/算术与标定资格检查，当前生产组合没有新的合格 `.cprof`。
+当前有两种Stage2成本来源：完整ECM tune TOML，以及独立标定的旧组件成本 `.cprof`。完整ECM tune在固定B2时选择D和合法梅森承载；Auto B2联合选择B2、D和承载，另要求提供正的Stage1每曲线成本，或加载匹配的完整Stage1实测。没有数据的范围不自动外推。旧组件成本路径保留其二进制/算术与标定资格检查，当前生产组合没有新的合格 `.cprof`。
 
 ## 原生接口
 
@@ -17,6 +17,16 @@ Auto B2 优化连续生成/处理曲线的单位时间收益，计入 Stage1 成
 有限正的`stage1_seconds_per_curve`优先，该值应是目标设备、位宽、B1和批次下已经摊销的每曲线Stage1成本；`stage1_batch`不会再将它除一次。未提供时可用`--stage1-tune-profile FILE.toml`或INI的`stage1_tune_profile`查询实测中位数。两者都没有则拒绝选择。T1不是本次save读取耗时，也不是Stage2 tune生成B1=20点的准备耗时。旧组件模型仍使用其自身已测摊销范围，不借用独立Stage1文件。
 
 每个curve worker按当前free VRAM重新选择，成功结果保留真实B2/D/承载、原始请求及规划时长；规划/执行失败保留未完成队列。完整tune Auto B2结果用`auto_plan`记录联合选择，`T1_source`区分显式成本与Stage1实测，不再执行第二次D/算术选择以改变已排名的组合。未完成队列的身份包含有效Stage1实测文件摘要和指数模式，改变成本后不能静默复用原进度。plan-only输出联合选择与实际形状，不推进队列。
+
+### 最小使用顺序
+
+1. 按生产目标的实际位宽/类型和B1准备有效save。默认已知素数目录使用B1=20；生产高B1或余因子应使用`--tune-save <save>`，不能借用不匹配的默认成本。
+2. 使用`--tune ecm --tune-level <1..10> --tune-file <输出.toml>`测完整Stage2。用`--tune-d <D,...>`、`--tune-b2 <B2,...>`及`--tune-repeats <n>`控制生产范围；指定B2列表后，另加正的`--tune-tail-samples <n>`才能补短尾点。比较承载时加`--tune-carrier-exponent <p>`，程序同时测普通/承载并检查实际整除关系。预算须与运行时相同。
+3. 若需要NTT组合预测，按实际计划补齐精确长度/批量实测，再用`--tune ecm --tune-merge <ECM.toml> --tune-ntt-profile <NTT.toml>`（可重复）`--tune-file <新.toml>`导入；纯NTT吞吐文件不能直接替代完整ECM成本。完整ECM文件也可单独用于精确点及合格分块预测。
+4. 固定B2运行时，提供`--save <save> --b2 <B2> --tune-profile <ECM.toml>`，不指定D/承载，让二者参与排名。Auto B2改用`--auto-b2`及匹配的`--stage1-tune-profile <T1.toml> --stage1-batch <C>`，或提供已摊销的`--stage1-seconds-per-curve <秒>`；指数模式须与Stage1成本一致。最终队列/INI的B2必须为0；非零值保留固定B2，`--b2 0`不能清除INI的非零`stage2_b2`。
+5. 先用`--plan-only`查看实际B2/D/承载、模型及联合显存，不推进队列。正式运行仍会重查当前free；没有匹配范围时不声明已有成本适用于该任务。
+
+原始日志、save和验证输出放在`data/experiments/`；只有性能TOML路径写入INI的`stage2_tune_profile`和`stage1_tune_profile`。更换设备/策略、目标位宽或B1后须重新核对范围，不能按位宽比例直接缩放成本。
 
 ## 收益和成本
 

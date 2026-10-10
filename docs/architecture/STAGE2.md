@@ -4,6 +4,14 @@
 
 输入为完成的 Suyama PARAM0 Stage1 点 Q、目标 N、B1/B2、设备及预算。普通模式在 N 上计算；梅森承载实验在 M=2ᵖ−1 上计算，再在 N 上解释单位性、投影、GCD 和因子。S=bit_length(M)，W=⌈S/64⌉。
 
+### Stage1 save 与承载资格
+
+save只提供目标N、sigma、B1和归一化X，不自动推断承载指数。支持PARAM=0、Z=1或省略Z，X须在[0,N)；存在checksum时必须通过校验。承载要求N为大于3的奇数、bit_length(N)≤p≤16384，且实际验证N∣2ᵖ−1；显式`--carrier-exponent p`不满足条件时报错。p不要求为素数，也没有按目标位宽自动启用的固定阈值。
+
+提供完整tune时，可从匹配的普通/合法承载候选按成本与联合显存选择，规则见[实测选型](AUTO_B2.md#实测-d-与承载选择)。显式`--carrier-exponent 0`锁定普通模数；未提供tune或显式p时，不因save来自梅森数自动抬升模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
+
+承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L8970)。
+
 设备点坐标使用 Montgomery 域，NTT digit 在 Goldilocks 域，多项式系数归约后为普通规范整数。不同表示不能直接相乘或判断数学相等。
 
 D 确定 baby 集 J={1≤j≤D/2:gcd(j,D)=1}，P=φ(D)/2。giant 数 I=⌊B2/D⌋+2，分为 G=⌈I/P⌉ 个 G 树批次。补充小素数路径覆盖主树映射不能直接处理的边界。
