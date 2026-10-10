@@ -261,6 +261,16 @@ NTT/S4 规划模型具有单独的规划与事件验证；本轮主扫描仍采�
 
 证据在`data/experiments/ecm_tune_carrier_20261010/`的`paired_7995.toml`、`measurement_summary.json`、`telemetry.csv`、`merge_runtime_final/result.json`及`production_auto/result.json`；逐曲线原始日志/回执为`data/experiments/ecm_tune_35836_14824203/`。最终驱动与53个编译依赖的冻结快照在`build_cuda_cmake/ecm_tune_merge_final_20261010/`。合并不提高原样本的统计可信度，不据此推断其他位宽、B1/B2或预算也有相同比例收益。
 
+## B2区间预测验证
+
+输入为梅森素数M521、B1=20、sigma26、D60060/P5760；GPU1 RTX4060 Laptop，用户固定1800 MHz/默认55W上限设置，arena6300/fold640/batch256 MiB。本轮没有修改显卡设置；短调优没有连续频率/功率采样，不声明实际功耗恒定。固定D的5个实测B2为2600000000、4623526466、8221921916、14620874401、26000000000，每点独立进程预热1次、正式3次，按B2递增测量。计时为`stage2_full_wall.total`，排除Stage1准备、进程启动、调优规划和结果发布。
+
+五点T=α+βI模型最大留一相对误差2.986%，最大留一绝对误差0.029099 s；最大样本MAD0.006177 s。使用未参与拟合的B2=5.2×10⁹、1.3×10¹⁰、2×10¹⁰，以D=0、承载未指定启动生产程序，自动采用预测候选D60060。最终二进制各运行1条完整曲线，预测分别0.313360、0.559302、0.780019 s，实测0.328982、0.559750、0.769658 s，相对误差4.748%、0.080%、1.346%。三个点均通过预先固定的8%独立验证门限；无因子/算术坏计数，fold/frontier驻留。这是该小位宽/固定D区间的验证，尚未证明生产高位宽、承载排序或其他预算的预测精度。
+
+模型资格之外还核对精确实测点优先、缺少模型标记保持旧选择、区间外拒绝预测、拟合失败回退、显式D/承载覆盖，以及请求B2的联合显存重新规划。CPU验证13项不适用模型、1项未知模型拒绝；原生reader验证13个素数与独立Stage1点、等级1…10网格、21项坏profile及3项设备/策略不匹配。合并保留模型标记，未标记文件仍仅使用实测点；失败发布保留既有文件。
+
+测量二进制SHA256=`846e27f5a956731156c90aae1796b74b9fcb830c901b1868f8c4e1605d325f00`；最终生产二进制SHA256=`182f2950505e864ab31727c8c475a327bda4dce94b79a3e16ab3c1f5d7f86db7`，复用相同、经依赖核对的CUDA对象。两组调优的40条完整曲线（含预热）均经回执与GMP日志核对，坏计数0。性能数据、留一结果、原生测试和最终独立曲线在`data/experiments/ecm_tune_prediction_20261010/`的`dense_profile.toml`、`dense_fit.log`、`raw_audit.json`、`native_final/`、`prediction_native_final/`、`merge_native_final/`、`merge_runtime_publish/`及`production_publish/result.json`；逐曲线原始证据在`data/experiments/ecm_tune_34824_16869734/`和`ecm_tune_27364_16994093/`。最终54项编译依赖的冻结快照在`build_cuda_cmake/ecm_tune_prediction_publish_20261010/`。
+
 ## B2 和位宽关系
 
 固定 D/P 时 I≈B2/D，G≈B2/(DP)，主重复成本近似 Tfixed+G·Tbatch，所以大 B2 可近线性。允许 P/D 随预算增长时可呈约平方根；驻留不是平方根的充分条件，owner 回退也不是线性的充分条件。

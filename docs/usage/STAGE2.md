@@ -72,7 +72,7 @@ Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目
 
 分批测量可用`--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml`合并，再将INI的`stage2_tune_profile`指向合并文件。要求设备、策略及重复次数一致；相同测量范围采用最后一份。该命令不运行GPU测试，输出不能覆盖输入文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
 
-生产运行用`--tune-profile FILE.toml`或`stage2_tune_profile`加载性能数据，自动选已测范围内的D和合法承载。显式非零D固定D；`--carrier-exponent 0`固定普通模数，显式非零p固定承载。无匹配实测数据时保留现有选型并给出原因；不会仅凭save来自梅森数自动启用承载。完整适用范围和计时边界见[Auto B2/tune](../architecture/AUTO_B2.md)。
+生产运行用`--tune-profile FILE.toml`或`stage2_tune_profile`加载性能数据，自动选已测D和合法承载。匹配请求B2的实测点优先；声明模型且同组数据通过资格检查时，可估计已测B2区间内部的成本。高等级会细化B2网格，增加这种预测所需的样本；它不保证每组拟合成功。显式非零D固定D；`--carrier-exponent 0`固定普通模数，显式非零p固定承载。无合格成本时保留现有选型并给出原因；不会仅凭save来自梅森数自动启用承载。该功能选择D/算术，不会代替用户选择B2。完整适用范围和计时边界见[Auto B2/tune](../architecture/AUTO_B2.md)。
 
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp#L175)：`records`；[队列字段](../../src/core/ecm_cuda_stage2_main.cpp#L395)：`queue_fields`。
 - [ecm_stage2_queue_state.h](../../src/core/ecm_stage2_queue_state.h)：原子进度和回执对账。

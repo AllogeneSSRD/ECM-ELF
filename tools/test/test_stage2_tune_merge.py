@@ -60,6 +60,11 @@ def main():
     assert compatible['profile']['format'] == 3
     assert compatible['policy']['environment'] == {'xadd6': 1}
     assert compatible['profile']['max_batches'] == 0
+    model = 'linear_giant_points_v1'
+    tagged = text.replace('format = 3', 'format = 3\nprediction_model = "'+model+'"')
+    opted = merge('prediction_optin', [tagged])
+    assert opted['profile']['prediction_model'] == model
+    assert 'prediction_model' not in single['profile']
     for name, old, new in [
         ('device', 'sm_minor = 9', 'sm_minor = 6'),
         ('policy', 'batch_mb = 256', 'batch_mb = 64'),
@@ -70,8 +75,9 @@ def main():
     different_repeats = different_repeats.replace('seconds = [2.0, 3.0, 4.0]', 'seconds = [2.0, 4.0]')
     merge('reject_repeats', [different_repeats], False)
     merge('reject_bad_statistics', [text.replace('median_seconds = 3.0', 'median_seconds = 9.0')], False)
-    report = {'valid_merges': 6, 'rejected_merges': 5, 'native_reader_roundtrips': 6,
-              'duplicate_scope_last_wins': True, 'format2_to_named_format3': True}
+    report = {'valid_merges': 7, 'rejected_merges': 5, 'native_reader_roundtrips': 7,
+              'duplicate_scope_last_wins': True, 'format2_to_named_format3': True,
+              'prediction_optin_preserved': True, 'untagged_remains_exact_only': True}
     (out/'result.json').write_text(json.dumps(report, indent=2)+'\n', encoding='utf-8')
     print(json.dumps(report))
 

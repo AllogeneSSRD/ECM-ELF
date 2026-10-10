@@ -45,6 +45,10 @@ def main():
     assert data['profile']['format'] == 3
     assert data['summary']['measured'] == len(expected)
     assert data['summary']['merged_profiles'] == 2
+    model = next((tomllib.loads(path.read_text(encoding='utf-8'))['profile'].get('prediction_model')
+                  for path in [a.profile_a, a.profile_b]
+                  if tomllib.loads(path.read_text(encoding='utf-8'))['profile'].get('prediction_model')), None)
+    assert data['profile'].get('prediction_model') == model
     for forbidden in ['binary', 'manifest', 'sha256', 'path']:
         assert forbidden not in target.read_text(encoding='utf-8').lower()
     previous = target.read_bytes()

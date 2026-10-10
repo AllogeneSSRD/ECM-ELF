@@ -54,11 +54,11 @@ iter/s 指每秒完整 field convolution 次数，不是每秒 ECM 曲线，也�
 
 默认基准使用已知梅森素数，sigma=26、B1=20，以独立GMP ladder生成归一化Stage1点。该准备不是生产Stage1计时或Auto B2的Stage1标定。`--tune-save FILE` 使用文件第一条有效记录；`--tune-carrier-exponent p` 对该记录同时测普通模数与承载，先验证N∣2ᵖ−1。save模式只声明所测曲线无因子，不宣称目标为素数或其他曲线不会产生因子。发现因子、算术坏计数或附加诊断使计时不干净时，停止调优并保留证据，不发布成功配置。
 
-完整Stage2默认等级为1。等级ℓ：基准位宽数min(13,ℓ+3)，D数min(12,ℓ+2)，B2数1+⌊(ℓ−1)/2⌋，重复2ℓ+1次，单曲线最多64+16(ℓ−1)棵G树。各等级保留前一等级的输入并扩大网格；高等级可能需要很长时间，不是固定秒数预算。
+完整Stage2默认等级为1。等级ℓ：基准位宽数min(13,ℓ+3)，D数为ℓ+2（ℓ≥7再加2），重复2ℓ+1次，单曲线最多64+16(ℓ−1)棵G树。各等级保留前一等级的输入并扩大、细化网格；高等级可能需要很长时间，不是固定秒数预算。
 
 - 位宽依次加入：521、2203、4423、9689、1279、3217、11213、607、2281、4253、127、107、9941。
-- D依次加入：30030、60060、120120、180180、210210、360360、570570、690690、1141140、1381380、1711710、2282280。
-- B2依次加入：2.6×10⁹、2.6×10¹⁰、2.6×10¹¹、2.6×10¹²、8×10¹²。
+- D使用递增目录：30030、60060、120120、180180、210210、360360、570570、690690、810810、1021020、1141140、1381380、1711710、2282280。等级1…10分别取前3、4、5、6、7、8、11、12、13、14项。
+- B2区间边界：2.6×10⁹、2.6×10¹⁰、2.6×10¹¹、2.6×10¹²、8×10¹²。等级ℓ覆盖前⌊(ℓ−1)/2⌋个区间；等级3…4每区间作2份对数等距细分，等级5…10作4份，内部点按最近整数取整。等级1…10的B2点数分别为1、1、3、3、9、9、13、13、17、17。等级10默认最多3094个输入/B2/D组合，实际仍受显存和G树数量限制。
 - `--tune-exponents p,...`、`--tune-d D,...`、`--tune-b2 B2,...`、`--tune-repeats n`覆盖相应预设；save与exponents互斥。`--tune-max-batches n`覆盖G树数量上限，0解除该耗时限制；它防止高B2搭配很小D产生极长基准，不是算术正确性门限。显存采用有效batch/arena/fold配置；`--tune-memory-mb`只用于NTT。G1、不支持的诊断/非驻留组合和静态free快照不满足的形状记录跳过；没有成功形状则不发布。
 
 TOML格式3按`[profile]`、`[device]`、`[policy]`、`[policy.environment]`、`[ecm.sample_<n>]`、`[summary]`组织；策略每键一行，重复时间用数组。配置只包含性能、校验与适用条件，不含路径、程序或构建摘要。reader兼容格式2的环境串并在内存中规范为命名字段。原始plan、子进程日志和测量回执保留在`data/experiments/ecm_tune_<id>/`，与可编辑性能配置分开。发布前核对设备/策略、完整状态、样本统计及运行期间程序未变化，随后原子替换；失败不覆盖已有配置。
@@ -73,13 +73,21 @@ TOML格式3按`[profile]`、`[device]`、`[policy]`、`[policy.environment]`、`
 
 显式B2任务可配置`--tune-profile FILE.toml`或INI的`stage2_tune_profile`，CLI路径优先。每条生产curve worker和plan-only都使用原生reader。它检查UUID/SM、CUDA runtime/driver、固定后端、outer、add/sub、显存预算及NTT策略；性能配置不依赖二进制摘要。基准不启用独立debug日志，运行启用debug日志时给出未标定原因并保留现有选型；NTT_MEMORY_AUDIT非零时拒绝调优。
 
-候选必须精确匹配目标位宽、普通算术类型、B1/B2及已测D；承载候选重新验证目标N实际整除2ᵖ−1。同位宽匹配是测量成本的适用条件，不是数学正确性的证明。非零显式D固定D；显式`--carrier-exponent`（包括0）固定算术模式。未指定算术时，匹配profile中的普通/合法承载候选参与同一排名。
+候选必须精确匹配目标位宽、算术位宽/类型、B1及已测D；B2使用精确实测点或下述合格区间预测。承载候选重新验证目标N实际整除2ᵖ−1。同位宽匹配是测量成本的适用条件，不是数学正确性的证明。非零显式D固定D；显式`--carrier-exponent`（包括0）固定算术模式。未指定算术时，匹配profile中的普通/合法承载候选参与同一排名。
 
-排名采用实测median+2·MAD，先检查排名较优候选的当前正常驻留联合内存模型。模型须有效、完整，且`required_free_bytes`不超过实时free快照；以联合峰、baby/fold/frontier预留需求计算，不能叠加模块各自峰。通过后把选定D和承载交给生产引擎，因此较大D不会再被legacy additive估计提前排除。引擎继续执行实际free检查、分配错误处理和回退，静态判断不保证物理驻留。无设备/策略匹配、未测范围或没有可用候选时记录原因并保留现有路径；损坏或未完成profile报错。
+实测排名采用median+2·MAD，预测排名采用估计时间+最大留一绝对误差+2·最大MAD。先检查排名较优候选在请求B2下的当前正常驻留联合内存模型。模型须有效、完整，且`required_free_bytes`不超过实时free快照；以联合峰、baby/fold/frontier预留需求计算，不能叠加模块各自峰。通过后把选定D和承载交给生产引擎，因此较大D不会再被legacy additive估计提前排除。引擎继续执行实际free检查、分配错误处理和回退，静态判断不保证物理驻留。无设备/策略匹配、没有合格成本或没有可用候选时记录原因并保留现有路径；损坏或未完成profile报错。
 
-结果的`tune_plan`保留候选数、选定D/承载、中位数/MAD、所需free与实际free；原始D/承载请求单独保存。此reader目前不拟合未测位宽/B1/B2、不读取NTT吞吐选择ECM参数、不选择B2。Auto B2成本模型仍受前述独立标定合同约束。
+结果的`tune_plan`保留候选数、选定D/承载、实测或预测的成本与不确定量、所需free与实际free；原始D/承载请求单独保存。此reader不外推位宽/B1/D、不读取NTT吞吐选择ECM参数、不选择B2。Auto B2成本模型仍受前述独立标定合同约束。
 
-GPU频率、功耗和背景负载属于测量条件，应在相同设置下调优和使用；改变设置后重新测量。当前profile的设备/策略匹配不验证这些动态条件。`stage2_plan`中的legacy耗时估计与`tune_selection`中的实测统计分别保留，实测排名使用后者。
+GPU频率、功耗和背景负载属于测量条件，应在相同设置下调优和使用；改变设置后重新测量。当前profile的设备/策略匹配不验证这些动态条件。`stage2_plan`中的legacy耗时估计与`tune_selection`中的成本分别保留，tune排名使用后者。
+
+### B2区间成本预测
+
+完整ECM tune发布`prediction_model="linear_giant_points_v1"`。旧profile未声明该字段时只使用精确实测点；未知模型名报错。合并保留已声明的模型，但每个输入位宽/算术/B1/D组仍独立检查资格。同组已有请求B2的实测点时，采用该实测点。
+
+固定D的近似模型为T=α+βI，I=⌊B2/D⌋+2。只允许在同组3…128个驻留实测点之间预测，I严格递增且最大I至少为最小I的2倍；整数I必须能由double精确表示。最小二乘得到的α、β须有限且非负，每个点的留一预测相对误差均≤8%，全部检查通过后才拟合所有点。请求B2必须严格位于已测区间内部，端点只接受其精确实测结果。
+
+输出使用`estimated_seconds`，并给出实测B2范围、点数、最大留一相对/绝对误差和最大MAD；不会将估计标为实测中位数。这些误差只描述已有样本，不是新请求的统计置信界或精度保证。尾树、分块与NTT形状台阶仍可能改变成本，当前没有位宽、B1、D或区间外外推；资格不满足则保留原选型。最终显存检查始终针对请求B2，不能复用锚点的内存准入结果。独立完整曲线验证见[性能说明](../performance/STAGE2.md#b2区间预测验证)。
 
 ## 标定资格与当前证据
 
@@ -93,6 +101,7 @@ GPU频率、功耗和背景负载属于测量条件，应在相同设置下调�
 
 - [ecm_stage2_cost_profile.h](../../src/core/ecm_stage2_cost_profile.h#L32)：reader、scope、`Work` 与 `choose`。
 - [ecm_stage2_tune_ecm.h](../../src/core/ecm_stage2_tune_ecm.h)：完整Stage2等级、素数点准备、统计及TOML reader。
+- [ecm_stage2_tune_prediction.h](../../src/core/ecm_stage2_tune_prediction.h)：B2分组、非负成本拟合及留一资格检查。
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：`run_ecm_tune`、`select_tuned`和`curve_worker`。
 - [驱动资格检查](../../src/core/ecm_cuda_stage2_main.cpp#L617)、[收益公式](../../src/core/ecm_stage2_cost_profile.h#L185)。
 - [measure_ecm_costs.py](../../tools/bench/measure_ecm_costs.py)、[fit_ecm_costs.py](../../tools/bench/fit_ecm_costs.py)、[validate_ecm_costs.py](../../tools/bench/validate_ecm_costs.py)、[audit_ecm_costs.py](../../tools/bench/audit_ecm_costs.py)、[export_ecm_cost_profile.py](../../tools/bench/export_ecm_cost_profile.py)。

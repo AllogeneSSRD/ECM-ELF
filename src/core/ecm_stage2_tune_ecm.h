@@ -5,6 +5,7 @@
 #include <limits>
 
 namespace ecm_stage2 { namespace tune {
+constexpr const char *b2_prediction_model="linear_giant_points_v1";
 struct EcmEffort {
     std::vector<unsigned> exponents;
     std::vector<Word> d,b2;
@@ -15,12 +16,23 @@ inline EcmEffort ecm_effort(int level) {
     if(level<1 || level>10)throw std::runtime_error("tune-level must be 1..10");
     // Known Mersenne prime exponents. Each level retains all previous inputs.
     const unsigned primes[]={521,2203,4423,9689,1279,3217,11213,607,2281,4253,127,107,9941};
-    const Word ds[]={30030,60060,120120,180180,210210,360360,570570,690690,1141140,1381380,1711710,2282280};
+    const Word ds[]={30030,60060,120120,180180,210210,360360,570570,690690,810810,1021020,1141140,1381380,1711710,2282280};
     const Word bounds[]={2600000000ull,26000000000ull,260000000000ull,2600000000000ull,8000000000000ull};
     EcmEffort e;
     e.exponents.assign(primes,primes+std::min(13,level+3));
-    e.d.assign(ds,ds+std::min(12,level+2));
-    e.b2.assign(bounds,bounds+1+(level-1)/2);
+    e.d.assign(ds,ds+level+2+(level>=7?2:0));
+    const int intervals=(level-1)/2;
+    const int subdivisions=level<3?1:level<5?2:4;
+    e.b2.push_back(bounds[0]);
+    for(int interval=0;interval<intervals;++interval) {
+        for(int step=1;step<subdivisions;++step) {
+            const double fraction=(double)step/subdivisions;
+            const auto point=(Word)std::llround((double)bounds[interval]*
+                std::pow((double)bounds[interval+1]/bounds[interval],fraction));
+            e.b2.push_back(point);
+        }
+        e.b2.push_back(bounds[interval+1]);
+    }
     e.repeats=2*level+1;e.max_batches=64+16*(level-1);return e;
 }
 struct Mpz {
@@ -180,6 +192,8 @@ struct EcmProfile {
         if(uint(p.profile,"effort_level")<1 || uint(p.profile,"effort_level")>10 ||
            !uint(p.profile,"repeats") || uint(p.profile,"repeats")>1000 || uint(p.profile,"warmups")!=1)
             throw std::runtime_error("invalid ECM tune effort metadata");
+        if(p.profile.count("prediction_model") && required(p.profile,"prediction_model")!=std::string("\"")+b2_prediction_model+"\"")
+            throw std::runtime_error("unsupported ECM tune prediction model");
         if(!cost::hex(required(p.device,"uuid_hex").substr(1,32),32) || required(p.device,"uuid_hex").size()!=34)
             throw std::runtime_error("invalid ECM tune device");
         for(const char *key:{"sm_major","sm_minor","cuda_runtime","cuda_driver","gl_fixed_mode","outer_unroll_u","add_sub_mask"})uint(p.device,key);
@@ -215,6 +229,7 @@ inline EcmProfile merge_ecm_profiles(const std::vector<EcmProfile> &inputs) {
     EcmProfile result=inputs.front();result.policy.erase("environment");result.samples.clear();
     std::map<std::string,size_t> positions;Word effort=0,limit=0,skipped=0,replaced=0;bool unlimited=false;
     for(const auto &input:inputs) {
+        if(input.profile.count("prediction_model"))result.profile["prediction_model"]=required(input.profile,"prediction_model");
         auto policy=input.policy;policy.erase("environment");
         if(input.device!=result.device || policy!=result.policy || input.environment!=result.environment)
             throw std::runtime_error("ECM tune merge device or memory/backend policy mismatch");

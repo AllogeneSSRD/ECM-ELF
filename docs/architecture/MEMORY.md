@@ -125,7 +125,7 @@ M6011余因子5872 bits、B1=20、sigma26、B2=2.6×10¹²、D1141140/P103680、
 
 plan-only 提供真实 packing、精确非空树组、请求顺序以及初始化/NTT/S4/owner/giant的条件联合结果与free快照需求；当前输出明确不保证full physical process peak、完整准入和全部fallback。候选筛选必须保持条件适用性和实时free/headroom查询。
 
-`select_tuned`在匹配的完整Stage2性能scope内按实测成本排序，逐候选要求`valid`、`finished`及`initial_free_snapshot_fits`。较大D通过这个条件模型后以显式D传给生产引擎；实际owner仍执行实时free查询及失败回退。未测、不支持或不满足当前free快照时保留现有选型，合同见[Auto B2/tune](AUTO_B2.md)。
+`select_tuned`在匹配的完整Stage2性能scope内按实测或合格B2区间预测成本排序，逐候选在请求B2下要求`valid`、`finished`及`initial_free_snapshot_fits`。较大D通过这个条件模型后以显式D传给生产引擎；实际owner仍执行实时free查询及失败回退。无合格成本、不支持或不满足当前free快照时保留现有选型，合同见[Auto B2/tune](AUTO_B2.md)。
 
 当前 NTT 事件模型的 CPU 账本从生产分配语句生成：173 cases、47,936 events、168,166 assertions，失配 0；故意改变表释放顺序会拒绝。40 个 native plan 查询和 10 条短 GPU 曲线通过组件/路由及算术核对。CPU opaque allocator 不验证 CUDA 物理分配失败、驱动驻留或完整进程峰。
 

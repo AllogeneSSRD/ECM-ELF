@@ -1,4 +1,5 @@
 #include "../../src/core/ecm_stage2_tune_ecm.h"
+#include "../../src/core/ecm_stage2_tune_prediction.h"
 #include <iostream>
 int main(int argc,char **argv) {
     try {
@@ -9,6 +10,19 @@ int main(int argc,char **argv) {
         } else if(argc==3 && std::string(argv[1])=="--effort") {
             const auto e=t::ecm_effort(std::stoi(argv[2]));
             std::cout<<e.exponents.size()<<' '<<e.d.size()<<' '<<e.b2.size()<<' '<<e.repeats<<' '<<e.max_batches<<'\n';
+        } else if(argc==3 && std::string(argv[1])=="--effort-d") {
+            for(const auto d:t::ecm_effort(std::stoi(argv[2])).d)std::cout<<d<<' ';
+        } else if(argc==3 && std::string(argv[1])=="--effort-b2") {
+            for(const auto b2:t::ecm_effort(std::stoi(argv[2])).b2)std::cout<<b2<<' ';
+        } else if(argc==4 && std::string(argv[1])=="--predict") {
+            const auto profile=t::EcmProfile::load(argv[2]);std::vector<const t::Fields*> samples;
+            for(const auto &sample:profile.samples)samples.push_back(&sample);
+            t::B2Prediction prediction;
+            const bool eligible=t::predicts_b2(profile) && t::predict_b2(samples,ecm_stage2::cost::integer(argv[3]),prediction);
+            std::cout<<std::setprecision(17)<<"{\"eligible\":"<<(eligible?"true":"false")
+                <<",\"seconds\":"<<prediction.seconds<<",\"error_seconds\":"<<prediction.error_seconds
+                <<",\"mad_seconds\":"<<prediction.mad_seconds<<",\"max_relative_error\":"<<prediction.max_relative_error
+                <<",\"samples\":"<<prediction.samples<<"}\n";
         } else if(argc>=3 && std::string(argv[1])=="--merge") {
             std::vector<t::EcmProfile> inputs;
             for(int i=2;i<argc;++i)inputs.push_back(t::EcmProfile::load(argv[i]));

@@ -704,12 +704,15 @@ stage2_tune_profile=<path>; default=""; empty=legacy_selection
 ```
 
 Full ECM tune TOML profile for choosing D and Mersenne carrier. Empty keeps existing selection.<br>
-Matches the device, backend, memory policy, target bit width, B1 and B2; unmeasured scopes use the<br>
-existing path. Explicit nonzero D fixes D; --carrier-exponent, including 0, fixes arithmetic.<br>
-Carrier candidates must exactly contain saved N as a divisor. This profile does not select B2.<br>
+Matches the device, backend, memory policy, target bit width and B1. Uses measured B2 values first;<br>
+profiles with a qualified prediction model can estimate between measured B2 bounds, without<br>
+width/B1/D extrapolation. Explicit nonzero D fixes D; --carrier-exponent, including 0, fixes<br>
+arithmetic. Carrier candidates must exactly contain saved N as a divisor. This profile does not<br>
+select B2.<br>
 指定完整 ECM tune 的 TOML 性能配置，用于选择 D 和梅森承载。留空保留现有选型。检查设备、后端、显存策<br>
-略、目标位宽、B1 与 B2；未测范围使用现有路径。显式非零 D 固定 D；--carrier-exponent（包括 0）固定算<br>
-术模式。承载候选必须实际被 save 的 N 整除。此配置不用于选择 B2。
+略、目标位宽与 B1。优先使用对应 B2 的实测数据；通过模型验证的配置可预测实测 B2 区间内的耗时，不外推<br>
+位宽、B1 或 D。显式非零 D 固定 D；--carrier-exponent（包括 0）固定算术模式。承载候选必须实际被 save<br>
+的 N 整除。此配置不用于选择 B2。
 
 ### stage2_auto_min_b2
 

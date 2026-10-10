@@ -109,3 +109,15 @@ CPU50 cases/1500 native events/4556 checks、错误tree extent+8 mutation拒绝�
 新主机构建复用相同且核对的CUDA对象，22.7秒；构建与native fixture编译均在承载预热结束前完成，正式承载样本开始后不再编译。CPU原生5项合并/5项拒绝及5次reader roundtrip通过；生产入口离线合并与6项拒绝通过，使用无效device9999仍合并成功，失败保留既有文件。证据`merge_native/result.json`、`merge_runtime_duplicate/result.json`。待配对性能文件发布后，合并5872/7995-bit两个范围并在生产入口分别核对选型。
 
 最终主机构建21.4秒，sha=`26c144825c72e7f7907ba4109590624e265ee8e9f0c07feb88b43eebf6ca0c7d`，53项源依赖与冻结快照一致。最终CPU原生合并与roundtrip通过，生产合并得到4个scope、7项非法操作拒绝，包含禁止NTT覆盖INI引用的ECM配置。生产自动承载完整曲线135.540秒/worker137.712秒，显式关闭及同位宽不合法整除反例通过；日志/结果在`merge_native_final/`、`merge_runtime_final/`、`production_auto/`。5872-bit同配置的最终驱动自动D1141140完整曲线97.431秒/worker99.708秒，mandatory2208/GMP43253、bad0、fold/frontier驻留，证据`production_d_auto/result.json`。两种优化已在同一最终驱动、同一合并性能文件中完整运行；未测范围拟合、生产B1/预算扩展、NTT阶段成本组合和Auto B2新数据合同仍未完成。
+
+### B2区间预测与高等级网格细化
+
+新`linear_giant_points_v1`按同target/arithmetic bits、carrier、类型、B1和D组拟合T=α+βI。显式profile模型标记、3…128锚点、I跨度至少2倍、非负有限系数与最大留一误差≤8%为固定资格；不允许位宽/B1/D或B2区间外外推。精确点优先，预测排名增加观测留一误差与2倍最大MAD，内存针对请求B2重新计算。无标记旧文件保持精确选择；合并保留标记但资格仍逐组检查。
+
+首次3点M521/D60060调优的留一检查失败，生产入口保持原选型；未放宽8%门限。随后按已规划的更细5点网格，每点预热1次、正式3次，最大留一误差2.986%。两组调优共40条完整曲线，原始回执与GMP日志bad0、无因子、驻留。数据和失败拟合证据均保留在`data/experiments/ecm_tune_prediction_20261010/`。三级与五级细化分别用2份/4份对数区间，高等级B2点数最高17；D目录加入810810、1021020，高等级覆盖14项，最高默认3094形状，不超过reader4096样本限制。
+
+最终生产exe SHA256=`182f2950505e864ab31727c8c475a327bda4dce94b79a3e16ab3c1f5d7f86db7`，主机构建21.5秒，54项依赖冻结并核对，CUDA对象未改。GPU1、用户固定1800MHz/默认55W上限，本轮不修改设置、不扰动忙碌GPU0；短测试没有连续传感器记录。三个未拟合B2的完整曲线预测/实测为0.313360/0.328982、0.559302/0.559750、0.780019/0.769658秒（每点n=1），误差4.748%、0.080%、1.346%，bad0。先前最终构建的同三点及首次构建验证也保留，不用筛选结果改善结论。
+
+CPU原生13素数证书与独立Stage1点、10等级嵌套D/B2网格、21坏profile/3身份拒绝，预测1合法/13不适用/1坏模型，7合并/5拒绝/7roundtrip通过；生产合并7scope及7非法调用拒绝，精确优先、旧标记、坏拟合、外推及显式覆盖验证通过。最终结果为`native_final/`、`prediction_native_final/`、`merge_native_final/`、`merge_runtime_publish/`、`production_publish/`，生成配置6文件及diff检查同步。
+
+剩余完整目标不缩小：扩大生产B1、位宽和预算的候选成本/排名验证，建立NTT预计算与阶段成本组合，接入Auto B2及真实Stage1摊销；当前固定D的小位宽B2拟合不替代这些工作。需要继续测高位宽、普通/承载竞争和D台阶，不能由本轮误差宣称通用预测合格。

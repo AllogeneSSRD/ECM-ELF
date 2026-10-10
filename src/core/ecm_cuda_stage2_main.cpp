@@ -13,6 +13,7 @@
 #include "ecm_stage2_cost_profile.h"
 #include "ecm_stage2_tune_format.h"
 #include "ecm_stage2_tune_ecm.h"
+#include "ecm_stage2_tune_prediction.h"
 #include "ecm_stage2_geometry.h"
 #include "ecm_stage2_logging.h"
 #include "ecm_stage2_console.h"
@@ -800,7 +801,7 @@ void help() {
         "           --tune-max-batches N limits G trees per curve; 0 removes the effort limit.\n"
         "      Merge: --tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml\n"
         "             Same device/policy/repeats required; the last profile replaces duplicate scopes.\n"
-        "Selection: --tune-profile FILE.toml; matches measured B1/B2/width/policy scopes.\n"
+        "Selection: --tune-profile FILE.toml; matches B1/width/policy, measured or qualified in-range B2.\n"
         "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
         "         --log FILE --log-level quiet|curve|phases|batches|debug (0..4)\n"
         "         Production console default: phases; readable file: batches. --dry-run --help\n"
@@ -863,20 +864,31 @@ std::string select_tuned(Options &o,const Record &r) {
     Big target,plus;mpz_set_str(target.z,r.n.c_str(),16);mpz_add_ui(plus.z,target.z,1);
     const auto bits=mpz_sizeinbase(target.z,2);
     const std::string kind=json_string(mpz_popcount(plus.z)==1?"mersenne":"generic");
-    struct Candidate {const t::Fields *sample;double rank;};std::vector<Candidate> candidates;
+    struct Candidate {const t::Fields *sample;double rank;t::B2Prediction prediction;};std::vector<Candidate> candidates;
+    std::map<std::string,std::vector<const t::Fields*>> groups;std::set<std::string> exact;
     for(const auto &s:profile.samples) {
         const auto carrier=t::uint(s,"carrier_exponent");
-        if(t::uint(s,"target_bits")!=bits || t::uint(s,"b1")!=r.b1 || t::uint(s,"b2")!=o.b2 ||
+        if(t::uint(s,"target_bits")!=bits || t::uint(s,"b1")!=r.b1 ||
            (o.has_d && o.d && t::uint(s,"d")!=o.d) || (o.has_carrier && carrier!=o.carrier_exponent) ||
            !t::uint(s,"fold_resident") || !t::uint(s,"frontier_resident"))continue;
         if(!carrier && t::required(s,"modulus_kind")!=kind)continue;
         if(carrier){ecm_stage2::ModulusContext m;std::string error;if(!m.configure(r.n.c_str(),16,(unsigned)carrier,error))continue;}
+        const auto key=t::b2_scope(s);
+        if(t::predicts_b2(profile))groups[key].push_back(&s);
+        if(t::uint(s,"b2")!=o.b2)continue;
+        exact.insert(key);
         const auto rank=t::real(s,"median_seconds")+2*t::real(s,"mad_seconds");
         if(!std::isfinite(rank))throw std::runtime_error("ECM tune rank overflow");
-        candidates.push_back({&s,rank});
+        candidates.push_back({&s,rank,{}});
     }
-    // Conservative measured rank avoids a noisy carrier win. No extrapolation
-    // across widths, B1, B2 or unmeasured D. The engine rechecks current memory.
+    for(const auto &group:groups)if(!exact.count(group.first)) {
+        t::B2Prediction prediction;if(!t::predict_b2(group.second,o.b2,prediction))continue;
+        const auto rank=prediction.seconds+prediction.error_seconds+2*prediction.mad_seconds;
+        if(!std::isfinite(rank))throw std::runtime_error("ECM predicted rank overflow");
+        candidates.push_back({group.second.front(),rank,prediction});
+    }
+    // Predictions stay inside independently checked B2 anchors. Width/B1/D
+    // and arithmetic remain scoped; real memory is checked for the requested B2.
     std::stable_sort(candidates.begin(),candidates.end(),[](const Candidate &a,const Candidate &b){return a.rank<b.rank;});
     size_t rejected=0;
     for(const auto &candidate:candidates) {
@@ -887,9 +899,14 @@ std::string select_tuned(Options &o,const Record &r) {
         const auto memory=curve_memory_record(plan);
         if(plan_scalar(memory,"valid")!="true" || plan_scalar(memory,"finished")!="true" || plan_scalar(memory,"initial_free_snapshot_fits")!="true") {++rejected;continue;}
         o.d=d;o.carrier_exponent=carrier;
-        std::ostringstream out;out<<std::setprecision(17)<<"{\"type\":\"tune_selection\",\"selected\":true,\"model\":\"measured_exact_scope_v1\",\"D\":"<<d
-            <<",\"carrier_exponent\":"<<carrier<<",\"median_seconds\":"<<t::real(s,"median_seconds")<<",\"mad_seconds\":"<<t::real(s,"mad_seconds")
-            <<",\"rank_seconds\":"<<candidate.rank<<",\"candidates\":"<<candidates.size()<<",\"memory_rejected\":"<<rejected
+        const auto &prediction=candidate.prediction;
+        std::ostringstream out;out<<std::setprecision(17)<<"{\"type\":\"tune_selection\",\"selected\":true,\"model\":"
+            <<json_string(prediction.samples?t::b2_prediction_model:"measured_exact_scope_v1")<<",\"D\":"<<d<<",\"carrier_exponent\":"<<carrier;
+        if(prediction.samples)out<<",\"estimated_seconds\":"<<prediction.seconds<<",\"mad_seconds\":"<<prediction.mad_seconds
+            <<",\"fit_max_relative_error\":"<<prediction.max_relative_error<<",\"fit_max_error_seconds\":"<<prediction.error_seconds
+            <<",\"fit_b2_min\":"<<prediction.low<<",\"fit_b2_max\":"<<prediction.high<<",\"fit_samples\":"<<prediction.samples;
+        else out<<",\"median_seconds\":"<<t::real(s,"median_seconds")<<",\"mad_seconds\":"<<t::real(s,"mad_seconds");
+        out<<",\"rank_seconds\":"<<candidate.rank<<",\"candidates\":"<<candidates.size()<<",\"memory_rejected\":"<<rejected
             <<",\"required_free_bytes\":"<<plan_scalar(memory,"required_free_bytes")<<",\"free_bytes\":"<<plan_scalar(plan,"free_bytes")
             <<",\"residency_guaranteed\":false}";return out.str();
     }
@@ -960,7 +977,7 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
     const auto manifest=executable().parent_path()/"build_manifest.json";
     const auto build=fs::is_regular_file(manifest)?ecm_stage2::sha256_file(manifest):"";
     output<<"# Full ECM Stage2 measurements. Seconds; bytes. Stage1 and process launch excluded.\n"
-        <<"[profile]\nformat = 3\nunit = \"full_stage2\"\nalgorithm_revision = 1\neffort_level = "<<(o.tune_level?o.tune_level:1)
+        <<"[profile]\nformat = 3\nunit = \"full_stage2\"\nalgorithm_revision = 1\nprediction_model = \""<<t::b2_prediction_model<<"\"\neffort_level = "<<(o.tune_level?o.tune_level:1)
         <<"\nrepeats = "<<effort.repeats<<"\nwarmups = 1\nmax_batches = "<<effort.max_batches<<"\n\n[device]\nuuid_hex = \""<<device.uuid_hex
         <<"\"\nsm_major = "<<device.major<<"\nsm_minor = "<<device.minor<<"\ncuda_runtime = "<<device.runtime
         <<"\ncuda_driver = "<<device.driver<<"\ngl_fixed_mode = "<<device.fixed_mode<<"\nouter_unroll_u = "<<device.outer_unroll_u
