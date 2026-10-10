@@ -492,9 +492,21 @@ GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大
 
 针对冻结的第一份实际ECM计划，另测log₂L=11…23与19种实际slices的矩形网格：每形状1次预热、21次正式重复，预算1 GiB。167个形状实测、80个超预算跳过，共核对36,079,493,120个输出字，坏计数0；该计划的60,609逻辑pairs、215 physical calls均能精确匹配。29个GPU利用率>50%的NVML样本中SM为1800 MHz、功率14.79…48.30 W；采样不证明采样间隔内频率恒定。实际加载的EXE和GMP模块身份已记录。
 
-将同一NTT文件映射至32个基础ECM scopes，可覆盖6,240,058/6,386,314逻辑pairs，其中只有2个scope完全覆盖，其他范围仍有374个缺失bins。逻辑pairs覆盖率约97.71%，不是时间覆盖率，也不证明所有位宽、B1或预算可用。工作量文件已核对设备/归约/环境策略，但仍标记`ranking_qualified=false`和`ntt_feature_is_time_prediction=false`，未将NTT参照与已包含NTT的阶段计时相加。
+当前NTT文件集合包含矩形基准与按实际请求补测的146个组合，均各有21次正式重复。基础32个ECM scopes需要的194种形状全部覆盖，2,422个工作量bins、6,386,314逻辑pairs和18,754 physical calls均有精确对应。工作量文件核对设备/归约/环境策略，并逐请求阶段保留覆盖和参照秒数；没有将NTT参照与已包含NTT的阶段计时相加。这个覆盖是冻结计划与实测NTT形状的对应关系，不是GPU调用审计或所有位宽/B1/预算的证明，输出仍标记`ranking_qualified=false`和`ntt_feature_is_time_prediction=false`。
 
-证据：`data/experiments/ntt_batch_tune_20261010/gpu_runtime_v3/`、`exact_shapes/`及`full_grid_features/`；CPU门禁与32份计划独立请求重放在`workload_cpu_v4/`。运行工具为[批量GPU门禁](../../tools/test/test_stage2_tune_ntt_batches.py)和[工作量映射](../../tools/bench/analyze_stage2_tune_workload.py)。
+证据：`data/experiments/ntt_batch_tune_20261010/gpu_runtime_v3/`、`exact_shapes/`及`data/experiments/ntt_phase_tune_20261010/supplement/`、`full_grid_features/`；CPU门禁与32份计划独立请求重放在`workload_cpu_v2/`。运行工具为[批量GPU门禁](../../tools/test/test_stage2_tune_ntt_batches.py)、[实际形状补测](../../tools/bench/benchmark_stage2_ntt_workload.py)和[工作量映射](../../tools/bench/analyze_stage2_tune_workload.py)。
+
+## NTT 与配对阶段组合验证
+
+实验组合模型使用完整engine成本减去同次giant_loop后的配对固定项，再用精确NTT批量参照、ladder迭代和分块特征拟合主循环。数学形式和适用条件见[组合模型](../architecture/AUTO_B2.md#实验性-ntt-与阶段组合)。它不是将NTT实测加到已包含NTT的阶段耗时中，也不将NTT参照视为完整阶段时间。
+
+训练为5872-bit余因子、承载6011、B1=20、D=60060/120120、B2=2.6e9…26e9的32scope/96正式曲线，每组8锚点；四组最大留一误差为6.827%、7.838%、4.960%、4.143%，均在8%门限内。既有12e9/23e9数据的回顾对照最大候选误差2.845%，不作为新的独立验收。
+
+新验收先冻结全部模型和预测，再测B2=12.5e9、23.7e9：每个B2含两D×普通/承载四候选，每候选一次预热、三次正式重复，共32条完整曲线。最大候选时间误差1.542%，两档排名损失均为0，均选择D=120120、承载6011。所选方案的正式engine中位数分别4.576035 s、7.965397 s；同档D=60060普通模数为11.370417 s、17.085825 s。原giant_route_cost_v2在同批曲线的最大候选误差1.708%，排名也相同；不能据此将NTT组合宣称为额外生产速度提升。
+
+本轮二进制与NTT标定相同，SHA256为`ef7bbf432221a9b2449584ab0464bf852bd4df619b0164e046bad7e589df5ecf`，设备/编译/预算条件沿用上节；保存点SHA256为`09e18bc98160b028d664e2c3706a6630f4216f772f96a706561101d6d97e3f42`。55,296 mandatory cases、224,700 GMP核对，坏计数及因子命中为0。293个利用率>50%的NVML样本中SM为1575…1800 MHz、功率20.34…54.96 W，条件是1800 MHz上限与默认55 W，不是全程恒定频率。计时为stage2_full_wall.total，排除Stage1、进程启动和规划；原始预热、失败记录、冻结预测与实际模块身份均保留。
+
+实验输出仍为`ranking_qualified=false`，主路径使用已实现的完整ECM实测/giant_route_cost_v2。此验收不覆盖其他位宽、生产B1、预算和非驻留/G1；原生组合预测及收益验收仍待完成。证据在`data/experiments/ntt_phase_tune_20261010/components/`、`query_supplement/`、`fresh_holdouts/`及`components_cpu/`，入口为[分析工具](../../tools/bench/analyze_stage2_tune_components.py)和[新留出验收](../../tools/bench/validate_stage2_tune_components.py)。
 
 ## 下一测量
 

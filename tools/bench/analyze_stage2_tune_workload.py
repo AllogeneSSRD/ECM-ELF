@@ -211,6 +211,23 @@ def ntt_policy_matches(ecm, ntt):
         all(type(v) is int for v in right.values()))
 
 
+def ntt_profile_set(ecm, profiles):
+    """Join disjoint measurements; repeated measured shapes are ambiguous."""
+    samples = {}
+    qualified = bool(profiles)
+    for profile in profiles:
+        if not all(ecm['device'][k] == profile['device'][k] for k in IDENTITY):
+            raise ValueError('NTT/full ECM device or arithmetic identity mismatch')
+        rows = ntt_batch_samples(profile)
+        if samples.keys() & rows.keys():
+            raise ValueError('duplicate measured NTT shape across profiles')
+        samples.update(rows)
+        qualified = qualified and ntt_policy_matches(ecm, profile)
+    if len(profiles) > 1 and not qualified:
+        raise ValueError('multiple NTT profiles require matching declared policies')
+    return samples, qualified
+
+
 def ntt_workload_features(rows, samples):
     """Return exact-shape coverage; reference timings exclude packing and S4."""
     serial = {n: seconds for (n, b), seconds in samples.items() if b == 1}
@@ -234,6 +251,27 @@ def ntt_workload_features(rows, samples):
             scope['ntt_missing_batch_bins'] += 1
         annotated.append(row)
     return scope, annotated
+
+
+def ntt_phase_references(rows):
+    """NTT request phases are not the exclusive engine wall-time partitions."""
+    if any(row['phase'] not in PHASES for row in rows):
+        raise ValueError('unknown NTT request phase')
+    phases = {}
+    for name in PHASES:
+        bins = [row for row in rows if row['phase'] == name]
+        measured = [row for row in bins if 'exact_batch_reference_seconds' in row]
+        complete = len(measured) == len(bins)
+        summary = dict(total_pairs=sum(r['pairs'] for r in bins),
+            total_calls=sum(r['calls'] for r in bins),
+            matched_pairs=sum(r['pairs'] for r in measured),
+            matched_calls=sum(r['calls'] for r in measured),
+            missing_bins=len(bins)-len(measured), complete=complete,
+            matched_reference_seconds=math.fsum(r['exact_batch_reference_seconds'] for r in measured))
+        if complete:
+            summary['reference_seconds'] = summary['matched_reference_seconds']
+        phases[name] = summary
+    return phases
 
 
 def paired_trials(plan, trials):
@@ -336,7 +374,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--evidence', type=Path, required=True, help='native full ECM tune evidence directory')
     p.add_argument('--profile', type=Path, required=True, help='matching full ECM performance TOML')
-    p.add_argument('--ntt-profile', type=Path, help='optional single-slice NTT performance TOML')
+    p.add_argument('--ntt-profile', type=Path, action='append', default=[],
+                   help='optional NTT TOML; repeat for disjoint measured shape sets')
     p.add_argument('--output', type=Path, required=True, help='fresh ignored output directory')
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=False)
@@ -359,19 +398,17 @@ def main():
         measured_ntt = {}
         identity_match = policy_match = False
         if a.ntt_profile:
-            ntt = tomllib.loads(source(a.ntt_profile).decode('utf-8-sig'))
-            measured_ntt = ntt_batch_samples(ntt)
-            identity_match = all(profile['device'][k] == ntt['device'][k] for k in IDENTITY)
-            if not identity_match:
-                raise ValueError('NTT/full ECM device or arithmetic identity mismatch')
-            policy_match = ntt_policy_matches(profile, ntt)
+            ntt = [tomllib.loads(source(path).decode('utf-8-sig')) for path in a.ntt_profile]
+            measured_ntt, policy_match = ntt_profile_set(profile, ntt)
+            identity_match = True
         text = '# Stage2 workload features; not a production cost profile.\n'
         text += table('profile', dict(format=1, unit='logical_field_convolutions',
             ranking_qualified=False, legacy_timer_contract='legacy_overlapping',
             phase_timer_contract='per_sample_optional',
             timing_boundary='stage2_engine_init_plus_main',
             ntt_single_slice_identity_match=identity_match,
-            ntt_policy_qualified=policy_match, ntt_feature_is_time_prediction=False))
+            ntt_policy_qualified=policy_match, ntt_feature_is_time_prediction=False,
+            ntt_profile_count=len(a.ntt_profile)))
         text += table('device', profile['device'])
         text += table('policy', {k: v for k, v in profile['policy'].items() if not isinstance(v, dict)})
         env = profile['policy'].get('environment', {})
@@ -416,6 +453,8 @@ def main():
             text += table(f'ecm.{key}', dict(**scope, **timers, **costs))
             for i, row in enumerate(rows):
                 text += table(f'workload.{key}.bin_{i}', row)
+            for phase, reference in ntt_phase_references(rows).items():
+                text += table(f'ntt_phase_reference.{key}.{phase}', reference)
             evidence['cases'].append(dict(case=case, sample=key, bins=len(rows),
                 pairs=scope['total_pairs'], physical_calls=scope['total_physical_calls']))
         if len(consumed) != len(profile['ecm']) or len(consumed) != profile['summary']['measured']:

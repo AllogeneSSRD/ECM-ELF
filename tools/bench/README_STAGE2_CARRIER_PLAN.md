@@ -48,6 +48,12 @@ NTT JSON version2 提供 exact_allocation_events、fuse_layouts、物理分配/�
 
 `test_stage2_tune_ntt_batches.py --exe <生产exe> --save <已验证save> --device <n> --carrier <p> --output <新目录>`执行GPU验证：小长度、不同slice常数项、非2次幂批量、65535 slices、等级覆盖、显式参数覆盖、内存跳过、JSONL与失败发布保护，再对普通/承载两种路径执行完整Stage2及mandatory GMP检查。输入保存点应先独立验证。输出冻结源码和依赖身份，证据放入忽略目录，不混入性能TOML。它不证明跨位宽、跨B1的收益排名。
 
+工作量分析可重复`--ntt-profile <文件>`汇集策略一致、实测形状不重复的文件；每请求阶段另给覆盖计数，缺项阶段不输出完整参照秒数。`benchmark_stage2_ntt_workload.py --exe <生产exe> --profile <完整ECM.toml> --evidence <原始ECM目录> [--ntt-profile <已有NTT.toml> ...] --device <n> --repeats <n> --memory-mb <MiB> --output <新目录>`按长度补测实际缺失slices，拒绝不匹配的基准、计划或策略。可重复`--additional-plan <原生plan.jsonl>`加入同scope组的留出形状，不加载其曲线成本；内存不足明确失败，不能把skip算作覆盖。
+
+`analyze_stage2_tune_components.py --profile <完整ECM.toml> --workload <workload.toml> --ntt-profile <文件> [重复] --output <新目录>`拟合实验NTT/配对阶段模型，可配合`--holdout-result <已有验收JSON> --query-plans <对应原生计划目录>`作回顾对照。回顾结果不代替新的独立验收，输出模型不进入生产选型。`test_stage2_tune_components.py`核对配对守恒、合成参数恢复、无效输入拒绝和不合格组；数学公式与适用条件见[组合模型](../../docs/architecture/AUTO_B2.md#实验性-ntt-与阶段组合)。
+
+`validate_stage2_tune_components.py --exe <生产exe> --save <已验证save> --models <models.toml> --profile <完整ECM.toml> --evidence <训练证据目录> --ntt-profile <文件> [重复] --device <n> --holdout-b2 <未测B2...> --output <新目录>`先补齐查询所需NTT形状，冻结全部预测，再测至少四候选的完整曲线。默认每候选1次预热、3次正式重复，NTT形状21次重复；保持8%时间/5%排名门限。失败不改写训练模型或删去候选。
+
 `test_stage2_tune_workload.py --output <新目录> [--evidence <原始调优目录>]`执行CPU门禁：手算满/尾分块、chunk上限、万亿次repeat压缩、错误协议拒绝及已保存原生plan的独立密集请求重放。它不证明GPU真实调用计数或NTT批处理吞吐；后者需要运行审计和独立完整曲线留出验证。
 
 当前事件矩阵173 cases、47,936 events、168,166 assertions，故意修改释放顺序的模型被拒绝。重复压缩依赖完整保留状态，observer 不生成所有跳过重复事件。

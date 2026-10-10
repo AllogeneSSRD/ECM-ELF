@@ -22,6 +22,18 @@ def main():
     spec = importlib.util.spec_from_file_location('work', ROOT/'tools/bench/analyze_stage2_tune_workload.py')
     work = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(work)
+    sys.path.insert(0,str(ROOT/'tools/bench'))
+    from benchmark_stage2_ntt_workload import missing_jobs
+    assert missing_jobs([(16,1),(16,2),(16,2),(32,1)],{(16,1):.2}) == [(16,[2]),(32,[1])]
+    assert missing_jobs([(16,b) for b in range(1,131)],{},64) == [
+        (16,list(range(1,65))),(16,list(range(65,129))),(16,[129,130])]
+    for shapes, capacity in [([(17,1)],64), ([(16,0)],64), ([(16,65536)],64), ([(16,1)],65)]:
+        try:
+            missing_jobs(shapes,{},capacity)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('invalid NTT job grid accepted')
     plan = dict(D=6, P=2, I=11, workspace_buffers=2,
         request_program=dict(version=2, valid=True, supported=True, residency_required=True,
             full_fold_degree_required=True, no_eviction_model=True, process_peak_complete=False,
@@ -156,6 +168,15 @@ def main():
     coverage, annotated = work.ntt_workload_features(rows, {(16,1): .2})
     assert coverage['ntt_missing_batch_bins'] == 1
     assert 'ntt_batch_seconds' not in annotated[1]
+    references = work.ntt_phase_references(annotated)
+    assert not references['gtrees']['complete'] and references['gtrees']['missing_bins'] == 1
+    assert 'reference_seconds' not in references['gtrees']
+    assert references['ftree']['complete'] and references['ftree']['reference_seconds'] == 0
+    _, annotated = work.ntt_workload_features(rows, measured)
+    references = work.ntt_phase_references(annotated)
+    assert math.isclose(references['gtrees']['reference_seconds'], 1.8)
+    assert references['gtrees']['total_calls'] == references['gtrees']['matched_calls'] == 9
+    rejected(lambda: work.ntt_phase_references([dict(rows[0], phase='unknown')]))
     batch_rejects = 0
     for section, key, value in [('profile','slices',[1,2,2]), ('profile','slices',[0,2,3]),
             ('profile','slices',[True,2,3]), ('profile','slices',[1,2,65536]),
@@ -186,6 +207,17 @@ def main():
                               environment=dict(ecm_policy['policy']['environment']))
     assert not work.ntt_policy_matches(ecm_policy, ntt)
     assert work.ntt_policy_matches(ecm_policy, batch_ntt)
+    supplement = copy.deepcopy(batch_ntt)
+    supplement['profile']['slices'] = [3]
+    supplement['summary'].update(measured=1, skipped=0)
+    supplement['ntt']['length_16'] = {'slices_3': dict(batch_ntt['ntt']['length_16']['slices_2'],
+        batch=3, verified_words_per_sample=48, conv_iter_per_s=15.)}
+    joined, qualified = work.ntt_profile_set(ecm_policy, [batch_ntt, supplement])
+    assert qualified and set(joined) == {(16,1),(16,2),(16,3)}
+    rejected(lambda: work.ntt_profile_set(ecm_policy, [batch_ntt, batch_ntt]))
+    mismatch = copy.deepcopy(supplement)
+    mismatch['policy']['environment']['fuse_warp_tail'] = 0
+    rejected(lambda: work.ntt_profile_set(ecm_policy, [batch_ntt, mismatch]))
     for section, key, value in [('device','gl_add_sub_mask',0), ('device','cuda_driver',12060),
             ('policy','accounting','unknown'), ('policy','environment',{}),
             ('policy','environment',dict(arena_cap_kb=1024,fuse_warp_tail=0)),
@@ -274,6 +306,21 @@ def main():
         assert batch_output['profile']['ntt_policy_qualified']
         assert not batch_output['profile']['ranking_qualified']
         assert not batch_output['profile']['ntt_feature_is_time_prediction']
+        supplement['device'] = dict(batch_ntt['device'])
+        supplemental_text = work.table('profile',supplement['profile'])
+        supplemental_text += work.table('device',supplement['device'])
+        supplemental_text += work.table('policy',dict(accounting=supplement['policy']['accounting']))
+        supplemental_text += work.table('policy.environment',supplement['policy']['environment'])
+        supplemental_text += work.table('ntt.length_16.slices_3',supplement['ntt']['length_16']['slices_3'])
+        supplemental_text += work.table('summary',supplement['summary'])
+        supplemental_path = root/'supplement.toml'
+        supplemental_path.write_text(supplemental_text,encoding='utf-8')
+        subprocess.run(command+['--ntt-profile',str(batch_path),'--ntt-profile',str(supplemental_path),
+                       '--output',str(root/'joined')],capture_output=True,check=True,timeout=30)
+        joined_output = tomllib.loads((root/'joined/workload.toml').read_text(encoding='utf-8'))
+        assert joined_output['profile']['ntt_profile_count'] == 2
+        assert math.isclose(joined_output['ntt_phase_reference']['sample_0']['gtrees']['reference_seconds'],1.8)
+        cli_rejected('duplicate_ntt',['--ntt-profile',str(batch_path),'--ntt-profile',str(batch_path)])
         profile.write_text(profile_text, encoding='utf-8')
         # Published worker intervals come from the parent, exclusive phases from raw children.
         (raw/'case_1_1.jsonl').write_text(json.dumps(exclusive)+'\n', encoding='utf-8')
@@ -312,7 +359,7 @@ def main():
         replay.append(dict(directory=str(directory), plans=count, pairs=pairs, calls=calls, bins=bins))
     result = dict(complete=True, synthetic_cases=3, paired_timing_cases=2, ntt_cases=3,
                   ntt_batch_rejected=batch_rejects,
-                  rejected=rejects, cli_roundtrips=4, cli_rejected=cli_rejects, replay=replay)
+                  rejected=rejects, cli_roundtrips=5, cli_rejected=cli_rejects, replay=replay)
     (a.output/'result.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')
     print(json.dumps(result))
 
