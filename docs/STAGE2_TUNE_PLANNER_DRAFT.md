@@ -87,3 +87,25 @@ CPU50 cases/1500 native events/4556 checks、错误tree extent+8 mutation拒绝�
 证据`data/experiments/ecm_tune_20261010/`的`native_certified/result.json`、`runtime_named/result.json`、`joint_plans/results.json`、`wide_5872.toml`、`production_wide/result.json`及两binary的frozen source closure。正式状态已同步到AUTO_B2、MEMORY、STAGE2和性能说明。
 
 剩余工作：更多生产B1/位宽/预算下的成本拟合与独立排名验证，正收益承载的生产自动选择完整曲线，NTT测量与阶段成本的预计算组合，Auto B2的新配置/Stage1成本接入，非驻留/G1回退模型。当前精确scope选择不宣称这些范围已完成。
+
+### 主路径验收与承载验证
+
+`698e207`已提交完整ECM tune和实测D/承载主路径。提交前核对最终冻结exe和53个编译依赖与当前源码一致，生成配置检查及diff检查通过。5872-bit生产自动较大D曲线已经完成；不是仅凭plan-only声明已接入。
+
+当前验收项：
+
+- 自动D使用tune实测排名，并允许联合内存规划通过的较大D：已有5872-bit完整生产曲线及小位宽覆盖。
+- 普通/承载候选共同排名，显式覆盖优先、整除证明独立于性能适用范围：小位宽配对与覆盖检查通过；7995-bit配对及完整生产自动选择通过，自动承载8011完整时间135.540秒。
+- tune等级1…10增加覆盖、D/B2网格、重复数和允许批次，支持NTT与完整Stage2：原生等级测试和完整GPU素数目录通过。
+- 命名TOML、无路径/二进制字段、有界reader、原子发布及失败保留：原生非法profile与实际失败发布测试通过。
+- 预计算使用已知梅森素数或经完整算术检查的无因子save曲线：13项Lucas–Lehmer、独立Stage1点与GPU目录通过；save测量不能推断其他sigma也无因子。
+
+本次在GPU1固定1800MHz/默认55W上限下测M8011/80111（7995 bits）、B1=20、sigma26、B2=2.6e12、D810810、arena6300/fold640/batch256，普通与8011承载各预热1次、正式2次。普通200.515秒、承载135.955秒中位数，少32.197%；正式测量无本轮编译并行，预热期间有主机编译。全部6条mandatory2304/GMP51956、bad0、无因子、fold/frontier驻留。原始证据目录`data/experiments/ecm_tune_35836_14824203/`，驱动日志/性能配置/传感器记录在`data/experiments/ecm_tune_carrier_20261010/`。
+
+### 分批预计算合并
+
+原生`--tune-merge`接入同一reader和命名格式3 writer，不启动GPU工作；锁定输入文件读取，所有输入设备/策略/正式重复次数/预热/算法/单位一致才合并。同一scope最后输入覆盖，保留对应完整样本，不拼接计时。保留旧格式2兼容、原子发布和源文件不变约束。INI指向输出时也允许刷新输出，不将运行性能配置当作不可更新输入。
+
+新主机构建复用相同且核对的CUDA对象，22.7秒；构建与native fixture编译均在承载预热结束前完成，正式承载样本开始后不再编译。CPU原生5项合并/5项拒绝及5次reader roundtrip通过；生产入口离线合并与6项拒绝通过，使用无效device9999仍合并成功，失败保留既有文件。证据`merge_native/result.json`、`merge_runtime_duplicate/result.json`。待配对性能文件发布后，合并5872/7995-bit两个范围并在生产入口分别核对选型。
+
+最终主机构建21.4秒，sha=`26c144825c72e7f7907ba4109590624e265ee8e9f0c07feb88b43eebf6ca0c7d`，53项源依赖与冻结快照一致。最终CPU原生合并与roundtrip通过，生产合并得到4个scope、7项非法操作拒绝，包含禁止NTT覆盖INI引用的ECM配置。生产自动承载完整曲线135.540秒/worker137.712秒，显式关闭及同位宽不合法整除反例通过；日志/结果在`merge_native_final/`、`merge_runtime_final/`、`production_auto/`。5872-bit同配置的最终驱动自动D1141140完整曲线97.431秒/worker99.708秒，mandatory2208/GMP43253、bad0、fold/frontier驻留，证据`production_d_auto/result.json`。两种优化已在同一最终驱动、同一合并性能文件中完整运行；未测范围拟合、生产B1/预算扩展、NTT阶段成本组合和Auto B2新数据合同仍未完成。

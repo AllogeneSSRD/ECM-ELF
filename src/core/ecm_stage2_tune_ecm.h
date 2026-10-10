@@ -2,6 +2,7 @@
 #include "ecm_stage2_tune_format.h"
 #include "ecm_stage2_cost_profile.h"
 #include <gmp.h>
+#include <limits>
 
 namespace ecm_stage2 { namespace tune {
 struct EcmEffort {
@@ -109,6 +110,12 @@ inline double median(std::vector<double> v) {
     return v.size()%2?v[v.size()/2]:v[v.size()/2-1]+(v[v.size()/2]-v[v.size()/2-1])/2;
 }
 inline double mad(const std::vector<double> &v) {const auto m=median(v);auto a=v;for(auto &x:a)x=std::abs(x-m);return median(a);}
+inline std::string sample_scope(const Fields &sample) {
+    std::string key;
+    for(const char *field:{"target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d"})
+        key+=required(sample,field)+":";
+    return key;
+}
 inline void validate_sample(const Fields &f) {
     const auto bits=uint(f,"target_bits"),s=uint(f,"arithmetic_bits"),p=uint(f,"carrier_exponent");
     const auto b1=uint(f,"b1"),b2=uint(f,"b2"),d=uint(f,"d"),leaves=uint(f,"p");
@@ -189,9 +196,7 @@ struct EcmProfile {
             validate_sample(s);if(uint(s,"repeats")!=uint(p.profile,"repeats"))throw std::runtime_error("inconsistent ECM profile repetitions");
             if(uint(p.profile,"format")==3 && uint(p.profile,"max_batches") &&
                 (uint(s,"giant_points")+uint(s,"p")-1)/uint(s,"p")>uint(p.profile,"max_batches"))throw std::runtime_error("ECM sample exceeds declared batch limit");
-            std::string key;
-            for(const char *field:{"target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d"})key+=required(s,field)+":";
-            if(!scopes.insert(key).second)throw std::runtime_error("duplicate ECM tune measurement scope");
+            if(!scopes.insert(sample_scope(s)).second)throw std::runtime_error("duplicate ECM tune measurement scope");
         }
         return p;
     }
@@ -203,4 +208,49 @@ struct EcmProfile {
             uint(policy,"fold_mb")==fold && environment==env;
     }
 };
+// Merge only comparable measurements. Repeated scopes use the last supplied
+// profile, rather than mixing trials collected under unknown thermal conditions.
+inline EcmProfile merge_ecm_profiles(const std::vector<EcmProfile> &inputs) {
+    if(inputs.empty() || inputs.size()>64)throw std::runtime_error("merge requires 1..64 ECM tune profiles");
+    EcmProfile result=inputs.front();result.policy.erase("environment");result.samples.clear();
+    std::map<std::string,size_t> positions;Word effort=0,limit=0,skipped=0,replaced=0;bool unlimited=false;
+    for(const auto &input:inputs) {
+        auto policy=input.policy;policy.erase("environment");
+        if(input.device!=result.device || policy!=result.policy || input.environment!=result.environment)
+            throw std::runtime_error("ECM tune merge device or memory/backend policy mismatch");
+        for(const char *field:{"unit","algorithm_revision","repeats","warmups"})
+            if(required(input.profile,field)!=required(result.profile,field))
+                throw std::runtime_error(std::string("ECM tune merge metadata mismatch: ")+field);
+        effort=std::max(effort,uint(input.profile,"effort_level"));
+        if(uint(input.profile,"format")==2 || !uint(input.profile,"max_batches"))unlimited=true;
+        else limit=std::max(limit,uint(input.profile,"max_batches"));
+        const auto skipped_field=input.summary.find("skipped");
+        const auto count=skipped_field==input.summary.end()?0:cost::integer(skipped_field->second);
+        if(count>std::numeric_limits<Word>::max()-skipped)throw std::runtime_error("merged skip count overflow");
+        skipped+=count;
+        for(const auto &sample:input.samples) {
+            const auto key=sample_scope(sample);const auto existing=positions.find(key);
+            if(existing==positions.end()) {
+                if(result.samples.size()>=4096)throw std::runtime_error("merged ECM tune exceeds 4096 samples");
+                positions.emplace(key,result.samples.size());result.samples.push_back(sample);
+            } else {result.samples[existing->second]=sample;++replaced;}
+        }
+    }
+    result.profile["format"]="3";result.profile["effort_level"]=std::to_string(effort);
+    result.profile["max_batches"]=std::to_string(unlimited?0:limit);
+    result.summary={{"complete","1"},{"failed","0"},{"measured",std::to_string(result.samples.size())},
+                    {"skipped",std::to_string(skipped)},{"merged_profiles",std::to_string(inputs.size())},
+                    {"replaced_scopes",std::to_string(replaced)}};
+    return result;
+}
+inline std::string ecm_profile_text(const EcmProfile &profile) {
+    std::ostringstream out;out<<"# Full ECM Stage2 measurements. Seconds; bytes.\n";
+    auto emit=[&](const char *name,const Fields &fields) {
+        out<<'\n'<<'['<<name<<"]\n";for(const auto &field:fields)out<<field.first<<" = "<<field.second<<'\n';
+    };
+    emit("profile",profile.profile);emit("device",profile.device);emit("policy",profile.policy);
+    emit("policy.environment",profile.environment);
+    for(size_t i=0;i<profile.samples.size();++i)out<<ecm_table(profile.samples[i],i);
+    emit("summary",profile.summary);return out.str();
+}
 } }

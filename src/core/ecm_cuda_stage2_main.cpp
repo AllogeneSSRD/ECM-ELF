@@ -228,6 +228,7 @@ struct Options {
     bool has_tune_lengths = false, has_tune_repeats = false,has_tune_memory=false;
     bool tune_child=false;
     std::string tune_save;
+    std::vector<std::string> tune_merge;
     std::vector<uint64_t> tune_ds,tune_b2s,tune_exponents;
     unsigned tune_carrier=0;
     uint64_t tune_max_batches=0;bool has_tune_max_batches=false;
@@ -305,6 +306,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--tune") o.tune = value();
         else if (a == "--ecm-tune-worker") o.tune_child=true;
         else if (a == "--tune-save") {o.tune_save=value();o.tune_options=true;}
+        else if (a == "--tune-merge") {o.tune_merge.push_back(value());o.tune_options=true;}
         else if (a == "--tune-max-batches") {
             o.tune_max_batches=num();if(o.tune_max_batches>1048576)throw std::runtime_error("tune-max-batches must be 0..1048576");
             o.has_tune_max_batches=true;o.tune_options=true;
@@ -796,6 +798,8 @@ void help() {
         "      ECM: --tune-exponents p,... or --tune-save FILE [--tune-carrier-exponent p]\n"
         "           --tune-d D,... --tune-b2 B2,...; one warmup per shape, separate processes.\n"
         "           --tune-max-batches N limits G trees per curve; 0 removes the effort limit.\n"
+        "      Merge: --tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml\n"
+        "             Same device/policy/repeats required; the last profile replaces duplicate scopes.\n"
         "Selection: --tune-profile FILE.toml; matches measured B1/B2/width/policy scopes.\n"
         "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
         "         --log FILE --log-level quiet|curve|phases|batches|debug (0..4)\n"
@@ -890,6 +894,34 @@ std::string select_tuned(Options &o,const Record &r) {
             <<",\"residency_guaranteed\":false}";return out.str();
     }
     return fallback(candidates.empty()?"no_matching_measured_scope":"no_candidate_fits_current_memory");
+}
+void merge_ecm_tune(const Options &o,const fs::path &destination) {
+    namespace t=ecm_stage2::tune;
+    if(o.tune_merge.size()>64)throw std::runtime_error("tune-merge requires at most 64 inputs");
+    if(!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() ||
+       !o.tune_exponents.empty() || o.tune_level || o.has_tune_repeats || o.has_tune_max_batches ||
+       o.has_tune_lengths || o.has_tune_memory)throw std::runtime_error("tune-merge is independent of benchmark grid options");
+    std::vector<Handle> guards(o.tune_merge.size());std::vector<t::EcmProfile> profiles;
+    for(size_t i=0;i<o.tune_merge.size();++i) {
+        const auto input=absolute_from(fs::current_path(),o.tune_merge[i]);std::error_code error;
+        if((fs::equivalent(input,destination,error) && !error) ||
+           upper(input.lexically_normal().string())==upper(destination.lexically_normal().string()))
+            throw std::runtime_error("merged tune-file must differ from all input profiles");
+        guards[i].value=CreateFileW(input.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+        if(guards[i].value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock merge input profile");
+        profiles.push_back(t::EcmProfile::load(input));
+    }
+    const auto merged=t::merge_ecm_profiles(profiles);
+    if(!destination.parent_path().empty())fs::create_directories(destination.parent_path());
+    const fs::path partial(destination.string()+".partial."+std::to_string(GetCurrentProcessId()));
+    std::ofstream output(partial,std::ios::binary|std::ios::trunc);if(!output)throw std::runtime_error("cannot write merged ECM tune partial");
+    output<<t::ecm_profile_text(merged);output.flush();if(!output)throw std::runtime_error("merged ECM tune write failed");
+    output.close();if(!output)throw std::runtime_error("merged ECM tune close failed");
+    t::EcmProfile::load(partial);
+    if(!MoveFileExW(partial.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
+        throw std::runtime_error("cannot publish merged ECM tune profile");
+    std::cout<<"ecm_tune_merge_complete: profiles="<<profiles.size()<<" measured="<<merged.samples.size()
+        <<" replaced="<<t::uint(merged.summary,"replaced_scopes")<<" profile="<<destination.string()<<std::endl;
 }
 void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settings,const fs::path &destination) {
     namespace t=ecm_stage2::tune;
@@ -1024,7 +1056,7 @@ int driver(Options o) {
     if (!o.tune.empty() && ((o.tune != "ntt" && o.tune!="ecm") || !o.save.empty() || !o.worktodo.empty() ||
         o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once || o.auto_b2 || !o.cost_profile.empty() || !o.tune_profile.empty() || o.has_carrier))
         throw std::runtime_error("--tune ntt|ecm is independent of save/queue/curve planning options; ECM accepts --tune-save");
-    if(o.tune=="ntt" && (!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() || !o.tune_exponents.empty() || o.has_tune_max_batches))throw std::runtime_error("ECM tune grid options require --tune ecm");
+    if(o.tune=="ntt" && (!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() || !o.tune_exponents.empty() || o.has_tune_max_batches || !o.tune_merge.empty()))throw std::runtime_error("ECM tune grid/merge options require --tune ecm");
     if(o.tune=="ecm" && o.has_tune_lengths)throw std::runtime_error("length-log2 requires --tune ntt");
     if(o.tune=="ecm" && o.has_tune_memory)throw std::runtime_error("ECM tune uses batch/arena/owner budgets; tune-memory-mb requires --tune ntt");
     if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
@@ -1100,10 +1132,11 @@ int driver(Options o) {
         if (same_path(executable()) || same_path(ini) || same_path(worktodo) || same_path(finished) ||
             same_path(results) || same_path(progress) || (!log.empty() && same_path(log)) ||
             (!o.debug_file.empty() && same_path(fs::path(o.debug_file))) || (!o.tune_save.empty() && same_path(absolute_from(cwd,o.tune_save))) ||
-            (!o.tune_profile.empty() && same_path(fs::path(o.tune_profile))))
+            (o.tune!="ecm" && !o.tune_profile.empty() && same_path(fs::path(o.tune_profile))))
             throw std::runtime_error("tune-file must differ from executable, config, queue and result files");
         if(o.tune=="ecm") {
             if(!toml)throw std::runtime_error("ECM tune requires a .toml profile");
+            if(!o.tune_merge.empty()){merge_ecm_tune(o,destination);return 0;}
             run_ecm_tune(o,batch,arena,s,destination);return 0;
         }
         if (!destination.parent_path().empty()) fs::create_directories(destination.parent_path());

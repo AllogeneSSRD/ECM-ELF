@@ -63,6 +63,12 @@ iter/s 指每秒完整 field convolution 次数，不是每秒 ECM 曲线，也�
 
 TOML格式3按`[profile]`、`[device]`、`[policy]`、`[policy.environment]`、`[ecm.sample_<n>]`、`[summary]`组织；策略每键一行，重复时间用数组。配置只包含性能、校验与适用条件，不含路径、程序或构建摘要。reader兼容格式2的环境串并在内存中规范为命名字段。原始plan、子进程日志和测量回执保留在`data/experiments/ecm_tune_<id>/`，与可编辑性能配置分开。发布前核对设备/策略、完整状态、样本统计及运行期间程序未变化，随后原子替换；失败不覆盖已有配置。
 
+### 汇集预计算结果
+
+不同位宽、B1/B2或D范围可分批调优，再使用`--tune ecm`、重复的`--tune-merge FILE.toml`及`--tune-file combined.toml`汇集到一份运行配置。合并只读取文件，不运行曲线、不查询CUDA设备。所有输入必须通过原生reader，且设备、内存/后端策略、算法版本、计时单位、正式重复次数及预热次数一致；等级取最大值。不同重复次数不能直接合并，调优时可用`--tune-repeats`统一采样条件。
+
+不同测量范围保留各自完整样本；相同范围按输入顺序使用最后一份，避免拼接未知热状态下的计时。合并输出格式3，兼容格式2输入，保留命名环境策略；输入文件不修改，输出必须与输入路径不同。完整校验后原子发布，失败保留旧输出。INI可指向待刷新的输出配置，配置更新成功后后续曲线使用新内容。设备频率、功耗和背景负载仍须由操作者保持可比，不能由文件合并证明。
+
 ## 实测 D 与承载选择
 
 显式B2任务可配置`--tune-profile FILE.toml`或INI的`stage2_tune_profile`，CLI路径优先。每条生产curve worker和plan-only都使用原生reader。它检查UUID/SM、CUDA runtime/driver、固定后端、outer、add/sub、显存预算及NTT策略；性能配置不依赖二进制摘要。基准不启用独立debug日志，运行启用debug日志时给出未标定原因并保留现有选型；NTT_MEMORY_AUDIT非零时拒绝调优。
@@ -88,6 +94,6 @@ GPU频率、功耗和背景负载属于测量条件，应在相同设置下调�
 - [ecm_stage2_cost_profile.h](../../src/core/ecm_stage2_cost_profile.h#L32)：reader、scope、`Work` 与 `choose`。
 - [ecm_stage2_tune_ecm.h](../../src/core/ecm_stage2_tune_ecm.h)：完整Stage2等级、素数点准备、统计及TOML reader。
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：`run_ecm_tune`、`select_tuned`和`curve_worker`。
-- [驱动资格检查](../../src/core/ecm_cuda_stage2_main.cpp#L576)、[收益公式](../../src/core/ecm_stage2_cost_profile.h#L185)。
+- [驱动资格检查](../../src/core/ecm_cuda_stage2_main.cpp#L617)、[收益公式](../../src/core/ecm_stage2_cost_profile.h#L185)。
 - [measure_ecm_costs.py](../../tools/bench/measure_ecm_costs.py)、[fit_ecm_costs.py](../../tools/bench/fit_ecm_costs.py)、[validate_ecm_costs.py](../../tools/bench/validate_ecm_costs.py)、[audit_ecm_costs.py](../../tools/bench/audit_ecm_costs.py)、[export_ecm_cost_profile.py](../../tools/bench/export_ecm_cost_profile.py)。
 - [当前 TODO](../TODO.md)。

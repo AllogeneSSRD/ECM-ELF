@@ -9,6 +9,10 @@ int main(int argc,char **argv) {
         } else if(argc==3 && std::string(argv[1])=="--effort") {
             const auto e=t::ecm_effort(std::stoi(argv[2]));
             std::cout<<e.exponents.size()<<' '<<e.d.size()<<' '<<e.b2.size()<<' '<<e.repeats<<' '<<e.max_batches<<'\n';
+        } else if(argc>=3 && std::string(argv[1])=="--merge") {
+            std::vector<t::EcmProfile> inputs;
+            for(int i=2;i<argc;++i)inputs.push_back(t::EcmProfile::load(argv[i]));
+            std::cout<<t::ecm_profile_text(t::merge_ecm_profiles(inputs));
         } else if(argc==3 && std::string(argv[1])=="--load") {
             const auto p=t::EcmProfile::load(argv[2]);
             EcmStage2DeviceInfo d;std::strcpy(d.uuid_hex,"0123456789abcdef0123456789abcdef");

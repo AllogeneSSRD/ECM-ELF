@@ -251,6 +251,16 @@ NTT/S4 规划模型具有单独的规划与事件验证；本轮主扫描仍采�
 
 证据：`data/experiments/ecm_tune_20261010/wide_5872.toml`、`data/experiments/ecm_tune_844_13103421/`的原始plan/逐曲线回执和日志、`production_wide/result.json`、`production_wide/telemetry.txt`。两构建的源码/依赖快照在各自build目录。完整调优还通过13个经Lucas–Lehmer验证的素数及独立Stage1点参考；GPU catalogue为26条完整曲线，含11213 bits；普通/承载M503配对及生产选择另有13条曲线，证据`runtime_named/result.json`。这些短正确性曲线不用于高位宽绝对速度横比。
 
+7995-bit输入为M8011/80111，B1=20、sigma26、B2=2.6×10¹²、D810810/P77760，其余设备与预算相同。普通N与承载8011各预热1次、正式2次；按普通后承载的顺序测量。普通样本200.493、200.536 s，中位数200.515 s、MAD0.022 s；承载样本135.910、136.000 s，中位数135.955 s、MAD0.045 s，相对少32.197%。六条曲线均clean、无因子、fold/frontier驻留，mandatory2304、GMP51956、坏计数0。承载预热期间有主机编译，四条正式样本无本轮编译重叠；这批不是交错ABBA性能标定。
+
+该配对使用exe SHA256=`5eecbb20334cdd492e8c9a71e07e8d662e437ea7eee220cc2380fb65cbb38353`，计时仍为`stage2_full_wall.total`。阶段中位数分别为giant45.526→27.530 s、G树93.868→64.163 s、fold29.876→21.833 s；这些阶段字段不能重复加到init/main总时间。传感器采样记录实际1800 MHz与负载/功耗变化，不将55W上限当作恒定功耗。
+
+最终合并驱动exe SHA256=`26c144825c72e7f7907ba4109590624e265ee8e9f0c07feb88b43eebf6ca0c7d`复用同一CUDA对象。将上述5872/7995-bit数据合并为四个测量范围后，生产运行不指定承载，自动选8011并完成1条曲线：引擎135.540 s，worker含规划/收尾137.712 s，坏计数0。正常路径联合峰估计4439.129 MiB，启动free需求5207.129 MiB；保持物理分配与回退检查。另核对显式carrier0固定普通模式；同位宽、不能整除承载的plan-only目标拒绝承载，显式不合法p报错。这些检查不将手工构造的plan-only点当作有效Stage1曲线运行。
+
+同一最终驱动和合并配置对5872-bit输入以D=0再运行1条完整曲线，自动选D1141140、普通模数；引擎97.431 s、worker99.708 s，mandatory2208、GMP43253、坏计数0，fold/frontier驻留。该验证说明一份配置可按实际save范围分别选择较大D和承载；不把额外1条曲线当作独立性能标定。证据`production_d_auto/result.json`。
+
+证据在`data/experiments/ecm_tune_carrier_20261010/`的`paired_7995.toml`、`measurement_summary.json`、`telemetry.csv`、`merge_runtime_final/result.json`及`production_auto/result.json`；逐曲线原始日志/回执为`data/experiments/ecm_tune_35836_14824203/`。最终驱动与53个编译依赖的冻结快照在`build_cuda_cmake/ecm_tune_merge_final_20261010/`。合并不提高原样本的统计可信度，不据此推断其他位宽、B1/B2或预算也有相同比例收益。
+
 ## B2 和位宽关系
 
 固定 D/P 时 I≈B2/D，G≈B2/(DP)，主重复成本近似 Tfixed+G·Tbatch，所以大 B2 可近线性。允许 P/D 随预算增长时可呈约平方根；驻留不是平方根的充分条件，owner 回退也不是线性的充分条件。
