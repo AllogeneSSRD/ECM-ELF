@@ -60,6 +60,10 @@ NTT JSON version2 提供 exact_allocation_events、fuse_layouts、物理分配/�
 
 `test_stage2_tune_component_auto_runtime.py --exe <生产exe> --profile <格式4完整ECM.toml> --save <已验证save> --training-plans <冻结训练目录> --device <n> --output <新目录>`核对Auto B2的INI入口、显式普通/承载及D锁定、精确点优先和缺少NTT形状时的分块模型回退，再运行一条未锁定D/承载的完整曲线。默认未测B2=12.5e9可由`--b2`覆盖；输入需有合格普通/承载模型及完整训练形状。T1=3是固定决策测试输入，不是Stage1实测或独立全流程收益验收；不把该单条曲线作为重复性能样本。
 
+`validate_stage2_tune_auto_profit.py --exe <生产exe> --profile <完整ECM.toml> --stage1-profile <实测Stage1.toml> --save <已验证save> --device <n> --stage1-batch <C> --output <新目录>`独立验证有限候选的全流程收益。可选`--stage1-exponent lcm|choose12`、`--ratio <R>`、`--repeats <n>`（默认3，至少2）。格式4另给`--training-plans <冻结训练目录>`；`--holdout-b2 <未测B2...>`把每档应用于所有适用D/算术组，不删除原锚点。全部候选预热后按正/反顺序交错正式重复，自动选中点始终通过未锁定B2/D/承载的入口执行。逐候选时间误差≤8%、有限收益损失≤5%；进程墙钟另列，NVML只读采样，输入/工具/EXE/DLL及源闭包冻结。它不证明连续B2范围的全局最佳值。
+
+`test_stage2_tune_profit_reference.py --profile <格式4完整ECM.toml> --training-plans <冻结训练目录> --holdout-dir <已完成四候选验收目录> --output <新目录>`在CPU上核对收益工具与固定B2工具共用的独立参考。覆盖原生已冻结预测的重算、精确点优先、旧格式回退和缺失/重复/策略错误训练计划拒绝，不运行CUDA或编译；不代替新的完整曲线收益验收。
+
 `test_stage2_tune_workload.py --output <新目录> [--evidence <原始调优目录>]`执行CPU门禁：手算满/尾分块、chunk上限、万亿次repeat压缩、错误协议拒绝及已保存原生plan的独立密集请求重放。它不证明GPU真实调用计数或NTT批处理吞吐；后者需要运行审计和独立完整曲线留出验证。
 
 当前事件矩阵173 cases、47,936 events、168,166 assertions，故意修改释放顺序的模型被拒绝。重复压缩依赖完整保留状态，observer 不生成所有跳过重复事件。

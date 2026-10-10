@@ -26,7 +26,51 @@ RANK_LOSS_LIMIT = .05
 SCOPE = ('target_bits', 'arithmetic_bits', 'carrier_exponent', 'modulus_kind', 'b1', 'd')
 
 
-def predict(samples, b2, opted):
+def component_reference(profile, groups, training_plans, identities):
+    """Rebuild eligible models from frozen plans, independent of native fits."""
+    measurements = embedded_ntt_samples(profile)
+    models = {}
+    if not measurements:
+        return measurements, models
+    assert training_plans, 'format 4 requires independent frozen training plans'
+    plan_samples = {tuple(s[k] for k in ('target_bits', 'arithmetic_bits', 'carrier_exponent', 'b1', 'b2', 'd')): s
+                    for group in groups.values() for s in group}
+    records, seen = {}, set()
+    policy = profile['ntt']['policy']
+    for path in sorted(training_plans.glob('case_*.plan.jsonl')):
+        plan = one_json(path)
+        key = tuple(plan[k] for k in ('target_bits', 'bits', 'carrier_exponent', 'B1', 'B2', 'D'))
+        if key not in plan_samples:
+            continue
+        assert key not in seen, 'duplicate component anchor plan'
+        tree = plan['tree_workspace']
+        assert (tree['supported'] and tree['batch_bytes'] == policy['batch_bytes'] and
+                tree['physical_chunks'] == bool(policy['physical_chunks']) and
+                tree['chunk_max'] == policy['chunk_max'] and plan['workspace_buffers'] == policy['buffers']), \
+            'component anchor NTT policy mismatch'
+        seen.add(key)
+        identities[str(path.resolve())] = hashlib.sha256(path.read_bytes()).hexdigest()
+        sample = plan_samples[key]
+        scope = tuple(sample[k] for k in SCOPE)
+        try:
+            reference = components.loop_reference(workload(plan), measurements)
+            records.setdefault(scope, []).append(dict(sample=sample, loop_reference_seconds=reference))
+        except ValueError:
+            pass  # Incomplete groups retain the qualified full-curve model.
+    assert seen == set(plan_samples), 'missing independent component training plans'
+    for scope, group in groups.items():
+        if len(records.get(scope, [])) != len(group):
+            continue
+        try:
+            model = components.train(records[scope])
+            if model['qualified']:
+                models[scope] = model
+        except ValueError:
+            pass
+    return measurements, models
+
+
+def predict(samples, b2, opted, component_model=None, plan=None, measurements=None):
     """Exact measurements or independent NumPy route regression."""
     exact = next((s for s in samples if s['b2'] == b2), None)
     if exact:
@@ -34,6 +78,13 @@ def predict(samples, b2, opted):
             return None
         return dict(model='measured_exact_scope_v1', seconds=exact['median_seconds'],
                     rank=exact['median_seconds']+2*exact['mad_seconds'])
+    if component_model is not None:
+        assert plan is not None and measurements, 'component query needs exact plan and NTT data'
+        try:
+            result = components.predict(component_model, plan, measurements)
+            return dict(model=components.MODEL, seconds=result['seconds'], rank=result['rank_seconds'])
+        except ValueError:
+            pass
     return predict_route(samples, b2, opted)
 
 
@@ -97,37 +148,7 @@ def main():
         key = tuple(sample[k] for k in SCOPE)
         groups.setdefault(key, []).append(sample)
     assert groups, 'profile does not cover this save'
-    measurements=embedded_ntt_samples(profile)
-    component_models={}
-    if measurements:
-        assert args.training_plans, 'format 4 requires independent frozen training plans'
-        plan_samples={tuple(s[k] for k in ('target_bits','arithmetic_bits','carrier_exponent','b1','b2','d')):s
-                      for group in groups.values() for s in group}
-        records={};seen=set()
-        for path in sorted(args.training_plans.glob('case_*.plan.jsonl')):
-            plan=one_json(path)
-            key=tuple(plan[k] for k in ('target_bits','bits','carrier_exponent','B1','B2','D'))
-            if key not in plan_samples:
-                continue
-            assert key not in seen, 'duplicate component anchor plan'
-            seen.add(key);identities[str(path.resolve())]=sha(path)
-            sample=plan_samples[key]
-            scope=tuple(sample[k] for k in SCOPE)
-            try:
-                reference=components.loop_reference(workload(plan),measurements)
-                records.setdefault(scope,[]).append(dict(sample=sample,loop_reference_seconds=reference))
-            except ValueError:
-                pass  # Incomplete groups must stay on the existing qualified route model.
-        assert seen==set(plan_samples), 'missing independent component training plans'
-        for scope,group in groups.items():
-            if len(records.get(scope,[]))!=len(group):
-                continue
-            try:
-                model=components.train(records[scope])
-                if model['qualified']:
-                    component_models[scope]=model
-            except ValueError:
-                pass
+    measurements, component_models = component_reference(profile, groups, args.training_plans, identities)
     ini = output/'bench.ini'
     ini.write_text('verbose=false\nstage2_debug_log=false\n', encoding='utf-8')
     policy = profile['policy']
@@ -185,18 +206,13 @@ def main():
             report['holdouts'].append(holdout)
             for key, group in groups.items():
                 d, carrier = key[-1], key[2]
-                prediction = predict(group, b2, profile['profile'].get('prediction_model'))
                 stem = f'holdout_{index}_d{d}_c{carrier}'
                 extra = ['--d', str(d), '--carrier-exponent', str(carrier)]
                 rows = run(stem+'_plan', b2, [*extra, '--plan-only'])
                 choice = next(x for x in rows if x.get('type') == 'tune_selection')
                 plan = next(x for x in rows if x.get('type') == 'stage2_plan')
-                if key in component_models:
-                    try:
-                        result=components.predict(component_models[key],plan,measurements)
-                        prediction=dict(model=components.MODEL,seconds=result['seconds'],rank=result['rank_seconds'])
-                    except ValueError:
-                        pass
+                prediction = predict(group, b2, profile['profile'].get('prediction_model'),
+                                     component_models.get(key), plan, measurements)
                 if not choice['selected']:
                     holdout['ineligible'].append(dict(d=d, carrier=carrier, reason=choice['reason']))
                     continue

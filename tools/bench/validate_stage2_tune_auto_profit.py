@@ -5,7 +5,7 @@ one warmup and interleaved full Stage2 repeats. This checks a stated finite set,
 not global ECM success probability or unseen B2 optimality. Raw process overhead
 is recorded separately and does not silently change the engine-cost contract.
 """
-import argparse,hashlib,importlib.util,json,math,os,re,statistics,subprocess,time,tomllib
+import argparse,hashlib,importlib.util,json,math,os,re,shutil,statistics,subprocess,time,tomllib
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -27,6 +27,8 @@ def main():
     p.add_argument('--stage1-exponent',choices=['lcm','choose12'],default='lcm')
     p.add_argument('--ratio',type=float,default=1);p.add_argument('--repeats',type=int,default=3)
     p.add_argument('--min-candidates',type=int,default=2);p.add_argument('--timeout',type=float,default=1800)
+    p.add_argument('--training-plans',type=Path,help='Frozen case_*.plan.jsonl for format-4 NTT reference')
+    p.add_argument('--holdout-b2',type=int,nargs='+',default=[],help='Additional unseen B2 at every eligible D/arithmetic scope')
     a=p.parse_args()
     if a.device<0 or not 1<=a.stage1_batch<=1048576 or not 2<=a.repeats<=1000 or a.min_candidates<2 or not math.isfinite(a.ratio) or a.ratio<=0 or not math.isfinite(a.timeout) or a.timeout<=0:
         p.error('invalid device/batch/repeats/ratio/timeout')
@@ -35,12 +37,28 @@ def main():
            ROOT/'tools/bench/validate_stage2_tune_selection.py']
     sha=lambda path:hashlib.sha256(path.read_bytes()).hexdigest();identities={str(x):sha(x) for x in paths}
     s=importlib.util.spec_from_file_location('fixed',paths[-1]);fixed=importlib.util.module_from_spec(s);s.loader.exec_module(fixed)
+    for name in ('analyze_stage2_tune_components.py','analyze_stage2_tune_workload.py','stage2_tune_route_cost.py'):
+        path=ROOT/'tools/bench'/name;identities[str(path)]=sha(path)
+    manifest_path=a.exe.resolve().parent/'build_manifest.json';dll=a.exe.resolve().parent/'gmp-10.dll'
+    assert manifest_path.is_file() and dll.is_file(),'actual build manifest and GMP DLL required'
+    identities[str(manifest_path)]=sha(manifest_path);identities[str(dll)]=sha(dll)
+    manifest=json.loads(manifest_path.read_text(encoding='utf-8-sig'))
+    assert manifest['sha256'].lower()==sha(a.exe.resolve())
+    closure=0
+    for entry in manifest['sources']:
+        name,separator,digest=entry.rpartition('=');path=ROOT/name
+        if separator and len(digest)==64 and path.is_file():
+            assert sha(path)==digest.lower(),('source differs from binary',name)
+            identities[str(path.resolve())]=digest.lower();closure+=1
+    assert closure>=49,'incomplete production source closure'
     profile=tomllib.loads(a.profile.read_text(encoding='utf-8-sig'))
     stage1=tomllib.loads(a.stage1_profile.read_text(encoding='utf-8-sig'))
     assert a.profile.stat().st_size<=64*1048576 and a.stage1_profile.stat().st_size<=16*1048576
     with a.save.open(encoding='utf-8-sig') as stream:line=next(x for x in stream if x.strip())
     fields=dict(re.findall(r'(\w+)\s*=\s*([^;]+)',line));n=int(fields['N'].strip(),0);b1=int(fields['B1'])
     bits=n.bit_length();kind='mersenne' if (n+1)&n==0 else 'generic'
+    assert n>3 and n%2 and bits<=16384 and b1>=2
+    assert all(stage1['device'][key]==profile['device'][key] for key in stage1['device']), 'Stage1/Stage2 device mismatch'
     matches=[x for x in stage1['stage1'].values() if x['target_bits']==bits and x['b1']==b1 and
         x['batch']==a.stage1_batch and x['modulus_kind']==kind and x['exponent']==a.stage1_exponent]
     assert len(matches)==1,'no unique measured Stage1 scope'
@@ -53,23 +71,35 @@ def main():
         if not carrier and row['modulus_kind']!=kind:continue
         groups.setdefault(tuple(row[k] for k in fixed.SCOPE),[]).append(row)
     assert groups,'no covered Stage2 scope'
+    assert all(b1<b2<=2**63-1-8192 and all(row['b2']!=b2 for group in groups.values() for row in group)
+               for b2 in a.holdout_b2),'holdout B2 must be valid and absent from training'
+    measurements,component_models=fixed.component_reference(profile,groups,a.training_plans,identities)
     ini=out/'ecm.ini';ini.write_text('verbose=false\nstage2_debug_log=false\n',encoding='utf-8')
     policy=profile['policy'];common=[str(a.exe.resolve()),'--ini',str(ini),'--save',str(a.save.resolve()),
         '--device',str(a.device),'--tune-profile',str(a.profile.resolve()),'--batch-mb',str(policy['batch_mb']),
         '--arena-mb',str(policy['arena_mb']),'--owner-budget-mb',str(policy['fold_mb']),'--log-level','quiet']
+    environment=dict(os.environ)
+    if isinstance(policy.get('environment'),dict):
+        for key,value in policy['environment'].items():
+            assert type(value) is int and value>=0
+            environment['NTT_'+key.upper()]=str(value)
     auto=['--auto-b2','--stage1-tune-profile',str(a.stage1_profile.resolve()),'--stage1-batch',str(a.stage1_batch),
         '--stage1-exponent',a.stage1_exponent,'--stage2-ratio-adjust',str(a.ratio)]
     report=dict(complete=False,source_identities=identities,b1=b1,target_bits=bits,t1_seconds=t1,ratio=a.ratio,
         stage1_batch=a.stage1_batch,exponent=a.stage1_exponent,repeats=a.repeats,warmups=1,
         time_error_limit=TIME_ERROR_LIMIT,rank_loss_limit=RANK_LOSS_LIMIT,candidates=[],memory_rejected=[],
+        profile_format=profile['profile']['format'],component_groups=len(component_models),
+        holdout_b2=a.holdout_b2,policy={k:v for k,v in policy.items() if k!='environment'},
+        environment={k:v for k,v in environment.items() if k.startswith('NTT_')},
         total_scope='score=K/(measured T1+ratio*remeasured Stage2 engine total); finite tested candidates')
     def publish():(out/'result.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     def run(name,extra):
-        start=time.perf_counter();proc=subprocess.run(common+extra,capture_output=True,text=True,errors='replace',timeout=a.timeout)
+        start=time.perf_counter();proc=subprocess.run(common+extra,cwd=ROOT,env=environment,capture_output=True,text=True,errors='replace',timeout=a.timeout)
         (out/(name+'.console.log')).write_text(proc.stdout+proc.stderr,encoding='utf-8')
         assert proc.returncode==0,(name,proc.stderr)
         return [json.loads(x) for x in proc.stdout.splitlines() if x.startswith('{')],time.perf_counter()-start
     publish()
+    monitor=None;telemetry=None
     try:
         rows,_=run('auto_plan',auto+['--plan-only']);choice=next(x for x in rows if x.get('type')=='stage2_auto_plan')
         assert choice['T1_source']=='measured_stage1_profile' and choice['T1']==t1
@@ -79,6 +109,7 @@ def main():
         candidates={selected}
         for key,group in groups.items():
             for row in group:candidates.add((row['b2'],row['d'],row['carrier_exponent']))
+            for b2 in a.holdout_b2:candidates.add((b2,key[-1],key[2]))
         for index,(b2,d,carrier) in enumerate(sorted(candidates)):
             extra=['--b2',str(b2),'--d',str(d),'--carrier-exponent',str(carrier)]
             rows,_=run(f'candidate_{index}_plan',extra+['--plan-only'])
@@ -86,15 +117,28 @@ def main():
             if not pick['selected']:
                 report['memory_rejected'].append(dict(b2=b2,d=d,carrier=carrier,reason=pick['reason']));continue
             assert plan['curve_workspace_memory']['initial_free_snapshot_fits']
-            group=next(values for key,values in groups.items() if key[-1]==d and key[2]==carrier)
-            prediction=fixed.predict(group,b2,profile['profile'].get('prediction_model'))
+            key,group=next((key,values) for key,values in groups.items() if key[-1]==d and key[2]==carrier)
+            prediction=fixed.predict(group,b2,profile['profile'].get('prediction_model'),component_models.get(key),plan,measurements)
             assert prediction is not None,'native accepted an independently ineligible candidate'
+            assert pick['model']==prediction['model']
             native=pick.get('estimated_seconds',pick.get('median_seconds'));assert math.isclose(native,prediction['seconds'],rel_tol=1e-10)
             assert math.isclose(pick['rank_seconds'],prediction['rank'],rel_tol=1e-10)
             report['candidates'].append(dict(index=index,b2=b2,d=d,carrier=carrier,selected=(b2,d,carrier)==selected,
                 prediction=prediction,seconds=[],process_seconds=[],warmup_seconds=None))
         assert len(report['candidates'])>=a.min_candidates
-        assert any(x['selected'] for x in report['candidates']);publish()
+        actual_choice=next(x for x in report['candidates'] if x['selected'])
+        assert choice['model']==actual_choice['prediction']['model']
+        assert math.isclose(choice['engine_seconds'],actual_choice['prediction']['seconds'],rel_tol=1e-10)
+        assert math.isclose(choice['guarded_engine_seconds'],actual_choice['prediction']['rank'],rel_tol=1e-10)
+        for path,digest in identities.items():
+            assert sha(Path(path))==digest,path
+            frozen=out/'inputs'/digest/Path(path).name;frozen.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(path,frozen)
+        publish()
+        smi=shutil.which('nvidia-smi');assert smi,'read-only NVML monitor required'
+        telemetry=(out/'telemetry.csv').open('w',encoding='utf-8')
+        monitor=subprocess.Popen([smi,'--query-gpu=timestamp,index,uuid,utilization.gpu,clocks.current.sm,temperature.gpu,power.draw,memory.used',
+                                  '--format=csv','-lms','1000'],stdout=telemetry,stderr=subprocess.STDOUT)
         # Measure the automatic choice through the real unforced production route.
         for repeat in range(a.repeats+1):
             ordered=report['candidates'][::1 if repeat%2==0 else -1]
@@ -107,7 +151,11 @@ def main():
                 assert row['B2']==candidate['b2'] and row['carrier_exponent']==candidate['carrier']
                 if candidate['selected']:
                     assert row['auto_plan']['D']==candidate['d'] and row['auto_plan']['T1']==t1 and 'tune_plan' not in row
-                else:assert row['tune_plan']['D']==candidate['d']
+                    assert row['requested_D']==row['requested_carrier_exponent']==0
+                    assert row['auto_plan']['model']==candidate['prediction']['model']
+                else:
+                    assert row['tune_plan']['D']==candidate['d']
+                    assert row['tune_plan']['model']==candidate['prediction']['model']
                 text=log.read_text(encoding='utf-8')
                 assert 'gmp_selftest_bad=0' in text and 'gmp_check_bad=0' in text
                 assert re.search(r'real_batched_folddevice: requested=1 enabled=1 fallback=none\b',text)
@@ -128,7 +176,11 @@ def main():
         assert report['rank_loss']<=RANK_LOSS_LIMIT,'Auto B2 benefit loss exceeds fixed finite-set limit'
         assert all(sha(Path(path))==h for path,h in identities.items()),'source data changed'
         report['complete']=True;publish()
-    except Exception as error:report['failure']=str(error);publish();raise
+    except BaseException as error:report['failure']=repr(error);publish();raise
+    finally:
+        if monitor is not None:
+            monitor.terminate();monitor.wait(timeout=10)
+        if telemetry is not None:telemetry.close()
     print(json.dumps(dict(passed=True,candidates=len(report['candidates']),rank_loss=report['rank_loss'],
         actual_curves=len(report['candidates'])*(a.repeats+1))))
 
