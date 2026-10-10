@@ -3,6 +3,7 @@
 #include "ecm_stage2_cost_profile.h"
 #include "ecm_stage2_phase_times.h"
 #include "ecm_stage2_giant_work.h"
+#include "ecm_stage2_tune_grid.h"
 #include <gmp.h>
 #include <limits>
 
@@ -14,6 +15,7 @@ struct EcmEffort {
     std::vector<Word> d,b2;
     int repeats=0;
     Word max_batches=0;
+    unsigned tail_samples=0;
 };
 inline EcmEffort ecm_effort(int level) {
     if(level<1 || level>10)throw std::runtime_error("tune-level must be 1..10");
@@ -36,7 +38,7 @@ inline EcmEffort ecm_effort(int level) {
         }
         e.b2.push_back(bounds[interval+1]);
     }
-    e.repeats=2*level+1;e.max_batches=64+16*(level-1);return e;
+    e.repeats=2*level+1;e.max_batches=64+16*(level-1);e.tail_samples=level>=3?3:0;return e;
 }
 struct Mpz {
     mpz_t v;Mpz(){mpz_init(v);}~Mpz(){mpz_clear(v);}
@@ -254,6 +256,10 @@ struct EcmProfile {
         if(p.profile.count("prediction_model") && required(p.profile,"prediction_model")!=std::string("\"")+b2_prediction_model+"\"" &&
            required(p.profile,"prediction_model")!=std::string("\"")+legacy_b2_prediction_model+"\"")
             throw std::runtime_error("unsupported ECM tune prediction model");
+        const bool sampled=p.profile.count("sampling_model")!=0;
+        if(sampled!=bool(p.profile.count("tail_samples")) || (sampled &&
+           (required(p.profile,"sampling_model")!=std::string("\"")+tail_sampling_model+"\"" || uint(p.profile,"tail_samples")>16)))
+            throw std::runtime_error("invalid ECM tune sampling metadata");
         if(!cost::hex(required(p.device,"uuid_hex").substr(1,32),32) || required(p.device,"uuid_hex").size()!=34)
             throw std::runtime_error("invalid ECM tune device");
         for(const char *key:{"sm_major","sm_minor","cuda_runtime","cuda_driver","gl_fixed_mode","outer_unroll_u","add_sub_mask"})uint(p.device,key);
@@ -268,6 +274,15 @@ struct EcmProfile {
         std::set<std::string> scopes;
         for(const auto &s:p.samples) {
             validate_sample(s);if(uint(s,"repeats")!=uint(p.profile,"repeats"))throw std::runtime_error("inconsistent ECM profile repetitions");
+            if(s.count("sampling_source")) {
+                const auto &source=required(s,"sampling_source");
+                if(!sampled || (source!="\"base\"" && source!="\"ladder_tail\"" && source!="\"chain_anchor\""))
+                    throw std::runtime_error("invalid ECM tune sampling source");
+                if(source!="\"base\"") {
+                    if(!uint(p.profile,"tail_samples") || !s.count("giant_work_model"))throw std::runtime_error("adaptive sample lacks route policy");
+                    if((source=="\"ladder_tail\"")!=(uint(s,"giant_ladder_steps")!=0))throw std::runtime_error("adaptive sample route mismatch");
+                }
+            }
             if(uint(p.profile,"format")==3 && uint(p.profile,"max_batches") &&
                 (uint(s,"giant_points")+uint(s,"p")-1)/uint(s,"p")>uint(p.profile,"max_batches"))throw std::runtime_error("ECM sample exceeds declared batch limit");
             if(!scopes.insert(sample_scope(s)).second)throw std::runtime_error("duplicate ECM tune measurement scope");
@@ -287,7 +302,7 @@ struct EcmProfile {
 inline EcmProfile merge_ecm_profiles(const std::vector<EcmProfile> &inputs) {
     if(inputs.empty() || inputs.size()>64)throw std::runtime_error("merge requires 1..64 ECM tune profiles");
     EcmProfile result=inputs.front();result.policy.erase("environment");result.samples.clear();
-    std::map<std::string,size_t> positions;Word effort=0,limit=0,skipped=0,replaced=0;bool unlimited=false;
+    std::map<std::string,size_t> positions;Word effort=0,limit=0,skipped=0,replaced=0,tail_samples=0;bool unlimited=false,sampled=false;
     for(const auto &input:inputs) {
         if(input.profile.count("prediction_model"))result.profile["prediction_model"]=required(input.profile,"prediction_model");
         auto policy=input.policy;policy.erase("environment");
@@ -297,6 +312,7 @@ inline EcmProfile merge_ecm_profiles(const std::vector<EcmProfile> &inputs) {
             if(required(input.profile,field)!=required(result.profile,field))
                 throw std::runtime_error(std::string("ECM tune merge metadata mismatch: ")+field);
         effort=std::max(effort,uint(input.profile,"effort_level"));
+        if(input.profile.count("sampling_model")) {sampled=true;tail_samples=std::max(tail_samples,uint(input.profile,"tail_samples"));}
         if(uint(input.profile,"format")==2 || !uint(input.profile,"max_batches"))unlimited=true;
         else limit=std::max(limit,uint(input.profile,"max_batches"));
         const auto skipped_field=input.summary.find("skipped");
@@ -313,6 +329,7 @@ inline EcmProfile merge_ecm_profiles(const std::vector<EcmProfile> &inputs) {
     }
     result.profile["format"]="3";result.profile["effort_level"]=std::to_string(effort);
     result.profile["max_batches"]=std::to_string(unlimited?0:limit);
+    if(sampled){result.profile["sampling_model"]=std::string("\"")+tail_sampling_model+"\"";result.profile["tail_samples"]=std::to_string(tail_samples);}
     result.summary={{"complete","1"},{"failed","0"},{"measured",std::to_string(result.samples.size())},
                     {"skipped",std::to_string(skipped)},{"merged_profiles",std::to_string(inputs.size())},
                     {"replaced_scopes",std::to_string(replaced)}};

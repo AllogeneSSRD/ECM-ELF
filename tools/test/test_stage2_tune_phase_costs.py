@@ -7,6 +7,9 @@ from pathlib import Path
 import statistics
 import subprocess
 import tomllib
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bench'))
+from stage2_tune_route_cost import annotate
 
 NAMES = ('shape', 'setup', 'baby', 'ftree', 'main_setup', 'inverse_setup',
          'giant_loop', 'descent', 'accum', 'finalize')
@@ -121,8 +124,9 @@ def main():
     capacity = None
     if a.large_profile:
         document = tomllib.loads(newest.read_text(encoding='utf-8'))
-        document['profile'].update(effort_level=10, repeats=21, max_batches=0)
-        document['summary']['measured'] = 3094
+        document['profile'].update(effort_level=10, repeats=21, max_batches=0,
+            sampling_model='giant_tail_grid_v1',tail_samples=3)
+        document['summary']['measured'] = 4096
         values = document['ecm']['sample_0'].copy()
         unit = math.pi/10
         total = 10*unit
@@ -142,18 +146,20 @@ def main():
             for group in ('profile', 'device', 'policy'):
                 stream.write(table(group, {k:v for k,v in document[group].items() if not isinstance(v, dict)}))
             stream.write(table('policy.environment', document['policy']['environment']))
-            for index in range(3094):
+            for index in range(4096):
                 values['b2'] = 26000000000+index
                 values['giant_points'] = values['b2']//values['d']+2
+                values=annotate(values,values['p']*8,32768,False)
+                values['sampling_source']='base'
                 stream.write(table('ecm.sample_'+str(index), values))
             stream.write(table('summary', document['summary']))
         assert 16*1048576 < large.stat().st_size < 64*1048576
-        assert subprocess.check_output([str(exe), '--load', str(large)], text=True).strip() == '3094'
+        assert subprocess.check_output([str(exe), '--load', str(large)], text=True).strip() == '4096'
         too_large = a.output/'over_limit.toml'
         with too_large.open('wb') as stream:
             stream.truncate(64*1048576+1)
         assert subprocess.run([str(exe), '--load', str(too_large)], capture_output=True).returncode != 0
-        capacity = dict(scopes=3094, repeats=21, bytes=large.stat().st_size, bounded_rejection=True)
+        capacity = dict(scopes=4096, repeats=21, bytes=large.stat().st_size, bounded_rejection=True)
     result = dict(complete=True, partitions=partitions, accepted=accepted, rejected=rejected,
                   paired_medians_not_additive=True, mixed_contract_merge=True)
     if capacity:result['capacity'] = capacity

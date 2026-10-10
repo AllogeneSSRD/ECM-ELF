@@ -66,6 +66,10 @@ S4 三个组件边界和 peak 不包含 NTT、giant、fold/frontier；giant 模�
 
 `test_stage2_tune_route_policy_runtime.py --exe <生产exe> --profile <完整tune.toml> --save <save> --device <id> --output <新目录>`用plan-only验证实际分块策略：有效数据接受；合成修改容量、chain阈值或强制ladder后，固定B2拒绝复用该选型，Auto B2拒绝无匹配候选。它不执行曲线，不代替时间预测验收。实际运行的分块策略与实时显存准入分别检查。
 
+`test_stage2_tune_tail_grid.py --fixture <fixture.exe> --valid-profile <CPU有效profile> --output <新目录>`独立枚举整数I，核对自适应样本的范围、G2/G树上限、去重和chain/ladder来源，并检查等级1…10默认目录的容量。它不运行GPU或证明时间拟合精度。
+
+`test_stage2_tune_tail_runtime.py --exe <生产exe> --save <save> --device <id> --output <新目录>`运行完整tune，默认等级3、D60060/120120、重复3次；`--carrier <p>`加入合法承载对照。`--level <3..10>`、`--ds <D,...>`、`--b2 <B2,...>`、`--tail-samples <0..16>`、`--max-batches <n>`覆盖范围。显式B2默认关闭补样，尾点数量另行开启。工具核对CLI拒绝、计划/回执/性能样本对应及分块来源；独立时间/排名验收另用`validate_stage2_tune_selection.py`，其8%/5%门限不变。保存点应事先独立验证；发现因子或算术问题立即保留失败证据。
+
 运行前冻结 exe、DLL、source closure、save、工具与 controls。CPU ledger、native plan、短/大 GPU算术和性能是不同范围，失败必须如实保留。重新构建/修改源码后不能把当前文件哈希冒充旧二进制来源。
 
 已完成事件/路由证据在 `data/stage2_ntt_events_20261009/` 与 `data/stage2_s4_program_20261009/`。它们属于组件规划门禁，没有新增大规模速度结论。完整联合执行器、driver free、回退和 D/Auto B2接入见 [TODO](../../docs/TODO.md)。

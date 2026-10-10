@@ -7,7 +7,23 @@
 int main(int argc,char **argv) {
     try {
         namespace t=ecm_stage2::tune;
-        if(argc==6 && std::string(argv[1])=="--work-policy") {
+        if(argc==2 && std::string(argv[1])=="--tail-grid") {
+            ecm_stage2::Word b1,d,p,chunk,minimum,batches;unsigned force,requested,count;
+            while(std::cin>>b1>>d>>p>>chunk>>minimum>>force>>batches>>requested>>count) {
+                if(count>64 || force>1)throw std::runtime_error("invalid grid fixture");
+                std::vector<ecm_stage2::Word> bounds(count);for(auto &b:bounds)if(!(std::cin>>b))throw std::runtime_error("incomplete grid fixture");
+                const auto grid=t::tune_tail_grid(bounds,b1,d,p,chunk,minimum,force!=0,batches,requested);
+                std::cout<<"{\"valid\":"<<(grid.valid?"true":"false")<<",\"reason\":\""<<grid.reason
+                    <<"\",\"low\":"<<grid.low<<",\"high\":"<<grid.high<<",\"chain_anchors\":"<<grid.existing_chain_anchors<<",\"points\":[";
+                bool first=true;for(const auto &point:grid.points){if(!first)std::cout<<',';first=false;
+                    std::cout<<"{\"b2\":"<<point.b2<<",\"source\":\""<<point.source<<"\"}";}
+                std::cout<<"]}\n";
+            }
+        } else if(argc==3 && std::string(argv[1])=="--effort-tail") {
+            std::cout<<t::ecm_effort(std::stoi(argv[2])).tail_samples<<'\n';
+        } else if(argc==3 && std::string(argv[1])=="--effort-exponents") {
+            for(const auto p:t::ecm_effort(std::stoi(argv[2])).exponents)std::cout<<p<<' ';
+        } else if(argc==6 && std::string(argv[1])=="--work-policy") {
             const auto profile=t::EcmProfile::load(argv[2]);
             std::cout<<(t::matches_giant_work_policy(profile.samples.front(),std::stoull(argv[3]),
                 std::stoull(argv[4]),std::stoul(argv[5])!=0)?1:0)<<'\n';

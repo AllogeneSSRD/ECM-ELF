@@ -30,6 +30,9 @@ def main():
         for key,s in candidate['ecm'].items():
             candidate['ecm'][key]=annotate(s,s['giant_chunk_points']*(2 if mode=='chunk' else 1),
                 s['giant_chain_min']+(1 if mode=='minimum' else 0),mode=='force')
+            # Synthetic policy rewrites are no longer the original grid route.
+            # Keep their source neutral so refusal reaches the runtime gate.
+            if mode!='valid' and 'sampling_source' in s:candidate['ecm'][key]['sampling_source']='base'
         sections=[('profile',candidate['profile']),('device',candidate['device']),
             ('policy',{k:v for k,v in candidate['policy'].items() if k!='environment'}),
             ('policy.environment',candidate['policy']['environment'])]

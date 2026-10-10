@@ -235,6 +235,7 @@ struct Options {
     std::vector<uint64_t> tune_ds,tune_b2s,tune_exponents;
     unsigned tune_carrier=0;
     uint64_t tune_max_batches=0;bool has_tune_max_batches=false;
+    unsigned tune_tail_samples=0;bool has_tune_tail_samples=false;
     uint64_t tune_memory_mb = 1024;
     bool factorize_hits = false;
     bool factor_only = false;
@@ -321,6 +322,10 @@ Options arguments(int argc, char **argv) {
         else if (a == "--tune-max-batches") {
             o.tune_max_batches=num();if(o.tune_max_batches>1048576)throw std::runtime_error("tune-max-batches must be 0..1048576");
             o.has_tune_max_batches=true;o.tune_options=true;
+        }
+        else if (a == "--tune-tail-samples") {
+            const auto n=num();if(n>16)throw std::runtime_error("tune-tail-samples must be 0..16");
+            o.tune_tail_samples=static_cast<unsigned>(n);o.has_tune_tail_samples=true;o.tune_options=true;
         }
         else if (a == "--tune-carrier-exponent") {
             const auto p=num();if(p<2 || p>16384)throw std::runtime_error("tune-carrier-exponent must be 2..16384");
@@ -817,6 +822,7 @@ void help() {
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
         "Tune: --tune ntt|ecm --tune-level 1..10 --tune-file FILE.toml --tune-repeats N\n"
         "      ECM: --tune-exponents p,... or --tune-save FILE [--tune-carrier-exponent p]\n"
+        "           --tune-tail-samples 0..16 (level 3+ defaults to 3; explicit --tune-b2 defaults to 0)\n"
         "           --tune-d D,... --tune-b2 B2,...; one warmup per shape, separate processes.\n"
         "           --tune-max-batches N limits G trees per curve; 0 removes the effort limit.\n"
         "      Merge: --tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml\n"
@@ -1032,7 +1038,7 @@ void merge_ecm_tune(const Options &o,const fs::path &destination) {
     if(o.tune_merge.size()>64)throw std::runtime_error("tune-merge requires at most 64 inputs");
     if(!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() ||
        !o.tune_exponents.empty() || o.tune_level || o.has_tune_repeats || o.has_tune_max_batches ||
-       o.has_tune_lengths || o.has_tune_memory)throw std::runtime_error("tune-merge is independent of benchmark grid options");
+       o.has_tune_lengths || o.has_tune_memory || o.has_tune_tail_samples)throw std::runtime_error("tune-merge is independent of benchmark grid options");
     std::vector<Handle> guards(o.tune_merge.size());std::vector<t::EcmProfile> profiles;
     for(size_t i=0;i<o.tune_merge.size();++i) {
         const auto input=absolute_from(fs::current_path(),o.tune_merge[i]);std::error_code error;
@@ -1064,6 +1070,8 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
     if(!o.tune_exponents.empty())effort.exponents.assign(o.tune_exponents.begin(),o.tune_exponents.end());
     if(o.has_tune_repeats)effort.repeats=o.tune_repeats;
     if(o.has_tune_max_batches)effort.max_batches=o.tune_max_batches;
+    if(!o.tune_b2s.empty())effort.tail_samples=0;
+    if(o.has_tune_tail_samples)effort.tail_samples=o.tune_tail_samples;
     if(!o.tune_save.empty() && !o.tune_exponents.empty())throw std::runtime_error("choose tune-save or tune-exponents");
     if(o.tune_carrier && o.tune_save.empty())throw std::runtime_error("paired carrier tune requires --tune-save");
     struct Input {fs::path save;Record record;unsigned prime=0;};
@@ -1081,8 +1089,41 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
         append(save,"METHOD=ECM; PARAM=0; SIGMA=26; B1=20; N=0x"+n+"; X=0x"+x+"; Z=1;");
         auto rec=records(save,0,1);inputs.push_back({save,rec.at(0),p});
     }
-    const auto count=inputs.size()*effort.d.size()*effort.b2.size()*(o.tune_carrier?2:1);
-    if(count>4096)throw std::runtime_error("ECM tune grid exceeds 4096 cases");
+    struct Case {size_t input;uint64_t b2,d;unsigned carrier;const char *source;};
+    std::vector<Case> cases;
+    auto schedule=[&](size_t input,uint64_t b2,uint64_t d,unsigned carrier,const char *source) {
+        if(cases.size()>=4096)throw std::runtime_error("ECM tune grid exceeds 4096 cases");
+        cases.push_back({input,b2,d,carrier,source});
+    };
+    for(size_t i=0;i<inputs.size();++i)for(auto b2:effort.b2)for(auto d:effort.d)
+        for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode)schedule(i,b2,d,mode?o.tune_carrier:0,"base");
+    const auto base_count=cases.size();size_t tail_count=0,chain_count=0,group=0;
+    if(effort.tail_samples)for(size_t i=0;i<inputs.size();++i)for(auto d:effort.d)
+        for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode) {
+            ++group;const unsigned carrier=mode?o.tune_carrier:0;const auto &r=inputs[i].record;
+            const auto p=ecm_stage2::cost::phi(d)/2;uint64_t low=0,high=0;
+            if(!t::tune_grid_bounds(effort.b2,r.b1,d,p,effort.max_batches,low,high)) {
+                std::cout<<"ecm_tune_grid: group="<<group<<" D="<<d<<" carrier="<<carrier<<" reason=no_admissible_range\n";continue;
+            }
+            std::string plan;
+            if(ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,high,d,o.device,
+                [](const char *p,void *ctx){*static_cast<std::string*>(ctx)=p;},&plan,carrier))throw std::runtime_error("ECM tune adaptive plan failed");
+            append(evidence/("grid_group_"+std::to_string(group)+".jsonl"),plan);
+            const auto giant=giant_memory_record(plan);
+            if(plan_scalar(giant,"valid")!="true") {
+                std::cout<<"ecm_tune_grid: group="<<group<<" D="<<d<<" carrier="<<carrier<<" reason=giant_policy_unavailable\n";continue;
+            }
+            const auto grid=t::tune_tail_grid(effort.b2,r.b1,d,p,u64(plan_scalar(giant,"chunk_points"),"chunk_points"),
+                u64(plan_scalar(giant,"chain_min"),"chain_min"),plan_scalar(giant,"force_ladder")=="true",effort.max_batches,effort.tail_samples);
+            if(!grid.valid)throw std::runtime_error(std::string("ECM tune adaptive grid invalid: ")+grid.reason);
+            for(const auto &point:grid.points) {
+                schedule(i,point.b2,d,carrier,point.source);
+                if(std::strcmp(point.source,"ladder_tail")==0)++tail_count;else ++chain_count;
+            }
+            std::cout<<"ecm_tune_grid: group="<<group<<" D="<<d<<" carrier="<<carrier<<" added="<<grid.points.size()<<" reason="<<grid.reason<<std::endl;
+        }
+    const auto count=cases.size();
+    std::cout<<"ecm_tune_grid_ready: base="<<base_count<<" ladder_tail="<<tail_count<<" chain_anchor="<<chain_count<<" cases="<<count<<std::endl;
     EcmStage2DeviceInfo device;if(ecm_cuda_stage2_device_info(o.device,&device))throw std::runtime_error("cannot query ECM tune device");
     const auto environment=tune_environment();
     if(!destination.parent_path().empty())fs::create_directories(destination.parent_path());
@@ -1094,7 +1135,8 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
     output<<"# Full ECM Stage2 measurements. Seconds; bytes. Engine cost excludes Stage1 and process launch.\n"
           <<"# Exclusive phases and worker wall/residual costs are declared per sample.\n"
         <<"[profile]\nformat = 3\nunit = \"full_stage2\"\nalgorithm_revision = 1\nprediction_model = \""<<t::b2_prediction_model<<"\"\neffort_level = "<<(o.tune_level?o.tune_level:1)
-        <<"\nrepeats = "<<effort.repeats<<"\nwarmups = 1\nmax_batches = "<<effort.max_batches<<"\n\n[device]\nuuid_hex = \""<<device.uuid_hex
+        <<"\nrepeats = "<<effort.repeats<<"\nwarmups = 1\nmax_batches = "<<effort.max_batches
+        <<"\nsampling_model = \""<<t::tail_sampling_model<<"\"\ntail_samples = "<<effort.tail_samples<<"\n\n[device]\nuuid_hex = \""<<device.uuid_hex
         <<"\"\nsm_major = "<<device.major<<"\nsm_minor = "<<device.minor<<"\ncuda_runtime = "<<device.runtime
         <<"\ncuda_driver = "<<device.driver<<"\ngl_fixed_mode = "<<device.fixed_mode<<"\nouter_unroll_u = "<<device.outer_unroll_u
         <<"\nadd_sub_mask = "<<NTT_GL_ADD_SUB_MASK<<"\n\n[policy]\nbatch_mb = "<<batch<<"\narena_mb = "<<arena<<"\nfold_mb = "<<o.owner_mb
@@ -1103,9 +1145,10 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
     size_t measured=0,skipped=0,case_number=0;
     const auto old_level=stage2_log::level;stage2_log::level=stage2_log::quiet;
     try {
-        for(const auto &input:inputs)for(auto b2:effort.b2)for(auto d:effort.d)for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode) {
+        for(const auto &item:cases) {
+            const auto &input=inputs[item.input];const auto b2=item.b2,d=item.d;
             ++case_number;if(stop_requests)throw std::runtime_error("ECM tune interrupted; partial/evidence retained");
-            const unsigned carrier=mode?o.tune_carrier:0;
+            const unsigned carrier=item.carrier;
             if(b2<=input.record.b1)throw std::runtime_error("tune B2 must exceed saved B1");
             const auto p=ecm_stage2::cost::phi(d)/2,giant=b2/d+2,g=(giant+p-1)/p;
             if(effort.max_batches && g>effort.max_batches) {
@@ -1152,6 +1195,7 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
             sample["benchmark_kind"]=json_string(input.prime?"known_mersenne_prime":"validated_save");
             sample["benchmark_exponent"]=std::to_string(input.prime);sample["sigma"]=std::to_string(input.record.sigma);
             sample["b1"]=std::to_string(input.record.b1);sample["b2"]=std::to_string(b2);
+            sample["sampling_source"]=json_string(item.source);
             const auto giant_record=giant_memory_record(plan);
             if(plan_scalar(giant_record,"valid")!="true")throw std::runtime_error("giant route plan invalid");
             sample["giant_work_model"]="\"chunk_routes_v1\"";
@@ -1236,7 +1280,7 @@ int driver(Options o) {
     if (!o.tune.empty() && ((o.tune != "ntt" && o.tune!="ecm") || !o.save.empty() || !o.worktodo.empty() ||
         o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once || o.auto_b2 || !o.cost_profile.empty() || !o.tune_profile.empty() || o.has_carrier))
         throw std::runtime_error("--tune ntt|ecm is independent of save/queue/curve planning options; ECM accepts --tune-save");
-    if(o.tune=="ntt" && (!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() || !o.tune_exponents.empty() || o.has_tune_max_batches || !o.tune_merge.empty()))throw std::runtime_error("ECM tune grid/merge options require --tune ecm");
+    if(o.tune=="ntt" && (!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() || !o.tune_exponents.empty() || o.has_tune_max_batches || o.has_tune_tail_samples || !o.tune_merge.empty()))throw std::runtime_error("ECM tune grid/merge options require --tune ecm");
     if(o.tune=="ecm" && o.has_tune_lengths)throw std::runtime_error("length-log2 requires --tune ntt");
     if(o.tune=="ecm" && o.has_tune_memory)throw std::runtime_error("ECM tune uses batch/arena/owner budgets; tune-memory-mb requires --tune ntt");
     if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
