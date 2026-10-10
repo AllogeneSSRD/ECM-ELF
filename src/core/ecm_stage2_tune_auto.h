@@ -52,9 +52,10 @@ inline std::vector<AutoCandidate> auto_candidates(const std::vector<const Fields
         if(lo>hi)continue;
         std::set<Word> points;
         for(const auto *s:anchors)if(uint(*s,"b2")>=lo && uint(*s,"b2")<=hi)points.insert(uint(*s,"b2"));
-        B2Prediction qualified;
+        B2Model model;B2Prediction qualified;
         const Word interior=first+(last-first)/2;
-        if(opted && predict_b2(anchors,interior,qualified)) {
+        const bool model_ready=opted && prepare_b2_model(anchors,model) && predict_b2(model,interior,qualified);
+        if(model_ready) {
             points.insert(lo);points.insert(hi);
             for(int index=1;index<64;++index) {
                 const double x=std::exp(std::log((double)lo)+std::log((double)hi/(double)lo)*index/64.);
@@ -78,7 +79,7 @@ inline std::vector<AutoCandidate> auto_candidates(const std::vector<const Fields
                 candidate.mad_seconds=real(*exact,"mad_seconds");
                 candidate.guarded_seconds=candidate.seconds+2*candidate.mad_seconds;
             } else {
-                if(!opted || !predict_b2(anchors,b2,candidate.prediction))continue;
+                if(!model_ready || !predict_b2(model,b2,candidate.prediction))continue;
                 candidate.sample=anchors.front();candidate.seconds=candidate.prediction.seconds;
                 candidate.mad_seconds=candidate.prediction.mad_seconds;
                 candidate.guarded_seconds=candidate.seconds+candidate.prediction.error_seconds+2*candidate.mad_seconds;

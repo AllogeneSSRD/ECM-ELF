@@ -3,6 +3,7 @@
 #include "../../src/core/ecm_stage2_tune_auto.h"
 #include "../../src/core/ecm_stage1_tune_profile.h"
 #include <iostream>
+#include <chrono>
 int main(int argc,char **argv) {
     try {
         namespace t=ecm_stage2::tune;
@@ -25,12 +26,41 @@ int main(int argc,char **argv) {
                 <<",\"seconds\":"<<prediction.seconds<<",\"error_seconds\":"<<prediction.error_seconds
                 <<",\"mad_seconds\":"<<prediction.mad_seconds<<",\"max_relative_error\":"<<prediction.max_relative_error
                 <<",\"samples\":"<<prediction.samples<<"}\n";
-        } else if(argc==7 && std::string(argv[1])=="--auto") {
+        } else if((argc==7 && (std::string(argv[1])=="--auto" || std::string(argv[1])=="--auto-grid")) ||
+                  (argc==8 && std::string(argv[1])=="--auto-time")) {
             const auto profile=t::EcmProfile::load(argv[2]);std::vector<const t::Fields*> samples;
             for(const auto &sample:profile.samples)samples.push_back(&sample);
             const t::AutoRequest request{t::uint(profile.samples.front(),"b1"),ecm_stage2::cost::integer(argv[4]),
                 ecm_stage2::cost::integer(argv[5]),std::stod(argv[3]),std::stod(argv[6])};
-            const auto candidates=t::auto_candidates(samples,t::predicts_b2(profile),request);
+            const auto iterations=argc==8?ecm_stage2::cost::integer(argv[7]):1;
+            if(!iterations || iterations>10000)throw std::runtime_error("invalid benchmark iterations");
+            const auto start=std::chrono::steady_clock::now();
+            std::vector<t::AutoCandidate> candidates;double checksum=0;
+            for(uint64_t i=0;i<iterations;++i) {
+                candidates=t::auto_candidates(samples,t::predicts_b2(profile),request);
+                checksum+=candidates.front().score;
+            }
+            const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+            if(std::string(argv[1])=="--auto-time") {
+                std::cout<<std::setprecision(17)<<"{\"seconds\":"<<seconds<<",\"iterations\":"<<iterations
+                    <<",\"candidates\":"<<candidates.size()<<",\"checksum\":"<<checksum<<"}\n";return 0;
+            }
+            if(std::string(argv[1])=="--auto-grid") {
+                std::cout<<std::setprecision(17)<<'[';bool first=true;
+                for(const auto &c:candidates) {
+                    if(!first)std::cout<<',';first=false;
+                    std::cout<<"{\"B2\":"<<c.b2<<",\"D\":"<<t::uint(*c.sample,"d")
+                        <<",\"carrier\":"<<t::uint(*c.sample,"carrier_exponent")<<",\"seconds\":"<<c.seconds
+                        <<",\"rank\":"<<c.guarded_seconds<<",\"K\":"<<c.benefit<<",\"score\":"<<c.score
+                        <<",\"low\":"<<c.low<<",\"high\":"<<c.high<<",\"mad_seconds\":"<<c.mad_seconds
+                        <<",\"fit_error_seconds\":"<<c.prediction.error_seconds
+                        <<",\"fit_relative_error\":"<<c.prediction.max_relative_error
+                        <<",\"fit_samples\":"<<c.prediction.samples
+                        <<",\"predicted\":"<<(c.prediction.samples?"true":"false")
+                        <<",\"limited\":"<<(c.limited?"true":"false")<<'}';
+                }
+                std::cout<<"]\n";return 0;
+            }
             const auto &best=candidates.front();
             std::cout<<std::setprecision(17)<<"{\"B2\":"<<best.b2<<",\"D\":"<<t::uint(*best.sample,"d")
                 <<",\"carrier\":"<<t::uint(*best.sample,"carrier_exponent")<<",\"seconds\":"<<best.seconds

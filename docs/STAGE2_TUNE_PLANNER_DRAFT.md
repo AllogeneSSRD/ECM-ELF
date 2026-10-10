@@ -201,3 +201,17 @@ M4423有效B1=1000 save完成两D、五B2各预热1+正式3，共40条完整Stag
 CPU门禁通过手算满/尾块、chunk上限、万亿次repeat压缩、30个错误输入拒绝、CLI成功roundtrip及缺少scope/错误回执/设备不符的3个拒绝。已有M4423/B1=1000与5872-bit M6011余因子/B1=20的30份plan经独立密集请求重放，通过且与原生phase总数一致：前者989701 pairs/2863 calls/757 bins，后者6360924 pairs/18640 calls/1481 bins。最终工具从两组全部90份正式回执生成对应10/20scope特征TOML，没有筛掉样本。这里是CPU计划重放和计时协议验证，不是新增GPU速度证明。
 
 证据`data/experiments/ecm_tune_workload_20261010/`：`cpu_protocol/result.json`、`m4423_final/`、`wide5872_final/`；性能TOML不含路径/二进制哈希，原始输入和工具身份另存evidence.json。用于对照的NTT文件只测N=65536/131072，匹配设备UUID/SM/runtime/driver/fixed模式，却只覆盖5872组78306/6360924个逻辑pairs，仍缺12种NTT长度；batch1与生产slice、多阶段准备/carry/S4差异尚未标定。已同步AUTO_B2、工具入口和TODO；下一步补齐策略与批量预计算、互斥阶段计时、冷启动边界及独立完整曲线留出，不由上述特征宣布组合模型已实现。
+
+### 生产B1完成与组内拟合复用
+
+Stage1原handle完整结束，8批36曲线通过普通GMP末点与checksum复核；M521/B1=10e6/lcm/batch1中位数210.324112 s/curve、batch8为44.357074。已发布格式1性能文件，sha=`6fe7d349450742807aac0dddee55302560d53e33855f8dd227fe0d9f9cbbadb9`，没有用部分计时投影。1秒NVML中2240个GPU1利用率≥80%的样本SM均1800MHz、功率中位数12.13 W；只说明本次小batch条件，不能推广满卡吞吐。
+
+将B2资格检查拆为`prepare_b2_model`和请求求值。Auto B2每组锚点拟合一次，复用有限非负系数、留一误差/MAD；精确点、不合格组、端点/外推、范围限制与实际free/联合显存仍按原合同。单请求wrapper保留区间外快速拒绝，不用“缓存”跨范围或持久化准入状态。加入CPU fixture完整候选输出/纯构造计时，使用同一caller及旧冻结头文件为基线。56组、17442个候选逐字段/顺序完全一致；三组有预测范围CPU构造降至旧值12.33%…17.74%，三精确点无拟合收益。CPU成本不包括GPU查询、联合内存规划或曲线，不作为完整提速宣称。13素数证书/点、10等级、预测、Auto、合并、Stage1 reader回归通过。
+
+顺序跟进脚本先持有既有Stage1父进程句柄；成功退出且profile/36末点复核后才编译与测Stage2，未因marker文件或观测缺失重复启动。首次收集器使用旧PowerShell且按UTF8解码其本地编码输出，打印到GBK stdout时失败；只读进程查询确认编译已终止后才继续。最小复现确认GBK打印U+FFFD失败、UTF8通过，以及旧PowerShell缺Get-FileHash而当前pwsh可用。换正确pwsh/UTF8并用新目录继续；旧日志/状态保留，不修改算法、资格门限或原始样本。
+
+最终HostOnly22.5秒，生产exe SHA=`d1d1946e927799c21bec4f16951069179bfb0e88ec2bc13fdb63919dc67e0b30`，56依赖/current/冻结快照一致，CUDA对象未改。同B1生产save完成两D×五B2各暖机1+正式3的40曲线，10scope，无跳过。D60060线性I最大留一4.794%合格，D120120不合格且仅保留精确点。真实batch8 T1独立收益工具复测10锚点×4=40曲线，自动选26e9/D120120/普通模数，实测0.533192/估计0.534010秒，10候选最大误差7.636%，收益损失0，范围上界平台。score仍是K/[T1+R·引擎T2]；Stage2进程中位数1.081551秒另列，未假装包含驱动成本或全局范围最优。
+
+runtime工具允许未提供choose12成本文件时明确跳过该模式接受检查，保持其缺失scope拒绝；生产B1通过2计划/13调用/3完整曲线及INI私有队列重启不重复。已有B1=20的choose12文件另实测4计划/15调用/3曲线，报告choose12_verified=true，未用缺失数据作choose12标定。首次调用误写成本文件名在启动GPU前失败，保留目录；改用实际stage1_lcm/stage1_choose12文件后在新目录验收。最终86条Stage2 raw审计160992 mandatory/385444 GMP checks，bad0。
+
+证据`data/experiments/ecm_tune_production_auto_20261010/`：`execution/cache_comparison/`、失败`execution/production_build.log`、`encoding_probe/`、成功`execution_resume/`、`production_runtime/`、`choose12_runtime_final/`及`final_audit/result.json`。原始40曲线tune在`data/experiments/ecm_tune_23416_25986359/`，源码/二进制冻结在`build_cuda_cmake/ecm_model_cache_final_20261010/`。生成配置6文件与diff核对通过；AUTO_B2、性能及TODO同步。剩余完整目标不缩小：更大D/B2与生产位宽/预算、choose12/余因子/实际大batch成本，独立更广收益排名，NTT批量及互斥阶段组合、驱动冷启动和非驻留/G1路径。

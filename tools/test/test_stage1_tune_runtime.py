@@ -13,15 +13,17 @@ ROOT=Path(__file__).resolve().parents[2]
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    for key in ['exe','ecm-profile','stage1-profile','choose12-profile','save','output']:
+    for key in ['exe','ecm-profile','stage1-profile','save','output']:
         p.add_argument('--'+key,type=Path,required=True)
+    p.add_argument('--choose12-profile',type=Path,help='optional matching choose12 cost profile; tests enabled when supplied')
     p.add_argument('--device',type=int,required=True)
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
-    paths=[a.exe,a.ecm_profile,a.stage1_profile,a.choose12_profile,a.save]
+    paths=[a.exe,a.ecm_profile,a.stage1_profile,a.save]
+    if a.choose12_profile:paths.append(a.choose12_profile)
     sha=lambda path:hashlib.sha256(path.read_bytes()).hexdigest()
     identity={str(path.resolve()):sha(path) for path in paths}
     s1=tomllib.loads(a.stage1_profile.read_text(encoding='utf-8'))
-    c12=tomllib.loads(a.choose12_profile.read_text(encoding='utf-8'))
+    c12=tomllib.loads(a.choose12_profile.read_text(encoding='utf-8')) if a.choose12_profile else None
     assert {s['batch'] for s in s1['stage1'].values()}=={1,8}
     ini=out/'bench.ini';ini.write_text('verbose=false\nexponent=lcm\n',encoding='utf-8')
     common=[str(a.exe.resolve()),'--ini',str(ini),'--device',str(a.device),'--batch-mb','256',
@@ -48,9 +50,10 @@ def main():
         plans[name]=choice;return choice
     one=select('batch1');eight=select('batch8',8)
     assert eight['T1']<one['T1']
-    select('choose12',8,['--stage1-tune-profile',a.choose12_profile.resolve(),'--stage1-exponent','choose12'],c12,'choose12')
-    cfg=out/'choose12.ini';cfg.write_text('verbose=false\nexponent=choose12\n',encoding='utf-8')
-    select('ini_choose12',8,['--ini',cfg,'--stage1-tune-profile',a.choose12_profile.resolve()],c12,'choose12')
+    if a.choose12_profile:
+        select('choose12',8,['--stage1-tune-profile',a.choose12_profile.resolve(),'--stage1-exponent','choose12'],c12,'choose12')
+        cfg=out/'choose12.ini';cfg.write_text('verbose=false\nexponent=choose12\n',encoding='utf-8')
+        select('ini_choose12',8,['--ini',cfg,'--stage1-tune-profile',a.choose12_profile.resolve()],c12,'choose12')
     rows=run('provided_priority',[*auto,'--stage1-seconds-per-curve','3','--stage1-tune-profile',out/'absent.toml','--plan-only'])
     provided=next(r for r in rows if r.get('type')=='stage2_auto_plan')
     assert provided['T1']==3 and provided['T1_source']=='provided_per_curve' and 'stage1_profile_sha256' not in provided
@@ -87,7 +90,8 @@ def main():
     assert result.read_bytes()==before
     assert identity=={str(path.resolve()):sha(path) for path in paths}
     report=dict(passed=True,plans=plans,calls=calls,full_curves=3,arithmetic_bad=0,
-                native_stage1_cost=True,provided_cost_priority=True,ini_and_queue=True,source_files_unchanged=True)
+                native_stage1_cost=True,provided_cost_priority=True,ini_and_queue=True,source_files_unchanged=True,
+                choose12_verified=a.choose12_profile is not None)
     (out/'result.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(dict(passed=True,plans=len(plans),calls=len(calls),full_curves=3)))
 

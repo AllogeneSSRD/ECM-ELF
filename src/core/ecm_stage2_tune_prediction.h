@@ -1,5 +1,6 @@
 #pragma once
 #include "ecm_stage2_tune_ecm.h"
+#include <utility>
 
 namespace ecm_stage2 { namespace tune {
 constexpr double b2_holdout_error_limit=0.08;
@@ -17,15 +18,24 @@ inline bool predicts_b2(const EcmProfile &profile) {
     const auto i=profile.profile.find("prediction_model");
     return i!=profile.profile.end() && i->second==std::string("\"")+b2_prediction_model+"\"";
 }
+// Qualification depends only on the anchors, not on the requested B2. Retain
+// coefficients per caller-owned group so an Auto B2 grid does not repeat every
+// leave-one-out fit. This carries no device/free-memory admission state.
+struct B2Model {
+    double fixed=0,rate=0;
+    Word d=0;
+    B2Prediction evidence;
+    bool qualified=false;
+};
 // A performance estimate, never a mathematical or memory admission proof.
 // All source scopes have already passed EcmProfile's independent validation.
-inline bool predict_b2(std::vector<const Fields*> samples,Word b2,B2Prediction &out) {
-    out=B2Prediction{};
+inline bool prepare_b2_model(std::vector<const Fields*> samples,B2Model &model) {
+    model=B2Model{};
     if(samples.size()<3 || samples.size()>128)return false;
     std::sort(samples.begin(),samples.end(),[](const Fields *a,const Fields *b){return uint(*a,"b2")<uint(*b,"b2");});
     const auto scope=b2_scope(*samples.front());
     const Word low=uint(*samples.front(),"b2"),high=uint(*samples.back(),"b2"),d=uint(*samples.front(),"d");
-    if(b2<=low || b2>=high)return false;
+    if(!d)return false;
     std::vector<double> x,y;double noise=0;
     Word previous=0;
     for(const auto *sample:samples) {
@@ -52,8 +62,26 @@ inline bool predict_b2(std::vector<const Fields*> samples,Word b2,B2Prediction &
     }
     if(relative>b2_holdout_error_limit)return false;
     double fixed=0,rate=0;if(!fit(samples.size(),fixed,rate))return false;
-    const auto points=b2/d+2;const auto seconds=fixed+rate*(double)points;
+    model.fixed=fixed;model.rate=rate;model.d=d;
+    model.evidence={0,noise,error,relative,low,high,(Word)samples.size()};
+    model.qualified=true;return true;
+}
+inline bool predict_b2(const B2Model &model,Word b2,B2Prediction &out) {
+    out=B2Prediction{};
+    if(!model.qualified || b2<=model.evidence.low || b2>=model.evidence.high)return false;
+    const auto points=b2/model.d+2;const auto seconds=model.fixed+model.rate*(double)points;
     if(!std::isfinite(seconds) || !(seconds>0))return false;
-    out={seconds,noise,error,relative,low,high,(Word)samples.size()};return true;
+    out=model.evidence;out.seconds=seconds;return true;
+}
+inline bool predict_b2(std::vector<const Fields*> samples,Word b2,B2Prediction &out) {
+    out=B2Prediction{};
+    if(samples.size()<3 || samples.size()>128)return false;
+    Word low=uint(*samples.front(),"b2"),high=low;
+    for(const auto *sample:samples) {
+        low=std::min(low,uint(*sample,"b2"));high=std::max(high,uint(*sample,"b2"));
+    }
+    if(b2<=low || b2>=high)return false;
+    B2Model model;
+    return prepare_b2_model(std::move(samples),model) && predict_b2(model,b2,out);
 }
 } }
