@@ -111,6 +111,10 @@ TOML格式3按`[profile]`、`[device]`、`[policy]`、`[policy.environment]`、`
 
 GPU频率、功耗和背景负载属于测量条件，应在相同设置下调优和使用；改变设置后重新测量。当前profile的设备/策略匹配不验证这些动态条件。`stage2_plan`中的legacy耗时估计与`tune_selection`中的成本分别保留，tune排名使用后者。
 
+### NTT工作量预计算
+
+CPU工具`analyze_stage2_tune_workload.py`从完整tune的冻结计划与正式回执生成可读的工作量TOML，按阶段/NTT长度/物理分块统计逻辑乘法和输出规模，并保留配对计时。可与同设备的单slice NTT实测对照，但当前输出不是成本profile，也不参与生产排名：NTT运行策略、批量吞吐、互斥阶段成本及独立留出精度尚未完成资格检查。不能把field convolution iter/s直接换成完整曲线速度，也不能再将其加入已包含NTT的阶段计时。用法和单位见[调优工作量与阶段特征](../../tools/bench/README_STAGE2_CARRIER_PLAN.md#调优工作量与阶段特征)。
+
 ### B2区间成本预测
 
 完整ECM tune发布`prediction_model="linear_giant_points_v1"`。旧profile未声明该字段时只使用精确实测点；未知模型名报错。合并保留已声明的模型，但每个输入位宽/算术/B1/D组仍独立检查资格。同组已有请求B2的实测点时，采用该实测点。

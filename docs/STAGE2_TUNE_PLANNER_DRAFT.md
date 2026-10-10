@@ -191,3 +191,13 @@ M4423有效B1=1000 save完成两D、五B2各预热1+正式3，共40条完整Stag
 证据目录`data/experiments/ecm_stage1_production_tune_20261010/`：`reference_tests/`、`small_native/`、`small_native.toml`、`reader_regression/`、`production_command.json`、`production_driver.log`、`production_telemetry.csv`及仍在运行的`m521_b10m/`。运行handle保存在当前任务，生产job未结束前不同时启动GPU1 Stage2计时、不修改collector或参考二进制。
 
 同时准备`validate_stage2_tune_auto_profit.py`：读取真实T1并以完整曲线交错复验profile锚点及自动选中B2/D/承载，独立计算K/[T1+R·T2]，预设时间8%、有限候选收益排名损失5%门限；每点暖机1次+正式3次，保留完整原始数据及另列的进程墙钟。CPU收益公式/倍率/七种非法成本检查与语法检查通过，完整GPU流程尚未验收，暂不写入已通过业务规则。该有限候选比较不声称连续范围或所有B2的全局最优；后续必须用同B1 Stage2 tune成本和实际生产save验收后再提交性能结论。
+
+### 冻结计划的NTT工作量特征
+
+生产Stage1 job保持原handle运行；本阶段先完成CPU侧特征工具，不编译、不并行启动GPU1工作，不修改当前collector/参考二进制。M521/B1=10e6/lcm/batch1的三个正式进程墙钟分别为210.325151、210.324112、210.287599秒/curve，末点已核对；batch8的独立GMP sigma27…33参考已完成，当前batch8暖机仍在运行。整体profile尚未发布，不能将该部分数据宣布为完整标定通过。
+
+新增`analyze_stage2_tune_workload.py`从原生request_program及S4形状提取按phase/N/slices分箱的逻辑多项式pairs、物理calls、输出系数、N和N·log₂N特征。中间G批次按repeat压缩累计，分块公式独立实现并核对原生各阶段groups/pairs/chunks。完整正式回执配对保留，init+main核对total；其他计时仍保留legacy_overlapping合同。NTT单slice数据只提供串行参照和缺失长度，不作为实际生产批量耗时或生产成本profile；策略/批量/独立留出未校准时固定ranking_qualified=false，不将NTT再加入已含NTT的ECM阶段计时。
+
+CPU门禁通过手算满/尾块、chunk上限、万亿次repeat压缩、30个错误输入拒绝、CLI成功roundtrip及缺少scope/错误回执/设备不符的3个拒绝。已有M4423/B1=1000与5872-bit M6011余因子/B1=20的30份plan经独立密集请求重放，通过且与原生phase总数一致：前者989701 pairs/2863 calls/757 bins，后者6360924 pairs/18640 calls/1481 bins。最终工具从两组全部90份正式回执生成对应10/20scope特征TOML，没有筛掉样本。这里是CPU计划重放和计时协议验证，不是新增GPU速度证明。
+
+证据`data/experiments/ecm_tune_workload_20261010/`：`cpu_protocol/result.json`、`m4423_final/`、`wide5872_final/`；性能TOML不含路径/二进制哈希，原始输入和工具身份另存evidence.json。用于对照的NTT文件只测N=65536/131072，匹配设备UUID/SM/runtime/driver/fixed模式，却只覆盖5872组78306/6360924个逻辑pairs，仍缺12种NTT长度；batch1与生产slice、多阶段准备/carry/S4差异尚未标定。已同步AUTO_B2、工具入口和TODO；下一步补齐策略与批量预计算、互斥阶段计时、冷启动边界及独立完整曲线留出，不由上述特征宣布组合模型已实现。

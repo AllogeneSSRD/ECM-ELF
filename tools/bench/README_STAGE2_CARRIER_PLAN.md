@@ -36,6 +36,18 @@
 
 NTT JSON version2 提供 exact_allocation_events、fuse_layouts、物理分配/释放与 grouped 计数。计数是成功前缀，不含未来 close 或 refusal 后的 per-call fallback。CPU allocator不证明 CUDA物理分配/free或真实驻留。
 
+### 调优工作量与阶段特征
+
+`analyze_stage2_tune_workload.py`在CPU上读取完整ECM tune的原始计划和正式回执，不启动CUDA。参数为`--evidence <原始调优目录>`、`--profile <对应完整ECM TOML>`、`--output <新目录>`，可选`--ntt-profile <NTT TOML>`。输出目录使用`data/experiments/`。
+
+输出`workload.toml`按阶段、NTT长度和每次调用的slice数保留逻辑多项式乘法数、物理调用数、输出系数数、N与N·log₂N工作量。中间G批次按repeat直接累计，不展开全部批次；分块遵循原始plan的packing形状、batch预算、buffer数和chunk上限，独立核对每个阶段原生groups/pairs/chunks总数。适用范围为当前多G、条件驻留、完整次数fold请求程序；不描述G1或owner回退。
+
+每次正式曲线的init/main及其他阶段计时以配对数组保留，核对init+main=引擎total；其他阶段计时仍标记为`legacy_overlapping`，不相加阶段中位数。文件必须覆盖对应性能profile的全部样本，缺少回执或不一致不能发布成功输出。原始文件、分析工具的路径和SHA只记录在另一个`evidence.json`，性能TOML不记录这些身份信息。
+
+可选NTT文件须为已完成、通过算术检查的batch=1 field convolution实测，设备UUID、SM、CUDA和固定算术编译条件一致。记录已覆盖长度、缺失长度、单slice秒数和“逻辑pairs×单slice秒数”的串行参照特征。后者不含packing/carry/S4归约、点乘、树准备、传输、自检和冷启动，也没有生产批量并行校准；当前NTT文件未完整声明运行策略。因此输出明确`ntt_policy_qualified=false`、`ranking_qualified=false`，不进入生产D/承载/Auto B2成本排名，不将串行参照相加到完整曲线或阶段计时。
+
+`test_stage2_tune_workload.py --output <新目录> [--evidence <原始调优目录>]`执行CPU门禁：手算满/尾分块、chunk上限、万亿次repeat压缩、错误协议拒绝及已保存原生plan的独立密集请求重放。它不证明GPU真实调用计数或NTT批处理吞吐；后者需要运行审计和独立完整曲线留出验证。
+
 当前事件矩阵173 cases、47,936 events、168,166 assertions，故意修改释放顺序的模型被拒绝。重复压缩依赖完整保留状态，observer 不生成所有跳过重复事件。
 
 ## S4 与 giant
