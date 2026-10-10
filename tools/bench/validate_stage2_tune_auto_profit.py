@@ -87,7 +87,7 @@ def main():
                 report['memory_rejected'].append(dict(b2=b2,d=d,carrier=carrier,reason=pick['reason']));continue
             assert plan['curve_workspace_memory']['initial_free_snapshot_fits']
             group=next(values for key,values in groups.items() if key[-1]==d and key[2]==carrier)
-            prediction=fixed.predict(group,b2,profile['profile'].get('prediction_model')=='linear_giant_points_v1')
+            prediction=fixed.predict(group,b2,profile['profile'].get('prediction_model'))
             assert prediction is not None,'native accepted an independently ineligible candidate'
             native=pick.get('estimated_seconds',pick.get('median_seconds'));assert math.isclose(native,prediction['seconds'],rel_tol=1e-10)
             assert math.isclose(pick['rank_seconds'],prediction['rank'],rel_tol=1e-10)

@@ -2,11 +2,13 @@
 #include "ecm_stage2_tune_format.h"
 #include "ecm_stage2_cost_profile.h"
 #include "ecm_stage2_phase_times.h"
+#include "ecm_stage2_giant_work.h"
 #include <gmp.h>
 #include <limits>
 
 namespace ecm_stage2 { namespace tune {
-constexpr const char *b2_prediction_model="linear_giant_points_v1";
+constexpr const char *b2_prediction_model="giant_route_cost_v2";
+constexpr const char *legacy_b2_prediction_model="linear_giant_points_v1";
 struct EcmEffort {
     std::vector<unsigned> exponents;
     std::vector<Word> d,b2;
@@ -106,6 +108,10 @@ inline const std::string &required(const Fields &f,const char *key) {
 }
 inline Word uint(const Fields &f,const char *key){return cost::integer(required(f,key));}
 inline double real(const Fields &f,const char *key){return cost::number(required(f,key));}
+inline bool matches_giant_work_policy(const Fields &sample,Word chunk,Word minimum,bool force) {
+    return !sample.count("giant_work_model") || (uint(sample,"giant_chunk_points")==chunk &&
+        uint(sample,"giant_chain_min")==minimum && (uint(sample,"giant_force_ladder")!=0)==force);
+}
 inline std::vector<double> array(const std::string &s) {
     if(s.size()<3 || s.front()!='[' || s.back()!=']')throw std::runtime_error("empty/invalid ECM tune array");
     std::vector<double> v;size_t a=1;
@@ -185,6 +191,20 @@ inline void validate_sample(const Fields &f) {
         throw std::runtime_error("inconsistent ECM tune repetitions/statistics");
     for(const char *phase:{"init_seconds","main_seconds","giant_seconds","gtrees_seconds","fold_seconds","descent_seconds","inverse_seconds","accum_seconds"})real(f,phase);
     validate_paired_costs(f,v);
+    if(f.count("giant_work_model")) {
+        if(required(f,"giant_work_model")!="\"chunk_routes_v1\"" || uint(f,"giant_force_ladder")>1)
+            throw std::runtime_error("unsupported giant work contract");
+        GiantWork work;
+        const auto chunk=uint(f,"giant_chunk_points");
+        if(!chunk || chunk%leaves || !giant_work(uint(f,"giant_points"),d,chunk,
+            uint(f,"giant_chain_min"),uint(f,"giant_force_ladder")!=0,work) ||
+            uint(f,"giant_chain_points")!=work.chain_points || uint(f,"giant_ladder_points")!=work.ladder_points ||
+            uint(f,"giant_chain_chunks")!=work.chain_chunks || uint(f,"giant_ladder_chunks")!=work.ladder_chunks ||
+            uint(f,"giant_ladder_steps")!=work.ladder_steps)
+            throw std::runtime_error("inconsistent giant route work");
+    } else for(const auto &field:f)if(field.first.compare(0,12,"giant_chain_")==0 ||
+        field.first.compare(0,13,"giant_ladder_")==0 || field.first=="giant_chunk_points" || field.first=="giant_force_ladder")
+        throw std::runtime_error("giant route work missing contract");
 }
 inline std::string ecm_table(const Fields &f,size_t index) {
     validate_sample(f);std::ostringstream out;out<<"\n[ecm.sample_"<<index<<"]\n";
@@ -231,7 +251,8 @@ struct EcmProfile {
         if(uint(p.profile,"effort_level")<1 || uint(p.profile,"effort_level")>10 ||
            !uint(p.profile,"repeats") || uint(p.profile,"repeats")>1000 || uint(p.profile,"warmups")!=1)
             throw std::runtime_error("invalid ECM tune effort metadata");
-        if(p.profile.count("prediction_model") && required(p.profile,"prediction_model")!=std::string("\"")+b2_prediction_model+"\"")
+        if(p.profile.count("prediction_model") && required(p.profile,"prediction_model")!=std::string("\"")+b2_prediction_model+"\"" &&
+           required(p.profile,"prediction_model")!=std::string("\"")+legacy_b2_prediction_model+"\"")
             throw std::runtime_error("unsupported ECM tune prediction model");
         if(!cost::hex(required(p.device,"uuid_hex").substr(1,32),32) || required(p.device,"uuid_hex").size()!=34)
             throw std::runtime_error("invalid ECM tune device");

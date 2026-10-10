@@ -52,9 +52,8 @@ inline std::vector<AutoCandidate> auto_candidates(const std::vector<const Fields
         if(lo>hi)continue;
         std::set<Word> points;
         for(const auto *s:anchors)if(uint(*s,"b2")>=lo && uint(*s,"b2")<=hi)points.insert(uint(*s,"b2"));
-        B2Model model;B2Prediction qualified;
-        const Word interior=first+(last-first)/2;
-        const bool model_ready=opted && prepare_b2_model(anchors,model) && predict_b2(model,interior,qualified);
+        B2Model model;
+        const bool model_ready=opted && prepare_b2_model(anchors,model);
         if(model_ready) {
             points.insert(lo);points.insert(hi);
             for(int index=1;index<64;++index) {

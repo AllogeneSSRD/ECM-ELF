@@ -15,6 +15,7 @@ import re
 import statistics
 import subprocess
 import tomllib
+from stage2_tune_route_cost import predict_route
 
 ROOT = Path(__file__).resolve().parents[2]
 TIME_ERROR_LIMIT = .08
@@ -23,49 +24,14 @@ SCOPE = ('target_bits', 'arithmetic_bits', 'carrier_exponent', 'modulus_kind', '
 
 
 def predict(samples, b2, opted):
-    """Independent reference using Python's linear regression implementation."""
+    """Exact measurements or independent NumPy route regression."""
     exact = next((s for s in samples if s['b2'] == b2), None)
     if exact:
         if not exact['fold_resident'] or not exact['frontier_resident']:
             return None
         return dict(model='measured_exact_scope_v1', seconds=exact['median_seconds'],
                     rank=exact['median_seconds']+2*exact['mad_seconds'])
-    ordered = sorted(samples, key=lambda s: s['b2'])
-    if not opted or not 3 <= len(ordered) <= 128:
-        return None
-    if not ordered[0]['b2'] < b2 < ordered[-1]['b2']:
-        return None
-    x = [s['giant_points'] for s in ordered]
-    y = [s['median_seconds'] for s in ordered]
-    if any(not s['fold_resident'] or not s['frontier_resident'] for s in ordered):
-        return None
-    if any(a >= b for a, b in zip(x, x[1:])) or x[-1] < 2*x[0] or x[-1] > 2**53:
-        return None
-
-    def fit(xx, yy):
-        slope, intercept = statistics.linear_regression(xx, yy)
-        if not all(math.isfinite(t) and t >= 0 for t in (slope, intercept)):
-            return None
-        return slope, intercept
-
-    errors = []
-    for index in range(len(x)):
-        coefficients = fit(x[:index]+x[index+1:], y[:index]+y[index+1:])
-        if coefficients is None:
-            return None
-        slope, intercept = coefficients
-        errors.append(abs(slope*x[index]+intercept-y[index]))
-    relative = max(e/t for e, t in zip(errors, y))
-    if relative > TIME_ERROR_LIMIT:
-        return None
-    coefficients = fit(x, y)
-    if coefficients is None:
-        return None
-    slope, intercept = coefficients
-    seconds = slope*(b2//ordered[0]['d']+2)+intercept
-    noise = max(s['mad_seconds'] for s in ordered)
-    return dict(model='linear_giant_points_v1', seconds=seconds,
-                rank=seconds+max(errors)+2*noise, fit_relative_error=relative)
+    return predict_route(samples, b2, opted)
 
 
 def main():
@@ -157,7 +123,7 @@ def main():
             holdout = dict(b2=b2, candidates=[], ineligible=[], complete=False)
             report['holdouts'].append(holdout)
             for key, group in groups.items():
-                prediction = predict(group, b2, profile['profile'].get('prediction_model') == 'linear_giant_points_v1')
+                prediction = predict(group, b2, profile['profile'].get('prediction_model'))
                 d, carrier = key[-1], key[2]
                 if prediction is None:
                     holdout['ineligible'].append(dict(d=d, carrier=carrier, reason='fit_not_qualified'))
@@ -195,7 +161,7 @@ def main():
             assert all(c['relative_error'] <= TIME_ERROR_LIMIT for c in candidates), (b2,candidates)
             rows = run(f'holdout_{index}_automatic_plan', b2, ['--plan-only'])
             choice = next(x for x in rows if x.get('type') == 'tune_selection')
-            assert choice['selected'] and choice['model'] == 'linear_giant_points_v1'
+            assert choice['selected'] and choice['model'] == profile['profile']['prediction_model']
             selected = next(c for c in candidates if c['d'] == choice['D'] and c['carrier'] == choice['carrier_exponent'])
             assert math.isclose(selected['prediction']['rank'], min(c['prediction']['rank'] for c in candidates), rel_tol=1e-10)
             fastest = min(c['actual_median'] for c in candidates)

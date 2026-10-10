@@ -5,6 +5,9 @@ import math
 from pathlib import Path
 import subprocess
 import tomllib
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bench'))
+from stage2_tune_route_cost import MODEL, annotate
 
 
 def main():
@@ -14,7 +17,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=False)
     template=tomllib.loads(args.valid.read_text(encoding='utf-8'))
-    template['profile']['prediction_model']='linear_giant_points_v1'
+    template['profile']['prediction_model']=MODEL
     template['profile']['max_batches']=0
     bounds=[26000000000,52000000000,104000000000]
     sample=template['ecm']['sample_0']
@@ -26,7 +29,7 @@ def main():
         for key,fraction in {'init_seconds':.2,'main_seconds':.8,'giant_seconds':.12,'gtrees_seconds':.4,
                              'fold_seconds':.12,'descent_seconds':.05,'inverse_seconds':.05,'accum_seconds':.01}.items():
             value[key]=seconds*fraction
-        samples.append(value)
+        samples.append(annotate(value,172800000))
     counts={'accepted':0,'rejected':0}
     def write(name,values=samples,opted=True):
         data=json.loads(json.dumps(template))
@@ -88,8 +91,21 @@ def main():
     invoke('below',lo=bounds[0]-1,success=False)
     invoke('above',hi=bounds[-1]+1,success=False)
     invoke('reversed',lo=80000000000,hi=70000000000,success=False)
+    # Qualification is per group, eligibility per query. An unseen ladder at
+    # the group's midpoint must not disable every other chain-only grid point.
+    chain_values=[]
+    for i in [100000,230000,275600]:
+        value=dict(samples[0]);seconds=.1+i*.000001
+        value.update(b2=(i-2)*value['d'],giant_points=i,seconds=[seconds-.001,seconds,seconds+.001],
+                     median_seconds=seconds,mad_seconds=.001)
+        chain_values.append(annotate(value,172800))
+    path=write('midpoint_unseen_ladder',chain_values)
+    grid=json.loads(subprocess.check_output([str(args.fixture.resolve()),'--auto-grid',str(path),
+        '3','0','0','1'],text=True))
+    assert len(grid)>len(chain_values) and any(c['predicted'] for c in grid)
     report=dict(counts,independent_benefit=True,dense_reference_score_ratio=middle['score']/best_dense,
-                stage1_and_ratio_change_selection=True,no_extrapolation=True,old_profile_exact_only=True)
+                stage1_and_ratio_change_selection=True,no_extrapolation=True,old_profile_exact_only=True,
+                unseen_midpoint_keeps_eligible_grid=True)
     (out/'result.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(report))
 

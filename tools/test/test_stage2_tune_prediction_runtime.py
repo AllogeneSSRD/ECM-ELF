@@ -25,10 +25,12 @@ def main():
     sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
     identities = {str(path):sha(path) for path in paths}
     profile = tomllib.loads(a.profile.read_text(encoding='utf-8'))
+    assert profile['profile']['prediction_model']=='giant_route_cost_v2'
     sources = [s for s in profile['ecm'].values() if s['d']==60060]
     assert len(sources) == 5
     assert {s['target_bits'] for s in sources} == {521}
     assert {s['b1'] for s in sources} == {20}
+    assert all(s['giant_ladder_steps']==0 for s in sources), 'this fixture expects chain-only calibration'
     ini = out/'bench.ini'
     ini.write_text('verbose=false\nstage2_debug_log=false\n', encoding='utf-8')
     common = [str(a.exe.resolve()), '--ini', str(ini), '--save', str(a.save.resolve()),
@@ -52,7 +54,7 @@ def main():
     assert exact['selected'] and exact['model']=='measured_exact_scope_v1'
     assert exact['D']==60060 and 'estimated_seconds' not in exact
     missing = out/'no_prediction.toml'
-    missing.write_text(a.profile.read_text(encoding='utf-8').replace('prediction_model = "linear_giant_points_v1"\n',''),encoding='utf-8')
+    missing.write_text(a.profile.read_text(encoding='utf-8').replace('prediction_model = "giant_route_cost_v2"\n',''),encoding='utf-8')
     legacy,_ = select('missing_optin',5200000000,['--tune-profile',str(missing)])
     assert not legacy['selected']
     rejected,_ = select('rejected_three_anchor_fit',5200000000,['--tune-profile',str(a.rejected_profile.resolve())])
@@ -72,7 +74,7 @@ def main():
     for index,b2 in enumerate([5200000000,13000000000,20000000000]):
         assert b2 not in {s['b2'] for s in sources}
         choice,plan = select('holdout_plan_'+str(index),b2)
-        assert choice['selected'] and choice['model']=='linear_giant_points_v1'
+        assert choice['selected'] and choice['model']=='giant_route_cost_v2'
         assert choice['D']==plan['D']==60060 and plan['B2']==b2 and plan['I']==b2//60060+2
         assert choice['fit_samples']==5 and choice['fit_max_relative_error']<=.08
         assert choice['fit_b2_min']<b2<choice['fit_b2_max']
@@ -83,7 +85,7 @@ def main():
         run('holdout_driver_'+str(index),['--b2',str(b2),'--curves','1','--results',str(result_path),'--log',str(log)])
         result = json.loads(result_path.read_text(encoding='utf-8'))
         assert result['status']=='stage2_completed' and result['requested_D']==0
-        assert result['B2']==b2 and result['tune_plan']['model']=='linear_giant_points_v1'
+        assert result['B2']==b2 and result['tune_plan']['model']=='giant_route_cost_v2'
         assert result['hits']==result['bad_factors']==0
         text = log.read_text(encoding='utf-8')
         assert 'gmp_selftest_bad=0' in text and 'gmp_check_bad=0' in text

@@ -29,6 +29,7 @@ def main():
     sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
     identities={str(p):sha(p) for p in sources}
     profile=tomllib.loads(args.profile.read_text(encoding='utf-8'))
+    assert profile['profile']['prediction_model']=='giant_route_cost_v2'
     assert all(s['target_bits']==521 and s['b1']==20 for s in profile['ecm'].values())
     ini=out/'bench.ini';ini.write_text('verbose=false\nstage2_debug_log=false\n',encoding='utf-8')
     policy=profile['policy']
@@ -73,7 +74,7 @@ def main():
     adjusted=choice('adjusted',['--stage2-ratio-adjust','2'])
     assert adjusted['B2']<default['B2'] and adjusted['ratio_adjust']==2
     fixed=choice('fixed_unseen',['--auto-min-b2','5200000000','--auto-max-b2','5200000000'])
-    assert fixed['B2']==5200000000 and fixed['model']=='linear_giant_points_v1' and fixed['range_limited']
+    assert fixed['B2']==5200000000 and fixed['model']=='giant_route_cost_v2' and fixed['range_limited']
     locked=choice('fixed_d',['--d','30030'])
     assert locked['D']==30030 and locked['model']=='measured_exact_scope_v1'
     ordinary=choice('fixed_ordinary',['--carrier-exponent','0'])
@@ -97,7 +98,7 @@ def main():
     run('legacy_unchanged',['--save',args.save.resolve(),'--auto-b2','--cost-profile',out/'absent.cprof','--plan-only'],
         False,'no calibrated cost profile for selected NTT add/sub')
     untagged=out/'no_model.toml'
-    untagged.write_text(args.profile.read_text(encoding='utf-8').replace('prediction_model = "linear_giant_points_v1"\n',''),encoding='utf-8')
+    untagged.write_text(args.profile.read_text(encoding='utf-8').replace('prediction_model = "giant_route_cost_v2"\n',''),encoding='utf-8')
     choice('no_model_inside',['--tune-profile',untagged,'--auto-min-b2','5200000000','--auto-max-b2','5200000000'],
            success=False,reason='no measured or qualified')
     derived=out/'synthetic_arena_refusal.toml'

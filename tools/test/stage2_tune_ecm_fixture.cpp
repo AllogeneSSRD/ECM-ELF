@@ -7,7 +7,16 @@
 int main(int argc,char **argv) {
     try {
         namespace t=ecm_stage2::tune;
-        if(argc==14 && std::string(argv[1])=="--phases") {
+        if(argc==6 && std::string(argv[1])=="--work-policy") {
+            const auto profile=t::EcmProfile::load(argv[2]);
+            std::cout<<(t::matches_giant_work_policy(profile.samples.front(),std::stoull(argv[3]),
+                std::stoull(argv[4]),std::stoul(argv[5])!=0)?1:0)<<'\n';
+        } else if(argc==7 && std::string(argv[1])=="--giant-work") {
+            ecm_stage2::GiantWork w;
+            if(!ecm_stage2::giant_work(std::stoull(argv[2]),std::stoull(argv[3]),std::stoull(argv[4]),
+                std::stoull(argv[5]),std::stoul(argv[6])!=0,w))throw std::runtime_error("invalid giant work");
+            std::cout<<w.chain_points<<' '<<w.ladder_points<<' '<<w.chain_chunks<<' '<<w.ladder_chunks<<' '<<w.ladder_steps<<'\n';
+        } else if(argc==14 && std::string(argv[1])=="--phases") {
             ecm_stage2::timing::Boundaries b;
             double *fields[]={&b.shape,&b.init_begin,&b.baby_begin,&b.ftree_begin,&b.init_end,
                 &b.main_begin,&b.inverse_begin,&b.loop_begin,&b.loop_end,&b.accum_begin,&b.accum_end,&b.main_end};

@@ -60,6 +60,12 @@ S4 三个组件边界和 peak 不包含 NTT、giant、fold/frontier；giant 模�
 
 ## 验证与证据位置
 
+完整ECM tune另保存`chunk_routes_v1`分块工作量。`stage2_tune_route_cost.py`是独立Python参考，按整数分块和标量位数计算chain/ladder点数、分块数和ladder迭代量；NumPy回归核对原生`giant_route_cost_v2`成本。旧`linear_giant_points_v1`文件可读但只用于精确实测点。新模型不预测未测ladder分支、正ladder迭代量范围之外或纯ladder组；其他资格及8%/5%独立验收门限见[Auto B2](../../docs/architecture/AUTO_B2.md#b2区间成本预测)。
+
+`test_stage2_giant_work.py --fixture <fixture.exe> --prediction-dir <预测测试目录> --output <新目录>`逐点独立核对工作量与原生输出，并比较NumPy和原生成本；这是CPU模型验证，不替代GPU完整曲线验证。
+
+`test_stage2_tune_route_policy_runtime.py --exe <生产exe> --profile <完整tune.toml> --save <save> --device <id> --output <新目录>`用plan-only验证实际分块策略：有效数据接受；合成修改容量、chain阈值或强制ladder后，固定B2拒绝复用该选型，Auto B2拒绝无匹配候选。它不执行曲线，不代替时间预测验收。实际运行的分块策略与实时显存准入分别检查。
+
 运行前冻结 exe、DLL、source closure、save、工具与 controls。CPU ledger、native plan、短/大 GPU算术和性能是不同范围，失败必须如实保留。重新构建/修改源码后不能把当前文件哈希冒充旧二进制来源。
 
 已完成事件/路由证据在 `data/stage2_ntt_events_20261009/` 与 `data/stage2_s4_program_20261009/`。它们属于组件规划门禁，没有新增大规模速度结论。完整联合执行器、driver free、回退和 D/Auto B2接入见 [TODO](../../docs/TODO.md)。

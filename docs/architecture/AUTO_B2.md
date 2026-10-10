@@ -125,19 +125,23 @@ CPU工具`analyze_stage2_tune_workload.py`从完整tune的冻结计划与正式�
 
 ### B2区间成本预测
 
-完整ECM tune发布`prediction_model="linear_giant_points_v1"`。旧profile未声明该字段时只使用精确实测点；未知模型名报错。合并保留已声明的模型，但每个输入位宽/算术/B1/D组仍独立检查资格。同组已有请求B2的实测点时，采用该实测点。
+完整ECM tune发布`prediction_model="giant_route_cost_v2"`。未声明预测模型或声明旧`linear_giant_points_v1`的profile仍可读取，只使用精确实测点；未知模型名报错。合并保留已声明的模型，但每个输入位宽/算术/B1/D组仍独立检查资格；缺少分块工作量的样本不能据此获得预测资格。同组已有请求B2的实测点时，采用该实测点。
 
-固定D的近似模型为T=α+βI，I=⌊B2/D⌋+2。只允许在同组3…128个驻留实测点之间预测，I严格递增且最大I至少为最小I的2倍；整数I必须能由double精确表示。最小二乘得到的α、β须有限且非负，每个点的留一预测相对误差均≤8%，全部检查通过后才拟合所有点。请求B2必须严格位于已测区间内部，端点只接受其精确实测结果。
+每个新样本以`giant_work_model="chunk_routes_v1"`记录点分块容量C、chain阈值、强制ladder策略，以及chain/ladder点数、分块数和ladder迭代量L。I=⌊B2/D⌋+2，按C划分满块与尾块；未强制ladder且块点数≥阈值时使用chain，否则使用ladder。L为全部ladder点标量iD的⌊log₂(iD)⌋之和，利用2的幂边界精确计数，不逐点枚举。reader重新计算这些字段，拒绝不一致的工作量或缺失合同。
 
-Auto B2每组锚点只执行一次资格检查和拟合，在本次选择中复用α、β、留一误差和MAD；各B2仍独立检查范围并按整数I计算成本。它不持久化模型、不复用其他位宽/B1/D的系数，也不缓存显存准入结果。未声明模型或不合格的组继续只使用精确点，资格门限、成本保护项及候选排序不变。实现入口为`prepare_b2_model`与`auto_candidates`。
+固定D的近似模型为T=α+βI+γL+δQ，Q为ladder分块数，系数有限且非负。同组需3…128个驻留实测点，I严格递增且最大I至少为最小I的2倍；整数特征须能由double精确表示，分块策略完全相同。只有chain的组采用α+βI；混合组至少7个点，且无ladder与含ladder的样本分别至少3个。纯ladder组当前只使用精确点。非负最小二乘及每个点的留一预测相对误差≤8%检查通过后，才拟合所有点。请求B2严格位于实测区间内部，端点只接受精确实测结果；含ladder的请求还须在实测正L的最小/最大值之间，不预测未测ladder分支。
+
+Auto B2每组锚点只执行一次资格检查和拟合，在本次选择中复用系数、留一误差和MAD；各B2独立检查范围和分块特征。组内某个中点含未测ladder，不会使其他有资格的chain请求失去网格搜索。它不持久化模型、不复用其他位宽/B1/D的系数，也不缓存显存准入结果。未声明模型或不合格的组继续只使用精确点，误差门限、成本保护项及候选排序不变。实现入口为`prepare_b2_model`、`giant_work`与`auto_candidates`。
 
 输出使用`estimated_seconds`，并给出实测B2范围、点数、最大留一相对/绝对误差和最大MAD；不会将估计标为实测中位数。这些误差只描述已有样本，不是新请求的统计置信界或精度保证。尾树、分块与NTT形状台阶仍可能改变成本，当前没有位宽、B1、D或区间外外推；资格不满足则保留原选型。最终显存检查始终针对请求B2，不能复用锚点的内存准入结果。独立完整曲线验证见[性能说明](../performance/STAGE2.md#b2区间预测验证)。
 
-已知限制：giant短尾跨越chain/ladder阈值时，现有I线性模型仍可能通过锚点留一检查，却低估内部B2成本。5872-bit/B2=12e9/D60060的独立失败与短尾诊断见[配对阶段计时](../performance/STAGE2.md#完整tune的配对阶段计时)。该分支尚未加入当前模型，不能宣称整个已测区间均通过独立精度验证；后续需标定短尾成本并补齐独立留出。
+新样本在进入排名结果前，还核对请求的原生giant规划：分块容量、chain阈值及强制ladder策略必须与实测一致。固定B2选型不匹配时保留原路径；Auto B2没有匹配候选则明确失败。它与实时联合显存准入是独立检查，精确点也不能跳过新样本的分块策略检查。
+
+已知限制：分块特征不能消除G树批次、NTT形状、GPU占用率及驱动成本的所有台阶，留一检查仍不是独立区间精度证明。5872-bit/B1=20、两D及普通/承载6011的12e9/33e9独立四候选检查通过，最大时间误差2.820%、排名损失0；范围及证据见[giant短尾预测验证](../performance/STAGE2.md#giant短尾预测验证)。这不覆盖其他位宽、生产B1、预算、纯ladder或所有内部B2。旧I线性模型的失败证据保留，不能据CPU合成数据或两个留出点宣称通用精度。
 
 ### 独立候选排序验证
 
-[validate_stage2_tune_selection.py](../../tools/bench/validate_stage2_tune_selection.py)读取性能profile和一份有效Stage1 save，使用Python独立线性回归核对原生候选成本。参数为`--exe <file>`、`--profile <file>`、`--save <file>`、`--device <id>`、`--holdout-b2 <B2...>`、`--output <新目录>`；`--repeats <n>`默认2且至少2，`--min-candidates <n>`默认4且至少2，`--timeout <s>`默认1800。输出放在`data/experiments/`。该验证工具只接受save中以字面整数记录的N，不替代生产表达式解析器。
+[validate_stage2_tune_selection.py](../../tools/bench/validate_stage2_tune_selection.py)读取性能profile和一份有效Stage1 save，使用独立NumPy最小二乘与整数分块参考核对原生候选成本。参数为`--exe <file>`、`--profile <file>`、`--save <file>`、`--device <id>`、`--holdout-b2 <B2...>`、`--output <新目录>`；`--repeats <n>`默认2且至少2，`--min-candidates <n>`默认4且至少2，`--timeout <s>`默认1800。输出放在`data/experiments/`。该验证工具只接受save中以字面整数记录的N，不替代生产表达式解析器。
 
 每个holdout必须未出现在适用组的调优数据中。逐候选检查整除资格、预测资格和当前联合显存，再各运行一次预热及正式重复；实测中位数用于独立比较。每个可用候选的预测相对误差要求≤8%，自动选中候选的中位数相对实测最快候选损失要求≤5%；最后运行一条不指定D/承载的完整曲线，核对生产入口实际执行与原生选择一致。这里的最快只指本次合格候选集，不是所有D/算术的全局最优。无足够候选或任何门限/算术/驻留检查失败均保留证据并报告不合格，不删失败组、不改profile、不放宽门限。日志、回执和逐步汇总在新输出目录；性能文件本身仍不记录这些路径或二进制身份。
 
@@ -159,6 +163,7 @@ Auto B2每组锚点只执行一次资格检查和拟合，在本次选择中复�
 - [ecm_stage2_tune_ecm.h](../../src/core/ecm_stage2_tune_ecm.h)：完整Stage2等级、素数点准备、统计及TOML reader。
 - [ecm_stage2_phase_times.h](../../src/core/ecm_stage2_phase_times.h)：引擎互斥阶段边界及时间守恒检查。
 - [ecm_stage2_tune_prediction.h](../../src/core/ecm_stage2_tune_prediction.h)：B2分组、非负成本拟合及留一资格检查。
+- [ecm_stage2_giant_work.h](../../src/core/ecm_stage2_giant_work.h)：giant满块/短尾路线与ladder迭代量精确计数。
 - [ecm_stage2_tune_auto.h](../../src/core/ecm_stage2_tune_auto.h)：完整tune的Auto B2候选与收益排名。
 - [ecm_stage1_tune_profile.h](../../src/core/ecm_stage1_tune_profile.h)：完整Stage1成本reader及精确范围查询。
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：`run_ecm_tune`、`select_tuned`、`select_auto_tuned`和`curve_worker`。

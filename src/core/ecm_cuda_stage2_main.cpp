@@ -874,6 +874,18 @@ std::string curve_memory_record(const std::string &json) {
     const auto a=json.find("\"curve_workspace_memory\":{");if(a==json.npos)throw std::runtime_error("curve memory model unavailable");
     return json.substr(a,json.find("\"s4_memory\":",a)-a);
 }
+std::string giant_memory_record(const std::string &json) {
+    const auto a=json.find("\"giant_memory\":{");
+    if(a==json.npos)throw std::runtime_error("giant route plan missing");
+    return json.substr(a,json.find("\"model\":",a)-a);
+}
+bool matches_tuned_giant_policy(const ecm_stage2::tune::Fields &sample,const std::string &plan) {
+    if(!sample.count("giant_work_model"))return true;
+    const auto giant=giant_memory_record(plan);
+    return plan_scalar(giant,"valid")=="true" && ecm_stage2::tune::matches_giant_work_policy(sample,
+        u64(plan_scalar(giant,"chunk_points"),"planned giant chunk"),
+        u64(plan_scalar(giant,"chain_min"),"planned chain minimum"),plan_scalar(giant,"force_ladder")=="true");
+}
 std::vector<const ecm_stage2::tune::Fields*> matching_tune_samples(
     const ecm_stage2::tune::EcmProfile &profile,const Options &o,const Record &r) {
     namespace t=ecm_stage2::tune;
@@ -931,12 +943,13 @@ std::string select_tuned(Options &o,const Record &r) {
     // Predictions stay inside independently checked B2 anchors. Width/B1/D
     // and arithmetic remain scoped; real memory is checked for the requested B2.
     std::stable_sort(candidates.begin(),candidates.end(),[](const Candidate &a,const Candidate &b){return a.rank<b.rank;});
-    size_t rejected=0;
+    size_t rejected=0,route_rejected=0;
     for(const auto &candidate:candidates) {
         const auto &s=*candidate.sample;std::string plan;
         const auto d=t::uint(s,"d");const unsigned carrier=(unsigned)t::uint(s,"carrier_exponent");
         if(ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,o.b2,d,o.device,
             [](const char *p,void *ctx){*static_cast<std::string*>(ctx)=p;},&plan,carrier))throw std::runtime_error("tuned candidate planning failed");
+        if(!matches_tuned_giant_policy(s,plan)){++route_rejected;continue;}
         const auto memory=curve_memory_record(plan);
         if(plan_scalar(memory,"valid")!="true" || plan_scalar(memory,"finished")!="true" || plan_scalar(memory,"initial_free_snapshot_fits")!="true") {++rejected;continue;}
         o.d=d;o.carrier_exponent=carrier;
@@ -948,10 +961,12 @@ std::string select_tuned(Options &o,const Record &r) {
             <<",\"fit_b2_min\":"<<prediction.low<<",\"fit_b2_max\":"<<prediction.high<<",\"fit_samples\":"<<prediction.samples;
         else out<<",\"median_seconds\":"<<t::real(s,"median_seconds")<<",\"mad_seconds\":"<<t::real(s,"mad_seconds");
         out<<",\"rank_seconds\":"<<candidate.rank<<",\"candidates\":"<<candidates.size()<<",\"memory_rejected\":"<<rejected
+            <<",\"route_rejected\":"<<route_rejected
             <<",\"required_free_bytes\":"<<plan_scalar(memory,"required_free_bytes")<<",\"free_bytes\":"<<plan_scalar(plan,"free_bytes")
             <<",\"residency_guaranteed\":false}";return out.str();
     }
-    return fallback(candidates.empty()?"no_matching_measured_scope":"no_candidate_fits_current_memory");
+    return fallback(candidates.empty()?"no_matching_measured_scope":route_rejected?
+        "no_candidate_matches_current_giant_policy":"no_candidate_fits_current_memory");
 }
 std::string select_auto_tuned(Options &o,const Record &r) {
     namespace t=ecm_stage2::tune;
@@ -978,12 +993,13 @@ std::string select_auto_tuned(Options &o,const Record &r) {
     }
     t::AutoRequest request{r.b1,o.auto_min,o.auto_max,stage1_seconds,o.ratio_adjust};
     const auto candidates=t::auto_candidates(matching_tune_samples(profile,o,r),t::predicts_b2(profile),request);
-    size_t rejected=0;
+    size_t rejected=0,route_rejected=0;
     for(const auto &candidate:candidates) {
         const auto d=t::uint(*candidate.sample,"d");const unsigned carrier=(unsigned)t::uint(*candidate.sample,"carrier_exponent");
         std::string plan;
         if(ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,candidate.b2,d,o.device,
             [](const char *p,void *ctx){*static_cast<std::string*>(ctx)=p;},&plan,carrier))throw std::runtime_error("Auto B2 candidate planning failed");
+        if(!matches_tuned_giant_policy(*candidate.sample,plan)){++route_rejected;continue;}
         const auto memory=curve_memory_record(plan);
         if(plan_scalar(memory,"valid")!="true" || plan_scalar(memory,"finished")!="true" || plan_scalar(memory,"initial_free_snapshot_fits")!="true") {++rejected;continue;}
         o.b2=candidate.b2;o.d=d;o.carrier_exponent=carrier;
@@ -1001,13 +1017,15 @@ std::string select_auto_tuned(Options &o,const Record &r) {
             <<",\"scope_b2_min\":"<<candidate.low<<",\"scope_b2_max\":"<<candidate.high
             <<",\"range_limited\":"<<(candidate.limited?"true":"false")<<",\"candidate_count\":"<<candidates.size()
             <<",\"memory_rejected\":"<<rejected<<",\"required_free_bytes\":"<<plan_scalar(memory,"required_free_bytes")
+            <<",\"route_rejected\":"<<route_rejected
             <<",\"free_bytes\":"<<plan_scalar(plan,"free_bytes")<<",\"residency_guaranteed\":false,\"process_peak_guaranteed\":false";
         if(!stage1_hash.empty())out<<",\"stage1_profile_sha256\":"<<json_string(stage1_hash);
         if(prediction.samples)out<<",\"fit_samples\":"<<prediction.samples<<",\"fit_max_relative_error\":"<<prediction.max_relative_error
             <<",\"fit_max_error_seconds\":"<<prediction.error_seconds;
         out<<'}';return out.str();
     }
-    throw std::runtime_error("no full ECM Auto B2 candidate fits current joint memory");
+    throw std::runtime_error(route_rejected?"no full ECM Auto B2 candidate matches current giant policy or joint memory":
+        "no full ECM Auto B2 candidate fits current joint memory");
 }
 void merge_ecm_tune(const Options &o,const fs::path &destination) {
     namespace t=ecm_stage2::tune;
@@ -1134,6 +1152,21 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
             sample["benchmark_kind"]=json_string(input.prime?"known_mersenne_prime":"validated_save");
             sample["benchmark_exponent"]=std::to_string(input.prime);sample["sigma"]=std::to_string(input.record.sigma);
             sample["b1"]=std::to_string(input.record.b1);sample["b2"]=std::to_string(b2);
+            const auto giant_record=giant_memory_record(plan);
+            if(plan_scalar(giant_record,"valid")!="true")throw std::runtime_error("giant route plan invalid");
+            sample["giant_work_model"]="\"chunk_routes_v1\"";
+            sample["giant_chunk_points"]=plan_scalar(giant_record,"chunk_points");
+            sample["giant_chain_min"]=plan_scalar(giant_record,"chain_min");
+            sample["giant_force_ladder"]=plan_scalar(giant_record,"force_ladder")=="true"?"1":"0";
+            ecm_stage2::GiantWork giant_work;
+            if(!ecm_stage2::giant_work(giant,d,t::uint(sample,"giant_chunk_points"),
+                t::uint(sample,"giant_chain_min"),t::uint(sample,"giant_force_ladder")!=0,giant_work))
+                throw std::runtime_error("giant route work overflow");
+            sample["giant_chain_points"]=std::to_string(giant_work.chain_points);
+            sample["giant_ladder_points"]=std::to_string(giant_work.ladder_points);
+            sample["giant_chain_chunks"]=std::to_string(giant_work.chain_chunks);
+            sample["giant_ladder_chunks"]=std::to_string(giant_work.ladder_chunks);
+            sample["giant_ladder_steps"]=std::to_string(giant_work.ladder_steps);
             sample["required_free_bytes"]=plan_scalar(memory,"required_free_bytes");
             sample["planned_peak_bytes"]=plan_scalar(memory,"peak_bytes");
             sample["repeats"]=std::to_string(effort.repeats);

@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import subprocess
 import tomllib
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'bench'))
+from stage2_tune_route_cost import MODEL, annotate
 
 
 def literal(value):
@@ -27,15 +30,17 @@ def main():
     template = tomllib.loads(args.valid.read_text(encoding='utf-8'))
     counts = {'accepted': 0, 'ineligible': 0, 'invalid_profiles': 0}
 
-    def invoke(name, bounds, query, time=lambda i: .1+.00001*i, mutate=None, expected=True):
+    def invoke(name, bounds, query, time=lambda i: .1+.00001*i, mutate=None, expected=True,
+               chunk=172800000, route_time=None):
         data = json.loads(json.dumps(template))
-        data['profile']['prediction_model'] = 'linear_giant_points_v1'
+        data['profile']['prediction_model'] = MODEL
         samples = []
         for b2 in bounds:
             sample = data['ecm']['sample_0'].copy()
             sample['b2'] = b2
             sample['giant_points'] = b2//sample['d']+2
-            seconds = time(sample['giant_points'])
+            sample=annotate(sample,chunk)
+            seconds = route_time(sample) if route_time else time(sample['giant_points'])
             sample.update(seconds=[seconds-.001, seconds, seconds+.001],
                           median_seconds=seconds, mad_seconds=.001)
             for key,fraction in {'init_seconds':.2,'main_seconds':.8,'giant_seconds':.12,
@@ -87,11 +92,29 @@ def main():
     invoke('nonresident',bounds,query,mutate=lambda d,s:s[1].update(fold_resident=0),expected=False)
     invoke('different_width',bounds,query,mutate=lambda d,s:s[1].update(target_bits=319),expected=False)
     invoke('missing_optin',bounds,query,mutate=lambda d,s:d['profile'].pop('prediction_model'),expected=False)
+    invoke('legacy_exact_only',bounds,query,mutate=lambda d,s:d['profile'].update(prediction_model='linear_giant_points_v1'),expected=False)
     invoke('unsupported_model',bounds,query,mutate=lambda d,s:d['profile'].update(prediction_model='unknown'),expected=None)
     invoke('insufficient_span',[26000000000,30000000000,34000000000],31000000000,expected=False)
     # Distinct B2 values can encode exactly the same integer giant count.
     invoke('duplicate_giant_count',[26000000000,26000000001,104000000000],query,expected=False)
-    report = dict(counts, model='linear_giant_points_v1', leave_one_out=True,
+    # A chain-only calibration cannot predict the unseen expensive short tail.
+    d=180180;cap=172800
+    points=[100000,cap+50000,2*cap+50000,3*cap+50000,4*cap+50000]
+    mixed_query=(cap+15000-2)*d
+    invoke('unseen_ladder',[(i-2)*d for i in points],mixed_query,chunk=cap,expected=False)
+    route_points=sorted(points+[cap+8000,cap+24000,2*cap+12000,3*cap+30000])
+    route_cost=lambda s:.1+1e-5*s['giant_points']+3e-6*s['giant_ladder_steps']+.05*s['giant_ladder_chunks']
+    prediction=invoke('mixed_routes',[(i-2)*d for i in route_points],mixed_query,chunk=cap,route_time=route_cost)
+    from stage2_tune_route_cost import route_work
+    expected=route_cost(dict(giant_points=mixed_query//d+2,**route_work(mixed_query//d+2,d,cap,32768)))
+    assert abs(prediction['seconds']-expected)<1e-9
+    invoke('ladder_outside_calibration',[(i-2)*d for i in route_points],(3*cap+32000-2)*d,
+           chunk=cap,route_time=route_cost,expected=False)
+    invoke('bad_ladder_work',bounds,query,mutate=lambda d,s:s[0].update(giant_ladder_steps=1),expected=None)
+    invoke('bad_chunk_policy',bounds,query,mutate=lambda d,s:s[0].update(giant_chunk_points=1),expected=None)
+    invoke('missing_work_contract',bounds,query,mutate=lambda d,s:s[0].pop('giant_work_model'),expected=None)
+    invoke('different_chunk_policy',bounds,query,mutate=lambda d,s:s.__setitem__(1,annotate(s[1],345600000)),expected=False)
+    report = dict(counts, model=MODEL, leave_one_out=True, unseen_routes_refused=True,
                   endpoint_extrapolation_refused=True, negative_costs_refused=True)
     (out/'result.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(report))
