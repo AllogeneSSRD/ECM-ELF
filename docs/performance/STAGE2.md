@@ -366,6 +366,16 @@ Stage2调优和收益复验另保留1秒NVML记录；短曲线及进程间准备
 
 全部160条完整曲线无因子、fold/frontier驻留、355200个mandatory cases与818108个GMP检查bad0。1秒NVML中GPU1利用率≥80%的245点记录SM1545…1800MHz、中位数1800，功率18.97…55.11W、中位数51.78；设置未变，实际频率不是严格恒定。原始证据在`data/experiments/ecm_tune_production_large_d_20261010/`的`execution/`和`final_audit/result.json`，60条调优回执在`data/experiments/ecm_tune_36356_26996765/`。合并profile SHA256=`2aa2fadf5aa80b462b9423a3b07117de70c59c70d7fd962642288aa9e73074d3`；56项依赖/current/冻结源和所有输入身份经核对，原始数据未改写。
 
+### fold预算限制下的大D选择
+
+M521/B1=10e6/lcm/sigma26，GPU1 RTX4060 Laptop（UUID `8a67b1f8ef1c3177a822813a7ac2224d`），用户1800MHz/默认55W上限，Stage2二进制SHA256=`d1d1946e927799c21bec4f16951069179bfb0e88ec2bc13fdb63919dc67e0b30`。batch256/arena6300 MiB保持，fold预算改为48 MiB；三D690690/1141140/1381380与前节相同五个B2形成15个计划。owner payload分别31933992、52255272、63867432 bytes（约30.45、49.83、60.91 MiB）；仅D690690满足48 MiB驻留预算。其五点各预热1次、正式3次，共20曲线；其余10个计划明确跳过，未生成执行回执。按B2递增的引擎total中位数为1.389267、1.845305、2.582515、4.012227、6.520463秒。
+
+使用真实batch8 T1=44.357074 s/curve、R=1，对五锚点各预热1次、交错正式3次独立复验，再执行20曲线。Auto B2从322个决策候选选B2=2.6e12、D690690、普通模数，P63360/I3764353/G60。所选点引擎中位数6.504293秒、估计6.520463秒，误差0.249%；全五候选最大误差2.467%，有限集合收益损失0，保持原8%/5%门限。生产进程中位数7.154319秒另记；范围上界受限，不声称全局最优。
+
+原fold640 profile在fold48配置下被策略检查拒绝；新profile强制D1381380时因缺少适用实测scope被拒绝。缩小owner预算确实改变可用D集合，不能沿用大预算的成本，或把不能驻留的大D当作已验证候选。本实验仍采用驻留路线，不能代替非驻留性能模型。组件payload也不代表进程峰值。
+
+全部40曲线无因子、fold/frontier驻留，88320 mandatory cases与317384 GMP检查bad0。1秒NVML利用率≥80%的103点SM1725…1800MHz、中位数1800，功率19.41…53.19W、中位数51.8；实际频率非严格恒定。证据`data/experiments/ecm_tune_owner48_20261010/execution/`和`final_audit/result.json`；20条调优回执在`data/experiments/ecm_tune_24624_28704187/`。性能profile SHA256=`0e546c1291697133f19532da0f99655ef23a2fc6b72d9acf4d39ebf0c989c9cb`，56源依赖及所有输入身份在测量完成时核对一致，原始数据保留。
+
 ### 余因子的完整Stage1成本
 
 指定目标为M6011的5872-bit余因子、B1=20、sigma26…33，GPU1 RTX4060 Laptop、用户1800MHz/默认55W上限，部署Stage1二进制与上述生产B1测量相同。分别对lcm/choose12、batch1/8各完整预热1次、正式3次，共16批72曲线；普通目标N实测，不以6011-bit承载代替Stage1目标。container6144/TPI16，CGBN ladder、自动TPI、关闭指数缓存与checkpoint。完整进程墙钟/C中位数及MAD为：

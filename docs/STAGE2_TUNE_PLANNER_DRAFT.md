@@ -243,3 +243,9 @@ Stage2进程中位数4.753833秒单独记录，score仍使用engine total。raw�
 扩展T1 runtime工具，私有队列的梅森来源用显式`--queue-exponent`指定，验证实际N整除原数并写入已知因子乘积；不从文件名推断原数或承载。CPU测试首次误把17列为2^8−1的不合法因子，实际上255/17=15，属于测试错误；把拒绝输入修正为19，正确实现不改、旧失败保留。`target_protocol_queue_final`通过2队列身份接受/5拒绝及原8/32目标协议。余因子INI/choose12、CLI/正T1优先、缺失scope、输出保护、私有队列重启通过4选择/15调用/3曲线；原M521/B1=10e6默认入口另2选择/13调用/3曲线。最终接口6曲线11232 mandatory/24153 GMP检查bad0，证据`runtime/`、`runtime_m521_regression/`和`runtime_audit/result.json`。正式文档与TODO改写当前已测范围，原始data不提交。
 
 下一阶段仍保留原目标：生产高位宽/高B1/实际大batch与预算，针对大D的owner/arena联合预算独立标定，NTT完整策略与生产slice吞吐、互斥阶段组合，冷启动/驱动成本和非驻留/G1。当前30.669%大D收益和0.538%余因子有限排名不替代这些未完成项目，不宣布整个目标完成。
+
+### 48 MiB fold预算的驻留选择验收
+
+既有协调器session30831成功exit0，原GPU1测量已停止后才修改计时代码。M521/B1=10e6/lcm/sigma26、真实batch8 T1=44.357074，冻结Stage2 exe d1d1946e…，GPU1用户1800MHz/默认55W上限。batch256/arena6300/fold48，三D与五B2形成15计划；owner31933992/52255272/63867432 bytes，仅D690690驻留。五scope暖机1+正式3，共20曲线；十个skip无执行receipt。原fold640 profile策略拒绝、新profile强制未测D1381380缺scope拒绝，未跨预算复用成本。
+
+独立五锚点各1+3再测20曲线，Auto选2.6e12/D690690/carrier0，322决策候选。实测6.504293/估计6.520463秒，五候选最大误差2.467%、收益损失0，原门限不变；进程7.154319秒另列，上界受限。最终40曲线88320 mandatory/317384 GMP检查bad0，无因子、驻留。loaded103点SM1725…1800/median1800，power19.41…53.19/median51.8W；并非严格恒频。raw、输入身份、56源闭包及profile0e546c12…在phase改动前完成审计，证据`data/experiments/ecm_tune_owner48_20261010/`。正式性能说明同步，本轮不代替非驻留或完整联合预算矩阵。
