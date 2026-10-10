@@ -15,7 +15,10 @@ import re
 import statistics
 import subprocess
 import tomllib
+import shutil
 from stage2_tune_route_cost import predict_route
+import analyze_stage2_tune_components as components
+from analyze_stage2_tune_workload import embedded_ntt_samples, one_json, workload
 
 ROOT = Path(__file__).resolve().parents[2]
 TIME_ERROR_LIMIT = .08
@@ -44,15 +47,32 @@ def main():
     parser.add_argument('--repeats', type=int, default=2)
     parser.add_argument('--min-candidates', type=int, default=4)
     parser.add_argument('--timeout', type=int, default=1800)
+    parser.add_argument('--training-plans', type=Path, help='Frozen case_*.plan.jsonl for format-4 component reference')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if args.repeats < 2 or args.min_candidates < 2 or args.timeout <= 0:
         parser.error('require repeats >=2, candidates >=2 and positive timeout')
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    sources = [args.exe.resolve(), args.profile.resolve(), args.save.resolve(), Path(__file__).resolve()]
+    sources = [args.exe.resolve(), args.profile.resolve(), args.save.resolve(), Path(__file__).resolve(),
+               Path(components.__file__).resolve(),ROOT/'tools/bench/analyze_stage2_tune_workload.py',
+               ROOT/'tools/bench/stage2_tune_route_cost.py']
     sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
     identities = {str(path): sha(path) for path in sources}
+    manifest_path=args.exe.resolve().parent/'build_manifest.json'
+    dll=args.exe.resolve().parent/'gmp-10.dll'
+    assert manifest_path.is_file() and dll.is_file(), 'actual build manifest and GMP DLL required'
+    identities[str(manifest_path)]=sha(manifest_path);identities[str(dll)]=sha(dll)
+    manifest=json.loads(manifest_path.read_text(encoding='utf-8-sig'))
+    assert manifest['sha256'].lower()==sha(args.exe.resolve())
+    closure=0
+    for entry in manifest['sources']:
+        name,separator,digest=entry.rpartition('=')
+        path=ROOT/name
+        if separator and len(digest)==64 and path.is_file():
+            assert sha(path)==digest.lower(), ('source differs from binary',name)
+            identities[str(path.resolve())]=digest.lower();closure+=1
+    assert closure>=49, 'incomplete production source closure'
     assert args.profile.stat().st_size <= 64*1048576, 'profile exceeds native size limit'
     profile = tomllib.loads(args.profile.read_text(encoding='utf-8-sig'))
     assert 0 < len(profile['ecm']) <= 4096, 'profile exceeds native sample limit'
@@ -77,9 +97,44 @@ def main():
         key = tuple(sample[k] for k in SCOPE)
         groups.setdefault(key, []).append(sample)
     assert groups, 'profile does not cover this save'
+    measurements=embedded_ntt_samples(profile)
+    component_models={}
+    if measurements:
+        assert args.training_plans, 'format 4 requires independent frozen training plans'
+        plan_samples={tuple(s[k] for k in ('target_bits','arithmetic_bits','carrier_exponent','b1','b2','d')):s
+                      for group in groups.values() for s in group}
+        records={};seen=set()
+        for path in sorted(args.training_plans.glob('case_*.plan.jsonl')):
+            plan=one_json(path)
+            key=tuple(plan[k] for k in ('target_bits','bits','carrier_exponent','B1','B2','D'))
+            if key not in plan_samples:
+                continue
+            assert key not in seen, 'duplicate component anchor plan'
+            seen.add(key);identities[str(path.resolve())]=sha(path)
+            sample=plan_samples[key]
+            scope=tuple(sample[k] for k in SCOPE)
+            try:
+                reference=components.loop_reference(workload(plan),measurements)
+                records.setdefault(scope,[]).append(dict(sample=sample,loop_reference_seconds=reference))
+            except ValueError:
+                pass  # Incomplete groups must stay on the existing qualified route model.
+        assert seen==set(plan_samples), 'missing independent component training plans'
+        for scope,group in groups.items():
+            if len(records.get(scope,[]))!=len(group):
+                continue
+            try:
+                model=components.train(records[scope])
+                if model['qualified']:
+                    component_models[scope]=model
+            except ValueError:
+                pass
     ini = output/'bench.ini'
     ini.write_text('verbose=false\nstage2_debug_log=false\n', encoding='utf-8')
     policy = profile['policy']
+    environment=dict(os.environ)
+    for key,value in policy['environment'].items():
+        assert type(value) is int and value>=0
+        environment['NTT_'+key.upper()]=str(value)
     common = [str(args.exe.resolve()), '--ini', str(ini), '--save', str(args.save.resolve()),
               '--device', str(args.device), '--tune-profile', str(args.profile.resolve()),
               '--batch-mb', str(policy['batch_mb']), '--arena-mb', str(policy['arena_mb']),
@@ -88,7 +143,7 @@ def main():
                   profile_sha256=identities[str(args.profile.resolve())],
                   source_identities=identities, device=args.device, target_bits=target.bit_length(),
                   b1=b1, policy={k:v for k,v in policy.items() if k!='environment'},
-                  environment={k:v for k,v in os.environ.items() if k.startswith('NTT_')},
+                  environment={k:v for k,v in environment.items() if k.startswith('NTT_')},
                   repeats=args.repeats, warmups=1, time_error_limit=TIME_ERROR_LIMIT,
                   rank_loss_limit=RANK_LOSS_LIMIT, holdouts=[], complete=False,
                   total_scope='stage2_full_wall.total; Stage1/process/planning/publication excluded')
@@ -98,7 +153,7 @@ def main():
 
     def run(name, b2, extra):
         proc = subprocess.run(common+['--b2', str(b2), *extra], cwd=ROOT, capture_output=True,
-                              text=True, errors='replace', timeout=args.timeout)
+                              text=True, errors='replace', timeout=args.timeout,env=environment)
         (output/(name+'.console.log')).write_text(proc.stdout+proc.stderr, encoding='utf-8')
         assert proc.returncode == 0, (name, proc.returncode, proc.stderr)
         return [json.loads(x) for x in proc.stdout.splitlines() if x.startswith('{')]
@@ -116,6 +171,12 @@ def main():
         assert 'clean=1' in wall
         return float(re.search(r'\btotal=([0-9.]+)', wall).group(1)), row
 
+    for path,digest in identities.items():
+        target=output/'inputs'/digest/Path(path).name
+        target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,target)
+    telemetry=(output/'telemetry.csv').open('wb')
+    monitor=subprocess.Popen(['nvidia-smi','--query-gpu=timestamp,index,uuid,utilization.gpu,clocks.sm,temperature.gpu,power.draw,memory.used',
+        '--format=csv','-lms','1000'],stdout=telemetry,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
     publish()
     try:
         for index, b2 in enumerate(args.holdout_b2):
@@ -123,19 +184,23 @@ def main():
             holdout = dict(b2=b2, candidates=[], ineligible=[], complete=False)
             report['holdouts'].append(holdout)
             for key, group in groups.items():
-                prediction = predict(group, b2, profile['profile'].get('prediction_model'))
                 d, carrier = key[-1], key[2]
-                if prediction is None:
-                    holdout['ineligible'].append(dict(d=d, carrier=carrier, reason='fit_not_qualified'))
-                    continue
+                prediction = predict(group, b2, profile['profile'].get('prediction_model'))
                 stem = f'holdout_{index}_d{d}_c{carrier}'
                 extra = ['--d', str(d), '--carrier-exponent', str(carrier)]
                 rows = run(stem+'_plan', b2, [*extra, '--plan-only'])
                 choice = next(x for x in rows if x.get('type') == 'tune_selection')
                 plan = next(x for x in rows if x.get('type') == 'stage2_plan')
+                if key in component_models:
+                    try:
+                        result=components.predict(component_models[key],plan,measurements)
+                        prediction=dict(model=components.MODEL,seconds=result['seconds'],rank=result['rank_seconds'])
+                    except ValueError:
+                        pass
                 if not choice['selected']:
                     holdout['ineligible'].append(dict(d=d, carrier=carrier, reason=choice['reason']))
                     continue
+                assert prediction is not None, 'native selected an independently ineligible group'
                 assert choice['model'] == prediction['model']
                 assert math.isclose(choice['estimated_seconds'], prediction['seconds'], rel_tol=1e-10)
                 assert math.isclose(choice['rank_seconds'], prediction['rank'], rel_tol=1e-10)
@@ -161,8 +226,9 @@ def main():
             assert all(c['relative_error'] <= TIME_ERROR_LIMIT for c in candidates), (b2,candidates)
             rows = run(f'holdout_{index}_automatic_plan', b2, ['--plan-only'])
             choice = next(x for x in rows if x.get('type') == 'tune_selection')
-            assert choice['selected'] and choice['model'] == profile['profile']['prediction_model']
+            assert choice['selected']
             selected = next(c for c in candidates if c['d'] == choice['D'] and c['carrier'] == choice['carrier_exponent'])
+            assert choice['model']==selected['prediction']['model']
             assert math.isclose(selected['prediction']['rank'], min(c['prediction']['rank'] for c in candidates), rel_tol=1e-10)
             fastest = min(c['actual_median'] for c in candidates)
             loss = selected['actual_median']/fastest-1
@@ -176,13 +242,17 @@ def main():
             holdout.update(automatic_seconds=seconds, automatic_relative_error=error, complete=True)
             publish()
             assert error <= TIME_ERROR_LIMIT, (b2,error)
-        assert identities == {str(path): sha(path) for path in sources}
+        assert all(sha(Path(path))==digest for path,digest in identities.items())
         report['complete'] = True
         publish()
     except BaseException as exc:
         report['error'] = repr(exc)
         publish()
         raise
+    finally:
+        monitor.terminate()
+        monitor.wait(timeout=10)
+        telemetry.close()
     print(json.dumps(dict(complete=True, holdouts=len(report['holdouts']),
                          maximum_rank_loss=max(h['rank_loss'] for h in report['holdouts']))))
 

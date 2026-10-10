@@ -50,11 +50,15 @@ NTT JSON version2 提供 exact_allocation_events、fuse_layouts、物理分配/�
 
 工作量分析可重复`--ntt-profile <文件>`汇集策略一致、实测形状不重复的文件；每请求阶段另给覆盖计数，缺项阶段不输出完整参照秒数。`benchmark_stage2_ntt_workload.py --exe <生产exe> --profile <完整ECM.toml> --evidence <原始ECM目录> [--ntt-profile <已有NTT.toml> ...] --device <n> --repeats <n> --memory-mb <MiB> --output <新目录>`按长度补测实际缺失slices，拒绝不匹配的基准、计划或策略。可重复`--additional-plan <原生plan.jsonl>`加入同scope组的留出形状，不加载其曲线成本；内存不足明确失败，不能把skip算作覆盖。
 
-`analyze_stage2_tune_components.py --profile <完整ECM.toml> --workload <workload.toml> --ntt-profile <文件> [重复] --output <新目录>`拟合实验NTT/配对阶段模型，可配合`--holdout-result <已有验收JSON> --query-plans <对应原生计划目录>`作回顾对照。回顾结果不代替新的独立验收，输出模型不进入生产选型。`test_stage2_tune_components.py`核对配对守恒、合成参数恢复、无效输入拒绝和不合格组；数学公式与适用条件见[组合模型](../../docs/architecture/AUTO_B2.md#实验性-ntt-与阶段组合)。
+`analyze_stage2_tune_components.py --profile <完整ECM.toml> --workload <workload.toml> [--ntt-profile <文件> ...] --output <新目录>`拟合实验NTT/配对阶段模型；格式4自动读取内嵌NTT。可配合`--holdout-result <已有验收JSON> --query-plans <对应原生计划目录>`作回顾对照。回顾结果不代替新的独立验收，输出模型TOML不进入生产选型。`test_stage2_tune_components.py`核对配对守恒、合成参数恢复、无效输入拒绝和不合格组；数学公式与适用条件见[组合模型](../../docs/architecture/AUTO_B2.md#ntt-与配对阶段组合)。
 
 `validate_stage2_tune_components.py --exe <生产exe> --save <已验证save> --models <models.toml> --profile <完整ECM.toml> --evidence <训练证据目录> --ntt-profile <文件> [重复] --device <n> --holdout-b2 <未测B2...> --output <新目录>`先补齐查询所需NTT形状，冻结全部预测，再测至少四候选的完整曲线。默认每候选1次预热、3次正式重复，NTT形状21次重复；保持8%时间/5%排名门限。失败不改写训练模型或删去候选。
 
-`test_stage2_tune_components_native.py --profile <完整ECM.toml> --plans <case_*.plan.jsonl所在目录> --ntt-profile <文件> [重复] [--query-plan <独立计划.jsonl> ...] --output <新目录>`编译CPU fixture，比较原生请求形状、配对固定项、非负拟合、留一误差和查询预测与独立Python参考。所有需要的NTT形状须精确覆盖且策略一致；同时检查缺项、端点、预算错配、未核验及高误差组拒绝。输出默认由调用者指定到`data/experiments/`，冻结源闭包、输入、fixture和DLL；不查询CUDA设备、不执行曲线、不改生产排名。
+`test_stage2_tune_components_native.py --profile <完整ECM.toml> --plans <case_*.plan.jsonl所在目录> --ntt-profile <文件> [重复] [--query-plan <独立计划.jsonl> ...] --output <新目录>`编译CPU fixture，比较原生请求形状、配对固定项、非负拟合、留一误差和查询预测与独立Python参考；核对原生NTT导入、格式4往返及与生产相同的Estimator。所有需要的NTT形状须精确覆盖且策略一致；同时检查缺项、端点、预算错配、未核验及高误差组拒绝。输出默认由调用者指定到`data/experiments/`，冻结源闭包、输入、fixture和DLL；不查询CUDA设备、不执行曲线。
+
+生产命令`--tune ecm --tune-merge <ECM.toml> --tune-ntt-profile <NTT.toml> [重复] --tune-file <新配置.toml>`将性能数据整理为格式4；测量模式也支持NTT导入。合并不查询CUDA设备，不接受重复NTT实测形状，失败保留旧目标。`test_stage2_tune_merge_runtime.py`可重复`--ntt-profile`检查实际CLI的内嵌导出、再合并及失败保护。格式4主路径的完整曲线验收用`validate_stage2_tune_selection.py`，额外提供`--training-plans <冻结训练目录>`，由独立Python参考重建组合模型；精确形状缺项时核对完整曲线模型回退。
+
+`test_stage2_tune_component_auto_runtime.py --exe <生产exe> --profile <格式4完整ECM.toml> --save <已验证save> --training-plans <冻结训练目录> --device <n> --output <新目录>`核对Auto B2的INI入口、显式普通/承载及D锁定、精确点优先和缺少NTT形状时的分块模型回退，再运行一条未锁定D/承载的完整曲线。默认未测B2=12.5e9可由`--b2`覆盖；输入需有合格普通/承载模型及完整训练形状。T1=3是固定决策测试输入，不是Stage1实测或独立全流程收益验收；不把该单条曲线作为重复性能样本。
 
 `test_stage2_tune_workload.py --output <新目录> [--evidence <原始调优目录>]`执行CPU门禁：手算满/尾分块、chunk上限、万亿次repeat压缩、错误协议拒绝及已保存原生plan的独立密集请求重放。它不证明GPU真实调用计数或NTT批处理吞吐；后者需要运行审计和独立完整曲线留出验证。
 

@@ -7,6 +7,7 @@ constexpr double b2_holdout_error_limit=0.08;
 struct B2Prediction {
     double seconds=0,mad_seconds=0,error_seconds=0,max_relative_error=0;
     Word low=0,high=0,samples=0;
+    const char *model=b2_prediction_model;
 };
 inline std::string b2_scope(const Fields &sample) {
     std::string key;

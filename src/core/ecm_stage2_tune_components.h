@@ -2,9 +2,9 @@
 #include "ecm_stage2_tune_prediction.h"
 #include "ecm_stage2_requests.h"
 #include <tuple>
+#include <functional>
 
 namespace ecm_stage2 { namespace tune {
-constexpr const char *component_prediction_model="phase_ntt_loop_v1";
 using NttMeasurements=std::map<std::pair<Word,Word>,double>;
 struct NttReferenceBin { Word calls=0,pairs=0; };
 struct NttReferencePhase {
@@ -143,6 +143,7 @@ inline bool prepare_component_model(std::vector<ComponentAnchor> anchors,Compone
         absolute=std::max(absolute,difference);relative=std::max(relative,difference/totals[i]);
     }
     out.evidence={0,noise,absolute,relative,uint(first,"b2"),uint(*anchors.back().sample,"b2"),(Word)anchors.size()};
+    out.evidence.model=component_prediction_model;
     if(relative>b2_holdout_error_limit || !fit(anchors.size(),out.fixed_seconds,out.coefficients))return false;
     out.qualified=true;return true;
 }
@@ -160,4 +161,40 @@ inline bool predict_component(const ComponentModel &model,Word b2,const NttRefer
     if(!(total>0) || !std::isfinite(total))return false;
     out=model.evidence;out.seconds=total;return true;
 }
+// One caller-owned cache per selection. No GPU state, lifetime/admission cache,
+// persisted coefficients, or reuse across device/target/profile scopes.
+struct ComponentEstimator {
+    using Query=std::function<bool(Word,int,Word*,Word*)>;
+    NttMeasurements measurements;
+    Fields packing;
+    Query query;
+    std::map<std::string,ComponentModel> models;
+    bool enabled=false;
+    ComponentEstimator(const EcmProfile &profile,Query shape_query):packing(profile.ntt_policy),query(std::move(shape_query)) {
+        enabled=profile.profile.count("component_model") && !profile.ntt_samples.empty();
+        if(enabled)for(const auto &entry:profile.ntt_samples)measurements.emplace(entry.first,real(entry.second,"median_seconds"));
+    }
+    bool reference(const Fields &sample,Word b2,NttReferences &out)const {
+        if(!enabled)return false;
+        return ntt_references(uint(sample,"p"),b2/uint(sample,"d")+2,(int)uint(sample,"arithmetic_bits"),query,
+            uint(packing,"batch_bytes"),(unsigned)uint(packing,"buffers"),uint(packing,"physical_chunks")!=0,
+            uint(packing,"chunk_max"),measurements,out);
+    }
+    bool prepare(const std::vector<const Fields*> &anchors) {
+        if(!enabled || anchors.empty())return false;
+        const auto key=b2_scope(*anchors.front());const auto found=models.find(key);
+        if(found!=models.end())return found->second.qualified;
+        auto &model=models[key];std::vector<NttReferences> references(anchors.size());std::vector<ComponentAnchor> input;
+        for(size_t i=0;i<anchors.size();++i) {
+            if(b2_scope(*anchors[i])!=key || !reference(*anchors[i],uint(*anchors[i],"b2"),references[i]))return false;
+            input.push_back({anchors[i],&references[i]});
+        }
+        return prepare_component_model(std::move(input),model);
+    }
+    bool predict(const std::vector<const Fields*> &anchors,Word b2,B2Prediction &out) {
+        out=B2Prediction{};if(!prepare(anchors))return false;
+        NttReferences refs;
+        return reference(*anchors.front(),b2,refs) && predict_component(models.at(b2_scope(*anchors.front())),b2,refs,out);
+    }
+};
 } }

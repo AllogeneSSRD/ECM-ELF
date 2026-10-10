@@ -15,6 +15,8 @@
 #include "ecm_stage2_tune_ecm.h"
 #include "ecm_stage2_tune_prediction.h"
 #include "ecm_stage2_tune_auto.h"
+#include "ecm_stage2_tune_components.h"
+#include "ecm_stage2_tune_ntt_profile.h"
 #include "ecm_stage1_tune_profile.h"
 #include "ecm_stage2_geometry.h"
 #include "ecm_stage2_logging.h"
@@ -233,6 +235,7 @@ struct Options {
     bool tune_child=false;
     std::string tune_save;
     std::vector<std::string> tune_merge;
+    std::vector<std::string> tune_ntt_profiles;
     std::vector<uint64_t> tune_ds,tune_b2s,tune_exponents;
     unsigned tune_carrier=0;
     uint64_t tune_max_batches=0;bool has_tune_max_batches=false;
@@ -320,6 +323,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--ecm-tune-worker") o.tune_child=true;
         else if (a == "--tune-save") {o.tune_save=value();o.tune_options=true;}
         else if (a == "--tune-merge") {o.tune_merge.push_back(value());o.tune_options=true;}
+        else if (a == "--tune-ntt-profile") {o.tune_ntt_profiles.push_back(value());o.tune_options=true;}
         else if (a == "--tune-max-batches") {
             o.tune_max_batches=num();if(o.tune_max_batches>1048576)throw std::runtime_error("tune-max-batches must be 0..1048576");
             o.has_tune_max_batches=true;o.tune_options=true;
@@ -831,6 +835,7 @@ void help() {
         "             Same device/policy/repeats required; the last profile replaces duplicate scopes.\n"
         "Selection: --tune-profile FILE.toml; matches B1/width/policy, measured or qualified in-range B2.\n"
         "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
+        "           --tune-ntt-profile FILE (repeatable): attach matching exact NTT batches to ECM tune/merge.\n"
         "         --log FILE --log-level quiet|curve|phases|batches|debug (0..4)\n"
         "         Production console default: phases; readable file: batches. --dry-run --help\n"
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
@@ -894,6 +899,16 @@ bool matches_tuned_giant_policy(const ecm_stage2::tune::Fields &sample,const std
         u64(plan_scalar(giant,"chunk_points"),"planned giant chunk"),
         u64(plan_scalar(giant,"chain_min"),"planned chain minimum"),plan_scalar(giant,"force_ladder")=="true");
 }
+bool matches_tuned_ntt_policy(const ecm_stage2::tune::EcmProfile &profile,const std::string &plan) {
+    namespace t=ecm_stage2::tune;
+    const auto start=plan.find("\"tree_workspace\":{");if(start==plan.npos)return false;
+    const auto tree=plan.substr(start);const auto &p=profile.ntt_policy;
+    return plan_scalar(tree,"supported")=="true" &&
+        u64(plan_scalar(tree,"batch_bytes"),"planned NTT batch")==t::uint(p,"batch_bytes") &&
+        u64(plan_scalar(plan,"workspace_buffers"),"planned NTT buffers")==t::uint(p,"buffers") &&
+        u64(plan_scalar(tree,"chunk_max"),"planned NTT chunk cap")==t::uint(p,"chunk_max") &&
+        (plan_scalar(tree,"physical_chunks")=="true")==bool(t::uint(p,"physical_chunks"));
+}
 std::vector<const ecm_stage2::tune::Fields*> matching_tune_samples(
     const ecm_stage2::tune::EcmProfile &profile,const Options &o,const Record &r) {
     namespace t=ecm_stage2::tune;
@@ -930,12 +945,14 @@ std::string select_tuned(Options &o,const Record &r) {
     auto fallback=[](const char *reason){return std::string("{\"type\":\"tune_selection\",\"selected\":false,\"reason\":")+json_string(reason)+"}";};
     if(o.debug_log)return fallback("debug_log_not_calibrated");
     if(!profile.matches(device,o.batch,o.arena,o.owner_mb,tune_environment(),NTT_GL_ADD_SUB_MASK))return fallback("device_or_policy_mismatch");
+    t::ComponentEstimator components(profile,[](ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots){
+        return ecm_cuda_stage2_shape_query(m,bits,n,slots);});
     struct Candidate {const t::Fields *sample;double rank;t::B2Prediction prediction;};std::vector<Candidate> candidates;
     std::map<std::string,std::vector<const t::Fields*>> groups;std::set<std::string> exact;
     for(const auto *sample:matching_tune_samples(profile,o,r)) {
         const auto &s=*sample;
         const auto key=t::b2_scope(s);
-        if(t::predicts_b2(profile))groups[key].push_back(&s);
+        if(t::predicts_b2(profile) || components.enabled)groups[key].push_back(&s);
         if(t::uint(s,"b2")!=o.b2)continue;
         exact.insert(key);
         const auto rank=t::real(s,"median_seconds")+2*t::real(s,"mad_seconds");
@@ -943,7 +960,7 @@ std::string select_tuned(Options &o,const Record &r) {
         candidates.push_back({&s,rank,{}});
     }
     for(const auto &group:groups)if(!exact.count(group.first)) {
-        t::B2Prediction prediction;if(!t::predict_b2(group.second,o.b2,prediction))continue;
+        t::B2Prediction prediction;if(!components.predict(group.second,o.b2,prediction) && !t::predict_b2(group.second,o.b2,prediction))continue;
         const auto rank=prediction.seconds+prediction.error_seconds+2*prediction.mad_seconds;
         if(!std::isfinite(rank))throw std::runtime_error("ECM predicted rank overflow");
         candidates.push_back({group.second.front(),rank,prediction});
@@ -957,13 +974,15 @@ std::string select_tuned(Options &o,const Record &r) {
         const auto d=t::uint(s,"d");const unsigned carrier=(unsigned)t::uint(s,"carrier_exponent");
         if(ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,o.b2,d,o.device,
             [](const char *p,void *ctx){*static_cast<std::string*>(ctx)=p;},&plan,carrier))throw std::runtime_error("tuned candidate planning failed");
-        if(!matches_tuned_giant_policy(s,plan)){++route_rejected;continue;}
+        if(!matches_tuned_giant_policy(s,plan) ||
+           (candidate.prediction.samples && std::strcmp(candidate.prediction.model,t::component_prediction_model)==0 && !matches_tuned_ntt_policy(profile,plan)))
+            {++route_rejected;continue;}
         const auto memory=curve_memory_record(plan);
         if(plan_scalar(memory,"valid")!="true" || plan_scalar(memory,"finished")!="true" || plan_scalar(memory,"initial_free_snapshot_fits")!="true") {++rejected;continue;}
         o.d=d;o.carrier_exponent=carrier;
         const auto &prediction=candidate.prediction;
         std::ostringstream out;out<<std::setprecision(17)<<"{\"type\":\"tune_selection\",\"selected\":true,\"model\":"
-            <<json_string(prediction.samples?t::b2_prediction_model:"measured_exact_scope_v1")<<",\"D\":"<<d<<",\"carrier_exponent\":"<<carrier;
+            <<json_string(prediction.samples?prediction.model:"measured_exact_scope_v1")<<",\"D\":"<<d<<",\"carrier_exponent\":"<<carrier;
         if(prediction.samples)out<<",\"estimated_seconds\":"<<prediction.seconds<<",\"mad_seconds\":"<<prediction.mad_seconds
             <<",\"fit_max_relative_error\":"<<prediction.max_relative_error<<",\"fit_max_error_seconds\":"<<prediction.error_seconds
             <<",\"fit_b2_min\":"<<prediction.low<<",\"fit_b2_max\":"<<prediction.high<<",\"fit_samples\":"<<prediction.samples;
@@ -1000,21 +1019,28 @@ std::string select_auto_tuned(Options &o,const Record &r) {
         stage1_hash=ecm_stage2::sha256_file(fs::path(o.stage1_profile));
     }
     t::AutoRequest request{r.b1,o.auto_min,o.auto_max,stage1_seconds,o.ratio_adjust};
-    const auto candidates=t::auto_candidates(matching_tune_samples(profile,o,r),t::predicts_b2(profile),request);
+    t::ComponentEstimator components(profile,[](ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots){
+        return ecm_cuda_stage2_shape_query(m,bits,n,slots);});
+    const t::AdditionalPrediction additional{
+        [&](const std::vector<const t::Fields*> &anchors){return components.prepare(anchors);},
+        [&](const std::vector<const t::Fields*> &anchors,ecm_stage2::Word b2,t::B2Prediction &p){return components.predict(anchors,b2,p);}};
+    const auto candidates=t::auto_candidates(matching_tune_samples(profile,o,r),t::predicts_b2(profile),request,additional);
     size_t rejected=0,route_rejected=0;
     for(const auto &candidate:candidates) {
         const auto d=t::uint(*candidate.sample,"d");const unsigned carrier=(unsigned)t::uint(*candidate.sample,"carrier_exponent");
         std::string plan;
         if(ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,candidate.b2,d,o.device,
             [](const char *p,void *ctx){*static_cast<std::string*>(ctx)=p;},&plan,carrier))throw std::runtime_error("Auto B2 candidate planning failed");
-        if(!matches_tuned_giant_policy(*candidate.sample,plan)){++route_rejected;continue;}
+        if(!matches_tuned_giant_policy(*candidate.sample,plan) ||
+           (candidate.prediction.samples && std::strcmp(candidate.prediction.model,t::component_prediction_model)==0 && !matches_tuned_ntt_policy(profile,plan)))
+            {++route_rejected;continue;}
         const auto memory=curve_memory_record(plan);
         if(plan_scalar(memory,"valid")!="true" || plan_scalar(memory,"finished")!="true" || plan_scalar(memory,"initial_free_snapshot_fits")!="true") {++rejected;continue;}
         o.b2=candidate.b2;o.d=d;o.carrier_exponent=carrier;
         const auto &prediction=candidate.prediction;
         std::ostringstream out;out<<std::setprecision(17)
             <<"{\"type\":\"stage2_auto_plan\",\"schema\":3,\"source\":\"full_ecm_tune\",\"profile_sha256\":"<<json_string(hash)
-            <<",\"model\":"<<json_string(prediction.samples?t::b2_prediction_model:"measured_exact_scope_v1")
+            <<",\"model\":"<<json_string(prediction.samples?prediction.model:"measured_exact_scope_v1")
             <<",\"B2\":"<<candidate.b2<<",\"D\":"<<d<<",\"carrier_exponent\":"<<carrier
             <<",\"P\":"<<plan_scalar(plan,"P")<<",\"I\":"<<plan_scalar(plan,"I")<<",\"G\":"<<plan_scalar(plan,"G")
             <<",\"T1\":"<<stage1_seconds<<",\"T1_source\":"<<json_string(stage1_hash.empty()?"provided_per_curve":"measured_stage1_profile")
@@ -1035,6 +1061,20 @@ std::string select_auto_tuned(Options &o,const Record &r) {
     throw std::runtime_error(route_rejected?"no full ECM Auto B2 candidate matches current giant policy or joint memory":
         "no full ECM Auto B2 candidate fits current joint memory");
 }
+void attach_tune_ntt(const Options &o,const fs::path &destination,ecm_stage2::tune::EcmProfile &profile) {
+    namespace t=ecm_stage2::tune;
+    if(o.tune_ntt_profiles.size()>64)throw std::runtime_error("tune-ntt-profile accepts at most 64 inputs");
+    std::vector<Handle> guards(o.tune_ntt_profiles.size());std::vector<t::NttProfile> inputs;
+    for(size_t i=0;i<o.tune_ntt_profiles.size();++i) {
+        const auto path=absolute_from(fs::current_path(),o.tune_ntt_profiles[i]);std::error_code error;
+        if((fs::equivalent(path,destination,error) && !error) || upper(path.lexically_normal().string())==upper(destination.lexically_normal().string()))
+            throw std::runtime_error("tune-file must differ from NTT inputs");
+        guards[i].value=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+        if(guards[i].value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock NTT tune input");
+        inputs.push_back(t::NttProfile::load(path));
+    }
+    t::attach_ntt_profiles(profile,inputs);
+}
 void merge_ecm_tune(const Options &o,const fs::path &destination) {
     namespace t=ecm_stage2::tune;
     if(o.tune_merge.size()>64)throw std::runtime_error("tune-merge requires at most 64 inputs");
@@ -1051,7 +1091,7 @@ void merge_ecm_tune(const Options &o,const fs::path &destination) {
         if(guards[i].value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock merge input profile");
         profiles.push_back(t::EcmProfile::load(input));
     }
-    const auto merged=t::merge_ecm_profiles(profiles);
+    auto merged=t::merge_ecm_profiles(profiles);attach_tune_ntt(o,destination,merged);
     if(!destination.parent_path().empty())fs::create_directories(destination.parent_path());
     const fs::path partial(destination.string()+".partial."+std::to_string(GetCurrentProcessId()));
     std::ofstream output(partial,std::ios::binary|std::ios::trunc);if(!output)throw std::runtime_error("cannot write merged ECM tune partial");
@@ -1252,7 +1292,13 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
     if(!measured)throw std::runtime_error("ECM tune measured no resident shapes; partial/evidence retained");
     output<<"\n[summary]\ncomplete = 1\nmeasured = "<<measured<<"\nskipped = "<<skipped<<"\nfailed = 0\n";
     output.flush();if(!output)throw std::runtime_error("ECM tune flush failed");output.close();if(!output)throw std::runtime_error("ECM tune close failed");
-    t::EcmProfile::load(partial);
+    auto completed=t::EcmProfile::load(partial);
+    if(!o.tune_ntt_profiles.empty()) {
+        attach_tune_ntt(o,destination,completed);
+        std::ofstream extended(partial,std::ios::binary|std::ios::trunc);
+        extended<<t::ecm_profile_text(completed);extended.flush();if(!extended)throw std::runtime_error("ECM/NTT tune write failed");
+        extended.close();if(!extended)throw std::runtime_error("ECM/NTT tune close failed");t::EcmProfile::load(partial);
+    }
     if(binary!=ecm_stage2::sha256_file(executable()) || (!build.empty() && build!=ecm_stage2::sha256_file(manifest)))throw std::runtime_error("ECM tune executable/build changed; partial retained");
     if(!MoveFileExW(partial.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::runtime_error("cannot publish ECM tune profile");
     std::cout<<"ecm_tune_complete: measured="<<measured<<" skipped="<<skipped<<" profile="<<destination.string()<<" evidence="<<evidence.string()<<std::endl;
@@ -1282,7 +1328,7 @@ int driver(Options o) {
     if (!o.tune.empty() && ((o.tune != "ntt" && o.tune!="ecm") || !o.save.empty() || !o.worktodo.empty() ||
         o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once || o.auto_b2 || !o.cost_profile.empty() || !o.tune_profile.empty() || o.has_carrier))
         throw std::runtime_error("--tune ntt|ecm is independent of save/queue/curve planning options; ECM accepts --tune-save");
-    if(o.tune=="ntt" && (!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() || !o.tune_exponents.empty() || o.has_tune_max_batches || o.has_tune_tail_samples || !o.tune_merge.empty()))throw std::runtime_error("ECM tune grid/merge options require --tune ecm");
+    if(o.tune=="ntt" && (!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() || !o.tune_exponents.empty() || o.has_tune_max_batches || o.has_tune_tail_samples || !o.tune_merge.empty() || !o.tune_ntt_profiles.empty()))throw std::runtime_error("ECM tune grid/merge options require --tune ecm");
     if(o.tune=="ecm" && o.has_tune_lengths)throw std::runtime_error("length-log2 requires --tune ntt");
     if(o.tune=="ecm" && o.has_tune_slices)throw std::runtime_error("tune-slices requires --tune ntt");
     if(o.tune=="ecm" && o.has_tune_memory)throw std::runtime_error("ECM tune uses batch/arena/owner budgets; tune-memory-mb requires --tune ntt");

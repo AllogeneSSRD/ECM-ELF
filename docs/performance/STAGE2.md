@@ -498,7 +498,7 @@ GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大
 
 ## NTT 与配对阶段组合验证
 
-实验组合模型使用完整engine成本减去同次giant_loop后的配对固定项，再用精确NTT批量参照、ladder迭代和分块特征拟合主循环。数学形式和适用条件见[组合模型](../architecture/AUTO_B2.md#实验性-ntt-与阶段组合)。它不是将NTT实测加到已包含NTT的阶段耗时中，也不将NTT参照视为完整阶段时间。
+组合模型使用完整engine成本减去同次giant_loop后的配对固定项，再用精确NTT批量参照、ladder迭代和分块特征拟合主循环。数学形式和适用条件见[组合模型](../architecture/AUTO_B2.md#ntt-与配对阶段组合)。它不是将NTT实测加到已包含NTT的阶段耗时中，也不将NTT参照视为完整阶段时间。
 
 训练为5872-bit余因子、承载6011、B1=20、D=60060/120120、B2=2.6e9…26e9的32scope/96正式曲线，每组8锚点；四组最大留一误差为6.827%、7.838%、4.960%、4.143%，均在8%门限内。既有12e9/23e9数据的回顾对照最大候选误差2.845%，不作为新的独立验收。
 
@@ -506,11 +506,28 @@ GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大
 
 本轮二进制与NTT标定相同，SHA256为`ef7bbf432221a9b2449584ab0464bf852bd4df619b0164e046bad7e589df5ecf`，设备/编译/预算条件沿用上节；保存点SHA256为`09e18bc98160b028d664e2c3706a6630f4216f772f96a706561101d6d97e3f42`。55,296 mandatory cases、224,700 GMP核对，坏计数及因子命中为0。293个利用率>50%的NVML样本中SM为1575…1800 MHz、功率20.34…54.96 W，条件是1800 MHz上限与默认55 W，不是全程恒定频率。计时为stage2_full_wall.total，排除Stage1、进程启动和规划；原始预热、失败记录、冻结预测与实际模块身份均保留。
 
-实验输出仍为`ranking_qualified=false`，主路径使用已实现的完整ECM实测/giant_route_cost_v2。此验收不覆盖其他位宽、生产B1、预算和非驻留/G1；原生组合预测及收益验收仍待完成。证据在`data/experiments/ntt_phase_tune_20261010/components/`、`query_supplement/`、`fresh_holdouts/`及`components_cpu/`，入口为[分析工具](../../tools/bench/analyze_stage2_tune_components.py)和[新留出验收](../../tools/bench/validate_stage2_tune_components.py)。
+独立分析输出的实验模型仍为`ranking_qualified=false`，主路径不读取该系数文件；生产格式4从完整ECM与精确NTT原始测量重新拟合。上述实验验收不覆盖其他位宽、生产B1、预算和非驻留/G1。证据在`data/experiments/ntt_phase_tune_20261010/components/`、`query_supplement/`、`fresh_holdouts/`及`components_cpu/`，入口为[分析工具](../../tools/bench/analyze_stage2_tune_components.py)和[实验模型留出验收](../../tools/bench/validate_stage2_tune_components.py)。
 
 ### 原生组合计算层的参考一致性
 
-原生组合计算层的CPU一致性证据在`data/experiments/ntt_phase_tune_20261010/native_components_v3/`。使用上述32个锚点和12.5e9/23.7e9的8份独立计划，逐项核对3,018个阶段/NTT批次bins及244项数值，包括每阶段参照、四组固定项/非负系数/留一误差和8个预测/保护成本；相对容差1e−7、绝对容差1e−10。10项底层门禁及8项组/reader拒绝检查通过，另覆盖缺失形状、查询端点和预算策略变化；加入异常耗时的组不合格，没有放宽8%门限。MSVC C++17/O2的CPU fixture与头文件闭包、输入和GMP DLL均冻结并在结束时核对。工具为[原生组合参考检查](../../tools/test/test_stage2_tune_components_native.py)，不启动CUDA或新增GPU曲线，因此不是新的性能收益测量；生产排名尚未接入该层。
+原生组合计算层的CPU一致性证据在`data/experiments/ntt_phase_tune_20261010/native_components_v8/`。使用上述32个锚点和12.5e9/23.7e9的8份独立计划，逐项核对3,018个阶段/NTT批次bins及252项数值，包括每阶段参照、四组固定项/非负系数/留一误差、8个预测/保护成本与生产Estimator；相对容差1e−7、绝对容差1e−10。10项底层门禁、8项组/reader拒绝与16项NTT/格式4拒绝检查通过，覆盖缺失形状、查询端点、预算策略、参考单位、核验量、重复统计和设备/归约环境变化。原生导入337种NTT实测形状，格式4往返及内嵌Python参考预测一致；异常耗时组不合格，没有放宽8%门限。MSVC C++17/O2的CPU fixture、头文件闭包、输入和GMP DLL均冻结并在结束时核对。工具为[原生组合参考检查](../../tools/test/test_stage2_tune_components_native.py)，不启动CUDA，因此不是性能收益测量。
+
+### 原生组合模型的主路径验证
+
+生产程序读取格式4完整ECM tune，合格组可在固定B2的D/承载排名及Auto B2中使用`phase_ntt_loop_v1`。精确ECM实测点优先；缺少精确NTT形状或组合资格不足时检查`giant_route_cost_v2`，再不合格时只使用精确点。实际giant/NTT分块策略、目标N整除承载和实时联合显存准入继续独立检查。文件中只有实测数组和策略，不含程序路径、构建身份或预拟合系数。
+
+验证输入为上述M6011的5872-bit余因子、B1=20、sigma26、归一化PARAM0 save；GPU1 RTX4060 Laptop，CUDA13.3/PTX3/sub-mask=1/outer=0，用户1800 MHz上限/默认55 W设置，batch256/arena6300/fold640 MiB。使用32个冻结锚点、337种精确NTT实测形状，训练范围B2=2.6e9…26e9；未将留出曲线成本加入训练。生产EXE SHA256=`eea672d1ea862df56c024b7a941e44970159aa167a926c8b5e41ec76ddcd640a`，格式4 profile=`ebe03493cfc1c6c42f7f43581c885838029f451bf02ec3e726468ffdb10b4b3e`，save=`09e18bc98160b028d664e2c3706a6630f4216f772f96a706561101d6d97e3f42`。沿用已核验的CUDA对象，实际加载的EXE/GMP及61项源闭包核对一致。
+
+两个未测B2各测试D60060/120120×普通/承载6011四候选；每候选预热1次、正式3次，另各执行1条不锁定D/承载的自动曲线，共34条。按D60060普通、D60060承载、D120120普通、D120120承载排列，引擎total中位数为：
+
+- B2=12.5e9：11.440463、8.821076、6.008838、4.626472 s；预测11.391958、8.624323、5.903875、4.580255 s。
+- B2=23.7e9：17.267044、9.983642、10.890436、8.004233 s；预测16.908719、9.823345、10.836932、7.973452 s。
+
+最大候选时间误差2.2305%，两档均选D120120/承载6011，有限四候选的实测排名损失0；未锁定自动曲线为4.631056、7.982833 s，误差1.0970%、0.1175%。保持8%时间/5%排名门限。计时为`stage2_full_wall.total`，排除Stage1、进程启动、规划和结果发布；候选采用固定顺序，每项n=3，没有交错置信区间或全区间精度证明，也没有新增内核速度收益结论。58,944 mandatory cases、233,864 GMP核对，bad和因子命中均为0。NVML每秒采样，GPU1完整349点；利用率>50%的305点中SM1560…1800 MHz、中位数1800，功率12.73…55.12 W、中位数47.14 W，不是严格恒频。
+
+证据`data/experiments/ntt_phase_tune_20261010/component_main_holdouts/`及`component_main_audit/result.json`。102项测量输入的冻结副本均匹配原始摘要，当前二进制的61项源仍一致。测量结束后工作量辅助工具修正格式2/3的旧调用兼容，冻结的GPU验收工具保留；修正后的当前工具已通过上述CPU原生参考及`workload_format4_regression/`的32计划重放，不将当前辅助工具摘要冒充为旧测量摘要。
+
+实际CLI合并的32个ECM范围与337个NTT形状、失败保留旧输出和再次合并已核对，证据`component_merge_runtime_v2/`。已知素数M521/B1=20/D60060/B2=2.6e9完成1次预热及1次正式曲线，再导入167个NTT形状并原子发布格式4，证据`live_ntt_import/`；这是发布入口检查，不是重复性能验收。Auto B2另通过INI、显式普通/承载/D锁定、精确点优先、未限制搜索和缺项回退共6个计划及1条完整未锁定曲线，证据`component_auto_runtime_v4/`，入口为[Auto运行检查](../../tools/test/test_stage2_tune_component_auto_runtime.py)。该检查T1=3 s/curve是固定测试输入，不是Stage1测量或全流程收益排名证明。更多生产位宽/B1、真实Stage1成本、预算、cold/driver和非驻留/G1仍在[TODO](../TODO.md)。
 
 ## 下一测量
 

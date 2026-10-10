@@ -706,14 +706,16 @@ stage2_tune_profile=<path>; default=""; empty=legacy_selection
 
 Full ECM tune TOML for D and legal Mersenne carrier selection. Matches device/backend/memory<br>
 policy/target width/B1. Uses exact B2 measurements or qualified predictions inside measured bounds;<br>
-no width/B1/D extrapolation. With stage2_auto_b2 and a provided or matched measured Stage1 cost,<br>
-jointly chooses B2/D/carrier and takes priority over stage2_cost_profile. Explicit nonzero D fixes<br>
-D; --carrier-exponent including 0 fixes arithmetic. Saved N must divide the carrier. Empty keeps<br>
-existing selection.<br>
+no width/B1/D extrapolation. Format 4 can include exact NTT batch measurements for a qualified<br>
+paired-phase model; missing shapes or an ineligible group retain the full-curve model. With<br>
+stage2_auto_b2 and a provided or matched measured Stage1 cost, jointly chooses B2/D/carrier and<br>
+takes priority over stage2_cost_profile. Explicit nonzero D fixes D; --carrier-exponent including 0<br>
+fixes arithmetic. Saved N must divide the carrier. Empty keeps existing selection.<br>
 用于 D 和合法梅森承载选择的完整 ECM tune TOML。匹配设备、后端、显存策略、目标位宽和 B1；使用精确 B2<br>
-实测或合格实测区间预测，不外推位宽、B1 或 D。启用 stage2_auto_b2 并提供或匹配实测的 Stage1 成本后，<br>
-联合选择 B2、D、承载，优先于 stage2_cost_profile。显式非零 D 固定 D；--carrier-exponent（包括 0）固<br>
-定算术。save 的 N 必须整除承载。留空保持已有选型。
+实测或合格实测区间预测，不外推位宽、B1 或 D。格式 4 可内嵌精确 NTT 批量实测，供合格配对阶段模型预测<br>
+；缺项或组不合格时保留完整曲线模型。启用 stage2_auto_b2 并提供或匹配实测的 Stage1 成本后，联合选择<br>
+B2、D、承载，优先于 stage2_cost_profile。显式非零 D 固定 D；--carrier-exponent（包括 0）固定算术。<br>
+save 的 N 必须整除承载。留空保持已有选型。
 
 ### stage1_tune_profile
 

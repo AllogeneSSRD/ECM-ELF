@@ -1,6 +1,7 @@
 #pragma once
 #include "ecm_stage2_tune_prediction.h"
 #include <set>
+#include <functional>
 
 namespace ecm_stage2 { namespace tune {
 struct AutoRequest {
@@ -14,6 +15,10 @@ struct AutoCandidate {
     B2Prediction prediction;
     bool limited=false;
 };
+struct AdditionalPrediction {
+    std::function<bool(const std::vector<const Fields*>&)> prepare;
+    std::function<bool(const std::vector<const Fields*>&,Word,B2Prediction&)> predict;
+};
 inline double relative_ecm_benefit(Word b1,Word b2) {
     const double a=1.96617-0.06781*std::log10((double)b1);
     return 0.11343+0.88657*std::pow(std::log10((double)b2/(double)b1)/2,a);
@@ -21,7 +26,7 @@ inline double relative_ecm_benefit(Word b1,Word b2) {
 // Samples have passed the native reader and the caller's target/device/policy
 // and explicit-option filters. Costs are performance estimates, not admission.
 inline std::vector<AutoCandidate> auto_candidates(const std::vector<const Fields*> &samples,
-                                                bool opted,const AutoRequest &request) {
+                                                bool opted,const AutoRequest &request,const AdditionalPrediction &additional={}) {
     if(request.b1<2 || !(request.stage1_seconds>0) || !std::isfinite(request.stage1_seconds) ||
        !(request.adjust>0) || !std::isfinite(request.adjust))
         throw std::runtime_error("full ECM Auto B2 requires positive Stage1 seconds per curve and ratio adjustment");
@@ -53,7 +58,9 @@ inline std::vector<AutoCandidate> auto_candidates(const std::vector<const Fields
         std::set<Word> points;
         for(const auto *s:anchors)if(uint(*s,"b2")>=lo && uint(*s,"b2")<=hi)points.insert(uint(*s,"b2"));
         B2Model model;
-        const bool model_ready=opted && prepare_b2_model(anchors,model);
+        const bool route_ready=opted && prepare_b2_model(anchors,model);
+        const bool component_ready=additional.prepare && additional.prepare(anchors);
+        const bool model_ready=route_ready || component_ready;
         if(model_ready) {
             points.insert(lo);points.insert(hi);
             for(int index=1;index<64;++index) {
@@ -78,7 +85,8 @@ inline std::vector<AutoCandidate> auto_candidates(const std::vector<const Fields
                 candidate.mad_seconds=real(*exact,"mad_seconds");
                 candidate.guarded_seconds=candidate.seconds+2*candidate.mad_seconds;
             } else {
-                if(!model_ready || !predict_b2(model,b2,candidate.prediction))continue;
+                const bool component=component_ready && additional.predict && additional.predict(anchors,b2,candidate.prediction);
+                if(!component && (!route_ready || !predict_b2(model,b2,candidate.prediction)))continue;
                 candidate.sample=anchors.front();candidate.seconds=candidate.prediction.seconds;
                 candidate.mad_seconds=candidate.prediction.mad_seconds;
                 candidate.guarded_seconds=candidate.seconds+candidate.prediction.error_seconds+2*candidate.mad_seconds;

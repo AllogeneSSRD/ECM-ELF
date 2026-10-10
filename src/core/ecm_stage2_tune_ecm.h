@@ -10,6 +10,8 @@
 namespace ecm_stage2 { namespace tune {
 constexpr const char *b2_prediction_model="giant_route_cost_v2";
 constexpr const char *legacy_b2_prediction_model="linear_giant_points_v1";
+constexpr const char *component_prediction_model="phase_ntt_loop_v1";
+constexpr const char *ntt_cost_accounting="cuda_events_two_forward_product_inverse_v1";
 struct EcmEffort {
     std::vector<unsigned> exponents;
     std::vector<Word> d,b2;
@@ -133,6 +135,40 @@ inline double median(std::vector<double> v) {
     return v.size()%2?v[v.size()/2]:v[v.size()/2-1]+(v[v.size()/2]-v[v.size()/2-1])/2;
 }
 inline double mad(const std::vector<double> &v) {const auto m=median(v);auto a=v;for(auto &x:a)x=std::abs(x-m);return median(a);}
+inline std::pair<Word,Word> ntt_scope(const Fields &s) {
+    return {uint(s,"length"),uint(s,"batch")};
+}
+inline std::string ntt_section(const Fields &s) {
+    const auto key=ntt_scope(s);return "ntt.length_"+std::to_string(key.first)+".slices_"+std::to_string(key.second);
+}
+inline void validate_ntt_measurement(const Fields &s) {
+    const auto key=ntt_scope(s);const auto n=key.first,b=key.second;
+    if(n<8 || n>(1ull<<27) || (n&(n-1)) || !b || b>65535 || uint(s,"bad") ||
+       required(s,"status")!="\"measured\"" || required(s,"unit")!="\"field_convolution\"" ||
+       required(s,"reference_kind")!="\"gmp_3x3_distinct_constant_v1\"" || uint(s,"verified_words_per_sample")!=n*b)
+        throw std::runtime_error("invalid/unchecked NTT measurement");
+    Word log=0;for(auto size=n;size>1;size>>=1)++log;
+    if(uint(s,"log2_length")!=log)throw std::runtime_error("inconsistent NTT length");
+    const auto seconds=array(required(s,"seconds"));const auto m=median(seconds);
+    auto close=[](double a,double b){return std::abs(a-b)<=1e-9*std::max(std::abs(a),std::abs(b));};
+    if(seconds.size()!=uint(s,"repeats") || seconds.size()>1000 || *std::min_element(seconds.begin(),seconds.end())<=0 ||
+       !close(m,real(s,"median_seconds")) || !close(double(b)/m,real(s,"conv_iter_per_s")) ||
+       !close(1/m,real(s,"batch_iter_per_s")))throw std::runtime_error("inconsistent NTT samples/statistics");
+}
+inline Word environment_uint(const Fields &environment,const char *key,Word fallback) {
+    const auto found=environment.find(key);return found==environment.end()?fallback:cost::integer(found->second);
+}
+inline Fields ntt_packing_policy(const Fields &environment) {
+    const auto override=environment_uint(environment,"s4_batch_mb",0);
+    const auto batch=override?override:((environment_uint(environment,"s4_hostpack",0) ||
+        !environment_uint(environment,"s4_pack_direct",1))?32:64);
+    if(!batch || batch>std::numeric_limits<Word>::max()/1048576)throw std::runtime_error("invalid NTT chunk budget");
+    return {{"accounting",std::string("\"")+ntt_cost_accounting+"\""},
+        {"batch_bytes",std::to_string(batch*1048576)},
+        {"buffers",environment_uint(environment,"arena_workspace_pool",1) && environment_uint(environment,"workspace_reuse_bq",0)?"2":"3"},
+        {"physical_chunks",environment_uint(environment,"s4_workspace_budget",0)?"1":"0"},
+        {"chunk_max",std::to_string(environment_uint(environment,"s4_chunk_max",0))}};
+}
 inline std::string sample_scope(const Fields &sample) {
     std::string key;
     for(const char *field:{"target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d"})
@@ -220,12 +256,15 @@ inline std::string ecm_table(const Fields &f,size_t index) {
 struct EcmProfile {
     Fields profile,device,policy,environment,summary;
     std::vector<Fields> samples;
+    Fields ntt_policy;
+    std::map<std::pair<Word,Word>,Fields> ntt_samples;
     static EcmProfile load(const std::filesystem::path &path) {
         std::error_code error;const auto size=std::filesystem::file_size(path,error);
         // Level 10 has up to 3094 scopes, each with 21 paired cost samples.
         if(error || size>64*1048576)throw std::runtime_error("ECM tune profile missing or exceeds 64MiB");
         std::ifstream in(path,std::ios::binary);EcmProfile p;Fields *table=nullptr;
         std::set<std::string> sections;std::string line;
+        std::map<std::string,Fields> ntt_tables;
         auto trim=[](std::string s){const auto a=s.find_first_not_of(" \t\r\n");if(a==s.npos)return std::string{};return s.substr(a,s.find_last_not_of(" \t\r\n")-a+1);};
         bool first_line=true;
         while(std::getline(in,line)) {
@@ -238,6 +277,8 @@ struct EcmProfile {
                 if(name=="profile")table=&p.profile;else if(name=="device")table=&p.device;
                 else if(name=="policy")table=&p.policy;else if(name=="summary")table=&p.summary;
                 else if(name=="policy.environment")table=&p.environment;
+                else if(name=="ntt.policy")table=&p.ntt_policy;
+                else if(name.compare(0,11,"ntt.length_")==0)table=&ntt_tables[name];
                 else if(name.compare(0,11,"ecm.sample_")==0) {
                     cost::integer(name.substr(11));if(p.samples.size()>=4096)throw std::runtime_error("too many ECM tune samples");
                     p.samples.emplace_back();table=&p.samples.back();
@@ -249,7 +290,7 @@ struct EcmProfile {
                 if(!table->emplace(key,parsed.at(key)).second)throw std::runtime_error("duplicate ECM tune key");
             }
         }
-        if(!in.eof() || (uint(p.profile,"format")!=2 && uint(p.profile,"format")!=3) || required(p.profile,"unit")!="\"full_stage2\"" ||
+        if(!in.eof() || (uint(p.profile,"format")!=2 && uint(p.profile,"format")!=3 && uint(p.profile,"format")!=4) || required(p.profile,"unit")!="\"full_stage2\"" ||
            uint(p.profile,"algorithm_revision")!=1 || uint(p.summary,"complete")!=1 || uint(p.summary,"failed") ||
            uint(p.summary,"measured")!=p.samples.size() || p.samples.empty())throw std::runtime_error("incomplete/unsupported ECM tune profile");
         if(uint(p.profile,"effort_level")<1 || uint(p.profile,"effort_level")>10 ||
@@ -273,6 +314,18 @@ struct EcmProfile {
             if(!sections.count("policy.environment") || p.policy.count("environment"))throw std::runtime_error("missing/mixed named tune environment");
             if(uint(p.profile,"max_batches")>1048576)throw std::runtime_error("invalid tune batch limit");
         }
+        if(uint(p.profile,"format")==4) {
+            for(const auto &setting:p.environment)cost::integer(setting.second);
+            if(required(p.profile,"component_model")!=std::string("\"")+component_prediction_model+"\"" ||
+               p.ntt_policy!=ntt_packing_policy(p.environment) || ntt_tables.empty() || ntt_tables.size()>65536 ||
+               uint(p.summary,"ntt_measured")!=ntt_tables.size())throw std::runtime_error("incomplete ECM/NTT component profile");
+            for(const auto &entry:ntt_tables) {
+                validate_ntt_measurement(entry.second);
+                if(entry.first!=ntt_section(entry.second) || !p.ntt_samples.emplace(ntt_scope(entry.second),entry.second).second)
+                    throw std::runtime_error("duplicate/mismatched embedded NTT shape");
+            }
+        } else if(!ntt_tables.empty() || !p.ntt_policy.empty() || p.profile.count("component_model") || p.summary.count("ntt_measured"))
+            throw std::runtime_error("embedded NTT measurements require ECM format 4");
         std::set<std::string> scopes;
         for(const auto &s:p.samples) {
             validate_sample(s);if(uint(s,"repeats")!=uint(p.profile,"repeats"))throw std::runtime_error("inconsistent ECM profile repetitions");
@@ -285,7 +338,7 @@ struct EcmProfile {
                     if((source=="\"ladder_tail\"")!=(uint(s,"giant_ladder_steps")!=0))throw std::runtime_error("adaptive sample route mismatch");
                 }
             }
-            if(uint(p.profile,"format")==3 && uint(p.profile,"max_batches") &&
+            if(uint(p.profile,"format")>=3 && uint(p.profile,"max_batches") &&
                 (uint(s,"giant_points")+uint(s,"p")-1)/uint(s,"p")>uint(p.profile,"max_batches"))throw std::runtime_error("ECM sample exceeds declared batch limit");
             if(!scopes.insert(sample_scope(s)).second)throw std::runtime_error("duplicate ECM tune measurement scope");
         }
@@ -303,7 +356,7 @@ struct EcmProfile {
 // profile, rather than mixing trials collected under unknown thermal conditions.
 inline EcmProfile merge_ecm_profiles(const std::vector<EcmProfile> &inputs) {
     if(inputs.empty() || inputs.size()>64)throw std::runtime_error("merge requires 1..64 ECM tune profiles");
-    EcmProfile result=inputs.front();result.policy.erase("environment");result.samples.clear();
+    EcmProfile result=inputs.front();result.policy.erase("environment");result.samples.clear();result.ntt_samples.clear();
     std::map<std::string,size_t> positions;Word effort=0,limit=0,skipped=0,replaced=0,tail_samples=0;bool unlimited=false,sampled=false;
     for(const auto &input:inputs) {
         if(input.profile.count("prediction_model"))result.profile["prediction_model"]=required(input.profile,"prediction_model");
@@ -328,6 +381,12 @@ inline EcmProfile merge_ecm_profiles(const std::vector<EcmProfile> &inputs) {
                 positions.emplace(key,result.samples.size());result.samples.push_back(sample);
             } else {result.samples[existing->second]=sample;++replaced;}
         }
+        for(const auto &entry:input.ntt_samples) {
+            const auto found=result.ntt_samples.find(entry.first);
+            if(found!=result.ntt_samples.end() && found->second!=entry.second)
+                throw std::runtime_error("ECM merge has ambiguous NTT measurement");
+            result.ntt_samples[entry.first]=entry.second;
+        }
     }
     result.profile["format"]="3";result.profile["effort_level"]=std::to_string(effort);
     result.profile["max_batches"]=std::to_string(unlimited?0:limit);
@@ -335,6 +394,10 @@ inline EcmProfile merge_ecm_profiles(const std::vector<EcmProfile> &inputs) {
     result.summary={{"complete","1"},{"failed","0"},{"measured",std::to_string(result.samples.size())},
                     {"skipped",std::to_string(skipped)},{"merged_profiles",std::to_string(inputs.size())},
                     {"replaced_scopes",std::to_string(replaced)}};
+    if(!result.ntt_samples.empty()) {
+        result.profile["format"]="4";result.profile["component_model"]=std::string("\"")+component_prediction_model+"\"";
+        result.ntt_policy=ntt_packing_policy(result.environment);result.summary["ntt_measured"]=std::to_string(result.ntt_samples.size());
+    } else {result.ntt_policy.clear();result.profile.erase("component_model");}
     return result;
 }
 inline std::string ecm_profile_text(const EcmProfile &profile) {
@@ -345,6 +408,10 @@ inline std::string ecm_profile_text(const EcmProfile &profile) {
     emit("profile",profile.profile);emit("device",profile.device);emit("policy",profile.policy);
     emit("policy.environment",profile.environment);
     for(size_t i=0;i<profile.samples.size();++i)out<<ecm_table(profile.samples[i],i);
+    if(!profile.ntt_samples.empty()) {
+        emit("ntt.policy",profile.ntt_policy);
+        for(const auto &entry:profile.ntt_samples)emit(ntt_section(entry.second).c_str(),entry.second);
+    }
     emit("summary",profile.summary);return out.str();
 }
 } }

@@ -72,7 +72,7 @@ def main():
     freeze(Path(__file__))
     freeze(ROOT/'tools/bench/analyze_stage2_tune_workload.py')
     profile = tomllib.loads(freeze(a.profile).read_text(encoding='utf-8-sig'))
-    if (profile['profile']['format'] not in (2,3) or profile['profile']['unit'] != 'full_stage2' or
+    if (profile['profile']['format'] not in (2,3,4) or profile['profile']['unit'] != 'full_stage2' or
             not profile['summary']['complete'] or profile['summary']['failed'] or
             profile['summary']['measured'] != len(profile['ecm'])):
         raise ValueError('complete measured ECM profile required')

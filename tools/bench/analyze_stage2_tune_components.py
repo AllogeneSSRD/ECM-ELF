@@ -142,7 +142,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for key in ('profile','workload','output'):
         p.add_argument('--'+key,type=Path,required=True)
-    p.add_argument('--ntt-profile',type=Path,action='append',required=True)
+    p.add_argument('--ntt-profile',type=Path,action='append',default=[])
     p.add_argument('--holdout-result',type=Path)
     p.add_argument('--query-plans',type=Path)
     a = p.parse_args()

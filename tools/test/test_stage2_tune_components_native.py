@@ -47,7 +47,8 @@ def main():
 
     profile_path = freeze(a.profile)
     profile = tomllib.loads(profile_path.read_text(encoding='utf-8-sig'))
-    ntt = [tomllib.loads(freeze(path).read_text(encoding='utf-8-sig')) for path in a.ntt_profile]
+    frozen_ntt=[freeze(path) for path in a.ntt_profile]
+    ntt = [tomllib.loads(path.read_text(encoding='utf-8-sig')) for path in frozen_ntt]
     measured, qualified = ntt_profile_set(profile, ntt)
     if not qualified:
         raise ValueError('matching declared NTT policies required')
@@ -237,12 +238,93 @@ def main():
     affected=[m for m in changed_policy['models'] if m['d']==samples[0]['d'] and m['carrier']==samples[0]['carrier_exponent']]
     assert len(affected)==1 and not affected[0]['qualified']
     rejected_groups+=3
+    # Native import and format-4 roundtrip, then the same estimator used by main.
+    attached=subprocess.run([str(exe),'--attach',str(profile_path),*[str(p) for p in frozen_ntt]],
+                            capture_output=True,text=True,timeout=60)
+    if attached.returncode:
+        raise RuntimeError(attached.stderr)
+    extended=out/'component_profile.toml'
+    extended.write_text(attached.stdout,encoding='utf-8')
+    embedded=tomllib.loads(attached.stdout)
+    assert embedded['profile']['format']==4 and embedded['profile']['component_model']==ref.MODEL
+    assert embedded['summary']['ntt_measured']==len(measured)
+    assert ntt_profile_set(embedded,[])==(measured,True)
+    assert not any(token in attached.stdout for token in ('sha256','binary_hash','D:\\','build_manifest'))
+    assert subprocess.check_output([str(exe),'--load',str(extended)],text=True).split()==[str(len(samples)),str(len(measured))]
+    imported=invoke('embedded',input_profile=extended)
+    assert all(m['embedded_qualified'] for m in imported['models'])
+    for native,baseline in zip(imported['cases'][len(samples):],actual['cases'][len(samples):]):
+        assert native['embedded_predicted'] and native['embedded_model']==ref.MODEL
+        close(native['embedded_seconds'],baseline['seconds'])
+    format_rejections=0
+
+    def import_refuses(name,changed=None,inputs=None):
+        nonlocal format_rejections
+        paths=inputs
+        if paths is None:
+            text=''.join(table(k,changed[k]) for k in ('profile','device'))
+            text+=table('policy',{k:v for k,v in changed['policy'].items() if k!='environment'})
+            text+=table('policy.environment',changed['policy']['environment'])
+            text+=''.join(table('ntt.'+length+'.'+batch,s) for length,batches in changed['ntt'].items() for batch,s in batches.items())
+            text+=table('summary',changed['summary'])
+            path=out/(name+'.toml')
+            path.write_text(text,encoding='utf-8')
+            paths=[path]
+        failed=subprocess.run([str(exe),'--attach',str(profile_path),*[str(p) for p in paths]],capture_output=True,text=True,timeout=60)
+        (out/(name+'.stderr')).write_text(failed.stderr,encoding='utf-8')
+        assert failed.returncode and failed.stderr
+        format_rejections+=1
+
+    base_ntt=next(p for p in ntt if any(s['status']=='measured' for batch in p['ntt'].values() for s in batch.values()))
+    for name,key,value in [('wrong_ntt_mask','gl_add_sub_mask',3),('wrong_ntt_driver','cuda_driver',1)]:
+        changed=copy.deepcopy(base_ntt)
+        changed['device'][key]=value
+        import_refuses(name,changed)
+    changed=copy.deepcopy(base_ntt)
+    changed['policy']['environment']['s4_batch_mb']+=1
+    import_refuses('wrong_ntt_environment',changed)
+    for name,key,value in [('unchecked_ntt','bad',1),('wrong_words','verified_words_per_sample',1),
+                           ('wrong_ntt_unit','unit','ecm'),('wrong_ntt_reference','reference_kind','unknown'),
+                           ('wrong_ntt_median','median_seconds',100.),('wrong_ntt_rate','conv_iter_per_s',0.)]:
+        changed=copy.deepcopy(base_ntt)
+        record=next(s for batch in changed['ntt'].values() for s in batch.values() if s['status']=='measured')
+        record[key]=value
+        import_refuses(name,changed)
+    changed=copy.deepcopy(base_ntt)
+    changed['profile']['format']=1
+    import_refuses('legacy_ntt_policy_missing',changed)
+    changed=copy.deepcopy(base_ntt)
+    changed['profile']['repeats']+=1
+    import_refuses('wrong_ntt_repeats',changed)
+    changed=copy.deepcopy(base_ntt)
+    first_length=next(iter(changed['ntt']))
+    del changed['ntt'][first_length][next(iter(changed['ntt'][first_length]))]
+    import_refuses('incomplete_ntt_grid',changed)
+    import_refuses('duplicate_ntt_input',inputs=[frozen_ntt[0],frozen_ntt[0]])
+    for name,change in [('embedded_count',lambda p:p['summary'].update(ntt_measured=1)),
+                        ('embedded_model',lambda p:p['profile'].update(component_model='unknown')),
+                        ('embedded_policy',lambda p:p['ntt']['policy'].update(batch_bytes=1))]:
+        changed=copy.deepcopy(embedded)
+        change(changed)
+        text=''.join(table(k,changed[k]) for k in ('profile','device'))
+        text+=table('policy',{k:v for k,v in changed['policy'].items() if k!='environment'})
+        text+=table('policy.environment',changed['policy']['environment'])
+        text+=''.join(table('ecm.'+k,s) for k,s in changed['ecm'].items())
+        text+=table('ntt.policy',changed['ntt']['policy'])
+        text+=''.join(table('ntt.'+length+'.'+batch,s) for length,batches in changed['ntt'].items() if length!='policy' for batch,s in batches.items())
+        text+=table('summary',changed['summary'])
+        path=out/(name+'.toml')
+        path.write_text(text,encoding='utf-8')
+        failed=subprocess.run([str(exe),'--load',str(path)],capture_output=True,text=True,timeout=60)
+        assert failed.returncode and failed.stderr
+        format_rejections+=1
     for path,digest in identities.items():
         assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==digest, path
     result = dict(complete=True,anchors=len(samples),queries=len(a.query_plan),groups=len(models),
         bins=sum(len(c['bins']) for c in actual['cases']),numeric_checks=checks,selftest_gates=gates['gates'],
         missing_shape_refused=True,endpoints_refused=True,changed_policy_refused=True,
         rejected_group_or_reader_cases=rejected_groups,noisy_group_ineligible=True,
+        native_ntt_import=True,format4_roundtrip=True,embedded_predictions_match=True,format_rejections=format_rejections,
         source_identities_match=True,production_ranking_changed=False,identities=identities)
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in result.items() if k!='identities'}))

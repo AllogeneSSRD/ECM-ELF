@@ -1,6 +1,7 @@
 // CPU-only conformance driver. Offline shape tables are frozen engine queries;
 // production callers must supply ecm_cuda_stage2_shape_query instead.
 #include "../../src/core/ecm_stage2_tune_components.h"
+#include "../../src/core/ecm_stage2_tune_ntt_profile.h"
 #include <iostream>
 #include <iomanip>
 using namespace ecm_stage2;
@@ -34,6 +35,14 @@ static void selftest() {
 int main(int argc,char **argv) {
     try {
         if(argc==2 && std::string(argv[1])=="--selftest"){selftest();return 0;}
+        if(argc>=4 && std::string(argv[1])=="--attach") {
+            auto profile=t::EcmProfile::load(argv[2]);std::vector<t::NttProfile> inputs;
+            for(int i=3;i<argc;++i)inputs.push_back(t::NttProfile::load(argv[i]));
+            t::attach_ntt_profiles(profile,inputs);std::cout<<t::ecm_profile_text(profile);return 0;
+        }
+        if(argc==3 && std::string(argv[1])=="--load") {
+            const auto p=t::EcmProfile::load(argv[2]);std::cout<<p.samples.size()<<' '<<p.ntt_samples.size()<<'\n';return 0;
+        }
         if(argc!=3)throw std::runtime_error("fixture requires ECM profile and offline cases");
         const auto profile=t::EcmProfile::load(argv[1]);std::ifstream in(argv[2]);
         size_t count=0;in>>count;if(!in || count>65536)throw std::runtime_error("invalid measurement count");
@@ -56,6 +65,15 @@ int main(int argc,char **argv) {
                 throw std::runtime_error("invalid native reference workload");
         }
         std::string trailing;if(in>>trailing)throw std::runtime_error("trailing offline input");
+        std::map<std::pair<int,Word>,std::pair<Word,Word>> all_shapes;
+        for(const auto &c:cases)for(const auto &shape:c.shapes) {
+            const auto key=std::make_pair(c.bits,shape.first);const auto found=all_shapes.find(key);
+            if(found!=all_shapes.end() && found->second!=shape.second)throw std::runtime_error("inconsistent frozen packing queries");
+            all_shapes[key]=shape.second;
+        }
+        t::ComponentEstimator embedded(profile,[&](Word m,int bits,Word *n,Word *slots){
+            const auto found=all_shapes.find({bits,m});if(found==all_shapes.end())return false;
+            *n=found->second.first;*slots=found->second.second;return true;});
         std::map<std::string,std::vector<t::ComponentAnchor>> groups;
         for(const auto &c:cases)if(c.sample>=0) {
             const auto &sample=profile.samples[c.sample];
@@ -69,8 +87,9 @@ int main(int argc,char **argv) {
             auto &m=models[g.first];t::prepare_component_model(g.second,m);
             if(!first)std::cout<<',';first=false;
             const auto &s=*g.second.front().sample;
+            std::vector<const t::Fields*> anchors;for(const auto &v:g.second)anchors.push_back(v.sample);
             std::cout<<"{\"d\":"<<t::uint(s,"d")<<",\"carrier\":"<<t::uint(s,"carrier_exponent")
-                <<",\"qualified\":"<<(m.qualified?"true":"false")<<",\"fixed_seconds\":"<<m.fixed_seconds
+                <<",\"qualified\":"<<(m.qualified?"true":"false")<<",\"embedded_qualified\":"<<(embedded.prepare(anchors)?"true":"false")<<",\"fixed_seconds\":"<<m.fixed_seconds
                 <<",\"relative\":"<<m.evidence.max_relative_error<<",\"absolute\":"<<m.evidence.error_seconds
                 <<",\"coefficients\":[";
             for(unsigned i=0;i<4;++i){if(i)std::cout<<',';std::cout<<m.coefficients[i];}std::cout<<"]}";
@@ -92,7 +111,11 @@ int main(int argc,char **argv) {
                 t::B2Prediction prediction;
                 const bool predicted=t::predict_component(models.at(g.first),c.b2,r,prediction);
                 std::cout<<",\"predicted\":"<<(predicted?"true":"false")<<",\"seconds\":"<<prediction.seconds
-                    <<",\"rank\":"<<prediction.seconds+prediction.error_seconds+2*prediction.mad_seconds;break;
+                    <<",\"rank\":"<<prediction.seconds+prediction.error_seconds+2*prediction.mad_seconds;
+                std::vector<const t::Fields*> anchors;for(const auto &v:g.second)anchors.push_back(v.sample);
+                t::B2Prediction estimate;const bool accepted=embedded.predict(anchors,c.b2,estimate);
+                std::cout<<",\"embedded_predicted\":"<<(accepted?"true":"false")<<",\"embedded_seconds\":"<<estimate.seconds
+                    <<",\"embedded_model\":\""<<estimate.model<<"\"";break;
             }
             std::cout<<'}';
         }

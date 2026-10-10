@@ -213,8 +213,8 @@ def ntt_policy_matches(ecm, ntt):
 
 def ntt_profile_set(ecm, profiles):
     """Join disjoint measurements; repeated measured shapes are ambiguous."""
-    samples = {}
-    qualified = bool(profiles)
+    samples = embedded_ntt_samples(ecm)
+    qualified = bool(profiles) or bool(samples)
     for profile in profiles:
         if not all(ecm['device'][k] == profile['device'][k] for k in IDENTITY):
             raise ValueError('NTT/full ECM device or arithmetic identity mismatch')
@@ -226,6 +226,42 @@ def ntt_profile_set(ecm, profiles):
     if len(profiles) > 1 and not qualified:
         raise ValueError('multiple NTT profiles require matching declared policies')
     return samples, qualified
+
+
+def embedded_ntt_samples(ecm):
+    """Format 4 inherits the complete ECM identity/environment, not file paths."""
+    if ecm.get('profile',{}).get('format') != 4:
+        if 'ntt' in ecm:
+            raise ValueError('embedded NTT data requires ECM format 4')
+        return {}
+    if ecm['profile'].get('component_model') != 'phase_ntt_loop_v1':
+        raise ValueError('unsupported embedded component model')
+    policy = ecm['ntt']['policy']
+    env = ecm['policy']['environment']
+    if not env or any(type(v) is not int or v < 0 for v in env.values()):
+        raise ValueError('embedded NTT requires named integer environment')
+    batch = env.get('s4_batch_mb',0) or (32 if env.get('s4_hostpack',0) or not env.get('s4_pack_direct',1) else 64)
+    expected = dict(accounting='cuda_events_two_forward_product_inverse_v1',batch_bytes=batch*1048576,
+        buffers=2 if env.get('arena_workspace_pool',1) and env.get('workspace_reuse_bq',0) else 3,
+        physical_chunks=int(bool(env.get('s4_workspace_budget',0))),chunk_max=env.get('s4_chunk_max',0))
+    if policy != expected:
+        raise ValueError('embedded NTT packing policy mismatch')
+    result = {}
+    for name,batches in ecm['ntt'].items():
+        if name == 'policy':
+            continue
+        for batch_name,s in batches.items():
+            n,b = integer(s['length'],8),integer(s['batch'],1)
+            one = dict(profile=dict(format=2,unit='field_convolution',min_log2=n.bit_length()-1,
+                max_log2=n.bit_length()-1,slices=[b],repeats=integer(s['repeats'],1)),
+                summary=dict(failed=0,usable=True,measured=1,skipped=0),ntt={name:{batch_name:s}})
+            rows = ntt_batch_samples(one)
+            if result.keys() & rows.keys():
+                raise ValueError('duplicate embedded NTT shape')
+            result.update(rows)
+    if not result or len(result) != integer(ecm['summary']['ntt_measured'],1):
+        raise ValueError('incomplete embedded NTT data')
+    return result
 
 
 def ntt_workload_features(rows, samples):
@@ -391,7 +427,7 @@ def main():
     try:
         source(Path(__file__))
         profile = tomllib.loads(source(a.profile).decode('utf-8-sig'))
-        if (profile['profile']['format'] not in (2, 3) or profile['summary']['failed'] or
+        if (profile['profile']['format'] not in (2, 3, 4) or profile['summary']['failed'] or
                 not profile['summary']['complete'] or profile['profile']['unit'] != 'full_stage2'):
             raise ValueError('complete full ECM profile required')
         repeats = integer(profile['profile']['repeats'], 1)
