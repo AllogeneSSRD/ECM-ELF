@@ -484,6 +484,18 @@ D60060普通/承载6011各测9个B2点：10.4e9、11.411279880e9、11.711579880e
 
 最大B2在5872…7995 bits的形状台阶使相邻B2经验幂指数约0.69…0.74；不能由全矩阵平均指数0.54推断每个位宽均按平方根增长。估算应显式纳入D/P、NTT长度台阶与阶段成本。
 
+## NTT 批量标定覆盖
+
+当前NTT tune按长度L与slices=s记录批调用秒数和域卷积吞吐。4060 Laptop GPU、默认55 W限制、1800 MHz上限，CUDA13.3/PTX3/sub-mask=1/outer=0，生产二进制SHA256为`ef7bbf432221a9b2449584ab0464bf852bd4df619b0164e046bad7e589df5ecf`。输入是Goldilocks域中的两组三项多项式，每个slice使用不同常数项；参考由GMP独立计算。CUDA事件只包含两次正向NTT及带乘积的逆NTT，排除输入生成、分配、传输和验证。因此conv iter/s=s/t，batch iter/s=1/t，均不是ECM curves/s。
+
+GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大长度组合和18个等级1组合，另检查反向参数顺序的6个组合与JSONL输出。21个大形状超预算正确跳过；无有效形状时保留已有目标文件。普通/承载6011路径在5872-bit余因子、B1=20、B2=12e9、D=120120下分别一次预热和一次正式完整曲线，共4曲线、7296 mandatory cases及13780 GMP采样核对，坏计数和因子命中均为0。这些曲线证明运行与算术门禁，不是新的独立性能排名验收。
+
+针对冻结的第一份实际ECM计划，另测log₂L=11…23与19种实际slices的矩形网格：每形状1次预热、21次正式重复，预算1 GiB。167个形状实测、80个超预算跳过，共核对36,079,493,120个输出字，坏计数0；该计划的60,609逻辑pairs、215 physical calls均能精确匹配。29个GPU利用率>50%的NVML样本中SM为1800 MHz、功率14.79…48.30 W；采样不证明采样间隔内频率恒定。实际加载的EXE和GMP模块身份已记录。
+
+将同一NTT文件映射至32个基础ECM scopes，可覆盖6,240,058/6,386,314逻辑pairs，其中只有2个scope完全覆盖，其他范围仍有374个缺失bins。逻辑pairs覆盖率约97.71%，不是时间覆盖率，也不证明所有位宽、B1或预算可用。工作量文件已核对设备/归约/环境策略，但仍标记`ranking_qualified=false`和`ntt_feature_is_time_prediction=false`，未将NTT参照与已包含NTT的阶段计时相加。
+
+证据：`data/experiments/ntt_batch_tune_20261010/gpu_runtime_v3/`、`exact_shapes/`及`full_grid_features/`；CPU门禁与32份计划独立请求重放在`workload_cpu_v4/`。运行工具为[批量GPU门禁](../../tools/test/test_stage2_tune_ntt_batches.py)和[工作量映射](../../tools/bench/analyze_stage2_tune_workload.py)。
+
 ## 下一测量
 
 扩大实测D/承载选择的生产B1、位宽和预算矩阵，独立验证候选排序、峰值安全余量及mandatory checks，并重标定Auto B2。完整数非单位回退另测CPU准备路径；热NTT、设备准备/传输与等待分别测量。用户计划的55 W复测单独记录，不混入1800 MHz样本。指标定义和未完成工作见[TODO](../TODO.md)。

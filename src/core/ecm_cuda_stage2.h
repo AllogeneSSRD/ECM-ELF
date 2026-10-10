@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstddef>
 #include "ecm_stage2_phase_times.h"
 
 // Production defaults to batch progress (3); development keeps full diagnostics
@@ -39,6 +40,10 @@ int ecm_cuda_stage2_plan(const char *n_hex, uint64_t sigma, uint64_t b1,
 int ecm_cuda_stage2_tune_ntt(int device, int min_log2, int max_log2,
                             int repeats, uint64_t memory_bytes,
                             void (*report)(const char *, void *), void *context);
+int ecm_cuda_stage2_tune_ntt_batches(int device,int min_log2,int max_log2,
+                                    int repeats,uint64_t memory_bytes,
+                                    const uint64_t *slices,size_t count,
+                                    void (*report)(const char *, void *),void *context);
 
 // Cost planning queries the same integer packing backend. No CUDA allocation or
 // curve arithmetic occurs in shape_query; device_info initializes a CUDA context.

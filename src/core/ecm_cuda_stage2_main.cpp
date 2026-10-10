@@ -227,6 +227,7 @@ struct Options {
     bool plan_only = false, tune_options = false;
     std::string tune, tune_file;
     int tune_first = 16, tune_last = 27, tune_repeats = 5;
+    std::vector<uint64_t> tune_slices{1};bool has_tune_slices=false;
     int tune_level = 0;
     bool has_tune_lengths = false, has_tune_repeats = false,has_tune_memory=false;
     bool tune_child=false;
@@ -331,13 +332,14 @@ Options arguments(int argc, char **argv) {
             const auto p=num();if(p<2 || p>16384)throw std::runtime_error("tune-carrier-exponent must be 2..16384");
             o.tune_carrier=static_cast<unsigned>(p);o.tune_options=true;
         }
-        else if (a == "--tune-d" || a == "--tune-b2" || a == "--tune-exponents") {
+        else if (a == "--tune-d" || a == "--tune-b2" || a == "--tune-exponents" || a=="--tune-slices") {
             const auto text=value();std::vector<uint64_t> values;size_t start=0;
             for(;;) {const auto end=text.find(',',start);values.push_back(u64(text.substr(start,end==text.npos?end:end-start),a.c_str()));
                 if(end==text.npos)break;start=end+1;}
             if(values.size()>64 || std::set<uint64_t>(values.begin(),values.end()).size()!=values.size())throw std::runtime_error("tune grid must contain 1..64 distinct values");
             if(a=="--tune-d"){for(auto d:values)if(d<6 || d%2 || d>200000000)throw std::runtime_error("tune-d must be even, 6..200000000");o.tune_ds=values;}
             else if(a=="--tune-b2"){for(auto b:values)if(b<3 || b>(uint64_t)INT64_MAX-8192)throw std::runtime_error("invalid tune-b2");o.tune_b2s=values;}
+            else if(a=="--tune-slices"){for(auto b:values)if(!b || b>65535)throw std::runtime_error("tune-slices must be 1..65535");o.tune_slices=values;o.has_tune_slices=true;}
             else {for(auto p:values)if(p<2 || p>16384)throw std::runtime_error("invalid tune exponent");o.tune_exponents=values;}
             o.tune_options=true;
         }
@@ -352,8 +354,8 @@ Options arguments(int argc, char **argv) {
             const auto colon = range.find(':');
             const auto first = u64(range.substr(0, colon), "length-log2");
             const auto last = colon == range.npos ? first : u64(range.substr(colon + 1), "length-log2");
-            if (first < 16 || last > 27 || first > last)
-                throw std::runtime_error("length-log2 must be 16..27 or FIRST:LAST");
+            if (first < 3 || last > 27 || first > last)
+                throw std::runtime_error("length-log2 must be 3..27 or FIRST:LAST");
             o.tune_first = static_cast<int>(first); o.tune_last = static_cast<int>(last);o.has_tune_lengths=true;
         }
         else if (a == "--tune-repeats") {
@@ -841,7 +843,7 @@ void help() {
         "         [--auto-min-b2 B2 --auto-max-b2 B2] [--owner-budget-mb MB]\n"
         "         Requires a matching measured runtime profile; no extrapolation.\n"
         "         --plan-only (queries device memory and D; runs no curve)\n"
-        "Tune: --tune ntt --device N [--tune-level 1..10] [--length-log2 16:27] [--tune-repeats 5]\n"
+        "Tune: --tune ntt --device N [--tune-level 1..10] [--length-log2 3:27] [--tune-slices 1,4,16] [--tune-repeats 5]\n"
         "      [--tune-memory-mb 1024] [--tune-file stage2_tune.toml]\n"
         "      Requires a fixed Goldilocks backend; measures field convolution only.\n"
         "Queue: ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
@@ -1038,7 +1040,7 @@ void merge_ecm_tune(const Options &o,const fs::path &destination) {
     if(o.tune_merge.size()>64)throw std::runtime_error("tune-merge requires at most 64 inputs");
     if(!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() ||
        !o.tune_exponents.empty() || o.tune_level || o.has_tune_repeats || o.has_tune_max_batches ||
-       o.has_tune_lengths || o.has_tune_memory || o.has_tune_tail_samples)throw std::runtime_error("tune-merge is independent of benchmark grid options");
+       o.has_tune_lengths || o.has_tune_memory || o.has_tune_tail_samples || o.has_tune_slices)throw std::runtime_error("tune-merge is independent of benchmark grid options");
     std::vector<Handle> guards(o.tune_merge.size());std::vector<t::EcmProfile> profiles;
     for(size_t i=0;i<o.tune_merge.size();++i) {
         const auto input=absolute_from(fs::current_path(),o.tune_merge[i]);std::error_code error;
@@ -1282,6 +1284,7 @@ int driver(Options o) {
         throw std::runtime_error("--tune ntt|ecm is independent of save/queue/curve planning options; ECM accepts --tune-save");
     if(o.tune=="ntt" && (!o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() || !o.tune_exponents.empty() || o.has_tune_max_batches || o.has_tune_tail_samples || !o.tune_merge.empty()))throw std::runtime_error("ECM tune grid/merge options require --tune ecm");
     if(o.tune=="ecm" && o.has_tune_lengths)throw std::runtime_error("length-log2 requires --tune ntt");
+    if(o.tune=="ecm" && o.has_tune_slices)throw std::runtime_error("tune-slices requires --tune ntt");
     if(o.tune=="ecm" && o.has_tune_memory)throw std::runtime_error("ECM tune uses batch/arena/owner budgets; tune-memory-mb requires --tune ntt");
     if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
     const fs::path cwd = fs::current_path();
@@ -1346,6 +1349,7 @@ int driver(Options o) {
             const auto effort=ecm_stage2::tune::effort(o.tune_level);
             if(!o.has_tune_lengths){o.tune_first=effort.first;o.tune_last=effort.last;}
             if(!o.has_tune_repeats)o.tune_repeats=effort.repeats;
+            if(!o.has_tune_slices)o.tune_slices.assign(effort.slices.begin(),effort.slices.end());
         }
         const fs::path destination = absolute_from(cwd, o.tune_file.empty() ? (o.tune=="ecm"?"stage2_ecm_tune.toml":"stage2_tune.toml") : o.tune_file);
         auto same_path = [&](const fs::path &other) {
@@ -1375,22 +1379,32 @@ int driver(Options o) {
         const auto manifest = executable().parent_path() / "build_manifest.json";
         const auto manifest_hash = fs::is_regular_file(manifest) ? ecm_stage2::sha256_file(manifest) : "";
         if(toml)output << "# ECM Stage2 tuning data. Times in seconds; capacities in bytes.\n"
-            << "[profile]\nformat = 1\nunit = \"field_convolution\"\nmin_log2 = " << o.tune_first
+            << "[profile]\nformat = 2\nunit = \"field_convolution\"\nmin_log2 = " << o.tune_first
             << "\nmax_log2 = " << o.tune_last << "\nrepeats = " << o.tune_repeats << "\neffort_level = " << o.tune_level << '\n';
-        else output << "{\"type\":\"profile\",\"schema\":1,\"unit\":\"field_convolution\""
+        else output << "{\"type\":\"profile\",\"schema\":2,\"unit\":\"field_convolution\""
                << ",\"min_log2\":" << o.tune_first << ",\"max_log2\":" << o.tune_last
                << ",\"repeats\":" << o.tune_repeats << ",\"effort_level\":" << o.tune_level << "}\n";
+        const auto env=tune_environment();
+        if(toml) {
+            output<<"slices = [";for(size_t i=0;i<o.tune_slices.size();++i){if(i)output<<", ";output<<o.tune_slices[i];}output<<"]\n";
+            output<<"\n[policy]\naccounting = \"cuda_events_two_forward_product_inverse_v1\"\n\n[policy.environment]\n";
+            for(const auto &entry:env)output<<entry.first<<" = "<<entry.second<<'\n';
+        } else {
+            output<<"{\"type\":\"policy\",\"accounting\":\"cuda_events_two_forward_product_inverse_v1\",\"slices\":[";
+            for(size_t i=0;i<o.tune_slices.size();++i){if(i)output<<',';output<<o.tune_slices[i];}
+            output<<"],\"environment\":{";size_t i=0;for(const auto &entry:env){if(i++)output<<',';output<<json_string(entry.first)<<':'<<entry.second;}output<<"}}\n";
+        }
         struct TuneOutput {std::ofstream &file;bool toml;};
         TuneOutput tune_output{output,toml};
         auto sink = [](const char *json, void *ctx) {
             auto &writer = *static_cast<TuneOutput *>(ctx);
             auto &out=writer.file;
-            out << (writer.toml ? ecm_stage2::tune::table(json) : std::string(json)+"\n"); out.flush();
+            out << (writer.toml ? ecm_stage2::tune::table(json,true) : std::string(json)+"\n"); out.flush();
             if (!out) throw std::runtime_error("tune profile write failed");
             std::cout << json << std::endl;
         };
-        const int code = ecm_cuda_stage2_tune_ntt(device, o.tune_first, o.tune_last, o.tune_repeats,
-                                                 o.tune_memory_mb * 1048576, sink, &tune_output);
+        const int code = ecm_cuda_stage2_tune_ntt_batches(device, o.tune_first, o.tune_last, o.tune_repeats,
+            o.tune_memory_mb * 1048576,o.tune_slices.data(),o.tune_slices.size(),sink,&tune_output);
         if (code) throw std::runtime_error("tune failed or measured no shapes; partial profile retained: " + partial.string());
         if (binary_hash != ecm_stage2::sha256_file(executable()) ||
             (!manifest_hash.empty() && manifest_hash != ecm_stage2::sha256_file(manifest)))

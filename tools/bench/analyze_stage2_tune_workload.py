@@ -1,7 +1,7 @@
 """Extract exact NTT workload features from frozen Stage2 tune plans (CPU only).
 
 Logical polynomial pairs, physical chunks and their lengths are separate units.
-An optional single-slice NTT profile supplies comparison features, never an ECM
+An optional NTT profile supplies exact length/batch comparison features, never an ECM
 time prediction. Raw identities go in evidence.json, not performance TOML.
 """
 import argparse
@@ -128,31 +128,112 @@ def workload(plan):
     return rows
 
 
-def ntt_samples(profile):
-    if (profile['profile']['format'] != 1 or profile['profile']['unit'] != 'field_convolution' or
+def ntt_batch_samples(profile):
+    """Validate every published measurement; never extrapolate length or slices."""
+    header = profile['profile']
+    version = integer(header['format'], 1)
+    if (version not in (1, 2) or header['unit'] != 'field_convolution' or
             profile['summary']['failed'] or not profile['summary']['usable']):
         raise ValueError('incomplete/unsupported NTT profile')
+    repeats = integer(header['repeats'], 1)
+    if repeats > 1000:
+        raise ValueError('invalid NTT repeat count')
+    requested = None
+    if version == 2:
+        first, last = integer(header['min_log2'], 3), integer(header['max_log2'], 3)
+        requested = header['slices']
+        if not first <= last <= 27 or not isinstance(requested, list) or not 1 <= len(requested) <= 64:
+            raise ValueError('invalid NTT shape grid')
+        if any(integer(b, 1) > 65535 for b in requested) or len(set(requested)) != len(requested):
+            raise ValueError('invalid NTT slices')
     measured = {}
-    for key, s in profile['ntt'].items():
-        n = integer(s['length'], 1)
-        if n & (n-1) or key != f'length_{n}':
-            raise ValueError('invalid NTT length table')
+    seen, skipped = set(), 0
+    samples = []
+    for key, group in profile['ntt'].items():
+        if version == 1:
+            samples.append((key, 'slices_1', group))
+        else:
+            samples.extend((key, batch_key, s) for batch_key, s in group.items())
+    for key, batch_key, s in samples:
+        n, batch = integer(s['length'], 8), integer(s.get('batch', 1), 1)
+        if n > 1 << 27 or n & (n-1) or key != f'length_{n}' or batch > 65535:
+            raise ValueError('invalid NTT length/slices table')
+        if batch_key != f'slices_{batch}' or (version == 1 and batch != 1):
+            raise ValueError('inconsistent NTT slices key')
+        if version == 2 and (batch not in requested or not first <= n.bit_length()-1 <= last or
+                             integer(s['log2_length']) != n.bit_length()-1):
+            raise ValueError('NTT sample outside declared grid')
+        if (n, batch) in seen:
+            raise ValueError('duplicate NTT shape')
+        seen.add((n, batch))
         if s['status'] == 'skipped_memory':
+            skipped += 1
             continue
-        if (s['status'] != 'measured' or s['unit'] != 'field_convolution' or s['batch'] != 1 or
-                s['bad'] or s['verified_words_per_sample'] != n or
-                len(s['seconds']) != profile['profile']['repeats']):
+        if (s['status'] != 'measured' or s['unit'] != 'field_convolution' or
+                integer(s['bad']) or integer(s['verified_words_per_sample'], 1) != n*batch or
+                len(s['seconds']) != repeats):
             raise ValueError('unchecked NTT benchmark')
         seconds = [positive(x) for x in s['seconds']]
         median = statistics.median(seconds)
         if not math.isclose(positive(s['median_seconds']), median, rel_tol=1e-9, abs_tol=1e-12):
             raise ValueError('inconsistent NTT median')
-        if not math.isclose(positive(s['conv_iter_per_s']), 1/median, rel_tol=1e-9):
+        if not math.isclose(positive(s['conv_iter_per_s']), batch/median, rel_tol=1e-9):
             raise ValueError('inconsistent NTT throughput')
-        measured[n] = median
+        if version == 2 and (s['reference_kind'] != 'gmp_3x3_distinct_constant_v1' or
+                not math.isclose(positive(s['batch_iter_per_s']), 1/median, rel_tol=1e-9)):
+            raise ValueError('unchecked/inconsistent NTT batch benchmark')
+        measured[n, batch] = median
     if len(measured) != integer(profile['summary']['measured'], 1):
         raise ValueError('inconsistent NTT summary')
+    if version == 2 and (integer(profile['summary']['skipped']) != skipped or
+            seen != {(1 << k, b) for k in range(first, last+1) for b in requested}):
+        raise ValueError('incomplete NTT grid')
     return measured
+
+
+def ntt_samples(profile):
+    """Legacy serial comparison, available only for actually measured batch=1."""
+    return {n: seconds for (n, batch), seconds in ntt_batch_samples(profile).items() if batch == 1}
+
+
+def ntt_policy_matches(ecm, ntt):
+    """Policy qualification is separate from cost-model/ranking qualification."""
+    if ntt['profile']['format'] != 2:
+        return False  # Legacy data does not declare its environment/mask.
+    policy = ntt.get('policy', {})
+    left, right = ecm['policy'].get('environment'), policy.get('environment')
+    return (all(ecm['device'].get(k) == ntt['device'].get(k) for k in IDENTITY) and
+        type(ecm['device'].get('add_sub_mask')) is int and
+        ecm['device']['add_sub_mask'] == ntt['device'].get('gl_add_sub_mask') and
+        policy.get('accounting') == 'cuda_events_two_forward_product_inverse_v1' and
+        isinstance(left, dict) and bool(left) and left == right and
+        all(type(v) is int for v in left.values()) and
+        all(type(v) is int for v in right.values()))
+
+
+def ntt_workload_features(rows, samples):
+    """Return exact-shape coverage; reference timings exclude packing and S4."""
+    serial = {n: seconds for (n, b), seconds in samples.items() if b == 1}
+    scope = dict(ntt_length_covered_pairs=sum(r['pairs'] for r in rows if r['length'] in serial),
+        ntt_missing_lengths=sorted({r['length'] for r in rows if r['length'] not in serial}),
+        ntt_exact_batch_covered_pairs=0, ntt_exact_batch_covered_calls=0,
+        ntt_missing_batch_bins=0)
+    annotated = []
+    for original in rows:
+        row = dict(original)
+        n, batch = row['length'], row['slices']
+        if n in serial:
+            row['ntt_single_slice_seconds'] = serial[n]
+            row['serial_single_slice_reference_seconds'] = row['pairs']*serial[n]
+        if (n, batch) in samples:
+            row['ntt_batch_seconds'] = samples[n, batch]
+            row['exact_batch_reference_seconds'] = row['calls']*samples[n, batch]
+            scope['ntt_exact_batch_covered_pairs'] += row['pairs']
+            scope['ntt_exact_batch_covered_calls'] += row['calls']
+        else:
+            scope['ntt_missing_batch_bins'] += 1
+        annotated.append(row)
+    return scope, annotated
 
 
 def paired_trials(plan, trials):
@@ -276,20 +357,21 @@ def main():
             raise ValueError('complete full ECM profile required')
         repeats = integer(profile['profile']['repeats'], 1)
         measured_ntt = {}
-        identity_match = False
+        identity_match = policy_match = False
         if a.ntt_profile:
             ntt = tomllib.loads(source(a.ntt_profile).decode('utf-8-sig'))
-            measured_ntt = ntt_samples(ntt)
+            measured_ntt = ntt_batch_samples(ntt)
             identity_match = all(profile['device'][k] == ntt['device'][k] for k in IDENTITY)
             if not identity_match:
                 raise ValueError('NTT/full ECM device or arithmetic identity mismatch')
+            policy_match = ntt_policy_matches(profile, ntt)
         text = '# Stage2 workload features; not a production cost profile.\n'
         text += table('profile', dict(format=1, unit='logical_field_convolutions',
             ranking_qualified=False, legacy_timer_contract='legacy_overlapping',
             phase_timer_contract='per_sample_optional',
             timing_boundary='stage2_engine_init_plus_main',
             ntt_single_slice_identity_match=identity_match,
-            ntt_policy_qualified=False, ntt_feature_is_time_prediction=False))
+            ntt_policy_qualified=policy_match, ntt_feature_is_time_prediction=False))
         text += table('device', profile['device'])
         text += table('policy', {k: v for k, v in profile['policy'].items() if not isinstance(v, dict)})
         env = profile['policy'].get('environment', {})
@@ -328,15 +410,11 @@ def main():
                 'modulus_kind', 'b1', 'b2', 'd', 'p', 'giant_points', 'repeats')}
             scope['total_pairs'] = sum(r['pairs'] for r in rows)
             scope['total_physical_calls'] = sum(r['calls'] for r in rows)
-            scope['ntt_length_covered_pairs'] = sum(r['pairs'] for r in rows if r['length'] in measured_ntt)
-            scope['ntt_missing_lengths'] = sorted({r['length'] for r in rows if r['length'] not in measured_ntt})
+            coverage, rows = ntt_workload_features(rows, measured_ntt)
+            scope.update(coverage)
             # Exact paired arrays retain correlation. Other timers are explicitly overlapping.
             text += table(f'ecm.{key}', dict(**scope, **timers, **costs))
             for i, row in enumerate(rows):
-                row = dict(row)
-                if row['length'] in measured_ntt:
-                    row['ntt_single_slice_seconds'] = measured_ntt[row['length']]
-                    row['serial_single_slice_reference_seconds'] = row['pairs']*measured_ntt[row['length']]
                 text += table(f'workload.{key}.bin_{i}', row)
             evidence['cases'].append(dict(case=case, sample=key, bins=len(rows),
                 pairs=scope['total_pairs'], physical_calls=scope['total_physical_calls']))

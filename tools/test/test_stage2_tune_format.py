@@ -41,6 +41,16 @@ def main():
     for record in records[1:3]:
         assert parsed['ntt'][f'length_{record["length"]}'] == {k:v for k,v in record.items() if k!='type'}
     assert parsed['summary']['usable'] is True
+    batches=[dict(type='sample',status='measured',length=64,batch=b,
+                  median_seconds=.001*b,conv_iter_per_s=1000.0) for b in [1,3,16]]
+    result=subprocess.run([str(exe),'--batched'],input='\n'.join(map(json.dumps,batches)),
+                          capture_output=True,text=True,check=True)
+    grouped=tomllib.loads(result.stdout)['ntt']['length_64']
+    assert set(grouped)=={'slices_1','slices_3','slices_16'}
+    assert all(grouped['slices_'+str(b)]['batch']==b for b in [1,3,16])
+    for bad in [dict(type='sample',length=64),dict(type='sample',length=64,batch=0),
+                dict(type='sample',length=64,batch='1.2')]:
+        assert subprocess.run([str(exe),'--batched'],input=json.dumps(bad),capture_output=True,text=True).returncode
     for bad in ['{"type":"sample"}', '{"type":"device","type":"device"}',
                 '{"type":"device",}', '{"type":"device"}garbage',
                 '{"type":"device","value":null}', '{"type":"unknown"}',
@@ -48,8 +58,10 @@ def main():
         assert subprocess.run([str(exe)], input=bad, capture_output=True, text=True).returncode != 0
     previous = 0
     for level in range(1,11):
-        values = list(map(int, subprocess.check_output([str(exe),str(level)], text=True).split()))
-        assert values == [16,20+min(level-1,7),2*level*level+1]
+        lines = subprocess.check_output([str(exe),str(level)], text=True).splitlines()
+        values = list(map(int, lines[0].split()))
+        assert values == [3,20+min(level-1,7),2*level*level+1]
+        assert list(map(int, lines[1].split())) == [1,4,16,64,256,1024,4096,16384,65535][:min(level,9)]
         assert values[2] > previous
         previous = values[2]
     for level in [0,11]:

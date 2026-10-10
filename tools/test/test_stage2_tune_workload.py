@@ -3,6 +3,7 @@ import argparse
 import copy
 import importlib.util
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -135,6 +136,65 @@ def main():
         bad = copy.deepcopy(ntt)
         bad['ntt']['length_16'][key] = value
         rejected(lambda: work.ntt_samples(bad))
+    batch_ntt = dict(profile=dict(format=2, unit='field_convolution', repeats=3,
+                                 min_log2=4, max_log2=4, slices=[1,2,3]),
+        summary=dict(failed=0, usable=True, measured=2, skipped=1), ntt={'length_16': {}})
+    for b in (1,2):
+        batch_ntt['ntt']['length_16'][f'slices_{b}'] = dict(ntt['ntt']['length_16'],
+            batch=b, log2_length=4, verified_words_per_sample=16*b,
+            conv_iter_per_s=5.*b, batch_iter_per_s=5., reference_kind='gmp_3x3_distinct_constant_v1')
+    batch_ntt['ntt']['length_16']['slices_3'] = dict(length=16, log2_length=4,
+                                                  batch=3, status='skipped_memory')
+    measured = work.ntt_batch_samples(batch_ntt)
+    assert measured == {(16,1): .2, (16,2): .2}
+    assert work.ntt_samples(batch_ntt) == {16: .2}
+    coverage, annotated = work.ntt_workload_features(rows, measured)
+    assert coverage['ntt_exact_batch_covered_pairs'] == 15
+    assert coverage['ntt_exact_batch_covered_calls'] == 9
+    assert coverage['ntt_missing_batch_bins'] == 0
+    assert math.isclose(sum(r['exact_batch_reference_seconds'] for r in annotated), 1.8)
+    coverage, annotated = work.ntt_workload_features(rows, {(16,1): .2})
+    assert coverage['ntt_missing_batch_bins'] == 1
+    assert 'ntt_batch_seconds' not in annotated[1]
+    batch_rejects = 0
+    for section, key, value in [('profile','slices',[1,2,2]), ('profile','slices',[0,2,3]),
+            ('profile','slices',[True,2,3]), ('profile','slices',[1,2,65536]),
+            ('profile','min_log2',3), ('profile','max_log2',28),
+            ('summary','skipped',0), ('summary','measured',3), ('summary','failed',1)]:
+        bad = copy.deepcopy(batch_ntt)
+        bad[section][key] = value
+        rejected(lambda: work.ntt_batch_samples(bad))
+        batch_rejects += 1
+    for key, value in [('batch',3), ('log2_length',3), ('verified_words_per_sample',16),
+            ('conv_iter_per_s',5.), ('batch_iter_per_s',10.), ('reference_kind','gpu_self'),
+            ('seconds',[.1]), ('bad',True), ('length',17)]:
+        bad = copy.deepcopy(batch_ntt)
+        bad['ntt']['length_16']['slices_2'][key] = value
+        rejected(lambda: work.ntt_batch_samples(bad))
+        batch_rejects += 1
+    bad = copy.deepcopy(batch_ntt)
+    del bad['ntt']['length_16']['slices_3']
+    rejected(lambda: work.ntt_batch_samples(bad))
+    batch_rejects += 1
+    # Legacy data has no mask/environment qualification. Matching format 2 is
+    # qualified for comparison only, never for ranking or total ECM prediction.
+    identity = dict(zip(work.IDENTITY, ['0'*32,8,9,13030,13030,3,0]))
+    ecm_policy = dict(device=dict(identity, add_sub_mask=1),
+                      policy=dict(environment=dict(arena_cap_kb=1024, fuse_warp_tail=1)))
+    batch_ntt['device'] = dict(identity, gl_add_sub_mask=1)
+    batch_ntt['policy'] = dict(accounting='cuda_events_two_forward_product_inverse_v1',
+                              environment=dict(ecm_policy['policy']['environment']))
+    assert not work.ntt_policy_matches(ecm_policy, ntt)
+    assert work.ntt_policy_matches(ecm_policy, batch_ntt)
+    for section, key, value in [('device','gl_add_sub_mask',0), ('device','cuda_driver',12060),
+            ('policy','accounting','unknown'), ('policy','environment',{}),
+            ('policy','environment',dict(arena_cap_kb=1024,fuse_warp_tail=0)),
+            ('policy','environment',dict(arena_cap_kb=1024,fuse_warp_tail=True))]:
+        mismatch = copy.deepcopy(batch_ntt)
+        mismatch[section][key] = value
+        assert not work.ntt_policy_matches(ecm_policy,mismatch)
+    (a.output/'ntt_batches.json').write_text(json.dumps(dict(complete=True, measured_shapes=2,
+        skipped_shapes=1, rejected=batch_rejects, policy_mismatches=7)), encoding='utf-8')
     with tempfile.TemporaryDirectory(dir=a.output) as tmp:
         path = Path(tmp)/'duplicate.jsonl'
         path.write_text('{"D":1,"D":2}\n', encoding='utf-8')
@@ -188,6 +248,33 @@ def main():
         wrong_ntt = root/'wrong_ntt.toml'
         wrong_ntt.write_text(ntt_text, encoding='utf-8')
         cli_rejected('wrong_identity', ['--ntt-profile', str(wrong_ntt)])
+        batch_ntt['device'] = dict(device, gl_add_sub_mask=1)
+        batch_text = work.table('profile', batch_ntt['profile'])
+        batch_text += work.table('device', batch_ntt['device'])
+        batch_text += work.table('policy', dict(accounting=batch_ntt['policy']['accounting']))
+        batch_text += work.table('policy.environment', batch_ntt['policy']['environment'])
+        for key, measurement in batch_ntt['ntt']['length_16'].items():
+            batch_text += work.table(f'ntt.length_16.{key}', measurement)
+        batch_text += work.table('summary', batch_ntt['summary'])
+        batch_path = root/'batch.toml'
+        batch_path.write_text(batch_text, encoding='utf-8')
+        subprocess.run(command+['--ntt-profile', str(batch_path), '--output', str(root/'batch')],
+                       capture_output=True, check=True, timeout=30)
+        batch_output = tomllib.loads((root/'batch/workload.toml').read_text(encoding='utf-8'))
+        assert batch_output['ecm']['sample_0']['ntt_exact_batch_covered_pairs'] == 15
+        assert batch_output['ecm']['sample_0']['ntt_exact_batch_covered_calls'] == 9
+        assert not batch_output['profile']['ntt_policy_qualified']
+        qualified = profile_text.replace(work.table('device', device),
+                                        work.table('device', dict(device, add_sub_mask=1)))
+        qualified += work.table('policy.environment', batch_ntt['policy']['environment'])
+        profile.write_text(qualified, encoding='utf-8')
+        subprocess.run(command+['--ntt-profile', str(batch_path), '--output', str(root/'qualified')],
+                       capture_output=True, check=True, timeout=30)
+        batch_output = tomllib.loads((root/'qualified/workload.toml').read_text(encoding='utf-8'))
+        assert batch_output['profile']['ntt_policy_qualified']
+        assert not batch_output['profile']['ranking_qualified']
+        assert not batch_output['profile']['ntt_feature_is_time_prediction']
+        profile.write_text(profile_text, encoding='utf-8')
         # Published worker intervals come from the parent, exclusive phases from raw children.
         (raw/'case_1_1.jsonl').write_text(json.dumps(exclusive)+'\n', encoding='utf-8')
         current = profile_text.replace(work.table('ecm.sample_0', sample),
@@ -223,8 +310,9 @@ def main():
             bins += len(r)
         assert count
         replay.append(dict(directory=str(directory), plans=count, pairs=pairs, calls=calls, bins=bins))
-    result = dict(complete=True, synthetic_cases=3, paired_timing_cases=2, ntt_cases=1,
-                  rejected=rejects, cli_roundtrips=2, cli_rejected=cli_rejects, replay=replay)
+    result = dict(complete=True, synthetic_cases=3, paired_timing_cases=2, ntt_cases=3,
+                  ntt_batch_rejected=batch_rejects,
+                  rejected=rejects, cli_roundtrips=4, cli_rejected=cli_rejects, replay=replay)
     (a.output/'result.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')
     print(json.dumps(result))
 

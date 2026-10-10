@@ -44,7 +44,9 @@ NTT JSON version2 提供 exact_allocation_events、fuse_layouts、物理分配/�
 
 每次正式曲线的init/main及其他阶段计时以配对数组保留，核对init+main=引擎total。新样本声明`phase_accounting="exclusive_engine_v1"`，逐次核对十个互斥阶段之和、init/main及原始回执与发布数组；旧阶段计时保持`legacy_overlapping`，不补造新阶段。父程序发布的worker墙钟及worker−engine残差也按次保留，检查样本、中位数及MAD。详细边界见[完整Stage2 tune](../../docs/architecture/AUTO_B2.md#完整-stage2-tune)。所有统计均不相加独立中位数。文件必须覆盖对应性能profile的全部样本，缺少回执或不一致不能发布成功输出。原始文件、分析工具的路径和SHA只记录在另一个`evidence.json`，性能TOML不记录这些身份信息。
 
-可选NTT文件须为已完成、通过算术检查的batch=1 field convolution实测，设备UUID、SM、CUDA和固定算术编译条件一致。记录已覆盖长度、缺失长度、单slice秒数和“逻辑pairs×单slice秒数”的串行参照特征。后者不含packing/carry/S4归约、点乘、树准备、传输、自检和冷启动，也没有生产批量并行校准；当前NTT文件未完整声明运行策略。因此输出明确`ntt_policy_qualified=false`、`ranking_qualified=false`，不进入生产D/承载/Auto B2成本排名，不将串行参照相加到完整曲线或阶段计时。
+可选NTT文件必须完成且通过算术检查，设备UUID、SM、CUDA和固定后端条件一致。格式1只提供已测batch=1的单slice秒数及“逻辑pairs×单slice秒数”串行参照，因缺少归约mask和环境策略，不能获得策略资格。格式2按`(length,slices)`精确匹配批量中位数，参照为“physical calls×批量中位数”；同时统计覆盖pairs/calls及缺失batch bins，不对未测形状插值。归约mask和完整命名环境一致时可标记`ntt_policy_qualified=true`，但`ranking_qualified=false`、`ntt_feature_is_time_prediction=false`仍保持。两种参照都不含packing/carry/S4归约、点运算、树准备、传输、自检和冷启动，不是完整曲线或阶段预测，不将其相加到含NTT的计时。
+
+`test_stage2_tune_ntt_batches.py --exe <生产exe> --save <已验证save> --device <n> --carrier <p> --output <新目录>`执行GPU验证：小长度、不同slice常数项、非2次幂批量、65535 slices、等级覆盖、显式参数覆盖、内存跳过、JSONL与失败发布保护，再对普通/承载两种路径执行完整Stage2及mandatory GMP检查。输入保存点应先独立验证。输出冻结源码和依赖身份，证据放入忽略目录，不混入性能TOML。它不证明跨位宽、跨B1的收益排名。
 
 `test_stage2_tune_workload.py --output <新目录> [--evidence <原始调优目录>]`执行CPU门禁：手算满/尾分块、chunk上限、万亿次repeat压缩、错误协议拒绝及已保存原生plan的独立密集请求重放。它不证明GPU真实调用计数或NTT批处理吞吐；后者需要运行审计和独立完整曲线留出验证。
 

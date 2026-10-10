@@ -70,6 +70,8 @@ Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目
 
 `--tune ecm --tune-level 1`生成完整Stage2性能配置；`--tune-save FILE --tune-carrier-exponent p`可对有效save测普通/承载两种路径。`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号分隔列表，`--tune-repeats`覆盖重复次数。默认配置为`stage2_ecm_tune.toml`，原始证据在工作目录的`data/experiments/`。调优失败不覆盖已有配置；高等级扩大输入与轮数，耗时可能很长。
 
+`--tune ntt`可用`--length-log2 a:b`与`--tune-slices s,...`测指定长度和批量，或用等级1…10预设。输出分别记录每秒域卷积数和每秒批调用数；它们不是ECM曲线吞吐。计时边界、预算跳过和格式见[NTT tune](../architecture/AUTO_B2.md#ntt-tune)。
+
 分批测量可用`--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml`合并，再将INI的`stage2_tune_profile`指向合并文件。要求设备、策略及重复次数一致；相同测量范围采用最后一份。该命令不运行GPU测试，输出不能覆盖输入文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
 
 生产运行用`--tune-profile FILE.toml`或`stage2_tune_profile`加载性能数据。固定B2时自动选已测D和合法承载，实测点优先；声明模型且同组数据通过资格检查时，可估计已测B2区间内部的成本。显式非零D固定D；`--carrier-exponent 0`固定普通模数，显式非零p固定承载。无合格成本时保留现有选型并给出原因；不会仅凭save来自梅森数自动启用承载。

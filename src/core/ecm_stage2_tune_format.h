@@ -5,12 +5,15 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace ecm_stage2 { namespace tune {
-struct Effort {int first,last,repeats;};
+struct Effort {int first,last,repeats;std::vector<unsigned> slices;};
 inline Effort effort(int level) {
     if(level<1 || level>10)throw std::runtime_error("tune-level must be 1..10");
-    return {16,20+std::min(level-1,7),2*level*level+1};
+    const unsigned slices[]={1,4,16,64,256,1024,4096,16384,65535};
+    Effort e{3,20+std::min(level-1,7),2*level*level+1,{}};
+    e.slices.assign(slices,slices+std::min(level,9));return e;
 }
 // Converts the engine's flat JSON callback records to named TOML tables.
 // Values remain JSON literals: the emitted subset (strings, numbers, booleans
@@ -61,7 +64,7 @@ inline std::map<std::string,std::string> fields(const std::string &s) {
     expect('}');space();if(i!=s.size())throw std::runtime_error("data after tune callback");
     return out;
 }
-inline std::string table(const std::string &json) {
+inline std::string table(const std::string &json,bool batch_tables=false) {
     const auto values=fields(json);
     auto required=[&](const char *key)->const std::string& {
         const auto it=values.find(key);if(it==values.end())throw std::runtime_error("missing tune field");return it->second;
@@ -74,6 +77,12 @@ inline std::string table(const std::string &json) {
         if(length.empty() || length.find_first_not_of("0123456789")!=length.npos)
             throw std::runtime_error("invalid tune length");
         section="ntt.length_"+length;
+        if(batch_tables) {
+            const auto &batch=required("batch");
+            if(batch.empty() || batch.find_first_not_of("0123456789")!=batch.npos || batch=="0")
+                throw std::runtime_error("invalid tune batch");
+            section+=".slices_"+batch;
+        }
     } else throw std::runtime_error("unsupported tune record");
     std::ostringstream out;out<<'\n'<<'['<<section<<"]\n";
     for(const auto &entry:values)if(entry.first!="type" && entry.first!="device_index")

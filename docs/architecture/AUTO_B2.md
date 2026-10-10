@@ -68,15 +68,17 @@ T1样本=完整Stage1进程墙钟/C，包含进程启动、指数/曲线准备�
 
 ## NTT tune
 
-`--tune ntt` 测不同 log₂L 的精确域卷积。参数含 `--length-log2 <a:b>`、`--tune-repeats <n>`、`--tune-memory-mb <MiB>` 与 `--tune-file <path>`；默认重复 5，预热不计中位数。需要固定 Goldilocks 后端。
+`--tune ntt` 测不同长度和批量的精确域卷积。参数含 `--length-log2 <a:b>`（3≤a≤b≤27）、`--tune-slices <s,...>`（1…65535，最多64个不同值）、`--tune-repeats <n>`、`--tune-memory-mb <MiB>` 与 `--tune-file <path>`；默认重复5次，每个形状另有一次预热，预热不计中位数。需要固定 Goldilocks 后端。
 
-默认输出 `stage2_tune.toml`：`[profile]` 保存格式、计时单位及测量范围，`[device]` 保存设备/后端适用条件，`[ntt.length_<L>]` 保存该长度的吞吐、样本、容量与核验结果，`[summary]` 保存完成状态。字段逐行排列，数组用于重复样本和 radix；不记录路径、二进制或构建摘要。显式 `.jsonl` 输出仍可用，其 profile 行同样不再含二进制/构建摘要。运行期间仍核对程序和已有构建 manifest 未发生变化，完整成功后才原子替换目标文件，失败留下 partial。
+默认输出格式2的 `stage2_tune.toml`：`[profile]` 保存计时单位、长度范围、slices和重复次数，`[device]` 保存设备/后端/加减归约条件，`[policy.environment]` 保存运行策略，`[ntt.length_<L>.slices_<s>]` 保存对应形状的吞吐、样本、容量与核验结果，`[summary]` 保存完成状态。字段逐行排列，数组用于重复样本和radix；不记录路径、二进制或构建摘要。显式 `.jsonl` 输出仍可用。运行期间核对程序和已有构建manifest未发生变化，成功且至少测到一个形状后才原子替换目标文件；失败保留原文件与partial。
 
-`--tune-level <1..10>` 当前用于 NTT 测量：等级 ℓ 的默认长度范围为 log₂L=16…[20+min(ℓ−1,7)]，重复次数为 2ℓ²+1；每个长度另有一次预热。显式 `--length-log2`、`--tune-repeats` 始终覆盖等级预设，与参数顺序无关。未指定等级时保持 16…27、重复5次。内存预算不随等级提高；越界长度记录 `skipped_memory`，不参与性能选择。`effort_level=0` 表示未使用等级预设，实际范围和重复次数以同一 profile 的字段为准。
+`--tune-level <1..10>` 的NTT预设为 log₂L=3…[20+min(ℓ−1,7)]、重复2ℓ²+1次，slices取序列1、4、16、64、256、1024、4096、16384、65535的前min(ℓ,9)项。等级10继续增加重复次数。显式 `--length-log2`、`--tune-slices`、`--tune-repeats` 覆盖对应预设，与参数顺序无关。未指定等级时保持16…27、slices=1、重复5次。内存预算不随等级提高；每个形状独立检查预算和实时free余量，超限记录 `skipped_memory`。`effort_level=0` 表示未使用等级预设，实际范围以profile字段为准。
 
 NTT TOML 不参与自动 D/承载或 Auto B2 的运行选择；不能将 field-convolution 吞吐替代完整 Stage2 成本。
 
-iter/s 指每秒完整 field convolution 次数，不是每秒 ECM 曲线，也不含 S4 系数归约、树准备和 GCD。profile 同时记录设备/后端、实际长度、容量、预热/样本和精确性核对。一次 NTT tune 不能单独推导最优 B2。
+CUDA事件计时包含两次正向NTT和一次带乘积/缩放的逆NTT，不含输入生成、分配、传输和验证。若批量s的中位数为t秒，`conv_iter_per_s=s/t`，`batch_iter_per_s=1/t`；两者均不是ECM curves/s。每个slice使用不同常数项，独立GMP计算参考卷积；预热和每次正式测量都检查全部L·s个输出，包括应为零的位置。一次NTT tune不含S4归约、树准备、点运算和GCD，不能单独推导最优B2。
+
+入口：[NTT测量](../../src/cuda/ecm_stage2_tune.cuh)、[等级预设与序列化](../../src/core/ecm_stage2_tune_format.h)、[命令与原子发布](../../src/core/ecm_cuda_stage2_main.cpp)。
 
 按位宽校准 Auto B2 还需真实 Stage1 摊销、阶段成本、非满树/根操作、分块和驻留/回退数据。生成拟合、冻结预测、独立验证与收益排名后才能导出运行 profile。
 
@@ -133,7 +135,7 @@ GPU频率、功耗和背景负载属于测量条件，应在相同设置下调�
 
 ### NTT工作量预计算
 
-CPU工具`analyze_stage2_tune_workload.py`从完整tune的冻结计划与正式回执生成可读的工作量TOML，按阶段/NTT长度/物理分块统计逻辑乘法和输出规模，并保留配对计时。新样本逐项核对原始互斥阶段回执与发布数组，保留父程序发布的worker配对成本；旧样本保留原有嵌套计时，不补造新阶段。可与同设备的单slice NTT实测对照，但当前输出不是成本profile，也不参与生产排名：NTT运行策略、批量吞吐、阶段组合模型及独立留出精度尚未完成资格检查。不能把field convolution iter/s直接换成完整曲线速度，也不能再将其加入已包含NTT的阶段计时。用法和单位见[调优工作量与阶段特征](../../tools/bench/README_STAGE2_CARRIER_PLAN.md#调优工作量与阶段特征)。
+CPU工具`analyze_stage2_tune_workload.py`从完整tune的冻结计划与正式回执生成工作量TOML，按阶段/NTT长度/物理分块统计逻辑乘法和输出规模，保留配对计时。新样本核对原始互斥阶段回执与发布数组；旧样本保留嵌套计时，不补造新阶段。NTT格式1只提供已测单slice的串行参照，无法确认完整策略；格式2按(L,s)精确匹配，检查完整声明网格、样本统计、核验字数和吞吐单位，单独核对设备/归约/环境策略。缺失形状显式计数，不插值。匹配批量的参照为physical calls×该批量中位数；不是完整阶段成本，也不能与含NTT的阶段计时相加。目前输出不参与生产排名，仍需阶段组合模型及完整曲线独立留出验证。用法见[调优工作量与阶段特征](../../tools/bench/README_STAGE2_CARRIER_PLAN.md#调优工作量与阶段特征)。
 
 ### B2区间成本预测
 
