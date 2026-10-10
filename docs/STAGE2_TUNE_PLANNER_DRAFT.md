@@ -233,3 +233,13 @@ runtime工具允许未提供choose12成本文件时明确跳过该模式接受�
 GPU1测M6011的5872-bit实际余因子/B1=20/sigma26…33/lcm及choose12/batch1、8，各1暖机+3正式，共16批72曲线，container6144/TPI16；末点与独立GMP和纯Python一致。lcm C1/C8完整process/C中位数0.256436/0.032049；choose12为0.262860/0.030819。短B1启动/准备占主导，不外推生产高B1，不把choose12小差异解释成优化。sigma40、60-bit合数C8和原默认M521入口各暖机1+正式1，另18曲线，n=1只是回归。raw审计20批90曲线与25独立Python点通过，profile身份/二进制/工具保持。
 
 证据`data/experiments/ecm_stage1_generic_tune_20261010/`：`target_protocol/`、`native_reference/`、`ecm_reader_regression/`、`stage1_reader_regression/`、`execution/`与`stage1_audit/result.json`；参考冻结在`build_cuda_cmake/stage1_gmp_generic_20261010/`。同scope已有20个D/B2/普通与6011承载锚点，正在使用真实lcm C8 T1=0.032049执行每候选暖机1+正式3的独立收益复验；本段不预先宣称排名或时间门限通过。更高生产B1/位宽/预算、NTT互斥阶段组合、冷启动与非驻留/G1目标继续保留。
+
+### 余因子真实T1的独立收益与队列验收
+
+原session80884完整成功结束后才启动接口测量。20个候选各1暖机+交错正式3的80曲线全部完成；以真实5872-bit目标/B1=20/lcm C8 T1=0.032049，Auto从1284决策候选选B2=10.4e9/D120120/承载6011，P11520/I86582/G8。实测4.091650/估计4.088892秒，误差0.067%；全20候选最大误差0.538%，有限集合收益损失0。低边界平台受限，不外推低B2或生产高B1。普通与承载、不同D同B2竞争实际复验；不能把单NTT或手填T1当作本轮完整收益证明。
+
+Stage2进程中位数4.753833秒单独记录，score仍使用engine total。raw审计80曲线138240 mandatory/694444 GMP检查bad0、无因子、驻留，56源/current/冻结及工具/profile/二进制身份核对。NVML loaded668点SM1515…1800/median1800，power18.92…55.08/median50.485 W，实际频率非严格恒定。证据`execution/profit/result.json`、逐曲线日志/回执与`profit_audit/result.json`。
+
+扩展T1 runtime工具，私有队列的梅森来源用显式`--queue-exponent`指定，验证实际N整除原数并写入已知因子乘积；不从文件名推断原数或承载。CPU测试首次误把17列为2^8−1的不合法因子，实际上255/17=15，属于测试错误；把拒绝输入修正为19，正确实现不改、旧失败保留。`target_protocol_queue_final`通过2队列身份接受/5拒绝及原8/32目标协议。余因子INI/choose12、CLI/正T1优先、缺失scope、输出保护、私有队列重启通过4选择/15调用/3曲线；原M521/B1=10e6默认入口另2选择/13调用/3曲线。最终接口6曲线11232 mandatory/24153 GMP检查bad0，证据`runtime/`、`runtime_m521_regression/`和`runtime_audit/result.json`。正式文档与TODO改写当前已测范围，原始data不提交。
+
+下一阶段仍保留原目标：生产高位宽/高B1/实际大batch与预算，针对大D的owner/arena联合预算独立标定，NTT完整策略与生产slice吞吐、互斥阶段组合，冷启动/驱动成本和非驻留/G1。当前30.669%大D收益和0.538%余因子有限排名不替代这些未完成项目，不宣布整个目标完成。

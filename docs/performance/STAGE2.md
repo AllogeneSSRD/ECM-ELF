@@ -381,6 +381,18 @@ Stage2调优和收益复验另保留1秒NVML记录；短曲线及进程间准备
 
 新独立参考二进制SHA256=`ff7a834abf2571a5b30d4a21e0c89fa176272ffacc1ef23f5e18a28f0014ee31`，构建4.6秒；Stage1/Stage2二进制身份和冻结工具、GMP依赖保留在原始证据。成本性能TOML不含目标数、路径或二进制身份，只匹配精确设备/位宽/类型/B1/批次/指数模式。证据`data/experiments/ecm_stage1_generic_tune_20261010/`中的`execution/`、`stage1_audit/result.json`、`target_protocol/`、`native_reference/`、`stage1_reader_regression/`和`ecm_reader_regression/`；短测量没有足够连续传感器证据，不声明实际频率/功耗恒定。
 
+#### 真实余因子T1的承载收益排名
+
+同一5872-bit余因子/B1=20/sigma26、batch8实测lcm T1=0.032049 s/curve、R=1，采用该页高位宽区间profile（两D、普通/承载6011、五B2共20scope）。每个锚点完整预热1次、交错正式3次，共80曲线；GPU1、Stage2二进制d1d1946e…、batch256/arena6300/fold640 MiB，用户1800MHz/默认55W上限。1284个原生决策候选自动选择B2=10400000000、D120120、承载6011，P11520、I86582、G8；没有强制B2/D/承载执行该点。
+
+所选点引擎中位数4.091650秒，估计4.088892秒，误差0.067%；20个复验候选最大误差0.538%，有限集合收益排名损失0，满足原定8%/5%门限。同B2四候选中位数依次为D60060普通6.130840、D60060承载4.799687、D120120普通5.237301、D120120承载4.091650秒。这里证明本次实际余因子T1与承载竞争贯通；选择在范围下界平台，不证明更低B2或所有D的全局收益最优，也不外推生产高B1。
+
+选中点进程中位数4.753833秒另列，score仍使用引擎T2，尚未计入Stage2驱动/冷启动。全部80曲线无因子、fold/frontier驻留，138240 mandatory cases、694444 GMP检查bad0。1秒NVML利用率≥80%的668点记录SM1515…1800MHz、中位数1800，功率18.92…55.08W、中位数50.485；设置未变，但实际频率不是严格恒定。证据为`execution/profit/result.json`、逐曲线日志/回执与`profit_audit/result.json`，所有输入/profile/二进制/冻结源身份经核对，未改写原始数据。
+
+共用INI的choose12成本选择、CLI覆盖、正T1优先、缺失scope/设备/输出冲突拒绝、余因子私有队列与重启不重复通过4组选择、15调用、3完整Stage2曲线。测试显式提供`--queue-exponent 6011`，以已知因子乘积还原队列目标N；不根据save名称推断指数。证据`runtime/result.json`。队列测试工具仍默认M521入口，额外目标须明确提供合法梅森来源并验证实际N整除原数。
+
+默认M521/B1=10e6入口另通过2组选择、13调用、3完整曲线。两组接口的6条曲线合计11232 mandatory cases、24153 GMP检查bad0，证据`runtime_m521_regression/`及`runtime_audit/result.json`；没有使用余因子测试替代原入口回归。
+
 ### Auto B2拟合复用的CPU成本
 
 同一AMD Ryzen AI 9 HX370、MSVC14.51 `/O2`、同一caller与冻结的旧/新头文件，在CPU原生fixture逐项比较完整候选。56组输入共17442个候选的数值和排序完全一致，含预测、精确点、不同T1/R、区间限制和拒绝条件。性能各1次预热、3次交错正式重复；每次20轮候选构造，计时不含profile读取、GPU查询、联合显存规划或完整曲线。

@@ -53,6 +53,15 @@ def main():
         assert proc.returncode==2 and not (out/'unused').exists(),(args,proc.stderr)
         (out/f'cli_reject_{i}.log').write_text(proc.stdout+proc.stderr,encoding='utf-8');rejected+=1
     result=dict(passed=True,accepted=accepted,rejected=rejected,gpu_access=False)
+    spec=importlib.util.spec_from_file_location('runtime',ROOT/'tools/test/test_stage1_tune_runtime.py')
+    runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
+    assert runtime.queue_task((1<<521)-1,521)=='ECMSTAGE2=stage1-tune,1,2,521,-1,"input.save",0,0,2,""\n'
+    assert runtime.queue_task(15,8)=='ECMSTAGE2=stage1-tune,1,2,8,-1,"input.save",0,0,2,"17"\n'
+    for n,e in [(19,8),(15,0),(15,16385),(4,8),(15,True)]:
+        try:runtime.queue_task(n,e)
+        except ValueError:pass
+        else:raise AssertionError('wrong queue identity accepted')
+    result['queue_identity_accepts']=2;result['queue_identity_rejects']=5
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8');print(json.dumps(result))
 
 if __name__=='__main__':main()

@@ -5,10 +5,21 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import tomllib
 
 ROOT=Path(__file__).resolve().parents[2]
+
+
+def queue_task(n,exponent):
+    if type(exponent) is not int or not 2<=exponent<=16384 or type(n) is not int or n<=3 or not n&1:
+        raise ValueError('invalid target or queue exponent')
+    original=(1<<exponent)-1
+    if original%n:raise ValueError('queue target must divide the explicitly supplied Mersenne number')
+    factor=original//n
+    factors='' if factor==1 else str(factor)
+    return f'ECMSTAGE2=stage1-tune,1,2,{exponent},-1,"input.save",0,0,2,"{factors}"\n'
 
 
 def main():
@@ -17,6 +28,7 @@ def main():
         p.add_argument('--'+key,type=Path,required=True)
     p.add_argument('--choose12-profile',type=Path,help='optional matching choose12 cost profile; tests enabled when supplied')
     p.add_argument('--device',type=int,required=True)
+    p.add_argument('--queue-exponent',type=int,default=521,help='Explicit Mersenne origin for the private queue; defaults to the M521 fixture')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     paths=[a.exe,a.ecm_profile,a.stage1_profile,a.save]
     if a.choose12_profile:paths.append(a.choose12_profile)
@@ -24,6 +36,9 @@ def main():
     identity={str(path.resolve()):sha(path) for path in paths}
     s1=tomllib.loads(a.stage1_profile.read_text(encoding='utf-8'))
     c12=tomllib.loads(a.choose12_profile.read_text(encoding='utf-8')) if a.choose12_profile else None
+    with a.save.open(encoding='utf-8-sig') as stream:line=next(x for x in stream if x.strip())
+    fields=dict(re.findall(r'(\w+)\s*=\s*([^;]+)',line));n=int(fields['N'].strip(),0)
+    task=queue_task(n,a.queue_exponent)
     assert {s['batch'] for s in s1['stage1'].values()}=={1,8}
     ini=out/'bench.ini';ini.write_text('verbose=false\nexponent=lcm\n',encoding='utf-8')
     common=[str(a.exe.resolve()),'--ini',str(ini),'--device',str(a.device),'--batch-mb','256',
@@ -73,8 +88,8 @@ def main():
     assert row['auto_plan']['T1']==eight['T1'] and row['auto_plan']['T1_source']=='measured_stage1_profile'
     assert row['B2']==eight['B2'] and row['hits']==row['bad_factors']==0 and row['requested_B2']==0
     text=log.read_text(encoding='utf-8');assert 'gmp_selftest_bad=0' in text and 'gmp_check_bad=0' in text
-    qdir=out/'queue';qdir.mkdir();qsave=qdir/'m521.save';qsave.write_bytes(a.save.read_bytes()*2)
-    queue=qdir/'worktodo.txt';task='ECMSTAGE2=stage1-tune,1,2,521,-1,"m521.save",0,0,2,""\n';queue.write_text(task,encoding='utf-8')
+    qdir=out/'queue';qdir.mkdir();qsave=qdir/'input.save';qsave.write_bytes(a.save.read_bytes()*2)
+    queue=qdir/'worktodo.txt';queue.write_text(task,encoding='utf-8')
     qini=qdir/'ecm.ini';qini.write_text('verbose=false\nexponent=lcm\ntmp_dir='+str(qdir)+
         '\nstage2_worktodo=worktodo.txt\nstage2_finished=finished.txt\nstage2_auto_b2=1\nstage1_batch=8\n'
         'stage2_tune_profile='+os.path.relpath(a.ecm_profile.resolve(),qdir)+'\nstage1_tune_profile='+os.path.relpath(a.stage1_profile.resolve(),qdir)+
@@ -91,7 +106,7 @@ def main():
     assert identity=={str(path.resolve()):sha(path) for path in paths}
     report=dict(passed=True,plans=plans,calls=calls,full_curves=3,arithmetic_bad=0,
                 native_stage1_cost=True,provided_cost_priority=True,ini_and_queue=True,source_files_unchanged=True,
-                choose12_verified=a.choose12_profile is not None)
+                choose12_verified=a.choose12_profile is not None,queue_exponent=a.queue_exponent,target_bits=n.bit_length())
     (out/'result.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(dict(passed=True,plans=len(plans),calls=len(calls),full_curves=3)))
 
