@@ -527,7 +527,19 @@ GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大
 
 证据`data/experiments/ntt_phase_tune_20261010/component_main_holdouts/`及`component_main_audit/result.json`。102项测量输入的冻结副本均匹配原始摘要，当前二进制的61项源仍一致。测量结束后工作量辅助工具修正格式2/3的旧调用兼容，冻结的GPU验收工具保留；修正后的当前工具已通过上述CPU原生参考及`workload_format4_regression/`的32计划重放，不将当前辅助工具摘要冒充为旧测量摘要。
 
-实际CLI合并的32个ECM范围与337个NTT形状、失败保留旧输出和再次合并已核对，证据`component_merge_runtime_v2/`。已知素数M521/B1=20/D60060/B2=2.6e9完成1次预热及1次正式曲线，再导入167个NTT形状并原子发布格式4，证据`live_ntt_import/`；这是发布入口检查，不是重复性能验收。Auto B2另通过INI、显式普通/承载/D锁定、精确点优先、未限制搜索和缺项回退共6个计划及1条完整未锁定曲线，证据`component_auto_runtime_v4/`，入口为[Auto运行检查](../../tools/test/test_stage2_tune_component_auto_runtime.py)。该检查T1=3 s/curve是固定测试输入，不是Stage1测量或全流程收益排名证明。更多生产位宽/B1、真实Stage1成本、预算、cold/driver和非驻留/G1仍在[TODO](../TODO.md)。
+实际CLI合并的32个ECM范围与337个NTT形状、失败保留旧输出和再次合并已核对，证据`component_merge_runtime_v2/`。已知素数M521/B1=20/D60060/B2=2.6e9完成1次预热及1次正式曲线，再导入167个NTT形状并原子发布格式4，证据`live_ntt_import/`；这是发布入口检查，不是重复性能验收。Auto B2另通过INI、显式普通/承载/D锁定、精确点优先、未限制搜索和缺项回退共6个计划及1条完整未锁定曲线，证据`component_auto_runtime_v4/`，入口为[Auto运行检查](../../tools/test/test_stage2_tune_component_auto_runtime.py)。该检查T1=3 s/curve是固定测试输入，实测T1的有限收益验证见下节。更多生产位宽/B1、预算、cold/driver和非驻留/G1仍在[TODO](../TODO.md)。
+
+### 格式4与实测Stage1成本的收益验证
+
+输入、生产EXE、格式4 profile、save、GPU与预算条件沿用上节。Stage1成本来自同一5872-bit余因子、B1=20、lcm、batch8的完整实测，每曲线中位数T1=0.0320491875 s；其profile SHA256为`0ea7bd7ac75e0350ca20eccdc204fdb383bbb1588188d1d0c8227fea0c9b42ac`。短B1主要包含启动、准备和保存成本，不能外推生产B1=10e6…260e6。R=1，收益使用K/(T1+R·T2)，T2为引擎total，排除Stage1、进程启动、Auto规划及结果发布。
+
+32个实测锚点与12.5e9/23.7e9×四D/算术组合共40个有限候选，全部预热1次，再正/反顺序交错正式3次，共160条完整曲线。32个锚点使用精确实测模型，8个留出候选使用`phase_ntt_loop_v1`；最大候选时间误差1.71511%，有限收益排名损失0，保持8%/5%门限。未锁定B2/D/承载的Auto入口从1316个决策候选中选择B2=2.6e9、D60060、承载6011；这在已测下界，不证明连续范围或全局最优。
+
+选中点引擎total正式数组为2.278519、2.307135、2.324756 s，中位数2.307135 s，收益5.3064816。相同B2下D60060普通、D120120普通、D120120承载的引擎中位数分别2.989427、7.023237、4.675710 s。276,480 mandatory cases、944,788 GMP核对均无坏计数和因子命中。每秒NVML完整1390点，利用率>50%的1232点中SM1545…1800 MHz、中位数1800，功率12.03…55.18 W、中位数47.135 W；设置是1800 MHz上限和默认55 W，采样不证明严格恒频。
+
+选中点完整进程中位数5.7157982 s，其中worker内Auto规划中位数3.065344 s。选中点每次执行完整Auto，其他候选显式固定B2/D/承载，因此不能把两类进程墙钟直接作为同等调用成本比较。当前8%/5%验收针对引擎T2收益；减少规划开销并核对完整调用成本仍是独立任务，不把上述结果写成端到端同等幅度收益。
+
+证据为`data/experiments/ntt_phase_tune_20261010/component_auto_profit/`、`component_auto_profit_audit/`及`component_auto_profit_audit_guards/`。独立CPU审计核对104份冻结输入、61项二进制源闭包、实际加载的EXE/GMP、实测T1、每条日志/回执、配对数组、收益和NVML；8种损坏的私有证据副本全部拒绝，原始目录未改写，未增加GPU曲线。工具为[收益验证](../../tools/bench/validate_stage2_tune_auto_profit.py)、[独立审计](../../tools/bench/audit_stage2_tune_auto_profit.py)及[审计拒绝门禁](../../tools/test/test_stage2_tune_profit_audit.py)。更多生产B1、位宽、实际批次、预算及非驻留/G1仍未覆盖。
 
 ## 下一测量
 
