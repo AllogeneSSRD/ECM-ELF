@@ -40,6 +40,33 @@ def profile_text(device,level,repeats,samples):
         '\n['+name+']\n'+''.join(k+' = '+json.dumps(v)+'\n' for k,v in fields.items()) for name,fields in tables)
 
 
+def read_native_reference(text,bits,b1,first,count,mode):
+    """Validate a complete scoped oracle response; partial/duplicate points fail."""
+    if len(text.encode('utf-8'))>16*1048576:raise ValueError('reference output exceeds 16MiB')
+    rows=[json.loads(line) for line in text.splitlines() if line.strip()]
+    if len(rows)!=count+2:raise ValueError('incomplete reference response')
+    h,end=rows[0],rows[-1]
+    expected=dict(type='stage1_reference',bits=bits,b1=b1,sigma_first=first,curves=count,exponent=mode)
+    if any(h.get(k)!=v or type(h.get(k)) is not type(v) for k,v in expected.items()):
+        raise ValueError('reference input scope mismatch')
+    if (not isinstance(h.get('n_hex'),str) or not re.fullmatch('[0-9a-f]+',h['n_hex']) or
+        int(h['n_hex'],16)!=(1<<bits)-1 or type(h.get('scalar_bits')) is not int or h['scalar_bits']<1):
+        raise ValueError('reference modulus/scalar mismatch')
+    if (end.get('type')!='complete' or end.get('algorithm')!='plain_gmp_ladder' or
+        type(end.get('curves')) is not int or end['curves']!=count or
+        type(end.get('seconds')) not in (int,float) or not math.isfinite(end['seconds']) or end['seconds']<=0):
+        raise ValueError('reference completion missing')
+    points=[]
+    for i,row in enumerate(rows[1:-1]):
+        if (row.get('type')!='point' or type(row.get('sigma')) is not int or row['sigma']!=first+i or
+            not isinstance(row.get('x_hex'),str) or not re.fullmatch('[0-9a-f]+',row['x_hex'])):
+            raise ValueError('duplicate/mismatched reference point')
+        x=int(row['x_hex'],16)
+        if x>=(1<<bits)-1:raise ValueError('reference coordinate outside target N')
+        points.append(x)
+    return points
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--stage1',type=Path,required=True)
@@ -52,6 +79,8 @@ def main():
     p.add_argument('--exponent',choices=['lcm','choose12'],default='lcm')
     p.add_argument('--repeats',type=int)
     p.add_argument('--timeout',type=float,default=3600)
+    p.add_argument('--reference',type=Path,help='Optional independent stage1_gmp_reference.exe for high B1')
+    p.add_argument('--reference-timeout',type=float,default=7200,help='Per native reference process; excluded from T1')
     p.add_argument('--output',type=Path,required=True,help='Fresh raw evidence directory under data/experiments')
     p.add_argument('--profile',type=Path,required=True,help='Published Stage1 performance TOML')
     a=p.parse_args();grid=effort(a.tune_level)
@@ -59,10 +88,12 @@ def main():
         if value is not None:grid[name]=value
     if a.repeats is not None:grid['repeats']=a.repeats
     if (a.device<0 or not 1<=grid['repeats']<=1000 or not math.isfinite(a.timeout) or a.timeout<=0 or
+        not math.isfinite(a.reference_timeout) or a.reference_timeout<=0 or
         not set(grid['exponents'])<=set(PRIMES) or any(b<2 or b>260000000 for b in grid['b1']) or
         any(b<1 or b>1048576 for b in grid['batches']) or
         any(len(values)!=len(set(values)) for values in [grid['exponents'],grid['b1'],grid['batches']])):
         p.error('invalid benchmark grid or timeout')
+    if a.reference and max(grid['batches'])>4096:p.error('native reference supports at most 4096 curves per scope')
     if len(grid['exponents'])*len(grid['b1'])*len(grid['batches'])>4096:p.error('grid exceeds 4096 scopes')
     out=a.output.resolve();destination=a.profile.resolve();exes=[a.stage1.resolve(),a.stage2.resolve()]
     if destination.suffix.lower()!='.toml':p.error('profile must use .toml')
@@ -70,6 +101,21 @@ def main():
     out.mkdir(parents=True,exist_ok=False)
     sha=lambda path:hashlib.sha256(path.read_bytes()).hexdigest()
     identities={str(path):sha(path) for path in exes}
+    if a.reference:
+        a.reference=a.reference.resolve()
+        if destination==a.reference:p.error('profile must differ from reference executable')
+        identities[str(a.reference)]=sha(a.reference)
+        manifest=a.reference.parent/'manifest.json'
+        if manifest.exists():
+            frozen=json.loads(manifest.read_text(encoding='utf-8-sig'))
+            if frozen['binary_sha256'].lower()!=sha(a.reference):raise RuntimeError('reference build identity mismatch')
+            identities[str(manifest)]=sha(manifest)
+            for name,want in frozen['sources'].items():
+                source=a.reference.parent/'sources'/name
+                if sha(source)!=want.lower():raise RuntimeError('reference frozen source mismatch')
+                identities[str(source)]=sha(source)
+        dll=a.reference.parent/'gmp-10.dll'
+        if dll.exists():identities[str(dll)]=sha(dll)
     own=sha(Path(__file__))
     spec=importlib.util.spec_from_file_location('reference',ROOT/'tools/stat/suyama_mont_ref.py')
     ref=importlib.util.module_from_spec(spec);spec.loader.exec_module(ref)
@@ -81,7 +127,7 @@ def main():
     info=next(json.loads(line) for line in probe.stdout.splitlines() if line.startswith('{'))
     device=dict(uuid_hex=info['uuid_hex'],sm_major=info['major'],sm_minor=info['minor'],
                 cuda_runtime=info['runtime'],cuda_driver=info['driver'])
-    data=dict(complete=False,identity=identities,tool_sha256=own,device=device,grid=grid,exponent=a.exponent,runs=[])
+    data=dict(complete=False,identity=identities,tool_sha256=own,device=device,grid=grid,exponent=a.exponent,runs=[],references=[])
     def persist():
         (out/'measurements.json').write_text(json.dumps(data,indent=2)+'\n',encoding='utf-8')
     persist();samples=[];reference={};scalars={}
@@ -92,14 +138,28 @@ def main():
         for b1 in grid['b1']:
             for batch in grid['batches']:
                 print(f'stage1_tune_prepare: bits={bits} B1={b1} batch={batch} independent_points={batch}',flush=True)
-                if b1 not in scalars:scalars[b1]=ref.lcm_1_to(b1)*(12 if a.exponent=='choose12' else 1)
-                for sigma in range(26,26+batch):
-                    key=(bits,b1,sigma)
-                    if key not in reference:
+                missing=[sigma for sigma in range(26,26+batch) if (bits,b1,sigma) not in reference]
+                if a.reference and missing:
+                    first,last=min(missing),max(missing);count=last-first+1
+                    command=[str(a.reference),str(bits),str(b1),str(first),str(count),a.exponent]
+                    where=out/f'reference_m{bits}_b{b1}_s{first}_c{count}';where.mkdir()
+                    try:
+                        checked=subprocess.run(command,capture_output=True,timeout=a.reference_timeout)
+                    except subprocess.TimeoutExpired as error:
+                        (where/'driver.log').write_bytes((error.stdout or b'')+(error.stderr or b''))
+                        data['failure']=dict(case=where.name,reason='reference_timeout');persist();raise
+                    (where/'points.jsonl').write_bytes(checked.stdout);(where/'driver.log').write_bytes(checked.stderr)
+                    if checked.returncode:raise RuntimeError('independent GMP reference failed: '+str(where))
+                    values=read_native_reference(checked.stdout.decode('utf-8'),bits,b1,first,count,a.exponent)
+                    for sigma,x in zip(range(first,last+1),values):reference[(bits,b1,sigma)]=x
+                    data['references'].append(dict(command=command,output=where.name,sha256=sha(where/'points.jsonl')));persist()
+                elif missing:
+                    if b1 not in scalars:scalars[b1]=ref.lcm_1_to(b1)*(12 if a.exponent=='choose12' else 1)
+                    for sigma in missing:
                         _,a24,x,z=ref.suyama_curve(sigma,n)
                         x,z=ref.ladder(scalars[b1],x,z,a24,n)
                         if math.gcd(z,n)!=1:raise RuntimeError('benchmark reference point is not a unit; evidence retained')
-                        reference[key]=x*pow(z,-1,n)%n
+                        reference[(bits,b1,sigma)]=x*pow(z,-1,n)%n
                 trials=[];gpu=[]
                 for repeat in range(grid['repeats']+1):
                     where=out/f'm{bits}_b{b1}_c{batch}_r{repeat}';where.mkdir()

@@ -52,6 +52,10 @@ reader限制1 MiB，拒绝旧格式、缺失END、重复键、非法整数、非
 
 当前测量路径固定CUDA/CGBN ladder、Suyama PARAM0、自动TPI、关闭指数缓存和checkpoint；`--exponent [lcm|choose12]`显式选择标量。输入来自与完整Stage2 tune相同的13个已知梅森素数目录。CPU独立生成每个sigma的末点，测量后逐条验证实际N、B1、PARAM、sigma、X、Z与checksum；不能用checkpoint、部分运行速度投影、因子曲线或缺失末点发布成功文件。
 
+高B1可加`--reference <stage1_gmp_reference.exe>`使用独立纯GMP末点参考，省去Python的大标量与点运算；不指定则保留Python参考。参考程序由`tools/build/test/build_stage1_gmp_reference.ps1 -Build <新目录> -VcVars <vcvars64.bat>`构建，纯CPU、不链接CUDA、不包含生产ECM算术代码。它用分段筛法收集最大素数幂、均衡乘积构造LCM，再用普通GMP模运算执行Montgomery ladder；choose12使用12倍标量。支持相同13个已知素数、B1=2…260e6、单范围1…4096条曲线。参考耗时完全排除T1。
+
+每次原生参考返回完整输入范围、按sigma顺序排列的坐标和成功尾记录。收集器拒绝缺尾、缺点、重复/乱序、范围不符或越界坐标；参考返回非单位或超时则保留证据并拒绝发布。`--reference-timeout <秒>`默认7200，单独限制每次原生参考进程；Python参考没有这一子进程限制。已计算的末点在本轮内复用，扩大batch时只计算缺少的sigma。原生参考的二进制、可用的构建manifest/冻结源与GMP DLL身份只进入原始审计，不进入性能TOML。
+
 `--tune-level <1..10>`默认1：位宽目录取前min(13,ℓ+3)项；B1目录依次为20、1000、10000、100000、1000000、10000000、26000000、100000000、260000000，取前min(9,ℓ)项；批次目录1、8、64、256，取前min(4,1+⌊(ℓ−1)/3⌋)项；每组合一次独立进程预热，正式重复2ℓ+1次。`--exponents <p...>`、`--b1 <B1...>`、`--batch <C...>`、`--repeats <n>`覆盖网格。最高默认468个范围、每范围21次正式重复，CPU独立点验证也可能很耗时。`--timeout <秒>`默认3600，只限制每个Stage1子进程，不承诺整轮时间上限。
 
 T1样本=完整Stage1进程墙钟/C，包含进程启动、指数/曲线准备、GPU运算、归一化与save写入；不含CPU独立验证及预热。GPU秒数另存，不作为默认T1。短B1的成本可能主要由启动/准备构成，因此不把短基准外推生产B1。Stage1和Stage2两个成本口径并不包含完全相同的进程开销；完整总流程还需单独核对Stage2驱动成本。

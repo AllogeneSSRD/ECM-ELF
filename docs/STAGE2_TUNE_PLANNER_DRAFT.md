@@ -179,3 +179,15 @@ M4423有效B1=1000 save完成两D、五B2各预热1+正式3，共40条完整Stag
 证据`data/experiments/ecm_stage1_tune_20261010/`：`completed_stage_audit.json`、`final_stage_audit.json`、`source_audit_final.json`、`runtime_final/`、`provided_runtime_after_probe/`、`coupled_4423_final/`、`final_drift_probe/`及Stage1原始目录；40条调优回执在`data/experiments/ecm_tune_36448_21825781/`。最终raw审计65条完整Stage2曲线mandatory/GMP bad0、无因子，包含失败性能样本，不能将其混作65条性能验收通过。GPU1同一4060 Laptop、用户1800MHz/默认55W上限，本批不修改设置、不扰动忙碌GPU0，正式短测量没有连续遥测；对照探针单独记录NVML。
 
 已同步AUTO_B2、Stage1/Stage2使用、性能及TODO；统一配置和diff检查通过。剩余完整目标：生产B1/余因子/实际batch成本与预算扩展、独立收益排名、互斥阶段/NTT特征组合、Stage2冷启动/驱动成本及非驻留/G1回退。新脚本可请求生产B1，但尚未完成生产B1实测，CPU纯Python参考会很耗时；下一阶段先改善高B1独立参考与受控标定，再扩大预算和尾部成本范围。本草稿继续保留。
+
+### 高B1独立GMP参考与生产标定启动
+
+`05d2de0`已提交完整Stage1成本查询。本阶段新增独立`stage1_gmp_reference.cpp`及纯CPU构建入口，用分段素数筛法、均衡乘积构造LCM和普通GMP ladder生成末点。它不引用生产CUDA/ECM头文件；当前仅支持13个已知梅森素数，B1=2…260e6、sigma>=6、单范围<=4096曲线，支持lcm/choose12。原生参考通过末点输入/输出协议接入现有成本collector，缺点/缺尾/乱序/越界/错误scope均拒绝，参考失败不能发布。原生进程timeout默认7200秒且排除T1；扩大batch时只补缺失sigma。性能文件格式及运行reader没有变化，二进制/冻结源/GMP身份保留在raw。
+
+纯CPU构建3.2秒，GMP参考exe SHA=`a7cb7de0e32d0a21c82becbd731bcf1f3e60e5f9ce4894ef022858a09c8d292b`，源码与GMP依赖冻结在`build_cuda_cmake/stage1_gmp_reference_20261010/`。15个LCM标量（含跨1MiB筛块）、76个独立Python末点及26种非法输入/缺尾等拒绝通过，覆盖13个素数与两指数模式。新collector用M521/B1=20、batch1/8、各1暖机+1正式完成4批18曲线，末点/原生reader通过；这是接口回归，正式n=1不作可靠速度标定。旧成本reader3接受/26拒绝/10等级仍通过。首次应用collector修改的补丁因上下文不匹配而未生效，核对文件后重应用；没有覆盖原始实验或数学门限。
+
+启动M521/B1=10e6、lcm、sigma从26开始、batch1/8、每scope1暖机+3正式，使用部署Stage1 SHA=`5ff1f58a3a072fb37b7ef6e35d3ac2de5488304d6acc5d4f32b6555cb2c96e6e`、冻结Stage2 SHA=`231cd6b22725caf1f17d111d0f89120df2f82e78e24cfb1e0b02c0a7457ee224`、GPU1。原生第一点33.4581秒，第一完整GPU暖机210.318895秒并与独立末点一致；本轮仍在运行，尚未发布生产B1配置或正式中位数。传感器每1秒读取，未改用户1800MHz/默认55W设置，不扰动GPU0的既有任务。管理员只读进程查询确认指定子进程运行后继续等待，未因没有即时输出重复启动。
+
+证据目录`data/experiments/ecm_stage1_production_tune_20261010/`：`reference_tests/`、`small_native/`、`small_native.toml`、`reader_regression/`、`production_command.json`、`production_driver.log`、`production_telemetry.csv`及仍在运行的`m521_b10m/`。运行handle保存在当前任务，生产job未结束前不同时启动GPU1 Stage2计时、不修改collector或参考二进制。
+
+同时准备`validate_stage2_tune_auto_profit.py`：读取真实T1并以完整曲线交错复验profile锚点及自动选中B2/D/承载，独立计算K/[T1+R·T2]，预设时间8%、有限候选收益排名损失5%门限；每点暖机1次+正式3次，保留完整原始数据及另列的进程墙钟。CPU收益公式/倍率/七种非法成本检查与语法检查通过，完整GPU流程尚未验收，暂不写入已通过业务规则。该有限候选比较不声称连续范围或所有B2的全局最优；后续必须用同B1 Stage2 tune成本和实际生产save验收后再提交性能结论。
