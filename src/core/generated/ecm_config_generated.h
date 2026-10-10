@@ -90,6 +90,15 @@ inline constexpr char worker_name[]="Worker #{N}";
 inline constexpr int worker_autostart=0;
 inline constexpr char worker_extra_args[]="";
 inline constexpr int worker_gpucurves=0;
+inline constexpr char stage2_stage2_tune_ignore[]="gpu,driver,cuda,backend,environment";
+inline constexpr uint64_t stage2_stage2_tune_budget_seconds=1800;
+inline constexpr bool stage2_stage2_short_calibration=true;
+inline constexpr uint64_t stage2_stage2_short_calibration_seconds=10;
+inline constexpr double stage2_stage2_tune_error_limit=0.08;
+inline constexpr char stage2_stage1_cost_csv[]="";
+inline constexpr uint64_t stage2_stage1_cost_mhz=0;
+inline constexpr uint64_t stage2_stage2_target_factor_bits=0;
+inline constexpr char stage2_stage2_tune_condition_tag[]="";
 } // namespace defaults
 namespace limits {
 inline constexpr int64_t stage2_stage2_device_minimum=0;
@@ -122,6 +131,14 @@ inline constexpr int64_t gui_dock_layout_ver_minimum=0;
 inline constexpr int64_t gui_dock_layout_ver_maximum=2147483647;
 inline constexpr int64_t gui_graceful_stop_ms_minimum=1000;
 inline constexpr int64_t gui_graceful_stop_ms_maximum=3600000;
+inline constexpr int64_t stage2_stage2_tune_budget_seconds_minimum=1;
+inline constexpr int64_t stage2_stage2_tune_budget_seconds_maximum=86400;
+inline constexpr int64_t stage2_stage2_short_calibration_seconds_minimum=1;
+inline constexpr int64_t stage2_stage2_short_calibration_seconds_maximum=600;
+inline constexpr int64_t stage2_stage1_cost_mhz_minimum=0;
+inline constexpr int64_t stage2_stage1_cost_mhz_maximum=10000;
+inline constexpr int64_t stage2_stage2_target_factor_bits_minimum=0;
+inline constexpr int64_t stage2_stage2_target_factor_bits_maximum=16384;
 } // namespace limits
 inline std::string canonical_stage1_method(const std::string &value){
     const auto v=lower(value);
@@ -269,6 +286,15 @@ struct Stage2Values {
     uint64_t stage1_batch=1;
     double stage1_seconds=0;
     double ratio_adjust=1;
+    std::string tune_ignore="gpu,driver,cuda,backend,environment";
+    uint64_t tune_budget=1800;
+    bool short_calibration=true;
+    uint64_t short_budget=10;
+    double tune_error=0.08;
+    std::string stage1_csv="";
+    uint64_t stage1_mhz=0;
+    uint64_t factor_bits=0;
+    std::string condition_tag="";
     bool has_worktodo=false;
     bool has_finished=false;
     bool has_log=false;
@@ -303,6 +329,15 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage1_batch",[](Stage2Values&c,const std::string&v){c.stage1_batch=static_cast<uint64_t>(bounded_integer(v,"stage1_batch",1,1048576));},false,nullptr},
     {"stage1_seconds_per_curve",[](Stage2Values&c,const std::string&v){c.stage1_seconds=positive(v,"stage1_seconds_per_curve");},false,nullptr},
     {"stage2_ratio_adjust",[](Stage2Values&c,const std::string&v){c.ratio_adjust=positive(v,"stage2_ratio_adjust");},false,nullptr},
+    {"stage2_tune_ignore",[](Stage2Values&c,const std::string&v){c.tune_ignore=v;},false,nullptr},
+    {"stage2_tune_budget_seconds",[](Stage2Values&c,const std::string&v){c.tune_budget=static_cast<uint64_t>(bounded_integer(v,"stage2_tune_budget_seconds",1,86400));},false,nullptr},
+    {"stage2_short_calibration",[](Stage2Values&c,const std::string&v){c.short_calibration=boolean(v,"stage2_short_calibration");},false,nullptr},
+    {"stage2_short_calibration_seconds",[](Stage2Values&c,const std::string&v){c.short_budget=static_cast<uint64_t>(bounded_integer(v,"stage2_short_calibration_seconds",1,600));},false,nullptr},
+    {"stage2_tune_error_limit",[](Stage2Values&c,const std::string&v){c.tune_error=positive(v,"stage2_tune_error_limit");},false,nullptr},
+    {"stage1_cost_csv",[](Stage2Values&c,const std::string&v){c.stage1_csv=v;},false,nullptr},
+    {"stage1_cost_mhz",[](Stage2Values&c,const std::string&v){c.stage1_mhz=static_cast<uint64_t>(bounded_integer(v,"stage1_cost_mhz",0,10000));},false,nullptr},
+    {"stage2_target_factor_bits",[](Stage2Values&c,const std::string&v){c.factor_bits=static_cast<uint64_t>(bounded_integer(v,"stage2_target_factor_bits",0,16384));},false,nullptr},
+    {"stage2_tune_condition_tag",[](Stage2Values&c,const std::string&v){c.condition_tag=v;},false,nullptr},
     {"debug_log",[](Stage2Values&c,const std::string&v){c.debug_log=boolean(v,"debug_log");},false,"stage2_debug_log"},
 };
 inline Stage2Values read_stage2(const Entries &entries){Stage2Values c;apply(c,entries,stage2_bindings);return c;}

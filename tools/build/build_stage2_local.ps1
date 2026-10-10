@@ -51,6 +51,7 @@ $sources = @($cudaSource, 'src/core/ecm_cuda_stage2_main.cpp',
     'src/core/ecm_expr.cpp', 'src/core/ecm_worktodo.cpp', 'src/core/ecm_queue_config.cpp')
 $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
     'src/core/ecm_stage2_phase_times.h',
+    'src/core/ecm_stage2_tune_portable.h','src/core/ecm_stage2_portable_model.h','src/core/ecm_stage2_portable_driver.inl','src/core/ecm_stage2_probability.h','src/core/ecm_stage1_cost_csv.h',
     'src/core/ecm_stage2_giant_work.h',
     'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h', 'src/core/ecm_stage2_ntt_memory.h', 'src/core/ecm_stage2_giant_memory.h', 'src/core/ecm_stage2_s4_memory.h', 'src/core/ecm_stage2_s4_program.h', 'src/core/ecm_stage2_modulus.h', 'src/core/ecm_stage2_logging.h', 'src/core/ecm_stage2_console.h', 'src/core/ecm_stage2_queue_state.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
     'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h', 'src/core/ecm_stage2_tune_format.h', 'src/core/ecm_stage2_tune_ecm.h', 'src/core/ecm_stage2_tune_grid.h', 'src/core/ecm_stage2_tune_prediction.h', 'src/core/ecm_stage2_tune_auto.h', 'src/core/ecm_stage2_tune_components.h', 'src/core/ecm_stage2_tune_ntt_profile.h', 'src/core/ecm_stage1_tune_profile.h', 'src/core/ecm_stage2_workspace_memory.h', 'src/core/ecm_stage2_owner_memory.h', 'src/core/ecm_stage2_giant_state.h', 'src/core/ecm_stage2_initial_memory.h',

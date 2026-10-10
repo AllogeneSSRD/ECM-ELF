@@ -51,12 +51,10 @@ struct Mpz {
 struct Point {Mpz x,z;};
 // Small, plain-GMP preparation only; not a production Stage1 implementation or
 // a Stage1 timing calibration. a24=(A+2)/4, Q=[lcm(1..20)]P, sigma=26.
-inline std::string prime_point(unsigned exponent,std::string &n_hex) {
-    const unsigned allowed[]={107,127,521,607,1279,2203,2281,3217,4253,4423,9689,9941,11213};
-    if(std::find(std::begin(allowed),std::end(allowed),exponent)==std::end(allowed))
-        throw std::runtime_error("ECM tune exponent is not in the known-prime catalogue");
+inline std::string benchmark_point(const std::string &n_hex) {
     Mpz n,u,v,t,a24,den,inv,xdiff,scalar;
-    mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,exponent);mpz_sub_ui(n.v,n.v,1);
+    if(mpz_set_str(n.v,n_hex.c_str(),16) || mpz_cmp_ui(n.v,3)<=0)
+        throw std::runtime_error("invalid benchmark modulus");
     mpz_set_ui(u.v,26*26-5);mpz_set_ui(v.v,4*26);
     mpz_sub(t.v,v.v,u.v);mpz_powm_ui(a24.v,t.v,3,n.v);
     mpz_mul_ui(t.v,u.v,3);mpz_add(t.v,t.v,v.v);mpz_mul(a24.v,a24.v,t.v);
@@ -93,7 +91,15 @@ inline std::string prime_point(unsigned exponent,std::string &n_hex) {
     if(!mpz_invert(inv.v,r0.z.v,n.v))throw std::runtime_error("benchmark Stage1 point is infinity");
     mpz_mul(t.v,r0.x.v,inv.v);mpz_mod(t.v,t.v,n.v);
     auto hex=[](mpz_srcptr z){std::string s(mpz_sizeinbase(z,16)+2,'\0');mpz_get_str(&s[0],16,z);s.resize(std::char_traits<char>::length(s.c_str()));return s;};
-    n_hex=hex(n.v);return hex(t.v);
+    return hex(t.v);
+}
+inline std::string prime_point(unsigned exponent,std::string &n_hex) {
+    const unsigned allowed[]={107,127,521,607,1279,2203,2281,3217,4253,4423,9689,9941,11213};
+    if(std::find(std::begin(allowed),std::end(allowed),exponent)==std::end(allowed))
+        throw std::runtime_error("ECM tune exponent is not in the known-prime catalogue");
+    Mpz n;mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,exponent);mpz_sub_ui(n.v,n.v,1);
+    n_hex.resize(mpz_sizeinbase(n.v,16)+2);mpz_get_str(&n_hex[0],16,n.v);
+    n_hex.resize(std::char_traits<char>::length(n_hex.c_str()));return benchmark_point(n_hex);
 }
 using Fields=std::map<std::string,std::string>;
 inline Fields legacy_environment(const std::string &text) {

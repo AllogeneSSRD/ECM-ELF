@@ -1,0 +1,22 @@
+# User supplied s/curve; RTX 4060 Laptop at 2000 MHz, B1=110e6.
+# container_bits is the dispatched width, not actual modulus bits.
+# TPB=128; submitted 2 blocks/SM: TPI8=768 curves, TPI16=384 curves.
+# Algorithm/exponent mode and arithmetic verification were not reported.
+# Blank exponent permits an explicitly acknowledged approximate cost anchor.
+container_bits,tpi,curves,tpb,b1,mhz,seconds_per_curve,exponent
+1280,8,768,128,110000000,2000,,
+1536,8,768,128,110000000,2000,,
+1792,8,768,128,110000000,2000,9.5,
+2048,8,768,128,110000000,2000,,
+2560,16,384,128,110000000,2000,19.6,
+3072,16,384,128,110000000,2000,26.6,
+3584,16,384,128,110000000,2000,,
+4096,16,384,128,110000000,2000,,
+4608,16,384,128,110000000,2000,,
+5120,16,384,128,110000000,2000,,
+5632,16,384,128,110000000,2000,66.8,
+6144,16,384,128,110000000,2000,76.3,
+6656,16,384,128,110000000,2000,90.0,
+7168,16,384,128,110000000,2000,105.7,
+7680,16,384,128,110000000,2000,,
+8192,16,384,128,110000000,2000,140.4,

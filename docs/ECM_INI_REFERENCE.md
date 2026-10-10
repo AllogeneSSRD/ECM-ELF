@@ -704,18 +704,11 @@ stage2_tune_profile 为空时供 Auto B2 使用的旧 .cprof 成本配置。保�
 stage2_tune_profile=<path>; default=""; empty=legacy_selection
 ```
 
-Full ECM tune TOML for D and legal Mersenne carrier selection. Matches device/backend/memory<br>
-policy/target width/B1. Uses exact B2 measurements or qualified predictions inside measured bounds;<br>
-no width/B1/D extrapolation. Format 4 can include exact NTT batch measurements for a qualified<br>
-paired-phase model; missing shapes or an ineligible group retain the full-curve model. With<br>
-stage2_auto_b2 and a provided or matched measured Stage1 cost, jointly chooses B2/D/carrier and<br>
-takes priority over stage2_cost_profile. Explicit nonzero D fixes D; --carrier-exponent including 0<br>
-fixes arithmetic. Saved N must divide the carrier. Empty keeps existing selection.<br>
-用于 D 和合法梅森承载选择的完整 ECM tune TOML。匹配设备、后端、显存策略、目标位宽和 B1；使用精确 B2<br>
-实测或合格实测区间预测，不外推位宽、B1 或 D。格式 4 可内嵌精确 NTT 批量实测，供合格配对阶段模型预测<br>
-；缺项或组不合格时保留完整曲线模型。启用 stage2_auto_b2 并提供或匹配实测的 Stage1 成本后，联合选择<br>
-B2、D、承载，优先于 stage2_cost_profile。显式非零 D 固定 D；--carrier-exponent（包括 0）固定算术。<br>
-save 的 N 必须整除承载。留空保持已有选型。
+ECM final-summary TOML for joint B2/D/carrier selection. B1 never gates reuse. Width and B2 may be<br>
+estimated with uncertainty labels. Explicit D or carrier locks the choice; saved N must divide<br>
+2^p-1. Empty uses stage2_ecm_tune.toml unless a legacy cost profile is supplied.<br>
+ECM 最终汇总 TOML，联合选择 B2、D、承载；B1 不作为复用门槛。位宽和 B2 可带不确定性标记估算。显式 D<br>
+或承载固定选择；承载须通过 save 模数整除检查。留空且未指定旧成本配置时使用 stage2_ecm_tune.toml。
 
 ### stage1_tune_profile
 
@@ -723,38 +716,31 @@ save 的 N 必须整除承载。留空保持已有选型。
 stage1_tune_profile=<path>; default=""; empty=disabled
 ```
 
-Completed CUDA Stage1 batch measurements for full ECM tune Auto B2. Used only when<br>
-stage1_seconds_per_curve is unset. Matches GPU/runtime, target width/type, B1, stage1_batch and<br>
-exponent (or --stage1-exponent). Costs are already per curve and include process/prepare/save time.<br>
-Ladder PARAM0, automatic TPI, exponent cache off only. Empty requires a provided cost. This file<br>
-does not configure or start Stage1.<br>
-为完整 ECM tune Auto B2 提供已完成 CUDA Stage1 批次成本；仅在未指定 stage1_seconds_per_curve 时使用<br>
-。匹配 GPU/运行时、目标位宽/类型、B1、stage1_batch 和 exponent（或 --stage1-exponent）。成本已按每曲<br>
-线摊销，包含进程、准备和存档时间。当前限 ladder PARAM0、自动 TPI、关闭指数缓存。留空需提供成本；此文<br>
-件不配置或启动 Stage1。
+Checked completed CUDA Stage1 cost anchors, used after explicit seconds/curve and CSV. Matches<br>
+batch, modulus type and exponent; B1 and missing widths scale by B1 and the dispatched container<br>
+squared. Device/runtime reuse follows stage2_tune_ignore. This does not run Stage1.<br>
+已核验的完整 CUDA Stage1 成本锚点，优先级低于显式秒/曲线和 CSV。匹配批次、模数类型和指数模式；B1 与<br>
+缺失位宽按 B1 和容器位宽平方估算。设备及运行时复用遵守 stage2_tune_ignore；此文件不启动 Stage1。
 
 ### stage2_auto_min_b2
 
 ```text
-stage2_auto_min_b2=<x:Z,x=0|measured_min<=x<=measured_max>; default=0; zero=profile_bound; min<=max
+stage2_auto_min_b2=<x:Z,0..2^63-8193>; default=0; zero=B1_plus_one; min<=max
 ```
 
-Minimum B2 searched by Auto B2. 0 uses the profile's measured lower bound. Explicit values must be<br>
-within calibration and no greater than the maximum. Does not override B2 supplied by CLI or task.<br>
-限制 Auto B2 搜索的最小 B2。0 使用 profile 的实测下界；非零值必须在已标定范围内且不超过最大 B2。此键<br>
-不覆盖命令行或任务行已经指定的 B2。
+Auto B2 lower search bound; 0 means B1+1. Unmeasured values may be estimated; explicit task B2 takes<br>
+precedence.<br>
+Auto B2 搜索下界；0 为 B1+1。未测值允许估算，显式任务 B2 优先。
 
 ### stage2_auto_max_b2
 
 ```text
-stage2_auto_max_b2=<x:Z,x=0|measured_min<=x<=measured_max>; default=0; zero=profile_bound; min<=max
+stage2_auto_max_b2=<x:Z,0..2^63-8193>; default=0; zero=2600000000000; min<=max
 ```
 
-Maximum B2 searched by Auto B2. 0 uses the profile's measured upper bound. Explicit values must be<br>
-within calibration and no smaller than the minimum. Raising it does not permit extrapolation beyond<br>
-measured data.<br>
-限制 Auto B2 搜索的最大 B2。0 使用 profile 的实测上界；非零值必须在已标定范围内且不小于最小 B2。不能<br>
-靠提高此值让模型外推到未测量的范围。
+Auto B2 upper search bound; 0 means 2.6e12. Unmeasured values may be estimated; explicit task B2<br>
+takes precedence.<br>
+Auto B2 搜索上界；0 为 2.6e12。未测值允许估算，显式任务 B2 优先。
 
 ### stage1_batch
 
@@ -792,6 +778,99 @@ estimates higher cost, less than 1 lower cost, usually changing selected B2. Adj
 not actual GPU speed.<br>
 将 Auto B2 模型中的 Stage2 时间乘以该系数。1 不调整，大于 1 表示估计 Stage2 更贵，小于 1 表示更便宜<br>
 ；通常会相应影响所选 B2。此键只调整选形成本，不会让 GPU 按比例变快或变慢。
+
+### stage2_tune_ignore
+
+```text
+stage2_tune_ignore=[gpu|driver|cuda|backend|memory|environment],...; default=gpu,driver,cuda,backend,environment; empty=none
+```
+
+Comma-separated conditions ignored for profile reuse. Empty enforces every condition. Memory<br>
+normally matches execution path; arithmetic legality and current memory admission are always<br>
+checked.<br>
+逗号分隔的复用忽略项；留空核对全部条件。memory 默认匹配执行路径。算术合法性及当前显存准入始终检查。
+
+### stage2_tune_budget_seconds
+
+```text
+stage2_tune_budget_seconds=<x:Z,1..86400>; default=1800
+```
+
+Total ECM tuning measurement budget, including warmups. Finish an in-flight measurement after the<br>
+deadline; publish completed summaries for incremental reuse.<br>
+ECM 调优的测量总预算，包含预热；到期后完成正在运行的测量并保存有效汇总，供下次增量使用。
+
+### stage2_short_calibration
+
+```text
+stage2_short_calibration=[0|1]; default=1
+```
+
+Calibrate once when no suitable ECM tune file exists, required components are missing, or the task<br>
+has no reusable calibrated width coverage. Partial coverage permits estimates.<br>
+无合适 ECM tune 文件、必要组件缺失或任务位宽完全没有可复用校准覆盖时短校准；部分覆盖允许估算。
+
+### stage2_short_calibration_seconds
+
+```text
+stage2_short_calibration_seconds=<x:Z,1..600>; default=10
+```
+
+Short calibration measurement budget, excluding first CUDA initialization; finish the current<br>
+measurement before stopping.<br>
+短校准测量预算，不含首次 CUDA 初始化；到期完成当前测量后停止。
+
+### stage2_tune_error_limit
+
+```text
+stage2_tune_error_limit=<x:R,0<x<=1>; default=0.08
+```
+
+Independent relative prediction error threshold used to prioritize additional full-curve<br>
+measurements. Unchecked estimates retain an uncertainty allowance.<br>
+独立预测相对误差阈值，用于优先追加完整曲线测量；未验证估算保留不确定性余量。
+
+### stage1_cost_csv
+
+```text
+stage1_cost_csv=<path>; default=""; empty=none
+```
+
+CSV Stage1 s/curve anchors for workflow Auto B2. Columns: container_bits or target_bits, tpi,<br>
+curves, b1, mhz, seconds_per_curve; optional tpb and exponent. Missing widths may interpolate or<br>
+extrapolate. Costs are already amortized.<br>
+总流程 Auto B2 的 Stage1 秒/曲线 CSV；列为 container_bits 或 target_bits、tpi、curves、b1、mhz、<br>
+seconds_per_curve；可选 tpb、exponent。缺失位宽可插值或外推，成本已摊销。
+
+### stage1_cost_mhz
+
+```text
+stage1_cost_mhz=<x:Z,0..10000>; default=0
+```
+
+Stage1 target frequency for inverse-frequency cost scaling. 0 uses the CSV reference frequency; this<br>
+does not change GPU clocks.<br>
+Stage1 成本反频率缩放的目标频率；0 使用 CSV 参考频率，不修改 GPU 时钟。
+
+### stage2_target_factor_bits
+
+```text
+stage2_target_factor_bits=<x:Z,0|2..16384>; default=0
+```
+
+Target prime-factor size for Dickman semismooth success probability. 0 derives a recommendation from<br>
+B1; this is distinct from the full modulus size.<br>
+Dickman 半光滑成功概率的目标素因子位数；0 根据 B1 推荐，与完整模数位宽不同。
+
+### stage2_tune_condition_tag
+
+```text
+stage2_tune_condition_tag=<text>; default=""; empty=none
+```
+
+Optional measurement-condition label, e.g. a fixed clock or power setting. Distinct labels preserve<br>
+separate fastest summaries; ignored environment allows reuse.<br>
+可选测量条件标签，例如固定频率或功耗。不同标签保留独立最快汇总；忽略 environment 时允许复用。
 
 ## GUI settings / GUI 配置 — [GUI]
 

@@ -66,19 +66,19 @@ Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目
 
 ## 规划与依据
 
-`--plan-only` 查询设备和算法/组件形状，不运行曲线、不写成功结果、不推进队列。`--dry-run` 检查输入，不承诺实时显存准入。`--carrier-exponent p` 为梅森承载实验，要求保存的目标N整除2ᵖ−1；可用显式B2，或匹配完整ECM tune的Auto B2。显式0锁定按save的N运算。
+`--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。合法梅森worktodo结合已知因子和save验证后，可自动比较普通与承载。
 
-`--tune ecm --tune-level 1`生成完整Stage2性能配置；`--tune-save FILE --tune-carrier-exponent p`可对有效save测普通/承载两种路径。`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号分隔列表，`--tune-repeats`覆盖重复次数。默认配置为`stage2_ecm_tune.toml`，原始证据在工作目录的`data/experiments/`。调优失败不覆盖已有配置；高等级扩大输入与轮数，耗时可能很长。
+`--tune ecm --tune-level 1`生成候选网格，在默认1800秒软预算内测锚点并估算其余组合；`--tune-budget-seconds`可覆盖。`--tune-save FILE --tune-carrier-exponent p`测有效save的普通/承载路径。`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号列表，其中exponents表示实际位数；`--tune-repeats`覆盖次数。默认文件为INI目录的`stage2_ecm_tune.toml`，原始证据位于工作目录`data/experiments/`。已完成摘要可增量利用，模型条目不冒充实测。
 
 `--tune ntt`可用`--length-log2 a:b`与`--tune-slices s,...`测指定长度和批量，或用等级1…10预设。输出分别记录每秒域卷积数和每秒批调用数；它们不是ECM曲线吞吐。计时边界、预算跳过和格式见[NTT tune](../architecture/AUTO_B2.md#ntt-tune)。
 
-分批测量可用`--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml`合并，再将INI的`stage2_tune_profile`指向合并文件。要求设备、策略及重复次数一致；相同测量范围采用最后一份。该命令不运行GPU测试，输出不能覆盖输入文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
+分批测量可用`--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml`合并，再让`stage2_tune_profile`指向结果。同条件同候选只保留更快正式中位数，不同条件分别保存；估算不能覆盖实测。可用`--tune-ntt-profile NTT.toml`导入组件。该命令不运行GPU测试，输出不能覆盖输入文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
 
-生产运行用`--tune-profile FILE.toml`或`stage2_tune_profile`加载性能数据。固定B2时自动选已测D和合法承载，实测点优先；声明模型且同组数据通过资格检查时，可估计已测B2区间内部的成本。显式非零D固定D；`--carrier-exponent 0`固定普通模数，显式非零p固定承载。无合格成本时保留现有选型并给出原因；不会仅凭save来自梅森数自动启用承载。
+生产用`--tune-profile FILE.toml`或`stage2_tune_profile`加载数据，允许位宽/B2插值和外推，任何情况不要求B1匹配。默认忽略gpu、driver、cuda、backend、environment，memory按执行路径匹配；可由`stage2_tune_ignore`调整。显式非零D或承载锁定候选。缺少适用文件、必要组件或队列范围完全未覆盖时，默认运行10秒软预算短校准。模型未收敛仍可使用，输出误差余量，当前显存及算术检查始终保留。
 
-任务最终B2=0时，可同时启用`--auto-b2`，联合选择B2、D与承载。Stage1成本优先使用正的`--stage1-seconds-per-curve`；未提供时，可用`--stage1-tune-profile FILE.toml`与`--stage1-batch C`查询完整批次实测。INI对应`stage2_auto_b2=1`、`stage2_tune_profile`、`stage1_seconds_per_curve`或`stage1_tune_profile`。成本已按每曲线摊销，不会再除以`stage1_batch`。Stage1实测的指数模式默认匹配共用INI的`exponent`，可用`--stage1-exponent`覆盖成本条件。
+任务最终B2=0时，`--auto-b2`联合选择B2、D、承载。T1优先使用正的`--stage1-seconds-per-curve`，其次`--stage1-cost-csv FILE.csv`，最后`--stage1-tune-profile FILE.toml`。对应INI为`stage1_seconds_per_curve`、`stage1_cost_csv`、`stage1_tune_profile`。CSV明确target_bits或container_bits，缺项和跨TPI可估算；`--stage1-cost-mhz`给目标频率，0使用表内参考频率。秒/曲线不会再除batch。指数模式默认跟随INI的exponent，可用`--stage1-exponent`覆盖。
 
-`--auto-min-b2`/`--auto-max-b2`只能缩小已测范围。完整tune优先于旧`stage2_cost_profile`；缺少成本、策略不符或没有满足当前显存的候选会明确失败并保留未完成队列。每条worker重新规划，plan-only不消费任务。Stage1成本预计算脚本、完整适用范围、成本口径和边界见[Auto B2/tune](../architecture/AUTO_B2.md)。
+`--auto-min-b2`/`--auto-max-b2`控制搜索边界，默认B1<B2≤2.6×10¹²，不限于已测范围。完整tune优先于旧`stage2_cost_profile`；Auto缺T1/完整成本或没有满足当前显存的候选时明确失败，保留队列。每条worker重新规划。模型精度与当前限制见[Auto B2/tune](../architecture/AUTO_B2.md)。
 
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp#L175)：`records`；[队列字段](../../src/core/ecm_cuda_stage2_main.cpp#L395)：`queue_fields`。
 - [ecm_stage2_queue_state.h](../../src/core/ecm_stage2_queue_state.h)：原子进度和回执对账。

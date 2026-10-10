@@ -8,7 +8,7 @@
 
 save只提供目标N、sigma、B1和归一化X，不自动推断承载指数。支持PARAM=0、Z=1或省略Z，X须在[0,N)；存在checksum时必须通过校验。承载要求N为大于3的奇数、bit_length(N)≤p≤16384，且实际验证N∣2ᵖ−1；显式`--carrier-exponent p`不满足条件时报错。p不要求为素数，也没有按目标位宽自动启用的固定阈值。
 
-提供完整tune时，可从匹配的普通/合法承载候选按成本与联合显存选择，规则见[实测选型](AUTO_B2.md#实测-d-与承载选择)。显式`--carrier-exponent 0`锁定普通模数；未提供tune或显式p时，不因save来自梅森数自动抬升模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
+完整tune可按成本与联合显存比较普通/合法承载，允许配置跨条件复用及宽度/B2估算，详见[Auto B2/tune](AUTO_B2.md)。合法梅森worktodo结合已知因子和save验证后提供承载指数；仅save不猜指数。显式`--carrier-exponent 0`锁定普通模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
 
 承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L8970)。
 
@@ -64,7 +64,7 @@ F(X)=∏ⱼ(X−xⱼ)。giant 叶为齐次形式 ZᵢX−Xᵢ，或等价的已�
 
 ## 当前规划边界
 
-`request_program`预测满次数驻留fold的乘法顺序、形状、来源和树租约。初始化/NTT/S4/owner/giant按同一时间线预测条件正常路径的峰与free需求；匹配完整Stage2 tune的数据后，驱动据此选择已测D和合法承载。单G批次、诊断和全部分配失败回退不在其统一保证中；引擎保留实时检查和回退，详见[内存](MEMORY.md)与[实测选型](AUTO_B2.md)。
+`request_program`预测满次数驻留fold的乘法顺序、形状、来源和树租约。初始化/NTT/S4/owner/giant按同一时间线计算条件峰和free需求，host fold/frontier可使用受限arena的保守上界。驱动以tune实测或估算选择D及合法承载；单G、baby预算回退、诊断及全部分配失败不在统一保证中。引擎保留实时检查，详见[内存](MEMORY.md)与[Auto B2/tune](AUTO_B2.md)。
 
 ## 代码依据
 

@@ -140,6 +140,17 @@ int main() {
         op.budget_bytes=owner_bytes(8,2,3);
         check(workspace_memory_plan(program,127,shape,layout,np,sp,refusal,true,{},&op));
         check(refusal.valid && !refusal.finished && !std::strcmp(refusal.reason,"frontier_budget_refusal"));
+        np.cap_bytes=1ull<<20;op.budget_bytes=1;
+        WorkspaceMemoryPlan fallback;
+        check(workspace_memory_plan(program,127,shape,layout,np,sp,fallback,true,{},&op,nullptr,nullptr,true));
+        check(fallback.valid && fallback.finished && fallback.fallback_upper_bound && !fallback.fold_enabled && !fallback.frontier_enabled);
+        check(fallback.peak_bytes>=np.cap_bytes && fallback.released_bytes==0);
+        op.budget_bytes=owner_bytes(8,2,3);
+        check(workspace_memory_plan(program,127,shape,layout,np,sp,fallback,true,{},&op,nullptr,nullptr,true));
+        check(fallback.valid && fallback.finished && fallback.fold_enabled && !fallback.frontier_enabled);
+        np.cap_bytes=128;op.budget_bytes=1ull<<20;
+        check(workspace_memory_plan(program,127,shape,layout,np,sp,fallback,true,{},&op,nullptr,nullptr,true));
+        check(fallback.valid && fallback.finished && fallback.transient_peak_bytes>0 && fallback.released_bytes==0);
         check(compressed_cases>0 && noncoincident>0);
         check(giant_compressed>0);
         // Enormous B2 must collapse complete point-chunk cycles, preserving a

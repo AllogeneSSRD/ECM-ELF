@@ -4,6 +4,10 @@
 
 所有输出使用新 `data/` 子目录；统计写 `data/benchmarks/`，图写 `data/figures/`。失败结果不覆盖，冻结证据不改路径/内容；用户显式参数应遵循同一位置规则。
 
+生产Auto B2与tune的权威合同见[Auto B2/tune](../../docs/architecture/AUTO_B2.md)。当前输出格式5标量摘要，允许跨B1、位宽及配置忽略条件复用。`tools/test/test_stage2_portable.py`核对CPU网格/摘要/CSV，`test_stage2_portable_gpu.py --stage2 <exe> --device 1 --output <新目录>`核对4060 Laptop的短流程；后者不调整硬件设置，不构成生产规模性能排名验收。
+
+本页以下依赖格式2/3/4、采样数组、训练计划或严格scope的分析/验收工具仍用于其声明格式的冻结证据，不是格式5生产选型参考。调用当前exe的旧合同测试需先适配；不能将这些工具中的B1精确匹配要求用于当前生产。它们与原始证据保留以供独立研究和核对。
+
 ## 研究与准备
 
 `merge_stage1_tune_profiles.py --stage2 <生产exe> --input <Stage1成本.toml> --input <另一成本.toml> --output <合并.toml> --evidence <新目录>`整理同设备/策略/重复次数的完整Stage1实测，供INI的`stage1_tune_profile`使用。不查询GPU，不编译或运行曲线；每个输入和合并结果都通过原生离线检查。目标位宽/B1/batch/模数类型/指数模式相同的记录须完全一致，或显式加`--replace-scopes`以最后完整记录替换；不混合统计。未知字段拒绝，路径和摘要只放证据JSON，失败不替换已有输出。`tools/test/test_stage1_tune_merge.py --stage2 <exe> --input <文件>`（至少两个输入）`--output <新目录>`核对范围保留、去重、冲突/策略/身份拒绝及发布保护；所有合成记录只用于私有测试，不作为性能测量。
@@ -64,7 +68,7 @@ NTT JSON version2 提供 exact_allocation_events、fuse_layouts、物理分配/�
 
 `test_stage2_tune_components_native.py --profile <完整ECM.toml> --plans <case_*.plan.jsonl所在目录> --ntt-profile <文件> [重复] [--query-plan <独立计划.jsonl> ...] --output <新目录>`编译CPU fixture，比较原生请求形状、配对固定项、非负拟合、留一误差和查询预测与独立Python参考；核对原生NTT导入、格式4往返及与生产相同的Estimator。所有需要的NTT形状须精确覆盖且策略一致；同时检查缺项、端点、预算错配、未核验及高误差组拒绝。输出默认由调用者指定到`data/experiments/`，冻结源闭包、输入、fixture和DLL；不查询CUDA设备、不执行曲线。
 
-生产命令`--tune ecm --tune-merge <ECM.toml> --tune-ntt-profile <NTT.toml> [重复] --tune-file <新配置.toml>`将性能数据整理为格式4；测量模式也支持NTT导入。合并不查询CUDA设备，不接受重复NTT实测形状，失败保留旧目标。`test_stage2_tune_merge_runtime.py`可重复`--ntt-profile`检查实际CLI的内嵌导出、再合并及失败保护。格式4主路径的完整曲线验收用`validate_stage2_tune_selection.py`，额外提供`--training-plans <冻结训练目录>`，由独立Python参考重建组合模型；精确形状缺项时核对完整曲线模型回退。
+生产命令`--tune ecm --tune-merge <ECM.toml> --tune-ntt-profile <NTT.toml> [重复] --tune-file <新配置.toml>`整理为格式5；测量模式也支持NTT导入。合并不查询CUDA设备，同条件同候选只保留严格更快的正式中位数。旧`test_stage2_tune_merge_runtime.py`、`validate_stage2_tune_selection.py`依赖格式4与冻结训练计划，尚未适配新合同；格式5现用上述portable测试核对。
 
 `test_stage2_tune_component_auto_runtime.py --exe <生产exe> --profile <格式4完整ECM.toml> --save <已验证save> --training-plans <冻结训练目录> --device <n> --output <新目录>`核对Auto B2的INI入口、显式普通/承载及D锁定、精确点优先和缺少NTT形状时的分块模型回退，再运行一条未锁定D/承载的完整曲线。默认未测B2=12.5e9可由`--b2`覆盖；输入需有合格普通/承载模型及完整训练形状。T1=3是固定决策测试输入，不是Stage1实测或独立全流程收益验收；不把该单条曲线作为重复性能样本。
 

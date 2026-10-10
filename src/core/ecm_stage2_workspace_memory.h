@@ -22,6 +22,8 @@ struct WorkspaceMemoryEvent {
 };
 struct WorkspaceMemoryPlan {
     bool valid=false,finished=false;
+    bool fallback_upper_bound=false,fold_enabled=false,frontier_enabled=false;
+    Word transient_peak_bytes=0;
     const char *reason="unsupported_request_program";
     Word peak_bytes=0,ntt_peak_bytes=0,s4_peak_bytes=0;
     Word ntt_at_peak=0,s4_at_peak=0,final_bytes=0,released_bytes=0;
@@ -38,7 +40,7 @@ template<class Query,class Describe> bool workspace_memory_plan(
         NttMemoryPolicy ntt_policy,S4ProgramPolicy s4_policy,WorkspaceMemoryPlan &plan,
         bool compress=true,std::function<void(const WorkspaceMemoryEvent &)> observe={},
         const OwnerMemoryPolicy *owner_policy=nullptr,const GiantTimelinePolicy *giant_policy=nullptr,
-        const InitialMemoryPolicy *initial_policy=nullptr) {
+        const InitialMemoryPolicy *initial_policy=nullptr,bool allow_fallback=false) {
     plan=WorkspaceMemoryPlan{};
     if(!program.supported || bits<2 || bits>max_input_bits)return true;
     const unsigned buffers=ntt_policy.pool && ntt_policy.reuse_bq?2:3;
@@ -60,14 +62,18 @@ template<class Query,class Describe> bool workspace_memory_plan(
        (owner_policy && initial_policy->p!=owner_policy->p))) {
         plan.reason="inconsistent_initial_policy";return false;
     }
-    bool overflow=false;
+    bool overflow=false;Word transient=0;
     auto event=[&](bool from_ntt,bool allocation,Word bytes,bool from_owner=false,bool from_giant=false,bool from_initial=false) {
         Word total=0;
-        if(!add(ntt.live.total,s4.live.total,total) || !add(total,owner.live,total) || !add(total,giant.live,total) ||
+        // Host folds can trim degrees, producing cache keys absent from the
+        // conditional request trace. Bound the entire capped arena instead of
+        // treating that trace as an exact lifetime model.
+        const Word arena_live=plan.fallback_upper_bound?std::max(ntt.live.total,ntt_policy.cap_bytes):ntt.live.total;
+        if(!add(arena_live,transient,total) || !add(total,s4.live.total,total) || !add(total,owner.live,total) || !add(total,giant.live,total) ||
            !add(total,initial.live,total) ||
            !add(plan.simulated_events,1,plan.simulated_events)){overflow=true;return;}
         if(total>plan.peak_bytes) {
-            plan.peak_bytes=total;plan.ntt_at_peak=ntt.live.total;plan.s4_at_peak=s4.live.total;
+            plan.peak_bytes=total;plan.ntt_at_peak=arena_live+transient;plan.s4_at_peak=s4.live.total;
             plan.owner_at_peak=owner.live;
             plan.giant_at_peak=giant.live;
             plan.initial_at_peak=initial.live;
@@ -121,17 +127,28 @@ template<class Query,class Describe> bool workspace_memory_plan(
             if(owner_policy && !future_headroom(owner_bytes(owner_policy->p,owner_policy->words,owner_policy->reuse),
                                                  plan.fold_headroom_bytes))return fail("invalid_fold_headroom_shape");
             if(owner_policy && !owner.fold_begin()) {
-                plan.reason=owner.reason;save();plan.valid=!std::strcmp(owner.reason,"fold_budget_refusal");return plan.valid;
+                if(!allow_fallback || std::strcmp(owner.reason,"fold_budget_refusal")) {
+                    plan.reason=owner.reason;save();plan.valid=!std::strcmp(owner.reason,"fold_budget_refusal");return plan.valid;
+                }
+                plan.fallback_upper_bound=true;plan.fold_headroom_bytes=0;
+                if(!ntt_policy.cap_bytes)return fail("uncapped_fallback_not_bounded");
             }
+            plan.fold_enabled=owner.live!=0;
         }
         if(!block.requests.empty() && block.requests.front().phase==RequestDescent && !descent_started) {
             descent_started=true;if(!trim())return fail(s4.reason);
             Word metadata=0;
             if(owner_policy && (!multiply(owner_policy->p,24,metadata) ||
                !future_headroom(metadata,plan.frontier_headroom_bytes)))return fail("invalid_frontier_headroom_shape");
-            if(owner_policy && !owner.frontier_begin()) {
-                plan.reason=owner.reason;save();plan.valid=!std::strcmp(owner.reason,"frontier_budget_refusal");return plan.valid;
+            if(owner_policy && (plan.fold_enabled || !allow_fallback) && !owner.frontier_begin()) {
+                if(!allow_fallback || std::strcmp(owner.reason,"frontier_budget_refusal")) {
+                    plan.reason=owner.reason;save();plan.valid=!std::strcmp(owner.reason,"frontier_budget_refusal");return plan.valid;
+                }
+                plan.fallback_upper_bound=true;plan.frontier_headroom_bytes=0;
+                if(!ntt_policy.cap_bytes)return fail("uncapped_fallback_not_bounded");
             }
+            plan.frontier_enabled=owner.frontier_bytes && owner.live>owner.fold_bytes;
+            if(owner_policy && allow_fallback && !plan.fold_enabled)plan.frontier_headroom_bytes=0;
         }
         Word remaining=block.repeat;
         struct Cycle {NttMemoryState ntt;S4MemoryState s4;OwnerMemoryState owner;GiantMemoryState giant;Word blocks=0;};
@@ -157,7 +174,10 @@ template<class Query,class Describe> bool workspace_memory_plan(
                 if(tree && r.phase!=RequestGtrees) {
                     if(!s4.tree_end())return fail(s4.reason);tree=false;
                 }
-                const bool route=(r.input==RequestHost && (r.phase==RequestFtree || r.phase==RequestInverse)) ||
+                const bool host_fallback=owner_policy && allow_fallback &&
+                    ((r.input==RequestFoldOwner && !plan.fold_enabled) ||
+                     (r.input==RequestFrontierOwner && !plan.frontier_enabled));
+                const bool route=host_fallback || (r.input==RequestHost && (r.phase==RequestFtree || r.phase==RequestInverse)) ||
                     (r.input==RequestTreeRaw && tree && r.phase==RequestGtrees) ||
                     (r.input==RequestFoldOwner && (r.phase==RequestFold || r.phase==RequestDescent)) ||
                     (r.input==RequestFrontierOwner && r.phase==RequestDescent);
@@ -176,12 +196,44 @@ template<class Query,class Describe> bool workspace_memory_plan(
                 // Mandatory shape test precedes output/raw growth. NTT work
                 // then precedes the first canonical counter allocation.
                 if(!s4.shape(d.slot_bits,d.slot_words,d.bpw) || !s4.output_reserve(need) ||
-                   (r.input==RequestHost && !s4.raw_reserve(raw,raw)))return fail(s4.reason);
+                   ((r.input==RequestHost || host_fallback) && !s4.raw_reserve(raw,raw)))return fail(s4.reason);
                 Word chunks=r.pairs/c+(r.pairs%c!=0);
                 for(Word index=0;index<chunks;++index) {
                     const Word slices=std::min(c,r.pairs-index*c);
                     const auto before=ntt;
+                    if(plan.fallback_upper_bound) {
+                        // A trimmed host polynomial can miss a different cache
+                        // key even if this full-degree request is a cache hit.
+                        // Bound its private context/buffers at every request.
+                        NttFuseMemoryLayout layout;Word base=0,table=0,big=0,digits=0;
+                        if(!describe(d.n,layout) || !layout.totals(base,table) ||
+                           !multiply(d.n,slices,big) || !multiply(big,32,big) ||
+                           !add(d.slots,2,digits) || !multiply(digits,slices,digits) || !multiply(digits,8,digits) ||
+                           !add(base,table,transient) || !add(transient,big,transient) || !add(transient,digits,transient))
+                            return fail("fallback_payload_overflow");
+                        plan.transient_peak_bytes=std::max(plan.transient_peak_bytes,transient);
+                        event(true,true,transient);transient=0;event(true,false,0);
+                    }
                     if(!ntt.call_layout(d.n,d.slots,slices,describe)) {
+                        const bool refused=!std::strcmp(ntt.reason,"fuse_cap_refusal") ||
+                            !std::strcmp(ntt.reason,"big_cap_refusal") || !std::strcmp(ntt.reason,"digits_cap_refusal");
+                        if(allow_fallback && refused) {
+                            // Actual legacy branch allocates A/B/Q, dOut/dRes,
+                            // plus a private FuseCtx on a cache miss. Include all
+                            // of them even when a cached context could be reused.
+                            NttFuseMemoryLayout layout;Word base=0,table=0,big=0,digits=0;
+                            if(!describe(d.n,layout) || !layout.totals(base,table) ||
+                               !multiply(d.n,slices,big) || !multiply(big,32,big) ||
+                               !add(d.slots,2,digits) || !multiply(digits,slices,digits) || !multiply(digits,8,digits) ||
+                               !add(base,table,transient) || !add(transient,big,transient) || !add(transient,digits,transient))
+                                return fail("fallback_payload_overflow");
+                            plan.fallback_upper_bound=true;plan.transient_peak_bytes=std::max(plan.transient_peak_bytes,transient);
+                            if(!ntt_policy.cap_bytes)return fail("uncapped_fallback_not_bounded");
+                            event(true,true,transient);transient=0;event(true,false,0);
+                            if(!s4.canonical_counter())return fail(s4.reason);
+                            if(compress && slices==c && chunks-index>2)index=chunks-2;
+                            continue;
+                        }
                         plan.reason=ntt.reason;save();
                         // A valid refusal prefix is useful evidence, but never
                         // licenses admission of the unmodeled malloc fallback.

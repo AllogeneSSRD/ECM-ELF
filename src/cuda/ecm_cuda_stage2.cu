@@ -8893,7 +8893,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     int k=0;for(auto size=n;size>1;size>>=1)++k;
                     FuseCtx description;fuse_describe(description,n,k,0,0);
                     return ecm_stage2::ntt_fuse_memory_layout(description,layout);
-                },memory_policy,s4_policy,*p.curve_workspace_memory,true,{},&owner_policy,&timeline,&initial_policy))return 3;
+                },memory_policy,s4_policy,*p.curve_workspace_memory,true,{},&owner_policy,&timeline,&initial_policy,true))return 3;
         }
         p.free_bytes=freeb; p.arena_cap_bytes=cap; p.owner_budget_bytes=fold_budget;
         p.baby_bytes=d_baby_payload_bytes(P_baby,nw);
@@ -9952,10 +9952,13 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
         const bool required_valid=ecm_stage2::add(m.peak_bytes,reserve,required_free);
         required_free=std::max(required_free,std::max(m.baby_headroom_bytes,
             std::max(m.fold_headroom_bytes,m.frontier_headroom_bytes)));
-        json<<",\"curve_workspace_memory\":{\"version\":2,\"valid\":"<<(m.valid?"true":"false")
+        json<<",\"curve_workspace_memory\":{\"version\":3,\"valid\":"<<(m.valid?"true":"false")
             <<",\"finished\":"<<(m.finished?"true":"false")<<",\"reason\":"<<stage2_tune::quote(m.reason)
             <<",\"components\":[\"ntt\",\"s4\",\"fold_frontier\",\"giant\",\"initial\"],\"process_peak_complete\":false,\"admission_model\":false"
-            <<",\"headroom_modeled\":false,\"fallback_modeled\":false,\"cold_trim_modeled\":false"
+            <<",\"headroom_modeled\":false,\"fallback_modeled\":"<<(m.fallback_upper_bound?"true":"false")
+            <<",\"payload_upper_bound\":"<<(m.fallback_upper_bound?"true":"false")
+            <<",\"fold_enabled\":"<<(m.fold_enabled?"true":"false")<<",\"frontier_enabled\":"<<(m.frontier_enabled?"true":"false")
+            <<",\"transient_peak_bytes\":"<<m.transient_peak_bytes<<",\"cold_trim_modeled\":false"
             <<",\"peak_bytes\":"<<m.peak_bytes<<",\"ntt_at_peak\":"<<m.ntt_at_peak<<",\"s4_at_peak\":"<<m.s4_at_peak
             <<",\"owner_at_peak\":"<<m.owner_at_peak<<",\"giant_at_peak\":"<<m.giant_at_peak
             <<",\"initial_at_peak\":"<<m.initial_at_peak<<",\"initial_peak_bytes\":"<<m.initial_peak_bytes
