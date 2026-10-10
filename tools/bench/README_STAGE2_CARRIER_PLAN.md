@@ -54,6 +54,8 @@ NTT JSON version2 提供 exact_allocation_events、fuse_layouts、物理分配/�
 
 `validate_stage2_tune_components.py --exe <生产exe> --save <已验证save> --models <models.toml> --profile <完整ECM.toml> --evidence <训练证据目录> --ntt-profile <文件> [重复] --device <n> --holdout-b2 <未测B2...> --output <新目录>`先补齐查询所需NTT形状，冻结全部预测，再测至少四候选的完整曲线。默认每候选1次预热、3次正式重复，NTT形状21次重复；保持8%时间/5%排名门限。失败不改写训练模型或删去候选。
 
+`test_stage2_tune_components_native.py --profile <完整ECM.toml> --plans <case_*.plan.jsonl所在目录> --ntt-profile <文件> [重复] [--query-plan <独立计划.jsonl> ...] --output <新目录>`编译CPU fixture，比较原生请求形状、配对固定项、非负拟合、留一误差和查询预测与独立Python参考。所有需要的NTT形状须精确覆盖且策略一致；同时检查缺项、端点、预算错配、未核验及高误差组拒绝。输出默认由调用者指定到`data/experiments/`，冻结源闭包、输入、fixture和DLL；不查询CUDA设备、不执行曲线、不改生产排名。
+
 `test_stage2_tune_workload.py --output <新目录> [--evidence <原始调优目录>]`执行CPU门禁：手算满/尾分块、chunk上限、万亿次repeat压缩、错误协议拒绝及已保存原生plan的独立密集请求重放。它不证明GPU真实调用计数或NTT批处理吞吐；后者需要运行审计和独立完整曲线留出验证。
 
 当前事件矩阵173 cases、47,936 events、168,166 assertions，故意修改释放顺序的模型被拒绝。重复压缩依赖完整保留状态，observer 不生成所有跳过重复事件。

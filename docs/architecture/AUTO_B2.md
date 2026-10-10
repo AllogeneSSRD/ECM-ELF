@@ -111,7 +111,7 @@ CUDA事件计时包含两次正向NTT和一次带乘积/缩放的逆NTT，不含
 
 profile声明`sampling_model="giant_tail_grid_v1"`和请求的`tail_samples`；样本用`sampling_source=[base|ladder_tail|chain_anchor]`说明来源。reader核对新增来源与实际分块工作量，兼容未声明采样模型的旧文件；合并保留各样本来源，采样数量取输入最大值，不把它解释成合并后各组的实际尾点数。控制台`ecm_tune_grid_ready`列出基础、短尾、chain及全部计划数量，最多4096项，超限在执行曲线前拒绝。原生探测计划独立保存在原始证据目录，不写进性能profile。
 
-当前范围/路线和默认目录容量已通过CPU检查；完整曲线采样已核对30个范围的计划与回执。四候选区间验收仍未完成：冻结测量中普通D60060低B2点留一误差8.506%，模型正确拒绝预测；当前分块调整后的完整曲线复测、低G成本及独立四候选覆盖仍见[TODO](../TODO.md)。当前原生规划可生成不同尾量，不据此声明时间模型已经合格。
+当前默认等级3网格在5872-bit余因子、B1=20、D60060/120120及普通/承载6011上，已核对32个范围的计划与回执；12e9/23e9的独立四候选时间与排名检查通过。资格仍逐组计算，采样网格本身不保证任意输入合格。更多生产B1、位宽、预算及低G范围见[TODO](../TODO.md)，输入与证据见[性能说明](../performance/STAGE2.md#自适应采样的验证范围)。
 
 TOML格式3按`[profile]`、`[device]`、`[policy]`、`[policy.environment]`、`[ecm.sample_<n>]`、`[summary]`组织；策略每键一行，重复时间用数组。配置只包含性能、校验与适用条件，不含路径、程序或构建摘要。reader兼容格式2的环境串并在内存中规范为命名字段，限制64 MiB/4096个范围，可容纳等级10的完整默认网格及逐次阶段记录。原始plan、子进程日志和测量回执保留在`data/experiments/ecm_tune_<id>/`，与可编辑性能配置分开。发布前核对设备/策略、完整状态、样本统计及运行期间程序未变化，随后原子替换；失败不覆盖已有配置。
 
@@ -142,6 +142,10 @@ CPU工具`analyze_stage2_tune_workload.py`从完整tune的冻结计划与正式�
 `benchmark_stage2_ntt_workload.py`读取已测ECM scopes的冻结计划，按长度分组补测缺失slices，每次最多64种；只测试真实需要的形状。允许另给同位宽/B1/D/算术组的原生留出计划，补齐其形状，但不导入留出曲线成本。设备和策略、每个输出字、请求形状完整性及运行前后输入身份均核对；预算不足保留失败证据，不发布覆盖成功。
 
 ### 实验性 NTT 与阶段组合
+
+原生计算层位于[ecm_stage2_tune_components.h](../../src/core/ecm_stage2_tune_components.h)，入口为`ntt_references`、`prepare_component_model`和`predict_component`。它重建压缩请求程序，沿用引擎的分块预算和满/尾slices规则，按精确长度及slices查实测中位数；未知形状保留缺项，不能将部分参照用于完整成本预测。packing长度必须由引擎查询提供，不能用近似公式替代。各请求阶段保留逻辑pairs、physical calls及参照秒数；重复G根压缩计数，不逐次展开。
+
+原生拟合独立读取完整ECM锚点、配对阶段和上述参照，重新检查样本/跨度/驻留/分块策略及8%留一门限。查询限同位宽、P、NTT分块策略与锚点内部，并核对已测ladder范围。这个计算层已与独立Python参考核对，尚未连接生产profile读取、D/承载排名或Auto B2；主路径仍使用`giant_route_cost_v2`。调用者还须核对完整设备/后端策略、实际N的承载整除资格及实时联合显存准入，计算层不代替这些检查。
 
 CPU工具`analyze_stage2_tune_components.py`按相同位宽、B1、D、算术及giant分块策略拟合实验模型。令R为G树与fold请求的“physical calls×对应批量NTT中位数”之和，L为ladder迭代量，Q为ladder分块数：
 

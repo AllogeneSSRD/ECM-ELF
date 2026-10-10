@@ -508,6 +508,10 @@ GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大
 
 实验输出仍为`ranking_qualified=false`，主路径使用已实现的完整ECM实测/giant_route_cost_v2。此验收不覆盖其他位宽、生产B1、预算和非驻留/G1；原生组合预测及收益验收仍待完成。证据在`data/experiments/ntt_phase_tune_20261010/components/`、`query_supplement/`、`fresh_holdouts/`及`components_cpu/`，入口为[分析工具](../../tools/bench/analyze_stage2_tune_components.py)和[新留出验收](../../tools/bench/validate_stage2_tune_components.py)。
 
+### 原生组合计算层的参考一致性
+
+原生组合计算层的CPU一致性证据在`data/experiments/ntt_phase_tune_20261010/native_components_v3/`。使用上述32个锚点和12.5e9/23.7e9的8份独立计划，逐项核对3,018个阶段/NTT批次bins及244项数值，包括每阶段参照、四组固定项/非负系数/留一误差和8个预测/保护成本；相对容差1e−7、绝对容差1e−10。10项底层门禁及8项组/reader拒绝检查通过，另覆盖缺失形状、查询端点和预算策略变化；加入异常耗时的组不合格，没有放宽8%门限。MSVC C++17/O2的CPU fixture与头文件闭包、输入和GMP DLL均冻结并在结束时核对。工具为[原生组合参考检查](../../tools/test/test_stage2_tune_components_native.py)，不启动CUDA或新增GPU曲线，因此不是新的性能收益测量；生产排名尚未接入该层。
+
 ## 下一测量
 
 扩大实测D/承载选择的生产B1、位宽和预算矩阵，独立验证候选排序、峰值安全余量及mandatory checks，并重标定Auto B2。完整数非单位回退另测CPU准备路径；热NTT、设备准备/传输与等待分别测量。用户计划的55 W复测单独记录，不混入1800 MHz样本。指标定义和未完成工作见[TODO](../TODO.md)。
