@@ -9,7 +9,12 @@ std::string portable_identity(const fs::path &evidence) {
     return hash;
 }
 pt::Profile portable_read(const fs::path &path) {
-    return fs::is_regular_file(path)?pt::Profile::load(path):pt::Profile{};
+    if(!fs::is_regular_file(path))return {};
+    try {return pt::Profile::load(path);}
+    catch(const pt::UnsupportedFormat &) {
+        std::cout<<"tune_profile_reset: incompatible development format; calibration will regenerate "<<path.string()<<std::endl;
+        return {};
+    }
 }
 et::Fields portable_condition(const Options &o) {
     EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(o.device,&info))throw std::runtime_error("cannot query tuning device");
@@ -376,33 +381,75 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
         const auto path=absolute_from(fs::current_path(),o.tune_save);auto rec=records(path,0,1);if(rec.empty())throw std::runtime_error("empty tune save");
         Big n;mpz_set_str(n.z,rec[0].n.c_str(),16);grid.widths={unsigned(mpz_sizeinbase(n.z,2))};inputs.emplace(grid.widths[0],PortableInput{path,rec[0],"validated_save"});
     }
+    std::sort(grid.ds.begin(),grid.ds.end());grid.ds.erase(std::unique(grid.ds.begin(),grid.ds.end()),grid.ds.end());
+    const size_t full_grid=grid.widths.size()*grid.b2s.size()*grid.ds.size()*(o.tune_carrier?2:1);
     struct Case {unsigned bits;uint64_t b2,d;unsigned carrier;double priority;};std::vector<Case> cases;
-    for(auto bits:grid.widths)for(auto b:grid.b2s)for(auto d:grid.ds)for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode) {
-        const unsigned carrier=mode?o.tune_carrier:0;double priority=10;
-        for(const auto &s:profile.samples)if(et::uint(s,"condition")==condition && et::uint(s,"target_bits")==bits &&
-            et::uint(s,"b2")==b && et::uint(s,"d")==d && et::uint(s,"carrier_exponent")==carrier && pt::measured(s)) {
-            priority=pt::optional_uint(s,"validation_count")?pt::optional_real(s,"validation_max_relative_error")/o.tune_error:1;
-            if(et::uint(s,"repeats")<grid.repeats)priority+=2;
-        }
-        // First cover widths and coarse D/NTT transitions; later tune runs spend
-        // budget on independent validation/error regions, not completed cells.
-        priority+=double(bits==grid.widths.front())*.1;
-        cases.push_back({bits,b,d,carrier,priority});
-    }
-    std::stable_sort(cases.begin(),cases.end(),[](const Case &a,const Case &b){return a.priority>b.priority;});
     size_t measured=0,skipped=0;
-    // Seed a cheap full-engine anchor per width before attempting long cells.
-    for(auto bits:grid.widths) {
+    // Cheap full-engine calibration supplies the model, not a D-table sweep.
+    // Each arithmetic family needs its own anchor; carrier data never borrows
+    // generic long-division timing.
+    for(auto bits:grid.widths)for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode) {
         if(budget.expired() || stop_requests)break;
-        bool exists=false;for(const auto &s:profile.samples)if(pt::measured(s) && et::uint(s,"condition")==condition && et::uint(s,"target_bits")==bits)exists=true;
+        const unsigned carrier=mode?o.tune_carrier:0;
+        bool exists=false;for(const auto &s:profile.samples)if(pt::measured(s) && et::uint(s,"condition")==condition &&
+            et::uint(s,"target_bits")==bits && et::uint(s,"carrier_exponent")==carrier)exists=true;
         if(exists)continue;
         if(!inputs.count(bits))inputs.emplace(bits,portable_input(bits,evidence));
         const auto &r=inputs.at(bits).record;
         const uint64_t seed_d=r.b1<42000?210:30030;
         const auto seed_b2=std::max(r.b1+1,2*seed_d*(ecm_stage2::cost::phi(seed_d)/2));
-        if(portable_measure(o,settings,inputs.at(bits),seed_b2,seed_d,0,grid.repeats,budget,evidence,profile,condition)){++measured;portable_publish(destination,profile);}
+        if(portable_measure(o,settings,inputs.at(bits),seed_b2,seed_d,carrier,grid.repeats,budget,evidence,profile,condition))
+            {++measured;portable_publish(destination,profile);}
     }
     portable_ntt(o,profile,condition,budget,evidence,{{16,1},{18,1},{20,1},{22,1}},grid.repeats);
+    // Freeze one center per width/B2/arithmetic family for this tune run.
+    // Retain the immediate lower/upper D indices only. High validation error
+    // increases priority inside this window; it never restores the full grid.
+    pt::Estimator selection(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+    for(auto bits:grid.widths) {
+        if(budget.expired() || stop_requests)break;
+        if(!inputs.count(bits))inputs.emplace(bits,portable_input(bits,evidence));
+        const auto &r=inputs.at(bits).record;
+        for(auto b:grid.b2s)for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode) {
+            if(b<=r.b1)continue;
+            const unsigned carrier=mode?o.tune_carrier:0;
+            std::vector<std::pair<double,size_t>> ranked;
+            for(size_t i=0;i<grid.ds.size();++i) {
+                const auto d=grid.ds[i],p=ecm_stage2::cost::phi(d)/2;
+                // The current native joint planner does not admit G=1.
+                if(b/d+2<=p || (o.tune_max_batches && (b/d+2+p-1)/p>o.tune_max_batches))continue;
+                auto shape=portable_shape(o,r,b,d,carrier);pt::Estimate e;
+                if(selection.predict(shape,e))ranked.push_back({e.rank,i});
+            }
+            std::sort(ranked.begin(),ranked.end());
+            size_t center=grid.ds.size();
+            for(const auto &candidate:ranked) {
+                auto shape=portable_shape(o,r,b,grid.ds[candidate.second],carrier);std::string plan;
+                const auto ranked_shape=shape;
+                if(portable_admit(o,r,shape,plan) && shape.fold==ranked_shape.fold &&
+                    shape.frontier==ranked_shape.frontier){center=candidate.second;break;}
+            }
+            if(center==grid.ds.size()){
+                std::cout<<"ecm_tune_window_skip: N="<<bits<<" B2="<<b<<" carrier="<<carrier
+                    <<" reason="<<(ranked.empty()?"no_costed_candidate":"no_admitted_ranked_path")<<std::endl;
+                ++skipped;continue;
+            }
+            const auto neighborhood=pt::neighbors(center,grid.ds.size());
+            std::cout<<"ecm_tune_window: N="<<bits<<" B2="<<b<<" carrier="<<carrier
+                <<" center_D="<<grid.ds[center]<<" D=["<<grid.ds[neighborhood.front()]<<','<<grid.ds[neighborhood.back()]
+                <<"] candidates="<<neighborhood.size()<<std::endl;
+            for(auto i:neighborhood) {
+                const auto d=grid.ds[i];double priority=10;
+                for(const auto &s:profile.samples)if(et::uint(s,"condition")==condition && et::uint(s,"target_bits")==bits &&
+                    et::uint(s,"b2")==b && et::uint(s,"d")==d && et::uint(s,"carrier_exponent")==carrier && pt::measured(s)) {
+                    priority=pt::optional_uint(s,"validation_count")?pt::optional_real(s,"validation_max_relative_error")/o.tune_error:1;
+                    if(et::uint(s,"repeats")<grid.repeats)priority+=2;
+                }
+                cases.push_back({bits,b,d,carrier,priority});
+            }
+        }
+    }
+    std::stable_sort(cases.begin(),cases.end(),[](const Case &a,const Case &b){return a.priority>b.priority;});
     for(const auto &c:cases) {
         if(budget.expired() || stop_requests)break;
         if(c.priority<1){++skipped;continue;}
@@ -444,9 +491,11 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
     }
     for(auto &s:estimates)profile.update(std::move(s));
     profile.metadata["effort_level"]=std::to_string(level);profile.metadata["budget_seconds"]=std::to_string(o.tune_budget);
-    profile.metadata["error_limit"]=pt::numeric(o.tune_error);profile.metadata["grid_candidates"]=std::to_string(cases.size());
+    profile.metadata["error_limit"]=pt::numeric(o.tune_error);profile.metadata["grid_candidates"]=std::to_string(full_grid);
+    profile.metadata["selected_candidates"]=std::to_string(cases.size());
+    profile.metadata["selection"]="\"model_center_plus_one_v1\"";
     if(binary!=ecm_stage2::sha256_file(executable()))throw std::runtime_error("ECM calibration binary changed; evidence retained");
     portable_publish(destination,profile);
-    std::cout<<"ecm_tune_complete: measured="<<measured<<" skipped="<<skipped<<" grid="<<cases.size()<<" summaries="<<profile.samples.size()
+    std::cout<<"ecm_tune_complete: measured="<<measured<<" skipped="<<skipped<<" grid="<<full_grid<<" selected="<<cases.size()<<" summaries="<<profile.samples.size()
         <<" budget_elapsed="<<budget.elapsed()<<" s profile="<<destination.string()<<" evidence="<<evidence.string()<<std::endl;
 }

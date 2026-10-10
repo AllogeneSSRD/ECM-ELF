@@ -861,6 +861,8 @@ void help() {
         "      ECM: --tune-exponents bits,... or --tune-save FILE [--tune-carrier-exponent p]\n"
         "           --tune-budget-seconds 1800 --tune-error-limit 0.08; incremental final summaries.\n"
         "           --tune-d D,... --tune-b2 B2,...; one warmup per shape, separate processes.\n"
+        "           Per width/B2: tune the model's best D and its immediate lower/upper D only.\n"
+        "           TOML format 6: width parameter tables; earlier development TOML is regenerated.\n"
         "           --tune-max-batches N limits G trees per curve; 0 removes the effort limit.\n"
         "      Merge: --tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml\n"
         "             Separate measurement conditions; only a strictly faster median replaces measured data.\n"

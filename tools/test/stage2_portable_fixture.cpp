@@ -4,7 +4,10 @@ int main(int argc,char **argv) {
     try {
         namespace p=ecm_stage2::tune::portable;
         std::cout<<std::setprecision(17);
-        if(argc==3 && std::string(argv[1])=="--grid") {
+        if(argc==4 && std::string(argv[1])=="--neighbors") {
+            auto indices=p::neighbors(std::stoul(argv[2]),std::stoul(argv[3]));
+            std::cout<<'[';for(size_t i=0;i<indices.size();++i){if(i)std::cout<<',';std::cout<<indices[i];}std::cout<<']';
+        } else if(argc==3 && std::string(argv[1])=="--grid") {
             const auto g=p::grid(std::stoul(argv[2]));
             auto list=[](const auto &v){for(size_t i=0;i<v.size();++i){if(i)std::cout<<',';std::cout<<v[i];}};
             std::cout<<"{\"widths\":[";list(g.widths);std::cout<<"],\"ds\":[";list(g.ds);

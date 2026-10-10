@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tomllib
+from stage2_tune_tables import summaries
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -43,7 +44,7 @@ def main():
         assert grid['b2s'][-1] == 2600000000000
         assert all(high//ratio == low for low, high in zip(grid['b2s'], grid['b2s'][1:]))
     base = '''[profile]
-format = 5
+format = 6
 unit = "full_stage2"
 algorithm_revision = 1
 revision = 0
@@ -57,7 +58,7 @@ gl_fixed_mode = 3
 outer_unroll_u = 0
 add_sub_mask = 1
 env_condition_tag = "baseline"
-[sample.0]
+[width.512.table.0]
 condition = 0
 target_bits = 512
 arithmetic_bits = 512
@@ -72,26 +73,28 @@ frontier_resident = 1
 execution_path = "fixture_resident"
 source = "measured"
 repeats = 2
-median_seconds = 2
-mad_seconds = 0.1
 clean = 1
 bad = 0
 hits = 0
 selftest_cases = 1
 checked = 1
+columns = ["median_seconds", "mad_seconds"]
+rows = [
+    [2, 0.1],
+]
 '''
     original = out/'base.toml'
     original.write_text(base, encoding='utf-8')
-    assert tomllib.loads(run('--roundtrip', original))['sample']['0']['median_seconds'] == 2
+    assert summaries(tomllib.loads(run('--roundtrip', original)))[0]['median_seconds'] == 2
     for value in [1, 2, 3]:
         other = out/f'new_{value}.toml'
-        other.write_text(base.replace('median_seconds = 2', f'median_seconds = {value}'), encoding='utf-8')
+        other.write_text(base.replace('[2, 0.1]', f'[{value}, 0.1]'), encoding='utf-8')
         result = tomllib.loads(run('--update', original, other))
-        assert result['sample']['0']['median_seconds'] == min(2, value)
+        assert summaries(result)[0]['median_seconds'] == min(2, value)
     other = out/'other_condition.toml'
     other.write_text(base.replace('0123456789abcdef0123456789abcdef','1123456789abcdef0123456789abcdef'), encoding='utf-8')
     result = tomllib.loads(run('--update', original, other))
-    assert len(result['condition']) == 2 and len(result['sample']) == 2
+    assert len(result['condition']) == 2 and len(summaries(result)) == 2
     assert run('--matches',original,original,'')=='true'
     assert run('--matches',original,other,'')=='false'
     default_ignore='gpu,driver,cuda,backend,environment'
@@ -103,8 +106,8 @@ checked = 1
     assert run('--matches',original,altered,'gpu')=='false'
     assert subprocess.run([str(exe),'--matches',str(original),str(altered),'unknown'],capture_output=True).returncode!=0
     modeled = out/'model.toml'
-    modeled.write_text(base.replace('source = "measured"','source = "model"').replace('median_seconds = 2','median_seconds = 0.1'), encoding='utf-8')
-    assert tomllib.loads(run('--update', original, modeled))['sample']['0']['median_seconds'] == 2
+    modeled.write_text(base.replace('source = "measured"','source = "model"').replace('[2, 0.1]','[0.1, 0.1]'), encoding='utf-8')
+    assert summaries(tomllib.loads(run('--update', original, modeled)))[0]['median_seconds'] == 2
     corruptions = [base+'seconds = [2,2]\n', base.replace('clean = 1','clean = 0'),
                    base.replace('p = 2880','p = 2881'), base+'validation_max_relative_error = 0\n',
                    base.replace('condition = 0','condition = 1')]
@@ -136,30 +139,52 @@ checked = 1
     across_width=json.loads(run('--predict',original,4423,10000000,2600000000000))
     assert across_b1['seconds']>0 and across_width['seconds']>across_b1['seconds']
     assert not across_width['validated'] and across_width['rank']>across_width['seconds']
-    legacy=ROOT/'data/experiments/ecm_tune_n318_prod_20261010/stage2.toml'
-    legacy_result=None
-    if legacy.is_file():
-        imported=tomllib.loads(run('--roundtrip',legacy))
-        assert imported['profile']['format']==5 and imported['sample']
-        assert all(not isinstance(v,list) for tables in imported.values() for table in
-            (tables.values() if isinstance(tables,dict) else []) if isinstance(table,dict) for v in table.values())
-        legacy_result=dict(samples=len(imported['sample']),ntt=len(imported.get('ntt',{})))
-    legacy_ntt=ROOT/'data/experiments/ntt_phase_tune_20261010/supplement/ntt_0.toml'
-    legacy_ntt_result=None
-    if legacy_ntt.is_file():
-        imported=tomllib.loads(run('--roundtrip',legacy_ntt))
-        assert imported['profile']['format']==5 and imported['ntt']
-        assert all(not isinstance(v,list) for s in imported['ntt'].values() for v in s.values())
-        damaged=out/'legacy_ntt_bad.toml'
-        original_text=legacy_ntt.read_text(encoding='utf-8')
-        assert 'bad = 0' in original_text
-        damaged.write_text(original_text.replace('bad = 0','bad = 1',1),encoding='utf-8')
+    legacy_result=[]
+    for legacy in [ROOT/'data/experiments/ecm_tune_n318_prod_20261010/stage2.toml',
+                   ROOT/'data/experiments/ntt_phase_tune_20261010/supplement/ntt_0.toml',
+                   ROOT/'data/experiments/stage2_portable_tune_20261010/gpu_06/resident.toml']:
+        if legacy.is_file():
+            p=subprocess.run([str(exe),'--roundtrip',str(legacy)],capture_output=True,text=True)
+            assert p.returncode!=0 and 'unsupported tune format' in p.stderr
+            legacy_result.append(str(legacy))
+    for count in range(1,15):
+        for center in range(count):
+            assert json.loads(run('--neighbors',center,count))==list(range(max(0,center-1),min(count,center+2)))
+    # Compact tables must preserve all named scalar values through native reload.
+    compact=run('--roundtrip',original)
+    packed=out/'compact.toml';packed.write_text(compact,encoding='utf-8')
+    assert summaries(tomllib.loads(run('--roundtrip',packed)))==summaries(tomllib.loads(compact))
+    # All final rows share proof/context fields; only the B2 and timing vary.
+    expanded=[]
+    for i in range(20):
+        record=base.split('[width.512.table.0]',1)[1]
+        record=record.replace('b2 = 26000000000',f'b2 = {26000000000+i}')
+        record=record.replace('[2, 0.1]',f'[{2+i/100}, 0.1]')
+        expanded.append(f'[width.512.table.{i}]'+record)
+    many=out/'many.toml'
+    many.write_text(base.split('[width.512.table.0]',1)[0]+''.join(expanded),encoding='utf-8')
+    many_compact=run('--roundtrip',many)
+    many_packed=out/'many_compact.toml';many_packed.write_text(many_compact,encoding='utf-8')
+    assert len(summaries(tomllib.loads(many_compact)))==20
+    assert len(tomllib.loads(many_compact)['width']['512']['table'])==1
+    assert summaries(tomllib.loads(run('--roundtrip',many_packed)))==summaries(tomllib.loads(many_compact))
+    assert len(many_compact.encode('utf-8')) < len(many.read_bytes())/2
+    table_bad=[
+        base.replace('[2, 0.1]', '[2]'),
+        base.replace('"mad_seconds"', '"median_seconds"'),
+        base.replace('[width.512.table.0]', '[width.513.table.0]'),
+        base.replace('    [2, 0.1],', '    [2, 0.1],\n    [2, 0.1],'),
+        base.replace('    [2, 0.1],', '    [2, [0.1]],'),
+        base.replace('    [2, 0.1],',''),
+    ]
+    for i,text in enumerate(table_bad):
+        damaged=out/f'bad_table_{i}.toml';damaged.write_text(text,encoding='utf-8')
         assert subprocess.run([str(exe),'--roundtrip',str(damaged)],capture_output=True).returncode!=0
-        legacy_ntt_result=dict(ntt=len(imported['ntt']))
     report = dict(passed=True, grid_levels=10, update_cases=5, corrupt_profiles=len(corruptions),
                   csv=dict(exact=exact,scaled=scaled,interpolated=interpolated,extrapolated=large),
-                  predictions=dict(across_b1=across_b1,across_width=across_width),legacy=legacy_result,
-                  container_boundary=dict(upper=upper,next=next_tier),legacy_ntt=legacy_ntt_result)
+                  predictions=dict(across_b1=across_b1,across_width=across_width),legacy_rejected=legacy_result,table_rejections=len(table_bad),neighbor_cases=105,
+                  compact_rows=20,compact_bytes=len(many_compact.encode('utf-8')),expanded_bytes=len(many.read_bytes()),
+                  container_boundary=dict(upper=upper,next=next_tier))
     (out/'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps(report))
 

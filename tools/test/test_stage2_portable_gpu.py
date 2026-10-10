@@ -12,6 +12,7 @@ import re
 import subprocess
 import time
 import tomllib
+from stage2_tune_tables import summaries
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -45,15 +46,14 @@ def main():
             '--tune-b2','60000','--tune-repeats',2,'--arena-mb',512,'--owner-budget-mb',640]
     first=run('tune_resident',common+['--tune-budget-seconds',30])
     table=tomllib.loads(profile.read_text(encoding='utf-8'))
-    assert table['profile']['format']==5
-    assert {512,4423} <= {s['target_bits'] for s in table['sample'].values() if s['source']=='measured'}
-    assert all(not isinstance(v,list) for group in table.values() if isinstance(group,dict)
-               for entry in group.values() if isinstance(entry,dict) for v in entry.values())
+    assert table['profile']['format']==6
+    assert {512,4423} <= {s['target_bits'] for s in summaries(table) if s['source']=='measured'}
+    assert 'sample' not in table and 'width' in table
     original={tuple(s[k] for k in ['condition','target_bits','b1','b2','d','carrier_exponent','execution_path']):s['median_seconds']
-              for s in table['sample'].values() if s['source']=='measured'}
+              for s in summaries(table) if s['source']=='measured'}
     run('tune_incremental',common+['--tune-budget-seconds',1])
     again=tomllib.loads(profile.read_text(encoding='utf-8'))
-    for s in again['sample'].values():
+    for s in summaries(again):
         key=tuple(s[k] for k in ['condition','target_bits','b1','b2','d','carrier_exponent','execution_path'])
         if key in original and s['source']=='measured':assert s['median_seconds']<=original[key]
     evidence=Path(re.search(r'evidence=(.+)',first).group(1).strip())
@@ -87,18 +87,18 @@ def main():
     run('tune_fallback',['--tune','ecm','--tune-file',fallback,'--tune-exponents','512,4423','--tune-d',210,
         '--tune-b2',60000,'--tune-repeats',2,'--tune-budget-seconds',30,'--arena-mb',512,'--owner-budget-mb',0])
     f=tomllib.loads(fallback.read_text(encoding='utf-8'))
-    assert {512,4423} <= {s['target_bits'] for s in f['sample'].values() if s['source']=='measured' and s['fold_resident']==0}
+    assert {512,4423} <= {s['target_bits'] for s in summaries(f) if s['source']=='measured' and s['fold_resident']==0}
     ntt=out/'ntt.toml'
     run('ntt_final_summary',['--tune','ntt','--tune-file',ntt,'--length-log2','10:11',
         '--tune-slices','1,4','--tune-repeats',2,'--tune-budget-seconds',10])
     nt=tomllib.loads(ntt.read_text(encoding='utf-8'))
-    assert nt['profile']['format']==5 and len(nt['ntt'])==4
-    assert all('seconds' not in s and 'outer_radix_bits' not in s for s in nt['ntt'].values())
+    assert nt['profile']['format']==6 and len(summaries(nt,'ntt'))==4
+    assert all('seconds' not in s and 'outer_radix_bits' not in s for s in summaries(nt,'ntt'))
     merged=out/'merged.toml'
     run('merge_summaries',['--tune','ecm','--tune-merge',profile,'--tune-merge',fallback,
         '--tune-ntt-profile',ntt,'--tune-file',merged])
     mt=tomllib.loads(merged.read_text(encoding='utf-8'))
-    assert len(mt['condition'])>=2 and len(mt['ntt'])>=4
+    assert len(mt['condition'])>=2 and len(summaries(mt,'ntt'))>=4
     ntt_before=ntt.read_bytes()
     rejected=run('protect_ntt_input',['--tune','ecm','--tune-merge',profile,
         '--tune-ntt-profile',ntt,'--tune-file',ntt],expected_success=False)
@@ -108,13 +108,30 @@ def main():
     run('protect_csv_input',['--tune','ntt','--tune-file',csv_input,
         '--stage1-cost-csv',csv_input],expected_success=False)
     assert csv_input.read_bytes()==csv_before
-    legacy_ntt=ROOT/'data/experiments/ntt_phase_tune_20261010/supplement/ntt_0.toml'
-    if legacy_ntt.is_file():
-        imported=out/'legacy_import.toml'
-        run('merge_legacy_ntt',['--tune','ecm','--tune-merge',profile,
-            '--tune-ntt-profile',legacy_ntt,'--tune-file',imported])
-        lt=tomllib.loads(imported.read_text(encoding='utf-8'))
-        assert any(s['length']==2048 and s['batch']==451 for s in lt['ntt'].values())
+    old_profile=ROOT/'data/experiments/stage2_portable_tune_20261010/gpu_06/resident.toml'
+    if old_profile.is_file():
+        rejected=run('reject_old_format',['--tune','ecm','--tune-merge',old_profile,
+            '--tune-file',out/'old_import.toml'],expected_success=False)
+        assert 'unsupported tune format' in rejected and not (out/'old_import.toml').exists()
+        replacement=out/'old_output.toml'
+        replacement.write_bytes(old_profile.read_bytes())
+        regenerated=run('regenerate_old_output',['--tune','ecm','--tune-file',replacement,
+            '--tune-exponents',512,'--tune-d',210,'--tune-b2',60000,
+            '--tune-repeats',2,'--tune-budget-seconds',30,'--arena-mb',512])
+        assert 'tune_profile_reset:' in regenerated
+        assert tomllib.loads(replacement.read_text(encoding='utf-8'))['profile']['format']==6
+    window_profile=out/'window.toml'
+    windows=run('local_d_window',['--tune','ecm','--tune-file',window_profile,
+        '--tune-exponents',512,'--tune-d','210,330,390,420,510','--tune-b2',260000,
+        '--tune-repeats',2,'--tune-budget-seconds',30,'--arena-mb',512])
+    wt=tomllib.loads(window_profile.read_text(encoding='utf-8'))
+    selected=re.search(r'ecm_tune_window:.*center_D=(\d+).*D=\[(\d+),(\d+)\] candidates=(\d+)',windows)
+    assert selected and int(selected[4])<=3
+    ds=[210,330,390,420,510];center=ds.index(int(selected[1]))
+    expected=set(ds[max(0,center-1):min(len(ds),center+2)])
+    actual={s['d'] for s in summaries(wt) if s['b2']==260000}
+    assert actual==expected and wt['profile']['selected_candidates']==len(expected)
+    assert wt['profile']['grid_candidates']==5
     run('execute_4423',['--save',out/'n4423_b1000.save','--b2',60000,'--d',210,'--tune-profile',profile,
         '--short-calibration',0,'--curves',1,'--results',out/'executed.jsonl','--log',out/'executed_engine.log','--arena-mb',512])
     # The first task lies outside calibrated widths, but a later valid task is
@@ -144,7 +161,7 @@ def main():
         args=['--worktodo',worktodo,'--once','--plan-only','--tune-profile',carrier,'--d',30030,'--arena-mb',512]
         automatic=run('worktodo_carrier_inference',args)
         ct=tomllib.loads(carrier.read_text(encoding='utf-8'))
-        assert any(s['carrier_exponent']==503 for s in ct['sample'].values())
+        assert any(s['carrier_exponent']==503 for s in summaries(ct))
         locked=run('worktodo_carrier_lock',args+['--carrier-exponent',503])
         assert '"selected":true' in locked and '"carrier_exponent":503' in locked
     report['passed']=True

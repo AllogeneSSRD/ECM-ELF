@@ -704,11 +704,13 @@ stage2_tune_profile 为空时供 Auto B2 使用的旧 .cprof 成本配置。保�
 stage2_tune_profile=<path>; default=""; empty=legacy_selection
 ```
 
-ECM final-summary TOML for joint B2/D/carrier selection. B1 never gates reuse. Width and B2 may be<br>
-estimated with uncertainty labels. Explicit D or carrier locks the choice; saved N must divide<br>
-2^p-1. Empty uses stage2_ecm_tune.toml unless a legacy cost profile is supplied.<br>
-ECM 最终汇总 TOML，联合选择 B2、D、承载；B1 不作为复用门槛。位宽和 B2 可带不确定性标记估算。显式 D<br>
-或承载固定选择；承载须通过 save 模数整除检查。留空且未指定旧成本配置时使用 stage2_ecm_tune.toml。
+Format-6 ECM parameter-table TOML, grouped by width, for joint B2/D/carrier selection. Older<br>
+development TOML must be regenerated. B1 never gates reuse; unmeasured widths/B2 retain uncertainty<br>
+labels. Saved N must divide 2^p-1 for a carrier. Empty uses stage2_ecm_tune.toml unless a legacy<br>
+cost profile is supplied.<br>
+格式6 ECM 参数表 TOML，按位宽分组并联合选择 B2、D、承载；旧开发格式需重新生成。B1 不作为复用门槛，未<br>
+测位宽/B2 保留不确定性标记。承载须验证 save 模数整除 2^p-1。留空且未指定旧成本配置时使用<br>
+stage2_ecm_tune.toml。
 
 ### stage1_tune_profile
 
@@ -796,9 +798,11 @@ checked.<br>
 stage2_tune_budget_seconds=<x:Z,1..86400>; default=1800
 ```
 
-Total ECM tuning measurement budget, including warmups. Finish an in-flight measurement after the<br>
-deadline; publish completed summaries for incremental reuse.<br>
-ECM 调优的测量总预算，包含预热；到期后完成正在运行的测量并保存有效汇总，供下次增量使用。
+Total ECM tuning budget, including warmups. Each width/B2 tunes only the model-selected D and its<br>
+immediate lower/upper entries. Finish an in-flight measurement after the deadline and retain<br>
+completed summaries for incremental reuse.<br>
+ECM 调优总预算，包含预热；每个位宽/B2 只调优模型推荐 D 及前后各一档。到期后完成正在运行的测量并保存<br>
+有效汇总，供下次增量使用。
 
 ### stage2_short_calibration
 

@@ -68,7 +68,7 @@ Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目
 
 `--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。合法梅森worktodo结合已知因子和save验证后，可自动比较普通与承载。
 
-`--tune ecm --tune-level 1`生成候选网格，在默认1800秒软预算内测锚点并估算其余组合；`--tune-budget-seconds`可覆盖。`--tune-save FILE --tune-carrier-exponent p`测有效save的普通/承载路径。`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号列表，其中exponents表示实际位数；`--tune-repeats`覆盖次数。默认文件为INI目录的`stage2_ecm_tune.toml`，原始证据位于工作目录`data/experiments/`。已完成摘要可增量利用，模型条目不冒充实测。
+`--tune ecm --tune-level 1`保留位宽和B2档位，每档仅测模型推荐D/P及前后各一档；默认1800秒软预算，`--tune-budget-seconds`可覆盖。缺锚点时先做轻量校准。`--tune-save FILE --tune-carrier-exponent p`测有效save的普通/承载路径。`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号列表，其中exponents表示实际位数；D列表也按邻近窗口裁剪。格式6按位宽保存公共字段和参数行，不再产生`[sample.*]`或被裁掉的模型网格。旧开发TOML须重测，失败不覆盖原文件。
 
 `--tune ntt`可用`--length-log2 a:b`与`--tune-slices s,...`测指定长度和批量，或用等级1…10预设。输出分别记录每秒域卷积数和每秒批调用数；它们不是ECM曲线吞吐。计时边界、预算跳过和格式见[NTT tune](../architecture/AUTO_B2.md#ntt-tune)。
 

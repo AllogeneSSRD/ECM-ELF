@@ -4,9 +4,9 @@
 
 所有输出使用新 `data/` 子目录；统计写 `data/benchmarks/`，图写 `data/figures/`。失败结果不覆盖，冻结证据不改路径/内容；用户显式参数应遵循同一位置规则。
 
-生产Auto B2与tune的权威合同见[Auto B2/tune](../../docs/architecture/AUTO_B2.md)。当前输出格式5标量摘要，允许跨B1、位宽及配置忽略条件复用。`tools/test/test_stage2_portable.py`核对CPU网格/摘要/CSV，`test_stage2_portable_gpu.py --stage2 <exe> --device 1 --output <新目录>`核对4060 Laptop的短流程；后者不调整硬件设置，不构成生产规模性能排名验收。
+生产Auto B2与tune的权威合同见[Auto B2/tune](../../docs/architecture/AUTO_B2.md)。当前格式6按位宽保存参数表，不兼容旧Stage2 TOML；每个位宽/B2只测模型中心D及相邻两档。允许跨B1、位宽及配置忽略条件复用。`tools/test/test_stage2_portable.py`核对邻域/参数表/CSV，`test_stage2_portable_gpu.py --stage2 <exe> --device 1 --output <新目录>`核对4060 Laptop短流程，包含窗口裁剪；不调整硬件设置，不构成生产规模排名验收。
 
-本页以下依赖格式2/3/4、采样数组、训练计划或严格scope的分析/验收工具仍用于其声明格式的冻结证据，不是格式5生产选型参考。调用当前exe的旧合同测试需先适配；不能将这些工具中的B1精确匹配要求用于当前生产。它们与原始证据保留以供独立研究和核对。
+本页以下依赖格式2/3/4、采样数组、训练计划或严格scope的分析/验收工具仍用于其声明格式的冻结证据，不是格式6生产选型参考。调用当前exe的旧合同测试需先适配；不能将这些工具中的B1精确匹配要求用于当前生产。它们与原始证据保留以供独立研究和核对。
 
 ## 研究与准备
 
@@ -68,7 +68,7 @@ NTT JSON version2 提供 exact_allocation_events、fuse_layouts、物理分配/�
 
 `test_stage2_tune_components_native.py --profile <完整ECM.toml> --plans <case_*.plan.jsonl所在目录> --ntt-profile <文件> [重复] [--query-plan <独立计划.jsonl> ...] --output <新目录>`编译CPU fixture，比较原生请求形状、配对固定项、非负拟合、留一误差和查询预测与独立Python参考；核对原生NTT导入、格式4往返及与生产相同的Estimator。所有需要的NTT形状须精确覆盖且策略一致；同时检查缺项、端点、预算错配、未核验及高误差组拒绝。输出默认由调用者指定到`data/experiments/`，冻结源闭包、输入、fixture和DLL；不查询CUDA设备、不执行曲线。
 
-生产命令`--tune ecm --tune-merge <ECM.toml> --tune-ntt-profile <NTT.toml> [重复] --tune-file <新配置.toml>`整理为格式5；测量模式也支持NTT导入。合并不查询CUDA设备，同条件同候选只保留严格更快的正式中位数。旧`test_stage2_tune_merge_runtime.py`、`validate_stage2_tune_selection.py`依赖格式4与冻结训练计划，尚未适配新合同；格式5现用上述portable测试核对。
+生产命令`--tune ecm --tune-merge <ECM.toml> --tune-ntt-profile <NTT.toml> [重复] --tune-file <新配置.toml>`合并格式6表；测量模式也支持NTT导入。合并不查询CUDA设备，同条件同候选只保留严格更快正式中位数。旧`test_stage2_tune_merge_runtime.py`、`validate_stage2_tune_selection.py`依赖格式4与冻结计划，尚未适配当前合同，现用上述portable测试核对。
 
 `test_stage2_tune_component_auto_runtime.py --exe <生产exe> --profile <格式4完整ECM.toml> --save <已验证save> --training-plans <冻结训练目录> --device <n> --output <新目录>`核对Auto B2的INI入口、显式普通/承载及D锁定、精确点优先和缺少NTT形状时的分块模型回退，再运行一条未锁定D/承载的完整曲线。默认未测B2=12.5e9可由`--b2`覆盖；输入需有合格普通/承载模型及完整训练形状。T1=3是固定决策测试输入，不是Stage1实测或独立全流程收益验收；不把该单条曲线作为重复性能样本。
 

@@ -1,6 +1,6 @@
 # Stage2 性能与规模关系
 
-本页的实验结论只适用于各节注明的冻结二进制、输入及统计边界。性能文件的当前复用、选型及估算规则以[Auto B2/tune](../architecture/AUTO_B2.md)为准；格式2/3/4测量的误差资格不能直接作为格式5跨范围模型的精度证明。
+本页的实验结论只适用于各节注明的冻结二进制、输入及统计边界。性能文件的当前复用、选型及估算规则以[Auto B2/tune](../architecture/AUTO_B2.md)为准；格式2/3/4测量的误差资格不能直接作为当前跨范围模型的精度证明。
 
 ## 计时与实验条件
 
@@ -508,7 +508,7 @@ GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大
 
 本轮二进制与NTT标定相同，SHA256为`ef7bbf432221a9b2449584ab0464bf852bd4df619b0164e046bad7e589df5ecf`，设备/编译/预算条件沿用上节；保存点SHA256为`09e18bc98160b028d664e2c3706a6630f4216f772f96a706561101d6d97e3f42`。55,296 mandatory cases、224,700 GMP核对，坏计数及因子命中为0。293个利用率>50%的NVML样本中SM为1575…1800 MHz、功率20.34…54.96 W，条件是1800 MHz上限与默认55 W，不是全程恒定频率。计时为stage2_full_wall.total，排除Stage1、进程启动和规划；原始预热、失败记录、冻结预测与实际模块身份均保留。
 
-独立分析输出的实验模型为`ranking_qualified=false`，当前主路径不读取该系数文件。格式4参考层从完整ECM与精确NTT原始测量拟合，用于这些冻结证据的核对；当前格式5初始模型的稀疏误差另见Auto B2说明。此实验不覆盖其他位宽、生产B1、预算和非驻留/G1。证据在`data/experiments/ntt_phase_tune_20261010/components/`、`query_supplement/`、`fresh_holdouts/`及`components_cpu/`，入口为[分析工具](../../tools/bench/analyze_stage2_tune_components.py)和[实验模型留出验收](../../tools/bench/validate_stage2_tune_components.py)。
+独立分析输出的实验模型为`ranking_qualified=false`，当前主路径不读取该系数文件。格式4参考层从完整ECM与精确NTT原始测量拟合，用于这些冻结证据的核对；当前初始模型的稀疏误差另见Auto B2说明。此实验不覆盖其他位宽、生产B1、预算和非驻留/G1。证据在`data/experiments/ntt_phase_tune_20261010/components/`、`query_supplement/`、`fresh_holdouts/`及`components_cpu/`，入口为[分析工具](../../tools/bench/analyze_stage2_tune_components.py)和[实验模型留出验收](../../tools/bench/validate_stage2_tune_components.py)。
 
 ### 原生组合计算层的参考一致性
 
@@ -516,7 +516,7 @@ GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大
 
 ### 原生组合模型的主路径验证
 
-本节所列冻结EXE的合同为格式4完整ECM，合格组使用`phase_ntt_loop_v1`，缺少精确NTT或组合资格不足时检查`giant_route_cost_v2`，再不合格只使用精确点；其误差结论限定于以下输入。当前主路径将格式4严格导入格式5摘要，并采用可移植组件估算，不承诺继承本节的预测精度。实际整除及联合显存检查仍独立执行。
+本节所列冻结EXE的合同为格式4完整ECM，合格组使用`phase_ntt_loop_v1`，缺少精确NTT或组合资格不足时检查`giant_route_cost_v2`，再不合格只使用精确点；其误差结论限定于以下输入。当前主路径使用格式6参数表和可移植组件估算，不读取旧Stage2 TOML，也不承诺继承本节的预测精度。实际整除及联合显存检查仍独立执行。
 
 验证输入为上述M6011的5872-bit余因子、B1=20、sigma26、归一化PARAM0 save；GPU1 RTX4060 Laptop，CUDA13.3/PTX3/sub-mask=1/outer=0，用户1800 MHz上限/默认55 W设置，batch256/arena6300/fold640 MiB。使用32个冻结锚点、337种精确NTT实测形状，训练范围B2=2.6e9…26e9；未将留出曲线成本加入训练。生产EXE SHA256=`eea672d1ea862df56c024b7a941e44970159aa167a926c8b5e41ec76ddcd640a`，格式4 profile=`ebe03493cfc1c6c42f7f43581c885838029f451bf02ec3e726468ffdb10b4b3e`，save=`09e18bc98160b028d664e2c3706a6630f4216f772f96a706561101d6d97e3f42`。沿用已核验的CUDA对象，实际加载的EXE/GMP及61项源闭包核对一致。
 

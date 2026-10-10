@@ -4,11 +4,21 @@
 #include "ecm_stage2_probability.h"
 #include "ecm_stage1_cost_csv.h"
 #include <chrono>
+#include <charconv>
 
 namespace ecm_stage2 { namespace tune { namespace portable {
-constexpr unsigned format=5;
+constexpr unsigned format=6;
 constexpr Word default_b2_max=2600000000000ull;
 struct Grid {std::vector<unsigned> widths;std::vector<Word> ds,b2s;unsigned repeats=2;};
+inline std::vector<size_t> neighbors(size_t center,size_t count) {
+    if(center>=count)throw std::runtime_error("invalid tune neighborhood");
+    std::vector<size_t> result;
+    for(size_t i=center?center-1:0;i<=std::min(center+1,count-1);++i)result.push_back(i);
+    return result;
+}
+struct UnsupportedFormat:std::runtime_error {
+    UnsupportedFormat():std::runtime_error("unsupported tune format; regenerate this development profile"){}
+};
 inline Grid grid(unsigned level,Word upper=default_b2_max) {
     if(level<1 || level>10 || upper<2 || upper>Word(INT64_MAX)-8192)
         throw std::runtime_error("invalid portable tune grid");
@@ -124,6 +134,40 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
     // not raw batch/arena/fold budget numbers stored in the condition.
     return true;
 }
+// Restricted TOML arrays contain scalar table cells, never trial samples.
+inline std::vector<std::string> scalar_array(const std::string &input) {
+    auto s=stage1_cost::trim(input);
+    if(s.size()<2 || s.front()!='[' || s.back()!=']')throw std::runtime_error("invalid tune cell array");
+    std::vector<std::string> result;size_t i=1;
+    while(i<s.size()-1) {
+        while(i<s.size()-1 && std::isspace(static_cast<unsigned char>(s[i])))++i;
+        if(i==s.size()-1)break;
+        const auto begin=i;
+        if(s[i]=='"') {
+            bool closed=false;++i;
+            while(i<s.size()-1) {
+                if(s[i]=='\\'){i+=2;continue;}
+                if(s[i++]=='"'){closed=true;break;}
+            }
+            if(!closed)throw std::runtime_error("unterminated tune cell");
+        } else while(i<s.size()-1 && s[i]!=',')++i;
+        auto value=stage1_cost::trim(s.substr(begin,i-begin));
+        if(value.empty() || value.front()=='[')throw std::runtime_error("nested/empty tune cell");
+        fields("{\"v\":"+value+"}");result.push_back(value);
+        while(i<s.size()-1 && std::isspace(static_cast<unsigned char>(s[i])))++i;
+        if(i<s.size()-1 && s[i++]!=',')throw std::runtime_error("invalid tune cell separator");
+    }
+    return result;
+}
+inline std::string compact_literal(const std::string &value) {
+    if(value.empty() || value.front()=='[')throw std::runtime_error("cannot persist trial arrays");
+    if(value.front()=='"' || value=="true" || value=="false" || value.find_first_of(".eE")==value.npos)return value;
+    const auto number=real(Fields{{"v",value}},"v");char buffer[64];
+    const auto written=std::to_chars(buffer,buffer+sizeof(buffer),number);
+    if(written.ec!=std::errc{})throw std::runtime_error("cannot format tune cell");
+    return std::string(buffer,written.ptr);
+}
+
 struct Profile {
     Fields metadata;
     std::map<Word,Fields> conditions;
@@ -157,112 +201,176 @@ struct Profile {
         if(ntt.size()>=65536)throw std::runtime_error("too many NTT summaries");
         ntt.push_back(std::move(sample));++revision;return true;
     }
-    static Profile from_legacy(const EcmProfile &legacy) {
-        Profile out;Fields condition=legacy.device;
-        if(condition.count("gl_add_sub_mask")){condition["add_sub_mask"]=condition.at("gl_add_sub_mask");condition.erase("gl_add_sub_mask");}
-        for(const auto &field:legacy.policy)if(field.first!="environment")condition[field.first]=field.second;
-        for(const auto &field:legacy.environment)condition["env_"+field.first]=field.second;
-        const auto id=out.condition(condition);
-        for(auto s:legacy.samples) {
-            for(auto i=s.begin();i!=s.end();)if(!i->second.empty() && i->second.front()=='[')i=s.erase(i);else ++i;
-            s["condition"]=std::to_string(id);s["source"]="\"measured\"";
-            s["execution_path"]="\"legacy_resident\"";out.update(std::move(s));
-        }
-        for(const auto &entry:legacy.ntt_samples) {
-            auto s=entry.second;s["mad_seconds"]=numeric(mad(array(required(s,"seconds"))));
-            for(auto i=s.begin();i!=s.end();)if(!i->second.empty() && i->second.front()=='[')i=s.erase(i);else ++i;
-            s["condition"]=std::to_string(id);s["source"]="\"measured\"";out.update_ntt(std::move(s));
-        }
-        out.metadata["effort_level"]=required(legacy.profile,"effort_level");return out;
-    }
-    static Profile from_ntt(const NttProfile &legacy) {
-        Profile out;auto fields=legacy.device;
-        if(fields.count("gl_add_sub_mask")){fields["add_sub_mask"]=fields.at("gl_add_sub_mask");fields.erase("gl_add_sub_mask");}
-        for(const auto &e:legacy.environment)fields["env_"+e.first]=e.second;
-        const auto id=out.condition(fields);
-        for(const auto &entry:legacy.samples) {
-            auto s=entry.second;s["mad_seconds"]=numeric(mad(array(required(s,"seconds"))));
-            for(auto i=s.begin();i!=s.end();)if(!i->second.empty() && i->second.front()=='[')i=s.erase(i);else ++i;
-            s["condition"]=std::to_string(id);s["source"]="\"measured\"";out.update_ntt(std::move(s));
-        }
-        out.metadata["component_unit"]="\"field_convolution\"";return out;
-    }
     static Profile load(const std::filesystem::path &path) {
         std::error_code error;const auto bytes=std::filesystem::file_size(path,error);
-        if(error || bytes>64*1048576)throw std::runtime_error("portable tune missing or exceeds 64MiB");
+        if(error || bytes>64*1048576)throw std::runtime_error("tune summary missing or exceeds 64MiB");
         std::ifstream in(path,std::ios::binary);Profile out;Fields *table=nullptr;std::string line;
-        std::set<std::string> sections;bool first=true;
+        Fields common;std::vector<std::string> columns;bool parameter_table=false,ntt_table=false,rows=false;
+        Word table_key=0,row_count=0;std::set<std::string> sections;bool first=true,columns_seen=false,rows_seen=false;
+        auto finish=[&]() {
+            if(parameter_table && (!columns_seen || !rows_seen || !row_count || rows))
+                throw std::runtime_error("incomplete tune parameter table");
+            parameter_table=false;common.clear();columns.clear();row_count=0;columns_seen=rows_seen=false;
+        };
         while(std::getline(in,line)) {
             if(first && line.compare(0,3,"\xef\xbb\xbf")==0)line.erase(0,3);first=false;
             line=stage1_cost::trim(line);if(line.empty() || line[0]=='#')continue;
-            if(line[0]=='[') {
-                if(line.back()!=']')throw std::runtime_error("invalid portable tune table");
-                const auto section=line.substr(1,line.size()-2);
-                if(!sections.insert(section).second)throw std::runtime_error("duplicate portable tune table");
-                if(section=="profile")table=&out.metadata;
-                else if(section.compare(0,10,"condition.")==0)table=&out.conditions[cost::integer(section.substr(10))];
-                else if(section.compare(0,7,"sample.")==0) {
-                    cost::integer(section.substr(7));if(out.samples.size()>=65536)throw std::runtime_error("too many portable samples");
-                    out.samples.emplace_back();table=&out.samples.back();
-                } else if(section.compare(0,4,"ntt.")==0) {
-                    cost::integer(section.substr(4));if(out.ntt.size()>=65536)throw std::runtime_error("too many portable NTT samples");
-                    out.ntt.emplace_back();table=&out.ntt.back();
+            if(rows) {
+                if(line=="]"){rows=false;continue;}
+                if(line.back()==',')line.pop_back();
+                auto values=scalar_array(line);
+                if(values.size()!=columns.size())throw std::runtime_error("tune row/column size mismatch");
+                Fields record=common;
+                for(size_t i=0;i<columns.size();++i)if(!record.emplace(columns[i],values[i]).second)
+                    throw std::runtime_error("tune column duplicates a common field");
+                if(ntt_table) {
+                    if(uint(record,"condition")!=table_key || out.ntt.size()>=65536)
+                        throw std::runtime_error("NTT table condition/count mismatch");
+                    out.ntt.push_back(std::move(record));
                 } else {
-                    // Native legacy reader verifies arrays/arithmetic before import.
-                    if(out.metadata.count("format") && uint(out.metadata,"format")<format) {
-                        if(required(out.metadata,"unit")=="\"field_convolution\"")return from_ntt(NttProfile::load(path));
-                        return from_legacy(EcmProfile::load(path));
-                    }
-                    throw std::runtime_error("unsupported portable tune table");
+                    if(uint(record,"target_bits")!=table_key || out.samples.size()>=65536)
+                        throw std::runtime_error("width table target/count mismatch");
+                    out.samples.push_back(std::move(record));
                 }
+                ++row_count;continue;
+            }
+            if(line[0]=='[') {
+                finish();if(line.back()!=']')throw std::runtime_error("invalid tune table");
+                const auto section=line.substr(1,line.size()-2);
+                if(!sections.insert(section).second)throw std::runtime_error("duplicate tune table");
+                if(section=="profile")table=&out.metadata;
+                else if(section.compare(0,10,"condition.")==0) {
+                    if(out.conditions.size()>=256)throw std::runtime_error("too many tune conditions");
+                    table=&out.conditions[cost::integer(section.substr(10))];
+                } else if(section.compare(0,6,"width.")==0 || section.compare(0,4,"ntt.")==0) {
+                    ntt_table=section.compare(0,4,"ntt.")==0;
+                    const size_t begin=ntt_table?4u:6u;const auto sep=section.find(".table.",begin);
+                    if(sep==section.npos)throw std::runtime_error("invalid parameter-table name");
+                    table_key=cost::integer(section.substr(begin,sep-begin));cost::integer(section.substr(sep+7));
+                    if(!ntt_table && (table_key<2 || table_key>16384))throw std::runtime_error("invalid width knot");
+                    parameter_table=true;table=&common;
+                } else throw std::runtime_error("unsupported tune table; regenerate this development profile");
             } else {
-                const auto eq=line.find('=');if(!table || eq==line.npos)throw std::runtime_error("invalid portable tune row");
-                const auto key=stage1_cost::trim(line.substr(0,eq)),value=stage1_cost::trim(line.substr(eq+1));
-                const auto parsed=fields("{\""+key+"\":"+value+"}");
-                if(!value.empty() && value.front()=='[')throw std::runtime_error("portable profile contains sampling array");
-                if(!table->emplace(key,parsed.at(key)).second)throw std::runtime_error("duplicate portable tune field");
-                // Legacy NTT has slices in [profile], before its first policy
-                // table. Delegate once the header identifies it, so legacy
-                // proof/array validation remains the sole importer boundary.
-                if(table==&out.metadata && out.metadata.count("format") && out.metadata.count("unit") &&
-                   uint(out.metadata,"format")<format) {
-                    if(required(out.metadata,"unit")=="\"field_convolution\"")return from_ntt(NttProfile::load(path));
-                    return from_legacy(EcmProfile::load(path));
+                const auto eq=line.find('=');if(!table || eq==line.npos)throw std::runtime_error("invalid tune row");
+                const auto key=stage1_cost::trim(line.substr(0,eq));
+                auto value=stage1_cost::trim(line.substr(eq+1));
+                if(parameter_table && key=="columns") {
+                    if(columns_seen || rows_seen)throw std::runtime_error("duplicate/late tune columns");
+                    while(value.empty() || value.back()!=']') {
+                        if(!std::getline(in,line))throw std::runtime_error("unterminated tune columns");
+                        value+=' '+stage1_cost::trim(line);
+                    }
+                    std::set<std::string> names;
+                    for(const auto &atom:scalar_array(value)) {
+                        const auto name=text(Fields{{"v",atom}},"v");
+                        fields("{\""+name+"\":0}");
+                        if(!names.insert(name).second)throw std::runtime_error("duplicate tune column");
+                        columns.push_back(name);
+                    }
+                    if(columns.size()>256)throw std::runtime_error("too many tune columns");
+                    columns_seen=true;continue;
                 }
+                if(parameter_table && key=="rows") {
+                    if(!columns_seen || rows_seen || value!="[")throw std::runtime_error("invalid tune rows");
+                    rows=rows_seen=true;continue;
+                }
+                if(parameter_table && rows_seen)throw std::runtime_error("common field after tune rows");
+                if(!value.empty() && value.front()=='[')throw std::runtime_error("sampling arrays are not tune summaries");
+                const auto parsed=fields("{\""+key+"\":"+value+"}");
+                if(!table->emplace(key,parsed.at(key)).second)throw std::runtime_error("duplicate tune field");
+                if(table==&out.metadata && key=="format" && uint(out.metadata,"format")!=format)
+                    throw UnsupportedFormat();
             }
         }
+        finish();
         if(!in.eof() || uint(out.metadata,"format")!=format || required(out.metadata,"unit")!="\"full_stage2\"" ||
-           uint(out.metadata,"algorithm_revision")!=1 || out.conditions.empty() || out.conditions.size()>256)
-            throw std::runtime_error("invalid portable tune header");
-        out.revision=uint(out.metadata,"revision");
-        std::set<std::string> scopes;
+           uint(out.metadata,"algorithm_revision")!=1 || out.conditions.empty())
+            throw std::runtime_error("invalid tune header");
+        out.revision=uint(out.metadata,"revision");std::set<std::string> scopes;
         for(const auto &s:out.samples) {
             validate(s);if(!out.conditions.count(uint(s,"condition")) || !scopes.insert(scope(s)).second)
-                throw std::runtime_error("duplicate/unknown portable measurement scope");
+                throw std::runtime_error("duplicate/unknown tune measurement scope");
         }
         std::set<std::tuple<Word,Word,Word>> ntt_scopes;
         for(const auto &s:out.ntt) {
             validate_ntt_summary(s);
             if(!out.conditions.count(uint(s,"condition")) || !ntt_scopes.emplace(uint(s,"condition"),uint(s,"length"),uint(s,"batch")).second)
-                throw std::runtime_error("duplicate/unknown portable NTT scope");
+                throw std::runtime_error("duplicate/unknown tune NTT scope");
         }
         return out;
     }
     std::string serialize()const {
-        std::ostringstream out;out<<"# Stage2 final performance summaries; no per-run samples. Seconds and bytes.\n[profile]\n";
+        std::ostringstream out;out<<"# Stage2 parameter tables. One final summary per row, not per-run samples.\n"
+            <<"# Widths are calibration knots; values between knots are estimates.\n[profile]\n";
         Fields header=metadata;header["format"]=std::to_string(format);header["unit"]="\"full_stage2\"";
         header["algorithm_revision"]="1";header["revision"]=std::to_string(revision);
-        for(const auto &f:header)out<<f.first<<" = "<<f.second<<'\n';
-        auto emit=[&](const std::string &section,const Fields &fields) {
-            out<<"\n["<<section<<"]\n";
-            for(const auto &f:fields) {
-                if(!f.second.empty() && f.second.front()=='[')throw std::runtime_error("cannot persist portable sampling arrays");
-                out<<f.first<<" = "<<f.second<<'\n';
-            }
+        auto emit_fields=[&](const Fields &values) {
+            for(const auto &f:values)out<<f.first<<" = "<<compact_literal(f.second)<<'\n';
         };
-        for(const auto &c:conditions)emit("condition."+std::to_string(c.first),c.second);
-        for(size_t i=0;i<samples.size();++i){validate(samples[i]);emit("sample."+std::to_string(i),samples[i]);}
-        for(size_t i=0;i<ntt.size();++i){validate_ntt_summary(ntt[i]);emit("ntt."+std::to_string(i),ntt[i]);}return out.str();
+        emit_fields(header);
+        for(const auto &c:conditions){out<<"\n[condition."<<c.first<<"]\n";emit_fields(c.second);}
+        using Group=std::vector<const Fields*>;
+        std::map<std::pair<Word,std::string>,Group> groups;
+        for(const auto &s:samples) {
+            validate(s);std::string key;
+            for(const char *name:{"condition","carrier_exponent","modulus_kind","execution_path","source"})key+=required(s,name)+';';
+            for(const auto &f:s)key+=f.first+';';
+            groups[{uint(s,"target_bits"),key}].push_back(&s);
+        }
+        auto emit_group=[&](const std::string &section,const Group &records,bool ntt) {
+            Fields common=*records.front();
+            for(auto it=common.begin();it!=common.end();) {
+                bool same=true;for(auto row:records)if(row->at(it->first)!=it->second)same=false;
+                const bool primary=ntt?(it->first=="length" || it->first=="batch" || it->first=="median_seconds"):
+                    (it->first=="d" || it->first=="p" || it->first=="b2" || it->first=="median_seconds" || it->first=="mad_seconds");
+                if(!same || primary)it=common.erase(it);else ++it;
+            }
+            std::vector<std::string> columns;
+            for(const char *key:{"d","p","b2","length","batch","median_seconds","mad_seconds","repeats",
+                                 "source","validation_count","validation_max_relative_error"})
+                if(records.front()->count(key) && !common.count(key))columns.push_back(key);
+            for(const auto &f:*records.front())if(!common.count(f.first) &&
+                std::find(columns.begin(),columns.end(),f.first)==columns.end())columns.push_back(f.first);
+            out<<"\n["<<section<<"]\n";emit_fields(common);
+            out<<"columns = [";size_t chars=11;
+            for(size_t i=0;i<columns.size();++i) {
+                const auto name=ecm_stage2::tune::portable::quoted(columns[i]);
+                if(i){out<<", ";chars+=2;}
+                if(chars+name.size()+2>112){out<<"\n    ";chars=4;}
+                out<<name;chars+=name.size();
+            }
+            out<<"]\nrows = [\n";
+            std::vector<size_t> widths(columns.size(),0);
+            for(auto row:records)for(size_t i=0;i<columns.size();++i)
+                widths[i]=std::max(widths[i],compact_literal(row->at(columns[i])).size());
+            for(auto row:records) {
+                out<<"    [";for(size_t i=0;i<columns.size();++i) {
+                    if(i)out<<", ";const auto value=compact_literal(row->at(columns[i]));
+                    out<<std::setw(int(widths[i]))<<value;
+                }out<<"],\n";
+            }out<<"]\n";
+        };
+        std::vector<Word> knots;
+        for(const auto &g:groups)if(knots.empty() || knots.back()!=g.first.first)knots.push_back(g.first.first);
+        Word width=0,index=0;
+        for(const auto &g:groups){if(width!=g.first.first){width=g.first.first;index=0;
+                const auto next=std::upper_bound(knots.begin(),knots.end(),width);
+                out<<"\n# Width "<<width<<" bits; rows below describe this knot only.\n";
+                if(next!=knots.end())out<<"# Interval ["<<width<<", "<<*next<<"): interior widths use model estimates.\n";
+                else out<<"# Widths above "<<width<<" bits use model extrapolation.\n";
+            }
+            emit_group("width."+std::to_string(width)+".table."+std::to_string(index++),g.second,false);}
+        groups.clear();
+        for(const auto &s:ntt) {
+            validate_ntt_summary(s);std::string key;for(const auto &f:s)key+=f.first+';';
+            groups[{uint(s,"condition"),key}].push_back(&s);
+        }
+        Word condition=Word(-1);index=0;
+        for(const auto &g:groups) {
+            if(condition!=g.first.first){condition=g.first.first;index=0;}
+            emit_group("ntt."+std::to_string(condition)+".table."+std::to_string(index++),g.second,true);
+        }
+        return out.str();
     }
 };
 class Budget {
