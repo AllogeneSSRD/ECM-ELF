@@ -71,12 +71,13 @@ int main(int argc,char **argv) {
             std::vector<t::EcmProfile> inputs;
             for(int i=2;i<argc;++i)inputs.push_back(t::EcmProfile::load(argv[i]));
             std::cout<<t::ecm_profile_text(t::merge_ecm_profiles(inputs));
-        } else if(argc==7 && std::string(argv[1])=="--stage1-cost") {
+        } else if((argc==7 || argc==8) && std::string(argv[1])=="--stage1-cost") {
             const auto p=t::Stage1Profile::load(argv[2]);
             EcmStage2DeviceInfo d;std::strcpy(d.uuid_hex,"0123456789abcdef0123456789abcdef");
             d.major=8;d.minor=9;d.runtime=13030;d.driver=13030;
             std::cout<<std::setprecision(17)<<p.seconds(d,ecm_stage2::cost::integer(argv[3]),
-                ecm_stage2::cost::integer(argv[4]),ecm_stage2::cost::integer(argv[5]),"\"mersenne\"",argv[6])<<'\n';
+                ecm_stage2::cost::integer(argv[4]),ecm_stage2::cost::integer(argv[5]),
+                std::string("\"")+(argc==8?argv[7]:"mersenne")+"\"",argv[6])<<'\n';
         } else if(argc==3 && std::string(argv[1])=="--load") {
             const auto p=t::EcmProfile::load(argv[2]);
             EcmStage2DeviceInfo d;std::strcpy(d.uuid_hex,"0123456789abcdef0123456789abcdef");

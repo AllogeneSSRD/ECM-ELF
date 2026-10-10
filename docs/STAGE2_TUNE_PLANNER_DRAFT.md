@@ -223,3 +223,13 @@ runtime工具允许未提供choose12成本文件时明确跳过该模式接受�
 独立收益25锚点各暖机1+交错正式3，100曲线；Auto从1293决策候选选择2.6e12/D1381380/普通模数，P126720/I1882177/G15。实测4.519360秒/估计4.577495，误差1.286%；全候选最大误差4.505%，收益排名损失0。D690690在同B2实测6.518491，选中D减少30.669%引擎时间；该结论不是承载收益或通用D默认。范围上界平台仍受限，Stage2进程5.128206秒另列，score未包含驱动/冷启动。
 
 最终raw审计160曲线355200 mandatory/818108 GMP检查bad0、无因子、驻留。NVML利用率≥80%的245点SM1545…1800/median1800，power18.97…55.11/median51.78 W；实际频率非严格恒定。证据`data/experiments/ecm_tune_production_large_d_20261010/execution/`与`final_audit/result.json`，原始60调优曲线`ecm_tune_36356_26996765/`，合并profile SHA2aa2fadf…；56源/current/冻结及二进制身份核对一致。正式性能和TODO同步；生产位宽/余因子T1/预算、NTT与互斥阶段组合、冷启动和非驻留/G1仍待完成。本草稿保留。
+
+### 余因子Stage1成本入口与完整批次验收
+
+新增独立参考`--n HEX_N`和collector `--target-n N...`、`--sigma-first s`，默认13素数目录不变，字面目标与exponents互斥。校验实际N为odd>3/≤16384bits、sigma连续范围、同位宽/类型scope不重复；末点复用键改为actual N/B1/sigma。参考协议验证实际N，拒绝相同位宽不同模数；成功TOML只存性能scope，不写目标数字、路径或二进制。普通目标Stage1成本不受Stage2承载位宽影响。参考非单位/缺尾/末点错误/因子均不能发布，lcm/choose12语义保持。
+
+大D测试终止后纯CPU构建4.6秒，GMP参考SHAff7a834a…，15 LCM/76素数点/20合数点/40拒绝全部通过。CPU目标协议8接受/32拒绝、ECM reader13证书/10等级/21坏profile、Stage1 reader4接受/28拒绝/10等级通过。文档补丁首次因完整段落上下文不匹配而未应用，核对后重应用，未改代码或原始证据以消除错误。
+
+GPU1测M6011的5872-bit实际余因子/B1=20/sigma26…33/lcm及choose12/batch1、8，各1暖机+3正式，共16批72曲线，container6144/TPI16；末点与独立GMP和纯Python一致。lcm C1/C8完整process/C中位数0.256436/0.032049；choose12为0.262860/0.030819。短B1启动/准备占主导，不外推生产高B1，不把choose12小差异解释成优化。sigma40、60-bit合数C8和原默认M521入口各暖机1+正式1，另18曲线，n=1只是回归。raw审计20批90曲线与25独立Python点通过，profile身份/二进制/工具保持。
+
+证据`data/experiments/ecm_stage1_generic_tune_20261010/`：`target_protocol/`、`native_reference/`、`ecm_reader_regression/`、`stage1_reader_regression/`、`execution/`与`stage1_audit/result.json`；参考冻结在`build_cuda_cmake/stage1_gmp_generic_20261010/`。同scope已有20个D/B2/普通与6011承载锚点，正在使用真实lcm C8 T1=0.032049执行每候选暖机1+正式3的独立收益复验；本段不预先宣称排名或时间门限通过。更高生产B1/位宽/预算、NTT互斥阶段组合、冷启动与非驻留/G1目标继续保留。

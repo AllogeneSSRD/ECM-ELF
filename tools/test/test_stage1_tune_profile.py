@@ -20,10 +20,10 @@ def main():
     sample=dict(target_bits=521,modulus_kind='mersenne',b1=20,batch=8,exponent='lcm',repeats=3,
                 checked_curves=8,hits=0,bad=0,seconds=[.2,.3,.4],median_seconds=.3,mad_seconds=.1)
     text=tool.profile_text(device,1,3,[sample]);accepted=rejected=0
-    def run(name,text=text,bits=521,b1=20,batch=8,exponent='lcm',ok=True):
+    def run(name,text=text,bits=521,b1=20,batch=8,exponent='lcm',kind=None,ok=True):
         nonlocal accepted,rejected
         path=out/(name+'.toml');path.write_text(text,encoding='utf-8')
-        proc=subprocess.run([str(a.fixture.resolve()),'--stage1-cost',str(path),str(bits),str(b1),str(batch),exponent],
+        proc=subprocess.run([str(a.fixture.resolve()),'--stage1-cost',str(path),str(bits),str(b1),str(batch),exponent]+([] if kind is None else [kind]),
                             capture_output=True,text=True,errors='replace',timeout=30)
         (out/(name+'.log')).write_text(proc.stdout+proc.stderr,encoding='utf-8')
         assert (proc.returncode==0)==ok,(name,proc.stdout,proc.stderr)
@@ -32,6 +32,11 @@ def main():
     run('valid');run('bom','\ufeff'+text)
     choose=copy.deepcopy(sample);choose['exponent']='choose12'
     run('choose12',tool.profile_text(device,1,3,[choose]),exponent='choose12')
+    generic=copy.deepcopy(sample);generic['modulus_kind']='generic'
+    generic_text=tool.profile_text(device,1,3,[generic])
+    run('generic',generic_text,kind='generic')
+    run('generic_as_mersenne',generic_text,ok=False)
+    run('mersenne_as_generic',kind='generic',ok=False)
     for name,kwargs in [('width',dict(bits=522)),('b1',dict(b1=21)),('batch',dict(batch=1)),('exponent',dict(exponent='choose12'))]:
         run(name,ok=False,**kwargs)
     for name,old,new in [

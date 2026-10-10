@@ -50,11 +50,13 @@ reader限制1 MiB，拒绝旧格式、缺失END、重复键、非法整数、非
 
 [tune_stage1_cost.py](../../tools/bench/tune_stage1_cost.py)运行完整CUDA Stage1批次，保存可复用的每曲线T1。必填参数为`--stage1 <exe>`、`--stage2 <exe>`、`--device <id>`、`--output <新证据目录>`和`--profile <输出.toml>`；原始输出置于`data/experiments/`。Stage2可执行文件只提供设备查询和原生文件检查，不参与Stage1计时。`--check-stage1-tune-profile <file>`离线校验格式、完成状态和全部样本，不查询GPU。
 
-当前测量路径固定CUDA/CGBN ladder、Suyama PARAM0、自动TPI、关闭指数缓存和checkpoint；`--exponent [lcm|choose12]`显式选择标量。输入来自与完整Stage2 tune相同的13个已知梅森素数目录。CPU独立生成每个sigma的末点，测量后逐条验证实际N、B1、PARAM、sigma、X、Z与checksum；不能用checkpoint、部分运行速度投影、因子曲线或缺失末点发布成功文件。
+当前测量路径固定CUDA/CGBN ladder、Suyama PARAM0、自动TPI、关闭指数缓存和checkpoint；`--exponent [lcm|choose12]`显式选择标量。默认输入来自与完整Stage2 tune相同的13个已知梅森素数目录；`--target-n <N...>`改测指定余因子或其他模数，接受十进制/0x十六进制字面整数，不计算表达式，也不推断承载指数。N须为大于3的奇数且最多16384 bits，与`--exponents`互斥。同轮输入不能重复位宽/模数类型成本scope，以免用不同目标混合统计。
 
-高B1可加`--reference <stage1_gmp_reference.exe>`使用独立纯GMP末点参考，省去Python的大标量与点运算；不指定则保留Python参考。参考程序由`tools/build/test/build_stage1_gmp_reference.ps1 -Build <新目录> -VcVars <vcvars64.bat>`构建，纯CPU、不链接CUDA、不包含生产ECM算术代码。它用分段筛法收集最大素数幂、均衡乘积构造LCM，再用普通GMP模运算执行Montgomery ladder；choose12使用12倍标量。支持相同13个已知素数、B1=2…260e6、单范围1…4096条曲线。参考耗时完全排除T1。
+`--sigma-first <s>`默认26，要求整个批次的连续sigma处于6…9007199254740991；可为已验证输入选择适当的曲线范围。CPU独立生成每个sigma的末点，测量后逐条验证实际N、B1、PARAM、sigma、X、Z与checksum。指定合数只声明本次测量曲线完成且没有因子，不证明N为素数或未来曲线无因子；参考出现非单位、GPU找到因子、末点不符或输出缺失均拒绝发布。不能用checkpoint或部分运行速度投影发布成功文件。
 
-每次原生参考返回完整输入范围、按sigma顺序排列的坐标和成功尾记录。收集器拒绝缺尾、缺点、重复/乱序、范围不符或越界坐标；参考返回非单位或超时则保留证据并拒绝发布。`--reference-timeout <秒>`默认7200，单独限制每次原生参考进程；Python参考没有这一子进程限制。已计算的末点在本轮内复用，扩大batch时只计算缺少的sigma。原生参考的二进制、可用的构建manifest/冻结源与GMP DLL身份只进入原始审计，不进入性能TOML。
+高B1可加`--reference <stage1_gmp_reference.exe>`使用独立纯GMP末点参考，省去Python的大标量与点运算；不指定则保留Python参考。参考程序由`tools/build/test/build_stage1_gmp_reference.ps1 -Build <新目录> -VcVars <vcvars64.bat>`构建，纯CPU、不链接CUDA、不包含生产ECM算术代码。它用分段筛法收集最大素数幂、均衡乘积构造LCM，再用普通GMP模运算执行Montgomery ladder；choose12使用12倍标量。支持相同13个已知素数，或通过`--n <HEX_N>`指定实际模数（纯十六进制数字、不带0x）；B1=2…260e6、单范围1…4096条曲线。参考耗时完全排除T1。
+
+每次原生参考返回完整输入范围、按sigma顺序排列的坐标和成功尾记录。收集器核对实际N，不能以位宽相同代替模数一致；拒绝缺尾、缺点、重复/乱序、范围不符或越界坐标；参考返回非单位或超时则保留证据并拒绝发布。`--reference-timeout <秒>`默认7200，单独限制每次原生参考进程；Python参考没有这一子进程限制。已计算的末点在本轮内按实际N/B1/sigma复用，扩大batch时只计算缺少的sigma。原生参考的二进制、可用的构建manifest/冻结源与GMP DLL身份只进入原始审计，不进入性能TOML。
 
 `--tune-level <1..10>`默认1：位宽目录取前min(13,ℓ+3)项；B1目录依次为20、1000、10000、100000、1000000、10000000、26000000、100000000、260000000，取前min(9,ℓ)项；批次目录1、8、64、256，取前min(4,1+⌊(ℓ−1)/3⌋)项；每组合一次独立进程预热，正式重复2ℓ+1次。`--exponents <p...>`、`--b1 <B1...>`、`--batch <C...>`、`--repeats <n>`覆盖网格。最高默认468个范围、每范围21次正式重复，CPU独立点验证也可能很耗时。`--timeout <秒>`默认3600，只限制每个Stage1子进程，不承诺整轮时间上限。
 
@@ -62,7 +64,7 @@ T1样本=完整Stage1进程墙钟/C，包含进程启动、指数/曲线准备�
 
 格式1使用`[profile]`、`[device]`、`[policy]`、`[stage1.sample_<n>]`和`[summary]`，每范围保存重复时间、中位数、MAD、批次及指数模式，性能文件不含路径或二进制身份。发布前由原生reader核对所有范围和统计，再原子替换；失败保留原文件和证据。原生reader限16 MiB/4096范围，拒绝未完成、重复范围、未核验、非有限/负成本和不支持的策略。
 
-运行查找精确匹配GPU UUID/SM、CUDA runtime/driver、目标位宽/类型、B1、`stage1_batch`及指数模式，不外推。指数模式默认读取共用INI的`exponent`，可用`--stage1-exponent [lcm|choose12]`覆盖该成本条件；它不重新计算save的Stage1点。当前脚本只发布已知完整梅森数成本，不据此匹配余因子或其他Stage1算法。文件不配置或启动生产Stage1，也不能验证将来所用Stage1构建具有同样速度；改变内核、频率、功耗、批量或缓存策略后应重新测量或提供实际成本。
+运行查找精确匹配GPU UUID/SM、CUDA runtime/driver、目标位宽/类型、B1、`stage1_batch`及指数模式，不外推。指数模式默认读取共用INI的`exponent`，可用`--stage1-exponent [lcm|choose12]`覆盖该成本条件；它不重新计算save的Stage1点。余因子成本按普通目标N实测，不能把承载位宽或完整梅森数的Stage1成本当作余因子成本。性能文件记录适用位宽/类型，不含目标数、路径或二进制身份；原始证据保留实际目标和全部核验依据。文件不配置或启动生产Stage1，也不能验证将来所用Stage1构建具有同样速度；改变内核、频率、功耗、批量或缓存策略后应重新测量或提供实际成本。
 
 ## NTT tune
 

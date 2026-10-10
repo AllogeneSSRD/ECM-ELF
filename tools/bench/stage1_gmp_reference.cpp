@@ -111,17 +111,27 @@ int main(int argc,char **argv) {
             const auto b1=decimal(argv[2]);if(b1<2 || b1>260000000)throw std::runtime_error("B1 must be 2..260000000");
             Integer s;scalar_lcm(s.v,(unsigned)b1);std::cout<<hex(s.v)<<'\n';return 0;
         }
-        if(argc!=6)throw std::runtime_error("usage: stage1_gmp_reference PRIME_EXPONENT B1 SIGMA_FIRST CURVES lcm|choose12");
-        const auto p=decimal(argv[1]),b1=decimal(argv[2]),sigma=decimal(argv[3]),curves=decimal(argv[4]);
-        const std::string mode=argv[5];
+        const bool literal=argc==7 && std::string(argv[1])=="--n";
+        if(!literal && argc!=6)throw std::runtime_error("usage: stage1_gmp_reference PRIME_EXPONENT B1 SIGMA_FIRST CURVES lcm|choose12, or --n HEX_N B1 SIGMA_FIRST CURVES lcm|choose12");
+        const unsigned offset=literal?1:0;
+        const auto b1=decimal(argv[2+offset]),sigma=decimal(argv[3+offset]),curves=decimal(argv[4+offset]);
+        const std::string mode=argv[5+offset];
         const unsigned allowed[]={107,127,521,607,1279,2203,2281,3217,4253,4423,9689,9941,11213};
-        if(p>16384 || std::find(std::begin(allowed),std::end(allowed),p)==std::end(allowed) ||
-           b1<2 || b1>260000000 || sigma<6 || sigma>9007199254740991ull || !curves || curves>4096 ||
+        if(b1<2 || b1>260000000 || sigma<6 || sigma>9007199254740991ull || !curves || curves>4096 ||
            curves-1>9007199254740991ull-sigma || (mode!="lcm" && mode!="choose12"))throw std::runtime_error("unsupported reference scope");
         const auto start=std::chrono::steady_clock::now();Integer n,s;
-        mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,(mp_bitcnt_t)p);mpz_sub_ui(n.v,n.v,1);
+        if(literal) {
+            const std::string text=argv[2];
+            if(text.empty() || text.size()>4096 || text.find_first_not_of("0123456789abcdefABCDEF")!=text.npos ||
+               mpz_set_str(n.v,text.c_str(),16) || mpz_cmp_ui(n.v,3)<=0 || !mpz_odd_p(n.v) ||
+               mpz_sizeinbase(n.v,2)>16384)throw std::runtime_error("target must be an odd hexadecimal integer >3 with at most 16384 bits");
+        } else {
+            const auto p=decimal(argv[1]);
+            if(std::find(std::begin(allowed),std::end(allowed),p)==std::end(allowed))throw std::runtime_error("unsupported reference scope");
+            mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,(mp_bitcnt_t)p);mpz_sub_ui(n.v,n.v,1);
+        }
         scalar_lcm(s.v,(unsigned)b1);if(mode=="choose12")mpz_mul_ui(s.v,s.v,12);
-        std::cout<<"{\"type\":\"stage1_reference\",\"bits\":"<<p<<",\"b1\":"<<b1<<",\"exponent\":\""<<mode
+        std::cout<<"{\"type\":\"stage1_reference\",\"bits\":"<<mpz_sizeinbase(n.v,2)<<",\"b1\":"<<b1<<",\"exponent\":\""<<mode
             <<"\",\"n_hex\":\""<<hex(n.v)<<"\",\"sigma_first\":"<<sigma<<",\"curves\":"<<curves
             <<",\"scalar_bits\":"<<mpz_sizeinbase(s.v,2)<<"}\n"<<std::flush;
         for(uint64_t i=0;i<curves;++i) {

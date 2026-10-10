@@ -366,6 +366,21 @@ Stage2调优和收益复验另保留1秒NVML记录；短曲线及进程间准备
 
 全部160条完整曲线无因子、fold/frontier驻留、355200个mandatory cases与818108个GMP检查bad0。1秒NVML中GPU1利用率≥80%的245点记录SM1545…1800MHz、中位数1800，功率18.97…55.11W、中位数51.78；设置未变，实际频率不是严格恒定。原始证据在`data/experiments/ecm_tune_production_large_d_20261010/`的`execution/`和`final_audit/result.json`，60条调优回执在`data/experiments/ecm_tune_36356_26996765/`。合并profile SHA256=`2aa2fadf5aa80b462b9423a3b07117de70c59c70d7fd962642288aa9e73074d3`；56项依赖/current/冻结源和所有输入身份经核对，原始数据未改写。
 
+### 余因子的完整Stage1成本
+
+指定目标为M6011的5872-bit余因子、B1=20、sigma26…33，GPU1 RTX4060 Laptop、用户1800MHz/默认55W上限，部署Stage1二进制与上述生产B1测量相同。分别对lcm/choose12、batch1/8各完整预热1次、正式3次，共16批72曲线；普通目标N实测，不以6011-bit承载代替Stage1目标。container6144/TPI16，CGBN ladder、自动TPI、关闭指数缓存与checkpoint。完整进程墙钟/C中位数及MAD为：
+
+- lcm/batch1：0.256436 s/curve，MAD0.003475；GPU部分0.029143。
+- lcm/batch8：0.032049 s/curve，MAD0.000416；GPU部分0.003932。
+- choose12/batch1：0.262860 s/curve，MAD0.003787；GPU部分0.033036。
+- choose12/batch8：0.030819 s/curve，MAD0.000140；GPU部分0.003853。
+
+这些短B1成本主要包含启动/准备，不外推生产10e6…260e6，也不由小差异认定两指数模式的性能优劣。每个sigma末点先与独立普通GMP参考核对，再以纯Python ladder重算复核；所有N/B1/PARAM/sigma/X/Z/checksum一致、无因子。仅声明本次曲线无因子，不声明目标为素数或未来扫描不会产生因子。
+
+另完成60-bit合数、sigma40起点、batch8以及默认M521素数入口的回归，各预热1次、正式1次，合计18曲线；该n=1只验证入口，不作速度标定。最终20批90条保存点及25个独立Python末点复核通过。CPU字面目标/范围/协议检查8接受、32拒绝；原生GMP参考15个LCM标量、76个素数点、20个合数点及40拒绝检查通过，含相同位宽不同N拒绝和非单位参考没有成功尾记录。原生成本reader4接受、28拒绝，10等级回归通过。
+
+新独立参考二进制SHA256=`ff7a834abf2571a5b30d4a21e0c89fa176272ffacc1ef23f5e18a28f0014ee31`，构建4.6秒；Stage1/Stage2二进制身份和冻结工具、GMP依赖保留在原始证据。成本性能TOML不含目标数、路径或二进制身份，只匹配精确设备/位宽/类型/B1/批次/指数模式。证据`data/experiments/ecm_stage1_generic_tune_20261010/`中的`execution/`、`stage1_audit/result.json`、`target_protocol/`、`native_reference/`、`stage1_reader_regression/`和`ecm_reader_regression/`；短测量没有足够连续传感器证据，不声明实际频率/功耗恒定。
+
 ### Auto B2拟合复用的CPU成本
 
 同一AMD Ryzen AI 9 HX370、MSVC14.51 `/O2`、同一caller与冻结的旧/新头文件，在CPU原生fixture逐项比较完整候选。56组输入共17442个候选的数值和排序完全一致，含预测、精确点、不同T1/R、区间限制和拒绝条件。性能各1次预热、3次交错正式重复；每次20轮候选构造，计时不含profile读取、GPU查询、联合显存规划或完整曲线。
