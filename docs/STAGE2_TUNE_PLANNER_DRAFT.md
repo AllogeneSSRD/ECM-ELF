@@ -159,3 +159,23 @@ NTT测量后续可作为阶段成本的独立特征/核对数据，须显式区�
 证据`data/experiments/ecm_tune_auto_20261010/`，最终runtime_final、explicit_b2_runtime_regression、native_final、auto_native_final、prediction_template_regression、merge_template_regression、merge_runtime_regression、final_raw_audit和source_audit。失败/早期输出均保留；成功验证器另冻结。统一配置6生成物、AUTO_B2、使用说明、性能及TODO同步。
 
 未完成目标仍保留：真实生产Stage1摊销预计算，更多生产B1/位宽/预算范围和独立收益排名，互斥阶段/NTT特征组合、冷启动/驱动成本及非驻留/G1回退。当前完整tune T2仅为引擎total，提供的T1=3/30是接口决策测试输入；不能把基准点准备作为生产Stage1成本，也不能宣布总流程收益模型已全面合格。临时草稿开发完成后应提示用户处理，不自行删除。
+
+### 完整Stage1成本预计算与原生T1查询
+
+新增`tools/bench/tune_stage1_cost.py`及`src/core/ecm_stage1_tune_profile.h`，使用完整已完成批次进程墙钟/C发布独立格式1 TOML。等级1…10扩大13项已知梅森素数、B1=20…260e6及batch1/8/64/256目录，重复2ℓ+1次；CLI可限制范围。固定ladder、PARAM0、auto TPI、exp-cache off、checkpoint off，CPU独立验证每个sigma末点及checksum，部分计时投影不得发布。reader拒绝未完成、非有限、坏统计、重复scope和不支持策略；文件只保存性能与适用条件，不含路径或二进制。原始实验另外保存身份、源和命令。
+
+Auto B2在正的用户T1未提供时，按GPU UUID/SM/runtime/driver、实际目标位宽/类型、B1、batch及指数模式查询实测中位数。共享INI的`exponent`默认提供成本条件，CLI可覆盖；不改变save中的点。CLI/INI/worker/plan-only/队列身份和输入文件防覆盖贯通。已有正T1优先，未使用的Stage1文件不读取；旧cost路径不借独立Stage1文件绕过资格。离线`--check-stage1-tune-profile`不启动GPU。
+
+部署Stage1二进制SHA=`5ff1f58a3a072fb37b7ef6e35d3ac2de5488304d6acc5d4f32b6555cb2c96e6e`，不是本批新Stage1构建；保存原二进制身份，不能从末点验证反推它与当前源码一致。M521/B1=20的lcm/choose12、batch1/8各1预热+3正式，以及M4423/B1=1000/lcm/batch8同轮次，总20批次104曲线全部独立末点核验。M4423的T1中位数0.0536744875秒/curve，GPU部分0.024823625秒/curve，container4608/TPI16。短B1启动/准备占比大，不外推生产10e6…260e6。
+
+初版collector按PRAC格式读ladder geometry，完成一次M521暖机后被错误拒绝；修正为实际`CGBN<8, 768>`与curve数量行，原失败保存。随后在M4423前加入Stage1 runtime/device检查，前两个成功批次的测量源由删除该新增块重建，SHA严格匹配原raw tool hash；不会把当前测量源伪装成旧源。独立审计又复核旧记录runtime/device一致，原始JSON不改。发布超时试验在0.1ms子进程timeout时拒绝写入，已有profile字节不变，未完成时间不得发布。普通权限配置生成一度被Windows拒绝写入INI示例，授权范围内提升权限后6生成物同步完成。
+
+M4423有效B1=1000 save完成两D、五B2各预热1+正式3，共40条完整Stage2曲线。D60060的线性I组留一误差3.5296%，合格；D120120短尾出现非单调且不合格，原生保持精确样本可用，未放宽8%。与真实Stage1 T1联合选择B2=2.6e9、D60060、普通模数：初轮1条实测1.430161秒/估计1.443278秒，误差0.917%；最终驱动再1条1.415360秒，误差1.972%。选择位于范围下界，只是所测范围内联合执行验证，不是独立总流程收益最佳证明。
+
+初轮冻结Stage2 exe SHA=`440950b99fddc7e3d315fbf6fa4745b6b85affd25e23a75acb7a4bd3629a5807`，56依赖核对。最终帮助/诊断与配置文字补齐经HostOnly23.1秒构建，SHA=`231cd6b22725caf1f17d111d0f89120df2f82e78e24cfb1e0b02c0a7457ee224`，复用经核对的CUDA对象。CPU读写3接受/26拒绝/10等级，ECM13证书/10等级/21坏profile、预测、Auto和7合并/5拒绝/7roundtrip回归通过。最终Stage1接口4选择/15调用/3完整Stage2曲线，涵盖shared INI choose12、CLI覆盖、用户T1优先、缺失scope、设备不符、写入冲突及私有队列续跑。
+
+最终驱动旧手工T1的首次单曲线回归出现M521预测0.313360秒/实测0.355秒（11.729%超限），算术正确但性能不计通过。按diagnose流程提出短曲线冷启动/调度、驱动初始化变化、旧profile动态偏差和外部竞争四假设，固定save/B2/D/算术/预算、旧新驱动各预热1再交错正式3次。两版median0.314233/0.318855秒，+1.471%；六个正式样本全部在原8%以内，不能确定初次失败具体原因。随后完整相同回归11选择/11拒绝/4完整曲线通过，最大误差3.643%；保留初次失败、对照和NVML样本，不放宽门限，不把重跑当作初次成功。
+
+证据`data/experiments/ecm_stage1_tune_20261010/`：`completed_stage_audit.json`、`final_stage_audit.json`、`source_audit_final.json`、`runtime_final/`、`provided_runtime_after_probe/`、`coupled_4423_final/`、`final_drift_probe/`及Stage1原始目录；40条调优回执在`data/experiments/ecm_tune_36448_21825781/`。最终raw审计65条完整Stage2曲线mandatory/GMP bad0、无因子，包含失败性能样本，不能将其混作65条性能验收通过。GPU1同一4060 Laptop、用户1800MHz/默认55W上限，本批不修改设置、不扰动忙碌GPU0，正式短测量没有连续遥测；对照探针单独记录NVML。
+
+已同步AUTO_B2、Stage1/Stage2使用、性能及TODO；统一配置和diff检查通过。剩余完整目标：生产B1/余因子/实际batch成本与预算扩展、独立收益排名、互斥阶段/NTT特征组合、Stage2冷启动/驱动成本及非驻留/G1回退。新脚本可请求生产B1，但尚未完成生产B1实测，CPU纯Python参考会很耗时；下一阶段先改善高B1独立参考与受控标定，再扩大预算和尾部成本范围。本草稿继续保留。

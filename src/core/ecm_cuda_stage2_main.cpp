@@ -15,6 +15,7 @@
 #include "ecm_stage2_tune_ecm.h"
 #include "ecm_stage2_tune_prediction.h"
 #include "ecm_stage2_tune_auto.h"
+#include "ecm_stage1_tune_profile.h"
 #include "ecm_stage2_geometry.h"
 #include "ecm_stage2_logging.h"
 #include "ecm_stage2_console.h"
@@ -243,6 +244,8 @@ struct Options {
     bool auto_b2=false,cost_device_info=false;
     std::string cost_profile,tune_profile;
     uint64_t auto_min=0,auto_max=0,owner_mb=ecm_config::defaults::stage2_stage2_fold_mb,stage1_batch=ecm_config::defaults::stage2_stage1_batch;
+    std::string stage1_profile,stage1_exponent="lcm",check_stage1_profile;
+    bool has_stage1_exponent=false;
     double stage1_seconds=ecm_config::defaults::stage2_stage1_seconds_per_curve,ratio_adjust=ecm_config::defaults::stage2_stage2_ratio_adjust;
     bool has_owner=false,has_stage1_seconds=false,has_stage1_batch=false,has_ratio=false;
 };
@@ -297,6 +300,12 @@ Options arguments(int argc, char **argv) {
         else if (a == "--owner-budget-mb") {o.owner_mb=num();o.has_owner=true;if(o.owner_mb>ecm_config::limits::stage2_stage2_fold_mb_maximum)throw std::runtime_error("invalid owner budget");}
         else if (a == "--stage1-batch") {o.stage1_batch=num();o.has_stage1_batch=true;if(!o.stage1_batch||o.stage1_batch>ecm_config::limits::stage2_stage1_batch_maximum)throw std::runtime_error("invalid Stage1 batch");}
         else if (a == "--stage1-seconds-per-curve") {o.stage1_seconds=positive(value(),"Stage1 seconds");o.has_stage1_seconds=true;}
+        else if (a == "--stage1-tune-profile") o.stage1_profile=value();
+        else if (a == "--check-stage1-tune-profile") o.check_stage1_profile=value();
+        else if (a == "--stage1-exponent") {
+            o.stage1_exponent=value();o.has_stage1_exponent=true;
+            if(o.stage1_exponent!="lcm" && o.stage1_exponent!="choose12")throw std::runtime_error("stage1-exponent must be lcm or choose12");
+        }
         else if (a == "--stage2-ratio-adjust") {o.ratio_adjust=positive(value(),"Stage2 ratio adjust");o.has_ratio=true;}
         else if (a == "--gp") { o.gp = value(); o.has_gp = true; }
         else if (a == "--factor-timeout") {
@@ -511,6 +520,8 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         arg(L"--arena-mb",o.arena);arg(L"--owner-budget-mb",o.owner_mb);arg(L"--stage1-batch",o.stage1_batch);
         if(o.auto_min)arg(L"--auto-min-b2",o.auto_min);if(o.auto_max)arg(L"--auto-max-b2",o.auto_max);
         if(o.stage1_seconds)cmd+=L" --stage1-seconds-per-curve "+real(o.stage1_seconds);
+        if(!o.stage1_profile.empty())cmd+=L" --stage1-tune-profile "+quote(fs::path(o.stage1_profile).wstring());
+        cmd+=L" --stage1-exponent "+quote(fs::path(o.stage1_exponent).wstring());
         cmd+=L" --stage2-ratio-adjust "+real(o.ratio_adjust);
     }
     if(!o.receipt.empty())cmd+=L" --queue-receipt "+quote(fs::path(o.receipt).wstring());
@@ -620,6 +631,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
 std::string select_auto_tuned(Options &o,const Record &r);
 std::string select_auto(Options &o,const Record &r,bool apply=true) {
     if(!o.tune_profile.empty())return select_auto_tuned(o,r);
+    if(!o.stage1_profile.empty() && !(o.stage1_seconds>0))throw std::runtime_error("Stage1 tune costs require a full ECM tune profile");
     namespace c=ecm_stage2::cost;
     if(o.carrier_exponent)throw std::runtime_error("Auto B2 needs a calibrated Mersenne-carrier profile; use explicit B2");
 #if NTT_GL_ADD_SUB_MASK != 0
@@ -812,6 +824,8 @@ void help() {
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
         "         --factor-only (skip optional prime-witness naming; raw factors may be composite)\n"
         "Auto B2: --auto-b2 --tune-profile FILE.toml --stage1-seconds-per-curve S\n"
+        "         Or: --stage1-tune-profile FILE.toml --stage1-batch N [--stage1-exponent lcm|choose12]\n"
+        "         Offline validation: --check-stage1-tune-profile FILE.toml\n"
         "         Legacy: --auto-b2 --cost-profile FILE [--stage1-batch N]\n"
         "         [--stage1-seconds-per-curve S] [--stage2-ratio-adjust R]\n"
         "         [--auto-min-b2 B2 --auto-max-b2 B2] [--owner-budget-mb MB]\n"
@@ -938,8 +952,8 @@ std::string select_tuned(Options &o,const Record &r) {
 std::string select_auto_tuned(Options &o,const Record &r) {
     namespace t=ecm_stage2::tune;
     if(o.debug_log)throw std::runtime_error("full ECM Auto B2 debug_log is not calibrated");
-    if(!(o.stage1_seconds>0) || !std::isfinite(o.stage1_seconds))
-        throw std::runtime_error("full ECM Auto B2 requires --stage1-seconds-per-curve or positive INI stage1_seconds_per_curve");
+    if((!(o.stage1_seconds>0) || !std::isfinite(o.stage1_seconds)) && o.stage1_profile.empty())
+        throw std::runtime_error("full ECM Auto B2 requires --stage1-seconds-per-curve or positive INI stage1_seconds_per_curve, or a matching --stage1-tune-profile");
     Handle guard;guard.value=CreateFileW(fs::path(o.tune_profile).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(guard.value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock full ECM Auto B2 profile");
     const auto profile=t::EcmProfile::load(o.tune_profile);
@@ -947,7 +961,18 @@ std::string select_auto_tuned(Options &o,const Record &r) {
     EcmStage2DeviceInfo device;if(ecm_cuda_stage2_device_info(o.device,&device))throw std::runtime_error("cannot query Auto B2 selection device");
     if(!profile.matches(device,o.batch,o.arena,o.owner_mb,tune_environment(),NTT_GL_ADD_SUB_MASK))
         throw std::runtime_error("full ECM Auto B2 device or memory/backend policy mismatch");
-    t::AutoRequest request{r.b1,o.auto_min,o.auto_max,o.stage1_seconds,o.ratio_adjust};
+    double stage1_seconds=o.stage1_seconds;std::string stage1_hash;
+    Handle stage1_guard;
+    if(!(stage1_seconds>0)) {
+        stage1_guard.value=CreateFileW(fs::path(o.stage1_profile).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+        if(stage1_guard.value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock Stage1 tune profile");
+        const auto stage1=t::Stage1Profile::load(o.stage1_profile);
+        Big target,plus;mpz_set_str(target.z,r.n.c_str(),16);mpz_add_ui(plus.z,target.z,1);
+        stage1_seconds=stage1.seconds(device,mpz_sizeinbase(target.z,2),r.b1,o.stage1_batch,
+            json_string(mpz_popcount(plus.z)==1?"mersenne":"generic"),o.stage1_exponent);
+        stage1_hash=ecm_stage2::sha256_file(fs::path(o.stage1_profile));
+    }
+    t::AutoRequest request{r.b1,o.auto_min,o.auto_max,stage1_seconds,o.ratio_adjust};
     const auto candidates=t::auto_candidates(matching_tune_samples(profile,o,r),t::predicts_b2(profile),request);
     size_t rejected=0;
     for(const auto &candidate:candidates) {
@@ -964,7 +989,8 @@ std::string select_auto_tuned(Options &o,const Record &r) {
             <<",\"model\":"<<json_string(prediction.samples?t::b2_prediction_model:"measured_exact_scope_v1")
             <<",\"B2\":"<<candidate.b2<<",\"D\":"<<d<<",\"carrier_exponent\":"<<carrier
             <<",\"P\":"<<plan_scalar(plan,"P")<<",\"I\":"<<plan_scalar(plan,"I")<<",\"G\":"<<plan_scalar(plan,"G")
-            <<",\"T1\":"<<o.stage1_seconds<<",\"T1_source\":\"provided_per_curve\",\"stage1_batch\":"<<o.stage1_batch
+            <<",\"T1\":"<<stage1_seconds<<",\"T1_source\":"<<json_string(stage1_hash.empty()?"provided_per_curve":"measured_stage1_profile")
+            <<",\"stage1_batch\":"<<o.stage1_batch<<",\"stage1_exponent\":"<<json_string(o.stage1_exponent)
             <<",\"ratio_adjust\":"<<o.ratio_adjust<<",\"T2\":"<<o.ratio_adjust*candidate.seconds
             <<",\"engine_seconds\":"<<candidate.seconds<<",\"guarded_engine_seconds\":"<<candidate.guarded_seconds
             <<",\"K\":"<<candidate.benefit<<",\"score\":"<<candidate.score<<",\"mad_seconds\":"<<candidate.mad_seconds
@@ -972,6 +998,7 @@ std::string select_auto_tuned(Options &o,const Record &r) {
             <<",\"range_limited\":"<<(candidate.limited?"true":"false")<<",\"candidate_count\":"<<candidates.size()
             <<",\"memory_rejected\":"<<rejected<<",\"required_free_bytes\":"<<plan_scalar(memory,"required_free_bytes")
             <<",\"free_bytes\":"<<plan_scalar(plan,"free_bytes")<<",\"residency_guaranteed\":false,\"process_peak_guaranteed\":false";
+        if(!stage1_hash.empty())out<<",\"stage1_profile_sha256\":"<<json_string(stage1_hash);
         if(prediction.samples)out<<",\"fit_samples\":"<<prediction.samples<<",\"fit_max_relative_error\":"<<prediction.max_relative_error
             <<",\"fit_max_error_seconds\":"<<prediction.error_seconds;
         out<<'}';return out.str();
@@ -1125,6 +1152,14 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
 int driver(Options o) {
     if (o.help) { help(); return 0; }
     if (o.child) return curve_worker(o);
+    if(!o.check_stage1_profile.empty()) {
+        if(!o.save.empty() || !o.worktodo.empty() || !o.tune.empty() || o.auto_b2 || o.plan_only || o.dry ||
+           o.b2 || o.has_carrier || !o.tune_profile.empty() || !o.stage1_profile.empty())
+            throw std::runtime_error("Stage1 profile validation is independent of curve/queue options");
+        const auto p=ecm_stage2::tune::Stage1Profile::load(absolute_from(fs::current_path(),o.check_stage1_profile));
+        std::cout<<"{\"type\":\"stage1_profile_checked\",\"samples\":"<<p.samples.size()<<",\"valid\":true}"<<std::endl;
+        return 0;
+    }
     if(o.tune_child)throw std::runtime_error("ecm-tune-worker requires the internal curve-worker mode");
     if(o.auto_b2&&o.b2)throw std::runtime_error("explicit --auto-b2 conflicts with nonzero --b2");
     if(o.cost_device_info) {
@@ -1163,6 +1198,7 @@ int driver(Options o) {
     if(o.owner_mb>ecm_config::limits::stage2_stage2_fold_mb_maximum)throw std::runtime_error("invalid owner budget");
     if(!o.has_stage1_batch)o.stage1_batch=s.stage1_batch;
     if(!o.has_stage1_seconds)o.stage1_seconds=s.stage1_seconds;
+    if(!o.has_stage1_exponent)o.stage1_exponent=cfg.exponent=="choose12"?"choose12":"lcm";
     if(!o.has_ratio)o.ratio_adjust=s.ratio_adjust;
     if(!o.has_gp && !s.gp.empty())o.gp=s.gp;
     if(!o.has_factor_timeout)o.factor_timeout=static_cast<unsigned>(s.factor_timeout);
@@ -1171,6 +1207,8 @@ int driver(Options o) {
     else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
     if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
     else if(!s.tune_profile.empty())o.tune_profile=absolute_from(base,s.tune_profile).string();
+    if(!o.stage1_profile.empty())o.stage1_profile=absolute_from(cwd,o.stage1_profile).string();
+    else if(!s.stage1_profile.empty())o.stage1_profile=absolute_from(base,s.stage1_profile).string();
     const fs::path worktodo = o.worktodo.empty() ? absolute_from(base, s.worktodo) : absolute_from(cwd, o.worktodo);
     const fs::path finished = absolute_from(base, s.finished);
     const fs::path tmp = absolute_from(base, s.save_dir.empty()?cfg.tmp_dir:s.save_dir);
@@ -1215,7 +1253,8 @@ int driver(Options o) {
         if (same_path(executable()) || same_path(ini) || same_path(worktodo) || same_path(finished) ||
             same_path(results) || same_path(progress) || (!log.empty() && same_path(log)) ||
             (!o.debug_file.empty() && same_path(fs::path(o.debug_file))) || (!o.tune_save.empty() && same_path(absolute_from(cwd,o.tune_save))) ||
-            (o.tune!="ecm" && !o.tune_profile.empty() && same_path(fs::path(o.tune_profile))))
+            (o.tune!="ecm" && !o.tune_profile.empty() && same_path(fs::path(o.tune_profile))) ||
+            (!o.stage1_profile.empty() && same_path(fs::path(o.stage1_profile))))
             throw std::runtime_error("tune-file must differ from executable, config, queue and result files");
         if(o.tune=="ecm") {
             if(!toml)throw std::runtime_error("ECM tune requires a .toml profile");
@@ -1282,6 +1321,7 @@ int driver(Options o) {
     const std::vector<fs::path> writable={worktodo,finished,results,log,progress,fs::path(o.debug_file)};
     for(size_t i=0;i<writable.size();++i) {
         if(!o.tune_profile.empty() && same_path(writable[i],fs::path(o.tune_profile)))throw std::runtime_error("output path conflicts with measured tune profile");
+        if(!o.stage1_profile.empty() && same_path(writable[i],fs::path(o.stage1_profile)))throw std::runtime_error("output path conflicts with Stage1 tune profile");
         if(same_path(writable[i],ini)||same_path(writable[i],executable()))throw std::runtime_error("output path conflicts with configuration or executable");
         for(size_t j=0;j<i;++j)if(same_path(writable[i],writable[j]))throw std::runtime_error("queue, finished, progress, result and log paths must be distinct");
     }
@@ -1360,6 +1400,10 @@ int driver(Options o) {
             if(o.carrier_exponent)identity << " carrier_exponent=" << o.carrier_exponent;
             if(o.has_carrier)identity << " carrier_request=" << o.carrier_exponent;
             if(o.auto_b2&&!b2)identity << ' ' << ecm_stage2::sha256_file(o.tune_profile.empty()?o.cost_profile:o.tune_profile) << ' ' << o.auto_min << ' ' << o.auto_max;
+            if(o.auto_b2&&!b2) {
+                identity << " stage1_exponent=" << o.stage1_exponent;
+                if(!o.stage1_profile.empty() && !(o.stage1_seconds>0))identity << " stage1_profile=" << ecm_stage2::sha256_file(o.stage1_profile);
+            }
             const auto key=identity.str();
             if(state.load(progress)) {
                 if(state.identity!=key) {

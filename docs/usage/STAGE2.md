@@ -74,7 +74,9 @@ Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目
 
 生产运行用`--tune-profile FILE.toml`或`stage2_tune_profile`加载性能数据。固定B2时自动选已测D和合法承载，实测点优先；声明模型且同组数据通过资格检查时，可估计已测B2区间内部的成本。显式非零D固定D；`--carrier-exponent 0`固定普通模数，显式非零p固定承载。无合格成本时保留现有选型并给出原因；不会仅凭save来自梅森数自动启用承载。
 
-任务最终B2=0时，可同时启用`--auto-b2`并提供正的`--stage1-seconds-per-curve`，联合选择B2、D与承载。INI对应`stage2_auto_b2=1`、`stage2_tune_profile`和`stage1_seconds_per_curve`。Stage1成本应为真实批次已摊销的每曲线时间，不会再除以`stage1_batch`。`--auto-min-b2`/`--auto-max-b2`只能缩小已测范围。完整tune优先于旧`stage2_cost_profile`；缺少成本、策略不符或没有满足当前显存的候选会明确失败并保留未完成队列。每条worker重新规划，plan-only不消费任务。完整适用范围、成本口径和边界见[Auto B2/tune](../architecture/AUTO_B2.md)。
+任务最终B2=0时，可同时启用`--auto-b2`，联合选择B2、D与承载。Stage1成本优先使用正的`--stage1-seconds-per-curve`；未提供时，可用`--stage1-tune-profile FILE.toml`与`--stage1-batch C`查询完整批次实测。INI对应`stage2_auto_b2=1`、`stage2_tune_profile`、`stage1_seconds_per_curve`或`stage1_tune_profile`。成本已按每曲线摊销，不会再除以`stage1_batch`。Stage1实测的指数模式默认匹配共用INI的`exponent`，可用`--stage1-exponent`覆盖成本条件。
+
+`--auto-min-b2`/`--auto-max-b2`只能缩小已测范围。完整tune优先于旧`stage2_cost_profile`；缺少成本、策略不符或没有满足当前显存的候选会明确失败并保留未完成队列。每条worker重新规划，plan-only不消费任务。Stage1成本预计算脚本、完整适用范围、成本口径和边界见[Auto B2/tune](../architecture/AUTO_B2.md)。
 
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp#L175)：`records`；[队列字段](../../src/core/ecm_cuda_stage2_main.cpp#L395)：`queue_fields`。
 - [ecm_stage2_queue_state.h](../../src/core/ecm_stage2_queue_state.h)：原子进度和回执对账。

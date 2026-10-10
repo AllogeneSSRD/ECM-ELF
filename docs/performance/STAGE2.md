@@ -296,7 +296,33 @@ M521的Stage1成本输入T1=0.01、3、100秒时，分别选择B2=2600000000、1
 
 同时检查CLI/INI、显式D与普通/承载锁定、上下限、缺少T1、区间外、策略不符、旧未标记模型、显存拒绝，以及完整tune优先于旧cost profile。plan-only不消费队列，两条曲线完成后重启不重复结果；联合选择不再被第二次D/承载选择改写。CPU原生Auto候选8项接受/12项拒绝；合成模型与20001点独立密集搜索的score比为0.9999954，该比值仅适用于这组合成模型。
 
-显式B2路径的三条完整回归曲线仍通过8%预定门限，最大误差2.048%。本轮含收集器失败后保留的已完成曲线共15条，原始日志核对mandatory/GMP坏计数均0；失败证据未删除。原始结果在`data/experiments/ecm_tune_auto_20261010/`的`runtime_final/result.json`、`runtime_final/frozen_verifier.py`、`explicit_b2_runtime_regression/result.json`、`auto_native_final/result.json`、`final_raw_audit.json`和`source_audit.json`。冻结二进制/源在`build_cuda_cmake/ecm_tune_auto_final_20261010/`。生产B1/预算扩展、真实Stage1预计算、驱动成本与独立收益排名仍见[TODO](../TODO.md)。
+显式B2路径的三条完整回归曲线仍通过8%预定门限，最大误差2.048%。本轮含收集器失败后保留的已完成曲线共15条，原始日志核对mandatory/GMP坏计数均0；失败证据未删除。原始结果在`data/experiments/ecm_tune_auto_20261010/`的`runtime_final/result.json`、`runtime_final/frozen_verifier.py`、`explicit_b2_runtime_regression/result.json`、`auto_native_final/result.json`、`final_raw_audit.json`和`source_audit.json`。冻结二进制/源在`build_cuda_cmake/ecm_tune_auto_final_20261010/`。完整Stage1成本接口见下节；生产B1/预算扩展、驱动成本与独立收益排名仍见[TODO](../TODO.md)。
+
+## 完整Stage1成本与Auto B2联动验证
+
+Stage1测量使用已部署的`ecm_cuda.exe`，SHA256=`5ff1f58a3a072fb37b7ef6e35d3ac2de5488304d6acc5d4f32b6555cb2c96e6e`；本批未重编译Stage1，不能据此宣称该二进制对应当前Stage1源码。Stage2测量与初轮接口验收使用SHA256=`440950b99fddc7e3d315fbf6fa4745b6b85affd25e23a75acb7a4bd3629a5807`，sm89/CUDA13.3、56项编译依赖冻结。GPU1为同一RTX4060 Laptop UUID，用户1800MHz/默认55W上限设置；没有修改设置或扰动忙碌GPU0。短测量无连续遥测，不声明实际频率或功耗恒定。
+
+Stage1采用CGBN ladder、Suyama PARAM0、自动TPI、关闭指数缓存与checkpoint，每scope独立进程预热1次、正式3次。T1为完整进程墙钟除以批次曲线数，包含启动、指数/点准备、运算、归一化和save写入；独立CPU末点验证不计入。单个batch的全部sigma从26起连续编号，逐条核对N/B1/PARAM/X/Z/checksum。已完成20个批次、104条曲线：
+
+- M521、B1=20、lcm：batch1的T1中位数0.230377 s/curve、MAD0.007960；batch8为0.030480、MAD0.001109。GPU部分中位数分别0.014149和0.001813 s/curve；container768/TPI8。
+- M521、B1=20、choose12：batch1为0.232075、MAD0.000842；batch8为0.031117、MAD0.000505 s/curve。GPU部分分别0.014308和0.001852 s/curve；container768/TPI8。
+- M4423、B1=1000、lcm、batch8：T1为0.053674、MAD0.000765 s/curve；GPU部分0.024824 s/curve，container4608/TPI16。
+
+短B1中进程启动和准备占比很大，不能将这些每曲线成本外推B1=10e6…260e6。生产查询按设备/运行时、目标位宽/类型、B1、批次和指数模式精确匹配；已提供的正T1优先，不再除以`stage1_batch`。读取成本条件不改变save中的Stage1点。
+
+M4423的有效B1=1000保存点另执行完整Stage2 tune：D60060/120120，B2=2.6e9、3.676955262e9、5.2e9、7.353910524e9、10.4e9，每scope预热1次、正式3次，共40条曲线。全部无因子、bad0、fold/frontier驻留；Stage2计时仍为引擎`total`，不含Stage1、进程启动、规划或发布。
+
+D60060的五个中位数为1.443278、1.630959、1.990434、2.561833、3.198121秒；D120120为2.873130、3.441712、2.041787、2.281035、2.598052秒。较大D在低B2下出现明显非单调耗时，不是通用更快。D60060通过原生线性I模型资格，最大留一误差3.530%；D120120不通过，只保留精确实测点，未放宽8%门限或删除样本。
+
+使用实际Stage1成本0.053674 s/curve及上述完整Stage2 profile，Auto B2从326个候选选择B2=2.6e9、D60060、普通模数，标记范围下限平台；1条完整生产曲线估计1.443278秒、实测1.430161秒，误差0.917%。它验证两份实测配置贯通生产选择与执行，不证明范围外最佳B2或独立总流程收益排名。
+
+证据：`data/experiments/ecm_stage1_tune_20261010/`的`lcm_verified/`、`choose12_verified/`、`m4423_b1000/`、三份Stage1 TOML、`ecm_4423_b1000.toml`、`coupled_4423/result.json`、`completed_stage_audit.json`。调优40条原始回执/日志在`data/experiments/ecm_tune_36448_21825781/`。Stage1生产接口验证另完成3条Stage2曲线，CLI/INI、choose12条件、已提供T1优先、私有队列自动续跑与错误scope拒绝通过；手工T1回归另4条完整曲线。超时测试确认未完成样本不发布且旧性能文件保持不变。原始失败样本、验证器与匹配其摘要的测量源均保留。
+
+最终驱动SHA256=`231cd6b22725caf1f17d111d0f89120df2f82e78e24cfb1e0b02c0a7457ee224`，补齐离线检查帮助与T1来源诊断，HostOnly构建23.1秒、CUDA对象未变。Stage1接口再次通过4组选择、15次调用和3条完整曲线；M4423成本联动另1条曲线实测1.415360秒，误差1.972%。二进制与56项源码依据在`build_cuda_cmake/ecm_stage1_cost_final_20261010/`，运行证据`runtime_final/`及`coupled_4423_final/`。
+
+最终驱动的M521/B1=20、未测B2=5.2e9性能检查曾出现单次预测0.313360/实测0.355000秒，误差11.729%，超过预定8%；原始失败保留在`provided_runtime_final/`，不计为通过。随后固定同一save、B2/D/算术/预算，两版各预热1次，再交错正式3次，前版中位数0.314233秒，最终版0.318855秒（+1.471%）；六条正式曲线均在8%以内。该对照未复现持续11.7%的版本差异，不能确定初次超限的具体原因，也不能将单次短曲线误差当作确定性能退化或保证将来不再超限。全部8条对照算术bad0，原始样本和采样在`final_drift_probe/`。
+
+对照之后的完整手工T1回归通过11组选择、11组拒绝和4条完整曲线，最大时间误差3.643%，证据`provided_runtime_after_probe/result.json`；并未改profile、模型或门限。`final_stage_audit.json`核对本批65条Stage2完整曲线（含失败性能检查、预热及前后驱动复验）的mandatory/GMP坏计数均0、无因子；性能超限与算术正确性分别报告，不用总曲线数掩盖该次失败。
 
 ## B2 和位宽关系
 

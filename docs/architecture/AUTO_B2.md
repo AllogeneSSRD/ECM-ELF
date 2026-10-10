@@ -4,7 +4,7 @@
 
 Auto B2 优化连续生成/处理曲线的单位时间收益，计入 Stage1 成本，即使本次读取 save。它不是有限已有 save 的每条 Stage2 时限选择器，也不是强制某个 T2/T1 比值。
 
-当前有两种成本来源：完整ECM tune TOML，以及独立标定的旧组件成本 `.cprof`。完整ECM tune可联合选择B2、D和合法梅森承载，要求提供正的Stage1每曲线成本并匹配实测适用范围；没有数据的范围不自动外推。旧组件成本路径保留其二进制/算术与标定资格检查，当前生产组合没有新的合格 `.cprof`。
+当前有两种Stage2成本来源：完整ECM tune TOML，以及独立标定的旧组件成本 `.cprof`。完整ECM tune可联合选择B2、D和合法梅森承载，要求提供正的Stage1每曲线成本，或加载匹配的完整Stage1实测；没有数据的范围不自动外推。旧组件成本路径保留其二进制/算术与标定资格检查，当前生产组合没有新的合格 `.cprof`。
 
 ## 原生接口
 
@@ -14,9 +14,9 @@ Auto B2 优化连续生成/处理曲线的单位时间收益，计入 Stage1 成
 
 `--auto-min-b2`/`--auto-max-b2`只缩小已测范围，非零`--d`锁定D，显式`--carrier-exponent`（包括0）锁定算术。`--arena-mb`/`--owner-budget-mb`选择匹配预算，`--stage2-ratio-adjust`给Stage2成本乘正系数R。
 
-完整tune要求有限正的`stage1_seconds_per_curve`，该值应是目标设备、位宽、B1和批次下已经摊销的每曲线Stage1成本；`stage1_batch`不会再将它除一次。该输入不是本次save读取耗时，也不是tune生成B1=20点的准备耗时。当前不自动测量或推导生产Stage1成本。旧组件模型的`stage1_batch`仍选择其已测摊销范围。
+有限正的`stage1_seconds_per_curve`优先，该值应是目标设备、位宽、B1和批次下已经摊销的每曲线Stage1成本；`stage1_batch`不会再将它除一次。未提供时可用`--stage1-tune-profile FILE.toml`或INI的`stage1_tune_profile`查询实测中位数。两者都没有则拒绝选择。T1不是本次save读取耗时，也不是Stage2 tune生成B1=20点的准备耗时。旧组件模型仍使用其自身已测摊销范围，不借用独立Stage1文件。
 
-每个curve worker按当前free VRAM重新选择，成功结果保留真实B2/D/承载、原始请求及规划时长；规划/执行失败保留未完成队列。完整tune Auto B2结果用`auto_plan`记录联合选择，不再执行第二次D/算术选择以改变已排名的组合。plan-only输出联合选择与实际形状，不推进队列。
+每个curve worker按当前free VRAM重新选择，成功结果保留真实B2/D/承载、原始请求及规划时长；规划/执行失败保留未完成队列。完整tune Auto B2结果用`auto_plan`记录联合选择，`T1_source`区分显式成本与Stage1实测，不再执行第二次D/算术选择以改变已排名的组合。未完成队列的身份包含有效Stage1实测文件摘要和指数模式，改变成本后不能静默复用原进度。plan-only输出联合选择与实际形状，不推进队列。
 
 ## 收益和成本
 
@@ -45,6 +45,20 @@ a=1.96617−0.06781·log₁₀B1；K=0.11343+0.88657·(log₁₀(B2/B1)/2)ᵃ。
 reader限制1 MiB，拒绝旧格式、缺失END、重复键、非法整数、非有限/负率、未覆盖路径及身份不符。旧组件Auto B2限制已测精确梅森模数和≤8192 bits；余因子/梅森承载、高B1、choose12、其他设备不自动外推。当前canonical等算术变化的保护会拒绝没有相应校准的组合。
 
 组件准入不能保证进程峰，输出 `process_peak_guaranteed=false`。当前全流程显存模型边界见 [内存](MEMORY.md)。
+
+## 完整Stage1成本预计算
+
+[tune_stage1_cost.py](../../tools/bench/tune_stage1_cost.py)运行完整CUDA Stage1批次，保存可复用的每曲线T1。必填参数为`--stage1 <exe>`、`--stage2 <exe>`、`--device <id>`、`--output <新证据目录>`和`--profile <输出.toml>`；原始输出置于`data/experiments/`。Stage2可执行文件只提供设备查询和原生文件检查，不参与Stage1计时。`--check-stage1-tune-profile <file>`离线校验格式、完成状态和全部样本，不查询GPU。
+
+当前测量路径固定CUDA/CGBN ladder、Suyama PARAM0、自动TPI、关闭指数缓存和checkpoint；`--exponent [lcm|choose12]`显式选择标量。输入来自与完整Stage2 tune相同的13个已知梅森素数目录。CPU独立生成每个sigma的末点，测量后逐条验证实际N、B1、PARAM、sigma、X、Z与checksum；不能用checkpoint、部分运行速度投影、因子曲线或缺失末点发布成功文件。
+
+`--tune-level <1..10>`默认1：位宽目录取前min(13,ℓ+3)项；B1目录依次为20、1000、10000、100000、1000000、10000000、26000000、100000000、260000000，取前min(9,ℓ)项；批次目录1、8、64、256，取前min(4,1+⌊(ℓ−1)/3⌋)项；每组合一次独立进程预热，正式重复2ℓ+1次。`--exponents <p...>`、`--b1 <B1...>`、`--batch <C...>`、`--repeats <n>`覆盖网格。最高默认468个范围、每范围21次正式重复，CPU独立点验证也可能很耗时。`--timeout <秒>`默认3600，只限制每个Stage1子进程，不承诺整轮时间上限。
+
+T1样本=完整Stage1进程墙钟/C，包含进程启动、指数/曲线准备、GPU运算、归一化与save写入；不含CPU独立验证及预热。GPU秒数另存，不作为默认T1。短B1的成本可能主要由启动/准备构成，因此不把短基准外推生产B1。Stage1和Stage2两个成本口径并不包含完全相同的进程开销；完整总流程还需单独核对Stage2驱动成本。
+
+格式1使用`[profile]`、`[device]`、`[policy]`、`[stage1.sample_<n>]`和`[summary]`，每范围保存重复时间、中位数、MAD、批次及指数模式，性能文件不含路径或二进制身份。发布前由原生reader核对所有范围和统计，再原子替换；失败保留原文件和证据。原生reader限16 MiB/4096范围，拒绝未完成、重复范围、未核验、非有限/负成本和不支持的策略。
+
+运行查找精确匹配GPU UUID/SM、CUDA runtime/driver、目标位宽/类型、B1、`stage1_batch`及指数模式，不外推。指数模式默认读取共用INI的`exponent`，可用`--stage1-exponent [lcm|choose12]`覆盖该成本条件；它不重新计算save的Stage1点。当前脚本只发布已知完整梅森数成本，不据此匹配余因子或其他Stage1算法。文件不配置或启动生产Stage1，也不能验证将来所用Stage1构建具有同样速度；改变内核、频率、功耗、批量或缓存策略后应重新测量或提供实际成本。
 
 ## NTT tune
 
@@ -121,6 +135,7 @@ GPU频率、功耗和背景负载属于测量条件，应在相同设置下调�
 - [ecm_stage2_tune_ecm.h](../../src/core/ecm_stage2_tune_ecm.h)：完整Stage2等级、素数点准备、统计及TOML reader。
 - [ecm_stage2_tune_prediction.h](../../src/core/ecm_stage2_tune_prediction.h)：B2分组、非负成本拟合及留一资格检查。
 - [ecm_stage2_tune_auto.h](../../src/core/ecm_stage2_tune_auto.h)：完整tune的Auto B2候选与收益排名。
+- [ecm_stage1_tune_profile.h](../../src/core/ecm_stage1_tune_profile.h)：完整Stage1成本reader及精确范围查询。
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：`run_ecm_tune`、`select_tuned`、`select_auto_tuned`和`curve_worker`。
 - [驱动资格检查](../../src/core/ecm_cuda_stage2_main.cpp#L617)、[收益公式](../../src/core/ecm_stage2_cost_profile.h#L185)。
 - [measure_ecm_costs.py](../../tools/bench/measure_ecm_costs.py)、[fit_ecm_costs.py](../../tools/bench/fit_ecm_costs.py)、[validate_ecm_costs.py](../../tools/bench/validate_ecm_costs.py)、[audit_ecm_costs.py](../../tools/bench/audit_ecm_costs.py)、[export_ecm_cost_profile.py](../../tools/bench/export_ecm_cost_profile.py)。

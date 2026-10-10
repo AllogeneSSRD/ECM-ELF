@@ -656,7 +656,7 @@ stage2_auto_b2=[0|1]; default=0
 
 Choose B2 when every source supplies zero. 1 optimizes total workflow benefit per unit time,<br>
 including Stage1 cost; 0 disables. Full ECM tune requires matching device/width/B1/memory policy and<br>
-a positive Stage1 seconds-per-curve input. It jointly selects measured or qualified in-range B2, D<br>
+a provided or matched measured Stage1 cost. It jointly selects measured or qualified in-range B2, D<br>
 and legal carrier. Without full ECM tune, the legacy cost profile must pass its calibration checks.<br>
 This switch does not calibrate costs.<br>
 所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。完整 ECM tune 要<br>
@@ -706,14 +706,30 @@ stage2_tune_profile=<path>; default=""; empty=legacy_selection
 
 Full ECM tune TOML for D and legal Mersenne carrier selection. Matches device/backend/memory<br>
 policy/target width/B1. Uses exact B2 measurements or qualified predictions inside measured bounds;<br>
-no width/B1/D extrapolation. With stage2_auto_b2 and positive stage1_seconds_per_curve, jointly<br>
-chooses B2/D/carrier and takes priority over stage2_cost_profile. Explicit nonzero D fixes D;<br>
---carrier-exponent including 0 fixes arithmetic. Saved N must divide the carrier. Empty keeps<br>
+no width/B1/D extrapolation. With stage2_auto_b2 and a provided or matched measured Stage1 cost,<br>
+jointly chooses B2/D/carrier and takes priority over stage2_cost_profile. Explicit nonzero D fixes<br>
+D; --carrier-exponent including 0 fixes arithmetic. Saved N must divide the carrier. Empty keeps<br>
 existing selection.<br>
 用于 D 和合法梅森承载选择的完整 ECM tune TOML。匹配设备、后端、显存策略、目标位宽和 B1；使用精确 B2<br>
-实测或合格实测区间预测，不外推位宽、B1 或 D。启用 stage2_auto_b2 并提供正的 stage1_seconds_per_curve<br>
-后，联合选择 B2、D、承载，优先于 stage2_cost_profile。显式非零 D 固定 D；--carrier-exponent（包括 0<br>
-）固定算术。save 的 N 必须整除承载。留空保持已有选型。
+实测或合格实测区间预测，不外推位宽、B1 或 D。启用 stage2_auto_b2 并提供或匹配实测的 Stage1 成本后，<br>
+联合选择 B2、D、承载，优先于 stage2_cost_profile。显式非零 D 固定 D；--carrier-exponent（包括 0）固<br>
+定算术。save 的 N 必须整除承载。留空保持已有选型。
+
+### stage1_tune_profile
+
+```text
+stage1_tune_profile=<path>; default=""; empty=disabled
+```
+
+Completed CUDA Stage1 batch measurements for full ECM tune Auto B2. Used only when<br>
+stage1_seconds_per_curve is unset. Matches GPU/runtime, target width/type, B1, stage1_batch and<br>
+exponent (or --stage1-exponent). Costs are already per curve and include process/prepare/save time.<br>
+Ladder PARAM0, automatic TPI, exponent cache off only. Empty requires a provided cost. This file<br>
+does not configure or start Stage1.<br>
+为完整 ECM tune Auto B2 提供已完成 CUDA Stage1 批次成本；仅在未指定 stage1_seconds_per_curve 时使用<br>
+。匹配 GPU/运行时、目标位宽/类型、B1、stage1_batch 和 exponent（或 --stage1-exponent）。成本已按每曲<br>
+线摊销，包含进程、准备和存档时间。当前限 ladder PARAM0、自动 TPI、关闭指数缓存。留空需提供成本；此文<br>
+件不配置或启动 Stage1。
 
 ### stage2_auto_min_b2
 
@@ -755,14 +771,13 @@ conditions; it neither starts a Stage1 batch from Stage2 nor changes the assignm
 stage1_seconds_per_curve=<x:R,finite,x>0>; default=@profile; unit=s/curve
 ```
 
-Positive Stage1 amortized seconds per curve for Auto B2, including its actual batch benefit; do not<br>
-divide by stage1_batch again. Required by full ECM tune. Zero/unset may use matched Stage1 data only<br>
-in a qualified legacy .cprof. Stage1 cost is included even for existing saves. It is a cost input,<br>
-not a runtime limit; full ECM tune does not measure Stage1 preparation or process overhead as this<br>
-value.<br>
-Auto B2 的正 Stage1 每曲线摊销秒数，应已包含实际批次收益，不再除以 stage1_batch。完整 ECM tune 必须<br>
-提供此值；零或未设置时，仅合格旧 .cprof 可读取匹配的 Stage1 数据。即使读取已有 save 仍计入 Stage1 成<br>
-本。此值是成本输入，不是运行时限；不能用完整 ECM tune 的基准点准备或进程开销代替。
+Positive Stage1 seconds per curve for Auto B2, already amortized for the actual batch. Does not<br>
+divide by stage1_batch again. Overrides Stage1 tune measurements. When unset, full ECM tune requires<br>
+a matching stage1_tune_profile; the legacy component profile uses its own matched Stage1 data. Not a<br>
+runtime limit or the tune input preparation time.<br>
+为 Auto B2 提供正的 Stage1 每曲线摊销秒数，应已包含实际批次收益，不再除以 stage1_batch。优先于<br>
+Stage1 tune 实测。未指定时，完整 ECM tune 需匹配 stage1_tune_profile；旧组件 profile 使用其自身匹配<br>
+的 Stage1 数据。此值不是本次运行时限，也不是调优输入的准备耗时。
 
 ### stage2_ratio_adjust
 
