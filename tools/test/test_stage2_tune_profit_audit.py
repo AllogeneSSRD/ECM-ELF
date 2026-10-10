@@ -6,7 +6,7 @@ live in explicitly labelled synthetic fixtures under a new ignored directory.
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import sys
 
@@ -48,6 +48,35 @@ def main():
             processes[0]['modules'][0]['sha256'] = '0' * 64
         change_json(folder, 'loaded_modules.json', mutate)
 
+    schemas = []
+    for schema in ('named', 'path_only'):
+        folder = out / ('valid_modules_' + schema)
+        shutil.copytree(evidence, folder)
+        def module_schema(value):
+            for process in ([value] if isinstance(value, dict) else value):
+                for module in process['modules']:
+                    if schema == 'named':
+                        module['name'] = PureWindowsPath(module['path']).name
+                    else:
+                        module.pop('name', None)
+        change_json(folder, 'loaded_modules.json', module_schema)
+        assert audit(folder, True)['counts'] == positive['counts']
+        schemas.append(schema)
+
+    def bad_module_field(folder, issue):
+        def mutate(value):
+            process = ([value] if isinstance(value, dict) else value)[0]
+            module = process['modules'][0]
+            if issue == 'missing_identity':
+                module.pop('name', None);module.pop('path', None)
+            elif issue == 'duplicate':
+                process['modules'].append(dict(module))
+            elif issue == 'name_path_mismatch':
+                module['name'] = 'gmp-10.dll'
+            elif issue == 'missing_gmp':
+                process['modules'] = [module]
+        change_json(folder, 'loaded_modules.json', mutate)
+
     def change_frozen(folder):
         original, expected = next(iter(report['source_identities'].items()))
         path = folder / 'inputs' / expected / Path(original).name
@@ -68,6 +97,10 @@ def main():
         'wrong_receipt_target': lambda f: change_json(f, stem + '.jsonl', lambda r: r.update(N_hex='7')),
         'arithmetic_bad': change_check,
         'wrong_loaded_module': change_modules,
+        'module_missing_identity': lambda f: bad_module_field(f, 'missing_identity'),
+        'module_duplicate': lambda f: bad_module_field(f, 'duplicate'),
+        'module_name_path_mismatch': lambda f: bad_module_field(f, 'name_path_mismatch'),
+        'module_missing_gmp': lambda f: bad_module_field(f, 'missing_gmp'),
         'changed_frozen_source': change_frozen,
         'wrong_nvml_uuid': change_nvml,
     }
@@ -87,6 +120,7 @@ def main():
                for name, expected in originals.items())
     result = dict(complete=True, audit_curves=positive['counts']['curves'],
                   rejected_synthetic_fixtures=rejected, extra_gpu_curves=0,
+                  module_schemas=schemas,
                   original_evidence_unchanged=True)
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result))

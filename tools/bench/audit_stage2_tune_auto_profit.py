@@ -9,7 +9,7 @@ import csv
 import hashlib
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import statistics
 import tomllib
@@ -27,6 +27,31 @@ def finite_positive(value):
 
 def benefit(b1, b2):
     return .11343 + .88657 * (math.log10(b2 / b1) / 2) ** (1.96617 - .06781 * math.log10(b1))
+
+
+def module_hashes(modules):
+    """Accept named or full-path captures without losing module identity checks."""
+    assert isinstance(modules, list) and modules, 'missing actual module records'
+    actual = {}
+    for module in modules:
+        assert isinstance(module, dict), 'invalid actual module record'
+        name, path = module.get('name'), module.get('path')
+        if path is not None:
+            assert isinstance(path, str) and path, 'invalid actual module path'
+            basename = PureWindowsPath(path).name
+            if name is None:
+                name = basename
+            else:
+                assert isinstance(name, str) and name.lower() == basename.lower(), 'module name/path mismatch'
+        assert isinstance(name, str) and name, 'module has neither name nor path'
+        name = name.lower()
+        assert name in ('ecm_cuda_stage2.exe', 'gmp-10.dll'), 'unexpected actual module'
+        assert name not in actual, 'duplicate actual module'
+        digest = module.get('sha256')
+        assert isinstance(digest, str) and re.fullmatch(r'[0-9a-fA-F]{64}', digest), 'invalid module SHA256'
+        actual[name] = digest.lower()
+    assert set(actual) == {'ecm_cuda_stage2.exe', 'gmp-10.dll'}, 'incomplete actual modules'
+    return actual
 
 
 def audit(evidence, require_current):
@@ -100,7 +125,7 @@ def audit(evidence, require_current):
         modules = [modules]
     assert modules
     for process in modules:
-        actual = {m['name']: m['sha256'] for m in process['modules']}
+        actual = module_hashes(process['modules'])
         assert actual['ecm_cuda_stage2.exe'] == exe_hash and actual['gmp-10.dll'] in dll_hashes
 
     scores, errors, selected, devices = [], [], [], set()
