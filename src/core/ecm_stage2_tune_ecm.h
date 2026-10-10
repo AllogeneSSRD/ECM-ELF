@@ -27,7 +27,9 @@ inline EcmEffort ecm_effort(int level) {
     e.exponents.assign(primes,primes+std::min(13,level+3));
     e.d.assign(ds,ds+level+2+(level>=7?2:0));
     const int intervals=(level-1)/2;
-    const int subdivisions=level<3?1:level<5?2:4;
+    // Keep low-I support at intermediate effort, too. A mixed route fit with
+    // only the two endpoints and midpoint can reject the lowest chain anchor.
+    const int subdivisions=level<3?1:4;
     e.b2.push_back(bounds[0]);
     for(int interval=0;interval<intervals;++interval) {
         for(int step=1;step<subdivisions;++step) {

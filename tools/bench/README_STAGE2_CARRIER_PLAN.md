@@ -70,6 +70,10 @@ S4 三个组件边界和 peak 不包含 NTT、giant、fold/frontier；giant 模�
 
 `test_stage2_tune_tail_runtime.py --exe <生产exe> --save <save> --device <id> --output <新目录>`运行完整tune，默认等级3、D60060/120120、重复3次；`--carrier <p>`加入合法承载对照。`--level <3..10>`、`--ds <D,...>`、`--b2 <B2,...>`、`--tail-samples <0..16>`、`--max-batches <n>`覆盖范围。显式B2默认关闭补样，尾点数量另行开启。工具核对CLI拒绝、计划/回执/性能样本对应及分块来源；独立时间/排名验收另用`validate_stage2_tune_selection.py`，其8%/5%门限不变。保存点应事先独立验证；发现因子或算术问题立即保留失败证据。
 
+`analyze_stage2_tune_sampling.py --profile <完整tune.toml> [更多文件] --b2 <查询B2...> --output <新目录>`只做CPU采样诊断：保留全部锚点，按组比较现行四特征模型和探索性chain分块特征的非负拟合、留一误差及逐点残差。查询结果来自独立NumPy参考，报告不是独立GPU时间/排名验收，也不会改写性能配置或生产模型。路径与输入哈希只写入忽略目录中的诊断JSON。探索性特征可能加重过拟合，不能按训练残差更小直接启用。
+
+`test_stage2_tune_sampling.py --fixture <fixture.exe> --profile <完整tune.toml> [更多文件] --b2 <查询B2...> --output <新目录>`将上述查询逐组与原生预测比较，并检查路线错配、无效时间、重复I及错误计时单位拒绝。这是CPU参考一致性检查，不执行曲线。
+
 运行前冻结 exe、DLL、source closure、save、工具与 controls。CPU ledger、native plan、短/大 GPU算术和性能是不同范围，失败必须如实保留。重新构建/修改源码后不能把当前文件哈希冒充旧二进制来源。
 
 已完成事件/路由证据在 `data/stage2_ntt_events_20261009/` 与 `data/stage2_s4_program_20261009/`。它们属于组件规划门禁，没有新增大规模速度结论。完整联合执行器、driver free、回退和 D/Auto B2接入见 [TODO](../../docs/TODO.md)。
