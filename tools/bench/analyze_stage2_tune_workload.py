@@ -14,6 +14,8 @@ import statistics
 import tomllib
 
 PHASES = ('ftree', 'gtrees', 'fold', 'descent', 'inverse')
+ENGINE_PHASES = ('shape', 'setup', 'baby', 'ftree', 'main_setup', 'inverse_setup',
+                 'giant_loop', 'descent', 'accum', 'finalize')
 TIMERS = ('init_seconds', 'main_seconds', 'giant_seconds', 'gtrees_seconds',
           'fold_seconds', 'descent_seconds', 'inverse_seconds', 'accum_seconds')
 IDENTITY = ('uuid_hex', 'sm_major', 'sm_minor', 'cuda_runtime', 'cuda_driver',
@@ -156,6 +158,10 @@ def ntt_samples(profile):
 def paired_trials(plan, trials):
     if not trials:
         raise ValueError('formal receipts required')
+    contracts = {t.get('phase_accounting') for t in trials}
+    if len(contracts) != 1 or contracts - {None, 'exclusive_engine_v1'}:
+        raise ValueError('mixed/unsupported engine phase contract')
+    exclusive = 'exclusive_engine_v1' in contracts
     for t in trials:
         if (t['d'] != plan['D'] or t['p'] != plan['P'] or t['giant_points'] != plan['I'] or
                 t['hits'] or t['bad'] or t['clean'] != 1 or t['fold_resident'] != 1 or
@@ -167,8 +173,64 @@ def paired_trials(plan, trials):
         for key in TIMERS:
             if not math.isfinite(t[key]) or t[key] < 0:
                 raise ValueError('invalid legacy phase timer')
+        if exclusive:
+            values = [t['phase_'+name+'_seconds'] for name in ENGINE_PHASES]
+            if any(isinstance(x, bool) or not isinstance(x, (int, float)) or
+                   not math.isfinite(x) or x < 0 for x in values):
+                raise ValueError('invalid exclusive phase timer')
+            if not (math.isclose(sum(values[:4]), init, rel_tol=1e-9, abs_tol=1e-9) and
+                    math.isclose(sum(values[4:]), main, rel_tol=1e-9, abs_tol=1e-9)):
+                raise ValueError('exclusive phases do not conserve engine time')
+        elif any(k.startswith('phase_') for k in t):
+            raise ValueError('exclusive phases missing contract')
     # Paired observations, not sums of independently computed phase medians.
-    return {key: [t[key] for t in trials] for key in ('total_seconds',)+TIMERS}
+    result = {key: [t[key] for t in trials] for key in ('total_seconds',)+TIMERS}
+    if exclusive:
+        result['phase_accounting'] = 'exclusive_engine_v1'
+        result.update({'phase_'+name+'_seconds': [t['phase_'+name+'_seconds'] for t in trials]
+                       for name in ENGINE_PHASES})
+    return result
+
+
+def published_costs(sample, timers):
+    """Cross-check raw phase receipts; worker intervals exist in the parent profile."""
+    result = {}
+    if sample.get('phase_accounting') != timers.get('phase_accounting'):
+        raise ValueError('published/raw phase accounting differs')
+    if 'phase_accounting' in timers:
+        for timer, samples in [('init_seconds', 'init_samples'), ('main_seconds', 'main_samples'),
+                               *[('phase_'+name+'_seconds', 'phase_'+name+'_samples')
+                                 for name in ENGINE_PHASES]]:
+            if sample[samples] != timers[timer] or not math.isclose(
+                    sample[timer], statistics.median(timers[timer]), rel_tol=1e-9, abs_tol=1e-9):
+                raise ValueError('published/raw paired phases differ')
+    elif any(k.startswith('phase_') or k in ('init_samples', 'main_samples') for k in sample):
+        raise ValueError('published phases missing contract')
+    if 'worker_accounting' in sample:
+        if sample['worker_accounting'] != 'spawn_wait_exit_v1':
+            raise ValueError('unsupported worker accounting')
+        for key in ('worker', 'worker_overhead'):
+            values = sample[key+'_samples']
+            if len(values) != len(timers['total_seconds']) or any(
+                    isinstance(x, bool) or not isinstance(x, (int, float)) or
+                    not math.isfinite(x) or x < 0 for x in values):
+                raise ValueError('invalid paired worker interval')
+            if not math.isclose(sample[key+'_seconds'], statistics.median(values),
+                                rel_tol=1e-9, abs_tol=1e-9):
+                raise ValueError('inconsistent paired worker median')
+            result[key+'_samples'] = values
+            result[key+'_seconds'] = sample[key+'_seconds']
+        for wall, engine, residual in zip(sample['worker_samples'], timers['total_seconds'],
+                                         sample['worker_overhead_samples']):
+            if not math.isclose(wall, engine+residual, rel_tol=1e-9, abs_tol=1e-9):
+                raise ValueError('worker interval does not conserve engine plus residual')
+        spread = statistics.median(abs(x-sample['worker_seconds']) for x in sample['worker_samples'])
+        if not math.isclose(sample['worker_mad_seconds'], spread, rel_tol=1e-9, abs_tol=1e-9):
+            raise ValueError('inconsistent worker MAD')
+        result.update(worker_accounting=sample['worker_accounting'], worker_mad_seconds=spread)
+    elif any(k.startswith('worker_') for k in sample):
+        raise ValueError('worker costs missing contract')
+    return result
 
 
 def toml_value(value):
@@ -223,7 +285,8 @@ def main():
                 raise ValueError('NTT/full ECM device or arithmetic identity mismatch')
         text = '# Stage2 workload features; not a production cost profile.\n'
         text += table('profile', dict(format=1, unit='logical_field_convolutions',
-            ranking_qualified=False, phase_timer_contract='legacy_overlapping',
+            ranking_qualified=False, legacy_timer_contract='legacy_overlapping',
+            phase_timer_contract='per_sample_optional',
             timing_boundary='stage2_engine_init_plus_main',
             ntt_single_slice_identity_match=identity_match,
             ntt_policy_qualified=False, ntt_feature_is_time_prediction=False))
@@ -258,6 +321,7 @@ def main():
                 raise ValueError('paired receipt times differ from published sample')
             if not math.isclose(sample['median_seconds'], statistics.median(sample['seconds']), rel_tol=1e-9):
                 raise ValueError('inconsistent full ECM median')
+            costs = published_costs(sample, timers)
             consumed.add(key)
             rows = workload(plan)
             scope = {k: sample[k] for k in ('target_bits', 'arithmetic_bits', 'carrier_exponent',
@@ -267,7 +331,7 @@ def main():
             scope['ntt_length_covered_pairs'] = sum(r['pairs'] for r in rows if r['length'] in measured_ntt)
             scope['ntt_missing_lengths'] = sorted({r['length'] for r in rows if r['length'] not in measured_ntt})
             # Exact paired arrays retain correlation. Other timers are explicitly overlapping.
-            text += table(f'ecm.{key}', dict(**scope, **timers))
+            text += table(f'ecm.{key}', dict(**scope, **timers, **costs))
             for i, row in enumerate(rows):
                 row = dict(row)
                 if row['length'] in measured_ntt:

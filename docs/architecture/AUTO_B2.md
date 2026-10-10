@@ -82,7 +82,13 @@ iter/s 指每秒完整 field convolution 次数，不是每秒 ECM 曲线，也�
 
 ## 完整 Stage2 tune
 
-`--tune ecm` 运行生产 Stage2，默认输出 `stage2_ecm_tune.toml`。每个输入/B2/D/算术组合先独立进程预热一次，再按指定轮数运行独立进程。保存 `stage2_full_wall.total` 的样本、中位数及 MAD，中位数统计不含预热、Stage1准备、进程启动、调优规划及结果发布；阶段字段是各自中位数，存在包含关系，不能相加替代总时长。算术核验完成后才产生测量回执。
+`--tune ecm` 运行生产 Stage2，默认输出 `stage2_ecm_tune.toml`。每个输入/B2/D/算术组合先独立进程预热一次，再按指定轮数运行独立进程。保存 `stage2_full_wall.total` 的样本、中位数及 MAD，主成本统计不含预热、Stage1准备、进程启动、调优规划及结果发布。算术核验完成后才产生测量回执。
+
+每个新样本用`phase_accounting="exclusive_engine_v1"`声明十个互斥阶段，保留`phase_<name>_samples`配对数组及`phase_<name>_seconds`中位数：shape为已计入引擎的baby索引枚举；setup为设备上下文、归约器及必需自检；baby为生成/归一化点；ftree为F树构建与检查；main_setup为主流程准备；inverse_setup为多项式逆及循环准备；giant_loop为giant/G树/fold完整循环；descent为fold归一化及F树下降；accum为叶乘积、GCD及尾部处理；finalize为局部释放、最终算术检查及因子合并。前四项逐次和等于init，后六项逐次和等于main，全部逐次和等于total。独立阶段中位数仍不能相加代替总时长中位数。
+
+旧`giant_seconds`、`gtrees_seconds`、`fold_seconds`、`descent_seconds`等计时字段继续保留，其边界可能嵌套，不能与上述十阶段相加。reader接受没有新计时合同的旧样本；声明新合同后必须包含全部配对数组和一致统计，不完整数据报错。合并可以保留不同样本各自的计时合同，不把旧样本冒充为互斥计时。
+
+`worker_accounting="spawn_wait_exit_v1"`单独记录父进程从调用曲线执行器到返回的墙钟，含命令/管道/日志准备、子进程启动、运行、输出收集与退出。`worker_samples`与engine样本同次对应，`worker_overhead_samples`逐次等于worker−engine；分别保留中位数及worker MAD。残差还包含引擎边界之外的保存点读取、CUDA初始化/清理和回执写入，不是纯驱动或纯启动耗时，也不包括外层父程序启动和tune规划。它目前只供分析，未加入生产成本排名；不能同时把worker和engine相加。
 
 默认基准使用已知梅森素数，sigma=26、B1=20，以独立GMP ladder生成归一化Stage1点。该准备不是生产Stage1计时或Auto B2的Stage1标定。`--tune-save FILE` 使用文件第一条有效记录；`--tune-carrier-exponent p` 对该记录同时测普通模数与承载，先验证N∣2ᵖ−1。save模式只声明所测曲线无因子，不宣称目标为素数或其他曲线不会产生因子。发现因子、算术坏计数或附加诊断使计时不干净时，停止调优并保留证据，不发布成功配置。
 
@@ -93,7 +99,7 @@ iter/s 指每秒完整 field convolution 次数，不是每秒 ECM 曲线，也�
 - B2区间边界：2.6×10⁹、2.6×10¹⁰、2.6×10¹¹、2.6×10¹²、8×10¹²。等级ℓ覆盖前⌊(ℓ−1)/2⌋个区间；等级3…4每区间作2份对数等距细分，等级5…10作4份，内部点按最近整数取整。等级1…10的B2点数分别为1、1、3、3、9、9、13、13、17、17。等级10默认最多3094个输入/B2/D组合，实际仍受显存和G树数量限制。
 - `--tune-exponents p,...`、`--tune-d D,...`、`--tune-b2 B2,...`、`--tune-repeats n`覆盖相应预设；save与exponents互斥。`--tune-max-batches n`覆盖G树数量上限，0解除该耗时限制；它防止高B2搭配很小D产生极长基准，不是算术正确性门限。显存采用有效batch/arena/fold配置；`--tune-memory-mb`只用于NTT。G1、不支持的诊断/非驻留组合和静态free快照不满足的形状记录跳过；没有成功形状则不发布。
 
-TOML格式3按`[profile]`、`[device]`、`[policy]`、`[policy.environment]`、`[ecm.sample_<n>]`、`[summary]`组织；策略每键一行，重复时间用数组。配置只包含性能、校验与适用条件，不含路径、程序或构建摘要。reader兼容格式2的环境串并在内存中规范为命名字段。原始plan、子进程日志和测量回执保留在`data/experiments/ecm_tune_<id>/`，与可编辑性能配置分开。发布前核对设备/策略、完整状态、样本统计及运行期间程序未变化，随后原子替换；失败不覆盖已有配置。
+TOML格式3按`[profile]`、`[device]`、`[policy]`、`[policy.environment]`、`[ecm.sample_<n>]`、`[summary]`组织；策略每键一行，重复时间用数组。配置只包含性能、校验与适用条件，不含路径、程序或构建摘要。reader兼容格式2的环境串并在内存中规范为命名字段，限制64 MiB/4096个范围，可容纳等级10的完整默认网格及逐次阶段记录。原始plan、子进程日志和测量回执保留在`data/experiments/ecm_tune_<id>/`，与可编辑性能配置分开。发布前核对设备/策略、完整状态、样本统计及运行期间程序未变化，随后原子替换；失败不覆盖已有配置。
 
 ### 汇集预计算结果
 
@@ -115,7 +121,7 @@ GPU频率、功耗和背景负载属于测量条件，应在相同设置下调�
 
 ### NTT工作量预计算
 
-CPU工具`analyze_stage2_tune_workload.py`从完整tune的冻结计划与正式回执生成可读的工作量TOML，按阶段/NTT长度/物理分块统计逻辑乘法和输出规模，并保留配对计时。可与同设备的单slice NTT实测对照，但当前输出不是成本profile，也不参与生产排名：NTT运行策略、批量吞吐、互斥阶段成本及独立留出精度尚未完成资格检查。不能把field convolution iter/s直接换成完整曲线速度，也不能再将其加入已包含NTT的阶段计时。用法和单位见[调优工作量与阶段特征](../../tools/bench/README_STAGE2_CARRIER_PLAN.md#调优工作量与阶段特征)。
+CPU工具`analyze_stage2_tune_workload.py`从完整tune的冻结计划与正式回执生成可读的工作量TOML，按阶段/NTT长度/物理分块统计逻辑乘法和输出规模，并保留配对计时。新样本逐项核对原始互斥阶段回执与发布数组，保留父程序发布的worker配对成本；旧样本保留原有嵌套计时，不补造新阶段。可与同设备的单slice NTT实测对照，但当前输出不是成本profile，也不参与生产排名：NTT运行策略、批量吞吐、阶段组合模型及独立留出精度尚未完成资格检查。不能把field convolution iter/s直接换成完整曲线速度，也不能再将其加入已包含NTT的阶段计时。用法和单位见[调优工作量与阶段特征](../../tools/bench/README_STAGE2_CARRIER_PLAN.md#调优工作量与阶段特征)。
 
 ### B2区间成本预测
 
@@ -126,6 +132,8 @@ CPU工具`analyze_stage2_tune_workload.py`从完整tune的冻结计划与正式�
 Auto B2每组锚点只执行一次资格检查和拟合，在本次选择中复用α、β、留一误差和MAD；各B2仍独立检查范围并按整数I计算成本。它不持久化模型、不复用其他位宽/B1/D的系数，也不缓存显存准入结果。未声明模型或不合格的组继续只使用精确点，资格门限、成本保护项及候选排序不变。实现入口为`prepare_b2_model`与`auto_candidates`。
 
 输出使用`estimated_seconds`，并给出实测B2范围、点数、最大留一相对/绝对误差和最大MAD；不会将估计标为实测中位数。这些误差只描述已有样本，不是新请求的统计置信界或精度保证。尾树、分块与NTT形状台阶仍可能改变成本，当前没有位宽、B1、D或区间外外推；资格不满足则保留原选型。最终显存检查始终针对请求B2，不能复用锚点的内存准入结果。独立完整曲线验证见[性能说明](../performance/STAGE2.md#b2区间预测验证)。
+
+已知限制：giant短尾跨越chain/ladder阈值时，现有I线性模型仍可能通过锚点留一检查，却低估内部B2成本。5872-bit/B2=12e9/D60060的独立失败与短尾诊断见[配对阶段计时](../performance/STAGE2.md#完整tune的配对阶段计时)。该分支尚未加入当前模型，不能宣称整个已测区间均通过独立精度验证；后续需标定短尾成本并补齐独立留出。
 
 ### 独立候选排序验证
 
@@ -149,6 +157,7 @@ Auto B2每组锚点只执行一次资格检查和拟合，在本次选择中复�
 
 - [ecm_stage2_cost_profile.h](../../src/core/ecm_stage2_cost_profile.h#L32)：reader、scope、`Work` 与 `choose`。
 - [ecm_stage2_tune_ecm.h](../../src/core/ecm_stage2_tune_ecm.h)：完整Stage2等级、素数点准备、统计及TOML reader。
+- [ecm_stage2_phase_times.h](../../src/core/ecm_stage2_phase_times.h)：引擎互斥阶段边界及时间守恒检查。
 - [ecm_stage2_tune_prediction.h](../../src/core/ecm_stage2_tune_prediction.h)：B2分组、非负成本拟合及留一资格检查。
 - [ecm_stage2_tune_auto.h](../../src/core/ecm_stage2_tune_auto.h)：完整tune的Auto B2候选与收益排名。
 - [ecm_stage1_tune_profile.h](../../src/core/ecm_stage1_tune_profile.h)：完整Stage1成本reader及精确范围查询。

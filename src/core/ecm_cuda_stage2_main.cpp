@@ -762,7 +762,7 @@ int curve_worker(Options o) {
     if (code || result.empty()) return code ? code : 1;
     if(o.tune_child) {
         const auto &m=tune_metrics;
-        if(status!="stage2_completed" || !m.clean || !m.selftest_cases || !m.checked || m.bad ||
+        if(status!="stage2_completed" || !m.clean || !m.selftest_cases || !m.checked || m.bad || !m.phases.complete ||
            result.find("\"hits\":0,")!=0 || !ecm_stage2::result_factors(result).empty())
             throw std::runtime_error("ECM tune requires a clean no-factor curve with arithmetic checks");
         std::ostringstream out;out<<std::setprecision(17)<<"{\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"giant_points\":"<<m.giant_points
@@ -770,7 +770,11 @@ int curve_worker(Options o) {
             <<",\"giant_seconds\":"<<m.giant_seconds<<",\"gtrees_seconds\":"<<m.gtrees_seconds<<",\"fold_seconds\":"<<m.fold_seconds
             <<",\"descent_seconds\":"<<m.descent_seconds<<",\"inverse_seconds\":"<<m.inverse_seconds<<",\"accum_seconds\":"<<m.accum_seconds
             <<",\"selftest_cases\":"<<m.selftest_cases<<",\"checked\":"<<m.checked<<",\"bad\":"<<m.bad
-            <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)<<'}';
+            <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)
+            <<",\"phase_accounting\":"<<json_string(ecm_stage2::timing::contract);
+        for(size_t i=0;i<ecm_stage2::timing::count;++i)
+            out<<",\"phase_"<<ecm_stage2::timing::names[i]<<"_seconds\":"<<m.phases.seconds[i];
+        out<<'}';
         append(o.results,out.str());return 0;
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -1069,7 +1073,8 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
     const auto binary=ecm_stage2::sha256_file(executable());
     const auto manifest=executable().parent_path()/"build_manifest.json";
     const auto build=fs::is_regular_file(manifest)?ecm_stage2::sha256_file(manifest):"";
-    output<<"# Full ECM Stage2 measurements. Seconds; bytes. Stage1 and process launch excluded.\n"
+    output<<"# Full ECM Stage2 measurements. Seconds; bytes. Engine cost excludes Stage1 and process launch.\n"
+          <<"# Exclusive phases and worker wall/residual costs are declared per sample.\n"
         <<"[profile]\nformat = 3\nunit = \"full_stage2\"\nalgorithm_revision = 1\nprediction_model = \""<<t::b2_prediction_model<<"\"\neffort_level = "<<(o.tune_level?o.tune_level:1)
         <<"\nrepeats = "<<effort.repeats<<"\nwarmups = 1\nmax_batches = "<<effort.max_batches<<"\n\n[device]\nuuid_hex = \""<<device.uuid_hex
         <<"\"\nsm_major = "<<device.major<<"\nsm_minor = "<<device.minor<<"\ncuda_runtime = "<<device.runtime
@@ -1102,9 +1107,12 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
                 worker.carrier_exponent=carrier;worker.debug_log=false;worker.debug_file.clear();worker.log_level=stage2_log::quiet;
                 const auto stem="case_"+std::to_string(case_number)+"_"+std::to_string(repeat);
                 const auto results=evidence/(stem+".jsonl"),log=evidence/(stem+".log");
+                const auto worker_begin=std::chrono::steady_clock::now();
                 if(child_run(worker,input.save,input.record,b2,d,o.device,results,log,batch,settings))throw std::runtime_error("ECM tune curve failed; inspect "+log.string());
+                const double worker_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-worker_begin).count();
                 std::ifstream in(results);std::string row,extra;if(!std::getline(in,row) || std::getline(in,extra))throw std::runtime_error("invalid ECM tune receipt");
-                const auto f=t::fields(row);
+                auto f=t::fields(row);
+                {std::ostringstream value;value<<std::setprecision(17)<<worker_seconds;f["worker_seconds"]=value.str();}
                 if(t::uint(f,"d")!=d || t::uint(f,"p")!=ecm_stage2::cost::phi(d)/2 || t::uint(f,"giant_points")!=b2/d+2)
                     throw std::runtime_error("ECM tune executed a different shape");
                 if(!t::uint(f,"fold_resident") || !t::uint(f,"frontier_resident")) {
@@ -1133,6 +1141,27 @@ void run_ecm_tune(Options o,uint64_t batch,uint64_t arena,const Settings &settin
             auto numeric=[](double x){std::ostringstream s;s<<std::setprecision(17)<<x;return s.str();};
             sample["median_seconds"]=numeric(t::median(seconds));sample["mad_seconds"]=numeric(t::mad(seconds));
             std::string array="[";for(auto x:seconds){if(array.size()>1)array+=", ";array+=numeric(x);}sample["seconds"]=array+"]";
+            auto paired=[&](const std::string &key,const std::string &samples,const std::string &median) {
+                std::vector<double> values;std::string text="[";
+                for(const auto &trial:trials){const double x=t::real(trial,key.c_str());values.push_back(x);if(text.size()>1)text+=", ";text+=numeric(x);}
+                sample[samples]=text+"]";sample[median]=numeric(t::median(values));return values;
+            };
+            paired("init_seconds","init_samples","init_seconds");
+            paired("main_seconds","main_samples","main_seconds");
+            for(size_t i=0;i<ecm_stage2::timing::count;++i) {
+                const std::string key=std::string("phase_")+ecm_stage2::timing::names[i];
+                paired(key+"_seconds",key+"_samples",key+"_seconds");
+            }
+            const auto workers=paired("worker_seconds","worker_samples","worker_seconds");
+            sample["worker_accounting"]="\"spawn_wait_exit_v1\"";
+            sample["worker_mad_seconds"]=numeric(t::mad(workers));
+            std::string overhead="[";std::vector<double> overheads;
+            for(size_t i=0;i<seconds.size();++i) {
+                const double x=workers[i]-seconds[i];overheads.push_back(x);
+                if(overhead.size()>1)overhead+=", ";overhead+=numeric(x);
+            }
+            sample["worker_overhead_samples"]=overhead+"]";
+            sample["worker_overhead_seconds"]=numeric(t::median(overheads));
             for(const char *key:{"init_seconds","main_seconds","giant_seconds","gtrees_seconds","fold_seconds","descent_seconds","inverse_seconds","accum_seconds"}) {
                 std::vector<double> v;for(const auto &trial:trials)v.push_back(t::real(trial,key));sample[key]=numeric(t::median(v));
             }

@@ -7157,6 +7157,7 @@ done:
    ladder is applied to the same total exponent), but 168 separate one-point launches cost
    11.7 s at S=5261 -- the per-LAUNCH cost again -- while ~24 grouped ones cost ~1.7 s. */
 struct BatchedRun {
+    ecm_stage2::timing::Boundaries phase_boundaries;
     DeviceGLeafStats device_leaf;
     FoldFlatStats fold_flat;
     FoldDeviceStats fold_device;
@@ -7382,6 +7383,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     CPoly finv;
     const CPoly Fpoly = fold_flat_enabled ? CPoly{} : cp_from_flat(Ft[1], Fdeg[1], W);
     const double ti0 = now_s();
+    R.phase_boundaries.inverse_begin=ti0;
     if (R.loops > 0) {
         CPoly revF;
         cp_resize(revF, P + 1, W);
@@ -7437,6 +7439,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     // One continuous interval includes chunk-local destruction between iterations.
     stage2_log::phase("Giant points, G trees and fold");
     const double t_loop_begin = now_s();
+    R.phase_boundaries.loop_begin=t_loop_begin;
     R.t_pre_loop = t_loop_begin - t_entry;
     for (unsigned long long c0 = 0; c0 < imax; c0 += pts_per_chunk) {
         ++actual_point_chunks;
@@ -7860,6 +7863,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
     }
     R.t_post_loop=now_s();
+    R.phase_boundaries.loop_end=R.t_post_loop;
     stage2_log::print(stage2_log::debug,
         "giant_chunk_done: chunks=%llu chain_chunks=%llu ladder_chunks=%llu points=%llu\n",
         actual_point_chunks,R.giant_chain_chunks,actual_point_chunks-R.giant_chain_chunks,imax);
@@ -8111,6 +8115,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     stage2_memory::snapshot("after_descent");
     /* ---- 4. accumulate prod_j H(x_j) mod N ON THE DEVICE, one gcd per block ------------ */
     const double ta0 = now_s();
+    R.phase_boundaries.accum_begin=ta0;
     const size_t BLOCK = 64;                            /* small, so a hit localises to <=64 */
     std::vector<std::vector<unsigned long long>> bprod;
     ws.need_vals((size_t)P);
@@ -8358,6 +8363,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         R.arena_mb = L.arena->mb();
     }
     R.t_post_end = now_s();
+    R.phase_boundaries.accum_end=R.t_post_end;
     R.t_post_loop = R.t_post_end - R.t_post_loop;
     return R;
 }
@@ -8996,6 +9002,9 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     /* Stage1 Q is ready. Include context/reducer setup, baby/F-tree, then the entire tail.
        Baby index enumeration ran before Stage1; account its measured work once separately. */
     const double stage2_init_begin=now_s();
+    ecm_stage2::timing::Boundaries phase_boundaries;
+    phase_boundaries.shape=stage2_shape_seconds;
+    phase_boundaries.init_begin=stage2_init_begin;
     LadderCtx C;
     mpz_to_words(C.target_n,nw,L.target());
     C.hn = hn;
@@ -9194,6 +9203,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        shares a factor with N, i.e. points that are the identity modulo that factor.  Collected
        here (the batched run does not exist yet) and merged into the reported factor set below. */
     std::vector<std::string> baby_deg;
+    phase_boundaries.baby_begin=now_s();
     stage2_log::phase("Generate and normalize baby points");
     stage2_memory::snapshot("before_baby");
     SmallPrimeBabyCache small_cache;
@@ -9317,6 +9327,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         stage2_log::print(stage2_log::phases, "real_baby: points=%llu ladder=%.3f s affine=%.3f s degenerate=%llu\n",
                     (unsigned long long)baby_j.size(), tb1 - tb0, now_s() - tb1, noninv);
         FTreeStats fs;
+        phase_boundaries.ftree_begin=now_s();
         stage2_log::phase("Build baby-point F tree");
         stage2_memory::snapshot("before_ftree");
         Ft = build_tree_flat(L, leaf, Fdeg, Fpad, fs, BC_FTREE);
@@ -9360,7 +9371,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             std::adjacent_find(small_cache.js.begin(),small_cache.js.end())==small_cache.js.end();
         if(small_prime_flag("NTT_SMALL_PRIME_CACHE_STALE"))++small_cache.D;
     }
-    const double stage2_init_seconds=stage2_shape_seconds+now_s()-stage2_init_begin;
+    phase_boundaries.init_end=now_s();
+    const double stage2_init_seconds=stage2_shape_seconds+(phase_boundaries.init_end-stage2_init_begin);
     /* ---- the tails ---- */
     Stage2Params SP;
     SP.D = D; SP.B1 = B1; SP.B2 = B2; SP.baby_j = baby_j;
@@ -9399,6 +9411,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             m.init_seconds=stage2_init_seconds;m.main_seconds=el;m.total_seconds=stage2_init_seconds+el;
             m.giant_seconds=BR.t_giant;m.gtrees_seconds=BR.t_gtrees;m.fold_seconds=BR.t_fold;
             m.descent_seconds=BR.t_descent;m.inverse_seconds=BR.t_inv;m.accum_seconds=BR.t_accum;
+            auto boundaries=BR.phase_boundaries;
+            boundaries.shape=phase_boundaries.shape;boundaries.init_begin=phase_boundaries.init_begin;
+            boundaries.baby_begin=phase_boundaries.baby_begin;boundaries.ftree_begin=phase_boundaries.ftree_begin;
+            boundaries.init_end=phase_boundaries.init_end;boundaries.main_begin=t0;boundaries.main_end=t0+el;
+            m.phases=ecm_stage2::timing::partition(boundaries);
             m.clean=!stage2_extra_fixtures && !run_s2 && curves==1;
             m.fold_resident=BR.fold_device.enabled;
         }

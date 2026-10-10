@@ -87,6 +87,39 @@ def main():
         inverse_seconds=.1, accum_seconds=.1, hits=0, bad=0, clean=1, fold_resident=1,
         frontier_resident=1, selftest_cases=10, checked=10)
     assert work.paired_trials(plan, [receipt])['total_seconds'] == [2.]
+    exclusive = dict(receipt, phase_accounting='exclusive_engine_v1')
+    phase_values = [.0, .1, .2, .2, .1, .2, .8, .2, .1, .1]
+    for name, value in zip(work.ENGINE_PHASES, phase_values):
+        exclusive['phase_'+name+'_seconds'] = value
+    timers = work.paired_trials(plan, [exclusive])
+    sample_costs = dict(phase_accounting='exclusive_engine_v1', init_samples=[.5], main_samples=[1.5],
+                        init_seconds=.5, main_seconds=1.5,
+                        worker_accounting='spawn_wait_exit_v1', worker_samples=[2.5],
+                        worker_seconds=2.5, worker_mad_seconds=0.,
+                        worker_overhead_samples=[.5], worker_overhead_seconds=.5)
+    for name, value in zip(work.ENGINE_PHASES, phase_values):
+        sample_costs['phase_'+name+'_samples'] = [value]
+        sample_costs['phase_'+name+'_seconds'] = value
+    assert work.published_costs(sample_costs, timers)['worker_samples'] == [2.5]
+    rejected(lambda: work.paired_trials(plan, [receipt, exclusive]))
+    for key, value in [('phase_accounting', 'unknown'), ('phase_setup_seconds', .2),
+                       ('phase_accum_seconds', -.1), ('phase_finalize_seconds', True)]:
+        bad = dict(exclusive, **{key: value})
+        rejected(lambda: work.paired_trials(plan, [bad]))
+    missing = dict(exclusive)
+    del missing['phase_accounting']
+    rejected(lambda: work.paired_trials(plan, [missing]))
+    for key, value in [('phase_accounting', 'unknown'), ('init_samples', [.4]),
+                       ('phase_setup_samples', [.2]), ('phase_setup_seconds', .2),
+                       ('worker_samples', [2.6]), ('worker_mad_seconds', .1),
+                       ('worker_samples', [2.5, 2.5]), ('worker_overhead_samples', [-.5]),
+                       ('worker_accounting', 'unknown'), ('worker_seconds', 2.4)]:
+        bad = dict(sample_costs, **{key: value})
+        rejected(lambda: work.published_costs(bad, timers))
+    for key in ('phase_accounting', 'worker_accounting', 'phase_setup_samples', 'worker_samples'):
+        bad = dict(sample_costs)
+        del bad[key]
+        rejected(lambda: work.published_costs(bad, timers))
     for key, value in [('total_seconds', 3.), ('fold_resident', 0), ('giant_seconds', float('nan')),
                        ('descent_seconds', -.1), ('hits', 1), ('d', 8)]:
         bad = dict(receipt, **{key: value})
@@ -155,6 +188,22 @@ def main():
         wrong_ntt = root/'wrong_ntt.toml'
         wrong_ntt.write_text(ntt_text, encoding='utf-8')
         cli_rejected('wrong_identity', ['--ntt-profile', str(wrong_ntt)])
+        # Published worker intervals come from the parent, exclusive phases from raw children.
+        (raw/'case_1_1.jsonl').write_text(json.dumps(exclusive)+'\n', encoding='utf-8')
+        current = profile_text.replace(work.table('ecm.sample_0', sample),
+                                       work.table('ecm.sample_0', dict(sample, **sample_costs)))
+        profile.write_text(current, encoding='utf-8')
+        subprocess.run(command+['--output', str(root/'exclusive')], capture_output=True, check=True, timeout=30)
+        parsed = tomllib.loads((root/'exclusive/workload.toml').read_text(encoding='utf-8'))
+        assert parsed['ecm']['sample_0']['phase_accounting'] == 'exclusive_engine_v1'
+        assert parsed['ecm']['sample_0']['worker_samples'] == [2.5]
+        bad = dict(sample_costs, worker_overhead_samples=[.6])
+        profile.write_text(profile_text.replace(work.table('ecm.sample_0', sample),
+                                               work.table('ecm.sample_0', dict(sample, **bad))), encoding='utf-8')
+        cli_rejected('bad_worker_pair', [])
+        profile.write_text(current, encoding='utf-8')
+        (raw/'case_1_1.jsonl').write_text(json.dumps(receipt)+'\n', encoding='utf-8')
+        cli_rejected('mismatched_contract', [])
     # Dense reference exists independently of the production request program.
     topo_spec = importlib.util.spec_from_file_location('topo', ROOT/'tools/test/test_stage2_request_program.py')
     topo = importlib.util.module_from_spec(topo_spec)
@@ -174,8 +223,8 @@ def main():
             bins += len(r)
         assert count
         replay.append(dict(directory=str(directory), plans=count, pairs=pairs, calls=calls, bins=bins))
-    result = dict(complete=True, synthetic_cases=3, paired_timing_cases=1, ntt_cases=1,
-                  rejected=rejects, cli_roundtrips=1, cli_rejected=cli_rejects, replay=replay)
+    result = dict(complete=True, synthetic_cases=3, paired_timing_cases=2, ntt_cases=1,
+                  rejected=rejects, cli_roundtrips=2, cli_rejected=cli_rejects, replay=replay)
     (a.output/'result.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')
     print(json.dumps(result))
 

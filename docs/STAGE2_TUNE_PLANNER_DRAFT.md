@@ -249,3 +249,23 @@ Stage2进程中位数4.753833秒单独记录，score仍使用engine total。raw�
 既有协调器session30831成功exit0，原GPU1测量已停止后才修改计时代码。M521/B1=10e6/lcm/sigma26、真实batch8 T1=44.357074，冻结Stage2 exe d1d1946e…，GPU1用户1800MHz/默认55W上限。batch256/arena6300/fold48，三D与五B2形成15计划；owner31933992/52255272/63867432 bytes，仅D690690驻留。五scope暖机1+正式3，共20曲线；十个skip无执行receipt。原fold640 profile策略拒绝、新profile强制未测D1381380缺scope拒绝，未跨预算复用成本。
 
 独立五锚点各1+3再测20曲线，Auto选2.6e12/D690690/carrier0，322决策候选。实测6.504293/估计6.520463秒，五候选最大误差2.467%、收益损失0，原门限不变；进程7.154319秒另列，上界受限。最终40曲线88320 mandatory/317384 GMP检查bad0，无因子、驻留。loaded103点SM1725…1800/median1800，power19.41…53.19/median51.8W；并非严格恒频。raw、输入身份、56源闭包及profile0e546c12…在phase改动前完成审计，证据`data/experiments/ecm_tune_owner48_20261010/`。正式性能说明同步，本轮不代替非驻留或完整联合预算矩阵。
+
+### 互斥阶段与worker配对成本
+
+新增`ecm_stage2_phase_times.h`，用绝对边界划分shape/setup/baby/ftree/main_setup/inverse_setup/giant_loop/descent/accum/finalize。保留既有engine边界，前四项逐次和=init、后六项=main、总和=total；规划、保存点及外层进程仍在边界外。native tune只发布完整边界的无因子曲线，旧嵌套timer保留。性能TOML按sample保存合同和配对数组，统计中位数不相加；reader检查字段、数组长度、统计及守恒，兼容旧样本与混合合并。父child_run整体墙钟另存worker_samples和逐次worker−engine，不借此宣称纯冷启动或改动排名。
+
+CPU51边界案例、4接受/47坏配置拒绝、非可加中位数及混合合并通过。首次缺字段测试仍从seed保留init_seconds，属于fixture生成错误；修正删除逻辑，失败目录保留。工作量工具扩展交叉核对raw阶段/发布数组与worker合同，50协议拒绝/5 CLI拒绝、2轮回及旧fold48 evidence重放通过。等级10新增数组可超过原16 MiB，reader与独立选择/收益工具扩至64 MiB；3094 scope×21次，23263161 bytes通过，超限拒绝。Stage1 reader仍限16 MiB。HostOnly加入新phase头依赖；故意修改记录hash在编译前拒绝。预测/Auto/合并/Stage1 reader、13素数证书、10等级和生成配置6文件全部回归通过。
+
+受限完整CUDA编译41.1秒在ptxas报INVALID_HANDLE；源码和参数不变，正常权限新目录完整构建107.9秒成功，保留原失败log。该观察支持启动环境因素，不宣称已确定编译器内部根因。完整测试exe83c0efb2…，57源闭包冻结；GPU1/batch256/arena6300/fold640、用户1800MHz/默认55W未改，GPU0既有任务保持。M521/B1=10e6两D五B2共40曲线；5872-bit余因子/B1=20两D五B2普通/6011承载80曲线；M521/D1381380/B2=2.6e12四曲线。各暖机1+正式3，31 scope/124曲线、222720 mandatory/900856 GMP检查bad0、无因子、驻留；每次互斥阶段和worker残差一致。独立工作量重放31计划、2343 bins。loaded681 NVML点SM1515…1800/median1800、power20.11…55.3/median49.9W，实际频率非严格恒定。
+
+残差正式样本组中位数M521小D0.377312、余因子0.439519、大D0.425614秒，只描述本组实测，未变成通用startup常数。测量终止后才修正64 MiB和配置注释，新目录HostOnly22.9秒，exe288e6df6…，CUDA对象未变，57项current/冻结源匹配。最终余因子4计划15调用3曲线，M521 2计划13调用3曲线，11232 mandatory/24153 GMP bad0，INI/choose12/CLI优先/private queue及重启不重复通过。首次runtime错误文件名在GPU启动前失败，保留目录，核对实际lcm.toml/choose12.toml后新目录完成。
+
+证据`data/experiments/ecm_phase_costs_20261010/`及三原始tune目录`ecm_tune_32876_29728078/`、`ecm_tune_3744_29762359/`、`ecm_tune_34824_30531265/`，`final_audit/result.json`分清测量二进制和仅主机修改后的二进制，不冒充旧二进制来自当前修改后的源。阶段合同及工具边界同步AUTO_B2和性能文档。
+
+### 独立留出失败与giant短尾定位
+
+最终版本/新余因子profile计划独立12e9、33e9两个B2，每候选暖机1+正式3，8%时间/5%排名门限不变。12e9四候选16曲线全部执行后时间gate失败：D60060普通预测6.968043/实际9.629335、误差27.637%；承载预测5.462318/实际7.780269、误差29.793%。D120120两算术误差1.276/2.125%。未执行自动曲线或第二B2，不报告排名通过；所有失败scope保留在`independent_holdouts/`。
+
+同二进制通过tune入口再测12e9/D60060普通/承载各1+3共8曲线，实际9.647932/7.757780，排除异常仅由生产调用策略造成；阶段giant_loop8.316307/6.722435。再做1条debug诊断，chunk容量184320点，I199802，尾15482<chain_min32768，1 chain+1 ladder chunk。ResidentGiant::prepare计时3.045434秒，loop_wall8.427；ladder GPU发射异步，在随后prepare的D2H等待，常规giant/G树/fold和漏掉了这部分。阈值和分块说明了线性I模型可能在内部B2出现未被锚点覆盖的台阶。尝试仅进程env chain_min0被已有production保护拒绝，没有移除门禁或更改默认。这条debug时间不计入正式性能样本。
+
+新证据改变下一步：先把giant chunk/短尾chain-ladder结构纳入资格与阶段组合成本，并做新的独立留出，不能靠LOO合格宣称内部区间全面可靠；同时保持原完整目标的NTT批量策略/缺失长度、更多生产B1/位宽/预算、真实Stage1大batch、cold/driver及非驻留/G1验证。阶段记录已经可用，组合排名模型尚未完成。本草稿保留，不宣布整个目标完成。

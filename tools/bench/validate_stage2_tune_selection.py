@@ -87,7 +87,7 @@ def main():
     sources = [args.exe.resolve(), args.profile.resolve(), args.save.resolve(), Path(__file__).resolve()]
     sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
     identities = {str(path): sha(path) for path in sources}
-    assert args.profile.stat().st_size <= 16*1048576, 'profile exceeds native size limit'
+    assert args.profile.stat().st_size <= 64*1048576, 'profile exceeds native size limit'
     profile = tomllib.loads(args.profile.read_text(encoding='utf-8-sig'))
     assert 0 < len(profile['ecm']) <= 4096, 'profile exceeds native sample limit'
     with args.save.open(encoding='utf-8-sig') as stream:

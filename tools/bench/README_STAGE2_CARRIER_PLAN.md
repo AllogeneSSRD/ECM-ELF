@@ -42,7 +42,7 @@ NTT JSON version2 提供 exact_allocation_events、fuse_layouts、物理分配/�
 
 输出`workload.toml`按阶段、NTT长度和每次调用的slice数保留逻辑多项式乘法数、物理调用数、输出系数数、N与N·log₂N工作量。中间G批次按repeat直接累计，不展开全部批次；分块遵循原始plan的packing形状、batch预算、buffer数和chunk上限，独立核对每个阶段原生groups/pairs/chunks总数。适用范围为当前多G、条件驻留、完整次数fold请求程序；不描述G1或owner回退。
 
-每次正式曲线的init/main及其他阶段计时以配对数组保留，核对init+main=引擎total；其他阶段计时仍标记为`legacy_overlapping`，不相加阶段中位数。文件必须覆盖对应性能profile的全部样本，缺少回执或不一致不能发布成功输出。原始文件、分析工具的路径和SHA只记录在另一个`evidence.json`，性能TOML不记录这些身份信息。
+每次正式曲线的init/main及其他阶段计时以配对数组保留，核对init+main=引擎total。新样本声明`phase_accounting="exclusive_engine_v1"`，逐次核对十个互斥阶段之和、init/main及原始回执与发布数组；旧阶段计时保持`legacy_overlapping`，不补造新阶段。父程序发布的worker墙钟及worker−engine残差也按次保留，检查样本、中位数及MAD。详细边界见[完整Stage2 tune](../../docs/architecture/AUTO_B2.md#完整-stage2-tune)。所有统计均不相加独立中位数。文件必须覆盖对应性能profile的全部样本，缺少回执或不一致不能发布成功输出。原始文件、分析工具的路径和SHA只记录在另一个`evidence.json`，性能TOML不记录这些身份信息。
 
 可选NTT文件须为已完成、通过算术检查的batch=1 field convolution实测，设备UUID、SM、CUDA和固定算术编译条件一致。记录已覆盖长度、缺失长度、单slice秒数和“逻辑pairs×单slice秒数”的串行参照特征。后者不含packing/carry/S4归约、点乘、树准备、传输、自检和冷启动，也没有生产批量并行校准；当前NTT文件未完整声明运行策略。因此输出明确`ntt_policy_qualified=false`、`ranking_qualified=false`，不进入生产D/承载/Auto B2成本排名，不将串行参照相加到完整曲线或阶段计时。
 

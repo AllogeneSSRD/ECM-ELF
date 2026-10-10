@@ -7,7 +7,16 @@
 int main(int argc,char **argv) {
     try {
         namespace t=ecm_stage2::tune;
-        if(argc==3 && std::string(argv[1])=="--prime") {
+        if(argc==14 && std::string(argv[1])=="--phases") {
+            ecm_stage2::timing::Boundaries b;
+            double *fields[]={&b.shape,&b.init_begin,&b.baby_begin,&b.ftree_begin,&b.init_end,
+                &b.main_begin,&b.inverse_begin,&b.loop_begin,&b.loop_end,&b.accum_begin,&b.accum_end,&b.main_end};
+            for(size_t i=0;i<12;++i)*fields[i]=std::stod(argv[i+2]);
+            const auto phases=ecm_stage2::timing::partition(b);
+            std::cout<<std::setprecision(17)<<"{\"complete\":"<<(phases.complete?"true":"false")<<",\"seconds\":[";
+            for(size_t i=0;i<phases.seconds.size();++i){if(i)std::cout<<',';std::cout<<phases.seconds[i];}
+            std::cout<<"],\"total\":"<<phases.total()<<"}\n";
+        } else if(argc==3 && std::string(argv[1])=="--prime") {
             std::string n;const auto x=t::prime_point((unsigned)std::stoul(argv[2]),n);
             std::cout<<n<<'\n'<<x<<'\n';
         } else if(argc==3 && std::string(argv[1])=="--effort") {

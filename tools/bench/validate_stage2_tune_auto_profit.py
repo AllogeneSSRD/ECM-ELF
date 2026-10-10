@@ -37,7 +37,7 @@ def main():
     s=importlib.util.spec_from_file_location('fixed',paths[-1]);fixed=importlib.util.module_from_spec(s);s.loader.exec_module(fixed)
     profile=tomllib.loads(a.profile.read_text(encoding='utf-8-sig'))
     stage1=tomllib.loads(a.stage1_profile.read_text(encoding='utf-8-sig'))
-    assert a.profile.stat().st_size<=16*1048576 and a.stage1_profile.stat().st_size<=16*1048576
+    assert a.profile.stat().st_size<=64*1048576 and a.stage1_profile.stat().st_size<=16*1048576
     with a.save.open(encoding='utf-8-sig') as stream:line=next(x for x in stream if x.strip())
     fields=dict(re.findall(r'(\w+)\s*=\s*([^;]+)',line));n=int(fields['N'].strip(),0);b1=int(fields['B1'])
     bits=n.bit_length();kind='mersenne' if (n+1)&n==0 else 'generic'

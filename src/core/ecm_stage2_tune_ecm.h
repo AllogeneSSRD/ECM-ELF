@@ -1,6 +1,7 @@
 #pragma once
 #include "ecm_stage2_tune_format.h"
 #include "ecm_stage2_cost_profile.h"
+#include "ecm_stage2_phase_times.h"
 #include <gmp.h>
 #include <limits>
 
@@ -128,6 +129,42 @@ inline std::string sample_scope(const Fields &sample) {
         key+=required(sample,field)+":";
     return key;
 }
+inline void validate_paired_costs(const Fields &f,const std::vector<double> &totals) {
+    auto paired=[&](const std::string &samples,const std::string &middle) {
+        auto values=array(required(f,samples.c_str()));
+        if(values.size()!=totals.size() || *std::min_element(values.begin(),values.end())<0 ||
+            std::abs(median(values)-real(f,middle.c_str()))>1e-9*std::max(1.,median(values)))
+            throw std::runtime_error("inconsistent paired ECM cost samples");
+        return values;
+    };
+    auto close=[](double a,double b){return std::abs(a-b)<=1e-9*std::max({1.,a,b});};
+    if(f.count("phase_accounting")) {
+        if(required(f,"phase_accounting")!=std::string("\"")+timing::contract+"\"")throw std::runtime_error("unsupported ECM phase accounting");
+        const auto init=paired("init_samples","init_seconds"),main=paired("main_samples","main_seconds");
+        std::array<std::vector<double>,timing::count> phases;
+        for(size_t i=0;i<timing::count;++i) {
+            const auto key=std::string("phase_")+timing::names[i];
+            phases[i]=paired(key+"_samples",key+"_seconds");
+        }
+        for(size_t r=0;r<totals.size();++r) {
+            double pre=0,post=0;for(size_t i=0;i<4;++i)pre+=phases[i][r];for(size_t i=4;i<timing::count;++i)post+=phases[i][r];
+            if(!close(pre,init[r]) || !close(post,main[r]) || !close(pre+post,totals[r]))
+                throw std::runtime_error("ECM exclusive phases do not conserve engine time");
+        }
+    } else {
+        for(const auto &field:f)if(field.first.compare(0,6,"phase_")==0 || field.first=="init_samples" || field.first=="main_samples")
+            throw std::runtime_error("paired ECM phases missing accounting contract");
+    }
+    if(f.count("worker_accounting")) {
+        if(required(f,"worker_accounting")!="\"spawn_wait_exit_v1\"")throw std::runtime_error("unsupported ECM worker accounting");
+        const auto workers=paired("worker_samples","worker_seconds"),overheads=paired("worker_overhead_samples","worker_overhead_seconds");
+        if(std::abs(mad(workers)-real(f,"worker_mad_seconds"))>1e-9*std::max(1.,mad(workers)))
+            throw std::runtime_error("inconsistent ECM worker spread");
+        for(size_t i=0;i<workers.size();++i)if(!close(workers[i],totals[i]+overheads[i]))
+            throw std::runtime_error("ECM worker and engine timing mismatch");
+    } else for(const auto &field:f)if(field.first.compare(0,7,"worker_")==0)
+        throw std::runtime_error("ECM worker samples missing accounting contract");
+}
 inline void validate_sample(const Fields &f) {
     const auto bits=uint(f,"target_bits"),s=uint(f,"arithmetic_bits"),p=uint(f,"carrier_exponent");
     const auto b1=uint(f,"b1"),b2=uint(f,"b2"),d=uint(f,"d"),leaves=uint(f,"p");
@@ -147,6 +184,7 @@ inline void validate_sample(const Fields &f) {
        std::abs(mad(v)-real(f,"mad_seconds"))>1e-9*std::max(1.,mad(v)))
         throw std::runtime_error("inconsistent ECM tune repetitions/statistics");
     for(const char *phase:{"init_seconds","main_seconds","giant_seconds","gtrees_seconds","fold_seconds","descent_seconds","inverse_seconds","accum_seconds"})real(f,phase);
+    validate_paired_costs(f,v);
 }
 inline std::string ecm_table(const Fields &f,size_t index) {
     validate_sample(f);std::ostringstream out;out<<"\n[ecm.sample_"<<index<<"]\n";
@@ -160,7 +198,8 @@ struct EcmProfile {
     std::vector<Fields> samples;
     static EcmProfile load(const std::filesystem::path &path) {
         std::error_code error;const auto size=std::filesystem::file_size(path,error);
-        if(error || size>16*1048576)throw std::runtime_error("ECM tune profile missing or exceeds 16MiB");
+        // Level 10 has up to 3094 scopes, each with 21 paired cost samples.
+        if(error || size>64*1048576)throw std::runtime_error("ECM tune profile missing or exceeds 64MiB");
         std::ifstream in(path,std::ios::binary);EcmProfile p;Fields *table=nullptr;
         std::set<std::string> sections;std::string line;
         auto trim=[](std::string s){const auto a=s.find_first_not_of(" \t\r\n");if(a==s.npos)return std::string{};return s.substr(a,s.find_last_not_of(" \t\r\n")-a+1);};
