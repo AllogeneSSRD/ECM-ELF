@@ -525,7 +525,7 @@ GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大
 
 最大候选时间误差2.2305%，两档均选D120120/承载6011，有限四候选的实测排名损失0；未锁定自动曲线为4.631056、7.982833 s，误差1.0970%、0.1175%。保持8%时间/5%排名门限。计时为`stage2_full_wall.total`，排除Stage1、进程启动、规划和结果发布；候选采用固定顺序，每项n=3，没有交错置信区间或全区间精度证明，也没有新增内核速度收益结论。58,944 mandatory cases、233,864 GMP核对，bad和因子命中均为0。NVML每秒采样，GPU1完整349点；利用率>50%的305点中SM1560…1800 MHz、中位数1800，功率12.73…55.12 W、中位数47.14 W，不是严格恒频。
 
-证据`data/experiments/ntt_phase_tune_20261010/component_main_holdouts/`及`component_main_audit/result.json`。102项测量输入的冻结副本均匹配原始摘要，当前二进制的61项源仍一致。测量结束后工作量辅助工具修正格式2/3的旧调用兼容，冻结的GPU验收工具保留；修正后的当前工具已通过上述CPU原生参考及`workload_format4_regression/`的32计划重放，不将当前辅助工具摘要冒充为旧测量摘要。
+证据`data/experiments/ntt_phase_tune_20261010/component_main_holdouts/`及`component_main_audit/result.json`。102项测量输入的冻结副本均匹配原始摘要，测量版本的61项源在验收时一致；冻结身份不作为当前源码摘要。测量结束后工作量辅助工具修正格式2/3的旧调用兼容，冻结的GPU验收工具保留；修正后的当前工具已通过上述CPU原生参考及`workload_format4_regression/`的32计划重放，不将当前辅助工具摘要冒充为旧测量摘要。
 
 实际CLI合并的32个ECM范围与337个NTT形状、失败保留旧输出和再次合并已核对，证据`component_merge_runtime_v2/`。已知素数M521/B1=20/D60060/B2=2.6e9完成1次预热及1次正式曲线，再导入167个NTT形状并原子发布格式4，证据`live_ntt_import/`；这是发布入口检查，不是重复性能验收。Auto B2另通过INI、显式普通/承载/D锁定、精确点优先、未限制搜索和缺项回退共6个计划及1条完整未锁定曲线，证据`component_auto_runtime_v4/`，入口为[Auto运行检查](../../tools/test/test_stage2_tune_component_auto_runtime.py)。该检查T1=3 s/curve是固定测试输入，实测T1的有限收益验证见下节。更多生产位宽/B1、预算、cold/driver和非驻留/G1仍在[TODO](../TODO.md)。
 
@@ -540,6 +540,21 @@ GPU门禁测量30个小长度/批量组合、65535 slices边界组合、57个大
 选中点完整进程中位数5.7157982 s，其中worker内Auto规划中位数3.065344 s。选中点每次执行完整Auto，其他候选显式固定B2/D/承载，因此不能把两类进程墙钟直接作为同等调用成本比较。当前8%/5%验收针对引擎T2收益；减少规划开销并核对完整调用成本仍是独立任务，不把上述结果写成端到端同等幅度收益。
 
 证据为`data/experiments/ntt_phase_tune_20261010/component_auto_profit/`、`component_auto_profit_audit/`及`component_auto_profit_audit_guards/`。独立CPU审计核对104份冻结输入、61项二进制源闭包、实际加载的EXE/GMP、实测T1、每条日志/回执、配对数组、收益和NVML；8种损坏的私有证据副本全部拒绝，原始目录未改写，未增加GPU曲线。工具为[收益验证](../../tools/bench/validate_stage2_tune_auto_profit.py)、[独立审计](../../tools/bench/audit_stage2_tune_auto_profit.py)及[审计拒绝门禁](../../tools/test/test_stage2_tune_profit_audit.py)。更多生产B1、位宽、实际批次、预算及非驻留/G1仍未覆盖。
+
+### 组合模型的packing查询复用
+
+CPU对照使用AMD Ryzen AI 9 HX370、MSVC14.51、CUDA13.3的nvcc C++17/O3，以及同一个已核验生产CUDA对象中导出的纯packing函数。旧头文件由上述收益证据的冻结源恢复，新头文件加入单次选型的有效形状缓存。输入仍为同一格式4配置；12组请求覆盖T1=0.0320491875/3/44 s、R=0.5/1/2、两D/两算术锁定、区间限制及精确端点。除第一个T1外，其他T1只是CPU等价性输入，不是新的Stage1标定。
+
+每次重新构造Estimator，不跨调用保留缓存；一次预热、三次旧/新交错正式重复，每次一轮。每轮9,207个候选的完整预测、误差、保护成本、收益、范围标志和排序完全一致。不受限1316候选构造中位数2.8393847→0.0381422 s（−98.657%），packing查询175,936→828次；查询计时从2.801339→0.0163801 s。该计时包含查询计数与时钟采样，排除profile读取、设备查询、显存规划和完整曲线，不是GPU内核加速。
+
+生产旧EXE SHA256=`eea672d1ea862df56c024b7a941e44970159aa167a926c8b5e41ec76ddcd640a`，新EXE=`8d20eec4ecae80adcb60d0da31e80a15f731728d562e9a2f16a26498ac1ac39d`；CUDA对象未变，HostOnly编译核对依赖和对象摘要。GPU1、输入、B1、sigma、实测T1、profile与预算沿用上节，1800 MHz上限/默认55 W保持不变。不限B2与限制B2=12.5e9…23.7e9两类调用均不锁定D/算术；每版本每类预热1次、正式3次，正/反顺序交错，共16完整曲线。正式中位数为：
+
+- 不限范围：Auto规划3.036589→0.355632 s（−88.288%）；完整进程5.689334→2.9999359 s（−47.271%）；引擎2.306269→2.307465 s。
+- 限制范围：Auto规划3.121298→0.350143 s（−88.782%）；完整进程8.3750426→5.6155627 s（−32.949%）；引擎4.896303→4.885065 s。
+
+两类选择及全部生产决策字段一致（仅实时free快照不同），分别选择B2=2.6e9/D60060/承载6011和B2=14,620,874,455/D120120/承载6011，均为精确实测点。27,648 mandatory cases、52,912 GMP核对bad0，无因子，fold/frontier驻留且引擎计时clean。71份冻结输入、实际父/worker加载模块、save实际目标和原始计时数组另经独立重算；模块采集只在丢弃的预热中进行。NVML每秒91点，其中49个利用率>50%样本SM1650…1800 MHz、中位数1800；功率12.93…54.81 W、中位数30.95 W。未进行显卡设置操作、并行GPU1任务或正式计时期间编译。
+
+缓存新增7项拒绝/隔离检查，原生32锚点/8查询/3018 bins/252数值与16格式拒绝继续通过。证据在`data/experiments/ntt_phase_tune_20261010/component_planning_cache_v1/`、`component_planning_runtime_v1/`及`native_components_cache_v1/`；工具为[CPU对照](../../tools/bench/benchmark_stage2_tune_component_planning.py)与[完整Auto对照](../../tools/bench/benchmark_stage2_auto_planning.py)。该改善是当前短曲线的规划收益，不改变8%时间/5%收益门限，不证明更广输入的GPU或连续全局收益。约0.35 s剩余规划、进程/驱动成本及更广生产标定仍待处理。
 
 ## 下一测量
 

@@ -30,7 +30,32 @@ static void selftest() {
     check(!t::ntt_references(48,200,129,invalid,1024,2,true,0,{},r));
     t::ComponentModel model;t::B2Prediction predicted;
     check(!t::prepare_component_model({},model) && !t::predict_component(model,100,r,predicted));
-    std::cout<<"{\"complete\":true,\"gates\":10}\n";
+    t::EcmProfile profile;
+    profile.profile["component_model"]="\"phase_ntt_loop_v1\"";
+    profile.ntt_policy={{"batch_bytes","1024"},{"buffers","2"},{"physical_chunks","1"},{"chunk_max","0"}};
+    measurements.begin()->second=.001;
+    for(const auto &m:measurements)profile.ntt_samples[m.first]={{"median_seconds",std::to_string(m.second)}};
+    t::Fields sample{{"p","48"},{"d","1"},{"arithmetic_bits","129"}};
+    Word calls=0;
+    auto counted=[&](Word m,int bits,Word *n,Word *slots){++calls;return query(m,bits,n,slots);};
+    t::ComponentEstimator cached(profile,counted);
+    check(cached.reference(sample,200,r) && calls>0);
+    const Word initial=calls;
+    check(cached.reference(sample,200,r) && calls==initial);
+    sample["arithmetic_bits"]="130";
+    check(cached.reference(sample,200,r) && calls==2*initial);
+    t::ComponentEstimator fresh(profile,counted);
+    check(fresh.reference(sample,200,r) && calls==3*initial);
+    calls=0;
+    t::ComponentEstimator malformed(profile,[&](Word m,int bits,Word *n,Word *slots){++calls;return invalid(m,bits,n,slots);});
+    check(!malformed.reference(sample,200,r) && !malformed.reference(sample,200,r) && calls==2);
+    calls=0;
+    t::ComponentEstimator refused(profile,[&](Word,int,Word*,Word*){++calls;return false;});
+    check(!refused.reference(sample,200,r) && !refused.reference(sample,200,r) && calls==2);
+    // Packing reuse must not reuse measurement coverage or references.
+    cached.measurements.clear();
+    check(cached.reference(sample,200,r) && !r.complete && calls==2);
+    std::cout<<"{\"complete\":true,\"gates\":17}\n";
 }
 int main(int argc,char **argv) {
     try {

@@ -8,6 +8,10 @@
 
 完成Auto B2收益测量后，`audit_stage2_tune_auto_profit.py --evidence <完成目录> --output <新目录> [--require-current]`在CPU上独立核对冻结身份、实测T1、每条曲线、重复统计、有限收益和NVML。默认可审计旧版本证据；`--require-current`另要求当前输入与源闭包一致。`tools/test/test_stage2_tune_profit_audit.py --evidence <完成目录> --output <新目录>`对8类损坏的私有证据副本验证拒绝，核对原始目录未变，不运行额外GPU曲线。引擎T2和完整进程墙钟分别保留，自动点与显式固定候选的规划工作量不同，不能直接混合进程收益排名。
 
+`benchmark_stage2_tune_component_planning.py --build <原生产构建目录> --baseline-evidence <该二进制完成的收益证据> --profile <格式4.toml> --output <新目录>`用冻结旧头文件和当前头文件编译CPU对照，链接相同已核验CUDA对象的纯packing查询。输入应为同一目标位宽/B1，覆盖D/算术锁定、T1/R与范围；默认每次1次预热、正式3次，每次2轮，可用`--rounds`修改。`--baseline-only`只采旧版本，不声称对照完成；原始失败目录保留。不查询设备、不运行曲线；候选数值和排序必须完全相同。
+
+`benchmark_stage2_auto_planning.py --baseline-exe <旧exe> --exe <新exe> --profile <格式4.toml> --stage1-profile <实测T1.toml> --save <有效save> --device <n> --powershell <pwsh.exe> --output <新目录>`交错测完整Auto调用。默认Stage1 batch8/lcm、正式3次；默认另测限制B2=12.5e9…23.7e9，可用`--lower-b2`/`--upper-b2`覆盖。两类调用均不锁定D/承载；独立记录完整进程、worker、规划与引擎，不相加中位数。只在预热采集实际模块，NVML只读；启动前须停止所测GPU的其他任务和编译，保持电源/频率条件。新二进制源闭包必须与当前源码一致，失败保留证据；脚本不更改硬件设置。
+
 - `analyze_stage2_carrier_plan.py`：计算 N/M packing、D/P、预算与并存下界。`--bits`、`--carrier-bits`、`--b2`、`--d`、预算和 buffers 参数；输出 JSON，不启动曲线，`measured=false`。
 - `plot_stage2_carrier_plan.py`：读取分析 JSON，生成 PNG/SVG；可读取位宽扫描统计。
 - `prepare_stage2_carrier_inputs.py`：准备明确 target/carrier 的参考输入和 save，不把合成宽位数算术覆盖当作生产性能输入。

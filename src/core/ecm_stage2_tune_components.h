@@ -169,6 +169,7 @@ struct ComponentEstimator {
     Fields packing;
     Query query;
     std::map<std::string,ComponentModel> models;
+    mutable std::map<std::pair<Word,int>,std::pair<Word,Word>> shapes;
     bool enabled=false;
     ComponentEstimator(const EcmProfile &profile,Query shape_query):packing(profile.ntt_policy),query(std::move(shape_query)) {
         enabled=profile.profile.count("component_model") && !profile.ntt_samples.empty();
@@ -176,7 +177,19 @@ struct ComponentEstimator {
     }
     bool reference(const Fields &sample,Word b2,NttReferences &out)const {
         if(!enabled)return false;
-        return ntt_references(uint(sample,"p"),b2/uint(sample,"d")+2,(int)uint(sample,"arithmetic_bits"),query,
+        // The caller supplies one immutable pure packing function for this
+        // selection. Only valid descriptors are retained; rejected/malformed
+        // queries still follow the uncached refusal path on every request.
+        auto shape=[&](Word operand,int bits,Word *n,Word *slots) {
+            const auto key=std::make_pair(operand,bits);
+            const auto found=shapes.find(key);
+            if(found!=shapes.end()){*n=found->second.first;*slots=found->second.second;return true;}
+            if(!query(operand,bits,n,slots))return false;
+            if(*n>=8 && *n<=(1ull<<27) && !(*n&(*n-1)) && *slots==2*operand-1)
+                shapes.emplace(key,std::make_pair(*n,*slots));
+            return true;
+        };
+        return ntt_references(uint(sample,"p"),b2/uint(sample,"d")+2,(int)uint(sample,"arithmetic_bits"),shape,
             uint(packing,"batch_bytes"),(unsigned)uint(packing,"buffers"),uint(packing,"physical_chunks")!=0,
             uint(packing,"chunk_max"),measurements,out);
     }
