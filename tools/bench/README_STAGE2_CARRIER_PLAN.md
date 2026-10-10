@@ -6,6 +6,8 @@
 
 ## 研究与准备
 
+`merge_stage1_tune_profiles.py --stage2 <生产exe> --input <Stage1成本.toml> --input <另一成本.toml> --output <合并.toml> --evidence <新目录>`整理同设备/策略/重复次数的完整Stage1实测，供INI的`stage1_tune_profile`使用。不查询GPU，不编译或运行曲线；每个输入和合并结果都通过原生离线检查。目标位宽/B1/batch/模数类型/指数模式相同的记录须完全一致，或显式加`--replace-scopes`以最后完整记录替换；不混合统计。未知字段拒绝，路径和摘要只放证据JSON，失败不替换已有输出。`tools/test/test_stage1_tune_merge.py --stage2 <exe> --input <文件>`（至少两个输入）`--output <新目录>`核对范围保留、去重、冲突/策略/身份拒绝及发布保护；所有合成记录只用于私有测试，不作为性能测量。
+
 完成Auto B2收益测量后，`audit_stage2_tune_auto_profit.py --evidence <完成目录> --output <新目录> [--require-current]`在CPU上独立核对冻结身份、实测T1、每条曲线、重复统计、有限收益和NVML。默认可审计旧版本证据；`--require-current`另要求当前输入与源闭包一致。`tools/test/test_stage2_tune_profit_audit.py --evidence <完成目录> --output <新目录>`对8类损坏的私有证据副本验证拒绝，核对原始目录未变，不运行额外GPU曲线。引擎T2和完整进程墙钟分别保留，自动点与显式固定候选的规划工作量不同，不能直接混合进程收益排名。
 
 `benchmark_stage2_tune_component_planning.py --build <原生产构建目录> --baseline-evidence <该二进制完成的收益证据> --profile <格式4.toml> --output <新目录>`用冻结旧头文件和当前头文件编译CPU对照，链接相同已核验CUDA对象的纯packing查询。输入应为同一目标位宽/B1，覆盖D/算术锁定、T1/R与范围；默认每次1次预热、正式3次，每次2轮，可用`--rounds`修改。`--baseline-only`只采旧版本，不声称对照完成；原始失败目录保留。不查询设备、不运行曲线；候选数值和排序必须完全相同。
