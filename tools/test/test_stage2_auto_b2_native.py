@@ -87,7 +87,7 @@ def main():
     auto('changed_kernel',success=False,extra_env={'NTT_GIANT_CHAIN_MIN':'1'},reason='configuration mismatch')
     auto('launch_blocking',success=False,extra_env={'CUDA_LAUNCH_BLOCKING':'1'},reason='configuration mismatch')
     invoke('explicit_conflict',['--save',save,'--auto-b2','--b2',3000000000,'--plan-only'],False,reason='conflicts')
-    invoke('missing_profile',['--save',save,'--auto-b2','--plan-only'],False,reason='requires --cost-profile')
+    invoke('missing_profile',['--save',save,'--auto-b2','--plan-only'],False,reason='requires --tune-profile or --cost-profile')
     invoke('legacy_zero',['--save',save,'--b2',0,'--plan-only'],False,reason='B2 must exceed')
     for bits in (2203,4423):
         args=['--save',a.save_dir.resolve()/f'm{bits}.save','--auto-b2','--cost-profile',profile,'--plan-only']

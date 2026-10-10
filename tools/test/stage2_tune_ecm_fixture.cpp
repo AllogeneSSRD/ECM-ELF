@@ -1,5 +1,6 @@
 #include "../../src/core/ecm_stage2_tune_ecm.h"
 #include "../../src/core/ecm_stage2_tune_prediction.h"
+#include "../../src/core/ecm_stage2_tune_auto.h"
 #include <iostream>
 int main(int argc,char **argv) {
     try {
@@ -23,6 +24,18 @@ int main(int argc,char **argv) {
                 <<",\"seconds\":"<<prediction.seconds<<",\"error_seconds\":"<<prediction.error_seconds
                 <<",\"mad_seconds\":"<<prediction.mad_seconds<<",\"max_relative_error\":"<<prediction.max_relative_error
                 <<",\"samples\":"<<prediction.samples<<"}\n";
+        } else if(argc==7 && std::string(argv[1])=="--auto") {
+            const auto profile=t::EcmProfile::load(argv[2]);std::vector<const t::Fields*> samples;
+            for(const auto &sample:profile.samples)samples.push_back(&sample);
+            const t::AutoRequest request{t::uint(profile.samples.front(),"b1"),ecm_stage2::cost::integer(argv[4]),
+                ecm_stage2::cost::integer(argv[5]),std::stod(argv[3]),std::stod(argv[6])};
+            const auto candidates=t::auto_candidates(samples,t::predicts_b2(profile),request);
+            const auto &best=candidates.front();
+            std::cout<<std::setprecision(17)<<"{\"B2\":"<<best.b2<<",\"D\":"<<t::uint(*best.sample,"d")
+                <<",\"carrier\":"<<t::uint(*best.sample,"carrier_exponent")<<",\"seconds\":"<<best.seconds
+                <<",\"rank\":"<<best.guarded_seconds<<",\"K\":"<<best.benefit<<",\"score\":"<<best.score
+                <<",\"candidates\":"<<candidates.size()<<",\"predicted\":"<<(best.prediction.samples?"true":"false")
+                <<",\"limited\":"<<(best.limited?"true":"false")<<"}\n";
         } else if(argc>=3 && std::string(argv[1])=="--merge") {
             std::vector<t::EcmProfile> inputs;
             for(int i=2;i<argc;++i)inputs.push_back(t::EcmProfile::load(argv[i]));

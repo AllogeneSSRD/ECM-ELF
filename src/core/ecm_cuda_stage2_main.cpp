@@ -14,6 +14,7 @@
 #include "ecm_stage2_tune_format.h"
 #include "ecm_stage2_tune_ecm.h"
 #include "ecm_stage2_tune_prediction.h"
+#include "ecm_stage2_tune_auto.h"
 #include "ecm_stage2_geometry.h"
 #include "ecm_stage2_logging.h"
 #include "ecm_stage2_console.h"
@@ -505,7 +506,8 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     if (o.factor_only) cmd += L" --factor-only";
     if (o.auto_b2 && !b2) {
         auto real=[](double value){std::wostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(17)<<value;return out.str();};
-        cmd += L" --auto-b2 --cost-profile " + quote(fs::path(o.cost_profile).wstring());
+        cmd += L" --auto-b2";
+        if(!o.cost_profile.empty())cmd+=L" --cost-profile " + quote(fs::path(o.cost_profile).wstring());
         arg(L"--arena-mb",o.arena);arg(L"--owner-budget-mb",o.owner_mb);arg(L"--stage1-batch",o.stage1_batch);
         if(o.auto_min)arg(L"--auto-min-b2",o.auto_min);if(o.auto_max)arg(L"--auto-max-b2",o.auto_max);
         if(o.stage1_seconds)cmd+=L" --stage1-seconds-per-curve "+real(o.stage1_seconds);
@@ -615,7 +617,9 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     return code==0?0:1;
 }
 
+std::string select_auto_tuned(Options &o,const Record &r);
 std::string select_auto(Options &o,const Record &r,bool apply=true) {
+    if(!o.tune_profile.empty())return select_auto_tuned(o,r);
     namespace c=ecm_stage2::cost;
     if(o.carrier_exponent)throw std::runtime_error("Auto B2 needs a calibrated Mersenne-carrier profile; use explicit B2");
 #if NTT_GL_ADD_SUB_MASK != 0
@@ -723,7 +727,7 @@ int curve_worker(Options o) {
     std::string auto_json;
     if(!o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
     o.has_d=requested_d!=0;
-    const auto tuned_json=o.tune_child?std::string{}:select_tuned(o,r);
+    const auto tuned_json=o.tune_child || !auto_json.empty()?std::string{}:select_tuned(o,r);
     if(!tuned_json.empty())std::cout<<tuned_json<<std::endl;
     const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
@@ -807,7 +811,8 @@ void help() {
         "         Production console default: phases; readable file: batches. --dry-run --help\n"
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
         "         --factor-only (skip optional prime-witness naming; raw factors may be composite)\n"
-        "Auto B2: --auto-b2 --cost-profile FILE [--stage1-batch N]\n"
+        "Auto B2: --auto-b2 --tune-profile FILE.toml --stage1-seconds-per-curve S\n"
+        "         Legacy: --auto-b2 --cost-profile FILE [--stage1-batch N]\n"
         "         [--stage1-seconds-per-curve S] [--stage2-ratio-adjust R]\n"
         "         [--auto-min-b2 B2 --auto-max-b2 B2] [--owner-budget-mb MB]\n"
         "         Requires a matching measured runtime profile; no extrapolation.\n"
@@ -851,6 +856,32 @@ std::string curve_memory_record(const std::string &json) {
     const auto a=json.find("\"curve_workspace_memory\":{");if(a==json.npos)throw std::runtime_error("curve memory model unavailable");
     return json.substr(a,json.find("\"s4_memory\":",a)-a);
 }
+std::vector<const ecm_stage2::tune::Fields*> matching_tune_samples(
+    const ecm_stage2::tune::EcmProfile &profile,const Options &o,const Record &r) {
+    namespace t=ecm_stage2::tune;
+    Big target,plus;mpz_set_str(target.z,r.n.c_str(),16);mpz_add_ui(plus.z,target.z,1);
+    const auto bits=mpz_sizeinbase(target.z,2);
+    const std::string kind=json_string(mpz_popcount(plus.z)==1?"mersenne":"generic");
+    std::map<unsigned,bool> legal;
+    std::vector<const t::Fields*> result;
+    for(const auto &sample:profile.samples) {
+        const auto carrier=(unsigned)t::uint(sample,"carrier_exponent");
+        if(t::uint(sample,"target_bits")!=bits || t::uint(sample,"b1")!=r.b1 ||
+           (o.has_d && o.d && t::uint(sample,"d")!=o.d) || (o.has_carrier && carrier!=o.carrier_exponent) ||
+           !t::uint(sample,"fold_resident") || !t::uint(sample,"frontier_resident"))continue;
+        if(!carrier && t::required(sample,"modulus_kind")!=kind)continue;
+        if(carrier) {
+            auto found=legal.find(carrier);
+            if(found==legal.end()) {
+                ecm_stage2::ModulusContext modulus;std::string error;
+                found=legal.emplace(carrier,modulus.configure(r.n.c_str(),16,carrier,error)).first;
+            }
+            if(!found->second)continue;
+        }
+        result.push_back(&sample);
+    }
+    return result;
+}
 std::string select_tuned(Options &o,const Record &r) {
     if(o.tune_profile.empty())return {};
     namespace t=ecm_stage2::tune;
@@ -861,18 +892,10 @@ std::string select_tuned(Options &o,const Record &r) {
     auto fallback=[](const char *reason){return std::string("{\"type\":\"tune_selection\",\"selected\":false,\"reason\":")+json_string(reason)+"}";};
     if(o.debug_log)return fallback("debug_log_not_calibrated");
     if(!profile.matches(device,o.batch,o.arena,o.owner_mb,tune_environment(),NTT_GL_ADD_SUB_MASK))return fallback("device_or_policy_mismatch");
-    Big target,plus;mpz_set_str(target.z,r.n.c_str(),16);mpz_add_ui(plus.z,target.z,1);
-    const auto bits=mpz_sizeinbase(target.z,2);
-    const std::string kind=json_string(mpz_popcount(plus.z)==1?"mersenne":"generic");
     struct Candidate {const t::Fields *sample;double rank;t::B2Prediction prediction;};std::vector<Candidate> candidates;
     std::map<std::string,std::vector<const t::Fields*>> groups;std::set<std::string> exact;
-    for(const auto &s:profile.samples) {
-        const auto carrier=t::uint(s,"carrier_exponent");
-        if(t::uint(s,"target_bits")!=bits || t::uint(s,"b1")!=r.b1 ||
-           (o.has_d && o.d && t::uint(s,"d")!=o.d) || (o.has_carrier && carrier!=o.carrier_exponent) ||
-           !t::uint(s,"fold_resident") || !t::uint(s,"frontier_resident"))continue;
-        if(!carrier && t::required(s,"modulus_kind")!=kind)continue;
-        if(carrier){ecm_stage2::ModulusContext m;std::string error;if(!m.configure(r.n.c_str(),16,(unsigned)carrier,error))continue;}
+    for(const auto *sample:matching_tune_samples(profile,o,r)) {
+        const auto &s=*sample;
         const auto key=t::b2_scope(s);
         if(t::predicts_b2(profile))groups[key].push_back(&s);
         if(t::uint(s,"b2")!=o.b2)continue;
@@ -911,6 +934,49 @@ std::string select_tuned(Options &o,const Record &r) {
             <<",\"residency_guaranteed\":false}";return out.str();
     }
     return fallback(candidates.empty()?"no_matching_measured_scope":"no_candidate_fits_current_memory");
+}
+std::string select_auto_tuned(Options &o,const Record &r) {
+    namespace t=ecm_stage2::tune;
+    if(o.debug_log)throw std::runtime_error("full ECM Auto B2 debug_log is not calibrated");
+    if(!(o.stage1_seconds>0) || !std::isfinite(o.stage1_seconds))
+        throw std::runtime_error("full ECM Auto B2 requires --stage1-seconds-per-curve or positive INI stage1_seconds_per_curve");
+    Handle guard;guard.value=CreateFileW(fs::path(o.tune_profile).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(guard.value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock full ECM Auto B2 profile");
+    const auto profile=t::EcmProfile::load(o.tune_profile);
+    const auto hash=ecm_stage2::sha256_file(fs::path(o.tune_profile));
+    EcmStage2DeviceInfo device;if(ecm_cuda_stage2_device_info(o.device,&device))throw std::runtime_error("cannot query Auto B2 selection device");
+    if(!profile.matches(device,o.batch,o.arena,o.owner_mb,tune_environment(),NTT_GL_ADD_SUB_MASK))
+        throw std::runtime_error("full ECM Auto B2 device or memory/backend policy mismatch");
+    t::AutoRequest request{r.b1,o.auto_min,o.auto_max,o.stage1_seconds,o.ratio_adjust};
+    const auto candidates=t::auto_candidates(matching_tune_samples(profile,o,r),t::predicts_b2(profile),request);
+    size_t rejected=0;
+    for(const auto &candidate:candidates) {
+        const auto d=t::uint(*candidate.sample,"d");const unsigned carrier=(unsigned)t::uint(*candidate.sample,"carrier_exponent");
+        std::string plan;
+        if(ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,candidate.b2,d,o.device,
+            [](const char *p,void *ctx){*static_cast<std::string*>(ctx)=p;},&plan,carrier))throw std::runtime_error("Auto B2 candidate planning failed");
+        const auto memory=curve_memory_record(plan);
+        if(plan_scalar(memory,"valid")!="true" || plan_scalar(memory,"finished")!="true" || plan_scalar(memory,"initial_free_snapshot_fits")!="true") {++rejected;continue;}
+        o.b2=candidate.b2;o.d=d;o.carrier_exponent=carrier;
+        const auto &prediction=candidate.prediction;
+        std::ostringstream out;out<<std::setprecision(17)
+            <<"{\"type\":\"stage2_auto_plan\",\"schema\":3,\"source\":\"full_ecm_tune\",\"profile_sha256\":"<<json_string(hash)
+            <<",\"model\":"<<json_string(prediction.samples?t::b2_prediction_model:"measured_exact_scope_v1")
+            <<",\"B2\":"<<candidate.b2<<",\"D\":"<<d<<",\"carrier_exponent\":"<<carrier
+            <<",\"P\":"<<plan_scalar(plan,"P")<<",\"I\":"<<plan_scalar(plan,"I")<<",\"G\":"<<plan_scalar(plan,"G")
+            <<",\"T1\":"<<o.stage1_seconds<<",\"T1_source\":\"provided_per_curve\",\"stage1_batch\":"<<o.stage1_batch
+            <<",\"ratio_adjust\":"<<o.ratio_adjust<<",\"T2\":"<<o.ratio_adjust*candidate.seconds
+            <<",\"engine_seconds\":"<<candidate.seconds<<",\"guarded_engine_seconds\":"<<candidate.guarded_seconds
+            <<",\"K\":"<<candidate.benefit<<",\"score\":"<<candidate.score<<",\"mad_seconds\":"<<candidate.mad_seconds
+            <<",\"scope_b2_min\":"<<candidate.low<<",\"scope_b2_max\":"<<candidate.high
+            <<",\"range_limited\":"<<(candidate.limited?"true":"false")<<",\"candidate_count\":"<<candidates.size()
+            <<",\"memory_rejected\":"<<rejected<<",\"required_free_bytes\":"<<plan_scalar(memory,"required_free_bytes")
+            <<",\"free_bytes\":"<<plan_scalar(plan,"free_bytes")<<",\"residency_guaranteed\":false,\"process_peak_guaranteed\":false";
+        if(prediction.samples)out<<",\"fit_samples\":"<<prediction.samples<<",\"fit_max_relative_error\":"<<prediction.max_relative_error
+            <<",\"fit_max_error_seconds\":"<<prediction.error_seconds;
+        out<<'}';return out.str();
+    }
+    throw std::runtime_error("no full ECM Auto B2 candidate fits current joint memory");
 }
 void merge_ecm_tune(const Options &o,const fs::path &destination) {
     namespace t=ecm_stage2::tune;
@@ -1122,7 +1188,7 @@ int driver(Options o) {
     const fs::path progress=s.progress.empty()?fs::path(worktodo.string()+suffix+".progress"):absolute_from(base,s.progress);
     const int device = o.device < 0 ? (s.device<0?cfg.device:s.device) : o.device;
     const uint64_t d = o.has_d ? o.d : s.d;
-    o.device=device;o.d=d;
+    o.device=device;o.d=d;o.has_d=d!=0;
     if (device < 0 || (d && (d < 6 || d % 2))) throw std::runtime_error("device must be >=0; D must be even and >=6");
     const uint64_t batch = o.has_batch ? o.batch : s.batch, arena = o.has_arena ? o.arena : s.arena;
     o.arena=arena;
@@ -1250,8 +1316,8 @@ int driver(Options o) {
             } else save=absolute_from(cwd,o.save);
             for(const auto &path:writable)if(same_path(save,path))throw std::runtime_error("save path conflicts with writable queue/log/result state");
             if(!o.dry&&!o.plan_only)fatal_log=log;
-            if(o.auto_b2&&!b2&&o.cost_profile.empty())throw std::runtime_error("Auto B2 requires --cost-profile FILE");
-            if(o.carrier_exponent && o.auto_b2 && !b2)throw std::runtime_error("Mersenne carrier requires explicit B2 until cost profiles are calibrated");
+            if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
+            if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
             plan=records(save,skip,count);
             for(const auto &r:plan) {
                 if((!(o.auto_b2&&!b2)&&b2<=r.b1)||b2>static_cast<uint64_t>(INT64_MAX)-8192)
@@ -1292,7 +1358,8 @@ int driver(Options o) {
                      << o.arena << ' ' << batch << ' ' << o.owner_mb << ' ' << std::setprecision(17)
                      << o.ratio_adjust << ' ' << o.stage1_seconds << ' ' << o.stage1_batch;
             if(o.carrier_exponent)identity << " carrier_exponent=" << o.carrier_exponent;
-            if(o.auto_b2&&!b2)identity << ' ' << ecm_stage2::sha256_file(o.cost_profile) << ' ' << o.auto_min << ' ' << o.auto_max;
+            if(o.has_carrier)identity << " carrier_request=" << o.carrier_exponent;
+            if(o.auto_b2&&!b2)identity << ' ' << ecm_stage2::sha256_file(o.tune_profile.empty()?o.cost_profile:o.tune_profile) << ' ' << o.auto_min << ' ' << o.auto_max;
             const auto key=identity.str();
             if(state.load(progress)) {
                 if(state.identity!=key) {
@@ -1328,7 +1395,7 @@ int driver(Options o) {
             if(o.plan_only) {
                 Options local=o;local.b2=b2;local.has_d=d!=0;
                 if(o.auto_b2&&!b2){std::cout<<select_auto(local,r,false)<<std::endl;if(o.tune_profile.empty())continue;}
-                const auto tuned=select_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;
+                else {const auto tuned=select_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;}
                 std::string result;
                 const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,local.b2,local.d,device,
                     [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,local.carrier_exponent);

@@ -286,6 +286,18 @@ NTT/S4 规划模型具有单独的规划与事件验证；本轮主扫描仍采�
 
 全部106条曲线无因子、GMP/算术坏计数0，fold/frontier驻留。执行二进制SHA256=`182f2950505e864ab31727c8c475a327bda4dce94b79a3e16ab3c1f5d7f86db7`，性能配置SHA256=`71d68c2ba57865be594d12450cbdb8a79c4a4d41d2bda11bcefb8328b7c4b33f`；计时为`stage2_full_wall.total`，排除Stage1、进程启动、规划和发布。证据在`data/experiments/ecm_tune_wide_prediction_20261010/`的`profile.toml`、`audit_measurement.json`、`audit_final.json`、`telemetry.csv`、`holdouts/result.json`和`reference_replay/result.json`；调优逐曲线回执/日志在`data/experiments/ecm_tune_17256_17927093/`。测量所用验证器保留为`holdouts/frozen_verifier.py`，当前参考实现已重放核对全部八个原生成本；原始性能文件与证据未改写。
 
+### 完整tune的Auto B2主路径验证
+
+生产二进制SHA256=`03ab129dc1b81faf928e806dffc8e2cf7ea287abc1173181c1cdc11a9f6d89e6`，55项编译依赖与冻结源一致，CUDA对象与上述区间验证相同。GPU1 RTX4060 Laptop，用户1800MHz/默认55W上限设置，arena6300/fold640/batch256 MiB；没有改变显卡设置或扰动忙碌GPU0。短运行没有连续传感器采样，不声明实际频率/功耗恒定。输入为M521及M6011的5872-bit余因子，B1=20、sigma26，复用上述小/大位宽性能数据。
+
+M521的Stage1成本输入T1=0.01、3、100秒时，分别选择B2=2600000000、14620874401、26000000000，均为D60060、普通模数；T1=3且倍率R=2时选择B2=4623526466。将`stage1_batch`改为16不再除已提供的T1，结果与score不变。这些T1是决策验证输入，不是实测Stage1成本，不能由这些结果声称已验证生产总流程收益。
+
+最终验收执行4条完整曲线，包含两条私有队列曲线。M521限定未测B2=5.2×10⁹时，估计0.313360秒、实测0.307504秒，误差1.905%；余因子T1=30秒时，从1284个成本候选中自动选B2=20800000000、D120120、承载6011，估计5.896012秒、实测5.848048秒，误差0.820%。直接曲线每输入n=1，计时为`stage2_full_wall.total`，不含Stage1、进程启动、规划和发布；这证明接口与执行一致，不证明连续全局最优或该次Auto B2的独立收益排名损失。所有最终曲线bad0、无因子、fold/frontier驻留。
+
+同时检查CLI/INI、显式D与普通/承载锁定、上下限、缺少T1、区间外、策略不符、旧未标记模型、显存拒绝，以及完整tune优先于旧cost profile。plan-only不消费队列，两条曲线完成后重启不重复结果；联合选择不再被第二次D/承载选择改写。CPU原生Auto候选8项接受/12项拒绝；合成模型与20001点独立密集搜索的score比为0.9999954，该比值仅适用于这组合成模型。
+
+显式B2路径的三条完整回归曲线仍通过8%预定门限，最大误差2.048%。本轮含收集器失败后保留的已完成曲线共15条，原始日志核对mandatory/GMP坏计数均0；失败证据未删除。原始结果在`data/experiments/ecm_tune_auto_20261010/`的`runtime_final/result.json`、`runtime_final/frozen_verifier.py`、`explicit_b2_runtime_regression/result.json`、`auto_native_final/result.json`、`final_raw_audit.json`和`source_audit.json`。冻结二进制/源在`build_cuda_cmake/ecm_tune_auto_final_20261010/`。生产B1/预算扩展、真实Stage1预计算、驱动成本与独立收益排名仍见[TODO](../TODO.md)。
+
 ## B2 和位宽关系
 
 固定 D/P 时 I≈B2/D，G≈B2/(DP)，主重复成本近似 Tfixed+G·Tbatch，所以大 B2 可近线性。允许 P/D 随预算增长时可呈约平方根；驻留不是平方根的充分条件，owner 回退也不是线性的充分条件。

@@ -654,13 +654,14 @@ policy. This does not disable decomposition or change stage2_factorize_hits.<br>
 stage2_auto_b2=[0|1]; default=0
 ```
 
-Choose B2 automatically when no source specifies a nonzero value. 1 optimizes total workflow benefit<br>
-per unit time, including Stage1 cost; 0 disables. Requires calibration matching the device, bit<br>
-width, B1, and memory range. The current release candidate lacks production calibration; provide<br>
-explicit B2. Enabling this switch does not perform calibration.<br>
-控制是否在各处都未指定非零 B2 时自动选择 B2。1 按包含 Stage1 成本的总流程单位时间收益选取，0 关闭；<br>
-需要与设备、位宽、B1 和内存范围匹配的成本标定。当前发布候选尚无可用的生产标定，应显式提供 B2；开启开<br>
-关不会自动完成标定。
+Choose B2 when every source supplies zero. 1 optimizes total workflow benefit per unit time,<br>
+including Stage1 cost; 0 disables. Full ECM tune requires matching device/width/B1/memory policy and<br>
+a positive Stage1 seconds-per-curve input. It jointly selects measured or qualified in-range B2, D<br>
+and legal carrier. Without full ECM tune, the legacy cost profile must pass its calibration checks.<br>
+This switch does not calibrate costs.<br>
+所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。完整 ECM tune 要<br>
+求设备、位宽、B1、显存策略匹配，并提供正的 Stage1 每曲线耗时；联合选择实测或合格区间内的 B2、D 和合<br>
+法承载。未提供完整 ECM tune 时，旧成本配置必须通过原有标定检查。本开关不执行成本标定。
 
 ### stage2_gp
 
@@ -691,11 +692,11 @@ not Stage2 curve computation. A timeout does not invalidate a factor already fou
 stage2_cost_profile=<path>; default=""; empty=none
 ```
 
-Measured cost profile for Auto B2. Empty supplies no profile. Auto B2 checks the device, calibrated<br>
-bit width, B1, workspace, and algorithm settings; profiles from other devices are not treated as<br>
-generic estimates.<br>
-指定 Auto B2 使用的实测成本 profile。留空不提供 profile；启用 Auto B2 时，程序检查设备与已标定位宽、<br>
-B1、工作区及算法配置是否匹配，不将其他设备的 profile 当作通用估计。
+Legacy .cprof cost profile for Auto B2 when stage2_tune_profile is empty. Checks the original<br>
+binary/device/arithmetic and calibration contract; new full ECM tune does not relax those checks.<br>
+Empty supplies no legacy profile.<br>
+stage2_tune_profile 为空时供 Auto B2 使用的旧 .cprof 成本配置。保持原二进制、设备、算术及标定资格检<br>
+查；新的完整 ECM tune 不放宽旧合同。留空不提供旧配置。
 
 ### stage2_tune_profile
 
@@ -703,16 +704,16 @@ B1、工作区及算法配置是否匹配，不将其他设备的 profile 当作
 stage2_tune_profile=<path>; default=""; empty=legacy_selection
 ```
 
-Full ECM tune TOML profile for choosing D and Mersenne carrier. Empty keeps existing selection.<br>
-Matches the device, backend, memory policy, target bit width and B1. Uses measured B2 values first;<br>
-profiles with a qualified prediction model can estimate between measured B2 bounds, without<br>
-width/B1/D extrapolation. Explicit nonzero D fixes D; --carrier-exponent, including 0, fixes<br>
-arithmetic. Carrier candidates must exactly contain saved N as a divisor. This profile does not<br>
-select B2.<br>
-指定完整 ECM tune 的 TOML 性能配置，用于选择 D 和梅森承载。留空保留现有选型。检查设备、后端、显存策<br>
-略、目标位宽与 B1。优先使用对应 B2 的实测数据；通过模型验证的配置可预测实测 B2 区间内的耗时，不外推<br>
-位宽、B1 或 D。显式非零 D 固定 D；--carrier-exponent（包括 0）固定算术模式。承载候选必须实际被 save<br>
-的 N 整除。此配置不用于选择 B2。
+Full ECM tune TOML for D and legal Mersenne carrier selection. Matches device/backend/memory<br>
+policy/target width/B1. Uses exact B2 measurements or qualified predictions inside measured bounds;<br>
+no width/B1/D extrapolation. With stage2_auto_b2 and positive stage1_seconds_per_curve, jointly<br>
+chooses B2/D/carrier and takes priority over stage2_cost_profile. Explicit nonzero D fixes D;<br>
+--carrier-exponent including 0 fixes arithmetic. Saved N must divide the carrier. Empty keeps<br>
+existing selection.<br>
+用于 D 和合法梅森承载选择的完整 ECM tune TOML。匹配设备、后端、显存策略、目标位宽和 B1；使用精确 B2<br>
+实测或合格实测区间预测，不外推位宽、B1 或 D。启用 stage2_auto_b2 并提供正的 stage1_seconds_per_curve<br>
+后，联合选择 B2、D、承载，优先于 stage2_cost_profile。显式非零 D 固定 D；--carrier-exponent（包括 0<br>
+）固定算术。save 的 N 必须整除承载。留空保持已有选型。
 
 ### stage2_auto_min_b2
 
@@ -754,11 +755,14 @@ conditions; it neither starts a Stage1 batch from Stage2 nor changes the assignm
 stage1_seconds_per_curve=<x:R,finite,x>0>; default=@profile; unit=s/curve
 ```
 
-Manual positive Stage1 time estimate in seconds per curve for Auto B2. Unset uses a matching<br>
-profile. The default objective includes Stage1 cost even when reading existing saves. This is a<br>
-cost-model input, not a runtime limit.<br>
-手动提供 Auto B2 的 Stage1 每曲线耗时，单位为秒/曲线，必须为正数。未配置时从匹配的 profile 获取；即<br>
-使当前读取既有 save，默认优化目标仍计入 Stage1 成本。此键用于成本模型，不是实际运行时限。
+Positive Stage1 amortized seconds per curve for Auto B2, including its actual batch benefit; do not<br>
+divide by stage1_batch again. Required by full ECM tune. Zero/unset may use matched Stage1 data only<br>
+in a qualified legacy .cprof. Stage1 cost is included even for existing saves. It is a cost input,<br>
+not a runtime limit; full ECM tune does not measure Stage1 preparation or process overhead as this<br>
+value.<br>
+Auto B2 的正 Stage1 每曲线摊销秒数，应已包含实际批次收益，不再除以 stage1_batch。完整 ECM tune 必须<br>
+提供此值；零或未设置时，仅合格旧 .cprof 可读取匹配的 Stage1 数据。即使读取已有 save 仍计入 Stage1 成<br>
+本。此值是成本输入，不是运行时限；不能用完整 ECM tune 的基准点准备或进程开销代替。
 
 ### stage2_ratio_adjust
 

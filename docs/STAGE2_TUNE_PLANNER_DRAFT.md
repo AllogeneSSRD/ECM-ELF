@@ -145,3 +145,17 @@ NTT测量后续可作为阶段成本的独立特征/核对数据，须显式区�
 独立验证工具首版在全部驻留本批上完成实测；之后核对发现reference的实测点分支应拒绝非驻留点，分组也应先过滤非驻留锚点，按native现状修正。冻结测量验证器保留在`holdouts/frozen_verifier.py`，新增拒绝检查与当前reference对全部8个原生候选的重放通过，证据`reference_replay/result.json`。未改native算法、profile、门限或原始样本来使结论通过。正式性能与工具说明已同步。
 
 本阶段验证了高位宽固定scope内的区间成本及D/承载竞争；Auto B2新数据接口、真实Stage1摊销、生产B1/预算扩展和NTT/互斥阶段成本组合仍为下一阶段，不将当前B1=20证据替代这些工作。
+
+### 完整tune Auto B2联合选择接入
+
+新增独立CPU候选模块，将完整ECM实测/合格区间成本按K/[T1+R·Tguard]排名；搜索保留锚点、65位置对数网格和附近整数I平台边界。CLI/INI/worker/plan-only/队列贯通B2/D/承载、显式锁定、范围限制、原始请求及`auto_plan`；每条worker重新检查目标整除与当前正常驻留联合显存，不在联合选择后再运行第二次D/承载选择。完整tune优先于 `.cprof`，要求有限正的已摊销T1；旧二进制/算术标定门限保留，没有用新路径使不合格旧profile通过。
+
+第一轮合成检查发现整数I平台内成本不变而B2收益继续增长，最优可能是首平台末端而非字面范围端点；修正`range_limited`为首/末I平台，不改变8%预测资格。合成Auto检查8接受/12拒绝，独立20001位置搜索score比0.9999953759；13素数证书/独立点、10等级、21坏profile、预测/合并回归通过。
+
+初次显存拒绝fixture修改arena预算但未同步有效环境的arena_cap_kb，正确触发策略拒绝；同步fixture后，全范围不满足显存的检查反复CPU规划，在自身300秒超时退出。原PID经管理员只读查询确认终止才重跑，未因观测缺失重复启动。显存拒绝改为单一精确scope，保持数学/显存门限；全部候选不满足显存时的重复规划成本列入TODO。另一次4条曲线全部完成后，收集器把Stage1的finished键误当Stage2，读取错误路径失败；改为stage2_finished，保留此前日志与结果。CPU回归首次误用7scope生产profile作单scope合成模板，被reader拒绝；用测试定义的valid模板复跑通过，未修改reader或资格。
+
+最终冻结生产exe SHA256=`03ab129dc1b81faf928e806dffc8e2cf7ea287abc1173181c1cdc11a9f6d89e6`，HostOnly23.1秒，复用同一CUDA对象，55依赖与当前/冻结源一致。GPU1、用户1800MHz/默认55W上限、arena6300/fold640/batch256、不改变设置、不扰动GPU0；短运行无连续传感器。最终11组选择、11组拒绝、4条完整曲线通过，含T1/batch不重复摊销与两种算术锁定；私有两条队列完成后重启不重复。5872-bit余因子T1=30决策输入选B2=20800000000、D120120、承载6011，估计5.8960122/实测5.848048秒；M521未测5.2e9估计0.3133604/实测0.307504秒。直接每输入n=1，最大误差1.905%，不是独立连续收益最优证明。额外显式B2三点回归最大误差2.048%；全部保留的15条曲线原始审计mandatory/GMP坏计数0、无因子。
+
+证据`data/experiments/ecm_tune_auto_20261010/`，最终runtime_final、explicit_b2_runtime_regression、native_final、auto_native_final、prediction_template_regression、merge_template_regression、merge_runtime_regression、final_raw_audit和source_audit。失败/早期输出均保留；成功验证器另冻结。统一配置6生成物、AUTO_B2、使用说明、性能及TODO同步。
+
+未完成目标仍保留：真实生产Stage1摊销预计算，更多生产B1/位宽/预算范围和独立收益排名，互斥阶段/NTT特征组合、冷启动/驱动成本及非驻留/G1回退。当前完整tune T2仅为引擎total，提供的T1=3/30是接口决策测试输入；不能把基准点准备作为生产Stage1成本，也不能宣布总流程收益模型已全面合格。临时草稿开发完成后应提示用户处理，不自行删除。
