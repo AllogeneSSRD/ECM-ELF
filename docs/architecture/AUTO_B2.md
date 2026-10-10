@@ -74,7 +74,7 @@ T1样本=完整Stage1进程墙钟/C，包含进程启动、指数/曲线准备�
 
 `--tune-level <1..10>` 的NTT预设为 log₂L=3…[20+min(ℓ−1,7)]、重复2ℓ²+1次，slices取序列1、4、16、64、256、1024、4096、16384、65535的前min(ℓ,9)项。等级10继续增加重复次数。显式 `--length-log2`、`--tune-slices`、`--tune-repeats` 覆盖对应预设，与参数顺序无关。未指定等级时保持16…27、slices=1、重复5次。内存预算不随等级提高；每个形状独立检查预算和实时free余量，超限记录 `skipped_memory`。`effort_level=0` 表示未使用等级预设，实际范围以profile字段为准。
 
-NTT TOML 不参与自动 D/承载或 Auto B2 的运行选择；不能将 field-convolution 吞吐替代完整 Stage2 成本。
+独立NTT TOML不直接作为自动D/承载或Auto B2的完整成本配置。将其精确批量实测导入完整ECM格式4后，合格组合模型可使用NTT参照参与生产排名；仍需完整曲线配对成本、覆盖与误差资格。不能将field-convolution吞吐直接替代完整Stage2成本，详见[组合模型](#ntt-与配对阶段组合)。
 
 CUDA事件计时包含两次正向NTT和一次带乘积/缩放的逆NTT，不含输入生成、分配、传输和验证。若批量s的中位数为t秒，`conv_iter_per_s=s/t`，`batch_iter_per_s=1/t`；两者均不是ECM curves/s。每个slice使用不同常数项，独立GMP计算参考卷积；预热和每次正式测量都检查全部L·s个输出，包括应为零的位置。一次NTT tune不含S4归约、树准备、点运算和GCD，不能单独推导最优B2。
 
