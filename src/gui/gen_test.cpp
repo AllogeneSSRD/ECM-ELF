@@ -403,6 +403,70 @@ int main(int argc, char **argv) {
         check(!apply_append(path2, "", s3, err), "an empty payload is refused");
         std::remove(path.c_str());
         std::remove(path2.c_str());
+
+        const std::string section_path = "ecm_gui_gen_test_sections.txt";
+        {
+            std::ofstream out(section_path, std::ios::binary | std::ios::trunc);
+            out << "# shared queue\r\n[Worker #1]\r\nOLD1\r\n\r\n"
+                   "[Worker #2]\r\nOLD2\r\n";
+        }
+        FileStamp section_stamp;
+        stamp_file(section_path, section_stamp);
+        const std::string section_batch =
+            "[Worker #1]\r\nNEW1\r\n\r\n[Worker #2]\r\nNEW2\r\n\r\n";
+        check(apply_append(section_path, section_batch, section_stamp, err),
+              "a batch can be added to a sectioned queue", err);
+        const std::string section_result = read_file(section_path);
+        const std::size_t new1 = section_result.find("NEW1");
+        const std::size_t worker2 = section_result.find("[Worker #2]");
+        check(new1 != std::string::npos && worker2 != std::string::npos && new1 < worker2,
+              "worker 1 additions stay inside worker 1's section", section_result);
+        check(section_result.find("[Worker #1]", section_result.find("[Worker #1]") + 1) ==
+                  std::string::npos &&
+                  section_result.find("[Worker #2]", worker2 + 1) == std::string::npos,
+              "existing worker headers are reused", section_result);
+        FileStamp after_section;
+        stamp_file(section_path, after_section);
+        check(!apply_append(section_path, "UNROUTED\r\n", after_section, err) &&
+                  read_file(section_path) == section_result,
+              "a sectionless preview cannot land in an arbitrary worker section", err);
+        {
+            std::fstream edit(section_path, std::ios::binary | std::ios::in | std::ios::out);
+            edit.seekp(2);
+            edit.put('X');
+        }
+        FileStamp changed_section;
+        stamp_file(section_path, changed_section);
+        check(changed_section.size == after_section.size &&
+                  changed_section.hash != after_section.hash &&
+                  !apply_append(section_path, section_batch, after_section, err),
+              "same-size queue edits after preview are refused", err);
+        std::remove(section_path.c_str());
+
+        const std::string repeated_path = "ecm_gui_gen_test_repeated_sections.txt";
+        {
+            std::ofstream out(repeated_path, std::ios::binary | std::ios::trunc);
+            out << "[Worker #2]\r\nFIRST2\r\n[ worker  # 1 ]\r\nOLD1\r\n"
+                   "[Worker #2]\r\nLAST2";
+        }
+        FileStamp repeated_stamp;
+        stamp_file(repeated_path, repeated_stamp);
+        const std::string repeated_batch =
+            "[Worker #1]\r\nNEW1\r\n\r\n[Worker #2]\r\nNEW2\r\n\r\n"
+            "[Worker #3]\r\nNEW3\r\n\r\n";
+        check(apply_append(repeated_path, repeated_batch, repeated_stamp, err),
+              "repeated and missing worker sections accept additions", err);
+        const std::string repeated_result = read_file(repeated_path);
+        const std::size_t last2 = repeated_result.rfind("[Worker #2]");
+        const std::size_t added3 = repeated_result.find("[Worker #3]");
+        check(repeated_result.find("FIRST2\r\n[ worker  # 1 ]\r\nOLD1\r\n") !=
+                  std::string::npos &&
+                  repeated_result.find("NEW1") < last2 &&
+                  repeated_result.find("LAST2\r\nNEW2") != std::string::npos &&
+                  added3 != std::string::npos && repeated_result.find("NEW2") < added3,
+              "new lines use the final matching section and missing workers get a new section",
+              repeated_result);
+        std::remove(repeated_path.c_str());
     }
 
     // ---- rejected input is reported, never silently dropped --------------------------

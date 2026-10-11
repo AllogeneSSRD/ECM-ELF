@@ -1,4 +1,5 @@
 #include "worktodo_gen.h"
+#include "../core/ecm_ini.h"
 
 #include <algorithm>
 #include <cctype>
@@ -7,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <set>
 #include <sstream>
@@ -16,6 +18,7 @@
 #include <windows.h>
 #else
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace ecmgui {
@@ -26,6 +29,86 @@ std::string trim(const std::string &s) {
     while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
     while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
     return s.substr(b, e - b);
+}
+
+std::uint64_t hash_bytes(std::uint64_t hash, const char *data, std::size_t size) {
+    for (std::size_t i = 0; i < size; ++i) {
+        hash ^= static_cast<unsigned char>(data[i]);
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+struct WorkerHeader {
+    int worker = 0;
+    std::size_t start = 0;
+    std::size_t body = 0;
+};
+
+std::vector<WorkerHeader> worker_headers(const std::string &text) {
+    std::vector<WorkerHeader> headers;
+    std::size_t start = 0;
+    while (start < text.size()) {
+        const std::size_t end = text.find('\n', start);
+        const std::size_t next = end == std::string::npos ? text.size() : end + 1;
+        std::string line = text.substr(start, (end == std::string::npos ? text.size() : end) - start);
+        if (start == 0 && line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
+        const int worker = ecm_config::worker_header(trim(line));
+        if (worker > 0) headers.push_back({worker, start, next});
+        start = next;
+    }
+    return headers;
+}
+
+bool insert_into_worker_sections(const std::string &existing, const std::string &batch,
+                                 std::string &merged, std::string &err) {
+    const std::vector<WorkerHeader> sections = worker_headers(existing);
+    const std::vector<WorkerHeader> additions = worker_headers(batch);
+    if (additions.empty() || additions.front().start != 0) {
+        err = "the target has worker sections, but the preview has no worker header; "
+              "generate a new preview with configured workers";
+        return false;
+    }
+
+    std::map<int, std::string> by_worker;
+    for (std::size_t i = 0; i < additions.size(); ++i) {
+        const std::size_t end = i + 1 < additions.size() ? additions[i + 1].start : batch.size();
+        by_worker[additions[i].worker] += batch.substr(additions[i].body, end - additions[i].body);
+    }
+
+    std::map<std::size_t, std::string> insertions;
+    const auto add_at = [&](std::size_t pos, const std::string &chunk) {
+        std::string &dest = insertions[pos];
+        const char before = dest.empty() ? (pos == 0 ? '\n' : existing[pos - 1]) : dest.back();
+        if (before != '\n' && before != '\r') dest += "\r\n";
+        dest += chunk;
+    };
+    std::vector<std::pair<int, std::string>> missing;
+    for (const auto &entry : by_worker) {
+        std::size_t last = sections.size();
+        for (std::size_t i = 0; i < sections.size(); ++i) {
+            if (sections[i].worker == entry.first) last = i;
+        }
+        if (last == sections.size()) {
+            missing.push_back(entry);
+        } else {
+            const std::size_t pos = last + 1 < sections.size() ? sections[last + 1].start : existing.size();
+            add_at(pos, entry.second);
+        }
+    }
+    for (const auto &entry : missing) {
+        add_at(existing.size(), "[Worker #" + std::to_string(entry.first) + "]\r\n" + entry.second);
+    }
+
+    merged.clear();
+    std::size_t cursor = 0;
+    for (const auto &entry : insertions) {
+        merged.append(existing, cursor, entry.first - cursor);
+        merged += entry.second;
+        cursor = entry.first;
+    }
+    merged.append(existing, cursor, std::string::npos);
+    return true;
 }
 
 bool is_int_like(const std::string &raw) {
@@ -702,6 +785,18 @@ bool stamp_file(const std::string &path, FileStamp &out) {
     out.exists = true;
     out.size = static_cast<long long>(st.st_size);
     out.mtime = static_cast<long long>(st.st_mtime);
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    std::uint64_t hash = 14695981039346656037ull;
+    long long size = 0;
+    char buffer[8192];
+    while (in.read(buffer, sizeof(buffer)) || in.gcount() > 0) {
+        const std::streamsize count = in.gcount();
+        size += count;
+        hash = hash_bytes(hash, buffer, static_cast<std::size_t>(count));
+    }
+    if (in.bad() || size != static_cast<long long>(st.st_size)) return false;
+    out.hash = hash;
     return true;
 }
 
@@ -713,8 +808,13 @@ bool apply_append(const std::string &path, const std::string &text, const FileSt
     }
     FileStamp now;
     const bool exists_now = stamp_file(path, now);
+    if (!exists_now && now.exists) {
+        err = "cannot read target queue " + path;
+        return false;
+    }
     if (expected.exists != exists_now || (exists_now && (now.size != expected.size ||
-                                                         now.mtime != expected.mtime))) {
+                                                         now.mtime != expected.mtime ||
+                                                         now.hash != expected.hash))) {
         err = "the target changed since the preview was generated (" + path +
               "); generate the preview again";
         return false;
@@ -722,20 +822,80 @@ bool apply_append(const std::string &path, const std::string &text, const FileSt
 
     std::string payload = text;
     if (exists_now && now.size > 0) {
-        // ecm.py's rule: add a separating newline when the file does not end with one.
         std::ifstream in(path, std::ios::binary);
         if (!in) {
             err = "cannot read " + path;
             return false;
         }
-        in.seekg(-1, std::ios::end);
-        char last = '\0';
-        in.get(last);
-        if (last != '\n' && last != '\r') payload = "\r\n" + payload;
+        const std::string existing(std::istreambuf_iterator<char>{in}, {});
+        const bool read_failed = in.bad();
+        in.close();
+        if (read_failed || static_cast<long long>(existing.size()) != now.size ||
+            hash_bytes(14695981039346656037ull, existing.data(), existing.size()) != now.hash) {
+            err = "the target changed while it was being read; generate the preview again";
+            return false;
+        }
+        if (!worker_headers(existing).empty()) {
+            std::string merged;
+            if (!insert_into_worker_sections(existing, text, merged, err)) return false;
+
+#ifdef _WIN32
+            const std::string temp = path + ".gui." + std::to_string(GetCurrentProcessId()) + ".tmp";
+#else
+            const std::string temp = path + ".gui." + std::to_string(getpid()) + ".tmp";
+#endif
+            {
+                std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+                if (!out) {
+                    err = "cannot write temporary queue file " + temp;
+                    return false;
+                }
+                out.write(merged.data(), static_cast<std::streamsize>(merged.size()));
+                out.close();
+                if (out.fail()) {
+                    err = "cannot finish temporary queue file " + temp;
+                    std::remove(temp.c_str());
+                    return false;
+                }
+            }
+
+            FileStamp before_replace;
+            const bool still_exists = stamp_file(path, before_replace);
+            std::ifstream verify(path, std::ios::binary);
+            const std::string current((std::istreambuf_iterator<char>(verify)),
+                                      std::istreambuf_iterator<char>());
+            const bool read_failed = !verify.is_open() || verify.bad();
+            verify.close();
+            if (!still_exists || before_replace.size != now.size ||
+                before_replace.mtime != now.mtime || before_replace.hash != now.hash ||
+                read_failed || current != existing) {
+                std::remove(temp.c_str());
+                err = "the target changed while preparing the insert; generate the preview again";
+                return false;
+            }
+#ifdef _WIN32
+            const bool replaced = MoveFileExA(temp.c_str(), path.c_str(),
+                                               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+            const DWORD replace_error = replaced ? ERROR_SUCCESS : GetLastError();
+#else
+            const bool replaced = std::rename(temp.c_str(), path.c_str()) == 0;
+#endif
+            if (!replaced) {
+                std::remove(temp.c_str());
+                err = "cannot replace " + path + " with the updated worker sections";
+#ifdef _WIN32
+                err += " (Win32 " + std::to_string(replace_error) + ")";
+#endif
+                return false;
+            }
+            if (appended != nullptr) *appended = merged.size() - existing.size();
+            return true;
+        }
+        // A sectionless queue keeps the existing append behavior.
+        if (existing.back() != '\n' && existing.back() != '\r') payload = "\r\n" + payload;
     }
 
-    // Append-only, and no truncation of what is already there: a running queue owns the
-    // file's existing lines.
+    // A sectionless queue keeps its existing lines and is appended to directly.
     std::ofstream out(path, std::ios::binary | std::ios::app);
     if (!out) {
         err = "cannot open " + path + " for append";

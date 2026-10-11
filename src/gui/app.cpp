@@ -1593,6 +1593,10 @@ void App::gen_make_preview() {
 
     // The preview is only valid for THIS state of the target file: apply re-validates it.
     const bool exists = stamp_file(gen_target_, gen_stamp_);
+    if (!exists && gen_stamp_.exists) {
+        gen_status_ = "cannot read target queue: " + gen_target_;
+        return;
+    }
     gen_has_preview_ = true;
 
     char buf[256];
@@ -1703,30 +1707,25 @@ void App::draw_gen_panel() {
         gen_status_ = gen_input_path_;
         trace("gen: loaded input " + gen_input_path_);
     }
-    // Keep labels in one column and controls in another so translated text and DPI
-    // scaling cannot squeeze an adjacent input box into an unusable width.
-    const float label_width = std::min(190.0f,
-                                       std::max(100.0f, ImGui::GetContentRegionAvail().x * 0.42f));
-    const auto option_label = [&](const char *key) {
-        const std::string label = loc_.t("gen", key);
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextWrapped("%s", label.c_str());
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-1.0f);
-    };
-
     ImGui::SeparatorText(loc_.t("gen", "curve_options").c_str());
     float blocks_box_w = 0.0f;
     float blocks_edit_w = 0.0f;
-    if (ImGui::BeginTable("##gen_curve_options", 2, ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("labels", ImGuiTableColumnFlags_WidthFixed, label_width);
-        ImGui::TableSetupColumn("controls", ImGuiTableColumnFlags_WidthStretch);
-
-        option_label("use_recommended");
+    if (ImGui::BeginTable("##gen_curve_options", 2, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
         if (ImGui::Checkbox("##gen_recommended", &gen_use_recommended_)) gen_has_preview_ = false;
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", loc_.t("gen", "use_recommended").c_str());
 
-        option_label("blocks_per_sm");
+        ImGui::TableSetColumnIndex(1);
+        if (ImGui::Checkbox("##gen_dedup", &gen_dedup_)) gen_has_preview_ = false;
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", loc_.t("gen", "dedup").c_str());
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextWrapped("%s", loc_.t("gen", "blocks_per_sm").c_str());
+        ImGui::SetNextItemWidth(-1.0f);
         // Step buttons consumed most of this field at high DPI; keep the step at zero.
         const int kBlocksStep = 0;
         if (ImGui::InputInt("##gen_blocks_per_sm", &gen_blocks_per_sm_, kBlocksStep, 0)) {
@@ -1736,9 +1735,6 @@ void App::draw_gen_panel() {
         if (gen_blocks_per_sm_ > 64) gen_blocks_per_sm_ = 64;
         blocks_box_w = ImGui::GetItemRectSize().x;
         blocks_edit_w = blocks_box_w;
-
-        option_label("dedup");
-        if (ImGui::Checkbox("##gen_dedup", &gen_dedup_)) gen_has_preview_ = false;
 
         std::vector<int> devices;
         for (const WorkerView &w : workers_) {
@@ -1752,7 +1748,9 @@ void App::draw_gen_panel() {
             gen_target_device_ = devices.front();
             gen_has_preview_ = false;
         }
-        option_label("target_device");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextWrapped("%s", loc_.t("gen", "target_device").c_str());
+        ImGui::SetNextItemWidth(-1.0f);
         const std::string current = "GPU " + std::to_string(gen_target_device_);
         if (ImGui::BeginCombo("##gen_target_device", current.c_str())) {
             for (int d : devices) {
@@ -1768,11 +1766,11 @@ void App::draw_gen_panel() {
     }
 
     ImGui::SeparatorText(loc_.t("gen", "output_options").c_str());
-    if (ImGui::BeginTable("##gen_output_options", 2, ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("labels", ImGuiTableColumnFlags_WidthFixed, label_width);
-        ImGui::TableSetupColumn("controls", ImGuiTableColumnFlags_WidthStretch);
-
-        option_label("override_b1");
+    if (ImGui::BeginTable("##gen_output_options", 2, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextWrapped("%s", loc_.t("gen", "override_b1").c_str());
+        ImGui::SetNextItemWidth(-1.0f);
         char override_b1[128];
         std::snprintf(override_b1, sizeof(override_b1), "%s", gen_set_b1_.c_str());
         if (ImGui::InputTextWithHint("##gen_override_b1",
@@ -1782,7 +1780,9 @@ void App::draw_gen_panel() {
             gen_has_preview_ = false;
         }
 
-        option_label("save_pattern");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextWrapped("%s", loc_.t("gen", "save_pattern").c_str());
+        ImGui::SetNextItemWidth(-1.0f);
         char pattern[128];
         std::snprintf(pattern, sizeof(pattern), "%s", gen_save_pattern_.c_str());
         if (ImGui::InputText("##gen_save_pattern", pattern, sizeof(pattern))) {
@@ -1790,12 +1790,23 @@ void App::draw_gen_panel() {
             gen_has_preview_ = false;
         }
 
-        option_label("sort_by");
-        char sortf[64];
-        std::snprintf(sortf, sizeof(sortf), "%s", gen_sort_by_.c_str());
-        if (ImGui::InputText("##gen_sort_by", sortf, sizeof(sortf))) {
-            gen_sort_by_ = sortf;
-            gen_has_preview_ = false;
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextWrapped("%s", loc_.t("gen", "sort_by").c_str());
+        ImGui::SetNextItemWidth(-1.0f);
+        const std::string sort_label = gen_sort_by_.empty() ? loc_.t("gen", "sort_none") : gen_sort_by_;
+        if (ImGui::BeginCombo("##gen_sort_by", sort_label.c_str())) {
+            const char *sort_fields[] = {"", "n", "k", "b", "c", "b1", "b2", "curves", "aid", "n,k,b,c"};
+            for (const char *field : sort_fields) {
+                const std::string label = *field == '\0' ? loc_.t("gen", "sort_none") : field;
+                const bool selected = gen_sort_by_ == field;
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    gen_sort_by_ = field;
+                    gen_has_preview_ = false;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
         }
         ImGui::EndTable();
     }

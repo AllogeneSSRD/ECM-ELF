@@ -35,6 +35,7 @@
       <Item id="override_b1_hint" name="blank keeps original"/>
       <Item id="save_pattern"   name="save name"/>
       <Item id="sort_by"        name="sort"/>
+      <Item id="sort_none"      name="input order"/>
       <Item id="target_device"  name="target GPU"/>
       <Item id="preview"        name="Generate preview"/>
       <Item id="apply"          name="Append to worktodo"/>

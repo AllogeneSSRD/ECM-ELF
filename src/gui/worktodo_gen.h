@@ -21,6 +21,7 @@
 // a bit or two only matters near a boundary -- and near a boundary the recommendation is
 // intentionally the larger tier anyway.
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -113,7 +114,7 @@ struct GenResult {
     std::vector<GenTask> tasks;         // after the whole pipeline
     std::vector<std::string> warnings;
     std::vector<GenSegment> segments;   // only workers that got at least one line
-    std::string text;                   // exactly what "apply append" would write (CRLF)
+    std::string text;                   // preview batch (CRLF); apply may merge it into existing sections
     int read = 0;                       // assignments seen
     int skipped_comment = 0;
     int skipped_other = 0;              // ECMSTAGE2=/other prefixes
@@ -153,10 +154,12 @@ struct FileStamp {
     bool exists = false;
     long long size = 0;
     long long mtime = 0;
+    std::uint64_t hash = 0;
 };
 bool stamp_file(const std::string &path, FileStamp &out);
-// Appends `text` to `path` (creating it when missing), adding a separating newline when the
-// file does not end with one -- exactly ecm.py's write_lines(append=True) rule.
+// Appends to a sectionless target. If the target has worker headers, inserts each batch under
+// the final matching worker section; a missing worker gets a new section at EOF. Existing
+// bytes are preserved and a changed target is refused.
 bool apply_append(const std::string &path, const std::string &text, const FileStamp &expected,
                   std::string &err, size_t *appended = nullptr);
 

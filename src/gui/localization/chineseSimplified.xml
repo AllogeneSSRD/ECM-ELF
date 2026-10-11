@@ -35,11 +35,12 @@
       <Item id="override_b1_hint" name="留空保持原值"/>
       <Item id="save_pattern"   name="存档名"/>
       <Item id="sort_by"        name="排序"/>
+      <Item id="sort_none"      name="按输入顺序"/>
       <Item id="target_device"  name="目标显卡"/>
       <Item id="preview"        name="生成预览"/>
       <Item id="apply"          name="追加到 worktodo"/>
       <Item id="target"         name="目标文件："/>
-      <Item id="preview_ready"  name="预览已生成，尚未写入任何文件 —— 点“追加到 worktodo”才会写。"/>
+      <Item id="preview_ready"  name="预览已生成，尚未写入，点击「追加到 worktodo」"/>
       <Item id="no_preview"     name="请先生成预览。"/>
       <Item id="applied"        name="已追加。下一批请重新生成预览（文件已变化）。"/>
       <Item id="gpu_info_failed" name="无法从 --gpu-info 读取内核档位"/>
