@@ -20,9 +20,11 @@
 
 ## 当前算术与调度
 
-生产使用固定 PTX Goldilocks 归约和 canonical 减法。2⁶⁴≡2³²−1 mod q 将 128-bit 乘积折成少量显式进位链；规范范围保证专用减法成立。后端绑定编译身份，不能在同一成本 profile 下任意换后端。
+生产使用固定 PTX Goldilocks 归约和 canonical 减法。2⁶⁴≡2³²−1 mod q 将 128-bit 乘积折成少量显式进位链；规范范围保证专用减法成立。后端由编译身份确定；可移植tune摘要默认允许忽略backend条件复用，跨后端时间不能据此声明为本机实测。旧.cprof保持独立的严格后端合同。
 
 tile 在 shared 中融合若干层，outer 按 radix/pass 分解大变换，缓存前向/逆向 pass 与 radix 根表。生产使用自动 coop 选择；显式 radix 比较需要开发引擎。outer V 收窄、展开、逆 scale 移位及 carry/check 融合仍有可选实验实现，不能把局部结果当作默认收益。
+
+NTT性能表的字段、计时边界、tile级数、外层radix与处理趟数，以及摘要如何影响D/P选型，统一见[NTT性能摘要表](AUTO_B2.md#ntt-性能摘要表)。当前NTT tune校准成本，不自动搜索或部署内核配置。
 
 Tensor Core 的整数拆分路线有独立实验实现，未成为生产默认。仅满足小字长 FHE 模数的库不能直接替换 Goldilocks64/多精度 carry 管线；适配参考见 [算法资料](../reference/ECM_ALGORITHMS.md)。
 
@@ -38,7 +40,21 @@ S4 形状常量按 slot_bits/slot_words/b 缓存，不能只用 slot_bits 作为
 
 NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导出 digit 的正常 pool 路径，inverse 后 B 无读者，carry 输出 Q 可借用 B；物理 A/B 为两份，Q 不拥有第三份。非适用路线保持独立 Q 或按次分配。
 
-S4 请求按 batch 预算执行整数减半分块，并保留至少一个 slice；因此 soft batch cap 不保证单请求一定能放入预算。grid.y 超过设备上限时继续物理拆分，模型与执行须使用相同 inner batch。分块改变内存与 launch，不改变数学请求集合。
+默认 S4 请求按 batch 预算执行整数减半分块，并保留至少一个 slice；因此 soft batch cap 不保证单请求一定能放入预算。grid.y 超过设备上限时继续物理拆分，模型与执行须使用相同 inner batch。分块改变内存与 launch，不改变数学请求集合。
+
+短 NTT 的实验性分块选型见 [Auto B2 / tune](AUTO_B2.md#短-ntt-批处理选型实验选项)。它使用同长度 batch 表和完整尾批估算，并同步驱动请求/NTT/S4内存规划，默认关闭。[完整曲线测量](../performance/STAGE2.md#短-ntt-分块选择)未显示稳定收益；较小batch的独立NTT吞吐优势不能覆盖整条S4流水线的成本。
+
+### 实际运行的长度与运算量
+
+正常曲线结束输出 `ntt_length_counts: log2_length:num_of_ntt`，按 k 升序列出 **L=2ᵏ 的独立数学变换数**。每次卷积含两个正向与一个逆向，所以 num_of_ntt=3·卷积数；不是 CUDA kernel 启动数。debug 另输出按长度的卷积数。
+
+阶段日志 `ntt_work` 汇总引擎累计卷积数、数学变换数、S4分块数及下列逻辑工作量。对各长度的卷积数 cₖ：
+
+- transforms=3·Σcₖ。
+- elements=3·Σ(cₖ·2ᵏ)：全部正向/逆向处理的元素总数。
+- logical_radix2_butterflies=(3/2)·Σ(cₖ·2ᵏ·k)：等价 radix2 蝶形数量；融合 radix 实际指令数不等于此数。
+
+计数包含经过多项式层的 F/G 树、inverse、fold和下降请求；不包含底层算术自检内部独立发起的变换，也不含 Stage1。普通独立 save worker 每进程一条曲线，包含该曲线的初始化；多曲线内部调试入口使用累计口径，共享初始化只累计一次。缓存工作区容量、batch×length 与单条长度分别记录，不能互相替代。
 
 ## 代码入口与依据
 

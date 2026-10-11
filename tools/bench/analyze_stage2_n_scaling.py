@@ -61,9 +61,8 @@ def compare_analyses(current, baseline, baseline_path, output):
     comparisons = []
     for identity, new in sorted(new_rows.items()):
         old = old_rows[identity]
-        if old['samples'] != new['samples']:
-            raise ValueError('Version comparison sample count differs')
         row = {field: new[field] for field in ('variant', 'exponent', 'bits', 'B1', 'sigma', 'B2', 'samples')}
+        row.update(previous_samples=old['samples'], current_samples=new['samples'])
         row.update(previous_seconds=old['mean_seconds'], current_seconds=new['mean_seconds'],
                    previous_std_seconds=old['std_seconds'], current_std_seconds=new['std_seconds'],
                    speedup=old['mean_seconds'] / new['mean_seconds'],
@@ -71,6 +70,10 @@ def compare_analyses(current, baseline, baseline_path, output):
                    shape_changed=any(old[field] != new[field] for field in ('D', 'P', 'G')),
                    factors_equal=sorted(filter(None, old['factors'].split(';'))) ==
                                  sorted(filter(None, new['factors'].split(';'))))
+        # factor-only outputs may include overlapping composite divisors.
+        # Keep exact list equality and compare their LCM coverage separately.
+        row['factor_coverage_equal'] = math.lcm(*(int(v) for v in old['factors'].split(';') if v)) == \
+            math.lcm(*(int(v) for v in new['factors'].split(';') if v))
         for field in ('D', 'P', 'G', 'fold_ntt_length', 'tree_top_ntt_length', 'fold_enabled',
                       'ntt_full_peak_mib', 'fold_peak_mib', 'observed_gpu_used_max', 'arena_overflow',
                       'sm_clock_mean', 'power_mean', 'temperature_max'):
@@ -92,7 +95,8 @@ def compare_analyses(current, baseline, baseline_path, output):
                   semantics='speedup=previous/current; time_change_percent=100*(current/previous-1); '
                             'identical inputs and requested budgets, same GPU UUID (indices may differ), separate sessions; '
                             'GPU clock/power/background load are not asserted equal; '
-                            'default implementation routes and auto D may differ; no clock/power normalization',
+                            'default implementation routes and auto D may differ; sample counts are separately recorded; '
+                            'a single sample has no repeatability estimate; no clock/power normalization',
                   rows=comparisons)
     Path(str(output) + '_comparison.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     dump_csv(str(output) + '_comparison.csv', comparisons)
@@ -215,6 +219,24 @@ def main():
         row['baby_seconds'] = float(baby['ladder']) + float(baby['affine'])
         row['f_tree_init_seconds'] = row['init_seconds'] - row['baby_seconds']
         row['outside_full_wall_seconds'] = row['process_seconds'] - row['total_seconds']
+        selection = run['result'].get('tune_plan', {})
+        row.update(tune_selected=selection.get('selected'), tune_model=selection.get('model'),
+                   tune_source=selection.get('source'),
+                   tune_independently_validated=selection.get('independently_validated'),
+                   tune_estimated_seconds=selection.get('estimated_seconds'),
+                   tune_rank_seconds=selection.get('rank_seconds'),
+                   tune_relative_error_allowance=selection.get('relative_error_allowance'))
+        row['tune_estimate_error_percent'] = (100 * (row['tune_estimated_seconds'] / row['total_seconds'] - 1)
+                                               if row['tune_estimated_seconds'] is not None else None)
+        length_rows = re.findall(r'^ntt_length_counts: log2_length:num_of_ntt (.+)$', text, re.M)
+        histogram = {int(k): int(n) for k, n in re.findall(r'(\d+):(\d+)', length_rows[-1])} if length_rows else {}
+        row['ntt_length_counts'] = ' '.join(f'{k}:{n}' for k, n in sorted(histogram.items())) or None
+        row['ntt_logical_transforms'] = sum(histogram.values()) if histogram else None
+        butterflies = sum(n * (1 << k) * k // 2 for k, n in histogram.items())
+        row['ntt_radix2_butterflies'] = butterflies if histogram else None
+        row['ntt_short_butterfly_percent'] = (100 * sum(n * (1 << k) * k // 2
+                                                        for k, n in histogram.items() if k <= 19) / butterflies
+                                              if butterflies else None)
         row['other_seconds'] = row['total_seconds'] - sum(
             row[key + '_seconds'] for key in
             ('giant', 'gtrees', 'fold', 'descent', 'inv', 'accum', 'name', 'init', 'gleaves'))
@@ -237,7 +259,8 @@ def main():
         record['range_percent'] = 100 * (max(times) - min(times)) / record['mean_seconds']
         for key in ('D', 'P', 'giant_points', 'G', 'fold_ntt_length', 'tree_top_ntt_length', 'packing_bpw',
                     'reduction', 'point_mersenne', 'fold_enabled', 'fold_fallback', 'leaf_hash',
-                    'd_model_calibrated', 'd_model_reason',
+                    'd_model_calibrated', 'd_model_reason', 'tune_selected', 'tune_model', 'tune_source',
+                    'tune_independently_validated', 'ntt_length_counts',
                     's4_coefficients', 'poly_muls', 's4_launches', 'gmp_checked', 'factor_count', 'factors',
                     'device_gleaf_bad_groups', 'device_gleaf_good_segments', 'device_gleaf_patch_words',
                     'device_gleaf_bad_point_d2h_bytes', 'gfinv_nonunits', 'giant_base_nonunits', 'arena_overflow'):
@@ -247,7 +270,9 @@ def main():
                 warnings.append(f'{variant} M{exponent} B2={b2}: {key} varied across samples')
         keys = [k for k in samples[0] if k.endswith('_seconds') and k != 'total_seconds']
         keys += ['ntt_full_peak_mib', 'ntt_big_peak_mib', 'fold_peak_mib', 'device_gleaf_coord_mib',
-                 'gpu_util_mean', 'sm_clock_mean', 'temperature_max', 'power_mean', 'observed_gpu_used_max']
+                 'gpu_util_mean', 'sm_clock_mean', 'temperature_max', 'power_mean', 'observed_gpu_used_max',
+                 'tune_relative_error_allowance', 'tune_estimate_error_percent',
+                 'ntt_logical_transforms', 'ntt_radix2_butterflies', 'ntt_short_butterfly_percent']
         peak_keys = {'ntt_full_peak_mib', 'ntt_big_peak_mib', 'fold_peak_mib', 'device_gleaf_coord_mib',
                      'temperature_max', 'observed_gpu_used_max'}
         for key in keys:

@@ -60,7 +60,7 @@ def plot_version_comparison(args):
     axes[0, 0].legend(fontsize=8)
     fig.suptitle('Complete Stage2: previous GPU / current GPU / Prime95', fontsize=13)
     fig.text(.01, -.025, 'GPU: identical N, B1, sigma, Stage1 saves and memory budgets; separate sessions, clocks/power may differ. '
-             'Independent y scales; error bars: sample SD.\nPrime95: exact N and nominal B2 matched; B1, sigma and actual B2 differ. Source: '
+             'Independent y scales; error bars: sample SD where n>=2; n=1 has no repeatability estimate.\nPrime95: exact N and nominal B2 matched; B1, sigma and actual B2 differ. Source: '
              + args.version_comparison.name, fontsize=8)
     fig.tight_layout()
     save(fig, '_versions_times')
@@ -288,7 +288,7 @@ def main():
         ax.spines[['top', 'right']].set_visible(False)
         ax.legend(fontsize=8, frameon=False, loc='upper left')
         b1s = '/'.join(sorted({r['B1'] for r in rows}))
-        caption = f'B1={b1s}; GPU1; cofactor x uses actual bits after removing catalog factors. '
+        caption = f'B1={b1s}; selected GPU; cofactor x uses actual bits after removing catalog factors. '
         caption += 'Bands show observed min/max, not confidence intervals. ' if kind != 'reduction' else 'S4 is nested inside Stage2; do not add it to wall time. '
         caption += 'Source: ' + a.summary.name
         fig.text(0.01, -0.035, caption, fontsize=8, wrap=True)

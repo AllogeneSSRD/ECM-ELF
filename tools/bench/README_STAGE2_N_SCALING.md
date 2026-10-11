@@ -24,6 +24,8 @@ python tools/bench/bench_stage2_n_scaling.py `
 
 默认指数 `503 1009 2003 3001 4001 5003 6011 7001 8011`；默认 B2 为 `26000000000 260000000000 2600000000000`，即 `260e8 260e9 260e10`。默认 B1=20，每个余因子/B2 测三遍。可用 `--exponents`、`--b2`、`--b1`、`--repeats` 覆盖。
 
+`--repeats 1` 支持单次快速扫描，每格没有重复性估计或样本标准差；完整数对照仍全部运行一次。`--reference-study <已完成study目录>`直接复制已验证的Stage1点、数据库快照、输入范围和内存预算，保留旧save/Q哈希；只替换当前构建、设备编号和重复次数。旧输入、二进制及证据不改写。`--tune-profile <TOML>`可为新目录初始化独立profile，当前生产启动短校准仍开启，生成数据只写新目录。
+
 `--full-controls` 为每个完整梅森数/B2 加一次对照；它与余因子使用相同 B1、sigma。sigma 从26开始，寻找能在完整梅森数上正常完成 Stage1 的点。小因子可能在较大的 B1 下必然提前检出，这时应减小 B1，不应把已剥离的数冒充完整梅森数对照。
 
 保存点由 Python 参考与 GMP-ECM 独立计算，要求实际 N、归一化 X 完全一致，再写 native checksum。GMP-ECM 调用明确使用 `B2=0`：`B2=B1` 仍可能因 Stage2 区间取整检出小因子并改写 save 的 N，不能作为“禁用 Stage2”。Stage1 生成、校验和源码快照均不计入 Stage2 时间。
@@ -46,7 +48,7 @@ python tools/bench/bench_stage2_n_scaling.py --output data/experiments/n_scaling
 
 预算默认 `--arena-mb 6300 --fold-mb 640 --batch-mb 256`，首次准备时可修改。D=0 保留当前生产程序的自动选 D 行为；每条实际 D/P/G、归约路径、NTT 容量都会记录。arena 不是全进程显存硬上限，各模块的容量峰不能相加当作同时峰值。
 
-执行串行，不与编译、profiler 或重型 CPU 分析并行。每个位宽先跑一次最小 B2 预热，预热单独保留。正式三轮按正序/逆序/正序遍历，完整梅森对照插入第二轮。108条正式数据之外还有9条预热。每条使用独立子进程，保留默认必需算术检查；`--factor-only` 关闭素数命名和 GP 因子拆解，仍做叶乘积/GCD及因子合法性验证。
+执行串行，不与编译、profiler 或重型 CPU 分析并行。每个位宽先跑一次最小 B2 预热，预热单独保留。正式重复按正序/逆序交替遍历，完整梅森对照插入第`min(2,repeats)`轮。默认三次重复产生108条正式记录，单次产生54条；两者各另有9条预热。每条使用独立子进程，保留默认必需算术检查；`--factor-only` 关闭素数命名和 GP 因子拆解，仍做叶乘积/GCD及因子合法性验证。
 
 主时间为 `stage2_full_wall.total=init+main`。日志 `shape` 是 baby 索引构造时间，已经包含在 init 中，不能重复相加；真正的自动选 D 扫描由 `d_scan_wall` 记录，不包含在该 total 中。外层进程墙钟另记。NVML每约250ms记录整张 GPU 的利用率、SM时钟、温度、功率、显存观测值；这些不是纯 kernel 时间，也不是精确的进程显存峰，短曲线的采样尤其有限。
 
@@ -92,10 +94,16 @@ python tools/bench/plot_stage2_n_scaling.py `
   --previous-label "GPU previous (55 W)" --current-label "GPU current (1800 MHz)"
 ```
 
-`--baseline-analysis` 要求两轮全部完成、每格样本数相同、N/B1/sigma/save/Q 与请求预算一致，GPU名称和UUID相同，输出 `_comparison.{json,csv}`。重启或移除其他显卡后允许同一UUID的设备编号改变，两个编号独立保留。D/P/G 可随实现改变，独立记录；因子比较忽略输出次序。时间变化为 `100·(current/previous−1)%`，速度比为 `previous/current`。同时记录模块容量和阶段秒数差额。
+`--baseline-analysis` 要求两轮全部完成、N/B1/sigma/save/Q 与请求预算一致，GPU名称和UUID相同，输出 `_comparison.{json,csv}`。允许不同样本数，逐格分别记录`previous_samples/current_samples`；n=1只有单次值，不能声明重复性或置信区间。重启或移除其他显卡后允许同一UUID的设备编号改变，两个编号独立保留。D/P/G 可随实现改变，独立记录；因子比较忽略输出次序。时间变化为 `100·(current/previous−1)%`，速度比为 `previous/current`。同时记录模块容量和阶段秒数差额。
 
 `--version-comparison` 生成 `_versions_times`、`_versions_speedup`、`_versions_clocks`、`_versions_phase_delta` 的 PNG/SVG。阶段差额按互斥墙钟分区，正值表示增加、负值表示减少；所有分区之和必须等于完整时间差。可选 `--cpu-comparison` 使用 [Prime95 比较器](../log_parser/README_PRIME95_ECM_BENCH.md) 对当前 GPU 分析生成的精确 N 配对，仅画匹配点。CPU 未匹配目标不进入速度比。
 
+CSV保留`tune_selected/model/source/independently_validated`、模型估计秒数、风险排名秒数及相对误差余量。`tune_estimate_error_percent=100·(estimated/实测完整Stage2−1)`；正值表示高估。估计/排名时间是规划数据，不是实测阶段，不加入时间账本。自动选中参数不等于经过独立性能验收。
+
+有运行长度日志时，同时提取`ntt_length_counts`、逻辑变换总数和`Σ count(k)·2ᵏ·k/2`的radix2蝶形工作量，以及k≤19的工作量占比。计数按每卷积名义三次变换（两次正向、一次反向）；蝶形数用于尺度比较，不是CUDA指令数、launch数或GPU耗时。没有该日志的旧构建记录空值，不记为0。
+
 输入及预算相同不代表频率、功率或后台负载相同。必须依据原始遥测与实际设置注明约束；固定55W与固定1800MHz属于不同条件，耗时差不能直接归因于软件，不按频率或功率比例修正。
+
+`factors_equal`保留原始因子列表的比较；`factor_coverage_equal`另比较所有因子的最小公倍数。factor-only可能收集重叠合数，所以列表不同也可能覆盖同一整除部分；两个字段独立保留，不代替每个因子的非平凡整除验证。
 
 拟合 `T=C(S/1000)^alpha(B2/2.6e10)^beta`，另按B2独立拟合N指数；报告数据内误差和按原exponent整组留出的误差。默认另拟合 `S>=1000` 子集，避免固定启动开销主导最小两个点。公式只是指定硬件、版本、预算和测量区间内的经验近似；NTT长度、自动D、owner回退及模数类型改变时，不能无条件外推。

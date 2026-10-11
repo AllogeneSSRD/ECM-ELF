@@ -257,6 +257,7 @@ struct Options {
     uint64_t tune_budget=1800,short_budget=10,stage1_mhz=0,factor_bits=0;
     unsigned inferred_carrier=0;
     bool short_calibration=true;
+    bool short_batch_tune=false;
     double tune_error=.08;
     std::set<std::string> portable_cli;
     bool has_owner=false,has_stage1_seconds=false,has_stage1_batch=false,has_ratio=false;
@@ -306,6 +307,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--auto-b2") o.auto_b2=true;
         else if (a == "--cost-profile") o.cost_profile=value();
         else if (a == "--tune-profile") o.tune_profile=value();
+        else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-ignore") {o.tune_ignore=value();o.portable_cli.insert(a);ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);}
         else if (a == "--stage1-cost-csv") {o.stage1_csv=value();o.portable_cli.insert(a);}
         else if (a == "--tune-condition-tag") {o.condition_tag=value();o.portable_cli.insert(a);}
@@ -539,6 +541,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
     if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
     if(!o.tune_profile.empty())cmd+=L" --tune-profile "+quote(fs::path(o.tune_profile).wstring());
+    arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
     cmd+=L" --tune-ignore "+quote(fs::path(o.tune_ignore).wstring());
     if(!o.stage1_csv.empty())cmd+=L" --stage1-cost-csv "+quote(fs::path(o.stage1_csv).wstring());
     if(!o.condition_tag.empty())cmd+=L" --tune-condition-tag "+quote(fs::path(o.condition_tag).wstring());
@@ -667,7 +670,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     if(heartbeat)std::cout<<std::endl;
     DWORD code=1;
     if(!GetExitCodeProcess(pi.hProcess,&code))throw std::runtime_error("cannot read curve exit status");
-    return code==0?0:1;
+    return code==0?0:(code==3?3:1);
 }
 
 std::string select_auto_tuned(Options &o,const Record &r);
@@ -748,6 +751,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     return c::json(plan,hash);
 }
 std::string select_tuned(Options &o,const Record &r);
+void configure_short_ntt_batches(const Options &o);
 int curve_worker(Options o) {
     // Children ignore the first console interrupt; the parent owns stop policy.
     SetConsoleCtrlHandler(nullptr,TRUE);
@@ -779,6 +783,7 @@ int curve_worker(Options o) {
     const unsigned requested_carrier=o.carrier_exponent;
     const auto start = std::chrono::steady_clock::now();
     std::string auto_json;
+    configure_short_ntt_batches(o);
     if(!o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
     o.has_d=requested_d!=0;
     const auto tuned_json=o.tune_child || !auto_json.empty()?std::string{}:select_tuned(o,r);
@@ -804,8 +809,22 @@ int curve_worker(Options o) {
     if (code || result.empty()) return code ? code : 1;
     if(o.tune_child) {
         const auto &m=tune_metrics;
-        if(status!="stage2_completed" || !m.clean || !m.selftest_cases || !m.checked || m.bad || !m.phases.complete ||
-           result.find("\"hits\":0,")!=0 || !ecm_stage2::result_factors(result).empty())
+        if(status!="stage2_completed" || !m.clean || !m.selftest_cases || !m.checked || m.bad || !m.phases.complete)
+            throw std::runtime_error("ECM tune requires a clean no-factor curve with arithmetic checks");
+        const auto calibration_factors=ecm_stage2::result_factors(result);
+        if(!calibration_factors.empty()) {
+            // A verified factor is not a timing sample. Startup calibration
+            // may skip this curve; explicit tune still rejects the nonzero exit.
+            Big factor;
+            for(const auto &text:calibration_factors)
+                if(mpz_set_str(factor.z,text.c_str(),10) || mpz_cmp_ui(factor.z,1)<=0 ||
+                    mpz_cmp(factor.z,n.z)>=0 || !mpz_divisible_p(n.z,factor.z))
+                    throw std::runtime_error("invalid calibration factor");
+            append(o.results,"{\"status\":\"verified_factor_not_timing_sample\",\"clean\":1,\"bad\":0,\"selftest_cases\":"+
+                std::to_string(m.selftest_cases)+",\"checked\":"+std::to_string(m.checked)+"}");
+            return 3;
+        }
+        if(result.find("\"hits\":0,")!=0)
             throw std::runtime_error("ECM tune requires a clean no-factor curve with arithmetic checks");
         std::ostringstream out;out<<std::setprecision(17)<<"{\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"giant_points\":"<<m.giant_points
             <<",\"total_seconds\":"<<m.total_seconds<<",\"init_seconds\":"<<m.init_seconds<<",\"main_seconds\":"<<m.main_seconds
@@ -869,6 +888,7 @@ void help() {
         "Selection: --tune-profile FILE.toml --tune-ignore gpu,driver,cuda,backend,environment\n"
         "           B1 never gates reuse; unmeasured widths/B2 retain estimate/uncertainty labels.\n"
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
+        "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
         "           --stage1-cost-csv FILE --stage1-cost-mhz MHz --target-factor-bits N\n"
         "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
         "           --tune-ntt-profile FILE (repeatable): attach checked NTT summaries to ECM tune/merge.\n"
@@ -969,6 +989,7 @@ int driver(Options o) {
     if(!o.portable_cli.count("--tune-budget-seconds"))o.tune_budget=s.tune_budget;
     if(!o.portable_cli.count("--short-calibration-seconds"))o.short_budget=s.short_budget;
     if(!o.portable_cli.count("--short-calibration"))o.short_calibration=s.short_calibration;
+    if(!o.portable_cli.count("--short-ntt-batch-tune"))o.short_batch_tune=s.short_batch_tune;
     if(!o.portable_cli.count("--tune-error-limit"))o.tune_error=s.tune_error;
     if(!o.portable_cli.count("--stage1-cost-mhz"))o.stage1_mhz=s.stage1_mhz;
     if(!o.portable_cli.count("--target-factor-bits"))o.factor_bits=s.factor_bits;
@@ -1028,6 +1049,7 @@ int driver(Options o) {
     if (batch < ecm_config::limits::stage2_stage2_batch_mb_minimum || batch > ecm_config::limits::stage2_stage2_batch_mb_maximum || arena > ecm_config::limits::stage2_stage2_arena_mb_maximum) throw std::runtime_error("invalid Stage2 memory budget in MB");
     _putenv_s("NTT_FOLD_DEVICE_MAX_MB",std::to_string(o.owner_mb).c_str());
     _putenv_s("NTT_S4_BATCH_MB", std::to_string(batch).c_str());
+    _putenv_s("NTT_S4_SHORT_BATCH_TUNE",o.short_batch_tune?"1":"");
     if (arena) _putenv_s("NTT_ARENA_CAP_KB", std::to_string(arena * 1024).c_str());
     if (!o.tune.empty()) {
         if(o.tune_level && o.tune=="ntt") {
@@ -1215,6 +1237,7 @@ int driver(Options o) {
                      << o.ratio_adjust << ' ' << o.stage1_seconds << ' ' << o.stage1_batch;
             if(o.carrier_exponent)identity << " carrier_exponent=" << o.carrier_exponent;
             if(o.has_carrier)identity << " carrier_request=" << o.carrier_exponent;
+            if(o.short_batch_tune)identity << " short_ntt_batch_tune=1";
             if(o.auto_b2&&!b2)identity << " auto_profile=" << (o.tune_profile.empty()?ecm_stage2::sha256_file(o.cost_profile):o.tune_profile)
                 << ' ' << o.auto_min << ' ' << o.auto_max << " tune_ignore=" << o.tune_ignore
                 << " factor_bits=" << o.factor_bits << " stage1_mhz=" << o.stage1_mhz;
@@ -1257,6 +1280,7 @@ int driver(Options o) {
             if(o.dry)continue;
             if(o.plan_only) {
                 Options local=o;local.b2=b2;local.has_d=d!=0;
+                configure_short_ntt_batches(local);
                 if(o.auto_b2&&!b2){std::cout<<select_auto(local,r,false)<<std::endl;if(o.tune_profile.empty())continue;}
                 else {const auto tuned=select_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;}
                 std::string result;

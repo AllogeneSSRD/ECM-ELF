@@ -4,7 +4,30 @@ int main(int argc,char **argv) {
     try {
         namespace p=ecm_stage2::tune::portable;
         std::cout<<std::setprecision(17);
-        if(argc==4 && std::string(argv[1])=="--neighbors") {
+        if(argc==2 && std::string(argv[1])=="--short-batch") {
+            ecm_stage2::ShortNttBatchPolicy policy;
+            const auto n=1ull<<19;
+            policy.observe(n,1,.000359424);policy.observe(n,4,.00114688);policy.observe(n,16,.00620544);
+            auto require=[](bool ok){if(!ok)throw std::runtime_error("short batch policy assertion");};
+            require(policy.select(n,64,16)==4);
+            require(policy.select(n,64,1)==1);
+            require(policy.select(n,64,3)==3);
+            require(policy.select(n,64,4)==4);
+            require(policy.select(1ull<<20,64,16)==16);
+            require(policy.select(n,0,16)==16);
+            require(policy.cost(n,0)==0 && policy.cost(n,2)>.000359424 && policy.cost(n,2)<.00114688);
+            require(std::abs(policy.cost(n,32)-2*.00620544)<1e-15);
+            for(unsigned pairs=1;pairs<=128;++pairs)for(unsigned limit=1;limit<=pairs;++limit) {
+                auto chosen=policy.select(n,pairs,limit);
+                require(chosen>=1 && chosen<=limit);
+                if(chosen!=limit) {
+                    auto total=[&](unsigned b){return (pairs/b)*policy.cost(n,b)+policy.cost(n,pairs%b);};
+                    require(total(chosen)<.9*total(limit));
+                }
+            }
+            require(ecm_stage2::planned_chunk_slices(n,1,64,1,3,true,0,&policy)==1);
+            std::cout<<"true";
+        } else if(argc==4 && std::string(argv[1])=="--neighbors") {
             auto indices=p::neighbors(std::stoul(argv[2]),std::stoul(argv[3]));
             std::cout<<'[';for(size_t i=0;i<indices.size();++i){if(i)std::cout<<',';std::cout<<indices[i];}std::cout<<']';
         } else if(argc==3 && std::string(argv[1])=="--grid") {

@@ -712,6 +712,20 @@ cost profile is supplied.<br>
 测位宽/B2 保留不确定性标记。承载须验证 save 模数整除 2^p-1。留空且未指定旧成本配置时使用<br>
 stage2_ecm_tune.toml。
 
+### stage2_short_ntt_batch_tune
+
+```text
+stage2_short_ntt_batch_tune=[false|true]; default=false
+```
+
+Experimental short NTT batch selection from stage2_tune_profile, for lengths up to 2^19. Minimizes<br>
+estimated convolution time including the tail, within the current chunk budget; requires at least<br>
+two measured batch sizes and a predicted gain above 10%. Does not tune kernel configuration. Pure<br>
+NTT gains do not guarantee faster full Stage2; default false pending full-engine validation.<br>
+实验性短 NTT 批量选择：读取 stage2_tune_profile，作用于不超过 2^19 的长度。在当前分块预算内按含尾批<br>
+的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不保证<br>
+完整 Stage2 更快；完成整机验证前默认 false。
+
 ### stage1_tune_profile
 
 ```text

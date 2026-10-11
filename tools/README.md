@@ -22,6 +22,7 @@
 ## 当前 Stage2 工作入口
 
 - [位宽/B2测量](bench/README_STAGE2_N_SCALING.md)：数据库只读输入、三遍余因子与完整梅森对照、统计和阶段堆积图。
+- [短NTT分块A/B](bench/README_STAGE2_SHORT_NTT.md)：冻结输入的开关对照、完整耗时、长度计数、GMP/执行计划门禁及图表。
 - [承载与内存规划](bench/README_STAGE2_CARRIER_PLAN.md)：N/M、B/Q、请求程序、NTT/S4/giant 组件与台账。
 - [当前管线](../docs/architecture/STAGE2.md)、[内存合同](../docs/architecture/MEMORY.md)、[Auto B2](../docs/architecture/AUTO_B2.md)。
 

@@ -80,13 +80,118 @@ level10普通路径的参数候选上限为16×8×3=384组，对比全D范围的
 
 默认 `stage2_short_calibration=1`，独立预算10秒。没有合适文件、必要NTT组件缺失，或当前worktodo范围完全不在可复用已测位宽覆盖内时触发；部分覆盖时不因首项宽度外推反复校准。直接读save以该目标作为单项范围。
 
-在已验证目标上重新生成sigma26/B1=20有效点，测小D/B2完整引擎及少数NTT点；所需承载缺摘要时补测。结果供后续tune利用，不改用户save、不消费队列，不代表生产B2精度验收。plan-only也可能触发校准并更新性能文件。`--short-calibration 0`可关闭；关闭后固定B2缺文件可走原生规划，Auto B2仍要求可用成本和T1。
+使用已验证save中的N、sigma及仿射点，做D=210、probe_B1=min(保存B1,20)、probe_B2=probe_B1+42000的完整引擎成本探测及少数NTT测量；所需承载缺摘要时补测。探测仅复用曲线上的有效点，不声称重新执行了probe_B1的Stage1；原B1与探测B1另存证据，用户save及生产B1/B2不变。这样生产B1增大不会扩大启动探测的巨步范围。短校准发现因子且全部算术检查通过时，保留证据、跳过该性能样本并继续正常任务；不将因子命中写入无因子性能表。算术检查失败仍中止。结果供后续tune利用，不消费队列，不代表生产B2精度验收；缺少完整引擎锚点时，固定B2可回退原生规划，Auto B2仍需可用成本。plan-only也可能触发校准并更新性能文件。`--short-calibration 0`可关闭；关闭后固定B2缺文件可走原生规划，Auto B2仍要求可用成本和T1。
+
+[复合数启动回归工具](../../tools/test/test_stage2_startup_composite_gpu.py)验证M2003/sigma27/B1=20保存点的因子4007探测不进入性能表、正常Stage2仍完成；另对经独立GMP核对的真实M521/B1=10e6保存点验证probe_B2保持42020。[当前功能证据](../../data/experiments/stage2_n_scaling_20261011_2400/calibration_final_gate/regression_report.json)与[全位宽性能扫描](../performance/STAGE2.md#2400-mhz-当前自动-d-扫描)分别保留，功能回归计时不混入性能矩阵。
 
 ## NTT tune
 
 `--tune ntt --length-log2 a:b --tune-slices s,... --tune-repeats n --tune-file FILE.toml`测长度和批量，也可用等级预设。共享软预算和增量摘要规则。每秒域卷积数=batch/median，每秒批调用数=1/median，不是ECM曲线吞吐，不含大整数carry、归约或完整Stage2。
 
 GMP参考验证每个输出项；摘要保留中位数、MAD、重复数及检查量。内存不足可跳过，验证失败报错并保留证据。TOML用格式6参数表，显式JSONL调试输出保留逐次接口。
+
+### NTT 性能摘要表
+
+`ntt.<condition>.table.<n>`按测量条件组织最终摘要。`[ntt.0.table.0]`表示关联`[condition.0]`的第一个表组，0不是GPU设备号、NTT长度或调优等级。显卡由条件中的UUID标识。表头公共字段适用于所有行，`columns`给出列名，`rows`按列保存每个“长度×批量”的最终结果；同一字段可能在公共部分，也可能成为列。
+
+一次基准批调用包含两个正向NTT、有限域点乘与缩放、一个逆向NTT，运算域为Goldilocks素数域。GPU事件只包围这段计算，输入生成、准备、核验在计时外；不包含生产多项式的packing、carry、模N归约、传输和整条ECM曲线。
+
+**规模与时间字段：**
+
+- `length=L`：每个NTT的有限域元素数，L为2的幂；不是ECM模数位数。
+- `log2_length=k`：k=log₂L。
+- `batch=b`：一次批调用中的独立卷积数，各切片使用相同长度和执行形状。
+- `median_seconds=t`：正式批调用GPU时间的中位数，单位秒。
+- `mad_seconds`：正式时间相对中位数的绝对偏差中位数，单位秒。
+- `min_seconds`、`max_seconds`：正式时间的最小、最大值。
+- `repeats`：正式重复次数，另执行一次预热。
+- `batch_iter_per_s=1/t`：每秒批调用数。
+- `conv_iter_per_s=b/t`：每秒独立有限域卷积数，不是ECM curves/s。
+
+性能TOML不保存`setup_seconds`、`warmup_seconds`、`verification_seconds`。这三项不参与成本选型；格式6文件读入及新摘要写入时剔除，正常重新发布后清理已有字段。底层诊断JSONL保留测量证据，原始实验文件不改写。
+
+**来源与正确性字段：**
+
+- `condition`：关联的条件编号；GPU、驱动、CUDA、后端和环境复用策略见本文前述规则。
+- `source="measured"`、`status="measured"`：结果来自完成并通过核验的实测。
+- `unit="field_convolution"`：计时单位为有限域卷积。
+- `bad=0`：结果不匹配数量为零。
+- `verified_words_per_sample=L·b`：每次核验的输出元素数，加载时核对其等式。
+- `reference_kind="gmp_3x3_distinct_constant_v1"`：GMP生成两个各含3个非零系数的多项式卷积参考，各batch切片常数项不同；核对所有输出，包括零尾部和切片寻址。这是规定输入的核验，不代表完整随机输入覆盖。
+
+**容量字段，均为bytes：**
+
+- `external_arrays_bytes=16Lb+40b+8`：两个64-bit输入数组、每切片5个参考元素及一个错误计数器。
+- `arena_payload_bytes`：本次基准的NTT arena实际记录载荷。
+- `payload_bytes`：准入用的规划载荷，等于external数组、规划的fuse基础缓冲及缓存表之和。arena字段不覆盖所有fuse基础分配，不能用external+arena机械替代该公式。
+
+这些是独立NTT基准的容量，不是生产Stage2的进程显存峰值；CUDA上下文、驱动及生产其他组件另计。生产仍使用当前原生规划和设备可用显存，性能表的容量记录不覆盖其检查。
+
+### tile、radix 与处理趟数
+
+长度L=2ᵏ的NTT有k级radix-2蝶形。执行器把其中t级放入共享内存tile，其余k−t级划成若干外层融合趟，每趟覆盖mᵢ级：
+
+**Σmᵢ=k−t；passes_forward=外层趟数+𝟙(t>0)。**
+
+每趟对相应切片的完整数组执行一次读入和写回；趟内多级蝶形复用寄存器或共享内存。规划器先最小化外层趟数，再按末段融合宽度打破平局；在当前允许的级数范围内，外层趟数为⌈(k−t)/max_radix_bits⌉。
+
+**`tile=t`：共享内存融合的级数。** 一个tile含2ᵗ个元素，正向NTT先做外层趟，再做tile；逆向顺序相反。当前生产固定请求t=12，长度较小时截为min(12,k)。例如t=12表示4096元素，tile主数据共享内存为4096×8=32KiB；t=10表示1024元素，不是10个元素。增大t可减少外层趟数，也会增加每block共享内存、同步和资源压力，不能仅凭t更大判断更快。
+
+**`max_radix_bits`：每个外层融合趟允许的最大级数。** 值4表示上限radix16，值6为radix64，值8为radix256。实际各趟mᵢ可小于上限；该字段不描述tile内部蝶形，也不是每个线程的数量。k≤t时没有外层趟，即使记录上限4也没有执行radix16外层内核。
+
+**`passes_forward`：一个正向NTT的完整数组处理趟数。** 不等于蝶形级数，也不等于整次卷积的CUDA launch数。逆向变换使用相同趟数，因此两个正向加一个逆向共有3·passes_forward个变换趟；有tile时点乘与归一化融合在逆向tile趟中。表构建、输入生成和检查的launch另计；生产carry和模N归约也不在这个字段里。
+
+- L=2¹⁰、t=10：没有外层级，passes_forward=1。
+- L=2²⁰、t=12、上限4：剩余8级，外层4+4级，passes_forward=3；一次基准卷积共9个变换趟。
+- L=2²⁴、t=12、上限4：剩余12级，外层4+4+4级，passes_forward=4。
+- 同一L/t采用上限6时：外层6+6级，passes_forward=3。
+
+每趟仅计主数组读写约为16Lb bytes；点乘还读第二个输入，旋转因子表访问另计。减少趟数能减少主数组传输，但不改变k级蝶形的总数学工作量，也不保证相同比例的时间收益。
+
+**`coop_outer`：外层是否启用block内协作融合。** 普通外层路径让线程持有一组radix元素并在寄存器中完成蝶形；协作路径由256线程block在共享内存中共同处理radix轴，支持5…8级融合，减少单线程随2ᵐ膨胀的寄存器压力。它使用普通CUDA kernel launch，不是跨block cooperative launch，也不要求全GPU共同驻留。协作需要共享内存和block屏障，并有旋转因子复用；实际mᵢ≥5的趟调用协作内核，较小趟仍用普通路径。
+
+当前生产采用确定的设备/形状规则：只有RTX4060 Laptop、sm89、t=12、warp_tail与compact_scratch启用及普通上限4等条件成立时，k=24启用协作上限6，k=25…27启用协作上限8；其他形状保持普通上限4。该规则在源码执行器中确定，不由TOML行重新配置。
+
+- `warp_tail`：tile的部分低层蝶形采用warp shuffle，实际使用要求t≥5；它不改变NTT长度。
+- `compact_scratch`：辅助表/临时空间采用按各趟需要计算的紧凑容量，不改变数学结果。
+
+### 摘要如何影响选型
+
+模型以`(length,batch)`查询`median_seconds`；满足条件复用策略的同形状记录取最低中位数。缺少精确形状时，从邻近测量点估算：
+
+**t(L,b)≈t(L₀,b₀)·(b/b₀)·[Llog₂L/(L₀log₂L₀)]。**
+
+短长度 L≤2¹⁹ 且有同长度测量时，优先在 batch 轴上分段线性插值 t(L,b)，保留小批次的启动成本；小于首个 batch 使用首个实测时间，大于末个 batch 按末点每卷积时间外推。没有同长度短表或 L>2¹⁹ 时才使用上述邻近长度公式。表外均为估算，不能声明实测吞吐饱和点。只有NTT表、没有完整ECM实测锚点时，仍不足以给出完整Stage2秒数，需要ECM tune或启动短校准。
+
+每个D决定P=φ(D)/2及树结构。模型从实际packing形状和分块规则得到各阶段的NTT长度、batch和调用次数，累计调用次数×批调用成本，再结合归约、传输、点生成及完整引擎阶段锚点预测总时间。当前多项式外推中NTT权重0.55是初始模型权重，不代表NTT实测占总时间55%。精确ECM点或同形状B2区间插值可直接使用完整曲线数据，不必由NTT重新推算总时间。
+
+结果影响固定B2的D/P与合法承载选择、Auto B2联合搜索，以及ECM tune的中心D和相邻窗口。D/P改变后，所需NTT形状和调用分布随之改变。实际NTT长度仍由操作数/算术位宽、packing及精确性约束决定。默认 batch 由任务分块预算决定；实验性 stage2_short_ntt_batch_tune 可在预算允许的分块内按短 NTT 表选择 batch。
+
+当前`tune ntt`不搜索tile、radix或协作开关；表中这些字段记录测量时的执行形状。成本模型没有把它们作为内核候选重新配置，容量和诊断字段也不直接参与时间排名。自动搜索并部署NTT内核配置仍列为待实现事项。
+
+### 短 NTT 批处理选型（实验选项）
+
+`stage2_short_ntt_batch_tune=false` 为默认；命令行 `--short-ntt-batch-tune 1` 可覆盖。输入是 `stage2_tune_profile` 内满足 `stage2_tune_ignore` 的已核验 NTT 摘要。仅 L≤2¹⁹ 且同长度至少有两个实测 batch 才参与选择；缺少资料、较长 NTT 和单 slice 请求保留原分块。
+
+设独立请求数 R、候选 batch b、单批估计时间 t(L,b)，比较：
+
+**T_NTT(R,b)=⌊R/b⌋·t(L,b)+t(L,R mod b)，t(L,0)=0。**
+
+候选包含原预算分块以及不大于该分块的实测 batch。预计卷积时间须比原分块降低超过10%才改变；不会将不同树层或互相依赖的请求合并。运行、请求签名、NTT/S4生命周期规划和组件模型使用相同选择函数。纯 NTT 表不含 packing、carry、系数归约、上传/读回及额外分块同步，所以这不是完整 Stage2 性能保证。
+
+关闭实验开关时保留原队列续跑身份和默认条件字段；开启时单独记录策略身份。策略数据 hash 改变后，不沿用原策略的精确测量或同形状B2插值，相关预测保持估算口径。
+
+NTT 校准和完整 ECM 校准保持独立：完整 ECM/启动短校准使用原分块，存入实际条件，不伪装成启用新策略的测量。运行日志给出策略摘要和参与数据的 hash。[固定 D 完整曲线验证](../performance/STAGE2.md#短-ntt-分块选择)中，当前策略未显示稳定收益；7995-bit通用余因子两档B2均慢约2.1%，因此保持默认关闭。后续选型需要计入每分块的归约、准备、检查和同步成本，不能仅用独立NTT的Conv/s决定分块。
+
+NTT 参数表发布时按 `(log2_length,length,batch,tile)` 数值升序排列，列顺序与行排序分别维护。现有生成表可用 `tools/bench/format_stage2_tune.py <profile> --in-place` 重排；此工具仅移动行，保留测量值、其他节和列结构。
+
+### NTT 摘要代码依据
+
+- [ecm_stage2_tune.cuh:91](../../src/cuda/ecm_stage2_tune.cuh#L91)：基准载荷；[计时与核验:119](../../src/cuda/ecm_stage2_tune.cuh#L119)：两个正向、一个逆向与GPU事件；[字段输出:141](../../src/cuda/ecm_stage2_tune.cuh#L141)。
+- [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h)：`validate_ntt_summary`、`strip_ntt_auxiliary_timing`、`Profile::update_ntt/load/serialize`，摘要检查、时间字段剔除及参数表发布。
+- [ntt_runtime.cuh:1418](../../src/cuda/stage2/ntt_runtime.cuh#L1418)：外层级数规划；[形状选择:1488](../../src/cuda/stage2/ntt_runtime.cuh#L1488)；[正向与逆向:1678](../../src/cuda/stage2/ntt_runtime.cuh#L1678)；[packing:3224](../../src/cuda/stage2/ntt_runtime.cuh#L3224)。
+- [ntt_coop_outer.cuh:15](../../src/cuda/stage2/ntt_coop_outer.cuh#L15)：block协作外层内核。
+- [ecm_stage2_portable_model.h:72](../../src/core/ecm_stage2_portable_model.h#L72)：NTT成本查询/外推；[工作量:19](../../src/core/ecm_stage2_portable_model.h#L19)；[阶段估算:110](../../src/core/ecm_stage2_portable_model.h#L110)。
 
 ## 汇集预计算结果
 
@@ -104,11 +209,11 @@ GMP参考验证每个输出项；摘要保留中位数、MAD、重复数及检�
 
 ## 验证范围与限制
 
-sm89/CUDA13.3/GMP Zen3，二进制SHA256 `9bbd4224a87fecdc485c83fd92136e732e6974cf8f4473847635766ff3ee58b0`，4060 Laptop设备1。未修改时钟/功耗，未采完整负载频率；以下是功能检查，不是速度提升报告：
+以下功能检查对应sm89/CUDA13.3/GMP Zen3冻结构建，二进制SHA256 `9bbd4224a87fecdc485c83fd92136e732e6974cf8f4473847635766ff3ee58b0`，4060 Laptop设备1。未修改时钟/功耗，未采完整负载频率；不是速度提升报告，也不证明后续源码变动已被该二进制覆盖：
 
 - CPU核对10级网格、105组相邻窗口、最快更新、5类异常profile、6类坏参数表、CSV推断和旧格式拒绝；20行合成摘要合并公共字段前8833字节、后1764字节，二次读回值一致。此容量比较针对同一组合成字段，不能外推所有生产文件的压缩率。
 - GPU20项流程通过：512/4423 bits、D210、B2=60000、正式重复2次的驻留/fold预算0测量，跨B1=20→1000、短校准及关闭、NTT摘要/合并、旧文件拒绝与重新生成、一条4423-bit完整曲线、部分覆盖队列和M503余因子318 bits承载推断/锁定。窗口检查使用512 bits、B2=260000、D表210/330/390/420/510；模型中心420，仅测390/420/510，各2次正式重复，另有轻量种子。
-- 本版证据：`data/experiments/stage2_local_tune_20261010/{core_04,gpu_03}/`。进程墙钟独立记录，不与引擎阶段相加。
+- 证据：`data/experiments/stage2_local_tune_20261010/{core_04,gpu_03}/`。进程墙钟独立记录，不与引擎阶段相加。
 - 未变化的概率核心有377组参考对拍，最大绝对误差3.44×10⁻¹⁵，证据为`data/experiments/stage2_portable_tune_20261010/probability_01/`，仅作为概率组件核对。
 
 稀疏跨位宽/跨B2预测已出现显著误差，早期冻结功能样本最高约343%和211%，证据在`data/experiments/stage2_portable_tune_20261010/gpu_01/`。局部D搜索可能错过窗口外的真实最优项；本版功能检查不能作为8%收敛、生产收益提高或全表最优D证明。待完成孤立组件校准、非负系数拟合与生产B2/高位宽独立排名验证。

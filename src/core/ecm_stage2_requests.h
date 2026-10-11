@@ -140,7 +140,7 @@ struct RequestPlan {
 // Repeated G-tree/fold blocks are summarized in O(log repeat), not expanded.
 template<class Query,class Describe> bool request_plan(Word p,Word giant_points,int bits,
         Query query,Describe describe,Word budget,unsigned buffers,bool physical,
-        Word chunk_max,bool pool,RequestPlan &plan) {
+        Word chunk_max,bool pool,RequestPlan &plan,const ShortNttBatchPolicy *short_ntt=nullptr) {
     plan=RequestPlan{};
     if(bits<2 || bits>max_input_bits || (buffers!=2 && buffers!=3) ||
        !request_program(p,giant_points,plan.program))return false;
@@ -153,8 +153,7 @@ template<class Query,class Describe> bool request_plan(Word p,Word giant_points,
             Word n=0,slots=0,pairs=0,chunks=0,bytes=0,out=0;
             const Word operand=std::max(r.ma,r.mb);
             if(!query(operand,bits,&n,&slots) || !n || slots!=2*operand-1)return false;
-            Word c=chunk_slices(n,slots,r.pairs,budget,physical?buffers:3,physical);
-            if(chunk_max)c=std::min(c,chunk_max);
+            Word c=planned_chunk_slices(n,slots,r.pairs,budget,physical?buffers:3,physical,chunk_max,short_ntt);
             if(!multiply(r.pairs,block.repeat,pairs) ||
                !multiply(r.pairs/c+(r.pairs%c!=0),block.repeat,chunks) ||
                !multiply(n,c,bytes) || !multiply(bytes,8*buffers,bytes) ||

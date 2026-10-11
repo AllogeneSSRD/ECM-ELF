@@ -2,38 +2,255 @@
 
 [中文](README.md) | English
 
-Elliptic Curve Method tools with CUDA/CGBN and OpenCL GPU Stage1, GMP and optional AVX-512 IFMA CPU Stage1, a standalone CUDA polynomial Stage2, and Windows GUI, queue and factor-dataset utilities.
+ECM-ELF is an Elliptic Curve Method (ECM) toolkit: CUDA/CGBN and OpenCL GPU Stage1, GMP and optional AVX-512 IFMA CPU Stage1, a separate CUDA polynomial Stage2, plus a Windows GUI, task queues and factor-data tools. The former name, OpenCL-ECM, described only one of these backends; executable names such as `ecm.exe` and `ecm_cuda.exe` remain in use.
 
-## Programs
+This page retains the purpose of each entry point, runnable commands, configuration workflows, save-file boundaries, build routes and tool index. The generated [INI reference](docs/ECM_INI_REFERENCE.md) is authoritative for configuration defaults, ranges and bilingual descriptions. Check the actual binary and its help output to determine which kernel tiers or experimental algorithms a build includes.
 
-- `ecm_cuda.exe`: NVIDIA GPU Stage1, with the curve families and bit-width tiers included in the build, batching and checkpoints.
-- `ecm.exe`: CPU Montgomery/Edwards and OpenCL build entry points.
-- `ecm_cuda_stage2.exe`: normalized PARAM0 Stage1 saves, product trees and exact NTT; a separate queue resumes completed curves.
-- `ecm_gui.exe`: configuration, Stage1 workers, queue generation, logs, GPU monitoring and results.
-- `ecm_p95feeder`: Prime95 handoff for local CPU saves; the driver also has completed-task handoff settings.
+![Language: C](https://img.shields.io/badge/language-C-blue)
+![GitHub License](https://img.shields.io/github/license/AllogeneSSRD/ECM-ELF)
+![GitHub commit activity](https://img.shields.io/github/commit-activity/t/AllogeneSSRD/ECM-ELF)
+![GitHub last commit](https://img.shields.io/github/last-commit/AllogeneSSRD/ECM-ELF)
 
-Save/checkpoint compatibility depends on the input format and parameterization. Manual Stage2 supports 2…16384-bit inputs. Auto B2 requires a matching audited cost profile; the current production combination needs an explicit B2.
+<a id="comparison"></a>
+## Compared with established ECM tools
 
-## Getting started
+ECM-ELF serves workflows that also use GMP-ECM, Prime95 and PrMers. It brings OpenCL, CUDA/CGBN and CPU Stage1 paths into one driver, INI file and task queue, while each backend retains its own curve representation and checkpoint format. A completed save can be handed to an external Stage2 consumer only when the parametrization and exponent semantics match. See [programs and backends](#programs) and [saves and checkpoints](#queues) for the compatibility boundaries.
 
-1. Select a release matching the GPU architecture and CPU dependencies, or use the launchers in `tools/build/`.
-2. Edit the shared `ecm.ini`. Stage1 uses `worktodo.txt`; Stage2 uses its separate `stage2_worktodo.txt`.
-3. Generate completed Stage1 saves, then run Stage2 directly or through its queue. The two executables remain separate.
-4. Consult executable help and the bilingual [INI reference](docs/ECM_INI_REFERENCE.md) for options, defaults and paths.
+The CUDA/CGBN path provides native Windows GPU Stage1 with Suyama PARAM0 and other curve families when built in. PARAM0 saves can enter a suitable GMP-ECM or Prime95 workflow; PARAM2 has narrower downstream support. This repository also has a separate CUDA polynomial Stage2 that consumes validated, normalized PARAM0 saves and records per-curve receipts for queued work. See [separate Stage2](#stage2) and the [Stage2 usage guide](docs/usage/STAGE2.md) for input eligibility and resuming work.
 
-Stage1/Stage2 each have development, local production and release production PS1/BAT entry points. Release builds target60,70,75,86,89,120 with CUDA12.6/13.3 as supported and package automatically. Compilation does not establish runtime validation on every architecture.
+The OpenCL path supports multiple platforms and selectable operators for comparing devices and kernel implementations. The CPU path offers Edwards and Suyama-Montgomery curves, with scalar GMP and AVX-512 IFMA SIMD implementations. Relative performance depends on the target, B1, curve batch, device and build. The [historical CPU comparison](#historical-performance) retains the earlier README measurements and their limits; current measurement methodology is documented under [Stage1 performance](docs/performance/STAGE1.md) and [Stage2 performance](docs/performance/STAGE2.md).
 
-## Documentation
+Task queues, a Windows GUI, Prime95 handoff, probability models and factor-data tools connect the computation to existing GIMPS workflows. See [queues and handoff](#queues), [GUI and tools](#android-tools), and the [tools index](tools/README.md) for their roles.
 
-- [Documentation index](docs/README.md): current usage, implementation, performance evidence and TODO.
-- [Build and release](docs/usage/BUILD.md), [build launchers](tools/build/README.md).
-- [Stage1](docs/usage/STAGE1.md), [Stage2](docs/usage/STAGE2.md), [GUI](docs/usage/GUI.md).
-- [Tools](tools/README.md), [factor dataset](tools/ecm_dataset/README.md), [Android](Android/ECM/README_ECM_FACTORIZATION.md).
+## Contents
 
-Experiments, benchmark summaries and generated figures belong in ignored `data/` directories. External sources belong in `.refactor/`; papers and translations remain in `docs/paper/`. Project status documents describe current behavior; [fixed references](docs/reference/README.md) preserve mathematical and third-party implementation analysis.
+| Section | Scope |
+| --- | --- |
+| [Compared with established ECM tools](#comparison) | Backend, save compatibility and workflow overview; performance data follows below |
+| [Programs and capabilities](#programs) · [Quick start](#quick-start) | Choosing a program, runnable commands and common options |
+| [CPU Stage1 configuration](#cpu-stage1) · [Queues and handoff](#queues) | Recipes, thread batches, workers, saves and checkpoints |
+| [Separate CUDA Stage2](#stage2) · [Building and releasing](#build) | Stage2 input/resuming and build entry points |
+| [Android, GUI and bundled tools](#android-tools) | Mobile builds, graphical frontend and helper tools |
+| [Historical performance record](#historical-performance) | Earlier README data and its limits |
+| [Documentation and repository layout](#docs-layout) · [Dependencies and license](#license) | Topic guides, source entry points and licenses |
 
+<a id="programs"></a>
+## Programs and capabilities
+
+| Program | Current purpose | Main input and output |
+| --- | --- | --- |
+| `ecm_cuda.exe` | NVIDIA CUDA/CGBN Stage1, processing batches of curves; PARAM0, PARAM2 and PARAM3 families when built in | Number/expression or Stage1 queue; completed `.save` files and in-progress checkpoints |
+| `ecm.exe` | OpenCL GPU Stage1 or CPU Edwards and Suyama-Montgomery Stage1 | Shared driver input, INI, queue and text saves; selectable OpenCL operators |
+| `ecm_cuda_stage2.exe` | Separate CUDA polynomial Stage2 for eligible normalized PARAM0 Stage1 saves | Direct save input or separate `stage2_worktodo`; factors, results and per-curve receipts |
+| `ecm_gui.exe` | Windows Stage1 workers, configuration, queue generation, logs, GPU status and results | Manages worker processes; the chosen `ecm_cuda.exe` still performs the computation |
+| `ecm_p95feeder` | Prime95 handoff for local CPU saves | Delivers tasks Prime95 can consume; the driver also supports completed-task handoff |
+
+### Stage1 backends
+
+- **CUDA/CGBN** is the native Windows CUDA path. The host builds the exponent and curves, the GPU advances point multiplication in slices, and the host checks final points before writing saves. `gpu_param=0` is the Suyama sigma family shared with CPU Montgomery and GMP-ECM `-param 0`. `gpu_param=2` is GMP-ECM batch 2 and produces saves with `PARAM=2`, which Prime95 does not accept. `gpu_param=3` is the batch family available to both CUDA and OpenCL. Supported operand sizes depend on the kernel tiers included in the binary. Production builds use the ladder by default; resident/PRAC require explicit build and runtime selection. See [Stage1 implementation](docs/architecture/STAGE1.md).
+- **OpenCL** is the Windows, Linux, macOS and Android GPU path. Its registry selects Montgomery multiplication/squaring, modular addition/subtraction and special multiplication operators. `ecm.exe --showkernel` lists paths in the current build. CUDA and OpenCL device IDs, runtimes and internal checkpoints are not interchangeable. See the [OpenCL architecture](docs/architecture/OPENCL.md) and [kernel guide](kernels/opencl/README.md).
+- **CPU** offers independent Edwards (Atkin–Morain) and Suyama-Montgomery curve families, using scalar GMP or eight-curve AVX-512 IFMA SIMD batches. `field=auto` can use Mersenne folding for a full `2^k−1` target and Montgomery reduction for a general integer. `backend=simd` is a hard requirement and fails without the ISA; only `backend=auto` falls back. See [Stage1 implementation](docs/architecture/STAGE1.md) and the [mathematical references](docs/reference/README.md).
+
+`gpucurves` is a task batch size, not a promise that all curves reside on the GPU at once. Choose GPU batches using `--gpu-info`, operand size, TPI, TPB, SM count and actual resource occupancy. CPU SIMD parallelism is bounded by `ceil(curves/8)` batches; the scalar path assigns one curve per task. With a fixed sigma, curve `i` uses `sigma+i`. The same numeric sigma under different parametrizations does not define the same curve.
+
+<a id="quick-start"></a>
+## Quick start
+
+Run these commands from the executable directory, or replace the paths with the output locations described in the [build guide](docs/usage/BUILD.md). `B2=0` runs Stage1 only; give the completed save to a compatible Stage2 consumer afterward.
+
+```powershell
+# Inspect the actual backend, options and available tiers; --gpu-info runs no curve
+.\ecm_cuda.exe --help
+.\ecm_cuda.exe --gpu-info --bits 5240
+.\ecm.exe --showkernel
+
+# One-off OpenCL / CUDA Stage1; N may be a decimal number or an expression
+echo '(2^347-1)' | .\ecm.exe -gpu -gpucurves 1 -d 0 1e4 0
+echo '(2^421-1)' | .\ecm_cuda.exe -gpu --gpu-param 0 -gpucurves 32 -d 0 1e5 0
+
+# CPU Suyama-Montgomery; auto selects SIMD on a supported CPU
+echo '(2^1277-1)' | .\ecm.exe --method mont --backend auto -gpucurves 8 1e5 0
+
+# Queue mode: no B1/B2; --worker selects matching INI and worktodo sections
+.\ecm_cuda.exe -ini .\ecm.ini --worker 1
+```
+
+A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 [B2]`. With no positional bound, the program enters Stage1 queue mode. `-gpu`, `--method edwards` and `--method mont` select mutually exclusive Stage1 methods. `-d` is the device index enumerated by that program. `--gpu-info` reports CUDA tiers and suggested batch sizes; an OpenCL build reports that this query is not applicable.
+
+Common options are below. Run the relevant binary's `--help` and consult the [INI reference](docs/ECM_INI_REFERENCE.md) for all options and exact defaults.
+
+| Option | Purpose |
+| --- | --- |
+| `-gpu`, `-gpucurves N`, `--gpu-param P`, `-sigma S` | GPU batch, parametrization and fixed seed; PARAM0 can use a full 64-bit sigma |
+| `--method gpu|edwards|mont`, `--backend auto|simd|gmp` | Stage1 method and CPU arithmetic backend |
+| `--field auto|mersenne|montgomery`, `--exponent lcm|choose12` | CPU SIMD reduction domain and Montgomery exponent semantics |
+| `--stage1-threads N`, `--affinity LIST` | CPU workers and optional affinity; measure before pinning on hybrid CPUs |
+| `--ckpt SEC`, `--tmp-dir DIR`, `--exp-cache DIR` | Checkpoint interval, local Stage1 output and exponent cache |
+| `-ini FILE`, `--worker N` | Queue configuration and section selection |
+| `--mul/--sqr/--add/--sub/--special-mult ID` | OpenCL operator paths; CUDA does not use these overrides |
+| `--go`, `--gp PATH`, `--verify-gpu`, `--profile-ops` | Group-order diagnostics, GP path, GPU cross-check and operator counts |
+
+Older CPU-specific flags such as `--mont-backend`, `--mont-torsion` and `--edwards-threads` remain aliases. New configurations should use the shared `--backend`, `--exponent` and `--stage1-threads` names. Current `--help` also lists OpenCL kernel-root, binary-cache, TPI, work-group, logging and diagnostic options.
+
+### OpenCL runtime and operator diagnostics
+
+The former README's environment-variable migration corresponds to current flags. `--kernel-root DIR` selects the `.cl` source tree; `--kernel-cache-dir DIR`, `--no-kernel-cache` and `--kernel-cache-verbose` control the binary cache; `--compile-verbose` reports compilation time. `--tpi N` and `--wg N` support experiments with instance threads and work-group size. `--force-normalize`, `--addsub-fused-unroll`, `--sync-each-batch`, `--gpu-dump`, `--profile-ops` and `--verify-gpu` support diagnostics and cross-checks. They are not CUDA kernel-selection interfaces; validate results again after changing an operator path.
+
+Operator microbenchmarks have their own CLI. `opencl_ecm_addsub` provides `--no-asm`, `--asm-b64`, `--addsub-fused-unroll` and `--csv`; `opencl_ecm_montsqr` provides `--wg-impl`, `--wg-impl4-unroll`, `--csv` and related options. Both take kernel iterations, instances and launch repeats as positional arguments, with `--bits` selecting operand size. These are single-operator measurements and cannot be equated directly with complete ECM seconds per curve. Source entry points are `src/opencl_ecm_addsub_bench.cpp` and `src/opencl_ecm_montsqr_bench.cpp`.
+
+<a id="cpu-stage1"></a>
+## CPU Stage1 configuration
+
+Both CPU methods use the same driver and `ecm.ini` as the GPU, but curve construction, coordinates and checkpoint files differ. `method=mont` selects Suyama sigma / GMP-ECM PARAM0; `method=edwards` selects the Atkin–Morain family. `exponent=lcm` means `lcm(1…B1)`; `choose12` multiplies this scalar by 12 for workflows requiring Prime95 exponent semantics. The exponent mode changes the computed point and must be recorded when comparing saves.
+
+Example local Montgomery configuration:
+
+```ini
+method = mont
+backend = auto
+field = auto
+exponent = lcm
+stage1_threads = 0
+tmp_dir = saves
+worktodo = worktodo.txt
+finished = worktodo.finished.txt
+```
+
+Set `method=edwards` for the Edwards path; `naf_w` applies only there. To compare reduction domains on the same mathematical target, set `field` to `mersenne` and `montgomery` in separate runs. The former requires a full `2^k−1` target. A Suyama save handed to Prime95 Stage2 must use compatible parametrization and exponent semantics, and Prime95 must be able to access the save. Applicable keys and ranges are in the [INI reference](docs/ECM_INI_REFERENCE.md).
+
+The four CPU recipes in the original README can still be expressed with the current shared keys:
+
+| Purpose | Change from the example above | Check |
+| --- | --- | --- |
+| GMP-ECM PARAM0 comparison | `method=mont`, `exponent=lcm` | Compare the Stage1 final point for the same N, B1 and sigma; run Stage1 only in the reference program |
+| Prime95 Suyama handoff | `method=mont`, `exponent=choose12` | Curve and exponent semantics, save location and task fields required by Prime95 |
+| Edwards on a full Mersenne number | `method=edwards`, `field=auto` | Actual reduction domain, NAF setting and Edwards-specific save |
+| Edwards on a general modulus or for A/B | `method=edwards`, `field=montgomery` | Avoid forcing folding after known factors have been removed and N is no longer `2^k−1` |
+
+`save_name_pattern` controls only the CPU Montgomery output name; other backends retain their own naming. A GMP-ECM text save, a Prime95 assignment and a local `.ckpt` serve different purposes. To continue this repository's unfinished CPU job, rerun the original command so it can read its checkpoint. An external `-resume` on a completed save still needs the bounds required by that program.
+
+One eight-curve SIMD batch is one CPU scheduling task; 64 curves therefore create at most eight parallel batches. `stage1_threads=0` chooses worker count automatically, and an explicit count is still bounded by available tasks. Do not run multiple processes against the same `(N,B1)` save/checkpoint path; give them separate output directories. A fixed sigma helps reproduce a curve, while a random seed should not be inferred from log order.
+
+For common failures: if explicit `simd` reports a missing ISA, use `auto` or `gmp`; if workers are idle, compare the number of curve batches with the worker count; if `field=mersenne` is rejected, verify that the actual N is still a full Mersenne number; if an INI edit has no effect, check the selected worker section, CLI overrides and legacy aliases. Stage1 validation should compare final points under identical N/B1/sigma/parametrization/exponent conditions. Passing a checksum alone is not mathematical agreement.
+
+<a id="queues"></a>
+## Queues, workers and handoff
+
+Stage1 reads `worktodo.txt` and moves completed tasks into `worktodo.finished.txt`; failed tasks retain an error record. `[Worker #N]` sections in INI and worktodo must correspond: `--worker N` selects both. Give each queue one consumer and each worker separate output paths. The GUI generator can parse PrimeNet `ECM=` / `ECM2=` assignments, preview them and append them to the queue; the worker performs computation and writes the real saves.
+
+For example, put a Stage1 task into the chosen worker section:
+
+```text
+ECM2=1,2,3001,-1,100000,0,64
+```
+
+Known factors, AID, sigma, curve count and save names have distinct queue semantics. Renaming a save cannot make it belong to another task. For production handoff, configure `p95_worktodo_path`: the driver synchronizes completed saves and appends assignments to Prime95's `worktodo.add`; failed deliveries enter a pending file for retry. The GUI displays status and is not a second consumer of Prime95's active queue. `ecm_p95feeder` can separately handle local CPU saves. See [Stage1 usage](docs/usage/STAGE1.md) and [GUI usage](docs/usage/GUI.md).
+
+### Saves and checkpoints are different
+
+A completed `.save` contains a normalized point and task fields for a compatible Stage2. An in-progress checkpoint contains unfinished point state, exponent position and implementation layout. CUDA, OpenCL, CPU Edwards and CPU Montgomery validate their own checkpoint formats; similar names do not make them cross-backend files. A normal stop or Ctrl+C waits for a safe save boundary. Forced termination can leave a partially written checkpoint. Resume the original task with matching N, B1, parametrization, exponent mode and compatible build; the log reports whether a checkpoint was loaded. See [Stage1 usage](docs/usage/STAGE1.md).
+
+Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 text records can feed the corresponding GMP-ECM/Prime95 workflow. PARAM2 saves carry `PARAM=2`; GMP-ECM accepts them, Prime95 does not. This repository's CUDA Stage2 accepts only the normalized PARAM0 records it explicitly supports. A checksum tests file integrity, not mathematical correctness of GPU point multiplication. Independent acceptance checks should cover N, B1, sigma, exponent mode and final point.
+
+<a id="stage2"></a>
+## Separate CUDA Stage2
+
+`ecm_cuda_stage2.exe` consumes a completed Stage1 save; it does not rerun Stage1. Direct invocation and queue examples (replace the filename and B2 with the actual task):
+
+```powershell
+.\ecm_cuda_stage2.exe --save .\m3701_260e6.save --b2 26000000000 --device 0
+.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --once
+```
+
+The Stage2 queue is selected by `stage2_worktodo`, independently of Stage1's `worktodo`. An assignment has the form `ECMSTAGE2=[AID,]k,b,n,c,save[,B2][,skip_curves][,num_curves][,"known_factors"]`. Direct save input can use `--skip-curves` and `--curves` to select records. The queue records completed curves with receipts and reconciles them after interruption; an unfinished current curve must be recomputed. Missing/corrupt saves, mismatched task fields and device/resource failures have distinct queue handling.
+
+Manual B2 supports eligible 2…16384-bit inputs. Auto B2 additionally needs a suitable cost profile and Stage1 cost, and always remains subject to current memory and arithmetic checks. Give production tasks an explicit B2 when no qualified model is available. `--dry-run` only validates input. `--plan-only` may run a short startup calibration; add `--short-calibration 0` for a pure query. See [Stage2 usage](docs/usage/STAGE2.md), [pipeline](docs/architecture/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md) for arguments, receipts, memory summaries and tuning data.
+
+<a id="build"></a>
+## Building and releasing
+
+CUDA Stage1 and Stage2 each have **development, local production and release production** PS1/BAT entry points. The PS1 files under `tools/build/` define their defaults and full parameters:
+
+```powershell
+.\tools\build\build_stage1_dev.ps1
+.\tools\build\build_stage1_local.ps1
+.\tools\build\build_stage1_release.ps1
+.\tools\build\build_stage2_dev.ps1
+.\tools\build\build_stage2_local.ps1
+.\tools\build\build_stage2_release.ps1
+```
+
+Release entry points target sm60, 70, 75, 86, 89 and 120 by default: sm60/70 use CUDA 12.6, while the other tiers use CUDA 13.3. Execution still needs a matching NVIDIA GPU, driver and validated CPU dependencies. Local/development builds default to a local Zen3 GMP; releases default to generic x64 GMP. A local DLL is not automatically suitable for redistribution. Production Stage1 defaults to the complete supported tiers/curve families and the ladder; PRAC/resident experiments require explicit build and runtime selection. Successful compilation is not a runtime qualification of every architecture. See [build and release](docs/usage/BUILD.md) and [launcher parameters](tools/build/README.md).
+
+The OpenCL/CPU CMake project needs a suitable C++ toolchain, GMP, OpenCL runtime/headers and required build libraries; CUDA also needs compatible nvcc/MSVC. `ecm.exe` and OpenCL operator microbenchmarks can be built separately. Use the current [build guide](docs/usage/BUILD.md) and CMake options for Windows debug/release or a specific toolchain. The following microbenchmark entries are retained from the earlier README; actual targets and options depend on the build:
+
+```powershell
+# Configure the OpenCL/CPU project separately; supply local dependency paths if needed
+cmake -S . -B build_opencl -DECM_ENABLE_CUDA=OFF
+cmake --build build_opencl --config Release
+
+.\build_rel\Release\opencl_ecm_addsub.exe --bits 512 10000 128 3
+.\build_rel\Release\opencl_ecm_montsqr.exe --bits 512 1000 128 1
+```
+
+The microbenchmark examples retain their old `build_rel` paths. If built using `build_opencl` above, use the actual executable paths from that directory. `--showkernel` lists operators and `--gpu-info` reports CUDA tiers; neither is an end-to-end throughput benchmark.
+
+<a id="android-tools"></a>
+## Android, GUI and bundled tools
+
+The Android app lives in `Android/ECM` and provides OpenCL device probing, ECM Stage1 factoring, operator microbenchmarks, work queues and local saves. Open that subproject in Android Studio; native factoring requires GMP. The app loads the vendor OpenCL library at runtime. Do not package a `libOpenCL.so` pulled from a phone into the APK. The build syncs `.cl` kernels into assets; the first compilation of a large kernel may take time. See the [Android overview](Android/README.md), [factoring guide](Android/ECM/README_ECM_FACTORIZATION.md) and [app guide](Android/ECM/README.md) for entry points, 16 KiB page constraints and device checks.
+
+The Windows GUI uses Dear ImGui docking, Win32/DX11 and NVML. One worker corresponds to one Stage1 child process. It edits configuration, generates/previews assignments and displays worker output, GPU metrics and results. It performs no ECM arithmetic and is not a second Prime95 queue consumer. The `[GUI]` and `[Worker #N]` settings, window recovery and stop behavior are covered in [GUI usage](docs/usage/GUI.md).
+
+- [`ecm_prob`](tools/ecm_prob/README.md): ECM success probability, parametrization and effective-divisor models; interpret predictions under their model conditions.
+- [`ecm_report`](tools/ecm_report/README.md): PrimeNet ECM progress and result summaries.
+- [`ecm_dataset`](tools/ecm_dataset/README.md): Mersenne and factor data, including sigma management and queries.
+- [`tools/bench`](tools/README.md): device arithmetic, CUDA/OpenCL, NTT, Stage2 planning and timing probes; run data goes into ignored `data/`.
+- [`tools/test`](tools/README.md): CPU/GPU arithmetic, queue, GUI, save/checkpoint and Stage2 regression checks.
+
+PrimeNet progress example from the original README:
+
+![Example ECM progress for exponents 1–20000](docs/image/ecm_progress_1-20000_factored_overlay.png)
+
+The probability-model and measured-comparison images from that README are retained as **historical examples**. Their samples, models and conclusions are not a fresh validation of current binaries:
+
+![Effective divisor against factor size](docs/image/emp_d_eff_vs_bit.png)
+
+| Historical success-rate sample | Historical success rate versus B1 |
+| --- | --- |
+| ![Measured success rate versus factor size](docs/image/emp_success_vs_bit.png) | ![Measured and predicted success rate versus B1](docs/image/success_vs_B1.png) |
+
+<a id="historical-performance"></a>
+## Historical performance record and limits
+
+The CPU comparison in the older README is not a current size recommendation or performance promise, but remains useful for checking that older implementation. The table preserves **single-thread, B1=1e6, seconds per curve** historical values from 2026-09-24, sourced from `docs/ECM_Montgomery_STAGE1.md` §§14.1–14.6 in commit `9be3d433855856fbb1519ff5e77e0bdc3bcb4789`. Targets are full Mersenne numbers. This implementation used AVX-512 IFMA eight-curve batches on a Ryzen AI 9 HX 370; GMP-ECM was 7.0.6 `ecm-zen3.exe` (`-c 2`); Prime95 was v31.04b05 with one worker. The original record reports pinned big/small core clocks of 3990/2995 MHz and a 90 W condition. Stage1 alone was timed: batch wall time divided by eight for this implementation, and `Step 1 took` for GMP-ECM. Measured batches here used eight curves and the GMP-ECM comparison command used two. Only the Prime95 M3001 value is measured, as a median of seven curves; its other rows use a calibrated FFT-tier model. Some rows for this implementation and GMP-ECM were also fitted or extrapolated by operand size: the table must not be read as ten direct measurements. The original record lacks an independently checkable SHA for this implementation's executable, so this table cannot describe a current build.
+
+| N | This implementation, SIMD | GMP-ECM 7.0.6 | Prime95 v31.04b05 |
+| --- | ---: | ---: | ---: |
+| M127 | 0.118 s | — | 3.86 s (model) |
+| M521 | 0.371 s | — | 3.86 s (model) |
+| M1277 | 0.979 s | 2.484 s | 3.86 s (model) |
+| M2203 | 2.285 s | 5.804 s | 3.86 s (model) |
+| M3001 | 4.137 s | 9.586 s | 5.65 s (measured median of 7 curves) |
+| M3500 | 5.164 s | 11.656 s | 5.65 s (model) |
+| M4001 | 6.290 s | 14.624 s | 5.65 s (model) |
+| M5755 | 12.05 s (fit) | ~21 s (extrapolation) | 8.06 s (model) |
+| M8527 | 24.9 s (fit) | ~43 s (extrapolation) | 10.06 s (model) |
+| M19701 | ~123 s (fit) | ~215 s (extrapolation) | 20.6 s (model) |
+
+These historical numbers compare only the recorded machine, exponent, binaries and timing boundary. The larger-size rows in the original document were fitted; they do not establish today's performance crossover. Do not extrapolate them to a different power limit, GPU/CPU, curve family or full Stage1+Stage2 wall time. Current repeatable conditions and evidence are in [Stage1 performance](docs/performance/STAGE1.md) and [Stage2 performance](docs/performance/STAGE2.md).
+
+<a id="docs-layout"></a>
+## Documentation and repository layout
+
+- The [documentation index](docs/README.md) covers current usage, implementation, performance evidence and TODO. [Stage1](docs/usage/STAGE1.md), [Stage2](docs/usage/STAGE2.md) and [GUI](docs/usage/GUI.md) give detailed workflows.
+- The [architecture overview](docs/architecture/OVERVIEW.md) traces the driver in `src/core/`, CPU code in `src/cpu/`, CUDA glue in `src/cuda/`, the OpenCL host in `src/opencl_ecm_stage1.cpp`, and kernels in `kernels/cuda/` and `kernels/opencl/`. [Configuration maintenance](docs/architecture/CONFIGURATION.md) explains generation from `config/ecm_options.json` into templates and references.
+- [Fixed mathematical and third-party references](docs/reference/README.md) retain ECM, curve, Goldilocks/NTT, Prime95/PrMers/GPUOWL derivations and research conditions. Original papers and translations remain in `docs/paper/`.
+- The [tools index](tools/README.md) covers `build/`, `bench/`, `test/`, `gen/`, `disasm/`, `log_parser/`, `ecm_prob/` and more. NPU microbenchmarks are under [RyzenAI](RyzenAI/README_ADDSUB.md).
+
+Original experiment logs, saves and profiles belong in ignored `data/experiments/`, summaries in `data/benchmarks/` and generated figures in `data/figures/`. Evidence paths from an older commit do not substitute for current local raw data. External sources belong in `.refactor/`. Current project documents, fixed research references and temporary development drafts are maintained under the [repository rules](AGENTS.md).
+
+<a id="license"></a>
 ## Dependencies and license
 
-The project builds on GMP-ECM, uses CGBN for CUDA big integers and Dear ImGui for the GUI. Builds need the appropriate CUDA/OpenCL, C++ toolchain and GMP. Releases default to generic x64 GMP; a local Zen3 library is not a guarantee of compatibility with every CPU.
-
-See [LICENSE](LICENSE) and retain dependency licenses when distributing binaries.
+The project builds on [GMP-ECM](https://gitlab.inria.fr/zimmerma/ecm), uses CGBN for CUDA multi-precision arithmetic and Dear ImGui for the GUI. Builds need the relevant CUDA/OpenCL, C++ toolchain, GMP and other components. Preserve each dependency's copyright and license when distributing binaries. See [LICENSE](LICENSE) for the project license.

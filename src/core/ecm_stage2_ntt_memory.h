@@ -362,7 +362,7 @@ struct NttMemoryPlan {
 // allocation/transient footprint is deliberately NOT presented as complete.
 template<class Query,class Describe> bool ntt_memory_plan(const RequestProgram &program,
         int bits,Query query,Describe describe,Word budget,bool physical,Word chunk_max,
-        NttMemoryPolicy policy,NttMemoryPlan &plan) {
+        NttMemoryPolicy policy,NttMemoryPlan &plan,const ShortNttBatchPolicy *short_ntt=nullptr) {
     plan=NttMemoryPlan{};plan.policy=policy;
     plan.exact_allocation_events=std::is_invocable_r_v<bool,Describe,Word,NttFuseMemoryLayout &>;
     if(!program.supported || bits<2 || bits>max_input_bits)return true;
@@ -401,8 +401,7 @@ template<class Query,class Describe> bool ntt_memory_plan(const RequestProgram &
                 if(!query(std::max(r.ma,r.mb),bits,&n,&slots) || !n ||
                    slots!=2*std::max(r.ma,r.mb)-1 || !r.pairs) {plan.reason="invalid_shape";return false;}
                 const Word buffers=policy.pool && policy.reuse_bq?2:3;
-                Word c=chunk_slices(n,slots,r.pairs,budget,physical?(unsigned)buffers:3,physical);
-                if(chunk_max)c=std::min(c,chunk_max);
+                Word c=planned_chunk_slices(n,slots,r.pairs,budget,physical?(unsigned)buffers:3,physical,chunk_max,short_ntt);
                 if(!calls(n,slots,c,r.pairs/c) || (r.pairs%c && !calls(n,slots,r.pairs%c,1))) {
                     plan.stop.block=bi;plan.stop.repeat_index=block.repeat-remaining;
                     plan.stop.request_index=ri;plan.stop.n=n;plan.stop.slots=slots;plan.stop.request=r;

@@ -58,6 +58,7 @@ Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目
 - `real_shape`：B1/B2、算术位宽、D/P、baby/giant 数及 G 批次数。
 - `mem`：设备 free/total、reserve 和 arena cap；预计最大变换及树顶形状。
 - 曲线结束的 `arena=a/b fold=a/b`：a 为实际完整 NTT 池峰值或启用 fold owner 占用；fold 回退时 a=0。b 保留读取的 INI 值，可能与 CLI/环境覆盖后的有效预算不同。
+- `ntt_length_counts`：曲线结束按 `log2_length:num_of_ntt` 汇总独立数学变换数；一次卷积为两个正向加一个逆向，不是 kernel 启动数。`ntt_work` 的元素数、逻辑蝶形数及计数边界见 [NTT](../architecture/NTT.md#实际运行的长度与运算量)。
 - `stage2_full_wall.total`：完整引擎 init+main，排除 Stage1 与自动 D 扫描。外层 result/curve_done 还含进程和发布结果等开销。
 
 `arena_mb` 是 NTT 池 payload，不是全部显存。独立 giant、S4、owner、下降元数据、按次回退和驱动资源另计。组件峰值不能直接相加；详细含义见 [内存](../architecture/MEMORY.md)。普通日志和结果默认不轮转。

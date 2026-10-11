@@ -137,6 +137,9 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
 }
 
 int ecm_cuda_stage2_default_log_level() { return 4; }
+int ecm_cuda_stage2_set_short_ntt_batches(const EcmStage2NttBatchSample *,size_t count) {
+    return count?2:0; // Production-only scheduling; legacy experiment paths stay fixed.
+}
 int ecm_cuda_stage2_set_log_level(int level) { return level == 4 ? 0 : 2; }
 int ecm_cuda_stage2_check_configuration() {
     if(fold_owner_reuse_option()<0) {

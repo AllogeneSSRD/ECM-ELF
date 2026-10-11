@@ -79,6 +79,8 @@ struct ProductionDefaults {
 #include <array>
 #include <functional>
 
+static ecm_stage2::ShortNttBatchPolicy g_short_ntt_batches;
+
 /* ===================================================================================== *
  *  a crash must never look like a silent exit again.  The real-shape failures of section
  *  18.3 were reported by the harness as a bare "exit=1" with an EMPTY stderr, which is what
@@ -1357,6 +1359,29 @@ struct PolyLayer : ecm_stage2::ModulusContext {
     int cat = -1;
     /* statistics */
     unsigned long long ntt_calls = 0, muls = 0, slot_checks = 0;
+    struct LengthCount { unsigned long long convolutions=0,chunks=0; };
+    std::array<LengthCount,33> ntt_lengths{};
+    unsigned long long short_batch_changed=0;
+    void count_ntt(unsigned long long n,unsigned long long pairs,unsigned long long chunks) {
+        unsigned k=0;for(auto v=n;v>1;v>>=1)++k;
+        if(k<ntt_lengths.size()) {ntt_lengths[k].convolutions+=pairs;ntt_lengths[k].chunks+=chunks;}
+    }
+    void print_ntt_lengths()const {
+        std::string counts,convs;unsigned long long pairs=0,chunks=0;double elements=0,butterflies=0;
+        for(size_t k=0;k<ntt_lengths.size();++k) {
+            const auto &v=ntt_lengths[k];if(!v.convolutions)continue;
+            if(!counts.empty()){counts+=' ';convs+=' ';}
+            counts+=std::to_string(k)+":"+std::to_string(3*v.convolutions);
+            convs+=std::to_string(k)+":"+std::to_string(v.convolutions);
+            pairs+=v.convolutions;chunks+=v.chunks;
+            const double work=3.*double(v.convolutions)*double(1ull<<k);
+            elements+=work;butterflies+=work*double(k)/2.;
+        }
+        stage2_log::print(stage2_log::curve,"ntt_length_counts: log2_length:num_of_ntt %s\n",counts.c_str());
+        stage2_log::print(stage2_log::phases,"ntt_work: scope=engine_cumulative convolutions=%llu transforms=%llu s4_chunks=%llu elements=%.6e logical_radix2_butterflies=%.6e short_batch_changed=%llu\n",
+            pairs,3*pairs,chunks,elements,butterflies,short_batch_changed);
+        stage2_log::print(stage2_log::debug,"ntt_convolution_counts: log2_length:num_of_conv %s\n",convs.c_str());
+    }
     /* slice S4: batched multiplies are ONE launch for `nbatch` poly multiplies, so the launch
        count is reported separately from the multiply count (which keeps the S3 numbers
        comparable) */
@@ -1454,6 +1479,7 @@ static std::vector<unsigned long long> poly_mul_modN(PolyLayer &L,
     L.t_ext += st.t_ext;
     L.t_xchk += st.t_xchk;
     ++L.ntt_calls;
+    L.count_ntt(st.N,1,1);
     ++L.muls;
     {
         const int c = (cat >= 0) ? cat : L.cat;       /* explicit, else the layer's current one */
@@ -3541,6 +3567,9 @@ static void poly_mul_batch_modN(PolyLayer &L,
         ecm_stage2::chunk_slices(qN,out_slots,nbatch,budget_bytes,buffers) : legacy_chunk;
     if (g_s4_chunk_max) chunk = std::min(chunk, g_s4_chunk_max);
     if (g_s4_chunk_max) legacy_chunk = std::min(legacy_chunk, g_s4_chunk_max);
+    const auto untuned_chunk=chunk;
+    chunk=g_short_ntt_batches.select(qN,nbatch,chunk);
+    if(chunk!=untuned_chunk)++L.short_batch_changed;
     ++C.chunk_plan_calls;
     C.chunk_plan_changed+=(chunk!=legacy_chunk);
     C.chunk_plan_chunks+=nbatch/chunk+(nbatch%chunk!=0);
@@ -3898,6 +3927,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
     }
     ++L.ntt_launches;
     L.ntt_calls += nbatch;
+    L.count_ntt(qN,nbatch,nbatch/chunk+(nbatch%chunk!=0));
     L.muls += nbatch;
     L.t_fwd += st.t_fwd;
     L.t_inv += st.t_inv;
@@ -8755,7 +8785,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             unsigned long long *n,unsigned long long *out) {
                 return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
             },p.tree_batch_bytes,(unsigned)p.geometry.workspace_buffers,p.tree_physical_chunks,
-            p.tree_chunk_max,p.tree_workspace))return 3;
+            p.tree_chunk_max,p.tree_workspace,&g_short_ntt_batches))return 3;
         if(!ecm_stage2::tree_cache_plan(P_baby,(int)L.S,[](unsigned long long m,int s,
             unsigned long long *n,unsigned long long *out) {
                 return ntt_shape_query(m,s,n,nullptr,nullptr,nullptr,nullptr,out);
@@ -8777,7 +8807,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 table=8ull*fuse_planned_table_words(description);
                 base=8ull*fuse_planned_base_words(description);return true;
             },p.tree_batch_bytes,(unsigned)p.geometry.workspace_buffers,p.tree_physical_chunks,
-            p.tree_chunk_max,NttWorkspacePolicy{}.workspace_pool,*p.requests))return 3;
+            p.tree_chunk_max,NttWorkspacePolicy{}.workspace_pool,*p.requests,&g_short_ntt_batches))return 3;
         p.ntt_memory=std::make_shared<ecm_stage2::NttMemoryPlan>();
         const NttWorkspacePolicy workspace_policy;
         const ecm_stage2::NttMemoryPolicy memory_policy{(unsigned long long)cap,
@@ -8789,11 +8819,12 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 int k=0;for(auto size=n;size>1;size>>=1)++k;
                 FuseCtx description;fuse_describe(description,n,k,0,0);
                 return ecm_stage2::ntt_fuse_memory_layout(description,layout);
-            },p.tree_batch_bytes,p.tree_physical_chunks,p.tree_chunk_max,memory_policy,*p.ntt_memory))return 3;
+            },p.tree_batch_bytes,p.tree_physical_chunks,p.tree_chunk_max,memory_policy,*p.ntt_memory,&g_short_ntt_batches))return 3;
         p.giant_memory=std::make_shared<ecm_stage2::GiantMemoryPlan>();
         p.s4_memory=std::make_shared<ecm_stage2::S4ProgramPlan>();
         ecm_stage2::S4ProgramPolicy s4_policy;
         s4_policy.batch_bytes=p.tree_batch_bytes;s4_policy.chunk_max=p.tree_chunk_max;
+        s4_policy.short_ntt=&g_short_ntt_batches;
         s4_policy.buffers=(unsigned)p.geometry.workspace_buffers;s4_policy.physical_chunks=p.tree_physical_chunks;
         s4_policy.output_window=g_s4_output_window;s4_policy.chunk_output=g_s4_chunk_output;
         s4_policy.compact_raw=g_groot_compact_raw;
@@ -9432,6 +9463,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     "main includes GCD, naming and oracle drain; Stage1 excluded; init shared)\n",
                     cv+1,stage2_shape_seconds,stage2_init_seconds,el,stage2_init_seconds+el,
                     stage2_fixture_seconds,(int)(!stage2_extra_fixtures && !run_s2 && curves==1));
+        L.print_ntt_lengths();
         stage2_log::print(stage2_log::debug, "real_batched_foldflat: enabled=%d folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu prepare=%.6f multiply=%.6f subtract=%.6f bridge=%.6f\n",
             (int)BR.fold_flat.enabled,BR.fold_flat.folds,BR.fold_flat.muls,BR.fold_flat.sub_coeffs,BR.fold_flat.peak_bytes,
             BR.fold_flat.t_prepare,BR.fold_flat.t_multiply,BR.fold_flat.t_subtract,BR.fold_flat.t_bridge);
@@ -10078,6 +10110,17 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
 }
 
 int ecm_cuda_stage2_default_log_level() { return stage2_log::batches; }
+int ecm_cuda_stage2_set_short_ntt_batches(const EcmStage2NttBatchSample *samples,size_t count) {
+    if((count && !samples) || count>65536)return 2;
+    ecm_stage2::ShortNttBatchPolicy next;
+    for(size_t i=0;i<count;++i) {
+        const auto &s=samples[i];
+        if(s.length<8 || s.length>(1ull<<19) || (s.length&(s.length-1)) ||
+           !s.batch || s.batch>65535 || !std::isfinite(s.seconds) || s.seconds<=0)return 2;
+        next.observe(s.length,s.batch,s.seconds);
+    }
+    g_short_ntt_batches=std::move(next);return 0;
+}
 int ecm_cuda_stage2_set_log_level(int level) {
     if(level<stage2_log::quiet || level>stage2_log::debug)return 2;
     stage2_log::level=level;return 0;

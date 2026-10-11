@@ -33,6 +33,7 @@ def main():
         shutil.copy2(dll, out/dll.name)
     def run(*args):
         return subprocess.check_output([str(exe), *map(str, args)], text=True)
+    assert run('--short-batch') == 'true'
     preset = [(3,4096,4,3,10,2),(4,3072,6,3,10,2),(5,2048,8,4,10,2),
               (5,2048,10,4,10,2),(5,2048,10,6,5,3),(8,1536,12,6,5,3),
               (8,1536,12,6,5,3),(10,1024,12,8,5,3),(15,1024,12,8,5,5),(15,1024,14,8,5,5)]

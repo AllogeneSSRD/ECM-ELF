@@ -78,6 +78,9 @@ inline void validate_ntt_summary(const Fields &s) {
     for(const auto &f:s)if(!f.second.empty() && f.second.front()=='[')
         throw std::runtime_error("portable NTT contains sampling arrays");
 }
+inline void strip_ntt_auxiliary_timing(Fields &s) {
+    for(const char *key:{"setup_seconds","warmup_seconds","verification_seconds"})s.erase(key);
+}
 inline std::string scope(const Fields &s) {
     std::string key;
     for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
@@ -133,6 +136,11 @@ inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore
     // Memory equality is checked against each actual candidate's execution_path,
     // not raw batch/arena/fold budget numbers stored in the condition.
     return true;
+}
+inline bool ntt_matches(Fields old,Fields current,const Ignore &ignore) {
+    // S4 scheduling changes do not change the standalone field benchmark.
+    for(const char *key:{"env_s4_short_batch_tune","env_s4_short_batch_hash"}) {old.erase(key);current.erase(key);}
+    return matches(old,current,ignore);
 }
 // Restricted TOML arrays contain scalar table cells, never trial samples.
 inline std::vector<std::string> scalar_array(const std::string &input) {
@@ -192,6 +200,7 @@ struct Profile {
     }
     bool update_ntt(Fields sample) {
         validate_ntt_summary(sample);
+        strip_ntt_auxiliary_timing(sample);
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown NTT measurement condition");
         for(auto &old:ntt)if(uint(old,"condition")==uint(sample,"condition") &&
             uint(old,"length")==uint(sample,"length") && uint(old,"batch")==uint(sample,"batch")) {
@@ -292,8 +301,9 @@ struct Profile {
                 throw std::runtime_error("duplicate/unknown tune measurement scope");
         }
         std::set<std::tuple<Word,Word,Word>> ntt_scopes;
-        for(const auto &s:out.ntt) {
+        for(auto &s:out.ntt) {
             validate_ntt_summary(s);
+            strip_ntt_auxiliary_timing(s);
             if(!out.conditions.count(uint(s,"condition")) || !ntt_scopes.emplace(uint(s,"condition"),uint(s,"length"),uint(s,"batch")).second)
                 throw std::runtime_error("duplicate/unknown tune NTT scope");
         }
@@ -318,17 +328,35 @@ struct Profile {
             groups[{uint(s,"target_bits"),key}].push_back(&s);
         }
         auto emit_group=[&](const std::string &section,const Group &records,bool ntt) {
+            Group ordered=records;
+            if(ntt)std::stable_sort(ordered.begin(),ordered.end(),[](const Fields *a,const Fields *b) {
+                return std::make_tuple(uint(*a,"log2_length"),uint(*a,"length"),uint(*a,"batch"),optional_uint(*a,"tile"))<
+                       std::make_tuple(uint(*b,"log2_length"),uint(*b,"length"),uint(*b,"batch"),optional_uint(*b,"tile"));
+            });
             Fields common=*records.front();
             for(auto it=common.begin();it!=common.end();) {
                 bool same=true;for(auto row:records)if(row->at(it->first)!=it->second)same=false;
-                const bool primary=ntt?(it->first=="length" || it->first=="batch" || it->first=="median_seconds"):
+                const bool primary=ntt?(it->first=="log2_length" || it->first=="length" || it->first=="batch" || it->first=="tile" || it->first=="median_seconds"):
                     (it->first=="d" || it->first=="p" || it->first=="b2" || it->first=="median_seconds" || it->first=="mad_seconds");
                 if(!same || primary)it=common.erase(it);else ++it;
             }
             std::vector<std::string> columns;
-            for(const char *key:{"d","p","b2","length","batch","median_seconds","mad_seconds","repeats",
-                                 "source","validation_count","validation_max_relative_error"})
-                if(records.front()->count(key) && !common.count(key))columns.push_back(key);
+            for (const char *key : {
+                "d", "p", "b2",                       // ECM 字段
+                "log2_length", "length", "batch",       // NTT 规模
+                "tile", "max_radix_bits",
+                "passes_forward", "coop_outer",
+                "warp_tail", "compact_scratch",       // 执行形状
+                "conv_iter_per_s", "median_seconds", "repeats",
+                "payload_bytes", "arena_payload_bytes",
+                "external_arrays_bytes",
+                "verified_words_per_sample",
+                "batch_iter_per_s", "mad_seconds", "min_seconds", "max_seconds",
+                "source", "validation_count",
+                "validation_max_relative_error"
+            })
+                if (records.front()->count(key) && !common.count(key))
+                    columns.push_back(key);
             for(const auto &f:*records.front())if(!common.count(f.first) &&
                 std::find(columns.begin(),columns.end(),f.first)==columns.end())columns.push_back(f.first);
             out<<"\n["<<section<<"]\n";emit_fields(common);
@@ -343,7 +371,7 @@ struct Profile {
             std::vector<size_t> widths(columns.size(),0);
             for(auto row:records)for(size_t i=0;i<columns.size();++i)
                 widths[i]=std::max(widths[i],compact_literal(row->at(columns[i])).size());
-            for(auto row:records) {
+            for(auto row:ordered) {
                 out<<"    [";for(size_t i=0;i<columns.size();++i) {
                     if(i)out<<", ";const auto value=compact_literal(row->at(columns[i]));
                     out<<std::setw(int(widths[i]))<<value;

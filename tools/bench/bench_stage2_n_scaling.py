@@ -228,7 +228,73 @@ def prepare(args, out, monitor):
                                             gmp_seconds=time.perf_counter() - begin,
                                             independent_X_equal=True, rejected_sigmas=rejected))
             print(f'prepared {case_id}: {n.bit_length()} bits B1={args.b1} sigma={sigma}', flush=True)
-    # Nine width-specific warmups are retained separately, never averaged in.
+    return finish_preparation(args, out, plan)
+
+
+def prepare_replay(args, out, monitor):
+    """Copy the exact verified inputs of a completed study to a new build/run."""
+    if any(out.iterdir()):
+        raise ValueError('Preparation requires a fresh output directory')
+    previous_path = args.reference_study.resolve() / 'measurements.json'
+    previous = read(previous_path)
+    if not previous['complete']:
+        raise ValueError('Reference study must be complete')
+    if (previous['device']['uuid'] != monitor.identity['uuid'] or
+            previous['device']['name'] != monitor.identity['name']):
+        raise ValueError('Reference GPU identity differs')
+    exe = args.exe.resolve()
+    build = read(exe.parent / 'build_manifest.json')
+    if sha(exe) != build['sha256'].lower() or build.get('engine') != 'production' or build.get('architecture') != 'sm_89':
+        raise ValueError('Need matching sm89 production build')
+    for name, want in build['source_hashes'].items():
+        source = ROOT / name
+        if sha(source) != want.lower():
+            raise ValueError('Compiled source changed: ' + name)
+        target = out / 'sources' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    binary = out / 'bin' / exe.name
+    binary.parent.mkdir()
+    for path in (exe, exe.parent / 'gmp-10.dll', exe.parent / 'build_manifest.json'):
+        shutil.copy2(path, binary.parent / path.name)
+    if sha(binary.parent / 'gmp-10.dll') != previous['dll_sha256']:
+        raise ValueError('Reference DLL differs')
+    args.b1, args.b2, args.exponents = previous['B1'], previous['bounds'], previous['exponents']
+    args.full_controls = previous['full_controls']
+    for key in ('arena_mb', 'fold_mb', 'batch_mb'):
+        setattr(args, key, previous['memory'][key])
+    plan = dict(schema=1, created_utc=stamp(), complete=False, device=monitor.identity,
+                B1=args.b1, bounds=args.b2, repetitions=args.repeats, full_controls=args.full_controls,
+                exponents=args.exponents, memory=previous['memory'], executable=str(binary),
+                executable_sha256=sha(binary), dll_sha256=sha(binary.parent / 'gmp-10.dll'), build=build,
+                gmp_ecm=previous['gmp_ecm'], gmp_ecm_sha256=previous['gmp_ecm_sha256'],
+                stage1_reference_sha256=previous['stage1_reference_sha256'],
+                reference_study=str(args.reference_study.resolve()), reference_manifest_sha256=sha(previous_path),
+                cases=[], preparation=[], sequence=[], runs=[], failures=[])
+    for case in previous['cases']:
+        folder = out / 'inputs' / case['id']
+        folder.mkdir(parents=True)
+        source = Path(case['save'])
+        if sha(source) != case['save_sha256']:
+            raise ValueError('Reference save changed: ' + case['id'])
+        for path in source.parent.iterdir():
+            if path.is_file():
+                shutil.copy2(path, folder / path.name)
+        copied = dict(case, save=str(folder / source.name))
+        assert sha(copied['save']) == case['save_sha256']
+        plan['cases'].append(copied)
+        plan['preparation'].append(dict(case=case['id'], reused_verified_stage1=True,
+                                      reference_manifest_sha256=sha(previous_path)))
+    for name in ('database_rows.json',):
+        path = args.reference_study.resolve() / name
+        shutil.copy2(path, out / name)
+    print('reused verified inputs:', len(plan['cases']), flush=True)
+    return finish_preparation(args, out, plan)
+
+
+def finish_preparation(args, out, plan):
+    plan['database_rows_sha256'] = sha(out / 'database_rows.json')
+    # Width-specific warmups are retained separately, never averaged in.
     primary = [c for c in plan['cases'] if c['variant'] == 'cofactor']
     for c in primary:
         plan['sequence'].append(dict(case=c['id'], B2=min(args.b2), category='warmup', repeat=0))
@@ -238,7 +304,7 @@ def prepare(args, out, monitor):
         for b2 in bounds:
             for c in cases:
                 plan['sequence'].append(dict(case=c['id'], B2=b2, category='timing', repeat=repeat))
-                if args.full_controls and repeat == 2:
+                if args.full_controls and repeat == min(2, args.repeats):
                     plan['sequence'].append(dict(case=f'm{c["exponent"]}_mersenne', B2=b2,
                                                  category='control', repeat=1))
     ini = out / 'bench.ini'
@@ -246,6 +312,12 @@ def prepare(args, out, monitor):
                    f'stage2_fold_mb={args.fold_mb}\nstage2_batch_mb={args.batch_mb}\n'
                    'stage2_d=0\nstage2_debug_log=true\n', encoding='ascii')
     plan['ini_sha256'] = sha(ini)
+    if args.tune_profile:
+        source = args.tune_profile.resolve()
+        profile = out / 'stage2_ecm_tune.toml'
+        shutil.copy2(source, profile)
+        plan['tune_profile_seed'] = dict(source=str(source), sha256=sha(source), destination=str(profile),
+                                       startup_calibration_enabled=True)
     write(out / 'measurements.json', plan)
     commands = []
     for index, item in enumerate(plan['sequence']):
@@ -398,20 +470,23 @@ def main():
     p.add_argument('--fold-mb', type=int, default=640)
     p.add_argument('--batch-mb', type=int, default=256)
     p.add_argument('--prepare-only', action='store_true')
+    p.add_argument('--reference-study', type=Path, help='Reuse exact Stage1 inputs and budgets of a completed study')
+    p.add_argument('--tune-profile', type=Path, help='Seed an isolated profile; ordinary startup calibration remains enabled')
     p.add_argument('--resume', action='store_true')
     p.add_argument('--timeout', type=int, default=1800)
     a = p.parse_args()
-    if (a.device < 0 or a.b1 < 2 or a.sigma < 6 or a.repeats < 2 or min(a.b2) <= a.b1
+    if (a.device < 0 or a.b1 < 2 or a.sigma < 6 or a.repeats < 1 or min(a.b2) <= a.b1
             or not a.exponents or len(set(a.exponents)) != len(a.exponents)
             or len(set(a.b2)) != len(a.b2)):
-        p.error('Need device>=0, unique exponents/B2, B1>=2, sigma>=6, repeats>=2, B2>B1')
+        p.error('Need device>=0, unique exponents/B2, B1>=2, sigma>=6, repeats>=1, B2>B1')
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     monitor = Monitor(a.device)
     try:
         if 'RTX 4060 Laptop' not in monitor.identity['name']:
             raise ValueError('Expected RTX 4060 Laptop at the selected device index')
-        plan = read(out / 'measurements.json') if a.resume else prepare(a, out, monitor)
+        plan = read(out / 'measurements.json') if a.resume else (
+            prepare_replay(a, out, monitor) if a.reference_study else prepare(a, out, monitor))
         if not a.prepare_only:
             run(a, out, monitor, plan)
     finally:

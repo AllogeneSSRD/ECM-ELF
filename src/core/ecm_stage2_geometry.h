@@ -4,6 +4,8 @@
 #include <map>
 #include <utility>
 #include <memory>
+#include <cmath>
+#include <iterator>
 
 // Shared integer geometry. These are component payloads/planning estimates,
 // never a sum of simultaneous process allocations or a promise of residency.
@@ -45,6 +47,49 @@ inline Word chunk_slices(Word n, Word out_slots, Word nbatch, Word budget,
         if(ok && bytes<=budget)return c;
     }
     return 1;
+}
+// Short convolution timings are per batch, not per slice. Preserve the launch
+// floor by interpolating on the batch axis; extrapolation above the last sample
+// uses its per-slice cost. This is an NTT estimate, not an S4 wall-time promise.
+struct ShortNttBatchPolicy {
+    std::map<Word,std::map<Word,double>> seconds;
+    void observe(Word n,Word batch,double time) {
+        if(n<8 || n>(1ull<<19) || (n&(n-1)) || !batch || batch>65535 ||
+           !std::isfinite(time) || time<=0)return;
+        auto &row=seconds[n];auto i=row.find(batch);
+        if(i==row.end() || time<i->second)row[batch]=time;
+    }
+    double cost(Word n,Word batch)const {
+        if(!batch)return 0;
+        auto length=seconds.find(n);if(length==seconds.end() || length->second.empty())return 0;
+        const auto &row=length->second;auto hi=row.lower_bound(batch);
+        if(hi==row.begin())return hi->second;
+        if(hi==row.end()) {const auto &last=*row.rbegin();return last.second*double(batch)/last.first;}
+        if(hi->first==batch)return hi->second;
+        auto lo=std::prev(hi);const double f=double(batch-lo->first)/double(hi->first-lo->first);
+        return lo->second+(hi->second-lo->second)*f;
+    }
+    Word select(Word n,Word pairs,Word limit)const {
+        auto row=seconds.find(n);
+        if(!pairs || limit<=1 || row==seconds.end() || row->second.size()<2)return limit;
+        auto total=[&](Word b){return double(pairs/b)*cost(n,b)+cost(n,pairs%b);};
+        const double baseline=total(limit);double best=baseline;Word chosen=limit;
+        for(const auto &sample:row->second) {
+            const Word b=sample.first;if(b>limit)break;
+            const double time=total(b);
+            if(time<best || (time==best && b>chosen)){best=time;chosen=b;}
+        }
+        // Avoid moving chunk boundaries for small/noisy pure-NTT differences.
+        return best<baseline*.90?chosen:limit;
+    }
+};
+inline Word planned_chunk_slices(Word n,Word slots,Word pairs,Word budget,
+        unsigned buffers,bool physical,Word chunk_max=0,const ShortNttBatchPolicy *short_ntt=nullptr) {
+    Word c=chunk_slices(n,slots,pairs,budget,buffers,physical);
+    if(chunk_max)c=std::min(c,chunk_max);
+    // Never enlarge the admitted legacy chunk: output/packing/retention budgets
+    // stay explicit, and no batching across dependent tree levels is introduced.
+    return short_ntt?short_ntt->select(n,pairs,c):c;
 }
 // bit 0 reuses q for qb; bit 1 reuses G for reverse(T)/reverse(q).
 // Both transitions are ordered on the engine's default stream, after the old
@@ -111,7 +156,7 @@ struct TreeWorkspacePlan {
 // allocation are deliberately separate; this is not a process admission test.
 template<class Query> bool tree_workspace_plan(Word p,int bits,Query query,
         Word budget,unsigned buffers,bool physical,Word chunk_max,
-        TreeWorkspacePlan &plan) {
+        TreeWorkspacePlan &plan,const ShortNttBatchPolicy *short_ntt=nullptr) {
     plan=TreeWorkspacePlan{};
     if(!p || bits<2 || bits>max_input_bits || (buffers!=2 && buffers!=3))return false;
     std::map<std::pair<Word,Word>,Word> digits;
@@ -121,8 +166,7 @@ template<class Query> bool tree_workspace_plan(Word p,int bits,Query query,
         Word n=0,slots=0,request=0,out=0,coeffs=0,expected_slots=0;
         if(!add(mb,mb-1,expected_slots) || !query(mb,bits,&n,&slots) || !n || slots!=expected_slots ||
            !add(ma,mb-1,coeffs))return false;
-        Word c=chunk_slices(n,slots,nb,budget,physical?buffers:3,physical);
-        if(chunk_max)c=std::min(c,chunk_max);
+        Word c=planned_chunk_slices(n,slots,nb,budget,physical?buffers:3,physical,chunk_max,short_ntt);
         if(!add(plan.groups,1,plan.groups) || !add(plan.pairs,nb,plan.pairs) ||
            !add(plan.chunks,nb/c+(nb%c!=0),plan.chunks) ||
            !multiply(n,c,request) || !multiply(request,8*buffers,request) ||

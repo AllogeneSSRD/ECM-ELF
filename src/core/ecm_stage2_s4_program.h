@@ -15,6 +15,7 @@ struct S4ProgramPolicy {
     unsigned buffers=3;
     bool physical_chunks=false,output_window=true,chunk_output=true;
     bool compact_raw=true,trim_raw=false,trim_output=false;
+    const ShortNttBatchPolicy *short_ntt=nullptr;
 };
 struct S4ProgramCounters {
     Word requests=0,chunks=0,trees=0,allocations=0,frees=0;
@@ -105,9 +106,8 @@ template<class Query> bool s4_program_plan(const RequestProgram &program,int bit
                    d.slots!=2*operand-1 || r.first>d.slots || r.count>d.slots-r.first)
                     return fail("invalid_request_route_or_shape");
                 plan.descriptors.emplace(operand,d);
-                Word c=chunk_slices(d.n,d.slots,r.pairs,policy.batch_bytes,
-                    policy.physical_chunks?policy.buffers:3,policy.physical_chunks);
-                if(policy.chunk_max)c=std::min(c,policy.chunk_max);
+                Word c=planned_chunk_slices(d.n,d.slots,r.pairs,policy.batch_bytes,
+                    policy.physical_chunks?policy.buffers:3,policy.physical_chunks,policy.chunk_max,policy.short_ntt);
                 Word output=policy.output_window?r.count:d.slots,need=0,raw=0;
                 if(!multiply(policy.chunk_output?c:r.pairs,output,need) || !multiply(need,w,need) ||
                    !multiply(c,operand,raw) || !multiply(raw,w,raw))return fail("payload_overflow");

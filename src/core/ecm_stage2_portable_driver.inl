@@ -27,6 +27,32 @@ et::Fields portable_condition(const Options &o) {
     for(const auto &e:tune_environment())f["env_"+e.first]=e.second;
     return f;
 }
+void configure_short_ntt_batches(const Options &o) {
+    // Matching ignores only the dimensions explicitly allowed by tune-ignore;
+    // memory admission always uses the current request and live device budget.
+    _putenv_s("NTT_S4_SHORT_BATCH_TUNE",o.short_batch_tune?"1":"");
+    _putenv_s("NTT_S4_SHORT_BATCH_HASH",o.short_batch_tune?"0":"");
+    std::vector<EcmStage2NttBatchSample> samples;uint64_t hash=0;
+    if(o.short_batch_tune && !o.tune_profile.empty() && fs::is_regular_file(o.tune_profile)) {
+        const auto profile=pt::Profile::load(o.tune_profile);const auto current=portable_condition(o);
+        const auto ignore=pt::Ignore::parse(o.tune_ignore);ecm_stage2::ShortNttBatchPolicy policy;
+        for(const auto &s:profile.ntt)if(pt::ntt_matches(profile.conditions.at(et::uint(s,"condition")),current,ignore))
+            policy.observe(et::uint(s,"length"),et::uint(s,"batch"),et::real(s,"median_seconds"));
+        hash=14695981039346656037ull;
+        for(const auto &length:policy.seconds)for(const auto &batch:length.second) {
+            samples.push_back({length.first,batch.first,batch.second});
+            const auto key=std::to_string(length.first)+":"+std::to_string(batch.first)+":"+pt::numeric(batch.second)+";";
+            for(unsigned char c:key)hash=(hash^c)*1099511628211ull;
+        }
+        if(samples.empty())hash=0;
+    }
+    if(ecm_cuda_stage2_set_short_ntt_batches(samples.data(),samples.size()))
+        throw std::runtime_error("short NTT batch policy is unsupported or invalid");
+    _putenv_s("NTT_S4_SHORT_BATCH_HASH",o.short_batch_tune?std::to_string(hash).c_str():"");
+    if(o.short_batch_tune)stage2_log::print(stage2_log::phases,
+        "ntt_batch_policy: mode=tune max_log2=19 samples=%llu hash=%llu fallback=%s\n",
+        (unsigned long long)samples.size(),(unsigned long long)hash,samples.empty()?"no_matching_short_ntt":"legacy_when_unmeasured");
+}
 void portable_publish(const fs::path &path,const pt::Profile &profile) {
     if(!path.parent_path().empty())fs::create_directories(path.parent_path());
     const fs::path partial(path.string()+".partial."+std::to_string(GetCurrentProcessId()));
@@ -55,6 +81,8 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     const auto packing=et::ntt_packing_policy(tune_environment());
     s.batch_bytes=et::uint(packing,"batch_bytes");s.buffers=unsigned(et::uint(packing,"buffers"));
     s.physical=et::uint(packing,"physical_chunks")!=0;s.chunk_max=et::uint(packing,"chunk_max");
+    s.short_batch_tune=o.short_batch_tune;
+    if(const char *hash=std::getenv("NTT_S4_SHORT_BATCH_HASH"))s.short_batch_hash=ecm_stage2::cost::integer(hash);
     const auto p=ecm_stage2::cost::phi(d)/2;
     const uint64_t w=(s.arithmetic_bits+63)/64;
     s.fold=ecm_stage2::owner_bytes(p,w,3)<=o.owner_mb*1048576;
@@ -201,8 +229,12 @@ PortableInput portable_input(unsigned bits,const fs::path &evidence,bool mersenn
     return {save,records(save,0,1).at(0),mersenne?"mersenne_benchmark":"probable_prime_gmp_nextprime"};
 }
 bool portable_measure(Options o,const Settings &settings,const PortableInput &input,uint64_t b2,uint64_t d,unsigned carrier,
-    unsigned repeats,pt::Budget &budget,const fs::path &evidence,pt::Profile &profile,ecm_stage2::Word condition) {
+    unsigned repeats,pt::Budget &budget,const fs::path &evidence,pt::Profile &profile,ecm_stage2::Word condition,bool skip_verified_factor=false) {
     if(budget.expired() || stop_requests)return false;
+    // Full-engine calibration remains independent of a mutable NTT tune file.
+    // Store that legacy policy in its actual condition, never label it as tuned.
+    o.short_batch_tune=false;configure_short_ntt_batches(o);
+    condition=profile.condition(portable_condition(o));
     auto shape=portable_shape(o,input.record,b2,d,carrier);std::string plan;
     if(!portable_admit(o,input.record,shape,plan))return false;
     const std::string stem="measure_"+std::to_string(profile.revision)+"_"+std::to_string(GetTickCount64());
@@ -216,7 +248,20 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
         worker.debug_log=false;worker.debug_file.clear();worker.tune_profile.clear();
         const auto base=stem+"_"+std::to_string(repeat);
         const auto result=evidence/(base+".jsonl"),log=evidence/(base+".log");
-        if(child_run(worker,input.save,input.record,b2,d,o.device,result,log,o.batch,settings))
+        const int code=child_run(worker,input.save,input.record,b2,d,o.device,result,log,o.batch,settings);
+        if(code==3 && skip_verified_factor) {
+            std::ifstream receipt(result);std::string row,extra;
+            if(!std::getline(receipt,row) || std::getline(receipt,extra))throw std::runtime_error("invalid factor calibration receipt");
+            const auto f=et::fields(row);
+            if(et::required(f,"status")!="\"verified_factor_not_timing_sample\"" || !et::uint(f,"clean") ||
+                et::uint(f,"bad") || !et::uint(f,"selftest_cases") || !et::uint(f,"checked"))
+                throw std::runtime_error("unverified factor calibration receipt");
+            std::cout<<"stage2_short_calibration_skip: reason=verified_factor evidence="<<result.string()<<std::endl;
+            return false;
+        }
+        if(code==3)
+            throw std::runtime_error("ECM tune cannot time a factor-producing curve; inspect "+result.string());
+        if(code)
             throw std::runtime_error("portable calibration failed arithmetic/curve checks; inspect "+log.string());
         std::ifstream in(result);std::string row,extra;if(!std::getline(in,row) || std::getline(in,extra))throw std::runtime_error("invalid calibration receipt");
         auto f=et::fields(row);if(et::uint(f,"d")!=d || et::uint(f,"giant_points")!=b2/d+2 || et::uint(f,"bad") ||
@@ -316,7 +361,7 @@ void ensure_portable_calibration(Options &o,const Record &r,const Settings &sett
     const bool ordinary_kind=mpz_popcount(plus.z)==1;
     const unsigned needed_carrier=o.has_carrier?o.carrier_exponent:o.inferred_carrier;
     unsigned low=16385,high=0;bool components=false,ordinary=false,carrier_covered=!needed_carrier;
-    const auto path=portable_shape(o,r,r.b1+42000,210,0);
+    const auto path=portable_shape(o,r,std::min(r.b1,uint64_t(20))+42000,210,0);
     for(const auto &s:profile.samples)if(pt::measured(s) && pt::matches(profile.conditions.at(et::uint(s,"condition")),current,ignore)) {
         if(!ignore.memory && (bool(et::uint(s,"fold_resident"))!=path.fold || bool(et::uint(s,"frontier_resident"))!=path.frontier))continue;
         if(!et::uint(s,"carrier_exponent") && (pt::text(s,"modulus_kind")=="mersenne")==ordinary_kind) {
@@ -341,14 +386,23 @@ void ensure_portable_calibration(Options &o,const Record &r,const Settings &sett
     pt::Budget budget(double(o.short_budget));std::cout<<"stage2_short_calibration: N="<<bits<<" budget="<<o.short_budget<<" s reason="
         <<(low>high?"no_suitable_profile":!components?"missing_ntt":"outside_calibrated_widths")<<std::endl;
     if(!width_covered || !ordinary || !carrier_covered) {
-        // Prepare a fresh, valid B1=20 point on the already validated target.
-        // This also permits a known cofactor to exercise its legal carrier.
+        // Reuse the validated affine Stage1 point. A fixed sigma=26 curve may
+        // be singular or infinity on a composite target whose saved curve is
+        // valid; calibration must not make that otherwise valid task fail.
+        // Probe small bounds on the same valid curve point. Do not use a
+        // production B1 here: giant_points scales with absolute B2, so D=210
+        // with B2=production_B1+42000 would defeat the short budget.
+        const auto probe_b1=std::min(r.b1,uint64_t(20));
+        append(evidence/"target_origin.jsonl","{\"saved_b1\":"+std::to_string(r.b1)+
+            ",\"probe_b1\":"+std::to_string(probe_b1)+",\"point_reused\":true}");
         const auto save=evidence/"target.save";
-        const auto x=et::benchmark_point(r.n);
-        append(save,"METHOD=ECM; PARAM=0; SIGMA=26; B1=20; N=0x"+r.n+"; X=0x"+x+"; Z=1;");
-        PortableInput input{save,records(save,0,1).at(0),"validated_target_benchmark"};
-        if(!ordinary || !width_covered)portable_measure(o,settings,input,42000,210,0,2,budget,evidence,profile,condition);
-        if(!carrier_covered && !budget.expired())portable_measure(o,settings,input,42000,210,needed_carrier,2,budget,evidence,profile,condition);
+        append(save,"METHOD=ECM; PARAM=0; SIGMA="+std::to_string(r.sigma)+"; B1="+std::to_string(probe_b1)+
+            "; N=0x"+r.n+"; X=0x"+r.x+"; Z=1;");
+        PortableInput input{save,records(save,0,1).at(0),"validated_saved_point_cost_probe"};
+        ecm_stage2::Word calibration_b2=0;
+        if(!ecm_stage2::add(probe_b1,42000,calibration_b2))throw std::runtime_error("short calibration B2 overflows");
+        if(!ordinary || !width_covered)portable_measure(o,settings,input,calibration_b2,210,0,2,budget,evidence,profile,condition,true);
+        if(!carrier_covered && !budget.expired())portable_measure(o,settings,input,calibration_b2,210,needed_carrier,2,budget,evidence,profile,condition,true);
     }
     portable_ntt(o,profile,condition,budget,evidence,{{16,1},{18,1},{20,1}},2);
     profile.metadata["short_calibration_budget_seconds"]=std::to_string(o.short_budget);
@@ -359,6 +413,7 @@ void ensure_portable_calibration(Options &o,const Record &r,const Settings &sett
 }
 
 void run_portable_tune(Options o,const Settings &settings,const fs::path &destination) {
+    o.short_batch_tune=false;configure_short_ntt_batches(o);
     if(!o.tune_save.empty() && !o.tune_exponents.empty())throw std::runtime_error("choose tune-save or tune-exponents");
     if(o.tune_carrier && o.tune_save.empty())throw std::runtime_error("carrier tuning requires a validated --tune-save");
     if(o.has_tune_tail_samples && o.tune_tail_samples)throw std::runtime_error("portable tune uses the default grid; legacy tune-tail-samples accepts only 0");

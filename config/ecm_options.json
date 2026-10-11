@@ -1034,6 +1034,20 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_short_ntt_batch_tune",
+      "field": "short_batch_tune",
+      "type": "bool",
+      "default": false,
+      "domain": "[false|true]",
+      "fx": "Stage2_short_NTT_batch_selection",
+      "parser": "strict",
+      "description": [
+        "Experimental short NTT batch selection from stage2_tune_profile, for lengths up to 2^19. Minimizes estimated convolution time including the tail, within the current chunk budget; requires at least two measured batch sizes and a predicted gain above 10%. Does not tune kernel configuration. Pure NTT gains do not guarantee faster full Stage2; default false pending full-engine validation.",
+        "实验性短 NTT 批量选择：读取 stage2_tune_profile，作用于不超过 2^19 的长度。在当前分块预算内按含尾批的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不保证完整 Stage2 更快；完成整机验证前默认 false。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage1_tune_profile",
       "field": "stage1_profile",
       "type": "string",
