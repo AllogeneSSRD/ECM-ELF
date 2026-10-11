@@ -1,6 +1,7 @@
 #pragma once
 #include "ecm_cuda_stage2.h"
 #include "ecm_stage2_geometry.h"
+#include "ecm_stage2_d_catalog.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -131,6 +132,7 @@ inline Choice choose(const Profile &profile,const Request &r,const EcmStage2Devi
             grid.insert(std::max(low,std::min(high,value)));}}
     const auto initial=grid;
     for(const auto *s:scopes)for(Word d:s->d) {
+        if(!r.d && !d_catalog::contains(d))continue;
         if(r.d&&r.d!=d)continue;const Word p=phi(d)/2,w=((Word)r.bits+63)/64;
         const Word capacity=std::max(p,(256ull<<20)/(16*w)),chunk=p*((capacity+p-1)/p),max_points=hi/d+2;
         auto edge=[&](Word points){if(points<2||points-2>hi/d)return;const Word b=d*(points-2);
@@ -155,6 +157,7 @@ inline Choice choose(const Profile &profile,const Request &r,const EcmStage2Devi
     const Word reserve=768ull<<20;
     const Word available=device.free_bytes>reserve?device.free_bytes-reserve:0;
     for(const auto *s:scopes)for(Word d:s->d) {
+        if(!r.d && !d_catalog::contains(d))continue;
         if(r.d&&r.d!=d)continue;const Word p=phi(d)/2,w=((Word)r.bits+63)/64;
         if(p<s->pmin||p>s->pmax||s->arena_mb>available/(1ull<<20))continue;
         Geometry geom;

@@ -30,6 +30,8 @@
 - [固定数学与第三方源码资料](reference/README.md)：保留完整推导、引用代码、伪代码及研究条件，独立于本仓库实现状态。
 - [TODO](TODO.md)：尚未完成或需要重新验证的工作。
 
+共享D候选表和跨NTT区间tune已接入源码，当前规则见 [Auto B2 / tune](architecture/AUTO_B2.md)。来源研究、379419项参考枚举及待验收边界见 [Stage2 D候选表草稿](development/STAGE2_D_CATALOG_DRAFT.md)；新实现尚无完整矩阵性能验收。
+
 ## 数据位置
 
 原始运行日志、保存点、剖析和冻结证据在 `data/experiments/` 或工具指定的 `data/` 子目录；统计结果在 `data/benchmarks/`，图表在 `data/figures/`。这些目录不提交 Git，链接到本机证据的页面不能代替原始证据分发。复用脚本保留在 `tools/`，可按其说明重新生成结果。

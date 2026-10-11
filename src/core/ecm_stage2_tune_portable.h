@@ -9,7 +9,7 @@
 namespace ecm_stage2 { namespace tune { namespace portable {
 constexpr unsigned format=7;
 constexpr Word default_b2_max=2600000000000ull;
-struct Grid {std::vector<unsigned> widths;std::vector<Word> ds,b2s;unsigned repeats=2;};
+struct Grid {std::vector<unsigned> widths;std::vector<Word> ds,b2s;unsigned repeats=2,basins=2;};
 inline std::vector<size_t> neighbors(size_t center,size_t count) {
     if(center>=count)throw std::runtime_error("invalid tune neighborhood");
     std::vector<size_t> result;
@@ -18,10 +18,10 @@ inline std::vector<size_t> neighbors(size_t center,size_t count) {
 }
 // Discrete descent: measure the starting cell and its immediate neighbors.
 // Move only on a significant measured improvement, then expose one new neighbor.
-// An absent / rejected measurement closes that direction. Never sweep the grid.
+// Invalid candidates close the local direction; budget deferrals are unfinished.
 struct LocalSearch {
     struct Timing {double seconds=0,mad=0;};
-    size_t center,count;std::map<size_t,Timing> tested;std::set<size_t> rejected;
+    size_t center,count;std::map<size_t,Timing> tested;std::set<size_t> rejected,deferred;
     explicit LocalSearch(size_t start,size_t size):center(start),count(size) {
         if(start>=size)throw std::runtime_error("invalid local search start");
     }
@@ -29,10 +29,10 @@ struct LocalSearch {
         return a.seconds>0 && b.seconds>0 && a.seconds+2*a.mad < .98*b.seconds-2*b.mad;
     }
     size_t next() {
-        if(!tested.count(center) && !rejected.count(center))return center;
+        if(!tested.count(center) && !rejected.count(center) && !deferred.count(center))return center;
         for(;;) {
             const auto adjacent=neighbors(center,count);
-            for(auto i:adjacent)if(!tested.count(i) && !rejected.count(i))return i;
+            for(auto i:adjacent)if(!tested.count(i) && !rejected.count(i) && !deferred.count(i))return i;
             if(!tested.count(center))return count;
             auto winner=center;
             for(auto i:adjacent)if(tested.count(i) && improves(tested.at(i),tested.at(winner)))winner=i;
@@ -40,6 +40,7 @@ struct LocalSearch {
             center=winner;
         }
     }
+    bool complete() {return next()==count && deferred.empty();}
 };
 struct UnsupportedFormat:std::runtime_error {
     UnsupportedFormat():std::runtime_error("unsupported tune format; regenerate this development profile"){}
@@ -49,18 +50,14 @@ inline Grid grid(unsigned level,Word upper=default_b2_max) {
         throw std::runtime_error("invalid portable tune grid");
     const unsigned widths[]={3,4,5,5,5,8,8,10,15,15};
     const unsigned steps[]={4096,3072,2048,2048,2048,1536,1536,1024,1024,1024};
-    const unsigned counts[]={4,6,8,10,10,12,12,12,12,14};
+    const unsigned basins[]={2,2,3,3,3,4,4,5,6,6};
     const unsigned bounds[]={3,3,4,4,6,6,6,8,8,8};
     const unsigned ratios[]={10,10,10,10,5,5,5,5,5,5};
     const unsigned repeats[]={2,2,2,2,3,3,3,3,5,5};
-    const Word catalog[]={30030,60060,120120,180180,210210,360360,570570,
-        690690,810810,1021020,1141140,1381380,1711710,2282280};
     const auto i=level-1;Grid out;out.widths.push_back(512);out.repeats=repeats[i];
+    out.basins=basins[i];
     for(unsigned n=1;n<=widths[i];++n)out.widths.push_back(n*steps[i]);
-    for(unsigned n=0;n<counts[i];++n) {
-        const unsigned index=(n*13+(counts[i]-1)/2)/(counts[i]-1);
-        out.ds.push_back(catalog[index]);
-    }
+    for(const auto &entry:d_catalog::entries())out.ds.push_back(entry.d);
     out.b2s.push_back(upper);
     for(unsigned n=1;n<bounds[i];++n)out.b2s.push_back(std::max(Word(2),out.b2s.back()/ratios[i]));
     std::sort(out.b2s.begin(),out.b2s.end());

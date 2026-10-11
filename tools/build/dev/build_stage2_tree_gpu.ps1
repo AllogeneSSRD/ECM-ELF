@@ -48,6 +48,7 @@ $dep  = 'tools/bench/ntt_poly_probe.cu'          # included by $src: a rebuild t
 $coop = 'tools/bench/ntt_coop_outer.cuh'
 $dmodel = 'tools/bench/stage2_d_model.cuh'
 $geometry = 'src/core/ecm_stage2_geometry.h'
+$dCatalog = 'src/core/ecm_stage2_d_catalog.h'
 $goldReduce = 'tools/bench/ntt_goldilocks_reduce.cuh'
 $goldPtx = 'tools/bench/ntt_goldilocks_ptx.cuh'
 $babyDevice = 'tools/bench/stage2_baby_device.cuh'
@@ -73,7 +74,7 @@ Write-Host ("stage2_tree_gpu build: exe={0} arch={1}" -f $exe, $Arch)
 $needCompile = $true
 if (-not $Rebuild -and (Test-Path $obj) -and (Test-Path $exe)) {
     $objTime = (Get-Item $obj).LastWriteTime
-    if (-not (@($src,$dep,$coop,$dmodel,$geometry,$goldReduce,$goldPtx,$babyDevice,$babyHost,$pointMersenne,$giantBaseHost,$carryCheck,$plainScale,$scaledFrontier) | Where-Object { (Get-Item $_).LastWriteTime -ge $objTime })) {
+    if (-not (@($src,$dep,$coop,$dmodel,$geometry,$dCatalog,$goldReduce,$goldPtx,$babyDevice,$babyHost,$pointMersenne,$giantBaseHost,$carryCheck,$plainScale,$scaledFrontier) | Where-Object { (Get-Item $_).LastWriteTime -ge $objTime })) {
         $needCompile = $false
     }
 }

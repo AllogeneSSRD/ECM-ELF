@@ -13,6 +13,7 @@ struct Shape {
 };
 struct Work {
     std::array<double,RequestPhaseCount> ntt{},reduce{},transfer{},calls{};
+    std::array<Word,RequestPhaseCount> largest_phase_ntt{};
     double baby=0,giant=0,accum=0;
     Word p=0,points=0,largest_ntt=0;bool exact_topology=true;
 };
@@ -23,7 +24,7 @@ template<class Query,class NttCost> bool work(const Shape &s,Query query,NttCost
     out=Work{};
     if(s.target_bits<2 || s.arithmetic_bits<s.target_bits || s.arithmetic_bits>16384 ||
        s.b1<2 || s.b2<=s.b1 || s.d<6 || s.d%2 || !s.batch_bytes)return false;
-    out.p=cost::phi(s.d)/2;out.points=s.b2/s.d+2;
+    out.p=d_catalog::degree(s.d);out.points=s.b2/s.d+2;
     RequestProgram program;if(!request_program(out.p,std::max(out.points,out.p+1),program))return false;
     if(out.points<=out.p) {
         // G=1 has a local root division/inverse. Use a conservative full-degree
@@ -41,6 +42,7 @@ template<class Query,class NttCost> bool work(const Shape &s,Query query,NttCost
         Word n=0,slots=0;const Word operand=std::max(r.ma,r.mb);
         if(!query(operand,s.arithmetic_bits,&n,&slots) || n<8 || n>(1ull<<27) || slots!=2*operand-1)return false;
         out.largest_ntt=std::max(out.largest_ntt,n);
+        out.largest_phase_ntt[r.phase]=std::max(out.largest_phase_ntt[r.phase],n);
         Word c=planned_chunk_slices(n,slots,r.pairs,s.batch_bytes,s.physical?s.buffers:3,s.physical,
             s.chunk_max,s.short_batch_tune?short_ntt:nullptr);
         for(auto batch:{std::make_pair(c,r.pairs/c),std::make_pair(r.pairs%c,Word(r.pairs%c!=0))})if(batch.second) {
@@ -62,6 +64,29 @@ template<class Query,class NttCost> bool work(const Shape &s,Query query,NttCost
     out.accum=out.p*target_words*target_words;
     return true;
 }
+// Coarse regions, not an identity for all requests or a memory admission proof.
+struct NttInterval {
+    std::array<Word,8> key{};
+    bool operator<(const NttInterval &other)const{return key<other.key;}
+};
+inline NttInterval interval(const Shape &s,const Work &w) {
+    Word levels=0,pad=1;while(pad<w.p){pad*=2;++levels;}
+    GiantWork giant;Word route=0;
+    if(s.giant_chunk && giant_work(w.points,s.d,s.giant_chunk,s.chain_min,s.force_ladder,giant))
+        route=giant.chain_points?(giant.ladder_steps?2:1):3;
+    return {{w.largest_phase_ntt[RequestFold],w.largest_phase_ntt[RequestInverse],
+        w.largest_phase_ntt[RequestFtree],levels,Word(s.fold),Word(s.frontier),route,
+        w.largest_phase_ntt[RequestDescent]}};
+}
+inline double relative_work(const Work &a,const Work &b) {
+    auto ratio=[](double x,double y){return y>0?x/y:1.;};
+    auto poly=[&](unsigned ph){return .55*ratio(a.ntt[ph],b.ntt[ph])+
+        .40*ratio(a.reduce[ph],b.reduce[ph])+.03*ratio(a.transfer[ph],b.transfer[ph])+
+        .02*ratio(a.calls[ph],b.calls[ph]);};
+    return .44*poly(RequestGtrees)+.19*poly(RequestFold)+.12*ratio(a.giant,b.giant)+
+        .07*ratio(a.baby,b.baby)+.05*poly(RequestFtree)+.05*poly(RequestInverse)+
+        .06*poly(RequestDescent)+.02*ratio(a.accum,b.accum);
+}
 struct Estimate {
     double seconds=0,mad=0,relative_error=0.25,rank=0;
     Word anchors=0;bool validated=false,exact=false,extrapolated=false;
@@ -74,7 +99,16 @@ public:
     const Profile &profile;Fields condition;Ignore ignore;Query query;
     std::map<std::pair<Word,Word>,double> ntt;
     ShortNttBatchPolicy short_ntt;
+    // Each estimator requires an immutable profile while ranking. A caller
+    // that updates the profile constructs a new estimator before using caches.
+    mutable std::map<std::array<Word,18>,std::pair<bool,Work>> work_cache;
+    std::set<const Fields*> profile_samples;
+    mutable std::map<const Fields*,Shape> sample_shapes;
+    mutable std::map<Word,bool> matching_conditions;
+    struct Fit {bool valid=false;B2Features coefficients{};double error=0;Word low=0,high=0;};
+    mutable std::map<std::array<Word,13>,Fit> fit_cache;
     Estimator(const Profile &p,Fields current,Ignore ign,Query q):profile(p),condition(std::move(current)),ignore(ign),query(std::move(q)) {
+        for(const auto &s:p.samples)profile_samples.insert(&s);
         for(const auto &s:p.ntt)if(ntt_matches(p.conditions.at(uint(s,"condition")),condition,ignore)) {
             const auto key=ntt_scope(s);const double v=real(s,"median_seconds");
             auto i=ntt.find(key);if(i==ntt.end() || v<i->second)ntt[key]=v;
@@ -94,7 +128,18 @@ public:
         // anchor still determines seconds; this value is never called measured.
         return result>0?result:double(n)*batch*std::log2(double(n));
     }
+    bool cached_work(const Shape &s,Work &out)const {
+        const std::array<Word,18> key={s.target_bits,s.arithmetic_bits,s.carrier,s.b1,s.b2,s.d,
+            s.batch_bytes,s.chunk_max,s.buffers,Word(s.physical),Word(s.fold),Word(s.frontier),
+            Word(s.mersenne),Word(s.short_batch_tune),s.short_batch_hash,s.giant_chunk,s.chain_min,
+            Word(s.force_ladder)};
+        auto at=work_cache.find(key);
+        if(at==work_cache.end()) {Work w;const bool ok=work(s,query,[&](Word n,Word b){return ntt_cost(n,b);},w,&short_ntt);
+            at=work_cache.emplace(key,std::make_pair(ok,std::move(w))).first;}
+        out=at->second.second;return at->second.first;
+    }
     Shape shape(const Fields &s)const {
+        const auto old=sample_shapes.find(&s);if(old!=sample_shapes.end())return old->second;
         Shape x;x.target_bits=unsigned(uint(s,"target_bits"));x.arithmetic_bits=unsigned(uint(s,"arithmetic_bits"));
         x.carrier=unsigned(uint(s,"carrier_exponent"));x.b1=uint(s,"b1");x.b2=uint(s,"b2");x.d=uint(s,"d");
         x.fold=uint(s,"fold_resident")!=0;x.frontier=uint(s,"frontier_resident")!=0;x.mersenne=text(s,"modulus_kind")=="mersenne";
@@ -105,52 +150,70 @@ public:
         x.buffers=optional_uint(c,"env_workspace_reuse_bq")?2:3;
         x.physical=optional_uint(c,"env_s4_workspace_budget")!=0;x.chunk_max=optional_uint(c,"env_s4_chunk_max");
         x.short_batch_tune=optional_uint(c,"env_s4_short_batch_tune")!=0;
-        x.short_batch_hash=optional_uint(c,"env_s4_short_batch_hash");return x;
+        x.short_batch_hash=optional_uint(c,"env_s4_short_batch_hash");
+        // Temporary Fields objects can reuse the same stack address. Cache
+        // only records owned by this estimator's immutable profile.
+        if(profile_samples.count(&s))sample_shapes.emplace(&s,x);return x;
     }
     bool eligible(const Fields &s,const Shape &x)const {
-        if(!measured(s) || !matches(profile.conditions.at(uint(s,"condition")),condition,ignore))return false;
+        if(!measured(s))return false;
+        const auto id=uint(s,"condition");auto at=matching_conditions.find(id);
+        if(at==matching_conditions.end())at=matching_conditions.emplace(id,matches(profile.conditions.at(id),condition,ignore)).first;
+        if(!at->second)return false;
         const auto a=shape(s);
         if(a.mersenne!=x.mersenne || bool(a.carrier)!=bool(x.carrier))return false;
         if(!ignore.memory && (a.fold!=x.fold || a.frontier!=x.frontier))return false;
         return true;
     }
     bool fitted(const Shape &x,const Work &target,double &seconds,double &error,const Fields *omit=nullptr)const {
-        std::vector<B2Features> features;std::vector<double> times;
-        std::set<Word> ds,bounds;Word low_p=UINT64_MAX,high_p=0;
+        const std::array<Word,13> key={x.target_bits,x.arithmetic_bits,Word(x.mersenne),Word(bool(x.carrier)),
+            Word(x.physical),x.batch_bytes,x.buffers,x.chunk_max,Word(x.fold),Word(x.frontier),
+            x.short_batch_hash,Word(x.short_batch_tune),Word(reinterpret_cast<std::uintptr_t>(omit))};
         auto encode=[](const Work &w) {
             double ntt=0,reduce=0;
             for(unsigned ph=0;ph<RequestPhaseCount;++ph){ntt+=w.ntt[ph];reduce+=w.reduce[ph];}
             return B2Features{1.,ntt,reduce,w.baby+w.giant+w.accum};
         };
-        for(const auto &s:profile.samples)if(&s!=omit && eligible(s,x)) {
-            const auto a=shape(s);
-            if(a.target_bits!=x.target_bits || a.arithmetic_bits!=x.arithmetic_bits ||
-               a.physical!=x.physical || a.batch_bytes!=x.batch_bytes || a.buffers!=x.buffers ||
-               a.chunk_max!=x.chunk_max || a.fold!=x.fold || a.frontier!=x.frontier ||
-               a.short_batch_hash!=x.short_batch_hash ||
-               a.short_batch_tune!=x.short_batch_tune || cost::phi(a.d)/2<512)continue;
-            Work w;if(!work(a,query,[&](Word n,Word b){return ntt_cost(n,b);},w,&short_ntt) || !w.exact_topology)continue;
-            features.push_back(encode(w));times.push_back(real(s,"median_seconds"));
-            ds.insert(a.d);bounds.insert(a.b2);low_p=std::min(low_p,w.p);high_p=std::max(high_p,w.p);
-        }
-        // An intercept separates setup from variable work. Qualification uses
-        // held-out full-engine curves, never a residual against fitted rows.
-        if(features.size()<6 || features.size()>128 || ds.size()<3 || bounds.size()<2 ||
-            target.p<low_p/2 || target.p>2*high_p)return false;
         auto dot=[](const B2Features &a,const B2Features &b){double s=0;for(unsigned j=0;j<4;++j)s+=a[j]*b[j];return s;};
-        error=0;B2Features coefficients{};
-        for(size_t i=0;i<features.size();++i) {
-            if(!fit_route_cost(features,times,i,4,coefficients))return false;
-            error=std::max(error,std::abs(dot(features[i],coefficients)-times[i])/times[i]);
+        auto at=fit_cache.find(key);
+        if(at==fit_cache.end()) {
+            Fit fit;fit.low=UINT64_MAX;
+            std::vector<B2Features> features;std::vector<double> times;
+            std::set<Word> ds,bounds;
+            for(const auto &s:profile.samples)if(&s!=omit && eligible(s,x)) {
+                const auto a=shape(s);
+                if(a.target_bits!=x.target_bits || a.arithmetic_bits!=x.arithmetic_bits ||
+                   a.physical!=x.physical || a.batch_bytes!=x.batch_bytes || a.buffers!=x.buffers ||
+                   a.chunk_max!=x.chunk_max || a.fold!=x.fold || a.frontier!=x.frontier ||
+                   a.short_batch_hash!=x.short_batch_hash ||
+                   a.short_batch_tune!=x.short_batch_tune || d_catalog::degree(a.d)<512)continue;
+                Work w;if(!cached_work(a,w) || !w.exact_topology)continue;
+                features.push_back(encode(w));times.push_back(real(s,"median_seconds"));
+                ds.insert(a.d);bounds.insert(a.b2);fit.low=std::min(fit.low,w.p);fit.high=std::max(fit.high,w.p);
+            }
+            // Qualification is unchanged: independent leave-one-out errors,
+            // six curves, three D, two B2; never substitute training residuals.
+            if(features.size()>=6 && features.size()<=128 && ds.size()>=3 && bounds.size()>=2) {
+                bool ok=true;B2Features coefficients{};
+                for(size_t i=0;i<features.size();++i) {
+                    if(!fit_route_cost(features,times,i,4,coefficients)){ok=false;break;}
+                    fit.error=std::max(fit.error,std::abs(dot(features[i],coefficients)-times[i])/times[i]);
+                }
+                const double limit=optional_real(profile.metadata,"error_limit",.08);
+                if(ok && limit>0 && limit<=1 && fit.error<=limit &&
+                   fit_route_cost(features,times,features.size(),4,fit.coefficients))fit.valid=true;
+            }
+            at=fit_cache.emplace(key,fit).first;
         }
-        const double limit=optional_real(profile.metadata,"error_limit",.08);
-        if(!(limit>0) || limit>1 || error>limit || !fit_route_cost(features,times,features.size(),4,coefficients))return false;
-        seconds=dot(encode(target),coefficients);return seconds>0 && std::isfinite(seconds);
+        const auto &fit=at->second;
+        if(!fit.valid || target.p<fit.low/2 || target.p>2*fit.high)return false;
+        error=fit.error;seconds=dot(encode(target),fit.coefficients);
+        return seconds>0 && std::isfinite(seconds);
     }
     double scaled(const Fields &a,const Shape &x,const Work &w)const {
         auto before=shape(a);
         if(before.short_batch_hash!=x.short_batch_hash)before.short_batch_tune=false;
-        Work old;if(!work(before,query,[&](Word n,Word b){return ntt_cost(n,b);},old,&short_ntt))return 0;
+        Work old;if(!cached_work(before,old))return 0;
         auto ratio=[](double x,double y){return y>0?x/y:1.;};
         auto phase=[&](const char *key,double scale){return optional_real(a,key)*scale;};
         double seconds=phase("phase_shape_seconds",1)+phase("phase_setup_seconds",ratio(double(x.arithmetic_bits),uint(a,"arithmetic_bits")))+
@@ -181,11 +244,11 @@ public:
         return seconds;
     }
     bool predict(const Shape &x,Estimate &out,const Fields *omit=nullptr)const {
-        out=Estimate{};Work w;if(!work(x,query,[&](Word n,Word b){return ntt_cost(n,b);},w,&short_ntt))return false;
+        out=Estimate{};Work w;if(!cached_work(x,w))return false;
         double nearest=std::numeric_limits<double>::infinity();
         for(const auto &s:profile.samples)if(&s!=omit && eligible(s,x)) {
             const auto a=shape(s);const double distance=2*std::abs(std::log2(double(x.arithmetic_bits)/a.arithmetic_bits))+
-                std::abs(std::log2(double(w.p)/(cost::phi(a.d)/2)))+
+                std::abs(std::log2(double(w.p)/d_catalog::degree(a.d)))+
                 .25*std::abs(std::log2(double(x.b2)/a.b2));
             ++out.anchors;
             if(distance<nearest) {nearest=distance;out.anchor=&s;}

@@ -4,10 +4,13 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tomllib
 from stage2_tune_tables import summaries
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT/'tools/bench'))
+from stage2_d_catalog import candidates
 
 
 def main():
@@ -35,13 +38,14 @@ def main():
         return subprocess.check_output([str(exe), *map(str, args)], text=True)
     assert run('--short-batch') == 'true'
     assert run('--local-search') == 'true'
-    preset = [(3,4096,4,3,10,2),(4,3072,6,3,10,2),(5,2048,8,4,10,2),
-              (5,2048,10,4,10,2),(5,2048,10,6,5,3),(8,1536,12,6,5,3),
-              (8,1536,12,6,5,3),(10,1024,12,8,5,3),(15,1024,12,8,5,5),(15,1024,14,8,5,5)]
-    for level, (count,step,ds,bc,ratio,reps) in enumerate(preset, 1):
+    expected_ds = [d for d, _ in candidates()]
+    preset = [(3,4096,3,10,2),(4,3072,3,10,2),(5,2048,4,10,2),
+              (5,2048,4,10,2),(5,2048,6,5,3),(8,1536,6,5,3),
+              (8,1536,6,5,3),(10,1024,8,5,3),(15,1024,8,5,5),(15,1024,8,5,5)]
+    for level, (count,step,bc,ratio,reps) in enumerate(preset, 1):
         grid = json.loads(run('--grid', level))
         assert grid['widths'] == [512]+[step*i for i in range(1,count+1)]
-        assert len(set(grid['ds'])) == ds and grid['ds'][0] == 30030 and grid['ds'][-1] == 2282280
+        assert grid['ds'] == expected_ds
         assert grid['repeats'] == reps and len(grid['b2s']) == bc
         assert grid['b2s'][-1] == 2600000000000
         assert all(high//ratio == low for low, high in zip(grid['b2s'], grid['b2s'][1:]))

@@ -4,6 +4,7 @@
 #include "ecm_stage2_phase_times.h"
 #include "ecm_stage2_giant_work.h"
 #include "ecm_stage2_tune_grid.h"
+#include "ecm_stage2_d_catalog.h"
 #include <gmp.h>
 #include <limits>
 
@@ -23,11 +24,10 @@ inline EcmEffort ecm_effort(int level) {
     if(level<1 || level>10)throw std::runtime_error("tune-level must be 1..10");
     // Known Mersenne prime exponents. Each level retains all previous inputs.
     const unsigned primes[]={521,2203,4423,9689,1279,3217,11213,607,2281,4253,127,107,9941};
-    const Word ds[]={30030,60060,120120,180180,210210,360360,570570,690690,810810,1021020,1141140,1381380,1711710,2282280};
     const Word bounds[]={2600000000ull,26000000000ull,260000000000ull,2600000000000ull,8000000000000ull};
     EcmEffort e;
     e.exponents.assign(primes,primes+std::min(13,level+3));
-    e.d.assign(ds,ds+level+2+(level>=7?2:0));
+    for(const auto &entry:d_catalog::entries())e.d.push_back(entry.d);
     const int intervals=(level-1)/2;
     // Keep low-I support at intermediate effort, too. A mixed route fit with
     // only the two endpoints and midpoint can reject the lowest chain anchor.

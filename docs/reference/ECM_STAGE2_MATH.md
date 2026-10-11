@@ -2,6 +2,8 @@
 
 固定算法资料，提取自 `STAGE2_GPU_CURRENT_PIPELINE.md` 的公式、`STAGE2_GPU_COMPARE_PRMERS.md` 的 Prime95 分析和 `DEV_GPUOWL_NTT_NOTES.md` 的 scaled 下降推导。以下不规定 CPU/GPU 分工或是否驻留；工程现状见[Stage2 管线](../architecture/STAGE2.md)。
 
+D的生成、φ(D)/2、非单调性及计算量折中见 [D参数数学](ECM_STAGE2_D_PARAMETERS.md)。
+
 ## Baby / giant 判据
 
 选取偶数 D。候选素数 q 写为 `q=iD±j`，baby 点为 `[j]Q`、giant 点为 `[iD]Q`。由于 x(P)=x(−P)，点阶条件可转为两点 x 坐标相遇。

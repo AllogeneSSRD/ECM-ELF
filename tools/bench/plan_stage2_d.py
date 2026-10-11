@@ -6,22 +6,7 @@ from pathlib import Path
 from functools import lru_cache
 from calibrate_stage2_d import tree,inverse,unit,shape,load_fixed_ptx_weights
 from fit_stage2_d import predict
-
-PRIMES=(2,3,5,7,11,13,17,19,23,29,31,37,41,43,47)
-
-def candidates(limit):
-    stack=[(0,1,1)]
-    while stack:
-        pos,d,tot=stack.pop()
-        if pos==len(PRIMES):
-            if tot//2:yield d,tot//2
-            continue
-        prime=PRIMES[pos];v=d;t=tot
-        stack.append((pos+1,v,t))
-        first=True
-        while v<=limit//prime:
-            v*=prime;t*=prime-1 if first else prime;first=False
-            stack.append((pos+1,v,t))
+from stage2_d_catalog import candidates
 
 @lru_cache(None)
 def static(p,bits):

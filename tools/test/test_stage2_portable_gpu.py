@@ -137,13 +137,12 @@ def main():
         '--tune-exponents',512,'--tune-d','210,330,390,420,510','--tune-b2',260000,
         '--tune-repeats',2,'--tune-budget-seconds',30,'--arena-mb',512])
     wt=tomllib.loads(window_profile.read_text(encoding='utf-8'))
-    selected=re.search(r'ecm_tune_window:.*center_D=(\d+).*search=measured_descent',windows)
-    assert selected
-    ds=[210,330,390,420,510];center=ds.index(int(selected[1]))
+    assert re.search(r'ecm_tune_window:.*search=ntt_intervals',windows)
+    regions=re.findall(r'ecm_tune_window:.*region=(\d+)/(\d+) center_D=(\d+)',windows)
+    assert regions and all(1<=int(i)<=int(n)<=2 for i,n,_ in regions)
+    ds=[210,330,390,420,510]
     actual={s['d'] for s in summaries(wt) if s['b2']==260000}
-    assert ds[center] in actual and actual<=set(ds)
-    indices=sorted(ds.index(d) for d in actual)
-    assert indices==list(range(indices[0],indices[-1]+1))
+    assert all(int(d) in actual for _,_,d in regions) and actual<=set(ds)
     assert wt['profile']['selected_candidates']==len(actual)
     assert wt['profile']['grid_candidates']==5
     run('execute_4423',['--save',out/'n4423_b1000.save','--b2',60000,'--d',210,'--tune-profile',profile,

@@ -5,9 +5,12 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT/'tools/bench'))
+from stage2_d_catalog import candidates
 
 
 def main():
@@ -50,10 +53,11 @@ def main():
     prev = (0,0,0,0,0)
     previous_bounds = set()
     previous_ds = set()
+    expected_ds = [d for d, _ in candidates()]
     for level in range(1,11):
         grid = tuple(map(int, subprocess.check_output([str(exe),'--effort',str(level)], text=True).split()))
         subdivisions = 1 if level<3 else 4
-        assert grid == (min(13,level+3),level+2+(2 if level>=7 else 0),1+((level-1)//2)*subdivisions,2*level+1,64+16*(level-1))
+        assert grid == (min(13,level+3),len(expected_ds),1+((level-1)//2)*subdivisions,2*level+1,64+16*(level-1))
         assert all(x >= y for x,y in zip(grid,prev)) and grid[-1] > prev[-1]
         bounds = list(map(int, subprocess.check_output([str(exe),'--effort-b2',str(level)],text=True).split()))
         assert bounds == sorted(set(bounds)) and len(bounds) == grid[2]
@@ -61,9 +65,8 @@ def main():
         if level in (3,4):
             assert len(bounds)==5 and 4000000000<bounds[1]<6000000000
             assert bounds[2]==8221921916 and 14000000000<bounds[3]<16000000000
-        assert grid[0]*grid[1]*grid[2] <= 4096
         ds = list(map(int, subprocess.check_output([str(exe),'--effort-d',str(level)],text=True).split()))
-        assert ds == sorted(set(ds)) and len(ds) == grid[1]
+        assert ds == expected_ds and len(ds) == grid[1]
         assert previous_ds.issubset(ds)
         if level>=7:
             assert {810810,1021020}.issubset(ds)

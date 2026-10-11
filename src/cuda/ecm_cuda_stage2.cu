@@ -4,6 +4,7 @@
 // allocation and generic-modulus fallbacks when changing production policy.
 #include "../core/ecm_stage2_logging.h"
 #include "../core/ecm_cuda_stage2.h"
+#include "../core/ecm_stage2_d_catalog.h"
 #if !defined(NTT_GL_FIXED_MODE) || NTT_GL_FIXED_MODE != 3
 #error "Production Stage2 requires fixed PTX3 Goldilocks"
 #endif
@@ -8650,48 +8651,21 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
             const double span = (B2 > B1) ? (double)(B2 - B1) : 1.0;
             c.rate = span / (c.total > 1e-9 ? c.total : 1e-9);
         };
-        /* every 47-smooth D (products of the primes below with ANY exponents): the step size need
-           not be squarefree, and a repeated factor multiplies D (fewer steps) without changing
-           phi(D)/D, which is exactly the trade the model is about. */
-        static const unsigned long long prim[] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41,
-                                                  43, 47};
-        const size_t np = sizeof(prim) / sizeof(prim[0]);
+        /* Automatic geometry comes from the same literal catalogue as ECM tune.
+           Explicit D remains a separately checked diagnostic override. */
         const unsigned long long dlim = 200000000ull;
         std::vector<DCand> cands;
-        cands.reserve(60000);
-        /* iterative enumeration of every 47-smooth D <= dlim: an explicit stack visits each
-           candidate exactly once, needs no recursion and no <functional> */
-        {
-            std::vector<std::pair<size_t, unsigned long long>> stk;
-            stk.push_back({0, 1ull});
-            while (!stk.empty()) {
-                const size_t i = stk.back().first;
-                const unsigned long long cur = stk.back().second;
-                stk.pop_back();
-                if (i == np) {
-                    DCand c;
-                    c.D = cur;
-                    c.P = phi_u64(cur) / 2;
-                    if (c.P == 0) continue;
-                    model(c);
-                    cands.push_back(c);
-                    continue;
-                }
-                unsigned long long v = cur;
-                for (;;) {
-                    stk.push_back({i + 1, v});
-                    if (v > dlim / prim[i]) break;
-                    v *= prim[i];
-                }
-            }
+        cands.reserve(ecm_stage2::d_catalog::count);
+        for(const auto &entry:ecm_stage2::d_catalog::entries()) {
+            DCand c;c.D=entry.d;c.P=entry.p;model(c);cands.push_back(c);
         }
         std::sort(cands.begin(), cands.end(),
                   [](const DCand &a, const DCand &b) { return a.total < b.total; });
-        if(calibrated) stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (47-smooth D <= %llu) ; "
+        if(calibrated) stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue D <= %llu) ; "
                                   "model=%s ranked by empirical full Stage2 cost; "
                                   "actual NTT lengths, partial trees/Newton, owner and arena filters\n",
                                   (unsigned long long)cands.size(),dlim,model_version);
-        else stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (47-smooth D <= %llu) ; model fitted to the section "
+        else stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue D <= %llu) ; model fitted to the section "
                     "56.1 run (rates: loop=%.3f s per imax*log2, tree=%.1f us per leaf, "
                     "giant=%.2f us per step, glue=%.2f ms per batch) ; ranked by TOTAL COST "
                     "(coverage is ~1 for every candidate: a prime p > D is coprime to D, so its "

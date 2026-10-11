@@ -77,7 +77,12 @@ Handle portable_lock(const fs::path &path) {
     return guard;
 }
 bool portable_query(ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots) {
-    return ecm_cuda_stage2_shape_query(m,bits,n,slots);
+    // Pure packing geometry has no device/free-memory dependencies.
+    struct Result {bool ok;ecm_stage2::Word n=0,slots=0;};
+    static std::map<std::pair<ecm_stage2::Word,int>,Result> cache;
+    const auto key=std::make_pair(m,bits);auto at=cache.find(key);
+    if(at==cache.end()) {Result r;r.ok=ecm_cuda_stage2_shape_query(m,bits,&r.n,&r.slots);at=cache.emplace(key,r).first;}
+    if(n)*n=at->second.n;if(slots)*slots=at->second.slots;return at->second.ok;
 }
 pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d,unsigned carrier) {
     Big n,plus;mpz_set_str(n.z,r.n.c_str(),16);mpz_add_ui(plus.z,n.z,1);
@@ -141,13 +146,14 @@ uint64_t portable_default_d(const Options &o,const Record &r,uint64_t b2,unsigne
     auto ntt=[](uint64_t n,uint64_t batch){return double(n)*batch*std::log2(double(n));};
     if(!baseline.fold || !baseline.frontier || !pt::work(baseline,portable_query,ntt,before) ||
         before.largest_ntt!=(1ull<<27) || (!baseline.mersenne && before.points/before.p<16))return legacy;
-    // At the backend's largest transform, compare larger D only inside the
+    // At the portable cost boundary, compare established larger D inside the
     // same NTT plateau. Lower lengths retain the established default model.
     // These normalized weights describe the observed production split, not
     // absolute seconds or a claim that all devices have identical rates.
     auto ratio=[](double a,double b){return b>0?a/b:1.;};
     double best=.95;uint64_t winner=legacy;
-    for(auto d:pt::grid(10).ds)if(d>legacy) {
+    for(const auto &entry:ecm_stage2::d_catalog::entries())if(entry.default_plateau && entry.d>legacy) {
+        const auto d=entry.d;
         auto shape=portable_shape(o,r,b2,d,carrier);pt::Work after;
         if(!shape.fold || !shape.frontier || !pt::work(shape,portable_query,ntt,after) ||
             !after.exact_topology || after.largest_ntt!=before.largest_ntt)continue;
@@ -198,10 +204,6 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
     const unsigned factor=o.factor_bits?unsigned(o.factor_bits):ecm_stage2::probability::recommended_factor_bits(double(r.b1),bits);
     std::vector<uint64_t> ds=pt::grid(10).ds;
     if(o.has_d && o.d)ds={o.d};
-    else {
-        for(const auto &s:profile.samples)if(pt::measured(s) && et::uint(s,"target_bits")==bits)ds.push_back(et::uint(s,"d"));
-        std::sort(ds.begin(),ds.end());ds.erase(std::unique(ds.begin(),ds.end()),ds.end());
-    }
     std::vector<uint64_t> b2s;
     if(automatic) {
         const auto low=std::max(r.b1+1,o.auto_min),high=o.auto_max?o.auto_max:pt::default_b2_max;
@@ -236,18 +238,21 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
         bool covered=false;for(auto b:b2s)covered|=baselines.at({b,carriers.front()})!=nullptr;
         if(!covered)return protected_default("default_planner_protected_missing_paired_baseline");
     }
+    std::map<std::pair<uint64_t,unsigned>,std::set<uint64_t>> paired_ds;
+    if(!automatic && !(o.has_d && o.d))for(auto b:b2s)for(auto carrier:carriers) {
+        const auto base=baselines.at({b,carriers.front()});if(!base)continue;
+        for(const auto &s:profile.samples)if(pt::measured(s) && et::uint(s,"target_bits")==bits &&
+            et::uint(s,"arithmetic_bits")==unsigned(carrier?carrier:bits) &&
+            et::uint(s,"carrier_exponent")==carrier && et::uint(s,"b2")==b &&
+            ecm_stage2::d_catalog::contains(et::uint(s,"d")) &&
+            pt::LocalSearch::improves({et::real(s,"median_seconds"),et::real(s,"mad_seconds")},
+                {et::real(*base,"median_seconds"),et::real(*base,"mad_seconds")}))
+            paired_ds[{b,carrier}].insert(et::uint(s,"d"));
+    }
     for(auto b:b2s)for(auto d:ds)for(auto carrier:carriers) {
         if(automatic && !(o.has_d && o.d) && !default_ds.at({b,carrier}))continue;
         const bool paired=!automatic && !(o.has_d && o.d);
-        if(paired) {
-            const auto base=baselines.at({b,carriers.front()});bool competitive=false;
-            if(base)for(const auto &s:profile.samples)if(pt::measured(s) &&
-                et::uint(s,"target_bits")==bits && et::uint(s,"arithmetic_bits")==unsigned(carrier?carrier:bits) &&
-                et::uint(s,"carrier_exponent")==carrier && et::uint(s,"d")==d && et::uint(s,"b2")==b &&
-                pt::LocalSearch::improves({et::real(s,"median_seconds"),et::real(s,"mad_seconds")},
-                    {et::real(*base,"median_seconds"),et::real(*base,"mad_seconds")}))competitive=true;
-            if(!competitive)continue;
-        }
+        if(paired && !paired_ds[{b,carrier}].count(d))continue;
         auto shape=portable_shape(o,r,b,d,carrier);pt::Estimate e;
         if(paired) {
             // Only paired measurements can replace the default planner. A
@@ -338,7 +343,10 @@ PortableInput portable_input(unsigned bits,const fs::path &evidence,bool mersenn
     return {save,records(save,0,1).at(0),mersenne?"mersenne_benchmark":"probable_prime_gmp_nextprime"};
 }
 bool portable_measure(Options o,const Settings &settings,const PortableInput &input,uint64_t b2,uint64_t d,unsigned carrier,
-    unsigned repeats,pt::Budget &budget,const fs::path &evidence,pt::Profile &profile,ecm_stage2::Word condition,bool skip_verified_factor=false) {
+    unsigned repeats,pt::Budget &budget,const fs::path &evidence,pt::Profile &profile,ecm_stage2::Word condition,
+    bool skip_verified_factor=false,unsigned *completed_repeats=nullptr,et::Fields *completed_sample=nullptr) {
+    if(completed_repeats)*completed_repeats=0;
+    if(completed_sample)completed_sample->clear();
     if(budget.expired() || stop_requests)return false;
     // Full-engine calibration remains independent of a mutable NTT tune file.
     // Store that legacy policy in its actual condition, never label it as tuned.
@@ -403,6 +411,8 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
         sample["validation_count"]="1";
         sample["validation_max_relative_error"]=pt::numeric(std::abs(prediction.seconds-et::median(seconds))/et::median(seconds));
     }
+    if(completed_repeats)*completed_repeats=unsigned(trials.size());
+    if(completed_sample)*completed_sample=sample;
     return profile.update(std::move(sample));
 }
 void portable_ntt(Options o,pt::Profile &profile,ecm_stage2::Word condition,pt::Budget &budget,const fs::path &evidence,
@@ -564,75 +574,164 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
             if(b<=r.b1 || budget.expired() || stop_requests)continue;
             const unsigned carrier=mode?o.tune_carrier:0;
             const auto baseline=portable_default_d(o,r,b,carrier);
-            auto ds=grid.ds;
-            // Keep the real default in the comparison, not an approximate
-            // catalog substitute. Explicit user grids remain exact.
-            if(o.tune_ds.empty())ds.push_back(baseline);
-            std::sort(ds.begin(),ds.end());ds.erase(std::unique(ds.begin(),ds.end()),ds.end());
-            size_t center=0;
-            for(size_t i=1;i<ds.size();++i)
-                if(std::abs(std::log(double(ds[i])/baseline))<std::abs(std::log(double(ds[center])/baseline)))center=i;
-            // Incremental tune starts at a previously measured winner when it
-            // has a paired default baseline. Remote model extrapolations do
-            // not redirect the initial neighborhood.
-            pt::Estimator guide(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
-            auto reference=portable_shape(o,r,b,baseline,carrier);std::string reference_plan;
-            const et::Fields *best=portable_admit(o,r,reference,reference_plan)?guide.observed(reference):nullptr;
-            if(best)for(const auto &sample:profile.samples)if(pt::measured(sample) &&
-                et::uint(sample,"target_bits")==bits && et::uint(sample,"b2")==b &&
-                pt::LocalSearch::improves({et::real(sample,"median_seconds"),et::real(sample,"mad_seconds")},
-                    {et::real(*best,"median_seconds"),et::real(*best,"mad_seconds")})) {
-                const auto i=std::lower_bound(ds.begin(),ds.end(),et::uint(sample,"d"));
-                if(i==ds.end() || *i!=et::uint(sample,"d"))continue;
-                auto trial=portable_shape(o,r,b,*i,carrier);pt::Work topology;std::string trial_plan;
-                if(!pt::work(trial,portable_query,[](uint64_t n,uint64_t batch){return double(n)*batch;},topology) ||
-                   !portable_admit(o,r,trial,trial_plan))continue;
-                const auto measured_trial=guide.observed(trial);
-                if(measured_trial && pt::LocalSearch::improves(
-                    {et::real(*measured_trial,"median_seconds"),et::real(*measured_trial,"mad_seconds")},
-                    {et::real(*best,"median_seconds"),et::real(*best,"mad_seconds")})) {
-                    best=measured_trial;center=size_t(i-ds.begin());
+            struct Outcome {enum State {Tested,Rejected,Deferred} state=Deferred;pt::LocalSearch::Timing time;};
+            std::map<uint64_t,Outcome> outcomes;
+            std::map<uint64_t,std::pair<bool,pt::Shape>> admissions;
+            auto admit=[&](uint64_t d,pt::Shape &shape) {
+                auto at=admissions.find(d);
+                if(at==admissions.end()) {
+                    shape=portable_shape(o,r,b,d,carrier);std::string plan;
+                    const bool ok=portable_admit(o,r,shape,plan);
+                    if(!plan.empty())append(evidence/"candidate_plans.jsonl",plan);
+                    at=admissions.emplace(d,std::make_pair(ok,shape)).first;
                 }
-            }
-            pt::LocalSearch search(center,ds.size());
-            std::cout<<"ecm_tune_window: N="<<bits<<" B2="<<b<<" carrier="<<carrier
-                <<" center_D="<<ds[center]<<" baseline_D="<<baseline<<" search=measured_descent"<<std::endl;
-            for(;;) {
-                const size_t i=search.next();if(i==ds.size() || budget.expired() || stop_requests)break;
-                const auto d=ds[i],p=ecm_stage2::cost::phi(d)/2,points=b/d+2;
-                if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches)) {
-                    search.rejected.insert(i);++skipped;continue;
-                }
-                auto shape=portable_shape(o,r,b,d,carrier);std::string plan;
-                pt::Work topology;
-                if(!pt::work(shape,portable_query,[](uint64_t n,uint64_t batch){return double(n)*batch;},topology)) {
-                    search.rejected.insert(i);++skipped;continue;
-                }
-                if(!portable_admit(o,r,shape,plan)){search.rejected.insert(i);++skipped;continue;}
+                shape=at->second.second;return at->second.first;
+            };
+            auto measure=[&](uint64_t d) {
+                if(outcomes.count(d))return outcomes.at(d);
+                Outcome result;
+                if(budget.expired() || stop_requests)return outcomes[d]=result;
+                auto shape=portable_shape(o,r,b,d,carrier);pt::Work topology;
+                const auto p=ecm_stage2::cost::phi(d)/2,points=b/d+2;
+                if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches) ||
+                   !pt::work(shape,portable_query,[](uint64_t n,uint64_t batch){return double(n)*batch;},topology) ||
+                   !admit(d,shape)) {result.state=Outcome::Rejected;++skipped;return outcomes[d]=result;}
                 pt::Estimator model(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
-                auto prior=model.observed(shape);
+                const auto prior=model.observed(shape);
                 const bool reuse=prior && et::uint(*prior,"repeats")>=grid.repeats;
+                unsigned completed=0;
+                et::Fields formal_sample;
                 if(!reuse) {
-                    // Only local measured durations can reject a trial for
-                    // budget. Remote P=24 extrapolations are not a clock.
-                    if(prior && et::real(*prior,"median_seconds")*(grid.repeats+1)>budget.remaining()) {
-                        search.rejected.insert(i);++skipped;continue;
-                    }
-                    if(portable_measure(o,settings,input,b,d,carrier,grid.repeats,budget,evidence,profile,condition)) {
-                        ++measured;portable_publish(destination,profile);
-                    }
+                    // A known local duration is a budget bound. A remote tiny-P
+                    // prediction cannot reject a production-sized measurement.
+                    if(prior && et::real(*prior,"median_seconds")*(grid.repeats+1)>budget.remaining())
+                        return outcomes[d]=result;
+                    const bool changed=portable_measure(o,settings,input,b,d,carrier,grid.repeats,
+                        budget,evidence,profile,condition,false,&completed,&formal_sample);
+                    if(completed)++measured;
+                    if(changed)portable_publish(destination,profile);
                 } else ++skipped;
                 pt::Estimator updated(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
                 const auto observation=updated.observed(shape);
-                if(!observation){search.rejected.insert(i);continue;}
-                search.tested[i]={et::real(*observation,"median_seconds"),et::real(*observation,"mad_seconds")};
+                if(!observation || (!reuse && completed<grid.repeats))return outcomes[d]=result;
+                result.state=Outcome::Tested;
+                // Fastest-on-disk may still be a partial earlier sample. The
+                // current neighborhood uses the completed requested repeats,
+                // without replacing that older fastest summary with a slower one.
+                const auto &timing=reuse?*observation:formal_sample;
+                result.time={et::real(timing,"median_seconds"),et::real(timing,"mad_seconds")};
                 cases.push_back({bits,b,d,carrier,0});
                 std::cout<<"ecm_tune_progress: N="<<bits<<" B2="<<b<<" D="<<d
-                    <<" median="<<et::real(*observation,"median_seconds")<<" s reused="<<reuse<<std::endl;
+                    <<" median="<<result.time.seconds<<" s reused="<<reuse<<std::endl;
+                return outcomes[d]=result;
+            };
+            // Measure the protected reference independently of model seeds.
+            // Explicit user lists remain exact and may intentionally omit it.
+            const bool has_baseline=std::binary_search(grid.ds.begin(),grid.ds.end(),baseline);
+            std::cout<<"ecm_tune_window: N="<<bits<<" B2="<<b<<" carrier="<<carrier
+                <<" baseline_D="<<baseline<<" search=ntt_intervals basins_limit="<<grid.basins
+                <<" catalog_candidates="<<ecm_stage2::d_catalog::count<<std::endl;
+            if(has_baseline)measure(baseline);
+            struct Node {uint64_t d,p;double rank;};
+            struct Basin {pt::NttInterval key;std::vector<Node> nodes;double rank;};
+            std::map<pt::NttInterval,std::vector<Node>> groups;
+            auto reference=portable_shape(o,r,b,baseline,carrier);pt::Work reference_work;
+            if(admissions.count(baseline) && admissions.at(baseline).first)reference=admissions.at(baseline).second;
+            pt::Estimator guide(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+            const bool reference_ok=guide.cached_work(reference,reference_work);
+            pt::Estimate reference_estimate;
+            const bool reference_predicted=guide.predict(reference,reference_estimate);
+            bool ranking_complete=true;
+            for(auto d:grid.ds) {
+                if(budget.expired() || stop_requests){ranking_complete=false;break;}
+                const auto p=ecm_stage2::cost::phi(d)/2,points=b/d+2;
+                if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches))continue;
+                auto shape=portable_shape(o,r,b,d,carrier);pt::Work w;
+                if(!guide.cached_work(shape,w) || !w.exact_topology)continue;
+                double score=reference_ok?pt::relative_work(w,reference_work):double(w.largest_ntt);
+                pt::Estimate prediction;
+                if(reference_predicted && guide.predict(shape,prediction))score=prediction.rank/reference_estimate.rank;
+                if(score>0 && std::isfinite(score))groups[pt::interval(shape,w)].push_back({d,p,score});
             }
+            std::vector<Basin> basins;
+            for(auto &group:groups) {
+                auto &nodes=group.second;
+                std::sort(nodes.begin(),nodes.end(),[](const Node &a,const Node &b){return a.p!=b.p?a.p<b.p:a.d>b.d;});
+                double rank=std::numeric_limits<double>::infinity();for(const auto &node:nodes)rank=std::min(rank,node.rank);
+                basins.push_back({group.first,std::move(nodes),rank});
+            }
+            std::sort(basins.begin(),basins.end(),[](const Basin &a,const Basin &b){return a.rank!=b.rank?a.rank<b.rank:a.key<b.key;});
+            // Bounded multi-region restarts may cross an uphill transform step.
+            // They schedule calibration; production still requires paired wins.
+            size_t requested=0;
+            while(requested<basins.size() && requested<grid.basins &&
+                  (requested==0 || basins[requested].rank<=1.5*basins.front().rank))++requested;
+            size_t explored=0;bool complete=ranking_complete && requested!=0;
+            for(size_t region=0;region<requested;++region) {
+                if(budget.expired() || stop_requests){complete=false;break;}
+                auto &basin=basins[region];const auto &nodes=basin.nodes;
+                std::vector<size_t> seeds;for(size_t i=0;i<nodes.size();++i)seeds.push_back(i);
+                std::sort(seeds.begin(),seeds.end(),[&](size_t a,size_t b){return nodes[a].rank!=nodes[b].rank?
+                    nodes[a].rank<nodes[b].rank:nodes[a].d<nodes[b].d;});
+                size_t center=nodes.size();
+                // Existing paired winners get priority, with actual route admission.
+                const auto base=outcomes.find(baseline);
+                if(base!=outcomes.end() && base->second.state==Outcome::Tested) {
+                    pt::LocalSearch::Timing best=base->second.time;
+                    pt::Estimator observed(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+                    for(size_t i=0;i<nodes.size();++i) {
+                        if(budget.expired() || stop_requests){complete=false;break;}
+                        auto shape=portable_shape(o,r,b,nodes[i].d,carrier);
+                        const auto sample=observed.observed(shape);
+                        if(!sample || !pt::LocalSearch::improves({et::real(*sample,"median_seconds"),et::real(*sample,"mad_seconds")},best))continue;
+                        if(!admit(nodes[i].d,shape))continue;
+                        const auto actual=observed.observed(shape);
+                        if(actual && pt::LocalSearch::improves({et::real(*actual,"median_seconds"),et::real(*actual,"mad_seconds")},best)) {
+                            best={et::real(*actual,"median_seconds"),et::real(*actual,"mad_seconds")};center=i;
+                        }
+                    }
+                }
+                // A rejected model seed does not reject every other D in the region.
+                if(center==nodes.size())for(auto i:seeds) {
+                    if(budget.expired() || stop_requests){complete=false;break;}
+                    pt::Shape shape;
+                    if(admit(nodes[i].d,shape)){center=i;break;}
+                    Outcome rejected;rejected.state=Outcome::Rejected;outcomes[nodes[i].d]=rejected;
+                }
+                if(center==nodes.size()) {if(budget.expired() || stop_requests)break;++explored;continue;}
+                pt::LocalSearch search(center,nodes.size());
+                std::cout<<"ecm_tune_window: N="<<bits<<" B2="<<b<<" carrier="<<carrier
+                    <<" region="<<(region+1)<<'/'<<requested<<" center_D="<<nodes[center].d
+                    <<" fold_ntt="<<basin.key.key[0]<<" tree_ntt="<<basin.key.key[2]
+                    <<" predicted_ratio="<<basin.rank<<" restart="<<(region!=0)<<std::endl;
+                for(;;) {
+                    const auto i=search.next();if(i==nodes.size())break;
+                    if(budget.expired() || stop_requests){search.deferred.insert(i);outcomes[nodes[i].d]=Outcome{};break;}
+                    const auto result=measure(nodes[i].d);
+                    if(result.state==Outcome::Tested)search.tested[i]=result.time;
+                    else if(result.state==Outcome::Rejected)search.rejected.insert(i);
+                    else search.deferred.insert(i);
+                }
+                complete=search.complete() && complete;++explored;
+            }
+            size_t tested=0,rejected=0,deferred=0;uint64_t best_d=baseline;
+            pt::LocalSearch::Timing best_time;
+            if(outcomes.count(baseline) && outcomes.at(baseline).state==Outcome::Tested)best_time=outcomes.at(baseline).time;
+            for(const auto &item:outcomes) {
+                if(item.second.state==Outcome::Tested) {
+                    ++tested;
+                    if(!best_time.seconds || pt::LocalSearch::improves(item.second.time,best_time))
+                        {best_time=item.second.time;best_d=item.first;}
+                } else if(item.second.state==Outcome::Rejected)++rejected;
+                else ++deferred;
+            }
+            complete=complete && tested!=0 && explored==requested && !deferred && !(budget.expired() || stop_requests);
             std::cout<<"ecm_tune_window_done: N="<<bits<<" B2="<<b<<" carrier="<<carrier
-                <<" best_D="<<ds[search.center]<<" tested="<<search.tested.size()
-                <<" rejected="<<search.rejected.size()<<" complete="<<(search.next()==ds.size())<<std::endl;
+                <<" best_D="<<best_d<<" tested="<<tested<<" rejected="<<rejected
+                <<" deferred="<<deferred<<" regions="<<explored<<'/'<<requested<<" complete="<<complete
+                <<" reason="<<(stop_requests?"interrupted":budget.expired()?"budget_expired":deferred?"budget_deferred":
+                              !ranking_complete?"ranking_incomplete":!requested?"no_supported_interval":!tested?"no_admissible_interval":
+                              complete?"local_regions_complete":"region_deferred")<<std::endl;
         }
     }
     // Persist only final candidate summaries. Estimates cannot replace measured
@@ -665,7 +764,8 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
     profile.metadata["effort_level"]=std::to_string(level);profile.metadata["budget_seconds"]=std::to_string(o.tune_budget);
     profile.metadata["error_limit"]=pt::numeric(o.tune_error);profile.metadata["grid_candidates"]=std::to_string(full_grid);
     profile.metadata["selected_candidates"]=std::to_string(cases.size());
-    profile.metadata["selection"]="\"measured_local_descent_v2\"";
+    profile.metadata["selection"]="\"ntt_interval_descent_v1\"";
+    profile.metadata["catalogue_candidates"]=std::to_string(ecm_stage2::d_catalog::count);
     if(binary!=ecm_stage2::sha256_file(executable()))throw std::runtime_error("ECM calibration binary changed; evidence retained");
     portable_publish(destination,profile);
     std::cout<<"ecm_tune_complete: measured="<<measured<<" skipped="<<skipped<<" grid="<<full_grid<<" selected="<<cases.size()<<" summaries="<<profile.samples.size()
