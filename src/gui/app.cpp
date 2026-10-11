@@ -1536,6 +1536,7 @@ void App::gen_make_preview() {
 
     GenOptions opt;
     opt.valid = true;
+    opt.set_b1 = gen_set_b1_;
     opt.save_pattern = gen_save_pattern_.empty() ? "m{n}_{b1}.save" : gen_save_pattern_;
     opt.sort_by = gen_sort_by_;
     opt.use_recommended = gen_use_recommended_;
@@ -1569,7 +1570,7 @@ void App::gen_make_preview() {
         }
     }
 
-    const GenResult r = generate(gen_input_, gpu, opt);
+    const GenResult r = generate(gen_input_.text(), gpu, opt);
     if (!r.ok) {
         gen_status_ = r.error;
         gen_warnings_.clear();
@@ -1656,17 +1657,11 @@ void App::draw_gen_panel() {
         trace("layout: start_tab is visible: ###gen");
     }
 
-    // The widget's char buffer is refreshed only when the model changed from outside
-    // (a loaded file); while the user types, ImGui's own state is authoritative and the
-    // model is updated below from the buffer.
-    if (!gen_input_sync_) {
-        gen_input_buf_.assign(gen_input_.begin(), gen_input_.end());
-        gen_input_buf_.push_back('\0');
-        gen_input_sync_ = true;
-    }
-
     // ---- input -----------------------------------------------------------------------
     ImGui::TextDisabled("%s", loc_.t("gen", "paste_hint").c_str());
+    std::string loaded_text;
+    std::string loaded_path;
+    bool loaded_this_frame = false;
     if (ImGui::Button(loc_.t("gen", "load_file").c_str())) {
         std::string path = gen_input_path_;
         if (browse_for_file(path, loc_.t("gen", "load_file"),
@@ -1675,65 +1670,76 @@ void App::draw_gen_panel() {
             if (in) {
                 std::ostringstream ss;
                 ss << in.rdbuf();
-                gen_input_ = ss.str();
-                gen_input_path_ = path;
-                gen_input_sync_ = false;      // refresh the widget's char buffer
-                gen_status_ = path;
-                trace("gen: loaded input " + path);
+                loaded_text = ss.str();
+                loaded_path = path;
+                loaded_this_frame = true;
             } else {
                 gen_status_ = "cannot read " + path;
                 trace("gen: cannot read input " + path);
             }
         }
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", gen_input_path_.empty() ? "-" : gen_input_path_.c_str());
+    if (!gen_input_path_.empty()) ImGui::TextWrapped("%s", gen_input_path_.c_str());
 
-    ImGui::InputTextMultiline("##gen_input", gen_input_buf_.data(), gen_input_buf_.size(),
-                              ImVec2(-1.0f, 120.0f));
-    gen_input_ = gen_input_buf_.empty() ? std::string() : std::string(gen_input_buf_.data());
-    // ---- options ---------------------------------------------------------------------
-    ImGui::Checkbox(loc_.t("gen", "use_recommended").c_str(), &gen_use_recommended_);
-    ImGui::SameLine();
-    // `blocks/SM` box. `kBlocksStep` MUST stay 0: ImGui reserves two GetFrameHeight() wide step
-    // buttons INSIDE the item width, so at 150 % DPI they ate ~63 px of an 80 px box and the
-    // value was invisible ("没有宽度，无法显示数字", 2026-09-29). With step 0 the whole box edits
-    // the number, and the two traced widths below (frame / editable) let a test catch a
-    // regression to a non-zero step.
-    const int kBlocksStep = 0;
-    const std::string blocks_label = loc_.t("gen", "blocks_per_sm");
-    ImGui::SetNextItemWidth(90.0f);
-    ImGui::InputInt(blocks_label.c_str(), &gen_blocks_per_sm_, kBlocksStep, 0);
-    if (gen_blocks_per_sm_ < 1) gen_blocks_per_sm_ = 1;
-    if (gen_blocks_per_sm_ > 64) gen_blocks_per_sm_ = 64;
-    // GetItemRectSize() covers the frame AND the label drawn next to it; the frame is what the
-    // number is edited in.
-    const float blocks_box_w = ImGui::GetItemRectSize().x - ImGui::CalcTextSize(blocks_label.c_str()).x -
-                               ImGui::GetStyle().ItemInnerSpacing.x;
-    const float blocks_edit_w = blocks_box_w -
-                                ((kBlocksStep != 0) ? 2.0f * ImGui::GetFrameHeight() : 0.0f);
-    ImGui::SameLine();
-    ImGui::Checkbox(loc_.t("gen", "dedup").c_str(), &gen_dedup_);
-
-    // Save pattern + sort field: two short text boxes.
-    {
-        char pattern[128];
-        std::snprintf(pattern, sizeof(pattern), "%s", gen_save_pattern_.c_str());
-        ImGui::SetNextItemWidth(200.0f);
-        if (ImGui::InputText(loc_.t("gen", "save_pattern").c_str(), pattern, sizeof(pattern))) {
-            gen_save_pattern_ = pattern;
-        }
-        char sortf[64];
-        std::snprintf(sortf, sizeof(sortf), "%s", gen_sort_by_.c_str());
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(90.0f);
-        if (ImGui::InputText(loc_.t("gen", "sort_by").c_str(), sortf, sizeof(sortf))) {
-            gen_sort_by_ = sortf;
-        }
+    auto &input_buffer = gen_input_.buffer();
+    if (ImGui::InputTextMultiline("##gen_input", input_buffer.data(), input_buffer.size(),
+                                 ImVec2(-1.0f, 120.0f), ImGuiInputTextFlags_CallbackResize,
+                                 [](ImGuiInputTextCallbackData *data) -> int {
+                                     auto *input = static_cast<GenInputText *>(data->UserData);
+                                     input->resize_buffer(static_cast<std::size_t>(data->BufSize));
+                                     data->Buf = input->buffer().data();
+                                     return 0;
+                                 }, &gen_input_)) {
+        gen_input_.accept_edit();
+        gen_has_preview_ = false;
+        gen_input_path_.clear();
     }
+    if (loaded_this_frame) {
+        // Apply after ImGui processes the edit box: its deactivation write-back must not
+        // overwrite the just-loaded file with the previous text.
+        gen_input_.set_text(std::move(loaded_text));
+        gen_input_path_ = std::move(loaded_path);
+        gen_has_preview_ = false;
+        gen_status_ = gen_input_path_;
+        trace("gen: loaded input " + gen_input_path_);
+    }
+    // Keep labels in one column and controls in another so translated text and DPI
+    // scaling cannot squeeze an adjacent input box into an unusable width.
+    const float label_width = std::min(190.0f,
+                                       std::max(100.0f, ImGui::GetContentRegionAvail().x * 0.42f));
+    const auto option_label = [&](const char *key) {
+        const std::string label = loc_.t("gen", key);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextWrapped("%s", label.c_str());
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1.0f);
+    };
 
-    // Target GPU: the devices the ini's workers use (the recommendation depends on it).
-    {
+    ImGui::SeparatorText(loc_.t("gen", "curve_options").c_str());
+    float blocks_box_w = 0.0f;
+    float blocks_edit_w = 0.0f;
+    if (ImGui::BeginTable("##gen_curve_options", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("labels", ImGuiTableColumnFlags_WidthFixed, label_width);
+        ImGui::TableSetupColumn("controls", ImGuiTableColumnFlags_WidthStretch);
+
+        option_label("use_recommended");
+        if (ImGui::Checkbox("##gen_recommended", &gen_use_recommended_)) gen_has_preview_ = false;
+
+        option_label("blocks_per_sm");
+        // Step buttons consumed most of this field at high DPI; keep the step at zero.
+        const int kBlocksStep = 0;
+        if (ImGui::InputInt("##gen_blocks_per_sm", &gen_blocks_per_sm_, kBlocksStep, 0)) {
+            gen_has_preview_ = false;
+        }
+        if (gen_blocks_per_sm_ < 1) gen_blocks_per_sm_ = 1;
+        if (gen_blocks_per_sm_ > 64) gen_blocks_per_sm_ = 64;
+        blocks_box_w = ImGui::GetItemRectSize().x;
+        blocks_edit_w = blocks_box_w;
+
+        option_label("dedup");
+        if (ImGui::Checkbox("##gen_dedup", &gen_dedup_)) gen_has_preview_ = false;
+
         std::vector<int> devices;
         for (const WorkerView &w : workers_) {
             if (std::find(devices.begin(), devices.end(), w.device) == devices.end()) {
@@ -1744,19 +1750,54 @@ void App::draw_gen_panel() {
         if (devices.empty()) devices.push_back(0);
         if (std::find(devices.begin(), devices.end(), gen_target_device_) == devices.end()) {
             gen_target_device_ = devices.front();
+            gen_has_preview_ = false;
         }
-        std::string current = "GPU " + std::to_string(gen_target_device_);
-        ImGui::SetNextItemWidth(200.0f);
-        if (ImGui::BeginCombo(loc_.t("gen", "target_device").c_str(), current.c_str())) {
+        option_label("target_device");
+        const std::string current = "GPU " + std::to_string(gen_target_device_);
+        if (ImGui::BeginCombo("##gen_target_device", current.c_str())) {
             for (int d : devices) {
                 const std::string label = "GPU " + std::to_string(d);
                 if (ImGui::Selectable(label.c_str(), d == gen_target_device_)) {
                     gen_target_device_ = d;
-                    gen_has_preview_ = false;      // the recommendation is device specific
+                    gen_has_preview_ = false;
                 }
             }
             ImGui::EndCombo();
         }
+        ImGui::EndTable();
+    }
+
+    ImGui::SeparatorText(loc_.t("gen", "output_options").c_str());
+    if (ImGui::BeginTable("##gen_output_options", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("labels", ImGuiTableColumnFlags_WidthFixed, label_width);
+        ImGui::TableSetupColumn("controls", ImGuiTableColumnFlags_WidthStretch);
+
+        option_label("override_b1");
+        char override_b1[128];
+        std::snprintf(override_b1, sizeof(override_b1), "%s", gen_set_b1_.c_str());
+        if (ImGui::InputTextWithHint("##gen_override_b1",
+                                     loc_.t("gen", "override_b1_hint").c_str(),
+                                     override_b1, sizeof(override_b1))) {
+            gen_set_b1_ = override_b1;
+            gen_has_preview_ = false;
+        }
+
+        option_label("save_pattern");
+        char pattern[128];
+        std::snprintf(pattern, sizeof(pattern), "%s", gen_save_pattern_.c_str());
+        if (ImGui::InputText("##gen_save_pattern", pattern, sizeof(pattern))) {
+            gen_save_pattern_ = pattern;
+            gen_has_preview_ = false;
+        }
+
+        option_label("sort_by");
+        char sortf[64];
+        std::snprintf(sortf, sizeof(sortf), "%s", gen_sort_by_.c_str());
+        if (ImGui::InputText("##gen_sort_by", sortf, sizeof(sortf))) {
+            gen_sort_by_ = sortf;
+            gen_has_preview_ = false;
+        }
+        ImGui::EndTable();
     }
 
     // ---- actions: generate and apply are deliberately SEPARATE ---------------------
@@ -1765,10 +1806,7 @@ void App::draw_gen_panel() {
     if (!gen_has_preview_) ImGui::BeginDisabled();
     if (ImGui::Button(loc_.t("gen", "apply").c_str())) gen_apply();
     if (!gen_has_preview_) ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", loc_.t("gen", "target").c_str());
-    ImGui::SameLine();
-    ImGui::Text("%s", genWorktodoPath().c_str());
+    ImGui::TextWrapped("%s %s", loc_.t("gen", "target").c_str(), genWorktodoPath().c_str());
 
     if (!gen_status_.empty()) {
         ImGui::TextWrapped("%s", gen_status_.c_str());

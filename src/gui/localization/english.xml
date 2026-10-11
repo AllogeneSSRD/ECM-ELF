@@ -26,9 +26,13 @@
       <Item id="title"          name="Generator"/>
       <Item id="paste_hint"     name="Paste PrimeNet assignments (ECM= / ECM2= lines) here, or load a file. Comment lines starting with # are ignored."/>
       <Item id="load_file"      name="Open file..."/>
+      <Item id="curve_options"  name="Curve options"/>
+      <Item id="output_options" name="Output options"/>
       <Item id="use_recommended" name="use the recommended curves"/>
       <Item id="blocks_per_sm"  name="blocks/SM"/>
       <Item id="dedup"          name="dedup"/>
+      <Item id="override_b1"    name="override B1"/>
+      <Item id="override_b1_hint" name="blank keeps original"/>
       <Item id="save_pattern"   name="save name"/>
       <Item id="sort_by"        name="sort"/>
       <Item id="target_device"  name="target GPU"/>

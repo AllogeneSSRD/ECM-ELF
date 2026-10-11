@@ -11,6 +11,7 @@
 // output; nothing in this header needs to change for that.
 
 #include "gpu_monitor.h"
+#include "gen_input_text.h"
 #include "ini_file.h"
 #include "localization.h"
 #include "log_parse.h"
@@ -260,12 +261,9 @@ private:
     float p95_strip_h_ = 0.0f;            // the strip's real height, reserved in App::draw
     std::string menu_bar_trace_last_;     // top-band geometry trace (change detect)
     // ---- worktodo generator (M6 scope A) --------------------------------------------
-    std::string gen_input_;               // the paste box / loaded file
-    // ImGui's InputTextMultiline takes a char buffer (this ImGui version has no
-    // std::string overload), so the buffer is the widget's model and gen_input_ follows it.
-    std::vector<char> gen_input_buf_;
-    bool gen_input_sync_ = false;         // gen_input_ changed outside the widget
+    GenInputText gen_input_;              // editable buffer and loaded file content
     std::string gen_input_path_;          // last file loaded into it ("" = pasted)
+    std::string gen_set_b1_;              // blank keeps each assignment's B1
     std::string gen_save_pattern_ = "m{n}_{b1}.save";
     std::string gen_sort_by_ = "n";
     int gen_blocks_per_sm_ = 2;           // the `n` in curves = n * sm_count * ipb

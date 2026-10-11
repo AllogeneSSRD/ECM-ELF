@@ -5,6 +5,7 @@
 // Everything here is a pure function over strings and files: no window, no GPU, no ImGui.
 
 #include "worktodo_gen.h"
+#include "gen_input_text.h"
 
 #include <cstdio>
 #include <cstring>
@@ -423,6 +424,40 @@ int main(int argc, char **argv) {
               std::to_string(r.parse_errors.size()));
         check(!r.parse_errors.empty() && r.parse_errors[0].find("invalid exponent") != std::string::npos,
               "with the reason", r.parse_errors.empty() ? "" : r.parse_errors[0]);
+    }
+
+    // ---- generator text field: typing and file loads share the same buffer -----------
+    std::printf("[10] generator input field\n");
+    {
+        GenInputText input;
+        check(input.buffer().size() > 1, "the empty editor has room for typed characters");
+        const std::string typed = "ECM2=1,2,521,-1,1e5";
+        std::memcpy(input.buffer().data(), typed.c_str(), typed.size() + 1);
+        input.accept_edit();
+        check(input.text() == typed, "typing updates the generator input");
+        GenOptions edit_opt = base_options();
+        edit_opt.use_recommended = false;
+        edit_opt.curves_fixed = 8;
+        const GenResult typed_result = generate(input.text(), GpuProfile{}, edit_opt);
+        check(typed_result.ok && typed_result.tasks.size() == 1 && typed_result.tasks[0].n == 521,
+              "typed text reaches the generator");
+
+        const std::string loaded = "ECM2=1,2,700,-1,2e5\n";
+        input.set_text(loaded);
+        check(input.text() == loaded && std::string(input.buffer().data()) == loaded,
+              "loading a file replaces the editor and the generator input");
+        const GenResult loaded_result = generate(input.text(), GpuProfile{}, edit_opt);
+        check(loaded_result.ok && loaded_result.tasks.size() == 1 && loaded_result.tasks[0].n == 700,
+              "loaded text reaches the generator");
+
+        const std::string large(8192, 'A');
+        input.set_text(large);
+        check(input.buffer().size() >= large.size() + 1 && input.text() == large &&
+              std::string(input.buffer().data()) == large,
+              "a file larger than the initial editor buffer is preserved");
+        input.resize_buffer(input.buffer().size() + 4096);
+        check(input.buffer().size() > large.size() + 1 && input.text() == large,
+              "the editor buffer can grow while typing");
     }
 
     std::printf("\npassed: %d   failed: %d\n", g_pass, g_fail);

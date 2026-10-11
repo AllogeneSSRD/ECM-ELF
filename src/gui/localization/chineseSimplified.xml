@@ -26,9 +26,13 @@
       <Item id="title"          name="生成器"/>
       <Item id="paste_hint"     name="把 PrimeNet 任务（ECM= / ECM2= 行）粘到这里，或打开一个文件；以 # 开头的注释行会被忽略。"/>
       <Item id="load_file"      name="打开文件…"/>
+      <Item id="curve_options"  name="曲线选项"/>
+      <Item id="output_options" name="输出选项"/>
       <Item id="use_recommended" name="使用推荐曲线数"/>
       <Item id="blocks_per_sm"  name="块/SM"/>
       <Item id="dedup"          name="去重"/>
+      <Item id="override_b1"    name="覆盖 B1"/>
+      <Item id="override_b1_hint" name="留空保持原值"/>
       <Item id="save_pattern"   name="存档名"/>
       <Item id="sort_by"        name="排序"/>
       <Item id="target_device"  name="目标显卡"/>
