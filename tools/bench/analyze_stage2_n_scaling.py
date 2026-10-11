@@ -33,10 +33,13 @@ def dump_csv(path, rows):
         writer.writerows(rows)
 
 
-def compare_analyses(current, baseline, baseline_path, output):
+def compare_analyses(current, baseline, baseline_path, output, variant=None):
     """Compare the same frozen input matrix; allow implementation shape changes."""
     if not baseline.get('complete') or not current.get('complete'):
         raise ValueError('Version comparison requires two completed studies')
+    if variant not in (None,'cofactor','mersenne'):
+        raise ValueError('Invalid explicit comparison variant')
+    include=lambda row: variant is None or row['variant']==variant
     for key in ('B1', 'memory', 'bounds', 'dll_sha256'):
         if current[key] != baseline[key]:
             raise ValueError('Version comparison scope differs: ' + key)
@@ -45,18 +48,18 @@ def compare_analyses(current, baseline, baseline_path, output):
                 current['device'][field] != baseline['device'].get(field)):
             raise ValueError('Version comparison GPU identity differs: ' + field)
     key = lambda row: (row['variant'], row['exponent'])
-    before = {key(row): row for row in baseline['inputs']}
-    after = {key(row): row for row in current['inputs']}
-    if before.keys() != after.keys():
+    before = {key(row): row for row in baseline['inputs'] if include(row)}
+    after = {key(row): row for row in current['inputs'] if include(row)}
+    if not before or before.keys() != after.keys():
         raise ValueError('Version comparison input matrix differs')
     for identity, case in after.items():
         for field in ('N_hex', 'B1', 'sigma', 'save_sha256', 'Q_sha256'):
             if case[field] != before[identity][field]:
                 raise ValueError(f'Frozen input differs: {identity} {field}')
     group_key = lambda row: (row['variant'], row['exponent'], row['B2'])
-    old_rows = {group_key(row): row for row in baseline['summary']}
-    new_rows = {group_key(row): row for row in current['summary']}
-    if old_rows.keys() != new_rows.keys():
+    old_rows = {group_key(row): row for row in baseline['summary'] if include(row)}
+    new_rows = {group_key(row): row for row in current['summary'] if include(row)}
+    if not old_rows or old_rows.keys() != new_rows.keys():
         raise ValueError('Version comparison timing matrix differs')
     comparisons = []
     for identity, new in sorted(new_rows.items()):
@@ -83,7 +86,7 @@ def compare_analyses(current, baseline, baseline_path, output):
             row['previous_' + field] = old.get(field)
             row['current_' + field] = new.get(field)
         for field in new:
-            if field.endswith('_seconds') and field in old and isinstance(new[field], (int, float)):
+            if field.endswith('_seconds') and isinstance(old.get(field), (int, float)) and isinstance(new[field], (int, float)):
                 row[field + '_delta'] = new[field] - old[field]
         comparisons.append(row)
     report = dict(schema=1, previous_analysis=str(baseline_path.resolve()),
@@ -92,6 +95,7 @@ def compare_analyses(current, baseline, baseline_path, output):
                   current_executable_sha256=current['executable_sha256'],
                   previous_device=baseline['device'], current_device=current['device'],
                   exact_inputs_verified=True, equal_scope_verified=True,
+                  comparison_variant=variant or 'all',
                   semantics='speedup=previous/current; time_change_percent=100*(current/previous-1); '
                             'identical inputs and requested budgets, same GPU UUID (indices may differ), separate sessions; '
                             'GPU clock/power/background load are not asserted equal; '
@@ -136,6 +140,8 @@ def main():
     p.add_argument('--output', type=Path, required=True, help='Filename prefix, e.g. data/benchmarks/stage2_n_20261008')
     p.add_argument('--allow-partial', action='store_true')
     p.add_argument('--baseline-analysis', type=Path, help='Completed previous analysis with identical frozen inputs and scope')
+    p.add_argument('--comparison-variant', choices=('cofactor','mersenne'),
+                   help='Explicitly compare only this complete input/timing matrix; all identity checks remain active')
     a = p.parse_args()
     study = a.study.resolve()
     data = json.loads((study / 'measurements.json').read_text(encoding='utf-8'))
@@ -333,7 +339,7 @@ def main():
     Path(str(output) + '_analysis.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     if a.baseline_analysis:
         baseline = json.loads(a.baseline_analysis.read_text(encoding='utf-8'))
-        compare_analyses(report, baseline, a.baseline_analysis, output)
+        compare_analyses(report, baseline, a.baseline_analysis, output, a.comparison_variant)
     print(json.dumps(dict(counts=report['counts'], warnings=warnings, fits={k: {a: b for a, b in v.items() if a != 'predictions'}
                         for k, v in fits.items() if k != 'per_B2_at_least_1000_bits'}), indent=2))
 

@@ -7,7 +7,7 @@
 #include <charconv>
 
 namespace ecm_stage2 { namespace tune { namespace portable {
-constexpr unsigned format=6;
+constexpr unsigned format=7;
 constexpr Word default_b2_max=2600000000000ull;
 struct Grid {std::vector<unsigned> widths;std::vector<Word> ds,b2s;unsigned repeats=2;};
 inline std::vector<size_t> neighbors(size_t center,size_t count) {
@@ -16,6 +16,31 @@ inline std::vector<size_t> neighbors(size_t center,size_t count) {
     for(size_t i=center?center-1:0;i<=std::min(center+1,count-1);++i)result.push_back(i);
     return result;
 }
+// Discrete descent: measure the starting cell and its immediate neighbors.
+// Move only on a significant measured improvement, then expose one new neighbor.
+// An absent / rejected measurement closes that direction. Never sweep the grid.
+struct LocalSearch {
+    struct Timing {double seconds=0,mad=0;};
+    size_t center,count;std::map<size_t,Timing> tested;std::set<size_t> rejected;
+    explicit LocalSearch(size_t start,size_t size):center(start),count(size) {
+        if(start>=size)throw std::runtime_error("invalid local search start");
+    }
+    static bool improves(Timing a,Timing b) {
+        return a.seconds>0 && b.seconds>0 && a.seconds+2*a.mad < .98*b.seconds-2*b.mad;
+    }
+    size_t next() {
+        if(!tested.count(center) && !rejected.count(center))return center;
+        for(;;) {
+            const auto adjacent=neighbors(center,count);
+            for(auto i:adjacent)if(!tested.count(i) && !rejected.count(i))return i;
+            if(!tested.count(center))return count;
+            auto winner=center;
+            for(auto i:adjacent)if(tested.count(i) && improves(tested.at(i),tested.at(winner)))winner=i;
+            if(winner==center)return count;
+            center=winner;
+        }
+    }
+};
 struct UnsupportedFormat:std::runtime_error {
     UnsupportedFormat():std::runtime_error("unsupported tune format; regenerate this development profile"){}
 };
@@ -228,6 +253,17 @@ struct Profile {
                 if(line=="]"){rows=false;continue;}
                 if(line.back()==',')line.pop_back();
                 auto values=scalar_array(line);
+                if(!columns_seen) {
+                    std::set<std::string> names;
+                    for(const auto &atom:values) {
+                        const auto name=text(Fields{{"v",atom}},"v");
+                        fields("{\""+name+"\":0}");
+                        if(!names.insert(name).second)throw std::runtime_error("duplicate tune column");
+                        columns.push_back(name);
+                    }
+                    if(columns.empty() || columns.size()>256)throw std::runtime_error("invalid tune matrix header");
+                    columns_seen=true;continue;
+                }
                 if(values.size()!=columns.size())throw std::runtime_error("tune row/column size mismatch");
                 Fields record=common;
                 for(size_t i=0;i<columns.size();++i)if(!record.emplace(columns[i],values[i]).second)
@@ -263,24 +299,8 @@ struct Profile {
                 const auto eq=line.find('=');if(!table || eq==line.npos)throw std::runtime_error("invalid tune row");
                 const auto key=stage1_cost::trim(line.substr(0,eq));
                 auto value=stage1_cost::trim(line.substr(eq+1));
-                if(parameter_table && key=="columns") {
-                    if(columns_seen || rows_seen)throw std::runtime_error("duplicate/late tune columns");
-                    while(value.empty() || value.back()!=']') {
-                        if(!std::getline(in,line))throw std::runtime_error("unterminated tune columns");
-                        value+=' '+stage1_cost::trim(line);
-                    }
-                    std::set<std::string> names;
-                    for(const auto &atom:scalar_array(value)) {
-                        const auto name=text(Fields{{"v",atom}},"v");
-                        fields("{\""+name+"\":0}");
-                        if(!names.insert(name).second)throw std::runtime_error("duplicate tune column");
-                        columns.push_back(name);
-                    }
-                    if(columns.size()>256)throw std::runtime_error("too many tune columns");
-                    columns_seen=true;continue;
-                }
-                if(parameter_table && key=="rows") {
-                    if(!columns_seen || rows_seen || value!="[")throw std::runtime_error("invalid tune rows");
+                if(parameter_table && key=="matrix") {
+                    if(rows_seen || value!="[")throw std::runtime_error("invalid tune matrix");
                     rows=rows_seen=true;continue;
                 }
                 if(parameter_table && rows_seen)throw std::runtime_error("common field after tune rows");
@@ -333,6 +353,10 @@ struct Profile {
                 return std::make_tuple(uint(*a,"log2_length"),uint(*a,"length"),uint(*a,"batch"),optional_uint(*a,"tile"))<
                        std::make_tuple(uint(*b,"log2_length"),uint(*b,"length"),uint(*b,"batch"),optional_uint(*b,"tile"));
             });
+            else std::stable_sort(ordered.begin(),ordered.end(),[](const Fields *a,const Fields *b) {
+                return std::make_tuple(uint(*a,"b2"),uint(*a,"d"),uint(*a,"p"))<
+                       std::make_tuple(uint(*b,"b2"),uint(*b,"d"),uint(*b,"p"));
+            });
             Fields common=*records.front();
             for(auto it=common.begin();it!=common.end();) {
                 bool same=true;for(auto row:records)if(row->at(it->first)!=it->second)same=false;
@@ -360,17 +384,15 @@ struct Profile {
             for(const auto &f:*records.front())if(!common.count(f.first) &&
                 std::find(columns.begin(),columns.end(),f.first)==columns.end())columns.push_back(f.first);
             out<<"\n["<<section<<"]\n";emit_fields(common);
-            out<<"columns = [";size_t chars=11;
-            for(size_t i=0;i<columns.size();++i) {
-                const auto name=ecm_stage2::tune::portable::quoted(columns[i]);
-                if(i){out<<", ";chars+=2;}
-                if(chars+name.size()+2>112){out<<"\n    ";chars=4;}
-                out<<name;chars+=name.size();
-            }
-            out<<"]\nrows = [\n";
             std::vector<size_t> widths(columns.size(),0);
+            for(size_t i=0;i<columns.size();++i)widths[i]=ecm_stage2::tune::portable::quoted(columns[i]).size();
             for(auto row:records)for(size_t i=0;i<columns.size();++i)
                 widths[i]=std::max(widths[i],compact_literal(row->at(columns[i])).size());
+            out<<"matrix = [\n    [";
+            for(size_t i=0;i<columns.size();++i) {
+                if(i)out<<", ";out<<std::setw(int(widths[i]))<<ecm_stage2::tune::portable::quoted(columns[i]);
+            }
+            out<<"],\n";
             for(auto row:ordered) {
                 out<<"    [";for(size_t i=0;i<columns.size();++i) {
                     if(i)out<<", ";const auto value=compact_literal(row->at(columns[i]));

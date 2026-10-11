@@ -23,10 +23,10 @@ def main():
     text = a.profile.read_text(encoding='utf-8-sig')
     rng = random.Random(17)
     def shuffle(match):
-        lines = match[1].splitlines(keepends=True)
+        header,*lines = match[1].splitlines(keepends=True)
         rng.shuffle(lines)
-        return 'rows = [\n' + ''.join(lines) + ']'
-    shuffled = re.sub(r'rows\s*=\s*\[\s*\n(.*?)^\]', shuffle, text, flags=re.S | re.M)
+        return 'matrix = [\n' + header + ''.join(lines) + ']'
+    shuffled = re.sub(r'matrix\s*=\s*\[\s*\n(.*?)^\]', shuffle, text, flags=re.S | re.M)
     path = a.output / 'shuffled.toml'
     path.write_text(shuffled, encoding='utf-8')
     original = summaries(tomllib.loads(shuffled), 'ntt')

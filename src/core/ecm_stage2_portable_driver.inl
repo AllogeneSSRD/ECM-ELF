@@ -1,6 +1,11 @@
 // Included inside s2prod after the save/worker/planning helpers.
 namespace pt=ecm_stage2::tune::portable;
 namespace et=ecm_stage2::tune;
+struct PortableQuiet {
+    int previous=stage2_log::level;
+    PortableQuiet(){ecm_cuda_stage2_set_log_level(stage2_log::quiet);stage2_log::level=stage2_log::quiet;}
+    ~PortableQuiet(){ecm_cuda_stage2_set_log_level(previous);stage2_log::level=previous;}
+};
 std::string portable_identity(const fs::path &evidence) {
     const auto hash=ecm_stage2::sha256_file(executable());
     append(evidence/"identity.jsonl","{\"binary_sha256\":"+json_string(hash)+",\"binary\":"+json_string(executable().string())+"}");
@@ -95,8 +100,10 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     s.giant_chunk=std::max(uint64_t(1),k/p+uint64_t(!floor && k%p))*p;return s;
 }
 bool portable_admit(const Options &o,const Record &r,pt::Shape &s,std::string &plan) {
-    if(ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,s.b2,s.d,o.device,
-        [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&plan,s.carrier))
+    const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,s.b2,s.d,o.device,
+        [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&plan,s.carrier);
+    if(code==3)return false;
+    if(code)
         throw std::runtime_error("portable candidate planning failed");
     const auto memory=curve_memory_record(plan);
     if(plan_scalar(memory,"valid")!="true" || plan_scalar(memory,"finished")!="true" ||
@@ -118,6 +125,41 @@ std::vector<unsigned> portable_carriers(const Options &o,const Record &r) {
         else throw std::runtime_error("validated worktodo carrier failed divisibility: "+error);
     }
     return out;
+}
+uint64_t portable_legacy_d(const Options &o,const Record &r,uint64_t b2,unsigned carrier,bool allow_no_plan=false) {
+    std::string plan;
+    const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,b2,0,o.device,
+        [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&plan,carrier);
+    if(code==3 && allow_no_plan)return 0;
+    if(code)
+        throw std::runtime_error("default D planning failed");
+    return u64(plan_scalar(plan,"D"),"default D");
+}
+uint64_t portable_default_d(const Options &o,const Record &r,uint64_t b2,unsigned carrier,bool allow_no_plan=false) {
+    const auto legacy=portable_legacy_d(o,r,b2,carrier,allow_no_plan);if(!legacy)return 0;
+    auto baseline=portable_shape(o,r,b2,legacy,carrier);pt::Work before;
+    auto ntt=[](uint64_t n,uint64_t batch){return double(n)*batch*std::log2(double(n));};
+    if(!baseline.fold || !baseline.frontier || !pt::work(baseline,portable_query,ntt,before) ||
+        before.largest_ntt!=(1ull<<27) || (!baseline.mersenne && before.points/before.p<16))return legacy;
+    // At the backend's largest transform, compare larger D only inside the
+    // same NTT plateau. Lower lengths retain the established default model.
+    // These normalized weights describe the observed production split, not
+    // absolute seconds or a claim that all devices have identical rates.
+    auto ratio=[](double a,double b){return b>0?a/b:1.;};
+    double best=.95;uint64_t winner=legacy;
+    for(auto d:pt::grid(10).ds)if(d>legacy) {
+        auto shape=portable_shape(o,r,b2,d,carrier);pt::Work after;
+        if(!shape.fold || !shape.frontier || !pt::work(shape,portable_query,ntt,after) ||
+            !after.exact_topology || after.largest_ntt!=before.largest_ntt)continue;
+        auto poly=[&](unsigned phase){return .7*ratio(after.ntt[phase],before.ntt[phase])+
+            .3*ratio(after.reduce[phase],before.reduce[phase]);};
+        const double score=.58*poly(ecm_stage2::RequestGtrees)+.22*poly(ecm_stage2::RequestFold)+
+            .13*ratio(after.giant,before.giant)+.07*std::max(poly(ecm_stage2::RequestFtree),ratio(after.baby,before.baby));
+        if(score>=best)continue;
+        std::string plan;if(!portable_admit(o,r,shape,plan) || !shape.fold || !shape.frontier)continue;
+        best=score;winner=d;
+    }
+    return winner;
 }
 std::string portable_select(Options &o,const Record &r,bool automatic) {
     if(o.tune_profile.empty())return {};
@@ -154,7 +196,12 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
     }
     if(automatic && (!(t1>0) || !std::isfinite(t1)))throw std::runtime_error("Auto B2 needs Stage1 seconds/curve, cost CSV, or a Stage1 profile");
     const unsigned factor=o.factor_bits?unsigned(o.factor_bits):ecm_stage2::probability::recommended_factor_bits(double(r.b1),bits);
-    std::vector<uint64_t> ds=pt::grid(10).ds;if(o.has_d && o.d)ds={o.d};
+    std::vector<uint64_t> ds=pt::grid(10).ds;
+    if(o.has_d && o.d)ds={o.d};
+    else {
+        for(const auto &s:profile.samples)if(pt::measured(s) && et::uint(s,"target_bits")==bits)ds.push_back(et::uint(s,"d"));
+        std::sort(ds.begin(),ds.end());ds.erase(std::unique(ds.begin(),ds.end()),ds.end());
+    }
     std::vector<uint64_t> b2s;
     if(automatic) {
         const auto low=std::max(r.b1+1,o.auto_min),high=o.auto_max?o.auto_max:pt::default_b2_max;
@@ -167,8 +214,60 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
     struct Candidate {pt::Shape shape;pt::Estimate estimate;double score=0,probability=0;};
     std::vector<Candidate> candidates;
     const auto carriers=portable_carriers(o,r);
+    std::map<std::pair<uint64_t,unsigned>,const et::Fields*> baselines;
+    std::map<std::pair<uint64_t,unsigned>,uint64_t> default_ds;
+    if(automatic && !(o.has_d && o.d)) {
+        for(auto b:b2s)for(auto carrier:carriers) {
+            const auto d=portable_default_d(o,r,b,carrier,true);default_ds[{b,carrier}]=d;if(d)ds.push_back(d);
+        }
+        std::sort(ds.begin(),ds.end());ds.erase(std::unique(ds.begin(),ds.end()),ds.end());
+    }
+    if(!automatic && !(o.has_d && o.d))for(auto b:b2s)for(auto carrier:carriers) {
+        const auto d=portable_default_d(o,r,b,carrier);default_ds[{b,carrier}]=d;
+        auto shape=portable_shape(o,r,b,d,carrier);std::string plan;
+        baselines[{b,carrier}]=portable_admit(o,r,shape,plan)?estimator.observed(shape):nullptr;
+    }
+    auto protected_default=[&](const char *reason) {
+        std::string out="{\"type\":\"tune_selection\",\"selected\":false,\"reason\":"+json_string(reason);
+        if(!automatic && !(o.has_d && o.d))out+=",\"default_D\":"+std::to_string(default_ds.at({o.b2,carriers.front()}));
+        return out+'}';
+    };
+    if(!automatic && !(o.has_d && o.d)) {
+        bool covered=false;for(auto b:b2s)covered|=baselines.at({b,carriers.front()})!=nullptr;
+        if(!covered)return protected_default("default_planner_protected_missing_paired_baseline");
+    }
     for(auto b:b2s)for(auto d:ds)for(auto carrier:carriers) {
-        auto shape=portable_shape(o,r,b,d,carrier);pt::Estimate e;if(!estimator.predict(shape,e))continue;
+        if(automatic && !(o.has_d && o.d) && !default_ds.at({b,carrier}))continue;
+        const bool paired=!automatic && !(o.has_d && o.d);
+        if(paired) {
+            const auto base=baselines.at({b,carriers.front()});bool competitive=false;
+            if(base)for(const auto &s:profile.samples)if(pt::measured(s) &&
+                et::uint(s,"target_bits")==bits && et::uint(s,"arithmetic_bits")==unsigned(carrier?carrier:bits) &&
+                et::uint(s,"carrier_exponent")==carrier && et::uint(s,"d")==d && et::uint(s,"b2")==b &&
+                pt::LocalSearch::improves({et::real(s,"median_seconds"),et::real(s,"mad_seconds")},
+                    {et::real(*base,"median_seconds"),et::real(*base,"mad_seconds")}))competitive=true;
+            if(!competitive)continue;
+        }
+        auto shape=portable_shape(o,r,b,d,carrier);pt::Estimate e;
+        if(paired) {
+            // Only paired measurements can replace the default planner. A
+            // sparse extrapolation is useful for scheduling tune, not a win.
+            std::string trial_plan;if(!portable_admit(o,r,shape,trial_plan))continue;
+            const auto base=baselines.at({b,carriers.front()}),trial=estimator.observed(shape);
+            if(!base || !trial || !pt::LocalSearch::improves(
+                {et::real(*trial,"median_seconds"),et::real(*trial,"mad_seconds")},
+                {et::real(*base,"median_seconds"),et::real(*base,"mad_seconds")}))continue;
+            e.seconds=et::real(*trial,"median_seconds");e.mad=et::real(*trial,"mad_seconds");
+            e.rank=e.seconds+2*e.mad;e.exact=true;e.model="paired_measured_d_v1";
+            e.anchor=trial;e.anchors=1;
+            e.validated=pt::optional_uint(*trial,"validation_count")>0 &&
+                pt::matches(profile.conditions.at(et::uint(*trial,"condition")),condition,pt::Ignore{});
+            e.relative_error=e.validated?pt::optional_real(*trial,"validation_max_relative_error"):.25;
+        } else {
+            if(!estimator.predict(shape,e))continue;
+            if(automatic && !(o.has_d && o.d) && d!=default_ds.at({b,carrier}) &&
+                !e.exact && std::string(e.model)!="portable_nonnegative_v1")continue;
+        }
         const double probability=automatic?ecm_stage2::probability::success(double(r.b1),double(b),factor):0;
         const double score=automatic?probability/(t1+o.ratio_adjust*e.rank):-e.rank;
         candidates.push_back({shape,e,score,probability});
@@ -177,7 +276,8 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
     size_t rejected=0;
     for(auto &candidate:candidates) {
         auto shape=candidate.shape;std::string plan;if(!portable_admit(o,r,shape,plan)){++rejected;continue;}
-        pt::Estimate e;if(!estimator.predict(shape,e)){++rejected;continue;}
+        pt::Estimate e=candidate.estimate;
+        if((automatic || (o.has_d && o.d)) && !estimator.predict(shape,e)){++rejected;continue;}
         // Do not publish a winner whose route changed after ranking. Re-rank
         // changed paths on the next pass rather than transferring resident data.
         if(shape.fold!=candidate.shape.fold || shape.frontier!=candidate.shape.frontier){++rejected;continue;}
@@ -194,9 +294,18 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
         out<<'}';return out.str();
     }
     if(automatic)throw std::runtime_error("Auto B2 has no costed candidate admitted by the current memory model");
-    return "{\"type\":\"tune_selection\",\"selected\":false,\"reason\":\"no_costed_candidate_fits_current_memory\"}";
+    return protected_default("default_planner_protected_no_measured_win");
 }
-std::string select_tuned(Options &o,const Record &r){return portable_select(o,r,false);}
+std::string select_tuned(Options &o,const Record &r){
+    auto result=portable_select(o,r,false);
+    if(!(o.has_d && o.d) && (result.empty() || result.find("\"selected\":false")!=result.npos)) {
+        const auto planned=result.find("\"default_D\":")==result.npos?std::string{}:plan_scalar(result,"default_D");
+        o.d=planned.empty()?portable_default_d(o,r,o.b2,o.carrier_exponent):u64(planned,"default D");
+        result="{\"type\":\"tune_selection\",\"selected\":false,\"reason\":\"default_planner_protected_no_measured_win\",\"default_D\":"+
+            std::to_string(o.d)+",\"default_model\":\"ntt_ceiling_plateau_v1\"}";
+    }
+    return result;
+}
 std::string select_auto_tuned(Options &o,const Record &r){return portable_select(o,r,true);}
 
 struct PortableInput {fs::path save;Record record;std::string kind;};
@@ -272,6 +381,7 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
         std::cout<<"ecm_tune_progress: N="<<shape.target_bits<<" D="<<d<<" B2="<<b2<<" repeat="<<repeat<<'/'<<repeats
             <<" budget_left="<<budget.remaining()<<" s"<<std::endl;
     }
+    if(trials.empty())return false;
     auto sample=trials.front();std::vector<double> seconds;
     for(const auto &f:trials)seconds.push_back(et::real(f,"total_seconds"));
     sample.erase("total_seconds");sample["median_seconds"]=pt::numeric(et::median(seconds));sample["mad_seconds"]=pt::numeric(et::mad(seconds));
@@ -323,6 +433,7 @@ void portable_ntt(Options o,pt::Profile &profile,ecm_stage2::Word condition,pt::
     }
 }
 void run_portable_ntt(const Options &o,const fs::path &destination) {
+    PortableQuiet quiet;
     auto guard=portable_lock(destination);auto profile=portable_read(destination);
     const auto condition=profile.condition(portable_condition(o));pt::Budget budget(double(o.tune_budget));
     const auto evidence=fs::current_path()/"data"/"experiments"/
@@ -413,11 +524,13 @@ void ensure_portable_calibration(Options &o,const Record &r,const Settings &sett
 }
 
 void run_portable_tune(Options o,const Settings &settings,const fs::path &destination) {
+    PortableQuiet quiet;
     o.short_batch_tune=false;configure_short_ntt_batches(o);
     if(!o.tune_save.empty() && !o.tune_exponents.empty())throw std::runtime_error("choose tune-save or tune-exponents");
     if(o.tune_carrier && o.tune_save.empty())throw std::runtime_error("carrier tuning requires a validated --tune-save");
     if(o.has_tune_tail_samples && o.tune_tail_samples)throw std::runtime_error("portable tune uses the default grid; legacy tune-tail-samples accepts only 0");
     auto guard=portable_lock(destination);auto profile=portable_read(destination);const auto current=portable_condition(o);
+    profile.metadata["error_limit"]=pt::numeric(o.tune_error);
     const auto condition=profile.condition(current);const unsigned level=o.tune_level?o.tune_level:1;
     auto grid=pt::grid(level,o.auto_max?o.auto_max:pt::default_b2_max);
     if(!o.tune_ds.empty())grid.ds=o.tune_ds;if(!o.tune_b2s.empty())grid.b2s=o.tune_b2s;
@@ -440,83 +553,87 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
     const size_t full_grid=grid.widths.size()*grid.b2s.size()*grid.ds.size()*(o.tune_carrier?2:1);
     struct Case {unsigned bits;uint64_t b2,d;unsigned carrier;double priority;};std::vector<Case> cases;
     size_t measured=0,skipped=0;
-    // Cheap full-engine calibration supplies the model, not a D-table sweep.
-    // Each arithmetic family needs its own anchor; carrier data never borrows
-    // generic long-division timing.
-    for(auto bits:grid.widths)for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode) {
-        if(budget.expired() || stop_requests)break;
-        const unsigned carrier=mode?o.tune_carrier:0;
-        bool exists=false;for(const auto &s:profile.samples)if(pt::measured(s) && et::uint(s,"condition")==condition &&
-            et::uint(s,"target_bits")==bits && et::uint(s,"carrier_exponent")==carrier)exists=true;
-        if(exists)continue;
-        if(!inputs.count(bits))inputs.emplace(bits,portable_input(bits,evidence));
-        const auto &r=inputs.at(bits).record;
-        const uint64_t seed_d=r.b1<42000?210:30030;
-        const auto seed_b2=std::max(r.b1+1,2*seed_d*(ecm_stage2::cost::phi(seed_d)/2));
-        if(portable_measure(o,settings,inputs.at(bits),seed_b2,seed_d,carrier,grid.repeats,budget,evidence,profile,condition))
-            {++measured;portable_publish(destination,profile);}
-    }
+    // NTT measurements are component evidence, never a substitute for paired
+    // full-engine D comparisons. No tiny-P full-engine seed is required.
     portable_ntt(o,profile,condition,budget,evidence,{{16,1},{18,1},{20,1},{22,1}},grid.repeats);
-    // Freeze one center per width/B2/arithmetic family for this tune run.
-    // Retain the immediate lower/upper D indices only. High validation error
-    // increases priority inside this window; it never restores the full grid.
-    pt::Estimator selection(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
     for(auto bits:grid.widths) {
         if(budget.expired() || stop_requests)break;
         if(!inputs.count(bits))inputs.emplace(bits,portable_input(bits,evidence));
-        const auto &r=inputs.at(bits).record;
+        const auto &input=inputs.at(bits);const auto &r=input.record;
         for(auto b:grid.b2s)for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode) {
-            if(b<=r.b1)continue;
+            if(b<=r.b1 || budget.expired() || stop_requests)continue;
             const unsigned carrier=mode?o.tune_carrier:0;
-            std::vector<std::pair<double,size_t>> ranked;
-            for(size_t i=0;i<grid.ds.size();++i) {
-                const auto d=grid.ds[i],p=ecm_stage2::cost::phi(d)/2;
-                // The current native joint planner does not admit G=1.
-                if(b/d+2<=p || (o.tune_max_batches && (b/d+2+p-1)/p>o.tune_max_batches))continue;
-                auto shape=portable_shape(o,r,b,d,carrier);pt::Estimate e;
-                if(selection.predict(shape,e))ranked.push_back({e.rank,i});
-            }
-            std::sort(ranked.begin(),ranked.end());
-            size_t center=grid.ds.size();
-            for(const auto &candidate:ranked) {
-                auto shape=portable_shape(o,r,b,grid.ds[candidate.second],carrier);std::string plan;
-                const auto ranked_shape=shape;
-                if(portable_admit(o,r,shape,plan) && shape.fold==ranked_shape.fold &&
-                    shape.frontier==ranked_shape.frontier){center=candidate.second;break;}
-            }
-            if(center==grid.ds.size()){
-                std::cout<<"ecm_tune_window_skip: N="<<bits<<" B2="<<b<<" carrier="<<carrier
-                    <<" reason="<<(ranked.empty()?"no_costed_candidate":"no_admitted_ranked_path")<<std::endl;
-                ++skipped;continue;
-            }
-            const auto neighborhood=pt::neighbors(center,grid.ds.size());
-            std::cout<<"ecm_tune_window: N="<<bits<<" B2="<<b<<" carrier="<<carrier
-                <<" center_D="<<grid.ds[center]<<" D=["<<grid.ds[neighborhood.front()]<<','<<grid.ds[neighborhood.back()]
-                <<"] candidates="<<neighborhood.size()<<std::endl;
-            for(auto i:neighborhood) {
-                const auto d=grid.ds[i];double priority=10;
-                for(const auto &s:profile.samples)if(et::uint(s,"condition")==condition && et::uint(s,"target_bits")==bits &&
-                    et::uint(s,"b2")==b && et::uint(s,"d")==d && et::uint(s,"carrier_exponent")==carrier && pt::measured(s)) {
-                    priority=pt::optional_uint(s,"validation_count")?pt::optional_real(s,"validation_max_relative_error")/o.tune_error:1;
-                    if(et::uint(s,"repeats")<grid.repeats)priority+=2;
+            const auto baseline=portable_default_d(o,r,b,carrier);
+            auto ds=grid.ds;
+            // Keep the real default in the comparison, not an approximate
+            // catalog substitute. Explicit user grids remain exact.
+            if(o.tune_ds.empty())ds.push_back(baseline);
+            std::sort(ds.begin(),ds.end());ds.erase(std::unique(ds.begin(),ds.end()),ds.end());
+            size_t center=0;
+            for(size_t i=1;i<ds.size();++i)
+                if(std::abs(std::log(double(ds[i])/baseline))<std::abs(std::log(double(ds[center])/baseline)))center=i;
+            // Incremental tune starts at a previously measured winner when it
+            // has a paired default baseline. Remote model extrapolations do
+            // not redirect the initial neighborhood.
+            pt::Estimator guide(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+            auto reference=portable_shape(o,r,b,baseline,carrier);std::string reference_plan;
+            const et::Fields *best=portable_admit(o,r,reference,reference_plan)?guide.observed(reference):nullptr;
+            if(best)for(const auto &sample:profile.samples)if(pt::measured(sample) &&
+                et::uint(sample,"target_bits")==bits && et::uint(sample,"b2")==b &&
+                pt::LocalSearch::improves({et::real(sample,"median_seconds"),et::real(sample,"mad_seconds")},
+                    {et::real(*best,"median_seconds"),et::real(*best,"mad_seconds")})) {
+                const auto i=std::lower_bound(ds.begin(),ds.end(),et::uint(sample,"d"));
+                if(i==ds.end() || *i!=et::uint(sample,"d"))continue;
+                auto trial=portable_shape(o,r,b,*i,carrier);pt::Work topology;std::string trial_plan;
+                if(!pt::work(trial,portable_query,[](uint64_t n,uint64_t batch){return double(n)*batch;},topology) ||
+                   !portable_admit(o,r,trial,trial_plan))continue;
+                const auto measured_trial=guide.observed(trial);
+                if(measured_trial && pt::LocalSearch::improves(
+                    {et::real(*measured_trial,"median_seconds"),et::real(*measured_trial,"mad_seconds")},
+                    {et::real(*best,"median_seconds"),et::real(*best,"mad_seconds")})) {
+                    best=measured_trial;center=size_t(i-ds.begin());
                 }
-                cases.push_back({bits,b,d,carrier,priority});
             }
+            pt::LocalSearch search(center,ds.size());
+            std::cout<<"ecm_tune_window: N="<<bits<<" B2="<<b<<" carrier="<<carrier
+                <<" center_D="<<ds[center]<<" baseline_D="<<baseline<<" search=measured_descent"<<std::endl;
+            for(;;) {
+                const size_t i=search.next();if(i==ds.size() || budget.expired() || stop_requests)break;
+                const auto d=ds[i],p=ecm_stage2::cost::phi(d)/2,points=b/d+2;
+                if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches)) {
+                    search.rejected.insert(i);++skipped;continue;
+                }
+                auto shape=portable_shape(o,r,b,d,carrier);std::string plan;
+                pt::Work topology;
+                if(!pt::work(shape,portable_query,[](uint64_t n,uint64_t batch){return double(n)*batch;},topology)) {
+                    search.rejected.insert(i);++skipped;continue;
+                }
+                if(!portable_admit(o,r,shape,plan)){search.rejected.insert(i);++skipped;continue;}
+                pt::Estimator model(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+                auto prior=model.observed(shape);
+                const bool reuse=prior && et::uint(*prior,"repeats")>=grid.repeats;
+                if(!reuse) {
+                    // Only local measured durations can reject a trial for
+                    // budget. Remote P=24 extrapolations are not a clock.
+                    if(prior && et::real(*prior,"median_seconds")*(grid.repeats+1)>budget.remaining()) {
+                        search.rejected.insert(i);++skipped;continue;
+                    }
+                    if(portable_measure(o,settings,input,b,d,carrier,grid.repeats,budget,evidence,profile,condition)) {
+                        ++measured;portable_publish(destination,profile);
+                    }
+                } else ++skipped;
+                pt::Estimator updated(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+                const auto observation=updated.observed(shape);
+                if(!observation){search.rejected.insert(i);continue;}
+                search.tested[i]={et::real(*observation,"median_seconds"),et::real(*observation,"mad_seconds")};
+                cases.push_back({bits,b,d,carrier,0});
+                std::cout<<"ecm_tune_progress: N="<<bits<<" B2="<<b<<" D="<<d
+                    <<" median="<<et::real(*observation,"median_seconds")<<" s reused="<<reuse<<std::endl;
+            }
+            std::cout<<"ecm_tune_window_done: N="<<bits<<" B2="<<b<<" carrier="<<carrier
+                <<" best_D="<<ds[search.center]<<" tested="<<search.tested.size()
+                <<" rejected="<<search.rejected.size()<<" complete="<<(search.next()==ds.size())<<std::endl;
         }
-    }
-    std::stable_sort(cases.begin(),cases.end(),[](const Case &a,const Case &b){return a.priority>b.priority;});
-    for(const auto &c:cases) {
-        if(budget.expired() || stop_requests)break;
-        if(c.priority<1){++skipped;continue;}
-        if(!inputs.count(c.bits))inputs.emplace(c.bits,portable_input(c.bits,evidence));
-        const auto &input=inputs.at(c.bits);if(c.b2<=input.record.b1){++skipped;continue;}
-        const auto p=ecm_stage2::cost::phi(c.d)/2,g=(c.b2/c.d+2+p-1)/p;
-        if(o.tune_max_batches && g>o.tune_max_batches){++skipped;continue;}
-        auto shape=portable_shape(o,input.record,c.b2,c.d,c.carrier);
-        pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);pt::Estimate prediction;
-        if(estimator.predict(shape,prediction) && prediction.seconds*(grid.repeats+1)>budget.remaining()){++skipped;continue;}
-        if(portable_measure(o,settings,input,c.b2,c.d,c.carrier,grid.repeats,budget,evidence,profile,condition)){++measured;portable_publish(destination,profile);}
-        else ++skipped;
     }
     // Persist only final candidate summaries. Estimates cannot replace measured
     // fastest values; their source and validation state remain explicit.
@@ -548,7 +665,7 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
     profile.metadata["effort_level"]=std::to_string(level);profile.metadata["budget_seconds"]=std::to_string(o.tune_budget);
     profile.metadata["error_limit"]=pt::numeric(o.tune_error);profile.metadata["grid_candidates"]=std::to_string(full_grid);
     profile.metadata["selected_candidates"]=std::to_string(cases.size());
-    profile.metadata["selection"]="\"model_center_plus_one_v1\"";
+    profile.metadata["selection"]="\"measured_local_descent_v2\"";
     if(binary!=ecm_stage2::sha256_file(executable()))throw std::runtime_error("ECM calibration binary changed; evidence retained");
     portable_publish(destination,profile);
     std::cout<<"ecm_tune_complete: measured="<<measured<<" skipped="<<skipped<<" grid="<<full_grid<<" selected="<<cases.size()<<" summaries="<<profile.samples.size()

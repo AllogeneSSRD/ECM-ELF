@@ -79,6 +79,8 @@ python tools/bench/plot_stage2_n_scaling.py `
 
 ## 4. 对比已有完整扫描
 
+复用输入时可指定`--cofactors-only`，明确只执行生产余因子矩阵，不加入完整梅森数控制；该范围在新manifest中保存。它不删除旧控制结果，也不允许分析器将缺失控制当作零耗时。需要完整控制矩阵时不使用该参数。
+
 准备新目录后，先核对新旧 `measurements.json` 的输入整数、B1、sigma、save/Q 哈希、预算、DLL 和运行顺序。原始实验无需 Git 跟踪，必须保留；旧数据不重新生成或覆盖。绘图和分析沿用本页脚本。
 
 ```powershell
@@ -96,7 +98,11 @@ python tools/bench/plot_stage2_n_scaling.py `
 
 `--baseline-analysis` 要求两轮全部完成、N/B1/sigma/save/Q 与请求预算一致，GPU名称和UUID相同，输出 `_comparison.{json,csv}`。允许不同样本数，逐格分别记录`previous_samples/current_samples`；n=1只有单次值，不能声明重复性或置信区间。重启或移除其他显卡后允许同一UUID的设备编号改变，两个编号独立保留。D/P/G 可随实现改变，独立记录；因子比较忽略输出次序。时间变化为 `100·(current/previous−1)%`，速度比为 `previous/current`。同时记录模块容量和阶段秒数差额。
 
+只有显式`--comparison-variant cofactor|mersenne`才允许比较指定的完整子矩阵，例如将只复测余因子的优化验收与旧完整扫描对照。默认仍拒绝输入集合不一致；子矩阵保留全部输入、预算、依赖和设备身份检查，并在结果中记录范围，不暗中丢弃未匹配点。
+
 `--version-comparison` 生成 `_versions_times`、`_versions_speedup`、`_versions_clocks`、`_versions_phase_delta` 的 PNG/SVG。阶段差额按互斥墙钟分区，正值表示增加、负值表示减少；所有分区之和必须等于完整时间差。可选 `--cpu-comparison` 使用 [Prime95 比较器](../log_parser/README_PRIME95_ECM_BENCH.md) 对当前 GPU 分析生成的精确 N 配对，仅画匹配点。CPU 未匹配目标不进入速度比。
+
+`--additional-comparison FILE --additional-label LABEL` 可在时间图中加入第三轮GPU基准。先用同一分析器把当前扫描与第三轮基准生成一份已核验的`_comparison.json`；该文件必须与主比较的当前二进制、位宽、B2及秒数一致，且覆盖同一完整矩阵。第三系列使用其`previous`均值和样本标准差。速度比、时钟和阶段差额图仍只比较主文件的两轮，不暗中改变分母。
 
 CSV保留`tune_selected/model/source/independently_validated`、模型估计秒数、风险排名秒数及相对误差余量。`tune_estimate_error_percent=100·(estimated/实测完整Stage2−1)`；正值表示高估。估计/排名时间是规划数据，不是实测阶段，不加入时间账本。自动选中参数不等于经过独立性能验收。
 

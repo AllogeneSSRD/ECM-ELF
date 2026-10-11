@@ -66,7 +66,7 @@ struct Estimate {
     double seconds=0,mad=0,relative_error=0.25,rank=0;
     Word anchors=0;bool validated=false,exact=false,extrapolated=false;
     const Fields *anchor=nullptr;
-    const char *model="portable_components_v1";
+    const char *model="portable_components_v2";
 };
 class Estimator {
 public:
@@ -114,6 +114,39 @@ public:
         if(!ignore.memory && (a.fold!=x.fold || a.frontier!=x.frontier))return false;
         return true;
     }
+    bool fitted(const Shape &x,const Work &target,double &seconds,double &error,const Fields *omit=nullptr)const {
+        std::vector<B2Features> features;std::vector<double> times;
+        std::set<Word> ds,bounds;Word low_p=UINT64_MAX,high_p=0;
+        auto encode=[](const Work &w) {
+            double ntt=0,reduce=0;
+            for(unsigned ph=0;ph<RequestPhaseCount;++ph){ntt+=w.ntt[ph];reduce+=w.reduce[ph];}
+            return B2Features{1.,ntt,reduce,w.baby+w.giant+w.accum};
+        };
+        for(const auto &s:profile.samples)if(&s!=omit && eligible(s,x)) {
+            const auto a=shape(s);
+            if(a.target_bits!=x.target_bits || a.arithmetic_bits!=x.arithmetic_bits ||
+               a.physical!=x.physical || a.batch_bytes!=x.batch_bytes || a.buffers!=x.buffers ||
+               a.chunk_max!=x.chunk_max || a.fold!=x.fold || a.frontier!=x.frontier ||
+               a.short_batch_hash!=x.short_batch_hash ||
+               a.short_batch_tune!=x.short_batch_tune || cost::phi(a.d)/2<512)continue;
+            Work w;if(!work(a,query,[&](Word n,Word b){return ntt_cost(n,b);},w,&short_ntt) || !w.exact_topology)continue;
+            features.push_back(encode(w));times.push_back(real(s,"median_seconds"));
+            ds.insert(a.d);bounds.insert(a.b2);low_p=std::min(low_p,w.p);high_p=std::max(high_p,w.p);
+        }
+        // An intercept separates setup from variable work. Qualification uses
+        // held-out full-engine curves, never a residual against fitted rows.
+        if(features.size()<6 || features.size()>128 || ds.size()<3 || bounds.size()<2 ||
+            target.p<low_p/2 || target.p>2*high_p)return false;
+        auto dot=[](const B2Features &a,const B2Features &b){double s=0;for(unsigned j=0;j<4;++j)s+=a[j]*b[j];return s;};
+        error=0;B2Features coefficients{};
+        for(size_t i=0;i<features.size();++i) {
+            if(!fit_route_cost(features,times,i,4,coefficients))return false;
+            error=std::max(error,std::abs(dot(features[i],coefficients)-times[i])/times[i]);
+        }
+        const double limit=optional_real(profile.metadata,"error_limit",.08);
+        if(!(limit>0) || limit>1 || error>limit || !fit_route_cost(features,times,features.size(),4,coefficients))return false;
+        seconds=dot(encode(target),coefficients);return seconds>0 && std::isfinite(seconds);
+    }
     double scaled(const Fields &a,const Shape &x,const Work &w)const {
         auto before=shape(a);
         if(before.short_batch_hash!=x.short_batch_hash)before.short_batch_tune=false;
@@ -122,10 +155,13 @@ public:
         auto phase=[&](const char *key,double scale){return optional_real(a,key)*scale;};
         double seconds=phase("phase_shape_seconds",1)+phase("phase_setup_seconds",ratio(double(x.arithmetic_bits),uint(a,"arithmetic_bits")))+
             phase("phase_baby_seconds",ratio(w.baby,old.baby))+phase("phase_accum_seconds",ratio(w.accum,old.accum))+
-            phase("phase_finalize_seconds",1)+phase("phase_main_setup_seconds",ratio(w.giant,old.giant));
+            phase("phase_finalize_seconds",1)+phase("phase_main_setup_seconds",1);
         auto poly_ratio=[&](unsigned ph) {
             // Separate operation/transfer features; sparse anchors cannot identify
             // every coefficient. Use an explicitly estimated positive mixture.
+            // Sparse launch-bound probes do not identify the large-transform
+            // arithmetic rate. Do not scale their fixed launch latency with
+            // coefficient work; use an explicit conservative model instead.
             return .55*ratio(w.ntt[ph],old.ntt[ph])+.40*ratio(w.reduce[ph],old.reduce[ph])+
                 .03*ratio(w.transfer[ph],old.transfer[ph])+.02*ratio(w.calls[ph],old.calls[ph]);
         };
@@ -157,17 +193,25 @@ public:
         if(!out.anchor)return false;
         const auto &a=*out.anchor;const auto sh=shape(a);
         out.exact=x.target_bits==sh.target_bits && x.arithmetic_bits==sh.arithmetic_bits && x.d==sh.d &&
-            x.b2==sh.b2 && x.b1==sh.b1 && x.batch_bytes==sh.batch_bytes && x.fold==sh.fold && x.frontier==sh.frontier &&
+            x.b2==sh.b2 && x.batch_bytes==sh.batch_bytes && x.buffers==sh.buffers &&
+            x.physical==sh.physical && x.chunk_max==sh.chunk_max && x.giant_chunk==sh.giant_chunk &&
+            x.chain_min==sh.chain_min && x.force_ladder==sh.force_ladder &&
+            x.fold==sh.fold && x.frontier==sh.frontier &&
             x.short_batch_tune==sh.short_batch_tune && x.short_batch_hash==sh.short_batch_hash &&
             matches(profile.conditions.at(uint(a,"condition")),condition,Ignore::parse(""));
         out.seconds=out.exact?real(a,"median_seconds"):scaled(a,x,w);
+        double fit_error=0,fit_seconds=0;bool fit=false;
+        if(!out.exact && fitted(x,w,fit_seconds,fit_error,omit)) {
+            fit=true;out.seconds=fit_seconds;out.model="portable_nonnegative_v1";
+        }
         if(!out.exact) {
             std::vector<const Fields*> same;
             for(const auto &s:profile.samples)if(&s!=omit && eligible(s,x)) {
                 const auto sh=shape(s);
                 if(sh.target_bits==x.target_bits && sh.arithmetic_bits==x.arithmetic_bits && sh.d==x.d &&
                    sh.batch_bytes==x.batch_bytes && sh.buffers==x.buffers && sh.chunk_max==x.chunk_max &&
-                   sh.physical==x.physical && sh.fold==x.fold && sh.frontier==x.frontier &&
+                   sh.physical==x.physical && sh.giant_chunk==x.giant_chunk && sh.chain_min==x.chain_min &&
+                   sh.force_ladder==x.force_ladder && sh.fold==x.fold && sh.frontier==x.frontier &&
                    sh.short_batch_tune==x.short_batch_tune && sh.short_batch_hash==x.short_batch_hash)same.push_back(&s);
             }
             std::sort(same.begin(),same.end(),[](const Fields *a,const Fields *b){return uint(*a,"b2")<uint(*b,"b2");});
@@ -183,14 +227,28 @@ public:
             }
         }
         out.mad=std::max(out.mad,real(a,"mad_seconds")*out.seconds/real(a,"median_seconds"));
-        out.validated=optional_uint(a,"validation_count")>0 && x.target_bits==sh.target_bits &&
-            x.arithmetic_bits==sh.arithmetic_bits && x.d==sh.d && x.b2==sh.b2 &&
-            x.short_batch_tune==sh.short_batch_tune && x.short_batch_hash==sh.short_batch_hash;
-        out.relative_error=out.validated?optional_real(a,"validation_max_relative_error"):.25;
+        out.validated=out.exact && optional_uint(a,"validation_count")>0;
+        out.relative_error=fit?fit_error:out.validated?optional_real(a,"validation_max_relative_error"):.25;
         out.extrapolated=nearest>0 || !w.exact_topology;
-        if(!out.exact)out.relative_error=std::max(out.relative_error,.08+.05*nearest);
+        if(!out.exact && !fit)out.relative_error=std::max(out.relative_error,.08+.05*nearest);
         out.rank=out.seconds*(1+out.relative_error)+2*out.mad;
         return out.seconds>0 && std::isfinite(out.rank);
+    }
+    // Production D replacement requires measurements at this width/B2/path.
+    // B1 is deliberately absent: it is not a tune eligibility dimension.
+    const Fields *observed(const Shape &x)const {
+        const Fields *best=nullptr;
+        for(const auto &s:profile.samples)if(eligible(s,x)) {
+            const auto a=shape(s);
+            if(a.target_bits!=x.target_bits || a.arithmetic_bits!=x.arithmetic_bits || a.d!=x.d ||
+               a.b2!=x.b2 || a.batch_bytes!=x.batch_bytes || a.physical!=x.physical ||
+               a.buffers!=x.buffers || a.chunk_max!=x.chunk_max || a.giant_chunk!=x.giant_chunk ||
+               a.force_ladder!=x.force_ladder || a.chain_min!=x.chain_min ||
+               a.fold!=x.fold || a.frontier!=x.frontier || a.short_batch_tune!=x.short_batch_tune ||
+               a.short_batch_hash!=x.short_batch_hash)continue;
+            if(!best || real(s,"median_seconds")<real(*best,"median_seconds"))best=&s;
+        }
+        return best;
     }
 };
 } } }

@@ -34,6 +34,7 @@ def main():
     def run(*args):
         return subprocess.check_output([str(exe), *map(str, args)], text=True)
     assert run('--short-batch') == 'true'
+    assert run('--local-search') == 'true'
     preset = [(3,4096,4,3,10,2),(4,3072,6,3,10,2),(5,2048,8,4,10,2),
               (5,2048,10,4,10,2),(5,2048,10,6,5,3),(8,1536,12,6,5,3),
               (8,1536,12,6,5,3),(10,1024,12,8,5,3),(15,1024,12,8,5,5),(15,1024,14,8,5,5)]
@@ -45,7 +46,7 @@ def main():
         assert grid['b2s'][-1] == 2600000000000
         assert all(high//ratio == low for low, high in zip(grid['b2s'], grid['b2s'][1:]))
     base = '''[profile]
-format = 6
+format = 7
 unit = "full_stage2"
 algorithm_revision = 1
 revision = 0
@@ -79,13 +80,15 @@ bad = 0
 hits = 0
 selftest_cases = 1
 checked = 1
-columns = ["median_seconds", "mad_seconds"]
-rows = [
+matrix = [
+    ["median_seconds", "mad_seconds"],
     [2, 0.1],
 ]
 '''
     original = out/'base.toml'
     original.write_text(base, encoding='utf-8')
+    assert run('--exact-shape',original)=='true'
+    assert run('--fit-model',original)=='true'
     assert summaries(tomllib.loads(run('--roundtrip', original)))[0]['median_seconds'] == 2
     for value in [1, 2, 3]:
         other = out/f'new_{value}.toml'
@@ -181,7 +184,7 @@ rows = [
     for i,text in enumerate(table_bad):
         damaged=out/f'bad_table_{i}.toml';damaged.write_text(text,encoding='utf-8')
         assert subprocess.run([str(exe),'--roundtrip',str(damaged)],capture_output=True).returncode!=0
-    report = dict(passed=True, grid_levels=10, update_cases=5, corrupt_profiles=len(corruptions),
+    report = dict(passed=True, local_search=True, nonnegative_fit=True, exact_route=True, grid_levels=10, update_cases=5, corrupt_profiles=len(corruptions),
                   csv=dict(exact=exact,scaled=scaled,interpolated=interpolated,extrapolated=large),
                   predictions=dict(across_b1=across_b1,across_width=across_width),legacy_rejected=legacy_result,table_rejections=len(table_bad),neighbor_cases=105,
                   compact_rows=20,compact_bytes=len(many_compact.encode('utf-8')),expanded_bytes=len(many.read_bytes()),

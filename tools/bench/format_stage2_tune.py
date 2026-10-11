@@ -14,18 +14,19 @@ def format_rows(source: str) -> tuple[str, int]:
         nonlocal changed
         table = document["ntt"][match[1]]["table"][match[2]]
         block = match[0]
-        rows = re.search(r"(?m)^rows\s*=\s*\[\s*\r?\n(.*?)^\][ \t]*", block, re.S)
+        rows = re.search(r"(?m)^matrix\s*=\s*\[\s*\r?\n(.*?)^\][ \t]*", block, re.S)
         if rows is None:
             raise ValueError("Expected generated one-row-per-line NTT table")
-        lines = rows[1].splitlines(keepends=True)
-        if len(lines) != len(table["rows"]):
+        header,*lines = rows[1].splitlines(keepends=True)
+        columns,*values=table["matrix"]
+        if len(lines) != len(values):
             raise ValueError("Cannot reorder a table with multiline/commented rows")
-        records = [dict(table, **dict(zip(table["columns"], row))) for row in table["rows"]]
+        records = [dict(table, **dict(zip(columns, row))) for row in values]
         order = sorted(range(len(records)), key=lambda i: tuple(
             int(records[i].get(key, 0)) for key in ("log2_length", "length", "batch", "tile")))
         if order != list(range(len(records))):
             changed += 1
-        return block[:rows.start(1)] + "".join(lines[i] for i in order) + block[rows.end(1):]
+        return block[:rows.start(1)] + header + "".join(lines[i] for i in order) + block[rows.end(1):]
 
     result = section.sub(rewrite, source)
     return result, changed

@@ -44,9 +44,12 @@ def main():
     profile=out/'resident.toml'
     common=['--tune','ecm','--tune-file',profile,'--tune-exponents','512,4423','--tune-d','210',
             '--tune-b2','60000','--tune-repeats',2,'--arena-mb',512,'--owner-budget-mb',640]
-    first=run('tune_resident',common+['--tune-budget-seconds',30])
+    first=run('tune_resident',common+['--tune-budget-seconds',30,'--log-level','batches'])
+    assert 'ecm_tune_progress:' in first
+    assert not any(prefix in first for prefix in ('stage2_phase:', 'real_baby:', 's4_multiply_stats:',
+        'batched_progress:', 'ntt_workspace_stats:', 'stage2_real:', 'real_shape:', 'mem_budget:'))
     table=tomllib.loads(profile.read_text(encoding='utf-8'))
-    assert table['profile']['format']==6
+    assert table['profile']['format']==7
     assert {512,4423} <= {s['target_bits'] for s in summaries(table) if s['source']=='measured'}
     assert 'sample' not in table and 'width' in table
     original={tuple(s[k] for k in ['condition','target_bits','b1','b2','d','carrier_exponent','execution_path']):s['median_seconds']
@@ -79,10 +82,19 @@ def main():
             disabled=run('short_disabled_missing_profile',['--save',save,'--b2',60000,'--d',210,
                 '--plan-only','--tune-profile',absent,'--short-calibration',0,'--arena-mb',512])
             assert '"selected":false' in disabled and not absent.exists()
+            unlocked_missing=run('short_disabled_unlocked_missing_profile',['--save',save,'--b2',26000000000,
+                '--d',0,'--plan-only','--tune-profile',absent,'--short-calibration',0,'--arena-mb',512])
+            choice=next(json.loads(line) for line in unlocked_missing.splitlines()
+                if line.startswith('{') and json.loads(line).get('type')=='tune_selection')
+            assert choice['selected'] is False and choice['default_D']>0 and not absent.exists()
             auto=run('auto_b2_csv',['--save',save,'--auto-b2','--tune-profile',profile,'--short-calibration',0,
                 '--stage1-cost-csv',ROOT/'config/stage1_cost_4060_2000mhz.csv','--auto-min-b2',60000,
                 '--auto-max-b2',200000000,'--d',210,'--plan-only','--arena-mb',512])
             assert '"type":"auto_b2"' in auto and '"T1_source":"csv_' in auto
+            unlocked=run('auto_b2_default_d',['--save',save,'--auto-b2','--tune-profile',profile,
+                '--short-calibration',0,'--stage1-seconds-per-curve',1,'--auto-min-b2',1001,
+                '--auto-max-b2',200000000,'--plan-only','--arena-mb',512])
+            assert '"type":"auto_b2"' in unlocked and '"selected":true' in unlocked
     fallback=out/'fallback.toml'
     run('tune_fallback',['--tune','ecm','--tune-file',fallback,'--tune-exponents','512,4423','--tune-d',210,
         '--tune-b2',60000,'--tune-repeats',2,'--tune-budget-seconds',30,'--arena-mb',512,'--owner-budget-mb',0])
@@ -92,7 +104,7 @@ def main():
     run('ntt_final_summary',['--tune','ntt','--tune-file',ntt,'--length-log2','10:11',
         '--tune-slices','1,4','--tune-repeats',2,'--tune-budget-seconds',10])
     nt=tomllib.loads(ntt.read_text(encoding='utf-8'))
-    assert nt['profile']['format']==6 and len(summaries(nt,'ntt'))==4
+    assert nt['profile']['format']==7 and len(summaries(nt,'ntt'))==4
     assert all('seconds' not in s and 'outer_radix_bits' not in s for s in summaries(nt,'ntt'))
     merged=out/'merged.toml'
     run('merge_summaries',['--tune','ecm','--tune-merge',profile,'--tune-merge',fallback,
@@ -119,18 +131,20 @@ def main():
             '--tune-exponents',512,'--tune-d',210,'--tune-b2',60000,
             '--tune-repeats',2,'--tune-budget-seconds',30,'--arena-mb',512])
         assert 'tune_profile_reset:' in regenerated
-        assert tomllib.loads(replacement.read_text(encoding='utf-8'))['profile']['format']==6
+        assert tomllib.loads(replacement.read_text(encoding='utf-8'))['profile']['format']==7
     window_profile=out/'window.toml'
     windows=run('local_d_window',['--tune','ecm','--tune-file',window_profile,
         '--tune-exponents',512,'--tune-d','210,330,390,420,510','--tune-b2',260000,
         '--tune-repeats',2,'--tune-budget-seconds',30,'--arena-mb',512])
     wt=tomllib.loads(window_profile.read_text(encoding='utf-8'))
-    selected=re.search(r'ecm_tune_window:.*center_D=(\d+).*D=\[(\d+),(\d+)\] candidates=(\d+)',windows)
-    assert selected and int(selected[4])<=3
+    selected=re.search(r'ecm_tune_window:.*center_D=(\d+).*search=measured_descent',windows)
+    assert selected
     ds=[210,330,390,420,510];center=ds.index(int(selected[1]))
-    expected=set(ds[max(0,center-1):min(len(ds),center+2)])
     actual={s['d'] for s in summaries(wt) if s['b2']==260000}
-    assert actual==expected and wt['profile']['selected_candidates']==len(expected)
+    assert ds[center] in actual and actual<=set(ds)
+    indices=sorted(ds.index(d) for d in actual)
+    assert indices==list(range(indices[0],indices[-1]+1))
+    assert wt['profile']['selected_candidates']==len(actual)
     assert wt['profile']['grid_candidates']==5
     run('execute_4423',['--save',out/'n4423_b1000.save','--b2',60000,'--d',210,'--tune-profile',profile,
         '--short-calibration',0,'--curves',1,'--results',out/'executed.jsonl','--log',out/'executed_engine.log','--arena-mb',512])

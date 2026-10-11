@@ -27,6 +27,17 @@ int main(int argc,char **argv) {
             }
             require(ecm_stage2::planned_chunk_slices(n,1,64,1,3,true,0,&policy)==1);
             std::cout<<"true";
+        } else if(argc==2 && std::string(argv[1])=="--local-search") {
+            auto require=[](bool ok){if(!ok)throw std::runtime_error("local search assertion");};
+            p::LocalSearch valley(4,12);const double costs[]={20,18,12,8,9,11,14,16,18,20,22,24};
+            std::set<size_t> visits;
+            for(size_t i;(i=valley.next())<12;){require(visits.insert(i).second);valley.tested[i]={costs[i],0};}
+            require(valley.center==3 && visits==std::set<size_t>({2,3,4,5}));
+            p::LocalSearch noisy(2,5);noisy.tested[1]={9.9,.2};noisy.tested[2]={10,.2};noisy.tested[3]={11,0};
+            require(noisy.next()==5 && noisy.center==2);
+            p::LocalSearch edge(0,3);require(edge.next()==0);edge.rejected.insert(0);
+            require(edge.next()==1);edge.rejected.insert(1);require(edge.next()==3);
+            std::cout<<"true";
         } else if(argc==4 && std::string(argv[1])=="--neighbors") {
             auto indices=p::neighbors(std::stoul(argv[2]),std::stoul(argv[3]));
             std::cout<<'[';for(size_t i=0;i<indices.size();++i){if(i)std::cout<<',';std::cout<<indices[i];}std::cout<<']';
@@ -37,6 +48,45 @@ int main(int argc,char **argv) {
             std::cout<<"],\"b2s\":[";list(g.b2s);std::cout<<"],\"repeats\":"<<g.repeats<<"}\n";
         } else if(argc==3 && std::string(argv[1])=="--roundtrip") {
             std::cout<<p::Profile::load(argv[2]).serialize();
+        } else if(argc==3 && std::string(argv[1])=="--exact-shape") {
+            const auto profile=p::Profile::load(argv[2]);
+            p::Estimator model(profile,profile.conditions.begin()->second,p::Ignore{},
+                [](ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots){
+                    *slots=2*m-1;*n=8;while(*n<*slots*ecm_stage2::Word((bits+7)/8))*n*=2;return true;});
+            auto shape=model.shape(profile.samples.front());p::Estimate e;
+            shape.b1=1000;
+            if(!model.predict(shape,e) || !e.exact)throw std::runtime_error("B1 blocked an exact shape");
+            ++shape.buffers;
+            if(!model.predict(shape,e) || e.exact)throw std::runtime_error("different buffers marked exact");
+            shape=model.shape(profile.samples.front());++shape.giant_chunk;
+            if(!model.predict(shape,e) || e.exact)throw std::runtime_error("different giant route marked exact");
+            std::cout<<"true";
+        } else if(argc==3 && std::string(argv[1])=="--fit-model") {
+            auto profile=p::Profile::load(argv[2]);const auto seed=profile.samples.front();profile.samples.clear();
+            auto query=[](ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots){
+                *slots=2*m-1;*n=8;while(*n<*slots*ecm_stage2::Word((bits+7)/8))*n*=2;return true;};
+            auto cost=[](ecm_stage2::Word n,ecm_stage2::Word b){return double(n)*b*std::log2(double(n));};
+            auto seconds=[](const p::Work &w){double ntt=0,reduce=0;
+                for(unsigned ph=0;ph<ecm_stage2::RequestPhaseCount;++ph){ntt+=w.ntt[ph];reduce+=w.reduce[ph];}
+                return .2+1e-10*ntt+1e-9*reduce+1e-10*(w.baby+w.giant+w.accum);};
+            p::Estimator empty(profile,profile.conditions.begin()->second,p::Ignore{},query);
+            for(auto d:{30030ull,60060ull,120120ull})for(auto b:{2600000000ull,26000000000ull,260000000000ull}) {
+                auto sample=seed;sample["d"]=std::to_string(d);sample["p"]=std::to_string(ecm_stage2::cost::phi(d)/2);
+                sample["b2"]=std::to_string(b);sample["mad_seconds"]="0";
+                p::Work w;if(!p::work(empty.shape(sample),query,cost,w))throw std::runtime_error("fit fixture shape");
+                sample["median_seconds"]=p::numeric(seconds(w));profile.update(sample);
+            }
+            p::Estimator model(profile,profile.conditions.begin()->second,p::Ignore{},query);
+            auto target=model.shape(seed);target.d=90090;target.b2=26000000000;
+            p::Estimate prediction;p::Work w;
+            if(!p::work(target,query,cost,w) || !model.predict(target,prediction) ||
+               std::string(prediction.model)!="portable_nonnegative_v1" ||
+               std::abs(prediction.seconds-seconds(w))>1e-5*seconds(w) || prediction.relative_error>1e-5)
+                throw std::runtime_error("qualified nonnegative model did not recover fixed cost");
+            profile.samples[4]["median_seconds"]=p::numeric(2*ecm_stage2::tune::real(profile.samples[4],"median_seconds"));
+            p::Estimator damaged(profile,profile.conditions.begin()->second,p::Ignore{},query);
+            double value=0,error=0;if(damaged.fitted(target,w,value,error))throw std::runtime_error("bad holdout model qualified");
+            std::cout<<"true";
         } else if(argc==4 && std::string(argv[1])=="--update") {
             auto old=p::Profile::load(argv[2]);const auto added=p::Profile::load(argv[3]);
             for(auto s:added.samples){s["condition"]=std::to_string(old.condition(added.conditions.at(ecm_stage2::tune::uint(s,"condition"))));old.update(std::move(s));}

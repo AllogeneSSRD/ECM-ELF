@@ -616,6 +616,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     };
     auto line=[&](const std::string &text,bool error) {
         if(output.is_open()){output<<text<<'\n';output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");}
+        if(o.tune_child)return; // Full diagnostic evidence stays in the per-trial file.
         const auto summary=error?stage2_console::Projection{}:console_summary.observe(text);
         if(stage2_log::enabled(stage2_log::phases))
             for(const auto &entry:summary.lines)console_line(entry);
@@ -656,7 +657,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         if(wait==WAIT_OBJECT_0)break;
         if(wait!=WAIT_TIMEOUT)throw std::runtime_error("curve process wait failed");
         const auto now=std::chrono::steady_clock::now();
-        if(now>=next && stage2_log::enabled(stage2_log::curve)) {
+        if(now>=next && !o.tune_child && stage2_log::enabled(stage2_log::curve)) {
             std::cout<<'\r'<<"Curve "<<r.index<<": "<<phase<<" | elapsed="
                      <<static_cast<unsigned long long>(std::chrono::duration<double>(now-begin).count())<<" s     "<<std::flush;
             heartbeat=true;next=now+std::chrono::seconds(30);
@@ -665,7 +666,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     drain(out_read.value,stdout_pending,false);drain(err_read.value,stderr_pending,true);
     if(!stdout_pending.empty())line(stdout_pending,false);
     if(!stderr_pending.empty())line(stderr_pending,true);
-    if(stage2_log::enabled(stage2_log::phases))
+    if(!o.tune_child && stage2_log::enabled(stage2_log::phases))
         for(const auto &entry:console_summary.finish().lines)console_line(entry);
     if(heartbeat)std::cout<<std::endl;
     DWORD code=1;
@@ -880,8 +881,8 @@ void help() {
         "      ECM: --tune-exponents bits,... or --tune-save FILE [--tune-carrier-exponent p]\n"
         "           --tune-budget-seconds 1800 --tune-error-limit 0.08; incremental final summaries.\n"
         "           --tune-d D,... --tune-b2 B2,...; one warmup per shape, separate processes.\n"
-        "           Per width/B2: tune the model's best D and its immediate lower/upper D only.\n"
-        "           TOML format 6: width parameter tables; earlier development TOML is regenerated.\n"
+        "           Per width/B2: start at default D; follow measured improvements through adjacent D.\n"
+        "           TOML format 7: matrices with column names in the first row; regenerate older files.\n"
         "           --tune-max-batches N limits G trees per curve; 0 removes the effort limit.\n"
         "      Merge: --tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml\n"
         "             Separate measurement conditions; only a strictly faster median replaces measured data.\n"

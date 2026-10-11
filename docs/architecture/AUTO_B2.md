@@ -24,7 +24,7 @@ P=φ(D)/2，I=⌊B2/D⌋+2，G=⌈I/P⌉。搜索目标为：
 - 默认目标因子位数从 B1 推荐式反推并受实际 N 约束；`stage2_target_factor_bits`可覆盖。因子规模不能直接用余因子总位宽代替。
 - 原生 Dickman/半光滑概率与 `tools/ecm_prob` 对拍；当前 poly 不计入未实现的 Brent–Suyama 收益。
 
-默认 B1<B2≤2.6×10¹²；`stage2_auto_min_b2`、`stage2_auto_max_b2`及对应 CLI 可修改。候选包含区间内49个对数间距点及已记录 B2，D从14项表选择。搜索不受 tune 网格边界限制，但有限候选搜索不证明连续范围全局最优。
+默认 B1<B2≤2.6×10¹²；`stage2_auto_min_b2`、`stage2_auto_max_b2`及对应 CLI 可修改。候选包含区间内49个对数间距点及已记录B2；D包含14项表、实际默认值及本位宽已有实测项，并受下文的实测/拟合资格约束。搜索不受tune网格边界限制，但有限候选搜索不证明连续范围全局最优。
 
 先按收益或固定 B2 成本排序，再逐项要求原生计划 `valid=true`、`finished=true`、`initial_free_snapshot_fits=true`。规划后 fold/frontier 路径变化时不借用原路径排名。实际执行仍检查 free/headroom及处理物理分配失败。无可用成本时固定 B2 返回原因并保留原生选型；Auto B2 明确失败，队列保持未完成。
 
@@ -42,7 +42,7 @@ CSV 必填 `b1,mhz,tpi,curves,seconds_per_curve`，另提供 `container_bits` �
 
 ## 完整 Stage2 tune
 
-`--tune ecm --tune-level 1..10 --tune-file FILE.toml`保留位宽和B2档位，每档只调优模型推荐D及相邻两档，并测必要的轻量完整引擎锚点和NTT。默认 `stage2_tune_budget_seconds=1800`秒；初次设备查询在预算外，点准备、预热、正式测量在预算内。软预算到达后不发起新测量，正在执行的测量结束并保留有效结果。
+`--tune ecm --tune-level 1..10 --tune-file FILE.toml`保留位宽和B2档位，从默认模型推荐D开始，比较邻档，仅沿实测更快的方向继续。没有轻量完整引擎种子扫描；缺失NTT组件时补测少数NTT。默认 `stage2_tune_budget_seconds=1800`秒；初次设备查询在预算外，点准备、预热、正式测量在预算内。软预算到达后不发起新测量，正在执行的测量结束并保留有效结果。
 
 每级额外包含512 bits。位宽 a:b表示b、2b、…、ab；B2 a:r从上界 U=2.6×10¹²按 r 倍递减取 a 项，再升序排列。非零 `--auto-max-b2`可改变 U。
 
@@ -56,15 +56,27 @@ CSV 必填 `b1,mhz,tpi,curves,seconds_per_curve`，另提供 `container_bits` �
 - level9：位宽15:1024，D12项，B2 8:5，正式重复5次。
 - level10：位宽15:1024，D14项，B2 8:5，正式重复5次。
 
-D范围在 `30030,60060,120120,180180,210210,360360,570570,690690,810810,1021020,1141140,1381380,1711710,2282280` 中均匀选取并含端点。P随D确定，不是独立参数。模型按当前算术、内存路径估算各D的保护成本，中心须通过原生显存规划，且规划不能改变排名所用的fold/frontier路径；仅保留中心和数值有序表中紧邻的前后各一项。位于端点时最多2项，单项表只取1项。
+D范围在 `30030,60060,120120,180180,210210,360360,570570,690690,810810,1021020,1141140,1381380,1711710,2282280` 中均匀选取并含端点。P随D确定，不是独立参数。默认网格额外加入实际默认D；显式`--tune-d`保持用户给出的搜索范围，起点取距离默认D最近的一项。
 
-每个“位宽×B2×算术路径”在本次tune中冻结一个窗口，不因误差超限扩大到全表；无模型或无可准入中心时跳过该档，控制台注明原因，不产生实测摘要。显式`--tune-d`提供搜索表，也按相邻窗口裁剪。轻量种子校准负责提供缺失的位宽/算术锚点，不属于全D扫描。
+每个“位宽×B2×算术路径”使用离散下降：先测起点及相邻前后项。候选A替代B要求 **T_A+2·MAD_A < 0.98·T_B−2·MAD_B**。有显著收益时移向更快邻项，只补测新暴露的邻项；否则停止。端点、显存拒绝、G=1或超过批次数限制会关闭相应方向。有限邻域搜索不保证全局最优，也不假设NTT拐点附近的目标函数平滑。
 
-level10普通路径的参数候选上限为16×8×3=384组，对比全D范围的16×8×14=1792组，减少78.6%；正式重复5次时上限为1920次，对比8960次。数字不含预热、种子、NTT及预算/准入跳过，不是实测时间节省比例。
+达到正式重复要求的已有同形状测量可复用；有成对默认基准且已有显著实测赢家时，从该赢家继续邻域搜索，否则从默认模型开始。预热和失败结果不成为性能摘要。预算到期后停止发起新测量，保留已完成结果。没有实测的高B2形状不再根据P=24远距离外推时间直接跳过。默认保护和现场显存准入均有效；显式窄D表可以排除默认D，得到的局部最优项不自动成为正式选型替代。
 
 `--tune-exponents bits,...`在此入口表示**实际位数**；`--tune-d`、`--tune-b2`、`--tune-repeats`覆盖对应网格。默认构造精确位宽的 GMP probable prime，sigma26、B1=20，不称为已证明素数。`--tune-save FILE`使用验证后的真实点并替代位宽列表；比较承载须同时给 `--tune-carrier-exponent p`并检查整除。旧 `--tune-tail-samples`只接受0。
 
-完整测量先预热，再正式采样，要求 mandatory自检、GMP检查、clean通过、bad=0、hits=0。预算中途结束保留已完成正式重复及真实次数。窗口内优先缺项、未校验、误差超限或重复不足的候选；预测超过剩余预算的长任务暂不启动。再次tune可根据已有结果重新选中心，不恢复全表扫描。只持久化窗口内的最终测量/估算以及校准锚点，不展开被裁掉的估算笛卡尔积。
+完整测量先预热，再正式采样，要求mandatory自检、GMP检查、clean通过、bad=0、hits=0。预算中途结束保留已完成正式重复及真实次数；仅完成预热时不生成摘要。再次tune复用已有候选并继续未完成邻域。TOML保留访问候选的最终测量/估算，不展开全表估算。
+
+控制台保留 `ecm_tune_window`、`ecm_tune_progress`、`ecm_tune_window_done` 和完成/失败原因。子进程阶段、NTT统计及内部自检不转发到控制台，完整诊断仍保存在每次测量的证据日志；正常Stage2的控制台与日志规则不受此限制。
+
+### 默认选型与实测保护
+
+默认模型在最大NTT长度低于2²⁷时保留原生D模型；达到后端2²⁷上限后，只比较仍驻留、最大NTT长度不增加的更大D。通用归约还要求默认巨步数至少16P，以摊销较贵的初始化；梅森归约不采用此附加门槛。归一化成本包含G树、fold、giant及初始化，避免在同一大NTT平台内过早减小P；显存准入仍使用完整生命周期。该几何模型不是绝对秒数预测；性能依据和范围见[Stage2性能](../performance/STAGE2.md)。
+
+固定B2的tune替代需要默认D与候选D具有同实际位宽、同B2、同算术/执行路径的完整曲线实测，并满足上述中位数/MAD改善条件。B1不作为匹配门槛。缺少配对基准时保留默认D；稀疏估算不会覆盖默认结果。未锁定承载时，承载候选也要与普通默认路径比较。实际输入、当前显存和整除关系仍须核对。
+
+固定B2先按实测摘要过滤没有显著优势的D，再对剩余候选作完整原生规划及严格执行路径匹配。合格项直接按实测中位数+2×MAD排名，输出模型`paired_measured_d_v1`；这一步不需要跨D拟合。预筛不是显存准入，最终候选仍要通过当前free和完整生命周期检查。显式锁D及Auto B2保留各自的成本预测流程。
+
+Auto B2仍使用概率与Stage1成本联合排名。无合格跨D拟合或对应实测时，每个B2仅使用默认D，不用远距离外推去改变D；B2秒数外推仍保留不确定性，不宣称已通过生产收益验证。
 
 ### NTT 与配对阶段组合
 
@@ -72,9 +84,11 @@ level10普通路径的参数候选上限为16×8×3=384组，对比全D范围的
 
 完整曲线的互斥阶段提供秒数尺度。giant、G树、fold嵌套计时仅用于权重，不与包含它们的主循环重复相加。同算术/位宽/D/内存形状的已测B2区间可插值；区间外走组件估算。
 
-稀疏数据尚不能识别所有系数。当前多项式阶段权重为NTT0.55、归约0.40、传输0.03、调用0.02，是初始估算，不是独立拟合的硬件定律。未校验相对余量默认25%，随形状距离增加；有校验证据时使用实际误差并保留估算余量。
+跨D成本模型可用非负拟合分别估计固定开销、NTT工作量、归约工作量和点运算工作量。需要同实际位宽/算术/分块路径至少六个完整曲线摘要、三个D、两个B2，逐项留一验证通过`stage2_tune_error_limit`（默认8%）；P<512的探测不参与拟合。目标P仅允许处于已测P范围的0.5～2倍内。
 
-`validation_max_relative_error=|预测−实测中位数|/实测中位数`来自纳入新样本前形成的预测。无独立校验时不写零误差。默认8%门限用于补测优先级，允许未收敛模型参与生产并明确输出状态，不保证全网格达标。`independently_validated`表示该形状有独立误差证据，不等同误差低于门限。
+数据不足或验证不通过时保留稀疏组件估算：多项式阶段使用NTT0.55、归约0.40、传输0.03、调用0.02的初始权重，固定主循环准备不再随giant数量放大。其初始误差余量为25%，随形状距离增加；该估算不是硬件定律，不能作为固定B2的D替代证据。同位宽/D/路径的已测B2区间仍可插值。
+
+`validation_max_relative_error=|预测−实测中位数|/实测中位数`来自加入该样本之前的预测；无独立证据时不写零。拟合的留一误差与该字段区分，均不以训练残差冒充独立误差。`independently_validated`不等于整个网格已经通过门限，也不代替当前输入的算术检查。
 
 ## 启动短校准
 
@@ -82,17 +96,17 @@ level10普通路径的参数候选上限为16×8×3=384组，对比全D范围的
 
 使用已验证save中的N、sigma及仿射点，做D=210、probe_B1=min(保存B1,20)、probe_B2=probe_B1+42000的完整引擎成本探测及少数NTT测量；所需承载缺摘要时补测。探测仅复用曲线上的有效点，不声称重新执行了probe_B1的Stage1；原B1与探测B1另存证据，用户save及生产B1/B2不变。这样生产B1增大不会扩大启动探测的巨步范围。短校准发现因子且全部算术检查通过时，保留证据、跳过该性能样本并继续正常任务；不将因子命中写入无因子性能表。算术检查失败仍中止。结果供后续tune利用，不消费队列，不代表生产B2精度验收；缺少完整引擎锚点时，固定B2可回退原生规划，Auto B2仍需可用成本。plan-only也可能触发校准并更新性能文件。`--short-calibration 0`可关闭；关闭后固定B2缺文件可走原生规划，Auto B2仍要求可用成本和T1。
 
-[复合数启动回归工具](../../tools/test/test_stage2_startup_composite_gpu.py)验证M2003/sigma27/B1=20保存点的因子4007探测不进入性能表、正常Stage2仍完成；另对经独立GMP核对的真实M521/B1=10e6保存点验证probe_B2保持42020。[当前功能证据](../../data/experiments/stage2_n_scaling_20261011_2400/calibration_final_gate/regression_report.json)与[全位宽性能扫描](../performance/STAGE2.md#2400-mhz-当前自动-d-扫描)分别保留，功能回归计时不混入性能矩阵。
+[复合数启动回归工具](../../tools/test/test_stage2_startup_composite_gpu.py)验证M2003/sigma27/B1=20保存点的因子4007探测不进入性能表、正常Stage2仍完成；另对经独立GMP核对的真实M521/B1=10e6保存点验证probe_B2保持42020。[当前功能证据](../../data/experiments/stage2_n_scaling_20261011_2400/calibration_final_gate/regression_report.json)与[全位宽性能扫描](../performance/STAGE2.md)分别保留，功能回归计时不混入性能矩阵。
 
 ## NTT tune
 
 `--tune ntt --length-log2 a:b --tune-slices s,... --tune-repeats n --tune-file FILE.toml`测长度和批量，也可用等级预设。共享软预算和增量摘要规则。每秒域卷积数=batch/median，每秒批调用数=1/median，不是ECM曲线吞吐，不含大整数carry、归约或完整Stage2。
 
-GMP参考验证每个输出项；摘要保留中位数、MAD、重复数及检查量。内存不足可跳过，验证失败报错并保留证据。TOML用格式6参数表，显式JSONL调试输出保留逐次接口。
+GMP参考验证每个输出项；摘要保留中位数、MAD、重复数及检查量。内存不足可跳过，验证失败报错并保留证据。TOML用格式7参数表，显式JSONL调试输出保留逐次接口。
 
 ### NTT 性能摘要表
 
-`ntt.<condition>.table.<n>`按测量条件组织最终摘要。`[ntt.0.table.0]`表示关联`[condition.0]`的第一个表组，0不是GPU设备号、NTT长度或调优等级。显卡由条件中的UUID标识。表头公共字段适用于所有行，`columns`给出列名，`rows`按列保存每个“长度×批量”的最终结果；同一字段可能在公共部分，也可能成为列。
+`ntt.<condition>.table.<n>`按测量条件组织最终摘要。`[ntt.0.table.0]`表示关联`[condition.0]`的第一个表组，0不是GPU设备号、NTT长度或调优等级。显卡由条件中的UUID标识。表头公共字段适用于所有行，`matrix`首行给出列名，后续行按列保存每个“长度×批量”的最终结果；同一字段可能在公共部分，也可能成为列。
 
 一次基准批调用包含两个正向NTT、有限域点乘与缩放、一个逆向NTT，运算域为Goldilocks素数域。GPU事件只包围这段计算，输入生成、准备、核验在计时外；不包含生产多项式的packing、carry、模N归约、传输和整条ECM曲线。
 
@@ -108,7 +122,7 @@ GMP参考验证每个输出项；摘要保留中位数、MAD、重复数及检�
 - `batch_iter_per_s=1/t`：每秒批调用数。
 - `conv_iter_per_s=b/t`：每秒独立有限域卷积数，不是ECM curves/s。
 
-性能TOML不保存`setup_seconds`、`warmup_seconds`、`verification_seconds`。这三项不参与成本选型；格式6文件读入及新摘要写入时剔除，正常重新发布后清理已有字段。底层诊断JSONL保留测量证据，原始实验文件不改写。
+性能TOML不保存`setup_seconds`、`warmup_seconds`、`verification_seconds`。这三项不参与成本选型；格式7文件读入及新摘要写入时剔除，正常重新发布后清理已有字段。底层诊断JSONL保留测量证据，原始实验文件不改写。
 
 **来源与正确性字段：**
 
@@ -191,11 +205,11 @@ NTT 参数表发布时按 `(log2_length,length,batch,tile)` 数值升序排列�
 - [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h)：`validate_ntt_summary`、`strip_ntt_auxiliary_timing`、`Profile::update_ntt/load/serialize`，摘要检查、时间字段剔除及参数表发布。
 - [ntt_runtime.cuh:1418](../../src/cuda/stage2/ntt_runtime.cuh#L1418)：外层级数规划；[形状选择:1488](../../src/cuda/stage2/ntt_runtime.cuh#L1488)；[正向与逆向:1678](../../src/cuda/stage2/ntt_runtime.cuh#L1678)；[packing:3224](../../src/cuda/stage2/ntt_runtime.cuh#L3224)。
 - [ntt_coop_outer.cuh:15](../../src/cuda/stage2/ntt_coop_outer.cuh#L15)：block协作外层内核。
-- [ecm_stage2_portable_model.h:72](../../src/core/ecm_stage2_portable_model.h#L72)：NTT成本查询/外推；[工作量:19](../../src/core/ecm_stage2_portable_model.h#L19)；[阶段估算:110](../../src/core/ecm_stage2_portable_model.h#L110)。
+- [ecm_stage2_portable_model.h:84](../../src/core/ecm_stage2_portable_model.h#L84)：NTT成本查询/外推；[工作量:21](../../src/core/ecm_stage2_portable_model.h#L21)；[非负拟合:117](../../src/core/ecm_stage2_portable_model.h#L117)；[阶段估算:150](../../src/core/ecm_stage2_portable_model.h#L150)。
 
 ## 汇集预计算结果
 
-格式6按位宽组织`width.<bits>.table.<n>`，NTT按条件组织`ntt.<condition>.table.<n>`；公共字段只写一次，`columns`声明列，`rows`按列保存每组参数的最终摘要。数值列对齐，位宽区间在注释中注明；每行只代表校准节点上的一组参数，节点间值仍是模型估算，不冒充整个区间实测。表的列和行是结果结构，不是逐次采样数组；不含运行、导入历史或`[sample.*]`。
+格式7按位宽组织`width.<bits>.table.<n>`，NTT按条件组织`ntt.<condition>.table.<n>`；公共字段只写一次，`matrix`首行声明列名，后续行保存每组参数的最终摘要；表头和数值按相同列宽对齐。位宽区间在注释中注明；每行只代表校准节点上的一组参数，节点间值仍是模型估算，不冒充整个区间实测。表的列和行是结果结构，不是逐次采样数组；不含运行、导入历史或`[sample.*]`。
 
 来源、条件、离散度、核验量和独立误差仍保存，读回恢复原命名字段并执行完整校验。重复列、列数不符、嵌套数组、错误位宽/条件、坏核验及重复候选均拒绝。
 
@@ -209,22 +223,26 @@ NTT 参数表发布时按 `(log2_length,length,batch,tile)` 数值升序排列�
 
 ## 验证范围与限制
 
-以下功能检查对应sm89/CUDA13.3/GMP Zen3冻结构建，二进制SHA256 `9bbd4224a87fecdc485c83fd92136e732e6974cf8f4473847635766ff3ee58b0`，4060 Laptop设备1。未修改时钟/功耗，未采完整负载频率；不是速度提升报告，也不证明后续源码变动已被该二进制覆盖：
+以下功能检查对应sm89/CUDA13.3.73/GMP Zen3冻结构建，二进制SHA256 `50171511de1dbc9b998e7a352173edbac4bc70cb181bb6c81da442e542d4e659`，4060 Laptop设备0。程序未修改时钟/功耗；这些短检查不是速度提升报告：
 
-- CPU核对10级网格、105组相邻窗口、最快更新、5类异常profile、6类坏参数表、CSV推断和旧格式拒绝；20行合成摘要合并公共字段前8833字节、后1764字节，二次读回值一致。此容量比较针对同一组合成字段，不能外推所有生产文件的压缩率。
-- GPU20项流程通过：512/4423 bits、D210、B2=60000、正式重复2次的驻留/fold预算0测量，跨B1=20→1000、短校准及关闭、NTT摘要/合并、旧文件拒绝与重新生成、一条4423-bit完整曲线、部分覆盖队列和M503余因子318 bits承载推断/锁定。窗口检查使用512 bits、B2=260000、D表210/330/390/420/510；模型中心420，仅测390/420/510，各2次正式重复，另有轻量种子。
-- 证据：`data/experiments/stage2_local_tune_20261010/{core_04,gpu_03}/`。进程墙钟独立记录，不与引擎阶段相加。
+- CPU核对10级网格、105组相邻窗口、离散下降/噪声停止、最快更新、5类异常profile、6类坏参数表、CSV推断和旧格式拒绝。20行同组合成摘要展开8773字节，合并公共字段及对齐后2211字节，二次读回值一致；不能外推所有生产文件的压缩率。
+- 非负拟合在合成完整工作量数据上恢复固定项与变动项；故意破坏一个留出点后拒绝资格。同形状检查确认B1变化不阻止精确复用，buffers或giant分块变化不能标为精确点。这是数学/策略检查，不证明实际GPU预测误差达到8%。
+- GPU22项流程通过：512/4423 bits、D210、B2=60000、正式重复2次的驻留/fold预算0测量，跨B1=20→1000、短校准及关闭、NTT摘要/合并、旧文件拒绝与重新生成、一条4423-bit完整曲线、部分覆盖队列及M503余因子318 bits承载推断/锁定；Auto B2覆盖锁定与未锁定D。无文件、关闭短校准、未锁定D时保留默认规划，不要求返回记录含缓存字段。512-bit、B2=260000的显式五档D表验证连续邻域搜索。父日志级别为batches时，tune仍仅转发进度，内部阶段日志保留在证据文件。
+- 48条冻结NTT记录验证四字段数值排序、测量值不变及Python重排幂等。
+- 固定B2的27格核对实测预筛前后D/P/排名、原生请求程序及giant路径一致；仅规划查询合计111.093→27.424秒。该查询不执行曲线，完整生产时间另见[性能](../performance/STAGE2.md)。
+- 无性能文件的27格默认D/P/I另与完整默认扫描核对一致；最终摘要导入工具通过14类损坏证据拒绝，保留全部冻结输入。
+- 证据：`data/experiments/stage2_tune_redesign_20261011/{core_fast,gpu_final_04,sort_production_final,planning_final02,default_plans_final02,import_gate_final}/`。首轮GPU检查的错误CLI参数已修正，失败文件在`gpu_final/`保留；没有放宽实现或算术门限。进程墙钟独立记录，不与引擎阶段相加。
 - 未变化的概率核心有377组参考对拍，最大绝对误差3.44×10⁻¹⁵，证据为`data/experiments/stage2_portable_tune_20261010/probability_01/`，仅作为概率组件核对。
 
-稀疏跨位宽/跨B2预测已出现显著误差，早期冻结功能样本最高约343%和211%，证据在`data/experiments/stage2_portable_tune_20261010/gpu_01/`。局部D搜索可能错过窗口外的真实最优项；本版功能检查不能作为8%收敛、生产收益提高或全表最优D证明。待完成孤立组件校准、非负系数拟合与生产B2/高位宽独立排名验证。
+稀疏跨位宽/跨B2预测已出现显著误差，早期冻结功能样本最高约343%和211%，证据在`data/experiments/stage2_portable_tune_20261010/gpu_01/`。局部D搜索可能错过不能经相邻显著改善到达的真实最优项；功能检查不能作为8%收敛或全表最优D证明。非负拟合已有资格检查，仍待孤立组件校准及更多生产B2/高位宽独立排名验证。
 
 G=1与baby预算回退缺完整联合生命周期，成本可估算但原生准入不放行。host fold/frontier采用受限arena的保守上界；部分借用设备NTT的cap失败回退尚未完成执行验证。见 [内存](MEMORY.md)及 [TODO](../TODO.md)。旧`.cprof`接口保持独立资格合同，不套用上述模型。
 
 ## 代码入口
 
-- [ecm_stage2_portable_driver.inl](../../src/core/ecm_stage2_portable_driver.inl)：短校准、候选、测量、合并与发布。
-- [ecm_stage2_portable_model.h](../../src/core/ecm_stage2_portable_model.h)：工作量、成本、插值与误差余量。
-- [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h)：网格、格式与更新。
+- [ecm_stage2_portable_driver.inl](../../src/core/ecm_stage2_portable_driver.inl#L138)：默认几何模型；`portable_select`负责实测预筛、成本排名及准入，`run_portable_tune`负责局部搜索、测量与发布。
+- [ecm_stage2_portable_model.h](../../src/core/ecm_stage2_portable_model.h#L117)：`Estimator::fitted`负责非负拟合及留一资格；同文件提供工作量、观察匹配、插值与误差余量。
+- [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h#L22)：`LocalSearch`负责邻域及噪声停止；`Profile`负责矩阵解析、排序与最快更新。
 - [ecm_stage1_cost_csv.h](../../src/core/ecm_stage1_cost_csv.h)、[ecm_stage2_probability.h](../../src/core/ecm_stage2_probability.h)：容器模型及概率。
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：配置、验证与队列。
 - [配置参考](../ECM_INI_REFERENCE.md)、[使用](../usage/STAGE2.md)、[工具](../../tools/bench/README_STAGE2_CARRIER_PLAN.md)。

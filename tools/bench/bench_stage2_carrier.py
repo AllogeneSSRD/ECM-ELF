@@ -203,6 +203,7 @@ def main():
             run_d = a.candidate_d if key == 'candidate_d' else a.d
             command = [str(exe), '--ini', str(ini), '--save', str(save),
                        '--b2', str(a.b2), '--d', str(run_d), '--device', str(a.device),
+                       '--short-calibration', '0',
                        '--carrier-exponent', str(exponent),
                        '--arena-mb', str(a.arena_mb), '--owner-budget-mb', str(a.fold_mb),
                        '--batch-mb', str(a.batch_mb), '--curves', '1', '--factor-only',

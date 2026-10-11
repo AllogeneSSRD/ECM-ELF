@@ -654,14 +654,14 @@ policy. This does not disable decomposition or change stage2_factorize_hits.<br>
 stage2_auto_b2=[0|1]; default=0
 ```
 
-Choose B2 when every source supplies zero. 1 optimizes total workflow benefit per unit time,<br>
-including Stage1 cost; 0 disables. Full ECM tune requires matching device/width/B1/memory policy and<br>
-a provided or matched measured Stage1 cost. It jointly selects measured or qualified in-range B2, D<br>
-and legal carrier. Without full ECM tune, the legacy cost profile must pass its calibration checks.<br>
-This switch does not calibrate costs.<br>
-所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。完整 ECM tune 要<br>
-求设备、位宽、B1、显存策略匹配，并提供正的 Stage1 每曲线耗时；联合选择实测或合格区间内的 B2、D 和合<br>
-法承载。未提供完整 ECM tune 时，旧成本配置必须通过原有标定检查。本开关不执行成本标定。
+Choose B2 when every source supplies zero. 1 optimizes workflow benefit per time including Stage1<br>
+cost; 0 disables. Requires usable Stage2 costs and positive Stage1 s/curve. B1 never gates tune<br>
+reuse; stage2_tune_ignore controls other conditions. Memory and carrier divisibility are checked on<br>
+the current input. Estimates retain uncertainty labels; the legacy .cprof interface keeps its<br>
+original qualification checks.<br>
+所有来源均为零 B2 时自动选择。1 按计入 Stage1 成本的全流程单位时间收益选取；0 关闭。须有可用 Stage2<br>
+成本与正的 Stage1 秒/曲线。B1 不作为 tune 复用门槛；其他条件由 stage2_tune_ignore 控制。当前输入仍检<br>
+查显存及承载整除关系；估算保留不确定性标记，旧 .cprof 接口保持原资格检查。
 
 ### stage2_gp
 
@@ -704,13 +704,13 @@ stage2_tune_profile 为空时供 Auto B2 使用的旧 .cprof 成本配置。保�
 stage2_tune_profile=<path>; default=""; empty=legacy_selection
 ```
 
-Format-6 ECM parameter-table TOML, grouped by width, for joint B2/D/carrier selection. Older<br>
-development TOML must be regenerated. B1 never gates reuse; unmeasured widths/B2 retain uncertainty<br>
-labels. Saved N must divide 2^p-1 for a carrier. Empty uses stage2_ecm_tune.toml unless a legacy<br>
-cost profile is supplied.<br>
-格式6 ECM 参数表 TOML，按位宽分组并联合选择 B2、D、承载；旧开发格式需重新生成。B1 不作为复用门槛，未<br>
-测位宽/B2 保留不确定性标记。承载须验证 save 模数整除 2^p-1。留空且未指定旧成本配置时使用<br>
-stage2_ecm_tune.toml。
+Format-7 ECM matrix TOML, grouped by width, with column names in the first row. Older development<br>
+files must be regenerated. Fixed-B2 D changes require a measured win against the default; estimates<br>
+do not override it. B1 never gates reuse. A carrier requires saved N to divide 2^p-1. Empty uses<br>
+stage2_ecm_tune.toml unless a legacy cost profile is supplied.<br>
+格式7 ECM 矩阵 TOML，按位宽分组，首行为列名；旧开发文件需重新生成。固定 B2 的 D 替换须有相对默认选型<br>
+的实测收益，估算不覆盖默认 D。B1 不作为复用门槛；承载须验证 save 模数整除 2^p-1。留空且未指定旧成本<br>
+配置时使用 stage2_ecm_tune.toml。
 
 ### stage2_short_ntt_batch_tune
 
@@ -812,11 +812,11 @@ checked.<br>
 stage2_tune_budget_seconds=<x:Z,1..86400>; default=1800
 ```
 
-Total ECM tuning budget, including warmups. Each width/B2 tunes only the model-selected D and its<br>
-immediate lower/upper entries. Finish an in-flight measurement after the deadline and retain<br>
-completed summaries for incremental reuse.<br>
-ECM 调优总预算，包含预热；每个位宽/B2 只调优模型推荐 D 及前后各一档。到期后完成正在运行的测量并保存<br>
-有效汇总，供下次增量使用。
+ECM tuning budget including warmups. Start each width/B2 at the default model's D, compare<br>
+neighbors, and follow only measured improvements above 2% plus the MAD noise margin. Reuse completed<br>
+candidates. Finish an in-flight measurement after the deadline and retain valid summaries.<br>
+ECM 调优预算，包含预热。每个位宽/B2 从默认模型的 D 开始比较邻档，仅沿超过 2% 且跨过 MAD 噪声界限的实<br>
+测收益移动。复用已测候选；到期完成正在运行的测量并保留有效摘要。
 
 ### stage2_short_calibration
 
@@ -844,9 +844,11 @@ measurement before stopping.<br>
 stage2_tune_error_limit=<x:R,0<x<=1>; default=0.08
 ```
 
-Independent relative prediction error threshold used to prioritize additional full-curve<br>
-measurements. Unchecked estimates retain an uncertainty allowance.<br>
-独立预测相对误差阈值，用于优先追加完整曲线测量；未验证估算保留不确定性余量。
+Relative error limit for qualifying the nonnegative full-curve cost model by leave-one-out<br>
+validation. Sparse estimates keep uncertainty labels and cannot override the default D. Local<br>
+descent compares measured medians and MAD rather than prediction error.<br>
+非负完整曲线成本模型的留一验证相对误差门限。稀疏估算保留不确定性标记，不能覆盖默认 D；局部下降比较实<br>
+测中位数与 MAD，不用预测误差决定移动。
 
 ### stage1_cost_csv
 

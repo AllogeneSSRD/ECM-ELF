@@ -261,6 +261,8 @@ def prepare_replay(args, out, monitor):
         raise ValueError('Reference DLL differs')
     args.b1, args.b2, args.exponents = previous['B1'], previous['bounds'], previous['exponents']
     args.full_controls = previous['full_controls']
+    if args.cofactors_only:
+        args.full_controls = False
     for key in ('arena_mb', 'fold_mb', 'batch_mb'):
         setattr(args, key, previous['memory'][key])
     plan = dict(schema=1, created_utc=stamp(), complete=False, device=monitor.identity,
@@ -272,6 +274,8 @@ def prepare_replay(args, out, monitor):
                 reference_study=str(args.reference_study.resolve()), reference_manifest_sha256=sha(previous_path),
                 cases=[], preparation=[], sequence=[], runs=[], failures=[])
     for case in previous['cases']:
+        if args.cofactors_only and case['variant'] != 'cofactor':
+            continue
         folder = out / 'inputs' / case['id']
         folder.mkdir(parents=True)
         source = Path(case['save'])
@@ -471,10 +475,13 @@ def main():
     p.add_argument('--batch-mb', type=int, default=256)
     p.add_argument('--prepare-only', action='store_true')
     p.add_argument('--reference-study', type=Path, help='Reuse exact Stage1 inputs and budgets of a completed study')
+    p.add_argument('--cofactors-only', action='store_true', help='Replay only the production cofactor matrix; omit intact-number controls')
     p.add_argument('--tune-profile', type=Path, help='Seed an isolated profile; ordinary startup calibration remains enabled')
     p.add_argument('--resume', action='store_true')
     p.add_argument('--timeout', type=int, default=1800)
     a = p.parse_args()
+    if a.cofactors_only and not a.reference_study and not a.resume:
+        p.error('--cofactors-only requires --reference-study or --resume')
     if (a.device < 0 or a.b1 < 2 or a.sigma < 6 or a.repeats < 1 or min(a.b2) <= a.b1
             or not a.exponents or len(set(a.exponents)) != len(a.exponents)
             or len(set(a.b2)) != len(a.b2)):

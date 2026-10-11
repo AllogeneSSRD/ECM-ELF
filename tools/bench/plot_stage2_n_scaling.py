@@ -18,6 +18,23 @@ def plot_version_comparison(args):
     if not report.get('exact_inputs_verified') or not report.get('equal_scope_verified'):
         raise ValueError('Need audited exact-input version comparison')
     rows = [r for r in report['rows'] if r['variant'] == 'cofactor']
+    third = {}
+    if args.additional_comparison:
+        extra = json.loads(args.additional_comparison.read_text(encoding='utf-8'))
+        if not extra.get('exact_inputs_verified') or not extra.get('equal_scope_verified'):
+            raise ValueError('Additional series needs audited exact-input comparison')
+        third = {(r['exponent'], r['B2']): r for r in extra['rows'] if r['variant'] == 'cofactor'}
+        if set(third) != {(r['exponent'], r['B2']) for r in rows}:
+            raise ValueError('Additional series has a different matrix scope')
+        for row in rows:
+            other = third[row['exponent'], row['B2']]
+            identity_fields = ('bits', 'B1', 'sigma', 'current_samples', 'current_D', 'current_P', 'current_G')
+            if any(other[key] != row[key] for key in identity_fields) or abs(other['current_seconds'] - row['current_seconds']) > 1e-9:
+                raise ValueError('Additional comparison belongs to a different current study')
+        if extra['current_executable_sha256'] != report['current_executable_sha256']:
+            raise ValueError('Additional comparison has a different current binary')
+        if extra['current_device'] != report['current_device']:
+            raise ValueError('Additional comparison has a different current GPU')
     bounds = sorted({r['B2'] for r in rows})
     xmax = ((max(r['bits'] for r in rows) + args.tick / 2) // args.tick + 1) * args.tick
     cpu = []
@@ -39,11 +56,27 @@ def plot_version_comparison(args):
     fig, axes = plt.subplots(1, len(bounds), figsize=(15, 5), squeeze=False)
     for ax, b2 in zip(axes[0], bounds):
         group = sorted([r for r in rows if r['B2'] == b2], key=lambda r: r['bits'])
-        for version, label, color, marker in [('previous', args.previous_label, '#858585', 'o'),
-                                               ('current', args.current_label, '#2468a2', 's')]:
-            ax.errorbar([r['bits'] for r in group], [r[version + '_seconds'] for r in group],
-                        yerr=[r[version + '_std_seconds'] or 0 for r in group],
-                        label=label, color=color, marker=marker, markersize=4, capsize=2)
+        series = [('previous', args.previous_label, '#858585', 'o'),
+                  ('current', args.current_label, '#2468a2', 's')]
+        if third:
+            series.reverse()
+        for version, label, color, marker in series:
+            x, y = [r['bits'] for r in group], [r[version + '_seconds'] for r in group]
+            sd = [r[version + '_std_seconds'] for r in group]
+            style = dict(label=label, color=color, marker=marker, markersize=4)
+            if all(v is None for v in sd):
+                ax.plot(x, y, **style)
+            else:
+                ax.errorbar(x, y, yerr=[v if v is not None else float('nan') for v in sd], capsize=2, **style)
+        if third:
+            older = [third[r['exponent'], r['B2']] for r in group]
+            x, y = [r['bits'] for r in older], [r['previous_seconds'] for r in older]
+            sd = [r['previous_std_seconds'] for r in older]
+            style = dict(label=args.additional_label, color='#47945b', marker='D', markersize=4)
+            if all(v is None for v in sd):
+                ax.plot(x, y, **style)
+            else:
+                ax.errorbar(x, y, yerr=[v if v is not None else float('nan') for v in sd], capsize=2, **style)
         matched = sorted([r for r in cpu if r['B2'] == b2], key=lambda r: r['bits'])
         if matched:
             ax.errorbar([r['bits'] for r in matched], [r['cpu']['mean'] for r in matched],
@@ -58,10 +91,12 @@ def plot_version_comparison(args):
         ax.grid(alpha=.2)
         ax.spines[['top', 'right']].set_visible(False)
     axes[0, 0].legend(fontsize=8)
-    fig.suptitle('Complete Stage2: previous GPU / current GPU / Prime95', fontsize=13)
+    fig.suptitle('Complete Stage2: three GPU versions / Prime95' if third else
+                 'Complete Stage2: previous GPU / current GPU / Prime95', fontsize=13)
     fig.text(.01, -.025, 'GPU: identical N, B1, sigma, Stage1 saves and memory budgets; separate sessions, clocks/power may differ. '
              'Independent y scales; error bars: sample SD where n>=2; n=1 has no repeatability estimate.\nPrime95: exact N and nominal B2 matched; B1, sigma and actual B2 differ. Source: '
-             + args.version_comparison.name, fontsize=8)
+             + args.version_comparison.name +
+             (' / ' + args.additional_comparison.name if third else ''), fontsize=8)
     fig.tight_layout()
     save(fig, '_versions_times')
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -238,9 +273,14 @@ def main():
     p.add_argument('--cpu-comparison', type=Path, help='Exact-N comparison.json for the current GPU study')
     p.add_argument('--previous-label', default='GPU previous')
     p.add_argument('--current-label', default='GPU current')
+    p.add_argument('--additional-comparison', type=Path,
+                   help='Audited comparison with the same current study and an additional baseline')
+    p.add_argument('--additional-label', default='GPU additional baseline')
     a = p.parse_args()
     if a.tick <= 0:
         p.error('--tick must be positive')
+    if a.additional_comparison and not a.version_comparison:
+        p.error('--additional-comparison requires --version-comparison')
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
