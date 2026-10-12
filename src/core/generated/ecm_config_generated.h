@@ -30,6 +30,7 @@ inline constexpr int stage1_naf_w=0;
 inline constexpr char stage1_exponent[]="lcm";
 inline constexpr uint64_t stage1_sigma=0;
 inline constexpr char stage1_p95_dir[]="";
+inline constexpr int stage1_ckpt_backups=3;
 inline constexpr double stage1_ckpt_seconds=600;
 inline constexpr int stage1_device=0;
 inline constexpr int stage1_gpu_param=3;
@@ -192,6 +193,7 @@ struct Stage1Values {
     std::string exponent="lcm";
     uint64_t sigma=0;
     std::string p95_dir="";
+    int ckpt_backups=3;
     double ckpt_seconds=600;
     int device=0;
     int gpu_param=3;
@@ -230,6 +232,7 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"exponent",[](Stage1Values&c,const std::string&v){c.exponent=canonical_stage1_exponent(v);},false,nullptr},
     {"sigma",[](Stage1Values&c,const std::string&v){legacy_assign(c.sigma,v);},false,nullptr},
     {"p95_dir",[](Stage1Values&c,const std::string&v){legacy_assign(c.p95_dir,v);},false,nullptr},
+    {"ckpt_backups",[](Stage1Values&c,const std::string&v){legacy_assign(c.ckpt_backups,v);},false,nullptr},
     {"ckpt_seconds",[](Stage1Values&c,const std::string&v){legacy_assign(c.ckpt_seconds,v);},false,nullptr},
     {"device",[](Stage1Values&c,const std::string&v){legacy_assign(c.device,v);},false,nullptr},
     {"gpu_param",[](Stage1Values&c,const std::string&v){legacy_assign(c.gpu_param,v);if(c.gpu_param!=0&&c.gpu_param!=2&&c.gpu_param!=3){std::fprintf(stderr,"[ecm] WARNING: gpu_param=%d unsupported; using 3\n",c.gpu_param);c.gpu_param=3;}},false,nullptr},

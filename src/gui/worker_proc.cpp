@@ -1,6 +1,7 @@
 #include "worker_proc.h"
 
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
 
 #ifdef _WIN32
@@ -170,6 +171,16 @@ bool WorkerProc::spawn_locked(std::string &err) {
     for (const std::string &a : spawn_.extra_args) {
         append_quoted(cmd, widen(a), false);
     }
+    HANDLE stop_event = CreateEventW(&sa, TRUE, FALSE, nullptr);
+    if (stop_event == nullptr) {
+        CloseHandle(rd);
+        CloseHandle(wr);
+        if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+        err = "CreateEventW failed (" + std::to_string(GetLastError()) + ")";
+        return false;
+    }
+    append_quoted(cmd, L"--stage1-stop-handle", false);
+    append_quoted(cmd, std::to_wstring(reinterpret_cast<uintptr_t>(stop_event)), false);
     std::vector<wchar_t> mutable_cmd(cmd.begin(), cmd.end());
     mutable_cmd.push_back(L'\0');
 
@@ -183,6 +194,7 @@ bool WorkerProc::spawn_locked(std::string &err) {
     if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
     if (!ok) {
         CloseHandle(rd);
+        CloseHandle(stop_event);
         err = "CreateProcessW failed (" + std::to_string(GetLastError()) + ")";
         return false;
     }
@@ -201,6 +213,7 @@ bool WorkerProc::spawn_locked(std::string &err) {
     thread_ = pi.hThread;
     pid_ = pi.dwProcessId;
     pipe_read_ = rd;
+    stop_event_ = stop_event;
     running_ = true;
     reader_stop_ = false;
     reader_ = std::thread(&WorkerProc::reader_main, this);
@@ -214,6 +227,7 @@ void WorkerProc::close_handles() {
     if (thread_ != nullptr) { CloseHandle(static_cast<HANDLE>(thread_)); thread_ = nullptr; }
     if (process_ != nullptr) { CloseHandle(static_cast<HANDLE>(process_)); process_ = nullptr; }
     if (pipe_read_ != nullptr) { CloseHandle(static_cast<HANDLE>(pipe_read_)); pipe_read_ = nullptr; }
+    if (stop_event_ != nullptr) { CloseHandle(static_cast<HANDLE>(stop_event_)); stop_event_ = nullptr; }
 #endif
 }
 
@@ -261,6 +275,17 @@ void WorkerProc::stop() {
     running_ = false;
     state_ = WorkerRunState::Stopped;
     state_text_.clear();
+#endif
+}
+
+bool WorkerProc::request_checkpoint_stop() {
+#ifdef _WIN32
+    if (!running_ || stop_event_ == nullptr ||
+        !SetEvent(static_cast<HANDLE>(stop_event_))) return false;
+    want_running_ = false;
+    return true;
+#else
+    return false;
 #endif
 }
 
@@ -318,6 +343,11 @@ void WorkerProc::poll(unsigned long long now_ms) {
             if (reader_.joinable()) reader_.join();
             close_handles();
             running_ = false;
+            if (!want_running_) {
+                state_ = WorkerRunState::Stopped;
+                state_text_ = code == 0 ? "stopped" : "stopped; check checkpoint log";
+                return;
+            }
 
             // "Queue empty" is the healthy end: the driver's queue manager ran out
             // of lines and exited 0 (it may also exit 0 after a hit, so the text

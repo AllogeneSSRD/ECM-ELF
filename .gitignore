@@ -155,3 +155,5 @@ tools/ecm_dataset/1000.bat
 AGENTS.md
 /docs/paper
 /NCU
+/build_cuda_ckpt_verify
+/build_cuda_ckpt_verify_bt

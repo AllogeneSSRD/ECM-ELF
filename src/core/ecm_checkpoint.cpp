@@ -1,4 +1,5 @@
 #include "ecm_checkpoint.h"
+#include "ecm_stage1_checkpoint_runtime.h"
 
 #include "opencl_ecm_log.h"
 
@@ -8,6 +9,7 @@
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -165,23 +167,24 @@ int opencl_ecm_checkpoint_save(const char *filename, const opencl_ecm_checkpoint
                        filename);
         return ECM_ERROR;
     }
-    FILE *f = fopen(filename, "wb");
+    const std::string temp = ecm_stage1_checkpoint_temp_path(filename);
+    FILE *f = fopen(temp.c_str(), "wb");
     if (!f) {
         ecm_ts_fprintf(stderr, "Warning: Could not open checkpoint file '%s' for writing (%s)\n",
                        filename, std::strerror(errno));
         return ECM_ERROR;
     }
-    if (fwrite(header, sizeof(opencl_ecm_checkpoint_header_t), 1, f) != 1) {
-        ecm_ts_fprintf(stderr, "Error writing checkpoint header\n");
-        fclose(f);
+    uint64_t sum = ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED, header, sizeof(*header));
+    sum = ecm_stage1_checksum(sum, data, data_size);
+    const bool written = fwrite(header, sizeof(*header), 1, f) == 1 &&
+                         fwrite(data, 1, data_size, f) == data_size &&
+                         fwrite(&sum, sizeof(sum), 1, f) == 1;
+    const bool closed = fclose(f) == 0;
+    if (!written || !closed || !ecm_stage1_commit_checkpoint(filename, temp)) {
+        ecm_ts_fprintf(stderr, "Error writing or rotating checkpoint '%s'\n", filename);
+        remove(temp.c_str());
         return ECM_ERROR;
     }
-    if (fwrite(data, 1, data_size, f) != data_size) {
-        ecm_ts_fprintf(stderr, "Error writing checkpoint data\n");
-        fclose(f);
-        return ECM_ERROR;
-    }
-    fclose(f);
     ecm_ts_fprintf(stderr, "Checkpoint saved: %s s_partial=%llu/%llu (%.1f%%)\n", filename,
                    (unsigned long long)header->s_partial,
                    (unsigned long long)header->s_num_bits,
@@ -217,6 +220,15 @@ int opencl_ecm_checkpoint_load(const char *filename, opencl_ecm_checkpoint_heade
         fclose(f);
         return -1;
     }
+    std::error_code size_error;
+    const auto file_bytes = std::filesystem::file_size(filename, size_error);
+    const uint64_t payload_end = sizeof(temp_header) + temp_header.data_size;
+    if (size_error || payload_end < temp_header.data_size ||
+        (file_bytes != payload_end && file_bytes != payload_end + sizeof(uint64_t))) {
+        ecm_ts_fprintf(stderr, "Warning: Checkpoint length mismatch\n");
+        fclose(f);
+        return -1;
+    }
     uint32_t *data = (uint32_t *)malloc((size_t)temp_header.data_size);
     if (!data) {
         ecm_ts_fprintf(stderr, "Error: Could not allocate memory for checkpoint data\n");
@@ -228,6 +240,18 @@ int opencl_ecm_checkpoint_load(const char *filename, opencl_ecm_checkpoint_heade
         free(data);
         fclose(f);
         return -1;
+    }
+    if (file_bytes == payload_end + sizeof(uint64_t)) {
+        uint64_t stored = 0;
+        const uint64_t actual = ecm_stage1_checksum(
+            ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED, &temp_header,
+                                sizeof(temp_header)), data, (size_t)temp_header.data_size);
+        if (fread(&stored, sizeof(stored), 1, f) != 1 || stored != actual) {
+            ecm_ts_fprintf(stderr, "Warning: Checkpoint checksum mismatch\n");
+            free(data);
+            fclose(f);
+            return -1;
+        }
     }
     fclose(f);
     *header = temp_header;
@@ -246,5 +270,6 @@ int opencl_ecm_checkpoint_load(const char *filename, opencl_ecm_checkpoint_heade
 }
 
 int opencl_ecm_checkpoint_remove(const char *filename) {
-    return remove(filename);
+    ecm_stage1_remove_checkpoints(filename);
+    return 0;
 }

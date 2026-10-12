@@ -119,6 +119,7 @@ long long newest_checkpoint_mtime(const std::string &dir, std::string *name_out)
     std::string newest_name;
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (std::strstr(fd.cFileName, ".bak") != nullptr) continue;
         const long long t = (static_cast<long long>(fd.ftLastWriteTime.dwHighDateTime) << 32) |
                             static_cast<long long>(fd.ftLastWriteTime.dwLowDateTime);
         if (t > newest) {

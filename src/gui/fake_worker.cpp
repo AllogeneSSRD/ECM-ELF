@@ -10,6 +10,7 @@
 //   --scenario crash-once   exit 3 the first time (marker file), then behave like ok
 //                                                      (restart handling)
 //   --scenario hang         print, then sleep forever   (stop / job object)
+//   --scenario checkpoint-stop wait for the inherited GUI stop event, save, exit
 //   --scenario spawn-child  start a copy of itself in "hang" mode, print child=<pid>,
 //                           then sleep                        (job-object kill test)
 //   --scenario stale-driver print a pre-D1/D2 driver's "No input number on stdin"
@@ -26,6 +27,7 @@
 // reader sees it immediately.
 
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -196,6 +198,21 @@ int main(int argc, char **argv) {
     if (scenario == "hang") {
         out("START: ECMSTAGE2=1,2=hang\n");
         for (;;) sleep_ms(1000);
+    }
+    if (scenario == "checkpoint-stop") {
+#ifdef _WIN32
+        const std::string value = arg_value("--stage1-stop-handle");
+        HANDLE stop = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(
+            std::strtoull(value.c_str(), nullptr, 10)));
+        DWORD flags = 0;
+        if (!stop || !GetHandleInformation(stop, &flags)) return 4;
+        out("START: waiting for checkpoint stop\n");
+        if (WaitForSingleObject(stop, 5000) != WAIT_OBJECT_0) return 5;
+        out("Checkpoint saved: GUI stop event\n");
+        return 1;
+#else
+        return 4;
+#endif
     }
 
     std::fprintf(stderr, "fake_worker: unknown scenario '%s'\n", scenario.c_str());

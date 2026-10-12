@@ -67,8 +67,8 @@ void mont_ckpt_ident(mont_ckpt_t *ck, uint32_t curve, uint64_t sigma, double B1,
    never races with another worker (a curve belongs to exactly one batch). */
 std::string mont_ckpt_path(const std::string &stem, uint32_t curve);
 
-/* 0 on success.  The file is written in place: a crash mid-write leaves no
-   CHECKSUM/END, which the reader rejects (no stale-but-valid half state). */
+/* 0 on success. A complete temporary file replaces the primary after backups
+   rotate; CHECKSUM/END still rejects truncated or damaged generations. */
 int mont_ckpt_write(const std::string &path, const mpz_t N, const mont_ckpt_t *ck);
 
 /* 1 = loaded and consistent with (N, B1, torsion, sbits), 0 = absent, unreadable,

@@ -322,6 +322,25 @@ int run_worker_selftest(const std::string &fake_path, const std::string &log_pat
               w.state_text());
     }
 
+    // ---- 7. GUI stop event reaches the inherited worker handle ------------
+    say("[7] checkpoint stop event reaches the worker and allows a clean exit\n");
+    {
+        WorkerProc w;
+        w.configure(make_spawn(fake_path, "checkpoint-stop", "idle"), fast);
+        std::string err;
+        check(w.start(err), "start() spawns a checkpoint-aware worker", err);
+        check(w.request_checkpoint_stop(), "GUI stop event was signalled");
+        RunResult r = drive(w, 10000, [&](const RunResult &) {
+            return w.state() == WorkerRunState::Stopped;
+        });
+        check(!w.running() && w.state() == WorkerRunState::Stopped,
+              "worker exited after checkpoint stop", w.state_text());
+        check(w.exit_code() == 1, "interrupted worker exit code retained",
+              std::to_string(w.exit_code()));
+        check(find_event(r.events, "Checkpoint saved: GUI stop event"),
+              "checkpoint event was captured before exit");
+    }
+
     say("\npassed: %d   failed: %d\n  log: %s\n", g_pass, g_fail, log_path.c_str());
     if (g_log) {
         std::fclose(g_log);

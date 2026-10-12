@@ -48,11 +48,13 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 // outputf/test_verbose shims, ECM_GPU_* constants, and pulls in the project's
 // ECM_* return codes (include/ecm.h).
 #include "cuda_ecm_shim.h"
+#include "ecm_stage1_checkpoint_runtime.h"
 
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <algorithm>
+#include <filesystem>
 
 // For %I64u on windows or %llu on linux
 #include <cinttypes>
@@ -892,27 +894,24 @@ int save_checkpoint(const char *filename,
                     const checkpoint_header_t *header,
                     const uint32_t *data, 
                     size_t data_size) {
-  FILE *f = fopen(filename, "wb");
+  const std::string temp = ecm_stage1_checkpoint_temp_path(filename);
+  FILE *f = fopen(temp.c_str(), "wb");
   if (!f) {
     outputf(OUTPUT_ALWAYS, "Warning: Could not open checkpoint file '%s' for writing\n", filename);
     return ECM_ERROR;
   }
   
-  // Write header
-  if (fwrite(header, sizeof(checkpoint_header_t), 1, f) != 1) {
-    outputf(OUTPUT_ERROR, "Error writing checkpoint header\n");
-    fclose(f);
+  uint64_t sum = ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED, header, sizeof(*header));
+  sum = ecm_stage1_checksum(sum, data, data_size);
+  const bool written = fwrite(header, sizeof(*header), 1, f) == 1 &&
+                       fwrite(data, 1, data_size, f) == data_size &&
+                       fwrite(&sum, sizeof(sum), 1, f) == 1;
+  const bool closed = fclose(f) == 0;
+  if (!written || !closed || !ecm_stage1_commit_checkpoint(filename, temp)) {
+    outputf(OUTPUT_ERROR, "Error writing or rotating checkpoint '%s'\n", filename);
+    remove(temp.c_str());
     return ECM_ERROR;
   }
-  
-  // Write data
-  if (fwrite(data, 1, data_size, f) != data_size) {
-    outputf(OUTPUT_ERROR, "Error writing checkpoint data\n");
-    fclose(f);
-    return ECM_ERROR;
-  }
-  
-  fclose(f);
   outputf(OUTPUT_VERBOSE, "Checkpoint saved: s_partial=%lu/%lu (%.1f%%)\n", 
           header->s_partial, header->s_num_bits, 
           100.0 * header->s_partial / header->s_num_bits);
@@ -954,6 +953,16 @@ int load_checkpoint(const char *filename,
     fclose(f);
     return -1;
   }
+  std::error_code size_error;
+  const auto file_bytes = std::filesystem::file_size(filename, size_error);
+  const uint64_t payload_end = (uint64_t)sizeof(temp_header) + (uint64_t)temp_header.data_size;
+  if (size_error || temp_header.data_size == 0 ||
+      payload_end < temp_header.data_size ||
+      (file_bytes != payload_end && file_bytes != payload_end + sizeof(uint64_t))) {
+    outputf(OUTPUT_ALWAYS, "Warning: Checkpoint length mismatch\n");
+    fclose(f);
+    return -1;
+  }
   
   // Allocate memory for data
   uint32_t *data = (uint32_t*) malloc(temp_header.data_size);
@@ -969,6 +978,18 @@ int load_checkpoint(const char *filename,
     free(data);
     fclose(f);
     return -1;
+  }
+  if (file_bytes == payload_end + sizeof(uint64_t)) {
+    uint64_t stored = 0;
+    const uint64_t actual = ecm_stage1_checksum(
+        ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED, &temp_header, sizeof(temp_header)),
+        data, temp_header.data_size);
+    if (fread(&stored, sizeof(stored), 1, f) != 1 || stored != actual) {
+      outputf(OUTPUT_ALWAYS, "Warning: Checkpoint checksum mismatch\n");
+      free(data);
+      fclose(f);
+      return -1;
+    }
   }
   
   fclose(f);
@@ -1320,70 +1341,38 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   size_t ckpt_data_size = 0;
   int ckpt_loaded = 0;
   
-  // Try to load checkpoint
-  if (load_checkpoint(ckpt_filename, &ckpt_header, &ckpt_data, &ckpt_data_size) == ECM_NO_FACTOR_FOUND) {
-    // Validate checkpoint compatibility
-    // Only check curves and s_num_bits (sigma is a range in real usage)
-    outputf(OUTPUT_TRACE, "Checkpoint validation: curves=%u(expect %u), s_num_bits=%lu(expect %lu)\n",
-            ckpt_header.curves, curves, ckpt_header.s_num_bits, s_num_bits);
-    
-    if (ckpt_header.curves == curves && 
-        ckpt_header.s_num_bits == s_num_bits) {
-      
-      outputf(OUTPUT_NORMAL, "Resuming from checkpoint: %.1f%% complete (s_partial=%lu/%lu)\n",
-              100.0 * ckpt_header.s_partial / ckpt_header.s_num_bits,
-              ckpt_header.s_partial, ckpt_header.s_num_bits);
-
-      /* v4 stores the full 64-bit sigma, so a param0 resume can restore the exact
-         curve index (the batch path keeps its 32-bit window). */
-      if (!param0 && ckpt_header.sigma != (uint64_t)sigma32) {
-        outputf(OUTPUT_VERBOSE, "Checkpoint sigma overrides current sigma: %u -> %llu\n",
-                sigma32, (unsigned long long)ckpt_header.sigma);
-      }
-      
-      ckpt_loaded = 1;
-      if (!param0) {
-        sigma64 = ckpt_header.sigma;
-      } else if (ckpt_header.sigma != sigma64) {
-        outputf(OUTPUT_NORMAL,
-                "Checkpoint sigma %llu overrides the requested %llu (param0)\n",
-                (unsigned long long)ckpt_header.sigma, (unsigned long long)sigma64);
-        sigma64 = ckpt_header.sigma;
-      }
-      BITS = ckpt_header.BITS;
-      TPI = ckpt_header.TPI;  // Restore TPI from checkpoint
-      data_size = ckpt_header.data_size;
-      data = ckpt_data;
-      s_partial = ckpt_header.s_partial;
-      batches_complete = ckpt_header.batches_complete;
-
-      /* The buffer layout identifies the parametrization (5 words/curve = param3,
-         7 = param0), so a checkpoint written by the other one must be refused
-         rather than read with the wrong stride -- see docs §20.2 item 6.
-         The header also records it explicitly since v4; both must agree. */
-      {
-        const uint32_t wpc_ck = (uint32_t)(data_size /
-            ((size_t)curves * (size_t)(BITS / 32) * sizeof(uint32_t)));
-        const uint32_t wpc_want = param0 ? 7u : 5u;
-        const uint32_t param_want = param0 ? 0u : (param2 ? 2u : 3u);
-        if (wpc_ck != wpc_want || ckpt_header.gpu_param != param_want) {
-          outputf(OUTPUT_NORMAL,
-                  "Checkpoint mismatch (param %u, %u words/curve; this run needs param %u, %u "
-                  "words/curve), starting fresh\n",
-                  ckpt_header.gpu_param, wpc_ck, param_want, wpc_want);
-          free(data);
-          data = NULL;
-          ckpt_loaded = 0;
-          BITS = 0;
-          TPI = 0;
-          s_partial = 0;
-        }
-      }
-    } else {
-      outputf(OUTPUT_NORMAL, "Checkpoint parameters mismatch (curves or s_num_bits differ), starting fresh\n");
-      if (ckpt_data) free(ckpt_data);
-      ckpt_loaded = 0;
+  // The primary may be torn or corrupted; try each older generation in order.
+  for (const std::string &candidate : ecm_stage1_checkpoint_candidates(ckpt_filename)) {
+    if (load_checkpoint(candidate.c_str(), &ckpt_header, &ckpt_data, &ckpt_data_size) !=
+        ECM_NO_FACTOR_FOUND) continue;
+    const uint32_t wpc_want = param0 ? 7u : 5u;
+    const uint32_t param_want = param0 ? 0u : (param2 ? 2u : 3u);
+    const uint64_t stride = (uint64_t)curves * (uint64_t)(ckpt_header.BITS / 32u) *
+                            sizeof(uint32_t);
+    if (ckpt_header.curves != curves || ckpt_header.s_num_bits != s_num_bits ||
+        ckpt_header.s_partial > s_num_bits || ckpt_header.BITS < 32u ||
+        ckpt_header.BITS % 32u || stride == 0 ||
+        ckpt_header.data_size != stride * wpc_want ||
+        ckpt_header.gpu_param != param_want || ckpt_header.TPI == 0u) {
+      outputf(OUTPUT_NORMAL, "Checkpoint parameters/layout mismatch: %s\n", candidate.c_str());
+      free(ckpt_data);
+      ckpt_data = NULL;
+      continue;
     }
+    outputf(OUTPUT_NORMAL, "Resuming from checkpoint: %.1f%% complete (s_partial=%lu/%lu)%s\n",
+            s_num_bits ? 100.0 * ckpt_header.s_partial / s_num_bits : 0.0,
+            ckpt_header.s_partial, s_num_bits,
+            candidate == ckpt_filename ? "" : " [backup]");
+    ckpt_loaded = 1;
+    if (candidate != ckpt_filename) ecm_stage1_mark_bad_primary(ckpt_filename);
+    sigma64 = ckpt_header.sigma;
+    BITS = ckpt_header.BITS;
+    TPI = ckpt_header.TPI;
+    data_size = ckpt_data_size;
+    data = ckpt_data;
+    s_partial = ckpt_header.s_partial;
+    batches_complete = ckpt_header.batches_complete;
+    break;
   }
   
   // If no checkpoint, proceed with normal initialization
@@ -1790,8 +1779,9 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     }
     
     // ========== CHECKPOINT SAVING ==========
-    if (checkpoint_interval_ms > 0 &&
-      (*gputime - last_checkpoint_time) >= checkpoint_interval_ms) {
+    const bool stop_now = ecm_stage1_stop_requested();
+    if (stop_now || (checkpoint_interval_ms > 0 &&
+      (*gputime - last_checkpoint_time) >= checkpoint_interval_ms)) {
       // Copy data back from GPU temporarily for checkpoint
       CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));
       
@@ -1812,8 +1802,14 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       header.data_size = data_size;
       header.timestamp = time(NULL);
       
-      save_checkpoint(ckpt_filename, &header, data, data_size);
-      last_checkpoint_time = *gputime;
+      const int saved = save_checkpoint(ckpt_filename, &header, data, data_size);
+      if (saved == ECM_NO_FACTOR_FOUND) last_checkpoint_time = *gputime;
+      if (stop_now) {
+        outputf(saved == ECM_NO_FACTOR_FOUND ? OUTPUT_NORMAL : OUTPUT_ERROR,
+                saved == ECM_NO_FACTOR_FOUND ? "Stage1 stopped: checkpoint saved\n" :
+                                               "Stage1 stop requested but checkpoint write failed\n");
+        break;
+      }
     }
   }
 
@@ -1823,14 +1819,16 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       fflush(stdout);
   }
 
-  // Copy data back from GPU memory
-  outputf (OUTPUT_VERBOSE, "Copying results back to CPU ...\n");
-  CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));
-
-  cudaEventElapsedTime (gputime, global_start, stop);
-
-  youpi = process_results(factors, array_found, N, data, BITS, curves, sigma64,
-                          words_per_curve, p1_word, p2_word, gpu_param);
+  if (ecm_stage1_stop_requested() && s_partial < s_num_bits) {
+    // A partial point is never a completed Stage1 result.
+    youpi = ECM_ERROR;
+  } else {
+    outputf (OUTPUT_VERBOSE, "Copying results back to CPU ...\n");
+    CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));
+    cudaEventElapsedTime (gputime, global_start, stop);
+    youpi = process_results(factors, array_found, N, data, BITS, curves, sigma64,
+                            words_per_curve, p1_word, p2_word, gpu_param);
+  }
 
   // clean up
   CUDA_CHECK(cudaFree(gpu_s_bits));
@@ -1845,7 +1843,8 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   
   // ========== CHECKPOINT CLEANUP ==========
   // Remove checkpoint file on successful completion
-  if (youpi != ECM_ERROR && remove(ckpt_filename) == 0) {
+  if (youpi != ECM_ERROR) {
+    ecm_stage1_remove_checkpoints(ckpt_filename);
     outputf (OUTPUT_VERBOSE, "Checkpoint file removed\n");
   }
 

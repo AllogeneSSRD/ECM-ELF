@@ -927,6 +927,7 @@ void App::request_stop(int worker_index) {
         w.ckpt_seen = false;
         w.ckpt_baseline = newest_checkpoint_mtime(worker_dir(), nullptr);
         w.stop_deadline_ms = mono_ms() + graceful_stop_ms_;
+        w.proc->request_checkpoint_stop();
         trace("worker " + std::to_string(w.index) +
               ": stop requested (waiting for a checkpoint, max " +
               std::to_string(graceful_stop_ms_ / 1000) + " s)");
@@ -943,6 +944,7 @@ void App::begin_graceful_exit() {
         w.ckpt_seen = false;
         w.ckpt_baseline = newest_checkpoint_mtime(worker_dir(), nullptr);
         w.stop_deadline_ms = exit_deadline_ms_;
+        w.proc->request_checkpoint_stop();
         trace("worker " + std::to_string(w.index) +
               ": graceful stop requested (waiting for a checkpoint, max " +
               std::to_string(graceful_stop_ms_ / 1000) + " s)");
@@ -963,14 +965,17 @@ void App::tick_graceful_stops(unsigned long long now) {
             const long long m = newest_checkpoint_mtime(worker_dir(), &name);
             if (m != 0 && m > w.ckpt_baseline) {
                 w.ckpt_seen = true;
-                trace("worker " + std::to_string(w.index) + ": checkpoint written (" + name +
-                      "), safe to stop");
+                trace("worker " + std::to_string(w.index) + ": checkpoint file updated (" + name +
+                      "); waiting for worker exit");
             }
         }
-        if (w.ckpt_seen || now >= w.stop_deadline_ms) {
+        // The child exits after writing its checkpoint. Never terminate it merely
+        // because a file appeared: rotation can publish a backup before the new
+        // primary is committed, and another worker may share this directory.
+        if (now >= w.stop_deadline_ms) {
             char buf[160];
-            std::snprintf(buf, sizeof(buf), "worker %d: stopping (checkpoint %s)",
-                          w.index, w.ckpt_seen ? "written" : "NOT written (timeout)");
+            std::snprintf(buf, sizeof(buf), "worker %d: stop timeout; terminating worker",
+                          w.index);
             trace(buf);
             w.proc->stop();
             w.stop_requested = false;
@@ -1056,15 +1061,13 @@ bool App::draw_exit_modal() {
         ImGui::Begin("Stopping workers###exit_stopping", nullptr,
                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse |
                          ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings);
-        ImGui::TextWrapped("Waiting for the workers to write a checkpoint (up to %lld s left) ...",
+        ImGui::TextWrapped("Waiting for workers to save and exit (up to %lld s left) ...",
                            left_ms / 1000);
         ImGui::Separator();
         for (const WorkerView &w : workers_) {
             if (w.proc == nullptr) continue;
             const bool running = w.proc->running();
-            const char *state = !running      ? "stopped"
-                                : w.ckpt_seen ? "checkpoint written, stopping"
-                                              : "waiting for checkpoint";
+            const char *state = !running ? "stopped" : "saving and stopping";
             ImGui::Text("Worker #%d: %s", w.index, state);
         }
         ImGui::Separator();

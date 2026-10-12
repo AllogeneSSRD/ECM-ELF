@@ -1,5 +1,6 @@
 /* ecm_mont_ckpt.cpp -- see ecm_mont_ckpt.h for the format contract. */
 #include "ecm_mont_ckpt.h"
+#include "ecm_stage1_checkpoint_runtime.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -93,7 +94,8 @@ static void w_mpz(FILE *f, uint64_t *sum, const char *key, const mpz_t z)
 
 int mont_ckpt_write(const std::string &path, const mpz_t N, const mont_ckpt_t *ck)
 {
-    FILE *f = fopen(path.c_str(), "wb");
+    const std::string temp = ecm_stage1_checkpoint_temp_path(path);
+    FILE *f = fopen(temp.c_str(), "wb");
     if (!f) return -1;
     uint64_t sum = CK_FNV_OFFSET;
 
@@ -133,7 +135,7 @@ int mont_ckpt_write(const std::string &path, const mpz_t N, const mont_ckpt_t *c
     }
     fputs("END\n", f);
     const int rc = (fclose(f) == 0) ? 0 : -1;
-    return rc;
+    return rc == 0 && ecm_stage1_commit_checkpoint(path, temp) ? 0 : -1;
 }
 
 /* --------------------------------------------------------------------------
@@ -145,7 +147,7 @@ static void set_hex(mpz_t z, const std::string &v)
     else if (mpz_set_str(z, v.c_str(), 16) != 0) mpz_set_ui(z, 0);
 }
 
-int mont_ckpt_read(const std::string &path, const mpz_t N, double B1, int torsion,
+static int mont_ckpt_read_one(const std::string &path, const mpz_t N, double B1, int torsion,
                    size_t sbits, mont_ckpt_t *ck, std::string *why)
 {
     std::ifstream in(path.c_str(), std::ios::in | std::ios::binary);
@@ -257,7 +259,19 @@ int mont_ckpt_read(const std::string &path, const mpz_t N, double B1, int torsio
     return 1;
 }
 
+int mont_ckpt_read(const std::string &path, const mpz_t N, double B1, int torsion,
+                   size_t sbits, mont_ckpt_t *ck, std::string *why)
+{
+    for (const auto &candidate : ecm_stage1_checkpoint_candidates(path)) {
+        if (mont_ckpt_read_one(candidate, N, B1, torsion, sbits, ck, why)) {
+            if (candidate != path) ecm_stage1_mark_bad_primary(path);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void mont_ckpt_remove(const std::string &path)
 {
-    remove(path.c_str());
+    ecm_stage1_remove_checkpoints(path);
 }

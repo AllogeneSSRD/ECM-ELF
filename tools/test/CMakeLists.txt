@@ -8,6 +8,18 @@
 # main: the older OpenCL low-risk test harness (src/main_test.cpp +
 # src/opencl_low_risk_tests.cpp, sharing src/cl_probe.cpp with the other OpenCL tools).
 # ---------------------------------------------------------------------------
+add_executable(stage1_checkpoint_rotation_test
+    stage1_checkpoint_rotation_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/ecm_checkpoint.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/ecm_mont_ckpt.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/ecm_stage1_checkpoint_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/opencl_ecm_log.cpp
+    ${CMAKE_SOURCE_DIR}/src/opencl_ecm_runtime_config.cpp)
+target_include_directories(stage1_checkpoint_rotation_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+ecm_target_link_gmp(stage1_checkpoint_rotation_test)
+ecm_tool_output_root(stage1_checkpoint_rotation_test)
+
 add_executable(main
     ${CMAKE_SOURCE_DIR}/src/cl_probe.cpp
     ${CMAKE_SOURCE_DIR}/src/main_test.cpp

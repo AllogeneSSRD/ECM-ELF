@@ -4,6 +4,7 @@
 #include "ecm.h"
 #include "cgbn_opencl.h"
 #include "ecm_checkpoint.h"
+#include "ecm_stage1_checkpoint_runtime.h"
 #include "opencl_ecm_debug_utils.h"
 #include "opencl_ecm_log.h"
 #include "opencl_ecm_mont.h"
@@ -35,36 +36,8 @@
 #endif
 #include <ctime>
 
-#include <atomic>
-#include <csignal>
-
 // Progress bar (indicators header-only library)
 #include "indicators/indicators.hpp"
-
-// ── Interrupt handling ──────────────────────────────────────────────────
-static std::atomic<bool> g_interrupted{false};
-
-#ifdef _WIN32
-#include <windows.h>
-static BOOL WINAPI console_ctrl_handler(DWORD ctrl_type) {
-    if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT) {
-        static int count = 0;
-        if (++count > 1) return FALSE;          // second Ctrl+C → let OS kill
-        g_interrupted.store(true, std::memory_order_relaxed);
-        // Reset terminal attributes immediately.
-        const char *reset = "\033[0m\r\n";
-        _write(2, reset, (unsigned int)strlen(reset));
-        return TRUE;   // TRUE = we handled it, do NOT terminate the process
-    }
-    return FALSE;
-}
-#else
-static void signal_handler(int) {
-    g_interrupted.store(true, std::memory_order_relaxed);
-    const char *reset = "\033[0m\n";
-    write(STDERR_FILENO, reset, strlen(reset));
-}
-#endif
 
 #define CARRY_BITS ECM_STAGE1_MONT_CARRY_BITS
 
@@ -823,9 +796,13 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
     size_t ckpt_data_size = 0;
     int ckpt_loaded = 0;
 
-    if (opencl_ecm_checkpoint_load(ckpt_filename, &ckpt_header, &ckpt_data, &ckpt_data_size) ==
-        ECM_NO_FACTOR_FOUND) {
-        if (ckpt_header.curves == curves && ckpt_header.s_num_bits == s_num_bits) {
+    for (const std::string &candidate : ecm_stage1_checkpoint_candidates(ckpt_filename)) {
+        if (opencl_ecm_checkpoint_load(candidate.c_str(), &ckpt_header, &ckpt_data,
+                                       &ckpt_data_size) != ECM_NO_FACTOR_FOUND)
+            continue;
+        if (ckpt_header.curves == curves && ckpt_header.s_num_bits == s_num_bits &&
+            ckpt_header.s_partial <= s_num_bits && ckpt_header.TPI != 0 &&
+            ckpt_header.data_size == ckpt_data_size) {
             ecm_ts_fprintf(stderr,
                            "Resuming from checkpoint: %.1f%% complete (s_partial=%llu/%llu)\n",
                            ckpt_header.s_num_bits
@@ -852,6 +829,10 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
                 }
                 ckpt_loaded = 1;
                 sigma = (uint32_t)ckpt_header.sigma;
+                if (candidate != ckpt_filename) {
+                    ecm_stage1_mark_bad_primary(ckpt_filename);
+                    ecm_ts_fprintf(stderr, "Restored Stage1 backup: %s\n", candidate.c_str());
+                }
             }
         } else {
             ecm_ts_fprintf(stderr,
@@ -860,6 +841,7 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
             free(ckpt_data);
             ckpt_data = nullptr;
         }
+        if (ckpt_loaded) break;
     }
 
     if (ensure_opencl_context_ready() != 0) {
@@ -1071,11 +1053,6 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
             std::vector<indicators::FontStyle>{indicators::FontStyle::bold}}
     };
     // ──────────────────────────────────────────────────────────────────────
-#ifdef _WIN32
-    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
-#else
-    std::signal(SIGINT, signal_handler);
-#endif
     while (s_partial < s_num_bits) {
         uint64_t this_batch = std::min(batch_size, s_num_bits - s_partial);
         if (g_dump_ctx.enabled) {
@@ -1200,8 +1177,9 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
                     header.reserved = 0;
                     header.data_size = (uint64_t)data_size;
                     header.timestamp = (int64_t)time(nullptr);
-                    opencl_ecm_checkpoint_save(ckpt_filename, &header, ckpt_buf.data(), data_size);
-                    last_checkpoint_wall = now_wall;
+                    if (opencl_ecm_checkpoint_save(ckpt_filename, &header, ckpt_buf.data(),
+                                                   data_size) == ECM_NO_FACTOR_FOUND)
+                        last_checkpoint_wall = now_wall;
                 } else {
                     ecm_ts_fprintf(stderr, "Warning: checkpoint GPU readback failed (%d)\n",
                                    ckpt_err);
@@ -1226,14 +1204,14 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
         }
 
         // ── Ctrl+C → break early ─────────────────────────────────────
-        if (g_interrupted.load(std::memory_order_relaxed)) break;
+        if (ecm_stage1_stop_requested()) break;
     }
 
     // ── Mark progress bar complete ──────────────────────────────────────
     bar.mark_as_completed();
 
     // ── Ctrl+C: save checkpoint before normal exit ─────────────────────
-    if (g_interrupted.load(std::memory_order_relaxed)) {
+    if (ecm_stage1_stop_requested()) {
         ecm_ts_fprintf(stderr, "\nInterrupted — saving checkpoint before exit...\n");
         fflush(stderr);
         std::vector<uint32_t> ckpt_buf(data_size / sizeof(uint32_t));
@@ -1257,10 +1235,11 @@ extern "C" int cgbn_ecm_stage1(mpz_t *factors, int *array_found, const mpz_t N, 
             hdr.reserved = 0;
             hdr.data_size = (uint64_t)data_size;
             hdr.timestamp = (int64_t)time(nullptr);
-            opencl_ecm_checkpoint_save(ckpt_filename, &hdr, ckpt_buf.data(), data_size);
-            ecm_ts_fprintf(stderr, "Checkpoint saved (%llu/%llu bits, %.1f%%)\n",
-                           (unsigned long long)s_partial, (unsigned long long)s_num_bits,
-                           s_num_bits > 0u ? (100.0*s_partial/s_num_bits) : 0.0);
+            if (opencl_ecm_checkpoint_save(ckpt_filename, &hdr, ckpt_buf.data(), data_size) ==
+                ECM_NO_FACTOR_FOUND)
+                ecm_ts_fprintf(stderr, "Checkpoint saved (%llu/%llu bits, %.1f%%)\n",
+                               (unsigned long long)s_partial, (unsigned long long)s_num_bits,
+                               s_num_bits > 0u ? (100.0*s_partial/s_num_bits) : 0.0);
         } else {
             ecm_ts_fprintf(stderr, "Warning: checkpoint GPU readback failed (%d)\n", ckpt_err);
         }

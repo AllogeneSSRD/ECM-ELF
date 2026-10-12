@@ -336,6 +336,18 @@ the current Prime95 handoff mechanism. Use p95_worktodo_path to hand off ECMSTAG
 保留旧配置兼容性，设置非空值只产生旧选项提示，不启用新的 Prime95 交接流程。需要交接 ECMSTAGE2 任务时<br>
 使用 p95_worktodo_path。
 
+### ckpt_backups
+
+```text
+ckpt_backups=<x:Z,0..16>; default=3; zero=no_backups
+```
+
+Maximum number of rotated Stage1 checkpoint backups. The primary checkpoint is additional; 0 keeps<br>
+only the primary. Corrupt or unreadable generations are skipped on resume. A completed Stage1 task<br>
+removes its primary checkpoint and all backups.<br>
+Stage1 检查点轮换备份的最大份数；主存档另计，0 表示只保留主存档。恢复时跳过损坏或无法读取的代次；<br>
+Stage1 完成后清理主存档及所有备份。
+
 ### ckpt_seconds
 
 ```text

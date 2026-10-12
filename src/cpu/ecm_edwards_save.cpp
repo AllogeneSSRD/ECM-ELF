@@ -1,4 +1,5 @@
 #include "ecm_edwards_save.h"
+#include "ecm_stage1_checkpoint_runtime.h"
 
 #include <cstdio>
 #include <cstring>
@@ -279,7 +280,8 @@ bool ecm_edwards_write_stage1(const std::string &path, const ecm_save_common &cm
                               uint32_t bitnum, uint32_t dict_size,
                               const mpz_t dict_x, const mpz_t dict_y,
                               const mpz_t e_x, const mpz_t e_y, const mpz_t e_z) {
-    std::ofstream o(path, std::ios::binary | std::ios::trunc);
+    const std::string temp = ecm_stage1_checkpoint_temp_path(path);
+    std::ofstream o(temp, std::ios::binary | std::ios::trunc);
     if (!o) return false;
 
     char stage[10];
@@ -306,10 +308,10 @@ bool ecm_edwards_write_stage1(const std::string &path, const ecm_save_common &cm
     put_giant(o, e_z, &sum);
     put_checksum(o, sum);
     o.close();
-    return !o.fail();
+    return !o.fail() && ecm_stage1_commit_checkpoint(path, temp);
 }
 
-bool ecm_edwards_read_stage1(const std::string &path, ecm_save_common &cm,
+static bool ecm_edwards_read_stage1_one(const std::string &path, ecm_save_common &cm,
                              uint64_t *stage1_start_prime, uint32_t *exp_buffer_size,
                              uint32_t *bitnum, uint32_t *dict_size,
                              mpz_t dict_x, mpz_t dict_y,
@@ -355,4 +357,19 @@ bool ecm_edwards_read_stage1(const std::string &path, ecm_save_common &cm,
     if (!get_giant(in, e_z, &sum)) return false;
 
     return sum == file_sum;
+}
+
+bool ecm_edwards_read_stage1(const std::string &path, ecm_save_common &cm,
+                             uint64_t *stage1_start_prime, uint32_t *exp_buffer_size,
+                             uint32_t *bitnum, uint32_t *dict_size,
+                             mpz_t dict_x, mpz_t dict_y,
+                             mpz_t e_x, mpz_t e_y, mpz_t e_z) {
+    for (const auto &candidate : ecm_stage1_checkpoint_candidates(path)) {
+        if (ecm_edwards_read_stage1_one(candidate, cm, stage1_start_prime, exp_buffer_size,
+                                        bitnum, dict_size, dict_x, dict_y, e_x, e_y, e_z)) {
+            if (candidate != path) ecm_stage1_mark_bad_primary(path);
+            return true;
+        }
+    }
+    return false;
 }

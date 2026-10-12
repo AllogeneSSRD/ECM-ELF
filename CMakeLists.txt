@@ -112,6 +112,7 @@ add_executable(ecm
     src/core/ecm_driver.cpp
     src/core/ecm_params_init.cpp
     src/core/ecm_checkpoint.cpp
+    src/core/ecm_stage1_checkpoint_runtime.cpp
     src/core/ecm_save.cpp
     src/core/ecm_gpu_common.cpp
     src/core/ecm_queue_config.cpp
@@ -271,6 +272,7 @@ if(ECM_ENABLE_CUDA)
         src/core/ecm_driver.cpp
         src/core/ecm_params_init.cpp
         src/core/ecm_checkpoint.cpp
+        src/core/ecm_stage1_checkpoint_runtime.cpp
         src/core/ecm_save.cpp
         src/core/ecm_gpu_common.cpp
         src/core/ecm_queue_config.cpp

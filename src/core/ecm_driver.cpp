@@ -39,6 +39,7 @@
 #include "ecm_backend.h"           /* GPU backend seam (OpenCL or CUDA glue) */
 #include "ecm_save.h"
 #include "ecm_checkpoint.h"         /* opencl_ecm_set_work_dir */
+#include "ecm_stage1_checkpoint_runtime.h"
 #include "opencl_ecm_runtime_config.h"
 #include "ecm.h"
 #include "cgbn_stage1.h"            /* gpu_pick_random_sigma / gpu_compute_batch_d */
@@ -909,6 +910,7 @@ struct Stage1RunOptions {
        0 = Suyama param0 (same curves as the CPU --method mont path, param0 save). */
     int gpu_param = ecm_config::defaults::stage1_gpu_param;
     unsigned long ckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
+    unsigned ckpt_backups = ecm_config::defaults::stage1_ckpt_backups;
     std::string gpu_mul_path, gpu_sqr_path, gpu_add_path, gpu_sub_path, gpu_special_mult_path;
     bool sigma_fixed = false;
     uint32_t fixed_sigma = 0;        // GPU batch sigma (32-bit)
@@ -943,11 +945,9 @@ struct Stage1RunResult {
 
 // ---- 自我 checkpoint / 进度显示 (CPU stage-1: Edwards 与 Montgomery 共用) ----
 //
-// 两个 CPU 方法共用同一套: SIGINT 标志、输出锁、墙钟、进度条与速率窗口。GPU 路径
-// (OpenCL) 有自己的 ckpt (src/core/ecm_checkpoint.*) 与进度输出, 不走这里。
+// 两个 CPU 方法共用停止请求、输出锁、墙钟、进度条与速率窗口。
+// OpenCL 使用自己的进度输出与存档格式，但共用停止请求。
 
-static volatile sig_atomic_t g_stage1_stop = 0;
-static void stage1_sigint_handler(int) { g_stage1_stop = 1; }
 
 // 多曲线并行时串行化输出 (避免 stdout 行交错).
 static std::mutex g_stage1_out_mutex;
@@ -1071,13 +1071,14 @@ struct EdwardsCheckpointCtx {
     long long last_ms;
     mpz_srcptr N;
     mpz_srcptr s;
+    bool write_failed = false;
 };
 
 static int edwards_checkpoint_progress(void *ctx, const edwards_checkpoint_t *cur) {
     EdwardsCheckpointCtx *c = (EdwardsCheckpointCtx *)ctx;
     const long long now = stage1_now_ms();
     const bool due = (now - c->last_ms >= c->interval_ms);
-    if (!due && !g_stage1_stop) return 1;   // 继续
+    if (!due && !ecm_stage1_stop_requested()) return 1;   // 继续
 
     mpz_t d, Px, Py;
     mpz_inits(d, Px, Py, NULL);
@@ -1094,14 +1095,20 @@ static int edwards_checkpoint_progress(void *ctx, const edwards_checkpoint_t *cu
     cm.sigma = c->sigma;
     const uint32_t expbuf = (uint32_t)mpz_sizeinbase(c->s, 2);
     const uint32_t dict_size = (uint32_t)1u << (edwards_get_naf_w() - 2);
-    if (local_save_overwrite_ok(c->save_path, cm)) {
+    const bool written = local_save_overwrite_ok(c->save_path, cm) &&
         ecm_edwards_write_stage1(c->save_path, cm, 2, expbuf, cur->bitnum, dict_size,
                                  Px, Py, cur->Rx, cur->Ry, cur->Rz);
-    }
     c->last_ms = now;
     mpz_clears(d, Px, Py, NULL);
+    if (!written) {
+        c->write_failed = true;
+        std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
+        ecm_ts_fprintf(stderr, "ERROR: cannot write stage-1 checkpoint %s\n",
+                       c->save_path.c_str());
+        return 0;
+    }
 
-    if (g_stage1_stop) {
+    if (ecm_stage1_stop_requested()) {
         std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
         ecm_ts_fprintf(stdout, "checkpoint written (stop): %s @ bitnum=%u\n",
                        c->save_path.c_str(), cur->bitnum);
@@ -1174,7 +1181,7 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
 
         if (rc == 2) {
             mpz_clears(Qx, Qz, NULL);
-            return 2;
+            return ck.write_failed ? ECM_ERROR : 2;
         }
     } else {
         rc = edwards_stage1_curve(factor_out, Qx, Qz, N, sigma, s);
@@ -1183,8 +1190,9 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
     // 落盘: 把 stage-1 结果写成本地 MIDSTAGE 存档 (总是写, 即使命中因子).
     // 送进 Prime95 由独立程序 ecm_p95feeder 负责。
     if (rc >= 0) {
-        edwards_write_local_midstage(opt, sigma, idx + 1, (uint64_t)B1, (uint64_t)B2,
-                                     Qx, Qz, idx);
+        if (edwards_write_local_midstage(opt, sigma, idx + 1, (uint64_t)B1,
+                                         (uint64_t)B2, Qx, Qz, idx) && !ckpt_path.empty())
+            ecm_stage1_remove_checkpoints(ckpt_path);
     }
     mpz_clears(Qx, Qz, NULL);
     return rc;
@@ -1409,6 +1417,7 @@ struct EdSimdProg {
     const uint64_t *sigmas;
     long long last_ms;
     long long interval_ms;
+    bool write_failed = false;
 };
 
 static const ifma_ctx_t *g_simd_prog_mc = nullptr;   /* 当前批次的 modulus 上下文 */
@@ -1419,7 +1428,7 @@ static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
 
     /* --- checkpoint (与标量路径同一套写入器/路径/字段) --- */
     const long long now = stage1_now_ms();
-    const bool due = (now - pr->last_ms >= pr->interval_ms) || g_stage1_stop;
+    const bool due = (now - pr->last_ms >= pr->interval_ms) || ecm_stage1_stop_requested();
     if (due && bits_done > 0) {
         if (mc) {
             mpz_t d, Px, Py, rx, ry, rz;
@@ -1443,15 +1452,20 @@ static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
                 ifma_to_mpz_lane(rz, Rz, k, mc);
                 const uint32_t expbuf = (uint32_t)pr->s_bits;
                 const uint32_t dict_size = (uint32_t)1u << (edwards_get_naf_w() - 2);
-                if (local_save_overwrite_ok(path, cm)) {
+                if (local_save_overwrite_ok(path, cm) &&
                     ecm_edwards_write_stage1(path, cm, 2, expbuf, (uint32_t)bits_done,
-                                             dict_size, Px, Py, rx, ry, rz);
+                                             dict_size, Px, Py, rx, ry, rz)) {
                     written++;
+                } else {
+                    pr->write_failed = true;
+                    std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
+                    ecm_ts_fprintf(stderr, "ERROR: cannot write stage-1 checkpoint %s\n",
+                                   path.c_str());
                 }
             }
             pr->last_ms = now;
             mpz_clears(d, Px, Py, rx, ry, rz, NULL);
-            if (written && (g_stage1_stop || getenv("ED_SOA_DEBUG"))) {
+            if (written && (ecm_stage1_stop_requested() || getenv("ED_SOA_DEBUG"))) {
                 std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
                 ecm_ts_fprintf(stdout, "checkpoint written (simd batch %u): %zu lane(s) @ bitnum=%zu\n",
                                pr->batch_first, written, bits_done);
@@ -1468,7 +1482,7 @@ static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
         stage1_progress_set(done_f, pr->curves);
     }
 
-    return g_stage1_stop ? 1 : 0;                 /* SIGINT: 批内也能停 */
+    return (ecm_stage1_stop_requested() || pr->write_failed) ? 1 : 0;
 }
 
 /* 标量路径的"曲线内"进度: 包一层 checkpoint 回调, 每 chunk_bits(16384) 位跳一格。
@@ -1601,7 +1615,7 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
     if (aborted) {                                  /* 中途停: 不写任何存档 */
         for (int k = 0; k < 8; k++) mpz_clears(Qx[k], Qz[k], fac[k], NULL);
         ed_soa_clear(&ctx);
-        return 2;
+        return pr.write_failed ? ECM_ERROR : 2;
     }
 
     int rc = 0;
@@ -1614,8 +1628,10 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
             ecm_ts_fprintf(stdout, "  curve %u sigma=%llu -> factor found\n",
                            i, (unsigned long long)sigmas[i]);
         }
-        edwards_write_local_midstage(opt, sigmas[i], i + 1, (uint64_t)B1, (uint64_t)B2,
-                                     Qx[k], Qz[k], i);
+        if (edwards_write_local_midstage(opt, sigmas[i], i + 1, (uint64_t)B1,
+                                         (uint64_t)B2, Qx[k], Qz[k], i))
+            ecm_stage1_remove_checkpoints(
+                edwards_local_stem(opt, i, (uint64_t)B1) + ".ckpt");
     }
     for (int k = 0; k < 8; k++) mpz_clears(Qx[k], Qz[k], fac[k], NULL);
     ed_soa_clear(&ctx);
@@ -1632,7 +1648,7 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
 static void edwards_worker(EdwardsWorkerCtx *ctx) {
     const int use_simd = (ctx->opt->backend != 2) && ctx->simd_ok;
     for (;;) {
-        if (g_stage1_stop) { ctx->aborted->store(1, std::memory_order_relaxed); break; }
+        if (ecm_stage1_stop_requested()) { ctx->aborted->store(1, std::memory_order_relaxed); break; }
         uint32_t i, n;
         if (use_simd) {                                   /* 静态分批: 一批 8 条 */
             i = ctx->next->fetch_add(8, std::memory_order_relaxed);
@@ -1833,8 +1849,6 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
 
     const bool use_ckpt = !opt.tmp_dir.empty();
     if (use_ckpt) {
-        g_stage1_stop = 0;
-        signal(SIGINT, stage1_sigint_handler);
         if (!ensure_dir(opt.tmp_dir)) {
             std::cerr << "ERROR: cannot create tmp_dir: " << opt.tmp_dir << std::endl;
             mpz_clear(s);
@@ -2173,7 +2187,7 @@ static int mont_progress_cb(void *p, size_t bitnum)
         stage1_progress_set(done_f, pc->total_curves);
     }
 
-    if (g_stage1_stop) return 1;                       /* Ctrl+C: stop at this chunk */
+    if (ecm_stage1_stop_requested()) return 1;                       /* Ctrl+C: stop at this chunk */
     if (pc->interval_ms > 0) {
         const long long now = stage1_now_ms();
         if (now - pc->last_ckpt_ms->load(std::memory_order_relaxed) >= pc->interval_ms) {
@@ -2291,6 +2305,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
      * mpz-based and has no such limit, but a sigma that works with every consumer is
      * strictly better -- and 2^53 still leaves ~9e15 curves to choose from. */
     std::vector<uint64_t> sigmas(curves);
+    std::atomic<int> checkpoint_failed(0);
     for (uint32_t i = 0; i < curves; i++) {
         const uint64_t fixed_sigma = opt.fixed_sigma64 + i;
         bool adopted = false;
@@ -2339,7 +2354,8 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                 ck.bitnum = 0;
                 mont_ckpt_ident(&ck, i, sigmas[i], B1, torsion, nbits,
                                 use_simd ? "ifma" : "mpn");
-                mont_ckpt_write(mont_ckpt_path(ckpt_stem, i), N, &ck);
+                if (mont_ckpt_write(mont_ckpt_path(ckpt_stem, i), N, &ck) != 0)
+                    checkpoint_failed.store(1);
                 mont_ckpt_clear(&ck);
                 n_seeded++;
             }
@@ -2423,11 +2439,6 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     for (uint32_t i = 0; i < curves; i++)
         lane_bits[i].store(ckpt_done[i] ? (uint64_t)nbits : (uint64_t)bit_off[i],
                            std::memory_order_relaxed);
-
-    if (use_ckpt) {
-        g_stage1_stop = 0;
-        signal(SIGINT, stage1_sigint_handler);
-    }
 
     auto worker = [&]() {
         if (use_simd) {
@@ -2523,11 +2534,12 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                             ifma_to_mpz_lane(ck.Z0, state.data() + 1 * lw, k, &ctx.mc);
                             ifma_to_mpz_lane(ck.X1, state.data() + 2 * lw, k, &ctx.mc);
                             ifma_to_mpz_lane(ck.Z1, state.data() + 3 * lw, k, &ctx.mc);
-                            mont_ckpt_write(mont_ckpt_path(ckpt_stem, c), N, &ck);
+                            if (mont_ckpt_write(mont_ckpt_path(ckpt_stem, c), N, &ck) != 0)
+                                checkpoint_failed.store(1);
                             mont_ckpt_clear(&ck);
                         }
                     }
-                    if (g_stage1_stop) break;      /* SIGINT: leave after saving */
+                    if (ecm_stage1_stop_requested()) break;      /* SIGINT: leave after saving */
                     start = bitnum;                /* autosave: continue from here */
                 }
                 if (rc == MONT_SOA_ERROR) { init_failed.store(1); break; }
@@ -2558,7 +2570,8 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                         mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, nbits, "ifma");
                         if (ck.hit) mpz_set(ck.factor, factors[c]);
                         else        mpz_set(ck.xout, xs[c]);
-                        mont_ckpt_write(mont_ckpt_path(ckpt_stem, c), N, &ck);
+                        if (mont_ckpt_write(mont_ckpt_path(ckpt_stem, c), N, &ck) != 0)
+                            checkpoint_failed.store(1);
                         mont_ckpt_clear(&ck);
                     }
                 }
@@ -2622,10 +2635,11 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                         mpz_set(ck.Z0, st.Z0);
                         mpz_set(ck.X1, st.X1);
                         mpz_set(ck.Z1, st.Z1);
-                        mont_ckpt_write(mont_ckpt_path(ckpt_stem, c), N, &ck);
+                        if (mont_ckpt_write(mont_ckpt_path(ckpt_stem, c), N, &ck) != 0)
+                            checkpoint_failed.store(1);
                         mont_ckpt_clear(&ck);
                     }
-                    if (g_stage1_stop) break;      /* SIGINT: leave after saving */
+                    if (ecm_stage1_stop_requested()) break;      /* SIGINT: leave after saving */
                     start = st.bitnum;             /* autosave: continue from here */
                 }
                 if (rc == MONT_LADDER_ERROR) {
@@ -2667,7 +2681,8 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                     mont_ckpt_ident(&ck, c, sigmas[c], B1, torsion, nbits, "mpn");
                     if (ck.hit) mpz_set(ck.factor, factors[c]);
                     else        mpz_set(ck.xout, xs[c]);
-                    mont_ckpt_write(mont_ckpt_path(ckpt_stem, c), N, &ck);
+                    if (mont_ckpt_write(mont_ckpt_path(ckpt_stem, c), N, &ck) != 0)
+                        checkpoint_failed.store(1);
                     mont_ckpt_clear(&ck);
                 }
                 mpz_clears(g, x, Qx, Qz, inv, NULL);
@@ -2698,8 +2713,9 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     stage1_bar_destroy(bar);
     free(bits);
 
-    if (init_failed.load()) {
-        ecm_ts_fprintf(stderr, "ERROR: mont SIMD context init failed\n");
+    if (init_failed.load() || checkpoint_failed.load()) {
+        ecm_ts_fprintf(stderr, "ERROR: mont stage-1 %s\n",
+                       checkpoint_failed.load() ? "checkpoint write failed" : "SIMD context init failed");
         mpz_clear(s);
         for (uint32_t i = 0; i < curves; i++) { mpz_clear(factors[i]); mpz_clear(xs[i]); }
         free(factors); free(array_found); free(hit);
@@ -2771,6 +2787,7 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
                            const Stage1RunOptions &opt, Stage1RunResult *out) {
+    ecm_stage1_set_backup_limit(opt.ckpt_backups);
     if (opt.use_mont) {
         return run_mont_stage1(N, B1, B2, curves, savefilename, saveappend,
                                n_expr, opt, out);
@@ -3035,7 +3052,7 @@ static std::string p95_quote(const std::string &s) {
 
 // Run one already-parsed queue task (ECM2= or ECMSTAGE2=), report factors, and
 // advance the worktodo file. Returns true to keep processing, false to abort
-// the queue (backend prepare failed).
+// the queue (including a stop request, which leaves the task in worktodo).
 static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                           uint64_t sigma, bool sigma_fixed,
                           const std::string &save_name, const std::string &n_expr,
@@ -3104,6 +3121,12 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
         free(result.factors);
         free(result.array_found);
         free(result.sigmas);
+    }
+
+    if (result.ret == ECM_ERROR && ecm_stage1_stop_requested()) {
+        ecm_ts_fprintf(stdout, "STOP: Stage1 interrupted; worktodo unchanged: %s\n",
+                       line.c_str());
+        return false;
     }
 
     if (result.ret == ECM_ERROR) {
@@ -3448,6 +3471,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     opt.ckpt_ms = (cfg.ckpt_seconds > 0.0)
                          ? (unsigned long)(cfg.ckpt_seconds * 1000.0)
                          : 0UL;
+    opt.ckpt_backups = (unsigned)std::clamp(cfg.ckpt_backups, 0,
+                                           (int)ECM_STAGE1_MAX_BACKUPS);
     opt.gpu_mul_path = cfg.kernel_mul;
     opt.gpu_sqr_path = cfg.kernel_sqr;
     opt.gpu_add_path = cfg.kernel_add;
@@ -3493,6 +3518,12 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     int processed = 0;
     const bool full_sync = (cfg.sync_mode == "full");
     while (true) {
+        // Also cover a stop arriving after a successful task but before the next read.
+        if (ecm_stage1_stop_requested()) {
+            ecm_ts_fprintf(stdout, "STOP: queue interrupted; remaining worktodo unchanged\n");
+            if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
+            return 1;
+        }
         std::string line;
         if (!ecm_worktodo_first_line(worktodo_path, worker, line)) {
             break;
@@ -3662,6 +3693,7 @@ int main(int argc, char **argv){
     int worker_index = 1;      // --worker N: ini + worktodo section (see the flag's parse site)
     std::string tmp_dir;                  // 本地 stage-1 落盘目录
     std::string p95_dir_ignored;          // 兼容旧脚本: 现在由 ecm_p95feeder 处理
+    uintptr_t stop_handle = 0;
     // parse args simple
     std::vector<std::string> pos;
     for(int i=1;i<argc;i++){
@@ -3760,6 +3792,12 @@ int main(int argc, char **argv){
                 std::cerr << "Invalid --ckpt value, expected number of seconds" << std::endl;
                 return 1;
             }
+            continue;
+        }
+        // Inherited manual-reset event created by ecm_gui for immediate graceful stop.
+        if(a == "--stage1-stop-handle" && i+1<argc){
+            try { stop_handle = (uintptr_t)std::stoull(argv[++i]); }
+            catch (...) { std::cerr << "Invalid Stage1 stop handle" << std::endl; return 1; }
             continue;
         }
         if(a == "--exp-cache" && i+1<argc){
@@ -3989,6 +4027,12 @@ int main(int argc, char **argv){
         }
         return print_gpu_info(ini_used, worker_index, eff_device, eff_param, gpu_info_bits);
     }
+
+    if (stop_handle && !ecm_stage1_set_stop_handle(stop_handle)) {
+        std::cerr << "Invalid inherited Stage1 stop handle" << std::endl;
+        return 1;
+    }
+    ecm_stage1_install_stop_handler();
 
     if (pos.empty()) {
         // No positional B1/B2 → queue-manager mode (reads ecm.ini + worktodo).

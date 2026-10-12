@@ -49,6 +49,8 @@ public:
     bool start(std::string &err);
     // Terminates the whole job (children included). Safe to call when stopped.
     void stop();
+    // Ask the child to checkpoint at its next safe Stage1 boundary and exit.
+    bool request_checkpoint_stop();
     // Autostart helper: start when the config says so and the worker is stopped.
     void set_autostart(bool on) { autostart_ = on; }
     bool autostart() const { return autostart_; }
@@ -107,6 +109,7 @@ private:
     void *thread_ = nullptr;             // HANDLE
     void *pipe_read_ = nullptr;          // HANDLE
     void *pipe_write_ = nullptr;         // HANDLE
+    void *stop_event_ = nullptr;          // inherited manual-reset event
     unsigned long pid_ = 0;
 
     WorkerRunState state_ = WorkerRunState::Stopped;
