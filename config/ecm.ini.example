@@ -380,6 +380,16 @@ stage2_factor_timeout = 30
 # stage2_tune_profile 为空时供 Auto B2 使用的旧 .cprof 成本配置。保持原二进制、设备、算术及标定资格检
 # 查；新的完整 ECM tune 不放宽旧合同。留空不提供旧配置。
 stage2_cost_profile =
+# [0|1]; default=1
+# For ECMSTAGE2=1,2,p,-1 worktodo tasks, add M=2^p-1 to the arithmetic candidates after reconstructing
+# N, matching the Stage1 save and verifying N divides M (2 <= p <= 16384). Switching requires eligible
+# tune data and memory admission; fixed B2 with unlocked D also requires a measured win against the
+# ordinary default. 0 disables automatic candidates; explicit --carrier-exponent still takes priority.
+# A save alone supplies no exponent.
+# 对 ECMSTAGE2=1,2,p,-1 队列任务，重建 N、核对 Stage1 save 并验证 N 整除 M=2^p-1 后，将梅森承载加入算
+# 术候选（2 <= p <= 16384）。切换须满足 tune 数据资格及显存准入；固定 B2 且 D 未锁定时还须有相对普通默
+# 认路径的实测收益。0 关闭自动候选；显式 --carrier-exponent 仍优先。单独读取 save 不推测指数。
+stage2_auto_carrier = true
 # <path>; default=""; empty=legacy_selection
 # Format-7 ECM matrix TOML, grouped by width, with column names in the first row. Older development
 # files must be regenerated. Fixed-B2 D changes require a measured win against the default; estimates

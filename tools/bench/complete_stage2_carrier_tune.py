@@ -27,6 +27,25 @@ def finished(text, budget):
     return len(w) == 2 and all(r['complete'] == '1' for r in w) and bool(elapsed) and float(elapsed[-1]) < budget
 
 
+def single_batch_only(command, b2):
+    if '--tune-d' not in command:
+        return False
+    ds = [int(d) for d in command[command.index('--tune-d')+1].split(',')]
+    for d in ds:
+        n, phi, prime = d, d, 2
+        while prime*prime <= n:
+            if n % prime == 0:
+                phi = phi//prime*(prime-1)
+                while n % prime == 0:
+                    n //= prime
+            prime += 1
+        if n > 1:
+            phi = phi//n*(n-1)
+        if b2//d+2 > phi//2:
+            return False
+    return bool(ds)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--study', type=Path, required=True)
@@ -53,16 +72,22 @@ def main():
     shutil.copy2(study/'measured.toml', profile)
     shutil.copy2(__file__, out/'collector.py')
     cases = {c['id']: c for c in data['cases']}
-    jobs = []
+    jobs, excluded = [], []
     for t in data['training']:
         log = study/'training'/(t['key']+'.log')
         if sha(log) != t['log_sha256']:
             raise ValueError('source tune log changed')
-        if not finished(log.read_text(encoding='utf-8'), data['tune_budget_seconds']):
+        text = log.read_text(encoding='utf-8')
+        w = windows(text)
+        if data.get('tune_defaults_only', False) and len(w) == 2 and all(
+                r['tested'] == '0' and r['rejected'] != '0' for r in w) and single_batch_only(t['command'], t['B2']):
+            excluded.append(dict(case=t['case'], B2=t['B2'], reason='single_batch_outside_current_tune_contract'))
+            continue
+        if not finished(text, data['tune_budget_seconds']):
             jobs.append(t)
     report = dict(complete=False, created_utc=stamp(), source_manifest_sha256=sha(study/'measurements.json'),
                   source_profile_sha256=data['profile_sha256'], binary_sha256=data['executable_sha256'],
-                  device=data['device'], collector_sha256=sha(__file__), jobs=len(jobs), receipts=[])
+                  device=data['device'], collector_sha256=sha(__file__), jobs=len(jobs), excluded=excluded, receipts=[])
     env = {k: v for k, v in os.environ.items() if not k.startswith('NTT_') and k != 'CUDA_VISIBLE_DEVICES'}
     env.update(NTT_NO_PROGRESS='1', CUDA_LAUNCH_BLOCKING='0')
     try:
@@ -79,6 +104,9 @@ def main():
                        '--tune-carrier-exponent', str(c['exponent']), '--tune-level', '10',
                        '--tune-b2', str(t['B2']), '--tune-repeats', '1',
                        '--tune-budget-seconds', str(a.budget_seconds*attempt)]
+                if data.get('tune_defaults_only', False):
+                    at = t['command'].index('--tune-d')
+                    cmd += ['--tune-d', t['command'][at+1]]
                 write(prefix.with_suffix('.command.json'), cmd)
                 before, start = sha(profile), time.perf_counter()
                 print('COMPLETE WINDOW', t['key'], 'attempt', attempt, flush=True)

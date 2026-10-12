@@ -1034,6 +1034,20 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_auto_carrier",
+      "field": "auto_carrier",
+      "type": "bool",
+      "default": true,
+      "domain": "[0|1]",
+      "fx": "Stage2_worktodo_carrier_candidates",
+      "parser": "strict",
+      "description": [
+        "For ECMSTAGE2=1,2,p,-1 worktodo tasks, add M=2^p-1 to the arithmetic candidates after reconstructing N, matching the Stage1 save and verifying N divides M (2 <= p <= 16384). Switching requires eligible tune data and memory admission; fixed B2 with unlocked D also requires a measured win against the ordinary default. 0 disables automatic candidates; explicit --carrier-exponent still takes priority. A save alone supplies no exponent.",
+        "对 ECMSTAGE2=1,2,p,-1 队列任务，重建 N、核对 Stage1 save 并验证 N 整除 M=2^p-1 后，将梅森承载加入算术候选（2 <= p <= 16384）。切换须满足 tune 数据资格及显存准入；固定 B2 且 D 未锁定时还须有相对普通默认路径的实测收益。0 关闭自动候选；显式 --carrier-exponent 仍优先。单独读取 save 不推测指数。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_tune_profile",
       "field": "tune_profile",
       "type": "string",

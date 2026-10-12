@@ -45,12 +45,24 @@ def main():
         checked = collect(data, cases[row['case']], item, prefix, row['process_seconds'], read(row['telemetry']))
         if checked['wall'] != row['wall'] or checked['result'] != row['result']:
             raise ValueError('collector result mismatch')
-        if any(int(row['s4'].get(k, 0)) <= 0 for k in ('gmp_selftest_cases', 'gmp_checked', 'full_checks')):
+        if any(int(row['s4'].get(k, 0)) <= 0 for k in ('gmp_selftest_cases', 'gmp_checked')):
             raise ValueError('mandatory arithmetic coverage missing')
-        carrier = row['exponent'] if row['arm'] == 'carrier' else 0
-        if row['result']['carrier_exponent'] != carrier:
+        carrier = row['result']['carrier_exponent'] if row['arm'] == 'auto' else (row['exponent'] if row['arm'] == 'carrier' else 0)
+        if carrier not in (0, row['exponent']) or row['result']['carrier_exponent'] != carrier:
             raise ValueError('arithmetic lock mismatch')
         text = log.read_text(encoding='utf-8')+'\n'+debug.read_text(encoding='utf-8')
+        # full_checks counts only tiny batches checked in entirety, not the
+        # mandatory primitive selftests. Some valid wide shapes have none.
+        # Require the actual primitive and drained async-oracle contracts.
+        for label, count_key, bad_key in [('mont_selftest', 'cases', 'mismatches'),
+                ('s4_oracle_pack_check', 'cases', 'bad'), ('s4_div_check', 'cases', 'bad')]:
+            check = fields(text, label)
+            if int(check.get(count_key, 0)) <= 0 or int(check.get(bad_key, -1)) != 0:
+                raise ValueError('primitive arithmetic check missing or failed: ' + label)
+        oracle = fields(text, 's4_oracle_stats')
+        if int(oracle.get('selected', 0)) <= 0 or oracle.get('selected') != oracle.get('compared') or \
+                int(oracle.get('samples', 0)) <= 0 or oracle.get('pending') != '0':
+            raise ValueError('asynchronous GMP oracle was not fully drained')
         reduction, point = fields(text, 's4_reduce_mode'), fields(text, 'point_mersenne_mode')
         if carrier and (reduction.get('algorithm') != 'mersenne' or point.get('enabled') != '1'):
             raise ValueError('carrier did not enable the expected fast arithmetic')
@@ -71,10 +83,11 @@ def main():
         if row['category'] == 'timing':
             groups[row['case'], row['B2'], row['arm']].append(derived)
     pairs = []
+    arms = ('generic', 'carrier', 'auto') if data.get('auto_arm', False) else ('generic', 'carrier')
     for c in data['cases']:
         for b in data['bounds']:
             pair = dict(exponent=c['exponent'], bits=c['bits'], B1=c['B1'], sigma=c['sigma'], B2=b)
-            for arm in ('generic', 'carrier'):
+            for arm in arms:
                 runs = groups[c['id'], b, arm]
                 if len(runs) != data['repetitions']:
                     raise ValueError('incomplete timing cell')
@@ -86,6 +99,7 @@ def main():
                 ntt = runs[0]['stats']['ntt_workspace_stats']
                 owner = runs[0]['stats']['real_batched_folddevice']
                 pair[arm] = dict(samples=len(times), mean_seconds=statistics.mean(times),
+                                 carrier_exponent=runs[0]['result']['carrier_exponent'],
                                  median_seconds=statistics.median(times),
                                  std_seconds=statistics.stdev(times) if len(times)>1 else None,
                                  process_seconds=statistics.mean(r['process_seconds'] for r in runs),
@@ -112,6 +126,10 @@ def main():
             pair.update(speedup=pair['generic']['mean_seconds']/pair['carrier']['mean_seconds'],
                         change_percent=100*(pair['carrier']['mean_seconds']/pair['generic']['mean_seconds']-1),
                         factor_coverage_equal=pair['generic']['factor_coverage']==pair['carrier']['factor_coverage'])
+            if 'auto' in arms:
+                pair['auto_speedup'] = pair['generic']['mean_seconds']/pair['auto']['mean_seconds']
+                if pair['auto']['factor_coverage'] != pair['generic']['factor_coverage']:
+                    raise ValueError('automatic arm factor coverage differs')
             pairs.append(pair)
     training = []
     for t in data['training']:
@@ -123,7 +141,7 @@ def main():
                    if line.startswith('ecm_tune_window_done:')]
         training.append(dict(case=t['case'], B2=t['B2'], seconds=t['seconds'], windows=windows,
                              log=str(log), log_sha256=sha(log)))
-    totals = {arm: sum(r[arm]['mean_seconds'] for r in pairs) for arm in ('generic', 'carrier')}
+    totals = {arm: sum(r[arm]['mean_seconds'] for r in pairs) for arm in arms}
     output = a.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     report = dict(complete=True, study=str(a.study.resolve()), binary_sha256=data['executable_sha256'],
@@ -151,8 +169,8 @@ def main():
     write(str(output)+'_analysis.json', report)
     flat = []
     for row in pairs:
-        r = {k: v for k, v in row.items() if k not in ('generic', 'carrier')}
-        for arm in ('generic', 'carrier'):
+        r = {k: v for k, v in row.items() if k not in arms}
+        for arm in arms:
             r.update({arm+'_'+k: v for k, v in row[arm].items() if k != 'tune_plan'})
         flat.append(r)
     with Path(str(output)+'_comparison.csv').open('w', encoding='utf-8-sig', newline='') as f:
@@ -174,8 +192,11 @@ def main():
                 ax.plot([r['bits'] for r in rows], [r['speedup'] for r in rows], 'o-', color='#2468a2')
                 ax.axhline(1, linestyle='--', color='#888888')
             else:
-                for arm, label, color, marker in [('generic','Ordinary target N','#858585','o'),
-                                                  ('carrier','Mersenne carrier + tuned D','#2468a2','s')]:
+                styles = [('generic','Ordinary target N','#858585','o'),
+                          ('carrier','Mersenne carrier + measured D','#2468a2','s')]
+                if 'auto' in arms:
+                    styles.append(('auto','Worktodo automatic candidates','#dc8e24','^'))
+                for arm, label, color, marker in styles:
                     key = 'mean_seconds' if kind=='time' else 'ntt_full_peak_mib'
                     ax.plot([r['bits'] for r in rows], [r[arm][key] for r in rows],
                             marker=marker, label=label, color=color)
@@ -189,8 +210,12 @@ def main():
         if kind != 'speedup':
             axes[0,0].legend(fontsize=8)
         fig.suptitle('Same cofactor saves: current native tune, ordinary versus Mersenne carrier')
-        fig.text(.01, -.03, 'RTX 4060 Laptop, user setting 2400 MHz; same binary, frozen tune profile and memory budgets. '
-                 'Automatic D differs by route; Stage1/tune/startup excluded. n='+str(data['repetitions'])+
+        clocks = [v for runs in groups.values() for r in runs for v in r['active_clocks']]
+        clock_label = f'active SM clock median {statistics.median(clocks):.0f} MHz' if clocks else 'active clocks unavailable'
+        same_d = all(len({r[arm]['D'] for arm in arms}) == 1 for r in pairs)
+        d_label = 'Same automatic D in all arms' if same_d else 'Automatic D chosen independently per route'
+        fig.text(.01, -.03, data['device']['name']+', '+clock_label+'; same binary, frozen tune profile and memory budgets. '
+                 +d_label+'; Stage1/planning/tune/startup excluded. n='+str(data['repetitions'])+
                  '; component peaks are not process peaks. Source: '+output.name+'_analysis.json', fontsize=8)
         fig.tight_layout()
         for extension in ('png','svg'):

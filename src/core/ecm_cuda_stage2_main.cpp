@@ -221,6 +221,7 @@ struct Options {
     uint64_t b2 = 0, d = 0, skip = 0, curves = 0, batch = 0, arena = 0;
     unsigned carrier_exponent=0;
     bool has_carrier=false;
+    bool auto_carrier=ecm_config::defaults::stage2_stage2_auto_carrier;
     int device = -1, worker = 1;
     int log_level = -1;
     bool dry = false, once = false, selection = false, help = false;
@@ -291,6 +292,7 @@ Options arguments(int argc, char **argv) {
             o.carrier_exponent=static_cast<unsigned>(p);
             o.has_carrier=true;
         }
+        else if (a == "--auto-carrier") {const auto n=num();if(n>1)throw std::runtime_error("auto-carrier must be 0 or 1");o.auto_carrier=n!=0;o.portable_cli.insert(a);}
         else if (a == "--skip-curves") { o.skip = num(); o.selection = true; }
         else if (a == "--curves") { o.curves = num(); o.selection = true; }
         else if (a == "--batch-mb") { o.batch = num(); o.has_batch = true; }
@@ -547,6 +549,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     if(!o.condition_tag.empty())cmd+=L" --tune-condition-tag "+quote(fs::path(o.condition_tag).wstring());
     arg(L"--stage1-cost-mhz",o.stage1_mhz);arg(L"--target-factor-bits",o.factor_bits);
     arg(L"--inferred-carrier-exponent",o.inferred_carrier);
+    arg(L"--auto-carrier",o.auto_carrier?1:0);
     // Startup calibration belongs to the parent queue, never every curve child.
     arg(L"--short-calibration",0);
     arg(L"--batch-mb",batch);arg(L"--arena-mb",o.arena);arg(L"--owner-budget-mb",o.owner_mb);
@@ -877,6 +880,7 @@ void help() {
         "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results FILE\n"
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
+        "         --auto-carrier 0|1 (override stage2_auto_carrier; verified worktodo candidates, tune selection required)\n"
         "Tune: --tune ntt|ecm --tune-level 1..10 --tune-file FILE.toml --tune-repeats N\n"
         "      ECM: --tune-exponents bits,... or --tune-save FILE [--tune-carrier-exponent p]\n"
         "           --tune-budget-seconds 1800 --tune-error-limit 0.08; incremental final summaries.\n"
@@ -986,6 +990,7 @@ int driver(Options o) {
     if (!ecm_queue_config_load(ini.string(), o.worker, cfg) && !o.ini.empty())
         throw std::runtime_error("cannot read explicit ini: " + ini.string());
     Settings s = stage2_ini(ini, o.worker);
+    if(!o.portable_cli.count("--auto-carrier"))o.auto_carrier=s.auto_carrier;
     if(!o.portable_cli.count("--tune-ignore"))o.tune_ignore=s.tune_ignore;
     if(!o.portable_cli.count("--tune-budget-seconds"))o.tune_budget=s.tune_budget;
     if(!o.portable_cli.count("--short-calibration-seconds"))o.short_budget=s.short_budget;
@@ -1189,8 +1194,8 @@ int driver(Options o) {
                 Big n;std::string error;
                 if(!ecm_compute_stage2_n(fields.task,n.z,error))throw TaskInputError("worktodo N: "+error);
                 expected_n=number(n.z);save=absolute_from(tmp,fields.task.save_name);
-                o.inferred_carrier=fields.task.k=="1" && fields.task.b=="2" && fields.task.c=="-1" &&
-                    fields.task.n<=16384?unsigned(fields.task.n):0;
+                o.inferred_carrier=o.auto_carrier && fields.task.k=="1" && fields.task.b=="2" && fields.task.c=="-1" &&
+                    fields.task.n>=2 && fields.task.n<=ecm_stage2::max_input_bits?unsigned(fields.task.n):0;
             } else save=absolute_from(cwd,o.save);
             for(const auto &path:writable)if(same_path(save,path))throw std::runtime_error("save path conflicts with writable queue/log/result state");
             if(!o.dry&&!o.plan_only)fatal_log=log;
@@ -1238,6 +1243,9 @@ int driver(Options o) {
                      << o.ratio_adjust << ' ' << o.stage1_seconds << ' ' << o.stage1_batch;
             if(o.carrier_exponent)identity << " carrier_exponent=" << o.carrier_exponent;
             if(o.has_carrier)identity << " carrier_request=" << o.carrier_exponent;
+            // Enabled is the existing inference policy: retain legacy progress
+            // identities for the default, distinguish the new disabled policy.
+            if(!o.auto_carrier)identity << " auto_carrier=0";
             if(o.short_batch_tune)identity << " short_ntt_batch_tune=1";
             if(o.auto_b2&&!b2)identity << " auto_profile=" << (o.tune_profile.empty()?ecm_stage2::sha256_file(o.cost_profile):o.tune_profile)
                 << ' ' << o.auto_min << ' ' << o.auto_max << " tune_ignore=" << o.tune_ignore

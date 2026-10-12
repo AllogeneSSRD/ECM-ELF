@@ -67,7 +67,7 @@ Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目
 
 ## 规划与依据
 
-`--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。合法梅森worktodo结合已知因子和save验证后，可自动比较普通与承载。
+`--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。默认`stage2_auto_carrier=1`允许标准梅森worktodo在已知因子、save和整除验证后比较普通与承载；设置0关闭自动候选，CLI `--auto-carrier 0|1`覆盖INI，显式carrier锁定仍优先。候选资格、性能保护及指数上限见[Auto B2 / tune](../architecture/AUTO_B2.md)。
 
 `--tune ecm --tune-level 1`保留位宽和B2档位，每档从默认模型D/P开始测相邻项；只有中位数降低超过2%且越过双方2×MAD噪声界限才继续沿邻档移动。默认1800秒软预算，`--tune-budget-seconds`可覆盖。缺NTT资料时先补轻量组件校准。`--tune-save FILE --tune-carrier-exponent p`测有效save的普通/承载路径。`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号列表，其中exponents表示实际位数；显式D表限定搜索范围。格式7按位宽保存公共字段和`matrix`，首行为列名，后续行与表头对齐；不产生`[sample.*]`或未访问的模型网格。旧开发TOML须重新生成，失败不覆盖原文件。控制台保留`ecm_tune_progress`等进度，内部诊断保存在证据日志。
 

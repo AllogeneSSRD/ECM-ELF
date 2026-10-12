@@ -124,7 +124,7 @@ bool portable_admit(const Options &o,const Record &r,pt::Shape &s,std::string &p
 std::vector<unsigned> portable_carriers(const Options &o,const Record &r) {
     if(o.has_carrier)return {o.carrier_exponent};
     std::vector<unsigned> out{0};
-    if(o.inferred_carrier) {
+    if(o.auto_carrier && o.inferred_carrier) {
         ecm_stage2::ModulusContext m;std::string error;
         if(m.configure(r.n.c_str(),16,o.inferred_carrier,error))out.push_back(o.inferred_carrier);
         else throw std::runtime_error("validated worktodo carrier failed divisibility: "+error);
@@ -480,7 +480,7 @@ void ensure_portable_calibration(Options &o,const Record &r,const Settings &sett
     auto profile=portable_read(o.tune_profile);const auto current=portable_condition(o);const auto ignore=pt::Ignore::parse(o.tune_ignore);
     Big n,plus;mpz_set_str(n.z,r.n.c_str(),16);mpz_add_ui(plus.z,n.z,1);const unsigned bits=unsigned(mpz_sizeinbase(n.z,2));
     const bool ordinary_kind=mpz_popcount(plus.z)==1;
-    const unsigned needed_carrier=o.has_carrier?o.carrier_exponent:o.inferred_carrier;
+    const unsigned needed_carrier=o.has_carrier?o.carrier_exponent:(o.auto_carrier?o.inferred_carrier:0);
     unsigned low=16385,high=0;bool components=false,ordinary=false,carrier_covered=!needed_carrier;
     const auto path=portable_shape(o,r,std::min(r.b1,uint64_t(20))+42000,210,0);
     for(const auto &s:profile.samples)if(pt::measured(s) && pt::matches(profile.conditions.at(et::uint(s,"condition")),current,ignore)) {

@@ -1,5 +1,23 @@
 # tune 后的余因子普通/梅森承载对照
 
+## 受限预算的高位宽补充
+
+`prepare_stage2_wide_carrier.py` 从本地 PrimeNet HTML 选择实际位宽不超过指定档且最接近的余因子，逐项验证因子并剥离重复幂。高位宽 Stage1 保存点用 Python 与 GMP-ECM 独立核对；`--lower-study` 可复用已完成扫描的原九个低位宽保存点。维护中的 `ecm_dataset` 数据库不变，临时输入数据库只写入忽略目录。
+
+```powershell
+python tools/bench/prepare_stage2_wide_carrier.py --exe build_cuda_cmake/stage2_auto_carrier_20261012/ecm_cuda_stage2.exe --lower-study data/experiments/stage2_d_compression_20261011/paired_default/candidate --output data/experiments/wide_carrier/inputs --b2 26000000 260000000
+```
+
+`bench_stage2_tuned_carrier.py --prepared-inputs` 接受这种尚未计时的独立有效输入。`--tune-defaults-only` 将搜索限制为普通和承载两条路径的默认 D，`--b2` 可覆盖边界，`--auto-arm` 增加从 worktodo 推断候选的第三条计时路径。普通和承载路径仍显式锁定算术；三条路径共用同一冻结 TOML。
+
+单批 G=1 的默认计划超出当前 ECM tune 合同，工具保留运行数据；自动选型缺乏配对实测时保留普通默认。`complete_stage2_carrier_tune.py` 补齐软预算截断的多批窗口，保持默认 D 限定，将单批范围列为排除项而非成功校准。预算到期完成当前测量，不能将软预算当作强制墙钟上限。
+
+```powershell
+python tools/bench/bench_stage2_tuned_carrier.py --exe build_cuda_cmake/stage2_auto_carrier_20261012/ecm_cuda_stage2.exe --reference-study data/experiments/wide_carrier/inputs --prepared-inputs --profile data/experiments/wide_carrier/seed.toml --output data/experiments/wide_carrier/timing --device 0 --tune-defaults-only --auto-arm --tune-budget-seconds 90
+```
+
+`seed.toml` 可由小范围 `--tune ntt` 生成；不会写入生产 tune 文件。`analyze_stage2_tuned_carrier.py` 同时审计三条路径并生成 CSV、JSON、PNG/SVG，图注使用实测活跃时钟，不假设频率设置。所有实验应串行占用 GPU，功能门禁和采样不要并发。
+
 `bench_stage2_tuned_carrier.py`复用一轮已完成位宽扫描的有效余因子save。先调用生产程序现有的局部D搜索，分别测普通模数和梅森承载；所有训练结束后冻结同一性能文件，交替运行两条路径。两侧都保持D=0，由生产选型器读取冻结文件选择D；这项比较包含承载及其选型效果，不是固定D下单个归约内核的比较。
 
 输入仍为相同目标N。显式`carrier_exponent=0`锁定普通路径，显式p锁定承载路径，工具先验证N整除2ᵖ−1。完整梅森数的独立控制任务不是这个A/B的替代输入。

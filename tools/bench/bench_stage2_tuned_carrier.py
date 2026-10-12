@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+import json
 
 from bench_stage2_n_scaling import Monitor, collect, read, sha, stamp, write
 from bench_stage2_production import freeze
@@ -28,9 +29,17 @@ def main():
     p.add_argument('--timeout', type=int, default=1800)
     p.add_argument('--resume', action='store_true')
     p.add_argument('--skip-training', action='store_true', help='Use an already frozen, externally trained profile for holdout timing')
+    p.add_argument('--prepared-inputs', action='store_true', help='Accept independently validated preparation-only inputs')
+    p.add_argument('--tune-defaults-only', action='store_true', help='Bound tune to the two arithmetic paths default D values')
+    p.add_argument('--auto-arm', action='store_true', help='Also time worktodo inference with stage2_auto_carrier=1')
+    p.add_argument('--b2', type=int, nargs='+', help='Override B2 grid without changing saved Stage1 inputs')
     a = p.parse_args()
     if min(a.repeats, a.tune_budget_seconds, a.timeout) <= 0:
         p.error('counts and budgets must be positive')
+    if a.b2:
+        if any(b <= 0 or b > (1 << 63)-8193 for b in a.b2):
+            p.error('B2 must be positive and fit the engine signed index range')
+        a.b2 = sorted(set(a.b2))
     out = a.output.resolve()
     mon = Monitor(a.device)
     env = {k: v for k, v in os.environ.items() if not k.startswith('NTT_') and k != 'CUDA_VISIBLE_DEVICES'}
@@ -45,7 +54,8 @@ def main():
                 raise ValueError('use a fresh output directory')
             out.mkdir(parents=True, exist_ok=True)
             previous = read(a.reference_study / 'measurements.json')
-            if not previous['complete'] or previous['failures'] or previous['device'] != mon.identity:
+            prepared = a.prepared_inputs and previous.get('preparation_only', False) and not previous['runs']
+            if (not previous['complete'] and not prepared) or previous['failures'] or previous['device'] != mon.identity:
                 raise ValueError('need verified completed study on this GPU')
             exe = a.exe.resolve()
             identity = freeze(exe)
@@ -68,16 +78,19 @@ def main():
                 cases.append(dict(c, save=str(folder / 'stage1.save')))
             if not cases:
                 raise ValueError('no cases')
+            if any(b <= max(c['B1'] for c in cases) for b in (a.b2 or previous['bounds'])):
+                raise ValueError('Every B2 must exceed saved B1')
             shutil.copy2(a.profile, out / 'training.toml')
             shutil.copy2(a.profile, out / 'seed.toml')
             ini = out / 'bench.ini'
-            ini.write_text(f'device={a.device}\nstage2_device={a.device}\nstage2_debug_log=true\n', encoding='ascii')
+            ini.write_text(f'device={a.device}\nstage2_device={a.device}\nstage2_debug_log=true\nstage2_auto_carrier=1\n', encoding='ascii')
             data = dict(complete=False, created_utc=stamp(), device=mon.identity, identity=identity,
                         executable=str(out / 'bin' / exe.name), executable_sha256=sha(exe),
                         dll_sha256=sha(exe.parent / 'gmp-10.dll'), ini_sha256=sha(ini),
                         seed_sha256=sha(out / 'seed.toml'), collector_sha256=sha(__file__),
                         profile_source=str(a.profile.resolve()), skip_training=a.skip_training,
-                        memory=previous['memory'], bounds=previous['bounds'], cases=cases,
+                        memory=previous['memory'], bounds=a.b2 or previous['bounds'], cases=cases,
+                        tune_defaults_only=a.tune_defaults_only, auto_arm=a.auto_arm,
                         reference_manifest_sha256=sha(a.reference_study / 'measurements.json'),
                         repetitions=a.repeats, tune_repeats=1, tune_budget_seconds=a.tune_budget_seconds,
                         environment={k: env[k] for k in ('NTT_NO_PROGRESS', 'CUDA_LAUNCH_BLOCKING')},
@@ -111,6 +124,23 @@ def main():
                                 '--tune-save', c['save'], '--tune-carrier-exponent', str(c['exponent']),
                                 '--tune-level', '10', '--tune-b2', str(b), '--tune-repeats', '1',
                                 '--tune-budget-seconds', str(data['tune_budget_seconds'])]
+                if data.get('tune_defaults_only', False):
+                    ds = set()
+                    for carrier in (0, c['exponent']):
+                        query = common + ['--save', c['save'], '--b2', str(b), '--d', '0', '--plan-only',
+                            '--carrier-exponent', str(carrier), '--short-calibration', '0',
+                            '--tune-profile', str(out/'absent.toml')]
+                        q = subprocess.run(query, cwd=out, env=env, capture_output=True, text=True,
+                                           errors='replace', timeout=a.timeout)
+                        query_prefix = prefix.with_name(prefix.name + f'_plan_{carrier}')
+                        write(query_prefix.with_suffix('.command.json'), query)
+                        query_prefix.with_suffix('.log').write_text(q.stdout+q.stderr, encoding='utf-8')
+                        choices = [json.loads(x) for x in q.stdout.splitlines() if x.startswith('{')]
+                        d = next((x['default_D'] for x in choices if 'default_D' in x), None)
+                        if q.returncode or not d:
+                            raise ValueError('Cannot establish protected default D')
+                        ds.add(d)
+                    cmd += ['--tune-d', ','.join(map(str, sorted(ds)))]
                 if prefix.with_suffix('.log').exists():
                     raise ValueError('unrecorded training log; retain and investigate before resuming')
                 write(prefix.with_suffix('.command.json'), cmd)
@@ -140,7 +170,10 @@ def main():
         for repeat in range(1, data['repetitions']+1):
             for b in data['bounds']:
                 for i, c in enumerate(data['cases']):
-                    for arm in (('generic', 'carrier') if (i+repeat)%2 else ('carrier', 'generic')):
+                    arms = ('generic', 'carrier') if (i+repeat)%2 else ('carrier', 'generic')
+                    if data.get('auto_arm', False):
+                        arms += ('auto',)
+                    for arm in arms:
                         sequence.append((c, b, 'timing', repeat, arm))
         (out / 'runs').mkdir(exist_ok=True)
         for index, (c, b, category, repeat, arm) in enumerate(sequence):
@@ -156,6 +189,13 @@ def main():
                             '--short-calibration', '0', '--factor-only', '--log-level', 'curve',
                             '--log', str(prefix.with_suffix('.log')), '--results', str(prefix.with_suffix('.result.jsonl')),
                             '--debug-log-file', str(prefix.with_suffix('.debug.log'))]
+            if arm == 'auto':
+                queue = prefix.with_suffix('.worktodo.txt')
+                n = int(c['N_hex'], 16); removed = ((1 << c['exponent'])-1)//n
+                queue.write_text(f'ECMSTAGE2=1,2,{c["exponent"]},-1,"{c["save"]}",{b},0,1,"{removed}"\n', encoding='ascii')
+                for option in ('--save', '--curves', '--carrier-exponent'):
+                    at = cmd.index(option); del cmd[at:at+2]
+                cmd += ['--worktodo', str(queue), '--once']
             write(prefix.with_suffix('.command.json'), cmd)
             samples = [mon.sample()]
             begin = time.perf_counter()
@@ -179,8 +219,10 @@ def main():
                 raise ValueError('timing invocation failed: ' + str(prefix))
             verify(c)
             row = collect(data, c, dict(case=c['id'], B2=b, category=category, repeat=repeat, arm=arm), prefix, elapsed, samples)
-            if row['result']['carrier_exponent'] != carrier:
+            if arm != 'auto' and row['result']['carrier_exponent'] != carrier:
                 raise ValueError('locked arithmetic path was not used')
+            if arm == 'auto' and row['result']['carrier_exponent'] not in (0, c['exponent']):
+                raise ValueError('automatic arithmetic path is outside validated candidates')
             row.update(sequence_index=index, command=cmd, debug_sha256=sha(prefix.with_suffix('.debug.log')),
                        telemetry=str(prefix.with_suffix('.telemetry.json')),
                        telemetry_sha256=sha(prefix.with_suffix('.telemetry.json')))

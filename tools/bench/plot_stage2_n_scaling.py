@@ -91,10 +91,10 @@ def plot_version_comparison(args):
         ax.grid(alpha=.2)
         ax.spines[['top', 'right']].set_visible(False)
     axes[0, 0].legend(fontsize=8)
-    fig.suptitle('Complete Stage2: three GPU versions / Prime95' if third else
-                 'Complete Stage2: previous GPU / current GPU / Prime95', fontsize=13)
-    fig.text(.01, -.025, 'GPU: identical N, B1, sigma, Stage1 saves and memory budgets; separate sessions, clocks/power may differ. '
-             'Independent y scales; error bars: sample SD where n>=2; n=1 has no repeatability estimate.\nPrime95: exact N and nominal B2 matched; B1, sigma and actual B2 differ. Source: '
+    fig.suptitle(args.title + (' / Prime95' if cpu else ''), fontsize=13)
+    fig.text(.01, -.025, 'GPU: identical N, B1, sigma, Stage1 saves and memory budgets; separate invocations, clocks/power may differ. '
+             'Independent y scales; error bars: sample SD where n>=2; n=1 has no repeatability estimate.\n'
+             + ('Prime95: exact N and nominal B2 matched; B1, sigma and actual B2 differ. ' if cpu else '') + 'Source: '
              + args.version_comparison.name +
              (' / ' + args.additional_comparison.name if third else ''), fontsize=8)
     fig.tight_layout()

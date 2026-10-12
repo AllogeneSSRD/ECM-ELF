@@ -1,12 +1,14 @@
 # ECM Stage2 的 D、φ(D)、P 与计算量
 
-固定数学资料。本页讨论采用相对素数 baby 集的多项式 BSGS Stage2，不规定本仓库默认候选、设备或显存预算。Prime95 的表与版本见 [Prime95 Poly Stage2](PRIME95_STAGE2.md#3-d-候选表的含义与适配条件)；本仓库实际候选来源、2080项的选取和搜索规则见 [Auto B2 / tune](../architecture/AUTO_B2.md#共享-d-候选表)。
+固定数学资料。本页讨论采用相对素数 baby 集的多项式 BSGS Stage2，不规定本仓库默认候选、设备或显存预算。Prime95 的表与版本见 [Prime95 Poly Stage2](PRIME95_STAGE2.md#3-d-候选表的含义与适配条件)；本仓库实际候选来源、筛选和搜索规则见 [Auto B2 / tune](../architecture/AUTO_B2.md#共享-d-候选表)。
 
 ## 1. D 的作用和生成方式
 
 D 是巨步间隔。Stage1 输出点为 Q，将后续需要检查的素数 q 写成
 
-$$q=iD\pm j,\qquad 1\le j\le D/2,\quad \gcd(j,D)=1.$$
+$$
+q=iD\pm j,\qquad 1\le j\le D/2,\quad \gcd(j,D)=1.
+$$
 
 在模某个待找因子的椭圆曲线上，若 qQ 为无穷远点，则 [iD]Q 与 [j]Q 的 x 坐标相遇。由于 x(A)=x(−A)，一个 baby 点同时服务正负两个剩余类。这是多项式批量求值的 BSGS 几何基础；小素数、非单位剩余类和边界必须另外覆盖。[Zimmermann–Dodson, *20 years of ECM*, §3.1–3.3](https://members.loria.fr/PZimmermann/papers/ecm.pdf)
 
@@ -16,7 +18,9 @@ D 可以从小素数轮及其幂扩展产生，也可以直接枚举一个受限
 
 y-smooth 表示 **所有素因子均不超过 y**。47-smooth D 的表达式为
 
-$$D=\prod_{\ell\in\{2,3,5,7,11,13,17,19,23,29,31,37,41,43,47\}}\ell^{e_\ell},\qquad e_\ell\ge0.$$
+$$
+D=\prod_{\ell\in\{2,3,5,7,11,13,17,19,23,29,31,37,41,43,47\}}\ell^{e_\ell},\qquad e_\ell\ge0.
+$$
 
 指数可以大于1，D不要求平方自由，也不要求包含因子基中的每个素数。例如 2¹⁰、30030 和 810810 都是47-smooth；带53因子的1591590不是。
 
@@ -26,8 +30,10 @@ $$D=\prod_{\ell\in\{2,3,5,7,11,13,17,19,23,29,31,37,41,43,47\}}\ell^{e_\ell},\qq
 
 对 D>1，有
 
-$$\varphi(D)=D\prod_{\ell\mid D}\left(1-\frac1\ell\right),\qquad
-\frac{D}{P}=\frac{2D}{\varphi(D)}=2\prod_{\ell\mid D}\frac{\ell}{\ell-1}.$$
+$$
+\varphi(D)=D\prod_{\ell\mid D}\left(1-\frac{1}{\ell}\right),\qquad
+\frac{D}{P}=\frac{2D}{\varphi(D)}=2\prod_{\ell\mid D}\frac{\ell}{\ell-1}.
+$$
 
 引入不同的小素因子，可以用较少的相对素数 baby 点服务较大的巨步间隔。相同P下，D/P较大通常意味着需要生成的giant点较少。只增大已包含素数的指数不会改善D/P。
 
@@ -46,7 +52,9 @@ $$\varphi(D)=D\prod_{\ell\mid D}\left(1-\frac1\ell\right),\qquad
 
 对 D>2，单位剩余类j与D−j配对。若配对固定，则2j≡0 mod D；j为单位时推出D∣2，与D>2矛盾。所以每对恰有一个代表落在1≤j≤⌊D/2⌋，得到
 
-$$J=\{j:1\le j\le\lfloor D/2\rfloor,\ \gcd(j,D)=1\},\qquad |J|=\varphi(D)/2=P.$$
+$$
+J=\{j:1\le j\le\lfloor D/2\rfloor,\ \gcd(j,D)=1\},\qquad |J|=\varphi(D)/2=P.
+$$
 
 这决定F多项式次数和baby点数，P不能与D独立任意指定。对于同一个D，φ和P唯一确定。
 
@@ -76,7 +84,9 @@ smooth整数可以为奇数或偶数。上述正负配对对任意D>2成立；�
 
 固定算术位宽S、B2和执行器，采用从低索引生成giant点的几何约定：
 
-$$I=\lfloor B2/D\rfloor+2,\quad q=\lfloor I/P\rfloor,\quad r=I\bmod P,\quad G=\lceil I/P\rceil.$$
+$$
+I=\lfloor B2/D\rfloor+2,\quad q=\lfloor I/P\rfloor,\quad r=I\bmod P,\quad G=\lceil I/P\rceil.
+$$
 
 I是giant点数，G是G树块数；q个完整P块，另有可能的r点尾树。其他实现可以只处理有效区间，此时I应换为相应段数，例如Prime95使用对齐后的B2_start/B2_end，不能直接套用本式。
 
@@ -84,18 +94,22 @@ I是giant点数，G是G树块数；q个完整P块，另有可能的r点尾树。
 
 记C_G(P,S)为一棵P叶G产品树的成本，C_fold(P,S)为一次满次数fold成本：
 
-$$\begin{aligned}
+$$
+\begin{aligned}
 T_2={}&T_{baby}(P,D,S)+T_F(P,S)+T_{inverse}(P,S)\\
 &+T_{descent}(P,S)+T_{accum}(P,N)+T_{giant}(I,D,S)\\
-&+qC_G(P,S)+\mathbf1_{r>0}C_G(r,S)\\
+&+qC_G(P,S)+\mathbf{1}_{r>0}C_G(r,S)\\
 &+(G-1)C_{fold}(P,S)+T_{small}(B1,B2,D,S).
-\end{aligned}$$
+\end{aligned}
+$$
 
 这些是互斥工作组成的模型，不把嵌套的NTT/归约计时再次加入总时间。首块初始化H，后续G−1块fold；尾块、部分乘积和点生成方法影响具体成本。
 
 忽略尾块和整数取整，主循环可写成
 
-$$T_{main}\approx\frac{B2}{D}\left[\frac{C_G(P,S)}P+\frac{C_{fold}(P,S)}P\right]+T_{giant}.$$
+$$
+T_{main}\approx\frac{B2}{D}\left[\frac{C_G(P,S)}{P}+\frac{C_{fold}(P,S)}{P}\right]+T_{giant}.
+$$
 
 **要比较的是D，以及单位系数成本C(P)/P。只比较G、D/P或P都不够。**
 
@@ -143,5 +157,5 @@ $$T_{main}\approx\frac{B2}{D}\left[\frac{C_G(P,S)}P+\frac{C_{fold}(P,S)}P\right]
 
 - [Zimmermann–Dodson, *20 years of ECM*, §3.1–3.3](https://members.loria.fr/PZimmermann/papers/ecm.pdf)：BSGS、正负剩余类、多项式树及分块Stage2。本文的D/P变化与成本比较是基于上述几何的独立推导。
 - [Prime95表和搜索](PRIME95_STAGE2.md#3-d-候选表的含义与适配条件)：本地31.06源码版本、有效分支、缺失素数及B2_start。
-- [当前候选生成与规模](../architecture/AUTO_B2.md#来源筛选与规模)：47截断、379419项参考域、2080项并集、标记和覆盖限制。
+- [当前候选生成与规模](../architecture/AUTO_B2.md#来源筛选与规模)：47截断、379419项参考域、共享表筛选、标记和覆盖限制。
 - [当前NTT](../architecture/NTT.md)、[内存](../architecture/MEMORY.md)：实际整数packing和生命周期；不能把其具体边界当作所有ECM程序的数学常数。

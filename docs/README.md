@@ -30,7 +30,7 @@
 - [固定数学与第三方源码资料](reference/README.md)：保留完整推导、引用代码、伪代码及研究条件，独立于本仓库实现状态。
 - [TODO](TODO.md)：尚未完成或需要重新验证的工作。
 
-共享D候选表和跨NTT区间tune已接入源码，当前规则见 [Auto B2 / tune](architecture/AUTO_B2.md)。来源研究、379419项参考枚举及待验收边界见 [Stage2 D候选表草稿](development/STAGE2_D_CATALOG_DRAFT.md)；新实现尚无完整矩阵性能验收。
+1094项共享D候选表和跨NTT区间tune已接入源码，当前规则见 [Auto B2 / tune](architecture/AUTO_B2.md)。普通余因子27格交替矩阵、冻结tune选型和有限预算查询的通过范围见 [Stage2性能](performance/STAGE2.md#d-候选压缩与边界覆盖)；379419项参考枚举、来源研究及未完成边界见 [Stage2 D候选表草稿](development/STAGE2_D_CATALOG_DRAFT.md)。
 
 ## 数据位置
 
