@@ -89,12 +89,19 @@ static void test_first_line_and_advance() {
     });
 
     std::string line;
+    std::string err;
+    check(ecm_worktodo_read_first_line(path, 2, line, err) == WorktodoReadResult::Task &&
+              line == kLine2 && err.empty(),
+          "shared reader finds worker 2 task", line);
     check(ecm_worktodo_first_line(path, 1, line) && line == kLine1,
           "worker 1 gets the unprefixed line", line);
     line.clear();
     check(ecm_worktodo_first_line(path, 2, line) && line == kLine2,
           "worker 2 gets its own section", line);
     check(!ecm_worktodo_first_line(path, 3, line), "worker 3 has no task line");
+    check(ecm_worktodo_read_first_line(path, 3, line, err) == WorktodoReadResult::Empty &&
+              line.empty() && err.empty(),
+          "shared reader distinguishes an empty worker section");
 
     // Worker 2 must not touch worker 1's line, headers or comments.
     check(ecm_worktodo_advance(path, 2, kLine2, WorktodoAction::MarkError),
@@ -131,6 +138,9 @@ static void test_first_line_and_advance() {
           "sectionless file: worker 1 reads the plain line", line);
 
     std::remove(path.c_str());
+    check(ecm_worktodo_read_first_line(path, 1, line, err) == WorktodoReadResult::Error &&
+              line.empty() && !err.empty(),
+          "shared reader distinguishes a missing worktodo from an empty queue");
 }
 
 static void test_list_workers() {

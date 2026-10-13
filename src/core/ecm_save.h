@@ -19,8 +19,8 @@ std::string opencl_ecm_build_saved_n_expr(const std::string &original_expr, cons
  * `param_id` selects the parametrization recorded in the `PARAM=` key and mixed into the
  * line checksum: 3 = the historical batch family (default, keeps every earlier caller
  * byte-identical) or 2 = the 6-torsion "batch 2" family (gpu_param = 2).  gmp-ecm reads
- * both back (`-param 2` / `-param 3`); Prime95 can read neither, it only accepts
- * sigma_type 0/1/3.
+ * both back (`-param 2` / `-param 3`); Prime95 can read param 3 but not param 2
+ * (its GMP-ECM resume reader maps param 3 to sigma_type 3).
  */
 bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N, double B1,
                                   uint32_t firstsigma, uint32_t curves, mpz_t *factors,

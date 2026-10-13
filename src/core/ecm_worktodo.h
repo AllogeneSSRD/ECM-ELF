@@ -68,8 +68,15 @@ bool ecm_compute_stage2_n(const EcmStage2Task &task, mpz_t N, std::string &err);
 // Compute N = (k*b^n + c) / (f1 * f2 * ...) for a Prime95 ECM2= task.
 bool ecm_compute_ecm2_n(const Ecm2Task &task, mpz_t N, std::string &err);
 
-// Read the first non-empty, non-comment line of `path`. Returns false if the
-// file is missing or has no task line.
+// Read the first task for one worker. Empty is distinct from an unreadable or
+// missing file; on Error, `err` explains the I/O failure. `line` and `err` are
+// cleared before reading. Worker <= 0 ignores sections.
+enum class WorktodoReadResult { Task, Empty, Error };
+WorktodoReadResult ecm_worktodo_read_first_line(const std::string &path, int worker,
+                                               std::string &line, std::string &err);
+
+// Legacy bool form: false means either empty or unreadable. New queue consumers
+// should use ecm_worktodo_read_first_line so I/O failure cannot mean "done".
 bool ecm_worktodo_first_line(const std::string &path, std::string &line);
 
 // Advance worktodo past the first task line: on success the line is removed; on

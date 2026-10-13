@@ -14,13 +14,14 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集：CUDA/CGBN 与 OpenCL GPU
 <a id="comparison"></a>
 ## 与现有主流工具相比
 
-本仓库面向 GMP-ECM、Prime95 和 PrMers 使用的 ECM 工作流。它把 OpenCL、CUDA/CGBN 与 CPU 路径接入统一的 Stage1 驱动、INI 和任务队列，同时保留各后端自己的曲线表示与检查点格式；完成的 save 只在参数化和指数语义匹配时交给外部 Stage2。[程序与后端](#programs) 和 [save 与 checkpoint](#queues) 说明实际兼容边界。
+ECM-ELF 提供可独立运行的多后端 ECM 工作流：使用 CUDA/CGBN、OpenCL 或 CPU 批量执行 Stage1，再由本仓库的 CUDA 多项式 Stage2，或符合条件的外部工具继续处理完成的 save。
 
-CUDA/CGBN 路径提供原生 Windows GPU Stage1、Suyama PARAM0 以及可选的其他曲线族。PARAM0 save 可进入合适的 GMP-ECM 或 Prime95 流程；PARAM2 的接收端则有限制。本仓库另有独立 CUDA 多项式 Stage2，消费经验证的归一化 PARAM0 save，并为队列任务保存逐曲线回执。[独立 Stage2](#stage2) 与 [Stage2 使用文档](docs/usage/STAGE2.md) 描述输入资格和续跑方式。
+- **计算路径：** CUDA 与 OpenCL 覆盖不同 GPU 平台；CPU 提供 GMP 标量和 AVX-512 IFMA 批量实现。各路径共用 Stage1 任务入口，实际可用位宽与算法以构建版本为准。
+- **独立 Stage2：** CUDA Stage2 使用精确整数多项式运算，支持直接读档、独立队列、逐曲线续跑，以及基于实测资料的参数调优与 Auto B2。[Stage2 使用](docs/usage/STAGE2.md)列出输入和资源限制。
+- **长任务管理：** worktodo、worker、Windows GUI 和 Prime95 交接支持批量任务。Stage1 在安全边界写入检查点并轮换备份；Stage2 用完成回执恢复队列进度。[队列与交接](#queues)说明各文件的职责。
+- **存档互通：** 符合条件的 Suyama PARAM0 和 batch PARAM3 save 可交给 GMP-ECM 或 Prime95。
 
-OpenCL 路径强调跨平台运行和可选算子，适合比较不同设备与内核实现；CPU 路径提供 Edwards 和 Suyama-Montgomery 两种曲线族，以及 GMP 标量和 AVX-512 IFMA SIMD 实现。相对性能取决于 N、B1、曲线批量、设备和构建，不能从后端名称推断。[旧版 CPU 对照](#historical-performance) 保留原 README 的数据与限制；当前测量口径见 [Stage1 性能](docs/performance/STAGE1.md) 和 [Stage2 性能](docs/performance/STAGE2.md)。
-
-任务队列、Windows GUI、Prime95 交接、概率模型和因子数据工具把计算接入现有 GIMPS 工作流。[队列与交接](#queues)、[GUI 与工具](#android-tools) 及 [工具目录](tools/README.md) 说明它们各自负责的部分。
+性能比较与适用范围见 [Stage1 性能](docs/performance/STAGE1.md)、[Stage2 性能](docs/performance/STAGE2.md)和[历史性能记录](#historical-performance)；结论以各自注明的输入、设备、构建及计时边界为准。
 
 ## 目录
 
@@ -70,12 +71,63 @@ echo '(2^421-1)' | .\ecm_cuda.exe -gpu --gpu-param 0 -gpucurves 32 -d 0 1e5 0
 
 # CPU Suyama-Montgomery；auto 在支持的机器上选 SIMD
 echo '(2^1277-1)' | .\ecm.exe --method mont --backend auto -gpucurves 8 1e5 0
-
-# 队列模式：不带 B1/B2，--worker 同时选择 INI 与 worktodo 的分区
-.\ecm_cuda.exe -ini .\ecm.ini --worker 1
 ```
 
 单次运行的形式为 `echo '<N>' | <ecm.exe 或 ecm_cuda.exe> [选项] B1 [B2]`；无位置参数时进入 Stage1 队列模式。`-gpu`、`--method edwards`、`--method mont` 选择互斥的 Stage1 方法。`-d` 是当前程序列出的设备编号；`--gpu-info` 可报告 CUDA 档位与建议批量，OpenCL 构建会说明该查询不适用。
+
+### 使用 worktodo 运行 Stage1
+
+以下示例假设 `ecm_cuda.exe`、`ecm_cuda_stage2.exe` 和 `ecm.ini` 位于同一目录，并从该目录运行命令；已有 INI 时将这些键合并进去。创建 `ecm.ini`：
+
+```ini
+[Worker #1]
+method = gpu
+gpu_param = 0
+device = 0
+worktodo = worktodo.txt
+finished = worktodo.finished.txt
+tmp_dir = .
+stage2_worktodo = stage2_worktodo.txt
+stage2_finished = stage2_worktodo.finished.txt
+```
+
+创建 `worktodo.txt`，其中 `ECM2` 的末尾字段依次为 B1、B2、曲线数；`B2=0` 表示只运行 Stage1：
+
+```text
+[Worker #1]
+ECM2=1,2,3001,-1,10000,0,8
+```
+
+```powershell
+.\ecm_cuda.exe -ini .\ecm.ini --worker 1
+```
+
+该命令不带位置参数，依次消费所选 worker 的任务。完成的任务写入 `worktodo.finished.txt`；正常中断时未完成任务留在 `worktodo.txt`，重启同一命令可从有效 checkpoint 恢复。`ecm.exe` 也使用同一队列入口，但应按所选 CPU/OpenCL 方法配置。每个队列只运行一个消费进程；不同 worker 的队列和输出路径应分开。详见[队列与交接](#queues)和 [Stage1 使用](docs/usage/STAGE1.md)。
+
+### 运行和调优 CUDA Stage2
+
+Stage1 完成并生成 `m3001_1e4.save` 后，创建独立的 `stage2_worktodo.txt`；这里的 B2 为显式上界，save 文件名必须与实际产物一致：
+
+```text
+[Worker #1]
+ECMSTAGE2=1,2,3001,-1,"m3001_1e4.save",1000000
+```
+
+```powershell
+# 可选：按当前 Stage2 队列和 save 测量完整 ECM；不会消费队列
+.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --tune ecm --tune-level 1 --tune-file .\stage2_ecm_tune.toml
+
+# 执行队列中的一项；生成调优文件后可加 --tune-profile .\stage2_ecm_tune.toml
+.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --once
+
+# 或跳过队列，直接处理同一 save（不要与上述队列命令重复执行）
+.\ecm_cuda_stage2.exe --save .\m3001_1e4.save --b2 1000000 --device 0
+
+# 可选：仅测量 NTT 组件，不等同于完整 ECM 调优
+.\ecm_cuda_stage2.exe --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
+```
+
+ECM tune 默认使用所选 worker 的 Stage2 队列；队列不存在时改测通用位宽网格，也可用 `--tune-save FILE --tune-b2 B2` 指定单个 save。调优有时间预算，生成的档案可由 `--tune-profile FILE` 或 INI 的 `stage2_tune_profile` 加载。显式 B2 无需先调优；自动选择 B2 还需要合格的 Stage1 成本和 Stage2 profile。Stage2 队列、直接读档和 Auto B2 的限制见[独立 CUDA Stage2](#stage2)、[Stage2 使用](docs/usage/STAGE2.md)及 [Auto B2](docs/architecture/AUTO_B2.md)。
 
 常用命令行参数如下；完整参数和准确默认值请运行相应程序的 `--help` 并查 [INI 参考](docs/ECM_INI_REFERENCE.md)。
 
@@ -150,7 +202,7 @@ ECM2=1,2,3001,-1,100000,0,64
 
 最终 `.save` 含可交给兼容 Stage2 的归一化点及任务字段；运行中 checkpoint 含未完成的点状态、指数偏移和实现布局。CUDA、OpenCL、CPU Edwards、CPU Montgomery 的 checkpoint 各按自身格式验证，不能凭相似文件名跨后端恢复。正常停止或 Ctrl+C 要等安全边界保存；强制结束可能丢失尚未写完的 checkpoint。恢复时重跑原任务并保留相同的 N、B1、参数化、指数模式和相容构建，日志会说明是否读到检查点。详见 [Stage1 使用](docs/usage/STAGE1.md)。
 
-save 的兼容范围也有限：CUDA/CPU PARAM0 的合格文本记录可用于相应 GMP-ECM/Prime95 流程；PARAM2 带 `PARAM=2`，GMP-ECM 可读，Prime95 不接受；本仓库的 CUDA Stage2 只接受它明确支持的归一化 PARAM0 记录。checksum 检查文件完整性，不证明 GPU 点乘数学正确。验收应独立核对 N、B1、σ、指数模式和最终点。
+save 的兼容范围也有限：CUDA/CPU PARAM0 及 CUDA/OpenCL PARAM3 的合格文本记录可用于相应 GMP-ECM/Prime95 流程；PARAM2 带 `PARAM=2`，GMP-ECM 可读，Prime95 不接受；本仓库的 CUDA Stage2 只接受它明确支持的归一化 PARAM0 记录。checksum 检查文件完整性，不证明 GPU 点乘数学正确。验收应独立核对 N、B1、σ、指数模式和最终点。
 
 <a id="stage2"></a>
 ## 独立 CUDA Stage2

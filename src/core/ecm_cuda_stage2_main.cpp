@@ -161,24 +161,6 @@ bool comment(const std::string &line) {
     const auto t = trim(line);
     return t.empty() || t[0] == '#' || t[0] == ';';
 }
-// Unlike the legacy helper, a read failure must not look like an empty queue.
-bool queue_first(const fs::path &path,int worker,std::string &line) {
-    std::ifstream input(path);
-    if(!input)throw std::runtime_error("cannot read worktodo: "+path.string());
-    int scope=1;
-    std::string text;
-    while(std::getline(input,text)) {
-        if(text.compare(0,3,"\xef\xbb\xbf")==0)text.erase(0,3);
-        text=trim(text);
-        bool bracket=false;
-        const int section=ecm_worktodo_parse_worker_header(text,&bracket);
-        if(section){scope=section;continue;}
-        if(bracket||text.empty()||text[0]=='#'||scope!=worker)continue;
-        line=text;return true;
-    }
-    if(input.bad())throw std::runtime_error("worktodo read failed: "+path.string());
-    return false;
-}
 std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
@@ -1206,7 +1188,13 @@ int driver(Options o) {
         std::string task_line,expected_n;
         std::vector<Record> plan;
         uint64_t skip=o.skip,count=o.curves,b2=o.b2?o.b2:s.b2;
-        if(queue && !queue_first(worktodo,o.worker,task_line))break;
+        if(queue) {
+            std::string read_error;
+            const auto read = ecm_worktodo_read_first_line(
+                worktodo.string(), o.worker, task_line, read_error);
+            if(read == WorktodoReadResult::Error)throw std::runtime_error(read_error);
+            if(read == WorktodoReadResult::Empty)break;
+        }
         try {
             if(queue) {
                 QueueSelection fields;
@@ -1347,7 +1335,11 @@ int driver(Options o) {
         if(!queue||o.dry||o.plan_only)break;
         if(state.done<state.total)break;
         std::string current;
-        if(!queue_first(worktodo,o.worker,current)||current!=task_line)
+        std::string read_error;
+        const auto read = ecm_worktodo_read_first_line(
+            worktodo.string(), o.worker, current, read_error);
+        if(read == WorktodoReadResult::Error)throw std::runtime_error(read_error);
+        if(read != WorktodoReadResult::Task||current!=task_line)
             throw std::runtime_error("task completed but worktodo changed; queue and progress retained");
         if(!stage2_queue::finished_written(finished,state.run,task_line))
             append(finished,"# stage2_task_id="+state.run+"\n"+task_line);

@@ -105,10 +105,10 @@ target_include_directories(opencl_ecm_entry PUBLIC
 
 target_link_libraries(opencl_ecm_entry ${GMP_LIBRARY})
 
-add_executable(ecm
-    src/opencl_ecm_stage1.cpp
-    src/opencl_backend_glue.cpp
-    src/cl_probe.cpp
+# The Stage1 driver and CPU paths are identical source files in the OpenCL and
+# CUDA executables. Keep one source inventory while compiling them per target:
+# each executable still supplies its own GPU backend and compile definitions.
+set(ECM_STAGE1_COMMON_SOURCES
     src/core/ecm_driver.cpp
     src/core/ecm_params_init.cpp
     src/core/ecm_checkpoint.cpp
@@ -117,32 +117,30 @@ add_executable(ecm
     src/core/ecm_gpu_common.cpp
     src/core/ecm_queue_config.cpp
     src/core/ecm_worktodo.cpp
-    # Prime95 worktodo.add handoff for finished tasks (docs/usage/GUI.md 18) plus the
-    # p95_worktodo helpers it shares with tools/p95feeder.
+    src/core/ecm_expr.cpp
     src/core/p95_transfer.cpp
     src/core/p95_worktodo.cpp
-    src/opencl_ecm_debug_utils.cpp
     src/opencl_ecm_log.cpp
-    src/opencl_ecm_mont.cpp
-    src/opencl_ecm_path_registry.cpp
-    src/opencl_ecm_selftest.cpp
     src/cpu/ecm_edwards_cpu.cpp
     src/cpu/ecm_edwards_save.cpp
     src/cpu/simd_edwards.cpp
     src/cpu/simd_mont_ifma.cpp
-    # Suyama-sigma Montgomery stage 1 (Prime95 sigma_type=1 / gmp-ecm -param 0):
-    # scalar MPN path + the 8-lane AVX512-IFMA batch.  See
-    # docs/architecture/STAGE1.md.
     src/cpu/ecm_mont_cpu.cpp
     src/cpu/simd_mont_curve.cpp
-    # Mid-stage-1 checkpoints for both of those paths (internal format).
     src/core/ecm_mont_ckpt.cpp
-    # s = torsion * lcm(1..B1): one product-tree builder shared by the GPU batch,
-    # the CPU Edwards path and the CPU Montgomery path.
     src/core/ecm_stage1_exp.cpp
-    # persistent, self-validating cache for that value: at B1 = 260e6 the product is 375 Mbit
-    # and costs ~10 s to build, which every queue task would otherwise repeat.
     src/core/ecm_stage1_exp_cache.cpp
+)
+
+add_executable(ecm
+    ${ECM_STAGE1_COMMON_SOURCES}
+    src/opencl_ecm_stage1.cpp
+    src/opencl_backend_glue.cpp
+    src/cl_probe.cpp
+    src/opencl_ecm_debug_utils.cpp
+    src/opencl_ecm_mont.cpp
+    src/opencl_ecm_path_registry.cpp
+    src/opencl_ecm_selftest.cpp
 )
 
 # 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
@@ -268,35 +266,8 @@ if(ECM_ENABLE_CUDA)
     option(ECM_CUDA_ENABLE_PRAC "Build experimental resident/PRAC Stage1 kernels (slow template compilation)" OFF)
 
     add_executable(ecm_cuda
-        # Shared, backend-neutral host TUs (same files `ecm` uses)
-        src/core/ecm_driver.cpp
-        src/core/ecm_params_init.cpp
-        src/core/ecm_checkpoint.cpp
-        src/core/ecm_stage1_checkpoint_runtime.cpp
-        src/core/ecm_save.cpp
-        src/core/ecm_gpu_common.cpp
-        src/core/ecm_queue_config.cpp
-        src/core/ecm_worktodo.cpp
-        # Prime95 worktodo.add handoff for finished tasks (docs/usage/GUI.md 18).
-        src/core/p95_transfer.cpp
-        src/core/p95_worktodo.cpp
-        src/opencl_ecm_log.cpp
+        ${ECM_STAGE1_COMMON_SOURCES}
         src/opencl_ecm_runtime_config.cpp
-        src/cpu/ecm_edwards_cpu.cpp
-        src/cpu/ecm_edwards_save.cpp
-        # ecm_driver.cpp (shared) calls the CPU Edwards SIMD batch unconditionally,
-        # so this target needs the two AVX512 TUs as well without them the link
-        # fails on ed_soa_* / ifma_to_mpz_lane.  The AVX512 COMPILE_OPTIONS set
-        # above are per-source-file (directory scoped) and so apply here too.
-        src/cpu/simd_edwards.cpp
-        src/cpu/simd_mont_ifma.cpp
-        # ecm_driver.cpp also dispatches the Suyama-sigma Montgomery stage-1 path
-        # (--mont / ini mont=1), so both of its TUs are needed here as well.
-        src/cpu/ecm_mont_cpu.cpp
-        src/cpu/simd_mont_curve.cpp
-        src/core/ecm_mont_ckpt.cpp
-        src/core/ecm_stage1_exp.cpp
-        src/core/ecm_stage1_exp_cache.cpp
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         kernels/cuda/cgbn_stage1.cu

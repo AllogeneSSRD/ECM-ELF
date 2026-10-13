@@ -478,9 +478,18 @@ bool ecm_worktodo_first_line(const std::string &path, std::string &line) {
 }
 
 bool ecm_worktodo_first_line(const std::string &path, int worker, std::string &line) {
+    std::string err;
+    return ecm_worktodo_read_first_line(path, worker, line, err) == WorktodoReadResult::Task;
+}
+
+WorktodoReadResult ecm_worktodo_read_first_line(const std::string &path, int worker,
+                                               std::string &line, std::string &err) {
+    line.clear();
+    err.clear();
     std::ifstream in(path);
     if (!in.is_open()) {
-        return false;
+        err = "cannot read worktodo: " + path;
+        return WorktodoReadResult::Error;
     }
     int section = 1;                        // lines before any header = worker 1
     std::string l;
@@ -496,9 +505,13 @@ bool ecm_worktodo_first_line(const std::string &path, int worker, std::string &l
         strip_bom(t);
         trim(t);
         line = t;
-        return true;
+        return WorktodoReadResult::Task;
     }
-    return false;
+    if (in.bad()) {
+        err = "worktodo read failed: " + path;
+        return WorktodoReadResult::Error;
+    }
+    return WorktodoReadResult::Empty;
 }
 
 bool ecm_worktodo_advance(const std::string &path, const std::string &first_line,

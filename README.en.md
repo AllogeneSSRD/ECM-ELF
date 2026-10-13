@@ -14,13 +14,14 @@ This page retains the purpose of each entry point, runnable commands, configurat
 <a id="comparison"></a>
 ## Compared with established ECM tools
 
-ECM-ELF serves workflows that also use GMP-ECM, Prime95 and PrMers. It brings OpenCL, CUDA/CGBN and CPU Stage1 paths into one driver, INI file and task queue, while each backend retains its own curve representation and checkpoint format. A completed save can be handed to an external Stage2 consumer only when the parametrization and exponent semantics match. See [programs and backends](#programs) and [saves and checkpoints](#queues) for the compatibility boundaries.
+ECM-ELF provides a standalone, multi-backend ECM workflow: CUDA/CGBN, OpenCL or CPU runs batches of Stage1 curves, then this repository's CUDA polynomial Stage2 or an eligible external tool processes the completed save.
 
-The CUDA/CGBN path provides native Windows GPU Stage1 with Suyama PARAM0 and other curve families when built in. PARAM0 saves can enter a suitable GMP-ECM or Prime95 workflow; PARAM2 has narrower downstream support. This repository also has a separate CUDA polynomial Stage2 that consumes validated, normalized PARAM0 saves and records per-curve receipts for queued work. See [separate Stage2](#stage2) and the [Stage2 usage guide](docs/usage/STAGE2.md) for input eligibility and resuming work.
+- **Compute paths:** CUDA and OpenCL cover different GPU platforms; CPU offers scalar GMP and batched AVX-512 IFMA implementations. The Stage1 paths share a task entry point. Available operand sizes and algorithms depend on the build.
+- **Independent Stage2:** CUDA Stage2 uses exact integer polynomial arithmetic and supports direct save input, a separate queue, per-curve resumption, measured tuning and Auto B2. [Stage2 usage](docs/usage/STAGE2.md) lists input and resource limits.
+- **Long-running work:** worktodo, workers, the Windows GUI and Prime95 handoff support batch operation. Stage1 writes checkpoints at safe boundaries and rotates backups; Stage2 resumes queued work from completion receipts. See [queues and handoff](#queues).
+- **Save interoperability:** Eligible Suyama PARAM0 and batch PARAM3 saves can be handed to GMP-ECM or Prime95.
 
-The OpenCL path supports multiple platforms and selectable operators for comparing devices and kernel implementations. The CPU path offers Edwards and Suyama-Montgomery curves, with scalar GMP and AVX-512 IFMA SIMD implementations. Relative performance depends on the target, B1, curve batch, device and build. The [historical CPU comparison](#historical-performance) retains the earlier README measurements and their limits; current measurement methodology is documented under [Stage1 performance](docs/performance/STAGE1.md) and [Stage2 performance](docs/performance/STAGE2.md).
-
-Task queues, a Windows GUI, Prime95 handoff, probability models and factor-data tools connect the computation to existing GIMPS workflows. See [queues and handoff](#queues), [GUI and tools](#android-tools), and the [tools index](tools/README.md) for their roles.
+For performance comparisons and applicable ranges, see [Stage1 performance](docs/performance/STAGE1.md), [Stage2 performance](docs/performance/STAGE2.md) and the [historical performance record](#historical-performance). Each result is bounded by its stated input, device, build and timing scope.
 
 ## Contents
 
@@ -70,12 +71,63 @@ echo '(2^421-1)' | .\ecm_cuda.exe -gpu --gpu-param 0 -gpucurves 32 -d 0 1e5 0
 
 # CPU Suyama-Montgomery; auto selects SIMD on a supported CPU
 echo '(2^1277-1)' | .\ecm.exe --method mont --backend auto -gpucurves 8 1e5 0
-
-# Queue mode: no B1/B2; --worker selects matching INI and worktodo sections
-.\ecm_cuda.exe -ini .\ecm.ini --worker 1
 ```
 
 A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 [B2]`. With no positional bound, the program enters Stage1 queue mode. `-gpu`, `--method edwards` and `--method mont` select mutually exclusive Stage1 methods. `-d` is the device index enumerated by that program. `--gpu-info` reports CUDA tiers and suggested batch sizes; an OpenCL build reports that this query is not applicable.
+
+### Run Stage1 from worktodo
+
+This example assumes `ecm_cuda.exe`, `ecm_cuda_stage2.exe` and `ecm.ini` are in the same directory and commands run there. Merge these keys into an existing INI if you have one. Create `ecm.ini`:
+
+```ini
+[Worker #1]
+method = gpu
+gpu_param = 0
+device = 0
+worktodo = worktodo.txt
+finished = worktodo.finished.txt
+tmp_dir = .
+stage2_worktodo = stage2_worktodo.txt
+stage2_finished = stage2_worktodo.finished.txt
+```
+
+Create `worktodo.txt`. The final `ECM2` fields are B1, B2 and curve count; `B2=0` runs Stage1 only:
+
+```text
+[Worker #1]
+ECM2=1,2,3001,-1,10000,0,8
+```
+
+```powershell
+.\ecm_cuda.exe -ini .\ecm.ini --worker 1
+```
+
+With no positional bounds, this command consumes assignments for the selected worker. Completed assignments go to `worktodo.finished.txt`. On a normal interruption, unfinished assignments remain in `worktodo.txt`; rerun the command to resume from a valid checkpoint. `ecm.exe` has the same queue entry point when configured for the chosen CPU/OpenCL method. Use one consumer per queue and separate queues and output paths for different workers. See [queues and handoff](#queues) and [Stage1 usage](docs/usage/STAGE1.md).
+
+### Run and tune CUDA Stage2
+
+After Stage1 finishes and writes `m3001_1e4.save`, create a separate `stage2_worktodo.txt`. This task has an explicit B2; the save name must match the actual output:
+
+```text
+[Worker #1]
+ECMSTAGE2=1,2,3001,-1,"m3001_1e4.save",1000000
+```
+
+```powershell
+# Optional: measure complete ECM using the current Stage2 queue and save; leaves the queue untouched
+.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --tune ecm --tune-level 1 --tune-file .\stage2_ecm_tune.toml
+
+# Consume one queued assignment; after tuning, you may add --tune-profile .\stage2_ecm_tune.toml
+.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --once
+
+# Or process the same save directly without the queue (do not run both paths)
+.\ecm_cuda_stage2.exe --save .\m3001_1e4.save --b2 1000000 --device 0
+
+# Optional: measure the NTT component only; this is not a complete ECM tune
+.\ecm_cuda_stage2.exe --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
+```
+
+ECM tune reads the selected worker's Stage2 queue by default. If the queue is absent, it measures a generic bit-width grid; `--tune-save FILE --tune-b2 B2` selects one save explicitly. Tuning has a time budget, and the resulting profile can be loaded with `--tune-profile FILE` or the `stage2_tune_profile` INI key. Explicit B2 does not require tuning; Auto B2 also requires qualified Stage1 cost and a Stage2 profile. See [separate CUDA Stage2](#stage2), [Stage2 usage](docs/usage/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md) for queue, direct-save and Auto B2 limits.
 
 Common options are below. Run the relevant binary's `--help` and consult the [INI reference](docs/ECM_INI_REFERENCE.md) for all options and exact defaults.
 
@@ -150,7 +202,7 @@ Known factors, AID, sigma, curve count and save names have distinct queue semant
 
 A completed `.save` contains a normalized point and task fields for a compatible Stage2. An in-progress checkpoint contains unfinished point state, exponent position and implementation layout. CUDA, OpenCL, CPU Edwards and CPU Montgomery validate their own checkpoint formats; similar names do not make them cross-backend files. A normal stop or Ctrl+C waits for a safe save boundary. Forced termination can leave a partially written checkpoint. Resume the original task with matching N, B1, parametrization, exponent mode and compatible build; the log reports whether a checkpoint was loaded. See [Stage1 usage](docs/usage/STAGE1.md).
 
-Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 text records can feed the corresponding GMP-ECM/Prime95 workflow. PARAM2 saves carry `PARAM=2`; GMP-ECM accepts them, Prime95 does not. This repository's CUDA Stage2 accepts only the normalized PARAM0 records it explicitly supports. A checksum tests file integrity, not mathematical correctness of GPU point multiplication. Independent acceptance checks should cover N, B1, sigma, exponent mode and final point.
+Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 and CUDA/OpenCL PARAM3 text records can feed the corresponding GMP-ECM/Prime95 workflow. PARAM2 saves carry `PARAM=2`; GMP-ECM accepts them, Prime95 does not. This repository's CUDA Stage2 accepts only the normalized PARAM0 records it explicitly supports. A checksum tests file integrity, not mathematical correctness of GPU point multiplication. Independent acceptance checks should cover N, B1, sigma, exponent mode and final point.
 
 <a id="stage2"></a>
 ## Separate CUDA Stage2

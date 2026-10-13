@@ -20,6 +20,16 @@ target_include_directories(stage1_checkpoint_rotation_test PRIVATE
 ecm_target_link_gmp(stage1_checkpoint_rotation_test)
 ecm_tool_output_root(stage1_checkpoint_rotation_test)
 
+add_executable(worktodo_sections_test
+    worktodo_sections_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/ecm_worktodo.cpp)
+target_include_directories(worktodo_sections_test PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
+ecm_target_link_gmp(worktodo_sections_test)
+if(MSVC)
+    target_compile_options(worktodo_sections_test PRIVATE /utf-8)
+endif()
+ecm_tool_output_root(worktodo_sections_test)
+
 add_executable(main
     ${CMAKE_SOURCE_DIR}/src/cl_probe.cpp
     ${CMAKE_SOURCE_DIR}/src/main_test.cpp
