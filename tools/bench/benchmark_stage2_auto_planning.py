@@ -30,7 +30,7 @@ def main():
         p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--device',type=int,required=True)
     p.add_argument('--stage1-batch',type=int,default=8)
-    p.add_argument('--stage1-exponent',choices=('lcm','choose12'),default='lcm')
+    p.add_argument('--lcm',choices=('1','12'),default='1')
     p.add_argument('--lower-b2',type=int,default=12500000000)
     p.add_argument('--upper-b2',type=int,default=23700000000)
     p.add_argument('--repeats',type=int,default=3)
@@ -70,7 +70,7 @@ def main():
         '--owner-budget-mb',str(policy['fold_mb']),'--log-level','quiet',
         '--tune-profile',str(a.profile.resolve()),'--auto-b2',
         '--stage1-tune-profile',str(a.stage1_profile.resolve()),'--stage1-batch',str(a.stage1_batch),
-        '--stage1-exponent',a.stage1_exponent,'--curves','1']
+        '--lcm',a.lcm,'--curves','1']
     cases = dict(unrestricted=[],bounded=['--auto-min-b2',str(a.lower_b2),'--auto-max-b2',str(a.upper_b2)])
     rows = [];choices = {};mandatory = checked = 0
     report = dict(complete=False,repeats=a.repeats,warmups=1,source_identities=identities,

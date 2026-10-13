@@ -3,7 +3,7 @@
 #include "../ecm_ini.h"
 #include <array>
 namespace ecm_config {
-inline constexpr int layout_version=4;
+inline constexpr int layout_version=5;
 namespace defaults {
 inline constexpr char stage1_worktodo[]="worktodo.txt";
 inline constexpr char stage1_finished[]="worktodo.finished.txt";
@@ -19,15 +19,16 @@ inline constexpr bool stage1_p95_recover_lost=true;
 inline constexpr char stage1_progress_color[]="cyan";
 inline constexpr double stage1_progress_log_seconds=60;
 inline constexpr bool stage1_verbose=true;
-inline constexpr char stage1_method[]="gpu";
-inline constexpr char stage1_backend[]="auto";
-inline constexpr char stage1_field[]="auto";
+inline constexpr char stage1_curve[]="mont";
+inline constexpr char stage1_target[]="gpu";
+inline constexpr char stage1_impl[]="auto";
+inline constexpr char stage1_reduction[]="auto";
 inline constexpr uint32_t stage1_stage1_threads=0;
 inline constexpr char stage1_affinity[]="";
 inline constexpr char stage1_save_name_pattern[]="m{n}_{b1}.save";
 inline constexpr char stage1_exp_cache[]="";
 inline constexpr int stage1_naf_w=0;
-inline constexpr char stage1_exponent[]="lcm";
+inline constexpr char stage1_lcm[]="1";
 inline constexpr uint64_t stage1_sigma=0;
 inline constexpr char stage1_p95_dir[]="";
 inline constexpr int stage1_ckpt_backups=3;
@@ -147,31 +148,6 @@ inline constexpr int64_t stage2_stage1_cost_mhz_maximum=10000;
 inline constexpr int64_t stage2_stage2_target_factor_bits_minimum=0;
 inline constexpr int64_t stage2_stage2_target_factor_bits_maximum=16384;
 } // namespace limits
-inline std::string canonical_stage1_method(const std::string &value){
-    const auto v=lower(value);
-    if(v=="opencl")return "gpu";
-    if(v=="atkin-morain")return "edwards";
-    if(v=="montgomery"||v=="suyama")return "mont";
-    return v;
-}
-inline std::string canonical_stage1_backend(const std::string &value){
-    const auto v=lower(value);
-    if(v=="avx512")return "simd";
-    if(v=="scalar"||v=="mpn")return "gmp";
-    return v;
-}
-inline std::string canonical_stage1_field(const std::string &value){
-    const auto v=lower(value);
-    if(v=="mers"||v=="on"||v=="fold")return "mersenne";
-    if(v=="mont"||v=="off"||v=="cios")return "montgomery";
-    return v;
-}
-inline std::string canonical_stage1_exponent(const std::string &value){
-    const auto v=lower(value);
-    if(v=="1"||v=="gmp"||v=="gmp-ecm")return "lcm";
-    if(v=="12"||v=="prime95")return "choose12";
-    return v;
-}
 struct Stage1Values {
     std::string worktodo="worktodo.txt";
     std::string finished="worktodo.finished.txt";
@@ -187,15 +163,16 @@ struct Stage1Values {
     std::string progress_color="cyan";
     double progress_log_seconds=60;
     bool verbose=true;
-    std::string method="gpu";
-    std::string backend="auto";
-    std::string field="auto";
+    std::string curve_model="mont";
+    std::string execution_target="gpu";
+    std::string cpu_implementation="auto";
+    std::string simd_reduction="auto";
     uint32_t stage1_threads=0;
     std::string affinity="";
     std::string save_name_pattern="m{n}_{b1}.save";
     std::string exp_cache="";
     int naf_w=0;
-    std::string exponent="lcm";
+    std::string scalar_construction="1";
     uint64_t sigma=0;
     std::string p95_dir="";
     int ckpt_backups=3;
@@ -226,21 +203,22 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"progress_color",[](Stage1Values&c,const std::string&v){legacy_assign(c.progress_color,v);},false,nullptr},
     {"progress_log_seconds",[](Stage1Values&c,const std::string&v){legacy_assign(c.progress_log_seconds,v);},false,nullptr},
     {"verbose",[](Stage1Values&c,const std::string&v){legacy_assign(c.verbose,v);},false,nullptr},
-    {"method",[](Stage1Values&c,const std::string&v){c.method=canonical_stage1_method(v);},false,nullptr},
-    {"backend",[](Stage1Values&c,const std::string&v){c.backend=canonical_stage1_backend(v);},false,nullptr},
-    {"field",[](Stage1Values&c,const std::string&v){c.field=canonical_stage1_field(v);},false,nullptr},
+    {"curve",[](Stage1Values&c,const std::string&v){legacy_assign(c.curve_model,v);},false,nullptr},
+    {"target",[](Stage1Values&c,const std::string&v){legacy_assign(c.execution_target,v);},false,nullptr},
+    {"impl",[](Stage1Values&c,const std::string&v){legacy_assign(c.cpu_implementation,v);},false,nullptr},
+    {"reduction",[](Stage1Values&c,const std::string&v){legacy_assign(c.simd_reduction,v);},false,nullptr},
     {"stage1_threads",[](Stage1Values&c,const std::string&v){legacy_assign(c.stage1_threads,v);},false,nullptr},
     {"affinity",[](Stage1Values&c,const std::string&v){legacy_assign(c.affinity,v);},false,nullptr},
     {"save_name_pattern",[](Stage1Values&c,const std::string&v){legacy_assign(c.save_name_pattern,v);},false,nullptr},
     {"exp_cache",[](Stage1Values&c,const std::string&v){legacy_assign(c.exp_cache,v);},false,nullptr},
     {"naf_w",[](Stage1Values&c,const std::string&v){legacy_assign(c.naf_w,v);},false,nullptr},
-    {"exponent",[](Stage1Values&c,const std::string&v){c.exponent=canonical_stage1_exponent(v);},false,nullptr},
+    {"lcm",[](Stage1Values&c,const std::string&v){legacy_assign(c.scalar_construction,v);},false,nullptr},
     {"sigma",[](Stage1Values&c,const std::string&v){legacy_assign(c.sigma,v);},false,nullptr},
     {"p95_dir",[](Stage1Values&c,const std::string&v){legacy_assign(c.p95_dir,v);},false,nullptr},
     {"ckpt_backups",[](Stage1Values&c,const std::string&v){legacy_assign(c.ckpt_backups,v);},false,nullptr},
     {"ckpt_seconds",[](Stage1Values&c,const std::string&v){legacy_assign(c.ckpt_seconds,v);},false,nullptr},
     {"device",[](Stage1Values&c,const std::string&v){legacy_assign(c.device,v);},false,nullptr},
-    {"gpu_param",[](Stage1Values&c,const std::string&v){legacy_assign(c.gpu_param,v);if(c.gpu_param!=0&&c.gpu_param!=2&&c.gpu_param!=3){std::fprintf(stderr,"[ecm] WARNING: gpu_param=%d unsupported; using 3\n",c.gpu_param);c.gpu_param=3;}},false,nullptr},
+    {"gpu_param",[](Stage1Values&c,const std::string&v){legacy_assign(c.gpu_param,v);},false,nullptr},
     {"tpi",[](Stage1Values&c,const std::string&v){legacy_assign(c.tpi,v);},false,nullptr},
     {"wg_size",[](Stage1Values&c,const std::string&v){legacy_assign(c.wg_size,v);},false,nullptr},
     {"kernel_mul",[](Stage1Values&c,const std::string&v){legacy_assign(c.kernel_mul,v);},false,nullptr},
@@ -248,22 +226,6 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"kernel_add",[](Stage1Values&c,const std::string&v){legacy_assign(c.kernel_add,v);},false,nullptr},
     {"kernel_sub",[](Stage1Values&c,const std::string&v){legacy_assign(c.kernel_sub,v);},false,nullptr},
     {"kernel_special_mult",[](Stage1Values&c,const std::string&v){legacy_assign(c.kernel_special_mult,v);},false,nullptr},
-    {"cpu_affinity",[](Stage1Values&c,const std::string&v){legacy_assign(c.affinity,v);},false,nullptr},
-    {"gpuckpt_seconds",[](Stage1Values&c,const std::string&v){legacy_assign(c.ckpt_seconds,v);},true,nullptr},
-    {"edwards_backend",[](Stage1Values&c,const std::string&v){c.backend=canonical_stage1_backend(v);},true,nullptr},
-    {"mont_backend",[](Stage1Values&c,const std::string&v){c.backend=canonical_stage1_backend(v);},true,nullptr},
-    {"edbackend",[](Stage1Values&c,const std::string&v){c.backend=canonical_stage1_backend(v);},true,nullptr},
-    {"edwards_threads",[](Stage1Values&c,const std::string&v){legacy_assign(c.stage1_threads,v);},true,nullptr},
-    {"mont_threads",[](Stage1Values&c,const std::string&v){legacy_assign(c.stage1_threads,v);},true,nullptr},
-    {"edthreads",[](Stage1Values&c,const std::string&v){legacy_assign(c.stage1_threads,v);},true,nullptr},
-    {"edwards_naf_w",[](Stage1Values&c,const std::string&v){legacy_assign(c.naf_w,v);},true,nullptr},
-    {"ednafw",[](Stage1Values&c,const std::string&v){legacy_assign(c.naf_w,v);},true,nullptr},
-    {"mont_save_pattern",[](Stage1Values&c,const std::string&v){legacy_assign(c.save_name_pattern,v);},true,nullptr},
-    {"edwards",[](Stage1Values&c,const std::string&v){int n=0;legacy_assign(n,v);if(n)c.method="edwards";},true,nullptr},
-    {"mont",[](Stage1Values&c,const std::string&v){int n=0;legacy_assign(n,v);if(n)c.method="mont";},true,nullptr},
-    {"edwards_mersenne",[](Stage1Values&c,const std::string&v){const auto x=lower(v);c.field="auto";if(x=="on")c.field="mersenne";if(x=="mersenne")c.field="mersenne";if(x=="mers")c.field="mersenne";if(x=="yes")c.field="mersenne";if(x=="1")c.field="mersenne";if(x=="off")c.field="montgomery";if(x=="montgomery")c.field="montgomery";if(x=="mont")c.field="montgomery";if(x=="no")c.field="montgomery";if(x=="0")c.field="montgomery";},true,nullptr},
-    {"emersenne",[](Stage1Values&c,const std::string&v){const auto x=lower(v);c.field="auto";if(x=="on")c.field="mersenne";if(x=="mersenne")c.field="mersenne";if(x=="mers")c.field="mersenne";if(x=="yes")c.field="mersenne";if(x=="1")c.field="mersenne";if(x=="off")c.field="montgomery";if(x=="montgomery")c.field="montgomery";if(x=="mont")c.field="montgomery";if(x=="no")c.field="montgomery";if(x=="0")c.field="montgomery";},true,nullptr},
-    {"mont_torsion",[](Stage1Values&c,const std::string&v){int n=0;legacy_assign(n,v);c.exponent=n==12?"choose12":"lcm";},true,nullptr},
 };
 inline Stage1Values read_stage1(const Entries &entries){Stage1Values c;apply(c,entries,stage1_bindings);return c;}
 struct Stage2Values {

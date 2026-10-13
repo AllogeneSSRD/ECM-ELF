@@ -98,7 +98,7 @@ Write-Utf8NoBom $iniPath @(
     ('worktodo = ' + $todoPath),
     ('finished = ' + $finPath),
     'device = 0',
-    'method = gpu',
+    'curve = mont', 'target = gpu',
     '',
     '[GUI]',
     'refresh_hz = 10',

@@ -63,7 +63,8 @@ HitRecord make_hit(const std::string &factor, int curve, unsigned long long sigm
     r.sigma = sigma;
     r.has_sigma = true;
     r.param = 3;
-    r.method = "gpu";
+    r.curve_model = "mont";
+    r.execution_target = "gpu";
     r.save = save;
     r.worker = worker;
     r.device = 0;
@@ -196,12 +197,13 @@ int main() {
         f.exponent = 677;
         f.b1_text = "1e6";
         f.param = 3;
-        f.method = "gpu";
+        f.curve_model = "mont";
+        f.execution_target = "gpu";
         f.curves = {0, 1, 2};
         f.sigmas = {100, 101, 102};
         f.hits = 3;
         const std::string line = ResultsStore::format_line(f);
-        check(line == "M677 has a factor: 1943118631 (ECM curves 0,1,2, B1=1e6, param 3, gpu, "
+        check(line == "M677 has a factor: 1943118631 (ECM curves 0,1,2, B1=1e6, param 3, mont, gpu, "
                       "Sigmas=[100,101,102], hits=3)",
               "exact shape", line);
     }

@@ -32,7 +32,7 @@ def main() -> None:
     finished = work / "finished.txt"
     ini = work / "ecm.ini"
     ini.write_text(
-        f"method = gpu\ndevice = 0\ngpu_param = 0\nckpt_seconds = 0\n"
+        f"curve = mont\ntarget = gpu\ndevice = 0\ngpu_param = 0\nckpt_seconds = 0\n"
         f"worktodo = {todo}\nfinished = {finished}\ntmp_dir = {work}\nlog_file =\n",
         encoding="ascii",
     )

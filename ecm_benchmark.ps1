@@ -62,13 +62,13 @@ foreach ($b1 in $B1_list -split ' ') {
 
         # warmup
         # "---- warmup  curves=$c  B1=$b1 ----" | Out-File -FilePath $logFile -Append -Encoding ASCII
-        # echo "($N_expr)" | & $exe -v -d $device -gpu -sigma 3:$sigma -gpucurves $c $b1 0 *>&1 |
+        # echo "($N_expr)" | & $exe -v -d $device --curve mont --target gpu -sigma 3:$sigma -gpucurves $c $b1 0 *>&1 |
         #     Out-File -FilePath $logFile -Append -Encoding ASCII
         # "" | Out-File -FilePath $logFile -Append -Encoding ASCII
 
         # --- run 1 ---
         "---- run 1  curves=$c  B1=$b1 ----" | Out-File -FilePath $logFile -Append -Encoding ASCII
-        echo "($N_expr)" | & $exe -v -d $device -gpu -sigma 3:$sigma -gpucurves $c $b1 0 *>&1 |
+        echo "($N_expr)" | & $exe -v -d $device --curve mont --target gpu -sigma 3:$sigma -gpucurves $c $b1 0 *>&1 |
             Tee-Object -FilePath $tmpFile |
             Out-File -FilePath $logFile -Append -Encoding ASCII
 
@@ -81,7 +81,7 @@ foreach ($b1 in $B1_list -split ' ') {
 
         # --- run 2 ---
         "---- run 2  curves=$c  B1=$b1 ----" | Out-File -FilePath $logFile -Append -Encoding ASCII
-        echo "($N_expr)" | & $exe -v -d $device -gpu -sigma 3:$sigma -gpucurves $c $b1 0 --wg 32 *>&1 | # --local 
+        echo "($N_expr)" | & $exe -v -d $device --curve mont --target gpu -sigma 3:$sigma -gpucurves $c $b1 0 --wg 32 *>&1 | # --local
             Tee-Object -FilePath $tmpFile |
             Out-File -FilePath $logFile -Append -Encoding ASCII
 
@@ -93,7 +93,7 @@ foreach ($b1 in $B1_list -split ' ') {
 
         # # --- run 3 ---
         # "---- run 3  curves=$c  B1=$b1 ----" | Out-File -FilePath $logFile -Append -Encoding ASCII
-        # echo "($N_expr)" | & $exe -v -d $device -gpu -sigma 3:$sigma -gpucurves $c $b1 0 --wg 64 *>&1 | # --local 
+        # echo "($N_expr)" | & $exe -v -d $device --curve mont --target gpu -sigma 3:$sigma -gpucurves $c $b1 0 --wg 64 *>&1 | # --local
         #     Tee-Object -FilePath $tmpFile |
         #     Out-File -FilePath $logFile -Append -Encoding ASCII
 
@@ -105,7 +105,7 @@ foreach ($b1 in $B1_list -split ' ') {
 
         # # --- run 4 ---
         # "---- run 4  curves=$c  B1=$b1 ----" | Out-File -FilePath $logFile -Append -Encoding ASCII
-        # echo "($N_expr)" | & $exe -v -d $device -gpu -sigma 3:$sigma -gpucurves $c $b1 0 --local  *>&1 | # --local 
+        # echo "($N_expr)" | & $exe -v -d $device --curve mont --target gpu -sigma 3:$sigma -gpucurves $c $b1 0 --local  *>&1 | # --local
         #     Tee-Object -FilePath $tmpFile |
         #     Out-File -FilePath $logFile -Append -Encoding ASCII
 
@@ -117,7 +117,7 @@ foreach ($b1 in $B1_list -split ' ') {
 	
         # # --- run 5 ---
         # "---- run 5  curves=$c  B1=$b1 ----" | Out-File -FilePath $logFile -Append -Encoding ASCII
-        # echo "($N_expr)" | & $exe -v -d $device -gpu -sigma 3:$sigma -gpucurves $c $b1 0 --local --wg 32 *>&1 | # --local 
+        # echo "($N_expr)" | & $exe -v -d $device --curve mont --target gpu -sigma 3:$sigma -gpucurves $c $b1 0 --local --wg 32 *>&1 | # --local
         #     Tee-Object -FilePath $tmpFile |
         #     Out-File -FilePath $logFile -Append -Encoding ASCII
 

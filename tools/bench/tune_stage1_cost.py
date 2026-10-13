@@ -200,8 +200,9 @@ def main():
                     ini=where/'ecm.ini';save=where/'stage1.save'
                     ini.write_text('device='+str(a.device)+'\nworktodo=unused.txt\ntmp_dir='+str(where)+
                                    '\nlog_file='+str(where/'screen.log')+'\nverbose=true\n',encoding='utf-8')
-                    command=[str(exes[0]),'-ini',str(ini),'-gpu','-d',str(a.device),'--gpu-param','0',
-                             '-sigma','0:'+str(a.sigma_first),'-gpucurves',str(batch),'--ckpt','0','-v','--exponent',a.exponent,
+                    command=[str(exes[0]),'-ini',str(ini),'--curve','mont','--target','gpu','-d',str(a.device),'--gpu-param','0',
+                             '-sigma','0:'+str(a.sigma_first),'-gpucurves',str(batch),'--ckpt','0','-v','--lcm',
+                             '12' if a.exponent == 'choose12' else '1',
                              '--exp-cache','off','-save',str(save),str(b1),'0']
                     start=time.perf_counter()
                     try:

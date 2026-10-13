@@ -2,7 +2,7 @@
 # test_cuda_param0.ps1 -- Suyama param0 on the CUDA/CGBN path (gpu_param = 0).
 #
 # Checks, in this order:
-#   A. correctness  : GPU param0 and CPU param0 (--method mont --backend gmp) run
+#   A. correctness  : GPU param0 and CPU param0 (--curve mont --target cpu --impl scalar) run
 #                     the SAME curves for the same sigma -> save content identical
 #                     (M991, B1=1e5, 64 curves)
 #   B. 64-bit sigma : the same with sigma > 2^32 -- the batch path (gpu_param = 3)
@@ -101,9 +101,9 @@ Write-N $n3217 '(2^3217-1)'
 Write-Host "=== A. GPU param0 vs CPU param0 (M991, B1=1e5, 64 curves) ==="
 $gA = Join-Path $work 'A_gpu.save'; $cA = Join-Path $work 'A_cpu'
 New-Item -ItemType Directory -Force $cA | Out-Null
-$o = Run-Tool $CudaExe "-gpu -d 0 --gpu-param 0 -sigma 100000 -gpucurves 64 -savea $gA 1e5 0" $n991 $work
+$o = Run-Tool $CudaExe "--curve mont --target gpu -d 0 --gpu-param 0 -sigma 100000 -gpucurves 64 -savea $gA 1e5 0" $n991 $work
 Check ($o -match 'parametrization = Suyama param0') 'GPU reports the Suyama param0 parametrization'
-$null = Run-Tool $CpuExe "--method mont --backend gmp -sigma 100000 -gpucurves 64 --tmp-dir `"$cA`" --ckpt 0 1e5 0" $n991 $work
+$null = Run-Tool $CpuExe "--curve mont --target cpu --impl scalar -sigma 100000 -gpucurves 64 --tmp-dir `"$cA`" --ckpt 0 1e5 0" $n991 $work
 $cAfile = (Get-ChildItem $cA -Filter *.save | Select-Object -First 1).FullName
 $r = Compare-Saves $gA $cAfile
 Check (($r.a -eq 64) -and ($r.b -eq 64)) "both saves have 64 curve lines (GPU $($r.a), CPU $($r.b))"
@@ -114,9 +114,9 @@ Write-Host "=== B. 64-bit sigma (> 2^32) ==="
 $SIG = '9007199254740881'
 $gB = Join-Path $work 'B_gpu.save'; $cB = Join-Path $work 'B_cpu'
 New-Item -ItemType Directory -Force $cB | Out-Null
-$o = Run-Tool $CudaExe "-v -gpu -d 0 --gpu-param 0 -sigma $SIG -gpucurves 32 -savea $gB 1e4 0" $n991 $work
+$o = Run-Tool $CudaExe "-v --curve mont --target gpu -d 0 --gpu-param 0 -sigma $SIG -gpucurves 32 -savea $gB 1e4 0" $n991 $work
 Check ($o -match "sigma=$SIG") "GPU reports the full 64-bit sigma ($SIG), not a truncated one"
-$null = Run-Tool $CpuExe "--method mont --backend gmp -sigma $SIG -gpucurves 32 --tmp-dir `"$cB`" --ckpt 0 1e4 0" $n991 $work
+$null = Run-Tool $CpuExe "--curve mont --target cpu --impl scalar -sigma $SIG -gpucurves 32 --tmp-dir `"$cB`" --ckpt 0 1e4 0" $n991 $work
 $cBfile = (Get-ChildItem $cB -Filter *.save | Select-Object -First 1).FullName
 $r = Compare-Saves $gB $cBfile
 Check ($r.same -eq 32 -and $r.diff -eq 0) "GPU and CPU agree on all 32 curves at sigma > 2^32"
@@ -141,7 +141,7 @@ if (-not $SkipSlow) {
     $refDir = Join-Path $work 'D_ref'; $resDir = Join-Path $work 'D_res'
     New-Item -ItemType Directory -Force $refDir, $resDir | Out-Null
     $crit = 'stage1 returned'
-    $o = Run-Tool $CudaExe "-gpu -d 0 --gpu-param 0 -sigma 9007199254740847 -gpucurves 4096 -savea out.save --ckpt 0 1e5 0" $n3217 $refDir
+    $o = Run-Tool $CudaExe "--curve mont --target gpu -d 0 --gpu-param 0 -sigma 9007199254740847 -gpucurves 4096 -savea out.save --ckpt 0 1e5 0" $n3217 $refDir
     Check ($o -match $crit) 'reference run completed'
 
     # A foreground run cannot be interrupted from inside the script, so the killed run
@@ -157,7 +157,7 @@ if (-not $SkipSlow) {
     $psi.FileName = $env:ComSpec
     $psi.WorkingDirectory = $resDir
     $psi.UseShellExecute = $false
-    $psi.Arguments = "/c `"`"$CudaExe`" -gpu -d 0 --gpu-param 0 -sigma 9007199254740847 -gpucurves 4096 " +
+    $psi.Arguments = "/c `"`"$CudaExe`" --curve mont --target gpu -d 0 --gpu-param 0 -sigma 9007199254740847 -gpucurves 4096 " +
                      "-savea out.save --ckpt 5 1e5 0 < `"$nin`" > run.log 2>&1`""
     $p = [System.Diagnostics.Process]::Start($psi)
     Start-Sleep -Seconds 25
@@ -180,7 +180,7 @@ if (-not $SkipSlow) {
         Check $false 'checkpoint size check (no checkpoint to inspect)'
     }
 
-    $o = Run-Tool $CudaExe "-gpu -d 0 --gpu-param 0 -sigma 9007199254740847 -gpucurves 4096 -savea out.save --ckpt 5 1e5 0" $n3217 $resDir
+    $o = Run-Tool $CudaExe "--curve mont --target gpu -d 0 --gpu-param 0 -sigma 9007199254740847 -gpucurves 4096 -savea out.save --ckpt 5 1e5 0" $n3217 $resDir
     Check ($o -match $crit) 'the resumed run completed'
     $r = Compare-Saves (Join-Path $refDir 'out.save') (Join-Path $resDir 'out.save')
     Check ($r.a -eq 4096 -and $r.same -eq 4096 -and $r.diff -eq 0) "killed+resumed save is identical to the uninterrupted one ($($r.same)/$($r.a) lines)"
@@ -196,11 +196,11 @@ if (-not $SkipSlow) {
 Write-Host ""
 Write-Host "=== E. param3 regression: CUDA vs OpenCL ==="
 $gE = Join-Path $work 'E_cuda.save'; $oE = Join-Path $work 'E_ocl.save'
-$o1 = Run-Tool $CudaExe "-gpu -d 0 --gpu-param 3 -sigma 3:8888 -gpucurves 32 -savea $gE 1e5 0" $n991 $work
-$o2 = Run-Tool $CpuExe  "-gpu -d 0 --gpu-param 3 -sigma 3:8888 -gpucurves 32 -savea $oE 1e5 0" $n991 $work
+$o1 = Run-Tool $CudaExe "--curve mont --target gpu -d 0 --gpu-param 3 -sigma 3:8888 -gpucurves 32 -savea $gE 1e5 0" $n991 $work
+$o2 = Run-Tool $CpuExe  "--curve mont --target gpu -d 0 --gpu-param 3 -sigma 3:8888 -gpucurves 32 -savea $oE 1e5 0" $n991 $work
 $r = Compare-Saves $gE $oE
 Check ($r.same -eq 32 -and $r.diff -eq 0) "param3 results unchanged across the two backends (32/32 lines)"
-$o3 = Run-Tool $CpuExe "-gpu -d 0 --gpu-param 0 -gpucurves 8 1e3 0" $n991 $work
+$o3 = Run-Tool $CpuExe "--curve mont --target gpu -d 0 --gpu-param 0 -gpucurves 8 1e3 0" $n991 $work
 Check ($o3 -match 'not implemented for the OpenCL backend') 'the OpenCL backend refuses gpu_param = 0 loudly'
 
 Write-Host ""

@@ -446,9 +446,9 @@ def emit_cli(t: Task, save: str, args) -> str:
     kind = args.emit_cli_kind
     expr = t.expression()
     if kind == "sh":
-        return (f"echo '{expr}' | {args.exe} -v -savea {save} -gpu "
+        return (f"echo '{expr}' | {args.exe} -v -savea {save} --curve mont --target gpu "
                 f"-gpuckpt {args.gpuckpt} -gpucurves {args.gpu_curves} {t.b1} {t.b2}")
-    cmd = (f"{args.exe} -v -gpu -d {args.device} -gpuckpt {args.gpuckpt} "
+    cmd = (f"{args.exe} -v --curve mont --target gpu -d {args.device} -gpuckpt {args.gpuckpt} "
            f"-gpucurves {args.gpu_curves} -savea {save} {t.b1} {t.b2}")
     if kind == "bat":
         # ^ & | < > need escaping inside a .bat file; the N expression has none of these

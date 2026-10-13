@@ -4,15 +4,15 @@
 #  下一行 # 开头的注释为期望因子。
 #  echo 和 .exe 路径前缀在 Android 上被自适应剥离。
 
-echo '(2^151-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 1 1e4 0
+echo '(2^151-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 1 1e4 0
 # 391612124215324515959
-echo '(2^241-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:3334796807 -gpucurves 1 1e4 0
+echo '(2^241-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:3334796807 -gpucurves 1 1e4 0
 # 22000409
-echo '(2^347-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:561219477 -gpucurves 1 1e4 0
+echo '(2^347-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:561219477 -gpucurves 1 1e4 0
 # 14143189112952632419639
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:268526266 -gpucurves 1 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:268526266 -gpucurves 1 1e4 0
 # 614002928307599
-echo '(2^677-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:4001686290 -gpucurves 1 1e3 0
+echo '(2^677-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:4001686290 -gpucurves 1 1e3 0
 # 1943118631
-echo '(2^991-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:822692423 -gpucurves 1 1e3 0
+echo '(2^991-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:822692423 -gpucurves 1 1e3 0
 # 231620367206687

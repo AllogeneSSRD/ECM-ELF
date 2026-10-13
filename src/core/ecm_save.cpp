@@ -272,6 +272,11 @@ bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, 
 
     mpz_clear(sigma_mpz);
     mpz_clear(checksum);
+    out.close();
+    if (out.fail()) {
+        ecm_ts_fprintf(stderr, "Could not finish appending to %s\n", savefilename.c_str());
+        return false;
+    }
     ecm_ts_fprintf(stdout, "Saved %u Montgomery curve line(s) to %s\n", curves,
                    savefilename.c_str());
     return true;

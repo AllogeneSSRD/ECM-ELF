@@ -11,8 +11,8 @@ function Run-W([int]$w) {
     $t = Join-Path $scratch "wt_$w"
     if (Test-Path $t) { Remove-Item -Recurse -Force $t }
     New-Item -ItemType Directory -Force -Path $t | Out-Null
-    $a = @("--edwards","--edwards-backend","simd","--edwards-threads","1","--edwards-naf-w","$w",
-           "--edwards-mersenne","on","-gpucurves","8","--tmp-dir",$t,"1000000","0")
+    $a = @("--curve","ed","--target","cpu","--impl","simd","--stage1-threads","1","--naf-w","$w",
+           "--reduction","mersenne-fold","-gpucurves","8","--tmp-dir",$t,"1000000","0")
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $N | & $exe @a *>&1 | Out-File -FilePath (Join-Path $t "out.log") -Encoding ASCII
     $sw.Stop()

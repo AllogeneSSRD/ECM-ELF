@@ -126,8 +126,9 @@ int main() {
         check(h.is_hit && h.factor == "1234567890123456789012345678907", "factor value",
               h.factor);
         const ParsedLine h2 = parse_line(
-            TS "factor[0]=999 curve=37 sigma=12345 param=0 save=m5351_110e6.save");
-        check(h2.is_hit && h2.factor == "999", "D3 hit fields tolerated", h2.factor);
+            TS "factor[0]=999 curve=37 sigma=12345 param=0 curve_model=mont execution_target=gpu save=m5351_110e6.save");
+        check(h2.is_hit && h2.factor == "999" && h2.hit.curve_model == "mont" &&
+              h2.hit.execution_target == "gpu", "curve and target hit fields parsed", h2.factor);
         const ParsedLine f = parse_line(
             TS "FACTOR FOUND aid=N/A task=ECMSTAGE2=1,2,5351,-1,\"m5351_110e6.save\",0,0,960");
         check(f.is_hit && f.kind == LogKind::Event, "FACTOR FOUND is a hit event");

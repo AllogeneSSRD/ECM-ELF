@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage1 选择项规范化与后端流程 · MPA-OpenCl</title>
+<style>
+:root{color-scheme:light;--ink:#162231;--muted:#536375;--line:#c7d1d8;--paper:#f6f7f5;--card:#fff;--soft:#eaf0ef;--accent:#155d58;--warn:#8a5311}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:system-ui,"Microsoft YaHei",sans-serif;line-height:1.55}main{max-width:1180px;padding:38px 24px 80px;margin:auto}
+h1{font-size:28px;line-height:1.25;margin:0 0 8px}h2{font-size:20px;margin:0 0 14px}h3{font-size:15px;margin:0 0 8px}p{margin:6px 0}a{color:var(--accent)}small,.muted{color:var(--muted)}
+.top{display:flex;justify-content:space-between;gap:24px;border-bottom:2px solid var(--ink);padding-bottom:24px}.tag{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.08em}
+.note{max-width:420px;color:var(--muted);font-size:13px}.section{margin-top:34px}
+.diagram{display:grid;grid-template-columns:minmax(180px,1fr) 36px minmax(205px,1.15fr) 36px minmax(220px,1.25fr) 36px minmax(190px,1fr);align-items:center;gap:8px;margin-top:18px}
+.node{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:15px;min-height:140px}.node.focus{border:2px solid var(--accent);background:var(--soft)}.node h3{margin-bottom:9px}.node p{font-size:13px;color:var(--muted)}.arrow{text-align:center;color:var(--accent);font-size:25px;font-weight:700}
+.lanes{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:20px}.lane{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:20px}.lane .steps{display:flex;align-items:stretch;gap:8px;margin-top:16px}.step{flex:1;border:1px solid var(--line);border-radius:7px;padding:12px;font-size:12px;background:var(--paper)}.lane .to{align-self:center;color:var(--accent);font-weight:700}
+.rule{border-left:3px solid var(--accent);padding-left:14px;margin:14px 0;font-size:14px}.rule.warn{border-left-color:var(--warn)}
+.dlst{display:grid;grid-template-columns:180px 1fr;gap:0;border-top:1px solid var(--line);font-size:13px}.dlst>*{padding:11px 6px;border-bottom:1px solid var(--line)}.dlst b{font-weight:650}
+.future{border:1px dashed var(--line);border-radius:9px;padding:18px;background:var(--card)}.refs{font:12px ui-monospace,Consolas,monospace;color:var(--muted);line-height:1.8}
+@media(max-width:920px){.diagram{display:block}.diagram .arrow{transform:rotate(90deg);line-height:38px}.node{min-height:0}.lanes{grid-template-columns:1fr}}@media(max-width:600px){.top{display:block}.lane .steps{display:block}.lane .to{text-align:center}.dlst{grid-template-columns:1fr}.dlst b{border-bottom:0;padding-bottom:0}}
+</style>
+</head>
+<body><main>
+<header class="top">
+<div><div class="tag">MPA-OpenCl · 当前实现流程</div><h1>Stage1 选择项规范化与后端校验</h1><small>2026-10-13 · 对应 Stage1 CLI、INI 与 worktodo；Stage2 保持独立</small></div>
+<p class="note">本页描述本轮代码中的解析与校验。曲线计算、save 格式、各后端 checkpoint 与 Stage2 回执流程没有并入这一轮。</p>
+</header>
+
+<section class="section"><h2>从输入到执行</h2>
+<div class="diagram">
+  <div class="node"><h3>输入入口</h3><p>单次：CLI 选项、stdin 的 N、位置参数 B1/B2。</p><p>队列：ecm.ini 的 worker 配置与 worktodo 当前任务。</p></div>
+  <div class="arrow">→</div>
+  <div class="node focus"><h3>正交选择项</h3><p>curve：Montgomery / Edwards；target：CPU / GPU。</p><p>CPU 实现、SIMD 约减及 Stage1 标量构造分别选择；Auto 枚举统一为 0。</p></div>
+  <div class="arrow">→</div>
+  <div class="node"><h3>启动前校验</h3><p>拒绝尚未实现的 GPU Edwards；核对参数化 0、2、3 与本二进制的能力。</p><p>PARAM0 接受 64 位 sigma；PARAM2/3 的批次须在 32 位窗口内。错误任务留在 worktodo。</p></div>
+  <div class="arrow">→</div>
+  <div class="node"><h3>Stage1 执行</h3><p>按执行位置与曲线模型分派 CPU 曲线路径或已链接的 OpenCL / CUDA GPU 后端。</p><p>Montgomery ECM2 队列任务发布 m{n}_{b1}.save，成功后才推进队列。</p></div>
+</div></section>
+
+<section class="section"><h2>两种入口如何汇合</h2>
+<div class="lanes">
+  <div class="lane"><h3>单次运行</h3><p class="muted">五个独立选项均校验取值；默认 Montgomery 曲线在 GPU 上执行。</p>
+    <div class="steps"><div class="step">--curve / --target<br>--impl / --reduction<br>--lcm</div><div class="to">→</div><div class="step">解析为 Selection<br>处理 -sigma i:s 与参数化冲突</div><div class="to">→</div><div class="step">结合 N、B1、曲线数与 sigma<br>执行能力及范围检查</div></div>
+  </div>
+  <div class="lane"><h3>worktodo 队列</h3><p class="muted">INI 的未知选择值直接报错；不支持的 GPU 参数组合在消费任务前退出。</p>
+    <div class="steps"><div class="step">ecm.ini 全局键及 Worker 键<br>由生成的配置绑定读取</div><div class="to">→</div><div class="step">共用 Selection 解析<br>后端能力预检</div><div class="to">→</div><div class="step">worktodo 的 N、B1、曲线数与 sigma<br>逐任务校验后运行</div></div>
+  </div>
+</div></section>
+
+<section class="section"><h2>关键规则</h2>
+<div class="dlst">
+  <b>曲线 × 执行位置</b><div>Montgomery 可运行在 CPU 或已链接的 GPU 后端；Edwards 当前只运行在 CPU。独立配置避免把 GPU 与曲线模型混为同一种“方法”。</div>
+  <b>CPU 实现</b><div>impl 为 auto、simd 或 scalar；reduction 为 auto、montgomery 或 mersenne-fold。显式 reduction 要求 impl=simd，避免 auto 选中标量时被忽略。两个 Auto 的内部值均为 0，IFMA 的常量通过显式映射传入。</div>
+  <b>标量构造</b><div>Montgomery 的 lcm 为 1 或 12，分别构造 lcm(1..B1) 与其 12 倍。Edwards 固定使用 48·lcm(1..B1)，拒绝 12。</div>
+  <b>参数化</b><div>GPU 接受 0、2、3 作为语法值；是否能运行由链接的后端和构建能力决定。OpenCL 仅实现 PARAM3。CUDA 构建可因禁用 PARAM2 或启用 Mersenne fold 而限制可用项。</div>
+  <b>sigma</b><div>-sigma i:s 会选择 PARAM i；与显式 --gpu-param 不一致时报错。CUDA PARAM0 以 64 位 sigma 构造每条曲线，批次不得在 2^64 处回绕；GPU PARAM2/3 的固定 sigma 及整个批次不能越过 2^32。</div>
+  <b>队列存档</b><div>ECM=/ECM2= 没有显式 save 名称，Montgomery GPU worker 在 tmp_dir 中按 m{n}_{b1}.save 生成；CPU Montgomery 使用同一默认名称。最终 save 写入失败时保留 worktodo，CPU 的可恢复 checkpoint 也保留。</div>
+  <b>任务失败</b><div>队列中某条任务的 sigma 不适配当前 GPU 批次时停止并保留 worktodo，避免截断 sigma 后运行另一条曲线。</div>
+</div>
+<p class="rule">选择项是解析结果，不等于通用计算后端接口。CPU 曲线算法、OpenCL/CUDA 内核及私有 checkpoint 仍由各自的实现负责。</p></section>
+
+<section class="section future"><h2>下一步的接口位置</h2><p>将 Stage1 的一次曲线任务或批次作为执行接缝，逐个接入 CPU Montgomery、CPU Edwards、OpenCL 与 CUDA 适配器。未来 Stage2 多后端应复用已验证曲线、队列身份、子进程及回执事务，保留各后端自己的规划和中间存档。此项仍是后续设计，本页不把它写成已实现能力。</p></section>
+
+<section class="section refs"><h2>代码依据</h2>
+<div><a href="../../src/core/ecm_stage1_selection.h">src/core/ecm_stage1_selection.h</a> · 曲线模型、执行位置、CPU 实现、SIMD 约减、标量构造解析</div>
+<div><a href="../../src/core/ecm_driver.cpp">src/core/ecm_driver.cpp</a> · 单次与队列入口、任务校验、Stage1 分派</div>
+<div><a href="../../include/ecm_backend.h">include/ecm_backend.h</a> · 链接后端的参数化能力查询</div>
+<div><a href="../../src/opencl_backend_glue.cpp">src/opencl_backend_glue.cpp</a> · OpenCL 实现能力</div>
+<div><a href="../../src/cuda/ecm_cuda_backend.cu">src/cuda/ecm_cuda_backend.cu</a> · CUDA 构建能力</div>
+</section>
+</main></body></html>

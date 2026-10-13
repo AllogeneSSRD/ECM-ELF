@@ -31,14 +31,14 @@ Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $local, $p95, $alt | Out-Null
 
 Write-Host "=== stage 0: generating saves with ecm.exe ==="
-"2^991-1" | & $ecm --edwards -sigma 105413044550089 -gpucurves 4 --tmp-dir $local 1000000 2>&1 |
+"2^991-1" | & $ecm --curve ed --target cpu -sigma 105413044550089 -gpucurves 4 --tmp-dir $local 1000000 2>&1 |
     Select-String -Pattern "stage1 save" | ForEach-Object { "  $($_.Line)" }
-"2^677-1" | & $ecm --edwards -sigma 6581585141005897 -gpucurves 2 --tmp-dir $local 1000000 2>&1 |
+"2^677-1" | & $ecm --curve ed --target cpu -sigma 6581585141005897 -gpucurves 2 --tmp-dir $local 1000000 2>&1 |
     Select-String -Pattern "stage1 save" | ForEach-Object { "  $($_.Line)" }
 # one save whose B1 does NOT match the validation worktodo below (must be skipped).
 # Local names carry B1 (e{n:07d}_B{B1}_c{curve}), so this one lands beside the
 # B1=1000000 saves instead of overwriting them.
-"2^991-1" | & $ecm --edwards -sigma 105413044550089 -gpucurves 1 --tmp-dir $alt 200000 2>&1 | Out-Null
+"2^991-1" | & $ecm --curve ed --target cpu -sigma 105413044550089 -gpucurves 1 --tmp-dir $alt 200000 2>&1 | Out-Null
 Copy-Item "$alt\e0000991_B200000_c000001.tmp" "$local\" -Force
 Write-Host "  local .tmp: $((Get-ChildItem $local -Filter '*.tmp' | ForEach-Object { $_.Name }) -join ', ')"
 

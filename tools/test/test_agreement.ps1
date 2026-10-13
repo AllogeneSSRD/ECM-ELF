@@ -2,9 +2,9 @@
 # test_agreement.ps1 -- three-backend agreement regression for Edwards stage 1.
 #
 # For the same (N, B1, sigma) it runs three independent implementations:
-#     gmp        : scalar mpz path                 (--edwards-backend gmp)
-#     simd-mont  : SIMD batch, Montgomery domain   (--edwards-mersenne off)
-#     simd-mers  : SIMD batch, Mersenne fold       (--edwards-mersenne on, N = 2^k-1)
+#     gmp        : scalar mpz path                 (--impl scalar)
+#     simd-mont  : SIMD batch, Montgomery domain   (--reduction montgomery)
+#     simd-mers  : SIMD batch, Mersenne fold       (--reduction mersenne-fold, N = 2^k-1)
 # and asserts
 #   1) the per-curve verdict agrees: same hit set AND same factor value, and
 #   2) the per-curve .tmp archives are byte-identical (same Qx/Qz => the ladder
@@ -53,10 +53,12 @@ $cases = if ($Quick) { @($allCases | Where-Object { $_.name -match "B1=2e4|sh=1"
 
 function Run-Backend {
     param([string]$backend, [string]$field, [string]$N, [int]$B1, [int]$sigma, [string]$dir)
+    $implementation = if ($backend -eq 'gmp') { 'scalar' } else { 'simd' }
+    $reduction = if ($field -eq 'on') { 'mersenne-fold' } elseif ($field -eq 'off') { 'montgomery' } else { 'auto' }
     Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $argv = @("--edwards", "--edwards-backend", $backend, "--edwards-threads", "1",
-              "--edwards-naf-w", "12", "--edwards-mersenne", $field,
+    $argv = @("--curve","ed","--target","cpu", "--impl", $implementation, "--stage1-threads", "1",
+              "--naf-w", "12", "--reduction", $reduction,
               "-gpucurves", "$Curves", "-sigma", "$sigma", "--tmp-dir", $dir, "$B1", "0")
     $out = $N | & $Exe @argv 2>&1
     $fld = ($out | Select-String -Pattern "field\s+:" | Select-Object -First 1)
@@ -87,7 +89,7 @@ foreach ($c in $cases) {
     foreach ($b in $c.backends) {
         $tag = ""; $field = ""; $backendName = "simd"
         switch ($b) {
-            "gmp"       { $tag = "gmp";       $field = "off";  $backendName = "gmp" }
+            "gmp"       { $tag = "gmp";       $field = "auto"; $backendName = "gmp" }
             "simd-mont" { $tag = "simd/mont"; $field = "off";  $backendName = "simd" }
             "simd-mers" { $tag = "simd/fold"; $field = "on";   $backendName = "simd" }
             "simd-auto" { $tag = "simd/auto"; $field = "auto"; $backendName = "simd" }

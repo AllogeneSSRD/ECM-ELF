@@ -80,7 +80,7 @@ def main():
                    ECM_PRAC_WINDOW_CHUNK=str(a.window_chunk), ECM_PRAC_WINDOW_WARMUP=str(a.window_warmup))
         env_keys += ('ECM_PRAC_WINDOW', 'ECM_PRAC_WINDOW_COUNT', 'ECM_PRAC_WINDOW_CHUNK', 'ECM_PRAC_WINDOW_WARMUP')
     env.pop('ECM_GPU_DUMP', None)
-    app = [str(exe), '-gpu', '-d', str(a.device), '--gpu-param', '0', '-sigma', '0:26',
+    app = [str(exe), '--curve','mont','--target','gpu', '-d', str(a.device), '--gpu-param', '0', '-sigma', '0:26',
            '-gpucurves', str(a.curves), '--ckpt', '0', '--exp-cache', str(a.exp_cache.resolve()),
            '-v', '-savea', 'completed.save', str(a.b1), '0']
     if a.tool == 'ncu':

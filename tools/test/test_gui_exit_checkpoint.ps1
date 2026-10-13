@@ -126,7 +126,7 @@ function New-Sandbox([string]$name, [string]$exitConfirm, [int]$gracefulMs, [boo
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $enc = New-Object System.Text.UTF8Encoding($false)
     $lines = @(
-        'method = gpu', 'backend = auto', 'device = 0', 'gpucurves = 384', 'verbose = 0',
+        'curve = mont', 'target = gpu', 'impl = auto', 'device = 0', 'gpucurves = 384', 'verbose = 0',
         ('ckpt_seconds = ' + $CheckpointSeconds),
         'save_sync_dir_1 =', 'save_sync_dir_2 =',
         ('tmp_dir = ' + (Join-Path $dir 'saves')),

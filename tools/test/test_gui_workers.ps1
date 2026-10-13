@@ -77,7 +77,7 @@ $marker = Join-Path $Sandbox 'crashed.once.marker'
 $enc = New-Object System.Text.UTF8Encoding($false)
 $iniLines = @(
     '# M2 sandbox: two fake workers, one of them crashes once',
-    'method = gpu',
+    'curve = mont', 'target = gpu',
     'device = 0',
     '',
     '[GUI]',

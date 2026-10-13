@@ -207,39 +207,50 @@ verbosity behavior.<br>
 控制普通控制台输出的详细程度。Stage2 中 true 显示阶段切换，false 保留曲线摘要；调试日志由<br>
 stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出规则处理。
 
-### method
+### curve
 
 ```text
-method=[gpu|edwards|mont]; default=gpu; empty=default; [opencl]=>gpu; [atkin-morain]=>edwards; [montgomery|suyama]=>mont
+curve=[mont|ed]; default=mont; empty=default
 ```
 
-Stage1 arithmetic method. gpu uses the backend linked into the executable: CUDA in ecm_cuda, OpenCL<br>
-in ecm. edwards and mont select the corresponding CPU implementations. This setting cannot switch an<br>
-executable between CUDA and OpenCL.<br>
-选择 Stage1 计算方法。gpu 使用当前可执行文件链接的 GPU 后端：ecm_cuda 使用 CUDA，ecm 使用 OpenCL；<br>
-edwards 和 mont 使用对应的 CPU 曲线实现。改为 gpu 不会在同一可执行文件内切换 CUDA 与 OpenCL。
+Stage1 curve model: mont for Montgomery or ed for Edwards. Montgomery is available on CPU and GPU;<br>
+Edwards currently runs on CPU.<br>
+Stage1 曲线模型：mont 为 Montgomery，ed 为 Edwards。Montgomery 可在 CPU 和 GPU 上运行；Edwards 当前<br>
+仅支持 CPU。
 
-### backend
+### target
 
 ```text
-backend=[auto|simd|gmp]; default=auto; empty=default; simd=>AVX512-IFMA; [avx512]=>simd; [scalar|mpn]=>gmp
+target=[cpu|gpu]; default=gpu
 ```
 
-CPU Edwards/Montgomery big-integer backend: auto selects automatically, simd uses supported<br>
-AVX512-IFMA operations, and gmp uses GMP. GPU Stage1 ignores this setting.<br>
-选择 CPU Edwards/Montgomery 的大整数乘法后端。auto 自动选择，simd 使用受支持的 AVX512-IFMA 路径，gmp<br>
-使用 GMP；GPU Stage1 不使用此设置。
+Run Stage1 on CPU or on the GPU backend linked into this executable. GPU Edwards is currently<br>
+unsupported. The target does not select between CUDA and OpenCL.<br>
+选择 Stage1 在 CPU 或本程序链接的 GPU 后端执行。当前不支持 GPU Edwards；此键不在同一可执行文件内切换<br>
+CUDA 与 OpenCL。
 
-### field
+### impl
 
 ```text
-field=[auto|mersenne|montgomery]; default=auto; empty=default; mersenne=>N=2^p-1; [mers|on|fold]=>mersenne; [mont|off|cios]=>montgomery
+impl=[auto|simd|scalar]; default=auto; empty=default; simd=>AVX512-IFMA
 ```
 
-CPU SIMD reduction method: auto selects for the input, mersenne requires N=2^p-1, and montgomery<br>
-uses general Montgomery reduction. Usually leave auto. GPU Stage1 ignores this setting.<br>
-选择 CPU SIMD 的模约减方法。auto 按输入数选择，mersenne 适用于 N=2^p-1，montgomery 使用通用<br>
-Montgomery 约减；GPU Stage1 不使用此设置。通常保持 auto。
+CPU Stage1 arithmetic implementation. auto selects by CPU capability and batch size; simd requires<br>
+AVX512-IFMA; scalar uses GMP. Non-auto values are rejected for GPU runs.<br>
+CPU Stage1 算术实现：auto 根据 CPU 能力和批量选择；simd 要求 AVX512-IFMA；scalar 使用 GMP。GPU 运行<br>
+时拒绝非 auto 值。
+
+### reduction
+
+```text
+reduction=[auto|montgomery|mersenne-fold]; default=auto; empty=default; mersenne-fold=>N=2^p-1
+```
+
+CPU SIMD modular reduction. auto selects for the input; mersenne-fold requires N=2^p-1; montgomery<br>
+uses general reduction. An explicit reduction requires impl=simd, so it cannot be silently ignored<br>
+when auto chooses scalar.<br>
+CPU SIMD 模约减：auto 按输入数选择；mersenne-fold 要求 N=2^p-1；montgomery 使用通用约减。显式归约要<br>
+求 impl=simd，避免 auto 选中标量时悄悄忽略设置。
 
 ### stage1_threads
 
@@ -300,30 +311,30 @@ are 3..12. CUDA PRAC ignores this setting.<br>
 设置 CPU Edwards 的 NAF 窗口。0 使用内置窗口；增大窗口通常减少主循环加法，但预计算字典按 2^(w-2) 增<br>
 长，会增加内存和准备时间。通常使用 3..12；CUDA PRAC 不使用此设置。
 
-### exponent
+### lcm
 
 ```text
-exponent=[lcm|choose12]; default=lcm; empty=default; lcm:lcm(1..B1); choose12:12*lcm(1..B1); [1|gmp|gmp-ecm]=>lcm; [12|prime95]=>choose12
+lcm=[1|12]; default=1; empty=default; 1:lcm(1..B1); 12:12*lcm(1..B1)
 ```
 
-Stage1 scalar: lcm uses lcm(1..B1); choose12 uses 12*lcm(1..B1) when extra multiplication by 12 is<br>
-required. This changes the output point. Keep the convention consistent with the curve and save<br>
-consumed by Stage2.<br>
-选择 Stage1 使用的指数。lcm 为 lcm(1..B1)，choose12 为 12*lcm(1..B1)，用于需要额外乘 12 的流程；该设<br>
-置改变计算结果，接续 Stage2 时应与所用曲线和存档约定一致。
+Montgomery Stage1 scalar is lcm(1..B1) multiplied by 1 or 12. Edwards uses its fixed 48*lcm scalar<br>
+and rejects 12. This choice changes the output point and must match the Stage2 save convention.<br>
+Montgomery Stage1 标量是 lcm(1..B1) 乘 1 或 12。Edwards 固定使用 48·lcm，不接受 12。此选择改变输出点<br>
+，须与 Stage2 存档约定一致。
 
 ### sigma
 
 ```text
-sigma=<x:Z,0..2^64-1>; default=0; zero=random; curve(i):sigma+i; Suyama:x>=6; P95:sigma+curves<=2^63-1
+sigma=<x:Z,0..2^64-1>; default=0; zero=random; curve(i):sigma+i; Suyama:x>=6; PARAM0:full_64_bit_sigma; PARAM2|3:sigma+curves<=2^32; batch:sigma+curve_index<=2^64-1; P95:warn_if_sigma+curve_index>2^63-1
 ```
 
-Initial curve sigma. 0 chooses a random value within the backend's valid range; consecutive curves<br>
-use sigma+i. A nonzero sigma in an ECM/ECM2 assignment overrides this setting; otherwise this<br>
-setting is used. ECMSTAGE2 assignments without a sigma field also use it.<br>
-指定曲线起始 sigma；0 由程序随机选择。在采用连续 sigma 的批处理中，后续曲线使用 sigma+i；各曲线后端<br>
-仍有自己的有效范围。ECM/ECM2 任务行给出非零 sigma 时覆盖此键，否则使用此键；不带 sigma 字段的<br>
-ECMSTAGE2 任务也使用此键。
+Initial curve sigma. 0 chooses a random value; consecutive curves use sigma+i without 64-bit<br>
+wraparound. CUDA PARAM0 accepts the full 64-bit range, while PARAM2/3 batches must stay below 2^32.<br>
+CPU runs warn if a sigma exceeds Prime95's signed reader range; this is not a Stage1 limit. A<br>
+nonzero ECM/ECM2 assignment sigma overrides this setting.<br>
+曲线起始 sigma；0 表示随机生成，连续曲线使用 sigma+i 且不得在 64 位处回绕。CUDA PARAM0 接受完整 64<br>
+位范围，PARAM2/3 批次须位于 2^32 以下。CPU 路径的 sigma 超出 Prime95 有符号读取范围时会警告，这不是<br>
+Stage1 的限制。ECM/ECM2 任务行的非零 sigma 覆盖此键。
 
 ### p95_dir
 
@@ -374,7 +385,7 @@ refer to the device list exposed by the executable's actual GPU backend.<br>
 ### gpu_param
 
 ```text
-gpu_param=[0|2|3]; default=3; release=0; first_run=0; OpenCL:3; S2_save:0; invalid=>3
+gpu_param=[0|2|3]; default=3; release=0; first_run=0; OpenCL:3; S2_save:0; invalid=>error
 ```
 
 GPU Stage1 curve parametrization. The current CUDA Stage2 consumes param0 saves; use 0 for that<br>
@@ -1234,155 +1245,6 @@ is independent.<br>
 
 Legacy names remain readable; use canonical keys in new configurations. Direct aliases share the canonical value rules and have no separate defaults; conversion switches use the mappings below.<br>
 旧名称仍可读取，新配置建议使用对应的正式键。直接别名沿用正式键的取值规则，不另设默认值；转换开关按下面列出的映射处理。
-
-### cpu_affinity
-
-```text
-cpu_affinity => affinity
-```
-
-Compatibility alias for affinity. Use affinity in new configurations.<br>
-与 affinity 相同，用于兼容旧配置；新配置建议使用 affinity。
-
-### gpuckpt_seconds
-
-```text
-gpuckpt_seconds => ckpt_seconds
-```
-
-Legacy GPU checkpoint name. Use ckpt_seconds; the interval and unit remain the same.<br>
-旧 GPU 检查点间隔名称，现统一使用 ckpt_seconds；单位和行为相同。
-
-### edwards_backend
-
-```text
-edwards_backend => backend
-```
-
-Legacy CPU Edwards backend name. Shares the backend setting.<br>
-旧 CPU Edwards 后端名称，现与 backend 共用设置。
-
-### mont_backend
-
-```text
-mont_backend => backend
-```
-
-Legacy CPU Montgomery backend name. Shares the backend setting.<br>
-旧 CPU Montgomery 后端名称，现与 backend 共用设置。
-
-### edbackend
-
-```text
-edbackend => backend
-```
-
-Legacy abbreviation of edwards_backend. Shares the backend setting.<br>
-edwards_backend 的旧缩写，现与 backend 共用设置。
-
-### edwards_threads
-
-```text
-edwards_threads => stage1_threads
-```
-
-Legacy Edwards thread-count name. Shares stage1_threads.<br>
-旧 Edwards 线程数名称，现与 stage1_threads 共用设置。
-
-### mont_threads
-
-```text
-mont_threads => stage1_threads
-```
-
-Legacy Montgomery thread-count name. Shares stage1_threads.<br>
-旧 Montgomery 线程数名称，现与 stage1_threads 共用设置。
-
-### edthreads
-
-```text
-edthreads => stage1_threads
-```
-
-Legacy Edwards thread-count abbreviation. Shares stage1_threads.<br>
-旧 Edwards 线程数缩写，现与 stage1_threads 共用设置。
-
-### edwards_naf_w
-
-```text
-edwards_naf_w => naf_w
-```
-
-Legacy Edwards NAF-window name. Shares naf_w.<br>
-旧 Edwards NAF 窗口名称，现与 naf_w 共用设置。
-
-### ednafw
-
-```text
-ednafw => naf_w
-```
-
-Legacy Edwards NAF-window abbreviation. Shares naf_w.<br>
-旧 Edwards NAF 窗口缩写，现与 naf_w 共用设置。
-
-### mont_save_pattern
-
-```text
-mont_save_pattern => save_name_pattern
-```
-
-Legacy CPU Montgomery save filename pattern. Shares save_name_pattern.<br>
-旧 CPU Montgomery 存档名称模式，现与 save_name_pattern 共用设置。
-
-### edwards
-
-```text
-edwards => method; domain=<x:Z>; x!=0:edwards; x=0:no_change
-```
-
-Legacy method switch. Nonzero selects method=edwards; 0 leaves the method unchanged. Use method<br>
-directly in new configurations.<br>
-旧方法开关。非零值选择 method=edwards，0 不改变当前方法；新配置直接使用 method。
-
-### mont
-
-```text
-mont => method; domain=<x:Z>; x!=0:mont; x=0:no_change
-```
-
-Legacy method switch. Nonzero selects method=mont; 0 leaves the method unchanged. Use method<br>
-directly in new configurations.<br>
-旧方法开关。非零值选择 method=mont，0 不改变当前方法；新配置直接使用 method。
-
-### edwards_mersenne
-
-```text
-edwards_mersenne => field; domain=<enum>; on:mersenne,mersenne:mersenne,mers:mersenne,yes:mersenne,1:mersenne,off:montgomery,montgomery:montgomery,mont:montgomery,no:montgomery,0:montgomery; else:auto
-```
-
-Legacy CPU reduction switch. on, yes, 1, or mersenne selects Mersenne; off, no, 0, or montgomery<br>
-selects Montgomery; other values select auto. Use field in new configurations.<br>
-旧 CPU 约减方法开关。on、yes、1 或 mersenne 相关值选择 Mersenne，off、no、0 或 montgomery 相关值选择<br>
-Montgomery，其他值自动选择；新配置使用 field。
-
-### emersenne
-
-```text
-emersenne => field; domain=<enum>; on:mersenne,mersenne:mersenne,mers:mersenne,yes:mersenne,1:mersenne,off:montgomery,montgomery:montgomery,mont:montgomery,no:montgomery,0:montgomery; else:auto
-```
-
-Same conversion as edwards_mersenne. Use field in new configurations.<br>
-与旧 edwards_mersenne 开关相同；新配置使用 field。
-
-### mont_torsion
-
-```text
-mont_torsion => exponent; domain=<x:Z>; x=12:choose12; else:lcm
-```
-
-Legacy scalar switch. 12 maps to exponent=choose12; other integers map to exponent=lcm. Use exponent<br>
-in new configurations.<br>
-旧指数选择开关。12 对应 exponent=choose12，其他整数对应 exponent=lcm；新配置使用 exponent。
 
 ### debug_log
 

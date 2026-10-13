@@ -98,10 +98,10 @@ void print_scripted_run(int lines, int delay_ms) {
                       100.0 * i / (lines > 0 ? lines : 1), i * 10, i, 1.2, i * 1.2, 60.0);
         out_raw(buf);
         out("curve %d sigma=%d -> factor found\n", i, 12345 + i);
-        // Same shape as the driver D3 hit line (curve/sigma/param/method/save), so the
+        // Same shape as the driver hit line (curve/sigma/param/model/target/save), so the
         // GUI result path is exercised by the fake worker too.
         out("factor[%d]=123456789012345678901234567890%d curve=%d sigma=%d param=3 "
-            "method=gpu save=fake_%d_1e4.save\n",
+            "curve_model=mont execution_target=gpu save=fake_%d_1e4.save\n",
             i, i % 7, i, 1000000 + i, i);
         if (delay_ms > 0) sleep_ms(delay_ms);
     }

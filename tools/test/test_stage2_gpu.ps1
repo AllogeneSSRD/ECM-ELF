@@ -186,7 +186,7 @@ if (-not (Test-Path $Driver)) {
     $errFile = Join-Path $sb 'driver.err'
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $drv = ($N128 | & $Driver --method mont --exponent lcm -sigma 26 -gpucurves 1 --tmp-dir $sb 1000 2>$errFile | Out-String)
+    $drv = ($N128 | & $Driver --curve mont --target cpu --lcm 1 -sigma 26 -gpucurves 1 --tmp-dir $sb 1000 2>$errFile | Out-String)
     $drvCode = $LASTEXITCODE
     $ErrorActionPreference = $prev
     $sm2 = [regex]::Match($drv, 'Saved \d+ Montgomery curve line\(s\) to (\S+)')

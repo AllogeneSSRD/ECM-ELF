@@ -125,8 +125,8 @@ $task2 = 'ECMSTAGE2=1,2,997,-1,"m997_1e4.save",0,0,8'
 $saves = Join-Path $Sandbox 'saves'
 $iniLines = @(
     '# M2 real-driver sandbox',
-    'method = gpu',
-    'backend = auto',
+    'curve = mont', 'target = gpu',
+    'impl = auto',
     'gpucurves = 8',
     ('tmp_dir = ' + $saves),
     ('finished = ' + $finished),

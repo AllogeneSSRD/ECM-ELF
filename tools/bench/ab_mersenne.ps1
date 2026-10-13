@@ -8,12 +8,13 @@ $env:PATH = (Join-Path $root "third_party\gmp-zen3\dist\bin") + ";" + $env:PATH
 $N = "(2^3001-1)"
 
 function Run-One([string]$field, [string]$tmpdir, [int]$curves, [string]$B1, [string]$sigma) {
+    $reduction = if ($field -eq 'on') { 'mersenne-fold' } else { 'montgomery' }
     if (Test-Path $tmpdir) { Remove-Item -Recurse -Force $tmpdir }
     New-Item -ItemType Directory -Force -Path $tmpdir | Out-Null
     $log = Join-Path $tmpdir "out.log"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $args = @("--edwards", "--edwards-backend", "simd", "--edwards-threads", "1",
-              "--edwards-naf-w", "12", "--edwards-mersenne", $field,
+    $args = @("--curve","ed","--target","cpu", "--impl", "simd", "--stage1-threads", "1",
+              "--naf-w", "12", "--reduction", $reduction,
               "-gpucurves", "$curves", "--tmp-dir", $tmpdir, $B1, "0")
     if ($sigma) { $args += @("-sigma", $sigma) }
     $N | & $exe @args *>&1 | Out-File -FilePath $log -Encoding ASCII

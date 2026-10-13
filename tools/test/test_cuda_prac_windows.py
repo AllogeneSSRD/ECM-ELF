@@ -106,7 +106,7 @@ def rejected(exe, folder, cache, settings, message, device, bits=4423):
     for key in ('ECM_PRAC_WINDOW_CHUNK','ECM_PRAC_TARGET_MS','ECM_GPU_DUMP'):
         env.pop(key,None)
     env.update(settings)
-    cmd = [str(exe),'-gpu','-d',str(device),'--gpu-param','0','-sigma','0:26','-gpucurves','8',
+    cmd = [str(exe),'--curve','mont','--target','gpu','-d',str(device),'--gpu-param','0','-sigma','0:26','-gpucurves','8',
         '--ckpt','0','--exp-cache',str(cache),'-savea','completed.save','1000','0']
     proc = subprocess.run(cmd,input=f'(2^{bits}-1)\n'.encode('ascii'),env=env,cwd=folder,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=120)
     text=proc.stdout.decode('utf-8',errors='replace');(folder/'run.log').write_text(text,encoding='utf-8')

@@ -87,10 +87,10 @@ Write-Host ("gp      : " + $Gp)
 Write-Host ""
 
 # ---------------------------------------------------------------------------------
-Write-Host "[1] --go reports the PARAM 0 curve (the one --method mont actually ran)"
+Write-Host "[1] --go reports the PARAM 0 curve (the one --curve mont --target cpu actually ran)"
 $prev = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
-$out = ($N128 | & $Driver --method mont --exponent lcm -sigma $Sigma -gpucurves 1 --go `
+$out = ($N128 | & $Driver --curve mont --target cpu --lcm 1 -sigma $Sigma -gpucurves 1 --go `
         --gp $Gp $B1 2>&1 | Out-String)
 $ErrorActionPreference = $prev
 

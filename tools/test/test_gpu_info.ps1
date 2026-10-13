@@ -195,7 +195,7 @@ Write-Host "=== E2. the run path agrees with the report ==="
 $nfile = Join-Path $work 'n.txt'
 # Exactly 63 bits (2^63 - 25); a literal, because PowerShell's 2**63 is a double.
 [System.IO.File]::WriteAllText($nfile, "9223372036854775783`n", ([System.Text.Encoding]::ASCII))
-$runOut = (& cmd /c "cd /d `"$work`" && `"$Exe`" -gpu -d $Device --gpu-param 0 -v -gpucurves 1 1e3 0 < `"$nfile`"" 2>&1 | Out-String)
+$runOut = (& cmd /c "cd /d `"$work`" && `"$Exe`" --curve mont --target gpu -d $Device --gpu-param 0 -v -gpucurves 1 1e3 0 < `"$nfile`"" 2>&1 | Out-String)
 $m = [regex]::Match($runOut, 'CGBN<(\d+),\s*(\d+)>')
 if ($m.Success) {
     $runTpi = [int]$m.Groups[1].Value

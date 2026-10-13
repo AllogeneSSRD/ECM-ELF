@@ -208,7 +208,7 @@ ParsedLine parse_line(const std::string &line) {
         if (eq != std::string::npos) {
             const std::string v = p.substr(eq + 1);
             // "factor[i]=<decimal>" possibly followed by the D3 fields
-            // " curve=… sigma=… param=… method=… save=…".
+            // " curve=… sigma=… param=… curve_model=… execution_target=… save=…".
             std::size_t end = 0;
             while (end < v.size() && is_digit(v[end])) ++end;
             if (end > 0) {
@@ -237,9 +237,13 @@ ParsedLine parse_line(const std::string &line) {
                     const char *r2 = r;
                     if (read_u64(r2, n)) out.hit.param = static_cast<int>(n);
                 }
-                if (const char *q = find_str(c, " method=")) {
-                    const char *r = q + 8;
-                    while (*r != '\0' && *r != ' ') out.hit.method.push_back(*r++);
+                if (const char *q = find_str(c, " curve_model=")) {
+                    const char *r = q + 13;
+                    while (*r != '\0' && *r != ' ') out.hit.curve_model.push_back(*r++);
+                }
+                if (const char *q = find_str(c, " execution_target=")) {
+                    const char *r = q + 18;
+                    while (*r != '\0' && *r != ' ') out.hit.execution_target.push_back(*r++);
                 }
                 if (const char *q = find_str(c, " save=")) {
                     const char *r = q + 6;
@@ -362,7 +366,8 @@ ParsedLine parse_line(const std::string &line) {
         // worth keeping in the log pane when a run is started or restarted.
         starts_with(p, "config :") || starts_with(p, "worktodo :") ||
         starts_with(p, "finished :") || starts_with(p, "log_file :") ||
-        starts_with(p, "saves :") || starts_with(p, "method :") ||
+        starts_with(p, "saves :") || starts_with(p, "curve model :") ||
+        starts_with(p, "execution target :") ||
         starts_with(p, "gpu backend :") || starts_with(p, "note:") ||
         contains(p, "raise -gpucurves") || contains(p, "needs >= 2 resident")) {
         out.kind = LogKind::Event;

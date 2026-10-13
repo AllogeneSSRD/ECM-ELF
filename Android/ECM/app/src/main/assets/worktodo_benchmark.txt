@@ -3,19 +3,19 @@
 #  N=2^421-1, sigma=3:2026, device=0
 #  B1=1e4 固定，遍历 16 个 gpucurves。
 
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 1 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 32 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 64 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 128 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 256 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 384 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 512 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 1024 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 1536 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 2048 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 3072 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 4096 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 6144 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 9216 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 12288 1e4 0
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -sigma 3:2026 -gpucurves 16384 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 1 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 32 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 64 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 128 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 256 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 384 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 512 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 1024 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 1536 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 2048 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 3072 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 4096 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 6144 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 9216 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 12288 1e4 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -sigma 3:2026 -gpucurves 16384 1e4 0

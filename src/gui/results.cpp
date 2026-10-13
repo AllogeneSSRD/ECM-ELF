@@ -238,7 +238,8 @@ bool ResultsStore::init(const std::string &json_path, const std::string &txt_pat
         if (json_int(line, "b1", &b1i)) r.b1 = static_cast<double>(b1i);
         r.b1_text = json_str(line, "b1_text");
         r.n_expr = json_str(line, "n");
-        r.method = json_str(line, "method");
+        r.curve_model = json_str(line, "curve_model");
+        r.execution_target = json_str(line, "execution_target");
         r.save = json_str(line, "save");
         r.task = json_str(line, "task");
         r.timestamp = json_str(line, "timestamp");
@@ -269,7 +270,8 @@ void ResultsStore::merge(const HitRecord &r) {
             m.b1 = r.b1;
         }
         if (m.param < 0) m.param = r.param;
-        if (m.method.empty()) m.method = r.method;
+        if (m.curve_model.empty()) m.curve_model = r.curve_model;
+        if (m.execution_target.empty()) m.execution_target = r.execution_target;
         if (m.save.empty()) m.save = r.save;
         m.worker = r.worker;
         m.device = r.device;
@@ -283,7 +285,8 @@ void ResultsStore::merge(const HitRecord &r) {
     m.b1_text = r.b1_text;
     m.b1 = r.b1;
     m.param = r.param;
-    m.method = r.method;
+    m.curve_model = r.curve_model;
+    m.execution_target = r.execution_target;
     if (r.curve >= 0) m.curves.push_back(r.curve);
     if (r.has_sigma) m.sigmas.push_back(r.sigma);
     m.hits = 1;
@@ -321,7 +324,8 @@ bool ResultsStore::add(const HitRecord &r, std::string &err) {
         if (!rec.b1_text.empty()) js << ", \"b1_text\":\"" << json_escape(rec.b1_text) << "\"";
         if (!rec.n_expr.empty()) js << ", \"n\":\"" << json_escape(rec.n_expr) << "\"";
         if (rec.param >= 0) js << ", \"param\":" << rec.param;
-        if (!rec.method.empty()) js << ", \"method\":\"" << json_escape(rec.method) << "\"";
+        if (!rec.curve_model.empty()) js << ", \"curve_model\":\"" << json_escape(rec.curve_model) << "\"";
+        if (!rec.execution_target.empty()) js << ", \"execution_target\":\"" << json_escape(rec.execution_target) << "\"";
         if (rec.curve >= 0) js << ", \"curve\":" << rec.curve;
         if (rec.has_sigma) js << ", \"sigma\":" << rec.sigma;
         if (!rec.save.empty()) js << ", \"save\":\"" << json_escape(rec.save) << "\"";
@@ -353,7 +357,8 @@ std::string ResultsStore::format_line(const MergedFactor &f) {
     if (!f.curves.empty()) os << " curves " << join_ints(f.curves);
     if (!f.b1_text.empty()) os << ", B1=" << f.b1_text;
     if (f.param >= 0) os << ", param " << f.param;
-    if (!f.method.empty()) os << ", " << f.method;
+    if (!f.curve_model.empty()) os << ", " << f.curve_model;
+    if (!f.execution_target.empty()) os << ", " << f.execution_target;
     if (!f.sigmas.empty()) os << ", Sigmas=[" << join_u64(f.sigmas) << "]";
     os << ", hits=" << f.hits << ")";
     return os.str();

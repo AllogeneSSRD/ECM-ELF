@@ -32,7 +32,8 @@ struct HitRecord {
     std::string b1_text;       // compact B1 as written in the save name ("1e6", "110e6")
     double b1 = 0.0;
     int param = -1;            // -1 = unknown
-    std::string method;        // gpu | edwards | mont
+    std::string curve_model;
+    std::string execution_target;
     int curve = -1;
     unsigned long long sigma = 0;
     bool has_sigma = false;
@@ -52,7 +53,8 @@ struct MergedFactor {
     std::string b1_text;
     double b1 = 0.0;
     int param = -1;
-    std::string method;
+    std::string curve_model;
+    std::string execution_target;
     std::vector<int> curves;              // deduplicated, in hit order
     std::vector<unsigned long long> sigmas;
     int hits = 0;

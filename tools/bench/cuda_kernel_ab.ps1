@@ -43,7 +43,7 @@ for ($r = 1; $r -le $Repeats; $r++) {
     # NOTE: gmp-ecm semantics -- "-sigma i:s" ALSO selects the parametrization, so the prefix
     # must agree with --gpu-param; "-sigma 3:..." together with "--gpu-param 0" is now a hard
     # error ("Error, conflict between -sigma and -param arguments", see test_cli_args.ps1).
-    $argv = "-gpu -d $Device --gpu-param $GpuParam -sigma ${GpuParam}:12345678 -gpucurves $Curves --ckpt 0 $B1 0"
+    $argv = "--curve mont --target gpu -d $Device --gpu-param $GpuParam -sigma ${GpuParam}:12345678 -gpucurves $Curves --ckpt 0 $B1 0"
     $out = cmd /c "cd /d `"$tmp`" && `"$Exe`" $argv < `"$nfile`"" 2>&1 | Out-String
     $m = $out -split "`r?`n" | Select-String -Pattern 'gputime=([0-9.]+)'
     if ($m.Count -eq 0) {

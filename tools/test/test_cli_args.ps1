@@ -51,7 +51,7 @@ function Skip([string]$name, [string]$why) {
 
 # Run the binary with the given argument tail; return @{exit=..; out=..}
 function Run-Ecm([string]$argtail) {
-    $argv = "-gpu -d $Device $argtail -gpucurves 1 --ckpt 0 1e3 0"
+    $argv = "--curve mont --target gpu -d $Device $argtail -gpucurves 1 --ckpt 0 1e3 0"
     $out = cmd /c "cd /d `"$work`" && `"$CudaExe`" $argv < n.txt" 2>&1 | Out-String
     return @{ exit = $LASTEXITCODE; out = $out }
 }

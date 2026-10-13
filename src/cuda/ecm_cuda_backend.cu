@@ -27,6 +27,20 @@
    overrides this from the driver's -v flag before the run. */
 static int g_cuda_verbose = OUTPUT_NORMAL;
 
+extern "C" const char *ecm_backend_stage1_param_error(int gpu_param) {
+    if (gpu_param != 0 && gpu_param != 2 && gpu_param != 3)
+        return "unknown GPU parametrization (expected 0, 2 or 3)";
+#if defined(ECM_NO_PARAM2) && ECM_NO_PARAM2
+    if (gpu_param == 2)
+        return "param2 kernels are NOT compiled into this binary (-DECM_NO_PARAM2=1)";
+#endif
+#if defined(ECM_MERS_FOLD) && ECM_MERS_FOLD
+    if (gpu_param == 3)
+        return "the Mersenne fold build has no PARAM3 Montgomery kernels";
+#endif
+    return nullptr;
+}
+
 extern "C" void ecm_cuda_set_verbose(int level) { g_cuda_verbose = level; }
 
 extern "C" int test_verbose(int level) { return g_cuda_verbose >= level; }

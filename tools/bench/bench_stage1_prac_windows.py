@@ -33,8 +33,9 @@ def sample(exe, folder, bits, b1, curves, device, tpi, registers, variant,
     env.pop('ECM_GPU_DUMP', None)
     env.pop('ECM_PRAC_TARGET_MS', None)  # Fixed window chunks are independent of production feedback.
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob('.ecm_ckpt_*')}
-    command = [str(exe), '-gpu', '-d', str(device), '--gpu-param', '0', '-sigma', f'0:{sigma}',
-        '-gpucurves', str(curves), '--ckpt', '0', '--exponent', exponent,
+    command = [str(exe), '--curve','mont','--target','gpu', '-d', str(device), '--gpu-param', '0', '-sigma', f'0:{sigma}',
+        '-gpucurves', str(curves), '--ckpt', '0', '--lcm',
+        '12' if exponent == 'choose12' else '1',
         '--exp-cache', str(cache), '-v', '-savea', 'completed.save', str(b1), '0']
     print(f'START window={position} chunk={chunk or count} n={bits} B1={b1} C={curves} reg={registers} variant={variant} constants={constants}', flush=True)
     start = time.monotonic()

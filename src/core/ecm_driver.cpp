@@ -40,6 +40,7 @@
 #include "ecm_save.h"
 #include "ecm_checkpoint.h"         /* opencl_ecm_set_work_dir */
 #include "ecm_stage1_checkpoint_runtime.h"
+#include "ecm_stage1_selection.h"
 #include "opencl_ecm_runtime_config.h"
 #include "ecm.h"
 #include "cgbn_stage1.h"            /* gpu_pick_random_sigma / gpu_compute_batch_d */
@@ -60,6 +61,15 @@
 /* IFMA_FIELD_* 常量 (SIMD 域选择)。头文件不含 AVX512 intrinsic, 基线 TU 可包含;
    只给 simd_*.cpp 加 /arch:AVX512, 见 §14.1。 */
 #include "simd_mont_ifma.h"
+
+static int to_ifma_field_mode(ecm_stage1::SimdReduction reduction) {
+    switch (reduction) {
+    case ecm_stage1::SimdReduction::Auto: return IFMA_FIELD_AUTO;
+    case ecm_stage1::SimdReduction::Montgomery: return IFMA_FIELD_MONT;
+    case ecm_stage1::SimdReduction::MersenneFold: return IFMA_FIELD_MERS;
+    }
+    return IFMA_FIELD_AUTO;
+}
 
 static void trim(std::string &s){
     while(!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
@@ -314,7 +324,7 @@ static std::string get_gp_executable(const std::string &explicit_path = "") {
 /* Group order of the ECM curve attached to `sigma` modulo the prime p, computed by gp/PARI.
  *
  * The four parametrizations follow the canonical FindGroupOrder() script (the same one gmp-ecm
- * ships): param 0 = Suyama sigma (what --method mont and --gpu-param 0 use, i.e. our own stage
+ * ships): param 0 = Suyama sigma (CPU Montgomery and --gpu-param 0, i.e. our own stage
  * 1 default), 1 = "A = 4s^2/2^64-2", 2 = the 6-torsion family, 3 = the historical GPU path
  * (A = 4s/2^32-2).
  *
@@ -535,45 +545,40 @@ static void print_ecm_usage(const char *prog) {
               << "  B1              Stage-1 bound (required for meaningful runs)\n"
               << "  B2              Stage-2 bound (optional; 0 disables stage 2)\n\n"
               << "Options:\n"
-              << "  -gpu                 Enable GPU stage-1 (requires -gpucurves)\n"
-              << "  --method <m>         gpu|edwards|mont : which stage-1 engine to run\n"
-              << "                       (-gpu / --edwards / --mont are the same choice)\n"
-              << "  --backend <m>        auto|simd|gmp : modular-mul backend of the CPU paths\n"
-              << "                       (simd = AVX512-IFMA 8 curves/batch; errors out when the\n"
-              << "                       CPU lacks the ISA, auto falls back to the scalar path)\n"
-              << "  --field <m>          auto|mersenne|montgomery : SIMD reduction domain. auto\n"
+              << "  --curve <m>          mont|ed (Montgomery or Edwards; default mont)\n"
+              << "  --target <t>         cpu|gpu (default gpu; GPU Edwards unsupported)\n"
+              << "  --impl <m>           auto|simd|scalar (CPU only). The SIMD path\n"
+              << "                       requires AVX512-IFMA; auto selects by batch size.\n"
+              << "  --reduction <m>      auto|montgomery|mersenne-fold (CPU SIMD). auto\n"
               << "                       uses the Mersenne fold when N = 2^k-1 (half the madds\n"
-              << "                       per multiply); montgomery forces the A/B baseline\n"
+              << "                       per multiply); explicit values require --impl simd.\n"
               << "  --stage1-threads <n> CPU stage-1 worker threads (0=auto, 1=serial). One task\n"
               << "                       is an 8-curve SIMD batch (simd backend) or one curve\n"
               << "  --exp-cache <dir>    cache s = torsion*lcm(1..B1) on disk (default: the exe\n"
               << "                       directory; \"off\" disables).  B1 = 260e6 costs ~10 s to\n"
               << "                       build and ~0.3 s to load from a validated cache.\n"
-              << "  --exponent <m>       lcm|choose12 : Montgomery stage-1 exponent. lcm =\n"
-              << "                       lcm(1..B1) (gmp-ecm -param 0, default); choose12 =\n"
-              << "                       12*lcm(1..B1) (Prime95-style; use when Prime95 runs\n"
+              << "  --lcm <1|12>         Stage1 scalar multiplier for lcm(1..B1). 1 is the\n"
+              << "                       default; 12 is Prime95-style (use when Prime95 runs\n"
               << "                       stage 2 on our point, see doc section 16.7)\n"
               << "  --naf-w <w>          Edwards NAF window (0 = default 12); dictionary = 2^(w-2)\n"
               << "  --affinity <list>    Pin worker t to logical CPU list[t %% len], e.g. 0,1,2,3\n"
               << "                       or 0-7.  On hybrid CPUs (Zen5 + Zen5c, P+E cores, ...)\n"
               << "                       this can hurt: measure first (doc section 13.4)\n"
-              << "  Legacy aliases: --edwards-backend/--mont-backend (=--backend),\n"
-              << "                       --edwards-threads/--mont-threads (=--stage1-threads),\n"
-              << "                       --edwards-naf-w (=--naf-w), --edwards-mersenne (=--field),\n"
-              << "                       --mont-torsion 1|12 (=--exponent lcm|choose12)\n"
               << "  --tmp-dir <dir>      Local dir for stage-1 saves e{n:07d}_c{k}[.tmp]\n"
               << "                       (default: current dir; ecm.exe never writes to p95)\n"
               << "  -gpucurves <n>       Number of ECM curves per launch (Edwards: total curves)\n"
               << "  --ckpt <sec>         Mid-stage-1 checkpoint interval in seconds, for every\n"
-              << "                       method that has one (GPU, CPU Edwards, CPU Montgomery;\n"
+              << "                       implementation that has one (GPU, CPU Edwards, CPU Montgomery;\n"
               << "                       default: 600, 0 = no autosave -- Ctrl+C still saves)\n"
               << "  -d <index>           " << ecm_backend_name()
               << " device index (default: 0)\n"
               << "  --gpu-param <0|2|3>  GPU curve parametrization (ini: gpu_param):\n"
-              << "                       0 = Suyama param0 (same curves as --method mont,\n"
+              << "                       0 = Suyama param0 (same curves as CPU Montgomery,\n"
               << "                           Z/12 torsion, param0 save file) -- CUDA/CGBN only;\n"
+              << "                       2 = gmp-ecm batch 2 / PARAM=2 -- CUDA/CGBN only;\n"
               << "                       3 = gmp-ecm batch/PARAM=3 (default, historical GPU path)\n"
-              << "  -sigma <value>       Fixed curve sigma (1..2^32-1; optional param:3: prefix)\n"
+              << "  -sigma <value>       Fixed curve sigma (1..2^64-1; optional param:sigma prefix).\n"
+              << "                       GPU PARAM2/3 need sigma+curves <= 2^32.\n"
               << "  -v                   Verbose output\n"
               << "  -save <file>         Append factorization lines to file\n"
               << "  -savea <file>        Same as -save (append mode)\n"
@@ -618,9 +623,9 @@ static void print_ecm_usage(const char *prog) {
               << "                             the worktodo file; keys before the first section\n"
               << "                             header are the global defaults for every worker.\n\n"
               << "Examples:\n"
-              << "  echo '(2^991-1)' | " << name << " -v --go -gpu -gpucurves 384 1e6 0\n"
-              << "  echo '(2^421-1)' | " << name << " -gpu -gpucurves 256 -d 1 1e5 0\n"
-              << "  echo '(2^4003-1)' | " << name << " -gpu -gpucurves 384 --add asm_b32 1e6 0\n"
+              << "  echo '(2^991-1)' | " << name << " -v --go --curve mont --target gpu -gpucurves 384 1e6 0\n"
+              << "  echo '(2^421-1)' | " << name << " --curve mont --target gpu -gpucurves 256 -d 1 1e5 0\n"
+              << "  echo '(2^4003-1)' | " << name << " --curve mont --target gpu -gpucurves 384 --add asm_b32 1e6 0\n"
               << "  " << name << " --showkernel\n"
               << "  " << name << " -ini ecm.ini --worker 2      (queue manager, worker #2)\n\n"
               << "Add/sub path names (for --add / --sub): default, fused, fused_unroll,\n"
@@ -686,45 +691,24 @@ static long long current_epoch_seconds() {
 }
 
 struct Stage1RunOptions {
-    /* Which stage-1 engine runs.  Exactly one is true; the CLI (--method / -gpu /
-       --edwards / --mont) and the ini key `method` both resolve into these flags. */
-    bool use_gpu = true;
-    bool use_edwards = false;        // CPU Edwards (Atkin-Morain)
-    bool use_mont = false;           // CPU Suyama-sigma Montgomery
-    /* Shared by both CPU paths (the ini key is `backend`; the two paths used to have
-       one copy each, which is exactly the duplication this cleanup removed). */
-    int      backend = 0;            // 0=auto 1=simd(强制,无 ISA 则报错) 2=gmp(标量)
-    int      backend_auto_pick = -1; // 实际选中的: 1=simd 2=gmp (打印用)
+    /* CLI and INI resolve the same mathematical and execution choices. */
+    ecm_stage1::Selection selection{};
     uint32_t stage1_threads = ecm_config::defaults::stage1_stage1_threads;     // 0 = auto (min(#tasks, #cores)); 1 = 顺序
-    /* SIMD 域的归约方式 (两条 CPU 路径共用): IFMA_FIELD_AUTO (N=2^k-1 时用 Mersenne
-       折叠, madds/模乘减半) | IFMA_FIELD_MONT (强制 Montgomery) | IFMA_FIELD_MERS. */
-    int      field = IFMA_FIELD_AUTO;
     long long stage1_t0_ms = 0;      // 进度条计时起点
     uint32_t  stage1_curves = 0;     // 进度条总数
     std::vector<unsigned> affinity_cpus;   // 亲核性 (空 = 不绑定)
     int naf_w = ecm_config::defaults::stage1_naf_w;                   // Edwards 专属: 0 = ecm_edwards_cpu 的默认窗口
-    /* Montgomery 专属: 指数约定. false = lcm(1..B1) (gmp-ecm -param 0, 本项目验收口径);
-       true = 12*lcm(1..B1) (Prime95 choose12, 交给 Prime95 做 stage 2 时用). */
-    bool exponent_choose12 = false;
     /* Save-file name pattern of the CPU paths (ini: save_name_pattern).  {n} = Mersenne
        exponent for N = 2^k-1 (else the bit length), {b1} = compact bound.  The reading
        side extracts B1 from the last '_' token, so keep that shape. */
     std::string save_name_pattern = ecm_config::defaults::stage1_save_name_pattern;
     int verbose = 0;
     int device_index = ecm_config::defaults::stage1_device;
-    /* Curve parametrization of the GPU stage-1 path (ini: gpu_param, CLI: --gpu-param):
-       3 = gmp-ecm batch (historical GPU path, save carries PARAM=3);
-       2 = param2, gmp-ecm's "batch 2" 6-torsion family (save carries PARAM=2, which
-           gmp-ecm reads back but Prime95 cannot; ~11% faster per curve than param0 at
-           the same success rate -- docs/performance/STAGE1.md);
-       0 = Suyama param0 (same curves as the CPU --method mont path, param0 save). */
-    int gpu_param = ecm_config::defaults::stage1_gpu_param;
     unsigned long ckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
     unsigned ckpt_backups = ecm_config::defaults::stage1_ckpt_backups;
     std::string gpu_mul_path, gpu_sqr_path, gpu_add_path, gpu_sub_path, gpu_special_mult_path;
     bool sigma_fixed = false;
-    uint32_t fixed_sigma = 0;        // GPU batch sigma (32-bit)
-    uint64_t fixed_sigma64 = 0;      // Edwards sigma (64-bit)
+    uint64_t fixed_sigma64 = 0;      // Full seed; GPU PARAM2/3 validate the 32-bit window
     // 本地 stage-1 落盘目录 (空 = 不落盘/不 checkpoint)。
     // 结果写成 <tmp_dir>/e{n:07d}_c{curve:06d}.tmp (MIDSTAGE 供 stage-2) 与
     // <tmp_dir>/e{n:07d}_c{curve:06d} (STAGE1 自检查点); p95 交接由 ecm_p95feeder 负责。
@@ -740,9 +724,10 @@ struct Stage1RunOptions {
 struct Stage1RunResult {
     int ret = ECM_ERROR;
     bool prepare_failed = false;
+    bool publish_failed = false;
     uint32_t curves = 0;
     uint32_t firstsigma = 0;
-    uint64_t firstsigma64 = 0;       // full 64-bit sigma (Edwards path)
+    uint64_t firstsigma64 = 0;       // full 64-bit sigma
     mpz_t *factors = nullptr;
     int *array_found = nullptr;
     // Per-curve sigma of THIS batch (malloc'd, `curves` entries, caller frees; may be
@@ -752,6 +737,67 @@ struct Stage1RunResult {
     // docs/usage/GUI.md) and therefore the GUI's results.txt sigma list.
     uint64_t *sigmas = nullptr;
 };
+
+static bool stage1_selection_error(const ecm_stage1::Selection &selection,
+                                   std::string &error) {
+    if (!ecm_stage1::valid_route(selection)) {
+        error = "GPU Edwards stage-1 is not implemented";
+        return true;
+    }
+    if (selection.curve == ecm_stage1::CurveModel::Edwards &&
+        selection.scalar_construction != ecm_stage1::ScalarConstruction::PrimePowerLcm) {
+        error = "CPU Edwards uses its fixed 48*lcm(1..B1) scalar; --lcm 12 is unsupported";
+        return true;
+    }
+    if (selection.target == ecm_stage1::ExecutionTarget::Gpu &&
+        (selection.cpu_implementation != ecm_stage1::CpuImplementation::Auto ||
+         selection.simd_reduction != ecm_stage1::SimdReduction::Auto)) {
+        error = "--impl and --reduction require --target cpu";
+        return true;
+    }
+    if (selection.target == ecm_stage1::ExecutionTarget::Cpu &&
+        selection.simd_reduction != ecm_stage1::SimdReduction::Auto &&
+        selection.cpu_implementation != ecm_stage1::CpuImplementation::IfmaSimd) {
+        error = "explicit --reduction requires --impl simd";
+        return true;
+    }
+    if (selection.target != ecm_stage1::ExecutionTarget::Gpu) return false;
+    if (!ecm_stage1::valid_gpu_param(selection.gpu_param)) {
+        error = "invalid gpu_param (expected 0, 2 or 3)";
+        return true;
+    }
+    if (const char *reason = ecm_backend_stage1_param_error(selection.gpu_param)) {
+        error = std::string(ecm_backend_name()) + ": " + reason;
+        return true;
+    }
+    return false;
+}
+
+static bool stage1_task_error(const Stage1RunOptions &opt, uint32_t curves,
+                              std::string &error) {
+    if (opt.sigma_fixed && curves != 0 &&
+        static_cast<uint64_t>(curves - 1) > UINT64_MAX - opt.fixed_sigma64) {
+        error = "sigma + curve index exceeds 2^64-1";
+        return true;
+    }
+    if (opt.selection.target != ecm_stage1::ExecutionTarget::Gpu ||
+        opt.selection.gpu_param == 0 || !opt.sigma_fixed) return false;
+    if (opt.fixed_sigma64 > 0xFFFFFFFFull) {
+        error = "GPU batch sigma exceeds 2^32-1";
+        return true;
+    }
+    if (curves != 0 && curves > 0x100000000ull - opt.fixed_sigma64) {
+        error = "GPU batch sigma + curves must be <= 2^32";
+        return true;
+    }
+    return false;
+}
+
+static bool fixed_sigma_batch_exceeds_prime95_range(uint64_t sigma, uint32_t curves) {
+    return curves != 0 &&
+           (sigma > static_cast<uint64_t>(INT64_MAX) ||
+            static_cast<uint64_t>(curves - 1) > static_cast<uint64_t>(INT64_MAX) - sigma);
+}
 
 // ---- 自我 checkpoint / 进度显示 (CPU stage-1: Edwards 与 Montgomery 共用) ----
 //
@@ -1327,12 +1373,12 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
     int w = edwards_get_naf_w();
     if (w < 3 || w > 12) w = 8;
     {
-        const int rc = ed_soa_init_ex(&ctx, N, w, opt.field);
+        const int rc = ed_soa_init_ex(&ctx, N, w, to_ifma_field_mode(opt.selection.simd_reduction));
         if (rc != 0) {
             /* 保持与原来完全相同的控制流 (先尝试建 ctx, 失败就返回 -1), 只把
                "SIMD stage-1 internal error" 这句含糊的日志换成能看出原因的话:
-               --edwards-mersenne on 要求 N = 2^k-1 (k>=64), 这是最常见的误用。 */
-            bool want_mers = (opt.field == IFMA_FIELD_MERS);
+               reduction=mersenne-fold 要求 N = 2^k-1 (k>=64), 这是最常见的误用。 */
+            bool want_mers = (opt.selection.simd_reduction == ecm_stage1::SimdReduction::MersenneFold);
             if (want_mers) {
                 mpz_t t;
                 mpz_init(t);
@@ -1456,7 +1502,7 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
 }
 
 static void edwards_worker(EdwardsWorkerCtx *ctx) {
-    const int use_simd = (ctx->opt->backend != 2) && ctx->simd_ok;
+    const int use_simd = (ctx->opt->selection.cpu_implementation != ecm_stage1::CpuImplementation::GmpScalar) && ctx->simd_ok;
     for (;;) {
         if (ecm_stage1_stop_requested()) { ctx->aborted->store(1, std::memory_order_relaxed); break; }
         uint32_t i, n;
@@ -1676,9 +1722,9 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     //   mpz_get_str() -> atoll()   (p95 ecmp.cpp:7375)
     // ⇒ σ >= 2^63 会溢出, Prime95 会按被截断的 σ 重建出**另一条曲线**, stage 2 白跑
     //   (它加载的 x 来自我们的曲线)。Prime95 自己只生成 σ < 2^53 (ecm.cpp:7416),
-    //   随机路径的 random_sigma_u64() 也只有 < 2^53 ✓; 但 `--edwards --sigma <64位>`
+    //   随机路径的 random_sigma_u64() 也只有 < 2^53 ✓; 但 CPU Edwards 的 64-bit sigma
     //   允许到 2^64-1, 那条路需要提醒。gmp-ecm 的 reader 是 mpz 的, 不受此限。
-    if (opt.sigma_fixed && (opt.fixed_sigma64 + curves) > (uint64_t)INT64_MAX) {
+    if (opt.sigma_fixed && fixed_sigma_batch_exceeds_prime95_range(opt.fixed_sigma64, curves)) {
         std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
         ecm_ts_fprintf(stderr,
             "WARNING: sigma >= 2^63; Prime95's ECMSTAGE2 reader (atoll) cannot read it --\n"
@@ -1765,21 +1811,21 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         std::atomic<uint32_t> &done_ctr = g_stage1_done;
         {
             const int isa = driver_simd_isa_ok();
-            if (opt.backend == 1 && !isa) {
+            if (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd && !isa) {
                 ecm_ts_fprintf(stderr,
-                               "ERROR: --edwards-backend simd requested but this CPU lacks "
+                               "ERROR: --impl simd requested but this CPU lacks "
                                "AVX512-F/DQ/IFMA. Refusing to fall back silently; use "
-                               "--edwards-backend auto or gmp.\n");
+                               "--impl auto or scalar.\n");
                 return -1;
             }
-            wctx.simd_ok = (opt.backend == 1) ? 1
-                         : (opt.backend == 0) ? (isa && curves >= 8) : 0;
+            wctx.simd_ok = (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd) ? 1
+                         : (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::Auto) ? (isa && curves >= 8) : 0;
             wctx.done_ctr = &done_ctr;
             char sbuf[160];
             snprintf(sbuf, sizeof(sbuf),
                      "simd (AVX512-IFMA: 8 curves per batch, 1 thread/batch, dict w=%d)",
                      edwards_get_naf_w() >= 3 ? edwards_get_naf_w() : 8);
-            ecm_ts_fprintf(stdout, "stage-1 backend : %s\n",
+            ecm_ts_fprintf(stdout, "CPU implementation : %s\n",
                            wctx.simd_ok ? sbuf : "gmp (scalar mpn, 1 curve/thread)");
             ecm_ts_fprintf(stdout, "N / s           : %zu bit N, %zu bit s\n",
                            mpz_sizeinbase(N, 2), mpz_sizeinbase(s, 2));
@@ -1938,7 +1984,7 @@ static std::string mont_save_stem(const std::string &pattern, const mpz_t N, dou
  * The unit of parallel work differs per backend: the SIMD path runs 8 curves per
  * batch, so its parallelism is capped by the number of batches (curves/8) and the
  * scalar path by the number of curves.  Extra threads beyond that would only
- * contend, so clamp -- 8 curves under --mont-backend simd is one thread of real
+ * contend, so clamp -- 8 curves under the IFMA SIMD implementation is one thread of real
  * work no matter how many cores the machine has. */
 static uint32_t mont_default_threads(uint32_t curves, bool use_simd) {
     unsigned hw = std::thread::hardware_concurrency();
@@ -2036,7 +2082,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
 
     mpz_t s;
     mpz_init(s);
-    const int torsion = opt.exponent_choose12 ? 12 : 1;
+    const int torsion = opt.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12 : 1;
     std::string s_status;
     const size_t s_bits = mont_build_s(s, (uint64_t)B1, (uint64_t)torsion, &s_status);
     if (s_bits == 0) {
@@ -2051,17 +2097,17 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     }
 
     const bool isa = driver_simd_isa_ok();
-    if (opt.backend == 1 && !isa) {
+    if (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd && !isa) {
         ecm_ts_fprintf(stderr,
-                       "ERROR: --mont-backend simd requested but this CPU lacks "
-                       "AVX512-F/DQ/IFMA. Use --mont-backend auto or gmp.\n");
+                       "ERROR: --impl simd requested but this CPU lacks "
+                       "AVX512-F/DQ/IFMA. Use auto or scalar.\n");
         mpz_clear(s);
         return ECM_ERROR;
     }
-    const bool use_simd = (opt.backend == 1) ? true
-                        : (opt.backend == 2) ? false
+    const bool use_simd = (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd) ? true
+                        : (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::GmpScalar) ? false
                         : (isa && curves >= 2);
-    ecm_ts_fprintf(stdout, "method          : montgomery (Suyama sigma, %s, torsion=%d)\n",
+    ecm_ts_fprintf(stdout, "curve model     : montgomery (Suyama sigma, %s, torsion=%d)\n",
                    use_simd ? "AVX512-IFMA 8-lane batch" : "scalar mpn", torsion);
     ecm_ts_fprintf(stdout, "stage1 exponent : s_bits=%zu (lcm(1..%.0f) x %d) [%s]\n",
                    s_bits, B1, torsion, s_status.c_str());
@@ -2171,7 +2217,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
             }
         }
     }
-    if (opt.sigma_fixed && opt.fixed_sigma64 + curves > (uint64_t)INT64_MAX) {
+    if (opt.sigma_fixed && fixed_sigma_batch_exceeds_prime95_range(opt.fixed_sigma64, curves)) {
         ecm_ts_fprintf(stderr,
             "WARNING: sigma >= 2^63; Prime95's ECMSTAGE2 reader (atoll) cannot read it.\n"
             "         Use gmp-ecm for stage 2 with these sigmas, or pass a smaller -sigma.\n");
@@ -2253,7 +2299,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     auto worker = [&]() {
         if (use_simd) {
             mont_soa_ctx_t ctx;                     /* per-thread scratch pool */
-            if (mont_soa_init(&ctx, N, opt.field) != 0) {
+            if (mont_soa_init(&ctx, N, to_ifma_field_mode(opt.selection.simd_reduction)) != 0) {
                 init_failed.store(1);
                 return;
             }
@@ -2562,18 +2608,26 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
 
     /* ONE shared save file for the whole task (same N, same B1), named with the
        CUDA/GPU convention: m{n}_{b1}.save */
+    bool save_failed = false;
     if (use_ckpt) {
         const std::string fname = mont_format_save_name(opt.save_name_pattern, N, B1);
         const std::string path = opt.tmp_dir + "/" + fname;
-        ecm_append_save_lines_mont(path, N, B1, sigmas.data(), curves, xs.data(), hit,
-                                   n_expr.empty() ? std::to_string(mpz_sizeinbase(N, 2)) : n_expr);
-        ecm_ts_fprintf(stdout, "  save            : %s (%u curve lines, shared)\n",
-                       path.c_str(), curves);
+        save_failed = !ecm_append_save_lines_mont(
+            path, N, B1, sigmas.data(), curves, xs.data(), hit,
+            n_expr.empty() ? std::to_string(mpz_sizeinbase(N, 2)) : n_expr);
+        if (save_failed) {
+            ecm_ts_fprintf(stderr, "ERROR: could not publish Montgomery save %s\n", path.c_str());
+        } else {
+            ecm_ts_fprintf(stdout, "  save            : %s (%u curve lines, shared)\n",
+                           path.c_str(), curves);
+        }
         /* The .save above is now the durable artifact (and the interoperable one),
            so the resume scratch files are no longer needed: dropping them makes a
            repeated run a fresh run instead of an instant replay of this one. */
-        for (uint32_t i = 0; i < curves; i++)
-            mont_ckpt_remove(mont_ckpt_path(ckpt_stem, i));
+        if (!save_failed) {
+            for (uint32_t i = 0; i < curves; i++)
+                mont_ckpt_remove(mont_ckpt_path(ckpt_stem, i));
+        }
     }
 
     if (n_done_ck || n_inflight_ck) {
@@ -2587,7 +2641,9 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     free(hit);
     mpz_clear(s);
 
-    out->ret = found ? ECM_FACTOR_FOUND_STEP1 : ECM_NO_FACTOR_FOUND;
+    out->ret = save_failed ? ECM_ERROR :
+               (found ? ECM_FACTOR_FOUND_STEP1 : ECM_NO_FACTOR_FOUND);
+    out->publish_failed = save_failed;
     out->factors = factors;
     out->array_found = array_found;
     return out->ret;
@@ -2598,11 +2654,13 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &n_expr,
                            const Stage1RunOptions &opt, Stage1RunResult *out) {
     ecm_stage1_set_backup_limit(opt.ckpt_backups);
-    if (opt.use_mont) {
+    if (opt.selection.target == ecm_stage1::ExecutionTarget::Cpu &&
+        opt.selection.curve == ecm_stage1::CurveModel::Montgomery) {
         return run_mont_stage1(N, B1, B2, curves, savefilename, saveappend,
                                n_expr, opt, out);
     }
-    if (opt.use_edwards) {
+    if (opt.selection.target == ecm_stage1::ExecutionTarget::Cpu &&
+        opt.selection.curve == ecm_stage1::CurveModel::Edwards) {
         return run_edwards_stage1(N, B1, B2, curves, savefilename, saveappend,
                                   n_expr, opt, out);
     }
@@ -2622,10 +2680,10 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
     // Setup params.
     ecm_params params;
     ecm_init(params);
-    params->gpu = opt.use_gpu ? 1 : 0;
+    params->gpu = 1;
     params->gpu_number_of_curves = curves;
     params->gpu_checkpoint_interval_ms = opt.ckpt_ms;
-    params->gpu_param = opt.gpu_param;
+    params->gpu_param = opt.selection.gpu_param;
     if (!opt.gpu_mul_path.empty()) {
         strncpy(params->gpu_mul_path, opt.gpu_mul_path.c_str(), sizeof(params->gpu_mul_path) - 1u);
         params->gpu_mul_path[sizeof(params->gpu_mul_path) - 1u] = '\0';
@@ -2652,7 +2710,8 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
 
     mpz_t batch_s;
     mpz_init(batch_s);
-    if (!compute_batch_s(batch_s, B1, opt.exponent_choose12 ? 12u : 1u)) {
+    if (!compute_batch_s(batch_s, B1,
+                         opt.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12u : 1u)) {
         std::cerr << "Failed to compute batch_s" << std::endl;
         mpz_clear(batch_s);
         ecm_clear(params);
@@ -2661,7 +2720,7 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
     mpz_set(params->batch_s, batch_s);
     params->batch_last_B1_used = B1;
 
-    if (opt.use_gpu) {
+    {
         const int prep = ecm_backend_prepare((size_t)mpz_sizeinbase(N, 2), params->verbose,
                                              opt.device_index,
                                              params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
@@ -2683,6 +2742,7 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
     if (!resolved_save.empty()) {
         resolved_save = opencl_ecm_resolve_data_path(resolved_save.c_str());
         if (!opencl_ecm_check_save_file_writable(resolved_save, saveappend)) {
+            out->publish_failed = true;
             mpz_clear(batch_s);
             ecm_clear(params);
             return ECM_ERROR;
@@ -2704,10 +2764,11 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
                        only accepts sigma < 2^63, and random_sigma_u64() is < 2^53). */
     const bool gpu_param0 = (params->gpu_param == 0);
     uint64_t firstsigma64 = opt.sigma_fixed
-        ? (gpu_param0 ? opt.fixed_sigma64 : (uint64_t)opt.fixed_sigma)
+        ? opt.fixed_sigma64
         : (gpu_param0 ? random_sigma_u64() : (uint64_t)gpu_pick_random_sigma(curves));
     const uint32_t firstsigma = (uint32_t)(firstsigma64 & 0xFFFFFFFFull);
-    if (!gpu_param0 && firstsigma64 + curves > 0x100000000ull) {
+    if (!gpu_param0 &&
+        (firstsigma64 > 0xFFFFFFFFull || curves > 0x100000000ull - firstsigma64)) {
         std::cerr << "sigma range overflows uint32 (sigma + curves > 2^32)" << std::endl;
         for (uint32_t i = 0; i < curves; i++) mpz_clear(factors[i]);
         free(factors);
@@ -2728,10 +2789,11 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
               << " (" << curves << " curves, " << ecm_backend_name() << ")" << std::endl;
 
     float gputime = 0.0f;
-    const int ret = ecm_backend_stage1(factors, array_found, N, params->batch_s, curves,
+    int ret = ecm_backend_stage1(factors, array_found, N, params->batch_s, curves,
                                        &firstsigma64, params->gpu_checkpoint_interval_ms,
                                        &gputime, params->verbose, params->gpu_param,
-                                       (uint64_t)std::floor(B1 + 0.0001), opt.exponent_choose12 ? 12u : 1u,
+                                       (uint64_t)std::floor(B1 + 0.0001),
+                                       opt.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12u : 1u,
                                        params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
                                        params->gpu_sqr_path[0] ? params->gpu_sqr_path : nullptr,
                                        params->gpu_add_path[0] ? params->gpu_add_path : nullptr,
@@ -2785,6 +2847,10 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
                                                  n_expr_stripped);
             if (!wrote)
                 std::cerr << "Failed to append GPU save lines into " << resolved_save << std::endl;
+        }
+        if (!wrote) {
+            out->publish_failed = true;
+            ret = ECM_ERROR;
         }
     }
 
@@ -2878,7 +2944,13 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     if (sigma_fixed) {
         opt.sigma_fixed = true;
         opt.fixed_sigma64 = sigma;
-        opt.fixed_sigma = (uint32_t)(sigma & 0xFFFFFFFFu);
+    }
+    {
+        std::string input_error;
+        if (stage1_task_error(opt, curves, input_error)) {
+            ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged\n", input_error.c_str());
+            return false;
+        }
     }
 
     Stage1RunResult result;
@@ -2886,14 +2958,16 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
 
     const bool has_factors = (result.factors != nullptr);
 
-    if (result.prepare_failed) {
+    if (result.prepare_failed || result.publish_failed) {
         if (has_factors) {
             for (uint32_t i = 0; i < result.curves; ++i) mpz_clear(result.factors[i]);
             free(result.factors);
             free(result.array_found);
             free(result.sigmas);
         }
-        ecm_ts_fprintf(stderr, "FATAL: backend prepare failed; aborting queue.\n");
+        ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged.\n",
+                       result.publish_failed ? "Stage1 save publication failed" :
+                                               "backend prepare failed");
         return false;
     }
 
@@ -2904,8 +2978,9 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
        "GPU: factor ... with curve c (sigma p:s)" from the GPU ones). Fields: the
        factor, the curve index inside this batch, the EXACT per-curve sigma
        (result.sigmas, when the path knows it), the parametrization, which engine ran,
-       and the save-file name (empty for ECM=/ECM2= tasks, which carry no save name). */
-    const char *method_token = opt.use_mont ? "mont" : (opt.use_edwards ? "edwards" : "gpu");
+       and the save-file name (generated for GPU ECM=/ECM2= tasks). */
+    const char *curve_token = ecm_stage1::curve_model_name(opt.selection.curve);
+    const char *target_token = ecm_stage1::execution_target_name(opt.selection.target);
     if (has_factors) {
         for (uint32_t i = 0; i < result.curves; ++i) {
             if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
@@ -2914,7 +2989,9 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                 if (result.sigmas != nullptr) {
                     std::cout << " sigma=" << result.sigmas[i];
                 }
-                std::cout << " param=" << opt.gpu_param << " method=" << method_token
+                std::cout << " param=" << (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu
+                                               ? opt.selection.gpu_param : 0)
+                          << " curve_model=" << curve_token << " execution_target=" << target_token
                           << " save=" << save_name << "\n";
                 free(fs);
                 found_factor = true;
@@ -2970,6 +3047,8 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     }
 
     ecm_sync_save_files(exe_dir, sync1, sync2, full_sync, marker);
+    if (!opt.tmp_dir.empty() && opt.tmp_dir != exe_dir)
+        ecm_sync_save_files(opt.tmp_dir, sync1, sync2, full_sync, marker);
 
     /* ── Prime95 handoff (docs/usage/GUI.md) ──────────────────────────────────
        The task is finished and its .save is synchronized, so Prime95's stage 2 can take
@@ -3097,6 +3176,10 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     // are the global defaults for every worker (see ecm_queue_config.h / D1).
     EcmQueueConfig cfg;
     if (!ecm_queue_config_load(ini, worker, cfg)) {
+        if (access(ini.c_str(), 0) == 0) {
+            ecm_ts_fprintf(stderr, "FATAL: invalid or unreadable config %s\n", ini.c_str());
+            return 1;
+        }
         if (!ecm_queue_config_write_default(ini)) {
             ecm_ts_fprintf(stderr, "FATAL: cannot create default config %s\n", ini.c_str());
             return 1;
@@ -3198,57 +3281,25 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     }
 
     Stage1RunOptions opt;
-    /* ---- [method] one engine, resolved from the single ini key --------------- */
-    {
-        std::string m = cfg.method;
-        for (size_t i = 0; i < m.size(); i++) {
-            const char ch = m[i];
-            m[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
-        }
-        opt.use_gpu = (m.empty() || m == "gpu" || m == "opencl");
-        opt.use_edwards = (m == "edwards" || m == "atkin-morain");
-        opt.use_mont = (m == "mont" || m == "montgomery" || m == "suyama");
-        if (!opt.use_gpu && !opt.use_edwards && !opt.use_mont) {
-            ecm_ts_fprintf(stderr,
-                           "WARNING: method='%s' not recognised (gpu|edwards|mont); using gpu\n",
-                           cfg.method.c_str());
-            opt.use_gpu = true;
-        }
+    if (!ecm_stage1::parse_curve_model(cfg.curve_model, opt.selection.curve) ||
+        !ecm_stage1::parse_execution_target(cfg.execution_target, opt.selection.target)) {
+        ecm_ts_fprintf(stderr, "ERROR: invalid curve or target in ecm.ini\n");
+        return 1;
     }
     opt.affinity_cpus = parse_affinity_spec(cfg.affinity);
     /* ---- [cpu] shared by edwards and mont ----------------------------------- */
-    /* backend: auto | simd | gmp */
+    /* CPU arithmetic: auto | simd | scalar */
     {
-        std::string b = cfg.backend;
-        for (size_t i = 0; i < b.size(); i++) {
-            const char ch = b[i];
-            b[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
-        }
-        if (b.empty() || b == "auto") opt.backend = 0;
-        else if (b == "simd" || b == "avx512") opt.backend = 1;
-        else if (b == "gmp" || b == "scalar" || b == "mpn") opt.backend = 2;
-        else {
-            ecm_ts_fprintf(stderr,
-                           "WARNING: backend='%s' not recognised (auto|simd|gmp); using auto\n",
-                           cfg.backend.c_str());
-            opt.backend = 0;
+        if (!ecm_stage1::parse_cpu_implementation(cfg.cpu_implementation, opt.selection.cpu_implementation)) {
+            ecm_ts_fprintf(stderr, "ERROR: invalid impl in ecm.ini\n");
+            return 1;
         }
     }
-    /* field: auto | mersenne | montgomery -> SIMD 域的归约方式 */
+    /* SIMD reduction: auto | montgomery | mersenne-fold. */
     {
-        std::string m = cfg.field;
-        for (size_t i = 0; i < m.size(); i++) {
-            const char ch = m[i];
-            m[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
-        }
-        if (m.empty() || m == "auto") opt.field = IFMA_FIELD_AUTO;
-        else if (m == "mersenne" || m == "mers" || m == "on" || m == "fold") opt.field = IFMA_FIELD_MERS;
-        else if (m == "montgomery" || m == "mont" || m == "off" || m == "cios") opt.field = IFMA_FIELD_MONT;
-        else {
-            ecm_ts_fprintf(stderr,
-                           "WARNING: field='%s' not recognised (auto|mersenne|montgomery); using auto\n",
-                           cfg.field.c_str());
-            opt.field = IFMA_FIELD_AUTO;
+        if (!ecm_stage1::parse_simd_reduction(cfg.simd_reduction, opt.selection.simd_reduction)) {
+            ecm_ts_fprintf(stderr, "ERROR: invalid reduction in ecm.ini\n");
+            return 1;
         }
     }
     opt.stage1_threads = cfg.stage1_threads;
@@ -3257,27 +3308,17 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     /* ---- [edwards] only ------------------------------------------------------ */
     if (cfg.naf_w >= 3 && cfg.naf_w <= 12) edwards_set_naf_w(cfg.naf_w);
     opt.naf_w = cfg.naf_w;
-    /* ---- [mont] only --------------------------------------------------------- */
+    /* Montgomery scalar construction, shared by CPU and GPU. */
     {
-        std::string e = cfg.exponent;
-        for (size_t i = 0; i < e.size(); i++) {
-            const char ch = e[i];
-            e[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
-        }
-        if (e.empty() || e == "lcm" || e == "1") opt.exponent_choose12 = false;
-        else if (e == "choose12" || e == "12" || e == "prime95") opt.exponent_choose12 = true;
-        else if (e == "gmp-ecm" || e == "gmp") opt.exponent_choose12 = false;
-        else {
-            ecm_ts_fprintf(stderr,
-                           "WARNING: exponent='%s' not recognised (lcm|choose12); using lcm\n",
-                           cfg.exponent.c_str());
-            opt.exponent_choose12 = false;
+        if (!ecm_stage1::parse_scalar_construction(cfg.scalar_construction, opt.selection.scalar_construction)) {
+            ecm_ts_fprintf(stderr, "ERROR: invalid lcm in ecm.ini (expected 1 or 12)\n");
+            return 1;
         }
     }
     opt.verbose = cfg.verbose ? 1 : 0;
     /* ---- [gpu] only ---------------------------------------------------------- */
     opt.device_index = cfg.device;
-    opt.gpu_param = cfg.gpu_param;
+    opt.selection.gpu_param = cfg.gpu_param;
     opt.ckpt_ms = (cfg.ckpt_seconds > 0.0)
                          ? (unsigned long)(cfg.ckpt_seconds * 1000.0)
                          : 0UL;
@@ -3290,9 +3331,21 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     opt.gpu_special_mult_path = cfg.kernel_special_mult;
     /* ---- [task] -------------------------------------------------------------- */
     opt.sigma_fixed = (cfg.sigma != 0);
-    opt.fixed_sigma = (uint32_t)(cfg.sigma & 0xFFFFFFFFull);
     opt.fixed_sigma64 = cfg.sigma;
     opt.tmp_dir = resolve_rel_local(exe_dir, cfg.tmp_dir);
+    {
+        std::string selection_error;
+        if (stage1_selection_error(opt.selection, selection_error)) {
+            ecm_ts_fprintf(stderr, "ERROR: %s\n", selection_error.c_str());
+            if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
+            return 1;
+        }
+        if (stage1_task_error(opt, 0, selection_error)) {
+            ecm_ts_fprintf(stderr, "ERROR: %s\n", selection_error.c_str());
+            if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
+            return 1;
+        }
+    }
     /* ---- [handoff] ----------------------------------------------------------- */
     if (!cfg.p95_dir.empty()) {
         ecm_ts_fprintf(stdout,
@@ -3310,20 +3363,22 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     ecm_ts_fprintf(stdout, "finished : %s\n", finished_path.c_str());
     ecm_ts_fprintf(stdout, "log_file : %s\n", cfg.log_file.c_str());
     ecm_ts_fprintf(stdout, "saves : %s\n", opt.tmp_dir.c_str());
-    ecm_ts_fprintf(stdout, "method : %s\n",
-                   opt.use_mont ? "mont (Suyama sigma)"
-                                : (opt.use_edwards ? "edwards (Atkin-Morain)"
-                                                   : "gpu"));   /* backend named below */
-    if (opt.use_gpu) {
+    ecm_ts_fprintf(stdout, "curve model : %s\n",
+                   ecm_stage1::curve_model_name(opt.selection.curve));
+    ecm_ts_fprintf(stdout, "execution target : %s\n",
+                   ecm_stage1::execution_target_name(opt.selection.target));
+    if (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu) {
         /* The GPU implementation is chosen at LINK time (ecm.exe = OpenCL glue,
            ecm_cuda.exe = CUDA backend), so ask the backend instead of hardcoding
            "OpenCL" -- the CUDA build used to print "gpu (OpenCL)" here. */
         ecm_ts_fprintf(stdout, "gpu backend : %s, param%d, device %d\n",
-                       ecm_backend_name(), opt.gpu_param, opt.device_index);
+                       ecm_backend_name(), opt.selection.gpu_param, opt.device_index);
     }
 
     // Startup full sync (matches the old work_manager.ps1 behaviour).
     ecm_sync_save_files(exe_dir, sync1, sync2, /*full=*/true, 0);
+    if (!opt.tmp_dir.empty() && opt.tmp_dir != exe_dir)
+        ecm_sync_save_files(opt.tmp_dir, sync1, sync2, /*full=*/true, 0);
 
     int processed = 0;
     const bool full_sync = (cfg.sync_mode == "full");
@@ -3384,10 +3439,27 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                     opt.handoff_factors += task.factors[fi];
                 }
             }
+            // ECM=/ECM2= has no save filename in the assignment. Give the GPU path a
+            // deterministic destination so a completed queue task publishes its Stage1
+            // point for Stage2 and save synchronization. CPU Montgomery already writes
+            // its own shared save under tmp_dir; Edwards keeps its separate .tmp format.
+            std::string queue_save_name;
+            if (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu) {
+                if (opt.tmp_dir.empty() || !ensure_dir(opt.tmp_dir)) {
+                    ecm_ts_fprintf(stderr, "FATAL: cannot create tmp_dir for GPU save: %s\n",
+                                   opt.tmp_dir.c_str());
+                    mpz_clear(N);
+                    if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
+                    return 1;
+                }
+                queue_save_name = opt.tmp_dir + "/" +
+                    mont_format_save_name(ecm_config::defaults::stage1_save_name_pattern,
+                                          N, task.B1);
+            }
             const bool cont = queue_run_one(
                 N, task.B1, task.B2, task.curves_to_run,
                 task.has_sigma ? task.sigma : 0, task.has_sigma,
-                /*save_name=*/"", n_expr, task.aid, line,
+                queue_save_name, n_expr, task.aid, line,
                 worktodo_path, finished_path, worker, opt,
                 exe_dir, sync1, sync2, full_sync, marker, &processed, &p95cfg);
             mpz_clear(N);
@@ -3470,28 +3542,19 @@ int main(int argc, char **argv){
     // Timestamped-stream install is deferred until after argv parsing / config fill,
     // so --no-log-timestamp takes effect.
     bool verbose = false;
-    bool use_gpu = false;
-    bool use_edwards = false;
-    /* Suyama-sigma Montgomery stage 1 (docs/architecture/STAGE1.md) */
-    bool use_mont = false;
-    /* [cpu] the two CPU paths share one backend / one thread count (the ini has a
-       single `backend` / `stage1_threads` too); --edwards-* and --mont-* stay as
-       aliases. */
-    int  backend = 0;                 // 0=auto 1=simd 2=gmp
-    int  field = IFMA_FIELD_AUTO;     // IFMA_FIELD_AUTO|MERS|MONT
+    ecm_stage1::Selection selection{};
+    /* Both CPU curve models share the implementation choice and thread count. */
     uint32_t stage1_threads = ecm_config::defaults::stage1_stage1_threads;      // 0 = auto
     int  naf_w = ecm_config::defaults::stage1_naf_w;                   // Edwards NAF window; 0 = built-in default
-    bool exponent_choose12 = false;   // mont exponent: false = lcm, true = 12*lcm
     std::string affinity_spec;        // --affinity, same syntax as the ini key
     uint32_t gpucurves = 0;
     double ckpt_seconds = -1.0;
     bool ckpt_set = false;
     bool sigma_fixed = false;
-    uint32_t fixed_sigma = 0;
     uint64_t fixed_sigma64 = 0;
     int gpu_device_index = ecm_config::defaults::stage1_device;
     bool device_set = false;        /* -d given: wins over the ini's `device` */
-    int gpu_param_cli = ecm_config::defaults::stage1_gpu_param;          /* --gpu-param 0|3 (0 = Suyama param0) */
+    int gpu_param_cli = ecm_config::defaults::stage1_gpu_param;          /* --gpu-param 0|2|3 */
     bool gpu_param_set = false;
     int sigma_param_claim = -1;     /* "-sigma i:s" -> i (gmp-ecm: selects -param i) */
     bool sigma_param_set = false;
@@ -3517,88 +3580,54 @@ int main(int argc, char **argv){
     for(int i=1;i<argc;i++){
         std::string a = argv[i];
         if(a == "-v") { verbose = true; continue; }
-        if(a == "-gpu") { use_gpu = true; continue; }
-        if(a == "--edwards") { use_edwards = true; continue; }
-        /* Suyama-sigma Montgomery stage 1 (Prime95 sigma_type=1 / gmp-ecm -param 0) */
-        if(a == "--mont") { use_mont = true; continue; }
-        if((a == "--affinity" || a == "--cpu-affinity") && i+1<argc){
+        if(a == "--affinity" && i+1<argc){
             affinity_spec = argv[++i];
             continue;
         }
-        /* ---- canonical names (one field per concept; the old per-method flags
-           below are accepted as aliases so existing scripts keep working) ------- */
+        /* Each option selects one mathematical or execution axis. */
         if(a == "--stage1-threads" && i+1<argc){
             try { stage1_threads = (uint32_t)std::stoul(argv[++i]); }
             catch (...) { std::cerr << "Invalid --stage1-threads value, expected >= 0" << std::endl; return 1; }
             continue;
         }
-        if(a == "--backend" && i+1<argc){
-            const std::string m = argv[++i];
-            if (m == "auto") backend = 0;
-            else if (m == "simd" || m == "avx512") backend = 1;
-            else if (m == "gmp" || m == "scalar" || m == "mpn") backend = 2;
-            else { std::cerr << "Invalid --backend, expected auto|simd|gmp" << std::endl; return 1; }
+        if(a == "--impl" && i+1<argc){
+            if (!ecm_stage1::parse_cpu_implementation(argv[++i], selection.cpu_implementation)) {
+                std::cerr << "Invalid --impl, expected auto|simd|scalar" << std::endl;
+                return 1;
+            }
             continue;
         }
-        if((a == "--field" || a == "--reduction") && i+1<argc){
-            const std::string m = argv[++i];
-            if (m == "auto") field = IFMA_FIELD_AUTO;
-            else if (m == "mersenne" || m == "mers" || m == "on" || m == "fold") field = IFMA_FIELD_MERS;
-            else if (m == "montgomery" || m == "mont" || m == "off" || m == "cios") field = IFMA_FIELD_MONT;
-            else { std::cerr << "Invalid --field, expected auto|mersenne|montgomery" << std::endl; return 1; }
+        if(a == "--reduction" && i+1<argc){
+            if (!ecm_stage1::parse_simd_reduction(argv[++i], selection.simd_reduction)) {
+                std::cerr << "Invalid --reduction, expected auto|montgomery|mersenne-fold" << std::endl;
+                return 1;
+            }
             continue;
         }
-        if((a == "--naf-w" || a == "--nafw") && i+1<argc){
+        if(a == "--naf-w" && i+1<argc){
             try { naf_w = std::stoi(argv[++i]); }
             catch (...) { std::cerr << "Invalid --naf-w value, expected integer" << std::endl; return 1; }
             continue;
         }
-        if(a == "--exponent" && i+1<argc){
-            const std::string m = argv[++i];
-            if (m == "lcm" || m == "gmp-ecm" || m == "1") exponent_choose12 = false;
-            else if (m == "choose12" || m == "prime95" || m == "12") exponent_choose12 = true;
-            else { std::cerr << "Invalid --exponent, expected lcm|choose12" << std::endl; return 1; }
+        if(a == "--lcm" && i+1<argc){
+            if (!ecm_stage1::parse_scalar_construction(argv[++i], selection.scalar_construction)) {
+                std::cerr << "Invalid --lcm, expected 1|12" << std::endl;
+                return 1;
+            }
             continue;
         }
-        if((a == "--method") && i+1<argc){
-            const std::string m = argv[++i];
-            if (m == "gpu" || m == "opencl") { use_gpu = true; use_edwards = use_mont = false; }
-            else if (m == "edwards") { use_edwards = true; use_gpu = use_mont = false; }
-            else if (m == "mont" || m == "montgomery" || m == "suyama") { use_mont = true; use_gpu = use_edwards = false; }
-            else { std::cerr << "Invalid --method, expected gpu|edwards|mont" << std::endl; return 1; }
+        if(a == "--curve" && i+1<argc){
+            if (!ecm_stage1::parse_curve_model(argv[++i], selection.curve)) {
+                std::cerr << "Invalid --curve, expected mont|ed" << std::endl;
+                return 1;
+            }
             continue;
         }
-        /* ---- legacy aliases (same meaning, mapped onto the fields above) ------- */
-        if((a == "--mont-threads" || a == "--montthreads" || a == "--edwards-threads" || a == "--edthreads") && i+1<argc){
-            try { stage1_threads = (uint32_t)std::stoul(argv[++i]); }
-            catch (...) { std::cerr << "Invalid --stage1-threads value, expected >= 0" << std::endl; return 1; }
-            continue;
-        }
-        if((a == "--mont-backend" || a == "--edwards-backend" || a == "--edbackend" || a == "--montbackend") && i+1<argc){
-            const std::string m = argv[++i];
-            if (m == "auto") backend = 0;
-            else if (m == "simd" || m == "avx512") backend = 1;
-            else if (m == "gmp" || m == "scalar" || m == "mpn") backend = 2;
-            else { std::cerr << "Invalid --backend, expected auto|simd|gmp" << std::endl; return 1; }
-            continue;
-        }
-        if((a == "--edwards-naf-w" || a == "--ednafw") && i+1<argc){
-            try { naf_w = std::stoi(argv[++i]); }
-            catch (...) { std::cerr << "Invalid --naf-w value, expected integer" << std::endl; return 1; }
-            continue;
-        }
-        if((a == "--edwards-mersenne" || a == "--edmers") && i+1<argc){
-            const std::string m = argv[++i];
-            if (m == "auto") field = IFMA_FIELD_AUTO;
-            else if (m == "on" || m == "mersenne" || m == "mers") field = IFMA_FIELD_MERS;
-            else if (m == "off" || m == "montgomery" || m == "mont") field = IFMA_FIELD_MONT;
-            else { std::cerr << "Invalid --field, expected auto|mersenne|montgomery" << std::endl; return 1; }
-            continue;
-        }
-        if(a == "--mont-torsion" && i+1<argc){
-            const int t = atoi(argv[++i]);
-            if (t != 1 && t != 12) { std::cerr << "--mont-torsion must be 1 (lcm) or 12 (choose12)" << std::endl; return 1; }
-            exponent_choose12 = (t == 12);
+        if(a == "--target" && i+1<argc){
+            if (!ecm_stage1::parse_execution_target(argv[++i], selection.target)) {
+                std::cerr << "Invalid --target, expected cpu|gpu" << std::endl;
+                return 1;
+            }
             continue;
         }
         if(a == "-gpucurves" && i+1<argc){ gpucurves = (uint32_t)std::stoul(argv[++i]); continue; }
@@ -3629,7 +3658,7 @@ int main(int argc, char **argv){
                 std::cerr << "Invalid --gpu-param value, expected 0, 2 or 3" << std::endl;
                 return 1;
             }
-            if (gpu_param_cli != 0 && gpu_param_cli != 2 && gpu_param_cli != 3) {
+            if (!ecm_stage1::valid_gpu_param(gpu_param_cli)) {
                 std::cerr << "Invalid --gpu-param value, expected 0 (Suyama param0), "
                              "2 (gmp-ecm batch 2 / 6-torsion) or 3 (gmp-ecm batch)" << std::endl;
                 return 1;
@@ -3661,7 +3690,7 @@ int main(int argc, char **argv){
             /* Like gmp-ecm, "-sigma i:s" also selects the parametrization.  An explicit
                --gpu-param that disagrees is a contradiction, not a precedence question. */
             if (sigma_prefix >= 0) {
-                if (sigma_prefix == 0 || sigma_prefix == 2 || sigma_prefix == 3) {
+                if (ecm_stage1::valid_gpu_param(sigma_prefix)) {
                     sigma_param_claim = sigma_prefix;
                     sigma_param_set = true;
                 } else {
@@ -3670,9 +3699,6 @@ int main(int argc, char **argv){
                                  "(this build knows -param 0, 2 and 3)" << std::endl;
                     return 1;
                 }
-            }
-            if (fixed_sigma64 <= 0xFFFFFFFFull) {
-                fixed_sigma = (uint32_t)fixed_sigma64;
             }
             continue;
         }
@@ -3808,6 +3834,10 @@ int main(int argc, char **argv){
         if(a == "-h" || a == "--help" || a == "/?") {
             continue;
         }
+        if (!a.empty() && a[0] == '-') {
+            std::cerr << "Unknown option: " << a << std::endl;
+            return 1;
+        }
         pos.push_back(a);
     }
 
@@ -3842,6 +3872,9 @@ int main(int argc, char **argv){
             ini_used = ini.c_str();
             if (!device_set) eff_device = info_cfg.device;
             if (!gpu_param_set) eff_param = info_cfg.gpu_param;
+        } else if (access(ini.c_str(), 0) == 0) {
+            std::cerr << "Invalid or unreadable config: " << ini << std::endl;
+            return 1;
         }
         return print_gpu_info(ini_used, worker_index, eff_device, eff_param, gpu_info_bits);
     }
@@ -3887,7 +3920,8 @@ int main(int argc, char **argv){
     }
 
     std::cout << "ecm driver starting" << std::endl;
-    std::cout << "  mode: " << (use_edwards ? "edwards" : (use_gpu ? "gpu" : "cpu-stub"))
+    std::cout << "  curve_model: " << ecm_stage1::curve_model_name(selection.curve)
+              << ", execution_target: " << ecm_stage1::execution_target_name(selection.target)
               << ", gpucurves=" << gpucurves
               << ", ckpt=" << (ckpt_ms == 0 ? 0.0 : ckpt_ms / 1000.0) << "s"
               << ", device=" << gpu_device_index
@@ -3966,14 +4000,28 @@ int main(int argc, char **argv){
     //     std::cout << std::endl;
     // }
 
+    if (selection.target == ecm_stage1::ExecutionTarget::Cpu) {
+        if (gpu_param_set) {
+            std::cerr << "Error, --gpu-param requires --target gpu" << std::endl;
+            mpz_clear(N);
+            return 1;
+        }
+        if (sigma_param_set &&
+            (selection.curve != ecm_stage1::CurveModel::Montgomery || sigma_param_claim != 0)) {
+            std::cerr << "Error, CPU accepts a parameterized sigma only for Montgomery PARAM0"
+                      << std::endl;
+            mpz_clear(N);
+            return 1;
+        }
+    }
+
     // gmp-ecm semantics for "-sigma i:s": the prefix selects the parametrization as well.
     // Adopt it when no --gpu-param was given, and reject a contradiction otherwise.  This
     // has to happen BEFORE the 32-bit sigma check below, which keys off gpu_param_cli.
     if (sigma_param_set) {
-        if (!gpu_param_set) {
-            gpu_param_cli = sigma_param_claim;
-            gpu_param_set = true;
-        } else if (sigma_param_claim != gpu_param_cli) {
+        int resolved_param = gpu_param_cli;
+        if (!ecm_stage1::resolve_gpu_param(gpu_param_cli, gpu_param_set,
+                                           sigma_param_claim, resolved_param)) {
             std::cerr << "Error, conflict between -sigma and -param arguments" << std::endl;
             std::cerr << "       -sigma " << sigma_param_claim << ":... selects -param "
                       << sigma_param_claim << ", but --gpu-param " << gpu_param_cli
@@ -3981,33 +4029,15 @@ int main(int argc, char **argv){
             mpz_clear(N);
             return 1;
         }
-    }
-
-    // Execute stage 1 through the shared single-run path.
-    // A 64-bit sigma is meaningful for the CPU methods and for the GPU param0 path
-    // (both build the curve from sigma themselves).  The GPU batch parametrization
-    // (gpu_param = 3) carries d = sigma/2^32 as a 32-bit kernel argument, so only
-    // that combination needs the 32-bit window.
-    if (!use_edwards && !use_mont && gpu_param_cli != 0 && sigma_fixed &&
-        fixed_sigma64 > 0xFFFFFFFFull) {
-        std::cerr << "Error: -sigma value exceeds 2^32-1; the GPU batch path "
-                     "(gpu_param = 3) needs a 32-bit sigma. Use --gpu-param 0, "
-                     "--method edwards or --method mont for a 64-bit sigma."
-                  << std::endl;
-        mpz_clear(N);
-        return 1;
+        gpu_param_cli = resolved_param;
+        gpu_param_set = true;
     }
 
     Stage1RunOptions opt;
-    opt.use_gpu = use_gpu;
-    opt.use_edwards = use_edwards;
-    opt.use_mont = use_mont;
-    /* [cpu] shared by both CPU paths: one backend, one thread count, one field mode. */
-    opt.backend = backend;
-    opt.field = field;
+    opt.selection = selection;
+    /* The two CPU curve models share the thread count. */
     opt.stage1_threads = stage1_threads;
     opt.naf_w = naf_w;                       /* [edwards] */
-    opt.exponent_choose12 = exponent_choose12;   /* [mont] */
     if (!affinity_spec.empty()) opt.affinity_cpus = parse_affinity_spec(affinity_spec);
 
     opt.verbose = verbose ? 1 : 0;
@@ -4019,7 +4049,16 @@ int main(int argc, char **argv){
         const std::string d = get_exe_dir_local();
         ecm_exp_cache_set_dir(d.empty() ? "." : d);
     }
-    opt.gpu_param = gpu_param_set ? gpu_param_cli : ecm_config::defaults::stage1_gpu_param;
+    opt.selection.gpu_param = gpu_param_set ? gpu_param_cli
+                                            : ecm_config::defaults::stage1_gpu_param;
+    {
+        std::string selection_error;
+        if (stage1_selection_error(opt.selection, selection_error)) {
+            std::cerr << "ERROR: " << selection_error << std::endl;
+            mpz_clear(N);
+            return 1;
+        }
+    }
     opt.ckpt_ms = ckpt_ms;
     opt.gpu_mul_path = gpu_mul_path;
     opt.gpu_sqr_path = gpu_sqr_path;
@@ -4027,8 +4066,15 @@ int main(int argc, char **argv){
     opt.gpu_sub_path = gpu_sub_path;
     opt.gpu_special_mult_path = gpu_special_mult_path;
     opt.sigma_fixed = sigma_fixed;
-    opt.fixed_sigma = fixed_sigma;
     opt.fixed_sigma64 = fixed_sigma64;
+    {
+        std::string input_error;
+        if (stage1_task_error(opt, gpucurves, input_error)) {
+            std::cerr << "ERROR: " << input_error << std::endl;
+            mpz_clear(N);
+            return 1;
+        }
+    }
     if (tmp_dir.empty()) tmp_dir = ".";      // 默认 = 当前目录 (本地)
     opt.tmp_dir = tmp_dir;
     if (!p95_dir_ignored.empty()) {
@@ -4062,16 +4108,17 @@ int main(int argc, char **argv){
     /* Effective parametrization of THIS run, for the --go group-order helper: the CPU
        Montgomery engine and the Edwards engine both use Suyama sigma = param 0 (their saves
        carry no PARAM= key, so gmp-ecm/Prime95 read them as param 0), while the GPU engines use
-       opt.gpu_param (0/2/3).  Passing opt.gpu_param unconditionally made --go report the order
+       the GPU parameter (0/2/3). Passing it for CPU methods made --go report the order
        of a param-3 curve for a param-0 run (measured: largest_prime came back as 2666737705477
        instead of the true 114713 for the 2^128+1 / sigma=26 case). */
-    const int go_param = (opt.use_mont || opt.use_edwards) ? 0 : opt.gpu_param;
+    const int go_param = opt.selection.target == ecm_stage1::ExecutionTarget::Gpu
+                             ? opt.selection.gpu_param : 0;
 
     if (cli_has_factors) {
         /* Same D3 fields as the queue path (docs/usage/GUI.md): a consumer must not
            have to guess which of the three back-end hit lines it is looking at. */
-        const char *cli_method_token =
-            opt.use_mont ? "mont" : (opt.use_edwards ? "edwards" : "gpu");
+        const char *curve_token = ecm_stage1::curve_model_name(opt.selection.curve);
+        const char *target_token = ecm_stage1::execution_target_name(opt.selection.target);
         for (uint32_t i = 0; i < result.curves; i++) {
             if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
                 char *s = mpz_get_str(NULL, 10, result.factors[i]);
@@ -4079,7 +4126,8 @@ int main(int argc, char **argv){
                 if (result.sigmas != nullptr) {
                     std::cout << " sigma=" << result.sigmas[i];
                 }
-                std::cout << " param=" << opt.gpu_param << " method=" << cli_method_token
+                std::cout << " param=" << go_param << " curve_model=" << curve_token
+                          << " execution_target=" << target_token
                           << " save=" << savefilename << "\n";
                 free(s);
                 if (print_group_order) {

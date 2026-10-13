@@ -13,11 +13,13 @@ $N = "(2^3001-1)"
 $B1s = @(100, 500, 1000, 2000, 5000, 10000, 20000)
 
 function Run-One([string]$backend, [string]$mers, [int]$B1) {
+    $implementation = if ($backend -eq 'gmp') { 'scalar' } else { 'simd' }
+    $reduction = if ($mers -eq 'on') { 'mersenne-fold' } elseif ($mers -eq 'off') { 'montgomery' } else { 'auto' }
     $d = Join-Path $scratch ("sw_{0}_{1}_{2}" -f $backend, $mers, $B1)
     Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $d | Out-Null
-    $argv = @("--edwards", "--edwards-backend", $backend, "--edwards-threads", "1",
-              "--edwards-naf-w", "12", "--edwards-mersenne", $mers,
+    $argv = @("--curve","ed","--target","cpu", "--impl", $implementation, "--stage1-threads", "1",
+              "--naf-w", "12", "--reduction", $reduction,
               "-gpucurves", "8", "-sigma", "20260922", "--tmp-dir", $d, "$B1", "0")
     $out = $N | & $exe @argv 2>&1
     $hits = @($out | Select-String -Pattern "factor found").Count

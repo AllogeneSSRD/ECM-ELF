@@ -11,7 +11,7 @@
 #                    curve set).  Checked by comparing the SIGMA values in the
 #                    final .save against the SIGMA lines of the pre-resume .ckpt
 #                    files.
-#   E3 scalar path : the same kill/resume on --backend gmp (one curve per task).
+#   E3 scalar path : the same kill/resume on --impl scalar (one curve per task).
 #
 # usage:  pwsh -File tools\test\test_mont_checkpoint.ps1
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ function Ckpt-Sigmas([string]$dir) {
     return $set
 }
 
-$common = @('--method','mont','--tmp-dir','.','-gpucurves',"$CURVES",'--stage1-threads',"$THREADS",$B1)
+$common = @('--curve','mont','--target','cpu','--tmp-dir','.','-gpucurves',"$CURVES",'--stage1-threads',"$THREADS",$B1)
 
 Write-Host "=== E1: fixed sigma, kill + resume vs uninterrupted (identical content) ==="
 $dirA = Join-Path $base 'e1_ref'
@@ -155,13 +155,13 @@ foreach ($s in $sigBefore) { if ($sigAfter -contains $s) { $kept++ } }
 Check ($kept -ge ($sigBefore.Count - 1)) "adopted sigmas survive into the save ($kept/$($sigBefore.Count))"
 
 Write-Host ""
-Write-Host "=== E3: scalar backend (--backend gmp) ==="
+Write-Host "=== E3: scalar backend (--impl scalar) ==="
 $dirD = Join-Path $base 'e3_scalar_ref'
 $dirE = Join-Path $base 'e3_scalar_resume'
 # one curve per task on the scalar backend, ~4 s/curve at B1 = 1e6 on this machine,
 # with a 0.5 s autosave interval, so a kill after 1.5 s lands mid-ladder and after
 # at least one automatic checkpoint
-$scalarCommon = @('--method','mont','--backend','gmp','--tmp-dir','.','-gpucurves','8',
+$scalarCommon = @('--curve','mont','--target','cpu','--impl','scalar','--tmp-dir','.','-gpucurves','8',
                   '--stage1-threads','2','-sigma','777000111','--ckpt','0.5','1e6')
 $rd1 = Run-Ecm -EcmArgs $scalarCommon -Dir $dirD
 Check (-not $rd1.killed) 'scalar reference finished'

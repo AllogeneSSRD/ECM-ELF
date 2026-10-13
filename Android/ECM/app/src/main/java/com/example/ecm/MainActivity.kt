@@ -501,7 +501,7 @@ class MainActivity : AppCompatActivity() {
         outputTextEcm.text = ""
         val saveFile = inputSaveFile.text?.toString()?.trim().orEmpty()
         val sessionHeader = buildString {
-            append("ECM -gpu N=$nExpr B1=$b1 B2=$b2 gpucurves=$gpuCurves device=$deviceIndex")
+            append("ECM Montgomery GPU N=$nExpr B1=$b1 B2=$b2 gpucurves=$gpuCurves device=$deviceIndex")
             if (chkVerbose.isChecked) append(" -v")
             if (saveFile.isNotEmpty()) {
                 append(if (chkSaveAppend.isChecked) " -savea " else " -save ")

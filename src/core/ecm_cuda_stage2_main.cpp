@@ -320,9 +320,11 @@ Options arguments(int argc, char **argv) {
         else if (a == "--stage1-seconds-per-curve") {o.stage1_seconds=positive(value(),"Stage1 seconds");o.has_stage1_seconds=true;}
         else if (a == "--stage1-tune-profile") o.stage1_profile=value();
         else if (a == "--check-stage1-tune-profile") o.check_stage1_profile=value();
-        else if (a == "--stage1-exponent") {
-            o.stage1_exponent=value();o.has_stage1_exponent=true;
-            if(o.stage1_exponent!="lcm" && o.stage1_exponent!="choose12")throw std::runtime_error("stage1-exponent must be lcm or choose12");
+        else if (a == "--lcm") {
+            const auto construction=value();o.has_stage1_exponent=true;
+            if(construction=="1")o.stage1_exponent="lcm";
+            else if(construction=="12")o.stage1_exponent="choose12";
+            else throw std::runtime_error("lcm must be 1 or 12");
         }
         else if (a == "--stage2-ratio-adjust") {o.ratio_adjust=positive(value(),"Stage2 ratio adjust");o.has_ratio=true;}
         else if (a == "--gp") { o.gp = value(); o.has_gp = true; }
@@ -562,7 +564,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         if(o.auto_min)arg(L"--auto-min-b2",o.auto_min);if(o.auto_max)arg(L"--auto-max-b2",o.auto_max);
         if(o.stage1_seconds)cmd+=L" --stage1-seconds-per-curve "+real(o.stage1_seconds);
         if(!o.stage1_profile.empty())cmd+=L" --stage1-tune-profile "+quote(fs::path(o.stage1_profile).wstring());
-        cmd+=L" --stage1-exponent "+quote(fs::path(o.stage1_exponent).wstring());
+        cmd+=L" --lcm "+quote(fs::path(o.stage1_exponent=="choose12"?"12":"1").wstring());
         cmd+=L" --stage2-ratio-adjust "+real(o.ratio_adjust);
     }
     if(!o.receipt.empty())cmd+=L" --queue-receipt "+quote(fs::path(o.receipt).wstring());
@@ -898,7 +900,7 @@ void help() {
         "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
         "         --factor-only (skip optional prime-witness naming; raw factors may be composite)\n"
         "Auto B2: --auto-b2 --tune-profile FILE.toml --stage1-seconds-per-curve S\n"
-        "         Or: --stage1-tune-profile FILE.toml --stage1-batch N [--stage1-exponent lcm|choose12]\n"
+        "         Or: --stage1-tune-profile FILE.toml --stage1-batch N [--lcm 1|12]\n"
         "         Offline validation: --check-stage1-tune-profile FILE.toml\n"
         "         Legacy: --auto-b2 --cost-profile FILE [--stage1-batch N]\n"
         "         [--stage1-seconds-per-curve S] [--stage2-ratio-adjust R]\n"
@@ -984,7 +986,7 @@ int driver(Options o) {
     const fs::path cwd = fs::current_path();
     const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.ini" : absolute_from(cwd, o.ini);
     EcmQueueConfig cfg;
-    if (!ecm_queue_config_load(ini.string(), o.worker, cfg) && !o.ini.empty())
+    if (!ecm_queue_config_load(ini.string(), o.worker, cfg) && (!o.ini.empty() || fs::exists(ini)))
         throw std::runtime_error("cannot read explicit ini: " + ini.string());
     Settings s = stage2_ini(ini, o.worker);
     if(!o.portable_cli.count("--auto-carrier"))o.auto_carrier=s.auto_carrier;
@@ -1018,7 +1020,7 @@ int driver(Options o) {
     if(o.owner_mb>ecm_config::limits::stage2_stage2_fold_mb_maximum)throw std::runtime_error("invalid owner budget");
     if(!o.has_stage1_batch)o.stage1_batch=s.stage1_batch;
     if(!o.has_stage1_seconds)o.stage1_seconds=s.stage1_seconds;
-    if(!o.has_stage1_exponent)o.stage1_exponent=cfg.exponent=="choose12"?"choose12":"lcm";
+    if(!o.has_stage1_exponent)o.stage1_exponent=cfg.scalar_construction=="12"?"choose12":"lcm";
     if(!o.has_ratio)o.ratio_adjust=s.ratio_adjust;
     if(!o.has_gp && !s.gp.empty())o.gp=s.gp;
     if(!o.has_factor_timeout)o.factor_timeout=static_cast<unsigned>(s.factor_timeout);

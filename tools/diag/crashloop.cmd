@@ -13,7 +13,7 @@ for %%T in (1 8) do (
     if exist "!D!" rmdir /s /q "!D!"
     mkdir "!D!"
     echo 1048575 > "!D!\in.txt"
-    "%EXE%" --edwards --edwards-backend simd --edwards-mersenne on --edwards-threads %%T -gpucurves 8 --tmp-dir "!D!" 256 0 < "!D!\in.txt" > "!D!\out.txt" 2> "!D!\err.txt"
+    "%EXE%" --curve ed --target cpu --impl simd --reduction mersenne-fold --stage1-threads %%T -gpucurves 8 --tmp-dir "!D!" 256 0 < "!D!\in.txt" > "!D!\out.txt" 2> "!D!\err.txt"
     echo threads=%%T attempt=%%I exit=!ERRORLEVEL! >> "%LOG%"
   )
 )

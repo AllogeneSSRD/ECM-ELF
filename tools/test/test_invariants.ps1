@@ -13,13 +13,14 @@ $cases = @(
 )
 
 foreach ($field in @("on","off")) {
+    $reduction = if ($field -eq 'on') { 'mersenne-fold' } else { 'montgomery' }
     foreach ($c in $cases) {
         $tag=$c[0]; $n=$c[1]; $sigma=$c[2]; $expect=$c[3]
         $t = Join-Path $scratch ("inv_$tag`_$field")
         if (Test-Path $t) { Remove-Item -Recurse -Force $t }
         New-Item -ItemType Directory -Force -Path $t | Out-Null
-        $a = @("--edwards","--edwards-backend","simd","--edwards-threads","1","--edwards-naf-w","12",
-               "--edwards-mersenne",$field,"-gpucurves","2","-sigma",$sigma,
+        $a = @("--curve","ed","--target","cpu","--impl","simd","--stage1-threads","1","--naf-w","12",
+               "--reduction",$reduction,"-gpucurves","2","-sigma",$sigma,
                "--tmp-dir",$t,"1000000","0")
         $sw=[System.Diagnostics.Stopwatch]::StartNew()
         "(2^$n-1)" | & $exe @a *>&1 | Out-File -FilePath (Join-Path $t "out.log") -Encoding ASCII

@@ -25,7 +25,7 @@ function Run-EcmCase($bits, $expr, $modeName, $disableWg) {
     if ($disableWg) { $env:ECM_DISABLE_MONT_WG = "1" } else { Remove-Item Env:ECM_DISABLE_MONT_WG -ErrorAction SilentlyContinue }
     $env:ECM_PROFILE_OPS = "1"
     $env:ECM_GPU_DUMP = "0"
-    $cmd = "Set-Location '$root'; '$expr' | $ecm -v -gpu -sigma 3:12345678 -gpucurves 32 2000 0"
+    $cmd = "Set-Location '$root'; '$expr' | $ecm -v --curve mont --target gpu -sigma 3:12345678 -gpucurves 32 2000 0"
     $out = powershell -NoProfile -Command $cmd
     $gputime = ""
     $found = "0"

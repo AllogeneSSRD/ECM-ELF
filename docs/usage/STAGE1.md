@@ -4,9 +4,9 @@
 
 `ecm_cuda.exe` 使用 NVIDIA CUDA/CGBN 并行处理曲线。`ecm.exe` 提供 CPU 和 OpenCL 路径；CPU 支持 Montgomery/Suyama 与 Edwards，OpenCL 的设备和算子能力按实际构建确定。选项以程序帮助及 [INI 参考](../ECM_INI_REFERENCE.md) 为准。
 
-生产任务通常使用 Suyama PARAM0。sigma 是曲线种子，不是曲线序号；不同参数化的 sigma 不能互换。GPU 一批曲线共享 N、B1 和指数，分别维护点状态。
+生产任务通常使用 Suyama PARAM0。sigma 是曲线种子，不是曲线序号；不同参数化的 sigma 不能互换。GPU 一批曲线共享 N、B1 和指数，分别维护点状态。`ECM=`/`ECM2=` 队列行没有 save 名称；GPU Montgomery worker 会按默认的 `m{n}_{b1}.save` 名称写入 `tmp_dir`，CPU Montgomery 也在该目录写入共享 save。保存失败时任务留在 worktodo，不会进入 finished。
 
-`exponent=lcm` 使用 lcm(1…B1)；`exponent=choose12` 在该标量上乘 12。后者会改变保存点和因子发现范围，比较程序或生成测试存档时必须明确口径。驱动、队列及命令行选择均由配置消费端处理。
+Montgomery 路径的 `lcm=1` 使用 lcm(1…B1)，`lcm=12` 在该标量上乘 12。后者会改变保存点和因子发现范围，比较程序或生成测试存档时必须明确口径。Edwards 路径固定使用 48·lcm(1…B1)，不接受 `lcm=12`。曲线模型和执行位置分别由 `curve` 与 `target` 选择；GPU Edwards 当前不支持。CUDA PARAM0 可使用完整 64 位 sigma；PARAM2/3 的批次受 32 位窗口限制。
 
 ## 共用 INI 与 worker
 

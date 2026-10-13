@@ -107,7 +107,7 @@ function Invoke-Task {
     # NOTE: parenthesise every concatenation inside an array literal -- the comma binds
     # tighter than '+', so "key = " + $v would silently become two ini lines.
     $iniLines = @(
-        'method = gpu',
+        'curve = mont', 'target = gpu',
         'gpu_param = 0',
         'gpucurves = 1',
         ('device = ' + $Device),

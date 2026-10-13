@@ -35,11 +35,12 @@ function Write-Worktodo {
 
 # 注意: 故意**不设 sigma** —— 这正是自动续跑曾经失效的场景 (每轮随机 sigma 配不上存档).
 Set-Content (Join-Path $run "ecm.ini") -Value @"
-edwards = 1
-edwards_threads = 2
+curve = ed
+target = cpu
+stage1_threads = 2
 tmp_dir = $saves
-edwards_backend = simd
-edwards_naf_w = 12
+impl = simd
+naf_w = 12
 ckpt_seconds = 1
 worktodo = $($run)\worktodo.txt
 finished = $($run)\finished.txt

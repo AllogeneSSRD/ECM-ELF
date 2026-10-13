@@ -226,7 +226,7 @@ Write-Text $todo "# empty queue (the generator appends here)`r`n"
 # NOTE: parenthesise every concatenation inside an array literal -- the comma binds tighter
 # than '+', so "key = " + $v would silently become two ini lines.
 Write-Text $iniPath ((@(
-    'method = gpu',
+    'curve = mont', 'target = gpu',
     ('tmp_dir = ' + $Sandbox),
     ('finished = ' + (Join-Path $Sandbox 'finished.txt')),
     ('worktodo = ' + $todo),

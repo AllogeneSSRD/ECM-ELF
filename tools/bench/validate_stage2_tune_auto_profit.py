@@ -24,7 +24,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     for key in ['exe','profile','stage1-profile','save','output']:p.add_argument('--'+key,type=Path,required=True)
     p.add_argument('--device',type=int,required=True);p.add_argument('--stage1-batch',type=int,required=True)
-    p.add_argument('--stage1-exponent',choices=['lcm','choose12'],default='lcm')
+    p.add_argument('--lcm',choices=['1','12'],default='1')
     p.add_argument('--ratio',type=float,default=1);p.add_argument('--repeats',type=int,default=3)
     p.add_argument('--min-candidates',type=int,default=2);p.add_argument('--timeout',type=float,default=1800)
     p.add_argument('--training-plans',type=Path,help='Frozen case_*.plan.jsonl for format-4 NTT reference')
@@ -59,8 +59,9 @@ def main():
     bits=n.bit_length();kind='mersenne' if (n+1)&n==0 else 'generic'
     assert n>3 and n%2 and bits<=16384 and b1>=2
     assert all(stage1['device'][key]==profile['device'][key] for key in stage1['device']), 'Stage1/Stage2 device mismatch'
+    exponent_tag='choose12' if a.lcm=='12' else 'lcm'
     matches=[x for x in stage1['stage1'].values() if x['target_bits']==bits and x['b1']==b1 and
-        x['batch']==a.stage1_batch and x['modulus_kind']==kind and x['exponent']==a.stage1_exponent]
+        x['batch']==a.stage1_batch and x['modulus_kind']==kind and x['exponent']==exponent_tag]
     assert len(matches)==1,'no unique measured Stage1 scope'
     t1=statistics.median(matches[0]['seconds']);assert t1>0 and t1==matches[0]['median_seconds']
     groups={}
@@ -84,9 +85,9 @@ def main():
             assert type(value) is int and value>=0
             environment['NTT_'+key.upper()]=str(value)
     auto=['--auto-b2','--stage1-tune-profile',str(a.stage1_profile.resolve()),'--stage1-batch',str(a.stage1_batch),
-        '--stage1-exponent',a.stage1_exponent,'--stage2-ratio-adjust',str(a.ratio)]
+        '--lcm',a.lcm,'--stage2-ratio-adjust',str(a.ratio)]
     report=dict(complete=False,source_identities=identities,b1=b1,target_bits=bits,t1_seconds=t1,ratio=a.ratio,
-        stage1_batch=a.stage1_batch,exponent=a.stage1_exponent,repeats=a.repeats,warmups=1,
+        stage1_batch=a.stage1_batch,exponent=exponent_tag,repeats=a.repeats,warmups=1,
         time_error_limit=TIME_ERROR_LIMIT,rank_loss_limit=RANK_LOSS_LIMIT,candidates=[],memory_rejected=[],
         profile_format=profile['profile']['format'],component_groups=len(component_models),
         holdout_b2=a.holdout_b2,policy={k:v for k,v in policy.items() if k!='environment'},

@@ -46,7 +46,7 @@ Write-Host "=== A. param2 stage-1 x vs gmp-ecm (M$Bits, sigma=$Sigma) ==="
 foreach ($B1 in '1e3', '1e5') {
     $ourSave = Join-Path $work "ours_$B1.save"
     $gmpSave = Join-Path $work "gmp_$B1.save"
-    $null = cmd /c "cd /d `"$work`" && `"$CudaExe`" -gpu -d $Device --gpu-param 2 -sigma 2:$Sigma -gpucurves 1 -savea `"$ourSave`" $B1 0 < `"$nfile`"" 2>&1
+    $null = cmd /c "cd /d `"$work`" && `"$CudaExe`" --curve mont --target gpu -d $Device --gpu-param 2 -sigma 2:$Sigma -gpucurves 1 -savea `"$ourSave`" $B1 0 < `"$nfile`"" 2>&1
     $null = cmd /c "cd /d `"$work`" && `"$GmpEcmExe`" -param 2 -sigma $Sigma -c 1 -save `"$gmpSave`" $B1 0 < `"$decfile`"" 2>&1
     if (-not (Test-Path $ourSave) -or -not (Test-Path $gmpSave)) {
         Check "B1=$B1 both saves exist" $false

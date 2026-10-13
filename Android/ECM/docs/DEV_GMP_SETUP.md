@@ -167,7 +167,7 @@ ECM Android: GMP found at D:/code/vcpkg/installed/arm64-android
 桌面对照：
 
 ```powershell
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -gpucurves 64 100 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -gpucurves 64 100 0
 ```
 
 ---

@@ -18,7 +18,7 @@ Write-Host "threads  wall_s   curve_s  speedup  factors"
 $base = 0.0
 foreach ($t in $Threads) {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $out = $n | & $exe --edwards -sigma $Sigma -gpucurves $Curves --edwards-threads $t $B1 2>&1
+    $out = $n | & $exe --curve ed --target cpu -sigma $Sigma -gpucurves $Curves --stage1-threads $t $B1 2>&1
     $sw.Stop()
     $wall = $sw.Elapsed.TotalSeconds
     if ($base -eq 0.0) { $base = $wall }

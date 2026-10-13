@@ -91,7 +91,7 @@ Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目
 
 通用位宽网格可用`--tune ecm --tune-exponents 512,2048,4096,8192,12288,15360 --tune-arithmetic both --tune-b2 26000000000,260000000000 --tune-budget-seconds 1800`。它分别收集通用与梅森算术资料；真实队列默认仍用真实save配对。网格的梅森实际余因子位数可能低于算术位数，两者不会混为同一索引。
 
-任务最终B2=0时，`--auto-b2`联合选择B2、D、承载。T1优先使用正的`--stage1-seconds-per-curve`，其次`--stage1-cost-csv FILE.csv`，最后`--stage1-tune-profile FILE.toml`。对应INI为`stage1_seconds_per_curve`、`stage1_cost_csv`、`stage1_tune_profile`。CSV明确target_bits或container_bits，缺项和跨TPI可估算；`--stage1-cost-mhz`给目标频率，0使用表内参考频率。秒/曲线不会再除batch。指数模式默认跟随INI的exponent，可用`--stage1-exponent`覆盖。
+任务最终B2=0时，`--auto-b2`联合选择B2、D、承载。T1优先使用正的`--stage1-seconds-per-curve`，其次`--stage1-cost-csv FILE.csv`，最后`--stage1-tune-profile FILE.toml`。对应INI为`stage1_seconds_per_curve`、`stage1_cost_csv`、`stage1_tune_profile`。CSV明确target_bits或container_bits，缺项和跨TPI可估算；`--stage1-cost-mhz`给目标频率，0使用表内参考频率。秒/曲线不会再除batch。Stage1 标量构造默认跟随 INI 的 `lcm`，可用 `--lcm 1|12` 覆盖。现有成本证据文件中的 `lcm`、`choose12` 标签由程序在读取时映射。
 
 `--auto-min-b2`/`--auto-max-b2`控制搜索边界，默认B1<B2≤2.6×10¹²，不限于已测范围。完整tune优先于旧`stage2_cost_profile`；Auto缺T1/完整成本或没有满足当前显存的候选时明确失败，保留队列。每条worker重新规划。模型精度与当前限制见[Auto B2/tune](../architecture/AUTO_B2.md)。
 

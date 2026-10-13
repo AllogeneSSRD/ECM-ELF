@@ -10,7 +10,7 @@
     <string name="ecm_diag_title">OpenCL 诊断</string>
     <string name="bench_section_hint">Add/Sub、Montgomery、Limb 微基准</string>
     <string name="ecm_section_title">ECM GPU 分解 (Stage-1)</string>
-    <string name="ecm_section_hint">对应桌面: echo \'N\' | ecm.exe -gpu -gpucurves … B1 B2</string>
+    <string name="ecm_section_hint">对应桌面: echo \'N\' | ecm.exe --curve mont --target gpu -gpucurves … B1 B2</string>
     <string name="hint_n_expr">N 表达式 (stdin)</string>
     <string name="hint_n_preset">预设</string>
     <string name="default_n_expr">(2^347-1)</string>
@@ -32,7 +32,7 @@
     <string name="hint_add_path">--add</string>
     <string name="hint_sub_path">--sub</string>
     <string name="hint_special_mult_path">--special-mult</string>
-    <string name="btn_run_ecm">运行 ECM (-gpu)</string>
+    <string name="btn_run_ecm">运行 ECM (GPU)</string>
     <string name="btn_worktodo">Worktodo 批量执行</string>
     <string name="chk_verbose">-v 详细输出</string>
     <string name="ecm_advanced_title">高级选项</string>

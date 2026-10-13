@@ -255,7 +255,8 @@ void App::record_hit(const WorkerView &w, const HitInfo &hit) {
     HitRecord r;
     r.factor = hit.factor;
     r.param = hit.param;
-    r.method = hit.method;
+    r.curve_model = hit.curve_model;
+    r.execution_target = hit.execution_target;
     r.curve = hit.curve;
     r.sigma = hit.sigma;
     r.has_sigma = hit.has_sigma;
@@ -369,7 +370,8 @@ void App::rebuild_workers() {
             if(token!=w.name.npos)w.name.replace(token,3,std::to_string(i));
         }
         w.device=ini_.get_int(sec,"device",ini_.get_int("","device",ecm_config::defaults::stage1_device));
-        w.method=ini_.get(sec,"method",ini_.get("","method",ecm_config::defaults::stage1_method));
+        w.curve_model=ini_.get(sec,"curve",ini_.get("","curve",ecm_config::defaults::stage1_curve));
+        w.execution_target=ini_.get(sec,"target",ini_.get("","target",ecm_config::defaults::stage1_target));
         w.gpucurves=worker.gpucurves;
         w.worktodo=ini_.get(sec,"worktodo",ini_.get("","worktodo",ecm_config::defaults::stage1_worktodo));
         w.log_file=ini_.get(sec,"log_file",ini_.get("","log_file",ecm_config::defaults::stage1_log_file));
@@ -419,10 +421,10 @@ void App::rebuild_workers() {
     // other workers, so this check only exists here.
     std::map<int, int> seen;
     for (const WorkerView &w : workers_) {
-        if (w.method == "gpu") seen[w.device]++;
+        if (w.execution_target == "gpu") seen[w.device]++;
     }
     for (WorkerView &w : workers_) {
-        w.duplicate_device = (w.method == "gpu" && seen[w.device] > 1);
+        w.duplicate_device = (w.execution_target == "gpu" && seen[w.device] > 1);
     }
 }
 
@@ -2232,7 +2234,7 @@ void App::draw_workers_table() {
             }
 
             ImGui::TableSetColumnIndex(2);
-            if (w.method == "gpu") {
+            if (w.execution_target == "gpu") {
                 ImGui::Text("GPU %d", w.device);
                 if (w.duplicate_device) {
                     ImGui::SameLine();
@@ -2242,7 +2244,7 @@ void App::draw_workers_table() {
                     }
                 }
             } else {
-                ImGui::TextUnformatted(w.method.c_str());
+                ImGui::Text("CPU %s", w.curve_model.c_str());
             }
 
             ImGui::TableSetColumnIndex(3);

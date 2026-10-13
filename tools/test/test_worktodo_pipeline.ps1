@@ -196,14 +196,14 @@ $null = Run-Py @('--input', $sortedCsv, '--out-linux', $shOld)
 $null = Run-Py @('--input', $sortedCsv, '--emit-cli', $shNew, '--emit-cli-kind', 'sh')
 Check "--out-linux == --emit-cli (kind sh)" ((FileText $shOld) -eq (FileText $shNew))
 Check "sh emitter keeps the historical gmp-ecm line shape" `
-      ([bool]((First $shOld) -match "^echo '\(1\*2\^\d+-1\)/?.*' \| \./ecm -v -savea .* -gpu -gpuckpt \d+ -gpucurves \d+ \S+ \S+$")) (First $shOld)
+      ([bool]((First $shOld) -match "^echo '\(1\*2\^\d+-1\)/?.*' \| \./ecm -v -savea .* --curve mont --target gpu -gpuckpt \d+ -gpucurves \d+ \S+ \S+$")) (First $shOld)
 
 Write-Host "=== 12. command-line emitters for our driver ==="
 $ps1 = Join-Path $work 'cli.ps1'; $bat = Join-Path $work 'cli.bat'
 $null = Run-Py @('--input', $sortedCsv, '--emit-cli', $ps1, '--emit-cli-kind', 'ps1', '--device', '1')
 $null = Run-Py @('--input', $sortedCsv, '--emit-cli', $bat, '--emit-cli-kind', 'bat', '--device', '1')
 Check "ps1 emitter quotes the N expression with single quotes" `
-      ([bool]((First $ps1) -match "^echo '\(1\*2\^5153-1\)/.*' \| ecm_cuda\.exe -v -gpu -d 1 ")) (First $ps1)
+      ([bool]((First $ps1) -match "^echo '\(1\*2\^5153-1\)/.*' \| ecm_cuda\.exe -v --curve mont --target gpu -d 1 ")) (First $ps1)
 Check "bat emitter escapes ^ as ^^ (cmd would otherwise eat it)" `
       ([bool]((First $bat) -match '2\^\^5153')) (First $bat)
 Check "emitters reference the same save name as the ECMSTAGE2= output" `

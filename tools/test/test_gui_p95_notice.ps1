@@ -250,7 +250,7 @@ function Write-SandboxIni([string]$path, [string]$p95Path, [string]$addWorkers, 
     # NOTE: parenthesise every concatenation inside an array literal -- the comma binds
     # tighter than '+', so "key = " + $v would silently become two ini lines.
     $lines = @(
-        'method = gpu',
+        'curve = mont', 'target = gpu',
         'gpucurves = 1',
         ('tmp_dir = ' + (Join-Path $Sandbox 'saves')),
         ('finished = ' + (Join-Path $Sandbox 'finished.txt')),

@@ -95,7 +95,7 @@ if ($ShowKernel) {
     exit $LASTEXITCODE
 }
 
-$ecmArgs = @('-v','-d',"$Device",'-gpu','-sigma',"3:$Sigma",'-gpucurves',"$Curves","$B1",'0')
+$ecmArgs = @('-v','-d',"$Device",'--curve','mont','--target','gpu','-sigma',"3:$Sigma",'-gpucurves',"$Curves","$B1",'0')
 if ($ExtraArgs.Trim().Length -gt 0) { $ecmArgs += ($ExtraArgs -split '\s+') }
 
 Write-Host "`n== Run ==" -ForegroundColor Cyan

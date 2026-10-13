@@ -38,12 +38,12 @@ def run(exe, folder, expr, b1, curves, sigma, exponent, algo, device, sample=0, 
     if registers is not None: env['ECM_PRAC_REG_TARGET'] = str(registers)
     env.pop('ECM_GPU_DUMP', None)
     args = [str(exe), '-sigma', f'0:{sigma}', '-gpucurves', str(curves), '--ckpt', '0',
-            '--exponent', exponent, '-v']
+            '--lcm', '12' if exponent == 'choose12' else '1', '-v']
     if algo == 'cpu':
         env['ECM_GPU_STAGE1_ALGO'] = 'ladder'
-        args += ['--method', 'mont', '--backend', 'gmp', '--tmp-dir', str(folder)]
+        args += ['--curve', 'mont', '--target', 'cpu', '--impl', 'scalar', '--tmp-dir', str(folder)]
     else:
-        args += ['-gpu', '-d', str(device), '--gpu-param', '0', '-savea', 'completed.save']
+        args += ['--curve','mont','--target','gpu', '-d', str(device), '--gpu-param', '0', '-savea', 'completed.save']
     args += [str(b1), '0']
     proc = subprocess.run(args, input=(expr + '\n').encode('ascii'), env=env, cwd=folder,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)

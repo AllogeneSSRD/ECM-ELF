@@ -55,7 +55,7 @@ def main():
         if study['device']['uuid']!=previous['device']['uuid']:raise ValueError('Reused Stage1 hardware differs')
         for row in study['stage1']:
             cmd=row['command']
-            if row['B1']!=1000 or row['torsion']!=1 or cmd[cmd.index('--exponent')+1]!='lcm' or cmd[cmd.index('-d')+1]!='1':
+            if row['B1']!=1000 or row['torsion']!=1 or cmd[cmd.index('--lcm')+1]!='1' or cmd[cmd.index('-d')+1]!='1':
                 raise ValueError('Reused Stage1 does not match the measured lcm/GPU1 contract')
     if 'prior_collection' in study:
         prior=study['prior_collection'];previous=json.loads(Path(prior['path']).read_text(encoding='utf-8'))

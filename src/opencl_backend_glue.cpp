@@ -19,6 +19,13 @@ extern "C" const char *ecm_backend_name(void) {
     return "OpenCL";
 }
 
+extern "C" const char *ecm_backend_stage1_param_error(int gpu_param) {
+    if (gpu_param == 3) return nullptr;
+    if (gpu_param == 0 || gpu_param == 2)
+        return "PARAM0 and PARAM2 are not implemented for the OpenCL backend; use PARAM3 or ecm_cuda";
+    return "unknown GPU parametrization (expected 0, 2 or 3)";
+}
+
 extern "C" void ecm_backend_print_kernels(FILE *out) {
     opencl_ecm_print_available_kernels(out);
 }

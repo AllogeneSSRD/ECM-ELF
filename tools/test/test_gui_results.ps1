@@ -106,7 +106,7 @@ $trace = Join-Path (Split-Path -Parent $Exe) 'ecm_gui_trace.log'
 # NOTE: parenthesise concatenations inside array literals (the comma binds tighter
 # than '+', so an unparenthesised "key = " + $v becomes two ini lines).
 $iniLines = @(
-    'method = gpu',
+    'curve = mont', 'target = gpu',
     ('gpucurves = ' + $Curves),
     ('tmp_dir = ' + $saves),
     ('finished = ' + $finished),
@@ -206,7 +206,7 @@ Check "status/worktype" (($first -match '"status":"F"') -and ($first -match '"wo
 Check ("exponent " + $Exp) ($first -match ('"exponent":' + $Exp))
 Check "b1 present" ($first -match '"b1":\d+')
 Check "sigma + curve present (D3 fields)" (($first -match '"sigma":\d+') -and ($first -match '"curve":\d+'))
-Check "param + method + save present" (($first -match '"param":\d') -and ($first -match '"method":"\w+"') -and ($first -match '"save":"m' + $Exp + '_1e6\.save"'))
+Check "param + curve and target + save present" (($first -match '"param":\d') -and ($first -match '"curve_model":"\w+"') -and ($first -match '"execution_target":"\w+"') -and ($first -match '"save":"m' + $Exp + '_1e6\.save"'))
 Check "timestamp present" ($first -match '"timestamp":"\d{4}-\d{2}-\d{2}T')
 Check "the hit came from the log pane's worker/device" (($first -match '"worker":1') -and ($first -match ('"device":' + $Device)))
 

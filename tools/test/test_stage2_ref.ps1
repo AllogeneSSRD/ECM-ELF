@@ -11,7 +11,7 @@
           against naive AFFINE arithmetic over a prime field, plus an end-to-end run on
           2^128+1 with a FROZEN deterministic configuration (sigma=26, B1=1e3, B2=1e6,
           D=210 -> the 17-digit factor 59649589127497217 through stage-2 prime 114713).
-      [2] convention: the REAL driver (ecm_cuda.exe --method mont, exponent lcm) writes
+      [2] convention: the REAL driver (ecm_cuda.exe --curve mont --target cpu, exponent lcm) writes
           a stage-1 save for that same curve; stage2_ref must recompute the SAME
           normalised x from (N, sigma, B1).  This is what ties the reference's curve
           math to our verified stage 1 (which is itself bit-exact against gmp-ecm).
@@ -105,7 +105,7 @@ $save = $null
 $errFile = Join-Path $Sandbox 'driver.err'
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
-$driverOut = ($N128 | & $Driver --method mont --exponent lcm -sigma 26 -gpucurves 1 `
+$driverOut = ($N128 | & $Driver --curve mont --target cpu --lcm 1 -sigma 26 -gpucurves 1 `
     --tmp-dir $Sandbox 1000 2>$errFile | Out-String)
 $driverExit = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
@@ -169,7 +169,7 @@ if ($null -ne $save -and (Test-Path $save)) {
 Write-Host "[4] soundness on a real Mersenne save (M677)"
 $m677 = [System.Numerics.BigInteger]::Pow(2, 677) - 1
 $ErrorActionPreference = 'Continue'
-$mout = ($m677.ToString() | & $Driver --method mont --exponent lcm -sigma 26 -gpucurves 2 `
+$mout = ($m677.ToString() | & $Driver --curve mont --target cpu --lcm 1 -sigma 26 -gpucurves 2 `
     --tmp-dir $Sandbox 1000 2>(Join-Path $Sandbox 'driver_m677.err') | Out-String)
 $ErrorActionPreference = $prevEap
 $msm = [regex]::Match($mout, 'Saved \d+ Montgomery curve line\(s\) to (\S+)')

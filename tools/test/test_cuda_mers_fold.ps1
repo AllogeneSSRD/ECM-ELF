@@ -103,9 +103,9 @@ Write-N $nnotm '(2^991+1)'
 
 Write-Host "=== A. M991 param0: fold build vs Montgomery build ==="
 $gA = Join-Path $work 'A_fold.save'; $mA = Join-Path $work 'A_mont.save'
-$oFold = Run-Tool $FoldExe "-gpu -d $Device --gpu-param 0 -sigma 100000 -gpucurves 64 -savea $gA 1e5 0" $n991 $work
+$oFold = Run-Tool $FoldExe "--curve mont --target gpu -d $Device --gpu-param 0 -sigma 100000 -gpucurves 64 -savea $gA 1e5 0" $n991 $work
 Check ($oFold -match 'Mersenne fold domain') 'the fold build announces the fold domain (and reports k/t)'
-$null = Run-Tool $CudaExe "-gpu -d $Device --gpu-param 0 -sigma 100000 -gpucurves 64 -savea $mA 1e5 0" $n991 $work
+$null = Run-Tool $CudaExe "--curve mont --target gpu -d $Device --gpu-param 0 -sigma 100000 -gpucurves 64 -savea $mA 1e5 0" $n991 $work
 $r = Compare-Saves $gA $mA
 Check (($r.a -eq 64) -and ($r.b -eq 64)) "both saves carry 64 curve lines (fold $($r.a), mont $($r.b))"
 Check ($r.same -eq 64 -and $r.diff -eq 0) "fold and Montgomery agree on all 64 curves (sigma AND x)"
@@ -115,7 +115,7 @@ Write-Host "=== B. M991 param0: fold build vs CPU reference ==="
 if (Test-Path $CpuExe) {
     $cB = Join-Path $work 'B_cpu'
     New-Item -ItemType Directory -Force $cB | Out-Null
-    $null = Run-Tool $CpuExe "--method mont --backend gmp -sigma 100000 -gpucurves 64 --tmp-dir `"$cB`" --ckpt 0 1e5 0" $n991 $work
+    $null = Run-Tool $CpuExe "--curve mont --target cpu --impl scalar -sigma 100000 -gpucurves 64 --tmp-dir `"$cB`" --ckpt 0 1e5 0" $n991 $work
     $cBfile = (Get-ChildItem $cB -Filter *.save | Select-Object -First 1).FullName
     $r = Compare-Saves $gA $cBfile
     Check ($r.same -eq 64 -and $r.diff -eq 0) "the FOLD result matches the CPU reference on all 64 curves"
@@ -128,27 +128,27 @@ Write-Host "=== C. M991 param2 (const-diff path): fold vs Montgomery ==="
 # NOTE the sigma prefix must match the parametrization: "-sigma 3:..." selects
 # -param 3 and the driver then refuses the conflict with --gpu-param 2.
 $gC = Join-Path $work 'C_fold.save'; $mC = Join-Path $work 'C_mont.save'
-$oC = Run-Tool $FoldExe "-gpu -d $Device --gpu-param 2 -sigma 2:777777 -gpucurves 32 -savea $gC 1e5 0" $n991 $work
+$oC = Run-Tool $FoldExe "--curve mont --target gpu -d $Device --gpu-param 2 -sigma 2:777777 -gpucurves 32 -savea $gC 1e5 0" $n991 $work
 Check ($oC -match 'param2 stage-1 x') 'the fold build runs the param2 family'
-$null = Run-Tool $CudaExe "-gpu -d $Device --gpu-param 2 -sigma 2:777777 -gpucurves 32 -savea $mC 1e5 0" $n991 $work
+$null = Run-Tool $CudaExe "--curve mont --target gpu -d $Device --gpu-param 2 -sigma 2:777777 -gpucurves 32 -savea $mC 1e5 0" $n991 $work
 $r = Compare-Saves $gC $mC
 Check (($r.a -eq 32) -and ($r.same -eq 32) -and ($r.diff -eq 0)) "param2 fold == param2 Montgomery (32/32 lines)"
 
 Write-Host ""
 Write-Host "=== D. M3217 (tier 3328) param0: fold vs Montgomery ==="
 $gD = Join-Path $work 'D_fold.save'; $mD = Join-Path $work 'D_mont.save'
-$oFoldD = Run-Tool $FoldExe "-gpu -d $Device --gpu-param 0 -sigma 9007199254740847 -gpucurves 64 -savea $gD 1e5 0" $n3217 $work
+$oFoldD = Run-Tool $FoldExe "--curve mont --target gpu -d $Device --gpu-param 0 -sigma 9007199254740847 -gpucurves 64 -savea $gD 1e5 0" $n3217 $work
 Check ($oFoldD -match 'N = 2\^3217 - 1') 'the fold banner reports k=3217 for M3217'
-$null = Run-Tool $CudaExe "-gpu -d $Device --gpu-param 0 -sigma 9007199254740847 -gpucurves 64 -savea $mD 1e5 0" $n3217 $work
+$null = Run-Tool $CudaExe "--curve mont --target gpu -d $Device --gpu-param 0 -sigma 9007199254740847 -gpucurves 64 -savea $mD 1e5 0" $n3217 $work
 $r = Compare-Saves $gD $mD
 Check (($r.a -eq 64) -and ($r.same -eq 64) -and ($r.diff -eq 0)) "M3217: fold == Montgomery (64/64 lines)"
 
 Write-Host ""
 Write-Host "=== E. guards: a fold build must refuse non-Mersenne N and param3 ==="
-$o = Run-Tool $FoldExe "-gpu -d $Device --gpu-param 0 -sigma 100000 -gpucurves 8 -savea $work\E.save 1e4 0" $nnotm $work
+$o = Run-Tool $FoldExe "--curve mont --target gpu -d $Device --gpu-param 0 -sigma 100000 -gpucurves 8 -savea $work\E.save 1e4 0" $nnotm $work
 Check ($o -match 'only valid for N = 2\^k - 1') 'a non-Mersenne N is refused with the fold-specific error'
 Check ($o -notmatch 'stage1 returned: 0') 'the non-Mersenne run did NOT run stage 1'
-$o = Run-Tool $FoldExe "-gpu -d $Device --gpu-param 3 -sigma 3:5555 -gpucurves 8 -savea $work\E3.save 1e4 0" $n991 $work
+$o = Run-Tool $FoldExe "--curve mont --target gpu -d $Device --gpu-param 3 -sigma 3:5555 -gpucurves 8 -savea $work\E3.save 1e4 0" $n991 $work
 # the message spans two source lines, each of which the logger prefixes with a timestamp,
 # so only the fragment that cannot be split is matched here
 Check ($o -match 'carries fold kernels') 'gpu_param 3 is refused by a fold build'
@@ -165,9 +165,9 @@ if (-not $SkipSlow) {
     $fF = Join-Path $work 'F_fold.save'; $mF = Join-Path $work 'F_mont.save'
     $tf = @(); $tm = @()
     foreach ($rep in 1, 2) {
-        $o = Run-Tool $FoldExe "-gpu -d $Device --gpu-param 0 -sigma 300000 -gpucurves $AbCurves -savea $fF.rep$rep 1e5 0" $n4999 $work
+        $o = Run-Tool $FoldExe "--curve mont --target gpu -d $Device --gpu-param 0 -sigma 300000 -gpucurves $AbCurves -savea $fF.rep$rep 1e5 0" $n4999 $work
         $tf += (Get-GpuTime $o)
-        $o = Run-Tool $CudaExe "-gpu -d $Device --gpu-param 0 -sigma 300000 -gpucurves $AbCurves -savea $mF.rep$rep 1e5 0" $n4999 $work
+        $o = Run-Tool $CudaExe "--curve mont --target gpu -d $Device --gpu-param 0 -sigma 300000 -gpucurves $AbCurves -savea $mF.rep$rep 1e5 0" $n4999 $work
         $tm += (Get-GpuTime $o)
     }
     $bestF = ($tf | Measure-Object -Minimum).Minimum

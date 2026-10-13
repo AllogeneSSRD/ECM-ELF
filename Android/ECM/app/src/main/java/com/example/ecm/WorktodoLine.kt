@@ -4,13 +4,13 @@ package com.example.ecm
  * Parsed worktodo line from shell-residue format.
  *
  * Example input line:
- *   echo '(2^151-1)' | .\build\Debug\ecm.exe -v -d 1 -gpu -sigma 3:2026 -gpucurves 1 1e4 0
+ *   echo '(2^151-1)' | .\build\Debug\ecm.exe -v -d 1 --curve mont --target gpu -sigma 3:2026 -gpucurves 1 1e4 0
  *   # 391612124215324515959
  *
  * Parsing rules:
  *   1. Strip "echo 'N' | anything.exe" prefix (path-agnostic).
  *   2. Remaining tokens are flags and positional B1 B2.
- *   3. Known flags: -v, -gpu, -d N, -sigma N:M, -gpucurves N,
+ *   3. Known flags: -v, --curve, --target, -d N, -sigma N:M, -gpucurves N,
  *      --mul X, --sqr X, --add X, --sub X, --special-mult X.
  *   4. Last 2 numeric tokens → B1, B2.
  *   5. Next line starting with '#' → expectedFactor.

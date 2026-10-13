@@ -36,7 +36,7 @@ def rejected(exe, folder, cache, device, settings, message, expr='(2^4423-1)'):
                ECM_PRAC_TARGET_MS='50', ECM_PRAC_PLAN_CACHE=str(cache))
     env.pop('ECM_GPU_DUMP', None)
     env.update(settings)
-    command = [str(exe), '-gpu', '-d', str(device), '--gpu-param', '0',
+    command = [str(exe), '--curve','mont','--target','gpu', '-d', str(device), '--gpu-param', '0',
                '-sigma', '0:26', '-gpucurves', '8', '--ckpt', '0',
                '--exp-cache', str(cache), '-savea', 'completed.save', '1000', '0']
     proc = subprocess.run(command, input=(expr+'\n').encode('ascii'), cwd=folder,

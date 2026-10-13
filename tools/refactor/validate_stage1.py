@@ -19,7 +19,7 @@ def test(dev, n_expr, b1, b2, sigma, curves, desc):
     t0 = time.time()
     try:
         r = subprocess.run(
-            [ECM, "-v", "-gpu", "-d", str(dev), "-sigma", sigma,
+            [ECM, "-v", "--curve","mont","--target","gpu", "-d", str(dev), "-sigma", sigma,
              "-gpucurves", curves, b1, b2],
             input=n_expr + "\n", capture_output=True, text=True, timeout=120, env=ENV,
         )
@@ -59,7 +59,7 @@ def main():
     # Detect GPU count
     try:
         r = subprocess.run(
-            [ECM, "-gpu", "-d", "0", "-gpucurves", "1", "-sigma", "3:1", "1", "0"],
+            [ECM, "--curve","mont","--target","gpu", "-d", "0", "-gpucurves", "1", "-sigma", "3:1", "1", "0"],
             input="(2^127-1)\n", capture_output=True, text=True, timeout=30, env=ENV,
         )
     except Exception:

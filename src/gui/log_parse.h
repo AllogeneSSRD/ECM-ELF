@@ -44,7 +44,8 @@ struct ProgressInfo {
 };
 
 // One hit as reported by the driver's D3 hit line (docs/usage/GUI.md):
-//   factor[i]=<decimal> curve=<i> sigma=<64-bit> param=<p> method=<m> save=<name>
+//   factor[i]=<decimal> curve=<i> sigma=<64-bit> param=<p>
+//             curve_model=<model> execution_target=<target> save=<name>
 // Only `factor` is guaranteed: the extra fields are optional on the line, and the CPU
 // back-ends also print their own (different) hit lines, which set `factor` alone.
 struct HitInfo {
@@ -53,7 +54,8 @@ struct HitInfo {
     unsigned long long sigma = 0;
     bool has_sigma = false;
     int param = -1;
-    std::string method;                  // gpu | edwards | mont
+    std::string curve_model;
+    std::string execution_target;
     std::string save;                    // save-file name (may be empty)
 };
 

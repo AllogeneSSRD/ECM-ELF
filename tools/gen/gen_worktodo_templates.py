@@ -34,7 +34,7 @@ def make_selftest():
     for n_expr, sigma, b1, curves, expected in SELFTEST_LINES:
         lines.append(
             f"echo '{n_expr}' | .\\build\\Debug\\ecm.exe "
-            f"-v -d 0 -gpu -sigma {sigma} -gpucurves {curves} {b1} 0"
+            f"-v -d 0 --curve mont --target gpu -sigma {sigma} -gpucurves {curves} {b1} 0"
         )
         lines.append(f"# {expected}")
     return "\n".join(lines) + "\n"
@@ -58,7 +58,7 @@ def make_benchmark():
     for curves in BENCH_CURVES:
         lines.append(
             f"echo '({BENCH_N})' | .\\build\\Debug\\ecm.exe "
-            f"-v -d {BENCH_DEVICE} -gpu -sigma {BENCH_SIGMA} "
+            f"-v -d {BENCH_DEVICE} --curve mont --target gpu -sigma {BENCH_SIGMA} "
             f"-gpucurves {curves} {BENCH_B1} 0"
         )
     return "\n".join(lines) + "\n"

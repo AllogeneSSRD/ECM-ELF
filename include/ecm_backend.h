@@ -1,7 +1,7 @@
 /* ecm_backend.h — GPU backend seam for the ECM driver.
 
    The single ecm driver (src/core/ecm_driver.cpp) talks to a GPU backend only
-   through these three hooks. Each backend provides its own implementation in a
+   through these hooks. Each backend provides its own implementation in a
    small glue translation unit:
 
      - OpenCL: src/opencl_backend_glue.cpp   (linked into the `ecm` target)
@@ -33,6 +33,11 @@ void ecm_backend_print_kernels(FILE *out);
    GPU implementation must ask here instead of hardcoding "OpenCL" -- the CUDA build
    used to announce itself as "gpu (OpenCL)" and list "OpenCL kernel paths". */
 const char *ecm_backend_name(void);
+
+/* Pure capability check for the linked GPU binary. Returns nullptr when the
+   parametrization can run, otherwise a reason suitable for an early CLI/INI
+   error. Device availability and modulus-specific checks remain in prepare/run. */
+const char *ecm_backend_stage1_param_error(int gpu_param);
 
 /* Select the GPU device and prepare the backend for an N of n_log2 bits.
      device_index          : user -d value (0-based); default 0.

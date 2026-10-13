@@ -88,20 +88,22 @@ def check(case, bits, bound, sigma=26, curves=1, convention='lcm', ini=False, de
         todo.write_text(f'ECMSTAGE2=N/A,1,2,{bits},-1,"{save_path.as_posix()}",0,0,{curves}\n', encoding='ascii')
         config = directory / 'ecm.ini'
         exponent = 'lcm' if case == 'ini_worker_choose12' else convention
-        text = (f'method = gpu\ngpu_param = 0\ndevice = {args.device}\nexponent = {exponent}\nsigma = {sigma}\n'
+        scalar = '12' if exponent == 'choose12' else '1'
+        text = (f'curve = mont\ntarget = gpu\ngpu_param = 0\ndevice = {args.device}\nlcm = {scalar}\nsigma = {sigma}\n'
                 f'worktodo = {todo.as_posix()}\nfinished = {(directory / "finished.txt").as_posix()}\n'
                 f'tmp_dir = {saves.as_posix()}\nexp_cache = off\nckpt_seconds = 0\nlog_file =\n'
                 'save_sync_dir_1 =\nsave_sync_dir_2 =\np95_worktodo_path =\n')
-        if case == 'ini_worker_choose12': text += '[Worker #1]\nexponent = choose12\n'
+        if case == 'ini_worker_choose12': text += '[Worker #1]\nlcm = 12\n'
         config.write_text(text, encoding='ascii')
         command = [str(exe), '-ini', str(config), '--worker', '1']
         data = None
     else:
         saves = directory
-        command = [str(exe), '-v', '--method', 'gpu', '--gpu-param', str(gpu_param), '-d', str(args.device),
+        command = [str(exe), '-v', '--curve', 'mont', '--target', 'gpu', '--gpu-param', str(gpu_param), '-d', str(args.device),
                    '-sigma', str(sigma), '-gpucurves', str(curves), '--exp-cache', 'off', '--ckpt', '0',
                    '-save', str(directory / 'result.save')]
-        if not default: command += ['--exponent', convention]
+        if not default: command += ['--lcm',
+                                    '12' if convention == 'choose12' else '1']
         command += [str(bound)]
         data = str(n) + '\n'
     run = subprocess.run(command, input=data, text=True, cwd=directory,

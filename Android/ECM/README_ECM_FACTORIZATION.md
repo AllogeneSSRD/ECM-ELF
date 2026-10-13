@@ -17,7 +17,7 @@
 示例桌面命令：
 
 ```powershell
-echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 -gpu -gpucurves 64 2000 0
+echo '(2^421-1)' | .\build\Debug\ecm.exe -v -d 0 --curve mont --target gpu -gpucurves 64 2000 0
 ```
 
 Android 默认字段即上述参数；点 **运行 ECM** 即可。

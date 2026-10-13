@@ -27,7 +27,7 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
     if (req.verbose) {
         out << " -v";
     }
-    out << " -d " << req.device_index << " -gpu -gpucurves " << req.gpu_curves << " "
+    out << " -d " << req.device_index << " --curve mont --target gpu -gpucurves " << req.gpu_curves << " "
         << static_cast<long long>(req.b1) << " " << static_cast<long long>(req.b2) << "\n";
     return out.str();
 }
@@ -71,7 +71,7 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
     if (req.verbose) {
         header << " -v";
     }
-    header << " -d " << req.device_index << " -gpu -gpucurves " << req.gpu_curves << " "
+    header << " -d " << req.device_index << " --curve mont --target gpu -gpucurves " << req.gpu_curves << " "
            << static_cast<long long>(req.b1) << " " << static_cast<long long>(req.b2);
     if (!req.save_file.empty()) {
         header << (req.save_append ? " -savea " : " -save ") << req.save_file;

@@ -186,7 +186,7 @@ def main():
                 where=out/name;where.mkdir(exist_ok=True);save=where/'stage1.save'
                 if save.exists(): raise ValueError('Unaccounted Stage1 output: '+str(save))
                 ini=where/'ecm.ini';ini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=unused.txt\ntmp_dir=.\n',encoding='utf-8')
-                cmd=[str(exe1),'-ini',str(ini),'--method','gpu','--gpu-param','0','--exponent','lcm',
+                cmd=[str(exe1),'-ini',str(ini),'--curve','mont','--target','gpu','--gpu-param','0','--lcm','1',
                      '--exp-cache','off','-d','1','-sigma','26','-gpucurves',str(batch),'--ckpt','0','-save',str(save),'1000']
                 seconds,log=run(cmd,f'{(1<<bits)-1}\n'.encode(),where,where/'driver.log')
                 gputime=float(re.search(r'GPU stage1 returned: 0 gputime=([\d.]+) ms',log)[1])/1000

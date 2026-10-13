@@ -86,7 +86,7 @@ function Invoke-Cadence([string]$seconds) {
     # NOTE: parenthesise every concatenation inside an array literal -- the comma binds
     # tighter than '+', so "key = " + $v would silently become two ini lines.
     $iniLines = @(
-        'method = gpu',
+        'curve = mont', 'target = gpu',
         'gpu_param = 0',
         ('gpucurves = ' + $Curves),
         ('tmp_dir = ' + $saves),

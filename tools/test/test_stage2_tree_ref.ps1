@@ -218,7 +218,7 @@ if (Test-Path $Driver) {
     $errFile = Join-Path $Sandbox 'driver.err'
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $driverOut = ($N128 | & $Driver --method mont --exponent lcm -sigma 26 -gpucurves 1 `
+    $driverOut = ($N128 | & $Driver --curve mont --target cpu --lcm 1 -sigma 26 -gpucurves 1 `
         --tmp-dir $Sandbox 1000 2>$errFile | Out-String)
     $driverExit = $LASTEXITCODE
     $ErrorActionPreference = $prevEap

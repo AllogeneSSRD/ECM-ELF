@@ -34,7 +34,7 @@ foreach ($T in $Tests) {
     Set-Content -Path $StdinFile -Value $T.N -Encoding ASCII -NoNewline
 
     # Bat: feed stdin from file, redirect stdout+stderr to output file
-    $BatContent = "@echo off`r`n`"$EcmBin`" -v -d 1 -gpu -sigma $($T.S) -gpucurves $($T.C) $($T.B) 0 <`"$StdinFile`" >`"$OutFile`" 2>&1"
+    $BatContent = "@echo off`r`n`"$EcmBin`" -v -d 1 --curve mont --target gpu -sigma $($T.S) -gpucurves $($T.C) $($T.B) 0 <`"$StdinFile`" >`"$OutFile`" 2>&1"
     $BatFile = Join-Path $env:TEMP "ecm_run_${Idx}.bat"
     Set-Content -Path $BatFile -Value $BatContent -Encoding ASCII
 

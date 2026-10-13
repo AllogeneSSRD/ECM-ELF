@@ -11,11 +11,13 @@ $N = "(2^3001-1)"
 $B1s = @(10000, 20000, 30000, 50000, 75000, 100000)
 
 function Run-One([string]$backend, [string]$mers, [int]$B1) {
+    $implementation = if ($backend -eq 'gmp') { 'scalar' } else { 'simd' }
+    $reduction = if ($mers -eq 'on') { 'mersenne-fold' } elseif ($mers -eq 'off') { 'montgomery' } else { 'auto' }
     $d = Join-Path $scratch "bisect_$backend$mers$B1"
     Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $d | Out-Null
-    $argv = @("--edwards", "--edwards-backend", $backend, "--edwards-threads", "1",
-              "--edwards-naf-w", "12", "--edwards-mersenne", $mers,
+    $argv = @("--curve","ed","--target","cpu", "--impl", $implementation, "--stage1-threads", "1",
+              "--naf-w", "12", "--reduction", $reduction,
               "-gpucurves", "8", "-sigma", "20260922", "--tmp-dir", $d, "$B1", "0")
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $out = $N | & $exe @argv 2>&1

@@ -40,9 +40,10 @@ def sample(exe: Path, folder: Path, bits: int, b1: int, algo: str, args) -> dict
         if key.startswith('ECM_PRAC_WINDOW'): env.pop(key)
     env.pop('ECM_GPU_DUMP', None)
     env['ECM_GPU_STAGE1_SAMPLE_SECONDS'] = str(args.seconds) if algo != 'ladder' else '0'
-    command = [str(exe), '-gpu', '-d', str(args.device), '--gpu-param', '0',
+    command = [str(exe), '--curve','mont','--target','gpu', '-d', str(args.device), '--gpu-param', '0',
                '-sigma', '0:26', '-gpucurves', str(args.curves), '--ckpt', '0', '-v',
-               '--exponent', args.exponent, '--exp-cache', str(args.exp_cache),
+               '--lcm', '12' if args.exponent == 'choose12' else '1',
+               '--exp-cache', str(args.exp_cache),
                '-savea', 'completed.save', str(b1), '0']
     log = folder / 'run.log'
     launched = time.monotonic()

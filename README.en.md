@@ -50,7 +50,7 @@ For performance comparisons and applicable ranges, see [Stage1 performance](docs
 
 - **CUDA/CGBN** is the native Windows CUDA path. The host builds the exponent and curves, the GPU advances point multiplication in slices, and the host checks final points before writing saves. `gpu_param=0` is the Suyama sigma family shared with CPU Montgomery and GMP-ECM `-param 0`. `gpu_param=2` is GMP-ECM batch 2 and produces saves with `PARAM=2`, which Prime95 does not accept. `gpu_param=3` is the batch family available to both CUDA and OpenCL. Supported operand sizes depend on the kernel tiers included in the binary. Production builds use the ladder by default; resident/PRAC require explicit build and runtime selection. See [Stage1 implementation](docs/architecture/STAGE1.md).
 - **OpenCL** is the Windows, Linux, macOS and Android GPU path. Its registry selects Montgomery multiplication/squaring, modular addition/subtraction and special multiplication operators. `ecm.exe --showkernel` lists paths in the current build. CUDA and OpenCL device IDs, runtimes and internal checkpoints are not interchangeable. See the [OpenCL architecture](docs/architecture/OPENCL.md) and [kernel guide](kernels/opencl/README.md).
-- **CPU** offers independent Edwards (Atkin–Morain) and Suyama-Montgomery curve families, using scalar GMP or eight-curve AVX-512 IFMA SIMD batches. `field=auto` can use Mersenne folding for a full `2^k−1` target and Montgomery reduction for a general integer. `backend=simd` is a hard requirement and fails without the ISA; only `backend=auto` falls back. See [Stage1 implementation](docs/architecture/STAGE1.md) and the [mathematical references](docs/reference/README.md).
+- **CPU** offers independent Edwards (Atkin–Morain) and Suyama-Montgomery curve families, using scalar GMP or eight-curve AVX-512 IFMA SIMD batches. `reduction=auto` can use Mersenne folding for a full `2^k−1` target and Montgomery reduction for a general integer. `impl=simd` requires that ISA; `impl=auto` may fall back. See [Stage1 implementation](docs/architecture/STAGE1.md) and the [mathematical references](docs/reference/README.md).
 
 `gpucurves` is a task batch size, not a promise that all curves reside on the GPU at once. Choose GPU batches using `--gpu-info`, operand size, TPI, TPB, SM count and actual resource occupancy. CPU SIMD parallelism is bounded by `ceil(curves/8)` batches; the scalar path assigns one curve per task. With a fixed sigma, curve `i` uses `sigma+i`. The same numeric sigma under different parametrizations does not define the same curve.
 
@@ -66,14 +66,14 @@ Run these commands from the executable directory, or replace the paths with the 
 .\ecm.exe --showkernel
 
 # One-off OpenCL / CUDA Stage1; N may be a decimal number or an expression
-echo '(2^347-1)' | .\ecm.exe -gpu -gpucurves 1 -d 0 1e4 0
-echo '(2^421-1)' | .\ecm_cuda.exe -gpu --gpu-param 0 -gpucurves 32 -d 0 1e5 0
+echo '(2^347-1)' | .\ecm.exe --curve mont --target gpu -gpucurves 1 -d 0 1e4 0
+echo '(2^421-1)' | .\ecm_cuda.exe --curve mont --target gpu --gpu-param 0 -gpucurves 32 -d 0 1e5 0
 
 # CPU Suyama-Montgomery; auto selects SIMD on a supported CPU
-echo '(2^1277-1)' | .\ecm.exe --method mont --backend auto -gpucurves 8 1e5 0
+echo '(2^1277-1)' | .\ecm.exe --curve mont --target cpu --impl auto -gpucurves 8 1e5 0
 ```
 
-A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 [B2]`. With no positional bound, the program enters Stage1 queue mode. `-gpu`, `--method edwards` and `--method mont` select mutually exclusive Stage1 methods. `-d` is the device index enumerated by that program. `--gpu-info` reports CUDA tiers and suggested batch sizes; an OpenCL build reports that this query is not applicable.
+A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 [B2]`. With no positional bound, the program enters Stage1 queue mode. `--curve` selects the curve and `--target` selects CPU or GPU; the default is Montgomery on GPU, and GPU Edwards is currently unsupported. `-d` is the device index enumerated by that program. `--gpu-info` reports CUDA tiers and suggested batch sizes; an OpenCL build reports that this query is not applicable.
 
 ### Run Stage1 from worktodo
 
@@ -81,7 +81,8 @@ This example assumes `ecm_cuda.exe`, `ecm_cuda_stage2.exe` and `ecm.ini` are in 
 
 ```ini
 [Worker #1]
-method = gpu
+curve = mont
+target = gpu
 gpu_param = 0
 device = 0
 worktodo = worktodo.txt
@@ -102,7 +103,7 @@ ECM2=1,2,3001,-1,10000,0,8
 .\ecm_cuda.exe -ini .\ecm.ini --worker 1
 ```
 
-With no positional bounds, this command consumes assignments for the selected worker. Completed assignments go to `worktodo.finished.txt`. On a normal interruption, unfinished assignments remain in `worktodo.txt`; rerun the command to resume from a valid checkpoint. `ecm.exe` has the same queue entry point when configured for the chosen CPU/OpenCL method. Use one consumer per queue and separate queues and output paths for different workers. See [queues and handoff](#queues) and [Stage1 usage](docs/usage/STAGE1.md).
+With no positional bounds, this command consumes assignments for the selected worker. A Montgomery `ECM2=` queue task writes its final save under `tmp_dir` using the `m{n}_{b1}.save` format, such as `m3001_1e4.save`. Completed assignments go to `worktodo.finished.txt`. On a normal interruption or save write failure, unfinished assignments remain in `worktodo.txt`; rerun the command to resume from a valid checkpoint. `ecm.exe` has the same queue entry point when configured for the chosen CPU/OpenCL path. Use one consumer per queue and separate queues and output paths for different workers. See [queues and handoff](#queues) and [Stage1 usage](docs/usage/STAGE1.md).
 
 ### Run and tune CUDA Stage2
 
@@ -133,16 +134,17 @@ Common options are below. Run the relevant binary's `--help` and consult the [IN
 
 | Option | Purpose |
 | --- | --- |
-| `-gpu`, `-gpucurves N`, `--gpu-param P`, `-sigma S` | GPU batch, parametrization and fixed seed; PARAM0 can use a full 64-bit sigma |
-| `--method gpu|edwards|mont`, `--backend auto|simd|gmp` | Stage1 method and CPU arithmetic backend |
-| `--field auto|mersenne|montgomery`, `--exponent lcm|choose12` | CPU SIMD reduction domain and Montgomery exponent semantics |
+| `-gpucurves N`, `--gpu-param P`, `-sigma S` | Curve batch, GPU parametrization and fixed seed; PARAM0 can use a full 64-bit sigma |
+| `--curve mont|ed`, `--target cpu|gpu` | Curve model and execution target |
+| `--impl auto|simd|scalar`, `--reduction auto|montgomery|mersenne-fold` | CPU arithmetic and SIMD reduction |
+| `--lcm 1|12` | Montgomery Stage1 scalar construction |
 | `--stage1-threads N`, `--affinity LIST` | CPU workers and optional affinity; measure before pinning on hybrid CPUs |
 | `--ckpt SEC`, `--tmp-dir DIR`, `--exp-cache DIR` | Checkpoint interval, local Stage1 output and exponent cache |
 | `-ini FILE`, `--worker N` | Queue configuration and section selection |
 | `--mul/--sqr/--add/--sub/--special-mult ID` | OpenCL operator paths; CUDA does not use these overrides |
 | `--go`, `--gp PATH`, `--verify-gpu`, `--profile-ops` | Group-order diagnostics, GP path, GPU cross-check and operator counts |
 
-Older CPU-specific flags such as `--mont-backend`, `--mont-torsion` and `--edwards-threads` remain aliases. New configurations should use the shared `--backend`, `--exponent` and `--stage1-threads` names. Current `--help` also lists OpenCL kernel-root, binary-cache, TPI, work-group, logging and diagnostic options.
+Current `--help` also lists OpenCL kernel-root, binary-cache, TPI, work-group, logging and diagnostic options.
 
 ### OpenCL runtime and operator diagnostics
 
@@ -153,37 +155,38 @@ Operator microbenchmarks have their own CLI. `opencl_ecm_addsub` provides `--no-
 <a id="cpu-stage1"></a>
 ## CPU Stage1 configuration
 
-Both CPU methods use the same driver and `ecm.ini` as the GPU, but curve construction, coordinates and checkpoint files differ. `method=mont` selects Suyama sigma / GMP-ECM PARAM0; `method=edwards` selects the Atkin–Morain family. `exponent=lcm` means `lcm(1…B1)`; `choose12` multiplies this scalar by 12 for workflows requiring Prime95 exponent semantics. The exponent mode changes the computed point and must be recorded when comparing saves.
+Both CPU curve models use the same driver and `ecm.ini` as the GPU, but curve construction, coordinates and checkpoint files differ. `curve=mont` with `target=cpu` selects Suyama sigma / GMP-ECM PARAM0; `curve=ed` selects the Atkin–Morain family. For Montgomery, `lcm=1` uses `lcm(1…B1)`; `lcm=12` multiplies it by 12 for workflows requiring Prime95 scalar semantics. Edwards uses a fixed `48*lcm(1…B1)` scalar and rejects `lcm=12`. The Montgomery choice changes the computed point and must be recorded when comparing saves.
 
 Example local Montgomery configuration:
 
 ```ini
-method = mont
-backend = auto
-field = auto
-exponent = lcm
+curve = mont
+target = cpu
+impl = auto
+reduction = auto
+lcm = 1
 stage1_threads = 0
 tmp_dir = saves
 worktodo = worktodo.txt
 finished = worktodo.finished.txt
 ```
 
-Set `method=edwards` for the Edwards path; `naf_w` applies only there. To compare reduction domains on the same mathematical target, set `field` to `mersenne` and `montgomery` in separate runs. The former requires a full `2^k−1` target. A Suyama save handed to Prime95 Stage2 must use compatible parametrization and exponent semantics, and Prime95 must be able to access the save. Applicable keys and ranges are in the [INI reference](docs/ECM_INI_REFERENCE.md).
+Set `curve=ed` for the Edwards path; `naf_w` applies only there. To compare reductions on the same mathematical target, set `reduction` to `mersenne-fold` and `montgomery` in separate runs. The former requires a full `2^k−1` target. A Suyama save handed to Prime95 Stage2 must use compatible parametrization and scalar construction, and Prime95 must be able to access the save. Applicable keys and ranges are in the [INI reference](docs/ECM_INI_REFERENCE.md).
 
-The four CPU recipes in the original README can still be expressed with the current shared keys:
+Common CPU recipes:
 
 | Purpose | Change from the example above | Check |
 | --- | --- | --- |
-| GMP-ECM PARAM0 comparison | `method=mont`, `exponent=lcm` | Compare the Stage1 final point for the same N, B1 and sigma; run Stage1 only in the reference program |
-| Prime95 Suyama handoff | `method=mont`, `exponent=choose12` | Curve and exponent semantics, save location and task fields required by Prime95 |
-| Edwards on a full Mersenne number | `method=edwards`, `field=auto` | Actual reduction domain, NAF setting and Edwards-specific save |
-| Edwards on a general modulus or for A/B | `method=edwards`, `field=montgomery` | Avoid forcing folding after known factors have been removed and N is no longer `2^k−1` |
+| GMP-ECM PARAM0 comparison | `curve=mont`, `lcm=1` | Compare the Stage1 final point for the same N, B1 and sigma; run Stage1 only in the reference program |
+| Prime95 Suyama handoff | `curve=mont`, `lcm=12` | Curve and scalar semantics, save location and task fields required by Prime95 |
+| Edwards on a full Mersenne number | `curve=ed`, `reduction=auto` | Actual reduction, NAF setting and Edwards-specific save |
+| Edwards on a general modulus or for A/B | `curve=ed`, `impl=simd`, `reduction=montgomery` | Avoid forcing folding after known factors have been removed and N is no longer `2^k−1` |
 
 `save_name_pattern` controls only the CPU Montgomery output name; other backends retain their own naming. A GMP-ECM text save, a Prime95 assignment and a local `.ckpt` serve different purposes. To continue this repository's unfinished CPU job, rerun the original command so it can read its checkpoint. An external `-resume` on a completed save still needs the bounds required by that program.
 
 One eight-curve SIMD batch is one CPU scheduling task; 64 curves therefore create at most eight parallel batches. `stage1_threads=0` chooses worker count automatically, and an explicit count is still bounded by available tasks. Do not run multiple processes against the same `(N,B1)` save/checkpoint path; give them separate output directories. A fixed sigma helps reproduce a curve, while a random seed should not be inferred from log order.
 
-For common failures: if explicit `simd` reports a missing ISA, use `auto` or `gmp`; if workers are idle, compare the number of curve batches with the worker count; if `field=mersenne` is rejected, verify that the actual N is still a full Mersenne number; if an INI edit has no effect, check the selected worker section, CLI overrides and legacy aliases. Stage1 validation should compare final points under identical N/B1/sigma/parametrization/exponent conditions. Passing a checksum alone is not mathematical agreement.
+For common failures: if explicit `simd` reports a missing ISA, use `auto` or `scalar`; if workers are idle, compare the number of curve batches with the worker count; if `reduction=mersenne-fold` is rejected, verify that the actual N is still a full Mersenne number; if an INI edit has no effect, check the selected worker section and CLI overrides. Stage1 validation should compare final points under identical N/B1/sigma/parametrization/scalar conditions. Passing a checksum alone is not mathematical agreement.
 
 <a id="queues"></a>
 ## Queues, workers and handoff

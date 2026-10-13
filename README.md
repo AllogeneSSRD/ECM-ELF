@@ -50,7 +50,7 @@ ECM-ELF 提供可独立运行的多后端 ECM 工作流：使用 CUDA/CGBN、Ope
 
 - **CUDA/CGBN**：原生 Windows CUDA 路径；主机生成指数与曲线，GPU 分片推进点乘，主机检查末点并写 save。`gpu_param=0` 是 Suyama σ 曲线，与 CPU Montgomery 和 GMP-ECM `-param 0` 同族；`gpu_param=2` 是 GMP-ECM batch 2，产生带 `PARAM=2` 的 save，Prime95 不接受该参数化；`gpu_param=3` 是 batch 族，CUDA 与 OpenCL 都可使用。受支持位宽由实际构建的 kernel 档位决定。生产构建默认 ladder；resident/PRAC 需要构建时显式启用，不能从源码存在推断为发布功能。见 [Stage1 实现](docs/architecture/STAGE1.md)。
 - **OpenCL**：Windows、Linux、macOS 和 Android 的 GPU 路径，支持从注册表选择 Montgomery 乘/平方、模加/减和 special multiplication 算子。`ecm.exe --showkernel` 列出当前构建可用的路径。OpenCL 与 CUDA 的设备编号、运行时和内部 checkpoint 不互换；同名驱动选项不表示两者有相同的内核。见 [OpenCL 架构](docs/architecture/OPENCL.md) 和 [内核说明](kernels/opencl/README.md)。
-- **CPU**：Edwards（Atkin–Morain）与 Suyama-Montgomery 是两条独立曲线族，可选 GMP 标量或 AVX-512 IFMA SIMD；SIMD 一批处理 8 条曲线。`field=auto` 可对完整梅森数选择折叠域，对一般整数使用 Montgomery 归约。`backend=simd` 是硬要求，缺少指令集时报错；`backend=auto` 才允许回退。算法和点表示见 [Stage1 实现](docs/architecture/STAGE1.md) 与 [数学参考](docs/reference/README.md)。
+- **CPU**：Edwards（Atkin–Morain）与 Suyama-Montgomery 是两条独立曲线族，可选 GMP 标量或 AVX-512 IFMA SIMD；SIMD 一批处理 8 条曲线。`reduction=auto` 可对完整梅森数选择折叠域，对一般整数使用 Montgomery 归约。`impl=simd` 是硬要求，缺少指令集时报错；`impl=auto` 才允许回退。算法和点表示见 [Stage1 实现](docs/architecture/STAGE1.md) 与 [数学参考](docs/reference/README.md)。
 
 `gpucurves` 表示一次任务的曲线数，并不保证所有曲线同时驻留 GPU。GPU 批量应结合 `--gpu-info`、位宽、TPI、TPB、SM 数及实际资源占用选择。CPU SIMD 的线程并行度上限为 `ceil(曲线数/8)` 个批；标量路径则按每曲线一个任务分配。固定 σ 时，第 `i` 条曲线使用 `sigma+i`；不同参数化的同一 σ 不是同一条曲线。
 
@@ -66,14 +66,14 @@ ECM-ELF 提供可独立运行的多后端 ECM 工作流：使用 CUDA/CGBN、Ope
 .\ecm.exe --showkernel
 
 # 单次 OpenCL / CUDA Stage1；N 可以是十进制数或表达式
-echo '(2^347-1)' | .\ecm.exe -gpu -gpucurves 1 -d 0 1e4 0
-echo '(2^421-1)' | .\ecm_cuda.exe -gpu --gpu-param 0 -gpucurves 32 -d 0 1e5 0
+echo '(2^347-1)' | .\ecm.exe --curve mont --target gpu -gpucurves 1 -d 0 1e4 0
+echo '(2^421-1)' | .\ecm_cuda.exe --curve mont --target gpu --gpu-param 0 -gpucurves 32 -d 0 1e5 0
 
 # CPU Suyama-Montgomery；auto 在支持的机器上选 SIMD
-echo '(2^1277-1)' | .\ecm.exe --method mont --backend auto -gpucurves 8 1e5 0
+echo '(2^1277-1)' | .\ecm.exe --curve mont --target cpu --impl auto -gpucurves 8 1e5 0
 ```
 
-单次运行的形式为 `echo '<N>' | <ecm.exe 或 ecm_cuda.exe> [选项] B1 [B2]`；无位置参数时进入 Stage1 队列模式。`-gpu`、`--method edwards`、`--method mont` 选择互斥的 Stage1 方法。`-d` 是当前程序列出的设备编号；`--gpu-info` 可报告 CUDA 档位与建议批量，OpenCL 构建会说明该查询不适用。
+单次运行的形式为 `echo '<N>' | <ecm.exe 或 ecm_cuda.exe> [选项] B1 [B2]`；无位置参数时进入 Stage1 队列模式。`--curve` 与 `--target` 分别选择曲线和执行位置；默认是 Montgomery + GPU，当前不支持 Edwards + GPU。`-d` 是当前程序列出的设备编号；`--gpu-info` 可报告 CUDA 档位与建议批量，OpenCL 构建会说明该查询不适用。
 
 ### 使用 worktodo 运行 Stage1
 
@@ -81,7 +81,8 @@ echo '(2^1277-1)' | .\ecm.exe --method mont --backend auto -gpucurves 8 1e5 0
 
 ```ini
 [Worker #1]
-method = gpu
+curve = mont
+target = gpu
 gpu_param = 0
 device = 0
 worktodo = worktodo.txt
@@ -102,7 +103,7 @@ ECM2=1,2,3001,-1,10000,0,8
 .\ecm_cuda.exe -ini .\ecm.ini --worker 1
 ```
 
-该命令不带位置参数，依次消费所选 worker 的任务。完成的任务写入 `worktodo.finished.txt`；正常中断时未完成任务留在 `worktodo.txt`，重启同一命令可从有效 checkpoint 恢复。`ecm.exe` 也使用同一队列入口，但应按所选 CPU/OpenCL 方法配置。每个队列只运行一个消费进程；不同 worker 的队列和输出路径应分开。详见[队列与交接](#queues)和 [Stage1 使用](docs/usage/STAGE1.md)。
+该命令不带位置参数，依次消费所选 worker 的任务。`ECM2=` 队列任务的 Montgomery 最终存档写在 `tmp_dir`，仍采用 `m{n}_{b1}.save` 格式，例如 `m3001_1e4.save`。完成的任务写入 `worktodo.finished.txt`；正常中断或最终存档写入失败时，未完成任务留在 `worktodo.txt`，重启同一命令可从有效 checkpoint 恢复。`ecm.exe` 也使用同一队列入口，但应按所选 CPU/OpenCL 路径配置。每个队列只运行一个消费进程；不同 worker 的队列和输出路径应分开。详见[队列与交接](#queues)和 [Stage1 使用](docs/usage/STAGE1.md)。
 
 ### 运行和调优 CUDA Stage2
 
@@ -133,16 +134,17 @@ ECM tune 默认使用所选 worker 的 Stage2 队列；队列不存在时改测�
 
 | 选项 | 用途 |
 | --- | --- |
-| `-gpu`、`-gpucurves N`、`--gpu-param P`、`-sigma S` | GPU 曲线批量、参数化和固定种子；PARAM0 可使用完整 64 位 σ |
-| `--method gpu|edwards|mont`、`--backend auto|simd|gmp` | 选择 Stage1 方法和 CPU 算术后端 |
-| `--field auto|mersenne|montgomery`、`--exponent lcm|choose12` | CPU SIMD 归约域与 Montgomery 指数语义 |
+| `-gpucurves N`、`--gpu-param P`、`-sigma S` | 曲线批量、GPU 参数化和固定种子；PARAM0 可使用完整 64 位 σ |
+| `--curve mont|ed`、`--target cpu|gpu` | 分别选择曲线模型和执行位置 |
+| `--impl auto|simd|scalar`、`--reduction auto|montgomery|mersenne-fold` | CPU 算术实现和 SIMD 约减 |
+| `--lcm 1|12` | Montgomery Stage1 标量的构造方式 |
 | `--stage1-threads N`、`--affinity LIST` | CPU 工作线程与可选亲和性；混合核机器须实测后再绑定 |
 | `--ckpt SEC`、`--tmp-dir DIR`、`--exp-cache DIR` | 检查点间隔、Stage1 本地输出目录和指数缓存 |
 | `-ini FILE`、`--worker N` | 队列配置与分区选择 |
 | `--mul/--sqr/--add/--sub/--special-mult ID` | OpenCL 算子路径；CUDA 不使用这些覆盖项 |
 | `--go`、`--gp PATH`、`--verify-gpu`、`--profile-ops` | 群阶诊断、GP 路径、GPU 交叉验证和算子计数 |
 
-旧的 CPU 专用选项（例如 `--mont-backend`、`--mont-torsion`、`--edwards-threads`）仍可作为别名使用；新配置建议使用共用的 `--backend`、`--exponent`、`--stage1-threads`。OpenCL 的内核根目录、二进制缓存、TPI、work-group 及日志诊断选项均由当前 `--help` 列出。
+OpenCL 的内核根目录、二进制缓存、TPI、work-group 及日志诊断选项均由当前 `--help` 列出。
 
 ### OpenCL 运行时与算子诊断
 
@@ -153,37 +155,38 @@ ECM tune 默认使用所选 worker 的 Stage2 队列；队列不存在时改测�
 <a id="cpu-stage1"></a>
 ## CPU Stage1 配置教程
 
-两条 CPU 方法使用与 GPU 相同的驱动和 `ecm.ini`，但曲线构造、坐标和 checkpoint 文件不同。`method=mont` 对应 Suyama σ / GMP-ECM PARAM0；`method=edwards` 对应 Atkin–Morain 曲线。`exponent=lcm` 是 `lcm(1…B1)`；`choose12` 在它前面乘 12，适用于需要 Prime95 指数语义的交接。指数模式改变了实际计算点，不应在比较 save 时忽略。
+两条 CPU 曲线模型使用与 GPU 相同的驱动和 `ecm.ini`，但曲线构造、坐标和 checkpoint 文件不同。`curve=mont` 且 `target=cpu` 对应 Suyama σ / GMP-ECM PARAM0；`curve=ed` 对应 Atkin–Morain 曲线。Montgomery 路径的 `lcm=1` 使用 `lcm(1…B1)`，`lcm=12` 再乘 12，适用于需要 Prime95 标量约定的交接。标量构造改变了实际计算点，不应在比较 save 时忽略。
 
 一份本地 Montgomery 配置示例：
 
 ```ini
-method = mont
-backend = auto
-field = auto
-exponent = lcm
+curve = mont
+target = cpu
+impl = auto
+reduction = auto
+lcm = 1
 stage1_threads = 0
 tmp_dir = saves
 worktodo = worktodo.txt
 finished = worktodo.finished.txt
 ```
 
-将 `method` 改为 `edwards` 就会选择 Edwards 路径；`naf_w` 只影响该路径。需要在同一数学目标上比较归约域时，可将 `field` 分别设为 `mersenne` 和 `montgomery`，前者只适用于完整的 `2^k−1`。要给 Prime95 的 Suyama Stage2 交接，应明确使用与接收端相符的参数化、指数模式和可访问的 save 路径。配置范围与各键是否适用于 GPU/CPU 见 [INI 参考](docs/ECM_INI_REFERENCE.md)。
+将 `curve` 改为 `ed` 就会选择 Edwards 路径；`naf_w` 只影响该路径。需要在同一数学目标上比较归约方式时，可将 `reduction` 分别设为 `mersenne-fold` 和 `montgomery`，前者只适用于完整的 `2^k−1`。要给 Prime95 的 Suyama Stage2 交接，应明确使用与接收端相符的参数化、标量构造和可访问的 save 路径。配置范围与各键是否适用于 GPU/CPU 见 [INI 参考](docs/ECM_INI_REFERENCE.md)。
 
-原 README 的四种 CPU 配方仍可按当前共用键表达：
+常用 CPU 配方：
 
 | 用途 | 在上述示例上修改 | 要核对的结果 |
 | --- | --- | --- |
-| GMP-ECM PARAM0 对照 | `method=mont`、`exponent=lcm` | 同 N、B1、σ 下检查 Stage1 最终点；参考程序只运行 Stage1 |
-| Prime95 Suyama 交接 | `method=mont`、`exponent=choose12` | Prime95 所需曲线和指数语义、save 位置与任务字段 |
-| Edwards 完整梅森数 | `method=edwards`、`field=auto` | 实际归约域、NAF 设置与 Edwards 专用 save |
-| Edwards 通用模数或 A/B | `method=edwards`、`field=montgomery` | 已知因子剥离后的 N 不再是 `2^k−1` 时，避免错误强制折叠 |
+| GMP-ECM PARAM0 对照 | `curve=mont`、`lcm=1` | 同 N、B1、σ 下检查 Stage1 最终点；参考程序只运行 Stage1 |
+| Prime95 Suyama 交接 | `curve=mont`、`lcm=12` | Prime95 所需曲线和标量语义、save 位置与任务字段 |
+| Edwards 完整梅森数 | `curve=ed`、`reduction=auto` | 实际归约域、NAF 设置与 Edwards 专用 save |
+| Edwards 通用模数或 A/B | `curve=ed`、`impl=simd`、`reduction=montgomery` | 已知因子剥离后的 N 不再是 `2^k−1` 时，避免错误强制折叠 |
 
 `save_name_pattern` 只控制 CPU Montgomery 写出的文件名；别的后端保留自身命名。给 GMP-ECM 的文本 save、给 Prime95 的任务行与本地 `.ckpt` 是三种不同用途的产物。需要继续本仓库自身的 CPU 任务时，优先重跑原命令读取 checkpoint；对已完成 save 的外部 `-resume` 要提供该程序要求的 B1/B2 参数。
 
 一批 8 条 SIMD 曲线是一个 CPU 调度任务；例如 64 条曲线最多形成 8 个可并行批。`stage1_threads=0` 自动选线程，显式线程数也会受任务数约束。多个进程不要并发写同一 `(N,B1)` 的 save 和 checkpoint；为各进程配置独立输出目录。固定 σ 可用于重复验证曲线，随机 σ 不宜靠日志顺序推断。
 
-常见排查顺序：若显式 `simd` 报 ISA 错误，改用 `auto` 或 `gmp`；若线程数未用满，先比较曲线批数与线程数；若 `field=mersenne` 被拒绝，核对实际 N 是否仍是完整梅森数；若改变 INI 后行为不变，检查所选 worker 分区、命令行覆盖及旧键别名。对 Stage1 校验应比较相同 N/B1/σ/参数化/指数下的最终点，不能把仅通过 checksum 当成数学一致。
+常见排查顺序：若显式 `simd` 报 ISA 错误，改用 `auto` 或 `scalar`；若线程数未用满，先比较曲线批数与线程数；若 `reduction=mersenne-fold` 被拒绝，核对实际 N 是否仍是完整梅森数；若改变 INI 后行为不变，检查所选 worker 分区与命令行覆盖。对 Stage1 校验应比较相同 N/B1/σ/参数化/标量构造下的最终点，不能把仅通过 checksum 当成数学一致。
 
 <a id="queues"></a>
 ## 队列、worker 与交接

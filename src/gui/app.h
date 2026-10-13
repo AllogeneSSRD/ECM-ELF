@@ -66,7 +66,8 @@ struct WorkerView {
     int index = 1;                    // [Worker #N] number (also --worker N)
     std::string name;                 // [Worker #N] name= (GUI-only key)
     int device = 0;                   // effective device= after section override
-    std::string method = ecm_config::defaults::stage1_method;
+    std::string curve_model = ecm_config::defaults::stage1_curve;
+    std::string execution_target = ecm_config::defaults::stage1_target;
     int gpucurves = 0;
     std::string worktodo;
     std::string log_file;

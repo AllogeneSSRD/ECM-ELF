@@ -108,8 +108,8 @@ $todo = Join-Path $Sandbox 'worktodo.txt'
 $header = ('# GPU history sandbox: one real worker keeps card ' + $Device + ' busy')
 $iniLines = @(
     $header,
-    'method = gpu',
-    'backend = auto',
+    'curve = mont', 'target = gpu',
+    'impl = auto',
     'gpucurves = 384',
     ('tmp_dir = ' + (Join-Path $Sandbox 'saves')),
     ('finished = ' + (Join-Path $Sandbox 'finished.txt')),

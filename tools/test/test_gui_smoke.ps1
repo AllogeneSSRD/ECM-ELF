@@ -119,7 +119,7 @@ $iniPath = Join-Path $Sandbox 'ecm.ini'
 $Language = 'chineseSimplified'
 $iniLines = @(
     '# sandbox ini: driver keys the GUI must not touch',
-    'method = gpu',
+    'curve = mont', 'target = gpu',
     'device = 0',
     'gpucurves = 384',
     ('tmp_dir = ' + (Join-Path $Sandbox 'saves')),

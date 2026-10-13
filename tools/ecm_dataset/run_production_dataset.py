@@ -94,7 +94,7 @@ def main():
         save=where/'stage1.save'
         if not args.resume or not save.exists():
             if save.exists():raise RuntimeError('Use a fresh directory or --resume')
-            prefix=[str(exe1),'-ini',str(ini),'--method','gpu','--gpu-param','0','--exponent','lcm','--exp-cache','off',
+            prefix=[str(exe1),'-ini',str(ini),'--curve','mont','--target','gpu','--gpu-param','0','--lcm','1','--exp-cache','off',
                  '-d','1','-sigma',str(case['sigma']),'-gpucurves','1','--ckpt','0','-save',str(save),str(case['B1'])]
             current=(1<<n)-1;strips=[]
             for index,g in enumerate(case.get('removed_gcds',[])):

@@ -8,7 +8,7 @@
     Runs the real driver in QUEUE mode (the mode the GUI uses) on M677 with B1=1e6 and
     8 curves, in a sandbox directory, and checks every hit line it prints:
 
-        factor[i]=<decimal> curve=<i> sigma=<64-bit> param=<p> method=<m> save=<name>
+        factor[i]=<decimal> curve=<i> sigma=<64-bit> param=<p> curve_model=<m> execution_target=<t> save=<name>
 
     M677 is used because its small factor 1943118631 (31 bits) is found by most curves at
     B1=1e6 (measured 6..11 of 16 curves per run), so this test does not depend on luck --
@@ -23,7 +23,7 @@
       * the factors really divide 2^677-1, and the known M677 factor shows up.
 
     NOTE (unrelated finding, measured while writing this test): single-run CLI GPU mode
-    ("echo N | ecm_cuda ... -gpu ...") dies inside CGBN with "invalid modulus (it must be
+    ("echo N | ecm_cuda ... --curve mont --target gpu ...") dies inside CGBN with "invalid modulus (it must be
     odd)" for every parametrization, while the identical task through the queue manager
     works. The D3 printing cannot be the cause -- both modes fill the same per-curve sigma
     array in the same function, and the queue path passes -- so this is a pre-existing
@@ -78,7 +78,7 @@ $logFile = Join-Path $Sandbox 'screen_1.log'
 # NOTE: parenthesise every concatenation inside an array literal -- the comma binds
 # tighter than '+', so "key = " + $v would silently become two ini lines.
 $iniLines = @(
-    'method = gpu',
+    'curve = mont', 'target = gpu',
     ('gpucurves = ' + $Curves),
     ('tmp_dir = ' + $saves),
     ('finished = ' + $finished),
@@ -129,7 +129,7 @@ Check "the hit lines also reached the per-worker log" `
       ((@($log -split "`r?`n" | Where-Object { $_ -match 'factor\[' })).Count -eq $hits.Count)
 
 Write-Host "[2] every hit line carries the D3 fields"
-$re = 'factor\[(\d+)\]=(\d+) curve=(\d+) sigma=(\d+) param=(\d+) method=(\w+) save=(\S*)\s*$'
+$re = 'factor\[(\d+)\]=(\d+) curve=(\d+) sigma=(\d+) param=(\d+) curve_model=(\w+) execution_target=(\w+) save=(\S*)\s*$'
 $parsed = @()
 $bad = 0
 foreach ($l in $hits) {
@@ -142,11 +142,12 @@ foreach ($l in $hits) {
         curve  = [int]$m.Groups[3].Value
         sigma  = [System.Numerics.BigInteger]::Parse($m.Groups[4].Value)
         param  = $m.Groups[5].Value
-        method = $m.Groups[6].Value
-        save   = $m.Groups[7].Value
+        curve_model = $m.Groups[6].Value
+        execution_target = $m.Groups[7].Value
+        save   = $m.Groups[8].Value
     }
 }
-Check "all $($hits.Count) hit line(s) have all six fields" `
+Check "all $($hits.Count) hit line(s) have all fields" `
       ($bad -eq 0 -and $parsed.Count -eq $hits.Count) ("$bad malformed")
 if ($parsed.Count -gt 0) {
     Write-Host ("  first: " + ($hits[0] -replace '^\[[^\]]+\] ', ''))
@@ -156,7 +157,8 @@ if ($parsed.Count -gt 0) {
     $bases = @($parsed | ForEach-Object { ($_.sigma - $_.curve).ToString() } | Sort-Object -Unique)
     Check "sigma - curve is one constant (the batch base)" ($bases.Count -eq 1) ($bases -join ',')
     Check "param = 3 (CUDA default parametrization)" (@($parsed | Where-Object { $_.param -ne '3' }).Count -eq 0)
-    Check "method = gpu" (@($parsed | Where-Object { $_.method -ne 'gpu' }).Count -eq 0)
+    Check "curve_model = mont" (@($parsed | Where-Object { $_.curve_model -ne 'mont' }).Count -eq 0)
+    Check "target = gpu" (@($parsed | Where-Object { $_.execution_target -ne 'gpu' }).Count -eq 0)
     Check ("save = " + $saveName) (@($parsed | Where-Object { $_.save -ne $saveName }).Count -eq 0)
 
     Write-Host "[4] the reported factors are real"

@@ -8,7 +8,7 @@
 #
 # Engines (all of them run stage 1 only, B2 = 0):
 #   edwards : CPU Edwards/Atkin-Morain, backends simd (auto/on/off fold) and gmp
-#   mont    : CPU Suyama param0 (--method mont), backends simd and gmp
+#   mont    : CPU Suyama param0 (--curve mont --target cpu), backends simd and gmp
 #   gpu     : ecm_cuda, param 0 (Suyama) or param 3 (gmp-ecm batch) -- the two GPU
 #             parametrizations can be compared directly, and param 0 can be compared
 #             against the CPU "mont" engine, which runs the SAME curves.
@@ -26,10 +26,8 @@
 #       -> CPU 与 GPU 逐曲线完全一致（同一 sigma 同一曲线族，命中数一模一样）
 #   GPU param3            = 458/2048 = 22.363%
 #   Edwards Z/2xZ/8       = 2611/8000 = 32.6375%（1000 primes x 8 curves；simd-mont 与 gmp
-#       完全一致。注意本脚本的 "simd-auto" 是**脚本内**的写法，驱动器只认
-#       auto|simd|gmp：以前原样传过去 ⇒ 驱动器每次报 "Invalid --backend"，1000 个素数
-#       全是 0 命中却没有任何提示；现在翻译成 --backend simd --field auto，并且对
-#       "有输出但没有结果行"的运行显式报警。）
+#       完全一致。本脚本的 "simd-auto" 会转换为
+#       --impl simd --reduction auto；缺少结果行会报错。）
 #
 # 历史陷阱（2026-09-24 修）：本脚本曾写 `@($out | Select-String -Pattern ...).Count`，而
 # `$out` 是 `| Out-String` 得到的**单个多行字符串** —— Select-String 把整串当一个输入对象，
@@ -174,26 +172,26 @@ foreach ($bits in $BitsFrom..$BitsTo) {
             [System.IO.File]::WriteAllText($nin, "$N`n", ([System.Text.Encoding]::ASCII))
             switch ($job.engine) {
                 "gpu" {
-                    $argv = "-gpu -d $Device --gpu-param $GpuParam -gpucurves $Curves " +
+                    $argv = "--curve mont --target gpu -d $Device --gpu-param $GpuParam -gpucurves $Curves " +
                             "-sigma $sigma --ckpt 0 $B1 0"
                     $out = cmd /c "cd /d `"$tmp`" && `"$cudaExe`" $argv < `"$nin`"" 2>&1 | Out-String
                 }
                 "mont" {
-                    $argv = "--method mont --backend $($job.backend) --stage1-threads $Threads " +
+                    $implementation = switch ($job.backend) { 'simd' { 'simd' } 'gmp' { 'scalar' } default { 'auto' } }
+                    $argv = "--curve mont --target cpu --impl $implementation --stage1-threads $Threads " +
                             "-gpucurves $Curves -sigma $sigma --tmp-dir `"$tmp`" --ckpt 0 $B1 0"
                     $out = cmd /c "cd /d `"$tmp`" && `"$ecmExe`" $argv < `"$nin`"" 2>&1 | Out-String
                 }
                 "edwards" {
-                    # 后端名的翻译：simd-auto / simd-mers / simd-mont 是本脚本的写法，
-                    # 驱动器只认 auto|simd|gmp + --field auto|mersenne|montgomery。
-                    # （曾经直接把 "simd-auto" 当 --backend 传过去 ⇒ 驱动器每次都报
-                    #  "Invalid --backend"，1000 个素数全部 0 命中却毫无提示。）
+                    # Translate this script's experiment labels into driver selections.
                     $bk = $job.backend; $field = "auto"
                     if ($bk -eq "simd-auto") { $bk = "simd"; $field = "auto" }
-                    elseif ($bk -eq "simd-mers") { $bk = "simd"; $field = "mersenne" }
+                    elseif ($bk -eq "simd-mers") { $bk = "simd"; $field = "mersenne-fold" }
                     elseif ($bk -eq "simd-mont") { $bk = "simd"; $field = "montgomery" }
-                    $argv = "--method edwards --backend $bk --stage1-threads $Threads --naf-w 12 " +
-                            "--field $field -gpucurves $Curves -sigma $sigma --tmp-dir `"$tmp`" " +
+                    elseif ($bk -eq "simd") { $bk = "simd" }
+                    elseif ($bk -eq "gmp") { $bk = "scalar" }
+                    $argv = "--curve ed --target cpu --impl $bk --stage1-threads $Threads --naf-w 12 " +
+                            "--reduction $field -gpucurves $Curves -sigma $sigma --tmp-dir `"$tmp`" " +
                             "--ckpt 0 $B1 0"
                     $out = cmd /c "cd /d `"$tmp`" && `"$ecmExe`" $argv < `"$nin`"" 2>&1 | Out-String
                 }

@@ -40,7 +40,7 @@ def main():
     fields=dict(re.findall(r'(\w+)\s*=\s*([^;]+)',line));n=int(fields['N'].strip(),0)
     task=queue_task(n,a.queue_exponent)
     assert {s['batch'] for s in s1['stage1'].values()}=={1,8}
-    ini=out/'bench.ini';ini.write_text('verbose=false\nexponent=lcm\n',encoding='utf-8')
+    ini=out/'bench.ini';ini.write_text('verbose=false\nlcm=1\n',encoding='utf-8')
     common=[str(a.exe.resolve()),'--ini',str(ini),'--device',str(a.device),'--batch-mb','256',
             '--arena-mb','6300','--owner-budget-mb','640','--log-level','quiet']
     calls=[];plans={}
@@ -66,15 +66,15 @@ def main():
     one=select('batch1');eight=select('batch8',8)
     assert eight['T1']<one['T1']
     if a.choose12_profile:
-        select('choose12',8,['--stage1-tune-profile',a.choose12_profile.resolve(),'--stage1-exponent','choose12'],c12,'choose12')
-        cfg=out/'choose12.ini';cfg.write_text('verbose=false\nexponent=choose12\n',encoding='utf-8')
+        select('choose12',8,['--stage1-tune-profile',a.choose12_profile.resolve(),'--lcm','12'],c12,'choose12')
+        cfg=out/'choose12.ini';cfg.write_text('verbose=false\nlcm=12\n',encoding='utf-8')
         select('ini_choose12',8,['--ini',cfg,'--stage1-tune-profile',a.choose12_profile.resolve()],c12,'choose12')
     rows=run('provided_priority',[*auto,'--stage1-seconds-per-curve','3','--stage1-tune-profile',out/'absent.toml','--plan-only'])
     provided=next(r for r in rows if r.get('type')=='stage2_auto_plan')
     assert provided['T1']==3 and provided['T1_source']=='provided_per_curve' and 'stage1_profile_sha256' not in provided
     for name,extra,reason in [
         ('missing_batch',['--stage1-batch','12'],'no matching Stage1 tune'),
-        ('mismatched_exponent',['--stage1-exponent','choose12'],'no matching Stage1 tune'),
+        ('mismatched_exponent',['--lcm','12'],'no matching Stage1 tune'),
         ('missing_file',['--stage1-tune-profile',out/'absent.toml'],'cannot lock Stage1 tune'),
         ('output_conflict',['--log',a.stage1_profile.resolve()],'conflicts with Stage1 tune'),
     ]:run(name,[*auto,'--plan-only',*extra],False,reason)
@@ -90,7 +90,7 @@ def main():
     text=log.read_text(encoding='utf-8');assert 'gmp_selftest_bad=0' in text and 'gmp_check_bad=0' in text
     qdir=out/'queue';qdir.mkdir();qsave=qdir/'input.save';qsave.write_bytes(a.save.read_bytes()*2)
     queue=qdir/'worktodo.txt';queue.write_text(task,encoding='utf-8')
-    qini=qdir/'ecm.ini';qini.write_text('verbose=false\nexponent=lcm\ntmp_dir='+str(qdir)+
+    qini=qdir/'ecm.ini';qini.write_text('verbose=false\nlcm=1\ntmp_dir='+str(qdir)+
         '\nstage2_worktodo=worktodo.txt\nstage2_finished=finished.txt\nstage2_auto_b2=1\nstage1_batch=8\n'
         'stage2_tune_profile='+os.path.relpath(a.ecm_profile.resolve(),qdir)+'\nstage1_tune_profile='+os.path.relpath(a.stage1_profile.resolve(),qdir)+
         '\nstage2_results_file=results.jsonl\nstage2_log_file=stage2.log\n',encoding='utf-8')
