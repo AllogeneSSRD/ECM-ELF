@@ -41,13 +41,14 @@ int ecm_cuda_stage2_plan(const char *n_hex, uint64_t sigma, uint64_t b1,
                         unsigned carrier_exponent=0);
 // One iteration is two forwards plus the fused product/scale/inverse.
 // This measures field convolution only, not packing/carry/ECM reduction.
+// Warmup is opt-in; formal repeats are always checked and reported separately.
 int ecm_cuda_stage2_tune_ntt(int device, int min_log2, int max_log2,
                             int repeats, uint64_t memory_bytes,
-                            void (*report)(const char *, void *), void *context);
+                            void (*report)(const char *, void *), void *context,bool warmup=false);
 int ecm_cuda_stage2_tune_ntt_batches(int device,int min_log2,int max_log2,
                                     int repeats,uint64_t memory_bytes,
                                     const uint64_t *slices,size_t count,
-                                    void (*report)(const char *, void *),void *context);
+                                    void (*report)(const char *, void *),void *context,bool warmup=false);
 
 // Cost planning queries the same integer packing backend. No CUDA allocation or
 // curve arithmetic occurs in shape_query; device_info initializes a CUDA context.

@@ -10,6 +10,12 @@ struct Shape {
     bool short_batch_tune=false;
     Word short_batch_hash=0;
     Word giant_chunk=0,chain_min=32768;bool force_ladder=false;
+    using Key=std::array<Word,18>;
+    Key key()const {
+        return {target_bits,arithmetic_bits,carrier,b1,b2,d,batch_bytes,chunk_max,buffers,
+            Word(physical),Word(fold),Word(frontier),Word(mersenne),Word(short_batch_tune),
+            short_batch_hash,giant_chunk,chain_min,Word(force_ladder)};
+    }
 };
 struct Work {
     std::array<double,RequestPhaseCount> ntt{},reduce{},transfer{},calls{};
@@ -129,10 +135,7 @@ public:
         return result>0?result:double(n)*batch*std::log2(double(n));
     }
     bool cached_work(const Shape &s,Work &out)const {
-        const std::array<Word,18> key={s.target_bits,s.arithmetic_bits,s.carrier,s.b1,s.b2,s.d,
-            s.batch_bytes,s.chunk_max,s.buffers,Word(s.physical),Word(s.fold),Word(s.frontier),
-            Word(s.mersenne),Word(s.short_batch_tune),s.short_batch_hash,s.giant_chunk,s.chain_min,
-            Word(s.force_ladder)};
+        const auto key=s.key();
         auto at=work_cache.find(key);
         if(at==work_cache.end()) {Work w;const bool ok=work(s,query,[&](Word n,Word b){return ntt_cost(n,b);},w,&short_ntt);
             at=work_cache.emplace(key,std::make_pair(ok,std::move(w))).first;}
@@ -161,7 +164,7 @@ public:
         if(at==matching_conditions.end())at=matching_conditions.emplace(id,matches(profile.conditions.at(id),condition,ignore)).first;
         if(!at->second)return false;
         const auto a=shape(s);
-        if(a.mersenne!=x.mersenne || bool(a.carrier)!=bool(x.carrier))return false;
+        if(a.mersenne!=x.mersenne)return false;
         if(!ignore.memory && (a.fold!=x.fold || a.frontier!=x.frontier))return false;
         return true;
     }
@@ -303,7 +306,7 @@ public:
         const Fields *best=nullptr;
         for(const auto &s:profile.samples)if(eligible(s,x)) {
             const auto a=shape(s);
-            if(a.target_bits!=x.target_bits || a.arithmetic_bits!=x.arithmetic_bits || a.d!=x.d ||
+            if(a.target_bits!=x.target_bits || a.arithmetic_bits!=x.arithmetic_bits || a.carrier!=x.carrier || a.d!=x.d ||
                a.b2!=x.b2 || a.batch_bytes!=x.batch_bytes || a.physical!=x.physical ||
                a.buffers!=x.buffers || a.chunk_max!=x.chunk_max || a.giant_chunk!=x.giant_chunk ||
                a.force_ladder!=x.force_ladder || a.chain_min!=x.chain_min ||

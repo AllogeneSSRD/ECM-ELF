@@ -120,6 +120,9 @@ long long newest_checkpoint_mtime(const std::string &dir, std::string *name_out)
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         if (std::strstr(fd.cFileName, ".bak") != nullptr) continue;
+        // Stage2 counters are published before starting a curve; they are not
+        // evidence that a running Stage1 kernel has saved its arithmetic state.
+        if (std::strncmp(fd.cFileName, ".ecm_ckpt_stage2_", sizeof(".ecm_ckpt_stage2_")-1)==0) continue;
         const long long t = (static_cast<long long>(fd.ftLastWriteTime.dwHighDateTime) << 32) |
                             static_cast<long long>(fd.ftLastWriteTime.dwLowDateTime);
         if (t > newest) {

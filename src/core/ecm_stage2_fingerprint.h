@@ -5,11 +5,12 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 #include <vector>
 
 // Windows CNG loaded dynamically: no new link dependency for existing builders.
 namespace ecm_stage2 {
-inline std::string sha256_file(const std::filesystem::path &path) {
+inline std::string sha256_stream(std::istream &input) {
     struct Cng {
         HMODULE library=nullptr;
         BCRYPT_ALG_HANDLE algorithm=nullptr;
@@ -52,17 +53,24 @@ inline std::string sha256_file(const std::filesystem::path &path) {
     check(api.property(api.algorithm,BCRYPT_OBJECT_LENGTH,reinterpret_cast<PUCHAR>(&length),sizeof(length),&received,0));
     object.resize(length);
     check(api.create(api.algorithm,&api.hash,object.data(),length,nullptr,0,0));
-    std::ifstream input(path,std::ios::binary);
-    if(!input)throw std::runtime_error("cannot fingerprint: "+path.string());
     std::vector<unsigned char> buffer(65536);
     while(input) {
         input.read(reinterpret_cast<char*>(buffer.data()),buffer.size());
         if(input.gcount())check(api.update(api.hash,buffer.data(),static_cast<ULONG>(input.gcount()),0));
     }
-    if(input.bad())throw std::runtime_error("fingerprint read failed: "+path.string());
+    if(input.bad())throw std::runtime_error("fingerprint input read failed");
     unsigned char digest[32];check(api.finish(api.hash,digest,sizeof(digest),0));
     const char *hex="0123456789abcdef";std::string result;
     for(auto c:digest){result+=hex[c>>4];result+=hex[c&15];}
     return result;
+}
+inline std::string sha256_file(const std::filesystem::path &path) {
+    std::ifstream input(path,std::ios::binary);
+    if(!input)throw std::runtime_error("cannot fingerprint: "+path.string());
+    return sha256_stream(input);
+}
+inline std::string sha256_text(const std::string &text) {
+    std::istringstream input(text);
+    return sha256_stream(input);
 }
 } // namespace ecm_stage2

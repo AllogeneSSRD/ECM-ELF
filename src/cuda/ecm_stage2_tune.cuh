@@ -40,7 +40,7 @@ struct Resources {
 };
 static int run(int device,int first,int last,int repeats,unsigned long long memory,
                void (*report)(const char*,void*),void *context,
-               const uint64_t *requested=nullptr,size_t requested_count=0) {
+               const uint64_t *requested=nullptr,size_t requested_count=0,bool do_warmup=false) {
     const uint64_t singleton=1;
     if(!requested && !requested_count){requested=&singleton;requested_count=1;}
     if(!report || device<0 || first<3 || last>27 || first>last || !requested ||
@@ -114,7 +114,7 @@ static int run(int device,int first,int last,int repeats,unsigned long long memo
         CK(cudaDeviceSynchronize());const double setup=now_s()-setup_start;
         CK(cudaEventCreate(&r.start));CK(cudaEventCreate(&r.end));
         std::vector<double> samples;double check_seconds=0,warmup=0;
-        for(int repeat=0;repeat<=repeats;++repeat) {
+        for(int repeat=do_warmup?0:1;repeat<=repeats;++repeat) {
             seed<<<(unsigned int)((words+255)/256),256>>>(r.a,r.b,n,slices);CK(cudaGetLastError());
             CK(cudaEventRecord(r.start));
             ntt_forward_fused(r.a,fc,om,slices);ntt_forward_fused(r.b,fc,om,slices);
@@ -141,6 +141,7 @@ static int run(int device,int first,int last,int repeats,unsigned long long memo
             <<k<<",\"length\":"<<n<<",\"median_seconds\":"<<median<<",\"conv_iter_per_s\":"<<slices/median
             <<",\"batch_iter_per_s\":"<<1/median
             <<",\"min_seconds\":"<<sorted.front()<<",\"max_seconds\":"<<sorted.back()
+            <<",\"warmup_runs\":"<<(do_warmup?1:0)
             <<",\"setup_seconds\":"<<setup<<",\"warmup_seconds\":"<<warmup
             <<",\"verification_seconds\":"<<check_seconds<<",\"bad\":0,\"verified_words_per_sample\":"<<words
             <<",\"reference_kind\":\"gmp_3x3_distinct_constant_v1\""

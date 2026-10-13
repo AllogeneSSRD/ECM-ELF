@@ -126,7 +126,7 @@ std::vector<unsigned> portable_carriers(const Options &o,const Record &r) {
     std::vector<unsigned> out{0};
     if(o.auto_carrier && o.inferred_carrier) {
         ecm_stage2::ModulusContext m;std::string error;
-        if(m.configure(r.n.c_str(),16,o.inferred_carrier,error))out.push_back(o.inferred_carrier);
+        if(m.configure(r.n.c_str(),16,o.inferred_carrier,error)) {if(m.lifted())out.push_back(o.inferred_carrier);}
         else throw std::runtime_error("validated worktodo carrier failed divisibility: "+error);
     }
     return out;
@@ -167,14 +167,84 @@ uint64_t portable_default_d(const Options &o,const Record &r,uint64_t b2,unsigne
     }
     return winner;
 }
+std::string portable_width_select(Options &o,const Record &r) {
+    const auto profile=portable_read(o.tune_profile);const auto condition=portable_condition(o);
+    pt::Estimator engine(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::WidthPredictor predictor(engine);
+    const auto carriers=portable_carriers(o,r);const unsigned initial=carriers.front();
+    const auto default_d=o.has_d && o.d?o.d:portable_default_d(o,r,o.b2,initial);
+    auto baseline=portable_shape(o,r,o.b2,default_d,initial);std::string baseline_plan;
+    pt::WidthEstimate reference;
+    if(!portable_admit(o,r,baseline,baseline_plan) || !predictor.predict(baseline,reference))
+        return "{\"type\":\"tune_selection\",\"selected\":false,\"reason\":\"default_prediction_or_memory_unavailable\",\"default_D\":"+std::to_string(default_d)+'}';
+    struct Candidate {pt::Shape shape;pt::WidthEstimate estimate,family;uint64_t center;};
+    std::vector<Candidate> candidates;std::string alternatives;
+    auto describe=[&](const pt::Shape &shape,const pt::WidthEstimate &e) {
+        std::ostringstream out;out<<std::setprecision(17)<<"{\"target_bits\":"<<shape.target_bits
+            <<",\"arithmetic_bits\":"<<shape.arithmetic_bits<<",\"carrier_exponent\":"<<shape.carrier
+            <<",\"D\":"<<shape.d<<",\"P\":"<<ecm_stage2::d_catalog::degree(shape.d)
+            <<",\"estimated_seconds\":"<<e.seconds<<",\"upper_seconds\":"<<e.rank
+            <<",\"lower_seconds\":"<<pt::WidthPredictor::lower(e)<<",\"model\":"<<json_string(e.model)
+            <<",\"source\":"<<json_string(e.exact?"measured":e.anchors?(e.extrapolated?"extrapolated":"interpolated"):"builtin_model")
+            <<",\"arithmetic_low\":"<<e.arithmetic_low<<",\"arithmetic_high\":"<<e.arithmetic_high
+            <<",\"anchors\":"<<e.anchors<<",\"region_covered\":"<<(e.region_covered?"true":"false")
+            <<",\"relative_error_allowance\":"<<e.relative_error<<",\"uncertainty_source\":"<<json_string(e.uncertainty)<<'}';
+        return out.str();
+    };
+    for(auto carrier:carriers) {
+        const auto center=o.has_d && o.d?o.d:portable_default_d(o,r,o.b2,carrier,true);if(!center)continue;
+        auto shape=portable_shape(o,r,o.b2,center,carrier);pt::WidthEstimate estimate;
+        std::string center_plan;
+        if(!portable_admit(o,r,shape,center_plan) || !predictor.predict(shape,estimate))continue;
+        const auto family_reference=estimate;
+        if(!alternatives.empty())alternatives+=',';alternatives+=describe(shape,estimate);
+        std::vector<uint64_t> ds{center};
+        if(!(o.has_d && o.d))for(const auto &entry:ecm_stage2::d_catalog::entries())ds.push_back(entry.d);
+        std::sort(ds.begin(),ds.end());ds.erase(std::unique(ds.begin(),ds.end()),ds.end());
+        for(auto d:ds) {
+            shape=portable_shape(o,r,o.b2,d,carrier);
+            if(!predictor.predict(shape,estimate))continue;
+            const bool paired=estimate.exact && reference.exact && pt::LocalSearch::improves(
+                {estimate.seconds,estimate.mad},{reference.seconds,reference.mad});
+            const bool family_pair=estimate.exact && family_reference.exact && pt::LocalSearch::improves(
+                {estimate.seconds,estimate.mad},{family_reference.seconds,family_reference.mad});
+            if(d!=center && !paired && !family_pair && !pt::WidthPredictor::improves(estimate,family_reference))continue;
+            if(paired || pt::WidthPredictor::improves(estimate,reference))candidates.push_back({shape,estimate,family_reference,center});
+        }
+    }
+    std::stable_sort(candidates.begin(),candidates.end(),[](const Candidate &a,const Candidate &b){return a.estimate.rank<b.estimate.rank;});
+    auto chosen=baseline;auto prediction=reference;uint64_t rejected=0;
+    for(auto &candidate:candidates) {
+        std::string plan;auto shape=candidate.shape;
+        if(!portable_admit(o,r,shape,plan) || !predictor.predict(shape,candidate.estimate)){++rejected;continue;}
+        const auto &estimate=candidate.estimate;
+        const bool paired=estimate.exact && reference.exact && pt::LocalSearch::improves(
+            {estimate.seconds,estimate.mad},{reference.seconds,reference.mad});
+        const bool family_pair=estimate.exact && candidate.family.exact && pt::LocalSearch::improves(
+            {estimate.seconds,estimate.mad},{candidate.family.seconds,candidate.family.mad});
+        if(shape.d!=candidate.center && !paired && !family_pair && !pt::WidthPredictor::improves(estimate,candidate.family)){++rejected;continue;}
+        if(!paired && !pt::WidthPredictor::improves(estimate,reference)){++rejected;continue;}
+        chosen=shape;prediction=estimate;break;
+    }
+    const bool selected=chosen.d!=baseline.d || chosen.carrier!=baseline.carrier;
+    o.d=chosen.d;o.carrier_exponent=chosen.carrier;
+    auto details=describe(chosen,prediction);details.erase(details.begin());
+    return "{\"type\":\"tune_selection\",\"selected\":"+std::string(selected?"true":"false")+
+        ",\"reason\":"+json_string(selected?"arithmetic_width_cost_win":"default_protected_by_prediction_uncertainty")+
+        ",\"policy\":\"model\",\"default_D\":"+std::to_string(default_d)+
+        ",\"B1\":"+std::to_string(r.b1)+",\"B2\":"+std::to_string(o.b2)+
+        ",\"memory_rejected\":"+std::to_string(rejected)+",\"alternatives\":["+alternatives+"],"+details;
+}
 std::string portable_select(Options &o,const Record &r,bool automatic) {
-    if(o.tune_profile.empty())return {};
-    if(!fs::is_regular_file(o.tune_profile)) {
+    if(!automatic && o.prediction_policy=="model")return portable_width_select(o,r);
+    if(o.tune_profile.empty() && o.prediction_policy!="model")return {};
+    if(!fs::is_regular_file(o.tune_profile) && o.prediction_policy!="model") {
         if(automatic)throw std::runtime_error("Auto B2 needs a tune summary; enable short calibration or supply a profile");
         return "{\"type\":\"tune_selection\",\"selected\":false,\"reason\":\"missing_profile\"}";
     }
-    const auto profile=pt::Profile::load(o.tune_profile);const auto condition=portable_condition(o);
+    const auto profile=portable_read(o.tune_profile);const auto condition=portable_condition(o);
     pt::Estimator estimator(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::WidthPredictor width_predictor(estimator);
     double t1=o.stage1_seconds;std::string t1_source="provided_per_curve";
     Big n;mpz_set_str(n.z,r.n.c_str(),16);const unsigned bits=unsigned(mpz_sizeinbase(n.z,2));
     if(automatic && !(t1>0) && !o.stage1_csv.empty()) {
@@ -269,9 +339,11 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
                 pt::matches(profile.conditions.at(et::uint(*trial,"condition")),condition,pt::Ignore{});
             e.relative_error=e.validated?pt::optional_real(*trial,"validation_max_relative_error"):.25;
         } else {
-            if(!estimator.predict(shape,e))continue;
+            pt::WidthEstimate reusable;
+            if(o.prediction_policy=="model") {if(!width_predictor.predict(shape,reusable))continue;e=reusable;}
+            else if(!estimator.predict(shape,e))continue;
             if(automatic && !(o.has_d && o.d) && d!=default_ds.at({b,carrier}) &&
-                !e.exact && std::string(e.model)!="portable_nonnegative_v1")continue;
+                !e.exact && (o.prediction_policy=="model"?!reusable.region_covered:std::string(e.model)!="portable_nonnegative_v1"))continue;
         }
         const double probability=automatic?ecm_stage2::probability::success(double(r.b1),double(b),factor):0;
         const double score=automatic?probability/(t1+o.ratio_adjust*e.rank):-e.rank;
@@ -282,7 +354,11 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
     for(auto &candidate:candidates) {
         auto shape=candidate.shape;std::string plan;if(!portable_admit(o,r,shape,plan)){++rejected;continue;}
         pt::Estimate e=candidate.estimate;
-        if((automatic || (o.has_d && o.d)) && !estimator.predict(shape,e)){++rejected;continue;}
+        if(automatic || (o.has_d && o.d)) {
+            pt::WidthEstimate reusable;
+            if(o.prediction_policy=="model") {if(!width_predictor.predict(shape,reusable)){++rejected;continue;}e=reusable;}
+            else if(!estimator.predict(shape,e)){++rejected;continue;}
+        }
         // Do not publish a winner whose route changed after ranking. Re-rank
         // changed paths on the next pass rather than transferring resident data.
         if(shape.fold!=candidate.shape.fold || shape.frontier!=candidate.shape.frontier){++rejected;continue;}
@@ -306,8 +382,10 @@ std::string select_tuned(Options &o,const Record &r){
     if(!(o.has_d && o.d) && (result.empty() || result.find("\"selected\":false")!=result.npos)) {
         const auto planned=result.find("\"default_D\":")==result.npos?std::string{}:plan_scalar(result,"default_D");
         o.d=planned.empty()?portable_default_d(o,r,o.b2,o.carrier_exponent):u64(planned,"default D");
-        result="{\"type\":\"tune_selection\",\"selected\":false,\"reason\":\"default_planner_protected_no_measured_win\",\"default_D\":"+
-            std::to_string(o.d)+",\"default_model\":\"ntt_ceiling_plateau_v1\"}";
+        if(result.empty())result="{\"type\":\"tune_selection\",\"selected\":false,\"reason\":\"no_suitable_tune_profile\"}";
+        result.pop_back();
+        if(planned.empty())result+=",\"default_D\":"+std::to_string(o.d);
+        result+=",\"default_model\":\"ntt_ceiling_plateau_v1\"}";
     }
     return result;
 }
@@ -315,7 +393,7 @@ std::string select_auto_tuned(Options &o,const Record &r){return portable_select
 
 struct PortableInput {fs::path save;Record record;std::string kind;};
 void merge_portable_tune(const Options &o,const fs::path &destination) {
-    if(o.tune_merge.size()>64 || !o.tune_save.empty() || o.tune_carrier || !o.tune_ds.empty() ||
+    if(o.tune_merge.size()>64 || !o.tune_save.empty() || !o.tune_worktodo.empty() || o.tune_carrier || !o.tune_ds.empty() ||
        !o.tune_b2s.empty() || !o.tune_exponents.empty())throw std::runtime_error("merge accepts at most 64 profiles and no curve grid");
     auto guard=portable_lock(destination);auto combined=portable_read(destination);
     for(const auto &path:o.tune_merge) {
@@ -334,13 +412,34 @@ void merge_portable_tune(const Options &o,const fs::path &destination) {
 PortableInput portable_input(unsigned bits,const fs::path &evidence,bool mersenne=false) {
     if(bits<5 || bits>16384)throw std::runtime_error("portable benchmark width must be 5..16384");
     Big n;mpz_set_ui(n.z,1);
-    if(mersenne){mpz_mul_2exp(n.z,n.z,bits);mpz_sub_ui(n.z,n.z,1);}
+    if(mersenne){
+        mpz_mul_2exp(n.z,n.z,bits);mpz_sub_ui(n.z,n.z,1);
+        // Arithmetic-band fixture only; never used to rewrite production factors.
+        // Drop factors inherited from proper exponent divisors. For power-of-two
+        // bands this removes earlier Fermat factors which would always be hits.
+        Big inherited,common;
+        auto strip_exponent=[&](unsigned exponent) {
+            mpz_set_ui(inherited.z,1);mpz_mul_2exp(inherited.z,inherited.z,exponent);mpz_sub_ui(inherited.z,inherited.z,1);
+            for(;;) {mpz_gcd(common.z,n.z,inherited.z);if(mpz_cmp_ui(common.z,1)<=0)break;mpz_divexact(n.z,n.z,common.z);}
+        };
+        unsigned rest=bits;
+        for(unsigned prime=2;prime<=rest/prime;++prime)if(rest%prime==0) {
+            while(rest%prime==0)rest/=prime;strip_exponent(bits/prime);
+        }
+        if(rest>1)strip_exponent(bits/rest);
+        for(unsigned divisor=3;divisor<=10000;divisor+=2)
+            while(mpz_divisible_ui_p(n.z,divisor))mpz_divexact_ui(n.z,n.z,divisor);
+    }
     else {mpz_mul_2exp(n.z,n.z,bits-1);mpz_add_ui(n.z,n.z,bits<16?1:12345);mpz_nextprime(n.z,n.z);}
-    if(mpz_sizeinbase(n.z,2)!=bits)throw std::runtime_error("benchmark prime construction exceeded requested width");
-    const auto hex=number(n.z),x=et::benchmark_point(hex);
+    if((!mersenne && mpz_sizeinbase(n.z,2)!=bits) || mpz_cmp_ui(n.z,3)<=0)
+        throw std::runtime_error("benchmark construction has no usable modulus at requested width");
+    const auto hex=number(n.z);
+    std::string x;
+    try {x=et::benchmark_point(hex);}
+    catch(const std::runtime_error &error) {throw TaskInputError(error.what());}
     const auto save=evidence/((mersenne?"m":"p")+std::to_string(bits)+".save");
     append(save,"METHOD=ECM; PARAM=0; SIGMA=26; B1=20; N=0x"+hex+"; X=0x"+x+"; Z=1;");
-    return {save,records(save,0,1).at(0),mersenne?"mersenne_benchmark":"probable_prime_gmp_nextprime"};
+    return {save,records(save,0,1).at(0),mersenne?"mersenne_small_factor_stripped_band":"probable_prime_gmp_nextprime"};
 }
 bool portable_measure(Options o,const Settings &settings,const PortableInput &input,uint64_t b2,uint64_t d,unsigned carrier,
     unsigned repeats,pt::Budget &budget,const fs::path &evidence,pt::Profile &profile,ecm_stage2::Word condition,
@@ -357,8 +456,8 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
     const std::string stem="measure_"+std::to_string(profile.revision)+"_"+std::to_string(GetTickCount64());
     append(evidence/(stem+".plan.jsonl"),plan);
     std::vector<et::Fields> trials;
-    for(unsigned repeat=0;repeat<=repeats;++repeat) {
-        // Warmup is one measurement; no new formal repeat starts after expiry.
+    for(unsigned repeat=o.tune_warmup?0:1;repeat<=repeats;++repeat) {
+        // Optional warmup consumes the same budget; never start after expiry.
         if(budget.expired() || stop_requests) {if(trials.empty())return false;break;}
         Options worker=o;worker.tune_child=true;worker.auto_b2=false;worker.factor_only=false;worker.factorize_hits=false;
         worker.carrier_exponent=carrier;worker.has_carrier=true;worker.log_level=stage2_log::quiet;
@@ -387,6 +486,7 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
             throw std::runtime_error("calibration execution path differs from planned path; evidence retained");
         if(repeat)trials.push_back(std::move(f));
         std::cout<<"ecm_tune_progress: N="<<shape.target_bits<<" D="<<d<<" B2="<<b2<<" repeat="<<repeat<<'/'<<repeats
+            <<" arithmetic_bits="<<shape.arithmetic_bits<<" kind="<<(shape.mersenne?"mersenne":"generic")
             <<" budget_left="<<budget.remaining()<<" s"<<std::endl;
     }
     if(trials.empty())return false;
@@ -401,6 +501,7 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
     sample["arithmetic_bits"]=std::to_string(shape.arithmetic_bits);sample["carrier_exponent"]=std::to_string(carrier);
     sample["modulus_kind"]=json_string(shape.mersenne?"mersenne":"generic");sample["benchmark_kind"]=json_string(input.kind);
     sample["b1"]=std::to_string(input.record.b1);sample["b2"]=std::to_string(b2);sample["repeats"]=std::to_string(trials.size());
+    sample["warmup_runs"]=o.tune_warmup?"1":"0";
     sample["source"]="\"measured\"";sample["execution_path"]=json_string(shape.fold?(shape.frontier?"resident":"host_frontier"):"host_fold_frontier");
     sample["giant_chunk_points"]=std::to_string(shape.giant_chunk);sample["giant_chain_min"]=std::to_string(shape.chain_min);
     sample["giant_force_ladder"]=shape.force_ladder?"1":"0";
@@ -438,7 +539,7 @@ void portable_ntt(Options o,pt::Profile &profile,ecm_stage2::Word condition,pt::
         };
         const uint64_t slices=item.second;
         if(ecm_cuda_stage2_tune_ntt_batches(o.device,item.first,item.first,repeats,
-            o.tune_memory_mb*1048576,&slices,1,callback,&sink) && !sink.skipped)
+            o.tune_memory_mb*1048576,&slices,1,callback,&sink,o.tune_warmup) && !sink.skipped)
             throw std::runtime_error("NTT calibration failed or shape did not fit; inspect evidence");
     }
 }
@@ -480,18 +581,25 @@ void ensure_portable_calibration(Options &o,const Record &r,const Settings &sett
     auto profile=portable_read(o.tune_profile);const auto current=portable_condition(o);const auto ignore=pt::Ignore::parse(o.tune_ignore);
     Big n,plus;mpz_set_str(n.z,r.n.c_str(),16);mpz_add_ui(plus.z,n.z,1);const unsigned bits=unsigned(mpz_sizeinbase(n.z,2));
     const bool ordinary_kind=mpz_popcount(plus.z)==1;
-    const unsigned needed_carrier=o.has_carrier?o.carrier_exponent:(o.auto_carrier?o.inferred_carrier:0);
-    unsigned low=16385,high=0;bool components=false,ordinary=false,carrier_covered=!needed_carrier;
+    const unsigned needed_carrier=o.has_carrier?o.carrier_exponent:(o.auto_carrier && !ordinary_kind?o.inferred_carrier:0);
+    unsigned low=16385,high=0;double ordinary_distance=100,carrier_distance=100;
+    bool components=false,ordinary=false,carrier_covered=!needed_carrier;
     const auto path=portable_shape(o,r,std::min(r.b1,uint64_t(20))+42000,210,0);
     for(const auto &s:profile.samples)if(pt::measured(s) && pt::matches(profile.conditions.at(et::uint(s,"condition")),current,ignore)) {
         if(!ignore.memory && (bool(et::uint(s,"fold_resident"))!=path.fold || bool(et::uint(s,"frontier_resident"))!=path.frontier))continue;
-        if(!et::uint(s,"carrier_exponent") && (pt::text(s,"modulus_kind")=="mersenne")==ordinary_kind) {
-            low=std::min(low,unsigned(et::uint(s,"target_bits")));high=std::max(high,unsigned(et::uint(s,"target_bits")));ordinary=true;
+        if((pt::text(s,"modulus_kind")=="mersenne")==ordinary_kind) {
+            const auto width=unsigned(et::uint(s,"arithmetic_bits"));
+            low=std::min(low,width);high=std::max(high,width);ordinary=true;
+            ordinary_distance=std::min(ordinary_distance,std::abs(std::log2(double(bits)/width)));
         }
-        if(needed_carrier && et::uint(s,"carrier_exponent")==needed_carrier)carrier_covered=true;
+        if(needed_carrier && pt::text(s,"modulus_kind")=="mersenne")
+            carrier_distance=std::min(carrier_distance,std::abs(std::log2(double(needed_carrier)/et::uint(s,"arithmetic_bits"))));
     }
     for(const auto &s:profile.ntt)if(pt::matches(profile.conditions.at(et::uint(s,"condition")),current,ignore))components=true;
-    bool width_covered=low<=bits && bits<=high;
+    bool width_covered=(low<=bits && bits<=high) || (o.prediction_policy=="model" && ordinary_distance<=std::log2(1.25));
+    if(o.prediction_policy=="model")carrier_covered|=carrier_distance<=std::log2(1.25);
+    else for(const auto &sample:profile.samples)if(pt::measured(sample) && et::uint(sample,"carrier_exponent")==needed_carrier &&
+            pt::matches(profile.conditions.at(et::uint(sample,"condition")),current,ignore))carrier_covered=true;
     for(const auto &future:range) {
         Big target,next;mpz_set_str(target.z,future.n.c_str(),16);mpz_add_ui(next.z,target.z,1);
         const auto width=mpz_sizeinbase(target.z,2);
@@ -533,10 +641,127 @@ void ensure_portable_calibration(Options &o,const Record &r,const Settings &sett
         <<" elapsed="<<budget.elapsed()<<" s profile="<<o.tune_profile<<std::endl;
 }
 
-void run_portable_tune(Options o,const Settings &settings,const fs::path &destination) {
+struct PortableTuneTarget {
+    unsigned bits=0;
+    PortableInput input;
+    std::vector<uint64_t> bounds;
+    unsigned carrier=0;
+    bool grid_mersenne=false;
+};
+PortableInput portable_freeze_input(const PortableInput &input,const fs::path &snapshot,const fs::path &destination) {
+    std::error_code error;
+    if((fs::equivalent(destination,input.save,error) && !error) ||
+       upper(destination.lexically_normal().string())==upper(input.save.lexically_normal().string()))
+        throw std::runtime_error("tune-file must differ from every task save");
+    std::ifstream in(input.save,std::ios::binary);std::string line;
+    in.seekg(std::streamoff(input.record.offset));
+    if(!std::getline(in,line) || fingerprint(line)!=input.record.hash)
+        throw TaskInputError("tune save changed before snapshot");
+    append(snapshot,line);
+    auto record=records(snapshot,0,1).at(0);
+    if(record.n!=input.record.n || record.x!=input.record.x || record.b1!=input.record.b1 || record.sigma!=input.record.sigma)
+        throw TaskInputError("tune save snapshot differs from selected record");
+    return {snapshot,record,input.kind};
+}
+unsigned portable_task_carrier(const EcmStage2Task &task,const Record &record,bool enabled) {
+    if(!enabled || task.k!="1" || task.b!="2" || task.c!="-1" ||
+       task.n<2 || task.n>ecm_stage2::max_input_bits)return 0;
+    ecm_stage2::ModulusContext modulus;std::string error;
+    if(!modulus.configure(record.n.c_str(),16,unsigned(task.n),error))
+        throw TaskInputError("worktodo carrier: "+error);
+    // Full M_p already uses native Mersenne reduction in ordinary mode.
+    if(modulus.target_bits()==task.n && !modulus.lifted())return 0;
+    return unsigned(task.n);
+}
+std::vector<PortableTuneTarget> portable_tune_tasks(const Options &o,const Settings &settings,
+    const fs::path &worktodo,const fs::path &save_dir,const std::vector<uint64_t> &fallback_bounds,
+    const fs::path &evidence,const fs::path &destination,bool require_tasks) {
+    std::ifstream in(worktodo);std::vector<PortableTuneTarget> targets;
+    if(!in) {
+        if(require_tasks || fs::exists(worktodo))throw std::runtime_error("cannot read tune worktodo: "+worktodo.string());
+        return targets;
+    }
+    std::string line;int section=1;size_t line_number=0,active=0;
+    std::set<std::string> seen;
+    while(std::getline(in,line)) {
+        ++line_number;
+        if(line.compare(0,3,"\xef\xbb\xbf")==0)line.erase(0,3);
+        bool header=false;const auto next=ecm_worktodo_parse_worker_header(line,&header);
+        if(next){section=next;continue;}
+        line=trim(line);
+        if(header || section!=o.worker || line.empty() || line.front()=='#' || line.front()==';')continue;
+        if(line.compare(0,10,"ECMSTAGE2="))continue;
+        ++active;
+        try {
+            const auto task=queue_fields(line);Big expected;std::string error;
+            if(!ecm_compute_stage2_n(task.task,expected.z,error))throw TaskInputError("worktodo N: "+error);
+            const auto save=absolute_from(save_dir,task.task.save_name);
+            auto records_in_task=records(save,task.skip,1);
+            if(records_in_task.empty())throw TaskInputError("no available save record after skip");
+            const auto &r=records_in_task.front();
+            if(r.n!=number(expected.z))throw TaskInputError("worktodo N differs from save N");
+            if(r.x=="0")throw TaskInputError("saved X=0 gives no usable Stage1 point");
+            PortableTuneTarget target;
+            target.bits=unsigned(mpz_sizeinbase(expected.z,2));
+            if(target.bits<2 || target.bits>ecm_stage2::max_input_bits)throw TaskInputError("target width is outside 2..16384 bits");
+            target.input={save,r,"validated_worktodo_save"};
+            target.carrier=portable_task_carrier(task.task,r,o.auto_carrier);
+            const auto b2=task.b2?task.b2:settings.b2;
+            target.bounds=!o.tune_b2s.empty()?o.tune_b2s:b2?std::vector<uint64_t>{b2}:fallback_bounds;
+            for(auto b:target.bounds)if(b>uint64_t(INT64_MAX)-8192)
+                throw TaskInputError("tune B2 must fit signed indices");
+            target.bounds.erase(std::remove_if(target.bounds.begin(),target.bounds.end(),
+                [&](uint64_t b){return b<=r.b1;}),target.bounds.end());
+            if(target.bounds.empty())throw TaskInputError("no tune B2 exceeds saved B1");
+            std::string key=r.n+":"+std::to_string(r.b1)+":"+std::to_string(target.carrier);
+            for(auto b:target.bounds)key+=':'+std::to_string(b);
+            if(!seen.insert(key).second)continue;
+            target.input=portable_freeze_input(target.input,evidence/("task_"+std::to_string(targets.size())+".save"),destination);
+            append(evidence/"target_origin.jsonl","{\"worktodo\":"+json_string(worktodo.string())+
+                ",\"line\":"+std::to_string(line_number)+",\"task\":"+json_string(line)+",\"save\":"+json_string(save.string())+
+                ",\"snapshot\":"+json_string(target.input.save.string())+
+                ",\"record\":"+std::to_string(r.index)+",\"record_hash\":"+std::to_string(r.hash)+
+                ",\"target_bits\":"+std::to_string(target.bits)+",\"carrier_exponent\":"+std::to_string(target.carrier)+'}');
+            targets.push_back(std::move(target));
+        } catch(const TaskInputError &error) {
+            std::cout<<"ecm_tune_input_skip: line="<<line_number<<" reason="<<error.what()<<std::endl;
+        }
+    }
+    if(in.bad())throw std::runtime_error("tune worktodo read failed");
+    if(targets.empty() && (require_tasks || active))throw std::runtime_error("tune worktodo has no valid available save tasks");
+    return targets;
+}
+unsigned portable_tune_save_carrier(const Options &o,const Record &record,const fs::path &worktodo) {
+    // This optional lookup never needs to open unrelated future save files.
+    std::ifstream in(worktodo);if(!in)return 0;
+    std::string line;int section=1;
+    while(std::getline(in,line)) {
+        if(line.compare(0,3,"\xef\xbb\xbf")==0)line.erase(0,3);
+        bool header=false;const auto next=ecm_worktodo_parse_worker_header(line,&header);
+        if(next){section=next;continue;}
+        line=trim(line);
+        if(header || section!=o.worker || line.compare(0,10,"ECMSTAGE2="))continue;
+        try {
+            const auto task=queue_fields(line);
+            if(task.task.k!="1" || task.task.b!="2" || task.task.c!="-1" ||
+               task.task.n<2 || task.task.n>ecm_stage2::max_input_bits)continue;
+            Big expected;std::string error;
+            if(ecm_compute_stage2_n(task.task,expected.z,error) && number(expected.z)==record.n)
+                return portable_task_carrier(task.task,record,o.auto_carrier);
+        } catch(const std::runtime_error &) {
+            // A future malformed task is not authority for this valid save.
+        }
+    }
+    if(in.bad())throw std::runtime_error("tune carrier worktodo read failed");
+    return 0;
+}
+void run_portable_tune(Options o,const Settings &settings,const fs::path &destination,
+    const fs::path &default_worktodo,const fs::path &save_dir) {
     PortableQuiet quiet;
     o.short_batch_tune=false;configure_short_ntt_batches(o);
     if(!o.tune_save.empty() && !o.tune_exponents.empty())throw std::runtime_error("choose tune-save or tune-exponents");
+    if(!o.tune_worktodo.empty() && (!o.tune_save.empty() || !o.tune_exponents.empty()))
+        throw std::runtime_error("choose tune-worktodo, tune-save or tune-exponents");
     if(o.tune_carrier && o.tune_save.empty())throw std::runtime_error("carrier tuning requires a validated --tune-save");
     if(o.has_tune_tail_samples && o.tune_tail_samples)throw std::runtime_error("portable tune uses the default grid; legacy tune-tail-samples accepts only 0");
     auto guard=portable_lock(destination);auto profile=portable_read(destination);const auto current=portable_condition(o);
@@ -554,25 +779,98 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
         for(auto s:old.ntt){s["condition"]=std::to_string(profile.condition(old.conditions.at(et::uint(s,"condition"))));profile.update_ntt(std::move(s));}
     }
     pt::Budget budget(double(o.tune_budget));
-    std::map<unsigned,PortableInput> inputs;
+    std::vector<PortableTuneTarget> targets;
+    const auto task_path=o.tune_worktodo.empty()?default_worktodo:absolute_from(fs::current_path(),o.tune_worktodo);
     if(!o.tune_save.empty()) {
         const auto path=absolute_from(fs::current_path(),o.tune_save);auto rec=records(path,0,1);if(rec.empty())throw std::runtime_error("empty tune save");
-        Big n;mpz_set_str(n.z,rec[0].n.c_str(),16);grid.widths={unsigned(mpz_sizeinbase(n.z,2))};inputs.emplace(grid.widths[0],PortableInput{path,rec[0],"validated_save"});
+        Big n,plus;mpz_set_str(n.z,rec[0].n.c_str(),16);mpz_add_ui(plus.z,n.z,1);
+        const auto bits=unsigned(mpz_sizeinbase(n.z,2));
+        unsigned carrier=o.tune_carrier;
+        if(!carrier && o.auto_carrier) {
+            // A cofactor save alone does not reveal p. Obtain it only from a
+            // validated matching task. Full M_p already has native reduction.
+            carrier=portable_tune_save_carrier(o,rec[0],task_path);
+            if(carrier==bits && mpz_popcount(plus.z)==1)carrier=0;
+        }
+        if(carrier) {ecm_stage2::ModulusContext modulus;std::string error;
+            if(!modulus.configure(rec[0].n.c_str(),16,carrier,error))throw std::runtime_error(error);}
+        auto input=portable_freeze_input({path,rec[0],"validated_save"},evidence/"target.save",destination);
+        append(evidence/"target_origin.jsonl","{\"save\":"+json_string(path.string())+
+            ",\"snapshot\":"+json_string(input.save.string())+",\"record\":"+std::to_string(rec[0].index)+
+            ",\"record_hash\":"+std::to_string(rec[0].hash)+",\"carrier_exponent\":"+std::to_string(carrier)+'}');
+        targets.push_back({bits,std::move(input),grid.b2s,carrier});
+    } else if(o.tune_exponents.empty()) {
+        targets=portable_tune_tasks(o,settings,task_path,save_dir,grid.b2s,evidence,destination,!o.tune_worktodo.empty());
+    }
+    if(targets.empty())for(auto bits:grid.widths) {
+        if(o.tune_arithmetic!="mersenne")targets.push_back({bits,{},grid.b2s,0,false});
+        if(o.tune_arithmetic!="generic")targets.push_back({bits,{},grid.b2s,0,true});
+    }
+    for(const auto &target:targets)if(!target.input.save.empty()) {
+        std::error_code error;
+        if((fs::equivalent(destination,target.input.save,error) && !error) ||
+           upper(destination.lexically_normal().string())==upper(target.input.save.lexically_normal().string()))
+            throw std::runtime_error("tune-file must differ from every task save");
     }
     std::sort(grid.ds.begin(),grid.ds.end());grid.ds.erase(std::unique(grid.ds.begin(),grid.ds.end()),grid.ds.end());
-    const size_t full_grid=grid.widths.size()*grid.b2s.size()*grid.ds.size()*(o.tune_carrier?2:1);
-    struct Case {unsigned bits;uint64_t b2,d;unsigned carrier;double priority;};std::vector<Case> cases;
+    size_t full_grid=0;for(const auto &target:targets)full_grid+=target.bounds.size()*grid.ds.size()*(target.carrier?2:1);
+    struct Case {size_t target;uint64_t b2,d;unsigned carrier;double priority;};std::vector<Case> cases;
     size_t measured=0,skipped=0;
+    std::cout<<"ecm_tune_inputs: targets="<<targets.size()<<" source="<<
+        (!o.tune_save.empty()?"save":targets.front().input.save.empty()?"width_grid":"worktodo")
+        <<" auto_carrier="<<o.auto_carrier<<" warmup="<<o.tune_warmup<<std::endl;
+    // Complete ordinary and carrier default references before spending the
+    // remaining budget on neighborhoods. Explicit D lists remain exact.
+    size_t paired_references=0;
+    std::map<std::pair<size_t,pt::Shape::Key>,et::Fields> reference_samples;
+    for(size_t target_index=0;target_index<targets.size();++target_index) {
+        if(budget.expired() || stop_requests)break;
+        auto &target=targets[target_index];if(!target.carrier)continue;
+        for(auto b:target.bounds)for(auto carrier:{0u,target.carrier}) {
+            if(budget.expired() || stop_requests)break;
+            const auto d=portable_default_d(o,target.input.record,b,carrier);
+            if(!std::binary_search(grid.ds.begin(),grid.ds.end(),d))continue;
+            auto shape=portable_shape(o,target.input.record,b,d,carrier);std::string plan;
+            if(!portable_admit(o,target.input.record,shape,plan))continue;
+            const auto p=ecm_stage2::cost::phi(d)/2,points=b/d+2;
+            if(points<=p || (o.tune_max_batches && (points+p-1)/p>o.tune_max_batches))continue;
+            pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+            const auto prior=estimator.observed(shape);
+            if(prior && et::uint(*prior,"repeats")>=grid.repeats){++skipped;++paired_references;continue;}
+            unsigned completed=0;
+            et::Fields formal_sample;
+            const bool changed=portable_measure(o,settings,target.input,b,d,carrier,grid.repeats,
+                budget,evidence,profile,condition,false,&completed,&formal_sample);
+            if(completed)++measured;
+            if(changed)portable_publish(destination,profile);
+            if(completed>=grid.repeats) {
+                ++paired_references;
+                pt::Estimator updated(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+                reference_samples[{target_index,updated.shape(formal_sample).key()}]=std::move(formal_sample);
+            }
+        }
+    }
     // NTT measurements are component evidence, never a substitute for paired
     // full-engine D comparisons. No tiny-P full-engine seed is required.
     portable_ntt(o,profile,condition,budget,evidence,{{16,1},{18,1},{20,1},{22,1}},grid.repeats);
-    for(auto bits:grid.widths) {
+    for(size_t target_index=0;target_index<targets.size();++target_index) {
         if(budget.expired() || stop_requests)break;
-        if(!inputs.count(bits))inputs.emplace(bits,portable_input(bits,evidence));
-        const auto &input=inputs.at(bits);const auto &r=input.record;
-        for(auto b:grid.b2s)for(unsigned mode=0;mode<(o.tune_carrier?2u:1u);++mode) {
+        auto &target=targets[target_index];
+        if(target.input.save.empty()) {
+            try {target.input=portable_input(target.bits,evidence,target.grid_mersenne);}
+            catch(const TaskInputError &error) {
+                if(!target.grid_mersenne)throw;
+                std::cout<<"ecm_tune_input_skip: arithmetic_bits="<<target.bits<<" kind=mersenne reason="<<error.what()<<std::endl;
+                continue;
+            }
+            if(target.grid_mersenne)target.carrier=target.bits;
+            Big n;mpz_set_str(n.z,target.input.record.n.c_str(),16);target.bits=unsigned(mpz_sizeinbase(n.z,2));
+        }
+        const auto bits=target.bits;
+        const auto &input=target.input;const auto &r=input.record;
+        for(auto b:target.bounds)for(unsigned mode=0;mode<(target.carrier && !target.grid_mersenne?2u:1u);++mode) {
             if(b<=r.b1 || budget.expired() || stop_requests)continue;
-            const unsigned carrier=mode?o.tune_carrier:0;
+            const unsigned carrier=target.grid_mersenne || mode?target.carrier:0;
             const auto baseline=portable_default_d(o,r,b,carrier);
             struct Outcome {enum State {Tested,Rejected,Deferred} state=Deferred;pt::LocalSearch::Timing time;};
             std::map<uint64_t,Outcome> outcomes;
@@ -598,16 +896,18 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
                    !admit(d,shape)) {result.state=Outcome::Rejected;++skipped;return outcomes[d]=result;}
                 pt::Estimator model(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
                 const auto prior=model.observed(shape);
-                const bool reuse=prior && et::uint(*prior,"repeats")>=grid.repeats;
+                const auto reference=reference_samples.find({target_index,shape.key()});
+                const bool reuse_current=reference!=reference_samples.end();
+                const bool reuse=reuse_current || (prior && et::uint(*prior,"repeats")>=grid.repeats);
                 unsigned completed=0;
                 et::Fields formal_sample;
                 if(!reuse) {
                     // A known local duration is a budget bound. A remote tiny-P
                     // prediction cannot reject a production-sized measurement.
-                    if(prior && et::real(*prior,"median_seconds")*(grid.repeats+1)>budget.remaining())
+                    if(prior && et::real(*prior,"median_seconds")*(grid.repeats+(o.tune_warmup?1:0))>budget.remaining())
                         return outcomes[d]=result;
                     const bool changed=portable_measure(o,settings,input,b,d,carrier,grid.repeats,
-                        budget,evidence,profile,condition,false,&completed,&formal_sample);
+                        budget,evidence,profile,condition,target.grid_mersenne,&completed,&formal_sample);
                     if(completed)++measured;
                     if(changed)portable_publish(destination,profile);
                 } else ++skipped;
@@ -618,9 +918,9 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
                 // Fastest-on-disk may still be a partial earlier sample. The
                 // current neighborhood uses the completed requested repeats,
                 // without replacing that older fastest summary with a slower one.
-                const auto &timing=reuse?*observation:formal_sample;
+                const auto &timing=reuse_current?reference->second:reuse?*observation:formal_sample;
                 result.time={et::real(timing,"median_seconds"),et::real(timing,"mad_seconds")};
-                cases.push_back({bits,b,d,carrier,0});
+                cases.push_back({target_index,b,d,carrier,0});
                 std::cout<<"ecm_tune_progress: N="<<bits<<" B2="<<b<<" D="<<d
                     <<" median="<<result.time.seconds<<" s reused="<<reuse<<std::endl;
                 return outcomes[d]=result;
@@ -638,9 +938,10 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
             auto reference=portable_shape(o,r,b,baseline,carrier);pt::Work reference_work;
             if(admissions.count(baseline) && admissions.at(baseline).first)reference=admissions.at(baseline).second;
             pt::Estimator guide(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
+            pt::WidthPredictor reusable_guide(guide);
             const bool reference_ok=guide.cached_work(reference,reference_work);
-            pt::Estimate reference_estimate;
-            const bool reference_predicted=guide.predict(reference,reference_estimate);
+            pt::WidthEstimate reference_estimate;
+            const bool reference_predicted=reusable_guide.predict(reference,reference_estimate);
             bool ranking_complete=true;
             for(auto d:grid.ds) {
                 if(budget.expired() || stop_requests){ranking_complete=false;break;}
@@ -649,8 +950,8 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
                 auto shape=portable_shape(o,r,b,d,carrier);pt::Work w;
                 if(!guide.cached_work(shape,w) || !w.exact_topology)continue;
                 double score=reference_ok?pt::relative_work(w,reference_work):double(w.largest_ntt);
-                pt::Estimate prediction;
-                if(reference_predicted && guide.predict(shape,prediction))score=prediction.rank/reference_estimate.rank;
+                pt::WidthEstimate prediction;
+                if(reference_predicted && reusable_guide.predict(shape,prediction))score=prediction.rank/reference_estimate.rank;
                 if(score>0 && std::isfinite(score))groups[pt::interval(shape,w)].push_back({d,p,score});
             }
             std::vector<Basin> basins;
@@ -662,7 +963,7 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
             }
             std::sort(basins.begin(),basins.end(),[](const Basin &a,const Basin &b){return a.rank!=b.rank?a.rank<b.rank:a.key<b.key;});
             // Bounded multi-region restarts may cross an uphill transform step.
-            // They schedule calibration; production still requires paired wins.
+            // Sampling scheduling is separate from paired/model production guards.
             size_t requested=0;
             while(requested<basins.size() && requested<grid.basins &&
                   (requested==0 || basins[requested].rank<=1.5*basins.front().rank))++requested;
@@ -744,9 +1045,7 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
     const auto model_evidence=std::to_string(fingerprint(evidence_key.str()));
     std::vector<et::Fields> estimates;
     for(const auto &c:cases) {
-        Record r;
-        if(inputs.count(c.bits))r=inputs.at(c.bits).record;
-        else {Big n;mpz_set_ui(n.z,1);mpz_mul_2exp(n.z,n.z,c.bits-1);mpz_add_ui(n.z,n.z,12345);r.n=number(n.z);r.b1=20;r.sigma=26;}
+        const auto &r=targets.at(c.target).input.record;
         auto shape=portable_shape(o,r,c.b2,c.d,c.carrier);pt::Estimate e;
         if(!estimator.predict(shape,e))continue;
         et::Fields s={{"condition",std::to_string(condition)},{"target_bits",std::to_string(shape.target_bits)},
@@ -766,6 +1065,8 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
     profile.metadata["selected_candidates"]=std::to_string(cases.size());
     profile.metadata["selection"]="\"ntt_interval_descent_v1\"";
     profile.metadata["catalogue_candidates"]=std::to_string(ecm_stage2::d_catalog::count);
+    profile.metadata["input_targets"]=std::to_string(targets.size());
+    profile.metadata["paired_references"]=std::to_string(paired_references);
     if(binary!=ecm_stage2::sha256_file(executable()))throw std::runtime_error("ECM calibration binary changed; evidence retained");
     portable_publish(destination,profile);
     std::cout<<"ecm_tune_complete: measured="<<measured<<" skipped="<<skipped<<" grid="<<full_grid<<" selected="<<cases.size()<<" summaries="<<profile.samples.size()

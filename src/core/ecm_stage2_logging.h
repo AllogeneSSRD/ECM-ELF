@@ -13,6 +13,12 @@ namespace stage2_log {
 enum Level { quiet=0, curve=1, phases=2, batches=3, debug=4 };
 inline int level=batches;
 inline FILE *debug_file=nullptr;
+inline unsigned phase_silence=0;
+struct PlanningScope {
+    int previous=level;
+    PlanningScope(){level=quiet;++phase_silence;}
+    ~PlanningScope(){level=previous;--phase_silence;}
+};
 inline void open_debug(const std::filesystem::path &path) {
 #ifdef _WIN32
     debug_file=_wfopen(path.c_str(),L"ab");
@@ -40,6 +46,7 @@ inline void print(int required,const char *format,...) {
 // Explicit milestones are separate from diagnostic statistics. The queue parent
 // forwards these to the console while retaining batch statistics in the log.
 inline void phase(const char *name) {
+    if(phase_silence)return;
     static const auto start=std::chrono::steady_clock::now();
     static auto previous=start;
     const auto now=std::chrono::steady_clock::now();

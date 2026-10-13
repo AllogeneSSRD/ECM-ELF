@@ -2,6 +2,20 @@
 
 本页的实验结论只适用于各节注明的冻结二进制、输入及统计边界。性能文件的当前复用、选型及估算规则以[Auto B2/tune](../architecture/AUTO_B2.md)为准；格式2/3/4测量的误差资格不能直接作为当前跨范围模型的精度证明。
 
+## M12011 真实 save 配对与默认无预热
+
+生产任务的实际余因子为11694 bits，承载指数12011；B1=44,000,000、B2=44,000,000,000，使用 save 第337条、sigma=606255614715663。普通/承载均固定D=240240、P=23040、giant=183152、G=8，arena6400/fold960/batch64 MiB。两侧各3次正式完整Stage2测量，没有丢弃的预热轮次；首轮冷启动样本也参与统计。
+
+**普通中位时间43.654966秒，MAD=0.020802秒；承载中位时间23.449956秒，MAD=0.020964秒。承载减少46.28%，速度约1.862倍。** 时间取`stage2_full_wall.total=init+main`，包含必需算术检查、树初始化和GCD，排除Stage1、父子进程启动、候选扫描及tune调度。两侧同一个N、save记录、B1/B2和D，因此这组比较包含算术承载带来的全部流水线变化，不包含不同D的收益。
+
+- 设备为GPU1 RTX4060 Laptop，UUID `GPU-8a67b1f8-ef1c-3177-a822-813a7ac2224d`，驱动610.88。用户设定1800MHz/默认55W；程序未修改功耗或频率。查询SM时钟为1800MHz，但未采集完整负载遥测；一次NVML功耗读数超出设备物理范围，不用于功率结论。GPU0的4070 Ti上存在其他任务，不将两卡功耗混为本任务功耗。
+- 计时EXE SHA256=`f239cb689a858288c97cf849ba158c49c070d13af4cdc184c566bf0201c5e318`，sm89/CUDA13.3.73/PTX3/addsub1/MSVC14.51.36231/GMP Zen3。save SHA256=`9ab980b126151ecd4aefb60cc141cb31eec09f0aae1c2568a02a96c7697c3b94`。完成后的性能文件SHA256=`9725bee47296fd9faa9386620f4614200a8425a40dd76b7b77396ecf1a2395ff`，保留已有摘要并补入本组普通/承载结果。
+- tune从生产INI和worktodo读取真实输入；未传`--tune-warmup`或`--tune-carrier-exponent`，INI也无预热键。调用数为6，全部为正式repeat1…3；没有repeat0预热日志或结果。总调优预算墙钟204.382秒，不等于两侧中位数之和。全部结果clean，必要自检和已检查字数为正、bad=0。
+- 当前部署EXE SHA256=`64103a3051fcf127744576de063e07849dd3a0479978d7d809a3124cb5b340bb`已用同一profile通过原生规划，自动选择承载12011/D240240；生产save第340条真实续跑检查亦选择该路径，外层结果24.493072秒。它使用不同sigma，计时边界也不同，不混入上述n=3中位数。
+- 原证据及SHA身份位于`data/experiments/stage2_resume_tune_20261013/m12011_pair/`；汇总为`report.json`，原始测量在其`data/experiments/portable_ecm_tune_38560_98482609/`。调优报告包含两侧完整算术路径及分阶段摘要。当前生产续跑证据为`production_resume_gate/report.json`和`console.log`，重排回归为`reorder_after_gate/`及`reordered_head_report.json`。
+
+这组数据证明当前输入和预算下的配对收益及自动承载资格；不证明其他B2、位宽、内存边界或D邻域已经调优完成。显式D列表只测指定D，本组没有进行全表搜索。插值模型误差字段仍保留真实较大误差，不能用精确配对结果宣称整个模型已收敛。
+
 ## 自动梅森承载与 10000–16384 bits 覆盖
 
 **在 B2=2.6×10⁸ 的13个位宽单次矩阵中，普通余因子合计62.693秒，worktodo自动候选合计39.233秒，减少37.42%。四个新增高位宽点均自动选择承载，单项减少38.2%–40.2%；318/383 bits保留普通路径。** 这是相同小B2、设备和冻结性能文件下的观测，不是生产大B2或其他设备的速度保证。
@@ -189,7 +203,7 @@ B2=2.6×10⁷的默认D=16170、P=1680、G=1，超出当前tune多批fold采样�
 - 训练：`data/experiments/stage2_tuned_carrier_20261011/`、`stage2_carrier_completed_tune_20261011/report.json`；前者保留截断训练和首轮测量，后者记录四个窗口补测及profile哈希。最终独立测量不改写这些证据。
 - 验证：`data/experiments/stage2_tuned_carrier_validation_20261011/`中的`report.json`、`projected_fixed_m{503,2003,8011}/`、自动计划和额外显式候选查询；首次失败的`projected_m503/`保留。
 - 汇总：`data/benchmarks/stage2_tuned_carrier_final_20261011_{analysis.json,comparison.csv}`；图表同前缀在`data/figures/`。可复用入口见[承载对照工具说明](../../tools/bench/README_STAGE2_TUNED_CARRIER.md)。
-- 代码依据：目标/承载配置与整除检查`src/core/ecm_stage2_modulus.h:28`；原生局部tune入口`src/core/ecm_stage2_portable_driver.inl:526`、窗口完成记录`:633`；NTT几何入口`tools/bench/ntt_poly_probe.cu:2706`。
+- 当前代码入口：目标/承载配置与整除检查`src/core/ecm_stage2_modulus.h:28`；局部tune入口`src/core/ecm_stage2_portable_driver.inl:650`、窗口完成记录`:908`；NTT几何入口`tools/bench/ntt_poly_probe.cu:2706`。入口说明不将本节冻结二进制的测量重新归属到当前源码版本。
 - TODO：复测几％差异；验证局部搜索跨NTT台阶的候选策略，尤其4667-bit大B2；测未锁定自动曲线、真实生产B1/sigma、正因子命中及其他GPU/预算边界。有限矩阵收益不保证未测范围的模型误差或全局最优。
 
 ## 2400 MHz 默认保护与局部 tune 验证

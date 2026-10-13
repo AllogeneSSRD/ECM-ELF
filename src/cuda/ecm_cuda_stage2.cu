@@ -9776,22 +9776,23 @@ int ecm_cuda_stage2_device_info(int device,EcmStage2DeviceInfo *info,const char 
 }
 
 int ecm_cuda_stage2_tune_ntt(int device,int min_log2,int max_log2,int repeats,
-                            uint64_t memory,void (*report)(const char*,void*),void *context)
+                            uint64_t memory,void (*report)(const char*,void*),void *context,bool warmup)
 {
     if(ecm_cuda_stage2_check_configuration())return 2;
-    return stage2_tune::run(device,min_log2,max_log2,repeats,memory,report,context);
+    return stage2_tune::run(device,min_log2,max_log2,repeats,memory,report,context,nullptr,0,warmup);
 }
 int ecm_cuda_stage2_tune_ntt_batches(int device,int min_log2,int max_log2,int repeats,
                                     uint64_t memory,const uint64_t *slices,size_t count,
-                                    void (*report)(const char*,void*),void *context)
+                                    void (*report)(const char*,void*),void *context,bool warmup)
 {
     if(ecm_cuda_stage2_check_configuration())return 2;
-    return stage2_tune::run(device,min_log2,max_log2,repeats,memory,report,context,slices,count);
+    return stage2_tune::run(device,min_log2,max_log2,repeats,memory,report,context,slices,count,warmup);
 }
 
 int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b2,
                         uint64_t d,int device,void (*report)(const char*,void*),void *context,unsigned carrier_exponent)
 {
+    stage2_log::PlanningScope planning_logs;
     if(!report || !n_hex || device<0 || !b1 || b2<=b1 ||
        b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
     if(ecm_cuda_stage2_check_configuration())return 2;

@@ -269,12 +269,24 @@ stage2_finished = stage2_worktodo.finished.txt
 # worker 加后缀，显式指定时按原路径使用。
 # stage2_debug_log_file = stage2_debug.log
 # <path>; default=""; empty=queue_path+worker_suffix+.progress; queue_only; empty!=off
-# Stage2 queue resume state. Empty derives the path from the queue plus worker suffix and .progress;
-# it does not disable resume. Stores completed curve indices and receipts, without checkpointing
-# arithmetic within a curve. Restart recomputes only curves not confirmed complete.
-# 指定 Stage2 队列续跑状态文件。空值自动使用队列路径加 worker 后缀和 .progress，并不关闭续跑；记录已完
-# 成曲线编号和回执，不保存当前曲线的 Stage2 中间计算。重启时只重算尚未确认完成的曲线。
+# Legacy single-file progress import path. Empty checks the old queue-path plus worker-suffix
+# .progress file. A matching task's completed count and pending receipt are imported into its own
+# .ecm_ckpt_stage2_<bits>_<task-id>.dat file. An unrelated legacy task is retained and does not stop
+# this task. New progress files use stage2_progress_dir; no arithmetic state is checkpointed.
+# 旧单文件进度的导入路径。空值检查旧的队列路径加 worker 后缀 .progress 文件；匹配任务的完成数和待确认
+# 回执迁入独立 .ecm_ckpt_stage2_<bits>_<task-id>.dat 文件。不相关的旧任务保留，当前任务继续。新进度文
+# 件使用 stage2_progress_dir，不保存曲线内部算术状态。
 stage2_progress_file =
+# <dir>; default=""; empty=legacy_progress_parent_or_queue_parent
+# Directory for per-task .ecm_ckpt_stage2_<bits>_<task-id>.dat progress files. Empty uses the legacy
+# progress file's directory if explicitly set, otherwise the queue directory. Task IDs bind AID, N,
+# save contents, selected curve range and B2; reordering tasks, changing device/memory/log paths or
+# tuning D/carrier does not reset completed curves. Files contain counts and receipt metadata only,
+# and are removed after the task is published and advanced.
+# 每任务 .ecm_ckpt_stage2_<bits>_<task-id>.dat 进度文件的目录。空值使用显式旧进度路径的父目录，否则使
+# 用队列目录。任务 ID 绑定 AID、N、save 内容、曲线范围和 B2；调整任务顺序、设备/显存/日志路径或 D/承载
+# 调优不会重置已完成曲线。文件仅保存计数和回执元数据，任务发布并移出队列后清除。
+stage2_progress_dir =
 # <dir>; default=""; empty=tmp_dir
 # Directory searched for saves referenced by Stage2 assignments. Empty inherits tmp_dir; absolute save
 # paths in assignments are used directly. Source saves are read and validated without modification.
@@ -381,23 +393,42 @@ stage2_factor_timeout = 30
 # 查；新的完整 ECM tune 不放宽旧合同。留空不提供旧配置。
 stage2_cost_profile =
 # [0|1]; default=1
-# For ECMSTAGE2=1,2,p,-1 worktodo tasks, add M=2^p-1 to the arithmetic candidates after reconstructing
-# N, matching the Stage1 save and verifying N divides M (2 <= p <= 16384). Switching requires eligible
-# tune data and memory admission; fixed B2 with unlocked D also requires a measured win against the
-# ordinary default. 0 disables automatic candidates; explicit --carrier-exponent still takes priority.
-# A save alone supplies no exponent.
-# 对 ECMSTAGE2=1,2,p,-1 队列任务，重建 N、核对 Stage1 save 并验证 N 整除 M=2^p-1 后，将梅森承载加入算
-# 术候选（2 <= p <= 16384）。切换须满足 tune 数据资格及显存准入；固定 B2 且 D 未锁定时还须有相对普通默
-# 认路径的实测收益。0 关闭自动候选；显式 --carrier-exponent 仍优先。单独读取 save 不推测指数。
+# Add M=2^p-1 for validated ECMSTAGE2=1,2,p,-1 saves when N divides M and 2<=p<=16384. Compare
+# ordinary cost at target_bits with Mersenne cost at arithmetic_bits=p, using
+# stage2_prediction_policy. Full M_p already has native Mersenne arithmetic. Explicit carrier options
+# take priority; a cofactor save needs a matching task to infer p.
+# 对有效ECMSTAGE2=1,2,p,-1保存点，验证N整除M=2^p-1且2<=p<=16384后加入承载候选。普通成本按target_bits、
+# 梅森成本按arithmetic_bits=p查询，并遵循stage2_prediction_policy；完整M_p已使用原生梅森算术，不重复加
+# 入相同候选。显式承载选项优先；余因子save须匹配任务才能推断p。
 stage2_auto_carrier = true
+# [model|paired]; default=model
+# model: prefer exact paired measurements, otherwise compare generic and Mersenne arithmetic-width
+# region estimates with two-sided uncertainty and current memory admission. Missing tune data uses an
+# explicitly estimated 4060-Laptop/1800-MHz basic model. Uncovered NTT/residency regions retain the
+# default. paired: require the original exact-width/B2 measured win. B1 never gates reuse.
+# model：优先使用精确配对实测；其他输入分别按通用、梅森算术位宽区间预测，满足双侧误差保护及当前显存准
+# 入才替换。缺调优资料时使用明确标为估算的4060 Laptop/1800MHz基础模型；未覆盖的NTT/驻留区间保留默认。
+# paired恢复原精确位宽/B2实测收益门禁。B1不作为复用门槛。
+stage2_prediction_policy = model
+# [both|generic|mersenne]; default=both
+# Arithmetic families for explicit width-grid ECM tune: both, generic probable-prime N, or Mersenne
+# 2^p-1 arithmetic after stripping proper-exponent inherited factors and small target divisors. p is
+# the requested grid arithmetic width; actual cofactor width is recorded separately. Real
+# worktodo/save pairs continue to follow stage2_auto_carrier. Invalid or factor-producing synthetic
+# Mersenne fixtures are skipped, never saved as timing measurements.
+# 显式位宽网格ECM tune的算术家族：both同时测量；generic使用通用可能素数；mersenne使用去除真因子指数继
+# 承因子及小因子后的2^p-1承载算术。p为网格要求的算术位宽，实际余因子位宽另行记录。真实worktodo/save配
+# 对仍遵循stage2_auto_carrier；无效或产生因子的合成梅森样本跳过，不写成计时数据。
+stage2_tune_arithmetic = both
 # <path>; default=""; empty=legacy_selection
-# Format-7 ECM matrix TOML, grouped by width, with column names in the first row. Older development
-# files must be regenerated. Fixed-B2 D changes require a measured win against the default; estimates
-# do not override it. B1 never gates reuse. A carrier requires saved N to divide 2^p-1. Empty uses
+# Format-7 final ECM matrix TOML. Arithmetic-family lookup uses arithmetic_bits; generic and Mersenne
+# data are independent, and native full-Mersenne data can calibrate carriers. target_bits and
+# carrier_exponent retain the measurement identity. stage2_prediction_policy controls estimated
+# replacement. Missing data permits the basic model; B1 never gates reuse. Empty selects adjacent
 # stage2_ecm_tune.toml unless a legacy cost profile is supplied.
-# 格式7 ECM 矩阵 TOML，按位宽分组，首行为列名；旧开发文件需重新生成。固定 B2 的 D 替换须有相对默认选型
-# 的实测收益，估算不覆盖默认 D。B1 不作为复用门槛；承载须验证 save 模数整除 2^p-1。留空且未指定旧成本
-# 配置时使用 stage2_ecm_tune.toml。
+# 格式7最终ECM矩阵TOML。按arithmetic_bits分别查询通用、梅森算术数据，原生完整梅森数数据也可校准承载；
+# target_bits和carrier_exponent保留测量身份。估算替换遵循stage2_prediction_policy，缺数据可使用基础模
+# 型；B1不作为复用门槛。留空且未指定旧成本配置时使用相邻stage2_ecm_tune.toml。
 stage2_tune_profile =
 # [false|true]; default=false
 # Experimental short NTT batch selection from stage2_tune_profile, for lengths up to 2^19. Minimizes
@@ -454,12 +485,21 @@ stage2_ratio_adjust = 1
 # 逗号分隔的复用忽略项；留空核对全部条件。memory 默认匹配执行路径。算术合法性及当前显存准入始终检查。
 stage2_tune_ignore = gpu,driver,cuda,backend,environment
 # <x:Z,1..86400>; default=1800
-# ECM tuning budget including warmups. Start each width/B2 at the default model's D, compare
-# neighbors, and follow only measured improvements above 2% plus the MAD noise margin. Reuse completed
-# candidates. Finish an in-flight measurement after the deadline and retain valid summaries.
-# ECM 调优预算，包含预热。每个位宽/B2 从默认模型的 D 开始比较邻档，仅沿超过 2% 且跨过 MAD 噪声界限的实
-# 测收益移动。复用已测候选；到期完成正在运行的测量并保留有效摘要。
+# Tuning budget including input preparation, measurements and optional warmups. Start each width/B2 at
+# the default model's D, compare neighbors, and follow only measured improvements above 2% plus the
+# MAD noise margin. Reuse completed candidates. Finish an in-flight measurement after the deadline and
+# retain valid summaries.
+# 调优预算，包含输入准备、测量及显式开启的预热。每个位宽/B2 从默认模型的 D 开始比较邻档，仅沿超过 2%
+# 且跨过 MAD 噪声界限的实测收益移动。复用已测候选；到期完成正在运行的测量并保留有效摘要。
 stage2_tune_budget_seconds = 1800
+# [0|1]; default=0
+# 0 starts formal ECM/NTT tuning and startup calibration without a discarded warmup. 1 runs one
+# checked warmup per shape before formal repeats; it consumes the same budget and is excluded from the
+# median/MAD. CLI --tune-warmup 0|1 overrides this key. Mandatory arithmetic checks are always
+# performed.
+# 0 表示 ECM/NTT 调优及启动短校准直接开始正式测量，不执行丢弃的预热轮次；1 表示每个形状先运行一轮经过
+# 核验的预热，占用相同预算但不计入中位数/MAD。CLI --tune-warmup 0|1 覆盖此键；必要算术检查始终执行。
+stage2_tune_warmup = false
 # [0|1]; default=1
 # Calibrate once when no suitable ECM tune file exists, required components are missing, or the task
 # has no reusable calibrated width coverage. Partial coverage permits estimates.

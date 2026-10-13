@@ -142,6 +142,8 @@ tools/ecm_worktodo/worktodo_p95_stage2.txt
 vc140.pdb
 # Local datasets, experiment logs, and evidence archives (kept on disk).
 /data/
+.ecm_ckpt_stage2_*.dat*
+*.progress.migrated.*
 # Prevent generated data from reappearing in the documentation tree.
 /docs/data/
 /dist/
