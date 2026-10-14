@@ -51,6 +51,8 @@ Stage2 使用独立的 `stage2_worktodo`、`stage2_finished`、`stage2_results_f
 
 Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目录；Stage1 保持其 exe 目录规则。共用 INI 推荐与两个 exe 放在同一目录。只将 `[Worker #N]` 用作命令行覆盖范围；模板的普通分组用注释，GUI 的真实分区规则见 [配置维护](../architecture/CONFIGURATION.md)。
 
+GUI可用`[Worker #N] stage=stage1|stage2`在同一INI中管理混合阶段，默认阶段由`[GUI] stage`提供。共享配置和GUI分区放在worker分区之前；Stage2队列内的worker编号须与启动参数一致，没有标题的任务只归worker 1。GUI的独立切换、生成器目标及停止方式见[GUI说明](GUI.md#worker-与配置)。
+
 运行时拒绝 Stage1/Stage2 队列冲突，以及 save、程序、配置、队列、进度、结果和日志之间的危险重叠。
 
 ## 日志与内存摘要

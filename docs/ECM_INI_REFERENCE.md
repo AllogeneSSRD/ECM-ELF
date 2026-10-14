@@ -27,6 +27,8 @@ override: built_in < global < Worker#N < CLI
 B2: CLI(nonzero) > task(nonzero) > stage2_b2 > AutoB2
 CLI.sections: Worker#N=scope; other[]=label; label!=scope_reset
 GUI.sections: global|GUI|Worker#N; other[]=distinct_section
+GUI.worker_stage: Worker#N.stage=[stage1|stage2] > GUI.stage; Worker#N.stage=auto => GUI.stage
+shared_settings,GUI => before_Worker_sections; queue_without_header => Worker#1
 global_keys => before_first_section; grouping => #comment
 duplicate_key: last_in_layer; unknown_key: ignore
 invalid: S1=legacy_fallback; S2=error; GUI=fallback_or_clamp
@@ -1024,10 +1026,41 @@ curve counts in worktodo. Concurrent workers should have separate queues and out
 exe=<exe>; default=""; empty=beside_GUI_then_PATH
 ```
 
-Worker executable launched by the GUI. Empty first searches for the default worker beside the GUI,<br>
-then the executable search path. Use this to select a built Stage1 executable.<br>
-指定 GUI 启动 worker 使用的程序路径。留空先查找 GUI 同目录的默认 worker 程序，再按程序搜索路径查找；<br>
-可用此键选择已构建的 Stage1 可执行文件。
+Stage1 worker executable, or a named Stage2 executable in auto mode. Relative paths resolve beside<br>
+the GUI; bare names can use PATH. Empty searches ecm_cuda.exe then ecm.exe. Mixed workers use this<br>
+path for Stage1 and stage2_exe for Stage2; each Worker #N can override the default stage.<br>
+Stage1工作程序，或auto模式下明确命名的Stage2程序。相对路径以GUI目录为基准，单独文件名也可经PATH查找<br>
+；留空依次查找ecm_cuda.exe、ecm.exe。混合worker分别使用此路径运行Stage1、stage2_exe运行Stage2；各<br>
+Worker #N可覆盖默认阶段。
+
+### stage
+
+```text
+stage=[auto|stage1|stage2]; default=auto
+```
+
+Default stage for workers without an explicit Worker #N stage. auto recognizes a Stage2 executable<br>
+named in exe, otherwise prefers available Stage1 and falls back to Stage2. Worker stage overrides<br>
+this default, allowing Stage1 and Stage2 together under one INI. Changing the default requires all<br>
+workers stopped; changing one worker requires only that worker stopped. No computation or queue<br>
+handoff starts automatically.<br>
+未指定Worker #N阶段时使用的默认阶段。auto识别exe中明确命名的Stage2程序，否则优先可用Stage1、再回退<br>
+Stage2。worker的stage覆盖此默认值，同一INI可同时运行Stage1和Stage2。修改默认值须全部worker停止；修改<br>
+单个worker只须该worker停止。切换不自动计算或交接队列。
+
+### stage2_exe
+
+```text
+stage2_exe=<exe>; default=""
+```
+
+Shared executable path for Stage2 workers. Empty searches ecm_cuda_stage2.exe beside the GUI, then a<br>
+single cuda-stage2* child package, then PATH. Multiple child packages require an explicit path. Each<br>
+worker receives the same INI and its own --worker index, using an inherited Stage2 stop event. A<br>
+current Stage2 build is required; exe remains the separate Stage1 path.<br>
+Stage2 worker共用的程序路径。留空先查找GUI同目录的ecm_cuda_stage2.exe，再查找唯一的cuda-stage2*子包<br>
+，最后使用PATH；多个子包时须明确指定路径。各worker使用同一INI和自己的--worker编号，以及继承的Stage2<br>
+停止事件，需要当前Stage2构建；exe仍保存独立Stage1路径。
 
 ### language
 
@@ -1144,7 +1177,7 @@ Incomplete manual edits may prevent layout restoration.<br>
 ### dock_layout_ver
 
 ```text
-dock_layout_ver=<x:Z,x>=0>; default=0; GUI_managed; current=4
+dock_layout_ver=<x:Z,x>=0>; default=0; GUI_managed; current=5
 ```
 
 Version of the saved docking layout, managed by the GUI. Older layouts are rebuilt using the current<br>
@@ -1169,11 +1202,11 @@ the task generator. Does not change worker autostart behavior.<br>
 exit_confirm=[ask|stop|kill]; default=ask
 ```
 
-Behavior when closing the GUI with active workers: ask prompts, stop requests a graceful stop and<br>
-waits for checkpoints, kill terminates immediately. Forced termination may lose progress not yet<br>
-checkpointed.<br>
-控制关闭 GUI 时如何处理运行中的 worker。ask 先询问，stop 直接请求正常停止并等待检查点，kill 立即终止<br>
-；强制终止时未写入的计算进度可能丢失。
+Behavior when closing the GUI with active workers: ask prompts, stop requests a safe stop, kill<br>
+terminates immediately. Stage1 saves a checkpoint; Stage2 finishes its current curve and records<br>
+completed progress. Forced termination may lose the unfinished Stage1 work or current Stage2 curve.<br>
+控制关闭GUI时如何处理运行中的worker：ask先询问，stop请求安全停止，kill立即终止。Stage1写检查点后退出<br>
+；Stage2完成当前曲线、记录完成进度后退出。强制终止可能丢失未存的Stage1计算或当前Stage2曲线。
 
 ### graceful_stop_ms
 
@@ -1181,11 +1214,11 @@ checkpointed.<br>
 graceful_stop_ms=<x:Z,1000..3600000>; default=300000; unit=ms
 ```
 
-Maximum wait in milliseconds after requesting a graceful worker stop. A new checkpoint or process<br>
-exit may end the wait early; workers still running at the deadline are terminated. Allow enough time<br>
-for current Stage1 checkpoint writes.<br>
-设置 GUI 请求正常停止后等待的最长时间，单位为毫秒。检测到新检查点或进程自行退出时可提前结束；到期仍<br>
-未退出时强制终止。应为当前 Stage1 检查点耗时留出余量。
+Maximum wait in milliseconds after requesting a safe worker stop. Process exit ends the wait;<br>
+workers still running at the deadline are terminated. Allow enough time for Stage1 checkpoint writes<br>
+or the full current Stage2 curve. Stage2 curve counters are not intermediate arithmetic saves.<br>
+请求安全停止后等待的最长时间，单位毫秒。进程退出结束等待；到期仍运行的worker强制终止。应为Stage1检查<br>
+点写入或当前Stage2整条曲线留足时间；Stage2曲线计数不是中间算术存档。
 
 ### results_json
 
@@ -1210,6 +1243,21 @@ directory. Preserve the source JSONL as well for long-term result storage.<br>
 要长期保留结果时同时妥善保存 JSONL 来源。
 
 ## GUI worker settings / GUI worker 配置 — [Worker #N]
+
+### stage
+
+```text
+stage=[auto|stage1|stage2]; default=auto
+```
+
+Stage for this GUI worker. auto inherits GUI stage; stage1 launches exe with worktodo, stage2<br>
+launches stage2_exe with stage2_worktodo. Only the selected worker must be stopped before changing<br>
+it; other workers keep running. Stage1 and Stage2 use distinct queues and output files. Place worker<br>
+sections after shared settings and GUI. This key does not redirect a directly launched command-line<br>
+executable.<br>
+此GUI worker的计算阶段。auto继承GUI的stage；stage1使用exe及worktodo，stage2使用stage2_exe及<br>
+stage2_worktodo。修改前只需停止该worker，其余worker继续运行。两阶段使用不同队列和输出文件。worker分<br>
+区放在共享设置和GUI之后。此键不改变直接从命令行启动的程序阶段。
 
 ### name
 

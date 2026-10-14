@@ -49,7 +49,7 @@ public:
     bool start(std::string &err);
     // Terminates the whole job (children included). Safe to call when stopped.
     void stop();
-    // Ask the child to checkpoint at its next safe Stage1 boundary and exit.
+    // Stage1 saves at its next safe boundary; Stage2 finishes the current curve.
     bool request_checkpoint_stop();
     // Autostart helper: start when the config says so and the worker is stopped.
     void set_autostart(bool on) { autostart_ = on; }
@@ -81,6 +81,9 @@ public:
         // The worker printed "No input number on stdin": its executable predates the
         // --worker support (D1/D2) and never entered queue mode. See kOldDriverHint.
         bool old_driver = false;
+        Stage2Status stage2;
+        bool speed_sample=false;
+        bool stage2_task_started=false;
     };
     void drain(DrainedOutput &out);
     std::size_t pending_lines() const;
@@ -120,6 +123,7 @@ private:
     bool autostart_ = false;
     bool want_running_ = false;
     bool saw_queue_done_ = false;
+    Stage2Status stage2_status_;
     unsigned long long restart_at_ms_ = 0;
     std::vector<unsigned long long> crash_times_ms_;
 };

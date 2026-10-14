@@ -78,6 +78,8 @@ inline constexpr double stage2_stage1_seconds_per_curve=0;
 inline constexpr double stage2_stage2_ratio_adjust=1;
 inline constexpr int gui_NumWorkers=1;
 inline constexpr char gui_exe[]="";
+inline constexpr char gui_stage[]="auto";
+inline constexpr char gui_stage2_exe[]="";
 inline constexpr char gui_language[]="english";
 inline constexpr char gui_localization_dir[]="";
 inline constexpr char gui_font[]="";
@@ -94,6 +96,7 @@ inline constexpr char gui_exit_confirm[]="ask";
 inline constexpr int64_t gui_graceful_stop_ms=300000;
 inline constexpr char gui_results_json[]="results.json.txt";
 inline constexpr char gui_results_txt[]="results.txt";
+inline constexpr char worker_stage[]="auto";
 inline constexpr char worker_name[]="Worker #{N}";
 inline constexpr int worker_autostart=0;
 inline constexpr char worker_extra_args[]="";
@@ -330,6 +333,8 @@ inline Stage2Values read_stage2(const Entries &entries){Stage2Values c;apply(c,e
 struct GuiValues {
     int NumWorkers=1;
     std::string exe="";
+    std::string stage="auto";
+    std::string stage2_exe="";
     std::string language="english";
     std::string localization_dir="";
     std::string font="";
@@ -350,6 +355,8 @@ struct GuiValues {
 inline const Binding<GuiValues> gui_bindings[]={
     {"NumWorkers",[](GuiValues&c,const std::string&v){c.NumWorkers=gui_integer(v,1,1,64);},false,nullptr},
     {"exe",[](GuiValues&c,const std::string&v){c.exe=v;},false,nullptr},
+    {"stage",[](GuiValues&c,const std::string&v){c.stage=(v=="auto"||v=="stage1"||v=="stage2")?v:"auto";},false,nullptr},
+    {"stage2_exe",[](GuiValues&c,const std::string&v){c.stage2_exe=v;},false,nullptr},
     {"language",[](GuiValues&c,const std::string&v){c.language=v;},false,nullptr},
     {"localization_dir",[](GuiValues&c,const std::string&v){c.localization_dir=v;},false,nullptr},
     {"font",[](GuiValues&c,const std::string&v){c.font=v;},false,nullptr},
@@ -369,12 +376,14 @@ inline const Binding<GuiValues> gui_bindings[]={
 };
 inline GuiValues read_gui(const Entries &entries){GuiValues c;apply(c,entries,gui_bindings);return c;}
 struct WorkerValues {
+    std::string stage="auto";
     std::string name="Worker #{N}";
     int autostart=0;
     std::string extra_args="";
     int gpucurves=0;
 };
 inline const Binding<WorkerValues> worker_bindings[]={
+    {"stage",[](WorkerValues&c,const std::string&v){c.stage=(v=="auto"||v=="stage1"||v=="stage2")?v:"auto";},false,nullptr},
     {"name",[](WorkerValues&c,const std::string&v){c.name=v;},false,nullptr},
     {"autostart",[](WorkerValues&c,const std::string&v){c.autostart=gui_integer(v,0,INT32_MIN,INT32_MAX);},false,nullptr},
     {"extra_args",[](WorkerValues&c,const std::string&v){c.extra_args=v;},false,nullptr},

@@ -1,14 +1,7 @@
 #pragma once
 #include "../core/generated/ecm_config_generated.h"
 
-// Application state and panels of ecm_gui (milestone M1: skeleton).
-//
-// The panels are real (docking + viewports, geometry persisted into [GUI]), but
-// the DATA is deliberately config-driven for now: the worker list comes from
-// NumWorkers + the [Worker #N] sections of ecm.ini, the log panes say so instead
-// of inventing lines, and the GPU panel reports what the sample source gives it
-// (nothing until M4 wires NVML). M2 replaces the placeholders with live process
-// output; nothing in this header needs to change for that.
+// Stage1/Stage2 worker supervision, readable progress, configuration and results.
 
 #include "gpu_monitor.h"
 #include "gen_input_text.h"
@@ -72,6 +65,9 @@ struct WorkerView {
     std::string worktodo;
     std::string log_file;
     std::string extra_args;           // [Worker #N] extra_args= (space separated)
+    std::string stage = ecm_config::defaults::worker_stage;
+    std::string exe;
+    std::string working_dir;
     bool autostart = false;
 
     // Live state (M2).
@@ -81,6 +77,8 @@ struct WorkerView {
     long long tasks_done = 0;
     long long hits = 0;
     std::string task;                 // current worktodo line (from START:)
+    bool stage2=false;
+    Stage2Status stage2_status;
     std::vector<std::string> events;  // event layer (timestamped, ANSI-free)
     std::vector<std::string> raw;     // everything, for the "raw output" toggle
     // Progress history for the sparkline (one sample per accepted progress line).
@@ -91,6 +89,7 @@ struct WorkerView {
     unsigned long long last_sample_ms = 0;
     double last_traced_pct = -1.0;
     bool show_raw = false;
+    bool follow_output=true;
     bool show_pane = true;
     bool duplicate_device = false;    // another worker uses the same device (warning)
     bool old_driver = false;          // worker exe printed "No input number on stdin"
@@ -187,7 +186,11 @@ public:
     void stop_all_quietly();
     // Resolves the worker executable: [GUI] exe=, else ecm_cuda.exe next to the GUI,
     // then ecm.exe next to it; falls back to the bare name (PATH lookup).
-    std::string resolve_worker_exe() const;
+    std::string resolve_worker_exe(int worker_index=0) const;
+    std::string resolve_stage1_exe() const;
+    std::string resolve_stage2_exe() const;
+    bool stage2_mode() const;
+    bool worker_stage2(int worker_index) const;
 
     // Reloads the current language file (the "Reload localization" button).
     void reload_localization();
@@ -209,6 +212,9 @@ public:
 
 private:
     void rebuild_workers();
+    WorkerView make_worker(int index) const;
+    void refresh_device_warnings();
+    bool set_worker_stage(int index, const std::string &stage);
     void draw_menu_bar();
     // Prominent full-width strip under the menu bar: the Prime95 handoff state in red /
     // yellow / green / grey, with the two "open" buttons (docs/usage/GUI.md 18).
@@ -229,6 +235,9 @@ private:
     // the worker executable's directory -- what the driver itself uses).
     std::string genWorktodoPath() const;
     void draw_workers_table();
+    void draw_stage2_status(const WorkerView &worker,bool compact=false);
+    std::string task_text(const WorkerView &worker) const;
+    bool select_workflow_ini(const std::string &path);
     void draw_gpu_panel();
     void draw_results_panel();
     void draw_detail_panel();
@@ -248,7 +257,7 @@ private:
     // Advances the per-worker graceful stop (checkpoint watch + deadline) from tick().
     void tick_graceful_stops(unsigned long long now);
     // Directory holding the worker executable: where the driver writes .ecm_ckpt_*.dat.
-    std::string worker_dir() const;
+    std::string worker_dir(int worker_index=0) const;
     // ---- Prime95 handoff ([queue] p95_worktodo_path / p95_add_workers) ---------------
     // Read from the ini by the GUI itself (not from a worker's output), so the "not
     // configured" hint is visible before any worker runs.
@@ -271,6 +280,7 @@ private:
     bool gen_use_recommended_ = true;     // default ON
     bool gen_dedup_ = true;
     int gen_target_device_ = 0;
+    int gen_worker_index_ = 1;
     std::string gen_text_;                // the preview (exactly what apply would write)
     std::string gen_status_;              // one-line result of the last action
     std::string gen_warnings_;            // rejected input lines, warnings
@@ -311,6 +321,9 @@ private:
     std::string status_;
     std::string layout_blob_loaded_;
     std::string worker_exe_;              // [GUI] exe= (empty = auto)
+    std::string engine_stage_=ecm_config::defaults::gui_stage;
+    std::string stage2_exe_;
+    mutable std::string resolved_stage2_exe_;
     float font_size_px_ = ecm_config::defaults::gui_font_size;           // [GUI] font_size= (0 = auto)
     bool font_snap_ = ecm_config::defaults::gui_font_snap;               // [GUI] font_snap= (PixelSnapH)
     std::string font_path_;               // [GUI] font= (empty = pick automatically)

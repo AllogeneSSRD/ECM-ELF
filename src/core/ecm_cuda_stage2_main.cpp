@@ -50,6 +50,11 @@ namespace s2prod {
 namespace fs = std::filesystem;
 struct TaskInputError : std::runtime_error { using std::runtime_error::runtime_error; };
 volatile LONG stop_requests = 0;
+HANDLE inherited_stop_event=nullptr;
+void poll_inherited_stop() {
+    if(inherited_stop_event && WaitForSingleObject(inherited_stop_event,0)==WAIT_OBJECT_0)
+        InterlockedCompareExchange(&stop_requests,1,0);
+}
 fs::path fatal_log;
 BOOL WINAPI console_control(DWORD event) {
     if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT) return FALSE;
@@ -211,6 +216,8 @@ struct Options {
     bool dry = false, once = false, selection = false, help = false;
     bool has_d = false, has_batch = false, has_arena = false;
     bool child = false;
+    bool gui_events=false;
+    uint64_t stop_handle=0;
     uint64_t offset = 0, hash = 0, index = 0;
     bool plan_only = false, tune_options = false;
     std::string tune, tune_file;
@@ -272,6 +279,8 @@ Options arguments(int argc, char **argv) {
         else if (a == "--log-level") o.log_level = stage2_log::parse(value());
         else if (a == "--debug-log-file") { o.debug_file=value(); o.debug_log=true; }
         else if (a == "--queue-receipt") o.receipt=value();
+        else if (a == "--stage2-stop-handle") o.stop_handle=num();
+        else if (a == "--gui-events") o.gui_events=true;
         else if (a == "--b2") o.b2 = num();
         else if (a == "--d") { o.d = num(); o.has_d = true; }
         else if (a == "--carrier-exponent") {
@@ -646,6 +655,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     };
     DWORD wait=WAIT_TIMEOUT;
     for(;;) {
+        poll_inherited_stop();
         if(stop_requests>=2) {
             TerminateJobObject(job.value,130);
             WaitForSingleObject(pi.hProcess,5000);
@@ -987,6 +997,10 @@ std::string giant_memory_record(const std::string &json) {
 int driver(Options o) {
     if (o.help) { help(); return 0; }
     if (o.child) return curve_worker(o);
+    if(o.stop_handle) {
+        inherited_stop_event=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.stop_handle));
+        if(WaitForSingleObject(inherited_stop_event,0)==WAIT_FAILED)throw std::runtime_error("invalid inherited Stage2 stop event");
+    }
     if(!o.check_stage1_profile.empty()) {
         if(!o.save.empty() || !o.worktodo.empty() || !o.tune.empty() || o.auto_b2 || o.plan_only || o.dry ||
            o.b2 || o.has_carrier || !o.tune_profile.empty() || !o.stage1_profile.empty())
@@ -1216,6 +1230,7 @@ int driver(Options o) {
     const auto calibration_range=queue && !o.dry && o.short_calibration?portable_queue_range(worktodo,o.worker,tmp):std::vector<Record>{};
     uint64_t completed=0,failed_tasks=0;
     for (;;) {
+        poll_inherited_stop();
         fatal_log.clear();
         if(stop_requests)break;
         fs::path save;
@@ -1320,6 +1335,7 @@ int driver(Options o) {
             }
         }
         if(stage2_log::enabled(stage2_log::curve)||o.dry) {
+            if(o.gui_events && !task_line.empty())std::cout<<"START: "<<task_line<<std::endl;
             std::ostringstream message;
             message << "stage2_plan: save=" << save.string() << " requested=" << (count?std::to_string(count):"all")
                     << " available=" << plan.size() << " completed=" << state.done << " remaining=" << plan.size()-state.done
@@ -1329,6 +1345,7 @@ int driver(Options o) {
             report(message.str());
         }
         for(size_t i=static_cast<size_t>(state.done);i<plan.size();++i) {
+            poll_inherited_stop();
             if(stop_requests)break;
             const auto &r=plan[i];
             if(stage2_log::enabled(stage2_log::curve)||o.dry)

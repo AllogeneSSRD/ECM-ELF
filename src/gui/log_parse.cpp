@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <cmath>
 
 namespace ecmgui {
 namespace {
@@ -136,7 +138,91 @@ bool parse_p95_notice(const std::string &p, P95Notice &out) {
     return true;
 }
 
+bool parse_stage2(const std::string &line,Stage2Event &e) {
+    using Kind=Stage2Event::Kind;
+    auto integer=[&](const char *key,unsigned long long &value) {
+        long long v=0;if(read_kv_int(line,key,v) && v>=0)value=static_cast<unsigned long long>(v);
+    };
+    if(starts_with(line,"stage2_short_calibration:")) {
+        e.kind=Kind::Phase;e.phase="calibration";
+    } else if(starts_with(line,"stage2_short_calibration_done:")) {
+        e.kind=Kind::Phase;e.phase="starting";
+    } else if(starts_with(line,"stage2_plan:")) {
+        e.kind=Kind::Plan;integer("available",e.total);integer("completed",e.done);integer("B2",e.b2);integer("D",e.d);
+        const auto a=line.find("save="),b=line.find(" requested=");
+        if(a!=line.npos && b!=line.npos && b>a+5)e.save=line.substr(a+5,b-a-5);
+    } else if(starts_with(line,"curve_start:")) {
+        if(std::sscanf(line.c_str(),"curve_start: %llu/%llu record=%llu sigma=%llu B1=%llu",
+            &e.done,&e.total,&e.record,&e.sigma,&e.b1)<2)return false;
+        e.kind=Kind::CurveStart;
+    } else if(starts_with(line,"real_shape:") || starts_with(line,"stage2_real:")) {
+        e.kind=Kind::Shape;integer("B1",e.b1);integer("B2",e.b2);integer("D",e.d);integer("P",e.p);
+        if(!e.p){const char *key=" P=phi(D)/2=";const auto a=line.find(key);if(a!=line.npos){const char *value=line.c_str()+a+std::strlen(key);read_u64(value,e.p);}}
+        integer("S_bits",e.bits);if(!e.bits)integer("N_bits",e.bits);
+    } else if(starts_with(line,"stage2_phase:")) {
+        e.kind=Kind::Phase;const auto a=line.find(':')+1,b=line.find(" previous=");
+        e.phase=line.substr(a,(b==line.npos?line.size():b)-a);
+        while(!e.phase.empty() && e.phase.front()==' ')e.phase.erase(e.phase.begin());
+        read_after(line,"elapsed=",e.elapsed);
+    } else if(starts_with(line,"batched_progress:")) {
+        if(std::sscanf(line.c_str(),"batched_progress: batch=%llu/%llu",&e.batch,&e.batches)!=2)return false;
+        e.kind=Kind::Batch;read_after(line,"t=",e.elapsed);read_after(line,"left=",e.left);
+    } else if(starts_with(line,"stage2_full_wall:")) {
+        e.kind=Kind::FullWall;read_after(line,"total=",e.seconds);
+    } else if(starts_with(line,"stage2_result:")) {
+        e.kind=Kind::Result;integer("record",e.record);read_after(line,"seconds=",e.seconds);
+        const auto a=line.find("\"factors\":[");
+        if(a!=line.npos) {
+            const auto end=line.find(']',a+11);size_t at=a+11;
+            while(end!=line.npos && at<end) {
+                const auto q=line.find('"',at);if(q==line.npos || q>=end)break;
+                const auto r=line.find('"',q+1);if(r==line.npos || r>=end)break;
+                const auto factor=line.substr(q+1,r-q-1);
+                if(!factor.empty() && factor.find_first_not_of("0123456789")==factor.npos)e.factors.push_back(factor);
+                at=r+1;
+            }
+        }
+    } else if(starts_with(line,"curve_done:")) {
+        if(std::sscanf(line.c_str(),"curve_done: %llu/%llu record=%llu",&e.done,&e.total,&e.record)<2)return false;
+        e.kind=Kind::CurveDone;read_after(line,"wall=",e.seconds);
+    } else if(starts_with(line,"task_done:")) {
+        e.kind=Kind::TaskDone;integer("completed",e.done);
+    } else if(starts_with(line,"stage2_complete:") || starts_with(line,"stage2_stopped:"))e.kind=Kind::Complete;
+    return e.kind!=Kind::None;
+}
+
 } // namespace
+
+void Stage2Status::apply(const Stage2Event &e) {
+    using Kind=Stage2Event::Kind;valid=true;
+    if(e.kind==Kind::Plan) {
+        *this=Stage2Status{};valid=true;total=e.total;done=std::min(e.done,total);current=done;
+        b2=e.b2;d=e.d;save=e.save;phase="starting";
+    } else if(e.kind==Kind::CurveStart) {
+        total=e.total;current=std::min(e.done,total);done=current?current-1:0;
+        record=e.record;sigma=e.sigma;b1=e.b1;engine_seconds=0;batch=batches=0;batch_left=0;elapsed=0;phase="read";
+    } else if(e.kind==Kind::Shape) {
+        if(e.b1)b1=e.b1;if(e.b2)b2=e.b2;if(e.d)d=e.d;if(e.p)p=e.p;if(e.bits)bits=e.bits;
+    } else if(e.kind==Kind::Phase) {
+        phase=e.phase;elapsed=e.elapsed;batch=batches=0;batch_left=0;
+    } else if(e.kind==Kind::Batch) {
+        batch=e.batch;batches=e.batches;batch_left=e.left;
+    } else if(e.kind==Kind::FullWall)engine_seconds=e.seconds;
+    else if(e.kind==Kind::CurveDone) {
+        total=e.total;done=std::min(e.done,total);current=done;record=e.record;
+        const auto seconds=engine_seconds>0?engine_seconds:e.seconds;
+        if(seconds>0 && std::isfinite(seconds)){seconds_sum+=seconds;++measured_curves;}
+        batch=batches=0;batch_left=0;phase="curve_done";
+    } else if(e.kind==Kind::TaskDone){done=total;phase="task_done";}
+    else if(e.kind==Kind::Complete)phase="complete";
+}
+ProgressInfo Stage2Status::progress()const {
+    ProgressInfo out;out.valid=valid && total>0;out.gpu=true;
+    out.curves_done=done;out.curves_total=total;out.pct=total?100.*done/total:0;out.elapsed_s=elapsed;
+    out.bits=bits;
+    out.s_per_curve=measured_curves?seconds_sum/measured_curves:0;
+    out.eta_s=(total>done?total-done:0)*out.s_per_curve;return out;
+}
 
 std::string strip_ansi(const std::string &s) {
     std::string out;
@@ -201,6 +287,13 @@ ParsedLine parse_line(const std::string &line) {
     out.text = strip_ansi(line);
     split_timestamp(out.text, out.timestamp, out.plain);
     const std::string &p = out.plain;
+    if(parse_stage2(p,out.stage2)) {
+        out.queue_done=starts_with(p,"stage2_complete:");
+        const auto kind=out.stage2.kind;
+        const bool detail=kind==Stage2Event::Kind::Shape || kind==Stage2Event::Kind::Batch || kind==Stage2Event::Kind::FullWall;
+        out.kind=out.queue_done?LogKind::QueueDone:detail?LogKind::Raw:LogKind::Event;
+        return out;
+    }
 
     // ---- hit ---------------------------------------------------------------
     if (starts_with(p, "factor[")) {
@@ -347,7 +440,7 @@ ParsedLine parse_line(const std::string &line) {
     // ---- events / errors ---------------------------------------------------
     const bool is_error = starts_with(p, "ERROR") || starts_with(p, "# ERROR") ||
                           starts_with(p, "FATAL") || contains(p, "error:") ||
-                          contains(p, "warning:");
+                          contains(p, "warning:") || starts_with(p,"WARNING:") || starts_with(p,"ecm_cuda_stage2:");
     if (is_error) {
         out.kind = LogKind::Error;
         return out;

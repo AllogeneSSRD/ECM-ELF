@@ -23,6 +23,7 @@
     </Panel>
 
     <Panel id="gen">
+      <Item id="target_worker" name="队列目标 worker"/>
       <Item id="title"          name="生成器"/>
       <Item id="paste_hint"     name="输入 PrimeNet 任务「ECM= / ECM2= 」或打开文件；忽略 # 开头的注释行"/>
       <Item id="load_file"      name="打开文件…"/>
@@ -64,6 +65,18 @@
     </Panel>
 
     <Panel id="workers">
+      <Item id="default_engine" name="默认阶段"/>
+      <Item id="worker_count" name="Worker 数量"/>
+      <Item id="inherit_engine" name="继承 [GUI] stage；修改此行只重配该已停止 worker。"/>
+      <Item id="engine" name="计算阶段"/>
+      <Item id="engine_auto" name="自动"/>
+      <Item id="choose_exe" name="选择程序…"/>
+      <Item id="choose_ini" name="选择INI…"/>
+      <Item id="configuration_selected" name="已选择配置"/>
+      <Item id="known_factors" name="已知因子"/>
+      <Item id="task_unavailable" name="任务摘要不可用"/>
+      <Item id="stopping" name="停止中"/>
+      <Item id="follow_output" name="自动滚动到底部"/>
       <Item id="title"        name="Worker 管理"/>
       <Item id="col_state"    name="状态"/>
       <Item id="col_gpu"      name=" GPU "/>
@@ -84,8 +97,7 @@
       <Item id="show_raw"     name="原始输出"/>
       <Item id="speed_history" name="秒/曲线（越小越快）"/>
       <Item id="collecting"    name="正在采集…"/>
-      <Item id="m2_note"      name="worker = ecm_cuda.exe 进程，关闭 GUI 时可选择终止
-若工作进程崩溃，将自动重启至多 3 次"/>
+      <Item id="m2_note" name="每个worker管理一个计算程序。停止会请求安全退出；反复失败后停止自动重启。"/>
       <Item id="log_pane"     name="输出"/>
       <Item id="log_file"     name="日志文件"/>
       <Item id="open_saves"   name="打开存档目录"/>
@@ -140,5 +152,40 @@
       <Item id="first_seen"  name="首次命中"/>
     </Panel>
 
+    <Panel id="stage2">
+      <Item id="phase" name="阶段"/>
+      <Item id="curve" name="曲线"/>
+      <Item id="batch" name="巨步批次"/>
+      <Item id="phase_remaining" name="当前阶段剩余（估计）"/>
+      <Item id="finish_curve_stop" name="正在等待当前曲线完成后停止。"/>
+      <Item id="notice" name="Stage1存档 → 多项式Stage2 → GCD  |  运行中的worker：%d / %d"/>
+      <Item id="phase_starting" name="准备曲线"/>
+      <Item id="phase_calibration" name="启动短校准"/>
+      <Item id="phase_read" name="读取并验证存档"/>
+      <Item id="phase_plan" name="规划边界与显存"/>
+      <Item id="phase_baby" name="生成并归一化baby点"/>
+      <Item id="phase_ftree" name="构建F树"/>
+      <Item id="phase_inverse" name="准备多项式逆"/>
+      <Item id="phase_giant" name="giant点、G树与fold"/>
+      <Item id="phase_descent" name="归一化fold并下降F树"/>
+      <Item id="phase_gcd" name="叶乘积与GCD"/>
+      <Item id="phase_check" name="算术检查"/>
+      <Item id="phase_factor" name="因子分解"/>
+      <Item id="phase_publish" name="发布结果"/>
+      <Item id="phase_curve_done" name="曲线已完成"/>
+      <Item id="phase_done" name="任务已完成"/>
+    </Panel>
+    <Panel id="exit">
+      <Item id="confirm_mixed" name="%d个worker仍在运行。保存Stage1检查点并完成各自当前Stage2曲线后退出？"/>
+      <Item id="waiting_mixed" name="等待Stage1检查点及当前Stage2曲线完成（最多剩余%lld秒）…"/>
+      <Item id="confirm_stage1" name="%d个worker仍在运行。保存Stage1检查点后退出？"/>
+      <Item id="confirm_stage2" name="%d个worker仍在运行。等待各自当前Stage2曲线完成后退出？"/>
+      <Item id="stop_quit" name="停止并退出"/>
+      <Item id="cancel" name="取消"/>
+      <Item id="stopping_title" name="正在停止worker"/>
+      <Item id="waiting_stage1" name="等待Stage1写检查点并退出（最多剩余%lld秒）…"/>
+      <Item id="waiting_stage2" name="等待当前Stage2曲线完成并退出（最多剩余%lld秒）…"/>
+      <Item id="force_quit" name="强制退出（丢弃未完成计算）"/>
+    </Panel>
   </Native-Langue>
 </EcmGui>

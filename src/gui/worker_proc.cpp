@@ -103,7 +103,7 @@ void WorkerProc::configure(const WorkerSpawn &spawn, const WorkerLimits &limits)
 std::string WorkerProc::command_line() const {
     std::string cmd = spawn_.exe;
     if (!spawn_.ini.empty()) {
-        cmd += " -ini " + spawn_.ini;
+        cmd += (spawn_.stage2?" --ini ":" -ini ") + spawn_.ini;
     }
     cmd += " --worker " + std::to_string(spawn_.worker_index);
     for (const std::string &a : spawn_.extra_args) {
@@ -127,6 +127,7 @@ bool WorkerProc::start(std::string &err) {
     }
     want_running_ = true;
     saw_queue_done_ = false;
+    stage2_status_=Stage2Status{};
     state_ = WorkerRunState::Running;
     state_text_.clear();
     return true;
@@ -163,7 +164,7 @@ bool WorkerProc::spawn_locked(std::string &err) {
     std::wstring cmd;
     append_quoted(cmd, widen(spawn_.exe), true);
     if (!spawn_.ini.empty()) {
-        append_quoted(cmd, L"-ini", false);
+        append_quoted(cmd, spawn_.stage2?L"--ini":L"-ini", false);
         append_quoted(cmd, widen(spawn_.ini), false);
     }
     append_quoted(cmd, L"--worker", false);
@@ -179,7 +180,7 @@ bool WorkerProc::spawn_locked(std::string &err) {
         err = "CreateEventW failed (" + std::to_string(GetLastError()) + ")";
         return false;
     }
-    append_quoted(cmd, L"--stage1-stop-handle", false);
+    append_quoted(cmd, spawn_.stage2?L"--stage2-stop-handle":L"--stage1-stop-handle", false);
     append_quoted(cmd, std::to_wstring(reinterpret_cast<uintptr_t>(stop_event)), false);
     std::vector<wchar_t> mutable_cmd(cmd.begin(), cmd.end());
     mutable_cmd.push_back(L'\0');
@@ -306,6 +307,18 @@ void WorkerProc::drain(DrainedOutput &out) {
         // GUI window is just noise). Events keep the timestamp, raw does not (the
         // timestamp column is drawn by the UI).
         const ParsedLine pl = parse_line(l);
+        if(pl.stage2.kind!=Stage2Event::Kind::None && spawn_.stage2) {
+            stage2_status_.apply(pl.stage2);out.stage2=stage2_status_;
+            if(pl.stage2.kind==Stage2Event::Kind::Plan)out.stage2_task_started=true;
+            out.last_progress=stage2_status_.progress();++out.progress_lines;
+            if(pl.stage2.kind==Stage2Event::Kind::CurveDone)out.speed_sample=true;
+            for(const auto &factor:pl.stage2.factors) {
+                HitInfo hit;hit.factor=factor;hit.curve=static_cast<int>(stage2_status_.record);
+                hit.sigma=stage2_status_.sigma;hit.has_sigma=hit.sigma!=0;hit.param=0;
+                hit.save=stage2_status_.save;hit.curve_model="montgomery";hit.execution_target="gpu";
+                out.hits.push_back(std::move(hit));
+            }
+        }
         out.raw.push_back(pl.plain);
         if (pl.old_driver) out.old_driver = true;
         switch (pl.kind) {
@@ -339,13 +352,18 @@ void WorkerProc::poll(unsigned long long now_ms) {
             DWORD code = 0;
             GetExitCodeProcess(p, &code);
             exit_code_ = code;
-            reader_stop_ = true;
+            // Finish reading the final result/queue marker before deciding the
+            // state. A surviving descendant must not keep the output pipe open.
+            if(job_!=nullptr)TerminateJobObject(static_cast<HANDLE>(job_),code);
             if (reader_.joinable()) reader_.join();
+            reader_stop_ = true;
+            // The final marker can still be in the pipe queue when exit arrives.
+            {std::lock_guard<std::mutex> guard(mu_);for(const auto &line:lines_)if(parse_line(line).queue_done)saw_queue_done_=true;}
             close_handles();
             running_ = false;
             if (!want_running_) {
                 state_ = WorkerRunState::Stopped;
-                state_text_ = code == 0 ? "stopped" : "stopped; check checkpoint log";
+                state_text_ = code == 0 ? "stopped" : "stopped; check worker log";
                 return;
             }
 

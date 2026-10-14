@@ -259,7 +259,13 @@ def template(schema, release):
             prefix = "# " if o.get("template_comment") or o.get("worker_suffix") else ""
             out.append(f"{prefix}{o['key']} = {text(value)}".rstrip())
         out.append("")
-    out.extend(["# [Worker #2]", "# device = 1", "# worktodo = worktodo_2.txt", "# stage2_worktodo = stage2_worktodo_2.txt", ""])
+    out.extend(["# Mixed stages: GUI.NumWorkers=2; worker sections follow shared settings/GUI.",
+                "# 混合阶段：GUI.NumWorkers=2；worker分区放在共享设置及GUI之后。",
+                "# [Worker #1]", "# stage = stage1", "# device = 0", "# autostart = 0",
+                "# [Worker #2]", "# stage = stage2", "# stage2_device = 1", "# autostart = 0",
+                "# stage2_worktodo = stage2_worktodo_2.txt",
+                "# Stage2 queue for this worker must contain [Worker #2].",
+                "# 此worker的Stage2队列须包含[Worker #2]分区。", ""])
     return "\n".join(out)
 
 
@@ -286,6 +292,8 @@ def reference(schema):
            "B2: CLI(nonzero) > task(nonzero) > stage2_b2 > AutoB2",
            "CLI.sections: Worker#N=scope; other[]=label; label!=scope_reset",
            "GUI.sections: global|GUI|Worker#N; other[]=distinct_section",
+           "GUI.worker_stage: Worker#N.stage=[stage1|stage2] > GUI.stage; Worker#N.stage=auto => GUI.stage",
+           "shared_settings,GUI => before_Worker_sections; queue_without_header => Worker#1",
            "global_keys => before_first_section; grouping => #comment",
            "duplicate_key: last_in_layer; unknown_key: ignore",
            "invalid: S1=legacy_fallback; S2=error; GUI=fallback_or_clamp",

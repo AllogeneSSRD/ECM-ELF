@@ -23,6 +23,7 @@
     </Panel>
 
     <Panel id="gen">
+      <Item id="target_worker" name="Queue target worker"/>
       <Item id="title"          name="Generator"/>
       <Item id="paste_hint"     name="Paste PrimeNet assignments (ECM= / ECM2= lines) here, or load a file. Comment lines starting with # are ignored."/>
       <Item id="load_file"      name="Open file..."/>
@@ -64,6 +65,18 @@
     </Panel>
 
     <Panel id="workers">
+      <Item id="default_engine" name="Default stage"/>
+      <Item id="worker_count" name="Workers"/>
+      <Item id="inherit_engine" name="Inherits [GUI] stage; changing this row only reconfigures this stopped worker."/>
+      <Item id="engine" name="Engine"/>
+      <Item id="engine_auto" name="Auto"/>
+      <Item id="choose_exe" name="Choose program..."/>
+      <Item id="choose_ini" name="Choose INI..."/>
+      <Item id="configuration_selected" name="Configuration selected"/>
+      <Item id="known_factors" name="known factors"/>
+      <Item id="task_unavailable" name="Task details unavailable"/>
+      <Item id="stopping" name="Stopping"/>
+      <Item id="follow_output" name="Auto-scroll to bottom"/>
       <Item id="title"        name="Workers"/>
       <Item id="col_state"    name="State"/>
       <Item id="col_gpu"      name="GPU"/>
@@ -84,7 +97,7 @@
       <Item id="show_raw"     name="raw output"/>
       <Item id="speed_history" name="s/curve (lower is better)"/>
       <Item id="collecting"    name="collecting..."/>
-      <Item id="m2_note"      name="One worker = one ecm_cuda.exe process. Crashes restart after 5 s; three crashes in five minutes stop the worker (breaker). Closing the GUI stops them all."/>
+      <Item id="m2_note"      name="Each worker manages one engine process. Stop requests a safe exit; repeated failures stop automatic restarts."/>
       <Item id="log_pane"     name="Output"/>
       <Item id="log_file"     name="log file"/>
       <Item id="open_saves"   name="Open saves folder"/>
@@ -139,5 +152,40 @@
       <Item id="first_seen"  name="First seen"/>
     </Panel>
 
+    <Panel id="stage2">
+      <Item id="phase" name="Phase"/>
+      <Item id="curve" name="Curve"/>
+      <Item id="batch" name="Giant batch"/>
+      <Item id="phase_remaining" name="Current phase remaining (estimate)"/>
+      <Item id="finish_curve_stop" name="Finishing the current curve before stopping."/>
+      <Item id="notice" name="Stage1 saves to polynomial Stage2 to GCD  |  running %d / %d workers"/>
+      <Item id="phase_starting" name="Preparing the curve"/>
+      <Item id="phase_calibration" name="Short startup calibration"/>
+      <Item id="phase_read" name="Read and validate save"/>
+      <Item id="phase_plan" name="Plan bounds and memory"/>
+      <Item id="phase_baby" name="Generate and normalize baby points"/>
+      <Item id="phase_ftree" name="Build F tree"/>
+      <Item id="phase_inverse" name="Prepare polynomial inverse"/>
+      <Item id="phase_giant" name="Giant points, G trees and fold"/>
+      <Item id="phase_descent" name="Normalize fold and descend F tree"/>
+      <Item id="phase_gcd" name="Leaf products and GCD"/>
+      <Item id="phase_check" name="Validate arithmetic"/>
+      <Item id="phase_factor" name="Factor decomposition"/>
+      <Item id="phase_publish" name="Publish result"/>
+      <Item id="phase_curve_done" name="Curve completed"/>
+      <Item id="phase_done" name="Task completed"/>
+    </Panel>
+    <Panel id="exit">
+      <Item id="confirm_mixed" name="%d workers are running. Save Stage1 checkpoints and finish current Stage2 curves before quitting?"/>
+      <Item id="waiting_mixed" name="Waiting for Stage1 checkpoints and current Stage2 curves (up to %lld seconds left)..."/>
+      <Item id="confirm_stage1" name="%d workers are running. Save Stage1 checkpoints and quit?"/>
+      <Item id="confirm_stage2" name="%d workers are running. Finish each current Stage2 curve and quit?"/>
+      <Item id="stop_quit" name="Stop and quit"/>
+      <Item id="cancel" name="Cancel"/>
+      <Item id="stopping_title" name="Stopping workers"/>
+      <Item id="waiting_stage1" name="Waiting for Stage1 checkpoints and exit (up to %lld s left)..."/>
+      <Item id="waiting_stage2" name="Waiting for the current Stage2 curves and exit (up to %lld s left)..."/>
+      <Item id="force_quit" name="Force quit (unfinished work is lost)"/>
+    </Panel>
   </Native-Langue>
 </EcmGui>

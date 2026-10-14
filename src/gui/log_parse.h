@@ -20,6 +20,7 @@
 //   * a hit prints "factor[i]=<decimal>" and "FACTOR FOUND aid=... task=...".
 
 #include <string>
+#include <vector>
 
 namespace ecmgui {
 
@@ -59,6 +60,24 @@ struct HitInfo {
     std::string save;                    // save-file name (may be empty)
 };
 
+struct Stage2Event {
+    enum class Kind {None,Plan,CurveStart,Shape,Phase,Batch,FullWall,Result,CurveDone,TaskDone,Complete};
+    Kind kind=Kind::None;
+    unsigned long long total=0,done=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0;
+    double seconds=0,elapsed=0,left=0;
+    std::string save,phase;
+    std::vector<std::string> factors;
+};
+struct Stage2Status {
+    bool valid=false;
+    unsigned long long total=0,done=0,current=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0;
+    unsigned long long measured_curves=0;
+    double engine_seconds=0,seconds_sum=0,elapsed=0,batch_left=0;
+    std::string save,phase;
+    void apply(const Stage2Event &event);
+    ProgressInfo progress()const;
+};
+
 // One `p95_add:` notice, i.e. the outcome of handing a finished task to Prime95 through
 // worktodo.add (docs/usage/GUI.md). The driver emits exactly four shapes:
 //   p95_add: ready workers="1-8" file="<...>" pending=<n>
@@ -88,6 +107,7 @@ struct ParsedLine {
     std::string plain;       // text without the "[timestamp] " prefix
     std::string timestamp;   // "2026-09-28 18:42:41", empty when absent
     ProgressInfo progress;
+    Stage2Event stage2;
     bool is_hit = false;
     std::string factor;      // decimal factor of a hit ("factor[i]=<dec>")
     HitInfo hit;             // full D3 hit details (factor + friends)

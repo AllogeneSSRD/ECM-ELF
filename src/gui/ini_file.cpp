@@ -87,6 +87,16 @@ void IniFile::set(const std::string &section, const std::string &key,
     nl.key = key;
     nl.value = value;
     nl.raw = key + " = " + value;
+    const auto refresh_scopes=[this]() {
+        int scope=0;
+        for(auto &line:lines_) {
+            if(line.kind==Line::Kind::Section) {
+                const int worker=ecm_config::worker_header(ecm_config::trim(line.raw));
+                if(worker)scope=worker;
+            }
+            line.worker_scope=scope;
+        }
+    };
 
     if (section.empty()) {
         // Global keys live before the first section header.
@@ -95,6 +105,7 @@ void IniFile::set(const std::string &section, const std::string &key,
             if (lines_[i].kind == Line::Kind::Section) { pos = i; break; }
         }
         lines_.insert(lines_.begin() + static_cast<std::ptrdiff_t>(pos), nl);
+        refresh_scopes();
         dirty_ = true;
         return;
     }
@@ -119,6 +130,7 @@ void IniFile::set(const std::string &section, const std::string &key,
         hdr.raw = "[" + section + "]";
         lines_.push_back(hdr);
         lines_.push_back(nl);
+        refresh_scopes();
         dirty_ = true;
         return;
     }
@@ -129,6 +141,7 @@ void IniFile::set(const std::string &section, const std::string &key,
     // Step back over trailing blank lines so the new key stays inside the section.
     while (pos > sec_start + 1 && lines_[pos - 1].kind == Line::Kind::Blank) --pos;
     lines_.insert(lines_.begin() + static_cast<std::ptrdiff_t>(pos), nl);
+    refresh_scopes();
     dirty_ = true;
 }
 

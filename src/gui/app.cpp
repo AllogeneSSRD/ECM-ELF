@@ -1,5 +1,6 @@
 #include "app.h"
 #include "platform.h"
+#include "task_display.h"
 #include "../core/generated/ecm_config_generated.h"
 
 #include "imgui.h"
@@ -7,15 +8,29 @@
 
 #include <algorithm>
 #include <cctype>              /* std::tolower for the start_tab value */
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <sstream>
 
 namespace ecmgui {
+
+namespace {
+void bounded_progress(double fraction, const char *overlay=nullptr) {
+    const float width=ImGui::GetContentRegionAvail().x;
+    if(width<=0.0f) { ImGui::Dummy(ImVec2(0.0f,ImGui::GetFrameHeight()));return; }
+    const ImVec2 start=ImGui::GetCursorScreenPos();
+    ImGui::PushClipRect(start,ImVec2(start.x+width,start.y+ImGui::GetFrameHeight()),true);
+    const float value=std::isfinite(fraction)?static_cast<float>(std::clamp(fraction,0.0,1.0)):0.0f;
+    ImGui::ProgressBar(value,ImVec2(width,0.0f),overlay);
+    ImGui::PopClipRect();
+}
+}
 
 // Bumped whenever the default layout changes: an ini carrying an older number gets
 // the new default layout instead of keeping the old arrangement.
@@ -44,6 +59,62 @@ std::string path_resolve(const std::string &base, const std::string &value) {
     if (value.empty()) return std::string();
     if (path_is_absolute(value)) return value;
     return path_join(base, value);
+}
+bool is_stage2_exe(std::string name) {
+    name=file_name(name);for(char &c:name)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return name.find("stage2")!=name.npos;
+}
+std::string resolve_gui_exe(const std::string &value) {
+    const auto local=path_resolve(exe_dir(),value);
+    return file_exists(local) || value.find_first_of("\\/")!=value.npos?local:value;
+}
+std::string adjacent_stage2_exe() {
+    const auto direct=path_join(exe_dir(),"ecm_cuda_stage2.exe");if(file_exists(direct))return direct;
+    std::vector<std::string> candidates;std::error_code error;
+    for(const auto &item:std::filesystem::directory_iterator(std::filesystem::u8path(exe_dir()),error)) {
+        if(error)break;
+        const auto name=item.path().filename().u8string();
+        if(name.compare(0,11,"cuda-stage2"))continue;
+        const auto exe=(item.path()/"ecm_cuda_stage2.exe").u8string();
+        if(file_exists(exe))candidates.push_back(exe);
+    }
+    return candidates.size()==1?candidates.front():"ecm_cuda_stage2.exe";
+}
+std::string queue_task(const std::string &path,int worker) {
+    std::ifstream in(std::filesystem::u8path(path));std::vector<std::pair<int,std::string>> tasks;
+    std::string line;int section=1;
+    while(std::getline(in,line)) {
+        const auto a=line.find_first_not_of(" \t\r");if(a==line.npos)continue;line.erase(0,a);
+        auto lower=line;for(char &c:lower)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if(line.front()=='[') {
+            const auto hash=lower.find('#'),end=lower.find(']');section=-1;
+            if(lower.find("worker")!=lower.npos && hash!=lower.npos && end!=lower.npos) {
+                const auto digits=lower.substr(hash+1,end-hash-1);section=std::atoi(digits.c_str());
+            }
+        } else if(line.front()!='#' && line.front()!=';' &&
+            (lower.compare(0,4,"ecm=")==0 || lower.compare(0,5,"ecm2=")==0 || lower.compare(0,10,"ecmstage2=")==0))
+            tasks.emplace_back(section,line);
+    }
+    for(const auto &task:tasks)if(task.first==worker)return task.second;
+    return {};
+}
+const char *stage2_phase_key(const std::string &phase) {
+    if(phase=="starting")return "phase_starting";
+    if(phase=="calibration")return "phase_calibration";
+    if(phase=="read" || phase.find("Read and validate")==0)return "phase_read";
+    if(phase.find("Plan Stage2")==0)return "phase_plan";
+    if(phase.find("Generate and normalize")==0)return "phase_baby";
+    if(phase.find("Build baby-point")==0)return "phase_ftree";
+    if(phase.find("Prepare polynomial inverse")==0)return "phase_inverse";
+    if(phase.find("Giant points")==0)return "phase_giant";
+    if(phase.find("Normalize fold")==0)return "phase_descent";
+    if(phase.find("Accumulate leaf")==0)return "phase_gcd";
+    if(phase.find("Validate arithmetic")==0)return "phase_check";
+    if(phase.find("Optional factor")==0)return "phase_factor";
+    if(phase.find("Publish result")==0)return "phase_publish";
+    if(phase=="curve_done")return "phase_curve_done";
+    if(phase=="task_done" || phase=="complete")return "phase_done";
+    return "phase_starting";
 }
 
 // The layout blob (ImGui's own settings: dock nodes, panel sizes, viewport
@@ -153,6 +224,7 @@ const WorkerRunState *all_worker_states(int *count) {
 
 bool App::init(const std::string &ini_path, const std::string &language, std::string &err) {
     ini_path_ = ini_path.empty() ? default_ini_path() : ini_path;
+    if(!path_is_absolute(ini_path_))ini_path_=std::filesystem::absolute(std::filesystem::u8path(ini_path_)).u8string();
     err.clear();
 
     if (!ini_.load(ini_path_, err)) {
@@ -197,6 +269,7 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
     layout_blob_loaded_=unescape_blob(gui.dock_layout);
     num_workers_=gui.NumWorkers;
     worker_exe_=gui.exe;
+    engine_stage_=gui.stage;stage2_exe_=gui.stage2_exe;
     // Font: 0 = auto (the host scales 15 px by the window DPI), or an explicit pixel
     // size; `font` names a .ttf/.ttc, empty lets the host pick (CJK font for a CJK
     // language, else a Latin system font). A FRACTIONAL size is allowed on purpose:
@@ -299,6 +372,11 @@ void App::record_hit(const WorkerView &w, const HitInfo &hit) {
         }
         r.exponent = exponent;
     }
+    if(w.stage2) {
+        const auto summary=task_display(w.task);
+        if(summary.valid && summary.number.size()>1 && summary.number.front()=='M')r.exponent=std::atoi(summary.number.c_str()+1);
+        r.b1=static_cast<double>(w.stage2_status.b1);r.b1_text=std::to_string(w.stage2_status.b1);
+    }
 
     std::string err;
     if (!results_.add(r, err)) {
@@ -335,15 +413,15 @@ void App::set_trace(std::function<void(const std::string &)> fn) {
     pending_trace_.clear();
 }
 
-std::string App::resolve_worker_exe() const {
-    if (!worker_exe_.empty()) {
+std::string App::resolve_stage1_exe() const {
+    if (!worker_exe_.empty() && !is_stage2_exe(worker_exe_)) {
         // Relative paths resolve against the GUI's own directory.
         if (worker_exe_.find('\\') == std::string::npos &&
             worker_exe_.find('/') == std::string::npos) {
             const std::string local = path_join(exe_dir(), worker_exe_);
             if (file_exists(local)) return local;
         }
-        return worker_exe_;
+        return resolve_gui_exe(worker_exe_);
     }
     for (const char *name : {"ecm_cuda.exe", "ecm.exe"}) {
         const std::string local = path_join(exe_dir(), name);
@@ -351,81 +429,142 @@ std::string App::resolve_worker_exe() const {
     }
     return "ecm_cuda.exe";                 // last resort: PATH lookup
 }
+bool App::stage2_mode() const {
+    if(engine_stage_=="stage2")return true;
+    if(engine_stage_=="stage1")return false;
+    if(!worker_exe_.empty())return is_stage2_exe(worker_exe_);
+    return !file_exists(resolve_stage1_exe()) && (!stage2_exe_.empty() || file_exists(resolve_stage2_exe()));
+}
+std::string App::resolve_stage2_exe() const {
+    if(resolved_stage2_exe_.empty())resolved_stage2_exe_=!stage2_exe_.empty()?resolve_gui_exe(stage2_exe_):
+        is_stage2_exe(worker_exe_)?resolve_gui_exe(worker_exe_):adjacent_stage2_exe();
+    return resolved_stage2_exe_;
+}
+bool App::worker_stage2(int worker_index) const {
+    const auto worker=ecm_config::read_worker(ecm_config::section_entries(ini_.lines(),"Worker #"+std::to_string(worker_index)));
+    return worker.stage=="stage2" || (worker.stage=="auto" && stage2_mode());
+}
+std::string App::resolve_worker_exe(int worker_index) const {
+    return (worker_index>0?worker_stage2(worker_index):stage2_mode())?resolve_stage2_exe():resolve_stage1_exe();
+}
+std::string App::task_text(const WorkerView &worker) const {
+    return task_caption(worker.task,loc_.t("workers","known_factors"),"assignment ID",loc_.t("workers","task_unavailable"));
+}
+bool App::select_workflow_ini(const std::string &path) {
+    for(const auto &w:workers_)if(w.proc && (w.proc->running() || w.proc->state()==WorkerRunState::Restarting))return false;
+    IniFile selected;std::string error;if(!selected.load(path,error)){status_=error;return false;}
+    try {
+        const auto gui=ecm_config::read_gui(ecm_config::section_entries(selected.lines(),"GUI"));
+        for(int i=1;i<=gui.NumWorkers;++i) {
+            const auto entries=ecm_config::cli_entries(selected.lines(),i,true);
+            ecm_config::read_stage1(entries);ecm_config::read_stage2(entries);
+        }
+        capture_layout();if(!ini_.save(error)){status_=error;return false;}
+        if(selected.has("GUI","exe"))worker_exe_=gui.exe;
+        if(selected.has("GUI","stage2_exe"))stage2_exe_=gui.stage2_exe;
+        if(selected.has("GUI","stage"))engine_stage_=gui.stage;
+        else {
+            const auto adjacent=path_join(path_dir(path),"ecm_cuda_stage2.exe");
+            if(file_exists(adjacent) && !file_exists(path_join(path_dir(path),"ecm_cuda.exe"))) {
+                engine_stage_="stage2";if(!selected.has("GUI","stage2_exe"))stage2_exe_=adjacent;
+            }
+        }
+        num_workers_=gui.NumWorkers;priority_=gui.priority;
+        exit_confirm_=gui.exit_confirm;graceful_stop_ms_=static_cast<unsigned long long>(gui.graceful_stop_ms);
+        ini_=std::move(selected);ini_path_=std::filesystem::absolute(std::filesystem::u8path(path)).u8string();
+        rebuild_workers();autostart_done_=true;selected_worker_=0;
+        status_=loc_.t("workers","configuration_selected")+": "+ini_path_;return true;
+    } catch(const std::exception &e){status_=e.what();return false;}
+}
 
 void App::rebuild_workers() {
     workers_.clear();
-    const std::string exe = resolve_worker_exe();
-    WorkerLimits limits;
-    for (int i = 1; i <= num_workers_; ++i) {
-        const std::string sec = "Worker #" + std::to_string(i);
-        WorkerView w;
-        w.index = i;
-        auto worker_entries=ecm_config::section_entries(ini_.lines(),sec);
-        if(!ini_.has(sec,"gpucurves") && ini_.has("","gpucurves"))
-            ecm_config::replace_entry(worker_entries,"gpucurves",ini_.get("","gpucurves"));
-        const auto worker=ecm_config::read_worker(worker_entries);
-        w.name=worker.name;
-        if(!ini_.has(sec,"name")) {
-            const auto token=w.name.find("{N}");
-            if(token!=w.name.npos)w.name.replace(token,3,std::to_string(i));
-        }
-        w.device=ini_.get_int(sec,"device",ini_.get_int("","device",ecm_config::defaults::stage1_device));
-        w.curve_model=ini_.get(sec,"curve",ini_.get("","curve",ecm_config::defaults::stage1_curve));
-        w.execution_target=ini_.get(sec,"target",ini_.get("","target",ecm_config::defaults::stage1_target));
-        w.gpucurves=worker.gpucurves;
-        w.worktodo=ini_.get(sec,"worktodo",ini_.get("","worktodo",ecm_config::defaults::stage1_worktodo));
-        w.log_file=ini_.get(sec,"log_file",ini_.get("","log_file",ecm_config::defaults::stage1_log_file));
-        if(i>1&&!ini_.has(sec,"log_file")&&!ini_.has("","log_file"))
-            w.log_file=ecm_config::worker_file(ecm_config::defaults::stage1_log_file,i);
-        w.extra_args=worker.extra_args;
-        w.autostart=worker.autostart!=0;
-        w.effective_config = effective_config_text(i);
+    resolved_stage2_exe_.clear();
+    gen_has_preview_=false;
+    for(int i=1;i<=num_workers_;++i)workers_.push_back(make_worker(i));
+    gen_worker_index_=std::clamp(gen_worker_index_,1,num_workers_);
+    gen_target_device_=workers_[static_cast<size_t>(gen_worker_index_-1)].device;
+    if(workers_[static_cast<size_t>(gen_worker_index_-1)].stage2)gen_use_recommended_=false;
+    refresh_device_warnings();
+}
 
-        WorkerSpawn spawn;
-        spawn.exe = exe;
-        spawn.ini = ini_path_;
-        spawn.worker_index = i;
-        spawn.priority = priority_;
-        // Run the driver in ITS OWN directory. The driver builds the checkpoint name with
-        // no path (kernels/cuda/cgbn_stage1.cu: get_checkpoint_filename -> ".ecm_ckpt_<n>_…dat"),
-        // so it is created relative to the current directory: without this the checkpoints
-        // of a GUI started from anywhere else land next to the GUI instead of next to the
-        // driver -- which also broke the "wait for a fresh checkpoint" exit flow, because
-        // the GUI watches <driver dir>. This matches how a user runs ecm_cuda by hand.
-        {
-            const std::size_t slash = exe.find_last_of("\\/");
-            if (slash != std::string::npos) spawn.working_dir = exe.substr(0, slash);
-        }
-        {
-            // extra_args is space separated; quotes are honoured so a path can
-            // contain spaces.
-            const std::string &s = w.extra_args;
-            std::string cur;
-            bool in_quotes = false;
-            for (char c : s) {
-                if (c == '"') { in_quotes = !in_quotes; continue; }
-                if (!in_quotes && (c == ' ' || c == '\t')) {
-                    if (!cur.empty()) { spawn.extra_args.push_back(cur); cur.clear(); }
-                    continue;
-                }
-                cur.push_back(c);
-            }
-            if (!cur.empty()) spawn.extra_args.push_back(cur);
-        }
-        w.proc.reset(new WorkerProc());
-        w.proc->configure(spawn, limits);
-        w.proc->set_autostart(w.autostart);
-        workers_.push_back(std::move(w));
+WorkerView App::make_worker(int index) const {
+    const std::string section="Worker #"+std::to_string(index);
+    auto gui_entries=ecm_config::section_entries(ini_.lines(),section);
+    if(!ini_.has(section,"gpucurves") && ini_.has("","gpucurves"))
+        ecm_config::replace_entry(gui_entries,"gpucurves",ini_.get("","gpucurves"));
+    const auto worker=ecm_config::read_worker(gui_entries);
+    WorkerView w;
+    w.index=index;w.stage=worker.stage;w.stage2=worker_stage2(index);
+    w.exe=resolve_worker_exe(index);
+    // Stage1 resolves paths beside its executable; Stage2 resolves INI paths
+    // beside the shared INI. An adjacent pair therefore shares one work directory.
+    w.working_dir=w.stage2?path_dir(ini_path_):path_dir(w.exe);
+    if(w.working_dir.empty())w.working_dir=exe_dir();
+    w.name=worker.name;
+    if(!ini_.has(section,"name")) {
+        const auto token=w.name.find("{N}");
+        if(token!=w.name.npos)w.name.replace(token,3,std::to_string(index));
     }
-    // Duplicate-device warning (docs/usage/GUI.md 5.7): the driver cannot see
-    // other workers, so this check only exists here.
-    std::map<int, int> seen;
-    for (const WorkerView &w : workers_) {
-        if (w.execution_target == "gpu") seen[w.device]++;
+    const auto entries=ecm_config::cli_entries(ini_.lines(),index,true);
+    const auto stage1=ecm_config::read_stage1(entries);
+    w.device=stage1.device;w.curve_model=stage1.curve_model;w.execution_target=stage1.execution_target;
+    w.gpucurves=worker.gpucurves;
+    w.worktodo=path_resolve(w.working_dir,stage1.worktodo);
+    const auto log=index>1 && !stage1.log_file_explicit && stage1.log_file==ecm_config::defaults::stage1_log_file?
+        ecm_config::worker_file(stage1.log_file,index):stage1.log_file;
+    w.log_file=path_resolve(w.working_dir,log);
+    if(w.stage2) {
+        const auto stage2=ecm_config::read_stage2(entries);
+        w.execution_target="gpu";w.curve_model="montgomery";
+        if(stage2.device>=0)w.device=stage2.device;
+        w.worktodo=path_resolve(path_dir(ini_path_),stage2.worktodo);
+        w.log_file=stage2.has_log?path_resolve(path_dir(ini_path_),stage2.log):
+            path_resolve(path_dir(ini_path_),ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,index));
     }
-    for (WorkerView &w : workers_) {
-        w.duplicate_device = (w.execution_target == "gpu" && seen[w.device] > 1);
+    w.task=queue_task(w.worktodo,index);
+    w.extra_args=worker.extra_args;w.autostart=worker.autostart!=0;
+    w.effective_config=effective_config_text(index);
+    WorkerSpawn spawn;
+    spawn.exe=w.exe;spawn.ini=ini_path_;spawn.working_dir=w.working_dir;
+    spawn.worker_index=index;spawn.priority=priority_;spawn.stage2=w.stage2;
+    if(w.stage2)spawn.extra_args={"--gui-events","--log-level","batches"};
+    std::string arg;bool quoted=false;
+    for(char c:w.extra_args) {
+        if(c=='"'){quoted=!quoted;continue;}
+        if(!quoted && (c==' ' || c=='\t')) {
+            if(!arg.empty()){spawn.extra_args.push_back(arg);arg.clear();}
+        } else arg.push_back(c);
     }
+    if(!arg.empty())spawn.extra_args.push_back(arg);
+    w.proc.reset(new WorkerProc());w.proc->configure(spawn,WorkerLimits{});
+    w.proc->set_autostart(w.autostart);
+    return w;
+}
+
+void App::refresh_device_warnings() {
+    std::map<int,int> seen;
+    for(const auto &w:workers_)if(w.execution_target=="gpu")++seen[w.device];
+    for(auto &w:workers_)w.duplicate_device=w.execution_target=="gpu" && seen[w.device]>1;
+}
+
+bool App::set_worker_stage(int index,const std::string &stage) {
+    for(auto &w:workers_)if(w.index==index) {
+        if(w.proc && (w.proc->running() || w.proc->state()==WorkerRunState::Restarting))return false;
+        const auto section="Worker #"+std::to_string(index);
+        const auto previous=w.stage;
+        ini_.set(section,"stage",stage);
+        try {
+            auto replacement=make_worker(index);
+            std::string error;
+            if(!ini_.save(error)){ini_.set(section,"stage",previous);status_=error;return false;}
+            w=std::move(replacement);
+            refresh_device_warnings();gen_has_preview_=false;
+            if(index==gen_worker_index_){gen_target_device_=w.device;if(w.stage2)gen_use_recommended_=false;}
+            return true;
+        } catch(const std::exception &e){ini_.set(section,"stage",previous);status_=e.what();return false;}
+    }
+    return false;
 }
 
 void App::start_all() {
@@ -449,7 +588,7 @@ void App::stop_all() {
     // button labelled "Stop" surprised the user (2026-09-28).
     for (WorkerView &w : workers_) {
         if (w.proc == nullptr) continue;
-        if (w.proc->running()) request_stop(w.index);
+        if (w.proc->running() || w.proc->state()==WorkerRunState::Restarting) request_stop(w.index);
     }
 }
 
@@ -503,7 +642,7 @@ void App::tick() {
             // Sample for the chart. The driver emits progress lines at a decaying rate, so
             // every line is worth keeping when it carries new information. The series holds
             // SECONDS PER CURVE (see WorkerView::hist_s_per_curve).
-            if (w.progress.s_per_curve > 0.0) {
+            if (w.progress.s_per_curve > 0.0 && (!w.stage2 || d.speed_sample)) {
                 w.hist_s_per_curve.push_back(static_cast<float>(w.progress.s_per_curve));
             }
             const std::size_t cap = 600;
@@ -529,6 +668,10 @@ void App::tick() {
         if (!d.last_start_line.empty()) {
             w.task = d.last_start_line;
             trace("worker " + std::to_string(w.index) + ": task " + w.task);
+        }
+        if(d.stage2.valid) {
+            w.stage2_status=d.stage2;
+            if(d.last_start_line.empty() && (d.stage2_task_started || w.task.empty()))w.task=queue_task(w.worktodo,w.index);
         }
         // "Resuming from checkpoint: 23.8% complete" / "Checkpoint loaded: … (23.8%)" tells
         // the GUI where the task already stands. That matters because the driver's redirected
@@ -602,33 +745,23 @@ void App::tick() {
 }
 
 std::string App::effective_config_text(int worker_index) const {
-    const std::string sec = "Worker #" + std::to_string(worker_index);
-    // Resolve "section -> global -> default" exactly like the driver does, and show
-    // which layer each key came from: this is the panel that answers "I changed the
-    // ini, why did nothing happen?".
-    std::vector<std::string> keys;
-    std::set<std::string> seen;
-    const auto collect = [&](const std::string &section) {
-        for (const IniFile::Line &l : ini_.lines()) {
-            if (l.kind != IniFile::Line::Kind::KeyValue || l.section != section) continue;
-            if (seen.insert(l.key).second) keys.push_back(l.key);
-        }
-    };
-    collect("");
-    collect(sec);
-
-    std::ostringstream oss;
-    for (const std::string &k : keys) {
-        const bool in_sec = ini_.has(sec, k);
-        const bool in_global = ini_.has("", k);
-        const std::string v = in_sec ? ini_.get(sec, k) : ini_.get("", k);
-        oss << k << " = " << v
-            << (in_sec ? "   [" + sec + "]"
-                       : (in_global ? "   [global]" : "   [built-in]" ))
-            << "\n";
+    const auto section="Worker #"+std::to_string(worker_index);
+    const auto worker=ecm_config::read_worker(ecm_config::section_entries(ini_.lines(),section));
+    std::ostringstream out;
+    out<<"stage = "<<(worker_stage2(worker_index)?"stage2":"stage1")
+       <<(worker.stage=="auto"?"   [GUI default]":"   ["+section+"]")<<"\n"
+       <<"exe = "<<resolve_worker_exe(worker_index)<<"\n";
+    std::set<std::string> keys;
+    for(const auto &binding:ecm_config::stage1_bindings)keys.insert(binding.key);
+    for(const auto &binding:ecm_config::stage2_bindings)keys.insert(binding.key);
+    const auto entries=ecm_config::cli_entries(ini_.lines(),worker_index,true);
+    for(const auto &entry:entries)if(keys.count(entry.first)) {
+        bool overridden=false;
+        for(const auto &line:ini_.lines())if(line.kind==IniFile::Line::Kind::KeyValue &&
+            line.worker_scope==worker_index && ecm_config::lower(line.key)==entry.first)overridden=true;
+        out<<entry.first<<" = "<<entry.second<<(overridden?"   ["+section+"]":"   [global]")<<"\n";
     }
-    if (keys.empty()) oss << "(the ini defines no keys yet)\n";
-    return oss.str();
+    return out.str();
 }
 
 void App::on_imgui_ready() {
@@ -666,6 +799,7 @@ void App::capture_layout(bool save_docking_layout) {
     ini_.set_int("GUI", "refresh_hz", refresh_hz_);
     ini_.set_int("GUI", "gpu_poll_ms", gpu_poll_ms_);
     ini_.set("GUI", "priority", priority_);
+    ini_.set("GUI","stage",engine_stage_);ini_.set("GUI","exe",worker_exe_);ini_.set("GUI","stage2_exe",stage2_exe_);
 }
 
 bool App::shutdown(std::string &err, bool save_docking_layout) {
@@ -879,14 +1013,10 @@ bool parse_resume_pct(const std::string &line, double &pct) {
     return false;
 }
 
-std::string App::worker_dir() const {
-    // The driver resolves its relative paths against its OWN directory, and that is where
-    // it writes .ecm_ckpt_*.dat -- which the graceful stop watches to know that the
-    // worker's work is safely on disk.
-    const std::string exe = resolve_worker_exe();
-    const std::size_t slash = exe.find_last_of("\\/");
-    if (slash == std::string::npos) return exe_dir();
-    return exe.substr(0, slash);
+std::string App::worker_dir(int worker_index) const {
+    if(worker_index>0)for(const auto &w:workers_)if(w.index==worker_index)return w.working_dir;
+    const auto directory=path_dir(resolve_stage1_exe());
+    return directory.empty()?exe_dir():directory;
 }
 
 bool App::request_close() {
@@ -924,14 +1054,15 @@ bool App::request_close() {
 void App::request_stop(int worker_index) {
     for (WorkerView &w : workers_) {
         if (w.index != worker_index) continue;
-        if (w.proc == nullptr || !w.proc->running()) return;
+        if (w.proc == nullptr) return;
+        if(!w.proc->running()) {if(w.proc->state()==WorkerRunState::Restarting)w.proc->stop();return;}
         w.stop_requested = true;
         w.ckpt_seen = false;
-        w.ckpt_baseline = newest_checkpoint_mtime(worker_dir(), nullptr);
+        w.ckpt_baseline = w.stage2?0:newest_checkpoint_mtime(worker_dir(w.index), nullptr);
         w.stop_deadline_ms = mono_ms() + graceful_stop_ms_;
         w.proc->request_checkpoint_stop();
         trace("worker " + std::to_string(w.index) +
-              ": stop requested (waiting for a checkpoint, max " +
+              (w.stage2?": stop requested (finishing current Stage2 curve, max ":": stop requested (waiting for a checkpoint, max ") +
               std::to_string(graceful_stop_ms_ / 1000) + " s)");
         return;
     }
@@ -944,11 +1075,11 @@ void App::begin_graceful_exit() {
         if (w.proc == nullptr || !w.proc->running()) continue;
         w.stop_requested = true;
         w.ckpt_seen = false;
-        w.ckpt_baseline = newest_checkpoint_mtime(worker_dir(), nullptr);
+        w.ckpt_baseline = w.stage2?0:newest_checkpoint_mtime(worker_dir(w.index), nullptr);
         w.stop_deadline_ms = exit_deadline_ms_;
         w.proc->request_checkpoint_stop();
         trace("worker " + std::to_string(w.index) +
-              ": graceful stop requested (waiting for a checkpoint, max " +
+              (w.stage2?": graceful stop requested (finishing current Stage2 curve, max ":": graceful stop requested (waiting for a checkpoint, max ") +
               std::to_string(graceful_stop_ms_ / 1000) + " s)");
     }
 }
@@ -962,9 +1093,9 @@ void App::tick_graceful_stops(unsigned long long now) {
             w.stop_requested = false;
             continue;
         }
-        if (!w.ckpt_seen) {
+        if (!w.stage2 && !w.ckpt_seen) {
             std::string name;
-            const long long m = newest_checkpoint_mtime(worker_dir(), &name);
+            const long long m = newest_checkpoint_mtime(worker_dir(w.index), &name);
             if (m != 0 && m > w.ckpt_baseline) {
                 w.ckpt_seen = true;
                 trace("worker " + std::to_string(w.index) + ": checkpoint file updated (" + name +
@@ -1006,6 +1137,12 @@ void App::tick_graceful_stops(unsigned long long now) {
 }
 
 bool App::draw_exit_modal() {
+    const auto exit_key=[&](const char *stage1,const char *stage2,const char *mixed) {
+        bool has_stage1=false,has_stage2=false;
+        for(const auto &w:workers_)if(w.proc && w.proc->running()){if(w.stage2)has_stage2=true;else has_stage1=true;}
+        return has_stage1 && has_stage2?mixed:has_stage2?stage2:stage1;
+    };
+
     if (exit_phase_ == ExitPhase::Idle) return false;
     const char *title = "###exit_modal";
     if (exit_phase_ == ExitPhase::Confirm) {
@@ -1025,19 +1162,17 @@ bool App::draw_exit_modal() {
                 if (w.proc != nullptr && w.proc->running()) ++running;
             }
             char buf[256];
-            std::snprintf(buf, sizeof(buf),
-                          "%d worker(s) are still running. Stop them (each one writes a "
-                          "checkpoint first) and quit?", running);
+            std::snprintf(buf, sizeof(buf),loc_.t("exit",exit_key("confirm_stage1","confirm_stage2","confirm_mixed")).c_str(),running);
             ImGui::TextWrapped("%s", buf);
             ImGui::Separator();
-            if (ImGui::Button("Stop and quit", ImVec2(160.0f, 0.0f)) ||
+            if (ImGui::Button(loc_.t("exit","stop_quit").c_str(), ImVec2(160.0f, 0.0f)) ||
                 ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
                 trace("exit: confirmed by the user");
                 ImGui::CloseCurrentPopup();
                 begin_graceful_exit();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f)) ||
+            if (ImGui::Button(loc_.t("exit","cancel").c_str(), ImVec2(120.0f, 0.0f)) ||
                 ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 trace("exit: cancelled by the user");
                 exit_phase_ = ExitPhase::Idle;
@@ -1060,20 +1195,19 @@ bool App::draw_exit_modal() {
             (exit_deadline_ms_ > now) ? static_cast<long long>(exit_deadline_ms_ - now) : 0;
         ImGui::SetNextWindowPos(ImVec2(vp->GetCenter().x, vp->GetCenter().y), ImGuiCond_Always,
                                 ImVec2(0.5f, 0.5f));
-        ImGui::Begin("Stopping workers###exit_stopping", nullptr,
+        ImGui::Begin((loc_.t("exit","stopping_title")+"###exit_stopping").c_str(), nullptr,
                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse |
                          ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings);
-        ImGui::TextWrapped("Waiting for workers to save and exit (up to %lld s left) ...",
-                           left_ms / 1000);
+        ImGui::TextWrapped(loc_.t("exit",exit_key("waiting_stage1","waiting_stage2","waiting_mixed")).c_str(),left_ms/1000);
         ImGui::Separator();
         for (const WorkerView &w : workers_) {
             if (w.proc == nullptr) continue;
             const bool running = w.proc->running();
-            const char *state = !running ? "stopped" : "saving and stopping";
-            ImGui::Text("Worker #%d: %s", w.index, state);
+            const auto state=loc_.t("workers",!running?"state_stopped":"stopping");
+            ImGui::Text("Worker #%d (%s): %s",w.index,w.stage2?"Stage2":"Stage1",state.c_str());
         }
         ImGui::Separator();
-        if (ImGui::Button("Force quit (no fresh checkpoint)", ImVec2(280.0f, 0.0f)) ||
+        if (ImGui::Button(loc_.t("exit","force_quit").c_str(), ImVec2(280.0f, 0.0f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             trace("exit: forced by the user (no fresh checkpoint)");
             stop_all_quietly();
@@ -1457,7 +1591,16 @@ void App::draw_p95_notice(float height, float host_top) {
         bg = ImVec4(0.05f, 0.20f, 0.07f, 1.0f);
         marker = "[OK] ";
     }
+    bool has_stage1=false;int stage1_running=0,stage2_running=0;
+    for(const auto &w:workers_){if(!w.stage2)has_stage1=true;if(w.proc && w.proc->running()){if(w.stage2)++stage2_running;else ++stage1_running;}}
+    if(!has_stage1) {
+        const int running=stage2_running;
+        std::snprintf(buf,sizeof(buf),loc_.t("stage2","notice").c_str(),running,static_cast<int>(workers_.size()));
+        marker="Stage2  |  ";detail.clear();extra=0;level=running?1:0;
+        fg=ImVec4(.82f,.77f,1.f,1.f);bg=ImVec4(.14f,.11f,.22f,1.f);
+    }
     std::string line = marker + buf;
+    if(has_stage1)line+=" | Stage1: "+std::to_string(stage1_running)+"  Stage2: "+std::to_string(stage2_running);
     if (!detail.empty()) line += " - " + detail;
     if (extra > 0) line += " (+" + std::to_string(extra) + ")";
 
@@ -1474,7 +1617,7 @@ void App::draw_p95_notice(float height, float host_top) {
     ImGui::PushStyleColor(ImGuiCol_Text, fg);
     ImGui::TextUnformatted(line.c_str());
     ImGui::PopStyleColor();
-    if (!p95_worktodo_path_.empty()) {
+    if (has_stage1 && !p95_worktodo_path_.empty()) {
         ImGui::SameLine();
         if (ImGui::SmallButton(loc_.t("p95", "open_dir").c_str())) {
             open_in_explorer(path_dir(p95WorktodoPath()));
@@ -1524,11 +1667,8 @@ void App::draw_p95_notice(float height, float host_top) {
 // ---- worktodo generator (M6 scope A, docs/usage/GUI.md 19) -------------------------
 
 std::string App::genWorktodoPath() const {
-    // The file the driver's queue reads: the ini's `worktodo` key, resolved against the
-    // worker executable's directory (what the driver does with a relative value). An absolute
-    // value must NOT be prefixed again -- measured 2026-09-29 in the test sandbox:
-    // "D:\...\sandbox\D:\...\sandbox\worktodo.txt" was displayed and would have been written.
-    return path_resolve(worker_dir(), ini_.get("", "worktodo", ecm_config::defaults::stage1_worktodo));
+    for(const auto &w:workers_)if(w.index==gen_worker_index_)return w.worktodo;
+    return {};
 }
 
 std::string App::p95WorktodoPath() const {
@@ -1547,16 +1687,15 @@ void App::gen_make_preview() {
     opt.use_recommended = gen_use_recommended_;
     opt.blocks_per_sm = gen_blocks_per_sm_;
     opt.dedup = gen_dedup_;
-    for (const WorkerView &w : workers_) {
-        opt.worker_devices.push_back(std::make_pair(w.index, w.device));
-    }
-    opt.target_device = gen_target_device_;
+    for(const auto &w:workers_)if(w.index==gen_worker_index_)
+        opt.worker_devices.emplace_back(w.index,gen_target_device_);
+    opt.target_device=gen_target_device_;
 
     GpuProfile gpu;
     if (gen_use_recommended_) {
         // The tier table and the SM count come from the driver itself (D4), so a copied
         // table can never drift from the kernels. --gpu-info writes nothing.
-        std::string cmd = "\"" + resolve_worker_exe() + "\" --gpu-info -d " +
+        std::string cmd = "\"" + resolve_stage1_exe() + "\" --gpu-info -d " +
                           std::to_string(gen_target_device_);
         std::string out;
         int code = -1;
@@ -1664,6 +1803,17 @@ void App::draw_gen_panel() {
     if (start_tab_id_ == "###gen" && !start_tab_applied_) {
         start_tab_applied_ = true;         // the wanted tab really is on screen now
         trace("layout: start_tab is visible: ###gen");
+    }
+
+    ImGui::TextDisabled("%s",loc_.t("gen","target_worker").c_str());
+    const auto &target=workers_[static_cast<size_t>(gen_worker_index_-1)];
+    const auto worker_label=[](const WorkerView &w){return w.name+" | "+(w.stage2?"Stage2":"Stage1")+" | GPU "+std::to_string(w.device);};
+    if(ImGui::BeginCombo("##gen_worker",worker_label(target).c_str())) {
+        for(const auto &w:workers_)if(ImGui::Selectable(worker_label(w).c_str(),w.index==gen_worker_index_)) {
+            gen_worker_index_=w.index;gen_target_device_=w.device;gen_has_preview_=false;
+            gen_use_recommended_=!w.stage2;
+        }
+        ImGui::EndCombo();
     }
 
     // ---- input -----------------------------------------------------------------------
@@ -2120,15 +2270,58 @@ void App::draw_workers_table() {
     // Stable window id (###workers): the docking layout must survive a language switch,
     // otherwise the titles change and ImGui sees a different window.
     ImGui::Begin((loc_.t("workers", "title") + "###workers").c_str());
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,6.0f);
+
+    bool busy=false;
+    for(const auto &w:workers_)if(w.proc && (w.proc->running() || w.proc->state()==WorkerRunState::Restarting))busy=true;
+    ImGui::TextDisabled("%s",loc_.t("workers","default_engine").c_str());ImGui::SameLine();
+    ImGui::BeginDisabled(busy);
+    ImGui::SetNextItemWidth(ImGui::CalcTextSize("Stage2 (CUDA)").x+55.0f);
+    const auto mode_label=[&](const std::string &mode){return mode=="auto"?loc_.t("workers","engine_auto"):mode=="stage2"?std::string("Stage2"):std::string("Stage1");};
+    if(ImGui::BeginCombo("##engine",mode_label(engine_stage_).c_str())) {
+        for(const char *mode:{"auto","stage1","stage2"})if(ImGui::Selectable(mode_label(mode).c_str(),engine_stage_==mode)) {
+            engine_stage_=mode;rebuild_workers();
+            ini_.set("GUI","stage",engine_stage_);std::string error;if(!ini_.save(error))status_=error;
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();ImGui::TextDisabled("%s",loc_.t("workers","worker_count").c_str());ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetFrameHeight()*3.0f);
+    int worker_count=num_workers_;
+    if(ImGui::InputInt("##worker_count",&worker_count,0,0) && worker_count!=num_workers_) {
+        num_workers_=std::clamp(worker_count,static_cast<int>(ecm_config::limits::gui_NumWorkers_minimum),static_cast<int>(ecm_config::limits::gui_NumWorkers_maximum));
+        rebuild_workers();selected_worker_=std::clamp(selected_worker_,0,num_workers_-1);
+        ini_.set_int("GUI","NumWorkers",num_workers_);std::string error;if(!ini_.save(error))status_=error;
+    }
+    ImGui::EndDisabled();
+    for(bool stage2:{false,true}) {
+        ImGui::BeginDisabled(busy);
+        const auto button=std::string(stage2?"Stage2: ":"Stage1: ")+loc_.t("workers","choose_exe")+"##exe"+(stage2?"2":"1");
+        if(ImGui::SmallButton(button.c_str())) {
+            std::string chosen=stage2?resolve_stage2_exe():resolve_stage1_exe();
+            if(browse_for_file(chosen,loc_.t("workers","choose_exe"),"Programs\0*.exe\0All\0*.*\0\0")) {
+                if(stage2)stage2_exe_=chosen;else worker_exe_=chosen;
+                rebuild_workers();capture_layout();std::string error;if(!ini_.save(error))status_=error;
+            }
+        }
+        ImGui::EndDisabled();ImGui::SameLine();
+        const auto executable=stage2?resolve_stage2_exe():resolve_stage1_exe();
+        ImGui::TextDisabled("%s",file_name(executable).c_str());
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",executable.c_str());
+    }
+    ImGui::BeginDisabled(busy);
+    if(ImGui::SmallButton(loc_.t("workers","choose_ini").c_str())) {
+        std::string selected=ini_path_;
+        if(browse_for_file(selected,loc_.t("workers","choose_ini"),"Configuration\0*.ini\0All\0*.*\0\0"))select_workflow_ini(selected);
+    }
+    ImGui::EndDisabled();ImGui::SameLine();ImGui::TextDisabled("%s",ini_path_.c_str());
+    if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ini_path_.c_str());
 
     // Global controls: start/stop everything, plus the resolved worker executable
     // (so a wrong [GUI] exe= is visible instead of mysterious).
     if (ImGui::Button(loc_.t("workers", "start_all").c_str())) start_all();
     ImGui::SameLine();
     if (ImGui::Button(loc_.t("workers", "stop_all").c_str())) stop_all();
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s %s", loc_.t("workers", "exe").c_str(),
-                        resolve_worker_exe().c_str());
     ImGui::Separator();
 
     // Column widths are explicit (derived from sample text, so they follow the DPI-scaled
@@ -2157,27 +2350,26 @@ void App::draw_workers_table() {
     // only 45 px wide, which the test caught (fits=0). Deterministic beats "hope ImGui
     // distributes it nicely": the bar is what the user actually watches.
     const float kProgressMin = 120.0f;
-    const float column_padding = ImGui::GetStyle().CellPadding.x * 2.0f * 9.0f + 34.0f;
+    const float column_padding=ImGui::GetStyle().CellPadding.x*2.0f*10.0f+34.0f;
+    const float w_stage=ImGui::CalcTextSize("Stage2*").x+ImGui::GetFrameHeight();
     const float table_left_x = ImGui::GetCursorScreenPos().x;
     const float table_w = table_right_x - table_left_x;
     float w_name = ImGui::CalcTextSize("4070Ti-110e6").x + 8.0f;
     {
         const float fixed = w_index + w_state + w_gpu + w_speed + w_eta + w_hits +
-                            w_actions + column_padding;
+                            w_actions + w_stage + column_padding;
         if (fixed + w_name + kProgressMin > table_w) {
             w_name = table_w - fixed - kProgressMin;
             if (w_name < 64.0f) w_name = 64.0f;      // give up gracefully on tiny panels
         }
     }
-    if (ImGui::BeginTable("workers", 9,
-                          // Horizontal separators only: ImGui draws table borders AFTER the
-                          // cell contents, so the vertical ("y") lines would strike through
-                          // the full-width task line on its own row (user report
-                          // 2026-09-28). Rows stay visually separated by the horizontal
-                          // lines; nothing is lost, because the data columns are aligned by
-                          // position and the header.
-                          ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersOuterH |
-                              ImGuiTableFlags_RowBg)) {
+    const float table_inner_w=std::max(table_w,w_index+w_state+w_gpu+w_name+w_speed+w_eta+w_hits+w_actions+w_stage+column_padding+kProgressMin);
+    int stage_change_index=0;std::string stage_change;
+    if(ImGui::BeginTable("workers",10,ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_BordersOuterH|
+                         ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollX|ImGuiTableFlags_SizingFixedFit,
+                         ImVec2(0.0f,0.0f),table_inner_w)) {
+        const auto table_clip_min=ImGui::GetWindowDrawList()->GetClipRectMin();
+        const auto table_clip_max=ImGui::GetWindowDrawList()->GetClipRectMax();
         ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, w_index);
         ImGui::TableSetupColumn(loc_.t("workers", "col_state").c_str(),
                                 ImGuiTableColumnFlags_WidthFixed, w_state);
@@ -2195,6 +2387,7 @@ void App::draw_workers_table() {
                                 ImGuiTableColumnFlags_WidthFixed, w_hits);
         ImGui::TableSetupColumn(loc_.t("workers", "col_actions").c_str(),
                                 ImGuiTableColumnFlags_WidthFixed, w_actions);
+        ImGui::TableSetupColumn(loc_.t("workers","engine").c_str(),ImGuiTableColumnFlags_WidthFixed,w_stage);
         ImGui::TableHeadersRow();
 
         int task_lines = 0;
@@ -2222,7 +2415,7 @@ void App::draw_workers_table() {
             else if (st == WorkerRunState::Error) col = ImVec4(1.0f, 0.35f, 0.35f, 1.0f);
             else if (st == WorkerRunState::Restarting) col = ImVec4(1.0f, 0.8f, 0.3f, 1.0f);
             else if (st == WorkerRunState::QueueEmpty) col = ImVec4(0.5f, 0.7f, 1.0f, 1.0f);
-            ImGui::TextColored(col, "%s", loc_.t("workers", state_key(st)).c_str());
+            ImGui::TextColored(col, "%s", loc_.t("workers", w.stop_requested?"stopping":state_key(st)).c_str());
             if (w.proc && !w.proc->state_text().empty()) {
                 // Full text in the tooltip (and the Detail panel): the column is sized for
                 // the state word so the progress bar keeps its width (see above).
@@ -2249,7 +2442,7 @@ void App::draw_workers_table() {
 
             ImGui::TableSetColumnIndex(3);
             if (i == 0) name_x = ImGui::GetCursorScreenPos().x;
-            ImGui::TextUnformatted(w.name.c_str());
+            if(ImGui::Selectable((w.name+"##worker"+std::to_string(w.index)).c_str(),selected_worker_==static_cast<int>(i),ImGuiSelectableFlags_AllowOverlap))selected_worker_=static_cast<int>(i);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", w.name.c_str());
             if (w.old_driver) {
                 // Visible, not just in the status line: the user's question is "why does
@@ -2260,19 +2453,20 @@ void App::draw_workers_table() {
             }
 
             ImGui::TableSetColumnIndex(4);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram,w.stage2?ImVec4(.56f,.44f,.89f,1.f):ImVec4(.18f,.68f,.59f,1.f));
             if (i == 0) {
                 progress_x = ImGui::GetCursorScreenPos().x;
                 progress_w = ImGui::GetContentRegionAvail().x;
             }
             if (w.progress.valid) {
-                ImGui::ProgressBar(static_cast<float>(w.progress.pct / 100.0), ImVec2(-1.0f, 0.0f));
+                char overlay[80];std::snprintf(overlay,sizeof(overlay),"%llu / %llu",w.progress.curves_done,w.progress.curves_total);
+                bounded_progress(w.progress.pct/100.0,w.stage2?overlay:nullptr);
             } else if (w.resume_pct >= 0.0) {
                 // Resumed run: the driver has not printed a progress line yet (its schedule
                 // is gated on the restored batch counter), but we know where it stands.
                 char overlay[64];
                 std::snprintf(overlay, sizeof(overlay), "%.1f%% (resumed)", w.resume_pct);
-                ImGui::ProgressBar(static_cast<float>(w.resume_pct / 100.0), ImVec2(-1.0f, 0.0f),
-                                   overlay);
+                bounded_progress(w.resume_pct/100.0,overlay);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip("%s", loc_.t("workers", "resume_note").c_str());
                 }
@@ -2280,10 +2474,11 @@ void App::draw_workers_table() {
                 // The driver emits its first progress line only after the first batch
                 // (a resumed B1=2.6e8 task can take a while to reach it). Saying so beats
                 // an empty bar, which reads as "the GUI is broken" (user report).
-                ImGui::ProgressBar(0.0f, ImVec2(-1.0f, 0.0f), loc_.t("workers", "waiting_progress").c_str());
+                bounded_progress(0.0,loc_.t("workers","waiting_progress").c_str());
             } else {
-                ImGui::ProgressBar(0.0f, ImVec2(-1.0f, 0.0f), "");
+                bounded_progress(0.0,"");
             }
+            ImGui::PopStyleColor();
 
             ImGui::TableSetColumnIndex(5);
             if (i == 0) speed_x = ImGui::GetCursorScreenPos().x;
@@ -2308,10 +2503,12 @@ void App::draw_workers_table() {
             // Only the applicable button: the column is narrow on purpose (the progress bar
             // is more valuable than two buttons that are never both useful).
             if (busy) {
+                ImGui::BeginDisabled(w.stop_requested);
                 if (ImGui::SmallButton((loc_.t("workers", "stop") + tag).c_str())) {
                     // Graceful: a checkpoint is written first (docs/usage/GUI.md 5.6).
                     request_stop(w.index);
                 }
+                ImGui::EndDisabled();
             } else {
                 if (ImGui::SmallButton((loc_.t("workers", "start") + tag).c_str())) {
                     std::string err;
@@ -2328,35 +2525,43 @@ void App::draw_workers_table() {
                 selected_worker_ = static_cast<int>(i);
             }
 
-            // ---- the task line: its own row, spanning the whole table -----------------
-            // The worktodo line ("ECMSTAGE2=7CF9…,1,2,3571,-1,"m3571_260e6.save",0,0,960,…")
-            // is ~80 characters. Keeping it in a column made that column thousands of
-            // pixels wide (with SizingStretchProp it also squeezed the progress bar away).
-            // Instead: a second row per worker whose text starts at the table's left edge
-            // and wraps at the table's right edge.
-            //
-            // Two details a first attempt got wrong -- together they made the line show only
-            // its first couple of characters (user report 2026-09-28):
-            //   * the cell's clip rect is the narrow FIRST COLUMN, and PushClipRect(..., 
-            //     intersect=true) intersects with it instead of widening it -> pass false so
-            //     the text can run across the remaining columns;
-            //   * PushTextWrapPos() takes a WINDOW-LOCAL x, not a screen x (a screen
-            //     coordinate silently disabled wrapping).
-            if (!w.task.empty()) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                const ImVec2 start = ImGui::GetCursorScreenPos();
-                const float text_h = ImGui::GetTextLineHeight();
-                const float wrap_local = table_right_x - 8.0f - ImGui::GetWindowPos().x;
-                task_wrap_w = table_right_x - 8.0f - start.x;
-                ImGui::PushClipRect(start, ImVec2(table_right_x, start.y + text_h * 4.0f), false);
-                ImGui::PushTextWrapPos(wrap_local);
-                ImGui::TextDisabled("%s %s", loc_.t("workers", "col_task").c_str(),
-                                    w.task.c_str());
-                ImGui::PopTextWrapPos();
-                ImGui::PopClipRect();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", w.task.c_str());
-                ++task_lines;
+            ImGui::TableSetColumnIndex(9);
+            ImGui::BeginDisabled(busy || w.stop_requested || exit_phase_!=ExitPhase::Idle);
+            ImGui::SetNextItemWidth(-1.0f);
+            const auto preview=std::string(w.stage2?"Stage2":"Stage1")+(w.stage=="auto"?"*":"");
+            if(ImGui::BeginCombo(("##stage"+std::to_string(w.index)).c_str(),preview.c_str())) {
+                for(const char *stage:{"auto","stage1","stage2"})if(ImGui::Selectable(mode_label(stage).c_str(),w.stage==stage)) {
+                    stage_change_index=w.index;stage_change=stage;
+                }
+                ImGui::EndCombo();
+            }
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",(w.stage=="auto"?loc_.t("workers","inherit_engine"):w.exe).c_str());
+            ImGui::EndDisabled();
+
+            // Draw the spanning summary in a bounded row without advertising its
+            // width as first-column content. It must not resize the index column.
+            if(!w.task.empty() || (w.stage2 && w.stage2_status.valid)) {
+                ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
+                const auto start=ImGui::GetCursorScreenPos();
+                const float right=std::min(table_right_x,table_clip_max.x);
+                const float width=std::max(1.0f,right-start.x-8.0f);
+                const auto summary=loc_.t("workers","col_task")+": "+task_text(w);
+                std::string phase;
+                if(w.stage2 && w.stage2_status.valid) {
+                    const auto &status=w.stage2_status;
+                    phase=loc_.t("stage2","phase")+": "+loc_.t("stage2",stage2_phase_key(status.phase));
+                    if(status.total)phase+=" | "+loc_.t("stage2","curve")+" "+std::to_string(status.current)+" / "+std::to_string(status.total);
+                }
+                const auto summary_size=ImGui::CalcTextSize(summary.c_str(),nullptr,false,width);
+                const auto phase_size=phase.empty()?ImVec2():ImGui::CalcTextSize(phase.c_str(),nullptr,false,width);
+                const float height=summary_size.y+(phase.empty()?0.0f:ImGui::GetStyle().ItemSpacing.y+phase_size.y);
+                ImGui::Dummy(ImVec2(1.0f,height));
+                ImGui::PushClipRect(ImVec2(std::max(start.x,table_clip_min.x),std::max(start.y,table_clip_min.y)),
+                                    ImVec2(right,std::min(start.y+height,table_clip_max.y)),false);
+                auto *draw=ImGui::GetWindowDrawList();
+                draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),start,ImGui::GetColorU32(ImGuiCol_TextDisabled),summary.c_str(),nullptr,width);
+                if(!phase.empty())draw->AddText(ImGui::GetFont(),ImGui::GetFontSize(),ImVec2(start.x,start.y+summary_size.y+ImGui::GetStyle().ItemSpacing.y),IM_COL32(191,176,247,255),phase.c_str(),nullptr,width);
+                ImGui::PopClipRect();task_wrap_w=width;++task_lines;
             }
         }
         ImGui::EndTable();
@@ -2384,9 +2589,28 @@ void App::draw_workers_table() {
         }
     }
 
+    if(stage_change_index)set_worker_stage(stage_change_index,stage_change);
+
     ImGui::Separator();
     ImGui::TextDisabled("%s", loc_.t("workers", "m2_note").c_str());
+    ImGui::PopStyleVar();
     ImGui::End();
+}
+
+void App::draw_stage2_status(const WorkerView &w,bool compact) {
+    const auto &s=w.stage2_status;if(!s.valid)return;
+    ImGui::TextColored(ImVec4(.75f,.69f,.97f,1.f),"%s: %s",loc_.t("stage2","phase").c_str(),loc_.t("stage2",stage2_phase_key(s.phase)).c_str());
+    if(s.total){ImGui::SameLine();ImGui::TextDisabled("| %s %llu / %llu",loc_.t("stage2","curve").c_str(),s.current,s.total);}
+    if(compact)return;
+    if(s.b1 && s.b2)ImGui::TextDisabled("B1=%llu   B2=%llu",s.b1,s.b2);
+    if(s.bits && s.d && s.p)ImGui::TextDisabled("S=%llu bits   D=%llu   P=%llu",s.bits,s.d,s.p);
+    if(s.batches) {
+        char overlay[96];std::snprintf(overlay,sizeof(overlay),"%s %llu / %llu",loc_.t("stage2","batch").c_str(),s.batch,s.batches);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.56f,.44f,.89f,1.f));
+        bounded_progress(double(s.batch)/s.batches,overlay);ImGui::PopStyleColor();
+        ImGui::TextDisabled("%s: %.1f s",loc_.t("stage2","phase_remaining").c_str(),s.batch_left);
+    }
+    if(w.stop_requested)ImGui::TextColored(ImVec4(1.f,.77f,.35f,1.f),"%s",loc_.t("stage2","finish_curve_stop").c_str());
 }
 
 void App::draw_gpu_panel() {
@@ -2647,6 +2871,9 @@ void App::draw_detail_panel() {
     if (selected_worker_ >= 0 && selected_worker_ < static_cast<int>(workers_.size())) {
         WorkerView &w = workers_[static_cast<std::size_t>(selected_worker_)];
         ImGui::Text("%s #%d (%s)", loc_.t("workers", "col_name").c_str(), w.index, w.name.c_str());
+        ImGui::TextColored(ImVec4(.75f,.8f,.9f,1.f),"%s  |  %s",w.stage2?"Stage2":"Stage1",task_text(w).c_str());
+        if(w.stage2)draw_stage2_status(w);
+        ImGui::TextDisabled("%s %s",loc_.t("gen","target").c_str(),w.worktodo.c_str());
         ImGui::Separator();
         ImGui::TextUnformatted(loc_.t("detail", "command_line").c_str());
         ImGui::BeginChild("cmd", ImVec2(0, 40), true);
@@ -2681,6 +2908,8 @@ void App::draw_worker_panes() {
                                   std::to_string(w.index) + " (" + w.name + ")###log" +
                                   std::to_string(w.index);
         ImGui::Begin(title.c_str(), &w.show_pane);
+        ImGui::TextColored(w.stage2?ImVec4(.75f,.69f,.97f,1.f):ImVec4(.35f,.84f,.74f,1.f),"%s  |  %s",w.stage2?"Stage2":"Stage1",task_text(w).c_str());
+        if(w.stage2)draw_stage2_status(w);
         ImGui::Separator();
         // Progress panel: the numbers come from the parsed progress line (the ASCII bar
         // in the raw output is NOT what the user sees here).
@@ -2708,15 +2937,19 @@ void App::draw_worker_panes() {
                 draw_metric_plot(plot, w.hist_s_per_curve);
             }
         }
-        ImGui::TextDisabled("%s: %s", loc_.t("workers", "log_file").c_str(), w.log_file.c_str());
+        ImGui::TextDisabled("%s: %s", loc_.t("workers", "log_file").c_str(),file_name(w.log_file).c_str());
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",w.log_file.c_str());
         ImGui::SameLine();
         if (ImGui::SmallButton((loc_.t("workers", "open_saves") + "##" +
                                 std::to_string(w.index)).c_str())) {
-            open_in_explorer(exe_dir());
+            const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(ini_.lines(),w.index,true));
+            const auto save_dir=w.stage2?path_resolve(path_dir(ini_path_),settings.save_dir.empty()?ecm_config::read_stage1(ecm_config::cli_entries(ini_.lines(),w.index,true)).tmp_dir:settings.save_dir):w.working_dir;
+            open_in_explorer(save_dir);
         }
         ImGui::SameLine();
         ImGui::Checkbox((loc_.t("workers", "show_raw") + "##" + std::to_string(w.index)).c_str(),
                         &w.show_raw);
+        ImGui::SameLine();ImGui::Checkbox((loc_.t("workers","follow_output")+"##"+std::to_string(w.index)).c_str(),&w.follow_output);
         ImGui::Separator();
         const std::vector<std::string> &lines = w.show_raw ? w.raw : w.events;
         if (lines.empty()) {
@@ -2724,13 +2957,17 @@ void App::draw_worker_panes() {
         } else {
             ImGui::BeginChild("log", ImVec2(0, 0), false,
                               ImGuiWindowFlags_HorizontalScrollbar);
-            for (const std::string &line : lines) {
+            const bool follow=w.follow_output && ImGui::GetScrollY()>=ImGui::GetScrollMaxY()-1.0f;
+            ImGuiListClipper clipper;clipper.Begin(static_cast<int>(lines.size()));
+            while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i) {
+                const auto &line=lines[static_cast<size_t>(i)];
                 // ANSI already stripped; the events keep the driver timestamp.
+                const bool error=line.find("ERROR")!=line.npos || line.find("WARNING")!=line.npos || line.find("ecm_cuda_stage2:")!=line.npos;
+                ImGui::PushStyleColor(ImGuiCol_Text,error?ImVec4(1.f,.65f,.46f,1.f):line.find("stage2_phase:")!=line.npos?ImVec4(.78f,.72f,1.f,1.f):ImGui::GetStyleColorVec4(ImGuiCol_Text));
                 ImGui::TextUnformatted(line.c_str());
+                ImGui::PopStyleColor();
             }
-            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f) {
-                ImGui::SetScrollHereY(1.0f);
-            }
+            if(follow)ImGui::SetScrollY(ImGui::GetScrollMaxY());
             ImGui::EndChild();
         }
         ImGui::End();
