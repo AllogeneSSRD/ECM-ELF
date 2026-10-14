@@ -436,6 +436,16 @@ stage2_tune_arithmetic = both
 # target_bits和carrier_exponent保留测量身份。估算替换遵循stage2_prediction_policy，缺数据可使用基础模
 # 型；B1不作为复用门槛。留空且未指定旧成本配置时使用相邻stage2_ecm_tune.toml。
 stage2_tune_profile =
+# [false|true]; default=true
+# Use complete, checked, no-factor production curves to fill missing arithmetic-width/NTT/residency
+# regions in stage2_tune_profile. Saves one summary per missing region, without extra curves or
+# warmup. Generic and Mersenne families are separate; B1 never gates coverage. Single-curve timings
+# calibrate the region model, not an exact paired win. Writes are atomic and locked; cache failures do
+# not fail a completed curve. false disables collection and writes.
+# 用完整、通过算术检查且无因子的生产曲线补充stage2_tune_profile缺失的算术位宽/NTT/驻留区间。每个缺失区
+# 间保存一份摘要，不额外执行曲线或预热；普通与梅森家族分别记录，B1不作为覆盖门槛。单曲线计时用于区间模
+# 型校准，不作为精确配对收益证明。锁定后原子写回，缓存失败不使已完成曲线失败；false关闭采集与写回。
+stage2_tune_runtime = true
 # [false|true]; default=false
 # Experimental short NTT batch selection from stage2_tune_profile, for lengths up to 2^19. Minimizes
 # estimated convolution time including the tail, within the current chunk budget; requires at least

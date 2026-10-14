@@ -314,7 +314,7 @@ def finish_preparation(args, out, plan):
     ini = out / 'bench.ini'
     ini.write_text(f'device={args.device}\nstage2_device={args.device}\nstage2_arena_mb={args.arena_mb}\n'
                    f'stage2_fold_mb={args.fold_mb}\nstage2_batch_mb={args.batch_mb}\n'
-                   'stage2_d=0\nstage2_debug_log=true\n', encoding='ascii')
+                   'stage2_d=0\nstage2_debug_log=true\nstage2_tune_runtime=false\n', encoding='ascii')
     plan['ini_sha256'] = sha(ini)
     if args.tune_profile:
         source = args.tune_profile.resolve()

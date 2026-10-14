@@ -34,6 +34,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -244,6 +245,7 @@ struct Options {
     unsigned inferred_carrier=0;
     bool short_calibration=true;
     bool short_batch_tune=false;
+    bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
     std::string prediction_policy="model",tune_arithmetic="both";
     double tune_error=.08;
     std::set<std::string> portable_cli;
@@ -297,6 +299,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--auto-b2") o.auto_b2=true;
         else if (a == "--cost-profile") o.cost_profile=value();
         else if (a == "--tune-profile") o.tune_profile=value();
+        else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
         else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-ignore") {o.tune_ignore=value();o.portable_cli.insert(a);ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);}
         else if (a == "--stage1-cost-csv") {o.stage1_csv=value();o.portable_cli.insert(a);}
@@ -538,6 +541,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
     if(!o.tune_profile.empty())cmd+=L" --tune-profile "+quote(fs::path(o.tune_profile).wstring());
     arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
+    arg(L"--tune-runtime",o.tune_runtime?1:0);
     cmd+=L" --tune-ignore "+quote(fs::path(o.tune_ignore).wstring());
     if(!o.stage1_csv.empty())cmd+=L" --stage1-cost-csv "+quote(fs::path(o.stage1_csv).wstring());
     if(!o.condition_tag.empty())cmd+=L" --tune-condition-tag "+quote(fs::path(o.condition_tag).wstring());
@@ -619,9 +623,10 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         if(stage2_log::enabled(stage2_log::phases))
             for(const auto &entry:summary.lines)console_line(entry);
         const bool milestone=text.compare(0,14,"stage2_phase: ")==0;
+        const bool tune_update=text.compare(0,21,"stage2_tune_runtime: ")==0;
         const bool result=text.compare(0,15,"stage2_result: ")==0;
         if(milestone){phase=text.substr(14);const auto timing=phase.find(" previous=");if(timing!=phase.npos)phase.resize(timing);}
-        if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&milestone) ||
+        if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
            (stage2_log::enabled(stage2_log::curve)&&result) ||
            stage2_log::enabled(stage2_log::batches) || text.find("WARNING")!=text.npos))console_line(text,error);
     };
@@ -751,6 +756,26 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
 }
 std::string select_tuned(Options &o,const Record &r);
 void configure_short_ntt_batches(const Options &o);
+struct RuntimeTuneObservation {
+    ecm_stage2::tune::portable::Shape shape;
+    ecm_stage2::tune::Fields condition,sample;
+};
+RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r);
+void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Metrics &m);
+void publish_runtime_tune(const Options &o,const RuntimeTuneObservation &observation);
+std::string runtime_tune_json(const RuntimeTuneObservation &observation);
+std::string tune_metrics_json(const EcmStage2Metrics &m) {
+    std::ostringstream out;out<<std::setprecision(17)<<"{\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"giant_points\":"<<m.giant_points
+        <<",\"total_seconds\":"<<m.total_seconds<<",\"init_seconds\":"<<m.init_seconds<<",\"main_seconds\":"<<m.main_seconds
+        <<",\"giant_seconds\":"<<m.giant_seconds<<",\"gtrees_seconds\":"<<m.gtrees_seconds<<",\"fold_seconds\":"<<m.fold_seconds
+        <<",\"descent_seconds\":"<<m.descent_seconds<<",\"inverse_seconds\":"<<m.inverse_seconds<<",\"accum_seconds\":"<<m.accum_seconds
+        <<",\"selftest_cases\":"<<m.selftest_cases<<",\"checked\":"<<m.checked<<",\"bad\":"<<m.bad
+        <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)
+        <<",\"phase_accounting\":"<<json_string(ecm_stage2::timing::contract);
+    for(size_t i=0;i<ecm_stage2::timing::count;++i)
+        out<<",\"phase_"<<ecm_stage2::timing::names[i]<<"_seconds\":"<<m.phases.seconds[i];
+    out<<'}';return out.str();
+}
 int curve_worker(Options o) {
     // Children ignore the first console interrupt; the parent owns stop policy.
     SetConsoleCtrlHandler(nullptr,TRUE);
@@ -792,6 +817,11 @@ int curve_worker(Options o) {
     Big n, x, gcd;
     mpz_set_str(n.z, r.n.c_str(), 16); mpz_set_str(x.z, r.x.c_str(), 16);
     mpz_gcd(gcd.z, x.z, n.z);
+    RuntimeTuneObservation observation;
+    if(!o.tune_child && o.tune_runtime && !o.tune_profile.empty() && mpz_cmp_ui(gcd.z,1)==0) {
+        try {observation=prepare_runtime_tune(o,r);}
+        catch(const std::exception &e){std::cerr<<"WARNING: runtime tune preparation skipped: "<<e.what()<<std::endl;}
+    }
     std::string status = "stage2_completed";
     int code = 0;
     if (mpz_cmp_ui(gcd.z, 1) > 0 && mpz_cmp(gcd.z, n.z) < 0) {
@@ -803,7 +833,7 @@ int curve_worker(Options o) {
         configure_cuda_wait(o.device);
         code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
             [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent,
-            o.tune_child?&tune_metrics:nullptr);
+            o.tune_child || !observation.sample.empty()?&tune_metrics:nullptr);
     }
     if (code || result.empty()) return code ? code : 1;
     if(o.tune_child) {
@@ -825,17 +855,13 @@ int curve_worker(Options o) {
         }
         if(result.find("\"hits\":0,")!=0)
             throw std::runtime_error("ECM tune requires a clean no-factor curve with arithmetic checks");
-        std::ostringstream out;out<<std::setprecision(17)<<"{\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"giant_points\":"<<m.giant_points
-            <<",\"total_seconds\":"<<m.total_seconds<<",\"init_seconds\":"<<m.init_seconds<<",\"main_seconds\":"<<m.main_seconds
-            <<",\"giant_seconds\":"<<m.giant_seconds<<",\"gtrees_seconds\":"<<m.gtrees_seconds<<",\"fold_seconds\":"<<m.fold_seconds
-            <<",\"descent_seconds\":"<<m.descent_seconds<<",\"inverse_seconds\":"<<m.inverse_seconds<<",\"accum_seconds\":"<<m.accum_seconds
-            <<",\"selftest_cases\":"<<m.selftest_cases<<",\"checked\":"<<m.checked<<",\"bad\":"<<m.bad
-            <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)
-            <<",\"phase_accounting\":"<<json_string(ecm_stage2::timing::contract);
-        for(size_t i=0;i<ecm_stage2::timing::count;++i)
-            out<<",\"phase_"<<ecm_stage2::timing::names[i]<<"_seconds\":"<<m.phases.seconds[i];
-        out<<'}';
-        append(o.results,out.str());return 0;
+        append(o.results,tune_metrics_json(m));return 0;
+    }
+    if(!observation.sample.empty()) {
+        if(status!="stage2_completed" || result.find("\"hits\":0,")!=0 || !ecm_stage2::result_factors(result).empty())
+            observation.sample.clear();
+        else try {complete_runtime_tune(observation,tune_metrics);}
+        catch(const std::exception &e){observation.sample.clear();std::cerr<<"WARNING: runtime tune sample skipped: "<<e.what()<<std::endl;}
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     double factor_seconds = 0;
@@ -864,7 +890,11 @@ int curve_worker(Options o) {
         ",\"auto_b2\":" + std::string(auto_json.empty() ? "false" : "true") +
         ",\"requested_B2\":" + std::to_string(requested_b2) + ",\"auto_planning_seconds\":" + std::to_string(auto_seconds) +
         (auto_json.empty() ? "" : ",\"auto_plan\":" + auto_json) +
-        ",\"timestamp_ms\":" + std::to_string(timestamp) + "," + result + "}");
+        ",\"timestamp_ms\":" + std::to_string(timestamp) + runtime_tune_json(observation) + "," + result + "}");
+    // Optional cache work follows the durable result. It cannot invalidate the
+    // successful curve or cause the parent to replay a committed receipt.
+    if(!observation.sample.empty())try {publish_runtime_tune(o,observation);}
+    catch(const std::exception &e){std::cerr<<"WARNING: runtime tune write skipped; observation retained in results: "<<e.what()<<std::endl;}
     std::cout << "stage2_result: record=" << o.index << " seconds=" << seconds
               << " factorization_seconds=" << factor_seconds << " " << result << std::endl;
     return 0;
@@ -890,6 +920,7 @@ void help() {
         "Selection: --tune-profile FILE.toml --tune-ignore gpu,driver,cuda,backend,environment\n"
         "           B1 never gates reuse; unmeasured widths/B2 retain estimate/uncertainty labels.\n"
         "           --prediction-policy model|paired (default model); model supplies a no-tune basic prior.\n"
+        "           --tune-runtime 0|1 (default 1): completed curves fill missing width/NTT/residency regions.\n"
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
         "           --stage1-cost-csv FILE --stage1-cost-mhz MHz --target-factor-bits N\n"
@@ -992,6 +1023,7 @@ int driver(Options o) {
     if(!o.portable_cli.count("--auto-carrier"))o.auto_carrier=s.auto_carrier;
     if(!o.portable_cli.count("--prediction-policy"))o.prediction_policy=s.prediction_policy;
     if(!o.portable_cli.count("--tune-arithmetic"))o.tune_arithmetic=s.tune_arithmetic;
+    if(!o.portable_cli.count("--tune-runtime"))o.tune_runtime=s.tune_runtime;
     if(o.prediction_policy!="model" && o.prediction_policy!="paired")throw std::runtime_error("prediction-policy must be model or paired");
     if(o.tune_arithmetic!="both" && o.tune_arithmetic!="generic" && o.tune_arithmetic!="mersenne")throw std::runtime_error("tune-arithmetic must be both, generic or mersenne");
     if(!o.portable_cli.count("--tune-ignore"))o.tune_ignore=s.tune_ignore;

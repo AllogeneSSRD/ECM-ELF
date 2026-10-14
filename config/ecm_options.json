@@ -1078,6 +1078,20 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_tune_runtime",
+      "field": "tune_runtime",
+      "type": "bool",
+      "default": true,
+      "domain": "[false|true]",
+      "fx": "missing_arithmetic_width_runtime_calibration",
+      "parser": "strict",
+      "description": [
+        "Use complete, checked, no-factor production curves to fill missing arithmetic-width/NTT/residency regions in stage2_tune_profile. Saves one summary per missing region, without extra curves or warmup. Generic and Mersenne families are separate; B1 never gates coverage. Single-curve timings calibrate the region model, not an exact paired win. Writes are atomic and locked; cache failures do not fail a completed curve. false disables collection and writes.",
+        "用完整、通过算术检查且无因子的生产曲线补充stage2_tune_profile缺失的算术位宽/NTT/驻留区间。每个缺失区间保存一份摘要，不额外执行曲线或预热；普通与梅森家族分别记录，B1不作为覆盖门槛。单曲线计时用于区间模型校准，不作为精确配对收益证明。锁定后原子写回，缓存失败不使已完成曲线失败；false关闭采集与写回。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_short_ntt_batch_tune",
       "field": "short_batch_tune",
       "type": "bool",

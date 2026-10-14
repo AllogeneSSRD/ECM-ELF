@@ -84,6 +84,9 @@ inline std::string text(const Fields &f,const char *key) {
 inline Word optional_uint(const Fields &f,const char *key,Word fallback=0){return f.count(key)?uint(f,key):fallback;}
 inline double optional_real(const Fields &f,const char *key,double fallback=0){return f.count(key)?real(f,key):fallback;}
 inline bool measured(const Fields &sample){return required(sample,"source")=="\"measured\"";}
+inline bool runtime_observation(const Fields &sample) {
+    return sample.count("benchmark_kind") && text(sample,"benchmark_kind")=="runtime_save";
+}
 inline void validate_ntt_summary(const Fields &s) {
     const auto n=uint(s,"length"),b=uint(s,"batch");
     if(n<8 || n>(1ull<<27) || (n&(n-1)) || !b || b>65535 || uint(s,"bad") ||
@@ -104,7 +107,9 @@ inline void strip_ntt_auxiliary_timing(Fields &s) {
     for(const char *key:{"setup_seconds","warmup_seconds","verification_seconds"})s.erase(key);
 }
 inline std::string scope(const Fields &s) {
-    std::string key;
+    // A single production observation must not prevent a slower but repeated
+    // formal benchmark from establishing an exact paired reference.
+    std::string key=runtime_observation(s)?"runtime;":"formal;";
     for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
                           "b1","b2","d","fold_resident","frontier_resident","execution_path"}) {
         const auto &value=required(s,field);key+=std::to_string(value.size())+":"+value;
@@ -126,11 +131,21 @@ inline void validate(const Fields &s) {
     if(measured(s) && (!uint(s,"repeats") || uint(s,"clean")!=1 || uint(s,"bad") ||
         uint(s,"hits") || !uint(s,"selftest_cases") || !uint(s,"checked")))
         throw std::runtime_error("portable measurement lacks completed arithmetic evidence");
+    if(runtime_observation(s) && (!measured(s) || uint(s,"repeats")!=1))
+        throw std::runtime_error("runtime observation must be a single checked measurement");
     real(s,"mad_seconds");uint(s,"condition");text(s,"execution_path");
     for(const auto &field:s)if(!field.second.empty() && field.second.front()=='[')
         throw std::runtime_error("portable summaries must not contain sampling arrays");
     if(optional_uint(s,"validation_count"))real(s,"validation_max_relative_error");
     else if(s.count("validation_max_relative_error"))throw std::runtime_error("portable error without independent validation");
+    if(s.count("measured_model_ratio") || s.count("predicted_seconds") || s.count("prediction_model") || s.count("prediction_basis")) {
+        const auto predicted=real(s,"predicted_seconds"),ratio=real(s,"measured_model_ratio");
+        const auto basis=text(s,"prediction_basis");text(s,"prediction_model");
+        if(!measured(s) || !(predicted>0 && ratio>0) ||
+           (basis!="before_measurement" && basis!="leave_one_out") ||
+           std::abs(ratio-real(s,"median_seconds")/predicted)>1e-9*std::max(1.,ratio))
+            throw std::runtime_error("inconsistent measured/model time ratio");
+    }
 }
 struct Ignore {
     bool gpu=true,driver=true,cuda=true,backend=true,memory=false,environment=true;
@@ -358,7 +373,8 @@ struct Profile {
             for(auto it=common.begin();it!=common.end();) {
                 bool same=true;for(auto row:records)if(row->at(it->first)!=it->second)same=false;
                 const bool primary=ntt?(it->first=="log2_length" || it->first=="length" || it->first=="batch" || it->first=="tile" || it->first=="median_seconds"):
-                    (it->first=="d" || it->first=="p" || it->first=="b2" || it->first=="median_seconds" || it->first=="mad_seconds");
+                    (it->first=="d" || it->first=="p" || it->first=="b2" || it->first=="median_seconds" || it->first=="mad_seconds" ||
+                     it->first=="measured_model_ratio" || it->first=="predicted_seconds");
                 if(!same || primary)it=common.erase(it);else ++it;
             }
             std::vector<std::string> columns;
@@ -368,7 +384,7 @@ struct Profile {
                 "tile", "max_radix_bits",
                 "passes_forward", "coop_outer",
                 "warp_tail", "compact_scratch",       // 执行形状
-                "conv_iter_per_s", "median_seconds", "repeats",
+                "conv_iter_per_s", "median_seconds", "predicted_seconds", "measured_model_ratio", "repeats",
                 "payload_bytes", "arena_payload_bytes",
                 "external_arrays_bytes",
                 "verified_words_per_sample",

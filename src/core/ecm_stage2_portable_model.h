@@ -258,7 +258,7 @@ public:
         }
         if(!out.anchor)return false;
         const auto &a=*out.anchor;const auto sh=shape(a);
-        out.exact=x.target_bits==sh.target_bits && x.arithmetic_bits==sh.arithmetic_bits && x.d==sh.d &&
+        out.exact=!runtime_observation(a) && x.target_bits==sh.target_bits && x.arithmetic_bits==sh.arithmetic_bits && x.d==sh.d &&
             x.b2==sh.b2 && x.batch_bytes==sh.batch_bytes && x.buffers==sh.buffers &&
             x.physical==sh.physical && x.chunk_max==sh.chunk_max && x.giant_chunk==sh.giant_chunk &&
             x.chain_min==sh.chain_min && x.force_ladder==sh.force_ladder &&
@@ -302,9 +302,12 @@ public:
     }
     // Production D replacement requires measurements at this width/B2/path.
     // B1 is deliberately absent: it is not a tune eligibility dimension.
-    const Fields *observed(const Shape &x)const {
+    const Fields *observed(const Shape &x,const Fields *omit=nullptr)const {
         const Fields *best=nullptr;
-        for(const auto &s:profile.samples)if(eligible(s,x)) {
+        for(const auto &s:profile.samples)if(&s!=omit && eligible(s,x)) {
+            // A single production curve calibrates a width region. It does not
+            // establish an exact paired benchmark with zero dispersion.
+            if(runtime_observation(s))continue;
             const auto a=shape(s);
             if(a.target_bits!=x.target_bits || a.arithmetic_bits!=x.arithmetic_bits || a.carrier!=x.carrier || a.d!=x.d ||
                a.b2!=x.b2 || a.batch_bytes!=x.batch_bytes || a.physical!=x.physical ||

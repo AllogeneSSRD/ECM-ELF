@@ -58,7 +58,14 @@ void configure_short_ntt_batches(const Options &o) {
         "ntt_batch_policy: mode=tune max_log2=19 samples=%llu hash=%llu fallback=%s\n",
         (unsigned long long)samples.size(),(unsigned long long)hash,samples.empty()?"no_matching_short_ntt":"legacy_when_unmeasured");
 }
-void portable_publish(const fs::path &path,const pt::Profile &profile) {
+void portable_complete_ratios(pt::Profile &profile);
+void portable_prediction_fields(et::Fields &sample,const pt::WidthEstimate &prediction,const char *basis) {
+    sample["predicted_seconds"]=pt::numeric(prediction.seconds);
+    sample["measured_model_ratio"]=pt::numeric(et::real(sample,"median_seconds")/prediction.seconds);
+    sample["prediction_model"]=pt::quoted(prediction.model);sample["prediction_basis"]=pt::quoted(basis);
+}
+void portable_publish(const fs::path &path,pt::Profile &profile) {
+    portable_complete_ratios(profile);
     if(!path.parent_path().empty())fs::create_directories(path.parent_path());
     const fs::path partial(path.string()+".partial."+std::to_string(GetCurrentProcessId()));
     std::ofstream out(partial,std::ios::binary|std::ios::trunc);
@@ -83,6 +90,24 @@ bool portable_query(ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::
     const auto key=std::make_pair(m,bits);auto at=cache.find(key);
     if(at==cache.end()) {Result r;r.ok=ecm_cuda_stage2_shape_query(m,bits,&r.n,&r.slots);at=cache.emplace(key,r).first;}
     if(n)*n=at->second.n;if(slots)*slots=at->second.slots;return at->second.ok;
+}
+void portable_complete_ratios(pt::Profile &profile) {
+    // Older summaries have no prospective forecast. Reconstruct with the row
+    // excluded, and label it retrospective rather than independent validation.
+    std::vector<std::pair<size_t,et::Fields>> updates;
+    std::map<ecm_stage2::Word,std::unique_ptr<pt::Estimator>> models;
+    for(size_t i=0;i<profile.samples.size();++i) {
+        const auto &sample=profile.samples[i];if(!pt::measured(sample) || sample.count("measured_model_ratio"))continue;
+        const auto condition=et::uint(sample,"condition");auto &model=models[condition];
+        if(!model)model=std::make_unique<pt::Estimator>(profile,profile.conditions.at(condition),pt::Ignore::parse(""),portable_query);
+        pt::WidthPredictor predictor(*model,&sample);pt::WidthEstimate prediction;
+        if(predictor.predict(model->shape(sample),prediction)) {
+            auto completed=sample;portable_prediction_fields(completed,prediction,"leave_one_out");
+            updates.emplace_back(i,std::move(completed));
+        }
+    }
+    for(auto &update:updates)profile.samples[update.first]=std::move(update.second);
+    if(!updates.empty())++profile.revision;
 }
 pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d,unsigned carrier) {
     Big n,plus;mpz_set_str(n.z,r.n.c_str(),16);mpz_add_ui(plus.z,n.z,1);
@@ -120,6 +145,68 @@ bool portable_admit(const Options &o,const Record &r,pt::Shape &s,std::string &p
     s.giant_chunk=u64(plan_scalar(giant,"chunk_points"),"giant chunk");
     s.chain_min=u64(plan_scalar(giant,"chain_min"),"giant chain minimum");s.force_ladder=plan_scalar(giant,"force_ladder")=="true";
     return true;
+}
+uint64_t portable_legacy_d(const Options &o,const Record &r,uint64_t b2,unsigned carrier,bool allow_no_plan);
+RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
+    RuntimeTuneObservation result;
+    const auto profile=portable_read(o.tune_profile);result.condition=portable_condition(o);
+    pt::Estimator engine(profile,result.condition,pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::WidthPredictor predictor(engine);
+    // Selection normally fixes D. A protected legacy fallback may leave it 0.
+    const auto d=o.d?o.d:portable_legacy_d(o,r,o.b2,o.carrier_exponent,false);
+    auto shape=portable_shape(o,r,o.b2,d,o.carrier_exponent);pt::Work work;
+    if(!engine.cached_work(shape,work) || work.p<512 || !work.exact_topology || predictor.has_width_measurement(shape))return result;
+    std::string plan;if(!portable_admit(o,r,shape,plan) || predictor.has_width_measurement(shape))return result;
+    pt::WidthEstimate prediction;if(!predictor.predict(shape,prediction))return result;
+    result.shape=shape;
+    auto &s=result.sample;
+    s["target_bits"]=std::to_string(shape.target_bits);s["arithmetic_bits"]=std::to_string(shape.arithmetic_bits);
+    s["carrier_exponent"]=std::to_string(shape.carrier);s["modulus_kind"]=pt::quoted(shape.mersenne?"mersenne":"generic");
+    s["b1"]=std::to_string(r.b1);s["b2"]=std::to_string(o.b2);s["source"]="\"measured\"";
+    s["benchmark_kind"]="\"runtime_save\"";s["repeats"]="1";s["warmup_runs"]="0";s["mad_seconds"]="0";
+    s["condition"]="0";s["execution_path"]=pt::quoted(shape.fold?(shape.frontier?"resident":"host_frontier"):"host_fold_frontier");
+    s["giant_chunk_points"]=std::to_string(shape.giant_chunk);s["giant_chain_min"]=std::to_string(shape.chain_min);
+    s["giant_force_ladder"]=shape.force_ladder?"1":"0";
+    s["predicted_seconds"]=pt::numeric(prediction.seconds);s["prediction_model"]=pt::quoted(prediction.model);
+    s["prediction_basis"]="\"before_measurement\"";
+    s["measurement_binary_sha256"]=pt::quoted(ecm_stage2::sha256_file(executable()));
+    return result;
+}
+void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Metrics &m) {
+    const auto &s=observation.shape;
+    if(!m.clean || m.bad || !m.checked || !m.selftest_cases || !m.phases.complete ||
+       !(m.total_seconds>0) || m.d!=s.d || m.p!=ecm_stage2::cost::phi(s.d)/2 ||
+       m.giant_points!=s.b2/s.d+2 || m.fold_resident!=s.fold || m.frontier_resident!=s.frontier)
+        throw std::runtime_error("curve is incomplete, unchecked, or changed its planned execution path");
+    auto metrics=et::fields(tune_metrics_json(m));metrics.erase("total_seconds");
+    for(const auto &field:metrics)observation.sample[field.first]=field.second;
+    auto &sample=observation.sample;
+    sample["median_seconds"]=pt::numeric(m.total_seconds);sample["min_seconds"]=sample["max_seconds"]=sample["median_seconds"];
+    const auto predicted=et::real(sample,"predicted_seconds");
+    sample["measured_model_ratio"]=pt::numeric(m.total_seconds/predicted);
+    sample["validation_count"]="1";sample["validation_max_relative_error"]=pt::numeric(std::abs(predicted-m.total_seconds)/m.total_seconds);
+    pt::validate(sample);
+}
+std::string portable_fields_json(const et::Fields &fields) {
+    std::string out="{";for(const auto &f:fields){if(out.size()>1)out+=',';out+=json_string(f.first)+':'+f.second;}return out+'}';
+}
+std::string runtime_tune_json(const RuntimeTuneObservation &observation) {
+    if(observation.sample.empty())return {};
+    return ",\"tune_observation\":{\"condition\":"+portable_fields_json(observation.condition)+
+        ",\"sample\":"+portable_fields_json(observation.sample)+"}";
+}
+void publish_runtime_tune(const Options &o,const RuntimeTuneObservation &observation) {
+    // Reload under the shared writer lock; never overwrite concurrent tune work.
+    auto guard=portable_lock(o.tune_profile);auto profile=portable_read(o.tune_profile);
+    pt::Estimator engine(profile,observation.condition,pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::WidthPredictor predictor(engine);if(predictor.has_width_measurement(observation.shape))return;
+    auto sample=observation.sample;sample["condition"]=std::to_string(profile.condition(observation.condition));
+    if(!profile.update(std::move(sample)))return;
+    portable_publish(o.tune_profile,profile);
+    stage2_log::print(stage2_log::phases,"stage2_tune_runtime: arithmetic_bits=%u kind=%s D=%llu B2=%llu ratio=%.3f profile=%s\n",
+        observation.shape.arithmetic_bits,observation.shape.mersenne?"mersenne":"generic",
+        (unsigned long long)observation.shape.d,(unsigned long long)observation.shape.b2,
+        et::real(observation.sample,"measured_model_ratio"),o.tune_profile.c_str());
 }
 std::vector<unsigned> portable_carriers(const Options &o,const Record &r) {
     if(o.has_carrier)return {o.carrier_exponent};
@@ -453,6 +540,9 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
     condition=profile.condition(portable_condition(o));
     auto shape=portable_shape(o,input.record,b2,d,carrier);std::string plan;
     if(!portable_admit(o,input.record,shape,plan))return false;
+    pt::Estimator before_model(profile,profile.conditions.at(condition),pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::WidthPredictor before_predictor(before_model);pt::WidthEstimate prediction;
+    const bool predicted=before_predictor.predict(shape,prediction);
     const std::string stem="measure_"+std::to_string(profile.revision)+"_"+std::to_string(GetTickCount64());
     append(evidence/(stem+".plan.jsonl"),plan);
     std::vector<et::Fields> trials;
@@ -507,8 +597,8 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
     sample["giant_force_ladder"]=shape.force_ladder?"1":"0";
     // The prediction was formed before admitting this new measurement. Store
     // its error as independent holdout evidence, never the training residual.
-    pt::Estimator model(profile,profile.conditions.at(condition),pt::Ignore::parse(o.tune_ignore),portable_query);pt::Estimate prediction;
-    if(model.predict(shape,prediction)) {
+    if(predicted) {
+        portable_prediction_fields(sample,prediction,"before_measurement");
         sample["validation_count"]="1";
         sample["validation_max_relative_error"]=pt::numeric(std::abs(prediction.seconds-et::median(seconds))/et::median(seconds));
     }

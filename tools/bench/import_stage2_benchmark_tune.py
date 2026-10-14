@@ -2,6 +2,7 @@
 
 No GPU work. Accepts the N-scaling collector's verified no-factor formal runs;
 warmups, factor-producing controls and incomplete studies are not timing anchors.
+Also accepts new production results containing checked tune_observation receipts.
 The output is an intermediate format-7 profile; the native --tune-merge command
 validates, compacts and keeps the fastest candidate when merging this evidence.
 """
@@ -101,34 +102,106 @@ def import_study(path, condition, audit):
     return samples
 
 
+def import_runtime(paths):
+    """Recover optional cache writes from durable new production receipts."""
+    conditions, best, inputs = [], {}, []
+    for path in paths:
+        raw = path.read_bytes()
+        lines = raw.splitlines(keepends=True)
+        # Match the queue receipt boundary: a torn final line is not committed.
+        torn = bool(lines and not lines[-1].endswith(b'\n'))
+        if torn:
+            lines.pop()
+        admitted = 0
+        for line in lines:
+            row = json.loads(line)
+            observation = row.get('tune_observation')
+            if not observation:
+                continue  # Older results have no complete structured evidence.
+            condition, sample = observation['condition'], dict(observation['sample'])
+            if (row['status'] != 'stage2_completed' or row['hits'] or row['bad_factors'] or row['factors'] or
+                    sample['source'] != 'measured' or sample['benchmark_kind'] != 'runtime_save' or
+                    sample['clean'] != 1 or sample['bad'] or sample['hits'] or
+                    not sample['selftest_cases'] or not sample['checked'] or sample['repeats'] != 1):
+                raise ValueError('Unchecked runtime observation')
+            n, carrier = int(row['N_hex'], 16), row['carrier_exponent']
+            if (sample['target_bits'] != n.bit_length() or sample['arithmetic_bits'] != (carrier or n.bit_length()) or
+                    sample['carrier_exponent'] != carrier or not 0 <= carrier <= 16384 or
+                    (carrier and ((1 << carrier) - 1) % n) or
+                    sample['b1'] != row['B1'] or sample['b2'] != row['B2']):
+                raise ValueError('Runtime target/bounds identity mismatch')
+            seconds, predicted = sample['median_seconds'], sample['predicted_seconds']
+            phases = ('shape', 'setup', 'baby', 'ftree', 'main_setup', 'inverse_setup',
+                      'giant_loop', 'descent', 'accum', 'finalize')
+            values = [sample[f'phase_{key}_seconds'] for key in phases]
+            if (sample['phase_accounting'] != 'exclusive_engine_v1' or seconds <= 0 or predicted <= 0 or
+                    any(not math.isfinite(x) or x < 0 for x in values) or
+                    not math.isclose(sum(values), seconds, rel_tol=1e-9, abs_tol=1e-8) or
+                    not math.isclose(sample['init_seconds'] + sample['main_seconds'], seconds, rel_tol=1e-9) or
+                    not math.isclose(sample['measured_model_ratio'], seconds / predicted, rel_tol=1e-9) or
+                    sample['prediction_basis'] != 'before_measurement'):
+                raise ValueError('Inconsistent runtime prediction/timing boundary')
+            if condition not in conditions:
+                conditions.append(condition)
+            sample['condition'] = conditions.index(condition)
+            key = tuple(sample[k] for k in ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent',
+                                           'modulus_kind', 'b1', 'b2', 'd', 'fold_resident',
+                                           'frontier_resident', 'execution_path'))
+            if key not in best or seconds < best[key]['median_seconds']:
+                best[key] = sample
+            admitted += 1
+        inputs.append(dict(path=str(path.resolve()), sha256=hashlib.sha256(raw).hexdigest(),
+                           observations=admitted, ignored_torn_line=torn))
+    if not best:
+        raise ValueError('No new complete runtime tune observations; older wall times alone cannot be imported')
+    return conditions, list(best.values()), inputs
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--study', type=Path, required=True)
-    parser.add_argument('--condition-profile', type=Path, required=True)
-    parser.add_argument('--audit-analysis', type=Path, required=True,
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--study', type=Path)
+    mode.add_argument('--runtime-results', type=Path, action='append', help='New production JSONL; repeatable')
+    parser.add_argument('--condition-profile', type=Path)
+    parser.add_argument('--audit-analysis', type=Path,
                         help='Completed analysis containing the frozen raw_artifact_hashes')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    study = args.study.resolve() / 'measurements.json'
-    doc = tomllib.loads(args.condition_profile.read_text(encoding='utf-8-sig'))
-    data = json.loads(study.read_text(encoding='utf-8'))
-    condition = next(c for c in doc['condition'].values() if
-                     c.get('batch_mb') == data['memory']['batch_mb'] and
-                     c.get('arena_mb') == data['memory']['arena_mb'] and c.get('fold_mb') == data['memory']['fold_mb'])
-    analysis=json.loads(args.audit_analysis.read_text(encoding='utf-8'))
-    if not analysis['complete'] or Path(analysis['study']).resolve()!=study.parent:
-        raise ValueError('Analysis is not the matching completed study')
-    audit={str(Path(r['log'])):r for r in analysis['raw_artifact_hashes']}
-    samples = import_study(study, condition, audit)
-    lines = ['# Final medians imported from verified frozen full-curve evidence.',
+    if args.runtime_results:
+        if args.condition_profile or args.audit_analysis:
+            parser.error('runtime-results carries its own condition; omit condition-profile/audit-analysis')
+        conditions, samples, inputs = import_runtime(args.runtime_results)
+        receipt = dict(runtime_inputs=inputs)
+    else:
+        if not args.condition_profile or not args.audit_analysis:
+            parser.error('study requires condition-profile and audit-analysis')
+        study = args.study.resolve() / 'measurements.json'
+        doc = tomllib.loads(args.condition_profile.read_text(encoding='utf-8-sig'))
+        data = json.loads(study.read_text(encoding='utf-8'))
+        condition = next(c for c in doc['condition'].values() if
+                         c.get('batch_mb') == data['memory']['batch_mb'] and
+                         c.get('arena_mb') == data['memory']['arena_mb'] and c.get('fold_mb') == data['memory']['fold_mb'])
+        analysis=json.loads(args.audit_analysis.read_text(encoding='utf-8'))
+        if not analysis['complete'] or Path(analysis['study']).resolve()!=study.parent:
+            raise ValueError('Analysis is not the matching completed study')
+        audit={str(Path(r['log'])):r for r in analysis['raw_artifact_hashes']}
+        samples = import_study(study, condition, audit)
+        conditions = [condition]
+        receipt = dict(study=str(study.parent), manifest_sha256=sha(study), binary_sha256=data['executable_sha256'],
+                       audit_analysis=str(args.audit_analysis.resolve()), audit_sha256=sha(args.audit_analysis),
+                       condition_profile_sha256=sha(args.condition_profile))
+    lines = ['# Final summaries imported from checked full-curve evidence.',
              '[profile]', 'format = 7', 'algorithm_revision = 1', 'unit = "full_stage2"',
-             'revision = 0', '[condition.0]']
-    lines += [f'{key} = {literal(value)}' for key, value in sorted(condition.items())]
+             'revision = 0']
+    for i, condition in enumerate(conditions):
+        lines += [f'\n[condition.{i}]']
+        lines += [f'{key} = {literal(value)}' for key, value in sorted(condition.items())]
     for i, sample in enumerate(samples):
+        keys = ['d','p','b2','median_seconds','mad_seconds']
+        keys += [k for k in ('predicted_seconds', 'measured_model_ratio') if k in sample]
         lines += [f'\n[width.{sample["target_bits"]}.table.{i}]']
         lines += [f'{key} = {literal(value)}' for key, value in sorted(sample.items())
-                  if key not in ('d','p','b2','median_seconds','mad_seconds')]
-        keys = ['d','p','b2','median_seconds','mad_seconds']
+                  if key not in keys]
         lines += ['matrix = [', '    ['+', '.join(map(literal, keys))+'],',
                   '    ['+', '.join(literal(sample[k]) for k in keys)+'],', ']']
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -137,10 +210,7 @@ def main():
         raise FileExistsError('Import requires new summary/evidence output paths')
     with args.output.open('x', encoding='utf-8') as stream:
         stream.write('\n'.join(lines)+'\n')
-    receipt=dict(study=str(study.parent), manifest_sha256=sha(study),
-                 binary_sha256=data['executable_sha256'], summary_sha256=sha(args.output),
-                 audit_analysis=str(args.audit_analysis.resolve()), audit_sha256=sha(args.audit_analysis),
-                 condition_profile_sha256=sha(args.condition_profile), importer_sha256=sha(__file__),
+    receipt.update(summary_sha256=sha(args.output), importer_sha256=sha(__file__),
                  candidates=[{key:s[key] for key in ('target_bits','arithmetic_bits','carrier_exponent',
                      'b1','b2','d','p','execution_path','median_seconds','mad_seconds','repeats')} for s in samples])
     with evidence.open('x',encoding='utf-8') as stream:

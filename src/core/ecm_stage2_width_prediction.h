@@ -12,6 +12,7 @@ struct WidthEstimate : Estimate {
 // identity is a lookup key. Actual packing, routes and residency are recomputed.
 class WidthPredictor {
     Estimator &engine;
+    const Fields *excluded=nullptr;
     struct Anchor {const Fields *sample;Shape shape;Work work;double correction;};
     using Region=std::array<Word,13>;
     mutable std::map<Region,std::vector<Anchor>> regions;
@@ -51,7 +52,16 @@ class WidthPredictor {
             r.descent*poly(RequestDescent)+r.accum*ratio(w.accum,ref.accum)+r.loop*loop;
     }
 public:
-    explicit WidthPredictor(Estimator &e):engine(e){}
+    explicit WidthPredictor(Estimator &e,const Fields *omit=nullptr):engine(e),excluded(omit){}
+    bool has_width_measurement(const Shape &s)const {
+        Work current;if(!engine.cached_work(s,current) || current.p<512 || !current.exact_topology)return false;
+        for(const auto &sample:engine.profile.samples)if(engine.eligible(sample,s)) {
+            const auto before=engine.shape(sample);Work w;
+            if(before.arithmetic_bits==s.arithmetic_bits && engine.cached_work(before,w) &&
+               w.p>=512 && w.exact_topology && region(before,w)==region(s,current))return true;
+        }
+        return false;
+    }
     double basic(const Shape &s,const Work &w)const {
         const WidthReference *low=nullptr,*high=nullptr;
         for(const auto &r:width_references)if(r.mersenne==s.mersenne) {
@@ -67,7 +77,7 @@ public:
     }
     bool predict(const Shape &s,WidthEstimate &out)const {
         out=WidthEstimate{};Work w;if(!engine.cached_work(s,w))return false;
-        if(const auto measured=engine.observed(s)) {
+        if(const auto measured=engine.observed(s,excluded)) {
             out.seconds=real(*measured,"median_seconds");out.mad=real(*measured,"mad_seconds");
             out.anchor=measured;out.anchors=1;out.exact=true;out.region_covered=true;
             out.arithmetic_low=out.arithmetic_high=s.arithmetic_bits;out.model="exact_shape_measurement_v1";
@@ -94,7 +104,7 @@ public:
         auto at=regions.find(region(s,w));
         if(at==regions.end()) {
             std::vector<Anchor> anchors;
-            for(const auto &sample:engine.profile.samples)if(engine.eligible(sample,s)) {
+            for(const auto &sample:engine.profile.samples)if(&sample!=excluded && engine.eligible(sample,s)) {
                 const auto shape=engine.shape(sample);Work before;
                 if(!engine.cached_work(shape,before) || before.p<512 || !before.exact_topology ||
                    region(shape,before)!=region(s,w))continue;

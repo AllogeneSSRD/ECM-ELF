@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "sha256": {
-    "src/core/generated/ecm_config_generated.h": "61f527eee5bd8b53c57bd5b4100d1d85dba79a26895c33377fd305791940d5d6",
-    "src/core/generated/ecm_ini_template.h": "54c055a2692f78d9b2d1fe51bcf5c18d56e53b8acdccaa208178d3a063ead602",
-    "config/ecm.ini.default": "507b41004dd8a8ab76ae3bd8a8a101c5791257ded0acda6bd401d514fa0ea9b9",
-    "config/ecm.ini.example": "507b41004dd8a8ab76ae3bd8a8a101c5791257ded0acda6bd401d514fa0ea9b9",
-    "docs/ECM_INI_REFERENCE.md": "54873a1ae9953351855d25000563781dfc5d1e3a1484e251aa05f677eebb1e09",
-    "config/ecm_options.json": "31559b7cb2b932e3e0cbe3e828ccaddd41eb99be4a9fa478ea050905923e9f74",
+    "src/core/generated/ecm_config_generated.h": "08f65c1a4a24d8ebf16dbd254bdf19689aef29249e18faca1832c09e14a8c1a7",
+    "src/core/generated/ecm_ini_template.h": "b4e36d94f7a4bd7531fa735509f002a0996475cc4b82875b7a179f588ae07cd1",
+    "config/ecm.ini.default": "47f3ac476dbb0b3475278eff95a647795ca8595c9d9975828115a0cafdd3fbb9",
+    "config/ecm.ini.example": "47f3ac476dbb0b3475278eff95a647795ca8595c9d9975828115a0cafdd3fbb9",
+    "docs/ECM_INI_REFERENCE.md": "631dddee275bf5a2bd0dffb2f80efa7e6d10068347f28f396f79603eb8d78763",
+    "config/ecm_options.json": "27d3350d97230d4c15c86e8836e49373984a499a6496b2355d6e68a05d050164",
     "tools/gen/generate_ecm_config.py": "fa38658dd92879696d30ea1e4c7c340966de95d1173aad609ac3ecef0e6ecdb6"
   }
 }

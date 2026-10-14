@@ -114,10 +114,31 @@ CSV 必填 `b1,mhz,tpi,curves,seconds_per_curve`，另提供 `container_bits` �
 - `p`：多项式P=φ(D)/2，**不是梅森指数**。
 - `condition`、fold/frontier及giant分块字段：描述设备/环境与实际执行形状。
 - `source`、`median_seconds`、`mad_seconds`、`repeats`：来源和正式测量摘要；新测摘要的`warmup_runs`为0或1，不计入repeats。已有未记录该字段的摘要保持原数据。
+- `predicted_seconds`：与该行完整 Stage2 计时边界相同的模型预测秒数。
+- `measured_model_ratio=median_seconds/predicted_seconds`：1为相等，>1为实测更慢，<1为实测更快。例如1.2表示比预测慢20%，0.8表示用时比预测少20%。只用于完整ECM实测矩阵；NTT组件表与纯模型行没有该实测比值。
+- `prediction_model`、`prediction_basis`：预测方法及依据。`before_measurement`为采集前冻结的预测，优先使用既有完整摘要校正，没有资料时使用内置位宽模型；`leave_one_out`为旧摘要补列时排除TOML该行后的回溯预测，内置冻结参考仍参与，不构成新的独立验证。原始计时和旧误差字段保持原值。
+
+`median_seconds`、`predicted_seconds`和`measured_model_ratio`使用引擎`stage2_full_wall.total=init+main`边界，包括初始化、必需自检、GCD和算术收尾；不含Stage1、选型、进程启动、因子分解及TOML写回。新测量在执行前计算预测，不能用刚采集的同一行校正自身后再输出比值。旧格式7摘要在下一次原生tune/合并/运行采集发布时补列；读取操作不改文件。纯模型行不会伪造比值1。
+
+新采样的比值与`validation_max_relative_error`使用同一次冻结预测，后者等于`|1−1/measured_model_ratio|`。旧摘要的独立误差不由回溯比值重算，可能与这个等式不符；应按`prediction_basis`区别解读。
 
 例如M12011余因子的普通摘要是target_bits=11694、arithmetic_bits=11694、carrier_exponent=0、modulus_kind=generic；承载摘要是target_bits=11694、arithmetic_bits=12011、carrier_exponent=12011、modulus_kind=mersenne。两个算术路径独立分组、独立更新最快正式中位数，共用一个性能文件。原始save、任务行、记录身份及逐轮证据留在忽略的实验目录，TOML不展开采样历史。
 
 NTT表只测Goldilocks有限域卷积，没有大整数进位carry或模N归约，不按梅森承载再重复一份；算术路径的速度差由完整ECM摘要和对应组件工作量体现。路径scope与参数表入口为`src/core/ecm_stage2_tune_portable.h::scope/Profile::update/serialize`。
+
+### 正常运行补充缺失位宽
+
+`stage2_tune_runtime=true`默认开启，CLI为`--tune-runtime 0|1`。使用队列或直接读取save计算的现有曲线，不额外计算曲线或预热。按当前允许复用的条件检查普通/梅森家族各自的**算术位宽、NTT/树区间、fold/frontier驻留、giant路线、物理缓冲和短NTT策略**；没有该算术位宽及执行区间的完整实测时，采集当前生产曲线。具体N、sigma、B1不作为覆盖门槛，B2和D通过工作量及区间决定覆盖关系。
+
+仅采集P≥512、具有完整多批请求拓扑的曲线；G=1及D210启动探针不作为区间锚点。结果必须无因子、clean=1、自检和抽查量为正、bad=0、互斥阶段计时完整，且实际D/P/giant数量及fold/frontier状态与原生准入计划相符；发生路径回退则跳过采集。规划、失败、中断、save中提前发现因子、调优子进程、因子命中不加入生产计时摘要。
+
+运行摘要使用`source=measured`、`benchmark_kind=runtime_save`、`repeats=1`、`mad_seconds=0`。这里MAD=0仅表示单个样本没有离散度估计。它参与区间成本校正及显式tune的成本预测，保留工程误差余量，**不作为精确配对实测收益证据**。运行摘要与正式调优摘要分别维护，单曲线最快时间不会阻止后续重复调优建立正式参考；各自同条件同候选仍只接受更快计时。
+
+覆盖后同一算术位宽/区间的后续曲线不继续写入，TOML不记录逐曲线历史。曲线结果先持久保存，之后取得既有tune独占锁、重新读取最新文件、重新检查覆盖、原子写回；并发tune已有覆盖时跳过。缓存占用或写回错误仅提示，不改变成功结果或队列曲线计数。生产JSONL的`tune_observation`保留条件、摘要和测量前预测，可在写回失败后由[导入工具](../../tools/bench/import_stage2_benchmark_tune.py)的`--runtime-results FILE`提取，再经原生`--tune-merge`汇集。没有该结构的旧普通运行结果不能仅凭外层seconds自动导入；已有冻结性能扫描仍走该工具的`--study`入口。
+
+全位宽扫描、普通/承载对照及短NTT基准工具在实验INI中设置`stage2_tune_runtime=false`，使正式比较的性能文件保持冻结。其他计时工具使用相同配置即可关闭运行采集。
+
+实现入口：`ecm_stage2_portable_driver.inl::prepare_runtime_tune/complete_runtime_tune/publish_runtime_tune/portable_complete_ratios`；`ecm_cuda_stage2_main.cpp::curve_worker`负责采集及结果回执；`ecm_stage2_width_prediction.h::has_width_measurement`定义缺失区间，`ecm_stage2_portable_model.h::observed`排除运行摘要的精确配对资格。源码位于`src/core/`。此入口已编译，完整GPU采集、并发锁及中断恢复的运行验证仍列入[TODO](../TODO.md)。
 
 ### 等级与通用网格
 
@@ -341,11 +362,11 @@ NTT 参数表发布时按 `(log2_length,length,batch,tile)` 数值升序排列�
 
 开发版不兼容旧TOML。显式合并旧文件报错；tune输出或默认短校准遇到旧版本时丢弃其内存中的性能数据，重新校准，成功发布后原子替换文件。校准失败不覆盖旧目标；关闭短校准后读取旧格式仍报错。旧`.cprof`及独立Stage1 TOML不受此Stage2格式规则影响。
 
-同条件同候选仅在正式中位数**严格更低**时替换；相等或更慢保持原记录，不同条件分别保存。估算不覆盖实测；模型仅在证据变化时更新。复用忽略项不把不同条件的秒数混入同一原始最快记录。写入用独占锁，临时文件重新校验后原子替换。
+同条件同候选仅在中位数**严格更低**时替换；运行单曲线摘要与正式调优摘要分别比较，相等或更慢保持原记录，不同条件分别保存。估算不覆盖实测；模型仅在证据变化时更新。复用忽略项不把不同条件的秒数混入同一原始最快记录。写入用独占锁，临时文件重新校验后原子替换。
 
 合并：`--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-ntt-profile NTT.toml --tune-file combined.toml`。不运行曲线或查询GPU。只有NTT的文件尚无完整引擎锚点，需要短校准或ECM tune。
 
-原始日志、计划、回执、二进制SHA256与可用构建清单位于工作目录的`data/experiments/`，不写入性能TOML。队列身份用性能文件路径，增量tune不重置已完成编号；Stage1成本输入身份另行保护。
+显式tune的原始日志、计划、回执、二进制SHA256与可用构建清单位于工作目录的`data/experiments/`；正常运行使用现有结果JSONL保存采集回执，摘要保留测量二进制SHA。TOML只保留最终摘要及来源，不记录运行/导入历史。队列进度身份不包含性能文件、D或承载选型，增量tune不重置已完成编号；Stage1成本输入身份另行保护。
 
 ## 验证范围与限制
 
@@ -370,7 +391,7 @@ G=1与baby预算回退缺完整联合生命周期，成本可估算但原生准�
 
 - [ecm_stage2_d_catalog.h:14](../../src/core/ecm_stage2_d_catalog.h#L14)：唯一D字面量表；`entries`、`degree`提供派生P，编译期检查范围、偶数、唯一和顺序。
 - [ecm_cuda_stage2.cu:8659](../../src/cuda/ecm_cuda_stage2.cu#L8659)：原生默认成本候选。
-- [ecm_stage2_portable_driver.inl](../../src/core/ecm_stage2_portable_driver.inl#L143)：默认几何模型；`portable_select`负责实测预筛、成本排名及准入，`run_portable_tune`负责局部搜索、测量与发布。
+- [ecm_stage2_portable_driver.inl:230](../../src/core/ecm_stage2_portable_driver.inl#L230)：默认几何模型；`portable_select`负责实测预筛、成本排名及准入，`run_portable_tune`负责局部搜索、测量与发布。[运行采集:150](../../src/core/ecm_stage2_portable_driver.inl#L150)负责采集与可选缓存写回，[比值补列:94](../../src/core/ecm_stage2_portable_driver.inl#L94)只补摘要字段。
 - [ecm_stage2_portable_model.h](../../src/core/ecm_stage2_portable_model.h#L171)：`Estimator::fitted`负责非负拟合及留一资格；同文件提供工作量、观察匹配、插值与误差余量。
 - [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h#L22)：`LocalSearch`负责邻域及噪声停止；`Profile`负责矩阵解析、排序与最快更新。
 - [ecm_stage1_cost_csv.h](../../src/core/ecm_stage1_cost_csv.h)、[ecm_stage2_probability.h](../../src/core/ecm_stage2_probability.h)：容器模型及概率。

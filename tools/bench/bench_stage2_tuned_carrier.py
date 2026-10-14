@@ -83,7 +83,7 @@ def main():
             shutil.copy2(a.profile, out / 'training.toml')
             shutil.copy2(a.profile, out / 'seed.toml')
             ini = out / 'bench.ini'
-            ini.write_text(f'device={a.device}\nstage2_device={a.device}\nstage2_debug_log=true\nstage2_auto_carrier=1\n', encoding='ascii')
+            ini.write_text(f'device={a.device}\nstage2_device={a.device}\nstage2_debug_log=true\nstage2_auto_carrier=1\nstage2_tune_runtime=false\n', encoding='ascii')
             data = dict(complete=False, created_utc=stamp(), device=mon.identity, identity=identity,
                         executable=str(out / 'bin' / exe.name), executable_sha256=sha(exe),
                         dll_sha256=sha(exe.parent / 'gmp-10.dll'), ini_sha256=sha(ini),
