@@ -33,3 +33,29 @@
 `analyze_ntt_outer_plans.py --operator <算子 summary.json> --stage2 <完整曲线 summary.json> --output data/benchmarks/<名称> --figure data/figures/<名称>.png`。
 
 汇总输出每格中位数/MAD、NTT模块峰值、两侧完整曲线样本数和各格中位数之和。后者只评价所选矩阵，不是一个生产任务的时长。算子吞吐与完整曲线分别绘图；组件峰不能作为进程显存峰。
+
+## tile/outer 联合扫描
+
+`benchmark_ntt_outer_plans.py --exe <probe> --output <新目录> --joint --lengths 20 21 22 23 24 25 --batches 1 4 --repeats 6 --iterations 4`。
+
+`--joint` 比较17种计划：mode0为生产自动表，mode1–16按tile10、11、12、13，每个tile依次M5、6、7、8。全部使用CTA512。k26–27另以batch1测量；入口限制k16–27、batch1–8、batch·L≤2²⁷，以限制四份检查数组的显存。每样本完整A/B与生产参考比较；每次先过原GMP门禁，再过密集joint GMP和故障门禁。
+
+原生探针对应 `--joint <k> <batch> <repeats> <iterations> <operation>`，`--joint-profile` 在末尾加mode0–16供cudaProfilerApi范围捕获。`--joint-check` 和 `--joint-fault` 覆盖17计划、k13/15、batch3及正向/融合逆向/卷积；正常102项/12,533,760 words，故障为bad1并退出3。
+
+`--joint-policy` 另检2592个自动/显式配置和k边界，并交替复用arena的旧/新计划，完整核对352,321,536 words；`--joint-policy-fault` 故意破坏一个k23结果，要求bad1、退出3。它覆盖实际tile与请求tile分离时的缓存身份。
+
+完整曲线用 `benchmark_stage2_graph.py --variant joint-outer ...`，off侧为MID_COOP=1/JOINT=0，on侧为MID_COOP=1/JOINT=1；其他用法相同。正式性能排除诊断和剖析，默认D/预算始终固定。
+
+联合结果：`analyze_stage2_joint.py --operator <短段 summary.json> <长段 summary.json> --stage2 <完整曲线 summary.json> --output data/benchmarks/<名称> --figures data/figures`。可加 `--gaps <空隙 JSON>` 生成准备归属图。热图以k21–23的中段M6、其他长度的生产表为参考，颜色裁切不改变单元格真实百分比。
+
+## CPU范围与GPU空隙
+
+`profile_stage2_graph.py --reference <已完成 command.json> --output <新目录> --kind systems --all-cuda-apis --host-trace --run-admin`。
+
+`--all-cuda-apis` 捕获Nsight默认过滤的调用；`--host-trace` 仅对该剖析子进程设置NTT_HOST_TRACE=1，启用CPU NVTX范围。两选项只用于Systems。范围可增加剖析开销，所有此类秒数排除正式性能。
+
+`analyze_stage2_cuda_gaps.py --trace <导出的 trace.sqlite> --device 1 --output data/benchmarks/<名称>/gaps.json`。
+
+工具限制单应用GPU进程，取本设备kernel/copy/memset并集，从第一个至最后一个GPU事件建立窗口。对空隙与同worker的runtime API做互斥区间分解；API外部分按最内层NVTX范围归属，跨线程重叠明确标记。异步memset按host enqueue的correlationId归属CPU范围，不按稍后的GPU时间戳归属。工具校验分区总和，保留最大空隙、API累计时长、原始trace及工具SHA；没有NVTX时仍可分析API空隙。
+
+API持续时间、GPU事件累计时间和空隙交集是不同口径，不能相加。详见[准备报告](../../docs/performance/STAGE2_PREPARATION.md)。

@@ -30,9 +30,10 @@ def main():
     parser.add_argument('--operations', type=int, nargs='+', default=[2])
     parser.add_argument('--repeats', type=int, default=10)
     parser.add_argument('--iterations', type=int, default=8)
+    parser.add_argument('--joint', action='store_true', help='tile10..13 x M5..8 plus production baseline')
     args = parser.parse_args()
-    if not all(16 <= k <= 25 for k in args.lengths) or not all(1 <= b <= 8 for b in args.batches):
-        parser.error('lengths 16..25 and batches 1..8 required')
+    if not all(16 <= k <= 27 for k in args.lengths) or not all(1 <= b <= 8 for b in args.batches) or any((1 << k)*b > 1 << 27 for k in args.lengths for b in args.batches):
+        parser.error('lengths 16..27, batches 1..8 and length*batch<=2^27 required')
     if not all(op in (0, 1, 2) for op in args.operations) or not 1 <= args.repeats <= 101 or not 1 <= args.iterations <= 128:
         parser.error('invalid operation/repeat/iteration')
     out = args.output.resolve()
@@ -51,7 +52,7 @@ def main():
     env['CUDA_LAUNCH_BLOCKING'] = '0'
     report = dict(complete=False, binary_sha256=sha(exe), build=manifest, tool_sha256=sha(__file__),
                   device=args.device, timing='device events; setup, fill and check excluded; no discarded warmup',
-                  runs=[], statistics=[], checks={})
+                  joint=args.joint, runs=[], statistics=[], checks={})
 
     def save():
         (out / 'summary.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
@@ -83,20 +84,27 @@ def main():
         if 'ntt_fuse_coop_check: cases=96 words=27131904 bad=1 ' not in fault:
             raise ValueError('fault not detected')
         report['checks'].update(gmp=True, fault=True)
+        modes = 17 if args.joint else 5
+        if args.joint:
+            dense = run('joint_gmp', ['--joint-check'])
+            fault = run('joint_fault', ['--joint-fault'], 3)
+            if 'joint_gmp_gate: cases=102 words=12533760 bad=0 fault=0 injected=0 live=0' not in dense or 'joint_gmp_gate: cases=102 words=12533760 bad=1 fault=1 injected=1 live=0' not in fault:
+                raise ValueError('dense independent joint gate/fault failed')
+            report['checks'].update(joint_gmp=True, joint_fault=True)
         for k in args.lengths:
             for batch in args.batches:
                 for op in args.operations:
                     name = f'k{k}_b{batch}_op{op}'
-                    text = run(name, ['--bench', k, batch, args.repeats, args.iterations, op])
+                    text = run(name, ['--joint' if args.joint else '--bench', k, batch, args.repeats, args.iterations, op])
                     rows = fields(text, 'outer_plan_sample')
                     plans = fields(text, 'outer_plan')[1:]  # first is the dense reference
-                    if len(rows) != 5 * args.repeats or len(plans) != 5 or 'outer_plan_done: live_bytes=0' not in text:
+                    if len(rows) != modes * args.repeats or len(plans) != modes or 'outer_plan_done: live_bytes=0' not in text:
                         raise ValueError('incomplete scan or live plan leak')
                     for row in rows:
                         if int(row['bad']) or int(row['checked_words']) != 2 * (1 << k) * batch:
                             raise ValueError('full-output check failed')
                     item = dict(k=k, batch=batch, operation=op, plans=plans, samples=rows, modes={})
-                    for mode in range(5):
+                    for mode in range(modes):
                         selected = [r for r in rows if int(r['mode']) == mode]
                         if len(selected) != args.repeats:
                             raise ValueError('unbalanced mode count')
@@ -110,8 +118,8 @@ def main():
                         data['gain_percent'] = 100 * (1-data['median_seconds']/baseline)
                     report['statistics'].append(item)
                     save()
-                    print(name + ': ' + ' '.join(f"M{mode+4}={item['modes'][str(mode)]['gain_percent']:+.2f}%"
-                          for mode in range(1, 5)), flush=True)
+                    best=min(item['modes'],key=lambda m:item['modes'][m]['median_seconds'])
+                    print(name+': best='+str(plans[int(best)])+' gain='+str(round(item['modes'][best]['gain_percent'],2))+'%',flush=True)
         report['complete'] = True
         save()
     finally:

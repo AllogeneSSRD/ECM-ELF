@@ -59,6 +59,7 @@
 #include <string>
 #include <map>
 #include <vector>
+#include "ntt_host_trace.cuh"
 
 /* Every CUDA call is checked, and a failure says WHICH call, WHICH line, WHAT the driver
    answered, HOW MANY bytes it was asked for (when the call carries a size) and how much device
@@ -1485,17 +1486,28 @@ static bool fuse_shape_policy_supported(int t)
         fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0 && fuse_compact_scratch() &&
         fuse_shape_device_supported();
 }
+static bool fuse_joint_policy_supported()
+{
+    return fuse_env_ull("NTT_FUSE_JOINT",0)!=0 && fuse_env_ull("NTT_FUSE_COOP_OUTER",0)==2 &&
+        fuse_env_ull("NTT_FUSE_T",12)==12 && fuse_shape_policy_supported(12);
+}
+static int fuse_selected_tile(int k,int requested)
+{
+    return k==23 && requested==12 && fuse_joint_policy_supported() ? 11 : requested;
+}
 static int fuse_outer_max(int t,int k,bool &coop)
 {
     const auto mode=fuse_env_ull("NTT_FUSE_COOP_OUTER",0);
     if(mode==2) {
         // Deterministic measured policy: small/unmeasured shapes keep M4.
         // COOP_M is the forced-mode override only; it cannot alter this table.
-        const bool middle=fuse_env_ull("NTT_FUSE_MID_COOP",0)!=0 && k>=21 && k<=23;
-        coop=((k>=24 && k<=27) || middle) && fuse_shape_policy_supported(t);
+        const bool joint=fuse_joint_policy_supported();
+        const bool middle=k>=21 && k<=23 && (fuse_env_ull("NTT_FUSE_MID_COOP",0)!=0 || joint);
+        coop=((k>=24 && k<=27) || middle) && (fuse_shape_policy_supported(t) || (joint && k==23 && t==11));
         // Experimental middle-length table. Keep the measured long table and
         // all unsupported devices/tiles unchanged. The arena keys m_max/coop.
         if(coop && middle)return 6;
+        if(coop && joint && k==25)return 7;
         if(coop)return k==24 ? 6 : 8;
     } else coop=mode!=0 && t>=5;
     const int maximum=coop ? 8 : FUSE_MAX_M;
@@ -1511,6 +1523,7 @@ static void fuse_describe(FuseCtx &c, unsigned long long n, int k, unsigned long
     int t = (int)fuse_env_ull("NTT_FUSE_T", 12);
     if (t > k) t = k;
     if (t < 0) t = 0;
+    t=fuse_selected_tile(k,t);
     c.t = t;
     c.warp_tail = fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0;
     c.m_max=fuse_outer_max(t,k,c.coop_outer);
@@ -2338,7 +2351,7 @@ static void ntt_arena_fuse(NttArena *ar, unsigned long long n, int k, unsigned l
 {
     ntt_gl_reduce_configure();
     if (!ar) { fuse_init(out, n, k, omega, omega_inv); return; }
-    const int requested_t=std::max(0,std::min(k,(int)fuse_env_ull("NTT_FUSE_T",12)));
+    const int requested_t=fuse_selected_tile(k,std::max(0,std::min(k,(int)fuse_env_ull("NTT_FUSE_T",12))));
     bool requested_coop=false;
     const int requested_m=fuse_outer_max(requested_t,k,requested_coop);
     for (NttArena::FuseEntry &e : ar->fuses) {
@@ -3212,6 +3225,7 @@ static int ntt_shape_plan_uncached(unsigned long long P, int S, int device, NttA
 static int ntt_shape_plan(unsigned long long P, int S, int device, NttArena *arena,
                           FuseCtx &fc, NttShape &sh, int force_bpw = 0)
 {
+    stage2_trace::Range trace("NTT.plan");
     static std::vector<NttShapeCacheEntry> memo;
     for (const NttShapeCacheEntry &e : memo) {
         if (e.P == P && e.S == S && e.device == device && e.force_bpw == force_bpw) {
@@ -3534,6 +3548,7 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
                                     std::vector<unsigned long long> *hPost,
                                     bool need_hout = true, bool defer_res = false, NttArena *arena=nullptr)
 {
+    stage2_trace::Range trace("NTT.submit");
     NttPassResult r;
     const unsigned long long N = sh.N, out_slots = sh.out_slots;
     const unsigned int threads = 256;
@@ -4004,6 +4019,7 @@ int ntt_poly_mul_batch_dev(unsigned long long P, int S, int device, unsigned lon
                            unsigned long long **digits_out = nullptr, int force_bpw = 0,
                            bool defer_carry = false, const NttInputHook *input = nullptr)
 {
+    stage2_trace::Range trace("NTT.request");
     if (nbatch == 0) {
         std::fprintf(stderr, NTT_PROBE_NAME ": batch of zero slices\n");
         return 2;

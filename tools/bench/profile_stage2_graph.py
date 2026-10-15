@@ -134,6 +134,13 @@ def collect(out):
                 subprocess.run([str(NSYS), 'export', '--type=sqlite', '--force-overwrite=true', '--output', str(exported),
                                 str(out / 'trace.nsys-rep')], stdout=f, stderr=subprocess.STDOUT, check=True, timeout=120)
         summary = systems_summary(exported, meta['device'])
+        if meta.get('host_trace'):
+            with sqlite3.connect(exported) as database:
+                exists = database.execute("select count(*) from sqlite_master where type='table' and name='NVTX_EVENTS'").fetchone()[0]
+                count = database.execute('select count(*) from NVTX_EVENTS where eventType in (59,70) and end is not null').fetchone()[0] if exists else 0
+            if not count:
+                raise ValueError('NTT_HOST_TRACE was requested but no CPU NVTX ranges were captured')
+            summary['host_trace_ranges'] = count
         summary['report_sha256'] = sha(out / 'trace.nsys-rep')
     else:
         # Failed exports must not overwrite a previously collected metric table.
@@ -176,6 +183,8 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--kind', choices=['systems', 'compute'], default='systems')
     p.add_argument('--kernel', type=Path, help='JSON shape selected from Systems summary, including first_invocation')
+    p.add_argument('--all-cuda-apis', action='store_true', help='Systems only; include normally filtered CUDA calls')
+    p.add_argument('--host-trace', action='store_true', help='Systems only; enable instrumented Stage2 CPU NVTX ranges')
     p.add_argument('--run-admin', action='store_true')
     p.add_argument('--collect-only', action='store_true')
     a = p.parse_args()
@@ -185,6 +194,8 @@ def main():
         return
     if not a.reference:
         p.error('--reference required for new capture')
+    if (a.all_cuda_apis or a.host_trace) and a.kind != 'systems':
+        p.error('--all-cuda-apis/--host-trace requires --kind systems')
     out.mkdir(parents=True, exist_ok=False)
     ref = a.reference.resolve()
     record = json.loads(ref.read_text(encoding='utf-8'))
@@ -199,6 +210,8 @@ def main():
     cmd[cmd.index('--log')+1] = str(out / 'engine.log')
     cmd[cmd.index('--results')+1] = str(out / 'results.jsonl')
     env = dict(record['environment'], CUDA_LAUNCH_BLOCKING='0')
+    if a.host_trace:
+        env['NTT_HOST_TRACE'] = '1'
     if any(not re.fullmatch(r'(NTT_[A-Z0-9_]+|CUDA_LAUNCH_BLOCKING)', k) or
            not re.fullmatch(r'[A-Za-z0-9_,.\-]+', v) for k, v in env.items()):
         raise ValueError('Unsupported environment value in administrator wrapper')
@@ -211,6 +224,8 @@ def main():
     if a.kind == 'systems':
         prefix = [str(NSYS), 'profile', '--trace=cuda,nvtx', '--sample=none', '--cpuctxsw=none',
                   '--cuda-graph-trace=node', '--force-overwrite=true', '--output', str(out / 'trace')]
+        if a.all_cuda_apis:
+            prefix += ['--cuda-trace-all-apis=true']
     else:
         if not a.kernel:
             p.error('--kernel required for compute')
@@ -231,6 +246,7 @@ def main():
     ps += "$stage2Profile.ExitCode | Set-Content -LiteralPath '" + str(out / 'exit.txt') + "'\nexit $stage2Profile.ExitCode\n"
     (out / 'admin.ps1').write_text(ps, encoding='utf-8')
     meta = dict(kind=a.kind, device=int(arg('--device')), app=cmd, environment=env, reference=reference,
+                all_cuda_apis=a.all_cuda_apis, host_trace=a.host_trace,
                 reference_file=str(ref), reference_sha256=sha(ref), inputs=inputs, binary_sha256=sha(cmd[0]),
                 command=command, kernel=kernel, collector_sha256=sha(__file__))
     verify(meta)

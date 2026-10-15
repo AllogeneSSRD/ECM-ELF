@@ -1766,6 +1766,7 @@ static unsigned long long g_pin_raw_used = 0, g_pin_out_used = 0, g_pin_fallback
    (measured, P=5). */
 static unsigned long long *pin_words(unsigned long long **slot, size_t *cap, size_t words)
 {
+    stage2_trace::Range trace("host.pinned_reserve");
     if (*slot && *cap >= words) return *slot;
     if (*slot) { (void)cudaFreeHost(*slot); *slot = nullptr; *cap = 0; }
     void *q = nullptr;
@@ -2443,6 +2444,7 @@ static void s4_div_check(const std::vector<unsigned long long> &actual)
 static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
                           const std::vector<unsigned long long> &hn, unsigned long long ninv)
 {
+    stage2_trace::Range trace("init.S4_constants");
     R.nw = (int)W;
     R.w = W;
     R.ninv = ninv;
@@ -2777,6 +2779,7 @@ static void s4_gmp_assemble_slow(mpz_t v, const unsigned long long *digits,
 
 static void s4_gmp_pack_check()
 {
+    stage2_trace::Range trace("check.GMP_pack");
     const int counts[] = {0, 1, 2, 3, 63, 64, 65, 502, 1024};
     const int bases[] = {1, 19, 21, 31, 32, 63, 64};
     unsigned long long seed = 0x1234fedcba987654ull, cases = 0, bad = 0;
@@ -2822,6 +2825,7 @@ static void s4_gmp_reduce(mpz_t out, const unsigned long long *digits, unsigned 
 /* the reduction kernel against GMP, on the ACTUAL shape, with adversarial patterns included */
 static int s4_reduce_selftest(S4Reduce &R, S4Reduce::Shape *S)
 {
+    stage2_trace::Range trace("check.S4_selftest");
     const unsigned long long cases = 96;
     const unsigned long long slot_words = S->slot_words;
     const int bpw = S->bpw;
@@ -3047,6 +3051,7 @@ static void s4_compare_snapshot(S4Reduce &R, S4Reduce::Shape *S,
     unsigned long long out_slots, const unsigned long long *digbuf,
     const unsigned long long *redbuf)
 {
+    stage2_trace::Range trace("check.GMP_snapshot");
     const double t0 = now_s();
     mpz_t want, mine;
     mpz_inits(want, mine, nullptr);
@@ -3448,6 +3453,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
                                 size_t first = 0, size_t count = (size_t)-1,
                                 const S4DeviceBatch *resident = nullptr)
 {
+    stage2_trace::Range trace("S4.request");
     const size_t W = L.W;
     const size_t P = (ma > mb) ? ma : mb;
     const size_t full_nc=ma+mb-1;
@@ -4030,6 +4036,7 @@ static std::vector<std::vector<unsigned long long>> build_tree_flat(
     std::vector<size_t> &deg, size_t &pad_out, FTreeStats &fs, int cat = -1,
     bool keep_children = true)
 {
+    stage2_trace::Range trace("Tree.host_driver");
     const size_t W = L.W;
     const size_t n = leaf.size();
     size_t pad = 1;
@@ -4220,6 +4227,7 @@ static void hex_of_words(std::string &out, const unsigned long long *w, size_t W
 static int mont_selftest(const std::vector<unsigned long long> &hn, size_t nw,
                          unsigned long long ninv, const mpz_t N, const mpz_t R)
 {
+    stage2_trace::Range trace("check.Montgomery");
     const bool requested=fuse_env_ull("NTT_POINT_MERSENNE",0)!=0;
     const int bits=(int)mpz_sizeinbase(N,2);
     const bool exact_shape=bits>=2 && mpz_popcount(N)==(mp_bitcnt_t)bits && (size_t)((bits+63)/64)==nw;
@@ -4287,6 +4295,7 @@ static int mont_selftest(const std::vector<unsigned long long> &hn, size_t nw,
 static int xadd_selftest(const std::vector<unsigned long long> &hn,size_t nw,
                           unsigned long long ninv,const mpz_t N,const mpz_t R)
 {
+    stage2_trace::Range trace("check.xADD");
     const char *flag=std::getenv("NTT_XADD6_TEST");
     if(!flag || !*flag || !std::atoi(flag)) return 0;
     const int cases=128; // 64 ordinary-domain inputs + their 64 Montgomery images
@@ -4459,6 +4468,7 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
     size_t device_n=0,const std::function<void(unsigned long long*)> &fill={},
     const std::function<void(const unsigned long long*,size_t)> &root_sink={})
 {
+    stage2_trace::Range trace("GTree.build");
     const size_t W=L.W,n=fill?device_n:leaf.size();size_t pad=1;while(pad<n)pad*=2;
     const bool check=g_groot_device_check;
     if(check && n>512) {std::fprintf(stderr,"%s: FATAL: resident GMP check limited to 512 leaves\n",NTT_PROBE_NAME);std::exit(3);}
@@ -4563,6 +4573,7 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
     const double start=now_s();
     static bool poisoned=false;
     for(size_t base=pad/2; base; base/=2) {
+        stage2_trace::Range level_trace("GTree.level");
         const double level_start=now_s();
         std::vector<unsigned long long> target(base);size_t next_words=0;
         for(size_t i=0;i<base;++i) {target[i]=next_words;if(deg[base+i])next_words+=(deg[base+i]+1)*W;}
@@ -6713,6 +6724,7 @@ static void ladder_points_ws(S3Workspace &W, const std::vector<unsigned long lon
                              std::vector<unsigned long long> &outx,
                              std::vector<unsigned long long> &outz)
 {
+    stage2_trace::Range trace("Giant.ladder");
     const LadderCtx &C = *W.C;
     const size_t nw = C.nw, n = js.size();
     outx.assign(n * nw, 0ull);
@@ -6824,6 +6836,7 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
                               std::vector<unsigned long long> *gseg = nullptr,
                               unsigned long long seg = 16,ResidentGiant *resident=nullptr)
 {
+    stage2_trace::Range trace("Giant.chain");
     const size_t nw = C.nw;
     const unsigned long long npts = chi - clo + 1;
     const unsigned long long blocks = (npts + per_block - 1) / per_block;
@@ -10164,12 +10177,15 @@ int ecm_cuda_stage2_check_configuration() {
             return 2;
         }
     }
-    for(const char *key:{"NTT_FUSE_MID_COOP","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_SCALED_FRONTIER_CHECK","NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_ALLOC_FAIL"}) {
+    for(const char *key:{"NTT_FUSE_JOINT","NTT_HOST_TRACE","NTT_FUSE_MID_COOP","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_SCALED_FRONTIER_CHECK","NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_ALLOC_FAIL"}) {
         const char *v=std::getenv(key);
         if(v && std::strcmp(v,"0") && std::strcmp(v,"1")) {
             std::fprintf(stderr,"production Stage2 requires %s=0 or 1\n",key);return 2;
         }
     }
+#if !ECM_STAGE2_NVTX_AVAILABLE
+    if(stage2_trace::enabled()) {std::fprintf(stderr,"NTT_HOST_TRACE requires CUDA NVTX3 headers\n");return 2;}
+#endif
     for(const auto &pair:{std::pair<const char*,const char*>("NTT_GSCALE_DEVICE_TEST_BAD","NTT_GSCALE_DEVICE_CHECK"),
                          std::pair<const char*,const char*>("NTT_SCALED_ROOT_TEST_BAD","NTT_SCALED_ROOT_CHECK"),
                          std::pair<const char*,const char*>("NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_CHECK")}) {

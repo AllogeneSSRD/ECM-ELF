@@ -24,6 +24,7 @@ static bool device_baby_generate(const LadderCtx &C,const mpz_t N,
     std::vector<std::vector<unsigned long long>> &leaf,SmallPrimeBabyCache *cache,
     std::vector<std::string> &factors,unsigned long long &noninv,DeviceBabyStats &st,bool force_check=false)
 {
+    stage2_trace::Range trace("Baby.generate");
     const double begin=now_s();const size_t n=indices.size(),w=C.nw;
     if(!n)return false;
     ecm_stage2::BabyMemoryLayout layout;

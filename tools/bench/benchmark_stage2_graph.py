@@ -26,6 +26,8 @@ def environment(enabled, max_k=19, max_words=1 << 22, min_calls=4, diagnostic=Fa
                NTT_D_MODEL='0', NTT_NO_PROGRESS='1', CUDA_LAUNCH_BLOCKING='0')
     if variant == 'mid-outer':
         env['NTT_FUSE_MID_COOP'] = str(enabled)
+    elif variant == 'joint-outer':
+        env.update(NTT_FUSE_MID_COOP='1', NTT_FUSE_JOINT=str(enabled))
     if diagnostic:
         env['NTT_TARGET_LEAF_HASH'] = '1'
     return env
@@ -51,7 +53,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--repeats', type=int, default=4)
-    p.add_argument('--variant', choices=['graph', 'mid-outer'], default='graph')
+    p.add_argument('--variant', choices=['graph', 'mid-outer', 'joint-outer'], default='graph')
     p.add_argument('--max-k', type=int, default=19)
     p.add_argument('--max-words', type=int, default=1 << 22)
     p.add_argument('--min-calls', type=int, default=4)
@@ -64,7 +66,7 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     exe = a.exe.resolve()
     identity = freeze(exe)
-    if a.variant == 'mid-outer':
+    if a.variant != 'graph':
         build = json.loads((exe.parent / 'build_manifest.json').read_text(encoding='utf-8-sig'))
         if (build.get('engine'), build.get('architecture'), build.get('gl_fixed_mode'),
             build.get('add_sub_mask'), build.get('outer_unroll_u')) != ('production', 'sm_89', 3, 1, 0):
@@ -128,14 +130,15 @@ def main():
                     if run.returncode:
                         raise RuntimeError(f'{name} failed ({run.returncode}); evidence retained')
                     row = parse(log, result, leaf_fixture=a.diagnostic)
-                    if a.variant == 'mid-outer' and 'RTX 4060 Laptop' not in log.read_text(encoding='utf-8'):
+                    if a.variant != 'graph' and 'RTX 4060 Laptop' not in log.read_text(encoding='utf-8'):
                         raise ValueError('Middle-outer table is not supported on this device')
                     graph = fields(log.read_text(encoding='utf-8'), 'ntt_graph_stats')
                     if int(graph['requested']) != (enabled if a.variant == 'graph' else 0) or int(graph['failures']):
                         raise ValueError('Graph request or capture failed')
                     graph_active = bool(enabled and int(graph['builds']) and int(graph['hits']))
+                    selected_lengths = {23, 25} if a.variant == 'joint-outer' else {21, 22, 23}
                     variant_active = graph_active if a.variant == 'graph' else bool(enabled and sum(
-                        count for k, count in row['histogram'].items() if 21 <= int(k) <= 23))
+                        count for k, count in row['histogram'].items() if int(k) in selected_lengths))
                     current = [row['correctness'], row['histogram'], row['convolutions'], row['chunks']]
                     if invariant is None:
                         invariant = current
@@ -156,7 +159,7 @@ def main():
                     with (out / 'runs.jsonl').open('a', encoding='utf-8') as stream:
                         stream.write(json.dumps(row) + '\n')
                     detail = (f"graph_hits={graph['hits']} builds={graph['builds']} saved={graph['saved_launches']}"
-                              if a.variant == 'graph' else f"middle_transforms={sum(count for k, count in row['histogram'].items() if 21 <= int(k) <= 23)} enabled={enabled}")
+                              if a.variant == 'graph' else f"variant={a.variant} selected_transforms={sum(count for k, count in row['histogram'].items() if int(k) in selected_lengths)} enabled={enabled}")
                     print(f"{name}: total={row['engine_seconds']:.6f}s {detail} PASS", flush=True)
     finally:
         telemetry.terminate()
