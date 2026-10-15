@@ -2,6 +2,8 @@
 
 本仓库提供 CUDA/OpenCL GPU Stage1、CPU Stage1、独立 CUDA 多项式 Stage2，以及 Windows 图形前端和数据集工具。文档描述当前源码；本机已有发布包是否包含某功能，应核对其构建身份。
 
+CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；使用、存档身份、检查点和当前限制见 [GPU Edwards](architecture/STAGE1.md#gpu-edwards)。
+
 ## 使用
 
 - [Stage1](usage/STAGE1.md)：曲线计算、指数模式、保存点、检查点和 Prime95 交接。

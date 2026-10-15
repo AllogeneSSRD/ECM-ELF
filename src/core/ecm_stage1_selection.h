@@ -74,9 +74,9 @@ inline bool parse_scalar_construction(std::string_view value, ScalarConstruction
     return true;
 }
 
-inline bool valid_route(const Selection &selection) {
+inline bool valid_route(const Selection &selection, bool gpu_edwards = false) {
     return selection.target != ExecutionTarget::Gpu ||
-           selection.curve == CurveModel::Montgomery;
+           selection.curve == CurveModel::Montgomery || gpu_edwards;
 }
 
 inline bool valid_gpu_param(int value) { return value == 0 || value == 2 || value == 3; }

@@ -24,6 +24,7 @@
 #include "ecm_stage2_logging.h"
 #include "ecm_stage2_console.h"
 #include "ecm_stage2_queue_state.h"
+#include "ecm_edwards_io.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -107,9 +108,9 @@ uint64_t fingerprint(const std::string &s) {
     return h;
 }
 struct Record {
-    std::string n, x;
+    std::string n, x, a24;
     uint64_t sigma = 0, b1 = 0, offset = 0, hash = 0, index = 0;
-    bool checksum = false;
+    bool checksum = false, edwards = false;
 };
 Record parse_record(std::string line) {
     if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
@@ -131,15 +132,20 @@ Record parse_record(std::string line) {
     for (const char *key : {"METHOD", "SIGMA", "B1", "N", "X"})
         if (!fields.count(key) || fields[key].empty())
             throw std::runtime_error(std::string("save is missing ") + key);
-    if (upper(fields["METHOD"]) != "ECM") throw std::runtime_error("save METHOD must be ECM");
+    const bool edwards=upper(fields["METHOD"])=="ECM-EDWARDS-AM";
+    if (!edwards && upper(fields["METHOD"]) != "ECM") throw std::runtime_error("save METHOD must be ECM or ECM-EDWARDS-AM");
+    if(edwards && (fields.count("PARAM") || fields["VERSION"]!="1" || fields["SCALAR"]!="48LCM" ||
+                   (fields["STATUS"]!="POINT" && fields["STATUS"]!="FACTOR") || !fields.count("CHECKSUM")))
+        throw std::runtime_error("invalid Edwards save identity (VERSION=1, SCALAR=48LCM, STATUS and CHECKSUM required; PARAM forbidden)");
     if (fields.count("PARAM") && u64(fields["PARAM"], "PARAM") != 0)
         throw std::runtime_error("only Suyama PARAM=0 text saves are supported");
     std::string sigma = fields["SIGMA"];
     if (sigma.compare(0, 2, "0:") == 0) sigma.erase(0, 2);
     Record r;
+    r.edwards=edwards;
     r.sigma = u64(sigma, "SIGMA");
     r.b1 = u64(fields["B1"], "B1");
-    if (r.sigma < 6 || r.b1 < 2) throw std::runtime_error("SIGMA must be >=6 and B1 >=2");
+    if (r.sigma < (edwards?1u:6u) || r.b1 < 2) throw std::runtime_error("invalid SIGMA or B1");
     Big n, x, z, chk, factor;
     std::string err;
     if (!ecm_parse_expression(fields["N"], n.z, &err)) throw std::runtime_error("N: " + err);
@@ -149,7 +155,22 @@ Record parse_record(std::string line) {
         throw std::runtime_error("X must be an integer in [0,N), decimal or 0x hex");
     if (fields.count("Z") && (mpz_set_str(z.z, fields["Z"].c_str(), 0) || mpz_cmp_ui(z.z, 1)))
         throw std::runtime_error("only normalized affine saves (Z=1 or absent) are supported");
-    if (fields.count("CHECKSUM")) {
+    if(edwards) {
+        const bool hit=fields["STATUS"]=="FACTOR";
+        if(u64(fields["CHECKSUM"],"CHECKSUM")!=ecm_edwards::save_checksum(number(n.z),number(x.z),r.sigma,r.b1,hit))
+            throw std::runtime_error("Edwards save CHECKSUM mismatch");
+        r.checksum=true;
+        if(hit) {
+            if(mpz_cmp_ui(x.z,1)<=0 || mpz_cmp(x.z,n.z)>=0 || !mpz_divisible_p(n.z,x.z))
+                throw std::runtime_error("invalid Edwards saved factor");
+        } else {
+            Big d,px,py,a24;
+            const auto setup=ecm_edwards::construct(d.z,px.z,py.z,a24.z,factor.z,r.sigma,n.z);
+            if(setup==ecm_edwards::Setup::Factor)mpz_set(x.z,factor.z);
+            else if(setup!=ecm_edwards::Setup::Ready)throw std::runtime_error("degenerate Edwards curve in save");
+            else r.a24=number(a24.z);
+        }
+    } else if (fields.count("CHECKSUM")) {
         set64(chk.z, r.b1);
         set64(factor.z, r.sigma);
         mpz_mul(chk.z, chk.z, factor.z);
@@ -828,6 +849,8 @@ int curve_worker(Options o) {
     if (!std::getline(in, line) || fingerprint(line) != o.hash)
         throw std::runtime_error("save changed after planning");
     const Record r = parse_record(line);
+    if(r.edwards && !o.b2 && o.auto_b2)
+        throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
     if(o.carrier_exponent) {
         ecm_stage2::ModulusContext modulus;std::string error;
         if(!modulus.configure(r.n.c_str(),16,o.carrier_exponent,error))throw std::runtime_error(error);
@@ -864,7 +887,8 @@ int curve_worker(Options o) {
         configure_cuda_wait(o.device);
         code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
             [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent,
-            o.tune_child || !observation.sample.empty()?&tune_metrics:nullptr);
+            o.tune_child || !observation.sample.empty()?&tune_metrics:nullptr,
+            r.a24.empty()?nullptr:r.a24.c_str());
     }
     if (code || result.empty()) return code ? code : 1;
     if(o.tune_child) {
@@ -916,7 +940,7 @@ int curve_worker(Options o) {
         ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
         ",\"factorization_seconds\":" + std::to_string(factor_seconds) +
-        ",\"param\":0" +
+        (r.edwards?",\"curve\":\"ed\",\"param\":null":",\"curve\":\"mont\",\"param\":0") +
         ",\"requested_factor_only\":" + std::string(o.factor_only ? "true" : "false") +
         ",\"auto_b2\":" + std::string(auto_json.empty() ? "false" : "true") +
         ",\"requested_B2\":" + std::to_string(requested_b2) + ",\"auto_planning_seconds\":" + std::to_string(auto_seconds) +
@@ -931,7 +955,7 @@ int curve_worker(Options o) {
     return 0;
 }
 void help() {
-    std::cout << "ecm_cuda_stage2 - resume normalized Suyama PARAM=0 Stage1 text saves\n"
+    std::cout << "ecm_cuda_stage2 - resume normalized Suyama PARAM=0 or ECM-EDWARDS-AM Stage1 text saves\n"
         "  ecm_cuda_stage2 --save FILE --b2 B2 [--curves N] [--skip-curves N]\n"
         "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results FILE\n"
@@ -1286,6 +1310,7 @@ int driver(Options o) {
             if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
             plan=records(save,skip,count);
             for(const auto &r:plan) {
+                if(r.edwards && o.auto_b2 && !b2)throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
                 if((!(o.auto_b2&&!b2)&&b2<=r.b1)||b2>static_cast<uint64_t>(INT64_MAX)-8192)
                     throw TaskInputError("B2 must exceed every saved B1 and fit the engine's signed index range");
                 if(!expected_n.empty()&&r.n!=expected_n)throw TaskInputError("worktodo N differs from save N");

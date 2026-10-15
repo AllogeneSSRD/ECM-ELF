@@ -270,6 +270,7 @@ if(ECM_ENABLE_CUDA)
         src/opencl_ecm_runtime_config.cpp
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
+        src/cuda/ecm_cuda_edwards.cu
         kernels/cuda/cgbn_stage1.cu
         kernels/cuda/cgbn_stage1_kernels_tpi4.cu
         kernels/cuda/cgbn_stage1_kernels_tpi8.cu
@@ -308,7 +309,7 @@ if(ECM_ENABLE_CUDA)
             kernels/cuda/cgbn_stage1_prac_constants.cu
             src/core/ecm_prac_plan.cpp)
     endif()
-    target_compile_definitions(ecm_cuda PRIVATE ECM_CUDA_ENABLE_PRAC=$<BOOL:${ECM_CUDA_ENABLE_PRAC}>)
+    target_compile_definitions(ecm_cuda PRIVATE ECM_HAS_CUDA_EDWARDS=1 ECM_CUDA_ENABLE_PRAC=$<BOOL:${ECM_CUDA_ENABLE_PRAC}>)
     # CGBN uses uint32_t without including stdint.h. CUDA 12.6 does not provide
     # that transitive include; keep the compatibility fix in our tracked build.
     target_compile_options(ecm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--pre-include=stdint.h>)

@@ -6,7 +6,9 @@
 
 生产任务通常使用 Suyama PARAM0。sigma 是曲线种子，不是曲线序号；不同参数化的 sigma 不能互换。GPU 一批曲线共享 N、B1 和指数，分别维护点状态。`ECM=`/`ECM2=` 队列行没有 save 名称；GPU Montgomery worker 会按默认的 `m{n}_{b1}.save` 名称写入 `tmp_dir`，CPU Montgomery 也在该目录写入共享 save。保存失败时任务留在 worktodo，不会进入 finished。
 
-Montgomery 路径的 `lcm=1` 使用 lcm(1…B1)，`lcm=12` 在该标量上乘 12。后者会改变保存点和因子发现范围，比较程序或生成测试存档时必须明确口径。Edwards 路径固定使用 48·lcm(1…B1)，不接受 `lcm=12`。曲线模型和执行位置分别由 `curve` 与 `target` 选择；GPU Edwards 当前不支持。CUDA PARAM0 可使用完整 64 位 sigma；PARAM2/3 的批次受 32 位窗口限制。
+Montgomery 路径的 `lcm=1` 使用 lcm(1…B1)，`lcm=12` 在该标量上乘 12。后者会改变保存点和因子发现范围，比较程序或生成测试存档时必须明确口径。Edwards 路径固定使用 48·lcm(1…B1)，不接受 `lcm=12`。`ecm_cuda.exe` 可用 `--curve ed --target gpu` 或同名 INI 键运行 GPU Edwards；OpenCL 不支持该组合。CUDA PARAM0 和 Edwards 可使用完整 64 位 sigma；PARAM2/3 的批次受 32 位窗口限制。
+
+GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param`、`--naf-w` 和 `--go`。它按二进制标量的 256 位切片执行，在 CPU 上构造曲线、检查结果及求 GCD。默认保存名在 `m{n}_{b1}.save` 前添加 `ed_`，显式 `-save` 可指定路径。存档格式、检查点与适用限制统一见 [GPU Edwards 实现](../architecture/STAGE1.md#gpu-edwards)。GPU Edwards 文本存档交给独立 CUDA Stage2；CPU Edwards 的 Prime95 二进制 `.tmp` 格式保持独立。
 
 ## 共用 INI 与 worker
 
@@ -34,7 +36,7 @@ Ctrl+C、Ctrl+Break 或 GUI 的正常停止请求会在当前后端的下一个�
 
 检查点先写入同目录的 `.new` 临时文件，完整关闭后再替换主文件。`ckpt_backups` 控制轮换备份的份数，主文件另计；例如 `.ecm_ckpt_….dat` 的首份备份为 `.ecm_ckpt_….bak.dat`，后续为 `.bak2.dat` 等，CPU `.ckpt` 文件同理。恢复按主文件、备份序号的顺序检查，跳过读不到、截断、校验失败或参数不符的文件；历史二进制检查点没有新附加的完整性校验，仍按旧格式读取。Stage1 成功完成后清理该任务的主检查点、临时文件和全部备份。存档写入或轮换失败会报错，不能把失败消息视作已保存进度。
 
-配置 Prime95 交接后，驱动将完成任务的 save 同步到目标位置，并向同目录 `worktodo.add` 追加原任务行；失败交付进入 pending 文件，后续重试。不要直接由两个程序共同改写 Prime95 的活动 `worktodo.txt`。CPU 本地存档的独立交接工具为 `ecm_p95feeder`。
+配置受支持的 Prime95 交接后，驱动将完成任务的 save 同步到目标位置，并向同目录 `worktodo.add` 追加原任务行；失败交付进入 pending 文件，后续重试。不要直接由两个程序共同改写 Prime95 的活动 `worktodo.txt`。CPU 本地存档的独立交接工具为 `ecm_p95feeder`；GPU Edwards 的独立文本格式交给 CUDA Stage2，不支持该 Prime95 自动交接。
 
 ## 算法与构建范围
 

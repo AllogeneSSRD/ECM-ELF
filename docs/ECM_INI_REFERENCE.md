@@ -215,10 +215,12 @@ stage2_debug_log 独立控制。Stage1 按各计算后端的普通详细输出�
 curve=[mont|ed]; default=mont; empty=default
 ```
 
-Stage1 curve model: mont for Montgomery or ed for Edwards. Montgomery is available on CPU and GPU;<br>
-Edwards currently runs on CPU.<br>
-Stage1 曲线模型：mont 为 Montgomery，ed 为 Edwards。Montgomery 可在 CPU 和 GPU 上运行；Edwards 当前<br>
-仅支持 CPU。
+Stage1 curve model: mont for Montgomery or ed for Atkin-Morain Edwards. Edwards runs on CPU or CUDA<br>
+GPU, using 48*lcm(1..B1); OpenCL Edwards is unsupported. CUDA Edwards saves use<br>
+METHOD=ECM-EDWARDS-AM for CUDA Stage2.<br>
+Stage1 曲线模型：mont 为 Montgomery，ed 为 Atkin-Morain Edwards。Edwards 支持 CPU 与 CUDA GPU，固定<br>
+使用 48*lcm(1..B1)；OpenCL 不支持 Edwards。CUDA Edwards 输出 METHOD=ECM-EDWARDS-AM 存档供 CUDA<br>
+Stage2 使用。
 
 ### target
 
@@ -226,10 +228,10 @@ Stage1 曲线模型：mont 为 Montgomery，ed 为 Edwards。Montgomery 可在 C
 target=[cpu|gpu]; default=gpu
 ```
 
-Run Stage1 on CPU or on the GPU backend linked into this executable. GPU Edwards is currently<br>
-unsupported. The target does not select between CUDA and OpenCL.<br>
-选择 Stage1 在 CPU 或本程序链接的 GPU 后端执行。当前不支持 GPU Edwards；此键不在同一可执行文件内切换<br>
-CUDA 与 OpenCL。
+Run Stage1 on CPU or on the GPU backend linked into this executable. Edwards GPU requires ecm_cuda;<br>
+the target does not select between CUDA and OpenCL.<br>
+选择 Stage1 在 CPU 或本程序链接的 GPU 后端执行。Edwards GPU 需要 ecm_cuda；此键不在同一可执行文件内<br>
+切换 CUDA 与 OpenCL。
 
 ### impl
 

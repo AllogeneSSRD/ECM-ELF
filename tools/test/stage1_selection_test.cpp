@@ -28,6 +28,7 @@ int main() {
             "curve model and execution target must not accept mixed or empty values");
     selection.curve = CurveModel::Edwards;
     require(!valid_route(selection), "GPU Edwards must be rejected before execution");
+    require(valid_route(selection,true), "CUDA Edwards capability must enable the route");
     selection.target = ExecutionTarget::Cpu;
     require(valid_route(selection), "CPU Edwards must remain available");
     require(static_cast<int>(CpuImplementation::Auto) == 0 &&

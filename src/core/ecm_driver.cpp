@@ -58,6 +58,9 @@
 #include <random>
 #include <algorithm>
 #include "ecm_edwards_save.h"       /* Prime95 ECM 二进制存档读写 */
+#ifndef ECM_HAS_CUDA_EDWARDS
+#define ECM_HAS_CUDA_EDWARDS 0
+#endif
 /* IFMA_FIELD_* 常量 (SIMD 域选择)。头文件不含 AVX512 intrinsic, 基线 TU 可包含;
    只给 simd_*.cpp 加 /arch:AVX512, 见 §14.1。 */
 #include "simd_mont_ifma.h"
@@ -740,13 +743,13 @@ struct Stage1RunResult {
 
 static bool stage1_selection_error(const ecm_stage1::Selection &selection,
                                    std::string &error) {
-    if (!ecm_stage1::valid_route(selection)) {
-        error = "GPU Edwards stage-1 is not implemented";
+    if (!ecm_stage1::valid_route(selection, ECM_HAS_CUDA_EDWARDS != 0)) {
+        error = "GPU Edwards requires the CUDA backend";
         return true;
     }
     if (selection.curve == ecm_stage1::CurveModel::Edwards &&
         selection.scalar_construction != ecm_stage1::ScalarConstruction::PrimePowerLcm) {
-        error = "CPU Edwards uses its fixed 48*lcm(1..B1) scalar; --lcm 12 is unsupported";
+        error = "Edwards uses its fixed 48*lcm(1..B1) scalar; --lcm 12 is unsupported";
         return true;
     }
     if (selection.target == ecm_stage1::ExecutionTarget::Gpu &&
@@ -761,7 +764,8 @@ static bool stage1_selection_error(const ecm_stage1::Selection &selection,
         error = "explicit --reduction requires --impl simd";
         return true;
     }
-    if (selection.target != ecm_stage1::ExecutionTarget::Gpu) return false;
+    if (selection.target != ecm_stage1::ExecutionTarget::Gpu ||
+        selection.curve == ecm_stage1::CurveModel::Edwards) return false;
     if (!ecm_stage1::valid_gpu_param(selection.gpu_param)) {
         error = "invalid gpu_param (expected 0, 2 or 3)";
         return true;
@@ -781,6 +785,7 @@ static bool stage1_task_error(const Stage1RunOptions &opt, uint32_t curves,
         return true;
     }
     if (opt.selection.target != ecm_stage1::ExecutionTarget::Gpu ||
+        opt.selection.curve == ecm_stage1::CurveModel::Edwards ||
         opt.selection.gpu_param == 0 || !opt.sigma_fixed) return false;
     if (opt.fixed_sigma64 > 0xFFFFFFFFull) {
         error = "GPU batch sigma exceeds 2^32-1";
@@ -2649,11 +2654,18 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     return out->ret;
 }
 
+#include "ecm_edwards_gpu_driver.inl"
+
 static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
                            const Stage1RunOptions &opt, Stage1RunResult *out) {
     ecm_stage1_set_backup_limit(opt.ckpt_backups);
+#if ECM_HAS_CUDA_EDWARDS
+    if (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu &&
+        opt.selection.curve == ecm_stage1::CurveModel::Edwards)
+        return run_edwards_gpu_stage1(N,B1,B2,curves,savefilename,saveappend,opt,out);
+#endif
     if (opt.selection.target == ecm_stage1::ExecutionTarget::Cpu &&
         opt.selection.curve == ecm_stage1::CurveModel::Montgomery) {
         return run_mont_stage1(N, B1, B2, curves, savefilename, saveappend,
@@ -3226,6 +3238,11 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
        stage 2 can continue it. `p95_worktodo_path` empty = the feature is off (the
        historical behaviour: ecm_p95feeder does the Edwards .tmp handoff instead). */
     P95TransferConfig p95cfg;
+    if(ecm_stage1::lower_ascii(cfg.curve_model)=="ed" &&
+       ecm_stage1::lower_ascii(cfg.execution_target)=="gpu" && !cfg.p95_worktodo_path.empty()) {
+        ecm_ts_fprintf(stderr,"ERROR: GPU Edwards text saves require CUDA Stage2; Prime95 automatic handoff is unavailable\n");
+        if(logf){ecm_log_set_mirror(nullptr);fclose(logf);}return 1;
+    }
     {
         p95cfg.worktodo_path = resolve_rel_local(exe_dir, cfg.p95_worktodo_path);
         p95cfg.add_workers = cfg.p95_add_workers;
@@ -3453,6 +3470,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                     return 1;
                 }
                 queue_save_name = opt.tmp_dir + "/" +
+                    (opt.selection.curve==ecm_stage1::CurveModel::Edwards?"ed_":"") +
                     mont_format_save_name(ecm_config::defaults::stage1_save_name_pattern,
                                           N, task.B1);
             }
@@ -4000,6 +4018,12 @@ int main(int argc, char **argv){
     //     std::cout << std::endl;
     // }
 
+    if (selection.curve == ecm_stage1::CurveModel::Edwards &&
+        selection.target == ecm_stage1::ExecutionTarget::Gpu &&
+        (gpu_param_set || sigma_param_set || print_group_order || naf_w!=0)) {
+        std::cerr << "Error, GPU Edwards uses an unprefixed sigma and binary scalar; --gpu-param, --naf-w and --go do not apply" << std::endl;
+        mpz_clear(N);return 1;
+    }
     if (selection.target == ecm_stage1::ExecutionTarget::Cpu) {
         if (gpu_param_set) {
             std::cerr << "Error, --gpu-param requires --target gpu" << std::endl;

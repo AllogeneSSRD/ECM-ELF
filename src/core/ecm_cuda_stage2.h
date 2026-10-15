@@ -13,7 +13,9 @@ struct EcmStage2NttBatchSample { uint64_t length=0,batch=0;double seconds=0; };
 // input restores legacy chunking. Does not select a different arithmetic kernel.
 int ecm_cuda_stage2_set_short_ntt_batches(const EcmStage2NttBatchSample *samples,size_t count);
 
-// One normalized param0 Stage1 point per process. The callback is invoked only
+// One normalized Stage1 point per process. A null a24_hex reconstructs Suyama
+// PARAM0 from sigma; an explicit canonical a24 supplies (A+2)/4 modulo saved N
+// for a previously verified curve (including Edwards). The callback is invoked only
 // after Stage2 and its arithmetic checks have completed successfully.
 // carrier_exponent=0 keeps arithmetic modulo saved N. An explicit p requires
 // N | (2^p-1); arithmetic uses that carrier, inverses/GCDs still target saved N.
@@ -31,7 +33,8 @@ struct EcmStage2Metrics {
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,
                        void (*report)(const char *, void *), void *context,
-                       unsigned carrier_exponent=0,EcmStage2Metrics *metrics=nullptr);
+                       unsigned carrier_exponent=0,EcmStage2Metrics *metrics=nullptr,
+                       const char *a24_hex=nullptr);
 
 // Planning initializes the CUDA context and queries live memory, but performs
 // no curve arithmetic. All time/memory estimates are explicitly labelled.

@@ -6,7 +6,7 @@
 
 基本参数为 `--save <file> --b2 <integer> --device <id>`。`--skip-curves <n>` 跳过记录，`--curves <n>` 限定数量；具体名字以当前 `--help` 为准。B1、sigma 和 N 取自 save，不重新执行 Stage1。`--factor-only` 省去命中素数命名，保留叶乘积、GCD 与必需检查；`--factorize-hits` 可再用 GP 拆解复合因子。
 
-只接受受支持的、归一化 Suyama PARAM0 文本记录。先验证选择范围中的所有记录，包括 checksum、N、B1、X 和任务匹配；文件损坏不能当作“没有足够曲线”略过。源 save 不修改。校验和通过只说明文件完整。
+接受归一化 Suyama PARAM0 文本记录，以及 GPU Edwards 输出的 `METHOD=ECM-EDWARDS-AM` 记录。Edwards 使用生产 Stage2 引擎并要求显式 B2；存档身份和常数约定见 [输入与表示](../architecture/STAGE2.md#stage1-save-与承载资格)。CPU Edwards 的 Prime95 二进制 `.tmp` 不属于此入口。先验证选择范围中的所有记录，包括 checksum、N、B1、X 和任务匹配；文件损坏不能当作“没有足够曲线”略过。源 save 不修改。校验和通过只说明文件完整。
 
 直接多记录执行不使用队列自动续跑。每条曲线在独立子进程计算，结束后释放 CUDA 上下文与临时资源。
 

@@ -8446,7 +8446,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
                     bool choose_d, bool run_s2, int curves,
                     const char *saved_qx_hex = nullptr, Stage2Tail *saved_result = nullptr, bool d_plan_only = false,
-                    ecm_stage2::Plan *plan_result = nullptr, unsigned carrier_exponent = 0)
+                    ecm_stage2::Plan *plan_result = nullptr, unsigned carrier_exponent = 0,
+                    const char *saved_a24_hex = nullptr)
 {
     PolyLayer L;
     L.device = g_device;
@@ -8924,7 +8925,12 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     std::vector<unsigned long long> hn(nw), ha24(nw), hmone(nw);
     mpz_to_words(hn, nw, L.N);
     mpz_to_words(hmone, nw, R);
-    if (suyama_curve(a24, ax, az, sigma, L.target()) != 0) {
+    if (saved_a24_hex) {
+        if(!saved_qx_hex || mpz_set_str(a24,saved_a24_hex,16) || mpz_sgn(a24)<0 ||
+           mpz_cmp(a24,L.target())>=0) {
+            std::fprintf(stderr,"invalid saved curve a24\n");return 2;
+        }
+    } else if (suyama_curve(a24, ax, az, sigma, L.target()) != 0) {
         std::fprintf(stderr, "%s: degenerate sigma for this N\n", NTT_PROBE_NAME);
         return 2;
     }
@@ -10023,7 +10029,8 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
 
 int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
                        uint64_t b1, uint64_t b2, uint64_t d, int device,
-                       void (*report)(const char *, void *), void *context,unsigned carrier_exponent,EcmStage2Metrics *metrics)
+                       void (*report)(const char *, void *), void *context,unsigned carrier_exponent,EcmStage2Metrics *metrics,
+                       const char *a24_hex)
 {
     if(!n_hex || !x_hex || !report || device<0 || b1<2 || b2<=b1 ||
        b2>(uint64_t)INT64_MAX-8192 || (d && (d<6 || d%2)))return 2;
@@ -10037,7 +10044,7 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     Stage2Tail tail;
     const int code = run_real(n_hex, true, sigma, b1, b2, d, d == 0,
-                              false, 1, x_hex, &tail,false,nullptr,carrier_exponent);
+                              false, 1, x_hex, &tail,false,nullptr,carrier_exponent,a24_hex);
     if (code || tail.bad_factors) return code ? code : 1;
     if(metrics)*metrics=tail.metrics;
     std::string json = "\"hits\":" + std::to_string(tail.hits) +

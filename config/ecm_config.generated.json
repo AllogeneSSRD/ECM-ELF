@@ -2,11 +2,11 @@
   "schema_version": 1,
   "sha256": {
     "src/core/generated/ecm_config_generated.h": "61039ec52bfea78adeda70239cd430f1d55612cc89c42b9093552c6302333f6a",
-    "src/core/generated/ecm_ini_template.h": "4a1b45112f030e5f99ab8d56da565e6ffcc45d695eef1cf21d2710f33336992e",
-    "config/ecm.ini.default": "74829cc56e71bf4382bc2a82feefcb40fcd4115b59f57bc254b7cb4bc3a27175",
-    "config/ecm.ini.example": "74829cc56e71bf4382bc2a82feefcb40fcd4115b59f57bc254b7cb4bc3a27175",
-    "docs/ECM_INI_REFERENCE.md": "e362591f2de5ce84e4d75b0d2b8da1b9b5c9923ea6fc98503cd114c6d11b10e6",
-    "config/ecm_options.json": "4515c0af531d9dd13f0673fc8e1f2d4fc237c6bf0332ee3c30f4a2a6b69aafcd",
+    "src/core/generated/ecm_ini_template.h": "9c37531a0def226b14dbde4a33b8893fb33af8c62558770fdfce38039a13895c",
+    "config/ecm.ini.default": "521b4ec87c0aa4486d255358b5f5d1911eb7c0c6f925738ce0b56b9beada0222",
+    "config/ecm.ini.example": "521b4ec87c0aa4486d255358b5f5d1911eb7c0c6f925738ce0b56b9beada0222",
+    "docs/ECM_INI_REFERENCE.md": "fd1d6ded9e0aa4c10140329ba40a5ea6ecd3b33287c1638df52213dec2a9cd20",
+    "config/ecm_options.json": "ca5d07d0819a03f76bc87232d816ecacdb6f6f6509c799dcf2d4b673f512aab4",
     "tools/gen/generate_ecm_config.py": "11162897c7fc0467e53312ce6dd67574b772e2de0bca9743b4b2ede26bf7e56f"
   }
 }
