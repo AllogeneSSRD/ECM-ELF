@@ -19,7 +19,7 @@
 - [ ] 扩大诊断、自检瞬时量、输出增长、树租约、冷缓存驱逐及分配失败的账本覆盖，保留实时设备free查询；组件峰不能相加代替联合峰。
 - [ ] 减少所有候选不满足显存时的重复CPU生命周期规划，以及短曲线启动/驱动成本；优化须保留候选、收益、排序和准入语义。
 - [ ] 评估热NTT的launch、tile/outer、设备树准备和传输；局部提速通过固定D完整曲线对照后才改变默认。
-- [ ] 推进短NTT的Graph/提交融合及k21–23 outer组织。当前Tensor40精确门禁与2⁸–2²⁶/短batch/CTA扫描已完成，尚无稳定Tensor收益；Graph仅有算子诊断，需验证稳定地址/缓存租约、分块尾部和完整Stage2 A/B。继续Tensor需降低总标量指令与寄存器成本，见[性能报告](performance/NTT_TENSOR.md)及[开发草稿](development/STAGE2_TENSOR_LENGTH_DRAFT.md)。
+- [ ] 继续评价包含pack/carry/S4的Graph完整请求、正常曲线的准备/同步与pinned分配，以及k21–23 outer组织。两个NTT Graph缓存已通过独立GMP与102次固定D完整曲线，P=155520基本持平，默认关闭；需扩大缓存上限驱逐、显存失败/回退及其他驱动覆盖，见[Graph性能](performance/NTT_GRAPH.md)及[保留草稿](development/STAGE2_SHORT_GRAPH_DRAFT.md)。Tensor40尚无稳定收益，继续时需减少总标量指令与寄存器成本，见[Tensor性能](performance/NTT_TENSOR.md)。
 - [ ] 短 NTT batch 选择补齐整条S4流水线的分块成本校准：现有固定D、host/resident及尾批A/B未显示稳定收益，7995-bit通用归约样本慢约2.1%；需核对归约并行度、每分块准备/检查/同步，再覆盖显存边界和其他设备，通过后才考虑启用默认。
 - [ ] 为NTT tune增加tile/radix/协作配置候选与执行器部署；现有摘要只校准成本。需按设备/形状核验全部候选，并通过固定D完整曲线对照后才启用自动内核配置。
 - [ ] 评估短/截断乘积和固定操作数频域缓存，核对尾次数、精确carry、缓存生命周期及完整曲线收益。

@@ -1676,7 +1676,7 @@ static void fuse_mark(const char *tag, double &t0)
    one launch transforms the whole batch.  nbatch == 1 (the per-call path) is bit-identical to
    the original single-slice code. */
 static void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
-                              unsigned long long omega, unsigned long long nbatch = 1)
+                              unsigned long long omega, unsigned long long nbatch = 1, cudaStream_t stream = 0)
 {
     unsigned long long n = c.n;
     const unsigned long long stride = n;
@@ -1692,24 +1692,24 @@ static void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
         unsigned long long *scr = c.scr, *scr2 = c.scr2;
         if (c.tables_cached) { scr = c.passF[p]; scr2 = c.radF[p]; }
         else {
-            build_pass_table_kernel<<<(unsigned int)fuse_grid(S, 256), 256>>>(scr, S, L, omega);
+            build_pass_table_kernel<<<(unsigned int)fuse_grid(S, 256), 256, 0, stream>>>(scr, S, L, omega);
             CK(cudaGetLastError());
             const unsigned long long baseW = gl_pow_host(omega, S << L);
-            build_radix_table_kernel<<<1, (1 << M)>>>(scr2, M, baseW, 0);
+            build_radix_table_kernel<<<1, (1 << M), 0, stream>>>(scr2, M, baseW, 0);
             CK(cudaGetLastError());
         }
         const unsigned int g = (unsigned int)fuse_grid(groups, gpb);
         dim3 gr(g, (unsigned int)nbatch);
         if(c.coop_outer && M>=5)
-            launch_outer_coop<false>(M,d,n,L,scr,scr2,nbatch,stride);
+            launch_outer_coop<false>(M,d,n,L,scr,scr2,nbatch,stride,stream);
         else {
         switch (M) {
-            case 1: outer_fwd_kernel<1><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
-            case 2: outer_fwd_kernel<2><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
-            case 3: outer_fwd_kernel<3><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
-            case 4: outer_fwd_kernel<4><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
-            case 5: outer_fwd_kernel<5><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
-            case 6: outer_fwd_kernel<6><<<gr, FUSE_OUTER_THREADS>>>(d, n, L, scr, scr2, gpb, stride); break;
+            case 1: outer_fwd_kernel<1><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, L, scr, scr2, gpb, stride); break;
+            case 2: outer_fwd_kernel<2><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, L, scr, scr2, gpb, stride); break;
+            case 3: outer_fwd_kernel<3><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, L, scr, scr2, gpb, stride); break;
+            case 4: outer_fwd_kernel<4><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, L, scr, scr2, gpb, stride); break;
+            case 5: outer_fwd_kernel<5><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, L, scr, scr2, gpb, stride); break;
+            case 6: outer_fwd_kernel<6><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, L, scr, scr2, gpb, stride); break;
             default: std::fprintf(stderr, NTT_PROBE_NAME ": bad outer radix M=%d\n", M); std::exit(3);
         }
         }
@@ -1722,8 +1722,8 @@ static void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
         const int smem = (int)(1ull << c.t) * (int)sizeof(unsigned long long);
         dim3 gr(blocks, (unsigned int)nbatch);
         if(c.warp_tail && c.t>=5)
-            tile_kernel<false,true><<<gr, FUSE_TILE_THREADS, smem>>>(d,nullptr,n,c.k,c.t,c.tblF,0ull,stride);
-        else tile_kernel<false><<<gr, FUSE_TILE_THREADS, smem>>>(d, nullptr, n, c.k, c.t,
+            tile_kernel<false,true><<<gr, FUSE_TILE_THREADS, smem, stream>>>(d,nullptr,n,c.k,c.t,c.tblF,0ull,stride);
+        else tile_kernel<false><<<gr, FUSE_TILE_THREADS, smem, stream>>>(d, nullptr, n, c.k, c.t,
                                                             c.tblF, 0ull, stride);
         CK(cudaGetLastError());
         fuse_mark("fwd tile pass", ft0);
@@ -1733,7 +1733,7 @@ static void ntt_forward_fused(unsigned long long *d, const FuseCtx &c,
 /* inverse: tile pass (stages 0..t-1 + pointwise + 1/N), then the outer passes in reverse */
 static void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b,
                               const FuseCtx &c, unsigned long long omega_inv,
-                              unsigned long long n_scale, unsigned long long nbatch = 1)
+                              unsigned long long n_scale, unsigned long long nbatch = 1, cudaStream_t stream = 0)
 {
     unsigned long long n = c.n;
     const unsigned long long stride = n;
@@ -1744,8 +1744,8 @@ static void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b
         dim3 gr(blocks, (unsigned int)nbatch);
         const bool shift_scale=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
         if(c.warp_tail && c.t>=5)
-            tile_kernel<true,true><<<gr, FUSE_TILE_THREADS, smem>>>(d,b,n,c.k,c.t,c.tblI,n_scale,stride,shift_scale);
-        else tile_kernel<true><<<gr, FUSE_TILE_THREADS, smem>>>(d, b, n, c.k, c.t, c.tblI,
+            tile_kernel<true,true><<<gr, FUSE_TILE_THREADS, smem, stream>>>(d,b,n,c.k,c.t,c.tblI,n_scale,stride,shift_scale);
+        else tile_kernel<true><<<gr, FUSE_TILE_THREADS, smem, stream>>>(d, b, n, c.k, c.t, c.tblI,
                                                            n_scale, stride,shift_scale);
         CK(cudaGetLastError());
         fuse_mark("inv tile pass (+pw+scale)", ft0);
@@ -1761,25 +1761,25 @@ static void ntt_inverse_fused(unsigned long long *d, const unsigned long long *b
         unsigned long long *scr = c.scr, *scr2 = c.scr2;
         if (c.tables_cached) { scr = c.passI[p]; scr2 = c.radI[p]; }
         else {
-            build_pass_table_kernel<<<(unsigned int)fuse_grid(S, 256), 256>>>(scr, S, L,
+            build_pass_table_kernel<<<(unsigned int)fuse_grid(S, 256), 256, 0, stream>>>(scr, S, L,
                                                                              omega_inv);
             CK(cudaGetLastError());
             const unsigned long long Wbase = gl_pow_host(omega_inv, 1ull << (c.k - M));
-            build_radix_table_kernel<<<1, (1 << M)>>>(scr2, M, Wbase, 1);
+            build_radix_table_kernel<<<1, (1 << M), 0, stream>>>(scr2, M, Wbase, 1);
             CK(cudaGetLastError());
         }
         const unsigned int g = (unsigned int)fuse_grid(groups, gpb);
         dim3 gr(g, (unsigned int)nbatch);
         if(c.coop_outer && M>=5)
-            launch_outer_coop<true>(M,d,n,s0,scr,scr2,nbatch,stride);
+            launch_outer_coop<true>(M,d,n,s0,scr,scr2,nbatch,stride,stream);
         else {
         switch (M) {
-            case 1: outer_inv_kernel<1><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
-            case 2: outer_inv_kernel<2><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
-            case 3: outer_inv_kernel<3><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
-            case 4: outer_inv_kernel<4><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
-            case 5: outer_inv_kernel<5><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
-            case 6: outer_inv_kernel<6><<<gr, FUSE_OUTER_THREADS>>>(d, n, s0, scr, scr2, gpb, stride); break;
+            case 1: outer_inv_kernel<1><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, s0, scr, scr2, gpb, stride); break;
+            case 2: outer_inv_kernel<2><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, s0, scr, scr2, gpb, stride); break;
+            case 3: outer_inv_kernel<3><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, s0, scr, scr2, gpb, stride); break;
+            case 4: outer_inv_kernel<4><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, s0, scr, scr2, gpb, stride); break;
+            case 5: outer_inv_kernel<5><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, s0, scr, scr2, gpb, stride); break;
+            case 6: outer_inv_kernel<6><<<gr, FUSE_OUTER_THREADS, 0, stream>>>(d, n, s0, scr, scr2, gpb, stride); break;
             default: std::fprintf(stderr, NTT_PROBE_NAME ": bad outer radix M=%d\n", M); std::exit(3);
         }
         }
@@ -1826,7 +1826,10 @@ struct NttWorkspacePolicy {
     }
 };
 
+#include "ntt_graph.cuh"
+
 struct NttArena : NttWorkspacePolicy {
+    NttGraphCache short_graph;
     int device = -1;
     size_t cap_bytes = 0;                 /* 0 = unlimited */
     size_t bytes = 0; // exact arena-owned CUDA payload; accounting v2
@@ -1933,6 +1936,7 @@ struct NttArena : NttWorkspacePolicy {
 
     void drop_workspace()
     {
+        short_graph.clear();
         /* cudaFree waits for queued default-stream readers, including oracle D2H copies.
            Drop before growth so old/new allocations never overlap in device memory. */
         if (workspace.dA) { CK(cudaFree(workspace.dA)); ++workspace_frees; }
@@ -1987,6 +1991,7 @@ struct NttArena : NttWorkspacePolicy {
             if(live>largest){largest=live;chosen=i;}
         }
         if(chosen==fuses.size())return 0;
+        short_graph.clear();
         fuse_release(fuses[chosen].fc); // cudaFree waits for all default-stream table readers.
         fuses.erase(fuses.begin()+(long)chosen);bytes-=largest;
         ++phase_fuse_evictions;phase_fuse_evicted_bytes+=largest;return largest;
@@ -2011,6 +2016,7 @@ struct NttArena : NttWorkspacePolicy {
                     (int)workspace_reuse_bq,(int)workspace.q_alias_b,(unsigned long long)workspace.capacity,
                     workspace.words ? (workspace.q_alias_b ? 2 : 3) : 0,workspace_bq_calls,
                     (unsigned long long)workspace_bq_saved_peak);
+        short_graph.print();
         const auto measured=payload();
         stage2_log::print(stage2_log::debug, "ntt_arena_accounting: version=2 payload_bytes=%llu cap_bytes=%llu calculated_bytes=%llu mismatch=%d\n",
                     (unsigned long long)bytes,(unsigned long long)cap_bytes,(unsigned long long)measured.total,(int)(bytes!=measured.total));
@@ -2072,6 +2078,7 @@ struct NttArena : NttWorkspacePolicy {
     {
         // This default-stream scratch is never exported and contains no deferred verdict.
         // Only shape-local dRes below retains diagnostics across interior chunks.
+        short_graph.clear();
         drop_carry_scratch();
         unsigned long long freed = 0;
         for (FuseEntry &e : fuses) {
@@ -2107,6 +2114,7 @@ struct NttArena : NttWorkspacePolicy {
 
     void release()
     {
+        short_graph.release();
         drop_carry_scratch();
         drop_workspace();
         for (FuseEntry &e : fuses) fuse_release(e.fc);
@@ -3554,9 +3562,20 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
     CK(cudaEventCreate(&ev_f0));
     CK(cudaEventCreate(&ev_f1));
     CK(cudaEventCreate(&ev_i1));
+    NttGraphCache::Entry *graph=nullptr;
+    if(arena && arena->short_graph.enabled && !dump && arena->workspace_pool && arena->workspace.dA && arena->workspace.dB) {
+        const size_t required=(size_t)N*(size_t)nbatch;
+        const auto contains=[&](const unsigned long long *base,const unsigned long long *value) {
+            const auto start=(uintptr_t)base,address=(uintptr_t)value;
+            return address>=start && (address-start)%8==0 && (address-start)/8<=arena->workspace.capacity &&
+                required<=arena->workspace.capacity-(address-start)/8;
+        };
+        if(contains(arena->workspace.dA,dA) && contains(arena->workspace.dB,dB))
+            graph=arena->short_graph.lookup(arena->device,fc,dA,dB,sh.omega,sh.omega_inv,sh.n_scale,nbatch);
+    }
     CK(cudaEventRecord(ev_f0));
-    ntt_forward_fused(dA, fc, sh.omega, nbatch);
-    ntt_forward_fused(dB, fc, sh.omega, nbatch);
+    if(graph)CK(cudaGraphLaunch(graph->forward,0));
+    else {ntt_forward_fused(dA, fc, sh.omega, nbatch);ntt_forward_fused(dB, fc, sh.omega, nbatch);}
     if (dump && nbatch == 1 && hfa && hfb) {
         hfa->assign(N, 0);
         hfb->assign(N, 0);
@@ -3569,7 +3588,10 @@ static NttPassResult ntt_run_passes(const NttShape &sh, const FuseCtx &fc,
        inverse's tile pass (which touches the array once anyway) -- two whole passes saved */
     CK(cudaEventRecord(ev_f1));
 
-    ntt_inverse_fused(dA, dB, fc, sh.omega_inv, sh.n_scale, nbatch);
+    if(graph) {
+        CK(cudaGraphLaunch(graph->inverse,0));arena->short_graph.launches+=2;
+        arena->short_graph.saved_launches+=(unsigned long long)fc.passes_fwd*3-2;
+    } else ntt_inverse_fused(dA, dB, fc, sh.omega_inv, sh.n_scale, nbatch);
     CK(cudaEventRecord(ev_i1));
 
     if (dump && nbatch == 1 && hPre) {

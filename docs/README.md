@@ -27,6 +27,7 @@
 - [Stage1 性能](performance/STAGE1.md)：已测范围、吞吐量投影和资源约束。
 - [Stage2 性能](performance/STAGE2.md)：CPU/GPU 比较、位宽/B2关系、阶段占比和容量收益。
 - [Tensor NTT 性能](performance/NTT_TENSOR.md)：精确Tensor64/40、NTT长度/batch、资源及Graph提交诊断。
+- [短NTT Graph性能](performance/NTT_GRAPH.md)：缓存生命周期、固定D完整曲线、batch吞吐及管理员Nsight分析。
 - [算法参考](reference/ECM_ALGORITHMS.md)：论文、Prime95、PrMers 和开源 NTT 的适配要点。
 - [固定数学与第三方源码资料](reference/README.md)：保留完整推导、引用代码、伪代码及研究条件，独立于本仓库实现状态。
 - [TODO](TODO.md)：尚未完成或需要重新验证的工作。

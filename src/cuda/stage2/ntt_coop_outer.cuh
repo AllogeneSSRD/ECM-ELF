@@ -91,7 +91,7 @@ void outer_coop_kernel(unsigned long long *a, unsigned long long n, int stage,
 template <bool INVERSE>
 static void launch_outer_coop(int m,unsigned long long *a,unsigned long long n,int stage,
                               const unsigned long long *coarse,const unsigned long long *radix,
-                              unsigned long long nbatch,unsigned long long stride)
+                              unsigned long long nbatch,unsigned long long stride,cudaStream_t stream=0)
 {
     const auto S=INVERSE ? (1ull<<stage) : (n>>(stage+m));
     const int v=m==8 ? 16 : 32;
@@ -101,9 +101,9 @@ static void launch_outer_coop(int m,unsigned long long *a,unsigned long long n,i
     }
     dim3 grid((unsigned int)(n/((1ull<<m)*v)),(unsigned int)nbatch);
     switch(m) {
-    case 5:outer_coop_kernel<5,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);break;
-    case 6:outer_coop_kernel<6,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);break;
-    case 7:outer_coop_kernel<7,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);break;
-    case 8:outer_coop_kernel<8,INVERSE><<<grid,256>>>(a,n,stage,coarse,radix,stride);break;
+    case 5:outer_coop_kernel<5,INVERSE><<<grid,256,0,stream>>>(a,n,stage,coarse,radix,stride);break;
+    case 6:outer_coop_kernel<6,INVERSE><<<grid,256,0,stream>>>(a,n,stage,coarse,radix,stride);break;
+    case 7:outer_coop_kernel<7,INVERSE><<<grid,256,0,stream>>>(a,n,stage,coarse,radix,stride);break;
+    case 8:outer_coop_kernel<8,INVERSE><<<grid,256,0,stream>>>(a,n,stage,coarse,radix,stride);break;
     }
 }
