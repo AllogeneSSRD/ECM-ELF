@@ -35,7 +35,7 @@
 
 Prime95 本地副本 `ecm.cpp:4409–4412` 明确保存 `Ad4=(dD-dN)/dD=1-d`；本仓库 `s2g_xdbl` 使用 `(A+2)/4`，因此 Edwards 交接传 `1/(1-d)`。Stage2 从目标 N 与 Edwards sigma 重建该值，不调用 Suyama 构造；baby、giant、小素数和多项式路径共用同一常数。Stage1 不可逆归一化得到的真因子使用明确的 FACTOR 记录，Stage2 在进入多项式运算前验证因子。
 
-[批量探针](../../tools/test/edwards_gpu_stage1_probe.cpp)在 GPU1 RTX 4060 Laptop（sm_89）上通过 53 条曲线：M127/B1=20/33 条，M127·M89/B1=20/4 条，M347、M677、M991、M2203、M4003/B1=1000 各 4 条。曲线参数、末点和分母 GCD 均与现有 CPU 实现核对；在第 17 位中止，再以 113 位片长续跑，结果与完整运行逐坐标一致。构建入口为 `tools/build/test/build_edwards_gpu_stage1_probe.ps1`，日志在 `data/experiments/gpu_edwards_pipeline_20261016/probe.log`。
+[批量探针](../../tools/test/edwards_gpu_stage1_probe.cpp)在 GPU1 RTX 4060 Laptop（sm_89）上通过 57 条曲线：M127/B1=20/33 条，M127·M89/B1=20/4 条，M347、M677、M991、M2203、M4003/B1=1000 各 4 条。曲线参数、末点和分母 GCD 均与现有 CPU 实现核对；在第 17 位中止，再以 113 位片长续跑，结果与完整运行逐坐标一致。构建入口为 `tools/build/test/build_edwards_gpu_stage1_probe.ps1`，日志在 `data/experiments/gpu_edwards_pipeline_20261016/probe.log`。
 
 worker 构建入口为 `tools/build/test/build_edwards_gpu_workers.ps1`；[端到端门禁](../../tools/test/test_edwards_gpu_pipeline.py)独立以 Python 整数及 Montgomery ladder 计算完整 48·lcm 参考点，并直接求 Stage2 每个 monic 叶子的乘积。2026-10-16 的 `gate_03/summary.json` 为 complete=true，29 个命令检查通过，包含：
 
@@ -47,7 +47,7 @@ worker 构建入口为 `tools/build/test/build_edwards_gpu_workers.ps1`；[端�
 
 [容器与发布失败门禁](../../tools/test/test_edwards_gpu_boundaries.py)的 `boundaries_02/summary.json` 为 complete=true，9 个命令检查通过：M1279、M4423、M8191、M9689，B1=20、各 1 曲线，覆盖 2048、8192、17408 容器，与独立参考末点一致；M9689 再完成 B2=13230、D=210 的 24 叶值全摘要核对。sigma=2^64−1 的单曲线正确，跨 2^64 的批次和 Edwards lcm=12 均拒绝。故意令 Stage1 save 目标不可写时，任务仍留在 worktodo，不写 finished。结合前述探针与闭环测试，七种容器均有代表位宽的正确性样本，但尚未穷尽各容器边界。
 
-全部运行使用 GPU1，设备 UUID、驱动、功耗上限查询结果、CUDA 版本、二进制 SHA256 与构建身份保存在 `data/experiments/gpu_edwards_pipeline_20261016/`。早期探针的曲线构造边界处理更新后，复用未改变输入和编译命令的 CUDA 对象，重建主机探针，53 条曲线再次通过；对应 `probe_current.log` 与 `probe_current_manifest.json`，全部登记源码 hash 与当前文件一致。功耗和时钟未锁定，本轮只做正确性验证，正式性能样本数为 0，不给出加速比。`gate_01` 的诊断采集遗漏和 `gate_02` 对 M4003 无因子的错误假定均保留原始日志；最终门禁读取独立诊断文件，并用直接乘积/GCD 判定真实因子，不放宽数学比较。
+全部运行使用 GPU1，设备 UUID、驱动、功耗上限查询结果、CUDA 版本、二进制 SHA256 与构建身份保存在 `data/experiments/gpu_edwards_pipeline_20261016/`。早期探针的曲线构造边界处理更新后，复用未改变输入和编译命令的 CUDA 对象，重建主机探针，57 条曲线再次通过；对应 `probe_current.log` 与 `probe_current_manifest.json`，全部登记源码 hash 与当前文件一致。功耗和时钟未锁定，本轮只做正确性验证，正式性能样本数为 0，不给出加速比。`gate_01` 的诊断采集遗漏和 `gate_02` 对 M4003 无因子的错误假定均保留原始日志；最终门禁读取独立诊断文件，并用直接乘积/GCD 判定真实因子，不放宽数学比较。
 
 复现顺序：先运行两个 `tools/build/test/build_edwards_gpu_*.ps1` 构建入口；运行 `edwards_gpu_stage1_probe.exe 1 <新输出目录>`；再运行 `python tools/test/test_edwards_gpu_pipeline.py --stage1 <Stage1 exe> --stage2 <Stage2 exe> --output <新目录> --device 1` 及同参数的 `test_edwards_gpu_boundaries.py`。输出应位于 `data/experiments/`，不能覆盖已有原始证据。Stage1 路由单元回归与配置生成器的 `--check` 也已通过。
 
