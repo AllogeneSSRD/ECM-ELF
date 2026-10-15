@@ -1491,7 +1491,11 @@ static int fuse_outer_max(int t,int k,bool &coop)
     if(mode==2) {
         // Deterministic measured policy: small/unmeasured shapes keep M4.
         // COOP_M is the forced-mode override only; it cannot alter this table.
-        coop=k>=24 && k<=27 && fuse_shape_policy_supported(t);
+        const bool middle=fuse_env_ull("NTT_FUSE_MID_COOP",0)!=0 && k>=21 && k<=23;
+        coop=((k>=24 && k<=27) || middle) && fuse_shape_policy_supported(t);
+        // Experimental middle-length table. Keep the measured long table and
+        // all unsupported devices/tiles unchanged. The arena keys m_max/coop.
+        if(coop && middle)return 6;
         if(coop)return k==24 ? 6 : 8;
     } else coop=mode!=0 && t>=5;
     const int maximum=coop ? 8 : FUSE_MAX_M;

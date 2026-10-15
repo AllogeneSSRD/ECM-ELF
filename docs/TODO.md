@@ -19,7 +19,8 @@
 - [ ] 扩大诊断、自检瞬时量、输出增长、树租约、冷缓存驱逐及分配失败的账本覆盖，保留实时设备free查询；组件峰不能相加代替联合峰。
 - [ ] 减少所有候选不满足显存时的重复CPU生命周期规划，以及短曲线启动/驱动成本；优化须保留候选、收益、排序和准入语义。
 - [ ] 评估热NTT的launch、tile/outer、设备树准备和传输；局部提速通过固定D完整曲线对照后才改变默认。
-- [ ] 继续评价包含pack/carry/S4的Graph完整请求、正常曲线的准备/同步与pinned分配，以及k21–23 outer组织。两个NTT Graph缓存已通过独立GMP与102次固定D完整曲线，P=155520基本持平，默认关闭；需扩大缓存上限驱逐、显存失败/回退及其他驱动覆盖，见[Graph性能](performance/NTT_GRAPH.md)及[保留草稿](development/STAGE2_SHORT_GRAPH_DRAFT.md)。
+- [ ] 继续评价包含pack/carry/S4的Graph完整请求、正常曲线的准备/同步与pinned分配。两个NTT Graph缓存已通过独立GMP与102次固定D完整曲线，P=155520基本持平，默认关闭；需扩大缓存上限驱逐、显存失败/回退及其他驱动覆盖，见[Graph性能](performance/NTT_GRAPH.md)及[保留草稿](development/STAGE2_SHORT_GRAPH_DRAFT.md)。
+- [ ] 扩大k21–23 M6候选的自动D/tune矩阵、显存边界与表驱逐覆盖，并研究tile/outer联合组织。已有500个算子样本、80条固定D曲线及32条复测、8条叶子诊断；矩阵中位数之和少1.77%，最大单项少6.43%，管理员剖析确认outer遍历收益，默认仍关闭。见[outer性能](performance/NTT_OUTER.md)与[保留草稿](development/STAGE2_OUTER_PLAN_DRAFT.md)。
 - [ ] Tensor后续优先减少拆字节、DFT8合并根乘及其他整数工作，或独立评估更大radix/warp分工。N96r64及单卡混合并发已完成门禁、3432个算子样本和并发范围剖析，未超过纯CUDA；不按低Tensor利用率或增开流部署。见[Tensor性能](performance/NTT_TENSOR.md#单卡cuda--tensor并发与96-bit候选)及[保留草稿](development/STAGE2_TENSOR_CONCURRENCY_DRAFT.md)。
 - [ ] 短 NTT batch 选择补齐整条S4流水线的分块成本校准：现有固定D、host/resident及尾批A/B未显示稳定收益，7995-bit通用归约样本慢约2.1%；需核对归约并行度、每分块准备/检查/同步，再覆盖显存边界和其他设备，通过后才考虑启用默认。
 - [ ] 为NTT tune增加tile/radix/协作配置候选与执行器部署；现有摘要只校准成本。需按设备/形状核验全部候选，并通过固定D完整曲线对照后才启用自动内核配置。

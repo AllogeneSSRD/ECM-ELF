@@ -10164,7 +10164,7 @@ int ecm_cuda_stage2_check_configuration() {
             return 2;
         }
     }
-    for(const char *key:{"NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_SCALED_FRONTIER_CHECK","NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_ALLOC_FAIL"}) {
+    for(const char *key:{"NTT_FUSE_MID_COOP","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_SCALED_FRONTIER_CHECK","NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_ALLOC_FAIL"}) {
         const char *v=std::getenv(key);
         if(v && std::strcmp(v,"0") && std::strcmp(v,"1")) {
             std::fprintf(stderr,"production Stage2 requires %s=0 or 1\n",key);return 2;

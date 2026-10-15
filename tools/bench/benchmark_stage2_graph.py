@@ -1,4 +1,4 @@
-"""Fixed-D, same-binary full Stage2 Graph A/B; preserve inputs and raw samples."""
+"""Fixed-D, same-binary Stage2 Graph or middle-outer A/B; retain raw evidence."""
 import argparse
 import csv
 import json
@@ -19,11 +19,13 @@ def sha(path):
     return file_sha(Path(path))
 
 
-def environment(enabled, max_k=19, max_words=1 << 22, min_calls=4, diagnostic=False):
+def environment(enabled, max_k=19, max_words=1 << 22, min_calls=4, diagnostic=False, variant='graph'):
     env = {k: v for k, v in os.environ.items() if not k.startswith('NTT_')}
-    env.update(NTT_SHORT_GRAPH=str(enabled), NTT_SHORT_GRAPH_MAX_K=str(max_k),
+    env.update(NTT_SHORT_GRAPH=str(enabled if variant == 'graph' else 0), NTT_SHORT_GRAPH_MAX_K=str(max_k),
                NTT_SHORT_GRAPH_MAX_WORDS=str(max_words), NTT_SHORT_GRAPH_MIN_CALLS=str(min_calls),
                NTT_D_MODEL='0', NTT_NO_PROGRESS='1', CUDA_LAUNCH_BLOCKING='0')
+    if variant == 'mid-outer':
+        env['NTT_FUSE_MID_COOP'] = str(enabled)
     if diagnostic:
         env['NTT_TARGET_LEAF_HASH'] = '1'
     return env
@@ -49,6 +51,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--repeats', type=int, default=4)
+    p.add_argument('--variant', choices=['graph', 'mid-outer'], default='graph')
     p.add_argument('--max-k', type=int, default=19)
     p.add_argument('--max-words', type=int, default=1 << 22)
     p.add_argument('--min-calls', type=int, default=4)
@@ -61,6 +64,11 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     exe = a.exe.resolve()
     identity = freeze(exe)
+    if a.variant == 'mid-outer':
+        build = json.loads((exe.parent / 'build_manifest.json').read_text(encoding='utf-8-sig'))
+        if (build.get('engine'), build.get('architecture'), build.get('gl_fixed_mode'),
+            build.get('add_sub_mask'), build.get('outer_unroll_u')) != ('production', 'sm_89', 3, 1, 0):
+            raise ValueError('Middle-outer study requires the supported production sm89/PTX3/canonical build')
     cases = json.loads(a.cases.read_text(encoding='utf-8-sig'))
     if not isinstance(cases, list) or not cases:
         raise ValueError('Nonempty case array required')
@@ -84,9 +92,9 @@ def main():
         case['save_sha256'] = sha(dest)
     ini = out / 'manual.ini'
     ini.write_text('verbose=true\nstage2_debug_log=false\nstage2_short_calibration=false\nstage2_tune_runtime=false\n')
-    baseline_env = environment(0, a.max_k, a.max_words, a.min_calls, a.diagnostic)
+    baseline_env = environment(0, a.max_k, a.max_words, a.min_calls, a.diagnostic, a.variant)
     receipt = dict(identity=identity, cases=cases, device=a.device, diagnostic=a.diagnostic,
-                   repeats=a.repeats, ini_sha256=sha(ini), script_sha256=sha(Path(__file__)),
+                   repeats=a.repeats, variant=a.variant, ini_sha256=sha(ini), script_sha256=sha(Path(__file__)),
                    graph_controls={k: v for k, v in baseline_env.items() if k.startswith('NTT_')},
                    argv_vars={k: str(v) if isinstance(v, Path) else v for k, v in vars(a).items()},
                    timing='engine init+main; no discarded warmups; profiling collected separately')
@@ -109,7 +117,7 @@ def main():
                     log, result = out / (name + '.engine.log'), out / (name + '.results.jsonl')
                     debug = out / (name + '.debug.log') if a.diagnostic else None
                     cmd = command(exe, ini, case, a.device, log, result, debug)
-                    env = environment(enabled, a.max_k, a.max_words, a.min_calls, a.diagnostic)
+                    env = environment(enabled, a.max_k, a.max_words, a.min_calls, a.diagnostic, a.variant)
                     started = time.time()
                     with (out / (name + '.stdout.log')).open('w', encoding='utf-8') as console:
                         run = subprocess.run(cmd, env=env, cwd=ROOT, stdout=console, stderr=subprocess.STDOUT, timeout=a.timeout,
@@ -120,10 +128,14 @@ def main():
                     if run.returncode:
                         raise RuntimeError(f'{name} failed ({run.returncode}); evidence retained')
                     row = parse(log, result, leaf_fixture=a.diagnostic)
+                    if a.variant == 'mid-outer' and 'RTX 4060 Laptop' not in log.read_text(encoding='utf-8'):
+                        raise ValueError('Middle-outer table is not supported on this device')
                     graph = fields(log.read_text(encoding='utf-8'), 'ntt_graph_stats')
-                    if int(graph['requested']) != enabled or int(graph['failures']):
+                    if int(graph['requested']) != (enabled if a.variant == 'graph' else 0) or int(graph['failures']):
                         raise ValueError('Graph request or capture failed')
                     graph_active = bool(enabled and int(graph['builds']) and int(graph['hits']))
+                    variant_active = graph_active if a.variant == 'graph' else bool(enabled and sum(
+                        count for k, count in row['histogram'].items() if 21 <= int(k) <= 23))
                     current = [row['correctness'], row['histogram'], row['convolutions'], row['chunks']]
                     if invariant is None:
                         invariant = current
@@ -137,18 +149,21 @@ def main():
                         if actual_leaf != leaf:
                             raise ValueError('Complete leaf fingerprint changed: ' + name)
                         row['leaf'] = actual_leaf
-                    row.update(case=case['name'], enabled=enabled, turn=turn, graph=graph, graph_active=graph_active, process_seconds=ended-started,
+                    row.update(case=case['name'], enabled=enabled, turn=turn, graph=graph, graph_active=graph_active,
+                               variant=a.variant, variant_active=variant_active, process_seconds=ended-started,
                                start_unix=started, end_unix=ended, diagnostic=a.diagnostic)
                     rows.append(row)
                     with (out / 'runs.jsonl').open('a', encoding='utf-8') as stream:
                         stream.write(json.dumps(row) + '\n')
-                    print(f"{name}: total={row['engine_seconds']:.6f}s graph_hits={graph['hits']} builds={graph['builds']} saved={graph['saved_launches']} PASS", flush=True)
+                    detail = (f"graph_hits={graph['hits']} builds={graph['builds']} saved={graph['saved_launches']}"
+                              if a.variant == 'graph' else f"middle_transforms={sum(count for k, count in row['histogram'].items() if 21 <= int(k) <= 23)} enabled={enabled}")
+                    print(f"{name}: total={row['engine_seconds']:.6f}s {detail} PASS", flush=True)
     finally:
         telemetry.terminate()
         telemetry.wait(timeout=10)
         trace_file.close()
-    if not any(r['graph_active'] for r in rows):
-        raise ValueError('No case executed/reused Graph; evidence retained but not an optimization A/B')
+    if not any(r['variant_active'] for r in rows):
+        raise ValueError('No case executed the selected variant; evidence retained but not an optimization A/B')
     summaries = []
     for case in cases:
         item = dict(case=case['name'], input=case)

@@ -12,6 +12,8 @@
 
 `benchmark_stage2_graph.py --exe <exe> --cases <cases.json> --output <新目录> --device 1 --repeats 4`。
 
+默认 `--variant graph` 测试本页的Graph缓存。`--variant mid-outer` 是同工具的另一个对照入口，要求受支持的生产sm89/PTX3/canonical构建和4060 Laptop；其条件与解释见[outer工具](README_NTT_OUTER_PLANS.md)。
+
 cases 为对象数组。每项必须提供 `name`、`save`、`b2`、`d`、`batch_mb`；可选 `arena_mb=6300`、`fold_mb=640`、`carrier=0`。name 只接受字母、数字和下划线。不同曲线形状用独立项；普通／承载使用相同 save、B2、D 和预算。
 
 - 每侧 4 次，顺序 off/on、on/off 交替；没有丢弃的 warmup。计时包括 Graph 建立和 mandatory selftests。
