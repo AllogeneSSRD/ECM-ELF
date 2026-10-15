@@ -82,6 +82,59 @@ __device__ __forceinline__ void tc_dot16_packed(const unsigned int *roots,
     }
 }
 
+// Two block-diagonal DFT8s replace one dense DFT16. Signed root digits only
+// occupy byte planes 0,1,3,5,6: +/-1, +/-2^24, +/-2^48 and
+// +/-(2^40-2^8). Five A planes times eight B planes need 40 MMAs.
+__device__ __forceinline__ void tc_mma_s8_u8(int s[4],unsigned int a0,
+                                           unsigned int a1,unsigned int b)
+{
+#if __CUDA_ARCH__ >= 800
+    asm volatile("mma.sync.aligned.m16n8k16.row.col.s32.s8.u8.s32 "
+        "{%0,%1,%2,%3}, {%4,%5}, {%6}, {%0,%1,%2,%3};"
+        : "+r"(s[0]),"+r"(s[1]),"+r"(s[2]),"+r"(s[3])
+        : "r"(a0),"r"(a1),"r"(b));
+#else
+    asm volatile("trap;");
+#endif
+}
+template<int D>
+__device__ __forceinline__ void tc_sum8_signed(const unsigned int a0[5],
+    const unsigned int a1[5],const unsigned int b[8],int carry[4],
+    unsigned long long lo[4],unsigned long long hi[4])
+{
+    constexpr int planes[]={0,1,3,5,6};int sum[4]={};
+    #pragma unroll
+    for(int i=0;i<5;++i)if(D-planes[i]>=0 && D-planes[i]<8)
+        tc_mma_s8_u8(sum,a0[i],a1[i],b[D-planes[i]]);
+    #pragma unroll
+    for(int j=0;j<4;++j) {
+        const int value=sum[j]+carry[j];carry[j]=value>>8;
+        if constexpr(D<8)lo[j]|=(unsigned long long)(value&255)<<(8*D);
+        else hi[j]|=(unsigned long long)(value&255)<<(8*(D-8));
+    }
+    if constexpr(D<13)tc_sum8_signed<D+1>(a0,a1,b,carry,lo,hi);
+}
+__device__ __forceinline__ void tc_dot8_signed_packed(const unsigned int *roots,
+    const unsigned long long br[4],unsigned long long output[4])
+{
+    const unsigned int lane=threadIdx.x&31;
+    unsigned int a0[5],a1[5],b[8];int carry[4]={};
+    unsigned long long lo[4]={},hi[4]={};
+    #pragma unroll
+    for(int i=0;i<5;++i){a0[i]=__ldg(roots+i*64+lane);a1[i]=__ldg(roots+i*64+32+lane);}
+    #pragma unroll
+    for(int i=0;i<8;++i)b[i]=tc_pack_bytes(br,i);
+    tc_sum8_signed<0>(a0,a1,b,carry,lo,hi);
+    #pragma unroll
+    for(int j=0;j<4;++j) {
+        // Signed sum magnitude < 8*2^48*2^64 < 2^115. Restore sign at
+        // bit112, then undo the unsigned 2^128 bias when S is negative.
+        hi[j]|=(unsigned long long)(long long)carry[j]<<48;
+        output[j]=gl_reduce(lo[j],hi[j]);
+        if(carry[j]<0)output[j]=gl_add_dev(output[j],1ull<<32);
+    }
+}
+
 __device__ __forceinline__ unsigned int tc_rev4(unsigned int x)
 {
     return ((x&1)<<3)|((x&2)<<1)|((x&4)>>1)|((x&8)>>3);
@@ -89,7 +142,7 @@ __device__ __forceinline__ unsigned int tc_rev4(unsigned int x)
 
 // Two independent 64-word transforms/warp: CUDA upper two stages, exact MMA
 // lower four stages. Input/output permutations match the existing warp6 tail.
-template<bool INV>
+template<bool INV,bool HYBRID=false>
 __device__ __forceinline__ void tc_warp6_tile(unsigned long long *sm,unsigned long long *global,
     unsigned long long tile,const unsigned long long *table,const unsigned int *roots,
     unsigned int offset)
@@ -98,7 +151,8 @@ __device__ __forceinline__ void tc_warp6_tile(unsigned long long *sm,unsigned lo
     unsigned long long br[4],out[4];
     #pragma unroll
     for(int i=0;i<4;++i) {
-        const unsigned int row=tid*4+i,index=offset+group*16+(INV ? tc_rev4(row) : row);
+        const unsigned int raw=tid*4+i,row=HYBRID ? 2*(raw&7)+(raw>>3) : raw;
+        const unsigned int index=offset+group*16+(INV ? tc_rev4(row) : row);
         br[i]=index<tile ? sm[index] : 0;
     }
     if(!INV) {
@@ -108,13 +162,22 @@ __device__ __forceinline__ void tc_warp6_tile(unsigned long long *sm,unsigned lo
             const bool upper=(group&upper_bit)!=0;
             #pragma unroll
             for(int i=0;i<4;++i) {
-                const unsigned int j=(group*16+tid*4+i)&((1u<<st)-1);
+                const unsigned int raw=tid*4+i,row=HYBRID ? 2*(raw&7)+(raw>>3) : raw;
+                const unsigned int j=(group*16+row)&((1u<<st)-1);
                 const auto peer=__shfl_xor_sync(0xffffffffu,br[i],shuffle);
                 br[i]=upper ? gl_mul(gl_sub_dev(peer,br[i]),__ldg(table+(1u<<st)-1+j)) : gl_add_dev(br[i],peer);
             }
         }
     }
-    tc_dot16_packed(roots,br,out);
+    if constexpr(HYBRID) {
+        tc_dot8_signed_packed(roots,br,out);
+        const auto w=__ldg(table+7+group);
+        #pragma unroll
+        for(int i=0;i<2;++i) {
+            const auto u=out[i],v=gl_mul(out[i+2],w);
+            out[i]=gl_add_dev(u,v);out[i+2]=gl_sub_dev(u,v);
+        }
+    } else tc_dot16_packed(roots,br,out);
     if(INV) {
         // stage 4 pairs adjacent columns, held in adjacent output registers.
         #pragma unroll
@@ -144,7 +207,7 @@ __device__ __forceinline__ void tc_warp6_tile(unsigned long long *sm,unsigned lo
 // Actual tile boundary contract: DIF natural -> bit-reversed; inverse DIT
 // bit-reversed -> natural, including the same B/1N fusion as the production tile.
 // This standalone experiment reuses the production shared radix4 high stages.
-template<bool INV>
+template<bool INV,bool HYBRID=false>
 __global__ void tc_goldilocks_tile(unsigned long long *a,const unsigned long long *b,
     unsigned long long n,int t,const unsigned long long *table,unsigned long long scale,
     unsigned long long stride,const unsigned int *roots)
@@ -166,7 +229,7 @@ __global__ void tc_goldilocks_tile(unsigned long long *a,const unsigned long lon
         if(st==6)tile_radix2_stage<false>(sm,tile,st,table);
     }
     for(unsigned int offset=(threadIdx.x>>5)*128;offset<tile;offset+=(blockDim.x/32)*128)
-        tc_warp6_tile<INV>(sm,a+base,tile,table,roots,offset);
+        tc_warp6_tile<INV,HYBRID>(sm,a+base,tile,table,roots,offset);
     if(INV) {
         __syncthreads();int st=6;
         for(;st+1<t;st+=2) {

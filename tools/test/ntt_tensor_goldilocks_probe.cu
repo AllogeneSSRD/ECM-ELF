@@ -1,5 +1,11 @@
 #define NTT_POLY_PROBE_NO_MAIN
+#ifdef NTT_TENSOR_USE_PRODUCTION_RUNTIME
+#include <algorithm>
+#include "../../src/core/ecm_stage2_logging.h"
+#include "../../src/cuda/stage2/ntt_runtime.cuh"
+#else
 #include "../bench/ntt_poly_probe.cu"
+#endif
 #include "../bench/ntt_tensor_goldilocks.cuh"
 
 using Word=unsigned long long;

@@ -32,8 +32,33 @@ result = gl_sub_dev(gl_reduce(lo,hi), top<<32)
 
 `gl_reduce` 复用当前任意128bit Goldilocks fold，结果 canonical；减数 `top<<32<q`。丢弃 top 会得到错误余数，roundtrip 单独成功不足以证明正确。GMP 直接保存完整和，并独立比较最终余数及 `floor(S/2¹²⁸)`。
 
-代码：[MMA:14](../../tools/bench/ntt_tensor_goldilocks.cuh#L14)、[对角/carry:28](../../tools/bench/ntt_tensor_goldilocks.cuh#L28)、[132bit 归约:45](../../tools/bench/ntt_tensor_goldilocks.cuh#L45)、[GMP dot:115](../../tools/test/ntt_tensor_goldilocks_probe.cu#L115)。
+代码：[MMA](../../tools/bench/ntt_tensor_goldilocks.cuh#L14)、[对角/carry](../../tools/bench/ntt_tensor_goldilocks.cuh#L28)、[132bit 归约](../../tools/bench/ntt_tensor_goldilocks.cuh#L45)、[GMP dot](../../tools/test/ntt_tensor_goldilocks_probe.cu#L121)。
 
+
+## 有符号稀疏根与 DFT8 分解
+
+本节为Goldilocks域的独立推导，不声明生产已使用该路线。令w₁₆=7^((q−1)/16)，w₈=w₁₆²。标准8次根的幂可用下列平衡整数代表：±1、±2²⁴、±2⁴⁸、±(2⁴⁰−2⁸)。它们只需要base256的byte位置0/1/3/5/6，系数为−1、0或1；等式在模q下成立，无需把q附近的canonical根展开为8个密集unsigned byte。
+
+对于16点输入x，将偶/奇项分别做8点变换E/O：
+
+```text
+E_j = Σ(k=0..7) x_(2k)   · w8^(jk)
+O_j = Σ(k=0..7) x_(2k+1) · w8^(jk)
+X_j   = E_j + w16^j · O_j
+X_(j+8) = E_j − w16^j · O_j, j=0..7
+```
+
+把两份8×8根矩阵放到16×16的对角块，使用s8根plane与u8输入plane组合，共5×8=40次`mma.sync.aligned.m16n8k16.row.col.s32.s8.u8.s32`，输出仍为16×8。分解新增每16点8次根乘及8个合并蝶形，因此40/64不是完整计算量或时间之比。[NVIDIA整数MMA合同](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#matrix-fragments-for-mma-m16n8k16-with-integer-type)定义fragment布局与输入类型；此处结构为独立实现，没有导入第三方内核。
+
+令c_(a,d)为根的有符号byte系数，b_(k,e)为输入unsigned byte。按对角d+e累加；单个plane输出至多8·255=2040，各对角及carry远小于signed32上界。完整有符号整数和满足|S|<8·2⁴⁸·2⁶⁴=2¹¹⁵。逐byte传播carry时须保留负数的算术右移和低byte，最后在bit112处补齐符号。若128-bit补码视为unsigned所得余数为r，且S<0，则：
+
+```text
+S_unsigned = S + 2^128
+2^128 ≡ −2^32 mod q
+S mod q = (r + 2^32) mod q
+```
+
+遗漏这一修正会使负和的结果错误；仅roundtrip成功不足以排除正逆两侧抵消。生产域元素仍须canonical，符号只用于中间精确累加。实现入口为[tc_dot8_signed_packed](../../tools/bench/ntt_tensor_goldilocks.cuh#L117)、[根矩阵构造](../../tools/bench/ntt_tensor_length_probe.cu#L7)。实际运行资格和测量见[性能报告](../performance/NTT_TENSOR.md)。
 
 ## 5. 计算量、容量和传输公式
 
@@ -67,4 +92,4 @@ tile Tensor forward/inverse寄存器 **74/76**，LOCAL0；生产CUDA两个方向
 
 自然序矩阵性能probe的device payload为 `2048·batches+37112 B`，包含两个主数组、矩阵/根表和16组参考pattern；batches65536约128.035MiB。完整门禁使用更小的fixture并回传全部结果及top，不能把其传输口径混入性能probe。
 
-代码：[计账:7](../../tools/test/ntt_tensor_goldilocks_probe.cu#L7)、[TileBuffers:258](../../tools/test/ntt_tensor_goldilocks_probe.cu#L258)、[资源查询:447](../../tools/test/ntt_tensor_goldilocks_probe.cu#L447)。
+代码：[计账](../../tools/test/ntt_tensor_goldilocks_probe.cu#L13)、[TileBuffers](../../tools/test/ntt_tensor_goldilocks_probe.cu#L264)、[资源查询](../../tools/test/ntt_tensor_goldilocks_probe.cu#L453)。
