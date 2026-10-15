@@ -39,6 +39,8 @@
 
 ## 其他实现
 
+- [ ] 将已验证的 CUDA Edwards 点算术接入 Stage1 批次、切片、检查点和 save，并使 CUDA Stage2 消费 Edwards 交接点；门禁与当前进度见 [GPU Edwards 开发草稿](development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)。
+
 - [ ] 扩大Stage1 PRAC位宽/设备/完整生产曲线验证；局部最佳参数不提升为通用默认。
 - [ ] 保持CPU/OpenCL可选路径的正确性覆盖和算子注册约束；没有对应设备证据时不写通用性能结论。
 - [ ] 数据集扩展参数化时，单独定义sigma、群阶/点阶和B1/B2比较口径，控制每因子持久记录数量。
