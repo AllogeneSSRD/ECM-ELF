@@ -135,6 +135,48 @@ __device__ __forceinline__ void tc_dot8_signed_packed(const unsigned int *roots,
     }
 }
 
+// Keep only the low 96 bits and a signed high coefficient. Since 2^96=-1
+// (mod q), no sign extension to 128 bits or general 128-bit reduction is needed.
+template<int D>
+__device__ __forceinline__ void tc_sum8_narrow(const unsigned int a0[5],
+    const unsigned int a1[5],const unsigned int b[8],int carry[4],
+    unsigned int low[4],unsigned int middle[4],unsigned int high[4])
+{
+    constexpr int planes[]={0,1,3,5,6};int sum[4]={};
+    #pragma unroll
+    for(int i=0;i<5;++i)if(D-planes[i]>=0 && D-planes[i]<8)
+        tc_mma_s8_u8(sum,a0[i],a1[i],b[D-planes[i]]);
+    #pragma unroll
+    for(int j=0;j<4;++j) {
+        if constexpr(D<12) {
+            const int value=sum[j]+carry[j];carry[j]=value>>8;
+            const unsigned int digit=(unsigned int)(value&255)<<(8*(D&3));
+            if constexpr(D<4)low[j]|=digit;
+            else if constexpr(D<8)middle[j]|=digit;
+            else high[j]|=digit;
+        } else carry[j]+=sum[j]*(1<<(8*(D-12)));
+    }
+    if constexpr(D<13)tc_sum8_narrow<D+1>(a0,a1,b,carry,low,middle,high);
+}
+__device__ __forceinline__ void tc_dot8_narrow_packed(const unsigned int *roots,
+    const unsigned long long br[4],unsigned long long output[4])
+{
+    const unsigned int lane=threadIdx.x&31;
+    unsigned int a0[5],a1[5],b[8],low[4]={},middle[4]={},high[4]={};int carry[4]={};
+    #pragma unroll
+    for(int i=0;i<5;++i){a0[i]=__ldg(roots+i*64+lane);a1[i]=__ldg(roots+i*64+32+lane);}
+    #pragma unroll
+    for(int i=0;i<8;++i)b[i]=tc_pack_bytes(br,i);
+    tc_sum8_narrow<0>(a0,a1,b,carry,low,middle,high);
+    #pragma unroll
+    for(int j=0;j<4;++j) {
+        const auto v=(unsigned long long)middle[j]+high[j];
+        const long long correction=(long long)low[j]-high[j]-carry[j]+(long long)(v>>32)*0xffffffffll;
+        const auto canonical=correction<0 ? (unsigned long long)correction+GL_P : (unsigned long long)correction;
+        output[j]=gl_add_dev(v<<32,canonical);
+    }
+}
+
 __device__ __forceinline__ unsigned int tc_rev4(unsigned int x)
 {
     return ((x&1)<<3)|((x&2)<<1)|((x&4)>>1)|((x&8)>>3);
@@ -142,7 +184,7 @@ __device__ __forceinline__ unsigned int tc_rev4(unsigned int x)
 
 // Two independent 64-word transforms/warp: CUDA upper two stages, exact MMA
 // lower four stages. Input/output permutations match the existing warp6 tail.
-template<bool INV,bool HYBRID=false>
+template<bool INV,bool HYBRID=false,bool NARROW=false>
 __device__ __forceinline__ void tc_warp6_tile(unsigned long long *sm,unsigned long long *global,
     unsigned long long tile,const unsigned long long *table,const unsigned int *roots,
     unsigned int offset)
@@ -170,7 +212,8 @@ __device__ __forceinline__ void tc_warp6_tile(unsigned long long *sm,unsigned lo
         }
     }
     if constexpr(HYBRID) {
-        tc_dot8_signed_packed(roots,br,out);
+        if constexpr(NARROW)tc_dot8_narrow_packed(roots,br,out);
+        else tc_dot8_signed_packed(roots,br,out);
         const auto w=__ldg(table+7+group);
         #pragma unroll
         for(int i=0;i<2;++i) {
@@ -207,8 +250,8 @@ __device__ __forceinline__ void tc_warp6_tile(unsigned long long *sm,unsigned lo
 // Actual tile boundary contract: DIF natural -> bit-reversed; inverse DIT
 // bit-reversed -> natural, including the same B/1N fusion as the production tile.
 // This standalone experiment reuses the production shared radix4 high stages.
-template<bool INV,bool HYBRID=false>
-__global__ void tc_goldilocks_tile(unsigned long long *a,const unsigned long long *b,
+template<bool INV,bool HYBRID=false,bool NARROW=false>
+__device__ __forceinline__ void tc_goldilocks_tile_body(unsigned long long *a,const unsigned long long *b,
     unsigned long long n,int t,const unsigned long long *table,unsigned long long scale,
     unsigned long long stride,const unsigned int *roots)
 {
@@ -229,7 +272,7 @@ __global__ void tc_goldilocks_tile(unsigned long long *a,const unsigned long lon
         if(st==6)tile_radix2_stage<false>(sm,tile,st,table);
     }
     for(unsigned int offset=(threadIdx.x>>5)*128;offset<tile;offset+=(blockDim.x/32)*128)
-        tc_warp6_tile<INV,HYBRID>(sm,a+base,tile,table,roots,offset);
+        tc_warp6_tile<INV,HYBRID,NARROW>(sm,a+base,tile,table,roots,offset);
     if(INV) {
         __syncthreads();int st=6;
         for(;st+1<t;st+=2) {
@@ -239,6 +282,24 @@ __global__ void tc_goldilocks_tile(unsigned long long *a,const unsigned long lon
         if(st<t)tile_radix2_stage<true>(sm,tile,st,table);
         for(unsigned int i=threadIdx.x;i<tile;i+=blockDim.x)a[base+i]=sm[i];
     }
+}
+
+template<bool INV,bool HYBRID=false,bool NARROW=false>
+__global__ void tc_goldilocks_tile(unsigned long long *a,const unsigned long long *b,
+    unsigned long long n,int t,const unsigned long long *table,unsigned long long scale,
+    unsigned long long stride,const unsigned int *roots)
+{
+    tc_goldilocks_tile_body<INV,HYBRID,NARROW>(a,b,n,t,table,scale,stride,roots);
+}
+
+// A separate wrapper leaves existing Tensor64/40 launch/resource contracts intact.
+// 512 threads and two CTAs/SM cap this candidate at 64 registers on sm89.
+template<bool INV>
+__global__ __launch_bounds__(512,2) void tc_goldilocks_narrow64_tile(unsigned long long *a,const unsigned long long *b,
+    unsigned long long n,int t,const unsigned long long *table,unsigned long long scale,
+    unsigned long long stride,const unsigned int *roots)
+{
+    tc_goldilocks_tile_body<INV,true,true>(a,b,n,t,table,scale,stride,roots);
 }
 
 // A is a common row-major 16x16 matrix. Each warp multiplies one row-major

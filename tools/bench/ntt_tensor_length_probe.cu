@@ -54,45 +54,50 @@ struct LengthPlan {
         Buffer *dst[]={&rf,&ri,&hf,&hi};
         for(int i=0;i<4;++i)CK(cudaMemcpy(dst[i]->p,roots[i].data(),dst[i]->bytes,cudaMemcpyHostToDevice));
         const void *kernels[]={(const void *)tc_goldilocks_tile<false>,(const void *)tc_goldilocks_tile<true>,
-            (const void *)tc_goldilocks_tile<false,true>,(const void *)tc_goldilocks_tile<true,true>};
+            (const void *)tc_goldilocks_tile<false,true>,(const void *)tc_goldilocks_tile<true,true>,
+            (const void *)tc_goldilocks_tile<false,true,true>,(const void *)tc_goldilocks_tile<true,true,true>,
+            (const void *)tc_goldilocks_narrow64_tile<false>,(const void *)tc_goldilocks_narrow64_tile<true>};
         for(const auto kernel:kernels) {
             CK(cudaFuncSetAttribute(kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,(1u<<t)*8));
             CK(cudaFuncSetAttribute(kernel,cudaFuncAttributePreferredSharedMemoryCarveout,100));
         }
     }
     ~LengthPlan(){fuse_release(ctx);}
-    void transform(int mode,bool inverse,Word *a,const Word *b,Word batch) {
+    void transform(int mode,bool inverse,Word *a,const Word *b,Word batch,cudaStream_t stream=0) {
         if(!mode) {
-            if(inverse)ntt_inverse_fused(a,b,ctx,omega_inverse,scale,batch);
-            else ntt_forward_fused(a,ctx,omega,batch);
+            if(inverse)ntt_inverse_fused(a,b,ctx,omega_inverse,scale,batch,stream);
+            else ntt_forward_fused(a,ctx,omega,batch,stream);
         } else {
             // t only gates the tile launch in the production runners. Preserve
             // k, nms, outer_stages, roots and radix tables exactly.
             FuseCtx outer=ctx;outer.t=0;
-            if(!inverse)ntt_forward_fused(a,outer,omega,batch);
+            if(!inverse)ntt_forward_fused(a,outer,omega,batch,stream);
             const dim3 grid((unsigned int)(n>>t),(unsigned int)batch);const int shared=(1u<<t)*8;
             if(mode==1) {
-                if(inverse)tc_goldilocks_tile<true><<<grid,threads,shared>>>(a,b,n,t,ctx.tblI,scale,n,ri.get<unsigned int>());
-                else tc_goldilocks_tile<false><<<grid,threads,shared>>>(a,nullptr,n,t,ctx.tblF,0,n,rf.get<unsigned int>());
+                if(inverse)tc_goldilocks_tile<true><<<grid,threads,shared,stream>>>(a,b,n,t,ctx.tblI,scale,n,ri.get<unsigned int>());
+                else tc_goldilocks_tile<false><<<grid,threads,shared,stream>>>(a,nullptr,n,t,ctx.tblF,0,n,rf.get<unsigned int>());
+            } else if(mode==2) {
+                if(inverse)tc_goldilocks_tile<true,true><<<grid,threads,shared,stream>>>(a,b,n,t,ctx.tblI,scale,n,hi.get<unsigned int>());
+                else tc_goldilocks_tile<false,true><<<grid,threads,shared,stream>>>(a,nullptr,n,t,ctx.tblF,0,n,hf.get<unsigned int>());
             } else {
-                if(inverse)tc_goldilocks_tile<true,true><<<grid,threads,shared>>>(a,b,n,t,ctx.tblI,scale,n,hi.get<unsigned int>());
-                else tc_goldilocks_tile<false,true><<<grid,threads,shared>>>(a,nullptr,n,t,ctx.tblF,0,n,hf.get<unsigned int>());
+                if(inverse)tc_goldilocks_narrow64_tile<true><<<grid,threads,shared,stream>>>(a,b,n,t,ctx.tblI,scale,n,hi.get<unsigned int>());
+                else tc_goldilocks_narrow64_tile<false><<<grid,threads,shared,stream>>>(a,nullptr,n,t,ctx.tblF,0,n,hf.get<unsigned int>());
             }
             CK(cudaGetLastError());
-            if(inverse)ntt_inverse_fused(a,b,outer,omega_inverse,scale,batch);
+            if(inverse)ntt_inverse_fused(a,b,outer,omega_inverse,scale,batch,stream);
         }
     }
-    void operation(int mode,int operation,Word *a,Word *b,Word batch) {
-        if(operation==2){transform(mode,false,a,nullptr,batch);transform(mode,false,b,nullptr,batch);}
-        transform(mode,operation!=0,a,b,batch);
+    void operation(int mode,int operation,Word *a,Word *b,Word batch,cudaStream_t stream=0) {
+        if(operation==2){transform(mode,false,a,nullptr,batch,stream);transform(mode,false,b,nullptr,batch,stream);}
+        transform(mode,operation!=0,a,b,batch,stream);
     }
 };
-static int length_gate(bool fault)
+static int length_gate(bool fault,int modes=3)
 {
     Word total_bad=0,words_checked=0;bool injected=false;
     for(int k:{6,8,10,12,13,14})for(int batch:{1,3}) {
         const Word n=1ull<<k,words=n*batch;LengthPlan plan(k,12,256);
-        Buffer a(words*8),b(words*8);Checks check[3];
+        Buffer a(words*8),b(words*8);Checks check[4];
         for(int pattern:{0,2,4,5,7}) {
             auto input=fixture(pattern,words,0x9134+k),multiplier=fixture(5,words,0x743+pattern);
             const auto forward=tile_reference(input,multiplier,k,false,1,batch,0);
@@ -100,16 +105,16 @@ static int length_gate(bool fault)
             const auto bf=tile_reference(multiplier,input,k,false,1,batch,0);
             const auto convolution=tile_reference(forward,bf,k,true,1,batch,0);
             const std::vector<Word> *expected[]={&forward,&inverse,&convolution};
-            for(int operation=0;operation<3;++operation)for(int mode=0;mode<3;++mode) {
+            for(int operation=0;operation<3;++operation)for(int mode=0;mode<modes;++mode) {
                 CK(cudaMemcpy(a.p,input.data(),a.bytes,cudaMemcpyHostToDevice));CK(cudaMemcpy(b.p,multiplier.data(),b.bytes,cudaMemcpyHostToDevice));
                 plan.operation(mode,operation,a.get(),b.get(),batch);
-                if(fault && mode==2 && !injected){corrupt_first<<<1,32>>>(a.get());injected=true;}
+                if(fault && mode==modes-1 && !injected){corrupt_first<<<1,32>>>(a.get());injected=true;}
                 std::vector<Word> got(words),got_b(words);CK(cudaMemcpy(got.data(),a.p,a.bytes,cudaMemcpyDeviceToHost));
                 CK(cudaMemcpy(got_b.data(),b.p,b.bytes,cudaMemcpyDeviceToHost));
                 compare(check[mode],got,*expected[operation]);compare(check[mode],got_b,operation==2 ? bf : multiplier);
             }
         }
-        for(int mode=0;mode<3;++mode) {
+        for(int mode=0;mode<modes;++mode) {
             total_bad+=check[mode].bad;words_checked+=check[mode].words;
             std::printf("tc_length_check: k=%d batch=%d mode=%d cases=%llu words=%llu bad=%llu\n",k,batch,mode,check[mode].cases,check[mode].words,check[mode].bad);
         }
@@ -154,6 +159,7 @@ static int length_bench(int k,int batch,int tile,int threads,int operation,int r
     if(graph)for(int mode=0;mode<3;++mode){CK(cudaGraphExecDestroy(executable[mode]));CK(cudaGraphDestroy(captured[mode]));}
     return 0;
 }
+#ifndef NTT_TENSOR_LENGTH_PROBE_NO_MAIN
 int main(int argc,char **argv)
 {
     if(argc<3){std::fprintf(stderr,"device --check|--fault|--bench [k batch tile threads operation repeats]\n");return 2;}
@@ -180,3 +186,4 @@ int main(int argc,char **argv)
         return code;
     } catch(const std::exception &e){std::fprintf(stderr,"tc_length_error: %s\n",e.what());return 2;}
 }
+#endif

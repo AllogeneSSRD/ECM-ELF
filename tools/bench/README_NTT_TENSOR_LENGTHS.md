@@ -52,3 +52,5 @@ Graph捕获、分配和参考构造在计时外；每样本报告事件时间除
 - 工具不更改功耗/频率。默认功耗墙下实际频率仍可能下降，结论应标明约束与实测范围。小于几个微秒的差异或零MAD不构成稳定收益证明。
 
 当前实测、限制与后续工作见[Tensor NTT性能](../../docs/performance/NTT_TENSOR.md)。
+
+同卡双流CUDA/Tensor混合并发及N96r64窄重构使用独立的[并发工具](README_NTT_TENSOR_CONCURRENCY.md)，含纯CUDA控制、GMP、Graph/native和管理员范围剖析。本长度工具的三模式输出合同保持CUDA/Tensor64/Tensor40。

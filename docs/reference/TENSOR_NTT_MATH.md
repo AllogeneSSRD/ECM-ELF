@@ -60,6 +60,24 @@ S mod q = (r + 2^32) mod q
 
 遗漏这一修正会使负和的结果错误；仅roundtrip成功不足以排除正逆两侧抵消。生产域元素仍须canonical，符号只用于中间精确累加。实现入口为[tc_dot8_signed_packed](../../tools/bench/ntt_tensor_goldilocks.cuh#L117)、[根矩阵构造](../../tools/bench/ntt_tensor_length_probe.cu#L7)。实际运行资格和测量见[性能报告](../performance/NTT_TENSOR.md)。
 
+## 96-bit有符号高项重构
+
+本节给出同一40次MMA和的另一种精确归约，不要求构造128-bit补码。令q=2⁶⁴−2³²+1，x=2³²，则x²≡x−1、x³≡−1（mod q）。把完整signed和S写成：
+
+$$S=w_0+xw_1+x^2w_2+x^3z,$$
+
+其中w₀、w₁、w₂∈[0,x)，z=⌊S/2⁹⁶⌋为signed高项。|S|<2¹¹⁵给出−2¹⁹≤z<2¹⁹，包括负数向下取整的边界。
+
+前12个byte对角逐byte传播signed carry，构造三个32-bit word；剩下两个对角直接累加到z：z=carry₁₁+s₁₂+256s₁₃。无需把z传播成128-bit的最高两byte，也无需补齐128-bit符号。
+
+根据上述同余，令U=w₀−w₂−z、V=w₁+w₂，便有S≡U+xV。再设h=⌊V/x⌋∈{0,1}、v=V mod x：
+
+$$S\equiv xv+C\pmod q,\qquad C=U+h(x-1).$$
+
+xv≤x²−x=q−1，本身canonical；|C|<2³⁴<q，C<0时加q即可canonical化。最终只需一次canonical Goldilocks加法。各byte对角的保守绝对上界5·8·255=10200，加carry仍远小于signed32；高项z及64-bit校正也都在上述范围内。对负值只使用算术右移或有界乘法，不使用C++未定义的负数左移。
+
+这一等式只替代重构，不减少40次MMA、DFT8合并根乘、tile高层和outer工作；寄存器与调度的变化必须测量。数学正确性也不意味着Tensor路线优于CUDA。实现入口为[窄重构](../../tools/bench/ntt_tensor_goldilocks.cuh#L137)，当前资格见[Tensor性能](../performance/NTT_TENSOR.md)。
+
 ## 5. 计算量、容量和传输公式
 
 ### 5.1 运算计量
