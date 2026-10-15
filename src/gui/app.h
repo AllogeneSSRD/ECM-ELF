@@ -5,6 +5,7 @@
 
 #include "gpu_monitor.h"
 #include "gen_input_text.h"
+#include "probability_panel.h"
 #include "ini_file.h"
 #include "localization.h"
 #include "log_parse.h"
@@ -20,7 +21,7 @@
 
 namespace ecmgui {
 
-// One line chart. Every chart in the GUI goes through App::draw_metric_plot so they all look
+// Telemetry charts go through App::draw_metric_plot so they all look
 // and read the same way: rounded card, subtle grid, filled area under the curve, the current
 // value + unit as the headline, min/max on the axis, an optional reference line (e.g. a power
 // limit) and a hover read-out with a vertical guide.
@@ -224,6 +225,7 @@ private:
     // Worktodo generator (M6 scope A, docs/usage/GUI.md 19): paste assignments, preview
     // the queue the generator would write, then append it with a re-validated mtime.
     void draw_gen_panel();
+    void draw_probability_panel();
     // The one line-chart implementation every panel uses (see MetricPlot).
     // `used_lo`/`used_hi` (optional) receive the y-range the chart actually drew with, which
     // the GPU history trace reports so a test can check the range covers the data.
@@ -287,6 +289,8 @@ private:
     FileStamp gen_stamp_;                 // target state when the preview was made
     std::string gen_target_;              // the file the preview would be appended to
     bool gen_has_preview_ = false;
+    ProbabilityPanel probability_panel_;
+    bool show_probability_=true,probability_focus_requested_=false;
     int gen_lines_ = 0, gen_segments_ = 0, gen_duplicates_ = 0, gen_read_ = 0,
         gen_skipped_ = 0;
     std::string gen_trace_last_;

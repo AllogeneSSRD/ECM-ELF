@@ -671,9 +671,9 @@ int run_selftest(const std::string &ini_path, const std::string &language,
                   std::to_string(app.workers().size()) + " worker(s)");
             if (!app.workers().empty()) {
                 const ecmgui::WorkerView &w = app.workers().front();
-                check(w.effective_config.find("device") != std::string::npos ||
-                          w.effective_config.find("no keys") != std::string::npos,
-                      "effective-config text is produced");
+                check(w.effective_config.find("stage = ") == 0 &&
+                          w.effective_config.find("\nexe = ") != std::string::npos,
+                      "effective-config text shows stage and executable");
             }
         }
     }

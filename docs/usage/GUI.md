@@ -1,6 +1,6 @@
 # Windows 图形前端
 
-`ecm_gui.exe` 使用 Dear ImGui docking、Win32/DX11，管理 Stage1 或 Stage2 worker、配置、队列生成、GPU监控及结果展示。GUI不执行数论算法，也不链接GMP/OpenCL/CUDA引擎；计算能力来自所选worker程序。
+`ecm_gui.exe` 使用 Dear ImGui docking、Win32/DX11，管理 Stage1 或 Stage2 worker、配置、队列生成、GPU监控、结果展示及ECM概率估算。概率面板使用CPU数值模型；实际曲线计算来自所选worker程序，GUI不链接GMP/OpenCL/CUDA引擎。
 
 ## Worker 与配置
 
@@ -40,15 +40,35 @@ Prime95 交接状态显示 pending、失败或成功；真实 save/worktodo.add 
 
 管道进度用于百分比、速度和 ETA，事件行用于开始、因子、checkpoint 和错误。结果 JSONL 为原始结果，文本汇总合并同因子的 sigma；两者不可互当 checkpoint。
 
-Stage2任务进度按**已完成曲线/可用曲线**显示，包括恢复的完成数；当前曲线编号、计算阶段、实际B1/B2/S位宽/D/P另行展示。巨步批次是当前曲线中一个阶段的进度，阶段剩余时间不作为整个任务的ETA。任务ETA用本轮已完成曲线的平均引擎时间估计，首次完成前不虚构速度或ETA。速度边界优先为`stage2_full_wall.total=init+main`，没有该输出才使用外层曲线墙钟。
+Stage2任务进度按**已完成曲线/可用曲线**显示，包括恢复的完成数；当前曲线编号、计算阶段、实际B1/B2/S位宽/D/P另行展示。大步点批次是当前曲线中一个阶段的进度，阶段剩余时间不作为整个任务的ETA。任务ETA用本轮已完成曲线的平均引擎时间估计，首次完成前不虚构速度或ETA。速度边界优先为`stage2_full_wall.total=init+main`，没有该输出才使用外层曲线墙钟。
 
-Stage2支持启动短校准、读save、规划、baby点、F树、逆、giant/G树/fold、下降、叶乘积/GCD、算术检查、因子分解及结果发布的阶段显示。正式因子结果进入已有结果汇总。GUI请求批次级控制台输出以取得状态，但常规输出窗口只保留阶段与曲线事件；形状、NTT统计和批次明细可从原始输出查看，工作程序文件日志仍由其配置维护。
+Stage2支持启动短校准、存档校验、D/P与内存规划、小步点（baby points）、F乘积树、反转多项式逆、大步点（giant points）/G乘积树/模F折叠、F树下降、叶值分块/GCD、算术检查、因子分解及结果发布的阶段显示。详情和worker输出窗在当前阶段标题下说明该阶段的操作与产物；完整管线见[Stage2架构](../architecture/STAGE2.md)。正式因子结果进入已有结果汇总。GUI请求批次级控制台输出以取得状态，但常规输出窗口只保留阶段与曲线事件；形状、NTT统计和批次明细可从原始输出查看，工作程序文件日志仍由其配置维护。
 
 工作进程管理按阶段使用青绿/紫色进度，长路径移到提示，选中worker显示详情。窄面板的表格保留进度列最小宽度并横向滚动，不强行把固定列挤入可视区域；条形与覆盖文字裁剪在同一矩形内，绘制比例约束为0到1。跨列任务摘要单独测量行高及绘制范围，不参与第一列宽度计算。日志提供“自动滚动到底部”开关、错误颜色和可见行绘制，保留原有4000行上限。开启时，停留在底部会随新输出滚动；向上翻阅时暂停，回到底部恢复；关闭时不随新输出滚动。此设置只控制界面滚动。绘制机制减少长日志的逐帧工作量，没有据此声明已测CPU占用或GPU性能提升。
 
 GPU 面板动态加载 NVML，显示利用率、显存、SM/graphics 时钟、功耗、温度和限频原因。驱动不支持的指标显示不可用；NVML 利用率不是 SM occupancy。监控不改变 GPU 功率/频率配置。
 
 NVML 采样时不持有 UI 读取设备/历史的锁；初始化仍同步，没有进程隔离或超时保证。`--trace` 可记录初始化与窗口恢复。
+
+## ECM 概率面板
+
+从“查看 → ECM 概率”打开或聚焦，也可设置`[GUI] start_tab=prob`直接进入。面板作为worker管理旁的独立页签加入现有停靠布局；关闭后可从菜单重开。输入只保存在本次GUI会话中，不写入任务队列或worker计算设置。
+
+输入目标素因子大小、B1、固定B2或B2/B1、曲线数C及曲线概率模型。大小可用bits或十进制位数，不是待分解完整N的位宽：b bits采用代表值2^(b−0.5)，d位十进制采用10^(d−0.5)。支持科学计数法。未启用Stage2时只计算Stage1。
+
+上半部分分为两栏：左侧集中输入因子大小、曲线数C、B1、Stage2开关及固定B2或B2/B1；右侧设置计算方式、概率模型、D_eff、概率口径及目标成功率。
+
+GMP理论预设包括Suyama/param0、param1、param2和param3，采用`tools/ecm_prob/model.py`及`rho.py`的理论有效除子；T=4/8/12/16只是扭转基线。自定义`D_eff`可以输入经验拟合值，但GUI不自动读取忽略目录中的小素数样本，也不把理论预设宣称为实测曲线命中率。`D_eff`与Stage2选型参数D无关。
+
+结果同时给出单曲线、C条曲线累计成功率、未命中率及首次成功的平均曲线数1/p。累计成功率使用Q=1−(1−p)^C，假定各曲线独立且等效；1/p是均值，不能当作达到某个置信概率所需的曲线数。已有Stage1 save可参考条件概率(p₁₂−p₁)/(1−p₁)，表示已未命中Stage1的曲线在Stage2中的成功率；p₁=1时该条件概率无定义。
+
+反算支持曲线数、因子大小、B1、B2及D_eff。目标可为单曲线或累计成功率；曲线数须使用累计目标，B2须启用Stage2。待求输入字段禁用。B1反算可固定B2或固定B2/B1；B2反算改为绝对界限。条件Stage2概率对B1不单调，因此不能按该口径反算B1。结果展示采用参数、实际概率及目标残差；“将反算结果用于输入”会把求得参数填回正向计算表单。
+
+当前反算使用有限范围：因子大小2..2048 bits，B1/B2为2..10¹⁸，D_eff为10⁻⁹..10¹⁸，曲线数不超过10¹⁸。先检查端点，再做80次区间搜索；B1/B2结果向上取整。最小允许界限已达到目标时直接返回边界，目标在模型范围内不可达时显示无解。有限Dickman表及数值截断给出的零概率不表示严格不可能命中。
+
+三张图分别展示因子大小与单曲线概率、因子大小与C条曲线累计成功率、曲线数与累计概率。第二张图固定本次结果的C，并在标题中显示该数值；沿因子大小变化计算Q=1−(1−p)^C，使用与第一张图相同的大小范围。Stage1与完整流程始终可比较，条件Stage2曲线可另行显示；选择该条件口径时自动展示对应曲线。每图使用129点，可悬停读取采样值，虚线标记结果所用参数。支持自定义范围、扩大曲线数图以包含结果、对数概率轴及复制三张图的CSV；CSV中的`factor_size_cumulative`标识固定C的新增图。对数轴跳过零值，条件概率无定义处留空，不伪造零值。
+
+首次打开面板计算默认参数；之后修改输入需点击“计算”。后台CPU任务使用输入快照，修改中的参数标记为待计算；图表与结果摘要均对应已完成的快照。现有概率核心不计入Brent–Suyama或额外Stage1×12收益。当前仅完成构建及接线检查，新增反算数值、边界及界面效果仍需运行验证。
 
 ## 窗口与退出
 
@@ -68,6 +88,7 @@ Stage2 GUI协议需要支持`--stage2-stop-handle`及`--gui-events`的当前工�
 - [app.cpp](../../src/gui/app.cpp)、[worker_proc.cpp](../../src/gui/worker_proc.cpp)：界面和 worker 生命周期。
 - [worktodo_gen.cpp](../../src/gui/worktodo_gen.cpp)、[results.cpp](../../src/gui/results.cpp)、[log_parse.cpp](../../src/gui/log_parse.cpp)：生成器、结果和进度。
 - [task_display.h](../../src/gui/task_display.h)：只用于显示的任务摘要与AID/因子替代；`log_parse.cpp::parse_stage2/Stage2Status`汇总阶段及完成曲线。
+- [probability_panel.cpp](../../src/gui/probability_panel.cpp)：`ProbabilityPanel::draw`、后台输入快照及概率图；[probability_model.cpp](../../src/gui/probability_model.cpp)：`evaluate`、`calculate`、反算及CSV。数值核心复用[ecm_stage2_probability.h](../../src/core/ecm_stage2_probability.h)。
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：GUI任务事件和继承的安全停止请求，队列/存档仍由原生驱动处理。
 - [gpu_monitor.cpp](../../src/gui/gpu_monitor.cpp)、[ini_file.cpp](../../src/gui/ini_file.cpp)：监控和配置。
 - 构建入口：`tools/build/dev/build_gui.ps1`；[构建说明](BUILD.md)。

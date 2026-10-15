@@ -658,11 +658,12 @@ dock_layout =
 # 保存已写入布局的版本编号，由 GUI 管理。版本早于当前默认布局时会重建布局；此键不是用户选择 GUI 功能版
 # 本的开关。
 dock_layout_ver = 0
-# [workers|detail|gen]; default=workers
-# Panel initially shown by the GUI: workers opens the worker list, detail the details panel, and gen
-# the task generator. Does not change worker autostart behavior.
-# 选择 GUI 启动时优先显示的面板。workers 为 worker 列表，detail 为详情，gen 为任务生成器；不改变是否自
-# 动启动 worker。
+# [workers|detail|gen|prob]; default=workers
+# Panel initially shown by the GUI: workers opens the worker list, detail the details panel, gen the
+# task generator, and prob the ECM probability calculator. The probability panel can also be opened
+# from View. Does not change worker autostart behavior.
+# 选择 GUI 启动时优先显示的面板。workers 为 worker 列表，detail 为详情，gen 为任务生成器，prob 为ECM概
+# 率计算器；概率面板也可从查看菜单打开。不改变是否自动启动 worker。
 start_tab = workers
 # [ask|stop|kill]; default=ask
 # Behavior when closing the GUI with active workers: ask prompts, stop requests a safe stop, kill

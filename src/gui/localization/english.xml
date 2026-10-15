@@ -162,13 +162,21 @@
       <Item id="phase_starting" name="Preparing the curve"/>
       <Item id="phase_calibration" name="Short startup calibration"/>
       <Item id="phase_read" name="Read and validate save"/>
+      <Item id="phase_read_detail" name="Read the selected Stage1 point, verify its save record against the planned fingerprint, and reject changed or malformed input."/>
       <Item id="phase_plan" name="Plan bounds and memory"/>
+      <Item id="phase_plan_detail" name="Choose D under B2, device, and memory constraints; derive P=phi(D)/2, giant-point count, G-tree batches, and polynomial workspace."/>
       <Item id="phase_baby" name="Generate and normalize baby points"/>
+      <Item id="phase_baby_detail" name="Compute [j]Q for indices j coprime to D, classify noninvertible coordinates, and batch-normalize to affine x_j."/>
       <Item id="phase_ftree" name="Build F tree"/>
+      <Item id="phase_ftree_detail" name="Multiply the X-x_j leaves into F(X), retaining subtree polynomials needed for multipoint evaluation."/>
       <Item id="phase_inverse" name="Prepare polynomial inverse"/>
+      <Item id="phase_inverse_detail" name="Use Newton iteration to compute the truncated inverse of reversed F; reuse it for reduction modulo F and descent-root setup."/>
       <Item id="phase_giant" name="Giant points, G trees and fold"/>
+      <Item id="phase_giant_detail" name="Generate [iD]Q in batches, build each G product tree, and accumulate H=G*H mod F. Point generation, tree construction, and folding interleave."/>
       <Item id="phase_descent" name="Normalize fold and descend F tree"/>
+      <Item id="phase_descent_detail" name="Undo the projective scale Gamma, prepare the scaled root, and descend the F tree to obtain H(x_j) at each baby root."/>
       <Item id="phase_gcd" name="Leaf products and GCD"/>
+      <Item id="phase_gcd_detail" name="Multiply H(x_j) in blocks, take GCDs with target N, then refine hit blocks and validate factors."/>
       <Item id="phase_check" name="Validate arithmetic"/>
       <Item id="phase_factor" name="Factor decomposition"/>
       <Item id="phase_publish" name="Publish result"/>
@@ -187,5 +195,95 @@
       <Item id="waiting_stage2" name="Waiting for the current Stage2 curves and exit (up to %lld s left)..."/>
       <Item id="force_quit" name="Force quit (unfinished work is lost)"/>
     </Panel>
+    <Panel id="prob">
+      <Item id="last_valid_result" name="Showing the last successful calculation until new inputs are calculated."/>
+      <Item id="title" name="ECM probability"/>
+      <Item id="intro" name="Estimate the chance of finding one prime factor. Enter its size, bounds and curve count; choose a target for inverse solving."/>
+      <Item id="parameters_group" name="Calculation parameters"/>
+      <Item id="probability_group" name="Probability and inverse solving"/>
+      <Item id="factor_size" name="Prime-factor size"/>
+      <Item id="bits" name="bits"/>
+      <Item id="digits" name="decimal digits"/>
+      <Item id="curves" name="Curves C"/>
+      <Item id="b1" name="Stage1 bound B1"/>
+      <Item id="b2" name="Fixed Stage2 bound B2"/>
+      <Item id="use_stage2" name="Include Stage2"/>
+      <Item id="use_ratio" name="Set B2 as a multiple of B1"/>
+      <Item id="ratio" name="B2 / B1"/>
+      <Item id="model" name="Curve probability model"/>
+      <Item id="divisor" name="Effective divisor D_eff"/>
+      <Item id="preset_suyama" name="Suyama / param0 (GMP theory)"/>
+      <Item id="preset_param1" name="param1, square d (GMP theory)"/>
+      <Item id="preset_param2" name="param2 (GMP theory)"/>
+      <Item id="preset_param3" name="param3, 32-bit d (GMP theory)"/>
+      <Item id="preset_custom" name="Custom D_eff"/>
+      <Item id="preset_t4" name="T=4 (torsion-only baseline)"/>
+      <Item id="preset_t8" name="T=8 (torsion-only baseline)"/>
+      <Item id="preset_t12" name="T=12 (torsion-only baseline)"/>
+      <Item id="preset_t16" name="T=16 (torsion-only baseline)"/>
+      <Item id="scope" name="Probability used for solving"/>
+      <Item id="scope_stage1" name="Stage1 only"/>
+      <Item id="scope_combined" name="Stage1 + Stage2"/>
+      <Item id="scope_conditional" name="Stage2, given Stage1 failure"/>
+      <Item id="mode" name="Calculation"/>
+      <Item id="forward" name="Forward probability"/>
+      <Item id="solve_curves" name="Solve curve count"/>
+      <Item id="solve_size" name="Solve factor size"/>
+      <Item id="solve_b1" name="Solve B1"/>
+      <Item id="solve_b2" name="Solve B2"/>
+      <Item id="solve_divisor" name="Fit D_eff"/>
+      <Item id="cumulative_target" name="Use a cumulative success target"/>
+      <Item id="target_total" name="Target cumulative success (%)"/>
+      <Item id="target_single" name="Target single-curve success (%)"/>
+      <Item id="number_hint" name="Numbers accept scientific notation, e.g. 110e6 or 2.6e12. The unknown field is disabled."/>
+      <Item id="scope_hint" name="For existing Stage1 saves, conditional Stage2 probability describes the surviving curves. Changing a model does not change any worker."/>
+      <Item id="plot_range" name="Plot ranges"/>
+      <Item id="auto_range" name="Expand curve-count range to include the result"/>
+      <Item id="size_min" name="Minimum factor size"/>
+      <Item id="size_max" name="Maximum factor size"/>
+      <Item id="curves_max" name="Curve-count plot maximum"/>
+      <Item id="calculate" name="Calculate"/>
+      <Item id="calculating" name="Calculating..."/>
+      <Item id="pending_edits" name="Inputs changed; click Calculate to refresh."/>
+      <Item id="result_parameters" name="Parameters used by these results"/>
+      <Item id="residual" name="Target error (percentage points)"/>
+      <Item id="lower_bound_sufficient" name="The lowest allowed bound already meets the target."/>
+      <Item id="residual_warning" name="Numerical resolution limits this inverse result; check the achieved probability."/>
+      <Item id="apply_solution" name="Use solved parameters as inputs"/>
+      <Item id="quantity" name="Probability"/>
+      <Item id="single_probability" name="One curve"/>
+      <Item id="total_probability" name="C curves"/>
+      <Item id="legend_stage1" name="Stage1"/>
+      <Item id="legend_combined" name="Stage1 + Stage2"/>
+      <Item id="expected_curves" name="Mean curves to first success (1/p)"/>
+      <Item id="miss_probability" name="Miss probability after C curves"/>
+      <Item id="zero_tail" name="The finite Dickman table returns zero here; this is a numerical/model limit, not proof that a factor cannot be found."/>
+      <Item id="copy_csv" name="Copy plot CSV"/>
+      <Item id="log_y" name="Logarithmic probability axis"/>
+      <Item id="show_conditional" name="Show conditional Stage2 curve"/>
+      <Item id="log_hint" name="Zero values have no logarithm and are omitted; values below the axis floor are clipped at that floor."/>
+      <Item id="plot_size" name="Single-curve success versus factor size"/>
+      <Item id="plot_size_cumulative" name="C-curve success versus factor size"/>
+      <Item id="plot_curves" name="Cumulative success versus curve count"/>
+      <Item id="widen_plot" name="Widen the panel to view the chart."/>
+      <Item id="model_note" name="Model estimate: local Dickman/semismooth probability; independent equivalent curves, Q=1-(1-p)^C. D_eff differs from Stage2 D. GMP presets are theory, not empirical curve fits. No Brent-Suyama or extra Stage1 x12 benefit is credited."/>
+      <Item id="size_note" name="Size refers to the sought prime factor, not the full modulus. A b-bit size uses the representative 2^(b-0.5); d decimal digits use 10^(d-0.5). Solver bounds are finite and graphs use the displayed result parameters."/>
+      <Item id="invalid_size" name="Factor size must be finite and equivalent to 2..2048 bits."/>
+      <Item id="invalid_b1" name="B1 must be a finite value in 2..1e18."/>
+      <Item id="invalid_b2" name="B2 must be finite, at least B1, and no greater than 1e18."/>
+      <Item id="invalid_ratio" name="B2/B1 must be finite and in 1..1e9."/>
+      <Item id="invalid_curves" name="C must be finite and in 0..1e18; cumulative inverse solving needs C&gt;=1."/>
+      <Item id="invalid_divisor" name="D_eff must be finite and in 1e-9..1e18."/>
+      <Item id="invalid_plot_range" name="Plot ranges must be finite, ordered, and inside the supported size/count ranges."/>
+      <Item id="invalid_target" name="Target probability must be strictly between 0% and 100%."/>
+      <Item id="undefined_conditional" name="Stage1 already has model probability 1; conditional Stage2 probability is undefined. Use another probability scope."/>
+      <Item id="unreachable" name="No solution reaches this target inside the model search range."/>
+      <Item id="curves_need_cumulative" name="Solving curve count requires a cumulative success target."/>
+      <Item id="b2_needs_stage2" name="Enable Stage2 before solving B2."/>
+      <Item id="conditional_b1" name="Conditional Stage2 success is not monotonic in B1. Solve B1 with Stage1 or combined probability instead."/>
+      <Item id="invalid_solve" name="Unsupported inverse mode."/>
+      <Item id="calculation_failed" name="Calculation failed; check the inputs and try again."/>
+    </Panel>
+
   </Native-Langue>
 </EcmGui>

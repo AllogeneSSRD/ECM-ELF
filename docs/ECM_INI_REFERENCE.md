@@ -1188,13 +1188,14 @@ default. This does not select a GUI feature version.<br>
 ### start_tab
 
 ```text
-start_tab=[workers|detail|gen]; default=workers
+start_tab=[workers|detail|gen|prob]; default=workers
 ```
 
-Panel initially shown by the GUI: workers opens the worker list, detail the details panel, and gen<br>
-the task generator. Does not change worker autostart behavior.<br>
-选择 GUI 启动时优先显示的面板。workers 为 worker 列表，detail 为详情，gen 为任务生成器；不改变是否自<br>
-动启动 worker。
+Panel initially shown by the GUI: workers opens the worker list, detail the details panel, gen the<br>
+task generator, and prob the ECM probability calculator. The probability panel can also be opened<br>
+from View. Does not change worker autostart behavior.<br>
+选择 GUI 启动时优先显示的面板。workers 为 worker 列表，detail 为详情，gen 为任务生成器，prob 为ECM概<br>
+率计算器；概率面板也可从查看菜单打开。不改变是否自动启动 worker。
 
 ### exit_confirm
 

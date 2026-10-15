@@ -5,8 +5,8 @@
 # so a machine without the vendored ImGui (or a non-Windows host) simply does not
 # get this target -- it can never break the build of ecm / ecm_cuda.
 #
-# The GUI links NO project code: it is a process supervisor + log/config viewer,
-# so no GMP, no OpenCL, no CUDA. System libraries only.
+# The GUI supervises processes and uses the header-only probability core.
+# It links no compute engine, GMP, OpenCL or CUDA. System libraries only.
 
 set(ECM_GUI_IMGUI_SOURCES
     ${ECM_IMGUI_DIR}/imgui.cpp
@@ -29,6 +29,8 @@ target_compile_options(ecm_gui_imgui PRIVATE /W3)
 add_executable(ecm_gui WIN32
     main_win32.cpp
     app.cpp
+    probability_model.cpp
+    probability_panel.cpp
     gpu_monitor.cpp
     gpu_selftest.cpp
     ini_file.cpp

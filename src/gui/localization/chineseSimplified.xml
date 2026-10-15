@@ -70,7 +70,7 @@
       <Item id="inherit_engine" name="继承 [GUI] stage；修改此行只重配该已停止 worker。"/>
       <Item id="engine" name="计算阶段"/>
       <Item id="engine_auto" name="自动"/>
-      <Item id="choose_exe" name="选择程序…"/>
+      <Item id="choose_exe" name="选择.exe…"/>
       <Item id="choose_ini" name="选择INI…"/>
       <Item id="configuration_selected" name="已选择配置"/>
       <Item id="known_factors" name="已知因子"/>
@@ -155,20 +155,28 @@
     <Panel id="stage2">
       <Item id="phase" name="阶段"/>
       <Item id="curve" name="曲线"/>
-      <Item id="batch" name="巨步批次"/>
+      <Item id="batch" name="Giant point 批次"/>
       <Item id="phase_remaining" name="当前阶段剩余（估计）"/>
       <Item id="finish_curve_stop" name="正在等待当前曲线完成后停止。"/>
       <Item id="notice" name="Stage1存档 → 多项式Stage2 → GCD  |  运行中的worker：%d / %d"/>
       <Item id="phase_starting" name="准备曲线"/>
       <Item id="phase_calibration" name="启动短校准"/>
-      <Item id="phase_read" name="读取并验证存档"/>
-      <Item id="phase_plan" name="规划边界与显存"/>
-      <Item id="phase_baby" name="生成并归一化baby点"/>
-      <Item id="phase_ftree" name="构建F树"/>
-      <Item id="phase_inverse" name="准备多项式逆"/>
-      <Item id="phase_giant" name="giant点、G树与fold"/>
-      <Item id="phase_descent" name="归一化fold并下降F树"/>
-      <Item id="phase_gcd" name="叶乘积与GCD"/>
+      <Item id="phase_read" name="读取并校验 Stage1 存档"/>
+      <Item id="phase_read_detail" name="读取当前曲线的 Stage1 点记录，核对存档内容与规划时的指纹，拒绝已变化或损坏的输入。"/>
+      <Item id="phase_plan" name="规划 D、P 与内存"/>
+      <Item id="phase_plan_detail" name="结合 B2、内存限制选择步长 D；计算 Baby point 数 P=φ(D)/2、Giant point数、G 树批次及多项式工作区。"/>
+      <Item id="phase_baby" name="生成并归一化 Baby point "/>
+      <Item id="phase_baby_detail" name="对与 D 互素的索引 j 计算 [j]Q，检查不可逆坐标并批量求逆，得到仿射横坐标 x_j。"/>
+      <Item id="phase_ftree" name="构建 F 乘积树"/>
+      <Item id="phase_ftree_detail" name="以 X−x_j 为叶逐层相乘，构造 F(X)=∏(X−x_j)，并保留后续多点求值所需的子树。"/>
+      <Item id="phase_inverse" name="预计算反转 F 的截断逆"/>
+      <Item id="phase_inverse_detail" name="用 Newton 迭代求反转 F 的截断逆 finv，供多次模 F 归约及下降根准备复用。"/>
+      <Item id="phase_giant" name="Giant point、G 乘积树与模 F 折叠"/>
+      <Item id="phase_giant_detail" name="分批生成 [iD]Q，构造每批的 G 乘积树，再以 H←G·H mod F 累积各批结果；点生成、建树和折叠交织执行。"/>
+      <Item id="phase_descent" name="校正缩放并沿 F 树下降"/>
+      <Item id="phase_descent_detail" name="消除齐次大步叶引入的 Γ 缩放，形成缩放表示的下降根，沿 F 子树传播余式，得到各小步根上的 H(x_j)。"/>
+      <Item id="phase_gcd" name="叶值分块求积与 GCD"/>
+      <Item id="phase_gcd_detail" name="将 H(x_j) 按块相乘，并与目标 N 求最大公因数；对命中块继续细分并验证因子。"/>
       <Item id="phase_check" name="算术检查"/>
       <Item id="phase_factor" name="因子分解"/>
       <Item id="phase_publish" name="发布结果"/>
@@ -187,5 +195,95 @@
       <Item id="waiting_stage2" name="等待当前Stage2曲线完成并退出（最多剩余%lld秒）…"/>
       <Item id="force_quit" name="强制退出（丢弃未完成计算）"/>
     </Panel>
+    <Panel id="prob">
+      <Item id="last_valid_result" name="新输入尚未完成计算，以下显示上一份成功计算的结果。"/>
+      <Item id="title" name="ECM 概率"/>
+      <Item id="intro" name="估算找到一个素因子的概率。输入因子大小、界限和曲线数；也可按目标概率反算参数。"/>
+      <Item id="parameters_group" name="计算参数"/>
+      <Item id="probability_group" name="概率与反算"/>
+      <Item id="factor_size" name="目标素因子大小"/>
+      <Item id="bits" name="二进制位数"/>
+      <Item id="digits" name="十进制位数"/>
+      <Item id="curves" name="曲线数 C"/>
+      <Item id="b1" name="Stage1 界限 B1"/>
+      <Item id="b2" name="固定 Stage2 界限 B2"/>
+      <Item id="use_stage2" name="计入 Stage2"/>
+      <Item id="use_ratio" name="按 B1 的倍数设置 B2"/>
+      <Item id="ratio" name="B2 / B1"/>
+      <Item id="model" name="曲线概率模型"/>
+      <Item id="divisor" name="有效除子 D_eff"/>
+      <Item id="preset_suyama" name="Suyama / param0（GMP 理论）"/>
+      <Item id="preset_param1" name="param1，平方 d（GMP 理论）"/>
+      <Item id="preset_param2" name="param2（GMP 理论）"/>
+      <Item id="preset_param3" name="param3，32-bit d（GMP 理论）"/>
+      <Item id="preset_custom" name="自定义 D_eff"/>
+      <Item id="preset_t4" name="T=4（仅扭转基线）"/>
+      <Item id="preset_t8" name="T=8（仅扭转基线）"/>
+      <Item id="preset_t12" name="T=12（仅扭转基线）"/>
+      <Item id="preset_t16" name="T=16（仅扭转基线）"/>
+      <Item id="scope" name="反算使用的概率口径"/>
+      <Item id="scope_stage1" name="仅 Stage1"/>
+      <Item id="scope_combined" name="Stage1 + Stage2"/>
+      <Item id="scope_conditional" name="Stage1 未命中后的 Stage2"/>
+      <Item id="mode" name="计算方式"/>
+      <Item id="forward" name="正向计算概率"/>
+      <Item id="solve_curves" name="反算曲线数"/>
+      <Item id="solve_size" name="反算因子大小"/>
+      <Item id="solve_b1" name="反算 B1"/>
+      <Item id="solve_b2" name="反算 B2"/>
+      <Item id="solve_divisor" name="反算 D_eff"/>
+      <Item id="cumulative_target" name="使用累计成功率作为目标"/>
+      <Item id="target_total" name="目标累计成功率（%）"/>
+      <Item id="target_single" name="目标单曲线成功率（%）"/>
+      <Item id="number_hint" name="支持科学计数法，如 110e6、2.6e12。待求字段无需填写。"/>
+      <Item id="scope_hint" name="已有 Stage1 save 可参考“Stage1 未命中后的 Stage2”口径。选择模型不会改变 worker 参数。"/>
+      <Item id="plot_range" name="图表范围"/>
+      <Item id="auto_range" name="自动扩大曲线数范围以包含计算结果"/>
+      <Item id="size_min" name="最小因子大小"/>
+      <Item id="size_max" name="最大因子大小"/>
+      <Item id="curves_max" name="曲线数图上限"/>
+      <Item id="calculate" name="计算"/>
+      <Item id="calculating" name="正在计算…"/>
+      <Item id="pending_edits" name="输入已修改，点击“计算”更新结果。"/>
+      <Item id="result_parameters" name="本次结果采用的参数"/>
+      <Item id="residual" name="目标残差（百分点）"/>
+      <Item id="lower_bound_sufficient" name="允许的最小界限已达到目标。"/>
+      <Item id="residual_warning" name="此反算结果受数值分辨率限制，请参考实际达到的概率。"/>
+      <Item id="apply_solution" name="将反算结果用于输入"/>
+      <Item id="quantity" name="概率口径"/>
+      <Item id="single_probability" name="单曲线"/>
+      <Item id="total_probability" name="C 条曲线累计"/>
+      <Item id="legend_stage1" name="Stage1"/>
+      <Item id="legend_combined" name="Stage1 + Stage2"/>
+      <Item id="expected_curves" name="首次成功的平均曲线数（1/p）"/>
+      <Item id="miss_probability" name="C 条曲线后的未命中概率"/>
+      <Item id="zero_tail" name="有限 Dickman 表在此给出零；这是数值或模型范围限制，不代表严格不可能找到因子。"/>
+      <Item id="copy_csv" name="复制图表 CSV"/>
+      <Item id="log_y" name="概率轴使用对数刻度"/>
+      <Item id="show_conditional" name="显示 Stage2 条件概率曲线"/>
+      <Item id="log_hint" name="零值无法取对数，图中跳过；低于坐标下限的值截在下限处。"/>
+      <Item id="plot_size" name="单曲线成功率与因子大小"/>
+      <Item id="plot_size_cumulative" name="C 条曲线成功率与因子大小"/>
+      <Item id="plot_curves" name="累计成功率与曲线数"/>
+      <Item id="widen_plot" name="加宽面板以查看图表。"/>
+      <Item id="model_note" name="模型估计：local Dickman／半光滑概率，假设各条曲线独立且等效，Q=1-(1-p)^C。D_eff 与 Stage2 的 D 不同；GMP 预设是理论口径，不是曲线实测拟合。未计入 Brent-Suyama 或 Stage1 额外乘12的收益。"/>
+      <Item id="size_note" name="大小指待寻找的素因子，不是完整模数。b bits 使用代表值 2^(b-0.5)，d 位十进制使用 10^(d-0.5)。反算有有限搜索范围，图表采用结果区显示的参数。"/>
+      <Item id="invalid_size" name="因子大小须为有限值，对应 2..2048 bits。"/>
+      <Item id="invalid_b1" name="B1 须为 2..1e18 内的有限值。"/>
+      <Item id="invalid_b2" name="B2 须为有限值，且 B1&lt;=B2&lt;=1e18。"/>
+      <Item id="invalid_ratio" name="B2/B1 须为 1..1e9 内的有限值。"/>
+      <Item id="invalid_curves" name="C 须为 0..1e18 内的有限值；按累计概率反算其他参数时 C&gt;=1。"/>
+      <Item id="invalid_divisor" name="D_eff 须为 1e-9..1e18 内的有限值。"/>
+      <Item id="invalid_plot_range" name="图表范围须为有限值且下限小于上限，并位于支持的大小／曲线数范围内。"/>
+      <Item id="invalid_target" name="目标概率须严格位于 0% 与 100% 之间。"/>
+      <Item id="undefined_conditional" name="Stage1 的模型概率已为 1，Stage2 条件概率无定义；请选择其他口径。"/>
+      <Item id="unreachable" name="模型搜索范围内没有达到此目标的解。"/>
+      <Item id="curves_need_cumulative" name="反算曲线数需要累计成功率目标。"/>
+      <Item id="b2_needs_stage2" name="反算 B2 前须启用 Stage2。"/>
+      <Item id="conditional_b1" name="Stage2 条件成功率对 B1 不保持单调；反算 B1 请使用 Stage1 或完整流程口径。"/>
+      <Item id="invalid_solve" name="不支持的反算方式。"/>
+      <Item id="calculation_failed" name="计算失败，请核对输入后重试。"/>
+    </Panel>
+
   </Native-Langue>
 </EcmGui>

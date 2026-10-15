@@ -1466,12 +1466,12 @@
       "field": "start_tab",
       "type": "string",
       "default": "workers",
-      "domain": "[workers|detail|gen]",
+      "domain": "[workers|detail|gen|prob]",
       "fx": "start_tab",
       "parser": "gui",
       "description": [
-        "Panel initially shown by the GUI: workers opens the worker list, detail the details panel, and gen the task generator. Does not change worker autostart behavior.",
-        "选择 GUI 启动时优先显示的面板。workers 为 worker 列表，detail 为详情，gen 为任务生成器；不改变是否自动启动 worker。"
+        "Panel initially shown by the GUI: workers opens the worker list, detail the details panel, gen the task generator, and prob the ECM probability calculator. The probability panel can also be opened from View. Does not change worker autostart behavior.",
+        "选择 GUI 启动时优先显示的面板。workers 为 worker 列表，detail 为详情，gen 为任务生成器，prob 为ECM概率计算器；概率面板也可从查看菜单打开。不改变是否自动启动 worker。"
       ]
     },
     {

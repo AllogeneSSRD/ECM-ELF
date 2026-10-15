@@ -270,6 +270,7 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
     num_workers_=gui.NumWorkers;
     worker_exe_=gui.exe;
     engine_stage_=gui.stage;stage2_exe_=gui.stage2_exe;
+    probability_focus_requested_=gui.start_tab=="prob" || gui.start_tab=="probability";
     // Font: 0 = auto (the host scales 15 px by the window DPI), or an explicit pixel
     // size; `font` names a .ttf/.ttc, empty lets the host pick (CJK font for a CJK
     // language, else a Latin system font). A FRACTIONAL size is allowed on purpose:
@@ -967,6 +968,8 @@ void App::draw() {
     if (trace_stages) trace("draw: detail panel ok");
     draw_gen_panel();
     if (trace_stages) trace("draw: gen panel ok");
+    draw_probability_panel();
+    if (trace_stages) trace("draw: probability panel ok");
     draw_worker_panes();
     if (trace_stages) trace("draw: worker panes ok");
     // Last so it is on top of everything; also keeps the dockspace from stealing input.
@@ -1249,6 +1252,7 @@ void App::build_default_layout(unsigned int dockspace_id) {
     // permanent space away from the table the user watches.
     ImGui::DockBuilderDockWindow("###detail", left_top);
     ImGui::DockBuilderDockWindow("###gen", left_top);
+    ImGui::DockBuilderDockWindow("###prob",left_top);
     ImGui::DockBuilderDockWindow("###gpu", right_top);
     ImGui::DockBuilderDockWindow("###results", right_bottom);
     for (const WorkerView &w : workers_) {
@@ -1264,6 +1268,7 @@ void App::build_default_layout(unsigned int dockspace_id) {
     std::string tab = ini_.get("GUI", "start_tab", ecm_config::defaults::gui_start_tab);
     for (char &c : tab) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     const char *tab_id = (tab == "gen" || tab == "generator") ? "###gen"
+                       : (tab == "prob" || tab == "probability") ? "###prob"
                        : (tab == "detail") ? "###detail"
                                            : "###workers";
     // The selection is applied LATER (App::draw, after the panels were submitted once):
@@ -1464,6 +1469,9 @@ void App::draw_menu_bar() {
     }
 
     if (ImGui::BeginMenu(loc_.t("menu", "view").c_str())) {
+        if(ImGui::MenuItem(loc_.t("prob","title").c_str(),nullptr,show_probability_)) {
+            show_probability_=true;probability_focus_requested_=true;
+        }
         for (WorkerView &w : workers_) {
             ImGui::MenuItem((loc_.t("workers", "log_pane") + " #" + std::to_string(w.index)).c_str(),
                             nullptr, &w.show_pane);
@@ -1772,6 +1780,15 @@ void App::gen_apply() {
     // consumed lines in the meantime).
     stamp_file(gen_target_, gen_stamp_);
     gen_has_preview_ = false;
+}
+
+void App::draw_probability_panel() {
+    if(!show_probability_)return;
+    // Add the tab to a saved layout without replacing the user's window layout.
+    if(const auto *worker_window=ImGui::FindWindowByName("###workers"))
+        if(worker_window->DockId)ImGui::SetNextWindowDockID(worker_window->DockId,ImGuiCond_FirstUseEver);
+    if(probability_focus_requested_){ImGui::SetNextWindowFocus();probability_focus_requested_=false;}
+    probability_panel_.draw(loc_,show_probability_);
 }
 
 void App::draw_gen_panel() {

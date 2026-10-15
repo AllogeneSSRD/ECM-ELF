@@ -23,11 +23,11 @@ D 确定 baby 集 J={1≤j≤D/2:gcd(j,D)=1}，P=φ(D)/2。giant 数 I=⌊B2/D�
 | 1. 读档与规划 | 验证 Q/N/B1/sigma；选择 D，查询 packing 与组件预算 | CPU、设备查询 |
 | 2. baby 点 | 求 [j]Q，得到 X/Z；处理不可逆坐标 | GPU 点算术、CPU GCD/逆 |
 | 3. baby 归一化 | 设备积树、主机根逆、设备逆传播，生成普通 xⱼ | GPU 为主 |
-| 4. F 积树 | 叶 X−xⱼ；逐层相乘，保留 F 与下降所需子树 | GPU NTT/S4，主机编排 |
+| 4. F 乘积树 | 叶 X−xⱼ；逐层相乘，保留 F 与下降所需子树 | GPU NTT/S4，主机编排 |
 | 5. Newton 逆 | 预计算反转 F 的截断逆 finv，供多次模 F 归约与根准备复用 | GPU 多项式乘法 |
 | 6. giant 点块 | 求 [iD]Q；ladder 或相邻 seed+差分 chain；按坐标预算分块 | GPU 为主 |
 | 7. giant 归一化/分组 | 精确 16 点段积、单位性分类、分组逆；形成仿射或齐次叶 | GPU、CPU 目标 N 逆/GCD |
-| 8. G 积树 | 将本批 giant 叶构成 G，多项式根直接交给 fold | GPU NTT/S4 |
+| 8. G 乘积树 | 将本批 giant 叶构成 G，多项式根直接交给 fold | GPU NTT/S4 |
 | 9. fold | 累计 H←G·H mod F；使用 finv 与长/短乘法，复用驻留临时槽 | GPU；准入失败有主机路径 |
 | 10. 缩放与根准备 | 消除齐次缩放 Γ；驻留 H/finv 形成 scaled 下降根 | GPU；回退时 CPU |
 | 11. F 树下降 | scaled remainder/middle-product 传播，最终得到 P 个叶值 | GPU NTT/S4、主机元数据 |
