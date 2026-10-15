@@ -127,6 +127,11 @@ def collect(out):
     graph = fields((out / 'engine.log').read_text(encoding='utf-8'), 'ntt_graph_stats')
     if graph['requested'] != meta['environment']['NTT_SHORT_GRAPH'] or int(graph['failures']):
         raise ValueError('Graph request/capture differs')
+    if 'NTT_S4_PACK_ZERO' in meta['environment']:
+        pack = fields((out / 'engine.log').read_text(encoding='utf-8'), 's4_pack_zero_stats')
+        enabled = int(meta['environment']['NTT_S4_PACK_ZERO'])
+        if int(pack['requested']) != enabled or bool(int(pack['words'])) != bool(enabled):
+            raise ValueError('Pack/zero profile request differs')
     if meta['kind'] == 'systems':
         exported = out / 'trace.sqlite'
         if not exported.exists():

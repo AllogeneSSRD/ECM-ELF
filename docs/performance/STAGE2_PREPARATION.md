@@ -87,12 +87,73 @@ runtime API外的0.256011秒，按最内层CPU范围归属为：
 
 GPU memset共4391次，写入84,325,430,832 bytes（78.53GiB），累计0.298869秒。按发起调用的correlationId关联CPU范围，NTT.request内4315次贡献84,325,430,216 bytes和0.298839秒；该范围包含A/B工作区补零及诊断计数器，不能把所有次数都归为大数组清零。
 
-同一曲线pack kernel累计0.256848秒。当前direct/gather输入路径先对A/B整个NTT数组补零，再写占用的digits。对一个m-slice请求，长度L、系数位宽S、digit宽b、两输入系数数ma/mb，当前写入量近似为：
+同一曲线pack kernel累计0.256848秒。默认direct/gather输入路径先对A/B整个NTT数组补零，再写占用的digits。对一个m-slice请求，长度L、系数位宽S、digit宽b、两输入系数数ma/mb，该路径写入量近似为：
 
 - 全数组补零：16·m·L bytes。
 - 有效digit覆写：8·m·(ma+mb)·⌈S/b⌉ bytes；contiguous路径按padding后的P打包。
 
-若采用完整输出覆盖的pack/zero融合，目标是把这两次写入组织成一次，并减少两次独立memset提交。槽内高位、空系数、NTT尾部仍必须写零；0.299秒不能全部视为可消除收益。需比较coalescing、索引除法、每线程工作量、reverse-B和尾slice成本，再以完整曲线验收。
+完整输出覆盖的pack/zero融合把这两次写入组织成一次，并减少两次独立memset提交。槽内高位、空系数、NTT尾部仍必须写零；0.299秒不能全部视为可消除收益。融合路径的当前合同和已测范围如下。
+
+### pack/zero 融合路径
+
+`NTT_S4_PACK_ZERO=1`启用实验路径，默认关闭，接受严格的0/1；不改变D、NTT长度、分块、carry、设备归约或GMP抽查。显式B2的普通save输入和resident gather共用相同digit表示，reverse-B有独立编译实例。不符合整数索引范围和slot容量的输入保持默认packer。
+
+每个线程负责一个最终digit地址，连续写入A或B；有效digit从原始系数提取，其他地址写零。每对输入通常由两个融合kernel替换两个memset及两个pack kernel。单个launch的slice上限65535，更多slice分段提交。slot内的除法用32-bit reciprocal、multiply-high及一次余数修正，保留sw=1分支；输入最大NTT地址必须可由uint32表示。
+
+两输入最终写入量为16·m·L bytes，少掉的是原先有效digit的重复覆写，近似8·m·(ma+mb)·⌈S/b⌉ bytes；不是少写16·m·L bytes。contiguous路径以padding后的P代替ma/mb。无需额外设备数组或host staging，原owner、metadata、arena借用和回退生命周期保持不变。
+
+`s4_pack_zero_stats`按进程累计：contiguous/gather计操作数批次调用次数（一次可含m个slice），reverse为gather子集；launches为实际融合kernel数，words为最终覆盖的digit数，avoided_memsets为替换掉的独立清零提交数。`replaced_memset_bytes=8·words`只是被替换清零操作的规模，不能当作避免的全部显存写入量，更不是PCIe流量。
+
+独立探针与生产共用[s4_input_pack.cuh](../../src/cuda/stage2/s4_input_pack.cuh)中的原始及融合内核。663项GMP验证完整38,030,604 words，覆盖1–16384 bits、bpw1/7/19/31/62、普通/gather/reverse、空/单/多系数、非零metadata偏移、slot尾、NTT尾、脏目标、两侧guard及65535-slice边界；专用故障仅产生bad1并返回3。另有1,048,576组uint32商余数边界检查，包含sw1–65536、随机值及UINT32_MAX，bad0。
+
+在本页相同GPU/工具链设置下，21个孤立准备形状每侧6样本、每样本8次、不丢弃预热，共252样本；设备事件包括默认memset+pack或完整融合kernel，排除源数据上传和结果检查。已测318/2203/4423/7995/12011 bits，P3/32/1024/5761/77761，batch1/4/64/512，三种输入路径耗时减少24.87%–73.63%。这是单操作数准备时间，不是NTT或完整Stage2收益。sm89探针的ptxas结果为新路径20 registers/thread、原路径38–40，均无spill；并不由寄存器数直接推断加速。
+
+原始证据为`data/experiments/stage2_pack_zero_20261015/`，复现入口见[pack/zero工具](../../tools/bench/README_STAGE2_PACK_ZERO.md)。旧严格cprof成本配置要求该开关为0，不能直接把旧配置当成融合路径的已测成本。
+
+### 固定D完整曲线结果
+
+同一生产二进制SHA256=`b4ca90b0542c2081cc992060574d41c3c60e2fc99b68bb6e1b784d5591cba9d0`，探针SHA256=`d728876ed737e0bb4395e28da4280b33d30c2533fca30e1cb5b5afc7df947688`。GPU/驱动/CUDA/GMP条件同本页，保持55W/1800MHz上限，不调整设备设置。10个save、B2、固定D和预算沿用[outer矩阵](NTT_OUTER.md#固定-d-完整曲线)，B1=20、sigma26；Graph、MID_COOP、JOINT、短batch选型及短校准关闭，只改变PACK_ZERO=0/1。每侧4样本、交错顺序、没有丢弃预热，总计80条正式曲线。
+
+各格引擎init+main中位数（off→on）为：
+
+- M521、batch64：0.138931→0.136033秒，少2.09%。
+- M2203、batch64：0.597498→0.573956秒，少3.94%。
+- M4423、batch64：1.398738→1.338799秒，少4.29%；batch256：1.377218→1.349973秒，少1.98%。
+- 7995-bit普通余因子、batch256：5.424563→5.361173秒，少1.17%；同余因子承载8011：3.777614→3.727039秒，少1.34%。
+- M4423、host fold：1.547628→1.521478秒，少1.69%。
+- M4423、B2=2.6×10¹⁰：6.726268→6.517520秒，少3.10%；7995-bit普通余因子、相同B2：16.065545→15.785060秒，少1.75%。
+- M2203、P155520、B2=2.6×10¹²：19.680968→19.193714秒，少2.48%。
+
+各格中位数之和56.734972→55.504744秒，少2.17%；不是某一生产任务时长。计时边界见本页前文；进程墙钟另保留在CSV中。GMP、自检、因子/rootfold、NTT长度分布、S4分块与检查数量均一致。各格NTT模块full_peak均相同，包括最大P项约3190.44 MiB；不是全进程显存峰，融合路径也没有新增设备临时数组。
+
+![准备阶段与完整曲线耗时减少](../../data/figures/stage2_pack_zero_20261015.png)
+
+图上半为单操作数准备时间，下半为完整曲线；两者不能相加。下半误差线为两侧MAD经比值传播后的离散尺度，不是置信区间。原始样本在`ab/`，孤立准备在`probe/`，汇总为`data/benchmarks/stage2_pack_zero_20261015/`；独立smoke、补充输入、诊断及剖析不加入这80条样本。
+
+M4423/batch64的独立6次/侧复测为1.381022→1.337825秒（3.13%），两侧MAD为0.003554/0.006237秒。它支持该短曲线存在收益，但不把首轮4.29%视为固定增益；单对最终smoke曾仅少约0.16%。`recheck_short/`、smoke及正式矩阵全部保留，复测不覆盖正式样本。
+
+正式矩阵GPU利用率≥80%的740个采样点中，SM1515–1800 MHz、中位1800；功率15.60–54.73 W、中位48.45。频率实际变化，不能称为恒频/恒功耗测量。原始GPU采样保留，不用空闲时的异常功率读数解释硬件限制。
+
+另18条补充曲线、每侧3样本：M2203、B1=20、sigma26、B2=2.6×10⁸、D30030、batch16、arena1/fold0 MiB为0.756954→0.743536秒（1.77%）；M12011真实save的11694-bit余因子，B1=44000000、sigma606255614715327、B2=2.6×10⁸、D30030、batch64，普通为12.889000→12.825073秒（0.50%），承载12011为7.629668→7.556426秒（0.96%），后两项arena6300/fold640 MiB。此组与主矩阵分开保存为`extended/`。
+
+高位宽收益受其他阶段限制：上述普通余因子的一个on样本中，giant为8.360/12.844秒，约65.1%，而G树0.616秒、fold0.134秒、下降0.535秒；这些阶段计时不再与完整total相加。该输入应优先研究点生成，不应由孤立packer的约50%收益推断完整曲线也改善约50%。
+
+另8条普通/承载/大P完整叶子诊断一致。B/Q复用加原生flat输入和workspace fixture通过：flat为16项/16,800 words，workspace为144检查/260 words，覆盖两/三缓冲、别名、失败回滚及拥有/借用回退；新增packer仍通过完整曲线GMP和叶子指纹。carry计数器故障被检出并使生产队列返回曲线失败，不能因融合而擦除诊断结果。诊断和故障均不进入性能统计。
+
+### 管理员剖析与剩余瓶颈
+
+Systems2026.1.3以管理员各采一条相同M4423、B2=2.6×10¹⁰、D60060、batch256曲线，开启全API与CPU范围，算术、工作量和输入身份通过采集器核对。使用上述同一b4ca90b0二进制，所有剖析秒数排除正式A/B：
+
+- GPU memset：4391→1527次；84,325,430,832→7,206,448 bytes；0.299407→0.001507秒。少掉2864次清零提交，与融合统计的2864个操作数批次完全一致，余下诊断等清零保持。
+- 原pack kernel累计0.255337秒，新pack/zero累计0.305582秒。新kernel还承担补零，不能单看这一项认为变慢；两边连同全部memset比较为0.554745→0.307089秒，少44.64%。
+- 本进程GPU事件窗口6.823283→6.611632秒，空隙0.631112→0.605956秒，即9.25%→9.16%。API外空隙0.266244→0.259290秒，CPU准备问题仍存在，不能宣称已经消除。
+- H2D/D2H事件数量和bytes相同，累计分别约13.6/12.1–12.3 ms；收益没有来自减少PCIe数据量。
+
+Compute2026.2.1以管理员采集新路径的一个热点gather实例，核对Systems的mangled kernel及第61次调用、grid32768×1、CTA256、20 registers/thread、动态shared0。16次replay，clock/cache control均为none，没有修改GPU控制；指标为SM约1799 MHz、单次kernel308.288 μs、DRAM吞吐占峰值96.04%、SM吞吐18.69%、活跃warp占峰值74.67%、local spilling0。原始导出中DRAM字节总吞吐约214.93 GB/s。这是单实例replay诊断，不是生产全程保证；SM吞吐较低不等于GPU空闲，当前完整写出已接近该实例的DRAM上限。
+
+融合侧outer/tile累计3.517414秒，占全部GPU kernel累计5.976605秒的约58.9%；该分母是kernel事件时间，不是GPU窗口或引擎墙钟。M4423长B2下应继续研究NTT遍历与tile/outer组织；11694-bit短B2样本则优先研究giant点生成。不能据一个输入指定全位宽的唯一瓶颈。
+
+证据：`nsys_off/`、`nsys_on/`、`ncu_pack/`，互斥空隙为汇总目录`gaps_off.json`、`gaps_on.json`，组件为`profile_comparison.json`。默认仍保留原packer；自动D/tune全矩阵、Graph组合及其他设备/发布架构没有本轮资格，继续验证后再评价默认部署。
 
 ## 当前实现与下一步
 
@@ -100,9 +161,9 @@ GPU memset共4391次，写入84,325,430,832 bytes（78.53GiB），累计0.298869
 
 优先级：
 
-1. pack/zero/gather融合：用完整脏缓冲、slot尾部、不同ma/mb、reverse-B、借用B/Q、arena增长/回退以及独立GMP验证后，再做固定D对照。
-2. tile11/CTA256与outer联合组织：当前测量均为CTA512，只作为待验证候选。
-3. 受限显存、host fold及生产高B2的准备/同步范围，扩大到不同位宽；当前9.42%不是通用上限。
+1. 融合路径扩大自动D/tune全矩阵、Graph组合及其他设备/发布架构覆盖；当前固定D收益不直接作为默认部署资格。
+2. NTT继续测试tile11/CTA256与outer联合组织，以及中段M6与pack融合的组合；已有联合扫描的tile均为CTA512，没有CTA256收益证据。
+3. 高位宽点生成及受限显存、生产高B2的准备/同步范围；当前约9%的事件空隙不是通用上限。
 4. 评估同N连续曲线的初始化/计划复用；需要完整的模数/表示身份、状态重置和验证合同，不减少现有必需检查。
 
 ## 复现与代码依据
@@ -112,4 +173,5 @@ GPU memset共4391次，写入84,325,430,832 bytes（78.53GiB），累计0.298869
 - 汇总：`data/benchmarks/stage2_tile_sync_20261015/gaps_nvtx_full.json`；剖析和正式性能使用独立的构建身份。
 - [ntt_host_trace.cuh](../../src/cuda/stage2/ntt_host_trace.cuh)：默认关闭的范围标记；[ntt_runtime.cuh](../../src/cuda/stage2/ntt_runtime.cuh)中的`ntt_shape_plan`、`ntt_run_passes`、`ntt_poly_mul_batch_dev`为NTT范围入口。
 - [ecm_cuda_stage2.cu](../../src/cuda/ecm_cuda_stage2.cu)：`s4_reduce_init`、`s4_compare_snapshot`、`poly_mul_batch_modN`、`build_tree_flat`和`giant_chunk_chain`；`s4_gather_final_input`及`s4_pack_final_input`为补零与pack入口。
+- [s4_input_pack.cuh:6](../../src/cuda/stage2/s4_input_pack.cuh#L6)：商余数修正；[完整写入:13](../../src/cuda/stage2/s4_input_pack.cuh#L13)；[分段提交:43](../../src/cuda/stage2/s4_input_pack.cuh#L43)。[gather接入:3306](../../src/cuda/ecm_cuda_stage2.cu#L3306)与[contiguous接入:3355](../../src/cuda/ecm_cuda_stage2.cu#L3355)保留形状校验及不支持时的默认路径。
 - 同文件`stage2_init_begin`、`stage2_init_seconds`及`run_batched`返回处定义引擎计时；[ecm_stage2_phase_times.h](../../src/core/ecm_stage2_phase_times.h)定义互斥阶段，不能将旧嵌套timer重新相加。

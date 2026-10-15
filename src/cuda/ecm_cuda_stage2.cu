@@ -3273,39 +3273,7 @@ static void s4_check_reduced(S4Reduce &R, S4Reduce::Shape *S, const unsigned lon
  *  raw coefficients are P*W words per slice, about 9x fewer than the packed form at S=5261, so
  *  this replaces both with one small upload and one device pass.
  * ===================================================================================== */
-__global__ void s4_pack_batch_kernel(const unsigned long long *src, int S, int bpw,
-                                     unsigned long long slot_words, unsigned long long N,
-                                     unsigned long long ds, unsigned long long ma, int W,
-                                     unsigned long long *dst)
-{
-    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
-    if (gid >= ds * ma) return;
-    const unsigned long long s = gid / ma, i = gid - s * ma;
-    const unsigned long long *c = src + gid * (unsigned long long)W;  /* slice stride = ma*W */
-    unsigned long long *d = dst + s * N + i * slot_words;
-    const unsigned long long mask = (bpw >= 64) ? ~0ull : ((1ull << bpw) - 1ull);
-    const int ndig = (S + bpw - 1) / bpw;
-    for (int k = 0; k < ndig; ++k) {
-        const int bit = k * bpw;
-        const int w = bit >> 6, sh = bit & 63;
-        unsigned long long v = c[w] >> sh;
-        if (sh + bpw > 64 && (w + 1) < W) v |= c[w + 1] << (64 - sh);   /* bits >= S stay zero */
-        d[k] = v & mask;
-    }
-}
-
-static void s4_launch_pack_batch(const unsigned long long *src, int S, int bpw,
-                                 unsigned long long slot_words, unsigned long long N,
-                                 unsigned long long ds, unsigned long long ma, int W,
-                                 unsigned long long *dst)
-{
-    const unsigned long long total = ds * ma;
-    if (total == 0) return;
-    const unsigned int th = 256;
-    const unsigned int bl = (unsigned int)((total + th - 1) / th);
-    s4_pack_batch_kernel<<<bl, th>>>(src, S, bpw, slot_words, N, ds, ma, W, dst);
-    CK(cudaGetLastError());
-}
+#include "stage2/s4_input_pack.cuh"
 
 /* Gather canonical coefficients from a tight resident frontier directly into the
    engine's digit buffers. Metadata is in WORD offsets, never polynomial indices. */
@@ -3331,41 +3299,6 @@ struct S4DeviceBatch {
     const S4ResidentOwner *owner=nullptr; // nullptr = the original exclusive raw frontier lease
     bool reverse_b=false; // scaled sibling input stays in ordinary host order
 };
-__global__ void s4_pack_gather_kernel(const unsigned long long *src,
-    const unsigned long long *offsets, size_t m, size_t nc, int W, int bits,
-    int bpw, unsigned long long sw, unsigned long long N, unsigned long long *dst)
-{
-    const size_t gid=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
-    if(gid>=m*nc)return;
-    const size_t slice=gid/nc,coef=gid%nc;
-    const auto *c=src+offsets[slice]+coef*W;
-    auto *d=dst+slice*N+coef*sw;
-    const unsigned long long mask=(1ull<<bpw)-1;
-    for(int k=0;k<(bits+bpw-1)/bpw;++k) {
-        const int bit=k*bpw,w=bit>>6,shift=bit&63;
-        unsigned long long v=c[w]>>shift;
-        if(shift+bpw>64 && w+1<W)v|=c[w+1]<<(64-shift);
-        d[k]=v&mask;
-    }
-}
-// Separate reverse specialization leaves the original forward gather unchanged.
-__global__ void s4_pack_gather_reverse_kernel(const unsigned long long *src,
-    const unsigned long long *offsets,size_t m,size_t nc,int W,int bits,
-    int bpw,unsigned long long sw,unsigned long long N,unsigned long long *dst)
-{
-    const size_t gid=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
-    if(gid>=m*nc)return;
-    const size_t slice=gid/nc,coef=gid%nc;
-    const auto *c=src+offsets[slice]+(nc-1-coef)*W;
-    auto *d=dst+slice*N+coef*sw;
-    const unsigned long long mask=(1ull<<bpw)-1;
-    for(int k=0;k<(bits+bpw-1)/bpw;++k) {
-        const int bit=k*bpw,w=bit>>6,shift=bit&63;
-        unsigned long long v=c[w]>>shift;
-        if(shift+bpw>64 && w+1<W)v|=c[w+1]<<(64-shift);
-        d[k]=v&mask;
-    }
-}
 struct S4GatherPack {
     const S4DeviceBatch *batch=nullptr;S4Ctx *C=nullptr;size_t s0=0,ma=0,mb=0;
     unsigned long long P=0,N=0,sw=0;int bits=0,bpw=0,W=0;
@@ -3377,6 +3310,16 @@ static int s4_gather_final_input(void *ctx,const NttShape &sh,unsigned long long
     if(sh.P!=p.P || sh.N!=p.N || sh.S!=p.bits || sh.bpw!=p.bpw ||
        sh.slot_words!=p.sw || sh.W!=(unsigned long long)p.W)return 3;
     const double start=now_s();
+    if(stage2_pack::enabled() && stage2_pack::supported(p.N,p.sw,p.ma,p.bits,p.bpw,p.W) &&
+       stage2_pack::supported(p.N,p.sw,p.mb,p.bits,p.bpw,p.W)) {
+        stage2_pack::launch<true>(p.batch->src,p.batch->meta+p.s0,m,p.ma,p.W,p.bits,p.bpw,p.sw,p.N,a);
+        const auto *offsets=p.batch->meta+p.batch->nbatch+p.s0;
+        if(p.batch->reverse_b)
+            stage2_pack::launch<true,true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
+        else stage2_pack::launch<true>(p.batch->src,offsets,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
+        stage2_pack::account(m,p.N,true);stage2_pack::account(m,p.N,true,p.batch->reverse_b);
+        p.C->t_packdev+=now_s()-start;return 0;
+    }
     CK(cudaMemsetAsync(a,0,(size_t)m*sh.N*8));
     CK(cudaMemsetAsync(b,0,(size_t)m*sh.N*8));
     s4_pack_gather_kernel<<<(unsigned int)((m*p.ma+255)/256),256>>>(p.batch->src,
@@ -3421,6 +3364,12 @@ static int s4_pack_final_input(void *ctx, const NttShape &sh, unsigned long long
     }
     const double t0 = now_s();
     const size_t bytes = (size_t)nbatch * sh.N * sizeof(unsigned long long);
+    if(stage2_pack::enabled() && stage2_pack::supported(p.N,p.slot_words,p.P,p.S,p.bpw,p.W)) {
+        stage2_pack::launch<false>(p.C->d_rawA,nullptr,nbatch,p.P,p.W,p.S,p.bpw,p.slot_words,p.N,dA);
+        stage2_pack::launch<false>(p.C->d_rawB,nullptr,nbatch,p.P,p.W,p.S,p.bpw,p.slot_words,p.N,dB);
+        stage2_pack::account(nbatch,p.N,false);stage2_pack::account(nbatch,p.N,false);
+        p.C->t_packdev+=now_s()-t0;return 0;
+    }
     /* Reused scratch contains spectra/previous outputs. Clear gaps, window tails and unused
        coefficients on EVERY call, then overwrite the occupied digits with the original packer. */
     CK(cudaMemsetAsync(dA, 0, bytes));
@@ -9738,6 +9687,11 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 "process_peak_complete=0\n",(int)(fuse_env_ull("NTT_S4_WORKSPACE_BUDGET",0)!=0),
                 s4.chunk_plan_calls,s4.chunk_plan_changed,s4.chunk_plan_chunks,s4.chunk_plan_legacy_chunks,
                 s4.chunk_plan_request_peak,s4.chunk_plan_subset_peak,s4.chunk_plan_over_budget);
+            const auto &pz=stage2_pack::stats;
+            stage2_log::print(stage2_log::phases,"s4_pack_zero_stats: requested=%d contiguous=%llu gather=%llu reverse=%llu "
+                "launches=%llu words=%llu replaced_memset_bytes=%llu avoided_memsets=%llu scope=process\n",
+                (int)stage2_pack::enabled(),pz.contiguous,pz.gather,pz.reverse,pz.launches,pz.words,
+                8*pz.words,pz.avoided_memsets);
             stage2_log::print(stage2_log::phases, "s4_multiply_stats: enabled=1 launches=%llu poly_muls=%llu "
                         "coeffs_reduced=%llu t_reduce=%.3f t_reduce_host=%.3f ring_waits=%llu "
                         "gmp_selftest_cases=%llu "
@@ -10177,7 +10131,7 @@ int ecm_cuda_stage2_check_configuration() {
             return 2;
         }
     }
-    for(const char *key:{"NTT_FUSE_JOINT","NTT_HOST_TRACE","NTT_FUSE_MID_COOP","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_SCALED_FRONTIER_CHECK","NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_ALLOC_FAIL"}) {
+    for(const char *key:{"NTT_S4_PACK_ZERO","NTT_FUSE_JOINT","NTT_HOST_TRACE","NTT_FUSE_MID_COOP","NTT_GSCALE_DEVICE_CHECK","NTT_GSCALE_DEVICE_TEST_BAD","NTT_SCALED_ROOT_CHECK","NTT_SCALED_ROOT_TEST_BAD","NTT_SCALED_FRONTIER_CHECK","NTT_SCALED_FRONTIER_TEST_BAD","NTT_SCALED_FRONTIER_ALLOC_FAIL"}) {
         const char *v=std::getenv(key);
         if(v && std::strcmp(v,"0") && std::strcmp(v,"1")) {
             std::fprintf(stderr,"production Stage2 requires %s=0 or 1\n",key);return 2;

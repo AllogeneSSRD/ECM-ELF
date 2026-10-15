@@ -1,4 +1,4 @@
-"""Fixed-D, same-binary Stage2 Graph or middle-outer A/B; retain raw evidence."""
+"""Fixed-D, same-binary Stage2 Graph, outer or pack/zero A/B; retain raw evidence."""
 import argparse
 import csv
 import json
@@ -28,6 +28,8 @@ def environment(enabled, max_k=19, max_words=1 << 22, min_calls=4, diagnostic=Fa
         env['NTT_FUSE_MID_COOP'] = str(enabled)
     elif variant == 'joint-outer':
         env.update(NTT_FUSE_MID_COOP='1', NTT_FUSE_JOINT=str(enabled))
+    elif variant == 'pack-zero':
+        env['NTT_S4_PACK_ZERO'] = str(enabled)
     if diagnostic:
         env['NTT_TARGET_LEAF_HASH'] = '1'
     return env
@@ -53,7 +55,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--repeats', type=int, default=4)
-    p.add_argument('--variant', choices=['graph', 'mid-outer', 'joint-outer'], default='graph')
+    p.add_argument('--variant', choices=['graph', 'mid-outer', 'joint-outer', 'pack-zero'], default='graph')
     p.add_argument('--max-k', type=int, default=19)
     p.add_argument('--max-words', type=int, default=1 << 22)
     p.add_argument('--min-calls', type=int, default=4)
@@ -139,7 +141,15 @@ def main():
                     selected_lengths = {23, 25} if a.variant == 'joint-outer' else {21, 22, 23}
                     variant_active = graph_active if a.variant == 'graph' else bool(enabled and sum(
                         count for k, count in row['histogram'].items() if int(k) in selected_lengths))
+                    if a.variant == 'pack-zero':
+                        pack = fields(log.read_text(encoding='utf-8'), 's4_pack_zero_stats')
+                        if int(pack['requested'])!=enabled or (not enabled and int(pack['words'])):
+                            raise ValueError('Pack/zero request differs')
+                        variant_active=bool(enabled and int(pack['words']) and int(pack['avoided_memsets']))
+                        row['pack_zero']=pack
                     current = [row['correctness'], row['histogram'], row['convolutions'], row['chunks']]
+                    if a.variant=='pack-zero':
+                        current.extend(row[key] for key in ('selftests','checked','launches'))
                     if invariant is None:
                         invariant = current
                     if current != invariant:
@@ -160,6 +170,8 @@ def main():
                         stream.write(json.dumps(row) + '\n')
                     detail = (f"graph_hits={graph['hits']} builds={graph['builds']} saved={graph['saved_launches']}"
                               if a.variant == 'graph' else f"variant={a.variant} selected_transforms={sum(count for k, count in row['histogram'].items() if int(k) in selected_lengths)} enabled={enabled}")
+                    if a.variant=='pack-zero':
+                        detail=f"variant=pack-zero words={row['pack_zero']['words']} enabled={enabled}"
                     print(f"{name}: total={row['engine_seconds']:.6f}s {detail} PASS", flush=True)
     finally:
         telemetry.terminate()

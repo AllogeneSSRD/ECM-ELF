@@ -10,7 +10,7 @@ save只提供目标N、sigma、B1和归一化X，不自动推断承载指数。�
 
 完整tune可按成本与联合显存比较普通/合法承载，允许配置跨条件复用及宽度/B2估算，详见[Auto B2/tune](AUTO_B2.md)。合法梅森worktodo结合已知因子和save验证后提供承载指数；仅save不猜指数。显式`--carrier-exponent 0`锁定普通模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
 
-承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L8970)。
+承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L8940)。
 
 设备点坐标使用 Montgomery 域，NTT digit 在 Goldilocks 域，多项式系数归约后为普通规范整数。不同表示不能直接相乘或判断数学相等。
 
@@ -68,7 +68,7 @@ F(X)=∏ⱼ(X−xⱼ)。giant 叶为齐次形式 ZᵢX−Xᵢ，或等价的已�
 
 ## 代码依据
 
-- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7267)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9413)。
+- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7261)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9397)。
 - [模数上下文](../../src/core/ecm_stage2_modulus.h#L28)：`configure`，目标/承载资格。
 - [请求程序](../../src/core/ecm_stage2_requests.h#L76)：`request_program`；[精确树组](../../src/core/ecm_stage2_geometry.h#L93)：`tree_multiply_groups`。
 - [点模乘](../../src/cuda/stage2/stage2_point_mersenne.cuh)、[NTT](NTT.md)、[内存](MEMORY.md)。

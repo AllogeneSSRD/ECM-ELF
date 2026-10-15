@@ -390,7 +390,7 @@ G=1与baby预算回退缺完整联合生命周期，成本可估算但原生准�
 ## 代码入口
 
 - [ecm_stage2_d_catalog.h:14](../../src/core/ecm_stage2_d_catalog.h#L14)：唯一D字面量表；`entries`、`degree`提供派生P，编译期检查范围、偶数、唯一和顺序。
-- [ecm_cuda_stage2.cu:8659](../../src/cuda/ecm_cuda_stage2.cu#L8659)：原生默认成本候选。
+- [ecm_cuda_stage2.cu:8621](../../src/cuda/ecm_cuda_stage2.cu#L8621)：原生默认成本候选。
 - [ecm_stage2_portable_driver.inl:230](../../src/core/ecm_stage2_portable_driver.inl#L230)：默认几何模型；`portable_select`负责实测预筛、成本排名及准入，`run_portable_tune`负责局部搜索、测量与发布。[运行采集:150](../../src/core/ecm_stage2_portable_driver.inl#L150)负责采集与可选缓存写回，[比值补列:94](../../src/core/ecm_stage2_portable_driver.inl#L94)只补摘要字段。
 - [ecm_stage2_portable_model.h](../../src/core/ecm_stage2_portable_model.h#L171)：`Estimator::fitted`负责非负拟合及留一资格；同文件提供工作量、观察匹配、插值与误差余量。
 - [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h#L22)：`LocalSearch`负责邻域及噪声停止；`Profile`负责矩阵解析、排序与最快更新。
