@@ -827,6 +827,21 @@ NTT gains do not guarantee faster full Stage2; default false pending full-engine
 的预计卷积总时间选型；至少需要两个实测 batch，预计收益须超过 10%。不改变内核配置。纯 NTT 收益不保证<br>
 完整 Stage2 更快；完成整机验证前默认 false。
 
+### stage2_pack_zero
+
+```text
+stage2_pack_zero=[false|true]; default=true
+```
+
+Fuse input digit packing and zero padding in one GPU kernel per operand. Covers contiguous, resident<br>
+gather and reverse inputs; unsupported shapes use the original packer. Does not change arithmetic<br>
+checks, D, NTT length or device workspace capacity. CLI --pack-zero overrides this key; an explicit<br>
+key overrides NTT_S4_PACK_ZERO. Without an override, the built-in default applies; legacy .cprof<br>
+cost profiles retain false and require false explicitly if this key is set.<br>
+每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退<br>
+原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式INI优先于<br>
+NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。
+
 ### stage1_tune_profile
 
 ```text

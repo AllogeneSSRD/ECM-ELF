@@ -21,7 +21,7 @@
 - [ ] 评估热NTT的launch、tile/outer、设备树准备和传输；局部提速通过固定D完整曲线对照后才改变默认。
 - [ ] 继续评价包含pack/carry/S4的Graph完整请求、正常曲线的准备/同步与pinned分配。两个NTT Graph缓存已通过独立GMP与102次固定D完整曲线，P=155520基本持平，默认关闭；需扩大缓存上限驱逐、显存失败/回退及其他驱动覆盖，见[Graph性能](performance/NTT_GRAPH.md)及[保留草稿](development/STAGE2_SHORT_GRAPH_DRAFT.md)。
 - [ ] 扩大k21–23 M6候选的自动D/tune矩阵、显存边界与表驱逐覆盖。已有500个算子样本、80条固定D曲线及32条复测、8条叶子诊断；矩阵中位数之和少1.77%，默认仍关闭。tile10–13×M5–M8另完成1428个算子样本及80条曲线、24条复测、8条叶子诊断，联合表相对中段M6仅少0.19%，同样默认关闭。见[outer性能](performance/NTT_OUTER.md)、[中段草稿](development/STAGE2_OUTER_PLAN_DRAFT.md)与[联合草稿](development/STAGE2_TILE_SYNC_DRAFT.md)。
-- [ ] 扩大pack/zero/gather融合的自动D/tune、Graph组合和其他设备/发布架构覆盖；目前663项GMP、252个准备样本、80条固定D曲线、18条补充曲线、8条叶子诊断及B/Q/回退通过，矩阵中位数之和少2.17%，默认关闭。Systems确认准备GPU时间少44.64%，Compute热点DRAM约96%；后续优先NTT的tile11/CTA256、中段M6组合及高位宽giant点生成，见[准备与同步](performance/STAGE2_PREPARATION.md)与[保留草稿](development/STAGE2_PACK_ZERO_DRAFT.md)。
+- [ ] 扩大pack/zero融合的其他发布架构/驱动、tune完整选型及预算边界验证；两卡SM1500MHz已完成86格/450条正式曲线、96条复测及16条叶子诊断，支持自动D、Graph、M6/joint、B/Q和预算回退，独立生产程序默认启用。GPU0等待定位到pinned/device分配，优先研究增长与跨请求复用；GPU1继续评价tile11/CTA256及高位宽giant生成。详见[准备与同步](performance/STAGE2_PREPARATION.md)与[保留草稿](development/STAGE2_PACK_ZERO_DRAFT.md)。
 - [ ] Tensor后续优先减少拆字节、DFT8合并根乘及其他整数工作，或独立评估更大radix/warp分工。N96r64及单卡混合并发已完成门禁、3432个算子样本和并发范围剖析，未超过纯CUDA；不按低Tensor利用率或增开流部署。见[Tensor性能](performance/NTT_TENSOR.md#单卡cuda--tensor并发与96-bit候选)及[保留草稿](development/STAGE2_TENSOR_CONCURRENCY_DRAFT.md)。
 - [ ] 短 NTT batch 选择补齐整条S4流水线的分块成本校准：现有固定D、host/resident及尾批A/B未显示稳定收益，7995-bit通用归约样本慢约2.1%；需核对归约并行度、每分块准备/检查/同步，再覆盖显存边界和其他设备，通过后才考虑启用默认。
 - [ ] 为NTT tune增加tile/radix/协作配置候选与执行器部署；现有摘要只校准成本。需按设备/形状核验全部候选，并通过固定D完整曲线对照后才启用自动内核配置。

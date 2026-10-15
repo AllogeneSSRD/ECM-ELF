@@ -1,4 +1,4 @@
-"""Fixed-D, same-binary Stage2 Graph, outer or pack/zero A/B; retain raw evidence."""
+"""Same-binary Stage2 Graph, outer or pack/zero A/B; retain raw evidence."""
 import argparse
 import csv
 import json
@@ -30,6 +30,8 @@ def environment(enabled, max_k=19, max_words=1 << 22, min_calls=4, diagnostic=Fa
         env.update(NTT_FUSE_MID_COOP='1', NTT_FUSE_JOINT=str(enabled))
     elif variant == 'pack-zero':
         env['NTT_S4_PACK_ZERO'] = str(enabled)
+    if variant != 'pack-zero':
+        env['NTT_S4_PACK_ZERO'] = '0'
     if diagnostic:
         env['NTT_TARGET_LEAF_HASH'] = '1'
     return env
@@ -61,18 +63,23 @@ def main():
     p.add_argument('--min-calls', type=int, default=4)
     p.add_argument('--diagnostic', action='store_true', help='One off/on all-leaf fingerprint pair; excluded from performance')
     p.add_argument('--timeout', type=int, default=600)
+    p.add_argument('--telemetry-ms', type=int, default=500, help='GPU sampling interval; 0 disables NVML polling for diagnosis')
     a = p.parse_args()
     if a.repeats < 1 or not 0 <= a.max_k <= 32 or a.max_words < 1 or a.min_calls < 1 or a.device < 0 or a.timeout < 1:
         p.error('invalid repeat/device/Graph limits/timeout')
+    if a.telemetry_ms and not 100<=a.telemetry_ms<=60000:
+        p.error('telemetry-ms must be 0 or 100..60000')
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     exe = a.exe.resolve()
     identity = freeze(exe)
     if a.variant != 'graph':
         build = json.loads((exe.parent / 'build_manifest.json').read_text(encoding='utf-8-sig'))
-        if (build.get('engine'), build.get('architecture'), build.get('gl_fixed_mode'),
-            build.get('add_sub_mask'), build.get('outer_unroll_u')) != ('production', 'sm_89', 3, 1, 0):
-            raise ValueError('Middle-outer study requires the supported production sm89/PTX3/canonical build')
+        if (build.get('engine'), build.get('gl_fixed_mode'), build.get('add_sub_mask'),
+            build.get('outer_unroll_u')) != ('production', 3, 1, 0):
+            raise ValueError('Study requires production PTX3/canonical build')
+        if a.variant in ('mid-outer','joint-outer') and build.get('architecture')!='sm_89':
+            raise ValueError('Middle-outer study requires the supported sm89 build')
     cases = json.loads(a.cases.read_text(encoding='utf-8-sig'))
     if not isinstance(cases, list) or not cases:
         raise ValueError('Nonempty case array required')
@@ -81,12 +88,19 @@ def main():
         if not re.fullmatch(r'[A-Za-z0-9_]+', case.get('name', '')) or case['name'] in names:
             raise ValueError('Unique case names using letters, digits and underscores required')
         names.add(case['name'])
-        for key in ('b2', 'd', 'batch_mb'):
+        for key in ('b2', 'batch_mb'):
             if type(case.get(key)) is not int or case[key] < 1:
                 raise ValueError('Positive integer field required: ' + key)
+        if type(case.get('d')) is not int or case['d'] < (0 if a.variant=='pack-zero' else 1):
+            raise ValueError('Positive D required; pack-zero also accepts 0 for automatic selection')
         for key in ('fold_mb', 'arena_mb', 'carrier'):
             if key in case and (type(case[key]) is not int or case[key] < 0):
                 raise ValueError('Nonnegative integer field required: ' + key)
+        controls=case.get('environment',{})
+        allowed={'NTT_SHORT_GRAPH','NTT_FUSE_MID_COOP','NTT_FUSE_JOINT','NTT_WORKSPACE_REUSE_BQ','NTT_ARENA_WORKSPACE_POOL'}
+        if not isinstance(controls,dict) or any(k not in allowed or str(v) not in ('0','1') for k,v in controls.items()):
+            raise ValueError('Unsupported case environment controls')
+        if controls and a.variant!='pack-zero':raise ValueError('Case controls require pack-zero')
         source = Path(case['save']).resolve()
         dest = out / 'inputs' / case['name'] / source.name
         dest.parent.mkdir(parents=True)
@@ -104,9 +118,11 @@ def main():
                    timing='engine init+main; no discarded warmups; profiling collected separately')
     (out / 'identity.json').write_text(json.dumps(receipt, indent=2), encoding='utf-8')
     trace_file = (out / 'gpu.csv').open('w', encoding='utf-8')
-    telemetry = subprocess.Popen(['nvidia-smi', '-i', str(a.device), '--query-gpu=timestamp,index,uuid,pstate,clocks.sm,clocks.mem,temperature.gpu,power.draw,memory.used,utilization.gpu',
-                                 '--format=csv', '-lms', '500'], stdout=trace_file, stderr=subprocess.STDOUT,
-                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    telemetry = None
+    if a.telemetry_ms:
+        telemetry = subprocess.Popen(['nvidia-smi', '-i', str(a.device), '--query-gpu=timestamp,index,uuid,pstate,clocks.sm,clocks.mem,temperature.gpu,power.draw,memory.used,utilization.gpu',
+                                     '--format=csv', '-lms', str(a.telemetry_ms)], stdout=trace_file, stderr=subprocess.STDOUT,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     rows = []
     try:
         for case in cases:
@@ -122,20 +138,21 @@ def main():
                     debug = out / (name + '.debug.log') if a.diagnostic else None
                     cmd = command(exe, ini, case, a.device, log, result, debug)
                     env = environment(enabled, a.max_k, a.max_words, a.min_calls, a.diagnostic, a.variant)
+                    env.update({k:str(v) for k,v in case.get('environment',{}).items()})
                     started = time.time()
                     with (out / (name + '.stdout.log')).open('w', encoding='utf-8') as console:
                         run = subprocess.run(cmd, env=env, cwd=ROOT, stdout=console, stderr=subprocess.STDOUT, timeout=a.timeout,
                                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                     ended = time.time()
-                    (out / (name + '.command.json')).write_text(json.dumps(dict(command=cmd, environment={k: v for k, v in env.items() if k.startswith('NTT_')},
+                    (out / (name + '.command.json')).write_text(json.dumps(dict(command=cmd, environment={k: v for k, v in env.items() if k.startswith(('NTT_', 'CUDA_'))},
                         start_unix=started, end_unix=ended, returncode=run.returncode), indent=2), encoding='utf-8')
                     if run.returncode:
                         raise RuntimeError(f'{name} failed ({run.returncode}); evidence retained')
                     row = parse(log, result, leaf_fixture=a.diagnostic)
-                    if a.variant != 'graph' and 'RTX 4060 Laptop' not in log.read_text(encoding='utf-8'):
+                    if a.variant in ('mid-outer','joint-outer') and 'RTX 4060 Laptop' not in log.read_text(encoding='utf-8'):
                         raise ValueError('Middle-outer table is not supported on this device')
                     graph = fields(log.read_text(encoding='utf-8'), 'ntt_graph_stats')
-                    if int(graph['requested']) != (enabled if a.variant == 'graph' else 0) or int(graph['failures']):
+                    if int(graph['requested']) != int(env['NTT_SHORT_GRAPH']) or int(graph['failures']):
                         raise ValueError('Graph request or capture failed')
                     graph_active = bool(enabled and int(graph['builds']) and int(graph['hits']))
                     selected_lengths = {23, 25} if a.variant == 'joint-outer' else {21, 22, 23}
@@ -174,8 +191,9 @@ def main():
                         detail=f"variant=pack-zero words={row['pack_zero']['words']} enabled={enabled}"
                     print(f"{name}: total={row['engine_seconds']:.6f}s {detail} PASS", flush=True)
     finally:
-        telemetry.terminate()
-        telemetry.wait(timeout=10)
+        if telemetry is not None:
+            telemetry.terminate()
+            telemetry.wait(timeout=10)
         trace_file.close()
     if not any(r['variant_active'] for r in rows):
         raise ValueError('No case executed the selected variant; evidence retained but not an optimization A/B')

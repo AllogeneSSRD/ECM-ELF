@@ -70,6 +70,7 @@ inline constexpr char stage2_stage2_tune_arithmetic[]="both";
 inline constexpr char stage2_stage2_tune_profile[]="";
 inline constexpr bool stage2_stage2_tune_runtime=true;
 inline constexpr bool stage2_stage2_short_ntt_batch_tune=false;
+inline constexpr bool stage2_stage2_pack_zero=true;
 inline constexpr char stage2_stage1_tune_profile[]="";
 inline constexpr uint64_t stage2_stage2_auto_min_b2=0;
 inline constexpr uint64_t stage2_stage2_auto_max_b2=0;
@@ -261,6 +262,7 @@ struct Stage2Values {
     std::string tune_profile="";
     bool tune_runtime=true;
     bool short_batch_tune=false;
+    bool pack_zero=true;
     std::string stage1_profile="";
     uint64_t auto_min=0;
     uint64_t auto_max=0;
@@ -281,6 +283,7 @@ struct Stage2Values {
     bool has_finished=false;
     bool has_log=false;
     bool has_owner=false;
+    bool has_pack_zero=false;
 };
 inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_worktodo",[](Stage2Values&c,const std::string&v){c.worktodo=v;c.has_worktodo=true;},false,nullptr},
@@ -311,6 +314,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_tune_profile",[](Stage2Values&c,const std::string&v){c.tune_profile=v;},false,nullptr},
     {"stage2_tune_runtime",[](Stage2Values&c,const std::string&v){c.tune_runtime=boolean(v,"stage2_tune_runtime");},false,nullptr},
     {"stage2_short_ntt_batch_tune",[](Stage2Values&c,const std::string&v){c.short_batch_tune=boolean(v,"stage2_short_ntt_batch_tune");},false,nullptr},
+    {"stage2_pack_zero",[](Stage2Values&c,const std::string&v){c.pack_zero=boolean(v,"stage2_pack_zero");c.has_pack_zero=true;},false,nullptr},
     {"stage1_tune_profile",[](Stage2Values&c,const std::string&v){c.stage1_profile=v;},false,nullptr},
     {"stage2_auto_min_b2",[](Stage2Values&c,const std::string&v){c.auto_min=static_cast<uint64_t>(bounded_integer(v,"stage2_auto_min_b2",0,UINT64_MAX));},false,nullptr},
     {"stage2_auto_max_b2",[](Stage2Values&c,const std::string&v){c.auto_max=static_cast<uint64_t>(bounded_integer(v,"stage2_auto_max_b2",0,UINT64_MAX));},false,nullptr},

@@ -252,6 +252,7 @@ struct Options {
     unsigned inferred_carrier=0;
     bool short_calibration=true;
     bool short_batch_tune=false;
+    bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;
     bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
     std::string prediction_policy="model",tune_arithmetic="both";
     double tune_error=.08;
@@ -310,6 +311,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--tune-profile") o.tune_profile=value();
         else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
         else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--pack-zero") {const auto n=num();if(n>1)throw std::runtime_error("pack-zero must be 0 or 1");o.pack_zero=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-ignore") {o.tune_ignore=value();o.portable_cli.insert(a);ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);}
         else if (a == "--stage1-cost-csv") {o.stage1_csv=value();o.portable_cli.insert(a);}
         else if (a == "--tune-condition-tag") {o.condition_tag=value();o.portable_cli.insert(a);}
@@ -413,6 +415,20 @@ Options arguments(int argc, char **argv) {
     return o;
 }
 using Settings=ecm_config::Stage2Values;
+void configure_pack_zero(Options &o,const Settings *s=nullptr) {
+    // Resolve once in the parent; every curve/tune child receives the value.
+    // Legacy cprof has an exact PACK_ZERO=0 contract, including absent env.
+    if(!o.portable_cli.count("--pack-zero")) {
+        if(s && s->has_pack_zero)o.pack_zero=s->pack_zero;
+        else if(const char *v=std::getenv("NTT_S4_PACK_ZERO")) {
+            if(std::strcmp(v,"0") && std::strcmp(v,"1"))
+                throw std::runtime_error("NTT_S4_PACK_ZERO must be 0 or 1");
+            o.pack_zero=std::strcmp(v,"1")==0;
+        } else if(!o.cost_profile.empty() || (s && !s->cost_profile.empty()))o.pack_zero=false;
+    }
+    if(_putenv_s("NTT_S4_PACK_ZERO",o.pack_zero?"1":"0"))
+        throw std::runtime_error("cannot configure Stage2 pack/zero fusion");
+}
 Settings stage2_ini(const fs::path &path,int worker) {
     std::vector<ecm_config::IniLine> lines;
     ecm_config::read_ini(path.string(),lines);
@@ -550,6 +566,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
     if(!o.tune_profile.empty())cmd+=L" --tune-profile "+quote(fs::path(o.tune_profile).wstring());
     arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
+    arg(L"--pack-zero",o.pack_zero?1:0);
     arg(L"--tune-runtime",o.tune_runtime?1:0);
     cmd+=L" --tune-ignore "+quote(fs::path(o.tune_ignore).wstring());
     if(!o.stage1_csv.empty())cmd+=L" --stage1-cost-csv "+quote(fs::path(o.stage1_csv).wstring());
@@ -790,6 +807,7 @@ std::string tune_metrics_json(const EcmStage2Metrics &m) {
     out<<'}';return out.str();
 }
 int curve_worker(Options o) {
+    configure_pack_zero(o);
     // Children ignore the first console interrupt; the parent owns stop policy.
     SetConsoleCtrlHandler(nullptr,TRUE);
     std::setvbuf(stdout,nullptr,_IONBF,0);std::setvbuf(stderr,nullptr,_IONBF,0);
@@ -936,6 +954,7 @@ void help() {
         "           --tune-runtime 0|1 (default 1): completed curves fill missing width/NTT/residency regions.\n"
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
+        "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in INI).\n"
         "           --stage1-cost-csv FILE --stage1-cost-mhz MHz --target-factor-bits N\n"
         "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
         "           --tune-ntt-profile FILE (repeatable): attach checked NTT summaries to ECM tune/merge.\n"
@@ -958,7 +977,7 @@ void help() {
         "INI: stage2_worktodo, stage2_finished, stage2_progress_dir, stage2_log_file;\n"
         "stage2_progress_file imports legacy single-file progress only.\n"
         "     shared tmp_dir/device/verbose; stage2_save_dir/device overrides; stage2_b2, stage2_d,\n"
-        "     stage2_batch_mb, stage2_arena_mb, stage2_results_file, stage2_log_level; [Worker #N].\n"
+        "     stage2_batch_mb, stage2_arena_mb, stage2_pack_zero, stage2_results_file, stage2_log_level; [Worker #N].\n"
         "     stage2_debug_log=true enables separate diagnostics (stage2_debug_log_file).\n"
         "D=0 chooses automatically; count/curves=0 means all remaining; shortages are clamped.\n"
         "Queue only: resumes completed curves. Ctrl+C finishes current curve; twice stops now.\n"
@@ -1037,6 +1056,7 @@ int driver(Options o) {
     if (!ecm_queue_config_load(ini.string(), o.worker, cfg) && (!o.ini.empty() || fs::exists(ini)))
         throw std::runtime_error("cannot read explicit ini: " + ini.string());
     Settings s = stage2_ini(ini, o.worker);
+    configure_pack_zero(o,&s);
     if(!o.portable_cli.count("--auto-carrier"))o.auto_carrier=s.auto_carrier;
     if(!o.portable_cli.count("--prediction-policy"))o.prediction_policy=s.prediction_policy;
     if(!o.portable_cli.count("--tune-arithmetic"))o.tune_arithmetic=s.tune_arithmetic;
