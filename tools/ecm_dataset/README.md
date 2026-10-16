@@ -10,6 +10,8 @@
 
 核心数据、替换规则和源码位置见 [数据集说明](../../docs/usage/DATASET.md)。这些工具尚不负责自动选择生产 B2。
 
+Atkin-Morain Edwards群阶/点阶由独立 `edwards_order.py` / `edwards_order.gp` 计算，支持完整uint64 sigma及17组mersenne.ca校验输入，输出带模型身份的证据，不写入PARAM0数据库。命令、数学口径及两处参考数据差异统一见[Edwards说明](../../docs/usage/DATASET.md#edwards群阶与点阶)。
+
 ## 1. 环境与文件位置
 
 - Python 3，仅使用标准库；SQLite 不需要单独安装或启动数据库服务。
@@ -25,6 +27,8 @@
 | `dataset.py` | 公共库：两表 schema、HTML 解析、GP 调用、即时界限计算和最优 sigma 更新 |
 | `migrate_dataset.py` | 从旧七表迁移到两表，保留已选最优 sigma并回收空间 |
 | `param0_order.gp` | Suyama PARAM0 模型、群阶/点阶分解、素性及最小点阶检查 |
+| `edwards_order.py` / `edwards_order.gp` | Atkin-Morain Edwards独立群阶/点阶分析和48LCM界限 |
+| `fixtures/edwards_mersenne_ca.json` | 用户提供的17组原始输入，保留已识别的两处差异 |
 | `prepare_dataset.py` | 按指数、因子位数、sigma 批量计算阶，准备实验候选 |
 | `scan_sigma.py` | 对指定exponent/sigma闭区间扫描目录因子，只保存最优sigma |
 | `run_production_dataset.py` | 先准备实验计划，再运行实际 Stage1/Stage2 并记录生产证据 |

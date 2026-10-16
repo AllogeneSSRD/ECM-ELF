@@ -10,7 +10,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Stage2](usage/STAGE2.md)：读 Stage1 save、任务字段、数量不足、队列续跑、日志和结果。
 - [GUI](usage/GUI.md)：worker、队列生成、监控及结果。
 - [构建与发布](usage/BUILD.md)：六组一键入口、GPU 架构、CUDA/GMP 依赖和发布内容。
-- [因子数据集](usage/DATASET.md)：两表数据库、最优 sigma、扫描和生产验证。
+- [因子数据集](usage/DATASET.md)：PARAM0数据库、最优sigma、扫描与生产验证，以及Edwards独立群阶/点阶分析。
 - [INI 配置参考](ECM_INI_REFERENCE.md)：所有键的符号默认值、范围和英中说明；由配置定义生成。
 
 ## 实现

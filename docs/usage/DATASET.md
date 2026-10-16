@@ -4,7 +4,7 @@
 
 ## 持久数据
 
-只保留 `mersennes` 与 `factors` 两张核心表：原梅森指数、因子/重数与素性状态，以及每因子的一个 sigma、B1/B2、群阶/点阶及其分解。没有每次扫描、导入或运行的 observations/frontier/history 表。
+只保留 `mersennes` 与 `factors` 两张核心表，当前模型为Montgomery PARAM0：原梅森指数、因子/重数与素性状态，以及每因子的一个 sigma、B1/B2、群阶/点阶及其分解。没有每次扫描、导入或运行的 observations/frontier/history 表。Edwards使用下文独立分析入口，输出带模型身份的JSON/CSV，不写入这两表。
 
 普通 analyze/ingest 保留当前要求的支配替换：新 B1≤旧 B1、新 B2≤旧 B2，且至少一项严格减少。界限相等不替换；失败/未胜出的 sigma 不持久化。所有保存比较使用 lcm，choose12 只是由点阶导出的查看口径。
 
@@ -21,8 +21,37 @@ B2=0 表示该点 Stage1 已足够。成功条件应根据点阶而非仅群阶�
 | `export_dataset.py` | 只读导出核心表、CSV 和身份 |
 | `migrate_dataset.py` | 将受支持旧 schema 转为当前核心数据 |
 | `dataset.py` / `param0_order.gp` | 共享存储、界限、GP 模型和分解 |
+| `edwards_order.py` / `edwards_order.gp` | Atkin-Morain Edwards群阶、点阶、分解及48LCM界限，独立输出 |
 
 Python 使用标准库；计算群阶/点阶及拆解因子需要 PARI/GP。显式 `--gp <path/name>` 优先；省略或仅传 `--gp` 时从 PATH 查找 gp.exe/gp。显式无效路径报错，不另选程序。
+
+## Edwards群阶与点阶
+
+[独立入口](../../tools/ecm_dataset/edwards_order.py)接收已知素因子p和完整uint64 sigma，按[共享C++构造](../../src/core/ecm_edwards_curve.h)重建Atkin-Morain曲线。GP先证明p素性、排除退化并核对基点，再通过等价Weierstrass模型计算群阶/点阶、完整分解及各因子的素性。Python核对Hasse界、分解乘积与点阶整除关系。数学映射及最小点阶验证见[固定参考](../reference/ECM_EDWARDS_MATH.md#41-在有限素域计算群阶与点阶)。
+
+```powershell
+python tools/ecm_dataset/edwards_order.py `
+  --prime 3740809188848298874514458320563758983497238991 `
+  --sigma 320289107620271 --exponent 10937 `
+  --output data/experiments/edwards_order_single
+
+python tools/ecm_dataset/edwards_order.py `
+  --fixtures tools/ecm_dataset/fixtures/edwards_mersenne_ca.json `
+  --output data/experiments/edwards_order_reference
+```
+
+输出目录必须不存在。`--exponent`可选，仅检查p整除 `2^exponent−1`，没有数据库的9999上限；p必须是已知素因子，不能把未分解的复合梅森数作为有限域模数。`--timeout`默认每条曲线120秒，`--stack`默认128M。完整GP脚本可在GP中直接读取后调用 `ecm_edwards_order(p,sigma)`。
+
+每条曲线保留输入脚本、stdout/stderr及摘要；顶层保留GP版本、exe/libpari摘要和脚本/fixture快照，汇总为 `summary.json`、`orders.csv`。`complete`表示所有计算和内部检查完成，外部GO是否匹配单列为 `reported_relation`、`reported_relations` 和 `all_reported_group_orders_match`；不把外部样本差异掩盖成通过。`point_order`是原始基点阶，`order_after_48`为其除以与48的GCD；B1/B2前沿按48LCM口径和单剩余素数推导，B2=0表示仅Stage1即可消去。数学界限不代表运行时整数范围内均可执行。
+
+用户提供的17行mersenne.ca数据在PARI/GP 2.17.3下逐行核对，15行完整群阶一致；原表和配对顺序原样保留在fixture，未将其视作独立下载的站点快照。两处差异为：
+
+- M13883，p=`190998088435897266796075481606147454353399`、sigma=`4674866307349397`：完整群阶是 `190998088435897266796654466340963036240192`，为给定乘积的3倍；分解中应为 `3³`。给定乘积既不满足该p的Hasse界，也不是该初始点的精确阶。
+- M15173，sigma=`1038876698`：给定分解精确复现Montgomery PARAM3的群阶 `5347934906960045728053670085517242297419632`。同sigma的Edwards群阶为 `5347934906960045728048506633196338632580320 = 2⁵·5·23·37·39276842736193050294128280208551253177`，不能将该行作为Edwards群阶的正对照。
+
+原始证据为 `data/experiments/edwards_group_order_20261016/reference_03/`，C++构造及独立点阶验证为同根的 `validation_02/`，CLI检查为 `cli_01/`。17组的d和基点坐标全部与实际C++构造一致；24组小素域组合中22组有效并通过独立逐点计数，2组被双方判退化；另验证6种无效输入和5种缺失证据。汇总为 `data/benchmarks/edwards_group_order_20261016/qualification_01/summary.json`，SHA256=`34970b36e80673744736847c3bba4a0f9635e85859afd7a7bc39c29ce731a1f8`，同目录 `orders.csv` 保留17行结果。可使用 `tools/build/test/build_edwards_order_probe.ps1` 构建CPU探针，再运行 `tools/test/test_edwards_group_order.py --reference <完整fixture输出> --probe <探针exe> --output <新证据目录>` 复核。
+
+主程序的 `--go` 尚未接入此Edwards模型；现有Montgomery诊断不能作为Edwards群阶证据。当前入口也不提供Edwards数据库存储、sigma扫描或生产正负对照的自动执行。
 
 ## 扫描策略
 

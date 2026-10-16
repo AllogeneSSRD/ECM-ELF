@@ -80,6 +80,22 @@ stage-1 完成后，Edwards 点 `[s]P=(e.x:e.y:e.z)` 转 Montgomery（`ed_to_Mon
 > **关键**：`(Qx,Qz)` 的**投影缩放不唯一**。不同加法律（标准 9M vs Atnashev 替代式）产生同仿射点但不同 Z，故原始 `Qx/Qz` 字节不逐位相等；**投影无关的不变量是 `u = Qx/Qz = (1+y)/(1−y)`**（Montgomery x 坐标），以及 `gcd(Qz,N)`（因子判定）。交叉验证以 `u` 一致 + `gcd(Qz,N)` 一致为准。
 
 
+### 4.1 在有限素域计算群阶与点阶
+
+设 `p>3` 为已证明素数，`d≠0,1`，采用曲线的光滑射影模型。上述映射是同一素域上的双有理等价，因而保持完整曲线群阶和非例外基点的阶。保留 `B=4/(1-d)` 后，令 `X=B·u`、`Y=B²·v`，则
+
+`Y² = X³ + (A·B)X² + B²X`，即PARI模型 `[a1,a2,a3,a4,a6]=[0,A·B,0,B²,0]`。
+
+对一般Edwards曲线，将 `Bv²` 直接改为 `v²` 可能改变二次扭转身份，群阶变为 `2p+2−#E`。本节Atkin-Morain族还有额外性质：令 `h=2β−1`，则 `1-d=(h²-1)²/h⁴`，故 `B=(2h²/(h²-1))²` 在非退化素域上是平方；该族可通过相应平方根缩放v而令B=1。保留B的Weierstrass映射无需另选平方根，也直接保持给定基点身份。同sigma的Suyama PARAM0、PARAM3和Atkin-Morain不定义同一曲线，不能共用其群阶。
+
+PARI的 `ellinit` 接受Weierstrass系数及有限素域；`ellcard` 计算 `#E(F_p)`，`ellorder` 计算基点P的阶。群阶需满足精确Hasse条件 `(#E−p−1)²≤4p`。若候选点阶为m，验证 `[m]P=O`，且对每个不同素因子q验证 `[m/q]P≠O`，可确认其最小性；同时核对 `m | #E` 与分解乘积。模数或曲线退化时不能套用这些结论。
+
+`(0,1)` 对应Weierstrass无穷远点，`(0,-1)` 对应 `(0,0)`；其余映射必须检查分母。直接枚举仿射Edwards方程可能漏掉光滑模型上位于无穷远处的点，不能把这样的枚举数直接当作完整群阶。
+
+Stage1若使用 `48·lcm(1,…,B1)`，应对 `ord(P)/gcd(ord(P),48)` 推导幂光滑界限。群阶整除所用标量是充分条件，具体基点被消去的充要条件是点阶整除该标量；单素数Stage2只额外消去一个剩余素数的一次幂，不能忽略重复素因子。
+
+参考：[PARI有限域椭圆曲线接口](https://pari.math.u-bordeaux.fr/dochtml/html-stable/Elliptic_curves.html)、[Edwards/Montgomery映射](https://www.hyperelliptic.org/tanja/teaching/cryptoI11/exercises/exercise-12.pdf)。本节采用 `v=u/x`、`B=4/(1-d)`；文献中 `v=2u/x`、`B=1/(1-d)` 是等价的坐标缩放。
+
 ## 5. Prime95 存档字节格式（ECM_VERSION=6）
 
 全部 **小端**。实测 `e0000347`（204 字节）如下：
