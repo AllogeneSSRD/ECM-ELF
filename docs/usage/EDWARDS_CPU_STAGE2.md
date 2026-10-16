@@ -17,7 +17,7 @@ ecm_cpu_stage2.exe --save ed.save --b2 100000000 --results results.jsonl --submi
 
 Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保存的 N 确实等于 2^127−1。一般整数可省略 exponent；梅森余因子必须显式提供 `--exponent P` 和可重复的 `--known-factor DECIMAL`，程序验证 `(2^P−1)/∏known-factors = N`，不会按位宽猜指数。输入存档与结果文件不能指向同一个文件。
 
-`--backend auto|ntt|plain` 默认 auto：沿用依赖源码 `NTT_SIZE_THRESHOLD=30`，不超过 30 个 GMP limb 使用 NTT，更宽使用非 NTT 多项式。当前 64 位 limb 对应约 1920 位分界。这是静态启发式，不能保证每个 B2 上最快；显式选项可覆盖。`--threads` 默认 1，控制 libecm 内部 OpenMP 线程，曲线仍逐条串行处理。
+`--backend auto|ntt|plain` 默认 auto：沿用依赖源码 `NTT_SIZE_THRESHOLD=30`，不超过 30 个 GMP limb 使用 NTT，更宽使用非 NTT 多项式。当前 64 位 limb 对应约 1920 位分界。这是静态启发式，不能保证每个 B2 上最快；显式选项可覆盖。`--threads` 默认 1，只设置 libecm 的 OpenMP 线程上限。当前普通多项式主路径串行；NTT 有局部表示转换并行，核心 `mpzspv_mul_ntt` 的并行开关仍关闭，不能视为完整多线程 Stage2。曲线也逐条串行处理。性能比较须结合实际 CPU 时间/墙钟核对占用，不能把设置 4 线程等同于四核加速。
 
 `--b2` 使用精确十进制整数，当前入口限制到 10^12，必须大于所选记录的 B1。`--memory-mib` 默认 512，传给 libecm 的内存规划器；它不限制进程工作集，也不包含所有 GMP/运行时开销。较小预算可能增加分块数并显著变慢。`--dry-run` 只校验文件身份和目标元数据，不执行算术或完整内存规划。
 
