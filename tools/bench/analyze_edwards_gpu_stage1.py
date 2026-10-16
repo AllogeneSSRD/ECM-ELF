@@ -39,6 +39,16 @@ def audit(folder, bits, models, curves, *, partial=False, window=None):
     with zipfile.ZipFile(folder/'sources.zip') as archive:
         for name, digest in r['source_sha256'].items():
             assert hashlib.sha256(archive.read(name)).hexdigest() == digest, name
+        tier_path='src/cuda/ecm_cuda_edwards_tiers.inc'
+        edwards_tiers=None
+        if tier_path in archive.namelist():
+            edwards_tiers=[tuple(map(int,pair)) for pair in re.findall(r'ECM_EDWARDS_TIER\((\d+),(\d+)\)',archive.read(tier_path).decode())]
+            cache=(folder/'CMakeCache.txt').read_text(encoding='utf-8-sig')
+            chosen=re.search(r'^ECM_TIERS:STRING=(.*)$',cache,re.M)
+            assert chosen
+            if chosen[1].strip():
+                allowed={int(x) for x in chosen[1].strip().split(',')}
+                edwards_tiers=[tier for tier in edwards_tiers if tier[0] in allowed]
     with zipfile.ZipFile(folder/'tools.zip') as archive:
         assert hashlib.sha256(archive.read('tools/bench/bench_edwards_gpu_stage1.py')).hexdigest() == r['test_sha256']
     expected = {(n,m,i) for n in bits for m in models for i in range(-1,3)}
@@ -66,6 +76,12 @@ def audit(folder, bits, models, curves, *, partial=False, window=None):
         geometry = s['geometry'][0]
         assert geometry['tpb'] == 128 and geometry['blocks'] == (curves+128//geometry['tpi']-1)//(128//geometry['tpi'])
         if s['model'].startswith('ed'):
+            if edwards_tiers is not None:
+                assert edwards_tiers
+                expected_tier=next(tier for tier in edwards_tiers if s['bits']<tier[0])
+                assert (geometry['container_bits'],geometry['tpi']) == expected_tier
+                assert re.findall(r'GPU Edwards geometry: container_bits=(\d+) tpi=(\d+) tpb=(\d+) blocks=(\d+)',text)==[
+                    tuple(str(geometry[k]) for k in ('container_bits','tpi','tpb','blocks'))]
             timer = re.findall(r'GPU Edwards arithmetic: algorithm=(\w+) api_seconds=([\d.]+)', text)
             assert [float(x[1]) for x in timer] == ([] if s['arithmetic_api_seconds'] is None else [s['arithmetic_api_seconds']])
             assert bool(s['naf_metrics']) == (s['model'] != 'ed-binary')
@@ -84,6 +100,9 @@ def audit(folder, bits, models, curves, *, partial=False, window=None):
                 assert (metric['dictionary_gpu_ms']+metric['loop_gpu_ms'])/1000 <= s['arithmetic_api_seconds']+0.001
             if s['arithmetic_api_seconds'] is not None:
                 assert 0 < s['arithmetic_api_seconds'] <= s['process_seconds']
+        else:
+            printed=re.findall(r'CGBN<(\d+),\s*(\d+)> kernel, N is (\d+) bits \((\d+) blocks x (\d+) threads\)',text)
+            assert printed==[tuple(str(geometry[k]) for k in ('tpi','container_bits','bits','blocks','tpb'))]
         if not s['warmup']:
             groups.setdefault((s['bits'],s['model']), []).append(s)
     rows = []
@@ -116,8 +135,24 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--evidence', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--suite', help='Audit one complete three-family suite instead of the historical study')
     a = p.parse_args(); evidence = a.evidence.absolute(); out = a.output.absolute()
     out.mkdir(parents=True, exist_ok=False)
+    if a.suite:
+        suite=audit(evidence/a.suite,[347,677,991,2203,4003,8191],['ed','mont0','mont3'],768,window=6)
+        report=dict(complete=True,device=1,uuid=UUID,b1=10000,curves=768,formal_samples=54,
+                    warmup_samples=18,suites=[suite],comparison=suite['rows'],analyzer_sha256=sha(Path(__file__)),
+                    statement='Three curve families in one executable; complete fresh-process wall, not factor-finding efficiency.')
+        (out/'summary.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
+        with (out/'comparison.csv').open('w',newline='',encoding='utf-8') as target:
+            writer=csv.writer(target)
+            writer.writerow(['bits','model','curves','b1','container_bits','tpi','median_seconds','min_seconds','max_seconds','mad_seconds','exe_sha256','evidence'])
+            for row in sorted(suite['rows'],key=lambda r:(r['bits'],r['model'])):
+                stat=row['process_seconds'];g=row['geometry']
+                writer.writerow([row['bits'],row['model'],row['curves'],row['b1'],g['container_bits'],g['tpi'],
+                                 stat['median'],stat['min'],stat['max'],stat['mad'],row['binary_sha256'],row['evidence']])
+        print(json.dumps(dict(complete=True,formal_samples=54,binary_sha256=suite['binary_sha256']),indent=2))
+        return
     suites = [audit(evidence/'bench_initial_01',[347,677,991,2203,4003],MODELS,768,partial=True),
               audit(evidence/'bench_initial_wide_01',[8191],MODELS,768),
               audit(evidence/'bench_paired_01',[347,677,991,2203,4003,8191],['ed-binary','ed'],768,window=6)]

@@ -279,14 +279,61 @@ def plot_doubling(suites, source, conditions):
     return fig
 
 
+def plot_comparison(report, source, conditions):
+    """Current same-executable NAF/PARAM0/PARAM3 cost, with no cross-build ratio."""
+    require(report.get('complete') is True and report['formal_samples']==54 and
+            report['warmup_samples']==18, 'Need a complete audited three-family matrix')
+    require(len(report['suites'])==1 and report['comparison']==report['suites'][0]['rows'],
+            'Comparison differs from its audited suite')
+    rows=report['comparison']
+    index={(r['bits'],r['model']):r for r in rows}
+    require(len(rows)==18 and set(index)=={(b,m) for b in WIDTHS for m in ['ed','mont0','mont3']},
+            'Different comparison matrix')
+    require(len({r['binary_sha256'] for r in rows})==1, 'Need one executable')
+    fig,axes=plt.subplots(1,2,figsize=(13.6,6.8))
+    colors=[COLORS[1],COLORS[0],COLORS[2]]
+    for j,(model,color) in enumerate(zip(['ed','mont0','mont3'],colors)):
+        for i,bits in enumerate(WIDTHS):
+            row=index[bits,model]
+            require(row['b1']==10000 and row['curves']==768,'Different comparison workload')
+            stat=row['process_seconds']
+            require(len(stat['samples'])==3 and statistics.median(stat['samples'])==stat['median'],
+                    'Invalid process samples')
+            observations(axes[0],i+(j-1)*.22,stat,color)
+            reference=index[bits,'mont3']['process_seconds']['median']
+            observations(axes[1],i+(j-1)*.22,stat,color,reference)
+    axes[0].set_yscale('log')
+    axes[0].yaxis.set_major_locator(FixedLocator([.25,.5,1,2,5,10,20,50,100]))
+    axes[0].yaxis.set_major_formatter(FuncFormatter(lambda x,_:f'{x:g}'))
+    axes[0].set_title('Complete process time',fontsize=11)
+    axes[1].set_title('Cost relative to PARAM3 median',fontsize=11)
+    axes[1].axhline(1,color='#7c858d',linestyle='--',linewidth=.8)
+    for ax,ylabel in zip(axes,['Seconds / batch (log scale)','Time / PARAM3 median (ratio; lower is faster)']):
+        style(ax,ylabel)
+        categories(ax,[str(b) for b in WIDTHS],'Mersenne exponent p (categorical spacing)')
+    legend(fig,['Edwards NAF w=6 / HWCD','Montgomery PARAM0','Montgomery PARAM3'],colors)
+    frame(fig,'Fine-tier Stage1: three curve families in one executable',768,
+          ['Fresh-process wall includes startup, scalar/curve setup, GPU, GCD/normalization and save; CPU oracle excluded.',
+           'Edwards uses 48*lcm; Montgomery uses lcm. Relative cost compares implementations, not factor-finding probability.',
+           f"Exe SHA256 {rows[0]['binary_sha256'][:12]}; source suite {report['suites'][0]['evidence']}. No cross-build speedup."],
+          source,conditions)
+    return fig
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=ROOT / "data/benchmarks" / STUDY / "final_02/summary.json")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "data/figures" / STUDY)
     parser.add_argument("--manifest", type=Path, default=ROOT / "data/benchmarks" / STUDY / "plots_01.json")
+    parser.add_argument('--comparison', action='store_true', help='Plot an audited --suite three-family report')
     args = parser.parse_args()
     report = json.loads(args.input.read_text(encoding="utf-8"))
-    suites = validate(report)
+    if args.comparison:
+        require(report['device']==1 and report['uuid']=='GPU-8a67b1f8-ef1c-3177-a822-813a7ac2224d',
+                'Different comparison device')
+        suites={s['evidence']:s for s in report['suites']}
+    else:
+        suites = validate(report)
     # This script plots the qualified GPU1 study, not arbitrary hardware/B1 inputs.
     telemetry = [s["loaded_telemetry"] for s in suites.values()]
     observed = {k: [min(s[k]["min"] for s in telemetry), max(s[k]["max"] for s in telemetry)]
@@ -299,11 +346,12 @@ def main():
                          "svg.hashsalt": STUDY, "savefig.dpi": 180})
     args.output_dir.mkdir(parents=True, exist_ok=True)
     outputs = []
-    for name, figure in [
+    figures=[('comparison',lambda:plot_comparison(report,source,conditions))] if args.comparison else [
             ("initial", lambda: plot_initial(report, suites, source, conditions)),
             ("paired_naf", lambda: plot_paired(suites, source, conditions)),
             ("windows", lambda: plot_windows(suites, source, conditions)),
-            ("doubling", lambda: plot_doubling(suites, source, conditions))]:
+            ("doubling", lambda: plot_doubling(suites, source, conditions))]
+    for name, figure in figures:
         fig = figure()
         for ext in ("png", "svg"):
             path = args.output_dir / f"{name}.{ext}"
@@ -317,12 +365,12 @@ def main():
                     formal_samples=report["formal_samples"], warmup_samples=report["warmup_samples"],
                     binaries={n: s["binary_sha256"] for n, s in suites.items()},
                     statistics="All three formal runs, median and observed min/max; no confidence intervals.",
-                    normalization="Paired: per-width binary median; windows: per-width w6 median; doubling: per-width HWCD median. Timer boundaries stay separate.",
+                    normalization="Per-width PARAM3 process median; implementation cost only." if args.comparison else "Paired: per-width binary median; windows: per-width w6 median; doubling: per-width HWCD median. Timer boundaries stay separate.",
                     dictionary="Derived curves * (container_bits/8) * 4 * 2^(window-2); logical allocation only.",
                     outputs=outputs)
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"Wrote {len(outputs)} PNG/SVG files; 144 formal samples retained. Manifest: {args.manifest}")
+    print(f"Wrote {len(outputs)} PNG/SVG files; {report['formal_samples']} formal samples retained. Manifest: {args.manifest}")
 
 
 if __name__ == "__main__":

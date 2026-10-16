@@ -8,7 +8,62 @@ CUDA Montgomery 默认 ladder、TPB128、按容器选择 TPI，分档寄存器�
 
 计时先预热，再按相反/交错顺序重复，保留完整矩阵、失败和原始日志。管理员 NCU 会重放，采集时间不作吞吐；Nsight Systems 的自身事件间隙不等于整卡空闲比例。
 
+## GPU Edwards 细分实例三曲线族对照
+
+当前Edwards使用[32档最小可用容器](../architecture/STAGE1.md#gpu-edwards)，核函数和七组实例化文件位于 `kernels/cuda/`，保留17408档上限。以下为同一新exe的Edwards NAF、Montgomery PARAM0与PARAM3完整批次成本，不比较曲线族的因子发现概率。
+
+### 条件与计时
+
+GPU1 RTX4060 Laptop、24 SM、UUID `GPU-8a67b1f8-ef1c-3177-a822-813a7ac2224d`，驱动610.88、CUDA13.3、MSVC14.51.36231、sm89、无PTX。exe SHA256=`fa8b903e9186dada7055e61176fff237411b575c4707a04541f5cc50e15ad3eb`，产品源码对应实例扩展提交 `ec47b0c`。构建为通用Montgomery域、TPB128、resident/PRAC关闭，保留当前分档寄存器策略。
+
+输入为完整 `M_p=2^p−1`，B1=10000、每批768条、sigma起点20260922。Edwards采用48·lcm、w6、HWCD；Montgomery采用lcm与ladder。每组排除一次设备预热，再交错/反序采集三次正式样本；每次是新进程，CUDA上下文/模块加载仍计入。完整进程wall包含启动、标量/曲线准备、GPU、GCD/归一化及save，排除独立CPU末点核对。此边界不能与嵌套的算术入口或CUDA event区间相加。
+
+硬件设置保持原值。利用率≥50%的457个离散遥测点中，SM均为1500MHz，观测功耗8.90…26.51W、温度57…68°C，功耗上限查询N/A；不声明锁频或55W。利用率窗口与瞬时功耗不同步；这一批的温度与采样条件不能直接合并到下文冻结参考。
+
+### 完整进程成本
+
+![GPU1细分实例同exe三曲线族完整进程成本](../../data/figures/edwards_fine_tiers_20261016/comparison.png)
+
+左面板为秒/批的对数轴；右面板把每个样本除以同位宽PARAM3的进程中位数，越低表示成本越小。实心点为中位数，空心点保留全部三次正式样本，误差线仅是实测最小值至最大值，不是置信区间。[矢量图](../../data/figures/edwards_fine_tiers_20261016/comparison.svg)。
+
+| 输入 | Edwards NAF 秒/批 | PARAM0 秒/批 | PARAM3 秒/批 | NAF/PARAM3成本比 | Edwards容器/TPI | Montgomery容器/TPI |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| M347 | 0.9537 | 0.6228 | 0.6062 | 1.573 | 384/4 | 384/4 |
+| M677 | 1.1098 | 0.6719 | 0.6457 | 1.719 | 768/8 | 768/8 |
+| M991 | 1.1686 | 0.8531 | 0.7538 | 1.550 | 1024/8 | 1024/8 |
+| M2203 | 2.5931 | 2.6388 | 1.8226 | 1.423 | 2560/16 | 2560/16 |
+| M4003 | 5.7542 | 4.6686 | 3.7624 | 1.529 | 4096/16 | 4096/16 |
+| M8191 | 16.6265 | 20.3712 | 16.5450 | 1.005 | 8192/16 | 9216/32 |
+
+前五个输入的容器/TPI已经一致；8191位按Edwards一位余量使用8192/TPI16，Montgomery按六位余量使用9216/TPI32。不同曲线构造、状态坐标、切片和准备开销仍存在，不能把整进程比值解释为纯点公式代价。表值除以768仅是批量摊销值，不是单曲线串行耗时。
+
+本矩阵前五个位宽的NAF中位成本为PARAM3的1.423…1.719倍。M8191为1.005倍，NAF范围16.4140…16.7420秒与PARAM3范围16.5397…16.5563秒重叠，所测完整成本接近。M347/M677的NAF范围分别为0.6381…1.0394、0.7084…1.6228秒，新进程离散明显；不把三次中位数视为稳定算法倍数。M2203的NAF与PARAM0范围也重叠，不能据中位数微小差异宣布稳定领先。
+
+本表不与下文不同exe的七档数据相除来宣称细分容器的独立加速比例，也不外推生产B1、常驻队列吞吐、其他设备或全局最优TPI/窗口。
+
+### 验收、证据与复现
+
+完整[验收记录](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)覆盖32档、131组探针/537条逻辑曲线组合、70条CLI检查、旧V1/V2跨容器恢复及Stage2交接。正式性能采集还核对每条记录和重复稳定性，首尾曲线用独立整数梯形计算；六个位宽共4608条Edwards归一化记录与冻结七档NAF逐字节一致，汇总为 `data/benchmarks/edwards_fine_tiers_20261016/endpoint_identity_01.json`。
+
+正式采集共72个完整批次：54个正式样本、18个排除的预热。原始证据为 `data/experiments/edwards_fine_tiers_20261016/bench_01/`，审计汇总为 `data/benchmarks/edwards_fine_tiers_20261016/comparison_01/summary.json` 和 `comparison.csv`；汇总SHA256=`158da9ec62537d18a2a59f9fb0ee3c8b2d48e9420d32aad0e961640fdd0f8665`。程序/GMP、源与工具快照、编译命令、设备遥测、日志和save摘要均保留。审计同时核对新Edwards实例清单、实际编入档位及两种Montgomery的原日志几何信息。
+
+采集入口为[批次基准](../../tools/bench/bench_edwards_gpu_stage1.py)，完整参数保存在原始 `summary.json` 的 `command`。审计输出须使用新目录；以下示例重新审计同份原始证据并重绘，不重新运行GPU：
+
+```powershell
+python tools/bench/analyze_edwards_gpu_stage1.py `
+  --evidence data/experiments/edwards_fine_tiers_20261016 --suite bench_01 `
+  --output data/benchmarks/edwards_fine_tiers_20261016/comparison_new
+python tools/bench/plot_edwards_gpu_stage1.py --comparison `
+  --input data/benchmarks/edwards_fine_tiers_20261016/comparison_new/summary.json `
+  --output-dir data/figures/edwards_fine_tiers_20261016 `
+  --manifest data/benchmarks/edwards_fine_tiers_20261016/plots_new.json
+```
+
+图表以Python/matplotlib生成，输入、脚本和图表摘要记录于 `plots_01.json`。图和汇总按规则保存在Git忽略的 `data/`，新工作区需要取得相同证据后生成；Git维护脚本与文档。
+
 ## GPU Edwards 初始基准与 NAF 对照
+
+以下为冻结七档容器版本的初始基准和NAF/窗口对照；当前32档构建及三曲线族成本见上节。它们保留各自构建与计时条件，不表示当前程序的绝对性能。
 
 ### 输入、设备与计时
 

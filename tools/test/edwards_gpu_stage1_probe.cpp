@@ -16,17 +16,24 @@ static void identity(mpz_t *s,const mpz_t d,const mpz_t x,const mpz_t y,const mp
     mpz_mul(s[4],x,y);mpz_mod(s[4],s[4],n);mpz_set_ui(s[6],1);mpz_set_ui(s[7],1);
 }
 static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int device,
-                const std::filesystem::path &out,unsigned other=0,unsigned window=0,int algorithm=4,bool prime=false) {
+                const std::filesystem::path &out,unsigned other=0,unsigned window=0,int algorithm=4,bool boundary_input=false) {
     Integer n,s,d,x,y,a,f,old_d,old_x,old_y,cpu_x,cpu_z,qx,qz,lhs,rhs,g,inv;
     mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,bits);mpz_sub_ui(n.v,n.v,1);
-    if(prime){
-        // All three execution modes use the same boundary input. Generating a
-        // large probable prime is setup work, not another arithmetic test.
-        static Integer boundary;static unsigned boundary_bits=0;
-        if(boundary_bits!=bits){
-            mpz_sub_ui(n.v,n.v,1048576);mpz_nextprime(boundary.v,n.v);
-            require(mpz_sizeinbase(boundary.v,2)==bits,"boundary prime crossed requested width");
-            boundary_bits=bits;
+    if(boundary_input){
+        // ECM arithmetic is defined over odd composite moduli as well. Select
+        // a near-limit odd N with valid curve setup; primality is irrelevant.
+        // Never select/skip an input based on a GPU or scalar-multiplication result.
+        static Integer boundary;static unsigned boundary_bits=0,boundary_count=0;
+        static uint64_t boundary_sigma=0;
+        if(boundary_bits!=bits || boundary_count!=count || boundary_sigma!=sigma){
+            bool ready=false;
+            for(unsigned offset=0;offset<4096 && !ready;++offset){
+                mpz_sub_ui(boundary.v,n.v,2*offset);ready=true;
+                for(unsigned i=0;i<count && ready;++i)
+                    ready=construct(d.v,x.v,y.v,a.v,f.v,sigma+i,boundary.v)==Setup::Ready;
+            }
+            require(ready && mpz_sizeinbase(boundary.v,2)==bits,"no valid near-boundary modulus");
+            boundary_bits=bits;boundary_count=count;boundary_sigma=sigma;
         }
         mpz_set(n.v,boundary.v);
     }
@@ -68,7 +75,7 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
         if(mpz_cmp_ui(g.v,1)==0){mpz_invert(inv.v,qz.v,n.v);mpz_mul(qx.v,qx.v,inv.v);mpz_mod(qx.v,qx.v,n.v);lines+=save_line(n.v,qx.v,sigmas[i],b1,false);}
         else if(mpz_cmp(g.v,n.v)<0)lines+=save_line(n.v,g.v,sigmas[i],b1,true);
     }
-    const auto name=std::string(prime?"p":"m")+std::to_string(bits)+(other?"x"+std::to_string(other):"")+"_b"+std::to_string(b1)+
+    const auto name=std::string(boundary_input?"n":"m")+std::to_string(bits)+(other?"x"+std::to_string(other):"")+"_b"+std::to_string(b1)+
         (window?"_w"+std::to_string(window)+"_a"+std::to_string(algorithm):"");
     std::ofstream file(out/(name+".save"),std::ios::binary);file<<lines;file.close();require(bool(file),"save fixture write failed");
     std::printf("PASS %s device=%d curves=%u columns=%u split_resume=17/113 cpu_match=1 tier=%u tpi=%u\n",name.c_str(),device,count,done,container,tpi);
@@ -78,6 +85,9 @@ int main(int argc,char **argv) {
     try {
         if(argc!=3 && argc!=4)throw std::runtime_error("usage: edwards_gpu_stage1_probe DEVICE OUTPUT_DIRECTORY [SINGLE_COMPILED_TIER]");
         const int device=std::atoi(argv[1]);std::filesystem::path out(argv[2]);std::filesystem::create_directories(out);
+        // Short-scalar oracle: use the existing CPU implementation at w=2,
+        // avoiding a fixed 1024-point CPU dictionary for 32-column tests.
+        edwards_set_naf_w(2);
         if(argc==4){
             const unsigned expected=unsigned(std::stoul(argv[3]));uint32_t w=0,t=0;
             require(ecm_cuda_edwards_tier(1,w,t) && w==expected,"restricted minimum/fallback failed");
@@ -97,7 +107,7 @@ int main(int argc,char **argv) {
             require(t==expected_tpi,"TPI dispatch failed");
             const bool next=ecm_cuda_edwards_tier(tiers[i],w,t);
             require(i+1<std::size(tiers)?next && w==tiers[i+1]:!next && !w && !t,"one-spare-bit boundary failed");
-            // Prime targets avoid curve-setup factors at synthetic container boundaries.
+            // Synthetic odd targets exercise every container's upper bit boundary.
             run(tiers[i]-1,20,1,17,device,out,0,0,4,true);
             for(int algorithm:{4,5})run(tiers[i]-1,20,1,17,device,out,0,6,algorithm,true);
         }

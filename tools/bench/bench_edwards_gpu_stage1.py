@@ -209,8 +209,16 @@ def main():
                     naf_metrics = re.findall(r'GPU Edwards NAF: columns=(\d+) additions=(\d+) container_bits=(\d+) tpi=(\d+) dictionary_bytes=(\d+) dictionary_gpu_ms=([\d.]+) loop_gpu_ms=([\d.]+) launches=(\d+)', text)
                     if edwards:
                         assert ('GPU Edwards NAF:' in text) == (model != 'ed-binary'), ('unexpected Edwards execution mode', name)
-                        tier = next((w, t) for w, t in [(256,4),(512,4),(1024,8),(2048,16),(4096,16),(8192,32),(17408,32)] if bits < w)
-                        geometry = [dict(container_bits=tier[0], tpi=tier[1], tpb=128, blocks=(a.curves+(128//tier[1])-1)//(128//tier[1]), basis='checked dispatcher source')]
+                        reported = re.findall(r'GPU Edwards geometry: container_bits=(\d+) tpi=(\d+) tpb=(\d+) blocks=(\d+)', text)
+                        # Old frozen binaries used seven fixed tiers and no geometry line.
+                        # New split builds report their actually compiled dispatch result.
+                        if reported:
+                            assert len(reported) == 1
+                            w,t,tpb,blocks = map(int,reported[0]);tier=(w,t)
+                            assert bits < w and tpb == 128 and blocks == (a.curves+128//t-1)//(128//t)
+                        else:
+                            tier = next((w, t) for w, t in [(256,4),(512,4),(1024,8),(2048,16),(4096,16),(8192,32),(17408,32)] if bits < w)
+                        geometry = [dict(container_bits=tier[0], tpi=tier[1], tpb=128, blocks=(a.curves+(128//tier[1])-1)//(128//tier[1]), basis='worker geometry' if reported else 'checked dispatcher source')]
                         # An old baseline has no API timer; never manufacture it.
                         if arithmetic: assert len(arithmetic) == 1 and arithmetic[0][0] == ('binary' if model == 'ed-binary' else 'naf')
                         if model != 'ed-binary':

@@ -19,3 +19,21 @@
 384单档构建只含该档GPU实例，三个模式（binary、NAF HWCD、NAF 2XY）各33曲线的CPU末点、17/113切片停止恢复均通过，共99条组合；同时核对缺档回退和无足够容器时的查询结果。原始日志、资源及清单为 `restricted_384*`。独立探针复用CMake对象时暴露运行库不一致，已使编译与链接显式使用 `/MD`，保留 `probe_link_01.log`。最终探针构建采用 `probe_build_03.log`。
 
 边界测试输入生成与算术验收分离，同位宽的三个模式复用同一边界整数。首次探针轮次 `validation_01` 因重复素数生成而中断，原始输出与二进制保留，不标完成；当前轮次为 `validation_02`。实现阶段提交时，128..16384的31档边界算术及恢复已与CPU一致；17408档、原有梅森/复合目标用例及完整流水线仍在运行。性能正式样本数仍为0。正式状态与验收范围将在完整门禁和性能采集后同步。
+
+## 2026-10-16：完整正确性门禁
+
+最终验收为 `data/experiments/edwards_fine_tiers_20261016/validation_03/`，主worker仍为上述 `fa8b903e...`。131组探针覆盖全部32档、537条逻辑曲线组合，全部核对CPU投影末点、GCD、点不变量，以及17列停止/113列继续的逐坐标一致性；包含原有梅森/复合输入、多窗口、两种NAF倍点和部分block。pipeline 29、边界9、恢复23及小素数9共70条CLI检查全部通过，包含旧binary V1和旧七档NAF V2恢复；V2的M677实际从1024档恢复到768档，归一化记录一致。Stage2交接与叶值独立核对通过。
+
+边界补充用例使用接近容器上界的奇数模数，只按曲线构造 `Setup::Ready` 选择输入，不依据GPU或点乘结果筛选；CPU参考使用现有实现的w2，保留全部末点/GCD比较。素数搜索与默认CPU w12字典对短标量验收没有必要，故 `validation_01/02` 的未完成输出保留，最终完整范围以 `validation_03` 为准。最终probe构建日志为 `probe_build_04.log`，SHA256=`c1b17d070be375a8858c7dc098fd5cdaaf50321b47dbb92ef7a615bcd7ab5f9f`。
+
+最终 `/MD` 单档入口再次通过384档的3组、99条逻辑曲线组合，证据为 `restricted_384_final.log` 和 `final_restricted_manifest.json`。汇总 `data/benchmarks/edwards_fine_tiers_20261016/qualification_01.json` 核对所有清单/日志摘要；原始工作程序、探针及各自GMP运行库在 `validation_03/bin/` 独立冻结。完整三曲线族性能矩阵另行采集，不把正确性运行的时间计入正式性能。
+
+## 2026-10-16：三曲线族性能与图表验收
+
+阶段目标已完成：32档实例、七组内核CU和8路并行构建经过完整正确性门禁；同一完整worker在GPU1上完成Edwards NAF w6/HWCD、Montgomery PARAM0和PARAM3的六个位宽对照。输入为M347/M677/M991/M2203/M4003/M8191、B1=10000、768条/批、sigma=20260922；18个预热排除，54个正式完整批次全部保留，原始证据为 `data/experiments/edwards_fine_tiers_20261016/bench_01/`。新旧两版六个位宽的4608条Edwards归一化记录逐字节相同，见 `data/benchmarks/edwards_fine_tiers_20261016/endpoint_identity_01.json`。
+
+审计汇总为 `data/benchmarks/edwards_fine_tiers_20261016/comparison_01/summary.json`，SHA256=`158da9ec62537d18a2a59f9fb0ee3c8b2d48e9420d32aad0e961640fdd0f8665`；数据、计时边界、硬件功耗及结论统一维护在[正式性能说明](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)。M8191完整进程中位数为NAF 16.6265秒、PARAM0 20.3712秒、PARAM3 16.5450秒；前五个位宽的NAF/PARAM3成本比为1.423…1.719，短任务有明显新进程离散，不能宣称统一领先或细分实例的独立加速比例。
+
+图表由现有绘图入口的 `--comparison` 模式生成到 `data/figures/edwards_fine_tiers_20261016/comparison.png`、`comparison.svg`，身份见 `plots_01.json`。`plot_validation_01.json` 核对54个原始样本、两面板108个观测点、CSV和正式文档数值；PNG/SVG可解析、重生成逐字节相同。私有内存中的五类错误元数据（缺样本、错误exe、错误wall、错误Edwards/Montgomery几何）均被审计拒绝，原始证据未修改；旧144样本审计回归与冻结汇总除审计脚本身份外一致。
+
+正式架构、构建、性能说明和TODO已同步。后续生产B1/B2、其他设备、常驻队列、批量和TPI/窗口标定仍待独立验收。本临时草稿保留，待用户决定如何处理。
