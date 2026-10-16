@@ -8,7 +8,7 @@
 
 Montgomery 路径的 `lcm=1` 使用 lcm(1…B1)，`lcm=12` 在该标量上乘 12。后者会改变保存点和因子发现范围，比较程序或生成测试存档时必须明确口径。Edwards 路径固定使用 48·lcm(1…B1)，不接受 `lcm=12`。`ecm_cuda.exe` 可用 `--curve ed --target gpu` 或同名 INI 键运行 GPU Edwards；OpenCL 不支持该组合。CUDA PARAM0 和 Edwards 可使用完整 64 位 sigma；PARAM2/3 的批次受 32 位窗口限制。
 
-GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` 和 `--go`。已知素因子的Edwards群阶、点阶及分解可用[独立PARI入口](DATASET.md#edwards群阶与点阶)计算。默认使用窗口 NAF，`--naf-w 0` 在 GPU 选择窗口 6，显式允许 2..12；每片最多 256 个 NAF 列，在 CPU 上构造曲线、检查结果及求 GCD。窗口越大，GPU 字典显存和准备成本越高。旧 GPU 二进制检查点会按原算法恢复；显式选择与检查点不符时会报错并保留进度。默认保存名在 `m{n}_{b1}.save` 前添加 `ed_`，显式 `-save` 可指定路径。存档格式、对照选项和适用限制统一见 [GPU Edwards 实现](../architecture/STAGE1.md#gpu-edwards)。GPU Edwards 文本存档交给独立 CUDA Stage2；CPU Edwards 的 Prime95 二进制 `.tmp` 格式保持独立。
+GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` 和 `--go`。已知素因子的Edwards群阶、点阶及分解可用[独立PARI入口](DATASET.md#edwards群阶与点阶)计算。默认使用窗口 NAF，`--naf-w 0` 在 GPU 选择窗口 6，显式允许 2..12；每片最多 256 个 NAF 列，在 CPU 上构造曲线、检查结果及求 GCD。窗口越大，GPU 字典显存和准备成本越高。旧 GPU 二进制检查点会按原算法恢复；显式选择与检查点不符时会报错并保留进度。默认保存名在 `m{n}_{b1}.save` 前添加 `ed_`，显式 `-save` 可指定路径。GPU 算术和检查点限制见 [GPU Edwards 实现](../architecture/STAGE1.md#gpu-edwards)。CPU/GPU Edwards 完成后统一生成多曲线文本 save，供 CUDA Stage2 或 [CPU Stage2](EDWARDS_CPU_STAGE2.md) 读取；旧 CPU 二进制文件仅作为备选输出。
 
 ## 共用 INI 与 worker
 

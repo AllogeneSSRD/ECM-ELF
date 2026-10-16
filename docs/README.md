@@ -1,6 +1,6 @@
 # ECM 项目文档
 
-本仓库提供 CUDA/OpenCL GPU Stage1、CPU Stage1、独立 CUDA 多项式 Stage2，以及 Windows 图形前端和数据集工具。文档描述当前源码；本机已有发布包是否包含某功能，应核对其构建身份。
+本仓库提供 CUDA/OpenCL GPU Stage1、CPU Stage1、独立 CUDA 多项式 Stage2、libecm CPU Edwards Stage2，以及 Windows 图形前端和数据集工具。文档描述当前源码；本机已有发布包是否包含某功能，应核对其构建身份。
 
 CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；使用、存档身份、检查点和当前限制见 [GPU Edwards](architecture/STAGE1.md#gpu-edwards)。
 
@@ -8,6 +8,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 - [Stage1](usage/STAGE1.md)：曲线计算、指数模式、保存点、检查点和 Prime95 交接。
 - [Stage2](usage/STAGE2.md)：读 Stage1 save、任务字段、数量不足、队列续跑、日志和结果。
+- [Edwards CPU Stage2](usage/EDWARDS_CPU_STAGE2.md)：统一文本存档、NTT/非 NTT 续算、结果 JSONL、CRC32 及完整 B2=10^12 实测。
 - [GUI](usage/GUI.md)：worker、队列生成、监控及结果。
 - [构建与发布](usage/BUILD.md)：六组一键入口、GPU 架构、CUDA/GMP 依赖和发布内容。
 - [因子数据集](usage/DATASET.md)：PARAM0数据库、最优sigma、扫描与生产验证，以及Edwards独立群阶/点阶分析。

@@ -1,5 +1,7 @@
 # Stage2 性能与规模关系
 
+libecm CPU Edwards 的 NTT/非 NTT 完整曲线对照、B2=10^12 样本、峰值工作集及图表见 [CPU Stage2 实测](../usage/EDWARDS_CPU_STAGE2.md#验证与实测)，与本页其他 CPU 参考程序分别计量。
+
 本页的实验结论只适用于各节注明的冻结二进制、输入及统计边界。性能文件的当前复用、选型及估算规则以[Auto B2/tune](../architecture/AUTO_B2.md)为准；格式2/3/4测量的误差资格不能直接作为当前跨范围模型的精度证明。
 
 独立NTT算子的Tensor64/40、2⁸–2²⁶长度、batch/CTA及Graph提交实验，统一见[Tensor NTT性能](NTT_TENSOR.md)。当前实验不支持改变生产默认，算子秒数不与本页完整Stage2秒数混用。

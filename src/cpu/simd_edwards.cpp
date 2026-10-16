@@ -843,11 +843,11 @@ void ed_soa_clear(ed_soa_ctx_t *c)
 /* per-lane batch inversion of m values, mirroring mpz_batch_invert.
    mpz_t is an array type: MSVC rejects std::vector<mpz_t>(n) (C3074), so the
    scratch here is a malloc'd mpz_t array with explicit init/clear. */
-static void soa_batch_invert(mpz_t *iz, mpz_t *z, size_t m, const mpz_t N)
+static bool soa_batch_invert(mpz_t *iz, mpz_t *z, size_t m, const mpz_t N)
 {
-    if (m == 0) return;
+    if (m == 0) return true;
     mpz_t *prefix = (mpz_t *)malloc(m * sizeof(mpz_t));
-    if (!prefix) return;
+    if (!prefix) return false;
     for (size_t i = 0; i < m; i++) mpz_init(prefix[i]);
     mpz_set(prefix[0], z[0]);
     for (size_t i = 1; i < m; i++) {
@@ -883,6 +883,7 @@ static void soa_batch_invert(mpz_t *iz, mpz_t *z, size_t m, const mpz_t N)
     mpz_clear(inv);
     for (size_t i = 0; i < m; i++) mpz_clear(prefix[i]);
     free(prefix);
+    return inv_ok!=0;
 }
 
 int ed_soa_set_curves(ed_soa_ctx_t *c, const uint64_t *sigma, int lanes)
@@ -962,8 +963,14 @@ int ed_soa_set_curves(ed_soa_ctx_t *c, const uint64_t *sigma, int lanes)
         const uint64_t *zv = base + 2 * lane_words;
         for (int k = 0; k < lanes; k++) ifma_to_mpz_lane(zval[k * c->m + j], zv, (unsigned)k, mc);
     }
+    bool inverses_ok=true;
     for (int k = 0; k < lanes; k++)
-        soa_batch_invert(zinv + k * c->m, zval + k * c->m, c->m, mc->N);
+        if(!soa_batch_invert(zinv + k * c->m, zval + k * c->m, c->m, mc->N))inverses_ok=false;
+    if(!inverses_ok) {
+        for(int k=0;k<lanes;++k)for(size_t j=0;j<c->m;++j){mpz_clear(zval[k*c->m+j]);mpz_clear(zinv[k*c->m+j]);}
+        free(zval);free(zinv);_mm_free(bx);_mm_free(by);_mm_free(bz);_mm_free(bt);
+        mpz_clears(d,px,py,t,NULL);return -4;
+    }
 
     /* 诊断: 逐 lane 统计 Z 与 N 不互素的字典项 (这些项会让该 lane 的字典报废) */
     c->bad_inv = 0;

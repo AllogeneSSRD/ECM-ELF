@@ -1,5 +1,8 @@
 #pragma once
 #include "ecm_edwards_curve.h"
+#include "ecm_stage1_checkpoint_runtime.h"
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -21,6 +24,19 @@ inline std::string save_line(const mpz_t n,const mpz_t x,uint64_t sigma,uint64_t
     return "METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM; SIGMA="+std::to_string(sigma)+
         "; B1="+std::to_string(b1)+"; N=0x"+nh+"; X=0x"+xh+"; STATUS="+
         (factor?"FACTOR":"POINT")+"; CHECKSUM="+std::to_string(save_checksum(nh,xh,sigma,b1,factor))+";\n";
+}
+inline bool publish_save(const std::string &path,const std::string &lines,bool append) {
+    const auto temp=ecm_stage1_checkpoint_temp_path(path);
+    std::ofstream out(temp,std::ios::binary|std::ios::trunc);if(!out)return false;
+    std::error_code error;
+    const bool exists=std::filesystem::exists(path,error);
+    if(error)return false;
+    if(append && exists){
+        std::ifstream old(path,std::ios::binary);if(!old)return false;
+        if(old.peek()!=std::char_traits<char>::eof())out<<old.rdbuf();
+        if(old.bad())return false;
+    }
+    out<<lines;out.close();return bool(out) && ecm_stage1_commit_checkpoint(path,temp);
 }
 // Validate raw extended coordinates; reducing corrupt input would hide errors.
 inline bool point_valid(const mpz_t n,const mpz_t d,mpz_t *p) {

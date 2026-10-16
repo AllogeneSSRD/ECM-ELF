@@ -19,6 +19,7 @@
 
 #include "ecm_edwards_cpu.h"
 #include "ecm_edwards_mont.h"
+#include "../core/ecm_edwards_curve.h"
 
 // 标量乘算法开关: 1 = w-NAF + 仿射字典 (默认), 0 = double-and-add (基准).
 #define ECM_EDWARDS_USE_NAF 1
@@ -306,15 +307,24 @@ static void ed_add_affine_mont(ed_point_mont &r, const ed_point_mont &p, const e
 }
 
 // 批量求逆 (mpz): iz[i] = z[i]^{-1} mod N, 一次 mpz_invert + O(n) 乘
-static void mpz_batch_invert(mpz_t *iz, mpz_t *z, size_t n, const mpz_t N) {
-    if (n == 0) return;
+static bool mpz_batch_invert(mpz_t *iz, mpz_t *z, size_t n, const mpz_t N,mpz_ptr factor) {
+    if (n == 0) return true;
     std::vector<mpz_t> prefix(n);
     for (size_t i = 0; i < n; i++) mpz_init(prefix[i]);
     mpz_set(prefix[0], z[0]);
     for (size_t i = 1; i < n; i++) { mpz_mul(prefix[i], prefix[i - 1], z[i]); mpz_mod(prefix[i], prefix[i], N); }
     mpz_t inv;
     mpz_init(inv);
-    mpz_invert(inv, prefix[n - 1], N);
+    if(!mpz_invert(inv, prefix[n - 1], N)) {
+        if(factor) {
+            mpz_gcd(factor,prefix[n-1],N);
+            if(mpz_cmp(factor,N)==0)for(size_t i=0;i<n;++i) {
+                mpz_gcd(factor,z[i],N);
+                if(mpz_cmp_ui(factor,1)>0 && mpz_cmp(factor,N)<0)break;
+            }
+        }
+        mpz_clear(inv);for(size_t i=0;i<n;++i)mpz_clear(prefix[i]);return false;
+    }
     for (size_t i = n; i-- > 0;) {
         if (i > 0) {
             mpz_mul(iz[i], inv, prefix[i - 1]); mpz_mod(iz[i], iz[i], N);
@@ -325,15 +335,18 @@ static void mpz_batch_invert(mpz_t *iz, mpz_t *z, size_t n, const mpz_t N) {
     }
     mpz_clear(inv);
     for (size_t i = 0; i < n; i++) mpz_clear(prefix[i]);
+    return true;
 }
 
 // 归一化字典到仿射 (Z=1): 用 mpz 做那 1 次逆, 其余 mont 运算
-static void ed_to_affine_batch_mont(ed_affine_mont *aff, ed_point_mont *pts, size_t n,
-                                    const mont_t *d, const mont_ctx_t *ctx) {
-    if (n == 0) return;
+static bool ed_to_affine_batch_mont(ed_affine_mont *aff, ed_point_mont *pts, size_t n,
+                                    const mont_t *d, const mont_ctx_t *ctx,mpz_ptr factor) {
+    if (n == 0) return true;
     std::vector<mpz_t> z(n), iz(n);
     for (size_t i = 0; i < n; i++) { mpz_init(z[i]); mpz_init(iz[i]); mont_from(z[i], &pts[i].z, ctx); }
-    mpz_batch_invert(iz.data(), z.data(), n, ctx->Nz);
+    if(!mpz_batch_invert(iz.data(), z.data(), n, ctx->Nz,factor)) {
+        for(size_t i=0;i<n;++i){mpz_clear(z[i]);mpz_clear(iz[i]);}return false;
+    }
 
     mont_t izm, xy;
     for (size_t i = 0; i < n; i++) {
@@ -344,15 +357,16 @@ static void ed_to_affine_batch_mont(ed_affine_mont *aff, ed_point_mont *pts, siz
         mont_mul(&aff[i].dxy, &xy, d, ctx);
     }
     for (size_t i = 0; i < n; i++) { mpz_clear(z[i]); mpz_clear(iz[i]); }
+    return true;
 }
 
 // 分块 Montgomery NAF 标量乘 (支持 checkpoint/resume).
-// 返回 true=完成 (r 有效), false=被 progress 中止 (cur 已填充当前累加点).
-static bool ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const mpz_t d,
+// Returns 1=complete, 0=stopped, 2=proper dictionary factor, -1=invalid inverse.
+static int ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const mpz_t d,
                            const mpz_t N, uint32_t chunk_bits,
                            const edwards_checkpoint_t *resume,
                            edwards_progress_fn progress, void *pctx,
-                           edwards_checkpoint_t *cur) {
+                           edwards_checkpoint_t *cur,mpz_ptr factor=nullptr) {
     mont_ctx_t mc;
     if (mont_init(&mc, N) != 0) {
         // N 超固定尺寸上限 (不该发生, <10000 bit); 回退 mpz double-and-add, 无 checkpoint.
@@ -395,7 +409,10 @@ static bool ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const 
     }
 
     std::vector<ed_affine_mont> aff(m);
-    ed_to_affine_batch_mont(aff.data(), dict.data(), m, &dm, &mc);
+    if(!ed_to_affine_batch_mont(aff.data(), dict.data(), m, &dm, &mc,factor)) {
+        const bool hit=factor && mpz_cmp_ui(factor,1)>0 && mpz_cmp(factor,N)<0;
+        mont_clear(&mc);return hit?2:-1;
+    }
 
     std::vector<int> digits;
     naf_digits(k, w, digits);
@@ -411,7 +428,11 @@ static bool ed_mul_chunked(ed_point &r, const mpz_t k, const ed_point &P, const 
         // T = X*Y/Z (仅 resume 时 1 次逆)
         mpz_t Zinv;
         mpz_init(Zinv);
-        mpz_invert(Zinv, resume->Rz, mc.Nz);
+        if(!mpz_invert(Zinv, resume->Rz, mc.Nz)) {
+            if(factor)mpz_gcd(factor,resume->Rz,N);
+            const bool hit=factor && mpz_cmp_ui(factor,1)>0 && mpz_cmp(factor,N)<0;
+            mpz_clear(Zinv);mont_clear(&mc);return hit?2:-1;
+        }
         mont_t zinvm, xy;
         mont_to(&zinvm, Zinv, &mc);
         mont_mul(&xy, &Rm.x, &Rm.y, &mc);
@@ -556,12 +577,11 @@ static void atkin_morain(mpz_t d, ed_point &P, uint64_t sigma, const mpz_t N) {
 // 公共入口: 单条 Edwards stage-1 曲线 (分块可恢复)
 // ---------------------------------------------------------------------------
 void edwards_atkin_morain(mpz_t d, mpz_t Px, mpz_t Py, uint64_t sigma, const mpz_t N) {
-    ed_point P;
-    ed_init(P);
-    atkin_morain(d, P, sigma, N);
-    if (Px) mpz_set(Px, P.x);
-    if (Py) mpz_set(Py, P.y);
-    ed_clear(P);
+    ecm_edwards::Integer x,y,a24,factor;
+    if(ecm_edwards::construct(d,x.v,y.v,a24.v,factor.v,sigma,N)!=ecm_edwards::Setup::Ready) {
+        mpz_set_ui(d,0);mpz_set_ui(x.v,0);mpz_set_ui(y.v,0);
+    }
+    if(Px)mpz_set(Px,x.v);if(Py)mpz_set(Py,y.v);
 }
 int edwards_get_naf_w(void) { return g_edwards_naf_w; }
 
@@ -583,17 +603,25 @@ int edwards_stage1_curve_progress(mpz_t factor, mpz_t Qx, mpz_t Qz,
     ed_point P, R;
     ed_init(P); ed_init(R);
 
-    atkin_morain(d, P, sigma, N);
+    ecm_edwards::Integer a24,setup_factor;
+    const auto setup=ecm_edwards::construct(d,P.x,P.y,a24.v,setup_factor.v,sigma,N);
+    if(setup!=ecm_edwards::Setup::Ready) {
+        const bool hit=setup==ecm_edwards::Setup::Factor;
+        if(hit){if(factor)mpz_set(factor,setup_factor.v);if(Qx)mpz_set(Qx,setup_factor.v);if(Qz)mpz_set_ui(Qz,1);}
+        ed_clear(P);ed_clear(R);mpz_clears(d,g,NULL);return hit?1:-1;
+    }
+    mpz_set_ui(P.z,1);mod_mul(P.t,P.x,P.y,N);
 
     edwards_checkpoint_t cur;
     edwards_checkpoint_init(&cur);
-    const bool completed = ed_mul_chunked(R, s, P, d, N, chunk_bits, resume, progress, ctx, &cur);
+    const int completed = ed_mul_chunked(R, s, P, d, N, chunk_bits, resume, progress, ctx, &cur,factor);
     edwards_checkpoint_clear(&cur);
 
-    if (!completed) {
+    if (completed!=1) {
+        if(completed==2){if(Qx)mpz_set(Qx,factor);if(Qz)mpz_set_ui(Qz,1);}
         ed_clear(P); ed_clear(R);
         mpz_clears(d, g, NULL);
-        return 2;   // 被 progress 中止 (checkpoint 由调用方处理)
+        return completed==2?1:(completed==0?2:-1);
     }
 
     // ed_to_Montgomery: Qx = z + y, Qz = z - y  (对齐 Prime95 ed_to_Montgomery)

@@ -1,5 +1,7 @@
 # Stage2 使用
 
+本页说明 CUDA Stage2。CPU Edwards 续算入口、双后端选择及 Prime95 结构的 JSONL 见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)；两个程序的选项与队列能力分别说明。
+
 `ecm_cuda_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入；Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。
 
 ## 直接读档

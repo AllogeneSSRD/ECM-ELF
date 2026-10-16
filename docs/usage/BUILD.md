@@ -4,6 +4,8 @@
 
 ## 六组入口
 
+独立 CPU Edwards Stage2 使用新功能入口 `tools/build/test/build_cpu_stage2.ps1`，不依赖 CUDA；依赖和输出见 [CPU Stage2](EDWARDS_CPU_STAGE2.md#构建与运行)。它尚未包含在下列 CUDA 发布包中。
+
 | 程序 | 开发 | 本机生产 | 发布生产 |
 | --- | --- | --- | --- |
 | Stage1 | `build_stage1_dev` | `build_stage1_local` | `build_stage1_release` |

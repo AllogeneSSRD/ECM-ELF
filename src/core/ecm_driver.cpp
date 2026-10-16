@@ -58,6 +58,7 @@
 #include <random>
 #include <algorithm>
 #include "ecm_edwards_save.h"       /* Prime95 ECM 二进制存档读写 */
+#include "ecm_edwards_io.h"
 #ifndef ECM_HAS_CUDA_EDWARDS
 #define ECM_HAS_CUDA_EDWARDS 0
 #endif
@@ -741,6 +742,27 @@ struct Stage1RunResult {
     uint64_t *sigmas = nullptr;
 };
 
+static std::string mont_format_save_name(const std::string &pattern,const mpz_t N,double B1);
+
+static bool edwards_capture_save(std::string &line,const mpz_t n,uint64_t sigma,uint64_t b1,
+                                  const mpz_t qx,const mpz_t qz,const mpz_t factor,bool hit) {
+    ecm_edwards::Integer x,g,inv;
+    if(hit) {
+        if(mpz_cmp_ui(factor,1)<=0 || mpz_cmp(factor,n)>=0 || !mpz_divisible_p(n,factor))return false;
+        mpz_set(x.v,factor);
+    } else {
+        mpz_gcd(g.v,qz,n);
+        if(mpz_cmp(g.v,n)==0) {
+            ecm_ts_fprintf(stdout,"Edwards identity: sigma=%llu gcd(Qz,N)=N, no Stage2 point\n",
+                           static_cast<unsigned long long>(sigma));
+            line.clear();return true;
+        }
+        if(mpz_cmp_ui(g.v,1)!=0 || !mpz_invert(inv.v,qz,n))return false;
+        mpz_mul(x.v,qx,inv.v);mpz_mod(x.v,x.v,n);
+    }
+    line=ecm_edwards::save_line(n,x.v,sigma,b1,hit);return true;
+}
+
 static bool stage1_selection_error(const ecm_stage1::Selection &selection,
                                    std::string &error) {
     if (!ecm_stage1::valid_route(selection, ECM_HAS_CUDA_EDWARDS != 0)) {
@@ -994,7 +1016,7 @@ static int edwards_checkpoint_progress_bar(void *ctx, const edwards_checkpoint_t
 static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
                                  const Stage1RunOptions &opt, double B1, double B2,
                                  uint32_t idx, uint64_t sigma, uint32_t curves,
-                                 mpz_t factor_out, const std::string &ckpt_path) {
+                                 mpz_t factor_out, const std::string &ckpt_path,std::string &save_line) {
     mpz_t Qx, Qz;
     mpz_inits(Qx, Qz, NULL);
 
@@ -1050,10 +1072,9 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
 
     // 落盘: 把 stage-1 结果写成本地 MIDSTAGE 存档 (总是写, 即使命中因子).
     // 送进 Prime95 由独立程序 ecm_p95feeder 负责。
-    if (rc >= 0) {
-        if (edwards_write_local_midstage(opt, sigma, idx + 1, (uint64_t)B1,
-                                         (uint64_t)B2, Qx, Qz, idx) && !ckpt_path.empty())
-            ecm_stage1_remove_checkpoints(ckpt_path);
+    if (rc == 0 || rc == 1) {
+        if(!edwards_capture_save(save_line,N,sigma,uint64_t(B1),Qx,Qz,factor_out,rc==1))rc=ECM_ERROR;
+        if(rc>=0)edwards_write_local_midstage(opt,sigma,idx+1,uint64_t(B1),uint64_t(B2),Qx,Qz,idx);
     }
     mpz_clears(Qx, Qz, NULL);
     return rc;
@@ -1073,6 +1094,7 @@ struct EdwardsWorkerCtx {
     const std::string *ckpt_paths;
     mpz_t *factors;
     int *array_found;
+    std::string *save_lines;
     std::atomic<uint32_t> *next;
     std::atomic<int> *aborted;
     /* SIMD 批量 (8 曲线/批) 相关 */
@@ -1083,13 +1105,9 @@ struct EdwardsWorkerCtx {
 // ---------------------------------------------------------------------------
 // SIMD 批量 stage-1 (8 曲线/批, AVX512-IFMA)
 //
-// 每批建一个 ifma/ed_soa 上下文 (字典本来就要按 sigma 重建, 见 §13.8 的 w=8 选型),
-// 跑完整阶梯后逐 lane 落盘成与标量路径**完全相同**的本地 MIDSTAGE 存档, 因此
-// ecm_p95feeder 不需要任何改动。
-//
-// 与标量路径的已知差别 (按 §13 第 6 条"内部实现可不同但必须记录"):
-//   * 没有阶梯中途 checkpoint, 只在批边界响应 SIGINT/写存档 (标量路径每 ckpt_ms 写一次);
-//   * 因此也没有 resume: 重跑该批从 s 的第一个 digit 开始。
+// 每批构造独立字典，逐 lane 生成统一文本记录，整个任务发布后清理检查点。
+// SIMD 进度回调写入各 lane 检查点；同批位号一致时可恢复。
+// 构造或字典逆元异常时逐曲线检查因子，不能继续使用失效的仿射字典。
 // ---------------------------------------------------------------------------
 #include "simd_edwards.h"   /* SoA 批量 Edwards 层 (AVX512-IFMA TU, 见 §13.8) */
 
@@ -1370,7 +1388,26 @@ static int edwards_checkpoint_progress_bar(void *ctx, const edwards_checkpoint_t
 static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N, mpz_srcptr s,
                                        double B1, double B2, uint32_t first, uint32_t count,
                                        const uint64_t *sigmas, mpz_t *factors, int *array_found,
-                                       std::atomic<uint32_t> *done_ctr) {
+                                       std::atomic<uint32_t> *done_ctr,std::string *save_lines) {
+    // Exceptional setup lanes need scalar factor/error classification before
+    // building an affine SIMD dictionary (which requires invertible inputs).
+    bool exceptional=false;
+    for(uint32_t k=0;k<count;++k) {
+        ecm_edwards::Integer d,x,y,a24,f;
+        if(ecm_edwards::construct(d.v,x.v,y.v,a24.v,f.v,sigmas[first+k],N)!=ecm_edwards::Setup::Ready)exceptional=true;
+    }
+    auto run_exceptional=[&]() {
+        for(uint32_t k=0;k<count;++k) {
+            const uint32_t i=first+k;
+            const auto path=opt.tmp_dir.empty()?std::string():edwards_local_stem(opt,i,uint64_t(B1))+".ckpt";
+            const int rc=edwards_run_one_curve(N,s,opt,B1,B2,i,sigmas[i],opt.stage1_curves,factors[i],path,save_lines[i]);
+            if(rc==2 || rc<0)return rc;
+            array_found[i]=rc==1?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
+            if(done_ctr)done_ctr->fetch_add(1,std::memory_order_relaxed);
+        }
+        return 0;
+    };
+    if(exceptional)return run_exceptional();
     ed_soa_ctx_t ctx;
     /* 字典窗口跟随配置 (naf_w / ini), 不再硬编码 w=8:
        这样 SIMD 与标量用同一套 digit/字典, 存档逐字节可比, 也便于混合与续跑。
@@ -1420,7 +1457,8 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
     uint64_t sg[8];
     for (uint32_t k = 0; k < 8; k++) sg[k] = sigmas[first + (k < count ? k : count - 1)];
 
-    if (ed_soa_set_curves(&ctx, sg, 8) != 0) { ed_soa_clear(&ctx); return -1; }
+    const int setup_rc=ed_soa_set_curves(&ctx,sg,8);
+    if(setup_rc!=0){ed_soa_clear(&ctx);return setup_rc==-4?run_exceptional():-1;}
 
     EdSimdProg pr;
     pr.done_ctr = done_ctr;
@@ -1489,10 +1527,8 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
             ecm_ts_fprintf(stdout, "  curve %u sigma=%llu -> factor found\n",
                            i, (unsigned long long)sigmas[i]);
         }
-        if (edwards_write_local_midstage(opt, sigmas[i], i + 1, (uint64_t)B1,
-                                         (uint64_t)B2, Qx[k], Qz[k], i))
-            ecm_stage1_remove_checkpoints(
-                edwards_local_stem(opt, i, (uint64_t)B1) + ".ckpt");
+        if(!edwards_capture_save(save_lines[i],N,sigmas[i],uint64_t(B1),Qx[k],Qz[k],fac[k],array_found[i]==ECM_FACTOR_FOUND_STEP1))rc=ECM_ERROR;
+        else edwards_write_local_midstage(opt,sigmas[i],i+1,uint64_t(B1),uint64_t(B2),Qx[k],Qz[k],i);
     }
     for (int k = 0; k < 8; k++) mpz_clears(Qx[k], Qz[k], fac[k], NULL);
     ed_soa_clear(&ctx);
@@ -1524,7 +1560,8 @@ static void edwards_worker(EdwardsWorkerCtx *ctx) {
             /* 批内至少 2 条才值得批量 (1 条走标量, 见 §13.6 的 hybrid 规则) */
             const int rc = edwards_run_batch_simd_impl(*ctx->opt, ctx->N, ctx->s, ctx->B1, ctx->B2,
                                                        i, n, ctx->sigmas, ctx->factors,
-                                                       ctx->array_found, ctx->done_ctr);
+                                                       ctx->array_found, ctx->done_ctr,ctx->save_lines);
+            if(rc==2){ctx->aborted->store(1,std::memory_order_relaxed);break;}
             if (rc < 0) {
                 std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
                 std::cerr << "  batch " << i << " -> SIMD stage-1 internal error" << std::endl;
@@ -1538,8 +1575,8 @@ static void edwards_worker(EdwardsWorkerCtx *ctx) {
             const uint64_t sigma = ctx->sigmas[i];
             const int rc = edwards_run_one_curve(ctx->N, ctx->s, *ctx->opt, ctx->B1, ctx->B2,
                                                  i, sigma, ctx->curves,
-                                                 ctx->factors[i], ctx->ckpt_paths[i]);
-            if (rc > 0) {
+                                                 ctx->factors[i], ctx->ckpt_paths[i],ctx->save_lines[i]);
+            if (rc == 1) {
                 ctx->array_found[i] = ECM_FACTOR_FOUND_STEP1;
                 std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
                 if (ctx->opt->verbose) {
@@ -1553,6 +1590,7 @@ static void edwards_worker(EdwardsWorkerCtx *ctx) {
                 std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
                 std::cerr << "  curve " << i << " sigma=" << sigma
                           << " -> Edwards stage-1 internal error" << std::endl;
+                ctx->aborted->store(1,std::memory_order_relaxed);break;
             } else if (rc == 2) {
                 ctx->aborted->store(1, std::memory_order_relaxed);
                 break;
@@ -1670,6 +1708,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
                               const Stage1RunOptions &opt, Stage1RunResult *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
+    out->publish_failed = false;
     out->curves = curves;
     out->firstsigma = 0;
     out->firstsigma64 = 0;
@@ -1703,6 +1742,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
 
     mpz_t *factors = (mpz_t *)malloc(sizeof(mpz_t) * curves);
     int *array_found = (int *)malloc(sizeof(int) * curves);
+    std::vector<std::string> save_lines(curves);
     for (uint32_t i = 0; i < curves; i++) {
         mpz_init(factors[i]);
         array_found[i] = ECM_NO_FACTOR_FOUND;
@@ -1791,8 +1831,8 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     if (nthreads <= 1 && curves == 1) {
         for (uint32_t i = 0; i < curves; i++) {
             const int rc = edwards_run_one_curve(N, s, opt, B1, B2, i, sigmas[i], curves,
-                                                 factors[i], ckpt_paths[i]);
-            if (rc > 0) {
+                                                 factors[i], ckpt_paths[i],save_lines[i]);
+            if (rc == 1) {
                 array_found[i] = ECM_FACTOR_FOUND_STEP1;
                 if (opt.verbose) {
                     std::cout << "  curve " << i << " sigma=" << sigmas[i]
@@ -1801,6 +1841,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
             } else if (rc < 0) {
                 std::cerr << "  curve " << i << " sigma=" << sigmas[i]
                           << " -> Edwards stage-1 internal error" << std::endl;
+                aborted=true;break;
             } else if (rc == 2) {
                 aborted = true;
                 break;
@@ -1870,6 +1911,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         wctx.ckpt_paths = ckpt_paths.data();
         wctx.factors = factors;
         wctx.array_found = array_found;
+        wctx.save_lines = save_lines.data();
         std::atomic<uint32_t> next(0);
         std::atomic<int> aborted_flag(0);
         wctx.next = &next;
@@ -1888,7 +1930,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     }
 
     if (aborted) {
-        ecm_ts_fprintf(stdout, "stage-1 aborted (checkpoint saved)\n");
+        ecm_ts_fprintf(stdout, "stage-1 incomplete; checkpoints retained\n");
         mpz_clear(s);
         for (uint32_t j = 0; j < curves; j++) mpz_clear(factors[j]);
         free(factors);
@@ -1897,9 +1939,17 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         return ECM_ERROR;
     }
 
-    // Binary Prime95 save format is a later task; the OpenCL text save is not
-    // valid for the Edwards parametrization, so skip it for now.
-    (void)savefilename; (void)saveappend; (void)n_expr;
+    const auto stem="ed_"+mont_format_save_name(opt.save_name_pattern,N,B1);
+    const auto save=savefilename.empty()?(opt.tmp_dir.empty()?std::string{}:opt.tmp_dir+"/")+stem:savefilename;
+    std::string lines;for(const auto &line:save_lines)lines+=line;
+    if(!ecm_edwards::publish_save(save,lines,saveappend)) {
+        out->publish_failed=true;out->ret=ECM_ERROR;
+        ecm_ts_fprintf(stderr,"ERROR: cannot publish Edwards save %s\n",save.c_str());
+        mpz_clear(s);for(uint32_t i=0;i<curves;++i)mpz_clear(factors[i]);free(factors);free(array_found);return ECM_ERROR;
+    }
+    for(const auto &path:ckpt_paths)if(!path.empty())ecm_stage1_remove_checkpoints(path);
+    ecm_ts_fprintf(stdout,"Edwards Stage1 save: %s (%u attempted curves)\n",save.c_str(),curves);
+    (void)n_expr;
 
     mpz_clear(s);
 
@@ -3463,9 +3513,9 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             // ECM=/ECM2= has no save filename in the assignment. Give the GPU path a
             // deterministic destination so a completed queue task publishes its Stage1
             // point for Stage2 and save synchronization. CPU Montgomery already writes
-            // its own shared save under tmp_dir; Edwards keeps its separate .tmp format.
+            // its own shared save under tmp_dir; both Edwards targets use text saves.
             std::string queue_save_name;
-            if (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu) {
+            if (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu || opt.selection.curve==ecm_stage1::CurveModel::Edwards) {
                 if (opt.tmp_dir.empty() || !ensure_dir(opt.tmp_dir)) {
                     ecm_ts_fprintf(stderr, "FATAL: cannot create tmp_dir for GPU save: %s\n",
                                    opt.tmp_dir.c_str());

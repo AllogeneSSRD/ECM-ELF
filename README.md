@@ -2,7 +2,7 @@
 
 [English](README.en.md) | 中文
 
-ECM-ELF 是椭圆曲线因子分解（ECM）工具集：CUDA/CGBN 与 OpenCL GPU Stage1、GMP 与可选 AVX-512 IFMA CPU Stage1、独立 CUDA 多项式 Stage2，以及 Windows GUI、任务队列和因子数据工具。原仓库名 OpenCL-ECM 只覆盖了其中一个后端；程序名仍为 `ecm.exe`、`ecm_cuda.exe` 等。
+ECM-ELF 是椭圆曲线因子分解（ECM）工具集：CUDA/CGBN 与 OpenCL GPU Stage1、GMP 与可选 AVX-512 IFMA CPU Stage1、独立 CUDA 多项式 Stage2、libecm CPU Edwards Stage2，以及 Windows GUI、任务队列和因子数据工具。原仓库名 OpenCL-ECM 只覆盖了其中一个后端；程序名仍为 `ecm.exe`、`ecm_cuda.exe` 等。
 
 本页保留各入口的实际用途、可运行命令、配置方法、存档关系、构建方式和工具索引。配置键的默认值、范围及双语说明以生成的 [INI 参考](docs/ECM_INI_REFERENCE.md) 为准；特定构建是否包含某个内核档位或实验算法，要检查该程序的构建身份与帮助输出。
 
@@ -14,7 +14,7 @@ ECM-ELF 是椭圆曲线因子分解（ECM）工具集：CUDA/CGBN 与 OpenCL GPU
 <a id="comparison"></a>
 ## 与现有主流工具相比
 
-ECM-ELF 提供可独立运行的多后端 ECM 工作流：使用 CUDA/CGBN、OpenCL 或 CPU 批量执行 Stage1，再由本仓库的 CUDA 多项式 Stage2，或符合条件的外部工具继续处理完成的 save。
+ECM-ELF 提供可独立运行的多后端 ECM 工作流：使用 CUDA/CGBN、OpenCL 或 CPU 批量执行 Stage1，再由本仓库的 CUDA 多项式 Stage2、[CPU Edwards Stage2](docs/usage/EDWARDS_CPU_STAGE2.md)，或符合条件的外部工具继续处理完成的 save。
 
 - **计算路径：** CUDA 与 OpenCL 覆盖不同 GPU 平台；CPU 提供 GMP 标量和 AVX-512 IFMA 批量实现。各路径共用 Stage1 任务入口，实际可用位宽与算法以构建版本为准。
 - **独立 Stage2：** CUDA Stage2 使用精确整数多项式运算，支持直接读档、独立队列、逐曲线续跑，以及基于实测资料的参数调优与 Auto B2。[Stage2 使用](docs/usage/STAGE2.md)列出输入和资源限制。
@@ -73,7 +73,7 @@ echo '(2^421-1)' | .\ecm_cuda.exe --curve mont --target gpu --gpu-param 0 -gpucu
 echo '(2^1277-1)' | .\ecm.exe --curve mont --target cpu --impl auto -gpucurves 8 1e5 0
 ```
 
-单次运行的形式为 `echo '<N>' | <ecm.exe 或 ecm_cuda.exe> [选项] B1 [B2]`；无位置参数时进入 Stage1 队列模式。`--curve` 与 `--target` 分别选择曲线和执行位置；默认是 Montgomery + GPU，当前不支持 Edwards + GPU。`-d` 是当前程序列出的设备编号；`--gpu-info` 可报告 CUDA 档位与建议批量，OpenCL 构建会说明该查询不适用。
+单次运行的形式为 `echo '<N>' | <ecm.exe 或 ecm_cuda.exe> [选项] B1 [B2]`；无位置参数时进入 Stage1 队列模式。`--curve` 与 `--target` 分别选择曲线和执行位置；默认是 Montgomery + GPU，CUDA 支持 Edwards + GPU，OpenCL 不支持该组合。`-d` 是当前程序列出的设备编号；`--gpu-info` 可报告 CUDA 档位与建议批量，OpenCL 构建会说明该查询不适用。
 
 ### 使用 worktodo 运行 Stage1
 
@@ -205,7 +205,7 @@ ECM2=1,2,3001,-1,100000,0,64
 
 最终 `.save` 含可交给兼容 Stage2 的归一化点及任务字段；运行中 checkpoint 含未完成的点状态、指数偏移和实现布局。CUDA、OpenCL、CPU Edwards、CPU Montgomery 的 checkpoint 各按自身格式验证，不能凭相似文件名跨后端恢复。正常停止或 Ctrl+C 要等安全边界保存；强制结束可能丢失尚未写完的 checkpoint。恢复时重跑原任务并保留相同的 N、B1、参数化、指数模式和相容构建，日志会说明是否读到检查点。详见 [Stage1 使用](docs/usage/STAGE1.md)。
 
-save 的兼容范围也有限：CUDA/CPU PARAM0 及 CUDA/OpenCL PARAM3 的合格文本记录可用于相应 GMP-ECM/Prime95 流程；PARAM2 带 `PARAM=2`，GMP-ECM 可读，Prime95 不接受；本仓库的 CUDA Stage2 只接受它明确支持的归一化 PARAM0 记录。checksum 检查文件完整性，不证明 GPU 点乘数学正确。验收应独立核对 N、B1、σ、指数模式和最终点。
+save 的兼容范围也有限：CUDA/CPU PARAM0 及 CUDA/OpenCL PARAM3 的合格文本记录可用于相应 GMP-ECM/Prime95 流程；PARAM2 带 `PARAM=2`，GMP-ECM 可读，Prime95 不接受；本仓库的 CUDA Stage2 接受归一化 PARAM0 和 Edwards AM 文本记录；CPU/GPU Edwards 统一文本 save 也可交给独立 libecm CPU Stage2。checksum 检查文件完整性，不证明 GPU 点乘数学正确。验收应独立核对 N、B1、σ、指数模式和最终点。
 
 <a id="stage2"></a>
 ## 独立 CUDA Stage2

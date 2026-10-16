@@ -1,0 +1,38 @@
+# Build the referenced CPU library without changing files in the upstream tree.
+set(ECM_LIBECM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../.refactor/gmp-ecm" CACHE PATH "GMP-ECM source tree")
+get_filename_component(ECM_LIBECM_SOURCE_DIR "${ECM_LIBECM_SOURCE_DIR}" ABSOLUTE)
+if(NOT EXISTS "${ECM_LIBECM_SOURCE_DIR}/ecm.h.in")
+    message(FATAL_ERROR "GMP-ECM sources not found: ${ECM_LIBECM_SOURCE_DIR}")
+endif()
+file(READ "${ECM_LIBECM_SOURCE_DIR}/configure.ac" _ecm_configure)
+string(REGEX MATCH "ECM_VERSION_AC\\], \\[([^]]+)\\]" _ecm_match "${_ecm_configure}")
+set(ECM_LIBECM_VERSION "${CMAKE_MATCH_1}")
+if(NOT ECM_LIBECM_VERSION)
+    message(FATAL_ERROR "Cannot determine GMP-ECM version")
+endif()
+set(_ecm_generated "${CMAKE_CURRENT_BINARY_DIR}/libecm_include")
+file(MAKE_DIRECTORY "${_ecm_generated}")
+file(READ "${ECM_LIBECM_SOURCE_DIR}/ecm.h.in" _ecm_header)
+string(REPLACE "#undef ECM_VERSION" "#define ECM_VERSION \"${ECM_LIBECM_VERSION}\"" _ecm_header "${_ecm_header}")
+file(WRITE "${_ecm_generated}/ecm.h" "${_ecm_header}")
+if(MSVC)
+    file(READ "${ECM_LIBECM_SOURCE_DIR}/build.vs/config.h" _ecm_config)
+    # Use GMP's limb routines, without the upstream YASM/MPIR build dependency.
+    string(APPEND _ecm_config "\n#undef NATIVE_REDC\n#undef HAVE_ASM_REDC3\n#define HAVE_INTTYPES_H 1\n")
+    file(WRITE "${_ecm_generated}/config.h" "${_ecm_config}")
+else()
+    message(FATAL_ERROR "This libecm build adapter currently requires MSVC")
+endif()
+set(_ecm_files ecm.c ecm2.c pm1.c pp1.c getprime_r.c listz.c lucas.c
+    stage2.c mpmod.c mul_lo.c polyeval.c median.c schoen_strass.c ks-multiply.c
+    rho.c bestd.c auxlib.c random.c factor.c sp.c spv.c spm.c mpzspm.c mpzspv.c
+    ntt_gfp.c ecm_ntt.c pm1fs2.c sets_long.c auxarith.c batch.c parametrizations.c
+    cudawrapper.c aprtcle/mpz_aprcl.c addlaws.c torsions.c)
+list(TRANSFORM _ecm_files PREPEND "${ECM_LIBECM_SOURCE_DIR}/")
+add_library(ecm_cpu_library STATIC ${_ecm_files})
+target_include_directories(ecm_cpu_library PUBLIC "${_ecm_generated}" "${GMP_INCLUDE_DIR}" PRIVATE "${ECM_LIBECM_SOURCE_DIR}" "${ECM_LIBECM_SOURCE_DIR}/build.vs")
+target_compile_definitions(ecm_cpu_library PRIVATE _CRT_SECURE_NO_WARNINGS NDEBUG WIN32 _WIN64)
+target_compile_options(ecm_cpu_library PRIVATE /O2 /MD /std:c11 /wd4996)
+target_link_libraries(ecm_cpu_library PUBLIC "${GMP_LIBRARY}")
+find_package(OpenMP REQUIRED COMPONENTS C)
+target_link_libraries(ecm_cpu_library PRIVATE OpenMP::OpenMP_C)

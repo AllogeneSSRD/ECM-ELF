@@ -36,7 +36,7 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 [worker 接入](../../src/core/ecm_edwards_gpu_driver.inl)支持 CLI 和队列、周期及安全停止检查点、损坏主文件后的备份恢复。`.gpu.ckpt` 绑定版本、完整 N、完整标量、B1、曲线数、精确 sigma、构造状态、四坐标和完整内容校验；恢复重构基点并核对点不变量。NAF 使用 `ECM_GPU_EDWARDS_NAF_V2`，另绑定窗口和倍点变体，进度计数为 NAF 列数；列数可能不同于原标量二进制位数。旧 `ECM_GPU_EDWARDS_BINARY_V1` 检查点默认按原二进制算法继续，不能把其位号解释为 NAF 列号；两者均不读取 CPU/Prime95 的 NAF 检查点。默认配置采用已保存的模式和窗口，显式不匹配选择报错并保留检查点。检查点按普通整数保存，因此恢复不绑定 TPI；由 N 重新选择容器。save 完整关闭并原子发布后才清理检查点，写入失败保留未完成任务。
 
-[交接格式](../../src/core/ecm_edwards_io.h)使用 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM`，包含 N、sigma、B1、规范 X、`POINT|FACTOR` 状态及覆盖这些数学字段的 64 位校验。该方法名与 Suyama 文本记录不同；CUDA Stage2 重建 Edwards 常数，不能按 PARAM0 解释 sigma。默认文件名前缀为 `ed_`，CPU Edwards 仍写 Prime95 二进制存档。GPU Edwards 不支持 Prime95 自动交付，配置该交付会在运行任务前报错。
+[交接格式](../../src/core/ecm_edwards_io.h)使用 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM`，包含 N、sigma、B1、规范 X、`POINT|FACTOR` 状态及覆盖这些数学字段的 64 位校验。该方法名与 Suyama 文本记录不同；CUDA Stage2 重建 Edwards 常数，不能按 PARAM0 解释 sigma。默认文件名前缀为 `ed_`，CPU/GPU Edwards 统一发布该文本格式；[CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md) 可直接消费。GPU Edwards 不支持 Prime95 自动交付，配置该交付会在运行任务前报错。
 
 Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery PARAM。Stage2 的曲线开始与结果事件传递相同模型身份；GUI 结果文件按该身份保存，旧版未带模型的 Stage2 日志沿用 Suyama PARAM0 解释。具体字段与管道规则见 [GUI 日志与结果](../usage/GUI.md#日志结果与监控)。完整大界限、随机 sigma 恢复和小素数回退的正确性证据见 [验收记录](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
 

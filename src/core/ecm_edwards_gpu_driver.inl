@@ -114,10 +114,7 @@ static bool progress(uint32_t done,void *context) {
     return !stop;
 }
 static bool publish(const std::string &path,const std::string &lines,bool append) {
-    const auto temp=ecm_stage1_checkpoint_temp_path(path);
-    std::ofstream out(temp,std::ios::binary|std::ios::trunc);if(!out)return false;
-    if(append && access(path.c_str(),0)==0){std::ifstream old(path,std::ios::binary);if(!old)return false;if(old.peek()!=std::char_traits<char>::eof())out<<old.rdbuf();if(old.bad())return false;}
-    out<<lines;out.close();return bool(out) && ecm_stage1_commit_checkpoint(path,temp);
+    return ecm_edwards::publish_save(path,lines,append);
 }
 }
 
@@ -196,12 +193,11 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
             else mpz_set(batch.factors[i],x.v);
             lines+=save_line(n,x.v,batch.sigmas[i],uint64_t(b1),batch.hit[i]!=0);
         }
-        const auto save=savefilename.empty()?(opt.tmp_dir.empty()?std::string{}:opt.tmp_dir+"/"+stem):savefilename;
-        if(!save.empty() && !publish(save,lines,saveappend)) {
+        const auto save=savefilename.empty()?(opt.tmp_dir.empty()?std::string{}:opt.tmp_dir+"/")+stem:savefilename;
+        if(!publish(save,lines,saveappend)) {
             out->publish_failed=true;throw std::runtime_error("cannot publish Edwards save "+save);
         }
-        // Only remove the resume state after a durable handoff (or an explicitly
-        // fileless run); an I/O failure must keep the queue task unfinished.
+        // Only remove the resume state after publishing the completed batch.
         if(!path.empty())ecm_stage1_remove_checkpoints(path);
         auto *factors=static_cast<mpz_t *>(malloc(sizeof(mpz_t)*curves));
         auto *hits=static_cast<int *>(malloc(sizeof(int)*curves));

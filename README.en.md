@@ -2,7 +2,7 @@
 
 [中文](README.md) | English
 
-ECM-ELF is an Elliptic Curve Method (ECM) toolkit: CUDA/CGBN and OpenCL GPU Stage1, GMP and optional AVX-512 IFMA CPU Stage1, a separate CUDA polynomial Stage2, plus a Windows GUI, task queues and factor-data tools. The former name, OpenCL-ECM, described only one of these backends; executable names such as `ecm.exe` and `ecm_cuda.exe` remain in use.
+ECM-ELF is an Elliptic Curve Method (ECM) toolkit: CUDA/CGBN and OpenCL GPU Stage1, GMP and optional AVX-512 IFMA CPU Stage1, a separate CUDA polynomial Stage2, libecm CPU Edwards Stage2, plus a Windows GUI, task queues and factor-data tools. The former name, OpenCL-ECM, described only one of these backends; executable names such as `ecm.exe` and `ecm_cuda.exe` remain in use.
 
 This page retains the purpose of each entry point, runnable commands, configuration workflows, save-file boundaries, build routes and tool index. The generated [INI reference](docs/ECM_INI_REFERENCE.md) is authoritative for configuration defaults, ranges and bilingual descriptions. Check the actual binary and its help output to determine which kernel tiers or experimental algorithms a build includes.
 
@@ -73,7 +73,7 @@ echo '(2^421-1)' | .\ecm_cuda.exe --curve mont --target gpu --gpu-param 0 -gpucu
 echo '(2^1277-1)' | .\ecm.exe --curve mont --target cpu --impl auto -gpucurves 8 1e5 0
 ```
 
-A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 [B2]`. With no positional bound, the program enters Stage1 queue mode. `--curve` selects the curve and `--target` selects CPU or GPU; the default is Montgomery on GPU, and GPU Edwards is currently unsupported. `-d` is the device index enumerated by that program. `--gpu-info` reports CUDA tiers and suggested batch sizes; an OpenCL build reports that this query is not applicable.
+A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 [B2]`. With no positional bound, the program enters Stage1 queue mode. `--curve` selects the curve and `--target` selects CPU or GPU; the default is Montgomery on GPU, and CUDA supports GPU Edwards while OpenCL does not. `-d` is the device index enumerated by that program. `--gpu-info` reports CUDA tiers and suggested batch sizes; an OpenCL build reports that this query is not applicable.
 
 ### Run Stage1 from worktodo
 
@@ -205,7 +205,7 @@ Known factors, AID, sigma, curve count and save names have distinct queue semant
 
 A completed `.save` contains a normalized point and task fields for a compatible Stage2. An in-progress checkpoint contains unfinished point state, exponent position and implementation layout. CUDA, OpenCL, CPU Edwards and CPU Montgomery validate their own checkpoint formats; similar names do not make them cross-backend files. A normal stop or Ctrl+C waits for a safe save boundary. Forced termination can leave a partially written checkpoint. Resume the original task with matching N, B1, parametrization, exponent mode and compatible build; the log reports whether a checkpoint was loaded. See [Stage1 usage](docs/usage/STAGE1.md).
 
-Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 and CUDA/OpenCL PARAM3 text records can feed the corresponding GMP-ECM/Prime95 workflow. PARAM2 saves carry `PARAM=2`; GMP-ECM accepts them, Prime95 does not. This repository's CUDA Stage2 accepts only the normalized PARAM0 records it explicitly supports. A checksum tests file integrity, not mathematical correctness of GPU point multiplication. Independent acceptance checks should cover N, B1, sigma, exponent mode and final point.
+Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 and CUDA/OpenCL PARAM3 text records can feed the corresponding GMP-ECM/Prime95 workflow. PARAM2 saves carry `PARAM=2`; GMP-ECM accepts them, Prime95 does not. This repository's CUDA Stage2 accepts normalized PARAM0 and Edwards AM text records. CPU/GPU Edwards share the same text save, also accepted by the separate [libecm CPU Stage2](docs/usage/EDWARDS_CPU_STAGE2.md). A checksum tests file integrity, not mathematical correctness of GPU point multiplication. Independent acceptance checks should cover N, B1, sigma, exponent mode and final point.
 
 <a id="stage2"></a>
 ## Separate CUDA Stage2
