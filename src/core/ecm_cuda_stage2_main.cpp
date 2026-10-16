@@ -674,7 +674,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         const bool result=text.compare(0,15,"stage2_result: ")==0;
         if(milestone){phase=text.substr(14);const auto timing=phase.find(" previous=");if(timing!=phase.npos)phase.resize(timing);}
         if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
-           (stage2_log::enabled(stage2_log::curve)&&result) ||
+           ((stage2_log::enabled(stage2_log::curve)||o.gui_events)&&result) ||
            stage2_log::enabled(stage2_log::batches) || text.find("WARNING")!=text.npos))console_line(text,error);
     };
     auto drain=[&](HANDLE pipe,std::string &pending,bool error) {
@@ -951,7 +951,11 @@ int curve_worker(Options o) {
     if(!observation.sample.empty())try {publish_runtime_tune(o,observation);}
     catch(const std::exception &e){std::cerr<<"WARNING: runtime tune write skipped; observation retained in results: "<<e.what()<<std::endl;}
     std::cout << "stage2_result: record=" << o.index << " seconds=" << seconds
-              << " factorization_seconds=" << factor_seconds << " " << result << std::endl;
+              << " factorization_seconds=" << factor_seconds
+              << " sigma=" << r.sigma << " B1=" << r.b1
+              << " curve_model=" << (r.edwards?"ed":"mont")
+              << (r.edwards?"":" param=0") << " save=" << json_string(o.save)
+              << " " << result << std::endl;
     return 0;
 }
 void help() {
@@ -1398,7 +1402,8 @@ int driver(Options o) {
             const auto &r=plan[i];
             if(stage2_log::enabled(stage2_log::curve)||o.dry)
                 report("curve_start: "+std::to_string(i+1)+"/"+std::to_string(plan.size())+" record="+std::to_string(r.index)+
-                       " sigma="+std::to_string(r.sigma)+" B1="+std::to_string(r.b1)+" checksum="+(r.checksum?"verified":"absent"));
+                       " sigma="+std::to_string(r.sigma)+" B1="+std::to_string(r.b1)+" checksum="+(r.checksum?"verified":"absent")+
+                       " curve_model="+(r.edwards?std::string("ed"):std::string("mont"))+(r.edwards?"":" param=0"));
             if(o.dry)continue;
             if(o.plan_only) {
                 Options local=o;local.b2=b2;local.has_d=d!=0;

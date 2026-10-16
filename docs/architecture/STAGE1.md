@@ -32,6 +32,8 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 [交接格式](../../src/core/ecm_edwards_io.h)使用 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM`，包含 N、sigma、B1、规范 X、`POINT|FACTOR` 状态及覆盖这些数学字段的 64 位校验。该方法名与 Suyama 文本记录不同；CUDA Stage2 重建 Edwards 常数，不能按 PARAM0 解释 sigma。默认文件名前缀为 `ed_`，CPU Edwards 仍写 Prime95 二进制存档。GPU Edwards 不支持 Prime95 自动交付，配置该交付会在运行任务前报错。
 
+Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery PARAM。Stage2 的曲线开始与结果事件传递相同模型身份；GUI 结果文件按该身份保存，旧版未带模型的 Stage2 日志沿用 Suyama PARAM0 解释。具体字段与管道规则见 [GUI 日志与结果](../usage/GUI.md#日志结果与监控)。完整大界限、随机 sigma 恢复和小素数回退的正确性证据见 [验收记录](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
+
 当前使用二进制倍加法，尚未提供 GPU NAF 字典、专用性能调优和 GUI 位进度。独立构建和验证证据见 [开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
 
 ### Montgomery resident 与 PRAC

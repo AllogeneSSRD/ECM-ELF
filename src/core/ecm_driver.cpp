@@ -3001,9 +3001,10 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                 if (result.sigmas != nullptr) {
                     std::cout << " sigma=" << result.sigmas[i];
                 }
-                std::cout << " param=" << (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu
-                                               ? opt.selection.gpu_param : 0)
-                          << " curve_model=" << curve_token << " execution_target=" << target_token
+                if(opt.selection.curve==ecm_stage1::CurveModel::Montgomery)
+                    std::cout << " param=" << (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu
+                                                   ? opt.selection.gpu_param : 0);
+                std::cout << " curve_model=" << curve_token << " execution_target=" << target_token
                           << " save=" << save_name << "\n";
                 free(fs);
                 found_factor = true;
@@ -3388,8 +3389,11 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         /* The GPU implementation is chosen at LINK time (ecm.exe = OpenCL glue,
            ecm_cuda.exe = CUDA backend), so ask the backend instead of hardcoding
            "OpenCL" -- the CUDA build used to print "gpu (OpenCL)" here. */
-        ecm_ts_fprintf(stdout, "gpu backend : %s, param%d, device %d\n",
-                       ecm_backend_name(), opt.selection.gpu_param, opt.device_index);
+        if(opt.selection.curve==ecm_stage1::CurveModel::Edwards)
+            ecm_ts_fprintf(stdout,"gpu backend : %s, Edwards Atkin-Morain, device %d\n",
+                           ecm_backend_name(),opt.device_index);
+        else ecm_ts_fprintf(stdout, "gpu backend : %s, param%d, device %d\n",
+                            ecm_backend_name(), opt.selection.gpu_param, opt.device_index);
     }
 
     // Startup full sync (matches the old work_manager.ps1 behaviour).
@@ -4129,12 +4133,9 @@ int main(int argc, char **argv){
        用户中止 (SIGINT/checkpoint abort) 等任何 stage-1 非正常结束。 */
     const bool cli_has_factors = (result.ret != ECM_ERROR && result.factors != nullptr && result.array_found != nullptr);
 
-    /* Effective parametrization of THIS run, for the --go group-order helper: the CPU
-       Montgomery engine and the Edwards engine both use Suyama sigma = param 0 (their saves
-       carry no PARAM= key, so gmp-ecm/Prime95 read them as param 0), while the GPU engines use
-       the GPU parameter (0/2/3). Passing it for CPU methods made --go report the order
-       of a param-3 curve for a param-0 run (measured: largest_prime came back as 2666737705477
-       instead of the true 114713 for the 2^128+1 / sigma=26 case). */
+    // Numeric Montgomery parameter used by the group-order helper. CPU Suyama
+    // uses PARAM0; GPU Montgomery uses its selected family. Edwards hit metadata
+    // identifies the curve model and carries no Montgomery PARAM.
     const int go_param = opt.selection.target == ecm_stage1::ExecutionTarget::Gpu
                              ? opt.selection.gpu_param : 0;
 
@@ -4150,7 +4151,9 @@ int main(int argc, char **argv){
                 if (result.sigmas != nullptr) {
                     std::cout << " sigma=" << result.sigmas[i];
                 }
-                std::cout << " param=" << go_param << " curve_model=" << curve_token
+                if(opt.selection.curve==ecm_stage1::CurveModel::Montgomery)
+                    std::cout << " param=" << go_param;
+                std::cout << " curve_model=" << curve_token
                           << " execution_target=" << target_token
                           << " save=" << savefilename << "\n";
                 free(s);

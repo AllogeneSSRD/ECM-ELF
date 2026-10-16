@@ -65,7 +65,8 @@ struct Stage2Event {
     Kind kind=Kind::None;
     unsigned long long total=0,done=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0;
     double seconds=0,elapsed=0,left=0;
-    std::string save,phase;
+    std::string save,phase,curve_model;
+    int param=-1;
     std::vector<std::string> factors;
 };
 struct Stage2Status {
@@ -73,9 +74,11 @@ struct Stage2Status {
     unsigned long long total=0,done=0,current=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0;
     unsigned long long measured_curves=0;
     double engine_seconds=0,seconds_sum=0,elapsed=0,batch_left=0;
-    std::string save,phase;
+    std::string save,phase,curve_model="mont";
+    int param=0; // Legacy Stage2 lines describe Suyama PARAM0.
     void apply(const Stage2Event &event);
     ProgressInfo progress()const;
+    HitInfo factor_hit(const std::string &factor)const;
 };
 
 // One `p95_add:` notice, i.e. the outcome of handing a finished task to Prime95 through

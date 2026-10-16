@@ -1,11 +1,16 @@
 #Requires -Version 5.1
 param([ValidateSet('stage1','stage2','both')][string]$Stage='both',
       [string]$Build='build_cuda_cmake/edwards_gpu_workers',
-      [string]$Arch='89')
+      [string]$Arch='89',
+      [switch]$RelinkOnly)
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 if($Stage -ne 'stage2') {
-    & (Join-Path $root 'build_stage1_local.ps1') -BuildDir "$Build/stage1" -Arch $Arch -Tiers '1024' -Incremental
+    if($RelinkOnly){
+        & (Join-Path $root 'build_stage1_local.ps1') -BuildDir "$Build/stage1" -Arch $Arch -Tiers '1024' -RelinkOnly
+    } else {
+        & (Join-Path $root 'build_stage1_local.ps1') -BuildDir "$Build/stage1" -Arch $Arch -Tiers '1024' -Incremental
+    }
     if($LASTEXITCODE -ne 0){throw 'Edwards Stage1 worker build failed'}
 }
 if($Stage -ne 'stage1') {

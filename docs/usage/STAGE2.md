@@ -10,6 +10,8 @@
 
 直接多记录执行不使用队列自动续跑。每条曲线在独立子进程计算，结束后释放 CUDA 上下文与临时资源。
 
+结果 JSONL 以 `curve=ed|mont` 标明模型，Edwards 的 `param` 为 null，Suyama 的 `param` 为 0；GUI 的因子结果文件使用其独立结果格式，见 [GUI 日志与结果](GUI.md#日志结果与监控)。控制台结果事件也携带模型及完整 sigma；显式 `--gui-events` 会在 quiet 级别保留该结果事件，普通 quiet 控制台规则保持不变。
+
 ## 队列语法
 
 任务格式：`ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip_curves][,num_curves][,"known_factors"]`。

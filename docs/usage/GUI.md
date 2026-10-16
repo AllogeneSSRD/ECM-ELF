@@ -40,6 +40,8 @@ Prime95 交接状态显示 pending、失败或成功；真实 save/worktodo.add 
 
 管道进度用于百分比、速度和 ETA，事件行用于开始、因子、checkpoint 和错误。结果 JSONL 为原始结果，文本汇总合并同因子的 sigma；两者不可互当 checkpoint。
 
+两个阶段的因子记录保留 `curve_model`、完整 sigma 和执行目标；Edwards 使用 `ed`，Montgomery 使用 `mont`。Edwards 没有 Montgomery PARAM，结果 JSONL 省略该字段；Suyama Stage2 保存 PARAM0。Stage2 的结果事件包含模型、sigma、B1、记录号和带引号的 save 路径，因此安静模式启用 GUI 事件时也能正确记录因子；未带模型的旧 Stage2 曲线开始行按 Suyama PARAM0 处理。混合模型的连续曲线会逐条更新身份，不继承上一条的模型。
+
 Stage2任务进度按**已完成曲线/可用曲线**显示，包括恢复的完成数；当前曲线编号、计算阶段、实际B1/B2/S位宽/D/P另行展示。大步点批次是当前曲线中一个阶段的进度，阶段剩余时间不作为整个任务的ETA。任务ETA用本轮已完成曲线的平均引擎时间估计，首次完成前不虚构速度或ETA。速度边界优先为`stage2_full_wall.total=init+main`，没有该输出才使用外层曲线墙钟。
 
 Stage2支持启动短校准、存档校验、D/P与内存规划、小步点（baby points）、F乘积树、反转多项式逆、大步点（giant points）/G乘积树/模F折叠、F树下降、叶值分块/GCD、算术检查、因子分解及结果发布的阶段显示。详情和worker输出窗在当前阶段标题下说明该阶段的操作与产物；完整管线见[Stage2架构](../architecture/STAGE2.md)。正式因子结果进入已有结果汇总。GUI请求批次级控制台输出以取得状态，但常规输出窗口只保留阶段与曲线事件；形状、NTT统计和批次明细可从原始输出查看，工作程序文件日志仍由其配置维护。

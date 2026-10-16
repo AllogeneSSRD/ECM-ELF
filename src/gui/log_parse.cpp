@@ -171,6 +171,8 @@ bool parse_stage2(const std::string &line,Stage2Event &e) {
         e.kind=Kind::FullWall;read_after(line,"total=",e.seconds);
     } else if(starts_with(line,"stage2_result:")) {
         e.kind=Kind::Result;integer("record",e.record);read_after(line,"seconds=",e.seconds);
+        integer("B1",e.b1);read_kv_str(line,"save",e.save);
+        if(const char *at=find_str(line.c_str()," sigma=")){at+=7;read_u64(at,e.sigma);}
         const auto a=line.find("\"factors\":[");
         if(a!=line.npos) {
             const auto end=line.find(']',a+11);size_t at=a+11;
@@ -188,6 +190,18 @@ bool parse_stage2(const std::string &line,Stage2Event &e) {
     } else if(starts_with(line,"task_done:")) {
         e.kind=Kind::TaskDone;integer("completed",e.done);
     } else if(starts_with(line,"stage2_complete:") || starts_with(line,"stage2_stopped:"))e.kind=Kind::Complete;
+    if(e.kind==Kind::CurveStart || e.kind==Kind::Result) {
+        std::size_t start=0;
+        if(kv_pos(line,"curve_model",start)) {
+            const auto end=line.find_first_of(" \t\r\n",start);
+            e.curve_model=line.substr(start,end==line.npos?line.npos:end-start);
+        }
+        if(e.kind==Kind::CurveStart && e.curve_model.empty())e.curve_model="mont";
+        if(e.curve_model=="mont") {
+            e.param=0;long long value=0;
+            if(read_kv_int(line,"param",value) && value>=0 && value<=3)e.param=static_cast<int>(value);
+        }
+    }
     return e.kind!=Kind::None;
 }
 
@@ -201,12 +215,16 @@ void Stage2Status::apply(const Stage2Event &e) {
     } else if(e.kind==Kind::CurveStart) {
         total=e.total;current=std::min(e.done,total);done=current?current-1:0;
         record=e.record;sigma=e.sigma;b1=e.b1;engine_seconds=0;batch=batches=0;batch_left=0;elapsed=0;phase="read";
+        curve_model=e.curve_model.empty()?"mont":e.curve_model;param=curve_model=="mont"?e.param:-1;
     } else if(e.kind==Kind::Shape) {
         if(e.b1)b1=e.b1;if(e.b2)b2=e.b2;if(e.d)d=e.d;if(e.p)p=e.p;if(e.bits)bits=e.bits;
     } else if(e.kind==Kind::Phase) {
         phase=e.phase;elapsed=e.elapsed;batch=batches=0;batch_left=0;
     } else if(e.kind==Kind::Batch) {
         batch=e.batch;batches=e.batches;batch_left=e.left;
+    } else if(e.kind==Kind::Result) {
+        if(e.record)record=e.record;if(e.sigma)sigma=e.sigma;if(e.b1)b1=e.b1;if(!e.save.empty())save=e.save;
+        if(!e.curve_model.empty()){curve_model=e.curve_model;param=curve_model=="mont"?e.param:-1;}
     } else if(e.kind==Kind::FullWall)engine_seconds=e.seconds;
     else if(e.kind==Kind::CurveDone) {
         total=e.total;done=std::min(e.done,total);current=done;record=e.record;
@@ -222,6 +240,12 @@ ProgressInfo Stage2Status::progress()const {
     out.bits=bits;
     out.s_per_curve=measured_curves?seconds_sum/measured_curves:0;
     out.eta_s=(total>done?total-done:0)*out.s_per_curve;return out;
+}
+HitInfo Stage2Status::factor_hit(const std::string &factor)const {
+    HitInfo hit;hit.factor=factor;hit.curve=static_cast<int>(record);
+    hit.sigma=sigma;hit.has_sigma=sigma!=0;hit.param=param;
+    hit.save=save;hit.curve_model=curve_model;hit.execution_target="gpu";
+    return hit;
 }
 
 std::string strip_ansi(const std::string &s) {

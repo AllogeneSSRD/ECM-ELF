@@ -141,6 +141,29 @@ int main() {
               "unknown lines stay raw");
     }
 
+    std::printf("[6a] Edwards Stage1 and Stage2 curve identity\n");
+    {
+        const auto hit=parse_line(TS "factor[0]=1009 curve=0 sigma=17 curve_model=ed execution_target=gpu save=ed_m137_1e3.save").hit;
+        check(hit.factor=="1009" && hit.curve_model=="ed" && hit.param==-1,
+              "Edwards Stage1 has no Montgomery PARAM");
+        Stage2Status state;
+        state.apply(parse_line("stage2_plan: save=ed_m137_1e3.save requested=1 available=1 completed=0 B2=40000 D=210").stage2);
+        state.apply(parse_line("curve_start: 1/1 record=1 sigma=17 B1=20 checksum=verified curve_model=ed").stage2);
+        const auto result=parse_line("stage2_result: record=1 seconds=0.1 sigma=18446744073709551615 B1=20 curve_model=ed save=\"D:\\\\My Saves\\\\ed.save\" \"hits\":1,\"factors\":[\"10007\"]").stage2;
+        state.apply(result);
+        check(result.factors.size()==1 && result.factors[0]=="10007", "Stage2 factor payload parsed");
+        const auto ed=state.factor_hit("10007");
+        check(ed.curve_model=="ed" && ed.param==-1 && ed.sigma==18446744073709551615ull &&
+              ed.save=="D:\\My Saves\\ed.save" && ed.execution_target=="gpu",
+              "Stage2 Edwards result preserves full sigma, path and family");
+        Stage2Status quiet;quiet.apply(result);
+        check(quiet.factor_hit("10007").curve_model=="ed" && quiet.sigma==ed.sigma && quiet.save==ed.save,
+              "quiet result carries identity without a curve-start line");
+        state.apply(parse_line("curve_start: 1/1 record=2 sigma=26 B1=1000 checksum=absent").stage2);
+        check(state.factor_hit("17").curve_model=="mont" && state.factor_hit("17").param==0,
+              "legacy Stage2 resets Edwards identity to Suyama PARAM0");
+    }
+
     std::printf("[7] pipe line splitter\n");
     {
         LineSplitter sp;

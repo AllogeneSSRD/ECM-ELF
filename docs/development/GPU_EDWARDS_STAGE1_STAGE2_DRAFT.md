@@ -52,3 +52,19 @@ worker 构建入口为 `tools/build/test/build_edwards_gpu_workers.ps1`；[端�
 复现顺序：先运行两个 `tools/build/test/build_edwards_gpu_*.ps1` 构建入口；运行 `edwards_gpu_stage1_probe.exe 1 <新输出目录>`；再运行 `python tools/test/test_edwards_gpu_pipeline.py --stage1 <Stage1 exe> --stage2 <Stage2 exe> --output <新目录> --device 1` 及同参数的 `test_edwards_gpu_boundaries.py`。输出应位于 `data/experiments/`，不能覆盖已有原始证据。Stage1 路由单元回归与配置生成器的 `--check` 也已通过。
 
 当前限制和后续门禁见正式 [GPU Edwards](../architecture/STAGE1.md#gpu-edwards)及 [TODO](../TODO.md)：GPU NAF 与吞吐调优、生产 B1/B2、各容器边界、其他发布架构、GUI 位进度、Edwards Auto B2 成本资格及 Prime95 二进制输入仍需后续工作。本文保留，不自动清理。
+
+## 2026-10-16：大界限、随机恢复与 GUI 曲线身份验收
+
+[大界限门禁](../../tools/test/test_edwards_gpu_large_bounds.py)的 `large_bounds_01/summary.json` 为 complete=true，11 个命令检查通过。GPU1 上完整计算 M347/B1=10^6、M677/B1=10^6、M347/B1=10^7，各一条 sigma=20260922 曲线；末点投影和分母 GCD 与现有 CPU 标量 NAF 独立实现一致。M347/B1=10^6 还与 [历史 Prime95 数值夹具](../../tools/test/ecm_edwards_save_test.cpp)内的 Qx/Qz 投影一致；原外部 `e0000347` 文件在本次机器状态下不存在，因此此项是仓库冻结参考点验证，不是重新运行 Prime95 二进制。
+
+两条 M347 点分别接 B2=10^8、D=30030 的完整 Stage2，2880 个 monic 叶值均与 Python 普通整数直接乘积一致；摘要分别为 4421140799724100171 和 4631816582894925691，最终 GCD 都为 1。M521/B1=10^6 的两条随机曲线在真实事件停止后续跑，恢复采用磁盘原有 sigma，而不是启动时新生成的 sigma；两个末点分别与 CPU NAF 参考一致。停止位号、sigma、校验后的原始检查点、命令与输出已保存在该门禁目录。
+
+[小素数门禁](../../tools/test/test_edwards_gpu_small_primes.py)检查 B1=2、B2=1000、D=210：独立检查曲线非奇异、Stage1 归一化点可逆，并验证 `[ell]Q` 的非零投影和 GCD。N=131·M127/sigma=31、N=67·M127/sigma=19、N=97·M127/sigma=26 分别覆盖 ell=3、5、7，三组均由真实 GPU Stage1 save 进入 Stage2 并返回相应真因子。另有 M127 无因子样本；每组的 26 个小素数中，23 项复用 baby 证明并与阶梯核对，3 项走直接阶梯回退，坏计数均为 0。`small_primes_06/summary.json` 为 complete=true，9 个命令检查通过；关闭生产缓存策略仍按原保护拒绝，未为测试改变生产规则。
+
+接入审计发现 Stage1 因子行仍带无效 Montgomery PARAM、GUI Stage2 因子构造固定填写 Montgomery。修复后 Stage1 Edwards 省略 PARAM，Stage2 的曲线开始及结果事件携带模型，结果事件还包含完整 sigma/B1/save，GUI 从事件状态生成因子记录。旧版无模型的 Stage2 开始行继续按 Suyama PARAM0 处理。独立 GUI 事件模式在 quiet 级别保留结果事件，保证因子身份不依赖进度日志。
+
+[真实管道门禁](../../tools/test/test_edwards_gpu_metadata.py)通过 [回放探针](../../tools/test/edwards_gui_metadata_probe.cpp)把最新 worker 原始输出送入实际 GUI 解析、状态和 ResultsStore，写入并重读真实结果文件。`metadata_03/summary.json` 为 complete=true，12 个命令检查覆盖 Stage1 CLI/队列、Edwards/Montgomery Stage2、安静结果事件及 Ed→Mont→Ed 混合流。Edwards JSONL 记录没有 PARAM，Montgomery 为 PARAM0；模型、sigma 和 save 保持一致。构建入口为 `tools/build/test/build_edwards_gui_metadata_probe.ps1`；GUI 完整构建、76 项解析检查和 42 项结果存储检查均通过。本轮没有修改窗口布局，也不据此声称完成 GUI 视觉或长时间交互验收。
+
+大界限算术验证使用前一提交的冻结 worker 身份；本轮曲线算术源码和 CUDA 对象保持相同，只重编主机日志及 GUI 接入。最新 worker 的完整闭环重跑见 `gate_05`，容器/发布失败重跑见 `boundaries_03`，小素数重跑见 `small_primes_06`，构建与二进制身份另行冻结。全部证据位于同一 `data/experiments/gpu_edwards_pipeline_20261016/`；原始失败或早期采集不删除、不改写。以上仍是正确性门禁，功耗/时钟未锁定，正式性能样本数为 0。
+
+后续优化与覆盖扩展保留在 [TODO](../TODO.md)：GPU NAF、批量吞吐调优、更多设备和容器边界、GUI 位进度、Auto B2 成本资格及 Prime95 二进制导入。它们不替代已接通的 Edwards Stage1/Stage2 路径，也不作为本轮性能承诺。

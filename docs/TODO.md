@@ -39,7 +39,7 @@
 
 ## 其他实现
 
-- [ ] 扩大 GPU Edwards 的生产 B1/B2、各容器边界和发布设备验收；评估 NAF 字典与批次性能，补齐 GUI 位进度、Edwards Stage1 成本及 Auto B2 资格、CPU Prime95 二进制存档的 CUDA Stage2 入口。当前实现与门禁见 [GPU Edwards](architecture/STAGE1.md#gpu-edwards)及[开发草稿](development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)。
+- [ ] 扩大 GPU Edwards 的设备、位宽/B1/B2 和容器边界验收；评估 NAF 字典与批次吞吐，补齐 GUI 位进度、Edwards Stage1 成本及 Auto B2 资格、CPU Prime95 二进制存档的 CUDA Stage2 入口。现有完整大界限、随机恢复、小素数及模型身份覆盖见 [GPU Edwards](architecture/STAGE1.md#gpu-edwards)和[验收记录](development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
 
 - [ ] 扩大Stage1 PRAC位宽/设备/完整生产曲线验证；局部最佳参数不提升为通用默认。
 - [ ] 保持CPU/OpenCL可选路径的正确性覆盖和算子注册约束；没有对应设备证据时不写通用性能结论。

@@ -313,10 +313,7 @@ void WorkerProc::drain(DrainedOutput &out) {
             out.last_progress=stage2_status_.progress();++out.progress_lines;
             if(pl.stage2.kind==Stage2Event::Kind::CurveDone)out.speed_sample=true;
             for(const auto &factor:pl.stage2.factors) {
-                HitInfo hit;hit.factor=factor;hit.curve=static_cast<int>(stage2_status_.record);
-                hit.sigma=stage2_status_.sigma;hit.has_sigma=hit.sigma!=0;hit.param=0;
-                hit.save=stage2_status_.save;hit.curve_model="montgomery";hit.execution_target="gpu";
-                out.hits.push_back(std::move(hit));
+                out.hits.push_back(stage2_status_.factor_hit(factor));
             }
         }
         out.raw.push_back(pl.plain);
