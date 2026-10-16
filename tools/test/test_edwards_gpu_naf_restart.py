@@ -15,6 +15,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--baseline', type=Path, required=True)
     p.add_argument('--stage1', type=Path, required=True)
+    p.add_argument('--naf-baseline', type=Path, help='Old seven-tier NAF worker for cross-container V2 restore')
     p.add_argument('--device', type=int, default=1)
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args(); old = a.baseline.resolve(); new = a.stage1.resolve(); out = a.output.resolve()
@@ -38,10 +39,15 @@ def main():
         assert (r.returncode == 0) == good, (name, r.returncode, raw[-2000:])
         report['checks'].append(dict(name=name, exit=r.returncode, log_sha256=sha(log))); persist()
         print('PASS', name, flush=True); return raw.decode('utf-8', 'replace')
-    for name, source, bits, count, fixed, window, doubling in [
+    cases=[
         ('binary_v1', old, 347, 4, True, 0, 0),
         ('naf_v2', new, 347, 4, True, 8, 5),
-        ('naf_random', new, 521, 2, False, 6, 4)]:
+        ('naf_random', new, 521, 2, False, 6, 4)]
+    if a.naf_baseline:
+        previous=a.naf_baseline.resolve()
+        report['naf_baseline_sha256']=sha(previous)
+        cases.append(('naf_v2_old_tier',previous,677,2,True,8,5))
+    for name, source, bits, count, fixed, window, doubling in cases:
         folder = out/name; folder.mkdir(); ini = folder/'ecm.ini'; queue = folder/'worktodo.txt'; finished = folder/'finished.txt'
         task = f'ECM2=1,2,{bits},-1,100000,0,{count}'+(',20260922' if fixed else '')+'\n'
         queue.write_text(task)
@@ -67,6 +73,8 @@ def main():
         assert queue.read_text() == task and not finished.exists()
         primary = next(folder.glob('*.gpu.ckpt')); frozen = out/(name+'_checkpoint.txt'); frozen.write_bytes(primary.read_bytes())
         data = checkpoint(primary)
+        if name=='naf_v2_old_tier':
+            assert 'container_bits=1024' in (out/(name+'_stopped.log')).read_text(encoding='utf-8')
         assert (data['window'], data['doubling'], data['b1'], data['count']) == (window, doubling, 100000, count)
         assert 0 < data['done'] < data['total']
         if window:
@@ -81,6 +89,7 @@ def main():
         assert 'checkpoint algorithm differs' in text and primary.read_bytes() == before and queue.read_text() == task
         text = call(name+'_resume', [new, '-ini', ini])
         assert f'window={window} doubling={doubling}' in text and 'GPU Edwards resume:' in text
+        if name=='naf_v2_old_tier': assert 'container_bits=768' in text
         assert not queue.read_text().strip() and finished.exists() and not list(folder.glob('*.ckpt'))
         rows = records(next(folder.glob('ed_*.save')))
         assert [r[2] for r in rows] == [r['sigma'] for r in data['rows']]

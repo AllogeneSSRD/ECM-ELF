@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 
 using namespace ecm_edwards;
@@ -15,9 +16,20 @@ static void identity(mpz_t *s,const mpz_t d,const mpz_t x,const mpz_t y,const mp
     mpz_mul(s[4],x,y);mpz_mod(s[4],s[4],n);mpz_set_ui(s[6],1);mpz_set_ui(s[7],1);
 }
 static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int device,
-                const std::filesystem::path &out,unsigned other=0,unsigned window=0,int algorithm=4) {
+                const std::filesystem::path &out,unsigned other=0,unsigned window=0,int algorithm=4,bool prime=false) {
     Integer n,s,d,x,y,a,f,old_d,old_x,old_y,cpu_x,cpu_z,qx,qz,lhs,rhs,g,inv;
     mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,bits);mpz_sub_ui(n.v,n.v,1);
+    if(prime){
+        // All three execution modes use the same boundary input. Generating a
+        // large probable prime is setup work, not another arithmetic test.
+        static Integer boundary;static unsigned boundary_bits=0;
+        if(boundary_bits!=bits){
+            mpz_sub_ui(n.v,n.v,1048576);mpz_nextprime(boundary.v,n.v);
+            require(mpz_sizeinbase(boundary.v,2)==bits,"boundary prime crossed requested width");
+            boundary_bits=bits;
+        }
+        mpz_set(n.v,boundary.v);
+    }
     if(other){mpz_set_ui(g.v,1);mpz_mul_2exp(g.v,g.v,other);mpz_sub_ui(g.v,g.v,1);mpz_mul(n.v,n.v,g.v);}
     mpz_set_ui(s.v,1);for(unsigned k=2;k<=b1;++k)mpz_lcm_ui(s.v,s.v,k);mpz_mul_ui(s.v,s.v,48);
     Array state(size_t(count)*9),resumed(size_t(count)*9);std::vector<uint64_t> sigmas;
@@ -40,6 +52,9 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
     // A new invocation uploads the complete ordinary-domain state, just as a
     // restarted worker does. Chunk boundaries deliberately differ.
     require(execute(resumed.data(),split,113,nullptr)==0,error.c_str());
+    uint32_t container=0,tpi=0;
+    require(ecm_cuda_edwards_tier(mpz_sizeinbase(n.v,2),container,tpi),"missing compiled Edwards tier");
+    if(window)require(metrics.container_bits==container && metrics.tpi==tpi,"executed NAF tier differs from query");
     for(size_t i=0;i<size_t(count)*9;++i)require(!mpz_cmp(state[i],resumed[i]),"resumed result differs from uninterrupted run");
     std::string lines;
     for(unsigned i=0;i<count;++i) {
@@ -53,15 +68,39 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
         if(mpz_cmp_ui(g.v,1)==0){mpz_invert(inv.v,qz.v,n.v);mpz_mul(qx.v,qx.v,inv.v);mpz_mod(qx.v,qx.v,n.v);lines+=save_line(n.v,qx.v,sigmas[i],b1,false);}
         else if(mpz_cmp(g.v,n.v)<0)lines+=save_line(n.v,g.v,sigmas[i],b1,true);
     }
-    const auto name="m"+std::to_string(bits)+(other?"x"+std::to_string(other):"")+"_b"+std::to_string(b1)+
+    const auto name=std::string(prime?"p":"m")+std::to_string(bits)+(other?"x"+std::to_string(other):"")+"_b"+std::to_string(b1)+
         (window?"_w"+std::to_string(window)+"_a"+std::to_string(algorithm):"");
     std::ofstream file(out/(name+".save"),std::ios::binary);file<<lines;file.close();require(bool(file),"save fixture write failed");
-    std::printf("PASS %s device=%d curves=%u columns=%u split_resume=17/113 cpu_match=1 tier=%u tpi=%u\n",name.c_str(),device,count,done,metrics.container_bits,metrics.tpi);
+    std::printf("PASS %s device=%d curves=%u columns=%u split_resume=17/113 cpu_match=1 tier=%u tpi=%u\n",name.c_str(),device,count,done,container,tpi);
+    std::fflush(stdout);
 }
 int main(int argc,char **argv) {
     try {
-        if(argc!=3)throw std::runtime_error("usage: edwards_gpu_stage1_probe DEVICE OUTPUT_DIRECTORY");
+        if(argc!=3 && argc!=4)throw std::runtime_error("usage: edwards_gpu_stage1_probe DEVICE OUTPUT_DIRECTORY [SINGLE_COMPILED_TIER]");
         const int device=std::atoi(argv[1]);std::filesystem::path out(argv[2]);std::filesystem::create_directories(out);
+        if(argc==4){
+            const unsigned expected=unsigned(std::stoul(argv[3]));uint32_t w=0,t=0;
+            require(ecm_cuda_edwards_tier(1,w,t) && w==expected,"restricted minimum/fallback failed");
+            require(ecm_cuda_edwards_tier(expected-1,w,t) && w==expected,"restricted upper boundary failed");
+            require(!ecm_cuda_edwards_tier(expected,w,t) && !w && !t,"restricted ceiling failed");
+            run(expected-1,20,33,17,device,out,0,0,4,true);
+            for(int algorithm:{4,5})run(expected-1,20,33,17,device,out,0,6,algorithm,true);
+            return 0;
+        }
+        const unsigned tiers[]={128,192,256,384,512,768,1024,1280,1536,1792,2048,
+            2560,3072,3584,4096,4608,5120,5632,6144,6656,7168,7680,8192,
+            9216,10240,11264,12288,13312,14336,15360,16384,17408};
+        for(size_t i=0;i<std::size(tiers);++i){
+            uint32_t w=0,t=0;
+            require(ecm_cuda_edwards_tier(tiers[i]-1,w,t) && w==tiers[i],"smallest container dispatch failed");
+            const unsigned expected_tpi=w<=512?4:w<=2048?8:w<=8192?16:32;
+            require(t==expected_tpi,"TPI dispatch failed");
+            const bool next=ecm_cuda_edwards_tier(tiers[i],w,t);
+            require(i+1<std::size(tiers)?next && w==tiers[i+1]:!next && !w && !t,"one-spare-bit boundary failed");
+            // Prime targets avoid curve-setup factors at synthetic container boundaries.
+            run(tiers[i]-1,20,1,17,device,out,0,0,4,true);
+            for(int algorithm:{4,5})run(tiers[i]-1,20,1,17,device,out,0,6,algorithm,true);
+        }
         run(127,20,33,17,device,out);
         run(127,20,4,17,device,out,89);
         run(347,1000,4,20260922,device,out);

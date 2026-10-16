@@ -157,6 +157,11 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
         }
         ecm_ts_fprintf(stdout,"GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu window=%u doubling=%d\n",
                        opt.device_index,curves,mpz_sizeinbase(n,2),mpz_sizeinbase(scalar.v,2),batch.window,batch.doubling);
+        uint32_t container=0,tpi=0;
+        if(!ecm_cuda_edwards_tier(mpz_sizeinbase(n,2),container,tpi))
+            throw std::runtime_error("no compiled GPU Edwards container with one spare bit for target");
+        ecm_ts_fprintf(stdout,"GPU Edwards geometry: container_bits=%u tpi=%u tpb=128 blocks=%u\n",
+                       container,tpi,(curves+128/tpi-1)/(128/tpi));
         Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),stage1_now_ms()};std::string error;
         EcmEdwardsNafMetrics metrics;
         const auto arithmetic_start=std::chrono::steady_clock::now();

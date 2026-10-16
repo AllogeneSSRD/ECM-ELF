@@ -1,6 +1,7 @@
 #pragma once
 #include <gmp.h>
 #include <cstdint>
+#include <cstddef>
 #include <string>
 
 // Per curve: d, Px, Py, Pz, Pt, Rx, Ry, Rz, Rt (ordinary residues).
@@ -12,3 +13,7 @@ int ecm_cuda_edwards_stage1(const mpz_t n,const mpz_t scalar,mpz_t *states,
                             uint32_t count,uint32_t &done,uint32_t chunk_bits,
                             int device,EcmEdwardsProgress progress,void *context,
                             std::string &error);
+
+// Query the smallest compiled container with one spare bit; no GPU initialization.
+// Returns false (and zero outputs) when the build has no suitable instance.
+bool ecm_cuda_edwards_tier(size_t bits,uint32_t &container,uint32_t &tpi);

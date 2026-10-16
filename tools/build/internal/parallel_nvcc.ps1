@@ -112,7 +112,7 @@ New-Item -ItemType Directory -Force $logDir | Out-Null
 
 # --- decide what to compile -------------------------------------------------
 $newestSource = Get-Date "1970-01-01"
-foreach ($pat in @("kernels\cuda\*", "include\*", "CMakeLists.txt", "kernels\*.h", "src\core\ecm_prac_plan.h")) {
+foreach ($pat in @("kernels\cuda\*", "src\cuda\*", "include\*", "CMakeLists.txt", "kernels\*.h", "src\core\ecm_prac_plan.h", "src\core\ecm_edwards_naf.h")) {
     $p = Join-Path $repo $pat
     Get-Item $p -ErrorAction SilentlyContinue | ForEach-Object {
         if ($_.LastWriteTime -gt $newestSource) { $newestSource = $_.LastWriteTime }
@@ -156,6 +156,7 @@ $queue = New-Object System.Collections.Queue
 foreach ($j in $todo) { $queue.Enqueue($j) }
 $running = New-Object System.Collections.ArrayList
 $failed = @()
+$compileStart = Get-Date
 
 while ($queue.Count -gt 0 -or $running.Count -gt 0) {
     while ($queue.Count -gt 0 -and $running.Count -lt $Jobs) {
@@ -195,14 +196,18 @@ while ($queue.Count -gt 0 -or $running.Count -gt 0) {
 
 foreach ($j in $tuList | Where-Object { $_.Skip }) { Write-Host ("  skip {0} (up to date)" -f $j.Name) }
 
-$wall = 0.0
+$longest = 0.0
 $slowest = $null
-foreach ($j in $tuList) { if ($j.Seconds -gt $wall) { $wall = $j.Seconds; $slowest = $j.Name } }
+foreach ($j in $tuList) { if ($j.Seconds -gt $longest) { $longest = $j.Seconds; $slowest = $j.Name } }
+$wall = ((Get-Date) - $compileStart).TotalSeconds
 $sum = ($tuList | Measure-Object -Property Seconds -Sum).Sum
-Write-Host ("compiled {0} TU(s): wall {1:N1}s (serial sum {2:N1}s, speedup {3:N2}x)" -f `
-    $todo.Count, $wall, $sum, $(if ($wall -gt 0) { $sum / $wall } else { 0 }))
+Write-Host ("compiled {0} TU(s): elapsed wall {1:N1}s (sum of concurrent TU elapsed times {2:N1}s)" -f `
+    $todo.Count, $wall, $sum)
+[ordered]@{jobs=$Jobs;wall_seconds=$wall;tu_elapsed_sum_seconds=$sum;
+    units=@($tuList|ForEach-Object{[ordered]@{source=$_.Entry.file;object=$_.Obj;skipped=$_.Skip;started=$_.Start;seconds=$_.Seconds}})
+}|ConvertTo-Json -Depth 6|Set-Content (Join-Path $logDir 'timings.json') -Encoding utf8
 if ($slowest) {
-    Write-Host ("critical path = {0} ({1:N1}s): further speedup means splitting THAT TU" -f $slowest, $wall)
+    Write-Host ("longest TU = {0} ({1:N1}s)" -f $slowest, $longest)
 }
 
 if ($failed.Count -gt 0) {

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+﻿cmake_minimum_required(VERSION 3.20)
 project(main)
 
 # Config source, generated bindings, templates and reference must agree.
@@ -272,6 +272,13 @@ if(ECM_ENABLE_CUDA)
         src/cuda/ecm_cuda_backend.cu
         src/cuda/ecm_cuda_edwards.cu
         src/cuda/ecm_cuda_edwards_naf.cu
+        kernels/cuda/cgbn_edwards_instances_tpi4.cu
+        kernels/cuda/cgbn_edwards_instances_tpi8.cu
+        kernels/cuda/cgbn_edwards_instances_tpi16_2560_4096.cu
+        kernels/cuda/cgbn_edwards_instances_tpi16_4608_6144.cu
+        kernels/cuda/cgbn_edwards_instances_tpi16_6656_8192.cu
+        kernels/cuda/cgbn_edwards_instances_tpi32_9216_12288.cu
+        kernels/cuda/cgbn_edwards_instances_tpi32_13312_17408.cu
         kernels/cuda/cgbn_stage1.cu
         kernels/cuda/cgbn_stage1_kernels_tpi4.cu
         kernels/cuda/cgbn_stage1_kernels_tpi8.cu

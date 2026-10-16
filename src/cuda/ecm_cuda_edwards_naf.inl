@@ -1,4 +1,4 @@
-// Included inside ecm_cuda_edwards.cu's private namespace, after put().
+// Included inside cgbn_edwards_instances.cuh's private namespace, after put().
 struct EdwardsEvent {
     cudaEvent_t value{};
     EdwardsEvent(){check(cudaEventCreate(&value));}

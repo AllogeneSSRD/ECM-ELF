@@ -1,6 +1,9 @@
 #Requires -Version 5.1
 param([string]$Build='build_cuda_cmake/edwards_gpu_stage1_probe',
       [ValidatePattern('^sm_[0-9]+$')][string]$Arch='sm_89',
+      [int]$Jobs=8,
+      [string]$Tiers='',
+      [string]$WorkerBuild='',
       [switch]$Incremental)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -9,54 +12,78 @@ Set-Location $repo
 $cuda=Resolve-EcmCudaToolkit -Archs $Arch
 $vc=Resolve-EcmVcEnvironment $cuda
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
-New-Item -ItemType Directory -Force $Build | Out-Null
-$sources=@('src/cuda/ecm_cuda_edwards.cu','src/cuda/ecm_cuda_edwards_naf.cu','tools/test/edwards_gpu_stage1_probe.cpp','src/cpu/ecm_edwards_cpu.cpp')
-$nafDeps=@('src/cuda/ecm_cuda_edwards_naf.h','src/cuda/ecm_cuda_edwards_naf.inl','src/core/ecm_edwards_naf.h','kernels/cuda/cgbn_edwards_naf.cuh')
-$objects=@()
-$previous=$null
-$manifestPath=Join-Path $Build 'manifest.json'
+$objDir=Join-Path $Build 'CMakeFiles/edwards_gpu_stage1_probe.dir'
+New-Item -ItemType Directory -Force $objDir | Out-Null
+$sources=@('src/cuda/ecm_cuda_edwards.cu','src/cuda/ecm_cuda_edwards_naf.cu')+
+    @(Get-ChildItem 'kernels/cuda/cgbn_edwards_instances_*.cu'|ForEach-Object{'kernels/cuda/'+$_.Name})+
+    @('tools/test/edwards_gpu_stage1_probe.cpp','src/cpu/ecm_edwards_cpu.cpp')
+$deps=@(Get-ChildItem 'src/cuda/ecm_cuda_edwards*' -File|ForEach-Object{'src/cuda/'+$_.Name})+
+    @(Get-ChildItem 'kernels/cuda/cgbn_edwards_*' -File|ForEach-Object{'kernels/cuda/'+$_.Name})+
+    @('src/core/ecm_edwards_naf.h','src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h',
+      'kernels/cuda/cgbn_edwards_point.cuh','kernels/cuda/cgbn_edwards_naf.cuh',
+      'src/cpu/ecm_edwards_mont.h','tools/build/test/build_edwards_gpu_stage1_probe.ps1')
+$hashes=[ordered]@{}
+foreach($source in ($sources+$deps|Select-Object -Unique)){$hashes[$source]=(Get-FileHash -LiteralPath $source).Hash}
+$worker=$null
+if($WorkerBuild){
+    $WorkerBuild=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WorkerBuild)
+    $worker=Get-Content (Join-Path $WorkerBuild 'edwards_build_manifest.json') -Raw|ConvertFrom-Json
+    if($worker.arch -ne $Arch){throw 'worker architecture mismatch'}
+    if($worker.tiers -ne $Tiers){throw 'worker tier selection mismatch'}
+    foreach($property in $worker.sources.PSObject.Properties){
+        if($property.Value -ne (Get-FileHash -LiteralPath $property.Name).Hash){throw "worker source changed: $($property.Name)"}
+    }
+    if($worker.compile_commands_sha256 -ne (Get-FileHash (Join-Path $WorkerBuild 'compile_commands.json')).Hash){throw 'worker commands changed'}
+}
+$previous=$null;$manifestPath=Join-Path $Build 'manifest.json'
 if($Incremental -and (Test-Path $manifestPath)){$previous=Get-Content $manifestPath -Raw|ConvertFrom-Json}
+$reuse=$previous -and $previous.arch -eq $Arch -and $previous.tiers -eq $Tiers
+if($reuse){foreach($key in $hashes.Keys){if($previous.sources.$key -ne $hashes[$key]){$reuse=$false}}}
+$objects=@();$objectMap=[ordered]@{};$commands=@()
 foreach($source in $sources){
     $stem=[IO.Path]::GetFileNameWithoutExtension($source)
-    $obj=Join-Path $Build ($stem+'.obj');$objects+=$obj
-    $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O2 -arch='+$Arch+
-        ' --pre-include=stdint.h -Xcompiler /utf-8 -Xcompiler /wd4819 -I cgbn/include -I third_party/gmp-zen3/dist/include -I src/core -I src/cpu -I src/cuda -c "'+$source+'" -o "'+$obj+'"'
-    $cmdFile=Join-Path $Build ($stem+'.cmd')
-    $commandText="@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n"
-    $reuse=$false
-    if($source -like '*.cu' -and $previous -and $previous.arch -eq $Arch -and (Test-Path $obj) -and (Test-Path $cmdFile)){
-        $reuse=[IO.File]::ReadAllText($cmdFile) -eq $commandText
-        $deps=@($source,'src/cuda/ecm_cuda_edwards.h','kernels/cuda/cgbn_edwards_point.cuh')
-        if($source -like '*_naf.cu'){$deps+=$nafDeps}
-        foreach($dep in $deps){
-            if($previous.sources.$dep -ne (Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash){$reuse=$false}
+    $obj=Join-Path $objDir ($stem+'.obj')
+    if($worker -and $source -like '*.cu'){
+        $absolute=(Join-Path $repo $source).Replace('\','/')
+        $entry=@($worker.objects.PSObject.Properties|Where-Object{$_.Name.Replace('\','/') -eq $absolute})
+        if($entry.Count -ne 1){throw "worker object absent: $source"}
+        $obj=$entry[0].Value.path
+        if($entry[0].Value.sha256 -ne (Get-FileHash -LiteralPath $obj).Hash){throw "worker object changed: $source"}
+        Write-Host "Reused verified worker object: $source"
+    } elseif(-not ($reuse -and $previous.objects.$source -and (Test-Path $obj) -and
+        $previous.objects.$source -eq (Get-FileHash -LiteralPath $obj).Hash)) {
+        $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O2 -arch='+$Arch+
+            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I cgbn/include -I third_party/gmp-zen3/dist/include -I src/core -I src/cpu -I src/cuda -c "'+$source+'" -o "'+$obj+'"'
+        if($Tiers){
+            $definitions=' -DECM_TIERS_RESTRICTED'
+            foreach($tier in $Tiers.Split(',')){
+                if($tier -notmatch '^\d+$'){throw 'Tiers must be comma-separated numeric containers'}
+                $definitions+=' -DECM_TIER_'+$tier
+            }
+            $command+=$definitions
         }
-        $expected=$null
-        if($previous.objects){$expected=$previous.objects.$source}
-        elseif($source -eq 'src/cuda/ecm_cuda_edwards.cu'){$expected=$previous.cuda_object_sha256}
-        if(-not $expected -or $expected -ne (Get-FileHash $obj).Hash){$reuse=$false}
-    }
-    if($reuse){Write-Host "Reused unchanged GPU translation unit: $source";continue}
-    [IO.File]::WriteAllText($cmdFile,$commandText,[Text.UTF8Encoding]::new($false))
-    & cmd.exe /d /c $cmdFile 2>&1 | Out-File (Join-Path $Build ($stem+'.log')) -Encoding utf8
-    if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build ($stem+'.log')) -Tail 30;throw "compile failed: $source"}
-    Write-Host "Compiled $source"
+        $commands += [ordered]@{directory=$repo;file=(Join-Path $repo $source);command=$command}
+    } else {Write-Host "Reused unchanged object: $source"}
+    $objects+=$obj;$objectMap[$source]=$obj
+}
+if($commands.Count){
+    ConvertTo-Json -InputObject @($commands) -Depth 4|Set-Content (Join-Path $Build 'compile_commands.json') -Encoding utf8
+    & (Join-Path $PSScriptRoot '../internal/parallel_nvcc.ps1') -BuildDir $Build -Target edwards_gpu_stage1_probe `
+        -Jobs $Jobs -SourceRegex '\.(cu|cpp)$' -NoBuild -VcVars $vc.VcVars -VcVersion $vc.Version
+    if($LASTEXITCODE -ne 0){throw 'parallel probe compile failed'}
 }
 $objArgs=($objects|ForEach-Object{'"'+$_+'"'}) -join ' '
 $exe=Join-Path $Build 'edwards_gpu_stage1_probe.exe'
-$command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -arch='+$Arch+' '+$objArgs+' -L third_party/gmp-zen3/dist/lib -lgmp -o "'+$exe+'"'
+$command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -arch='+$Arch+' -Xcompiler /MD '+$objArgs+' -L third_party/gmp-zen3/dist/lib -lgmp -o "'+$exe+'"'
 $cmdFile=Join-Path $Build 'link.cmd'
 [IO.File]::WriteAllText($cmdFile,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))
 & cmd.exe /d /c $cmdFile 2>&1 | Out-File (Join-Path $Build 'link.log') -Encoding utf8
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'link.log') -Tail 30;throw 'link failed'}
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
-$hashes=[ordered]@{}
-foreach($source in ($sources+$nafDeps+@('src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h','src/cuda/ecm_cuda_edwards.h','kernels/cuda/cgbn_edwards_point.cuh','src/cpu/ecm_edwards_mont.h','tools/build/test/build_edwards_gpu_stage1_probe.ps1'))){
-    $hashes[$source]=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
-}
+foreach($key in $hashes.Keys){if($hashes[$key] -ne (Get-FileHash -LiteralPath $key).Hash){throw "source changed during probe build: $key"}}
 $objectHashes=[ordered]@{}
-for($i=0;$i -lt $sources.Count;$i++){$objectHashes[$sources[$i]]=(Get-FileHash $objects[$i]).Hash}
-[ordered]@{exe=$exe;sha256=(Get-FileHash $exe).Hash;arch=$Arch;objects=$objectHashes;
-    cuda_object_sha256=(Get-FileHash (Join-Path $Build 'ecm_cuda_edwards.obj')).Hash;
-    sources=$hashes}|ConvertTo-Json -Depth 5|Set-Content $manifestPath -Encoding utf8
+foreach($source in $sources){$objectHashes[$source]=(Get-FileHash -LiteralPath $objectMap[$source]).Hash}
+[ordered]@{exe=$exe;sha256=(Get-FileHash $exe).Hash;arch=$Arch;tiers=$Tiers;worker_build=$WorkerBuild;objects=$objectHashes;
+    cuda_object_sha256=$objectHashes['src/cuda/ecm_cuda_edwards.cu'];sources=$hashes
+}|ConvertTo-Json -Depth 5|Set-Content $manifestPath -Encoding utf8
 Write-Host "Built $exe"

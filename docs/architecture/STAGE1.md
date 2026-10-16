@@ -26,7 +26,9 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 [CUDA NAF 批量入口](../../src/cuda/ecm_cuda_edwards_naf.cu)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12；每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，不做字典模逆。主机以两份紧凑位图保存非零列和有符号索引，设备按每片最多 256 个 NAF 列推进。设备累加点在算术域跨片保留，只回传四个规范普通坐标供回调及检查点使用。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [ecm_edwards_naf.h](../../src/core/ecm_edwards_naf.h)，设备字典与切片见 [cgbn_edwards_naf.cuh](../../kernels/cuda/cgbn_edwards_naf.cuh)。
 
-容器选择要求 N 至少留一位余量：256/512 用 TPI4，1024 用 TPI8，2048/4096 用 TPI16，8192/17408 用 TPI32；TPB128。该分派与 Montgomery 的进位预留及调优规则分别维护。字典显存随批量、容器和窗口增长，分配失败会报错并保留未完成队列，不静默改变显式窗口。
+容器选择要求 N 至少留一位余量，选择本次构建中最小的可用容器。完整网格为128/192/256/384/512（TPI4）、768..2048间隔256（TPI8）、2560..8192间隔512（TPI16）、9216..17408间隔1024（TPI32），共32档，TPB128。Montgomery仍预留六位，不能把两个模型的边界条件互换。`ECM_TIERS`同时筛选Edwards实例；缺档时使用更大可用档，超过本次构建可用上限时报错。日志的 `GPU Edwards geometry` 给出实际容器、TPI及网格，查询入口为 `ecm_cuda_edwards_tier`。
+
+二进制与NAF的实例共享[位宽清单](../../src/cuda/ecm_cuda_edwards_tiers.inc)，核函数和七组实例化文件位于 `kernels/cuda/cgbn_edwards_instances*`，按TPI及位宽范围拆分并行编译；`src/cuda/`保留接口、输入校验、分派和主机驱动。模板算术与切片逻辑见[共用实例实现](../../kernels/cuda/cgbn_edwards_instances.cuh)。字典显存为曲线数×容器字节数×4坐标×2^(w−2)，分配失败会报错并保留未完成队列，不静默改变显式窗口。
 
 主循环默认倍点为 HWCD；`ECM_EDWARDS_DBL_ALGO=4|5` 选择 HWCD（内部编号 4）或 2XY 多项式（编号 5），字典构造使用 HWCD。后者采用 Prime95 算法 5 的代数形式，CGBN 不模拟其 FFT 复合指令；内部编号 4 不代表 Prime95 算法 4。参考版本与运算计数见 [数学说明](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。`ECM_EDWARDS_STAGE1_ALGO=binary|naf` 可显式选择 [原二进制路径](../../src/cuda/ecm_cuda_edwards.cu)或 NAF，用于对照；binary 不接受窗口或 NAF 倍点设置。未指定时使用 NAF，恢复时遵从已保存的模式。
 
