@@ -368,15 +368,15 @@
       "domain": "[0|3..12]",
       "fx": "Edwards_NAF",
       "parser": "legacy",
-      "zero": "12",
+      "zero": "backend_default",
       "rules": [
         "recommended",
         "runtime:x=0|x>=2",
         "dict=2^(x-2)"
       ],
       "description": [
-        "CPU Edwards NAF window. 0 uses the built-in choice. Larger windows usually reduce loop additions, while the precomputed dictionary grows as 2^(w-2), increasing memory and setup time. Typical values are 3..12. CUDA PRAC ignores this setting.",
-        "设置 CPU Edwards 的 NAF 窗口。0 使用内置窗口；增大窗口通常减少主循环加法，但预计算字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA PRAC 不使用此设置。"
+        "Edwards NAF window. 0 selects CPU 12 or CUDA GPU 6. CUDA accepts explicit windows 2..12. Larger windows reduce loop additions while the dictionary grows as 2^(w-2), increasing memory and setup time. Typical values are 3..12. CUDA Montgomery/PRAC ignores this setting.",
+        "设置 Edwards NAF 窗口。0 在 CPU 选择 12，在 CUDA GPU 选择 6；CUDA 显式窗口允许 2..12。增大窗口减少主循环加法，但字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA Montgomery/PRAC 不使用此设置。"
       ]
     },
     {

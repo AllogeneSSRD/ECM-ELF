@@ -28,8 +28,19 @@ TODO：冻结基线与源依赖；完成测量、窗口/倍点选择、正确性
 
 ## 2026-10-16：GPU NAF 算术门禁
 
-独立 CUDA 模块 `src/cuda/ecm_cuda_edwards_naf.cu` 已通过 GPU1 探针：35 个用例、441 个逻辑曲线组合，其中 NAF 384 条、原二进制对照 57 条。NAF 覆盖窗口 2/3/5/6/8/12、倍点算法 4/5、全部七档容器（256..17408）、部分 block 的 33 曲线、完整 Mersenne 和 M127·M89 复合输入；B1 为 20 或 1000。每条核对现有 CPU Edwards 的投影末点与 GCD、构造参数及扩展点不变量，完成态与第 17 列停止后改用 113 列切片恢复逐坐标一致。B1=1000 的窗口 6 案例实际有 1445 列，覆盖原标量 1444 位之外的 NAF 进位。
+独立 CUDA 模块 `src/cuda/ecm_cuda_edwards_naf.cu` 已通过 GPU1 探针：35 个用例、441 个逻辑曲线组合，其中 NAF 384 条、原二进制对照 57 条。NAF 覆盖窗口 2/3/5/6/8/12、两个倍点变体、全部七档容器（256..17408）、部分 block 的 33 曲线、完整 Mersenne 和 M127·M89 复合输入；B1 为 20 或 1000。GPU 内部编号 4 指 HWCD 四平方路径，并非 Prime95 算法 4；编号 5 指采用 Prime95 算法 5 的 2XY 多项式，但不模拟 FFT 复合指令。每条核对现有 CPU Edwards 的投影末点与 GCD、构造参数及扩展点不变量，完成态与第 17 列停止后改用 113 列切片恢复逐坐标一致。B1=1000 的窗口 6 案例实际有 1445 列，覆盖原标量 1444 位之外的 NAF 进位。
 
 证据为 `data/experiments/edwards_naf_20261016/probe_01.log`、`probe_01/manifest.json`。探针 SHA256 为 `0e07c0f366fced6383654d4af5c8d55ee02845127ff297368825cb1c1c7b0a52`，sm89/CUDA13.3，正式性能样本数为 0。首轮构建遇到 CGBN load 不接受 const 指针，已按其接口修正；原始失败日志保留于 `compile_01/naf.log`。
 
 生产驱动与 V1/V2 磁盘恢复仍待门禁，正式性能矩阵尚未完成。优化前基线 exe 已冻结于 `baseline_build/bin/`，SHA256=`3777416c9026027c88d2d56f78e6fbfa28a3886a7d78aa25ce9a500b66a534cb`；编译对象和扩建档位身份见 `baseline_build/identity_v2.json`，原始代码及 CGBN/GMP 头文件在 `sources_v2.zip`。M4003 的三曲线族试跑仅用于核对采集工具，不计正式性能。
+
+## 2026-10-16：生产入口与恢复验收
+
+当前 Stage1 测试 exe SHA256=`d853b4ce80c78853a4fdafa5f3ad3abc51cbe267cd5231c64d2a523e299f9a89`，GPU1 RTX 4060 Laptop。`validation_01.json` 的六组完整通过；补充后的 `restart_02/summary.json` 通过 18 条命令。合计采用最新恢复组的 88 条命令：流水线 29、上层位宽/发布边界 9、恢复 18、小素数 9、大界限 11、GUI 元数据 12。
+
+- CLI、队列、完整 Stage2 叶值、保存校验、损坏主文件后的备份恢复及发布失败保留任务均通过。
+- 实际停止的 V1 二进制检查点由新 worker 按原算法继续；V2 保存窗口和倍点编号，默认配置采用原设置。显式窗口或 binary/NAF 模式冲突报错且原检查点和 worktodo 不变。随机 sigma 恢复及全部末点由独立整数梯形参考核对。
+- M347 的 B1=1e6/1e7、M677 的 B1=1e6 完整结果与现有 CPU NAF 投影和 GCD 一致。M347/B1=1e6 同时匹配仓库冻结的历史 Prime95 数值；没有声称重新运行了外部 Prime95 二进制。M347 两条曲线继续 B2=1e8，全部 2880 个叶值与直接乘积一致。
+- 新路径保留原 13 个 CUDA 对象的逐字节身份，仅新增 NAF 模块；原对象对照见 `object_identity_02.json`。主机对象变化为选择/计时驱动及嵌入配置说明的队列配置。`bench_smoke_02/`、`bench_smoke_03/` 验证二进制/NAF、PARAM0/PARAM3、两倍点变体的采集与末点核对，不列入正式性能矩阵。
+
+正式测量使用完整进程批次、B1=10000、sigma=20260922、GPU1。`bench_initial_01` 保留 347/677/991/2203/4003 位的 60 个有效样本；8191 位的 PARAM3 被缺失 9216 容器拦住，原报告保持 incomplete。Montgomery 预留六位进位，不能误用 8192 容器。已从冻结的优化前源码补建原算法（`baseline_native_identity.json`，exe SHA256=`cfa6c4d675a33fddca72797254c02ff2170593c2a7507d1d78c5e8000cbb5dde`），独立补测该位宽。完整矩阵、NAF 配对、窗口和倍点对照仍在采集；未将失败组标记为已完成。

@@ -1,6 +1,8 @@
 // Included by the shared Stage1 driver after its save-name helpers.
 #if ECM_HAS_CUDA_EDWARDS
 #include "../cuda/ecm_cuda_edwards.h"
+#include "../cuda/ecm_cuda_edwards_naf.h"
+#include "ecm_edwards_naf.h"
 #include "ecm_edwards_io.h"
 #include <iterator>
 #include <stdexcept>
@@ -9,6 +11,8 @@ namespace ed_gpu_driver {
 using namespace ecm_edwards;
 struct Batch {
     uint32_t count,done=0;
+    unsigned window=6;
+    int doubling=4;
     Array state,factors;
     std::vector<uint64_t> sigmas;
     std::vector<int> hit;
@@ -34,7 +38,9 @@ static bool initialize(Batch &b,const mpz_t n,std::string &error) {
 }
 static std::string checkpoint_body(Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
     std::ostringstream out;
-    out<<"ECM_GPU_EDWARDS_BINARY_V1\n"<<hex(n)<<'\n'<<hex(scalar)<<'\n'
+    if(b.window)out<<"ECM_GPU_EDWARDS_NAF_V2\n"<<b.window<<' '<<b.doubling<<'\n';
+    else out<<"ECM_GPU_EDWARDS_BINARY_V1\n";
+    out<<hex(n)<<'\n'<<hex(scalar)<<'\n'
        <<b1<<' '<<b.count<<' '<<b.done<<'\n';
     for(uint32_t i=0;i<b.count;++i){out<<b.sigmas[i]<<' '<<b.hit[i]<<' '<<hex(b.factors[i]);
         for(unsigned j=0;j<9;++j)out<<' '<<hex(b.state[size_t(i)*9+j]);out<<'\n';}
@@ -47,7 +53,7 @@ static bool write_checkpoint(const std::string &path,Batch &b,const mpz_t n,cons
     return bool(out) && ecm_stage1_commit_checkpoint(path,temp);
 }
 static bool restore(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,
-                    uint64_t b1,bool fixed) {
+                    uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
     for(const auto &candidate:ecm_stage1_checkpoint_candidates(path)) {
         std::ifstream in(candidate,std::ios::binary);
         if(!in)continue;
@@ -56,9 +62,15 @@ static bool restore(const std::string &path,Batch &b,const mpz_t n,const mpz_t s
         const auto body=text.substr(0,end);std::istringstream check(text.substr(end+9));uint64_t sum;std::string extra;
         if(!(check>>sum) || (check>>extra) || sum!=hash(body))continue;
         std::istringstream data(body);std::string tag,nh,sh,fh;uint64_t bound;uint32_t count,done;
-        if(!(data>>tag>>nh>>sh>>bound>>count>>done) || tag!="ECM_GPU_EDWARDS_BINARY_V1" ||
-           nh!=hex(n) || sh!=hex(scalar) || bound!=b1 || count!=b.count || done>mpz_sizeinbase(scalar,2))continue;
-        Batch temp(count);temp.done=done;bool valid=true;
+        unsigned window=0;int doubling=0;
+        if(!(data>>tag))continue;
+        if(tag=="ECM_GPU_EDWARDS_NAF_V2") {
+            if(!(data>>window>>doubling) || window<2 || window>12 || (doubling!=4 && doubling!=5))continue;
+        } else if(tag!="ECM_GPU_EDWARDS_BINARY_V1")continue;
+        if(!(data>>nh>>sh>>bound>>count>>done) || nh!=hex(n) || sh!=hex(scalar) || bound!=b1 || count!=b.count)continue;
+        const auto total=window?EcmEdwardsNaf(scalar,window).bits:mpz_sizeinbase(scalar,2);
+        if(done>total)continue;
+        Batch temp(count);temp.done=done;temp.window=window;temp.doubling=doubling;bool valid=true;
         for(uint32_t i=0;i<count && valid;++i) {
             if(!(data>>temp.sigmas[i]>>temp.hit[i]>>fh) ||
                (fixed && temp.sigmas[i]!=b.sigmas[i]) || (temp.hit[i]!=0 && temp.hit[i]!=1) ||
@@ -74,11 +86,15 @@ static bool restore(const std::string &path,Batch &b,const mpz_t n,const mpz_t s
             if(!point_valid(n,temp.state[size_t(i)*9],temp.state.data()+size_t(i)*9+5))valid=false;
         }
         if(!valid)continue;
+        if((window_fixed && b.window!=window) || (doubling_fixed && b.doubling!=doubling) ||
+           (mode_fixed>=0 && bool(mode_fixed)!=bool(window)))
+            throw std::runtime_error("GPU Edwards checkpoint algorithm differs from explicit NAF/doubling selection");
+        b.window=window;b.doubling=doubling;
         b.done=temp.done;b.sigmas=temp.sigmas;b.hit=temp.hit;
         for(uint32_t i=0;i<count;++i)mpz_set(b.factors[i],temp.factors[i]);
         for(size_t i=0;i<size_t(count)*9;++i)mpz_set(b.state[i],temp.state[i]);
         if(candidate!=path)ecm_stage1_mark_bad_primary(path);
-        ecm_ts_fprintf(stdout,"GPU Edwards resume: bits=%u path=%s\n",b.done,candidate.c_str());return true;
+        ecm_ts_fprintf(stdout,"GPU Edwards resume: columns=%u window=%u doubling=%d path=%s\n",b.done,b.window,b.doubling,candidate.c_str());return true;
     }
     return false;
 }
@@ -94,7 +110,7 @@ static bool progress(uint32_t done,void *context) {
         p.failed=true;ecm_ts_fprintf(stderr,"ERROR: GPU Edwards checkpoint write failed: %s\n",p.path.c_str());return false;
     }
     p.last=now;
-    if(stop)ecm_ts_fprintf(stdout,"GPU Edwards stopped at binary bit %u\n",done);
+    if(stop)ecm_ts_fprintf(stdout,"GPU Edwards stopped at %s %u\n",p.b.window?"NAF column":"binary bit",done);
     return !stop;
 }
 static bool publish(const std::string &path,const std::string &lines,bool append) {
@@ -111,20 +127,49 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
     *out=Stage1RunResult{};out->curves=curves;
     if(!curves)return ECM_ERROR;
     try {
+        if(opt.naf_w!=0 && (opt.naf_w<2 || opt.naf_w>12))throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
         Integer scalar;if(!compute_batch_s(scalar.v,b1,48))throw std::runtime_error("cannot build Edwards exponent");
         if(!opt.tmp_dir.empty() && !ensure_dir(opt.tmp_dir))throw std::runtime_error("cannot create Edwards save directory");
         Batch batch(curves);
+        batch.window=opt.naf_w?unsigned(opt.naf_w):6;
+        int mode_fixed=-1;
+        if(const char *mode=std::getenv("ECM_EDWARDS_STAGE1_ALGO")) {
+            const std::string value=mode;
+            if(value!="binary" && value!="naf")throw std::runtime_error("ECM_EDWARDS_STAGE1_ALGO must be binary or naf");
+            mode_fixed=value=="naf"?1:0;
+            if(!mode_fixed) {
+                if(opt.naf_w)throw std::runtime_error("binary Edwards mode cannot use --naf-w");
+                batch.window=0;batch.doubling=0;
+            }
+        }
+        const char *dbl_env=std::getenv("ECM_EDWARDS_DBL_ALGO");
+        if(dbl_env) {
+            if(!batch.window)throw std::runtime_error("binary Edwards mode cannot select a NAF doubling algorithm");
+            const std::string value=dbl_env;
+            if(value!="4" && value!="5")throw std::runtime_error("ECM_EDWARDS_DBL_ALGO must be 4 or 5");
+            batch.doubling=value=="5"?5:4;
+        }
         for(uint32_t i=0;i<curves;++i)batch.sigmas[i]=opt.sigma_fixed?opt.fixed_sigma64+i:random_sigma_u64();
         const auto stem="ed_"+mont_format_save_name(opt.save_name_pattern,n,b1);
         const auto path=opt.tmp_dir.empty()?std::string{}:opt.tmp_dir+"/"+stem+".gpu.ckpt";
-        if(path.empty() || !restore(path,batch,n,scalar.v,uint64_t(b1),opt.sigma_fixed)) {
+        if(path.empty() || !restore(path,batch,n,scalar.v,uint64_t(b1),opt.sigma_fixed,opt.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
             std::string error;if(!initialize(batch,n,error))throw std::runtime_error(error);
         }
-        ecm_ts_fprintf(stdout,"GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu\n",
-                       opt.device_index,curves,mpz_sizeinbase(n,2),mpz_sizeinbase(scalar.v,2));
+        ecm_ts_fprintf(stdout,"GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu window=%u doubling=%d\n",
+                       opt.device_index,curves,mpz_sizeinbase(n,2),mpz_sizeinbase(scalar.v,2),batch.window,batch.doubling);
         Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),stage1_now_ms()};std::string error;
-        const int rc=ecm_cuda_edwards_stage1(n,scalar.v,batch.state.data(),curves,batch.done,256,
-                                           opt.device_index,progress,&p,error);
+        EcmEdwardsNafMetrics metrics;
+        const auto arithmetic_start=std::chrono::steady_clock::now();
+        const int rc=batch.window?
+            ecm_cuda_edwards_stage1_naf(n,scalar.v,batch.state.data(),curves,batch.done,256,
+                opt.device_index,progress,&p,error,batch.window,batch.doubling,&metrics):
+            ecm_cuda_edwards_stage1(n,scalar.v,batch.state.data(),curves,batch.done,256,
+                opt.device_index,progress,&p,error);
+        const double arithmetic_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-arithmetic_start).count();
+        ecm_ts_fprintf(stdout,"GPU Edwards arithmetic: algorithm=%s api_seconds=%.9f\n",batch.window?"naf":"binary",arithmetic_seconds);
+        if(batch.window)ecm_ts_fprintf(stdout,"GPU Edwards NAF: columns=%u additions=%u container_bits=%u tpi=%u dictionary_bytes=%llu dictionary_gpu_ms=%.6f loop_gpu_ms=%.6f launches=%u\n",
+            metrics.columns,metrics.additions,metrics.container_bits,metrics.tpi,
+            static_cast<unsigned long long>(metrics.dictionary_bytes),metrics.dictionary_gpu_ms,metrics.loop_gpu_ms,metrics.launches);
         if(rc<0)throw std::runtime_error(error);
         if(rc==2){out->publish_failed=p.failed;return ECM_ERROR;}
         Integer x,z,g,inv;std::string lines;bool found=false;

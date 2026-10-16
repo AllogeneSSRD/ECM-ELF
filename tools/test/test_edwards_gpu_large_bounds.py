@@ -16,7 +16,7 @@ import re
 import struct
 import subprocess
 import time
-from test_edwards_gpu_pipeline import ROOT, checksum, curve, values
+from test_edwards_gpu_pipeline import ROOT, checksum, curve, values, checkpoint
 
 
 def cpu_midstage(path):
@@ -175,9 +175,10 @@ def main():
     body, tail = raw.rsplit(b'CHECKSUM ', 1); h = 14695981039346656037
     for byte in body: h = ((h ^ byte)*1099511628211) & ((1 << 64)-1)
     assert int(tail) == h
-    lines = body.decode().splitlines(); bound, count, done = map(int, lines[3].split())
+    decoded = checkpoint(next(restart.glob('*.gpu.ckpt')))
+    bound, count, done = decoded['b1'], decoded['count'], decoded['done']
     assert (bound, count) == (1000000, 2) and done > 0
-    sigmas = [int(line.split()[0]) for line in lines[4:]]; assert len(sigmas) == 2
+    sigmas = [row['sigma'] for row in decoded['rows']]; assert len(sigmas) == 2
     text = call('random_resume', [s1, '-ini', ini])
     assert 'GPU Edwards resume:' in text and not queue.read_text().strip() and finished.exists()
     rows = save_rows(next(restart.glob('ed_*.save'))); assert [row['sigma'] for row in rows] == sigmas

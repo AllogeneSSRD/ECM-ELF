@@ -549,7 +549,7 @@ static void print_ecm_usage(const char *prog) {
               << "  B2              Stage-2 bound (optional; 0 disables stage 2)\n\n"
               << "Options:\n"
               << "  --curve <m>          mont|ed (Montgomery or Edwards; default mont)\n"
-              << "  --target <t>         cpu|gpu (default gpu; GPU Edwards unsupported)\n"
+              << "  --target <t>         cpu|gpu (default gpu; GPU Edwards requires CUDA)\n"
               << "  --impl <m>           auto|simd|scalar (CPU only). The SIMD path\n"
               << "                       requires AVX512-IFMA; auto selects by batch size.\n"
               << "  --reduction <m>      auto|montgomery|mersenne-fold (CPU SIMD). auto\n"
@@ -563,7 +563,7 @@ static void print_ecm_usage(const char *prog) {
               << "  --lcm <1|12>         Stage1 scalar multiplier for lcm(1..B1). 1 is the\n"
               << "                       default; 12 is Prime95-style (use when Prime95 runs\n"
               << "                       stage 2 on our point, see doc section 16.7)\n"
-              << "  --naf-w <w>          Edwards NAF window (0 = default 12); dictionary = 2^(w-2)\n"
+              << "  --naf-w <w>          Edwards NAF window (0 = CPU 12 / GPU 6); dictionary = 2^(w-2)\n"
               << "  --affinity <list>    Pin worker t to logical CPU list[t %% len], e.g. 0,1,2,3\n"
               << "                       or 0-7.  On hybrid CPUs (Zen5 + Zen5c, P+E cores, ...)\n"
               << "                       this can hurt: measure first (doc section 13.4)\n"
@@ -4024,8 +4024,8 @@ int main(int argc, char **argv){
 
     if (selection.curve == ecm_stage1::CurveModel::Edwards &&
         selection.target == ecm_stage1::ExecutionTarget::Gpu &&
-        (gpu_param_set || sigma_param_set || print_group_order || naf_w!=0)) {
-        std::cerr << "Error, GPU Edwards uses an unprefixed sigma and binary scalar; --gpu-param, --naf-w and --go do not apply" << std::endl;
+        (gpu_param_set || sigma_param_set || print_group_order)) {
+        std::cerr << "Error, GPU Edwards uses an unprefixed sigma; --gpu-param and --go do not apply" << std::endl;
         mpz_clear(N);return 1;
     }
     if (selection.target == ecm_stage1::ExecutionTarget::Cpu) {

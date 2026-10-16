@@ -271,6 +271,7 @@ if(ECM_ENABLE_CUDA)
         # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
         src/cuda/ecm_cuda_backend.cu
         src/cuda/ecm_cuda_edwards.cu
+        src/cuda/ecm_cuda_edwards_naf.cu
         kernels/cuda/cgbn_stage1.cu
         kernels/cuda/cgbn_stage1_kernels_tpi4.cu
         kernels/cuda/cgbn_stage1_kernels_tpi8.cu

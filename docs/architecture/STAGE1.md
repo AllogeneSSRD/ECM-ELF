@@ -20,21 +20,27 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 ## GPU 点乘
 
-默认 ladder 按 s 的比特进行差分加法和倍点，状态由相邻点及固定差点组成。GPU 以切片推进，避免一个超长 kernel 占用整段 B1。每曲线的末点先解码、检查，求 Z 与 N 的 GCD；可逆时归一化 X=X/Z mod N，再输出 save。
+Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由相邻点及固定差点组成。GPU 以切片推进，避免一个超长 kernel 占用整段 B1。每曲线的末点先解码、检查，求 Z 与 N 的 GCD；可逆时归一化 X=X/Z mod N，再输出 save。
 
 ### GPU Edwards
 
-[CUDA 批量入口](../../src/cuda/ecm_cuda_edwards.cu)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)` 二进制点乘，每片最多处理 256 位。每条曲线保存 d、基点和累加点；片间及磁盘状态均为规范普通整数，重新上传时转换到算术域。容器选择要求 N 至少留一位余量：256/512 用 TPI4，1024 用 TPI8，2048/4096 用 TPI16，8192/17408 用 TPI32；TPB128。该分派与 Montgomery 的进位预留及调优规则分别维护。
+[CUDA NAF 批量入口](../../src/cuda/ecm_cuda_edwards_naf.cu)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12；每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，不做字典模逆。主机以两份紧凑位图保存非零列和有符号索引，设备按每片最多 256 个 NAF 列推进。设备累加点在算术域跨片保留，只回传四个规范普通坐标供回调及检查点使用。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [ecm_edwards_naf.h](../../src/core/ecm_edwards_naf.h)，设备字典与切片见 [cgbn_edwards_naf.cuh](../../kernels/cuda/cgbn_edwards_naf.cuh)。
+
+容器选择要求 N 至少留一位余量：256/512 用 TPI4，1024 用 TPI8，2048/4096 用 TPI16，8192/17408 用 TPI32；TPB128。该分派与 Montgomery 的进位预留及调优规则分别维护。字典显存随批量、容器和窗口增长，分配失败会报错并保留未完成队列，不静默改变显式窗口。
+
+默认倍点为 HWCD；`ECM_EDWARDS_DBL_ALGO=4|5` 选择 HWCD（内部编号 4）或 2XY 多项式（编号 5）。后者采用 Prime95 算法 5 的代数形式，CGBN 不模拟其 FFT 复合指令；内部编号 4 不代表 Prime95 算法 4。参考版本与运算计数见 [数学说明](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。`ECM_EDWARDS_STAGE1_ALGO=binary|naf` 可显式选择 [原二进制路径](../../src/cuda/ecm_cuda_edwards.cu)或 NAF，用于对照；binary 不接受窗口或 NAF 倍点设置。未指定时使用 NAF，恢复时遵从已保存的模式。
 
 [曲线构造](../../src/core/ecm_edwards_curve.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
 
-[worker 接入](../../src/core/ecm_edwards_gpu_driver.inl)支持 CLI 和队列、周期及安全停止检查点、损坏主文件后的备份恢复。`.gpu.ckpt` 绑定版本、完整 N、完整标量、B1、曲线数、精确 sigma、构造状态、四坐标和完整内容校验；恢复重构基点并核对点不变量。二进制位号与 CPU/Prime95 的 NAF 位号不同，格式不能互换。检查点按普通整数保存，因此恢复不绑定 TPI；由 N 重新选择容器。save 完整关闭并原子发布后才清理检查点，写入失败保留未完成任务。
+[worker 接入](../../src/core/ecm_edwards_gpu_driver.inl)支持 CLI 和队列、周期及安全停止检查点、损坏主文件后的备份恢复。`.gpu.ckpt` 绑定版本、完整 N、完整标量、B1、曲线数、精确 sigma、构造状态、四坐标和完整内容校验；恢复重构基点并核对点不变量。NAF 使用 `ECM_GPU_EDWARDS_NAF_V2`，另绑定窗口和倍点变体，进度计数为 NAF 列数；列数可能不同于原标量二进制位数。旧 `ECM_GPU_EDWARDS_BINARY_V1` 检查点默认按原二进制算法继续，不能把其位号解释为 NAF 列号；两者均不读取 CPU/Prime95 的 NAF 检查点。默认配置采用已保存的模式和窗口，显式不匹配选择报错并保留检查点。检查点按普通整数保存，因此恢复不绑定 TPI；由 N 重新选择容器。save 完整关闭并原子发布后才清理检查点，写入失败保留未完成任务。
 
 [交接格式](../../src/core/ecm_edwards_io.h)使用 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM`，包含 N、sigma、B1、规范 X、`POINT|FACTOR` 状态及覆盖这些数学字段的 64 位校验。该方法名与 Suyama 文本记录不同；CUDA Stage2 重建 Edwards 常数，不能按 PARAM0 解释 sigma。默认文件名前缀为 `ed_`，CPU Edwards 仍写 Prime95 二进制存档。GPU Edwards 不支持 Prime95 自动交付，配置该交付会在运行任务前报错。
 
 Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery PARAM。Stage2 的曲线开始与结果事件传递相同模型身份；GUI 结果文件按该身份保存，旧版未带模型的 Stage2 日志沿用 Suyama PARAM0 解释。具体字段与管道规则见 [GUI 日志与结果](../usage/GUI.md#日志结果与监控)。完整大界限、随机 sigma 恢复和小素数回退的正确性证据见 [验收记录](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
 
-当前使用二进制倍加法，尚未提供 GPU NAF 字典、专用性能调优和 GUI 位进度。独立构建和验证证据见 [开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
+`arithmetic api_seconds` 覆盖标量编码、设备初始化/分配、字典、切片、回传及进度回调，排除之前的指数/曲线构造和之后的 GCD/归一化/save。`dictionary_gpu_ms` 与 `loop_gpu_ms` 是 CUDA event 区间，可能包含首次模块加载或主机发射间隙，不能当作 profiler 的纯 kernel 时间，也不能再与进程 wall 相加。
+
+尚未提供 GUI 位进度。NAF 全档算术、新旧检查点、完整大界限及 Stage2 交接的证据见 [窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)，初始流水线证据见 [开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
 
 ### Montgomery resident 与 PRAC
 

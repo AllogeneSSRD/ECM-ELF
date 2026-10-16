@@ -146,12 +146,13 @@ save_name_pattern = m{n}_{b1}.save
 # 指定 Stage1 指数缓存目录，复用相同 B1 和指数模式的预计算结果。留空使用可执行文件目录；off、none、0
 # 或 - 关闭缓存。显式相对目录以进程当前工作目录为基准；很小的 B1 可能直接计算而不写缓存。
 exp_cache =
-# [0|3..12]; default=0; zero=12; recommended; runtime:x=0|x>=2; dict=2^(x-2)
-# CPU Edwards NAF window. 0 uses the built-in choice. Larger windows usually reduce loop additions,
-# while the precomputed dictionary grows as 2^(w-2), increasing memory and setup time. Typical values
-# are 3..12. CUDA PRAC ignores this setting.
-# 设置 CPU Edwards 的 NAF 窗口。0 使用内置窗口；增大窗口通常减少主循环加法，但预计算字典按 2^(w-2) 增
-# 长，会增加内存和准备时间。通常使用 3..12；CUDA PRAC 不使用此设置。
+# [0|3..12]; default=0; zero=backend_default; recommended; runtime:x=0|x>=2; dict=2^(x-2)
+# Edwards NAF window. 0 selects CPU 12 or CUDA GPU 6. CUDA accepts explicit windows 2..12. Larger
+# windows reduce loop additions while the dictionary grows as 2^(w-2), increasing memory and setup
+# time. Typical values are 3..12. CUDA Montgomery/PRAC ignores this setting.
+# 设置 Edwards NAF 窗口。0 在 CPU 选择 12，在 CUDA GPU 选择 6；CUDA 显式窗口允许 2..12。增大窗口减少主
+# 循环加法，但字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA Montgomery/PRAC 不使用此
+# 设置。
 naf_w = 0
 # [1|12]; default=1; empty=default; 1:lcm(1..B1); 12:12*lcm(1..B1)
 # Montgomery Stage1 scalar is lcm(1..B1) multiplied by 1 or 12. Edwards uses its fixed 48*lcm scalar

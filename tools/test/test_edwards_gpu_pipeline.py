@@ -79,6 +79,47 @@ def records(path):
     return rows
 
 
+def checkpoint(path):
+    """Decode both GPU formats without using production C++ checkpoint code."""
+    raw = path.read_bytes(); body, tail = raw.rsplit(b'CHECKSUM ', 1)
+    h = 14695981039346656037
+    for byte in body: h = ((h ^ byte)*1099511628211) & ((1 << 64)-1)
+    assert int(tail) == h
+    lines = body.decode().splitlines(); tag = lines.pop(0)
+    if tag == 'ECM_GPU_EDWARDS_NAF_V2':
+        window, doubling = map(int, lines.pop(0).split())
+        assert 2 <= window <= 12 and doubling in (4, 5)
+    else:
+        assert tag == 'ECM_GPU_EDWARDS_BINARY_V1'; window = doubling = 0
+    n, scalar = int(lines[0], 16), int(lines[1], 16)
+    b1, count, done = map(int, lines[2].split())
+    assert n > 3 and n % 2 and scalar == 48*mont.lcm_1_to(b1) and len(lines) == count+3
+    total = scalar.bit_length()
+    if window:
+        bits = bin(scalar)[2:][::-1]; i = carry = total = 0
+        while i < len(bits) or carry:
+            low = (int(bits[i]) if i < len(bits) else 0)+carry
+            if low % 2 == 0: carry = low//2; i += 1; continue
+            value = int(bits[i:i+window][::-1] or '0', 2)+carry
+            carry = int(value >= 1 << (window-1)); total = i+1; i += window
+    assert 0 < done <= total
+    rows = []
+    for line in lines[3:]:
+        tokens = line.split(); assert len(tokens) == 12
+        sigma, hit = map(int, tokens[:2]); factor = int(tokens[2], 16)
+        state = [int(x, 16) for x in tokens[3:]]
+        assert 0 < sigma < 1 << 64 and hit in (0, 1)
+        assert (1 < factor < n and n % factor == 0) if hit else factor == 0
+        assert all(0 <= x < n for x in state)
+        d = state[0]
+        for x, y, z, t in (state[1:5], state[5:9]):
+            assert any((x, y, z, t)) and (x*y-z*t) % n == 0
+            assert (x*x+y*y-z*z-d*t*t) % n == 0
+        rows.append(dict(sigma=sigma, hit=hit, factor=factor, state=state))
+    return dict(tag=tag, window=window, doubling=doubling, n=n, scalar=scalar,
+                b1=b1, count=count, done=done, total=total, rows=rows)
+
+
 def values(n, x, a24, b2, d=210, with_gcd=False):
     def affine(k):
         u, z = mont.ladder(k, x, 1, a24, n)

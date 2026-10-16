@@ -306,14 +306,15 @@ current working directory. Small B1 values may be computed without writing a cac
 ### naf_w
 
 ```text
-naf_w=[0|3..12]; default=0; zero=12; recommended; runtime:x=0|x>=2; dict=2^(x-2)
+naf_w=[0|3..12]; default=0; zero=backend_default; recommended; runtime:x=0|x>=2; dict=2^(x-2)
 ```
 
-CPU Edwards NAF window. 0 uses the built-in choice. Larger windows usually reduce loop additions,<br>
-while the precomputed dictionary grows as 2^(w-2), increasing memory and setup time. Typical values<br>
-are 3..12. CUDA PRAC ignores this setting.<br>
-设置 CPU Edwards 的 NAF 窗口。0 使用内置窗口；增大窗口通常减少主循环加法，但预计算字典按 2^(w-2) 增<br>
-长，会增加内存和准备时间。通常使用 3..12；CUDA PRAC 不使用此设置。
+Edwards NAF window. 0 selects CPU 12 or CUDA GPU 6. CUDA accepts explicit windows 2..12. Larger<br>
+windows reduce loop additions while the dictionary grows as 2^(w-2), increasing memory and setup<br>
+time. Typical values are 3..12. CUDA Montgomery/PRAC ignores this setting.<br>
+设置 Edwards NAF 窗口。0 在 CPU 选择 12，在 CUDA GPU 选择 6；CUDA 显式窗口允许 2..12。增大窗口减少主<br>
+循环加法，但字典按 2^(w-2) 增长，会增加内存和准备时间。通常使用 3..12；CUDA Montgomery/PRAC 不使用此<br>
+设置。
 
 ### lcm
 
