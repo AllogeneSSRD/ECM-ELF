@@ -1,4 +1,5 @@
 #include "ecm_cuda_edwards.h"
+#include "ecm_cuda_edwards_naf.h"
 #include "ecm_edwards_cpu.h"
 #include "ecm_edwards_io.h"
 #include <cstdio>
@@ -14,7 +15,7 @@ static void identity(mpz_t *s,const mpz_t d,const mpz_t x,const mpz_t y,const mp
     mpz_mul(s[4],x,y);mpz_mod(s[4],s[4],n);mpz_set_ui(s[6],1);mpz_set_ui(s[7],1);
 }
 static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int device,
-                const std::filesystem::path &out,unsigned other=0) {
+                const std::filesystem::path &out,unsigned other=0,unsigned window=0,int algorithm=4) {
     Integer n,s,d,x,y,a,f,old_d,old_x,old_y,cpu_x,cpu_z,qx,qz,lhs,rhs,g,inv;
     mpz_set_ui(n.v,1);mpz_mul_2exp(n.v,n.v,bits);mpz_sub_ui(n.v,n.v,1);
     if(other){mpz_set_ui(g.v,1);mpz_mul_2exp(g.v,g.v,other);mpz_sub_ui(g.v,g.v,1);mpz_mul(n.v,n.v,g.v);}
@@ -29,12 +30,16 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
     }
     for(size_t i=0;i<size_t(count)*9;++i)mpz_set(resumed[i],state[i]);
     uint32_t done=0,split=0;std::string error;
-    require(ecm_cuda_edwards_stage1(n.v,s.v,state.data(),count,done,256,device,nullptr,nullptr,error)==0,error.c_str());
-    require(ecm_cuda_edwards_stage1(n.v,s.v,resumed.data(),count,split,17,device,
-                [](uint32_t,void *){return false;},nullptr,error)==2,"slice stop failed");
+    EcmEdwardsNafMetrics metrics;
+    auto execute=[&](mpz_t *data,uint32_t &pos,uint32_t chunk,EcmEdwardsProgress cb){
+        return window?ecm_cuda_edwards_stage1_naf(n.v,s.v,data,count,pos,chunk,device,cb,nullptr,error,window,algorithm,&metrics)
+                     :ecm_cuda_edwards_stage1(n.v,s.v,data,count,pos,chunk,device,cb,nullptr,error);
+    };
+    require(execute(state.data(),done,256,nullptr)==0,error.c_str());
+    require(execute(resumed.data(),split,17,[](uint32_t,void *){return false;})==2,"slice stop failed");
     // A new invocation uploads the complete ordinary-domain state, just as a
     // restarted worker does. Chunk boundaries deliberately differ.
-    require(ecm_cuda_edwards_stage1(n.v,s.v,resumed.data(),count,split,113,device,nullptr,nullptr,error)==0,error.c_str());
+    require(execute(resumed.data(),split,113,nullptr)==0,error.c_str());
     for(size_t i=0;i<size_t(count)*9;++i)require(!mpz_cmp(state[i],resumed[i]),"resumed result differs from uninterrupted run");
     std::string lines;
     for(unsigned i=0;i<count;++i) {
@@ -48,9 +53,10 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
         if(mpz_cmp_ui(g.v,1)==0){mpz_invert(inv.v,qz.v,n.v);mpz_mul(qx.v,qx.v,inv.v);mpz_mod(qx.v,qx.v,n.v);lines+=save_line(n.v,qx.v,sigmas[i],b1,false);}
         else if(mpz_cmp(g.v,n.v)<0)lines+=save_line(n.v,g.v,sigmas[i],b1,true);
     }
-    const auto name="m"+std::to_string(bits)+(other?"x"+std::to_string(other):"")+"_b"+std::to_string(b1);
+    const auto name="m"+std::to_string(bits)+(other?"x"+std::to_string(other):"")+"_b"+std::to_string(b1)+
+        (window?"_w"+std::to_string(window)+"_a"+std::to_string(algorithm):"");
     std::ofstream file(out/(name+".save"),std::ios::binary);file<<lines;file.close();require(bool(file),"save fixture write failed");
-    std::printf("PASS %s device=%d curves=%u scalar_bits=%u split_resume=17/113 cpu_match=1\n",name.c_str(),device,count,done);
+    std::printf("PASS %s device=%d curves=%u columns=%u split_resume=17/113 cpu_match=1 tier=%u tpi=%u\n",name.c_str(),device,count,done,metrics.container_bits,metrics.tpi);
 }
 int main(int argc,char **argv) {
     try {
@@ -63,6 +69,18 @@ int main(int argc,char **argv) {
         run(991,1000,4,20260922,device,out);
         run(2203,1000,4,20260922,device,out);
         run(4003,1000,4,20260922,device,out);
+        for(unsigned w: {2u,3u,5u,8u,12u})for(int algorithm: {4,5})run(127,1000,33,17,device,out,0,w,algorithm);
+        for(int algorithm: {4,5}) {
+            run(127,20,4,17,device,out,89,6,algorithm);
+            run(347,1000,4,20260922,device,out,0,6,algorithm);
+            run(677,1000,4,20260922,device,out,0,6,algorithm);
+            run(991,1000,4,20260922,device,out,0,6,algorithm);
+            run(1279,20,1,17,device,out,0,6,algorithm);
+            run(2203,1000,4,20260922,device,out,0,6,algorithm);
+            run(4003,1000,4,20260922,device,out,0,6,algorithm);
+            run(4423,20,1,17,device,out,0,6,algorithm);
+            run(9689,20,1,17,device,out,0,6,algorithm);
+        }
         return 0;
     }catch(const std::exception &e){std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}
 }

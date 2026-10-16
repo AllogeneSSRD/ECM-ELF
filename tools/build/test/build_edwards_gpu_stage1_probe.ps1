@@ -10,7 +10,8 @@ $cuda=Resolve-EcmCudaToolkit -Archs $Arch
 $vc=Resolve-EcmVcEnvironment $cuda
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 New-Item -ItemType Directory -Force $Build | Out-Null
-$sources=@('src/cuda/ecm_cuda_edwards.cu','tools/test/edwards_gpu_stage1_probe.cpp','src/cpu/ecm_edwards_cpu.cpp')
+$sources=@('src/cuda/ecm_cuda_edwards.cu','src/cuda/ecm_cuda_edwards_naf.cu','tools/test/edwards_gpu_stage1_probe.cpp','src/cpu/ecm_edwards_cpu.cpp')
+$nafDeps=@('src/cuda/ecm_cuda_edwards_naf.h','src/cuda/ecm_cuda_edwards_naf.inl','src/core/ecm_edwards_naf.h','kernels/cuda/cgbn_edwards_naf.cuh')
 $objects=@()
 $previous=$null
 $manifestPath=Join-Path $Build 'manifest.json'
@@ -25,10 +26,15 @@ foreach($source in $sources){
     $reuse=$false
     if($source -like '*.cu' -and $previous -and $previous.arch -eq $Arch -and (Test-Path $obj) -and (Test-Path $cmdFile)){
         $reuse=[IO.File]::ReadAllText($cmdFile) -eq $commandText
-        foreach($dep in @($source,'src/cuda/ecm_cuda_edwards.h','kernels/cuda/cgbn_edwards_point.cuh')){
+        $deps=@($source,'src/cuda/ecm_cuda_edwards.h','kernels/cuda/cgbn_edwards_point.cuh')
+        if($source -like '*_naf.cu'){$deps+=$nafDeps}
+        foreach($dep in $deps){
             if($previous.sources.$dep -ne (Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash){$reuse=$false}
         }
-        if($previous.cuda_object_sha256 -and $previous.cuda_object_sha256 -ne (Get-FileHash $obj).Hash){$reuse=$false}
+        $expected=$null
+        if($previous.objects){$expected=$previous.objects.$source}
+        elseif($source -eq 'src/cuda/ecm_cuda_edwards.cu'){$expected=$previous.cuda_object_sha256}
+        if(-not $expected -or $expected -ne (Get-FileHash $obj).Hash){$reuse=$false}
     }
     if($reuse){Write-Host "Reused unchanged GPU translation unit: $source";continue}
     [IO.File]::WriteAllText($cmdFile,$commandText,[Text.UTF8Encoding]::new($false))
@@ -45,10 +51,12 @@ $cmdFile=Join-Path $Build 'link.cmd'
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'link.log') -Tail 30;throw 'link failed'}
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
 $hashes=[ordered]@{}
-foreach($source in ($sources+@('src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h','src/cuda/ecm_cuda_edwards.h','kernels/cuda/cgbn_edwards_point.cuh','src/cpu/ecm_edwards_mont.h','tools/build/test/build_edwards_gpu_stage1_probe.ps1'))){
+foreach($source in ($sources+$nafDeps+@('src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h','src/cuda/ecm_cuda_edwards.h','kernels/cuda/cgbn_edwards_point.cuh','src/cpu/ecm_edwards_mont.h','tools/build/test/build_edwards_gpu_stage1_probe.ps1'))){
     $hashes[$source]=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
 }
-[ordered]@{exe=$exe;sha256=(Get-FileHash $exe).Hash;arch=$Arch;
+$objectHashes=[ordered]@{}
+for($i=0;$i -lt $sources.Count;$i++){$objectHashes[$sources[$i]]=(Get-FileHash $objects[$i]).Hash}
+[ordered]@{exe=$exe;sha256=(Get-FileHash $exe).Hash;arch=$Arch;objects=$objectHashes;
     cuda_object_sha256=(Get-FileHash (Join-Path $Build 'ecm_cuda_edwards.obj')).Hash;
     sources=$hashes}|ConvertTo-Json -Depth 5|Set-Content $manifestPath -Encoding utf8
 Write-Host "Built $exe"

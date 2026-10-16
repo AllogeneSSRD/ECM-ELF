@@ -25,3 +25,11 @@ TODO：冻结基线与源依赖；完成测量、窗口/倍点选择、正确性
 `src/core/ecm_edwards_naf.h` 以两个 32-bit 位平面保存非零位置和有符号字典索引；非零间隔至少 w，因此索引不会重叠。最高位进位独立纳入列数，不与旧二进制 bitnum 混用。
 
 `tools/build/test/build_edwards_naf_test.ps1` 使用实际 MSVC/GMP 构建后通过 46574 组精确重建：窗口 2..12、1..4095、2 的幂及前后邻值、31/32/33 等 limb 边界与确定性随机大整数。覆盖 603364 个负数位及 126047 个跨 limb 索引。测试还逐项检查数字范围、奇数性、非相邻间隔、最高非零位和加法计数；这只证明编码正确，GPU 执行尚待验证。构建身份在 `build_cuda_cmake/edwards_naf_test/manifest.json`。
+
+## 2026-10-16：GPU NAF 算术门禁
+
+独立 CUDA 模块 `src/cuda/ecm_cuda_edwards_naf.cu` 已通过 GPU1 探针：35 个用例、441 个逻辑曲线组合，其中 NAF 384 条、原二进制对照 57 条。NAF 覆盖窗口 2/3/5/6/8/12、倍点算法 4/5、全部七档容器（256..17408）、部分 block 的 33 曲线、完整 Mersenne 和 M127·M89 复合输入；B1 为 20 或 1000。每条核对现有 CPU Edwards 的投影末点与 GCD、构造参数及扩展点不变量，完成态与第 17 列停止后改用 113 列切片恢复逐坐标一致。B1=1000 的窗口 6 案例实际有 1445 列，覆盖原标量 1444 位之外的 NAF 进位。
+
+证据为 `data/experiments/edwards_naf_20261016/probe_01.log`、`probe_01/manifest.json`。探针 SHA256 为 `0e07c0f366fced6383654d4af5c8d55ee02845127ff297368825cb1c1c7b0a52`，sm89/CUDA13.3，正式性能样本数为 0。首轮构建遇到 CGBN load 不接受 const 指针，已按其接口修正；原始失败日志保留于 `compile_01/naf.log`。
+
+生产驱动与 V1/V2 磁盘恢复仍待门禁，正式性能矩阵尚未完成。优化前基线 exe 已冻结于 `baseline_build/bin/`，SHA256=`3777416c9026027c88d2d56f78e6fbfa28a3886a7d78aa25ce9a500b66a534cb`；编译对象和扩建档位身份见 `baseline_build/identity_v2.json`，原始代码及 CGBN/GMP 头文件在 `sources_v2.zip`。M4003 的三曲线族试跑仅用于核对采集工具，不计正式性能。
