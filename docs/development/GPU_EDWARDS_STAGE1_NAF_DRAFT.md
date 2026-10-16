@@ -44,3 +44,21 @@ TODO：冻结基线与源依赖；完成测量、窗口/倍点选择、正确性
 - 新路径保留原 13 个 CUDA 对象的逐字节身份，仅新增 NAF 模块；原对象对照见 `object_identity_02.json`。主机对象变化为选择/计时驱动及嵌入配置说明的队列配置。`bench_smoke_02/`、`bench_smoke_03/` 验证二进制/NAF、PARAM0/PARAM3、两倍点变体的采集与末点核对，不列入正式性能矩阵。
 
 正式测量使用完整进程批次、B1=10000、sigma=20260922、GPU1。`bench_initial_01` 保留 347/677/991/2203/4003 位的 60 个有效样本；8191 位的 PARAM3 被缺失 9216 容器拦住，原报告保持 incomplete。Montgomery 预留六位进位，不能误用 8192 容器。已从冻结的优化前源码补建原算法（`baseline_native_identity.json`，exe SHA256=`cfa6c4d675a33fddca72797254c02ff2170593c2a7507d1d78c5e8000cbb5dde`），独立补测该位宽。完整矩阵、NAF 配对、窗口和倍点对照仍在采集；未将失败组标记为已完成。
+
+## 2026-10-16：性能矩阵完成与证据审计
+
+`benchmarks_01.json` 七组顺序采集全部exit0。加上初始五个完整范围，共192个完整批次（144正式、48预热）。六个位宽的原始Edwards/PARAM0/PARAM3基准、同一exe的binary/NAF配对、窗口6/8/10/12以及HWCD/2XY配对已完成。正式数字和条件只维护在 [Stage1性能](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)。
+
+`tools/bench/analyze_edwards_gpu_stage1.py` 在 `data/benchmarks/edwards_naf_20261016/final_02/` 完成独立范围/身份/计时审计。原日志与JSON计时逐项一致；初始 incomplete 报告仅取五个完整范围，8191资格由完整补测提供。四项私有元数据损坏（缺失位宽、错误二进制摘要、修改进程计时、修改GPU区间）均拒绝，证据为 `audit_guards_01/summary.json`，未写原始证据。审计首次处理CRLF日志时匹配失败，已规范化行尾；失败输出目录 `final_01/` 保留，最终使用新目录，不覆盖。
+
+本轮SM离散采样为1500MHz，功耗上限查询N/A；没有把历史1800MHz/55W条件用于当前结论。M2203/M4003/M8191同exe配对的完整进程中位数降低约34.6…36.2%，算术入口为1.64…1.70倍。991位小幅差异仍在样本离散内。窗口10的所测event区间较小，但存在字典显存和冷启动代价；未全局替换默认窗口6。2XY路径在大位宽没有足够证据支持全局切换，默认仍为HWCD。Prime95算法6已按源码确认废弃。
+
+当前编译依赖、原CUDA对象身份、88条命令、46574组NAF重建、441个逻辑探针曲线及144个正式样本的完成审计均通过，冻结在 `completion_01/identity_and_completion.json`，对应exe/GMP/单元测试及原始输出同时保留。
+
+功能和初始性能阶段均已完成；生产B1性能资格、更多设备/批次、容器细化和GUI位进度属于后续验证。此草稿保留待用户处理。
+
+## 2026-10-16：已有实测数据可视化
+
+`tools/bench/plot_edwards_gpu_stage1.py` 读取 `final_02/summary.json`，生成三曲线族初始成本、同一exe的binary/NAF、窗口/字典分配及HWCD/2XY四组PNG/SVG，图与解释维护在 [Stage1性能](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)。没有新增GPU测量，144个正式样本全部保留，48个预热仍排除；误差线为实测范围而非置信区间，嵌套计时独立展示。来源、变换、构建及图表摘要保存在 `data/benchmarks/edwards_naf_20261016/plots_01.json`，输出位于 `data/figures/edwards_naf_20261016/`。原始证据保持不变，开发草稿继续保留。
+
+数值/绘图核对见同目录的 `plot_validation_01.json`：234个绘制的计时观测点均未被裁出坐标范围（含同批次不同计时边界），归一化结果匹配原审计，36个窗口正式样本的字典分配匹配原日志；7项损坏输入均被拒绝。8个PNG/SVG可解析并在重复生成时逐字节相同，图表链接存在，四组图已查看排版。

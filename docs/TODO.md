@@ -39,7 +39,7 @@
 
 ## 其他实现
 
-- [ ] 扩大 GPU Edwards 的设备、位宽/B1/B2 和容器边界验收；完善生产 B1 的窗口/批次性能标定，补齐 GUI 位进度、Edwards Stage1 成本及 Auto B2 资格、CPU Prime95 二进制存档的 CUDA Stage2 入口。NAF、旧二进制检查点兼容及完整交接覆盖见 [GPU Edwards](architecture/STAGE1.md#gpu-edwards)和[窗口优化记录](development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)；初始完整大界限、随机恢复、小素数及模型身份覆盖见[验收记录](development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
+- [ ] 扩大 GPU Edwards 的设备、位宽/B1/B2 和容器边界验收；完善生产 B1 的窗口/批次性能标定及容器细化，补齐 GUI 位进度、Edwards Stage1 成本及 Auto B2 资格、CPU Prime95 二进制存档的 CUDA Stage2 入口。GPU1六个位宽初始基准及窗口/倍点数据见[性能依据](performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)。NAF、旧二进制检查点兼容及完整交接覆盖见 [GPU Edwards](architecture/STAGE1.md#gpu-edwards)和[窗口优化记录](development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)；初始完整大界限、随机恢复、小素数及模型身份覆盖见[验收记录](development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
 
 - [ ] 扩大Stage1 PRAC位宽/设备/完整生产曲线验证；局部最佳参数不提升为通用默认。
 - [ ] 保持CPU/OpenCL可选路径的正确性覆盖和算子注册约束；没有对应设备证据时不写通用性能结论。
