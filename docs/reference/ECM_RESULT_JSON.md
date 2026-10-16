@@ -10,6 +10,20 @@ Prime95 用 `SEC5(exponent,B1,B2)` 产生 8 位十六进制 `security-code`。�
 
 PRPLL-NTT 的 `src/Task.cpp:128–165` 构造结果公共字段和程序尾字段，未生成 `security-code` 或结果 checksum；`common.cpp` 的 CRC32 用于 `File.h` 的保存数据校验，不能据此当作 ECM 结果校验。
 
+## PrimeNet v5 API 与现代 JSON
+
+[PrimeNet v5 Web API 0.97](https://v5.mersenne.org/v5design/v5webAPI_0.97.html) 为 2007-11-14 的接口资料。`ar` 表示报告结果，ECM 有因子/无因子结果类型分别为 3/6；数学目标、曲线数、B1/B2、stage 和 fftlen 是协议语义。AID 未分配时可按接口规定使用未分配值。该文档不是现代 `results.json.txt` 或 manual_result 的完整 JSON 语法规范，也不能据此证明任意新程序名被手工页面接受。
+
+本地 Prime95 `primenet.c` 将 ECM 参数填入 `ar` 请求，并支持比旧文档通用 integer 定义更宽的 B1/B2。现代 JSON 的依据是 `ecm.cpp` 的 F/NF 生成路径及用户提供的本地 Prime95 31.4 正式输出。3309 条 ECM 样本中，NF 的 Edwards 标记为空对象，F 才携带 sigma；program.port 为整数，FFT 长度为正数。样本只用于字段形状和聚合核对，不能把其中的私有字段复制成公开测试向量。
+
+旧文档区分可信与开放客户端，并说明程序版本注册要求。这描述 API 服务端规则，不是对当前 manual_result 页面接受策略的实验结论。服务器实际拒绝原因只能由解析器依据或真实回执确认。
+
+## mult.asm FFT 容量参考
+
+Prime95 31.6 `gwnum/mult.asm` 的 `PRCSTRT max_exp,fftlen,speed` 行在不同跳转表中列出指数容量、FFT 长度和速度。`zjmptable` 为循环 AVX-512 表，241 个容量/长度对严格递增；`xjmptable` 等表及负循环表是不同适用条件，不能混为一张无条件最优表。
+
+取第一个 `max_exp≥P` 可以给原始梅森指数 P 生成固定容量参考。GWNUM 实际选择还受 CPU 指令集、余因子、零填充和安全余量影响，因此该参考不是重现任意 Prime95 运行的 FFT 选择算法，更不能据此声称非 FFT 后端执行过该变换。
+
 ## PrMers CRC32
 
 `PrMers/src/io/JsonBuilder.cpp:519–593` 拼接规范字段并生成 `checksum:{version:1,checksum:XXXXXXXX}`，底层为 `src/util/Crc32.cpp:96–113`。标准反射 CRC32 的多项式为 0xEDB88320，初值与末尾异或均为 0xFFFFFFFF，按 UTF-8 字节更新，输出大写 8 位十六进制。它与 Prime95 的字段名称和调用参数不同，不能视为 SEC5 的实现依据。

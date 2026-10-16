@@ -161,3 +161,8 @@ AGENTS.md
 /build_cuda_ckpt_verify_bt
 /docs/web
 /build_cpu_stage2
+
+# Runtime identities and generated result/checksum values are private local data.
+*.ini
+*.jsonl*
+*.json.txt*

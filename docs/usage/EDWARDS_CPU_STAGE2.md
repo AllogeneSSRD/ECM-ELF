@@ -4,7 +4,7 @@ CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=4
 
 ## 构建与运行
 
-Windows x64 新功能构建使用 `tools/build/test/build_cpu_stage2.ps1 -Jobs 8`，输出 `build_cpu_stage2/native/ecm_cpu_stage2.exe`。需要 MSVC、CMake/Ninja、现有 GMP 和 `.refactor/gmp-ecm` 源码，不需要 CUDA。源目录可在 CMake 中设置 `ECM_LIBECM_SOURCE_DIR`；根 CMake 也提供默认关闭的 `ECM_BUILD_CPU_STAGE2`。适配器不修改外部源码，分发目录附 GMP DLL 与上游许可文件。此程序尚未纳入 CUDA 发布包、INI、GUI 或 Stage2 队列入口。
+Windows x64 新功能构建使用 `tools/build/test/build_cpu_stage2.ps1 -Jobs 8`，输出 `build_cpu_stage2/native/ecm_cpu_stage2.exe`。需要 MSVC、CMake/Ninja、现有 GMP 和 `.refactor/gmp-ecm` 源码，不需要 CUDA。源目录可在 CMake 中设置 `ECM_LIBECM_SOURCE_DIR`；根 CMake 也提供默认关闭的 `ECM_BUILD_CPU_STAGE2`。适配器不修改外部源码，分发目录附 GMP DLL 与上游许可文件。支持 INI 中的结果身份和提交文件配置；此程序尚未纳入 CUDA 发布包、GUI 或 Stage2 队列入口。
 
 本机依赖为 GMP-ECM `7.0.6-dev`，上游提交 `17b5cdf1536b96fce4a7b92832f57f9028fbe570`。构建使用通用 GMP limb 路径及 OpenMP，不依赖上游 MPIR/YASM 汇编工程。实现入口为 [CPU Stage2](../../src/core/ecm_cpu_stage2_main.cpp)、[严格存档读取](../../src/core/ecm_edwards_save_reader.h) 和 [依赖构建](../../tools/build/internal/ecm_libecm.cmake)。
 
@@ -12,7 +12,7 @@ Windows x64 新功能构建使用 `tools/build/test/build_cpu_stage2.ps1 -Jobs 8
 
 ```powershell
 ecm_cuda.exe --curve ed --target gpu -d 1 -sigma 17 -gpucurves 4 -save ed.save 1000 1000
-ecm_cpu_stage2.exe --save ed.save --b2 100000000 --results results.jsonl --exponent 127
+ecm_cpu_stage2.exe --save ed.save --b2 100000000 --results results.jsonl --submission results.json.txt --exponent 127
 ```
 
 Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保存的 N 确实等于 2^127−1。一般整数可省略 exponent；梅森余因子必须显式提供 `--exponent P` 和可重复的 `--known-factor DECIMAL`，程序验证 `(2^P−1)/∏known-factors = N`，不会按位宽猜指数。输入存档与结果文件不能指向同一个文件。
@@ -21,7 +21,7 @@ Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保�
 
 `--b2` 使用精确十进制整数，当前入口限制到 10^12，必须大于所选记录的 B1。`--memory-mib` 默认 512，传给 libecm 的内存规划器；它不限制进程工作集，也不包含所有 GMP/运行时开销。较小预算可能增加分块数并显著变慢。`--dry-run` 只校验文件身份和目标元数据，不执行算术或完整内存规划。
 
-`--skip N --curves K` 按有效 save 记录选择范围。每完成一条曲线原子追加一行 JSONL；Ctrl+C 或停止事件中断当前曲线时不报告 NF，之前已发布行保留。CPU Stage2 暂无曲线内部恢复或自动去重：续跑时根据已完成记录数设置 skip，中断的当前曲线从 Stage1 末点重新开始。Stage1 与 Stage2 仍需分别启动。
+`--skip N --curves K` 按有效 save 记录选择范围。每完成一条曲线原子追加一行内部 JSONL；Ctrl+C 或停止事件中断当前曲线时不报告 NF，之前已发布行保留。CPU Stage2 暂无曲线内部恢复或算术跳过：续跑时根据已完成记录数设置 skip，中断的当前曲线从 Stage1 末点重新开始。提交账本会对相同数学工作去重，但重复启动仍可能重算并追加内部行。Stage1 与 Stage2 仍需分别启动。
 
 ## 存档与数学边界
 
@@ -39,17 +39,17 @@ a_{24}=\frac1{1-d},\qquad A=4a_{24}-2\pmod N.
 
 曲线构造、字典批量求逆或恢复归一化失败必须提取真因子或报错，不能使用零化字典继续算术。SIMD 字典不可逆时转入逐曲线的检查路径。所有输出因子都在实际 N 上验证 `1<f<N` 且 `f|N`；饱和 GCD=N 和算术错误不生成 NF。
 
-## 结果 JSONL
+## 两份结果文件
 
-结果沿用 Prime95 ECM 的 `status`、`worktype`、`b1/b2`、`curves`、`Edwards`、`stage`、`factors`、`program`、`timestamp` 等字段；每行代表一条完成曲线。程序身份为正式项目名 **ECM-ELF**，version 包含 Git 基点和 Stage2 源码摘要。非 FFT 算术的 `fft-length` 为 0；stage1 因子不报告完成 B2。可通过 `--user`、`--computer`、`--aid` 补充提交元数据。
+`--results` 保存逐曲线内部 JSONL，包含引擎、后端、时间、save 行号、真实构建身份和公开 CRC32。此文件的非 FFT 算术 `fft-length=0` 是内部记录，不能直接作为手工提交文件。
 
-按用户确认省略 `security-code`，实现公开 CRC32 `checksum.version=1`，字段顺序参照 PrMers ECM 布局。它校验结果字段，不证明数学计算正确，也不等同于 Prime95 SEC5。具体规范及本地源码依据见 [ECM 结果字段与校验研究](../reference/ECM_RESULT_JSON.md)。`stage2-engine` 是本项目的引擎、后端、计时及 save 行号扩展。
-
-验证范围是 JSON 解析、独立 CRC32、数学结果及 AutoPrimeNet ECM 解析前缀的离线测试。没有向任何服务器提交，也没有修改 AutoPrimeNet；其固定程序名扫描器尚不识别 ECM-ELF，服务器是否接受该程序名及 ECM checksum 仍待外部确认。一般 N 结果不等同于有 PrimeNet 指数/AID 的任务。
+`--submission` 另存 Prime95 ECM 字段结构的 `results.json.txt`，使用正的参考 FFT 长度、数字平台号及真实 ECM-ELF 程序名；NF 曲线合并为不可变批次，省略内部扩展、CRC32 和 `security-code`。INI 身份、目标关系检查、账本去重和无算术恢复命令统一见 [ECM 结果输出](ECM_RESULTS.md)。服务器对新程序身份的接受情况仍待实际提交验证。
 
 ## 验证与实测
 
 正确性脚本为 [test_edwards_cpu_pipeline.py](../../tools/test/test_edwards_cpu_pipeline.py)。冻结证据在 `data/experiments/edwards_full_pipeline_20261016/`：CPU 标量、多线程、AVX512-IFMA 与 GPU1 RTX4060 的 127/347/2203 位保存点对照，独立 Python `48LCM` 点乘，Stage1/Stage2 真因子，已知因子元数据，存档损坏拒绝，默认/追加输出，写入失败队列保持，以及真实 Stage1 停止恢复和 Stage2 中断。GPU 测试仅用设备 1。
+
+结果分离版本的数学回归及双文件验证见 `data/experiments/ecm_submission_20261016/`，范围见 [结果输出验证](ECM_RESULTS.md#验证与边界)。下述性能数据使用独立冻结二进制，不代表新输出与账本的发布开销。
 
 双后端性能由 [bench_edwards_cpu_stage2.py](../../tools/bench/bench_edwards_cpu_stage2.py) 采集。CPU 为 Ryzen AI 9 HX 370，Windows 11，GMP-ECM 7.0.6-dev，单线程、512 MiB 规划预算，输入为 M127/M347/M2203、B1=1000、sigma=17，每格 1 条曲线、1 次预热和 3 个正式样本，交替后端。CPU 功耗、频率和调度未固定或测量。下表为构造曲线至完整 libecm 返回的中位秒数，不包含读档、进程启动及 JSON 发布；完整进程计时另存原始汇总。
 

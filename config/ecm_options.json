@@ -640,6 +640,54 @@
     },
     {
       "owner": "stage2",
+      "key": "user",
+      "field": "result_user",
+      "type": "string",
+      "default": "",
+      "domain": "<local-user-id>",
+      "fx": "result_identity(S2)",
+      "parser": "strict",
+      "empty": "omit",
+      "description": [
+        "Optional local result user identity for CPU and CUDA Stage2. Never put real account values in committed templates or fixtures.",
+        "CPU与CUDA Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。"
+      ]
+    },
+    {
+      "owner": "stage2",
+      "key": "computer",
+      "field": "result_computer",
+      "type": "string",
+      "default": "",
+      "domain": "<local-computer-name>",
+      "fx": "result_identity(S2)",
+      "parser": "strict",
+      "empty": "omit",
+      "description": [
+        "Optional local computer name in result output. Keep configured values and generated results outside public Git commits.",
+        "结果输出的可选本地计算机名；实际配置值及生成结果不得进入公共Git提交。"
+      ]
+    },
+    {
+      "owner": "stage2",
+      "key": "stage2_submission_file",
+      "field": "submission",
+      "type": "string",
+      "default": "results.json.txt",
+      "domain": "<path>",
+      "fx": "submission(S2)",
+      "parser": "strict",
+      "empty": "invalid",
+      "path_base": "ini_dir",
+      "worker_suffix": true,
+      "present": "has_submission",
+      "description": [
+        "Submission-only ECM JSON lines, separate from the internal results JSONL. Uses a reference FFT size from Prime95 mult.asm. Personal identifiers and checksums belong only in local ignored files.",
+        "仅含提交字段的ECM JSON行，与内部结果JSONL分开；FFT长度参考Prime95 mult.asm。个人标识与校验值仅保存在本地忽略文件中。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_worktodo",
       "field": "worktodo",
       "type": "string",
@@ -1264,7 +1312,11 @@
       "fx": "GUI_worker_engine",
       "parser": "gui",
       "parser_override": "gui_enum",
-      "values": ["auto", "stage1", "stage2"],
+      "values": [
+        "auto",
+        "stage1",
+        "stage2"
+      ],
       "description": [
         "Default stage for workers without an explicit Worker #N stage. auto recognizes a Stage2 executable named in exe, otherwise prefers available Stage1 and falls back to Stage2. Worker stage overrides this default, allowing Stage1 and Stage2 together under one INI. Changing the default requires all workers stopped; changing one worker requires only that worker stopped. No computation or queue handoff starts automatically.",
         "未指定Worker #N阶段时使用的默认阶段。auto识别exe中明确命名的Stage2程序，否则优先可用Stage1、再回退Stage2。worker的stage覆盖此默认值，同一INI可同时运行Stage1和Stage2。修改默认值须全部worker停止；修改单个worker只须该worker停止。切换不自动计算或交接队列。"
@@ -1568,7 +1620,11 @@
       "fx": "GUI_worker_engine_override",
       "parser": "gui",
       "parser_override": "gui_enum",
-      "values": ["auto", "stage1", "stage2"],
+      "values": [
+        "auto",
+        "stage1",
+        "stage2"
+      ],
       "description": [
         "Stage for this GUI worker. auto inherits GUI stage; stage1 launches exe with worktodo, stage2 launches stage2_exe with stage2_worktodo. Only the selected worker must be stopped before changing it; other workers keep running. Stage1 and Stage2 use distinct queues and output files. Place worker sections after shared settings and GUI. This key does not redirect a directly launched command-line executable.",
         "此GUI worker的计算阶段。auto继承GUI的stage；stage1使用exe及worktodo，stage2使用stage2_exe及stage2_worktodo。修改前只需停止该worker，其余worker继续运行。两阶段使用不同队列和输出文件。worker分区放在共享设置和GUI之后。此键不改变直接从命令行启动的程序阶段。"

@@ -475,6 +475,37 @@ selection is normally suitable. CUDA ignores this key.<br>
 
 ## Stage2 — global or [Worker #N] / 全局或 [Worker #N]
 
+### user
+
+```text
+user=<local-user-id>; default=""; empty=omit
+```
+
+Optional local result user identity for CPU and CUDA Stage2. Never put real account values in<br>
+committed templates or fixtures.<br>
+CPU与CUDA Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。
+
+### computer
+
+```text
+computer=<local-computer-name>; default=""; empty=omit
+```
+
+Optional local computer name in result output. Keep configured values and generated results outside<br>
+public Git commits.<br>
+结果输出的可选本地计算机名；实际配置值及生成结果不得进入公共Git提交。
+
+### stage2_submission_file
+
+```text
+stage2_submission_file=<path>; default=results.json.txt; empty=invalid; path_base=ini_dir; worker(N>1)=_N
+```
+
+Submission-only ECM JSON lines, separate from the internal results JSONL. Uses a reference FFT size<br>
+from Prime95 mult.asm. Personal identifiers and checksums belong only in local ignored files.<br>
+仅含提交字段的ECM JSON行，与内部结果JSONL分开；FFT长度参考Prime95 mult.asm。个人标识与校验值仅保存在<br>
+本地忽略文件中。
+
 ### stage2_worktodo
 
 ```text

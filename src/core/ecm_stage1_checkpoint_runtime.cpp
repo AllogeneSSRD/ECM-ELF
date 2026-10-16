@@ -1,4 +1,5 @@
 #include "ecm_stage1_checkpoint_runtime.h"
+#include "ecm_file_publication.h"
 
 #include <atomic>
 #include <csignal>
@@ -31,14 +32,7 @@ void signal_control(int) { stop_requested.store(true, std::memory_order_relaxed)
 #endif
 
 bool replace_file(const std::string &source, const std::string &target) {
-#ifdef _WIN32
-    return MoveFileExA(source.c_str(), target.c_str(),
-                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-#else
-    std::error_code ec;
-    std::filesystem::rename(source, target, ec);
-    return !ec;
-#endif
+    return ecm_replace_file(source,target);
 }
 } // namespace
 

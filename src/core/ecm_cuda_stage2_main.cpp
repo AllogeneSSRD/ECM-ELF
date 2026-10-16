@@ -25,6 +25,8 @@
 #include "ecm_stage2_console.h"
 #include "ecm_stage2_queue_state.h"
 #include "ecm_edwards_io.h"
+#include "ecm_result_submission.h"
+#include "ecm_submission_writer.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -226,7 +228,9 @@ fs::path executable() {
     return fs::path(std::wstring(buf.data(), n));
 }
 struct Options {
-    std::string ini, save, worktodo, results, log, debug_file, receipt;
+    std::string ini, save, worktodo, results, log, debug_file, receipt,submission,submission_ini,submission_aid;
+    uint64_t submission_exponent=0;
+    std::vector<std::string> submission_known;
     bool debug_log = false;
     uint64_t b2 = 0, d = 0, skip = 0, curves = 0, batch = 0, arena = 0;
     unsigned carrier_exponent=0;
@@ -297,6 +301,10 @@ Options arguments(int argc, char **argv) {
         else if (a == "--save") o.save = value();
         else if (a == "--worktodo") o.worktodo = value();
         else if (a == "--results") o.results = value();
+        else if (a == "--submission") o.submission=value();
+        else if (a == "--exponent") o.submission_exponent=num();
+        else if (a == "--known-factor") o.submission_known.push_back(value());
+        else if (a == "--aid") o.submission_aid=value();
         else if (a == "--log") o.log = value();
         else if (a == "--log-level") o.log_level = stage2_log::parse(value());
         else if (a == "--debug-log-file") { o.debug_file=value(); o.debug_log=true; }
@@ -602,6 +610,11 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     if(o.tune_child)cmd+=L" --ecm-tune-worker";
     arg(L"--log-level", static_cast<uint64_t>(o.log_level));
     cmd += L" --results " + quote(results.wstring());
+    if(!o.submission.empty())cmd+=L" --submission "+quote(fs::path(o.submission).wstring());
+    if(!o.submission_ini.empty())cmd+=L" --ini "+quote(fs::path(o.submission_ini).wstring());
+    if(o.submission_exponent)arg(L"--exponent",o.submission_exponent);
+    for(const auto &factor:o.submission_known)cmd+=L" --known-factor "+quote(fs::path(factor).wstring());
+    if(!o.submission_aid.empty())cmd+=L" --aid "+quote(fs::path(o.submission_aid).wstring());
     if (o.factorize_hits) {
         cmd += L" --factorize-hits --gp " + quote(fs::path(o.gp).wstring());
         arg(L"--factor-timeout", o.factor_timeout);
@@ -930,6 +943,19 @@ int curve_worker(Options o) {
     const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     stage2_log::phase("Publish result");
+    const auto identity_ini=o.ini.empty()?executable().parent_path()/"ecm.ini":fs::path(o.ini);
+    std::vector<ecm_config::IniLine> identity_lines;
+    if(!ecm_config::read_ini(identity_ini.string(),identity_lines) && (!o.ini.empty() || fs::exists(identity_ini)))
+        throw std::runtime_error("cannot read result identity INI");
+    const auto identity=ecm_config::read_stage2(ecm_config::cli_entries(identity_lines,o.worker,true));
+    ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
+    submission.known=o.submission_known;submission.aid=o.submission_aid;
+    submission.sigma=r.sigma;submission.b1=r.b1;submission.b2=o.b2;
+    submission.user=identity.result_user;submission.computer=identity.result_computer;
+    submission.factors=ecm_stage2::result_factors(result);
+    submission.stage=submission.factors.empty()?0:(status=="factor_in_saved_X"?1:2);
+    const auto external_path=o.submission.empty()?identity_ini.parent_path()/identity.submission:fs::path(o.submission);
+    ecm_results::publish_submission(external_path,submission,n.z);
     append(o.results, "{\"queue_receipt\":" + json_string(o.receipt) + ",\"status\":" + json_string(status) + ",\"save\":" + json_string(o.save) +
         ",\"record\":" + std::to_string(o.index) + ",\"record_hash\":" + json_string(std::to_string(o.hash)) +
         ",\"worker\":" + std::to_string(o.worker) + ",\"device\":" + std::to_string(o.device) +
@@ -945,7 +971,8 @@ int curve_worker(Options o) {
         ",\"auto_b2\":" + std::string(auto_json.empty() ? "false" : "true") +
         ",\"requested_B2\":" + std::to_string(requested_b2) + ",\"auto_planning_seconds\":" + std::to_string(auto_seconds) +
         (auto_json.empty() ? "" : ",\"auto_plan\":" + auto_json) +
-        ",\"timestamp_ms\":" + std::to_string(timestamp) + runtime_tune_json(observation) + "," + result + "}");
+        ",\"timestamp_ms\":" + std::to_string(timestamp) + ",\"submission_file\":"+json_string(external_path.string())+
+        ",\"reference_fft_table\":\"Prime95-31.6-zjmptable\""+runtime_tune_json(observation) + "," + result + "}");
     // Optional cache work follows the durable result. It cannot invalidate the
     // successful curve or cause the parent to replay a committed receipt.
     if(!observation.sample.empty())try {publish_runtime_tune(o,observation);}
@@ -962,7 +989,8 @@ void help() {
     std::cout << "ecm_cuda_stage2 - resume normalized Suyama PARAM=0 or ECM-EDWARDS-AM Stage1 text saves\n"
         "  ecm_cuda_stage2 --save FILE --b2 B2 [--curves N] [--skip-curves N]\n"
         "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
-        "Options: --device N --d D --batch-mb MB --arena-mb MB --results FILE\n"
+        "Options: --device N --d D --batch-mb MB --arena-mb MB --results INTERNAL.jsonl\n"
+        "         --submission results.json.txt --exponent P --known-factor F (repeatable)\n"
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
         "         --auto-carrier 0|1 (override stage2_auto_carrier; verified worktodo candidates, tune selection required)\n"
         "Tune: --tune ntt|ecm --tune-level 1..10 --tune-file FILE.toml --tune-repeats N\n"
@@ -1122,6 +1150,10 @@ int driver(Options o) {
     if(!o.has_gp && !s.gp.empty())o.gp=s.gp;
     if(!o.has_factor_timeout)o.factor_timeout=static_cast<unsigned>(s.factor_timeout);
     const fs::path base = ini.parent_path();
+    o.submission_ini=ini.string();
+    if(s.has_submission && s.submission.empty())throw std::runtime_error("empty submission path");
+    o.submission=(!o.submission.empty()?absolute_from(cwd,o.submission):
+        absolute_from(base,s.has_submission?s.submission:ecm_config::worker_file(s.submission,o.worker))).string();
     if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
     else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
     if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
@@ -1261,7 +1293,7 @@ int driver(Options o) {
         return upper(a.lexically_normal().string())==upper(b.lexically_normal().string());
     };
     // A common INI may share device/save defaults, never writable queue state.
-    const std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::path(o.debug_file)};
+    const std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::path(o.debug_file),fs::path(o.submission)};
     for(size_t i=0;i<writable.size();++i) {
         if(!o.tune_profile.empty() && same_path(writable[i],fs::path(o.tune_profile)))throw std::runtime_error("output path conflicts with measured tune profile");
         if(!o.stage1_profile.empty() && same_path(writable[i],fs::path(o.stage1_profile)))throw std::runtime_error("output path conflicts with Stage1 tune profile");
@@ -1269,6 +1301,7 @@ int driver(Options o) {
         if(same_path(writable[i],ini)||same_path(writable[i],executable()))throw std::runtime_error("output path conflicts with configuration or executable");
         for(size_t j=0;j<i;++j)if(same_path(writable[i],writable[j]))throw std::runtime_error("queue, finished, progress, result and log paths must be distinct");
     }
+    if(!o.dry && !o.plan_only && !o.tune_child)ecm_results::refresh_submission_if_owned(o.submission);
     if(queue && (same_path(worktodo,absolute_from(executable().parent_path(),cfg.worktodo)) ||
                   same_path(finished,absolute_from(executable().parent_path(),cfg.finished))))
         throw std::runtime_error("Stage2 queue/finished conflicts with Stage1 configuration; use distinct stage2_worktodo/stage2_finished");
@@ -1305,6 +1338,8 @@ int driver(Options o) {
                 Big n;std::string error;
                 if(!ecm_compute_stage2_n(fields.task,n.z,error))throw TaskInputError("worktodo N: "+error);
                 expected_n=number(n.z);save=absolute_from(tmp,fields.task.save_name);
+                o.submission_exponent=fields.task.k=="1" && fields.task.b=="2" && fields.task.c=="-1"?fields.task.n:0;
+                o.submission_known=fields.task.factors;o.submission_aid=fields.task.aid;
                 o.inferred_carrier=o.auto_carrier && fields.task.k=="1" && fields.task.b=="2" && fields.task.c=="-1" &&
                     fields.task.n>=2 && fields.task.n<=ecm_stage2::max_input_bits?unsigned(fields.task.n):0;
             } else save=absolute_from(cwd,o.save);
@@ -1436,6 +1471,7 @@ int driver(Options o) {
                 report(message.str());
             }
         }
+        if(!o.dry && !o.plan_only && !o.tune_child)ecm_results::seal_submissions(o.submission);
         if(!queue||o.dry||o.plan_only)break;
         if(state.done<state.total)break;
         std::string current;

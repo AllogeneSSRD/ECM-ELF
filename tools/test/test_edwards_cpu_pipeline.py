@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import secrets
 import time
 import zlib
 from types import SimpleNamespace
@@ -172,9 +173,10 @@ def main():
     low_memory = stage2('small_memory', fixtures[2], 'ntt', extra=['--memory-mib', 1, '--curves', 1])
     assert len(low_memory) == 1 and low_memory[0]['status'] == 'NF'
     assert not stage2('reject_zero_memory', fixtures[2], 'ntt', extra=['--memory-mib', 0], good=False)
+    private_user=secrets.token_hex(12)+'"\\\n'
     selected = stage2('selection', fixtures[0], 'plain', extra=['--skip', 1, '--curves', 1,
-                     '--user', 'name"\\\n', '--computer', 'offline', '--aid', '0123456789ABCDEF'*2])
-    assert len(selected) == 1 and selected[0]['Edwards']['sigma'] == 18 and selected[0]['user'] == 'name"\\\n'
+                     '--user', private_user, '--computer', secrets.token_hex(12), '--aid', secrets.token_hex(16)])
+    assert len(selected) == 1 and selected[0]['Edwards']['sigma'] == 18 and selected[0]['user'] == private_user
     default = out/'default';default.mkdir()
     call('default_save', [s1, '--curve', 'ed', '--target', 'cpu', '--impl', 'scalar', '-sigma', 17,
         '-gpucurves', 1, '--tmp-dir', default, 20, 20], str((1 << 127)-1).encode())

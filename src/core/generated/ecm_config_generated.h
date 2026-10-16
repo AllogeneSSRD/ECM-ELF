@@ -42,6 +42,9 @@ inline constexpr char stage1_kernel_sqr[]="";
 inline constexpr char stage1_kernel_add[]="";
 inline constexpr char stage1_kernel_sub[]="";
 inline constexpr char stage1_kernel_special_mult[]="";
+inline constexpr char stage2_user[]="";
+inline constexpr char stage2_computer[]="";
+inline constexpr char stage2_stage2_submission_file[]="results.json.txt";
 inline constexpr char stage2_stage2_worktodo[]="stage2_worktodo.txt";
 inline constexpr char stage2_stage2_finished[]="stage2_worktodo.finished.txt";
 inline constexpr char stage2_stage2_log_file[]="stage2_screen.log";
@@ -234,6 +237,9 @@ inline const Binding<Stage1Values> stage1_bindings[]={
 };
 inline Stage1Values read_stage1(const Entries &entries){Stage1Values c;apply(c,entries,stage1_bindings);return c;}
 struct Stage2Values {
+    std::string result_user="";
+    std::string result_computer="";
+    std::string submission="results.json.txt";
     std::string worktodo="stage2_worktodo.txt";
     std::string finished="stage2_worktodo.finished.txt";
     std::string log="";
@@ -279,6 +285,7 @@ struct Stage2Values {
     uint64_t stage1_mhz=0;
     uint64_t factor_bits=0;
     std::string condition_tag="";
+    bool has_submission=false;
     bool has_worktodo=false;
     bool has_finished=false;
     bool has_log=false;
@@ -286,6 +293,9 @@ struct Stage2Values {
     bool has_pack_zero=false;
 };
 inline const Binding<Stage2Values> stage2_bindings[]={
+    {"user",[](Stage2Values&c,const std::string&v){c.result_user=v;},false,nullptr},
+    {"computer",[](Stage2Values&c,const std::string&v){c.result_computer=v;},false,nullptr},
+    {"stage2_submission_file",[](Stage2Values&c,const std::string&v){c.submission=v;c.has_submission=true;},false,nullptr},
     {"stage2_worktodo",[](Stage2Values&c,const std::string&v){c.worktodo=v;c.has_worktodo=true;},false,nullptr},
     {"stage2_finished",[](Stage2Values&c,const std::string&v){c.finished=v;c.has_finished=true;},false,nullptr},
     {"stage2_log_file",[](Stage2Values&c,const std::string&v){c.log=v;c.has_log=true;},false,nullptr},

@@ -1,6 +1,6 @@
 # Stage2 使用
 
-本页说明 CUDA Stage2。CPU Edwards 续算入口、双后端选择及 Prime95 结构的 JSONL 见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)；两个程序的选项与队列能力分别说明。
+本页说明 CUDA Stage2。CPU Edwards 续算入口与双后端选择见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)；两份结果文件及提交字段规则统一见 [ECM 结果输出](ECM_RESULTS.md)。
 
 `ecm_cuda_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入；Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。
 
@@ -12,7 +12,7 @@
 
 直接多记录执行不使用队列自动续跑。每条曲线在独立子进程计算，结束后释放 CUDA 上下文与临时资源。
 
-结果 JSONL 以 `curve=ed|mont` 标明模型，Edwards 的 `param` 为 null，Suyama 的 `param` 为 0；GUI 的因子结果文件使用其独立结果格式，见 [GUI 日志与结果](GUI.md#日志结果与监控)。控制台结果事件也携带模型及完整 sigma；显式 `--gui-events` 会在 quiet 级别保留该结果事件，普通 quiet 控制台规则保持不变。
+`--results` 的内部 JSONL 以 `curve=ed|mont` 标明模型，Edwards 的 `param` 为 null，Suyama 的 `param` 为 0。另写 `--submission` 指定的 `results.json.txt`；INI 的 `user`、`computer` 用于提交身份，标准梅森队列自动传递原始指数、已知因子和可选 AID。直接处理梅森余因子时应提供 `--exponent P --known-factor F`，输出前验证与实际 N 的关系。批次去重和恢复见 [结果输出](ECM_RESULTS.md)。GUI 的因子结果文件使用其独立结果格式，见 [GUI 日志与结果](GUI.md#日志结果与监控)。控制台结果事件也携带模型及完整 sigma；显式 `--gui-events` 会在 quiet 级别保留该结果事件，普通 quiet 控制台规则保持不变。
 
 ## 队列语法
 
@@ -51,7 +51,7 @@
 
 默认读取 exe 同目录 `ecm.ini`。隐式文件缺失采用默认值；显式指定但不可读则报错。全部键见 [INI 参考](../ECM_INI_REFERENCE.md)。
 
-Stage2 使用独立的 `stage2_worktodo`、`stage2_finished`、`stage2_results_file`、`stage2_log_file`、`stage2_progress_dir` 和 `stage2_debug_log_file`。进度目录空值使用队列目录；显式设置旧 `stage2_progress_file` 时使用其父目录，并仅将该文件作为旧进度导入来源。save 目录空值继承 `tmp_dir`，设备未指定时继承共享 `device`。多 worker 的显式输出路径须自行区分；未指定的部分输出自动添加 worker 后缀。相同任务的进度另有独占锁，防止不同队列重复消费。
+Stage2 使用独立的 `stage2_worktodo`、`stage2_finished`、`stage2_results_file`、`stage2_submission_file`、`stage2_log_file`、`stage2_progress_dir` 和 `stage2_debug_log_file`。进度目录空值使用队列目录；显式设置旧 `stage2_progress_file` 时使用其父目录，并仅将该文件作为旧进度导入来源。save 目录空值继承 `tmp_dir`，设备未指定时继承共享 `device`。多 worker 的显式输出路径须自行区分；未指定的部分输出自动添加 worker 后缀。相同任务的进度另有独占锁，防止不同队列重复消费。
 
 Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目录；Stage1 保持其 exe 目录规则。共用 INI 推荐与两个 exe 放在同一目录。只将 `[Worker #N]` 用作命令行覆盖范围；模板的普通分组用注释，GUI 的真实分区规则见 [配置维护](../architecture/CONFIGURATION.md)。
 
