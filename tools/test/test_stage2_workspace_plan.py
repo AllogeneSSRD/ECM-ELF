@@ -43,7 +43,8 @@ def verify_giant_memory(plan):
         block = v['short_block'] if v['short_block'] and x < v['short_max'] and v['short_block'] < v['chain_block'] else v['chain_block']
         chains = (x+block-1)//block
         seeds = 2*chains+1 if chain else x
-        cap = max(cap,seeds)
+        reserve=max(seeds,min(x,8192)) if chain and v.get('wide_tail_chain',False) and x<32768 else seeds
+        cap = max(cap,reserve)
         base |= chain and v['seed_device'] and v['seed_pair']
         ns = (x+v['segment']-1)//v['segment']
         coordinate = 16*x*w

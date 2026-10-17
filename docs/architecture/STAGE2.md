@@ -12,7 +12,7 @@ save提供目标N、sigma、B1和归一化X，不自动推断承载指数。Suya
 
 完整tune可按成本与联合显存比较普通/合法承载，允许配置跨条件复用及宽度/B2估算，详见[Auto B2/tune](AUTO_B2.md)。合法梅森worktodo结合已知因子和save验证后提供承载指数；仅save不猜指数。显式`--carrier-exponent 0`锁定普通模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
 
-承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L8940)。
+承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L9023)。
 
 设备点坐标使用 Montgomery 域，NTT digit 在 Goldilocks 域，多项式系数归约后为普通规范整数。不同表示不能直接相乘或判断数学相等。
 
@@ -36,11 +36,17 @@ D 确定 baby 集 J={1≤j≤D/2:gcd(j,D)=1}，P=φ(D)/2。giant 数 I=⌊B2/D�
 | 12. 累积与 GCD | 设备每 64 叶求块积；CPU GCD；饱和块细分 | GPU 产品、CPU GMP |
 | 13. 验证与结果 | 排空算术检查，验证因子；可选命名/GP 分解；写入成功回执 | CPU 与检查收尾 |
 
-Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务。每曲线 init 包括 baby/F 树和必需自检，main 包括 inverse、批循环、下降、GCD 和检查收尾。完整时间为 init+main，Stage1 和自动 D 扫描另计。
+Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务。每曲线 init 包括 baby 集合枚举、baby/F 树和引擎内 NTT/S4 检查，main 包括 inverse、批循环、下降、GCD 和检查收尾。日志中的 shape 是 baby 集合枚举，已包含在 init 中，不能再次求和。引擎时间为 init+main；Stage1、外层 D 选型、计时前的 Montgomery/xADD 预检和进程启动另计。性能比较使用相同边界，进程墙钟单独记录。
 
 ## 点生成与归一化
 
 差分 xADD 使用 6 次模乘，固定差点保证 chain 中的相邻点关系。相邻 seed 可同时得到 [iD]Q 与 [(i+1)D]Q，避免重复计算两个独立 ladder。短块、容量不足或非单位场景仍需保留正确回退。
+
+生产路径的通用 chain 下限为每个点块 32768 点；当算术位宽 W>128 个 64-bit limb、驻留 G 叶可用且其坐标预算至少覆盖 32767 点时，有效下限为 8192。这里 W 取实际算术模数，承载模式按承载位宽计算。更短点块或不足的驻留预算仍使用通用路线；`NTT_GIANT_CHAIN_MIN` 的生产配置约束保持不变。共享选择函数为 [giant_chain_minimum](../../src/core/ecm_stage2_geometry.h)，原生内存规划与 portable tune 使用相同的有效阈值。
+
+新接入的宽尾块先验证 [D]Q 的单位性。非单位基点直接使用逐点 ladder；若差分链生成后的分组乘积在目标 N 上非单位，则恢复此前的逻辑 Gamma，并在原坐标和分段缓冲区内用逐点 ladder 重做整个尾块。该回退保留原有因子集合及非仿射占位叶，避免将表示差异引入结果。已有大点块的路线保持原合同。缓冲区预留公式见 [Giant 组件](MEMORY.md#giant-组件)。
+
+`device_gleaf.chunks` 记录实际准备次数，`retry_chunks` 记录重做次数；分组、检查和传输计数包含重做工作，`coord_peak_bytes`/`group_peak_bytes` 仍为各自同时占用峰。数学上的唯一覆盖由 `real_batched_projective` 的 `leaves=gamma_points` 校验，不能从准备次数推导曲线数。
 
 分块求逆以积换取少量主机逆：可逆集合使用前缀/积树传播，遇到非单位先在目标 N 上判定和求 GCD。不能在承载 M 上的单位性替代 N 上的单位性。Gamma 保存使用齐次叶引入的累计缩放，在最终下降前校正。
 
@@ -64,14 +70,16 @@ F(X)=∏ⱼ(X−xⱼ)。giant 叶为齐次形式 ZᵢX−Xᵢ，或等价的已�
 
 必需自检、carry 精确性、系数 GMP 抽样、proper divisor 验证和检查排空属于计算合同；factor-only 只省可选命名。性能测量与额外逐节点/台账诊断分开，不能把诊断曲线当作普通速度样本。
 
+完整叶比较使用目标环：承载计算先将叶 v 投影为 v mod N，再与普通模数或其他点生成路线比较。Γ 的逆元只需满足目标 N 上的合同，不同投影坐标可产生不同的 M 代表元；原始 M 叶指纹适合检查同一路线的重复一致性。承载正确性仍须独立核对目标环完整叶、点生成、分段/分组与缩放，因子集合或最终 GCD 相同不能替代这些检查。
+
 ## 当前规划边界
 
 `request_program`预测满次数驻留fold的乘法顺序、形状、来源和树租约。初始化/NTT/S4/owner/giant按同一时间线计算条件峰和free需求，host fold/frontier可使用受限arena的保守上界。驱动以tune实测或估算选择D及合法承载；单G、baby预算回退、诊断及全部分配失败不在统一保证中。引擎保留实时检查，详见[内存](MEMORY.md)与[Auto B2/tune](AUTO_B2.md)。
 
 ## 代码依据
 
-- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7261)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9397)。
+- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7299)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9480)。
 - [模数上下文](../../src/core/ecm_stage2_modulus.h#L28)：`configure`，目标/承载资格。
-- [请求程序](../../src/core/ecm_stage2_requests.h#L76)：`request_program`；[精确树组](../../src/core/ecm_stage2_geometry.h#L93)：`tree_multiply_groups`。
+- [请求程序](../../src/core/ecm_stage2_requests.h#L76)：`request_program`；[精确树组](../../src/core/ecm_stage2_geometry.h#L147)：`tree_multiply_groups`。
 - [点模乘](../../src/cuda/stage2/stage2_point_mersenne.cuh)、[NTT](NTT.md)、[内存](MEMORY.md)。
 - 固定资料：[多项式数学](../reference/ECM_STAGE2_MATH.md)、[Prime95 Poly](../reference/PRIME95_STAGE2.md)、[PrMers ECM](../reference/PRMERS_ECM.md)。

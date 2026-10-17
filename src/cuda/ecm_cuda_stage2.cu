@@ -6710,7 +6710,7 @@ struct DeviceGLeafStats {
         good_segments=0,device_trees=0,device_leaf_words=0,patch_words=0,
         group_d2h_bytes=0,bad_segment_d2h_bytes=0,bad_point_d2h_bytes=0,
         avoided_point_d2h_bytes=0,avoided_segment_d2h_bytes=0,avoided_leaf_h2d_bytes=0,
-        coord_peak_bytes=0,group_peak_bytes=0,checked_groups=0,checked_leaf_words=0;
+        coord_peak_bytes=0,group_peak_bytes=0,checked_groups=0,checked_leaf_words=0,retry_chunks=0;
     double t_prepare=0,t_invert=0,t_fill=0;
 };
 static bool device_gleaf_flag(const char *name) {
@@ -6742,7 +6742,8 @@ struct ResidentGiant {
         const auto bad_before=st.bad_point_d2h_bytes,seg_before=st.bad_segment_d2h_bytes;
         ++st.chunks;st.groups+=ng;st.coord_peak_bytes=std::max(st.coord_peak_bytes,16ull*n*w);
         group_good.assign(ng,0);bad_x.resize(ng);bad_z.resize(ng);
-        CK(cudaMalloc(&groups_device,ng*w*8));CK(cudaMalloc(&group_fix,(GROUP+1)*w*8));
+        if(!groups_device)CK(cudaMalloc(&groups_device,ng*w*8));
+        if(!group_fix)CK(cudaMalloc(&group_fix,(GROUP+1)*w*8));
         std::vector<unsigned long long> fix((GROUP+1)*w),word(w),products(ng*w);
         mpz_t R,p,v,inv;mpz_inits(R,p,v,inv,nullptr);words_to_mpz(R,ws.C->hmone.data(),w);mpz_set_ui(p,1);
         for(size_t j=0;j<=GROUP;++j) {
@@ -6785,13 +6786,27 @@ struct ResidentGiant {
     }
 };
 
-static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, unsigned long long D,
+static void giant_ladder_into(S3Workspace &ws,const LadderCtx &C,unsigned long long D,
+    unsigned long long first,size_t points,unsigned long long *x,unsigned long long *z) {
+    const auto w=C.nw;
+    std::vector<unsigned long long> scalars(std::min(points,ws.pt_cap));
+    for(size_t offset=0;offset<points;offset+=scalars.size()) {
+        const auto take=std::min(scalars.size(),points-offset);
+        for(size_t i=0;i<take;++i)scalars[i]=(first+offset+i)*D;
+        CK(cudaMemcpy(ws.djs,scalars.data(),take*8,cudaMemcpyHostToDevice));
+        S2G_DISPATCH((int)w,s2g_launch_ladder,(int)w,(int)take,ws.dn,C.ninv,
+            ws.dqx,ws.dqz,ws.da24,ws.dmone,ws.djs,x+offset*w,z+offset*w);
+        CK(cudaGetLastError());++ws.ladder_calls;ws.ladder_points_total+=take;
+    }
+}
+
+static bool giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, unsigned long long D,
                               unsigned long long clo, unsigned long long chi,
                               unsigned long long per_block, std::vector<unsigned long long> &gx,
                               std::vector<unsigned long long> &gz, bool check,
                               unsigned long long &seed_points,
                               std::vector<unsigned long long> *gseg = nullptr,
-                              unsigned long long seg = 16,ResidentGiant *resident=nullptr)
+                              unsigned long long seg = 16,ResidentGiant *resident=nullptr,bool wide_tail=false)
 {
     stage2_trace::Range trace("Giant.chain");
     const size_t nw = C.nw;
@@ -6813,9 +6828,12 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
     js.push_back(D);                                    /* the difference point x_D */
     seed_points = (unsigned long long)js.size();
     std::vector<unsigned long long> lx, lz;
+    bool ladder_fallback=false;
     if(g_giant_seed_device) {
-        W.need_pts(js.size());
+        W.need_pts(ecm_stage2::giant_seed_reserve(npts,js.size(),wide_tail));
         const bool paired=g_giant_seed_pair && W.need_giant_base(D,L.target());
+        ladder_fallback=wide_tail && !paired;
+        if(!ladder_fallback) {
         if(paired) {
             S2G_DISPATCH((int)nw,s2g_launch_seed_pair,(int)nw,clo,npts,per_block,blocks,
                          W.dn,C.ninv,W.giant_base,W.giant_base+nw,W.da24,W.dmone,W.dx,W.dz);
@@ -6858,6 +6876,7 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
                 g_giant_seed.checked_words+=nw;
             }
             mpz_clears(old_z,new_z,nullptr);
+        }
         }
     } else ladder_points_ws(W, js, lx, lz);
     /* the seeds and the difference point as MONTGOMERY IMAGES (x*R mod N) */
@@ -6905,8 +6924,18 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
     }
     CK(cudaMalloc(&ox, (size_t)npts * nw * 8));
     CK(cudaMalloc(&oz, (size_t)npts * nw * 8));
-    S2G_DISPATCH((int)nw, s2g_launch_chain, (int)nw, blocks, npts, per_block, C.ninv, W.dn, ddx,
-                 ddz, ddsx, ddsz, desx, desz, ox, oz,g_giant_seed_device?2:1);
+    if(ladder_fallback) {
+        // A nonunit [D]Q must retain the old individual-ladder factor path.
+        // Reuse the reserved index tile and the normal chain output arrays;
+        // no fallback-only device allocation or seed-capacity growth occurs.
+        giant_ladder_into(W,C,D,clo,(size_t)npts,ox,oz);
+        seed_points=0;
+        stage2_log::print(stage2_log::debug,"wide_tail_ladder_fallback: points=%llu reason=nonunit_base index_capacity=%llu\n",
+            npts,(unsigned long long)W.pt_cap);
+    } else {
+        S2G_DISPATCH((int)nw, s2g_launch_chain, (int)nw, blocks, npts, per_block, C.ninv, W.dn, ddx,
+                     ddz, ddsx, ddsz, desx, desz, ox, oz,g_giant_seed_device?2:1);
+    }
     CK(cudaGetLastError());
     CK(cudaDeviceSynchronize());
     if(!resident || check || g_gfinv_seg_check) {
@@ -6948,7 +6977,7 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
     /* THE CHECK: the same chunk through the ladder, compared on the AFFINE x value (the chain and
        the ladder hold different projective representatives of the same point, so X and Z cannot
        be compared -- X/Z mod N can, and that is the only quantity the caller uses). */
-    if (check) {
+    if (check && !ladder_fallback) {
         std::vector<unsigned long long> gjs((size_t)npts, 0ull);
         for (unsigned long long i = 0; i < npts; ++i) gjs[(size_t)i] = (clo + i) * D;
         std::vector<unsigned long long> cx, cz;
@@ -7003,6 +7032,7 @@ static void giant_chunk_chain(PolyLayer &L, const LadderCtx &C, S3Workspace &W, 
                     first);
     }
     mpz_clears(Rm, X, Z, nullptr);
+    return !ladder_fallback;
 }
 
 /* the block product of nvals values, computed ON the device from a device buffer */
@@ -7500,7 +7530,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
            is 901 s and the chain's fixed costs are irrelevant.  So: below `chain_min` points per
            chunk use the ladder, above it use the chain.  NTT_GIANT_CHAIN_MIN=0 forces the chain
            (for the checks), NTT_GIANT_CHAIN_MIN=<big> forces the ladder. */
-        static const unsigned long long chain_min = [] {
+        static const unsigned long long configured_chain_min = [] {
             const char *e = std::getenv("NTT_GIANT_CHAIN_MIN");
             return (e && *e) ? std::strtoull(e, nullptr, 10) : 32768ull;
         }();
@@ -7517,13 +7547,14 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         const bool device_leaf=requested && g_groot_device && g_s4_groot_only && L.s4 &&
             g_s4_pack_direct && !g_s4_final_readback && !(hp && std::atoi(hp)) && g_gfinv_seg_exact &&
             16ull*npts*W<=maxbytes;
+        const auto chain_min=device_leaf && g_giant_seed_device?
+            ecm_stage2::giant_chain_minimum(W,configured_chain_min,maxbytes):configured_chain_min;
+        const bool wide_tail=g_giant_seed_device && npts<configured_chain_min && chain_min<configured_chain_min;
         if(requested && !device_leaf)++R.device_leaf.fallback_chunks;
         gseg.assign(((size_t)npts + S2G_GFINV_SEG - 1) / S2G_GFINV_SEG * (size_t)C.nw, 0ull);
         const unsigned long long effective_chain_block=ecm_stage2::giant_chain_block(
             npts,chain_block,short_chain_block,short_chain_max);
-        if(short_chain_block)stage2_log::print(stage2_log::debug, "giant_chain_policy: npts=%llu route=%s base_block=%llu block=%llu short_block=%llu short_max=%llu\n",
-            npts,(force_ladder || npts<chain_min)?"ladder":"chain",chain_block,
-            (force_ladder || npts<chain_min)?0ull:effective_chain_block,short_chain_block,short_chain_max);
+        bool actual_chain=false;
         if (force_ladder || npts < chain_min) {
             gjs.resize(chi - clo + 1);
             for (size_t i = clo; i <= chi; ++i) gjs[i - clo] = (unsigned long long)i * D;
@@ -7548,17 +7579,50 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             }
         } else {
             unsigned long long seed_points = 0;
-            giant_chunk_chain(L, C, ws, D, (unsigned long long)clo, (unsigned long long)chi,
+            actual_chain=giant_chunk_chain(L, C, ws, D, (unsigned long long)clo, (unsigned long long)chi,
                               effective_chain_block, gx, gz, chain_check, seed_points, &gseg,
-                              S2G_GFINV_SEG,device_leaf?&resident:nullptr);
+                              S2G_GFINV_SEG,device_leaf?&resident:nullptr,wide_tail);
             R.giant_seed_points += seed_points;
-            ++R.giant_chain_chunks;
+            if(actual_chain)++R.giant_chain_chunks;
         }
         R.t_giant += now_s() - tgp;
         if(device_leaf) {
-            const double t=now_s(),ti=R.device_leaf.t_invert;resident.prepare(ws,L,gseg,Ginv,proj_gamma_points,proj_segments,R.device_leaf);
+            const double t=now_s(),ti=R.device_leaf.t_invert;
+            if(wide_tail && actual_chain) {
+                // Any nonunit segment must keep the old per-point factor path,
+                // including its non-affine placeholders. Retry in the SAME
+                // coordinates/segment/group leases and restore logical Gamma.
+                mpz_t saved;mpz_init_set(saved,Ginv);
+                const auto gamma_before=proj_gamma_points,segments_before=proj_segments;
+                const auto bad_before=R.device_leaf.bad_groups;
+                resident.prepare(ws,L,gseg,Ginv,proj_gamma_points,proj_segments,R.device_leaf);
+                if(R.device_leaf.bad_groups!=bad_before) {
+                    mpz_set(Ginv,saved);proj_gamma_points=gamma_before;proj_segments=segments_before;
+                    giant_ladder_into(ws,C,D,clo,(size_t)npts,resident.x,resident.z);
+                    S2G_DISPATCH((int)W,s2g_launch_segprod,(int)W,npts,S2G_GFINV_SEG,C.ninv,
+                        ws.dn,resident.z,resident.segments,ws.dsegfix);
+                    CK(cudaGetLastError());
+                    if(g_gfinv_seg_check) {
+                        gx.resize(npts*W);gz.resize(npts*W);
+                        CK(cudaMemcpy(gx.data(),resident.x,gx.size()*8,cudaMemcpyDeviceToHost));
+                        CK(cudaMemcpy(gz.data(),resident.z,gz.size()*8,cudaMemcpyDeviceToHost));
+                        CK(cudaMemcpy(gseg.data(),resident.segments,gseg.size()*8,cudaMemcpyDeviceToHost));
+                        std::vector<unsigned long long> expected;gfinv_segprod_host(expected,npts,W,gz,L.N);
+                        if(expected!=gseg){std::fprintf(stderr,"FATAL: wide-tail fallback segment GMP mismatch\n");std::exit(3);}
+                    }
+                    ++R.device_leaf.retry_chunks;
+                    resident.prepare(ws,L,gseg,Ginv,proj_gamma_points,proj_segments,R.device_leaf);
+                    actual_chain=false;--R.giant_chain_chunks;
+                    stage2_log::print(stage2_log::debug,"wide_tail_ladder_fallback: points=%llu reason=nonunit_segment index_capacity=%llu\n",
+                        npts,(unsigned long long)ws.pt_cap);
+                }
+                mpz_clear(saved);
+            } else resident.prepare(ws,L,gseg,Ginv,proj_gamma_points,proj_segments,R.device_leaf);
             R.t_gleaves+=now_s()-t;R.t_ginv+=R.device_leaf.t_invert-ti;
         }
+        stage2_log::print(stage2_log::debug, "giant_chain_policy: npts=%llu route=%s base_block=%llu block=%llu short_block=%llu short_max=%llu configured_min=%llu effective_min=%llu words=%llu\n",
+            npts,actual_chain?"chain":"ladder",chain_block,actual_chain?effective_chain_block:0ull,
+            short_chain_block,short_chain_max,configured_chain_min,chain_min,(unsigned long long)W);
         GfinvBatch segment_inverse(gseg,W,L.target(),g_gfinv_batch);
         /* the G trees of the batches that lie inside this point chunk */
         for (unsigned long long b = c0 / P; b < R.num_poly_g && b * P < c1; ++b) {
@@ -8347,8 +8411,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     // and result merging. Keep its measured endpoint separate from subphases.
     /* the device-side counters: how much of the orchestration actually happened once */
     const auto &dl=R.device_leaf;
-    stage2_log::print(stage2_log::debug, "device_gleaf: requested_chunks=%llu chunks=%llu fallback_chunks=%llu groups=%llu bad_groups=%llu good_segments=%llu device_trees=%llu device_leaf_words=%llu patch_words=%llu group_d2h_bytes=%llu bad_segment_d2h_bytes=%llu bad_point_d2h_bytes=%llu avoided_point_d2h_bytes=%llu avoided_segment_d2h_bytes=%llu avoided_leaf_h2d_bytes=%llu coord_peak_bytes=%llu group_peak_bytes=%llu checked_groups=%llu checked_leaf_words=%llu t_prepare=%.6f t_invert=%.6f t_fill=%.6f\n",
-        dl.requested_chunks,dl.chunks,dl.fallback_chunks,dl.groups,dl.bad_groups,dl.good_segments,dl.device_trees,
+    stage2_log::print(stage2_log::debug, "device_gleaf: requested_chunks=%llu chunks=%llu retry_chunks=%llu fallback_chunks=%llu groups=%llu bad_groups=%llu good_segments=%llu device_trees=%llu device_leaf_words=%llu patch_words=%llu group_d2h_bytes=%llu bad_segment_d2h_bytes=%llu bad_point_d2h_bytes=%llu avoided_point_d2h_bytes=%llu avoided_segment_d2h_bytes=%llu avoided_leaf_h2d_bytes=%llu coord_peak_bytes=%llu group_peak_bytes=%llu checked_groups=%llu checked_leaf_words=%llu t_prepare=%.6f t_invert=%.6f t_fill=%.6f\n",
+        dl.requested_chunks,dl.chunks,dl.retry_chunks,dl.fallback_chunks,dl.groups,dl.bad_groups,dl.good_segments,dl.device_trees,
         dl.device_leaf_words,dl.patch_words,dl.group_d2h_bytes,dl.bad_segment_d2h_bytes,dl.bad_point_d2h_bytes,
         dl.avoided_point_d2h_bytes,dl.avoided_segment_d2h_bytes,dl.avoided_leaf_h2d_bytes-dl.patch_words*8,
         dl.coord_peak_bytes,dl.group_peak_bytes,dl.checked_groups,dl.checked_leaf_words,dl.t_prepare,dl.t_invert,dl.t_fill);
@@ -8850,6 +8914,10 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         } else if(!ecm_stage2::multiply(leaf_mb,1048576,giant_policy.resident_limit_bytes) ||
                   !ecm_stage2::multiply(point_kb,1024,point_bytes))return 3;
         else {
+            if(giant_policy.seed_device && giant_policy.resident_requested && giant_policy.resident_eligible && giant_policy.exact_segments) {
+                giant_policy.chain_min=ecm_stage2::giant_chain_minimum(nw,giant_policy.chain_min,giant_policy.resident_limit_bytes);
+                giant_policy.wide_tail_chain=giant_policy.chain_min<fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768);
+            }
             const auto giant_chunk=stage2_giant_chunk::plan(P_baby,nw,point_bytes,
                 fold_device_flag("NTT_GIANT_CHUNK_FLOOR"));
             if(!giant_chunk.valid || !ecm_stage2::giant_memory_plan(P_baby,p.giant_points,nw,
@@ -10007,6 +10075,7 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
             <<",\"final_point_capacity\":"<<m.final_point_capacity
             <<",\"policy\":{\"chain_block\":"<<v.chain_block<<",\"short_block\":"<<v.short_block
             <<",\"short_max\":"<<v.short_max<<",\"chain_min\":"<<v.chain_min
+            <<",\"wide_tail_chain\":"<<(v.wide_tail_chain?"true":"false")
             <<",\"segment\":"<<v.segment<<",\"group\":"<<v.group
             <<",\"resident_limit_bytes\":"<<v.resident_limit_bytes<<",\"initial_points\":"<<v.initial_points
             <<",\"compact_products\":"<<(v.compact_products?"true":"false")

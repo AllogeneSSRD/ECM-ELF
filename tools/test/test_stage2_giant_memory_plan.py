@@ -35,7 +35,8 @@ def main():
         ('legacy_points',1381380,2600000000000,{}),
         ('legacy_products',1381380,2600000000000,{'NTT_S3_COMPACT_PRODUCTS':'0'}),
         ('bounded_points',1381380,2600000000000,{'NTT_GIANT_CHUNK_FLOOR':'1'}),
-        ('ladder_tail',1381380,1381380*(253440+32000-2),{}),
+        ('ladder_tail',1381380,1381380*(253440+32000-2),{'NTT_DEVICE_GLEAF_MAX_MB':'1'}),
+        ('wide_tail',1381380,1381380*(253440+32000-2),{}),
         ('forced_ladder',1381380,2600000000000,{'NTT_GIANT_LADDER':'1'}),
         ('legacy_seed',1381380,2600000000000,{'NTT_GIANT_SEED_DEVICE':'0'}),
         ('resident_budget_fallback',1381380,2600000000000,{'NTT_DEVICE_GLEAF_MAX_MB':'1'}),
@@ -55,7 +56,8 @@ def main():
             env.update(overrides)
             command = [str(exe),'--ini',str(ini),'--save',str(save),'--carrier-exponent',str(args.carrier_exponent),
                        '--device',str(args.device),'--b2',str(b2),'--d',str(d),'--arena-mb','6300',
-                       '--owner-budget-mb','1024','--batch-mb','256','--plan-only']
+                       '--owner-budget-mb','1024','--batch-mb','256','--plan-only',
+                       '--short-calibration','0','--tune-runtime','0']
             proc = subprocess.run(command,env=env,capture_output=True,timeout=60)
             log = out/(name+'.log');log.write_bytes(proc.stdout+proc.stderr)
             if name in ('legacy_seed','small_prime_no_reuse','short_chain'):
@@ -70,7 +72,8 @@ def main():
                 continue
             if proc.returncode:
                 raise ValueError(name+' plan failed; raw output retained')
-            plans = [json.loads(line) for line in proc.stdout.decode('utf-8').splitlines() if line.startswith('{')]
+            records = [json.loads(line) for line in proc.stdout.decode('utf-8').splitlines() if line.startswith('{')]
+            plans = [record for record in records if record.get('type')=='stage2_plan']
             if len(plans)!=1 or plans[0]['curves_executed']:
                 raise ValueError('one plan-only result is required')
             plan = plans[0];verify_giant_memory(plan)
@@ -82,6 +85,12 @@ def main():
                 raise ValueError('ordinary giant policy unsupported')
             if name=='ladder_tail' and not (m['chunks'][0]['route']=='chain' and m['chunks'][1]['route']=='ladder' and m['final_point_capacity']==32000):
                 raise ValueError('chain -> ladder retained-capacity transition missing')
+            if name=='wide_tail':
+                wide=(plan['bits']+63)//64>128
+                if m['policy'].get('wide_tail_chain',False)!=wide or m['chunks'][-1]['route']!=('chain' if wide else 'ladder'):
+                    raise ValueError('wrong width-dependent tail route')
+                if wide and m['final_point_capacity']!=8192:
+                    raise ValueError('wide-tail fallback reserve is missing')
             if name=='resident_budget_fallback' and any(c['resident'] for c in m['chunks']):
                 raise ValueError('resident budget incorrectly accepted')
             if sha(exe)!=identity['binary_sha256'] or sha(save)!=save_sha or sha(__file__)!=tool_sha:

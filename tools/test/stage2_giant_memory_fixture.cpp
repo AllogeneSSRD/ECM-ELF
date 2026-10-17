@@ -80,7 +80,9 @@ static void one(Word p,Word n,Word w,Word q,GiantMemoryPolicy policy) {
                 const Word block=policy.short_block && points<policy.short_max && policy.short_block<policy.chain_block?
                     policy.short_block:policy.chain_block;
                 const Word chains=points/block+(points%block!=0),seeds=chain?2*chains+1:points;
-                ws.need_pts(size_t(seeds));
+                const Word reserve=chain && policy.wide_tail_chain && points<32768?
+                    std::max(seeds,std::min(points,8192ull)):seeds;
+                ws.need_pts(size_t(reserve));
                 if(chain && policy.seed_device && policy.seed_pair)ws.need_giant_base(1,nullptr);
                 const Word ns=points/policy.segment+(points%policy.segment!=0);
                 const bool resident=policy.resident_requested && policy.resident_eligible && policy.exact_segments &&
@@ -151,6 +153,18 @@ int main(int argc,char **argv) {
                 <<",\"accumulation\":"<<p.accumulation_bytes<<",\"peak\":"<<p.peak_bytes
                 <<",\"giant_peak\":"<<giant_peak<<",\"point_capacity\":"<<p.final_point_capacity<<"}\n";return 0;
         }
+        for(Word w=1;w<=256;++w) {
+            check(giant_chain_minimum(w,32768)==(w>128?8192ull:32768ull));
+            check(giant_chain_minimum(w,0)==0);
+            check(giant_chain_minimum(w,1024)==1024);
+        }
+        for(Word w:{128ull,129ull,256ull})for(Word n:{8191ull,8192ull,32767ull,32768ull}) {
+            GiantMemoryPolicy policy;policy.chain_min=giant_chain_minimum(w,32768);
+            GiantMemoryPlan route;check(giant_memory_plan(1,n,w,n,policy,route));
+            check(route.chunks.size()==1 && route.chunks[0].chain==(n>=policy.chain_min));
+            policy.force_ladder=true;check(giant_memory_plan(1,n,w,n,policy,route));
+            check(!route.chunks[0].chain);
+        }
         for(unsigned flags=0;flags<128;++flags)for(Word w:{1ull,7ull,126ull,256ull})
         for(Word p:{1ull,17ull,64ull,8192ull}) {
             GiantMemoryPolicy v;v.chain_min=128;v.chain_block=64;
@@ -161,6 +175,9 @@ int main(int argc,char **argv) {
             v.compact_products=flags&64;
             one(p,3*p+1,w,2*p,v);
         }
+        GiantMemoryPolicy wide;wide.chain_min=8192;wide.wide_tail_chain=true;
+        one(240,8192,129,12000,wide);one(240,32767,256,34560,wide);
+        one(2880,149940,256,69120,wide);
         GiantMemoryPolicy v;v.initial_points=1;
         one(126720,1882177,126,253440,v);
         one(126720,253440+32000,126,253440,v); // chain -> ladder tail retains larger seed cap

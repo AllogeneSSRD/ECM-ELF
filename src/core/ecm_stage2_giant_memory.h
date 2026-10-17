@@ -19,6 +19,7 @@ struct GiantMemoryPolicy {
     Word chain_block=64,short_block=0,short_max=8192,chain_min=32768;
     Word segment=16,group=64,resident_limit_bytes=512ull<<20,initial_points=0,accumulation_block=64;
     bool force_ladder=false,seed_device=true,seed_pair=true;
+    bool wide_tail_chain=false;
     bool exact_segments=true,resident_requested=true,resident_eligible=true;
     bool compact_products=true;
 };
@@ -60,7 +61,8 @@ inline bool giant_memory_plan(Word p,Word points,Word w,Word chunk_points,
             if(!multiply(chains,2,c.seeds) || !add(c.seeds,1,c.seeds))return false;
             base=base || (policy.seed_device && policy.seed_pair);
         } else c.seeds=n;
-        capacity=std::max(capacity,c.seeds);c.point_capacity=capacity;
+        capacity=std::max(capacity,giant_seed_reserve(n,c.seeds,c.chain && policy.wide_tail_chain));
+        c.point_capacity=capacity;
         if(!multiply(n,w,v) || !multiply(v,16,c.coordinate_bytes))return false;
         c.resident=policy.resident_requested && policy.resident_eligible &&
             policy.exact_segments && c.coordinate_bytes<=policy.resident_limit_bytes;

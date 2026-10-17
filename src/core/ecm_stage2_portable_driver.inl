@@ -123,7 +123,10 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     s.fold=ecm_stage2::owner_bytes(p,w,3)<=o.owner_mb*1048576;
     const auto env=tune_environment();const auto front=et::environment_uint(env,"scaled_frontier_max_mb",o.owner_mb);
     s.frontier=s.fold && ecm_stage2::owner_bytes(p,w,3)+24*p<=std::min(o.owner_mb,front)*1048576;
-    s.chain_min=et::environment_uint(env,"giant_chain_min",32768);s.force_ladder=et::environment_uint(env,"giant_ladder",0)!=0;
+    const auto leaf_mb=et::environment_uint(env,"device_gleaf_max_mb",512);
+    const auto leaf_bytes=leaf_mb<=~uint64_t(0)/1048576?leaf_mb*1048576:0;
+    s.chain_min=ecm_stage2::giant_chain_minimum(w,et::environment_uint(env,"giant_chain_min",32768),leaf_bytes);
+    s.force_ladder=et::environment_uint(env,"giant_ladder",0)!=0;
     const auto kb=et::environment_uint(env,"giant_point_budget_kb",262144);
     const auto k=kb*1024/(w*16);
     const bool floor=et::environment_uint(env,"giant_chunk_floor",0)!=0;

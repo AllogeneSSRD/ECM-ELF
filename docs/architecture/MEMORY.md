@@ -101,6 +101,8 @@ S3 workspace=8[5W+(2W+1)c+W(v+r)+W(f+1)·[f>0]+2Wh] bytes。
 
 点 X/Z 坐标=16·Q·W bytes；segment/group 使用各自数量×8W。chain seed 数约 2⌈Q/Cchain⌉+1，ladder 则可能直接保留 Q。尾块切换到 ladder 时可以增长 seed 容量，并保留至末阶段；不能只记录最大满 chunk 的 chain seed。
 
+启用 [宽尾块路线](STAGE2.md#点生成与归一化) 且 8192≤Q<32768 时，令实际 seed 数 s=2⌈Q/Cchain⌉+1，新的 seed/索引点槽预留为 qreserve=max(s,min(Q,8192))，保留容量更新为 c←max(c,qreserve)。S3 同时为这 qreserve 个槽保留索引、seed X/Z，字节量为 8·qreserve·(1+2W)，不是只有索引数组。非单位回退使用这些索引槽分批生成逐点 ladder，输出、segment 和 group 复用该点块已有设备缓冲区，不在重做时额外增长容量。`giant_memory.policy.wide_tail_chain` 标记此规划合同，生命周期状态机使用相同规则。
+
 积缓冲按 r=⌈P/64⌉ 分配，叶值仍为 P。相对于 r=P，节省 8W(P−⌈P/64⌉) bytes。这个末阶段容量收益不必降低发生在 giant 阶段的完整峰。
 
 `giant_memory` 按保留容量和满/尾 chunk 路线预测本组件。非驻留 G 叶并不取消此前 chain 坐标生成峰；小素数处理可能留下初始容量。组件程序最多压缩为满块与尾块，不模拟更早 NTT 拒绝或完整回退。
@@ -155,5 +157,5 @@ M8011/80111、carrier8011、B1=20、B2=2.6e12、D1381380/P126720、batch256、ar
 - [ecm_stage2_giant_memory.h](../../src/core/ecm_stage2_giant_memory.h#L9)：giant 容量与保留状态。
 - [ecm_stage2_giant_state.h](../../src/core/ecm_stage2_giant_state.h#L17)：giant有序分配、point chunk租约及末阶段容量。
 - [ecm_stage2_initial_memory.h](../../src/core/ecm_stage2_initial_memory.h)：共享baby布局、基础自检及初始化时间线。
-- [plan-only 接入](../../src/cuda/ecm_cuda_stage2.cu#L8711)、[工作区工具说明](../../tools/bench/README_STAGE2_CARRIER_PLAN.md)。
+- [plan-only 接入](../../src/cuda/ecm_cuda_stage2.cu)、[工作区工具说明](../../tools/bench/README_STAGE2_CARRIER_PLAN.md)。
 - [性能](../performance/STAGE2.md)、[TODO](../TODO.md)。

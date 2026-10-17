@@ -74,7 +74,7 @@ public:
            !multiply(segments,policy.words,seg_words)) {reason="payload_overflow";return false;}
         const bool resident=c.resident_requested && c.resident_eligible && c.exact_segments &&
             coord_bytes<=c.resident_limit_bytes;
-        if(!points_reserve(seeds))return false;
+        if(!points_reserve(giant_seed_reserve(n,seeds,chain && c.wide_tail_chain)))return false;
         if(chain && c.seed_device && c.seed_pair && !slots[GiantBase]) {
             Word count=0;if(!multiply(policy.words,2,count) || !words(GiantBase,count))return false;
         }
