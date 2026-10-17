@@ -9,6 +9,10 @@ import json
 import math
 from pathlib import Path
 import re
+import sys
+
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bench'))
+from edwards_stage2_reference_scope import measurement_scope
 
 
 def load(path):
@@ -29,9 +33,10 @@ def main():
     p.add_argument('--study',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--allow-partial',action='store_true')
+    p.add_argument('--scope',choices=('all','gpu'),default='all',help='GPU scope requires both GPU paths; CPU rows remain audited references')
     a=p.parse_args();plan=load(a.study/'plan.json')
     require(plan['prepared'],'Input preparation incomplete')
-    require(plan['complete'] or a.allow_partial,'Measurement matrix incomplete')
+    scope=measurement_scope(plan,a.scope,a.allow_partial)
     require(not plan['failures'],'Recorded measurement failures require review')
     require(len(plan['engines'])==len(set(plan['engines'])),'Duplicate engines')
     for binary in plan['binaries'].values():
@@ -92,16 +97,19 @@ def main():
             ntt_counts.extend(map(int,counts));cpu_occupancy.append(row['parent_cpu_wall_ratio'])
             require(row['cpu_affinity_mask']==plan['cpu_affinity_mask'],'CPU affinity differs')
     require(not plan['complete'] or seen==expected,'Completed study lacks declared samples')
-    report=dict(complete=plan['complete'],expected_invocations=len(expected),accepted_invocations=len(seen),
+    report=dict(complete=scope['complete'],reporting_scope=scope,original_matrix_complete=plan['complete'],
+                expected_invocations=len(expected),accepted_invocations=len(seen),
                 missing_invocations=len(expected-seen),engine_counts=dict(Counter(r['engine'] for r in plan['runs'])),
                 full_nf_samples=sum(r['full_sample'] for r in plan['runs']),factor_samples=sum(not r['full_sample'] for r in plan['runs']),
                 cpu_ntt_small_prime_range=[min(ntt_counts),max(ntt_counts)] if ntt_counts else None,
                 cpu_time_wall_range=[min(cpu_occupancy),max(cpu_occupancy)] if cpu_occupancy else None,
-                study_sha256=sha(a.study/'plan.json'),audit_sha256=sha(__file__))
+                study_sha256=sha(a.study/'plan.json'),audit_sha256=sha(__file__),
+                scope_validator_sha256=sha(Path(__file__).resolve().parents[1]/'bench/edwards_stage2_reference_scope.py'))
     a.output.parent.mkdir(parents=True,exist_ok=True)
     require(not a.output.exists(),'Audit output already exists')
     a.output.write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
-    print('PASS frozen evidence and exact workloads:',len(seen),'of',len(expected),'invocations')
+    print('PASS frozen evidence and exact workloads:',len(seen),'of',len(expected),'original invocations;',
+          a.scope,'scope',scope['accepted_invocations'],'of',scope['expected_invocations'])
 
 
 if __name__=='__main__':main()

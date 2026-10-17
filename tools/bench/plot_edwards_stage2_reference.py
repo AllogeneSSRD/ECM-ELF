@@ -12,10 +12,13 @@ import re
 import statistics
 import textwrap
 
+from edwards_stage2_reference_scope import measurement_scope
+
 
 def stats(values):
-    return dict(n=len(values),median=statistics.median(values),min=min(values),max=max(values),
-                mad=statistics.median(abs(x-statistics.median(values)) for x in values))
+    median=statistics.median(values)
+    return dict(n=len(values),median=median,min=min(values),max=max(values),
+                mad=statistics.median(abs(x-median) for x in values))
 
 
 def main():
@@ -25,10 +28,12 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--figures',type=Path,required=True)
     p.add_argument('--allow-partial',action='store_true')
+    p.add_argument('--scope',choices=('all','gpu'),default='all',help='Finalize GPU paths while retaining CPU samples as a separate reference')
     a=p.parse_args();source_raw=(a.study/'plan.json').read_bytes();plan=json.loads(source_raw)
     conditions_path=a.study/'cpu_conditions.json'
     cpu_conditions=json.loads(conditions_path.read_text(encoding='utf-8')) if conditions_path.exists() else {}
-    if not plan['complete'] and not a.allow_partial:raise ValueError('Study incomplete; cannot publish a final comparison')
+    scope=measurement_scope(plan,a.scope,a.allow_partial)
+    if plan['failures']:raise ValueError('Recorded measurement failures require review')
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -76,12 +81,14 @@ def main():
         if key=='power_mw':
             valid=[x for x in values if 0<x<=250000];telemetry['power_samples_rejected']=len(values)-len(valid);values=valid
         if values:telemetry[key]=stats(values)
-    summary=dict(complete=plan['complete'],source_sha256=hashlib.sha256(source_raw).hexdigest(),
+    summary=dict(complete=scope['complete'],reporting_scope=scope,original_matrix_complete=plan['complete'],
+                 source_sha256=hashlib.sha256(source_raw).hexdigest(),
                  source_study=str(a.study.resolve()),binaries=plan['binaries'],dll_sha256=plan['dll_sha256'],
                  prime95_exe_sha256=plan.get('prime95_exe_sha256'),protocol=plan['protocol'],rows=rows,
                  measured_runs=len(plan['runs']),full_runs=sum(r['full_sample'] for r in plan['runs']),
                  factor_runs=[r['id'] for r in plan['runs'] if not r['full_sample']],failures=plan['failures'],busy_gpu_telemetry=telemetry,
                  cpu_conditions=cpu_conditions,thread_probe_sha256=hashlib.sha256(a.thread_probe.read_bytes()).hexdigest(),
+                 scope_validator_sha256=hashlib.sha256(Path(__file__).with_name('edwards_stage2_reference_scope.py').read_bytes()).hexdigest(),
                  cpu_conditions_sha256=hashlib.sha256(conditions_path.read_bytes()).hexdigest() if conditions_path.exists() else None)
     (a.output/'study.snapshot.json').write_bytes(source_raw)
     if conditions_path.exists():(a.output/'cpu_conditions.snapshot.json').write_bytes(conditions_path.read_bytes())
@@ -109,8 +116,8 @@ def main():
               ', GPU '+plan['binaries']['gpu']['sha256'][:12]+'. Plan '+summary['source_sha256'][:12]+'.')
     artifacts=[]
     def save(fig,name):
-        if not plan['complete'] and fig._suptitle is not None and 'PARTIAL' not in fig._suptitle.get_text():
-            fig._suptitle.set_text(fig._suptitle.get_text()+' [PARTIAL STUDY]')
+        if not scope['complete'] and fig._suptitle is not None and 'PARTIAL' not in fig._suptitle.get_text():
+            fig._suptitle.set_text(fig._suptitle.get_text()+' [PARTIAL SCOPE]')
         for ext in ('png','svg'):
             path=a.figures/(name+'.'+ext);fig.savefig(path,dpi=175,bbox_inches='tight');artifacts.append(str(path.resolve()))
         plt.close(fig)
@@ -127,7 +134,7 @@ def main():
     for ax,bound in zip(axes[0],bounds):
         ref=reference_rows(bound,'Edwards')
         ax.plot([r['actual_input_bits'] for r in ref],[r['s2_total_time'] for r in ref],color='#333333',ls='--',marker='D',markersize=4,label='Prime95 Edwards (4 threads)')
-        for engine in plan['engines']:
+        for engine in scope['engines']:
             part=sorted([r for r in rows if r['nominal_B2']==bound and r['engine']==engine],key=lambda r:r['bits'])
             if not part:continue
             v=[r['seconds']['median'] for r in part]
@@ -136,11 +143,32 @@ def main():
         ax.set_title(f'Requested B2={bound:.1e}; per-case adjusted B2 retained')
         ax.set_xlabel('Actual modulus N (bits)');ax.set_ylabel('Complete native Stage2 time (seconds, log scale)')
         ax.set_yscale('log');ax.grid(alpha=.2);ax.legend(fontsize=8)
-    fig.suptitle('Edwards Stage2: CPU / GPU elapsed-time reference'+(' [PARTIAL]' if not plan['complete'] else ''))
-    sample_counts=sorted({r['seconds']['n'] for r in rows})
+    fig.suptitle('Edwards Stage2: '+('GPU elapsed-time comparison' if a.scope=='gpu' else 'CPU / GPU elapsed-time reference'))
+    sample_counts=sorted({r['seconds']['n'] for r in rows if r['engine'] in scope['engines']})
     footer(fig,caption+'\nNew runs: n='+','.join(map(str,sample_counts))+
              ', median with min/max whiskers; thread counts differ from historical Prime95.\n'+identity)
     save(fig,'edwards_times')
+    if a.scope=='gpu' and scope['cpu_reference_invocations']:
+        fig,axes=plt.subplots(1,len(bounds),figsize=(14,5),squeeze=False)
+        for ax,bound in zip(axes[0],bounds):
+            ref=reference_rows(bound,'Edwards')
+            ax.plot([r['actual_input_bits'] for r in ref],[r['s2_total_time'] for r in ref],
+                    color='#333333',ls='--',marker='D',markersize=4,label='Prime95 Edwards (4 threads, n=1)')
+            for engine in ('cpu-ntt','cpu-plain'):
+                part=sorted([r for r in rows if r['nominal_B2']==bound and r['engine']==engine],key=lambda r:r['bits'])
+                counts=','.join(map(str,sorted({r['seconds']['n'] for r in part})))
+                # Individual cells have uneven coverage: show observations without
+                # drawing a line through unmeasured conditions.
+                for i,r in enumerate(part):
+                    s=r['seconds'];v=s['median']
+                    ax.errorbar(r['bits'],v,yerr=[[v-s['min']],[s['max']-v]],fmt='o',
+                                color=colors[engine],capsize=2,label=labels[engine]+f', n={counts}' if i==0 else None)
+            ax.set_title(f'CPU reference coverage; nominal B2={bound:.1e}')
+            ax.set_xlabel('Actual modulus N (bits)');ax.set_ylabel('Complete native Stage2 (seconds, log scale)')
+            ax.set_yscale('log');ax.grid(alpha=.2);ax.legend(fontsize=8)
+        fig.suptitle('CPU Stage2 reference only: partial coverage; collection stopped')
+        footer(fig,caption+'\nMeasured CPU cells only; no interpolation or projected timings. CPU background load overlapped development.\n'+identity)
+        save(fig,'cpu_reference')
     # Historical model context includes all four user-supplied screen logs.
     fig,axes=plt.subplots(1,len(bounds),figsize=(13,4.5),squeeze=False)
     for ax,bound in zip(axes[0],bounds):
@@ -182,7 +210,7 @@ def main():
     footer(fig,'Ryzen AI9 HX370, '+cpu_note+', M2203, B1=1000, B2=1e9, 4096 MiB planner budget; 3 samples per cell, median and min/max.\n'
              'CPU/wall is occupancy, not useful-work efficiency. EXE '+probe['exe_sha256'][:12]+'. Probe '+summary['thread_probe_sha256'][:12]+'.')
     save(fig,'cpu_threads')
-    (a.figures/'manifest.json').write_text(json.dumps(dict(artifacts=artifacts,study_sha256=summary['source_sha256'],script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),indent=2)+'\n')
+    (a.figures/'manifest.json').write_text(json.dumps(dict(artifacts=artifacts,reporting_scope=scope,study_sha256=summary['source_sha256'],scope_validator_sha256=summary['scope_validator_sha256'],script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()),indent=2)+'\n')
     print('Rendered',len(artifacts),'figures; accepted full samples',summary['full_runs'])
 
 
