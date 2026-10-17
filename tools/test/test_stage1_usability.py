@@ -129,6 +129,7 @@ def main():
         assert '100.0%' in log
         assert not list(work.glob('*.ckpt'))
         assert not list(work.glob('*.tmp'))
+        assert (work/'points.save').exists() and len((work/'points.save').read_text().splitlines())==count
         exponent = int(re.search(r'\^(\d+)',expr)[1]) if expr else (n.bit_length() if n & (n+1) == 0 else None)
         label='m'+str(exponent) if exponent else 'bit'+str(n.bit_length())
         assert f'.{"e" if model=="ed" else "m"+str(param)}_s1_{label}_{b1}.ckpt' in log
@@ -298,7 +299,7 @@ def main():
         assert not queue.read_text().strip() and not list(work.glob('*.ckpt'))
         assert not (work/'absent_prime95').exists()
         if model == 'ed':
-            oracle.records(next(work.glob('ed_*.save')))
+            oracle.records(next(work.glob('e_*.save')))
             assert 'ignored' in log
         passed(name)
     report['complete'] = True

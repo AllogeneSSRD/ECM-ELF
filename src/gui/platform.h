@@ -28,10 +28,9 @@ bool has_arg(const std::vector<std::string> &args, const std::string &name);
 // Value of `name` (as "--name value"); empty when absent.
 std::string arg_value(const std::vector<std::string> &args, const std::string &name);
 
-// Newest mtime (seconds since the Unix epoch, 0 when none) of the driver's checkpoint
-// files in `dir`: "<dir>\.ecm_ckpt_*.dat". Used by the graceful stop (docs/usage/GUI.md
-// 5.6): the GUI may only terminate a worker once a checkpoint newer than the stop request
-// has appeared, otherwise up to one checkpoint interval of work would be lost.
+// Newest native mtime (0 when none) of Stage1 primary files in `dir`:
+// .e_s1_*.ckpt / .m{0|2|3}_s1_*.ckpt and legacy .ecm_ckpt_*.dat.
+// Only an advisory update notice: graceful stop still waits for child exit.
 // `name_out` (optional) receives the file name that was found.
 long long newest_checkpoint_mtime(const std::string &dir, std::string *name_out);
 

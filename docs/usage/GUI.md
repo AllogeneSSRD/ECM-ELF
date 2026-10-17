@@ -1,5 +1,7 @@
 # Windows 图形前端
 
+窗口标题和启动输出显示公共程序名及版本；`ecm_gui.exe --version` 仅查询版本，不打开窗口或初始化 GPU 监控。
+
 `ecm_gui.exe` 使用 Dear ImGui docking、Win32/DX11，管理 Stage1 或 Stage2 worker、配置、队列生成、GPU监控、结果展示及ECM概率估算。概率面板使用CPU数值模型；实际曲线计算来自所选worker程序，GUI不链接GMP/OpenCL/CUDA引擎。
 
 ## Worker 与配置

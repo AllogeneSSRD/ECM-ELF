@@ -181,10 +181,10 @@ def main():
     default = out/'default';default.mkdir()
     call('default_save', [s1, '--curve', 'ed', '--target', 'cpu', '--impl', 'scalar', '-sigma', 17,
         '-gpucurves', 1, '--tmp-dir', default, 20, 20], str((1 << 127)-1).encode())
-    assert len(oracle.records(next(default.glob('ed_*.save')))) == 1
+    assert len(oracle.records(next(default.glob('e_*.save')))) == 1
     # A failed text save publication must preserve the queue and checkpoints.
     queue_dir = out/'queue_failure';queue_dir.mkdir()
-    blocker = queue_dir/next(default.glob('ed_*.save')).name;blocker.mkdir()
+    blocker = queue_dir/next(default.glob('e_*.save')).name;blocker.mkdir()
     queue = queue_dir/'worktodo.txt';task = 'ECM2=1,2,127,-1,20,0,1,17\n';queue.write_text(task)
     ini = queue_dir/'ecm.ini';finished = queue_dir/'finished.txt'
     ini.write_text(f'curve=ed\ntarget=cpu\nimpl=scalar\nworktodo={queue}\nfinished={finished}\ntmp_dir={queue_dir}\nlog_file=\n')

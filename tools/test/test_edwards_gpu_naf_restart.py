@@ -62,16 +62,22 @@ def main():
                 env=child_env, cwd=out)
             try:
                 deadline = time.monotonic()+120
-                while not list(folder.glob('*.gpu.ckpt')) and time.monotonic() < deadline:
+                ready=False
+                while not ready and time.monotonic() < deadline:
                     assert proc.poll() is None, ('worker finished before checkpoint', name)
+                    candidates=[v for v in list(folder.glob('*.gpu.ckpt'))+list(folder.glob('.e_s1_*.ckpt')) if '.bak' not in v.name]
+                    for candidate in candidates:
+                        try:ready=checkpoint(candidate)['done']>0
+                        except (AssertionError,ValueError,PermissionError,FileNotFoundError):continue
+                        if ready:break
                     time.sleep(0.01)
-                assert list(folder.glob('*.gpu.ckpt')) and kernel.SetEvent(event)
+                assert ready and kernel.SetEvent(event)
                 assert proc.wait(timeout=120) != 0
             finally:
                 if proc.poll() is None: proc.kill(); proc.wait()
                 kernel.CloseHandle(event)
         assert queue.read_text() == task and not finished.exists()
-        primary = next(folder.glob('*.gpu.ckpt')); frozen = out/(name+'_checkpoint.txt'); frozen.write_bytes(primary.read_bytes())
+        primary = next(v for v in list(folder.glob('*.gpu.ckpt'))+list(folder.glob('.e_s1_*.ckpt')) if '.bak' not in v.name); frozen = out/(name+'_checkpoint.txt'); frozen.write_bytes(primary.read_bytes())
         data = checkpoint(primary)
         if name=='naf_v2_old_tier':
             assert 'container_bits=1024' in (out/(name+'_stopped.log')).read_text(encoding='utf-8')
@@ -90,8 +96,9 @@ def main():
         text = call(name+'_resume', [new, '-ini', ini])
         assert f'window={window} doubling={doubling}' in text and 'GPU Edwards resume:' in text
         if name=='naf_v2_old_tier': assert 'container_bits=768' in text
-        assert not queue.read_text().strip() and finished.exists() and not list(folder.glob('*.ckpt'))
-        rows = records(next(folder.glob('ed_*.save')))
+        assert not queue.read_text().strip() and finished.exists() and not list(folder.glob('.e_s1_*.ckpt'))
+        if primary.name.endswith('.gpu.ckpt'):assert primary.read_bytes()==frozen.read_bytes()
+        rows = records(next(folder.glob('e_*.save')))
         assert [r[2] for r in rows] == [r['sigma'] for r in data['rows']]
         # Binary and NAF have identical affine endpoints; independently validate
         # all rows above, then compare with fresh explicitly selected NAF runs.

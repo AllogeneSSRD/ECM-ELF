@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Acceptance test for the Prime95 handoff: every finished task is appended VERBATIM to
+    Acceptance test for the Prime95 handoff: canonical typed tasks are appended VERBATIM to
     the worktodo.add next to Prime95's worktodo.txt (docs/usage/GUI.md 18,
     docs/usage/STAGE1.md 8).
 
@@ -47,10 +47,18 @@ if (-not $Exe -or -not (Test-Path $Exe)) {
     Write-Host "FAIL: no ecm_cuda executable found (pass -Exe <path>)" -ForegroundColor Red
     exit 2
 }
-if (-not $Sandbox) { $Sandbox = Join-Path $PSScriptRoot '_run\p95_transfer' }
-if (Test-Path $Sandbox) { Remove-Item $Sandbox -Recurse -Force }
+if (-not $Sandbox) { $Sandbox = Join-Path $repoRoot ('data\experiments\p95_transfer_' + (Get-Date -Format 'yyyyMMdd_HHmmss')) }
+if (Test-Path -LiteralPath $Sandbox) { throw 'Use a new sandbox; existing evidence is preserved' }
 New-Item -ItemType Directory -Force -Path $Sandbox | Out-Null
 
+# Isolate transfer ledgers and relative saves from the supplied executable.
+$Exe = (Resolve-Path -LiteralPath $Exe).Path
+$sourceDir = Split-Path -Parent $Exe
+$testBin = Join-Path $Sandbox 'bin'
+New-Item -ItemType Directory -Path $testBin | Out-Null
+Copy-Item -LiteralPath $Exe -Destination (Join-Path $testBin 'ecm_cuda.exe')
+Copy-Item -LiteralPath (Join-Path $sourceDir 'gmp-10.dll') -Destination $testBin
+$Exe = Join-Path $testBin 'ecm_cuda.exe'
 # The driver parks undelivered lines next to ITS OWN executable.
 $pending = Join-Path (Split-Path -Parent $Exe) 'p95_add_pending.txt'
 $ledger = Join-Path (Split-Path -Parent $Exe) 'p95_add_sent.txt'
@@ -88,7 +96,7 @@ function Invoke-Task {
     )
     $dir = Join-Path $Sandbox $name
     if (-not $KeepAdd) {
-        if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+        if (Test-Path -LiteralPath $dir) { throw 'Scenario already exists; existing evidence is preserved' }
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $dir 'p95') | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $dir 'saves') | Out-Null
@@ -157,7 +165,7 @@ function Get-Index([string[]]$lines, [string]$needle) {
     return -1
 }
 
-$task = 'ECMSTAGE2=1,2,521,-1,"m521_1e3.save",0,0,1'
+$task = 'ECMSTAGE2=1,2,521,-1,"m0_m521_1e3.save",0,0,1'
 $todoBoth = "[Worker #1]`r`nfoo=bar`r`n`r`n[Worker #2]`r`nbaz=qux`r`n"
 Write-Host ("driver  : " + $Exe)
 Write-Host ("task    : " + $task + " (2^521-1, B1=1e3, 1 curve, device $Device)")
@@ -222,7 +230,7 @@ Check "abc used worker=0"                   ((Get-Notice $r5b.out 'warn') -match
 # ------------------------------------------------------------------ [6] verbatim ---------
 Write-Host "[6] AID + known factors survive byte for byte"
 # 1943118631 really divides 2^677-1 (docs/usage/STAGE1.md), so N_eff is legitimate.
-$verbatim = 'ECMSTAGE2=ABCDEF0123456789ABCDEF0123456789,1,2,677,-1,"m677_1e3.save",0,0,1,"1943118631"'
+$verbatim = 'ECMSTAGE2=ABCDEF0123456789ABCDEF0123456789,1,2,677,-1,"m0_m677_1e3.save",0,0,1,"1943118631"'
 $r6 = Invoke-Task -name 'verbatim' -task $verbatim -workerSpec '1' -p95Todo $todoBoth
 $hit6 = ($r6.out -match 'FACTOR FOUND')
 Write-Host ("      elapsed={0:N1}s  factor found in this run: {1}" -f $r6.seconds, $hit6)
@@ -241,7 +249,7 @@ Check "the delivery failed loudly"          ($r7a.out -match 'p95_add: pending')
 Check "the reason mentions the lock"        ((Get-Notice $r7a.out 'pending') -match 'lock')
 Check "it waited for the lock"              ($r7a.seconds -ge 2.5)
 Check "no worktodo.add was written"         (-not (Test-Path $r7a.addPath))
-Check "the line was parked"                 ((Test-Path $pending) -and ((Get-Content -LiteralPath $pending -Raw) -match [regex]::Escape('m521_1e3.save')))
+Check "the line was parked"                 ((Test-Path $pending) -and ((Get-Content -LiteralPath $pending -Raw) -match [regex]::Escape('m0_m521_1e3.save')))
 Check "the pending count is reported"       ((Get-Notice $r7a.out 'pending') -match 'lines=1')
 Check "the task still left our queue"       (-not ((Get-Content (Join-Path $r7a.dir 'worktodo.txt') -Raw) -match 'ECMSTAGE2'))
 
@@ -250,7 +258,7 @@ $r7b = Invoke-Task -name 'locked' -task $task -workerSpec '1' -p95Todo $todoBoth
 Write-Host ("      second run: {0}" -f (Get-Notice $r7b.out 'ok'))
 Check "the next delivery was ok"            ($null -ne (Get-Notice $r7b.out 'ok'))
 Check "it reports the re-delivery"          ((Get-Notice $r7b.out 'ok') -match 'pending_delivered=1')
-Check "both lines are in worktodo.add"      (@($r7b.add | Where-Object { $_ -match 'm521_1e3\.save' }).Count -eq 2)
+Check "both lines are in worktodo.add"      (@($r7b.add | Where-Object { $_ -match 'm0_m521_1e3\.save' }).Count -eq 2)
 Check "the pending file is gone"            (-not (Test-Path $pending))
 
 # ------------------------------------------------------------------ [8] stale lock -------
@@ -275,14 +283,14 @@ $primeLogBad = @(
     'PrimeNet error 43: Invalid assignment key',
     ("ap: no such assignment key, GUID: 0e068755443bf5372102b7ceb29a6d62, key: " + $rejectedAid)
 ) -join "`r`n"
-$taskBadAid = ('ECMSTAGE2=' + $rejectedAid + ',1,2,521,-1,"m521_1e3.save",0,0,1')
-$taskLiveAid = ('ECMSTAGE2=' + $liveAid + ',1,2,523,-1,"m523_1e3.save",0,0,1')
+$taskBadAid = ('ECMSTAGE2=' + $rejectedAid + ',1,2,521,-1,"m0_m521_1e3.save",0,0,1')
+$taskLiveAid = ('ECMSTAGE2=' + $liveAid + ',1,2,523,-1,"m0_m523_1e3.save",0,0,1')
 
 Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
 $r9 = Invoke-Task -name 'rejectedaid' -task $taskBadAid -workerSpec '1' -p95Todo $todoBoth -primeLog $primeLogBad
 $notice9 = Get-Notice $r9.out 'warn'
 Write-Host ("      notice: {0}" -f $(if ($notice9) { $notice9.Trim() } else { '(none)' }))
-Check "the delivery still happened"          ($r9.add -contains 'ECMSTAGE2=1,2,521,-1,"m521_1e3.save",0,0,1')
+Check "the delivery still happened"          ($r9.add -contains 'ECMSTAGE2=1,2,521,-1,"m0_m521_1e3.save",0,0,1')
 Check "the rejected AID was dropped"         (@($r9.add | Where-Object { $_ -match [regex]::Escape($rejectedAid) }).Count -eq 0)
 Check "the notice says aid=dropped"          ($notice9 -match 'aid=dropped')
 Check "the notice names the rejected key"    ($notice9 -match 'rejected AID')
@@ -301,7 +309,7 @@ Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
 $r10 = Invoke-Task -name 'recover' -task $task -workerSpec '1' -p95Todo $todoBoth -primeLog $primeLogBad
 $notice10 = Get-Notice $r10.out 'warn'
 Write-Host ("      notice: {0}" -f $(if ($notice10) { $notice10.Trim() } else { '(none)' }))
-Check "the lost line came back without its AID" ($r10.add -contains 'ECMSTAGE2=1,2,521,-1,"m521_1e3.save",0,0,1')
+Check "the lost line came back without its AID" ($r10.add -contains 'ECMSTAGE2=1,2,521,-1,"m0_m521_1e3.save",0,0,1')
 Check "the notice reports recovered=1"          ($notice10 -match 'recovered=1')
 Check "the new task was delivered too"          ($r10.add -contains $task)
 Check "the ledger marks the recovery"           ((Get-Content $ledger -Raw) -match 'recovered ')
@@ -313,14 +321,14 @@ Write-Host "[10b] nothing is recovered when Prime95 still holds the line"
 Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
 [System.IO.File]::WriteAllText($ledger, ('sent ' + $taskBadAid + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 # The line (AID stripped) is already in Prime95's worktodo.txt -> no recovery.
-$r10c = Invoke-Task -name 'recoverheld' -task $task -workerSpec '1' -p95Todo ($todoBoth + 'ECMSTAGE2=1,2,521,-1,"m521_1e3.save",0,0,1' + "`r`n") -primeLog $primeLogBad
+$r10c = Invoke-Task -name 'recoverheld' -task $task -workerSpec '1' -p95Todo ($todoBoth + 'ECMSTAGE2=1,2,521,-1,"m0_m521_1e3.save",0,0,1' + "`r`n") -primeLog $primeLogBad
 Check "no recovery while Prime95 holds it"      ($null -eq (Get-Notice $r10c.out 'warn'))
 
 # ------------------------------------------------------------------ [11] keep_aid = 0 ----
 Write-Host "[11] p95_keep_aid = 0 drops the AID even when it is not known to be bad"
 Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
 $r11 = Invoke-Task -name 'noaid' -task $taskLiveAid -workerSpec '1' -p95Todo $todoBoth -iniExtra 'p95_keep_aid = 0'
-Check "the line went over without the AID"      ($r11.add -contains 'ECMSTAGE2=1,2,523,-1,"m523_1e3.save",0,0,1')
+Check "the line went over without the AID"      ($r11.add -contains 'ECMSTAGE2=1,2,523,-1,"m0_m523_1e3.save",0,0,1')
 Check "no AID is present in worktodo.add"       (@($r11.add | Where-Object { $_ -match [regex]::Escape($liveAid) }).Count -eq 0)
 Check "the notice says why"                     ((Get-Notice $r11.out 'warn') -match 'p95_keep_aid = 0')
 Check "ready reports keep_aid=0"                ((Get-Notice $r11.out 'ready') -match 'keep_aid=0')

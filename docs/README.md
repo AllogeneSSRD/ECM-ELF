@@ -19,6 +19,8 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 - [架构与术语](architecture/OVERVIEW.md)：模块职责、数据表示和入口。
 - [Stage1 算法](architecture/STAGE1.md)：曲线、标量、ladder/PRAC、域转换和存档。
+- [Checkpoint](architecture/CHECKPOINT.md)：Stage1 统一外壳、各后端载荷字段与偏移、校验、备份恢复及 Stage2 曲线进度。
+- [Save](architecture/SAVE.md)：完成点与因子文本、校验公式、命名前缀、发布去重和消费者/交接边界。
 - [Stage2 管线](architecture/STAGE2.md)：每一步的输入、输出、计算量及 CPU/GPU 分工。
 - [NTT](architecture/NTT.md)：精确卷积、Goldilocks 算术、布局和设备归约。
 - [内存与规划](architecture/MEMORY.md)：容量公式、生命周期模型、准入边界和证据。

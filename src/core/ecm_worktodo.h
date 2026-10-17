@@ -21,7 +21,7 @@
 #include <gmp.h>
 
 struct EcmStage2Task {
-    std::string raw_line;        // full original line, for finished/error output
+    std::string raw_line;        // original queue identity/error text; delivery may rename save
     std::string aid;             // optional assignment id (empty if none)
     std::string k;               // integer string
     std::string b;               // integer string
@@ -51,6 +51,10 @@ struct Ecm2Task {
 
 // Parse one ECMSTAGE2 line into `task`. Returns false and fills `err` on failure.
 bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::string &err);
+// Replace only the save-name CSV token; AID, bounds, counts and factors keep
+// their original spelling. Used when Stage1 adds its curve/param prefix.
+bool ecm_rewrite_stage2_save(const std::string &line,const std::string &save,
+                             std::string &rewritten,std::string &err);
 
 // Parse one Prime95 ECM2= line into `task`. Returns false and fills `err` on failure.
 bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &err);

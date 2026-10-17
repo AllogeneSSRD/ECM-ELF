@@ -282,13 +282,19 @@ none 或 auto 均不主动绑定，由操作系统调度。当前 Windows 实现
 ### save_name_pattern
 
 ```text
-save_name_pattern=<pattern>; default=m{n}_{b1}.save; empty=default; tokens:{n},{b1}; suffix:_<B1>.save
+save_name_pattern=<pattern>; default={curve}_{target}_{b1}.save; empty=default; tokens:{curve},{target},{n},{b1}; suffix:_<B1>.save
 ```
 
-CPU Montgomery save filename pattern: {n} is the Mersenne exponent and {b1} is B1. Empty restores<br>
-the default pattern. Other backends retain their own naming rules.<br>
-设置 CPU Montgomery 存档的名称模式，{n} 表示输入指数，{b1} 表示 B1。留空恢复默认模式；此键不改变其他<br>
-计算后端自己的文件命名规则。
+Automatic Stage1 save filename pattern for CPU and GPU. {curve}=e|m0|m2|m3; {target}=m<exponent> for<br>
+Mersenne assignments, otherwise bit<actual_bits>; {n}=original assignment exponent when available,<br>
+otherwise actual bits; {b1}=compact B1. Missing curve prefixes are added. In ECMSTAGE2 queues, typed<br>
+save prefixes override INI curve/param and the final filename field supplies B1; untyped names use<br>
+the INI construction. Finished/handoff lines name the actual prefixed save. Explicit CLI save paths<br>
+are preserved. Empty restores the default.<br>
+统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m<指数>，否则为<br>
+bit<实际位数>；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。<br>
+ECMSTAGE2 队列中，类型前缀覆盖 INI 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 INI。完成/交<br>
+接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。
 
 ### exp_cache
 

@@ -1,5 +1,6 @@
 #include "ecm_stage1_checkpoint_runtime.h"
 #include "ecm_file_publication.h"
+#include "ecm_stage1_binary.h"
 
 #include <atomic>
 #include <csignal>
@@ -14,7 +15,9 @@
 #include <iostream>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -173,14 +176,18 @@ uint64_t ecm_stage1_checksum(uint64_t sum, const void *data, size_t size) {
 
 namespace {
 bool flush_batch() {
-    std::ostringstream out;
-    out << "ECM_STAGE1_BATCH_V1\n" << batch_identity << '\n' << batch_records.size() << '\n';
-    for (size_t i=0;i<batch_records.size();++i)
-        out << batch_sigmas[i] << ' ' << batch_records[i].size() << '\n' << batch_records[i] << '\n';
-    const auto body=out.str();
+    using namespace ecm_stage1_binary;
+    std::string body(batch_magic,8);
+    u32(body,2);u32(body,uint32_t(batch_records.size()));u64(body,batch_identity.size());
+    body+=batch_identity;
+    for(size_t i=0;i<batch_records.size();++i) {
+        u64(body,batch_sigmas[i]);u64(body,batch_records[i].size());
+        u32(body,crc32c(batch_records[i]));u32(body,0);body+=batch_records[i];
+    }
+    u32(body,crc32c(body));
     const auto temp=ecm_stage1_checkpoint_temp_path(batch_path);
     std::ofstream file(temp,std::ios::binary|std::ios::trunc);
-    file << body << "CHECKSUM " << ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,body.data(),body.size()) << '\n';
+    file.write(body.data(),static_cast<std::streamsize>(body.size()));
     file.close();
     return bool(file) && ecm_stage1_commit_checkpoint(batch_path,temp);
 }
@@ -213,6 +220,36 @@ void ecm_stage1_begin_batch(const std::string &identity,uint32_t curves,bool fix
     for(const auto &candidate:ecm_stage1_checkpoint_candidates(batch_path)) {
         std::ifstream file(candidate,std::ios::binary);if(!file)continue;existing=true;
         const std::string bytes((std::istreambuf_iterator<char>(file)),{});
+        if(ecm_stage1_binary::is_batch(bytes)) {
+            using namespace ecm_stage1_binary;
+            std::vector<std::string> records;std::vector<uint64_t> sigmas;
+            std::string saved_identity;uint32_t count=0;
+            try {
+                if(bytes.size()<28)continue;
+                Reader footer(std::string_view(bytes).substr(bytes.size()-4));
+                if(footer.u32()!=crc32c(std::string_view(bytes).substr(0,bytes.size()-4)))continue;
+                Reader in(std::string_view(bytes).substr(0,bytes.size()-4));in.take(8);
+                if(in.u32()!=2)continue;
+                count=in.u32();saved_identity=std::string(in.take(in.u64()));
+                if(count>in.left()/24)continue;
+                records.resize(count);sigmas.resize(count);
+                for(uint32_t i=0;i<count;++i) {
+                    sigmas[i]=in.u64();const auto length=in.u64();const auto sum=in.u32();
+                    if(in.u32()!=0)throw std::runtime_error("unsupported checkpoint record flags");
+                    auto payload=in.take(length);
+                    if(crc32c(payload)!=sum)throw std::runtime_error("checkpoint record CRC32C mismatch");
+                    records[i]=std::string(payload);
+                }
+                if(in.left())continue;
+            }catch(const std::runtime_error &){continue;}
+            if(saved_identity!=identity || count!=curves)throw std::runtime_error("batch checkpoint belongs to different target/parameters/curve count/CPU algorithm; select another checkpoint directory");
+            for(uint32_t i=0;i<curves;++i)
+                if(fixed && sigmas[i] && sigmas[i]!=first_sigma+i)throw std::runtime_error("batch checkpoint sigma differs from requested sigma");
+            batch_records=std::move(records);batch_sigmas=std::move(sigmas);
+            if(candidate!=batch_path)ecm_stage1_mark_bad_primary(batch_path);
+            std::cout<<"Stage1 batch resume: path="<<candidate<<" curves="<<curves<<" format=binary-v2\n";
+            return;
+        }
         const auto at=bytes.rfind("CHECKSUM ");if(at==bytes.npos)continue;
         const auto body=bytes.substr(0,at);std::istringstream footer(bytes.substr(at+9));uint64_t sum;std::string extra;
         if(!(footer>>sum) || (footer>>extra) || sum!=ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,body.data(),body.size()))continue;
@@ -260,6 +297,21 @@ bool ecm_stage1_write_blob(const std::string &path,const std::string &bytes) {
     const auto temp=ecm_stage1_checkpoint_temp_path(path);
     std::ofstream out(temp,std::ios::binary|std::ios::trunc);out.write(bytes.data(),static_cast<std::streamsize>(bytes.size()));out.close();
     return bool(out) && ecm_stage1_commit_checkpoint(path,temp);
+}
+bool ecm_stage1_import_gpu_payload(const std::string &bytes,uint64_t first_sigma) {
+    if(first_sigma>UINT64_MAX-(batch_sigmas.empty()?0:batch_sigmas.size()-1))throw std::runtime_error("legacy checkpoint sigma range overflow");
+    std::vector<uint64_t> sigmas(batch_sigmas.size());
+    for(size_t i=0;i<sigmas.size();++i)sigmas[i]=first_sigma+i;
+    return ecm_stage1_import_gpu_payload(bytes,sigmas);
+}
+bool ecm_stage1_import_gpu_payload(const std::string &bytes,const std::vector<uint64_t> &sigmas) {
+    std::lock_guard<std::mutex> lock(batch_mutex);
+    if(batch_path.empty() || batch_records.empty() || bytes.empty() || sigmas.size()!=batch_sigmas.size())return false;
+    for(const auto &record:batch_records)if(!record.empty())return false;
+    batch_sigmas=sigmas;
+    batch_records[0]=bytes;
+    if(!flush_batch())throw std::runtime_error("cannot import legacy GPU checkpoint");
+    return true;
 }
 void ecm_stage1_end_batch(bool completed) {
     const auto path=batch_path;batch_path.clear();batch_identity.clear();batch_records.clear();batch_sigmas.clear();

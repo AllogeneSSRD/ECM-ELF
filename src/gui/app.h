@@ -258,7 +258,7 @@ private:
     void begin_graceful_exit();
     // Advances the per-worker graceful stop (checkpoint watch + deadline) from tick().
     void tick_graceful_stops(unsigned long long now);
-    // Directory holding the worker executable: where the driver writes .ecm_ckpt_*.dat.
+    // Worker directory used for Stage1 primary-checkpoint update notices.
     std::string worker_dir(int worker_index=0) const;
     // ---- Prime95 handoff ([queue] p95_worktodo_path / p95_add_workers) ---------------
     // Read from the ini by the GUI itself (not from a worker's output), so the "not

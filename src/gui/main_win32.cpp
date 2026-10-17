@@ -16,6 +16,7 @@
 #include "platform.h"
 #include "gpu_selftest.h"
 #include "worker_selftest.h"
+#include "../core/ecm_program_version.h"
 
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
@@ -741,6 +742,13 @@ void ensure_stdio() {
 
 int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     const std::vector<std::string> args = ecmgui::command_line_args();
+    ensure_stdio();
+    if(ecmgui::has_arg(args,"--version")) {
+        std::printf("%s %s\n",ecm_program::name,ecm_program::version);
+        std::fflush(stdout);return 0;
+    }
+    std::printf("%s %s (GUI)\n",ecm_program::name,ecm_program::version);
+    std::fflush(stdout);
 
     const bool selftest = ecmgui::has_arg(args, "--selftest");
     std::string ini_path = ecmgui::arg_value(args, "-ini");
@@ -764,6 +772,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         // _SH_DENYWR: we are the only writer, but a test script must be able to READ
         // the trace while the GUI is still running (that is the whole point of it).
         g_trace = _fsopen(p.c_str(), "w", _SH_DENYWR);
+        trace("%s %s (GUI)",ecm_program::name,ecm_program::version);
         trace("start: exe dir %s", ecmgui::exe_dir().c_str());
         trace("start: ini %s", ini_path.c_str());
     }
@@ -830,7 +839,9 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     RegisterClassExW(&wc);
     const int wx = app.window_x(), wy = app.window_y();
     const int ww = app.window_w(), wh = app.window_h();
-    g_hwnd = CreateWindowW(wc.lpszClassName, L"ecm_gui", WS_OVERLAPPEDWINDOW, wx, wy, ww, wh,
+    const std::string title=std::string(ecm_program::name)+" GUI "+ecm_program::version;
+    const std::wstring window_title(title.begin(),title.end());
+    g_hwnd = CreateWindowW(wc.lpszClassName, window_title.c_str(), WS_OVERLAPPEDWINDOW, wx, wy, ww, wh,
                            nullptr, nullptr, wc.hInstance, nullptr);
     if (!g_hwnd || !create_device(g_hwnd)) {
         MessageBoxA(nullptr, "cannot create the Direct3D 11 device", "ecm_gui",

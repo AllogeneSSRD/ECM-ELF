@@ -35,7 +35,7 @@
 | F/G/H | baby 积树根、当前 giant 多项式、累计模 F 的乘积 |
 | L | NTT 长度，取受支持的 2 的幂；与目标整数 N 区分 |
 | TPI/TPB | 每实例协作线程数/每 block 线程数；不等于实际驻留数量 |
-| save/checkpoint | 完成的 Stage1 点/未完成的 Stage1 中间状态 |
+| save/checkpoint | [完成的 Stage1 点或因子](SAVE.md) / [Stage1 中间状态或 Stage2 曲线进度](CHECKPOINT.md) |
 | owner | 有独立分配与释放责任的设备存储；借用/别名不重复计账 |
 
 Montgomery 表示为 xR mod M，乘法返回 abR⁻¹ mod M。普通整数、Montgomery 点坐标、Goldilocks digit 和普通多项式系数必须在入口明确区分。

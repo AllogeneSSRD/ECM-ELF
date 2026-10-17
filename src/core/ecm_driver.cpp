@@ -40,6 +40,7 @@
 #include "ecm_save.h"
 #include "ecm_checkpoint.h"         /* opencl_ecm_set_work_dir */
 #include "ecm_stage1_checkpoint_runtime.h"
+#include "ecm_stage1_legacy_gpu.h"
 #include "ecm_stage1_selection.h"
 #include "opencl_ecm_runtime_config.h"
 #include "ecm.h"
@@ -708,10 +709,11 @@ struct Stage1RunOptions {
     uint32_t  stage1_curves = 0;     // 进度条总数
     std::vector<unsigned> affinity_cpus;   // 亲核性 (空 = 不绑定)
     int naf_w = ecm_config::defaults::stage1_naf_w;                   // Edwards 专属: 0 = ecm_edwards_cpu 的默认窗口
-    /* Save-file name pattern of the CPU paths (ini: save_name_pattern).  {n} = Mersenne
-       exponent for N = 2^k-1 (else the bit length), {b1} = compact bound.  The reading
-       side extracts B1 from the last '_' token, so keep that shape. */
+    /* Shared automatic save pattern. {curve} separates e/m0/m2/m3, {target}
+       retains the Mersenne assignment or actual integer width, {b1} is compact.
+       The Stage1 queue reader extracts B1 from the last '_' token. */
     std::string save_name_pattern = ecm_config::defaults::stage1_save_name_pattern;
+    std::string legacy_save_source; // Queue-only source when a save gains its curve prefix.
     int verbose = 0;
     int device_index = ecm_config::defaults::stage1_device;
     unsigned long ckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
@@ -750,7 +752,87 @@ struct Stage1RunResult {
     uint64_t *sigmas = nullptr;
 };
 
-static std::string mont_format_save_name(const std::string &pattern,const mpz_t N,double B1);
+static std::string mont_format_save_name(const std::string &pattern,const mpz_t N,double B1,
+                                         const Stage1RunOptions *options=nullptr);
+static std::string stage1_save_prefix(const Stage1RunOptions &opt) {
+    if(opt.selection.curve==ecm_stage1::CurveModel::Edwards)return "e";
+    return "m"+std::to_string(opt.selection.target==ecm_stage1::ExecutionTarget::Gpu?opt.selection.gpu_param:0);
+}
+static bool stage1_save_construction(const std::string &name,Stage1RunOptions &opt,std::string &error) {
+    const auto leaf=ecm_stage1::lower_ascii(std::filesystem::path(name).filename().string());
+    const auto prefix=leaf.substr(0,leaf.find('_'));
+    if(prefix=="e" || prefix=="ed") {
+        opt.selection.curve=ecm_stage1::CurveModel::Edwards;
+        opt.selection.scalar_construction=ecm_stage1::ScalarConstruction::PrimePowerLcm;
+    } else if(prefix=="m0" || prefix=="m2" || prefix=="m3") {
+        opt.selection.curve=ecm_stage1::CurveModel::Montgomery;
+        opt.selection.gpu_param=static_cast<unsigned>(prefix[1]-'0');
+        if(opt.selection.target==ecm_stage1::ExecutionTarget::Cpu && opt.selection.gpu_param!=0) {
+            error="save prefix selects Montgomery PARAM"+prefix.substr(1)+", which requires target=gpu";
+            return false;
+        }
+    }
+    return true;
+}
+static std::string stage1_prefixed_save(const std::string &name,const std::string &prefix) {
+    const auto file=std::filesystem::path(name);auto leaf=file.filename().string();
+    if(leaf.rfind(prefix+"_",0)==0)return name;
+    const auto lower=ecm_stage1::lower_ascii(leaf);
+    for(const auto *old:{"ed_","e_","m0_","m2_","m3_"})
+        if(lower.rfind(old,0)==0){leaf.erase(0,std::strlen(old));break;}
+    return (file.parent_path()/(prefix+"_"+leaf)).string();
+}
+static void stage1_copy_save_history(const Stage1RunOptions &opt,const std::string &destination) {
+    if(opt.legacy_save_source.empty())return;
+    const auto source=opencl_ecm_resolve_data_path_buf(opt.legacy_save_source.c_str());
+    const auto target=opencl_ecm_resolve_data_path_buf(destination.c_str());
+    if((std::filesystem::exists(target) && std::filesystem::file_size(target)) ||
+       !std::filesystem::exists(source) || !std::filesystem::file_size(source))return;
+    std::ifstream input(source,std::ios::binary);if(!input)throw std::runtime_error("cannot read legacy save history");
+    std::string line;uint64_t records=0;
+    const bool ed=opt.selection.curve==ecm_stage1::CurveModel::Edwards;
+    const auto param=opt.selection.target==ecm_stage1::ExecutionTarget::Gpu?opt.selection.gpu_param:0;
+    const auto trim=[](std::string s){const auto a=s.find_first_not_of(" \r\n\t"),b=s.find_last_not_of(" \r\n\t");return a==s.npos?std::string{}:s.substr(a,b-a+1);};
+    while(std::getline(input,line)) {
+        auto text=trim(line);
+        if(text.compare(0,3,"\xef\xbb\xbf")==0)text.erase(0,3);
+        if(text.empty() || text[0]=='#' || text[0]==';')continue;
+        std::string method,kind="0";size_t at=0;
+        while(at<text.size()) {
+            const auto end=text.find(';',at);const auto field=trim(text.substr(at,end==text.npos?end:end-at));
+            at=end==text.npos?text.size():end+1;const auto eq=field.find('=');if(eq==field.npos)continue;
+            const auto key=trim(field.substr(0,eq)),value=trim(field.substr(eq+1));
+            if(key=="METHOD")method=value;else if(key=="PARAM")kind=value;
+        }
+        if((ed && method!="ECM-EDWARDS-AM") || (!ed && (method!="ECM" || kind!=std::to_string(param))))
+            throw std::runtime_error("legacy save belongs to another curve/parametrization; choose a separate curve-prefixed save name");
+        ++records;
+    }
+    if(input.bad())throw std::runtime_error("cannot read complete legacy save history");
+    if(!records)return;
+    if(!opencl_ecm_ensure_parent_dir(target.c_str()))throw std::runtime_error("cannot create prefixed save directory");
+    const auto temp=ecm_stage1_checkpoint_temp_path(target);
+    std::filesystem::copy_file(source,temp,std::filesystem::copy_options::overwrite_existing);
+    if(!ecm_stage1_commit_checkpoint(target,temp))throw std::runtime_error("cannot publish prefixed save history");
+    ecm_ts_fprintf(stdout,"Stage1 save history copied: source=%s target=%s records=%llu original_retained=1\n",
+                   source.c_str(),target.c_str(),static_cast<unsigned long long>(records));
+}
+
+// Retained legacy sources must not replay curves already durably published.
+static bool stage1_results_complete(const Stage1RunOptions &opt,mpz_srcptr n,uint64_t b1,
+                                     bool edwards,unsigned param,const std::vector<uint64_t> &sigmas) {
+    const auto ledger=ecm_results::submission_ledger(opt.results_file);
+    if(!std::filesystem::exists(ledger/"format"))return false;
+    ecm_results::require_ledger_format(ledger,"ECM_INTERNAL_LEDGER_V1");
+    for(const auto sigma:sigmas) {
+        const auto key=ecm_edwards::hex(n)+"|"+(edwards?"ed":"mont"+std::to_string(param))+"|"+
+            std::to_string(sigma)+"|"+std::to_string(b1)+"|stage1";
+        const auto entry=ledger/(std::to_string(ecm_edwards::hash(key))+".curve");
+        if(!std::filesystem::exists(entry))return false;
+        if(ecm_results::read_submission_entry(entry).key!=key)throw std::runtime_error("legacy result identity collision");
+    }
+    return !sigmas.empty();
+}
 
 static bool edwards_capture_save(std::string &line,const mpz_t n,uint64_t sigma,uint64_t b1,
                                   const mpz_t qx,const mpz_t qz,const mpz_t factor,bool hit) {
@@ -1867,7 +1949,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         return ECM_ERROR;
     }
 
-    const auto stem="ed_"+mont_format_save_name(opt.save_name_pattern,N,B1);
+    const auto stem=mont_format_save_name(opt.save_name_pattern,N,B1,&opt);
     const auto save=savefilename.empty()?(opt.tmp_dir.empty()?std::string{}:opt.tmp_dir+"/")+stem:savefilename;
     std::string lines;for(const auto &line:save_lines)lines+=line;
     if(!ecm_edwards::publish_save(save,lines,saveappend)) {
@@ -1898,16 +1980,16 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
 // Run one stage-1 batch. N and the caller's n_expr are borrowed (not cleared);
 // factors / array_found are allocated here and returned via `out` (caller frees).
 /* ---------------------------------------------------------------------------
- * Save-file name for the Montgomery stage-1 path, following the CUDA/GPU
- * convention (ecm.ini: save_name_pattern = m{n}_{b1}.save):
+ * Shared automatic Stage1 save names (ecm.ini: save_name_pattern).
  *
- *   {n}  : the Mersenne exponent k when N = 2^k - 1 (so M4003 -> m4003), else the
- *          bit length of N;
+ *   {curve}: e / m0 / m2 / m3; {target}: m<original exponent> / bit<actual bits>;
+ *   {n}  : original assignment exponent when available, else actual N bits;
  *   {b1} : compact bound -- 100000 -> "1e5", 110000000 -> "110e6", 12345 -> "12345".
  *
  * ecm_extract_b1_from_save_name() documents the same pattern on the reading side.
  * ------------------------------------------------------------------------- */
-static std::string mont_format_save_name(const std::string &pattern, const mpz_t N, double B1) {
+static std::string mont_format_save_name(const std::string &pattern, const mpz_t N, double B1,
+                                         const Stage1RunOptions *options) {
     /* {n} */
     std::string n_str;
     {
@@ -1918,6 +2000,15 @@ static std::string mont_format_save_name(const std::string &pattern, const mpz_t
         else                      n_str = std::to_string((unsigned long)mpz_sizeinbase(N, 2));
         mpz_clear(t);
     }
+    bool mersenne=false;
+    if(options && options->target_kbnc) {
+        n_str=std::to_string(options->handoff_n);
+        mersenne=options->handoff_k_str=="1" && options->handoff_b==2 && options->handoff_c==-1;
+    } else {
+        ecm_edwards::Integer plus;mpz_add_ui(plus.v,N,1);mersenne=mpz_popcount(plus.v)==1;
+    }
+    const auto curve=options?stage1_save_prefix(*options):std::string("m0");
+    const auto target=mersenne?"m"+n_str:"bit"+std::to_string(mpz_sizeinbase(N,2));
     /* {b1}: mantissa + 'e' + number of trailing zeros when there are >= 3 of them */
     std::string b1_str;
     {
@@ -1936,6 +2027,13 @@ static std::string mont_format_save_name(const std::string &pattern, const mpz_t
         out.replace(p, 3, n_str);
     for (size_t p = out.find("{b1}"); p != std::string::npos; p = out.find("{b1}", p))
         out.replace(p, 4, b1_str);
+    for(const auto &entry:{std::pair<std::string,std::string>{"{curve}",curve},{"{target}",target}})
+        for(size_t p=out.find(entry.first);p!=std::string::npos;p=out.find(entry.first,p))
+            out.replace(p,entry.first.size(),entry.second);
+    if(out.find('{')!=std::string::npos || out.find('}')!=std::string::npos)
+        throw std::runtime_error("unknown save_name_pattern token");
+    // Old custom patterns still receive the mandatory curve/param prefix.
+    out=stage1_prefixed_save(out,curve);
     return out;
 }
 
@@ -2589,10 +2687,12 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     /* ONE shared save file for the whole task (same N, same B1), named with the
        CUDA/GPU convention: m{n}_{b1}.save */
     bool save_failed = false;
-    if (use_ckpt) {
-        const std::string fname = mont_format_save_name(opt.save_name_pattern, N, B1);
-        const std::string path = opt.tmp_dir + "/" + fname;
-        save_failed = !ecm_append_save_lines_mont(
+    if (use_ckpt || !savefilename.empty()) {
+        const std::string fname = mont_format_save_name(opt.save_name_pattern, N, B1,&opt);
+        const std::string path = savefilename.empty()?opt.tmp_dir+"/"+fname:
+            opencl_ecm_resolve_data_path_buf(savefilename.c_str());
+        if(!savefilename.empty() && !opencl_ecm_check_save_file_writable(path,saveappend))save_failed=true;
+        if(!save_failed)save_failed = !ecm_append_save_lines_mont(
             path, N, B1, sigmas.data(), curves, xs.data(), hit,
             n_expr.empty() ? std::to_string(mpz_sizeinbase(N, 2)) : n_expr);
         if (save_failed) {
@@ -2706,6 +2806,15 @@ static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
     }
     mpz_set(params->batch_s, batch_s);
     params->batch_last_B1_used = B1;
+    {
+        const char *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO");
+        if(std::string(ecm_backend_name())=="CUDA/CGBN" && (!algorithm || !*algorithm || std::string(algorithm)=="ladder"))
+            ecm_stage1_import_legacy_gpu(N,batch_s,curves,uint32_t(params->gpu_param),
+                opt.sigma_fixed,opt.fixed_sigma64,[&](uint64_t sigma,uint32_t count){
+                    std::vector<uint64_t> sigmas(count);for(uint32_t i=0;i<count;++i)sigmas[i]=sigma+i;
+                    return stage1_results_complete(opt,N,uint64_t(B1),false,unsigned(params->gpu_param),sigmas);
+                });
+    }
 
     {
         const int prep = ecm_backend_prepare((size_t)mpz_sizeinbase(N, 2), params->verbose,
@@ -2936,6 +3045,7 @@ static int run_stage1_once(const mpz_t N,double B1,double B2,uint32_t curves,
             }
             ecm_stage1_begin_batch(identity,curves,opt.sigma_fixed,opt.fixed_sigma64);
         }
+        stage1_copy_save_history(opt,savefilename);
         const auto begin=std::chrono::steady_clock::now();
         const int rc=run_stage1_impl(N,B1,B2,curves,savefilename,saveappend,n_expr,opt,out);
         if(rc==ECM_ERROR){if(!ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;ecm_stage1_end_batch(false);return rc;}
@@ -3031,7 +3141,7 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                           const std::string &exe_dir, const std::string &sync1,
                           const std::string &sync2, bool full_sync, long long marker,
                           int *processed,
-                          const P95TransferConfig *p95) {
+                          const P95TransferConfig *p95,const std::string &published_line={}) {
     Stage1RunOptions opt = base_opt;
     opt.result_aid=aid;
     if (sigma_fixed) {
@@ -3040,7 +3150,7 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     }
     {
         std::string input_error;
-        if (stage1_task_error(opt, curves, input_error)) {
+        if (stage1_selection_error(opt.selection,input_error) || stage1_task_error(opt, curves, input_error)) {
             ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged\n", input_error.c_str());
             return false;
         }
@@ -3122,7 +3232,8 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
         return true;
     }
 
-    if (!ecm_append_text_line(finished_path, line)) {
+    const auto &completed_line=published_line.empty()?line:published_line;
+    if (!ecm_append_text_line(finished_path, completed_line)) {
         ecm_ts_fprintf(stderr, "ERROR: cannot append to %s\n", finished_path.c_str());
         if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError)) {
             ecm_ts_fprintf(stderr, "ERROR: cannot mark the failed line in %s; aborting\n",
@@ -3146,13 +3257,13 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
 
     /* ── Prime95 handoff (docs/usage/GUI.md) ──────────────────────────────────
        The task is finished and its .save is synchronized, so Prime95's stage 2 can take
-       it from worktodo.add. The line goes over VERBATIM -- the AID and the known-factors
-       field are what let Prime95 report the eventual factor under the right assignment --
+       it from worktodo.add. AID, bounds and known factors are preserved; an ECMSTAGE2
+       save token names the actual curve-prefixed file. Other fields remain verbatim.
        and a handoff failure NEVER fails the task: the line is parked and re-delivered
        with the next successful delivery, and the GUI shows a red notice meanwhile.
        Supported handoff remains available after local result publication. */
     if (p95 != nullptr && !p95->worktodo_path.empty()) {
-        const P95TransferResult tr = p95_transfer_deliver(*p95, line);
+        const P95TransferResult tr = p95_transfer_deliver(*p95, completed_line);
         if (!tr.ok) {
             ecm_ts_fprintf(stdout,
                            "p95_add: pending worker=%d lines=%zu file=\"%s\" error=\"%s\"\n",
@@ -3314,17 +3425,23 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     const std::string sync1 = resolve_rel_local(exe_dir, cfg.save_sync_dir_1);
     const std::string sync2 = resolve_rel_local(exe_dir, cfg.save_sync_dir_2);
 
-    /* ── Prime95 handoff (docs/usage/GUI.md, docs/usage/STAGE1.md) ─────
-       Every finished task is appended to Prime95's worktodo.add, verbatim, so Prime95's
-       stage 2 can continue it. `p95_worktodo_path` empty = the feature is off (the
-       historical behaviour: ecm_p95feeder does the Edwards .tmp handoff instead). */
+    // Initialize handoff only for an eligible actual task. A typed save may override
+    // the INI curve, and unsupported constructions must not touch transfer paths.
     P95TransferConfig p95cfg;
-    const bool ignore_p95 = ecm_stage1::lower_ascii(cfg.curve_model)=="ed" ||
-        (ecm_stage1::lower_ascii(cfg.execution_target)=="gpu" && cfg.gpu_param==2);
-    if(ignore_p95 && !cfg.p95_worktodo_path.empty())
-        ecm_ts_fprintf(stdout,"Prime95 transfer path ignored for this curve construction; Stage1 saves remain local\n");
-    {
-        p95cfg.worktodo_path = ignore_p95 ? std::string{} : resolve_rel_local(exe_dir, cfg.p95_worktodo_path);
+    bool p95_initialized=false,p95_ignore_reported=false;
+    auto p95_for_task=[&](const Stage1RunOptions &actual)->const P95TransferConfig* {
+        const bool ignore=actual.selection.curve==ecm_stage1::CurveModel::Edwards ||
+            (actual.selection.target==ecm_stage1::ExecutionTarget::Gpu && actual.selection.gpu_param==2);
+        if(ignore) {
+            if(!cfg.p95_worktodo_path.empty() && !p95_ignore_reported) {
+                ecm_ts_fprintf(stdout,"Prime95 transfer path ignored for this curve construction; Stage1 saves remain local\n");
+                p95_ignore_reported=true;
+            }
+            return nullptr;
+        }
+        if(p95_initialized)return &p95cfg;
+        p95_initialized=true;
+        p95cfg.worktodo_path = resolve_rel_local(exe_dir, cfg.p95_worktodo_path);
         p95cfg.add_workers = cfg.p95_add_workers;
         p95cfg.pending_path = p95_transfer_pending_path(exe_dir);
         p95cfg.keep_aid = cfg.p95_keep_aid;
@@ -3375,7 +3492,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                 }
             }
         }
-    }
+        return &p95cfg;
+    };
 
     Stage1RunOptions opt;
     if (!ecm_stage1::parse_curve_model(cfg.curve_model, opt.selection.curve) ||
@@ -3431,19 +3549,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     opt.sigma_fixed = (cfg.sigma != 0);
     opt.fixed_sigma64 = cfg.sigma;
     opt.tmp_dir = resolve_rel_local(exe_dir, cfg.tmp_dir);
-    {
-        std::string selection_error;
-        if (stage1_selection_error(opt.selection, selection_error)) {
-            ecm_ts_fprintf(stderr, "ERROR: %s\n", selection_error.c_str());
-            if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
-            return 1;
-        }
-        if (stage1_task_error(opt, 0, selection_error)) {
-            ecm_ts_fprintf(stderr, "ERROR: %s\n", selection_error.c_str());
-            if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
-            return 1;
-        }
-    }
+    // Validate semantic combinations per task, after applying any save prefix.
     /* ---- [handoff] ----------------------------------------------------------- */
     if (!cfg.p95_dir.empty()) {
         ecm_ts_fprintf(stdout,
@@ -3453,6 +3559,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             cfg.p95_dir.c_str(), opt.tmp_dir.c_str());
     }
 
+    ecm_ts_fprintf(stdout,"%s %s (Stage1)\n",ecm_program::name,ecm_program::version);
     ecm_ts_fprintf(stdout, "===== ECM queue manager =====\n");
     ecm_ts_fprintf(stdout, "config : %s\n", ini.c_str());
     ecm_ts_fprintf(stdout, "worker : %d (ini section [Worker #%d]; unprefixed keys are the "
@@ -3482,6 +3589,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         ecm_sync_save_files(opt.tmp_dir, sync1, sync2, /*full=*/true, 0);
 
     int processed = 0;
+    bool saw_task=false;
     const bool full_sync = (cfg.sync_mode == "full");
     while (true) {
         // Also cover a stop arriving after a successful task but before the next read.
@@ -3500,8 +3608,10 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             return 1;
         }
         if (read == WorktodoReadResult::Empty) {
+            if(!saw_task)p95_for_task(opt); // Preserve idle-start recovery for an eligible INI.
             break;
         }
+        saw_task=true;
 
         ecm_ts_fprintf(stdout, "START: %s\n", line.c_str());
 
@@ -3555,16 +3665,14 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                     return 1;
                 }
                 queue_save_name = opt.tmp_dir + "/" +
-                    (opt.selection.curve==ecm_stage1::CurveModel::Edwards?"ed_":"") +
-                    mont_format_save_name(ecm_config::defaults::stage1_save_name_pattern,
-                                          N, task.B1);
+                    mont_format_save_name(opt.save_name_pattern,N,task.B1,&opt);
             }
             const bool cont = queue_run_one(
                 N, task.B1, task.B2, task.curves_to_run,
                 task.has_sigma ? task.sigma : 0, task.has_sigma,
                 queue_save_name, n_expr, task.aid, line,
                 worktodo_path, finished_path, worker, opt,
-                exe_dir, sync1, sync2, full_sync, marker, &processed, &p95cfg);
+                exe_dir, sync1, sync2, full_sync, marker, &processed, p95_for_task(opt));
             mpz_clear(N);
             if (!cont) {
                 if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
@@ -3615,13 +3723,29 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                 opt.handoff_factors += task.factors[fi];
             }
         }
-        // ECMSTAGE2 lines carry no per-line sigma: use cfg.sigma (already in opt).
+        // The typed save owns curve/param and B1; untyped legacy names use the INI.
+        // Clone options so the next task always starts from the configured defaults.
+        auto task_opt=opt;
+        if(!stage1_save_construction(task.save_name,task_opt,err) ||
+           stage1_selection_error(task_opt.selection,err) || stage1_task_error(task_opt,task.curves_to_run,err)) {
+            mpz_clear(N);ecm_ts_fprintf(stderr,"FATAL: %s; worktodo unchanged\n",err.c_str());
+            if(logf){ecm_log_set_mirror(nullptr);fclose(logf);}return 1;
+        }
+        ecm_ts_fprintf(stdout,"queue_save: curve=%s param=%s B1=%.0f\n",
+            ecm_stage1::curve_model_name(task_opt.selection.curve),
+            task_opt.selection.curve==ecm_stage1::CurveModel::Edwards?"-":stage1_save_prefix(task_opt).substr(1).c_str(),B1);
+        const auto queue_save_name=stage1_prefixed_save(task.save_name,stage1_save_prefix(task_opt));
+        std::string published_line=line;
+        if(queue_save_name!=task.save_name && !ecm_rewrite_stage2_save(line,queue_save_name,published_line,err)) {
+            mpz_clear(N);ecm_ts_fprintf(stderr,"FATAL: %s; worktodo unchanged\n",err.c_str());return 1;
+        }
+        if(queue_save_name!=task.save_name)task_opt.legacy_save_source=task.save_name;
         const bool cont = queue_run_one(
             N, B1, /*B2=*/0.0, task.curves_to_run,
             /*sigma=*/0, /*sigma_fixed=*/false,
-            task.save_name, n_expr, task.aid, line,
-            worktodo_path, finished_path, worker, opt,
-            exe_dir, sync1, sync2, full_sync, marker, &processed, &p95cfg);
+            queue_save_name, n_expr, task.aid, line,
+            worktodo_path, finished_path, worker, task_opt,
+            exe_dir, sync1, sync2, full_sync, marker, &processed, p95_for_task(task_opt),published_line);
         mpz_clear(N);
         if (!cont) {
             if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
@@ -3994,6 +4118,8 @@ int main(int argc, char **argv){
         // No positional B1/B2 → queue-manager mode (reads ecm.ini + worktodo).
         return run_queue_manager(ini_path, worker_index);
     }
+
+    ecm_ts_fprintf(stdout,"%s %s (Stage1)\n",ecm_program::name,ecm_program::version);
 
     unsigned long ckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
     if (ckpt_set) {

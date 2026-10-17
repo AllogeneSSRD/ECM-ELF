@@ -131,6 +131,33 @@ bool replace_file(const std::string &tmp, const std::string &dst) {
 
 } // namespace
 
+bool ecm_rewrite_stage2_save(const std::string &line,const std::string &save,
+                             std::string &rewritten,std::string &err) {
+    EcmStage2Task task;if(!ecm_parse_stage2_line(line,task,err))return false;
+    const auto begin=line.find('=')+1;const auto fields=split_csv(line.substr(begin));
+    const size_t wanted=is_int_like(fields[0])?4:5;
+    size_t column=0,start=begin;bool quoted=false;
+    for(size_t i=begin;i<=line.size();++i) {
+        if(i<line.size() && line[i]=='"') {
+            if(quoted && i+1<line.size() && line[i+1]=='"'){++i;continue;}
+            quoted=!quoted;continue;
+        }
+        if(i!=line.size() && (quoted || line[i]!=','))continue;
+        if(column==wanted) {
+            std::string replacement="\"";for(const auto c:save){replacement+=c;if(c=='"')replacement+='"';}replacement+='"';
+            size_t left=start,right=i;
+            while(left<right && std::isspace(static_cast<unsigned char>(line[left])))++left;
+            while(right>left && std::isspace(static_cast<unsigned char>(line[right-1])))--right;
+            rewritten=line.substr(0,left)+replacement+line.substr(right);
+            EcmStage2Task check;
+            if(ecm_parse_stage2_line(rewritten,check,err) && check.save_name==save)return true;
+            err="cannot rewrite Stage1 save name";return false;
+        }
+        ++column;start=i+1;
+    }
+    err="missing Stage1 save-name field";return false;
+}
+
 bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::string &err) {
     std::string s = line;
     strip_bom(s);
@@ -637,7 +664,8 @@ void ecm_sync_save_files(const std::string &dir, const std::string &sync_dir_1,
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             continue;
         }
-        if (!full && filetime_to_epoch(fd.ftLastWriteTime) <= since_epoch_seconds) {
+        // The marker is rounded to seconds; include saves published in that second.
+        if (!full && filetime_to_epoch(fd.ftLastWriteTime) < since_epoch_seconds) {
             continue;
         }
         const std::wstring wsrc = wdir + L"\\" + fd.cFileName;
@@ -675,7 +703,7 @@ void ecm_sync_save_files(const std::string &dir, const std::string &sync_dir_1,
         if (stat(fullpath.c_str(), &st) != 0) {
             continue;
         }
-        if (!full && static_cast<long long>(st.st_mtime) <= since_epoch_seconds) {
+        if (!full && static_cast<long long>(st.st_mtime) < since_epoch_seconds) {
             continue;
         }
         if (!sync_dir_1.empty()) {

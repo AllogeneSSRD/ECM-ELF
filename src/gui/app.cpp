@@ -339,8 +339,8 @@ void App::record_hit(const WorkerView &w, const HitInfo &hit) {
     r.device = w.device;
     r.task = w.task;
     r.n_expr = w.task.empty() ? std::string() : std::string();
-    // Exponent and B1 come from the save name when it follows the m{n}_{b1}.save
-    // contract (the same rule the driver uses); otherwise from the task's N.
+    // Exponent and B1 come from the save name with an optional curve prefix.
+    // Otherwise fall back to the task's N expression.
     std::string b1_text;
     int exponent = 0;
     if (!hit.save.empty() && ResultsStore::parse_save_name(hit.save, &exponent, &b1_text)) {

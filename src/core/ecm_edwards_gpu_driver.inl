@@ -4,96 +4,13 @@
 #include "../cuda/ecm_cuda_edwards_naf.h"
 #include "ecm_edwards_naf.h"
 #include "ecm_edwards_io.h"
+#include "ecm_stage1_binary.h"
 #include <iterator>
 #include <stdexcept>
 
+#include "ecm_edwards_gpu_checkpoint.h"
+
 namespace ed_gpu_driver {
-using namespace ecm_edwards;
-struct Batch {
-    uint32_t count,done=0;
-    unsigned window=6;
-    int doubling=4;
-    Array state,factors;
-    std::vector<uint64_t> sigmas;
-    std::vector<int> hit;
-    explicit Batch(uint32_t c):count(c),state(size_t(c)*9),factors(c),sigmas(c),hit(c,0){}
-};
-static bool initialize(Batch &b,const mpz_t n,std::string &error) {
-    Integer d,px,py,a24,f;
-    for(uint32_t i=0;i<b.count;++i) {
-        const auto rc=construct(d.v,px.v,py.v,a24.v,f.v,b.sigmas[i],n);
-        auto *s=b.state.data()+size_t(i)*9;
-        if(rc==Setup::Degenerate){error="degenerate Atkin-Morain sigma="+std::to_string(b.sigmas[i]);return false;}
-        if(rc==Setup::Factor) {
-            b.hit[i]=1;mpz_set(b.factors[i],f.v);
-            // A harmless identity lane keeps batch indexing stable.
-            mpz_set_ui(s[2],1);mpz_set_ui(s[3],1);
-        } else {
-            mpz_set(s[0],d.v);mpz_set(s[1],px.v);mpz_set(s[2],py.v);
-            mpz_set_ui(s[3],1);mpz_mul(s[4],px.v,py.v);mpz_mod(s[4],s[4],n);
-        }
-        mpz_set_ui(s[6],1);mpz_set_ui(s[7],1);
-    }
-    return true;
-}
-static std::string checkpoint_body(Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
-    std::ostringstream out;
-    if(b.window)out<<"ECM_GPU_EDWARDS_NAF_V2\n"<<b.window<<' '<<b.doubling<<'\n';
-    else out<<"ECM_GPU_EDWARDS_BINARY_V1\n";
-    out<<hex(n)<<'\n'<<hex(scalar)<<'\n'
-       <<b1<<' '<<b.count<<' '<<b.done<<'\n';
-    for(uint32_t i=0;i<b.count;++i){out<<b.sigmas[i]<<' '<<b.hit[i]<<' '<<hex(b.factors[i]);
-        for(unsigned j=0;j<9;++j)out<<' '<<hex(b.state[size_t(i)*9+j]);out<<'\n';}
-    return out.str();
-}
-static bool write_checkpoint(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
-    const auto body=checkpoint_body(b,n,scalar,b1);
-    return ecm_stage1_write_blob(path,body+"CHECKSUM "+std::to_string(hash(body))+'\n');
-}
-static bool restore(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,
-                    uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
-    for(const auto &candidate:ecm_stage1_checkpoint_candidates(path)) {
-        std::string text;if(!ecm_stage1_read_blob(candidate,text))continue;
-        const auto end=text.rfind("CHECKSUM ");if(end==std::string::npos)continue;
-        const auto body=text.substr(0,end);std::istringstream check(text.substr(end+9));uint64_t sum;std::string extra;
-        if(!(check>>sum) || (check>>extra) || sum!=hash(body))continue;
-        std::istringstream data(body);std::string tag,nh,sh,fh;uint64_t bound;uint32_t count,done;
-        unsigned window=0;int doubling=0;
-        if(!(data>>tag))continue;
-        if(tag=="ECM_GPU_EDWARDS_NAF_V2") {
-            if(!(data>>window>>doubling) || window<2 || window>12 || (doubling!=4 && doubling!=5))continue;
-        } else if(tag!="ECM_GPU_EDWARDS_BINARY_V1")continue;
-        if(!(data>>nh>>sh>>bound>>count>>done) || nh!=hex(n) || sh!=hex(scalar) || bound!=b1 || count!=b.count)continue;
-        const auto total=window?EcmEdwardsNaf(scalar,window).bits:mpz_sizeinbase(scalar,2);
-        if(done>total)continue;
-        Batch temp(count);temp.done=done;temp.window=window;temp.doubling=doubling;bool valid=true;
-        for(uint32_t i=0;i<count && valid;++i) {
-            if(!(data>>temp.sigmas[i]>>temp.hit[i]>>fh) ||
-               (fixed && temp.sigmas[i]!=b.sigmas[i]) || (temp.hit[i]!=0 && temp.hit[i]!=1) ||
-               mpz_set_str(temp.factors[i],fh.c_str(),16)){valid=false;break;}
-            for(unsigned j=0;j<9;++j){if(!(data>>fh) || mpz_set_str(temp.state[size_t(i)*9+j],fh.c_str(),16)){valid=false;break;}}
-        }
-        if(!valid || (data>>extra))continue;
-        Batch reference(count);reference.sigmas=temp.sigmas;std::string error;
-        if(!initialize(reference,n,error))continue;
-        for(uint32_t i=0;i<count && valid;++i) {
-            if(reference.hit[i]!=temp.hit[i] || mpz_cmp(reference.factors[i],temp.factors[i])){valid=false;break;}
-            for(unsigned j=0;j<5;++j)if(mpz_cmp(reference.state[size_t(i)*9+j],temp.state[size_t(i)*9+j]))valid=false;
-            if(!point_valid(n,temp.state[size_t(i)*9],temp.state.data()+size_t(i)*9+5))valid=false;
-        }
-        if(!valid)continue;
-        if((window_fixed && b.window!=window) || (doubling_fixed && b.doubling!=doubling) ||
-           (mode_fixed>=0 && bool(mode_fixed)!=bool(window)))
-            throw std::runtime_error("GPU Edwards checkpoint algorithm differs from explicit NAF/doubling selection");
-        b.window=window;b.doubling=doubling;
-        b.done=temp.done;b.sigmas=temp.sigmas;b.hit=temp.hit;
-        for(uint32_t i=0;i<count;++i)mpz_set(b.factors[i],temp.factors[i]);
-        for(size_t i=0;i<size_t(count)*9;++i)mpz_set(b.state[i],temp.state[i]);
-        if(candidate!=path)ecm_stage1_mark_bad_primary(path);
-        ecm_ts_fprintf(stdout,"GPU Edwards resume: columns=%u window=%u doubling=%d path=%s\n",b.done,b.window,b.doubling,candidate.c_str());return true;
-    }
-    return false;
-}
 struct Progress {
     Batch &b;mpz_srcptr n,scalar;const Stage1RunOptions &opt;std::string path;
     uint64_t b1,total;long long last;const EcmEdwardsNafMetrics *metrics;bool failed=false;
@@ -145,10 +62,31 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
             batch.doubling=value=="5"?5:4;
         }
         for(uint32_t i=0;i<curves;++i)batch.sigmas[i]=ecm_stage1_batch_sigma(i,opt.sigma_fixed?opt.fixed_sigma64+i:random_sigma_u64());
-        const auto stem="ed_"+mont_format_save_name(opt.save_name_pattern,n,b1);
+        const auto stem=mont_format_save_name(opt.save_name_pattern,n,b1,&opt);
         const auto path=opt.tmp_dir.empty()?std::string{}:ecm_stage1_curve_record(0);
-        if(path.empty() || !restore(path,batch,n,scalar.v,uint64_t(b1),opt.sigma_fixed,opt.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
-            std::string existing;
+        bool restored=!path.empty() && restore(path,batch,n,scalar.v,uint64_t(b1),opt.sigma_fixed,opt.naf_w!=0,dbl_env!=nullptr,mode_fixed);
+        std::string existing;
+        if(!restored && !path.empty() && !ecm_stage1_read_blob(path,existing)) {
+            // Pre-container GPU Edwards used ed_<old-pattern>.save.gpu.ckpt.
+            for(const auto &pattern:{std::string("m{n}_{b1}.save"),opt.save_name_pattern}) {
+                auto old=mont_format_save_name(pattern,n,b1);
+                if(old.rfind("m0_",0)==0)old.erase(0,3);
+                const auto legacy=(std::filesystem::path(opt.tmp_dir)/("ed_"+old+".gpu.ckpt")).string();
+                Batch saved(curves);saved.sigmas=batch.sigmas;saved.window=batch.window;saved.doubling=batch.doubling;
+                if(restore(legacy,saved,n,scalar.v,uint64_t(b1),opt.sigma_fixed,opt.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
+                    if(stage1_results_complete(opt,n,uint64_t(b1),true,0,saved.sigmas))continue;
+                    batch.done=saved.done;batch.window=saved.window;batch.doubling=saved.doubling;
+                    batch.sigmas=saved.sigmas;batch.hit=saved.hit;
+                    for(uint32_t i=0;i<curves;++i)mpz_set(batch.factors[i],saved.factors[i]);
+                    for(size_t i=0;i<size_t(curves)*9;++i)mpz_set(batch.state[i],saved.state[i]);
+                    if(!ecm_stage1_import_gpu_payload(checkpoint_body(batch,n,scalar.v,uint64_t(b1)),batch.sigmas))
+                        throw std::runtime_error("cannot import legacy Edwards checkpoint");
+                    ecm_ts_fprintf(stdout,"Stage1 legacy Edwards checkpoint imported: path=%s original_retained=1\n",legacy.c_str());
+                    restored=true;break;
+                }
+            }
+        }
+        if(!restored) {
             if(!path.empty() && ecm_stage1_read_blob(path,existing))throw std::runtime_error("GPU Edwards batch payload is invalid or unsupported");
             std::string error;if(!initialize(batch,n,error))throw std::runtime_error(error);
         }

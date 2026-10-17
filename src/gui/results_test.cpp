@@ -107,6 +107,12 @@ int main() {
                   b1 == "110e6", "bigger exponent + 110e6", std::to_string(exp) + "/" + b1);
         check(!ResultsStore::parse_save_name("m991_1e4_w1.save", &exp, &b1),
               "a name breaking the contract is rejected (B1 must be the last _ token)");
+        for(const auto *name:{"e_m5351_260e6.save","m0_m5351_260e6.save","m2_m5351_260e6.save",
+                              "m3_m5351_260e6.save","D:\\saves\\ed_m5351_260e6.save"})
+            check(ResultsStore::parse_save_name(name,&exp,&b1) && exp==5351 && b1=="260e6",
+                  "typed save filename parsed",name);
+        check(!ResultsStore::parse_save_name("e_bit4916_260e6.save",&exp,&b1),
+              "generic bit count is not an original exponent");
         check(ResultsStore::exponent_from_n_expr("(1*2^677-1)") == 677, "exponent from N",
               std::to_string(ResultsStore::exponent_from_n_expr("(1*2^677-1)")));
         check(ResultsStore::exponent_from_n_expr("(2^991-1)/(8218291649)") == 991,

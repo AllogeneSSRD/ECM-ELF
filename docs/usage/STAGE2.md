@@ -16,6 +16,8 @@
 
 ## 队列语法
 
+save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队列 checkpoint 的字段、身份摘要与持久化顺序见 [Checkpoint 架构](../architecture/CHECKPOINT.md#7-stage2-队列进度格式)。
+
 任务格式：`ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip_curves][,num_curves][,"known_factors"]`。
 
 数学目标为 k·bⁿ+c，再按已知因子确定实际 N。可选字段顺序固定：B2、跳过数量、执行数量、已知因子。AID 位于 k 之前，末尾 quoted 字段是因子列表。

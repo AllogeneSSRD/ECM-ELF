@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import struct
 import time
 from stage1_checkpoint_decode import batch as checkpoint_batch
 
@@ -83,13 +84,40 @@ def records(path):
 def checkpoint(path):
     """Decode both GPU formats without using production C++ checkpoint code."""
     raw=path.read_bytes()
-    if raw.startswith(b'ECM_STAGE1_BATCH_V1\n'):
+    if raw.startswith((b'ECM_STAGE1_BATCH_V1\n',b'ECMS1B2\0')):
         _,rows=checkpoint_batch(path);raw=rows[0][1]
-    body,tail=raw.rsplit(b'CHECKSUM ',1)
+    binary=raw.startswith(b'ECMEDB3\0')
+    if binary:body,tail=raw[:-8],int.from_bytes(raw[-8:],'little')
+    else:body,tail=raw.rsplit(b'CHECKSUM ',1)
     h = 14695981039346656037
     for byte in body: h = ((h ^ byte)*1099511628211) & ((1 << 64)-1)
     assert int(tail) == h
-    lines = body.decode().splitlines(); tag = lines.pop(0)
+    if binary:
+        version,window,doubling,count,done,flags=struct.unpack_from('<IIIIII',body,8)
+        b1,scalar_bits,fingerprint=struct.unpack_from('<QQQ',body,32)
+        assert version==3 and flags==0
+        at=56
+        def value():
+            nonlocal at
+            size=struct.unpack_from('<I',body,at)[0];at+=4
+            assert size<=len(body)-at
+            data=body[at:at+size];at+=size
+            assert not size or data[-1]
+            return int.from_bytes(data,'little')
+        n=value();scalar=48*mont.lcm_1_to(b1)
+        assert scalar.bit_length()==scalar_bits
+        encoded=scalar.to_bytes((scalar_bits+7)//8,'little')
+        actual=14695981039346656037
+        for byte in struct.pack('<I',len(encoded))+encoded:actual=((actual^byte)*1099511628211)&((1<<64)-1)
+        assert actual==fingerprint
+        lines=['ECM_GPU_EDWARDS_NAF_V2',f'{window} {doubling}'] if window else ['ECM_GPU_EDWARDS_BINARY_V1']
+        lines += [f'{n:x}',f'{scalar:x}',f'{b1} {count} {done}']
+        for _ in range(count):
+            sigma,hit=struct.unpack_from('<QI',body,at);at+=12
+            lines.append(f'{sigma} {hit} '+' '.join(f'{value():x}' for _ in range(10)))
+        assert at==len(body)
+    else:lines=body.decode().splitlines()
+    tag = lines.pop(0)
     if tag == 'ECM_GPU_EDWARDS_NAF_V2':
         window, doubling = map(int, lines.pop(0).split())
         assert 2 <= window <= 12 and doubling in (4, 5)
@@ -285,7 +313,7 @@ def main():
     resumed_text = call('resume_queue', [s1, '-ini', ini1])
     assert 'GPU Edwards resume:' in resumed_text and '.bak.ckpt' in resumed_text
     assert not queue.read_text().strip() and finished.exists()
-    save = next(restart.glob('ed_*.save')); resumed_rows = records(save); assert len(resumed_rows) == 4
+    save = next(restart.glob('e_*.save')); resumed_rows = records(save); assert len(resumed_rows) == 4
     reference, ref_rows, _ = worker('uninterrupted', (1 << 347)-1, 100000)
     assert save.read_bytes() == reference.read_bytes() and resumed_rows == ref_rows
     assert not list(restart.glob('*.ckpt'))

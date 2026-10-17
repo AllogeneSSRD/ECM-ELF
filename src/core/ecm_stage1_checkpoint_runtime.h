@@ -40,3 +40,6 @@ bool ecm_stage1_is_curve_record(const std::string &path);
 uint64_t ecm_stage1_batch_sigma(uint32_t curve, uint64_t proposed);
 bool ecm_stage1_read_blob(const std::string &path, std::string &bytes);
 bool ecm_stage1_write_blob(const std::string &path, const std::string &bytes);
+// Import only into a seed-only batch; never replace existing arithmetic state.
+bool ecm_stage1_import_gpu_payload(const std::string &bytes,uint64_t first_sigma);
+bool ecm_stage1_import_gpu_payload(const std::string &bytes,const std::vector<uint64_t> &sigmas);

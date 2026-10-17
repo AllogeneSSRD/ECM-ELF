@@ -25,7 +25,7 @@ inline constexpr char stage1_impl[]="auto";
 inline constexpr char stage1_reduction[]="auto";
 inline constexpr uint32_t stage1_stage1_threads=0;
 inline constexpr char stage1_affinity[]="";
-inline constexpr char stage1_save_name_pattern[]="m{n}_{b1}.save";
+inline constexpr char stage1_save_name_pattern[]="{curve}_{target}_{b1}.save";
 inline constexpr char stage1_exp_cache[]="";
 inline constexpr int stage1_naf_w=0;
 inline constexpr char stage1_lcm[]="1";
@@ -184,7 +184,7 @@ struct Stage1Values {
     std::string simd_reduction="auto";
     uint32_t stage1_threads=0;
     std::string affinity="";
-    std::string save_name_pattern="m{n}_{b1}.save";
+    std::string save_name_pattern="{curve}_{target}_{b1}.save";
     std::string exp_cache="";
     int naf_w=0;
     std::string scalar_construction="1";

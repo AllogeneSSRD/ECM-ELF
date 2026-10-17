@@ -16,6 +16,8 @@ INI 使用 `curve`、`target`、`impl`、`reduction`、`lcm`；CLI 使用同名�
 
 GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行范围取决于链接的后端和构建配置。CPU Montgomery 只实现 PARAM0，因此 CPU 单次运行只接受 `-sigma 0:s` 这种带参数化前缀的种子；Edwards 不接受参数化前缀，`--gpu-param` 仅适用于 GPU。启动曲线计算前，驱动查询当前 GPU 后端是否支持该参数化；OpenCL 仅实现 PARAM3，CUDA 的 PARAM2 与 PARAM3 还受是否编入相应内核及折叠构建配置约束。CUDA PARAM0 在曲线构造、检查点及 save 中保留完整 64 位 sigma，批次不得在 2⁶⁴ 处回绕。PARAM2/3 的固定 sigma 及曲线批次须满足 sigma+曲线数≤2³²；不再截取低 32 位继续计算。参数化与 sigma 的冲突、后端不支持项在初始化 GPU 前报错。队列任务的 sigma 不符合要求时停止并保留原 worktodo。
 
+`ECMSTAGE2` 作为 Stage1 输入时，文件名前缀决定该任务的曲线构造，末尾字段决定 B1；覆盖 INI 后再校验后端能力和 sigma 范围。每条任务复制基础选项，防止混合队列之间传播覆盖。Edwards 前缀同时恢复其固定标量约定；执行目标保持 INI 设置。名称、旧 save 历史复制及交接合同见[队列输入](../usage/STAGE1.md#程序与输入)。
+
 这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核、save 发布及各后端 checkpoint 仍沿用各自的路径。入口见 [ecm_stage1_selection.h](../../src/core/ecm_stage1_selection.h)、[ecm_driver.cpp](../../src/core/ecm_driver.cpp) 和 [ecm_backend.h](../../include/ecm_backend.h)。
 
 ## GPU 点乘
@@ -34,9 +36,9 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 [曲线构造](../../src/core/ecm_edwards_curve.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
 
-[worker 接入](../../src/core/ecm_edwards_gpu_driver.inl)支持 CLI 和队列、周期及安全停止检查点、损坏主文件后的备份恢复。统一批次容器中的 GPU Edwards 载荷绑定版本、完整 N、完整标量、B1、曲线数、精确 sigma、构造状态、四坐标和完整内容校验；恢复重构基点并核对点不变量。NAF 使用 `ECM_GPU_EDWARDS_NAF_V2`，另绑定窗口和倍点变体，进度计数为 NAF 列数；列数可能不同于原标量二进制位数。旧 `ECM_GPU_EDWARDS_BINARY_V1` 检查点默认按原二进制算法继续，不能把其位号解释为 NAF 列号；两者均不读取 CPU/Prime95 的 NAF 检查点。默认配置采用已保存的模式和窗口，显式不匹配选择报错并保留检查点。检查点按普通整数保存，因此恢复不绑定 TPI；由 N 重新选择容器。save 和双结果文件完整发布后才清理检查点，写入失败保留未完成任务。容器、命名和批次锁规则见 [检查点与交接](../usage/STAGE1.md#检查点与交接)。
+[worker 接入](../../src/core/ecm_edwards_gpu_driver.inl)支持 CLI 和队列、周期及安全停止检查点。当前 GPU Edwards 使用 V3 二进制载荷，保存完整 N、算法、进度、各 sigma 和普通整数状态；指数只保存位数与指纹。恢复重建基点、核对点不变量并采用已保存的模式，显式不匹配选择报错。载荷不绑定 TPI，恢复按 N 重新选择容器。NAF 列数与 binary 位数不能互换。完整字段、兼容读取和恢复资格统一见 [Checkpoint](CHECKPOINT.md#42-gpu-edwards-v3)。
 
-[交接格式](../../src/core/ecm_edwards_io.h)使用 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM`，包含 N、sigma、B1、规范 X、`POINT|FACTOR` 状态及覆盖这些数学字段的 64 位校验。该方法名与 Suyama 文本记录不同；CUDA Stage2 重建 Edwards 常数，不能按 PARAM0 解释 sigma。默认文件名前缀为 `ed_`，CPU/GPU Edwards 统一发布该文本格式；[CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md) 可直接消费。Edwards 不执行 Prime95 自动交付；配置的转移路径会被忽略，运行继续。
+CPU/GPU Edwards 共用完成点文本，可由 CUDA Stage2 和 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md) 消费；sigma 不能按 Suyama PARAM0 解释。字段、状态、校验及外部程序能力统一见 [Save](SAVE.md#5-edwards-save-version1)。
 
 Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery PARAM。Stage2 的曲线开始与结果事件传递相同模型身份；GUI 结果文件按该身份保存，旧版未带模型的 Stage2 日志沿用 Suyama PARAM0 解释。具体字段与管道规则见 [GUI 日志与结果](../usage/GUI.md#日志结果与监控)。完整大界限、随机 sigma 恢复和小素数回退的正确性证据见 [验收记录](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
 
@@ -64,15 +66,22 @@ PRAC 可显式比较替代 TPI、寄存器 cap 和切片目标时长。强制 TP
 
 Suyama CUDA 主状态每曲线包含 N、a24、差点和两相邻点，共 7ℓ 个 32-bit 字，即 28ℓC bytes。其他曲线族的布局由自身入口定义。指数和计划由批量共享，存档/检查点及主机对象另计。一次上传/读回量应按实际切片路线统计，不能把逻辑字节当作全部 PCIe 流量。
 
+checkpoint 外壳、各后端载荷大小、备份和整批重写开销见 [Checkpoint 存储](CHECKPOINT.md#8-存储写入成本和边界)；完成点文本及追加合并成本见 [Save 成本](SAVE.md#63-成本和体积)。指数重建、缓存、NAF 计划和设备字典另计，不能以磁盘文件大小代替进程内存或显存。
+
 ## 正确性与持久化
 
 保存点记录规范化普通 X；checkpoint 则记录足以恢复下一切片的数学状态和布局身份。恢复须检查 N/B1/参数化/指数模式和实际 TPI，不能让 checkpoint 的状态域与当前内核失配。
+
+Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留各自数学表示及版本；不同层的校验算法和覆盖范围不同。格式、身份、锁、恢复、旧档兼容及完成清理顺序统一见 [Checkpoint](CHECKPOINT.md)，save 的发布和去重见 [Save](SAVE.md#6-写入去重与发布)。操作说明见 [Stage1 使用](../usage/STAGE1.md#检查点与交接)。
 
 跨实现验证应覆盖生成点、分片边界、最终投影/仿射点、有效因子及文件语义。选择不同寄存器预算不改变数学状态；改变 TPI 的恢复资格按当前格式检查。checksum 不替代 CPU/GMP 独立点验证。
 
 ## 代码入口
 
 - [ecm_stage1_exp.cpp](../../src/core/ecm_stage1_exp.cpp)：指数生成和缓存。
+- [ecm_stage1_checkpoint_runtime.cpp](../../src/core/ecm_stage1_checkpoint_runtime.cpp)、[ecm_stage1_binary.h](../../src/core/ecm_stage1_binary.h)：二进制外壳、长度边界、CRC32C、锁及轮换恢复。
+- [ecm_stage1_legacy_gpu.h](../../src/core/ecm_stage1_legacy_gpu.h)：旧 CUDA ladder V5 导入及逐 lane 模数校验。
+- [ecm_edwards_gpu_checkpoint.h](../../src/core/ecm_edwards_gpu_checkpoint.h)：GPU Edwards 二进制/旧文本载荷及状态验证。
 - [cgbn_stage1.cu](../../kernels/cuda/cgbn_stage1.cu)：曲线布局、归一化、调度及保存点。
 - [cgbn_stage1_kernel.h](../../kernels/cuda/cgbn_stage1_kernel.h#L1163)：TPI 容器分档和 ladder。
 - [cgbn_stage1_prac_host.cuh](../../kernels/cuda/cgbn_stage1_prac_host.cuh)：计划、策略、切片及恢复。

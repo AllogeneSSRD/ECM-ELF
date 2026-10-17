@@ -108,15 +108,15 @@ long long newest_checkpoint_mtime(const std::string &dir, std::string *name_out)
     if (name_out != nullptr) name_out->clear();
     if (dir.empty()) return 0;
 #ifdef _WIN32
-    // The driver writes "<dir>\.ecm_ckpt_<bits>_<hash>_<hash>.dat" and REMOVES it when the
-    // task completes, so the presence of a fresh one is exactly "this task can be resumed
-    // from here" (kernels/cuda/cgbn_stage1.cu:775,1676,1709).
-    const std::string pattern = path_join(dir, ".ecm_ckpt_*.dat");
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return 0;
+    // This is an advisory update notice. The GUI waits for the child to exit;
+    // a changed file alone never authorizes terminating the worker.
     long long newest = 0;
     std::string newest_name;
+    for(const auto *glob:{".e_s1_*.ckpt",".m0_s1_*.ckpt",".m2_s1_*.ckpt",".m3_s1_*.ckpt",".ecm_ckpt_*.dat"}) {
+    const std::string pattern = path_join(dir, glob);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) continue;
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         if (std::strstr(fd.cFileName, ".bak") != nullptr) continue;
@@ -131,6 +131,7 @@ long long newest_checkpoint_mtime(const std::string &dir, std::string *name_out)
         }
     } while (FindNextFileA(h, &fd));
     FindClose(h);
+    }
     if (name_out != nullptr) *name_out = newest_name;
     return newest;
 #else

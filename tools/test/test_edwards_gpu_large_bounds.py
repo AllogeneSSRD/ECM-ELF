@@ -181,7 +181,7 @@ def main():
     sigmas = [row['sigma'] for row in decoded['rows']]; assert len(sigmas) == 2
     text = call('random_resume', [s1, '-ini', ini])
     assert 'GPU Edwards resume:' in text and not queue.read_text().strip() and finished.exists()
-    rows = save_rows(next(restart.glob('ed_*.save'))); assert [row['sigma'] for row in rows] == sigmas
+    rows = save_rows(next(restart.glob('e_*.save'))); assert [row['sigma'] for row in rows] == sigmas
     for i, row in enumerate(rows): compare('random_curve_'+str(i), row, cpu('cpu_random_'+str(i), 521, 1000000, row['sigma']))
     assert not list(restart.glob('*.ckpt'))
     report['arithmetic'].append(dict(name='random_sigma_restore', sigmas=sigmas, checkpoint_bit=done, identity_preserved=True))

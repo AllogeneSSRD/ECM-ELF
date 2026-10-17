@@ -18,9 +18,9 @@ stage2_submission_file=results.json.txt
 
 INI 相对输出路径基于 INI 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀；显式配置路径需要自行区分。提交文件有独占写锁，不支持多个进程同时共享同一个输出路径。输入 save、内部结果与提交文件必须不同。GUI 摘要默认使用 `gui_results.jsonl`，不得与 CLI 输出共用文件。
 
-AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA Stage2 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护，当前为 `ECM-ELF 0.34.1`；Windows x64 平台号为数字 4；其他平台不冒用该编号。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。Stage1 的 `source-build` 从链接后生成的 `ecm_stage1_build_identity.txt` 读取入口/共用源码及构建档位指纹；复制程序时可一并保留该文件，缺失时明确使用 development。精确二进制以构建清单中的 SHA256 为准。CPU Stage2 内部结果的 `source-build` 保留 Git/入口源码指纹，GW 构建另含算术模块与 GW 库指纹；CUDA 内部结果也记录公共程序身份，精确二进制身份由构建清单保存。
+AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA Stage2 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护，当前为 `ECM-ELF 0.35.1`；Windows x64 平台号为数字 4；其他平台不冒用该编号。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。Stage1 的 `source-build` 从链接后生成的 `ecm_stage1_build_identity.txt` 读取入口/共用源码及构建档位指纹；复制程序时可一并保留该文件，缺失时明确使用 development。精确二进制以构建清单中的 SHA256 为准。CPU Stage2 内部结果的 `source-build` 保留 Git/入口源码指纹，GW 构建另含算术模块与 GW 库指纹；CUDA 内部结果也记录公共程序身份，精确二进制身份由构建清单保存。
 
-版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。例如当前版本的下一次新功能为 0.35.0，下一次修复为 0.34.2。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
+版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
 
 ## 提交字段与参考 FFT
 
@@ -115,7 +115,7 @@ ecm_cpu_stage2.exe --export-results --submission results.json.txt
 
 ## 验证与边界
 
-[test_ecm_submission.py](../../tools/test/test_ecm_submission.py) 对本地正式 Prime95 文件的 3317 条 ECM 样本提取字段结构，覆盖 CPU/GPU1 的 F/NF、Stage1/Stage2 因子、INI worker/CLI 优先级、空身份、四曲线 NF 合并、重放去重、增量批次不变、损坏导出恢复、未封存完成曲线恢复、无算术恢复、M11213 FFT 选长、外来文件保护和路径别名拒绝。当前 0.34.1 的 22 项检查通过，包括 Stage1 因子跨 B2 去重、旧因子账本导出去重、CUDA 实际 D/P、字段顺序及 Stage1 因子省略参数；证据在 `data/experiments/edwards_stage2_opt_20261017/submission_gate_01/`。
+[test_ecm_submission.py](../../tools/test/test_ecm_submission.py) 对本地正式 Prime95 文件的 3317 条 ECM 样本提取字段结构，覆盖 CPU/GPU1 的 F/NF、Stage1/Stage2 因子、INI worker/CLI 优先级、空身份、四曲线 NF 合并、重放去重、增量批次不变、损坏导出恢复、未封存完成曲线恢复、无算术恢复、M11213 FFT 选长、外来文件保护和路径别名拒绝。版本 0.34.1 的 22 项检查通过，包括 Stage1 因子跨 B2 去重、旧因子账本导出去重、CUDA 实际 D/P、字段顺序及 Stage1 因子省略参数；证据在 `data/experiments/edwards_stage2_opt_20261017/submission_gate_01/`。
 
 [Stage1 流程验收](../../tools/test/test_stage1_usability.py) 的 27 组检查覆盖单批次检查点及全部 CPU/CUDA 选择路径，实际串接 CPU Stage2，验证 Stage1 NF 仅内部记录、因子不重复计入、Stage1 不封存待发布的 Stage2 NF。64 曲线 GPU NF 批次及重放另验证内部和 save 各 64 行、提交为空，并独立复核 147 条 Stage1 内部 CRC32。GPU 仅使用设备 1 RTX4060；输入、二进制与冻结证据位置见 `data/experiments/stage1_usability_20261017/validation_final_manifest.json`，这些检查不作为性能基准或服务器验收。
 

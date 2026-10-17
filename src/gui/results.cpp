@@ -1,6 +1,7 @@
 #include "results.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -171,22 +172,25 @@ int bit_length(const std::string &decimal) {
 } // namespace
 
 bool ResultsStore::parse_save_name(const std::string &save, int *exponent, std::string *b1_text) {
-    // Contract (src/core/ecm_worktodo.h): m{n}_{b1}.save, with B1 in the LAST "_" token.
-    if (save.size() < 4) return false;
-    if (save.compare(0, 1, "m") != 0) return false;
-    const std::size_t dot = save.rfind(".save");
-    if (dot == std::string::npos) return false;
-    const std::size_t us = save.rfind('_', dot);
+    // Optional construction prefix, original Mersenne exponent, B1 in the last field.
+    const auto slash=save.find_last_of("/\\");
+    std::string leaf=save.substr(slash==std::string::npos?0:slash+1);
+    for(const char *prefix:{"e_","ed_","m0_","m2_","m3_"})
+        if(leaf.rfind(prefix,0)==0){leaf.erase(0,std::char_traits<char>::length(prefix));break;}
+    if (leaf.size()<4 || leaf.front()!='m') return false;
+    const std::size_t dot = leaf.rfind(".save");
+    if (dot == std::string::npos || dot+5!=leaf.size()) return false;
+    const std::size_t us = leaf.rfind('_', dot);
     if (us == std::string::npos || us < 2) return false;
-    const std::string n_text = save.substr(1, us - 1);
-    const std::string b1 = save.substr(us + 1, dot - us - 1);
+    const std::string n_text = leaf.substr(1, us - 1);
+    const std::string b1 = leaf.substr(us + 1, dot - us - 1);
     if (n_text.empty() || b1.empty()) return false;
     for (char c : n_text) {
         if (c < '0' || c > '9') return false;
     }
     char *endp = nullptr;
     const double v = std::strtod(b1.c_str(), &endp);
-    if (endp == nullptr || *endp != '\0') return false;
+    if (endp == nullptr || *endp != '\0' || !std::isfinite(v) || v<=0.0) return false;
     (void)v;
     if (exponent != nullptr) *exponent = std::atoi(n_text.c_str());
     if (b1_text != nullptr) *b1_text = b1;

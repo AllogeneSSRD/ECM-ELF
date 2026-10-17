@@ -8,7 +8,8 @@
 // deletes the file (undoc.txt, and incorporateWorkToDoAddFile() in commonc.c). Nothing here
 // ever touches worktodo.txt, so Prime95's own bookkeeping stays intact.
 //
-// The line is appended VERBATIM — the AID and any known-factors field are what makes
+// The supplied line is appended VERBATIM; the Stage1 driver prepares its actual
+// curve-prefixed save token before delivery. AID and known-factors fields are what makes
 // Prime95 report the eventual factor to the server under the right assignment, and
 // ECMSTAGE2= is Prime95's own "continue stage 2 from a GMP-ECM stage 1" keyword
 // (commonc.c: "ECMSTAGE2=k,b,n,c,filename[,B2-or-zero][,skip_curves][,num_curves]
