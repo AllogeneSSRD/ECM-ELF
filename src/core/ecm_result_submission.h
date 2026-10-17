@@ -1,5 +1,6 @@
 #pragma once
 #include "ecm_edwards_curve.h"
+#include "ecm_program_version.h"
 #include "generated/p95_fft_reference.h"
 #include <ctime>
 #include <iomanip>
@@ -83,9 +84,7 @@ inline std::string submission_json(const Submission &r,const mpz_t n) {
     else if(hit)out<<",\"sigma\":"<<r.sigma;
     if(hit)out<<",\"stage\":"<<r.stage;
     out<<",\"curves\":"<<r.curves<<",\"fft-length\":"<<fft;
-    // A stable numeric public version and platform code are separate from the
-    // executable/source identities stored in the internal JSONL.
-    out<<",\"program\":{\"name\":\"ECM-ELF\",\"version\":\"0.1\",\"build\":1,\"port\":4}"
+    out<<",\"program\":{\"name\":"<<quoted(ecm_program::name)<<",\"version\":"<<quoted(ecm_program::version)<<",\"port\":4}"
        <<",\"timestamp\":"<<quoted(r.when.empty()?utc_timestamp():r.when);
     if(!r.known.empty()){out<<",\"known-factors\":[";for(size_t i=0;i<r.known.size();++i){if(i)out<<',';out<<quoted(r.known[i]);}out<<']';}
     if(!r.user.empty())out<<",\"user\":"<<quoted(r.user);

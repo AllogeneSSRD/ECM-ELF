@@ -9,6 +9,7 @@ import shutil
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import subprocess
 
@@ -21,6 +22,8 @@ def contract(row, allowed):
     assert isinstance(row['fft-length'], int) and row['fft-length'] > 0
     assert isinstance(row['program']['port'], int)
     assert row['program']['name'] == 'ECM-ELF'
+    version=re.search(r'version\[\]\s*=\s*"([0-9.]+)"',(ROOT/'src/core/ecm_program_version.h').read_text())[1]
+    assert row['program']['version']==version and re.fullmatch(r'\d+\.\d+\.\d+',version)
     if row['status'] == 'NF':
         assert row['Edwards'] == {} and row['curves'] >= 1 and row['b2'] > row['b1']
         assert 'stage' not in row and 'factors' not in row
@@ -70,6 +73,7 @@ def main():
     internal,submission,rows=run('cpu',extra=['--exponent',127],destination=(internal,submission))
     a=json.loads(internal.read_text());b=rows[0]
     assert a['Edwards']['sigma']==17 and 'stage2-engine' in a
+    assert a['program']['version']==b['program']['version'] and a['source-build']
     assert all(b.get(k)==v for k,v in identity.items())
     assert 'aid' not in b and b['exponent']==127 and b['fft-length']==128
     # Multiple NF curves produce one immutable count, and replay adds no credit.

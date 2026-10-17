@@ -18,7 +18,9 @@ stage2_submission_file=results.json.txt
 
 INI 相对输出路径基于 INI 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀；显式配置路径需要自行区分。提交文件有独占写锁，不支持多个进程同时共享同一个输出路径。输入 save、内部结果与提交文件必须不同。
 
-AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用任务的 AID。没有 AID 时不生成虚构值。提交文件中的程序公共版本为 `0.1`、build 为 1、Windows 平台号为数字 4；内部结果保留源码或引擎构建身份，二者用途不同。
+AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护，当前为 `ECM-ELF 0.20.0`；Windows 平台号为数字 4。不再使用占位版本或固定 build=1，也不把 Git 哈希写入 program.version。CPU 内部结果的 `source-build` 保留 Git/入口源码指纹，CUDA 内部结果也记录公共程序身份，精确二进制身份由构建清单保存。
+
+版本按实际功能里程碑维护，不由距离上次发布的天数或提交数量直接生成。0.20.0 对应完整 CUDA 多项式 Stage2、Edwards CPU/GPU 流程、宽位数、存档/队列与调优能力；后续兼容功能递增 minor，兼容修正递增 patch。开发状态可由 Git 标签或发布页表达，提交 JSON 的版本保持纯数字点分格式，不要求先创建 Release。
 
 ## 提交字段与参考 FFT
 
@@ -28,7 +30,8 @@ AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用�
 
 - NF：`status=NF`、目标、`worktype=ECM`、B1/B2、曲线数、参考 FFT、程序和 UTC 时间；Edwards 标记为 `Edwards:{}`。
 - F：增加十进制字符串因子数组、stage 和原始 sigma，Edwards 使用 `Edwards:{sigma:…}`。Stage1 因子不写 B2。
-- user、computer、aid、known-factors 仅在有值时输出。内部诊断、`os`、CRC32 `checksum` 和 `security-code` 不进入提交文件。
+- user、computer、aid、known-factors 仅在有值时输出。Montgomery 不添加 `Edwards` 字段；不冒用 Prime95 或其他 Stage1 程序名。
+- 原生提交序列化不附内部诊断与 CRC；历史转换器按要求附 `checksum:{version:1,checksum:…}` 及其规范串需要的 `errors`/`os`。两者都省略 `security-code`，CRC32 不冒充缺少依据的 Prime95 SEC5。
 
 每个因子均验证 `1<f<N` 且 `f|N`。失败或未完成的当前曲线不生成 NF。NF 的 B2 只声明已完成的请求界限，不把 libecm 内部可能超出的尾部覆盖算作额外工作。没有执行的 Prime95 D、poly-size 或 Stage2 FFT 参数不补造。
 
@@ -55,6 +58,18 @@ ecm_cpu_stage2.exe --export-results --submission results.json.txt
 真实 user、computer、aid、checksum/security-code 值仅留在本地。仓库忽略运行时 `*.ini`、`*.jsonl*` 和 `*.json.txt*`，账本名称也受覆盖；受控模板只含空身份。原始 Prime95 样本只在内存中做结构比较，测试身份在运行时随机产生，原始结果、日志和测试样本均写入忽略的 `data/experiments/`。
 
 提交 Git 前运行 [check_result_privacy.py](../../tools/test/check_result_privacy.py)，通过 `--reference-results` 指定本地正式样本、内部结果，通过可重复的 `--ini` 指定实际配置。它检查暂存新增行是否含这些私有值，并拒绝暂存运行时结果文件；只输出通过或失败，不打印匹配值。这个检查依赖提供的本地输入集合，不能替代对新增内容的审阅。
+
+## 历史 CUDA JSONL 转换
+
+[rewrite_stage2_results.py](../../tools/ecm_report/rewrite_stage2_results.py) 将旧的逐曲线 `stage2_completed` NF 回执转换为提交文件。输入始终保留，输出必须使用全新路径；工具没有网络提交功能。使用方法见 [工具说明](../../tools/ecm_report/README.md#历史-stage2-结果转换)。
+
+目标目录必须给出 exponent、N 与 known-factors，工具逐项精确验证 `(2^P−1)/∏f=N`，并要求实际 N 存在 Miller–Rabin 合数见证；找不到见证时停止供人工复核，不将其直接宣判为素数。这可以拦截已知梅森素数及其他疑似素数测试输入，不能代替对 ECM 工作是否有用的人工判断。
+
+相同 N、sigma、B1、曲线和参数化只保留完成 B2 最大的一条；相同 B2 重放只取首次完成。随后只合并源行相邻、save 记录号递增且数学工作、版本和 worker 一致的连续曲线。不同 B2 或中间的重放/覆盖记录会切开批次，不把整份文件按目标无条件累加。合并时间为末条真实完成时间，保留其 UTC 日期，不改成导出时间。原始版本缺失或为哈希时采用显式迁移版本，并在私有审计记录中注明不能重建逐条原始构建。
+
+实际 D/poly-size 仅在原日志完整关联且整批一致时输出；requested_D 不是实际选型证明。GPU 多层 NTT 不提供单一 Prime95 Stage2 FFT 长度，因此不伪填 stage2-fft-length。通用 fft-length 沿用前述正的容量参考。CRC32 按转换后的实际字段重新计算；它不覆盖所有扩展字段，不是整个 JSON 或曲线数的完整性签名。
+
+2026-10-17 本地转换冻结于 `data/experiments/ecm_submission_rewrite_20261017/`：1056 条 PARAM0 NF 回执，剔除 17 条完全重复和 13 条较小 B2 覆盖记录，得到 1026 条不同曲线、7 个连续批次。M3877/M12011/M12037 的实际余因子分别为 3275/11694/11616 位，已知因子均精确重建目标，合数见证均为基数 3。输出为 0.20.0 迁移标签，身份从快照 INI 读取；原文件不含逐条程序版本。所有数据、身份、实际 CRC 和原始日志只保存在忽略目录；该转换没有提交到服务器。
 
 ## 验证与边界
 

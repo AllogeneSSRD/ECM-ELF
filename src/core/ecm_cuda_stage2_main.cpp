@@ -971,7 +971,8 @@ int curve_worker(Options o) {
         ",\"auto_b2\":" + std::string(auto_json.empty() ? "false" : "true") +
         ",\"requested_B2\":" + std::to_string(requested_b2) + ",\"auto_planning_seconds\":" + std::to_string(auto_seconds) +
         (auto_json.empty() ? "" : ",\"auto_plan\":" + auto_json) +
-        ",\"timestamp_ms\":" + std::to_string(timestamp) + ",\"submission_file\":"+json_string(external_path.string())+
+        ",\"timestamp_ms\":" + std::to_string(timestamp) + ",\"program\":{\"name\":"+json_string(ecm_program::name)+
+        ",\"version\":"+json_string(ecm_program::version)+"},\"submission_file\":"+json_string(external_path.string())+
         ",\"reference_fft_table\":\"Prime95-31.6-zjmptable\""+runtime_tune_json(observation) + "," + result + "}");
     // Optional cache work follows the durable result. It cannot invalidate the
     // successful curve or cause the parent to replay a committed receipt.

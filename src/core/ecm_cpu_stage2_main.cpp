@@ -132,7 +132,7 @@ std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_
     const auto target=o.exponent?std::to_string(o.exponent):"N="+number(n);
     const auto b2=stage==1?std::string():std::to_string(o.b2);
     const std::string canonical=target+";ECM;"+fac+";"+known+";"+std::to_string(r.b1)+";"+b2+";E"+
-        std::to_string(r.sigma)+";0;invariant:0;ECM-ELF;"+ECM_BUILD_ID+";;;Windows;x86_64;"+when;
+        std::to_string(r.sigma)+";0;invariant:0;"+ecm_program::name+";"+ecm_program::version+";;;Windows;x86_64;"+when;
     std::ostringstream out;out<<"{\"status\":"<<quote(hit?"F":"NF");
     if(o.exponent)out<<",\"exponent\":"<<o.exponent;
     else {const auto decimal_n=number(n);out<<",\"N\":"<<(decimal_n.size()>2000?quote(decimal_n):decimal_n);}
@@ -141,7 +141,8 @@ std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_
     out<<",\"curves\":1,\"Edwards\":{\"sigma\":"<<r.sigma<<"},\"fft-length\":0";
     if(hit)out<<",\"stage\":"<<stage<<",\"factors\":["<<quote(fac)<<"]";
     if(!o.known.empty()) {out<<",\"known-factors\":[";for(size_t i=0;i<o.known.size();++i){if(i)out<<',';out<<quote(o.known[i]);}out<<']';}
-    out<<",\"errors\":{\"invariant\":0},\"program\":{\"name\":\"ECM-ELF\",\"version\":"<<quote(ECM_BUILD_ID)<<",\"port\":\"Windows x86_64\"}"
+    out<<",\"errors\":{\"invariant\":0},\"program\":{\"name\":"<<quote(ecm_program::name)<<",\"version\":"<<quote(ecm_program::version)<<",\"port\":\"Windows x86_64\"}"
+       <<",\"source-build\":"<<quote(ECM_BUILD_ID)
        <<",\"os\":{\"os\":\"Windows\",\"architecture\":\"x86_64\"},\"timestamp\":"<<quote(when);
     if(!o.user.empty())out<<",\"user\":"<<quote(o.user);
     if(!o.computer.empty())out<<",\"computer\":"<<quote(o.computer);
