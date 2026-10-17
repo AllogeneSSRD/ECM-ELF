@@ -13,6 +13,7 @@ struct Request {
     const EcmEdwardsNaf *plan;
     int doubling;
     EcmEdwardsNafMetrics *metrics;
+    EcmEdwardsPrepared prepared;
 };
 #define ECM_EDWARDS_TIER(W,T) int run_##W(const Request &request);
 #include "ecm_cuda_edwards_tiers.inc"

@@ -5,6 +5,7 @@
 #include "ecm_edwards_naf.h"
 #include "ecm_edwards_io.h"
 #include "ecm_stage1_binary.h"
+#include "ecm_stage1_gpu_progress.h"
 #include <iterator>
 #include <stdexcept>
 
@@ -12,20 +13,63 @@
 
 namespace ed_gpu_driver {
 struct Progress {
+    using Clock=std::chrono::steady_clock;
     Batch &b;mpz_srcptr n,scalar;const Stage1RunOptions &opt;std::string path;
     uint64_t b1,total;long long last;const EcmEdwardsNafMetrics *metrics;bool failed=false;
+    Clock::time_point initialization_start,loop_start,sample_start,last_print;
+    uint64_t sampled=0,delta=0;
+    bool printed=false,line_open=false;
+    ecm_stage1_gpu_progress::SpeedWindow speed;
+    Progress(Batch &batch,mpz_srcptr modulus,mpz_srcptr exponent,const Stage1RunOptions &options,
+             const std::string &checkpoint,uint64_t bound,uint64_t bits,
+             const EcmEdwardsNafMetrics *measurements,Clock::time_point start)
+        :b(batch),n(modulus),scalar(exponent),opt(options),path(checkpoint),b1(bound),total(bits),
+         last(stage1_now_ms()),metrics(measurements),initialization_start(start){}
+    void finish() {
+        if(line_open){std::fputc('\n',stdout);std::fflush(stdout);line_open=false;}
+    }
+    void display(Clock::time_point now) {
+        const auto text=ecm_stage1_gpu_progress::line(total?100.0*b.done/total:100.0,b.done,delta,
+            b.window?"columns":"bits",speed.per_curve(total,b.count),
+            std::chrono::duration<double>(now-loop_start).count(),speed.remaining(total,b.done));
+        if(stdout_is_tty_local()) {
+            std::fprintf(stdout,"\r%s%s%s",ecm_log_progress_color_code(),text.c_str(),ecm_log_progress_color_reset());
+            std::fflush(stdout);line_open=true;
+        } else ecm_ts_fprintf(stdout,"%s\n",text.c_str());
+        printed=true;last_print=now;
+    }
 };
+static void prepared(void *context) {
+    auto &p=*static_cast<Progress *>(context);
+    const double dictionary=p.metrics->dictionary_wall_ms/1000.0;
+    const double preparation=std::chrono::duration<double>(Progress::Clock::now()-p.initialization_start).count();
+    ecm_ts_fprintf(stdout,"GPU Edwards initialization: %.3f s\n",(std::max)(0.0,preparation-dictionary));
+    ecm_ts_fprintf(stdout,"GPU Edwards dictionary: %.3f s (gpu=%.3f ms)\n",dictionary,p.metrics->dictionary_gpu_ms);
+    p.total=p.b.window?p.metrics->columns:p.total;
+    // Restored work is the baseline, never a speed sample. Preparation and its
+    // console I/O finish before the live loop clock starts.
+    p.sampled=p.b.done;p.loop_start=p.sample_start=Progress::Clock::now();
+    if(p.b.done==p.total)p.display(p.loop_start);
+}
 static bool progress(uint32_t done,void *context) {
     auto &p=*static_cast<Progress *>(context);p.b.done=done;
-    const auto total=p.b.window?p.metrics->columns:p.total;
-    stage1_progress_set(total?double(done)*p.b.count/total:0,p.b.count);
+    const auto sample_time=Progress::Clock::now();p.delta=done-p.sampled;
+    p.speed.add(p.delta,std::chrono::duration<double,std::milli>(sample_time-p.sample_start).count());
+    p.sampled=done;
     const bool stop=ecm_stage1_stop_requested();const auto now=stage1_now_ms();
-    if(!stop && (!p.opt.ckpt_ms || now-p.last<p.opt.ckpt_ms))return true;
-    if(!p.path.empty() && !write_checkpoint(p.path,p.b,p.n,p.scalar,p.b1)) {
-        p.failed=true;ecm_ts_fprintf(stderr,"ERROR: GPU Edwards checkpoint write failed: %s\n",p.path.c_str());return false;
+    if(!p.printed || stop || done==p.total || sample_time-p.last_print>=std::chrono::milliseconds(200))
+        p.display(sample_time);
+    if(stop || (p.opt.ckpt_ms && now-p.last>=p.opt.ckpt_ms)) {
+        if(!p.path.empty() && !write_checkpoint(p.path,p.b,p.n,p.scalar,p.b1)) {
+            p.finish();p.failed=true;
+            ecm_ts_fprintf(stderr,"ERROR: GPU Edwards checkpoint write failed: %s\n",p.path.c_str());return false;
+        }
+        p.last=now;
     }
-    p.last=now;
-    if(stop)ecm_ts_fprintf(stdout,"GPU Edwards stopped at %s %u\n",p.b.window?"NAF column":"binary bit",done);
+    // The rate samples include each slice and its state readback, excluding
+    // checkpoint/console callback time. Elapsed is the complete loop wall time.
+    p.sample_start=Progress::Clock::now();
+    if(stop){p.finish();ecm_ts_fprintf(stdout,"GPU Edwards stopped at %s %u\n",p.b.window?"NAF column":"binary bit",done);}
     return !stop;
 }
 static bool publish(const std::string &path,const std::string &lines,bool append) {
@@ -39,6 +83,7 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
     *out=Stage1RunResult{};out->curves=curves;
     if(!curves)return ECM_ERROR;
     try {
+        const auto initialization_start=Progress::Clock::now();
         if(opt.naf_w!=0 && (opt.naf_w<2 || opt.naf_w>12))throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
         Integer scalar;if(!compute_batch_s(scalar.v,b1,48))throw std::runtime_error("cannot build Edwards exponent");
         if(!opt.tmp_dir.empty() && !ensure_dir(opt.tmp_dir))throw std::runtime_error("cannot create Edwards save directory");
@@ -97,18 +142,16 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
             throw std::runtime_error("no compiled GPU Edwards container with one spare bit for target");
         ecm_ts_fprintf(stdout,"GPU Edwards geometry: container_bits=%u tpi=%u tpb=128 blocks=%u\n",
                        container,tpi,(curves+128/tpi-1)/(128/tpi));
-        auto *bar=stage1_bar_create();stage1_progress_set(0,curves);
         EcmEdwardsNafMetrics metrics;
-        Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),mpz_sizeinbase(scalar.v,2),stage1_now_ms(),&metrics};std::string error;
+        Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),mpz_sizeinbase(scalar.v,2),&metrics,initialization_start};std::string error;
         const auto arithmetic_start=std::chrono::steady_clock::now();
         const int rc=batch.window?
             ecm_cuda_edwards_stage1_naf(n,scalar.v,batch.state.data(),curves,batch.done,256,
-                opt.device_index,progress,&p,error,batch.window,batch.doubling,&metrics):
+                opt.device_index,progress,&p,error,batch.window,batch.doubling,&metrics,prepared):
             ecm_cuda_edwards_stage1(n,scalar.v,batch.state.data(),curves,batch.done,256,
-                opt.device_index,progress,&p,error);
+                opt.device_index,progress,&p,error,prepared);
         const double arithmetic_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-arithmetic_start).count();
-        if(rc==0)stage1_progress_set(curves,curves);
-        stage1_bar_destroy(bar);
+        p.finish();
         ecm_ts_fprintf(stdout,"GPU Edwards arithmetic: algorithm=%s api_seconds=%.9f\n",batch.window?"naf":"binary",arithmetic_seconds);
         if(batch.window)ecm_ts_fprintf(stdout,"GPU Edwards NAF: columns=%u additions=%u container_bits=%u tpi=%u dictionary_bytes=%llu dictionary_gpu_ms=%.6f loop_gpu_ms=%.6f launches=%u\n",
             metrics.columns,metrics.additions,metrics.container_bits,metrics.tpi,

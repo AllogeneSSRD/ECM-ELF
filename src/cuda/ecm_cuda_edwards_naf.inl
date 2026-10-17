@@ -6,13 +6,13 @@ struct EdwardsEvent {
 };
 template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *states,
         uint32_t count,uint32_t &done,uint32_t chunk,EcmEdwardsProgress cb,
-        void *context,int doubling,EcmEdwardsNafMetrics *metrics) {
+        void *context,int doubling,EcmEdwardsNafMetrics *metrics,EcmEdwardsPrepared prepared) {
     using Mem=cgbn_mem_t<P::BITS>;
     const uint32_t entries=1u<<(plan.window-2),ipb=P::TPB/P::TPI;
     if(metrics){*metrics={};metrics->columns=plan.bits;metrics->additions=plan.additions;
         metrics->container_bits=P::BITS;metrics->tpi=P::TPI;
         metrics->dictionary_bytes=uint64_t(count)*entries*4*sizeof(Mem);}
-    if(done==plan.bits)return 0;
+    if(done==plan.bits){if(prepared)prepared(context);return 0;}
     std::vector<Mem> host(size_t(count)*10),ordinary(size_t(count)*4);
     for(uint32_t i=0;i<count;++i) {
         put(host[size_t(i)*10],n);
@@ -24,11 +24,15 @@ template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *sta
     check(cudaMemcpy(nonzero.p,plan.nonzero.data(),plan.nonzero.size()*4,cudaMemcpyHostToDevice));
     check(cudaMemcpy(codes.p,plan.codes.data(),plan.codes.size()*4,cudaMemcpyHostToDevice));
     EdwardsEvent start,stop;
+    const auto dictionary_start=std::chrono::steady_clock::now();
     check(cudaEventRecord(start.value));
     edwards_naf_prepare<P><<<(count+ipb-1)/ipb,P::TPB>>>(report.p,data.p,dictionary.p,entries,count);
     check(cudaGetLastError());check(cudaEventRecord(stop.value));check(cudaEventSynchronize(stop.value));
     if(cgbn_error_report_check(report.p))throw std::runtime_error("CGBN Edwards dictionary arithmetic error");
     if(metrics)check(cudaEventElapsedTime(&metrics->dictionary_gpu_ms,start.value,stop.value));
+    if(metrics)metrics->dictionary_wall_ms=std::chrono::duration<double,std::milli>(
+        std::chrono::steady_clock::now()-dictionary_start).count();
+    if(prepared)prepared(context);
     while(done<plan.bits) {
         const uint32_t end=done+std::min(chunk,plan.bits-done);
         check(cudaEventRecord(start.value));

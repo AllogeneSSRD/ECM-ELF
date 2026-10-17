@@ -4,6 +4,7 @@
 #include <cgbn/cgbn.h>
 #include <cuda_runtime.h>
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -62,7 +63,8 @@ template<class Mem> void put(Mem &r,const mpz_t x) {
     std::memset(&r,0,sizeof(r));size_t used=0;mpz_export(r._limbs,&used,-1,4,0,0,x);
 }
 template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t count,
-                         uint32_t &done,uint32_t chunk,EcmEdwardsProgress cb,void *context) {
+                         uint32_t &done,uint32_t chunk,EcmEdwardsProgress cb,void *context,
+                         EcmEdwardsPrepared prepared) {
     using Mem=cgbn_mem_t<P::BITS>;
     const uint32_t bits=static_cast<uint32_t>(mpz_sizeinbase(s,2));
     std::vector<Mem> host(size_t(count)*10);
@@ -75,6 +77,7 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
     Device<Mem> data(host.size());Device<uint32_t> scalar(words.size());Report report;
     check(cudaMemcpy(data.p,host.data(),host.size()*sizeof(Mem),cudaMemcpyHostToDevice));
     check(cudaMemcpy(scalar.p,words.data(),words.size()*4,cudaMemcpyHostToDevice));
+    if(prepared)prepared(context);
     while(done<bits) {
         const uint32_t stop=done+std::min(chunk,bits-done);
         const uint32_t ipb=P::TPB/P::TPI;
@@ -95,8 +98,8 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
 namespace ecm_edwards_cuda_detail {
 #define ECM_EDWARDS_TIER(W,T) \
 int run_##W(const Request &r) { \
-    if(r.plan)return run_naf<Params<W,T>>(r.n,*r.plan,r.states,r.count,r.done,r.chunk,r.progress,r.context,r.doubling,r.metrics); \
-    return run<Params<W,T>>(r.n,r.scalar,r.states,r.count,r.done,r.chunk,r.progress,r.context); \
+    if(r.plan)return run_naf<Params<W,T>>(r.n,*r.plan,r.states,r.count,r.done,r.chunk,r.progress,r.context,r.doubling,r.metrics,r.prepared); \
+    return run<Params<W,T>>(r.n,r.scalar,r.states,r.count,r.done,r.chunk,r.progress,r.context,r.prepared); \
 }
 #include "../../src/cuda/ecm_cuda_edwards_tiers.inc"
 #undef ECM_EDWARDS_TIER

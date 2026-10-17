@@ -451,6 +451,13 @@ ParsedLine parse_line(const std::string &line) {
             const char *r = q;
             if (read_u64(r, b)) pr.bits = b;
         }
+        const char *columns = find_str(c, "columns");
+        if(columns != nullptr) {
+            const char *q=columns;
+            while(q>c && *(q-1)==' ')--q;
+            while(q>c && is_digit(*(q-1)))--q;
+            read_u64(q,pr.columns);
+        }
         read_s_per_curve(p, pr.s_per_curve);
         read_after(p, "elapsed", pr.elapsed_s);
         if (!read_after(p, "ETA", pr.eta_s)) {

@@ -42,7 +42,11 @@ CPU/GPU Edwards 共用完成点文本，可由 CUDA Stage2 和 [CPU Stage2](../u
 
 Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery PARAM。Stage2 的曲线开始与结果事件传递相同模型身份；GUI 结果文件按该身份保存，旧版未带模型的 Stage2 日志沿用 Suyama PARAM0 解释。具体字段与管道规则见 [GUI 日志与结果](../usage/GUI.md#日志结果与监控)。完整大界限、随机 sigma 恢复和小素数回退的正确性证据见 [验收记录](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
 
-`arithmetic api_seconds` 覆盖标量编码、设备初始化/分配、字典、切片、回传及进度回调，排除之前的指数/曲线构造和之后的 GCD/归一化/save。`dictionary_gpu_ms` 与 `loop_gpu_ms` 是 CUDA event 区间，可能包含首次模块加载或主机发射间隙，不能当作 profiler 的纯 kernel 时间，也不能再与进程 wall 相加。
+`GPU Edwards initialization` 为本次 Edwards 批次从指数准备开始、到设备可进入切片循环为止的墙钟时间，减去单独报告的字典构建墙钟；包括曲线构造/恢复、标量编码、设备分配和上传。`GPU Edwards dictionary` 为设备字典准备的墙钟，同时报告对应的 CUDA event 毫秒；binary 不构建字典，该项为零。两行均在进度条前输出。已完成的 checkpoint 不重建 NAF 设备字典，字典计时也为零。
+
+`arithmetic api_seconds` 覆盖标量编码、设备初始化/分配、字典、切片、回传及进度回调，排除之前的指数/曲线构造和之后的 GCD/归一化/save。`dictionary_gpu_ms` 与 `loop_gpu_ms` 是 CUDA event 区间，可能包含首次模块加载或主机发射间隙，不能当作 profiler 的纯 kernel 时间。这些计时存在嵌套，不能与进程 wall 重复相加。
+
+GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../src/core/ecm_stage1_gpu_progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/core/ecm_edwards_gpu_driver.inl)，设备准备边界位于[主机循环](../../kernels/cuda/cgbn_edwards_instances.cuh)与[NAF 主机循环](../../src/cuda/ecm_cuda_edwards_naf.inl)。
 
 GPU Edwards 在 NAF 列或二进制位的片边界更新共用进度输出，GUI 管道可读取百分比。当前32档构建的三曲线族同exe数据见[性能依据](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，32档CPU末点、旧检查点跨容器恢复及Stage2交接见[细分实例验收](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)。冻结七档的binary/NAF、窗口/倍点对照及大界限证据分别见[性能参考](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)和[窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)，初始流水线见[开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
 

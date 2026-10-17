@@ -49,6 +49,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 // ECM_* return codes (include/ecm.h).
 #include "cuda_ecm_shim.h"
 #include "ecm_stage1_checkpoint_runtime.h"
+#include "ecm_stage1_gpu_progress.h"
 
 #include <time.h>
 #include <sys/types.h>
@@ -80,40 +81,19 @@ static bool stdout_is_tty() {
 static void print_progress(double pct, uint64_t s_partial, uint64_t this_batch,
                            double per_curve_s, double elapsed_ms, double remaining_s,
                            bool newline, const char *unit = "bits") {
-    const int bar_width = 40;
-    int filled = (int)(bar_width * (pct / 100.0));
-    if (filled < 0) filled = 0;
-    if (filled > bar_width) filled = bar_width;
-
-    char bar[bar_width + 1];
-    int i;
-    for (i = 0; i < bar_width; i++) {
-        bar[i] = (i < filled) ? '=' : ' ';
-    }
-    bar[bar_width] = '\0';
-    if (filled > 0 && filled < bar_width) {
-        bar[filled - 1] = '>';
-    }
-
-    const double elapsed_s = elapsed_ms / 1000.0;
+    const auto text=ecm_stage1_gpu_progress::line(pct,s_partial,this_batch,unit,
+                                                per_curve_s,elapsed_ms/1000.0,remaining_s);
 
     if (newline) {
         // Redirected / log mode: a full timestamped line, mirrored to screen.log
         // via the outputf → ecm_ts_vfprintf path. No ANSI colour in the log.
-        outputf(OUTPUT_ALWAYS,
-                "GPU: [%s] %.1f%%  %llu, +%llu %s (~%.2f s/curve)  elapsed %.1fs  remaining %.1fs\n",
-                bar, pct,
-                (unsigned long long)s_partial, (unsigned long long)this_batch, unit,
-                per_curve_s, elapsed_s, remaining_s);
+        outputf(OUTPUT_ALWAYS,"%s\n",text.c_str());
     } else {
         // Interactive terminal: in-place update, coloured (ANSI; colour is
         // configurable via ecm.ini progress_color).
         fprintf(stdout,
-                "\r%sGPU: [%s] %.1f%%  %llu, +%llu %s (~%.2f s/curve)  elapsed %.1fs  remaining %.1fs%s",
-                ecm_log_progress_color_code(),
-                bar, pct,
-                (unsigned long long)s_partial, (unsigned long long)this_batch, unit,
-                per_curve_s, elapsed_s, remaining_s,
+                "\r%s%s%s",
+                ecm_log_progress_color_code(),text.c_str(),
                 ecm_log_progress_color_reset());
         fflush(stdout);
     }

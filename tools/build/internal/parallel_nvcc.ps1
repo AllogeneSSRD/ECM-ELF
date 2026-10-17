@@ -135,6 +135,12 @@ foreach ($e in $entries) {
     if ($SkipUpToDate -and $obj -and (Test-Path $obj)) {
         $objTime = (Get-Item $obj).LastWriteTime
         $srcTime = (Get-Item $e.file).LastWriteTime
+        # The common progress formatter is host-only; only this CUDA TU includes
+        # it. Driver C++ dependencies are handled by the normal CMake build.
+        if ($name -eq 'cgbn_stage1') {
+            $progressTime=(Get-Item (Join-Path $repo 'src/core/ecm_stage1_gpu_progress.h')).LastWriteTime
+            if ($progressTime -gt $srcTime) { $srcTime=$progressTime }
+        }
         if ($objTime -gt $srcTime -and $objTime -gt $newestSource) { $skip = $true }
     }
     $tuList += [pscustomobject]@{

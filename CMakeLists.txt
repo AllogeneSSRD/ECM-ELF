@@ -149,7 +149,8 @@ foreach(_source IN LISTS ECM_STAGE1_COMMON_SOURCES)
 endforeach()
 foreach(_source src/core/ecm_internal_result.h src/core/ecm_result_submission.h
                 src/core/ecm_submission_writer.h src/core/ecm_edwards_gpu_driver.inl
-                src/core/ecm_edwards_io.h src/core/ecm_program_version.h)
+                src/core/ecm_edwards_io.h src/core/ecm_program_version.h
+                src/core/ecm_stage1_gpu_progress.h)
     file(SHA256 "${CMAKE_SOURCE_DIR}/${_source}" _stage1_hash)
     string(APPEND _stage1_identity "${_stage1_hash}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
@@ -158,7 +159,19 @@ string(SHA256 _stage1_identity "${_stage1_identity}")
 string(SUBSTRING "${_stage1_identity}" 0 12 _stage1_identity)
 set(_stage1_identity_file "${CMAKE_CURRENT_BINARY_DIR}/ecm_stage1_source_identity.txt")
 file(GENERATE OUTPUT "${_stage1_identity_file}" CONTENT "${_stage1_revision}.s1.${_stage1_identity}\n")
+# Keep the monolithic driver current even when an existing NMake build tree has
+# incomplete include dependencies (notably the included GPU driver .inl).
+set(_stage1_driver_headers
+    src/core/ecm_edwards_gpu_driver.inl src/core/ecm_edwards_gpu_checkpoint.h
+    src/core/ecm_stage1_gpu_progress.h src/core/ecm_program_version.h
+    src/cuda/ecm_cuda_edwards.h src/cuda/ecm_cuda_edwards_naf.h)
+foreach(_header IN LISTS _stage1_driver_headers)
+    set_property(SOURCE src/core/ecm_driver.cpp APPEND PROPERTY OBJECT_DEPENDS
+        "${CMAKE_SOURCE_DIR}/${_header}")
+endforeach()
 # A post-link sidecar leaves flags.make and CUDA response files unchanged.
+set_property(SOURCE kernels/cuda/cgbn_stage1.cu APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src/core/ecm_stage1_gpu_progress.h")
 function(ecm_stage1_identity_sidecar target)
     add_custom_command(TARGET ${target} POST_BUILD COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${_stage1_identity_file}" "$<TARGET_FILE_DIR:${target}>/ecm_stage1_build_identity.txt")

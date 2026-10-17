@@ -42,6 +42,7 @@ struct ProgressInfo {
     unsigned long long curves_done = 0;  // 42.3 -> 42, 123456 -> 123456
     unsigned long long curves_total = 0; // only in the stage1: form
     unsigned long long bits = 0;         // "+789 bits"
+    unsigned long long columns = 0;      // "+256 columns" (GPU Edwards NAF)
 };
 
 // One hit as reported by the driver's D3 hit line (docs/usage/GUI.md):

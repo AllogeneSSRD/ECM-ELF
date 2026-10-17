@@ -99,6 +99,14 @@ int main() {
         check(p.text.find('\033') == std::string::npos, "ANSI already stripped");
     }
 
+    {
+        const auto p=parse_line(TS "GPU: [>                                       ] 2.0%  512, +256 columns (~1.20 s/curve)  elapsed 0.2s  remaining 9.8s");
+        check(p.kind==LogKind::Progress && p.progress.gpu,"Edwards NAF GPU progress");
+        check(p.progress.columns==256 && p.progress.bits==0,"NAF columns distinct from binary bits");
+        check(p.progress.curves_done==512 && near(p.progress.s_per_curve,1.20),"NAF count and rate");
+        check(near(p.progress.eta_s,9.8),"NAF remaining time");
+    }
+
     std::printf("[5] events and errors\n");
     {
         const ParsedLine s = parse_line(

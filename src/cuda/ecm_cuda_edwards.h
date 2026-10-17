@@ -9,10 +9,13 @@
 // A callback sees canonical ordinary residues at a completed slice boundary.
 // Return 0=completed, 2=callback stopped, -1=error (message populated).
 using EcmEdwardsProgress = bool (*)(uint32_t done, void *context);
+// Optional one-shot notification after allocations/uploads/dictionary preparation,
+// before any scalar slice. Uses the same context; does not imply completed work.
+using EcmEdwardsPrepared = void (*)(void *context);
 int ecm_cuda_edwards_stage1(const mpz_t n,const mpz_t scalar,mpz_t *states,
                             uint32_t count,uint32_t &done,uint32_t chunk_bits,
                             int device,EcmEdwardsProgress progress,void *context,
-                            std::string &error);
+                            std::string &error,EcmEdwardsPrepared prepared=nullptr);
 
 // Query the smallest compiled container with one spare bit; no GPU initialization.
 // Returns false (and zero outputs) when the build has no suitable instance.
