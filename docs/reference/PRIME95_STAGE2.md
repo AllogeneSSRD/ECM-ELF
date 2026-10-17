@@ -61,3 +61,56 @@ Prime95将较小素数移到更大的复合倍数，以减少实际D段数。它
 Prime95的88项已配合自身缺失素数移位、CPU FFT、补齐段数、缓存和内存模型使用；源码没有由此给出另一GPU执行器只需88项或200项即可覆盖其最优参数的证明。它适合作为候选几何先验，移植后的覆盖仍须按另一执行器评价。
 
 具体packing、边界计算、当前源码与实测条件属于各执行器的工程状态，见本项目的 [NTT](../architecture/NTT.md)、[Auto B2](../architecture/AUTO_B2.md)。本项目的共享表来源、项数与限制记录在当前实现主题；不把这些工程选择写成Prime95或多项式Stage2的数学要求。
+
+## 4. B2 上扩：完整 G 多项式与 relocation
+
+本节针对上文 SHA256 对应的 Prime95 31.6b1 本地源码；同名源码包可在 [GIMPS 官方目录](https://www.mersenne.org/download/software/v31/31.06/) 找到。以下是固定 D 下的端点计算，和 Auto B2 搜索哪个请求值最划算是两件事。即使没有进行 Auto B2 搜索，选定 poly 路径后仍会补齐 D 段。
+
+### 4.1 初始区间和完整多项式
+
+设请求终点为 C，步长为 D，P=numrels=φ(D)/2，m 为不整除 D 的第一个素数 `first_missing_prime`。ECM 将 D 段中心放在 D 的倍数，初始端点与起点按以下规则落在半 D 网格上（`ecm.cpp:837–853`）：
+
+\[
+E_0=D\left\lceil\frac{C-D/2}{D}\right\rceil+D/2,
+\qquad
+U=\max\left(\left\lfloor E_0/m\right\rfloor,C_{start},gap_{end}\right),
+\]
+
+\[
+S_0=D\left\lfloor\frac{U+D/2}{D}\right\rfloor-D/2,
+\qquad n_0=(E_0-S_0)/D.
+\]
+
+这里通常 C_start=B1、gap_end=0；续算的实际下界另由保存状态约束，源码还检查过小起点及不能丢失的 relocation 素数。随后 `ecm_stage2_cost` 的 poly 分支令（`ecm.cpp:5774–5776`）：
+
+\[
+K=\max\left(2,\left\lceil n_0/P\right\rceil\right),\qquad n=KP.
+\]
+
+因此每个 G 都是完整的 P 点多项式，末尾不保留较小次数的 G。至少两批是这份源码的下降实现限制，源码在 `:8839–8840` 解释为当前 Ftree 下降不能处理单批产生的 monic H；它不是多项式 Stage2 的数学要求。
+
+### 4.2 固定段数，继续提高起点和终点
+
+若 `gap_end==0`，源码接着反复计算（`ecm.cpp:5777–5783`）：
+
+\[
+E=S+nD,\qquad
+S_{next}=D\left\lfloor\frac{\lfloor E/m\rfloor}{D}\right\rfloor.
+\]
+
+只有 S_next>S 时更新 S；否则停止。这里按源码使用 D 网格，不能把初始半 D 网格公式机械地放进循环。n 和 K 在循环中始终不变，最后终点为 E=S+nD。
+
+提高起点仍可覆盖较小素数，是因为 q 可用不整除 D 的 m 的幂乘成较大的复合倍数；当 Stage1 后模某因子的点被 [q] 消去时，[m^k q] 同样消去该点。因而完整覆盖并不要求从 B1 开始逐个生成所有 D 段。连续量近似为 S≈E/m，故 E≈nD·m/(m−1)，精确值由上述取整和下界决定。续算存在 gap 时不执行这段起点提高循环，且新 D 还须保留原有 relocation 所依赖的缺失素数（`:898–903`）。
+
+源码称它为免费的端点增加，含义是在完整 P 点批次和固定 n 的成本模型下扩大范围，并非保证任意后端补齐末块都不增加耗时。ECM 成本效率使用这个实际终点（`:5907`）；完成 poly 主计算后，C 和 C_done 也按实际段数更新（`:9800–9804`）。
+
+### 4.3 可复核的端点例子
+
+以下均为 C_start=B1=50000、gap_end=0 的整数几何复算，不是计时结果，也没有运行新的 Prime95 曲线。
+
+- C=26,000,000,000、D=210210、P=20160、m=17：初始 S=1,529,382,855、n0=116411；补齐为 K=6、n=120960。起点依次成为 1,585,614,030、1,588,977,390，最终 E=**27,015,978,990**。
+- C=260,000,000,000、D=510510、P=46080、m=19：初始 n0=482491；补齐为 K=11、n=506880，最终 S=14,375,451,090、E=**273,142,759,890**。
+
+D/P/m 对应有效 poly 表的 `ecm.cpp:641,646`。复算源码、源码指纹及完整迭代值保存在 `data/experiments/stage2_b2_boundary_feasibility_20261017/analyze.py` 和 `geometry.json`。另一执行器若没有 relocation，不能直接把这里的 S 缩短或终点放大计入自己的覆盖。
+
+relocation 的区间覆盖证明、保持原有 giant 网格的保守后缀，以及为什么相同零支持仍需处理 gcd=N 的因子恢复，集中见 [Stage2 relocation](ECM_STAGE2_RELOCATION.md)。

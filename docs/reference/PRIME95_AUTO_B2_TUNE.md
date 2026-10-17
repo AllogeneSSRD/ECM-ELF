@@ -7,7 +7,7 @@
 - `N`：待分解整数；`S=bit_length(N)`，`W=ceil(S/64)`。
 - `B1`：save 中完成的第一阶段界限；`B2>B1`：本次第二阶段请求界限。
 - `D`：Stage2 步长；`P=phi(D)/2`：baby 集大小。
-- 当前引擎 `I=floor(B2/D)+2`：giant 点数；`G=ceil(I/P)`：G 树批数；fold 次数为 `G−1`。见 [I 的生成](../../tools/bench/stage2_tree_gpu.cu#L10998) 和 [批次数](../../tools/bench/stage2_tree_gpu.cu#L9694)。这不是 Prime95 的区间/relocation 公式。
+- 本仓库引擎的几何 `I=floor(B2/D)+2`：giant 点数；`G=ceil(I/P)`：G 树批数；fold 次数为 `G−1`。见 [I 的生成](../../src/cuda/ecm_cuda_stage2.cu#L7306) 和 [批次数](../../src/cuda/ecm_cuda_stage2.cu#L7405)。这不是 Prime95 的区间/relocation 公式。
 - `L=2^k`：NTT length，避免沿用 NTT 代码局部变量 `N` 而与待分解整数混淆。
 - `q_GL=2^64−2^32+1`：NTT 域模数，与待分解的 N 无关。
 - `D_eff`：概率工具的群阶有效除子/挠子收益参数，**不等于 Stage2 步长 D**。
@@ -63,7 +63,7 @@ Poly 模型包括以下项：
 3. 左右扩展到包围较好效率，再做类似二分的区间细化。
 4. 返回实际端点对应倍率，而非原始试探倍率。
 
-实际端点来自 [poly 批次补齐与 relocation](../../.refactor/p95v3106b01.source/ecm.cpp#L5772)，并不总等于请求 B2。**不应照抄这部分端点扩展到我们的实现**；我们应记录当前引擎真正保证的区间，再决定收益函数使用什么端点。
+实际端点来自 [poly 批次补齐与 relocation](../../.refactor/p95v3106b01.source/ecm.cpp#L5772)，并不总等于请求 B2。精确取整、起点迭代与两个端点复算见 [Prime95 Poly Stage2 §4](PRIME95_STAGE2.md#4-b2-上扩完整-g-多项式与-relocation)。这部分不能直接套用到没有 relocation 的引擎；评价收益须使用对应引擎真正保证的区间。
 
 这种搜索依赖包围峰值的启发式。GPU 中的 NTT 2 幂跳变、partial tree、owner 回退会使成本曲线不光滑；首版宜用对数网格加局部/形状边界细化，不宣称全局最优。
 
