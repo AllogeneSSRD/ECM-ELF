@@ -3,6 +3,7 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+import re
 import secrets
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -29,6 +30,7 @@ def validate_crc(row):
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True)
     p.add_argument('--actual-export',type=Path)
+    p.add_argument('--expected-export-version',help='Exact version expected in a historical export; defaults to current public version')
     a=p.parse_args();a.output.mkdir(exist_ok=False,parents=True);checks=[]
     assert bitwise_crc('123456789')=='CBF43926';checks.append('independent_crc_reference')
     catalog=a.output/'targets.json';catalog.write_text(json.dumps([dict(exponent=29,N_hex=f'{(1<<29)-1:x}',known_factors=[])]))
@@ -54,8 +56,23 @@ def main():
                    'stage2_result: record=1 seconds=1.0\n')
     result,_=rewrite.convert([(1,rows[0])],targets,version,{},rewrite.geometry_logs([log]))
     assert result[0]['d']==30 and result[0]['poly-size']==4;validate_crc(result[0]);checks.append('completed_geometry_recovery')
+    keys=list(result[0]);assert keys[keys.index('b2')+1:keys.index('b2')+3]==['d','poly-size']
+    checks.append('geometry_immediately_after_B2')
+    actual=rows[0]|{'d':30,'poly-size':4,'program':dict(name='ECM-ELF',version='0.20.0')}
+    result,_=rewrite.convert([(1,actual)],targets,version,{})
+    assert result[0]['d']==30 and result[0]['poly-size']==4 and result[0]['program']['version']=='0.20.0'
+    validate_crc(result[0]);checks.extend(['receipt_actual_geometry','preserve_original_numeric_version'])
+    result,_=rewrite.convert([(1,actual)],targets,version,{},
+                             {('unit.save',1,31,1000,1000000):{(42,6,29)}})
+    assert 'd' not in result[0];checks.append('conflicting_geometry_omitted')
+    result,_=rewrite.convert([(1,actual),(2,receipt(32,2,1000000)|{'d':42,'poly-size':6})],targets,version,{})
+    assert len(result)==2 # Original numeric versions must not be relabelled to merge batches.
+    result,_=rewrite.convert([(1,actual),(2,receipt(32,2,1000000)|{'d':42,'poly-size':6})],targets,'0.20.0',{})
+    assert len(result)==1 and result[0]['curves']==2 and 'd' not in result[0]
+    checks.append('mixed_batch_geometry_omitted')
     for name,patch in [('failed',dict(status='error')),('bad_factor',dict(bad_factors=1)),('factor',dict(factors=['233'])),
-                       ('wrong_target',dict(N_hex='ff')),('wrong_program',dict(program=dict(name='Prime95',version='31.4')))]:
+                       ('wrong_target',dict(N_hex='ff')),('wrong_program',dict(program=dict(name='Prime95',version='31.4'))),
+                       ('incomplete_geometry',dict(d=30)),('invalid_geometry',{'d':31,'poly-size':4})]:
         try:rewrite.convert([(1,rows[0]|patch)],targets,version,{})
         except ValueError:checks.append(name+'_rejected')
         else:raise AssertionError(name)
@@ -70,10 +87,14 @@ def main():
     assert rewrite.ini_identity(ini,2)['user']==token and rewrite.ini_identity(ini,1)['user']==''
     checks.append('ini_worker_identity')
     if a.actual_export:
+        expected_version=a.expected_export_version or version
+        assert re.fullmatch(r'\d+(?:\.\d+)+',expected_version)
         actual=[json.loads(s) for s in a.actual_export.read_text(encoding='utf-8').splitlines()]
         for r in actual:
-            assert r['status']=='NF' and r['program']['version']==version and 'security-code' not in r
+            assert r['status']=='NF' and r['program']['version']==expected_version and 'security-code' not in r
             assert r['fft-length']>0 and 'Edwards' not in r;validate_crc(r)
+            if 'd' in r:
+                keys=list(r);assert keys[keys.index('b2')+1:keys.index('b2')+3]==['d','poly-size']
         checks.append('actual_export_independent_crc')
     (a.output/'summary.json').write_text(json.dumps(dict(complete=True,checks=checks,actual_batches=len(actual) if a.actual_export else None),indent=2)+'\n')
     print('PASS',len(checks),'offline conversion checks')

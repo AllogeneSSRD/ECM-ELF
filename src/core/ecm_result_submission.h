@@ -37,6 +37,7 @@ inline uint32_t reference_fft(uint64_t exponent) {
 }
 struct Submission {
     uint64_t exponent=0,sigma=0,b1=0,b2=0,curves=1;
+    uint64_t d=0,poly_size=0; // Actual completed Stage2 geometry; zero means unavailable.
     int stage=0;bool edwards=true;
     std::vector<std::string> factors,known;
     std::string user,computer,aid,when;
@@ -64,6 +65,8 @@ inline std::string submission_json(const Submission &r,const mpz_t n) {
     const bool hit=!r.factors.empty();
     if(!r.curves || r.b1<2 || (!hit && (r.stage || r.b2<=r.b1)) || (hit && r.stage!=1 && r.stage!=2))
         throw std::runtime_error("inconsistent ECM submission result");
+    if((r.d==0)!=(r.poly_size==0) || (r.d && (r.stage==1 || r.d<6 || r.d%2)))
+        throw std::runtime_error("inconsistent Stage2 submission geometry");
     ecm_edwards::Integer f;
     for(const auto &text:r.factors)if(mpz_set_str(f.v,text.c_str(),10) || mpz_cmp_ui(f.v,1)<=0 ||
         mpz_cmp(f.v,n)>=0 || !mpz_divisible_p(n,f.v))throw std::runtime_error("invalid submission factor");
@@ -80,6 +83,7 @@ inline std::string submission_json(const Submission &r,const mpz_t n) {
     if(hit){out<<",\"factors\":[";for(size_t i=0;i<r.factors.size();++i){if(i)out<<',';out<<quoted(r.factors[i]);}out<<']';}
     out<<",\"b1\":"<<r.b1;
     if(r.stage!=1)out<<",\"b2\":"<<r.b2;
+    if(r.d)out<<",\"d\":"<<r.d<<",\"poly-size\":"<<r.poly_size;
     if(r.edwards){out<<",\"Edwards\":{";if(hit)out<<"\"sigma\":"<<r.sigma;out<<'}';}
     else if(hit)out<<",\"sigma\":"<<r.sigma;
     if(hit)out<<",\"stage\":"<<r.stage;

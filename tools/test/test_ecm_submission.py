@@ -33,6 +33,9 @@ def contract(row, allowed):
         if row['stage'] == 1:
             assert 'b2' not in row
     assert 'checksum' not in row and 'security-code' not in row
+    if 'd' in row or 'poly-size' in row:
+        assert row['d']>=6 and row['d']%2==0 and row['poly-size']>0
+        keys=list(row);assert keys[keys.index('b2')+1:keys.index('b2')+3]==['d','poly-size']
 
 
 def main():
@@ -55,12 +58,12 @@ def main():
     ini.write_text('\n'.join(f'{k}={v}' for k, v in identity.items())+'\n', encoding='utf-8')
     internal, submission = out/'internal.jsonl', out/'results.json.txt'
     checks=[]
-    def run(name, extra=(), save=None, good=True, gpu=False, destination=None):
+    def run(name, extra=(), save=None, good=True, gpu=False, destination=None,gpu_d=210):
         inside, outside=destination or (out/(name+'.jsonl'),out/(name+'.json.txt'))
         command=[args.cuda_stage2.resolve() if gpu else args.cpu_stage2.resolve(),
                  '--save', save or args.fixture.resolve(), '--b2', 40000, '--curves', 1,
                  '--results', inside, '--submission', outside, '--ini', ini, *extra]
-        if gpu:command+=['--device',1,'--short-calibration',0,'--tune-runtime',0,'--d',210,'--factor-only','--log',out/(name+'_engine.log')]
+        if gpu:command+=['--device',1,'--short-calibration',0,'--tune-runtime',0,'--d',gpu_d,'--factor-only','--log',out/(name+'_engine.log')]
         proc=subprocess.run(list(map(str,command)),cwd=out,capture_output=True,timeout=180)
         (out/(name+'.log')).write_bytes(proc.stdout+proc.stderr)
         assert (proc.returncode==0)==good, name+' failed; inspect ignored evidence log'
@@ -147,10 +150,20 @@ def main():
         if any(r.get('stage')==2 for r in rows):stage2_found=True;break
     assert stage2_found
     if args.cuda_stage2:
-        _,_,rows=run('cuda',gpu=True,extra=['--curves',4])
+        inside,_,rows=run('cuda',gpu=True,extra=['--curves',4])
         assert len(rows)==1 and rows[0]['curves']==4 and all(rows[0][k]==v for k,v in identity.items())
+        assert rows[0]['d']==210 and rows[0]['poly-size']==24
+        raw=[json.loads(line) for line in inside.read_text().splitlines()]
+        assert all(r['d']==210 and r['poly-size']==24 for r in raw)
+        for r in raw:
+            keys=list(r);assert keys[keys.index('B2')+1:keys.index('B2')+3]==['d','poly-size']
+        inside,_,rows=run('cuda_auto_d',gpu=True,gpu_d=0)
+        raw=json.loads(inside.read_text());assert raw['requested_D']==0 and raw['d']>0
+        shape=re.search(r'real_shape: D=(\d+) P=phi\(D\)/2=(\d+)',(out/'cuda_auto_d_engine.log').read_text())
+        assert shape and (rows[0]['d'],rows[0]['poly-size'])==tuple(map(int,shape.groups()))
+        assert (raw['d'],raw['poly-size'])==(rows[0]['d'],rows[0]['poly-size'])
         _,_,rows=run('cuda_stage1_factor',gpu=True,save=factor_save)
-        assert rows[0]['stage']==1
+        assert rows[0]['stage']==1 and 'd' not in rows[0] and 'poly-size' not in rows[0]
         _,_,rows=run('cuda_stage2_factor',gpu=True,save=fixture)
         assert any(r.get('stage')==2 for r in rows)
     # Existing non-owned exports and aliases cannot be silently overwritten.

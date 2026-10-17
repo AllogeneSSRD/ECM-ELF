@@ -1,6 +1,6 @@
 # ECM 结果输出
 
-CPU Edwards Stage2 与 CUDA Stage2 同时写两份结果：逐曲线内部 JSONL 用于数学和运行诊断，`results.json.txt` 用于手工提交。提交文件只使用 Prime95 ECM 的字段结构，程序名如实写为 **ECM-ELF**。生成文件不触发网络请求；服务器是否接受新程序身份仍待实际验证，不能用离线字段检查代替服务器接受结论。
+CPU Edwards Stage2 与 CUDA Stage2 同时写两份结果：逐曲线内部 JSONL 用于数学和运行诊断，`results.json.txt` 用于手工提交。提交文件使用 Prime95 ECM 的字段结构，程序名如实写为 **ECM-ELF**。用户已确认一个真实 Montgomery NF 批次被手工提交入口接受，范围见下文；生成文件本身不触发网络请求。
 
 ## 文件与身份
 
@@ -18,9 +18,9 @@ stage2_submission_file=results.json.txt
 
 INI 相对输出路径基于 INI 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀；显式配置路径需要自行区分。提交文件有独占写锁，不支持多个进程同时共享同一个输出路径。输入 save、内部结果与提交文件必须不同。
 
-AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护，当前为 `ECM-ELF 0.20.0`；Windows 平台号为数字 4。不再使用占位版本或固定 build=1，也不把 Git 哈希写入 program.version。CPU 内部结果的 `source-build` 保留 Git/入口源码指纹，CUDA 内部结果也记录公共程序身份，精确二进制身份由构建清单保存。
+AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护，当前为 `ECM-ELF 0.31.0`；Windows 平台号为数字 4。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。CPU 内部结果的 `source-build` 保留 Git/入口源码指纹，CUDA 内部结果也记录公共程序身份，精确二进制身份由构建清单保存。
 
-版本按实际功能里程碑维护，不由距离上次发布的天数或提交数量直接生成。0.20.0 对应完整 CUDA 多项式 Stage2、Edwards CPU/GPU 流程、宽位数、存档/队列与调优能力；后续兼容功能递增 minor，兼容修正递增 patch。开发状态可由 Git 标签或发布页表达，提交 JSON 的版本保持纯数字点分格式，不要求先创建 Release。
+版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。例如当前版本的下一次新功能为 0.32.0，下一次修复为 0.31.1。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
 
 ## 提交字段与参考 FFT
 
@@ -31,6 +31,7 @@ AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用�
 - NF：`status=NF`、目标、`worktype=ECM`、B1/B2、曲线数、参考 FFT、程序和 UTC 时间；Edwards 标记为 `Edwards:{}`。
 - F：增加十进制字符串因子数组、stage 和原始 sigma，Edwards 使用 `Edwards:{sigma:…}`。Stage1 因子不写 B2。
 - user、computer、aid、known-factors 仅在有值时输出。Montgomery 不添加 `Edwards` 字段；不冒用 Prime95 或其他 Stage1 程序名。
+- 有实际 Stage2 几何参数时，字段连续排列为 `b2 → d → poly-size`。CUDA 直接使用已完成引擎返回的 D 和 baby 多项式大小，内部 JSONL 也在 B2 后记录这两个字段。Stage1 因子没有这些字段；CPU libecm 当前没有导出对应几何参数，保持省略。
 - 原生提交序列化不附内部诊断与 CRC；历史转换器按要求附 `checksum:{version:1,checksum:…}` 及其规范串需要的 `errors`/`os`。两者都省略 `security-code`，CRC32 不冒充缺少依据的 Prime95 SEC5。
 
 每个因子均验证 `1<f<N` 且 `f|N`。失败或未完成的当前曲线不生成 NF。NF 的 B2 只声明已完成的请求界限，不把 libecm 内部可能超出的尾部覆盖算作额外工作。没有执行的 Prime95 D、poly-size 或 Stage2 FFT 参数不补造。
@@ -38,6 +39,37 @@ AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用�
 参考 FFT 来自 Prime95 31.6 `gwnum/mult.asm` 的循环 AVX-512 `zjmptable`，生成器 [generate_p95_fft_reference.py](../../tools/gen/generate_p95_fft_reference.py) 固化其中 241 个 `(max_exp, fftlen)` 容量对。选择满足 `max_exp≥P` 的第一项；例如 M127/M347 为 128，M2203 为 128，M11057 为 512。它是按原始梅森指数生成的报告参考值，不代表 CPU/GPU 实际执行了该长度 FFT，也不保证等于任意机器上 GWNUM 的运行时选择。
 
 完整梅森数仅在 `N+1` 恰为 2 的幂时自动识别指数。余因子必须提供原始 `--exponent P` 与可重复的 `--known-factor F`，严格验证 `(2^P−1)/∏F=N`。CUDA 标准梅森队列自动携带这些字段。一般 N 没有原始梅森指数时仍使用 N 字段，FFT 参考按 `2·bitlength(N)+128` 的保守零填充容量选择；它不等同于 PrimeNet 梅森任务。提交行限制在 2000 字节以内，较大的一般 N 或很长的可选字段会报错，不能据此宣称支持所有大整数的手工提交。
+
+## checksum 计算方法
+
+`checksum.version=1` 对应 PrMers ECM 规范串的 CRC32。计算对象是按约定提取的字段值，不是 JSON 文本。当前 CPU 内部结果和历史转换器生成 checksum；原生 `results.json.txt` 序列化不附 checksum。两条带 checksum 的路径都使用下列 16 个槽位，按次序用 ASCII 分号 `;` 连接，空槽保留，最后一个槽后不加分号：
+
+1. 目标：十进制 exponent。CPU 内部一般整数扩展使用 `N=` 加完整十进制 N；转换器只接受经过目标关系验证的梅森任务。
+2. 固定字符串 `ECM`。
+3. 本次 factors：按数组原顺序用逗号连接十进制因子，无因子时为空。
+4. known-factors：按数组原顺序用逗号连接十进制因子，没有时为空。
+5. 十进制 b1。
+6. 十进制已完成 b2；Stage1 因子没有 b2，此槽为空。
+7. 曲线及 sigma 标记，取值规则见下文。
+8. 十进制 fft-length，直接采用这份结果实际记录的值。
+9. 固定字符串 `invariant:0`，对应已验证成功结果中的 invariant 错误计数。
+10. program.name，即 `ECM-ELF`。
+11. program.version，即该结果记录的数字版本。
+12. program.kernel/subversion 槽，本仓库当前为空。
+13. program.details 槽，本仓库当前为空。
+14. os.os，即 `Windows`。
+15. os.architecture，即 `x86_64`。
+16. timestamp，保留结果中的 UTC 字符串 `YYYY-MM-DD HH:MM:SS`。
+
+第 7 槽：Edwards 先写 `E`，再写存在的十进制 sigma；Montgomery 只写存在的 sigma。CPU 逐曲线内部结果始终保留 sigma，故 Edwards NF/F 都为 `E` 加 sigma。转换器当前只处理 NF：Edwards 输出 `Edwards:{}`，此槽为 `E`；Montgomery 没有 Edwards 对象或 sigma，此槽为空。不从原始逐曲线回执额外补入合并结果已省略的 sigma，也不猜测 torsion 后缀。
+
+设规范串为 S，以 UTF-8 编码为字节序列；不包含 BOM、JSON 引号、转义后的 JSON 表达、行尾换行或终止零字节。整数使用普通十进制，无千位分隔符或科学计数法；因子顺序、大小写、空槽和时间空格都参与校验。
+
+CRC 使用标准反射 CRC-32/ISO-HDLC：宽度 32 位，初值 `0xFFFFFFFF`，反射多项式 `0xEDB88320`（正向表示为 `0x04C11DB7`），最终异或 `0xFFFFFFFF`。对每个字节 b，先令 r ← r XOR b，再执行 8 次：若最低位为 1，则 r ← (r >> 1) XOR `0xEDB88320`；否则 r ← r >> 1。全部字节处理后，C = r XOR `0xFFFFFFFF`。将 C 写成大写、左补零至 8 位的十六进制字符串，放入 checksum 对象的 checksum 字段，版本字段为整数 1。Python 的 `zlib.crc32` 对 S 的 UTF-8 字节执行同一计算。
+
+CPU 内部结果使用自己的 fft-length=0 和逐曲线 sigma；转换后提交文件使用正的参考 FFT、NF 模型标记和合并后的真实完成时间，必须从最终记录重新计算 CRC，不能拷贝内部旧值。版本、参与计算的字段或其表示改变时也须重算。单纯调整 JSON 键顺序、空格，以及移动 d/poly-size 不改变规范串。
+
+curves、d、poly-size、stage2-fft-length、status、stage、user、computer、aid、program.port 和 source-build 不在这 16 个槽位中；CRC 不保护这些字段。它也不是 Prime95 的 security-code/SEC5。第三方源码依据见 [PrMers CRC32 研究](../reference/ECM_RESULT_JSON.md#prmers-crc32)，本仓库入口为 [转换器 checksum](../../tools/ecm_report/rewrite_stage2_results.py) 与 [CPU result](../../src/core/ecm_cpu_stage2_main.cpp)；[独立按位校验](../../tools/test/test_stage2_result_rewrite.py) 用于复核库计算结果。真实运行产生的 checksum 值保留在忽略目录。
 
 ## 去重、批次与恢复
 
@@ -67,18 +99,22 @@ ecm_cpu_stage2.exe --export-results --submission results.json.txt
 
 相同 N、sigma、B1、曲线和参数化只保留完成 B2 最大的一条；相同 B2 重放只取首次完成。随后只合并源行相邻、save 记录号递增且数学工作、版本和 worker 一致的连续曲线。不同 B2 或中间的重放/覆盖记录会切开批次，不把整份文件按目标无条件累加。合并时间为末条真实完成时间，保留其 UTC 日期，不改成导出时间。原始版本缺失或为哈希时采用显式迁移版本，并在私有审计记录中注明不能重建逐条原始构建。
 
-实际 D/poly-size 仅在原日志完整关联且整批一致时输出；requested_D 不是实际选型证明。GPU 多层 NTT 不提供单一 Prime95 Stage2 FFT 长度，因此不伪填 stage2-fft-length。通用 fft-length 沿用前述正的容量参考。CRC32 按转换后的实际字段重新计算；它不覆盖所有扩展字段，不是整个 JSON 或曲线数的完整性签名。
+实际 d/poly-size 来自已完成回执中的实际字段，或完整关联的原日志；整批一致且证据不冲突时才输出，位置紧随 b2。requested_D 不是实际选型证明。GPU 多层 NTT 不提供单一 Prime95 Stage2 FFT 长度，因此不伪填 stage2-fft-length。通用 fft-length 沿用前述正的容量参考。CRC32 按转换后的实际字段重新计算；它不覆盖所有扩展字段，不是整个 JSON 或曲线数的完整性签名。
 
-2026-10-17 本地转换冻结于 `data/experiments/ecm_submission_rewrite_20261017/`：1056 条 PARAM0 NF 回执，剔除 17 条完全重复和 13 条较小 B2 覆盖记录，得到 1026 条不同曲线、7 个连续批次。M3877/M12011/M12037 的实际余因子分别为 3275/11694/11616 位，已知因子均精确重建目标，合数见证均为基数 3。输出为 0.20.0 迁移标签，身份从快照 INI 读取；原文件不含逐条程序版本。所有数据、身份、实际 CRC 和原始日志只保存在忽略目录；该转换没有提交到服务器。
+本地转换证据冻结于 `data/experiments/ecm_submission_rewrite_20261017/`：1056 条 PARAM0 NF 回执，剔除 17 条完全重复和 13 条较小 B2 覆盖记录，得到 1026 条不同曲线、7 个连续批次。M3877/M12011/M12037 的实际余因子分别为 3275/11694/11616 位，已知因子均精确重建目标，合数见证均为基数 3。该冻结输出使用 0.20.0 迁移标签，身份从快照 INI 读取；原文件不含逐条程序版本。冻结文件保留原版本与原文，已有合法数字版本的回执也不会被转换器改名。所有数据、身份、实际 CRC 和原始日志只保存在忽略目录。
+
+用户于 2026-10-17 提供的服务器回执确认：其中 M3877 的 NF 批次、B1=260,000,000、B2=2,600,000,000,000 已接受 1 行，状态码 0，CPU credit 为 753.2415 GHz-days。该结果使用真实 ECM-ELF 身份、正的参考 fft-length 和 CRC32，省略 security-code。此回执证明这一批提交可用，不扩展为 Edwards 或因子结果的服务器验收结论。已接受批次保持冻结，不能因版本或排版更新再次申报。回执摘要和冻结文件身份保存在 `data/experiments/ecm_submission_v031_20261017/server_acceptance.json`。
 
 ## 验证与边界
 
-[test_ecm_submission.py](../../tools/test/test_ecm_submission.py) 对本地正式 Prime95 文件的 3309 条 ECM 样本提取字段结构，覆盖 CPU/GPU1 的 F/NF、Stage1/Stage2 因子、INI worker/CLI 优先级、空身份、四曲线 NF 合并、重放去重、增量批次不变、损坏导出恢复、未封存完成曲线恢复、无算术恢复、M11213 FFT 选长、外来文件保护和路径别名拒绝。19 项测试通过，原始证据在 `data/experiments/ecm_submission_20261016/gates_06/`。数学回归证据另见同目录 `cpu_regression_02/` 与 `gpu_regression_03/`；GPU 仅使用设备 1 RTX4060。二进制身份随证据冻结，不用当前文件名替代版本依据。
+[test_ecm_submission.py](../../tools/test/test_ecm_submission.py) 对本地正式 Prime95 文件的 3309 条 ECM 样本提取字段结构，覆盖 CPU/GPU1 的 F/NF、Stage1/Stage2 因子、INI worker/CLI 优先级、空身份、四曲线 NF 合并、重放去重、增量批次不变、损坏导出恢复、未封存完成曲线恢复、无算术恢复、M11213 FFT 选长、外来文件保护和路径别名拒绝。0.31.0 的 20 项检查通过，也核对 CUDA 显式/自动 D 的实际参数、内部/提交字段顺序及 Stage1 因子省略参数；证据在 `data/experiments/ecm_submission_v031_20261017/native_gates_02/`。首次临时核绑定的停顿样本保留在 `native_gates_01/`，不列为通过。GPU 仅使用设备 1 RTX4060，二进制身份随证据冻结。
+
+[转换器回归](../../tools/test/test_stage2_result_rewrite.py) 的 24 项检查通过，涵盖新回执参数、旧日志恢复、冲突/混合参数省略、版本保留、字段顺序和实际 7 批输出的独立按位 CRC。另对当前 CPU 输出的 59 条内部 checksum 复核通过；历史 7 批记录字段值与 CRC 保持一致，已接受导出文件原文未改。证据在同目录 `converter_gates_03/`、`crc_and_history_audit.json`。独立数学回归另见 `data/experiments/ecm_submission_20261016/cpu_regression_02/` 与 `gpu_regression_03/`；测试证据以各自冻结二进制为准。
 
 [atomic_publish_fixture.cpp](../../tools/test/atomic_publish_fixture.cpp) 在真实检查点发布入口模拟短暂与持续占用：短暂占用解除后发布成功，持续占用时旧文件和待发布文件均保留。红/绿测试与两次完整 GPU 流程失败证据保留在同目录；有时限恢复后原 GPU 流程通过。独立循环文件测试曾直接观察到 Win32 错误 5；这不证明占用者的身份。
 
 一份可人工审阅的真实输出在同证据目录 `review/`：M347、sigma=17…20、B1=1000、B2=10^8，四条 CPU plain Stage2 完成的 NF 内部行合并为一条提交行，未填入身份/AID，也未发送网络请求。此输入只用于格式验收，不作为有用 ECM 覆盖量或性能基准。
 
-PrimeNet v5 API 0.97 描述的是 `ar` 请求字段与结果类型，不是现代手工提交 JSON 的完整规范；结构还需对照 Prime95 生成器及正式样本。[固定源码与 API 研究](../reference/ECM_RESULT_JSON.md) 列出依据。当前没有服务器接受回执，也未修改 AutoPrimeNet 的固定程序名扫描规则；省略 security-code 后的新程序接受策略仍为待验证条件。
+PrimeNet v5 API 0.97 描述的是 `ar` 请求字段与结果类型，不是现代手工提交 JSON 的完整规范；结构还需对照 Prime95 生成器及正式样本。[固定源码与 API 研究](../reference/ECM_RESULT_JSON.md) 列出依据。上述 Montgomery NF 批次已有用户提供的服务器接受回执；Edwards、因子结果及其他提交入口仍需各自验证。AutoPrimeNet 的固定程序名扫描规则未修改。
 
 实现入口：[提交序列化](../../src/core/ecm_result_submission.h) 的 `submission_json`、[账本与原子导出](../../src/core/ecm_submission_writer.h) 的 `publish_submission`/`seal_submissions`，CPU 和 CUDA 主程序在验证完成结果后调用它们。

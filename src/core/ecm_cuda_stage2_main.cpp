@@ -900,7 +900,7 @@ int curve_worker(Options o) {
         configure_cuda_wait(o.device);
         code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
             [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent,
-            o.tune_child || !observation.sample.empty()?&tune_metrics:nullptr,
+            &tune_metrics,
             r.a24.empty()?nullptr:r.a24.c_str());
     }
     if (code || result.empty()) return code ? code : 1;
@@ -951,6 +951,7 @@ int curve_worker(Options o) {
     ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
     submission.known=o.submission_known;submission.aid=o.submission_aid;
     submission.sigma=r.sigma;submission.b1=r.b1;submission.b2=o.b2;
+    submission.d=tune_metrics.d;submission.poly_size=tune_metrics.p;
     submission.user=identity.result_user;submission.computer=identity.result_computer;
     submission.factors=ecm_stage2::result_factors(result);
     submission.stage=submission.factors.empty()?0:(status=="factor_in_saved_X"?1:2);
@@ -962,6 +963,7 @@ int curve_worker(Options o) {
         ",\"N_hex\":" + json_string(r.n) + ",\"sigma\":" + std::to_string(r.sigma) +
         ",\"carrier_exponent\":" + std::to_string(o.carrier_exponent) +
         ",\"B1\":" + std::to_string(r.b1) + ",\"B2\":" + std::to_string(o.b2) +
+        (tune_metrics.d?",\"d\":"+std::to_string(tune_metrics.d)+",\"poly-size\":"+std::to_string(tune_metrics.p):"")+
         ",\"requested_D\":" + std::to_string(requested_d) + ",\"seconds\":" + std::to_string(seconds) +
         ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+

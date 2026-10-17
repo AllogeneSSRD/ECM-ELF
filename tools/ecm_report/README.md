@@ -16,18 +16,20 @@ python tools/ecm_report/rewrite_stage2_results.py `
   --targets data/experiments/submission/targets.json `
   --ini data/experiments/submission/ecm.snapshot.ini `
   --geometry-logs data/experiments/submission/stage2_screen.log `
-  --legacy-version 0.20.0 `
+  --legacy-version 0.31.0 `
   --output data/experiments/submission/export/results.json.txt `
   --audit data/experiments/submission/export/audit.json
 ```
 
 `targets.json` 是数组，每项目标包含整数 `exponent`、十六进制字符串 `N_hex`、十进制字符串数组 `known_factors`。必须按实际余因子提供，工具精确验证目标关系；不能仅按 save 文件名推定。无合数见证的目标会停止供复核，格式测试不得上传到服务器。这里的元数据、原始结果、INI、CRC 和审计文件均应保存在 Git 忽略目录。
 
-只处理完整且无错误/无因子的 CUDA Stage2 单曲线回执。相同曲线的重复或较小 B2 结果被去重；剩余相邻源行、递增记录号、相同数学工作与版本的曲线合并。真实完成日期保留。输出不覆盖旧文件，`--audit` 记录全部取舍和源文件身份。`--geometry-logs` 可传多份日志；只有完整关联且整批一致的实际 D/poly-size 才进入输出，requested_D 不算依据。
+只处理完整且无错误/无因子的 CUDA Stage2 单曲线回执。相同曲线的重复或较小 B2 结果被去重；剩余相邻源行、递增记录号、相同数学工作与版本的曲线合并。真实完成日期保留。输出不覆盖旧文件，`--audit` 记录全部取舍和源文件身份。实际 d/poly-size 可直接来自完成回执，`--geometry-logs` 也可传多份关联日志；整批参数一致且证据不冲突时，按 `b2 → d → poly-size` 输出，requested_D 不算依据。
 
 Montgomery 不写 Edwards 标记。FFT 使用仓库固化的 Prime95 正容量参考；GPU 多层 NTT 不冒充单一 Stage2 FFT。转换后的 CRC32 按公开 ECM 规范串重算，省略缺少依据的 security-code。`--ini` 按全局/`[Worker #N]` 读取 user/computer，`--worker` 默认 1，空值省略。
 
-缺失或非数字版本使用 `--legacy-version` 的迁移标签，默认来自 `src/core/ecm_program_version.h`；这不会重建缺失的逐条历史二进制版本。结果规范、计时以外的限制和实际转换范围见 [ECM 结果输出](../../docs/usage/ECM_RESULTS.md)。回归入口是 `tools/test/test_stage2_result_rewrite.py`，验证重复覆盖、连续批次、模型标记、目标拒绝和独立按位 CRC；它始终离线运行。
+CRC 的 16 个槽位、空值与 sigma 规则、UTF-8 编码、反射多项式和十六进制输出方式统一见 [checksum 计算方法](../../docs/usage/ECM_RESULTS.md#checksum-计算方法)。JSON 键顺序不参与计算；版本、参考 FFT 或参与规范串的值改变时，必须重新计算。
+
+缺失或非数字版本使用 `--legacy-version` 的迁移标签，默认来自 `src/core/ecm_program_version.h`；这不会重建缺失的逐条历史二进制版本。已有合法数字版本保持原值；已提交结果保留原文，不因当前版本或字段排版变化而重复申报。结果规范、版本更新规则及实际服务器验收范围见 [ECM 结果输出](../../docs/usage/ECM_RESULTS.md)。回归入口是 `tools/test/test_stage2_result_rewrite.py`，验证重复覆盖、连续批次、模型标记、实际参数及顺序、目标拒绝和独立按位 CRC；它始终离线运行。
 
 ## 快速流程
 

@@ -154,21 +154,29 @@ def convert(rows,targets,legacy_version,identity,geometry=None):
     for batch in batches:
         first,last=batch[0],batch[-1];target=targets[first['n']]
         timestamp=datetime.fromtimestamp(last['raw']['timestamp_ms']/1000,timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        row=dict(status='NF',exponent=target['exponent'],worktype='ECM',b1=first['b1'],b2=first['b2'],curves=len(batch))
-        if first['model']=='ed':row['Edwards']={}
-        row.update({'fft-length':reference_fft(target['exponent']),
-                    'program':dict(name='ECM-ELF',version=first['version'],port=4),'timestamp':timestamp,
-                    'known-factors':target['known'],'errors':dict(invariant=0),'os':dict(os='Windows',architecture='x86_64')})
-        row.update({k:v for k,v in identity.items() if k in ('user','computer') and v})
+        row=dict(status='NF',exponent=target['exponent'],worktype='ECM',b1=first['b1'],b2=first['b2'])
         plans=[]
         for item in batch:
             raw=item['raw'];key=(Path(raw['save']).name.lower(),raw['record'],item['sigma'],item['b1'],item['b2'])
             options=(geometry or {}).get(key,set())
             allowed_bits=(item['n'].bit_length(),targets[item['n']]['exponent'])
             options={(d,p) for d,p,bits in options if bits in allowed_bits}
+            # New receipts carry the completed engine geometry directly. A
+            # requested_D remains insufficient, and conflicting evidence is omitted.
+            d,p=raw.get('d'),raw.get('poly-size')
+            if d is not None or p is not None:
+                if type(d) is not int or type(p) is not int or d<6 or d%2 or p<1:
+                    raise ValueError('Invalid completed Stage2 geometry')
+                options.add((d,p))
             plans.append(next(iter(options)) if len(options)==1 else None)
         if plans and plans[0] is not None and all(x==plans[0] for x in plans):
             row['d'],row['poly-size']=plans[0]
+        row['curves']=len(batch)
+        if first['model']=='ed':row['Edwards']={}
+        row.update({'fft-length':reference_fft(target['exponent']),
+                    'program':dict(name='ECM-ELF',version=first['version'],port=4),'timestamp':timestamp,
+                    'known-factors':target['known'],'errors':dict(invariant=0),'os':dict(os='Windows',architecture='x86_64')})
+        row.update({k:v for k,v in identity.items() if k in ('user','computer') and v})
         row['checksum']=checksum(row)
         if len(json.dumps(row,separators=(',',':'),ensure_ascii=False).encode('utf-8'))>=2000:raise ValueError('Submission line exceeds capacity')
         output.append(row);audit_batches.append(dict(source_lines=[x['line'] for x in batch],exponent=row['exponent'],
