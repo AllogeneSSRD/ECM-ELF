@@ -5,6 +5,7 @@
 #include <cstring>
 #include <fstream>
 #include <vector>
+#include <sstream>
 
 namespace {
 
@@ -14,31 +15,31 @@ constexpr uint32_t CHECKSUM_OFFSET = 48u;
 
 // ---------- LE write helpers (sum != NULL 时累加 checksum) ----------
 
-void put_u32(std::ofstream &o, uint32_t v, uint32_t *sum) {
+void put_u32(std::ostream &o, uint32_t v, uint32_t *sum) {
     unsigned char b[4] = {(unsigned char)v, (unsigned char)(v >> 8),
                           (unsigned char)(v >> 16), (unsigned char)(v >> 24)};
     o.write(reinterpret_cast<const char *>(b), 4);
     if (sum) *sum += v;
 }
-void put_i32(std::ofstream &o, int32_t v, uint32_t *sum) {
+void put_i32(std::ostream &o, int32_t v, uint32_t *sum) {
     put_u32(o, static_cast<uint32_t>(v), sum);
 }
-void put_u64(std::ofstream &o, uint64_t v, uint32_t *sum) {
+void put_u64(std::ostream &o, uint64_t v, uint32_t *sum) {
     unsigned char b[8];
     for (int i = 0; i < 8; ++i) b[i] = (unsigned char)(v >> (8 * i));
     o.write(reinterpret_cast<const char *>(b), 8);
     if (sum) *sum += (uint32_t)((v >> 32) + v);
 }
-void put_double(std::ofstream &o, double v) {
+void put_double(std::ostream &o, double v) {
     o.write(reinterpret_cast<const char *>(&v), 8);
 }
-void put_bytes(std::ofstream &o, const char *p, size_t n) {
+void put_bytes(std::ostream &o, const char *p, size_t n) {
     if (n) o.write(p, static_cast<std::streamsize>(n));
 }
 
 // ---------- LE read helpers ----------
 
-bool get_u32(std::ifstream &in, uint32_t *v, uint32_t *sum) {
+bool get_u32(std::istream &in, uint32_t *v, uint32_t *sum) {
     unsigned char b[4];
     in.read(reinterpret_cast<char *>(b), 4);
     if (!in) return false;
@@ -46,13 +47,13 @@ bool get_u32(std::ifstream &in, uint32_t *v, uint32_t *sum) {
     if (sum) *sum += *v;
     return true;
 }
-bool get_i32(std::ifstream &in, int32_t *v, uint32_t *sum) {
+bool get_i32(std::istream &in, int32_t *v, uint32_t *sum) {
     uint32_t t;
     if (!get_u32(in, &t, sum)) return false;
     *v = (int32_t)t;
     return true;
 }
-bool get_u64(std::ifstream &in, uint64_t *v, uint32_t *sum) {
+bool get_u64(std::istream &in, uint64_t *v, uint32_t *sum) {
     unsigned char b[8];
     in.read(reinterpret_cast<char *>(b), 8);
     if (!in) return false;
@@ -61,11 +62,11 @@ bool get_u64(std::ifstream &in, uint64_t *v, uint32_t *sum) {
     if (sum) *sum += (uint32_t)((*v >> 32) + *v);
     return true;
 }
-bool get_double(std::ifstream &in, double *v) {
+bool get_double(std::istream &in, double *v) {
     in.read(reinterpret_cast<char *>(v), 8);
     return static_cast<bool>(in);
 }
-bool get_bytes(std::ifstream &in, char *p, size_t n) {
+bool get_bytes(std::istream &in, char *p, size_t n) {
     if (n) in.read(p, static_cast<std::streamsize>(n));
     return static_cast<bool>(in);
 }
@@ -73,7 +74,7 @@ bool get_bytes(std::ifstream &in, char *p, size_t n) {
 // ---------- giant: 4-byte limb count + 32-bit LE limbs ----------
 // Prime95 write_giant 的 checksum 累加 = len(经 write_long) + Σlimbs + len(显式二次).
 
-bool put_giant(std::ofstream &o, const mpz_t v, uint32_t *sum) {
+bool put_giant(std::ostream &o, const mpz_t v, uint32_t *sum) {
     const size_t bits = mpz_sizeinbase(v, 2);
     size_t count = (bits + 31) / 32;
     if (count == 0) count = 1;
@@ -93,7 +94,7 @@ bool put_giant(std::ofstream &o, const mpz_t v, uint32_t *sum) {
     return static_cast<bool>(o);
 }
 
-bool get_giant(std::ifstream &in, mpz_t v, uint32_t *sum) {
+bool get_giant(std::istream &in, mpz_t v, uint32_t *sum) {
     uint32_t count = 0;
     if (!get_u32(in, &count, sum)) return false;        // len (read_long)
     if (count == 0) return false;
@@ -110,7 +111,7 @@ bool get_giant(std::ifstream &in, mpz_t v, uint32_t *sum) {
     return true;
 }
 
-void put_header(std::ofstream &o, const ecm_save_common &cm, const char *stage) {
+void put_header(std::ostream &o, const ecm_save_common &cm, const char *stage) {
     put_u32(o, ECM_MAGICNUM, nullptr);
     put_u32(o, ECM_VERSION, nullptr);
     put_double(o, cm.k);
@@ -124,12 +125,12 @@ void put_header(std::ofstream &o, const ecm_save_common &cm, const char *stage) 
     put_u32(o, 0, nullptr);   // checksum 占位 (offset 48)
 }
 
-void put_checksum(std::ofstream &o, uint32_t sum) {
+void put_checksum(std::ostream &o, uint32_t sum) {
     o.seekp(CHECKSUM_OFFSET, std::ios::beg);
     put_u32(o, sum, nullptr);
 }
 
-bool get_header(std::ifstream &in, ecm_save_common &cm) {
+bool get_header(std::istream &in, ecm_save_common &cm) {
     uint32_t magic, version;
     char stage[10], pad[2];
     double pct;
@@ -151,7 +152,7 @@ bool get_header(std::ifstream &in, ecm_save_common &cm) {
 }
 
 // 读回文件里存的 checksum 值 (offset 48), 供校验.
-bool get_file_checksum(std::ifstream &in, uint32_t *file_sum) {
+bool get_file_checksum(std::istream &in, uint32_t *file_sum) {
     in.seekg(CHECKSUM_OFFSET, std::ios::beg);
     return get_u32(in, file_sum, nullptr);
 }
@@ -280,8 +281,7 @@ bool ecm_edwards_write_stage1(const std::string &path, const ecm_save_common &cm
                               uint32_t bitnum, uint32_t dict_size,
                               const mpz_t dict_x, const mpz_t dict_y,
                               const mpz_t e_x, const mpz_t e_y, const mpz_t e_z) {
-    const std::string temp = ecm_stage1_checkpoint_temp_path(path);
-    std::ofstream o(temp, std::ios::binary | std::ios::trunc);
+    std::ostringstream o(std::ios::binary | std::ios::out);
     if (!o) return false;
 
     char stage[10];
@@ -307,8 +307,7 @@ bool ecm_edwards_write_stage1(const std::string &path, const ecm_save_common &cm
     put_giant(o, e_y, &sum);
     put_giant(o, e_z, &sum);
     put_checksum(o, sum);
-    o.close();
-    return !o.fail() && ecm_stage1_commit_checkpoint(path, temp);
+    return !o.fail() && ecm_stage1_write_blob(path,o.str());
 }
 
 static bool ecm_edwards_read_stage1_one(const std::string &path, ecm_save_common &cm,
@@ -316,8 +315,9 @@ static bool ecm_edwards_read_stage1_one(const std::string &path, ecm_save_common
                              uint32_t *bitnum, uint32_t *dict_size,
                              mpz_t dict_x, mpz_t dict_y,
                              mpz_t e_x, mpz_t e_y, mpz_t e_z) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) return false;
+    std::string bytes;
+    if (!ecm_stage1_read_blob(path,bytes)) return false;
+    std::istringstream in(bytes,std::ios::binary | std::ios::in);
     if (!get_header(in, cm)) return false;
 
     uint32_t file_sum = 0;

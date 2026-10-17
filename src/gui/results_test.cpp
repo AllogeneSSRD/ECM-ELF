@@ -17,6 +17,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -85,6 +86,14 @@ HitRecord make_hit(const std::string &factor, int curve, unsigned long long sigm
 int main() {
     const std::string json = "results_test.json.txt";
     const std::string txt = "results_test.txt";
+    {
+        const auto owned=json+".ecm-ledger";
+        std::filesystem::create_directory(owned);
+        ResultsStore st;std::string err;
+        check(!st.init(json,txt,err),"GUI refuses CLI-owned results");
+        check(err.find("CLI-owned")!=std::string::npos,"ownership error explains the conflict",err);
+        std::filesystem::remove(owned);
+    }
     std::remove(json.c_str());
     std::remove(txt.c_str());
 

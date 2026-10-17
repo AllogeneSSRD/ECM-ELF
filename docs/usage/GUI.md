@@ -38,7 +38,7 @@ Prime95 交接状态显示 pending、失败或成功；真实 save/worktodo.add 
 
 ## 日志、结果与监控
 
-管道进度用于百分比、速度和 ETA，事件行用于开始、因子、checkpoint 和错误。结果 JSONL 为原始结果，文本汇总合并同因子的 sigma；两者不可互当 checkpoint。
+管道进度用于百分比、速度和 ETA，事件行用于开始、因子、checkpoint 和错误。GUI 的 `gui_results.jsonl` 是因子摘要缓存，文本汇总合并同因子的 sigma；两者不可互当 checkpoint。正式内部 JSONL 与提交 `results.json.txt` 由 CLI Worker 生成，见 [结果输出](ECM_RESULTS.md)；GUI 拒绝向已有 CLI 归属账本的文件追加摘要。
 
 两个阶段的因子记录保留 `curve_model`、完整 sigma 和执行目标；Edwards 使用 `ed`，Montgomery 使用 `mont`。Edwards 没有 Montgomery PARAM，结果 JSONL 省略该字段；Suyama Stage2 保存 PARAM0。Stage2 的结果事件包含模型、sigma、B1、记录号和带引号的 save 路径，因此安静模式启用 GUI 事件时也能正确记录因子；未带模型的旧 Stage2 曲线开始行按 Suyama PARAM0 处理。混合模型的连续曲线会逐条更新身份，不继承上一条的模型。
 

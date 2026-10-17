@@ -122,8 +122,8 @@
       "parser": "legacy",
       "empty": "off",
       "description": [
-        "Path to Prime95 worktodo.txt. Stage1 appends generated ECMSTAGE2 assignments to worktodo.add in the same directory for Prime95 to import. Empty disables handoff. Prime95 must also be able to access the save files.",
-        "指定 Prime95 的 worktodo.txt 路径。启用后，将 Stage1 生成的 ECMSTAGE2 任务追加到同目录的 worktodo.add，由 Prime95 自行导入；留空关闭交接。save 文件本身还需能被 Prime95 访问。"
+        "Prime95 worktodo path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this path and keep saves local; they do not access Prime95 transfer files.",
+        "用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，存档保留在本地，不访问 Prime95 转移文件。"
       ]
     },
     {
@@ -645,12 +645,15 @@
       "type": "string",
       "default": "",
       "domain": "<local-user-id>",
-      "fx": "result_identity(S2)",
+      "fx": "result_identity(S1,S2)",
       "parser": "strict",
       "empty": "omit",
       "description": [
-        "Optional local result user identity for CPU and CUDA Stage2. Never put real account values in committed templates or fixtures.",
-        "CPU与CUDA Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。"
+        "Optional local result user identity for Stage1 and Stage2. Never put real account values in committed templates or fixtures.",
+        "Stage1与Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。"
+      ],
+      "shared_with": [
+        "stage1"
       ]
     },
     {
@@ -660,12 +663,15 @@
       "type": "string",
       "default": "",
       "domain": "<local-computer-name>",
-      "fx": "result_identity(S2)",
+      "fx": "result_identity(S1,S2)",
       "parser": "strict",
       "empty": "omit",
       "description": [
         "Optional local computer name in result output. Keep configured values and generated results outside public Git commits.",
         "结果输出的可选本地计算机名；实际配置值及生成结果不得进入公共Git提交。"
+      ],
+      "shared_with": [
+        "stage1"
       ]
     },
     {
@@ -1604,11 +1610,11 @@
       "domain": "<path>",
       "fx": "hit_JSONL(GUI)",
       "parser": "gui",
-      "empty": "GUI_exe_dir/results.json.txt",
-      "effective_default": "results.json.txt",
+      "empty": "GUI_exe_dir/gui_results.jsonl",
+      "effective_default": "gui_results.jsonl",
       "description": [
-        "GUI factor-results JSONL file. Empty uses results.json.txt in the GUI executable directory. This summary is separate from stage2_results_file, which provides Stage2 resume receipts.",
-        "指定 GUI 汇总命中结果的 JSONL 文件。留空使用 GUI 可执行文件目录下的 results.json.txt；这是 GUI 的结果汇总文件，与 Stage2 用于续跑对账的 stage2_results_file 分开。"
+        "GUI factor summary cache; empty uses gui_results.jsonl. CLI workers own the submission results.json.txt and the canonical Stage1/Stage2 internal JSONL files.",
+        "GUI 因子摘要缓存，留空使用 gui_results.jsonl。提交 results.json.txt 与统一格式的 Stage1/Stage2 内部 JSONL 由 CLI Worker 写入。"
       ]
     },
     {
@@ -1864,6 +1870,42 @@
         "可选测量条件标签，例如固定频率或功耗。不同标签保留独立最快汇总；忽略 environment 时允许复用。"
       ],
       "empty": "none"
+    },
+    {
+      "owner": "stage1",
+      "key": "stage1_submission_file",
+      "field": "submission",
+      "type": "string",
+      "default": "results.json.txt",
+      "domain": "<path>",
+      "fx": "results(S1)",
+      "parser": "strict",
+      "empty": "invalid",
+      "path_base": "ini_dir",
+      "worker_suffix": true,
+      "present": "has_submission",
+      "description": [
+        "Submission JSON lines for Stage1 factors only. No-factor work stays in the internal JSONL and save; an all-NF batch creates an empty owned submission file.",
+        "仅输出 Stage1 找到因子的提交 JSON 行；无因子工作仅写内部 JSONL 与 save。整批 NF 时生成有归属账本的空提交文件。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "stage1_results_file",
+      "field": "results",
+      "type": "string",
+      "default": "stage1_results.jsonl",
+      "domain": "<path>",
+      "fx": "results(S1)",
+      "parser": "strict",
+      "empty": "invalid",
+      "path_base": "ini_dir",
+      "worker_suffix": true,
+      "present": "has_results",
+      "description": [
+        "Canonical internal per-curve Stage1 JSONL with CRC32 and execution metadata, separate from submission output.",
+        "统一格式的逐曲线 Stage1 内部 JSONL，包含 CRC32 与执行元数据，与提交文件分开。"
+      ]
     }
   ],
   "aliases": [

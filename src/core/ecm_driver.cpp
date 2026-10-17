@@ -59,6 +59,12 @@
 #include <algorithm>
 #include "ecm_edwards_save.h"       /* Prime95 ECM 二进制存档读写 */
 #include "ecm_edwards_io.h"
+#include "ecm_internal_result.h"
+#include "ecm_submission_writer.h"
+#include <regex>
+#ifndef ECM_BUILD_ID
+#define ECM_BUILD_ID "development"
+#endif
 #ifndef ECM_HAS_CUDA_EDWARDS
 #define ECM_HAS_CUDA_EDWARDS 0
 #endif
@@ -568,7 +574,7 @@ static void print_ecm_usage(const char *prog) {
               << "  --affinity <list>    Pin worker t to logical CPU list[t %% len], e.g. 0,1,2,3\n"
               << "                       or 0-7.  On hybrid CPUs (Zen5 + Zen5c, P+E cores, ...)\n"
               << "                       this can hurt: measure first (doc section 13.4)\n"
-              << "  --tmp-dir <dir>      Local dir for stage-1 saves e{n:07d}_c{k}[.tmp]\n"
+              << "  --tmp-dir <dir>      Local directory for text saves and one batch .ckpt\n"
               << "                       (default: current dir; ecm.exe never writes to p95)\n"
               << "  -gpucurves <n>       Number of ECM curves per launch (Edwards: total curves)\n"
               << "  --ckpt <sec>         Mid-stage-1 checkpoint interval in seconds, for every\n"
@@ -714,8 +720,7 @@ struct Stage1RunOptions {
     bool sigma_fixed = false;
     uint64_t fixed_sigma64 = 0;      // Full seed; GPU PARAM2/3 validate the 32-bit window
     // 本地 stage-1 落盘目录 (空 = 不落盘/不 checkpoint)。
-    // 结果写成 <tmp_dir>/e{n:07d}_c{curve:06d}.tmp (MIDSTAGE 供 stage-2) 与
-    // <tmp_dir>/e{n:07d}_c{curve:06d} (STAGE1 自检查点); p95 交接由 ecm_p95feeder 负责。
+    // One task owns one batch checkpoint; final text saves feed Stage2.
     std::string tmp_dir;
     double handoff_k = 1.0;
     std::string handoff_k_str = "1"; // 原始 k 字符串 (worktodo.add 用)
@@ -723,6 +728,9 @@ struct Stage1RunOptions {
     uint32_t handoff_n = 0;
     int32_t handoff_c = -1;
     std::string handoff_factors;     // 透传给 worktodo.add 的已知因子 (逗号分隔)
+    bool target_kbnc=false;
+    std::string result_user,result_computer,result_aid;
+    std::string results_file="stage1_results.jsonl",submission_file="results.json.txt";
 };
 
 struct Stage1RunResult {
@@ -840,13 +848,7 @@ static long long stage1_now_ms() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// ---- 本地 stage-1 结果落盘 ----
-//
-// ecm.exe 不再与 Prime95 交互。每条曲线把 stage-1 结果写到**本地**目录:
-//     <tmp_dir>/e{n:07d}_c{curve:06d}.tmp       (MIDSTAGE, state=2, 供 stage-2)
-//     <tmp_dir>/e{n:07d}_c{curve:06d}           (STAGE1,  state=1, 分块自检查点)
-// 把结果送进 Prime95 (在 p95 目录写 e{n:07d} + 往 worktodo.add 的 [Worker #N]
-// 段追加 ECM= 行) 由独立程序 ecm_p95feeder 负责。
+// Local Stage1 text-save publication and batch checkpoint records.
 
 // 创建目录 (已存在视为成功).
 static bool ensure_dir(const std::string &dir) {
@@ -857,91 +859,6 @@ static bool ensure_dir(const std::string &dir) {
     if (mkdir(dir.c_str(), 0777) == 0) return true;
 #endif
     return access(dir.c_str(), 0) == 0;
-}
-
-// 曲线本地路径主干: <tmp_dir>/e{n:07d}_B{B1}_c{curve:06d}
-//
-// B1 必须进名字: 同一个 n 配不同 B1 的不同任务(例如 p95 参考 worktodo 里
-// Worker #2/#3/#4 都是 n=12323 而 B1 分别是 55e6/130e6/400e6)否则会互相覆盖。
-// p95 侧的存档名仍由 ecm_p95feeder 从存档头部推出 (e{n:07d}), 与本名字无关。
-static std::string edwards_local_stem(const Stage1RunOptions &opt, uint32_t curve_idx,
-                                     uint64_t B1) {
-    std::string dir = opt.tmp_dir;
-    if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '/';
-    char name[80];
-    snprintf(name, sizeof(name), "e%07u_B%llu_c%06u", opt.handoff_n,
-             (unsigned long long)B1, curve_idx + 1);
-    return dir + name;
-}
-
-// 目标文件已存在且头部与本次写入不一致 -> 拒绝覆盖 (返回 false).
-// 一致时允许覆盖: 那是正常的 resume / 周期刷新.
-static bool local_save_overwrite_ok(const std::string &path, const ecm_save_common &cm) {
-    if (access(path.c_str(), 0) != 0) return true;   // 不存在, 直接写
-    ecm_save_common old;
-    uint32_t st = 0;
-    if (!ecm_save_read_header(path, old, &st)) return true;  // 损坏文件允许覆盖
-    const bool same = (old.k == cm.k) && (old.b == cm.b) && (old.n == cm.n) &&
-                      (old.c == cm.c) && (old.B1 == cm.B1) && (old.sigma == cm.sigma);
-    if (!same) {
-        std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
-        ecm_ts_fprintf(stderr,
-            "ERROR: refusing to overwrite %s: existing save is "
-            "(k=%.0f b=%u n=%u c=%d B1=%llu sigma=%llu) but this run is "
-            "(k=%.0f b=%u n=%u c=%d B1=%llu sigma=%llu)\n",
-            path.c_str(), old.k, old.b, old.n, old.c,
-            (unsigned long long)old.B1, (unsigned long long)old.sigma,
-            cm.k, cm.b, cm.n, cm.c, (unsigned long long)cm.B1,
-            (unsigned long long)cm.sigma);
-        return false;
-    }
-    return true;
-}
-
-// 交接行 (ECM2=...); 仅用于日志/追踪 —— ecm_p95feeder 会从存档头部重建同样的行.
-static std::string edwards_ecm2_line(const Stage1RunOptions &opt, uint64_t sigma,
-                                     uint64_t B1, uint64_t B2) {
-    std::string line = "ECM2=" + (opt.handoff_k_str.empty() ? "1" : opt.handoff_k_str);
-    line += "," + std::to_string(opt.handoff_b);
-    line += "," + std::to_string(opt.handoff_n);
-    line += "," + std::to_string(opt.handoff_c);
-    line += "," + std::to_string(B1);
-    line += "," + std::to_string(B2);
-    line += ",1," + std::to_string(sigma);
-    if (!opt.handoff_factors.empty()) line += ",\"" + opt.handoff_factors + "\"";
-    return line;
-}
-
-// 把一条曲线的 stage-1 结果写成本地 MIDSTAGE 存档 (<tmp_dir>/e{n:07d}_c{k}.tmp).
-static bool edwards_write_local_midstage(const Stage1RunOptions &opt, uint64_t sigma,
-                                         uint32_t curve, uint64_t B1, uint64_t B2,
-                                         const mpz_t Qx, const mpz_t Qz,
-                                         uint32_t curve_idx) {
-    if (opt.tmp_dir.empty()) return true;
-
-    ecm_save_common cm;
-    cm.k = opt.handoff_k;
-    cm.b = opt.handoff_b;
-    cm.n = opt.handoff_n;
-    cm.c = opt.handoff_c;
-    cm.curve = curve;
-    cm.B1 = B1;
-    cm.B2 = B2;
-    cm.sigma = sigma;
-
-    const std::string path = edwards_local_stem(opt, curve_idx, B1) + ".tmp";
-    if (!local_save_overwrite_ok(path, cm)) return false;
-    if (!ecm_edwards_write_midstage(path, cm, Qx, Qz)) {
-        std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
-        ecm_ts_fprintf(stderr, "ERROR: cannot write stage-1 save %s\n", path.c_str());
-        return false;
-    }
-    {
-        std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
-        ecm_ts_fprintf(stdout, "stage1 save -> %s : %s\n", path.c_str(),
-                       edwards_ecm2_line(opt, sigma, B1, B2).c_str());
-    }
-    return true;
 }
 
 // 自我 checkpoint 上下文 + 进度回调 (写 STAGE1 存档)
@@ -960,7 +877,8 @@ struct EdwardsCheckpointCtx {
 static int edwards_checkpoint_progress(void *ctx, const edwards_checkpoint_t *cur) {
     EdwardsCheckpointCtx *c = (EdwardsCheckpointCtx *)ctx;
     const long long now = stage1_now_ms();
-    const bool due = (now - c->last_ms >= c->interval_ms);
+    if (c->save_path.empty()) return ecm_stage1_stop_requested()?0:1;
+    const bool due = c->interval_ms>0 && (now - c->last_ms >= c->interval_ms);
     if (!due && !ecm_stage1_stop_requested()) return 1;   // 继续
 
     mpz_t d, Px, Py;
@@ -978,8 +896,7 @@ static int edwards_checkpoint_progress(void *ctx, const edwards_checkpoint_t *cu
     cm.sigma = c->sigma;
     const uint32_t expbuf = (uint32_t)mpz_sizeinbase(c->s, 2);
     const uint32_t dict_size = (uint32_t)1u << (edwards_get_naf_w() - 2);
-    const bool written = local_save_overwrite_ok(c->save_path, cm) &&
-        ecm_edwards_write_stage1(c->save_path, cm, 2, expbuf, cur->bitnum, dict_size,
+    const bool written = ecm_edwards_write_stage1(c->save_path, cm, 2, expbuf, cur->bitnum, dict_size,
                                  Px, Py, cur->Rx, cur->Ry, cur->Rz);
     c->last_ms = now;
     mpz_clears(d, Px, Py, NULL);
@@ -1013,6 +930,18 @@ static std::atomic<uint32_t> g_stage1_done(0);
 /* 定义在后面 (需要 g_stage1_bar / stage1_progress_set), 这里先声明给调用点用 */
 static int edwards_checkpoint_progress_bar(void *ctx, const edwards_checkpoint_t *cur);
 
+static bool edwards_completed_read(uint32_t curve,uint64_t sigma,mpz_t factor,int &rc,std::string &line) {
+    std::string bytes;if(!ecm_stage1_read_blob(ecm_stage1_curve_record(curve),bytes))return false;
+    std::istringstream in(bytes);std::string tag,value,extra;uint64_t saved_sigma;
+    if(!(in>>tag) || tag!="ECM_EDWARDS_DONE_V1" || !(in>>saved_sigma>>rc>>value>>std::quoted(line)) ||
+       (in>>extra) || saved_sigma!=sigma || (rc!=0 && rc!=1) || mpz_set_str(factor,value.c_str(),16))return false;
+    return true;
+}
+static bool edwards_completed_write(uint32_t curve,uint64_t sigma,const mpz_t factor,int rc,const std::string &line) {
+    std::ostringstream out;out<<"ECM_EDWARDS_DONE_V1\n"<<sigma<<' '<<rc<<' '<<ecm_edwards::hex(factor)<<' '<<std::quoted(line)<<'\n';
+    return ecm_stage1_write_blob(ecm_stage1_curve_record(curve),out.str());
+}
+
 static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
                                  const Stage1RunOptions &opt, double B1, double B2,
                                  uint32_t idx, uint64_t sigma, uint32_t curves,
@@ -1021,7 +950,10 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
     mpz_inits(Qx, Qz, NULL);
 
     int rc;
-    if (!ckpt_path.empty()) {
+    if(!ckpt_path.empty() && edwards_completed_read(idx,sigma,factor_out,rc,save_line)) {
+        mpz_clears(Qx,Qz,NULL);return rc;
+    }
+    {
         EdwardsCheckpointCtx ck;
         ck.opt = &opt;
         ck.sigma = sigma;
@@ -1056,7 +988,7 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
             mpz_clears(rdx, rdy, rex, rey, rez, NULL);
         }
 
-        const uint32_t chunk_bits = 16384;
+        const uint32_t chunk_bits = static_cast<uint32_t>(std::clamp<size_t>(mpz_sizeinbase(s,2)/512,64,4096));
         rc = edwards_stage1_curve_progress(factor_out, Qx, Qz, N, sigma, s, chunk_bits,
                                            resume.bitnum > 0 ? &resume : nullptr,
                                            edwards_checkpoint_progress_bar, &ck);
@@ -1066,15 +998,12 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
             mpz_clears(Qx, Qz, NULL);
             return ck.write_failed ? ECM_ERROR : 2;
         }
-    } else {
-        rc = edwards_stage1_curve(factor_out, Qx, Qz, N, sigma, s);
     }
 
-    // 落盘: 把 stage-1 结果写成本地 MIDSTAGE 存档 (总是写, 即使命中因子).
-    // 送进 Prime95 由独立程序 ecm_p95feeder 负责。
+    // Capture the canonical text-save record and retain the completed result.
     if (rc == 0 || rc == 1) {
         if(!edwards_capture_save(save_line,N,sigma,uint64_t(B1),Qx,Qz,factor_out,rc==1))rc=ECM_ERROR;
-        if(rc>=0)edwards_write_local_midstage(opt,sigma,idx+1,uint64_t(B1),uint64_t(B2),Qx,Qz,idx);
+        if(rc>=0 && !ckpt_path.empty() && !edwards_completed_write(idx,sigma,factor_out,rc,save_line))rc=ECM_ERROR;
     }
     mpz_clears(Qx, Qz, NULL);
     return rc;
@@ -1294,20 +1223,20 @@ struct EdSimdProg {
     const Stage1RunOptions *opt;
     double   B1, B2;
     const uint64_t *sigmas;
+    const ifma_ctx_t *mc;
     long long last_ms;
     long long interval_ms;
     bool write_failed = false;
 };
 
-static const ifma_ctx_t *g_simd_prog_mc = nullptr;   /* 当前批次的 modulus 上下文 */
 static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
                                 const uint64_t *Rx, const uint64_t *Ry, const uint64_t *Rz) {
     EdSimdProg *pr = (EdSimdProg *)p;
-    const ifma_ctx_t *mc = g_simd_prog_mc;
+    const ifma_ctx_t *mc = pr->mc;
 
     /* --- checkpoint (与标量路径同一套写入器/路径/字段) --- */
     const long long now = stage1_now_ms();
-    const bool due = (now - pr->last_ms >= pr->interval_ms) || ecm_stage1_stop_requested();
+    const bool due = !pr->opt->tmp_dir.empty() && ((pr->interval_ms>0 && now-pr->last_ms>=pr->interval_ms) || ecm_stage1_stop_requested());
     if (due && bits_done > 0) {
         if (mc) {
             mpz_t d, Px, Py, rx, ry, rz;
@@ -1315,7 +1244,7 @@ static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
             size_t written = 0;
             for (uint32_t k = 0; k < pr->batch_count; k++) {
                 const uint32_t i = pr->batch_first + k;
-                const std::string path = edwards_local_stem(*pr->opt, i, (uint64_t)pr->B1) + ".ckpt";
+                const std::string path = ecm_stage1_curve_record(i);
                 ecm_save_common cm;
                 cm.k = pr->opt->handoff_k;
                 cm.b = pr->opt->handoff_b;
@@ -1331,8 +1260,7 @@ static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
                 ifma_to_mpz_lane(rz, Rz, k, mc);
                 const uint32_t expbuf = (uint32_t)pr->s_bits;
                 const uint32_t dict_size = (uint32_t)1u << (edwards_get_naf_w() - 2);
-                if (local_save_overwrite_ok(path, cm) &&
-                    ecm_edwards_write_stage1(path, cm, 2, expbuf, (uint32_t)bits_done,
+                if (ecm_edwards_write_stage1(path, cm, 2, expbuf, (uint32_t)bits_done,
                                              dict_size, Px, Py, rx, ry, rz)) {
                     written++;
                 } else {
@@ -1353,7 +1281,7 @@ static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
     }
 
     /* --- 进度条 --- */
-    if (g_stage1_bar) {
+    {
         const uint32_t base = pr->done_ctr ? pr->done_ctr->load(std::memory_order_relaxed) : 0;
         const double frac = (bits_total > 0) ? (double)bits_done / (double)bits_total : 0.0;
         const double done_f = (double)base + frac * (double)pr->batch_count;
@@ -1364,11 +1292,11 @@ static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
     return (ecm_stage1_stop_requested() || pr->write_failed) ? 1 : 0;
 }
 
-/* 标量路径的"曲线内"进度: 包一层 checkpoint 回调, 每 chunk_bits(16384) 位跳一格。
+/* 标量路径的"曲线内"进度: 包一层 checkpoint 回调, 按动态分块位数更新。
    没有它的话 B1 很大时一条曲线要跑几分钟, 进度条看着就是卡死的。
    (定义在这里而不是函数旁边, 因为要用到上面的 g_stage1_bar/stage1_progress_set。) */
 static int edwards_checkpoint_progress_bar(void *ctx, const edwards_checkpoint_t *cur) {
-    if (g_stage1_bar && ctx) {
+    if (ctx) {
         EdwardsCheckpointCtx *ck = (EdwardsCheckpointCtx *)ctx;
         if (ck->opt && ck->s && ck->opt->stage1_curves > 0) {
             const size_t s_bits = (size_t)mpz_sizeinbase(ck->s, 2);
@@ -1389,6 +1317,15 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
                                        double B1, double B2, uint32_t first, uint32_t count,
                                        const uint64_t *sigmas, mpz_t *factors, int *array_found,
                                        std::atomic<uint32_t> *done_ctr,std::string *save_lines) {
+    if(!opt.tmp_dir.empty()) {
+        bool completed=true;std::vector<int> statuses(count);
+        for(uint32_t k=0;k<count;++k)if(!edwards_completed_read(first+k,sigmas[first+k],factors[first+k],statuses[k],save_lines[first+k])){completed=false;break;}
+        if(completed) {
+            for(uint32_t k=0;k<count;++k)array_found[first+k]=statuses[k]?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
+            if(done_ctr)done_ctr->fetch_add(count,std::memory_order_relaxed);
+            return 0;
+        }
+    }
     // Exceptional setup lanes need scalar factor/error classification before
     // building an affine SIMD dictionary (which requires invertible inputs).
     bool exceptional=false;
@@ -1399,7 +1336,7 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
     auto run_exceptional=[&]() {
         for(uint32_t k=0;k<count;++k) {
             const uint32_t i=first+k;
-            const auto path=opt.tmp_dir.empty()?std::string():edwards_local_stem(opt,i,uint64_t(B1))+".ckpt";
+            const auto path=opt.tmp_dir.empty()?std::string():ecm_stage1_curve_record(i);
             const int rc=edwards_run_one_curve(N,s,opt,B1,B2,i,sigmas[i],opt.stage1_curves,factors[i],path,save_lines[i]);
             if(rc==2 || rc<0)return rc;
             array_found[i]=rc==1?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
@@ -1473,7 +1410,7 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
     pr.sigmas = sigmas;
     pr.last_ms = stage1_now_ms();
     pr.interval_ms = (long long)opt.ckpt_ms;
-    g_simd_prog_mc = &ctx.mc;
+    pr.mc = &ctx.mc;
     /* ---- resume: 一批 8 条 lane 必须共用恢复点, 所以仅当**所有** lane 都有有效检查点
        且 bitnum 完全相同时才续跑 (这正是"整批一起被中止、一起落盘"的常态); 否则从头跑。 ---- */
     {
@@ -1483,7 +1420,7 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
         int all_ok = (count > 0);
         for (uint32_t k = 0; k < count && all_ok; k++) {
             const uint32_t i = first + k;
-            const std::string path = edwards_local_stem(opt, i, (uint64_t)B1) + ".ckpt";
+            const std::string path = ecm_stage1_curve_record(i);
             ecm_save_common rcm;
             uint64_t rsp; uint32_t rebs, rbn, rds;
             mpz_t rdx, rdy;
@@ -1528,7 +1465,7 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
                            i, (unsigned long long)sigmas[i]);
         }
         if(!edwards_capture_save(save_lines[i],N,sigmas[i],uint64_t(B1),Qx[k],Qz[k],fac[k],array_found[i]==ECM_FACTOR_FOUND_STEP1))rc=ECM_ERROR;
-        else edwards_write_local_midstage(opt,sigmas[i],i+1,uint64_t(B1),uint64_t(B2),Qx[k],Qz[k],i);
+        if(rc==0 && !opt.tmp_dir.empty() && !edwards_completed_write(i,sigmas[i],factors[i],array_found[i]==ECM_FACTOR_FOUND_STEP1?1:0,save_lines[i]))rc=ECM_ERROR;
     }
     for (int k = 0; k < 8; k++) mpz_clears(Qx[k], Qz[k], fac[k], NULL);
     ed_soa_clear(&ctx);
@@ -1763,18 +1700,6 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     // sigma 预生成: random_sigma_u64 使用全局 rand()/srand(), 非线程安全,
     // 因此全部在主线程生成后再分发给工作线程.
     //
-    // 互操作约束: 若这些存档要交给 Prime95 做 stage 2 (ECMSTAGE2= 行), 它的 σ 读取是
-    //   mpz_get_str() -> atoll()   (p95 ecmp.cpp:7375)
-    // ⇒ σ >= 2^63 会溢出, Prime95 会按被截断的 σ 重建出**另一条曲线**, stage 2 白跑
-    //   (它加载的 x 来自我们的曲线)。Prime95 自己只生成 σ < 2^53 (ecm.cpp:7416),
-    //   随机路径的 random_sigma_u64() 也只有 < 2^53 ✓; 但 CPU Edwards 的 64-bit sigma
-    //   允许到 2^64-1, 那条路需要提醒。gmp-ecm 的 reader 是 mpz 的, 不受此限。
-    if (opt.sigma_fixed && fixed_sigma_batch_exceeds_prime95_range(opt.fixed_sigma64, curves)) {
-        std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
-        ecm_ts_fprintf(stderr,
-            "WARNING: sigma >= 2^63; Prime95's ECMSTAGE2 reader (atoll) cannot read it --\n"
-            "         hand this save to gmp-ecm for stage 2, or use a smaller -sigma.\n");
-    }
     std::vector<uint64_t> sigmas(curves);
     for (uint32_t i = 0; i < curves; i++) {
         // Fixed sigma → batch start + i (matches -sigma/-gpucurves semantics);
@@ -1782,11 +1707,11 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         // .ckpt 就**采用存档里的 sigma**（存档覆盖参数）。否则每轮都随机出新的 sigma,
         // 与存档永久不匹配, 自动续跑永远不会发生（这正是"不会自动从 saves/ 续跑"的根因）。
         if (opt.sigma_fixed) {
-            sigmas[i] = opt.fixed_sigma64 + i;
+            sigmas[i] = ecm_stage1_batch_sigma(i,opt.fixed_sigma64 + i);
         } else {
-            sigmas[i] = random_sigma_u64();
+            sigmas[i] = ecm_stage1_batch_sigma(i,random_sigma_u64());
             if (!opt.tmp_dir.empty()) {
-                const std::string cp = edwards_local_stem(opt, i, (uint64_t)B1) + ".ckpt";
+                const std::string cp = ecm_stage1_curve_record(i);
                 ecm_save_common rcm;
                 uint64_t rsp; uint32_t rebs, rbn, rds;
                 mpz_t dx, dy, rx, ry, rz;
@@ -1806,12 +1731,11 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     }
     const uint64_t firstsigma = sigmas[0];
 
-    // checkpoint 路径: 统一每条曲线独立 <tmp_dir>/e{n:07d}_c{6-digit},
-    // 与同名的 .tmp (MIDSTAGE) 区分开, 且并行写不冲突.
+    // Curve codecs address records inside the single process-owned batch file.
     std::vector<std::string> ckpt_paths(curves);
     if (use_ckpt) {
         for (uint32_t i = 0; i < curves; i++) {
-            ckpt_paths[i] = edwards_local_stem(opt, i, (uint64_t)B1) + ".ckpt";
+            ckpt_paths[i] = ecm_stage1_curve_record(i);
         }
     }
 
@@ -1827,6 +1751,10 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     if (use_ckpt) std::cout << " [saves -> " << opt.tmp_dir << "]";
     std::cout << std::endl;
 
+    auto *bar = stage1_bar_create();
+    ((Stage1RunOptions &)opt).stage1_t0_ms = stage1_now_ms();
+    ((Stage1RunOptions &)opt).stage1_curves = curves;
+    g_stage1_done.store(0);stage1_progress_set(0,curves);
     bool aborted = false;
     if (nthreads <= 1 && curves == 1) {
         for (uint32_t i = 0; i < curves; i++) {
@@ -1900,7 +1828,6 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
             fflush(stdout);
         }
         /* 进度条: 照 CUDA stage-1 host 的样式, prefix 换成 stage1 */
-        indicators::ProgressBar *bar = stage1_bar_create();
         ((Stage1RunOptions &)opt).stage1_t0_ms = stage1_now_ms();
         ((Stage1RunOptions &)opt).stage1_curves = curves;
         stage1_progress_set(0, curves);
@@ -1925,10 +1852,11 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
                 edwards_worker(&wctx);
             });
         for (auto &th : pool) th.join();
-        stage1_bar_destroy(bar);
         aborted = (aborted_flag.load(std::memory_order_relaxed) != 0);
     }
 
+    if (!aborted) stage1_progress_set(curves,curves);
+    stage1_bar_destroy(bar);
     if (aborted) {
         ecm_ts_fprintf(stdout, "stage-1 incomplete; checkpoints retained\n");
         mpz_clear(s);
@@ -2011,9 +1939,7 @@ static std::string mont_format_save_name(const std::string &pattern, const mpz_t
     return out;
 }
 
-/* The same name without the extension: mid-stage-1 checkpoints sit next to the
-   save as <stem>_c%07u.ckpt, so a run that dies can be resumed by the identical
-   command line (see docs/architecture/STAGE1.md). */
+/* Standalone codec fallback stem; the driver routes records into its batch. */
 static std::string mont_save_stem(const std::string &pattern, const mpz_t N, double B1) {
     std::string f = mont_format_save_name(pattern, N, B1);
     const size_t dot = f.rfind('.');
@@ -2182,8 +2108,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     const size_t ckpt_chunk = mont_ckpt_chunk_bits(nbits);
 
     /* ---- mid-stage-1 checkpoints (docs/architecture/STAGE1.md) ----------
-       One text file per curve, <tmp_dir>/<save stem>_c%07u.ckpt, written by the
-       worker that owns the curve and read back by the same command line.  The
+       One independently resumable record per curve in a shared batch file. The
        interval comes from ckpt_seconds / --ckpt; 0 = no autosave (Ctrl+C still
        checkpoints, which is what turns an interrupted run into a resumed one). */
     const bool use_ckpt = !opt.tmp_dir.empty();
@@ -2254,7 +2179,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
             mont_ckpt_clear(&ck);
         }
         if (!adopted) {
-            sigmas[i] = opt.sigma_fixed ? fixed_sigma : random_sigma_u64();
+            sigmas[i] = ecm_stage1_batch_sigma(i,opt.sigma_fixed ? fixed_sigma : random_sigma_u64());
             if (use_ckpt) {
                 /* Seed record: pins the sigma before any ladder work happens, so a
                    run that is killed while this curve is still queued resumes the
@@ -2706,7 +2631,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
 
 #include "ecm_edwards_gpu_driver.inl"
 
-static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
+static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
                            const Stage1RunOptions &opt, Stage1RunResult *out) {
@@ -2828,6 +2753,7 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
     uint64_t firstsigma64 = opt.sigma_fixed
         ? opt.fixed_sigma64
         : (gpu_param0 ? random_sigma_u64() : (uint64_t)gpu_pick_random_sigma(curves));
+    firstsigma64=ecm_stage1_batch_sigma(0,firstsigma64);
     const uint32_t firstsigma = (uint32_t)(firstsigma64 & 0xFFFFFFFFull);
     if (!gpu_param0 &&
         (firstsigma64 > 0xFFFFFFFFull || curves > 0x100000000ull - firstsigma64)) {
@@ -2839,6 +2765,7 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
         ecm_clear(params);
         return ECM_ERROR;
     }
+    for(uint32_t i=1;i<curves;++i)ecm_stage1_batch_sigma(i,firstsigma64+i);
     mpz_t batch_d;
     mpz_init(batch_d);
     /* batch_d is the batch parametrization's curve constant; only param3 uses it */
@@ -2934,6 +2861,109 @@ static int run_stage1_once(const mpz_t N, double B1, double B2, uint32_t curves,
     return ret;
 }
 
+static void stage1_result_settings(Stage1RunOptions &opt,const EcmQueueConfig &cfg,
+                                   const std::string &base,int worker) {
+    opt.result_user=cfg.result_user;opt.result_computer=cfg.result_computer;
+    opt.results_file=(std::filesystem::path(base)/(cfg.has_results?cfg.results:ecm_config::worker_file(cfg.results,worker))).string();
+    opt.submission_file=(std::filesystem::path(base)/(cfg.has_submission?cfg.submission:ecm_config::worker_file(cfg.submission,worker))).string();
+}
+static const std::string &stage1_build_identity() {
+    static const std::string identity=[] {
+        std::ifstream in(std::filesystem::path(get_exe_dir_local())/"ecm_stage1_build_identity.txt");
+        std::string value;std::getline(in,value);
+        return value.size()<=128 && !value.empty() && value.find_first_not_of("0123456789abcdefghijklmnopqrstuvwxyz.-")==value.npos?value:std::string(ECM_BUILD_ID);
+    }();return identity;
+}
+
+static ecm_results::Submission stage1_submission(const Stage1RunOptions &opt,const mpz_t N,uint64_t b1) {
+    ecm_results::Submission r;r.b1=b1;r.b2=b1;r.stage1_only=true;
+    r.edwards=opt.selection.curve==ecm_stage1::CurveModel::Edwards;
+    r.param=opt.selection.target==ecm_stage1::ExecutionTarget::Gpu?opt.selection.gpu_param:0;
+    r.user=opt.result_user;r.computer=opt.result_computer;r.aid=opt.result_aid;
+    if(opt.target_kbnc) {
+        r.kbnc=true;r.k=opt.handoff_k_str;r.b=opt.handoff_b;r.exponent=opt.handoff_n;r.c=opt.handoff_c;
+        std::istringstream known(opt.handoff_factors);std::string f;
+        while(std::getline(known,f,','))if(!f.empty())r.known.push_back(f);
+    }
+    // Validate complete metadata against the actual modulus before running.
+    (void)ecm_results::target_exponent(r,N);return r;
+}
+
+static int run_stage1_once(const mpz_t N,double B1,double B2,uint32_t curves,
+                           const std::string &savefilename,bool saveappend,const std::string &n_expr,
+                           const Stage1RunOptions &options,Stage1RunResult *out) {
+    Stage1RunOptions opt=options;*out=Stage1RunResult{};
+    try {
+        if(!opt.target_kbnc) {
+            // Direct CLI expressions retain k*b^n+c for naming and reporting.
+            std::smatch m;
+            const std::regex form(R"(^\s*\(?\s*(?:(\d+)\s*\*\s*)?(\d+)\s*\^\s*(\d+)\s*([+-])\s*(\d+)\s*\)?\s*$)");
+            if(std::regex_match(n_expr,m,form)) {
+                const auto b=std::stoull(m[2]),n=std::stoull(m[3]);const auto c=std::stoll(m[5])*(m[4]=="-"?-1:1);
+                if(b<=UINT32_MAX && n<=UINT32_MAX && c>=INT32_MIN && c<=INT32_MAX) {
+                    opt.target_kbnc=true;opt.handoff_k_str=m[1].matched?m[1].str():"1";
+                    opt.handoff_b=static_cast<uint32_t>(b);opt.handoff_n=static_cast<uint32_t>(n);opt.handoff_c=static_cast<int32_t>(c);
+                }
+            }
+        }
+        const auto base=stage1_submission(opt,N,uint64_t(B1));
+        (void)ecm_results::submission_json(base,N);
+        const auto same=[](const std::string &a,const std::string &b){if(a.empty() || b.empty())return false;std::error_code ec;
+            return std::filesystem::absolute(a).lexically_normal()==std::filesystem::absolute(b).lexically_normal() || std::filesystem::equivalent(a,b,ec);};
+        if(same(opt.results_file,opt.submission_file) || same(savefilename,opt.results_file) || same(savefilename,opt.submission_file))
+            throw std::runtime_error("Stage1 save, internal results and submission paths must differ");
+        for(const auto &file:{opt.results_file,opt.submission_file}) {
+            if(file.empty())throw std::runtime_error("empty Stage1 result output path");
+            if(std::filesystem::exists(file) && !std::filesystem::exists(ecm_results::submission_ledger(file)/"format"))
+                throw std::runtime_error("result output has no owned ledger; select a fresh Stage1 result path");
+        }
+        ecm_edwards::Integer plus;mpz_add_ui(plus.v,N,1);
+        const auto exponent=opt.target_kbnc?opt.handoff_n:(mpz_popcount(plus.v)==1?mpz_scan1(plus.v,0):0);
+        const auto name=std::string(base.edwards?".e":".m"+std::to_string(base.param))+"_s1_"+
+            (exponent?"m"+std::to_string(exponent):"bit"+std::to_string(mpz_sizeinbase(N,2)))+"_"+std::to_string(uint64_t(B1))+".ckpt";
+        const auto path=opt.tmp_dir.empty()?std::string{}:(std::filesystem::path(opt.tmp_dir)/name).string();
+        if(!path.empty())std::filesystem::create_directories(opt.tmp_dir);
+        ecm_stage1_set_backup_limit(opt.ckpt_backups);ecm_stage1_set_checkpoint_path(path);
+        {
+            auto identity=ecm_edwards::hex(N)+"|"+(base.edwards?"ed":"mont"+std::to_string(base.param))+"|"+
+                std::to_string(uint64_t(B1))+"|"+std::to_string(int(opt.selection.scalar_construction))+"|"+
+                ecm_stage1::execution_target_name(opt.selection.target);
+            if(opt.selection.target==ecm_stage1::ExecutionTarget::Cpu)
+                identity+="|"+std::to_string(opt.naf_w?opt.naf_w:edwards_get_naf_w())+"|"+std::to_string(int(opt.selection.cpu_implementation));
+            else if(!base.edwards) {
+                const char *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO");
+                identity+="|"+std::string(algorithm && *algorithm?algorithm:"ladder");
+            }
+            ecm_stage1_begin_batch(identity,curves,opt.sigma_fixed,opt.fixed_sigma64);
+        }
+        const auto begin=std::chrono::steady_clock::now();
+        const int rc=run_stage1_impl(N,B1,B2,curves,savefilename,saveappend,n_expr,opt,out);
+        if(rc==ECM_ERROR){if(!ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;ecm_stage1_end_batch(false);return rc;}
+        if(!out->sigmas || !out->factors || !out->array_found)throw std::runtime_error("Stage1 completed without per-curve result identity");
+        const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
+        for(uint32_t i=0;i<out->curves;++i) {
+            auto r=base;r.sigma=out->sigmas[i];r.when=ecm_results::utc_timestamp();
+            if(out->array_found[i]!=ECM_NO_FACTOR_FOUND){r.stage=1;r.factors.push_back(ecm_results::decimal(out->factors[i]));}
+            (void)ecm_results::submission_json(r,N);
+            const auto key=ecm_edwards::hex(N)+"|"+(r.edwards?"ed":"mont"+std::to_string(r.param))+"|"+std::to_string(r.sigma)+"|"+std::to_string(r.b1)+"|stage1";
+            std::ostringstream extra;extra<<",\"stage1-engine\":{\"curve\":"<<i<<",\"target\":"<<ecm_results::quoted(ecm_stage1::execution_target_name(opt.selection.target))
+                <<",\"batch-seconds\":"<<seconds<<",\"coverage\":\"B1\"}";
+            ecm_results::publish_internal(opt.results_file,key,ecm_results::internal_json(r,N,0,stage1_build_identity(),extra.str()),false);
+            if(!r.factors.empty())ecm_results::publish_submission(opt.submission_file,r,N,false);
+        }
+        ecm_results::refresh_internal(opt.results_file);
+        // Stage1 NF belongs only to the internal log and save. Create an owned
+        // empty export when no factor was found; do not seal Stage2 NF receipts.
+        ecm_results::ensure_submission_output(opt.submission_file);
+        ecm_stage1_end_batch(true);
+        ecm_ts_fprintf(stdout,"Stage1 results: internal=%s submission=%s\n",opt.results_file.c_str(),opt.submission_file.c_str());
+        return out->ret;
+    } catch(const std::exception &e) {
+        out->publish_failed=out->factors!=nullptr;out->prepare_failed=!out->publish_failed;out->ret=ECM_ERROR;
+        ecm_stage1_end_batch(false);ecm_ts_fprintf(stderr,"ERROR: Stage1: %s\n",e.what());return ECM_ERROR;
+    }
+}
+
 // Rebuild the original N expression for the save-file N= field.
 static std::string build_n_expr(const std::string &k, const std::string &b,
                                 unsigned long n, const std::string &c,
@@ -3003,6 +3033,7 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                           int *processed,
                           const P95TransferConfig *p95) {
     Stage1RunOptions opt = base_opt;
+    opt.result_aid=aid;
     if (sigma_fixed) {
         opt.sigma_fixed = true;
         opt.fixed_sigma64 = sigma;
@@ -3028,7 +3059,7 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
             free(result.sigmas);
         }
         ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged.\n",
-                       result.publish_failed ? "Stage1 save publication failed" :
+                       result.publish_failed ? "Stage1 save/result publication failed" :
                                                "backend prepare failed");
         return false;
     }
@@ -3119,8 +3150,7 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
        field are what let Prime95 report the eventual factor under the right assignment --
        and a handoff failure NEVER fails the task: the line is parked and re-delivered
        with the next successful delivery, and the GUI shows a red notice meanwhile.
-       This deliberately runs even when a factor was found: stage 2 still has to run the
-       GCD and report, and we cannot submit factors ourselves. */
+       Supported handoff remains available after local result publication. */
     if (p95 != nullptr && !p95->worktodo_path.empty()) {
         const P95TransferResult tr = p95_transfer_deliver(*p95, line);
         if (!tr.ok) {
@@ -3289,13 +3319,12 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
        stage 2 can continue it. `p95_worktodo_path` empty = the feature is off (the
        historical behaviour: ecm_p95feeder does the Edwards .tmp handoff instead). */
     P95TransferConfig p95cfg;
-    if(ecm_stage1::lower_ascii(cfg.curve_model)=="ed" &&
-       ecm_stage1::lower_ascii(cfg.execution_target)=="gpu" && !cfg.p95_worktodo_path.empty()) {
-        ecm_ts_fprintf(stderr,"ERROR: GPU Edwards text saves require CUDA Stage2; Prime95 automatic handoff is unavailable\n");
-        if(logf){ecm_log_set_mirror(nullptr);fclose(logf);}return 1;
-    }
+    const bool ignore_p95 = ecm_stage1::lower_ascii(cfg.curve_model)=="ed" ||
+        (ecm_stage1::lower_ascii(cfg.execution_target)=="gpu" && cfg.gpu_param==2);
+    if(ignore_p95 && !cfg.p95_worktodo_path.empty())
+        ecm_ts_fprintf(stdout,"Prime95 transfer path ignored for this curve construction; Stage1 saves remain local\n");
     {
-        p95cfg.worktodo_path = resolve_rel_local(exe_dir, cfg.p95_worktodo_path);
+        p95cfg.worktodo_path = ignore_p95 ? std::string{} : resolve_rel_local(exe_dir, cfg.p95_worktodo_path);
         p95cfg.add_workers = cfg.p95_add_workers;
         p95cfg.pending_path = p95_transfer_pending_path(exe_dir);
         p95cfg.keep_aid = cfg.p95_keep_aid;
@@ -3370,6 +3399,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             return 1;
         }
     }
+    stage1_result_settings(opt,cfg,std::filesystem::path(ini).parent_path().string(),worker);
     opt.stage1_threads = cfg.stage1_threads;
     if (!cfg.save_name_pattern.empty()) opt.save_name_pattern = cfg.save_name_pattern;
     if (!cfg.exp_cache.empty()) ecm_exp_cache_set_dir(cfg.exp_cache);
@@ -3499,6 +3529,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             const std::string n_expr = build_n_expr(task.k, task.b, task.n, task.c, task.factors);
             // 交接字段 (从 ECM= 任务读取)
             {
+                opt.target_kbnc = true;
                 opt.handoff_k_str = task.k;
                 opt.handoff_k = std::strtod(task.k.c_str(), nullptr);
                 opt.handoff_b = (uint32_t)std::strtoul(task.b.c_str(), nullptr, 10);
@@ -3572,7 +3603,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         const std::string n_expr = build_n_expr(task.k, task.b, task.n, task.c, task.factors);
         // 交接字段 (从 ECMSTAGE2 任务读取)
         {
-            opt.handoff_k_str = task.k;
+            opt.target_kbnc = true;
+                opt.handoff_k_str = task.k;
             opt.handoff_k = std::strtod(task.k.c_str(), nullptr);
             opt.handoff_b = (uint32_t)std::strtoul(task.b.c_str(), nullptr, 10);
             opt.handoff_n = (uint32_t)task.n;
@@ -3651,6 +3683,7 @@ int main(int argc, char **argv){
     std::vector<std::string> pos;
     for(int i=1;i<argc;i++){
         std::string a = argv[i];
+        if(a=="--version"){std::cout<<ecm_program::name<<' '<<ecm_program::version<<std::endl;return 0;}
         if(a == "-v") { verbose = true; continue; }
         if(a == "--affinity" && i+1<argc){
             affinity_spec = argv[++i];
@@ -4155,9 +4188,15 @@ int main(int argc, char **argv){
     }
     if (tmp_dir.empty()) tmp_dir = ".";      // 默认 = 当前目录 (本地)
     opt.tmp_dir = tmp_dir;
+    {
+        const auto ini=ini_path.empty()?std::filesystem::path(get_exe_dir_local())/"ecm.ini":std::filesystem::path(ini_path);
+        EcmQueueConfig cfg;
+        if(ecm_queue_config_load(ini.string(),worker_index,cfg))stage1_result_settings(opt,cfg,ini.parent_path().string(),worker_index);
+        else if(!ini_path.empty()) {std::cerr<<"Cannot read Stage1 result settings from INI"<<std::endl;mpz_clear(N);return 1;}
+    }
     if (!p95_dir_ignored.empty()) {
-        std::cerr << "note: --p95-dir is obsolete for ecm.exe (stage-1 saves are written "
-                     "locally); use --tmp-dir, and run ecm_p95feeder for the p95 handoff"
+        std::cout << "Prime95 transfer path ignored: --p95-dir is obsolete; Stage1 saves "
+                     "remain local. Supported Montgomery handoff uses INI p95_worktodo_path."
                   << std::endl;
     }
     {

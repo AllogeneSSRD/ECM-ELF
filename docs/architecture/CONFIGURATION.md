@@ -2,7 +2,7 @@
 
 ## 唯一数据源
 
-[config/ecm_options.json](../../config/ecm_options.json) 定义 Stage1、Stage2、GUI 和 worker 的键、字段、默认值、类型、静态范围、别名、模板覆盖与英中说明。程序使用已生成的 C++ 文件，不在运行时解析 JSON。
+[config/ecm_options.json](../../config/ecm_options.json) 定义 Stage1、Stage2、GUI 和 worker 的键、字段、默认值、类型、静态范围、别名、模板覆盖与英中说明。`shared_with` 将单一定义的共享键（如 user/computer）投影到其他消费端；INI 模板只生成一份键，不重复定义默认值。程序使用已生成的 C++ 文件，不在运行时解析 JSON。
 
 修改定义后调用 `tools/gen/generate_ecm_config.py` 生成并提交全部产物；`--check` 只检查同步。构建使用 `tools/build/internal/check_ecm_config.cmake` 检查输入/生成物哈希，不需要 Python。定义、生成器或产物不一致时停止构建。
 

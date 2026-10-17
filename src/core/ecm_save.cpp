@@ -1,6 +1,8 @@
 #include "ecm_save.h"
 
 #include "ecm_checkpoint.h"
+#include "ecm_edwards_io.h"
+#include "ecm_program_version.h"
 #include "opencl_ecm_log.h"
 
 #include <algorithm>
@@ -156,11 +158,7 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
                        savefilename.c_str());
         return false;
     }
-    std::ofstream out(savefilename, std::ios::out | std::ios::app);
-    if (!out.is_open()) {
-        ecm_ts_fprintf(stderr, "Could not open file %s for appending\n", savefilename.c_str());
-        return false;
-    }
+    std::ostringstream out;
 
     mpz_t sigma_mpz, checksum;
     mpz_init(sigma_mpz);
@@ -192,7 +190,7 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
             << "; N=" << n_expr_save
             << "; X=0x" << x_hex
             << "; CHECKSUM=" << csum
-            << "; PROGRAM=ECM-ELY;" /* was GMP-ECM 7.0.6 */
+            << "; PROGRAM=" << ecm_program::name << ";"
             << " X0=0x0; Y0=0x0;"
             << (who.empty() ? "" : (" WHO=" + who + ";"))
             << " TIME=" << timebuf << ";"
@@ -204,6 +202,7 @@ bool opencl_ecm_append_save_lines(const std::string &savefilename, const mpz_t N
 
     mpz_clear(sigma_mpz);
     mpz_clear(checksum);
+    if(!ecm_edwards::publish_save(savefilename,out.str(),true))return false;
     ecm_ts_fprintf(stdout, "Saved %u curve line(s) to %s\n", curves, savefilename.c_str());
     return true;
 }
@@ -220,11 +219,7 @@ bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, 
                                 const uint64_t *sigmas, uint32_t curves, const mpz_t *xs,
                                 const int *hit, const std::string &n_expr_save)
 {
-    std::ofstream out(savefilename, std::ios::app);
-    if (!out.is_open()) {
-        ecm_ts_fprintf(stderr, "Could not open file %s for appending\n", savefilename.c_str());
-        return false;
-    }
+    std::ostringstream out;
 
     mpz_t sigma_mpz, checksum;
     mpz_init(sigma_mpz);
@@ -259,7 +254,7 @@ bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, 
             << "; N=" << n_expr_save
             << "; X=0x" << x_hex
             << "; CHECKSUM=" << csum
-            << "; PROGRAM=ECM-ELY;"
+            << "; PROGRAM=" << ecm_program::name << ";"
             << " X0=0x0; Y0=0x0;"
             << (who.empty() ? "" : (" WHO=" + who + ";"))
             << " TIME=" << timebuf << ";"
@@ -272,11 +267,7 @@ bool ecm_append_save_lines_mont(const std::string &savefilename, const mpz_t N, 
 
     mpz_clear(sigma_mpz);
     mpz_clear(checksum);
-    out.close();
-    if (out.fail()) {
-        ecm_ts_fprintf(stderr, "Could not finish appending to %s\n", savefilename.c_str());
-        return false;
-    }
+    if(!ecm_edwards::publish_save(savefilename,out.str(),true))return false;
     ecm_ts_fprintf(stdout, "Saved %u Montgomery curve line(s) to %s\n", curves,
                    savefilename.c_str());
     return true;

@@ -1,7 +1,7 @@
 // Standalone CPU Edwards continuation. This target's <ecm.h> is libecm's API.
 #include <ecm.h>
 #include "ecm_edwards_save_reader.h"
-#include "ecm_result_submission.h"
+#include "ecm_internal_result.h"
 #include "ecm_submission_writer.h"
 #include "generated/ecm_config_generated.h"
 #include <chrono>
@@ -22,36 +22,9 @@
 #endif
 namespace {
 using namespace ecm_edwards;
-std::string quote(const std::string &s) {
-    std::ostringstream out;out<<'"';
-    for(unsigned char c:s) {
-        if(c=='"' || c=='\\')out<<'\\'<<c;
-        else if(c<32)out<<"\\u"<<std::hex<<std::setw(4)<<std::setfill('0')<<unsigned(c)<<std::dec;
-        else out<<c;
-    }
-    out<<'"';return out.str();
-}
-std::string number(const mpz_t x) {
-    std::vector<char> b(mpz_sizeinbase(x,10)+3);mpz_get_str(b.data(),10,x);return b.data();
-}
+std::string quote(const std::string &s) {return ecm_results::quoted(s);}
+std::string number(const mpz_t x) {return ecm_results::decimal(x);}
 void set64(mpz_t x,uint64_t n) {mpz_import(x,1,1,sizeof n,0,0,&n);}
-uint32_t crc32(const std::string &s) {
-    uint32_t c=0xffffffffu;
-    for(unsigned char b:s){c^=b;for(int i=0;i<8;++i)c=(c>>1)^((c&1)?0xedb88320u:0);}
-    return c^0xffffffffu;
-}
-std::string crc_hex(const std::string &s) {
-    std::ostringstream out;out<<std::uppercase<<std::hex<<std::setw(8)<<std::setfill('0')<<crc32(s);return out.str();
-}
-std::string timestamp() {
-    const auto now=std::time(nullptr);std::tm t{};
-#ifdef _WIN32
-    gmtime_s(&t,&now);
-#else
-    gmtime_r(&now,&t);
-#endif
-    std::ostringstream out;out<<std::put_time(&t,"%Y-%m-%d %H:%M:%S");return out.str();
-}
 struct Options {
     std::string save,results="results_cpu_stage2.jsonl",submission,ini,backend="auto",user,computer,aid;
     std::vector<std::string> known;uint64_t b2=0,skip=0,count=UINT64_MAX,exponent=0,memory=512,threads=1;
@@ -146,30 +119,12 @@ int stopped(){return ecm_stage1_stop_requested()?1:0;}
 struct Params {ecm_params p;Params(){ecm_init(p);}~Params(){ecm_clear(p);}};
 struct Details {uint64_t d=0,poly_size=0,fft_length=0,checked_values=0;double init=0,main=0,maxerr=0;};
 std::string result(const Options &o,const SavedCurve &r,const mpz_t n,const mpz_t f,int stage,double seconds,const Details &details) {
-    const bool hit=stage!=0;const auto when=timestamp();const auto fac=hit?number(f):"";
-    std::string known;for(const auto &v:o.known){if(!known.empty())known+=',';known+=v;}
-    // PrMers JsonBuilder's public ECM canonical layout, without optional torsion.
-    // Generic-N extension uses N=<decimal> in its first slot; no server claim.
-    const auto target=o.exponent?std::to_string(o.exponent):"N="+number(n);
-    const auto b2=stage==1?std::string():std::to_string(o.b2);
-    const std::string canonical=target+";ECM;"+fac+";"+known+";"+std::to_string(r.b1)+";"+b2+";E"+
-        std::to_string(r.sigma)+";"+std::to_string(details.fft_length)+";invariant:0;"+ecm_program::name+";"+ecm_program::version+";;;Windows;x86_64;"+when;
-    std::ostringstream out;out<<"{\"status\":"<<quote(hit?"F":"NF");
-    if(o.exponent)out<<",\"exponent\":"<<o.exponent;
-    else {const auto decimal_n=number(n);out<<",\"N\":"<<(decimal_n.size()>2000?quote(decimal_n):decimal_n);}
-    out<<",\"worktype\":\"ECM\",\"b1\":"<<r.b1;
-    if(stage!=1)out<<",\"b2\":"<<o.b2;
-    if(stage!=1 && details.d)out<<",\"d\":"<<details.d<<",\"poly-size\":"<<details.poly_size;
-    out<<",\"curves\":1,\"Edwards\":{\"sigma\":"<<r.sigma<<"},\"fft-length\":"<<details.fft_length;
-    if(hit)out<<",\"stage\":"<<stage<<",\"factors\":["<<quote(fac)<<"]";
-    if(!o.known.empty()) {out<<",\"known-factors\":[";for(size_t i=0;i<o.known.size();++i){if(i)out<<',';out<<quote(o.known[i]);}out<<']';}
-    out<<",\"errors\":{\"invariant\":0},\"program\":{\"name\":"<<quote(ecm_program::name)<<",\"version\":"<<quote(ecm_program::version)<<",\"port\":\"Windows x86_64\"}"
-       <<",\"source-build\":"<<quote(ECM_BUILD_ID)
-       <<",\"os\":{\"os\":\"Windows\",\"architecture\":\"x86_64\"},\"timestamp\":"<<quote(when);
-    if(!o.user.empty())out<<",\"user\":"<<quote(o.user);
-    if(!o.computer.empty())out<<",\"computer\":"<<quote(o.computer);
-    if(!o.aid.empty())out<<",\"aid\":"<<quote(o.aid);
-    out<<",\"checksum\":{\"version\":1,\"checksum\":"<<quote(crc_hex(canonical))<<"}"
+    ecm_results::Submission common;common.exponent=o.exponent;common.sigma=r.sigma;common.b1=r.b1;common.b2=o.b2;
+    common.stage=stage;common.known=o.known;common.user=o.user;common.computer=o.computer;common.aid=o.aid;
+    if(stage)common.factors.push_back(number(f));
+    if(stage!=1){common.d=details.d;common.poly_size=details.poly_size;}
+    auto text=ecm_results::internal_json(common,n,details.fft_length,ECM_BUILD_ID);text.resize(text.size()-2);
+    std::ostringstream out;out<<text
        <<",\"stage2-engine\":{\"name\":"<<quote(o.backend=="gwpoly"?"gwnum-polymult":"libecm")<<",\"version\":"<<quote(
 #ifdef ECM_CPU_HAVE_GWPOLY
            o.backend=="gwpoly"?ecm_gwpoly::version():

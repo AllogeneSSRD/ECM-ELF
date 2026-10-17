@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import subprocess
 import time
+from stage1_checkpoint_decode import batch as checkpoint_batch
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('mont_reference', ROOT/'tools/stat/suyama_mont_ref.py')
@@ -81,7 +82,10 @@ def records(path):
 
 def checkpoint(path):
     """Decode both GPU formats without using production C++ checkpoint code."""
-    raw = path.read_bytes(); body, tail = raw.rsplit(b'CHECKSUM ', 1)
+    raw=path.read_bytes()
+    if raw.startswith(b'ECM_STAGE1_BATCH_V1\n'):
+        _,rows=checkpoint_batch(path);raw=rows[0][1]
+    body,tail=raw.rsplit(b'CHECKSUM ',1)
     h = 14695981039346656037
     for byte in body: h = ((h ^ byte)*1099511628211) & ((1 << 64)-1)
     assert int(tail) == h
@@ -261,8 +265,12 @@ def main():
                                 creationflags=subprocess.CREATE_NO_WINDOW, env=env, cwd=out)
         try:
             deadline = time.monotonic()+90
-            while not list(restart.glob('*.gpu.ckpt')) and time.monotonic() < deadline:
+            while time.monotonic() < deadline:
                 assert proc.poll() is None, 'worker exited before checkpoint'
+                primary=[v for v in restart.glob('.e_s1_*.ckpt') if '.bak' not in v.name]
+                try:
+                    if primary and checkpoint_batch(primary[0])[1][0][1]:break
+                except (PermissionError,FileNotFoundError):pass
                 time.sleep(0.05)
             assert kernel.SetEvent(event)
             assert proc.wait(timeout=120) != 0
@@ -270,7 +278,7 @@ def main():
             if proc.poll() is None: proc.kill(); proc.wait()
             kernel.CloseHandle(event)
     assert queue.read_text() == task and (not finished.exists() or not finished.read_text().strip())
-    checkpoints = list(restart.glob('*.gpu.ckpt')); assert len(checkpoints) == 1
+    checkpoints = [v for v in restart.glob('.e_s1_*.ckpt') if '.bak' not in v.name]; assert len(checkpoints) == 1
     primary = checkpoints[0]; backup = primary.with_name(primary.stem+'.bak'+primary.suffix)
     assert backup.exists(); (out/'frozen_checkpoint.txt').write_bytes(primary.read_bytes())
     primary.write_bytes(b'corrupt primary\n')

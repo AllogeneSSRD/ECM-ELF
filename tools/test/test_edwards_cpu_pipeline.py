@@ -13,6 +13,7 @@ import subprocess
 import secrets
 import time
 import zlib
+from stage1_checkpoint_decode import batch as checkpoint_batch
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -219,11 +220,20 @@ def main():
             proc = subprocess.Popen([str(s1), '-ini', str(ini), '--stage1-stop-handle', str(event)],
                 close_fds=False, stdout=log, stderr=subprocess.STDOUT, cwd=out)
             deadline = time.monotonic()+60
-            while not list(restart.glob('*.ckpt')) and proc.poll() is None and time.monotonic() < deadline:
+            inflight=False
+            while proc.poll() is None and time.monotonic() < deadline:
+                primary=[v for v in restart.glob('*.ckpt') if '.bak' not in v.name]
+                try:
+                    if primary and any(payload for _,payload in checkpoint_batch(primary[0])[1]):
+                        inflight=True;break
+                except (PermissionError,FileNotFoundError):
+                    pass
                 time.sleep(0.01)
+            assert inflight,'no arithmetic checkpoint before stop'
             kernel.SetEvent(event)
             assert proc.wait(timeout=120) != 0
         assert queue.read_text() == task and list(restart.glob('*.ckpt')) and not list(restart.glob('*.save'))
+        ini.write_text(ini.read_text().replace('ckpt_seconds=0.001','ckpt_seconds=0'))
         text = call('cpu_resume', [s1, '-ini', ini])
         assert 'resume STAGE1 checkpoint' in text
         assert len(oracle.records(next(restart.glob('*.save')))) == 1

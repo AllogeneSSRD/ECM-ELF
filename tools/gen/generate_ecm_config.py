@@ -42,6 +42,11 @@ def text(value):
 
 def load_schema():
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    # Shared identity keys have one authoritative definition and one INI entry.
+    originals = list(schema["options"])
+    for option in originals:
+        for owner in option.get("shared_with", []):
+            schema["options"].append(dict(option, owner=owner, _mirror=True))
     if schema["schema_version"] != 1:
         raise ValueError("unsupported configuration schema")
     seen = set()
@@ -242,7 +247,7 @@ def template(schema, release):
     for owner in ("stage1", "stage2", "gui"):
         out.extend((["[GUI]"] if owner == "gui" else ["# " + owner.upper()]))
         for o in schema["options"]:
-            if o["owner"] != owner:
+            if o["owner"] != owner or o.get("_mirror"):
                 continue
             value = o.get("template_value", o["default"])
             override = "release_value" if release else "first_run_value"

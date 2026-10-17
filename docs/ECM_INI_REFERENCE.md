@@ -133,11 +133,10 @@ assignment; full copies all eligible saves. Startup always performs a full synch
 p95_worktodo_path=<path>; default=""; empty=off
 ```
 
-Path to Prime95 worktodo.txt. Stage1 appends generated ECMSTAGE2 assignments to worktodo.add in the<br>
-same directory for Prime95 to import. Empty disables handoff. Prime95 must also be able to access<br>
-the save files.<br>
-指定 Prime95 的 worktodo.txt 路径。启用后，将 Stage1 生成的 ECMSTAGE2 任务追加到同目录的<br>
-worktodo.add，由 Prime95 自行导入；留空关闭交接。save 文件本身还需能被 Prime95 访问。
+Prime95 worktodo path for supported Montgomery Stage1 handoff. Edwards and GPU PARAM2 ignore this<br>
+path and keep saves local; they do not access Prime95 transfer files.<br>
+用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，<br>
+存档保留在本地，不访问 Prime95 转移文件。
 
 ### p95_add_workers
 
@@ -473,6 +472,47 @@ OpenCL special-multiplication kernel ID or alias. Empty or auto lets the backend
 selection is normally suitable. CUDA ignores this key.<br>
 指定 OpenCL 特殊乘法内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
 
+### stage1_submission_file
+
+```text
+stage1_submission_file=<path>; default=results.json.txt; empty=invalid; path_base=ini_dir; worker(N>1)=_N
+```
+
+Submission JSON lines for Stage1 factors only. No-factor work stays in the internal JSONL and save;<br>
+an all-NF batch creates an empty owned submission file.<br>
+仅输出 Stage1 找到因子的提交 JSON 行；无因子工作仅写内部 JSONL 与 save。整批 NF 时生成有归属账本的空<br>
+提交文件。
+
+### stage1_results_file
+
+```text
+stage1_results_file=<path>; default=stage1_results.jsonl; empty=invalid; path_base=ini_dir; worker(N>1)=_N
+```
+
+Canonical internal per-curve Stage1 JSONL with CRC32 and execution metadata, separate from<br>
+submission output.<br>
+统一格式的逐曲线 Stage1 内部 JSONL，包含 CRC32 与执行元数据，与提交文件分开。
+
+### user
+
+```text
+user=<local-user-id>; default=""; empty=omit
+```
+
+Optional local result user identity for Stage1 and Stage2. Never put real account values in<br>
+committed templates or fixtures.<br>
+Stage1与Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。
+
+### computer
+
+```text
+computer=<local-computer-name>; default=""; empty=omit
+```
+
+Optional local computer name in result output. Keep configured values and generated results outside<br>
+public Git commits.<br>
+结果输出的可选本地计算机名；实际配置值及生成结果不得进入公共Git提交。
+
 ## Stage2 — global or [Worker #N] / 全局或 [Worker #N]
 
 ### user
@@ -481,9 +521,9 @@ selection is normally suitable. CUDA ignores this key.<br>
 user=<local-user-id>; default=""; empty=omit
 ```
 
-Optional local result user identity for CPU and CUDA Stage2. Never put real account values in<br>
+Optional local result user identity for Stage1 and Stage2. Never put real account values in<br>
 committed templates or fixtures.<br>
-CPU与CUDA Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。
+Stage1与Stage2结果的可选本地用户标识；真实账号值不得写入提交的模板或测试样本。
 
 ### computer
 
@@ -1288,13 +1328,13 @@ or the full current Stage2 curve. Stage2 curve counters are not intermediate ari
 ### results_json
 
 ```text
-results_json=<path>; default=results.json.txt; empty=GUI_exe_dir/results.json.txt
+results_json=<path>; default=gui_results.jsonl; empty=GUI_exe_dir/gui_results.jsonl
 ```
 
-GUI factor-results JSONL file. Empty uses results.json.txt in the GUI executable directory. This<br>
-summary is separate from stage2_results_file, which provides Stage2 resume receipts.<br>
-指定 GUI 汇总命中结果的 JSONL 文件。留空使用 GUI 可执行文件目录下的 results.json.txt；这是 GUI 的结<br>
-果汇总文件，与 Stage2 用于续跑对账的 stage2_results_file 分开。
+GUI factor summary cache; empty uses gui_results.jsonl. CLI workers own the submission<br>
+results.json.txt and the canonical Stage1/Stage2 internal JSONL files.<br>
+GUI 因子摘要缓存，留空使用 gui_results.jsonl。提交 results.json.txt 与统一格式的 Stage1/Stage2 内部<br>
+JSONL 由 CLI Worker 写入。
 
 ### results_txt
 

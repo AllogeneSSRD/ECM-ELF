@@ -6,9 +6,9 @@
  *   * INTERNAL format.  Only this program writes and reads it; the artifact that
  *     has to interoperate with gmp-ecm / Prime95 stays the .save file produced
  *     at the END of stage 1, which this module does not touch at all.
- *   * One text file per curve:  <dir>/<stem>_c0000017.ckpt , where <stem> is the
- *     .save stem (m3001_1e6).  The Edwards path uses the same <tmp_dir> idea with
- *     a per-curve file, so the two CPU methods behave alike for the queue manager.
+ *   * One text record per curve inside the process-owned batch container.
+ *     The standalone codec API can also read/write an independent file, for
+ *     focused codec tests; the Stage1 driver never creates per-curve files.
  *   * Text rather than binary because it is written by several worker threads at
  *     unpredictable moments (interval timer, Ctrl+C) and it is the artifact a human
  *     stares at after a crash: key=value lines stay readable and greppable.  A
@@ -63,8 +63,8 @@ void mont_ckpt_clear(mont_ckpt_t *ck);
    sbits, field token).  Callers only have to add status/bitnum/payload. */
 void mont_ckpt_ident(mont_ckpt_t *ck, uint32_t curve, uint64_t sigma, double B1,
                      int torsion, size_t sbits, const char *field);
-/* <stem>_c<curve, 7 digits>.ckpt -- one name per curve, so a checkpoint write
-   never races with another worker (a curve belongs to exactly one batch). */
+/* Active batch: address its curve record. Without a batch scope, use the
+   standalone codec's <stem>_c<curve, 7 digits>.ckpt fallback. */
 std::string mont_ckpt_path(const std::string &stem, uint32_t curve);
 
 /* 0 on success. A complete temporary file replaces the primary after backups

@@ -5,6 +5,8 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <set>
+#include <sstream>
 
 namespace ecm_edwards {
 inline std::string hex(const mpz_t x) {
@@ -31,12 +33,17 @@ inline bool publish_save(const std::string &path,const std::string &lines,bool a
     std::error_code error;
     const bool exists=std::filesystem::exists(path,error);
     if(error)return false;
+    std::set<std::string> seen;
+    const auto key=[](const std::string &line){return line.substr(0,line.find("; PROGRAM="));};
     if(append && exists){
         std::ifstream old(path,std::ios::binary);if(!old)return false;
-        if(old.peek()!=std::char_traits<char>::eof())out<<old.rdbuf();
+        std::string line;
+        while(std::getline(old,line)){if(!line.empty() && line.back()=='\r')line.pop_back();out<<line<<'\n';seen.insert(key(line));}
         if(old.bad())return false;
     }
-    out<<lines;out.close();return bool(out) && ecm_stage1_commit_checkpoint(path,temp);
+    std::istringstream incoming(lines);std::string line;
+    while(std::getline(incoming,line))if(seen.insert(key(line)).second)out<<line<<'\n';
+    out.close();return bool(out) && ecm_stage1_commit_checkpoint(path,temp);
 }
 // Validate raw extended coordinates; reducing corrupt input would hide errors.
 inline bool point_valid(const mpz_t n,const mpz_t d,mpz_t *p) {

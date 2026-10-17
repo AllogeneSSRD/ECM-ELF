@@ -77,8 +77,7 @@ tools/gen/__pycache__/
 /third_party/gmp-zen3/
 /third_party/zen3_runtime/
 
-# Local Edwards stage-1 saves written by ecm.exe (e{n:07d}_c{curve:06d}[.tmp]);
-# they are consumed by ecm_p95feeder. See docs/usage/STAGE1.md.
+# Local computation artifacts and fallback feeder files.
 /e[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
 /saves/
 /feeder.ini
@@ -166,3 +165,7 @@ AGENTS.md
 *.ini
 *.jsonl*
 *.json.txt*
+*.json_*.txt*
+*.ckpt*
+*.ecm-ledger*
+ecm_stage1_*identity.txt

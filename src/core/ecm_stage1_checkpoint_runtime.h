@@ -27,3 +27,16 @@ void ecm_stage1_remove_checkpoints(const std::string &path);
 // without the trailer remain readable; every newly written file has one.
 uint64_t ecm_stage1_checksum(uint64_t sum, const void *data, size_t size);
 constexpr uint64_t ECM_STAGE1_CHECKSUM_SEED = 1469598103934665603ull;
+
+// One physical batch file. CPU curve codecs address records inside it; GPU
+// codecs retain their native batch payload. The driver owns this scope.
+void ecm_stage1_set_checkpoint_path(const std::string &path);
+const std::string &ecm_stage1_checkpoint_path();
+void ecm_stage1_begin_batch(const std::string &identity, uint32_t curves,
+                              bool fixed, uint64_t first_sigma);
+void ecm_stage1_end_batch(bool completed);
+std::string ecm_stage1_curve_record(uint32_t curve);
+bool ecm_stage1_is_curve_record(const std::string &path);
+uint64_t ecm_stage1_batch_sigma(uint32_t curve, uint64_t proposed);
+bool ecm_stage1_read_blob(const std::string &path, std::string &bytes);
+bool ecm_stage1_write_blob(const std::string &path, const std::string &bytes);

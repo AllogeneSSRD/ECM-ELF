@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 
 /* FNV-1a 64 over the bytes written so far.  The reader recomputes it over every
    byte preceding the CHECKSUM line, so a truncated or half-flushed file is
@@ -48,6 +49,7 @@ void mont_ckpt_ident(mont_ckpt_t *ck, uint32_t curve, uint64_t sigma, double B1,
 
 std::string mont_ckpt_path(const std::string &stem, uint32_t curve)
 {
+    if (!ecm_stage1_checkpoint_path().empty()) return ecm_stage1_curve_record(curve);
     char buf[64];
     snprintf(buf, sizeof(buf), "_c%07u.ckpt", curve);
     return stem + buf;
@@ -56,36 +58,35 @@ std::string mont_ckpt_path(const std::string &stem, uint32_t curve)
 /* --------------------------------------------------------------------------
  * writer
  * ------------------------------------------------------------------------ */
-static void w_line(FILE *f, uint64_t *sum, const char *s)
+static void w_line(std::ostream &f, uint64_t *sum, const char *s)
 {
     /* The reader accumulates every byte it consumed, newline included, so the
        newline has to be part of the writer's sum as well. */
     *sum = ck_fnv(*sum, s, strlen(s));
     *sum = ck_fnv(*sum, "\n", 1);
-    fputs(s, f);
-    fputc('\n', f);
+    f << s << '\n';
 }
 
-static void w_key(FILE *f, uint64_t *sum, const char *key, const char *val)
+static void w_key(std::ostream &f, uint64_t *sum, const char *key, const char *val)
 {
     char buf[128];
     snprintf(buf, sizeof(buf), "%s=", key);
     *sum = ck_fnv(*sum, buf, strlen(buf));
-    fputs(buf, f);
+    f << buf;
     *sum = ck_fnv(*sum, val, strlen(val));
-    fputs(val, f);
+    f << val;
     *sum = ck_fnv(*sum, "\n", 1);
-    fputc('\n', f);
+    f << '\n';
 }
 
-static void w_u64(FILE *f, uint64_t *sum, const char *key, unsigned long long v)
+static void w_u64(std::ostream &f, uint64_t *sum, const char *key, unsigned long long v)
 {
     char buf[32];
     snprintf(buf, sizeof(buf), "%llu", v);
     w_key(f, sum, key, buf);
 }
 
-static void w_mpz(FILE *f, uint64_t *sum, const char *key, const mpz_t z)
+static void w_mpz(std::ostream &f, uint64_t *sum, const char *key, const mpz_t z)
 {
     char *s = mpz_get_str(NULL, 16, z);   /* NULL: let GMP allocate (may be huge) */
     w_key(f, sum, key, s ? s : "0");
@@ -94,9 +95,7 @@ static void w_mpz(FILE *f, uint64_t *sum, const char *key, const mpz_t z)
 
 int mont_ckpt_write(const std::string &path, const mpz_t N, const mont_ckpt_t *ck)
 {
-    const std::string temp = ecm_stage1_checkpoint_temp_path(path);
-    FILE *f = fopen(temp.c_str(), "wb");
-    if (!f) return -1;
+    std::ostringstream f;
     uint64_t sum = CK_FNV_OFFSET;
 
     char head[48];
@@ -130,12 +129,10 @@ int mont_ckpt_write(const std::string &path, const mpz_t N, const mont_ckpt_t *c
     {
         char buf[32];
         snprintf(buf, sizeof(buf), "CHECKSUM=%016llx", (unsigned long long)sum);
-        fputs(buf, f);            /* not part of the checksum itself */
-        fputc('\n', f);
+        f << buf << '\n';        /* not part of the checksum itself */
     }
-    fputs("END\n", f);
-    const int rc = (fclose(f) == 0) ? 0 : -1;
-    return rc == 0 && ecm_stage1_commit_checkpoint(path, temp) ? 0 : -1;
+    f << "END\n";
+    return f && ecm_stage1_write_blob(path,f.str()) ? 0 : -1;
 }
 
 /* --------------------------------------------------------------------------
@@ -150,8 +147,9 @@ static void set_hex(mpz_t z, const std::string &v)
 static int mont_ckpt_read_one(const std::string &path, const mpz_t N, double B1, int torsion,
                    size_t sbits, mont_ckpt_t *ck, std::string *why)
 {
-    std::ifstream in(path.c_str(), std::ios::in | std::ios::binary);
-    if (!in) return 0;
+    std::string bytes;
+    if (!ecm_stage1_read_blob(path,bytes)) return 0;
+    std::istringstream in(bytes);
 
     uint64_t sum = CK_FNV_OFFSET;
     bool seen_sum = false, sum_ok = false, saw_end = false, saw_magic = false;

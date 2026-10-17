@@ -123,68 +123,19 @@ bool opencl_ecm_ensure_parent_dir(const char *filepath) {
 }
 
 const char *opencl_ecm_checkpoint_filename(const mpz_t N) {
-    static char filename[1024];
-    const size_t nbits = mpz_sizeinbase(N, 2);
-    char *N_str = mpz_get_str(nullptr, 16, N);
-    if (!N_str) {
-        const std::string resolved =
-            opencl_ecm_resolve_data_path_buf(".ecm_ckpt_alloc_fail.dat");
-        std::snprintf(filename, sizeof(filename), "%s", resolved.c_str());
-        return filename;
-    }
-    const size_t len = strlen(N_str);
-    char first_hex[16] = {0};
-    char last_hex[16] = {0};
-    // Use memcpy to avoid MSVC Debug CRT strncpy /GS interaction with
-    // GMP-allocated N_str (GMP uses its own allocator; CRT secure-strncpy
-    // may probe the buffer length through CRT heap metadata and crash).
-    // This fix is not needed for Release CRT (/MD) builds.
-    strncpy(first_hex, N_str, (len >= 8u) ? 8u : len);
-    // std::memcpy(first_hex, N_str, (len >= 8u) ? 8u : len);
-    if (len > 8u) {
-        strncpy(last_hex, N_str + len - 8u, 8u);
-        // std::memcpy(last_hex, N_str + len - 8u, 8u);
-    }
-
-    char basename[512];
-    if (len > 8u && last_hex[0] != '\0') {
-        std::snprintf(basename, sizeof(basename), ".ecm_ckpt_%zu_%s_%s.dat", nbits, first_hex,
-                      last_hex);
-    } else {
-        std::snprintf(basename, sizeof(basename), ".ecm_ckpt_%zu_%s.dat", nbits, first_hex);
-    }
-    free(N_str);
-
-    const std::string resolved = opencl_ecm_resolve_data_path_buf(basename);
-    std::snprintf(filename, sizeof(filename), "%s", resolved.c_str());
-    return filename;
+    static std::string name;
+    name=ecm_stage1_checkpoint_path().empty()?opencl_ecm_resolve_data_path_buf(".mont_stage1.ckpt"):ecm_stage1_curve_record(0);
+    (void)N;return name.c_str();
 }
 
 int opencl_ecm_checkpoint_save(const char *filename, const opencl_ecm_checkpoint_header_t *header,
                                const uint32_t *data, size_t data_size) {
-    if (!opencl_ecm_ensure_parent_dir(filename)) {
-        ecm_ts_fprintf(stderr, "Warning: Could not create directory for checkpoint '%s'\n",
-                       filename);
-        return ECM_ERROR;
-    }
-    const std::string temp = ecm_stage1_checkpoint_temp_path(filename);
-    FILE *f = fopen(temp.c_str(), "wb");
-    if (!f) {
-        ecm_ts_fprintf(stderr, "Warning: Could not open checkpoint file '%s' for writing (%s)\n",
-                       filename, std::strerror(errno));
-        return ECM_ERROR;
-    }
-    uint64_t sum = ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED, header, sizeof(*header));
-    sum = ecm_stage1_checksum(sum, data, data_size);
-    const bool written = fwrite(header, sizeof(*header), 1, f) == 1 &&
-                         fwrite(data, 1, data_size, f) == data_size &&
-                         fwrite(&sum, sizeof(sum), 1, f) == 1;
-    const bool closed = fclose(f) == 0;
-    if (!written || !closed || !ecm_stage1_commit_checkpoint(filename, temp)) {
-        ecm_ts_fprintf(stderr, "Error writing or rotating checkpoint '%s'\n", filename);
-        remove(temp.c_str());
-        return ECM_ERROR;
-    }
+    uint64_t sum=ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,header,sizeof(*header));
+    sum=ecm_stage1_checksum(sum,data,data_size);
+    std::string bytes(reinterpret_cast<const char *>(header),sizeof(*header));
+    bytes.append(reinterpret_cast<const char *>(data),data_size);
+    bytes.append(reinterpret_cast<const char *>(&sum),sizeof(sum));
+    if(!ecm_stage1_write_blob(filename,bytes))return ECM_ERROR;
     ecm_ts_fprintf(stderr, "Checkpoint saved: %s s_partial=%llu/%llu (%.1f%%)\n", filename,
                    (unsigned long long)header->s_partial,
                    (unsigned long long)header->s_num_bits,
@@ -194,66 +145,17 @@ int opencl_ecm_checkpoint_save(const char *filename, const opencl_ecm_checkpoint
 
 int opencl_ecm_checkpoint_load(const char *filename, opencl_ecm_checkpoint_header_t *header,
                                uint32_t **data_ptr, size_t *data_size_ptr) {
-    FILE *f = fopen(filename, "rb");
-    if (!f) {
-        return -1;
-    }
+    std::string bytes;if(!ecm_stage1_read_blob(filename,bytes))return -1;
     opencl_ecm_checkpoint_header_t temp_header{};
-    if (fread(&temp_header, sizeof(opencl_ecm_checkpoint_header_t), 1, f) != 1) {
-        ecm_ts_fprintf(stderr, "Warning: Could not read checkpoint header\n");
-        fclose(f);
-        return -1;
-    }
-    if (temp_header.magic != OPENCL_ECM_CHECKPOINT_MAGIC) {
-        ecm_ts_fprintf(stderr, "Warning: Checkpoint file has invalid magic number\n");
-        fclose(f);
-        return -1;
-    }
-    if (temp_header.version != OPENCL_ECM_CHECKPOINT_VERSION) {
-        ecm_ts_fprintf(stderr, "Warning: Checkpoint version mismatch (expected %d, got %u)\n",
-                       OPENCL_ECM_CHECKPOINT_VERSION, temp_header.version);
-        fclose(f);
-        return -1;
-    }
-    if (temp_header.data_size == 0u) {
-        ecm_ts_fprintf(stderr, "Warning: Checkpoint data_size is zero\n");
-        fclose(f);
-        return -1;
-    }
-    std::error_code size_error;
-    const auto file_bytes = std::filesystem::file_size(filename, size_error);
-    const uint64_t payload_end = sizeof(temp_header) + temp_header.data_size;
-    if (size_error || payload_end < temp_header.data_size ||
-        (file_bytes != payload_end && file_bytes != payload_end + sizeof(uint64_t))) {
-        ecm_ts_fprintf(stderr, "Warning: Checkpoint length mismatch\n");
-        fclose(f);
-        return -1;
-    }
-    uint32_t *data = (uint32_t *)malloc((size_t)temp_header.data_size);
-    if (!data) {
-        ecm_ts_fprintf(stderr, "Error: Could not allocate memory for checkpoint data\n");
-        fclose(f);
-        return -1;
-    }
-    if (fread(data, 1, (size_t)temp_header.data_size, f) != (size_t)temp_header.data_size) {
-        ecm_ts_fprintf(stderr, "Warning: Could not read checkpoint data completely\n");
-        free(data);
-        fclose(f);
-        return -1;
-    }
-    if (file_bytes == payload_end + sizeof(uint64_t)) {
-        uint64_t stored = 0;
-        const uint64_t actual = ecm_stage1_checksum(
-            ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED, &temp_header,
-                                sizeof(temp_header)), data, (size_t)temp_header.data_size);
-        if (fread(&stored, sizeof(stored), 1, f) != 1 || stored != actual) {
-            ecm_ts_fprintf(stderr, "Warning: Checkpoint checksum mismatch\n");
-            free(data);
-            fclose(f);
-            return -1;
-        }
-    }
-    fclose(f);
+    if(bytes.size()<sizeof(temp_header)+sizeof(uint64_t))return -1;
+    memcpy(&temp_header,bytes.data(),sizeof(temp_header));
+    if(temp_header.magic!=OPENCL_ECM_CHECKPOINT_MAGIC || temp_header.version!=OPENCL_ECM_CHECKPOINT_VERSION || !temp_header.data_size ||
+       temp_header.data_size>bytes.size()-sizeof(temp_header)-sizeof(uint64_t) ||
+       bytes.size()!=sizeof(temp_header)+temp_header.data_size+sizeof(uint64_t))return -1;
+    uint64_t sum;memcpy(&sum,bytes.data()+bytes.size()-sizeof(sum),sizeof(sum));
+    if(sum!=ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,bytes.data(),bytes.size()-sizeof(sum)))return -1;
+    auto *data=static_cast<uint32_t *>(malloc(static_cast<size_t>(temp_header.data_size)));if(!data)return -1;
+    memcpy(data,bytes.data()+sizeof(temp_header),static_cast<size_t>(temp_header.data_size));
     *header = temp_header;
     *data_ptr = data;
     *data_size_ptr = (size_t)temp_header.data_size;

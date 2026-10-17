@@ -850,40 +850,9 @@ typedef struct {
  */
 static
 char* get_checkpoint_filename(const mpz_t N) {
-  static char filename[512];
-  
-  size_t nbits = mpz_sizeinbase(N, 2);
-  
-  // Get first and last few chars of N in hex for unique identifier.
-  // Use GMP-allocated buffer to avoid stack overflow for large N.
-  char *N_str = mpz_get_str(NULL, 16, N);
-  if (N_str == NULL) {
-    snprintf(filename, sizeof(filename), ".ecm_ckpt_%zu_alloc_fail.dat", nbits);
-    return filename;
-  }
-
-  size_t len = strlen(N_str);
-  char first_hex[16] = {0};
-  char last_hex[16] = {0};
-  
-  // First 8 chars (or less if N is small)
-  strncpy(first_hex, N_str, (len >= 8) ? 8 : len);
-  // Last 8 chars
-  if (len > 8) {
-    strncpy(last_hex, N_str + len - 8, 8);
-  }
-  
-  // Format: .ecm_ckpt_<nbits>_<first8>_<last8>.dat
-  // Example: .ecm_ckpt_127_7fffffff_ffffffff.dat (much more readable than full hex)
-  if (len > 8 && last_hex[0] != '\0') {
-    snprintf(filename, sizeof(filename), ".ecm_ckpt_%zu_%s_%s.dat", nbits, first_hex, last_hex);
-  } else {
-    snprintf(filename, sizeof(filename), ".ecm_ckpt_%zu_%s.dat", nbits, first_hex);
-  }
-
-  free(N_str);
-  
-  return filename;
+  static char filename[1024];
+  const auto path=ecm_stage1_checkpoint_path().empty()?std::string(".mont_stage1.ckpt"):ecm_stage1_curve_record(0);
+  snprintf(filename,sizeof(filename),"%s",path.c_str());(void)N;return filename;
 }
 
 /**
@@ -894,24 +863,12 @@ int save_checkpoint(const char *filename,
                     const checkpoint_header_t *header,
                     const uint32_t *data, 
                     size_t data_size) {
-  const std::string temp = ecm_stage1_checkpoint_temp_path(filename);
-  FILE *f = fopen(temp.c_str(), "wb");
-  if (!f) {
-    outputf(OUTPUT_ALWAYS, "Warning: Could not open checkpoint file '%s' for writing\n", filename);
-    return ECM_ERROR;
-  }
-  
-  uint64_t sum = ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED, header, sizeof(*header));
-  sum = ecm_stage1_checksum(sum, data, data_size);
-  const bool written = fwrite(header, sizeof(*header), 1, f) == 1 &&
-                       fwrite(data, 1, data_size, f) == data_size &&
-                       fwrite(&sum, sizeof(sum), 1, f) == 1;
-  const bool closed = fclose(f) == 0;
-  if (!written || !closed || !ecm_stage1_commit_checkpoint(filename, temp)) {
-    outputf(OUTPUT_ERROR, "Error writing or rotating checkpoint '%s'\n", filename);
-    remove(temp.c_str());
-    return ECM_ERROR;
-  }
+  uint64_t sum=ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,header,sizeof(*header));
+  sum=ecm_stage1_checksum(sum,data,data_size);
+  std::string bytes(reinterpret_cast<const char *>(header),sizeof(*header));
+  bytes.append(reinterpret_cast<const char *>(data),data_size);
+  bytes.append(reinterpret_cast<const char *>(&sum),sizeof(sum));
+  if(!ecm_stage1_write_blob(filename,bytes))return ECM_ERROR;
   outputf(OUTPUT_VERBOSE, "Checkpoint saved: s_partial=%lu/%lu (%.1f%%)\n", 
           header->s_partial, header->s_num_bits, 
           100.0 * header->s_partial / header->s_num_bits);
@@ -927,73 +884,17 @@ int load_checkpoint(const char *filename,
                     checkpoint_header_t *header,
                     uint32_t **data_ptr,
                     size_t *data_size_ptr) {
-  FILE *f = fopen(filename, "rb");
-  if (!f) {
-    // File doesn't exist - this is normal on first run
-    return -1;
-  }
-  
-  // Read and validate header
+  std::string bytes;if(!ecm_stage1_read_blob(filename,bytes))return -1;
   checkpoint_header_t temp_header;
-  if (fread(&temp_header, sizeof(checkpoint_header_t), 1, f) != 1) {
-    outputf(OUTPUT_ALWAYS, "Warning: Could not read checkpoint header\n");
-    fclose(f);
-    return -1;
-  }
-  
-  if (temp_header.magic != CHECKPOINT_MAGIC) {
-    outputf(OUTPUT_ALWAYS, "Warning: Checkpoint file has invalid magic number\n");
-    fclose(f);
-    return -1;
-  }
-  
-  if (temp_header.version != CHECKPOINT_VERSION) {
-    outputf(OUTPUT_ALWAYS, "Warning: Checkpoint version mismatch (expected %d, got %d)\n", 
-            CHECKPOINT_VERSION, temp_header.version);
-    fclose(f);
-    return -1;
-  }
-  std::error_code size_error;
-  const auto file_bytes = std::filesystem::file_size(filename, size_error);
-  const uint64_t payload_end = (uint64_t)sizeof(temp_header) + (uint64_t)temp_header.data_size;
-  if (size_error || temp_header.data_size == 0 ||
-      payload_end < temp_header.data_size ||
-      (file_bytes != payload_end && file_bytes != payload_end + sizeof(uint64_t))) {
-    outputf(OUTPUT_ALWAYS, "Warning: Checkpoint length mismatch\n");
-    fclose(f);
-    return -1;
-  }
-  
-  // Allocate memory for data
-  uint32_t *data = (uint32_t*) malloc(temp_header.data_size);
-  if (!data) {
-    outputf(OUTPUT_ERROR, "Error: Could not allocate memory for checkpoint data\n");
-    fclose(f);
-    return -1;
-  }
-  
-  // Read data
-  if (fread(data, 1, temp_header.data_size, f) != temp_header.data_size) {
-    outputf(OUTPUT_ALWAYS, "Warning: Could not read checkpoint data completely\n");
-    free(data);
-    fclose(f);
-    return -1;
-  }
-  if (file_bytes == payload_end + sizeof(uint64_t)) {
-    uint64_t stored = 0;
-    const uint64_t actual = ecm_stage1_checksum(
-        ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED, &temp_header, sizeof(temp_header)),
-        data, temp_header.data_size);
-    if (fread(&stored, sizeof(stored), 1, f) != 1 || stored != actual) {
-      outputf(OUTPUT_ALWAYS, "Warning: Checkpoint checksum mismatch\n");
-      free(data);
-      fclose(f);
-      return -1;
-    }
-  }
-  
-  fclose(f);
-  
+  if(bytes.size()<sizeof(temp_header)+sizeof(uint64_t))return -1;
+  memcpy(&temp_header,bytes.data(),sizeof(temp_header));
+  if(temp_header.magic!=CHECKPOINT_MAGIC || temp_header.version!=CHECKPOINT_VERSION || !temp_header.data_size ||
+     temp_header.data_size>bytes.size()-sizeof(temp_header)-sizeof(uint64_t) ||
+     bytes.size()!=sizeof(temp_header)+temp_header.data_size+sizeof(uint64_t))return -1;
+  uint64_t sum;memcpy(&sum,bytes.data()+bytes.size()-sizeof(sum),sizeof(sum));
+  if(sum!=ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,bytes.data(),bytes.size()-sizeof(sum)))return -1;
+  auto *data=static_cast<uint32_t *>(malloc(temp_header.data_size));if(!data)return -1;
+  memcpy(data,bytes.data()+sizeof(temp_header),temp_header.data_size);
   *header = temp_header;
   *data_ptr = data;
   *data_size_ptr = temp_header.data_size;
@@ -1241,7 +1142,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       outputf(OUTPUT_ERROR, "GPU: param3 needs sigma + curves <= 2^32\n");
       return ECM_ERROR;
   }
-  const uint32_t sigma32 = (uint32_t)(sigma64 & 0xFFFFFFFFull);
+  uint32_t sigma32 = (uint32_t)(sigma64 & 0xFFFFFFFFull);
   if (param0) {
       /* OUTPUT_ALWAYS: which curve family is being run is as important to see as
          "Using B1=..." -- it decides what the save file can be handed to. */
@@ -1345,7 +1246,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   for (const std::string &candidate : ecm_stage1_checkpoint_candidates(ckpt_filename)) {
     if (load_checkpoint(candidate.c_str(), &ckpt_header, &ckpt_data, &ckpt_data_size) !=
         ECM_NO_FACTOR_FOUND) continue;
-    const uint32_t wpc_want = param0 ? 7u : 5u;
+    const uint32_t wpc_want = suyama_layout ? 7u : 5u;
     const uint32_t param_want = param0 ? 0u : (param2 ? 2u : 3u);
     const uint64_t stride = (uint64_t)curves * (uint64_t)(ckpt_header.BITS / 32u) *
                             sizeof(uint32_t);
@@ -1366,6 +1267,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     ckpt_loaded = 1;
     if (candidate != ckpt_filename) ecm_stage1_mark_bad_primary(ckpt_filename);
     sigma64 = ckpt_header.sigma;
+    sigma32 = static_cast<uint32_t>(sigma64);
     BITS = ckpt_header.BITS;
     TPI = ckpt_header.TPI;
     data_size = ckpt_data_size;
@@ -1377,6 +1279,11 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   
   // If no checkpoint, proceed with normal initialization
   if (!ckpt_loaded) {
+  std::string existing_checkpoint;
+  if (!ecm_stage1_checkpoint_path().empty() && ecm_stage1_read_blob(ckpt_filename,existing_checkpoint)) {
+    outputf(OUTPUT_ERROR,"GPU: invalid or incompatible batch checkpoint payload\n");
+    return ECM_ERROR;
+  }
   /* param0 uses the same container grid as param3 (see cgbn_stage1_kernels_suyama.cu):
      TPI=4 for <=512, TPI=8 up to 2048, TPI=16 2560..8192, TPI=32 9216..16384, all on
      the 512-bit grid above 2560.  In a dev build only the small tiers exist, and the
@@ -1780,7 +1687,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     
     // ========== CHECKPOINT SAVING ==========
     const bool stop_now = ecm_stage1_stop_requested();
-    if (stop_now || (checkpoint_interval_ms > 0 &&
+    if (stop_now || s_partial>=s_num_bits || (checkpoint_interval_ms > 0 &&
       (*gputime - last_checkpoint_time) >= checkpoint_interval_ms)) {
       // Copy data back from GPU temporarily for checkpoint
       CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));

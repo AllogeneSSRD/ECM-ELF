@@ -8,7 +8,7 @@
     curves, device 0 -- reliable: 5..11 of 16 curves hit the 31-bit factor 1943118631)
     and checks the promised behaviour:
 
-      * results.json.txt is append-only JSONL: one object per hit, prime95-shaped field
+      * gui_results.jsonl is append-only JSONL: one object per hit, summary field
         names (status/worktype/factors/b1/sigma/...), every factor really dividing
         2^677-1;
       * results.txt merges: ONE line per distinct factor, carrying the curve list, the
@@ -99,7 +99,7 @@ $ini = Join-Path $Sandbox 'ecm.ini'
 $finished = Join-Path $Sandbox 'finished.txt'
 $saves = Join-Path $Sandbox 'saves'
 $logFile = Join-Path $Sandbox 'screen_1.log'
-$resultsJson = Join-Path $Sandbox 'results.json.txt'
+$resultsJson = Join-Path $Sandbox 'gui_results.jsonl'
 $resultsTxt = Join-Path $Sandbox 'results.txt'
 $trace = Join-Path (Split-Path -Parent $Exe) 'ecm_gui_trace.log'
 
@@ -187,7 +187,7 @@ $txt1 = Read-TextShared $resultsTxt
 # Wrap every call site in @(...) to keep indexing on an array.
 $objs1 = @(Get-JsonlObjects $json1)
 $lines1 = @(Get-MergedLines $txt1)
-Check "results.json.txt exists with hit objects" ($objs1.Count -ge 1) ("objects=" + $objs1.Count)
+Check "gui_results.jsonl exists with hit objects" ($objs1.Count -ge 1) ("objects=" + $objs1.Count)
 Check "results.txt exists with merged lines" ($lines1.Count -ge 1) ("lines=" + $lines1.Count)
 
 $N = [System.Numerics.BigInteger]::Pow(2, $Exp) - 1

@@ -22,6 +22,11 @@ inline std::string quoted(const std::string &s) {
 inline std::string decimal(const mpz_t n) {
     std::vector<char> b(mpz_sizeinbase(n,10)+3);mpz_get_str(b.data(),10,n);return b.data();
 }
+inline std::string normalized_integer(const std::string &text) {
+    ecm_edwards::Integer v;
+    if(mpz_set_str(v.v,text.c_str(),10))throw std::runtime_error("invalid decimal metadata");
+    return decimal(v.v);
+}
 inline std::string utc_timestamp() {
     const auto now=std::time(nullptr);std::tm t{};
 #ifdef _WIN32
@@ -39,6 +44,9 @@ struct Submission {
     uint64_t exponent=0,sigma=0,b1=0,b2=0,curves=1;
     uint64_t d=0,poly_size=0,stage2_fft_length=0; // Actual completed Stage2 geometry; zero means unavailable.
     int stage=0;bool edwards=true;
+    int param=0;
+    bool stage1_only=false,kbnc=false;
+    std::string k="1";uint32_t b=2;int32_t c=-1;
     std::vector<std::string> factors,known;
     std::string user,computer,aid,when;
 };
@@ -46,6 +54,20 @@ struct Submission {
 // inputs are inferred; a cofactor needs its original exponent and known factors.
 inline uint64_t target_exponent(const Submission &r,const mpz_t n) {
     ecm_edwards::Integer m,f;
+    if(r.kbnc && (r.k!="1" || r.b!=2 || r.c!=-1)) {
+        if(!r.exponent || r.exponent>1000000000 || r.b<2 || mpz_set_str(f.v,r.k.c_str(),10) || mpz_sgn(f.v)<=0)
+            throw std::runtime_error("invalid k*b^n+c submission target");
+        mpz_ui_pow_ui(m.v,r.b,static_cast<unsigned long>(r.exponent));mpz_mul(m.v,m.v,f.v);
+        if(r.c<0)mpz_sub_ui(m.v,m.v,static_cast<unsigned long>(-static_cast<int64_t>(r.c)));
+        else mpz_add_ui(m.v,m.v,r.c);
+        for(const auto &text:r.known) {
+            if(text.empty() || text.find_first_not_of("0123456789")!=text.npos || mpz_set_str(f.v,text.c_str(),10) ||
+               mpz_cmp_ui(f.v,1)<=0 || !mpz_divisible_p(m.v,f.v))throw std::runtime_error("invalid submission known factor");
+            mpz_divexact(m.v,m.v,f.v);
+        }
+        if(mpz_cmp(m.v,n))throw std::runtime_error("submission target differs from saved modulus");
+        return 0;
+    }
     if(!r.exponent) {
         if(!r.known.empty())throw std::runtime_error("known factors require the original Mersenne exponent");
         mpz_add_ui(m.v,n,1);
@@ -63,7 +85,8 @@ inline uint64_t target_exponent(const Submission &r,const mpz_t n) {
 }
 inline std::string submission_json(const Submission &r,const mpz_t n) {
     const bool hit=!r.factors.empty();
-    if(!r.curves || r.b1<2 || (!hit && (r.stage || r.b2<=r.b1)) || (hit && r.stage!=1 && r.stage!=2))
+    if(!r.curves || r.b1<2 || (!hit && (r.stage || (r.stage1_only?r.b2!=r.b1:r.b2<=r.b1))) || (hit && r.stage!=1 && r.stage!=2) ||
+       (r.stage1_only && (r.stage==2 || r.d || r.poly_size || r.stage2_fft_length)) || (!r.edwards && r.param!=0 && r.param!=2 && r.param!=3))
         throw std::runtime_error("inconsistent ECM submission result");
     if((r.d==0)!=(r.poly_size==0) || (r.d && (r.stage==1 || r.d<6 || r.d%2)))
         throw std::runtime_error("inconsistent Stage2 submission geometry");
@@ -78,8 +101,9 @@ inline std::string submission_json(const Submission &r,const mpz_t n) {
     // protocol reporting metadata, independent of the engine's actual transform.
     const auto fft=reference_fft(exponent?exponent:2*mpz_sizeinbase(n,2)+128);
     std::ostringstream out;out<<"{\"status\":"<<quoted(hit?"F":"NF");
-    if(exponent)out<<",\"exponent\":"<<exponent;
-    else out<<",\"N\":"<<decimal(n);
+    if(r.kbnc && !exponent)out<<",\"k\":"<<normalized_integer(r.k)<<",\"b\":"<<r.b<<",\"n\":"<<r.exponent<<",\"c\":"<<r.c;
+    else if(exponent)out<<",\"exponent\":"<<exponent;
+    else {const auto value=decimal(n);out<<",\"N\":"<<(value.size()>2000?quoted(value):value);}
     out<<",\"worktype\":\"ECM\"";
     if(hit){out<<",\"factors\":[";for(size_t i=0;i<r.factors.size();++i){if(i)out<<',';out<<quoted(r.factors[i]);}out<<']';}
     out<<",\"b1\":"<<r.b1;
@@ -87,17 +111,23 @@ inline std::string submission_json(const Submission &r,const mpz_t n) {
     if(r.d)out<<",\"d\":"<<r.d<<",\"poly-size\":"<<r.poly_size;
     if(r.stage2_fft_length)out<<",\"stage2-fft-length\":"<<r.stage2_fft_length;
     if(r.edwards){out<<",\"Edwards\":{";if(hit)out<<"\"sigma\":"<<r.sigma;out<<'}';}
-    else if(hit)out<<",\"sigma\":"<<r.sigma;
+    else if(r.param==3){out<<",\"GMP-ECM-param3\":{";if(hit)out<<"\"sigma\":"<<r.sigma;out<<'}';}
+    else if(hit){out<<",\"sigma\":"<<r.sigma;if(r.param)out<<",\"param\":"<<r.param;}
     if(hit)out<<",\"stage\":"<<r.stage;
     out<<",\"curves\":"<<r.curves<<",\"fft-length\":"<<fft;
-    out<<",\"program\":{\"name\":"<<quoted(ecm_program::name)<<",\"version\":"<<quoted(ecm_program::version)<<",\"port\":4}"
-       <<",\"timestamp\":"<<quoted(r.when.empty()?utc_timestamp():r.when);
+    out<<",\"program\":{\"name\":"<<quoted(ecm_program::name)<<",\"version\":"<<quoted(ecm_program::version);
+#ifdef _WIN64
+    out<<",\"port\":4";
+#endif
+    out<<"},\"timestamp\":"<<quoted(r.when.empty()?utc_timestamp():r.when);
     if(!r.known.empty()){out<<",\"known-factors\":[";for(size_t i=0;i<r.known.size();++i){if(i)out<<',';out<<quoted(r.known[i]);}out<<']';}
     if(!r.user.empty())out<<",\"user\":"<<quoted(r.user);
     if(!r.computer.empty())out<<",\"computer\":"<<quoted(r.computer);
     if(!r.aid.empty())out<<",\"aid\":"<<quoted(r.aid);
     out<<'}';const auto line=out.str();
-    if(line.size()>=2000)throw std::runtime_error("ECM submission exceeds Prime95 JSON message capacity");
+    // An arbitrary long integer has no compact PrimeNet assignment identity.
+    // Keep its exact local export rather than preventing Stage1 computation.
+    if((exponent || r.kbnc) && line.size()>=2000)throw std::runtime_error("ECM submission exceeds Prime95 JSON message capacity");
     return line+'\n';
 }
 } // namespace ecm_results

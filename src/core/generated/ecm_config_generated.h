@@ -99,7 +99,7 @@ inline constexpr int gui_dock_layout_ver=0;
 inline constexpr char gui_start_tab[]="workers";
 inline constexpr char gui_exit_confirm[]="ask";
 inline constexpr int64_t gui_graceful_stop_ms=300000;
-inline constexpr char gui_results_json[]="results.json.txt";
+inline constexpr char gui_results_json[]="gui_results.jsonl";
 inline constexpr char gui_results_txt[]="results.txt";
 inline constexpr char worker_stage[]="auto";
 inline constexpr char worker_name[]="Worker #{N}";
@@ -116,6 +116,10 @@ inline constexpr char stage2_stage1_cost_csv[]="";
 inline constexpr uint64_t stage2_stage1_cost_mhz=0;
 inline constexpr uint64_t stage2_stage2_target_factor_bits=0;
 inline constexpr char stage2_stage2_tune_condition_tag[]="";
+inline constexpr char stage1_stage1_submission_file[]="results.json.txt";
+inline constexpr char stage1_stage1_results_file[]="stage1_results.jsonl";
+inline constexpr char stage1_user[]="";
+inline constexpr char stage1_computer[]="";
 } // namespace defaults
 namespace limits {
 inline constexpr int64_t stage2_stage2_device_minimum=0;
@@ -197,7 +201,13 @@ struct Stage1Values {
     std::string kernel_add="";
     std::string kernel_sub="";
     std::string kernel_special_mult="";
+    std::string submission="results.json.txt";
+    std::string results="stage1_results.jsonl";
+    std::string result_user="";
+    std::string result_computer="";
     bool log_file_explicit=false;
+    bool has_submission=false;
+    bool has_results=false;
 };
 inline const Binding<Stage1Values> stage1_bindings[]={
     {"worktodo",[](Stage1Values&c,const std::string&v){legacy_assign(c.worktodo,v);},false,nullptr},
@@ -237,6 +247,10 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"kernel_add",[](Stage1Values&c,const std::string&v){legacy_assign(c.kernel_add,v);},false,nullptr},
     {"kernel_sub",[](Stage1Values&c,const std::string&v){legacy_assign(c.kernel_sub,v);},false,nullptr},
     {"kernel_special_mult",[](Stage1Values&c,const std::string&v){legacy_assign(c.kernel_special_mult,v);},false,nullptr},
+    {"stage1_submission_file",[](Stage1Values&c,const std::string&v){c.submission=v;c.has_submission=true;},false,nullptr},
+    {"stage1_results_file",[](Stage1Values&c,const std::string&v){c.results=v;c.has_results=true;},false,nullptr},
+    {"user",[](Stage1Values&c,const std::string&v){c.result_user=v;},false,nullptr},
+    {"computer",[](Stage1Values&c,const std::string&v){c.result_computer=v;},false,nullptr},
 };
 inline Stage1Values read_stage1(const Entries &entries){Stage1Values c;apply(c,entries,stage1_bindings);return c;}
 struct Stage2Values {

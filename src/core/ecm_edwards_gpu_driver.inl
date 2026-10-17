@@ -47,17 +47,13 @@ static std::string checkpoint_body(Batch &b,const mpz_t n,const mpz_t scalar,uin
     return out.str();
 }
 static bool write_checkpoint(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,uint64_t b1) {
-    const auto body=checkpoint_body(b,n,scalar,b1),temp=ecm_stage1_checkpoint_temp_path(path);
-    std::ofstream out(temp,std::ios::binary|std::ios::trunc);
-    out<<body<<"CHECKSUM "<<hash(body)<<'\n';out.close();
-    return bool(out) && ecm_stage1_commit_checkpoint(path,temp);
+    const auto body=checkpoint_body(b,n,scalar,b1);
+    return ecm_stage1_write_blob(path,body+"CHECKSUM "+std::to_string(hash(body))+'\n');
 }
 static bool restore(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,
                     uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
     for(const auto &candidate:ecm_stage1_checkpoint_candidates(path)) {
-        std::ifstream in(candidate,std::ios::binary);
-        if(!in)continue;
-        const std::string text((std::istreambuf_iterator<char>(in)),{});
+        std::string text;if(!ecm_stage1_read_blob(candidate,text))continue;
         const auto end=text.rfind("CHECKSUM ");if(end==std::string::npos)continue;
         const auto body=text.substr(0,end);std::istringstream check(text.substr(end+9));uint64_t sum;std::string extra;
         if(!(check>>sum) || (check>>extra) || sum!=hash(body))continue;
@@ -100,10 +96,12 @@ static bool restore(const std::string &path,Batch &b,const mpz_t n,const mpz_t s
 }
 struct Progress {
     Batch &b;mpz_srcptr n,scalar;const Stage1RunOptions &opt;std::string path;
-    uint64_t b1;long long last;bool failed=false;
+    uint64_t b1,total;long long last;const EcmEdwardsNafMetrics *metrics;bool failed=false;
 };
 static bool progress(uint32_t done,void *context) {
     auto &p=*static_cast<Progress *>(context);p.b.done=done;
+    const auto total=p.b.window?p.metrics->columns:p.total;
+    stage1_progress_set(total?double(done)*p.b.count/total:0,p.b.count);
     const bool stop=ecm_stage1_stop_requested();const auto now=stage1_now_ms();
     if(!stop && (!p.opt.ckpt_ms || now-p.last<p.opt.ckpt_ms))return true;
     if(!p.path.empty() && !write_checkpoint(p.path,p.b,p.n,p.scalar,p.b1)) {
@@ -146,10 +144,12 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
             if(value!="4" && value!="5")throw std::runtime_error("ECM_EDWARDS_DBL_ALGO must be 4 or 5");
             batch.doubling=value=="5"?5:4;
         }
-        for(uint32_t i=0;i<curves;++i)batch.sigmas[i]=opt.sigma_fixed?opt.fixed_sigma64+i:random_sigma_u64();
+        for(uint32_t i=0;i<curves;++i)batch.sigmas[i]=ecm_stage1_batch_sigma(i,opt.sigma_fixed?opt.fixed_sigma64+i:random_sigma_u64());
         const auto stem="ed_"+mont_format_save_name(opt.save_name_pattern,n,b1);
-        const auto path=opt.tmp_dir.empty()?std::string{}:opt.tmp_dir+"/"+stem+".gpu.ckpt";
+        const auto path=opt.tmp_dir.empty()?std::string{}:ecm_stage1_curve_record(0);
         if(path.empty() || !restore(path,batch,n,scalar.v,uint64_t(b1),opt.sigma_fixed,opt.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
+            std::string existing;
+            if(!path.empty() && ecm_stage1_read_blob(path,existing))throw std::runtime_error("GPU Edwards batch payload is invalid or unsupported");
             std::string error;if(!initialize(batch,n,error))throw std::runtime_error(error);
         }
         ecm_ts_fprintf(stdout,"GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu window=%u doubling=%d\n",
@@ -159,8 +159,9 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
             throw std::runtime_error("no compiled GPU Edwards container with one spare bit for target");
         ecm_ts_fprintf(stdout,"GPU Edwards geometry: container_bits=%u tpi=%u tpb=128 blocks=%u\n",
                        container,tpi,(curves+128/tpi-1)/(128/tpi));
-        Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),stage1_now_ms()};std::string error;
+        auto *bar=stage1_bar_create();stage1_progress_set(0,curves);
         EcmEdwardsNafMetrics metrics;
+        Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),mpz_sizeinbase(scalar.v,2),stage1_now_ms(),&metrics};std::string error;
         const auto arithmetic_start=std::chrono::steady_clock::now();
         const int rc=batch.window?
             ecm_cuda_edwards_stage1_naf(n,scalar.v,batch.state.data(),curves,batch.done,256,
@@ -168,12 +169,17 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
             ecm_cuda_edwards_stage1(n,scalar.v,batch.state.data(),curves,batch.done,256,
                 opt.device_index,progress,&p,error);
         const double arithmetic_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-arithmetic_start).count();
+        if(rc==0)stage1_progress_set(curves,curves);
+        stage1_bar_destroy(bar);
         ecm_ts_fprintf(stdout,"GPU Edwards arithmetic: algorithm=%s api_seconds=%.9f\n",batch.window?"naf":"binary",arithmetic_seconds);
         if(batch.window)ecm_ts_fprintf(stdout,"GPU Edwards NAF: columns=%u additions=%u container_bits=%u tpi=%u dictionary_bytes=%llu dictionary_gpu_ms=%.6f loop_gpu_ms=%.6f launches=%u\n",
             metrics.columns,metrics.additions,metrics.container_bits,metrics.tpi,
             static_cast<unsigned long long>(metrics.dictionary_bytes),metrics.dictionary_gpu_ms,metrics.loop_gpu_ms,metrics.launches);
         if(rc<0)throw std::runtime_error(error);
         if(rc==2){out->publish_failed=p.failed;return ECM_ERROR;}
+        if(!path.empty() && !write_checkpoint(path,batch,n,scalar.v,uint64_t(b1))) {
+            out->publish_failed=true;throw std::runtime_error("cannot retain completed Edwards batch");
+        }
         Integer x,z,g,inv;std::string lines;bool found=false;
         for(uint32_t i=0;i<curves;++i) {
             auto *s=batch.state.data()+size_t(i)*9;

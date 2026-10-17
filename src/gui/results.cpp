@@ -6,6 +6,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <filesystem>
 #include <sstream>
 
 #ifdef _WIN32
@@ -213,6 +214,10 @@ bool ResultsStore::init(const std::string &json_path, const std::string &txt_pat
     last_error_.clear();
     err.clear();
     if (json_path_.empty()) return true;      // results disabled
+    if (std::filesystem::path(json_path_).filename()=="results.json.txt" || std::filesystem::exists(json_path_+".ecm-ledger")) {
+        err="GUI summary cannot share a CLI-owned result file; use gui_results.jsonl";
+        last_error_=err;json_path_.clear();return false;
+    }
 
     // Replay an existing JSONL so a restart keeps merging into the same table.
     std::ifstream in(json_path_, std::ios::in | std::ios::binary);
@@ -301,6 +306,10 @@ void ResultsStore::merge(const HitRecord &r) {
 bool ResultsStore::add(const HitRecord &r, std::string &err) {
     err.clear();
     if (json_path_.empty()) return true;
+    if (std::filesystem::exists(json_path_+".ecm-ledger")) {
+        err="GUI summary cannot append to a CLI-owned result file; use gui_results.jsonl";
+        last_error_=err;return false;
+    }
     if (r.factor.empty()) {
         err = "empty factor";
         return false;

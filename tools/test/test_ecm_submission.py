@@ -140,8 +140,26 @@ def main():
     _,_,rows=run('fft_large_mersenne',save=large_save,extra=['--b2',30])
     assert rows[0]['exponent']==11213 and rows[0]['fft-length']==512
     factor_save=make_save('saved_factor',(1<<29)-1,17,2,233)
-    _,_,rows=run('stage1_factor',save=factor_save)
+    factor_inside,factor_outside,rows=run('stage1_factor',save=factor_save)
     assert rows[0]['stage']==1 and 'b2' not in rows[0]
+    first_factor=factor_outside.read_bytes()
+    run('stage1_factor_new_requested_b2',save=factor_save,extra=['--b2',80000],destination=(factor_inside,factor_outside))
+    assert factor_outside.read_bytes()==first_factor
+    # Keep legacy private receipts; B2 did not belong to their Stage1 work.
+    legacy=out/'legacy_stage1_factor.json.txt';legacy_ledger=Path(str(legacy)+'.ecm-ledger')
+    shutil.copytree(Path(str(factor_outside)+'.ecm-ledger'),legacy_ledger)
+    receipt=next(legacy_ledger.glob('*.curve'));line=receipt.read_text().splitlines()[3]
+    receipt.unlink()  # Working copy; the original ledger remains above.
+    def ledger_hash(text):
+        value=14695981039346656037
+        for byte in text.encode():value=((value^byte)*1099511628211)&((1<<64)-1)
+        return value
+    for bound in (40000,80000):
+        key=f'{(1<<29)-1:x}|17|2|{bound}|1|ed|233'
+        body='ECM_SUBMISSION_V1\n'+key+'\nF\n'+line+'\n'
+        (legacy_ledger/(str(ledger_hash(key))+'.curve')).write_bytes((body+str(ledger_hash(body))+'\n').encode())
+    _,_,rows=run('legacy_stage1_factor_dedup',save=factor_save,destination=(out/'legacy_factor_internal.jsonl',legacy))
+    assert len(rows)==1 and rows[0]['stage']==1
     stage2_found=False
     for exponent in (29,37,41,43,47,53,59,67):
         try:fixture=make_save('factor_input_'+str(exponent),(1<<exponent)-1,17,2)

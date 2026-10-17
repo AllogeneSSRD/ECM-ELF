@@ -137,6 +137,33 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/core/ecm_stage1_exp_cache.cpp
 )
 
+# Source identity is host-only: changing result/reporting code must not force
+# all CUDA kernel translation units to rebuild.
+execute_process(COMMAND git rev-parse --short=12 HEAD WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE _stage1_revision OUTPUT_STRIP_TRAILING_WHITESPACE)
+set(_stage1_identity "${ECM_TIERS}|${CMAKE_BUILD_TYPE}")
+foreach(_source IN LISTS ECM_STAGE1_COMMON_SOURCES)
+    file(SHA256 "${CMAKE_SOURCE_DIR}/${_source}" _stage1_hash)
+    string(APPEND _stage1_identity "${_stage1_hash}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
+endforeach()
+foreach(_source src/core/ecm_internal_result.h src/core/ecm_result_submission.h
+                src/core/ecm_submission_writer.h src/core/ecm_edwards_gpu_driver.inl
+                src/core/ecm_edwards_io.h src/core/ecm_program_version.h)
+    file(SHA256 "${CMAKE_SOURCE_DIR}/${_source}" _stage1_hash)
+    string(APPEND _stage1_identity "${_stage1_hash}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
+endforeach()
+string(SHA256 _stage1_identity "${_stage1_identity}")
+string(SUBSTRING "${_stage1_identity}" 0 12 _stage1_identity)
+set(_stage1_identity_file "${CMAKE_CURRENT_BINARY_DIR}/ecm_stage1_source_identity.txt")
+file(GENERATE OUTPUT "${_stage1_identity_file}" CONTENT "${_stage1_revision}.s1.${_stage1_identity}\n")
+# A post-link sidecar leaves flags.make and CUDA response files unchanged.
+function(ecm_stage1_identity_sidecar target)
+    add_custom_command(TARGET ${target} POST_BUILD COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${_stage1_identity_file}" "$<TARGET_FILE_DIR:${target}>/ecm_stage1_build_identity.txt")
+endfunction()
+
 add_executable(ecm
     ${ECM_STAGE1_COMMON_SOURCES}
     src/opencl_ecm_stage1.cpp
@@ -147,6 +174,7 @@ add_executable(ecm
     src/opencl_ecm_path_registry.cpp
     src/opencl_ecm_selftest.cpp
 )
+ecm_stage1_identity_sidecar(ecm)
 
 # 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
 # (鍩虹嚎 TU 閲岀殑 CPUID 鎺㈡祴) 杩斿洖 1 涔嬪悗, 瑙?docs/architecture/STAGE1.md 搂13.8銆?
@@ -306,6 +334,7 @@ if(ECM_ENABLE_CUDA)
         kernels/cuda/cgbn_stage1_kernels_param2_tpi16.cu
         kernels/cuda/cgbn_stage1_kernels_param2_tpi32.cu
     )
+    ecm_stage1_identity_sidecar(ecm_cuda)
 
     if(ECM_CUDA_ENABLE_PRAC)
         target_sources(ecm_cuda PRIVATE

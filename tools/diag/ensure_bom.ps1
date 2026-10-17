@@ -32,7 +32,7 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repo
 $bom = [byte[]](0xEF, 0xBB, 0xBF)
 $fixedBom = 0; $fixedNoBom = 0; $scanned = 0
-$tmp = Join-Path $env:TEMP "ensure_bom_head.bin"
+$tmp = Join-Path $env:TEMP ("ecm_ensure_bom_{0}_{1}.bin" -f $PID, [guid]::NewGuid().ToString('N'))
 
 foreach ($p in $Path) {
     $root = if ([System.IO.Path]::IsPathRooted($p)) { $p } else { Join-Path $repo $p }

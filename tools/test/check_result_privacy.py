@@ -38,7 +38,7 @@ def main():
         for spelling in {value, json.dumps(value, ensure_ascii=True)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]}:
             if spelling and spelling in additions:raise SystemExit('FAIL: staged additions contain a private local result value')
     staged = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], encoding='utf-8').splitlines()
-    if any(re.search(r'\.(?:jsonl|json\.txt|local\.ini)(?:\.|$)', name, re.I) for name in staged):
+    if any('.ecm-ledger' in name.lower() or re.search(r'\.(?:jsonl|json(?:_\d+)?\.txt|local\.ini|ckpt)(?:\.|$)', name, re.I) for name in staged):
         raise SystemExit('FAIL: runtime result/configuration artifact is staged')
     print('PASS: staged additions contain no inspected private result values or runtime artifacts')
 
