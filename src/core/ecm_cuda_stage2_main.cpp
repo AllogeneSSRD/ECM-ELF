@@ -238,6 +238,7 @@ struct Options {
     bool auto_carrier=ecm_config::defaults::stage2_stage2_auto_carrier;
     int device = -1, worker = 1;
     int log_level = -1;
+    bool ntt_counts=ecm_config::defaults::stage2_stage2_ntt_counts;
     bool dry = false, once = false, selection = false, help = false;
     bool has_d = false, has_batch = false, has_arena = false;
     bool child = false;
@@ -340,6 +341,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--tune-profile") o.tune_profile=value();
         else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
         else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--ntt-counts") {const auto n=num();if(n>1)throw std::runtime_error("ntt-counts must be 0 or 1");o.ntt_counts=n!=0;o.portable_cli.insert(a);}
         else if (a == "--pack-zero") {const auto n=num();if(n>1)throw std::runtime_error("pack-zero must be 0 or 1");o.pack_zero=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-ignore") {o.tune_ignore=value();o.portable_cli.insert(a);ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);}
         else if (a == "--stage1-cost-csv") {o.stage1_csv=value();o.portable_cli.insert(a);}
@@ -609,6 +611,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     arg(L"--batch-mb",batch);arg(L"--arena-mb",o.arena);arg(L"--owner-budget-mb",o.owner_mb);
     if(o.tune_child)cmd+=L" --ecm-tune-worker";
     arg(L"--log-level", static_cast<uint64_t>(o.log_level));
+    arg(L"--ntt-counts",o.ntt_counts?1:0);
     cmd += L" --results " + quote(results.wstring());
     if(!o.submission.empty())cmd+=L" --submission "+quote(fs::path(o.submission).wstring());
     if(!o.submission_ini.empty())cmd+=L" --ini "+quote(fs::path(o.submission_ini).wstring());
@@ -688,7 +691,9 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         if(milestone){phase=text.substr(14);const auto timing=phase.find(" previous=");if(timing!=phase.npos)phase.resize(timing);}
         if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
            ((stage2_log::enabled(stage2_log::curve)||o.gui_events)&&result) ||
-           stage2_log::enabled(stage2_log::batches) || text.find("WARNING")!=text.npos))console_line(text,error);
+           stage2_log::enabled(stage2_log::batches) ||
+           (o.ntt_counts && (text.rfind("ntt_count_",0)==0 || text.rfind("ntt_length_counts:",0)==0 || text.rfind("ntt_work:",0)==0)) ||
+           text.find("WARNING")!=text.npos))console_line(text,error);
     };
     auto drain=[&](HANDLE pipe,std::string &pending,bool error) {
         DWORD available=0;
@@ -850,6 +855,7 @@ int curve_worker(Options o) {
     if(ecm_cuda_stage2_set_log_level(o.log_level))throw std::runtime_error("engine rejected log level (development requires debug)");
     stage2_log::level=o.log_level;
     stage2_log::phase("Read and validate Stage1 point");
+    if(ecm_cuda_stage2_set_ntt_counts(o.ntt_counts))throw std::runtime_error("NTT length counts require the production Stage2 engine");
     if(ecm_cuda_stage2_check_configuration())throw std::runtime_error("Stage2 engine configuration rejected");
     if (o.factor_only && _putenv_s("NTT_NAME_HITS", "0"))
         throw std::runtime_error("cannot disable optional prime-witness naming");
@@ -994,6 +1000,7 @@ void help() {
         "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results INTERNAL.jsonl\n"
         "         --submission results.json.txt --exponent P --known-factor F (repeatable)\n"
+        "         --ntt-counts 0|1 (per-curve NTT length table; INI stage2_ntt_counts)\n"
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
         "         --auto-carrier 0|1 (override stage2_auto_carrier; verified worktodo candidates, tune selection required)\n"
         "Tune: --tune ntt|ecm --tune-level 1..10 --tune-file FILE.toml --tune-repeats N\n"
@@ -1128,6 +1135,7 @@ int driver(Options o) {
     if(!o.portable_cli.count("--short-calibration-seconds"))o.short_budget=s.short_budget;
     if(!o.portable_cli.count("--short-calibration"))o.short_calibration=s.short_calibration;
     if(!o.portable_cli.count("--short-ntt-batch-tune"))o.short_batch_tune=s.short_batch_tune;
+    if(!o.portable_cli.count("--ntt-counts"))o.ntt_counts=s.ntt_counts;
     if(!o.portable_cli.count("--tune-error-limit"))o.tune_error=s.tune_error;
     if(!o.portable_cli.count("--stage1-cost-mhz"))o.stage1_mhz=s.stage1_mhz;
     if(!o.portable_cli.count("--target-factor-bits"))o.factor_bits=s.factor_bits;

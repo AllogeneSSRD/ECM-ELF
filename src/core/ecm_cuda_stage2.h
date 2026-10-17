@@ -7,6 +7,7 @@
 // (4). Lower levels never disable mandatory arithmetic/error checks.
 int ecm_cuda_stage2_default_log_level();
 int ecm_cuda_stage2_set_log_level(int level);
+int ecm_cuda_stage2_set_ntt_counts(bool enabled);
 int ecm_cuda_stage2_check_configuration();
 struct EcmStage2NttBatchSample { uint64_t length=0,batch=0;double seconds=0; };
 // Copies immutable short-length timings before planning/running a curve. Empty

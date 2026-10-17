@@ -58,15 +58,25 @@ NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导�
 
 ### 实际运行的长度与运算量
 
-正常曲线结束输出 `ntt_length_counts: log2_length:num_of_ntt`，按 k 升序列出 **L=2ᵏ 的独立数学变换数**。每次卷积含两个正向与一个逆向，所以 num_of_ntt=3·卷积数；不是 CUDA kernel 启动数。debug 另输出按长度的卷积数。
+生产 Stage2 通过 `stage2_ntt_counts=1` 开启按长度计数，默认 0，关闭时不采集或输出长度表；CLI `--ntt-counts 0|1` 覆盖选定 worker 的 INI。Edwards/Montgomery 使用相同入口。实验引擎不支持此选项，开启时报错。
 
-阶段日志 `ntt_work` 汇总引擎累计卷积数、数学变换数、S4分块数及下列逻辑工作量。对各长度的卷积数 cₖ：
+开启后每条曲线结束输出 `ntt_count_table` 表，按长度升序列出 length、log2、convolutions、forward、inverse、total。每个 batch 成员独立计数，每次卷积含两个正向与一个逆向，因此 forward=2·convolutions、inverse=convolutions、total=3·convolutions。Graph 重放和物理分块不改变数学变换数；它不是 CUDA kernel 启动数。表显式开启后在 quiet 控制台也输出，正常日志中保留一份。
+
+兼容行 `ntt_length_counts: log2_length:num_of_ntt` 按 k 升序列出 **L=2ᵏ 的独立数学变换数**；debug 另输出按长度的卷积数。消费旧直方图的分析工具仍可读取此行，新运行需要显式开启上述选项。
+
+同一张表的 `ntt_work` 汇总卷积数、数学变换数、S4分块数及下列逻辑工作量。对各长度的卷积数 cₖ：
 
 - transforms=3·Σcₖ。
 - elements=3·Σ(cₖ·2ᵏ)：全部正向/逆向处理的元素总数。
 - logical_radix2_butterflies=(3/2)·Σ(cₖ·2ᵏ·k)：等价 radix2 蝶形数量；融合 radix 实际指令数不等于此数。
 
-计数包含经过多项式层的 F/G 树、inverse、fold和下降请求；不包含底层算术自检内部独立发起的变换，也不含 Stage1。普通独立 save worker 每进程一条曲线，包含该曲线的初始化；多曲线内部调试入口使用累计口径，共享初始化只累计一次。缓存工作区容量、batch×length 与单条长度分别记录，不能互相替代。
+计数包含经过多项式层的 F/G 树、inverse、fold和下降请求；不包含底层算术自检内部独立发起的变换，也不含 Stage1。每个生产 worker 进程处理一条曲线，多曲线 save 逐条输出各自的表，每条都包含本曲线初始化，不是整份 save 的累计表。缓存工作区容量、batch×length 与单条长度分别记录，不能互相替代。
+
+计数器使用主机固定 33 档数组，在已完成的多项式调用处更新，不增加设备计数、显存分配、CUDA event 或同步。关闭时在进入长度分档前返回。计数采集成本属于原生 Stage2 时间；结束表的格式化/输出发生在主计算计时结束后，另用进程墙钟检查该部分。
+
+0.32.0 在 GPU1 RTX4060 Laptop 上固定 B1=50000、B2=27,015,978,990、D=180180、普通余因子模式，383/10232-bit 输入的开关各测 5 次，交替顺序、首轮保留。383-bit 原生 Stage2 中位秒数关闭/开启为 0.525023/0.532992（+1.52%）；10232-bit 为 47.844802/47.763551（−0.17%）。配对变化分别为 −1.97%…+2.87%、−0.42%…+0.11%，未显示稳定损失，不能据此保证所有规模零开销。包含结束输出的进程墙钟中位数分别为 1.349713/1.246619 秒、48.772801/48.782988 秒，也保留全部原始样本。
+
+该开关对照未固定或采集 GPU 功率/时钟，CPU 基准在后台运行，不与其他固定频率实验混合。程序 SHA256=`908b51f96416679e58242b20a47e69456724d4e0e0719f4390485ae2aadc06a3`；构建、输入、13 项功能门禁、原始样本及汇总位于 `data/experiments/stage2_ntt_counts_20261017/`。`perf_01` 的小输入 10 次均完整；同批大输入首次因缺少目标元数据而在结果发布时报错，未计入耗时样本，原证据保留；补齐原指数/已知因子后的 `perf_02` 完成大输入 10 次。汇总为 `analysis_01/summary.json`。开关检查入口是 [test_stage2_ntt_counts.py](../../tools/test/test_stage2_ntt_counts.py)，性能复现入口是 [bench_stage2_ntt_counts.py](../../tools/bench/bench_stage2_ntt_counts.py)；大余因子需用 `--study` 携带已经验证的目标元数据。
 
 ## 代码入口与依据
 

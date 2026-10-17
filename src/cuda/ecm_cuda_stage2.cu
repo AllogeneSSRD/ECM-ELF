@@ -4,6 +4,7 @@
 // allocation and generic-modulus fallbacks when changing production policy.
 #include "../core/ecm_stage2_logging.h"
 #include "../core/ecm_cuda_stage2.h"
+#include "../core/ecm_stage2_ntt_counts.h"
 #include "../core/ecm_stage2_d_catalog.h"
 #if !defined(NTT_GL_FIXED_MODE) || NTT_GL_FIXED_MODE != 3
 #error "Production Stage2 requires fixed PTX3 Goldilocks"
@@ -1344,6 +1345,7 @@ struct S4Ctx {
     }
 };
 
+static bool g_ntt_counts_enabled=false;
 struct PolyLayer : ecm_stage2::ModulusContext {
     int device = 1;
     /* slice S3: the persistent multiply arena (buffers + fusion plan + per-pass twiddle
@@ -1360,17 +1362,22 @@ struct PolyLayer : ecm_stage2::ModulusContext {
     int cat = -1;
     /* statistics */
     unsigned long long ntt_calls = 0, muls = 0, slot_checks = 0;
-    struct LengthCount { unsigned long long convolutions=0,chunks=0; };
-    std::array<LengthCount,33> ntt_lengths{};
+    ecm_stage2::NttLengthCounts ntt_lengths;
     unsigned long long short_batch_changed=0;
     void count_ntt(unsigned long long n,unsigned long long pairs,unsigned long long chunks) {
-        unsigned k=0;for(auto v=n;v>1;v>>=1)++k;
-        if(k<ntt_lengths.size()) {ntt_lengths[k].convolutions+=pairs;ntt_lengths[k].chunks+=chunks;}
+        ntt_lengths.add(n,pairs,chunks);
     }
     void print_ntt_lengths()const {
+        if(!ntt_lengths.enabled)return;
         std::string counts,convs;unsigned long long pairs=0,chunks=0;double elements=0,butterflies=0;
-        for(size_t k=0;k<ntt_lengths.size();++k) {
-            const auto &v=ntt_lengths[k];if(!v.convolutions)continue;
+        // Explicit opt-in output is independent of the progress log level.
+        std::printf("ntt_count_table: scope=curve_polynomial includes=initialization excludes=arithmetic_selftests,stage1\n");
+        std::printf("ntt_count_columns: length log2 convolutions forward inverse total\n");
+        for(size_t k=0;k<ntt_lengths.entries.size();++k) {
+            const auto &v=ntt_lengths.entries[k];if(!v.convolutions)continue;
+            std::printf("ntt_count_row: %12llu %2zu %12llu %12llu %12llu %12llu\n",
+                1ull<<k,k,(unsigned long long)v.convolutions,2ull*v.convolutions,
+                (unsigned long long)v.convolutions,3ull*v.convolutions);
             if(!counts.empty()){counts+=' ';convs+=' ';}
             counts+=std::to_string(k)+":"+std::to_string(3*v.convolutions);
             convs+=std::to_string(k)+":"+std::to_string(v.convolutions);
@@ -1378,10 +1385,11 @@ struct PolyLayer : ecm_stage2::ModulusContext {
             const double work=3.*double(v.convolutions)*double(1ull<<k);
             elements+=work;butterflies+=work*double(k)/2.;
         }
-        stage2_log::print(stage2_log::curve,"ntt_length_counts: log2_length:num_of_ntt %s\n",counts.c_str());
-        stage2_log::print(stage2_log::phases,"ntt_work: scope=engine_cumulative convolutions=%llu transforms=%llu s4_chunks=%llu elements=%.6e logical_radix2_butterflies=%.6e short_batch_changed=%llu\n",
+        std::printf("ntt_length_counts: log2_length:num_of_ntt %s\n",counts.c_str());
+        std::printf("ntt_work: scope=curve_polynomial convolutions=%llu transforms=%llu s4_chunks=%llu elements=%.6e logical_radix2_butterflies=%.6e short_batch_changed=%llu\n",
             pairs,3*pairs,chunks,elements,butterflies,short_batch_changed);
         stage2_log::print(stage2_log::debug,"ntt_convolution_counts: log2_length:num_of_conv %s\n",convs.c_str());
+        std::fflush(stdout);
     }
     /* slice S4: batched multiplies are ONE launch for `nbatch` poly multiplies, so the launch
        count is reported separately from the multiply count (which keeps the S3 numbers
@@ -8450,6 +8458,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     const char *saved_a24_hex = nullptr)
 {
     PolyLayer L;
+    L.ntt_lengths.enabled=g_ntt_counts_enabled && !d_plan_only;
     L.device = g_device;
     stage2_memory::Session memory_session; // Destroyed after all curve-local device owners.
     stage2_log::phase("Plan Stage2 bounds and memory");
@@ -10059,6 +10068,7 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
 }
 
 int ecm_cuda_stage2_default_log_level() { return stage2_log::batches; }
+int ecm_cuda_stage2_set_ntt_counts(bool enabled) { g_ntt_counts_enabled=enabled;return 0; }
 int ecm_cuda_stage2_set_short_ntt_batches(const EcmStage2NttBatchSample *samples,size_t count) {
     if((count && !samples) || count>65536)return 2;
     ecm_stage2::ShortNttBatchPolicy next;

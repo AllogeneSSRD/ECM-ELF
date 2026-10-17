@@ -640,6 +640,21 @@ batches. Usually use verbose and stage2_debug_log.<br>
 决定；debug 在生产程序中开启独立调试日志，普通控制台最高保持 batches。一般只需使用 verbose 和<br>
 stage2_debug_log。
 
+### stage2_ntt_counts
+
+```text
+stage2_ntt_counts=[0|1]; default=0
+```
+
+Print a per-curve NTT length count table at the end of production Stage2: 1 enables; 0 disables<br>
+collection and output. Counts mathematical transforms (two forwards and one inverse per<br>
+convolution), including polynomial initialization and main work, excluding Stage1 and independent<br>
+arithmetic selftests. Shared by Edwards and Montgomery; no GPU counters or extra synchronization.<br>
+CLI --ntt-counts overrides the selected worker INI.<br>
+生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积<br>
+含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery<br>
+通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 INI。
+
 ### stage2_b2
 
 ```text

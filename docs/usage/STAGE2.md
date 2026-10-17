@@ -68,7 +68,7 @@ GUI可用`[Worker #N] stage=stage1|stage2`在同一INI中管理混合阶段，�
 - `real_shape`：B1/B2、算术位宽、D/P、baby/giant 数及 G 批次数。
 - `mem`：设备 free/total、reserve 和 arena cap；预计最大变换及树顶形状。
 - 曲线结束的 `arena=a/b fold=a/b`：a 为实际完整 NTT 池峰值或启用 fold owner 占用；fold 回退时 a=0。b 保留读取的 INI 值，可能与 CLI/环境覆盖后的有效预算不同。
-- `ntt_length_counts`：曲线结束按 `log2_length:num_of_ntt` 汇总独立数学变换数；一次卷积为两个正向加一个逆向，不是 kernel 启动数。`ntt_work` 的元素数、逻辑蝶形数及计数边界见 [NTT](../architecture/NTT.md#实际运行的长度与运算量)。
+- `stage2_ntt_counts=1`（默认 0，CLI `--ntt-counts` 可覆盖）：曲线结束输出按长度排列的卷积、正向、逆向和总次数表，并保留 `ntt_length_counts` 兼容行。一次卷积为两个正向加一个逆向，不是 kernel 启动数；关闭时不采集此表。`ntt_work` 的元素数、逻辑蝶形数、计数边界及开销见 [NTT](../architecture/NTT.md#实际运行的长度与运算量)。
 - `stage2_full_wall.total`：完整引擎 init+main，排除 Stage1 与自动 D 扫描。外层 result/curve_done 还含进程和发布结果等开销。
 - `stage2_tune_runtime`：只有成功补充缺失算术位宽/执行区间摘要时输出，包含位宽、算术家族、D/B2与实测/预测比值。默认采集已执行的干净完整曲线，可用`stage2_tune_runtime=false`关闭；完整规则见[运行补充](../architecture/AUTO_B2.md#正常运行补充缺失位宽)。
 

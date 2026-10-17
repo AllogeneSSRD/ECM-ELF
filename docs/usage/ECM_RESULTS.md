@@ -18,9 +18,9 @@ stage2_submission_file=results.json.txt
 
 INI 相对输出路径基于 INI 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀；显式配置路径需要自行区分。提交文件有独占写锁，不支持多个进程同时共享同一个输出路径。输入 save、内部结果与提交文件必须不同。
 
-AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护，当前为 `ECM-ELF 0.31.0`；Windows 平台号为数字 4。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。CPU 内部结果的 `source-build` 保留 Git/入口源码指纹，CUDA 内部结果也记录公共程序身份，精确二进制身份由构建清单保存。
+AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护，当前为 `ECM-ELF 0.32.0`；Windows 平台号为数字 4。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。CPU 内部结果的 `source-build` 保留 Git/入口源码指纹，CUDA 内部结果也记录公共程序身份，精确二进制身份由构建清单保存。
 
-版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。例如当前版本的下一次新功能为 0.32.0，下一次修复为 0.31.1。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
+版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。例如当前版本的下一次新功能为 0.33.0，下一次修复为 0.32.1。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
 
 ## 提交字段与参考 FFT
 

@@ -56,6 +56,7 @@ inline constexpr char stage2_stage2_save_dir[]="";
 inline constexpr bool stage2_stage2_debug_log=false;
 inline constexpr int stage2_stage2_device=-1;
 inline constexpr int stage2_stage2_log_level=-1;
+inline constexpr bool stage2_stage2_ntt_counts=false;
 inline constexpr uint64_t stage2_stage2_b2=0;
 inline constexpr uint64_t stage2_stage2_d=0;
 inline constexpr uint64_t stage2_stage2_batch_mb=64;
@@ -119,6 +120,8 @@ inline constexpr char stage2_stage2_tune_condition_tag[]="";
 namespace limits {
 inline constexpr int64_t stage2_stage2_device_minimum=0;
 inline constexpr int64_t stage2_stage2_device_maximum=2147483647;
+inline constexpr int64_t stage2_stage2_ntt_counts_minimum=0;
+inline constexpr int64_t stage2_stage2_ntt_counts_maximum=1;
 inline constexpr int64_t stage2_stage2_batch_mb_minimum=1;
 inline constexpr int64_t stage2_stage2_batch_mb_maximum=1048576;
 inline constexpr int64_t stage2_stage2_arena_mb_minimum=0;
@@ -251,6 +254,7 @@ struct Stage2Values {
     bool debug_log=false;
     int device=-1;
     int log_level=-1;
+    bool ntt_counts=false;
     uint64_t b2=0;
     uint64_t d=0;
     uint64_t batch=64;
@@ -307,6 +311,7 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage2_debug_log",[](Stage2Values&c,const std::string&v){c.debug_log=boolean(v,"stage2_debug_log");},false,nullptr},
     {"stage2_device",[](Stage2Values&c,const std::string&v){c.device=static_cast<int>(bounded_integer(v,"stage2_device",0,2147483647));},false,nullptr},
     {"stage2_log_level",[](Stage2Values&c,const std::string&v){c.log_level=log_level(v);},false,nullptr},
+    {"stage2_ntt_counts",[](Stage2Values&c,const std::string&v){c.ntt_counts=bounded_integer(v,"stage2_ntt_counts",0,1)!=0;},false,nullptr},
     {"stage2_b2",[](Stage2Values&c,const std::string&v){c.b2=static_cast<uint64_t>(bounded_integer(v,"stage2_b2",0,UINT64_MAX));},false,nullptr},
     {"stage2_d",[](Stage2Values&c,const std::string&v){c.d=static_cast<uint64_t>(bounded_integer(v,"stage2_d",0,UINT64_MAX));},false,nullptr},
     {"stage2_batch_mb",[](Stage2Values&c,const std::string&v){c.batch=static_cast<uint64_t>(bounded_integer(v,"stage2_batch_mb",1,1048576));},false,nullptr},

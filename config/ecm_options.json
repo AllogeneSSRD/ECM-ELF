@@ -879,6 +879,23 @@
     },
     {
       "owner": "stage2",
+      "key": "stage2_ntt_counts",
+      "field": "ntt_counts",
+      "type": "bool",
+      "default": false,
+      "domain": "[0|1]",
+      "fx": "NTT_length_counts(S2)",
+      "parser": "strict",
+      "parser_override": "integer_bool",
+      "minimum": 0,
+      "maximum": 1,
+      "description": [
+        "Print a per-curve NTT length count table at the end of production Stage2: 1 enables; 0 disables collection and output. Counts mathematical transforms (two forwards and one inverse per convolution), including polynomial initialization and main work, excluding Stage1 and independent arithmetic selftests. Shared by Edwards and Montgomery; no GPU counters or extra synchronization. CLI --ntt-counts overrides the selected worker INI.",
+        "生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 INI。"
+      ]
+    },
+    {
+      "owner": "stage2",
       "key": "stage2_b2",
       "field": "b2",
       "type": "u64",
