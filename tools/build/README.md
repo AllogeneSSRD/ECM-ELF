@@ -28,3 +28,5 @@ Stage1 默认 `Jobs=8`，Stage2 默认 `SplitCompile=8`。PS1 为默认参数来
 - `internal/`：并行 nvcc、配置一致性、工具链选择、Stage1 拆分及两阶段打包。
 
 `dev/build_stage2_tree_gpu.ps1` 的原型驱动与根目录 Stage2 生产/开发队列程序不同。实际生产算术和当前限制见 [NTT](../../docs/architecture/NTT.md)、[Stage2使用](../../docs/usage/STAGE2.md)。
+
+独立 CPU Edwards Stage2 使用 `test/build_cpu_stage2.ps1`；`-GwPoly` 启用 GWNUM/polymult 多线程快速多项式后端，无此开关保留 libecm 构建。依赖、运行参数和输出见 [CPU Stage2](../../docs/usage/EDWARDS_CPU_STAGE2.md)，当前不随 CUDA 发布入口自动打包。

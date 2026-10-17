@@ -2,6 +2,8 @@
 
 本页维护 Edwards 大余因子 GPU Stage2 的完整性能参照：普通余因子、梅森承载各 26 个条件，每格三次，共 156 次完整 NF 运行。CPU NTT/plain 仅保留已完成的 32 次单线程样本作为参考，采集已停止，不要求补齐 CPU 后才生成 GPU 结果。计算入口及后端选择见 [CPU Stage2 使用](../usage/EDWARDS_CPU_STAGE2.md)，GPU 管线见 [Stage2 架构](../architecture/STAGE2.md)。小位宽、B2=10^12 的既有 CPU 测量仍在使用页，使用其独立冻结版本和条件，不混入本矩阵。
 
+GWNUM/polymult 多线程 CPU 后端有独立的 [4 GHz 精确输入实测](CPU_GWPOLY_STAGE2.md)；不改写本页的 libecm 冻结样本，也不补齐已停止的旧 CPU 矩阵。
+
 ## 输入与统计口径
 
 输入来自用户提供的 Prime95 31.4b05 `4Core@4GHz` 四份完整屏幕日志：Edwards/Montgomery 各有请求 B2=2.6×10^10、2.6×10^11 两档，B1=50000。每个模型 13 个目标、26 个条件，每格历史样本 n=1。Montgomery 是独立曲线族的参考，不能当作相同 Edwards 末点的实现对照。

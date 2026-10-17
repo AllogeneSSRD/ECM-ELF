@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-param([string]$Build='build_cpu_stage2',[int]$Jobs=8,[string]$VcVars='')
+param([string]$Build='build_cpu_stage2',[int]$Jobs=8,[string]$VcVars='',[switch]$GwPoly)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
@@ -21,7 +21,8 @@ set(GMP_LIBRARY "$gmpRoot/lib/gmp.lib")
 include("$repoUnix/tools/build/internal/ecm_cpu_stage2.cmake")
 "@
 [IO.File]::WriteAllText((Join-Path $project 'CMakeLists.txt'),$cmake,[Text.UTF8Encoding]::new($false))
-$commands=@(('cmake -S "{0}" -B "{1}/native" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON' -f $project,$Build),
+$gwOption=if($GwPoly){'ON'}else{'OFF'}
+$commands=@(('cmake -S "{0}" -B "{1}/native" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DECM_CPU_GW_POLY={2}' -f $project,$Build,$gwOption),
             ('cmake --build "{0}/native" --parallel {1}' -f $Build,$Jobs))
 $batch=Join-Path $Build 'build.cmd'
 [IO.File]::WriteAllText($batch,"@echo off`r`ncall ""$VcVars"" >nul 2>&1`r`nif errorlevel 1 exit /b 1`r`n"+($commands -join "`r`nif errorlevel 1 exit /b 1`r`n")+"`r`n",[Text.UTF8Encoding]::new($false))

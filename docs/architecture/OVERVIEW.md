@@ -10,6 +10,7 @@
 | OpenCL Stage1 | 设备配置、路径注册、动态内核组装 | [opencl_ecm_entry.cpp](../../src/opencl_ecm_entry.cpp) |
 | Stage2 驱动 | save、独立队列、回执、日志、Auto B2 | [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp) |
 | CUDA Stage2 | 点生成、多项式树、NTT、归约、下降、GCD | [ecm_cuda_stage2.cu](../../src/cuda/ecm_cuda_stage2.cu) |
+| CPU Stage2 | Edwards save 续算，GW 多线程快速多项式或 libecm NTT/plain | [ecm_cpu_stage2_main.cpp](../../src/core/ecm_cpu_stage2_main.cpp)、[GW 后端](../../src/cpu/ecm_stage2_gwpoly.cpp) |
 | GUI | 配置、worker 进程监管、队列生成、监控、结果展示 | [src/gui](../../src/gui/) |
 | 工具 | 构建、参考计算、数据集、计时、剖析和图表 | [tools](../../tools/) |
 

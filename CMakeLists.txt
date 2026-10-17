@@ -68,7 +68,7 @@ if(NOT GMP_INCLUDE_DIR OR NOT GMP_LIBRARY)
 endif()
 message(STATUS "GMP: include=${GMP_INCLUDE_DIR} lib=${GMP_LIBRARY}")
 
-option(ECM_BUILD_CPU_STAGE2 "Build standalone libecm Edwards Stage2" OFF)
+option(ECM_BUILD_CPU_STAGE2 "Build standalone CPU Edwards Stage2" OFF)
 if(ECM_BUILD_CPU_STAGE2)
     include(${CMAKE_CURRENT_SOURCE_DIR}/tools/build/internal/ecm_cpu_stage2.cmake)
 endif()

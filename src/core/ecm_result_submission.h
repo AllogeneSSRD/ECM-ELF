@@ -37,7 +37,7 @@ inline uint32_t reference_fft(uint64_t exponent) {
 }
 struct Submission {
     uint64_t exponent=0,sigma=0,b1=0,b2=0,curves=1;
-    uint64_t d=0,poly_size=0; // Actual completed Stage2 geometry; zero means unavailable.
+    uint64_t d=0,poly_size=0,stage2_fft_length=0; // Actual completed Stage2 geometry; zero means unavailable.
     int stage=0;bool edwards=true;
     std::vector<std::string> factors,known;
     std::string user,computer,aid,when;
@@ -67,6 +67,7 @@ inline std::string submission_json(const Submission &r,const mpz_t n) {
         throw std::runtime_error("inconsistent ECM submission result");
     if((r.d==0)!=(r.poly_size==0) || (r.d && (r.stage==1 || r.d<6 || r.d%2)))
         throw std::runtime_error("inconsistent Stage2 submission geometry");
+    if(r.stage2_fft_length && (r.stage==1 || !r.d))throw std::runtime_error("inconsistent Stage2 FFT metadata");
     ecm_edwards::Integer f;
     for(const auto &text:r.factors)if(mpz_set_str(f.v,text.c_str(),10) || mpz_cmp_ui(f.v,1)<=0 ||
         mpz_cmp(f.v,n)>=0 || !mpz_divisible_p(n,f.v))throw std::runtime_error("invalid submission factor");
@@ -74,7 +75,7 @@ inline std::string submission_json(const Submission &r,const mpz_t n) {
         throw std::runtime_error("invalid submission assignment id");
     const auto exponent=target_exponent(r,n);
     // Generic N follows a conservative zero-padded capacity reference. This is
-    // protocol reporting metadata; CPU/GPU arithmetic does not execute this FFT.
+    // protocol reporting metadata, independent of the engine's actual transform.
     const auto fft=reference_fft(exponent?exponent:2*mpz_sizeinbase(n,2)+128);
     std::ostringstream out;out<<"{\"status\":"<<quoted(hit?"F":"NF");
     if(exponent)out<<",\"exponent\":"<<exponent;
@@ -84,6 +85,7 @@ inline std::string submission_json(const Submission &r,const mpz_t n) {
     out<<",\"b1\":"<<r.b1;
     if(r.stage!=1)out<<",\"b2\":"<<r.b2;
     if(r.d)out<<",\"d\":"<<r.d<<",\"poly-size\":"<<r.poly_size;
+    if(r.stage2_fft_length)out<<",\"stage2-fft-length\":"<<r.stage2_fft_length;
     if(r.edwards){out<<",\"Edwards\":{";if(hit)out<<"\"sigma\":"<<r.sigma;out<<'}';}
     else if(hit)out<<",\"sigma\":"<<r.sigma;
     if(hit)out<<",\"stage\":"<<r.stage;

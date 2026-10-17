@@ -30,7 +30,7 @@
 
 ## 产品与发布
 
-- [ ] 为[双结果文件](usage/ECM_RESULTS.md)取得真实服务器解析回执：在授权后提交一条实际完成的 ECM 结果，确认 ECM-ELF 身份、参考 FFT 与省略 security-code 的接受情况。离线字段合同和数学验证已通过，不能替代 manual_result 的接受结论。
+- [ ] 扩大[双结果文件](usage/ECM_RESULTS.md)的 Edwards 与因子结果服务器验收；当前已接受真实 Montgomery NF 批次，不能外推其他模型和结果类别。新提交需要用户授权，离线字段合同和数学验证不替代服务器回执。
 - [ ] 合并Stage1/Stage2可执行文件，保留共享INI及接口兼容，明确Stage1完成后继续Stage2或交给其他消费者的策略。
 - [ ] 对全部发布架构分别运行验收，编译与包结构检查不代替设备算术验证。
 - [ ] GUI真实运行与视觉验收：混合worker独立阶段切换、共用INI范围、多worker队列目标、任务摘要脱敏、恢复计数、巨步批次与任务ETA、单/多因子结果、安全停止/超时及强制退出；核对大字体窄面板的总进度条裁剪。概率面板待核对理论预设与Python参考、各反算残差和边界、条件概率、大字体与窄图、后台修改输入及菜单重开。当前仅完成构建与接线检查。
@@ -40,7 +40,7 @@
 
 ## 其他实现
 
-- [ ] 扩大 GPU Edwards 的设备及生产B1/B2验收；完善生产B1的窗口/批次性能标定和每档TPI选择，补齐GUI位进度、Edwards Stage1成本及Auto B2资格；CPU Stage2的GUI/队列集成、曲线内部恢复及大位宽B2=10^12验收见[当前能力](usage/EDWARDS_CPU_STAGE2.md)。32档实例及边界CPU核对已完成；当前六个位宽的同exe三曲线族成本见[性能依据](performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，更广批量、常驻队列及各档稳定性能仍待测。NAF、旧检查点与完整交接覆盖见[GPU Edwards](architecture/STAGE1.md#gpu-edwards)、[细分实例验收](development/GPU_EDWARDS_FINE_TIERS_DRAFT.md)和[窗口优化记录](development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)；初始大界限、随机恢复、小素数及模型身份覆盖见[验收记录](development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
+- [ ] 扩大 GPU Edwards 的设备及生产B1/B2验收；完善生产B1的窗口/批次性能标定和每档TPI选择，补齐GUI位进度、Edwards Stage1成本及Auto B2资格；CPU GW Stage2 的 GUI/队列集成、曲线内部恢复、自动扩大 FFT 重算及大位宽 B2=10^12 验收见[当前能力](usage/EDWARDS_CPU_STAGE2.md)。32档实例及边界CPU核对已完成；当前六个位宽的同exe三曲线族成本见[性能依据](performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，更广批量、常驻队列及各档稳定性能仍待测。NAF、旧检查点与完整交接覆盖见[GPU Edwards](architecture/STAGE1.md#gpu-edwards)、[细分实例验收](development/GPU_EDWARDS_FINE_TIERS_DRAFT.md)和[窗口优化记录](development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)；初始大界限、随机恢复、小素数及模型身份覆盖见[验收记录](development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md#2026-10-16大界限随机恢复与-gui-曲线身份验收)。
 
 - [ ] 扩大Stage1 PRAC位宽/设备/完整生产曲线验证；局部最佳参数不提升为通用默认。
 - [ ] 保持CPU/OpenCL可选路径的正确性覆盖和算子注册约束；没有对应设备证据时不写通用性能结论。

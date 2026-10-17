@@ -78,6 +78,18 @@ child_state=coefficients [b,b+a) of
 
 Prime95 的具体运算与源码入口见[Poly 源码分析](PRIME95_STAGE2.md)。理论出处为 Bernstein 的 `scaledmod-20040820.pdf`，本地资料在 `docs/paper/Stage2/`。
 
+### 反转状态与循环高段
+
+若父节点次数 m=a+b，将上述状态反转为 `T=rev_(m−1)(S_M)`，目标孩子次数 a、兄弟 monic 多项式 B 次数 b，则孩子的反转状态为：
+
+\[
+T_{child}[k]=[X^{b+k}]\,T(X)B(X),\qquad 0\le k<a.
+\]
+
+乘积次数最多 m+b−1。改成模 X^m−1 的循环乘法时，仅次数 m…m+b−1 的系数折返到 0…b−1，所需高段 b…m−1 不受影响。因此可以使用循环乘法的高 a 项完成下降；兄弟的最高项是隐式的 1。这个结论适用于非均分的孩子次数，也适用于合数模环，因为只涉及加法、乘法及固定截断，没有除以非单位。
+
+本地 Prime95 31.6b01 的 `gwnum/polymult.h` 提供 `POLYMULT_CIRCULAR`、`POLYMULT_MULHI` 和隐式 monic 输入接口。数学上的窗口正确性仍须与具体 API 的输入长度、循环长度 m 和输出长度 a 对齐，不能只复制标志位。
+
 ## 工作量与空间
 
 完整 F 树有 P−1 次非空逻辑乘法；若 I 个 giant 被分为 G 个块，各 G 树合计 I−G 次。逻辑乘法数不等于 kernel 数；满层可以按同形状合批。

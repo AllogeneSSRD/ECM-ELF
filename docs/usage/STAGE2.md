@@ -1,6 +1,6 @@
 # Stage2 使用
 
-本页说明 CUDA Stage2。CPU Edwards 续算入口与双后端选择见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)；两份结果文件及提交字段规则统一见 [ECM 结果输出](ECM_RESULTS.md)。
+本页说明 CUDA Stage2。CPU Edwards 续算入口、GW 多线程多项式与 libecm 后端选择见 [Edwards CPU Stage2](EDWARDS_CPU_STAGE2.md)；两份结果文件及提交字段规则统一见 [ECM 结果输出](ECM_RESULTS.md)。
 
 `ecm_cuda_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入；Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。
 

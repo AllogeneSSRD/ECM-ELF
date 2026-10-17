@@ -18,20 +18,20 @@ stage2_submission_file=results.json.txt
 
 INI 相对输出路径基于 INI 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀；显式配置路径需要自行区分。提交文件有独占写锁，不支持多个进程同时共享同一个输出路径。输入 save、内部结果与提交文件必须不同。
 
-AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护，当前为 `ECM-ELF 0.32.0`；Windows 平台号为数字 4。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。CPU 内部结果的 `source-build` 保留 Git/入口源码指纹，CUDA 内部结果也记录公共程序身份，精确二进制身份由构建清单保存。
+AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护，当前为 `ECM-ELF 0.33.0`；Windows 平台号为数字 4。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。CPU 内部结果的 `source-build` 保留 Git/入口源码指纹，GW 构建另含算术模块与 GW 库指纹；CUDA 内部结果也记录公共程序身份，精确二进制身份由构建清单保存。
 
-版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。例如当前版本的下一次新功能为 0.33.0，下一次修复为 0.32.1。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
+版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。例如当前版本的下一次新功能为 0.34.0，下一次修复为 0.33.1。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
 
 ## 提交字段与参考 FFT
 
-内部 CPU JSONL 每行一条完成曲线，保留 sigma、后端、计时、save 行号和 PrMers 布局 CRC32；其 `fft-length=0` 表示该实现没有执行 GWNUM FFT。CUDA 内部 JSONL 保留引擎原有的点、多项式、NTT 和回执诊断。内部文件不直接粘贴到手工提交页面。
+内部 CPU JSONL 每行一条完成曲线，保留 sigma、后端、计时、save 行号和 PrMers 布局 CRC32；libecm 的 `fft-length=0` 表示未执行 GWNUM FFT；gwpoly 则记录实际选用的 GW FFT 长度，并保留真实 D/P 和引擎误差诊断。CUDA 内部 JSONL 保留引擎原有的点、多项式、NTT 和回执诊断。内部文件不直接粘贴到手工提交页面。
 
 提交文件每行一个 JSON 对象，UTF-8、以换行结束：
 
 - NF：`status=NF`、目标、`worktype=ECM`、B1/B2、曲线数、参考 FFT、程序和 UTC 时间；Edwards 标记为 `Edwards:{}`。
 - F：增加十进制字符串因子数组、stage 和原始 sigma，Edwards 使用 `Edwards:{sigma:…}`。Stage1 因子不写 B2。
 - user、computer、aid、known-factors 仅在有值时输出。Montgomery 不添加 `Edwards` 字段；不冒用 Prime95 或其他 Stage1 程序名。
-- 有实际 Stage2 几何参数时，字段连续排列为 `b2 → d → poly-size`。CUDA 直接使用已完成引擎返回的 D 和 baby 多项式大小，内部 JSONL 也在 B2 后记录这两个字段。Stage1 因子没有这些字段；CPU libecm 当前没有导出对应几何参数，保持省略。
+- 有实际 Stage2 几何参数时，字段连续排列为 `b2 → d → poly-size`。CUDA 直接使用已完成引擎返回的 D 和 baby 多项式大小，内部 JSONL 也在 B2 后记录这两个字段。Stage1 因子没有这些字段；CPU gwpoly 记录实际 D/P，并在其后输出真实 `stage2-fft-length`；libecm 当前没有导出对应几何参数，保持省略。
 - 原生提交序列化不附内部诊断与 CRC；历史转换器按要求附 `checksum:{version:1,checksum:…}` 及其规范串需要的 `errors`/`os`。两者都省略 `security-code`，CRC32 不冒充缺少依据的 Prime95 SEC5。
 
 每个因子均验证 `1<f<N` 且 `f|N`。失败或未完成的当前曲线不生成 NF。NF 的 B2 只声明已完成的请求界限，不把 libecm 内部可能超出的尾部覆盖算作额外工作。没有执行的 Prime95 D、poly-size 或 Stage2 FFT 参数不补造。
@@ -67,7 +67,7 @@ AID 可省略；CPU 和 CUDA 直接读档均可用 `--aid`，CUDA 队列沿用�
 
 CRC 使用标准反射 CRC-32/ISO-HDLC：宽度 32 位，初值 `0xFFFFFFFF`，反射多项式 `0xEDB88320`（正向表示为 `0x04C11DB7`），最终异或 `0xFFFFFFFF`。对每个字节 b，先令 r ← r XOR b，再执行 8 次：若最低位为 1，则 r ← (r >> 1) XOR `0xEDB88320`；否则 r ← r >> 1。全部字节处理后，C = r XOR `0xFFFFFFFF`。将 C 写成大写、左补零至 8 位的十六进制字符串，放入 checksum 对象的 checksum 字段，版本字段为整数 1。Python 的 `zlib.crc32` 对 S 的 UTF-8 字节执行同一计算。
 
-CPU 内部结果使用自己的 fft-length=0 和逐曲线 sigma；转换后提交文件使用正的参考 FFT、NF 模型标记和合并后的真实完成时间，必须从最终记录重新计算 CRC，不能拷贝内部旧值。版本、参与计算的字段或其表示改变时也须重算。单纯调整 JSON 键顺序、空格，以及移动 d/poly-size 不改变规范串。
+CPU 内部结果使用本行的实际 fft-length（libecm 为 0，gwpoly 为真实 GW 长度）和逐曲线 sigma；转换后提交文件使用正的参考 FFT、NF 模型标记和合并后的真实完成时间，必须从最终记录重新计算 CRC，不能拷贝内部旧值。版本、参与计算的字段或其表示改变时也须重算。单纯调整 JSON 键顺序、空格，以及移动 d/poly-size 不改变规范串。
 
 curves、d、poly-size、stage2-fft-length、status、stage、user、computer、aid、program.port 和 source-build 不在这 16 个槽位中；CRC 不保护这些字段。它也不是 Prime95 的 security-code/SEC5。第三方源码依据见 [PrMers CRC32 研究](../reference/ECM_RESULT_JSON.md#prmers-crc32)，本仓库入口为 [转换器 checksum](../../tools/ecm_report/rewrite_stage2_results.py) 与 [CPU result](../../src/core/ecm_cpu_stage2_main.cpp)；[独立按位校验](../../tools/test/test_stage2_result_rewrite.py) 用于复核库计算结果。真实运行产生的 checksum 值保留在忽略目录。
 
