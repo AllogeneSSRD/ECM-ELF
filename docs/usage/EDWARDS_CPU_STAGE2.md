@@ -47,6 +47,8 @@ a_{24}=\frac1{1-d},\qquad A=4a_{24}-2\pmod N.
 
 ## 验证与实测
 
+318–16272 位余因子、B1=50000、4096 MiB 规划预算的双后端 CPU/GPU 对照与 Prime95 历史参考，统一见 [Edwards Stage2 基准](../performance/EDWARDS_STAGE2.md)。本节保留下述小位宽、独立冻结版本的验证及性能数据。
+
 正确性脚本为 [test_edwards_cpu_pipeline.py](../../tools/test/test_edwards_cpu_pipeline.py)。冻结证据在 `data/experiments/edwards_full_pipeline_20261016/`：CPU 标量、多线程、AVX512-IFMA 与 GPU1 RTX4060 的 127/347/2203 位保存点对照，独立 Python `48LCM` 点乘，Stage1/Stage2 真因子，已知因子元数据，存档损坏拒绝，默认/追加输出，写入失败队列保持，以及真实 Stage1 停止恢复和 Stage2 中断。GPU 测试仅用设备 1。
 
 结果分离版本的数学回归及双文件验证见 `data/experiments/ecm_submission_20261016/`，范围见 [结果输出验证](ECM_RESULTS.md#验证与边界)。下述性能数据使用独立冻结二进制，不代表新输出与账本的发布开销。

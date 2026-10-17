@@ -21,6 +21,7 @@
 
 ## 当前 Stage2 工作入口
 
+- [Edwards CPU/GPU 精确输入基准](bench/README_EDWARDS_STAGE2_REFERENCE.md)：Prime95 历史余因子恢复、共享末点、双 CPU 后端、普通/承载 GPU、线程占用与图表。
 - [位宽/B2测量](bench/README_STAGE2_N_SCALING.md)：数据库只读输入、三遍余因子与完整梅森对照、统计和阶段堆积图。
 - [短NTT分块A/B](bench/README_STAGE2_SHORT_NTT.md)：冻结输入的开关对照、完整耗时、长度计数、GMP/执行计划门禁及图表。
 - [短NTT Graph A/B](bench/README_STAGE2_GRAPH.md)：完整曲线、缓存生命周期门禁、管理员Systems/Compute与图表。

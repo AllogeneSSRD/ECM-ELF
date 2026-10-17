@@ -1,5 +1,7 @@
 # Stage2 性能与规模关系
 
+Edwards 的 318–16272 位余因子、B1=50000、两档大 B2、Prime95 四线程历史参考及本仓库 CPU/GPU 测量统一见 [Edwards Stage2 基准](EDWARDS_STAGE2.md)。该矩阵保留实际 B2 和独立版本、时钟及线程条件，不与本页其他实验合并统计。
+
 libecm CPU Edwards 的 NTT/非 NTT 完整曲线对照、B2=10^12 样本、峰值工作集及图表见 [CPU Stage2 实测](../usage/EDWARDS_CPU_STAGE2.md#验证与实测)，与本页其他 CPU 参考程序分别计量。
 
 本页的实验结论只适用于各节注明的冻结二进制、输入及统计边界。性能文件的当前复用、选型及估算规则以[Auto B2/tune](../architecture/AUTO_B2.md)为准；格式2/3/4测量的误差资格不能直接作为当前跨范围模型的精度证明。
