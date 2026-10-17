@@ -18,6 +18,8 @@ GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` �
 
 ## 共用 INI 与 worker
 
+队列的 `tmp_dir` 相对可执行文件所在目录解析；路径生成时清除 `.` 等冗余目录组件，并使用当前平台的分隔符。检查点文件名自身的前导 `.` 属于命名的一部分。
+
 两个 CUDA 程序可共用 exe 目录中的 `ecm.ini`。Stage1 使用 `worktodo`、`finished`、`log_file`；Stage2 使用相应 `stage2_*` 键，分别消费队列。
 
 `--worker N` 同时选择 INI 与 worktodo 中的 `[Worker #N]`。worker 设置覆盖全局设置，再使用默认值。每个队列只能有一个消费进程；不同 worker 使用独立输出路径。键的默认值和适用范围只在配置参考维护。
@@ -31,6 +33,8 @@ GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` �
 CPU Edwards 单曲线、SIMD 和 GPU 路径均在分块边界刷新进度；重定向到文件或 GUI 管道时输出普通文本百分比，不依赖终端控件。
 
 GPU Edwards 先输出 `GPU Edwards initialization` 和 `GPU Edwards dictionary` 耗时，再进入与 CUDA Montgomery 相同格式的 `GPU:` 实时进度条。NAF 的累计量和单片增量单位为 `columns`；binary 为 `bits`，二者不可互换。NAF 直接使用已有列计数，不为进度重新编码标量。终端原地刷新；GUI 管道保留完整文本行，常规刷新间隔约 200 ms，首片、末片及安全停止时立即输出。
+
+这里的 `bits` 是 Stage1 标量 S 的二进制位置数，不是目标 N 的位宽。`columns` 是同一 S 的窗口 NAF 位置数，包含零列；每列仍对应一个 2 的幂次位置，窗口 6 不代表每列处理 6 bits。每列执行一次倍点，非零列再加减一个预计算奇数倍点。NAF 列数可能与二进制位数不同，也不等于非零项数或点加法次数。比较两种路径的耗时应看同任务的完成时间及 `s/curve`；数字表示与例子见 [NAF 原理](../reference/ECM_EDWARDS_MATH.md#3-naf-标量乘法)。
 
 Edwards 的初始化涵盖指数、曲线构造或恢复、标量编码及设备分配/上传，排除单独报告的设备字典构建。进度条 `elapsed` 从准备完成后开始，包含本次主循环的回传、输出和检查点耗时；恢复前的工作不计入本次耗时。速度取最近最多 50 个切片的推进量/时间，包含切片及状态回传，排除进度回调中的输出和检查点写入。续算以已保存位置为采样基准，避免把历史推进量计入当前速度。完整计时边界见[实现说明](../architecture/STAGE1.md#gpu-edwards)。
 

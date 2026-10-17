@@ -669,9 +669,18 @@ static bool is_absolute_path_local(const std::string &p) {
 #endif
 }
 
+static std::string normalize_path_local(std::filesystem::path path) {
+    if(path.empty())return {};
+    path=path.lexically_normal();
+    // A directory's trailing separator is unnecessary, except at a root.
+    if(path.filename().empty() && path!=path.root_path())path=path.parent_path();
+    return path.make_preferred().string();
+}
+
 static std::string resolve_rel_local(const std::string &base, const std::string &p) {
-    if (p.empty() || is_absolute_path_local(p)) return p;
-    return base + "/" + p;
+    if(p.empty())return {};
+    return normalize_path_local(is_absolute_path_local(p)?std::filesystem::path(p):
+                                std::filesystem::path(base)/p);
 }
 
 static std::string get_exe_dir_local() {
@@ -3030,7 +3039,7 @@ static int run_stage1_once(const mpz_t N,double B1,double B2,uint32_t curves,
         const auto exponent=opt.target_kbnc?opt.handoff_n:(mpz_popcount(plus.v)==1?mpz_scan1(plus.v,0):0);
         const auto name=std::string(base.edwards?".e":".m"+std::to_string(base.param))+"_s1_"+
             (exponent?"m"+std::to_string(exponent):"bit"+std::to_string(mpz_sizeinbase(N,2)))+"_"+std::to_string(uint64_t(B1))+".ckpt";
-        const auto path=opt.tmp_dir.empty()?std::string{}:(std::filesystem::path(opt.tmp_dir)/name).string();
+        const auto path=opt.tmp_dir.empty()?std::string{}:normalize_path_local(std::filesystem::path(opt.tmp_dir)/name);
         if(!path.empty())std::filesystem::create_directories(opt.tmp_dir);
         ecm_stage1_set_backup_limit(opt.ckpt_backups);ecm_stage1_set_checkpoint_path(path);
         {
@@ -4313,7 +4322,7 @@ int main(int argc, char **argv){
         }
     }
     if (tmp_dir.empty()) tmp_dir = ".";      // 默认 = 当前目录 (本地)
-    opt.tmp_dir = tmp_dir;
+    opt.tmp_dir = normalize_path_local(tmp_dir);
     {
         const auto ini=ini_path.empty()?std::filesystem::path(get_exe_dir_local())/"ecm.ini":std::filesystem::path(ini_path);
         EcmQueueConfig cfg;
