@@ -1,5 +1,6 @@
 #pragma once
 #include "ecm_stage2_geometry.h"
+#include "ecm_stage2_giant_tree.h"
 #include <vector>
 
 // Predictive request topology, independent of CUDA allocation or coefficient data.
@@ -55,13 +56,14 @@ struct RequestSignature {
         *this=result;
     }
 };
-inline bool append_tree_requests(Word p,unsigned phase,RequestBlock &block) {
+inline bool append_tree_requests(Word p,unsigned phase,RequestBlock &block,bool balanced=false) {
     if(phase==RequestGtrees)block.tree_leaves=p;
-    return tree_multiply_groups(p,[&](Word a,Word b,Word nb) {
+    const auto visit=[&](Word a,Word b,Word nb) {
         Word count=0;if(!add(a,b-1,count))return false;
         block.requests.push_back({phase,a,b,nb,0,count,
             phase==RequestGtrees?RequestTreeRaw:RequestHost});return true;
-    });
+    };
+    return phase==RequestGtrees && balanced?giant_tree_multiply_groups(p,visit):tree_multiply_groups(p,visit);
 }
 inline bool append_fold_requests(Word p,Word ng,Word h,RequestBlock &block) {
     Word nt=0;if(!ng || !h || !add(ng,h-1,nt))return false;
@@ -73,7 +75,7 @@ inline bool append_fold_requests(Word p,Word ng,Word h,RequestBlock &block) {
     }
     return true;
 }
-inline bool request_program(Word p,Word giant_points,RequestProgram &program) {
+inline bool request_program(Word p,Word giant_points,RequestProgram &program,bool balanced=false) {
     program=RequestProgram{};
     if(!p || !giant_points || p>std::numeric_limits<Word>::max()/2)return false;
     // One full G root is monic of degree P and needs a separate root division.
@@ -91,24 +93,24 @@ inline bool request_program(Word p,Word giant_points,RequestProgram &program) {
     const Word full=giant_points/p,rem=giant_points%p;
     if(full) {
         RequestBlock first;
-        if(!append_tree_requests(p,RequestGtrees,first))return false;
+        if(!append_tree_requests(p,RequestGtrees,first,balanced))return false;
         program.blocks.push_back(std::move(first));
     }
     if(full>=2) {
         RequestBlock second;
-        if(!append_tree_requests(p,RequestGtrees,second) ||
+        if(!append_tree_requests(p,RequestGtrees,second,balanced) ||
            !append_fold_requests(p,p+1,p+1,second))return false;
         program.blocks.push_back(std::move(second));
     }
     if(full>2) {
         RequestBlock middle;middle.repeat=full-2;
-        if(!append_tree_requests(p,RequestGtrees,middle) ||
+        if(!append_tree_requests(p,RequestGtrees,middle,balanced) ||
            !append_fold_requests(p,p+1,p,middle))return false;
         program.blocks.push_back(std::move(middle));
     }
     if(rem) {
         RequestBlock last;
-        if(!append_tree_requests(rem,RequestGtrees,last) ||
+        if(!append_tree_requests(rem,RequestGtrees,last,balanced) ||
            (full && !append_fold_requests(p,rem+1,full==1?p+1:p,last)))return false;
         program.blocks.push_back(std::move(last));
     }
@@ -143,7 +145,7 @@ template<class Query,class Describe> bool request_plan(Word p,Word giant_points,
         Word chunk_max,bool pool,RequestPlan &plan,const ShortNttBatchPolicy *short_ntt=nullptr) {
     plan=RequestPlan{};
     if(bits<2 || bits>max_input_bits || (buffers!=2 && buffers!=3) ||
-       !request_program(p,giant_points,plan.program))return false;
+       !request_program(p,giant_points,plan.program,giant_tree_balanced((bits+63)/64,giant_points,p)))return false;
     if(!plan.program.supported)return true;
     const Word w=(bits+63)/64;
     std::map<std::pair<Word,Word>,Word> digits,bigs;

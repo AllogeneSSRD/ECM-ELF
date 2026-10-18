@@ -19,7 +19,7 @@ static void payload_check(const S4MemoryPayload &p,const S4Ctx &C,const Reducer 
 }
 static void program_case(Word p,Word points,int bits,S4ProgramPolicy policy) {
     check(heap.empty());actual.clear();total=peak=0;
-    RequestProgram program;check(request_program(p,points,program));
+    RequestProgram program;check(request_program(p,points,program,giant_tree_balanced((bits+63)/64,points,p)));
     S4ProgramPlan model;check(s4_program_plan(program,bits,synthetic_shape,policy,model) && model.valid);
     Word requests=0,chunks=0,trees=0;
     {

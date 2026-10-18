@@ -17,6 +17,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--exe', type=Path, required=True)
     p.add_argument('--save', type=Path, required=True)
+    p.add_argument('--ini', type=Path, help='Explicit identity/config INI for current native drivers')
     p.add_argument('--b2', type=int, required=True)
     p.add_argument('--d', type=int, required=True)
     p.add_argument('--device', type=int, default=1)
@@ -65,6 +66,7 @@ def main():
     sources = raw_sources if isinstance(raw_sources, dict) else {s.split('=',1)[0]:s.split('=',1)[1].lower() for s in raw_sources if '=' in s and (root/s.split('=',1)[0]).is_file()}
     exe_sha = hashlib.sha256(exe.read_bytes()).hexdigest()
     save_sha = hashlib.sha256(save.read_bytes()).hexdigest()
+    ini_sha=hashlib.sha256(a.ini.read_bytes()).hexdigest() if a.ini is not None else None
     frozen_manifest=exe.parent/'frozen_sources_manifest.json'
     source_root=root
     if frozen_manifest.exists():
@@ -76,6 +78,7 @@ def main():
     def verify():
         assert hashlib.sha256(exe.read_bytes()).hexdigest() == exe_sha == build['sha256'].lower()
         assert hashlib.sha256(save.read_bytes()).hexdigest() == save_sha
+        if ini_sha:assert hashlib.sha256(a.ini.read_bytes()).hexdigest()==ini_sha, 'Explicit INI changed'
         if manifest_sha:assert hashlib.sha256(frozen_manifest.read_bytes()).hexdigest()==manifest_sha, 'Frozen manifest changed'
         for name, digest in sources.items(): assert hashlib.sha256((source_root/name).read_bytes()).hexdigest() == digest.lower(), name
     verify()
@@ -108,6 +111,8 @@ def main():
     if a.outer_narrow is not None:
         env['NTT_OUTER_NARROW']=str(a.outer_narrow)
     command = [str(exe), '--save', str(save), '--b2', str(a.b2), '--d', str(a.d), '--device', str(a.device), '--results', str(out/'results.jsonl'), '--log', str(out/'engine.log')]
+    if a.ini is not None:
+        command+=['--ini',str(a.ini.resolve()),'--submission',str(out/'results.json.txt')]
     if a.arena_mb is not None:
         if a.arena_mb<=0:raise ValueError('Invalid arena budget')
         command+=['--arena-mb',str(a.arena_mb)]
@@ -171,6 +176,7 @@ def main():
         with (out/'export.log').open('wb') as log:
             subprocess.run(export, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=120)
     manifest = dict(exe=str(exe), sha256=exe_sha, save=str(save), save_sha256=save_sha, sources=sources,source_root=str(source_root),frozen_manifest_sha256=manifest_sha,collector_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), command=command, env={k:v for k,v in env.items() if k.startswith('NTT_')}, profile=profile, export=export, Q_sha256=hashlib.sha256(q.encode()).hexdigest(), leaf=re.search(r'descent_values: (.*)',text)[1], full_wall=re.search(r'stage2_full_wall: (.*)',text)[1], oracle=re.search(r's4_oracle_stats: (.*)',text)[1])
+    if ini_sha:manifest.update(ini=str(a.ini.resolve()),ini_sha256=ini_sha)
     if a.add_sub_mask is not None:manifest['compiled_add_sub_mask']=a.add_sub_mask
     (out/'manifest.json').write_text(json.dumps(manifest, indent=2))
     c = sqlite3.connect('file:'+trace.with_suffix('.sqlite').as_posix()+'?mode=ro', uri=True)

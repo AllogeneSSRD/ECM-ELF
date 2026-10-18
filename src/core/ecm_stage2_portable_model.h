@@ -31,7 +31,8 @@ template<class Query,class NttCost> bool work(const Shape &s,Query query,NttCost
     if(s.target_bits<2 || s.arithmetic_bits<s.target_bits || s.arithmetic_bits>16384 ||
        s.b1<2 || s.b2<=s.b1 || s.d<6 || s.d%2 || !s.batch_bytes)return false;
     out.p=d_catalog::degree(s.d);out.points=s.b2/s.d+2;
-    RequestProgram program;if(!request_program(out.p,std::max(out.points,out.p+1),program))return false;
+    RequestProgram program;if(!request_program(out.p,std::max(out.points,out.p+1),program,
+        giant_tree_balanced((s.arithmetic_bits+63)/64,out.points,out.p)))return false;
     if(out.points<=out.p) {
         // G=1 has a local root division/inverse. Use a conservative full-degree
         // cost surrogate, without claiming the resident request topology.

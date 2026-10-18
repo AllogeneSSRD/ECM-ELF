@@ -53,7 +53,7 @@ $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
     'src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h','src/core/ecm_file_publication.h','src/core/ecm_program_version.h','src/core/ecm_result_submission.h','src/core/ecm_submission_writer.h','src/core/generated/p95_fft_reference.h',
     'src/core/ecm_stage2_phase_times.h','src/core/ecm_stage2_ntt_counts.h','src/core/ecm_stage2_d_catalog.h',
     'src/core/ecm_stage2_tune_portable.h','src/core/ecm_stage2_portable_model.h','src/core/ecm_stage2_width_prediction.h','src/core/ecm_stage2_width_reference.h','src/core/ecm_stage2_portable_driver.inl','src/core/ecm_stage2_probability.h','src/core/ecm_stage1_cost_csv.h',
-    'src/core/ecm_stage2_giant_work.h','src/core/ecm_stage2_relocation.h',
+    'src/core/ecm_stage2_giant_work.h','src/core/ecm_stage2_relocation.h','src/core/ecm_stage2_giant_tree.h',
     'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h', 'src/core/ecm_stage2_ntt_memory.h', 'src/core/ecm_stage2_giant_memory.h', 'src/core/ecm_stage2_s4_memory.h', 'src/core/ecm_stage2_s4_program.h', 'src/core/ecm_stage2_modulus.h', 'src/core/ecm_stage2_logging.h', 'src/core/ecm_stage2_console.h', 'src/core/ecm_stage2_queue_state.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
     'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h', 'src/core/ecm_stage2_tune_format.h', 'src/core/ecm_stage2_tune_ecm.h', 'src/core/ecm_stage2_tune_grid.h', 'src/core/ecm_stage2_tune_prediction.h', 'src/core/ecm_stage2_tune_auto.h', 'src/core/ecm_stage2_tune_components.h', 'src/core/ecm_stage2_tune_ntt_profile.h', 'src/core/ecm_stage1_tune_profile.h', 'src/core/ecm_stage2_workspace_memory.h', 'src/core/ecm_stage2_owner_memory.h', 'src/core/ecm_stage2_giant_state.h', 'src/core/ecm_stage2_initial_memory.h',
     'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h', 'src/core/ecm_ini.h',
@@ -62,6 +62,7 @@ $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
     'tools/gen/generate_ecm_config.py', 'tools/build/internal/check_ecm_config.cmake',
     'tools/build/build_stage2_local.ps1','tools/build/internal/gmp_dependency.ps1','tools/build/internal/cuda_toolchain.ps1')
 if ($Engine -eq 'production') {
+    $deps += @('kernels/cuda/stage2_giant_chain.cuh')
     $deps += @(Get-ChildItem -LiteralPath 'src/cuda/stage2' -File -Filter '*.cuh' |
         Sort-Object Name | ForEach-Object { 'src/cuda/stage2/' + $_.Name })
 } else {
@@ -86,8 +87,8 @@ $gmpHashes = $gmpDependency.Hashes
 $signature += "gmp=$Gmp"
 foreach ($name in $gmpHashes.Keys) { $signature += "gmp/$name=$($gmpHashes[$name])" }
 $signatureText = $signature -join "`n"
-$cudaDeps = @($cudaSource,'src/core/ecm_cuda_stage2.h','src/core/ecm_stage2_relocation.h','src/core/ecm_stage2_d_catalog.h','src/core/ecm_stage2_ntt_counts.h','src/core/ecm_stage2_phase_times.h','src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h','src/core/ecm_stage2_ntt_memory.h','src/core/ecm_stage2_giant_memory.h','src/core/ecm_stage2_s4_memory.h','src/core/ecm_stage2_s4_program.h','src/core/ecm_stage2_modulus.h','src/core/ecm_stage2_logging.h',
-    'src/cuda/ecm_stage2_tune.cuh','src/core/ecm_stage2_workspace_memory.h','src/core/ecm_stage2_owner_memory.h','src/core/ecm_stage2_giant_state.h','src/core/ecm_stage2_initial_memory.h') + @($deps | Where-Object { $_ -like 'tools/bench/*' -or $_ -like 'src/cuda/stage2/*' })
+$cudaDeps = @($cudaSource,'src/core/ecm_cuda_stage2.h','src/core/ecm_stage2_relocation.h','src/core/ecm_stage2_giant_tree.h','src/core/ecm_stage2_d_catalog.h','src/core/ecm_stage2_ntt_counts.h','src/core/ecm_stage2_phase_times.h','src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h','src/core/ecm_stage2_ntt_memory.h','src/core/ecm_stage2_giant_memory.h','src/core/ecm_stage2_s4_memory.h','src/core/ecm_stage2_s4_program.h','src/core/ecm_stage2_modulus.h','src/core/ecm_stage2_logging.h',
+    'src/cuda/ecm_stage2_tune.cuh','src/core/ecm_stage2_workspace_memory.h','src/core/ecm_stage2_owner_memory.h','src/core/ecm_stage2_giant_state.h','src/core/ecm_stage2_initial_memory.h') + @($deps | Where-Object { $_ -like 'tools/bench/*' -or $_ -like 'src/cuda/stage2/*' -or $_ -like 'kernels/cuda/stage2*' })
 if ($HostOnly) {
     $previous = Get-Content -LiteralPath (Join-Path $Build 'build_manifest.json') -Raw | ConvertFrom-Json
     $previousSplit = if ($previous.split_compile) { $previous.split_compile } else { 1 }

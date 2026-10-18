@@ -12,7 +12,7 @@ save提供目标N、sigma、B1和归一化X，不自动推断承载指数。Suya
 
 完整tune可按成本与联合显存比较普通/合法承载，允许配置跨条件复用及宽度/B2估算，详见[Auto B2/tune](AUTO_B2.md)。合法梅森worktodo结合已知因子和save验证后提供承载指数；仅save不猜指数。显式`--carrier-exponent 0`锁定普通模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
 
-承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L9034)。
+承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L9015)。
 
 设备点坐标使用 Montgomery 域，NTT digit 在 Goldilocks 域，多项式系数归约后为普通规范整数。不同表示不能直接相乘或判断数学相等。
 
@@ -42,6 +42,8 @@ Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务�
 
 差分 xADD 使用 6 次模乘，固定差点保证 chain 中的相邻点关系。相邻 seed 可同时得到 [iD]Q 与 [(i+1)D]Q，避免重复计算两个独立 ladder。短块、容量不足或非单位场景仍需保留正确回退。
 
+seed 和 chain 的宽位数核在 W>128 时使用 32 线程 CUDA 块，其他宽度仍为 64 线程；每条顺序 chain 仍生成 64 点。此处 CUDA 线程块大小与 chain 点数是两个独立参数。点坐标、Montgomery radix、seed 标量和回退条件保持同一合同。chain 核位于 `kernels/cuda/stage2_giant_chain.cuh`，正式构建记录其依赖与哈希。
+
 生产路径的通用 chain 下限为每个点块 32768 点；当算术位宽 W>128 个 64-bit limb、驻留 G 叶可用且其坐标预算至少覆盖 32767 点时，有效下限为 8192。这里 W 取实际算术模数，承载模式按承载位宽计算。更短点块或不足的驻留预算仍使用通用路线；`NTT_GIANT_CHAIN_MIN` 的生产配置约束保持不变。共享选择函数为 [giant_chain_minimum](../../src/core/ecm_stage2_geometry.h)，原生内存规划与 portable tune 使用相同的有效阈值。
 
 新接入的宽尾块先验证 [D]Q 的单位性。非单位基点直接使用逐点 ladder；若差分链生成后的分组乘积在目标 N 上非单位，则恢复此前的逻辑 Gamma，并在原坐标和分段缓冲区内用逐点 ladder 重做整个尾块。该回退保留原有因子集合及非仿射占位叶，避免将表示差异引入结果。已有大点块的路线保持原合同。缓冲区预留公式见 [Giant 组件](MEMORY.md#giant-组件)。
@@ -53,6 +55,12 @@ Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务�
 ## 多项式与 scaled 下降
 
 F(X)=∏ⱼ(X−xⱼ)。giant 叶为齐次形式 ZᵢX−Xᵢ，或等价的已归一化叶；累计 H 与相关缩放共同保持数学结果。G 树非满尾批按真实次数构建，不能用填满后的次数估计所有 NTT。
+
+当 W>128 且本次 giant 区间至少包含 4 个完整 G 批次时，驻留 G 根树使用分块空位布局：底部保留密集的二次幂叶块，将最多 128 个块分散在上层完整树的槽位中，减少非二次幂次数导致的高层输入不平衡。其他位宽及较短 Stage2 保留原来的左侧连续布局，避免为少量计算增加形状准备及复制开销。启用条件由 `giant_tree_balanced` 统一用于执行器、请求规划及调优工作量；debug日志 `groot_layout` 记录实际选择。
+
+真实叶数组保持原密集顺序，空位代表次数为 0 的常数 1；没有新增 giant 点或根。F 树及其有序下降保持原布局，主机树回退仍产生相同根。布局、压缩请求分组和 raw 缓冲区容量依据见 [G 树固定资料](../reference/ECM_STAGE2_G_TREE_LAYOUT.md)；请求规划与设备每层排序使用同一形状合同。
+
+G 树不会为了填满 P 而扩大已经选定的 B2。若显式比较完整覆盖边界，先取 `I=floor(B2/D)+2`、`G=ceil(I/P)`，最小扩展值为 `B2'=max(B2,(G*P-2)*D)`；这是增加实际覆盖范围，须以新 B2 运行并报告。非满 G 的空位不能作为已经完成的曲线工作量。
 
 多 G 批次复用 F 和反转逆，不逐批重建。scaled 下降采用反转/截断/middle product 的等价表达，将原余式链传播到各子树；非空子节点使用实际 operand 长度，空节点复制或补零。归一化后的叶投影与直接 Horner/CPU 参考一致是正确性门禁。
 
@@ -92,8 +100,8 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 
 ## 代码依据
 
-- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7304)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9546)。
+- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7265)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9511)。
 - [模数上下文](../../src/core/ecm_stage2_modulus.h#L28)：`configure`，目标/承载资格。
-- [请求程序](../../src/core/ecm_stage2_requests.h#L76)：`request_program`；[精确树组](../../src/core/ecm_stage2_geometry.h#L147)：`tree_multiply_groups`。
+- [请求程序](../../src/core/ecm_stage2_requests.h#L78)：`request_program`；[F树组](../../src/core/ecm_stage2_geometry.h#L147)：`tree_multiply_groups`；[G树布局/分组与选择](../../src/core/ecm_stage2_giant_tree.h)：`giant_tree_balanced`、`giant_tree_layout`、`giant_tree_multiply_groups`。
 - [点模乘](../../src/cuda/stage2/stage2_point_mersenne.cuh)、[NTT](NTT.md)、[内存](MEMORY.md)。
 - 固定资料：[多项式数学](../reference/ECM_STAGE2_MATH.md)、[Prime95 Poly](../reference/PRIME95_STAGE2.md)、[PrMers ECM](../reference/PRMERS_ECM.md)。

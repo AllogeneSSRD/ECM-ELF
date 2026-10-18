@@ -20,17 +20,21 @@ from stage2_memory_ledger import parse as parse_memory_ledger
 PHASES = ('ftree','gtrees','fold','descent','inverse')
 
 
-def dense_degrees(p):
+def dense_degrees(p, giant=False):
     pad = 1 << (p-1).bit_length()
-    d = [0]*pad+[1]*p+[0]*(pad-p)
+    d = [0]*(2*pad)
+    tile=min(pad,max(16,pad//128));slots=pad//tile;tiles=(p+tile-1)//tile
+    for i in range(p):
+        index=((i//tile)*slots//tiles)*tile+i%tile if giant else i
+        d[pad+index]=1
     for i in range(pad-1,0,-1):
         d[i] = d[2*i]+d[2*i+1]
     return d,pad
 
 
 @lru_cache(maxsize=32)
-def dense_tree(p, phase):
-    d,pad = dense_degrees(p)
+def dense_tree(p, phase, balanced=False):
+    d,pad = dense_degrees(p,phase==1 and balanced)
     result,base = [],pad//2
     while base:
         groups = {}
@@ -44,7 +48,7 @@ def dense_tree(p, phase):
     return tuple(result)
 
 
-def dense_program(p, points):
+def dense_program(p, points, balanced=False):
     result = list(dense_tree(p,0))
     size = 1
     while size < p+1:
@@ -54,7 +58,7 @@ def dense_program(p, points):
     h = 0
     for begin in range(0,points,p):
         g = min(p,points-begin)
-        result.extend(dense_tree(g,1))
+        result.extend(dense_tree(g,1,balanced))
         if not h:
             h = g+1
         else:
@@ -96,7 +100,8 @@ def verify_topology(plan):
         raise ValueError('dense gate limited to 128 G roots; compressed huge-repeat fixture is CPU-only')
     actual = [tuple(r[k] for k in ('phase','ma','mb','pairs','first','count'))
               for block in request['blocks'] for _ in range(block['repeat']) for r in block['requests']]
-    expected = dense_program(plan['P'],plan['I'])
+    balanced=plan['words']>128 and plan['I']//plan['P']>=4
+    expected = dense_program(plan['P'],plan['I'],balanced)
     if actual!=expected:
         raise ValueError('predictive request order differs from independent dense topology')
     if request['version']>=2:

@@ -1049,7 +1049,7 @@ static void s2g_launch_seed_pair(int nw,unsigned long long clo,unsigned long lon
 {
     for(unsigned long long offset=0;offset<blocks;offset+=g_ladder_cap) {
         const unsigned long long count=std::min(blocks-offset,(unsigned long long)g_ladder_cap);
-        const unsigned int th=64,bl=(unsigned int)((count+th-1)/th);
+        const unsigned int th=nw>128?32:64,bl=(unsigned int)((count+th-1)/th);
         if constexpr(g_xadd6)s2g_seed_pair_kernel<NW,true><<<bl,th>>>(dn,ninv,nw,hx,hz,a24,mone,
             clo,npts,per_block,blocks,offset,count,ox,oz);
         else s2g_seed_pair_kernel<NW,false><<<bl,th>>>(dn,ninv,nw,hx,hz,a24,mone,
@@ -1073,50 +1073,7 @@ static void s2g_launch_seed_pair(int nw,unsigned long long clo,unsigned long lon
  *  Montgomery domain -- the only consumer is the host's affine_x = X/Z mod N, which is invariant
  *  under projective scaling, so no inversion and no conversion is needed.
  * ===================================================================================== */
-template <int NW, bool XADD6=false>
-__global__ void s2g_chain_kernel(const unsigned long long *dn, unsigned long long ninv, int nw,
-                                 const unsigned long long *ddx, const unsigned long long *ddz,
-                                 const unsigned long long *dsx, const unsigned long long *dsz,
-                                 const unsigned long long *esx, const unsigned long long *esz,
-                                 unsigned long long npts, unsigned long long per_block,
-                                 unsigned long long blocks,
-                                 unsigned long long *out_x, unsigned long long *out_z,
-                                 size_t seed_stride)
-{
-    const unsigned long long t = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
-    if (t >= blocks) return;
-    const unsigned long long start = t * per_block;
-    if (start >= npts) return;
-    const unsigned long long end = ((start + per_block) < npts) ? (start + per_block) : npts;
-    unsigned long long xa[NW], za[NW], xb[NW], zb[NW], xc[NW], zc[NW];
-    for (int j = 0; j < nw; ++j) {
-        xa[j] = dsx[(size_t)t * seed_stride * nw + j];
-        za[j] = dsz[(size_t)t * seed_stride * nw + j];
-        xb[j] = esx[(size_t)t * seed_stride * nw + j];
-        zb[j] = esz[(size_t)t * seed_stride * nw + j];
-    }
-    for (int j = 0; j < nw; ++j) {
-        out_x[(size_t)start * nw + j] = xa[j];
-        out_z[(size_t)start * nw + j] = za[j];
-    }
-    if (end > start + 1)
-        for (int j = 0; j < nw; ++j) {
-            out_x[(size_t)(start + 1) * nw + j] = xb[j];
-            out_z[(size_t)(start + 1) * nw + j] = zb[j];
-        }
-    for (unsigned long long k = start + 2; k < end; ++k) {
-        /* x_k = x_{k-1} + x_1, with the difference x_{k-2}: p = x_{k-1}, q = x_D, diff = x_{k-2} */
-        s2g_xadd<NW,XADD6>(xc, zc, xb, zb, ddx, ddz, xa, za, dn, ninv, nw);
-        for (int j = 0; j < nw; ++j) {
-            out_x[(size_t)k * nw + j] = xc[j];
-            out_z[(size_t)k * nw + j] = zc[j];
-            xa[j] = xb[j];
-            za[j] = zb[j];
-            xb[j] = xc[j];
-            zb[j] = zc[j];
-        }
-    }
-}
+#include "../../kernels/cuda/stage2_giant_chain.cuh"
 
 template <int NW>
 static void s2g_launch_chain(int nw, unsigned long long blocks, unsigned long long npts,
@@ -1127,7 +1084,7 @@ static void s2g_launch_chain(int nw, unsigned long long blocks, unsigned long lo
                              const unsigned long long *esz, unsigned long long *ox,
                              unsigned long long *oz, size_t seed_stride=1)
 {
-    const unsigned int th = 64;
+    const unsigned int th = nw>128?32:64;
     const unsigned int bl = (unsigned int)((blocks + th - 1) / th);
     if constexpr(g_xadd6)
         s2g_chain_kernel<NW,true><<<bl,th>>>(dn,ninv,nw,ddx,ddz,dsx,dsz,esx,esz,npts,per_block,
@@ -4425,17 +4382,20 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
     PolyLayer &L,const std::vector<std::vector<unsigned long long>> &leaf,
     std::vector<size_t> &deg,size_t &pad_out,FTreeStats &fs,int cat,
     size_t device_n=0,const std::function<void(unsigned long long*)> &fill={},
-    const std::function<void(const unsigned long long*,size_t)> &root_sink={})
+    const std::function<void(const unsigned long long*,size_t)> &root_sink={},bool balanced=false)
 {
     stage2_trace::Range trace("GTree.build");
-    const size_t W=L.W,n=fill?device_n:leaf.size();size_t pad=1;while(pad<n)pad*=2;
+    const size_t W=L.W,n=fill?device_n:leaf.size();
+    ecm_stage2::GiantTreeLayout layout;
+    if(!ecm_stage2::giant_tree_layout(n,layout)){std::fprintf(stderr,"FATAL: G tree layout overflow\n");std::exit(3);}
+    const size_t pad=layout.pad;
     const bool check=g_groot_device_check;
     if(check && n>512) {std::fprintf(stderr,"%s: FATAL: resident GMP check limited to 512 leaves\n",NTT_PROBE_NAME);std::exit(3);}
     ++g_gdevice.trees;fs.leaves=n;fs.padded=pad;pad_out=pad;
     deg.assign(2*pad,0);
     for(size_t i=0;i<n;++i) {
         if(!fill && leaf[i].size()!=2*W) {std::fprintf(stderr,"%s: FATAL: resident tree requires linear leaves\n",NTT_PROBE_NAME);std::exit(3);}
-        deg[pad+i]=1;
+        deg[pad+(balanced?layout.leaf(i):i)]=1;
     }
     for(size_t i=pad;--i;)deg[i]=deg[2*i]+deg[2*i+1];
     std::vector<std::vector<unsigned long long>> tree(2*pad),expected;
@@ -4492,18 +4452,19 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
         std::vector<unsigned long long> device_leaf;
         if(fill){device_leaf.resize(need);CK(cudaMemcpy(device_leaf.data(),C.d_rawA,need*8,cudaMemcpyDeviceToHost));}
         expected.resize(2*pad);
-        for(size_t i=0;i<pad;++i) {
-            expected[pad+i].assign(W,0);expected[pad+i][0]=1;
-            if(i<n) {
-                if(fill)expected[pad+i].assign(device_leaf.begin()+2*i*W,device_leaf.begin()+2*(i+1)*W);
-                else expected[pad+i]=leaf[i];
-            }
+        for(size_t i=0;i<pad;++i){expected[pad+i].assign(W,0);expected[pad+i][0]=1;}
+        for(size_t i=0;i<n;++i) {
+            auto &dest=expected[pad+(balanced?layout.leaf(i):i)];
+            if(fill)dest.assign(device_leaf.begin()+2*i*W,device_leaf.begin()+2*(i+1)*W);
+            else dest=leaf[i];
         }
         for(size_t i=pad;--i;)expected[i]=groot_product_gmp(L,expected[2*i],expected[2*i+1]);
     }
     auto *cur=C.d_rawA,*next=C.d_rawB;size_t cur_words=need;
     std::vector<unsigned long long> offsets(pad);
-    for(size_t i=0;i<pad;++i)offsets[i]=std::min(i,n)*2*W;
+    size_t leaf_offset=0;
+    for(size_t i=0;i<pad;++i){offsets[i]=leaf_offset;leaf_offset+=2*W*deg[pad+i];}
+    if(leaf_offset!=need){std::fprintf(stderr,"FATAL: G tree dense leaf offsets\n");std::exit(3);}
     struct Metadata {
         unsigned long long *device=nullptr,*pinned=nullptr;size_t capacity=0;
         ~Metadata(){if(device)CK(cudaFree(device));if(pinned)CK(cudaFreeHost(pinned));}
@@ -4594,11 +4555,11 @@ static std::vector<std::vector<unsigned long long>> build_groot_device(
 static std::vector<std::vector<unsigned long long>> build_groot_select(
     PolyLayer &L,const std::vector<std::vector<unsigned long long>> &leaf,
     std::vector<size_t> &deg,size_t &pad,FTreeStats &fs,int cat,bool keep_children,
-    const std::function<void(const unsigned long long*,size_t)> &root_sink={})
+    const std::function<void(const unsigned long long*,size_t)> &root_sink={},bool balanced=false)
 {
     const char *host=std::getenv("NTT_S4_HOSTPACK");
     if(g_groot_device && !keep_children && L.s4 && g_s4_pack_direct && !g_s4_final_readback &&
-       !(host && std::atoi(host)))return build_groot_device(L,leaf,deg,pad,fs,cat,0,{},root_sink);
+       !(host && std::atoi(host)))return build_groot_device(L,leaf,deg,pad,fs,cat,0,{},root_sink,balanced);
     if(g_groot_device)++g_gdevice.fallbacks;
     return build_tree_flat(L,leaf,deg,pad,fs,cat,keep_children);
 }
@@ -4623,7 +4584,7 @@ static void groot_device_fixture(PolyLayer &L)
             leaf.push_back(f);expected=groot_product_gmp(L,expected,f);
         }
         FTreeStats fs;std::vector<size_t> degree;size_t pad=0;
-        auto tree=build_groot_select(L,leaf,degree,pad,fs,-1,false);
+        auto tree=build_groot_select(L,leaf,degree,pad,fs,-1,false,{},true);
         if(tree[1]!=expected || degree[1]!=n) {std::fprintf(stderr,"%s: FATAL: resident fixture root mismatch n=%llu\n",NTT_PROBE_NAME,(unsigned long long)n);std::exit(3);}
         for(size_t i=2;i<tree.size();++i)if(!tree[i].empty())std::exit(3);
         ++cases;words+=expected.size();
@@ -7313,6 +7274,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     const unsigned long long imax = range.points;
     const double t_entry = now_s();
     const size_t P = Fdeg[1];                            /* deg F = the baby count = poly_size */
+    const bool balanced_groot=ecm_stage2::giant_tree_balanced(W,imax,P);
     if(!L.s4) {
         std::fprintf(stderr,"%s: FATAL: scaled descent needs S4 and cannot be combined with S5\n",NTT_PROBE_NAME);
         std::exit(3);
@@ -7324,6 +7286,9 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     R.P = P;
     R.giant_points = imax;
     R.giant_first=range.first;R.giant_last=range.last;
+    stage2_log::print(stage2_log::debug,
+        "groot_layout: balanced=%d words=%llu points=%llu P=%llu full_groups=%llu policy=wide_repeated_v1\n",
+        (int)balanced_groot,(unsigned long long)W,imax,(unsigned long long)P,imax/P);
     R.dbg_progress = true;                  /* one line per G-tree batch: gate-able, machine-readable */
     L.cost.S = (long)L.S;                              /* (already set by the caller) */
 
@@ -7868,8 +7833,8 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 R.device_leaf.avoided_leaf_h2d_bytes+=16ull*count*W;
                 R.device_leaf.t_fill+=now_s()-t;
             };
-            gt=build_groot_device(L,bleaf,bdeg,bpad,bs,BC_GTREE,hi-lo,fill,root_sink);
-        } else gt=build_groot_select(L,bleaf,bdeg,bpad,bs,BC_GTREE,!g_s4_groot_only,root_sink);
+            gt=build_groot_device(L,bleaf,bdeg,bpad,bs,BC_GTREE,hi-lo,fill,root_sink,balanced_groot);
+        } else gt=build_groot_select(L,bleaf,bdeg,bpad,bs,BC_GTREE,!g_s4_groot_only,root_sink,balanced_groot);
         if (g_s4_groot_only) {
             const double tr0 = now_s();
             for (const auto &v : bleaf) g_groot.input_released_bytes += 8ull * v.capacity();

@@ -135,3 +135,22 @@ tools/bench/audit_stage2_frontier_production.py text eol=lf
 src/core/ecm_stage2_queue_state.h text eol=lf
 src/core/ecm_stage2_console.h text eol=lf
 tools/build/build_stage2_release.ps1 text eol=lf
+
+# Original-path Stage2 kernels, shape policy and reproducible benchmark sources.
+kernels/cuda/stage2_giant_chain.cuh text eol=lf
+src/core/ecm_stage2_giant_tree.h text eol=lf
+src/core/ecm_stage2_requests.h text eol=lf
+src/core/ecm_stage2_portable_model.h text eol=lf
+src/core/ecm_stage2_tune_components.h text eol=lf
+src/core/ecm_program_version.h text eol=lf
+tools/test/stage2_giant_point_probe.cu text eol=lf
+tools/test/stage2_request_program_fixture.cpp text eol=lf
+tools/test/stage2_ntt_memory_fixture.cpp text eol=lf
+tools/test/stage2_s4_program_fixture.cpp text eol=lf
+tools/test/test_stage2_original_tree.py text eol=lf
+tools/test/test_stage2_request_program.py text eol=lf
+tools/test/test_stage2_ntt_memory.py text eol=lf
+tools/test/test_stage2_s4_memory.py text eol=lf
+tools/test/check_stage2_original_path.py text eol=lf
+tools/bench/bench_stage2_original_path.py text eol=lf
+tools/bench/plot_stage2_original_path.py text eol=lf

@@ -11,6 +11,7 @@
 - [X-only 标量乘研究](ECM_XONLY_SCALAR.md)：差分信息限制、成本枚举、伪代码与不确定性。
 - [Stage2 D参数数学](ECM_STAGE2_D_PARAMETERS.md)：smooth生成、φ/2、D与P非单调、giant/多项式工作量和候选覆盖判断。
 - [多项式 Stage2 数学](ECM_STAGE2_MATH.md)：Newton 逆、fold、齐次尺度、scaled 下降及工作量。
+- [G 乘积树分块空位布局](ECM_STAGE2_G_TREE_LAYOUT.md)：非满树的高层平衡、常数 1 空位、密集存储与压缩请求形状。
 
 ## 第三方实现
 

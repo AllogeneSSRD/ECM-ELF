@@ -88,7 +88,7 @@ def main():
     source = ROOT/'src/cuda/ecm_cuda_stage2.cu'
     template = Path(__file__).with_name('stage2_s4_memory_fixture.cpp')
     program_template = Path(__file__).with_name('stage2_s4_program_fixture.cpp')
-    headers = ('ecm_stage2_s4_memory.h', 'ecm_stage2_s4_program.h', 'ecm_stage2_requests.h', 'ecm_stage2_geometry.h')
+    headers = ('ecm_stage2_s4_memory.h', 'ecm_stage2_s4_program.h', 'ecm_stage2_requests.h', 'ecm_stage2_geometry.h', 'ecm_stage2_giant_tree.h')
     files = [source, template, program_template, Path(__file__).resolve(), *(ROOT/'src/core'/h for h in headers)]
     identities = {str(f.relative_to(ROOT)):sha(f) for f in files}
     result = dict(complete=False, sources=identities, gpu_calls=0, scope='s4_component_allocation_events')

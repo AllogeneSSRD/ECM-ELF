@@ -27,7 +27,7 @@ template<class Query> bool ntt_references(Word p,Word points,int bits,Query quer
     out=NttReferences{};
     if(bits<2 || bits>max_input_bits || !budget || (buffers!=2 && buffers!=3))return false;
     RequestProgram program;
-    if(!request_program(p,points,program) || !program.supported)return false;
+    if(!request_program(p,points,program,giant_tree_balanced((bits+63)/64,points,p)) || !program.supported)return false;
     out.p=p;out.points=points;out.bits=bits;out.budget=budget;out.buffers=buffers;
     out.physical=physical;out.chunk_max=chunk_max;
     for(const auto &block:program.blocks)for(const auto &r:block.requests) {

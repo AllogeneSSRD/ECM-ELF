@@ -16,6 +16,8 @@
 
 生产 Stage2 源码独立于 `tools/bench/stage2_tree_gpu.cu` 原型；开发 wrapper 使用实验引擎。两者的构建、后端和源闭包须分别核对，不能以原型文档推断生产行为。
 
+生产 giant chain 核在 `kernels/cuda/stage2_giant_chain.cuh`；G 根树的分块空位布局和压缩请求形状由 `src/core/ecm_stage2_giant_tree.h` 定义。它们分别服务点生成和根多项式调度，F 树及其有序下降仍由原布局控制。
+
 `ecm` 与 `ecm_cuda` 编译同一组 Stage1 驱动、CPU 算术、配置、队列和存档源文件；两者在 `ecm_backend_*` 接口分别接入 OpenCL 与 CUDA 实现。`ecm_cuda_stage2` 保持独立的 save/回执执行流程。三个程序共用 [整数表达式解析](../../src/core/ecm_expr.cpp)与 [worktodo 读写](../../src/core/ecm_worktodo.cpp)；队列读取结果区分任务、空队列和 I/O 错误，避免把读档失败视为处理完成。构建的共用 Stage1 源清单在根目录 [CMakeLists.txt](../../CMakeLists.txt) 中维护；不同后端仍分别编译这些源文件。
 
 ## 数学与数据术语

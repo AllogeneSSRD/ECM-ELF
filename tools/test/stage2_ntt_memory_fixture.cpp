@@ -34,6 +34,7 @@ static bool ntt_carry_check_requested(){return fuse_env_ull("NTT_CARRY_CHECK_FUS
 static bool fuse_compact_scratch(){return true;}
 static void ntt_gl_reduce_configure(){}
 static int fuse_outer_max(int,int,bool &coop){coop=false;return 1;}
+static int fuse_selected_tile(int k,int requested){return std::min(k,requested);}
 static void ntt_tile_attributes(bool,int){}
 struct FuseCtx {
     Word n=0;int t=0,m_max=1;
@@ -57,6 +58,10 @@ static void fuse_release(FuseCtx &f) {
     f=FuseCtx{};
 }
 struct {Word live_bytes=0,allocations=0,frees=0,peak_bytes=0;} g_fuse_base;
+
+// The allocation ledger runs with Graph disabled. CUDA Graph/stream handles
+// are outside its array-payload scope; arena lifetime hooks remain callable.
+struct NttGraphCache {void clear(){} void print()const{} void release(){}};
 
 // @NATIVE_ARENA@
 

@@ -8,13 +8,18 @@ using Requests=std::vector<MultiplyRequest>;
 static unsigned long long checks=0;
 static std::string context;
 static void check(bool value) {++checks;if(!value)throw std::runtime_error("request fixture mismatch "+context);}
-static std::vector<Word> degrees(Word p) {
+static std::vector<Word> degrees(Word p,bool giant=false) {
     Word pad=1;while(pad<p)pad*=2;
-    std::vector<Word> d(2*pad);for(Word i=0;i<p;++i)d[pad+i]=1;
+    std::vector<Word> d(2*pad);
+    Word tile=std::min(pad,std::max(Word(16),pad/128)),slots=pad/tile,tiles=(p+tile-1)/tile;
+    for(Word i=0;i<p;++i) {
+        const Word index=giant?((i/tile)*slots/tiles)*tile+i%tile:i;
+        d[pad+index]=1;
+    }
     for(Word i=pad;--i;)d[i]=d[2*i]+d[2*i+1];return d;
 }
-static void dense_tree(Word p,unsigned phase,Requests &out) {
-    const auto d=degrees(p);
+static void dense_tree(Word p,unsigned phase,Requests &out,bool balanced=false) {
+    const auto d=degrees(p,phase==RequestGtrees && balanced);
     for(Word base=d.size()/4;base;base/=2) {
         std::map<std::pair<Word,Word>,Word> groups;
         for(Word i=base;i<2*base;++i)if(d[2*i] && d[2*i+1])
@@ -23,7 +28,7 @@ static void dense_tree(Word p,unsigned phase,Requests &out) {
             phase==RequestGtrees?RequestTreeRaw:RequestHost});
     }
 }
-static Requests dense_program(Word p,Word I) {
+static Requests dense_program(Word p,Word I,bool balanced=false) {
     Requests out;dense_tree(p,RequestFtree,out);
     Word inverse=1;
     while(inverse<=p) {
@@ -32,7 +37,7 @@ static Requests dense_program(Word p,Word I) {
     }
     Word H=0;
     for(Word begin=0;begin<I;begin+=p) {
-        const Word g=std::min(p,I-begin);dense_tree(g,RequestGtrees,out);
+        const Word g=std::min(p,I-begin);dense_tree(g,RequestGtrees,out,balanced);
         if(!H)H=g+1;
         else {
             const Word product=g+H;
@@ -60,19 +65,30 @@ static bool equal(const MultiplyRequest &a,const MultiplyRequest &b) {
 }
 int main() {
     try {
-        for(Word p=1;p<=257;++p)for(Word I:{p+1,2*p,2*p+1,4*p+std::max(Word(1),p/3)}) {
+        for(bool balanced:{false,true})for(Word p=1;p<=257;++p)for(Word I:{p+1,2*p,2*p+1,4*p+std::max(Word(1),p/3)}) {
             context="p="+std::to_string(p)+" I="+std::to_string(I);
-            RequestProgram program;check(request_program(p,I,program) && program.supported);
+            RequestProgram program;check(request_program(p,I,program,balanced) && program.supported);
             Requests actual;for(const auto &b:program.blocks)for(Word i=0;i<b.repeat;++i)actual.insert(actual.end(),b.requests.begin(),b.requests.end());
-            const auto expected=dense_program(p,I);check(actual.size()==expected.size());
+            const auto expected=dense_program(p,I,balanced);check(actual.size()==expected.size());
             for(size_t i=0;i<actual.size();++i)check(equal(actual[i],expected[i]));
         }
-        for(Word p:{Word(65535),Word(65536),Word(65537),Word(126720),Word(138240),Word(262145)}) {
+        for(bool balanced:{false,true})for(Word p:{Word(65535),Word(65536),Word(65537),Word(126720),Word(138240),Word(262145)}) {
             context="large p="+std::to_string(p);
-            RequestProgram program;check(request_program(p,3*p+7,program));
+            RequestProgram program;check(request_program(p,3*p+7,program,balanced));
             Requests actual;for(const auto &b:program.blocks)for(Word i=0;i<b.repeat;++i)actual.insert(actual.end(),b.requests.begin(),b.requests.end());
-            const auto expected=dense_program(p,3*p+7);check(actual.size()==expected.size());
+            const auto expected=dense_program(p,3*p+7,balanced);check(actual.size()==expected.size());
             for(size_t i=0;i<actual.size();++i)check(equal(actual[i],expected[i]));
+        }
+        for(Word words:{Word(128),Word(129),Word(256)})for(Word p:{Word(1),Word(48),Word(17280)})
+            for(Word points:{4*p-1,4*p,4*p+1})check(giant_tree_balanced(words,points,p)==(words>128 && points>=4*p));
+        // The first parent frontier remains n+ceil(n/2), so the S4 lease
+        // model is exact despite the redistributed upper empty slots.
+        for(Word n=1;n<=4096;++n) {
+            const auto d=degrees(n,true);const Word pad=d.size()/2;
+            Word parents=0;for(Word i=pad/2;pad>1 && i<pad;++i)parents+=d[i]!=0;
+            check(parents==(n>1?(n+1)/2:0));
+            Word previous=0;GiantTreeLayout l;check(giant_tree_layout(n,l));
+            for(Word i=0;i<n;++i){const Word slot=l.leaf(i);check(slot<pad && d[pad+slot]==1 && (!i || slot>previous));previous=slot;}
         }
         RequestSignature one;one.append_word(17);one.append_word(23);
         context="signature";
@@ -88,12 +104,12 @@ int main() {
         RequestProgram huge;check(request_program(48,Word(1)<<60,huge) && huge.blocks.size()<=6);
         auto query=[](Word m,int,Word *n,Word *out){*n=1;while(*n<4*m)*n*=2;*out=2*m-1;return true;};
         auto describe=[](Word n,Word &table,Word &base){table=8*n;base=16*n;return true;};
-        for(unsigned buffers:{2u,3u})for(bool physical:{false,true}) {
+        for(int bits:{129,8192,8193,16384})for(unsigned buffers:{2u,3u})for(bool physical:{false,true}) {
             context="payload buffers="+std::to_string(buffers)+" physical="+std::to_string(physical);
-            RequestPlan plan;check(request_plan(48,200,129,query,describe,1024,buffers,physical,0,true,plan) && plan.valid);
+            RequestPlan plan;check(request_plan(48,200,bits,query,describe,1024,buffers,physical,0,true,plan) && plan.valid);
             Word pairs[RequestPhaseCount]{},groups[RequestPhaseCount]{};RequestSignature signatures[RequestPhaseCount],all;
-            for(const auto &r:dense_program(48,200)) {
-                Word n=0,slots=0;query(std::max(r.ma,r.mb),129,&n,&slots);
+            for(const auto &r:dense_program(48,200,bits>8192)) {
+                Word n=0,slots=0;query(std::max(r.ma,r.mb),bits,&n,&slots);
                 Word c=1;for(Word test=r.pairs;test;test/=2)if(8*test*((physical?buffers:3)*n+slots+(physical?2:0))<=1024){c=test;break;}
                 ++groups[r.phase];pairs[r.phase]+=r.pairs;signatures[r.phase].append(r,n,slots,c);all.append(r,n,slots,c);
             }

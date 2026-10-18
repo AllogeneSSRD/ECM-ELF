@@ -13,7 +13,7 @@ namespace ecm_stage2 {
 using Word = unsigned long long;
 constexpr int max_input_bits = 16384;
 constexpr int max_words = max_input_bits / 64;
-// Points per sequential chain thread; the CUDA block itself has 64 threads.
+// Points per sequential chain thread, independent of the CUDA block size.
 // A disabled short policy preserves the base value, including large chunks.
 inline Word giant_chain_block(Word points, Word base, Word short_block, Word short_max) {
     return short_block && points < short_max && short_block < base ? short_block : base;

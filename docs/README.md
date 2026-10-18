@@ -32,7 +32,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 - [Stage1 性能](performance/STAGE1.md)：GPU Edwards细分实例与Montgomery三曲线族同exe成本、冻结初始基准、NAF窗口/倍点图表、PRAC投影和资源约束。
 - [Stage2 性能](performance/STAGE2.md)：CPU/GPU 比较、位宽/B2关系、阶段占比和容量收益。
-- [Edwards GPU Stage2 性能与 CPU 参考](performance/EDWARDS_STAGE2.md)：可选relocation的NF/命中重放对照、Edwards/PARAM0版本对照、宽尾块调度、普通/承载基准、Prime95 精确余因子参考及 CPU 已测样本。
+- [Edwards GPU Stage2 性能与 CPU 参考](performance/EDWARDS_STAGE2.md)：原路径giant/G树优化、显式完整G边界实验、可选relocation的NF/命中重放对照、Edwards/PARAM0版本对照、普通/承载基准、Prime95精确余因子参考及CPU已测样本。
 - [CPU GW 多项式 Stage2](performance/CPU_GWPOLY_STAGE2.md)：4 GHz、相同精确输入的 Prime95 对照、1/4 线程实测和进程内存。
 - [Tensor NTT 性能](performance/NTT_TENSOR.md)：精确Tensor64/40/N96r64、长度/batch、同卡CUDA/Tensor并发及硬件计数器。
 - [短NTT Graph性能](performance/NTT_GRAPH.md)：缓存生命周期、固定D完整曲线、batch吞吐及管理员Nsight分析。

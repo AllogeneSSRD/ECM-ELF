@@ -20,11 +20,11 @@ arena cap 不足时可淘汰缓存或按次分配；owner 预算/headroom 不足
 
 ### 配置预算与实际占用
 
-`stage2_arena_mb` 是预算上限，不是启动时预分配量，也不表示必须选满这部分显存。通常设备 free 大于 reserve 时，D 规划上限为 **C=min(A, free−reserve)**；A 为正的用户 arena 预算，A=0 时仅使用 free−reserve。默认 reserve=768 MiB。例如 A=6400、free=7106 时，规划 C=6338 MiB，继续提高 A 不增加这次规划的可用空间。依据为 [ecm_cuda_stage2.cu:8473](../../src/cuda/ecm_cuda_stage2.cu#L8473)。运行 arena 可重新采用显式用户 cap，因此 `mem_budget.arena_cap` 显示 6400 不等于规划 JSON 的 `arena_cap_bytes` 必须也是 6400；该赋值见 [运行 arena:9001](../../src/cuda/ecm_cuda_stage2.cu#L9001)。
+`stage2_arena_mb` 是预算上限，不是启动时预分配量，也不表示必须选满这部分显存。通常设备 free 大于 reserve 时，D 规划上限为 **C=min(A, free−reserve)**；A 为正的用户 arena 预算，A=0 时仅使用 free−reserve。默认 reserve=768 MiB。例如 A=6400、free=7106 时，规划 C=6338 MiB，继续提高 A 不增加这次规划的可用空间。依据为 [ecm_cuda_stage2.cu:8540](../../src/cuda/ecm_cuda_stage2.cu#L8540)。运行 arena 可重新采用显式用户 cap，因此 `mem_budget.arena_cap` 显示 6400 不等于规划 JSON 的 `arena_cap_bytes` 必须也是 6400；该赋值见 [运行 arena:9078](../../src/cuda/ecm_cuda_stage2.cu#L9078)。
 
 所需大工作区由选定 P、算术位宽和实际 packing 共同决定。三缓冲、单 slice、L=2²⁶ 时，**big=3×8×2²⁶ bytes=1536 MiB**；L 增至2²⁷才跳到3072 MiB。同一档内提高预算不会扩大该请求。`ntt_workspace_stats.full_peak_bytes` 还包括 small、table 和 fuse base；独立 S4、giant、fold/frontier 与驱动占用另计。曲线结束的 `arena=a/b` 采用 full peak，而不是仅 big；`fold=a/b` 采用实际启用的 owner 占用，回退时 a=0，b 均保留 INI 值。投影入口见 [ecm_stage2_console.h:49](../../src/core/ecm_stage2_console.h#L49)。
 
-默认选型按预计时间排名，不最大化显存用量。较大 D 通常减少 giant 数量，但也改变 P、初始化、下降以及 NTT 档位；不能仅由“剩余显存很多”或“更大工作区可以准入”推断它更快。当前原生默认搜索仍以 `arena_estimate_bytes` 的旧静态加总过滤候选，实际曲线规划使用共享工作区与生命周期模型；两者可能给出不同准入结果。入口为 [real_run_words:8416](../../src/cuda/ecm_cuda_stage2.cu#L8416)、[默认搜索:8644](../../src/cuda/ecm_cuda_stage2.cu#L8644)及下文曲线联合模型。显式 D 或合格实测候选仍须通过当前完整规划和实时检查；统一默认搜索筛选属于待验证改进。
+默认选型按预计时间排名，不最大化显存用量。较大 D 通常减少 giant 数量，但也改变 P、初始化、下降以及 NTT 档位；不能仅由“剩余显存很多”或“更大工作区可以准入”推断它更快。当前原生默认搜索仍以 `arena_estimate_bytes` 的旧静态加总过滤候选，实际曲线规划使用共享工作区与生命周期模型；两者可能给出不同准入结果。入口为 [real_run_words:8482](../../src/cuda/ecm_cuda_stage2.cu#L8482)、[默认搜索:8712](../../src/cuda/ecm_cuda_stage2.cu#L8712)及下文曲线联合模型。显式 D 或合格实测候选仍须通过当前完整规划和实时检查；统一默认搜索筛选属于待验证改进。
 
 ## NTT 容量
 
@@ -74,6 +74,8 @@ S4 持有 raw A/B、归约输出、临时 pack、模数、按完整 shape 缓存
 输入分为 host、tree_raw、fold_owner、frontier_owner。host raw 是 S4 所有；后两项借用其他 owner，不能按数据长度再次计为 S4 分配。
 
 G 树具有 tree_begin/tree_end 租约：raw 容量可保留，树元数据在树结束后、fold 前释放。inverse_done/fold_done 边界按配置释放 raw/输出。S4 模型记录 after_inverse、after_giant、final_payload、peak 和 released_payload；最终释放状态必须为 0。
+
+分块空位布局不改变线性叶所需raw容量 `2nW` 或首父层所需容量 `(n+ceil(n/2))W`（均为64-bit word数），但会改变G树NTT请求及缓存形状；模型按实际布局枚举，不能沿用左侧连续布局的请求签名。容量证明见 [G树固定资料](../reference/ECM_STAGE2_G_TREE_LAYOUT.md)，实际启用条件见 [Stage2管线](STAGE2.md#多项式与-scaled-下降)。
 
 `s4_memory` 目前只保证条件驻留、直接设备 packing、满次数 fold 的正常路径，不模拟 owner/NTT 准入和真实 driver free。`valid` 不等于完整曲线可驻留。
 
