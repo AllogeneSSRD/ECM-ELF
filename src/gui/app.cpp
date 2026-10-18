@@ -2,6 +2,7 @@
 #include "platform.h"
 #include "task_display.h"
 #include "../core/generated/ecm_config_generated.h"
+#include "../core/ecm_program_version.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"   // ImGui::DockBuilder* for the initial layout
@@ -29,6 +30,13 @@ void bounded_progress(double fraction, const char *overlay=nullptr) {
     const float value=std::isfinite(fraction)?static_cast<float>(std::clamp(fraction,0.0,1.0)):0.0f;
     ImGui::ProgressBar(value,ImVec2(width,0.0f),overlay);
     ImGui::PopClipRect();
+}
+
+std::string generator_curve_type(const WorkerView &worker) {
+    if(worker.curve_model=="edwards" || worker.curve_model=="ed")return "e";
+    if(worker.stage2 || worker.execution_target=="cpu")return "m0";
+    if(worker.gpu_param==2 || worker.gpu_param==3)return "m"+std::to_string(worker.gpu_param);
+    return "m0";
 }
 }
 
@@ -485,7 +493,9 @@ void App::rebuild_workers() {
     for(int i=1;i<=num_workers_;++i)workers_.push_back(make_worker(i));
     gen_worker_index_=std::clamp(gen_worker_index_,1,num_workers_);
     gen_target_device_=workers_[static_cast<size_t>(gen_worker_index_-1)].device;
-    if(workers_[static_cast<size_t>(gen_worker_index_-1)].stage2)gen_use_recommended_=false;
+    const auto &gen_worker=workers_[static_cast<size_t>(gen_worker_index_-1)];
+    gen_curve_type_=generator_curve_type(gen_worker);
+    if(gen_worker.stage2 || gen_worker.execution_target=="cpu" || gen_curve_type_=="e")gen_use_recommended_=false;
     refresh_device_warnings();
 }
 
@@ -509,7 +519,7 @@ WorkerView App::make_worker(int index) const {
     }
     const auto entries=ecm_config::cli_entries(ini_.lines(),index,true);
     const auto stage1=ecm_config::read_stage1(entries);
-    w.device=stage1.device;w.curve_model=stage1.curve_model;w.execution_target=stage1.execution_target;
+    w.device=stage1.device;w.curve_model=stage1.curve_model;w.execution_target=stage1.execution_target;w.gpu_param=stage1.gpu_param;
     w.gpucurves=worker.gpucurves;
     w.worktodo=path_resolve(w.working_dir,stage1.worktodo);
     const auto log=index>1 && !stage1.log_file_explicit && stage1.log_file==ecm_config::defaults::stage1_log_file?
@@ -561,7 +571,9 @@ bool App::set_worker_stage(int index,const std::string &stage) {
             if(!ini_.save(error)){ini_.set(section,"stage",previous);status_=error;return false;}
             w=std::move(replacement);
             refresh_device_warnings();gen_has_preview_=false;
-            if(index==gen_worker_index_){gen_target_device_=w.device;if(w.stage2)gen_use_recommended_=false;}
+            if(index==gen_worker_index_){gen_target_device_=w.device;if(w.stage2 || w.execution_target=="cpu")gen_use_recommended_=false;
+                gen_curve_type_=generator_curve_type(w);
+                if(gen_curve_type_=="e")gen_use_recommended_=false;}
             return true;
         } catch(const std::exception &e){ini_.set(section,"stage",previous);status_=e.what();return false;}
     }
@@ -635,8 +647,13 @@ void App::tick() {
             }
         }
         w.proc->poll(now);
+        if(w.proc->running() && w.version_pid!=w.proc->pid()) {
+            w.version_pid=w.proc->pid();
+            w.application_version.clear();
+        }
         WorkerProc::DrainedOutput d;
         w.proc->drain(d);
+        if(!d.application_version.empty())w.application_version=d.application_version;
         w.progress_lines += d.progress_lines;
         if (d.last_progress.valid) {
             w.progress = d.last_progress;
@@ -1690,7 +1707,8 @@ void App::gen_make_preview() {
     GenOptions opt;
     opt.valid = true;
     opt.set_b1 = gen_set_b1_;
-    opt.save_pattern = gen_save_pattern_.empty() ? "m{n}_{b1}.save" : gen_save_pattern_;
+    opt.save_pattern = gen_save_pattern_.empty() ? "{curve}_{target}_{b1}.save" : gen_save_pattern_;
+    opt.curve_type=gen_curve_type_;
     opt.sort_by = gen_sort_by_;
     opt.use_recommended = gen_use_recommended_;
     opt.blocks_per_sm = gen_blocks_per_sm_;
@@ -1699,12 +1717,23 @@ void App::gen_make_preview() {
         opt.worker_devices.emplace_back(w.index,gen_target_device_);
     opt.target_device=gen_target_device_;
 
+    const auto &target_worker=workers_[static_cast<size_t>(gen_worker_index_-1)];
+    if((gen_curve_type_=="m2" || gen_curve_type_=="m3") &&
+       (target_worker.stage2 || target_worker.execution_target=="cpu")) {
+        gen_status_=loc_.t("gen","curve_unavailable");
+        return;
+    }
+    if(gen_use_recommended_ && (gen_curve_type_=="e" || (!target_worker.stage2 && target_worker.execution_target=="cpu"))) {
+        gen_status_=loc_.t("gen","recommendation_unavailable");
+        return;
+    }
     GpuProfile gpu;
     if (gen_use_recommended_) {
         // The tier table and the SM count come from the driver itself (D4), so a copied
         // table can never drift from the kernels. --gpu-info writes nothing.
-        std::string cmd = "\"" + resolve_stage1_exe() + "\" --gpu-info -d " +
-                          std::to_string(gen_target_device_);
+        std::string cmd = "\"" + resolve_stage1_exe() + "\" -ini \"" + ini_path_ +
+                          "\" --worker " + std::to_string(gen_worker_index_) + " --gpu-info -d " +
+                          std::to_string(gen_target_device_) + " --gpu-param " + gen_curve_type_.substr(1);
         std::string out;
         int code = -1;
         std::string err;
@@ -1828,7 +1857,8 @@ void App::draw_gen_panel() {
     if(ImGui::BeginCombo("##gen_worker",worker_label(target).c_str())) {
         for(const auto &w:workers_)if(ImGui::Selectable(worker_label(w).c_str(),w.index==gen_worker_index_)) {
             gen_worker_index_=w.index;gen_target_device_=w.device;gen_has_preview_=false;
-            gen_use_recommended_=!w.stage2;
+            gen_curve_type_=generator_curve_type(w);
+            gen_use_recommended_=!w.stage2 && w.execution_target!="cpu" && gen_curve_type_!="e";
         }
         ImGui::EndCombo();
     }
@@ -1953,6 +1983,25 @@ void App::draw_gen_panel() {
         }
 
         ImGui::TableSetColumnIndex(1);
+        ImGui::TextWrapped("%s",loc_.t("gen","curve_type").c_str());
+        ImGui::SetNextItemWidth(-1.0f);
+        const char *curve_keys[]={"e","m0","m2","m3"};
+        const std::string curve_label=loc_.t("gen","curve_"+gen_curve_type_);
+        if(ImGui::BeginCombo("##gen_curve_type",curve_label.c_str())) {
+            for(const char *key:curve_keys) {
+                const std::string label=loc_.t("gen",std::string("curve_")+key);
+                const bool unavailable=(std::strcmp(key,"m2")==0 || std::strcmp(key,"m3")==0) &&
+                                       (target.stage2 || target.execution_target=="cpu");
+                if(ImGui::Selectable(label.c_str(),gen_curve_type_==key,unavailable?ImGuiSelectableFlags_Disabled:0)) {
+                    gen_curve_type_=key;gen_has_preview_=false;
+                    if(gen_curve_type_=="e")gen_use_recommended_=false;
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
         ImGui::TextWrapped("%s", loc_.t("gen", "save_pattern").c_str());
         ImGui::SetNextItemWidth(-1.0f);
         char pattern[128];
@@ -1962,8 +2011,7 @@ void App::draw_gen_panel() {
             gen_has_preview_ = false;
         }
 
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
+        ImGui::TableSetColumnIndex(1);
         ImGui::TextWrapped("%s", loc_.t("gen", "sort_by").c_str());
         ImGui::SetNextItemWidth(-1.0f);
         const std::string sort_label = gen_sort_by_.empty() ? loc_.t("gen", "sort_none") : gen_sort_by_;
@@ -2621,6 +2669,7 @@ void App::draw_stage2_status(const WorkerView &w,bool compact) {
     if(compact)return;
     if(s.b1 && s.b2)ImGui::TextDisabled("B1=%llu   B2=%llu",s.b1,s.b2);
     if(s.bits && s.d && s.p)ImGui::TextDisabled("S=%llu bits   D=%llu   P=%llu",s.bits,s.d,s.p);
+    if(s.carrier_known)ImGui::TextDisabled("mersenne_carrier = %llu",s.carrier_exponent);
     if(s.batches) {
         char overlay[96];std::snprintf(overlay,sizeof(overlay),"%s %llu / %llu",loc_.t("stage2","batch").c_str(),s.batch,s.batches);
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram,ImVec4(.56f,.44f,.89f,1.f));
@@ -2926,6 +2975,12 @@ void App::draw_worker_panes() {
                                   std::to_string(w.index);
         ImGui::Begin(title.c_str(), &w.show_pane);
         ImGui::TextColored(w.stage2?ImVec4(.75f,.69f,.97f,1.f):ImVec4(.35f,.84f,.74f,1.f),"%s  |  %s",w.stage2?"Stage2":"Stage1",task_text(w).c_str());
+        const std::string worker_version=w.application_version.empty()?loc_.t("workers","version_pending"):w.application_version;
+        ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s: %s %s   |   %s: %s",
+                           loc_.t("workers","gui_version").c_str(),ecm_program::name,ecm_program::version,
+                           loc_.t("workers","application_version").c_str(),worker_version.c_str());
+        ImGui::PopStyleColor();
         if(w.stage2)draw_stage2_status(w);
         ImGui::Separator();
         // Progress panel: the numbers come from the parsed progress line (the ASCII bar

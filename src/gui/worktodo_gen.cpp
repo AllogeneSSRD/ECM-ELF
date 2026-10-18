@@ -266,6 +266,20 @@ std::string emit_stage2(const GenTask &t, const std::string &save, long long ski
     return out;
 }
 
+std::string prefixed_save_name(const std::string &name,const std::string &curve) {
+    const auto slash=name.find_last_of("/\\");
+    const auto begin=slash==std::string::npos?0:slash+1;
+    std::string leaf=name.substr(begin);
+    if(leaf.compare(0,curve.size()+1,curve+"_")==0)return name;
+    std::string lower=leaf;
+    for(char &c:lower)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for(const char *old:{"ed_","e_","m0_","m2_","m3_"}) {
+        const auto length=std::strlen(old);
+        if(lower.compare(0,length,old)==0){leaf.erase(0,length);break;}
+    }
+    return name.substr(0,begin)+curve+"_"+leaf;
+}
+
 } // namespace
 
 // ── GpuProfile ───────────────────────────────────────────────────────────────────────
@@ -507,11 +521,15 @@ bool parse_assignment(const std::string &line, int idx, GenTask &out, std::strin
 
 // ── save names ──────────────────────────────────────────────────────────────────────
 
-std::string render_save_name(const std::string &pattern, const GenTask &t) {
+std::string render_save_name(const std::string &pattern, const GenTask &t,
+                             const std::string &curve_type) {
     std::string out = pattern;
+    const bool mersenne=t.k=="1" && int_or(t.b,0)==2 && int_or(t.c,0)==-1;
+    const std::string target=mersenne?"m"+to_string_ll(t.n):"bit"+std::to_string(t.bits);
     const std::pair<const char *, std::string> subs[] = {
         {"{k}", t.k}, {"{b}", t.b}, {"{c}", t.c},
         {"{n}", to_string_ll(t.n)}, {"{b1}", t.b1}, {"{b2}", t.b2},
+        {"{curve}", curve_type}, {"{target}", target},
     };
     for (const auto &s : subs) {
         std::string key = s.first;
@@ -551,6 +569,10 @@ GenResult generate(const std::string &input, const GpuProfile &gpu, const GenOpt
     GenResult r;
     if (!opt.valid) {
         r.error = opt.error.empty() ? "the generator options are invalid" : opt.error;
+        return r;
+    }
+    if(opt.curve_type!="e" && opt.curve_type!="m0" && opt.curve_type!="m2" && opt.curve_type!="m3") {
+        r.error="unsupported curve type: "+opt.curve_type;
         return r;
     }
     const bool need_recommendation = opt.curves_fixed < 0 && opt.use_recommended;
@@ -710,6 +732,7 @@ GenResult generate(const std::string &input, const GpuProfile &gpu, const GenOpt
     std::sort(target_workers.begin(), target_workers.end());
 
     std::size_t rr = 0;
+    bool warned_target_estimate=false;
     for (GenTask &t : tasks) {
         std::string err;
         if (!effective_bits(t.k, t.b, t.n, t.c, t.factors, t.bits, err)) {
@@ -732,7 +755,17 @@ GenResult generate(const std::string &input, const GpuProfile &gpu, const GenOpt
         }
         t.curves_out = curves;
 
-        const std::string save = render_save_name(opt.save_pattern, t);
+        std::string save = render_save_name(opt.save_pattern, t, opt.curve_type);
+        if(save.find('{')!=std::string::npos || save.find('}')!=std::string::npos) {
+            r.error="unknown save-name pattern token: "+opt.save_pattern;
+            return r;
+        }
+        if(opt.normalize_curve_prefix)save=prefixed_save_name(save,opt.curve_type);
+        if(!warned_target_estimate && opt.save_pattern.find("{target}")!=std::string::npos &&
+           !(t.k=="1" && int_or(t.b,0)==2 && int_or(t.c,0)==-1)) {
+            r.warnings.push_back("Non-Mersenne bit target uses an estimated effective size; verify filenames near tier boundaries or with known factors.");
+            warned_target_estimate=true;
+        }
         if (const char *why = check_save_name(save)) {
             r.error = std::string(why) +
                       " (the driver takes B1 from the save name; change the save pattern)";

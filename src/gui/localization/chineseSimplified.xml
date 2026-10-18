@@ -24,7 +24,7 @@
 
     <Panel id="gen">
       <Item id="target_worker" name="队列目标 worker"/>
-      <Item id="title"          name="生成器"/>
+      <Item id="title"          name="worktodo 生成器"/>
       <Item id="paste_hint"     name="输入 PrimeNet 任务「ECM= / ECM2= 」或打开文件；忽略 # 开头的注释行"/>
       <Item id="load_file"      name="打开文件…"/>
       <Item id="curve_options"  name="曲线选项"/>
@@ -35,6 +35,11 @@
       <Item id="override_b1"    name="覆盖 B1"/>
       <Item id="override_b1_hint" name="留空保持原值"/>
       <Item id="save_pattern"   name="存档名"/>
+      <Item id="curve_type" name="曲线类型"/>
+      <Item id="curve_e" name="Edwards (e)"/>
+      <Item id="curve_m0" name="Montgomery param0 (m0)"/>
+      <Item id="curve_m2" name="Montgomery param2 (m2)"/>
+      <Item id="curve_m3" name="Montgomery param3 (m3)"/>
       <Item id="sort_by"        name="排序"/>
       <Item id="sort_none"      name="按输入顺序"/>
       <Item id="target_device"  name="目标 GPU "/>
@@ -45,6 +50,8 @@
       <Item id="no_preview"     name="预览为空"/>
       <Item id="applied"        name="追加成功"/>
       <Item id="gpu_info_failed" name="--gpu-info 无法读取内核信息"/>
+      <Item id="recommendation_unavailable" name="Edwards 或 CPU 目标没有对应的 GPU 档位推荐；请关闭“使用推荐曲线数”，保留任务原有曲线数。"/>
+      <Item id="curve_unavailable" name="Stage2 仅接收 Edwards 或 Montgomery param0 存档；CPU Stage1 也不支持 param2/3。"/>
       <Item id="col_lines"      name="行数"/>
       <Item id="col_segments"   name="worker 段数"/>
       <Item id="col_dup"        name="去除重复"/>
@@ -99,6 +106,9 @@
       <Item id="collecting"    name="正在采集…"/>
       <Item id="m2_note" name="每个worker管理一个计算程序。停止会请求安全退出；反复失败后停止自动重启。"/>
       <Item id="log_pane"     name="输出"/>
+      <Item id="gui_version" name="GUI 版本"/>
+      <Item id="application_version" name="工作程序版本"/>
+      <Item id="version_pending" name="尚未报告"/>
       <Item id="log_file"     name="日志文件"/>
       <Item id="open_saves"   name="打开存档目录"/>
       <Item id="no_output"    name="暂无输出"/>

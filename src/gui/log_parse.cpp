@@ -155,6 +155,14 @@ bool parse_stage2(const std::string &line,Stage2Event &e) {
         if(std::sscanf(line.c_str(),"curve_start: %llu/%llu record=%llu sigma=%llu B1=%llu",
             &e.done,&e.total,&e.record,&e.sigma,&e.b1)<2)return false;
         e.kind=Kind::CurveStart;
+    } else if(starts_with(line,"stage2_modulus:")) {
+        e.kind=Kind::Modulus;
+        integer("carrier_bits",e.bits);
+        long long exponent=0;
+        if(read_kv_int(line,"carrier_exponent",exponent) && exponent>=0) {
+            e.carrier_exponent=static_cast<unsigned long long>(exponent);
+            e.carrier_known=true;
+        }
     } else if(starts_with(line,"real_shape:") || starts_with(line,"stage2_real:")) {
         e.kind=Kind::Shape;integer("B1",e.b1);integer("B2",e.b2);integer("D",e.d);integer("P",e.p);
         if(!e.p){const char *key=" P=phi(D)/2=";const auto a=line.find(key);if(a!=line.npos){const char *value=line.c_str()+a+std::strlen(key);read_u64(value,e.p);}}
@@ -215,7 +223,11 @@ void Stage2Status::apply(const Stage2Event &e) {
     } else if(e.kind==Kind::CurveStart) {
         total=e.total;current=std::min(e.done,total);done=current?current-1:0;
         record=e.record;sigma=e.sigma;b1=e.b1;engine_seconds=0;batch=batches=0;batch_left=0;elapsed=0;phase="read";
+        carrier_exponent=0;carrier_known=false;
         curve_model=e.curve_model.empty()?"mont":e.curve_model;param=curve_model=="mont"?e.param:-1;
+    } else if(e.kind==Kind::Modulus) {
+        if(e.bits)bits=e.bits;
+        if(e.carrier_known){carrier_exponent=e.carrier_exponent;carrier_known=true;}
     } else if(e.kind==Kind::Shape) {
         if(e.b1)b1=e.b1;if(e.b2)b2=e.b2;if(e.d)d=e.d;if(e.p)p=e.p;if(e.bits)bits=e.bits;
     } else if(e.kind==Kind::Phase) {
@@ -311,10 +323,24 @@ ParsedLine parse_line(const std::string &line) {
     out.text = strip_ansi(line);
     split_timestamp(out.text, out.timestamp, out.plain);
     const std::string &p = out.plain;
+    if(starts_with(p,"ECM-ELF ")) {
+        const std::size_t end=p.find(' ',8);
+        const std::string version=p.substr(8,end==p.npos?p.npos:end-8);
+        int dots=0;bool valid=!version.empty() && version.size()<=32;
+        for(char c:version) {
+            if(c=='.')++dots;
+            else if(!is_digit(c))valid=false;
+        }
+        if(valid && dots==2) {
+            out.application_version="ECM-ELF "+version;
+            out.kind=LogKind::Event;
+            return out;
+        }
+    }
     if(parse_stage2(p,out.stage2)) {
         out.queue_done=starts_with(p,"stage2_complete:");
         const auto kind=out.stage2.kind;
-        const bool detail=kind==Stage2Event::Kind::Shape || kind==Stage2Event::Kind::Batch || kind==Stage2Event::Kind::FullWall;
+        const bool detail=kind==Stage2Event::Kind::Modulus || kind==Stage2Event::Kind::Shape || kind==Stage2Event::Kind::Batch || kind==Stage2Event::Kind::FullWall;
         out.kind=out.queue_done?LogKind::QueueDone:detail?LogKind::Raw:LogKind::Event;
         return out;
     }

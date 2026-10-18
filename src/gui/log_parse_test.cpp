@@ -145,6 +145,9 @@ int main() {
               "queue completion + task count", std::to_string(d.tasks_processed));
         check(parse_line(TS "gpu backend : CUDA/CGBN, param0, device 1").kind == LogKind::Event,
               "banner line is an event");
+        const auto version=parse_line(TS "ECM-ELF 0.39.0 (Stage1)");
+        check(version.kind==LogKind::Event && version.application_version=="ECM-ELF 0.39.0",
+              "actual worker version is an event and is captured");
         check(parse_line(TS "some unclassified chatter").kind == LogKind::Raw,
               "unknown lines stay raw");
     }
@@ -157,6 +160,11 @@ int main() {
         Stage2Status state;
         state.apply(parse_line("stage2_plan: save=ed_m137_1e3.save requested=1 available=1 completed=0 B2=40000 D=210").stage2);
         state.apply(parse_line("curve_start: 1/1 record=1 sigma=17 B1=20 checksum=verified curve_model=ed").stage2);
+        const auto modulus=parse_line("stage2_modulus: target_bits=137 carrier_bits=274 carrier_exponent=274 lifted=1 target_divides_carrier=1");
+        state.apply(modulus.stage2);
+        check(modulus.stage2.kind==Stage2Event::Kind::Modulus && modulus.kind==LogKind::Raw &&
+              state.carrier_known && state.carrier_exponent==274 && state.bits==274,
+              "Stage2 carrier exponent is captured from the engine's modulus line");
         const auto result=parse_line("stage2_result: record=1 seconds=0.1 sigma=18446744073709551615 B1=20 curve_model=ed save=\"D:\\\\My Saves\\\\ed.save\" \"hits\":1,\"factors\":[\"10007\"]").stage2;
         state.apply(result);
         check(result.factors.size()==1 && result.factors[0]=="10007", "Stage2 factor payload parsed");
@@ -168,6 +176,9 @@ int main() {
         check(quiet.factor_hit("10007").curve_model=="ed" && quiet.sigma==ed.sigma && quiet.save==ed.save,
               "quiet result carries identity without a curve-start line");
         state.apply(parse_line("curve_start: 1/1 record=2 sigma=26 B1=1000 checksum=absent").stage2);
+        check(!state.carrier_known,"a new curve does not inherit the previous carrier");
+        state.apply(parse_line("stage2_modulus: target_bits=137 carrier_bits=137 carrier_exponent=0 lifted=0 target_divides_carrier=1").stage2);
+        check(state.carrier_known && state.carrier_exponent==0,"ordinary arithmetic reports carrier zero");
         check(state.factor_hit("17").curve_model=="mont" && state.factor_hit("17").param==0,
               "legacy Stage2 resets Edwards identity to Suyama PARAM0");
     }

@@ -8,6 +8,7 @@
 #include "ecm_expr.h"
 #include "ecm_queue_config.h"
 #include "ecm_worktodo.h"
+#include "ecm_program_version.h"
 #include "ecm_stage2_fingerprint.h"
 #include "ecm_stage2_factorize.h"
 #include "ecm_stage2_cost_profile.h"
@@ -1343,6 +1344,7 @@ int driver(Options o) {
         (error?std::cerr:std::cout)<<message<<std::endl;
         if(!o.dry&&!o.plan_only&&!log.empty())append(log,message);
     };
+    if(o.gui_events)report(std::string(ecm_program::name)+" "+ecm_program::version+" (Stage2)");
     if(!SetConsoleCtrlHandler(console_control,TRUE))throw std::runtime_error("cannot install console stop handler");
     struct ControlGuard { ~ControlGuard(){SetConsoleCtrlHandler(console_control,FALSE);} } control_guard;
     const auto calibration_range=queue && !o.dry && o.short_calibration?portable_queue_range(worktodo,o.worker,tmp):std::vector<Record>{};

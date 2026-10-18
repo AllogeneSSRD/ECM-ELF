@@ -24,7 +24,7 @@
 
     <Panel id="gen">
       <Item id="target_worker" name="Queue target worker"/>
-      <Item id="title"          name="Generator"/>
+      <Item id="title"          name="Worktodo generator"/>
       <Item id="paste_hint"     name="Paste PrimeNet assignments (ECM= / ECM2= lines) here, or load a file. Comment lines starting with # are ignored."/>
       <Item id="load_file"      name="Open file..."/>
       <Item id="curve_options"  name="Curve options"/>
@@ -35,6 +35,11 @@
       <Item id="override_b1"    name="override B1"/>
       <Item id="override_b1_hint" name="blank keeps original"/>
       <Item id="save_pattern"   name="save name"/>
+      <Item id="curve_type" name="Curve type"/>
+      <Item id="curve_e" name="Edwards (e)"/>
+      <Item id="curve_m0" name="Montgomery param0 (m0)"/>
+      <Item id="curve_m2" name="Montgomery param2 (m2)"/>
+      <Item id="curve_m3" name="Montgomery param3 (m3)"/>
       <Item id="sort_by"        name="sort"/>
       <Item id="sort_none"      name="input order"/>
       <Item id="target_device"  name="target GPU"/>
@@ -45,6 +50,8 @@
       <Item id="no_preview"     name="Generate a preview first."/>
       <Item id="applied"        name="Appended. Generate a new preview for the next batch."/>
       <Item id="gpu_info_failed" name="cannot read the kernel tiers from --gpu-info"/>
+      <Item id="recommendation_unavailable" name="No matching GPU tier recommendation for Edwards or a CPU target. Turn off recommended curves to keep each task's curve count."/>
+      <Item id="curve_unavailable" name="Stage2 accepts Edwards or Montgomery param0 saves; CPU Stage1 does not support param2/3."/>
       <Item id="col_lines"      name="lines"/>
       <Item id="col_segments"   name="worker sections"/>
       <Item id="col_dup"        name="duplicates removed"/>
@@ -99,6 +106,9 @@
       <Item id="collecting"    name="collecting..."/>
       <Item id="m2_note"      name="Each worker manages one engine process. Stop requests a safe exit; repeated failures stop automatic restarts."/>
       <Item id="log_pane"     name="Output"/>
+      <Item id="gui_version" name="GUI version"/>
+      <Item id="application_version" name="Worker version"/>
+      <Item id="version_pending" name="Not reported"/>
       <Item id="log_file"     name="log file"/>
       <Item id="open_saves"   name="Open saves folder"/>
       <Item id="no_output"    name="No output yet."/>

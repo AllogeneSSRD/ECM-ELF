@@ -62,9 +62,10 @@ struct HitInfo {
 };
 
 struct Stage2Event {
-    enum class Kind {None,Plan,CurveStart,Shape,Phase,Batch,FullWall,Result,CurveDone,TaskDone,Complete};
+    enum class Kind {None,Plan,CurveStart,Modulus,Shape,Phase,Batch,FullWall,Result,CurveDone,TaskDone,Complete};
     Kind kind=Kind::None;
-    unsigned long long total=0,done=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0;
+    unsigned long long total=0,done=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0,carrier_exponent=0;
+    bool carrier_known=false;
     double seconds=0,elapsed=0,left=0;
     std::string save,phase,curve_model;
     int param=-1;
@@ -72,7 +73,8 @@ struct Stage2Event {
 };
 struct Stage2Status {
     bool valid=false;
-    unsigned long long total=0,done=0,current=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0;
+    unsigned long long total=0,done=0,current=0,record=0,sigma=0,b1=0,b2=0,d=0,p=0,bits=0,batch=0,batches=0,carrier_exponent=0;
+    bool carrier_known=false;
     unsigned long long measured_curves=0;
     double engine_seconds=0,seconds_sum=0,elapsed=0,batch_left=0;
     std::string save,phase,curve_model="mont";
@@ -110,6 +112,7 @@ struct ParsedLine {
     std::string text;        // the line as received, ANSI codes removed
     std::string plain;       // text without the "[timestamp] " prefix
     std::string timestamp;   // "2026-09-28 18:42:41", empty when absent
+    std::string application_version; // actual child banner, e.g. ECM-ELF 0.39.0
     ProgressInfo progress;
     Stage2Event stage2;
     bool is_hit = false;

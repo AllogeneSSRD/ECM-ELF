@@ -15,6 +15,7 @@
 #include "log_parse.h"
 #include "platform.h"
 #include "worker_proc.h"
+#include "../core/ecm_program_version.h"
 
 #include <cmath>
 #include <cstdarg>
@@ -66,6 +67,7 @@ struct RunResult {
     std::vector<HitInfo> hits;
     ProgressInfo last_progress;
     std::string last_start_line;
+    std::string application_version;
     unsigned long long ms_to_finish = 0;
 };
 
@@ -98,6 +100,7 @@ void drain_into(WorkerProc &w, RunResult &r) {
     r.hits.insert(r.hits.end(), d.hits.begin(), d.hits.end());
     if (d.last_progress.valid) r.last_progress = d.last_progress;
     if (!d.last_start_line.empty()) r.last_start_line = d.last_start_line;
+    if (!d.application_version.empty()) r.application_version = d.application_version;
 }
 
 WorkerSpawn make_spawn(const std::string &fake, const std::string &scenario,
@@ -194,6 +197,9 @@ int run_worker_selftest(const std::string &fake_path, const std::string &log_pat
               std::to_string(r.progress_lines) + " progress lines");
         check(!has_ansi(r.raw), "ANSI escapes removed from captured text");
         check(find_event(r.events, "START: ECMSTAGE2="), "START event kept in the event layer");
+        const std::string identity=std::string(ecm_program::name)+" "+ecm_program::version;
+        check(r.application_version==identity && find_event(r.events,identity.c_str()),
+              "worker version is visible and captured from its own banner",r.application_version);
         check(find_event(r.events, "FACTOR FOUND"), "FACTOR FOUND kept in the event layer");
         check(find_event(r.events, "Checkpoint saved"), "checkpoint event kept");
         const long long prio = event_value(r.raw, "priority");

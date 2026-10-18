@@ -307,6 +307,7 @@ void WorkerProc::drain(DrainedOutput &out) {
         // GUI window is just noise). Events keep the timestamp, raw does not (the
         // timestamp column is drawn by the UI).
         const ParsedLine pl = parse_line(l);
+        if(!pl.application_version.empty())out.application_version=pl.application_version;
         if(pl.stage2.kind!=Stage2Event::Kind::None && spawn_.stage2) {
             stage2_status_.apply(pl.stage2);out.stage2=stage2_status_;
             if(pl.stage2.kind==Stage2Event::Kind::Plan)out.stage2_task_started=true;

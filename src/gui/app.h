@@ -62,6 +62,7 @@ struct WorkerView {
     int device = 0;                   // effective device= after section override
     std::string curve_model = ecm_config::defaults::stage1_curve;
     std::string execution_target = ecm_config::defaults::stage1_target;
+    int gpu_param = ecm_config::defaults::stage1_gpu_param;
     int gpucurves = 0;
     std::string worktodo;
     std::string log_file;
@@ -80,6 +81,8 @@ struct WorkerView {
     std::string task;                 // current worktodo line (from START:)
     bool stage2=false;
     Stage2Status stage2_status;
+    std::string application_version;  // observed banner of this worker process
+    unsigned long version_pid = 0;
     std::vector<std::string> events;  // event layer (timestamped, ANSI-free)
     std::vector<std::string> raw;     // everything, for the "raw output" toggle
     // Progress history for the sparkline (one sample per accepted progress line).
@@ -276,7 +279,8 @@ private:
     GenInputText gen_input_;              // editable buffer and loaded file content
     std::string gen_input_path_;          // last file loaded into it ("" = pasted)
     std::string gen_set_b1_;              // blank keeps each assignment's B1
-    std::string gen_save_pattern_ = "m{n}_{b1}.save";
+    std::string gen_save_pattern_ = "{curve}_{target}_{b1}.save";
+    std::string gen_curve_type_ = "m0";
     std::string gen_sort_by_ = "n";
     int gen_blocks_per_sm_ = 2;           // the `n` in curves = n * sm_count * ipb
     bool gen_use_recommended_ = true;     // default ON

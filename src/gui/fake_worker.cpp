@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include "../core/ecm_program_version.h"
 #include <vector>
 
 #ifdef _WIN32
@@ -80,6 +81,7 @@ void sleep_ms(int ms) {
 
 void print_scripted_run(int lines, int delay_ms) {
     const std::string worker = arg_value("--worker", "1");
+    out("%s %s (Stage1)\n",ecm_program::name,ecm_program::version);
     out("===== ECM queue manager =====\n");
     out("worker : %s (ini section [Worker #%s]; unprefixed keys are the global defaults)\n",
         worker.c_str(), worker.c_str());

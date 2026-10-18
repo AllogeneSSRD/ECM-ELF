@@ -75,6 +75,7 @@ public:
         long long progress_lines = 0;
         ProgressInfo last_progress;
         std::string last_start_line;       // newest "START: <worktodo line>"
+        std::string application_version;    // version reported by the running executable
         std::vector<HitInfo> hits;         // every hit line seen in this batch (D3 fields)
         // Every `p95_add:` notice seen in this batch (Prime95 handoff, docs 13).
         std::vector<P95Notice> p95;

@@ -120,6 +120,7 @@ int main(int argc, char **argv) {
 
         GenOptions opt = base_options();
         opt.save_pattern = save_pattern;
+        opt.normalize_curve_prefix = false; // legacy Python byte-comparison mode
         opt.skip_curves = skip;
         opt.curves_fixed = curves;
         opt.use_recommended = (curves < 0);
@@ -239,12 +240,29 @@ int main(int argc, char **argv) {
         std::string err;
         parse_assignment("ECM2=1,2,521,-1,110e6", 0, t, err);
         check(render_save_name("m{n}_{b1}.save", t) == "m521_110e6.save",
-              "the default pattern renders", render_save_name("m{n}_{b1}.save", t));
+              "the legacy custom pattern renders", render_save_name("m{n}_{b1}.save", t));
+        t.bits=521;
+        check(render_save_name("{curve}_{target}_{b1}.save",t,"e")=="e_m521_110e6.save",
+              "Edwards Mersenne save name uses e and original exponent");
+        check(render_save_name("{curve}_{target}_{b1}.save",t,"m2")=="m2_m521_110e6.save" &&
+              render_save_name("{curve}_{target}_{b1}.save",t,"m3")=="m3_m521_110e6.save",
+              "Montgomery parameterizations use distinct save prefixes");
+        t.k="3";t.c="1";t.bits=9;t.b1="11000000";
+        check(render_save_name("{curve}_{target}_{b1}.save",t,"m0")=="m0_bit9_11000000.save",
+              "generic target uses estimated bits and preserves the input B1 spelling");
         check(check_save_name("m521_110e6.save") == nullptr, "a good name passes");
         check(check_save_name("m521.save") != nullptr, "a name without _<B1> fails");
         check(check_save_name("m521_.save") != nullptr, "an empty B1 token fails");
         check(check_save_name("m521_abc.save") != nullptr, "a non-numeric B1 token fails");
         check(check_save_name("m521_0.save") != nullptr, "B1 = 0 fails");
+        GenOptions generic=base_options();generic.use_recommended=false;generic.curves_fixed=8;
+        const GenResult generated=generate("ECM2=3,2,7,1,1e5\n",GpuProfile{},generic);
+        check(generated.ok && generated.text.find("\"m0_bit9_1e5.save\"")!=std::string::npos &&
+              !generated.warnings.empty(),
+              "non-Mersenne default name uses estimated bits and warns",generated.text);
+        generic.curve_type="m1";
+        check(!generate("ECM2=3,2,7,1,1e5\n",GpuProfile{},generic).ok,
+              "unsupported construction is refused");
     }
 
     // ---- the pipeline ---------------------------------------------------------------
@@ -278,8 +296,12 @@ int main(int argc, char **argv) {
         check(r.text.find("[Worker #1]\r\n") == 0, "the text starts with the worker 1 header");
         check(r.text.find("[Worker #3]") == std::string::npos,
               "no section for a worker with no tasks");
-        check(r.text.find("ECMSTAGE2=AID0000000000000000000000000001,1,2,521,-1,\"m521_110e6.save\",0,0,1920,\"3,5\"") != std::string::npos,
+        check(r.text.find("ECMSTAGE2=AID0000000000000000000000000001,1,2,521,-1,\"m0_m521_110e6.save\",0,0,1920,\"3,5\"") != std::string::npos,
               "the emitted line keeps the AID, the save name and the factors", r.text);
+        GenOptions e=opt;e.curve_type="e";e.save_pattern="m{n}_{b1}.save";
+        const GenResult er=generate("ECM2=1,2,521,-1,1e5\n",gpu,e);
+        check(er.ok && er.text.find("\"e_m521_1e5.save\"")!=std::string::npos,
+              "a custom pattern still uses the selected curve prefix",er.text);
         check(r.text.find("\r\n\r\n") != std::string::npos, "sections end with a blank line");
     }
 

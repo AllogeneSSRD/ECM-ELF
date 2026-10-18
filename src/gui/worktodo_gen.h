@@ -80,7 +80,9 @@ struct GenTask {
 };
 
 struct GenOptions {
-    std::string save_pattern = "m{n}_{b1}.save";
+    std::string save_pattern = "{curve}_{target}_{b1}.save";
+    std::string curve_type = "m0";      // e, m0, m2, m3; the Stage1 save identity
+    bool normalize_curve_prefix = true; // match Stage1's filename prefix override
     long long skip_curves = 0;
     // >= 0: use this many curves for every line (what ecm.py's --gpu-curves does, and what
     // the byte-for-byte test uses). < 0: use the recommendation.
@@ -139,8 +141,9 @@ bool parse_assignment(const std::string &line, int idx, GenTask &out, std::strin
 // (use_recommended == false), otherwise it is required.
 GenResult generate(const std::string &input, const GpuProfile &gpu, const GenOptions &opt);
 
-// Save name: `pattern` with {k}{b}{c}{n}{b1}{b2} substituted (ecm.py's render_save_name).
-std::string render_save_name(const std::string &pattern, const GenTask &t);
+// Save name: the shared Stage1 {curve}_{target}_{b1} tokens plus legacy k/b/c/n/b2.
+std::string render_save_name(const std::string &pattern, const GenTask &t,
+                             const std::string &curve_type="m0");
 // nullptr when the name is fine, else the reason (mirrors ecm_extract_b1_from_save_name:
 // must end with ".save" and carry a _<B1> token whose value is a positive number).
 const char *check_save_name(const std::string &name);
