@@ -1,0 +1,12 @@
+// Shared ascending, stable matrix row order. First key has highest priority.
+// integer/string are required; optional_integer defaults to zero.
+ECM_STAGE2_TUNE_ECM_ROW(condition, integer)
+ECM_STAGE2_TUNE_ECM_ROW(b2, integer)
+ECM_STAGE2_TUNE_ECM_ROW(d, integer)
+ECM_STAGE2_TUNE_ECM_ROW(carrier_exponent, integer)
+ECM_STAGE2_TUNE_ECM_ROW(b1, integer)
+ECM_STAGE2_TUNE_ECM_ROW(source, string)
+
+ECM_STAGE2_TUNE_NTT_ROW(length, integer)
+ECM_STAGE2_TUNE_NTT_ROW(batch, integer)
+ECM_STAGE2_TUNE_NTT_ROW(tile, optional_integer)

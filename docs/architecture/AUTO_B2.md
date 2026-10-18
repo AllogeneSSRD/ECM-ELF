@@ -121,6 +121,8 @@ NTT表只测Goldilocks有限域卷积，不含大整数carry和模N归约，不�
 
 列优先级只在 [`src/core/ecm_stage2_tune_columns.def`](../../src/core/ecm_stage2_tune_columns.def) 定义：移动其中的字段行即可调整顺序；未列出的可选字段按字母顺序排在后面。生产程序在编译时展开该定义，Python导入器通过 `tools/bench/stage2_tune_matrix.py::matrix_column_order` 读取同一文件，保留现有列宽对齐。调整顺序需要重编译生产程序；读取仍按列名解释，不依赖文件中的列位置。
 
+行排序只在 [`src/core/ecm_stage2_tune_rows.def`](../../src/core/ecm_stage2_tune_rows.def) 定义，ECM优先级为 `condition → b2 → d → carrier_exponent → b1 → source`。数值键按数值、source按字符串升序，所有键相同则保留原有先后。NTT使用 `length → batch → tile`，tile缺失按0处理。生产程序的 `matrix_row_less`、Python导入器及NTT格式化工具的 `matrix_row_key` 消费同一定义；调整对应字段行即可改变优先级，生产程序须重编译。列位置、耗时、版本和更新时间不参与行排序。
+
 ### 正常运行累计采样与候选试跑
 
 `stage2_tune_runtime=true` 默认开启；CLI 为 `--tune-runtime 0|1`。`stage2_tune_runtime_samples=10` 指定每组独立 NF 样本上限，范围2–1000，CLI 为 `--tune-runtime-samples N`。候选先取得两次观察，胜出路线随继续执行累计至上限。达到上限后停止该组采集，已有证据保留；调低上限不删除已有样本。关闭采集仍可读取已累计数据选型，但不再安排新试跑或写回。
@@ -161,13 +163,15 @@ M₂ = (n−1)s₁² + (m−1)s₂² + (μ₂−μ₁)²·nm/(n+m)，s = √[M�
 
 ### 当前验证范围
 
-0.37.2在GPU1 RTX4060 Laptop上验证15次队列NF：使用M1009的383位余因子save，B1=50000、B2=10⁸、D=30030、batch=64 MiB、arena=6300 MiB、owner=640 MiB。12次独立执行观察合并为普通10次和承载2次共两行；另核对显式D/算术锁、关闭写入仍读取统计、Montgomery Auto B2计划和因子命中不入样本。采用相同验证保存点重复运行，属于功能门禁，不是新的独立ECM覆盖或性能基准；计时边界为引擎init+main。
+完整GPU流程基线为0.37.2：在GPU1 RTX4060 Laptop上验证15次队列NF，使用M1009的383位余因子save，B1=50000、B2=10⁸、D=30030、batch=64 MiB、arena=6300 MiB、owner=640 MiB。12次独立执行观察合并为普通10次和承载2次共两行；另核对显式D/算术锁、关闭写入仍读取统计、Montgomery Auto B2计划和因子命中不入样本。采用相同验证保存点重复运行，属于功能门禁，不是新的独立ECM覆盖或性能基准；计时边界为引擎init+main。
 
 CPU检查覆盖独立两遍方差参考、加权合并、较慢观察、10次上限、跨版本复用与设备隔离、完整/子集快照去重、部分重叠拒绝、不同B1记录、NTT参数行与布尔列、对齐矩阵稳定读写、20条不同参数、10级网格、非负拟合、105组邻域及坏文件拒绝。共享列序检查核对原生/Python表头一致、旧条件迁移、最近来源按时间选择、未知时间留空及重复导入不刷新时间。正式GPU门禁通过22项：驻留/host fold调优、512/4423位输入、跨B1复用、短校准、Auto B2、NTT、合并、输入保护、旧格式重建、D邻域、实际执行及承载规划。4条NTT摘要通过排序、数值保持和格式化幂等检查。
 
 真实0.37.1 format 8文件在0.37.2只读规划时不重写或重新校准；续算一次NF后，原普通10次统计累计为11次，均值/方差按独立参考核对，未运行的承载行仍保留0.37.1和未知时间。恢复工具把两版24次JSONL观察合并为同一条件、普通20次和承载4次两行；重复导入/合并不增加计数，较慢观察保留，坏检查回执拒绝。
 
-证据位于 `data/experiments/stage2_tune_provenance_20261018/`：`cpu_final01/`、`portable_final01/`、`provenance_final01/`、`reuse_final01/`、`gpu_final02/`及其审计、`portable_gpu_final02/`、`import_legacy01/`、`import_mixed_final01/`、`sort_final02/`；最终身份汇总见`final_acceptance.json`，前置运行目录保留。15条队列NF的GMP抽查18836，错误0。正式local构建为 `build_cuda_cmake/local_stage2_0_37_2/ecm_cuda_stage2.exe`，sm89、CUDA13.3.73、MSVC14.51.36231、PTX3/addsub1、GMP Zen3；CUDA对象与0.37.1一致，变更位于主机侧。冻结85项编译输入，EXE SHA256为`5714f405d4bde1853666e94c5add94bdf31cbb01e6792e0ba3e3f7f8d81a9243`。
+基线证据位于 `data/experiments/stage2_tune_provenance_20261018/`：`cpu_final01/`、`portable_final01/`、`provenance_final01/`、`reuse_final01/`、`gpu_final02/`及其审计、`portable_gpu_final02/`、`import_legacy01/`、`import_mixed_final01/`、`sort_final02/`；身份汇总见`final_acceptance.json`，前置运行目录保留。15条队列NF的GMP抽查18836，错误0。该基线构建为 `build_cuda_cmake/local_stage2_0_37_2/ecm_cuda_stage2.exe`，sm89、CUDA13.3.73、MSVC14.51.36231、PTX3/addsub1、GMP Zen3；CUDA对象与0.37.1一致。冻结85项编译输入，EXE SHA256为`5714f405d4bde1853666e94c5add94bdf31cbb01e6792e0ba3e3f7f8d81a9243`。
+
+0.37.3的共享行排序在CPU验证9行ECM逐键优先级、同键稳定性、原生/Python输出及统计/来源一致；4条NTT行的数值顺序与格式化幂等通过。24次既有观察的离线导入、去重和统计检查通过；不重新测量GPU曲线。证据在 `data/experiments/stage2_tune_row_order_20261018/` 的 `portable01/`、`runtime01/`、`provenance01/`、`ntt01/`、`import01/` 和 `final_acceptance.json`。正式local为 `build_cuda_cmake/local_stage2_0_37_3/ecm_cuda_stage2.exe`，工具链和CUDA对象与基线相同，86项编译输入经哈希核验；EXE SHA256为`eaa4822db03d9b74f6dbc577a079f5e1afc44f41f1042cc45352dc7be78bb81a`。
 
 频率、功耗未按性能协议冻结，因此不据此给出加速比例。真实并发写锁、强制中断、其他设备和生产规模边界仍见TODO。
 
@@ -355,7 +359,7 @@ log₂L、batch/mean、1/mean、L·b检查字数由程序推导，不重复保�
 
 NTT 校准和完整 ECM 校准保持独立：完整 ECM/启动短校准使用原分块，存入实际条件，不伪装成启用新策略的测量。运行日志给出策略摘要和参与数据的 hash。[固定 D 完整曲线验证](../performance/STAGE2.md#短-ntt-分块选择)中，当前策略未显示稳定收益；7995-bit通用余因子两档B2均慢约2.1%，因此保持默认关闭。后续选型需要计入每分块的归约、准备、检查和同步成本，不能仅用独立NTT的Conv/s决定分块。
 
-NTT 参数表发布时按 `(log2_length,length,batch,tile)` 数值升序排列，列顺序与行排序分别维护。现有生成表可用 `tools/bench/format_stage2_tune.py <profile> --in-place` 重排；此工具仅移动行，保留测量值、其他节和列结构。
+NTT 参数表发布时按共享行规则 `(length,batch,tile)` 数值稳定升序排列，详见[矩阵行列定义](#toml-中的算术路径)。现有生成表可用 `tools/bench/format_stage2_tune.py <profile> --in-place` 重排；此工具仅移动行，保留测量值、其他节和列结构。
 
 ### NTT 摘要代码依据
 

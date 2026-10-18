@@ -29,6 +29,27 @@ def matrix_column_order():
 
 COLUMN_ORDER=matrix_column_order()
 
+def matrix_row_order():
+    path=Path(__file__).resolve().parents[2]/'src/core/ecm_stage2_tune_rows.def'
+    result={'ecm':[], 'ntt':[]}
+    for line in path.read_text(encoding='utf-8').splitlines():
+        line=line.strip()
+        if not line or line.startswith('//'):continue
+        match=re.fullmatch(r'ECM_STAGE2_TUNE_(ECM|NTT)_ROW\(([a-z_][a-z_0-9]*),\s*(integer|optional_integer|string)\)',line)
+        if not match:raise ValueError('Invalid shared tune row definition')
+        keys=result[match[1].lower()]
+        if any(name==match[2] for name,_ in keys):raise ValueError('Duplicate tune row sort key')
+        keys.append((match[2],match[3]))
+    if not all(result.values()):raise ValueError('Missing tune row sort definition')
+    return {name:tuple(keys) for name,keys in result.items()}
+
+ROW_ORDER=matrix_row_order()
+
+def matrix_row_key(row,section='ecm'):
+    return tuple(str(row[name]) if kind=='string' else
+                 int(row.get(name,0) or 0) if kind=='optional_integer' else int(row[name])
+                 for name,kind in ROW_ORDER[section])
+
 def utc_updated_at(nanoseconds):
     seconds,fraction=divmod(int(nanoseconds),1_000_000_000)
     return datetime.fromtimestamp(seconds,timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')+f'.{fraction:09d}Z'
@@ -155,7 +176,7 @@ def write_profile(conditions, samples):
     for width, rows in sorted(widths.items()):
         names = (set().union(*(r.keys() for r in rows)) | {'program_version','updated_at'})-omit
         columns = [k for k in COLUMN_ORDER if k in names]+sorted(names-set(COLUMN_ORDER))
-        rows.sort(key=lambda r:(r['condition'],r['carrier_exponent'],r['b2'],r['d'],r['b1'],r['source']))
+        rows.sort(key=matrix_row_key)
         matrix = [[literal(c) for c in columns]]+[[literal(r.get(c,'')) for c in columns] for r in rows]
         col_widths = [max(len(r[i]) for r in matrix) for i in range(len(columns))]
         lines += [f'\n[width.{width}]', 'matrix = [']

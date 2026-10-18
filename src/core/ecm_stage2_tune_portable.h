@@ -15,6 +15,22 @@ inline constexpr const char *matrix_column_order[]={
 #include "ecm_stage2_tune_columns.def"
 #undef ECM_STAGE2_TUNE_COLUMN
 };
+enum class MatrixSortKind {integer,optional_integer,string};
+struct MatrixSortKey {const char *name;MatrixSortKind kind;};
+inline constexpr MatrixSortKey ecm_row_order[]={
+#define ECM_STAGE2_TUNE_ECM_ROW(name,kind) {#name,MatrixSortKind::kind},
+#define ECM_STAGE2_TUNE_NTT_ROW(name,kind)
+#include "ecm_stage2_tune_rows.def"
+#undef ECM_STAGE2_TUNE_ECM_ROW
+#undef ECM_STAGE2_TUNE_NTT_ROW
+};
+inline constexpr MatrixSortKey ntt_row_order[]={
+#define ECM_STAGE2_TUNE_ECM_ROW(name,kind)
+#define ECM_STAGE2_TUNE_NTT_ROW(name,kind) {#name,MatrixSortKind::kind},
+#include "ecm_stage2_tune_rows.def"
+#undef ECM_STAGE2_TUNE_ECM_ROW
+#undef ECM_STAGE2_TUNE_NTT_ROW
+};
 constexpr Word default_b2_max=2600000000000ull;
 struct Grid {std::vector<unsigned> widths;std::vector<Word> ds,b2s;unsigned repeats=2,basins=2;};
 inline std::vector<size_t> neighbors(size_t center,size_t count) {
@@ -90,6 +106,18 @@ inline std::string text(const Fields &f,const char *key) {
 }
 inline Word optional_uint(const Fields &f,const char *key,Word fallback=0){return f.count(key)?uint(f,key):fallback;}
 inline double optional_real(const Fields &f,const char *key,double fallback=0){return f.count(key)?real(f,key):fallback;}
+template<size_t N> inline bool matrix_row_less(const Fields &a,const Fields &b,const MatrixSortKey (&keys)[N]) {
+    for(const auto &key:keys) {
+        if(key.kind==MatrixSortKind::string) {
+            const auto x=text(a,key.name),y=text(b,key.name);if(x!=y)return x<y;
+        } else {
+            const auto x=key.kind==MatrixSortKind::optional_integer?optional_uint(a,key.name):uint(a,key.name);
+            const auto y=key.kind==MatrixSortKind::optional_integer?optional_uint(b,key.name):uint(b,key.name);
+            if(x!=y)return x<y;
+        }
+    }
+    return false;
+}
 inline std::string utc_updated_at(Word nanoseconds) {
     const auto seconds=std::time_t(nanoseconds/1000000000);std::tm utc{};
 #ifdef _WIN32
@@ -551,9 +579,7 @@ struct Profile {
                 if(names.erase(k))columns.push_back(k);
             columns.insert(columns.end(),names.begin(),names.end());
             std::stable_sort(rows.begin(),rows.end(),[&](const Fields &a,const Fields &b){
-                return ntt?std::make_tuple(uint(a,"length"),uint(a,"batch"),optional_uint(a,"tile"))<std::make_tuple(uint(b,"length"),uint(b,"batch"),optional_uint(b,"tile")):
-                    std::make_tuple(uint(a,"condition"),uint(a,"carrier_exponent"),uint(a,"b2"),uint(a,"d"),uint(a,"b1"),required(a,"source"))<
-                    std::make_tuple(uint(b,"condition"),uint(b,"carrier_exponent"),uint(b,"b2"),uint(b,"d"),uint(b,"b1"),required(b,"source"));
+                return ntt?matrix_row_less(a,b,ntt_row_order):matrix_row_less(a,b,ecm_row_order);
             });
             std::vector<std::vector<std::string>> matrix(1);
             for(const auto &c:columns)matrix[0].push_back(ecm_stage2::tune::portable::quoted(c));

@@ -10,7 +10,7 @@ import tomllib
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools/bench'))
-from stage2_tune_matrix import COLUMN_ORDER, aggregate, encode_ids, literal, utc_updated_at, write_profile
+from stage2_tune_matrix import COLUMN_ORDER, ROW_ORDER, aggregate, encode_ids, literal, utc_updated_at, write_profile
 from stage2_tune_tables import summaries
 
 
@@ -77,12 +77,38 @@ def main():
     separate=put('different_device.toml',[different],[late])
     isolated=tomllib.loads(run('--update',old,separate))
     assert len(isolated['condition'])==2 and len(summaries(isolated))==2
+    # Conflict between D/B2 and carrier order, plus source and stable ties.
+    assert [name for name,_ in ROW_ORDER['ecm']]==['condition','b2','d','carrier_exponent','b1','source']
+    changes=[dict(condition=1),dict(b2=1400000000000,d=210),dict(b1=260000001),
+        dict(carrier_exponent=5003),dict(d=210,carrier_exponent=5003),
+        dict(d=210,source='model',fold_resident=0),dict(d=210),
+        dict(d=210,frontier_resident=0),dict(d=210,b1=260000001)]
+    order_rows=[]
+    for i,change in enumerate(changes):
+        row=sample('order-'+str(i),20-i,'0.0.'+str(i))
+        row.update(benchmark_kind='synthetic_order',**change)
+        if row['carrier_exponent']:row.update(arithmetic_bits=5003,modulus_kind='mersenne')
+        order_rows.append(row)
+    ordered=put('row_order.toml',[condition,different],order_rows)
+    expected_versions=['0.0.'+str(i) for i in (6,7,5,8,4,2,3,1,0)]
+    document=tomllib.loads(ordered.read_text(encoding='utf-8'))
+    assert [s['program_version'] for s in summaries(document)]==expected_versions
+    # Feed native code unsorted input rather than relying on Python's output order.
+    header,*values=document['width']['4916']['matrix']
+    values.sort(key=lambda row:int(row[header.index('program_version')].rsplit('.',1)[1]))
+    prefix=ordered.read_text(encoding='utf-8').split('matrix = [',1)[0]
+    unsorted=out/'row_unsorted.toml'
+    unsorted.write_text(prefix+'matrix = [\n'+''.join(
+        '['+', '.join(map(literal,row))+'],\n' for row in [header,*values])+']\n',encoding='utf-8')
+    native=tomllib.loads(run('--roundtrip',unsorted))
+    assert summaries(native)==summaries(document),'native/Python row order or data differs'
     # Metadata errors fail explicitly; the aggregate must not acquire an invalid clock.
     damaged=out/'bad_time.toml';damaged.write_text(old.read_text().replace('2023-11-14T22:13:20.000000001Z','not-a-time'),encoding='utf-8')
     assert subprocess.run([str(exe),'--roundtrip',str(damaged)],capture_output=True).returncode!=0
     report=dict(complete=True,shared_columns=True,native_python_order_equal=True,cross_version_statistics=True,
         latest_source_by_time=True,duplicate_no_refresh=True,legacy_condition_migration=True,
-        unknown_time_preserved=True,hardware_isolation=True,invalid_time_rejected=True)
+        unknown_time_preserved=True,hardware_isolation=True,invalid_time_rejected=True,
+        shared_row_order=True,native_python_row_order=True,stable_ties=True)
     (out/'result.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8');print(json.dumps(report))
 
 if __name__=='__main__':main()

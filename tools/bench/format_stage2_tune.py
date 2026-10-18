@@ -3,6 +3,7 @@ import argparse
 import pathlib
 import re
 import tomllib
+from stage2_tune_matrix import matrix_row_key
 
 
 def format_rows(source: str) -> tuple[str, int]:
@@ -24,8 +25,7 @@ def format_rows(source: str) -> tuple[str, int]:
         if len(lines) != len(values):
             raise ValueError("Cannot reorder a table with multiline/commented rows")
         records = [dict(table, **dict(zip(columns, row))) for row in values]
-        order = sorted(range(len(records)), key=lambda i: tuple(
-            int(records[i].get(key, 0)) for key in ("log2_length", "length", "batch", "tile")))
+        order = sorted(range(len(records)), key=lambda i: matrix_row_key(records[i],'ntt'))
         if order != list(range(len(records))):
             changed += 1
         return block[:rows.start(1)] + header + "".join(lines[i] for i in order) + block[rows.end(1):]
