@@ -50,6 +50,8 @@ GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位�
 
 GPU Edwards 在 NAF 列或二进制位的片边界更新共用进度输出，GUI 管道可读取百分比。当前32档构建的三曲线族同exe数据见[性能依据](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，32档CPU末点、旧检查点跨容器恢复及Stage2交接见[细分实例验收](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)。冻结七档的binary/NAF、窗口/倍点对照及大界限证据分别见[性能参考](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)和[窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)，初始流水线见[开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
 
+**主机等待限制。** Montgomery 的 CUDA 初始化设置 `cudaDeviceScheduleBlockingSync`，切片通过设备同步后再检查报告与计时事件；Edwards 入口只选择设备，NAF 直接等待默认事件。Windows 11 / WDDM、驱动 610.88 的 GPU1 实测中，NAF 的 `cudaEventSynchronize` 持续消耗约一个逻辑核心，不能据此认为点运算回退到 CPU。单独增加阻塞事件标志在该环境没有降低占用。已验证的诊断候选是在阻塞设备调度下先记录结束事件，再通过设备同步等待，最后读取事件；它尚未进入生产实现。输入、计时边界、CPU 时间归属及候选代价见 [主机等待诊断草稿](../development/GPU_STAGE1_HOST_WAIT_DRAFT.md)。
+
 ### Montgomery resident 与 PRAC
 
 resident 路径将点状态保持在 Montgomery 域，减少切片间往返转换。PRAC 将素数幂标量分解为规则链，以更多活跃点和控制流换取较少点运算；主机离线计划可缓存，并以分片保持检查点和进度语义。
