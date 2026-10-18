@@ -21,7 +21,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Stage1 算法](architecture/STAGE1.md)：曲线、标量、ladder/PRAC、域转换和存档。
 - [Checkpoint](architecture/CHECKPOINT.md)：Stage1 统一外壳、各后端载荷字段与偏移、校验、备份恢复及 Stage2 曲线进度。
 - [Save](architecture/SAVE.md)：完成点与因子文本、校验公式、命名前缀、发布去重和消费者/交接边界。
-- [Stage2 管线](architecture/STAGE2.md)：每一步的输入、输出、计算量及 CPU/GPU 分工。
+- [Stage2 管线](architecture/STAGE2.md)：每一步的输入、输出、计算量、CPU/GPU 分工及可选 relocation/原区间重放。
 - [NTT](architecture/NTT.md)：精确卷积、Goldilocks 算术、布局和设备归约。
 - [内存与规划](architecture/MEMORY.md)：容量公式、生命周期模型、准入边界和证据。
 - [Auto B2 / tune](architecture/AUTO_B2.md)：收益目标、profile 合同、搜索和标定资格。
@@ -32,7 +32,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 - [Stage1 性能](performance/STAGE1.md)：GPU Edwards细分实例与Montgomery三曲线族同exe成本、冻结初始基准、NAF窗口/倍点图表、PRAC投影和资源约束。
 - [Stage2 性能](performance/STAGE2.md)：CPU/GPU 比较、位宽/B2关系、阶段占比和容量收益。
-- [Edwards GPU Stage2 性能与 CPU 参考](performance/EDWARDS_STAGE2.md)：Edwards/PARAM0 同条件版本对照、宽尾块调度、普通/承载基准、Prime95 精确余因子参考及 CPU 已测样本。
+- [Edwards GPU Stage2 性能与 CPU 参考](performance/EDWARDS_STAGE2.md)：可选relocation的NF/命中重放对照、Edwards/PARAM0版本对照、宽尾块调度、普通/承载基准、Prime95 精确余因子参考及 CPU 已测样本。
 - [CPU GW 多项式 Stage2](performance/CPU_GWPOLY_STAGE2.md)：4 GHz、相同精确输入的 Prime95 对照、1/4 线程实测和进程内存。
 - [Tensor NTT 性能](performance/NTT_TENSOR.md)：精确Tensor64/40/N96r64、长度/batch、同卡CUDA/Tensor并发及硬件计数器。
 - [短NTT Graph性能](performance/NTT_GRAPH.md)：缓存生命周期、固定D完整曲线、batch吞吐及管理员Nsight分析。

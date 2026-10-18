@@ -6,6 +6,7 @@
 #include "../core/ecm_cuda_stage2.h"
 #include "../core/ecm_stage2_ntt_counts.h"
 #include "../core/ecm_stage2_d_catalog.h"
+#include "../core/ecm_stage2_relocation.h"
 #if !defined(NTT_GL_FIXED_MODE) || NTT_GL_FIXED_MODE != 3
 #error "Production Stage2 requires fixed PTX3 Goldilocks"
 #endif
@@ -1346,6 +1347,7 @@ struct S4Ctx {
 };
 
 static bool g_ntt_counts_enabled=false;
+static bool g_relocation_enabled=false;
 struct PolyLayer : ecm_stage2::ModulusContext {
     int device = 1;
     /* slice S3: the persistent multiply arena (buffers + fusion plan + per-pass twiddle
@@ -6394,6 +6396,7 @@ static long long name_max(void)
 
 struct Stage2Tail {
     EcmStage2Metrics metrics;
+    bool nonunit=false;
     unsigned long long hits = 0, bad_factors = 0;
     /* hits whose prime was counted but not named (the naming budget stopped the scan): hits and
        bad_factors stay EXACTLY comparable with the CPU reference either way, only the
@@ -7101,6 +7104,7 @@ static void block_product_fixture(const LadderCtx &C)
 static void s3_record(Stage2Tail &out, const mpz_t f, unsigned long long prime, const mpz_t N,
                       bool count_hit = true)
 {
+    if(mpz_cmp_ui(f,1)>0)out.nonunit=true;
     if (mpz_cmp_ui(f, 1) <= 0 || mpz_cmp(f, N) == 0) return;
     mpz_t tq;
     mpz_init(tq);
@@ -7194,6 +7198,7 @@ struct BatchedRun {
     FoldDeviceStats fold_device;
     Stage2Tail tail;
     unsigned long long giant_points = 0, num_poly_g = 0, loops = 0, P = 0;
+    unsigned long long giant_first=1,giant_last=0;
     unsigned long long descent_divmods = 0, leaf_values = 0, apply_blocks = 0, block_per = 0;
     unsigned long long small_primes = 0;
     unsigned long long hit_blocks = 0, named_searches = 0, candidates_tested = 0;
@@ -7299,11 +7304,13 @@ struct SmallPrimeBabyCache {
 static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Params &SP,
                               const std::vector<std::vector<unsigned long long>> &Ft,
                               const std::vector<size_t> &Fdeg, size_t Fpad,
-                              const SmallPrimeBabyCache *baby_cache=nullptr)
+                              const SmallPrimeBabyCache *baby_cache=nullptr,
+                              const ecm_stage2::GiantRange *requested_range=nullptr)
 {
     const size_t W = L.W;
     const unsigned long long D = SP.D, B1 = SP.B1, B2 = SP.B2;
-    const unsigned long long imax = B2 / D + 2;          /* the SAME giant set S2/the CPU ref use */
+    const auto range=requested_range?*requested_range:ecm_stage2::giant_range(B2,D,false);
+    const unsigned long long imax = range.points;
     const double t_entry = now_s();
     const size_t P = Fdeg[1];                            /* deg F = the baby count = poly_size */
     if(!L.s4) {
@@ -7316,6 +7323,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     R.fold_flat.enabled=fold_flat_enabled;
     R.P = P;
     R.giant_points = imax;
+    R.giant_first=range.first;R.giant_last=range.last;
     R.dbg_progress = true;                  /* one line per G-tree batch: gate-able, machine-readable */
     L.cost.S = (long)L.S;                              /* (already set by the caller) */
 
@@ -7367,6 +7375,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             } else {
                 words_to_mpz(z,sz.data()+fallback++*W,W);mpz_gcd(pg,z,L.target());
             }
+            if(mpz_cmp_ui(pg,1)>0)R.tail.nonunit=true;
             if(mpz_cmp_ui(pg,1)>0 && mpz_cmp(pg,L.target())<0)s3_record(R.tail,pg,smalljs[k],L.target());
         }
         mpz_clears(z,expected,nullptr);
@@ -7472,10 +7481,25 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     const double t_loop_begin = now_s();
     R.phase_boundaries.loop_begin=t_loop_begin;
     R.t_pre_loop = t_loop_begin - t_entry;
-    for (unsigned long long c0 = 0; c0 < imax; c0 += pts_per_chunk) {
+    // Rebalance only the optional suffix. Admission retains the original full
+    // range/capacity, so a replay never depends on a smaller point budget.
+    const char *rebalance_hostpack=std::getenv("NTT_S4_HOSTPACK");
+    const auto resident_limit=fuse_env_ull("NTT_DEVICE_GLEAF_MAX_MB",512)*1048576ull;
+    const bool rebalance_resident=device_gleaf_flag("NTT_DEVICE_GLEAF") && g_groot_device &&
+        g_s4_groot_only && L.s4 && g_s4_pack_direct && !g_s4_final_readback && g_gfinv_seg_exact &&
+        !(rebalance_hostpack && std::atoi(rebalance_hostpack)) && 16ull*pts_per_chunk*W<=resident_limit;
+    const auto rebalance_min=g_giant_seed_device && rebalance_resident?
+        ecm_stage2::giant_chain_minimum(W,fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768),
+            fuse_env_ull("NTT_DEVICE_GLEAF_MAX_MB",512)*1048576ull):
+        fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768);
+    for (unsigned long long c0 = 0; c0 < imax;) {
         ++actual_point_chunks;
-        const unsigned long long c1 = ((imax - c0) < pts_per_chunk) ? imax : (c0 + pts_per_chunk);
-        const size_t clo = (size_t)(c0 + 1), chi = (size_t)c1;
+        const auto take=ecm_stage2::giant_chunk_take(imax-c0,pts_per_chunk,P,rebalance_min,range.active);
+        const unsigned long long c1=c0+take;
+        const size_t clo=(size_t)(range.first+c0),chi=(size_t)(range.first+c1-1);
+        if(range.active)stage2_log::print(stage2_log::debug,
+            "relocation_chunk: offset=%llu first=%llu points=%llu capacity=%llu\n",
+            c0,(unsigned long long)clo,take,pts_per_chunk);
         const double tgp = now_s();
         s2g_state("giant ladder chunk: about to launch");   /* the last state on a driver kill */
         /* THE CHAIN BY DEFAULT (see s2g_chain_kernel): one differential addition per giant point
@@ -7586,6 +7610,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
             if(actual_chain)++R.giant_chain_chunks;
         }
         R.t_giant += now_s() - tgp;
+        if(ws.giant_base_d && !ws.giant_base_unit)R.tail.nonunit=true;
         if(device_leaf) {
             const double t=now_s(),ti=R.device_leaf.t_invert;
             if(wide_tail && actual_chain) {
@@ -7618,6 +7643,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 }
                 mpz_clear(saved);
             } else resident.prepare(ws,L,gseg,Ginv,proj_gamma_points,proj_segments,R.device_leaf);
+            if(R.device_leaf.bad_groups)R.tail.nonunit=true;
             R.t_gleaves+=now_s()-t;R.t_ginv+=R.device_leaf.t_invert-ti;
         }
         stage2_log::print(stage2_log::debug, "giant_chain_policy: npts=%llu route=%s base_block=%llu block=%llu short_block=%llu short_max=%llu configured_min=%llu effective_min=%llu words=%llu\n",
@@ -7687,7 +7713,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                `first_touch` keeps Gamma from counting a segment twice when a BATCH boundary
                falls inside it: only the batch that owns the segment's first point adds its
                inverse, and the other half's projective leaves are covered by that one factor. */
-            const size_t lbase = clo - 1;               /* local 0 == global lbase */
+            const size_t lbase = (size_t)c0;             /* tree offsets, not absolute giant i */
             const size_t lhi = hi - lbase;
             for (size_t la = lo - lbase; la < lhi;) {
                 const size_t sidx = la / SEG;
@@ -7722,6 +7748,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                 const double t3 = now_s();
                 R.t_gin += t2 - t1;
                 R.t_ginv += t3 - t2;
+                if(!clean)R.tail.nonunit=true;
                 if (clean) {
                     if (first_touch) {
                         mpz_mul(Ginv, Ginv, invp);
@@ -7812,7 +7839,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         }
         if(device_leaf) {
             auto fill=[&](unsigned long long *out) {
-                const double t=now_s();const size_t first=lo-(clo-1),count=hi-lo;
+                const double t=now_s();const size_t first=lo-c0,count=hi-lo;
                 s2g_projective_leaf_kernel<<<(unsigned)((count+127)/128),128>>>(ws.dn,(int)W,resident.x,resident.z,first,count,out);
                 CK(cudaGetLastError());
                 for(auto it=patches.begin();it!=patches.end();) {
@@ -7926,6 +7953,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                         L.arena ? L.arena->overflow : 0ull);
         }
         }
+        c0=c1;
     }
     R.t_post_loop=now_s();
     R.phase_boundaries.loop_end=R.t_post_loop;
@@ -8270,6 +8298,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
     for (size_t b = 0; b < bprod.size(); ++b) {
         words_to_mpz(bv, bprod[b].data(), W);
         mpz_gcd(bg, bv, L.target());
+        if(mpz_cmp_ui(bg,1)>0)R.tail.nonunit=true; // includes gcd=N before the legacy extraction gate
         if (mpz_cmp_ui(bg, 1) > 0 && mpz_cmp(bg, L.target()) < 0) {
             ++R.hit_blocks;                             /* a real hit: only NOW do we look at
                                                            the individual leaf values */
@@ -8299,7 +8328,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
                reference) and says so, instead of spending hours naming primes nobody will read:
                measured at B2=4e10/D=570570, one 64-leaf block of the old loop took 762.8 s and
                there are 810 such blocks, i.e. ~2.7 h of the ~2.75 h run. */
-            const bool name_here = name_hits && (R.hit_blocks <= name_budget_blocks);
+            const bool name_here = !range.active && name_hits && (R.hit_blocks <= name_budget_blocks);
             if (R.dbg_progress && !name_here && R.hit_blocks == name_budget_blocks + 1) {
                 stage2_log::print(stage2_log::phases, "batched_phase: naming_budget_exhausted at block=%llu hit_blocks=%llu "
                             "-- hits are still counted, hit_primes are no longer named\n",
@@ -9253,6 +9282,8 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
        shares a factor with N, i.e. points that are the identity modulo that factor.  Collected
        here (the batched run does not exist yet) and merged into the reported factor set below. */
     std::vector<std::string> baby_deg;
+    unsigned long long baby_noninv=0;
+    bool baby_nonunit_seen=false;
     phase_boundaries.baby_begin=now_s();
     stage2_log::phase("Generate and normalize baby points");
     stage2_memory::snapshot("before_baby");
@@ -9262,13 +9293,14 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
     {
         const double t0 = now_s();
         std::vector<unsigned long long> bx, bz;
-        unsigned long long noninv = 0;              /* printed as real_baby: ... degenerate= */
+        auto &noninv=baby_noninv;                    /* legacy failed affine conversions; saturation tracked separately */
         const double tb0 = now_s();
         std::vector<std::vector<unsigned long long>> leaf(baby_j.size());
         DeviceBabyStats bs;
         const bool baby_requested=fuse_env_ull("NTT_BABY_DEVICE",0)!=0;
         const bool baby_used=baby_requested && device_baby_generate(C,L.target(),baby_j,leaf,
             reuse_small?&small_cache:nullptr,baby_deg,noninv,bs);
+        if(baby_used && bs.bad_groups)baby_nonunit_seen=true;
         if(!baby_used)ladder_points(C,baby_j,bx,bz);
         const double tb1=baby_used?tb0+bs.ladder_seconds:now_s();
         if(!baby_used) {
@@ -9308,6 +9340,7 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 }
                 if (clean && mpz_invert(iprod, pv[seg], L.target()) == 0) clean = false;
                 if (!clean) {
+                    baby_nonunit_seen=true; // includes target-zero Z accepted as a legacy placeholder
                     /* the affine path, VERBATIM: whatever refuses to invert is a hit, not an
                        accident, and affine_x_gmp_checked records its gcd as a factor */
                     for (size_t j = 0; j < seg; ++j) {
@@ -9442,7 +9475,31 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
         const unsigned long long rw0 = L.s4 ? L.s4->raw_words : 0ull;
         const unsigned long long pl0 = L.s4 ? L.s4->pack_launches : 0ull;
         const double t0 = now_s();
-        BatchedRun BR = run_batched(L, C, SP, Ft, Fdeg, Fpad,reuse_small?&small_cache:nullptr);
+        const auto relocation=ecm_stage2::giant_range(B2,D,g_relocation_enabled);
+        const bool baby_nonunit=baby_nonunit_seen || baby_noninv!=0 || !baby_deg.empty();
+        const bool attempted=relocation.active && !baby_nonunit;
+        double probe_seconds=0,replay_seconds=0,final_begin=t0;
+        bool replayed=relocation.active && baby_nonunit;
+        ecm_stage2::timing::PhaseTimes probe_phases;
+        BatchedRun BR=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr,
+                                  attempted?&relocation:nullptr);
+        if(attempted) {
+            s4_oracle_drain(red); // an unchecked probe cannot authorize NF or replay
+            const double end=now_s();probe_seconds=end-t0;
+            replayed=BR.tail.nonunit || !BR.tail.factors.empty();
+            if(replayed) {
+                auto bounds=BR.phase_boundaries;bounds.main_begin=t0;bounds.main_end=end;
+                probe_phases=ecm_stage2::timing::partition(bounds);
+                if(!probe_phases.complete){std::fprintf(stderr,"FATAL: incomplete relocation probe timing\n");std::exit(3);}
+                final_begin=end;
+                stage2_log::print(stage2_log::phases,"stage2_relocation_replay: reason=hit_or_nonunit first=1 last=%llu\n",relocation.last);
+                BatchedRun original=run_batched(L,C,SP,Ft,Fdeg,Fpad,reuse_small?&small_cache:nullptr);
+                s4_oracle_drain(red);replay_seconds=now_s()-end;
+                original.t_giant+=BR.t_giant;original.t_gtrees+=BR.t_gtrees;original.t_fold+=BR.t_fold;
+                original.t_descent+=BR.t_descent;original.t_inv+=BR.t_inv;original.t_accum+=BR.t_accum;
+                BR=std::move(original);
+            }
+        } else if(replayed)replay_seconds=now_s()-t0;
         stage2_log::phase("Validate arithmetic and finalize factors");
         s4_oracle_drain(red);    /* validation must finish BEFORE elapsed and success */
         /* merge the factors that degenerate BABY points revealed (objective 3): each already
@@ -9455,17 +9512,26 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                 BR.tail.factors.push_back(s);
         if (saved_result) *saved_result = BR.tail;
         const double el = now_s() - t0;
+        if(replayed && !attempted)replay_seconds=el; // early nonunit: include the mandatory oracle drain
         if(saved_result) {
             auto &m=saved_result->metrics;
-            m.d=D;m.p=P_baby;m.giant_points=imax;
+            m.d=D;m.p=P_baby;m.giant_points=BR.giant_points;
+            m.giant_first=BR.giant_first;m.giant_last=BR.giant_last;
+            m.relocation=g_relocation_enabled;m.relocation_replayed=replayed;
+            m.relocation_points=attempted?relocation.points:0;m.relocation_prime=relocation.missing;
+            m.relocation_probe_seconds=probe_seconds;m.relocation_replay_seconds=replay_seconds;
             m.init_seconds=stage2_init_seconds;m.main_seconds=el;m.total_seconds=stage2_init_seconds+el;
             m.giant_seconds=BR.t_giant;m.gtrees_seconds=BR.t_gtrees;m.fold_seconds=BR.t_fold;
             m.descent_seconds=BR.t_descent;m.inverse_seconds=BR.t_inv;m.accum_seconds=BR.t_accum;
             auto boundaries=BR.phase_boundaries;
             boundaries.shape=phase_boundaries.shape;boundaries.init_begin=phase_boundaries.init_begin;
             boundaries.baby_begin=phase_boundaries.baby_begin;boundaries.ftree_begin=phase_boundaries.ftree_begin;
-            boundaries.init_end=phase_boundaries.init_end;boundaries.main_begin=t0;boundaries.main_end=t0+el;
+            boundaries.init_end=phase_boundaries.init_end;boundaries.main_begin=final_begin;boundaries.main_end=t0+el;
             m.phases=ecm_stage2::timing::partition(boundaries);
+            if(replayed && attempted) {
+                m.phases.complete=m.phases.complete && probe_phases.complete;
+                for(size_t i=4;i<ecm_stage2::timing::count;++i)m.phases.seconds[i]+=probe_phases.seconds[i];
+            }
             m.clean=!stage2_extra_fixtures && !run_s2 && curves==1;
             m.fold_resident=BR.fold_device.enabled;
         }
@@ -9483,6 +9549,12 @@ static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     cv+1,stage2_shape_seconds,stage2_init_seconds,el,stage2_init_seconds+el,
                     stage2_fixture_seconds,(int)(!stage2_extra_fixtures && !run_s2 && curves==1));
         L.print_ntt_lengths();
+        if(g_relocation_enabled)stage2_log::print(stage2_log::curve,
+            "stage2_relocation: active=%d first=%llu last=%llu probe_points=%llu missing=%llu replayed=%d "
+            "probe=%.6f replay=%.6f main=%.6f final_first=%llu final_points=%llu reason=%s\n",
+            (int)attempted,relocation.first,relocation.last,attempted?relocation.points:0ull,relocation.missing,
+            (int)replayed,probe_seconds,replay_seconds,el,BR.giant_first,BR.giant_points,
+            baby_nonunit?"baby_nonunit":replayed?"hit_or_nonunit":attempted?"clean_nf":"no_reduction");
         stage2_log::print(stage2_log::debug, "real_batched_foldflat: enabled=%d folds=%llu muls=%llu sub_coeffs=%llu peak_bytes=%llu prepare=%.6f multiply=%.6f subtract=%.6f bridge=%.6f\n",
             (int)BR.fold_flat.enabled,BR.fold_flat.folds,BR.fold_flat.muls,BR.fold_flat.sub_coeffs,BR.fold_flat.peak_bytes,
             BR.fold_flat.t_prepare,BR.fold_flat.t_multiply,BR.fold_flat.t_subtract,BR.fold_flat.t_bridge);
@@ -9851,11 +9923,15 @@ int ecm_cuda_stage2_plan(const char *n_hex,uint64_t sigma,uint64_t b1,uint64_t b
     const int code=run_real(n_hex,true,sigma,b1,b2,d,d==0,false,1,nullptr,nullptr,true,&p,carrier_exponent);
     if(code)return code;
     const auto &g=p.geometry;
+    const auto relocation=ecm_stage2::giant_range(p.b2,p.d,g_relocation_enabled);
     std::ostringstream json;json<<std::setprecision(17)
         <<"{\"type\":\"stage2_plan\",\"schema\":1,\"curves_executed\":0,\"bits\":"<<g.bits
         <<",\"target_bits\":"<<p.target_bits<<",\"carrier_exponent\":"<<p.carrier_exponent
         <<",\"words\":"<<g.words<<",\"workspace_buffers\":"<<g.workspace_buffers<<",\"B1\":"<<p.b1<<",\"B2\":"<<p.b2<<",\"D\":"<<p.d
         <<",\"P\":"<<g.p<<",\"I\":"<<p.giant_points<<",\"G\":"<<p.batches
+        <<",\"relocation\":"<<int(g_relocation_enabled)<<",\"relocation_first\":"<<relocation.first
+        <<",\"relocation_points\":"<<relocation.points<<",\"relocation_prime\":"<<relocation.missing
+        <<",\"relocation_estimate_scope\":\"original_replay_range\""
         <<",\"fold_length\":"<<g.fold_length<<",\"tree_length\":"<<g.tree_length
         <<",\"tree_operand_coefficients\":"<<g.tree_operand_coeffs
         <<",\"fold_big_bytes\":"<<g.fold_big_bytes<<",\"arena_estimate_bytes\":"<<g.arena_estimate_bytes
@@ -10138,6 +10214,7 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
 
 int ecm_cuda_stage2_default_log_level() { return stage2_log::batches; }
 int ecm_cuda_stage2_set_ntt_counts(bool enabled) { g_ntt_counts_enabled=enabled;return 0; }
+int ecm_cuda_stage2_set_relocation(bool enabled) { g_relocation_enabled=enabled;return 0; }
 int ecm_cuda_stage2_set_short_ntt_batches(const EcmStage2NttBatchSample *samples,size_t count) {
     if((count && !samples) || count>65536)return 2;
     ecm_stage2::ShortNttBatchPolicy next;

@@ -239,6 +239,7 @@ struct Options {
     int device = -1, worker = 1;
     int log_level = -1;
     bool ntt_counts=ecm_config::defaults::stage2_stage2_ntt_counts;
+    bool relocation=ecm_config::defaults::stage2_stage2_relocation;
     bool dry = false, once = false, selection = false, help = false;
     bool has_d = false, has_batch = false, has_arena = false;
     bool child = false;
@@ -342,6 +343,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
         else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
         else if (a == "--ntt-counts") {const auto n=num();if(n>1)throw std::runtime_error("ntt-counts must be 0 or 1");o.ntt_counts=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--relocation") {const auto n=num();if(n>1)throw std::runtime_error("relocation must be 0 or 1");o.relocation=n!=0;o.portable_cli.insert(a);}
         else if (a == "--pack-zero") {const auto n=num();if(n>1)throw std::runtime_error("pack-zero must be 0 or 1");o.pack_zero=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-ignore") {o.tune_ignore=value();o.portable_cli.insert(a);ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);}
         else if (a == "--stage1-cost-csv") {o.stage1_csv=value();o.portable_cli.insert(a);}
@@ -612,6 +614,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     if(o.tune_child)cmd+=L" --ecm-tune-worker";
     arg(L"--log-level", static_cast<uint64_t>(o.log_level));
     arg(L"--ntt-counts",o.ntt_counts?1:0);
+    arg(L"--relocation",o.relocation?1:0);
     cmd += L" --results " + quote(results.wstring());
     if(!o.submission.empty())cmd+=L" --submission "+quote(fs::path(o.submission).wstring());
     if(!o.submission_ini.empty())cmd+=L" --ini "+quote(fs::path(o.submission_ini).wstring());
@@ -690,7 +693,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         const bool result=text.compare(0,15,"stage2_result: ")==0;
         if(milestone){phase=text.substr(14);const auto timing=phase.find(" previous=");if(timing!=phase.npos)phase.resize(timing);}
         if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
-           ((stage2_log::enabled(stage2_log::curve)||o.gui_events)&&result) ||
+           ((stage2_log::enabled(stage2_log::curve)||o.gui_events)&&(result || text.rfind("stage2_relocation:",0)==0)) ||
            stage2_log::enabled(stage2_log::batches) ||
            (o.ntt_counts && (text.rfind("ntt_count_",0)==0 || text.rfind("ntt_length_counts:",0)==0 || text.rfind("ntt_work:",0)==0)) ||
            text.find("WARNING")!=text.npos))console_line(text,error);
@@ -891,7 +894,7 @@ int curve_worker(Options o) {
     mpz_set_str(n.z, r.n.c_str(), 16); mpz_set_str(x.z, r.x.c_str(), 16);
     mpz_gcd(gcd.z, x.z, n.z);
     RuntimeTuneObservation observation;
-    if(!o.tune_child && o.tune_runtime && !o.tune_profile.empty() && mpz_cmp_ui(gcd.z,1)==0) {
+    if(!o.relocation && !o.tune_child && o.tune_runtime && !o.tune_profile.empty() && mpz_cmp_ui(gcd.z,1)==0) {
         try {observation=prepare_runtime_tune(o,r);}
         catch(const std::exception &e){std::cerr<<"WARNING: runtime tune preparation skipped: "<<e.what()<<std::endl;}
     }
@@ -904,6 +907,7 @@ int curve_worker(Options o) {
     } else {
         if (!mpz_cmp(gcd.z, n.z)) throw std::runtime_error("saved X=0 gives no usable Stage1 point");
         configure_cuda_wait(o.device);
+        if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");
         code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
             [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent,
             &tune_metrics,
@@ -972,6 +976,15 @@ int curve_worker(Options o) {
         (tune_metrics.d?",\"d\":"+std::to_string(tune_metrics.d)+",\"poly-size\":"+std::to_string(tune_metrics.p):"")+
         ",\"requested_D\":" + std::to_string(requested_d) + ",\"seconds\":" + std::to_string(seconds) +
         ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
+        ",\"relocation\":"+std::string(o.relocation?"true":"false")+
+        ",\"relocation_replayed\":"+std::string(tune_metrics.relocation_replayed?"true":"false")+
+        ",\"giant_first\":"+std::to_string(tune_metrics.giant_first)+",\"giant_last\":"+std::to_string(tune_metrics.giant_last)+
+        ",\"giant_points\":"+std::to_string(tune_metrics.giant_points)+
+        ",\"relocation_points\":"+std::to_string(tune_metrics.relocation_points)+
+        ",\"relocation_prime\":"+std::to_string(tune_metrics.relocation_prime)+
+        ",\"relocation_probe_seconds\":"+std::to_string(tune_metrics.relocation_probe_seconds)+
+        ",\"relocation_replay_seconds\":"+std::to_string(tune_metrics.relocation_replay_seconds)+
+        (o.relocation?",\"relocation_estimate_scope\":\"original_replay_range\"":"")+
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
         ",\"factorization_seconds\":" + std::to_string(factor_seconds) +
         (r.edwards?",\"curve\":\"ed\",\"param\":null":",\"curve\":\"mont\",\"param\":0") +
@@ -1001,6 +1014,7 @@ void help() {
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results INTERNAL.jsonl\n"
         "         --submission results.json.txt --exponent P --known-factor F (repeatable)\n"
         "         --ntt-counts 0|1 (per-curve NTT length table; INI stage2_ntt_counts)\n"
+        "         --relocation 0|1 (optional conservative suffix, original-range replay on hits/nonunits)\n"
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
         "         --auto-carrier 0|1 (override stage2_auto_carrier; verified worktodo candidates, tune selection required)\n"
         "Tune: --tune ntt|ecm --tune-level 1..10 --tune-file FILE.toml --tune-repeats N\n"
@@ -1136,6 +1150,8 @@ int driver(Options o) {
     if(!o.portable_cli.count("--short-calibration"))o.short_calibration=s.short_calibration;
     if(!o.portable_cli.count("--short-ntt-batch-tune"))o.short_batch_tune=s.short_batch_tune;
     if(!o.portable_cli.count("--ntt-counts"))o.ntt_counts=s.ntt_counts;
+    if(!o.portable_cli.count("--relocation"))o.relocation=s.relocation;
+    if(o.relocation && (o.tune=="ecm" || o.tune_child))throw std::runtime_error("relocation does not collect legacy ECM tune samples; use --relocation 0 for --tune ecm");
     if(!o.portable_cli.count("--tune-error-limit"))o.tune_error=s.tune_error;
     if(!o.portable_cli.count("--stage1-cost-mhz"))o.stage1_mhz=s.stage1_mhz;
     if(!o.portable_cli.count("--target-factor-bits"))o.factor_bits=s.factor_bits;
@@ -1387,7 +1403,7 @@ int driver(Options o) {
             report("WARNING: requested="+std::to_string(count)+" available="+std::to_string(plan.size())+
                    " after skip="+std::to_string(skip)+"; running available curves only.",true);
         if(plan.empty())report("WARNING: no available curves after skip; task will finish with zero curves.",true);
-        if(!o.dry && !plan.empty() && !o.tune_profile.empty())ensure_portable_calibration(o,plan.front(),s,calibration_range);
+        if(!o.relocation && !o.dry && !plan.empty() && !o.tune_profile.empty())ensure_portable_calibration(o,plan.front(),s,calibration_range);
         stage2_queue::State state;
         const bool persist=queue&&!o.dry&&!o.plan_only;
         fs::path progress;
@@ -1457,6 +1473,7 @@ int driver(Options o) {
                 if(o.auto_b2&&!b2){std::cout<<select_auto(local,r,false)<<std::endl;if(o.tune_profile.empty())continue;}
                 else {const auto tuned=select_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;}
                 std::string result;
+                if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");
                 const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,local.b2,local.d,device,
                     [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,local.carrier_exponent);
                 if(code||result.empty())throw std::runtime_error("Stage2 planning failed");

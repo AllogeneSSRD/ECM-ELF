@@ -4,6 +4,7 @@ param([ValidateSet('stage1','stage2','both')][string]$Stage='both',
       [string]$Arch='89',
       [string]$Tiers='1024',
       [int]$Jobs=8,
+      [ValidateRange(1,64)][int]$SplitCompile=8,
       [switch]$RelinkOnly)
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
@@ -33,6 +34,6 @@ if($Stage -ne 'stage2') {
     }|ConvertTo-Json -Depth 6|Set-Content "$Build/stage1/edwards_build_manifest.json" -Encoding utf8
 }
 if($Stage -ne 'stage1') {
-    & (Join-Path $root 'build_stage2_local.ps1') -Build "$Build/stage2" -Arch "sm_$Arch" -Engine production
+    & (Join-Path $root 'build_stage2_local.ps1') -Build "$Build/stage2" -Arch "sm_$Arch" -Engine production -SplitCompile $SplitCompile
     if($LASTEXITCODE -ne 0){throw 'Edwards Stage2 worker build failed'}
 }

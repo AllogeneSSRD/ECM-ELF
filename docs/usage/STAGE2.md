@@ -63,6 +63,8 @@ GUI可用`[Worker #N] stage=stage1|stage2`在同一INI中管理混合阶段，�
 
 ## 日志与内存摘要
 
+可选 `stage2_relocation=1`（或 CLI `--relocation 1`，默认0）在相同 B2 下试算较短 giant 后缀。命中或目标 N 非单位时自动重放完整原区间，完成验证后才发布结果。选 D/内存规划仍按原区间，完整 ECM tune 不支持此模式；详见 [算法、指标及边界](../architecture/STAGE2.md#可选-relocation) 与 [性能实测](../performance/EDWARDS_STAGE2.md)。
+
 `verbose` 控制可读的阶段/批次输出；`stage2_debug_log` 控制独立调试文件。警告和错误始终可见。长阶段每 30 秒的父进程状态提示不等于 kernel 完成百分比。
 
 - `curve_start`：任务曲线编号、save 记录编号、sigma、B1 和文件校验状态。

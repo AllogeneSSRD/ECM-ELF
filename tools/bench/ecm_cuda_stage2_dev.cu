@@ -147,6 +147,7 @@ int ecm_cuda_stage2_run(const char *n_hex, const char *x_hex, uint64_t sigma,
 
 int ecm_cuda_stage2_default_log_level() { return 4; }
 int ecm_cuda_stage2_set_ntt_counts(bool enabled) { return enabled?2:0; }
+int ecm_cuda_stage2_set_relocation(bool enabled) { return enabled?2:0; }
 int ecm_cuda_stage2_set_short_ntt_batches(const EcmStage2NttBatchSample *,size_t count) {
     return count?2:0; // Production-only scheduling; legacy experiment paths stay fixed.
 }

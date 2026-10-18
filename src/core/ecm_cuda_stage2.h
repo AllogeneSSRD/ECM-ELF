@@ -8,6 +8,7 @@
 int ecm_cuda_stage2_default_log_level();
 int ecm_cuda_stage2_set_log_level(int level);
 int ecm_cuda_stage2_set_ntt_counts(bool enabled);
+int ecm_cuda_stage2_set_relocation(bool enabled);
 int ecm_cuda_stage2_check_configuration();
 struct EcmStage2NttBatchSample { uint64_t length=0,batch=0;double seconds=0; };
 // Copies immutable short-length timings before planning/running a curve. Empty
@@ -25,6 +26,9 @@ int ecm_cuda_stage2_set_short_ntt_batches(const EcmStage2NttBatchSample *samples
 // startup/planning/Stage1 remain outside that boundary.
 struct EcmStage2Metrics {
     uint64_t d=0,p=0,giant_points=0,selftest_cases=0,checked=0,bad=0;
+    uint64_t giant_first=1,giant_last=0,relocation_points=0,relocation_prime=0;
+    bool relocation=false,relocation_replayed=false;
+    double relocation_probe_seconds=0,relocation_replay_seconds=0;
     double total_seconds=0,init_seconds=0,main_seconds=0;
     double giant_seconds=0,gtrees_seconds=0,fold_seconds=0,descent_seconds=0;
     double inverse_seconds=0,accum_seconds=0;

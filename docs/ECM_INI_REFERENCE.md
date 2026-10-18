@@ -701,6 +701,23 @@ CLI --ntt-counts overrides the selected worker INI.<br>
 含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery<br>
 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 INI。
 
+### stage2_relocation
+
+```text
+stage2_relocation=[0|1]; default=0
+```
+
+Optional production GPU Stage2 conservative relocation. Keeps B2 and the original giant endpoint,<br>
+uses a shorter suffix for clean NF, and replays the original interval on any hit or target-N nonunit<br>
+(including GCD=N). Rebalances short point chunks on whole G boundaries. Default 0 preserves the<br>
+original algorithm. CLI --relocation overrides this worker INI. D/AutoB2 and memory admission use<br>
+original-interval estimates; relocation does not collect ECM tune samples or run startup ECM<br>
+calibration, and explicit --tune ecm is unavailable in this mode. Pure NTT samples remain reusable.<br>
+可选的生产 GPU Stage2 保守 relocation。保持 B2 和原 giant 终点，干净 NF 使用较短后缀；命中或出现目标<br>
+N 非单位（包括 GCD=N）时重放原区间。短点块按完整 G 边界重分。默认 0 保留原算法，CLI --relocation 覆<br>
+盖当前 worker 的 INI。D/AutoB2 和内存准入使用原区间估算；本模式不采集 ECM 调优样本、不执行启动 ECM<br>
+标定，并禁用显式 --tune ecm；纯 NTT 样本仍可复用。
+
 ### stage2_b2
 
 ```text

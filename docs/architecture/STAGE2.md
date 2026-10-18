@@ -12,11 +12,11 @@ save提供目标N、sigma、B1和归一化X，不自动推断承载指数。Suya
 
 完整tune可按成本与联合显存比较普通/合法承载，允许配置跨条件复用及宽度/B2估算，详见[Auto B2/tune](AUTO_B2.md)。合法梅森worktodo结合已知因子和save验证后提供承载指数；仅save不猜指数。显式`--carrier-exponent 0`锁定普通模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
 
-承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L9023)。
+承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L9034)。
 
 设备点坐标使用 Montgomery 域，NTT digit 在 Goldilocks 域，多项式系数归约后为普通规范整数。不同表示不能直接相乘或判断数学相等。
 
-D 确定 baby 集 J={1≤j≤D/2:gcd(j,D)=1}，P=φ(D)/2。giant 数 I=⌊B2/D⌋+2，分为 G=⌈I/P⌉ 个 G 树批次。补充小素数路径覆盖主树映射不能直接处理的边界。
+D 确定 baby 集 J={1≤j≤D/2:gcd(j,D)=1}，P=φ(D)/2。默认 giant 数 I=⌊B2/D⌋+2，分为 G=⌈I/P⌉ 个 G 树批次；可选后缀范围见下文 relocation。补充小素数路径覆盖主树映射不能直接处理的边界。
 
 ## 执行步骤
 
@@ -33,7 +33,7 @@ D 确定 baby 集 J={1≤j≤D/2:gcd(j,D)=1}，P=φ(D)/2。giant 数 I=⌊B2/D�
 | 9. fold | 累计 H←G·H mod F；使用 finv 与长/短乘法，复用驻留临时槽 | GPU；准入失败有主机路径 |
 | 10. 缩放与根准备 | 消除齐次缩放 Γ；驻留 H/finv 形成 scaled 下降根 | GPU；回退时 CPU |
 | 11. F 树下降 | scaled remainder/middle-product 传播，最终得到 P 个叶值 | GPU NTT/S4、主机元数据 |
-| 12. 累积与 GCD | 设备每 64 叶求块积；CPU GCD；饱和块细分 | GPU 产品、CPU GMP |
+| 12. 累积与 GCD | 设备每 64 叶求块积；CPU GCD 提取真因子；relocation 遇到非平凡 GCD 时重放原区间 | GPU 产品、CPU GMP |
 | 13. 验证与结果 | 排空算术检查，验证因子；可选命名/GP 分解；写入成功回执 | CPU 与检查收尾 |
 
 Giant、G 树和 fold 交织运行；阶段墙钟不能视为独立并行任务。每曲线 init 包括 baby 集合枚举、baby/F 树和引擎内 NTT/S4 检查，main 包括 inverse、批循环、下降、GCD 和检查收尾。日志中的 shape 是 baby 集合枚举，已包含在 init 中，不能再次求和。引擎时间为 init+main；Stage1、外层 D 选型、计时前的 Montgomery/xADD 预检和进程启动另计。性能比较使用相同边界，进程墙钟单独记录。
@@ -56,7 +56,21 @@ F(X)=∏ⱼ(X−xⱼ)。giant 叶为齐次形式 ZᵢX−Xᵢ，或等价的已�
 
 多 G 批次复用 F 和反转逆，不逐批重建。scaled 下降采用反转/截断/middle product 的等价表达，将原余式链传播到各子树；非空子节点使用实际 operand 长度，空节点复制或补零。归一化后的叶投影与直接 Horner/CPU 参考一致是正确性门禁。
 
+## 可选 relocation
+
+`stage2_relocation=1` 或 `--relocation 1` 启用保守后缀算法，默认0，CLI 覆盖 INI。Edwards 和 PARAM0 共用该路径。设原 giant 终点 I=⌊B2/D⌋+2，m 为不整除 D 的最小素数，A=max(1,⌊I/m⌋)；试算仅生成 i=A,…,I，共 I−A+1 点。原 B1/B2、baby 集、补充小素数路径和终端 guard 覆盖保持不变。证明与 GCD=N 反例见 [relocation 固定资料](../reference/ECM_STAGE2_RELOCATION.md)。
+
+试算经过既有算术检查排空后，只有没有命中且目标 N 上没有非单位时才允许完成 NF。任何真因子、gcd=N、giant/分组/分段求逆非单位都令试算失效：丢弃其因子结果，重放 i=1,…,I，以原算法结果发布。baby 初始化已发现非单位时直接执行原区间，不先做后缀。F 树与 baby 初始化复用；原区间的 inverse、giant/G/fold、下降及 GCD 重新执行。不同区间的叶指纹通常不同，验收比较各自独立参考；重放完成叶必须匹配原算法。原算法只接收真因子块，gcd=N 本身不会发布成因子。
+
+relocation 的点块末尾不足差分 chain 下限时，在容量允许且两个末块都达到有效下限的条件下，从前一块借取整数个 P 点；点数和点块数不变，局部多项式批次与 giant 绝对索引分别计算。无法满足条件时保留既有 ladder 回退。例如 I=149940、D=180180、m=17，后缀141121点；容量69120、chain 下限8192时分成69120/51840/20161。
+
+选 D、Auto B2 和内存准入继续按原完整区间建模，以保留重放条件。计划输出的 `relocation_estimate_scope=original_replay_range` 明确这个范围；时间预测并非后缀专用成本模型。启用时不做旧 ECM 短标定、不写入旧 ECM 性能样本；完整 ECM tune 显式拒绝，纯 NTT 校准仍可使用。现有实时分配和算术检查继续生效。
+
+内部结果记录 `relocation`、`relocation_replayed`、最终 `giant_first/last/points`、试算 `relocation_points/prime` 和 `relocation_probe_seconds/replay_seconds`。后两者是 main 内的子区间，不能再加到完整耗时。重放后的最终 giant 指标为原区间；NTT 次数包含实际试算和重放。提交文件继续报告原 B1/B2，不发布中间 probe 结果。实测、限制及复现入口见 [Edwards 性能](../performance/EDWARDS_STAGE2.md)。
+
 ## 工作量
+
+本节 I 表示单次 pass 的实际 giant 点数：默认取 ⌊B2/D⌋+2，relocation 后缀取 ⌊B2/D⌋+3−A，G=⌈I/P⌉。命中时另加原区间 pass，共用的 baby/F 初始化只计一次。
 
 设 Mpoly(a,b,S) 表示一次系数模 M 的多项式乘法成本。完整 F 树有 P−1 次非空逻辑乘法，G 树总计 I−G 次；这不是 kernel launch 数，多个同形乘法可合并成 batch。
 
@@ -78,7 +92,7 @@ F(X)=∏ⱼ(X−xⱼ)。giant 叶为齐次形式 ZᵢX−Xᵢ，或等价的已�
 
 ## 代码依据
 
-- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7299)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9480)。
+- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L7304)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L9546)。
 - [模数上下文](../../src/core/ecm_stage2_modulus.h#L28)：`configure`，目标/承载资格。
 - [请求程序](../../src/core/ecm_stage2_requests.h#L76)：`request_program`；[精确树组](../../src/core/ecm_stage2_geometry.h#L147)：`tree_multiply_groups`。
 - [点模乘](../../src/cuda/stage2/stage2_point_mersenne.cuh)、[NTT](NTT.md)、[内存](MEMORY.md)。
