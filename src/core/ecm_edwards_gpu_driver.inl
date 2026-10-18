@@ -176,7 +176,8 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
                 }
                 else {mpz_invert(inv.v,z.v,n);mpz_mul(x.v,x.v,inv.v);mpz_mod(x.v,x.v,n);}
             }
-            if(batch.hit[i]){mpz_set(x.v,batch.factors[i]);found=true;}
+            if(batch.hit[i]){mpz_set(x.v,batch.factors[i]);found=true;
+                if(!stage1_publish_factor(opt,n,uint64_t(b1),batch.sigmas[i],batch.factors[i])){out->publish_failed=true;throw std::runtime_error("cannot publish Edwards factor");}}
             else mpz_set(batch.factors[i],x.v);
             lines+=save_line(n,x.v,batch.sigmas[i],uint64_t(b1),batch.hit[i]!=0);
         }

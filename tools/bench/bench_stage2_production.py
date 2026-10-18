@@ -9,6 +9,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import re
 import statistics
 import subprocess
@@ -18,7 +21,7 @@ if hasattr(sys,'set_int_max_str_digits'):sys.set_int_max_str_digits(0)
 
 ROOT=Path(__file__).resolve().parents[2]
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
-def read(p):return json.loads(Path(p).read_text(encoding='utf-8-sig'))
+def read(p):return normalize_result(json.loads(Path(p).read_text(encoding='utf-8-sig')))
 def fields(text,prefix):
     rows=re.findall(r'^'+re.escape(prefix)+r': (.*)$',text,re.M)
     if not rows:raise ValueError('missing '+prefix)
@@ -178,7 +181,7 @@ def main():
         if category=='gate' and c['unit']:row['affine_chain_points']=chain_points;row['ladder_tail_points']=c['points']-chain_points
         data['runs'].append(row);persist();print(name,row['wall']['total'],'s',flush=True)
     def read_lines(path):
-        rows=[json.loads(s) for s in path.read_text(encoding='utf-8').splitlines()]
+        rows=[normalize_result(json.loads(s)) for s in path.read_text(encoding='utf-8').splitlines()]
         if len(rows)!=1:raise ValueError('wrong record count')
         return rows[0]
     persist()

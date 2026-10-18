@@ -17,6 +17,8 @@ import zlib
 from stage1_checkpoint_decode import batch, progressed
 
 ROOT = Path(__file__).resolve().parents[2]
+from test_result_output_consistency import crc_valid
+def ledger(path): return path.parent/'data'/(path.name+'.ecm-ledger')
 spec = importlib.util.spec_from_file_location('oracle', ROOT/'tools/test/test_edwards_gpu_pipeline.py')
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
@@ -56,8 +58,8 @@ def identity_case(exe, out):
     assert p.returncode==0, 'identity case failed; inspect private evidence log'
     inside=[json.loads(v) for v in (work/'stage1_results_2.jsonl').read_text().splitlines()]
     outside=[json.loads(v) for v in (work/'results.json_2.txt').read_text().splitlines()]
-    assert len(inside)==2 and sum(v['curves'] for v in outside)==sum(v['status']=='F' for v in inside)
-    assert all(v['status']=='F' and v['stage']==1 for v in outside)
+    assert len(inside)==2 and sum(v['curves'] for v in outside)==len(inside)
+    assert all(v.get('stage')==1 if v['status']=='F' else v['b2']==v['b1'] for v in outside)
     for row in inside+outside:
         assert row['exponent']==130 and row['known-factors']==['3']
         assert row['user']==user and row['computer']==computer and row['aid']==aid
@@ -119,12 +121,13 @@ def main():
         assert len(internal) == count
         for row in internal:
             verify_result(row)
-        assert sum(v['curves'] for v in public) == sum(v['status']=='F' for v in internal)
-        assert len(list(Path(str(public_path)+'.ecm-ledger').glob('*.curve'))) == len(public)
-        assert not list(Path(str(public_path)+'.ecm-ledger').glob('*.batch'))
+        assert sum(v['curves'] for v in public) == count
+        assert len(list(ledger(public_path).glob('*.curve'))) == count
+        assert sum(json.loads(v.read_text().splitlines()[3])['curves'] for v in ledger(public_path).glob('*.batch')) == sum(v['status']=='NF' for v in internal)
         for row in public:
-            assert row['fft-length'] > 0 and 'checksum' not in row and 'security-code' not in row
-            assert row['status'] == 'F' and row['stage'] == 1 and 'b2' not in row
+            assert row['fft-length'] > 0 and crc_valid(row) and 'security-code' not in row
+            if row['status']=='F':assert row['stage']==1 and row['curves']==1 and 'b2' not in row
+            else:assert row['b2']==row['b1']
             assert ('Edwards' in row) == (model == 'ed')
         assert '100.0%' in log
         assert not list(work.glob('*.ckpt'))
@@ -163,8 +166,8 @@ def main():
                 call(name+'_stage2',cmd,work)
                 rows=[json.loads(v) for v in submission.read_text().splitlines()]
                 if name=='ed_scalar':
-                    assert not before and sum(v['curves'] for v in rows)==4
-                    assert all(v['status']=='NF' and v['b2']==40000 for v in rows)
+                    assert sum(v['curves'] for v in rows)==8
+                    assert all(v['status']=='NF' for v in rows) and sum(v['curves'] for v in rows if v['b2']==40000)==4
                 else:
                     assert len(rows)==4 and submission.read_bytes()==before
                 completed=submission.read_bytes()
@@ -180,16 +183,17 @@ def main():
                 if name=='ed_scalar':
                     # Simulate interrupted Stage2 publication on a working copy,
                     # preserving the completed source ledger and its export.
-                    pending=work/'pending.json.txt';ledger=Path(str(pending)+'.ecm-ledger')
-                    shutil.copytree(Path(str(submission)+'.ecm-ledger'),ledger)
-                    for sealed in ledger.glob('*.batch'):sealed.unlink()
+                    pending=work/'pending.json.txt';pending_ledger=ledger(pending)
+                    shutil.copytree(ledger(submission),pending_ledger)
+                    for sealed in pending_ledger.glob('*.batch'):
+                        if json.loads(sealed.read_text().splitlines()[3])['b2']>1000:sealed.unlink()
                     ini=work/'pending.ini';ini.write_text('user=\ncomputer=\nstage1_submission_file='+str(pending)+'\n')
                     replay[replay.index('-ini')+1]=ini
                     call('stage1_with_pending_stage2_nf',replay,work,str(n)+'\n')
-                    assert pending.read_bytes()==b'' and not list(ledger.glob('*.batch'))
-                    assert len(list(ledger.glob('*.curve')))==4
+                    assert sum(json.loads(v)['curves'] for v in pending.read_text().splitlines())==4 and len(list(pending_ledger.glob('*.batch')))==1
+                    assert len(list(pending_ledger.glob('*.curve')))==8
                     call('pending_stage2_export',[stage2,'--export-results','--submission',pending,'--ini',ini],work)
-                    assert sum(json.loads(v)['curves'] for v in pending.read_text().splitlines())==4
+                    assert sum(json.loads(v)['curves'] for v in pending.read_text().splitlines())==8
                     passed('stage1_preserves_pending_stage2_nf')
 
         for model in ('ed', 'mont'):
@@ -210,7 +214,7 @@ def main():
             call(name+'_retry',[exe,'-ini',ini],work)
             assert not queue.read_text().strip() and not primary.exists()
             assert len((work/'stage1_results.jsonl').read_text().splitlines())==4
-            assert (blocked/'results.json.txt').read_bytes()==b''
+            assert sum(json.loads(v)['curves'] for v in (blocked/'results.json.txt').read_text().splitlines())==4
             save=next(p for p in work.glob('*.save') if '.bak' not in p.name)
             assert len(save.read_text().splitlines())==4, 'save replay duplicated curves'
             passed(name)

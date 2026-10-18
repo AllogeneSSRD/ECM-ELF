@@ -5,6 +5,9 @@ import json
 import math
 import statistics
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import subprocess
 import sys
 import tomllib
@@ -20,7 +23,7 @@ def main():
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     spec=importlib.util.spec_from_file_location('importer',ROOT/'tools/bench/import_stage2_benchmark_tune.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    raw=[json.loads(s) for s in a.results.read_text(encoding='utf-8').splitlines()]
+    raw=[normalize_result(json.loads(s)) for s in a.results.read_text(encoding='utf-8').splitlines()]
     expected={r['tune_observation']['sample']['runtime_sample_id'] for r in raw if 'tune_observation' in r}
     _,samples,_=module.import_runtime([a.results,a.results],a.sample_limit)
     assert set().union(*(decode_ids(s['measurement_ids']) for s in samples))==expected

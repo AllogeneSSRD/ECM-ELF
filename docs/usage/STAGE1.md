@@ -44,7 +44,7 @@ Auto B2的可复用Stage1成本可用[tune_stage1_cost.py](../../tools/bench/tun
 
 最终 save 保存可继续 Stage2 的点；checkpoint 保存尚未完成 Stage1 的状态，二者不能互用。save 的归一化 X 必须属于记录中的 N、参数化、sigma、B1 和指数模式；checksum 用于检查文件完整性，不重新证明点乘正确。
 
-内部 JSONL 记录全部曲线的 F/NF；提交文件仅新增 Stage1 找到的因子。Stage1 NF 保留在内部结果和 save 中，供后续 Stage2 使用；全新提交路径的整批 NF 生成空文件及私有归属账本。
+内部 JSONL 记录全部曲线的 F/NF，并按实际批次曲线顺序导出。整条任务完成后，NF 合并为提交行（B2=B1）；验证后的因子立即额外输出为一条 curves=1 的 F，保留 sigma。账本位于输出目录的 data/ 下，字段与恢复规则见 [ECM 结果输出](ECM_RESULTS.md)。
 
 ## 检查点与交接
 

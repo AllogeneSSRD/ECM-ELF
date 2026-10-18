@@ -9,6 +9,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import shutil
 import subprocess
 import sys
@@ -21,7 +24,7 @@ from bench_edwards_stage2_optimization import freeze_binary
 from bench_stage2_n_scaling import Monitor
 if hasattr(sys,'set_int_max_str_digits'):sys.set_int_max_str_digits(0)
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
-def read(p):return json.loads(Path(p).read_text(encoding='utf-8-sig'))
+def read(p):return normalize_result(json.loads(Path(p).read_text(encoding='utf-8-sig')))
 def write(p,v):
     t=Path(str(p)+'.new');t.write_text(json.dumps(v,indent=2)+'\n',encoding='utf-8');t.replace(p)
 def degree(d):
@@ -119,7 +122,7 @@ def run(a):
                             if time.perf_counter()-start>1800:proc.kill();proc.wait();raise TimeoutError(tag)
                     seconds=time.perf_counter()-start;write(out/'telemetry.json',telemetry)
                     if proc.returncode:raise ValueError(f'{tag}: exit={proc.returncode}')
-                    row=json.loads((out/'internal.jsonl').read_text().splitlines()[-1])
+                    row=normalize_result(json.loads((out/'internal.jsonl').read_text().splitlines()[-1]))
                     text=(out/'debug.log').read_text()+(out/'engine.log').read_text()
                     timer=fields(text,'stage2_full_wall');oracle=fields(text,'s4_multiply_stats')
                     if any(int(oracle[k]) for k in ('gmp_check_bad','gmp_selftest_bad')) or not int(oracle['gmp_checked']):raise ValueError('Arithmetic gate failed')

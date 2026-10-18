@@ -13,6 +13,9 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import re
 import shutil
 import sqlite3
@@ -34,7 +37,7 @@ def stamp():
 
 
 def read(path):
-    return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    return normalize_result(json.loads(Path(path).read_text(encoding='utf-8-sig')))
 
 
 def write(path, value):
@@ -347,7 +350,7 @@ def command(plan, out, case, item, prefix):
 
 
 def collect(plan, case, item, prefix, process_seconds, samples):
-    results = [json.loads(s) for s in prefix.with_suffix('.result.jsonl').read_text(encoding='utf-8').splitlines() if s.strip()]
+    results = [normalize_result(json.loads(s)) for s in prefix.with_suffix('.result.jsonl').read_text(encoding='utf-8').splitlines() if s.strip()]
     if len(results) != 1:
         raise ValueError('Expected one curve result')
     result = results[0]

@@ -10,6 +10,9 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import shutil
 import subprocess
 import sys
@@ -25,7 +28,7 @@ DEFAULT_CELLS=('1009:low:normal','10267:low:normal','10267:high:normal',
                '16319:low:normal','10267:low:carrier','16319:low:carrier')
 
 
-def read(path):return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+def read(path):return normalize_result(json.loads(Path(path).read_text(encoding='utf-8-sig')))
 def write(path,value):
     temporary=Path(str(path)+'.new')
     temporary.write_text(json.dumps(value,indent=2)+'\n',encoding='utf-8')

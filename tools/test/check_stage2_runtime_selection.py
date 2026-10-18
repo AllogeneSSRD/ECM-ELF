@@ -3,6 +3,9 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import re
 import statistics
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
@@ -12,8 +15,8 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--study',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();folder=a.study.resolve();assert not a.output.exists()
-    report=json.loads((folder/'result.json').read_text(encoding='utf-8'));assert report['complete']
-    rows=[json.loads(s) for s in (folder/'internal.jsonl').read_text(encoding='utf-8').splitlines()]
+    report=normalize_result(json.loads((folder/'result.json').read_text(encoding='utf-8')));assert report['complete']
+    rows=[normalize_result(json.loads(s)) for s in (folder/'internal.jsonl').read_text(encoding='utf-8').splitlines()]
     history={};ids=set();measured=0;observations=0
     for row in rows:
         assert row['status']=='stage2_completed' and not row['factors'] and not row['bad_factors']

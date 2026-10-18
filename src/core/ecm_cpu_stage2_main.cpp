@@ -144,7 +144,7 @@ int main(int argc,char **argv) {
         if(o.gw_selftest){ecm_gwpoly::selftest(static_cast<unsigned>(o.threads));return 0;}
 #endif
         if(o.export_only) {
-            if(!std::filesystem::exists(ecm_results::submission_ledger(o.submission)/"format"))throw std::runtime_error("no owned submission ledger");
+            if(!ecm_results::has_result_ledger(o.submission))throw std::runtime_error("no owned submission ledger");
             ecm_results::seal_submissions(o.submission);std::cout<<"submission output regenerated\n";return 0;
         }
         auto rows=ecm_edwards::read_saved_curves(o.save);
@@ -153,12 +153,14 @@ int main(int argc,char **argv) {
         // Validate the entire selected batch before any computation or publication.
         for(uint64_t i=o.skip;i<end;++i)validate_target(o,rows[i]);
         if(o.dry){std::cout<<"validated "<<end-o.skip<<" curves; B2="<<o.b2<<'\n';return 0;}
-        ecm_results::refresh_submission_if_owned(o.submission);
+        std::string task_key=std::to_string(o.b2);
+        for(uint64_t i=o.skip;i<end;++i)task_key+="|"+rows[i].n+"|"+std::to_string(rows[i].sigma)+"|"+std::to_string(rows[i].b1);
+        const auto publication_task=std::to_string(ecm_edwards::hash(task_key));
         ecm_stage1_install_stop_handler();if(o.stop_handle && !ecm_stage1_set_stop_handle(o.stop_handle))throw std::runtime_error("invalid stop handle");
         omp_set_num_threads(static_cast<int>(o.threads));
         std::cout<<"CPU Edwards Stage2 backend="<<o.backend<<" threads="<<o.threads<<" memory_mib="<<o.memory<<" libecm="<<ecm_version()<<std::endl;
         for(uint64_t i=o.skip;i<end;++i) {
-            if(stopped()){ecm_results::seal_submissions(o.submission);return 130;}const auto &r=rows[i];Integer n,x,d,px,py,a24,f;
+            if(stopped())return 130;const auto &r=rows[i];Integer n,x,d,px,py,a24,f;
             mpz_set_str(n.v,r.n.c_str(),16);mpz_set_str(x.v,r.x.c_str(),16);
             auto selected=o;
             if(selected.backend=="auto"){
@@ -180,7 +182,7 @@ int main(int argc,char **argv) {
                         ecm_gwpoly::Options gw;gw.threads=static_cast<unsigned>(o.threads);gw.memory_mib=o.memory;
                         gw.exponent=o.exponent;gw.d=o.d;gw.stop=stopped;gw.check=o.gw_check;ecm_gwpoly::Stats stats;
                         try {if(ecm_gwpoly::stage2(f.v,n.v,x.v,a24.v,r.b1,o.b2,gw,stats))stage=2;}
-                        catch(...){if(stopped()){ecm_results::seal_submissions(o.submission);return 130;}throw;}
+                        catch(...){if(stopped())return 130;throw;}
                         details.d=stats.d;details.poly_size=stats.poly_size;details.fft_length=stats.fft_length;
                         details.init=stats.init_seconds;details.main=stats.main_seconds;details.maxerr=stats.max_roundoff;details.checked_values=stats.checked_values;
                         std::cout<<"gwpoly: D="<<stats.d<<" P="<<stats.poly_size<<" fft_length="<<stats.fft_length
@@ -197,7 +199,7 @@ int main(int argc,char **argv) {
                     mpz_set(p->x,x.v);p->B1done=static_cast<double>(r.b1);set64(p->B2,o.b2);
                     p->maxmem=static_cast<double>(o.memory)*1048576.0;p->use_ntt=selected.backend=="ntt";p->S=1;p->verbose=2;p->stop_asap=stopped;
                     const int rc=ecm_factor(f.v,n.v,static_cast<double>(r.b1),p);
-                    if(stopped()){ecm_results::seal_submissions(o.submission);return 130;} // libecm may return NF on interruption.
+                    if(stopped())return 130; // libecm may return NF on interruption.
                     if(rc<0)throw std::runtime_error("libecm failed; no result published for current curve");
                     if((rc==0 || rc==ECM_FACTOR_FOUND_STEP2) &&
                        (p->B1done!=static_cast<double>(r.b1) || mpz_cmp(p->x,x.v)))
@@ -210,14 +212,14 @@ int main(int argc,char **argv) {
             const auto elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
             const auto json=result(selected,r,n.v,f.v,stage,elapsed,details);
             ecm_results::Submission report;report.exponent=o.exponent;report.sigma=r.sigma;report.b1=r.b1;report.b2=o.b2;
-            report.stage=stage;report.known=o.known;report.user=o.user;report.computer=o.computer;report.aid=o.aid;
+            report.publication_task=publication_task;report.stage=stage;report.known=o.known;report.user=o.user;report.computer=o.computer;report.aid=o.aid;
             report.d=details.d;report.poly_size=details.poly_size;report.stage2_fft_length=details.fft_length;
             if(stage)report.factors.push_back(number(f.v));
             ecm_results::publish_submission(o.submission,report,n.v);
             if(!publish_save(o.results,json,true))throw std::runtime_error("result publication failed");
             std::cout<<"completed save-line="<<r.line<<" sigma="<<r.sigma<<" status="<<(stage?"F":"NF")<<" seconds="<<elapsed<<std::endl;
         }
-        ecm_results::seal_submissions(o.submission);
+        ecm_results::seal_submissions(o.submission,0,publication_task);
         return 0;
     }catch(const std::exception &e){std::cerr<<"CPU Stage2: "<<e.what()<<'\n';return 1;}
 }

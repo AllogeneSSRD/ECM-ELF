@@ -147,7 +147,7 @@ foreach(_source IN LISTS ECM_STAGE1_COMMON_SOURCES)
     string(APPEND _stage1_identity "${_stage1_hash}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
 endforeach()
-foreach(_source src/core/ecm_internal_result.h src/core/ecm_result_submission.h
+foreach(_source src/core/ecm_result_paths.h src/core/ecm_result_json.h src/core/ecm_internal_result.h src/core/ecm_result_submission.h
                 src/core/ecm_submission_writer.h src/core/ecm_edwards_gpu_driver.inl
                 src/core/ecm_edwards_io.h src/core/ecm_program_version.h
                 src/core/ecm_stage1_gpu_progress.h)

@@ -1,6 +1,7 @@
 #pragma once
 #include "ecm_edwards_curve.h"
 #include "ecm_program_version.h"
+#include "ecm_result_json.h"
 #include "generated/p95_fft_reference.h"
 #include <ctime>
 #include <iomanip>
@@ -11,13 +12,7 @@
 
 namespace ecm_results {
 inline std::string quoted(const std::string &s) {
-    std::ostringstream out;out<<'"';
-    for(unsigned char c:s) {
-        if(c=='"' || c=='\\')out<<'\\'<<c;
-        else if(c<32)out<<"\\u"<<std::hex<<std::setw(4)<<std::setfill('0')<<unsigned(c)<<std::dec;
-        else out<<c;
-    }
-    out<<'"';return out.str();
+    return json::quote(s);
 }
 inline std::string decimal(const mpz_t n) {
     std::vector<char> b(mpz_sizeinbase(n,10)+3);mpz_get_str(b.data(),10,n);return b.data();
@@ -48,7 +43,7 @@ struct Submission {
     bool stage1_only=false,kbnc=false;
     std::string k="1";uint32_t b=2;int32_t c=-1;
     std::vector<std::string> factors,known;
-    std::string user,computer,aid,when;
+    std::string user,computer,aid,when,publication_task;
 };
 // Verify original M metadata against the actual modulus. Only exact Mersenne
 // inputs are inferred; a cofactor needs its original exponent and known factors.
@@ -82,6 +77,50 @@ inline uint64_t target_exponent(const Submission &r,const mpz_t n) {
     }
     if(mpz_cmp(m.v,n))throw std::runtime_error("submission target differs from saved modulus");
     return r.exponent;
+}
+inline uint32_t crc32(const std::string &s) {
+    uint32_t c=0xffffffffu;
+    for(unsigned char b:s){c^=b;for(int i=0;i<8;++i)c=(c>>1)^((c&1)?0xedb88320u:0);}
+    return c^0xffffffffu;
+}
+inline std::string crc_hex(const std::string &s) {
+    std::ostringstream out;out<<std::uppercase<<std::hex<<std::setw(8)<<std::setfill('0')<<crc32(s);return out.str();
+}
+// Compute from the final record, including its source version, model marker,
+// actual/reference FFT field and final timestamp. Sealing must call this again.
+inline std::string with_result_checksum(const std::string &line) {
+    auto row=json::parse(line);if(row.type!='o')throw std::runtime_error("result is not a JSON object");
+    if(!row.has("errors"))row.set("errors",json::parse("{\"invariant\":0}"));
+    if(!row.has("os"))row.set("os",json::parse("{\"os\":"+quoted(ecm_program::host_os)+",\"architecture\":"+quoted(ecm_program::host_arch)+"}"));
+    std::string target=row.get("exponent").text();
+    if(target.empty()) {
+        target=row.get("N").text();
+        if(target.empty() && row.has("k")) {
+            ecm_edwards::Integer n,k,f;
+            mpz_ui_pow_ui(n.v,std::stoul(row.get("b").text()),std::stoul(row.get("n").text()));
+            if(mpz_set_str(k.v,row.get("k").text().c_str(),10))throw std::runtime_error("invalid checksum target");
+            mpz_mul(n.v,n.v,k.v);const auto c=std::stoll(row.get("c").text());
+            if(c<0)mpz_sub_ui(n.v,n.v,static_cast<unsigned long>(-c));else mpz_add_ui(n.v,n.v,static_cast<unsigned long>(c));
+            for(const auto &v:row.get("known-factors").items) {
+                if(mpz_set_str(f.v,v.text().c_str(),10)||mpz_cmp_ui(f.v,1)<=0||!mpz_divisible_p(n.v,f.v))throw std::runtime_error("invalid checksum known factor");
+                mpz_divexact(n.v,n.v,f.v);
+            }
+            target=decimal(n.v);
+        }
+        if(target.empty())throw std::runtime_error("missing checksum target");
+        target="N="+target;
+    }
+    const auto &model=row.has("Edwards")?row.get("Edwards"):row.get("GMP-ECM-param3");
+    const auto sigma=(row.has("Edwards")?"E":"")+model.get("sigma").text(row.get("sigma").text());
+    const auto b1=row.get("b1").text(),b2=row.get("b2").text();
+    const auto bound2=!b2.empty()&&std::stoull(b2)>std::stoull(b1)?b2:std::string{};
+    const auto &program=row.get("program"),&os=row.get("os");
+    const std::vector<std::string> slots={target,"ECM",json::joined(row.get("factors")),json::joined(row.get("known-factors")),b1,bound2,sigma,
+        row.get("fft-length").text(),"invariant:"+row.get("errors").get("invariant").text("0"),
+        program.get("name").text(),program.get("version").text(),"","",os.get("os").text(),os.get("architecture").text(),row.get("timestamp").text()};
+    std::string canonical;for(size_t i=0;i<slots.size();++i){if(i)canonical+=';';canonical+=slots[i];}
+    row.set("checksum",json::parse("{\"version\":1,\"checksum\":"+quoted(crc_hex(canonical))+"}"));
+    return row.dump();
 }
 inline std::string submission_json(const Submission &r,const mpz_t n) {
     const bool hit=!r.factors.empty();
@@ -124,7 +163,7 @@ inline std::string submission_json(const Submission &r,const mpz_t n) {
     if(!r.user.empty())out<<",\"user\":"<<quoted(r.user);
     if(!r.computer.empty())out<<",\"computer\":"<<quoted(r.computer);
     if(!r.aid.empty())out<<",\"aid\":"<<quoted(r.aid);
-    out<<'}';const auto line=out.str();
+    out<<'}';const auto line=with_result_checksum(out.str());
     // An arbitrary long integer has no compact PrimeNet assignment identity.
     // Keep its exact local export rather than preventing Stage1 computation.
     if((exponent || r.kbnc) && line.size()>=2000)throw std::runtime_error("ECM submission exceeds Prime95 JSON message capacity");

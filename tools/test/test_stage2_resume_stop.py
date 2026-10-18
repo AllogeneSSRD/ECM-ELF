@@ -10,6 +10,9 @@ from ctypes import wintypes
 import hashlib
 import json
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import re
 import subprocess
 import time
@@ -55,7 +58,7 @@ def main():
     exe=args.exe.resolve();ini=args.ini.resolve();queue=args.worktodo.resolve()
     command=[str(exe),'--ini',str(ini),'--once','--short-calibration','0']
     before={'exe_sha256':sha(exe),'ini_sha256':sha(ini),'queue_sha256':sha(queue),'command':command}
-    if args.analyze_only:before=json.loads((out/'identity.json').read_text(encoding='utf-8'))
+    if args.analyze_only:before=normalize_result(json.loads((out/'identity.json').read_text(encoding='utf-8')))
     else:(out/'identity.json').write_text(json.dumps(before,indent=2),encoding='utf-8')
     log=out/'console.log'
     startup=subprocess.STARTUPINFO();startup.dwFlags|=subprocess.STARTF_USESHOWWINDOW;startup.wShowWindow=0
@@ -79,7 +82,7 @@ def main():
     if not args.analyze_only:
         execution=run()
         (out/'execution.json').write_text(json.dumps(execution,indent=2),encoding='utf-8')
-    elif (out/'execution.json').exists():execution=json.loads((out/'execution.json').read_text(encoding='utf-8'))
+    elif (out/'execution.json').exists():execution=normalize_result(json.loads((out/'execution.json').read_text(encoding='utf-8')))
     else:execution=None
     text=log.read_text(encoding='utf-8',errors='replace')
     if execution:assert execution['stopped'] and execution['exit_code']==0,(execution,text[-2000:])
@@ -93,9 +96,9 @@ def main():
     assert paths,'missing engine/result paths'
     engine=Path(paths[1]).read_text(encoding='utf-8',errors='replace')
     engine=engine[engine.rfind('stage2_phase: Read and validate Stage1 point'):]
-    choices=[json.loads(s) for s in engine.splitlines() if s.startswith('{"type":"tune_selection"')]
+    choices=[normalize_result(json.loads(s)) for s in engine.splitlines() if s.startswith('{"type":"tune_selection"')]
     assert len(choices)==1 and choices[0]['selected'] and choices[0]['carrier_exponent']==args.carrier,choices
-    receipts=[json.loads(s) for s in Path(paths[2]).read_text(encoding='utf-8').splitlines()]
+    receipts=[normalize_result(json.loads(s)) for s in Path(paths[2]).read_text(encoding='utf-8').splitlines()]
     receipt=receipts[-1]
     assert receipt['record']==args.record and receipt['status']=='stage2_completed'
     assert receipt['bad_factors']==0 and receipt['carrier_exponent']==args.carrier

@@ -1,5 +1,6 @@
 #pragma once
 #include "ecm_result_submission.h"
+#include "ecm_result_paths.h"
 #include "ecm_edwards_io.h"
 #include "ecm_file_publication.h"
 #include <algorithm>
@@ -75,7 +76,17 @@ inline SubmissionEntry read_submission_entry(const fs::path &path) {
     if(checksum!=std::to_string(ecm_edwards::hash(body)))throw std::runtime_error("submission ledger checksum mismatch");
     return {key,group,json};
 }
-inline fs::path submission_ledger(const fs::path &path){return fs::path(path.string()+".ecm-ledger");}
+// The caller holds the output lock, shared with old binaries. Rename the whole
+// private directory; never merge two histories or replace an existing target.
+inline fs::path migrate_result_ledger(const fs::path &path) {
+    const auto old=legacy_submission_ledger(path),next=submission_ledger(path);
+    if(fs::exists(old)) {
+        if(fs::exists(next))throw std::runtime_error("both old and data result ledgers exist; reconcile privately before continuing");
+        if(!fs::is_regular_file(old/"format"))throw std::runtime_error("legacy result ledger has no owner marker");
+        fs::create_directories(next.parent_path());fs::rename(old,next);
+    }
+    return next;
+}
 inline std::string stage1_factor_key(const std::string &key) {
     std::istringstream in(key);std::vector<std::string> fields;std::string field;
     while(std::getline(in,field,'|'))fields.push_back(field);
@@ -109,9 +120,8 @@ inline void render_submission(const fs::path &path,const fs::path &ledger) {
     for(const auto &pair:factors)output+=pair.second+'\n';
     atomic_text(path,output);
 }
-inline void seal_submissions(const fs::path &path) {
-    const auto ledger=submission_ledger(path);if(!fs::exists(ledger/"format"))return;
-    SubmissionLock lock(path);
+inline void seal_submissions(const fs::path &path,int stage_filter=0,const std::string &task={}) {
+    SubmissionLock lock(path);const auto ledger=migrate_result_ledger(path);if(!fs::exists(ledger/"format"))return;
     require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");
     std::set<std::string> sealed,lines;
     for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".batch") {
@@ -122,24 +132,27 @@ inline void seal_submissions(const fs::path &path) {
     std::map<std::string,std::vector<std::pair<std::string,SubmissionEntry>>> pending;
     for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".curve") {
         const auto id=file.path().stem().string();const auto entry=read_submission_entry(file.path());
-        if(entry.group!="F" && !sealed.count(id))pending[entry.group].push_back({id,entry});
+        if(entry.group=="F" || sealed.count(id))continue;
+        if(!task.empty() && entry.group.compare(0,task.size()+3,"T:"+task+":"))continue;
+        const auto row=json::parse(entry.json);
+        const bool stage1=row.get("stage").text()=="1" || row.get("b1").text()==row.get("b2").text();
+        if(stage_filter && stage1!=(stage_filter==1))continue;
+        pending[entry.group].push_back({id,entry});
     }
     for(auto &group:pending) {
         auto &entries=group.second;std::sort(entries.begin(),entries.end(),[](const auto &a,const auto &b){return a.first<b.first;});
         std::string ids;for(const auto &entry:entries){if(!ids.empty())ids+=',';ids+=entry.first;}
-        auto json=entries.back().second.json;const std::string count="\"curves\":1,";
-        const auto at=json.find(count);if(at==json.npos)throw std::runtime_error("invalid NF ledger count");
-        json.replace(at,count.size(),"\"curves\":"+std::to_string(entries.size())+",");
-        const std::string time="\"timestamp\":\"";const auto ts=json.find(time);
-        if(ts==json.npos)throw std::runtime_error("invalid NF timestamp");
-        // Same-second batches can otherwise be byte-identical. Wait for a real
-        // timestamp; never invent a future date or re-report cumulative counts.
-        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
-        for(;;) {
-            json.replace(ts+time.size(),19,utc_timestamp());
-            if(!lines.count(json))break;
-            if(std::chrono::steady_clock::now()>deadline)throw std::runtime_error("system clock did not advance for NF report");
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        auto json=entries.back().second.json;
+        {
+            auto row=json::parse(json);row.set("curves",json::Value::number(std::to_string(entries.size())));
+            // Only real UTC timestamps are used to distinguish equal batches.
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+            for(;;) {
+                row.set("timestamp",json::Value::string(utc_timestamp()));json=with_result_checksum(row.dump());
+                if(!lines.count(json))break;
+                if(std::chrono::steady_clock::now()>deadline)throw std::runtime_error("system clock did not advance for NF report");
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
         }
         const auto key=std::to_string(ecm_edwards::hash(ids));
         const auto body="ECM_SUBMISSION_V1\n"+key+'\n'+ids+'\n'+json+'\n';
@@ -149,14 +162,13 @@ inline void seal_submissions(const fs::path &path) {
     render_submission(path,ledger);
 }
 inline void refresh_submission_if_owned(const fs::path &path) {
-    const auto ledger=submission_ledger(path);
+    SubmissionLock lock(path);const auto ledger=migrate_result_ledger(path);
     if(!fs::exists(ledger/"format"))return;
-    require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");
-    SubmissionLock lock(path);render_submission(path,ledger);
+    require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");render_submission(path,ledger);
 }
 // The caller holds SubmissionLock, including while establishing ownership.
 inline fs::path prepare_submission_ledger(const fs::path &path) {
-    const auto ledger=submission_ledger(path);
+    const auto ledger=migrate_result_ledger(path);
     if(!fs::exists(ledger/"format")) {
         // Never replace an unrelated Prime95/manual result file.
         if(fs::exists(path))throw std::runtime_error("submission file has no owned ledger; select a fresh output path");
@@ -169,7 +181,7 @@ inline void ensure_submission_output(const fs::path &path) {
     SubmissionLock lock(path);
     render_submission(path,prepare_submission_ledger(path));
 }
-inline void publish_submission(const fs::path &path,const Submission &r,const mpz_t n,bool render_now=true) {
+inline void publish_submission(const fs::path &path,const Submission &r,const mpz_t n,bool render_now=false) {
     if(r.curves!=1)throw std::runtime_error("submission ledger accepts individual completed curves");
     auto line=submission_json(r,n);line.pop_back();
     SubmissionLock lock(path);const auto ledger=prepare_submission_ledger(path);
@@ -178,7 +190,7 @@ inline void publish_submission(const fs::path &path,const Submission &r,const mp
     for(const auto &factor:r.factors)key+='|'+factor;
     key=stage1_factor_key(key);
     auto group=r;group.when="1970-01-01 00:00:00";
-    const auto group_key=r.factors.empty()?submission_json(group,n):"F";
+    const auto group_key=r.factors.empty()?"T:"+r.publication_task+":"+submission_json(group,n):"F";
     const auto group_line=r.factors.empty()?group_key.substr(0,group_key.size()-1):group_key;
     const auto entry=ledger/(std::to_string(ecm_edwards::hash(key))+".curve");
     if(r.stage==1 && !fs::exists(entry)) {
@@ -187,7 +199,7 @@ inline void publish_submission(const fs::path &path,const Submission &r,const mp
         for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".curve") {
             const auto previous=read_submission_entry(file.path());
             if(previous.group=="F" && stage1_factor_key(previous.key)==key) {
-                if(render_now)render_submission(path,ledger);return;
+                if(render_now || !r.factors.empty())render_submission(path,ledger);return;
             }
         }
     }
@@ -197,32 +209,54 @@ inline void publish_submission(const fs::path &path,const Submission &r,const mp
         const auto body="ECM_SUBMISSION_V1\n"+key+'\n'+group_line+'\n'+line+'\n';
         atomic_text(entry,body+std::to_string(ecm_edwards::hash(body))+'\n');
     }
-    // Factors publish immediately. NF receipts are sealed at a normal task end;
-    // immutable batches prevent cumulative counts being credited twice.
-    if(render_now)render_submission(path,ledger);
+    // Factors publish immediately; NF waits for whole-task completion.
+    // Immutable batches prevent cumulative counts being credited twice.
+    if(render_now || !r.factors.empty())render_submission(path,ledger);
 }
-// Internal records have independent ownership and durable per-curve receipts.
-// Replaying a completed checkpoint after an output failure must not append a
-// second result for the same mathematical work.
-inline void publish_internal(const fs::path &path,const std::string &key,const std::string &json,bool render_now=true) {
-    SubmissionLock lock(path);const auto ledger=submission_ledger(path);
+// Internal receipts carry a monotone export order, independent of sigma and
+// directory iteration. V1 receipts retain their original creation/write order.
+inline void render_internal(const fs::path &path,const fs::path &ledger) {
+    struct Row {SubmissionEntry entry;fs::file_time_type time;};std::vector<Row> rows;
+    for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".curve")
+        rows.push_back({read_submission_entry(file.path()),fs::last_write_time(file.path())});
+    std::sort(rows.begin(),rows.end(),[](const auto &a,const auto &b){
+        const bool ai=a.entry.group.compare(0,2,"I:")==0,bi=b.entry.group.compare(0,2,"I:")==0;
+        if(ai!=bi)return !ai;
+        if(ai)return std::stoull(a.entry.group.substr(2))<std::stoull(b.entry.group.substr(2));
+        if(a.time!=b.time)return a.time<b.time;return a.entry.key<b.entry.key;
+    });
+    std::string output;for(const auto &r:rows)output+=r.entry.json+'\n';atomic_text(path,output);
+}
+inline fs::path prepare_internal_ledger(const fs::path &path) {
+    const auto ledger=migrate_result_ledger(path);
     if(!fs::exists(ledger/"format")) {
         if(fs::exists(path))throw std::runtime_error("internal result file has no owned ledger; select a fresh output path");
-        fs::create_directories(ledger);atomic_text(ledger/"format","ECM_INTERNAL_LEDGER_V1\n");
+        fs::create_directories(ledger);atomic_text(ledger/"format","ECM_INTERNAL_LEDGER_V2\n");
     }
-    require_ledger_format(ledger,"ECM_INTERNAL_LEDGER_V1");
-    const auto entry=ledger/(std::to_string(ecm_edwards::hash(key))+".curve");
-    auto line=json;if(!line.empty() && line.back()=='\n')line.pop_back();
-    if(fs::exists(entry)) {
-        if(read_submission_entry(entry).key!=key)throw std::runtime_error("internal result identity collision");
-    } else {
-        const auto body="ECM_SUBMISSION_V1\n"+key+"\nF\n"+line+'\n';
-        atomic_text(entry,body+std::to_string(ecm_edwards::hash(body))+'\n');
+    std::ifstream in(ledger/"format",std::ios::binary);std::string tag;std::getline(in,tag);in.close();
+    if(tag=="ECM_INTERNAL_LEDGER_V1") {require_ledger_format(ledger,tag);atomic_text(ledger/"format","ECM_INTERNAL_LEDGER_V2\n");}
+    else require_ledger_format(ledger,"ECM_INTERNAL_LEDGER_V2");
+    return ledger;
+}
+inline void publish_internal_batch(const fs::path &path,const std::vector<std::pair<std::string,std::string>> &records,bool render_now=true) {
+    SubmissionLock lock(path);const auto ledger=prepare_internal_ledger(path);uint64_t next=0;
+    for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".curve") {
+        const auto entry=read_submission_entry(file.path());
+        if(entry.group.compare(0,2,"I:")==0)next=(std::max)(next,uint64_t(std::stoull(entry.group.substr(2)))+uint64_t(1));else ++next;
     }
-    if(render_now)render_submission(path,ledger);
+    for(const auto &record:records) {
+        const auto &key=record.first;auto line=record.second;if(!line.empty()&&line.back()=='\n')line.pop_back();
+        const auto entry=ledger/(std::to_string(ecm_edwards::hash(key))+".curve");
+        if(fs::exists(entry)) {if(read_submission_entry(entry).key!=key)throw std::runtime_error("internal result identity collision");}
+        else {const auto body="ECM_SUBMISSION_V1\n"+key+"\nI:"+std::to_string(next++)+'\n'+line+'\n';
+            atomic_text(entry,body+std::to_string(ecm_edwards::hash(body))+'\n');}
+    }
+    if(render_now)render_internal(path,ledger);
+}
+inline void publish_internal(const fs::path &path,const std::string &key,const std::string &json,bool render_now=true) {
+    publish_internal_batch(path,{{key,json}},render_now);
 }
 inline void refresh_internal(const fs::path &path) {
-    SubmissionLock lock(path);const auto ledger=submission_ledger(path);
-    require_ledger_format(ledger,"ECM_INTERNAL_LEDGER_V1");render_submission(path,ledger);
+    SubmissionLock lock(path);const auto ledger=prepare_internal_ledger(path);render_internal(path,ledger);
 }
 } // namespace ecm_results

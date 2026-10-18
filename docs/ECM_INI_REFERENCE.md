@@ -484,10 +484,10 @@ selection is normally suitable. CUDA ignores this key.<br>
 stage1_submission_file=<path>; default=results.json.txt; empty=invalid; path_base=ini_dir; worker(N>1)=_N
 ```
 
-Submission JSON lines for Stage1 factors only. No-factor work stays in the internal JSONL and save;<br>
-an all-NF batch creates an empty owned submission file.<br>
-仅输出 Stage1 找到因子的提交 JSON 行；无因子工作仅写内部 JSONL 与 save。整批 NF 时生成有归属账本的空<br>
-提交文件。
+Stage1 submission JSON: seal NF once the whole task completes (B2=B1); publish verified factors<br>
+immediately as individual curves. Private ledgers live under the output directory data/.<br>
+Stage1 提交 JSON：整条任务完成后合并 NF（B2=B1）；验证后的因子立即单曲线输出。私有账本位于输出目录的<br>
+data/ 下。
 
 ### stage1_results_file
 

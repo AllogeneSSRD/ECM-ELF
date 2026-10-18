@@ -1,4 +1,5 @@
 #pragma once
+#include "ecm_result_json.h"
 #include <windows.h>
 #include <cstdint>
 #include <filesystem>
@@ -99,13 +100,14 @@ inline bool result_written(const fs::path &path,const std::string &receipt) {
     if(receipt.empty() || !fs::exists(path))return false;
     std::ifstream in(path,std::ios::binary);
     if(!in)throw std::runtime_error("cannot inspect Stage2 result receipts");
-    const auto prefix="{\"queue_receipt\":\""+receipt+"\",";
+
     std::string line;
     while(std::getline(in,line)) {
         // An unterminated last line may be a torn append. Never acknowledge it.
         if(in.eof())break;
         if(!line.empty() && line.back()=='\r')line.pop_back();
-        if(line.compare(0,prefix.size(),prefix)==0 && line.back()=='}')return true;
+        try {const auto row=ecm_results::json::parse(line);if(row.type=='o' && row.get("queue_receipt").text()==receipt)return true;}
+        catch(const std::runtime_error &){/* A torn/invalid append is never a durable receipt. */}
     }
     if(in.bad())throw std::runtime_error("cannot read Stage2 result receipts");
     return false;

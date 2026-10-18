@@ -13,6 +13,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import shutil
 import subprocess
 import sys
@@ -29,7 +32,7 @@ from bench_stage2_n_scaling import Monitor,fields,number
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def stamp():return datetime.now(timezone.utc).isoformat()
-def read(path):return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+def read(path):return normalize_result(json.loads(Path(path).read_text(encoding='utf-8-sig')))
 def write(path,data):
     # One collector owns this file. Raw invocation logs are never overwritten.
     temp=Path(str(path)+'.new');temp.write_text(json.dumps(data,indent=2)+'\n',encoding='utf-8',newline='\n');temp.replace(path)
@@ -55,7 +58,7 @@ def prepare(a,out):
     record_path=sources/'results.snapshot.json.txt';shutil.copy2(a.results,record_path)
     records=[]
     for i,s in enumerate(record_path.read_text(encoding='utf-8-sig').splitlines(),1):
-        if s.strip():r=json.loads(s);r['_line']=i;records.append(r)
+        if s.strip():r=normalize_result(json.loads(s));r['_line']=i;records.append(r)
     report=dict(created_utc=stamp(),git_base=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,encoding='utf-8').strip(),
                 source_files={},prime95_rows=[],cases=[],runs=[],failures=[],complete=False,prepared=False,
                 engines=a.engines,repeats=a.repeats,thread_limit=a.threads,cpu_memory_mib=a.memory_mib,

@@ -50,7 +50,7 @@ $cudaStem = [IO.Path]::GetFileNameWithoutExtension($cudaSource)
 $sources = @($cudaSource, 'src/core/ecm_cuda_stage2_main.cpp',
     'src/core/ecm_expr.cpp', 'src/core/ecm_worktodo.cpp', 'src/core/ecm_queue_config.cpp')
 $deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
-    'src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h','src/core/ecm_file_publication.h','src/core/ecm_program_version.h','src/core/ecm_result_submission.h','src/core/ecm_submission_writer.h','src/core/generated/p95_fft_reference.h',
+    'src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h','src/core/ecm_file_publication.h','src/core/ecm_program_version.h','src/core/ecm_result_submission.h','src/core/ecm_result_paths.h','src/core/ecm_result_json.h','src/core/ecm_internal_result.h','src/core/ecm_submission_writer.h','src/core/generated/p95_fft_reference.h',
     'src/core/ecm_stage2_phase_times.h','src/core/ecm_stage2_ntt_counts.h','src/core/ecm_stage2_d_catalog.h',
     'src/core/ecm_stage2_tune_portable.h','src/core/ecm_stage2_tune_columns.def','src/core/ecm_stage2_tune_rows.def','src/core/ecm_stage2_portable_model.h','src/core/ecm_stage2_width_prediction.h','src/core/ecm_stage2_runtime_tune.h','src/core/ecm_stage2_width_reference.h','src/core/ecm_stage2_portable_driver.inl','src/core/ecm_stage2_probability.h','src/core/ecm_stage1_cost_csv.h',
     'src/core/ecm_stage2_giant_work.h','src/core/ecm_stage2_relocation.h','src/core/ecm_stage2_giant_tree.h',

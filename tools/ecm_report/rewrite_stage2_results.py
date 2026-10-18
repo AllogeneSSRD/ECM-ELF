@@ -11,6 +11,10 @@ from pathlib import Path
 import re
 import zlib
 
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from result_format import normalize_result
+
 ROOT=Path(__file__).resolve().parents[2]
 
 
@@ -82,7 +86,7 @@ def reference_fft(p):
 def checksum(row):
     ed=row.get('Edwards');sigma=('E' if ed is not None else '')+str((ed or {}).get('sigma',row.get('sigma','')))
     fields=[str(row['exponent']),'ECM',','.join(row.get('factors',[])),','.join(row.get('known-factors',[])),
-            str(row['b1']),str(row.get('b2','')),sigma,str(row['fft-length']),'invariant:0',
+            str(row['b1']),str(row['b2']) if row.get('b2',0)>row['b1'] else '',sigma,str(row['fft-length']),'invariant:0',
             row['program']['name'],row['program']['version'],'','',row['os']['os'],row['os']['architecture'],row['timestamp']]
     return dict(version=1,checksum=f'{zlib.crc32(";".join(fields).encode("utf-8")):08X}')
 
@@ -199,7 +203,7 @@ def main():
     a=p.parse_args()
     paths=[x.resolve() for x in (a.input,a.targets,a.output,a.audit)]
     if len(set(paths))!=4 or a.output.exists() or a.audit.exists():raise ValueError('Use fresh, distinct output paths')
-    raw=a.input.read_bytes();rows=[(i,json.loads(s)) for i,s in enumerate(raw.decode('utf-8-sig').splitlines(),1) if s.strip()]
+    raw=a.input.read_bytes();rows=[(i,normalize_result(json.loads(s))) for i,s in enumerate(raw.decode('utf-8-sig').splitlines(),1) if s.strip()]
     if not rows:raise ValueError('No receipts')
     if any(b[1]['timestamp_ms']<a[1]['timestamp_ms'] for a,b in zip(rows,rows[1:])):raise ValueError('Input receipt times are not ordered')
     output,audit=convert(rows,target_catalog(a.targets),a.legacy_version,ini_identity(a.ini,a.worker),geometry_logs(a.geometry_logs))

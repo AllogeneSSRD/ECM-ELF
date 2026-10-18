@@ -9,15 +9,20 @@ import shutil
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import re
 import secrets
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
+from test_result_output_consistency import crc_valid
+def ledger(path): return path.parent/'data'/(path.name+'.ecm-ledger')
 
 
 def contract(row, allowed):
-    assert set(row) <= allowed, 'non-submission fields escaped into results.json.txt'
+    assert set(row) <= allowed | {"checksum", "os", "errors"}, 'non-submission fields escaped into results.json.txt'
     assert row['worktype'] == 'ECM' and row['status'] in ('F', 'NF')
     assert isinstance(row['fft-length'], int) and row['fft-length'] > 0
     assert isinstance(row['program']['port'], int)
@@ -32,7 +37,7 @@ def contract(row, allowed):
         assert row['stage'] in (1, 2) and row['factors']
         if row['stage'] == 1:
             assert 'b2' not in row
-    assert 'checksum' not in row and 'security-code' not in row
+    assert crc_valid(row) and 'security-code' not in row
     if 'd' in row or 'poly-size' in row:
         assert row['d']>=6 and row['d']%2==0 and row['poly-size']>0
         keys=list(row);assert keys[keys.index('b2')+1:keys.index('b2')+3]==['d','poly-size']
@@ -74,7 +79,7 @@ def main():
         checks.append(name)
         return inside,outside,rows
     internal,submission,rows=run('cpu',extra=['--exponent',127],destination=(internal,submission))
-    a=json.loads(internal.read_text());b=rows[0]
+    a=normalize_result(json.loads(internal.read_text()));b=rows[0]
     assert a['Edwards']['sigma']==17 and 'stage2-engine' in a
     assert a['program']['version']==b['program']['version'] and a['source-build']
     assert all(b.get(k)==v for k,v in identity.items())
@@ -99,8 +104,8 @@ def main():
     # A crash can leave completed curves without a sealed batch. Exercise that
     # state on a copy, retaining the original evidence and its published count.
     pending=out/'pending.json.txt'
-    pending_ledger=Path(str(pending)+'.ecm-ledger')
-    shutil.copytree(Path(str(outside)+'.ecm-ledger'),pending_ledger)
+    pending_ledger=ledger(pending)
+    shutil.copytree(ledger(outside),pending_ledger)
     for batch in pending_ledger.glob('*.batch'):batch.unlink()
     recovered=subprocess.run(list(map(str,[args.cpu_stage2.resolve(),'--export-results','--submission',pending,'--ini',ini])),cwd=out,capture_output=True)
     (out/'pending_recovery.log').write_bytes(recovered.stdout+recovered.stderr)
@@ -147,7 +152,7 @@ def main():
     assert factor_outside.read_bytes()==first_factor
     # Keep legacy private receipts; B2 did not belong to their Stage1 work.
     legacy=out/'legacy_stage1_factor.json.txt';legacy_ledger=Path(str(legacy)+'.ecm-ledger')
-    shutil.copytree(Path(str(factor_outside)+'.ecm-ledger'),legacy_ledger)
+    shutil.copytree(ledger(factor_outside),legacy_ledger)
     receipt=next(legacy_ledger.glob('*.curve'));line=receipt.read_text().splitlines()[3]
     receipt.unlink()  # Working copy; the original ledger remains above.
     def ledger_hash(text):
@@ -171,12 +176,12 @@ def main():
         inside,_,rows=run('cuda',gpu=True,extra=['--curves',4])
         assert len(rows)==1 and rows[0]['curves']==4 and all(rows[0][k]==v for k,v in identity.items())
         assert rows[0]['d']==210 and rows[0]['poly-size']==24
-        raw=[json.loads(line) for line in inside.read_text().splitlines()]
+        raw=[normalize_result(json.loads(line)) for line in inside.read_text().splitlines()]
         assert all(r['d']==210 and r['poly-size']==24 for r in raw)
         for r in raw:
-            keys=list(r);assert keys[keys.index('B2')+1:keys.index('B2')+3]==['d','poly-size']
+            keys=list(r);assert keys[keys.index('b2')+1:keys.index('b2')+3]==['d','poly-size']
         inside,_,rows=run('cuda_auto_d',gpu=True,gpu_d=0)
-        raw=json.loads(inside.read_text());assert raw['requested_D']==0 and raw['d']>0
+        raw=normalize_result(json.loads(inside.read_text()));assert raw['requested_D']==0 and raw['d']>0
         shape=re.search(r'real_shape: D=(\d+) P=phi\(D\)/2=(\d+)',(out/'cuda_auto_d_engine.log').read_text())
         assert shape and (rows[0]['d'],rows[0]['poly-size'])==tuple(map(int,shape.groups()))
         assert (raw['d'],raw['poly-size'])==(rows[0]['d'],rows[0]['poly-size'])

@@ -27,6 +27,7 @@
 #include "ecm_stage2_queue_state.h"
 #include "ecm_edwards_io.h"
 #include "ecm_result_submission.h"
+#include "ecm_internal_result.h"
 #include "ecm_submission_writer.h"
 #include <algorithm>
 #include <chrono>
@@ -229,7 +230,7 @@ fs::path executable() {
     return fs::path(std::wstring(buf.data(), n));
 }
 struct Options {
-    std::string ini, save, worktodo, results, log, debug_file, receipt,submission,submission_ini,submission_aid;
+    std::string ini, save, worktodo, results, log, debug_file, receipt,publication_task,submission,submission_ini,submission_aid;
     uint64_t submission_exponent=0;
     std::vector<std::string> submission_known;
     bool debug_log = false;
@@ -314,6 +315,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--log-level") o.log_level = stage2_log::parse(value());
         else if (a == "--debug-log-file") { o.debug_file=value(); o.debug_log=true; }
         else if (a == "--queue-receipt") o.receipt=value();
+        else if (a == "--publication-task") o.publication_task=value();
         else if (a == "--stage2-stop-handle") o.stop_handle=num();
         else if (a == "--gui-events") o.gui_events=true;
         else if (a == "--b2") o.b2 = num();
@@ -642,6 +644,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         cmd+=L" --lcm "+quote(fs::path(o.stage1_exponent=="choose12"?"12":"1").wstring());
         cmd+=L" --stage2-ratio-adjust "+real(o.ratio_adjust);
     }
+    if(!o.publication_task.empty())cmd+=L" --publication-task "+quote(fs::path(o.publication_task).wstring());
     if(!o.receipt.empty())cmd+=L" --queue-receipt "+quote(fs::path(o.receipt).wstring());
     if(o.debug_log)cmd+=L" --debug-log-file "+quote(fs::path(o.debug_file).wstring());
     // Preserve readable batch statistics in the file even with a concise console.
@@ -956,8 +959,6 @@ int curve_worker(Options o) {
                                                    fs::path(o.results).parent_path() / "factor_details");
         factor_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
     }
-    const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
     stage2_log::phase("Publish result");
     const auto identity_ini=o.ini.empty()?executable().parent_path()/"ecm.ini":fs::path(o.ini);
     std::vector<ecm_config::IniLine> identity_lines;
@@ -965,6 +966,7 @@ int curve_worker(Options o) {
         throw std::runtime_error("cannot read result identity INI");
     const auto identity=ecm_config::read_stage2(ecm_config::cli_entries(identity_lines,o.worker,true));
     ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
+    submission.publication_task=o.publication_task;submission.when=ecm_results::utc_timestamp();
     submission.known=o.submission_known;submission.aid=o.submission_aid;
     submission.sigma=r.sigma;submission.b1=r.b1;submission.b2=o.b2;
     submission.d=tune_metrics.d;submission.poly_size=tune_metrics.p;
@@ -972,35 +974,31 @@ int curve_worker(Options o) {
     submission.factors=ecm_stage2::result_factors(result);
     submission.stage=submission.factors.empty()?0:(status=="factor_in_saved_X"?1:2);
     const auto external_path=o.submission.empty()?identity_ini.parent_path()/identity.submission:fs::path(o.submission);
+    if(submission.stage==1){submission.d=0;submission.poly_size=0;}
     ecm_results::publish_submission(external_path,submission,n.z);
-    append(o.results, "{\"queue_receipt\":" + json_string(o.receipt) + ",\"status\":" + json_string(status) + ",\"save\":" + json_string(o.save) +
-        ",\"record\":" + std::to_string(o.index) + ",\"record_hash\":" + json_string(std::to_string(o.hash)) +
-        ",\"worker\":" + std::to_string(o.worker) + ",\"device\":" + std::to_string(o.device) +
-        ",\"N_hex\":" + json_string(r.n) + ",\"sigma\":" + std::to_string(r.sigma) +
-        ",\"carrier_exponent\":" + std::to_string(o.carrier_exponent) +
-        ",\"B1\":" + std::to_string(r.b1) + ",\"B2\":" + std::to_string(o.b2) +
-        (tune_metrics.d?",\"d\":"+std::to_string(tune_metrics.d)+",\"poly-size\":"+std::to_string(tune_metrics.p):"")+
-        ",\"requested_D\":" + std::to_string(requested_d) + ",\"seconds\":" + std::to_string(seconds) +
+    std::string engine="{\"name\":\"cuda-ntt\",\"status\":"+json_string(status)+
+        ",\"save\":"+json_string(o.save)+",\"record\":"+std::to_string(o.index)+
+        ",\"record_hash\":"+json_string(std::to_string(o.hash))+",\"worker\":"+std::to_string(o.worker)+
+        ",\"device\":"+std::to_string(o.device)+",\"seconds\":"+std::to_string(seconds)+
+        ",\"carrier_exponent\":"+std::to_string(o.carrier_exponent)+
         ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
-        ",\"relocation\":"+std::string(o.relocation?"true":"false")+
-        ",\"relocation_replayed\":"+std::string(tune_metrics.relocation_replayed?"true":"false")+
-        ",\"giant_first\":"+std::to_string(tune_metrics.giant_first)+",\"giant_last\":"+std::to_string(tune_metrics.giant_last)+
-        ",\"giant_points\":"+std::to_string(tune_metrics.giant_points)+
-        ",\"relocation_points\":"+std::to_string(tune_metrics.relocation_points)+
-        ",\"relocation_prime\":"+std::to_string(tune_metrics.relocation_prime)+
-        ",\"relocation_probe_seconds\":"+std::to_string(tune_metrics.relocation_probe_seconds)+
-        ",\"relocation_replay_seconds\":"+std::to_string(tune_metrics.relocation_replay_seconds)+
-        (o.relocation?",\"relocation_estimate_scope\":\"original_replay_range\"":"")+
+        ",\"requested_D\":"+std::to_string(requested_d)+",\"requested_B2\":"+std::to_string(requested_b2)+
         (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
-        ",\"factorization_seconds\":" + std::to_string(factor_seconds) +
-        (r.edwards?",\"curve\":\"ed\",\"param\":null":",\"curve\":\"mont\",\"param\":0") +
-        ",\"requested_factor_only\":" + std::string(o.factor_only ? "true" : "false") +
-        ",\"auto_b2\":" + std::string(auto_json.empty() ? "false" : "true") +
-        ",\"requested_B2\":" + std::to_string(requested_b2) + ",\"auto_planning_seconds\":" + std::to_string(auto_seconds) +
-        (auto_json.empty() ? "" : ",\"auto_plan\":" + auto_json) +
-        ",\"timestamp_ms\":" + std::to_string(timestamp) + ",\"program\":{\"name\":"+json_string(ecm_program::name)+
-        ",\"version\":"+json_string(ecm_program::version)+"},\"submission_file\":"+json_string(external_path.string())+
-        ",\"reference_fft_table\":\"Prime95-31.6-zjmptable\""+runtime_tune_json(observation) + "," + result + "}");
+        (o.factorize_hits?",\"factorization_seconds\":"+std::to_string(factor_seconds):"")+
+        (o.factor_only?",\"requested_factor_only\":true":"")+
+        (auto_json.empty()?"":",\"auto_b2\":true,\"auto_planning_seconds\":"+std::to_string(auto_seconds)+",\"auto_plan\":"+auto_json)+
+        (o.relocation?",\"relocation\":true,\"relocation_replayed\":"+std::string(tune_metrics.relocation_replayed?"true":"false")+
+            ",\"giant_first\":"+std::to_string(tune_metrics.giant_first)+",\"giant_last\":"+std::to_string(tune_metrics.giant_last)+
+            ",\"giant_points\":"+std::to_string(tune_metrics.giant_points)+",\"relocation_points\":"+std::to_string(tune_metrics.relocation_points)+
+            ",\"relocation_prime\":"+std::to_string(tune_metrics.relocation_prime)+
+            ",\"relocation_probe_seconds\":"+std::to_string(tune_metrics.relocation_probe_seconds)+
+            ",\"relocation_replay_seconds\":"+std::to_string(tune_metrics.relocation_replay_seconds)+
+            ",\"relocation_estimate_scope\":\"original_replay_range\"":"")+","+result+"}";
+    auto details=ecm_results::json::parse(engine);
+    details.members.erase(std::remove_if(details.members.begin(),details.members.end(),[](const auto &p){return p.first=="factors";}),details.members.end());
+    const auto extra=",\"queue_receipt\":"+json_string(o.receipt)+",\"stage2-engine\":"+details.dump()+runtime_tune_json(observation);
+    static const auto source_build=ecm_stage2::sha256_file(executable());
+    auto internal=ecm_results::internal_json(submission,n.z,0,source_build,extra);internal.pop_back();append(o.results,internal);
     // Optional cache work follows the durable result. It cannot invalidate the
     // successful curve or cause the parent to replay a committed receipt.
     if(!observation.sample.empty())try {publish_runtime_tune(o,observation);}
@@ -1337,7 +1335,7 @@ int driver(Options o) {
         if(same_path(writable[i],ini)||same_path(writable[i],executable()))throw std::runtime_error("output path conflicts with configuration or executable");
         for(size_t j=0;j<i;++j)if(same_path(writable[i],writable[j]))throw std::runtime_error("queue, finished, progress, result and log paths must be distinct");
     }
-    if(!o.dry && !o.plan_only && !o.tune_child)ecm_results::refresh_submission_if_owned(o.submission);
+
     if(queue && (same_path(worktodo,absolute_from(executable().parent_path(),cfg.worktodo)) ||
                   same_path(finished,absolute_from(executable().parent_path(),cfg.finished))))
         throw std::runtime_error("Stage2 queue/finished conflicts with Stage1 configuration; use distinct stage2_worktodo/stage2_finished");
@@ -1467,9 +1465,11 @@ int driver(Options o) {
             if(persist)message<<" checkpoint="<<progress.string();
             report(message.str());
         }
+        o.publication_task=persist?state.identity:std::to_string(ecm_edwards::hash(ecm_stage2::sha256_file(save)+"|"+std::to_string(skip)+"|"+std::to_string(plan.size())+"|"+std::to_string(b2)));
+        bool task_completed=true;
         for(size_t i=static_cast<size_t>(state.done);i<plan.size();++i) {
             poll_inherited_stop();
-            if(stop_requests)break;
+            if(stop_requests){task_completed=false;break;}
             const auto &r=plan[i];
             if(stage2_log::enabled(stage2_log::curve)||o.dry)
                 report("curve_start: "+std::to_string(i+1)+"/"+std::to_string(plan.size())+" record="+std::to_string(r.index)+
@@ -1511,7 +1511,7 @@ int driver(Options o) {
                 report(message.str());
             }
         }
-        if(!o.dry && !o.plan_only && !o.tune_child)ecm_results::seal_submissions(o.submission);
+        if(task_completed && !o.dry && !o.plan_only && !o.tune_child)ecm_results::seal_submissions(o.submission,0,o.publication_task);
         if(!queue||o.dry||o.plan_only)break;
         if(state.done<state.total)break;
         std::string current;

@@ -10,6 +10,9 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import shutil
 import subprocess
 import sys
@@ -24,7 +27,7 @@ from bench_stage2_n_scaling import Monitor
 
 
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
-def read(p):return json.loads(Path(p).read_text(encoding='utf-8-sig'))
+def read(p):return normalize_result(json.loads(Path(p).read_text(encoding='utf-8-sig')))
 def write(p,r):
     temp=Path(str(p)+'.new');temp.write_text(json.dumps(r,indent=2)+'\n',encoding='utf-8');temp.replace(p)
 def prime(n):return n>=2 and all(n%d for d in range(2,math.isqrt(n)+1))

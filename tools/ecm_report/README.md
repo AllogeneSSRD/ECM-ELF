@@ -31,6 +31,23 @@ CRC 的 16 个槽位、空值与 sigma 规则、UTF-8 编码、反射多项式�
 
 缺失或非数字版本使用 `--legacy-version` 的迁移标签，默认来自 `src/core/ecm_program_version.h`；这不会重建缺失的逐条历史二进制版本。已有合法数字版本保持原值；已提交结果保留原文，不因当前版本或字段排版变化而重复申报。结果规范、版本更新规则及实际服务器验收范围见 [ECM 结果输出](../../docs/usage/ECM_RESULTS.md)。回归入口是 `tools/test/test_stage2_result_rewrite.py`，验证重复覆盖、连续批次、模型标记、实际参数及顺序、目标拒绝和独立按位 CRC；它始终离线运行。
 
+## 内部格式压缩与 checksum 修复副本
+
+`compact_results.py` 从同一目标的一份 Stage1 JSONL、对应 Edwards save、旧 CUDA Stage2 JSONL 及提交文件生成可审阅副本。它验证 sigma 一一对应、save 的实际 N/B1 和已知因子关系，按 save 顺序重排 Stage1，压缩 Stage2 的重复目标字段并将执行信息归入 stage2-engine；原始版本、时间、调优样本和每条内部观察保留。旧构建哈希未知时明确标记 unknown，不借用当前构建身份。
+
+```powershell
+python tools/ecm_report/compact_results.py `
+  --stage1 data/experiments/results/source/stage1_results.jsonl `
+  --save data/experiments/results/source/curves.save `
+  --stage2 data/experiments/results/source/stage2_results.jsonl `
+  --submission data/experiments/results/source/results.json_2.txt `
+  --output data/experiments/results/review
+```
+
+输出目录必须不存在。工具不会改写源文件或账本，也不会发送网络请求；提交文件副本按最终字段补算 checksum。`--os`/`--architecture` 说明源运行平台，默认 Windows/x86_64；未知平台不能沿用默认值。它不判断哪些历史行已经提交，已有接受回执的行不可重复申报。
+
+生产日志读取的公共适配入口为 `result_format.normalize_result`，兼容旧/新 CUDA 布局。旧别名 N_hex 仅在内存中从经过整除验证的目标重建；新格式不得再次写回这些大字段。调优导入和主要基准采集器使用该入口。
+
 ## 快速流程
 
 ```bash

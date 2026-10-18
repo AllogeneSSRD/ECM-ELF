@@ -247,10 +247,10 @@ kernel_sub =
 # 指定 OpenCL 特殊乘法内核的标识或别名。空值或 auto 由后端选择；通常保持自动，CUDA 后端忽略此键。
 kernel_special_mult =
 # <path>; default=results.json.txt; empty=invalid; path_base=ini_dir; worker(N>1)=_N
-# Submission JSON lines for Stage1 factors only. No-factor work stays in the internal JSONL and save;
-# an all-NF batch creates an empty owned submission file.
-# 仅输出 Stage1 找到因子的提交 JSON 行；无因子工作仅写内部 JSONL 与 save。整批 NF 时生成有归属账本的空
-# 提交文件。
+# Stage1 submission JSON: seal NF once the whole task completes (B2=B1); publish verified factors
+# immediately as individual curves. Private ledgers live under the output directory data/.
+# Stage1 提交 JSON：整条任务完成后合并 NF（B2=B1）；验证后的因子立即单曲线输出。私有账本位于输出目录的
+# data/ 下。
 # stage1_submission_file = results.json.txt
 # <path>; default=stage1_results.jsonl; empty=invalid; path_base=ini_dir; worker(N>1)=_N
 # Canonical internal per-curve Stage1 JSONL with CRC32 and execution metadata, separate from

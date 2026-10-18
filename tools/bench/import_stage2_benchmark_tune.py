@@ -11,6 +11,9 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 from stage2_tune_matrix import aggregate, write_profile
 import re
 import statistics
@@ -59,7 +62,7 @@ def import_study(path, condition, audit):
         results = Path(row['command'][row['command'].index('--results')+1])
         if sha(results) != row['result_sha256']:
             raise ValueError('Frozen result changed')
-        result, checks = row['result'], row['s4']
+        result, checks = normalize_result(row['result']), row['s4']
         if (result['bad_factors'] or int(row['wall']['clean']) != 1 or
                 any(int(checks[k]) for k in ('gmp_selftest_bad', 'gmp_check_bad')) or
                 not int(checks['gmp_selftest_cases']) or not int(checks['gmp_checked'])):
@@ -116,7 +119,7 @@ def import_runtime(paths, sample_limit=10):
             lines.pop()
         admitted = 0
         for line in lines:
-            row = json.loads(line)
+            row = normalize_result(json.loads(line))
             observation = row.get('tune_observation')
             if not observation:
                 continue  # Older results have no complete structured evidence.

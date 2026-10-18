@@ -8,6 +8,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"ecm_report"))
+from result_format import normalize_result
 import re
 import subprocess
 import sys
@@ -54,7 +57,7 @@ def main():
         return r.stdout
     results=out/'internal.jsonl'
     call('production',['--worktodo',str(queue),'--once','--d','30030','--results',str(results),'--log',str(out/'engine.log')])
-    rows=[json.loads(s) for s in results.read_text(encoding='utf-8').splitlines()]
+    rows=[normalize_result(json.loads(s)) for s in results.read_text(encoding='utf-8').splitlines()]
     assert len(rows)==count and all(x['status']=='stage2_completed' and not x['factors'] and not x['bad_factors'] for x in rows)
     assert [r['carrier_exponent'] for r in rows[:4]]==[a.exponent,a.exponent,0,0]
     assert all(r['B2']==100000000 and r['d']==30030 and int(r['N_hex'],16)==n for r in rows)
@@ -81,7 +84,7 @@ def main():
     call('disabled',['--save',str(out/'curves.save'),'--curves','1','--b2','100000000','--d','30030',
         '--tune-runtime','0','--carrier-exponent','0','--results',str(out/'disabled.jsonl'),'--log',str(out/'disabled.engine.log')])
     assert sha(profile)==before
-    disabled=json.loads((out/'disabled.jsonl').read_text(encoding='utf-8'))
+    disabled=normalize_result(json.loads((out/'disabled.jsonl').read_text(encoding='utf-8')))
     assert 'tune_observation' not in disabled
     assert disabled['tune_plan']['model']=='runtime_shape_mean_v2' and not disabled['tune_plan']['runtime_probe']
     if a.mont_save:
@@ -94,7 +97,7 @@ def main():
     if a.factor_save:
         call('factor',['--save',str(a.factor_save.resolve()),'--curves','1','--b2','100000000','--d','30030',
             '--carrier-exponent','0','--results',str(out/'factor.jsonl'),'--log',str(out/'factor.engine.log')])
-        factor=json.loads((out/'factor.jsonl').read_text(encoding='utf-8'))
+        factor=normalize_result(json.loads((out/'factor.jsonl').read_text(encoding='utf-8')))
         assert any(int(f)%1000367==0 for f in factor['factors']) and 'tune_observation' not in factor
         assert sha(profile)==before
     assert all(sha(Path(f))==h for f,h in identities.items())

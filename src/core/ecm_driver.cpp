@@ -744,6 +744,8 @@ struct Stage1RunOptions {
     std::string results_file="stage1_results.jsonl",submission_file="results.json.txt";
 };
 
+static bool stage1_publish_factor(const Stage1RunOptions &,mpz_srcptr,uint64_t,uint64_t,mpz_srcptr);
+
 struct Stage1RunResult {
     int ret = ECM_ERROR;
     bool prepare_failed = false;
@@ -830,9 +832,9 @@ static void stage1_copy_save_history(const Stage1RunOptions &opt,const std::stri
 // Retained legacy sources must not replay curves already durably published.
 static bool stage1_results_complete(const Stage1RunOptions &opt,mpz_srcptr n,uint64_t b1,
                                      bool edwards,unsigned param,const std::vector<uint64_t> &sigmas) {
-    const auto ledger=ecm_results::submission_ledger(opt.results_file);
-    if(!std::filesystem::exists(ledger/"format"))return false;
-    ecm_results::require_ledger_format(ledger,"ECM_INTERNAL_LEDGER_V1");
+    if(!ecm_results::has_result_ledger(opt.results_file))return false;
+    ecm_results::SubmissionLock lock(opt.results_file);
+    const auto ledger=ecm_results::prepare_internal_ledger(opt.results_file);
     for(const auto sigma:sigmas) {
         const auto key=ecm_edwards::hex(n)+"|"+(edwards?"ed":"mont"+std::to_string(param))+"|"+
             std::to_string(sigma)+"|"+std::to_string(b1)+"|stage1";
@@ -1431,6 +1433,7 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
             const int rc=edwards_run_one_curve(N,s,opt,B1,B2,i,sigmas[i],opt.stage1_curves,factors[i],path,save_lines[i]);
             if(rc==2 || rc<0)return rc;
             array_found[i]=rc==1?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
+            if(rc==1 && !stage1_publish_factor(opt,N,uint64_t(B1),sigmas[i],factors[i]))return ECM_ERROR;
             if(done_ctr)done_ctr->fetch_add(1,std::memory_order_relaxed);
         }
         return 0;
@@ -1551,6 +1554,7 @@ static int edwards_run_batch_simd_impl(const Stage1RunOptions &opt, mpz_srcptr N
         if (mpz_cmp_ui(fac[k], 1) > 0) {
             mpz_set(factors[i], fac[k]);
             array_found[i] = ECM_FACTOR_FOUND_STEP1;
+            if(!stage1_publish_factor(opt,N,uint64_t(B1),sigmas[i],factors[i]))rc=ECM_ERROR;
             std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
             ecm_ts_fprintf(stdout, "  curve %u sigma=%llu -> factor found\n",
                            i, (unsigned long long)sigmas[i]);
@@ -1606,6 +1610,7 @@ static void edwards_worker(EdwardsWorkerCtx *ctx) {
                                                  ctx->factors[i], ctx->ckpt_paths[i],ctx->save_lines[i]);
             if (rc == 1) {
                 ctx->array_found[i] = ECM_FACTOR_FOUND_STEP1;
+                if(!stage1_publish_factor(*ctx->opt,ctx->N,uint64_t(ctx->B1),sigma,ctx->factors[i])){ctx->aborted->store(1);break;}
                 std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
                 if (ctx->opt->verbose) {
                     std::cout << "  curve " << i << " sigma=" << sigma
@@ -1853,6 +1858,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
                                                  factors[i], ckpt_paths[i],save_lines[i]);
             if (rc == 1) {
                 array_found[i] = ECM_FACTOR_FOUND_STEP1;
+                if(!stage1_publish_factor(opt,N,uint64_t(B1),sigmas[i],factors[i])){aborted=true;break;}
                 if (opt.verbose) {
                     std::cout << "  curve " << i << " sigma=" << sigmas[i]
                               << " -> factor found" << std::endl;
@@ -2498,6 +2504,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                         mpz_set(xs[c], bg[k]);
                         hit[c] = 1;
                         local++;
+                        if(!stage1_publish_factor(opt,N,uint64_t(B1),sigmas[c],factors[c]))checkpoint_failed.store(1);
                     } else {
                         mpz_set(xs[c], bx[k]);
                     }
@@ -2612,6 +2619,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                     mpz_set(xs[c], g);
                     hit[c] = 1;
                     found_atomic.fetch_add(1);
+                    if(!stage1_publish_factor(opt,N,uint64_t(B1),sigmas[c],factors[c]))checkpoint_failed.store(1);
                 } else {
                     mpz_set(xs[c], x);
                 }
@@ -2909,6 +2917,8 @@ static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
                                                                        : nullptr);
 
     std::cout << "GPU stage1 returned: " << ret << " gputime=" << gputime << " ms\n";
+    if(ret!=ECM_ERROR)for(uint32_t i=0;i<curves;++i)if(array_found[i]!=ECM_NO_FACTOR_FOUND &&
+        !stage1_publish_factor(opt,N,uint64_t(B1),firstsigma64+i,factors[i])){out->publish_failed=true;ret=ECM_ERROR;break;}
 
     if (ret != ECM_ERROR && !resolved_save.empty()) {
         /* The save must describe the SAME curve family the GPU just ran:
@@ -3007,6 +3017,14 @@ static ecm_results::Submission stage1_submission(const Stage1RunOptions &opt,con
     (void)ecm_results::target_exponent(r,N);return r;
 }
 
+static bool stage1_publish_factor(const Stage1RunOptions &opt,mpz_srcptr n,uint64_t b1,uint64_t sigma,mpz_srcptr factor) {
+    static std::mutex mutex;std::lock_guard<std::mutex> lock(mutex);
+    try {
+        auto r=stage1_submission(opt,n,b1);r.stage=1;r.sigma=sigma;r.when=ecm_results::utc_timestamp();
+        r.factors.push_back(ecm_results::decimal(factor));ecm_results::publish_submission(opt.submission_file,r,n);return true;
+    } catch(const std::exception &e){ecm_ts_fprintf(stderr,"ERROR: immediate Stage1 factor publication: %s\n",e.what());return false;}
+}
+
 static int run_stage1_once(const mpz_t N,double B1,double B2,uint32_t curves,
                            const std::string &savefilename,bool saveappend,const std::string &n_expr,
                            const Stage1RunOptions &options,Stage1RunResult *out) {
@@ -3032,7 +3050,7 @@ static int run_stage1_once(const mpz_t N,double B1,double B2,uint32_t curves,
             throw std::runtime_error("Stage1 save, internal results and submission paths must differ");
         for(const auto &file:{opt.results_file,opt.submission_file}) {
             if(file.empty())throw std::runtime_error("empty Stage1 result output path");
-            if(std::filesystem::exists(file) && !std::filesystem::exists(ecm_results::submission_ledger(file)/"format"))
+            if(std::filesystem::exists(file) && !ecm_results::has_result_ledger(file))
                 throw std::runtime_error("result output has no owned ledger; select a fresh Stage1 result path");
         }
         ecm_edwards::Integer plus;mpz_add_ui(plus.v,N,1);
@@ -3060,20 +3078,22 @@ static int run_stage1_once(const mpz_t N,double B1,double B2,uint32_t curves,
         if(rc==ECM_ERROR){if(!ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;ecm_stage1_end_batch(false);return rc;}
         if(!out->sigmas || !out->factors || !out->array_found)throw std::runtime_error("Stage1 completed without per-curve result identity");
         const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
+        std::vector<std::pair<std::string,std::string>> internal_records;
+        std::string task_identity=ecm_edwards::hex(N)+"|"+std::to_string(base.b1)+(base.edwards?"ed":"mont"+std::to_string(base.param));
+        for(uint32_t i=0;i<out->curves;++i)task_identity+="|"+std::to_string(out->sigmas[i]);
+        const auto publication_task=std::to_string(ecm_edwards::hash(task_identity));
         for(uint32_t i=0;i<out->curves;++i) {
-            auto r=base;r.sigma=out->sigmas[i];r.when=ecm_results::utc_timestamp();
+            auto r=base;r.publication_task=publication_task;r.sigma=out->sigmas[i];r.when=ecm_results::utc_timestamp();
             if(out->array_found[i]!=ECM_NO_FACTOR_FOUND){r.stage=1;r.factors.push_back(ecm_results::decimal(out->factors[i]));}
             (void)ecm_results::submission_json(r,N);
             const auto key=ecm_edwards::hex(N)+"|"+(r.edwards?"ed":"mont"+std::to_string(r.param))+"|"+std::to_string(r.sigma)+"|"+std::to_string(r.b1)+"|stage1";
             std::ostringstream extra;extra<<",\"stage1-engine\":{\"curve\":"<<i<<",\"target\":"<<ecm_results::quoted(ecm_stage1::execution_target_name(opt.selection.target))
                 <<",\"batch-seconds\":"<<seconds<<",\"coverage\":\"B1\"}";
-            ecm_results::publish_internal(opt.results_file,key,ecm_results::internal_json(r,N,0,stage1_build_identity(),extra.str()),false);
-            if(!r.factors.empty())ecm_results::publish_submission(opt.submission_file,r,N,false);
+            internal_records.emplace_back(key,ecm_results::internal_json(r,N,0,stage1_build_identity(),extra.str()));
+            ecm_results::publish_submission(opt.submission_file,r,N,false);
         }
-        ecm_results::refresh_internal(opt.results_file);
-        // Stage1 NF belongs only to the internal log and save. Create an owned
-        // empty export when no factor was found; do not seal Stage2 NF receipts.
-        ecm_results::ensure_submission_output(opt.submission_file);
+        ecm_results::publish_internal_batch(opt.results_file,internal_records);
+        ecm_results::seal_submissions(opt.submission_file,1,publication_task);
         ecm_stage1_end_batch(true);
         ecm_ts_fprintf(stdout,"Stage1 results: internal=%s submission=%s\n",opt.results_file.c_str(),opt.submission_file.c_str());
         return out->ret;

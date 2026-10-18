@@ -1,3 +1,4 @@
+#include "../core/ecm_result_paths.h"
 #include "results.h"
 
 #include <algorithm>
@@ -218,7 +219,7 @@ bool ResultsStore::init(const std::string &json_path, const std::string &txt_pat
     last_error_.clear();
     err.clear();
     if (json_path_.empty()) return true;      // results disabled
-    if (std::filesystem::path(json_path_).filename()=="results.json.txt" || std::filesystem::exists(json_path_+".ecm-ledger")) {
+    if (std::filesystem::path(json_path_).filename()=="results.json.txt" || ecm_results::has_result_ledger_directory(json_path_)) {
         err="GUI summary cannot share a CLI-owned result file; use gui_results.jsonl";
         last_error_=err;json_path_.clear();return false;
     }
@@ -310,7 +311,7 @@ void ResultsStore::merge(const HitRecord &r) {
 bool ResultsStore::add(const HitRecord &r, std::string &err) {
     err.clear();
     if (json_path_.empty()) return true;
-    if (std::filesystem::exists(json_path_+".ecm-ledger")) {
+    if (ecm_results::has_result_ledger_directory(json_path_)) {
         err="GUI summary cannot append to a CLI-owned result file; use gui_results.jsonl";
         last_error_=err;return false;
     }

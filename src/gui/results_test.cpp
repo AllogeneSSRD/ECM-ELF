@@ -94,6 +94,13 @@ int main() {
         check(err.find("CLI-owned")!=std::string::npos,"ownership error explains the conflict",err);
         std::filesystem::remove(owned);
     }
+    {
+        const auto owned=std::filesystem::path("data")/(json+".ecm-ledger");
+        std::filesystem::create_directories(owned);
+        ResultsStore st;std::string err;
+        check(!st.init(json,txt,err),"GUI refuses data/ CLI-owned results");
+        std::filesystem::remove(owned);
+    }
     std::remove(json.c_str());
     std::remove(txt.c_str());
 
