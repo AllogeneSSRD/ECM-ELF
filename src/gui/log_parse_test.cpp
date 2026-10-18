@@ -145,9 +145,12 @@ int main() {
               "queue completion + task count", std::to_string(d.tasks_processed));
         check(parse_line(TS "gpu backend : CUDA/CGBN, param0, device 1").kind == LogKind::Event,
               "banner line is an event");
-        const auto version=parse_line(TS "ECM-ELF 0.39.0 (Stage1)");
-        check(version.kind==LogKind::Event && version.application_version=="ECM-ELF 0.39.0",
-              "actual worker version is an event and is captured");
+        const auto version=parse_line(TS "ECM-ELF 0.38.0 (Stage1)");
+        check(version.kind==LogKind::Event && version.application_version=="ECM-ELF 0.38.0",
+              "older Stage1 worker version is captured without GUI substitution");
+        const auto stage2_version=parse_line("ECM-ELF 0.38.3 (Stage2)");
+        check(stage2_version.kind==LogKind::Event && stage2_version.application_version=="ECM-ELF 0.38.3",
+              "Stage2 worker version uses the same parser");
         check(parse_line(TS "some unclassified chatter").kind == LogKind::Raw,
               "unknown lines stay raw");
     }

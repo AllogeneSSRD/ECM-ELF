@@ -106,8 +106,7 @@
       <Item id="collecting"    name="正在采集…"/>
       <Item id="m2_note" name="每个worker管理一个计算程序。停止会请求安全退出；反复失败后停止自动重启。"/>
       <Item id="log_pane"     name="输出"/>
-      <Item id="gui_version" name="GUI 版本"/>
-      <Item id="application_version" name="工作程序版本"/>
+      <Item id="application_version" name="Worker 版本"/>
       <Item id="version_pending" name="尚未报告"/>
       <Item id="log_file"     name="日志文件"/>
       <Item id="open_saves"   name="打开存档目录"/>

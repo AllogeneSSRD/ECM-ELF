@@ -4,6 +4,8 @@
 
 `ecm_cuda_stage2.exe` 读取完成的 Stage1 save，运行 CUDA 多项式 ECM Stage2。手动 B2 可处理实际 N 为 2…16384 bits 的受支持输入；Auto B2 另受 profile 资格限制。设备编号是 CUDA 运行时编号，与构建的 sm 架构不同。
 
+直接读档和队列运行启动时均输出 `ECM-ELF x.y.z (Stage2)` 版本横幅，包括 `--dry-run` 和 `--plan-only`；GUI 从这个横幅读取实际 worker 版本。只输出机器数据的内部辅助入口保持其原有格式。
+
 ## 直接读档
 
 基本参数为 `--save <file> --b2 <integer> --device <id>`。`--skip-curves <n>` 跳过记录，`--curves <n>` 限定数量；具体名字以当前 `--help` 为准。B1、sigma 和 N 取自 save，不重新执行 Stage1。`--factor-only` 省去命中素数命名，保留叶乘积、GCD 与必需检查；`--factorize-hits` 可再用 GP 拆解复合因子。

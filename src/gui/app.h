@@ -21,6 +21,8 @@
 
 namespace ecmgui {
 
+bool run_worker_log_scroll_selftest(std::string &error);
+
 // Telemetry charts go through App::draw_metric_plot so they all look
 // and read the same way: rounded card, subtle grid, filled area under the curve, the current
 // value + unit as the headline, min/max on the axis, an optional reference line (e.g. a power

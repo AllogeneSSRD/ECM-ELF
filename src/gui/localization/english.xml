@@ -106,7 +106,6 @@
       <Item id="collecting"    name="collecting..."/>
       <Item id="m2_note"      name="Each worker manages one engine process. Stop requests a safe exit; repeated failures stop automatic restarts."/>
       <Item id="log_pane"     name="Output"/>
-      <Item id="gui_version" name="GUI version"/>
       <Item id="application_version" name="Worker version"/>
       <Item id="version_pending" name="Not reported"/>
       <Item id="log_file"     name="log file"/>

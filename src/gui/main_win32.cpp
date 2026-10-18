@@ -708,6 +708,11 @@ int run_selftest(const std::string &ini_path, const std::string &language,
         ImGui::DestroyContext();
         check(true, "ImGui context create/destroy round-trip");
     }
+    {
+        std::string scroll_error;
+        check(ecmgui::run_worker_log_scroll_selftest(scroll_error),
+              "worker log follows initial and appended output",scroll_error);
+    }
 
     char tail[256];
     std::snprintf(tail, sizeof(tail), "\npassed: %d   failed: %d\n  log: %s\n", pass, fail,

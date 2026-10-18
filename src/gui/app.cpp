@@ -38,6 +38,24 @@ std::string generator_curve_type(const WorkerView &worker) {
     if(worker.gpu_param==2 || worker.gpu_param==3)return "m"+std::to_string(worker.gpu_param);
     return "m0";
 }
+
+void draw_worker_log_lines(const std::vector<std::string> &lines,bool follow_output,const ImVec2 &size) {
+    ImGui::BeginChild("log",size,false,ImGuiWindowFlags_HorizontalScrollbar);
+    const bool follow=follow_output && ImGui::GetScrollY()>=ImGui::GetScrollMaxY()-1.0f;
+    ImGuiListClipper clipper;clipper.Begin(static_cast<int>(lines.size()));
+    while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i) {
+        const auto &line=lines[static_cast<size_t>(i)];
+        // ANSI already stripped; the events keep the driver timestamp.
+        const bool error=line.find("ERROR")!=line.npos || line.find("WARNING")!=line.npos || line.find("ecm_cuda_stage2:")!=line.npos;
+        ImGui::PushStyleColor(ImGuiCol_Text,error?ImVec4(1.f,.65f,.46f,1.f):line.find("stage2_phase:")!=line.npos?ImVec4(.78f,.72f,1.f,1.f):ImGui::GetStyleColorVec4(ImGuiCol_Text));
+        ImGui::TextUnformatted(line.c_str());
+        ImGui::PopStyleColor();
+    }
+    // ScrollMax still describes the previous frame's content here. Anchor to
+    // this frame's final cursor position, including the clipped-off rows.
+    if(follow)ImGui::SetScrollHereY(1.0f);
+    ImGui::EndChild();
+}
 }
 
 // Bumped whenever the default layout changes: an ini carrying an older number gets
@@ -2977,9 +2995,7 @@ void App::draw_worker_panes() {
         ImGui::TextColored(w.stage2?ImVec4(.75f,.69f,.97f,1.f):ImVec4(.35f,.84f,.74f,1.f),"%s  |  %s",w.stage2?"Stage2":"Stage1",task_text(w).c_str());
         const std::string worker_version=w.application_version.empty()?loc_.t("workers","version_pending"):w.application_version;
         ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("%s: %s %s   |   %s: %s",
-                           loc_.t("workers","gui_version").c_str(),ecm_program::name,ecm_program::version,
-                           loc_.t("workers","application_version").c_str(),worker_version.c_str());
+        ImGui::TextWrapped("%s: %s",loc_.t("workers","application_version").c_str(),worker_version.c_str());
         ImGui::PopStyleColor();
         if(w.stage2)draw_stage2_status(w);
         ImGui::Separator();
@@ -3027,23 +3043,50 @@ void App::draw_worker_panes() {
         if (lines.empty()) {
             ImGui::TextDisabled("%s", loc_.t("workers", "no_output").c_str());
         } else {
-            ImGui::BeginChild("log", ImVec2(0, 0), false,
-                              ImGuiWindowFlags_HorizontalScrollbar);
-            const bool follow=w.follow_output && ImGui::GetScrollY()>=ImGui::GetScrollMaxY()-1.0f;
-            ImGuiListClipper clipper;clipper.Begin(static_cast<int>(lines.size()));
-            while(clipper.Step())for(int i=clipper.DisplayStart;i<clipper.DisplayEnd;++i) {
-                const auto &line=lines[static_cast<size_t>(i)];
-                // ANSI already stripped; the events keep the driver timestamp.
-                const bool error=line.find("ERROR")!=line.npos || line.find("WARNING")!=line.npos || line.find("ecm_cuda_stage2:")!=line.npos;
-                ImGui::PushStyleColor(ImGuiCol_Text,error?ImVec4(1.f,.65f,.46f,1.f):line.find("stage2_phase:")!=line.npos?ImVec4(.78f,.72f,1.f,1.f):ImGui::GetStyleColorVec4(ImGuiCol_Text));
-                ImGui::TextUnformatted(line.c_str());
-                ImGui::PopStyleColor();
-            }
-            if(follow)ImGui::SetScrollY(ImGui::GetScrollMaxY());
-            ImGui::EndChild();
+            draw_worker_log_lines(lines,w.follow_output,ImVec2(0,0));
         }
         ImGui::End();
     }
+}
+
+bool run_worker_log_scroll_selftest(std::string &error) {
+    ImGuiContext *previous=ImGui::GetCurrentContext();
+    ImGuiContext *context=ImGui::CreateContext();
+    ImGuiIO &io=ImGui::GetIO();
+    io.IniFilename=nullptr;
+    io.DisplaySize=ImVec2(600,400);
+    io.DeltaTime=1.0f/60.0f;
+    io.Fonts->Build();
+    std::vector<std::string> lines;
+    for(int i=0;i<40;++i)lines.push_back("line "+std::to_string(i));
+    auto frame=[&]() {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowSize(ImVec2(400,260),ImGuiCond_Always);
+        ImGui::Begin("scroll selftest");
+        draw_worker_log_lines(lines,true,ImVec2(0,180));
+        ImGui::End();
+        ImGui::Render();
+        for(ImGuiWindow *window:context->Windows)
+            if(std::strncmp(window->Name,"scroll selftest/log_",20)==0)return window;
+        return static_cast<ImGuiWindow *>(nullptr);
+    };
+    frame();
+    ImGuiWindow *child=frame();
+    bool initial=child && child->ScrollMax.y>0 && child->Scroll.y>=child->ScrollMax.y-1.0f;
+    for(int i=40;i<60;++i)lines.push_back("line "+std::to_string(i));
+    frame();child=frame();
+    bool appended=child && child->ScrollMax.y>0 && child->Scroll.y>=child->ScrollMax.y-1.0f;
+    if(child){child->Scroll.y=0;child->ScrollTarget.y=0;}
+    child=frame();
+    const bool manual_pause=child && child->ScrollMax.y>0 && child->Scroll.y<=1.0f;
+    if(!initial || !appended || !manual_pause) {
+        error="initial="+std::to_string(initial)+" appended="+std::to_string(appended)+
+              " manual_pause="+std::to_string(manual_pause);
+        if(child)error+=" scroll="+std::to_string(child->Scroll.y)+" max="+std::to_string(child->ScrollMax.y);
+    }
+    ImGui::DestroyContext(context);
+    ImGui::SetCurrentContext(previous);
+    return initial && appended && manual_pause;
 }
 
 } // namespace ecmgui
