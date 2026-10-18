@@ -146,9 +146,9 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
         Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),mpz_sizeinbase(scalar.v,2),&metrics,initialization_start};std::string error;
         const auto arithmetic_start=std::chrono::steady_clock::now();
         const int rc=batch.window?
-            ecm_cuda_edwards_stage1_naf(n,scalar.v,batch.state.data(),curves,batch.done,256,
+            ecm_cuda_edwards_stage1_naf(n,scalar.v,batch.state.data(),curves,batch.done,0,
                 opt.device_index,progress,&p,error,batch.window,batch.doubling,&metrics,prepared):
-            ecm_cuda_edwards_stage1(n,scalar.v,batch.state.data(),curves,batch.done,256,
+            ecm_cuda_edwards_stage1(n,scalar.v,batch.state.data(),curves,batch.done,0,
                 opt.device_index,progress,&p,error,prepared);
         const double arithmetic_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-arithmetic_start).count();
         p.finish();

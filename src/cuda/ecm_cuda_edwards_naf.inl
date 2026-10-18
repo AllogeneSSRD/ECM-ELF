@@ -3,6 +3,7 @@ struct EdwardsEvent {
     cudaEvent_t value{};
     EdwardsEvent(){check(cudaEventCreate(&value));}
     ~EdwardsEvent(){cudaEventDestroy(value);}
+    void wait(){check(cudaDeviceSynchronize());check(cudaEventSynchronize(value));}
 };
 template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *states,
         uint32_t count,uint32_t &done,uint32_t chunk,EcmEdwardsProgress cb,
@@ -27,20 +28,23 @@ template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *sta
     const auto dictionary_start=std::chrono::steady_clock::now();
     check(cudaEventRecord(start.value));
     edwards_naf_prepare<P><<<(count+ipb-1)/ipb,P::TPB>>>(report.p,data.p,dictionary.p,entries,count);
-    check(cudaGetLastError());check(cudaEventRecord(stop.value));check(cudaEventSynchronize(stop.value));
+    check(cudaGetLastError());check(cudaEventRecord(stop.value));stop.wait();
     if(cgbn_error_report_check(report.p))throw std::runtime_error("CGBN Edwards dictionary arithmetic error");
     if(metrics)check(cudaEventElapsedTime(&metrics->dictionary_gpu_ms,start.value,stop.value));
     if(metrics)metrics->dictionary_wall_ms=std::chrono::duration<double,std::milli>(
         std::chrono::steady_clock::now()-dictionary_start).count();
     if(prepared)prepared(context);
+    EcmEdwardsSlice slices(chunk);
     while(done<plan.bits) {
-        const uint32_t end=done+std::min(chunk,plan.bits-done);
+        const uint32_t end=done+slices.columns(plan.bits-done);
         check(cudaEventRecord(start.value));
         edwards_naf_slice<P><<<(count+ipb-1)/ipb,P::TPB>>>(report.p,data.p,dictionary.p,result.p,
             nonzero.p,codes.p,plan.bits,done,end,entries,plan.window,count,doubling);
-        check(cudaGetLastError());check(cudaEventRecord(stop.value));check(cudaEventSynchronize(stop.value));
+        check(cudaGetLastError());check(cudaEventRecord(stop.value));stop.wait();
         if(cgbn_error_report_check(report.p))throw std::runtime_error("CGBN Edwards NAF arithmetic error");
-        if(metrics){float ms=0;check(cudaEventElapsedTime(&ms,start.value,stop.value));metrics->loop_gpu_ms+=ms;++metrics->launches;}
+        if(metrics || !chunk){float ms=0;check(cudaEventElapsedTime(&ms,start.value,stop.value));
+            slices.observe(end-done,ms);
+            if(metrics){metrics->loop_gpu_ms+=ms;++metrics->launches;}}
         check(cudaMemcpy(ordinary.data(),result.p,ordinary.size()*sizeof(Mem),cudaMemcpyDeviceToHost));
         for(uint32_t i=0;i<count;++i)for(unsigned j=0;j<4;++j)
             mpz_import(states[size_t(i)*9+j+5],P::BITS/32,-1,4,0,0,ordinary[size_t(i)*4+j]._limbs);

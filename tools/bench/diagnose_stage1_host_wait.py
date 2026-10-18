@@ -36,21 +36,31 @@ def main():
     p.add_argument('--scalar-bits',type=int,default=131072)
     p.add_argument('--curves',type=int,default=64)
     p.add_argument('--repeats',type=int,default=3)
+    p.add_argument('--exponent',type=int,default=1279)
+    p.add_argument('--chunk',type=int,default=256)
+    p.add_argument('--b1',type=int,default=0,help='Use production 48*lcm(1..B1) instead of the synthetic scalar')
+    p.add_argument('--primary-only',action='store_true',help='Repeat only original and blocking device waits')
+    p.add_argument('--adaptive-candidate',action='store_true',help='Include adaptive blocking slices as a third primary control')
+    p.add_argument('--timeout',type=float,default=900)
     a=p.parse_args();exe=a.probe.resolve();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     if a.repeats<2:
         raise ValueError('Need repeated primary controls')
     env={k:v for k,v in os.environ.items() if k not in ('CUDA_LAUNCH_BLOCKING','CUDA_VISIBLE_DEVICES')}
     modes={'baseline':(0,0,0),'context_only':(4,0,0),'event_only':(0,1,0),
            'context_event':(4,1,0),'auto_device_wait':(0,0,2),'blocking_device_wait':(4,0,2)}
+    if a.adaptive_candidate:
+        modes['blocking_device_adaptive']=(4,0,2)
     report=dict(complete=False,probe=str(exe),probe_sha256=sha(exe),gmp_sha256=sha(exe.parent/'gmp-10.dll'),
+        collector_sha256=sha(Path(__file__)),adaptive_candidate=a.adaptive_candidate,
         host=dict(os=platform.platform(),cpu=platform.processor()),device=gpu_sample(),
-        target='2^1279-1',scalar=f'2^{a.scalar_bits}-1',curves=a.curves,sigma_start=17,window=6,
-        chunk_columns=256,container_bits=1280,tpi=8,cpu_power_settings='unchanged',
+        target=f'2^{a.exponent}-1',scalar=f'48*lcm(1..{a.b1})' if a.b1 else f'2^{a.scalar_bits}-1',
+        curves=a.curves,sigma_start=17,window=6,chunk_columns=a.chunk,cpu_power_settings='unchanged',
         removed_environment={k:os.environ[k] for k in ('CUDA_LAUNCH_BLOCKING','CUDA_VISIBLE_DEVICES') if k in os.environ},
-        timing_boundary='production run_1280 entry to return; excludes curve/context setup and final export',runs=[])
-    sequence=['context_only','event_only','context_event','auto_device_wait']
+        timing_boundary='production run entry to return; excludes exponent/NAF/curve/context setup and final export',runs=[])
+    sequence=[] if a.primary_only else ['context_only','event_only','context_event','auto_device_wait']
+    primary=['baseline','blocking_device_wait']+(['blocking_device_adaptive'] if a.adaptive_candidate else [])
     for i in range(a.repeats):
-        sequence+=['baseline','blocking_device_wait'] if i%2==0 else ['blocking_device_wait','baseline']
+        sequence+=primary if i%2==0 else primary[::-1]
     for index,name in enumerate(sequence):
         flags,event,order=modes[name];prefix=out/f'{index:02}_{name}';points=prefix.with_suffix('.points')
         samples=[];stop=threading.Event()
@@ -59,9 +69,13 @@ def main():
                 samples.append(dict(monotonic=time.monotonic(),gpu=gpu_sample()))
                 stop.wait(.3)
         worker=threading.Thread(target=telemetry);worker.start()
-        command=list(map(str,[exe,1,flags,event,a.scalar_bits,a.curves,points,order]))
+        chunk=0 if name=='blocking_device_adaptive' else a.chunk
+        command=list(map(str,[exe,1,flags,event,a.scalar_bits,a.curves,points,order,a.exponent,chunk,a.b1]))
         try:
-            result=subprocess.run(command,cwd=out,env=env,capture_output=True,timeout=180)
+            result=subprocess.run(command,cwd=out,env=env,capture_output=True,timeout=a.timeout)
+        except subprocess.TimeoutExpired as error:
+            prefix.with_suffix('.log').write_bytes((error.stdout or b'')+(error.stderr or b''))
+            raise
         finally:
             stop.set();worker.join(timeout=15)
         prefix.with_suffix('.log').write_bytes(result.stdout+result.stderr)
@@ -70,6 +84,10 @@ def main():
         row=json.loads(result.stdout)
         if not row['invariant_ok'] or row['event_creations']!=2 or row['context_flags']&7!=flags or row['created_event_flags']!=event:
             raise ValueError('Probe did not execute the requested wait controls')
+        if (row['exponent'],row['chunk'],row['b1'])!=(a.exponent,chunk,a.b1):
+            raise ValueError('Probe did not execute the requested arithmetic controls')
+        row['curve_columns_per_second']=a.curves*row['columns']/row['wall_seconds']
+        row['average_slice_gpu_ms']=(row['gpu_seconds']*1000-row['dictionary_ms'])/row['launches']
         row.update(mode=name,command=command,points_sha256=sha(points),telemetry=samples)
         report['runs'].append(row)
         (out/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
@@ -79,8 +97,13 @@ def main():
     summaries={}
     for name in modes:
         rows=[r for r in report['runs'] if r['mode']==name]
+        if not rows:
+            continue
         summaries[name]=dict(samples=len(rows),median_cpu_cores=statistics.median(r['cpu_cores'] for r in rows),
             median_wall_seconds=statistics.median(r['wall_seconds'] for r in rows),
+            median_cpu_seconds=statistics.median(r['cpu_seconds'] for r in rows),
+            median_curve_columns_per_second=statistics.median(r['curve_columns_per_second'] for r in rows),
+            median_slice_gpu_ms=statistics.median(r['average_slice_gpu_ms'] for r in rows),
             wall_range=[min(r['wall_seconds'] for r in rows),max(r['wall_seconds'] for r in rows)])
     report.update(complete=True,summaries=summaries,identical_final_coordinates=True)
     (out/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')

@@ -1,4 +1,4 @@
-// Diagnostic only: instantiate the production 1280-bit kernel and substitute
+// Diagnostic only: instantiate a production kernel and substitute
 // event construction, keeping its arithmetic, chunking and readback unchanged.
 #include <gmp.h>
 #include <cuda_runtime.h>
@@ -11,6 +11,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "../../src/core/ecm_edwards_io.h"
+#include "../../src/core/ecm_stage1_exp.h"
 
 static bool diagnostic_blocking_event=false;
 static unsigned diagnostic_pre_sync=0,diagnostic_event_flags=0;
@@ -19,6 +20,7 @@ static unsigned diagnostic_events=0;
 static double process_cpu();
 struct ApiTime {double wall=0,cpu=0;unsigned calls=0;};
 static ApiTime diagnostic_api[6];
+static std::vector<float> diagnostic_intervals;
 template<class F> static cudaError_t timed(unsigned index,F call) {
     const auto start=std::chrono::steady_clock::now();const double cpu=process_cpu();
     const auto result=call();auto &m=diagnostic_api[index];
@@ -31,12 +33,19 @@ static cudaError_t diagnostic_event_record(cudaEvent_t event,cudaStream_t stream
     return timed(1,[&]{return cudaEventRecord(event,stream);});
 }
 static cudaError_t diagnostic_event_sync(cudaEvent_t event) {
-    if(diagnostic_pre_sync==2){const auto rc=timed(0,[]{return cudaDeviceSynchronize();});if(rc!=cudaSuccess)return rc;}
     return timed(2,[&]{return cudaEventSynchronize(event);});
+}
+// The reference control suppresses only the production host device wait.
+// Its event wait still completes all GPU work before report/readback.
+static cudaError_t diagnostic_device_sync() {
+    return diagnostic_pre_sync==2?timed(0,[]{return cudaDeviceSynchronize();}):cudaSuccess;
 }
 static cudaError_t diagnostic_memcpy(void *dest,const void *src,size_t size,cudaMemcpyKind kind) {return timed(3,[&]{return cudaMemcpy(dest,src,size,kind);});}
 static cudaError_t diagnostic_last_error() {return timed(4,[]{return cudaGetLastError();});}
-static cudaError_t diagnostic_elapsed(float *ms,cudaEvent_t start,cudaEvent_t stop) {return timed(5,[&]{return cudaEventElapsedTime(ms,start,stop);});}
+static cudaError_t diagnostic_elapsed(float *ms,cudaEvent_t start,cudaEvent_t stop) {
+    const auto rc=timed(5,[&]{return cudaEventElapsedTime(ms,start,stop);});
+    if(rc==cudaSuccess)diagnostic_intervals.push_back(*ms);return rc;
+}
 static cudaError_t diagnostic_event_create(cudaEvent_t *event) {
     const auto rc=cudaEventCreateWithFlags(event,diagnostic_blocking_event?cudaEventBlockingSync:cudaEventDefault);
     if(rc!=cudaSuccess)return rc;
@@ -45,11 +54,16 @@ static cudaError_t diagnostic_event_create(cudaEvent_t *event) {
     if(++diagnostic_events==2)diagnostic_stop_event=*event;return rc;
 }
 #define ECM_TIERS_RESTRICTED
+#ifndef ECM_HOST_WAIT_TIER
+#define ECM_HOST_WAIT_TIER 1280
 #define ECM_TIER_1280
-#define ECM_EDWARDS_GROUP 1
+#endif
+#define DIAGNOSTIC_JOIN_IMPL(A,B) A##B
+#define DIAGNOSTIC_JOIN(A,B) DIAGNOSTIC_JOIN_IMPL(A,B)
 #define cudaEventCreate diagnostic_event_create
 #define cudaEventRecord diagnostic_event_record
 #define cudaEventSynchronize diagnostic_event_sync
+#define cudaDeviceSynchronize diagnostic_device_sync
 #define cudaMemcpy diagnostic_memcpy
 #define cudaGetLastError diagnostic_last_error
 #define cudaEventElapsedTime diagnostic_elapsed
@@ -57,6 +71,7 @@ static cudaError_t diagnostic_event_create(cudaEvent_t *event) {
 #undef cudaEventCreate
 #undef cudaEventRecord
 #undef cudaEventSynchronize
+#undef cudaDeviceSynchronize
 #undef cudaMemcpy
 #undef cudaGetLastError
 #undef cudaEventElapsedTime
@@ -70,22 +85,27 @@ static double process_cpu() {
 }
 int main(int argc,char **argv) {
     try {
-        if(argc!=7 && argc!=8)throw std::runtime_error("usage: probe DEVICE CONTEXT_FLAGS EVENT_BLOCKING SCALAR_BITS CURVES POINTS_FILE [WAIT_ORDER:0=event,1=before-record,2=before-event-wait]");
+        if(argc<7 || argc>11)throw std::runtime_error("usage: probe DEVICE CONTEXT_FLAGS EVENT_BLOCKING SCALAR_BITS CURVES POINTS_FILE [WAIT_ORDER:0=event,1=before-record,2=before-event-wait] [EXPONENT=1279] [CHUNK=256] [B1=0]");
         const int device=std::stoi(argv[1]);const unsigned flags=std::stoul(argv[2]);
         diagnostic_blocking_event=std::stoi(argv[3])!=0;
-        diagnostic_pre_sync=argc==8?std::stoul(argv[7]):0;
+        diagnostic_pre_sync=argc>=8?std::stoul(argv[7]):0;
         require(diagnostic_pre_sync<=2,"invalid wait order");
         const unsigned bits=std::stoul(argv[4]),count=std::stoul(argv[5]);
+        const unsigned exponent=argc>=9?std::stoul(argv[8]):1279;
+        const unsigned chunk=argc>=10?std::stoul(argv[9]):256;
+        const uint64_t b1=argc>=11?std::stoull(argv[10]):0;
         require(device==1 && (flags==0 || flags==4) && bits>=32 && bits<=1000000 && count && count<=1024,"invalid diagnostic controls");
+        require(exponent>=1279 && exponent<ECM_HOST_WAIT_TIER && chunk<=4096 && b1<=10000000,"invalid arithmetic controls");
         require(cudaSetDevice(device)==cudaSuccess,"cudaSetDevice failed");
         require(cudaSetDeviceFlags(flags)==cudaSuccess,"cudaSetDeviceFlags failed");
         require(cudaFree(nullptr)==cudaSuccess,"context warmup failed");
         unsigned actual_flags=0;require(cudaGetDeviceFlags(&actual_flags)==cudaSuccess,"cannot inspect context flags");
         using ecm_edwards::Integer;
         Integer n,scalar,d,x,y,a,f,t;
-        mpz_ui_pow_ui(n.v,2,1279);mpz_sub_ui(n.v,n.v,1);
+        mpz_ui_pow_ui(n.v,2,exponent);mpz_sub_ui(n.v,n.v,1);
         // A deterministic long scalar avoids measuring the CPU exponent builder.
-        mpz_ui_pow_ui(scalar.v,2,bits);mpz_sub_ui(scalar.v,scalar.v,1);
+        if(b1)require(ecm_build_lcm_exponent(scalar.v,b1,48),"exponent builder failed");
+        else {mpz_ui_pow_ui(scalar.v,2,bits);mpz_sub_ui(scalar.v,scalar.v,1);}
         ecm_edwards::Array states(size_t(count)*9);
         for(unsigned i=0;i<count;++i) {
             require(ecm_edwards::construct(d.v,x.v,y.v,a.v,f.v,17+i,n.v)==ecm_edwards::Setup::Ready,"curve setup failed");
@@ -95,7 +115,7 @@ int main(int argc,char **argv) {
         }
         EcmEdwardsNaf plan(scalar.v,6);EcmEdwardsNafMetrics metrics;uint32_t done=0;
         const auto start=std::chrono::steady_clock::now();const auto cpu=process_cpu();
-        const int rc=ecm_edwards_cuda_detail::run_1280({n.v,scalar.v,states.data(),count,done,256,nullptr,nullptr,&plan,4,&metrics,nullptr});
+        const int rc=ecm_edwards_cuda_detail::DIAGNOSTIC_JOIN(run_,ECM_HOST_WAIT_TIER)({n.v,scalar.v,states.data(),count,done,chunk,nullptr,nullptr,&plan,4,&metrics,nullptr});
         const auto cpu_seconds=process_cpu()-cpu;
         const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
         require(rc==0 && done==plan.bits,"incomplete arithmetic");
@@ -108,9 +128,12 @@ int main(int argc,char **argv) {
             }
         }
         points.close();require(bool(points),"cannot save final points");
-        std::printf("{\"context_flags\":%u,\"event_blocking\":%s,\"wait_order\":%u,\"created_event_flags\":%u,\"event_creations\":%u,\"wall_seconds\":%.9f,\"cpu_seconds\":%.9f,\"cpu_cores\":%.6f,\"gpu_seconds\":%.9f,\"dictionary_ms\":%.6f,\"launches\":%u,\"columns\":%u,\"invariant_ok\":true,\"api\":{",
+        std::printf("{\"exponent\":%u,\"container_bits\":%u,\"tpi\":%u,\"chunk\":%u,\"b1\":%llu,\"additions\":%u,\"context_flags\":%u,\"event_blocking\":%s,\"wait_order\":%u,\"created_event_flags\":%u,\"event_creations\":%u,\"wall_seconds\":%.9f,\"cpu_seconds\":%.9f,\"cpu_cores\":%.6f,\"gpu_seconds\":%.9f,\"dictionary_ms\":%.6f,\"launches\":%u,\"columns\":%u,\"invariant_ok\":true,\"event_intervals_ms\":[",
+            exponent,metrics.container_bits,metrics.tpi,chunk,(unsigned long long)b1,plan.additions,
             actual_flags,diagnostic_blocking_event?"true":"false",diagnostic_pre_sync,diagnostic_event_flags,diagnostic_events,seconds,cpu_seconds,cpu_seconds/seconds,
             (metrics.dictionary_gpu_ms+metrics.loop_gpu_ms)/1000.,metrics.dictionary_gpu_ms,metrics.launches,done);
+        for(size_t i=0;i<diagnostic_intervals.size();++i)std::printf("%s%.6f",i?",":"",diagnostic_intervals[i]);
+        std::printf("],\"api\":{");
         const char *names[]={"device_sync","event_record","event_sync","memcpy","last_error","elapsed_time"};
         for(unsigned i=0;i<6;++i)std::printf("%s\"%s\":{\"wall\":%.9f,\"cpu\":%.9f,\"calls\":%u}",i?",":"",names[i],diagnostic_api[i].wall,diagnostic_api[i].cpu,diagnostic_api[i].calls);
         std::printf("}}\n");

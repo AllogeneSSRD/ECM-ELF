@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <vector>
 #include "../../src/cuda/ecm_cuda_edwards_internal.h"
+#include "../../src/cuda/ecm_cuda_edwards_slice.h"
 #include "cgbn_edwards_point.cuh"
 #include "cgbn_edwards_naf.cuh"
 
@@ -78,11 +79,15 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
     check(cudaMemcpy(data.p,host.data(),host.size()*sizeof(Mem),cudaMemcpyHostToDevice));
     check(cudaMemcpy(scalar.p,words.data(),words.size()*4,cudaMemcpyHostToDevice));
     if(prepared)prepared(context);
+    EcmEdwardsSlice slices(chunk);
     while(done<bits) {
-        const uint32_t stop=done+std::min(chunk,bits-done);
+        const uint32_t stop=done+slices.columns(bits-done);
         const uint32_t ipb=P::TPB/P::TPI;
+        const auto started=std::chrono::steady_clock::now();
         slice<P><<<(count+ipb-1)/ipb,P::TPB>>>(report.p,data.p,scalar.p,bits,done,stop,count);
         check(cudaGetLastError());check(cudaDeviceSynchronize());
+        slices.observe(stop-done,std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-started).count());
         if(cgbn_error_report_check(report.p))throw std::runtime_error("CGBN Edwards arithmetic error");
         check(cudaMemcpy(host.data(),data.p,host.size()*sizeof(Mem),cudaMemcpyDeviceToHost));
         for(uint32_t i=0;i<count;++i)for(unsigned j=5;j<9;++j)

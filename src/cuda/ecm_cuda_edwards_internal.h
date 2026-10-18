@@ -19,4 +19,5 @@ struct Request {
 #include "ecm_cuda_edwards_tiers.inc"
 #undef ECM_EDWARDS_TIER
 int dispatch(const Request &request);
+void prepare_device(int device);
 }

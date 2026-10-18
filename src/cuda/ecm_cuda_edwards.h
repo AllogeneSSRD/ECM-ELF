@@ -8,6 +8,7 @@
 // done counts binary scalar bits from the MSB, NOT CPU/Prime95 NAF positions.
 // A callback sees canonical ordinary residues at a completed slice boundary.
 // Return 0=completed, 2=callback stopped, -1=error (message populated).
+// chunk_bits=0 adapts slices toward 100 ms; positive values stay fixed.
 using EcmEdwardsProgress = bool (*)(uint32_t done, void *context);
 // Optional one-shot notification after allocations/uploads/dictionary preparation,
 // before any scalar slice. Uses the same context; does not imply completed work.

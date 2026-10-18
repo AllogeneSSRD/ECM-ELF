@@ -1,4 +1,4 @@
-"""Real stopped workers: V1 binary migration, V2 settings and random sigma restore."""
+"""Real stopped workers: saved binary/NAF modes and random sigma restore."""
 import argparse
 import ctypes
 from ctypes import wintypes
@@ -40,7 +40,7 @@ def main():
         report['checks'].append(dict(name=name, exit=r.returncode, log_sha256=sha(log))); persist()
         print('PASS', name, flush=True); return raw.decode('utf-8', 'replace')
     cases=[
-        ('binary_v1', old, 347, 4, True, 0, 0),
+        ('binary_saved_mode', old, 347, 4, True, 0, 0),
         ('naf_v2', new, 347, 4, True, 8, 5),
         ('naf_random', new, 521, 2, False, 6, 4)]
     if a.naf_baseline:
@@ -57,6 +57,7 @@ def main():
         event = kernel.CreateEventW(ctypes.byref(sa), True, False, None); assert event
         with (out/(name+'_stopped.log')).open('wb') as log:
             child_env = env | ({'ECM_EDWARDS_DBL_ALGO': str(doubling)} if doubling else {})
+            if not window:child_env['ECM_EDWARDS_STAGE1_ALGO']='binary'
             proc = subprocess.Popen([str(source), '-ini', str(ini), '--stage1-stop-handle', str(event)],
                 stdout=log, stderr=subprocess.STDOUT, close_fds=False, creationflags=subprocess.CREATE_NO_WINDOW,
                 env=child_env, cwd=out)
@@ -71,8 +72,11 @@ def main():
                         except (AssertionError,ValueError,PermissionError,FileNotFoundError):continue
                         if ready:break
                     time.sleep(0.01)
-                assert ready and kernel.SetEvent(event)
+                assert ready
+                stop_started=time.monotonic()
+                assert kernel.SetEvent(event)
                 assert proc.wait(timeout=120) != 0
+                stop_latency=time.monotonic()-stop_started
             finally:
                 if proc.poll() is None: proc.kill(); proc.wait()
                 kernel.CloseHandle(event)
@@ -110,7 +114,8 @@ def main():
                 extra={'ECM_EDWARDS_DBL_ALGO': str(doubling or 4)})
             assert records(save) == [row]
         report.setdefault('restarts', []).append(dict(name=name, columns=data['done'], total=data['total'],
-            window=window, doubling=doubling, sigmas=[r['sigma'] for r in data['rows']], checkpoint_sha256=sha(frozen)))
+            saved_format=data['tag'],window=window, doubling=doubling, sigmas=[r['sigma'] for r in data['rows']], checkpoint_sha256=sha(frozen),
+            signal_to_exit_seconds=stop_latency))
     report['complete'] = True; persist()
 
 

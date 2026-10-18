@@ -39,7 +39,7 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
     }
     if(other){mpz_set_ui(g.v,1);mpz_mul_2exp(g.v,g.v,other);mpz_sub_ui(g.v,g.v,1);mpz_mul(n.v,n.v,g.v);}
     mpz_set_ui(s.v,1);for(unsigned k=2;k<=b1;++k)mpz_lcm_ui(s.v,s.v,k);mpz_mul_ui(s.v,s.v,48);
-    Array state(size_t(count)*9),resumed(size_t(count)*9);std::vector<uint64_t> sigmas;
+    Array state(size_t(count)*9),resumed(size_t(count)*9),adaptive(size_t(count)*9);std::vector<uint64_t> sigmas;
     for(unsigned i=0;i<count;++i) {
         const auto sg=sigma+i;
         require(construct(d.v,x.v,y.v,a.v,f.v,sg,n.v)==Setup::Ready,"unexpected curve setup classification");
@@ -47,22 +47,26 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
         require(!mpz_cmp(d.v,old_d.v) && !mpz_cmp(x.v,old_x.v) && !mpz_cmp(y.v,old_y.v),"checked constructor differs from CPU reference");
         identity(state.data()+size_t(i)*9,d.v,x.v,y.v,n.v);sigmas.push_back(sg);
     }
-    for(size_t i=0;i<size_t(count)*9;++i)mpz_set(resumed[i],state[i]);
+    for(size_t i=0;i<size_t(count)*9;++i){mpz_set(resumed[i],state[i]);mpz_set(adaptive[i],state[i]);}
     uint32_t done=0,split=0;std::string error;
     EcmEdwardsNafMetrics metrics;
     auto execute=[&](mpz_t *data,uint32_t &pos,uint32_t chunk,EcmEdwardsProgress cb){
         return window?ecm_cuda_edwards_stage1_naf(n.v,s.v,data,count,pos,chunk,device,cb,nullptr,error,window,algorithm,&metrics)
                      :ecm_cuda_edwards_stage1(n.v,s.v,data,count,pos,chunk,device,cb,nullptr,error);
     };
-    require(execute(state.data(),done,256,nullptr)==0,error.c_str());
+    require(execute(state.data(),done,0,nullptr)==0,error.c_str());
     require(execute(resumed.data(),split,17,[](uint32_t,void *){return false;})==2,"slice stop failed");
     // A new invocation uploads the complete ordinary-domain state, just as a
     // restarted worker does. Chunk boundaries deliberately differ.
     require(execute(resumed.data(),split,113,nullptr)==0,error.c_str());
+    uint32_t paused=0;
+    require(execute(adaptive.data(),paused,0,[](uint32_t,void *){return false;})==2,"adaptive slice stop failed");
+    require(execute(adaptive.data(),paused,0,nullptr)==0,error.c_str());
     uint32_t container=0,tpi=0;
     require(ecm_cuda_edwards_tier(mpz_sizeinbase(n.v,2),container,tpi),"missing compiled Edwards tier");
     if(window)require(metrics.container_bits==container && metrics.tpi==tpi,"executed NAF tier differs from query");
     for(size_t i=0;i<size_t(count)*9;++i)require(!mpz_cmp(state[i],resumed[i]),"resumed result differs from uninterrupted run");
+    for(size_t i=0;i<size_t(count)*9;++i)require(!mpz_cmp(state[i],adaptive[i]),"adaptive resume differs from uninterrupted run");
     std::string lines;
     for(unsigned i=0;i<count;++i) {
         auto *p=state.data()+size_t(i)*9;
@@ -78,7 +82,7 @@ static void run(unsigned bits,unsigned b1,unsigned count,uint64_t sigma,int devi
     const auto name=std::string(boundary_input?"n":"m")+std::to_string(bits)+(other?"x"+std::to_string(other):"")+"_b"+std::to_string(b1)+
         (window?"_w"+std::to_string(window)+"_a"+std::to_string(algorithm):"");
     std::ofstream file(out/(name+".save"),std::ios::binary);file<<lines;file.close();require(bool(file),"save fixture write failed");
-    std::printf("PASS %s device=%d curves=%u columns=%u split_resume=17/113 cpu_match=1 tier=%u tpi=%u\n",name.c_str(),device,count,done,container,tpi);
+    std::printf("PASS %s device=%d curves=%u columns=%u split_resume=17/113 adaptive_restart=1 cpu_match=1 tier=%u tpi=%u\n",name.c_str(),device,count,done,container,tpi);
     std::fflush(stdout);
 }
 int main(int argc,char **argv) {
@@ -88,6 +92,11 @@ int main(int argc,char **argv) {
         // Short-scalar oracle: use the existing CPU implementation at w=2,
         // avoiding a fixed 1024-point CPU dictionary for 32-column tests.
         edwards_set_naf_w(2);
+        if(argc==4 && std::string(argv[3])=="--wait-slices") {
+            for(unsigned bits:{347,677,1279,9689})for(unsigned window:{0u,6u})
+                run(bits,200,3,17,device,out,0,window);
+            return 0;
+        }
         if(argc==4){
             const unsigned expected=unsigned(std::stoul(argv[3]));uint32_t w=0,t=0;
             require(ecm_cuda_edwards_tier(1,w,t) && w==expected,"restricted minimum/fallback failed");

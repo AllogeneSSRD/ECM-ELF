@@ -10,6 +10,7 @@ struct EcmEdwardsNafMetrics {
 // done counts MSB-first NAF columns (possibly one more than binary scalar
 // length). Rebuilding the dictionary never changes the supplied accumulator.
 // Windows 2..12; doubling 4 (square-based) or 5 (2XY). Both publish full XYZT.
+// chunk_bits=0 adapts slices toward 100 ms; positive values stay fixed.
 int ecm_cuda_edwards_stage1_naf(const mpz_t n,const mpz_t scalar,mpz_t *states,
         uint32_t count,uint32_t &done,uint32_t chunk_bits,int device,
         EcmEdwardsProgress progress,void *context,std::string &error,
