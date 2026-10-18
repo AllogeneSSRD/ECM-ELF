@@ -5,6 +5,7 @@
 namespace ecm_stage2 { namespace tune { namespace portable {
 struct WidthEstimate : Estimate {
     unsigned arithmetic_low=0,arithmetic_high=0;
+    Word runtime_samples=0;
     bool region_covered=false;
     const char *uncertainty="analytic_prior";
 };
@@ -77,6 +78,14 @@ public:
     }
     bool predict(const Shape &s,WidthEstimate &out)const {
         out=WidthEstimate{};Work w;if(!engine.cached_work(s,w))return false;
+        const auto runtime=engine.runtime_statistics(s);
+        if(runtime.count>=2 && w.p>=512 && w.exact_topology) {
+            out.seconds=runtime.seconds;out.mad=runtime.timing().mad;
+            out.runtime_samples=runtime.count;out.exact=out.region_covered=true;
+            out.anchors=runtime.count;out.arithmetic_low=out.arithmetic_high=s.arithmetic_bits;
+            out.relative_error=0;out.rank=out.seconds+2*out.mad;
+            out.model="runtime_shape_statistics_v1";out.uncertainty="observed_runtime_mad";return true;
+        }
         if(const auto measured=engine.observed(s,excluded)) {
             out.seconds=real(*measured,"median_seconds");out.mad=real(*measured,"mad_seconds");
             out.anchor=measured;out.anchors=1;out.exact=true;out.region_covered=true;

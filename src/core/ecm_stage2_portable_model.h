@@ -100,10 +100,16 @@ struct Estimate {
     const Fields *anchor=nullptr;
     const char *model="portable_components_v2";
 };
+struct RuntimeStatistics {
+    Word count=0,preferred_order=0;
+    double seconds=0,mad=0,minimum=0,maximum=0;
+    LocalSearch::Timing timing()const {return {seconds,1.4826*mad};}
+};
 class Estimator {
 public:
     using Query=std::function<bool(Word,int,Word*,Word*)>;
     const Profile &profile;Fields condition;Ignore ignore;Query query;
+    std::string runtime_binary;
     std::map<std::pair<Word,Word>,double> ntt;
     ShortNttBatchPolicy short_ntt;
     // Each estimator requires an immutable profile while ranking. A caller
@@ -168,6 +174,24 @@ public:
         if(a.mersenne!=x.mersenne)return false;
         if(!ignore.memory && (a.fold!=x.fold || a.frontier!=x.frontier))return false;
         return true;
+    }
+    RuntimeStatistics runtime_statistics(const Shape &x)const {
+        RuntimeStatistics out;if(runtime_binary.empty())return out;
+        std::vector<double> seconds;
+        for(const auto &s:profile.samples)if(runtime_observation(s) && measured(s) &&
+            s.count("measurement_binary_sha256") && text(s,"measurement_binary_sha256")==runtime_binary &&
+            matches(profile.conditions.at(uint(s,"condition")),condition,Ignore::parse(""))) {
+            const auto a=shape(s);
+            auto left=a.key(),right=x.key();left[3]=right[3]=0; // B1 never gates Stage2 cost reuse.
+            if(left!=right)continue;
+            seconds.push_back(real(s,"median_seconds"));
+            if(!optional_uint(s,"runtime_probe",1))out.preferred_order=std::max(out.preferred_order,
+                optional_uint(s,"runtime_completed_ns",optional_uint(s,"runtime_order")));
+        }
+        out.count=seconds.size();if(seconds.empty())return out;
+        out.seconds=median(seconds);out.mad=ecm_stage2::tune::mad(seconds);
+        out.minimum=*std::min_element(seconds.begin(),seconds.end());out.maximum=*std::max_element(seconds.begin(),seconds.end());
+        return out;
     }
     bool fitted(const Shape &x,const Work &target,double &seconds,double &error,const Fields *omit=nullptr)const {
         const std::array<Word,13> key={x.target_bits,x.arithmetic_bits,Word(x.mersenne),Word(bool(x.carrier)),

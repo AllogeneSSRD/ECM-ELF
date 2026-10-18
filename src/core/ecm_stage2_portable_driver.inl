@@ -154,12 +154,12 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     RuntimeTuneObservation result;
     const auto profile=portable_read(o.tune_profile);result.condition=portable_condition(o);
     pt::Estimator engine(profile,result.condition,pt::Ignore::parse(o.tune_ignore),portable_query);
-    pt::WidthPredictor predictor(engine);
+    engine.runtime_binary=ecm_stage2::sha256_file(executable());pt::WidthPredictor predictor(engine);
     // Selection normally fixes D. A protected legacy fallback may leave it 0.
     const auto d=o.d?o.d:portable_legacy_d(o,r,o.b2,o.carrier_exponent,false);
     auto shape=portable_shape(o,r,o.b2,d,o.carrier_exponent);pt::Work work;
-    if(!engine.cached_work(shape,work) || work.p<512 || !work.exact_topology || predictor.has_width_measurement(shape))return result;
-    std::string plan;if(!portable_admit(o,r,shape,plan) || predictor.has_width_measurement(shape))return result;
+    if(!engine.cached_work(shape,work) || work.p<512 || !work.exact_topology)return result;
+    std::string plan;if(!portable_admit(o,r,shape,plan) || engine.runtime_statistics(shape).count>=o.runtime_samples)return result;
     pt::WidthEstimate prediction;if(!predictor.predict(shape,prediction))return result;
     result.shape=shape;
     auto &s=result.sample;
@@ -173,6 +173,8 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     s["predicted_seconds"]=pt::numeric(prediction.seconds);s["prediction_model"]=pt::quoted(prediction.model);
     s["prediction_basis"]="\"before_measurement\"";
     s["measurement_binary_sha256"]=pt::quoted(ecm_stage2::sha256_file(executable()));
+    s["runtime_sample_id"]=pt::quoted(o.receipt.empty()?stage2_queue::token():o.receipt);
+    s["runtime_probe"]=o.runtime_probe?"1":"0";
     return result;
 }
 void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Metrics &m) {
@@ -185,6 +187,8 @@ void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Me
     for(const auto &field:metrics)observation.sample[field.first]=field.second;
     auto &sample=observation.sample;
     sample["median_seconds"]=pt::numeric(m.total_seconds);sample["min_seconds"]=sample["max_seconds"]=sample["median_seconds"];
+    sample["runtime_completed_ns"]=std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
     const auto predicted=et::real(sample,"predicted_seconds");
     sample["measured_model_ratio"]=pt::numeric(m.total_seconds/predicted);
     sample["validation_count"]="1";sample["validation_max_relative_error"]=pt::numeric(std::abs(predicted-m.total_seconds)/m.total_seconds);
@@ -201,10 +205,8 @@ std::string runtime_tune_json(const RuntimeTuneObservation &observation) {
 void publish_runtime_tune(const Options &o,const RuntimeTuneObservation &observation) {
     // Reload under the shared writer lock; never overwrite concurrent tune work.
     auto guard=portable_lock(o.tune_profile);auto profile=portable_read(o.tune_profile);
-    pt::Estimator engine(profile,observation.condition,pt::Ignore::parse(o.tune_ignore),portable_query);
-    pt::WidthPredictor predictor(engine);if(predictor.has_width_measurement(observation.shape))return;
     auto sample=observation.sample;sample["condition"]=std::to_string(profile.condition(observation.condition));
-    if(!profile.update(std::move(sample)))return;
+    if(!profile.update(std::move(sample),o.runtime_samples))return;
     portable_publish(o.tune_profile,profile);
     stage2_log::print(stage2_log::phases,"stage2_tune_runtime: arithmetic_bits=%u kind=%s D=%llu B2=%llu ratio=%.3f profile=%s\n",
         observation.shape.arithmetic_bits,observation.shape.mersenne?"mersenne":"generic",
@@ -257,10 +259,78 @@ uint64_t portable_default_d(const Options &o,const Record &r,uint64_t b2,unsigne
     }
     return winner;
 }
+std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &engine,pt::WidthPredictor &predictor) {
+    if(o.relocation || o.tune_child || o.tune_profile.empty())return {};
+    engine.runtime_binary=ecm_stage2::sha256_file(executable());
+    const auto carriers=portable_carriers(o,r);
+    std::vector<pt::RuntimeCandidate> candidates;
+    uint64_t ordinary_default=0;
+    for(auto carrier:carriers) {
+        const auto center=o.has_d && o.d?o.d:portable_default_d(o,r,o.b2,carrier,true);if(!center)continue;
+        if(!carrier || !ordinary_default)ordinary_default=center;
+        const auto original=portable_shape(o,r,o.b2,center,carrier);
+        std::map<uint64_t,unsigned> ds{{center,carrier?0u:1u}};
+        const et::Fields *historical=nullptr;bool tested_alternate=false;
+        for(const auto &sample:engine.profile.samples)if(pt::measured(sample) &&
+            pt::matches(engine.profile.conditions.at(et::uint(sample,"condition")),engine.condition,engine.ignore)) {
+            const auto shape=engine.shape(sample);
+            if(shape.target_bits!=original.target_bits || shape.arithmetic_bits!=original.arithmetic_bits ||
+               shape.carrier!=carrier || shape.b2!=o.b2 || (o.has_d && o.d && shape.d!=o.d))continue;
+            if(!historical || et::real(sample,"median_seconds")<et::real(*historical,"median_seconds"))historical=&sample;
+            if(pt::runtime_observation(sample) && sample.count("measurement_binary_sha256") &&
+               pt::text(sample,"measurement_binary_sha256")==engine.runtime_binary) {
+                if(!ds.count(shape.d))ds[shape.d]=2;
+                tested_alternate|=shape.d!=center;
+            }
+        }
+        if(historical && !ds.count(et::uint(*historical,"d")))ds[et::uint(*historical,"d")]=2;
+        // One model seed per family, followed by real observations. Do not
+        // chase a new optimistic unmeasured D after every completed trial.
+        if(!(o.has_d && o.d) && !tested_alternate) {
+            uint64_t best=center;double rank=std::numeric_limits<double>::infinity();
+            for(const auto &entry:ecm_stage2::d_catalog::entries()) {
+                const auto shape=portable_shape(o,r,o.b2,entry.d,carrier);pt::Work w;pt::WidthEstimate e;
+                if(!engine.cached_work(shape,w) || w.p<512 || !w.exact_topology || !predictor.predict(shape,e))continue;
+                if(e.rank<rank){rank=e.rank;best=entry.d;}
+            }
+            if(!ds.count(best))ds[best]=3;
+        }
+        for(const auto &entry:ds) {
+            auto shape=portable_shape(o,r,o.b2,entry.first,carrier);pt::Work w;std::string plan;
+            if(!engine.cached_work(shape,w) || w.p<512 || !w.exact_topology || !portable_admit(o,r,shape,plan))continue;
+            candidates.push_back({shape,engine.runtime_statistics(shape),entry.second});
+        }
+    }
+    const auto choice=pt::runtime_choice(candidates,o.tune_runtime);if(!choice.available)return {};
+    const auto &chosen=candidates[choice.index];const auto &shape=chosen.shape;
+    o.d=shape.d;o.carrier_exponent=shape.carrier;o.runtime_probe=choice.probe;
+    const char *reason=!choice.probe?"runtime_measured_hysteresis":chosen.priority==0?
+        "runtime_probe_carrier_first":chosen.priority==1?"runtime_probe_reference":"runtime_probe_candidate";
+    std::ostringstream out;out<<std::setprecision(17)<<"{\"type\":\"tune_selection\",\"selected\":true,\"policy\":\"model\""
+        <<",\"reason\":"<<json_string(reason)<<",\"default_D\":"<<ordinary_default
+        <<",\"B1\":"<<r.b1<<",\"B2\":"<<o.b2<<",\"D\":"<<shape.d
+        <<",\"P\":"<<ecm_stage2::d_catalog::degree(shape.d)<<",\"target_bits\":"<<shape.target_bits
+        <<",\"arithmetic_bits\":"<<shape.arithmetic_bits<<",\"carrier_exponent\":"<<shape.carrier
+        <<",\"source\":"<<json_string(choice.probe?"runtime_trial":"measured")
+        <<",\"model\":\"runtime_shape_statistics_v1\",\"runtime_probe\":"<<(choice.probe?"true":"false")
+        <<",\"runtime_samples\":"<<chosen.statistics.count<<",\"runtime_sample_limit\":"<<o.runtime_samples;
+    if(chosen.statistics.count)out<<",\"median_seconds\":"<<chosen.statistics.seconds<<",\"mad_seconds\":"<<chosen.statistics.mad;
+    out<<",\"runtime_candidates\":[";
+    for(size_t i=0;i<candidates.size();++i) {
+        if(i)out<<',';const auto &c=candidates[i];
+        out<<"{\"D\":"<<c.shape.d<<",\"carrier_exponent\":"<<c.shape.carrier
+            <<",\"priority\":"<<c.priority<<",\"samples\":"<<c.statistics.count;
+        if(c.statistics.count)out<<",\"median_seconds\":"<<c.statistics.seconds<<",\"mad_seconds\":"<<c.statistics.mad;
+        out<<'}';
+    }
+    out<<']';
+    return out.str()+'}';
+}
 std::string portable_width_select(Options &o,const Record &r) {
     const auto profile=portable_read(o.tune_profile);const auto condition=portable_condition(o);
     pt::Estimator engine(profile,condition,pt::Ignore::parse(o.tune_ignore),portable_query);
     pt::WidthPredictor predictor(engine);
+    const auto runtime=portable_runtime_select(o,r,engine,predictor);if(!runtime.empty())return runtime;
     const auto carriers=portable_carriers(o,r);const unsigned initial=carriers.front();
     const auto default_d=o.has_d && o.d?o.d:portable_default_d(o,r,o.b2,initial);
     auto baseline=portable_shape(o,r,o.b2,default_d,initial);std::string baseline_plan;
@@ -480,6 +550,12 @@ std::string select_tuned(Options &o,const Record &r){
     return result;
 }
 std::string select_auto_tuned(Options &o,const Record &r){return portable_select(o,r,true);}
+std::string select_runtime_tuned(Options &o,const Record &r) {
+    if(o.prediction_policy!="model")return {};
+    const auto profile=portable_read(o.tune_profile);
+    pt::Estimator engine(profile,portable_condition(o),pt::Ignore::parse(o.tune_ignore),portable_query);
+    pt::WidthPredictor predictor(engine);return portable_runtime_select(o,r,engine,predictor);
+}
 
 struct PortableInput {fs::path save;Record record;std::string kind;};
 void merge_portable_tune(const Options &o,const fs::path &destination) {
@@ -488,7 +564,7 @@ void merge_portable_tune(const Options &o,const fs::path &destination) {
     auto guard=portable_lock(destination);auto combined=portable_read(destination);
     for(const auto &path:o.tune_merge) {
         const auto source=pt::Profile::load(absolute_from(fs::current_path(),path));
-        for(auto s:source.samples){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update(std::move(s));}
+        for(auto s:source.samples){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update(std::move(s),o.runtime_samples);}
         for(auto s:source.ntt){s["condition"]=std::to_string(combined.condition(source.conditions.at(et::uint(s,"condition"))));combined.update_ntt(std::move(s));}
     }
     for(const auto &path:o.tune_ntt_profiles) {

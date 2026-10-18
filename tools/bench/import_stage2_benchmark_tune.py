@@ -102,9 +102,9 @@ def import_study(path, condition, audit):
     return samples
 
 
-def import_runtime(paths):
+def import_runtime(paths, sample_limit=10):
     """Recover optional cache writes from durable new production receipts."""
-    conditions, best, inputs = [], {}, []
+    conditions, best, inputs, counts = [], {}, [], {}
     for path in paths:
         raw = path.read_bytes()
         lines = raw.splitlines(keepends=True)
@@ -144,11 +144,16 @@ def import_runtime(paths):
             if condition not in conditions:
                 conditions.append(condition)
             sample['condition'] = conditions.index(condition)
-            key = tuple(sample[k] for k in ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent',
-                                           'modulus_kind', 'b1', 'b2', 'd', 'fold_resident',
-                                           'frontier_resident', 'execution_path'))
-            if key not in best or seconds < best[key]['median_seconds']:
+            group = tuple(sample.get(k) for k in ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent',
+                                           'modulus_kind', 'b2', 'd', 'fold_resident',
+                                           'frontier_resident', 'execution_path', 'giant_chunk_points',
+                                           'giant_chain_min', 'giant_force_ladder', 'measurement_binary_sha256'))
+            sample.setdefault('runtime_sample_id', row.get('queue_receipt') or hashlib.sha256(line).hexdigest())
+            sample.setdefault('runtime_probe', 1)
+            key = group + (sample['runtime_sample_id'],)
+            if key not in best and counts.get(group, 0) < sample_limit:
                 best[key] = sample
+                counts[group] = counts.get(group, 0) + 1
             admitted += 1
         inputs.append(dict(path=str(path.resolve()), sha256=hashlib.sha256(raw).hexdigest(),
                            observations=admitted, ignored_torn_line=torn))
@@ -162,15 +167,18 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--study', type=Path)
     mode.add_argument('--runtime-results', type=Path, action='append', help='New production JSONL; repeatable')
+    parser.add_argument('--runtime-samples', type=int, default=10, help='Independent runtime observations per matching scope (2..1000)')
     parser.add_argument('--condition-profile', type=Path)
     parser.add_argument('--audit-analysis', type=Path,
                         help='Completed analysis containing the frozen raw_artifact_hashes')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    if not 2 <= args.runtime_samples <= 1000:
+        parser.error('runtime-samples must be 2..1000')
     if args.runtime_results:
         if args.condition_profile or args.audit_analysis:
             parser.error('runtime-results carries its own condition; omit condition-profile/audit-analysis')
-        conditions, samples, inputs = import_runtime(args.runtime_results)
+        conditions, samples, inputs = import_runtime(args.runtime_results, args.runtime_samples)
         receipt = dict(runtime_inputs=inputs)
     else:
         if not args.condition_profile or not args.audit_analysis:

@@ -106,10 +106,27 @@ inline void validate_ntt_summary(const Fields &s) {
 inline void strip_ntt_auxiliary_timing(Fields &s) {
     for(const char *key:{"setup_seconds","warmup_seconds","verification_seconds"})s.erase(key);
 }
+inline std::string runtime_group(const Fields &s) {
+    std::string key;
+    for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
+                          "b2","d","fold_resident","frontier_resident","execution_path"})
+        key+=std::string(field)+'='+required(s,field)+';';
+    for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder","measurement_binary_sha256"}) {
+        const auto at=s.find(field);key+=std::string(field)+'='+(at==s.end()?"absent":at->second)+';';
+    }
+    return key;
+}
+inline std::string runtime_sample_id(const Fields &s) {
+    if(s.count("runtime_sample_id"))return text(s,"runtime_sample_id");
+    // Old one-shot summaries have no independent receipt. Identical legacy
+    // rows remain one observation when repeatedly imported or merged.
+    return "legacy:"+required(s,"b1")+':'+numeric(real(s,"median_seconds"))+':'+required(s,"checked");
+}
 inline std::string scope(const Fields &s) {
     // A single production observation must not prevent a slower but repeated
     // formal benchmark from establishing an exact paired reference.
-    std::string key=runtime_observation(s)?"runtime;":"formal;";
+    if(runtime_observation(s))return "runtime;"+runtime_group(s)+runtime_sample_id(s);
+    std::string key="formal;";
     for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
                           "b1","b2","d","fold_resident","frontier_resident","execution_path"}) {
         const auto &value=required(s,field);key+=std::to_string(value.size())+":"+value;
@@ -133,6 +150,10 @@ inline void validate(const Fields &s) {
         throw std::runtime_error("portable measurement lacks completed arithmetic evidence");
     if(runtime_observation(s) && (!measured(s) || uint(s,"repeats")!=1))
         throw std::runtime_error("runtime observation must be a single checked measurement");
+    if(runtime_observation(s) && s.count("runtime_sample_id") &&
+       (text(s,"runtime_sample_id").empty() || text(s,"runtime_sample_id").size()>256))
+        throw std::runtime_error("invalid runtime observation identity");
+    if(optional_uint(s,"runtime_probe")>1)throw std::runtime_error("invalid runtime probe marker");
     real(s,"mad_seconds");uint(s,"condition");text(s,"execution_path");
     for(const auto &field:s)if(!field.second.empty() && field.second.front()=='[')
         throw std::runtime_error("portable summaries must not contain sampling arrays");
@@ -223,9 +244,21 @@ struct Profile {
         if(conditions.size()>=256)throw std::runtime_error("too many portable tune conditions");
         const Word id=conditions.empty()?0:conditions.rbegin()->first+1;conditions.emplace(id,fields);return id;
     }
-    bool update(Fields sample) {
+    bool update(Fields sample,Word runtime_limit=10) {
         validate(sample);if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown measurement condition");
         const auto key=scope(sample);
+        if(runtime_observation(sample)) {
+            if(runtime_limit<2 || runtime_limit>1000)throw std::runtime_error("runtime sample limit must be 2..1000");
+            Word count=0;const auto group=runtime_group(sample);
+            for(const auto &old:samples)if(runtime_observation(old) && runtime_group(old)==group) {
+                if(scope(old)==key)return false;
+                ++count;
+            }
+            if(count>=runtime_limit)return false;
+            if(samples.size()>=65536)throw std::runtime_error("too many portable tune samples");
+            sample["runtime_order"]=std::to_string(revision+1);
+            samples.push_back(std::move(sample));++revision;return true;
+        }
         for(auto &old:samples)if(scope(old)==key) {
             if(measured(old) && (!measured(sample) || real(sample,"median_seconds")>=real(old,"median_seconds")))return false;
             if(!measured(old) && !measured(sample) && (!sample.count("model_evidence") ||
@@ -342,7 +375,7 @@ struct Profile {
         return out;
     }
     std::string serialize()const {
-        std::ostringstream out;out<<"# Stage2 parameter tables. One final summary per row, not per-run samples.\n"
+        std::ostringstream out;out<<"# Stage2 parameter tables. Formal summaries and bounded independent runtime observations.\n"
             <<"# Widths are calibration knots; values between knots are estimates.\n[profile]\n";
         Fields header=metadata;header["format"]=std::to_string(format);header["unit"]="\"full_stage2\"";
         header["algorithm_revision"]="1";header["revision"]=std::to_string(revision);

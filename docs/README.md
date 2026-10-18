@@ -24,7 +24,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Stage2 管线](architecture/STAGE2.md)：每一步的输入、输出、计算量、CPU/GPU 分工及可选 relocation/原区间重放。
 - [NTT](architecture/NTT.md)：精确卷积、Goldilocks 算术、布局和设备归约。
 - [内存与规划](architecture/MEMORY.md)：容量公式、生命周期模型、准入边界和证据。
-- [Auto B2 / tune](architecture/AUTO_B2.md)：收益目标、profile 合同、搜索和标定资格。
+- [Auto B2 / tune](architecture/AUTO_B2.md)：收益目标、profile合同、正常运行累计采样、承载优先试跑、实测波动选型与标定资格。
 - [配置维护](architecture/CONFIGURATION.md)：定义、生成物、解析器与构建一致性。
 - [OpenCL 算子](architecture/OPENCL.md)：路径注册、内核组装和设备约束。
 

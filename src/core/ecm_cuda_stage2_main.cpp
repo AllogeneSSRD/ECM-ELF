@@ -20,6 +20,7 @@
 #include "ecm_stage1_tune_profile.h"
 #include "ecm_stage2_portable_model.h"
 #include "ecm_stage2_width_prediction.h"
+#include "ecm_stage2_runtime_tune.h"
 #include "ecm_stage2_geometry.h"
 #include "ecm_stage2_logging.h"
 #include "ecm_stage2_console.h"
@@ -281,6 +282,8 @@ struct Options {
     bool short_batch_tune=false;
     bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;
     bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
+    uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
+    bool runtime_probe=false;
     std::string prediction_policy="model",tune_arithmetic="both";
     double tune_error=.08;
     std::set<std::string> portable_cli;
@@ -341,6 +344,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--cost-profile") o.cost_profile=value();
         else if (a == "--tune-profile") o.tune_profile=value();
         else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--tune-runtime-samples") {o.runtime_samples=num();if(o.runtime_samples<2 || o.runtime_samples>1000)throw std::runtime_error("tune-runtime-samples must be 2..1000");o.portable_cli.insert(a);}
         else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
         else if (a == "--ntt-counts") {const auto n=num();if(n>1)throw std::runtime_error("ntt-counts must be 0 or 1");o.ntt_counts=n!=0;o.portable_cli.insert(a);}
         else if (a == "--relocation") {const auto n=num();if(n>1)throw std::runtime_error("relocation must be 0 or 1");o.relocation=n!=0;o.portable_cli.insert(a);}
@@ -601,6 +605,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
     arg(L"--pack-zero",o.pack_zero?1:0);
     arg(L"--tune-runtime",o.tune_runtime?1:0);
+    arg(L"--tune-runtime-samples",o.runtime_samples);
     cmd+=L" --tune-ignore "+quote(fs::path(o.tune_ignore).wstring());
     if(!o.stage1_csv.empty())cmd+=L" --stage1-cost-csv "+quote(fs::path(o.stage1_csv).wstring());
     if(!o.condition_tag.empty())cmd+=L" --tune-condition-tag "+quote(fs::path(o.condition_tag).wstring());
@@ -827,6 +832,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     return c::json(plan,hash);
 }
 std::string select_tuned(Options &o,const Record &r);
+std::string select_runtime_tuned(Options &o,const Record &r);
 void configure_short_ntt_batches(const Options &o);
 struct RuntimeTuneObservation {
     ecm_stage2::tune::portable::Shape shape;
@@ -886,7 +892,7 @@ int curve_worker(Options o) {
     configure_short_ntt_batches(o);
     if(!o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
     o.has_d=requested_d!=0;
-    const auto tuned_json=o.tune_child || !auto_json.empty()?std::string{}:select_tuned(o,r);
+    const auto tuned_json=o.tune_child?std::string{}:auto_json.empty()?select_tuned(o,r):select_runtime_tuned(o,r);
     if(!tuned_json.empty())std::cout<<tuned_json<<std::endl;
     const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
@@ -1031,7 +1037,8 @@ void help() {
         "Selection: --tune-profile FILE.toml --tune-ignore gpu,driver,cuda,backend,environment\n"
         "           B1 never gates reuse; unmeasured widths/B2 retain estimate/uncertainty labels.\n"
         "           --prediction-policy model|paired (default model); model supplies a no-tune basic prior.\n"
-        "           --tune-runtime 0|1 (default 1): completed curves fill missing width/NTT/residency regions.\n"
+        "           --tune-runtime 0|1 (default 1): accumulate checked NF curves and test legal carriers first.\n"
+        "           --tune-runtime-samples N (2..1000, default 10): per-condition/path observation cap.\n"
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
         "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in INI).\n"
@@ -1141,6 +1148,7 @@ int driver(Options o) {
     if(!o.portable_cli.count("--prediction-policy"))o.prediction_policy=s.prediction_policy;
     if(!o.portable_cli.count("--tune-arithmetic"))o.tune_arithmetic=s.tune_arithmetic;
     if(!o.portable_cli.count("--tune-runtime"))o.tune_runtime=s.tune_runtime;
+    if(!o.portable_cli.count("--tune-runtime-samples"))o.runtime_samples=s.runtime_samples;
     if(o.prediction_policy!="model" && o.prediction_policy!="paired")throw std::runtime_error("prediction-policy must be model or paired");
     if(o.tune_arithmetic!="both" && o.tune_arithmetic!="generic" && o.tune_arithmetic!="mersenne")throw std::runtime_error("tune-arithmetic must be both, generic or mersenne");
     if(!o.portable_cli.count("--tune-ignore"))o.tune_ignore=s.tune_ignore;
@@ -1166,6 +1174,7 @@ int driver(Options o) {
     if(ecm_cuda_stage2_check_configuration())throw std::runtime_error("Stage2 engine configuration rejected");
     if(s.factorize_hits)o.factorize_hits=true;
     if(s.factor_only)o.factor_only=true;
+    if(o.factor_only && _putenv_s("NTT_NAME_HITS","0"))throw std::runtime_error("cannot disable optional prime-witness naming");
     o.auto_b2=o.auto_b2||s.auto_b2;
     if(!o.auto_min)o.auto_min=s.auto_min;if(!o.auto_max)o.auto_max=s.auto_max;
     if(!o.has_owner){if(s.has_owner)o.owner_mb=s.owner_mb;else if(const char *v=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))o.owner_mb=ecm_stage2::cost::integer(v);}
@@ -1470,7 +1479,10 @@ int driver(Options o) {
             if(o.plan_only) {
                 Options local=o;local.b2=b2;local.has_d=d!=0;
                 configure_short_ntt_batches(local);
-                if(o.auto_b2&&!b2){std::cout<<select_auto(local,r,false)<<std::endl;if(o.tune_profile.empty())continue;}
+                if(o.auto_b2&&!b2){
+                    std::cout<<select_auto(local,r,false)<<std::endl;if(o.tune_profile.empty())continue;
+                    const auto tuned=select_runtime_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;
+                }
                 else {const auto tuned=select_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;}
                 std::string result;
                 if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");

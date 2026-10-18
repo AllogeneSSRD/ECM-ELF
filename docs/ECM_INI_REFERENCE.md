@@ -916,14 +916,29 @@ target_bits和carrier_exponent保留测量身份。估算替换遵循stage2_pred
 stage2_tune_runtime=[false|true]; default=true
 ```
 
-Use complete, checked, no-factor production curves to fill missing arithmetic-width/NTT/residency<br>
-regions in stage2_tune_profile. Saves one summary per missing region, without extra curves or<br>
-warmup. Generic and Mersenne families are separate; B1 never gates coverage. Single-curve timings<br>
-calibrate the region model, not an exact paired win. Writes are atomic and locked; cache failures do<br>
-not fail a completed curve. false disables collection and writes.<br>
-用完整、通过算术检查且无因子的生产曲线补充stage2_tune_profile缺失的算术位宽/NTT/驻留区间。每个缺失区<br>
-间保存一份摘要，不额外执行曲线或预热；普通与梅森家族分别记录，B1不作为覆盖门槛。单曲线计时用于区间模<br>
-型校准，不作为精确配对收益证明。锁定后原子写回，缓存失败不使已完成曲线失败；false关闭采集与写回。
+Accumulate independent checked no-factor production curves in stage2_tune_profile, bounded by<br>
+stage2_tune_runtime_samples per exact device/environment/build/arithmetic/path. Model selection<br>
+tests a legal Mersenne carrier first, then ordinary and promising D candidates using pending curves.<br>
+At least two samples establish a median/MAD comparison with switching hysteresis. B1 never gates<br>
+reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables<br>
+runtime trials, collection and writes.<br>
+按相同设备、环境、构建、算术和执行形状，在stage2_tune_profile累计独立且通过检查的无因子生产曲线，每<br>
+组上限由stage2_tune_runtime_samples指定。model选型优先试跑合法梅森承载，再用待处理曲线比较普通路径和<br>
+有希望的D；至少两个样本后按中位数/MAD及切换余量比较。B1不限制复用；锁定后原子写回，缓存失败不使已完<br>
+成曲线失败。false关闭运行试跑、采集与写回。
+
+### stage2_tune_runtime_samples
+
+```text
+stage2_tune_runtime_samples=[2..1000]; default=10
+```
+
+Maximum independent runtime NF observations per matching device/environment/build/arithmetic/path,<br>
+including slower samples. Collection stops at this cap; existing evidence is retained. Two samples<br>
+are required for direct measured selection. Formal tune repetitions remain separate. CLI:<br>
+--tune-runtime-samples N.<br>
+每组相同设备、环境、构建、算术和执行形状的独立运行NF样本上限，包含较慢样本；达到上限后停止采集，已有<br>
+证据保留。至少两次用于直接实测选型；正式tune重复数独立维护。CLI：--tune-runtime-samples N。
 
 ### stage2_short_ntt_batch_tune
 

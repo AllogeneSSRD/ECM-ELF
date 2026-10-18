@@ -126,19 +126,49 @@ CSV 必填 `b1,mhz,tpi,curves,seconds_per_curve`，另提供 `container_bits` �
 
 NTT表只测Goldilocks有限域卷积，没有大整数进位carry或模N归约，不按梅森承载再重复一份；算术路径的速度差由完整ECM摘要和对应组件工作量体现。路径scope与参数表入口为`src/core/ecm_stage2_tune_portable.h::scope/Profile::update/serialize`。
 
-### 正常运行补充缺失位宽
+### 正常运行累计采样与候选试跑
 
-`stage2_tune_runtime=true`默认开启，CLI为`--tune-runtime 0|1`。使用队列或直接读取save计算的现有曲线，不额外计算曲线或预热。按当前允许复用的条件检查普通/梅森家族各自的**算术位宽、NTT/树区间、fold/frontier驻留、giant路线、物理缓冲和短NTT策略**；没有该算术位宽及执行区间的完整实测时，采集当前生产曲线。具体N、sigma、B1不作为覆盖门槛，B2和D通过工作量及区间决定覆盖关系。
+`stage2_tune_runtime=true` 默认开启；CLI 为 `--tune-runtime 0|1`。`stage2_tune_runtime_samples=10` 指定每组独立 NF 样本上限，范围2–1000，CLI 为 `--tune-runtime-samples N`。候选先取得两次观察，胜出路线随继续执行累计至上限。达到上限后停止该组采集，已有证据保留；调低上限不删除已有样本。关闭采集仍可读取已累计数据选型，但不再安排新试跑或写回。
 
-仅采集P≥512、具有完整多批请求拓扑的曲线；G=1及D210启动探针不作为区间锚点。结果必须无因子、clean=1、自检和抽查量为正、bad=0、互斥阶段计时完整，且实际D/P/giant数量及fold/frontier状态与原生准入计划相符；发生路径回退则跳过采集。规划、失败、中断、save中提前发现因子、调优子进程、因子命中不加入生产计时摘要。
+同组要求相同设备、驱动/工具链/后端与环境、程序二进制、目标/算术位宽、承载指数、实际B2/D、packing与物理分块、giant路线及fold/frontier执行形状。B1、具体N和sigma不作为Stage2成本复用门槛；仍须分别验证当前目标、save和承载整除关系。跨构建或环境资料可提出候选、校正预测，不能与当前组混成低波动的精确样本。
 
-运行摘要使用`source=measured`、`benchmark_kind=runtime_save`、`repeats=1`、`mad_seconds=0`。这里MAD=0仅表示单个样本没有离散度估计。它参与区间成本校正及显式tune的成本预测，保留工程误差余量，**不作为精确配对实测收益证据**。运行摘要与正式调优摘要分别维护，单曲线最快时间不会阻止后续重复调优建立正式参考；各自同条件同候选仍只接受更快计时。
+固定B2、`model`策略下，用待处理曲线建立完整Stage2对照，不额外重算同一生产曲线：先试合法梅森承载的默认D，再建立普通默认D基线，随后补测已记录的较快D和每个算术家族的一个模型起点。每条待比较路线至少需要两个合格NF；因子命中或失败不计数。模型起点不因一次预测偏低而不断扩展，已测路线继续参与比较。候选逐条通过当前原生显存/执行计划准入；承载优先级不预设任何百分比收益。
 
-覆盖后同一算术位宽/区间的后续曲线不继续写入，TOML不记录逐曲线历史。曲线结果先持久保存，之后取得既有tune独占锁、重新读取最新文件、重新检查覆盖、原子写回；并发tune已有覆盖时跳过。缓存占用或写回错误仅提示，不改变成功结果或队列曲线计数。生产JSONL的`tune_observation`保留条件、摘要和测量前预测，可在写回失败后由[导入工具](../../tools/bench/import_stage2_benchmark_tune.py)的`--runtime-results FILE`提取，再经原生`--tune-merge`汇集。没有该结构的旧普通运行结果不能仅凭外层seconds自动导入；已有冻结性能扫描仍走该工具的`--study`入口。
+显式D锁限制候选D；显式`--carrier-exponent 0|p`锁定算术。关闭`stage2_auto_carrier`时不自动加入承载。独立save不从文件名或位数猜指数；合法worktodo提供并验证p。`paired`策略仍使用正式配对调优规则。Auto B2先选择覆盖上界，再允许在同一实际B2下进行上述正常运行比较。
 
-全位宽扫描、普通/承载对照及短NTT基准工具在实验INI中设置`stage2_tune_runtime=false`，使正式比较的性能文件保持冻结。其他计时工具使用相同配置即可关闭运行采集。
+### 实测统计与路径保留
 
-实现入口：`ecm_stage2_portable_driver.inl::prepare_runtime_tune/complete_runtime_tune/publish_runtime_tune/portable_complete_ratios`；`ecm_cuda_stage2_main.cpp::curve_worker`负责采集及结果回执；`ecm_stage2_width_prediction.h::has_width_measurement`定义缺失区间，`ecm_stage2_portable_model.h::observed`排除运行摘要的精确配对资格。源码位于`src/core/`。此入口已编译，完整GPU采集、并发锁及中断恢复的运行验证仍列入[TODO](../TODO.md)。
+TOML中每个运行观察仍为独立标量行：`source=measured`、`benchmark_kind=runtime_save`、`repeats=1`、`mad_seconds=0`，带`runtime_sample_id`去重身份。较慢样本同样保留，上限在锁内重新检查。单行的MAD=0不表示无波动；选型时从组内所有独立观察计算中位数m和MAD，至少两次才建立`runtime_shape_statistics_v1`实测估计。
+
+切换使用实际波动尺度 `σ̂=1.4826·MAD`，候选A替换当前B的条件为 `m_A+2σ̂_A < 0.98·m_B−2σ̂_B`。这是工程切换门槛，不是统计置信区间。当前构建和形状的合格运行组不再叠加双侧15%的跨条件模型余量；未取得重复实测的输入仍走原预测保护。
+
+已成功完成、且属于实测选型的路线作为优先保留对象；波动范围重叠时保持它，出现明确更快的路线再切换。首轮尚无此对象时以普通基线开始比较；承载首个试跑不代表必须采用。`runtime_probe`区分试跑与实测选择，完成时间和`runtime_order`用于保留已完成路线；日志`tune_selection.runtime_candidates`展示当前准入候选的D、承载指数、优先级、样本数、中位数及MAD。此路径的`selected=true`表示本次选型或试跑已应用，不等于已经证明加速。
+
+运行记录和正式tune摘要分别维护。正式重复调优继续按原规则保留最快摘要；运行观察按去重身份累计，不以最快单次替代整个组。旧单次运行摘要作为一个观察保留；不同构建不会因版本升级而自动冒充当前构建的重复实测。新的算术或环境应重新取得重复样本。
+
+### 验证与持久化
+
+只采集P≥512且具有完整多批请求拓扑的曲线；G=1及D210启动探针不作为完整区间锚点。结果必须无因子、clean=1、自检和抽查量为正、bad=0、互斥阶段计时完整，且实际D/P/giant数量及fold/frontier状态与原生准入计划相符。规划、失败、中断、save中提前发现因子、调优子进程、因子命中和改变规划路径的回退不加入NF样本。
+
+计时保持`stage2_full_wall.total=init+main`，不包含Stage1、进程启动、选型和发布；每个观察保存采集前预测及完整数学检查。曲线结果先持久保存，再取得tune独占锁、重新读取文件、去重、检查上限并原子写回。锁占用或写回错误只提示，不改变已完成曲线或队列计数。
+
+生产JSONL的`tune_observation`可由[导入工具](../../tools/bench/import_stage2_benchmark_tune.py)的`--runtime-results FILE --runtime-samples 10`恢复，再经原生`--tune-merge`汇集。重复导入同一观察不增加计数；导入保留上限内的独立较慢样本，不只保留最快一条。原始曲线、日志和失败证据放在忽略目录；TOML仅保存有上限的必要标量观察及正式摘要。
+
+实现入口为`ecm_stage2_portable_driver.inl::portable_runtime_select/prepare_runtime_tune/complete_runtime_tune/publish_runtime_tune`，统计在`ecm_stage2_portable_model.h::runtime_statistics`，切换规则在`ecm_stage2_runtime_tune.h::runtime_choice`，均位于`src/core/`。CPU门禁、GPU生产流程及离线恢复脚本为`tools/test/test_stage2_runtime_tune.py`、`test_stage2_runtime_selection_gpu.py`、`test_stage2_runtime_task.py`和`test_stage2_runtime_import.py`；各脚本要求新的`--output data/experiments/<目录>`。
+
+基准扫描须设置`stage2_tune_runtime=false`并冻结性能文件。此时仍可使用该文件已有的合格实测组；若需要完全固定D/算术，应同时显式锁定它们。
+
+### 当前验证范围
+
+0.37.0在GPU1 RTX4060 Laptop上通过两组功能门禁，采用相同保存点的独立进程重复执行，不计作新的独立ECM覆盖或性能基准。窄位队列15次NF验证默认10样本上限、承载优先、达到上限停止采样及稳定选型；另验证显式D/算术锁、关闭写入仍读取统计、Montgomery Auto B2计划和因子命中不入样本。
+
+4916-bit、B1=260000000、B2=1300000000000的9次NF复测，依次取得承载默认D1141140、普通默认D690690、普通D1381380各两次观察，最后三条稳定采用p=5351承载及D1141140。该门禁将每组上限设为3，最终分别保存承载3条、两种普通D各2条。旧摘要及原生产文件保持不变；承载优先并未强制窄位测试也采用承载。
+
+独立审计检查两组24次NF、19条独立观察、14次实测选择，GMP抽查合计510258，错误0；观察统计与日志一致，未选择被其他实测路线明确压倒的候选。CPU门禁另验证默认10次上限、较慢样本保留、重复身份拒绝、旧摘要/不同B1迁移、构建/设备隔离及波动重叠时保留当前路线。离线导入与原生合并重复同一批12条观察不增加计数，未通过检查的观察被拒绝。
+
+证据在`data/experiments/stage2_runtime_selection_20261018/`：`gpu_final03/`、`task4916_final03/`及对应`audit_*.json`，CPU为`cpu_final02/`、`portable_final01/`，恢复为`import_final03/`。生产构建sm89、CUDA13.3.73、MSVC14.51.36231、PTX3/addsub1、GMP Zen3，冻结84份编译依赖；EXE SHA256为`82ffa97f76a6aa01ed51a20c3d36cd9edcbf74f18c37e41a62118a5ceb8c7816`。内核对象与0.36.1逐字一致，仅重编译主机单元。本地`build_cuda_cmake/local_stage2_0_37_0/ecm_cuda_stage2.exe`经正式入口核验并复用同一EXE。
+
+上述为功能和算术验证；频率、功耗和调优候选未按性能研究协议冻结，不据此给出通用加速百分比。真实并发写锁、强制中断、其他设备与显存边界的扩大验证仍列入TODO。
 
 ### 等级与通用网格
 
