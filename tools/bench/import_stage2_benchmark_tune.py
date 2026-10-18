@@ -3,14 +3,15 @@
 No GPU work. Accepts the N-scaling collector's verified no-factor formal runs;
 warmups, factor-producing controls and incomplete studies are not timing anchors.
 Also accepts new production results containing checked tune_observation receipts.
-The output is an intermediate format-7 profile; the native --tune-merge command
-validates, compacts and keeps the fastest candidate when merging this evidence.
+The output is an intermediate format-8 profile; the native --tune-merge command
+validates, compacts and merges repeat-weighted mean/variance when combining this evidence.
 """
 import argparse
 import hashlib
 import json
 import math
 from pathlib import Path
+from stage2_tune_matrix import aggregate, write_profile
 import re
 import statistics
 import tomllib
@@ -89,7 +90,7 @@ def import_study(path, condition, audit):
         if len(chunks) != 1:
             raise ValueError('Mixed giant routes in one candidate')
         times = [float(row['wall']['total']) for row, _ in runs]
-        median = statistics.median(times)
+        mean = statistics.fmean(times)
         samples.append(dict(condition=0, target_bits=bits, arithmetic_bits=carrier or bits,
             carrier_exponent=carrier, modulus_kind=kind, b1=b1, b2=b2, d=d, p=runs[0][0]['P'],
             fold_resident=fold, frontier_resident=frontier,
@@ -97,7 +98,7 @@ def import_study(path, condition, audit):
             source='measured', benchmark_kind='frozen_full_curve_benchmark', clean=1, bad=0, hits=0,
             selftest_cases=min(int(row['s4']['gmp_selftest_cases']) for row, _ in runs),
             checked=min(int(row['s4']['gmp_checked']) for row, _ in runs), repeats=len(runs),
-            median_seconds=median, mad_seconds=statistics.median(abs(t-median) for t in times),
+            mean_seconds=mean, stddev_seconds=statistics.stdev(times) if len(times)>1 else 0,
             giant_chunk_points=chunks.pop(), giant_chain_min=32768, giant_force_ladder=0))
     return samples
 
@@ -124,13 +125,15 @@ def import_runtime(paths, sample_limit=10):
                     sample['clean'] != 1 or sample['bad'] or sample['hits'] or
                     not sample['selftest_cases'] or not sample['checked'] or sample['repeats'] != 1):
                 raise ValueError('Unchecked runtime observation')
+            if condition.get('program_version') != sample.get('program_version'):
+                raise ValueError('Runtime condition/program version mismatch')
             n, carrier = int(row['N_hex'], 16), row['carrier_exponent']
             if (sample['target_bits'] != n.bit_length() or sample['arithmetic_bits'] != (carrier or n.bit_length()) or
                     sample['carrier_exponent'] != carrier or not 0 <= carrier <= 16384 or
                     (carrier and ((1 << carrier) - 1) % n) or
                     sample['b1'] != row['B1'] or sample['b2'] != row['B2']):
                 raise ValueError('Runtime target/bounds identity mismatch')
-            seconds, predicted = sample['median_seconds'], sample['predicted_seconds']
+            seconds, predicted = sample['mean_seconds'], sample['predicted_seconds']
             phases = ('shape', 'setup', 'baby', 'ftree', 'main_setup', 'inverse_setup',
                       'giant_loop', 'descent', 'accum', 'finalize')
             values = [sample[f'phase_{key}_seconds'] for key in phases]
@@ -145,9 +148,9 @@ def import_runtime(paths, sample_limit=10):
                 conditions.append(condition)
             sample['condition'] = conditions.index(condition)
             group = tuple(sample.get(k) for k in ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent',
-                                           'modulus_kind', 'b2', 'd', 'fold_resident',
+                                           'modulus_kind', 'b1', 'b2', 'd', 'fold_resident',
                                            'frontier_resident', 'execution_path', 'giant_chunk_points',
-                                           'giant_chain_min', 'giant_force_ladder', 'measurement_binary_sha256'))
+                                           'giant_chain_min', 'giant_force_ladder', 'program_version'))
             sample.setdefault('runtime_sample_id', row.get('queue_receipt') or hashlib.sha256(line).hexdigest())
             sample.setdefault('runtime_probe', 1)
             key = group + (sample['runtime_sample_id'],)
@@ -159,7 +162,7 @@ def import_runtime(paths, sample_limit=10):
                            observations=admitted, ignored_torn_line=torn))
     if not best:
         raise ValueError('No new complete runtime tune observations; older wall times alone cannot be imported')
-    return conditions, list(best.values()), inputs
+    return conditions, aggregate(list(best.values())), inputs
 
 
 def main():
@@ -194,33 +197,22 @@ def main():
             raise ValueError('Analysis is not the matching completed study')
         audit={str(Path(r['log'])):r for r in analysis['raw_artifact_hashes']}
         samples = import_study(study, condition, audit)
+        versions={r.get('result',{}).get('program',{}).get('version') for r in data['runs'] if r['category']=='timing'}
+        if not condition.get('program_version') or versions!={condition['program_version']}:
+            raise ValueError('Frozen results must record the matching program.version; old unversioned studies are unsupported')
         conditions = [condition]
         receipt = dict(study=str(study.parent), manifest_sha256=sha(study), binary_sha256=data['executable_sha256'],
                        audit_analysis=str(args.audit_analysis.resolve()), audit_sha256=sha(args.audit_analysis),
                        condition_profile_sha256=sha(args.condition_profile))
-    lines = ['# Final summaries imported from checked full-curve evidence.',
-             '[profile]', 'format = 7', 'algorithm_revision = 1', 'unit = "full_stage2"',
-             'revision = 0']
-    for i, condition in enumerate(conditions):
-        lines += [f'\n[condition.{i}]']
-        lines += [f'{key} = {literal(value)}' for key, value in sorted(condition.items())]
-    for i, sample in enumerate(samples):
-        keys = ['d','p','b2','median_seconds','mad_seconds']
-        keys += [k for k in ('predicted_seconds', 'measured_model_ratio') if k in sample]
-        lines += [f'\n[width.{sample["target_bits"]}.table.{i}]']
-        lines += [f'{key} = {literal(value)}' for key, value in sorted(sample.items())
-                  if key not in keys]
-        lines += ['matrix = [', '    ['+', '.join(map(literal, keys))+'],',
-                  '    ['+', '.join(literal(sample[k]) for k in keys)+'],', ']']
     args.output.parent.mkdir(parents=True, exist_ok=True)
     evidence=args.output.with_suffix('.evidence.json')
     if args.output.exists() or evidence.exists():
         raise FileExistsError('Import requires new summary/evidence output paths')
     with args.output.open('x', encoding='utf-8') as stream:
-        stream.write('\n'.join(lines)+'\n')
+        stream.write(write_profile(conditions,samples))
     receipt.update(summary_sha256=sha(args.output), importer_sha256=sha(__file__),
                  candidates=[{key:s[key] for key in ('target_bits','arithmetic_bits','carrier_exponent',
-                     'b1','b2','d','p','execution_path','median_seconds','mad_seconds','repeats')} for s in samples])
+                     'b1','b2','d','p','execution_path','mean_seconds','stddev_seconds','repeats')} for s in samples])
     with evidence.open('x',encoding='utf-8') as stream:
         json.dump(receipt,stream,ensure_ascii=False,indent=2);stream.write('\n')
     print(f'Imported {len(samples)} final candidates: {args.output}')

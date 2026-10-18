@@ -88,7 +88,7 @@ def main():
             'summaries':measured,'evidence':str(evidence)}
     (out/'report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     print(json.dumps({'passed':True,'formal_curve_calls':len(receipts),'warmups_executed':0,
-                      'summaries':[{k:s[k] for k in ('carrier_exponent','median_seconds','mad_seconds','repeats')} for s in measured]},indent=2))
+                      'summaries':[{k:s[k] for k in ('carrier_exponent','mean_seconds','stddev_seconds','repeats')} for s in measured]},indent=2))
 
 
 if __name__=='__main__':

@@ -80,20 +80,20 @@ public:
         out=WidthEstimate{};Work w;if(!engine.cached_work(s,w))return false;
         const auto runtime=engine.runtime_statistics(s);
         if(runtime.count>=2 && w.p>=512 && w.exact_topology) {
-            out.seconds=runtime.seconds;out.mad=runtime.timing().mad;
+            out.seconds=runtime.seconds;out.stddev=runtime.timing().stddev;
             out.runtime_samples=runtime.count;out.exact=out.region_covered=true;
             out.anchors=runtime.count;out.arithmetic_low=out.arithmetic_high=s.arithmetic_bits;
-            out.relative_error=0;out.rank=out.seconds+2*out.mad;
-            out.model="runtime_shape_statistics_v1";out.uncertainty="observed_runtime_mad";return true;
+            out.relative_error=0;out.rank=out.seconds+2*out.stddev;
+            out.model="runtime_shape_mean_v2";out.uncertainty="observed_runtime_stddev";return true;
         }
         if(const auto measured=engine.observed(s,excluded)) {
-            out.seconds=real(*measured,"median_seconds");out.mad=real(*measured,"mad_seconds");
+            out.seconds=real(*measured,"mean_seconds");out.stddev=real(*measured,"stddev_seconds");
             out.anchor=measured;out.anchors=1;out.exact=true;out.region_covered=true;
             out.arithmetic_low=out.arithmetic_high=s.arithmetic_bits;out.model="exact_shape_measurement_v1";
             const bool same=matches(engine.profile.conditions.at(uint(*measured,"condition")),engine.condition,
                                     Ignore::parse("environment,memory"));
-            out.relative_error=same?0:.15;out.uncertainty=same?"sample_mad":"changed_hardware_prior";
-            out.rank=out.seconds*(1+out.relative_error)+2*out.mad;return true;
+            out.relative_error=same?0:.15;out.uncertainty=same?"sample_stddev":"changed_hardware_prior";
+            out.rank=out.seconds*(1+out.relative_error)+2*out.stddev;return true;
         }
         out.seconds=basic(s,w);if(!(out.seconds>0) || !std::isfinite(out.seconds))return false;
         double distance=100,geometry=100;
@@ -118,7 +118,7 @@ public:
                 if(!engine.cached_work(shape,before) || before.p<512 || !before.exact_topology ||
                    region(shape,before)!=region(s,w))continue;
                 const double baseline=basic(shape,before);
-                if(baseline>0 && std::isfinite(baseline))anchors.push_back({&sample,shape,before,real(sample,"median_seconds")/baseline});
+                if(baseline>0 && std::isfinite(baseline))anchors.push_back({&sample,shape,before,real(sample,"mean_seconds")/baseline});
             }
             at=regions.emplace(region(s,w),std::move(anchors)).first;
         }
@@ -150,18 +150,18 @@ public:
             // Dispersion is model disagreement, never independent validation.
             if(a!=b)out.relative_error=std::max(out.relative_error,
                 .5*std::abs(a->correction-b->correction)/std::max(a->correction,b->correction));
-            out.mad=std::max(real(*a->sample,"mad_seconds")/real(*a->sample,"median_seconds"),
-                             real(*b->sample,"mad_seconds")/real(*b->sample,"median_seconds"))*out.seconds;
+            out.stddev=std::max(real(*a->sample,"stddev_seconds")/real(*a->sample,"mean_seconds"),
+                             real(*b->sample,"stddev_seconds")/real(*b->sample,"mean_seconds"))*out.seconds;
             out.uncertainty="width_distance_and_anchor_dispersion";
             if(!matches(engine.profile.conditions.at(uint(*a->sample,"condition")),engine.condition,
                         Ignore::parse("environment,memory")) ||
                !matches(engine.profile.conditions.at(uint(*b->sample,"condition")),engine.condition,
                         Ignore::parse("environment,memory")))out.relative_error=std::min(.8,out.relative_error+.15);
         }
-        out.rank=out.seconds*(1+out.relative_error)+2*out.mad;
+        out.rank=out.seconds*(1+out.relative_error)+2*out.stddev;
         return out.seconds>0 && std::isfinite(out.rank);
     }
-    static double lower(const WidthEstimate &e){return std::max(0.,e.seconds*(1-e.relative_error)-2*e.mad);}
+    static double lower(const WidthEstimate &e){return std::max(0.,e.seconds*(1-e.relative_error)-2*e.stddev);}
     static bool improves(const WidthEstimate &a,const WidthEstimate &b) {
         return a.region_covered && b.region_covered && a.rank<.98*lower(b);
     }

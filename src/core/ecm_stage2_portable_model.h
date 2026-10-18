@@ -95,21 +95,21 @@ inline double relative_work(const Work &a,const Work &b) {
         .06*poly(RequestDescent)+.02*ratio(a.accum,b.accum);
 }
 struct Estimate {
-    double seconds=0,mad=0,relative_error=0.25,rank=0;
+    double seconds=0,stddev=0,relative_error=0.25,rank=0;
     Word anchors=0;bool validated=false,exact=false,extrapolated=false;
     const Fields *anchor=nullptr;
     const char *model="portable_components_v2";
 };
 struct RuntimeStatistics {
     Word count=0,preferred_order=0;
-    double seconds=0,mad=0,minimum=0,maximum=0;
-    LocalSearch::Timing timing()const {return {seconds,1.4826*mad};}
+    double seconds=0,stddev=0;
+    LocalSearch::Timing timing()const {return {seconds,stddev};}
 };
 class Estimator {
 public:
     using Query=std::function<bool(Word,int,Word*,Word*)>;
     const Profile &profile;Fields condition;Ignore ignore;Query query;
-    std::string runtime_binary;
+    std::string runtime_version;
     std::map<std::pair<Word,Word>,double> ntt;
     ShortNttBatchPolicy short_ntt;
     // Each estimator requires an immutable profile while ranking. A caller
@@ -123,7 +123,7 @@ public:
     Estimator(const Profile &p,Fields current,Ignore ign,Query q):profile(p),condition(std::move(current)),ignore(ign),query(std::move(q)) {
         for(const auto &s:p.samples)profile_samples.insert(&s);
         for(const auto &s:p.ntt)if(ntt_matches(p.conditions.at(uint(s,"condition")),condition,ignore)) {
-            const auto key=ntt_scope(s);const double v=real(s,"median_seconds");
+            const auto key=ntt_scope(s);const double v=real(s,"mean_seconds");
             auto i=ntt.find(key);if(i==ntt.end() || v<i->second)ntt[key]=v;
             short_ntt.observe(key.first,key.second,v);
         }
@@ -175,23 +175,21 @@ public:
         if(!ignore.memory && (a.fold!=x.fold || a.frontier!=x.frontier))return false;
         return true;
     }
-    RuntimeStatistics runtime_statistics(const Shape &x)const {
-        RuntimeStatistics out;if(runtime_binary.empty())return out;
-        std::vector<double> seconds;
+    RuntimeStatistics runtime_statistics(const Shape &x,bool complete_parameters=false)const {
+        RuntimeStatistics out;if(runtime_version.empty())return out;
+        double m2=0;
         for(const auto &s:profile.samples)if(runtime_observation(s) && measured(s) &&
-            s.count("measurement_binary_sha256") && text(s,"measurement_binary_sha256")==runtime_binary &&
+            s.count("program_version") && text(s,"program_version")==runtime_version &&
             matches(profile.conditions.at(uint(s,"condition")),condition,Ignore::parse(""))) {
-            const auto a=shape(s);
-            auto left=a.key(),right=x.key();left[3]=right[3]=0; // B1 never gates Stage2 cost reuse.
+            const auto a=shape(s);auto left=a.key(),right=x.key();if(!complete_parameters)left[3]=right[3]=0;
             if(left!=right)continue;
-            seconds.push_back(real(s,"median_seconds"));
-            if(!optional_uint(s,"runtime_probe",1))out.preferred_order=std::max(out.preferred_order,
-                optional_uint(s,"runtime_completed_ns",optional_uint(s,"runtime_order")));
+            const auto n=uint(s,"repeats");const double delta=real(s,"mean_seconds")-out.seconds;
+            const double sd=real(s,"stddev_seconds");
+            m2+=double(n-1)*sd*sd+delta*delta*double(out.count)*double(n)/double(out.count+n);
+            out.seconds+=delta*double(n)/double(out.count+n);out.count+=n;
+            out.preferred_order=std::max(out.preferred_order,optional_uint(s,"preferred_order"));
         }
-        out.count=seconds.size();if(seconds.empty())return out;
-        out.seconds=median(seconds);out.mad=ecm_stage2::tune::mad(seconds);
-        out.minimum=*std::min_element(seconds.begin(),seconds.end());out.maximum=*std::max_element(seconds.begin(),seconds.end());
-        return out;
+        out.stddev=out.count>1?std::sqrt(std::max(0.,m2/double(out.count-1))):0;return out;
     }
     bool fitted(const Shape &x,const Work &target,double &seconds,double &error,const Fields *omit=nullptr)const {
         const std::array<Word,13> key={x.target_bits,x.arithmetic_bits,Word(x.mersenne),Word(bool(x.carrier)),
@@ -216,7 +214,7 @@ public:
                    a.short_batch_hash!=x.short_batch_hash ||
                    a.short_batch_tune!=x.short_batch_tune || d_catalog::degree(a.d)<512)continue;
                 Work w;if(!cached_work(a,w) || !w.exact_topology)continue;
-                features.push_back(encode(w));times.push_back(real(s,"median_seconds"));
+                features.push_back(encode(w));times.push_back(real(s,"mean_seconds"));
                 ds.insert(a.d);bounds.insert(a.b2);fit.low=std::min(fit.low,w.p);fit.high=std::max(fit.high,w.p);
             }
             // Qualification is unchanged: independent leave-one-out errors,
@@ -267,7 +265,7 @@ public:
         if(!(seconds>0)) {
             double before=old.baby+old.giant+old.accum,after=w.baby+w.giant+w.accum;
             for(unsigned ph=0;ph<RequestPhaseCount;++ph){before+=old.ntt[ph]+old.reduce[ph];after+=w.ntt[ph]+w.reduce[ph];}
-            seconds=real(a,"median_seconds")*ratio(after,before);
+            seconds=real(a,"mean_seconds")*ratio(after,before);
         }
         return seconds;
     }
@@ -290,7 +288,7 @@ public:
             x.fold==sh.fold && x.frontier==sh.frontier &&
             x.short_batch_tune==sh.short_batch_tune && x.short_batch_hash==sh.short_batch_hash &&
             matches(profile.conditions.at(uint(a,"condition")),condition,Ignore::parse(""));
-        out.seconds=out.exact?real(a,"median_seconds"):scaled(a,x,w);
+        out.seconds=out.exact?real(a,"mean_seconds"):scaled(a,x,w);
         double fit_error=0,fit_seconds=0;bool fit=false;
         if(!out.exact && fitted(x,w,fit_seconds,fit_error,omit)) {
             fit=true;out.seconds=fit_seconds;out.model="portable_nonnegative_v1";
@@ -312,17 +310,17 @@ public:
             // and tree shape. Outside, retain the route/component extrapolation.
             if(lo && hi && lo!=hi && uint(*hi,"b2")>uint(*lo,"b2")) {
                 const double f=double(x.b2-uint(*lo,"b2"))/double(uint(*hi,"b2")-uint(*lo,"b2"));
-                out.seconds=real(*lo,"median_seconds")+(real(*hi,"median_seconds")-real(*lo,"median_seconds"))*f;
+                out.seconds=real(*lo,"mean_seconds")+(real(*hi,"mean_seconds")-real(*lo,"mean_seconds"))*f;
                 out.model="same_shape_b2_interpolation_v1";
-                out.mad=std::max(real(*lo,"mad_seconds"),real(*hi,"mad_seconds"));
+                out.stddev=std::max(real(*lo,"stddev_seconds"),real(*hi,"stddev_seconds"));
             }
         }
-        out.mad=std::max(out.mad,real(a,"mad_seconds")*out.seconds/real(a,"median_seconds"));
+        out.stddev=std::max(out.stddev,real(a,"stddev_seconds")*out.seconds/real(a,"mean_seconds"));
         out.validated=out.exact && optional_uint(a,"validation_count")>0;
         out.relative_error=fit?fit_error:out.validated?optional_real(a,"validation_max_relative_error"):.25;
         out.extrapolated=nearest>0 || !w.exact_topology;
         if(!out.exact && !fit)out.relative_error=std::max(out.relative_error,.08+.05*nearest);
-        out.rank=out.seconds*(1+out.relative_error)+2*out.mad;
+        out.rank=out.seconds*(1+out.relative_error)+2*out.stddev;
         return out.seconds>0 && std::isfinite(out.rank);
     }
     // Production D replacement requires measurements at this width/B2/path.
@@ -340,7 +338,7 @@ public:
                a.force_ladder!=x.force_ladder || a.chain_min!=x.chain_min ||
                a.fold!=x.fold || a.frontier!=x.frontier || a.short_batch_tune!=x.short_batch_tune ||
                a.short_batch_hash!=x.short_batch_hash)continue;
-            if(!best || real(s,"median_seconds")<real(*best,"median_seconds"))best=&s;
+            if(!best || real(s,"mean_seconds")<real(*best,"mean_seconds"))best=&s;
         }
         return best;
     }

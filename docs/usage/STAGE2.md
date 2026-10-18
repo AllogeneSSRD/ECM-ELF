@@ -84,17 +84,17 @@ GUI可用`[Worker #N] stage=stage1|stage2`在同一INI中管理混合阶段，�
 
 `--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。默认`stage2_auto_carrier=1`允许标准梅森worktodo在已知因子、save和整除验证后比较普通与承载；设置0关闭自动候选，CLI `--auto-carrier 0|1`覆盖INI，显式carrier锁定仍优先。候选资格、性能保护及指数上限见[Auto B2 / tune](../architecture/AUTO_B2.md)。
 
-`--tune ecm --tune-level 1`优先读取INI指定的当前worker队列与有效save，采用任务/INI的生产B2；`--tune-worktodo FILE`可指定队列。`stage2_auto_carrier=1`时先补普通默认基线与经整除验证的承载默认对照，再从模型D/P搜索相邻项；只有中位数降低超过2%且越过双方2×MAD噪声界限才继续移动。不会推进生产队列。
+`--tune ecm --tune-level 1`优先读取INI指定的当前worker队列与有效save，采用任务/INI的生产B2；`--tune-worktodo FILE`可指定队列。`stage2_auto_carrier=1`时先补普通默认基线与经整除验证的承载默认对照，再从模型D/P搜索相邻项；只有平均耗时降低超过2%且越过双方2×样本标准差噪声界限才继续移动。不会推进生产队列。
 
 `--tune-exponents bits,...`明确使用通用位宽网格；默认队列缺失或无Stage2任务时也使用网格。`--tune-save FILE`使用一个保存点，自动承载指数可来自当前worker中重建N相同的任务；也可用`--tune-carrier-exponent p`明确指定。完整梅森N的普通路径已使用梅森归约，自动模式不重复测量相同承载。
 
-默认1800秒软预算，`--tune-budget-seconds`可覆盖。ECM、NTT及启动短校准默认不运行丢弃的预热轮次；`stage2_tune_warmup=1`或CLI `--tune-warmup 1`启用每个新测形状的一次预热。正式`repeats`、中位数/MAD及必要算术检查保持原口径。缺NTT资料时补轻量组件校准，真实承载任务的普通/承载参考优先占用预算。
+默认1800秒软预算，`--tune-budget-seconds`可覆盖。ECM、NTT及启动短校准默认不运行丢弃的预热轮次；`stage2_tune_warmup=1`或CLI `--tune-warmup 1`启用每个新测形状的一次预热。正式`repeats`记录实际次数，保存平均耗时和样本标准差；必要算术检查保持不变。缺NTT资料时补轻量组件校准，真实承载任务的普通/承载参考优先占用预算。
 
-`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号列表，其中exponents表示实际位数；显式D表限定搜索范围。格式7按位宽保存公共字段和`matrix`，首行为列名，后续行与表头对齐；普通/承载通过`carrier_exponent`、`arithmetic_bits`和`modulus_kind`独立记录，详见[算术路径字段](../architecture/AUTO_B2.md#toml-中的算术路径)。不产生`[sample.*]`或未访问的模型网格。旧开发TOML须重新生成，失败不覆盖原文件。控制台保留`ecm_tune_progress`等进度，内部诊断保存在证据日志。
+`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号列表，其中exponents表示实际位数；显式D表限定搜索范围。格式8每个位宽一个`matrix`，首行为列名，后续行与表头对齐；同参数重复执行合并repeats、均值和样本标准差，不同参数保留多行。条件保存程序版本，普通/承载通过`carrier_exponent`和`modulus_kind`独立记录，算术位宽自动恢复，详见[算术路径字段](../architecture/AUTO_B2.md#toml-中的算术路径)。不产生`[sample.*]`或未访问的模型网格。旧格式或其他程序版本的TOML须重新生成，失败不覆盖原文件；队列进度和Stage1 save不受影响。控制台保留`ecm_tune_progress`等进度，内部诊断保存在证据日志。
 
 `--tune ntt`可用`--length-log2 a:b`与`--tune-slices s,...`测指定长度和批量，或用等级1…10预设。输出分别记录每秒域卷积数和每秒批调用数；它们不是ECM曲线吞吐。计时边界、预算跳过和格式见[NTT tune](../architecture/AUTO_B2.md#ntt-tune)。
 
-分批测量可用`--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml`合并，再让`stage2_tune_profile`指向结果。同条件同候选只保留更快正式中位数，不同条件分别保存；估算不能覆盖实测。可用`--tune-ntt-profile NTT.toml`导入组件。该命令不运行GPU测试，输出不能覆盖输入文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
+分批测量可用`--tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml`合并，再让`stage2_tune_profile`指向结果。同条件同完整参数按真实次数合并均值与样本标准差，不同参数保留多行；估算不能覆盖实测。可用`--tune-ntt-profile NTT.toml`导入组件。该命令不运行GPU测试，输出不能覆盖输入文件。[合并规则](../architecture/AUTO_B2.md#汇集预计算结果)。
 
 生产用`--tune-profile FILE.toml`或`stage2_tune_profile`加载资料，不要求B1匹配。默认`stage2_prediction_policy=model`：普通按实际N位宽，梅森按p的算术位宽查询各自区间；精确实测优先，其他输入使用基础模型加区间校正。更改D和切换承载分别通过双侧误差保护，NTT/驻留边界及当前显存重新规划。设为`paired`或CLI `--prediction-policy paired`恢复精确位宽/B2/形状的配对实测门禁。
 

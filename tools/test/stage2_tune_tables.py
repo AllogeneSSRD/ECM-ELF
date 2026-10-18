@@ -1,14 +1,19 @@
-"""Read format-7 final matrices for test assertions (not a cost model)."""
+"""Read format-8 mean-time matrices for assertions and analysis."""
 def summaries(document, kind='sample'):
+    if document.get('profile',{}).get('format')!=8:
+        raise ValueError('This reader requires a format-8 mean-time profile')
     result=[]
-    group='width' if kind=='sample' else 'ntt'
-    for node in document.get(group,{}).values():
-        for table in node.get('table',{}).values():
-            common={k:v for k,v in table.items() if k != 'matrix'}
-            columns,*rows=table['matrix']
-            assert len(columns)==len(set(columns)) and all(isinstance(k,str) for k in columns)
-            for row in rows:
-                assert len(row)==len(columns)
-                assert not common.keys() & set(columns)
-                result.append(dict(common,**dict(zip(columns,row))))
+    for key, table in document.get('width' if kind=='sample' else 'ntt',{}).items():
+        columns,*rows=table['matrix']
+        assert len(columns)==len(set(columns))
+        for values in rows:
+            row={k:v for k,v in zip(columns,values) if v!=''}
+            assert len(values)==len(columns)
+            if kind=='sample':
+                row['target_bits']=int(key)
+                row['arithmetic_bits']=row.get('carrier_exponent') or int(key)
+                row['execution_path']='resident' if row['fold_resident'] and row['frontier_resident'] else 'host_frontier' if row['fold_resident'] else 'host_fold_frontier'
+            else:row['condition']=int(key)
+            row['program_version']=document['condition'][str(row['condition'])]['program_version']
+            result.append(row)
     return result

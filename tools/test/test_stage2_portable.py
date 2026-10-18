@@ -1,6 +1,7 @@
 """Native portable-grid, scalar summary, incremental update and Stage1 CSV checks."""
 import argparse
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -50,11 +51,12 @@ def main():
         assert grid['b2s'][-1] == 2600000000000
         assert all(high//ratio == low for low, high in zip(grid['b2s'], grid['b2s'][1:]))
     base = '''[profile]
-format = 7
+format = 8
 unit = "full_stage2"
 algorithm_revision = 1
 revision = 0
 [condition.0]
+program_version = "0.37.1"
 uuid_hex = "0123456789abcdef0123456789abcdef"
 sm_major = 8
 sm_minor = 9
@@ -64,9 +66,8 @@ gl_fixed_mode = 3
 outer_unroll_u = 0
 add_sub_mask = 1
 env_condition_tag = "baseline"
-[width.512.table.0]
+[width.512]
 condition = 0
-target_bits = 512
 arithmetic_bits = 512
 carrier_exponent = 0
 modulus_kind = "generic"
@@ -76,7 +77,7 @@ d = 30030
 p = 2880
 fold_resident = 1
 frontier_resident = 1
-execution_path = "fixture_resident"
+execution_path = "resident"
 source = "measured"
 repeats = 2
 clean = 1
@@ -85,20 +86,22 @@ hits = 0
 selftest_cases = 1
 checked = 1
 matrix = [
-    ["median_seconds", "mad_seconds"],
+    ["mean_seconds", "stddev_seconds"],
     [2, 0.1],
 ]
 '''
+    version=re.search(r'inline constexpr char version\[\] = "([^"]+)"', (ROOT/'src/core/ecm_program_version.h').read_text())[1]
+    base=base.replace('program_version = "0.37.1"', f'program_version = "{version}"')
     original = out/'base.toml'
     original.write_text(base, encoding='utf-8')
     assert run('--exact-shape',original)=='true'
     assert run('--fit-model',original)=='true'
-    assert summaries(tomllib.loads(run('--roundtrip', original)))[0]['median_seconds'] == 2
+    assert summaries(tomllib.loads(run('--roundtrip', original)))[0]['mean_seconds'] == 2
     for value in [1, 2, 3]:
         other = out/f'new_{value}.toml'
         other.write_text(base.replace('[2, 0.1]', f'[{value}, 0.1]'), encoding='utf-8')
         result = tomllib.loads(run('--update', original, other))
-        assert summaries(result)[0]['median_seconds'] == min(2, value)
+        assert summaries(result)[0]['mean_seconds'] == (2+value)/2
     other = out/'other_condition.toml'
     other.write_text(base.replace('0123456789abcdef0123456789abcdef','1123456789abcdef0123456789abcdef'), encoding='utf-8')
     result = tomllib.loads(run('--update', original, other))
@@ -115,7 +118,7 @@ matrix = [
     assert subprocess.run([str(exe),'--matches',str(original),str(altered),'unknown'],capture_output=True).returncode!=0
     modeled = out/'model.toml'
     modeled.write_text(base.replace('source = "measured"','source = "model"').replace('[2, 0.1]','[0.1, 0.1]'), encoding='utf-8')
-    assert summaries(tomllib.loads(run('--update', original, modeled)))[0]['median_seconds'] == 2
+    assert summaries(tomllib.loads(run('--update', original, modeled)))[0]['mean_seconds'] == 2
     corruptions = [base+'seconds = [2,2]\n', base.replace('clean = 1','clean = 0'),
                    base.replace('p = 2880','p = 2881'), base+'validation_max_relative_error = 0\n',
                    base.replace('condition = 0','condition = 1')]
@@ -162,25 +165,25 @@ matrix = [
     compact=run('--roundtrip',original)
     packed=out/'compact.toml';packed.write_text(compact,encoding='utf-8')
     assert summaries(tomllib.loads(run('--roundtrip',packed)))==summaries(tomllib.loads(compact))
-    # All final rows share proof/context fields; only the B2 and timing vary.
+    # All parameters remain in one matrix, including optional-field differences.
+    from stage2_tune_matrix import write_profile
+    import copy
+    doc=tomllib.loads(compact);seed=summaries(doc)[0]
     expanded=[]
     for i in range(20):
-        record=base.split('[width.512.table.0]',1)[1]
-        record=record.replace('b2 = 26000000000',f'b2 = {26000000000+i}')
-        record=record.replace('[2, 0.1]',f'[{2+i/100}, 0.1]')
-        expanded.append(f'[width.512.table.{i}]'+record)
-    many=out/'many.toml'
-    many.write_text(base.split('[width.512.table.0]',1)[0]+''.join(expanded),encoding='utf-8')
+        record=copy.deepcopy(seed);record['b2']+=i;record['mean_seconds']=2+i/100
+        if i%2:record['giant_chain_min']=32768
+        expanded.append(record)
+    many=out/'many.toml';many.write_text(write_profile(list(doc['condition'].values()),expanded),encoding='utf-8')
     many_compact=run('--roundtrip',many)
     many_packed=out/'many_compact.toml';many_packed.write_text(many_compact,encoding='utf-8')
     assert len(summaries(tomllib.loads(many_compact)))==20
-    assert len(tomllib.loads(many_compact)['width']['512']['table'])==1
+    assert set(tomllib.loads(many_compact)['width']['512'])=={'matrix'}
     assert summaries(tomllib.loads(run('--roundtrip',many_packed)))==summaries(tomllib.loads(many_compact))
-    assert len(many_compact.encode('utf-8')) < len(many.read_bytes())/2
     table_bad=[
         base.replace('[2, 0.1]', '[2]'),
-        base.replace('"mad_seconds"', '"median_seconds"'),
-        base.replace('[width.512.table.0]', '[width.513.table.0]'),
+        base.replace('"stddev_seconds"', '"mean_seconds"'),
+        base.replace('[width.512]', '[width.513]'),
         base.replace('    [2, 0.1],', '    [2, 0.1],\n    [2, 0.1],'),
         base.replace('    [2, 0.1],', '    [2, [0.1]],'),
         base.replace('    [2, 0.1],',''),

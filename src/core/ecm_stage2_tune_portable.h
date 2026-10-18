@@ -5,9 +5,10 @@
 #include "ecm_stage1_cost_csv.h"
 #include <chrono>
 #include <charconv>
+#include "ecm_program_version.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
-constexpr unsigned format=7;
+constexpr unsigned format=8;
 constexpr Word default_b2_max=2600000000000ull;
 struct Grid {std::vector<unsigned> widths;std::vector<Word> ds,b2s;unsigned repeats=2,basins=2;};
 inline std::vector<size_t> neighbors(size_t center,size_t count) {
@@ -20,13 +21,13 @@ inline std::vector<size_t> neighbors(size_t center,size_t count) {
 // Move only on a significant measured improvement, then expose one new neighbor.
 // Invalid candidates close the local direction; budget deferrals are unfinished.
 struct LocalSearch {
-    struct Timing {double seconds=0,mad=0;};
+    struct Timing {double seconds=0,stddev=0;};
     size_t center,count;std::map<size_t,Timing> tested;std::set<size_t> rejected,deferred;
     explicit LocalSearch(size_t start,size_t size):center(start),count(size) {
         if(start>=size)throw std::runtime_error("invalid local search start");
     }
     static bool improves(Timing a,Timing b) {
-        return a.seconds>0 && b.seconds>0 && a.seconds+2*a.mad < .98*b.seconds-2*b.mad;
+        return a.seconds>0 && b.seconds>0 && a.seconds+2*a.stddev < .98*b.seconds-2*b.stddev;
     }
     size_t next() {
         if(!tested.count(center) && !rejected.count(center) && !deferred.count(center))return center;
@@ -43,7 +44,7 @@ struct LocalSearch {
     bool complete() {return next()==count && deferred.empty();}
 };
 struct UnsupportedFormat:std::runtime_error {
-    UnsupportedFormat():std::runtime_error("unsupported tune format; regenerate this development profile"){}
+    UnsupportedFormat():std::runtime_error("unsupported tune format/version; regenerate this development profile"){}
 };
 inline Grid grid(unsigned level,Word upper=default_b2_max) {
     if(level<1 || level>10 || upper<2 || upper>Word(INT64_MAX)-8192)
@@ -83,23 +84,55 @@ inline std::string text(const Fields &f,const char *key) {
 }
 inline Word optional_uint(const Fields &f,const char *key,Word fallback=0){return f.count(key)?uint(f,key):fallback;}
 inline double optional_real(const Fields &f,const char *key,double fallback=0){return f.count(key)?real(f,key):fallback;}
+inline Word ntt_option(const Fields &f,const char *key) {
+    const auto at=f.find(key);if(at==f.end())return 0;
+    return at->second=="true"?1:at->second=="false"?0:uint(f,key);
+}
 inline bool measured(const Fields &sample){return required(sample,"source")=="\"measured\"";}
 inline bool runtime_observation(const Fields &sample) {
     return sample.count("benchmark_kind") && text(sample,"benchmark_kind")=="runtime_save";
+}
+inline double average(const std::vector<double> &values) {
+    double mean=0;size_t n=0;for(double x:values)mean+=(x-mean)/double(++n);return mean;
+}
+inline double deviation(const std::vector<double> &values) {
+    double mean=0,m2=0;size_t n=0;
+    for(double x:values){const double delta=x-mean;mean+=delta/double(++n);m2+=delta*(x-mean);}
+    return n>1?std::sqrt(std::max(0.,m2/double(n-1))):0;
+}
+// Length-prefixed scalar strings keep the matrix flat and identities unambiguous.
+inline std::set<std::string> measurement_ids(const Fields &s) {
+    std::set<std::string> ids;
+    if(s.count("measurement_ids")) {
+        const auto value=text(s,"measurement_ids");size_t pos=0;
+        while(pos<value.size()) {
+            const auto sep=value.find(':',pos);if(sep==value.npos)throw std::runtime_error("invalid measurement identity set");
+            const auto length=cost::integer(value.substr(pos,sep-pos));pos=sep+1;
+            if(!length || length>value.size()-pos || !ids.insert(value.substr(pos,size_t(length))).second)
+                throw std::runtime_error("invalid/duplicate measurement identity");
+            pos+=size_t(length);
+        }
+    } else if(s.count("runtime_sample_id"))ids.insert(text(s,"runtime_sample_id"));
+    else if(measured(s))ids.insert("summary:"+required(s,"mean_seconds")+":"+required(s,"stddev_seconds")+":"+required(s,"repeats"));
+    return ids;
+}
+inline std::string encoded_ids(const std::set<std::string> &ids) {
+    std::string value;for(const auto &id:ids)value+=std::to_string(id.size())+":"+id;return ecm_stage2::tune::portable::quoted(value);
 }
 inline void validate_ntt_summary(const Fields &s) {
     const auto n=uint(s,"length"),b=uint(s,"batch");
     if(n<8 || n>(1ull<<27) || (n&(n-1)) || !b || b>65535 || uint(s,"bad") ||
        text(s,"source")!="measured" || text(s,"status")!="measured" ||
        text(s,"unit")!="field_convolution" || text(s,"reference_kind")!="gmp_3x3_distinct_constant_v1" ||
-       uint(s,"verified_words_per_sample")!=n*b || !uint(s,"repeats") || uint(s,"repeats")>1000 ||
-       !(real(s,"median_seconds")>0))throw std::runtime_error("unchecked portable NTT summary");
+       uint(s,"verified_words_per_sample")!=n*b || !uint(s,"repeats") || uint(s,"repeats")>1000000000 ||
+       !(real(s,"mean_seconds")>0))throw std::runtime_error("unchecked portable NTT summary");
     Word log=0;for(auto x=n;x>1;x>>=1)++log;
-    const double seconds=real(s,"median_seconds");
+    const double seconds=real(s,"mean_seconds");
     auto close=[](double a,double b){return std::abs(a-b)<=1e-9*std::max(std::abs(a),std::abs(b));};
     if(uint(s,"log2_length")!=log || !close(real(s,"conv_iter_per_s"),b/seconds) ||
        !close(real(s,"batch_iter_per_s"),1/seconds))throw std::runtime_error("inconsistent portable NTT summary");
-    real(s,"mad_seconds");uint(s,"condition");
+    const auto sd=real(s,"stddev_seconds");uint(s,"condition");
+    if(uint(s,"repeats")==1 && sd!=0)throw std::runtime_error("single NTT observation has dispersion");
     for(const auto &f:s)if(!f.second.empty() && f.second.front()=='[')
         throw std::runtime_error("portable NTT contains sampling arrays");
 }
@@ -109,28 +142,24 @@ inline void strip_ntt_auxiliary_timing(Fields &s) {
 inline std::string runtime_group(const Fields &s) {
     std::string key;
     for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
-                          "b2","d","fold_resident","frontier_resident","execution_path"})
+                          "b1","b2","d","fold_resident","frontier_resident","execution_path"})
         key+=std::string(field)+'='+required(s,field)+';';
-    for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder","measurement_binary_sha256"}) {
+    for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder","program_version"}) {
         const auto at=s.find(field);key+=std::string(field)+'='+(at==s.end()?"absent":at->second)+';';
     }
     return key;
 }
-inline std::string runtime_sample_id(const Fields &s) {
-    if(s.count("runtime_sample_id"))return text(s,"runtime_sample_id");
-    // Old one-shot summaries have no independent receipt. Identical legacy
-    // rows remain one observation when repeatedly imported or merged.
-    return "legacy:"+required(s,"b1")+':'+numeric(real(s,"median_seconds"))+':'+required(s,"checked");
-}
 inline std::string scope(const Fields &s) {
-    // A single production observation must not prevent a slower but repeated
-    // formal benchmark from establishing an exact paired reference.
-    if(runtime_observation(s))return "runtime;"+runtime_group(s)+runtime_sample_id(s);
+    // Formal calibration and production timing remain distinct populations.
+    if(runtime_observation(s))return "runtime;"+runtime_group(s);
     std::string key="formal;";
     for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
                           "b1","b2","d","fold_resident","frontier_resident","execution_path"}) {
         const auto &value=required(s,field);key+=std::to_string(value.size())+":"+value;
-    }return key;
+    }
+    for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"})
+        key+=std::string(field)+'='+std::to_string(optional_uint(s,field, std::string(field)=="giant_chain_min"?32768:0))+';';
+    return key;
 }
 inline void validate(const Fields &s) {
     const auto bits=uint(s,"target_bits"),arithmetic=uint(s,"arithmetic_bits"),carrier=uint(s,"carrier_exponent");
@@ -139,22 +168,29 @@ inline void validate(const Fields &s) {
        (!carrier && bits!=arithmetic) || b1<2 || b2<=b1 || b2>Word(INT64_MAX)-8192 ||
        d<6 || d%2 || d>200000000 || uint(s,"p")!=cost::phi(d)/2 ||
        uint(s,"fold_resident")>1 || uint(s,"frontier_resident")>1 ||
-       !(real(s,"median_seconds")>0) || uint(s,"repeats")>1000)
+       !(real(s,"mean_seconds")>0) || uint(s,"repeats")>1000000000)
         throw std::runtime_error("invalid portable ECM sample shape/cost");
     const auto kind=text(s,"modulus_kind"),source=text(s,"source");
     if((kind!="generic" && kind!="mersenne") || (carrier && kind!="mersenne") ||
        (source!="measured" && source!="model" && source!="calibrated" && source!="interpolated" && source!="extrapolated"))
         throw std::runtime_error("unsupported portable ECM source/arithmetic");
-    if(measured(s) && (!uint(s,"repeats") || uint(s,"clean")!=1 || uint(s,"bad") ||
-        uint(s,"hits") || !uint(s,"selftest_cases") || !uint(s,"checked")))
+    if(measured(s) && (!uint(s,"repeats") ||
+       (s.count("verified")?uint(s,"verified")!=1:
+        (uint(s,"clean")!=1 || uint(s,"bad") || uint(s,"hits") || !uint(s,"selftest_cases") || !uint(s,"checked")))))
         throw std::runtime_error("portable measurement lacks completed arithmetic evidence");
-    if(runtime_observation(s) && (!measured(s) || uint(s,"repeats")!=1))
-        throw std::runtime_error("runtime observation must be a single checked measurement");
+    if(runtime_observation(s) && (!measured(s) || uint(s,"repeats")>1000))
+        throw std::runtime_error("invalid runtime aggregate count");
     if(runtime_observation(s) && s.count("runtime_sample_id") &&
        (text(s,"runtime_sample_id").empty() || text(s,"runtime_sample_id").size()>256))
         throw std::runtime_error("invalid runtime observation identity");
     if(optional_uint(s,"runtime_probe")>1)throw std::runtime_error("invalid runtime probe marker");
-    real(s,"mad_seconds");uint(s,"condition");text(s,"execution_path");
+    const auto spread=real(s,"stddev_seconds");
+    if(uint(s,"repeats")==1 && spread!=0)throw std::runtime_error("single observation has nonzero standard deviation");
+    uint(s,"condition");text(s,"execution_path");
+    if(measured(s) && s.count("verified") &&
+       (!s.count("measurement_ids") || measurement_ids(s).empty() ||
+        (runtime_observation(s) && measurement_ids(s).size()!=uint(s,"repeats"))))
+        throw std::runtime_error("invalid aggregate measurement identities");
     for(const auto &field:s)if(!field.second.empty() && field.second.front()=='[')
         throw std::runtime_error("portable summaries must not contain sampling arrays");
     if(optional_uint(s,"validation_count"))real(s,"validation_max_relative_error");
@@ -164,7 +200,7 @@ inline void validate(const Fields &s) {
         const auto basis=text(s,"prediction_basis");text(s,"prediction_model");
         if(!measured(s) || !(predicted>0 && ratio>0) ||
            (basis!="before_measurement" && basis!="leave_one_out") ||
-           std::abs(ratio-real(s,"median_seconds")/predicted)>1e-9*std::max(1.,ratio))
+           std::abs(ratio-real(s,"mean_seconds")/predicted)>1e-9*std::max(1.,ratio))
             throw std::runtime_error("inconsistent measured/model time ratio");
     }
 }
@@ -183,6 +219,7 @@ struct Ignore {
 };
 inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore) {
     auto same=[&](const char *key){auto a=old.find(key),b=current.find(key);return a!=old.end() && b!=current.end() && a->second==b->second;};
+    if(old.count("program_version") || current.count("program_version"))if(!same("program_version"))return false;
     if(!ignore.gpu && (!same("uuid_hex") || !same("sm_major") || !same("sm_minor")))return false;
     if(!ignore.driver && !same("cuda_driver"))return false;
     if(!ignore.cuda && !same("cuda_runtime"))return false;
@@ -234,50 +271,112 @@ inline std::string compact_literal(const std::string &value) {
     return std::string(buffer,written.ptr);
 }
 
+inline Fields compact_sample(Fields s) {
+    validate(s);
+    if(measured(s)) {
+        s["verified"]="1";s["measurement_ids"]=encoded_ids(measurement_ids(s));
+        if(!optional_uint(s,"runtime_probe",1))s["preferred_order"]=std::to_string(optional_uint(s,"runtime_completed_ns"));
+    }
+    static const std::set<std::string> keep={
+        "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d","p",
+        "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder",
+        "source","benchmark_kind","program_version","verified","repeats","mean_seconds","stddev_seconds",
+        "measurement_ids","preferred_order","validation_count","validation_max_relative_error",
+        "phase_shape_seconds","phase_setup_seconds","phase_baby_seconds","phase_ftree_seconds","phase_main_setup_seconds",
+        "phase_inverse_setup_seconds","phase_giant_loop_seconds","phase_descent_seconds","phase_accum_seconds","phase_finalize_seconds",
+        "giant_seconds","gtrees_seconds","fold_seconds","model_relative_error_allowance"};
+    for(auto i=s.begin();i!=s.end();)if(!keep.count(i->first))i=s.erase(i);else ++i;
+    return s;
+}
+// Merge sufficient statistics, preserving slow observations and sample variance.
+inline bool combine(Fields &old,const Fields &sample,Word limit=1000000000) {
+    const auto before=measurement_ids(old),added=measurement_ids(sample);
+    if(std::includes(before.begin(),before.end(),added.begin(),added.end()))return false;
+    if(std::includes(added.begin(),added.end(),before.begin(),before.end())) {
+        if(uint(sample,"repeats")<uint(old,"repeats"))throw std::runtime_error("measurement snapshot count regressed");
+        if(uint(sample,"repeats")>limit)return false;
+        const auto order=std::max(optional_uint(old,"preferred_order"),optional_uint(sample,"preferred_order"));
+        old=sample;if(order)old["preferred_order"]=std::to_string(order);return true;
+    }
+    for(const auto &id:added)if(before.count(id))
+        throw std::runtime_error("partially overlapping tune snapshots; recover deduplicated original JSONL instead");
+    const auto n=uint(old,"repeats"),m=uint(sample,"repeats");
+    if(n>=limit || m>limit-n)return false;
+    const double a=real(old,"mean_seconds"),b=real(sample,"mean_seconds"),delta=b-a;
+    const double x=real(old,"stddev_seconds"),y=real(sample,"stddev_seconds");
+    const double m2=double(n-1)*x*x+double(m-1)*y*y+delta*delta*double(n)*double(m)/double(n+m);
+    for(auto &f:old)if(f.first!="stddev_seconds" && f.first.size()>=8 &&
+        f.first.compare(f.first.size()-8,8,"_seconds")==0 && sample.count(f.first))
+        f.second=numeric(real(old,f.first.c_str())+(real(sample,f.first.c_str())-real(old,f.first.c_str()))*double(m)/double(n+m));
+    old["mean_seconds"]=numeric(a+delta*double(m)/double(n+m));
+    old["stddev_seconds"]=numeric(std::sqrt(std::max(0.,m2/double(n+m-1))));old["repeats"]=std::to_string(n+m);
+    auto ids=before;ids.insert(added.begin(),added.end());old["measurement_ids"]=encoded_ids(ids);
+    const auto order=std::max(optional_uint(old,"preferred_order"),optional_uint(sample,"preferred_order"));
+    if(order)old["preferred_order"]=std::to_string(order);
+    const auto checks=optional_uint(old,"validation_count")+optional_uint(sample,"validation_count");
+    if(checks){old["validation_count"]=std::to_string(checks);old["validation_max_relative_error"]=numeric(std::max(optional_real(old,"validation_max_relative_error"),optional_real(sample,"validation_max_relative_error")));}
+    return true;
+}
+inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
+    s["program_version"]=required(condition,"program_version");
+    if(ntt) {
+        const auto n=uint(s,"length"),b=uint(s,"batch");Word log=0;for(auto x=n;x>1;x>>=1)++log;
+        s["log2_length"]=std::to_string(log);s["source"]=s["status"]="\"measured\"";s["unit"]="\"field_convolution\"";
+        s["reference_kind"]="\"gmp_3x3_distinct_constant_v1\"";s["verified_words_per_sample"]=std::to_string(n*b);s["bad"]="0";
+        s["conv_iter_per_s"]=numeric(b/real(s,"mean_seconds"));s["batch_iter_per_s"]=numeric(1/real(s,"mean_seconds"));
+    } else {
+        const auto d=uint(s,"d");if(d<6 || d>200000000 || d%2)throw std::runtime_error("invalid tune D");
+        const Fields derived={{"arithmetic_bits",std::to_string(optional_uint(s,"carrier_exponent")?uint(s,"carrier_exponent"):uint(s,"target_bits"))},
+            {"p",std::to_string(cost::phi(uint(s,"d"))/2)},
+            {"execution_path",ecm_stage2::tune::portable::quoted(uint(s,"fold_resident")?(uint(s,"frontier_resident")?"resident":"host_frontier"):"host_fold_frontier")}};
+        for(const auto &f:derived){if(s.count(f.first) && s.at(f.first)!=f.second)throw std::runtime_error("inconsistent derived tune field");s[f.first]=f.second;}
+    }
+}
 struct Profile {
     Fields metadata;
     std::map<Word,Fields> conditions;
     std::vector<Fields> samples,ntt;
     Word revision=0;
-    Word condition(const Fields &fields) {
+    Word condition(Fields fields) {
+        if(!fields.count("program_version"))fields["program_version"]=ecm_stage2::tune::portable::quoted(ecm_program::version);
+        if(text(fields,"program_version")!=ecm_program::version)throw UnsupportedFormat();
         for(const auto &old:conditions)if(old.second==fields)return old.first;
         if(conditions.size()>=256)throw std::runtime_error("too many portable tune conditions");
         const Word id=conditions.empty()?0:conditions.rbegin()->first+1;conditions.emplace(id,fields);return id;
     }
     bool update(Fields sample,Word runtime_limit=10) {
-        validate(sample);if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown measurement condition");
+        if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown measurement condition");
+        const auto &c=conditions.at(uint(sample,"condition"));
+        if(sample.count("program_version") && required(sample,"program_version")!=required(c,"program_version"))throw std::runtime_error("measurement/condition version mismatch");
+        sample["program_version"]=required(c,"program_version");sample=compact_sample(std::move(sample));
         const auto key=scope(sample);
         if(runtime_observation(sample)) {
             if(runtime_limit<2 || runtime_limit>1000)throw std::runtime_error("runtime sample limit must be 2..1000");
-            Word count=0;const auto group=runtime_group(sample);
-            for(const auto &old:samples)if(runtime_observation(old) && runtime_group(old)==group) {
-                if(scope(old)==key)return false;
-                ++count;
-            }
-            if(count>=runtime_limit)return false;
-            if(samples.size()>=65536)throw std::runtime_error("too many portable tune samples");
-            sample["runtime_order"]=std::to_string(revision+1);
-            samples.push_back(std::move(sample));++revision;return true;
         }
         for(auto &old:samples)if(scope(old)==key) {
-            if(measured(old) && (!measured(sample) || real(sample,"median_seconds")>=real(old,"median_seconds")))return false;
-            if(!measured(old) && !measured(sample) && (!sample.count("model_evidence") ||
-               (old.count("model_evidence") && old.at("model_evidence")==sample.at("model_evidence"))))return false;
-            old=std::move(sample);++revision;return true;
+            if(measured(old) && !measured(sample))return false;
+            if(measured(old) && measured(sample)) {
+                const Word limit=runtime_observation(sample)?std::max(runtime_limit,uint(old,"repeats")):1000000000;
+                if(!combine(old,sample,limit))return false;
+            } else {if(old==sample)return false;old=std::move(sample);}
+            ++revision;return true;
         }
-        if(samples.size()>=65536)throw std::runtime_error("too many portable tune samples");
+        if(runtime_observation(sample) && uint(sample,"repeats")>runtime_limit)return false;
         samples.push_back(std::move(sample));++revision;return true;
     }
     bool update_ntt(Fields sample) {
         validate_ntt_summary(sample);
         strip_ntt_auxiliary_timing(sample);
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown NTT measurement condition");
+        sample["measurement_ids"]=encoded_ids(measurement_ids(sample));sample["verified"]="1";
         for(auto &old:ntt)if(uint(old,"condition")==uint(sample,"condition") &&
             uint(old,"length")==uint(sample,"length") && uint(old,"batch")==uint(sample,"batch")) {
-            if(real(sample,"median_seconds")>=real(old,"median_seconds"))return false;
-            old=std::move(sample);++revision;return true;
+            bool same=true;
+            for(const char *k:{"tile","max_radix_bits","coop_outer","warp_tail","compact_scratch"})
+                if(ntt_option(old,k)!=ntt_option(sample,k))same=false;
+            if(!same)continue;
+            if(!combine(old,sample))return false;hydrate(old,conditions.at(uint(old,"condition")),true);++revision;return true;
         }
-        if(ntt.size()>=65536)throw std::runtime_error("too many NTT summaries");
         ntt.push_back(std::move(sample));++revision;return true;
     }
     static Profile load(const std::filesystem::path &path) {
@@ -311,14 +410,14 @@ struct Profile {
                 }
                 if(values.size()!=columns.size())throw std::runtime_error("tune row/column size mismatch");
                 Fields record=common;
-                for(size_t i=0;i<columns.size();++i)if(!record.emplace(columns[i],values[i]).second)
+                for(size_t i=0;i<columns.size();++i)if(values[i]!="\"\"" && !record.emplace(columns[i],values[i]).second)
                     throw std::runtime_error("tune column duplicates a common field");
                 if(ntt_table) {
-                    if(uint(record,"condition")!=table_key || out.ntt.size()>=65536)
+                    if(uint(record,"condition")!=table_key)
                         throw std::runtime_error("NTT table condition/count mismatch");
                     out.ntt.push_back(std::move(record));
                 } else {
-                    if(uint(record,"target_bits")!=table_key || out.samples.size()>=65536)
+                    if(uint(record,"target_bits")!=table_key)
                         throw std::runtime_error("width table target/count mismatch");
                     out.samples.push_back(std::move(record));
                 }
@@ -334,11 +433,9 @@ struct Profile {
                     table=&out.conditions[cost::integer(section.substr(10))];
                 } else if(section.compare(0,6,"width.")==0 || section.compare(0,4,"ntt.")==0) {
                     ntt_table=section.compare(0,4,"ntt.")==0;
-                    const size_t begin=ntt_table?4u:6u;const auto sep=section.find(".table.",begin);
-                    if(sep==section.npos)throw std::runtime_error("invalid parameter-table name");
-                    table_key=cost::integer(section.substr(begin,sep-begin));cost::integer(section.substr(sep+7));
+                    const size_t begin=ntt_table?4u:6u;table_key=cost::integer(section.substr(begin));
                     if(!ntt_table && (table_key<2 || table_key>16384))throw std::runtime_error("invalid width knot");
-                    parameter_table=true;table=&common;
+                    parameter_table=true;table=&common;common[ntt_table?"condition":"target_bits"]=std::to_string(table_key);
                 } else throw std::runtime_error("unsupported tune table; regenerate this development profile");
             } else {
                 const auto eq=line.find('=');if(!table || eq==line.npos)throw std::runtime_error("invalid tune row");
@@ -358,114 +455,62 @@ struct Profile {
         }
         finish();
         if(!in.eof() || uint(out.metadata,"format")!=format || required(out.metadata,"unit")!="\"full_stage2\"" ||
-           uint(out.metadata,"algorithm_revision")!=1 || out.conditions.empty())
+           out.conditions.empty())
             throw std::runtime_error("invalid tune header");
-        out.revision=uint(out.metadata,"revision");std::set<std::string> scopes;
-        for(const auto &s:out.samples) {
-            validate(s);if(!out.conditions.count(uint(s,"condition")) || !scopes.insert(scope(s)).second)
+        std::set<std::string> scopes;
+        for(const auto &c:out.conditions)if(text(c.second,"program_version")!=ecm_program::version)throw UnsupportedFormat();
+        for(auto &s:out.samples) {
+            if(!out.conditions.count(uint(s,"condition")))throw std::runtime_error("unknown tune condition");
+            hydrate(s,out.conditions.at(uint(s,"condition")));validate(s);
+            out.revision=std::max(out.revision,optional_uint(s,"preferred_order"));if(!out.conditions.count(uint(s,"condition")) || !scopes.insert(scope(s)).second)
                 throw std::runtime_error("duplicate/unknown tune measurement scope");
         }
-        std::set<std::tuple<Word,Word,Word>> ntt_scopes;
+        std::set<std::array<Word,8>> ntt_scopes;
         for(auto &s:out.ntt) {
-            validate_ntt_summary(s);
+            if(!out.conditions.count(uint(s,"condition")) || optional_uint(s,"verified")!=1)throw std::runtime_error("unchecked NTT summary");
+            hydrate(s,out.conditions.at(uint(s,"condition")),true);validate_ntt_summary(s);
             strip_ntt_auxiliary_timing(s);
-            if(!out.conditions.count(uint(s,"condition")) || !ntt_scopes.emplace(uint(s,"condition"),uint(s,"length"),uint(s,"batch")).second)
+            if(!ntt_scopes.insert({uint(s,"condition"),uint(s,"length"),uint(s,"batch"),ntt_option(s,"tile"),ntt_option(s,"max_radix_bits"),
+                ntt_option(s,"coop_outer"),ntt_option(s,"warp_tail"),ntt_option(s,"compact_scratch")}).second)
                 throw std::runtime_error("duplicate/unknown tune NTT scope");
         }
         return out;
     }
     std::string serialize()const {
-        std::ostringstream out;out<<"# Stage2 parameter tables. Formal summaries and bounded independent runtime observations.\n"
-            <<"# Widths are calibration knots; values between knots are estimates.\n[profile]\n";
-        Fields header=metadata;header["format"]=std::to_string(format);header["unit"]="\"full_stage2\"";
-        header["algorithm_revision"]="1";header["revision"]=std::to_string(revision);
-        auto emit_fields=[&](const Fields &values) {
-            for(const auto &f:values)out<<f.first<<" = "<<compact_literal(f.second)<<'\n';
-        };
-        emit_fields(header);
-        for(const auto &c:conditions){out<<"\n[condition."<<c.first<<"]\n";emit_fields(c.second);}
-        using Group=std::vector<const Fields*>;
-        std::map<std::pair<Word,std::string>,Group> groups;
-        for(const auto &s:samples) {
-            validate(s);std::string key;
-            for(const char *name:{"condition","carrier_exponent","modulus_kind","execution_path","source"})key+=required(s,name)+';';
-            for(const auto &f:s)key+=f.first+';';
-            groups[{uint(s,"target_bits"),key}].push_back(&s);
+        std::ostringstream out;out<<"# Stage2 mean timings; identical parameters share one repeated measurement row.\n[profile]\nformat = "<<format<<"\nunit = \"full_stage2\"\n";
+        if(metadata.count("error_limit"))out<<"error_limit = "<<compact_literal(metadata.at("error_limit"))<<'\n';
+        for(const auto &c:conditions) {
+            out<<"\n[condition."<<c.first<<"]\n";
+            for(const auto &f:c.second)out<<f.first<<" = "<<compact_literal(f.second)<<'\n';
         }
-        auto emit_group=[&](const std::string &section,const Group &records,bool ntt) {
-            Group ordered=records;
-            if(ntt)std::stable_sort(ordered.begin(),ordered.end(),[](const Fields *a,const Fields *b) {
-                return std::make_tuple(uint(*a,"log2_length"),uint(*a,"length"),uint(*a,"batch"),optional_uint(*a,"tile"))<
-                       std::make_tuple(uint(*b,"log2_length"),uint(*b,"length"),uint(*b,"batch"),optional_uint(*b,"tile"));
-            });
-            else std::stable_sort(ordered.begin(),ordered.end(),[](const Fields *a,const Fields *b) {
-                return std::make_tuple(uint(*a,"b2"),uint(*a,"d"),uint(*a,"p"))<
-                       std::make_tuple(uint(*b,"b2"),uint(*b,"d"),uint(*b,"p"));
-            });
-            Fields common=*records.front();
-            for(auto it=common.begin();it!=common.end();) {
-                bool same=true;for(auto row:records)if(row->at(it->first)!=it->second)same=false;
-                const bool primary=ntt?(it->first=="log2_length" || it->first=="length" || it->first=="batch" || it->first=="tile" || it->first=="median_seconds"):
-                    (it->first=="d" || it->first=="p" || it->first=="b2" || it->first=="median_seconds" || it->first=="mad_seconds" ||
-                     it->first=="measured_model_ratio" || it->first=="predicted_seconds");
-                if(!same || primary)it=common.erase(it);else ++it;
-            }
+        auto emit=[&](const std::string &section,std::vector<Fields> rows,bool ntt) {
+            std::set<std::string> names;
+            const std::set<std::string> omitted=ntt?std::set<std::string>{"condition","program_version","log2_length","source","status","unit","reference_kind","verified_words_per_sample","bad","conv_iter_per_s","batch_iter_per_s"}:
+                std::set<std::string>{"target_bits","program_version","p","arithmetic_bits","execution_path"};
+            for(const auto &s:rows)for(const auto &f:s)if(!omitted.count(f.first))names.insert(f.first);
             std::vector<std::string> columns;
-            for (const char *key : {
-                "d", "p", "b2",                       // ECM 字段
-                "log2_length", "length", "batch",       // NTT 规模
-                "tile", "max_radix_bits",
-                "passes_forward", "coop_outer",
-                "warp_tail", "compact_scratch",       // 执行形状
-                "conv_iter_per_s", "median_seconds", "predicted_seconds", "measured_model_ratio", "repeats",
-                "payload_bytes", "arena_payload_bytes",
-                "external_arrays_bytes",
-                "verified_words_per_sample",
-                "batch_iter_per_s", "mad_seconds", "min_seconds", "max_seconds",
-                "source", "validation_count",
-                "validation_max_relative_error"
-            })
-                if (records.front()->count(key) && !common.count(key))
-                    columns.push_back(key);
-            for(const auto &f:*records.front())if(!common.count(f.first) &&
-                std::find(columns.begin(),columns.end(),f.first)==columns.end())columns.push_back(f.first);
-            out<<"\n["<<section<<"]\n";emit_fields(common);
-            std::vector<size_t> widths(columns.size(),0);
-            for(size_t i=0;i<columns.size();++i)widths[i]=ecm_stage2::tune::portable::quoted(columns[i]).size();
-            for(auto row:records)for(size_t i=0;i<columns.size();++i)
-                widths[i]=std::max(widths[i],compact_literal(row->at(columns[i])).size());
-            out<<"matrix = [\n    [";
-            for(size_t i=0;i<columns.size();++i) {
-                if(i)out<<", ";out<<std::setw(int(widths[i]))<<ecm_stage2::tune::portable::quoted(columns[i]);
-            }
-            out<<"],\n";
-            for(auto row:ordered) {
-                out<<"    [";for(size_t i=0;i<columns.size();++i) {
-                    if(i)out<<", ";const auto value=compact_literal(row->at(columns[i]));
-                    out<<std::setw(int(widths[i]))<<value;
-                }out<<"],\n";
-            }out<<"]\n";
+            for(const char *k:{"condition","carrier_exponent","modulus_kind","b1","b2","d","length","batch","tile","fold_resident","frontier_resident","source","benchmark_kind","repeats","mean_seconds","stddev_seconds"})
+                if(names.erase(k))columns.push_back(k);
+            columns.insert(columns.end(),names.begin(),names.end());
+            std::stable_sort(rows.begin(),rows.end(),[&](const Fields &a,const Fields &b){
+                return ntt?std::make_tuple(uint(a,"length"),uint(a,"batch"),optional_uint(a,"tile"))<std::make_tuple(uint(b,"length"),uint(b,"batch"),optional_uint(b,"tile")):
+                    std::make_tuple(uint(a,"condition"),uint(a,"carrier_exponent"),uint(a,"b2"),uint(a,"d"),uint(a,"b1"),required(a,"source"))<
+                    std::make_tuple(uint(b,"condition"),uint(b,"carrier_exponent"),uint(b,"b2"),uint(b,"d"),uint(b,"b1"),required(b,"source"));
+            });
+            std::vector<std::vector<std::string>> matrix(1);
+            for(const auto &c:columns)matrix[0].push_back(ecm_stage2::tune::portable::quoted(c));
+            for(const auto &s:rows){std::vector<std::string> row;for(const auto &c:columns){const auto at=s.find(c);row.push_back(at==s.end()?"\"\"":compact_literal(at->second));}matrix.push_back(std::move(row));}
+            std::vector<size_t> widths(columns.size());for(const auto &row:matrix)for(size_t i=0;i<row.size();++i)widths[i]=std::max(widths[i],row[i].size());
+            out<<"\n["<<section<<"]\nmatrix = [\n";
+            for(const auto &row:matrix){out<<"    [";for(size_t i=0;i<row.size();++i){if(i)out<<", ";out<<std::setw(int(widths[i]))<<row[i];}out<<"],\n";}out<<"]\n";
         };
-        std::vector<Word> knots;
-        for(const auto &g:groups)if(knots.empty() || knots.back()!=g.first.first)knots.push_back(g.first.first);
-        Word width=0,index=0;
-        for(const auto &g:groups){if(width!=g.first.first){width=g.first.first;index=0;
-                const auto next=std::upper_bound(knots.begin(),knots.end(),width);
-                out<<"\n# Width "<<width<<" bits; rows below describe this knot only.\n";
-                if(next!=knots.end())out<<"# Interval ["<<width<<", "<<*next<<"): interior widths use model estimates.\n";
-                else out<<"# Widths above "<<width<<" bits use model extrapolation.\n";
-            }
-            emit_group("width."+std::to_string(width)+".table."+std::to_string(index++),g.second,false);}
+        std::map<Word,std::vector<Fields>> groups;
+        for(const auto &s:samples){auto row=compact_sample(s);groups[uint(s,"target_bits")].push_back(std::move(row));}
+        for(auto &g:groups)emit("width."+std::to_string(g.first),std::move(g.second),false);
         groups.clear();
-        for(const auto &s:ntt) {
-            validate_ntt_summary(s);std::string key;for(const auto &f:s)key+=f.first+';';
-            groups[{uint(s,"condition"),key}].push_back(&s);
-        }
-        Word condition=Word(-1);index=0;
-        for(const auto &g:groups) {
-            if(condition!=g.first.first){condition=g.first.first;index=0;}
-            emit_group("ntt."+std::to_string(condition)+".table."+std::to_string(index++),g.second,true);
-        }
+        static const std::set<std::string> ntt_fields={"length","batch","tile","max_radix_bits","coop_outer","warp_tail","compact_scratch","repeats","mean_seconds","stddev_seconds","verified","measurement_ids"};
+        for(const auto &s:ntt){validate_ntt_summary(s);Fields row;for(const auto &f:s)if(ntt_fields.count(f.first))row.insert(f);row["verified"]="1";groups[uint(s,"condition")].push_back(std::move(row));}
+        for(auto &g:groups)emit("ntt."+std::to_string(g.first),std::move(g.second),true);
         return out.str();
     }
 };

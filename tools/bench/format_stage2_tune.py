@@ -7,12 +7,14 @@ import tomllib
 
 def format_rows(source: str) -> tuple[str, int]:
     document = tomllib.loads(source)
+    if document.get('profile',{}).get('format')!=8:
+        raise ValueError('The formatter requires format 8; regenerate older profiles')
     changed = 0
-    section = re.compile(r"(?m)^\[ntt\.(\d+)\.table\.(\d+)\][^\r\n]*\r?\n(?:(?!^\[).)*", re.S | re.M)
+    section = re.compile(r"(?m)^\[ntt\.(\d+)\][^\r\n]*\r?\n(?:(?!^\[).)*", re.S | re.M)
 
     def rewrite(match):
         nonlocal changed
-        table = document["ntt"][match[1]]["table"][match[2]]
+        table = document["ntt"][match[1]]
         block = match[0]
         rows = re.search(r"(?m)^matrix\s*=\s*\[\s*\r?\n(.*?)^\][ \t]*", block, re.S)
         if rows is None:

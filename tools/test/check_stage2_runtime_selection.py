@@ -7,8 +7,7 @@ import re
 import statistics
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def spread(values):
-    m=statistics.median(values)
-    return m,statistics.median(abs(x-m) for x in values)
+    return statistics.fmean(values),statistics.stdev(values) if len(values)>1 else 0
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--study',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
@@ -24,21 +23,21 @@ def main():
             assert c['samples']==len(values),(key,c,len(values))
             if values:
                 m,mad=spread(values)
-                assert abs(m-c['median_seconds'])<1e-8 and abs(mad-c['mad_seconds'])<1e-8
+                assert abs(m-c['mean_seconds'])<1e-8 and abs(mad-c['stddev_seconds'])<1e-8
                 current[key]=(m,mad)
         if not plan['runtime_probe']:
             key=row['d'],row['carrier_exponent'];assert len(history[key])>=2
-            m,mad=current[key];lower=m-2*1.4826*mad
-            assert all(v+2*1.4826*d>=.98*lower for v,d in current.values()),'selected path is measurably dominated'
+            m,mad=current[key];lower=m-2*mad
+            assert all(v+2*d>=.98*lower for v,d in current.values()),'selected path is measurably dominated'
             measured+=1
         obs=row.get('tune_observation')
         if obs:
             s=obs['sample'];identifier=s['runtime_sample_id'];assert identifier not in ids;ids.add(identifier)
             assert s['clean']==1 and not s['bad'] and not s['hits'] and s['checked'] and s['selftest_cases']
-            assert s['repeats']==1 and s['median_seconds']>0
-            assert abs(s['init_seconds']+s['main_seconds']-s['median_seconds'])<1e-7
+            assert s['repeats']==1 and s['mean_seconds']>0
+            assert abs(s['init_seconds']+s['main_seconds']-s['mean_seconds'])<1e-7
             assert s['b2']==row['B2'] and s['d']==row['d'] and s['carrier_exponent']==row['carrier_exponent']
-            history.setdefault((s['d'],s['carrier_exponent']),[]).append(s['median_seconds']);observations+=1
+            history.setdefault((s['d'],s['carrier_exponent']),[]).append(s['mean_seconds']);observations+=1
     stats=[]
     for line in (folder/'engine.log').read_text(encoding='utf-8').splitlines():
         if line.startswith('s4_multiply_stats: '):

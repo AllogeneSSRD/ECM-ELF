@@ -28,7 +28,7 @@ def main():
     before=sha(path);samples=import_study(path,condition,audit)
     assert samples and sum(s['repeats'] for s in samples)==sum(r['category'] in ('timing','control') and
         not r['result']['hits'] for r in data['runs'])
-    assert all(s['source']=='measured' and s['median_seconds']>0 and s['clean']==1 for s in samples)
+    assert all(s['source']=='measured' and s['mean_seconds']>0 and s['clean']==1 for s in samples)
     formal=next(i for i,r in enumerate(data['runs']) if r['category']=='timing')
     mutations={
         'incomplete':lambda d:d.update(complete=False),

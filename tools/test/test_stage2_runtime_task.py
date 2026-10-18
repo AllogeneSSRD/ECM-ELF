@@ -1,7 +1,7 @@
 """Replay a verified NF saved point to check automatic runtime D/carrier choice.
 
 This is a functional selection gate, not new independent ECM coverage. Copies
-the first point and a legacy profile into a fresh ignored evidence directory.
+the first point and a matching format-8 profile into a fresh ignored evidence directory.
 """
 import argparse
 import hashlib
@@ -29,7 +29,10 @@ def main():
     assert whole%n==0 and whole!=n
     saved=out/'points.save';saved.write_text((point+'\n')*a.curves,encoding='utf-8')
     profile=out/'tune.toml';shutil.copy2(a.profile,profile)
-    old_samples=len(summaries(tomllib.loads(profile.read_text(encoding='utf-8-sig'))))
+    original=tomllib.loads(profile.read_text(encoding='utf-8-sig'))
+    if original.get('profile',{}).get('format')!=8:
+        raise ValueError('Use a newly calibrated format-8 seed profile')
+    old_samples=len(summaries(original))
     queue=out/'worktodo.txt';queue.write_text(
         f'ECMSTAGE2=1,2,{a.exponent},-1,points.save,{a.b2},0,{a.curves},"{whole//n}"\n',encoding='utf-8')
     ini=out/'ecm.ini';ini.write_text('user=\ncomputer=\nverbose=false\nstage2_finished=finished.txt\n'
@@ -51,14 +54,15 @@ def main():
     final=rows[-3:];assert all(not r['tune_plan']['runtime_probe'] for r in final)
     assert len({(r['d'],r['carrier_exponent']) for r in final})==1,'winner reverted during stable observations'
     samples=summaries(tomllib.loads(profile.read_text(encoding='utf-8-sig')))
-    current=[s for s in samples if s.get('measurement_binary_sha256')==identities[str(exe)] and s.get('benchmark_kind')=='runtime_save']
+    version=re.search(r'inline constexpr char version\[\] = "([^"]+)"', (ROOT/'src/core/ecm_program_version.h').read_text())[1]
+    current=[s for s in samples if s.get('program_version')==version and s.get('benchmark_kind')=='runtime_save']
     groups={}
-    for s in current:groups.setdefault((s['d'],s['carrier_exponent']),[]).append(s['median_seconds'])
-    assert all(2<=len(v)<=3 for v in groups.values()) and len(samples)>old_samples
+    for s in current:groups[(s['d'],s['carrier_exponent'])]=dict(repeats=s['repeats'],mean_seconds=s['mean_seconds'],stddev_seconds=s['stddev_seconds'])
+    assert all(2<=v['repeats']<=3 for v in groups.values()) and len(samples)>old_samples
     assert all(sha(Path(f))==h for f,h in identities.items())
     report=dict(complete=True,device=a.device,identities=identities,curves=len(rows),
         comparison='functional replay of one saved point; no new independent ECM coverage',
         target_bits=n.bit_length(),b2=a.b2,carrier_first=True,stable_winner=dict(d=final[-1]['d'],carrier=final[-1]['carrier_exponent']),
-        groups=[dict(d=d,carrier=c,samples=times) for (d,c),times in groups.items()],legacy_samples_retained=True)
+        groups=[dict(d=d,carrier=c,samples=times) for (d,c),times in groups.items()],existing_parameter_rows_retained=True)
     (out/'result.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8');print(json.dumps(report))
 if __name__=='__main__':main()

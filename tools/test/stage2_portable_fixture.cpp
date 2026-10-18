@@ -72,9 +72,9 @@ int main(int argc,char **argv) {
             p::Estimator empty(profile,profile.conditions.begin()->second,p::Ignore{},query);
             for(auto d:{30030ull,60060ull,120120ull})for(auto b:{2600000000ull,26000000000ull,260000000000ull}) {
                 auto sample=seed;sample["d"]=std::to_string(d);sample["p"]=std::to_string(ecm_stage2::cost::phi(d)/2);
-                sample["b2"]=std::to_string(b);sample["mad_seconds"]="0";
+                sample["b2"]=std::to_string(b);sample["stddev_seconds"]="0";
                 p::Work w;if(!p::work(empty.shape(sample),query,cost,w))throw std::runtime_error("fit fixture shape");
-                sample["median_seconds"]=p::numeric(seconds(w));profile.update(sample);
+                sample["mean_seconds"]=p::numeric(seconds(w));profile.update(sample);
             }
             p::Estimator model(profile,profile.conditions.begin()->second,p::Ignore{},query);
             auto target=model.shape(seed);target.d=90090;target.b2=26000000000;
@@ -83,7 +83,7 @@ int main(int argc,char **argv) {
                std::string(prediction.model)!="portable_nonnegative_v1" ||
                std::abs(prediction.seconds-seconds(w))>1e-5*seconds(w) || prediction.relative_error>1e-5)
                 throw std::runtime_error("qualified nonnegative model did not recover fixed cost");
-            profile.samples[4]["median_seconds"]=p::numeric(2*ecm_stage2::tune::real(profile.samples[4],"median_seconds"));
+            profile.samples[4]["mean_seconds"]=p::numeric(2*ecm_stage2::tune::real(profile.samples[4],"mean_seconds"));
             p::Estimator damaged(profile,profile.conditions.begin()->second,p::Ignore{},query);
             double value=0,error=0;if(damaged.fitted(target,w,value,error))throw std::runtime_error("bad holdout model qualified");
             std::cout<<"true";

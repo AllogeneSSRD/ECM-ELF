@@ -29,7 +29,8 @@ def main():
     selected=next((r for r in before.splitlines() if r.split(',')[0].strip()==str(a.device)),None)
     if selected is None or '4060 Laptop' not in selected:
         raise ValueError('This agreed validation requires the RTX 4060 Laptop device')
-    ini=out/'test.ini';ini.write_text('stage2_log_level=quiet\nstage2_log_file=\nstage2_tune_profile=\n',encoding='utf-8')
+    ini=out/'test.ini';ini.write_text('stage2_log_level=quiet\nstage2_log_file=\nstage2_tune_profile=\n'
+                                   'stage2_tune_runtime=false\n',encoding='utf-8')
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),device=selected,cases=[])
     def run(name,args,timeout=180,expected_success=True):
         command=[str(exe),'--ini',str(ini),'--device',str(a.device),*map(str,args)]
@@ -49,16 +50,18 @@ def main():
     assert not any(prefix in first for prefix in ('stage2_phase:', 'real_baby:', 's4_multiply_stats:',
         'batched_progress:', 'ntt_workspace_stats:', 'stage2_real:', 'real_shape:', 'mem_budget:'))
     table=tomllib.loads(profile.read_text(encoding='utf-8'))
-    assert table['profile']['format']==7
+    assert table['profile']['format']==8
     assert {512,4423} <= {s['target_bits'] for s in summaries(table) if s['source']=='measured'}
     assert 'sample' not in table and 'width' in table
-    original={tuple(s[k] for k in ['condition','target_bits','b1','b2','d','carrier_exponent','execution_path']):s['median_seconds']
+    original={tuple(s[k] for k in ['condition','target_bits','b1','b2','d','carrier_exponent','execution_path']):s
               for s in summaries(table) if s['source']=='measured'}
     run('tune_incremental',common+['--tune-budget-seconds',1])
     again=tomllib.loads(profile.read_text(encoding='utf-8'))
     for s in summaries(again):
         key=tuple(s[k] for k in ['condition','target_bits','b1','b2','d','carrier_exponent','execution_path'])
-        if key in original and s['source']=='measured':assert s['median_seconds']<=original[key]
+        if key in original and s['source']=='measured':
+            assert s['repeats']>=original[key]['repeats']
+            if s['repeats']==original[key]['repeats']:assert s['mean_seconds']==original[key]['mean_seconds']
     evidence=Path(re.search(r'evidence=(.+)',first).group(1).strip())
     spec=importlib.util.spec_from_file_location('reference',ROOT/'tools/stat/suyama_mont_ref.py')
     ref=importlib.util.module_from_spec(spec);spec.loader.exec_module(ref)
@@ -70,7 +73,15 @@ def main():
         save.write_text(f'METHOD=ECM; PARAM=0; SIGMA=26; B1=1000; N=0x{n:x}; X=0x{point["x"]:x}; Z=1;\n',encoding='utf-8')
         selected=run(f'cross_b1_{bits}',['--save',save,'--b2',60000,'--d',210,'--plan-only','--tune-profile',profile,
             '--short-calibration',0,'--arena-mb',512,'--owner-budget-mb',640])
-        assert '"selected":true' in selected
+        # Reusing an exact timing does not imply replacing a protected default
+        # D. Check the actual B1-independent anchor instead of that UI flag.
+        choice=next(json.loads(line) for line in selected.splitlines()
+                    if line.startswith('{') and json.loads(line).get('type')=='tune_selection')
+        assert choice['model']=='exact_shape_measurement_v1' and choice['source']=='measured'
+        assert choice['B1']==1000 and choice['D']==210 and choice['target_bits']==bits
+        expected=next(s['mean_seconds'] for s in summaries(again) if s['target_bits']==bits and
+                      s['carrier_exponent']==0 and s['d']==210 and s['source']=='measured')
+        assert abs(choice['estimated_seconds']-expected)<1e-10
         if bits==512:
             short=out/'short.toml'
             args=['--save',save,'--b2',60000,'--d',210,'--plan-only','--tune-profile',short,'--arena-mb',512]
@@ -104,7 +115,7 @@ def main():
     run('ntt_final_summary',['--tune','ntt','--tune-file',ntt,'--length-log2','10:11',
         '--tune-slices','1,4','--tune-repeats',2,'--tune-budget-seconds',10])
     nt=tomllib.loads(ntt.read_text(encoding='utf-8'))
-    assert nt['profile']['format']==7 and len(summaries(nt,'ntt'))==4
+    assert nt['profile']['format']==8 and len(summaries(nt,'ntt'))==4
     assert all('seconds' not in s and 'outer_radix_bits' not in s for s in summaries(nt,'ntt'))
     merged=out/'merged.toml'
     run('merge_summaries',['--tune','ecm','--tune-merge',profile,'--tune-merge',fallback,
@@ -131,7 +142,7 @@ def main():
             '--tune-exponents',512,'--tune-d',210,'--tune-b2',60000,
             '--tune-repeats',2,'--tune-budget-seconds',30,'--arena-mb',512])
         assert 'tune_profile_reset:' in regenerated
-        assert tomllib.loads(replacement.read_text(encoding='utf-8'))['profile']['format']==7
+        assert tomllib.loads(replacement.read_text(encoding='utf-8'))['profile']['format']==8
     window_profile=out/'window.toml'
     windows=run('local_d_window',['--tune','ecm','--tune-file',window_profile,
         '--tune-exponents',512,'--tune-d','210,330,390,420,510','--tune-b2',260000,
@@ -143,8 +154,10 @@ def main():
     ds=[210,330,390,420,510]
     actual={s['d'] for s in summaries(wt) if s['b2']==260000}
     assert all(int(d) in actual for _,_,d in regions) and actual<=set(ds)
-    assert wt['profile']['selected_candidates']==len(actual)
-    assert wt['profile']['grid_candidates']==5
+    targets=int(re.search(r'ecm_tune_inputs: targets=(\d+)',windows)[1])
+    grid_count=int(re.search(r'ecm_tune_complete:.* grid=(\d+)',windows)[1])
+    assert len(actual)>0 and grid_count==len(ds)*targets
+    assert all(set(t)=={'matrix'} for t in wt['width'].values())
     run('execute_4423',['--save',out/'n4423_b1000.save','--b2',60000,'--d',210,'--tune-profile',profile,
         '--short-calibration',0,'--curves',1,'--results',out/'executed.jsonl','--log',out/'executed_engine.log','--arena-mb',512])
     # The first task lies outside calibrated widths, but a later valid task is
@@ -160,7 +173,13 @@ def main():
     queue_before=partial.read_bytes()
     ranged=run('partially_covered_queue',['--worktodo',partial,'--once','--plan-only',
         '--tune-profile',profile,'--d',210,'--arena-mb',512])
-    assert 'stage2_short_calibration:' not in ranged and '"selected":true' in ranged
+    choices=[json.loads(line) for line in ranged.splitlines() if line.startswith('{') and
+             json.loads(line).get('type')=='tune_selection']
+    assert 'stage2_short_calibration:' not in ranged
+    # --once plans the first, uncovered task. The covered future task prevents
+    # unnecessary calibration, while the first task retains its prior/model.
+    assert any(c['target_bits']==4944 and c['D']==210 and c['source']=='builtin_model' for c in choices)
+    assert any(s['target_bits']==512 and s['source']=='measured' for s in summaries(tomllib.loads(profile.read_text(encoding='utf-8'))))
     assert partial.read_bytes()==queue_before
     saved=ROOT/'data/experiments/ecm_tune_n318_prod_20261010/stage1/n318_generic_b10000000_c8_r0/stage1.save'
     if saved.is_file():
@@ -176,7 +195,8 @@ def main():
         ct=tomllib.loads(carrier.read_text(encoding='utf-8'))
         assert any(s['carrier_exponent']==503 for s in summaries(ct))
         locked=run('worktodo_carrier_lock',args+['--carrier-exponent',503])
-        assert '"selected":true' in locked and '"carrier_exponent":503' in locked
+        plans=[json.loads(line) for line in locked.splitlines() if line.startswith('{')]
+        assert any(p.get('type')=='stage2_plan' and p['carrier_exponent']==503 for p in plans)
     report['passed']=True
     (out/'report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     print(json.dumps(report))

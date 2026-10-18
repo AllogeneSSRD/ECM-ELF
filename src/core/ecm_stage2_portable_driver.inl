@@ -17,13 +17,13 @@ pt::Profile portable_read(const fs::path &path) {
     if(!fs::is_regular_file(path))return {};
     try {return pt::Profile::load(path);}
     catch(const pt::UnsupportedFormat &) {
-        std::cout<<"tune_profile_reset: incompatible development format; calibration will regenerate "<<path.string()<<std::endl;
+        std::cout<<"tune_profile_reset: incompatible development format/version; calibration will regenerate "<<path.string()<<std::endl;
         return {};
     }
 }
 et::Fields portable_condition(const Options &o) {
     EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(o.device,&info))throw std::runtime_error("cannot query tuning device");
-    et::Fields f={{"uuid_hex",json_string(info.uuid_hex)},{"sm_major",std::to_string(info.major)},
+    et::Fields f={{"program_version",pt::quoted(ecm_program::version)},{"uuid_hex",json_string(info.uuid_hex)},{"sm_major",std::to_string(info.major)},
         {"sm_minor",std::to_string(info.minor)},{"cuda_runtime",std::to_string(info.runtime)},
         {"cuda_driver",std::to_string(info.driver)},{"gl_fixed_mode",std::to_string(info.fixed_mode)},
         {"outer_unroll_u",std::to_string(info.outer_unroll_u)},{"add_sub_mask",std::to_string(NTT_GL_ADD_SUB_MASK)},
@@ -39,10 +39,10 @@ void configure_short_ntt_batches(const Options &o) {
     _putenv_s("NTT_S4_SHORT_BATCH_HASH",o.short_batch_tune?"0":"");
     std::vector<EcmStage2NttBatchSample> samples;uint64_t hash=0;
     if(o.short_batch_tune && !o.tune_profile.empty() && fs::is_regular_file(o.tune_profile)) {
-        const auto profile=pt::Profile::load(o.tune_profile);const auto current=portable_condition(o);
+        const auto profile=portable_read(o.tune_profile);const auto current=portable_condition(o);
         const auto ignore=pt::Ignore::parse(o.tune_ignore);ecm_stage2::ShortNttBatchPolicy policy;
         for(const auto &s:profile.ntt)if(pt::ntt_matches(profile.conditions.at(et::uint(s,"condition")),current,ignore))
-            policy.observe(et::uint(s,"length"),et::uint(s,"batch"),et::real(s,"median_seconds"));
+            policy.observe(et::uint(s,"length"),et::uint(s,"batch"),et::real(s,"mean_seconds"));
         hash=14695981039346656037ull;
         for(const auto &length:policy.seconds)for(const auto &batch:length.second) {
             samples.push_back({length.first,batch.first,batch.second});
@@ -58,14 +58,12 @@ void configure_short_ntt_batches(const Options &o) {
         "ntt_batch_policy: mode=tune max_log2=19 samples=%llu hash=%llu fallback=%s\n",
         (unsigned long long)samples.size(),(unsigned long long)hash,samples.empty()?"no_matching_short_ntt":"legacy_when_unmeasured");
 }
-void portable_complete_ratios(pt::Profile &profile);
 void portable_prediction_fields(et::Fields &sample,const pt::WidthEstimate &prediction,const char *basis) {
     sample["predicted_seconds"]=pt::numeric(prediction.seconds);
-    sample["measured_model_ratio"]=pt::numeric(et::real(sample,"median_seconds")/prediction.seconds);
+    sample["measured_model_ratio"]=pt::numeric(et::real(sample,"mean_seconds")/prediction.seconds);
     sample["prediction_model"]=pt::quoted(prediction.model);sample["prediction_basis"]=pt::quoted(basis);
 }
 void portable_publish(const fs::path &path,pt::Profile &profile) {
-    portable_complete_ratios(profile);
     if(!path.parent_path().empty())fs::create_directories(path.parent_path());
     const fs::path partial(path.string()+".partial."+std::to_string(GetCurrentProcessId()));
     std::ofstream out(partial,std::ios::binary|std::ios::trunc);
@@ -90,24 +88,6 @@ bool portable_query(ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::
     const auto key=std::make_pair(m,bits);auto at=cache.find(key);
     if(at==cache.end()) {Result r;r.ok=ecm_cuda_stage2_shape_query(m,bits,&r.n,&r.slots);at=cache.emplace(key,r).first;}
     if(n)*n=at->second.n;if(slots)*slots=at->second.slots;return at->second.ok;
-}
-void portable_complete_ratios(pt::Profile &profile) {
-    // Older summaries have no prospective forecast. Reconstruct with the row
-    // excluded, and label it retrospective rather than independent validation.
-    std::vector<std::pair<size_t,et::Fields>> updates;
-    std::map<ecm_stage2::Word,std::unique_ptr<pt::Estimator>> models;
-    for(size_t i=0;i<profile.samples.size();++i) {
-        const auto &sample=profile.samples[i];if(!pt::measured(sample) || sample.count("measured_model_ratio"))continue;
-        const auto condition=et::uint(sample,"condition");auto &model=models[condition];
-        if(!model)model=std::make_unique<pt::Estimator>(profile,profile.conditions.at(condition),pt::Ignore::parse(""),portable_query);
-        pt::WidthPredictor predictor(*model,&sample);pt::WidthEstimate prediction;
-        if(predictor.predict(model->shape(sample),prediction)) {
-            auto completed=sample;portable_prediction_fields(completed,prediction,"leave_one_out");
-            updates.emplace_back(i,std::move(completed));
-        }
-    }
-    for(auto &update:updates)profile.samples[update.first]=std::move(update.second);
-    if(!updates.empty())++profile.revision;
 }
 pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d,unsigned carrier) {
     Big n,plus;mpz_set_str(n.z,r.n.c_str(),16);mpz_add_ui(plus.z,n.z,1);
@@ -154,25 +134,25 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     RuntimeTuneObservation result;
     const auto profile=portable_read(o.tune_profile);result.condition=portable_condition(o);
     pt::Estimator engine(profile,result.condition,pt::Ignore::parse(o.tune_ignore),portable_query);
-    engine.runtime_binary=ecm_stage2::sha256_file(executable());pt::WidthPredictor predictor(engine);
+    engine.runtime_version=ecm_program::version;pt::WidthPredictor predictor(engine);
     // Selection normally fixes D. A protected legacy fallback may leave it 0.
     const auto d=o.d?o.d:portable_legacy_d(o,r,o.b2,o.carrier_exponent,false);
     auto shape=portable_shape(o,r,o.b2,d,o.carrier_exponent);pt::Work work;
     if(!engine.cached_work(shape,work) || work.p<512 || !work.exact_topology)return result;
-    std::string plan;if(!portable_admit(o,r,shape,plan) || engine.runtime_statistics(shape).count>=o.runtime_samples)return result;
+    std::string plan;if(!portable_admit(o,r,shape,plan) || engine.runtime_statistics(shape,true).count>=o.runtime_samples)return result;
     pt::WidthEstimate prediction;if(!predictor.predict(shape,prediction))return result;
     result.shape=shape;
     auto &s=result.sample;
     s["target_bits"]=std::to_string(shape.target_bits);s["arithmetic_bits"]=std::to_string(shape.arithmetic_bits);
     s["carrier_exponent"]=std::to_string(shape.carrier);s["modulus_kind"]=pt::quoted(shape.mersenne?"mersenne":"generic");
     s["b1"]=std::to_string(r.b1);s["b2"]=std::to_string(o.b2);s["source"]="\"measured\"";
-    s["benchmark_kind"]="\"runtime_save\"";s["repeats"]="1";s["warmup_runs"]="0";s["mad_seconds"]="0";
+    s["benchmark_kind"]="\"runtime_save\"";s["repeats"]="1";s["warmup_runs"]="0";s["stddev_seconds"]="0";
     s["condition"]="0";s["execution_path"]=pt::quoted(shape.fold?(shape.frontier?"resident":"host_frontier"):"host_fold_frontier");
     s["giant_chunk_points"]=std::to_string(shape.giant_chunk);s["giant_chain_min"]=std::to_string(shape.chain_min);
     s["giant_force_ladder"]=shape.force_ladder?"1":"0";
     s["predicted_seconds"]=pt::numeric(prediction.seconds);s["prediction_model"]=pt::quoted(prediction.model);
     s["prediction_basis"]="\"before_measurement\"";
-    s["measurement_binary_sha256"]=pt::quoted(ecm_stage2::sha256_file(executable()));
+    s["program_version"]=pt::quoted(ecm_program::version);
     s["runtime_sample_id"]=pt::quoted(o.receipt.empty()?stage2_queue::token():o.receipt);
     s["runtime_probe"]=o.runtime_probe?"1":"0";
     return result;
@@ -186,7 +166,7 @@ void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Me
     auto metrics=et::fields(tune_metrics_json(m));metrics.erase("total_seconds");
     for(const auto &field:metrics)observation.sample[field.first]=field.second;
     auto &sample=observation.sample;
-    sample["median_seconds"]=pt::numeric(m.total_seconds);sample["min_seconds"]=sample["max_seconds"]=sample["median_seconds"];
+    sample["mean_seconds"]=pt::numeric(m.total_seconds);sample["min_seconds"]=sample["max_seconds"]=sample["mean_seconds"];
     sample["runtime_completed_ns"]=std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     const auto predicted=et::real(sample,"predicted_seconds");
@@ -261,7 +241,7 @@ uint64_t portable_default_d(const Options &o,const Record &r,uint64_t b2,unsigne
 }
 std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &engine,pt::WidthPredictor &predictor) {
     if(o.relocation || o.tune_child || o.tune_profile.empty())return {};
-    engine.runtime_binary=ecm_stage2::sha256_file(executable());
+    engine.runtime_version=ecm_program::version;
     const auto carriers=portable_carriers(o,r);
     std::vector<pt::RuntimeCandidate> candidates;
     uint64_t ordinary_default=0;
@@ -276,9 +256,9 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
             const auto shape=engine.shape(sample);
             if(shape.target_bits!=original.target_bits || shape.arithmetic_bits!=original.arithmetic_bits ||
                shape.carrier!=carrier || shape.b2!=o.b2 || (o.has_d && o.d && shape.d!=o.d))continue;
-            if(!historical || et::real(sample,"median_seconds")<et::real(*historical,"median_seconds"))historical=&sample;
-            if(pt::runtime_observation(sample) && sample.count("measurement_binary_sha256") &&
-               pt::text(sample,"measurement_binary_sha256")==engine.runtime_binary) {
+            if(!historical || et::real(sample,"mean_seconds")<et::real(*historical,"mean_seconds"))historical=&sample;
+            if(pt::runtime_observation(sample) && sample.count("program_version") &&
+               pt::text(sample,"program_version")==engine.runtime_version) {
                 if(!ds.count(shape.d))ds[shape.d]=2;
                 tested_alternate|=shape.d!=center;
             }
@@ -312,15 +292,15 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         <<",\"P\":"<<ecm_stage2::d_catalog::degree(shape.d)<<",\"target_bits\":"<<shape.target_bits
         <<",\"arithmetic_bits\":"<<shape.arithmetic_bits<<",\"carrier_exponent\":"<<shape.carrier
         <<",\"source\":"<<json_string(choice.probe?"runtime_trial":"measured")
-        <<",\"model\":\"runtime_shape_statistics_v1\",\"runtime_probe\":"<<(choice.probe?"true":"false")
+        <<",\"model\":\"runtime_shape_mean_v2\",\"runtime_probe\":"<<(choice.probe?"true":"false")
         <<",\"runtime_samples\":"<<chosen.statistics.count<<",\"runtime_sample_limit\":"<<o.runtime_samples;
-    if(chosen.statistics.count)out<<",\"median_seconds\":"<<chosen.statistics.seconds<<",\"mad_seconds\":"<<chosen.statistics.mad;
+    if(chosen.statistics.count)out<<",\"mean_seconds\":"<<chosen.statistics.seconds<<",\"stddev_seconds\":"<<chosen.statistics.stddev;
     out<<",\"runtime_candidates\":[";
     for(size_t i=0;i<candidates.size();++i) {
         if(i)out<<',';const auto &c=candidates[i];
         out<<"{\"D\":"<<c.shape.d<<",\"carrier_exponent\":"<<c.shape.carrier
             <<",\"priority\":"<<c.priority<<",\"samples\":"<<c.statistics.count;
-        if(c.statistics.count)out<<",\"median_seconds\":"<<c.statistics.seconds<<",\"mad_seconds\":"<<c.statistics.mad;
+        if(c.statistics.count)out<<",\"mean_seconds\":"<<c.statistics.seconds<<",\"stddev_seconds\":"<<c.statistics.stddev;
         out<<'}';
     }
     out<<']';
@@ -365,9 +345,9 @@ std::string portable_width_select(Options &o,const Record &r) {
             shape=portable_shape(o,r,o.b2,d,carrier);
             if(!predictor.predict(shape,estimate))continue;
             const bool paired=estimate.exact && reference.exact && pt::LocalSearch::improves(
-                {estimate.seconds,estimate.mad},{reference.seconds,reference.mad});
+                {estimate.seconds,estimate.stddev},{reference.seconds,reference.stddev});
             const bool family_pair=estimate.exact && family_reference.exact && pt::LocalSearch::improves(
-                {estimate.seconds,estimate.mad},{family_reference.seconds,family_reference.mad});
+                {estimate.seconds,estimate.stddev},{family_reference.seconds,family_reference.stddev});
             if(d!=center && !paired && !family_pair && !pt::WidthPredictor::improves(estimate,family_reference))continue;
             if(paired || pt::WidthPredictor::improves(estimate,reference))candidates.push_back({shape,estimate,family_reference,center});
         }
@@ -379,9 +359,9 @@ std::string portable_width_select(Options &o,const Record &r) {
         if(!portable_admit(o,r,shape,plan) || !predictor.predict(shape,candidate.estimate)){++rejected;continue;}
         const auto &estimate=candidate.estimate;
         const bool paired=estimate.exact && reference.exact && pt::LocalSearch::improves(
-            {estimate.seconds,estimate.mad},{reference.seconds,reference.mad});
+            {estimate.seconds,estimate.stddev},{reference.seconds,reference.stddev});
         const bool family_pair=estimate.exact && candidate.family.exact && pt::LocalSearch::improves(
-            {estimate.seconds,estimate.mad},{candidate.family.seconds,candidate.family.mad});
+            {estimate.seconds,estimate.stddev},{candidate.family.seconds,candidate.family.stddev});
         if(shape.d!=candidate.center && !paired && !family_pair && !pt::WidthPredictor::improves(estimate,candidate.family)){++rejected;continue;}
         if(!paired && !pt::WidthPredictor::improves(estimate,reference)){++rejected;continue;}
         chosen=shape;prediction=estimate;break;
@@ -426,7 +406,7 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
         }
         if(!anchor)throw std::runtime_error("no Stage1 cost anchor for batch/type/exponent");
         const auto container=ecm_stage2::stage1_cost::tier(unsigned(et::uint(*anchor,"target_bits")));
-        t1=et::real(*anchor,"median_seconds")*double(r.b1)/et::uint(*anchor,"b1")*
+        t1=et::real(*anchor,"mean_seconds")*double(r.b1)/et::uint(*anchor,"b1")*
             double(requested.bits)*requested.bits/(double(container.bits)*container.bits);
         t1_source="legacy_profile_scaled_estimate";
     }
@@ -475,8 +455,8 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
             et::uint(s,"arithmetic_bits")==unsigned(carrier?carrier:bits) &&
             et::uint(s,"carrier_exponent")==carrier && et::uint(s,"b2")==b &&
             ecm_stage2::d_catalog::contains(et::uint(s,"d")) &&
-            pt::LocalSearch::improves({et::real(s,"median_seconds"),et::real(s,"mad_seconds")},
-                {et::real(*base,"median_seconds"),et::real(*base,"mad_seconds")}))
+            pt::LocalSearch::improves({et::real(s,"mean_seconds"),et::real(s,"stddev_seconds")},
+                {et::real(*base,"mean_seconds"),et::real(*base,"stddev_seconds")}))
             paired_ds[{b,carrier}].insert(et::uint(s,"d"));
     }
     for(auto b:b2s)for(auto d:ds)for(auto carrier:carriers) {
@@ -490,10 +470,10 @@ std::string portable_select(Options &o,const Record &r,bool automatic) {
             std::string trial_plan;if(!portable_admit(o,r,shape,trial_plan))continue;
             const auto base=baselines.at({b,carriers.front()}),trial=estimator.observed(shape);
             if(!base || !trial || !pt::LocalSearch::improves(
-                {et::real(*trial,"median_seconds"),et::real(*trial,"mad_seconds")},
-                {et::real(*base,"median_seconds"),et::real(*base,"mad_seconds")}))continue;
-            e.seconds=et::real(*trial,"median_seconds");e.mad=et::real(*trial,"mad_seconds");
-            e.rank=e.seconds+2*e.mad;e.exact=true;e.model="paired_measured_d_v1";
+                {et::real(*trial,"mean_seconds"),et::real(*trial,"stddev_seconds")},
+                {et::real(*base,"mean_seconds"),et::real(*base,"stddev_seconds")}))continue;
+            e.seconds=et::real(*trial,"mean_seconds");e.stddev=et::real(*trial,"stddev_seconds");
+            e.rank=e.seconds+2*e.stddev;e.exact=true;e.model="paired_measured_d_v1";
             e.anchor=trial;e.anchors=1;
             e.validated=pt::optional_uint(*trial,"validation_count")>0 &&
                 pt::matches(profile.conditions.at(et::uint(*trial,"condition")),condition,pt::Ignore{});
@@ -661,9 +641,9 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
     if(trials.empty())return false;
     auto sample=trials.front();std::vector<double> seconds;
     for(const auto &f:trials)seconds.push_back(et::real(f,"total_seconds"));
-    sample.erase("total_seconds");sample["median_seconds"]=pt::numeric(et::median(seconds));sample["mad_seconds"]=pt::numeric(et::mad(seconds));
-    for(auto &field:sample)if(field.first.size()>8 && field.first.compare(field.first.size()-8,8,"_seconds")==0 && field.first!="median_seconds" && field.first!="mad_seconds") {
-        std::vector<double> values;for(const auto &f:trials)values.push_back(et::real(f,field.first.c_str()));field.second=pt::numeric(et::median(values));
+    sample.erase("total_seconds");sample["mean_seconds"]=pt::numeric(pt::average(seconds));sample["stddev_seconds"]=pt::numeric(pt::deviation(seconds));
+    for(auto &field:sample)if(field.first.size()>8 && field.first.compare(field.first.size()-8,8,"_seconds")==0 && field.first!="mean_seconds" && field.first!="stddev_seconds") {
+        std::vector<double> values;for(const auto &f:trials)values.push_back(et::real(f,field.first.c_str()));field.second=pt::numeric(pt::average(values));
     }
     for(const char *key:{"selftest_cases","checked"}) {auto minimum=et::uint(sample,key);for(const auto &f:trials)minimum=std::min(minimum,et::uint(f,key));sample[key]=std::to_string(minimum);}
     sample["condition"]=std::to_string(condition);sample["target_bits"]=std::to_string(shape.target_bits);
@@ -671,6 +651,7 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
     sample["modulus_kind"]=json_string(shape.mersenne?"mersenne":"generic");sample["benchmark_kind"]=json_string(input.kind);
     sample["b1"]=std::to_string(input.record.b1);sample["b2"]=std::to_string(b2);sample["repeats"]=std::to_string(trials.size());
     sample["warmup_runs"]=o.tune_warmup?"1":"0";
+    sample["measurement_ids"]=pt::encoded_ids({stage2_queue::token()});
     sample["source"]="\"measured\"";sample["execution_path"]=json_string(shape.fold?(shape.frontier?"resident":"host_frontier"):"host_fold_frontier");
     sample["giant_chunk_points"]=std::to_string(shape.giant_chunk);sample["giant_chain_min"]=std::to_string(shape.chain_min);
     sample["giant_force_ladder"]=shape.force_ladder?"1":"0";
@@ -679,7 +660,7 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
     if(predicted) {
         portable_prediction_fields(sample,prediction,"before_measurement");
         sample["validation_count"]="1";
-        sample["validation_max_relative_error"]=pt::numeric(std::abs(prediction.seconds-et::median(seconds))/et::median(seconds));
+        sample["validation_max_relative_error"]=pt::numeric(std::abs(prediction.seconds-pt::average(seconds))/pt::average(seconds));
     }
     if(completed_repeats)*completed_repeats=unsigned(trials.size());
     if(completed_sample)*completed_sample=sample;
@@ -701,7 +682,10 @@ void portable_ntt(Options o,pt::Profile &profile,ecm_stage2::Word condition,pt::
             if(et::required(f,"status")=="\"skipped_memory\""){sink.skipped=true;return;}
             if(et::required(f,"status")!="\"measured\"")return;
             f["repeats"]=std::to_string(sink.repeats);et::validate_ntt_measurement(f);
-            f["mad_seconds"]=pt::numeric(et::mad(et::array(et::required(f,"seconds"))));
+            const auto times=et::array(et::required(f,"seconds"));
+            f["mean_seconds"]=pt::numeric(pt::average(times));f["stddev_seconds"]=pt::numeric(pt::deviation(times));
+            f["conv_iter_per_s"]=pt::numeric(et::uint(f,"batch")/pt::average(times));f["batch_iter_per_s"]=pt::numeric(1/pt::average(times));
+            f["measurement_ids"]=pt::encoded_ids({stage2_queue::token()});f.erase("median_seconds");
             for(auto i=f.begin();i!=f.end();)if(!i->second.empty() && i->second.front()=='[')i=f.erase(i);else ++i;
             f.erase("type");f.erase("device_index");
             f["condition"]=std::to_string(sink.condition);f["source"]="\"measured\"";sink.profile.update_ntt(std::move(f));
@@ -1073,7 +1057,7 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
                 if(!reuse) {
                     // A known local duration is a budget bound. A remote tiny-P
                     // prediction cannot reject a production-sized measurement.
-                    if(prior && et::real(*prior,"median_seconds")*(grid.repeats+(o.tune_warmup?1:0))>budget.remaining())
+                    if(prior && et::real(*prior,"mean_seconds")*(grid.repeats+(o.tune_warmup?1:0))>budget.remaining())
                         return outcomes[d]=result;
                     const bool changed=portable_measure(o,settings,input,b,d,carrier,grid.repeats,
                         budget,evidence,profile,condition,target.grid_mersenne,&completed,&formal_sample);
@@ -1084,14 +1068,13 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
                 const auto observation=updated.observed(shape);
                 if(!observation || (!reuse && completed<grid.repeats))return outcomes[d]=result;
                 result.state=Outcome::Tested;
-                // Fastest-on-disk may still be a partial earlier sample. The
-                // current neighborhood uses the completed requested repeats,
-                // without replacing that older fastest summary with a slower one.
+                // Rank this completed trial population; persistent rows combine
+                // independent batches with their true repeat counts.
                 const auto &timing=reuse_current?reference->second:reuse?*observation:formal_sample;
-                result.time={et::real(timing,"median_seconds"),et::real(timing,"mad_seconds")};
+                result.time={et::real(timing,"mean_seconds"),et::real(timing,"stddev_seconds")};
                 cases.push_back({target_index,b,d,carrier,0});
                 std::cout<<"ecm_tune_progress: N="<<bits<<" B2="<<b<<" D="<<d
-                    <<" median="<<result.time.seconds<<" s reused="<<reuse<<std::endl;
+                    <<" mean="<<result.time.seconds<<" s reused="<<reuse<<std::endl;
                 return outcomes[d]=result;
             };
             // Measure the protected reference independently of model seeds.
@@ -1153,11 +1136,11 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
                         if(budget.expired() || stop_requests){complete=false;break;}
                         auto shape=portable_shape(o,r,b,nodes[i].d,carrier);
                         const auto sample=observed.observed(shape);
-                        if(!sample || !pt::LocalSearch::improves({et::real(*sample,"median_seconds"),et::real(*sample,"mad_seconds")},best))continue;
+                        if(!sample || !pt::LocalSearch::improves({et::real(*sample,"mean_seconds"),et::real(*sample,"stddev_seconds")},best))continue;
                         if(!admit(nodes[i].d,shape))continue;
                         const auto actual=observed.observed(shape);
-                        if(actual && pt::LocalSearch::improves({et::real(*actual,"median_seconds"),et::real(*actual,"mad_seconds")},best)) {
-                            best={et::real(*actual,"median_seconds"),et::real(*actual,"mad_seconds")};center=i;
+                        if(actual && pt::LocalSearch::improves({et::real(*actual,"mean_seconds"),et::real(*actual,"stddev_seconds")},best)) {
+                            best={et::real(*actual,"mean_seconds"),et::real(*actual,"stddev_seconds")};center=i;
                         }
                     }
                 }
@@ -1205,12 +1188,12 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
         }
     }
     // Persist only final candidate summaries. Estimates cannot replace measured
-    // fastest values; their source and validation state remain explicit.
+    // measured values; their source and validation state remain explicit.
     pt::Estimator estimator(profile,current,pt::Ignore::parse(o.tune_ignore),portable_query);
     std::ostringstream evidence_key;
-    for(const auto &s:profile.samples)if(pt::measured(s))evidence_key<<pt::scope(s)<<et::required(s,"median_seconds")<<';';
+    for(const auto &s:profile.samples)if(pt::measured(s))evidence_key<<pt::scope(s)<<et::required(s,"mean_seconds")<<';';
     for(const auto &s:profile.ntt)evidence_key<<et::required(s,"condition")<<':'<<et::required(s,"length")<<':'
-        <<et::required(s,"batch")<<':'<<et::required(s,"median_seconds")<<';';
+        <<et::required(s,"batch")<<':'<<et::required(s,"mean_seconds")<<';';
     const auto model_evidence=std::to_string(fingerprint(evidence_key.str()));
     std::vector<et::Fields> estimates;
     for(const auto &c:cases) {
@@ -1223,7 +1206,7 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
             {"d",std::to_string(c.d)},{"p",std::to_string(ecm_stage2::cost::phi(c.d)/2)},{"fold_resident",shape.fold?"1":"0"},
             {"frontier_resident",shape.frontier?"1":"0"},{"source","\"model\""},{"repeats","0"},
             {"execution_path",json_string(shape.fold?(shape.frontier?"resident":"host_frontier"):"host_fold_frontier")},
-            {"median_seconds",pt::numeric(e.seconds)},{"mad_seconds",pt::numeric(e.mad)},
+            {"mean_seconds",pt::numeric(e.seconds)},{"stddev_seconds",pt::numeric(e.stddev)},
             {"model_anchor_count",std::to_string(e.anchors)},{"model_evidence",json_string(model_evidence)},
             {"model_relative_error_allowance",pt::numeric(e.relative_error)}};
         estimates.push_back(std::move(s));

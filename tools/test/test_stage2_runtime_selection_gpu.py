@@ -60,10 +60,10 @@ def main():
     assert all(r['B2']==100000000 and r['d']==30030 and int(r['N_hex'],16)==n for r in rows)
     sample_rows=summaries(tomllib.loads(profile.read_text(encoding='utf-8')))
     runtime=[s for s in sample_rows if s.get('benchmark_kind')=='runtime_save']
-    counts={c:sum(s['carrier_exponent']==c for s in runtime) for c in (0,a.exponent)}
+    counts={c:sum(s['repeats'] for s in runtime if s['carrier_exponent']==c) for c in (0,a.exponent)}
     assert sorted(counts.values())==[2,a.sample_limit],counts
-    assert len({s['runtime_sample_id'] for s in runtime})==a.sample_limit+2
-    assert all(s['clean']==1 and not s['bad'] and not s['hits'] and s['checked']>0 for s in runtime)
+    assert len(runtime)==2 and sum(s['repeats'] for s in runtime)==a.sample_limit+2
+    assert all(s['verified']==1 and s['stddev_seconds']>0 for s in runtime)
     assert all(not r['tune_plan']['runtime_probe'] for r in rows[4:])
     assert len({r['carrier_exponent'] for r in rows[4:]})==1,'stable conditions repeatedly reverted path'
     assert queue.read_text(encoding='utf-8').strip()==''
@@ -80,7 +80,7 @@ def main():
     assert sha(profile)==before
     disabled=json.loads((out/'disabled.jsonl').read_text(encoding='utf-8'))
     assert 'tune_observation' not in disabled
-    assert disabled['tune_plan']['model']=='runtime_shape_statistics_v1' and not disabled['tune_plan']['runtime_probe']
+    assert disabled['tune_plan']['model']=='runtime_shape_mean_v2' and not disabled['tune_plan']['runtime_probe']
     if a.mont_save:
         text=call('auto_b2_plan',['--save',str(a.mont_save.resolve()),'--curves','1','--auto-b2',
             '--auto-min-b2','100000000','--auto-max-b2','100000000','--stage1-seconds-per-curve','1',
