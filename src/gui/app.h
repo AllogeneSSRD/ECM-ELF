@@ -303,7 +303,7 @@ private:
     std::string p95AddPath() const;       // <dir of p95_worktodo_path>\worktodo.add
     std::string p95PendingPath() const;   // <worker dir>\p95_add_pending.txt
     std::string p95WorktodoPath() const;  // the ini value resolved against the worker dir
-    long long p95PendingCount() const;    // lines waiting in that file (0 when absent)
+    long long p95PendingCount();          // cached count; external file checked every 500 ms
     // One-shot measurement of the default font (can it draw CJK?), traced so the tests
     // can check "Chinese renders" without a human looking at the screen.
     void trace_font_metrics();
@@ -329,6 +329,8 @@ private:
     std::string loc_dir_;
     std::string language_ = ecm_config::defaults::gui_language;
     std::string status_;
+    long long p95_pending_cached_ = 0;
+    unsigned long long p95_pending_next_scan_ms_ = 0;
     std::string layout_blob_loaded_;
     std::string worker_exe_;              // [GUI] exe= (empty = auto)
     std::string engine_stage_=ecm_config::defaults::gui_stage;

@@ -1270,10 +1270,11 @@ case-sensitive.<br>
 refresh_hz=<x:Z,1..60>; default=10; unit=Hz
 ```
 
-GUI refresh frequency in Hz. Higher values can smooth charts and status updates at additional UI<br>
-cost. Does not change GPU computation frequency.<br>
-设置 GUI 刷新频率，单位为 Hz。提高可使图表和状态显示更平滑，但增加界面刷新开销；不改变 GPU 计算迭代<br>
-频率。
+Idle GUI frame and worker-status refresh target in Hz. Input messages wake the GUI promptly; higher<br>
+values smooth charts and status updates at additional UI cost. GPU metrics are sampled independently<br>
+at gpu_poll_ms, and neither setting changes computation speed.<br>
+GUI 空闲时绘制帧与 worker 状态处理的目标频率，单位为 Hz。输入消息会及时唤醒界面；提高此值可使图表和<br>
+状态显示更平滑，但增加界面开销。GPU 指标按 gpu_poll_ms 独立采样，两项设置均不改变计算速度。
 
 ### gpu_poll_ms
 

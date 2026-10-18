@@ -499,6 +499,7 @@ bool App::select_workflow_ini(const std::string &path) {
         num_workers_=gui.NumWorkers;priority_=gui.priority;
         exit_confirm_=gui.exit_confirm;graceful_stop_ms_=static_cast<unsigned long long>(gui.graceful_stop_ms);
         ini_=std::move(selected);ini_path_=std::filesystem::absolute(std::filesystem::u8path(path)).u8string();
+        p95_pending_next_scan_ms_ = 0;
         rebuild_workers();autostart_done_=true;selected_worker_=0;
         status_=loc_.t("workers","configuration_selected")+": "+ini_path_;return true;
     } catch(const std::exception &e){status_=e.what();return false;}
@@ -740,6 +741,7 @@ void App::tick() {
         // plus a trace line, so a script can prove what the strip shows.
         for (const P95Notice &notice : d.p95) {
             w.p95 = notice;
+            p95_pending_next_scan_ms_ = 0;
             const char *lvl = notice.level == P95Notice::Level::Ok ? "ok"
                             : notice.level == P95Notice::Level::Warn ? "warn"
                             : notice.level == P95Notice::Level::Pending ? "pending" : "ready";
@@ -1549,18 +1551,21 @@ std::string App::p95PendingPath() const {
     return path_join(worker_dir(), "p95_add_pending.txt");
 }
 
-long long App::p95PendingCount() const {
-    // Read straight from disk (not from a notice) so the red state is also correct when
-    // the pending file was left by an earlier GUI session or by a hand-run driver.
+long long App::p95PendingCount() {
+    // Poll disk independently of worker notices, including files left by an earlier run.
+    // Notices invalidate the cache in tick() so a handoff is reflected immediately.
+    const unsigned long long now = mono_ms();
+    if (now < p95_pending_next_scan_ms_) return p95_pending_cached_;
+    p95_pending_next_scan_ms_ = now + 500;
     std::ifstream in(p95PendingPath());
-    if (!in) return 0;
+    if (!in) return p95_pending_cached_ = 0;
     long long n = 0;
     std::string line;
     while (std::getline(in, line)) {
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
         if (!line.empty()) ++n;
     }
-    return n;
+    return p95_pending_cached_ = n;
 }
 
 void App::draw_p95_notice(float height, float host_top) {
@@ -2352,7 +2357,10 @@ void App::draw_metric_plot(const MetricPlot &p, const std::vector<float> &values
 void App::draw_workers_table() {
     // Stable window id (###workers): the docking layout must survive a language switch,
     // otherwise the titles change and ImGui sees a different window.
-    ImGui::Begin((loc_.t("workers", "title") + "###workers").c_str());
+    if (!ImGui::Begin((loc_.t("workers", "title") + "###workers").c_str())) {
+        ImGui::End();
+        return;
+    }
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,6.0f);
 
     bool busy=false;
@@ -2698,7 +2706,10 @@ void App::draw_stage2_status(const WorkerView &w,bool compact) {
 }
 
 void App::draw_gpu_panel() {
-    ImGui::Begin((loc_.t("gpu", "title") + "###gpu").c_str());
+    if (!ImGui::Begin((loc_.t("gpu", "title") + "###gpu").c_str())) {
+        ImGui::End();
+        return;
+    }
     if (!gpu_.available()) {
         ImGui::TextDisabled("%s", loc_.t("gpu", "nvml_missing").c_str());
         ImGui::TextWrapped("%s", gpu_.reason().c_str());
@@ -2865,7 +2876,10 @@ void App::draw_gpu_panel() {
 }
 
 void App::draw_results_panel() {
-    ImGui::Begin((loc_.t("results", "title") + "###results").c_str());
+    if (!ImGui::Begin((loc_.t("results", "title") + "###results").c_str())) {
+        ImGui::End();
+        return;
+    }
     if (ImGui::Button(loc_.t("results", "rebuild").c_str())) {
         std::string err;
         if (results_.rebuild_from_jsonl(err)) {
@@ -2951,7 +2965,10 @@ void App::draw_results_panel() {
 }
 
 void App::draw_detail_panel() {
-    ImGui::Begin((loc_.t("detail", "title") + "###detail").c_str());
+    if (!ImGui::Begin((loc_.t("detail", "title") + "###detail").c_str())) {
+        ImGui::End();
+        return;
+    }
     if (selected_worker_ >= 0 && selected_worker_ < static_cast<int>(workers_.size())) {
         WorkerView &w = workers_[static_cast<std::size_t>(selected_worker_)];
         ImGui::Text("%s #%d (%s)", loc_.t("workers", "col_name").c_str(), w.index, w.name.c_str());
@@ -2991,7 +3008,10 @@ void App::draw_worker_panes() {
         const std::string title = loc_.t("workers", "log_pane") + " #" +
                                   std::to_string(w.index) + " (" + w.name + ")###log" +
                                   std::to_string(w.index);
-        ImGui::Begin(title.c_str(), &w.show_pane);
+        if (!ImGui::Begin(title.c_str(), &w.show_pane)) {
+            ImGui::End();
+            continue;
+        }
         ImGui::TextColored(w.stage2?ImVec4(.75f,.69f,.97f,1.f):ImVec4(.35f,.84f,.74f,1.f),"%s  |  %s",w.stage2?"Stage2":"Stage1",task_text(w).c_str());
         const std::string worker_version=w.application_version.empty()?loc_.t("workers","version_pending"):w.application_version;
         ImGui::PushStyleColor(ImGuiCol_Text,ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));

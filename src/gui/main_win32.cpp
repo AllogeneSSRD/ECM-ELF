@@ -472,7 +472,7 @@ void apply_ui_font(ecmgui::App &app, float dpi_scale, const char *why) {
     }
 }
 
-void render_frame(float clear[4], int refresh_hz) {
+void render_frame(const float clear[4]) {
     ImGui::Render();
     if (g_d3d.rtv == nullptr || g_d3d.swap_chain == nullptr) {
         // No usable target (a resize is in flight, or the window is occluded): drop the
@@ -880,7 +880,9 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
     const float clear[4] = {0.10f, 0.11f, 0.13f, 1.00f};
     int frames = 0;
-    while (new_frame()) {
+    while (true) {
+        const ULONGLONG frame_started_ms = GetTickCount64();
+        if (!new_frame()) break;
         if (g_skip_frame) continue;           // minimized: no draw, no Present
         if (!switch_language.empty() && frames == switch_after_frames) {
             trace("language: runtime switch to %s (--switch-language)", switch_language.c_str());
@@ -895,9 +897,18 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         }
         app.draw();
         if (app.quit_requested()) break;      // File -> Quit
-        render_frame(const_cast<float *>(clear), app.refresh_hz());
+        render_frame(clear);
         ++frames;
         if (frames == 1 || (frames % 120) == 0) trace("frame %d rendered", frames);
+        // Cap idle redraws without holding input behind the next scheduled frame.
+        const DWORD frame_period_ms = static_cast<DWORD>(1000 / std::clamp(app.refresh_hz(), 1, 60));
+        const ULONGLONG elapsed_ms = GetTickCount64() - frame_started_ms;
+        if (elapsed_ms < frame_period_ms) {
+            const DWORD remaining_ms = static_cast<DWORD>(frame_period_ms - elapsed_ms);
+            if (MsgWaitForMultipleObjectsEx(0, nullptr, remaining_ms, QS_ALLINPUT,
+                                            MWMO_INPUTAVAILABLE) == WAIT_FAILED)
+                Sleep(remaining_ms);
+        }
     }
     trace("frame loop left after %d frame(s)", frames);
 

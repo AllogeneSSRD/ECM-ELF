@@ -88,6 +88,7 @@ $tests = @(
     @{ name = 'results-unit';    kind = 'exe';    target = (Join-Path $Build 'ecm_gui_results_test.exe');     args = @(); gpu = $false; what = 'results.json.txt + results.txt (unit)' }
     @{ name = 'smoke';           kind = 'script'; target = 'test_gui_smoke.ps1';          exe = 'gui';    gpu = $false; what = 'window lifecycle, minimize/restore, layout, font, CJK' }
     @{ name = 'workers';         kind = 'script'; target = 'test_gui_workers.ps1';        exe = 'gui';    fake = $true; gpu = $false; what = 'fake-worker supervision, table geometry, graceful stop' }
+    @{ name = 'refresh';         kind = 'script'; target = 'test_gui_refresh.ps1';        exe = 'gui';    gpu = $false; what = 'idle frame pacing and Prime95 pending-file transitions' }
     @{ name = 'exit-checkpoint'; kind = 'script'; target = 'test_gui_exit_checkpoint.ps1'; exe = 'gui'; cuda = $true; gpu = $true; what = 'exit confirmation + checkpoint written before exit (real driver)' }
     @{ name = 'cjk-pixels';      kind = 'script'; target = 'test_gui_cjk_pixels.ps1';     exe = 'gui';    gpu = $false; what = 'Chinese rendering verified in the window pixels' }
     @{ name = 'gpu-panel';       kind = 'script'; target = 'test_gui_gpu.ps1';            exe = 'gui';    gpu = $true;  what = 'GPU panel + NVML degradation' }
