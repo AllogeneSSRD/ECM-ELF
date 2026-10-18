@@ -16,18 +16,21 @@ KEEP = set(SHAPE) | {'program_version', 'updated_at', 'p', 'source', 'benchmark_
     'model_relative_error_allowance'} | {f'phase_{p}_seconds' for p in PHASES}
 
 
-def matrix_column_order():
+def matrix_column_order(section='ecm'):
     path=Path(__file__).resolve().parents[2]/'src/core/ecm_stage2_tune_columns.def'
-    result=[]
+    result={'ecm':[], 'ntt':[]}
     for line in path.read_text(encoding='utf-8').splitlines():
         line=line.strip()
         if not line or line.startswith('//'):continue
-        match=re.fullmatch(r'ECM_STAGE2_TUNE_COLUMN\(([a-z_][a-z_0-9]*)\)',line)
-        if not match or match[1] in result:raise ValueError('Invalid shared tune column definition')
-        result.append(match[1])
-    return tuple(result)
+        match=re.fullmatch(r'ECM_STAGE2_TUNE_(NTT_)?COLUMN\(([a-z_][a-z_0-9]*)\)',line)
+        if not match:raise ValueError('Invalid shared tune column definition')
+        columns=result['ntt' if match[1] else 'ecm']
+        if match[2] in columns:raise ValueError('Duplicate shared tune column')
+        columns.append(match[2])
+    return tuple(result[section])
 
 COLUMN_ORDER=matrix_column_order()
+NTT_COLUMN_ORDER=matrix_column_order('ntt')
 
 def matrix_row_order():
     path=Path(__file__).resolve().parents[2]/'src/core/ecm_stage2_tune_rows.def'

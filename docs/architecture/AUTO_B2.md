@@ -119,7 +119,7 @@ CSV 必填 `b1,mhz,tpi,curves,seconds_per_curve`，另提供 `container_bits` �
 
 NTT表只测Goldilocks有限域卷积，不含大整数carry和模N归约，不按梅森承载重复一份。实现入口为 `ecm_stage2_tune_portable.h::compact_sample/hydrate/Profile::update/serialize`。
 
-列优先级只在 [`src/core/ecm_stage2_tune_columns.def`](../../src/core/ecm_stage2_tune_columns.def) 定义：移动其中的字段行即可调整顺序；未列出的可选字段按字母顺序排在后面。生产程序在编译时展开该定义，Python导入器通过 `tools/bench/stage2_tune_matrix.py::matrix_column_order` 读取同一文件，保留现有列宽对齐。调整顺序需要重编译生产程序；读取仍按列名解释，不依赖文件中的列位置。
+列优先级只在 [`src/core/ecm_stage2_tune_columns.def`](../../src/core/ecm_stage2_tune_columns.def) 定义：ECM使用 `ECM_STAGE2_TUNE_COLUMN`，NTT使用 `ECM_STAGE2_TUNE_NTT_COLUMN`，移动对应字段行即可调整该表顺序；未列出的可选字段按字母顺序排在后面。生产程序在编译时展开该定义，Python导入器通过 `tools/bench/stage2_tune_matrix.py::matrix_column_order` 读取同一文件，保留现有列宽对齐。调整顺序需要重编译生产程序；读取仍按列名解释，不依赖文件中的列位置。
 
 行排序只在 [`src/core/ecm_stage2_tune_rows.def`](../../src/core/ecm_stage2_tune_rows.def) 定义，ECM优先级为 `condition → b2 → d → carrier_exponent → b1 → source`。数值键按数值、source按字符串升序，所有键相同则保留原有先后。NTT使用 `length → batch → tile`，tile缺失按0处理。生产程序的 `matrix_row_less`、Python导入器及NTT格式化工具的 `matrix_row_key` 消费同一定义；调整对应字段行即可改变优先级，生产程序须重编译。列位置、耗时、版本和更新时间不参与行排序。
 
@@ -171,7 +171,9 @@ CPU检查覆盖独立两遍方差参考、加权合并、较慢观察、10次上
 
 基线证据位于 `data/experiments/stage2_tune_provenance_20261018/`：`cpu_final01/`、`portable_final01/`、`provenance_final01/`、`reuse_final01/`、`gpu_final02/`及其审计、`portable_gpu_final02/`、`import_legacy01/`、`import_mixed_final01/`、`sort_final02/`；身份汇总见`final_acceptance.json`，前置运行目录保留。15条队列NF的GMP抽查18836，错误0。该基线构建为 `build_cuda_cmake/local_stage2_0_37_2/ecm_cuda_stage2.exe`，sm89、CUDA13.3.73、MSVC14.51.36231、PTX3/addsub1、GMP Zen3；CUDA对象与0.37.1一致。冻结85项编译输入，EXE SHA256为`5714f405d4bde1853666e94c5add94bdf31cbb01e6792e0ba3e3f7f8d81a9243`。
 
-0.37.3的共享行排序在CPU验证9行ECM逐键优先级、同键稳定性、原生/Python输出及统计/来源一致；4条NTT行的数值顺序与格式化幂等通过。24次既有观察的离线导入、去重和统计检查通过；不重新测量GPU曲线。证据在 `data/experiments/stage2_tune_row_order_20261018/` 的 `portable01/`、`runtime01/`、`provenance01/`、`ntt01/`、`import01/` 和 `final_acceptance.json`。正式local为 `build_cuda_cmake/local_stage2_0_37_3/ecm_cuda_stage2.exe`，工具链和CUDA对象与基线相同，86项编译输入经哈希核验；EXE SHA256为`eaa4822db03d9b74f6dbc577a079f5e1afc44f41f1042cc45352dc7be78bb81a`。
+0.37.3的共享行排序在CPU验证9行ECM逐键优先级、同键稳定性、原生/Python输出及统计/来源一致；4条NTT行的数值顺序与格式化幂等通过。24次既有观察的离线导入、去重和统计检查通过；不重新测量GPU曲线。证据在 `data/experiments/stage2_tune_row_order_20261018/` 的 `portable01/`、`runtime01/`、`provenance01/`、`ntt01/`、`import01/` 和 `final_acceptance.json`。该行排序验证构建为 `build_cuda_cmake/local_stage2_0_37_3/ecm_cuda_stage2.exe`，工具链和CUDA对象与基线相同，86项编译输入经哈希核验；EXE SHA256为`eaa4822db03d9b74f6dbc577a079f5e1afc44f41f1042cc45352dc7be78bb81a`。
+
+0.37.4的NTT展示字段在GPU1 RTX4060 Laptop核对L=2¹⁰至2¹⁴、batch=1/4、256 MiB预算，每参数独立测3次和4次，10行共70次正式观察。实际radix/趟数与底层回执一致，合并均值/方差与原始时间独立核对，重复导入不增计数，吞吐率重算且行序不变。旧0.37.2的4条NTT记录补齐展示信息时统计和来源保留，4类坏派生字段拒绝；CPU现有门禁及24次生产观察离线恢复通过。证据在 `data/experiments/stage2_ntt_metadata_20261018/` 的 `gpu01/`、`legacy_ntt01/`、`portable_final01/`、`runtime_final01/`、`provenance_final01/`、`import_final01/` 及 `final_acceptance.json`。正式local为 `build_cuda_cmake/local_stage2_0_37_4/ecm_cuda_stage2.exe`，工具链和CUDA对象与0.37.3相同，86项编译输入经核验；EXE SHA256为`4458a337e554afb663ddadbe5c0d7174e8685b05dadee779caea8e14709b0ddb`。此处仅验证元数据与持久化，不作为新的整曲线性能测量。
 
 频率、功耗未按性能协议冻结，因此不据此给出加速比例。真实并发写锁、强制中断、其他设备和生产规模边界仍见TODO。
 
@@ -287,19 +289,21 @@ GMP参考验证每个输出项；摘要保留平均耗时、样本标准差、�
 
 ### NTT 性能摘要表
 
-`[ntt.<condition>]`关联对应设备/环境条件，内容只有一个列对齐matrix。每行保存一组长度、批量、tile/radix及执行开关的统计，以及来源版本和UTC更新时间；完全相同参数重复测量合并次数和均值/标准差，不同参数保留多行。NTT长度对数、吞吐率、检查字数等确定性派生量不重复存储。
+`[ntt.<condition>]`关联对应设备/环境条件，内容只有一个列对齐matrix。前四列固定为 `log2_length`、`length`、`iter_per_s`、`mean_seconds`，后续保存离散度、次数、批量、执行参数和来源。完全相同参数重复测量合并次数和均值/标准差，不同参数保留多行；行排序仍为length、batch、tile的稳定升序。
 
 一次基准批调用包含两个正向NTT、有限域点乘与缩放、一个逆向NTT，运算域为Goldilocks素数域。GPU事件只包围这段计算，输入生成、准备、核验在计时外；不包含生产多项式的packing、carry、模N归约、传输和整条ECM曲线。
 
 **性能矩阵字段：**
 
-- `length=L`：每个NTT的有限域元素数，L为2的幂。
+- `log2_length=k`、`length=L`：L=2ᵏ，每个NTT的有限域元素数。
+- `iter_per_s=b/mean_seconds`：每秒独立卷积数，一个卷积包含两个正向和一个逆向NTT；`batch_iter_per_s=1/mean_seconds`是每秒批调用数，不能把前者解释成单次正向NTT吞吐率。
 - `batch=b`：一次批调用中的独立卷积数。
 - `repeats`、`mean_seconds`、`stddev_seconds`：正式观察次数、批调用平均GPU耗时、样本标准差。显式预热不计入次数。
 - `tile`、`max_radix_bits`、`coop_outer`、`warp_tail`、`compact_scratch`：实际执行形状。
+- `passes_forward`：一次正向NTT的完整数组处理趟数，优先保留实际报告。旧format 8有合法tile和max_radix_bits时按最少外层趟数推导，缺少必要参数则留空，不猜默认radix；详见下文公式。
 - `verified=1`、`measurement_ids`：通过算术验证的标记及独立批次身份。
 
-log₂L、batch/mean、1/mean、L·b检查字数由程序推导，不重复保存。NTT使用GMP的规定输入参考：两个各含3个非零系数的多项式，各切片常数项不同，核对全部输出及零尾部；不声明随机输入覆盖。逐次bad计数、最小/最大值、预热及准备/核验耗时留在底层JSONL。
+log₂L和吞吐率作为展示列持久保存并核对一致性，合并观察后由新的批平均耗时重新计算，不能直接平均吞吐率。读取旧format 8时补齐可确定的展示信息，不改变已有均值、方差、次数、来源或行排序。L·b检查字数仍由程序推导。NTT使用GMP的规定输入参考：两个各含3个非零系数的多项式，各切片常数项不同，核对全部输出及零尾部；不声明随机输入覆盖。逐次bad计数、最小/最大值、预热、准备/核验耗时和具体outer_radix_bits序列留在底层JSONL。
 
 独立基准仍记录容量证据：external数组为16Lb+40b+8 bytes，另有arena实际载荷及准入规划载荷。这些不是生产Stage2进程峰值，不持久写入性能矩阵；生产始终核对当前原生计划及设备可用显存。
 

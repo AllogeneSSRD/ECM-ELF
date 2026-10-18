@@ -12,8 +12,17 @@ namespace ecm_stage2 { namespace tune { namespace portable {
 constexpr unsigned format=8;
 inline constexpr const char *matrix_column_order[]={
 #define ECM_STAGE2_TUNE_COLUMN(name) #name,
+#define ECM_STAGE2_TUNE_NTT_COLUMN(name)
 #include "ecm_stage2_tune_columns.def"
 #undef ECM_STAGE2_TUNE_COLUMN
+#undef ECM_STAGE2_TUNE_NTT_COLUMN
+};
+inline constexpr const char *ntt_matrix_column_order[]={
+#define ECM_STAGE2_TUNE_COLUMN(name)
+#define ECM_STAGE2_TUNE_NTT_COLUMN(name) #name,
+#include "ecm_stage2_tune_columns.def"
+#undef ECM_STAGE2_TUNE_COLUMN
+#undef ECM_STAGE2_TUNE_NTT_COLUMN
 };
 enum class MatrixSortKind {integer,optional_integer,string};
 struct MatrixSortKey {const char *name;MatrixSortKind kind;};
@@ -202,6 +211,16 @@ inline void validate_ntt_summary(const Fields &s) {
     auto close=[](double a,double b){return std::abs(a-b)<=1e-9*std::max(std::abs(a),std::abs(b));};
     if(uint(s,"log2_length")!=log || !close(real(s,"conv_iter_per_s"),b/seconds) ||
        !close(real(s,"batch_iter_per_s"),1/seconds))throw std::runtime_error("inconsistent portable NTT summary");
+    if(s.count("iter_per_s") && !close(real(s,"iter_per_s"),b/seconds))
+        throw std::runtime_error("inconsistent NTT convolution throughput");
+    if(s.count("passes_forward") && (!uint(s,"passes_forward") || uint(s,"passes_forward")>log+1))
+        throw std::runtime_error("invalid NTT forward pass count");
+    if(s.count("tile") && s.count("max_radix_bits") && uint(s,"tile")<=log && uint(s,"max_radix_bits")) {
+        const auto remaining=log-uint(s,"tile"),radix=uint(s,"max_radix_bits");
+        const auto passes=remaining/radix+(remaining%radix!=0)+(uint(s,"tile")!=0);
+        if(s.count("passes_forward") && uint(s,"passes_forward")!=passes)
+            throw std::runtime_error("inconsistent NTT forward pass count");
+    }
     const auto sd=real(s,"stddev_seconds");uint(s,"condition");
     if(uint(s,"repeats")==1 && sd!=0)throw std::runtime_error("single NTT observation has dispersion");
     for(const auto &f:s)if(!f.second.empty() && f.second.front()=='[')
@@ -394,9 +413,23 @@ inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
     if(!s.count("program_version") && condition.count("program_version"))s["program_version"]=condition.at("program_version");
     if(ntt) {
         const auto n=uint(s,"length"),b=uint(s,"batch");Word log=0;for(auto x=n;x>1;x>>=1)++log;
+        if(s.count("log2_length") && uint(s,"log2_length")!=log)
+            throw std::runtime_error("inconsistent NTT length logarithm");
         s["log2_length"]=std::to_string(log);s["source"]=s["status"]="\"measured\"";s["unit"]="\"field_convolution\"";
         s["reference_kind"]="\"gmp_3x3_distinct_constant_v1\"";s["verified_words_per_sample"]=std::to_string(n*b);s["bad"]="0";
+        if(s.count("batch_iter_per_s") && std::abs(real(s,"batch_iter_per_s")-1/real(s,"mean_seconds"))>
+            1e-9*std::max(real(s,"batch_iter_per_s"),1/real(s,"mean_seconds")))
+            throw std::runtime_error("inconsistent NTT batch throughput");
         s["conv_iter_per_s"]=numeric(b/real(s,"mean_seconds"));s["batch_iter_per_s"]=numeric(1/real(s,"mean_seconds"));
+        if(s.count("iter_per_s") && std::abs(real(s,"iter_per_s")-b/real(s,"mean_seconds"))>
+            1e-9*std::max(real(s,"iter_per_s"),b/real(s,"mean_seconds")))
+            throw std::runtime_error("inconsistent NTT convolution throughput");
+        s["iter_per_s"]=s["conv_iter_per_s"];
+        if(!s.count("passes_forward") && s.count("tile") && s.count("max_radix_bits") &&
+            uint(s,"tile")<=log && uint(s,"max_radix_bits")) {
+            const auto remaining=log-uint(s,"tile"),radix=uint(s,"max_radix_bits");
+            s["passes_forward"]=std::to_string(remaining/radix+(remaining%radix!=0)+(uint(s,"tile")!=0));
+        }
     } else {
         const auto d=uint(s,"d");if(d<6 || d>200000000 || d%2)throw std::runtime_error("invalid tune D");
         const Fields derived={{"arithmetic_bits",std::to_string(optional_uint(s,"carrier_exponent")?uint(s,"carrier_exponent"):uint(s,"target_bits"))},
@@ -438,6 +471,7 @@ struct Profile {
         validate_ntt_summary(sample);
         strip_ntt_auxiliary_timing(sample);
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown NTT measurement condition");
+        hydrate(sample,conditions.at(uint(sample,"condition")),true);
         sample["measurement_ids"]=encoded_ids(measurement_ids(sample));sample["verified"]="1";
         for(auto &old:ntt)if(uint(old,"condition")==uint(sample,"condition") &&
             uint(old,"length")==uint(sample,"length") && uint(old,"batch")==uint(sample,"batch")) {
@@ -445,7 +479,8 @@ struct Profile {
             for(const char *k:{"tile","max_radix_bits","coop_outer","warp_tail","compact_scratch"})
                 if(ntt_option(old,k)!=ntt_option(sample,k))same=false;
             if(!same)continue;
-            if(!combine(old,sample))return false;hydrate(old,conditions.at(uint(old,"condition")),true);++revision;return true;
+            if(!combine(old,sample))return false;old.erase("iter_per_s");old.erase("batch_iter_per_s");
+            hydrate(old,conditions.at(uint(old,"condition")),true);++revision;return true;
         }
         ntt.push_back(std::move(sample));++revision;return true;
     }
@@ -570,13 +605,15 @@ struct Profile {
         }
         auto emit=[&](const std::string &section,std::vector<Fields> rows,bool ntt) {
             std::set<std::string> names;
-            const std::set<std::string> omitted=ntt?std::set<std::string>{"condition","log2_length","source","status","unit","reference_kind","verified_words_per_sample","bad","conv_iter_per_s","batch_iter_per_s"}:
+            const std::set<std::string> omitted=ntt?std::set<std::string>{"condition","source","status","unit","reference_kind","verified_words_per_sample","bad","conv_iter_per_s"}:
                 std::set<std::string>{"target_bits","p","arithmetic_bits","execution_path"};
             for(const auto &s:rows)for(const auto &f:s)if(!omitted.count(f.first))names.insert(f.first);
             names.insert("program_version");names.insert("updated_at");
             std::vector<std::string> columns;
-            for(const char *k:matrix_column_order)
-                if(names.erase(k))columns.push_back(k);
+            if(ntt) {
+                for(const char *k:ntt_matrix_column_order)names.insert(k);
+                for(const char *k:ntt_matrix_column_order)if(names.erase(k))columns.push_back(k);
+            } else for(const char *k:matrix_column_order)if(names.erase(k))columns.push_back(k);
             columns.insert(columns.end(),names.begin(),names.end());
             std::stable_sort(rows.begin(),rows.end(),[&](const Fields &a,const Fields &b){
                 return ntt?matrix_row_less(a,b,ntt_row_order):matrix_row_less(a,b,ecm_row_order);
@@ -592,8 +629,8 @@ struct Profile {
         for(const auto &s:samples){auto row=compact_sample(s);groups[uint(s,"target_bits")].push_back(std::move(row));}
         for(auto &g:groups)emit("width."+std::to_string(g.first),std::move(g.second),false);
         groups.clear();
-        static const std::set<std::string> ntt_fields={"length","batch","tile","max_radix_bits","coop_outer","warp_tail","compact_scratch","repeats","mean_seconds","stddev_seconds","verified","measurement_ids","program_version","updated_at"};
-        for(const auto &s:ntt){validate_ntt_summary(s);Fields row;for(const auto &f:s)if(ntt_fields.count(f.first))row.insert(f);row["verified"]="1";groups[uint(s,"condition")].push_back(std::move(row));}
+        static const std::set<std::string> ntt_fields={"log2_length","length","iter_per_s","batch_iter_per_s","batch","tile","max_radix_bits","passes_forward","coop_outer","warp_tail","compact_scratch","repeats","mean_seconds","stddev_seconds","verified","measurement_ids","program_version","updated_at"};
+        for(auto s:ntt){hydrate(s,conditions.at(uint(s,"condition")),true);validate_ntt_summary(s);Fields row;for(const auto &f:s)if(ntt_fields.count(f.first))row.insert(f);row["verified"]="1";groups[uint(s,"condition")].push_back(std::move(row));}
         for(auto &g:groups)emit("ntt."+std::to_string(g.first),std::move(g.second),true);
         return out.str();
     }

@@ -6,6 +6,8 @@ int main(int argc,char **argv) {
         std::cout<<std::setprecision(17);
         if(argc==2 && std::string(argv[1])=="--columns") {
             std::cout<<'[';bool first=true;for(const auto *column:p::matrix_column_order){if(!first)std::cout<<',';first=false;std::cout<<p::quoted(column);}std::cout<<']';
+        } else if(argc==2 && std::string(argv[1])=="--ntt-columns") {
+            std::cout<<'[';bool first=true;for(const auto *column:p::ntt_matrix_column_order){if(!first)std::cout<<',';first=false;std::cout<<p::quoted(column);}std::cout<<']';
         } else if(argc==2 && std::string(argv[1])=="--short-batch") {
             ecm_stage2::ShortNttBatchPolicy policy;
             const auto n=1ull<<19;
