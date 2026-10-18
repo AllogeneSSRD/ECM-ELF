@@ -54,8 +54,8 @@ def main():
     final=rows[-3:];assert all(not r['tune_plan']['runtime_probe'] for r in final)
     assert len({(r['d'],r['carrier_exponent']) for r in final})==1,'winner reverted during stable observations'
     samples=summaries(tomllib.loads(profile.read_text(encoding='utf-8-sig')))
-    version=re.search(r'inline constexpr char version\[\] = "([^"]+)"', (ROOT/'src/core/ecm_program_version.h').read_text())[1]
-    current=[s for s in samples if s.get('program_version')==version and s.get('benchmark_kind')=='runtime_save']
+    current=[s for s in samples if s.get('benchmark_kind')=='runtime_save' and
+        s['target_bits']==n.bit_length() and s['b2']==a.b2]
     groups={}
     for s in current:groups[(s['d'],s['carrier_exponent'])]=dict(repeats=s['repeats'],mean_seconds=s['mean_seconds'],stddev_seconds=s['stddev_seconds'])
     assert all(2<=v['repeats']<=3 for v in groups.values()) and len(samples)>old_samples

@@ -14,7 +14,7 @@ static Fields sample(unsigned id,unsigned d,double seconds) {
         {"mean_seconds",p::numeric(seconds)},{"min_seconds",p::numeric(seconds)},
         {"max_seconds",p::numeric(seconds)},{"stddev_seconds","0"},
         {"giant_chunk_points","253440"},{"giant_chain_min","32768"},{"giant_force_ladder","0"},
-        {"program_version",p::quoted(ecm_program::version)},
+        {"program_version",p::quoted(ecm_program::version)},{"updated_at",p::quoted(p::utc_updated_at(1700000000000000000ull+id))},
         {"runtime_sample_id",p::quoted("sample-"+std::to_string(id))}};
 }
 int main(int argc,char **argv) {
@@ -32,7 +32,7 @@ int main(int argc,char **argv) {
         require(profile.update(sample(22,1381380,45.3)),"candidate second observation missing");
         auto query=[](ecm_stage2::Word m,int bits,ecm_stage2::Word *n,ecm_stage2::Word *slots){
             *slots=2*m-1;*n=8;while(*n<*slots*ecm_stage2::Word((bits+23)/24))*n*=2;return true;};
-        p::Estimator model(profile,profile.conditions.at(0),p::Ignore::parse(""),query);model.runtime_version=ecm_program::version;
+        p::Estimator model(profile,profile.conditions.at(0),p::Ignore::parse(""),query);
         auto old=model.shape(profile.samples[0]),fast=model.shape(profile.samples[1]);
         auto before=model.runtime_statistics(old),after=model.runtime_statistics(fast);
         require(before.count==10 && after.count==2 && before.stddev>0 && after.stddev>0,"actual dispersion not accumulated");
@@ -57,8 +57,10 @@ int main(int argc,char **argv) {
         require(p::runtime_choice(routes,false).index==1,"disabling writes discarded an established measurement");
         auto isolated=fast;++isolated.giant_chunk;require(model.runtime_statistics(isolated).count==0,"different giant shape mixed");
         isolated=fast;++isolated.b1;require(model.runtime_statistics(isolated).count==2,"B1 blocked timing reuse");
-        model.runtime_version="0.0.1";require(model.runtime_statistics(fast).count==0,"different binary treated as exact");
-        model.runtime_version=ecm_program::version;model.condition["uuid_hex"]="\"another-device\"";
+        auto historical=profile;historical.samples[1]["program_version"]="\"0.0.1\"";
+        p::Estimator reused(historical,historical.conditions.at(0),p::Ignore::parse(""),query);
+        require(reused.runtime_statistics(fast).count==2,"older program version blocked statistics reuse");
+        model.condition["uuid_hex"]="\"another-device\"";
         require(model.runtime_statistics(fast).count==0,"different device treated as exact");
         p::Profile bounded;bounded.condition(profile.conditions.at(0));
         auto legacy=sample(1,690690,52.8);legacy.erase("runtime_sample_id");
@@ -91,19 +93,20 @@ int main(int argc,char **argv) {
         auto next_b1=sample(40,1381380,46);next_b1["b1"]="22000000";
         require(profile.update(next_b1),"different B1 parameter row was discarded");
         require(profile.samples.size()==3,"different complete parameters merged into one row");
-        p::Estimator pooled(profile,profile.conditions.at(0),p::Ignore::parse(""),query);pooled.runtime_version=ecm_program::version;
+        p::Estimator pooled(profile,profile.conditions.at(0),p::Ignore::parse(""),query);
         require(pooled.runtime_statistics(fast).count==3 && pooled.runtime_statistics(fast,true).count==2,"B1 storage/reuse populations mixed");
         auto other_b1=sample(41,690690,54);other_b1["b1"]="22000000";
         require(profile.update(other_b1),"full row cap discarded a different complete parameter row");
         auto current=profile.conditions.at(0),different=current;different["program_version"]="\"0.0.1\"";
-        require(!p::matches(current,different,p::Ignore::parse("gpu,driver,cuda,backend,environment,memory")),"version isolation bypassed by tune-ignore");
+        require(p::matches(current,different,p::Ignore::parse("")),"provenance version became a measurement condition");
+        require(profile.condition(different)==0,"version-only difference created a new condition");
         p::Profile field;field.condition(current);
         auto ntt=[](const char *id,double time,unsigned tile) {
             Fields f={{"coop_outer","false"},{"warp_tail","true"},{"compact_scratch","true"},{"condition","0"},{"length","8"},{"log2_length","3"},{"batch","1"},{"tile",std::to_string(tile)},
                 {"bad","0"},{"source","\"measured\""},{"status","\"measured\""},{"unit","\"field_convolution\""},
                 {"reference_kind","\"gmp_3x3_distinct_constant_v1\""},{"verified_words_per_sample","8"},{"repeats","1"},
                 {"mean_seconds",p::numeric(time)},{"stddev_seconds","0"},{"conv_iter_per_s",p::numeric(1/time)},
-                {"batch_iter_per_s",p::numeric(1/time)},{"measurement_ids",p::encoded_ids({id})}};return f;
+                {"batch_iter_per_s",p::numeric(1/time)},{"measurement_ids",p::encoded_ids({id})}};p::stamp_provenance(f,1700000000000000000ull+tile);return f;
         };
         require(field.update_ntt(ntt("ntt-a",1,3)) && field.update_ntt(ntt("ntt-b",3,3)),"NTT repeat accumulation failed");
         require(field.ntt.size()==1 && ecm_stage2::tune::uint(field.ntt.front(),"repeats")==2 &&
@@ -112,12 +115,13 @@ int main(int argc,char **argv) {
         {std::ofstream out(path);out<<field.serialize();}
         require(p::Profile::load(path).serialize()==field.serialize(),"NTT matrix roundtrip changed statistics");
         auto foreign=field.serialize();const auto at=foreign.find(ecm_program::version);foreign.replace(at,std::string(ecm_program::version).size(),"0.0.1");
-        {std::ofstream out(path);out<<foreign;}bool rejected=false;
-        try{p::Profile::load(path);}catch(const p::UnsupportedFormat&){rejected=true;}
-        require(rejected,"foreign program version was accepted");
+        {std::ofstream out(path);out<<foreign;}
+        const auto older=p::Profile::load(path);require(older.ntt.size()==2,"older version NTT rows lost");
+        require(p::text(older.ntt.front(),"program_version")=="0.0.1","source version was rewritten to current version");
+        require(!older.conditions.at(0).count("program_version"),"version still stored in condition");
         std::cout<<"{\"complete\":true,\"retains_slower_samples\":true,\"cap\":10,\"independent_samples\":12,"
             "\"observed_D_win\":true,\"hysteresis\":true,\"carrier_first\":true,\"deduplication\":true,"
-            "\"version_isolation\":true,\"matrix_roundtrip\":true,\"mean_variance_reference\":true,"
+            "\"cross_version_reuse\":true,\"matrix_roundtrip\":true,\"mean_variance_reference\":true,"
             "\"snapshot_deduplication\":true,\"partial_overlap_rejected\":true,\"ntt_parameter_rows\":true,\"CUDA_calls\":0}\n";
     } catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

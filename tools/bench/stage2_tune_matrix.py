@@ -1,16 +1,53 @@
 """Format-8 scalar matrices. Full receipts remain in the original JSONL."""
 import json
 import math
+import re
+from pathlib import Path
+from datetime import datetime, timezone
 
 SHAPE = ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent', 'modulus_kind',
          'b1', 'b2', 'd', 'fold_resident', 'frontier_resident', 'execution_path',
-         'giant_chunk_points', 'giant_chain_min', 'giant_force_ladder', 'program_version')
+         'giant_chunk_points', 'giant_chain_min', 'giant_force_ladder')
 PHASES = ('shape', 'setup', 'baby', 'ftree', 'main_setup', 'inverse_setup',
           'giant_loop', 'descent', 'accum', 'finalize')
-KEEP = set(SHAPE) | {'p', 'source', 'benchmark_kind', 'verified', 'repeats', 'mean_seconds',
+KEEP = set(SHAPE) | {'program_version', 'updated_at', 'p', 'source', 'benchmark_kind', 'verified', 'repeats', 'mean_seconds',
     'stddev_seconds', 'measurement_ids', 'preferred_order', 'validation_count',
     'validation_max_relative_error', 'giant_seconds', 'gtrees_seconds', 'fold_seconds',
     'model_relative_error_allowance'} | {f'phase_{p}_seconds' for p in PHASES}
+
+
+def matrix_column_order():
+    path=Path(__file__).resolve().parents[2]/'src/core/ecm_stage2_tune_columns.def'
+    result=[]
+    for line in path.read_text(encoding='utf-8').splitlines():
+        line=line.strip()
+        if not line or line.startswith('//'):continue
+        match=re.fullmatch(r'ECM_STAGE2_TUNE_COLUMN\(([a-z_][a-z_0-9]*)\)',line)
+        if not match or match[1] in result:raise ValueError('Invalid shared tune column definition')
+        result.append(match[1])
+    return tuple(result)
+
+COLUMN_ORDER=matrix_column_order()
+
+def utc_updated_at(nanoseconds):
+    seconds,fraction=divmod(int(nanoseconds),1_000_000_000)
+    return datetime.fromtimestamp(seconds,timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')+f'.{fraction:09d}Z'
+
+def merge_provenance(target, source):
+    a,b=target.get('updated_at',''),source.get('updated_at','')
+    if b>a or (b==a and not target.get('program_version')):
+        for k in ('program_version','updated_at'):
+            if k in source:target[k]=source[k]
+            else:target.pop(k,None)
+
+def validate_provenance(row):
+    version=row.get('program_version','')
+    if not isinstance(version,str) or len(version)>256:raise ValueError('Invalid source version')
+    time=row.get('updated_at','')
+    if time:
+        if not isinstance(time,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{9}Z',time):
+            raise ValueError('updated_at requires UTC nanosecond format')
+        datetime.strptime(time[:19],'%Y-%m-%dT%H:%M:%S')
 
 
 def literal(value):
@@ -47,6 +84,9 @@ def aggregate(samples):
     groups = {}
     for original in samples:
         row = {k:v for k,v in original.items() if k in KEEP}
+        if not row.get('updated_at') and original.get('runtime_completed_ns'):
+            row['updated_at']=utc_updated_at(original['runtime_completed_ns'])
+        validate_provenance(row)
         if row['source'] == 'measured':
             row['verified'] = 1
             row.setdefault('measurement_ids', encode_ids({original.get('runtime_sample_id') or
@@ -67,6 +107,7 @@ def aggregate(samples):
         if b <= a:
             continue
         if a <= b:
+            merge_provenance(row,old)
             groups[key] = row
             continue
         if a & b:
@@ -87,26 +128,33 @@ def aggregate(samples):
             old['validation_count'] = checks
             old['validation_max_relative_error'] = max(old.get('validation_max_relative_error',0),
                                                        row.get('validation_max_relative_error',0))
+        merge_provenance(old,row)
     return list(groups.values())
 
 
 def write_profile(conditions, samples):
     lines = ['# Stage2 mean timings; identical parameters share one repeated measurement row.',
              '[profile]', 'format = 8', 'unit = "full_stage2"']
-    for i, condition in enumerate(conditions):
-        if not condition.get('program_version'):
-            raise ValueError('Missing program version')
+    canonical=[];remap={};prepared=[]
+    for i,c in enumerate(conditions):
+        condition={k:v for k,v in c.items() if k not in ('program_version','updated_at')}
+        if condition not in canonical:canonical.append(condition)
+        remap[i]=canonical.index(condition)
+    for s in samples:
+        row=dict(s);old=int(row['condition'])
+        if not row.get('program_version') and conditions[old].get('program_version'):
+            row['program_version']=conditions[old]['program_version']
+        row['condition']=remap[old];prepared.append(row)
+    for i,condition in enumerate(canonical):
         lines += [f'\n[condition.{i}]']
         lines += [f'{k} = {literal(v)}' for k,v in sorted(condition.items())]
     widths = {}
-    for s in aggregate(samples):
+    for s in aggregate(prepared):
         widths.setdefault(s['target_bits'], []).append(s)
-    omit = {'target_bits','arithmetic_bits','p','execution_path','program_version'}
-    first = ('condition','carrier_exponent','modulus_kind','b1','b2','d','fold_resident',
-             'frontier_resident','source','benchmark_kind','repeats','mean_seconds','stddev_seconds')
+    omit = {'target_bits','arithmetic_bits','p','execution_path'}
     for width, rows in sorted(widths.items()):
-        names = set().union(*(r.keys() for r in rows))-omit
-        columns = [k for k in first if k in names]+sorted(names-set(first))
+        names = (set().union(*(r.keys() for r in rows)) | {'program_version','updated_at'})-omit
+        columns = [k for k in COLUMN_ORDER if k in names]+sorted(names-set(COLUMN_ORDER))
         rows.sort(key=lambda r:(r['condition'],r['carrier_exponent'],r['b2'],r['d'],r['b1'],r['source']))
         matrix = [[literal(c) for c in columns]]+[[literal(r.get(c,'')) for c in columns] for r in rows]
         col_widths = [max(len(r[i]) for r in matrix) for i in range(len(columns))]

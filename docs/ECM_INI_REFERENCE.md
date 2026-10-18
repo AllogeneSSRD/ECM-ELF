@@ -916,16 +916,17 @@ target_bits和carrier_exponent保留测量身份。估算替换遵循stage2_pred
 stage2_tune_runtime=[false|true]; default=true
 ```
 
-Accumulate checked no-factor production timings by device, environment, program version and<br>
-execution shape. Identical complete parameters share one matrix row with repeats, mean time and<br>
-sample standard deviation; slower observations count too. Model selection tests a legal Mersenne<br>
-carrier first, then ordinary and promising D candidates. At least two observations enable comparison<br>
-with switching hysteresis. B1 does not gate cost reuse. Writes are locked and atomic; cache failure<br>
-does not fail a completed curve. false disables runtime trials, collection and writes.<br>
-按设备、环境、程序版本与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存<br>
-repeats、平均耗时和样本标准差，包含较慢观察。model选型优先试跑合法梅森承载，再比较普通路径和有希望的<br>
-D；至少两次观察后按均值、标准差及切换余量比较。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成<br>
-曲线失败。false关闭运行试跑、采集与写回。
+Accumulate checked no-factor production timings by device, environment and execution shape.<br>
+Identical complete parameters share one matrix row with repeats, mean time and sample standard<br>
+deviation; slower observations count too. Row version and UTC update time record provenance only;<br>
+software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first,<br>
+then ordinary and promising D candidates. At least two observations enable comparison with switching<br>
+hysteresis. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a<br>
+completed curve. false disables runtime trials, collection and writes.<br>
+按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、<br>
+平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选<br>
+型优先试跑合法梅森承载，再比较普通路径和有希望的D；至少两次观察后按均值、标准差及切换余量比较。B1不<br>
+限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。
 
 ### stage2_tune_runtime_samples
 
@@ -934,13 +935,13 @@ stage2_tune_runtime_samples=[2..1000]; default=10
 ```
 
 Maximum independent runtime NF observations per identical complete parameters (including B1) and<br>
-matching device/environment/program-version/arithmetic/path, including slower observations.<br>
-Identical parameters merge into repeats and mean/stddev; the limit counts observations, not matrix<br>
-rows. Different parameter rows are retained. At least two observations enable measured selection.<br>
-Lowering this limit preserves existing evidence. CLI: --tune-runtime-samples N.<br>
-完全相同参数（含B1）及相同设备、环境、程序版本、算术和执行形状的独立运行NF观察上限，包含较慢观察。相<br>
-同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。至少两次用于实测<br>
-选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。
+matching device/environment/arithmetic/path, including slower observations and compatible software<br>
+versions. Identical parameters merge into repeats and mean/stddev; the limit counts observations,<br>
+not matrix rows. Different parameter rows are retained. At least two observations enable measured<br>
+selection. Lowering this limit preserves existing evidence. CLI: --tune-runtime-samples N.<br>
+完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他<br>
+程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。至少<br>
+两次用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。
 
 ### stage2_short_ntt_batch_tune
 

@@ -109,7 +109,6 @@ class Estimator {
 public:
     using Query=std::function<bool(Word,int,Word*,Word*)>;
     const Profile &profile;Fields condition;Ignore ignore;Query query;
-    std::string runtime_version;
     std::map<std::pair<Word,Word>,double> ntt;
     ShortNttBatchPolicy short_ntt;
     // Each estimator requires an immutable profile while ranking. A caller
@@ -176,10 +175,9 @@ public:
         return true;
     }
     RuntimeStatistics runtime_statistics(const Shape &x,bool complete_parameters=false)const {
-        RuntimeStatistics out;if(runtime_version.empty())return out;
+        RuntimeStatistics out;
         double m2=0;
         for(const auto &s:profile.samples)if(runtime_observation(s) && measured(s) &&
-            s.count("program_version") && text(s,"program_version")==runtime_version &&
             matches(profile.conditions.at(uint(s,"condition")),condition,Ignore::parse(""))) {
             const auto a=shape(s);auto left=a.key(),right=x.key();if(!complete_parameters)left[3]=right[3]=0;
             if(left!=right)continue;

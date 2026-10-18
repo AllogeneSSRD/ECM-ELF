@@ -4,7 +4,9 @@ int main(int argc,char **argv) {
     try {
         namespace p=ecm_stage2::tune::portable;
         std::cout<<std::setprecision(17);
-        if(argc==2 && std::string(argv[1])=="--short-batch") {
+        if(argc==2 && std::string(argv[1])=="--columns") {
+            std::cout<<'[';bool first=true;for(const auto *column:p::matrix_column_order){if(!first)std::cout<<',';first=false;std::cout<<p::quoted(column);}std::cout<<']';
+        } else if(argc==2 && std::string(argv[1])=="--short-batch") {
             ecm_stage2::ShortNttBatchPolicy policy;
             const auto n=1ull<<19;
             policy.observe(n,1,.000359424);policy.observe(n,4,.00114688);policy.observe(n,16,.00620544);

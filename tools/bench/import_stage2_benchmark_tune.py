@@ -95,6 +95,7 @@ def import_study(path, condition, audit):
             carrier_exponent=carrier, modulus_kind=kind, b1=b1, b2=b2, d=d, p=runs[0][0]['P'],
             fold_resident=fold, frontier_resident=frontier,
             execution_path='resident' if fold and frontier else 'host_frontier' if fold else 'host_fold_frontier',
+            program_version=runs[-1][0].get('result',{}).get('program',{}).get('version',condition.get('program_version','')),
             source='measured', benchmark_kind='frozen_full_curve_benchmark', clean=1, bad=0, hits=0,
             selftest_cases=min(int(row['s4']['gmp_selftest_cases']) for row, _ in runs),
             checked=min(int(row['s4']['gmp_checked']) for row, _ in runs), repeats=len(runs),
@@ -125,8 +126,9 @@ def import_runtime(paths, sample_limit=10):
                     sample['clean'] != 1 or sample['bad'] or sample['hits'] or
                     not sample['selftest_cases'] or not sample['checked'] or sample['repeats'] != 1):
                 raise ValueError('Unchecked runtime observation')
-            if condition.get('program_version') != sample.get('program_version'):
-                raise ValueError('Runtime condition/program version mismatch')
+            legacy_version=condition.get('program_version')
+            sample.setdefault('program_version',legacy_version or row.get('program',{}).get('version',''))
+            condition={k:v for k,v in condition.items() if k not in ('program_version','updated_at')}
             n, carrier = int(row['N_hex'], 16), row['carrier_exponent']
             if (sample['target_bits'] != n.bit_length() or sample['arithmetic_bits'] != (carrier or n.bit_length()) or
                     sample['carrier_exponent'] != carrier or not 0 <= carrier <= 16384 or
@@ -150,7 +152,7 @@ def import_runtime(paths, sample_limit=10):
             group = tuple(sample.get(k) for k in ('condition', 'target_bits', 'arithmetic_bits', 'carrier_exponent',
                                            'modulus_kind', 'b1', 'b2', 'd', 'fold_resident',
                                            'frontier_resident', 'execution_path', 'giant_chunk_points',
-                                           'giant_chain_min', 'giant_force_ladder', 'program_version'))
+                                           'giant_chain_min', 'giant_force_ladder'))
             sample.setdefault('runtime_sample_id', row.get('queue_receipt') or hashlib.sha256(line).hexdigest())
             sample.setdefault('runtime_probe', 1)
             key = group + (sample['runtime_sample_id'],)
@@ -197,9 +199,7 @@ def main():
             raise ValueError('Analysis is not the matching completed study')
         audit={str(Path(r['log'])):r for r in analysis['raw_artifact_hashes']}
         samples = import_study(study, condition, audit)
-        versions={r.get('result',{}).get('program',{}).get('version') for r in data['runs'] if r['category']=='timing'}
-        if not condition.get('program_version') or versions!={condition['program_version']}:
-            raise ValueError('Frozen results must record the matching program.version; old unversioned studies are unsupported')
+
         conditions = [condition]
         receipt = dict(study=str(study.parent), manifest_sha256=sha(study), binary_sha256=data['executable_sha256'],
                        audit_analysis=str(args.audit_analysis.resolve()), audit_sha256=sha(args.audit_analysis),

@@ -10,7 +10,7 @@
 
 本页以下依赖格式2/3/4、采样数组、训练计划或严格scope的分析/验收工具仍用于其声明格式的冻结证据，不是格式8生产选型参考。调用当前exe的旧合同测试需先适配；不能将这些工具中的B1精确匹配要求用于当前生产。它们与原始证据保留以供独立研究和核对。
 
-`import_stage2_benchmark_tune.py --study <完整扫描目录> --audit-analysis <对应analysis.json> --condition-profile <格式8条件文件> --output <新文件.toml>`核对完成状态、exe/DLL、save/result、算术记录及分析器冻结的debug哈希后，导入无因子的正式完整曲线均值、样本标准差和真实重复数；预热与命中因子的控制不导入。输出可经原生`--tune-merge`合并并按真实次数合并均值与标准差。TOML只含必要统计与去重身份，来源和工具哈希写入同名`.evidence.json`；输出路径必须是新文件，不修改原始扫描。条件必须包含可信的program_version，且源结果必须明确记录匹配的program.version，缺失版本的旧扫描不导入；不启动GPU测量，不将旧版本实测冒充本版本验证。
+`import_stage2_benchmark_tune.py --study <完整扫描目录> --audit-analysis <对应analysis.json> --condition-profile <格式8条件文件> --output <新文件.toml>`核对完成状态、exe/DLL、save/result、算术记录及分析器冻结的debug哈希后，导入无因子的正式完整曲线均值、样本标准差和真实重复数；预热与命中因子的控制不导入。输出可经原生`--tune-merge`合并并按真实次数合并均值与标准差。TOML只含必要统计与去重身份，来源和工具哈希写入同名`.evidence.json`；输出路径必须是新文件，不修改原始扫描。列序统一读取src/core/ecm_stage2_tune_columns.def；行内program_version和updated_at仅记录源版本与UTC测量时间，不参与条件匹配；旧format 8条件中的版本迁入行内，未知来源或时间留空；不启动GPU测量，不将旧版本实测冒充本版本验证。
 
 `test_stage2_benchmark_import.py --study <完整扫描目录> --analysis <对应analysis.json> --condition-profile <格式8条件文件> --output <新目录>`在CPU核对有效摘要及14类损坏证据拒绝：完成状态、失败记录、exe/DLL、save/log/result、输入身份、算术/clean、预算、GPU、后端与debug哈希。私有JSON副本不改变原始文件，不运行GPU。
 

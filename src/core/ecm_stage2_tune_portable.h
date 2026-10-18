@@ -5,10 +5,16 @@
 #include "ecm_stage1_cost_csv.h"
 #include <chrono>
 #include <charconv>
+#include <ctime>
 #include "ecm_program_version.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
 constexpr unsigned format=8;
+inline constexpr const char *matrix_column_order[]={
+#define ECM_STAGE2_TUNE_COLUMN(name) #name,
+#include "ecm_stage2_tune_columns.def"
+#undef ECM_STAGE2_TUNE_COLUMN
+};
 constexpr Word default_b2_max=2600000000000ull;
 struct Grid {std::vector<unsigned> widths;std::vector<Word> ds,b2s;unsigned repeats=2,basins=2;};
 inline std::vector<size_t> neighbors(size_t center,size_t count) {
@@ -44,7 +50,7 @@ struct LocalSearch {
     bool complete() {return next()==count && deferred.empty();}
 };
 struct UnsupportedFormat:std::runtime_error {
-    UnsupportedFormat():std::runtime_error("unsupported tune format/version; regenerate this development profile"){}
+    UnsupportedFormat():std::runtime_error("unsupported tune format; regenerate this development profile"){}
 };
 inline Grid grid(unsigned level,Word upper=default_b2_max) {
     if(level<1 || level>10 || upper<2 || upper>Word(INT64_MAX)-8192)
@@ -84,6 +90,42 @@ inline std::string text(const Fields &f,const char *key) {
 }
 inline Word optional_uint(const Fields &f,const char *key,Word fallback=0){return f.count(key)?uint(f,key):fallback;}
 inline double optional_real(const Fields &f,const char *key,double fallback=0){return f.count(key)?real(f,key):fallback;}
+inline std::string utc_updated_at(Word nanoseconds) {
+    const auto seconds=std::time_t(nanoseconds/1000000000);std::tm utc{};
+#ifdef _WIN32
+    if(gmtime_s(&utc,&seconds))throw std::runtime_error("invalid measurement time");
+#else
+    if(!gmtime_r(&seconds,&utc))throw std::runtime_error("invalid measurement time");
+#endif
+    std::ostringstream out;out<<std::put_time(&utc,"%Y-%m-%dT%H:%M:%S")<<'.'
+        <<std::setfill('0')<<std::setw(9)<<nanoseconds%1000000000<<'Z';return out.str();
+}
+inline void stamp_provenance(Fields &s,Word completed_ns=0) {
+    if(!completed_ns)completed_ns=Word(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+    s["program_version"]=ecm_stage2::tune::portable::quoted(ecm_program::version);
+    s["updated_at"]=ecm_stage2::tune::portable::quoted(utc_updated_at(completed_ns));
+}
+inline std::string updated_at(const Fields &s) {return s.count("updated_at")?text(s,"updated_at"):std::string{};}
+inline void validate_provenance(const Fields &s) {
+    if(s.count("program_version") && text(s,"program_version").size()>256)throw std::runtime_error("invalid source version");
+    const auto time=updated_at(s);if(time.empty())return;
+    const std::string pattern="0000-00-00T00:00:00.000000000Z";
+    if(time.size()!=pattern.size())throw std::runtime_error("updated_at requires UTC nanosecond format");
+    for(size_t i=0;i<time.size();++i)if(pattern[i]=='0'?time[i]<'0' || time[i]>'9':time[i]!=pattern[i])
+        throw std::runtime_error("invalid updated_at UTC timestamp");
+    std::tm parsed{};std::istringstream in(time.substr(0,19));in>>std::get_time(&parsed,"%Y-%m-%dT%H:%M:%S");
+    if(in.fail())throw std::runtime_error("invalid updated_at calendar time");
+}
+inline void merge_provenance(Fields &to,const Fields &from) {
+    // Unknown legacy times stay unknown. Reading or formatting is not a measurement.
+    if(updated_at(from)>updated_at(to) ||
+       (updated_at(from)==updated_at(to) && !to.count("program_version"))) {
+        for(const char *key:{"program_version","updated_at"}) {
+            if(from.count(key))to[key]=from.at(key);else to.erase(key);
+        }
+    }
+}
 inline Word ntt_option(const Fields &f,const char *key) {
     const auto at=f.find(key);if(at==f.end())return 0;
     return at->second=="true"?1:at->second=="false"?0:uint(f,key);
@@ -120,6 +162,7 @@ inline std::string encoded_ids(const std::set<std::string> &ids) {
     std::string value;for(const auto &id:ids)value+=std::to_string(id.size())+":"+id;return ecm_stage2::tune::portable::quoted(value);
 }
 inline void validate_ntt_summary(const Fields &s) {
+    validate_provenance(s);
     const auto n=uint(s,"length"),b=uint(s,"batch");
     if(n<8 || n>(1ull<<27) || (n&(n-1)) || !b || b>65535 || uint(s,"bad") ||
        text(s,"source")!="measured" || text(s,"status")!="measured" ||
@@ -144,7 +187,7 @@ inline std::string runtime_group(const Fields &s) {
     for(const char *field:{"condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind",
                           "b1","b2","d","fold_resident","frontier_resident","execution_path"})
         key+=std::string(field)+'='+required(s,field)+';';
-    for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder","program_version"}) {
+    for(const char *field:{"giant_chunk_points","giant_chain_min","giant_force_ladder"}) {
         const auto at=s.find(field);key+=std::string(field)+'='+(at==s.end()?"absent":at->second)+';';
     }
     return key;
@@ -162,6 +205,7 @@ inline std::string scope(const Fields &s) {
     return key;
 }
 inline void validate(const Fields &s) {
+    validate_provenance(s);
     const auto bits=uint(s,"target_bits"),arithmetic=uint(s,"arithmetic_bits"),carrier=uint(s,"carrier_exponent");
     const auto b1=uint(s,"b1"),b2=uint(s,"b2"),d=uint(s,"d");
     if(bits<2 || bits>16384 || arithmetic<bits || arithmetic>16384 || (carrier && carrier!=arithmetic) ||
@@ -178,7 +222,7 @@ inline void validate(const Fields &s) {
        (s.count("verified")?uint(s,"verified")!=1:
         (uint(s,"clean")!=1 || uint(s,"bad") || uint(s,"hits") || !uint(s,"selftest_cases") || !uint(s,"checked")))))
         throw std::runtime_error("portable measurement lacks completed arithmetic evidence");
-    if(runtime_observation(s) && (!measured(s) || uint(s,"repeats")>1000))
+    if(runtime_observation(s) && !measured(s))
         throw std::runtime_error("invalid runtime aggregate count");
     if(runtime_observation(s) && s.count("runtime_sample_id") &&
        (text(s,"runtime_sample_id").empty() || text(s,"runtime_sample_id").size()>256))
@@ -219,7 +263,6 @@ struct Ignore {
 };
 inline bool matches(const Fields &old,const Fields &current,const Ignore &ignore) {
     auto same=[&](const char *key){auto a=old.find(key),b=current.find(key);return a!=old.end() && b!=current.end() && a->second==b->second;};
-    if(old.count("program_version") || current.count("program_version"))if(!same("program_version"))return false;
     if(!ignore.gpu && (!same("uuid_hex") || !same("sm_major") || !same("sm_minor")))return false;
     if(!ignore.driver && !same("cuda_driver"))return false;
     if(!ignore.cuda && !same("cuda_runtime"))return false;
@@ -280,7 +323,7 @@ inline Fields compact_sample(Fields s) {
     static const std::set<std::string> keep={
         "condition","target_bits","arithmetic_bits","carrier_exponent","modulus_kind","b1","b2","d","p",
         "fold_resident","frontier_resident","execution_path","giant_chunk_points","giant_chain_min","giant_force_ladder",
-        "source","benchmark_kind","program_version","verified","repeats","mean_seconds","stddev_seconds",
+        "source","benchmark_kind","program_version","updated_at","verified","repeats","mean_seconds","stddev_seconds",
         "measurement_ids","preferred_order","validation_count","validation_max_relative_error",
         "phase_shape_seconds","phase_setup_seconds","phase_baby_seconds","phase_ftree_seconds","phase_main_setup_seconds",
         "phase_inverse_setup_seconds","phase_giant_loop_seconds","phase_descent_seconds","phase_accum_seconds","phase_finalize_seconds",
@@ -296,7 +339,8 @@ inline bool combine(Fields &old,const Fields &sample,Word limit=1000000000) {
         if(uint(sample,"repeats")<uint(old,"repeats"))throw std::runtime_error("measurement snapshot count regressed");
         if(uint(sample,"repeats")>limit)return false;
         const auto order=std::max(optional_uint(old,"preferred_order"),optional_uint(sample,"preferred_order"));
-        old=sample;if(order)old["preferred_order"]=std::to_string(order);return true;
+        const auto previous=old;old=sample;merge_provenance(old,previous);
+        if(order)old["preferred_order"]=std::to_string(order);return true;
     }
     for(const auto &id:added)if(before.count(id))
         throw std::runtime_error("partially overlapping tune snapshots; recover deduplicated original JSONL instead");
@@ -315,10 +359,11 @@ inline bool combine(Fields &old,const Fields &sample,Word limit=1000000000) {
     if(order)old["preferred_order"]=std::to_string(order);
     const auto checks=optional_uint(old,"validation_count")+optional_uint(sample,"validation_count");
     if(checks){old["validation_count"]=std::to_string(checks);old["validation_max_relative_error"]=numeric(std::max(optional_real(old,"validation_max_relative_error"),optional_real(sample,"validation_max_relative_error")));}
+    merge_provenance(old,sample);
     return true;
 }
 inline void hydrate(Fields &s,const Fields &condition,bool ntt=false) {
-    s["program_version"]=required(condition,"program_version");
+    if(!s.count("program_version") && condition.count("program_version"))s["program_version"]=condition.at("program_version");
     if(ntt) {
         const auto n=uint(s,"length"),b=uint(s,"batch");Word log=0;for(auto x=n;x>1;x>>=1)++log;
         s["log2_length"]=std::to_string(log);s["source"]=s["status"]="\"measured\"";s["unit"]="\"field_convolution\"";
@@ -338,17 +383,14 @@ struct Profile {
     std::vector<Fields> samples,ntt;
     Word revision=0;
     Word condition(Fields fields) {
-        if(!fields.count("program_version"))fields["program_version"]=ecm_stage2::tune::portable::quoted(ecm_program::version);
-        if(text(fields,"program_version")!=ecm_program::version)throw UnsupportedFormat();
+        fields.erase("program_version");fields.erase("updated_at");
         for(const auto &old:conditions)if(old.second==fields)return old.first;
         if(conditions.size()>=256)throw std::runtime_error("too many portable tune conditions");
         const Word id=conditions.empty()?0:conditions.rbegin()->first+1;conditions.emplace(id,fields);return id;
     }
     bool update(Fields sample,Word runtime_limit=10) {
         if(!conditions.count(uint(sample,"condition")))throw std::runtime_error("unknown measurement condition");
-        const auto &c=conditions.at(uint(sample,"condition"));
-        if(sample.count("program_version") && required(sample,"program_version")!=required(c,"program_version"))throw std::runtime_error("measurement/condition version mismatch");
-        sample["program_version"]=required(c,"program_version");sample=compact_sample(std::move(sample));
+        sample=compact_sample(std::move(sample));
         const auto key=scope(sample);
         if(runtime_observation(sample)) {
             if(runtime_limit<2 || runtime_limit>1000)throw std::runtime_error("runtime sample limit must be 2..1000");
@@ -458,7 +500,6 @@ struct Profile {
            out.conditions.empty())
             throw std::runtime_error("invalid tune header");
         std::set<std::string> scopes;
-        for(const auto &c:out.conditions)if(text(c.second,"program_version")!=ecm_program::version)throw UnsupportedFormat();
         for(auto &s:out.samples) {
             if(!out.conditions.count(uint(s,"condition")))throw std::runtime_error("unknown tune condition");
             hydrate(s,out.conditions.at(uint(s,"condition")));validate(s);
@@ -474,22 +515,39 @@ struct Profile {
                 ntt_option(s,"coop_outer"),ntt_option(s,"warp_tail"),ntt_option(s,"compact_scratch")}).second)
                 throw std::runtime_error("duplicate/unknown tune NTT scope");
         }
-        return out;
+        // Legacy format-8 conditions included a program version. Transfer it
+        // to rows, then merge conditions that now describe the same hardware.
+        Profile normalized;normalized.metadata=out.metadata;std::map<Word,Word> remap;
+        for(const auto &c:out.conditions)remap[c.first]=normalized.condition(c.second);
+        std::map<std::string,size_t> merged;
+        for(auto s:out.samples) {
+            s["condition"]=std::to_string(remap.at(uint(s,"condition")));const auto key=scope(s);
+            const auto at=merged.find(key);
+            if(at==merged.end()){merged[key]=normalized.samples.size();normalized.samples.push_back(std::move(s));}
+            else {
+                auto &old=normalized.samples[at->second];
+                if(measured(old) && measured(s))combine(old,s);
+                else if(!measured(old))old=std::move(s);
+            }
+        }
+        for(auto s:out.ntt){s["condition"]=std::to_string(remap.at(uint(s,"condition")));normalized.update_ntt(std::move(s));}
+        normalized.revision=out.revision;return normalized;
     }
     std::string serialize()const {
         std::ostringstream out;out<<"# Stage2 mean timings; identical parameters share one repeated measurement row.\n[profile]\nformat = "<<format<<"\nunit = \"full_stage2\"\n";
         if(metadata.count("error_limit"))out<<"error_limit = "<<compact_literal(metadata.at("error_limit"))<<'\n';
         for(const auto &c:conditions) {
             out<<"\n[condition."<<c.first<<"]\n";
-            for(const auto &f:c.second)out<<f.first<<" = "<<compact_literal(f.second)<<'\n';
+            for(const auto &f:c.second)if(f.first!="program_version" && f.first!="updated_at")out<<f.first<<" = "<<compact_literal(f.second)<<'\n';
         }
         auto emit=[&](const std::string &section,std::vector<Fields> rows,bool ntt) {
             std::set<std::string> names;
-            const std::set<std::string> omitted=ntt?std::set<std::string>{"condition","program_version","log2_length","source","status","unit","reference_kind","verified_words_per_sample","bad","conv_iter_per_s","batch_iter_per_s"}:
-                std::set<std::string>{"target_bits","program_version","p","arithmetic_bits","execution_path"};
+            const std::set<std::string> omitted=ntt?std::set<std::string>{"condition","log2_length","source","status","unit","reference_kind","verified_words_per_sample","bad","conv_iter_per_s","batch_iter_per_s"}:
+                std::set<std::string>{"target_bits","p","arithmetic_bits","execution_path"};
             for(const auto &s:rows)for(const auto &f:s)if(!omitted.count(f.first))names.insert(f.first);
+            names.insert("program_version");names.insert("updated_at");
             std::vector<std::string> columns;
-            for(const char *k:{"condition","carrier_exponent","modulus_kind","b1","b2","d","length","batch","tile","fold_resident","frontier_resident","source","benchmark_kind","repeats","mean_seconds","stddev_seconds"})
+            for(const char *k:matrix_column_order)
                 if(names.erase(k))columns.push_back(k);
             columns.insert(columns.end(),names.begin(),names.end());
             std::stable_sort(rows.begin(),rows.end(),[&](const Fields &a,const Fields &b){
@@ -508,7 +566,7 @@ struct Profile {
         for(const auto &s:samples){auto row=compact_sample(s);groups[uint(s,"target_bits")].push_back(std::move(row));}
         for(auto &g:groups)emit("width."+std::to_string(g.first),std::move(g.second),false);
         groups.clear();
-        static const std::set<std::string> ntt_fields={"length","batch","tile","max_radix_bits","coop_outer","warp_tail","compact_scratch","repeats","mean_seconds","stddev_seconds","verified","measurement_ids"};
+        static const std::set<std::string> ntt_fields={"length","batch","tile","max_radix_bits","coop_outer","warp_tail","compact_scratch","repeats","mean_seconds","stddev_seconds","verified","measurement_ids","program_version","updated_at"};
         for(const auto &s:ntt){validate_ntt_summary(s);Fields row;for(const auto &f:s)if(ntt_fields.count(f.first))row.insert(f);row["verified"]="1";groups[uint(s,"condition")].push_back(std::move(row));}
         for(auto &g:groups)emit("ntt."+std::to_string(g.first),std::move(g.second),true);
         return out.str();

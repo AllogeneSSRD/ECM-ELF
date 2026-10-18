@@ -90,7 +90,7 @@ GUI可用`[Worker #N] stage=stage1|stage2`在同一INI中管理混合阶段，�
 
 默认1800秒软预算，`--tune-budget-seconds`可覆盖。ECM、NTT及启动短校准默认不运行丢弃的预热轮次；`stage2_tune_warmup=1`或CLI `--tune-warmup 1`启用每个新测形状的一次预热。正式`repeats`记录实际次数，保存平均耗时和样本标准差；必要算术检查保持不变。缺NTT资料时补轻量组件校准，真实承载任务的普通/承载参考优先占用预算。
 
-`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号列表，其中exponents表示实际位数；显式D表限定搜索范围。格式8每个位宽一个`matrix`，首行为列名，后续行与表头对齐；同参数重复执行合并repeats、均值和样本标准差，不同参数保留多行。条件保存程序版本，普通/承载通过`carrier_exponent`和`modulus_kind`独立记录，算术位宽自动恢复，详见[算术路径字段](../architecture/AUTO_B2.md#toml-中的算术路径)。不产生`[sample.*]`或未访问的模型网格。旧格式或其他程序版本的TOML须重新生成，失败不覆盖原文件；队列进度和Stage1 save不受影响。控制台保留`ecm_tune_progress`等进度，内部诊断保存在证据日志。
+`--tune-d`、`--tune-b2`、`--tune-exponents`使用逗号列表，其中exponents表示实际位数；显式D表限定搜索范围。格式8每个位宽一个`matrix`，首行为列名，后续行与表头对齐；同参数重复执行合并repeats、均值和样本标准差，不同参数保留多行。行内保存来源程序版本与UTC更新时间，版本不影响匹配或累计，普通/承载通过`carrier_exponent`和`modulus_kind`独立记录，算术位宽自动恢复，详见[算术路径字段](../architecture/AUTO_B2.md#toml-中的算术路径)。不产生`[sample.*]`或未访问的模型网格。兼容其他程序版本的format 8，并将旧条件级版本迁入行内；format 8以前的不兼容结构须重新生成，失败不覆盖原文件；队列进度和Stage1 save不受影响。控制台保留`ecm_tune_progress`等进度，内部诊断保存在证据日志。
 
 `--tune ntt`可用`--length-log2 a:b`与`--tune-slices s,...`测指定长度和批量，或用等级1…10预设。输出分别记录每秒域卷积数和每秒批调用数；它们不是ECM曲线吞吐。计时边界、预算跳过和格式见[NTT tune](../architecture/AUTO_B2.md#ntt-tune)。
 

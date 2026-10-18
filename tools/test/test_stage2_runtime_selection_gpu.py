@@ -64,6 +64,9 @@ def main():
     assert sorted(counts.values())==[2,a.sample_limit],counts
     assert len(runtime)==2 and sum(s['repeats'] for s in runtime)==a.sample_limit+2
     assert all(s['verified']==1 and s['stddev_seconds']>0 for s in runtime)
+    version=re.search(r'inline constexpr char version\[\] = "([^"]+)"', (ROOT/'src/core/ecm_program_version.h').read_text())[1]
+    assert all(s.get('program_version')==version and s.get('updated_at') for s in runtime)
+    assert all('program_version' not in c for c in tomllib.loads(profile.read_text(encoding='utf-8'))['condition'].values())
     assert all(not r['tune_plan']['runtime_probe'] for r in rows[4:])
     assert len({r['carrier_exponent'] for r in rows[4:]})==1,'stable conditions repeatedly reverted path'
     assert queue.read_text(encoding='utf-8').strip()==''

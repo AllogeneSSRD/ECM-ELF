@@ -1174,8 +1174,8 @@
       "fx": "bounded_runtime_sampling_and_path_selection",
       "parser": "strict",
       "description": [
-        "Accumulate checked no-factor production timings by device, environment, program version and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. At least two observations enable comparison with switching hysteresis. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables runtime trials, collection and writes.",
-        "按设备、环境、程序版本与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；至少两次观察后按均值、标准差及切换余量比较。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。"
+        "Accumulate checked no-factor production timings by device, environment and execution shape. Identical complete parameters share one matrix row with repeats, mean time and sample standard deviation; slower observations count too. Row version and UTC update time record provenance only; software upgrades retain compatible timings. Model selection tests a legal Mersenne carrier first, then ordinary and promising D candidates. At least two observations enable comparison with switching hysteresis. B1 does not gate cost reuse. Writes are locked and atomic; cache failure does not fail a completed curve. false disables runtime trials, collection and writes.",
+        "按设备、环境与执行形状累计通过检查的无因子生产计时。完全相同参数合并为一条matrix记录，保存repeats、平均耗时和样本标准差，包含较慢观察。行内版本与UTC更新时间仅记录来源，程序升级保留可兼容计时。model选型优先试跑合法梅森承载，再比较普通路径和有希望的D；至少两次观察后按均值、标准差及切换余量比较。B1不限制成本复用；锁定后原子写回，缓存失败不使已完成曲线失败。false关闭运行试跑、采集与写回。"
       ]
     },
     {
@@ -1190,8 +1190,8 @@
       "fx": "bounded_independent_runtime_observations",
       "parser": "strict",
       "description": [
-        "Maximum independent runtime NF observations per identical complete parameters (including B1) and matching device/environment/program-version/arithmetic/path, including slower observations. Identical parameters merge into repeats and mean/stddev; the limit counts observations, not matrix rows. Different parameter rows are retained. At least two observations enable measured selection. Lowering this limit preserves existing evidence. CLI: --tune-runtime-samples N.",
-        "完全相同参数（含B1）及相同设备、环境、程序版本、算术和执行形状的独立运行NF观察上限，包含较慢观察。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。至少两次用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。"
+        "Maximum independent runtime NF observations per identical complete parameters (including B1) and matching device/environment/arithmetic/path, including slower observations and compatible software versions. Identical parameters merge into repeats and mean/stddev; the limit counts observations, not matrix rows. Different parameter rows are retained. At least two observations enable measured selection. Lowering this limit preserves existing evidence. CLI: --tune-runtime-samples N.",
+        "完全相同参数（含B1）及相同设备、环境、算术和执行形状的独立运行NF观察上限，包含较慢观察及可兼容的其他程序版本。相同参数合并repeats和均值/标准差；上限统计观察次数，不统计matrix行数；不同参数行保留。至少两次用于实测选型；调低上限不删除已有证据。CLI：--tune-runtime-samples N。"
       ]
     },
     {

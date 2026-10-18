@@ -17,13 +17,13 @@ pt::Profile portable_read(const fs::path &path) {
     if(!fs::is_regular_file(path))return {};
     try {return pt::Profile::load(path);}
     catch(const pt::UnsupportedFormat &) {
-        std::cout<<"tune_profile_reset: incompatible development format/version; calibration will regenerate "<<path.string()<<std::endl;
+        std::cout<<"tune_profile_reset: incompatible development format; calibration will regenerate "<<path.string()<<std::endl;
         return {};
     }
 }
 et::Fields portable_condition(const Options &o) {
     EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(o.device,&info))throw std::runtime_error("cannot query tuning device");
-    et::Fields f={{"program_version",pt::quoted(ecm_program::version)},{"uuid_hex",json_string(info.uuid_hex)},{"sm_major",std::to_string(info.major)},
+    et::Fields f={{"uuid_hex",json_string(info.uuid_hex)},{"sm_major",std::to_string(info.major)},
         {"sm_minor",std::to_string(info.minor)},{"cuda_runtime",std::to_string(info.runtime)},
         {"cuda_driver",std::to_string(info.driver)},{"gl_fixed_mode",std::to_string(info.fixed_mode)},
         {"outer_unroll_u",std::to_string(info.outer_unroll_u)},{"add_sub_mask",std::to_string(NTT_GL_ADD_SUB_MASK)},
@@ -134,7 +134,7 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     RuntimeTuneObservation result;
     const auto profile=portable_read(o.tune_profile);result.condition=portable_condition(o);
     pt::Estimator engine(profile,result.condition,pt::Ignore::parse(o.tune_ignore),portable_query);
-    engine.runtime_version=ecm_program::version;pt::WidthPredictor predictor(engine);
+    pt::WidthPredictor predictor(engine);
     // Selection normally fixes D. A protected legacy fallback may leave it 0.
     const auto d=o.d?o.d:portable_legacy_d(o,r,o.b2,o.carrier_exponent,false);
     auto shape=portable_shape(o,r,o.b2,d,o.carrier_exponent);pt::Work work;
@@ -169,6 +169,7 @@ void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Me
     sample["mean_seconds"]=pt::numeric(m.total_seconds);sample["min_seconds"]=sample["max_seconds"]=sample["mean_seconds"];
     sample["runtime_completed_ns"]=std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
+    pt::stamp_provenance(sample,et::uint(sample,"runtime_completed_ns"));
     const auto predicted=et::real(sample,"predicted_seconds");
     sample["measured_model_ratio"]=pt::numeric(m.total_seconds/predicted);
     sample["validation_count"]="1";sample["validation_max_relative_error"]=pt::numeric(std::abs(predicted-m.total_seconds)/m.total_seconds);
@@ -241,7 +242,7 @@ uint64_t portable_default_d(const Options &o,const Record &r,uint64_t b2,unsigne
 }
 std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &engine,pt::WidthPredictor &predictor) {
     if(o.relocation || o.tune_child || o.tune_profile.empty())return {};
-    engine.runtime_version=ecm_program::version;
+
     const auto carriers=portable_carriers(o,r);
     std::vector<pt::RuntimeCandidate> candidates;
     uint64_t ordinary_default=0;
@@ -257,8 +258,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
             if(shape.target_bits!=original.target_bits || shape.arithmetic_bits!=original.arithmetic_bits ||
                shape.carrier!=carrier || shape.b2!=o.b2 || (o.has_d && o.d && shape.d!=o.d))continue;
             if(!historical || et::real(sample,"mean_seconds")<et::real(*historical,"mean_seconds"))historical=&sample;
-            if(pt::runtime_observation(sample) && sample.count("program_version") &&
-               pt::text(sample,"program_version")==engine.runtime_version) {
+            if(pt::runtime_observation(sample)) {
                 if(!ds.count(shape.d))ds[shape.d]=2;
                 tested_alternate|=shape.d!=center;
             }
@@ -651,6 +651,7 @@ bool portable_measure(Options o,const Settings &settings,const PortableInput &in
     sample["modulus_kind"]=json_string(shape.mersenne?"mersenne":"generic");sample["benchmark_kind"]=json_string(input.kind);
     sample["b1"]=std::to_string(input.record.b1);sample["b2"]=std::to_string(b2);sample["repeats"]=std::to_string(trials.size());
     sample["warmup_runs"]=o.tune_warmup?"1":"0";
+    pt::stamp_provenance(sample);
     sample["measurement_ids"]=pt::encoded_ids({stage2_queue::token()});
     sample["source"]="\"measured\"";sample["execution_path"]=json_string(shape.fold?(shape.frontier?"resident":"host_frontier"):"host_fold_frontier");
     sample["giant_chunk_points"]=std::to_string(shape.giant_chunk);sample["giant_chain_min"]=std::to_string(shape.chain_min);
@@ -685,6 +686,7 @@ void portable_ntt(Options o,pt::Profile &profile,ecm_stage2::Word condition,pt::
             const auto times=et::array(et::required(f,"seconds"));
             f["mean_seconds"]=pt::numeric(pt::average(times));f["stddev_seconds"]=pt::numeric(pt::deviation(times));
             f["conv_iter_per_s"]=pt::numeric(et::uint(f,"batch")/pt::average(times));f["batch_iter_per_s"]=pt::numeric(1/pt::average(times));
+            pt::stamp_provenance(f);
             f["measurement_ids"]=pt::encoded_ids({stage2_queue::token()});f.erase("median_seconds");
             for(auto i=f.begin();i!=f.end();)if(!i->second.empty() && i->second.front()=='[')i=f.erase(i);else ++i;
             f.erase("type");f.erase("device_index");
@@ -1209,7 +1211,7 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
             {"mean_seconds",pt::numeric(e.seconds)},{"stddev_seconds",pt::numeric(e.stddev)},
             {"model_anchor_count",std::to_string(e.anchors)},{"model_evidence",json_string(model_evidence)},
             {"model_relative_error_allowance",pt::numeric(e.relative_error)}};
-        estimates.push_back(std::move(s));
+        pt::stamp_provenance(s);estimates.push_back(std::move(s));
     }
     for(auto &s:estimates)profile.update(std::move(s));
     profile.metadata["effort_level"]=std::to_string(level);profile.metadata["budget_seconds"]=std::to_string(o.tune_budget);
