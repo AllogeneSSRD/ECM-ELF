@@ -70,6 +70,9 @@ python query_changes.py
 
 # 4. 密排柱状图（默认指数 1–20000）
 python plot_ecm.py
+
+# 5. 两日变化图（热度图用 --plot heatmap 或 --plot both）
+python plot_changes.py
 ```
 
 ## 数据模型（简要）
@@ -249,6 +252,42 @@ python plot_ecm.py --plots overlay --compress 4 --compress-agg max
 # Y 从 40 起，图高约 800 像素
 python plot_ecm.py --plots overlay --ymin 40 --fig-height 8 --dpi 100
 ```
+
+---
+
+## `plot_changes.py`
+
+从稀疏 `progress_history` 还原指定日期的状态。默认只生成最近两个报告日期的变化图；热度图需用 `--plot heatmap` 或 `--plot both` 选择。默认指数范围为 `1–20000`，热度图覆盖全部报告日期。图片默认写入仓库忽略的 `tools/ecm_report/figures/`，可用 `--out-dir` 指定其他目录。
+
+```bash
+python tools/ecm_report/plot_changes.py
+python tools/ecm_report/plot_changes.py --compress 10 --compress-agg avg
+python tools/ecm_report/plot_changes.py --plot both --from 20261001 --to 20261018 --lo 1000 --hi 10000 --range-size 500
+python tools/ecm_report/plot_changes.py --plot heatmap --metric progress --out-dir data/figures
+python tools/ecm_report/plot_changes.py --plot heatmap --hide-zero --last-days 60
+python tools/ecm_report/plot_changes.py --plot both --last-days 60 --compress 10 --range-size 100 --xtick-gap 2000 --vgrid --max-height-px 800 --max-width-px 1200
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--plot change\|progress\|heatmap\|both` | 绘制变化图、热度图或两者；默认 `change`，`progress` 是变化图的兼容别名 |
+| `--from` / `--to` | `YYYYMMDD`，可以是未导入报告的日期；进度图按该日期以前的最后记录还原状态，要求前后日期有序；热度图只显示区间内实际导入的报告日期 |
+| `--lo` / `--hi` | 指数闭区间，默认 `1–20000` |
+| `--range-size` | 热度图每列的指数区间宽度，默认 `1000`；从 `--lo` 开始分组，例如 `100` 会将 `1–20000` 分成 200 列；刻度疏密由 `--xtick-gap` 控制 |
+| `--xtick-gap N\|auto` | 两张图共用：整数表示按指数值每 N 标一个刻度（默认 `1000`），`auto` 表示在图上均匀放置刻度并标实际指数；热度图按刻度所属的指数分箱定位 |
+| `--vgrid` | 两张图共用：在当前 x 轴刻度位置画竖向虚线，默认关闭 |
+| `--compress N` | 只用于变化图：每 N 个连续指数合成一柱，默认 `1`；热度图用 `--range-size` 控制指数分箱 |
+| `--compress-agg avg\|max` | 变化图压缩后柱高的聚合方式，默认 `avg`；`max` 使用组内最大进度 |
+| `--last-days` | 可选，选择截至 `--to` 的最近 N 个自然日；变化图取窗口开始前一天的状态作比较基线，热度图显示窗口内的报告日期；与 `--from` 同用时采用较晚的起点 |
+| `--max-height-px` / `--height-span-days` | 热度图高度上限默认 800 像素；60 个自然日对应此高度，较短日期跨度按比例缩小，较长跨度保持上限；单日等短跨度保留足够标注空间 |
+| `--max-width-px` | 热度图宽度上限，默认 2800 像素，最小 500；细分指数区间时仍逐格保留数据，横轴标签随可用宽度抽稀 |
+| `--metric curves\|progress` | 热度图颜色单位，默认 `curves`，可选归一化进度 `progress` |
+| `--hide-zero` | 仅用于热度图：增长量为 0 的格子不着色，显示白色背景；全为 0 时省略色标；输出文件名增加 `_hidezero`，默认关闭 |
+| `--db` / `--out-dir` / `--dpi` | 数据库路径、图片目录和分辨率；数据库也可用 `ECM_DB` 指定 |
+
+变化图的灰柱是起始日状态，青色是两日间净增长，红色是回退或更正，紫色是结束日首次出现的指数。小幅变化另用顶端标记指出，柱段高度仍表示真实差值。压缩时按结束日指数顺序分组，只用两日均存在的指数计算可比较的柱高；同组首次出现的指数另用紫色三角标记，整组均为首次出现时画紫色柱。组内增长和回退可能在 `avg` 中互相抵消，或被 `max` 遮住；标记仍指出发生过变化的组。纵轴沿用 `plot_ecm.py` 的 t-level 进度刻度。
+
+热度图按报告日期分行，每格累加该区间指数在该日期**相对前次记录的正向变化**。`curves` 将已完成的较低 t-level 所需曲线数与当前档曲线数相加，再计算增量；跨档位也计入。`progress` 改用进度图的纵轴差值。颜色越深，增长越多；首次出现没有前值，不计入增长；回退或更正不抵消正向变化。`--hide-zero` 会将零增长格子留白，不改变统计量。报告日期是数据库观测时间，不代表每条曲线实际提交的时间。纵向像素高度按所选日期跨度自动计算并受到上限约束，日期标签也随高度抽稀；日期数据不合并。脚本在终端输出首次出现和回退事件数。
 
 ---
 

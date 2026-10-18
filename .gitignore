@@ -169,3 +169,4 @@ AGENTS.md
 *.ckpt*
 *.ecm-ledger*
 ecm_stage1_*identity.txt
+/tools/ecm_report/figures
