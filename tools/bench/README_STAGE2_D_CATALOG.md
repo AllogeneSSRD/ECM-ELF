@@ -55,7 +55,23 @@ python tools/bench/analyze_stage2_d_catalog.py `
 
 候选数量不等于完整曲线测量数量，长度相符不证明整条曲线显存适配。默认性能保护保持配对中位数/MAD门限和现场原生准入。各输入域的性能证据见[Stage2性能](../../docs/performance/STAGE2.md)；离线边界与规划查询不能代替完整曲线计时。
 
-## 压缩候选表
+## 持续搜索的离线结构分析
+
+`analyze_stage2_d_search.py`读取当前共享表，计算几何包络、同P冗余、P非单调性及不同S/B2下的粗区间规模，保存几何支配却需要更多fold的反例。它只调用现有Python整数packing复刻，不运行CUDA、完整曲线、测试或原生资源准入，也不修改生产表。
+
+运行 `python tools/bench/analyze_stage2_d_search.py --output data/experiments/<新目录>`。默认S为512/1939/4667/7995/12011/16319，B2为260000000/26000000000/2600000000000，owner为640 MiB；可用`--bits`、`--b2`、`--owner-mb`覆盖。输出目录必须不存在。
+
+输出`analysis.json`、`catalog.csv`和`sources/`；图默认写入`data/figures/<目录名>_geometry.png/.svg`，`--figures`可指定前缀。图中fold代理为`(G−1)L log₂L`，忽略尾fold缩短及其他阶段，不是Stage2时间预测。原理及待实现策略见[D搜索研究草稿](../../docs/development/STAGE2_D_SEARCH_DRAFT.md)。
+
+### 有界搜索实现验证
+
+`tools/build/test/build_stage2_d_search.ps1`在独立目录构建主机选型改动，复用并由正式构建器逐项核验原CUDA对象/依赖；默认基于`build_cuda_cmake/local_stage2_0_38_4`，可用`-BaseBuild`、`-Build`覆盖。
+
+`tools/test/test_stage2_d_search.py --output data/experiments/<新目录>`执行共享搜索器CPU门禁。`test_stage2_d_search_gpu.py --exe <EXE> --save <已核验save> --output data/experiments/<新目录>`在GPU1重放保存点，检查自动D/承载、多尺度探索、后续轮次、采样与显式锁；`--exponent`、`--b2`、`--curves`可覆盖。它保存冻结EXE/DLL、构建输入和日志，属于功能验证，不代表新增ECM覆盖或性能提升。
+
+`test_stage2_d_search_default_plans.py --exe <EXE> --reference <完整52格基准目录> --output data/experiments/<新目录>`逐格比较无tune的D/P，要求`curves_executed=0`。计划一致仍需结合已有完整曲线采集器验证性能。
+
+## 压缩候选表提议生成
 
 `compress_stage2_d_catalog.py`从指定的冻结候选头文件提取字面量，以保护集合、几何包络、NTT/树边界及默认owner布局的预算边界产生提议。不会改写生产头文件。`--protect-profile`仅采用干净且有正式重复的实测记录；`--protect-analysis`要求完整、零失败的矩阵。它们可重复指定。
 

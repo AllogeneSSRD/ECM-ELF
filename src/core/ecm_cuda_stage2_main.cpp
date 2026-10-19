@@ -286,6 +286,7 @@ struct Options {
     bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
     uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
     bool runtime_probe=false;
+    uint64_t runtime_remaining=0; // Parent queue hint; not part of a measurement identity.
     std::string prediction_policy="model",tune_arithmetic="both";
     double tune_error=.08;
     std::set<std::string> portable_cli;
@@ -348,6 +349,7 @@ Options arguments(int argc, char **argv) {
         else if (a == "--tune-profile") o.tune_profile=value();
         else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-runtime-samples") {o.runtime_samples=num();if(o.runtime_samples<2 || o.runtime_samples>1000)throw std::runtime_error("tune-runtime-samples must be 2..1000");o.portable_cli.insert(a);}
+        else if (a == "--runtime-remaining-curves") {o.runtime_remaining=num();}
         else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
         else if (a == "--ntt-counts") {const auto n=num();if(n>1)throw std::runtime_error("ntt-counts must be 0 or 1");o.ntt_counts=n!=0;o.portable_cli.insert(a);}
         else if (a == "--relocation") {const auto n=num();if(n>1)throw std::runtime_error("relocation must be 0 or 1");o.relocation=n!=0;o.portable_cli.insert(a);}
@@ -609,6 +611,7 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     arg(L"--pack-zero",o.pack_zero?1:0);
     arg(L"--tune-runtime",o.tune_runtime?1:0);
     arg(L"--tune-runtime-samples",o.runtime_samples);
+    arg(L"--runtime-remaining-curves",o.runtime_remaining);
     cmd+=L" --tune-ignore "+quote(fs::path(o.tune_ignore).wstring());
     if(!o.stage1_csv.empty())cmd+=L" --stage1-cost-csv "+quote(fs::path(o.stage1_csv).wstring());
     if(!o.condition_tag.empty())cmd+=L" --tune-condition-tag "+quote(fs::path(o.condition_tag).wstring());
@@ -1473,6 +1476,7 @@ int driver(Options o) {
             poll_inherited_stop();
             if(stop_requests){task_completed=false;break;}
             const auto &r=plan[i];
+            o.runtime_remaining=plan.size()-i;
             if(stage2_log::enabled(stage2_log::curve)||o.dry)
                 report("curve_start: "+std::to_string(i+1)+"/"+std::to_string(plan.size())+" record="+std::to_string(r.index)+
                        " sigma="+std::to_string(r.sigma)+" B1="+std::to_string(r.b1)+" checksum="+(r.checksum?"verified":"absent")+

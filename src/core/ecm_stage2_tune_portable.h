@@ -3,6 +3,7 @@
 #include "ecm_stage2_tune_ntt_profile.h"
 #include "ecm_stage2_probability.h"
 #include "ecm_stage1_cost_csv.h"
+#include "ecm_stage2_d_search.h"
 #include <chrono>
 #include <charconv>
 #include <ctime>
@@ -58,7 +59,7 @@ struct LocalSearch {
         if(start>=size)throw std::runtime_error("invalid local search start");
     }
     static bool improves(Timing a,Timing b) {
-        return a.seconds>0 && b.seconds>0 && a.seconds+2*a.stddev < .98*b.seconds-2*b.stddev;
+        return d_search_improves(a.seconds,a.stddev,b.seconds,b.stddev);
     }
     size_t next() {
         if(!tested.count(center) && !rejected.count(center) && !deferred.count(center))return center;

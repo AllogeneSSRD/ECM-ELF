@@ -240,18 +240,88 @@ uint64_t portable_default_d(const Options &o,const Record &r,uint64_t b2,unsigne
     }
     return winner;
 }
+std::string portable_runtime_search(const Options &o,const Record &r,const pt::Shape &reference,
+        pt::Estimator &engine,pt::WidthPredictor &predictor,std::vector<pt::RuntimeCandidate> &candidates) {
+    if(!o.tune_runtime || (o.has_d && o.d))return {};
+    std::vector<pt::DSearchNode> existing;bool partial=false;
+    for(const auto &c:candidates)if(c.shape.carrier==reference.carrier) {
+        existing.push_back({c.shape.d,ecm_stage2::d_catalog::degree(c.shape.d),{},1,
+            c.statistics.seconds,c.statistics.stddev,c.statistics.count});
+        partial|=c.shape.d!=reference.d && c.statistics.count && c.statistics.count<2;
+    }
+    const auto initial_budget=pt::runtime_search_budget(existing,reference.d,o.runtime_samples);
+    if((pt::DSearch(existing,reference.d).explored()>=initial_budget.candidates && !partial) ||
+       !initial_budget.remaining || (o.runtime_remaining && o.runtime_remaining<4))return {};
+    std::vector<pt::DSearchNode> nodes;std::vector<pt::Shape> shapes;std::vector<pt::WidthEstimate> estimates;
+    std::set<uint64_t> ds;for(const auto &entry:ecm_stage2::d_catalog::entries())ds.insert(entry.d);
+    for(const auto &c:candidates)if(c.shape.carrier==reference.carrier)ds.insert(c.shape.d);
+    for(auto d:ds) {
+        auto s=portable_shape(o,r,o.b2,d,reference.carrier);pt::Work w;pt::WidthEstimate e;
+        if(!engine.cached_work(s,w) || w.p<512 || !w.exact_topology || !predictor.predict(s,e))continue;
+        // Reuse the admitted shape of existing candidates; predicted chunk and
+        // residency are not a substitute for their exact runtime identity.
+        for(const auto &c:candidates)if(c.shape.d==d && c.shape.carrier==reference.carrier){s=c.shape;break;}
+        if(!engine.cached_work(s,w) || !predictor.predict(s,e))continue;
+        const auto stats=engine.runtime_statistics(s);
+        nodes.push_back({d,w.p,pt::interval(s,w).key,e.rank,stats.seconds,stats.stddev,stats.count});
+        shapes.push_back(s);estimates.push_back(e);
+    }
+    auto budget=pt::runtime_search_budget(nodes,reference.d,o.runtime_samples);
+    const char *reason="admission_attempt_limit";uint64_t proposed=0;double scale=0;
+    for(unsigned attempt=0;attempt<16;++attempt) {
+        budget=pt::runtime_search_budget(nodes,reference.d,o.runtime_samples);
+        const pt::DSearch search(nodes,reference.d,2,budget.candidates,pt::RuntimeSearchBudget::regions);
+        const auto step=search.next();reason=step.reason;scale=step.scale;if(!step.available)break;
+        const auto i=step.index;auto s=shapes[i];std::string plan;
+        if(estimates[i].seconds>1.5*budget.reference) {
+            nodes[i].rejected=true;reason="model_uncompetitive";continue;
+        }
+        if(!budget.permits(estimates[i].seconds*(1+estimates[i].relative_error)+2*estimates[i].stddev,
+                           nodes[i].samples,o.runtime_remaining)) {
+            nodes[i].rejected=true;reason="exploration_budget";continue;
+        }
+        if(!portable_admit(o,r,s,plan)){nodes[i].rejected=true;reason="memory_admission";continue;}
+        pt::Work w;pt::WidthEstimate e;
+        if(!engine.cached_work(s,w) || !w.exact_topology || !predictor.predict(s,e)) {
+            nodes[i].rejected=true;reason="admitted_model_unavailable";continue;
+        }
+        const auto stats=engine.runtime_statistics(s);
+        // A physical route may differ from the cheap ranking shape. Reconcile
+        // its existing observations before exposing another trial.
+        if(stats.count>=2) {
+            nodes[i]={s.d,w.p,pt::interval(s,w).key,e.rank,stats.seconds,stats.stddev,stats.count};
+            bool present=false;for(auto &c:candidates)if(c.shape.d==s.d && c.shape.carrier==s.carrier) {
+                c.shape=s;c.statistics=stats;present=true;break;
+            }
+            if(!present)candidates.push_back({s,stats,2,false});continue;
+        }
+        if(!budget.permits(e.seconds*(1+e.relative_error)+2*e.stddev,stats.count,o.runtime_remaining)) {
+            nodes[i].rejected=true;reason="admitted_exploration_budget";continue;
+        }
+        bool present=false;for(auto &c:candidates)if(c.shape.d==s.d && c.shape.carrier==s.carrier) {
+            c.shape=s;c.statistics=stats;c.probe_allowed=true;present=true;break;
+        }
+        if(!present)candidates.push_back({s,stats,3,true});proposed=s.d;break;
+    }
+    std::ostringstream out;out<<std::setprecision(17)<<"{\"carrier_exponent\":"<<reference.carrier
+        <<",\"candidate_limit\":"<<budget.candidates<<",\"explored\":"<<pt::DSearch(nodes,reference.d).explored()
+        <<",\"extra_seconds\":"<<budget.spent<<",\"remaining_extra_seconds\":"<<budget.remaining
+        <<",\"proposed_D\":"<<proposed<<",\"reason\":"<<json_string(reason)<<",\"scale\":"<<scale<<'}';
+    return out.str();
+}
 std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &engine,pt::WidthPredictor &predictor) {
     if(o.relocation || o.tune_child || o.tune_profile.empty())return {};
 
     const auto carriers=portable_carriers(o,r);
     std::vector<pt::RuntimeCandidate> candidates;
+    std::vector<pt::Shape> references;std::vector<std::string> searches;bool references_ready=true;
     uint64_t ordinary_default=0;
     for(auto carrier:carriers) {
         const auto center=o.has_d && o.d?o.d:portable_default_d(o,r,o.b2,carrier,true);if(!center)continue;
         if(!carrier || !ordinary_default)ordinary_default=center;
         const auto original=portable_shape(o,r,o.b2,center,carrier);
         std::map<uint64_t,unsigned> ds{{center,carrier?0u:1u}};
-        const et::Fields *historical=nullptr;bool tested_alternate=false;
+        const et::Fields *historical=nullptr;
         for(const auto &sample:engine.profile.samples)if(pt::measured(sample) &&
             pt::matches(engine.profile.conditions.at(et::uint(sample,"condition")),engine.condition,engine.ignore)) {
             const auto shape=engine.shape(sample);
@@ -260,26 +330,20 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
             if(!historical || et::real(sample,"mean_seconds")<et::real(*historical,"mean_seconds"))historical=&sample;
             if(pt::runtime_observation(sample)) {
                 if(!ds.count(shape.d))ds[shape.d]=2;
-                tested_alternate|=shape.d!=center;
             }
         }
         if(historical && !ds.count(et::uint(*historical,"d")))ds[et::uint(*historical,"d")]=2;
-        // One model seed per family, followed by real observations. Do not
-        // chase a new optimistic unmeasured D after every completed trial.
-        if(!(o.has_d && o.d) && !tested_alternate) {
-            uint64_t best=center;double rank=std::numeric_limits<double>::infinity();
-            for(const auto &entry:ecm_stage2::d_catalog::entries()) {
-                const auto shape=portable_shape(o,r,o.b2,entry.d,carrier);pt::Work w;pt::WidthEstimate e;
-                if(!engine.cached_work(shape,w) || w.p<512 || !w.exact_topology || !predictor.predict(shape,e))continue;
-                if(e.rank<rank){rank=e.rank;best=entry.d;}
-            }
-            if(!ds.count(best))ds[best]=3;
-        }
         for(const auto &entry:ds) {
             auto shape=portable_shape(o,r,o.b2,entry.first,carrier);pt::Work w;std::string plan;
             if(!engine.cached_work(shape,w) || w.p<512 || !w.exact_topology || !portable_admit(o,r,shape,plan))continue;
-            candidates.push_back({shape,engine.runtime_statistics(shape),entry.second});
+            const auto stats=engine.runtime_statistics(shape);
+            candidates.push_back({shape,stats,entry.second,entry.first==center || (o.has_d && o.d)});
+            if(entry.first==center) {references.push_back(shape);references_ready&=stats.count>=2;}
         }
+    }
+    if(references_ready)for(const auto &reference:references) {
+        const auto search=portable_runtime_search(o,r,reference,engine,predictor,candidates);
+        if(!search.empty())searches.push_back(search);
     }
     const auto choice=pt::runtime_choice(candidates,o.tune_runtime);if(!choice.available)return {};
     const auto &chosen=candidates[choice.index];const auto &shape=chosen.shape;
@@ -303,7 +367,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         if(c.statistics.count)out<<",\"mean_seconds\":"<<c.statistics.seconds<<",\"stddev_seconds\":"<<c.statistics.stddev;
         out<<'}';
     }
-    out<<']';
+    out<<"],\"runtime_search\":[";for(size_t i=0;i<searches.size();++i){if(i)out<<',';out<<searches[i];}out<<']';
     return out.str()+'}';
 }
 std::string portable_width_select(Options &o,const Record &r) {
@@ -1154,20 +1218,43 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
                     Outcome rejected;rejected.state=Outcome::Rejected;outcomes[nodes[i].d]=rejected;
                 }
                 if(center==nodes.size()) {if(budget.expired() || stop_requests)break;++explored;continue;}
-                pt::LocalSearch search(center,nodes.size());
                 std::cout<<"ecm_tune_window: N="<<bits<<" B2="<<b<<" carrier="<<carrier
                     <<" region="<<(region+1)<<'/'<<requested<<" center_D="<<nodes[center].d
                     <<" fold_ntt="<<basin.key.key[0]<<" tree_ntt="<<basin.key.key[2]
                     <<" predicted_ratio="<<basin.rank<<" restart="<<(region!=0)<<std::endl;
-                for(;;) {
-                    const auto i=search.next();if(i==nodes.size())break;
-                    if(budget.expired() || stop_requests){search.deferred.insert(i);outcomes[nodes[i].d]=Outcome{};break;}
-                    const auto result=measure(nodes[i].d);
-                    if(result.state==Outcome::Tested)search.tested[i]=result.time;
-                    else if(result.state==Outcome::Rejected)search.rejected.insert(i);
-                    else search.deferred.insert(i);
+                if(!o.tune_ds.empty()) {
+                    // Explicit research lists retain their established local
+                    // traversal; automatic catalogues use the shared search.
+                    pt::LocalSearch search(center,nodes.size());
+                    for(;;) {
+                        const auto i=search.next();if(i==nodes.size())break;
+                        if(budget.expired() || stop_requests){search.deferred.insert(i);outcomes[nodes[i].d]=Outcome{};break;}
+                        const auto result=measure(nodes[i].d);
+                        if(result.state==Outcome::Tested)search.tested[i]=result.time;
+                        else if(result.state==Outcome::Rejected)search.rejected.insert(i);
+                        else search.deferred.insert(i);
+                    }
+                    complete=search.complete() && complete;
+                } else {
+                    std::vector<pt::DSearchNode> pool;
+                    for(const auto &n:nodes)pool.push_back({n.d,n.p,basin.key.key,n.rank});
+                    for(size_t i=0;i<pool.size();++i)if(outcomes.count(pool[i].d)) {
+                        const auto &prior=outcomes.at(pool[i].d);
+                        if(prior.state==Outcome::Tested) {
+                            pool[i].seconds=prior.time.seconds;pool[i].stddev=prior.time.stddev;pool[i].samples=grid.repeats;
+                        } else pool[i].rejected=true;
+                    }
+                    for(;;) {
+                        const auto step=pt::DSearch(pool,nodes[center].d,grid.repeats,std::max(4u,grid.basins*2),1).next();
+                        if(!step.available)break;const auto i=step.index;
+                        if(budget.expired() || stop_requests){complete=false;outcomes[pool[i].d]=Outcome{};break;}
+                        const auto result=measure(pool[i].d);
+                        if(result.state==Outcome::Tested) {
+                            pool[i].seconds=result.time.seconds;pool[i].stddev=result.time.stddev;pool[i].samples=grid.repeats;
+                        } else {pool[i].rejected=true;if(result.state==Outcome::Deferred)complete=false;}
+                    }
                 }
-                complete=search.complete() && complete;++explored;
+                ++explored;
             }
             size_t tested=0,rejected=0,deferred=0;uint64_t best_d=baseline;
             pt::LocalSearch::Timing best_time;

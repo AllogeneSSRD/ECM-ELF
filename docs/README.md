@@ -45,6 +45,8 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 1094项共享D候选表和跨NTT区间tune已接入源码，当前规则见 [Auto B2 / tune](architecture/AUTO_B2.md)。冻结实验、有限预算查询、379419项参考枚举及未完成边界见 [D候选表草稿](development/STAGE2_D_CATALOG_DRAFT.md)。
 
+候选是否可继续精简、几何包络的局限，以及按P比例跨步与跨区间持续探索，见 [D候选压缩与搜索研究草稿](development/STAGE2_D_SEARCH_DRAFT.md)。0.39.0源码已接入有界搜索，当前验证范围与尚待完成的性能验收见草稿；运行规则以Auto B2 / tune为准。
+
 ## 数据位置
 
 原始运行日志、保存点、剖析和冻结证据在 `data/experiments/` 或工具指定的 `data/` 子目录；统计结果在 `data/benchmarks/`，图表在 `data/figures/`。这些目录不提交 Git，链接到本机证据的页面不能代替原始证据分发。复用脚本保留在 `tools/`，可按其说明重新生成结果。
