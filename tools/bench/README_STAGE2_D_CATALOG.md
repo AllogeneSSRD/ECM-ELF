@@ -85,6 +85,8 @@ python tools/bench/compare_stage2_d_search.py `
 
 `bench_stage2_d_default_pair.py --baseline <旧完整n=3矩阵> --candidate <新EXE> --candidate-version <版本> --output data/experiments/<新目录> --repeats 1`复用上述采集器，在同一会话按52个相同条件交替旧/新版本，合计104次。相邻格反转版本顺序，不预热；启动前校验旧EXE的原始结果指纹与新构建输入。每个版本目录保持标准矩阵格式，可分别用`check_stage2_version.py --expected-repeats 1`审计，再用同一比较工具指定两侧均为1。`pair.json`保留总调度与两侧身份；`--resume`只续跑已记录成功调用后的剩余格，遇到失败或未记录调用须先调查。配对结果补充历史n=3参考，不覆盖历史会话和原始失败样本。
 
+比较该交替实验时，额外传`compare_stage2_d_search.py --paired-study <交替实验根目录>`；工具要求两侧恰为该目录的`baseline/`、`candidate/`，核对完整状态、EXE身份、版本、次数及保留调用顺序，图注改为同会话相邻版本。一格一次仍只作筛查，不估计方差；没有该选项时沿用独立历史会话口径。编排器的纯CPU检查为`tools/test/test_stage2_d_default_pair.py`，比较和实验身份检查为`test_stage2_d_search_comparison.py`，均需新的`--output data/experiments/<目录>`，不调用CUDA。
+
 ### 同入口的准备缓存对照
 
 `bench_stage2_d_prepare.py --exe <EXE> --profile <已有运行统计的TOML> --reference <完整52格矩阵> --output data/experiments/<新目录>`从已核验输入选择实际余因子，在GPU1重放12条相同点的worktodo队列。`--exponent`、`--b2`、`--curves`覆盖任务；`--order carrier,uncached,on,on,uncached,carrier`比较默认承载、同一实测文件且关闭准备缓存、同一文件且开启缓存。`normal`为默认普通，`off`为保留已有实测选择但关闭继续采样，`on`开启正常运行采样；`--prepare-cache 0|1`控制其余模式的内部诊断开关。

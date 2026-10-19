@@ -1,6 +1,7 @@
 """Audit and compare two complete default Stage2 matrices, retaining both sample counts.
 
-This is a screening comparison, not a paired causal experiment. Original logs,
+Optional paired-study metadata verifies the adjacent-version schedule. A single
+sample per cell is still screening, not variance estimation. Original logs,
 samples and outliers are never rewritten or discarded. Retests remain separate.
 """
 import argparse
@@ -84,7 +85,29 @@ def telemetry(plan):
     return result
 
 
-def plot(rows, versions, counts, target):
+def paired_protocol(study, baseline, candidate, first, last):
+    source=study/'pair.json';record=load(source)
+    if not record['complete'] or record['failures']:
+        raise ValueError('Paired study is incomplete or failed')
+    if baseline.resolve()!=(study/'baseline').resolve() or candidate.resolve()!=(study/'candidate').resolve():
+        raise ValueError('Compared arms do not belong to the paired study')
+    plans={'baseline':first,'candidate':last};repeats=record['repeats']
+    if repeats<1 or any(p['repeats']!=repeats for p in plans.values()) or len(record['schedule'])!=104*repeats:
+        raise ValueError('Paired repeat count or scope differs')
+    for arm,plan in plans.items():
+        if record['versions'][arm]!=plan['program_version'] or record['exe_sha256'][arm]!=hashlib.sha256(Path(plan['exe']).read_bytes()).hexdigest():
+            raise ValueError('Paired version or executable differs')
+        declared=[s['id'] for s in record['schedule'] if s['arm']==arm]
+        if len(declared)!=52*repeats or len(set(declared))!=len(declared) or declared!=[r['id'] for r in plan['runs']]:
+            raise ValueError('Paired schedule differs from retained invocation order')
+    schedule=record['schedule']
+    if any({a['arm'],b['arm']}!={'baseline','candidate'} or a['id']!=b['id'] for a,b in zip(schedule[::2],schedule[1::2])):
+        raise ValueError('Versions were not adjacent per exact condition')
+    return dict(study=str(study.resolve()),plan_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+                retained_invocations=len(schedule),repeats=repeats,adjacent_versions=True,order=record['order'])
+
+
+def plot(rows, versions, counts, target, paired=False):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -105,8 +128,9 @@ def plot(rows, versions, counts, target):
         ax.set_xlabel('Actual cofactor N (bits)'); ax.grid(alpha=.2); ax.legend()
     axes[0].set_ylabel('Full engine time change (%); positive = slower')
     fig.suptitle(f'ECM-ELF {versions[1]} (n={counts[1]}) vs {versions[0]} (n={counts[0]}) | default D, no tune')
+    protocol='Same session, adjacent versions per cell; n=1 does not estimate variance.' if paired else 'Separate sessions; no causal claim.'
     fig.text(.5, .025, 'RTX 4060 Laptop, GPU1, SM 1500 MHz setting | 6300 / 640 / 256 MiB | Stage2 init + main incl. checks and GCD\n'
-        'Separate sessions; no causal claim. Shading combines observed min/max, not a confidence interval. All samples retained.',
+        +protocol+' Shading combines observed min/max, not a confidence interval. All samples retained.',
         ha='center', fontsize=9)
     fig.tight_layout(rect=(0, .11, 1, .94))
     for ext in ('png', 'svg'):
@@ -118,6 +142,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--baseline', type=Path, required=True)
     p.add_argument('--candidate', type=Path, required=True)
+    p.add_argument('--paired-study',type=Path,help='Completed bench_stage2_d_default_pair study; verifies arm identity and retained order')
     p.add_argument('--baseline-repeats', type=int, default=3)
     p.add_argument('--candidate-repeats', type=int, default=1)
     p.add_argument('--output', type=Path, required=True)
@@ -129,6 +154,7 @@ def main():
         p.error('Retest thresholds cannot be negative')
     first, before, first_audit = matrix(args.baseline, args.baseline_repeats)
     last, after, last_audit = matrix(args.candidate, args.candidate_repeats)
+    paired=paired_protocol(args.paired_study,args.baseline,args.candidate,first,last) if args.paired_study else None
     for field in ('device', 'arena_mb', 'fold_mb', 'batch_mb'):
         if first[field] != last[field]:
             raise ValueError('Benchmark protocol differs: ' + field)
@@ -145,14 +171,15 @@ def main():
             exe_sha256=hashlib.sha256(Path(plan['exe']).read_bytes()).hexdigest(),
             plan_sha256=hashlib.sha256((path/'plan.json').read_bytes()).hexdigest(), gpu=plan['gpu'],
             busy_gpu_telemetry=telemetry(plan))
-    summary = dict(complete=True, screening_only=True,
+    summary = dict(complete=True, screening_only=True,paired_control=paired,
         baseline=identity(args.baseline, first, args.baseline_repeats, first_audit),
         candidate=identity(args.candidate, last, args.candidate_repeats, last_audit),
         primary='stage2_full_wall.total=init+main; mandatory checks and GCD included; Stage1 excluded',
         retest_rule=dict(relative=args.retest_relative, absolute_seconds=args.retest_seconds, both_required=True),
         all_default_plans_unchanged=all(r['same_plan'] for r in rows), totals=totals,
         retests=[r for r in rows if r['retest_required']], rows=rows,
-        limitations='Independent historical sessions; n=1 is screening, not variance estimation. Retests must retain original samples.')
+        limitations=('Same-session adjacent-version control; ' if paired else 'Independent historical sessions; ')+
+            'n=1 is screening, not variance estimation. Retests must retain original samples.')
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output/'comparison.json').write_text(json.dumps(summary, indent=2)+'\n', encoding='utf-8')
     with (args.output/'cells.csv').open('w', newline='', encoding='utf-8') as f:
@@ -161,7 +188,7 @@ def main():
     if args.figures:
         args.figures.mkdir(parents=True, exist_ok=False)
         plot(rows, (first['program_version'], last['program_version']),
-             (args.baseline_repeats, args.candidate_repeats), args.figures/'default-matrix-change')
+             (args.baseline_repeats, args.candidate_repeats), args.figures/'default-matrix-change',paired=bool(paired))
     print(json.dumps(dict(totals=totals, unchanged_plans=summary['all_default_plans_unchanged'],
                           retests=len(summary['retests'])), indent=2))
 

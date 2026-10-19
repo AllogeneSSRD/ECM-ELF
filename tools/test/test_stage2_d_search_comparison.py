@@ -1,12 +1,13 @@
 """Check the default-matrix comparison rules without a GPU or timed workload."""
 import argparse
 import copy
+import hashlib
 import json
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
-from compare_stage2_d_search import compare, repeat_totals
+from compare_stage2_d_search import compare, repeat_totals, paired_protocol
 
 
 def main():
@@ -47,9 +48,36 @@ def main():
             dict(repeat=2, engine='gpu', engine_seconds=7), dict(repeat=2, engine='gpu-carrier', engine_seconds=8)]
     assert repeat_totals(dict(runs=runs), 'gpu') == [2., 7.]
     assert repeat_totals(dict(runs=runs), 'all') == [5., 15.]
-    report = dict(complete=True, checks=8, exact_identity=True, full_scope=True,
-                  absolute_and_relative_retest_thresholds=True, CUDA_calls=0)
     a.output.mkdir(parents=True, exist_ok=False)
+    study=a.output/'paired';study.mkdir();plans={};schedule=[]
+    for arm,version in [('baseline','0.38.4'),('candidate','0.39.2')]:
+        folder=study/arm;folder.mkdir();exe=folder/'fake.exe';exe.write_bytes(arm.encode())
+        plans[arm]=dict(program_version=version,repeats=1,exe=str(exe),runs=[dict(id=str(i)) for i in range(52)])
+    for i in range(52):
+        for arm in (('baseline','candidate') if i%2 else ('candidate','baseline')):schedule.append(dict(arm=arm,id=str(i)))
+    record=dict(complete=True,failures=[],repeats=1,versions={k:v['program_version'] for k,v in plans.items()},
+                exe_sha256={k:hashlib.sha256(Path(v['exe']).read_bytes()).hexdigest() for k,v in plans.items()},
+                schedule=schedule,order='Adjacent versions; reverse per condition')
+    def paired(data,baseline=None):
+        (study/'pair.json').write_text(json.dumps(data),encoding='utf-8')
+        return paired_protocol(study,baseline or study/'baseline',study/'candidate',plans['baseline'],plans['candidate'])
+    assert paired(record)['retained_invocations']==104
+    for field,value in [('complete',False),('failures',['failure']),('repeats',2),('schedule',schedule[:-1]),
+                        ('versions',{'baseline':'wrong','candidate':'0.39.2'}),
+                        ('exe_sha256',{'baseline':'wrong','candidate':record['exe_sha256']['candidate']})]:
+        bad=copy.deepcopy(record);bad[field]=value
+        try:paired(bad)
+        except ValueError:pass
+        else:raise AssertionError('Bad paired metadata accepted: '+field)
+    bad=copy.deepcopy(record);bad['schedule'][0],bad['schedule'][2]=bad['schedule'][2],bad['schedule'][0]
+    try:paired(bad)
+    except ValueError:pass
+    else:raise AssertionError('Nonadjacent schedule accepted')
+    try:paired(record,study/'unrelated')
+    except ValueError:pass
+    else:raise AssertionError('Unrelated study accepted as paired')
+    report = dict(complete=True, checks=17, exact_identity=True, full_scope=True,paired_metadata=True,
+                  absolute_and_relative_retest_thresholds=True, CUDA_calls=0)
     (a.output/'report.json').write_text(json.dumps(report, indent=2)+'\n', encoding='utf-8')
     print(json.dumps(report))
 
