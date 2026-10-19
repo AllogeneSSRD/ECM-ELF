@@ -12,6 +12,7 @@
 // worker's task" -- which is silent otherwise.
 
 #include "../../src/core/ecm_worktodo.h"
+#include "../../src/core/ecm_ini.h"
 
 #include <cstdio>
 #include <fstream>
@@ -170,10 +171,63 @@ static void test_list_workers() {
     std::remove((path + ".edit.lock").c_str());
 }
 
+static void test_stage_selection_and_transition() {
+    printf("[4] mixed-stage selection and in-place transition\n");
+    const std::string path="worktodo_sections_test.tmp";
+    const std::string stage1="ECMSTAGE1=1,2,991,-1,m991_1e6.save,0,0,3";
+    const std::string stage2="ECMSTAGE2=1,2,997,-1,m997_1e6.save,10000000,0,3";
+    write_file(path,{"# keep",stage2,stage1,"[Worker #2]",stage1});
+    std::string line,err;
+    check(ecm_worktodo_read_next_line(path,1,{1,0},WorktodoStage::Stage1,line,err)==WorktodoReadResult::Task && line==stage1,
+          "Stage1 priority selects later Stage1 row");
+    check(ecm_worktodo_read_next_line(path,1,{1,0},WorktodoStage::Stage2,line,err)==WorktodoReadResult::Empty,
+          "Stage2 waits while Stage1 is preferred");
+    check(ecm_worktodo_read_next_line(path,1,{2,0},WorktodoStage::Stage2,line,err)==WorktodoReadResult::Task && line==stage2,
+          "Stage2 priority selects Stage2 row");
+    check(ecm_worktodo_read_next_line(path,1,{1,1},WorktodoStage::Any,line,err)==WorktodoReadResult::Task && line==stage2,
+          "skip Stage1 leaves Stage1 untouched and falls back to Stage2");
+    check(ecm_worktodo_read_next_line(path,1,{2,2},WorktodoStage::Any,line,err)==WorktodoReadResult::Task && line==stage1,
+          "skip Stage2 leaves Stage2 untouched and falls back to Stage1");
+    EcmStage2Task parsed;
+    check(ecm_parse_stage1_line(stage1,parsed,err) && parsed.n==991,
+          "ECMSTAGE1 save task parses");
+    const auto converted=std::string("ECMSTAGE2=")+stage1.substr(10);
+    check(ecm_worktodo_advance(path,1,stage1,WorktodoAction::Replace,converted),
+          "later selected row is replaced in place");
+    const auto after=read_file(path);
+    check(after.size()==5 && after[0]=="# keep" && after[1]==stage2 && after[2]==converted && after[3]=="[Worker #2]" && after[4]==stage1,
+          "replacement preserves order, comments and other worker");
+    std::remove(path.c_str());
+    std::remove((path+".edit.lock").c_str());
+}
+
+static void test_ini_priority_sections() {
+    const std::string path="worktodo_ini_sections_test.ini";
+    write_file(path,{"priority=2","[GUI]","priority=below_normal",
+                     "[Worker #1]","priority=1","[GUI]","priority=high",
+                     "[Worker #2]","skip=2"});
+    std::vector<ecm_config::IniLine> lines;
+    check(ecm_config::read_ini(path,lines),"INI with GUI and worker sections opens");
+    const auto value=[](const ecm_config::Entries &entries,const std::string &key) {
+        for(const auto &entry:entries)if(entry.first==key)return entry.second;
+        return std::string{};
+    };
+    const auto worker1=ecm_config::cli_entries(lines,1,true);
+    const auto worker2=ecm_config::cli_entries(lines,2,true);
+    check(value(worker1,"priority")=="1" && value(worker2,"priority")=="2",
+          "CLI priority ignores GUI process priority and respects worker overrides");
+    check(value(worker2,"skip")=="2","worker 2 skip override remains visible");
+    check(value(ecm_config::section_entries(lines,"GUI"),"priority")=="high",
+          "GUI priority remains available to the GUI");
+    std::remove(path.c_str());
+}
+
 int main() {
     test_header_syntax();
     test_first_line_and_advance();
     test_list_workers();
+    test_stage_selection_and_transition();
+    test_ini_priority_sections();
     printf("\npassed: %d   failed: %d\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

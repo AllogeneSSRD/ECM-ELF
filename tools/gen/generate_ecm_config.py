@@ -120,6 +120,8 @@ def assignment(o, key=None):
         code = f"{dst}=bounded_integer(v,{literal(key)},{lo},{hi})!=0;"
     elif kind == "positive":
         code = f"{dst}=positive(v,{literal(key)});"
+    elif kind == "optional_integer":
+        code = f"{dst}=v.empty()?0:static_cast<{TYPES[o['type']]}>(bounded_integer(v,{literal(key)},{lo},{hi}));"
     elif kind == "log_level":
         code = f"{dst}=log_level(v);"
     elif kind == "gui_font":
@@ -241,7 +243,7 @@ def template(schema, release):
     out = ["# GENERATED: config/ecm_options.json -> tools/gen/generate_ecm_config.py",
            "# Reference: ECM_INI_REFERENCE.md (package), docs/ECM_INI_REFERENCE.md (repository)",
            "# CLI: global < Worker #N < CLI; GUI: global / [GUI] / [Worker #N]",
-           "# S1.path_base=exe_dir; S2.path_base=ini_dir; CLI.path_base=CWD",
+           "# worktodo.path_base=ini_dir; other S1.path_base=exe_dir; S2.path_base=ini_dir; CLI.path_base=CWD",
            "# AutoB2(current_release)=uncalibrated; use explicit B2",
            "# MiB=2^20 B; arena+fold+batch != process_peak", ""]
     for owner in ("stage1", "stage2", "gui"):
@@ -264,13 +266,12 @@ def template(schema, release):
             prefix = "# " if o.get("template_comment") or o.get("worker_suffix") else ""
             out.append(f"{prefix}{o['key']} = {text(value)}".rstrip())
         out.append("")
-    out.extend(["# Mixed stages: GUI.NumWorkers=2; worker sections follow shared settings/GUI.",
-                "# 混合阶段：GUI.NumWorkers=2；worker分区放在共享设置及GUI之后。",
-                "# [Worker #1]", "# stage = stage1", "# device = 0", "# autostart = 0",
-                "# [Worker #2]", "# stage = stage2", "# stage2_device = 1", "# autostart = 0",
-                "# stage2_worktodo = stage2_worktodo_2.txt",
-                "# Stage2 queue for this worker must contain [Worker #2].",
-                "# 此worker的Stage2队列须包含[Worker #2]分区。", ""])
+    out.extend(["# Mixed stages share worktodo; each task prefix selects its executable.",
+                "# 两阶段共用 worktodo，任务前缀决定执行程序。",
+                "# [Worker #1]", "# device = 0", "# autostart = 0",
+                "# [Worker #2]", "# stage2_device = 1", "# autostart = 0",
+                "# Queue rows for worker 2 belong under [Worker #2].",
+                "# worker 2 的任务行放在 [Worker #2] 分区下。", ""])
     return "\n".join(out)
 
 
@@ -294,16 +295,16 @@ def reference(schema):
            "bool(S1,S2): [true|false|yes|no|on|off|1|0]; case=insensitive",
            "integer(S2): decimal|scientific; exact_integer; >=0",
            "override: built_in < global < Worker#N < CLI",
-           "B2: CLI(nonzero) > task(nonzero) > stage2_b2 > AutoB2",
+           "B2: b2_ratio(nonzero,queue) > CLI(nonzero) > task(nonzero) > stage2_b2 > AutoB2",
            "CLI.sections: Worker#N=scope; other[]=label; label!=scope_reset",
            "GUI.sections: global|GUI|Worker#N; other[]=distinct_section",
-           "GUI.worker_stage: Worker#N.stage=[stage1|stage2] > GUI.stage; Worker#N.stage=auto => GUI.stage",
+           "queue_stage: ECMSTAGE1=>Stage1; ECMSTAGE2=>Stage2; GUI dispatches by next task",
            "shared_settings,GUI => before_Worker_sections; queue_without_header => Worker#1",
            "global_keys => before_first_section; grouping => #comment",
            "duplicate_key: last_in_layer; unknown_key: ignore",
            "invalid: S1=legacy_fallback; S2=error; GUI=fallback_or_clamp",
            "path_base: S1=exe_dir; S2.INI=ini_dir; CLI=CWD; exceptions=path_base(key)",
-           "queue: consumers=1; parallel_workers=>distinct(queue,outputs)",
+           "queue: one process per worker section at a time; stages share worktodo",
            "S1.INI => queue_mode; single_run => CLI",
            "AutoB2(current_release)=uncalibrated; required=explicit_B2",
            "memory: arena+fold+batch != process_peak; budget!=total_VRAM_cap", "```", "",
@@ -313,8 +314,8 @@ def reference(schema):
            "公共键放在任何分区标题之前；专用 worker 值放在 `[Worker #N]` 下。命令行程序只把 worker 标题当作作用域，其他标题仅是标签，也不会退出已有 worker 作用域；GUI 则按真实分区读取。为兼容两者，公共键应使用 `#` 注释分组。", "",
            "The last duplicate key in each layer wins; worker settings override global settings, and CLI overrides INI. Boolean keys accept the forms above, but Stage2 integer switches accept only `0|1`. Do not quote INI paths or append inline comments to configuration values.<br>",
            "同一层重复键以最后一次出现为准，worker 设置覆盖全局，命令行覆盖 INI。布尔键可以使用上列布尔写法，但标为整数开关的 Stage2 键只接受 `0|1`。路径不要加引号，不支持在配置行末尾追加注释。", "",
-           "Stage1 relative paths normally use the executable directory. Stage2 INI paths use the INI directory; CLI paths use the current working directory. Individual keys document any exceptions. Concurrent processes need separate queues, progress files, and output paths.<br>",
-           "Stage1 相对路径通常以可执行文件目录为基准；Stage2 的 INI 相对路径以 INI 目录为基准，命令行相对路径以当前工作目录为基准。各键另有约定时见该项说明。多进程并行运行应使用独立队列、进度及输出路径。", ""]
+           "The shared worktodo path and Stage2 INI paths use the INI directory. Other Stage1 relative paths use the executable directory; CLI paths use the current working directory. A worker section has one queue consumer at a time; finished and progress paths remain separate.<br>",
+           "共用 worktodo 和 Stage2 的 INI 路径以 INI 目录为基准；其他 Stage1 相对路径以可执行文件目录为基准，命令行相对路径以当前工作目录为基准。同一 worker 分区同时只有一个队列消费者，完成记录及进度路径保持独立。", ""]
     for owner, title in (("stage1", "Stage1 and shared settings / Stage1 与共享选项 — global or [Worker #N] / 全局或 [Worker #N]"),
                          ("stage2", "Stage2 — global or [Worker #N] / 全局或 [Worker #N]"),
                          ("gui", "GUI settings / GUI 配置 — [GUI]"), ("worker", "GUI worker settings / GUI worker 配置 — [Worker #N]")):

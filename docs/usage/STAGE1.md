@@ -8,7 +8,7 @@
 
 生产任务通常使用 Suyama PARAM0。sigma 是曲线种子，不是曲线序号；不同参数化的 sigma 不能互换。GPU 一批曲线共享 N、B1 和指数，分别维护点状态。`ECM=`/`ECM2=` 队列行没有 save 名称；CPU/GPU 的自动 save 共用 `save_name_pattern`，默认 `{curve}_{target}_{b1}.save`，写入 `tmp_dir`。curve 为 e、m0、m2、m3；target 保留梅森任务的原始指数，例如 m5351，即使已经剥离因子。普通整数使用 bit 加实际位宽。B1 使用紧凑写法，例如 `m0_m5351_260e6.save`、`e_m5351_260e6.save`。旧自定义模式自动补充曲线前缀；CLI 显式 `-save` 路径保持原样。保存失败时任务留在 worktodo，不会进入 finished。
 
-Stage1 启动器也接受 `ECMSTAGE2=` 队列：从 save 文件名末尾的 `_B1.save` 提取 B1。文件名前缀 `e_`、`m0_`、`m2_`、`m3_` 分别指定 Edwards、Montgomery PARAM0/2/3，覆盖该任务的 INI `curve`、`gpu_param`；`ed_` 兼容识别为 Edwards，并规范为 `e_`。Edwards 自动采用固定的 48·lcm 标量，忽略该任务的 Montgomery `lcm` 设置。执行设备和 CPU/GPU 选择仍由 INI 决定，CPU 遇到 `m2_`/`m3_` 会报错并保留队列。每条任务独立应用前缀，不影响下一条无类型前缀任务的 INI 默认值。无类型前缀的旧名称沿用 INI，并自动补充类型前缀；父目录和剩余文件名保留。
+Stage1 启动器也接受 `ECMSTAGE1=` 队列：从 save 文件名末尾的 `_B1.save` 提取 B1。文件名前缀 `e_`、`m0_`、`m2_`、`m3_` 分别指定 Edwards、Montgomery PARAM0/2/3，覆盖该任务的 INI `curve`、`gpu_param`；`ed_` 兼容识别为 Edwards，并规范为 `e_`。Edwards 自动采用固定的 48·lcm 标量，忽略该任务的 Montgomery `lcm` 设置。执行设备和 CPU/GPU 选择仍由 INI 决定，CPU 遇到 `m2_`/`m3_` 会报错并保留队列。每条任务独立应用前缀，不影响下一条无类型前缀任务的 INI 默认值。无类型前缀的旧名称沿用 INI，并自动补充类型前缀；父目录和剩余文件名保留。
 
 控制台 `START:` 保留原始 worktodo 行；`finished` 和受支持的 Prime95 交接行使用实际 save 名称，其他字段保持原样。补前缀时，若新目标不存在或为空，将旧 save 中同曲线族、同参数化的记录复制到新文件后追加，保持原 `skip_curves` 编号；旧文件保留。记录类型冲突时停止并保留队列。新目标已有内容时不重复复制旧历史。`save_name_pattern` 只生成没有显式 save 名称的任务路径。
 
@@ -20,11 +20,11 @@ GPU Edwards 使用不带参数化前缀的 sigma；CLI 不接受 `--gpu-param` �
 
 队列的 `tmp_dir` 相对可执行文件所在目录解析；路径生成时清除 `.` 等冗余目录组件，并使用当前平台的分隔符。检查点文件名自身的前导 `.` 属于命名的一部分。
 
-两个 CUDA 程序可共用 exe 目录中的 `ecm.ini`。Stage1 使用 `worktodo`、`finished`、`log_file`；Stage2 使用相应 `stage2_*` 键，分别消费队列。
+两个 CUDA 程序共用 `ecm.ini` 和 `worktodo`；任务前缀 `ECMSTAGE1=`、`ECMSTAGE2=` 分别指定 Stage1、Stage2。`worktodo` 相对 INI 目录解析。Stage1 使用 `finished`、`log_file`，Stage2 使用 `stage2_finished`、`stage2_log_file` 等独立输出。GUI 根据下一个可运行任务启动对应程序；单独启动 CLI 程序时，该程序只领取自己阶段的任务。
 
-`--worker N` 同时选择 INI 与 worktodo 中的 `[Worker #N]`。worker 设置覆盖全局设置，再使用默认值。每个队列只能有一个消费进程；不同 worker 使用独立输出路径。键的默认值和适用范围只在配置参考维护。
+`--worker N` 同时选择 INI 与 worktodo 中的 `[Worker #N]`。worker 设置覆盖全局设置，再使用默认值。同一 worker 分区同时只由一个程序处理；不同 worker 可以共用队列文件，队列改写受文件锁保护。`priority=0` 按文件顺序，`1` 优先处理全部 Stage1，`2` 优先处理全部 Stage2；优先阶段无任务时回退另一阶段。`skip=1` 完全忽略 Stage1 行，`skip=2` 完全忽略 Stage2 行，`0` 不跳过。空值等于 0。
 
-队列无待运行任务时正常结束；`worktodo` 不存在或读取失败时报错退出，不能把它当成空队列。
+当前程序没有符合 `priority`、`skip` 和阶段要求的任务时正常结束；`worktodo` 不存在或读取失败时报错。`auto_stage2=1` 时，Stage1 完成后照常将原任务写入 `finished`；未找到因子时再把 worktodo 原位置改写为 `ECMSTAGE2=`，已找到因子时直接移除任务。0 或空值仍删除已完成行。改写的 save 使用绝对路径，避免两程序工作目录不同。Stage2 执行时，非零 `b2_ratio` 将有效 B2 覆盖为 save 中 B1 × ratio；0 或空值保留原 B2 选择。该选项范围为 1…1000000，任务仍须满足 B2 > B1。四项队列设置均可在 `[Worker #N]` 覆盖。
 
 ## 计算与输出
 
@@ -75,15 +75,15 @@ Ctrl+C、Ctrl+Break 或 GUI 的正常停止请求会在当前后端的下一个�
 
 Prime95 交接资格按每条任务应用文件名前缀后的实际曲线判断。Edwards 与 GPU Montgomery PARAM2 自动忽略配置的 Prime95 转移路径，仅输出说明，不访问该路径或转移账本。受支持的 Montgomery PARAM0/3 可将 save 同步并向 Prime95 `worktodo.add` 追加任务，save 字段指向实际输出文件；失败交付进入 pending 文件，后续重试。不要由两个程序共同改写 Prime95 活动 `worktodo.txt`。
 
-设置 `edwards_stage2_transfer=1` 后，Stage1 将已完成的 Edwards `ECM=`/`ECM2=` 或 `ECMSTAGE2=` 任务投递到本仓库 Stage2 的 `stage2_worktodo`。`edwards_stage2_worker=0`（默认）沿用 Stage1 的 worker 编号；设置正整数时，读取该接收 worker 的 `stage2_worktodo`、`stage2_finished` 配置，并写入对应的 `[Worker #N]` 分区。Stage1 finished 沿用原有记录规则：`ECM=`/`ECM2=` 保留原行，`ECMSTAGE2=` 在补全 save 类型前缀后记录；投递行使用实际 save 的绝对路径。`ECM=`/`ECM2=` 转成 `ECMSTAGE2=`，保留目标数、AID、B2、曲线数及已知因子，并用 save 中已有非注释记录数作为 skip，与 Stage2 的记录索引一致；原本是 `ECMSTAGE2=` 的行则保留其 B2、skip、曲线数等字段。Edwards Stage2 需要显式 B2：任务中的 B2 为 0 时，应在接收端配置有效的 `stage2_b2`。
+`edwards_stage2_transfer=1` 可把已完成的 Edwards Stage1 任务作为 `ECMSTAGE2=` 投递到共用 worktodo 的另一 worker 分区；`edwards_stage2_worker=0` 沿用当前编号，正整数指定接收 worker。该机制与原位 `auto_stage2` 分别适用于跨 worker 和同 worker 交接；同时启用时由 `auto_stage2` 接管当前任务。投递行使用实际 save 的绝对路径，并保留 B2、曲线范围、AID 和已知因子。
 
-投递前先将记录写入 Stage1 队列旁的 `.stage2_pending_workerN` 文件；目标队列不可写时，Stage1 仍完成当前任务，保留待投递记录，并在下次启动时重试。重试时若相同任务已在 Stage2 活动队列或完成记录中，不再重复入队。Stage1 与 Stage2 使用各自队列；交接只负责入队，Stage2 worker 仍需独立运行。关闭交接开关后，已有待投递记录仍会在 Stage1 下次启动时重试。
+跨 worker 投递前先将记录写入队列旁的 `.stage2_pending_workerN`；目标不可写时保留待投递记录并在下次启动时重试。已经存在于活动队列或 Stage2 finished 的相同行不会重复入队。已有 pending 记录在关闭交接开关后仍会重试。
 
 ## 算法与构建范围
 
 CUDA 默认路径为 ladder。resident/PRAC 必须在构建时启用，再显式选择；发布入口默认不编译这些实验模块。TPI 和寄存器实验的适用条件见 [Stage1 实现](../architecture/STAGE1.md) 与 [性能](../performance/STAGE1.md)。
 
-本程序与 Stage2 仍为两个独立可执行文件。Edwards 队列交接只在显式开启时入队，不自动启动 Stage2；其他曲线和统一消费策略见 [TODO](../TODO.md)。
+Stage1 与 Stage2 仍为独立可执行文件。GUI 按队列行自动选择并在当前阶段任务耗尽后切换；直接启动 CLI 时应分别运行两个程序。
 
 ## 代码入口
 

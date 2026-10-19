@@ -84,6 +84,8 @@ inline Entries cli_entries(const std::vector<IniLine> &lines,int worker,bool ins
     // Last occurrence wins within each layer; a worker layer always follows globals.
     for(int pass=0;pass<2;++pass)for(const auto &l:lines) {
         if(l.kind!=IniLine::Kind::KeyValue||l.key.empty())continue;
+        // [GUI] owns keys such as priority that have a different CLI meaning.
+        if(lower(l.section)=="gui")continue;
         if(pass==0?l.worker_scope!=0:(worker<=0||l.worker_scope!=worker))continue;
         replace_entry(values,insensitive?lower(l.key):l.key,l.value);
     }

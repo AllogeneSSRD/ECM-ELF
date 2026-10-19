@@ -67,7 +67,7 @@ function Check([string]$name, [bool]$ok, [string]$detail = "") {
 
 $enc = New-Object System.Text.UTF8Encoding($false)
 $saveName = "m${Exp}_1e6.save"
-$task = 'ECMSTAGE2=1,2,{0},-1,"{1}",0,0,{2}' -f $Exp, $saveName, $Curves
+$task = 'ECMSTAGE1=1,2,{0},-1,"{1}",0,0,{2}' -f $Exp, $saveName, $Curves
 $todo = Join-Path $Sandbox 'worktodo.txt'
 $ini = Join-Path $Sandbox 'ecm.ini'
 $finished = Join-Path $Sandbox 'finished.txt'

@@ -18,7 +18,7 @@ inline TaskDisplay task_display(const std::string &line) {
     };
     auto keyword=trim(line.substr(0,eq));
     for(char &c:keyword)c=static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    if(keyword!="ECM" && keyword!="ECM2" && keyword!="ECMSTAGE2")return out;
+    if(keyword!="ECM" && keyword!="ECM2" && keyword!="ECMSTAGE1" && keyword!="ECMSTAGE2")return out;
     std::vector<std::string> values;std::vector<bool> quoted;
     std::string value;bool in_quote=false,had_quote=false;
     for(size_t i=eq+1;i<=line.size();++i) {
@@ -45,7 +45,7 @@ inline TaskDisplay task_display(const std::string &line) {
     if((!numeric(values[0]) || hex_aid || quoted[0]) && values[0].compare(0,5,"FFT2=")) {out.has_aid=!values[0].empty() && values[0]!="N/A";++offset;}
     if(offset<values.size() && values[offset].compare(0,5,"FFT2=")==0)++offset;
     // A numeric AID in an ECMSTAGE2 row is distinguishable by the save position.
-    if(keyword=="ECMSTAGE2" && offset==0 && values.size()>5 && numeric(values[4]) && !numeric(values[5])) {
+    if((keyword=="ECMSTAGE1" || keyword=="ECMSTAGE2") && offset==0 && values.size()>5 && numeric(values[4]) && !numeric(values[5])) {
         out.has_aid=true;offset=1;
     }
     if(values.size()<offset+5)return TaskDisplay{};

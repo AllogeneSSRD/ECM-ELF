@@ -672,9 +672,9 @@ int run_selftest(const std::string &ini_path, const std::string &language,
                   std::to_string(app.workers().size()) + " worker(s)");
             if (!app.workers().empty()) {
                 const ecmgui::WorkerView &w = app.workers().front();
-                check(w.effective_config.find("stage = ") == 0 &&
+                check(w.effective_config.find("next task = ") == 0 &&
                           w.effective_config.find("\nexe = ") != std::string::npos,
-                      "effective-config text shows stage and executable");
+                      "effective-config text shows next queue stage and executable");
             }
         }
     }

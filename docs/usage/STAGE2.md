@@ -26,7 +26,7 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 例如 `ECMSTAGE2=1,2,3701,-1,"m3701_260e6.save",26000000000,960,10,"xxx"` 中，960 是跳过的 save 记录数，10 是请求数量；`xxx` 所在位置必须填可解析的已知因子或空字符串，不能当作任意备注。
 
-整数支持精确十进制及科学记数法，不能经浮点舍入改变 B2。B2 优先级为 CLI 非零值 → 任务非零值 → `stage2_b2`；只有最终 B2=0 且启用 Auto B2 时进行自动选择。
+整数支持精确十进制及科学记数法，不能经浮点舍入改变 B2。`b2_ratio` 为非零整数时，执行 Stage2 前用 save 中的 B1 × ratio 覆盖 B2，并检查乘法溢出与 B2 > B1；否则 B2 优先级为 CLI 非零值 → 任务非零值 → `stage2_b2`，最终为 0 且启用 Auto B2 时才自动选择。
 
 ## 数量不足与错误
 
@@ -55,13 +55,13 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 默认读取 exe 同目录 `ecm.ini`。隐式文件缺失采用默认值；显式指定但不可读则报错。全部键见 [INI 参考](../ECM_INI_REFERENCE.md)。
 
-Stage2 使用独立的 `stage2_worktodo`、`stage2_finished`、`stage2_results_file`、`stage2_submission_file`、`stage2_log_file`、`stage2_progress_dir` 和 `stage2_debug_log_file`。进度目录空值使用队列目录；显式设置旧 `stage2_progress_file` 时使用其父目录，并仅将该文件作为旧进度导入来源。save 目录空值继承 `tmp_dir`，设备未指定时继承共享 `device`。多 worker 的显式输出路径须自行区分；未指定的部分输出自动添加 worker 后缀。相同任务的进度另有独占锁，防止不同队列重复消费。
+Stage2 与 Stage1 共用 `worktodo`，但使用独立的 `stage2_finished`、`stage2_results_file`、`stage2_submission_file`、`stage2_log_file`、`stage2_progress_dir` 和 `stage2_debug_log_file`。队列中只领取 `ECMSTAGE2=` 行；`priority`、`skip` 的选择规则见 [Stage1 队列说明](STAGE1.md#共用-ini-与-worker)。非零 `b2_ratio` 将有效 B2 覆盖为 save 中 B1 × ratio；使用该 INI 直接读档时也适用。进度目录空值使用队列目录；显式设置旧 `stage2_progress_file` 时使用其父目录，并仅将该文件作为旧进度导入来源。save 目录空值继承 `tmp_dir`，设备未指定时继承共享 `device`。不同 worker 分区可共用队列；输出路径和相同任务的进度锁须避免冲突。
 
-Edwards Stage1 可通过 `edwards_stage2_transfer=1` 在完成队列任务后自动向本队列投递 `ECMSTAGE2` 行。Stage2 接收 worker 默认与 Stage1 同编号，可由 `edwards_stage2_worker` 指定其他编号；具体完成顺序、pending 恢复和 save 路径见 [Stage1 交接](STAGE1.md#检查点与交接)。此设置不启动 Stage2 进程。Edwards 任务必须在投递行或接收端 `stage2_b2` 中给出大于 B1 的 B2。
+`auto_stage2=1` 使未找到因子的 Stage1 任务在同一队列位置转为 Stage2；Edwards 的 `edwards_stage2_transfer=1` 可投递到另一 worker 分区。交接不由 CLI 自行启动 Stage2 程序，GUI 会在当前阶段任务耗尽后按下一行启动对应程序。Edwards Stage2 需要有效 B2，可由任务、`stage2_b2` 或 `b2_ratio` 提供。
 
-Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目录；Stage1 保持其 exe 目录规则。共用 INI 推荐与两个 exe 放在同一目录。只将 `[Worker #N]` 用作命令行覆盖范围；模板的普通分组用注释，GUI 的真实分区规则见 [配置维护](../architecture/CONFIGURATION.md)。
+共用 `worktodo` 以及 Stage2 INI 相对路径基于 INI 目录；其他 Stage1 相对路径基于程序目录，CLI 相对路径基于当前工作目录。共用 INI 推荐与两个 exe 放在同一目录。只将 `[Worker #N]` 用作命令行覆盖范围；模板的普通分组用注释，GUI 的真实分区规则见 [配置维护](../architecture/CONFIGURATION.md)。
 
-GUI可用`[Worker #N] stage=stage1|stage2`在同一INI中管理混合阶段，默认阶段由`[GUI] stage`提供。共享配置和GUI分区放在worker分区之前；Stage2队列内的worker编号须与启动参数一致，没有标题的任务只归worker 1。GUI的独立切换、生成器目标及停止方式见[GUI说明](GUI.md#worker-与配置)。
+GUI 依据共用队列的 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀调度，不再读取 INI 的 `stage`。同一 worker 在当前阶段可运行任务耗尽后切换程序；优先级与跳过规则可按 worker 覆盖。没有 worker 标题的任务只归 worker 1。GUI 的生成器目标及停止方式见 [GUI 说明](GUI.md#worker-与配置)。
 
 运行时拒绝 Stage1/Stage2 队列冲突，以及 save、程序、配置、队列、进度、结果和日志之间的危险重叠。
 

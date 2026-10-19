@@ -258,7 +258,7 @@ std::string emit_stage2(const GenTask &t, const std::string &save, long long ski
         }
         parts.push_back(csv_quote(joined));
     }
-    std::string out = "ECMSTAGE2=";
+    std::string out = "ECMSTAGE1=";
     for (std::size_t i = 0; i < parts.size(); ++i) {
         if (i) out += ",";
         out += parts[i];
@@ -604,9 +604,10 @@ GenResult generate(const std::string &input, const GpuProfile &gpu, const GenOpt
         const std::string s = trim(line);
         if (s.empty() || s[0] == '#') { r.skipped_comment++; continue; }
         if (s.compare(0, 5, "ECM2=") != 0 && s.compare(0, 4, "ECM=") != 0) {
-            // ecm.py's split: ECMSTAGE2= is our OUTPUT format (the generator only takes
+            // ecm.py's split: ECMSTAGE1=/ECMSTAGE2= are output formats (the generator only takes
             // assignments), everything else is an unknown line.
-            if (s.compare(0, 10, "ECMSTAGE2=") == 0) r.skipped_other++;
+            if (s.compare(0, 10, "ECMSTAGE1=") == 0 ||
+                s.compare(0, 10, "ECMSTAGE2=") == 0) r.skipped_other++;
             else r.skipped_unknown++;
             continue;
         }

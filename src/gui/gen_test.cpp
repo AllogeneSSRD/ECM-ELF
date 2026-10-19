@@ -302,7 +302,7 @@ int main(int argc, char **argv) {
         check(r.text.find("[Worker #1]\r\n") == 0, "the text starts with the worker 1 header");
         check(r.text.find("[Worker #3]") == std::string::npos,
               "no section for a worker with no tasks");
-        check(r.text.find("ECMSTAGE2=AID0000000000000000000000000001,1,2,521,-1,\"m0_m521_110e6.save\",0,0,1920,\"3,5\"") != std::string::npos,
+        check(r.text.find("ECMSTAGE1=AID0000000000000000000000000001,1,2,521,-1,\"m0_m521_110e6.save\",0,0,1920,\"3,5\"") != std::string::npos,
               "the emitted line keeps the AID, the save name and the factors", r.text);
         GpuProfile ed_gpu;
         check(parse_gpu_info(kEdwardsGpuInfo, ed_gpu, err), "Edwards GPU tiers parse", err);
@@ -378,7 +378,7 @@ int main(int argc, char **argv) {
         w.set_b2 = "1e9";
         w.set_has_na = true;
         const GenResult rw = generate("ECM2=1,2,521,-1,1e5\n", gpu, w);
-        // ECMSTAGE2= has NO B1 field: the driver takes B1 from the save name, so --set-b1
+        // ECMSTAGE1= has NO B1 field: the driver takes B1 from the save name, so --set-b1
         // shows up in the save name and in nothing else.
         check(rw.ok && rw.text.find("_2e6.save\"") != std::string::npos,
               "set_b1 lands in the save name", rw.text);
@@ -390,7 +390,7 @@ int main(int argc, char **argv) {
         w.set_b2 = "-1";
         check(!generate("ECM2=1,2,521,-1,1e5\n", gpu, w).ok,
               "negative B2 override is rejected");
-        check(rw.text.find("ECMSTAGE2=N/A,1,2,521") != std::string::npos,
+        check(rw.text.find("ECMSTAGE1=N/A,1,2,521") != std::string::npos,
               "set_has_na writes N/A", rw.text);
 
         GenOptions s = opt;

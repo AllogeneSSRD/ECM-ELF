@@ -19,7 +19,7 @@ foreach ($name in $Files) {
 }
 # Do not archive a user's existing INI, work queue, saves, logs or progress state.
 Copy-Item -LiteralPath (Join-Path $staging 'ecm.ini.example') -Destination (Join-Path $staging 'ecm.ini')
-$queueName = if ($Stage -eq 'stage1') { 'worktodo.txt' } else { 'stage2_worktodo.txt' }
+$queueName = 'worktodo.txt'
 $header = if ($Stage -eq 'stage1') { '# Add Stage1 ECM worktodo assignments here.' } else {
     '# Add ECMSTAGE2=k,b,n,c,filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"].'
 }

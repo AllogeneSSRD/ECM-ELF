@@ -91,7 +91,7 @@ def main():
     qdir=out/'queue';qdir.mkdir();qsave=qdir/'input.save';qsave.write_bytes(a.save.read_bytes()*2)
     queue=qdir/'worktodo.txt';queue.write_text(task,encoding='utf-8')
     qini=qdir/'ecm.ini';qini.write_text('verbose=false\nlcm=1\ntmp_dir='+str(qdir)+
-        '\nstage2_worktodo=worktodo.txt\nstage2_finished=finished.txt\nstage2_auto_b2=1\nstage1_batch=8\n'
+        '\nworktodo=worktodo.txt\nstage2_finished=finished.txt\nstage2_auto_b2=1\nstage1_batch=8\n'
         'stage2_tune_profile='+os.path.relpath(a.ecm_profile.resolve(),qdir)+'\nstage1_tune_profile='+os.path.relpath(a.stage1_profile.resolve(),qdir)+
         '\nstage2_results_file=results.jsonl\nstage2_log_file=stage2.log\n',encoding='utf-8')
     run('queue_plan',['--ini',qini,'--worktodo',queue,'--plan-only'])

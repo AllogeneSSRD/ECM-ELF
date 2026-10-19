@@ -67,7 +67,7 @@ $ini = Join-Path $Sandbox 'ecm.ini'
 $finished = Join-Path $Sandbox 'finished.txt'
 $saves = Join-Path $Sandbox 'saves'
 $logFile = Join-Path $Sandbox 'screen.log'
-$task = 'ECMSTAGE2=1,2,521,-1,"m521_{0}.save",0,0,{1}' -f $B1, $Curves
+$task = 'ECMSTAGE1=1,2,521,-1,"m521_{0}.save",0,0,{1}' -f $B1, $Curves
 
 # One run: fresh worktodo + log, one ini line for the cadence (or none for "default").
 # Returns @{ out; log; seconds }.

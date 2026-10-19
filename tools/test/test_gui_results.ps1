@@ -93,7 +93,7 @@ public static class Win32GuiRes {
 }
 
 $enc = New-Object System.Text.UTF8Encoding($false)
-$task = 'ECMSTAGE2=1,2,{0},-1,"m{0}_1e6.save",0,0,{1}' -f $Exp, $Curves
+$task = 'ECMSTAGE1=1,2,{0},-1,"m{0}_1e6.save",0,0,{1}' -f $Exp, $Curves
 $todo = Join-Path $Sandbox 'worktodo.txt'
 $ini = Join-Path $Sandbox 'ecm.ini'
 $finished = Join-Path $Sandbox 'finished.txt'

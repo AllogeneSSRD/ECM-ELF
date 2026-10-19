@@ -287,7 +287,7 @@ $ecmCuda = Join-Path $repoRoot 'build_cuda_cmake\ecm_cuda.exe'
 if (Test-Path $ecmCuda) {
     Write-Host "[4] the driver can still read the rewritten ini"
     $todo = Join-Path $Sandbox 'worktodo.txt'
-    [System.IO.File]::WriteAllText($todo, "ECMSTAGE2=garbage`r`n", $enc)
+    [System.IO.File]::WriteAllText($todo, "ECMSTAGE1=garbage`r`n", $enc)
     $iniText = [System.IO.File]::ReadAllText($iniPath)
     if ($iniText -notmatch '(?m)^worktodo\s*=') {
         [System.IO.File]::AppendAllText($iniPath, ("worktodo = " + $todo + "`r`n"), $enc)

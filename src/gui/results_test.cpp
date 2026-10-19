@@ -69,7 +69,7 @@ HitRecord make_hit(const std::string &factor, int curve, unsigned long long sigm
     r.save = save;
     r.worker = worker;
     r.device = 0;
-    r.task = "ECMSTAGE2=1,2,677,-1,\"m677_1e6.save\",0,0,8";
+    r.task = "ECMSTAGE1=1,2,677,-1,\"m677_1e6.save\",0,0,8";
     int exponent = 0;
     std::string b1;
     if (ResultsStore::parse_save_name(save, &exponent, &b1)) {

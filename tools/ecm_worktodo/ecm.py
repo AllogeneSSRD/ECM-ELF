@@ -4,11 +4,9 @@
 GENERATION ONLY.  This tool never runs stage 1 or stage 2 and never rewrites a file that a
 running Prime95 owns; it only turns assignment lines into the work files both consumers read.
 
-  stage 1 : our driver (ecm_cuda.exe, queue mode) reads the ECMSTAGE2= lines
-  stage 2 : Prime95 reads the ECM=/ECM2= lines (and/or the same ECMSTAGE2= lines, which is
-            the format the stage-2 handoff was designed around -- the driver merely *also*
-            accepts ECMSTAGE2= to run stage 1, a convenience feature with different
-            semantics)
+  stage 1 : ECM-ELF (ecm_cuda.exe, queue mode) reads ECMSTAGE1= lines
+  stage 2 : ECM-ELF (ecm_cuda_stage2.exe) reads ECMSTAGE2= lines
+  Prime95 reads ECM=/ECM2= lines or handoff ECMSTAGE2= lines.
 
 INPUT (both prefixes are equivalent; the prefix is only a spelling)
 
@@ -21,12 +19,10 @@ INPUT (both prefixes are equivalent; the prefix is only a spelling)
 
 OUTPUT
 
-    --out-ecmstage2 FILE   ECMSTAGE2=[<aid>,]<k>,<b>,<n>,<c>,"<save>",<B2>,<skip>,<curves>
-                           [,"f1,f2,..."]
-                           This single artifact is BOTH our stage-1 queue file and the
-                           stage-2 handoff line, which is why there is no separate
-                           --out-stage1 switch: copy it wherever it is needed.
-                           The driver takes B1 from the save name, so the rendered name must
+    --out-ecmstage1 FILE   ECMSTAGE1= save-based Stage1 assignments for ECM-ELF.
+    --out-ecmstage2 FILE   ECMSTAGE2= save-based Stage2 assignments or Prime95 handoff.
+                           Both formats use [<aid>,]<k>,<b>,<n>,<c>,"<save>",<B2>,<skip>,
+                           <curves>[,"f1,f2,..."]. B1 is read from the save name, which must
                            end in "_<B1>.save" (enforced, see --allow-invalid-save-name).
 
     --out-ecm FILE         ECM=/ECM2= lines for native Prime95 worktodo files, selected by
@@ -268,9 +264,8 @@ def read_tasks(paths: Sequence[Path], stats: dict) -> List[Task]:
                     stats["skipped_blank_or_comment"] += 1
                     continue
                 if not (line.startswith("ECM2=") or line.startswith("ECM=")):
-                    if line.startswith("ECMSTAGE2="):
-                        # ECMSTAGE2= is an OUTPUT format: our driver accepts it to run
-                        # stage 1, but this generator only takes assignments.
+                    if line.startswith(("ECMSTAGE1=", "ECMSTAGE2=")):
+                        # Save-based queue lines are outputs; this generator takes assignments.
                         stats["skipped_other_prefix"] += 1
                     else:
                         stats["skipped_unknown"] += 1
@@ -428,6 +423,10 @@ def emit_ecmstage2(t: Task, save: str, skip_curves: int, curves: int) -> str:
     return "ECMSTAGE2=" + ",".join(parts)
 
 
+def emit_ecmstage1(t: Task, save: str, skip_curves: int, curves: int) -> str:
+    return "ECMSTAGE1=" + emit_ecmstage2(t, save, skip_curves, curves)[10:]
+
+
 def emit_ecm(t: Task, prefix: str, curves: int) -> str:
     parts: List[str] = []
     if t.aid:
@@ -508,7 +507,7 @@ def write_section(path: Path, worker: int, lines: Sequence[str], append: bool, n
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ecm.py",
-        description="ECM worktodo pipeline: assignments -> stage-1 queue (ECMSTAGE2=) and "
+        description="ECM worktodo pipeline: assignments -> stage-1 queue (ECMSTAGE1=) and "
                     "Prime95 worktodo (ECM=/ECM2=).  Generation only.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="B2=0 means 'let Prime95 choose B2 automatically', not 'skip stage 2'.")
@@ -520,8 +519,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="assignment file (ECM=/ECM2= lines); repeatable")
 
     g = p.add_argument_group("output (all optional; none = summary only)")
+    g.add_argument("--out-ecmstage1", metavar="FILE",
+                   help="ECMSTAGE1= lines for the ECM-ELF Stage1 queue")
     g.add_argument("--out-ecmstage2", metavar="FILE",
-                   help="ECMSTAGE2= lines: our stage-1 queue AND the stage-2 handoff")
+                   help="ECMSTAGE2= lines for ECM-ELF Stage2 or Prime95 handoff")
     g.add_argument("--out-ecm", metavar="FILE",
                    help="ECM=/ECM2= lines for native Prime95 worktodo files")
     g.add_argument("--emit-cli", metavar="FILE",
@@ -533,6 +534,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="prefix for --out-ecm (default ECM2; both are equivalent for Prime95)")
     g.add_argument("--newline", choices=["crlf", "lf"], default="crlf",
                    help="output line ending (default crlf)")
+    g.add_argument("--append-ecmstage1", action="store_true")
     g.add_argument("--append-ecmstage2", action="store_true")
     g.add_argument("--append-ecm", action="store_true")
     g.add_argument("--append-cli", action="store_true")
@@ -640,7 +642,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"error: {msg}", file=sys.stderr)
         return 1
 
-    need_save = bool(args.out_ecmstage2) or (bool(args.emit_cli) and args.emit_cli_kind != "sh")
+    need_save = bool(args.out_ecmstage1 or args.out_ecmstage2) or (bool(args.emit_cli) and args.emit_cli_kind != "sh")
     save_names: List[str] = []
     for t in tasks:
         name = render_save_name(args.save_pattern, t)
@@ -649,12 +651,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             why = check_save_name(name)
             if why and not args.allow_invalid_save_name:
                 print(f"error: {why}", file=sys.stderr)
-                print("       the driver takes B1 from the save name for ECMSTAGE2= lines; "
+                print("       the driver takes B1 from the save name for ECMSTAGE1=/ECMSTAGE2= lines; "
                       "see --allow-invalid-save-name", file=sys.stderr)
                 return 1
 
     # ---- emit ------------------------------------------------------------------------
     stage2_lines = [emit_ecmstage2(t, s, args.skip_curves, args.gpu_curves)
+                    for t, s in zip(tasks, save_names)]
+    stage1_lines = [emit_ecmstage1(t, s, args.skip_curves, args.gpu_curves)
                     for t, s in zip(tasks, save_names)]
     ecm_lines = [emit_ecm(t, args.ecm_prefix, args.gpu_curves) for t in tasks]
     cli_lines = [emit_cli(t, s, args) for t, s in zip(tasks, save_names)]
@@ -662,6 +666,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     written: List[str] = []
     if not args.dry_run:
         try:
+            if args.out_ecmstage1:
+                write_lines(Path(args.out_ecmstage1), stage1_lines, args.append_ecmstage1, args.newline)
+                written.append(f"ECMSTAGE1=    {len(stage1_lines):6d} lines -> {args.out_ecmstage1}")
             if args.out_ecmstage2:
                 write_lines(Path(args.out_ecmstage2), stage2_lines, args.append_ecmstage2, args.newline)
                 written.append(f"ECMSTAGE2=    {len(stage2_lines):6d} lines -> {args.out_ecmstage2}")
@@ -695,7 +702,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for line in written:
         print(f"  wrote {line}")
     if not written and not args.dry_run:
-        print("  no output requested (use --out-ecmstage2 / --out-ecm / --emit-cli)")
+        print("  no output requested (use --out-ecmstage1 / --out-ecmstage2 / --out-ecm / --emit-cli)")
     return 0
 
 

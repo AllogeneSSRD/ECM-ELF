@@ -326,7 +326,7 @@ Write-Host "[B] a real worker with a routing fallback (p95_add_workers = 3, no [
 $dirB = Join-Path $Sandbox 'b'
 New-Item -ItemType Directory -Force -Path $dirB | Out-Null
 $todoB = Join-Path $dirB 'worktodo.txt'
-$taskB = 'ECMSTAGE2=1,2,521,-1,"m521_1e3.save",0,0,1'
+$taskB = 'ECMSTAGE1=1,2,521,-1,"m521_1e3.save",0,0,1'
 [System.IO.File]::WriteAllText($todoB, ("[Worker #1]`r`n" + $taskB + "`r`n"), $enc)
 $iniB = Join-Path $dirB 'ecm.ini'
 Write-SandboxIni $iniB $p95Todo '3' $todoB $EcmCuda
@@ -354,7 +354,7 @@ Write-Host "[C] a real worker whose delivery fails (a fresh worktodo.add.lock)"
 $dirC = Join-Path $Sandbox 'c'
 New-Item -ItemType Directory -Force -Path $dirC | Out-Null
 $todoC = Join-Path $dirC 'worktodo.txt'
-$taskC = 'ECMSTAGE2=1,2,522,-1,"m522_1e3.save",0,0,1'
+$taskC = 'ECMSTAGE1=1,2,522,-1,"m522_1e3.save",0,0,1'
 [System.IO.File]::WriteAllText($todoC, ("[Worker #1]`r`n" + $taskC + "`r`n"), $enc)
 $iniC = Join-Path $dirC 'ecm.ini'
 Write-SandboxIni $iniC $p95Todo '1' $todoC $EcmCuda
@@ -373,7 +373,7 @@ try {
     Check "the strip counts the parked line" ($null -ne $sC -and [int]$sC.Groups[2].Value -ge 1) $(if ($sC) { $sC.Groups[2].Value })
     Check "the line is really parked on disk" ((Test-Path $realPending) -and
                                                ([System.IO.File]::ReadAllText($realPending) -match 'm522_1e3\.save'))
-    Check "the task still left the queue"     (-not ([System.IO.File]::ReadAllText($todoC) -match 'ECMSTAGE2'))
+    Check "the task still left the queue"     (-not ([System.IO.File]::ReadAllText($todoC) -match 'ECMSTAGE1'))
     Check "no curve was lost to the failure"  ($rC.trace -match 'worker 1: state QueueEmpty')
 } finally {
     Remove-Item (Join-Path $p95Dir 'worktodo.add.lock') -Force -ErrorAction SilentlyContinue

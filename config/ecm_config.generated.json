@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "sha256": {
-    "src/core/generated/ecm_config_generated.h": "3703c8e6b3b8430d3e1c5f48c6fecaec19580ef3ce54c22615e41dc9278ea44a",
-    "src/core/generated/ecm_ini_template.h": "6b3f1e2ba49c6294f46160729c1a9b02a6051a0042e7868241c2f7478435e777",
-    "config/ecm.ini.default": "44f4266a0e0526318d137714a5fe7b6a0f49a14dd8d7c389cf618c0686531354",
-    "config/ecm.ini.example": "44f4266a0e0526318d137714a5fe7b6a0f49a14dd8d7c389cf618c0686531354",
-    "docs/ECM_INI_REFERENCE.md": "e6a5263ec1cb491bcb44550a8496d1e1b886191ec0a895b82a96f1aca63a8c77",
-    "config/ecm_options.json": "9e4a41fb8921d2d923e5809b44bdce9babfa5db08614527d570bb8dc3f122aa1",
-    "tools/gen/generate_ecm_config.py": "74e9d5bcd7b087ca3747cd9542fb1ac3391c08b76cf046afbd44450bd0c8af8d"
+    "src/core/generated/ecm_config_generated.h": "43f425a805884644f53e10d9ec35ad36748ba8d1c0de205309d3b575e3c14d24",
+    "src/core/generated/ecm_ini_template.h": "9ca8c1c424b0c606d50609bee10bb1643c64b7abfedd97820a99c3a245e6e39c",
+    "config/ecm.ini.default": "48b875c752ce0c822e62fe195c278a972c78045b162dae9df1b96ab20cfb12c9",
+    "config/ecm.ini.example": "48b875c752ce0c822e62fe195c278a972c78045b162dae9df1b96ab20cfb12c9",
+    "docs/ECM_INI_REFERENCE.md": "8253d0d066889189df009d90ff19f6f2a05d2c4321f14c1bf5c29aa0f3da9051",
+    "config/ecm_options.json": "2fd77ab3f9f57a7e724e4f0646446f23a443a74255fe9d5745d7ad6df2a3cd3a",
+    "tools/gen/generate_ecm_config.py": "ae8ba86a96e19f6cb061a6c3ca0026e0fbce928c081ef06b19ba2e09604dc5c3"
   }
 }

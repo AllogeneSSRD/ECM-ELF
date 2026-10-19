@@ -74,11 +74,8 @@
     </Panel>
 
     <Panel id="workers">
-      <Item id="default_engine" name="默认阶段"/>
       <Item id="worker_count" name="Worker 数量"/>
-      <Item id="inherit_engine" name="继承 [GUI] stage；修改此行只重配该已停止 worker。"/>
       <Item id="engine" name="计算阶段"/>
-      <Item id="engine_auto" name="自动"/>
       <Item id="choose_exe" name="选择.exe…"/>
       <Item id="choose_ini" name="选择INI…"/>
       <Item id="configuration_selected" name="已选择配置"/>

@@ -32,17 +32,17 @@ def main():
     a=p.parse_args(); out=a.output.resolve()
     if not a.analyze_only:out.mkdir(parents=True,exist_ok=False)
     production=a.production.resolve();exe=a.exe.resolve()
-    before={name:sha(production/name) for name in ('ecm.ini','stage2_worktodo.txt','stage2_worktodo.txt.progress','stage2_ecm_tune.toml') if (production/name).exists()}
+    before={name:sha(production/name) for name in ('ecm.ini','worktodo.txt','stage2_ecm_tune.toml') if (production/name).exists()}
     queue=out/'worktodo.txt';profile=out/'stage2_ecm_tune.toml'
     ini=out/'ecm.ini'
     if not a.analyze_only:
-        rows=(production/'stage2_worktodo.txt').read_text(encoding='utf-8-sig').splitlines()
+        rows=(production/'worktodo.txt').read_text(encoding='utf-8-sig').splitlines()
         task=next(s for s in rows if s.startswith('ECMSTAGE2=') and f',2,{a.exponent},-1,' in s)
         queue.write_text(task+'\n',encoding='utf-8')
         shutil.copyfile(production/'stage2_ecm_tune.toml',profile)
         original=(production/'ecm.ini').read_text(encoding='utf-8-sig')
         assert 'stage2_tune_warmup' not in original, 'This gate checks the missing-key default; use an INI without a warmup override.'
-        ini.write_text(original+'\nstage2_save_dir='+str(production)+'\nstage2_worktodo='+str(queue)+
+        ini.write_text(original+'\nstage2_save_dir='+str(production)+'\nworktodo='+str(queue)+
                        '\nstage2_tune_profile='+str(profile)+'\n',encoding='utf-8')
     command=[str(exe),'--ini',str(ini),'--tune','ecm','--tune-file',str(profile),
              '--tune-d',str(a.d),'--tune-repeats',str(a.repeats),'--tune-budget-seconds','600']

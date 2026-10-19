@@ -42,7 +42,7 @@ ECM-ELF 提供可独立运行的多后端 ECM 工作流：使用 CUDA/CGBN、Ope
 | --- | --- | --- |
 | `ecm_cuda.exe` | NVIDIA CUDA/CGBN Stage1，批量运行曲线；支持构建中包含的 PARAM0、PARAM2、PARAM3 曲线族 | 数字/表达式或 Stage1 队列；生成最终 `.save` 和运行中 checkpoint |
 | `ecm.exe` | OpenCL GPU Stage1 或 CPU Edwards、Suyama-Montgomery Stage1 | 与驱动共用的输入、INI、队列及文本 save；GPU 算子可单独选择 |
-| `ecm_cuda_stage2.exe` | 独立 CUDA 多项式 Stage2，处理合格的归一化 PARAM0 Stage1 save | 直接读档或独立 `stage2_worktodo`；输出因子、结果和逐曲线回执 |
+| `ecm_cuda_stage2.exe` | 独立 CUDA 多项式 Stage2，处理合格的归一化 PARAM0 Stage1 save | 直接读档或共用 `worktodo` 的 `ECMSTAGE2=` 任务；输出因子、结果和逐曲线回执 |
 | `ecm_gui.exe` | Windows Stage1 worker、配置、队列生成、日志、GPU 状态和结果界面 | 管理 worker 进程；计算仍由所选 `ecm_cuda.exe` 完成 |
 | `ecm_p95feeder` | CPU 本地 save 的 Prime95 交接工具 | 交付可供 Prime95 消费的任务；驱动也支持完成任务交接 |
 
@@ -88,8 +88,7 @@ device = 0
 worktodo = worktodo.txt
 finished = worktodo.finished.txt
 tmp_dir = .
-stage2_worktodo = stage2_worktodo.txt
-stage2_finished = stage2_worktodo.finished.txt
+stage2_finished = worktodo.stage2.finished.txt
 ```
 
 创建 `worktodo.txt`，其中 `ECM2` 的末尾字段依次为 B1、B2、曲线数；`B2=0` 表示只运行 Stage1：
@@ -103,11 +102,11 @@ ECM2=1,2,3001,-1,10000,0,8
 .\ecm_cuda.exe -ini .\ecm.ini --worker 1
 ```
 
-该命令不带位置参数，依次消费所选 worker 的任务。`ECM2=` 队列任务的 Montgomery 最终存档写在 `tmp_dir`，仍采用 `m{n}_{b1}.save` 格式，例如 `m3001_1e4.save`。完成的任务写入 `worktodo.finished.txt`；正常中断或最终存档写入失败时，未完成任务留在 `worktodo.txt`，重启同一命令可从有效 checkpoint 恢复。`ecm.exe` 也使用同一队列入口，但应按所选 CPU/OpenCL 路径配置。每个队列只运行一个消费进程；不同 worker 的队列和输出路径应分开。详见[队列与交接](#queues)和 [Stage1 使用](docs/usage/STAGE1.md)。
+该命令不带位置参数，只消费所选 worker 的 Stage1 任务。`ECM2=` 队列任务的 Montgomery 最终存档写在 `tmp_dir`，仍采用 `m{n}_{b1}.save` 格式，例如 `m3001_1e4.save`。完成的任务写入 `worktodo.finished.txt`；正常中断或最终存档写入失败时，未完成任务留在 `worktodo.txt`，重启同一命令可从有效 checkpoint 恢复。`ecm.exe` 也使用同一队列入口，但应按所选 CPU/OpenCL 路径配置。不同 worker 可使用同一队列的独立分区；同一 worker 同时只运行一个程序。详见[队列与交接](#queues)和 [Stage1 使用](docs/usage/STAGE1.md)。
 
 ### 运行和调优 CUDA Stage2
 
-Stage1 完成并生成 `m3001_1e4.save` 后，创建独立的 `stage2_worktodo.txt`；这里的 B2 为显式上界，save 文件名必须与实际产物一致：
+Stage1 完成且未找到因子，并生成 `m3001_1e4.save` 后，在同一个 `worktodo.txt` 的 `[Worker #1]` 分区添加下行；这里的 B2 为显式上界，save 文件名必须与实际产物一致。也可设置 `auto_stage2=1`，让 Stage1 完成且未找到因子时自动将原任务原位改写为 Stage2：
 
 ```text
 [Worker #1]
@@ -217,7 +216,7 @@ save 的兼容范围也有限：CUDA/CPU PARAM0 及 CUDA/OpenCL PARAM3 的合格
 .\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --once
 ```
 
-Stage2 的队列文件由 `stage2_worktodo` 指定，不与 Stage1 的 `worktodo` 共用。任务格式为 `ECMSTAGE2=[AID,]k,b,n,c,save[,B2][,skip_curves][,num_curves][,"known_factors"]`。直接读档可用 `--skip-curves` 和 `--curves` 选择记录；队列按回执记录已完成的曲线，在中断后对账，未完成的当前曲线需要重算。输入文件缺失、损坏、任务字段不匹配与设备/资源故障有不同的队列处理方式。
+Stage1 与 Stage2 共用 `worktodo`，由 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀决定执行阶段；GUI 会按队列自动切换程序。`priority=1` 优先 Stage1，`2` 优先 Stage2，空值或 `0` 按文件顺序；优先阶段无任务时处理另一阶段。`skip=1` 忽略 Stage1，`2` 忽略 Stage2；`priority`、`skip`、`auto_stage2` 均可按 worker 覆盖。`b2_ratio` 为非零整数时，Stage2 使用 B1 × ratio 覆盖其他 B2 来源；使用该 INI 直接读档时也适用。Stage2 任务格式为 `ECMSTAGE2=[AID,]k,b,n,c,save[,B2][,skip_curves][,num_curves][,"known_factors"]`。直接读档可用 `--skip-curves` 和 `--curves` 选择记录；队列按回执记录已完成的曲线，在中断后对账，未完成的当前曲线需要重算。输入文件缺失、损坏、任务字段不匹配与设备/资源故障有不同的队列处理方式。
 
 手动 B2 支持符合实现约束的 2…16384-bit 输入。Auto B2 还要求适用的成本 profile 和 Stage1 成本，且始终受当前显存及算术检查约束；对没有合格模型的生产任务应明确给出 B2。`--dry-run` 只校验输入；`--plan-only` 可进行启动短校准，若要纯查询需配合 `--short-calibration 0`。参数、回执、内存摘要、调优数据格式见 [Stage2 使用](docs/usage/STAGE2.md)、[管线](docs/architecture/STAGE2.md)、[Auto B2](docs/architecture/AUTO_B2.md)。
 

@@ -1,6 +1,6 @@
 @echo off
 @REM ============================================================================
-@REM ecmcuda.bat -- 生成"给我们驱动跑 stage 1"的 worktodo（ECMSTAGE2= 行）
+@REM ecmcuda.bat -- 生成"给我们驱动跑 stage 1"的 worktodo（ECMSTAGE1= 行）
 @REM
 @REM 用本仓库自带的 Windows 原生工具（不需要 WSL / 外部 ECM.py）：
 @REM   tools\ecm_worktodo\ecm.py
@@ -13,8 +13,8 @@ set "PIPE=%~dp0ecm.py"
 set "SRC=%~dp0assignment.csv"
 set "OUTPATH=D:\code\GIMPS\GIMPS_同步"
 
-@REM 两份输出内容逐字节相同，只是投放位置不同：
-@REM   OUT_QUEUE -> 我们驱动的队列目录（ecm_cuda.exe 读 ECMSTAGE2= 跑 stage 1）
+@REM OUT_QUEUE is ECM-ELF Stage1; OUT_SAVE is Prime95 Stage2 handoff.
+@REM   OUT_QUEUE -> 我们驱动的队列目录（ecm_cuda.exe 读 ECMSTAGE1= 跑 stage 1）
 @REM   OUT_SAVE  -> 另一路（例如 P95 侧接档）
 set "OUT_QUEUE=%OUTPATH%\worktodo_add.csv"
 set "OUT_SAVE=%OUTPATH%\worktodo_save.csv"
@@ -37,8 +37,8 @@ if not exist "%SRC%" (
   --input "%SRC%" ^
   --set-b1 %B1% --set-b2 0 --gpu-curves %CURVES% --skip-curves 0 ^
   --sort-factors ^
-  --append-ecmstage2 ^
-  --out-ecmstage2 "%OUT_QUEUE%"
+  --append-ecmstage1 ^
+  --out-ecmstage1 "%OUT_QUEUE%"
 
 "%PYTHON%" "%PIPE%" ^
   --input "%SRC%" ^

@@ -85,7 +85,7 @@ def check(case, bits, bound, sigma=26, curves=1, convention='lcm', ini=False, de
         todo = directory / 'worktodo.txt'
         # ECMSTAGE2 tasks explicitly request a save; plain ECM tasks do not.
         save_path = saves / f'm{bits}_{bound}.save'
-        todo.write_text(f'ECMSTAGE2=N/A,1,2,{bits},-1,"{save_path.as_posix()}",0,0,{curves}\n', encoding='ascii')
+        todo.write_text(f'ECMSTAGE1=N/A,1,2,{bits},-1,"{save_path.as_posix()}",0,0,{curves}\n', encoding='ascii')
         config = directory / 'ecm.ini'
         exponent = 'lcm' if case == 'ini_worker_choose12' else convention
         scalar = '12' if exponent == 'choose12' else '1'

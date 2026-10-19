@@ -196,7 +196,7 @@ int run_worker_selftest(const std::string &fake_path, const std::string &log_pat
         check(r.progress_lines >= 3, "progress lines recognised",
               std::to_string(r.progress_lines) + " progress lines");
         check(!has_ansi(r.raw), "ANSI escapes removed from captured text");
-        check(find_event(r.events, "START: ECMSTAGE2="), "START event kept in the event layer");
+        check(find_event(r.events, "START: ECMSTAGE1="), "START event kept in the event layer");
         const std::string identity=std::string(ecm_program::name)+" "+ecm_program::version;
         check(r.application_version==identity && find_event(r.events,identity.c_str()),
               "worker version is visible and captured from its own banner",r.application_version);
@@ -223,7 +223,7 @@ int run_worker_selftest(const std::string &fake_path, const std::string &log_pat
               std::to_string(r.last_progress.curves_done));
         check(r.last_progress.bits == 3, "bits", std::to_string(r.last_progress.bits));
         check(r.last_progress.gpu, "GPU progress form recognised");
-        check(r.last_start_line.compare(0, 10, "ECMSTAGE2=") == 0,
+        check(r.last_start_line.compare(0, 10, "ECMSTAGE1=") == 0,
               "the task line was captured for the table", r.last_start_line);
         check(r.hits.size() >= 2, "hit lines captured", std::to_string(r.hits.size()));
     }

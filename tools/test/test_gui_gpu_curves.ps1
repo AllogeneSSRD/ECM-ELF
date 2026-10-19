@@ -99,7 +99,7 @@ $todo = Join-Path $Sandbox 'worktodo.txt'
 # the last "_" token and rejects the line otherwise (see docs/usage/GUI.md).
 [System.IO.File]::WriteAllText($todo, (@(
     '[Worker #1]',
-    ('ECMSTAGE2=1,2,991,-1,"m991_1e4.save",0,0,' + $Curves)) -join "`r`n") + "`r`n", $enc)
+    ('ECMSTAGE1=1,2,991,-1,"m991_1e4.save",0,0,' + $Curves)) -join "`r`n") + "`r`n", $enc)
 
 # PowerShell trap (docs/usage/GUI.md): inside an array literal the comma
 # binds tighter than '+', so every concatenation MUST be parenthesised -- an unparenthesised

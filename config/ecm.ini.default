@@ -1,17 +1,42 @@
 # GENERATED: config/ecm_options.json -> tools/gen/generate_ecm_config.py
 # Reference: ECM_INI_REFERENCE.md (package), docs/ECM_INI_REFERENCE.md (repository)
 # CLI: global < Worker #N < CLI; GUI: global / [GUI] / [Worker #N]
-# S1.path_base=exe_dir; S2.path_base=ini_dir; CLI.path_base=CWD
+# worktodo.path_base=ini_dir; other S1.path_base=exe_dir; S2.path_base=ini_dir; CLI.path_base=CWD
 # AutoB2(current_release)=uncalibrated; use explicit B2
 # MiB=2^20 B; arena+fold+batch != process_peak
 
 # STAGE1
-# <path>; default=worktodo.txt
-# Stage1 task queue for the current worker. Completed assignments move to finished. Stage2 uses
-# stage2_worktodo; each queue must have only one consumer.
-# 指定 Stage1 读取的任务队列。程序按当前 worker 领取任务；完成后将原任务移入 finished。Stage2 使用独立
-# 的 stage2_worktodo，不要让两个程序同时消费同一文件。
+# <path>; default=worktodo.txt; path_base=ini_dir
+# Shared Stage1/Stage2 task queue for the current worker. ECMSTAGE1 and ECMSTAGE2 select the engine;
+# Stage1 and Stage2 keep separate finished records. One worker process consumes this queue at a time.
+# Stage1/Stage2 共用的任务队列。ECMSTAGE1 与 ECMSTAGE2 前缀选择执行程序；两阶段分别记录完成任务。同一
+# worker 同时只能有一个进程消费此队列。
 worktodo = worktodo.txt
+# [0|1..1000000]; default=0; empty=0
+# At Stage2 execution with this INI, nonzero ratio replaces B2 with saved B1 multiplied by this
+# integer, including direct save runs. Zero or empty preserves normal B2 selection. Product overflow
+# is rejected.
+# 使用此 INI 执行 Stage2 时，非零整数将 B2 设为存档 B1 与此值的乘积，直接读档也适用。0 或留空沿用原有
+# B2 选择；乘积溢出会报错。
+b2_ratio = 0
+# [0|1]; default=0; empty=0
+# After Stage1 finishes without finding a factor, record the Stage1 assignment in finished and replace
+# its worktodo row in place with ECMSTAGE2. A Stage1 factor hit completes the task without Stage2.
+# Zero or empty removes the completed row as usual. Worker sections can override this setting.
+# Stage1 完成且未找到因子时，照常将原任务记录到 finished，并把 worktodo 原位置改写为 ECMSTAGE2。Stage1
+# 找到因子时直接完成任务，不生成 Stage2 任务。0 或留空仍删除已完成行；worker 分区可覆盖此设置。
+auto_stage2 = 0
+# [0|1|2]; default=0; empty=0
+# Queue selection order: 0 follows file order; 1 drains ECMSTAGE1 first; 2 drains ECMSTAGE2 first.
+# When no preferred task remains, the other stage runs. Worker sections can override this setting.
+# 队列选择顺序：0 按文件顺序；1 优先完成 ECMSTAGE1；2 优先完成 ECMSTAGE2。优先阶段暂无任务时执行另一阶
+# 段；worker 分区可覆盖。
+priority = 0
+# [0|1|2]; default=0; empty=0
+# 0 processes both stages; 1 leaves ECMSTAGE1 rows untouched; 2 leaves ECMSTAGE2 rows untouched.
+# Worker sections can override this setting.
+# 0 处理两个阶段；1 完全跳过 ECMSTAGE1 行；2 完全跳过 ECMSTAGE2 行。worker 分区可覆盖。
+skip = 0
 # <path>; default=worktodo.finished.txt
 # Stage1 completed-task record, containing original assignments and results. This is not an
 # intermediate curve checkpoint.
@@ -52,18 +77,17 @@ sync_mode = incremental
 # 存档保留在本地，不访问 Prime95 转移文件。
 p95_worktodo_path =
 # [0|1]; default=0
-# When enabled, a completed Edwards Stage1 worktodo assignment is converted to ECMSTAGE2 and delivered
-# to the receiving worker's stage2_worktodo. Published saves use absolute paths; failed delivery
-# remains pending for retry. Montgomery assignments are unaffected.
-# 启用后，将已完成的 Edwards Stage1 队列任务转换为 ECMSTAGE2，投递到接收 worker 的 stage2_worktodo。发
-# 布的 save 使用绝对路径；投递失败时保留待投递记录以便重试。Montgomery 任务不受影响。
+# When enabled, a completed Edwards Stage1 task is delivered as ECMSTAGE2 to the receiving worker
+# section of the shared worktodo. Published saves use absolute paths; failed delivery remains pending
+# for retry. auto_stage2 takes precedence when both are set.
+# 启用后，将已完成的 Edwards Stage1 任务作为 ECMSTAGE2 投递到共用 worktodo 的接收 worker 分区。存档使
+# 用绝对路径；投递失败时保留待投递记录。两项同时设置时以 auto_stage2 为准。
 edwards_stage2_transfer = false
 # [0|1..1000000]; default=0
-# Receiving Stage2 worker when edwards_stage2_transfer=1. Zero uses the current Stage1 worker number;
-# a positive value selects that worker's stage2_worktodo and stage2_finished settings and queue
-# section.
-# edwards_stage2_transfer=1 时的 Stage2 接收 worker。0 沿用当前 Stage1 worker 编号；正数选择该 worker
-# 的 stage2_worktodo、stage2_finished 配置及队列分区。
+# Receiving worker when edwards_stage2_transfer=1. Zero keeps the Stage1 worker number; a positive
+# value selects that worker section of the shared worktodo.
+# edwards_stage2_transfer=1 时的接收 worker。0 沿用 Stage1 worker 编号；正数指定共用 worktodo 中的接收
+# 分区。
 edwards_stage2_worker = 0
 # [<n>|<n>,...|<a>-<b>|auto]; default=""; empty=no_worker_header
 # Prime95 workers eligible to receive handoffs: one ID, a comma list, or ranges. The shortest eligible
@@ -149,13 +173,13 @@ affinity =
 # <pattern>; default={curve}_{target}_{b1}.save; empty=default; tokens:{curve},{target},{n},{b1}; suffix:_<B1>.save
 # Automatic Stage1 save filename pattern for CPU and GPU. {curve}=e|m0|m2|m3; {target}=m<exponent> for
 # Mersenne assignments, otherwise bit<actual_bits>; {n}=original assignment exponent when available,
-# otherwise actual bits; {b1}=compact B1. Missing curve prefixes are added. In ECMSTAGE2 queues, typed
+# otherwise actual bits; {b1}=compact B1. Missing curve prefixes are added. In ECMSTAGE1 queues, typed
 # save prefixes override INI curve/param and the final filename field supplies B1; untyped names use
 # the INI construction. Finished/handoff lines name the actual prefixed save. Explicit CLI save paths
 # are preserved. Empty restores the default.
 # 统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m<指数>，否则为
 # bit<实际位数>；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。
-# ECMSTAGE2 队列中，类型前缀覆盖 INI 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 INI。完成/交
+# ECMSTAGE1 队列中，类型前缀覆盖 INI 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 INI。完成/交
 # 接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。
 save_name_pattern = {curve}_{target}_{b1}.save
 # [off|none|0|-|<dir>]; default=""; empty=exe_dir; path_base=process_CWD(nonempty); [off|none|0|-]:disabled; case:sensitive
@@ -289,20 +313,12 @@ computer =
 # 仅含提交字段的ECM JSON行，与内部结果JSONL分开；FFT长度参考Prime95 mult.asm。个人标识与校验值仅保存在
 # 本地忽略文件中。
 # stage2_submission_file = results.json.txt
-# <path>; default=stage2_worktodo.txt; empty=invalid
-# ECMSTAGE2 queue consumed by Stage2. Only curves available in the save are processed; shortages are
-# reported. Processing continues with the next assignment after completion. Only one process may
-# consume a queue and its progress file.
-# 指定 Stage2 读取的 ECMSTAGE2 任务队列。程序仅执行 save 中可用的曲线并报告数量不足；任务完成后继续下
-# 一项。队列及其进度文件只应由一个消费进程使用。
-stage2_worktodo = stage2_worktodo.txt
-# <path>; default=stage2_worktodo.finished.txt; empty=invalid
-# Record of completed Stage2 assignments and assignments with invalid input. Stores original tasks,
-# result status, and commit receipts for reconciliation. Must not share a path with Stage1 finished or
-# an active queue.
-# 指定 Stage2 完成或输入错误任务的记录文件。保存原任务、结果状态及提交回执，用于队列完成后的对账；不能
-# 与 Stage1 finished 或活动队列共用路径。
-stage2_finished = stage2_worktodo.finished.txt
+# <path>; default=worktodo.stage2.finished.txt; empty=invalid
+# Record of completed or invalid Stage2 assignments from the shared worktodo. Stores original tasks,
+# result status, and commit receipts. Must be distinct from Stage1 finished and the active queue.
+# 记录共用 worktodo 中已完成或输入错误的 Stage2 任务，保存原任务、结果状态及提交回执。路径必须不同于
+# Stage1 finished 和活动队列。
+stage2_finished = worktodo.stage2.finished.txt
 # <path>; default=stage2_screen.log; empty=off; worker(N>1)=_N
 # Append normal Stage2 phases, batches, warnings, and final statistics. Empty disables this file log;
 # console output remains. Default filenames gain a worker suffix unless an explicit filename is
@@ -658,23 +674,12 @@ stage2_tune_condition_tag =
 # 务的曲线数。并行运行时应给各 worker 配置独立队列和输出路径。
 NumWorkers = 1
 # <exe>; default=""; empty=beside_GUI_then_PATH
-# Stage1 worker executable, or a named Stage2 executable in auto mode. Relative paths resolve beside
-# the GUI; bare names can use PATH. Empty searches ecm_cuda.exe then ecm.exe. Mixed workers use this
-# path for Stage1 and stage2_exe for Stage2; each Worker #N can override the default stage.
-# Stage1工作程序，或auto模式下明确命名的Stage2程序。相对路径以GUI目录为基准，单独文件名也可经PATH查找
-# ；留空依次查找ecm_cuda.exe、ecm.exe。混合worker分别使用此路径运行Stage1、stage2_exe运行Stage2；各
-# Worker #N可覆盖默认阶段。
+# Stage1 worker executable. Relative paths resolve beside the GUI; bare names can use PATH. Empty
+# searches ecm_cuda.exe then ecm.exe. The worktodo prefix selects this executable or stage2_exe for
+# each worker.
+# Stage1 工作程序。相对路径以 GUI 目录为基准，单独文件名也可经 PATH 查找；留空依次查找 ecm_cuda.exe、
+# ecm.exe。每个 worker 根据 worktodo 前缀选择此程序或 stage2_exe。
 exe =
-# [auto|stage1|stage2]; default=auto
-# Default stage for workers without an explicit Worker #N stage. auto recognizes a Stage2 executable
-# named in exe, otherwise prefers available Stage1 and falls back to Stage2. Worker stage overrides
-# this default, allowing Stage1 and Stage2 together under one INI. Changing the default requires all
-# workers stopped; changing one worker requires only that worker stopped. No computation or queue
-# handoff starts automatically.
-# 未指定Worker #N阶段时使用的默认阶段。auto识别exe中明确命名的Stage2程序，否则优先可用Stage1、再回退
-# Stage2。worker的stage覆盖此默认值，同一INI可同时运行Stage1和Stage2。修改默认值须全部worker停止；修改
-# 单个worker只须该worker停止。切换不自动计算或交接队列。
-stage = auto
 # <exe>; default=""
 # Shared executable path for Stage2 workers. Empty searches ecm_cuda_stage2.exe beside the GUI, then a
 # single cuda-stage2* child package, then PATH. Multiple child packages require an explicit path. Each
@@ -787,16 +792,13 @@ results_json = gui_results.jsonl
 # 要长期保留结果时同时妥善保存 JSONL 来源。
 results_txt = results.txt
 
-# Mixed stages: GUI.NumWorkers=2; worker sections follow shared settings/GUI.
-# 混合阶段：GUI.NumWorkers=2；worker分区放在共享设置及GUI之后。
+# Mixed stages share worktodo; each task prefix selects its executable.
+# 两阶段共用 worktodo，任务前缀决定执行程序。
 # [Worker #1]
-# stage = stage1
 # device = 0
 # autostart = 0
 # [Worker #2]
-# stage = stage2
 # stage2_device = 1
 # autostart = 0
-# stage2_worktodo = stage2_worktodo_2.txt
-# Stage2 queue for this worker must contain [Worker #2].
-# 此worker的Stage2队列须包含[Worker #2]分区。
+# Queue rows for worker 2 belong under [Worker #2].
+# worker 2 的任务行放在 [Worker #2] 分区下。

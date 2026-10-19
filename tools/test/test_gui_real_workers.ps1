@@ -9,7 +9,7 @@
 
         ecm.ini       : global keys + [GUI] (exe = the real ecm_cuda.exe) + [Worker #1]
                         (device 0) + [Worker #2] (device 1)
-        worktodo.txt  : one ECMSTAGE2= line under [Worker #1] and one under [Worker #2]
+        worktodo.txt  : one ECMSTAGE1= line under [Worker #1] and one under [Worker #2]
 
     then starts ecm_gui, lets it autostart both workers, and waits (bounded) for both
     to finish. The task is tiny on purpose (M991, B1=1e4, 8 curves -> a few seconds),
@@ -109,8 +109,8 @@ $enc = New-Object System.Text.UTF8Encoding($false)
 # the B1 token ("m{n}_{b1}.save") -- the driver extracts B1 from the LAST "_" token, so
 # a suffix like "_w1" makes it reject the line ("# ERROR cannot extract B1"). Distinct
 # exponents keep the two workers off each other's .save file.
-$task1 = 'ECMSTAGE2=1,2,991,-1,"m991_1e4.save",0,0,8'
-$task2 = 'ECMSTAGE2=1,2,997,-1,"m997_1e4.save",0,0,8'
+$task1 = 'ECMSTAGE1=1,2,991,-1,"m991_1e4.save",0,0,8'
+$task2 = 'ECMSTAGE1=1,2,997,-1,"m997_1e4.save",0,0,8'
 [System.IO.File]::WriteAllText($todo, (@(
     '# two sections, one task each',
     '[Worker #1]',
@@ -209,7 +209,7 @@ Check "worker 2's line is gone"  (-not ($after -match [regex]::Escape($task2)))
 Check "no line was marked as ERROR" (-not ($after -match '# ERROR'))
 Check "both section headers survive" (($after -match '\[Worker #1\]') -and ($after -match '\[Worker #2\]'))
 $fin = if (Test-Path $finished) { [System.IO.File]::ReadAllText($finished) } else { '' }
-Check "the shared finished file has both tasks" (([regex]::Matches($fin, 'ECMSTAGE2=')).Count -eq 2) $fin
+Check "the shared finished file has both tasks" (([regex]::Matches($fin, 'ECMSTAGE1=')).Count -eq 2) $fin
 
 Write-Host "[5] per-worker logs prove each worker ran ITS OWN task"
 # NOTE: the GPU stage-1 path writes .save files next to the ecm_cuda executable (not
@@ -219,8 +219,8 @@ $log1 = if (Test-Path (Join-Path $Sandbox 'screen_1.log')) { [System.IO.File]::R
 $log2 = if (Test-Path (Join-Path $Sandbox 'screen_2.log')) { [System.IO.File]::ReadAllText((Join-Path $Sandbox 'screen_2.log')) } else { '' }
 Check "worker 1 wrote its own log" ($log1.Length -gt 0)
 Check "worker 2 wrote its own log" ($log2.Length -gt 0)
-Check "worker 1 log shows the M991 task" ($log1 -match 'START: ECMSTAGE2=1,2,991,')
-Check "worker 2 log shows the M997 task" ($log2 -match 'START: ECMSTAGE2=1,2,997,')
+Check "worker 1 log shows the M991 task" ($log1 -match 'START: ECMSTAGE1=1,2,991,')
+Check "worker 2 log shows the M997 task" ($log2 -match 'START: ECMSTAGE1=1,2,997,')
 Check "worker 1 log never mentions M997" (-not ($log1 -match '2,997,'))
 Check "worker 2 log never mentions M991" (-not ($log2 -match '2,991,'))
 Check "worker 1 log ends with queue done" ($log1 -match 'queue done, 1 task')

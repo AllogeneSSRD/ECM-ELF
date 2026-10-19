@@ -1,24 +1,24 @@
 # Windows 图形前端
 
-窗口标题和启动输出显示公共程序名及版本；`ecm_gui.exe --version` 仅查询版本，不打开窗口或初始化 GPU 监控。每个 worker 输出窗只显示该工作程序启动横幅报告的实际版本，例如 `Worker 版本: ECM-ELF 0.38.0`；工作程序尚未报告时显示“尚未报告”。GUI 不把自身版本当作 worker 版本。
+窗口标题和启动输出显示公共程序名及版本；`ecm_gui.exe --version` 仅查询版本，不打开窗口或初始化 GPU 监控。每个 worker 输出窗只显示该工作程序启动横幅报告的实际版本，例如 `Worker 版本: ECM-ELF 0.41.0`；工作程序尚未报告时显示“尚未报告”。GUI 不把自身版本当作 worker 版本。
 
 `ecm_gui.exe` 使用 Dear ImGui docking、Win32/DX11，管理 Stage1 或 Stage2 worker、配置、队列生成、GPU监控、结果展示及ECM概率估算。概率面板使用CPU数值模型；实际曲线计算来自所选worker程序，GUI不链接GMP/OpenCL/CUDA引擎。
 
 ## Worker 与配置
 
-一个worker对应一个计算进程，并有独立输出窗口和进程监管。Stage1使用`ecm_cuda.exe -ini <file> --worker N`；Stage2使用`ecm_cuda_stage2.exe --ini <file> --worker N`。INI/worktodo的`[Worker #N]`使用同一编号。同一个GUI可以同时管理不同阶段的worker，各自使用同一INI中的计算设置和自己的编号。阶段切换不自动启动计算；显式启用 `edwards_stage2_transfer` 时，Stage1 完成 Edwards 队列任务后可向 Stage2 队列投递，接收 worker 仍需单独启动。
+一个 worker 对应一个计算进程，并有独立输出窗口和进程监管。Stage1 使用 `ecm_cuda.exe -ini <file> --worker N`；Stage2 使用 `ecm_cuda_stage2.exe --ini <file> --worker N`。INI/worktodo 的 `[Worker #N]` 使用同一编号。GUI 从共用 `worktodo` 中按 `priority`、`skip` 选择下一行，`ECMSTAGE1=` 启动 Stage1，`ECMSTAGE2=` 启动 Stage2；当前程序完成其可运行任务后，GUI 自动切换到另一阶段。一个 worker 同时只运行一个程序。
 
-Worker管理顶部设置默认阶段、worker数量、两个阶段的程序路径和共用INI。`[GUI] stage=[auto|stage1|stage2]`默认auto；auto识别明确命名的Stage2程序，其他情况下优先可用Stage1，再回退Stage2。`[Worker #N] stage=[auto|stage1|stage2]`覆盖默认阶段；auto继承GUI默认值。每行显示实际阶段，星号表示继承默认值。只需停止要修改的worker，即可在其行尾切换阶段；其他worker保持运行和进度。修改默认阶段、worker数量、共享程序或INI须全部worker停止。
+Worker 管理顶部设置 worker 数量、两个阶段的程序路径和共用 INI。每行显示当前任务的阶段，阶段由 worktodo 前缀决定，不再提供 `[GUI] stage` 或 `[Worker #N] stage`。修改 worker 数量、共享程序或 INI 须先停止所有 worker。`priority` 和 `skip` 可在各 worker 分区单独覆盖；`[GUI] priority` 仍仅控制进程优先级。
 
-`[GUI] exe`用于Stage1或既有明确命名Stage2路径，`stage2_exe`用于Stage2。Stage2默认查找GUI同目录程序、唯一`cuda-stage2*`子包、PATH；存在多个子包时明确选择程序。每种阶段共用一个程序路径，阶段选择不改变直接从命令行启动的程序，也不替代GPU架构支持检查。
+`[GUI] exe` 用于 Stage1，`stage2_exe` 用于 Stage2。Stage2 默认查找 GUI 同目录程序、唯一 `cuda-stage2*` 子包、PATH；存在多个子包时明确选择程序。按任务前缀调度不改变直接从命令行启动的程序，也不替代 GPU 架构支持检查。
 
-使用现有独立Stage2目录时，选择其中的`ecm.ini`；该目录只有Stage2程序而没有Stage1程序时自动选择Stage2。选择INI前检查参数并保存当前窗口设置，选择后不自动运行。当前窗口的语言、字体和布局保持，计算配置、worker数量及程序设置从所选INI读取。INI及实际队列路径在管理/详情面板展示。
+选择 INI 前检查参数并保存当前窗口设置，选择后不自动运行。当前窗口的语言、字体和布局保持，计算配置、worker 数量及程序设置从所选 INI 读取。INI 及实际队列路径在管理和详情面板展示。
 
-Stage2读取`stage2_worktodo`、`stage2_log_file`等独立键，并按Stage2规则相对于INI目录解析路径；`stage2_device`优先于公共device。Stage1读取`worktodo`、`log_file`等键，相对路径基于Stage1程序目录。共享INI与两个程序放在同一目录即可统一工作目录，save无需搬移。GUI显示的生效设置从命令行使用的同一配置投影读取。配置共用规则见[Stage2使用](STAGE2.md)；默认值及范围见[INI参考](../ECM_INI_REFERENCE.md)。
+两阶段共用 `worktodo`，相对 INI 目录解析；Stage2 的 `stage2_log_file`、`stage2_finished` 等输出也基于 INI 目录，`stage2_device` 优先于公共 `device`。Stage1 的 `log_file`、`finished` 等相对路径仍基于 Stage1 程序目录。GUI 显示的生效设置从命令行使用的同一配置投影读取。配置共用规则见[Stage2 使用](STAGE2.md)；默认值及范围见[INI 参考](../ECM_INI_REFERENCE.md)。
 
-GUI专用设置位于`[GUI]`，worker覆盖位于相应分区。公共键放在任何分区前；共享设置和`[GUI]`全部放在worker分区之前。命令行的普通分组标题不重置worker范围，因此不能把共享`[stage2]`或`[GUI]`放在`[Worker #N]`之后。推荐用注释对公共配置分组。
+GUI 专用设置位于 `[GUI]`，worker 覆盖位于相应分区。公共 CLI 键放在任何分区前；`[GUI]` 键不会进入命令行配置。命令行的普通分组标题不重置 worker 范围，因此不要在 `[Worker #N]` 之后放置公共 CLI 键。推荐用注释对公共配置分组，并把 `[GUI]` 放在 worker 分区之前。
 
-例如，`[GUI] NumWorkers=2`，`[Worker #1] stage=stage1, device=0`，`[Worker #2] stage=stage2, stage2_device=1`；这里的逗号仅分隔说明项，实际INI每行一个键。两者分别消费`worktodo.txt`和`stage2_worktodo.txt`，两个队列使用相应`[Worker #1]`或`[Worker #2]`标题。没有worker标题的队列只归worker 1；同一GUI可为不同worker配置不同队列，Stage2同一队列文件仍只允许一个消费者。读写保留注释、未知键和顺序，保存使用原子替换。全部默认/范围见 [INI 参考](../ECM_INI_REFERENCE.md)。
+例如，`[GUI] NumWorkers=2`，`[Worker #1] device=0`，`[Worker #2] stage2_device=1`；实际 INI 每行一个键。两个 worker 可分别处理同一 `worktodo.txt` 中的 `[Worker #1]`、`[Worker #2]` 分区，各分区按任务前缀选择程序。没有 worker 标题的队列行只归 worker 1。队列改写保留注释、未知键和顺序；GUI 保存 INI 使用原子替换。全部默认值和范围见 [INI 参考](../ECM_INI_REFERENCE.md)。
 
 ### 当前任务摘要
 
@@ -28,13 +28,13 @@ GUI专用设置位于`[GUI]`，worker覆盖位于相应分区。公共键放在�
 
 ## 队列生成与交接
 
-worktodo 生成器解析 PrimeNet ECM/ECM2 任务，过滤、去重、排序、检查 save 名称，并按所选设备档位建议曲线批量。写入前展示预览，追加前重新核对目标队列大小/修改时间，避免覆盖外部编辑。目标 worktodo 已有 worker 标签时，新任务写入对应 worker 最后一个分段的末尾；没有对应标签时在文件末尾新建分段。目标文件没有 worker 标签时沿用文件末尾追加。
+worktodo 生成器解析 PrimeNet ECM/ECM2 任务，过滤、去重、排序、检查 save 名称，输出 `ECMSTAGE1=` 行，并按所选 Stage1 设备档位建议曲线批量。写入前展示预览，追加前重新核对目标队列大小/修改时间，避免覆盖外部编辑。目标 worktodo 已有 worker 标签时，新任务写入对应 worker 最后一个分段的末尾；没有对应标签时在文件末尾新建分段。目标文件没有 worker 标签时沿用文件末尾追加。
 
 “曲线选项”每行两项：推荐曲线数与去重勾选框在第一行，块/SM 与目标显卡在第二行。“输出选项”提供覆盖 B1/B2、曲线类型、存档名格式及排序。曲线类型可选 Edwards（`e`）与 Montgomery param0/2/3（`m0`/`m2`/`m3`），初值来自所选 worker 的 Stage1 配置。默认存档名格式为 `{curve}_{target}_{b1}.save`：梅森任务的 target 为 `m<原始指数>`；其他任务为 `bit<估算的有效位数>`，后者需在涉及边界位数或已知因子时核对，生成器也会提示。`{b1}` 保留输入或覆盖值的原始写法；旧 `m{n}_{b1}.save` 仍可作为自定义格式使用，生成器会规范为所选曲线的前缀。Stage1 队列依文件名前缀选择构造方式；Stage2 仍以 save 内容的 METHOD/PARAM 为依据，详见[存档与队列覆盖](../architecture/SAVE.md)。排序可选输入顺序、单个支持字段或 `n,k,b,c` 组合。覆盖 B1 留空时保留原值；填入后预览和追加结果统一采用覆盖值。覆盖 B2 默认为 `0`，会覆盖输入任务原有的 B2；留空才保留原值。`0` 表示使用 Stage2 的 `stage2_b2`；该值也为零且启用 Auto B2 时才自动选取。修改任一选项后需要重新生成预览。
 
-GPU 批量建议向实际 Stage1 程序查询所选曲线的编译档位：Montgomery 按 param 选择档位，Edwards 使用其独立档位及一位容器余量；曲线数由 blocks/SM、SM 数及每 block 实例数计算。Edwards 当前查询不提供实际占用率，推荐值仅按界面设置的块/SM 计算。CPU Stage1 目标自动关闭并禁用推荐曲线数，保留任务原有曲线数。Stage2 目标只提供 `e`/`m0`，CPU Stage1 目标不提供 `m2`/`m3`；选择器据此禁用不可执行的组合。生成器不使用 GMP，剥离已知因子后的位宽为估计下界，精确整数仍由驱动校验。
+GPU 批量建议向实际 Stage1 程序查询所选曲线的编译档位：Montgomery 按 param 选择档位，Edwards 使用其独立档位及一位容器余量；曲线数由 blocks/SM、SM 数及每 block 实例数计算。Edwards 当前查询不提供实际占用率，推荐值仅按界面设置的块/SM 计算。CPU Stage1 目标自动关闭并禁用推荐曲线数，保留任务原有曲线数，也不提供 `m2`/`m3`；选择器据此禁用不可执行的组合。生成器不使用 GMP，剥离已知因子后的位宽为估计下界，精确整数仍由驱动校验。
 
-生成器明确选择一个目标worker，显示该worker的阶段、设备及实际队列路径，生成的任务只写入该worker分区，不因其他worker使用相同GPU而分配给它们。选择Stage2 worker时默认关闭Stage1 GPU批量推荐，保留任务曲线数量；需要时仍可显式开启并从Stage1程序读取档位。实际可用save曲线由Stage2驱动检查。切换目标worker、阶段或INI会清除旧预览，需要重新生成。
+生成器明确选择一个目标 worker，显示当前队列阶段、Stage1 设备及实际队列路径，生成的任务只写入该 worker 分区。即使当前任务正在 Stage2，生成器也依据该 worker 的 Stage1 配置产生 Stage1 行。切换目标 worker 或 INI 会清除旧预览，需要重新生成。
 
 Prime95 交接状态显示 pending、失败或成功；真实 save/worktodo.add 写入由驱动负责。GUI 不是 Prime95 活动队列的第二个消费者。
 

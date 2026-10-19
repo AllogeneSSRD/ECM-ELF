@@ -6,6 +6,10 @@ namespace ecm_config {
 inline constexpr int layout_version=5;
 namespace defaults {
 inline constexpr char stage1_worktodo[]="worktodo.txt";
+inline constexpr uint64_t stage1_b2_ratio=0;
+inline constexpr int stage1_auto_stage2=0;
+inline constexpr int stage1_priority=0;
+inline constexpr int stage1_skip=0;
 inline constexpr char stage1_finished[]="worktodo.finished.txt";
 inline constexpr char stage1_log_file[]="screen.log";
 inline constexpr char stage1_tmp_dir[]=".";
@@ -47,8 +51,7 @@ inline constexpr char stage1_kernel_special_mult[]="";
 inline constexpr char stage2_user[]="";
 inline constexpr char stage2_computer[]="";
 inline constexpr char stage2_stage2_submission_file[]="results.json.txt";
-inline constexpr char stage2_stage2_worktodo[]="stage2_worktodo.txt";
-inline constexpr char stage2_stage2_finished[]="stage2_worktodo.finished.txt";
+inline constexpr char stage2_stage2_finished[]="worktodo.stage2.finished.txt";
 inline constexpr char stage2_stage2_log_file[]="stage2_screen.log";
 inline constexpr char stage2_stage2_results_file[]="stage2_results.jsonl";
 inline constexpr char stage2_stage2_debug_log_file[]="stage2_debug.log";
@@ -87,7 +90,6 @@ inline constexpr double stage2_stage1_seconds_per_curve=0;
 inline constexpr double stage2_stage2_ratio_adjust=1;
 inline constexpr int gui_NumWorkers=1;
 inline constexpr char gui_exe[]="";
-inline constexpr char gui_stage[]="auto";
 inline constexpr char gui_stage2_exe[]="";
 inline constexpr char gui_language[]="english";
 inline constexpr char gui_localization_dir[]="";
@@ -105,7 +107,6 @@ inline constexpr char gui_exit_confirm[]="ask";
 inline constexpr int64_t gui_graceful_stop_ms=300000;
 inline constexpr char gui_results_json[]="gui_results.jsonl";
 inline constexpr char gui_results_txt[]="results.txt";
-inline constexpr char worker_stage[]="auto";
 inline constexpr char worker_name[]="Worker #{N}";
 inline constexpr int worker_autostart=0;
 inline constexpr char worker_extra_args[]="";
@@ -122,10 +123,22 @@ inline constexpr uint64_t stage2_stage2_target_factor_bits=0;
 inline constexpr char stage2_stage2_tune_condition_tag[]="";
 inline constexpr char stage1_stage1_submission_file[]="results.json.txt";
 inline constexpr char stage1_stage1_results_file[]="stage1_results.jsonl";
+inline constexpr char stage2_worktodo[]="worktodo.txt";
+inline constexpr uint64_t stage2_b2_ratio=0;
+inline constexpr int stage2_priority=0;
+inline constexpr int stage2_skip=0;
 inline constexpr char stage1_user[]="";
 inline constexpr char stage1_computer[]="";
 } // namespace defaults
 namespace limits {
+inline constexpr int64_t stage1_b2_ratio_minimum=0;
+inline constexpr int64_t stage1_b2_ratio_maximum=1000000;
+inline constexpr int64_t stage1_auto_stage2_minimum=0;
+inline constexpr int64_t stage1_auto_stage2_maximum=1;
+inline constexpr int64_t stage1_priority_minimum=0;
+inline constexpr int64_t stage1_priority_maximum=2;
+inline constexpr int64_t stage1_skip_minimum=0;
+inline constexpr int64_t stage1_skip_maximum=2;
 inline constexpr int64_t stage2_stage2_device_minimum=0;
 inline constexpr int64_t stage2_stage2_device_maximum=2147483647;
 inline constexpr int64_t stage2_stage2_ntt_counts_minimum=0;
@@ -170,9 +183,19 @@ inline constexpr int64_t stage2_stage1_cost_mhz_minimum=0;
 inline constexpr int64_t stage2_stage1_cost_mhz_maximum=10000;
 inline constexpr int64_t stage2_stage2_target_factor_bits_minimum=0;
 inline constexpr int64_t stage2_stage2_target_factor_bits_maximum=16384;
+inline constexpr int64_t stage2_b2_ratio_minimum=0;
+inline constexpr int64_t stage2_b2_ratio_maximum=1000000;
+inline constexpr int64_t stage2_priority_minimum=0;
+inline constexpr int64_t stage2_priority_maximum=2;
+inline constexpr int64_t stage2_skip_minimum=0;
+inline constexpr int64_t stage2_skip_maximum=2;
 } // namespace limits
 struct Stage1Values {
     std::string worktodo="worktodo.txt";
+    uint64_t b2_ratio=0;
+    int auto_stage2=0;
+    int worktodo_priority=0;
+    int worktodo_skip=0;
     std::string finished="worktodo.finished.txt";
     std::string log_file="screen.log";
     std::string tmp_dir=".";
@@ -221,6 +244,10 @@ struct Stage1Values {
 };
 inline const Binding<Stage1Values> stage1_bindings[]={
     {"worktodo",[](Stage1Values&c,const std::string&v){legacy_assign(c.worktodo,v);},false,nullptr},
+    {"b2_ratio",[](Stage1Values&c,const std::string&v){c.b2_ratio=v.empty()?0:static_cast<uint64_t>(bounded_integer(v,"b2_ratio",0,1000000));},false,nullptr},
+    {"auto_stage2",[](Stage1Values&c,const std::string&v){c.auto_stage2=v.empty()?0:static_cast<int>(bounded_integer(v,"auto_stage2",0,1));},false,nullptr},
+    {"priority",[](Stage1Values&c,const std::string&v){c.worktodo_priority=v.empty()?0:static_cast<int>(bounded_integer(v,"priority",0,2));},false,nullptr},
+    {"skip",[](Stage1Values&c,const std::string&v){c.worktodo_skip=v.empty()?0:static_cast<int>(bounded_integer(v,"skip",0,2));},false,nullptr},
     {"finished",[](Stage1Values&c,const std::string&v){legacy_assign(c.finished,v);},false,nullptr},
     {"log_file",[](Stage1Values&c,const std::string&v){legacy_assign(c.log_file,v);c.log_file_explicit=true;},false,nullptr},
     {"tmp_dir",[](Stage1Values&c,const std::string&v){legacy_assign(c.tmp_dir,v);},false,nullptr},
@@ -269,8 +296,7 @@ struct Stage2Values {
     std::string result_user="";
     std::string result_computer="";
     std::string submission="results.json.txt";
-    std::string worktodo="stage2_worktodo.txt";
-    std::string finished="stage2_worktodo.finished.txt";
+    std::string finished="worktodo.stage2.finished.txt";
     std::string log="";
     std::string results="";
     std::string debug_file="";
@@ -317,8 +343,11 @@ struct Stage2Values {
     uint64_t stage1_mhz=0;
     uint64_t factor_bits=0;
     std::string condition_tag="";
+    std::string worktodo="worktodo.txt";
+    uint64_t b2_ratio=0;
+    int worktodo_priority=0;
+    int worktodo_skip=0;
     bool has_submission=false;
-    bool has_worktodo=false;
     bool has_finished=false;
     bool has_log=false;
     bool has_owner=false;
@@ -328,7 +357,6 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"user",[](Stage2Values&c,const std::string&v){c.result_user=v;},false,nullptr},
     {"computer",[](Stage2Values&c,const std::string&v){c.result_computer=v;},false,nullptr},
     {"stage2_submission_file",[](Stage2Values&c,const std::string&v){c.submission=v;c.has_submission=true;},false,nullptr},
-    {"stage2_worktodo",[](Stage2Values&c,const std::string&v){c.worktodo=v;c.has_worktodo=true;},false,nullptr},
     {"stage2_finished",[](Stage2Values&c,const std::string&v){c.finished=v;c.has_finished=true;},false,nullptr},
     {"stage2_log_file",[](Stage2Values&c,const std::string&v){c.log=v;c.has_log=true;},false,nullptr},
     {"stage2_results_file",[](Stage2Values&c,const std::string&v){c.results=v;},false,nullptr},
@@ -376,13 +404,16 @@ inline const Binding<Stage2Values> stage2_bindings[]={
     {"stage1_cost_mhz",[](Stage2Values&c,const std::string&v){c.stage1_mhz=static_cast<uint64_t>(bounded_integer(v,"stage1_cost_mhz",0,10000));},false,nullptr},
     {"stage2_target_factor_bits",[](Stage2Values&c,const std::string&v){c.factor_bits=static_cast<uint64_t>(bounded_integer(v,"stage2_target_factor_bits",0,16384));},false,nullptr},
     {"stage2_tune_condition_tag",[](Stage2Values&c,const std::string&v){c.condition_tag=v;},false,nullptr},
+    {"worktodo",[](Stage2Values&c,const std::string&v){legacy_assign(c.worktodo,v);},false,nullptr},
+    {"b2_ratio",[](Stage2Values&c,const std::string&v){c.b2_ratio=v.empty()?0:static_cast<uint64_t>(bounded_integer(v,"b2_ratio",0,1000000));},false,nullptr},
+    {"priority",[](Stage2Values&c,const std::string&v){c.worktodo_priority=v.empty()?0:static_cast<int>(bounded_integer(v,"priority",0,2));},false,nullptr},
+    {"skip",[](Stage2Values&c,const std::string&v){c.worktodo_skip=v.empty()?0:static_cast<int>(bounded_integer(v,"skip",0,2));},false,nullptr},
     {"debug_log",[](Stage2Values&c,const std::string&v){c.debug_log=boolean(v,"debug_log");},false,"stage2_debug_log"},
 };
 inline Stage2Values read_stage2(const Entries &entries){Stage2Values c;apply(c,entries,stage2_bindings);return c;}
 struct GuiValues {
     int NumWorkers=1;
     std::string exe="";
-    std::string stage="auto";
     std::string stage2_exe="";
     std::string language="english";
     std::string localization_dir="";
@@ -404,7 +435,6 @@ struct GuiValues {
 inline const Binding<GuiValues> gui_bindings[]={
     {"NumWorkers",[](GuiValues&c,const std::string&v){c.NumWorkers=gui_integer(v,1,1,64);},false,nullptr},
     {"exe",[](GuiValues&c,const std::string&v){c.exe=v;},false,nullptr},
-    {"stage",[](GuiValues&c,const std::string&v){c.stage=(v=="auto"||v=="stage1"||v=="stage2")?v:"auto";},false,nullptr},
     {"stage2_exe",[](GuiValues&c,const std::string&v){c.stage2_exe=v;},false,nullptr},
     {"language",[](GuiValues&c,const std::string&v){c.language=v;},false,nullptr},
     {"localization_dir",[](GuiValues&c,const std::string&v){c.localization_dir=v;},false,nullptr},
@@ -425,14 +455,12 @@ inline const Binding<GuiValues> gui_bindings[]={
 };
 inline GuiValues read_gui(const Entries &entries){GuiValues c;apply(c,entries,gui_bindings);return c;}
 struct WorkerValues {
-    std::string stage="auto";
     std::string name="Worker #{N}";
     int autostart=0;
     std::string extra_args="";
     int gpucurves=0;
 };
 inline const Binding<WorkerValues> worker_bindings[]={
-    {"stage",[](WorkerValues&c,const std::string&v){c.stage=(v=="auto"||v=="stage1"||v=="stage2")?v:"auto";},false,nullptr},
     {"name",[](WorkerValues&c,const std::string&v){c.name=v;},false,nullptr},
     {"autostart",[](WorkerValues&c,const std::string&v){c.autostart=gui_integer(v,0,INT32_MIN,INT32_MAX);},false,nullptr},
     {"extra_args",[](WorkerValues&c,const std::string&v){c.extra_args=v;},false,nullptr},

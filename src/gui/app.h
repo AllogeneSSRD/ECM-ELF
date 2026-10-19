@@ -62,14 +62,15 @@ struct WorkerView {
     int index = 1;                    // [Worker #N] number (also --worker N)
     std::string name;                 // [Worker #N] name= (GUI-only key)
     int device = 0;                   // effective device= after section override
+    int stage1_device = 0;
     std::string curve_model = ecm_config::defaults::stage1_curve;
     std::string execution_target = ecm_config::defaults::stage1_target;
+    std::string stage1_target = ecm_config::defaults::stage1_target;
     int gpu_param = ecm_config::defaults::stage1_gpu_param;
     int gpucurves = 0;
     std::string worktodo;
     std::string log_file;
     std::string extra_args;           // [Worker #N] extra_args= (space separated)
-    std::string stage = ecm_config::defaults::worker_stage;
     std::string exe;
     std::string working_dir;
     bool autostart = false;
@@ -220,7 +221,7 @@ private:
     void rebuild_workers();
     WorkerView make_worker(int index) const;
     void refresh_device_warnings();
-    bool set_worker_stage(int index, const std::string &stage);
+    void refresh_worker_for_queue(WorkerView &worker);
     void draw_menu_bar();
     // Prominent full-width strip under the menu bar: the Prime95 handoff state in red /
     // yellow / green / grey, with the two "open" buttons (docs/usage/GUI.md 18).
@@ -334,7 +335,6 @@ private:
     unsigned long long p95_pending_next_scan_ms_ = 0;
     std::string layout_blob_loaded_;
     std::string worker_exe_;              // [GUI] exe= (empty = auto)
-    std::string engine_stage_=ecm_config::defaults::gui_stage;
     std::string stage2_exe_;
     mutable std::string resolved_stage2_exe_;
     float font_size_px_ = ecm_config::defaults::gui_font_size;           // [GUI] font_size= (0 = auto)

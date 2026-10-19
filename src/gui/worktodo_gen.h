@@ -3,7 +3,7 @@
 // worktodo generator (docs/usage/GUI.md).
 //
 // The operator pastes PrimeNet assignments (ECM2= lines) and gets back a worktodo queue:
-// parse -> filter -> dedup -> rewrite -> sort -> save-name check -> emit ECMSTAGE2= lines,
+// parse -> filter -> dedup -> rewrite -> sort -> save-name check -> emit ECMSTAGE1= lines,
 // with the curves of each line taken from the GPU tier that line's N would actually run on.
 //
 // The reference implementation is tools/ecm_worktodo/ecm.py, and the byte-for-byte test
@@ -13,7 +13,7 @@
 //   * the exact divisibility check of the known factors (needs bignum; the GUI links no
 //     GMP) -- the generator checks the SHAPE (integer > 1) and says so;
 //   * the CLI emitters (--emit-cli) and the ECM=/ECM2= Prime95 emitter: scope A is the
-//     ECMSTAGE2= queue only;
+//     ECMSTAGE1= queue only;
 //   * one invocation writes MULTIPLE [Worker #N] sections (ecm.py needs one run per worker).
 //
 // Why an estimate is enough for the tiers: the kernel picks the smallest CGBN container

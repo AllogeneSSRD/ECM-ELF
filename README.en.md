@@ -42,7 +42,7 @@ For performance comparisons and applicable ranges, see [Stage1 performance](docs
 | --- | --- | --- |
 | `ecm_cuda.exe` | NVIDIA CUDA/CGBN Stage1, processing batches of curves; PARAM0, PARAM2 and PARAM3 families when built in | Number/expression or Stage1 queue; completed `.save` files and in-progress checkpoints |
 | `ecm.exe` | OpenCL GPU Stage1 or CPU Edwards and Suyama-Montgomery Stage1 | Shared driver input, INI, queue and text saves; selectable OpenCL operators |
-| `ecm_cuda_stage2.exe` | Separate CUDA polynomial Stage2 for eligible normalized PARAM0 Stage1 saves | Direct save input or separate `stage2_worktodo`; factors, results and per-curve receipts |
+| `ecm_cuda_stage2.exe` | Separate CUDA polynomial Stage2 for eligible normalized PARAM0 Stage1 saves | Direct save input or `ECMSTAGE2=` tasks in the shared `worktodo`; factors, results and per-curve receipts |
 | `ecm_gui.exe` | Windows Stage1 workers, configuration, queue generation, logs, GPU status and results | Manages worker processes; the chosen `ecm_cuda.exe` still performs the computation |
 | `ecm_p95feeder` | Prime95 handoff for local CPU saves | Delivers tasks Prime95 can consume; the driver also supports completed-task handoff |
 
@@ -88,8 +88,7 @@ device = 0
 worktodo = worktodo.txt
 finished = worktodo.finished.txt
 tmp_dir = .
-stage2_worktodo = stage2_worktodo.txt
-stage2_finished = stage2_worktodo.finished.txt
+stage2_finished = worktodo.stage2.finished.txt
 ```
 
 Create `worktodo.txt`. The final `ECM2` fields are B1, B2 and curve count; `B2=0` runs Stage1 only:
@@ -103,11 +102,11 @@ ECM2=1,2,3001,-1,10000,0,8
 .\ecm_cuda.exe -ini .\ecm.ini --worker 1
 ```
 
-With no positional bounds, this command consumes assignments for the selected worker. A Montgomery `ECM2=` queue task writes its final save under `tmp_dir` using the `m{n}_{b1}.save` format, such as `m3001_1e4.save`. Completed assignments go to `worktodo.finished.txt`. On a normal interruption or save write failure, unfinished assignments remain in `worktodo.txt`; rerun the command to resume from a valid checkpoint. `ecm.exe` has the same queue entry point when configured for the chosen CPU/OpenCL path. Use one consumer per queue and separate queues and output paths for different workers. See [queues and handoff](#queues) and [Stage1 usage](docs/usage/STAGE1.md).
+With no positional bounds, this command consumes only Stage1 assignments for the selected worker. A Montgomery `ECM2=` queue task writes its final save under `tmp_dir` using the `m{n}_{b1}.save` format, such as `m3001_1e4.save`. Completed assignments go to `worktodo.finished.txt`. On a normal interruption or save write failure, unfinished assignments remain in `worktodo.txt`; rerun the command to resume from a valid checkpoint. `ecm.exe` has the same queue entry point when configured for the chosen CPU/OpenCL path. Different workers may use separate sections of the same queue; run only one program at a time for each worker. See [queues and handoff](#queues) and [Stage1 usage](docs/usage/STAGE1.md).
 
 ### Run and tune CUDA Stage2
 
-After Stage1 finishes and writes `m3001_1e4.save`, create a separate `stage2_worktodo.txt`. This task has an explicit B2; the save name must match the actual output:
+After Stage1 finishes without finding a factor and writes `m3001_1e4.save`, append this line to the `[Worker #1]` section of the same `worktodo.txt`. Its explicit B2 and save name must match the actual output. Alternatively, set `auto_stage2=1` to let Stage1 replace its completed queue line in place when no factor was found:
 
 ```text
 [Worker #1]
@@ -217,7 +216,7 @@ Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 and CUDA/OpenCL PAR
 .\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --once
 ```
 
-The Stage2 queue is selected by `stage2_worktodo`, independently of Stage1's `worktodo`. An assignment has the form `ECMSTAGE2=[AID,]k,b,n,c,save[,B2][,skip_curves][,num_curves][,"known_factors"]`. Direct save input can use `--skip-curves` and `--curves` to select records. The queue records completed curves with receipts and reconciles them after interruption; an unfinished current curve must be recomputed. Missing/corrupt saves, mismatched task fields and device/resource failures have distinct queue handling.
+Stage1 and Stage2 share `worktodo`; the `ECMSTAGE1=` / `ECMSTAGE2=` prefix selects the engine, and the GUI switches programs as needed. `priority=1` prefers Stage1, `2` prefers Stage2, and empty or `0` follows file order; if the preferred stage is empty, it runs the other. `skip=1` ignores Stage1, and `2` ignores Stage2. Worker sections may override `priority`, `skip` and `auto_stage2`. A nonzero integer `b2_ratio` makes Stage2 use B1 × ratio instead of other B2 sources; it also applies to a direct save run using that INI. A Stage2 assignment has the form `ECMSTAGE2=[AID,]k,b,n,c,save[,B2][,skip_curves][,num_curves][,"known_factors"]`. Direct save input can use `--skip-curves` and `--curves` to select records. The queue records completed curves with receipts and reconciles them after interruption; an unfinished current curve must be recomputed. Missing/corrupt saves, mismatched task fields and device/resource failures have distinct queue handling.
 
 Manual B2 supports eligible 2…16384-bit inputs. Auto B2 additionally needs a suitable cost profile and Stage1 cost, and always remains subject to current memory and arithmetic checks. Give production tasks an explicit B2 when no qualified model is available. `--dry-run` only validates input. `--plan-only` may run a short startup calibration; add `--short-calibration 0` for a pure query. See [Stage2 usage](docs/usage/STAGE2.md), [pipeline](docs/architecture/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md) for arguments, receipts, memory summaries and tuning data.
 

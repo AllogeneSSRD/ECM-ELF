@@ -322,7 +322,7 @@ def main():
     q2 = out/'stage2_worktodo.txt'; f2 = out/'stage2_finished.txt'; result = out/'queue_results.jsonl'
     q2.write_text(f'ECMSTAGE2=1,2,347,-1,"{fixtures[1]}",13230,0,1\n')
     ini2 = out/'queue_stage2.ini'
-    ini2.write_text(f'device={args.device}\nstage2_worktodo={q2}\nstage2_finished={f2}\nstage2_results_file={result}\nstage2_log_file={out/"queue_stage2.log"}\nstage2_b2=13230\nstage2_tune_runtime=0\n')
+    ini2.write_text(f'device={args.device}\nworktodo={q2}\nstage2_finished={f2}\nstage2_results_file={result}\nstage2_log_file={out/"queue_stage2.log"}\nstage2_b2=13230\nstage2_tune_runtime=0\n')
     call('stage2_queue', [s2, '--ini', ini2, '--d', 210, '--factor-only'])
     before = result.read_bytes(); call('stage2_queue_empty', [s2, '--ini', ini2, '--d', 210, '--factor-only'])
     assert result.read_bytes() == before and len(before.splitlines()) == 1 and f2.exists()

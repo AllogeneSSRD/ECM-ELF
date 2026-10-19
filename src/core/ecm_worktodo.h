@@ -2,12 +2,12 @@
 
 // Worktodo parsing + small file helpers used by the queue manager.
 //
-// Two line formats are supported (dispatched by prefix):
+// Three line formats are supported (dispatched by prefix):
 //
-// 1) ECMSTAGE2= (CUDA-oriented, unchanged):
+// 1) ECMSTAGE1= / ECMSTAGE2= (save-based tasks; the prefix selects the stage):
 //      ECMSTAGE2=[<aid>,]<k>,<b>,<n>,<c>,<save_name>,<B2>,<skip_curves>,<curves_to_run>[,"factors"]
-//    B2 and skip_curves are parsed but ignored (they are for a prime95 stage-2
-//    consumer). B1 is not a field: it is extracted from save_name (m{n}_{b1}.save).
+//    B1 is extracted from save_name (m{n}_{b1}.save). Stage1 preserves B2 and
+//    skip_curves for Stage2 handoff; Stage2 uses them when processing the save.
 //
 // 2) ECM= / ECM2= (Prime95 native ECM worktodo; both prefixes are equivalent —
 //    added for the Edwards CPU path):
@@ -50,6 +50,8 @@ struct Ecm2Task {
     std::vector<std::string> factors; // known factors (optional)
 };
 
+// Both save-based stages use the same CSV fields; the prefix selects the engine.
+bool ecm_parse_stage1_line(const std::string &line, EcmStage2Task &task, std::string &err);
 // Parse one ECMSTAGE2 line into `task`. Returns false and fills `err` on failure.
 bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::string &err);
 // Replace only the save-name CSV token; AID, bounds, counts and factors keep
@@ -77,6 +79,15 @@ bool ecm_compute_ecm2_n(const Ecm2Task &task, mpz_t N, std::string &err);
 // missing file; on Error, `err` explains the I/O failure. `line` and `err` are
 // cleared before reading. Worker <= 0 ignores sections.
 enum class WorktodoReadResult { Task, Empty, Error };
+enum class WorktodoStage { Any = 0, Stage1 = 1, Stage2 = 2 };
+struct WorktodoSelection {
+    int priority = 0; // 0=file order, 1=Stage1 first, 2=Stage2 first
+    int skip = 0;     // 0=none, 1=Stage1, 2=Stage2
+};
+WorktodoStage ecm_worktodo_stage(const std::string &line);
+WorktodoReadResult ecm_worktodo_read_next_line(const std::string &path, int worker,
+    WorktodoSelection selection, WorktodoStage consumer,
+    std::string &line, std::string &err);
 WorktodoReadResult ecm_worktodo_read_first_line(const std::string &path, int worker,
                                                std::string &line, std::string &err);
 
@@ -88,7 +99,7 @@ bool ecm_worktodo_first_line(const std::string &path, std::string &line);
 // error it is replaced in place by "# ERROR <line>" (kept as a comment so the
 // user can inspect it). `first_line` must match the current first task line.
 // Returns true if the file was rewritten.
-enum class WorktodoAction { Remove, MarkError };
+enum class WorktodoAction { Remove, MarkError, Replace };
 bool ecm_worktodo_advance(const std::string &path, const std::string &first_line,
                           WorktodoAction action);
 
@@ -118,7 +129,7 @@ int ecm_worktodo_parse_worker_header(const std::string &line, bool *is_bracket_l
 // Section-aware variants of the two functions above.
 bool ecm_worktodo_first_line(const std::string &path, int worker, std::string &line);
 bool ecm_worktodo_advance(const std::string &path, int worker, const std::string &first_line,
-                          WorktodoAction action);
+                          WorktodoAction action, const std::string &replacement = {});
 
 // Distinct worker indices that own at least one task line (worker 1 when the file
 // has no headers), ascending. The GUI uses this to flag sections that have no

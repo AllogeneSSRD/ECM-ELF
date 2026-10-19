@@ -74,11 +74,8 @@
     </Panel>
 
     <Panel id="workers">
-      <Item id="default_engine" name="Default stage"/>
       <Item id="worker_count" name="Workers"/>
-      <Item id="inherit_engine" name="Inherits [GUI] stage; changing this row only reconfigures this stopped worker."/>
       <Item id="engine" name="Engine"/>
-      <Item id="engine_auto" name="Auto"/>
       <Item id="choose_exe" name="Choose program..."/>
       <Item id="choose_ini" name="Choose INI..."/>
       <Item id="configuration_selected" name="Configuration selected"/>

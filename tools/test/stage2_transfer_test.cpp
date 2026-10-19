@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
         const fs::path root = argv[1];
         fs::create_directories(root);
         const Stage2TransferConfig cfg{
-            (root / "stage2_worktodo.txt").string(),
+            (root / "worktodo.txt").string(),
             (root / "stage2_finished.txt").string(),
             (root / "stage1.stage2_pending_worker1").string(), 2};
         const std::string line =

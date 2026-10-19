@@ -153,7 +153,7 @@ function New-Sandbox([string]$name, [string]$exitConfirm, [int]$gracefulMs, [boo
         # 200000 curves of M991/B1=1e4: the run outlives the test, so the exit path is what
         # stops it (a task that finishes on its own would remove the checkpoint).
         [System.IO.File]::WriteAllText((Join-Path $dir 'worktodo.txt'),
-            ('ECMSTAGE2=1,2,991,-1,"m991_1e4.save",0,0,4000000' + "`r`n"), $enc)
+            ('ECMSTAGE1=1,2,991,-1,"m991_1e4.save",0,0,4000000' + "`r`n"), $enc)
         # gmp-10.dll sits next to the production driver; copy it if present.
         $gmpCandidates = @((Join-Path (Split-Path -Parent $EcmCuda) 'gmp-10.dll'))
         foreach ($g in $gmpCandidates) { if (Test-Path $g) { Copy-Item $g $dir -Force } }

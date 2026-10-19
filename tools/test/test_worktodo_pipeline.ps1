@@ -1,8 +1,7 @@
 # test_worktodo_pipeline.ps1 -- regression tests for tools/ecm_worktodo/ecm.py
 #
-# The generator is the layer in front of both consumers of the ECM split:
-#   stage 1 : our driver (ecm_cuda.exe) reads the ECMSTAGE2= lines
-#   stage 2 : Prime95 reads the ECM=/ECM2= lines
+# The generator emits ECMSTAGE1= for ECM-ELF Stage1, ECMSTAGE2= for
+# ECM-ELF Stage2 or Prime95 handoff, and ECM=/ECM2= for Prime95 worktodo.
 # so the tests below pin down (a) the wire formats against REAL fixtures that live in the
 # repository, (b) the processing rules agreed in the design review (filter -> dedup ->
 # rewrite -> sort), and (c) the failure modes that would silently break a handoff.

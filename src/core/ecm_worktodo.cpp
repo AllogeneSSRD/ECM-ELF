@@ -138,7 +138,9 @@ bool replace_file(const std::string &tmp, const std::string &dst) {
 
 bool ecm_rewrite_stage2_save(const std::string &line,const std::string &save,
                              std::string &rewritten,std::string &err) {
-    EcmStage2Task task;if(!ecm_parse_stage2_line(line,task,err))return false;
+    const bool stage1 = line.compare(0, 10, "ECMSTAGE1=") == 0;
+    EcmStage2Task task;
+    if (!(stage1 ? ecm_parse_stage1_line(line,task,err) : ecm_parse_stage2_line(line,task,err))) return false;
     const auto begin=line.find('=')+1;const auto fields=split_csv(line.substr(begin));
     const size_t wanted=is_int_like(fields[0])?4:5;
     size_t column=0,start=begin;bool quoted=false;
@@ -155,7 +157,8 @@ bool ecm_rewrite_stage2_save(const std::string &line,const std::string &save,
             while(right>left && std::isspace(static_cast<unsigned char>(line[right-1])))--right;
             rewritten=line.substr(0,left)+replacement+line.substr(right);
             EcmStage2Task check;
-            if(ecm_parse_stage2_line(rewritten,check,err) && check.save_name==save)return true;
+            if((stage1 ? ecm_parse_stage1_line(rewritten,check,err) :
+                         ecm_parse_stage2_line(rewritten,check,err)) && check.save_name==save)return true;
             err="cannot rewrite Stage1 save name";return false;
         }
         ++column;start=i+1;
@@ -163,17 +166,17 @@ bool ecm_rewrite_stage2_save(const std::string &line,const std::string &save,
     err="missing Stage1 save-name field";return false;
 }
 
-bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::string &err) {
+static bool parse_save_line(const std::string &line, const std::string &prefix,
+                            EcmStage2Task &task, std::string &err) {
     std::string s = line;
     strip_bom(s);
     trim(s);
     task = EcmStage2Task{};
     task.raw_line = s;
 
-    const std::string prefix = "ECMSTAGE2=";
     if (s.size() <= prefix.size() ||
         s.compare(0, prefix.size(), prefix) != 0) {
-        err = "line does not start with ECMSTAGE2=";
+        err = "line does not start with " + prefix;
         return false;
     }
 
@@ -234,6 +237,14 @@ bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::st
         }
     }
     return true;
+}
+
+bool ecm_parse_stage1_line(const std::string &line, EcmStage2Task &task, std::string &err) {
+    return parse_save_line(line, "ECMSTAGE1=", task, err);
+}
+
+bool ecm_parse_stage2_line(const std::string &line, EcmStage2Task &task, std::string &err) {
+    return parse_save_line(line, "ECMSTAGE2=", task, err);
 }
 
 bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &err) {
@@ -553,8 +564,19 @@ bool ecm_worktodo_first_line(const std::string &path, int worker, std::string &l
     return ecm_worktodo_read_first_line(path, worker, line, err) == WorktodoReadResult::Task;
 }
 
-WorktodoReadResult ecm_worktodo_read_first_line(const std::string &path, int worker,
-                                               std::string &line, std::string &err) {
+WorktodoStage ecm_worktodo_stage(const std::string &line) {
+    std::string text = line;
+    strip_bom(text);
+    trim(text);
+    if (starts_with(text, "ECMSTAGE2=")) return WorktodoStage::Stage2;
+    // ECM/ECM2 remain native Prime95 Stage1 assignments. An unknown task is
+    // diagnosed by Stage1 rather than silently hidden from the queue.
+    return WorktodoStage::Stage1;
+}
+
+WorktodoReadResult ecm_worktodo_read_next_line(const std::string &path, int worker,
+    WorktodoSelection selection, WorktodoStage consumer,
+    std::string &line, std::string &err) {
     line.clear();
     err.clear();
     std::ifstream in(path);
@@ -562,27 +584,33 @@ WorktodoReadResult ecm_worktodo_read_first_line(const std::string &path, int wor
         err = "cannot read worktodo: " + path;
         return WorktodoReadResult::Error;
     }
-    int section = 1;                        // lines before any header = worker 1
-    std::string l;
-    while (std::getline(in, l)) {
-        const LineKind kind = classify_line(l, &section, nullptr);
-        if (kind != LineKind::Task) {
-            continue;
-        }
-        if (!worker_matches(section, worker)) {
-            continue;
-        }
-        std::string t = l;
-        strip_bom(t);
-        trim(t);
-        line = t;
-        return WorktodoReadResult::Task;
+    int section = 1;
+    std::string first, preferred, raw;
+    while (std::getline(in, raw)) {
+        if (classify_line(raw, &section, nullptr) != LineKind::Task ||
+            !worker_matches(section, worker)) continue;
+        std::string task = raw;
+        strip_bom(task);
+        trim(task);
+        const auto stage = ecm_worktodo_stage(task);
+        if (selection.skip == static_cast<int>(stage)) continue;
+        if (first.empty()) first = task;
+        if (selection.priority == static_cast<int>(stage) && preferred.empty()) preferred = task;
     }
     if (in.bad()) {
         err = "worktodo read failed: " + path;
         return WorktodoReadResult::Error;
     }
-    return WorktodoReadResult::Empty;
+    const std::string &selected = preferred.empty() ? first : preferred;
+    if (selected.empty() || (consumer != WorktodoStage::Any &&
+        ecm_worktodo_stage(selected) != consumer)) return WorktodoReadResult::Empty;
+    line = selected;
+    return WorktodoReadResult::Task;
+}
+
+WorktodoReadResult ecm_worktodo_read_first_line(const std::string &path, int worker,
+                                               std::string &line, std::string &err) {
+    return ecm_worktodo_read_next_line(path, worker, {}, WorktodoStage::Any, line, err);
 }
 
 bool ecm_worktodo_advance(const std::string &path, const std::string &first_line,
@@ -591,7 +619,9 @@ bool ecm_worktodo_advance(const std::string &path, const std::string &first_line
 }
 
 bool ecm_worktodo_advance(const std::string &path, int worker, const std::string &first_line,
-                          WorktodoAction action) {
+                          WorktodoAction action, const std::string &replacement) {
+    if (action == WorktodoAction::Replace &&
+        (replacement.empty() || replacement.find_first_of("\r\n") != std::string::npos)) return false;
     QueueEditLock lock(path);
     if (!lock.valid()) return false;
     std::ifstream in(path);
@@ -615,20 +645,23 @@ bool ecm_worktodo_advance(const std::string &path, int worker, const std::string
         if (!worker_matches(section, worker)) {
             continue;                       // another worker's line
         }
-        // Never remove a different task if the queue changed during computation.
+        // The selected task can follow another stage when queue priority is set.
+        // Match its exact line in this worker section before changing it.
         std::string current = lines[i], expected = first_line;
         strip_bom(current);
         strip_bom(expected);
         trim(current);
         trim(expected);
-        if (current != expected) return false;
+        if (current != expected) continue;
         if (action == WorktodoAction::Remove) {
             lines.erase(lines.begin() + static_cast<std::vector<std::string>::difference_type>(i));
-        } else {
+        } else if (action == WorktodoAction::MarkError) {
             std::string t = lines[i];
             strip_bom(t);
             trim(t);
             lines[i] = "# ERROR " + t;
+        } else {
+            lines[i] = replacement;
         }
         found = true;
         break;

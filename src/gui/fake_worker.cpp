@@ -89,7 +89,7 @@ void print_scripted_run(int lines, int delay_ms) {
 #ifdef _WIN32
     out("priority=%lu\n", static_cast<unsigned long>(GetPriorityClass(GetCurrentProcess())));
 #endif
-    out("START: ECMSTAGE2=1,2,5351,-1,\"m5351_110e6.save\",0,0,960\n");
+    out("START: ECMSTAGE1=1,2,5351,-1,\"m5351_110e6.save\",0,0,960\n");
     for (int i = 0; i < lines; ++i) {
         // One ANSI-coloured progress line per iteration, in the driver's log-mode
         // shape (colour code + ASCII bar + percentage + speed + ETA).
@@ -109,7 +109,7 @@ void print_scripted_run(int lines, int delay_ms) {
     }
     out("Checkpoint saved: s_partial=1234/5678 (21.7%%)\n");
     out("factor[0]=999888777666555444333222111\n");
-    out("FACTOR FOUND aid=N/A task=ECMSTAGE2=1,2,5351,-1,\"m5351_110e6.save\",0,0,960\n");
+    out("FACTOR FOUND aid=N/A task=ECMSTAGE1=1,2,5351,-1,\"m5351_110e6.save\",0,0,960\n");
     out("===== queue done, 2 task(s) processed =====\n");
 }
 
@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (scenario == "crash") {
-        out("START: ECMSTAGE2=garbage\n");
+        out("START: ECMSTAGE1=garbage\n");
         out("ERROR: not enough fields (need at least 8 core columns)\n");
         out("FATAL: backend prepare failed; aborting queue.\n");
         return 3;
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
             }
         }
         out("GPU: warning: only 12 blocks for 60 SMs - some SMs idle\n");
-        out("ERROR: stage1 failed for task: ECMSTAGE2=1,2,5351,-1,\"m5351_110e6.save\",0,0,960\n");
+        out("ERROR: stage1 failed for task: ECMSTAGE1=1,2,5351,-1,\"m5351_110e6.save\",0,0,960\n");
         return 7;
     }
     if (scenario == "spawn-child") {
@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
         for (;;) sleep_ms(1000);
     }
     if (scenario == "hang") {
-        out("START: ECMSTAGE2=1,2=hang\n");
+        out("START: ECMSTAGE1=1,2=hang\n");
         for (;;) sleep_ms(1000);
     }
     if (scenario == "checkpoint-stop") {

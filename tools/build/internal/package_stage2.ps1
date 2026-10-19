@@ -75,7 +75,7 @@ Copy-Item -LiteralPath (Join-Path $Build 'gmp-10.dll') -Destination $OutDir -For
 Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.ini.example') -Destination $OutDir -Force
 $ini = Join-Path $OutDir 'ecm.ini'
 if (-not (Test-Path -LiteralPath $ini)) { Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.ini.example') -Destination $ini }
-$queue = Join-Path $OutDir 'stage2_worktodo.txt'
+$queue = Join-Path $OutDir 'worktodo.txt'
 if (-not (Test-Path -LiteralPath $queue)) {
     $queueHeader = '# Add ECMSTAGE2=k,b,n,c,filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"].'
     $queueHeader += [Environment]::NewLine

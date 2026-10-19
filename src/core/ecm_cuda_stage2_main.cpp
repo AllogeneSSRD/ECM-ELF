@@ -1106,7 +1106,7 @@ void help() {
         "      [--tune-memory-mb 1024] [--tune-file stage2_tune.toml]\n"
         "      Requires a fixed Goldilocks backend; measures field convolution only.\n"
         "Queue: ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
-        "INI: stage2_worktodo, stage2_finished, stage2_progress_dir, stage2_log_file;\n"
+        "INI: shared worktodo, stage2_finished, stage2_progress_dir, stage2_log_file;\n"
         "stage2_progress_file imports legacy single-file progress only.\n"
         "     shared tmp_dir/device/verbose; stage2_save_dir/device overrides; stage2_b2, stage2_d,\n"
         "     stage2_batch_mb, stage2_arena_mb, stage2_pack_zero, stage2_results_file, stage2_log_level; [Worker #N].\n"
@@ -1220,7 +1220,7 @@ int driver(Options o) {
     if(s.factorize_hits)o.factorize_hits=true;
     if(s.factor_only)o.factor_only=true;
     if(o.factor_only && _putenv_s("NTT_NAME_HITS","0"))throw std::runtime_error("cannot disable optional prime-witness naming");
-    o.auto_b2=o.auto_b2||s.auto_b2;
+    o.auto_b2=(o.auto_b2||s.auto_b2) && !cfg.b2_ratio;
     if(!o.auto_min)o.auto_min=s.auto_min;if(!o.auto_max)o.auto_max=s.auto_max;
     if(!o.has_owner){if(s.has_owner)o.owner_mb=s.owner_mb;else if(const char *v=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))o.owner_mb=ecm_stage2::cost::integer(v);}
     if(o.owner_mb>ecm_config::limits::stage2_stage2_fold_mb_maximum)throw std::runtime_error("invalid owner budget");
@@ -1358,10 +1358,9 @@ int driver(Options o) {
     if (queue) {
         if (!fs::exists(worktodo)) throw std::runtime_error("worktodo not found: " + worktodo.string());
         if (!o.dry && !o.plan_only) {
-            // One production consumer per queue file also serializes the shared
-            // atomic rewrite across worker sections. Use separate queues for
-            // concurrent processes in this minimal driver.
-            fs::path lockpath(worktodo.string() + ".stage2.lock");
+            // Each worker section has one Stage2 consumer. The shared queue edit
+            // lock serializes row rewrites across different workers.
+            fs::path lockpath(worktodo.string() + ".worker" + std::to_string(o.worker) + ".stage2.lock");
             lock.value = CreateFileW(lockpath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
                                      FILE_ATTRIBUTE_NORMAL, nullptr);
             if (lock.value == INVALID_HANDLE_VALUE) throw std::runtime_error("cannot lock worktodo worker (another process may own it)");
@@ -1383,9 +1382,8 @@ int driver(Options o) {
         for(size_t j=0;j<i;++j)if(same_path(writable[i],writable[j]))throw std::runtime_error("queue, finished, progress, result and log paths must be distinct");
     }
 
-    if(queue && (same_path(worktodo,absolute_from(executable().parent_path(),cfg.worktodo)) ||
-                  same_path(finished,absolute_from(executable().parent_path(),cfg.finished))))
-        throw std::runtime_error("Stage2 queue/finished conflicts with Stage1 configuration; use distinct stage2_worktodo/stage2_finished");
+    if(queue && same_path(finished,absolute_from(executable().parent_path(),cfg.finished)))
+        throw std::runtime_error("Stage1 and Stage2 finished records must use distinct paths");
     auto report=[&](const std::string &message,bool error=false) {
         (error?std::cerr:std::cout)<<message<<std::endl;
         if(!o.dry&&!o.plan_only&&!log.empty())append(log,message);
@@ -1405,8 +1403,9 @@ int driver(Options o) {
         uint64_t skip=o.skip,count=o.curves,b2=o.b2?o.b2:s.b2;
         if(queue) {
             std::string read_error;
-            const auto read = ecm_worktodo_read_first_line(
-                worktodo.string(), o.worker, task_line, read_error);
+            const auto read = ecm_worktodo_read_next_line(worktodo.string(), o.worker,
+                {cfg.worktodo_priority, cfg.worktodo_skip}, WorktodoStage::Stage2,
+                task_line, read_error);
             if(read == WorktodoReadResult::Error)throw std::runtime_error(read_error);
             if(read == WorktodoReadResult::Empty)break;
         }
@@ -1430,6 +1429,11 @@ int driver(Options o) {
             if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
             if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
             plan=records(save,skip,count);
+            if(cfg.b2_ratio && !plan.empty()) {
+                if(plan.front().b1 > (static_cast<uint64_t>(INT64_MAX)-8192)/cfg.b2_ratio)
+                    throw TaskInputError("b2_ratio multiplication exceeds Stage2 B2 range");
+                b2=plan.front().b1*cfg.b2_ratio;
+            }
             for(const auto &r:plan) {
                 if(r.edwards && o.auto_b2 && !b2)throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
                 if((!(o.auto_b2&&!b2)&&b2<=r.b1)||b2>static_cast<uint64_t>(INT64_MAX)-8192)
@@ -1565,8 +1569,9 @@ int driver(Options o) {
         if(state.done<state.total)break;
         std::string current;
         std::string read_error;
-        const auto read = ecm_worktodo_read_first_line(
-            worktodo.string(), o.worker, current, read_error);
+        const auto read = ecm_worktodo_read_next_line(worktodo.string(), o.worker,
+            {cfg.worktodo_priority, cfg.worktodo_skip}, WorktodoStage::Stage2,
+            current, read_error);
         if(read == WorktodoReadResult::Error)throw std::runtime_error(read_error);
         if(read != WorktodoReadResult::Task||current!=task_line)
             throw std::runtime_error("task completed but worktodo changed; queue and progress retained");

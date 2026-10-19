@@ -10,7 +10,7 @@
 
       [1] the unit test (ecm_gui_gen_test.exe): --gpu-info parsing, tier pick, effective
           bits, parsing, save names, the pipeline, the mtime-guarded append
-      [2] byte-for-byte vs ecm.py: assignments -> ECMSTAGE2= lines with a fixed curve count
+      [2] byte-for-byte vs ecm.py: assignments -> ECMSTAGE1= lines with a fixed curve count
           (the case where both must agree exactly)
       [3] the same with duplicates (dedup winner + merged known factors)
       [4] the same with rewrites (--set-b1 / --set-b2 / --set-has-na)
@@ -126,7 +126,7 @@ function Compare-WithEcmPy([string]$name, [string[]]$lines, [string[]]$extraEcmP
 
     # NOTE: no PowerShell switches here -- this is the python interpreter, not powershell.
     $pyArgs = @($ecmPy, '--input', $input,
-                '--out-ecmstage2', $py, '--save-pattern', 'm{n}_{b1}.save',
+                '--out-ecmstage1', $py, '--save-pattern', 'm{n}_{b1}.save',
                 '--gpu-curves', "$Curves", '--skip-curves', '0') + $extraEcmPy
     & $Python @pyArgs *>&1 | Out-Null
     $pyExit = $LASTEXITCODE
@@ -197,7 +197,7 @@ function Expected-Curves([int]$n) {
 $recInput = Join-Path $Sandbox 'rec.txt'
 Write-Text $recInput ("ECM2=1,2,101,-1,1e5`r`nECM2=1,2,521,-1,1e5`r`nECM2=1,2,1019,-1,1e5`r`n")
 $rec = (& $GenTest --emit $recInput --workers '1=0' --sort-by 'n' 2>&1 | Out-String)
-$recLines = @($rec -split "`r?`n" | Where-Object { $_ -match '^ECMSTAGE2=' })
+$recLines = @($rec -split "`r?`n" | Where-Object { $_ -match '^ECMSTAGE1=' })
 Check "three lines were emitted" ($recLines.Count -eq 3) ($recLines -join ' | ')
 # NOTE: every call needs its own parentheses -- inside an array literal the comma binds
 # tighter than the call, so `Expected-Curves 101, (...)` would pass two arguments.
@@ -205,7 +205,7 @@ $expects = @((Expected-Curves 101), (Expected-Curves 521), (Expected-Curves 1019
 Write-Host ("       expected curves: " + ($expects -join ', '))
 $ok = $true
 for ($i = 0; $i -lt [Math]::Min(3, $recLines.Count); $i++) {
-    # ECMSTAGE2=...,<save>,<B2>,<skip>,<curves>[,<factors>]
+    # ECMSTAGE1=...,<save>,<B2>,<skip>,<curves>[,<factors>]
     $fields = $recLines[$i].Substring(10) -split ','
     $curvesOfLine = [int]$fields[7]
     if ($curvesOfLine -ne $expects[$i]) {

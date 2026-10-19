@@ -62,7 +62,6 @@ function Run-Gui([int]$hz, [bool]$exercisePending) {
 p95_worktodo_path = prime95\worktodo.txt
 [GUI]
 NumWorkers = 1
-stage = stage1
 refresh_hz = $hz
 gpu_poll_ms = 1000
 localization_dir = $localization

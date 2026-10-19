@@ -205,7 +205,7 @@ Stage1 批次锁防止同名 checkpoint 的并发写入，**没有独立的跨�
 
 交付失败不回滚完成的 Stage1，任务进入 pending 交付状态供后续重试；不直接改写 Prime95 活动 worktodo.txt。结果/AID/重复交付策略见[Stage1 使用](../usage/STAGE1.md#检查点与交接)和 [ECM 结果输出](../usage/ECM_RESULTS.md)。
 
-Edwards 的本地 Stage2 队列交接由 `edwards_stage2_transfer` 独立控制，不使用 Prime95 `worktodo.add`。完成 save 发布后先记录待投递行，再将原任务移入 Stage1 finished；交付时将实际 save 的绝对路径写入接收 worker 的 `stage2_worktodo` 分区。队列追加和 Stage2 移除任务共用短时编辑锁；重试前检查活动队列及 Stage2 finished 中的完成行或输入错误回执，避免在队列发布后、待投递记录清除前崩溃导致重复交付。接收 worker 的选择和 B2 要求见 [Stage1 使用](../usage/STAGE1.md#检查点与交接)。
+Edwards 的本地 Stage2 队列交接由 `edwards_stage2_transfer` 独立控制，不使用 Prime95 `worktodo.add`。完成 save 发布后先记录待投递行，再将原任务移入 Stage1 finished；交付时将实际 save 的绝对路径写入接收 worker 的共用 `worktodo` 分区。队列追加和 Stage2 移除任务共用短时编辑锁；重试前检查活动队列及 Stage2 finished 中的完成行或输入错误回执，避免在队列发布后、待投递记录清除前崩溃导致重复交付。接收 worker 的选择和 B2 要求见 [Stage1 使用](../usage/STAGE1.md#检查点与交接)。
 
 来源：[队列完成与交接](../../src/core/ecm_driver.cpp#L3236)、[按实际构造启用交接](../../src/core/ecm_driver.cpp#L3431)、[save 同步](../../src/core/ecm_worktodo.cpp#L645)、[交付器](../../src/core/p95_transfer.h)。
 

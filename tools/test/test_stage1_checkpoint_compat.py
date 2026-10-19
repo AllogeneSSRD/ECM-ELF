@@ -151,7 +151,7 @@ def main():
             assert (work/filename).exists(),(name,filename)
             assert len(points(work/filename))==2
 
-    # Production uses ECMSTAGE2 as a Stage1 queue. Keep its original START text,
+    # ECMSTAGE1 runs Stage1. Keep its original START text,
     # but publish the actual prefixed save token to finished and Prime95.
     aid='ABCDEF0123456789ABCDEF0123456789'
     baseline=out/'name_mont_gpu0_default/m0_m1982_1e3.save'
@@ -167,7 +167,7 @@ def main():
         target=source.with_name(prefix+'_'+source.name)
         token=str(source) if absolute else source.name
         new_token=str(target) if absolute else target.name
-        task=f'ECMSTAGE2={aid},1,2,1982,-1,"{token}",260000000,{2 if history else 0},2,"{(1<<991)+1}"\n'
+        task=f'ECMSTAGE1={aid},1,2,1982,-1,"{token}",260000000,{2 if history else 0},2,"{(1<<991)+1}"\n'
         (work/'worktodo.txt').write_text(task)
         prime=work/'p95';prime.mkdir();(prime/'worktodo.txt').write_text('[Worker #1]\n')
         with ini.open('a') as file:file.write(f'sigma=20260924\np95_worktodo_path={prime/"worktodo.txt"}\np95_add_workers=1\nsave_sync_dir_1={prime}\n')
@@ -179,14 +179,14 @@ def main():
         assert len(points(target))==(4 if history else 2)
         if history:assert set(points(baseline)).issubset(set(points(target)))
         if model=='mont':
-            assert expected in (prime/'worktodo.add').read_text().splitlines()
+            assert expected.replace('ECMSTAGE1=','ECMSTAGE2=',1) in (prime/'worktodo.add').read_text().splitlines()
             assert target.exists() if absolute else (prime/target.name).exists()
             assert (prime/'worktodo.txt').read_text()=='[Worker #1]\n'
         else:assert not (prime/'worktodo.add').exists()
 
     work,ini=setup('queue_reject_mixed_history',model='ed')
     source=work/'legacy_1e3.save';source.write_bytes(baseline.read_bytes());before=source.read_bytes()
-    task=f'ECMSTAGE2=1,2,1982,-1,"{source}",260000000,2,2,"{(1<<991)+1}"\n'
+    task=f'ECMSTAGE1=1,2,1982,-1,"{source}",260000000,2,2,"{(1<<991)+1}"\n'
     (work/'worktodo.txt').write_text(task)
     text=run('queue_reject_mixed_history',work,ini,good=False)
     assert 'legacy save belongs to another curve/parametrization' in text
@@ -199,7 +199,7 @@ def main():
                                       ('e','mont','cpu',0),('m0','ed','cpu',0)]:
         name=f'prefix_{prefix}_{target}';work,ini=setup(name,model,target,param)
         save=work/f'{prefix}_m1982_1e3.save'
-        task=f'ECMSTAGE2=1,2,1982,-1,"{save}",260000000,0,2,"{(1<<991)+1}"\n'
+        task=f'ECMSTAGE1=1,2,1982,-1,"{save}",260000000,0,2,"{(1<<991)+1}"\n'
         (work/'worktodo.txt').write_text(task)
         with ini.open('a') as file:
             file.write('sigma=20260922\nB1=9000\n'+('lcm=12\n' if prefix=='e' else ''))
@@ -219,18 +219,19 @@ def main():
     tasks=[]
     for prefix in ('e','m0','m3','legacy'):
         save=work/f'{prefix}_m1982_1e3.save'
-        tasks.append(f'ECMSTAGE2=1,2,1982,-1,"{save}",260000000,0,2,"{(1<<991)+1}"')
+        tasks.append(f'ECMSTAGE1=1,2,1982,-1,"{save}",260000000,0,2,"{(1<<991)+1}"')
     (work/'worktodo.txt').write_text('\n'.join(tasks)+'\n')
     run(name,work,ini,local_exe)
     finished=(work/'finished.txt').read_text().splitlines()
     assert finished[:3]==tasks[:3]
     assert 'm2_legacy_' in finished[3]
     delivered=(prime/'worktodo.add').read_text().splitlines()
-    assert [line for line in delivered if line.startswith('ECMSTAGE2=')]==tasks[1:3]
+    assert [line for line in delivered if line.startswith('ECMSTAGE2=')]==[
+        task.replace('ECMSTAGE1=','ECMSTAGE2=',1) for task in tasks[1:3]]
     assert all(row[:2]==('ECM','2') for row in points(work/'m2_legacy_m1982_1e3.save'))
     for prefix in ('m2','m3'):
         name=f'prefix_reject_{prefix}_cpu';work,ini=setup(name,target='cpu')
-        task=f'ECMSTAGE2=1,2,1982,-1,"{prefix}_m1982_1e3.save",0,0,2,"{(1<<991)+1}"\n'
+        task=f'ECMSTAGE1=1,2,1982,-1,"{prefix}_m1982_1e3.save",0,0,2,"{(1<<991)+1}"\n'
         (work/'worktodo.txt').write_text(task)
         text=run(name,work,ini,good=False)
         assert 'requires target=gpu' in text and (work/'worktodo.txt').read_text()==task

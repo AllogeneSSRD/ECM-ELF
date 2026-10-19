@@ -3210,7 +3210,8 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                           int *processed,
                           const P95TransferConfig *p95,const std::string &published_line={},
                           const Stage2TransferConfig *stage2=nullptr,
-                          const std::string &stage2_line={}) {
+                          const std::string &stage2_line={},
+                          const std::string &auto_stage2_line={}) {
     Stage1RunOptions opt = base_opt;
     opt.result_aid=aid;
     if (sigma_fixed) {
@@ -3318,10 +3319,15 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
         }
         return true;
     }
-    if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::Remove)) {
+    // A Stage1 hit completes this factor search. Its saved point carries a
+    // factor, so Stage2 cannot use it as a clean curve.
+    const bool queue_stage2 = !found_factor && !auto_stage2_line.empty();
+    if (!ecm_worktodo_advance(worktodo_path, worker, line,
+            queue_stage2 ? WorktodoAction::Replace : WorktodoAction::Remove,
+            queue_stage2 ? auto_stage2_line : std::string{})) {
         // The task itself succeeded (its .save is on disk), but the queue cannot drop
         // the line. Abort: continuing would re-run it and append a second time.
-        ecm_ts_fprintf(stderr, "ERROR: cannot remove the finished line from %s; aborting "
+        ecm_ts_fprintf(stderr, "ERROR: cannot advance the finished line in %s; aborting "
                                "(the task's .save is already written)\n",
                        worktodo_path.c_str());
         return false;
@@ -3352,7 +3358,9 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
        with the next successful delivery, and the GUI shows a red notice meanwhile.
        Supported handoff remains available after local result publication. */
     if (p95 != nullptr && !p95->worktodo_path.empty()) {
-        const P95TransferResult tr = p95_transfer_deliver(*p95, completed_line);
+        std::string p95_line=completed_line;
+        if(p95_line.compare(0,10,"ECMSTAGE1=")==0)p95_line.replace(0,10,"ECMSTAGE2=");
+        const P95TransferResult tr = p95_transfer_deliver(*p95, p95_line);
         if (!tr.ok) {
             ecm_ts_fprintf(stdout,
                            "p95_add: pending worker=%d lines=%zu file=\"%s\" error=\"%s\"\n",
@@ -3512,7 +3520,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         ecm_log_set_mirror(logf);
     }
 
-    const std::string worktodo_path = resolve_rel_local(exe_dir, cfg.worktodo);
+    const std::string ini_dir = std::filesystem::path(ini).parent_path().string();
+    const std::string worktodo_path = resolve_rel_local(ini_dir, cfg.worktodo);
     const std::string finished_path = resolve_rel_local(exe_dir, cfg.finished);
     const std::string sync1 = resolve_rel_local(exe_dir, cfg.save_sync_dir_1);
     const std::string sync2 = resolve_rel_local(exe_dir, cfg.save_sync_dir_2);
@@ -3531,7 +3540,6 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             return 1;
         }
         const auto receiver_cfg = ecm_config::read_stage2(ecm_config::cli_entries(lines, receiver, true));
-        const std::string ini_dir = std::filesystem::path(ini).parent_path().string();
         stage2cfg.worktodo = resolve_rel_local(ini_dir, receiver_cfg.worktodo);
         stage2cfg.finished = resolve_rel_local(ini_dir, receiver_cfg.finished);
         stage2cfg.pending = stage2_pending;
@@ -3547,7 +3555,6 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         };
         if (stage2cfg.worktodo.empty() || stage2cfg.finished.empty() ||
             same_path(stage2cfg.worktodo, stage2cfg.finished) ||
-            same_path(stage2cfg.worktodo, worktodo_path) ||
             same_path(stage2cfg.worktodo, finished_path) ||
             same_path(stage2cfg.finished, worktodo_path) ||
             same_path(stage2cfg.finished, finished_path) ||
@@ -3742,8 +3749,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         }
         std::string line;
         std::string read_error;
-        const WorktodoReadResult read =
-            ecm_worktodo_read_first_line(worktodo_path, worker, line, read_error);
+        const WorktodoReadResult read = ecm_worktodo_read_next_line(worktodo_path, worker,
+            {cfg.worktodo_priority, cfg.worktodo_skip}, WorktodoStage::Stage1, line, read_error);
         if (read == WorktodoReadResult::Error) {
             ecm_ts_fprintf(stderr, "ERROR: %s\n", read_error.c_str());
             if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
@@ -3798,7 +3805,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             // point for Stage2 and save synchronization. CPU Montgomery already writes
             // its own shared save under tmp_dir; both Edwards targets use text saves.
             std::string queue_save_name;
-            if (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu || opt.selection.curve==ecm_stage1::CurveModel::Edwards) {
+            if (cfg.auto_stage2 || opt.selection.target == ecm_stage1::ExecutionTarget::Gpu ||
+                opt.selection.curve==ecm_stage1::CurveModel::Edwards) {
                 if (opt.tmp_dir.empty() || !ensure_dir(opt.tmp_dir)) {
                     ecm_ts_fprintf(stderr, "FATAL: cannot create tmp_dir for GPU save: %s\n",
                                    opt.tmp_dir.c_str());
@@ -3810,17 +3818,17 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                     mont_format_save_name(opt.save_name_pattern,N,task.B1,&opt);
             }
             const Stage2TransferConfig *stage2 =
-                cfg.edwards_stage2_transfer && opt.selection.curve == ecm_stage1::CurveModel::Edwards
+                !cfg.auto_stage2 && cfg.edwards_stage2_transfer && opt.selection.curve == ecm_stage1::CurveModel::Edwards
                     ? &stage2cfg : nullptr;
             std::string stage2_line;
-            if (stage2 != nullptr) {
+            if (stage2 != nullptr || cfg.auto_stage2) {
                 try { (void)ecm_config::unsigned_integer(task.b2_text, "Stage2 handoff B2"); }
                 catch (const std::exception &e) {
                     ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged\n", e.what());
                     mpz_clear(N);
                     return 1;
                 }
-                const auto save = normalize_path_local(std::filesystem::absolute(queue_save_name));
+                const auto save = normalize_path_local(std::filesystem::absolute(resolve_rel_local(exe_dir, queue_save_name)));
                 const auto skip = stage2_save_record_count(save);
                 stage2_line = edwards_stage2_line(task, save, skip);
             }
@@ -3830,7 +3838,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                 queue_save_name, n_expr, task.aid, line,
                 worktodo_path, finished_path, worker, opt,
                 exe_dir, sync1, sync2, full_sync, marker, &processed, p95_for_task(opt),
-                {}, stage2, stage2_line);
+                {}, stage2, stage2 != nullptr ? stage2_line : std::string{},
+                cfg.auto_stage2 ? stage2_line : std::string{});
             mpz_clear(N);
             if (!cont) {
                 if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
@@ -3839,9 +3848,9 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             continue;
         }
 
-        // ECMSTAGE2= (existing CUDA-oriented format, unchanged semantics).
+        // ECMSTAGE1= uses the save-based task format. ECMSTAGE2 belongs to Stage2.
         EcmStage2Task task;
-        if (!ecm_parse_stage2_line(line, task, err)) {
+        if (!ecm_parse_stage1_line(line, task, err)) {
             ecm_ts_fprintf(stderr, "ERROR: %s (line: %s)\n", err.c_str(), line.c_str());
             if (!ecm_worktodo_advance(worktodo_path, worker, line, WorktodoAction::MarkError))
                 break;
@@ -3899,16 +3908,17 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         }
         if(queue_save_name!=task.save_name)task_opt.legacy_save_source=task.save_name;
         const Stage2TransferConfig *stage2 =
-            cfg.edwards_stage2_transfer && task_opt.selection.curve == ecm_stage1::CurveModel::Edwards
+            !cfg.auto_stage2 && cfg.edwards_stage2_transfer && task_opt.selection.curve == ecm_stage1::CurveModel::Edwards
                 ? &stage2cfg : nullptr;
         std::string stage2_line;
-        if (stage2 != nullptr) {
-            const auto save = normalize_path_local(std::filesystem::absolute(queue_save_name));
+        if (stage2 != nullptr || cfg.auto_stage2) {
+            const auto save = normalize_path_local(std::filesystem::absolute(resolve_rel_local(exe_dir, queue_save_name)));
             if (!ecm_rewrite_stage2_save(published_line, save, stage2_line, err)) {
                 mpz_clear(N);
                 ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged\n", err.c_str());
                 return 1;
             }
+            stage2_line.replace(0, 10, "ECMSTAGE2=");
         }
         const bool cont = queue_run_one(
             N, B1, /*B2=*/0.0, task.curves_to_run,
@@ -3916,7 +3926,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             queue_save_name, n_expr, task.aid, line,
             worktodo_path, finished_path, worker, task_opt,
             exe_dir, sync1, sync2, full_sync, marker, &processed, p95_for_task(task_opt),published_line,
-            stage2,stage2_line);
+            stage2,stage2 != nullptr ? stage2_line : std::string{},
+            cfg.auto_stage2 ? stage2_line : std::string{});
         mpz_clear(N);
         if (!cont) {
             if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
