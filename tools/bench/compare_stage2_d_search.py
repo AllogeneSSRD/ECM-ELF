@@ -64,6 +64,26 @@ def compare(baseline, candidate, relative=.05, absolute=.25):
     return sorted(result, key=lambda r: (r['nominal_B2'], r['bits'], r['engine']))
 
 
+def repeat_totals(plan, mode):
+    sums = defaultdict(float)
+    for r in plan['runs']:
+        if mode == 'all' or r['engine'] == mode:
+            sums[r['repeat']] += r['engine_seconds']
+    return [sums[i] for i in sorted(sums)]
+
+
+def telemetry(plan):
+    busy = []
+    for r in plan['runs']:
+        busy.extend(t for t in load(Path(r['prefix']).with_suffix('.telemetry.json'))
+                    if (t.get('gpu_percent') or 0) >= 50)
+    result = dict(busy_samples=len(busy))
+    for key in ('sm_clock_mhz', 'temperature_c', 'power_mw'):
+        values = [t[key] for t in busy if t.get(key) is not None]
+        result[key] = dict(min=min(values), median=statistics.median(values), max=max(values)) if values else None
+    return result
+
+
 def plot(rows, versions, counts, target):
     import matplotlib
     matplotlib.use('Agg')
@@ -85,7 +105,7 @@ def plot(rows, versions, counts, target):
         ax.set_xlabel('Actual cofactor N (bits)'); ax.grid(alpha=.2); ax.legend()
     axes[0].set_ylabel('Full engine time change (%); positive = slower')
     fig.suptitle(f'ECM-ELF {versions[1]} (n={counts[1]}) vs {versions[0]} (n={counts[0]}) | default D, no tune')
-    fig.text(.5, .025, 'RTX 4060 Laptop, GPU1, SM 1500 MHz | 6300 / 640 / 256 MiB | Stage2 init + main incl. checks and GCD\n'
+    fig.text(.5, .025, 'RTX 4060 Laptop, GPU1, SM 1500 MHz setting | 6300 / 640 / 256 MiB | Stage2 init + main incl. checks and GCD\n'
         'Separate sessions; no causal claim. Shading combines observed min/max, not a confidence interval. All samples retained.',
         ha='center', fontsize=9)
     fig.tight_layout(rect=(0, .11, 1, .94))
@@ -118,11 +138,13 @@ def main():
         selected = [r for r in rows if mode == 'all' or r['engine'] == mode]
         a = sum(r['baseline_seconds'] for r in selected); b = sum(r['candidate_seconds'] for r in selected)
         totals[mode] = dict(baseline_seconds=a, candidate_seconds=b, change_percent=100*(b/a-1),
-                            matrix_nonregression=b <= a)
+                            matrix_nonregression=b <= a, baseline_repeat_sums=repeat_totals(first, mode),
+                            candidate_repeat_sums=repeat_totals(last, mode))
     def identity(path, plan, repeats, checked):
         return dict(study=str(path.resolve()), version=plan['program_version'], repeats=repeats, audit=checked,
             exe_sha256=hashlib.sha256(Path(plan['exe']).read_bytes()).hexdigest(),
-            plan_sha256=hashlib.sha256((path/'plan.json').read_bytes()).hexdigest(), gpu=plan['gpu'])
+            plan_sha256=hashlib.sha256((path/'plan.json').read_bytes()).hexdigest(), gpu=plan['gpu'],
+            busy_gpu_telemetry=telemetry(plan))
     summary = dict(complete=True, screening_only=True,
         baseline=identity(args.baseline, first, args.baseline_repeats, first_audit),
         candidate=identity(args.candidate, last, args.candidate_repeats, last_audit),

@@ -72,6 +72,24 @@ int main() {
         require(p::runtime_choice(routes).index==0,"noisy observation weakened default performance protection");
         routes[1].statistics={2,100,90,.1};
         require(p::runtime_choice(routes).index==1,"significant measured win was rejected");
+        // Replayed production pattern: a newly preferred ordinary route must
+        // not hide a faster known carrier behind an intermediate candidate.
+        routes.resize(3);
+        routes[0].shape.d=180180;routes[0].statistics={5,200,2.07930226,.0206580101};routes[0].priority=1;
+        routes[1].shape.d=174720;routes[1].statistics={2,0,1.8664843,.0205118949};routes[1].priority=2;
+        routes[2].shape.d=210210;routes[2].statistics={10,100,1.75911053,.0250890914};routes[2].priority=2;
+        require(p::LocalSearch::improves(routes[2].statistics.timing(),routes[0].statistics.timing()) &&
+            !p::LocalSearch::improves(routes[2].statistics.timing(),routes[1].statistics.timing()),
+            "production ordering regression fixture no longer represents overlapping intermediate bands");
+        std::vector<unsigned> order{0,1,2};
+        do {
+            std::vector<p::RuntimeCandidate> permuted;for(auto i:order)permuted.push_back(routes[i]);
+            const auto selected=p::runtime_choice(permuted,false);
+            require(selected.available && !selected.probe && permuted[selected.index].shape.d==210210,
+                "candidate ordering hid a qualified faster route behind an unexecuted intermediate");
+        }while(std::next_permutation(order.begin(),order.end()));
+        routes[2].statistics.preferred_order=300;
+        require(p::runtime_choice(routes,false).index==2,"overlapping alternatives displaced the successful incumbent");
         std::cout<<"{\"complete\":true,\"checks\":"<<checks<<",\"scaled_steps\":true,\"threshold_escape\":true,"
             "\"region_restarts\":true,\"reconstruction\":true,\"candidate_budget\":true,\"extra_time_budget\":true,"
             "\"unchanged_hysteresis\":true,\"CUDA_calls\":0}\n";

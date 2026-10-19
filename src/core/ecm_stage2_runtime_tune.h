@@ -57,8 +57,21 @@ inline RuntimeChoice runtime_choice(const std::vector<RuntimeCandidate> &candida
     if(!out.available)return out;
     // Keep the successful incumbent when the observed bands overlap. Default D
     // has no special privilege after a measured path has been established.
+    const auto incumbent=out.index;
+    auto better=[&](size_t a,size_t b) {
+        const auto &x=candidates[a],&y=candidates[b];
+        const double upper_x=x.statistics.seconds+2*x.statistics.stddev;
+        const double upper_y=y.statistics.seconds+2*y.statistics.stddev;
+        if(upper_x!=upper_y)return upper_x<upper_y;
+        if(x.statistics.seconds!=y.statistics.seconds)return x.statistics.seconds<y.statistics.seconds;
+        return x.shape.key()<y.shape.key();
+    };
+    // Intermediate loop entries have never been executed as an incumbent.
+    // Qualify every alternative against the same actual incumbent, then pick
+    // the smallest observed upper bound among the qualified alternatives.
     for(size_t i=0;i<candidates.size();++i)if(candidates[i].statistics.count>=2 &&
-        LocalSearch::improves(candidates[i].statistics.timing(),candidates[out.index].statistics.timing()))out.index=i;
+        LocalSearch::improves(candidates[i].statistics.timing(),candidates[incumbent].statistics.timing()) &&
+        (out.index==incumbent || better(i,out.index)))out.index=i;
     return out;
 }
 } } }

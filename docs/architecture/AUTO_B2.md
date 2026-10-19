@@ -149,6 +149,10 @@ M₂ = (n−1)s₁² + (m−1)s₂² + (μ₂−μ₁)²·nm/(n+m)，s = √[M�
 
 单次观察的s记0，至少两次才建立 `runtime_shape_mean_v2` 实测估计。切换条件为 `μ_A+2s_A < 0.98μ_B−2s_B`；这是工程切换门槛，不是置信区间。当前设备、环境和形状的合格运行组不叠加跨条件模型余量；未取得重复观察的输入继续使用预测保护。
 
+先确定实际当前路线B，再将所有候选分别与同一个B比较；多个候选合格时选择`μ+2s`最小者，随后按均值及完整形状打破同值。扫描中的中间候选未实际执行，不成为新的采用基准。没有候选越过B的门槛时保留B，避免候选排列顺序改变最终路线。
+
+当前每曲线仍会重新准入已观察候选；候选额度尚未耗尽、但模型反复找不到有竞争力试跑项时，也可能重复全表排名。这些准备工作不在`stage2_full_wall`内，低位宽时可能抵消引擎收益。优化与验收范围见[Stage2性能](../performance/STAGE2.md#有界d搜索的验证范围)及[研究草稿](../development/STAGE2_D_SEARCH_DRAFT.md)。
+
 存储身份包含B1，避免把不同完整参数写成同一行；成本复用不以B1为门槛，会合并匹配形状的统计；采集上限按各完整参数行的repeats独立计算。具体N和sigma不作为成本身份，但每条曲线仍独立验证。
 
 波动范围重叠时保留已成功采用的路线；首轮无保留对象时从普通基线比较。承载首个试跑不等于必须采用。日志 `runtime_candidates` 输出样本次数、平均时间及标准差。正式调优和运行观察分开累计，不混为一个低波动总体。
@@ -223,7 +227,7 @@ D/φ/P的数学意义、非单调性和完整计算量推导集中在 [D参数�
 - **几何包络：**同P先选最大D，按P升序保留刷新最大D的227项。因此任意P上限内仍能找到原池中最大的D。这是覆盖启发式，不是完整曲线性能支配证明。
 - **NTT边界：**52个代表算术位宽S，检查操作数P及P+1在2^14～2^27内的packing边界；每个边界各保留一项下方、上方P代表。代表S包含128、256、实际余因子/承载例子及1024…16384每512 bits的点。
 - **树边界：**P=2^k、k=3…23的两侧各保留一个P代表。
-- **owner边界：**默认reuse=3的fold精确payload为8·ceil(S/64)·(7P+7)+48 bytes；frontier再增加24P bytes。对48/128/256/640/1024 MiB分别保留两侧P代表。公式依据为 [FoldOwnerLayout](../../src/core/ecm_stage2_geometry.h#L102)、[frontier元数据](../../src/core/ecm_stage2_owner_memory.h#L65)。
+- **owner边界：**默认reuse=3的fold精确payload为8·ceil(S/64)·(7P+7)+48 bytes；frontier再增加24P bytes。对48/128/256/640/1024 MiB分别保留两侧P代表。公式依据为 [FoldOwnerLayout](../../src/core/ecm_stage2_geometry.h#L110)、[frontier元数据](../../src/core/ecm_stage2_owner_memory.h#L57)。
 
 去重后1094项、1083个不同P；按D升序仍有525处相邻P下降。筛选减少47.40%的候选数，不意味着GPU计算减少相同比例。来源、全部移除项和逐边界代表保存在`data/experiments/stage2_d_compression_20261011/proposal/`；扩展池来源的冻结记录在`data/experiments/stage2_d_catalog_20261011_final/analysis.json`。性能验收与证据见 [Stage2性能](../performance/STAGE2.md)。
 
@@ -249,7 +253,7 @@ D/φ/P的数学意义、非单调性和完整计算量推导集中在 [D参数�
 
 完成正式重复要求的同形状测量可复用；预算结束、已有时间预计超过剩余预算或重复数不足时标为`deferred`，不当作无效项关闭方向。`rejected`表示数学/当前原生准入拒绝；`complete=1`仅表示本次选择的所有区间邻域已完成且没有延期，不表示全表或全局最优。完成的正式样本及真实重复数保留，下一次tune重新模型排序并复用它们。正式新测时间用于本次邻域比较，即使文件按均值累计规则仍保留了更快的旧部分样本；不借本次重复数提升旧样本资格。没有实测的高B2形状不根据P=24的远距离外推时间直接跳过。
 
-纯packing形状按操作数/算术位宽缓存；工作量按完整Shape缓存，拟合及资格按模型域缓存。缓存只在相应条件和不变profile内复用，更新测量后重新创建估算器；现场free准入不由这些数学缓存代替。本轮已完成的配对参考按目标对象及完整Shape复用，防止磁盘上的更快部分摘要造成重复测量；当前邻域使用本轮正式结果，不提升旧部分摘要的重复数。实现见 [区间键](../../src/core/ecm_stage2_portable_model.h#L74)、[搜索](../../src/core/ecm_stage2_portable_driver.inl#L650)。
+纯packing形状按操作数/算术位宽缓存；工作量按完整Shape缓存，拟合及资格按模型域缓存。缓存只在相应条件和不变profile内复用，更新测量后重新创建估算器；现场free准入不由这些数学缓存代替。本轮已完成的配对参考按目标对象及完整Shape复用，防止磁盘上的更快部分摘要造成重复测量；当前邻域使用本轮正式结果，不提升旧部分摘要的重复数。实现见 [区间键](../../src/core/ecm_stage2_portable_model.h#L74)、[正式调优调用](../../src/core/ecm_stage2_portable_driver.inl#L1248)及[共享搜索器](../../src/core/ecm_stage2_d_search.h#L27)。
 
 `--tune-exponents bits,...`在通用家族表示**实际位数**，在梅森网格表示算术指数p；`--tune-d`、`--tune-b2`、`--tune-repeats`覆盖对应网格。通用家族构造精确位宽的GMP probable prime，sigma26、B1=20，不称为已证明素数。`--tune-save FILE`使用验证后的真实点并替代位宽列表；自动承载要求匹配真实任务，显式`--tune-carrier-exponent p`仍检查整除。旧 `--tune-tail-samples`只接受0。
 
@@ -377,7 +381,7 @@ NTT 参数表发布时按共享行规则 `(length,batch,tile)` 数值稳定升�
 - [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h)：`validate_ntt_summary`、`strip_ntt_auxiliary_timing`、`Profile::update_ntt/load/serialize`，摘要检查、时间字段剔除及参数表发布。
 - [ntt_runtime.cuh:1418](../../src/cuda/stage2/ntt_runtime.cuh#L1418)：外层级数规划；[形状选择:1488](../../src/cuda/stage2/ntt_runtime.cuh#L1488)；[正向与逆向:1678](../../src/cuda/stage2/ntt_runtime.cuh#L1678)；[packing:3224](../../src/cuda/stage2/ntt_runtime.cuh#L3224)。
 - [ntt_coop_outer.cuh:15](../../src/cuda/stage2/ntt_coop_outer.cuh#L15)：block协作外层内核。
-- [ecm_stage2_portable_model.h:131](../../src/core/ecm_stage2_portable_model.h#L131)：NTT成本查询/外推；[工作量:28](../../src/core/ecm_stage2_portable_model.h#L28)；[非负拟合:171](../../src/core/ecm_stage2_portable_model.h#L194)；[阶段估算:239](../../src/core/ecm_stage2_portable_model.h#L239)。
+- [ecm_stage2_portable_model.h:130](../../src/core/ecm_stage2_portable_model.h#L130)：NTT成本查询/外推；[工作量:28](../../src/core/ecm_stage2_portable_model.h#L28)；[非负拟合:194](../../src/core/ecm_stage2_portable_model.h#L194)；[阶段估算:236](../../src/core/ecm_stage2_portable_model.h#L236)。
 
 ## 汇集预计算结果
 
@@ -406,10 +410,11 @@ G=1与baby预算回退缺完整联合生命周期，成本可估算但原生准�
 ## 代码入口
 
 - [ecm_stage2_d_catalog.h:14](../../src/core/ecm_stage2_d_catalog.h#L14)：唯一D字面量表；`entries`、`degree`提供派生P，编译期检查范围、偶数、唯一和顺序。
-- [ecm_cuda_stage2.cu:8621](../../src/cuda/ecm_cuda_stage2.cu#L8621)：原生默认成本候选。
-- [ecm_stage2_portable_driver.inl:378](../../src/core/ecm_stage2_portable_driver.inl#L378)：默认几何模型；`portable_select`负责实测预筛、成本排名及准入，`run_portable_tune`负责局部搜索、测量与发布。[运行采集:133](../../src/core/ecm_stage2_portable_driver.inl#L133)负责采集与可选缓存写回。
+- [ecm_cuda_stage2.cu:8689](../../src/cuda/ecm_cuda_stage2.cu#L8689)：原生默认成本候选。
+- [ecm_stage2_portable_driver.inl:216](../../src/core/ecm_stage2_portable_driver.inl#L216)：默认几何模型；[运行时搜索:243](../../src/core/ecm_stage2_portable_driver.inl#L243)、[运行时采用:312](../../src/core/ecm_stage2_portable_driver.inl#L312)处理候选和重复观察；[portable_select:442](../../src/core/ecm_stage2_portable_driver.inl#L442)负责实测预筛、成本排名及准入；[run_portable_tune:977](../../src/core/ecm_stage2_portable_driver.inl#L977)负责正式搜索、测量与发布。[运行采集:133](../../src/core/ecm_stage2_portable_driver.inl#L133)负责采集与可选缓存写回。
 - [ecm_stage2_portable_model.h](../../src/core/ecm_stage2_portable_model.h#L194)：`Estimator::fitted`负责非负拟合及留一资格；同文件提供工作量、观察匹配、插值与误差余量。
-- [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h#L22)：`LocalSearch`负责邻域及噪声停止；`Profile`负责矩阵解析、排序与均值累计。
+- [ecm_stage2_d_search.h:27](../../src/core/ecm_stage2_d_search.h#L27)：`DSearch`负责比例跨步、细化和区间重启；[ecm_stage2_runtime_tune.h:15](../../src/core/ecm_stage2_runtime_tune.h#L15)负责额外成本预算，[runtime_choice:39](../../src/core/ecm_stage2_runtime_tune.h#L39)执行试跑/采用分离及原有波动门槛。
+- [ecm_stage2_tune_portable.h:55](../../src/core/ecm_stage2_tune_portable.h#L55)：`LocalSearch`用于显式D研究列表；[Profile:442](../../src/core/ecm_stage2_tune_portable.h#L442)负责矩阵解析、排序与均值累计。
 - [ecm_stage1_cost_csv.h](../../src/core/ecm_stage1_cost_csv.h)、[ecm_stage2_probability.h](../../src/core/ecm_stage2_probability.h)：容器模型及概率。
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：配置、验证与队列。
 - [配置参考](../ECM_INI_REFERENCE.md)、[使用](../usage/STAGE2.md)、[工具](../../tools/bench/README_STAGE2_CARRIER_PLAN.md)。

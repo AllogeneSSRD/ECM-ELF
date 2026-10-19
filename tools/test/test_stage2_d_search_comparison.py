@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bench'))
-from compare_stage2_d_search import compare
+from compare_stage2_d_search import compare, repeat_totals
 
 
 def main():
@@ -43,7 +43,11 @@ def main():
         pass
     else:
         raise AssertionError('Incomplete matrix accepted')
-    report = dict(complete=True, checks=6, exact_identity=True, full_scope=True,
+    runs = [dict(repeat=1, engine='gpu', engine_seconds=2), dict(repeat=1, engine='gpu-carrier', engine_seconds=3),
+            dict(repeat=2, engine='gpu', engine_seconds=7), dict(repeat=2, engine='gpu-carrier', engine_seconds=8)]
+    assert repeat_totals(dict(runs=runs), 'gpu') == [2., 7.]
+    assert repeat_totals(dict(runs=runs), 'all') == [5., 15.]
+    report = dict(complete=True, checks=8, exact_identity=True, full_scope=True,
                   absolute_and_relative_retest_thresholds=True, CUDA_calls=0)
     a.output.mkdir(parents=True, exist_ok=False)
     (a.output/'report.json').write_text(json.dumps(report, indent=2)+'\n', encoding='utf-8')
