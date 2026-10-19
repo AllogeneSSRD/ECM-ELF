@@ -93,6 +93,10 @@ python tools/bench/compare_stage2_d_search.py `
 
 默认要求性能文件未改写、已有10次观察、无试跑且所有实测文件组选择相同D/算术。需要研究学习阶段时显式`--allow-learning`，报告标为非冻结控制，不能与稳定状态混淆。逐队列保存全部曲线，包括首条冷启动及最后三条短队列；数学检查、精确N/B1/B2/sigma和完成进度仍核对。`report.json`分别给出引擎之和、`curve_done.wall`之和、外层进程观察墙钟及准备分项。前两项不包含退出轮询量化误差，原生规划时间嵌套在候选/默认准备内，不能再重复相加。重放仅用于性能/功能观察，不计作新增ECM覆盖；原始EXE、save及profile不改写。
 
+`plot_stage2_d_prepare.py --study <稳定study> [--study <另一study>] --output data/benchmarks/<新目录> --figures data/figures/<新目录>`核对冻结EXE/编译输入、原始NF结果、计时闭合、性能文件身份及调用前后共享状态，再生成每曲线均摊时间的引擎/外层堆积图。黑点为完整队列；橙色是队列总时间减引擎，不是独立CPU核计时。只接受完整、冻结、无试跑的控制，不将学习数据混入；设备/预算检查对应此采集器的GPU1、arena6300/fold640/batch256 MiB。输出审计JSON、绘图脚本副本和PNG/SVG；已有目录不覆盖。图中位宽、B1/B2、版本与频率观测取自输入，首轮与尾部都保留。
+
+`tools/test/test_stage2_d_prepare_plot.py --study <完整稳定study> --output data/experiments/<新目录>`在只读输入替身上检查错误记录拒绝，覆盖失败/学习状态、计时和几何不一致、非有限耗时；不改写原始实验，也不调用GPU。
+
 ## 压缩候选表提议生成
 
 `compress_stage2_d_catalog.py`从指定的冻结候选头文件提取字面量，以保护集合、几何包络、NTT/树边界及默认owner布局的预算边界产生提议。不会改写生产头文件。`--protect-profile`仅采用干净且有正式重复的实测记录；`--protect-analysis`要求完整、零失败的矩阵。它们可重复指定。

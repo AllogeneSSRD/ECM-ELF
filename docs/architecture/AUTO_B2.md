@@ -167,7 +167,7 @@ M₂ = (n−1)s₁² + (m−1)s₂² + (μ₂−μ₁)²·nm/(n+m)，s = √[M�
 
 两条路径的默认D仍实时规划；实际引擎初始化、分配失败处理、承载整除验证及数学检查继续执行。提示附在现有`tune_selection`事件中，父进程仅在内存保留，带长度检查和SHA256校验；校验用于发现损坏，不作为权限机制。完整几何计划不写入tune矩阵。内部A/B开关`--runtime-prepare-cache 0|1`默认1，可一次关闭上述复用；它不改变测量身份或采用门限。
 
-`tune_selection.runtime_prepare`给出默认规划、候选准备、搜索及总时间，另列原生调用数和缓存命中数。`native_plan_seconds`嵌套在这些阶段内，不能重复相加；`selection_seconds`还包括外层配置准备，`observation_prepare_seconds`单列观察准备。这些均在`stage2_full_wall`外；性能需同时比较引擎与队列墙钟。缓存实现为`src/core/ecm_stage2_runtime_cache.h`，接入点为`ecm_stage2_portable_driver.inl::portable_runtime_admit/portable_runtime_search`和`ecm_cuda_stage2_main.cpp::child_run/curve_worker`。验证范围见[Stage2性能](../performance/STAGE2.md#有界d搜索的验证范围)。
+`tune_selection.runtime_prepare`给出默认规划、候选准备、搜索及总时间，另列原生调用数和缓存命中数。`runtime_search.native_admission_calls`是含缓存命中的逻辑准入请求数，`runtime_prepare.native_plan_calls`才是真正调用原生规划器的次数。`native_plan_seconds`嵌套在这些阶段内，不能重复相加；`selection_seconds`还包括外层配置准备，`observation_prepare_seconds`单列观察准备。这些均在`stage2_full_wall`外；性能需同时比较引擎与队列墙钟。缓存实现为`src/core/ecm_stage2_runtime_cache.h`，接入点为`ecm_stage2_portable_driver.inl::portable_runtime_admit/portable_runtime_search`和`ecm_cuda_stage2_main.cpp::child_run/curve_worker`。验证范围见[Stage2性能](../performance/STAGE2.md#有界d搜索的验证范围)。
 
 ### 验证与持久化
 
