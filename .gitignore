@@ -1,165 +1,38 @@
-
+# Local editor, cache, and scratch files
 .agents
 skills-lock.json
 .github/
 .opencl_cache/
 .refactor/
 .vscode/
-.pdf-tools/
 logs/
-docs/ecm/
-test/bench
+.tmp*
+/.bench_tmp
 
-# build
+# Build outputs. tools/build contains tracked build scripts.
 build/
-# tools/build holds parallel_nvcc.ps1 (the parallel CUDA compile driver), so the bare
-# "build/" rule above must not swallow that directory.
 !/tools/build/
-build_rel/
+/build_*/
+!/build_cuda/
 build_cuda/*
 !build_cuda/*.bat
-build_cuda_cmake/
-/build_vs18
-
 release/
-
-**/__pycache__/
-*.save
-*-*signature.txt
-
-.tmp*
-
-# CGBN
-cgbn/
-
-# CPU edwards stage1 Z/2×Z/8
-ecm_edwards_cpu.obj
-*.obj
-*.dll
-*.exe
-src/cpu/*.dll
-src/cpu/*.exe
-/test_edwards
-
-# Android Studio apk
+/dist/
+/test_edwards/
 Android/ECM/app/debug/
 Android/ECM/app/release/
 
-# log
-tools/log_parser/example
-
-# ECM report database & downloaded HTML
-tools/ecm_report/html/
-tools/ecm_report/example/
-tools/ecm_report/*.db*
-# tools/ecm_report/*.png
-tools/ecm_report/*.html
-tools/ecm_report/*.bat
-tools/ecm_report/*.png
-
-# ECM prob
-tools/ecm_prob/out
-tools/ecm_prob/data
-tools/ecm_prob/*.exe
-
-# tools/ scratch (test/bench sandboxes and built helpers)
-tools/bench/_abtest/
-tools/bench/_speed_*.exe
-tools/test/_feeder_scratch/
-tools/test/fixtures/_test_*.save
-tools/test/*.exe
-tools/refactor/*.exe
-tools/gen/__pycache__/
-
-# Locally rebuilt GMP with x86_64/zen3 (BMI2+ADX) mpn kernels.
-# Regenerate with third_party/build_gmp_zen3.sh; CMake auto-detects
-# third_party/gmp-zen3/dist and falls back to vcpkg GMP when absent.
-/third_party/gmp-zen3/
-/third_party/zen3_runtime/
-
-# Local computation artifacts and fallback feeder files.
-/e[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
-/saves/
-/feeder.ini
-/feeder.log
-
-
-/tools/test/_m3_gmp
-/tools/test/_m3_simd
-/tools/test/_m3f_gmp
-/tools/test/_m3f_simd
-# tools/test holds the acceptance/regression scripts this project actually relies on
-# (test_cuda_param0.ps1 18 checks, test_cuda_param2.ps1 7 checks, test_cli_args.ps1, ...).
-# The blanket "/tools/test" rule kept them out of version control entirely, so they are
-# re-included here and only the "_"-prefixed scratch directories stay ignored.
-!/tools/test/
-/tools/test/_*
-/.bench_tmp
-/test_edwards-1
-/tools/stat/_run
-/build_cuda_dev
-/build_t16
-/build_jom
-/build_ninja
-/build_nm16
-/build_a80
-/build_a86
-/build_cpu_nmake
-/build_reltest
-/build_cuda_release
-# Local Mersenne-fold experiment builds; see docs/performance/STAGE1.md.
-/build_cuda_fold
-# single-tier fold build (6144 only), kept as build_cuda_fold\ecm_cuda_fold6144.exe
-/build_cuda_fold6144
-# Local fold/TPB experiment builds:
-# fold at other TPB values, basic with ECM_SBITS_CACHE, basic at TPB 256/512
-/build_cuda_foldt*/
-/build_cuda_sbcache
-/build_cuda_tpb*/
-# Local fused Mersenne-core build.
-/build_cuda_fold_fused
-tools/ecm_worktodo/assignment.csv
-tools/ecm_worktodo/assignment.save.csv
-tools/ecm_worktodo/sorted.csv
-tools/ecm_worktodo/worktodo.csv
-tools/ecm_worktodo/worktodo.sh
-tools/ecm_worktodo/worktodo_p95_stage2.txt
-/tools/ecm_worktodo/tmp
-/build_cpu_nmake
-/build_a80
-/build_a86
-/build_reltest2
-/build_cuda_basic_t256
-/build_cuda_fold_t256
-
-# ecm_gui build directory (docs/usage/GUI.md)
-/build_gui
-/third_party
-
-# gwnum probe build artifacts (the probe itself and its recorded output are tracked)
-/tools/gwnum_probe/bin/
-vc140.pdb
-# Local datasets, experiment logs, and evidence archives (kept on disk).
-/data/
-.ecm_ckpt_stage2_*.dat*
-*.progress.migrated.*
-# Prevent generated data from reappearing in the documentation tree.
-/docs/data/
-/dist/
-/tools/ecm_dataset/ecm_stage2_dataset.sqlite
-/tools/ecm_dataset/ecm_stage2_dataset.sqlite-*
+# Generated files
+**/__pycache__/
+*.save
 *.bak
 *.sqlite
-tools/ecm_dataset/1000.bat
-/build_cuda_test
-/tools/diag
-AGENTS.md
-/docs/paper
-/NCU
-/build_cuda_ckpt_verify
-/build_cuda_ckpt_verify_bt
-/docs/web
-/build_cpu_stage2
+*.obj
+*.dll
+*.exe
+*-*signature.txt
+*.progress.migrated.*
+.ecm_ckpt_stage2_*.dat*
 
 # Runtime identities and generated result/checksum values are private local data.
 *.ini
@@ -168,5 +41,46 @@ AGENTS.md
 *.json_*.txt*
 *.ckpt*
 *.ecm-ledger*
-ecm_stage1_*identity.txt
-/tools/ecm_report/figures
+
+# Local dependencies, datasets, and generated documentation content.
+/third_party
+/data/
+/docs/data/
+/docs/paper/
+/docs/web/
+AGENTS.md
+
+# Tool output and scratch directories
+/tools/.pdf-tools
+/tools/log_parser/example/
+/tools/ecm_report/html/
+/tools/ecm_report/example/
+/tools/ecm_report/figures/
+/tools/ecm_report/*.db*
+/tools/ecm_report/*.html
+/tools/ecm_report/*.bat
+/tools/ecm_report/*.png
+/tools/ecm_prob/out/
+/tools/ecm_prob/data/
+/tools/test/_*
+/tools/test-old/
+/tools/NCU/
+/tools/stat/_run
+/tools/diag/
+/tools/gwnum_probe/bin/
+
+# Worktodo and ECM dataset output
+/tools/ecm_worktodo/assignment.csv
+/tools/ecm_worktodo/assignment.save.csv
+/tools/ecm_worktodo/sorted.csv
+/tools/ecm_worktodo/worktodo.csv
+/tools/ecm_worktodo/worktodo.sh
+/tools/ecm_worktodo/worktodo_p95_stage2.txt
+/tools/ecm_worktodo/tmp
+/tools/ecm_dataset/ecm_stage2_dataset.sqlite-*
+/tools/ecm_dataset/1000.bat
+
+# Local computation artifacts and fallback feeder files.
+/e[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*
+/saves/
+/feeder.log
