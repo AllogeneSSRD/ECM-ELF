@@ -54,6 +54,17 @@
 
 namespace s2prod {
 namespace fs = std::filesystem;
+bool open_runtime_routes(const std::string &text,ecm_stage2::tune::portable::RuntimeRouteHints &out) {
+    out={};if(text.empty())return true;
+    if(text.size()>8257 || text.size()<130 || text[text.size()-65]!='#')return false;
+    const auto body=text.substr(0,text.size()-65),digest=text.substr(text.size()-64);
+    if(!ecm_stage2::tune::portable::RuntimePauseHints::valid_key(digest) ||
+       ecm_stage2::sha256_text(body)!=digest)return false;
+    return out.assign(body);
+}
+std::string seal_runtime_routes(const ecm_stage2::tune::portable::RuntimeRouteHints &routes) {
+    const auto body=routes.text();return body.empty()?std::string{}:body+'#'+ecm_stage2::sha256_text(body);
+}
 struct TaskInputError : std::runtime_error { using std::runtime_error::runtime_error; };
 volatile LONG stop_requests = 0;
 HANDLE inherited_stop_event=nullptr;
@@ -287,6 +298,9 @@ struct Options {
     uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
     bool runtime_probe=false;
     uint64_t runtime_remaining=0; // Parent queue hint; not part of a measurement identity.
+    bool runtime_prepare_cache=true; // Diagnostic A/B switch; not an arithmetic or timing-data identity.
+    std::string runtime_prepare_hints; // Parent-memory cost-search pauses, never a checkpoint.
+    std::string runtime_route_hints; // Sealed, successful geometry plans for this parent only.
     std::string prediction_policy="model",tune_arithmetic="both";
     double tune_error=.08;
     std::set<std::string> portable_cli;
@@ -350,6 +364,9 @@ Options arguments(int argc, char **argv) {
         else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
         else if (a == "--tune-runtime-samples") {o.runtime_samples=num();if(o.runtime_samples<2 || o.runtime_samples>1000)throw std::runtime_error("tune-runtime-samples must be 2..1000");o.portable_cli.insert(a);}
         else if (a == "--runtime-remaining-curves") {o.runtime_remaining=num();}
+        else if (a == "--runtime-prepare-cache") {const auto n=num();if(n>1)throw std::runtime_error("runtime-prepare-cache must be 0 or 1");o.runtime_prepare_cache=n!=0;}
+        else if (a == "--runtime-prepare-hints") {ecm_stage2::tune::portable::RuntimePauseHints hints;hints.assign(value());o.runtime_prepare_hints=hints.text();}
+        else if (a == "--runtime-route-hints") {const auto text=value();ecm_stage2::tune::portable::RuntimeRouteHints hints;if(open_runtime_routes(text,hints))o.runtime_route_hints=text;}
         else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
         else if (a == "--ntt-counts") {const auto n=num();if(n>1)throw std::runtime_error("ntt-counts must be 0 or 1");o.ntt_counts=n!=0;o.portable_cli.insert(a);}
         else if (a == "--relocation") {const auto n=num();if(n>1)throw std::runtime_error("relocation must be 0 or 1");o.relocation=n!=0;o.portable_cli.insert(a);}
@@ -597,7 +614,7 @@ void configure_cuda_wait(int device) {
     if(stage2_log::enabled(stage2_log::debug))std::cout<<"stage2_cuda_wait: device="<<device<<" requested="<<mode
              <<" before="<<before<<" after="<<after<<std::endl;
 }
-int child_run(const Options &o, const fs::path &save, const Record &r,
+int child_run(Options &o, const fs::path &save, const Record &r,
               uint64_t b2, uint64_t d, int device, const fs::path &results, const fs::path &log,
               uint64_t batch, const Settings &ini_settings) {
     const fs::path exe = executable();
@@ -612,6 +629,11 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
     arg(L"--tune-runtime",o.tune_runtime?1:0);
     arg(L"--tune-runtime-samples",o.runtime_samples);
     arg(L"--runtime-remaining-curves",o.runtime_remaining);
+    arg(L"--runtime-prepare-cache",o.runtime_prepare_cache?1:0);
+    if(o.runtime_prepare_cache && !o.runtime_prepare_hints.empty())
+        cmd+=L" --runtime-prepare-hints "+quote(std::wstring(o.runtime_prepare_hints.begin(),o.runtime_prepare_hints.end()));
+    if(o.runtime_prepare_cache && !o.runtime_route_hints.empty())
+        cmd+=L" --runtime-route-hints "+quote(std::wstring(o.runtime_route_hints.begin(),o.runtime_route_hints.end()));
     cmd+=L" --tune-ignore "+quote(fs::path(o.tune_ignore).wstring());
     if(!o.stage1_csv.empty())cmd+=L" --stage1-cost-csv "+quote(fs::path(o.stage1_csv).wstring());
     if(!o.condition_tag.empty())cmd+=L" --tune-condition-tag "+quote(fs::path(o.condition_tag).wstring());
@@ -695,6 +717,16 @@ int child_run(const Options &o, const fs::path &save, const Record &r,
         (error?std::cerr:std::cout)<<text<<std::endl;
     };
     auto line=[&](const std::string &text,bool error) {
+        if(!error && o.runtime_prepare_cache && text.rfind("{\"type\":\"tune_selection\"",0)==0) {
+            try {
+                const auto event=ecm_results::json::parse(text);
+                ecm_stage2::tune::portable::RuntimePauseHints hints;
+                hints.assign(event.get("runtime_prepare_hints").text());o.runtime_prepare_hints=hints.text();
+                const auto route_text=event.get("runtime_route_hints").text();
+                ecm_stage2::tune::portable::RuntimeRouteHints routes;
+                if(open_runtime_routes(route_text,routes))o.runtime_route_hints=route_text;else o.runtime_route_hints.clear();
+            }catch(const std::runtime_error &){o.runtime_prepare_hints.clear();o.runtime_route_hints.clear();}
+        }
         if(output.is_open()){output<<text<<'\n';output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");}
         if(o.tune_child)return; // Full diagnostic evidence stays in the per-trial file.
         const auto summary=error?stage2_console::Projection{}:console_summary.observe(text);
@@ -844,8 +876,10 @@ void configure_short_ntt_batches(const Options &o);
 struct RuntimeTuneObservation {
     ecm_stage2::tune::portable::Shape shape;
     ecm_stage2::tune::Fields condition,sample;
+    uint64_t plan_cache_hits=0;
 };
 RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r);
+std::string runtime_route_event(const Options &o);
 void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Metrics &m);
 void publish_runtime_tune(const Options &o,const RuntimeTuneObservation &observation);
 std::string runtime_tune_json(const RuntimeTuneObservation &observation);
@@ -899,17 +933,26 @@ int curve_worker(Options o) {
     configure_short_ntt_batches(o);
     if(!o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
     o.has_d=requested_d!=0;
-    const auto tuned_json=o.tune_child?std::string{}:auto_json.empty()?select_tuned(o,r):select_runtime_tuned(o,r);
-    if(!tuned_json.empty())std::cout<<tuned_json<<std::endl;
+    auto tuned_json=o.tune_child?std::string{}:auto_json.empty()?select_tuned(o,r):select_runtime_tuned(o,r);
+    const double selection_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
     if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
     Big n, x, gcd;
     mpz_set_str(n.z, r.n.c_str(), 16); mpz_set_str(x.z, r.x.c_str(), 16);
     mpz_gcd(gcd.z, x.z, n.z);
     RuntimeTuneObservation observation;
+    const auto observation_start=std::chrono::steady_clock::now();
     if(!o.relocation && !o.tune_child && o.tune_runtime && !o.tune_profile.empty() && mpz_cmp_ui(gcd.z,1)==0) {
         try {observation=prepare_runtime_tune(o,r);}
         catch(const std::exception &e){std::cerr<<"WARNING: runtime tune preparation skipped: "<<e.what()<<std::endl;}
+    }
+    if(!tuned_json.empty()) {
+        tuned_json.pop_back();tuned_json+=",\"selection_seconds\":"+ecm_stage2::tune::portable::numeric(selection_seconds)+
+            ",\"observation_prepare_seconds\":"+ecm_stage2::tune::portable::numeric(std::chrono::duration<double>(
+                std::chrono::steady_clock::now()-observation_start).count())+
+            ",\"observation_plan_cache_hits\":"+std::to_string(observation.plan_cache_hits)+'}';
+        auto event=tuned_json;event.pop_back();event+=",\"runtime_route_hints\":"+json_string(runtime_route_event(o))+'}';
+        std::cout<<event<<std::endl;
     }
     std::string status = "stage2_completed";
     int code = 0;

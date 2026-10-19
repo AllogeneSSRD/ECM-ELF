@@ -83,6 +83,14 @@ python tools/bench/compare_stage2_d_search.py `
 
 主指标为52格引擎完整时间的逐格中位数之和；n=1一侧就是原值。总耗时不增加才满足矩阵数值门槛；同时变慢超过5%和0.25秒的格另行交替A/B复测，可用`--retest-relative`、`--retest-seconds`指定预先约定的筛查门限。该门限只生成复测清单，不删除样本、不自动判定回退来源，也不替代矩阵总耗时要求。图中正值表示变慢，阴影为观测范围组合，不是置信区间。不同会话的温度和后台负载仍可能不同，不能由该图直接归因到D搜索改动。
 
+`bench_stage2_d_default_pair.py --baseline <旧完整n=3矩阵> --candidate <新EXE> --candidate-version <版本> --output data/experiments/<新目录> --repeats 1`复用上述采集器，在同一会话按52个相同条件交替旧/新版本，合计104次。相邻格反转版本顺序，不预热；启动前校验旧EXE的原始结果指纹与新构建输入。每个版本目录保持标准矩阵格式，可分别用`check_stage2_version.py --expected-repeats 1`审计，再用同一比较工具指定两侧均为1。`pair.json`保留总调度与两侧身份；`--resume`只续跑已记录成功调用后的剩余格，遇到失败或未记录调用须先调查。配对结果补充历史n=3参考，不覆盖历史会话和原始失败样本。
+
+### 同入口的准备缓存对照
+
+`bench_stage2_d_prepare.py --exe <EXE> --profile <已有运行统计的TOML> --reference <完整52格矩阵> --output data/experiments/<新目录>`从已核验输入选择实际余因子，在GPU1重放12条相同点的worktodo队列。`--exponent`、`--b2`、`--curves`覆盖任务；`--order carrier,uncached,on,on,uncached,carrier`比较默认承载、同一实测文件且关闭准备缓存、同一文件且开启缓存。`normal`为默认普通，`off`为保留已有实测选择但关闭继续采样，`on`开启正常运行采样；`--prepare-cache 0|1`控制其余模式的内部诊断开关。
+
+默认要求性能文件未改写、已有10次观察、无试跑且所有实测文件组选择相同D/算术。需要研究学习阶段时显式`--allow-learning`，报告标为非冻结控制，不能与稳定状态混淆。逐队列保存全部曲线，包括首条冷启动及最后三条短队列；数学检查、精确N/B1/B2/sigma和完成进度仍核对。`report.json`分别给出引擎之和、`curve_done.wall`之和、外层进程观察墙钟及准备分项。前两项不包含退出轮询量化误差，原生规划时间嵌套在候选/默认准备内，不能再重复相加。重放仅用于性能/功能观察，不计作新增ECM覆盖；原始EXE、save及profile不改写。
+
 ## 压缩候选表提议生成
 
 `compress_stage2_d_catalog.py`从指定的冻结候选头文件提取字面量，以保护集合、几何包络、NTT/树边界及默认owner布局的预算边界产生提议。不会改写生产头文件。`--protect-profile`仅采用干净且有正式重复的实测记录；`--protect-analysis`要求完整、零失败的矩阵。它们可重复指定。

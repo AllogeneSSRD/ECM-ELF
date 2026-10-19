@@ -1,5 +1,6 @@
 #pragma once
 #include "ecm_stage2_width_prediction.h"
+#include "ecm_stage2_runtime_cache.h"
 
 namespace ecm_stage2 { namespace tune { namespace portable {
 struct RuntimeCandidate {
@@ -8,9 +9,25 @@ struct RuntimeCandidate {
     unsigned priority=3; // carrier default, ordinary default, historical D, model D
     bool probe_allowed=true;
 };
+inline std::string runtime_pause_scope(const std::string &context,const Shape &reference,
+                                      const std::vector<RuntimeCandidate> &candidates) {
+    std::ostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(17)<<context<<'\n';
+    auto shape=[&](const Shape &s){for(auto value:s.key())out<<value<<',';out<<'\n';};
+    shape(reference);
+    for(const auto &c:candidates)if(c.shape.carrier==reference.carrier) {
+        shape(c.shape);out<<c.priority<<','<<c.probe_allowed<<','<<c.statistics.count<<','
+            <<c.statistics.seconds<<','<<c.statistics.stddev<<','<<c.statistics.preferred_order<<'\n';
+    }
+    return out.str();
+}
 struct RuntimeChoice {
     size_t index=0;
     bool available=false,probe=false;
+};
+struct RuntimeSearchAttempts {
+    size_t steps=0,shapes=0;unsigned admissions=0;
+    explicit RuntimeSearchAttempts(size_t count):shapes(count){}
+    bool next(){return admissions<16 && steps++<=shapes;}
 };
 struct RuntimeSearchBudget {
     static constexpr unsigned initial_candidates=4,extended_candidates=8,regions=3;

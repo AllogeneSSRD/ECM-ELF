@@ -112,9 +112,28 @@ pt::Shape portable_shape(const Options &o,const Record &r,uint64_t b2,uint64_t d
     const bool floor=et::environment_uint(env,"giant_chunk_floor",0)!=0;
     s.giant_chunk=std::max(uint64_t(1),k/p+uint64_t(!floor && k%p))*p;return s;
 }
+struct PortablePlanMetrics {
+    uint64_t calls=0,cache_hits=0,route_hits=0;double seconds=0;
+    std::set<std::pair<uint64_t,unsigned>> d_carriers;
+};
+PortablePlanMetrics *portable_plan_metrics=nullptr;
+struct PortablePlanMetricsScope {
+    PortablePlanMetrics *previous;
+    explicit PortablePlanMetricsScope(PortablePlanMetrics &m):previous(portable_plan_metrics){portable_plan_metrics=&m;}
+    ~PortablePlanMetricsScope(){portable_plan_metrics=previous;}
+};
+int portable_native_plan(const Options &o,const Record &r,uint64_t b2,uint64_t d,unsigned carrier,std::string &plan) {
+    const auto start=std::chrono::steady_clock::now();
+    const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,b2,d,o.device,
+        [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&plan,carrier);
+    if(portable_plan_metrics) {
+        ++portable_plan_metrics->calls;portable_plan_metrics->d_carriers.insert({d,carrier});
+        portable_plan_metrics->seconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+    }
+    return code;
+}
 bool portable_admit(const Options &o,const Record &r,pt::Shape &s,std::string &plan) {
-    const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,s.b2,s.d,o.device,
-        [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&plan,s.carrier);
+    const int code=portable_native_plan(o,r,s.b2,s.d,s.carrier,plan);
     if(code==3)return false;
     if(code)
         throw std::runtime_error("portable candidate planning failed");
@@ -129,6 +148,80 @@ bool portable_admit(const Options &o,const Record &r,pt::Shape &s,std::string &p
     s.chain_min=u64(plan_scalar(giant,"chain_min"),"giant chain minimum");s.force_ladder=plan_scalar(giant,"force_ladder")=="true";
     return true;
 }
+pt::RuntimeMemorySnapshot portable_memory_snapshot(int device) {
+    size_t free=0,total=0;
+    if(cudaSetDevice(device)!=cudaSuccess || cudaMemGetInfo(&free,&total)!=cudaSuccess)return {};
+    return {uint64_t(free),uint64_t(total)};
+}
+bool portable_plan_context(const Options &o,const Record &r,std::string &scope,bool include_sigma=true) {
+    std::ostringstream out;out<<"worker-plan-v2 "<<o.device<<' '<<(include_sigma?r.sigma:0)<<' '<<r.b1<<' '<<o.b2<<' '
+        <<o.batch<<' '<<o.arena<<' '<<o.owner_mb<<' '<<o.log_level<<' '<<o.debug_log<<' '<<o.ntt_counts<<' '
+        <<o.relocation<<' '<<o.factor_only<<' '<<r.n<<'\n';
+    // This local memo uses the complete environment, including diagnostic flags
+    // excluded from statistical compatibility. It never crosses curve workers.
+    const auto block=GetEnvironmentStringsA();if(!block)return false;
+    for(const char *p=block;*p;p+=std::strlen(p)+1)out.write(p,std::strlen(p)+1);
+    FreeEnvironmentStringsA(block);scope=out.str();return true;
+}
+struct PortableRuntimeRoutes {
+    bool initialized=false;std::string context;pt::RuntimeRouteHints hints;
+};
+PortableRuntimeRoutes portable_runtime_routes;
+bool portable_route_scope(const Options &o,const Record &r) {
+    auto &state=portable_runtime_routes;
+    if(!state.initialized){open_runtime_routes(o.runtime_route_hints,state.hints);state.initialized=true;}
+    std::string context;if(!portable_plan_context(o,r,context,false)){state.hints={};state.context.clear();return false;}
+    if(context==state.context && !state.hints.scope_key.empty())return true;
+    EcmStage2DeviceInfo info;
+    if(ecm_cuda_stage2_device_info(o.device,&info)){state.hints={};state.context.clear();return false;}
+    std::ostringstream scope;scope<<"runtime-routes-v1 "<<ecm_program::version<<' '<<info.uuid_hex<<' '
+        <<info.major<<' '<<info.minor<<' '<<info.runtime<<' '<<info.driver<<' '<<info.fixed_mode<<' '
+        <<info.outer_unroll_u<<' '<<NTT_GL_ADD_SUB_MASK<<'\n'<<context;
+    state.hints.scope(ecm_stage2::sha256_text(scope.str()));state.context=std::move(context);return true;
+}
+pt::RuntimeRouteHint portable_route(const pt::Shape &s,const pt::RuntimeMemorySnapshot &memory) {
+    return {s.d,s.carrier,memory.free,memory.total,uint64_t(s.fold),uint64_t(s.frontier),s.giant_chunk,s.chain_min,uint64_t(s.force_ladder)};
+}
+std::string runtime_route_event(const Options &o) {
+    return o.runtime_prepare_cache?seal_runtime_routes(portable_runtime_routes.hints):std::string{};
+}
+bool portable_runtime_admit(const Options &o,const Record &r,pt::Shape &shape,std::string &plan,bool *hit=nullptr) {
+    if(hit)*hit=false;
+    if(!o.runtime_prepare_cache)return portable_admit(o,r,shape,plan);
+    struct Value {pt::Shape shape;std::string plan;};
+    static pt::RuntimePlanMemo<pt::Shape::Key,Value> memo;
+    std::string scope;if(!portable_plan_context(o,r,scope))return portable_admit(o,r,shape,plan);
+    memo.scope(scope);const auto key=shape.key();const auto before=portable_memory_snapshot(o.device);
+    if(const auto cached=memo.find(key,before)) {
+        shape=cached->shape;plan=cached->plan;if(hit)*hit=true;
+        if(portable_plan_metrics)++portable_plan_metrics->cache_hits;
+        std::string route_context;
+        if(portable_plan_context(o,r,route_context,false) && route_context==portable_runtime_routes.context)
+            portable_runtime_routes.hints.put(portable_route(shape,before),true,before);
+        return true;
+    }
+    const bool route_scope=portable_route_scope(o,r);
+    pt::RuntimeRouteHint route;
+    if(route_scope && portable_runtime_routes.hints.find(shape.d,shape.carrier,before,route)) {
+        const auto after=portable_memory_snapshot(o.device);
+        if(after.valid() && after==before) {
+            shape.fold=route.fold!=0;shape.frontier=route.frontier!=0;shape.giant_chunk=route.chunk;
+            shape.chain_min=route.chain_min;shape.force_ladder=route.ladder!=0;plan.clear();if(hit)*hit=true;
+            memo.put(key,Value{shape,plan},before,route.free,after,true);
+            if(portable_plan_metrics){++portable_plan_metrics->cache_hits;++portable_plan_metrics->route_hits;}
+            return true;
+        }
+        portable_runtime_routes.hints.put(route,false,after);
+    }
+    const bool admitted=portable_admit(o,r,shape,plan);
+    uint64_t reported=~uint64_t(0);
+    if(admitted)try {reported=u64(plan_scalar(plan,"free_bytes"),"plan free snapshot");}catch(const std::runtime_error &){}
+    const auto after=portable_memory_snapshot(o.device);
+    memo.put(key,Value{shape,plan},before,reported,after,admitted);
+    if(route_scope)portable_runtime_routes.hints.put(portable_route(shape,before),
+        admitted && pt::runtime_plan_may_reuse(before,reported,after),after);
+    return admitted;
+}
 uint64_t portable_legacy_d(const Options &o,const Record &r,uint64_t b2,unsigned carrier,bool allow_no_plan);
 RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     RuntimeTuneObservation result;
@@ -139,7 +232,9 @@ RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r) {
     const auto d=o.d?o.d:portable_legacy_d(o,r,o.b2,o.carrier_exponent,false);
     auto shape=portable_shape(o,r,o.b2,d,o.carrier_exponent);pt::Work work;
     if(!engine.cached_work(shape,work) || work.p<512 || !work.exact_topology)return result;
-    std::string plan;if(!portable_admit(o,r,shape,plan) || engine.runtime_statistics(shape,true).count>=o.runtime_samples)return result;
+    std::string plan;bool cache_hit=false;
+    const bool admitted=portable_runtime_admit(o,r,shape,plan,&cache_hit);result.plan_cache_hits=cache_hit?1:0;
+    if(!admitted || engine.runtime_statistics(shape,true).count>=o.runtime_samples)return result;
     pt::WidthEstimate prediction;if(!predictor.predict(shape,prediction))return result;
     result.shape=shape;
     auto &s=result.sample;
@@ -206,8 +301,7 @@ std::vector<unsigned> portable_carriers(const Options &o,const Record &r) {
 }
 uint64_t portable_legacy_d(const Options &o,const Record &r,uint64_t b2,unsigned carrier,bool allow_no_plan=false) {
     std::string plan;
-    const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,b2,0,o.device,
-        [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&plan,carrier);
+    const int code=portable_native_plan(o,r,b2,0,carrier,plan);
     if(code==3 && allow_no_plan)return 0;
     if(code)
         throw std::runtime_error("default D planning failed");
@@ -241,7 +335,8 @@ uint64_t portable_default_d(const Options &o,const Record &r,uint64_t b2,unsigne
     return winner;
 }
 std::string portable_runtime_search(const Options &o,const Record &r,const pt::Shape &reference,
-        pt::Estimator &engine,pt::WidthPredictor &predictor,std::vector<pt::RuntimeCandidate> &candidates) {
+        pt::Estimator &engine,pt::WidthPredictor &predictor,std::vector<pt::RuntimeCandidate> &candidates,
+        const std::string &pause_context,pt::RuntimePauseHints &outgoing) {
     if(!o.tune_runtime || (o.has_d && o.d))return {};
     std::vector<pt::DSearchNode> existing;bool partial=false;
     for(const auto &c:candidates)if(c.shape.carrier==reference.carrier) {
@@ -252,10 +347,26 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
     const auto initial_budget=pt::runtime_search_budget(existing,reference.d,o.runtime_samples);
     if((pt::DSearch(existing,reference.d).explored()>=initial_budget.candidates && !partial) ||
        !initial_budget.remaining || (o.runtime_remaining && o.runtime_remaining<4))return {};
+    std::string pause_key;
+    if(o.runtime_prepare_cache && !pause_context.empty()) {
+        pause_key=ecm_stage2::sha256_text(pt::runtime_pause_scope(pause_context,reference,candidates));
+        pt::RuntimePauseHints incoming;incoming.assign(o.runtime_prepare_hints);
+        if(incoming.contains(pause_key)) {
+            outgoing.add(pause_key);
+            std::ostringstream out;out<<std::setprecision(17)<<"{\"carrier_exponent\":"<<reference.carrier
+                <<",\"candidate_limit\":"<<initial_budget.candidates<<",\"explored\":"<<pt::DSearch(existing,reference.d).explored()
+                <<",\"extra_seconds\":"<<initial_budget.spent<<",\"remaining_extra_seconds\":"<<initial_budget.remaining
+                <<",\"proposed_D\":0,\"reason\":\"cached_model_pause\",\"scale\":0,\"cached_pause\":true"
+                <<",\"ranked_shapes\":0,\"rank_seconds\":0,\"native_admission_calls\":0}";
+            return out.str();
+        }
+    }
+    const auto rank_start=std::chrono::steady_clock::now();
     std::vector<pt::DSearchNode> nodes;std::vector<pt::Shape> shapes;std::vector<pt::WidthEstimate> estimates;
     std::set<uint64_t> ds;for(const auto &entry:ecm_stage2::d_catalog::entries())ds.insert(entry.d);
     for(const auto &c:candidates)if(c.shape.carrier==reference.carrier)ds.insert(c.shape.d);
     for(auto d:ds) {
+        if(ecm_stage2::d_catalog::degree(d)<512)continue;
         auto s=portable_shape(o,r,o.b2,d,reference.carrier);pt::Work w;pt::WidthEstimate e;
         if(!engine.cached_work(s,w) || w.p<512 || !w.exact_topology || !predictor.predict(s,e))continue;
         // Reuse the admitted shape of existing candidates; predicted chunk and
@@ -266,9 +377,13 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
         nodes.push_back({d,w.p,pt::interval(s,w).key,e.rank,stats.seconds,stats.stddev,stats.count});
         shapes.push_back(s);estimates.push_back(e);
     }
+    const double rank_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-rank_start).count();
     auto budget=pt::runtime_search_budget(nodes,reference.d,o.runtime_samples);
+    pt::RuntimeSearchAttempts attempts(nodes.size());auto &native_admissions=attempts.admissions;
     const char *reason="admission_attempt_limit";uint64_t proposed=0;double scale=0;
-    for(unsigned attempt=0;attempt<16;++attempt) {
+    // Cheap model rejections must not consume the native-admission allowance:
+    // otherwise every new worker can get stuck on the same first 16 rejects.
+    while(attempts.next()) {
         budget=pt::runtime_search_budget(nodes,reference.d,o.runtime_samples);
         const pt::DSearch search(nodes,reference.d,2,budget.candidates,pt::RuntimeSearchBudget::regions);
         const auto step=search.next();reason=step.reason;scale=step.scale;if(!step.available)break;
@@ -280,7 +395,8 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
                            nodes[i].samples,o.runtime_remaining)) {
             nodes[i].rejected=true;reason="exploration_budget";continue;
         }
-        if(!portable_admit(o,r,s,plan)){nodes[i].rejected=true;reason="memory_admission";continue;}
+        ++native_admissions;
+        if(!portable_runtime_admit(o,r,s,plan)){nodes[i].rejected=true;reason="memory_admission";continue;}
         pt::Work w;pt::WidthEstimate e;
         if(!engine.cached_work(s,w) || !w.exact_topology || !predictor.predict(s,e)) {
             nodes[i].rejected=true;reason="admitted_model_unavailable";continue;
@@ -303,21 +419,32 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
         }
         if(!present)candidates.push_back({s,stats,3,true});proposed=s.d;break;
     }
+    const bool cacheable=!proposed && !native_admissions && !pause_key.empty();
+    if(cacheable)outgoing.add(pause_key);
     std::ostringstream out;out<<std::setprecision(17)<<"{\"carrier_exponent\":"<<reference.carrier
         <<",\"candidate_limit\":"<<budget.candidates<<",\"explored\":"<<pt::DSearch(nodes,reference.d).explored()
         <<",\"extra_seconds\":"<<budget.spent<<",\"remaining_extra_seconds\":"<<budget.remaining
-        <<",\"proposed_D\":"<<proposed<<",\"reason\":"<<json_string(reason)<<",\"scale\":"<<scale<<'}';
+        <<",\"proposed_D\":"<<proposed<<",\"reason\":"<<json_string(reason)<<",\"scale\":"<<scale
+        <<",\"ranked_shapes\":"<<nodes.size()<<",\"rank_seconds\":"<<rank_seconds
+        <<",\"native_admission_calls\":"<<native_admissions<<",\"cached_pause\":false,\"pause_cacheable\":"
+        <<(cacheable?"true":"false")<<'}';
     return out.str();
 }
 std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &engine,pt::WidthPredictor &predictor) {
     if(o.relocation || o.tune_child || o.tune_profile.empty())return {};
-
+    const auto prepare_start=std::chrono::steady_clock::now();
+    PortablePlanMetrics plan_metrics;PortablePlanMetricsScope metric_scope(plan_metrics);
+    double default_seconds=0,candidate_seconds=0,search_seconds=0;
     const auto carriers=portable_carriers(o,r);
     std::vector<pt::RuntimeCandidate> candidates;
     std::vector<pt::Shape> references;std::vector<std::string> searches;bool references_ready=true;
     uint64_t ordinary_default=0;
     for(auto carrier:carriers) {
-        const auto center=o.has_d && o.d?o.d:portable_default_d(o,r,o.b2,carrier,true);if(!center)continue;
+        const auto default_start=std::chrono::steady_clock::now();
+        const auto center=o.has_d && o.d?o.d:portable_default_d(o,r,o.b2,carrier,true);
+        default_seconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-default_start).count();
+        if(!center)continue;
+        const auto candidate_start=std::chrono::steady_clock::now();
         if(!carrier || !ordinary_default)ordinary_default=center;
         const auto original=portable_shape(o,r,o.b2,center,carrier);
         std::map<uint64_t,unsigned> ds{{center,carrier?0u:1u}};
@@ -335,16 +462,26 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         if(historical && !ds.count(et::uint(*historical,"d")))ds[et::uint(*historical,"d")]=2;
         for(const auto &entry:ds) {
             auto shape=portable_shape(o,r,o.b2,entry.first,carrier);pt::Work w;std::string plan;
-            if(!engine.cached_work(shape,w) || w.p<512 || !w.exact_topology || !portable_admit(o,r,shape,plan))continue;
+            if(!engine.cached_work(shape,w) || w.p<512 || !w.exact_topology || !portable_runtime_admit(o,r,shape,plan))continue;
             const auto stats=engine.runtime_statistics(shape);
             candidates.push_back({shape,stats,entry.second,entry.first==center || (o.has_d && o.d)});
             if(entry.first==center) {references.push_back(shape);references_ready&=stats.count>=2;}
         }
+        candidate_seconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-candidate_start).count();
+    }
+    const auto search_start=std::chrono::steady_clock::now();
+    pt::RuntimePauseHints outgoing;std::string pause_context;
+    if(references_ready && o.tune_runtime && o.runtime_prepare_cache && (!o.runtime_remaining || o.runtime_remaining>=4)) {
+        std::ostringstream context;context<<"runtime-pause-v1 "<<ecm_program::version<<' '<<o.runtime_samples<<' '
+            <<o.tune_ignore<<' '<<r.n<<' '<<r.b1<<' '<<o.b2<<'\n'<<portable_fields_json(engine.condition)<<'\n'
+            <<ecm_stage2::sha256_text(engine.profile.serialize());
+        pause_context=context.str();
     }
     if(references_ready)for(const auto &reference:references) {
-        const auto search=portable_runtime_search(o,r,reference,engine,predictor,candidates);
+        const auto search=portable_runtime_search(o,r,reference,engine,predictor,candidates,pause_context,outgoing);
         if(!search.empty())searches.push_back(search);
     }
+    search_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-search_start).count();
     const auto choice=pt::runtime_choice(candidates,o.tune_runtime);if(!choice.available)return {};
     const auto &chosen=candidates[choice.index];const auto &shape=chosen.shape;
     o.d=shape.d;o.carrier_exponent=shape.carrier;o.runtime_probe=choice.probe;
@@ -368,6 +505,13 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
         out<<'}';
     }
     out<<"],\"runtime_search\":[";for(size_t i=0;i<searches.size();++i){if(i)out<<',';out<<searches[i];}out<<']';
+    out<<",\"runtime_prepare_hints\":"<<json_string(outgoing.text());
+    out<<",\"runtime_prepare\":{\"default_seconds\":"<<default_seconds<<",\"candidate_seconds\":"<<candidate_seconds
+        <<",\"search_seconds\":"<<search_seconds<<",\"native_plan_seconds\":"<<plan_metrics.seconds
+        <<",\"native_plan_calls\":"<<plan_metrics.calls<<",\"plan_cache_hits\":"<<plan_metrics.cache_hits
+        <<",\"route_cache_hits\":"<<plan_metrics.route_hits
+        <<",\"distinct_D_carrier\":"<<plan_metrics.d_carriers.size()
+        <<",\"total_seconds\":"<<std::chrono::duration<double>(std::chrono::steady_clock::now()-prepare_start).count()<<'}';
     return out.str()+'}';
 }
 std::string portable_width_select(Options &o,const Record &r) {

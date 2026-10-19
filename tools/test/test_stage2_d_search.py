@@ -33,7 +33,7 @@ def main():
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
     report = json.loads(result.stdout)
-    sources = ['src/core/ecm_stage2_d_search.h', 'src/core/ecm_stage2_runtime_tune.h',
+    sources = ['src/core/ecm_stage2_d_search.h', 'src/core/ecm_stage2_runtime_tune.h', 'src/core/ecm_stage2_runtime_cache.h',
                'src/core/ecm_stage2_tune_portable.h', 'tools/test/stage2_d_search_fixture.cpp',
                'tools/test/test_stage2_d_search.py']
     report['sources'] = {}
