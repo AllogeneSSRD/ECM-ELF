@@ -122,6 +122,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/core/ecm_gpu_common.cpp
     src/core/ecm_queue_config.cpp
     src/core/ecm_worktodo.cpp
+    src/core/ecm_stage2_transfer.cpp
     src/core/ecm_expr.cpp
     src/core/p95_transfer.cpp
     src/core/p95_worktodo.cpp

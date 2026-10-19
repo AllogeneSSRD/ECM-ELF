@@ -34,6 +34,17 @@ if(MSVC)
 endif()
 ecm_tool_output_root(worktodo_sections_test)
 
+add_executable(stage2_transfer_test
+    stage2_transfer_test.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/ecm_stage2_transfer.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/ecm_worktodo.cpp)
+target_include_directories(stage2_transfer_test PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
+ecm_target_link_gmp(stage2_transfer_test)
+if(MSVC)
+    target_compile_options(stage2_transfer_test PRIVATE /utf-8)
+endif()
+ecm_tool_output_root(stage2_transfer_test)
+
 add_executable(main
     ${CMAKE_SOURCE_DIR}/src/cl_probe.cpp
     ${CMAKE_SOURCE_DIR}/src/main_test.cpp

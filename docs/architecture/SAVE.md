@@ -178,7 +178,7 @@ Stage1 批次锁防止同名 checkpoint 的并发写入，**没有独立的跨�
 | Montgomery PARAM0 | 支持 | 该入口只读 Edwards | 支持相应 Suyama 记录 | 以 PARAM0 解释 |
 | Montgomery PARAM2 | 当前读取器拒绝 | 不支持 | Stage1 不自动交接 | 格式面向 PARAM2 读取器 |
 | Montgomery PARAM3 | 当前读取器拒绝 | 不支持 | Stage1 允许交接；含新因子改写见4.3 | 格式面向 PARAM3 读取器；同样须注意4.3 |
-| Edwards AM VERSION=1 | 支持，重建对应曲线常数 | 支持专用协议，交给 GW/libecm 后端 | Stage1 不自动交接该文本 | 自定义 METHOD，不能当作普通 PARAM0 文本直接导入 |
+| Edwards AM VERSION=1 | 支持，重建对应曲线常数；可选本地队列交接 | 支持专用协议，交给 GW/libecm 后端 | Stage1 不向 Prime95 自动交接该文本 | 自定义 METHOD，不能当作普通 PARAM0 文本直接导入 |
 | Stage1 私有二进制 checkpoint | 拒绝 | 专用文本入口不接受 | 不是交换 save | 不支持直接交换 |
 
 “Stage1 能生成”不等于“本仓库 CUDA Stage2 能消费所有 param”。消费者按内容检查，不靠文件名前缀放宽能力。
@@ -204,6 +204,8 @@ Stage1 批次锁防止同名 checkpoint 的并发写入，**没有独立的跨�
 保存成功后会按配置同步扫描目录中的 `.save`，再交付任务行；增量同步包含与启动标记同一秒写出的文件。不能由此推断所有任意父目录的显式路径都会被扫描；绝对 save 路径和消费者可访问位置需按实际配置安排。同步和交付不是同一个原子事务。
 
 交付失败不回滚完成的 Stage1，任务进入 pending 交付状态供后续重试；不直接改写 Prime95 活动 worktodo.txt。结果/AID/重复交付策略见[Stage1 使用](../usage/STAGE1.md#检查点与交接)和 [ECM 结果输出](../usage/ECM_RESULTS.md)。
+
+Edwards 的本地 Stage2 队列交接由 `edwards_stage2_transfer` 独立控制，不使用 Prime95 `worktodo.add`。完成 save 发布后先记录待投递行，再将原任务移入 Stage1 finished；交付时将实际 save 的绝对路径写入接收 worker 的 `stage2_worktodo` 分区。队列追加和 Stage2 移除任务共用短时编辑锁；重试前检查活动队列及 Stage2 finished 中的完成行或输入错误回执，避免在队列发布后、待投递记录清除前崩溃导致重复交付。接收 worker 的选择和 B2 要求见 [Stage1 使用](../usage/STAGE1.md#检查点与交接)。
 
 来源：[队列完成与交接](../../src/core/ecm_driver.cpp#L3236)、[按实际构造启用交接](../../src/core/ecm_driver.cpp#L3431)、[save 同步](../../src/core/ecm_worktodo.cpp#L645)、[交付器](../../src/core/p95_transfer.h)。
 

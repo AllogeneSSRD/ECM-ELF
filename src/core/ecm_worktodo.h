@@ -43,6 +43,7 @@ struct Ecm2Task {
     unsigned long n = 0;          // exponent
     double B1 = 0.0;
     double B2 = 0.0;
+    std::string b2_text = "0";   // original valid token for exact Stage2 handoff
     uint32_t curves_to_run = 0;
     bool has_sigma = false;
     uint64_t sigma = 0;           // optional specific sigma (64-bit)
@@ -127,6 +128,12 @@ bool ecm_worktodo_list_workers(const std::string &path, std::vector<uint32_t> &w
 
 // Append one line (with trailing newline) to `path`, creating parent dirs.
 bool ecm_append_text_line(const std::string &path, const std::string &line);
+
+// Atomically add one Stage2 assignment to a worker section. The queue edit is
+// serialized with ecm_worktodo_advance; an active or finished identical line
+// counts as already delivered, which makes pending-file replay idempotent.
+bool ecm_worktodo_append_unique(const std::string &path, const std::string &finished,
+                                int worker, const std::string &line, std::string &err);
 
 // Copy *.save files from `dir` into `sync_dir_1` and `sync_dir_2` (empty dirs
 // are skipped). With `full` every *.save is copied; otherwise only files whose

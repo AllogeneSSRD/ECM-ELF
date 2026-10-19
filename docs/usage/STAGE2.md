@@ -57,6 +57,8 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 Stage2 使用独立的 `stage2_worktodo`、`stage2_finished`、`stage2_results_file`、`stage2_submission_file`、`stage2_log_file`、`stage2_progress_dir` 和 `stage2_debug_log_file`。进度目录空值使用队列目录；显式设置旧 `stage2_progress_file` 时使用其父目录，并仅将该文件作为旧进度导入来源。save 目录空值继承 `tmp_dir`，设备未指定时继承共享 `device`。多 worker 的显式输出路径须自行区分；未指定的部分输出自动添加 worker 后缀。相同任务的进度另有独占锁，防止不同队列重复消费。
 
+Edwards Stage1 可通过 `edwards_stage2_transfer=1` 在完成队列任务后自动向本队列投递 `ECMSTAGE2` 行。Stage2 接收 worker 默认与 Stage1 同编号，可由 `edwards_stage2_worker` 指定其他编号；具体完成顺序、pending 恢复和 save 路径见 [Stage1 交接](STAGE1.md#检查点与交接)。此设置不启动 Stage2 进程。Edwards 任务必须在投递行或接收端 `stage2_b2` 中给出大于 B1 的 B2。
+
 Stage2 INI 相对路径基于 INI 目录，CLI 相对路径基于当前工作目录；Stage1 保持其 exe 目录规则。共用 INI 推荐与两个 exe 放在同一目录。只将 `[Worker #N]` 用作命令行覆盖范围；模板的普通分组用注释，GUI 的真实分区规则见 [配置维护](../architecture/CONFIGURATION.md)。
 
 GUI可用`[Worker #N] stage=stage1|stage2`在同一INI中管理混合阶段，默认阶段由`[GUI] stage`提供。共享配置和GUI分区放在worker分区之前；Stage2队列内的worker编号须与启动参数一致，没有标题的任务只归worker 1。GUI的独立切换、生成器目标及停止方式见[GUI说明](GUI.md#worker-与配置)。

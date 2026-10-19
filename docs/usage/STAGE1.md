@@ -73,13 +73,17 @@ Ctrl+C、Ctrl+Break 或 GUI 的正常停止请求会在当前后端的下一个�
 
 最终多曲线 save、内部 JSONL 和提交 JSON 均成功发布后才删除检查点。写入失败时保留批次状态和原队列任务；恢复发布不会重复增加数学工作回执或重复追加相同 save 记录。内部与提交文件的配置、字段和校验见 [ECM 结果输出](ECM_RESULTS.md)。
 
-Prime95 交接资格按每条任务应用文件名前缀后的实际曲线判断。Edwards 与 GPU Montgomery PARAM2 自动忽略配置的 Prime95 转移路径，仅输出说明，不访问该路径或转移账本。受支持的 Montgomery PARAM0/3 可将 save 同步并向 Prime95 `worktodo.add` 追加任务，save 字段指向实际输出文件；失败交付进入 pending 文件，后续重试。不要由两个程序共同改写 Prime95 活动 `worktodo.txt`。Edwards 文本 save 由本仓库 CPU/CUDA Stage2 消费。
+Prime95 交接资格按每条任务应用文件名前缀后的实际曲线判断。Edwards 与 GPU Montgomery PARAM2 自动忽略配置的 Prime95 转移路径，仅输出说明，不访问该路径或转移账本。受支持的 Montgomery PARAM0/3 可将 save 同步并向 Prime95 `worktodo.add` 追加任务，save 字段指向实际输出文件；失败交付进入 pending 文件，后续重试。不要由两个程序共同改写 Prime95 活动 `worktodo.txt`。
+
+设置 `edwards_stage2_transfer=1` 后，Stage1 将已完成的 Edwards `ECM=`/`ECM2=` 或 `ECMSTAGE2=` 任务投递到本仓库 Stage2 的 `stage2_worktodo`。`edwards_stage2_worker=0`（默认）沿用 Stage1 的 worker 编号；设置正整数时，读取该接收 worker 的 `stage2_worktodo`、`stage2_finished` 配置，并写入对应的 `[Worker #N]` 分区。Stage1 finished 沿用原有记录规则：`ECM=`/`ECM2=` 保留原行，`ECMSTAGE2=` 在补全 save 类型前缀后记录；投递行使用实际 save 的绝对路径。`ECM=`/`ECM2=` 转成 `ECMSTAGE2=`，保留目标数、AID、B2、曲线数及已知因子，并用 save 中已有非注释记录数作为 skip，与 Stage2 的记录索引一致；原本是 `ECMSTAGE2=` 的行则保留其 B2、skip、曲线数等字段。Edwards Stage2 需要显式 B2：任务中的 B2 为 0 时，应在接收端配置有效的 `stage2_b2`。
+
+投递前先将记录写入 Stage1 队列旁的 `.stage2_pending_workerN` 文件；目标队列不可写时，Stage1 仍完成当前任务，保留待投递记录，并在下次启动时重试。重试时若相同任务已在 Stage2 活动队列或完成记录中，不再重复入队。Stage1 与 Stage2 使用各自队列；交接只负责入队，Stage2 worker 仍需独立运行。关闭交接开关后，已有待投递记录仍会在 Stage1 下次启动时重试。
 
 ## 算法与构建范围
 
 CUDA 默认路径为 ladder。resident/PRAC 必须在构建时启用，再显式选择；发布入口默认不编译这些实验模块。TPI 和寄存器实验的适用条件见 [Stage1 实现](../architecture/STAGE1.md) 与 [性能](../performance/STAGE1.md)。
 
-本程序与 Stage2 仍为两个独立可执行文件。自动串接两阶段、统一消费策略属于 [TODO](../TODO.md)，不能由共用 INI 推断为已经实现。
+本程序与 Stage2 仍为两个独立可执行文件。Edwards 队列交接只在显式开启时入队，不自动启动 Stage2；其他曲线和统一消费策略见 [TODO](../TODO.md)。
 
 ## 代码入口
 

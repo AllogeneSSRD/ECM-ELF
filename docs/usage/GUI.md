@@ -6,7 +6,7 @@
 
 ## Worker 与配置
 
-一个worker对应一个计算进程，并有独立输出窗口和进程监管。Stage1使用`ecm_cuda.exe -ini <file> --worker N`；Stage2使用`ecm_cuda_stage2.exe --ini <file> --worker N`。INI/worktodo的`[Worker #N]`使用同一编号。同一个GUI可以同时管理不同阶段的worker，各自使用同一INI中的计算设置和自己的编号。阶段切换不自动启动计算，也不自动串接两个队列。
+一个worker对应一个计算进程，并有独立输出窗口和进程监管。Stage1使用`ecm_cuda.exe -ini <file> --worker N`；Stage2使用`ecm_cuda_stage2.exe --ini <file> --worker N`。INI/worktodo的`[Worker #N]`使用同一编号。同一个GUI可以同时管理不同阶段的worker，各自使用同一INI中的计算设置和自己的编号。阶段切换不自动启动计算；显式启用 `edwards_stage2_transfer` 时，Stage1 完成 Edwards 队列任务后可向 Stage2 队列投递，接收 worker 仍需单独启动。
 
 Worker管理顶部设置默认阶段、worker数量、两个阶段的程序路径和共用INI。`[GUI] stage=[auto|stage1|stage2]`默认auto；auto识别明确命名的Stage2程序，其他情况下优先可用Stage1，再回退Stage2。`[Worker #N] stage=[auto|stage1|stage2]`覆盖默认阶段；auto继承GUI默认值。每行显示实际阶段，星号表示继承默认值。只需停止要修改的worker，即可在其行尾切换阶段；其他worker保持运行和进度。修改默认阶段、worker数量、共享程序或INI须全部worker停止。
 

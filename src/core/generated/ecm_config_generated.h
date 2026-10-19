@@ -13,6 +13,8 @@ inline constexpr char stage1_save_sync_dir_1[]="";
 inline constexpr char stage1_save_sync_dir_2[]="";
 inline constexpr char stage1_sync_mode[]="incremental";
 inline constexpr char stage1_p95_worktodo_path[]="";
+inline constexpr bool stage1_edwards_stage2_transfer=false;
+inline constexpr int stage1_edwards_stage2_worker=0;
 inline constexpr char stage1_p95_add_workers[]="";
 inline constexpr bool stage1_p95_keep_aid=true;
 inline constexpr bool stage1_p95_recover_lost=true;
@@ -178,6 +180,8 @@ struct Stage1Values {
     std::string save_sync_dir_2="";
     std::string sync_mode="incremental";
     std::string p95_worktodo_path="";
+    bool edwards_stage2_transfer=false;
+    int edwards_stage2_worker=0;
     std::string p95_add_workers="";
     bool p95_keep_aid=true;
     bool p95_recover_lost=true;
@@ -224,6 +228,8 @@ inline const Binding<Stage1Values> stage1_bindings[]={
     {"save_sync_dir_2",[](Stage1Values&c,const std::string&v){legacy_assign(c.save_sync_dir_2,v);},false,nullptr},
     {"sync_mode",[](Stage1Values&c,const std::string&v){legacy_assign(c.sync_mode,v);},false,nullptr},
     {"p95_worktodo_path",[](Stage1Values&c,const std::string&v){legacy_assign(c.p95_worktodo_path,v);},false,nullptr},
+    {"edwards_stage2_transfer",[](Stage1Values&c,const std::string&v){legacy_assign(c.edwards_stage2_transfer,v);},false,nullptr},
+    {"edwards_stage2_worker",[](Stage1Values&c,const std::string&v){legacy_assign(c.edwards_stage2_worker,v);},false,nullptr},
     {"p95_add_workers",[](Stage1Values&c,const std::string&v){legacy_assign(c.p95_add_workers,v);},false,nullptr},
     {"p95_keep_aid",[](Stage1Values&c,const std::string&v){legacy_assign(c.p95_keep_aid,v);},false,nullptr},
     {"p95_recover_lost",[](Stage1Values&c,const std::string&v){legacy_assign(c.p95_recover_lost,v);},false,nullptr},

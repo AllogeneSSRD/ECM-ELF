@@ -138,6 +138,30 @@ path and keep saves local; they do not access Prime95 transfer files.<br>
 用于受支持的 Montgomery Stage1 交接的 Prime95 worktodo 路径。Edwards 与 GPU PARAM2 自动忽略此路径，<br>
 存档保留在本地，不访问 Prime95 转移文件。
 
+### edwards_stage2_transfer
+
+```text
+edwards_stage2_transfer=[0|1]; default=0
+```
+
+When enabled, a completed Edwards Stage1 worktodo assignment is converted to ECMSTAGE2 and delivered<br>
+to the receiving worker's stage2_worktodo. Published saves use absolute paths; failed delivery<br>
+remains pending for retry. Montgomery assignments are unaffected.<br>
+启用后，将已完成的 Edwards Stage1 队列任务转换为 ECMSTAGE2，投递到接收 worker 的 stage2_worktodo。发<br>
+布的 save 使用绝对路径；投递失败时保留待投递记录以便重试。Montgomery 任务不受影响。
+
+### edwards_stage2_worker
+
+```text
+edwards_stage2_worker=[0|1..1000000]; default=0
+```
+
+Receiving Stage2 worker when edwards_stage2_transfer=1. Zero uses the current Stage1 worker number;<br>
+a positive value selects that worker's stage2_worktodo and stage2_finished settings and queue<br>
+section.<br>
+edwards_stage2_transfer=1 时的 Stage2 接收 worker。0 沿用当前 Stage1 worker 编号；正数选择该 worker<br>
+的 stage2_worktodo、stage2_finished 配置及队列分区。
+
 ### p95_add_workers
 
 ```text

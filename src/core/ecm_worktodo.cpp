@@ -7,12 +7,17 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
+#include <thread>
+#include <chrono>
 #include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -327,6 +332,7 @@ bool ecm_parse_ecm2_line(const std::string &line, Ecm2Task &task, std::string &e
             const double v = std::strtod(b2str.c_str(), &end);
             if (end != b2str.c_str() && *end == '\0' && v >= 0.0) {
                 task.B2 = v;
+                task.b2_text = b2str;
             }
         }
         ++p;
@@ -498,6 +504,44 @@ bool worker_matches(int section, int worker) {
     return worker <= 0 || section == worker;
 }
 
+struct QueueEditLock {
+#ifdef _WIN32
+    HANDLE handle = INVALID_HANDLE_VALUE;
+#else
+    int fd = -1;
+#endif
+    explicit QueueEditLock(const std::string &path) {
+        const std::string name = path + ".edit.lock";
+        for (int attempt = 0; attempt < 100; ++attempt) {
+#ifdef _WIN32
+            const std::wstring wide = utf8_to_wide(name);
+            handle = CreateFileW(wide.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                 OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (handle != INVALID_HANDLE_VALUE) break;
+#else
+            fd = open(name.c_str(), O_CREAT | O_RDWR, 0666);
+            if (fd >= 0 && flock(fd, LOCK_EX | LOCK_NB) == 0) break;
+            if (fd >= 0) { close(fd); fd = -1; }
+#endif
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+    bool valid() const {
+#ifdef _WIN32
+        return handle != INVALID_HANDLE_VALUE;
+#else
+        return fd >= 0;
+#endif
+    }
+    ~QueueEditLock() {
+#ifdef _WIN32
+        if (valid()) CloseHandle(handle);
+#else
+        if (valid()) { flock(fd, LOCK_UN); close(fd); }
+#endif
+    }
+};
+
 } // namespace
 
 bool ecm_worktodo_first_line(const std::string &path, std::string &line) {
@@ -548,6 +592,8 @@ bool ecm_worktodo_advance(const std::string &path, const std::string &first_line
 
 bool ecm_worktodo_advance(const std::string &path, int worker, const std::string &first_line,
                           WorktodoAction action) {
+    QueueEditLock lock(path);
+    if (!lock.valid()) return false;
     std::ifstream in(path);
     if (!in.is_open()) {
         return false;
@@ -640,6 +686,63 @@ bool ecm_append_text_line(const std::string &path, const std::string &line) {
     }
     out << line << "\n";
     return !out.fail();
+}
+
+bool ecm_worktodo_append_unique(const std::string &path, const std::string &finished,
+                                int worker, const std::string &line, std::string &err) {
+    err.clear();
+    if (worker < 1 || worker > 1000000 || line.empty() || line.find_first_of("\r\n") != std::string::npos) {
+        err = "invalid Stage2 transfer worker or line";
+        return false;
+    }
+    std::error_code ec;
+    const auto parent = std::filesystem::path(path).parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent, ec);
+    if (ec) { err = "cannot create Stage2 queue directory: " + ec.message(); return false; }
+    QueueEditLock lock(path);
+    if (!lock.valid()) { err = "cannot lock Stage2 queue: " + path; return false; }
+
+    auto read_lines = [&](const std::string &name, std::vector<std::string> &lines) -> bool {
+        ec.clear();
+        const bool exists = std::filesystem::exists(name, ec);
+        if (ec) return false;
+        if (!exists) return true;
+        std::ifstream in(name, std::ios::binary);
+        if (!in) return false;
+        std::string raw;
+        while (std::getline(in, raw)) lines.push_back(raw);
+        return !in.bad();
+    };
+    std::vector<std::string> lines, done;
+    if (!read_lines(path, lines) || !read_lines(finished, done)) {
+        err = "cannot read Stage2 queue or finished record";
+        return false;
+    }
+    auto same = [&](const std::string &raw) {
+        std::string value = raw;
+        strip_bom(value); trim(value);
+        return value == line;
+    };
+    auto same_done = [&](const std::string &raw) {
+        if (same(raw)) return true;
+        std::string value = raw;
+        strip_bom(value); trim(value);
+        return value == "# " + line; // Stage2 invalid-input receipt
+    };
+    if (std::any_of(lines.begin(), lines.end(), same) || std::any_of(done.begin(), done.end(), same_done))
+        return true;
+    lines.push_back("[Worker #" + std::to_string(worker) + "]");
+    lines.push_back(line);
+    const std::string tmp = path + ".transfer.tmp";
+    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    if (!out) { err = "cannot write Stage2 queue temp file"; return false; }
+    for (const auto &raw : lines) out << raw << '\n';
+    out.close();
+    if (!out || !replace_file(tmp, path)) {
+        err = "cannot publish Stage2 queue";
+        return false;
+    }
+    return true;
 }
 
 void ecm_sync_save_files(const std::string &dir, const std::string &sync_dir_1,

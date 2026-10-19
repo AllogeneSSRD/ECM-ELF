@@ -138,6 +138,7 @@ static void test_first_line_and_advance() {
           "sectionless file: worker 1 reads the plain line", line);
 
     std::remove(path.c_str());
+    std::remove((path + ".edit.lock").c_str());
     check(ecm_worktodo_read_first_line(path, 1, line, err) == WorktodoReadResult::Error &&
               line.empty() && !err.empty(),
           "shared reader distinguishes a missing worktodo from an empty queue");
@@ -166,6 +167,7 @@ static void test_list_workers() {
     check(!ecm_worktodo_list_workers("does_not_exist.tmp", workers, err) && !err.empty(),
           "missing file -> false + error text");
     std::remove(path.c_str());
+    std::remove((path + ".edit.lock").c_str());
 }
 
 int main() {
