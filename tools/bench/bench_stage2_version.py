@@ -5,7 +5,9 @@ ordinary/carrier runs kept separate. Identity uses version numbers and frozen
 files; result checksums and mandatory arithmetic verification remain enabled.
 """
 import argparse
+import csv
 from datetime import datetime, timezone
+import io
 import json
 import os
 from pathlib import Path
@@ -34,6 +36,23 @@ def write(path, value):
 
 def stamp():
     return datetime.now(timezone.utc).isoformat()
+
+
+def foreign_gpu_processes(rows, uuid, workspace):
+    prefix = os.path.normcase(str(Path(workspace).resolve())) + os.sep
+    return [r for r in rows if r['gpu_uuid'].strip() == uuid and
+            not os.path.normcase(os.path.abspath(r['process_name'].strip())).startswith(prefix)]
+
+
+def check_gpu_processes(monitor, workspace, evidence, allow_shared=False):
+    text = subprocess.check_output(['nvidia-smi', '--query-compute-apps=gpu_uuid,pid,process_name',
+                                    '--format=csv'], text=True, encoding='utf-8', errors='replace')
+    rows = list(csv.DictReader(io.StringIO(text), skipinitialspace=True))
+    foreign = foreign_gpu_processes(rows, monitor.identity['uuid'], workspace)
+    write(evidence, dict(utc=stamp(), uuid=monitor.identity['uuid'], processes=rows, foreign=foreign,
+                         shared_allowed=allow_shared))
+    if foreign and not allow_shared:
+        raise RuntimeError('Another process uses the measured GPU; retained process snapshot: ' + str(evidence))
 
 
 def without_digests(value):
@@ -86,7 +105,9 @@ def prepare(args, out):
             primary='stage2_full_wall.total=init+main; includes mandatory checks and GCD',
             process='launch through observed exit; polling interval 0.25 seconds',
             excluded='Stage1, process startup, outer selection and preflight point checks',
-            settings='GPU1 only, no power/clock/priority changes; no concurrent task-owned compilation'))
+            settings='GPU1 only, no power/clock/priority changes; no concurrent task-owned compilation',
+            gpu_process_checks='Before/after each invocation, reject foreign contexts on the selected UUID; snapshots do not cover every instant',
+            shared_device_allowed=args.allow_shared_device))
     write(out/'plan.json', report)
     return report
 
@@ -143,6 +164,7 @@ def run(args):
                     for factor in case['known']:
                         command += ['--known-factor', str(factor)]
                     print('RUN', len(report['runs'])+1, '/', 26*2*report['repeats'], tag, flush=True)
+                    check_gpu_processes(monitor, out, prefix.with_suffix('.processes_before.json'), args.allow_shared_device)
                     started = stamp()
                     start = time.perf_counter()
                     observations = []
@@ -155,6 +177,7 @@ def run(args):
                             time.sleep(.25)
                     wall = time.perf_counter()-start
                     write(prefix.with_suffix('.telemetry.json'), observations)
+                    check_gpu_processes(monitor, out, prefix.with_suffix('.processes_after.json'), args.allow_shared_device)
                     if process.returncode:
                         raise ValueError('Worker failed: '+tag)
                     result = normalize_result(load(prefix.with_suffix('.jsonl')))
@@ -214,6 +237,7 @@ if __name__=='__main__':
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--max-runs',type=int,default=0)
     parser.add_argument('--timeout',type=float,default=7200)
+    parser.add_argument('--allow-shared-device',action='store_true',help='Explicitly allow other processes on the measured GPU; timings may be contended')
     args=parser.parse_args()
     if not args.resume and not (args.exe and args.reference):
         parser.error('New study needs --exe and --reference')

@@ -6,15 +6,17 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'bench'))
-from bench_stage2_version import load, validate
+from bench_stage2_version import foreign_gpu_processes, load, validate
 from bench_stage2_n_scaling import fields, number
 from result_format import normalize_result
 
 
-def audit(study):
+def audit(study, expected_repeats=3):
     plan = load(study/'plan.json')
-    if not plan['complete'] or plan['failures'] or plan['repeats'] != 3:
-        raise ValueError('Need a complete, failure-free three-repeat matrix')
+    if expected_repeats < 1 or not isinstance(expected_repeats, int):
+        raise ValueError('Expected repeats must be a positive integer')
+    if not plan['complete'] or plan['failures'] or plan['repeats'] != expected_repeats:
+        raise ValueError('Need a complete, failure-free matrix with the explicitly expected repeat count')
     if plan['device'] != 1 or len(plan['cases']) != 13:
         raise ValueError('Wrong device or input scope')
     cases = {c['id']: c for c in plan['cases']}
@@ -46,13 +48,13 @@ def audit(study):
             raise ValueError('Missing or duplicate reference bound')
         for ref in matched:
             for mode in ('gpu', 'gpu-carrier'):
-                for repeat in range(1,4):
+                for repeat in range(1,expected_repeats+1):
                     expected.add(f'{case["id"]}_b{ref["b2"]}_{mode}_r{repeat}')
     ids = Counter(r['id'] for r in plan['runs'])
-    if set(ids) != expected or any(n != 1 for n in ids.values()) or len(expected) != 156:
+    if set(ids) != expected or any(n != 1 for n in ids.values()) or len(expected) != 52*expected_repeats:
         raise ValueError('Missing, duplicate or extra invocation')
     checked = selftests = 0
-    geometries = {}
+    geometries = {}; process_snapshots = 0; selected_uuid = None
     for run in plan['runs']:
         case = cases[run['case']]
         if run['id'] != f'{case["id"]}_b{run["B2"]}_{run["engine"]}_r{run["repeat"]}':
@@ -126,11 +128,25 @@ def audit(study):
                 raise ValueError('Invocation setting differs')
         if not load(prefix.with_suffix('.telemetry.json')):
             raise ValueError('Missing device observations')
+        if plan.get('protocol', {}).get('gpu_process_checks'):
+            for suffix in ('.processes_before.json', '.processes_after.json'):
+                snapshot = load(prefix.with_suffix(suffix))
+                uuid = snapshot['uuid']
+                if selected_uuid is not None and uuid != selected_uuid:
+                    raise ValueError('Measured GPU UUID changed')
+                selected_uuid = uuid
+                if snapshot['shared_allowed'] != plan['protocol']['shared_device_allowed']:
+                    raise ValueError('GPU sharing protocol differs')
+                foreign = foreign_gpu_processes(snapshot['processes'], uuid, study)
+                if foreign != snapshot['foreign'] or (foreign and not snapshot['shared_allowed']):
+                    raise ValueError('Foreign GPU context in a retained process snapshot')
+                process_snapshots += 1
         checked += int(s4['gmp_checked'])
         selftests += int(s4['gmp_selftest_cases'])
     return dict(complete=True, program_version=plan['program_version'], invocations=len(ids),
-                conditions=len(geometries), input_saves=len(cases), gmp_checked=checked,
+                conditions=len(geometries), repeats=expected_repeats, input_saves=len(cases), gmp_checked=checked,
                 gmp_selftest_cases=selftests, arithmetic_errors=0,
+                gpu_process_snapshots=process_snapshots,
                 scope='Full NF measurements; sampled GMP arithmetic checks, not an independent full-leaf oracle')
 
 
@@ -138,7 +154,9 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--study',type=Path,required=True)
     p.add_argument('--output',type=Path)
-    a=p.parse_args(); report=audit(a.study)
+    p.add_argument('--expected-repeats',type=int,default=3,
+                   help='Explicit expected samples per cell; default 3, use 1 for an authorized screening matrix')
+    a=p.parse_args(); report=audit(a.study,a.expected_repeats)
     if a.output:
         a.output.write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(report,indent=2))

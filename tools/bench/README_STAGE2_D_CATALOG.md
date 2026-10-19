@@ -71,6 +71,18 @@ python tools/bench/analyze_stage2_d_catalog.py `
 
 `test_stage2_d_search_default_plans.py --exe <EXE> --reference <完整52格基准目录> --output data/experiments/<新目录>`逐格比较无tune的D/P，要求`curves_executed=0`。计划一致仍需结合已有完整曲线采集器验证性能。
 
+完整曲线使用`bench_stage2_version.py`。`compare_stage2_d_search.py`分别审计两份完整矩阵并核对精确N/save、B1、sigma、B2和算术路径，输出逐格CSV、统计JSON及可选图。默认旧矩阵每格三次、新筛查每格一次，图注和统计保留两侧样本数；可用`--baseline-repeats`、`--candidate-repeats`显式修改，不从数据自动降低期望次数。
+
+```powershell
+python tools/bench/compare_stage2_d_search.py `
+  --baseline data/experiments/stage2_v0_38_4_20261018/full_matrix `
+  --candidate data/experiments/stage2_d_search_implementation_20261019/default_matrix_serial02 `
+  --output data/benchmarks/stage2_d_search_0_39_0/default01 `
+  --figures data/figures/stage2_d_search_0_39_0/default01
+```
+
+主指标为52格引擎完整时间的逐格中位数之和；n=1一侧就是原值。总耗时不增加才满足矩阵数值门槛；同时变慢超过5%和0.25秒的格另行交替A/B复测，可用`--retest-relative`、`--retest-seconds`指定预先约定的筛查门限。该门限只生成复测清单，不删除样本、不自动判定回退来源，也不替代矩阵总耗时要求。图中正值表示变慢，阴影为观测范围组合，不是置信区间。不同会话的温度和后台负载仍可能不同，不能由该图直接归因到D搜索改动。
+
 ## 压缩候选表提议生成
 
 `compress_stage2_d_catalog.py`从指定的冻结候选头文件提取字面量，以保护集合、几何包络、NTT/树边界及默认owner布局的预算边界产生提议。不会改写生产头文件。`--protect-profile`仅采用干净且有正式重复的实测记录；`--protect-analysis`要求完整、零失败的矩阵。它们可重复指定。
