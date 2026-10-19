@@ -92,7 +92,7 @@ def main():
             '--auto-min-b2','100000000','--auto-max-b2','100000000','--stage1-seconds-per-curve','1',
             '--d','30030','--carrier-exponent','0','--plan-only'])
         auto_rows=[json.loads(s) for s in text.splitlines() if s.startswith('{')]
-        assert any(s.get('type')=='tune_selection' and s.get('reason')=='runtime_measured_hysteresis' for s in auto_rows)
+        assert any(s.get('type')=='tune_selection' and s.get('reason')=='runtime_measured_fastest' for s in auto_rows)
         assert sha(profile)==before
     if a.factor_save:
         call('factor',['--save',str(a.factor_save.resolve()),'--curves','1','--b2','100000000','--d','30030',

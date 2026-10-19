@@ -32,7 +32,9 @@ template<class Query> bool ntt_references(Word p,Word points,int bits,Query quer
     out.physical=physical;out.chunk_max=chunk_max;
     for(const auto &block:program.blocks)for(const auto &r:block.requests) {
         Word n=0,slots=0;const Word operand=std::max(r.ma,r.mb);
-        if(!query(operand,bits,&n,&slots) || n<8 || n>(1ull<<27) || (n&(n-1)) || slots!=2*operand-1)return false;
+        // Count every shape accepted by native packing, including lengths
+        // beyond the benchmark grid; missing measurement bins remain explicit.
+        if(!query(operand,bits,&n,&slots) || n<8 || (n&(n-1)) || slots!=2*operand-1)return false;
         Word c=chunk_slices(n,slots,r.pairs,budget,physical?buffers:3,physical);
         if(chunk_max)c=std::min(c,chunk_max);
         for(const auto batch: {std::make_pair(c,r.pairs/c),std::make_pair(r.pairs%c,Word(r.pairs%c!=0))}) {

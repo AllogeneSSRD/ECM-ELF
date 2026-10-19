@@ -23,7 +23,7 @@ struct DSearchStep {
 };
 // A reconstructed, bounded search, shared by production trials and formal tune.
 // No assumption of unimodality, no persistent per-curve search journal, and no
-// authority to adopt a route: the existing measured hysteresis remains separate.
+// authority to adopt a route: production adoption is a separate policy.
 class DSearch {
     const std::vector<DSearchNode> &nodes;
     Word baseline;unsigned repeats,limit,regions;
@@ -46,8 +46,7 @@ public:
         repeats(observations),limit(new_candidates),regions(region_limit) {}
     size_t center()const {
         size_t out=missing();
-        // The geometric centre may follow a small nominal improvement. Adopting
-        // it for production still requires d_search_improves, never this choice.
+        // Centre on the fastest repeated observation, not the model minimum.
         for(size_t i=0;i<nodes.size();++i) {
             const auto &n=nodes[i];if(n.rejected || n.samples<repeats || !(n.seconds>0))continue;
             if(out==missing() || n.seconds<nodes[out].seconds ||
@@ -70,6 +69,46 @@ public:
         std::set<DSearchRegion> seen;
         for(const auto &n:nodes)if(!n.rejected && n.samples>=repeats)seen.insert(n.region);
         auto new_region_allowed=[&](const DSearchNode &n){return seen.count(n.region) || seen.size()<regions;};
+        // An improving edge supplies a measured direction. Extend its last
+        // meaningful P step before considering a new model seed or backfill.
+        // A change in packing/NTT region is admissible here, never a hard wall.
+        // Reconstruct from the measured bracket; no timestamps/journal needed.
+        size_t left=missing(),right=missing();bool d_left=false,d_right=false;
+        for(size_t i=0;i<nodes.size();++i) {
+            const auto &n=nodes[i];
+            if(n.rejected || n.samples<repeats || !(n.seconds>0) || !n.p)continue;
+            // Use the best prior contender, not a closer but slower backfill:
+            // filling a 2% P gap must not erase the last successful 12% step.
+            if(n.p<nodes[c].p && (left==missing() || n.seconds<nodes[left].seconds ||
+                (n.seconds==nodes[left].seconds && n.p>nodes[left].p)))left=i;
+            if(n.p>nodes[c].p && (right==missing() || n.seconds<nodes[right].seconds ||
+                (n.seconds==nodes[right].seconds && n.p<nodes[right].p)))right=i;
+            d_left|=n.d<nodes[c].d;d_right|=n.d>nodes[c].d;
+        }
+        const int direction=left!=missing() && right==missing()?1:
+                            right!=missing() && left==missing()?-1:0;
+        const auto previous=direction>0?left:right;
+        const int d_direction=d_left && !d_right?1:d_right && !d_left?-1:0;
+        if(direction && nodes[c].seconds<nodes[previous].seconds) {
+            const double distance=std::clamp(std::abs(std::log(double(nodes[c].p)/nodes[previous].p)),
+                                            std::log(1.25)/8,std::log(1.25));
+            for(unsigned level=0;level<4;++level) {
+                const double span=distance/double(1u<<level);
+                const auto i=best([&](const DSearchNode &n) {
+                    const double delta=std::log(double(n.p)/nodes[c].p)*direction;
+                    // P is not monotonic in D. When both have an observed edge,
+                    // do not call a reversal of D a forward P continuation.
+                    if((d_direction>0 && n.d<=nodes[c].d) || (d_direction<0 && n.d>=nodes[c].d))return false;
+                    // Old losing regions must not exhaust all forward options.
+                    // Permit one extra region for a measured edge; candidate
+                    // count and engine-time caps still bound the whole search.
+                    return (seen.count(n.region) || seen.size()<regions+1) &&
+                        delta>=span*.65 && delta<=span*1.35;
+                });
+                if(i!=missing() && !nodes[i].samples)
+                    return step(i,"improving_edge",std::exp(direction*span));
+            }
+        }
         const auto seed=best([&](const DSearchNode &n){return new_region_allowed(n);});
         if(seed!=missing() && !nodes[seed].samples)return step(seed,"model_seed");
         auto jump=[&]() {
@@ -80,16 +119,22 @@ public:
         if(used+1>=limit) {const auto i=jump();if(i!=missing())return step(i,"region_restart");}
         for(unsigned level=0;level<4;++level) {
             const double distance=std::log(1.25)/double(1u<<level);
-            for(int direction:{-1,1}) {
+            size_t selected=missing();int selected_direction=0;
+            for(int sign:{-1,1}) {
                 const auto i=best([&](const DSearchNode &n) {
                     if(n.region!=nodes[c].region || n.d==nodes[c].d)return false;
-                    const double delta=std::log(double(n.p)/nodes[c].p)*direction;
+                    const double delta=std::log(double(n.p)/nodes[c].p)*sign;
                     return delta>=distance*.65 && delta<=distance*1.35;
                 });
                 // Pick the representative before checking its sample count:
                 // otherwise every restart would crawl through the same band.
-                if(i!=missing() && !nodes[i].samples)return step(i,level?"refine":"scale",std::exp(direction*distance));
+                if(i!=missing() && !nodes[i].samples && (selected==missing() ||
+                    nodes[i].rank<nodes[selected].rank ||
+                    (nodes[i].rank==nodes[selected].rank && nodes[i].d<nodes[selected].d))) {
+                    selected=i;selected_direction=sign;
+                }
             }
+            if(selected!=missing())return step(selected,level?"refine":"scale",std::exp(selected_direction*distance));
         }
         if(const auto i=jump();i!=missing())return step(i,"region_restart");
         const auto far_candidate=best([&](const DSearchNode &n){return n.region==nodes[c].region &&

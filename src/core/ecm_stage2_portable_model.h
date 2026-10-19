@@ -47,7 +47,9 @@ template<class Query,class NttCost> bool work(const Shape &s,Query query,NttCost
     for(const auto &block:program.blocks)for(const auto &r:block.requests) {
         if(!r.pairs)continue;
         Word n=0,slots=0;const Word operand=std::max(r.ma,r.mb);
-        if(!query(operand,s.arithmetic_bits,&n,&slots) || n<8 || n>(1ull<<27) || slots!=2*operand-1)return false;
+        // The native packing query owns its supported length limit. The NTT
+        // benchmark grid's 2^27 ceiling is not a production geometry limit.
+        if(!query(operand,s.arithmetic_bits,&n,&slots) || n<8 || (n&(n-1)) || slots!=2*operand-1)return false;
         out.largest_ntt=std::max(out.largest_ntt,n);
         out.largest_phase_ntt[r.phase]=std::max(out.largest_phase_ntt[r.phase],n);
         Word c=planned_chunk_slices(n,slots,r.pairs,s.batch_bytes,s.physical?s.buffers:3,s.physical,

@@ -12,6 +12,82 @@ static p::DSearchNode node(unsigned d,unsigned degree,double rank,double seconds
 }
 int main() {
     try {
+        // Production M5351/cofactor4916: an observed 1.90% win must be used,
+        // even when the incumbent has ten samples and narrower dispersion.
+        std::vector<p::RuntimeCandidate> production(2);
+        production[0].shape.d=1141140;production[0].priority=0;
+        production[0].statistics={10,1792332823133745200ull,39.59522408000001,.17348454780529188};
+        production[1].shape.d=1231230;production[1].priority=2;
+        production[1].statistics={2,0,38.841368599999996,.3099226394523714};
+        require(p::runtime_choice(production,false).index==1,"production fastest mean still blocked by adoption hysteresis");
+        // The improved edge must try the next larger P region before filling
+        // smaller-P gaps, rather than treating the NTT boundary as a wall.
+        std::vector<p::DSearchNode> edge{
+            node(1141140,103680,1,39.59522408000001,10),
+            node(1231230,115200,1.01,38.841368599999996,2),
+            node(1089270,108864,1.1),node(1381380,126720,1.2,0,0,1)};
+        auto continuation=p::DSearch(edge,1141140,2,8).next();
+        require(continuation.available && edge[continuation.index].d==1381380,
+            "improving edge turned back instead of crossing the next P/NTT boundary");
+        require(std::string(continuation.reason)=="improving_edge" && continuation.scale>1,
+            "directed continuation has no identifiable reason/direction");
+        auto misleading=edge;misleading.push_back(node(1185030,116640,.9));
+        continuation=p::DSearch(misleading,1141140,2,8).next();
+        require(continuation.available && misleading[continuation.index].d==1381380,
+            "higher P but smaller D was mistaken for continuing the measured D trend");
+        auto backfilled=misleading;backfilled.push_back(node(1108380,112896,1.1,41.02137495,2));
+        continuation=p::DSearch(backfilled,1141140,2,8).next();
+        require(continuation.available && backfilled[continuation.index].d==1381380,
+            "slower backfill shrank the successful forward step to an empty narrow band");
+        auto legacy_regions=edge;
+        legacy_regions.push_back(node(930930,86400,2,45.29672205,2,1));
+        legacy_regions.push_back(node(1018710,105840,2,43.9585362,2,2));
+        legacy_regions[3].region[0]=3;
+        continuation=p::DSearch(legacy_regions,1141140,2,8,3).next();
+        require(continuation.available && legacy_regions[continuation.index].d==1381380,
+            "old losing regions exhausted the single measured-edge boundary allowance");
+        auto bracket=edge;bracket[3].samples=2;bracket[3].seconds=42;
+        continuation=p::DSearch(bracket,1141140,2,8).next();
+        require(continuation.available && bracket[continuation.index].d==1089270 &&
+            std::string(continuation.reason)!="improving_edge","measured uphill edge did not reopen refinement");
+        auto descending=edge;descending[0].seconds=38;descending[2].region[0]=1;
+        descending.push_back(node(1021020,92160,1.3,0,0,1));
+        continuation=p::DSearch(descending,1141140,2,8).next();
+        require(continuation.available && descending[continuation.index].d==1021020 && continuation.scale<1,
+            "measured decreasing-P direction was replaced by a larger-D bias");
+        auto full_regions=legacy_regions;full_regions[4].region[0]=3;
+        full_regions[3].region[0]=4;
+        full_regions.push_back(node(746130,69120,2,53.1207831,2,1));
+        continuation=p::DSearch(full_regions,1141140,2,8,3).next();
+        require(!continuation.available || full_regions[continuation.index].region[0]!=4,
+            "directed continuation exceeded its single additional-region allowance");
+        require(!p::DSearch(edge,1141140,2,1).next().available,"directed continuation ignored the D budget");
+        std::vector<unsigned> production_order{0,1};
+        do {
+            std::vector<p::RuntimeCandidate> permuted;
+            for(auto i:production_order)permuted.push_back(production[i]);
+            const auto chosen=p::runtime_choice(permuted,false);
+            require(chosen.available && permuted[chosen.index].shape.d==1231230,
+                "fastest production route depends on iteration order");
+        }while(std::next_permutation(production_order.begin(),production_order.end()));
+        production[1].statistics.seconds=production[0].statistics.seconds;
+        require(p::runtime_choice(production,false).index==0,"an equal mean displaced the incumbent");
+        production[1].statistics.count=1;production[1].statistics.seconds=1;
+        require(p::runtime_choice(production,false).index==0,"one observation was promoted to a stable route");
+        production[1].statistics.count=2;production[1].statistics.seconds=std::numeric_limits<double>::quiet_NaN();
+        require(p::runtime_choice(production,false).index==0,"nonfinite timing replaced a valid route");
+        p::Shape large;large.target_bits=4916;large.arithmetic_bits=5351;large.carrier=5351;
+        large.mersenne=true;large.b1=260000000;large.b2=1300000000000;large.d=1381380;
+        auto large_query=[](ecm_stage2::Word m,int,ecm_stage2::Word *n,ecm_stage2::Word *slots) {
+            *n=1ull<<28;*slots=2*m-1;return true;
+        };
+        p::Work large_work;
+        require(p::work(large,large_query,[](ecm_stage2::Word,ecm_stage2::Word){return 1.;},large_work) &&
+            large_work.largest_ntt==(1ull<<28),"model rejected a larger NTT already accepted by native packing");
+        ecm_stage2::tune::NttReferences large_reference;
+        require(ecm_stage2::tune::ntt_references(large_work.p,large_work.points,large.arithmetic_bits,
+            large_query,large.batch_bytes,3,false,0,{},large_reference) && large_reference.valid &&
+            !large_reference.complete,"unmeasured long NTT was rejected or falsely marked as measured");
         std::vector<p::DSearchNode> nodes{node(100,1000,100,100,2),node(95,950,90),node(80,800,91)};
         auto step=p::DSearch(nodes,100).next();require(step.available && nodes[step.index].d==95,"model seed not scheduled");
         nodes[1].samples=1;nodes[1].seconds=99;
@@ -69,7 +145,7 @@ int main() {
         routes[1].probe_allowed=true;
         require(p::runtime_choice(routes).probe && !p::runtime_choice(routes,false).probe,"runtime disable no longer suppresses trials");
         routes[1].statistics={2,100,99,1};routes[0].statistics.preferred_order=200;
-        require(p::runtime_choice(routes).index==0,"noisy observation weakened default performance protection");
+        require(p::runtime_choice(routes).index==1,"dispersion vetoed the fastest repeated mean");
         routes[1].statistics={2,100,90,.1};
         require(p::runtime_choice(routes).index==1,"significant measured win was rejected");
         // Replayed production pattern: a newly preferred ordinary route must
@@ -150,6 +226,6 @@ int main() {
         require(!unscoped.put(route,true,memory),"unscoped route proof accepted");
         std::cout<<"{\"complete\":true,\"checks\":"<<checks<<",\"scaled_steps\":true,\"threshold_escape\":true,"
             "\"region_restarts\":true,\"reconstruction\":true,\"candidate_budget\":true,\"extra_time_budget\":true,"
-            "\"unchanged_hysteresis\":true,\"CUDA_calls\":0}\n";
+            "\"runtime_fastest_mean\":true,\"improving_edge\":true,\"CUDA_calls\":0}\n";
     }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -62,33 +62,22 @@ inline RuntimeChoice runtime_choice(const std::vector<RuntimeCandidate> &candida
         }
     }
     if(out.available)return out;
-    Word latest=0;
-    auto fallback=[](unsigned p){return p==1?0u:p+1;};
-    for(size_t i=0;i<candidates.size();++i) {
-        const auto &c=candidates[i];if(c.statistics.count<2)continue;
-        if(!out.available || c.statistics.preferred_order>latest ||
-           (!latest && fallback(c.priority)<fallback(candidates[out.index].priority))) {
-            out={i,true,false};latest=c.statistics.preferred_order;
-        }
-    }
-    if(!out.available)return out;
-    // Keep the successful incumbent when the observed bands overlap. Default D
-    // has no special privilege after a measured path has been established.
-    const auto incumbent=out.index;
+    // Repeated, admitted production observations are ranked by their mean.
+    // Dispersion is diagnostic; it must not veto a measured improvement.
+    // Preserve the actual incumbent only on an exactly equal mean, then use a
+    // full-shape tie break so candidate iteration order never changes the route.
     auto better=[&](size_t a,size_t b) {
         const auto &x=candidates[a],&y=candidates[b];
-        const double upper_x=x.statistics.seconds+2*x.statistics.stddev;
-        const double upper_y=y.statistics.seconds+2*y.statistics.stddev;
-        if(upper_x!=upper_y)return upper_x<upper_y;
         if(x.statistics.seconds!=y.statistics.seconds)return x.statistics.seconds<y.statistics.seconds;
+        if(x.statistics.preferred_order!=y.statistics.preferred_order)
+            return x.statistics.preferred_order>y.statistics.preferred_order;
         return x.shape.key()<y.shape.key();
     };
-    // Intermediate loop entries have never been executed as an incumbent.
-    // Qualify every alternative against the same actual incumbent, then pick
-    // the smallest observed upper bound among the qualified alternatives.
-    for(size_t i=0;i<candidates.size();++i)if(candidates[i].statistics.count>=2 &&
-        LocalSearch::improves(candidates[i].statistics.timing(),candidates[incumbent].statistics.timing()) &&
-        (out.index==incumbent || better(i,out.index)))out.index=i;
+    for(size_t i=0;i<candidates.size();++i) {
+        const auto &s=candidates[i].statistics;
+        if(s.count<2 || !(s.seconds>0) || !std::isfinite(s.seconds))continue;
+        if(!out.available || better(i,out.index))out={i,true,false};
+    }
     return out;
 }
 } } }

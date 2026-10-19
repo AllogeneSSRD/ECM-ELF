@@ -381,6 +381,8 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
     auto budget=pt::runtime_search_budget(nodes,reference.d,o.runtime_samples);
     pt::RuntimeSearchAttempts attempts(nodes.size());auto &native_admissions=attempts.admissions;
     const char *reason="admission_attempt_limit";uint64_t proposed=0;double scale=0;
+    unsigned model_rejected=0,budget_rejected=0,memory_rejected=0;
+    std::string memory_rejection="null";
     // Cheap model rejections must not consume the native-admission allowance:
     // otherwise every new worker can get stuck on the same first 16 rejects.
     while(attempts.next()) {
@@ -389,14 +391,24 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
         const auto step=search.next();reason=step.reason;scale=step.scale;if(!step.available)break;
         const auto i=step.index;auto s=shapes[i];std::string plan;
         if(estimates[i].seconds>1.5*budget.reference) {
-            nodes[i].rejected=true;reason="model_uncompetitive";continue;
+            ++model_rejected;nodes[i].rejected=true;reason="model_uncompetitive";continue;
         }
         if(!budget.permits(estimates[i].seconds*(1+estimates[i].relative_error)+2*estimates[i].stddev,
                            nodes[i].samples,o.runtime_remaining)) {
-            nodes[i].rejected=true;reason="exploration_budget";continue;
+            ++budget_rejected;nodes[i].rejected=true;reason="exploration_budget";continue;
         }
         ++native_admissions;
-        if(!portable_runtime_admit(o,r,s,plan)){nodes[i].rejected=true;reason="memory_admission";continue;}
+        if(!portable_runtime_admit(o,r,s,plan)) {
+            ++memory_rejected;nodes[i].rejected=true;reason="memory_admission";
+            memory_rejection="{\"D\":"+std::to_string(s.d)+"}";
+            if(!plan.empty())try {
+                const auto memory=curve_memory_record(plan);
+                memory_rejection="{\"D\":"+std::to_string(s.d)+",\"required_free_bytes\":"+
+                    plan_scalar(memory,"required_free_bytes")+",\"free_bytes\":"+plan_scalar(plan,"free_bytes")+
+                    ",\"initial_free_snapshot_fits\":"+plan_scalar(memory,"initial_free_snapshot_fits")+"}";
+            }catch(const std::runtime_error &){}
+            continue;
+        }
         pt::Work w;pt::WidthEstimate e;
         if(!engine.cached_work(s,w) || !w.exact_topology || !predictor.predict(s,e)) {
             nodes[i].rejected=true;reason="admitted_model_unavailable";continue;
@@ -412,7 +424,7 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
             if(!present)candidates.push_back({s,stats,2,false});continue;
         }
         if(!budget.permits(e.seconds*(1+e.relative_error)+2*e.stddev,stats.count,o.runtime_remaining)) {
-            nodes[i].rejected=true;reason="admitted_exploration_budget";continue;
+            ++budget_rejected;nodes[i].rejected=true;reason="admitted_exploration_budget";continue;
         }
         bool present=false;for(auto &c:candidates)if(c.shape.d==s.d && c.shape.carrier==s.carrier) {
             c.shape=s;c.statistics=stats;c.probe_allowed=true;present=true;break;
@@ -421,10 +433,26 @@ std::string portable_runtime_search(const Options &o,const Record &r,const pt::S
     }
     const bool cacheable=!proposed && !native_admissions && !pause_key.empty();
     if(cacheable)outgoing.add(pause_key);
+    const auto center=pt::DSearch(nodes,reference.d).center();
+    std::set<pt::DSearchRegion> measured_regions;
+    size_t forward=nodes.size();
+    for(size_t i=0;i<nodes.size();++i) {
+        if(nodes[i].samples>=2)measured_regions.insert(nodes[i].region);
+        if(center<nodes.size() && !nodes[i].samples && nodes[i].d>nodes[center].d &&
+           nodes[i].p>nodes[center].p && (forward==nodes.size() || nodes[i].rank<nodes[forward].rank))forward=i;
+    }
     std::ostringstream out;out<<std::setprecision(17)<<"{\"carrier_exponent\":"<<reference.carrier
         <<",\"candidate_limit\":"<<budget.candidates<<",\"explored\":"<<pt::DSearch(nodes,reference.d).explored()
         <<",\"extra_seconds\":"<<budget.spent<<",\"remaining_extra_seconds\":"<<budget.remaining
         <<",\"proposed_D\":"<<proposed<<",\"reason\":"<<json_string(reason)<<",\"scale\":"<<scale
+        <<",\"center_D\":"<<(center<nodes.size()?nodes[center].d:0)
+        <<",\"center_P\":"<<(center<nodes.size()?nodes[center].p:0)
+        <<",\"measured_regions\":"<<measured_regions.size()
+        <<",\"forward_model_D\":"<<(forward<nodes.size()?nodes[forward].d:0)
+        <<",\"forward_model_P\":"<<(forward<nodes.size()?nodes[forward].p:0)
+        <<",\"forward_model_seconds\":"<<(forward<nodes.size()?estimates[forward].seconds:0)
+        <<",\"model_rejected\":"<<model_rejected<<",\"budget_rejected\":"<<budget_rejected
+        <<",\"memory_rejected\":"<<memory_rejected<<",\"last_memory_rejection\":"<<memory_rejection
         <<",\"ranked_shapes\":"<<nodes.size()<<",\"rank_seconds\":"<<rank_seconds
         <<",\"native_admission_calls\":"<<native_admissions<<",\"cached_pause\":false,\"pause_cacheable\":"
         <<(cacheable?"true":"false")<<'}';
@@ -485,7 +513,7 @@ std::string portable_runtime_select(Options &o,const Record &r,pt::Estimator &en
     const auto choice=pt::runtime_choice(candidates,o.tune_runtime);if(!choice.available)return {};
     const auto &chosen=candidates[choice.index];const auto &shape=chosen.shape;
     o.d=shape.d;o.carrier_exponent=shape.carrier;o.runtime_probe=choice.probe;
-    const char *reason=!choice.probe?"runtime_measured_hysteresis":chosen.priority==0?
+    const char *reason=!choice.probe?"runtime_measured_fastest":chosen.priority==0?
         "runtime_probe_carrier_first":chosen.priority==1?"runtime_probe_reference":"runtime_probe_candidate";
     std::ostringstream out;out<<std::setprecision(17)<<"{\"type\":\"tune_selection\",\"selected\":true,\"policy\":\"model\""
         <<",\"reason\":"<<json_string(reason)<<",\"default_D\":"<<ordinary_default

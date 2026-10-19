@@ -120,7 +120,7 @@ int main(int argc,char **argv) {
         require(p::text(older.ntt.front(),"program_version")=="0.0.1","source version was rewritten to current version");
         require(!older.conditions.at(0).count("program_version"),"version still stored in condition");
         std::cout<<"{\"complete\":true,\"retains_slower_samples\":true,\"cap\":10,\"independent_samples\":12,"
-            "\"observed_D_win\":true,\"hysteresis\":true,\"carrier_first\":true,\"deduplication\":true,"
+            "\"observed_D_win\":true,\"fastest_mean\":true,\"carrier_first\":true,\"deduplication\":true,"
             "\"cross_version_reuse\":true,\"matrix_roundtrip\":true,\"mean_variance_reference\":true,"
             "\"snapshot_deduplication\":true,\"partial_overlap_rejected\":true,\"ntt_parameter_rows\":true,\"CUDA_calls\":0}\n";
     } catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}

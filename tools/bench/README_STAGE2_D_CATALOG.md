@@ -113,6 +113,12 @@ python tools/bench/compress_stage2_d_catalog.py `
 
 按D/P筛选是覆盖启发式；完整时间还取决于尾树、点生成、NTT效率和联合显存。部署提议后须通过原生准入和完整矩阵，不允许以表大小或模型成本宣布性能验收。
 
+## 生产运行统计回放
+
+`tools/test/test_stage2_runtime_profile_replay.py`把指定INI、性能文件及一条有效save复制到独立目录，通过生产规划入口核对稳定路线是否为合格重复观察中均值最快者。`--baseline-exe`可对照旧程序；`--expected-d`指定预期稳定D。`--expect-forward-d`要求向更大D提出实际试跑；若预计被显存拒绝，使用`--expect-forward-rejection`，要求原生规划明确给出更大D的所需free超过现场free，不能用无提议冒充通过。
+
+必填参数为`--exe`、`--profile`、`--save`、`--ini`、`--exponent`、`--b2`及新建的`--output`；可选`--device`、`--arena-mb`、`--fold-mb`和`--batch-mb`须对应研究条件。脚本验证save模数整除指定梅森数，生成仅用于规划的任务，不消费生产队列，不更新输入文件；保存逐次命令、日志、选择记录和SHA256。它不执行Stage2算术，不能作为曲线耗时或独立曲线覆盖的证据。
+
 ## 交替性能矩阵
 
 `bench_stage2_d_catalog.py`复用位宽扫描的collector，对两份冻结study交替运行相同9份余因子save和三档B2。两份study可用`bench_stage2_n_scaling.py --prepare-only --reference-study ... --cofactors-only`准备；源码、EXE、DLL和输入必须已冻结且哈希匹配。启动短校准关闭，普通余因子路径、D=0；GPU设置只读。
