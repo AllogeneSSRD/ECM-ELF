@@ -1,6 +1,6 @@
 # Edwards GPU Stage2 relocation 测量
 
-算法和当前限制的权威说明在 [Stage2 架构](../../docs/architecture/STAGE2.md#可选-relocation)，结论在 [Edwards 性能](../../docs/performance/EDWARDS_STAGE2.md)。本工具比较同一生产二进制的原算法与默认关闭的 relocation；只增加 Edwards 测量。
+算法和当前限制的权威说明在 [Stage2 架构](../../docs/architecture/STAGE2.md#可选-relocation)，冻结实验结论在 [relocation 草稿](../../docs/development/GPU_STAGE2_RELOCATION_DRAFT.md)。本工具比较同一生产二进制的原算法与默认关闭的 relocation；只增加 Edwards 测量。
 
 ## 正确性与冻结
 

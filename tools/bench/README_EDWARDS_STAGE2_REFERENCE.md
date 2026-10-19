@@ -1,6 +1,6 @@
 # Edwards Stage2 精确输入基准
 
-`bench_edwards_stage2_reference.py` 冻结 Prime95 屏幕日志和正式结果，在恢复出的同一 N、Edwards sigma、B1、实际 B2 上测量 CPU NTT/plain 与 GPU 普通余因子/梅森承载。性能结论与计时限制见 [Edwards Stage2 性能](../../docs/performance/EDWARDS_STAGE2.md)。工具不启动 Prime95，也不提交结果。
+`bench_edwards_stage2_reference.py` 冻结 Prime95 屏幕日志和正式结果，在恢复出的同一 N、Edwards sigma、B1、实际 B2 上测量 CPU NTT/plain 与 GPU 普通余因子/梅森承载。输入与计时限制见 [精确输入参考](../../docs/performance/EDWARDS_STAGE2.md)，当前完整 GPU 性能见 [Stage2 性能](../../docs/performance/STAGE2.md)。工具不启动 Prime95，也不提交结果。
 
 ## 准备
 

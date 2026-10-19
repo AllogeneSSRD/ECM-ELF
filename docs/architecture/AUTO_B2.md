@@ -24,7 +24,7 @@ Auto B2 选择连续生成、处理新曲线的单位时间收益，计入 Stage
 
 `paired`策略及精确形状实测还核对实际batch、物理分块、缓冲数量、giant路线及fold/frontier状态，B1不参与匹配。`model`策略从当前请求重算工作量；预算数值和梅森指数不作为采样身份门槛。区间未覆盖或预测收益不足时保留默认。
 
-未替换时保留具体原因。`paired`中的`default_planner_protected_missing_paired_baseline`表示缺少配对基线；`model`中的`default_protected_by_prediction_uncertainty`表示候选未通过预测保护。`alternatives`分别展示普通/梅森的算术位宽、D、秒数、来源和余量。这不构成全局最优证明；M12011真实计时见[性能依据](../performance/STAGE2.md#m12011-真实-save-配对与默认无预热)。
+未替换时保留具体原因。`paired`中的`default_planner_protected_missing_paired_baseline`表示缺少配对基线；`model`中的`default_protected_by_prediction_uncertainty`表示候选未通过预测保护。`alternatives`分别展示普通/梅森的算术位宽、D、秒数、来源和余量。这不构成全局最优证明；队列配对的冻结验证见[开发草稿](../development/STAGE2_TUNE_TASK_PAIR_DRAFT.md)。
 
 ## 算术位宽区间预测
 
@@ -361,7 +361,7 @@ log₂L和吞吐率作为展示列持久保存并核对一致性，合并观察�
 
 短NTT策略不改变任务曲线进度身份；调优条件中记录策略身份。策略数据 hash 改变后，不沿用原策略的精确测量或同形状B2插值，相关预测保持估算口径。
 
-NTT 校准和完整 ECM 校准保持独立：完整 ECM/启动短校准使用原分块，存入实际条件，不伪装成启用新策略的测量。运行日志给出策略摘要和参与数据的 hash。[固定 D 完整曲线验证](../performance/STAGE2.md#短-ntt-分块选择)中，当前策略未显示稳定收益；7995-bit通用余因子两档B2均慢约2.1%，因此保持默认关闭。后续选型需要计入每分块的归约、准备、检查和同步成本，不能仅用独立NTT的Conv/s决定分块。
+NTT 校准和完整 ECM 校准保持独立：完整 ECM/启动短校准使用原分块，存入实际条件，不伪装成启用新策略的测量。运行日志给出策略摘要和参与数据的 hash。[固定 D 冻结实验](../STAGE2_SHORT_NTT_BATCH_DRAFT.md)中，当前策略未显示稳定收益；7995-bit通用余因子两档B2均慢约2.1%，因此保持默认关闭。后续选型需要计入每分块的归约、准备、检查和同步成本，不能仅用独立NTT的Conv/s决定分块。
 
 NTT 参数表发布时按共享行规则 `(length,batch,tile)` 数值稳定升序排列，详见[矩阵行列定义](#toml-中的算术路径)。现有生成表可用 `tools/bench/format_stage2_tune.py <profile> --in-place` 重排；此工具仅移动行，保留测量值、其他节和列结构。
 

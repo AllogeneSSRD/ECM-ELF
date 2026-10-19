@@ -27,7 +27,7 @@
 
 ## 当前进度
 
-0.36.1 已实现宽位 seed/chain 的 32 线程块，以及驻留 G 根树的分块空位布局。candidate04冻结83份编译源，EXE SHA256为 `8fdda93f9a434e9ffa89e4adad38146792bca9f523fbac41a2e54a10f27b8114`；`matrix02/` 的全新56次调用已完成，不导入先前计时。当前正式结论见 [Edwards性能](../performance/EDWARDS_STAGE2.md#原路径宽位-giant-调度与-g-树)。candidate02的源与规划冻结在 `original_path_0_36_1_candidate02/stage2`，EXE SHA256 为 `3b8a2760614c2248ac0d72887c7c25a4685ae3ff14e38cf5c119f1942457ddec`，它属于选择阶段，不能作为最终版本性能数据。
+0.36.1 已实现宽位 seed/chain 的 32 线程块，以及驻留 G 根树的分块空位布局。candidate04冻结83份编译源，EXE SHA256为 `8fdda93f9a434e9ffa89e4adad38146792bca9f523fbac41a2e54a10f27b8114`；`matrix02/` 的全新56次调用已完成，不导入先前计时。本轮冻结结论见 `data/benchmarks/gpu_stage2_original_20261018/final01/`；当前全范围实测见 [Stage2性能](../performance/STAGE2.md)。candidate02的源与规划冻结在 `original_path_0_36_1_candidate02/stage2`，EXE SHA256 为 `3b8a2760614c2248ac0d72887c7c25a4685ae3ff14e38cf5c119f1942457ddec`，它属于选择阶段，不能作为最终版本性能数据。
 
 ## 点生成实验
 

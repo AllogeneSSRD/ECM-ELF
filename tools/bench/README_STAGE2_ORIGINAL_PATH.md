@@ -1,6 +1,6 @@
 # 原路径 GPU Stage2 优化测量
 
-当前算法见 [Stage2 管线](../../docs/architecture/STAGE2.md)，数学布局见 [G 树固定资料](../../docs/reference/ECM_STAGE2_G_TREE_LAYOUT.md)，有效性能结论见 [Edwards 性能](../../docs/performance/EDWARDS_STAGE2.md)。实验数据均在忽略的 `data/` 下，脚本要求新输出目录，不覆盖已有原始调用。
+当前算法见 [Stage2 管线](../../docs/architecture/STAGE2.md)，数学布局见 [G 树固定资料](../../docs/reference/ECM_STAGE2_G_TREE_LAYOUT.md)，本轮冻结结论见 [原路径草稿](../../docs/development/GPU_STAGE2_ORIGINAL_PATH_OPTIMIZATION_DRAFT.md)，当前完整矩阵见 [Stage2 性能](../../docs/performance/STAGE2.md)。实验数据均在忽略的 `data/` 下，脚本要求新输出目录，不覆盖已有原始调用。
 
 ## 构建和正确性
 

@@ -1,6 +1,6 @@
 # 短 NTT 分块 A/B
 
-用于验证实验开关 `--short-ntt-batch-tune` 的完整Stage2效果。当前结论、输入和统计边界见[Stage2性能](../../docs/performance/STAGE2.md#短-ntt-分块选择)。工具不会调整显卡功耗或频率。
+用于验证实验开关 `--short-ntt-batch-tune` 的完整Stage2效果。冻结实验的输入和统计边界见[短NTT草稿](../../docs/STAGE2_SHORT_NTT_BATCH_DRAFT.md)，当前全范围结果见[Stage2性能](../../docs/performance/STAGE2.md)。工具不会调整显卡功耗或频率。
 
 ## 输入
 

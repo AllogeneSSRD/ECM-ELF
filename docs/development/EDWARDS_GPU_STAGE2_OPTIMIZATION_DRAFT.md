@@ -46,7 +46,7 @@
 
 `matrix_03/` 导入17条已验证预热，再执行剩余7条预热和全部72条正式样本，三轮循环变换四侧顺序；96条均为完整NF。`audit_final_01.json` 核对全部来源、文件、二进制和源码哈希、目标环叶以及S4覆盖，`gmp_checked` 合计679488。原 `matrix_02/`、未入账调用和旧采集器保留，不覆盖或删除。
 
-权威结果维护在 [Edwards Stage2性能](../performance/EDWARDS_STAGE2.md#固定-d-的-edwards--param0-优化对照)：五个宽位数条件的Edwards耗时减少9.24%–37.98%，10232-bit普通低档中位数44.687503→27.715751秒；PARAM0得到相近收益。383-bit控制组范围重叠，没有宣称加速。阶段图只堆叠互斥均值；shape是baby集合枚举，已经包含在init内。
+本轮冻结结果保存在 `data/benchmarks/edwards_stage2_opt_20261017/final_03/`：五个宽位数条件的Edwards耗时减少9.24%–37.98%，10232-bit普通低档中位数44.687503→27.715751秒；PARAM0得到相近收益。383-bit控制组范围重叠，没有宣称加速。阶段图只堆叠互斥均值；shape是baby集合枚举，已经包含在init内。当前全范围实测另见 [Stage2性能](../performance/STAGE2.md)。
 
 最终PNG/SVG为 `data/figures/edwards_stage2_opt_20261017/final_03/`，CSV/JSON为同名 `data/benchmarks/` 路径。绘图使用本机Python3.14.7、Matplotlib3.11.1、NumPy2.5.2。早期 `final_01` 因采集用Python缺Matplotlib而未渲染，`final_02` 排版检查发现标签和图例重叠；统计和早期图保留，最终调整只涉及排版，数据未变。
 

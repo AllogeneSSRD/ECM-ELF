@@ -74,7 +74,7 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 
 选 D、Auto B2 和内存准入继续按原完整区间建模，以保留重放条件。计划输出的 `relocation_estimate_scope=original_replay_range` 明确这个范围；时间预测并非后缀专用成本模型。启用时不做旧 ECM 短标定、不写入旧 ECM 性能样本；完整 ECM tune 显式拒绝，纯 NTT 校准仍可使用。现有实时分配和算术检查继续生效。
 
-内部结果记录 `relocation`、`relocation_replayed`、最终 `giant_first/last/points`、试算 `relocation_points/prime` 和 `relocation_probe_seconds/replay_seconds`。后两者是 main 内的子区间，不能再加到完整耗时。重放后的最终 giant 指标为原区间；NTT 次数包含实际试算和重放。提交文件继续报告原 B1/B2，不发布中间 probe 结果。实测、限制及复现入口见 [Edwards 性能](../performance/EDWARDS_STAGE2.md)。
+内部结果记录 `relocation`、`relocation_replayed`、最终 `giant_first/last/points`、试算 `relocation_points/prime` 和 `relocation_probe_seconds/replay_seconds`。后两者是 main 内的子区间，不能再加到完整耗时。重放后的最终 giant 指标为原区间；NTT 次数包含实际试算和重放。提交文件继续报告原 B1/B2，不发布中间 probe 结果。冻结实测与复现入口见 [relocation 草稿](../development/GPU_STAGE2_RELOCATION_DRAFT.md)。
 
 ## 工作量
 

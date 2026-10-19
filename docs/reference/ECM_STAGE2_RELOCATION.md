@@ -4,7 +4,7 @@
 
 ## 1. 从低区间移到高区间
 
-本页保留离线研究的条件、证明与证据；生产功能及随后完成的 GPU 验证另见 [Stage2 可选 relocation](../architecture/STAGE2.md#可选-relocation) 和 [性能数据](../performance/EDWARDS_STAGE2.md)，不以本页的旧研究条件描述当前实现状态。
+本页保留离线研究的条件、证明与证据；生产功能及随后完成的 GPU 验证另见 [Stage2 可选 relocation](../architecture/STAGE2.md#可选-relocation) 和 [冻结实测](../development/GPU_STAGE2_RELOCATION_DRAFT.md)，不以本页的旧研究条件描述当前实现状态。
 
 设 Q 是 Stage1 后的点，D 为偶数，J={1≤j≤D/2:gcd(j,D)=1}，P=φ(D)/2。若某个待找因子模数上的 Q 被 [q] 消去，任何 [m^a q] 也消去 Q。只要 gcd(m,D)=1，且 q∤D，移位后的 t=m^a q 仍可写成 iD±j，j∈J。
 

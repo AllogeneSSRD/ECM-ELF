@@ -84,4 +84,4 @@ python tools/bench/plot_edwards_stage2_optimization.py `
 
 正确性入口另包括 `test_stage2_wide_tail_chain.py`：复用 `test_stage2_wide_native.py --prepare-only` 的独立 GMP 输入，覆盖阈值边界、逐点 chain/ladder、非单位分组和非单位基点；完整叶和因子集合均需与基线一致。这些诊断运行不计入正式性能统计。
 
-当前结果和适用范围维护在 [Edwards Stage2 性能](../../docs/performance/EDWARDS_STAGE2.md)，开发过程保留在相应草稿。
+本轮冻结结果和适用范围保留在 [优化草稿](../../docs/development/EDWARDS_GPU_STAGE2_OPTIMIZATION_DRAFT.md)，当前完整矩阵见 [Stage2 性能](../../docs/performance/STAGE2.md)。

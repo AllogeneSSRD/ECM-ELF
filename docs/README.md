@@ -32,8 +32,8 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 ## 性能与后续工作
 
 - [Stage1 性能](performance/STAGE1.md)：GPU Edwards细分实例与Montgomery三曲线族同exe成本、冻结初始基准、NAF窗口/倍点图表、PRAC投影和资源约束。
-- [Stage2 性能](performance/STAGE2.md)：CPU/GPU 比较、位宽/B2关系、阶段占比和容量收益。
-- [Edwards GPU Stage2 性能与 CPU 参考](performance/EDWARDS_STAGE2.md)：原路径giant/G树优化、显式完整G边界实验、可选relocation的NF/命中重放对照、Edwards/PARAM0版本对照、普通/承载基准、Prime95精确余因子参考及CPU已测样本。
+- [Stage2 性能](performance/STAGE2.md)：0.38.4 完整 GPU 矩阵、普通/承载、版本对照、分项分析与 Montgomery 全范围参考。
+- [Stage2 精确输入与 Prime95 / CPU 参考](performance/EDWARDS_STAGE2.md)：13 个精确余因子、两档实际 B2、Prime95 两曲线族全范围和保留的 libecm 样本。
 - [CPU GW 多项式 Stage2](performance/CPU_GWPOLY_STAGE2.md)：4 GHz、相同精确输入的 Prime95 对照、1/4 线程实测和进程内存。
 - [Tensor NTT 性能](performance/NTT_TENSOR.md)：精确Tensor64/40/N96r64、长度/batch、同卡CUDA/Tensor并发及硬件计数器。
 - [短NTT Graph性能](performance/NTT_GRAPH.md)：缓存生命周期、固定D完整曲线、batch吞吐及管理员Nsight分析。
@@ -43,7 +43,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [固定数学与第三方源码资料](reference/README.md)：保留完整推导、引用代码、伪代码及研究条件，独立于本仓库实现状态。
 - [TODO](TODO.md)：尚未完成或需要重新验证的工作。
 
-1094项共享D候选表和跨NTT区间tune已接入源码，当前规则见 [Auto B2 / tune](architecture/AUTO_B2.md)。普通余因子27格交替矩阵、冻结tune选型和有限预算查询的通过范围见 [Stage2性能](performance/STAGE2.md#d-候选压缩与边界覆盖)；379419项参考枚举、来源研究及未完成边界见 [Stage2 D候选表草稿](development/STAGE2_D_CATALOG_DRAFT.md)。
+1094项共享D候选表和跨NTT区间tune已接入源码，当前规则见 [Auto B2 / tune](architecture/AUTO_B2.md)。冻结实验、有限预算查询、379419项参考枚举及未完成边界见 [D候选表草稿](development/STAGE2_D_CATALOG_DRAFT.md)。
 
 ## 数据位置
 

@@ -1,6 +1,6 @@
 # Stage2 队列续跑与生产配对验收草稿
 
-临时开发记录，保留至用户决定处理。正式规则见[Stage2使用](../usage/STAGE2.md#自动续跑与退出)，性能证据见[M12011配对](../performance/STAGE2.md#m12011-真实-save-配对与默认无预热)。
+临时开发记录，保留至用户决定处理。正式规则见[Stage2使用](../usage/STAGE2.md#自动续跑与退出)，M12011配对的冻结验证见[配对草稿](STAGE2_TUNE_TASK_PAIR_DRAFT.md)。
 
 ## 问题与定位
 
