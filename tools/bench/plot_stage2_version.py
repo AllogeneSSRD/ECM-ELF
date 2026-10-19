@@ -4,7 +4,7 @@ Original studies stay untouched. New outputs contain numeric program versions,
 or explicitly state that a historical study did not record one.
 """
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import csv
 import json
 from pathlib import Path
@@ -20,11 +20,62 @@ import numpy as np
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools/test'))
 from check_stage2_version import audit
+from check_stage2_runtime_matrix import audit as audit_runtime
 from bench_stage2_version import load
 
 OLD=ROOT/'data/benchmarks/edwards_stage2_reference_20261017/gpu_final_02/summary.json'
 GW=ROOT/'data/benchmarks/cpu_gw_poly_stage2_20261017/final_01/summary.json'
 COLORS=['#24699c','#d16a32','#67717c','#729e48']
+
+
+def runtime_matrix(study,baseline):
+    checked=audit_runtime(study);plan=load(study/'plan.json')
+    if Path(plan['baseline']).resolve()!=baseline.resolve():
+        raise ValueError('Runtime data uses a different default baseline')
+    cases={c['id']:c for c in plan['cases']};cells={c['id']:c for c in plan['cells']}
+    runs={r['id']:r for r in plan['runs']};rows=[]
+    for decision in plan['decisions']:
+        cell=cells[decision['cell']];case=cases[cell['case']];sample=decision['sample']
+        selected=[runs[tag] for tag in decision['run_ids']];first=selected[0]
+        times=[r['observation']['mean_seconds'] for r in selected]
+        cell_runs=[r for r in plan['runs'] if r['cell']==cell['id']]
+        searches=[s for r in cell_runs for s in r['selection'].get('runtime_search',[])]
+        last_search={}
+        for search in searches:last_search[str(search['carrier_exponent'])]=search
+        rows.append(dict(cell=cell['id'],bits=case['bits'],exponent=case['exponent'],B1=case['b1'],sigma=case['sigma'],
+            B2=cell['B2'],nominal_B2=cell['nominal_B2'],version=plan['program_version'],n=sample['repeats'],
+            seconds=sample['mean_seconds'],stddev_seconds=sample['stddev_seconds'],min_seconds=min(times),max_seconds=max(times),
+            statistic='best admitted repeated profile mean; selected on these same observations',
+            D=sample['d'],P=decision['selection']['P'],carrier_exponent=sample['carrier_exponent'],
+            G=int(first['shape']['num_poly_g']),giants=int(first['shape']['giant_points']),
+            parent_seconds_mean=st.mean(r['parent_seconds'] for r in selected),run_ids=decision['run_ids'],
+            prepare_seconds_mean=st.mean(r['selection']['runtime_prepare']['total_seconds'] for r in selected),
+            ordinary_measured_D=sorted({r['D'] for r in cell_runs if not r['carrier_exponent']}),
+            carrier_measured_D=sorted({r['D'] for r in cell_runs if r['carrier_exponent']}),
+            learning_calls=len(cell_runs),queue_finish_reason=next(q['finish_reason'] for q in plan['queues'] if q['cell']==cell['id']),
+            search_reasons=dict(Counter(s['reason'] for s in searches)),last_search=last_search,
+            memory_rejection_events=sum(s.get('memory_rejected',0) for s in searches),
+            ntt_peak_mib=st.median(int(r['stats']['ntt_workspace_stats']['full_peak_bytes'])/1048576 for r in selected),
+            init_fraction=st.mean(float(r['phase_seconds']['init'])/r['engine_seconds'] for r in selected),
+            component_fractions={k:st.mean(float(r['stats']['real_batched_split'][k])/r['engine_seconds'] for r in selected)
+                for k in ['giant','gtrees','fold','descent','inv']}))
+    busy=[]
+    for queue in plan['queues']:
+        if queue.get('telemetry_unavailable'):continue
+        busy.extend(t for t in load(Path(queue['folder'])/'telemetry.json') if (t.get('gpu_percent') or 0)>=50)
+    telemetry={k:distribution(t[k] for t in busy if t.get(k) is not None) for k in ['sm_clock_mhz','temperature_c','power_mw']}
+    telemetry.update(busy_samples=len(busy),power_outside_0_200w=sum(t.get('power_mw') is not None and not 0<=t['power_mw']<=200000 for t in busy))
+    return dict(complete=True,audit=checked,rows=rows,planned_curve_cap=plan['curves_per_condition'],
+        stop_repeats=plan['stop_repeats'],imported_calls=plan.get('imported_calls',0),sample_limit=plan['sample_limit'],
+        learning_calls=len(plan['runs']),learning_engine_seconds=sum(r['engine_seconds'] for r in plan['runs']),
+        learning_queue_seconds=sum(q['parent_sum'] for q in plan['queues']),
+        learning_process_seconds=sum(q['process_seconds'] for q in plan['queues'] if q['process_seconds'] is not None),
+        process_time_missing_queues=sum(q['process_seconds'] is None for q in plan['queues']),
+        telemetry_missing_queues=sum(bool(q.get('telemetry_unavailable')) for q in plan['queues']),
+        busy_gpu_telemetry=telemetry,context=load(study/'context.json'),
+        profile=str(study/'stage2_ecm_tune_frozen.toml'),trace=[dict(cell=r['cell'],index=r['index'],
+            seconds=r['engine_seconds'],D=r['D'],P=r['P'],carrier=r['carrier_exponent'],
+            probe=r['selection']['runtime_probe'],samples_before=r['selection']['runtime_samples']) for r in plan['runs']])
 
 
 def distribution(values):
@@ -43,7 +94,7 @@ def save(fig,name,args,caption,scales=None):
                 ax.set_yscale(scale)
                 ax.relim();ax.autoscale_view(scaley=True)
                 if scale=='linear':ax.set_ylim(bottom=0)
-                label='Full Stage2 seconds' if scales=='time' else 'NTT module full peak (MiB), median of n=3'
+                label='Full Stage2 seconds' if scales=='time' else 'NTT module full peak (MiB), median per cell'
                 ax.set_ylabel(f'{label} ({scale} scale)')
         fig.tight_layout(rect=(0,.10,1,.94))
         for ext in ('png','svg'):
@@ -193,16 +244,25 @@ def current(plan,args):
             busy.extend(t for t in load(Path(run['prefix']).with_suffix('.telemetry.json')) if (t.get('gpu_percent') or 0)>=50)
     bounds=sorted({r['nominal_B2'] for r in rows});bits=[c['bits'] for c in plan['cases']];x=np.arange(13)
     lookup={(r['bits'],r['nominal_B2'],r['engine']):r for r in rows}
+    learned=runtime_matrix(args.runtime_study,args.study) if args.runtime_study else None
+    runtime_lookup={(r['bits'],r['nominal_B2']):r for r in learned['rows']} if learned else {}
     title=f'ECM-ELF {plan["program_version"]} | Edwards GPU full Stage2'
     caption='RTX 4060 Laptop, GPU1 | ordinary / Mersenne carrier | n=3 medians, min-max | B1=50,000\nSame exact N / sigma / adjusted B2 as Prime95 31.4b05 4T (n=1). No warmup removal or normalization.'
+    if learned:
+        audit_counts=learned['audit']
+        runtime_n=f"{audit_counts['best_sample_count_min']}..{audit_counts['best_sample_count_max']}"
+        caption=f'RTX 4060 Laptop, GPU1 | defaults: n=3 medians | runtime: best profile means (actual n={runtime_n}), min-max\nSame exact N / sigma / adjusted B2; B1=50,000. Runtime selected on these observations; costs separate. Prime95 4T: historical n=1.'
     fig,axes=plt.subplots(1,2,figsize=(16,6.2))
     for ax,bound in zip(axes,bounds):
         for i,mode in enumerate(['gpu','gpu-carrier']):
             errorline(ax,x,[lookup[b,bound,mode] for b in bits],['Ordinary N','Mersenne carrier'][i],COLORS[i])
         ax.plot(x,[lookup[b,bound,'gpu']['prime95_seconds'] for b in bits],'s--',color=COLORS[2],label='Prime95 4T (n=1)',ms=4)
+        if learned:
+            errorline(ax,x,[runtime_lookup[b,bound] for b in bits],f'Runtime {learned["rows"][0]["version"]}: best profile mean',COLORS[3])
         axes_bits(ax,bits,bound);ax.legend(fontsize=9)
     prefix=f'stage2-{plan["program_version"]}'
-    fig.suptitle(title);save(fig,prefix+'-overall',args,caption,scales='time')
+    combined_prefix=f'stage2-runtime-{learned["rows"][0]["version"]}' if learned else prefix
+    fig.suptitle(title if not learned else f'Edwards full Stage2 | defaults {plan["program_version"]} / runtime {learned["rows"][0]["version"]}');save(fig,combined_prefix+'-overall',args,caption,scales='time')
 
     fig,axes=plt.subplots(1,2,figsize=(16,6.2),sharey=True)
     for ax,bound in zip(axes,bounds):
@@ -218,39 +278,43 @@ def current(plan,args):
     save(fig,prefix+'-change',args,
          'Both studies: same 13 exact N, Edwards inputs, actual B2, memory budgets; 3 retained samples per cell\nShading combines observed min-max, not a confidence interval. Separate sessions; not isolated causality for one optimization.')
 
-    fig,axes=plt.subplots(2,2,figsize=(16,9))
-    for j,mode in enumerate(['gpu','gpu-carrier']):
+    modes=['gpu','gpu-carrier']+(['runtime'] if learned else [])
+    mode_labels=['Default ordinary N','Default carrier']+(['Runtime-selected'] if learned else [])
+    fig,axes=plt.subplots(len(modes),2,figsize=(16,4.5*len(modes)))
+    for j,mode in enumerate(modes):
         for ax,bound in zip(axes[j],bounds):
-            values=[lookup[b,bound,mode]['init_fraction']*100 for b in bits]
+            values=[(runtime_lookup[b,bound] if mode=='runtime' else lookup[b,bound,mode])['init_fraction']*100 for b in bits]
             ax.bar(x,values,color=COLORS[0],label='Init');ax.bar(x,100-np.array(values),bottom=values,color=COLORS[1],label='Main incl. GCD / checks')
-            axes_bits(ax,bits,bound,False);ax.set_ylim(0,100);ax.set_ylabel(f'{["Ordinary N","Carrier"][j]} | full time (%)');ax.legend(fontsize=8)
-    fig.suptitle(title+' | disjoint timing boundaries')
-    save(fig,prefix+'-phases',args,'Mean of per-call fractions (n=3). Init + main = full engine timer.\nNested NTT, S4 reduction and component timers are not added to these bars.')
+            axes_bits(ax,bits,bound,False);ax.set_ylim(0,100);ax.set_ylabel(f'{mode_labels[j]} | full time (%)');ax.legend(fontsize=8)
+    fig.suptitle(title+' | disjoint timing boundaries' if not learned else f'Full Stage2 phases | defaults {plan["program_version"]} / runtime {learned["rows"][0]["version"]}')
+    save(fig,combined_prefix+'-phases',args,'Mean of per-call fractions (defaults n=3; runtime actual chosen observations). Init + main = full engine timer.\nNested NTT, S4 reduction and component timers are not added to these bars.' if learned else 'Mean of per-call fractions (n=3). Init + main = full engine timer.\nNested NTT, S4 reduction and component timers are not added to these bars.')
 
     # Diagnostic component timers are shown individually, never as a 100% stack.
-    fig,axes=plt.subplots(2,2,figsize=(16,9))
+    fig,axes=plt.subplots(len(modes),2,figsize=(16,4.5*len(modes)))
     components=['giant','gtrees','fold','descent','inv']
-    for j,mode in enumerate(['gpu','gpu-carrier']):
+    for j,mode in enumerate(modes):
         for ax,bound in zip(axes[j],bounds):
-            values=np.array([[lookup[b,bound,mode]['component_fractions'][k]*100 for b in bits] for k in components])
+            values=np.array([[(runtime_lookup[b,bound] if mode=='runtime' else lookup[b,bound,mode])['component_fractions'][k]*100 for b in bits] for k in components])
             ax.imshow(values,aspect='auto',cmap='Blues',vmin=0,vmax=100)
             for iy in range(len(components)):
                 for ix in range(len(bits)):
                     ax.text(ix,iy,f'{values[iy,ix]:.0f}%',ha='center',va='center',fontsize=8,
                             color='white' if values[iy,ix]>60 else '#152c45')
             ax.grid(False);ax.set_yticks(np.arange(5),['Giant','G trees','Fold','Descent','Inverse'])
-            axes_bits(ax,bits,bound,False);ax.set_ylabel(['Ordinary N','Mersenne carrier'][j])
-    fig.suptitle(title+' | individual component timer / full engine time')
-    save(fig,prefix+'-components',args,
-         'Mean of per-call fractions (n=3); diagnostic intervals may include waits and shared work.\nCells are not an additive timing ledger. NTT / S4 reduction remain nested; percentages must not be summed.')
+            axes_bits(ax,bits,bound,False);ax.set_ylabel(mode_labels[j])
+    fig.suptitle(title+' | individual component timer / full engine time' if not learned else f'Full Stage2 components | defaults {plan["program_version"]} / runtime {learned["rows"][0]["version"]}')
+    save(fig,combined_prefix+'-components',args,
+         ('Mean of per-call fractions (defaults n=3; runtime actual chosen observations)' if learned else 'Mean of per-call fractions (n=3)')+'; diagnostic intervals may include waits and shared work.\nCells are not an additive timing ledger. NTT / S4 reduction remain nested; percentages must not be summed.')
 
     fig,axes=plt.subplots(1,2,figsize=(16,6.2))
     for ax,bound in zip(axes,bounds):
         for i,mode in enumerate(['gpu','gpu-carrier']):
             ax.plot(x,[lookup[b,bound,mode]['ntt_peak_mib'] for b in bits],'-o',color=COLORS[i],label=['Ordinary N','Carrier'][i],ms=4)
-        axes_bits(ax,bits,bound,False);ax.set_ylabel('NTT module full peak (MiB), median of n=3');ax.legend(fontsize=9)
-    fig.suptitle(title+' | NTT module memory')
-    save(fig,prefix+'-ntt-memory',args,'Module-owned peak includes workspace, tables and fused base; it is not the process or whole-GPU peak.\n6300 MiB arena / 640 MiB fold owner / 256 MiB batch budgets. Component peaks are not added.',scales='memory')
+        if learned:
+            ax.plot(x,[runtime_lookup[b,bound]['ntt_peak_mib'] for b in bits],'-o',color=COLORS[3],label='Runtime-selected',ms=4)
+        axes_bits(ax,bits,bound,False);ax.set_ylabel('NTT module full peak (MiB), median per cell');ax.legend(fontsize=9)
+    fig.suptitle(title+' | NTT module memory' if not learned else f'NTT module memory | defaults {plan["program_version"]} / runtime {learned["rows"][0]["version"]}')
+    save(fig,combined_prefix+'-ntt-memory',args,'Module-owned peak includes workspace, tables and fused base; it is not the process or whole-GPU peak.\n6300 MiB arena / 640 MiB fold owner / 256 MiB batch budgets. Component peaks are not added.',scales='memory')
 
     totals={}
     for mode in ['gpu','gpu-carrier']:
@@ -263,9 +327,54 @@ def current(plan,args):
     telemetry={k:distribution(t[k] for t in busy if t.get(k) is not None) for k in ['sm_clock_mhz','temperature_c','power_mw']}
     telemetry['busy_samples']=len(busy)
     telemetry['power_outside_0_200w']=sum(t.get('power_mw') is not None and not 0<=t['power_mw']<=200000 for t in busy)
+    if learned:
+        for r in learned['rows']:
+            ordinary=lookup[r['bits'],r['nominal_B2'],'gpu'];carrier=lookup[r['bits'],r['nominal_B2'],'gpu-carrier']
+            same=carrier if r['carrier_exponent'] else ordinary
+            r.update(default_ordinary_seconds=ordinary['seconds'],default_carrier_seconds=carrier['seconds'],
+                default_ordinary_D=ordinary['D'],default_ordinary_P=ordinary['P'],
+                default_carrier_D=carrier['D'],default_carrier_P=carrier['P'],
+                best_default_seconds=min(ordinary['seconds'],carrier['seconds']),default_same_family_D=same['D'],
+                default_same_family_P=same['P'],geometry_changed=(r['D'],r['P'])!=(same['D'],same['P']))
+            r['reduction_vs_best_default_percent']=100*(1-r['seconds']/r['best_default_seconds'])
+        total=sum(r['seconds'] for r in learned['rows'])
+        best=sum(r['best_default_seconds'] for r in learned['rows'])
+        learned['totals']=dict(runtime_mean_seconds_sum=total,best_default_median_seconds_sum=best,
+            selected_parent_mean_seconds_sum=sum(r['parent_seconds_mean'] for r in learned['rows']),
+            selected_prepare_mean_seconds_sum=sum(r['prepare_seconds_mean'] for r in learned['rows']),
+            reduction_vs_best_default_percent=100*(1-total/best),
+            reduction_vs_ordinary_percent=100*(1-total/totals['gpu']['median_seconds_sum']),
+            reduction_vs_carrier_percent=100*(1-total/totals['gpu-carrier']['median_seconds_sum']),
+            changed_geometry_cells=sum(r['geometry_changed'] for r in learned['rows']),
+            carrier_cells=sum(bool(r['carrier_exponent']) for r in learned['rows']))
+        fig,axes=plt.subplots(1,2,figsize=(16,6.2),sharey=True)
+        for ax,bound in zip(axes,bounds):
+            cells=[runtime_lookup[b,bound] for b in bits]
+            ax.plot(x,[r['reduction_vs_best_default_percent'] for r in cells],'-o',color=COLORS[3],ms=4)
+            ax.axhline(0,color='#666',lw=1);axes_bits(ax,bits,bound,False)
+            ax.set_ylabel('Full time reduction vs faster default family (%)')
+        fig.suptitle(f'Edwards full Stage2 | runtime {learned["rows"][0]["version"]} vs defaults {plan["program_version"]}')
+        save(fig,combined_prefix+'-change',args,
+            f'Runtime {learned["rows"][0]["version"]}: best admitted profile means, actual n={runtime_n}; same observations used for selection\nReference: faster default-family median ({plan["program_version"]}). Separate versions/sessions; no independent post-selection validation or global optimum claim.')
+        fig,axes=plt.subplots(1,2,figsize=(16,8.5))
+        by_cell=defaultdict(list)
+        for r in learned['trace']:by_cell[r['cell']].append(r)
+        for ax,bound in zip(axes,bounds):
+            values=np.full((13,max(len(by_cell[r['cell']]) for r in learned['rows'] if r['nominal_B2']==bound)),np.nan)
+            for iy,b in enumerate(bits):
+                r=runtime_lookup[b,bound]
+                for ix,call in enumerate(by_cell[r['cell']]):values[iy,ix]=call['seconds']/r['best_default_seconds']
+            im=ax.imshow(values,aspect='auto',cmap='RdYlGn_r',vmin=.5,vmax=1.5)
+            ax.set_yticks(np.arange(13),bits);ax.set_xlabel('Invocation within each exact condition (1-based)')
+            ticks=np.arange(0,values.shape[1],5);ax.set_xticks(ticks,ticks+1)
+            ax.set_ylabel('Actual cofactor N (bits)');ax.set_title(f'Request B2 {bound:.1e}');ax.grid(False)
+            fig.colorbar(im,ax=ax,label='Engine seconds / faster default median; colors clipped at 0.5 / 1.5')
+        fig.suptitle(f'ECM-ELF {learned["rows"][0]["version"]} | continuous runtime learning queues')
+        save(fig,combined_prefix+'-learning',args,
+            'All complete NF calls retained; blank cells follow early/manual stops and have no completed NF observation.\nEarlier observations retained; cap 48, sample cap 10. Timing replays, not new ECM coverage. No manual D/carrier choice.')
     context=args.study/'context.json'
     return dict(complete=True,program_version=plan['program_version'],rows=rows,audit=checked,totals=totals,
-                busy_gpu_telemetry=telemetry,context=load(context) if context.exists() else None)
+                busy_gpu_telemetry=telemetry,context=load(context) if context.exists() else None,runtime=learned)
 
 
 def main():
@@ -275,7 +384,12 @@ def main():
     p.add_argument('--figures',type=Path,required=True)
     p.add_argument('--publish',type=Path)
     p.add_argument('--references-only',action='store_true')
+    p.add_argument('--runtime-study',type=Path,help='Complete queue-learning matrix; add best measured profile means as a fourth curve')
     a=p.parse_args();plan=load(a.study/'plan.json')
+    if a.references_only and a.runtime_study:p.error('--runtime-study requires the complete comparison')
+    # Refuse incomplete studies before writing any public attachment copies.
+    if not a.references_only:audit(a.study)
+    if a.runtime_study:runtime_matrix(a.runtime_study,a.study)
     a.output.mkdir(parents=True,exist_ok=False);a.figures.mkdir(parents=True,exist_ok=False)
     plt.rcParams.update({'font.size':10,'axes.grid':True,'grid.alpha':.20,'axes.axisbelow':True,'figure.dpi':150})
     summary=references(plan,a)
@@ -285,6 +399,10 @@ def main():
         with (a.output/'cells.csv').open('w',newline='',encoding='utf-8') as f:
             writer=csv.DictWriter(f,fieldnames=summary['rows'][0].keys());writer.writeheader()
             writer.writerows({k:json.dumps(v) if isinstance(v,(dict,list)) else v for k,v in r.items()} for r in summary['rows'])
+        if summary['runtime']:
+            with (a.output/'runtime_cells.csv').open('w',newline='',encoding='utf-8') as f:
+                writer=csv.DictWriter(f,fieldnames=summary['runtime']['rows'][0].keys());writer.writeheader()
+                writer.writerows({k:json.dumps(v) if isinstance(v,(dict,list)) else v for k,v in r.items()} for r in summary['runtime']['rows'])
     (a.output/'summary.json').write_text(json.dumps(summary,indent=2)+'\n',encoding='utf-8')
     shutil.copy2(__file__,a.output/'plot_snapshot.py')
     print('Wrote',a.output,'and',a.figures)

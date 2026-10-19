@@ -181,7 +181,7 @@ M₂ = (n−1)s₁² + (m−1)s₂² + (μ₂−μ₁)²·nm/(n+m)，s = √[M�
 
 实现入口为`ecm_stage2_portable_driver.inl::portable_runtime_select/prepare_runtime_tune/complete_runtime_tune/publish_runtime_tune`，统计在`ecm_stage2_portable_model.h::runtime_statistics`，切换规则在`ecm_stage2_runtime_tune.h::runtime_choice`，均位于`src/core/`。CPU门禁、GPU生产流程及离线恢复脚本为`tools/test/test_stage2_runtime_tune.py`、`test_stage2_runtime_selection_gpu.py`、`test_stage2_runtime_task.py`和`test_stage2_runtime_import.py`；各脚本要求新的`--output data/experiments/<目录>`。
 
-基准扫描须设置`stage2_tune_runtime=false`并冻结性能文件。此时仍可使用该文件已有的合格实测组；若需要完全固定D/算术，应同时显式锁定它们。
+固定配置的独立基准扫描应设置`stage2_tune_runtime=false`并冻结性能文件。此时仍可使用该文件已有的合格实测组；若需要完全固定D/算术，应同时显式锁定它们。检验正常运行时选型的矩阵则保留该开关，单独记录学习和候选试跑；稳定性能须核对无新试跑、文件未变化，并对相同D/P/算术重复测量。若直接报告性能文件的最佳合格均值，则须注明实际样本数和波动，明确这些观察也参与了选型，不冒充独立的选型后验证。两种口径不混合，复现方法见[运行时矩阵](../../tools/bench/README_STAGE2_VERSION.md#正常运行时选型矩阵)。
 
 ### 当前验证范围
 

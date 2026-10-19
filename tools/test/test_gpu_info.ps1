@@ -19,7 +19,8 @@
 param(
     [string]$Exe = 'build_cuda_cmake\ecm_cuda.exe',
     [string]$OpenClExe = '',
-    [int]$Device = 0
+    [int]$Device = 0,
+    [string]$Work = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -27,7 +28,12 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 if (-not [System.IO.Path]::IsPathRooted($Exe)) { $Exe = Join-Path $repo $Exe }
 if (-not (Test-Path $Exe)) { Write-Host "missing exe: $Exe" -ForegroundColor Red; exit 2 }
 
-$work = Join-Path $repo '.bench_tmp\test_gpu_info'
+if (-not $Work) { $Work = Join-Path $repo '.bench_tmp\test_gpu_info' }
+$work = [System.IO.Path]::GetFullPath($Work)
+if (-not $work.StartsWith($repo + [System.IO.Path]::DirectorySeparatorChar,
+                          [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "test work directory must be inside the repository: $work"
+}
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 
@@ -97,6 +103,7 @@ Check "sm_count > 0"                      ([int](Get-Key $allLines 'sm_count') -
 Check "cc looks like major.minor"         ((Get-Key $allLines 'cc') -match '^\d+\.\d+$')
 Check "carry_bits = 6"                    ((Get-Key $allLines 'carry_bits') -eq '6')
 Check "gpu_param = 3 by default"          ((Get-Key $allLines 'gpu_param') -eq '3')
+Check "default curve is Montgomery"       ((Get-Key $allLines 'curve_model') -eq 'mont')
 Check "picked = 0 without --bits"         ((Get-Key $allLines 'picked') -eq '0')
 Check "every non-tier line is key=value"  (@($allLines | Where-Object { $_ -notmatch '^tier\s' -and $_ -notmatch '^[a-z_]+=' }).Count -eq 0)
 Check "every tier token is key=value"     (@($allLines | Where-Object { $_ -match '^tier\s' } | ForEach-Object { ($_ -split '\s+') | Where-Object { $_ -ne 'tier' -and $_ -notmatch '^[a-z_]+=' } }).Count -eq 0)
@@ -149,6 +156,21 @@ $rlow = Invoke-GpuInfo @('--bits', '64')
 $tlow = Get-Tiers @($rlow.lines)
 Check "--bits 64 -> the 128-bit tier" (($rlow.exit -eq 0) -and $tlow.Count -eq 1 -and $tlow[0]['bits'] -eq $tiers[0]['bits'])
 
+Write-Host "=== C2. Edwards tiers ==="
+$red = Invoke-GpuInfo @('--curve', 'ed', '-d', "$Device")
+$edLines = @($red.lines)
+$edTiers = Get-Tiers $edLines
+Check "Edwards query exits 0"              ($red.exit -eq 0)
+Check "Edwards model reported"             ((Get-Key $edLines 'curve_model') -eq 'ed')
+Check "Edwards has one spare bit"          ((Get-Key $edLines 'carry_bits') -eq '1')
+Check "Edwards has no parametrization"     ((Get-Key $edLines 'gpu_param') -eq '-1')
+Check "Edwards has compiled tiers"         ($edTiers.Count -gt 0)
+Check "Edwards uses TPB 128"               (@($edTiers | Where-Object { $_['tpb'] -ne 128 }).Count -eq 0)
+$edPick = Invoke-GpuInfo @('--curve', 'ed', '--bits', '512', '-d', "$Device")
+$edPicked = Get-Tiers @($edPick.lines)
+$expectedEd = $edTiers | Where-Object { $_['bits'] -gt 512 } | Select-Object -First 1
+Check "Edwards boundary picks next tier"  ($edPick.exit -eq 0 -and $edPicked.Count -eq 1 -and $edPicked[0]['bits'] -eq $expectedEd['bits'])
+
 # ------------------------------------------------------------------ D. errors ------------
 Write-Host "=== D. error paths ==="
 $rbad = Invoke-GpuInfo @('-d', '99')
@@ -171,6 +193,9 @@ gpu_param = 0
 [Worker #2]
 gpu_param = 2
 device = 0
+[Worker #3]
+curve = ed
+device = 0
 "@ | Set-Content -Path $ini -Encoding ASCII
 
 $before = @(Get-ChildItem $work -Recurse -File | Select-Object -ExpandProperty FullName)
@@ -188,6 +213,11 @@ Check "--gpu-param beats the ini"         ((Get-Key $rcli 'gpu_param') -eq '2')
 $rworker = (& $Exe --gpu-info -ini $ini --worker 2 2>&1 | ForEach-Object { "$_" })
 Check "worker 2 reads its own section"    ((Get-Key $rworker 'gpu_param') -eq '2')
 Check "worker is echoed"                  ((Get-Key $rworker 'worker') -eq '2')
+$redWorker = (& $Exe --gpu-info -ini $ini --worker 3 2>&1 | ForEach-Object { "$_" })
+Check "worker curve selects Edwards tiers" ((Get-Key $redWorker 'curve_model') -eq 'ed' -and
+                                             (Get-Key $redWorker 'carry_bits') -eq '1')
+$rCurveCli = (& $Exe --gpu-info -ini $ini --worker 3 --curve mont 2>&1 | ForEach-Object { "$_" })
+Check "CLI curve beats worker curve"       ((Get-Key $rCurveCli 'curve_model') -eq 'mont')
 
 # The CUDA run path prints its own choice as "CGBN<TPI, BITS> kernel, N is k bits", so the
 # report is checked against the run itself and not just against its own arithmetic.

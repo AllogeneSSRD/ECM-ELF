@@ -6,6 +6,8 @@
 
 使用正式 local 构建入口，测量前完成编译；不要同时运行本任务的 GPU 诊断：
 
+以下示例记录已完成的 0.38.4 研究。重建该版本须使用对应版本源码；用当前源码开展新研究时，应同时更新目录与 `--version`，以程序实际报告的版本为准。
+
 ```powershell
 tools/build/build_stage2_local.ps1 -Build build_cuda_cmake/local_stage2_0_38_4 `
   -Arch sm_89 -Engine production -SplitCompile 8
@@ -54,3 +56,44 @@ python tools/bench/plot_stage2_version.py `
 同一工具重绘已验收历史参考：Prime95 31.4b05 全部两曲线族、32 条 libecm 样本、CPU GW 0.33.0 的 36 次实测，以及 Montgomery 55 W 及两种频率设置下的三份 9 位宽×3 B2×3 次矩阵。不将缺测 CPU 单元插值，不按频率、B2 或线程数归一化。历史参考路径集中在绘图脚本顶部，原始研究不改写。`--references-only` 可在等待 GPU 时单独重绘这些参考，不能生成当前版本完整性能结论。
 
 `--publish` 只复制选定 PNG 到指定 attachments 目录；原始结果、账户字段、运行校验值、EXE、遥测和全部数据只在忽略的 data 目录。公开提交只包含工具、文档和审查过的图。
+
+## 正常运行时选型矩阵
+
+当前矩阵使用 `build_cuda_cmake/stage2_d_search_0_39_3/` 的 ECM-ELF 0.39.3，保留 0.38.4 完整默认矩阵作参考。`bench_stage2_runtime_matrix.py` 冻结指定 EXE/GMP、13 份已独立验证的原始 Stage1 点。每个实际 N/B2 条件提供一条 **上限 48 曲线的连续 worktodo 队列**，共 26 条队列；当当前最快合格参数组完成第 3 个入账观察时，提前结束该条件。相同保存点重放仅测量耗时和选型，不增加独立 ECM 覆盖。
+
+```powershell
+python tools/bench/bench_stage2_runtime_matrix.py `
+  --baseline data/experiments/stage2_v0_38_4_20261018/full_matrix `
+  --exe build_cuda_cmake/stage2_d_search_0_39_3/ecm_cuda_stage2.exe `
+  --version 0.39.3 `
+  --import-study data/experiments/stage2_runtime_v0_39_3_20261019/matrix_01 `
+  --output data/experiments/stage2_runtime_v0_39_3_20261019/adaptive_01
+```
+
+D/P 和普通/承载全由正常运行时选型决定；不执行单独 tune，不锁定 D 或算术。每组采样上限保持默认 10，启用准备缓存。队列提供并验证原指数、已知因子和精确 N；48 条计划用于保留正常的队列剩余量判断和父子进程准备复用，外部采集器按第 3 次观察提前停止。先运行最小位宽低 B2，随后按位宽和 B2 降序，优先核对最大位宽高 B2。
+
+停止条件要求完整形状相同、当前调用不是探测对、更新后的均值仍不高于其他已准入重复候选；探测过程中的两个观察不会触发停止。采集器用继承的原生停止事件请求退出，保留已经开始的至多一条额外曲线、未完成 worktodo 和检查点，不修改原始结果。此规则是用户指定的采集启发式，不表示候选已穷尽：程序可能在更多重复之后开放更大的搜索配额。
+
+本轮保留原规则的三条完整队列，以及用户要求立即停止的 14328-bit 高 B2 队列中 42 次完整 NF，共 186 次调用；后续条件采用提前停止。`--import-study` 只接受记录了用户批准停止的原始研究，并核对同一冻结程序、输入和数学结果。中断时未完成的一次调用只保留日志，不计入 NF 或成绩；该队列未落盘的遥测和精确进程墙钟明确标为不可用，完整曲线计时与算术检查仍逐条验证。原目录与日志不改写。全新研究省略 `--import-study`，从空白性能文件开始。不同条件实际执行次数和被选行样本数分别报告。
+
+逐调用保留完整引擎计时、`curve_done.wall`、实际 D/P/承载、选择和搜索理由、GMP 检查；逐队列保留整卡遥测、进程墙钟和性能文件快照。调用前后查询 GPU1 外部进程，发现竞争即保留证据并拒绝该轮；边界快照不能证明每一瞬间绝无竞争。GPU0 用户工作不作更改。预算保持 arena6300/fold640/batch256 MiB，短标定、relocation、NTT 计数关闭。
+
+成绩采用最终 tune 的最佳合格实测决策：全部队列完成后通过生产 worktodo 的只规划入口读取，关闭新采样、不锁定参数。程序须返回 `runtime_measured_fastest`、至少两次合格观察，均值为已准入重复候选中的最小者。记录实际样本数、均值、样本标准差及原始 min/max；这些观察也参与选型，**不冒充独立的选型后 n=3 验证**，也不证明全部 D 的全局最优。默认普通/承载仍使用原 n=3 中位数，图注区分统计口径。
+
+```powershell
+python tools/bench/bench_stage2_runtime_matrix.py --resume `
+  --output data/experiments/stage2_runtime_v0_39_3_20261019/adaptive_01
+python tools/test/check_stage2_runtime_matrix.py `
+  --study data/experiments/stage2_runtime_v0_39_3_20261019/adaptive_01 `
+  --output data/experiments/stage2_runtime_v0_39_3_20261019/adaptive_01/audit.json
+python tools/bench/plot_stage2_version.py `
+  --study data/experiments/stage2_v0_38_4_20261018/full_matrix `
+  --runtime-study data/experiments/stage2_runtime_v0_39_3_20261019/adaptive_01 `
+  --output data/benchmarks/stage2_runtime_v0_39_3_20261019/final `
+  --figures data/figures/stage2_runtime_v0_39_3_20261019/final `
+  --publish docs/performance/attachments
+```
+
+审计要求完整 26 个条件、每条实际执行的唯一完整 NF，核对提前停止的触发观察、原生退出确认及队列剩余状态，同时核对点重放、输入、版本、原始计时、数学检查及覆盖；用 JSONL 的完整精度观察独立重算各组均值/方差，六位小数文本计时另按舍入精度对照。保留队列另与导入前的原始计划逐项核对。最终只规划输出须与被选性能行和原始观察对应。
+
+`stage2_ecm_tune.toml` 为活动文件，最终完全相同的 `stage2_ecm_tune_frozen.toml` 可通过 `stage2_tune_profile` / `--tune-profile` 复用。它们留在忽略的 data 目录，不公开设备身份或运行去重标识。学习队列的引擎、队列和进程时间分别报告，不与最优成绩重复相加；计时边界见 [准备结果的复用](../../docs/architecture/AUTO_B2.md#准备结果的复用)。
