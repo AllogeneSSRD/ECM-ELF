@@ -45,9 +45,9 @@ extern "C" int ecm_backend_prepare(size_t n_log2, int verbose, int device_index,
    of the cubin the CUDA backend would launch; the OpenCL .cl kernels have neither).
    Say so plainly and let the driver exit 0 -- asking a question this build cannot answer
    is not a failure. */
-extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, uint32_t want_bits,
+extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, int edwards, uint32_t want_bits,
                                      ecm_backend_gpu_info *out, const char **err) {
-    (void)device_index; (void)gpu_param; (void)want_bits;
+    (void)device_index; (void)gpu_param; (void)edwards; (void)want_bits;
     /* Zero it so a caller that ignores the return value cannot read garbage. */
     if (out != nullptr) memset(out, 0, sizeof(*out));
     if (err != nullptr) *err = "not applicable to the OpenCL backend";

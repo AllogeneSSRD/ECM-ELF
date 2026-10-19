@@ -34,6 +34,8 @@
       <Item id="dedup"          name="去重"/>
       <Item id="override_b1"    name="覆盖 B1"/>
       <Item id="override_b1_hint" name="留空保持原值"/>
+      <Item id="override_b2" name="覆盖 B2"/>
+      <Item id="override_b2_hint" name="默认 0；留空保持原值"/>
       <Item id="save_pattern"   name="存档名"/>
       <Item id="curve_type" name="曲线类型"/>
       <Item id="curve_e" name="Edwards (e)"/>
@@ -50,7 +52,7 @@
       <Item id="no_preview"     name="预览为空"/>
       <Item id="applied"        name="追加成功"/>
       <Item id="gpu_info_failed" name="--gpu-info 无法读取内核信息"/>
-      <Item id="recommendation_unavailable" name="Edwards 或 CPU 目标没有对应的 GPU 档位推荐；请关闭“使用推荐曲线数”，保留任务原有曲线数。"/>
+      <Item id="recommendation_unavailable" name="CPU 目标不使用 GPU 档位推荐；请保留任务原有曲线数。"/>
       <Item id="curve_unavailable" name="Stage2 仅接收 Edwards 或 Montgomery param0 存档；CPU Stage1 也不支持 param2/3。"/>
       <Item id="col_lines"      name="行数"/>
       <Item id="col_segments"   name="worker 段数"/>

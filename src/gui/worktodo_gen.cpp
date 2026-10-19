@@ -343,6 +343,7 @@ bool parse_gpu_info(const std::string &text, GpuProfile &out, std::string &err) 
         else if (key == "sm_count") out.sm_count = static_cast<int>(int_or(val, 0));
         else if (key == "carry_bits") out.carry_bits = static_cast<int>(int_or(val, 6));
         else if (key == "gpu_param") out.gpu_param = static_cast<int>(int_or(val, 3));
+        else if (key == "curve_model") out.curve_model = val;
         else if (key == "fold") out.fold = static_cast<int>(int_or(val, 0));
         else if (key == "reason" && out.not_applicable) out.error = val;
     }
@@ -575,10 +576,22 @@ GenResult generate(const std::string &input, const GpuProfile &gpu, const GenOpt
         r.error="unsupported curve type: "+opt.curve_type;
         return r;
     }
+    if (!opt.set_b2.empty()) {
+        double b2 = 0.0;
+        if (!strtod_value(opt.set_b2, b2) || !std::isfinite(b2) || b2 < 0.0) {
+            r.error = "invalid B2 override: '" + opt.set_b2 + "'";
+            return r;
+        }
+    }
     const bool need_recommendation = opt.curves_fixed < 0 && opt.use_recommended;
     if (need_recommendation && !gpu.valid) {
         r.error = "the recommended curves need a working `--gpu-info` report: " +
                   (gpu.error.empty() ? std::string("no GPU profile") : gpu.error);
+        return r;
+    }
+    if (need_recommendation && (gpu.curve_model != (opt.curve_type == "e" ? "ed" : "mont") ||
+                                (opt.curve_type != "e" && gpu.gpu_param != opt.curve_type[1] - '0'))) {
+        r.error = "GPU tier report does not match the selected curve construction";
         return r;
     }
 

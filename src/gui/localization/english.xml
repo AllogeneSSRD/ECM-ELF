@@ -34,6 +34,8 @@
       <Item id="dedup"          name="dedup"/>
       <Item id="override_b1"    name="override B1"/>
       <Item id="override_b1_hint" name="blank keeps original"/>
+      <Item id="override_b2" name="override B2"/>
+      <Item id="override_b2_hint" name="default 0; blank keeps original"/>
       <Item id="save_pattern"   name="save name"/>
       <Item id="curve_type" name="Curve type"/>
       <Item id="curve_e" name="Edwards (e)"/>
@@ -50,7 +52,7 @@
       <Item id="no_preview"     name="Generate a preview first."/>
       <Item id="applied"        name="Appended. Generate a new preview for the next batch."/>
       <Item id="gpu_info_failed" name="cannot read the kernel tiers from --gpu-info"/>
-      <Item id="recommendation_unavailable" name="No matching GPU tier recommendation for Edwards or a CPU target. Turn off recommended curves to keep each task's curve count."/>
+      <Item id="recommendation_unavailable" name="CPU targets do not use GPU tier recommendations; keep each task's original curve count."/>
       <Item id="curve_unavailable" name="Stage2 accepts Edwards or Montgomery param0 saves; CPU Stage1 does not support param2/3."/>
       <Item id="col_lines"      name="lines"/>
       <Item id="col_segments"   name="worker sections"/>

@@ -281,6 +281,7 @@ private:
     GenInputText gen_input_;              // editable buffer and loaded file content
     std::string gen_input_path_;          // last file loaded into it ("" = pasted)
     std::string gen_set_b1_;              // blank keeps each assignment's B1
+    std::string gen_set_b2_ = "0";        // GUI default overrides every assignment's B2
     std::string gen_save_pattern_ = "{curve}_{target}_{b1}.save";
     std::string gen_curve_type_ = "m0";
     std::string gen_sort_by_ = "n";

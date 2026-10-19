@@ -49,6 +49,7 @@ struct GpuProfile {
     int sm_count = 0;
     int carry_bits = 6;
     int gpu_param = 3;
+    std::string curve_model = "mont";
     int fold = 0;
     std::string name;
     std::string error;            // why it is not valid

@@ -514,7 +514,7 @@ void App::rebuild_workers() {
     gen_target_device_=workers_[static_cast<size_t>(gen_worker_index_-1)].device;
     const auto &gen_worker=workers_[static_cast<size_t>(gen_worker_index_-1)];
     gen_curve_type_=generator_curve_type(gen_worker);
-    if(gen_worker.stage2 || gen_worker.execution_target=="cpu" || gen_curve_type_=="e")gen_use_recommended_=false;
+    if(gen_worker.stage2 || gen_worker.execution_target=="cpu")gen_use_recommended_=false;
     refresh_device_warnings();
 }
 
@@ -592,7 +592,7 @@ bool App::set_worker_stage(int index,const std::string &stage) {
             refresh_device_warnings();gen_has_preview_=false;
             if(index==gen_worker_index_){gen_target_device_=w.device;if(w.stage2 || w.execution_target=="cpu")gen_use_recommended_=false;
                 gen_curve_type_=generator_curve_type(w);
-                if(gen_curve_type_=="e")gen_use_recommended_=false;}
+            }
             return true;
         } catch(const std::exception &e){ini_.set(section,"stage",previous);status_=e.what();return false;}
     }
@@ -1730,6 +1730,7 @@ void App::gen_make_preview() {
     GenOptions opt;
     opt.valid = true;
     opt.set_b1 = gen_set_b1_;
+    opt.set_b2 = gen_set_b2_;
     opt.save_pattern = gen_save_pattern_.empty() ? "{curve}_{target}_{b1}.save" : gen_save_pattern_;
     opt.curve_type=gen_curve_type_;
     opt.sort_by = gen_sort_by_;
@@ -1746,7 +1747,7 @@ void App::gen_make_preview() {
         gen_status_=loc_.t("gen","curve_unavailable");
         return;
     }
-    if(gen_use_recommended_ && (gen_curve_type_=="e" || (!target_worker.stage2 && target_worker.execution_target=="cpu"))) {
+    if(gen_use_recommended_ && !target_worker.stage2 && target_worker.execution_target=="cpu") {
         gen_status_=loc_.t("gen","recommendation_unavailable");
         return;
     }
@@ -1756,7 +1757,9 @@ void App::gen_make_preview() {
         // table can never drift from the kernels. --gpu-info writes nothing.
         std::string cmd = "\"" + resolve_stage1_exe() + "\" -ini \"" + ini_path_ +
                           "\" --worker " + std::to_string(gen_worker_index_) + " --gpu-info -d " +
-                          std::to_string(gen_target_device_) + " --gpu-param " + gen_curve_type_.substr(1);
+                          std::to_string(gen_target_device_) + " --curve " +
+                          (gen_curve_type_=="e" ? "ed" : "mont");
+        if(gen_curve_type_!="e")cmd += " --gpu-param " + gen_curve_type_.substr(1);
         std::string out;
         int code = -1;
         std::string err;
@@ -1881,7 +1884,7 @@ void App::draw_gen_panel() {
         for(const auto &w:workers_)if(ImGui::Selectable(worker_label(w).c_str(),w.index==gen_worker_index_)) {
             gen_worker_index_=w.index;gen_target_device_=w.device;gen_has_preview_=false;
             gen_curve_type_=generator_curve_type(w);
-            gen_use_recommended_=!w.stage2 && w.execution_target!="cpu" && gen_curve_type_!="e";
+            gen_use_recommended_=!w.stage2 && w.execution_target!="cpu";
         }
         ImGui::EndCombo();
     }
@@ -1938,7 +1941,11 @@ void App::draw_gen_panel() {
     if (ImGui::BeginTable("##gen_curve_options", 2, ImGuiTableFlags_SizingStretchSame)) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
+        const bool cpu_target=!target.stage2 && target.execution_target=="cpu";
+        if(cpu_target && gen_use_recommended_) {gen_use_recommended_=false;gen_has_preview_=false;}
+        if(cpu_target)ImGui::BeginDisabled();
         if (ImGui::Checkbox("##gen_recommended", &gen_use_recommended_)) gen_has_preview_ = false;
+        if(cpu_target)ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::TextWrapped("%s", loc_.t("gen", "use_recommended").c_str());
 
@@ -2017,7 +2024,6 @@ void App::draw_gen_panel() {
                                        (target.stage2 || target.execution_target=="cpu");
                 if(ImGui::Selectable(label.c_str(),gen_curve_type_==key,unavailable?ImGuiSelectableFlags_Disabled:0)) {
                     gen_curve_type_=key;gen_has_preview_=false;
-                    if(gen_curve_type_=="e")gen_use_recommended_=false;
                 }
             }
             ImGui::EndCombo();
@@ -2025,12 +2031,14 @@ void App::draw_gen_panel() {
 
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        ImGui::TextWrapped("%s", loc_.t("gen", "save_pattern").c_str());
+        ImGui::TextWrapped("%s", loc_.t("gen", "override_b2").c_str());
         ImGui::SetNextItemWidth(-1.0f);
-        char pattern[128];
-        std::snprintf(pattern, sizeof(pattern), "%s", gen_save_pattern_.c_str());
-        if (ImGui::InputText("##gen_save_pattern", pattern, sizeof(pattern))) {
-            gen_save_pattern_ = pattern;
+        char override_b2[128];
+        std::snprintf(override_b2, sizeof(override_b2), "%s", gen_set_b2_.c_str());
+        if (ImGui::InputTextWithHint("##gen_override_b2",
+                                     loc_.t("gen", "override_b2_hint").c_str(),
+                                     override_b2, sizeof(override_b2))) {
+            gen_set_b2_ = override_b2;
             gen_has_preview_ = false;
         }
 
@@ -2051,6 +2059,18 @@ void App::draw_gen_panel() {
             }
             ImGui::EndCombo();
         }
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextWrapped("%s", loc_.t("gen", "save_pattern").c_str());
+        ImGui::SetNextItemWidth(-1.0f);
+        char pattern[128];
+        std::snprintf(pattern, sizeof(pattern), "%s", gen_save_pattern_.c_str());
+        if (ImGui::InputText("##gen_save_pattern", pattern, sizeof(pattern))) {
+            gen_save_pattern_ = pattern;
+            gen_has_preview_ = false;
+        }
+
         ImGui::EndTable();
     }
 

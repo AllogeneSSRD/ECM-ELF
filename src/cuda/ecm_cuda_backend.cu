@@ -195,9 +195,10 @@ extern "C" int ecm_backend_prepare(size_t n_log2, int verbose, int device_index,
    1's kernel would report numbers for the wrong GPU. Nothing is launched and
    nothing is written, so -d 1 --gpu-info remains safe to run at any time.
 
-   The tier list and the occupancy query live in cgbn_stage1.cu, next to the
-   kernels they describe, so this report cannot drift from the run path. */
-extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, uint32_t want_bits,
+   Montgomery tiers/occupancy are queried from cgbn_stage1.cu. Edwards tiers
+   use the same include list as its dispatch path. */
+extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, int edwards,
+                                     uint32_t want_bits,
                                      ecm_backend_gpu_info *out, const char **err) {
     static char reason[256];
     reason[0] = '\0';
@@ -208,11 +209,12 @@ extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, uint32_t w
     }
     memset(out, 0, sizeof(*out));
 
-    const int fold = ecm_cuda_fold_build();
+    const int fold = edwards ? 0 : ecm_cuda_fold_build();
     out->fold = fold;
-    out->gpu_param = gpu_param;
+    out->edwards = edwards != 0;
+    out->gpu_param = edwards ? -1 : gpu_param;
 
-    if (gpu_param != 0 && gpu_param != 2 && gpu_param != 3) {
+    if (!edwards && gpu_param != 0 && gpu_param != 2 && gpu_param != 3) {
         snprintf(reason, sizeof(reason),
                  "unknown gpu_param %d (expected 0, 2 or 3)", gpu_param);
         return ECM_BACKEND_QUERY_FAILED;
@@ -260,6 +262,39 @@ extern "C" int ecm_backend_query_gpu(int device_index, int gpu_param, uint32_t w
     out->cc_major = prop.major;
     out->cc_minor = prop.minor;
     snprintf(out->name, sizeof(out->name), "%s", prop.name);
+
+    if (edwards) {
+        // The dispatch path includes this same list. Edwards needs one spare bit and
+        // launches 128 threads per block. Its occupancy is not queried here (0 = unknown).
+        struct EdwardsTier { uint32_t bits, tpi; };
+        static const EdwardsTier tiers[] = {
+#define ECM_EDWARDS_TIER(W,T) {W,T},
+#include "ecm_cuda_edwards_tiers.inc"
+#undef ECM_EDWARDS_TIER
+        };
+        const uint32_t sm = static_cast<uint32_t>(prop.multiProcessorCount);
+        out->carry_bits = 1;
+        out->picked = want_bits != 0u;
+        for (const EdwardsTier &raw : tiers) {
+            if (want_bits != 0u && want_bits >= raw.bits) continue;
+            ecm_backend_tier &t = out->tiers[out->tier_count++];
+            t.bits = raw.bits;
+            t.tpb = 128;
+            t.tpi = raw.tpi;
+            t.ipb = t.tpb / t.tpi;
+            t.blocks_min = sm;
+            t.curves_min = static_cast<uint64_t>(sm) * t.ipb;
+            t.blocks_wave = sm;
+            t.curves_wave = t.curves_min;
+            if (want_bits != 0u || out->tier_count == ECM_BACKEND_MAX_TIERS) break;
+        }
+        if (out->tier_count == 0) {
+            snprintf(reason, sizeof(reason),
+                     "no Edwards tier of this build covers an N of %u bits", want_bits);
+            return ECM_BACKEND_QUERY_FAILED;
+        }
+        return ECM_BACKEND_QUERY_OK;
+    }
 
     const int param0 = (gpu_param == 0) ? 1 : 0;
     const int param2 = (gpu_param == 2) ? 1 : 0;

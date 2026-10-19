@@ -98,6 +98,7 @@ typedef struct {
     int      cc_major;
     int      cc_minor;
     int      fold;          /* 1 = this binary carries the Mersenne-fold kernels */
+    int      edwards;       /* 1 = Edwards tiers; 0 = Montgomery tiers */
     int      gpu_param;     /* the parametrization the tiers were resolved for */
     uint32_t carry_bits;    /* container overhead the kernel adds to the bit size */
     int      picked;        /* 1 = only the tier the kernel would pick is reported */
@@ -108,7 +109,8 @@ typedef struct {
 
 /* Fill `*out` with the device the backend would select and the tiers it carries.
      device_index : 0-based, as given by -d (default 0)
-     gpu_param    : 0 = Suyama param0, 2 = param2, 3 = gmp-ecm batch (param3)
+     gpu_param    : Montgomery only: 0 = Suyama, 2 = param2, 3 = param3
+     edwards      : 1 selects Edwards tiers; gpu_param is ignored and reported as -1
      want_bits    : 0 = every tier; otherwise only the tier the kernel would pick
                     for an N of that many bits
    Returns ECM_BACKEND_QUERY_OK on success, or ECM_BACKEND_QUERY_FAILED with a
@@ -116,7 +118,7 @@ typedef struct {
    always print something useful). A backend that has no such concept (OpenCL)
    returns ECM_BACKEND_QUERY_NOT_APPLICABLE and says so in *err -- the driver prints
    that and still exits 0, because asking is not itself an error. */
-int ecm_backend_query_gpu(int device_index, int gpu_param, uint32_t want_bits,
+int ecm_backend_query_gpu(int device_index, int gpu_param, int edwards, uint32_t want_bits,
                           ecm_backend_gpu_info *out, const char **err);
 
 #define ECM_BACKEND_QUERY_OK           0

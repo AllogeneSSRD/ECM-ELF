@@ -604,7 +604,8 @@ static void print_ecm_usage(const char *prog) {
               << " kernel paths and exit\n"
               << "  --gpu-info           Report the device this build would use and, per kernel\n"
               << "                       tier, the curves a full GPU needs; no curve is run and\n"
-              << "                       no file is written. Honours -d and --gpu-param\n"
+              << "                       no file is written. Honours -d, --curve and\n"
+              << "                       --gpu-param (Montgomery only)\n"
               << "  --bits <n>           With --gpu-info: only the tier the kernel would pick\n"
               << "                       for an N of n bits (default: every tier of this build)\n"
               << "  -h, --help           Show this help and exit\n"
@@ -3325,7 +3326,8 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
 
      gpu_info=1               (or gpu_info=not_applicable on the OpenCL build)
      backend=<name>  device=<i>  name=<gpu>  sm_count=<n>  cc=<major>.<minor>
-     gpu_param=<0|2|3>  fold=<0|1>  carry_bits=<n>  picked=<0|1>  tier_count=<n>
+     curve_model=<mont|ed>  gpu_param=<0|2|3|-1>  fold=<0|1>
+     carry_bits=<n>  picked=<0|1>  tier_count=<n>
      ini=<path|->  worker=<n>
      tier bits=<n> tpb=<n> tpi=<n> ipb=<n> blocks_per_sm=<n> blocks_min=<n>
           curves_min=<n> blocks_wave=<n> curves_wave=<n>
@@ -3340,10 +3342,11 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
    "not applicable" answer too (asking is not an error); 1 only for a real failure
    (unknown -d, --bits too large for any tier, bad --gpu-param). */
 static int print_gpu_info(const char *ini_used, int worker, int device_index,
-                          int gpu_param, uint32_t want_bits) {
+                          int gpu_param, bool edwards, uint32_t want_bits) {
     ecm_backend_gpu_info info;
     const char *err = nullptr;
-    const int rc = ecm_backend_query_gpu(device_index, gpu_param, want_bits, &info, &err);
+    const int rc = ecm_backend_query_gpu(device_index, gpu_param, edwards ? 1 : 0,
+                                         want_bits, &info, &err);
 
     if (rc == ECM_BACKEND_QUERY_NOT_APPLICABLE) {
         fprintf(stdout, "gpu_info=not_applicable\nbackend=%s\nreason=%s\n",
@@ -3364,6 +3367,7 @@ static int print_gpu_info(const char *ini_used, int worker, int device_index,
     fprintf(stdout, "name=%s\n", info.name);
     fprintf(stdout, "sm_count=%d\n", info.sm_count);
     fprintf(stdout, "cc=%d.%d\n", info.cc_major, info.cc_minor);
+    fprintf(stdout, "curve_model=%s\n", info.edwards ? "ed" : "mont");
     fprintf(stdout, "gpu_param=%d\n", info.gpu_param);
     fprintf(stdout, "fold=%d\n", info.fold);
     fprintf(stdout, "carry_bits=%u\n", info.carry_bits);
@@ -3826,6 +3830,7 @@ int main(int argc, char **argv){
     std::string gpu_special_mult_path;
     bool show_kernels = false;
     bool show_gpu_info = false;           // --gpu-info: report tiers/occupancy and exit
+    bool curve_set = false;
     uint32_t gpu_info_bits = 0;           // --bits N: only the tier that N would pick (0 = all)
     std::string ini_path;
     int worker_index = 1;      // --worker N: ini + worktodo section (see the flag's parse site)
@@ -3879,6 +3884,7 @@ int main(int argc, char **argv){
                 std::cerr << "Invalid --curve, expected mont|ed" << std::endl;
                 return 1;
             }
+            curve_set = true;
             continue;
         }
         if(a == "--target" && i+1<argc){
@@ -4124,17 +4130,23 @@ int main(int argc, char **argv){
                                            : resolve_rel_local(exe_dir, ini_path);
         int eff_device = gpu_device_index;
         int eff_param = gpu_param_set ? gpu_param_cli : ecm_config::defaults::stage1_gpu_param;
+        ecm_stage1::CurveModel eff_curve = selection.curve;
         const char *ini_used = nullptr;
         EcmQueueConfig info_cfg;
         if (ecm_queue_config_load(ini, worker_index, info_cfg)) {
             ini_used = ini.c_str();
             if (!device_set) eff_device = info_cfg.device;
             if (!gpu_param_set) eff_param = info_cfg.gpu_param;
+            if (!curve_set && !ecm_stage1::parse_curve_model(info_cfg.curve_model, eff_curve)) {
+                std::cerr << "Invalid curve in config: " << info_cfg.curve_model << std::endl;
+                return 1;
+            }
         } else if (access(ini.c_str(), 0) == 0) {
             std::cerr << "Invalid or unreadable config: " << ini << std::endl;
             return 1;
         }
-        return print_gpu_info(ini_used, worker_index, eff_device, eff_param, gpu_info_bits);
+        return print_gpu_info(ini_used, worker_index, eff_device, eff_param,
+                              eff_curve == ecm_stage1::CurveModel::Edwards, gpu_info_bits);
     }
 
     if (stop_handle && !ecm_stage1_set_stop_handle(stop_handle)) {

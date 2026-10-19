@@ -49,6 +49,7 @@ const char *kGpuInfo =
     "name=NVIDIA GeForce RTX 4070 Ti\n"
     "sm_count=60\n"
     "cc=8.9\n"
+    "curve_model=mont\n"
     "gpu_param=0\n"
     "fold=0\n"
     "carry_bits=6\n"
@@ -60,6 +61,11 @@ const char *kGpuInfo =
     "tier bits=256 tpb=128 tpi=4 ipb=32 blocks_per_sm=9 blocks_min=60 curves_min=1920 blocks_wave=540 curves_wave=17280\n"
     "tier bits=768 tpb=128 tpi=8 ipb=16 blocks_per_sm=9 blocks_min=60 curves_min=960 blocks_wave=540 curves_wave=8640\n"
     "tier bits=1280 tpb=128 tpi=8 ipb=16 blocks_per_sm=9 blocks_min=60 curves_min=960 blocks_wave=540 curves_wave=8640\n";
+
+const char *kEdwardsGpuInfo =
+    "gpu_info=1\ncurve_model=ed\nsm_count=60\ngpu_param=-1\ncarry_bits=1\n"
+    "tier bits=512 tpb=128 tpi=4 ipb=32 blocks_per_sm=0 blocks_min=60 curves_min=1920\n"
+    "tier bits=768 tpb=128 tpi=8 ipb=16 blocks_per_sm=0 blocks_min=60 curves_min=960\n";
 
 // Two assignments of very different size (521 bits -> 768 tier, 1019 bits -> 1280 tier).
 const char *kInput =
@@ -298,10 +304,18 @@ int main(int argc, char **argv) {
               "no section for a worker with no tasks");
         check(r.text.find("ECMSTAGE2=AID0000000000000000000000000001,1,2,521,-1,\"m0_m521_110e6.save\",0,0,1920,\"3,5\"") != std::string::npos,
               "the emitted line keeps the AID, the save name and the factors", r.text);
+        GpuProfile ed_gpu;
+        check(parse_gpu_info(kEdwardsGpuInfo, ed_gpu, err), "Edwards GPU tiers parse", err);
+        check(ed_gpu.pick(512) && ed_gpu.pick(512)->bits == 768,
+              "Edwards needs one spare bit at the 512-bit boundary");
         GenOptions e=opt;e.curve_type="e";e.save_pattern="m{n}_{b1}.save";
-        const GenResult er=generate("ECM2=1,2,521,-1,1e5\n",gpu,e);
+        const GenResult er=generate("ECM2=1,2,521,-1,1e5\n",ed_gpu,e);
         check(er.ok && er.text.find("\"e_m521_1e5.save\"")!=std::string::npos,
               "a custom pattern still uses the selected curve prefix",er.text);
+        check(er.ok && er.tasks[0].curves_out == 1920,
+              "Edwards recommendation uses Edwards TPI", er.error);
+        check(!generate("ECM2=1,2,521,-1,1e5\n",gpu,e).ok,
+              "Edwards cannot use Montgomery tier data");
         check(r.text.find("\r\n\r\n") != std::string::npos, "sections end with a blank line");
     }
 
@@ -369,6 +383,13 @@ int main(int argc, char **argv) {
         check(rw.ok && rw.text.find("_2e6.save\"") != std::string::npos,
               "set_b1 lands in the save name", rw.text);
         check(rw.text.find(",1e9,0,8") != std::string::npos, "set_b2 is written", rw.text);
+        w.set_b2 = "0";
+        const GenResult r0 = generate("ECM2=1,2,521,-1,1e5,1e9,8\n", gpu, w);
+        check(r0.ok && r0.text.find(",0,0,8") != std::string::npos,
+              "B2=0 overrides a nonzero source B2", r0.text);
+        w.set_b2 = "-1";
+        check(!generate("ECM2=1,2,521,-1,1e5\n", gpu, w).ok,
+              "negative B2 override is rejected");
         check(rw.text.find("ECMSTAGE2=N/A,1,2,521") != std::string::npos,
               "set_has_na writes N/A", rw.text);
 
