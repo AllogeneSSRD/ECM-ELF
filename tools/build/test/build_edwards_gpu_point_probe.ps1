@@ -24,7 +24,7 @@ foreach($command in @($gpuCommand,$cpuCommand,$linkCommand)){
     if($LASTEXITCODE -ne 0){Get-Content $log -Tail 40;throw 'Edwards GPU point probe build failed'}
 }
 Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
-$sources=@('kernels/cuda/cgbn_edwards_point.cuh','tools/test/edwards_gpu_point_probe.cu',
+$sources=@('kernels/cuda/stage1/edwards/point.cuh','tools/test/edwards_gpu_point_probe.cu',
            'src/cpu/ecm_edwards_cpu.cpp','src/cpu/ecm_edwards_mont.h',
            'tools/build/test/build_edwards_gpu_point_probe.ps1')
 $hashes=[ordered]@{}

@@ -21,11 +21,13 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器策略；resident/PRAC 默认不编译，显式 `-EnablePrac` 才加入。`-Tiers` 可缩小开发档位。折叠域、统一寄存器上限和算术探针不是通用发布默认。
 
-Edwards binary/NAF使用32档容器、七组 `kernels/cuda/cgbn_edwards_instances_*.cu`，同样受 `-Tiers` 筛选；容器边界仍按Edwards的一位余量判断，Montgomery按六位。新功能构建入口 `tools/build/test/build_edwards_gpu_workers.ps1` 可用 `-Stage stage1 -Tiers '' -Jobs 8` 编译完整三曲线族。该worker测试入口默认仅1024；检查其他位宽前需显式选档或使用空列表编全档。
+位宽唯一清单为 `include/ecm/cuda/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `kernels/cuda/stage1/edwards/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `kernels/cuda/stage1/montgomery/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标，保留统一构建参数与发布拆分流程。
+
+新功能构建入口 `tools/build/test/build_edwards_gpu_workers.ps1` 可用 `-Stage stage1 -Tiers '' -Jobs 8` 编译完整三曲线族。该 worker 测试入口默认仅1024；检查其他位宽前需显式选档或使用空列表编全档。
 
 `build_edwards_gpu_stage1_probe.ps1` 默认8路并行；`-WorkerBuild <stage1构建目录>` 在源文件、命令、架构及对象摘要全部匹配时，复用该worker的Edwards对象，只编译探针和CPU参考，再链接独立验证程序。构建日志 `par_nvcc/timings.json` 区分队列实际墙钟和各TU同时运行的时间之和，后者不作为串行构建实测或加速比。
 
-独立探针默认编全档，可用 `-Tiers 384` 构建单档；验证时执行 `edwards_gpu_stage1_probe.exe 1 <新输出目录> 384` 检查回退、上限和三种执行模式，全档执行时省略最后的384。探针编译和链接均显式使用 `/MD` 与worker一致。短标量CPU参考使用w2，边界输入仅按奇数模数和有效曲线构造筛选，避免把大素数搜索或大CPU字典作为算术验收的前置工作；末点、GCD、点不变量和恢复比较均保留。
+独立探针默认编全档，可用 `-Tiers 384` 构建单档；验证时执行 `edwards_gpu_stage1_probe.exe 1 <新输出目录> 384` 检查回退、上限和三种执行模式。多档受限构建使用末尾参数 `--compiled-tiers`，全档完整用例则省略最后参数。探针编译和链接均显式使用 `/MD` 与 worker 一致。短标量 CPU 参考使用 w2，边界输入仅按奇数模数和有效曲线构造筛选，避免把大素数搜索或大 CPU 字典作为算术验收的前置工作；末点、GCD、点不变量和恢复比较均保留。
 
 Stage2：独立生产 CUDA 引擎，固定 Goldilocks PTX 后端、canonical 减法、`AddSubMask=1`、`OuterUnrollU=0`。这里“PTX 后端”是内联模算术，不表示一定携带驱动 JIT 的 compute PTX。开发引擎由独立 wrapper 选择。
 
@@ -62,6 +64,6 @@ Stage2 的 `-HostOnly` 只复用完整清单中身份一致的 CUDA 对象，并
 
 CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目对象库/静态库；条件目标按保守全集收集，导入库由工具链与依赖清单另行记录。对象枚举和 CUDA 完全重编按该目标闭包执行。`cuda_build_state.ps1` 扫描本地递归包含，包括 `.inc/.inl/.def`，并用 NVCC 依赖文件补齐宏包含及 SDK 头。每个对象的 `.ecm-state.json` 记录命令、依赖内容指纹与对象摘要；摘要编码在 Windows PowerShell 5.1 和 PowerShell 7 间一致。
 
-P0 独立验证入口为 `tools/build/test/build_cuda_p0.ps1`，用 `-Stage stage1/stage2/development` 选择构建；CPU 故障注入为 `tools/test/test_cuda_build_identity.ps1`，短曲线双版本对照为 `tools/test/test_cuda_p0_runtime.py`。这些入口不替代完整位宽、多架构或性能验收，证据写入 `data/experiments/`。
+源身份验证入口为 `tools/build/test/build_cuda_p0.ps1`，用 `-Stage stage1/stage2/development` 选择构建；CPU 故障注入为 `tools/test/test_cuda_build_identity.ps1`，短曲线双版本对照为 `tools/test/test_cuda_p0_runtime.py`。`tools/build/test/build_cuda_p1.ps1 -Stage tiers` 编译清单的16种筛选/几何配置，`-Stage stage1/stage2` 构建迁移后的程序。结构与冻结算术正文校验使用 `test_cuda_p1_structure.py`；实际注册、跨组曲线与可选运行时分别使用 `test_cuda_p1_registry.py`、`test_cuda_p1_curves.py`、`test_cuda_p1_prac.py`。这些入口不替代完整位宽、多架构或性能验收，证据写入 `data/experiments/`。
 
 `tools/build/dev/` 为开发和 GUI 入口，`test/` 为探针与参考实现构建，`internal/` 为配置检查、并行编译、拆分和打包辅助。详细参数入口见 [构建工具](../../tools/build/README.md)；配置生成合同见 [配置维护](../architecture/CONFIGURATION.md)。

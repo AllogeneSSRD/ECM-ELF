@@ -911,18 +911,14 @@ __global__ void s2g_xadd_test_kernel(const unsigned long long *input,
     s2g_halfmod<NW>(out+2*nw,s,n,nw);
 }
 
+#include "../../include/ecm/cuda/tiers.def"
+#define ECM_S2G_CAPACITY_ROW(NW,FN,...) if (_nwd <= NW) { FN<NW>(__VA_ARGS__); } else
 /* the word-count dispatch: seven instantiations cover every N up to 16384 bits */
 #define S2G_DISPATCH(NWD, FN, ...)                                                      \
     do {                                                                                \
         const int _nwd = (NWD);                                                         \
-        if (_nwd <= 4) { FN<4>(__VA_ARGS__); }                                          \
-        else if (_nwd <= 8) { FN<8>(__VA_ARGS__); }                                     \
-        else if (_nwd <= 16) { FN<16>(__VA_ARGS__); }                                   \
-        else if (_nwd <= 32) { FN<32>(__VA_ARGS__); }                                   \
-        else if (_nwd <= 64) { FN<64>(__VA_ARGS__); }                                   \
-        else if (_nwd <= 128) { FN<128>(__VA_ARGS__); }                                 \
-        else if (_nwd <= 256) { FN<256>(__VA_ARGS__); }                                 \
-        else {                                                                          \
+        ECM_CUDA_STAGE2_CAPACITIES(ECM_S2G_CAPACITY_ROW,FN,__VA_ARGS__)                   \
+        {                                                                               \
             std::fprintf(stderr, "%s: N has %d words (%d bits); the ladder supports up " \
                                  "to 256 words (16384 bits)\n",                          \
                          NTT_PROBE_NAME, _nwd, _nwd * 64);                              \

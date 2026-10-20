@@ -5,7 +5,7 @@
 # instructions (spills = LDL/STL) and see the inner-loop opcode mix, per
 # docs/performance/STAGE1.md
 param(
-    [string]$Obj = 'build_cuda_cmake\CMakeFiles\ecm_cuda.dir\kernels\cuda\cgbn_stage1_kernels_tpi16.cu.obj',
+    [string]$Obj = 'build_cuda_cmake\CMakeFiles\ecm_cuda.dir\kernels\cuda\stage1\montgomery\instances_param3_g4.cu.obj',
     [string]$Kernel = 'kernel_double_addI13cgbn_params_tILj16ELj8192E',
     [int]$Top = 12
 )

@@ -33,7 +33,7 @@
 */
 
 #include "cgbn_stage2_cuda.h"
-#include "cuda_ecm_shim.h"
+#include "../../src/cuda/common/cuda_ecm_shim.h"
 
 #include <gmp.h>
 
@@ -47,7 +47,7 @@
 #include <vector>
 
 /* ── logging shims ───────────────────────────────────────────────────────────────
-   In ecm_cuda these live in src/cuda/ecm_cuda_backend.cu and route through the project's
+   In ecm_cuda these live in src/cuda/backend.cpp and route through the project's
    timestamped logger; here they print plainly, so the probe stays a single self-contained
    executable. */
 static int g_verbose = OUTPUT_NORMAL;

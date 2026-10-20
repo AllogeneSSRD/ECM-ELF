@@ -22,6 +22,6 @@
 
 生产程序需要用同一套源码、配置和全部 CUDA 对象完整重建后发布。当前可用验证程序为 `build_cuda_cmake/ecm_cuda.exe`。该版本使用 `ecm.toml` 和 `--config`，生产仍为 INI 配置，发布时须协调配置与 GUI；或从生产对应版本完整重建，避免混用配置接口及旧对象。
 
-主机自动切片调用见 `src/core/ecm_edwards_gpu_driver.inl`；NAF 循环见 `src/cuda/ecm_cuda_edwards_naf.inl`；切片策略见 `src/cuda/ecm_cuda_edwards_slice.h`。后续发布验收宜覆盖每个实际发布的 Edwards 容器，并核对 CUDA 对象的源文件、头文件和编译命令身份，不能只依据文件时间戳。
+主机自动切片调用见 `src/core/ecm_edwards_gpu_driver.inl`；NAF 循环见 `src/cuda/stage1/edwards_runtime.inl`；切片策略见 `src/cuda/stage1/edwards_slice.h`。后续发布验收宜覆盖每个实际发布的 Edwards 容器，并核对 CUDA 对象的源文件、头文件和编译命令身份，不能只依据文件时间戳。
 
 本草稿保留，完成后的整理或删除由用户决定。

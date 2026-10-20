@@ -1,7 +1,7 @@
 // Included by the shared Stage1 driver after its save-name helpers.
 #if ECM_HAS_CUDA_EDWARDS
-#include "../cuda/ecm_cuda_edwards.h"
-#include "../cuda/ecm_cuda_edwards_naf.h"
+#include "ecm/cuda/edwards.h"
+#include "ecm/cuda/edwards_naf.h"
 #include "ecm_edwards_naf.h"
 #include "ecm_edwards_io.h"
 #include "ecm_stage1_binary.h"

@@ -10,11 +10,11 @@ $cuda=Resolve-EcmCudaToolkit -Archs $Arch
 $vc=Resolve-EcmVcEnvironment $cuda
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 New-Item -ItemType Directory -Path $Build -Force | Out-Null
-$sources=@('tools/test/stage1_host_wait_probe.cu','kernels/cuda/cgbn_edwards_instances.cuh',
- 'kernels/cuda/cgbn_edwards_point.cuh','kernels/cuda/cgbn_edwards_naf.cuh',
- 'src/cuda/ecm_cuda_edwards_naf.inl','src/cuda/ecm_cuda_edwards_internal.h',
- 'src/cuda/ecm_cuda_edwards_naf.h','src/cuda/ecm_cuda_edwards.h','src/cuda/ecm_cuda_edwards_tiers.inc',
- 'src/cuda/ecm_cuda_edwards_slice.h',
+$sources=@('tools/test/stage1_host_wait_probe.cu','kernels/cuda/stage1/edwards/instances.cuh',
+ 'kernels/cuda/stage1/edwards/point.cuh','kernels/cuda/stage1/edwards/naf.cuh',
+ 'src/cuda/stage1/edwards_runtime.inl','src/cuda/stage1/edwards_internal.h',
+ 'include/ecm/cuda/edwards_naf.h','include/ecm/cuda/edwards.h','include/ecm/cuda/tiers.def',
+ 'src/cuda/stage1/edwards_slice.h',
  'src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h','src/core/ecm_edwards_naf.h',
  'src/core/ecm_stage1_exp.h','src/core/ecm_stage1_exp.cpp',
  'tools/build/test/build_stage1_host_wait_probe.ps1')+
@@ -25,7 +25,7 @@ $exe=Join-Path $Build 'probe.exe'
 $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O2 -arch='+$Arch+
  ' -DECM_HOST_WAIT_TIER='+$Tier+' -DECM_TIER_'+$Tier+
  ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819'+
- ' -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include tools/test/stage1_host_wait_probe.cu src/core/ecm_stage1_exp.cpp'+
+ ' -I include -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include tools/test/stage1_host_wait_probe.cu src/core/ecm_stage1_exp.cpp'+
  ' -L third_party/gmp-zen3/dist/lib -lgmp -o "'+$exe+'"'
 $batch=Join-Path $Build 'build.cmd'
 [IO.File]::WriteAllText($batch,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))

@@ -67,7 +67,8 @@ static cudaError_t diagnostic_event_create(cudaEvent_t *event) {
 #define cudaMemcpy diagnostic_memcpy
 #define cudaGetLastError diagnostic_last_error
 #define cudaEventElapsedTime diagnostic_elapsed
-#include "../../kernels/cuda/cgbn_edwards_instances.cuh"
+#include "../../kernels/cuda/stage1/edwards/instances.cuh"
+#include "../../src/cuda/stage1/edwards_runtime.inl"
 #undef cudaEventCreate
 #undef cudaEventRecord
 #undef cudaEventSynchronize

@@ -148,7 +148,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 
 CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、指数总长/进度及数组几何，并恢复保存的 BITS/TPI；相应内核须存在。原始 V5 自动导入另逐 lane 核对完整 N。保存整个指数不必要：当前任务重新生成相应指数。
 
-来源：[CUDA 头和读写](../../kernels/cuda/cgbn_stage1.cu#L831)、[CUDA 恢复布局](../../kernels/cuda/cgbn_stage1.cu#L1243)、[普通域写回](../../kernels/cuda/cgbn_stage1_kernel.h#L1148)、[OpenCL codec](../../src/core/ecm_checkpoint.cpp#L131)、[OpenCL 状态](../../src/opencl_ecm_stage1.cpp#L937)。
+来源：[CUDA 头和读写](../../src/cuda/stage1/montgomery.cu#L831)、[CUDA 恢复布局](../../src/cuda/stage1/montgomery.cu#L1243)、[普通域写回](../../kernels/cuda/stage1/montgomery/arithmetic.cuh#L1148)、[OpenCL codec](../../src/core/ecm_checkpoint.cpp#L131)、[OpenCL 状态](../../src/opencl_ecm_stage1.cpp#L937)。
 
 ### 4.2 GPU Edwards V3
 
@@ -257,7 +257,7 @@ CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存
 
 next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内层 checksum 仅为 data 的标准 FNV-1a 64，初值14695981039346656037；N/S 的 hash 按低 limb 到高 limb 的 GMP 本机 limb 字节计算，因此不构成跨 ABI 的规范数值摘要。模数、指数和计划身份通过头字段比对，外层 CRC 保护整个载荷。恢复要求版本、算法、域、N/S/计划 hash、B1、总长、BITS/TPI、曲线数及 torsion 等匹配。PRAC window 局部采样不产生完整 Stage1 save 或 checkpoint。
 
-来源：[ResidentCheckpoint 与恢复](../../kernels/cuda/cgbn_stage1_prac_host.cuh#L18)、[window 范围](../../kernels/cuda/cgbn_stage1_prac_window.cuh#L70)。
+来源：[ResidentCheckpoint 与恢复](../../src/cuda/stage1/prac_runtime.inl#L18)、[window 范围](../../src/cuda/stage1/prac_window.inl#L70)。
 
 ## 5. 写入、恢复和清理顺序
 

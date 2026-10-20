@@ -14,26 +14,28 @@ $vc=Resolve-EcmVcEnvironment $cuda
 $Build=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
 $objDir=Join-Path $Build 'CMakeFiles/edwards_gpu_stage1_probe.dir'
 New-Item -ItemType Directory -Force $objDir | Out-Null
-$sources=@('src/cuda/ecm_cuda_edwards.cu','src/cuda/ecm_cuda_edwards_naf.cu')+
-    @(Get-ChildItem 'kernels/cuda/cgbn_edwards_instances_*.cu'|ForEach-Object{'kernels/cuda/'+$_.Name})+
+. (Join-Path $PSScriptRoot '../internal/stage1_release_sources.ps1')
+$inventory=Get-EcmCudaInventory $repo
+$workerSources=@($inventory.groups.STAGE1_EDWARDS)
+$sources=$workerSources+
     @('tools/test/edwards_gpu_stage1_probe.cpp','src/cpu/ecm_edwards_cpu.cpp')
-$deps=@(Get-ChildItem 'src/cuda/ecm_cuda_edwards*' -File|ForEach-Object{'src/cuda/'+$_.Name})+
-    @(Get-ChildItem 'kernels/cuda/cgbn_edwards_*' -File|ForEach-Object{'kernels/cuda/'+$_.Name})+
-    @('src/core/ecm_edwards_naf.h','src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h',
-      'kernels/cuda/cgbn_edwards_point.cuh','kernels/cuda/cgbn_edwards_naf.cuh',
-      'src/cpu/ecm_edwards_mont.h','tools/build/test/build_edwards_gpu_stage1_probe.ps1')
+$deps=@(Get-EcmSourceClosure $repo $sources @('include','src/core','src/cpu','third_party/cgbn/include'))+
+    @('tools/build/test/build_edwards_gpu_stage1_probe.ps1')
 $hashes=[ordered]@{}
 foreach($source in ($sources+$deps|Select-Object -Unique)){$hashes[$source]=(Get-FileHash -LiteralPath $source).Hash}
 $worker=$null
 if($WorkerBuild){
     $WorkerBuild=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($WorkerBuild)
-    $worker=Get-Content (Join-Path $WorkerBuild 'edwards_build_manifest.json') -Raw|ConvertFrom-Json
-    if($worker.arch -ne $Arch){throw 'worker architecture mismatch'}
-    if($worker.tiers -ne $Tiers){throw 'worker tier selection mismatch'}
-    foreach($property in $worker.sources.PSObject.Properties){
-        if($property.Value -ne (Get-FileHash -LiteralPath $property.Name).Hash){throw "worker source changed: $($property.Name)"}
+    $local=Get-Content (Join-Path $WorkerBuild 'stage1_local_manifest.json') -Raw|ConvertFrom-Json
+    if("sm_$($local.architecture)" -ne $Arch){throw 'worker architecture mismatch'}
+    if($local.tiers -ne $Tiers){throw 'worker tier selection mismatch'}
+    Assert-Stage1BuildIdentity $repo $WorkerBuild $local
+    $worker=[pscustomobject]@{objects=[pscustomobject]@{}}
+    foreach($entry in @(Get-EcmTargetCompileEntries $WorkerBuild ecm_cuda)){
+        if((Get-EcmSourceKey $repo $entry.file) -notin $workerSources){continue}
+        $path=Get-EcmObjectPath $entry $WorkerBuild
+        $worker.objects|Add-Member -NotePropertyName $entry.file -NotePropertyValue ([pscustomobject]@{path=$path;sha256=(Get-FileHash $path).Hash})
     }
-    if($worker.compile_commands_sha256 -ne (Get-FileHash (Join-Path $WorkerBuild 'compile_commands.json')).Hash){throw 'worker commands changed'}
 }
 $previous=$null;$manifestPath=Join-Path $Build 'manifest.json'
 if($Incremental -and (Test-Path $manifestPath)){$previous=Get-Content $manifestPath -Raw|ConvertFrom-Json}
@@ -43,7 +45,7 @@ $objects=@();$objectMap=[ordered]@{};$commands=@()
 foreach($source in $sources){
     $stem=[IO.Path]::GetFileNameWithoutExtension($source)
     $obj=Join-Path $objDir ($stem+'.obj')
-    if($worker -and $source -like '*.cu'){
+    if($worker -and $source -in $workerSources){
         $absolute=(Join-Path $repo $source).Replace('\','/')
         $entry=@($worker.objects.PSObject.Properties|Where-Object{$_.Name.Replace('\','/') -eq $absolute})
         if($entry.Count -ne 1){throw "worker object absent: $source"}
@@ -53,7 +55,7 @@ foreach($source in $sources){
     } elseif(-not ($reuse -and $previous.objects.$source -and (Test-Path $obj) -and
         $previous.objects.$source -eq (Get-FileHash -LiteralPath $obj).Hash)) {
         $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O2 -arch='+$Arch+
-            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I src/core -I src/cpu -I src/cuda -c "'+$source+'" -o "'+$obj+'"'
+            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I include -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I src/core -I src/cpu -I src/cuda/stage1 -c "'+$source+'" -o "'+$obj+'"'
         if($Tiers){
             $definitions=' -DECM_TIERS_RESTRICTED'
             foreach($tier in $Tiers.Split(',')){
@@ -84,6 +86,6 @@ foreach($key in $hashes.Keys){if($hashes[$key] -ne (Get-FileHash -LiteralPath $k
 $objectHashes=[ordered]@{}
 foreach($source in $sources){$objectHashes[$source]=(Get-FileHash -LiteralPath $objectMap[$source]).Hash}
 [ordered]@{exe=$exe;sha256=(Get-FileHash $exe).Hash;arch=$Arch;tiers=$Tiers;worker_build=$WorkerBuild;objects=$objectHashes;
-    cuda_object_sha256=$objectHashes['src/cuda/ecm_cuda_edwards.cu'];sources=$hashes
+    cuda_object_sha256=$objectHashes['src/cuda/stage1/edwards_runtime.cu'];sources=$hashes
 }|ConvertTo-Json -Depth 5|Set-Content $manifestPath -Encoding utf8
 Write-Host "Built $exe"

@@ -71,7 +71,7 @@ New-Item -ItemType Directory -Force $objDir | Out-Null
 
 # A header change must invalidate every TU (they all include the kernel header).
 $headers = @('kernels/cuda/cgbn_stage2_kernel.h', 'kernels/cuda/cgbn_stage2_cuda.h',
-             'kernels/cuda/cuda_ecm_shim.h') |
+             'src/cuda/common/cuda_ecm_shim.h') |
     Where-Object { Test-Path $_ } | ForEach-Object { (Get-Item $_).LastWriteTime }
 $newestHeader = if ($headers) { ($headers | Measure-Object -Maximum).Maximum } else { [datetime]'1970-01-01' }
 

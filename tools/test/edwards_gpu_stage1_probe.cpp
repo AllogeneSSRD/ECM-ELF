@@ -1,5 +1,5 @@
-#include "ecm_cuda_edwards.h"
-#include "ecm_cuda_edwards_naf.h"
+#include "ecm/cuda/edwards.h"
+#include "ecm/cuda/edwards_naf.h"
 #include "ecm_edwards_cpu.h"
 #include "ecm_edwards_io.h"
 #include <cstdio>
@@ -92,6 +92,16 @@ int main(int argc,char **argv) {
         // Short-scalar oracle: use the existing CPU implementation at w=2,
         // avoiding a fixed 1024-point CPU dictionary for 32-column tests.
         edwards_set_naf_w(2);
+        if(argc==4 && std::string(argv[3])=="--compiled-tiers") {
+            uint32_t bits=0,w=0,t=0;unsigned count=0;
+            while(ecm_cuda_edwards_tier(bits,w,t)) {
+                require(w>bits && ++count<=32,"compiled tier query did not advance");
+                run(w-1,20,1,17,device,out,0,0,4,true);
+                for(int algorithm:{4,5})run(w-1,20,1,17,device,out,0,6,algorithm,true);
+                bits=w;
+            }
+            require(count!=0,"no compiled Edwards tiers");return 0;
+        }
         if(argc==4 && std::string(argv[3])=="--wait-slices") {
             for(unsigned bits:{347,677,1279,9689})for(unsigned window:{0u,6u})
                 run(bits,200,3,17,device,out,0,window);

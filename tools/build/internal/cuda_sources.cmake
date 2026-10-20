@@ -25,41 +25,58 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/core/ecm_mont_ckpt.cpp
     src/core/ecm_stage1_exp.cpp
     src/core/ecm_stage1_exp_cache.cpp)
+set(ECM_STAGE1_EDWARDS_SOURCES
+    src/cuda/stage1/edwards.cpp
+    src/cuda/stage1/edwards_naf.cpp
+    src/cuda/stage1/edwards_runtime.cu
+    kernels/cuda/stage1/edwards/cgbn_edwards_instances_tpi4.cu
+    kernels/cuda/stage1/edwards/cgbn_edwards_instances_tpi8.cu
+    kernels/cuda/stage1/edwards/cgbn_edwards_instances_tpi16_2560_4096.cu
+    kernels/cuda/stage1/edwards/cgbn_edwards_instances_tpi16_4608_6144.cu
+    kernels/cuda/stage1/edwards/cgbn_edwards_instances_tpi16_6656_8192.cu
+    kernels/cuda/stage1/edwards/cgbn_edwards_instances_tpi32_9216_12288.cu
+    kernels/cuda/stage1/edwards/cgbn_edwards_instances_tpi32_13312_17408.cu)
+set(ECM_STAGE1_MONT_SOURCES
+    src/cuda/stage1/montgomery.cu
+    kernels/cuda/stage1/montgomery/registry.cu
+    kernels/cuda/stage1/montgomery/instances_param3_g0.cu
+    kernels/cuda/stage1/montgomery/instances_param3_g1.cu
+    kernels/cuda/stage1/montgomery/instances_param3_g2.cu
+    kernels/cuda/stage1/montgomery/instances_param3_g3.cu
+    kernels/cuda/stage1/montgomery/instances_param3_g4.cu
+    kernels/cuda/stage1/montgomery/instances_param3_g5.cu
+    kernels/cuda/stage1/montgomery/instances_param3_g6.cu
+    kernels/cuda/stage1/montgomery/instances_param0_g0.cu
+    kernels/cuda/stage1/montgomery/instances_param0_g1.cu
+    kernels/cuda/stage1/montgomery/instances_param0_g2.cu
+    kernels/cuda/stage1/montgomery/instances_param0_g3.cu
+    kernels/cuda/stage1/montgomery/instances_param0_g4.cu
+    kernels/cuda/stage1/montgomery/instances_param0_g5.cu
+    kernels/cuda/stage1/montgomery/instances_param0_g6.cu
+    kernels/cuda/stage1/montgomery/instances_param2_g0.cu
+    kernels/cuda/stage1/montgomery/instances_param2_g1.cu
+    kernels/cuda/stage1/montgomery/instances_param2_g2.cu
+    kernels/cuda/stage1/montgomery/instances_param2_g3.cu
+    kernels/cuda/stage1/montgomery/instances_param2_g4.cu
+    kernels/cuda/stage1/montgomery/instances_param2_g5.cu
+    kernels/cuda/stage1/montgomery/instances_param2_g6.cu)
 set(ECM_STAGE1_CUDA_SOURCES
     src/opencl_ecm_runtime_config.cpp
-    src/cuda/ecm_cuda_backend.cu
-    src/cuda/ecm_cuda_edwards.cu
-    src/cuda/ecm_cuda_edwards_naf.cu
-    kernels/cuda/cgbn_edwards_instances_tpi4.cu
-    kernels/cuda/cgbn_edwards_instances_tpi8.cu
-    kernels/cuda/cgbn_edwards_instances_tpi16_2560_4096.cu
-    kernels/cuda/cgbn_edwards_instances_tpi16_4608_6144.cu
-    kernels/cuda/cgbn_edwards_instances_tpi16_6656_8192.cu
-    kernels/cuda/cgbn_edwards_instances_tpi32_9216_12288.cu
-    kernels/cuda/cgbn_edwards_instances_tpi32_13312_17408.cu
-    kernels/cuda/cgbn_stage1.cu
-    kernels/cuda/cgbn_stage1_kernels_tpi4.cu
-    kernels/cuda/cgbn_stage1_kernels_tpi8.cu
-    kernels/cuda/cgbn_stage1_kernels_tpi16.cu
-    kernels/cuda/cgbn_stage1_kernels_tpi32.cu
-    kernels/cuda/cgbn_stage1_kernels_suyama.cu
-    kernels/cuda/cgbn_stage1_kernels_param2.cu
-    kernels/cuda/cgbn_stage1_kernels_suyama_tpi16.cu
-    kernels/cuda/cgbn_stage1_kernels_suyama_tpi32.cu
-    kernels/cuda/cgbn_stage1_kernels_param2_tpi16.cu
-    kernels/cuda/cgbn_stage1_kernels_param2_tpi32.cu)
+    src/cuda/backend.cpp
+    ${ECM_STAGE1_EDWARDS_SOURCES}
+    ${ECM_STAGE1_MONT_SOURCES})
 set(ECM_STAGE1_PRAC_SOURCES
-    kernels/cuda/cgbn_stage1_prac_kernels.cu
-    kernels/cuda/cgbn_stage1_prac_small.cu
-    kernels/cuda/cgbn_stage1_prac_tpi16.cu
-    kernels/cuda/cgbn_stage1_prac_tpi32.cu
-    kernels/cuda/cgbn_stage1_prac_tpi32_9216_10240.cu
-    kernels/cuda/cgbn_stage1_prac_tpi32_11264_12288.cu
-    kernels/cuda/cgbn_stage1_prac_tpi32_13312_14336.cu
-    kernels/cuda/cgbn_stage1_prac_tpi32_15360_16384.cu
-    kernels/cuda/cgbn_stage1_prac_alternate32.cu
-    kernels/cuda/cgbn_stage1_prac_single_add.cu
-    kernels/cuda/cgbn_stage1_prac_constants.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_kernels.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_small.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_tpi16.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_tpi32.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_tpi32_9216_10240.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_tpi32_11264_12288.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_tpi32_13312_14336.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_tpi32_15360_16384.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_alternate32.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_single_add.cu
+    kernels/cuda/optional/prac/cgbn_stage1_prac_constants.cu
     src/core/ecm_prac_plan.cpp)
 set(ECM_STAGE2_HOST_SOURCES
     src/core/ecm_cuda_stage2_main.cpp
@@ -69,7 +86,7 @@ set(ECM_STAGE2_HOST_SOURCES
 set(ECM_STAGE2_PRODUCTION_SOURCES src/cuda/ecm_cuda_stage2.cu)
 set(ECM_STAGE2_DEVELOPMENT_SOURCES tools/bench/ecm_cuda_stage2_dev.cu)
 set(ECM_CUDA_SOURCE_GROUPS
-    STAGE1_COMMON STAGE1_CUDA STAGE1_PRAC
+    STAGE1_COMMON STAGE1_CUDA STAGE1_EDWARDS STAGE1_MONT STAGE1_PRAC
     STAGE2_HOST STAGE2_PRODUCTION STAGE2_DEVELOPMENT)
 set(ECM_CUDA_BUILD_INPUTS
     CMakeLists.txt

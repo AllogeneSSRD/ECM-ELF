@@ -38,7 +38,7 @@
     }                                                                               \
   } while (0)
 
-// Per-tier params, mirroring kernels/cuda/cgbn_stage1_kernel.h::cgbn_params_t.
+// Per-tier params, mirroring kernels/cuda/stage1/montgomery/arithmetic.cuh::cgbn_params_t.
 template <uint32_t tpi, uint32_t bits>
 struct params_t {
   static const uint32_t TPB = 128;

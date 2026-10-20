@@ -1,0 +1,372 @@
+// Authoritative CGBN geometry. Repeated inclusion; no include guard.
+// ECM_CUDA_TIER(bits,tpi,group,montgomery,dev_montgomery,legacy_name,mont_tpb,edwards_tpb).
+// ECM_CUDA_ALL_TIERS bypasses build/group filtering for type declarations and
+// host candidate ordering. Runtime availability still comes from kernel factories.
+// Edwards has one spare bit; Montgomery has six. TPB: Edwards=128,
+// Montgomery=ECM_TPB (default 128). These are separate policies.
+#ifndef ECM_CUDA_MONT_TPB
+#ifdef ECM_TPB
+#define ECM_CUDA_MONT_TPB ECM_TPB
+#else
+#define ECM_CUDA_MONT_TPB 128
+#endif
+#endif
+#ifndef ECM_CUDA_TIER
+#define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET)
+#define ECM_CUDA_UNDEF_TIER
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 0) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_128)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 1) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 0 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 0 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 128 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 128 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(128,4,0,1,1,128,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 0) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_192)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 1) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 0 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 0 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 192 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 192 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(192,4,0,1,1,192,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 0) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_256)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 1) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 0 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 0 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 256 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 256 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(256,4,0,1,1,256,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 0) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_384)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 1) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 0 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 0 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 384 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 384 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(384,4,0,1,1,384,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 0) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_512) || defined(ECM_TIER_small)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 1) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 0 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 0 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 512 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 512 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(512,4,0,1,1,small,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 1) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_768)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 1) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 1 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 1 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 768 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 768 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(768,8,1,1,1,768,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 1) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_1024) || defined(ECM_TIER_medium)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 1) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 1 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 1 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 1024 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 1024 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(1024,8,1,1,1,medium,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 1) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_1280)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 1 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 1 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 1280 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 1280 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(1280,8,1,1,0,1280,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 1) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_1536)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 1 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 1 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 1536 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 1536 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(1536,8,1,1,0,1536,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 1) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_1792)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 1 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 1 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 1792 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 1792 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(1792,8,1,1,0,1792,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 1) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_2048)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 1 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 1 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 2048 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 2048 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(2048,8,1,1,0,2048,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 2) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_2560)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 2 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 2 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 2560 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 2560 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(2560,16,2,1,0,2560,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 2) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_3072)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 2 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 2 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 3072 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 3072 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(3072,16,2,1,0,3072,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 2) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_3584)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 2 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 2 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 3584 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 3584 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(3584,16,2,1,0,3584,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 2) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_4096)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 2 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 2 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 4096 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 4096 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(4096,16,2,1,0,4096,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 3) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_4608)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 3 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 3 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 4608 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 4608 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(4608,16,3,1,0,4608,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 3) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_5120)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 3 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 3 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 5120 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 5120 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(5120,16,3,1,0,5120,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 3) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_5632)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 3 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 3 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 5632 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 5632 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(5632,16,3,1,0,5632,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 3) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_6144)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 3 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 3 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 6144 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 6144 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(6144,16,3,1,0,6144,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 4) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_6656)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 4 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 4 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 6656 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 6656 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(6656,16,4,1,0,6656,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 4) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_7168)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 4 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 4 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 7168 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 7168 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(7168,16,4,1,0,7168,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 4) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_7680)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 4 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 4 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 7680 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 7680 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(7680,16,4,1,0,7680,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 4) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_8192)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 4 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 4 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 8192 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 8192 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(8192,16,4,1,0,8192,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 5) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_9216)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 5 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 5 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 9216 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 9216 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(9216,32,5,1,0,9216,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 5) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_10240)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 5 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 5 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 10240 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 10240 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(10240,32,5,1,0,10240,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 5) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_11264)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 5 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 5 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 11264 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 11264 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(11264,32,5,1,0,11264,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 5) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_12288)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 5 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 5 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 12288 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 12288 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(12288,32,5,1,0,12288,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 6) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_13312)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 6 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 6 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 13312 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 13312 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(13312,32,6,1,0,13312,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 6) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_14336)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 6 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 6 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 14336 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 14336 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(14336,32,6,1,0,14336,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 6) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_15360)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 6 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 6 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 15360 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 15360 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(15360,32,6,1,0,15360,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 6) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_16384)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 1) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 6 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 6 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 16384 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 16384 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(16384,32,6,1,0,16384,ECM_CUDA_MONT_TPB,128)
+#endif
+#if defined(ECM_CUDA_ALL_TIERS) || ((!defined(ECM_CUDA_TIER_GROUP) || ECM_CUDA_TIER_GROUP == 6) && \
+    (!defined(ECM_TIERS_RESTRICTED) || defined(ECM_TIER_17408)) && \
+    (!defined(ECM_CUDA_MONT_ONLY) || 0) && \
+    (!defined(ECM_CUDA_MONT_DEV_ONLY) || 0) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MIN) || 6 >= ECM_CUDA_TIER_GROUP_MIN) && \
+    (!defined(ECM_CUDA_TIER_GROUP_MAX) || 6 <= ECM_CUDA_TIER_GROUP_MAX) && \
+    (!defined(ECM_CUDA_TIER_MIN_BITS) || 17408 >= ECM_CUDA_TIER_MIN_BITS) && \
+    (!defined(ECM_CUDA_TIER_MAX_BITS) || 17408 <= ECM_CUDA_TIER_MAX_BITS))
+ECM_CUDA_TIER(17408,32,6,0,0,17408,ECM_CUDA_MONT_TPB,128)
+#endif
+#ifdef ECM_CUDA_UNDEF_TIER
+#undef ECM_CUDA_TIER
+#undef ECM_CUDA_UNDEF_TIER
+#endif
+
+// Type compatibility only: these containers are not registered kernel instances.
+#ifdef ECM_CUDA_LEGACY_TYPE
+ECM_CUDA_LEGACY_TYPE(2816,16)
+ECM_CUDA_LEGACY_TYPE(3328,16)
+ECM_CUDA_LEGACY_TYPE(3840,16)
+ECM_CUDA_LEGACY_TYPE(4352,16)
+ECM_CUDA_LEGACY_TYPE(4864,16)
+ECM_CUDA_LEGACY_TYPE(5376,16)
+ECM_CUDA_LEGACY_TYPE(5888,16)
+ECM_CUDA_LEGACY_TYPE(6400,16)
+ECM_CUDA_LEGACY_TYPE(6912,16)
+ECM_CUDA_LEGACY_TYPE(7424,16)
+ECM_CUDA_LEGACY_TYPE(7936,16)
+#endif
+
+// Capacity, not a CGBN container. Arithmetic and Montgomery radix use actual W.
+#ifndef ECM_CUDA_STAGE2_CAPACITIES
+#define ECM_CUDA_STAGE2_CAPACITIES(ROW,FN,...) \
+    ROW(4,FN,__VA_ARGS__) ROW(8,FN,__VA_ARGS__) ROW(16,FN,__VA_ARGS__) \
+    ROW(32,FN,__VA_ARGS__) ROW(64,FN,__VA_ARGS__) ROW(128,FN,__VA_ARGS__) ROW(256,FN,__VA_ARGS__)
+#endif
+
+// Explicit PRAC policy geometry; separate from the default CGBN TPI mapping.
+// mode_family values are descriptive, not persistent algorithm/domain IDs.
+#ifdef ECM_CUDA_PRAC_VARIANT
+ECM_CUDA_PRAC_VARIANT(2560,32,alternate)
+ECM_CUDA_PRAC_VARIANT(4608,32,alternate)
+ECM_CUDA_PRAC_VARIANT(4608,16,special_registers)
+ECM_CUDA_PRAC_VARIANT(4608,32,single_compact)
+#endif

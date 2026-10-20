@@ -9,7 +9,7 @@
 - 成功完成后删除主文件、临时文件和所有备份代次。CPU Montgomery、CPU Edwards、OpenCL、CUDA 共用停止请求与轮换辅助实现；Android OpenCL 构建也链接该实现。
 - 队列处理当前任务时收到停止请求，会在检查点保存后直接退出；未完成任务保留原始 `worktodo` 行，不标为 `# ERROR`，也不启动后续任务。已完成任务之后才收到停止请求时，先完成该行的结果登记，再停止读取下一行。
 
-主要入口：`src/core/ecm_stage1_checkpoint_runtime.cpp`；CPU 驱动 `src/core/ecm_driver.cpp`；OpenCL `src/opencl_ecm_stage1.cpp`、`src/core/ecm_checkpoint.cpp`；CUDA `kernels/cuda/cgbn_stage1.cu`；GUI `src/gui/worker_proc.cpp`、`src/gui/app.cpp`。
+主要入口：`src/core/ecm_stage1_checkpoint_runtime.cpp`；CPU 驱动 `src/core/ecm_driver.cpp`；OpenCL `src/opencl_ecm_stage1.cpp`、`src/core/ecm_checkpoint.cpp`；CUDA `src/cuda/stage1/montgomery.cu`；GUI `src/gui/worker_proc.cpp`、`src/gui/app.cpp`。
 
 ## 本轮验证
 

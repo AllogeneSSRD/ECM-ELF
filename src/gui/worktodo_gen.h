@@ -56,7 +56,7 @@ struct GpuProfile {
     std::vector<GpuTier> tiers;   // ascending `bits`
 
     // The tier the kernel would pick for an N of `bits` bits (nullptr = none is large
-    // enough). Same rule as kernels/cuda/cgbn_stage1.cu and `--gpu-info --bits`.
+    // enough). Same rule as src/cuda/stage1/montgomery.cu and `--gpu-info --bits`.
     const GpuTier *pick(int bits) const;
 };
 

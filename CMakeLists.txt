@@ -142,13 +142,13 @@ file(GENERATE OUTPUT "${_stage1_identity_file}" CONTENT "${_stage1_revision}.s1.
 set(_stage1_driver_headers
     src/core/ecm_edwards_gpu_driver.inl src/core/ecm_edwards_gpu_checkpoint.h
     src/core/ecm_stage1_gpu_progress.h src/core/ecm_program_version.h
-    src/cuda/ecm_cuda_edwards.h src/cuda/ecm_cuda_edwards_naf.h)
+    include/ecm/cuda/edwards.h include/ecm/cuda/edwards_naf.h)
 foreach(_header IN LISTS _stage1_driver_headers)
     set_property(SOURCE src/core/ecm_driver.cpp APPEND PROPERTY OBJECT_DEPENDS
         "${CMAKE_SOURCE_DIR}/${_header}")
 endforeach()
 # A post-link sidecar leaves flags.make and CUDA response files unchanged.
-set_property(SOURCE kernels/cuda/cgbn_stage1.cu APPEND PROPERTY OBJECT_DEPENDS
+set_property(SOURCE src/cuda/stage1/montgomery.cu APPEND PROPERTY OBJECT_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/core/ecm_stage1_gpu_progress.h")
 function(ecm_stage1_identity_sidecar target)
     add_custom_command(TARGET ${target} POST_BUILD COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -237,7 +237,7 @@ endif()
 #  translation units as `ecm`, swapping only the GPU backend at link time via the
 #  ecm_backend_* seam (include/ecm_backend.h):
 #     - OpenCL: src/opencl_backend_glue.cpp  (in `ecm`)
-#     - CUDA:   src/cuda/ecm_cuda_backend.cu  (here)
+#     - CUDA:   src/cuda/backend.cpp  (here)
 #
 #  Auto-enabled when a CUDA toolkit is present; force off with -DECM_ENABLE_CUDA=OFF.
 #
@@ -295,7 +295,8 @@ if(ECM_ENABLE_CUDA)
     ecm_stage1_identity_sidecar(ecm_cuda)
 
     if(ECM_CUDA_ENABLE_PRAC)
-        target_sources(ecm_cuda PRIVATE ${ECM_STAGE1_PRAC_SOURCES})
+        add_library(ecm_cuda_prac OBJECT ${ECM_STAGE1_PRAC_SOURCES})
+        target_sources(ecm_cuda PRIVATE $<TARGET_OBJECTS:ecm_cuda_prac>)
     endif()
     target_compile_definitions(ecm_cuda PRIVATE ECM_HAS_CUDA_EDWARDS=1 ECM_CUDA_ENABLE_PRAC=$<BOOL:${ECM_CUDA_ENABLE_PRAC}>)
     # CGBN uses uint32_t without including stdint.h. CUDA 12.6 does not provide
@@ -310,6 +311,8 @@ if(ECM_ENABLE_CUDA)
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/core
         ${CMAKE_SOURCE_DIR}/src/cpu
+        ${CMAKE_SOURCE_DIR}/src/cuda/common
+        "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}>"
         ${CMAKE_SOURCE_DIR}/kernels/cuda
         ${CGBN_INCLUDE_DIR}
         ${CGBN_INCLUDE_DIR}/cgbn   # the .cu uses #include <cgbn.h>
@@ -413,7 +416,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     target_compile_definitions(ecm_cuda PRIVATE ECM_PROBE_CHAIN_W=${ECM_PROBE_CHAIN_W})
 
     # Kernel launch/occupancy tunables (docs/performance/STAGE1.md).  TPB must
-    # match the launch config in kernels/cuda/cgbn_stage1.cu, hence compile-time.  Defaults
+    # match the launch config in src/cuda/stage1/montgomery.cu, hence compile-time.  Defaults
     # are the MEASURED best from the 2026-09-25 sweep (M511/M761, 8192 curves, B1=1e5,
     # param3, GPU 1): the historical 256/4 measured 78.18 M curve-bits/s at M511, 128/1
     # measures 79.15 M, and blocks = curves/(TPB/TPI) is what actually drives throughput
@@ -433,8 +436,8 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     set(ECM_MAXRREG_SMALL "0" CACHE STRING "maxrregcount for the <=2048-bit kernel sources (0 = off)")
     if(NOT ECM_MAXRREG_SMALL STREQUAL "0")
         set_source_files_properties(
-            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_tpi4.cu
-            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_tpi8.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param3_g0.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param3_g1.cu
             PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SMALL}")
     endif()
 
@@ -455,12 +458,20 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     set(ECM_MAXRREG_SUYAMA "0" CACHE STRING "maxrregcount for the param0/Suyama + param2 kernel sources (0 = off)")
     if(NOT ECM_MAXRREG_SUYAMA STREQUAL "0")
         set_source_files_properties(
-            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_suyama.cu
-            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_suyama_tpi16.cu
-            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_suyama_tpi32.cu
-            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_param2.cu
-            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_param2_tpi16.cu
-            ${CMAKE_SOURCE_DIR}/kernels/cuda/cgbn_stage1_kernels_param2_tpi32.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param0_g0.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param0_g1.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param0_g2.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param0_g3.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param0_g4.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param0_g5.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param0_g6.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param2_g0.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param2_g1.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param2_g2.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param2_g3.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param2_g4.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param2_g5.cu
+            ${CMAKE_SOURCE_DIR}/kernels/cuda/stage1/montgomery/instances_param2_g6.cu
             PROPERTIES COMPILE_OPTIONS "--maxrregcount=${ECM_MAXRREG_SUYAMA}")
     endif()
 
@@ -529,7 +540,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     #
     # This is a WHOLE-BUILD switch: a binary built with -DECM_MERS_FOLD=1 only carries fold
     # kernels, so it REFUSES any N that is not 2^k - 1 and refuses --gpu-param 3
-    # (kernels/cuda/cgbn_stage1.cu).  Default 0 keeps the historical Montgomery kernels.
+    # (src/cuda/stage1/montgomery.cu).  Default 0 keeps the historical Montgomery kernels.
     set(ECM_MERS_FOLD "0" CACHE STRING "1 = suyama family runs the Mersenne fold domain (N = 2^k-1 only)")
     target_compile_definitions(ecm_cuda PRIVATE ECM_MERS_FOLD=${ECM_MERS_FOLD})
     if(ECM_MERS_FOLD)
@@ -650,3 +661,14 @@ endforeach()
 
 # Export object owners for build/dependency identity without changing CUDA flags.
 ecm_cuda_write_target_graph()
+
+if(TARGET ecm_cuda_prac)
+    add_dependencies(ecm_cuda_prac ecm_config_check)
+    foreach(_property INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS
+            CXX_STANDARD CXX_STANDARD_REQUIRED CUDA_STANDARD CUDA_STANDARD_REQUIRED CUDA_ARCHITECTURES)
+        get_target_property(_value ecm_cuda ${_property})
+        if(NOT _value STREQUAL "_value-NOTFOUND")
+            set_property(TARGET ecm_cuda_prac PROPERTY ${_property} "${_value}")
+        endif()
+    endforeach()
+endif()

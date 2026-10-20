@@ -134,7 +134,7 @@ def main():
             public_alias_pairs=len(aliases),invalid_difference_alias_mismatches=negative_differences,
             output_reuse_cases=cases,output_reuse_invalid_difference_alias_mismatches=reuse_negative,
             minus_one_raw_REDC_exceeds_N=raw>=n,counts=dict(counts),passed=True))
-    source=Path('kernels/cuda/cgbn_stage1_prac_single_add.cuh')
+    source=Path('kernels/cuda/optional/prac/cgbn_stage1_prac_single_add.cuh')
     report=dict(passed=True,cases=sum(r['cases'] for r in results),
         output_reuse_cases=sum(r['output_reuse_cases'] for r in results),results=results,
         counts=dict(totals),source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),

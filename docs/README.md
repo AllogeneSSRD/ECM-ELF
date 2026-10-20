@@ -47,7 +47,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 候选是否可继续精简、几何包络的局限，以及按P比例跨步与跨区间持续探索，见 [D候选压缩与搜索研究草稿](development/STAGE2_D_SEARCH_DRAFT.md)。0.39.0源码已接入有界搜索，当前验证范围与尚待完成的性能验收见草稿；运行规则以Auto B2 / tune为准。
 
-CUDA 目录与模块重构的 P0 实施范围、验证证据和后续阶段见 [CUDA 结构重构草稿](development/GPU_CUDA_STRUCTURE_REFACTOR_DRAFT.md)；当前构建规则以构建与发布说明为准。
+CUDA 目录与模块重构的 P0/P1 实施范围、验证证据和后续阶段见 [CUDA 结构重构草稿](development/GPU_CUDA_STRUCTURE_REFACTOR_DRAFT.md)；当前模块职责以 Stage1 架构说明、构建规则以构建与发布说明为准。
 
 ## 数据位置
 

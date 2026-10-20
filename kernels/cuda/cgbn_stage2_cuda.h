@@ -1,7 +1,7 @@
 ﻿/* cgbn_stage2_cuda.h — entry declaration for the native CUDA/CGBN ECM stage 2.
 
    M1 of docs/architecture/STAGE2.md.  The interface is deliberately the same SHAPE as
-   the stage-1 entry (kernels/cuda/cgbn_stage1_cuda.h), so that the driver can later
+   the stage-1 entry (include/ecm/cuda/montgomery.h), so that the driver can later
    reach stage 2 through the backend seam (include/ecm_backend.h) exactly the way it
    already reaches stage 1:
 

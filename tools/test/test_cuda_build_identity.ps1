@@ -161,7 +161,7 @@ $set = Get-EcmStage2SourceSet $repo $inventory production @('include','src/core'
 Check (-not @($set.Dependencies | Where-Object { $_ -match '^tools/(bench|experiments)/' }).Count) 'actual production Stage2 source closure isolated'
 Check (@($set.Dependencies | Where-Object { $_ -like '*.def' }).Count -ge 2) 'Stage2 definition tables present in source identity'
 $stage1 = Get-Stage1ReleaseSources $repo
-foreach ($name in @('src/cuda/ecm_cuda_edwards_tiers.inc','src/cuda/ecm_cuda_edwards_naf.inl','src/core/ecm_edwards_gpu_driver.inl')) {
+foreach ($name in @('include/ecm/cuda/tiers.def','src/cuda/stage1/edwards_runtime.inl','src/core/ecm_edwards_gpu_driver.inl')) {
     Check ($stage1.Contains($name)) "Stage1 release records $name"
 }
 $enabled = Get-Stage1ReleaseSources $repo -EnablePrac $true

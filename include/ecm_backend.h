@@ -5,7 +5,7 @@
    small glue translation unit:
 
      - OpenCL: src/opencl_backend_glue.cpp   (linked into the `ecm` target)
-     - CUDA:   src/cuda/ecm_cuda_backend.cu  (linked into the `ecm_cuda` target)
+     - CUDA:   src/cuda/backend.cpp  (linked into the `ecm_cuda` target)
 
    This lets both executables share the exact same driver, argument parsing,
    checkpoint/save logic and logging, while swapping the GPU implementation at

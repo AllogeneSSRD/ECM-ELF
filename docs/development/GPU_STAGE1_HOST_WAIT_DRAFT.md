@@ -7,8 +7,8 @@
 0.38.0 GPU Edwards NAF 的高进程 CPU 占用主要集中在 `cudaEventSynchronize` 等待区间，不是 NAF 点运算在 CPU 执行。原始两条驱动的入口不同；以下为该冻结版本的代码依据，当前实现见后文：
 
 - `src/core/ecm_driver.cpp` 的 GPU Edwards 分支直接进入 `run_edwards_gpu_stage1`，未执行 Montgomery 使用的 `ecm_backend_prepare`。
-- `src/cuda/ecm_cuda_backend.cu:178` 为 Montgomery 设置阻塞设备调度；`kernels/cuda/cgbn_stage1.cu:1595` 在读 CGBN 报告、记录结束事件前调用设备同步。
-- `src/cuda/ecm_cuda_edwards_naf.cu` 只选择设备；`src/cuda/ecm_cuda_edwards_naf.inl:4` 默认创建事件，字典及每片完成时在第 30/41 行直接等待结束事件。
+- `src/cuda/backend.cpp:178` 为 Montgomery 设置阻塞设备调度；`src/cuda/stage1/montgomery.cu:1595` 在读 CGBN 报告、记录结束事件前调用设备同步。
+- `src/cuda/stage1/edwards_naf.cpp` 只选择设备；`src/cuda/stage1/edwards_runtime.inl:4` 默认创建事件，字典及每片完成时在第 30/41 行直接等待结束事件。
 - Edwards 的每片规范坐标回读、GMP 导入和主机回调确实有 CPU 工作，但不是本次接近一核的主要来源。二进制 Edwards 另使用设备同步且共享缺少阻塞调度的入口，本轮没有将 NAF 的量化结果外推为 binary 的测量结果。
 
 [NVIDIA Event Management](https://docs.nvidia.com/cuda/cuda-runtime-api/cuda_runtime_api/group__CUDART__EVENT.html) 说明默认事件与阻塞事件的等待语义；本地 CUDA 13.3 头文件含同一接口约定。公开页面为 13.4 文档。本机实测中，成功以阻塞标志创建事件仍未降低 CPU 占用，因此不能把“加一个事件标志”作为已经验证的修复，也不能仅凭本试验证明具体驱动内部缺陷。
@@ -75,7 +75,7 @@ CUDA 官方区分事件创建标志与设备调度标志；`cudaEventBlockingSyn
 
 Edwards 两个入口共用 `ecm_edwards_cuda_detail::prepare_device`，设置阻塞调度且保留非调度标志。NAF 在原结束事件记录后执行设备同步，然后读取事件、报告及普通坐标；等待不移动结束事件位置。binary 原有设备同步在相同调度设置下执行。当前模块只有默认流；若未来并发独立流，须重新评估设备级等待范围。
 
-生产传入 chunk=0，`src/cuda/ecm_cuda_edwards_slice.h` 从 32 列/位开始，依据上一片时间选择约 100 ms 的下一片，范围 16…4096，每次最多增减 4 倍。正数 chunk 保留固定边界。NAF 使用原 CUDA event 计时，binary 使用提交至设备同步返回的墙钟；CPU 构造、错误检查、回传和检查点不计作纯 GPU 时间。最后不足一片的尾部只执行剩余列。目标 100 ms 不构成停止响应的硬上限。
+生产传入 chunk=0，`src/cuda/stage1/edwards_slice.h` 从 32 列/位开始，依据上一片时间选择约 100 ms 的下一片，范围 16…4096，每次最多增减 4 倍。正数 chunk 保留固定边界。NAF 使用原 CUDA event 计时，binary 使用提交至设备同步返回的墙钟；CPU 构造、错误检查、回传和检查点不计作纯 GPU 时间。最后不足一片的尾部只执行剩余列。目标 100 ms 不构成停止响应的硬上限。
 
 回调、停止和检查点继续发生在已完成切片及普通坐标回读之后。切片长度不是算法身份，也不写入检查点；恢复仍以完整标量、窗口、倍点方法、列进度及普通域累加点为依据，重新从小片采样。窗口和倍点冲突检查保持原门限。
 

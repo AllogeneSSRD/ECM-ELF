@@ -1146,7 +1146,7 @@ struct EdwardsWorkerCtx {
 static indicators::ProgressBar *g_stage1_bar = nullptr;
 
 /* ---------------------------------------------------------------------------
- * 速率显示 (对齐 kernels/cuda/cgbn_stage1.cu 的 print_progress)
+ * 速率显示 (对齐 src/cuda/stage1/montgomery.cu 的 print_progress)
  *
  * CUDA 那套的要点有两个, 这里都照做:
  *  1) 平均的是"速度样本"而不是时间: 每个采样点算 speed = delta_work/delta_t,

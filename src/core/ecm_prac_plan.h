@@ -8,8 +8,8 @@
 
 // Version 1: param0 DBL=5, projective DADD=6; Prime95 ten seeds/search=7.
 // Persistent descriptors, not an expanded operation stream. All fields are u32.
-struct EcmPracPrime { uint32_t p, d, repetitions, work; };
-static_assert(sizeof(EcmPracPrime) == 16, "PRAC descriptor ABI");
+
+#include "../../include/ecm/cuda/prac_descriptor.h"
 struct EcmPracPlan {
     std::vector<EcmPracPrime> primes;
     uint64_t work = 0, identity = 0;

@@ -2,9 +2,9 @@
 
 ## 范围与约束
 
-按已确认方案分 P0～P5 实施。本轮只完成 P0：构建源清单、依赖与身份校验；不进入位宽清单或设备模块迁移。算法、配置、存档及程序输出语义保持，软件修订号由 0.44.0 增至 0.44.1。
+按已确认方案分 P0～P5 实施。P0（0.44.1）完成构建源清单、依赖与身份校验。本轮实施 P1：统一位宽清单并拆分 Stage1 主机与设备职责，版本只递增修订号至 0.44.2。算法、配置、存档及程序输出语义保持。
 
-基线为 `36171f4`（0.44.0），当前 TOML、队列及输出行为作为基线。478 个已跟踪 `src/`、`kernels/`、`include/` 文件的原始摘要保存在 `data/experiments/cuda_structure_p0_20261020/baseline.json`。除版本头外，不修改这些文件。
+P0 基线为 `36171f4`（0.44.0），当时的 TOML、队列及输出行为作为基线。478 个已跟踪 `src/`、`kernels/`、`include/` 文件的原始摘要保存在 `data/experiments/cuda_structure_p0_20261020/baseline.json`。P0 除版本头外未修改这些文件；P1 的迁移与验证另见下节。
 
 ## P0 实现
 
@@ -40,4 +40,44 @@ P0 分为源清单与 CPU 故障注入、原生构建、复用/发布校验及�
 
 ## 后续
 
-P0 已通过上述限定范围的分步验证。P1～P5 尚未实施。保留本草稿并提示用户处理，不自动删除。正式构建说明只记录已验证的当前行为；原始源码快照、失败夹具和日志不更改。
+P0 已通过上述限定范围的分步验证。P2～P5 尚未实施。保留本草稿并提示用户处理，不自动删除。正式构建说明只记录已验证的当前行为；原始源码快照、失败夹具和日志不更改。
+
+## P1 范围与验证顺序
+
+基线为 `c0c4c74`（0.44.1），源摘要与原二进制冻结在 `data/experiments/cuda_structure_p1_20261020/`。原方案第二批包含：中立位宽清单、Montgomery 七组实例、Edwards 主机循环迁出核目录，以及 PRAC 独立可选目标。不进入 Stage2 算术/NTT 或流程拆分，不清理其旧分支。
+
+先验证清单生成的 full/dev/限制档/别名/实例组与边界；再验证主机/核迁移及实际注册；最后进行独立算术、停止恢复、双版本存档/Stage2 回归和发布构建。每步通过后才继续。Montgomery 的六位余量、Edwards 的一位余量、Stage2 按实际字数选择容量、PRAC 显式启用与全部配置默认保持。
+
+## P1 实现
+
+- 中立接口位于 `include/ecm/cuda/`，`tiers.def` 统一 32 档的位宽、TPI、七组归属、Montgomery/dev 支持、TPB 和旧别名；Stage2 仅消费同文件的七档容量宏，实际 W、Montgomery radix 和分派顺序保持。PRAC 特殊 TPI/寄存器组合与默认网格分开标记，策略实现不变。
+- Montgomery 主机入口迁至 `src/cuda/stage1/montgomery.cu`，核发射移入薄包装；PARAM0/2/3 各由七个实例单元编译。Edwards 校验/分派入口使用普通 C++，binary/NAF 的分配、GMP 编解码、事件、切片和回调归同一主机运行时。设备目录只保留算术、模板实例及发射器；缓冲布局与同步/发布顺序保持。
+- 可选 PRAC 的设备源码迁至 `kernels/cuda/optional/prac/`，用独立 `ecm_cuda_prac` 对象目标显式链接；主机运行时迁至 `src/cuda/stage1/`。继承实际主目标的宏、编译选项、包含目录、语言标准与架构；不引入 RDC/device link。P0 目标闭包同时收集主目标及 PRAC 对象。
+- 公共设备原语在 `kernels/cuda/shared/`；主机兼容 shim 位于 `src/cuda/common/`。CGBN 自身要求 NVCC 主机解析时存在 GMP，唯一适配头 `cgbn_types.cuh` 以主机条件包含满足；项目核接口不传 GMP、回调或检查点对象。探针的引用与 worker 对象复用同步更新。
+
+## P1 验证证据
+
+证据根为 `data/experiments/cuda_structure_p1_20261020/`。CUDA 13.3 / MSVC 14.51.36231 / sm89；运行使用 GPU1（RTX 4060 Laptop），未改变设备功耗/频率。以下均为正确性和构建验证，没有性能采样或提升结论。
+
+- `tiers_04/result.json`：16 种真实 C++ 清单配置通过，覆盖完整/开发/限制/空档、旧别名、七组、PRAC 区间和 TPB 覆盖；检查 Stage1 余量边界及 Stage2 实际字数 1…257 的容量选择。
+- `identity_02/result.json`：37 项 CPU 身份故障注入及 Windows PowerShell 5.1 / PowerShell 7 指纹一致性通过。`structure_final_02/result.json`：55 个项目设备闭包文件无反向主机/实验依赖；四段 Montgomery、Edwards、NAF、PRAC 设备算术正文与 `c0c4c74` 去注释/空白后完全相同。
+- `step2_build_03.log` / `stage2_build_02.log`：迁移后的默认 Stage1（31 CUDA TU、384 档）及最终生产 Stage2 构建通过。`worker_reuse_01.log`：31 个 CUDA 对象全部复用，重编 0 个；`worker_objects.json`：收集十个 Edwards 对象，包含普通 C++ 前端。`stage2_hostonly_01.log`：身份匹配，程序整体复用。
+- `step2_sass_02/result.json`：384 档六个设备函数的 SASS 指令正文与冻结基线相同；仅对函数名中 NVCC 因源路径产生的匿名命名空间文件摘要做规范化，保留模板签名并拒绝规范化重名，未忽略指令差异。
+- `wide_build_01.log` / `registry_wide_01/result.json`：384/1024/4096/6144/8192/12288/16384/17408 档跨全部七组构建通过，68 项实际工厂、边界、余量、TPI/TPB 查询通过。`curves_wide_01/result.json`：七个 Montgomery 档各 PARAM0/2/3，共21组、每组2曲线，与冻结的完整 0.44.0 二进制逐字段存档一致；输入位数 W−6，模数、命令、原日志、二进制摘要均随例保存。P0 已证明 0.44.0 与 0.44.1 的相同算法基线。
+- `point_small_01.log`：384 档三种 Edwards 模式各33曲线。`point_wide_01.log`：八档各 binary/NAF4/NAF5，共24组独立 GMP 末点、点不变量、固定停止/恢复与自适应重启检查通过。`host_wait_build_01.log` / `host_wait_run_01.log`：迁移后的诊断仍可编译，短调用点不变量通过；原始计时不用于性能结论。
+- `prac_build_01.log` / `prac_identity_02.json`：显式 PRAC 构建通过，真实目标图收集42个 CUDA 对象，根/子目标五组编译宏/选项与 CUDA 包含响应文件内容一致，PowerShell 7 验证真实构建身份通过。`prac_runtime_03/result.json`：16组 CPU/GMP 与 ladder/resident/PRAC 完整点、正常恢复、双代损坏拒绝及干净目录重试检查通过；损坏检查点原始字节保留，损坏计划缓存重建后点结果一致。
+- `final_runtime_02/summary.json`：最终 Stage1/Stage2 与冻结 0.44.1 比较，5组 Stage1 存档及5组 Stage2 目标环叶指纹和非计时结果字段一致，覆盖 Edwards NAF/binary、普通/承载/relocation/主机回退交接。排除版本、构建身份、计时及关联校验字段，保留其余存档/结果字段比较。
+- `dev_build_01.log` / `registry_dev_01/result.json`：384/1024/1280 限档且 `ECM_CUDA_FULL_BUILD=OFF`、`ECM_NO_PARAM2=1` 的真实构建与28项查询通过；Montgomery 停在1024、Edwards 保留1280，PARAM2 明确拒绝。
+- `release_build_01.log` / `release_split_package_01.log`：通用 x64 GMP 的 sm89/384 档显式 PRAC 发布构建通过，SkipBuild 身份、42个 CUDA 对象拆分、原对象/exe 还原及隔离 ZIP 打包通过。
+
+提交前清理了新接口头文件末尾的多余空行，`worker_reuse_final.log` / `wide_build_final.log` / `dev_build_final.log` 各只重编1个受影响主机 CUDA 单元；`prac_build_final.log` 重编11个依赖该接口的单元，其余对象通过内容身份复用。设备算术正文校验及上述最终双版本回归重新通过。`final_static_checks.json` 记录11个 PowerShell 脚本语法、生成配置一致性和提交差异空白检查通过。正式发布按最终源码重新构建、拆分和打包通过，结果见 `release_final.log`；`release_restored_identity_final.json` 核对42个原对象/exe 完整还原、真实源身份与根/子目标编译设置，`release_archive_final.json` 核对 ZIP 的8个分发文件且无内部 manifest/运行数据。最终包的16组独立点/恢复/损坏拒绝验证见 `prac_packaged_runtime_final/result.json`。
+
+## P1 失败证据与边界
+
+`tiers_01.log` 保留 Windows PowerShell 丢弃空字符串实参导致的测试夹具失败，比较器接受无实参表示空期望集合后重新验证；未放宽空档必须为空的判断。`step1_build_01/02` 暴露从旧工厂复制的禁用占位定义与新工厂重复，删除重复占位后通过；原始 NVCC 日志均保留。
+
+`step2_build_01` 的 SDK 包含目录被错误同时传给 CUDA，导致保守依赖扫描进入未启用的 RTC 分支；修正为仅普通 C++ 需要的显式 SDK 包含后通过，扫描规则未放宽。`step2_build_02` 触发上游 CGBN 主机 fallback 的 GMP 要求，增加上述窄适配后通过。`step2_sass_01` 仅因 NVCC 路径摘要导致函数名不同，原指令与失败结果保留；比较器的最终边界见上文。
+
+`prac_runtime_01/02` 的夹具沿用旧检查点名称和损坏后自动重建预期，与当前二进制批次轮换合同不符；按现有主/备两代格式改为损坏拒绝并保留证据，重新验证通过，未修改程序恢复行为。首轮 PRAC 编译参数比较把目标各自的响应文件路径误判为包含内容差异；最终逐字比较响应文件内容。
+
+本轮验证了上述选档与 sm89，不宣称完整32档、全部 PRAC 特殊策略或多架构发布均已验收。受限构建 PARAM2/3 精确选档后缺失实例的行为保持。Stage2 主体拆分、旧分支删除及全部探针隔离属于 P2～P4；主机等待诊断仍直接包含私有运行时，保持现有诊断能力，后续改为独立探针接口。P5 的完整矩阵与性能资格未实施。草稿保留，完成后提示用户处理，不自动删除。

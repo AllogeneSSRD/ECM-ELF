@@ -4,7 +4,7 @@
 
 ## 初步开发：GPU 扩展坐标算术
 
-[cgbn_edwards_point.cuh](../../kernels/cuda/cgbn_edwards_point.cuh)实现 `a=1` 的扩展 Edwards 加法和倍点，使用 CGBN Montgomery 域、规范模数余数及 `(X,Y,Z,T)`。调用方负责提供已构造的曲线参数 `d`、基点、奇数模数，以及比模数多至少一位的容器；点公式不执行模逆。加法和倍点允许输入输出点重叠。
+[cgbn_edwards_point.cuh](../../kernels/cuda/stage1/edwards/point.cuh)实现 `a=1` 的扩展 Edwards 加法和倍点，使用 CGBN Montgomery 域、规范模数余数及 `(X,Y,Z,T)`。调用方负责提供已构造的曲线参数 `d`、基点、奇数模数，以及比模数多至少一位的容器；点公式不执行模逆。加法和倍点允许输入输出点重叠。
 
 [GPU 探针](../../tools/test/edwards_gpu_point_probe.cu)由 CPU 的 `edwards_atkin_morain` 构造曲线，用 `48·lcm(1…B1)` 生成标量，GPU 逐位执行倍点和条件加法。独立 [构建入口](../../tools/build/test/build_edwards_gpu_point_probe.ps1)生成测试程序。探针检查 `XY=ZT`、Edwards 曲线方程，并将 GPU 结果的 `(Z+Y):(Z−Y)` 与 CPU `edwards_stage1_curve` 的点交叉相乘比较；投影缩放不同不按原始坐标逐字比较。
 
@@ -31,7 +31,7 @@
 
 ## 2026-10-16：批量 worker 与 NTT Stage2 接入
 
-新增 [批量 CUDA 模块](../../src/cuda/ecm_cuda_edwards.cu)、[worker](../../src/core/ecm_edwards_gpu_driver.inl)、[带失败分类的曲线构造](../../src/core/ecm_edwards_curve.h)和[交接格式](../../src/core/ecm_edwards_io.h)。曲线辅助倍点采用 Jacobian 坐标，模逆失败在实际 N 上返回因子或退化结果；不继承 CPU 参考中忽略逆失败的行为。GPU 保持标准扩展坐标，二进制标量位号与 NAF 格式隔离。安全停止和周期检查点沿用原子替换与备份轮换；恢复核对完整任务身份、基点和累加点不变量。
+新增 [批量 CUDA 模块](../../src/cuda/stage1/edwards.cpp)、[worker](../../src/core/ecm_edwards_gpu_driver.inl)、[带失败分类的曲线构造](../../src/core/ecm_edwards_curve.h)和[交接格式](../../src/core/ecm_edwards_io.h)。曲线辅助倍点采用 Jacobian 坐标，模逆失败在实际 N 上返回因子或退化结果；不继承 CPU 参考中忽略逆失败的行为。GPU 保持标准扩展坐标，二进制标量位号与 NAF 格式隔离。安全停止和周期检查点沿用原子替换与备份轮换；恢复核对完整任务身份、基点和累加点不变量。
 
 Prime95 本地副本 `ecm.cpp:4409–4412` 明确保存 `Ad4=(dD-dN)/dD=1-d`；本仓库 `s2g_xdbl` 使用 `(A+2)/4`，因此 Edwards 交接传 `1/(1-d)`。Stage2 从目标 N 与 Edwards sigma 重建该值，不调用 Suyama 构造；baby、giant、小素数和多项式路径共用同一常数。Stage1 不可逆归一化得到的真因子使用明确的 FACTOR 记录，Stage2 在进入多项式运算前验证因子。
 

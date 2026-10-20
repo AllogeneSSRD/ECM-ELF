@@ -5,7 +5,7 @@
 | 模块 | 职责 | 主要入口 |
 | --- | --- | --- |
 | Stage1 驱动 | 参数、队列、指数、检查点、结果和交接 | [ecm_driver.cpp](../../src/core/ecm_driver.cpp) |
-| CUDA Stage1 | CGBN 曲线批处理、分档和点乘 | [cgbn_stage1.cu](../../kernels/cuda/cgbn_stage1.cu) |
+| CUDA Stage1 | CGBN 曲线批处理、分档和点乘 | [cgbn_stage1.cu](../../src/cuda/stage1/montgomery.cu) |
 | CPU Stage1 | Montgomery/Edwards，GMP 与可选 SIMD 算术 | [src/cpu](../../src/cpu/) |
 | OpenCL Stage1 | 设备配置、路径注册、动态内核组装 | [opencl_ecm_entry.cpp](../../src/opencl_ecm_entry.cpp) |
 | Stage2 驱动 | save、独立队列、回执、日志、Auto B2 | [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp) |
@@ -18,7 +18,9 @@
 
 生产 giant chain 核在 `kernels/cuda/stage2_giant_chain.cuh`；G 根树的分块空位布局和压缩请求形状由 `src/core/ecm_stage2_giant_tree.h` 定义。它们分别服务点生成和根多项式调度，F 树及其有序下降仍由原布局控制。
 
-`ecm` 与 `ecm_cuda` 编译同一组 Stage1 驱动、CPU 算术、配置、队列和存档源文件；两者在 `ecm_backend_*` 接口分别接入 OpenCL 与 CUDA 实现。`ecm_cuda_stage2` 保持独立的 save/回执执行流程。三个程序共用 [整数表达式解析](../../src/core/ecm_expr.cpp)与 [worktodo 读写](../../src/core/ecm_worktodo.cpp)；队列读取结果区分任务、空队列和 I/O 错误，避免把读档失败视为处理完成。构建的共用 Stage1 源清单在根目录 [CMakeLists.txt](../../CMakeLists.txt) 中维护；不同后端仍分别编译这些源文件。
+`ecm` 与 `ecm_cuda` 编译同一组 Stage1 驱动、CPU 算术、配置、队列和存档源文件；两者在 `ecm_backend_*` 接口分别接入 OpenCL 与 CUDA 实现。`ecm_cuda_stage2` 保持独立的 save/回执执行流程。三个程序共用 [整数表达式解析](../../src/core/ecm_expr.cpp)与 [worktodo 读写](../../src/core/ecm_worktodo.cpp)；队列读取结果区分任务、空队列和 I/O 错误，避免把读档失败视为处理完成。构建的共用 Stage1 源清单在 [cuda_sources.cmake](../../tools/build/internal/cuda_sources.cmake) 中维护，由根 CMake 消费；不同后端仍分别编译这些源文件。
+
+CUDA Stage1 的中立接口与位宽表位于 `include/ecm/cuda/`，主机生命周期和恢复位于 `src/cuda/stage1/`，设备模板/实例位于 `kernels/cuda/stage1/`。可选 PRAC 设备目标位于 `kernels/cuda/optional/prac/`；公共 CGBN 设备原语位于 `kernels/cuda/shared/`。模块职责、依赖方向和两族位宽边界以 [Stage1](STAGE1.md#cuda-模块边界) 为准。
 
 ## 数学与数据术语
 

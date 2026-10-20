@@ -10,10 +10,12 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 if($Stage -ne 'stage2') {
     Set-Location (Split-Path -Parent (Split-Path -Parent $root))
-    $sourcePaths=@('CMakeLists.txt','src/core/ecm_edwards_naf.h','kernels/cuda/cgbn_edwards_point.cuh','kernels/cuda/cgbn_edwards_naf.cuh')+
-        @(Get-ChildItem 'src/cuda/ecm_cuda_edwards*','kernels/cuda/cgbn_edwards_*' -File|ForEach-Object{$_.FullName})
-    $hashes=[ordered]@{}
-    foreach($source in $sourcePaths){$hashes[$source]=(Get-FileHash -LiteralPath $source).Hash}
+    . (Join-Path $root 'internal/cuda_build_state.ps1')
+    $repo=(Get-Location).Path
+    $inventory=Get-EcmCudaInventory $repo
+    $edwardsSources=@($inventory.groups.STAGE1_EDWARDS)
+    $sourcePaths=@(Get-EcmSourceClosure $repo $edwardsSources @('include','src/core','src/cpu','third_party/cgbn/include'))+@('CMakeLists.txt')
+    $hashes=Get-EcmSourceHashes $repo $sourcePaths
     if($RelinkOnly){
         & (Join-Path $root 'build_stage1_local.ps1') -BuildDir "$Build/stage1" -Arch $Arch -Tiers $Tiers -Jobs $Jobs -RelinkOnly
     } else {
@@ -23,9 +25,8 @@ if($Stage -ne 'stage2') {
     foreach($source in $sourcePaths){if($hashes[$source] -ne (Get-FileHash -LiteralPath $source).Hash){throw "source changed during build: $source"}}
     $objects=[ordered]@{}
     $commands=Get-Content "$Build/stage1/compile_commands.json" -Raw|ConvertFrom-Json
-    foreach($entry in $commands|Where-Object{$_.file -match '(ecm_cuda_edwards|cgbn_edwards_instances).*\.cu$'}){
-        $match=[regex]::Match($entry.command,'-o\s+("[^"]+"|\S+)');$obj=$match.Groups[1].Value.Trim('"')
-        if(-not [IO.Path]::IsPathRooted($obj)){$obj=Join-Path $entry.directory $obj}
+    foreach($entry in $commands|Where-Object{(Get-EcmSourceKey $repo $_.file) -in $edwardsSources}){
+        $obj=Get-EcmObjectPath $entry (Resolve-EcmSourcePath $repo "$Build/stage1")
         $objects[$entry.file]=[ordered]@{path=$obj;sha256=(Get-FileHash -LiteralPath $obj).Hash}
     }
     [ordered]@{arch="sm_$Arch";tiers=$Tiers;sources=$hashes;objects=$objects;

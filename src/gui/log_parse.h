@@ -14,7 +14,7 @@
 //   * progress lines come in two shapes with the same fields:
 //       stage1: [bar] 42.3%  42.3/100 (~1.20 s/curve)  elapsed 51.0s  ETA 69.0s
 //       GPU: [bar] 42.3%  123456, +789 bits (~1.20 s/curve)  elapsed 51.0s  remaining 69.0s
-//     (src/core/ecm_driver.cpp:1263 and kernels/cuda/cgbn_stage1.cu:102);
+//     (src/core/ecm_driver.cpp:1263 and src/cuda/stage1/montgomery.cu:102);
 //   * a finished queue prints "===== queue done, N task(s) processed ====="
 //     (src/core/ecm_driver.cpp, end of run_queue_manager());
 //   * a hit prints "factor[i]=<decimal>" and "FACTOR FOUND aid=... task=...".
