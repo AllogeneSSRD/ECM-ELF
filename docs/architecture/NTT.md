@@ -85,5 +85,6 @@ NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导�
 - [ntt_launch.h](../../include/ecm/cuda/ntt_launch.h)、[transform_kernels.cu](../../kernels/cuda/ntt/transform_kernels.cu)：中立启动接口与唯一 NTT 设备编译单元；`transform.cuh`、`tile.cuh`、`outer_coop.cuh`、`carry.cuh`、`carry_partial.cuh` 分别维护基础变换、融合 tile/outer 和 carry。运行时后端常量在设备所属编译单元上传，不引入 RDC。
 - [goldilocks.cuh](../../kernels/cuda/shared/goldilocks.cuh)、[goldilocks_reduce.cuh](../../kernels/cuda/shared/goldilocks_reduce.cuh)、[goldilocks_ptx.cuh](../../kernels/cuda/shared/goldilocks_ptx.cuh)、[goldilocks_sub.cuh](../../kernels/cuda/shared/goldilocks_sub.cuh)、[goldilocks_tile.cuh](../../kernels/cuda/shared/goldilocks_tile.cuh)：域算术和可复用 tile 原语；设备闭包不包含 GMP 或 ECM 主机流程。
 - [s4_reduce.cuh](../../kernels/cuda/stage2/s4_reduce.cuh)、[stage2_scalar.cuh](../../kernels/cuda/shared/stage2_scalar.cuh)：S4 长除法与梅森归约；[模块职责及实验边界](STAGE2.md#cuda-模块边界)。
+- 独立 NTT/carry/outer/cuFFT 候选位于 `tools/experiments/cuda/ntt_variants/`，Tensor 候选位于 `tools/experiments/cuda/ntt_tensor/`；GMP oracle 和夹具位于 `tools/test/`。使用生产 NTT 的探针显式链接同一源清单或经身份验证的对象，保留各自默认流 ABI。
 - [内存模型](MEMORY.md)、[性能结论](../performance/STAGE2.md)、[tune 合同](AUTO_B2.md)。
 - 固定资料：[GPUOWL NTT](../reference/GPUOWL_NTT.md)、[Goldilocks 证明](../reference/GOLDILOCKS_ARITHMETIC.md)、[开源库分析](../reference/GPU_NTT_LIBRARIES.md)。

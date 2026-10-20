@@ -6,9 +6,9 @@
 #include <string>
 #include <vector>
 #define CK(call) do{auto e=(call);if(e!=cudaSuccess){std::fprintf(stderr,"CUDA %s: %s\n",#call,cudaGetErrorString(e));std::exit(2);}}while(0)
-#include "carry_reference.cuh"
-#include "carry_cone_reference.cuh"
-#include "../bench/ntt_carry_partial.cuh"
+#include "../experiments/cuda/ntt_variants/carry_reference.cuh"
+#include "../experiments/cuda/ntt_variants/carry_cone.cuh"
+#include "../experiments/cuda/ntt_variants/ntt_carry_partial.cuh"
 using U=unsigned long long;
 static void launch(int mode,const U *c,U n,int bpw,unsigned int *partial,U *out,U stride,U batch){
     const auto blocks=(unsigned int)((n+255)/256);

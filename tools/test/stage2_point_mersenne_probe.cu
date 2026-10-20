@@ -4,8 +4,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
-#include "stage2_point_reference.cuh"
-#include "../bench/stage2_point_mersenne.cuh"
+#include "../experiments/cuda/stage2_tree/point_arithmetic.cuh"
+#include "../experiments/cuda/stage2_tree/stage2_point_mersenne.cuh"
 using Word=unsigned long long;
 #define CK(x) do{auto e=(x);if(e!=cudaSuccess){fprintf(stderr,"CUDA: %s\n",cudaGetErrorString(e));exit(2);}}while(0)
 template<int NW,bool NEW>

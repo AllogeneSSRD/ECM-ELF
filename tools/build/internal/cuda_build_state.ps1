@@ -36,7 +36,7 @@ function Get-EcmSourceClosure([string]$Repo, [string[]]$Sources, [string[]]$Incl
         if ($seen.ContainsKey($path)) { continue }
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Build dependency missing: $path" }
         $key = Get-EcmSourceKey $Repo $path
-        if ($Production -and $key -match '^(tools/(bench|experiments)/|\.refactor/)') {
+        if ($Production -and $key -match '^(tools/(bench|experiments|test)/|\.refactor/)') {
             throw "Production CUDA source depends on experiment: $key"
         }
         $seen[$path] = $key
@@ -168,7 +168,7 @@ function Get-EcmCompileState([string]$Repo, $Entry, [string]$Setup = '', [string
     # must not prevent recompiling a source which no longer includes it.
     if ($Production) {
         foreach ($path in $paths) {
-            if ($path -match '^(tools/(bench|experiments)/|\.refactor/)') { throw "Production CUDA source depends on experiment: $path" }
+            if ($path -match '^(tools/(bench|experiments|test)/|\.refactor/)') { throw "Production CUDA source depends on experiment: $path" }
         }
     }
     $hashes = Get-EcmSourceHashes $Repo $paths

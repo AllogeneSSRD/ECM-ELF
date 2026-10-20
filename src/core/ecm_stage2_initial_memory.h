@@ -28,6 +28,12 @@ inline bool baby_memory_layout(Word p,Word w,BabyMemoryLayout &layout) {
     }
     return true;
 }
+// Shared payload query; invalid or overflowing shapes retain the sentinel.
+inline Word baby_payload_bytes(Word p,Word w) {
+    BabyMemoryLayout layout;
+    return baby_memory_layout(p,w,layout)?layout.bytes:~0ull;
+}
+
 struct InitialMemoryPolicy {
     Word p=0,words=0,baby_budget_bytes=512ull<<20;
     bool baby_requested=true,diagnostic=false;

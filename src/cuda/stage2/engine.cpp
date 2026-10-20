@@ -18,17 +18,13 @@ int run_real(
     unsigned long long B2,
     unsigned long long D_in,
     bool choose_d,
-    bool run_s2,
-    int curves,
     const char *saved_qx_hex,
     Stage2Tail *saved_result,
-    bool d_plan_only,
-    ecm_stage2::Plan *plan_result,
     unsigned carrier_exponent,
     const char *saved_a24_hex)
 {
     PolyLayer L;
-    L.ntt_lengths.enabled=g_ntt_counts_enabled && !d_plan_only;
+    L.ntt_lengths.enabled=g_ntt_counts_enabled;
     L.device = g_device;
     stage2_memory::Session memory_session; // Destroyed after all curve-local device owners.
     stage2_log::phase("Plan Stage2 bounds and memory");
@@ -40,8 +36,8 @@ int run_real(
     const size_t nw = L.W;
 
     Stage2PlanRuntime planning;
-    const int plan_code=prepare_stage2_plan(L,nw,sigma,B1,B2,D_in,choose_d,curves,d_plan_only,plan_result,planning);
-    if(plan_code || d_plan_only)return plan_code;
+    const int plan_code=prepare_stage2_plan(L,nw,sigma,B1,B2,D_in,choose_d,1,false,nullptr,planning);
+    if(plan_code)return plan_code;
     const auto freeb=planning.freeb,totalb=planning.totalb,reserve=planning.reserve,cap=planning.cap;
     const auto D=planning.D,P_baby=planning.P_baby;
     const bool s4_on=planning.s4_on;
@@ -524,7 +520,7 @@ int run_real(
     /* ---- the tails ---- */
     Stage2Params SP;
     SP.D = D; SP.B1 = B1; SP.B2 = B2; SP.baby_j = baby_j;
-    for (int cv = 0; cv < curves; ++cv) {
+    {
         g_gfinv={};g_giant_seed={};
 
         const unsigned long long nb = L.ntt_calls, nl = L.ntt_launches;
@@ -597,7 +593,7 @@ int run_real(
                 m.phases.complete=m.phases.complete && probe_phases.complete;
                 for(size_t i=4;i<ecm_stage2::timing::count;++i)m.phases.seconds[i]+=probe_phases.seconds[i];
             }
-            m.clean=!stage2_extra_fixtures && !run_s2 && curves==1;
+            m.clean=!stage2_extra_fixtures;
             m.fold_resident=BR.fold_device.enabled;
         }
         BR.t_return_finalize = t0 + el - BR.t_post_end;
@@ -611,8 +607,8 @@ int run_real(
         stage2_log::print(stage2_log::curve, "stage2_full_wall: curve=%d shape=%.6f init=%.6f main=%.6f total=%.6f "
                     "fixture=%.6f clean=%d (init includes baby/F-tree and mandatory selftests; "
                     "main includes GCD, naming and oracle drain; Stage1 excluded; init shared)\n",
-                    cv+1,stage2_shape_seconds,stage2_init_seconds,el,stage2_init_seconds+el,
-                    stage2_fixture_seconds,(int)(!stage2_extra_fixtures && !run_s2 && curves==1));
+                    1,stage2_shape_seconds,stage2_init_seconds,el,stage2_init_seconds+el,
+                    stage2_fixture_seconds,(int)(!stage2_extra_fixtures));
         L.print_ntt_lengths();
         if(g_relocation_enabled)stage2_log::print(stage2_log::curve,
             "stage2_relocation: active=%d first=%llu last=%llu probe_points=%llu missing=%llu replayed=%d "
@@ -956,7 +952,7 @@ int ecm_cuda_stage2_run(
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     Stage2Tail tail;
     const int code = run_real(n_hex, true, sigma, b1, b2, d, d == 0,
-                              false, 1, x_hex, &tail,false,nullptr,carrier_exponent,a24_hex);
+                              x_hex, &tail,carrier_exponent,a24_hex);
     if (code || tail.bad_factors) return code ? code : 1;
     if(metrics)*metrics=tail.metrics;
     std::string json = "\"hits\":" + std::to_string(tail.hits) +

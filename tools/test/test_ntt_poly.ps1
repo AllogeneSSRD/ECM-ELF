@@ -4,7 +4,7 @@
     Integer-NTT polynomial multiplication (Route B, M2 first gate): is it CORRECT?
 
 .DESCRIPTION
-    tools/bench/ntt_poly_probe.cu is the integer-NTT twin of cufft_kron_probe.cu's `poly`
+    tools/experiments/cuda/ntt_variants/engine.cuh is the integer-NTT twin of cufft_kron_probe.cu's `poly`
     mode: the same Kronecker-packed polynomial multiplication (slot width 2S + ceil(log2 P),
     so no carry crosses a slot) with the fp64 cuFFT replaced by an NTT over the Goldilocks
     prime p = 2^64-2^32+1.  The two are meant to be compared on one figure of merit,

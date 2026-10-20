@@ -52,7 +52,7 @@ inline constexpr bool g_giant_seed_pair = true;
 inline constexpr bool g_giant_base_cpu = false;
 inline constexpr bool g_xadd6 = true;
 inline const char *const kBatchedCat[BC_NCAT] = { "f_tree", "g_tree", "fold", "descent", "inv" };
-inline constexpr bool g_scaled_descent = true;
+
 inline const unsigned long long g_s4_batch_budget_mb = 64;
 inline constexpr unsigned kFoldOwnerReuse=3;
 

@@ -3,4 +3,6 @@ param([string]$Build='build_cuda_cmake/stage2_pack_zero_probe',[ValidatePattern(
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot));Set-Location $repo
 . (Join-Path $PSScriptRoot '../internal/cuda_ntt_probe.ps1')
-Invoke-EcmNttProbeBuild -Repo $repo -Build $Build -Arch $Arch -Source 'tools/bench/stage2_pack_zero_probe.cu' -Name 'stage2_pack_zero_probe' -DefaultStream 'per-thread'
+. (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
+$inventory=Get-EcmCudaInventory $repo
+Invoke-EcmNttProbeBuild -Repo $repo -Build $Build -Arch $Arch -Source 'tools/bench/stage2_pack_zero_probe.cu' -Name 'stage2_pack_zero_probe' -DefaultStream 'per-thread' -AdditionalProductionSources @($inventory.groups.STAGE2_ARITHMETIC)

@@ -2,7 +2,7 @@
 """Isolate the slot-assembly step from the NTT: feed it the EXACT product words.
 
 Why: with the transform now verified against a direct-DFT oracle, the remaining failure of
-tools/bench/ntt_poly_probe.cu is that `poly 4 64 1 1` still returns wrong slots.  Two
+tools/experiments/cuda/ntt_variants/engine.cuh is that `poly 4 64 1 1` still returns wrong slots.  Two
 possibilities, and they need very different fixes:
   (a) the extraction (slot_assemble_kernel) mangles a correct word array, or
   (b) the extraction is fine and the word array it is fed is not the exact product

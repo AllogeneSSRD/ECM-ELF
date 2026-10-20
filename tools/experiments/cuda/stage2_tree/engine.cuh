@@ -85,10 +85,9 @@
  *   check_F: F_degree_gpu=... F_degree_cpu=... ok=1
  * ------------------------------------------------------------------------- */
 #define NTT_PROBE_NAME "stage2_tree_gpu"
-#define NTT_POLY_PROBE_NO_MAIN 1
-#include "ntt_poly_probe.cu"
-#include "../../src/core/ecm_stage2_geometry.h"
-#include "../../src/core/ecm_stage2_d_catalog.h"
+#include "../ntt_variants/engine.cuh"
+#include "../../../../src/core/ecm_stage2_geometry.h"
+#include "../../../../src/core/ecm_stage2_d_catalog.h"
 
 #include <string>
 #include <utility>
@@ -602,142 +601,7 @@ static void gfinv_segprod_host(std::vector<unsigned long long> &out, size_t npts
  *  is what the host sees.)
  * ===================================================================================== */
 
-/* (hi, lo) = x*y + z + c, exactly */
-__device__ __forceinline__ void s2g_mac(unsigned long long x, unsigned long long y,
-                                        unsigned long long z, unsigned long long c,
-                                        unsigned long long &lo, unsigned long long &hi)
-{
-    const unsigned long long p0 = x * y;
-    const unsigned long long p1 = __umul64hi(x, y);
-    unsigned long long s = p0 + z;
-    unsigned long long k = (s < p0) ? 1ull : 0ull;
-    s += c;
-    k += (s < c) ? 1ull : 0ull;
-    lo = s;
-    hi = p1 + k;
-}
-
-/* r = (r - N) mod 2^(64*nw); returns the borrow */
-__device__ __forceinline__ unsigned long long s2g_sub_n(unsigned long long *r,
-                                                        const unsigned long long *n, int nw)
-{
-    unsigned long long borrow = 0;
-    for (int i = 0; i < nw; ++i) {
-        const unsigned long long d = r[i] - n[i];
-        const unsigned long long b1 = (r[i] < n[i]) ? 1ull : 0ull;
-        const unsigned long long d2 = d - borrow;
-        const unsigned long long b2 = (d < borrow) ? 1ull : 0ull;
-        r[i] = d2;
-        borrow = b1 + b2;
-    }
-    return borrow;
-}
-
-__device__ __forceinline__ bool s2g_ge_n(const unsigned long long *a,
-                                         const unsigned long long *n, int nw)
-{
-    for (int i = nw - 1; i >= 0; --i)
-        if (a[i] != n[i]) return a[i] > n[i];
-    return true;                                          /* equal counts as >= */
-}
-
-/* r = a + b mod N  (a, b < N) */
-template <int NW>
-__device__ __forceinline__ void s2g_addmod(unsigned long long *r, const unsigned long long *a,
-                                           const unsigned long long *b,
-                                           const unsigned long long *n, int nw)
-{
-    unsigned long long c = 0;
-    for (int i = 0; i < nw; ++i) {
-        const unsigned long long s1 = a[i] + b[i];
-        const unsigned long long c1 = (s1 < a[i]) ? 1ull : 0ull;
-        const unsigned long long s2 = s1 + c;
-        const unsigned long long c2 = (s2 < c) ? 1ull : 0ull;
-        r[i] = s2;
-        c = c1 + c2;
-    }
-    if (c != 0 || s2g_ge_n(r, n, nw)) s2g_sub_n(r, n, nw);   /* a+b < 2N: one subtraction */
-}
-
-/* r = a - b mod N  (a, b < N) */
-template <int NW>
-__device__ __forceinline__ void s2g_submod(unsigned long long *r, const unsigned long long *a,
-                                           const unsigned long long *b,
-                                           const unsigned long long *n, int nw)
-{
-    unsigned long long borrow = 0;
-    for (int i = 0; i < nw; ++i) {
-        const unsigned long long d = a[i] - b[i];
-        const unsigned long long b1 = (a[i] < b[i]) ? 1ull : 0ull;
-        const unsigned long long d2 = d - borrow;
-        const unsigned long long b2 = (d < borrow) ? 1ull : 0ull;
-        r[i] = d2;
-        borrow = b1 + b2;
-    }
-    if (borrow) {
-        unsigned long long c = 0;
-        for (int i = 0; i < nw; ++i) {
-            const unsigned long long s1 = r[i] + n[i];
-            const unsigned long long c1 = (s1 < r[i]) ? 1ull : 0ull;
-            const unsigned long long s2 = s1 + c;
-            const unsigned long long c2 = (s2 < c) ? 1ull : 0ull;
-            r[i] = s2;
-            c = c1 + c2;
-        }
-    }
-}
-
-__device__ __constant__ int g_s2g_point_mersenne_bits=0;
-#include "stage2_point_mersenne.cuh"
-
-/* r = a*b*R^-1 mod N, R = 2^(64*nw), a,b < N.  Schoolbook product + Montgomery reduction
-   (SOS/REDC).  The result is < 2N, so ONE conditional subtraction of N finishes it.
-   ninv = -N^-1 mod 2^64 (N odd).  Checked against GMP for every shape at startup. */
-template <int NW>
-__device__ __forceinline__ void s2g_mont_mul(unsigned long long *r,
-                                             const unsigned long long *a,
-                                             const unsigned long long *b,
-                                             const unsigned long long *n,
-                                             unsigned long long ninv, int nw)
-{
-    unsigned long long t[2 * NW + 2];
-    for (int i = 0; i < 2 * nw + 2; ++i) t[i] = 0;
-    for (int i = 0; i < nw; ++i) {
-        unsigned long long c = 0;
-        const unsigned long long bi = b[i];
-        for (int j = 0; j < nw; ++j) {
-            unsigned long long lo, hi;
-            s2g_mac(a[j], bi, t[i + j], c, lo, hi);
-            t[i + j] = lo;
-            c = hi;
-        }
-        t[i + nw] = c;                 /* untouched before this iteration (SOS invariant) */
-    }
-    unsigned long long out[NW];
-    const int mersenne_bits=g_s2g_point_mersenne_bits;
-    if(mersenne_bits){s2g_mersenne_mont_reduce<NW>(r,t,n,nw,mersenne_bits,out);return;}
-    for (int i = 0; i < nw; ++i) {
-        const unsigned long long m = t[i] * ninv;
-        unsigned long long c = 0;
-        for (int j = 0; j < nw; ++j) {
-            unsigned long long lo, hi;
-            s2g_mac(m, n[j], t[i + j], c, lo, hi);
-            t[i + j] = lo;
-            c = hi;
-        }
-        int k = i + nw;
-        while (c != 0) {
-            const unsigned long long s = t[k] + c;
-            c = (s < c) ? 1ull : 0ull;
-            t[k] = s;
-            ++k;
-        }
-    }
-    for (int i = 0; i < nw; ++i) out[i] = t[nw + i];
-    if (t[2 * nw] != 0 || s2g_ge_n(out, n, nw)) s2g_sub_n(out, n, nw);
-    for (int i = 0; i < nw; ++i) r[i] = out[i];
-}
-
+#include "point_arithmetic.cuh"
 /* r = 2p: the reference's xdbl, in Montgomery images */
 template <int NW>
 __device__ __forceinline__ void s2g_xdbl(unsigned long long *rx, unsigned long long *rz,
@@ -7688,8 +7552,8 @@ __global__ void fold_subtract_kernel(const unsigned long long *a,const unsigned 
     unsigned long long any=0;for(int j=0;j<W;++j)any|=out[j];
     if(any)atomicMax(length,(unsigned long long)i+1);
 }
-#include "../../kernels/cuda/stage2/plain_scale.cuh"
-#include "../../src/cuda/stage2/scale_plain.cuh"
+#include "../../../../kernels/cuda/stage2/plain_scale.cuh"
+#include "plain_scale.cuh"
 
 static bool gscale_flag(const char *key)
 {
@@ -11087,7 +10951,7 @@ static bool real_run_words(unsigned long long P,int S,unsigned long long *out_wo
 /* the D scan's candidate record lives with the scan itself (section 59); the old `DChoice`, which
    only carried a memory footprint, was replaced by a cost+coverage model */
 
-#include "stage2_d_model.cuh"
+#include "legacy_d_model_profiles.h"
 
 static int run_real(const char *n_str, bool n_is_hex, unsigned long long sigma,
                     unsigned long long B1, unsigned long long B2, unsigned long long D_in,
@@ -12632,78 +12496,3 @@ static int run_selftest(void)
                                    "and prime modulus)");
     return fails ? 1 : 0;
 }
-
-#ifndef STAGE2_TREE_GPU_NO_MAIN
-int main(int argc, char **argv)
-{
-    s2g_install_crash_handler();          /* first: a crash must never print nothing */
-    s2g_install_terminate();              /* and neither must an escaping exception */
-    ladder_cap_init();                    /* the ladder launch length (NTT_LADDER_CAP) */
-    {
-        const char *enp = std::getenv("NTT_NO_PROGRESS");   /* progress lines on by default */
-        if (enp && *enp && std::atoi(enp) != 0) g_s4_batched_progress = false;
-    }
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
-    const char *check_F = nullptr, *gpu_dump = nullptr;
-    const char *real_n = nullptr;
-    bool selftest = false, evaluate = false, evaluate_batched = false;
-    bool real = false, real_hex = false, choose_d = false, real_s2 = false, d_plan_only = false;
-    unsigned long long r_sigma = 26, r_b1 = 1000, r_b2 = 1000000, r_d = 0;
-    int r_curves = 1;
-    for (int i = 1; i < argc; ++i) {
-        const char *a = argv[i];
-        auto next = [&]() -> const char * { return (i + 1 < argc) ? argv[++i] : ""; };
-        if (!std::strcmp(a, "--check-F")) check_F = next();
-        else if (!std::strcmp(a, "--dump-F-gpu")) gpu_dump = next();
-        else if (!std::strcmp(a, "--device")) g_device = std::atoi(next());
-        else if (!std::strcmp(a, "--evaluate")) evaluate = true;
-        else if (!std::strcmp(a, "--evaluate-batched")) evaluate_batched = true;
-        else if (!std::strcmp(a, "--selftest")) selftest = true;
-        /* slice S4: the real-shape path (no CPU reference can exist at S = 5261) */
-        else if (!std::strcmp(a, "--real")) real = true;
-        else if (!std::strcmp(a, "--n")) real_n = next();
-        else if (!std::strcmp(a, "--n-hex")) { real_n = next(); real_hex = true; }
-        else if (!std::strcmp(a, "--sigma")) r_sigma = (unsigned long long)std::strtod(next(), nullptr);
-        /* strtod, NOT strtoull(base 10): "--b2 1e11" is how the plan and Prime95's own
-           parameters write B2, and strtoull stops at the 'e' and returns 1 (measured:
-           a whole run computed a B2=1 shape and printed giant_points=2, section 27) */
-        else if (!std::strcmp(a, "--b1")) r_b1 = (unsigned long long)std::strtod(next(), nullptr);
-        else if (!std::strcmp(a, "--b2")) r_b2 = (unsigned long long)std::strtod(next(), nullptr);
-        else if (!std::strcmp(a, "--d")) r_d = (unsigned long long)std::strtod(next(), nullptr);
-        else if (!std::strcmp(a, "--choose-d")) choose_d = true;
-        else if (!std::strcmp(a, "--d-plan-only")) d_plan_only = true;
-        else if (!std::strcmp(a, "--s2")) real_s2 = true;
-        else if (!std::strcmp(a, "--curves")) r_curves = std::atoi(next());
-        else {
-            std::fprintf(stderr,
-                         "usage: stage2_tree_gpu --check-F <cpu dump> [--dump-F-gpu <file>] "
-                         "[--evaluate] [--evaluate-batched] [--device N]\n"
-                         "       stage2_tree_gpu --selftest [--device N]\n"
-                         "       stage2_tree_gpu --real --n <decimal>|--n-hex <hex> "
-                         "[--sigma S] [--b1 B1] [--b2 B2] [--d D | --choose-d] [--d-plan-only] [--s2] "
-                         "[--curves K] [--device N]\n");
-            return 2;
-        }
-    }
-    if (selftest) return run_selftest();
-    if (real) {
-        if (!real_n) {
-            std::fprintf(stderr, "%s: --real needs --n <decimal> or --n-hex <hex>\n",
-                         NTT_PROBE_NAME);
-            return 2;
-        }
-        if (!choose_d && r_d == 0) {
-            std::fprintf(stderr, "%s: --real needs --d <D> or --choose-d\n", NTT_PROBE_NAME);
-            return 2;
-        }
-        return run_real(real_n, real_hex, r_sigma, r_b1, r_b2, r_d, choose_d, real_s2, r_curves,nullptr,nullptr,d_plan_only);
-    }
-    if (!check_F) {
-        std::fprintf(stderr, "%s: --check-F <file> is required (write one with "
-                             "stage2_tree_ref --dump-F)\n", NTT_PROBE_NAME);
-        return 2;
-    }
-    return run_check_F(check_F, gpu_dump, evaluate, evaluate_batched);
-}
-#endif // STAGE2_TREE_GPU_NO_MAIN
-

@@ -1,10 +1,20 @@
-// CPU-only model gate using the actual NTT shape query and production class.
-#define NTT_POLY_PROBE_NO_MAIN
-#include "../bench/ntt_poly_probe.cu"
-#include "../bench/stage2_d_model.cuh"
+// Historical model gate. Frozen production profiles use the actual NTT module;
+// the default retains the independent legacy engine's existing shape query.
+#ifdef ECM_STAGE2_FROZEN_PRODUCTION_PROFILES
+#include "../../src/core/ecm_stage2_logging.h"
+#include "../../src/core/ecm_stage2_initial_memory.h"
+#include "../../src/cuda/ntt/runtime.h"
+#include "../experiments/cuda/stage2_tree/d_model_profiles.h"
+#else
+#include "../experiments/cuda/ntt_variants/engine.cuh"
+#include "../experiments/cuda/stage2_tree/legacy_d_model_profiles.h"
+#endif
 
 int main(int argc,char **argv)
 {
+#ifdef ECM_STAGE2_FROZEN_PRODUCTION_PROFILES
+    stage2_log::level=stage2_log::debug;
+#endif
     if(argc!=6)return 2;
     const int bits=std::atoi(argv[1]),profile=std::atoi(argv[5]);
     const auto bound=std::strtoull(argv[2],nullptr,10),d=std::strtoull(argv[3],nullptr,10),p=std::strtoull(argv[4],nullptr,10);

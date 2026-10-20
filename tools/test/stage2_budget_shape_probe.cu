@@ -1,5 +1,4 @@
-#define NTT_POLY_PROBE_NO_MAIN
-#include "../bench/ntt_poly_probe.cu"
+#include "../experiments/cuda/ntt_variants/engine.cuh"
 // Query the actual immutable production packing planner. No transforms or
 // arithmetic kernels are launched; the device is selected explicitly.
 int main(int argc,char **argv) {

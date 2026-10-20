@@ -4,8 +4,8 @@
     GPU tree-based stage 2 (slice S1/S2): is the GPU F tree the CPU reference's F tree?
 
 .DESCRIPTION
-    tools/bench/stage2_tree_gpu.cu builds the baby product tree F(X) = prod_j (X - x_j) mod N
-    on the GPU, reusing the SAME NTT multiply kernels as tools/bench/ntt_poly_probe.cu
+    tools/experiments/cuda/stage2_tree/engine.cuh builds the baby product tree F(X) = prod_j (X - x_j) mod N
+    on the GPU, reusing the SAME NTT multiply kernels as tools/experiments/cuda/ntt_variants/engine.cuh
     (extracted into ntt_poly_mul_host(), so there is exactly one implementation of every
     kernel -- two copies would drift, which is what docs/architecture/STAGE2.md
     records as a lesson).  The oracle is coefficient-by-coefficient:
@@ -35,7 +35,10 @@ param(
     [string]$Check = '',
     [int]$Device = 1,
     # For hosts where nested PowerShell startup stalls; retain child-like NTT env isolation.
-    [switch]$InProcessChecks
+    [switch]$InProcessChecks,
+    # Run the independent reference group after rebuilding its CPU/GPU inputs.
+    # The default still executes every group below.
+    [switch]$ReferenceChecksOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,8 +76,8 @@ Write-Host ("device : " + $Device)
 Write-Host ""
 
 # The acceptance script takes -N/-Sigma/-B1/-B2/-D/-Device and a -Evaluate switch that also
-# walks the stage-2 tail (giant points, remainder tree, gcd).  It has no -Exe parameter: it
-# locates the exe itself, so we only pass shapes and the device.
+# walks the stage-2 tail (giant points, remainder tree, gcd). It accepts the same
+# explicit executable, so all checks use the selected target.
 function RunGpuCapture([string[]]$gpuRunArgs) {
     # PS 5.1 turns redirected native stderr into ErrorRecord objects. Fixtures deliberately
     # print arena refusal diagnostics; capture them and let the existing exit/output checks
@@ -98,7 +101,7 @@ function RunCheck([string[]]$extra) {
         $ErrorActionPreference = 'Continue'
         if($InProcessChecks) {
             # Array splatting passes strings positionally to a script; named flags need a hash.
-            $checkArgs=@{Device=$Device}
+            $checkArgs=@{Device=$Device;GpuExe=$Exe}
             for($i=0;$i -lt $extra.Count;++$i) {
                 $key=$extra[$i].TrimStart('-')
                 if($i+1 -lt $extra.Count -and -not $extra[$i+1].StartsWith('-')) {
@@ -107,7 +110,7 @@ function RunCheck([string[]]$extra) {
             }
             $o = (& $Check @checkArgs *>&1 | Out-String -Width 4096)
         } else {
-            $o = (& powershell -NoProfile -ExecutionPolicy Bypass -File $Check -Device $Device @extra 2>&1 | Out-String -Width 4096)
+            $o = (& powershell -NoProfile -ExecutionPolicy Bypass -File $Check -Device $Device -GpuExe $Exe @extra 2>&1 | Out-String -Width 4096)
         }
         $c = $LASTEXITCODE
     } finally {
@@ -308,6 +311,14 @@ Check "S5 on D=30030: the batched engine finds the frozen factor" `
       ($rS5huge.out -match 'algorithm=tree_gpu_batched .*hits=1 bad_factors=0 factors=59649589127497217') `
       $rS5huge.out.Trim()
 
+if($ReferenceChecksOnly) {
+    Check 'reference scope: full current division fixtures are checked against GMP' `
+        ($r210.out -match 's4_div_check: cases=800 bad=0 repairs=[1-9]') ''
+    Write-Host ("passed: " + $script:pass + "   failed: " + $script:fail + " (independent reference scope)")
+    if($script:fail -gt 0){exit 1}
+    exit 0
+}
+
 # [10] THE ARENA'S CACHE EVICTION (section 20, objective 1).  NttArena caches, per (N, nbatch), the
 # three big buffers dA/dB/dQ (3N words) plus dOut/dRes, and per N the fused per-pass tables -- all
 # of it a PURE CACHE that used to be kept forever.  That is what capped D: at a larger P the fold's
@@ -454,7 +465,7 @@ try {
            $divSummary.Groups[2].Value -eq $montSummary.Groups[2].Value) ""
     $divFixture = [regex]::Match($oDiv, 's4_div_check: cases=(\d+) bad=(\d+) repairs=(\d+)')
     Check "division reduction: full GMP fixtures pass and exercise borrow repairs" `
-          ($divFixture.Success -and $divFixture.Groups[1].Value -eq '608' -and
+          ($divFixture.Success -and $divFixture.Groups[1].Value -eq '800' -and
            $divFixture.Groups[2].Value -eq '0' -and [int]$divFixture.Groups[3].Value -gt 0) `
           $divFixture.Value
     $env:NTT_S4_OLDTAIL = '0'

@@ -1,6 +1,5 @@
 // One context, private data, immutable cached roots, explicit nonblocking streams.
-#define NTT_TENSOR_LENGTH_PROBE_NO_MAIN
-#include "ntt_tensor_length_probe.cu"
+#include "../experiments/cuda/ntt_tensor/length_fixture.cuh"
 #include <cuda_profiler_api.h>
 
 struct ConcurrentSubmit {

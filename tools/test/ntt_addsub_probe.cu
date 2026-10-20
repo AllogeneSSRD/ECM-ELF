@@ -1,6 +1,5 @@
-#define NTT_POLY_PROBE_NO_MAIN
-#include "../bench/ntt_poly_probe.cu"
-#include "../bench/ntt_goldilocks_addsub.cuh"
+#include "../experiments/cuda/ntt_variants/engine.cuh"
+#include "../experiments/cuda/ntt_variants/ntt_goldilocks_addsub.cuh"
 using Word=unsigned long long;
 
 template<int OP,bool PTX>

@@ -102,6 +102,10 @@ Check (-not (Test-EcmCompileState (Get-EcmCompileState $fixture $entry))) 'new l
 Write-Fixture (Join-Path $fixture 'tools/bench/experiment.cuh') '// experiment'
 Write-Fixture $source "#include `"../tools/bench/experiment.cuh`"`n"
 Reject { Get-EcmSourceClosure $fixture @('src/main.cu') @() -Production } 'depends on experiment' 'production cannot include experiment source'
+New-Item -ItemType Directory -Force (Join-Path $fixture 'tools/test') | Out-Null
+Write-Fixture (Join-Path $fixture 'tools/test/fixture.h') '// test-only fixture'
+Write-Fixture $source "#include `"../tools/test/fixture.h`"`n"
+Reject { Get-EcmSourceClosure $fixture @('src/main.cu') @() -Production } 'depends on experiment' 'production cannot include a test adapter or oracle'
 Write-Fixture $source "#include <nested/table.inc>`n"
 $names = Get-EcmObjectNames @('one/runtime.cpp','two/runtime.cpp','unique.cu')
 Check ($names['one/runtime.cpp'] -ne $names['two/runtime.cpp'] -and $names['unique.cu'] -eq 'unique') 'same-basename object names remain unique; existing unique names preserved'
@@ -170,7 +174,7 @@ $production=@($inventory.groups.STAGE2_PRODUCTION)
 Check ($production.Count -eq $expectedProduction.Count -and
     @(Compare-Object ($production|Sort-Object) ($expectedProduction|Sort-Object)).Count -eq 0 -and
     @($inventory.groups.STAGE2_DEVELOPMENT).Count -eq 1 -and
-    $inventory.groups.STAGE2_DEVELOPMENT[0] -eq 'tools/bench/ecm_cuda_stage2_dev.cu' -and
+    $inventory.groups.STAGE2_DEVELOPMENT[0] -eq 'tools/experiments/cuda/stage2_tree/worker.cu' -and
     @($production|Where-Object {$_ -like 'tools/*'}).Count -eq 0) 'production and development source groups separate'
 $set = Get-EcmStage2SourceSet $repo $inventory production @('include','src/core','kernels/cuda')
 Check (-not @($set.Dependencies | Where-Object { $_ -match '^tools/(bench|experiments)/' }).Count) 'actual production Stage2 source closure isolated'

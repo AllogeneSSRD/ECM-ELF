@@ -4,7 +4,7 @@
 #include <iomanip>
 #include <set>
 
-#include "../../src/cuda/common/json_quote.h"
+#include "../../../../src/cuda/common/json_quote.h"
 namespace stage2_tune {
 
 struct Resources {

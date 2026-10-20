@@ -7,8 +7,8 @@ $vcvars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliar
 if(-not $vcvars){throw 'vcvars64.bat not found'}
 New-Item -ItemType Directory -Force $Build | Out-Null
 $exe=Join-Path $Build 'ntt_goldilocks_ptx_probe.exe';$log=Join-Path $Build 'build.log'
-$deps=@('tools/test/ntt_goldilocks_ptx_probe.cu','tools/bench/ntt_goldilocks_ptx.cuh',
-    'tools/bench/ntt_goldilocks_reduce.cuh','tools/build/test/build_ntt_goldilocks_ptx_probe.ps1')
+$deps=@('tools/test/ntt_goldilocks_ptx_probe.cu','tools/experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh',
+    'tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh','tools/build/test/build_ntt_goldilocks_ptx_probe.ps1')
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash -LiteralPath $dep).Hash}
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 tools/test/ntt_goldilocks_ptx_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
 $watch=[Diagnostics.Stopwatch]::StartNew();& cmd.exe /c $line;$code=$LASTEXITCODE;$watch.Stop()

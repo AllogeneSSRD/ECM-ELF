@@ -2,14 +2,8 @@
 #include "ecm/cuda/stage2_launch.h"
 
 
-namespace stage2_pack {
-__device__ __forceinline__ unsigned quotient(unsigned j,unsigned sw,unsigned reciprocal,unsigned &digit) {
-    if(sw==1){digit=0;return j;}
-    unsigned q=__umulhi(j,reciprocal),r=j-q*sw;
-    const unsigned correction=r>=sw;
-    digit=r-correction*sw;return q+correction;
-}
-}
+#include "../shared/pack_index.cuh"
+
 namespace stage2_pack {
 template<bool GATHER,bool REVERSE>
 __global__ void pack_zero_kernel(const unsigned long long *src,const unsigned long long *offsets,

@@ -5,7 +5,10 @@ if(Test-Path (Join-Path $Build 'manifest.json')){throw 'Use a fresh build direct
 New-Item -ItemType Directory -Force $Build|Out-Null
 $vcvars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue|Select-Object -First 1).FullName
 if(-not $vcvars){throw 'vcvars64.bat not found'}
-$deps=@('tools/test/ntt_carry_fused_probe.cu','tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/bench/ntt_carry_partial.cuh','tools/build/test/build_ntt_carry_fused_probe.ps1')
+$deps=@('tools/test/ntt_carry_fused_probe.cu','tools/experiments/cuda/ntt_variants/main.cu','tools/experiments/cuda/ntt_variants/ntt_coop_outer.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh','tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh','tools/build/test/build_ntt_carry_fused_probe.ps1')
+. (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
+$deps=@(Get-EcmSourceClosure $repo $deps @('include','third_party/gmp-zen3/dist/include'))+
+    @('tools/build/internal/cuda_build_state.ps1')
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash $dep).Hash}
 $exe=Join-Path $Build 'ntt_carry_fused_probe.exe';$log=Join-Path $Build 'build.log'
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=3 -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /wd4819 tools/test/ntt_carry_fused_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"

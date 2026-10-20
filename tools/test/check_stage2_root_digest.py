@@ -11,7 +11,7 @@ p.add_argument('--output', required=True)
 p.add_argument('--device', type=int, default=1)
 a = p.parse_args()
 repo = Path(__file__).resolve().parents[2]
-source = repo / 'tools/bench/stage2_tree_gpu.cu'
+source = repo / 'tools/experiments/cuda/stage2_tree/engine.cuh'
 raw = source.read_bytes()
 text = raw.decode('utf-8').replace('\r\n', '\n')
 start = text.index('// Two order-sensitive 64-bit checksums')

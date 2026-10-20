@@ -1,6 +1,5 @@
-#define NTT_TENSOR_GOLDILOCKS_PROBE_NO_MAIN
-#include "ntt_tensor_goldilocks_probe.cu" // reuse independent GMP tile oracle and pattern buffers
-#include "../bench/ntt_small_roots.cuh"
+#include "ntt_tensor_fixture.cuh" // reuse independent GMP tile oracle and pattern buffers
+#include "../experiments/cuda/ntt_variants/ntt_small_roots.cuh"
 
 template<int METHOD>
 __global__ void root_primitive(const Word *v,const Word *w,const unsigned int *j,

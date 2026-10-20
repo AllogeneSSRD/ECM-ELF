@@ -32,7 +32,7 @@
    (and copy third_party/gmp-zen3/dist/bin/gmp-10.dll next to the exe).
 */
 
-#include "cgbn_stage2_cuda.h"
+#include "../experiments/cuda/stage2_bsgs/cgbn_stage2_cuda.h"
 #include "../../src/cuda/common/cuda_ecm_shim.h"
 
 #include <gmp.h>

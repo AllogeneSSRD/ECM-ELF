@@ -22,35 +22,11 @@ $builderName=@($builderNames | Where-Object { $_ -in $upstream.sources.PSObject.
 if($builderName.Count -ne 1){throw 'Upstream builder missing or ambiguous in manifest'}
 $upstreamBuilder=Get-Content -LiteralPath (Join-Path $SourceBuild ('sources/'+$builderName[0])) -Raw
 if($upstreamBuilder -notmatch "-DNTT_GL_ADD_SUB_MASK=$Mask -DNTT_GL_FIXED_MODE=3"){throw 'Upstream arithmetic mask differs'}
-$vcvars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-if(-not $vcvars){throw 'vcvars64.bat not found'}
-New-Item -ItemType Directory $Build | Out-Null
-$deps=@('tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh',
-    'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh',
-    'tools/bench/ntt_carry_partial.cuh','tools/bench/ntt_goldilocks_addsub.cuh')
-$own=@('tools/test/ntt_addsub_batch_probe.cu','tools/build/test/build_ntt_addsub_batch_probe.ps1')
-$hashes=[ordered]@{}
-foreach($dep in ($deps+$own)){
-    $src=if($dep -in $own){Join-Path $repo $dep}else{Join-Path $SourceBuild ('sources/'+$dep)}
-    $hashes[$dep]=(Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash.ToLower()
-    $dest=Join-Path $Build ('sources/'+$dep)
-    New-Item -ItemType Directory -Force (Split-Path -Parent $dest) | Out-Null
-    Copy-Item -LiteralPath $src -Destination $dest
-}
-$exe=Join-Path $Build 'ntt_addsub_batch_probe.exe';$log=Join-Path $Build 'build.log'
-$src=Join-Path $Build 'sources/tools/test/ntt_addsub_batch_probe.cu'
-$line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -DNTT_GL_ADD_SUB_MASK=$Mask -DNTT_GL_FIXED_MODE=3 -DNTT_OUTER_UNROLL_U=0 -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /wd4819 `"$src`" -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
-$watch=[Diagnostics.Stopwatch]::StartNew();& cmd.exe /d /c $line;$code=$LASTEXITCODE;$watch.Stop()
-if($code -ne 0){Get-Content $log -Tail 35;throw 'Batch arithmetic probe build failed'}
-foreach($dep in ($deps+$own)){
-    $src=if($dep -in $own){Join-Path $repo $dep}else{Join-Path $SourceBuild ('sources/'+$dep)}
-    if((Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash.ToLower() -ne $hashes[$dep]){throw 'Source changed during build'}
-    if((Get-FileHash -LiteralPath (Join-Path $Build ('sources/'+$dep)) -Algorithm SHA256).Hash.ToLower() -ne $hashes[$dep]){throw 'Snapshot changed'}
-}
-Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build
-[ordered]@{exe=$exe;sha256=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLower();
-    architecture=$Arch;gl_fixed_mode=3;compiled_outer_u=0;arithmetic_mask=$Mask;build_seconds=$watch.Elapsed.TotalSeconds;
-    source_build_manifest_sha256=(Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLower();
-    sources=$hashes;toolkit=(& nvcc --version | Out-String).Trim()} |
-    ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $Build 'manifest.json')
-Write-Host ("built {0} ({1:N1}s)" -f $exe,$watch.Elapsed.TotalSeconds)
+. (Join-Path $PSScriptRoot '../internal/cuda_frozen_ntt_probe.ps1')
+$result=Invoke-EcmFrozenNttProbeBuild -Repo $repo -SourceRoot (Join-Path $SourceBuild 'sources') -Build $Build -Arch $Arch `
+    -Source 'tools/test/ntt_addsub_batch_probe.cu' -Name 'ntt_addsub_batch_probe' `
+    -Defines @("NTT_GL_ADD_SUB_MASK=$Mask",'NTT_GL_FIXED_MODE=3','NTT_OUTER_UNROLL_U=0') -AllowedSources $upstream.sources
+$result.gl_fixed_mode=3;$result.compiled_outer_u=0;$result.arithmetic_mask=$Mask
+$result.source_build_manifest_sha256=(Get-FileHash $manifestPath).Hash.ToLower()
+$result|ConvertTo-Json -Depth 8|Set-Content (Join-Path $Build 'manifest.json') -Encoding utf8
+Write-Host "built $($result.exe)"

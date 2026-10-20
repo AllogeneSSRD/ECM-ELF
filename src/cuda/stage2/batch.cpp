@@ -782,7 +782,7 @@ BatchedRun run_batched(
     if(!frontier.enabled)ws.need_vals((size_t)P);
     R.tail.metrics.frontier_resident=frontier.enabled;
     std::vector<std::vector<unsigned long long>> values;
-    bool dev_leaves = false;
+
     {
             L.cat=BC_DESCENT;
             ScaledStats st;
@@ -802,15 +802,7 @@ BatchedRun run_batched(
     {
         const char *envc = std::getenv("NTT_S4_DESCENT_CHECK");
         if (L.s4 && envc && *envc && std::atoi(envc) != 0) {
-            if (dev_leaves) {
-                values.assign((size_t)P, std::vector<unsigned long long>(W, 0ull));
-                std::vector<unsigned long long> flat((size_t)P * W, 0ull);
-                CK(cudaMemcpy(flat.data(), ws.dvals, flat.size() * 8, cudaMemcpyDeviceToHost));
-                for (size_t i = 0; i < (size_t)P; ++i)
-                    std::copy(flat.begin() + (long)(i * W), flat.begin() + (long)((i + 1) * W),
-                              values[i].begin());
-                R.s5_readback = true;
-            }
+
             std::vector<std::vector<unsigned long long>> ref((size_t)P,
                 std::vector<unsigned long long>(W, 0ull));
             unsigned long long dm = 0;
@@ -886,7 +878,7 @@ BatchedRun run_batched(
     }
     R.leaf_values = P;
     /* A diagnostic S5 readback is also a complete plain-domain leaf vector. */
-    if(!dev_leaves || R.s5_readback) {
+    {
         unsigned long long hash=1469598103934665603ull,words=0;
         for(const auto &v:values) for(auto word:v) {hash=(hash^word)*1099511628211ull;++words;}
         stage2_log::print(stage2_log::debug, "descent_values: leaves=%llu words=%llu hash=%llu\n",(unsigned long long)values.size(),words,hash);
@@ -926,7 +918,7 @@ BatchedRun run_batched(
     std::vector<std::vector<unsigned long long>> bprod;
     ws.need_vals((size_t)P);
     {
-        if (!dev_leaves) {                  /* the S5 path already left its leaves in ws.dvals */
+        {                  /* the S5 path already left its leaves in ws.dvals */
             std::vector<unsigned long long> flat((size_t)P * W, 0ull);
             for (size_t i = 0; i < P; ++i)
                 std::copy(values[i].begin(), values[i].end(), flat.begin() + (long)(i * W));
@@ -946,45 +938,12 @@ BatchedRun run_batched(
                     (unsigned long long)bprod.size(), now_s() - ta0);
     R.apply_blocks = bprod.size();
     R.block_per = BLOCK;
-    /* ---- THE NAMING BUDGET ---------------------------------------------------------------------
-     * Naming a hit is DIAGNOSTICS: it says which stage-2 prime produced the factor.  It must not
-     * be on the critical path at scale, but the reporting semantics the gates assert must keep
-     * working, so the DEFAULT depends on the shape rather than on a flag:
-     *   * candidate arithmetic is 2*imax is_prime_u64 calls per hit leaf, and 2*imax = 2*(B2/D+2).
-     *     The shapes the gates use have B2 <= 1e8 and D >= 210, and their hit count is small, so
-     *     the budget below (2^19 primality tests, ~1 s at the exact test's measured speed) covers
-     *     them: the frozen vector still prints hit_primes=114713 and rung 2/3 still print 3511,
-     *     which is what `check_stage2_tree_gpu.ps1` compares against the CPU reference.
-     *   * MEASURED at rung 3 (S=5261, D=510510, B2=1e8): 351 hit blocks and 22490 individual hits.
-     *     Even with the exact primality test and with the scan stopping at the first confirmed
-     *     prime, naming all of them costs ~195 s of a 233 s run (a 5261-bit GMP ladder point + gcd
-     *     per hit is the irreducible part), while the same run with naming off takes 35.7 s and
-     *     produces the same factor set.  So the budget is a TIME bound on a diagnostics phase, and
-     *     a shape that exceeds it gets a full factor list and a `stage2_naming:` line that says how
-     *     many hits were counted but not named.  NTT_NAME_HITS=1 forces full naming for a shape
-     *     whose hit primes are actually wanted.
-     * NTT_NAME_HITS=1 forces naming everywhere (for a deliberate deep run); NTT_NAME_HITS=0 forces
-     * it off everywhere; NTT_NAME_BUDGET_BLOCKS=n overrides the block budget. */
-    /* ---- THE CANDIDATE SET: THE TWO ENGINES ARE TRANSPOSED, AND THAT MATTERS ------------------
-     * The recovered S5 patch (section 28) carried a `leaf_candidates()` lambda that attributed a
-     * hit at "leaf L" to the primes p = off -+ j with off = (L+1)*D over the BABY VALUES j, i.e.
-     * exactly the CPU reference's rule (stage2_tree_ref.cpp's name_culprit).  That rule is right
-     * for the reference because ITS leaf values are F evaluated at the GIANT points, and it is
-     * WRONG here: this engine's `values`/ws.dvals hold H evaluated at the BABY points (H is the
-     * folded giant product, reduced mod F, and the descent walks F's tree, whose leaves are the
-     * baby factors (x - x_j)).  The evidence for the baby reading is direct, not a reading of the
-     * code: at rung 2 (D=2310, B2=1e7) this engine reports hit_leaves=240 = P, i.e. EVERY leaf
-     * value shares a factor with N, which is exactly what the baby reading predicts -- the only
-     * factor q=42089 has residual order m=3511 after stage 1, so
-     * "D*i -+ j = 0 (mod 3511)" is solvable for every baby value j (i ranges over 4331 > 3511
-     * values), while only one of those 240 leaves has a PRIME witness, p = 2310 + 1201 = 3511.
-     * Under the giant reading those 240 hits would have to come from 240 distinct giant leaves,
-     * and the count would not be P.  (Both readings name p=3511 for the leaf that confirms, which
-     * is why the transposed rule looked like a fix: it was validated against a run whose modulus
-     * was not the one the oracle used -- section 25.)
-     * The lambda is therefore NOT used; the sound rule for THIS engine, used below, is: a hit
-     * leaf j (a baby point) is witnessed by the primes p = i*D -+ j over the whole giant range,
-     * because q | H(x_j) => q | (x_j - x_i) for some i => (i*D -+ j)*Q = O (mod q). */
+    /* A hit at baby j is witnessed by a prime i*D +/- j over the full giant
+       range: q | H(x_j) implies some (i*D +/- j)*Q is zero modulo q.
+       Naming has a block budget derived from 2*BLOCK*imax primality tests;
+       NTT_NAME_HITS enables/disables it and NTT_NAME_BUDGET_BLOCKS overrides
+       the cap. Every hit leaf's GCD and proper factors are retained even when
+       candidate naming stops. Relocated probes do not name candidates. */
     bool name_hits = true;
     unsigned long long name_budget_blocks = 0;
     {
@@ -1015,32 +974,14 @@ BatchedRun run_batched(
         if (mpz_cmp_ui(bg, 1) > 0 && mpz_cmp(bg, L.target()) < 0) {
             ++R.hit_blocks;                             /* a real hit: only NOW do we look at
                                                            the individual leaf values */
-            if (dev_leaves && values.empty()) {
-                /* the S5 leaves were never on the host: read them back ONCE, here, because a
-                   hit means they are about to be inspected one by one anyway */
-                values.assign((size_t)P, std::vector<unsigned long long>(W, 0ull));
-                std::vector<unsigned long long> flat((size_t)P * W, 0ull);
-                CK(cudaMemcpy(flat.data(), ws.dvals, flat.size() * 8, cudaMemcpyDeviceToHost));
-                for (size_t i = 0; i < (size_t)P; ++i)
-                    std::copy(flat.begin() + (long)(i * W), flat.begin() + (long)((i + 1) * W),
-                              values[i].begin());
-                R.s5_readback = true;
-            }
+
             const size_t lo = b * BLOCK;
             const size_t hi = std::min(lo + BLOCK, (size_t)P);
             if (R.dbg_progress)
                 stage2_log::print(stage2_log::phases, "batched_phase: naming_begin block=%llu leaves=[%llu,%llu) t=%.1f s\n",
                             (unsigned long long)b, (unsigned long long)lo, (unsigned long long)hi,
                             now_s() - ta0);
-            /* THE WORK BUDGET OF THE NAMING PHASE (see the comment above `name_hits`).
-               Candidate arithmetic is exactly 2*imax is_prime_u64 calls per LEAF, and this loop is
-               entered once per hit block, so the phase costs
-                   blocks * BLOCK * 2 * imax
-               primality tests whatever the shape is.  When that product exceeds the budget the
-               phase counts the hits (so hits/bad_factors stay exactly comparable with the CPU
-               reference) and says so, instead of spending hours naming primes nobody will read:
-               measured at B2=4e10/D=570570, one 64-leaf block of the old loop took 762.8 s and
-               there are 810 such blocks, i.e. ~2.7 h of the ~2.75 h run. */
+            /* The naming cap bounds candidate scans; leaf GCDs remain complete. */
             const bool name_here = !range.active && name_hits && (R.hit_blocks <= name_budget_blocks);
             if (R.dbg_progress && !name_here && R.hit_blocks == name_budget_blocks + 1) {
                 stage2_log::print(stage2_log::phases, "batched_phase: naming_budget_exhausted at block=%llu hit_blocks=%llu "

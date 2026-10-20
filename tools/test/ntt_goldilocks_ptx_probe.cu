@@ -6,8 +6,8 @@
 #include <cstring>
 #include <vector>
 #define GL_P 0xFFFFFFFF00000001ull
-#include "../bench/ntt_goldilocks_reduce.cuh"
-#include "../bench/ntt_goldilocks_ptx.cuh"
+#include "../experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh"
+#include "../experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh"
 using Word=unsigned long long;
 #define CK(call) do{const auto e=(call);if(e!=cudaSuccess){std::fprintf(stderr,"CUDA %s line%d\n",cudaGetErrorString(e),__LINE__);std::exit(2);}}while(0)
 static Word live=0,peak=0;

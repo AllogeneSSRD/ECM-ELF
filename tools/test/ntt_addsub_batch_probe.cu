@@ -1,6 +1,5 @@
 // Compile against a frozen isolated arithmetic source closure; no production edits.
-#define NTT_POLY_PROBE_NO_MAIN
-#include "../bench/ntt_poly_probe.cu"
+#include "../experiments/cuda/ntt_variants/engine.cuh"
 using BatchWord=unsigned long long;
 static constexpr BatchWord BATCH_PAD=0x12345678ull;
 

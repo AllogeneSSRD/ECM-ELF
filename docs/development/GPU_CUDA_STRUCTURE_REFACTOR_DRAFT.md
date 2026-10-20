@@ -2,7 +2,7 @@
 
 ## 范围与约束
 
-按已确认方案分 P0～P5 实施。P0（0.44.1）完成构建源清单、依赖与身份校验，P1（0.44.2）统一位宽清单并拆分 Stage1 主机与设备职责，P2（0.44.3）拆分 Stage2 算术与 NTT 底层模块。本轮实施 P3：拆分 Stage2 主机流程、资源管理和校验，版本只递增修订号至 0.44.4。算法、配置、存档及程序输出语义保持。
+按已确认方案分 P0～P5 实施。P0（0.44.1）完成构建源清单、依赖与身份校验，P1（0.44.2）统一位宽清单并拆分 Stage1 主机与设备职责，P2（0.44.3）拆分 Stage2 算术与 NTT 底层模块，P3（0.44.4）拆分 Stage2 主机流程、资源管理和校验。本轮实施 P4：删除已证明不可达的旧分支与无用代码，完成实验消费者隔离；版本只递增修订号至 0.44.5。算法、配置、存档及程序输出语义保持。
 
 P0 基线为 `36171f4`（0.44.0），当时的 TOML、队列及输出行为作为基线。478 个已跟踪 `src/`、`kernels/`、`include/` 文件的原始摘要保存在 `data/experiments/cuda_structure_p0_20261020/baseline.json`。P0 除版本头外未修改这些文件；P1 的迁移与验证另见下节。
 
@@ -152,3 +152,53 @@ P3 的主机流程拆分、P4 的剩余实验消费者/旧分支整理和 P5 的
 P3 不删除尚存的不可达分支、旧候选模型或固定研究资料；剩余实验消费者整理归 P4，完整矩阵、多架构及性能资格归 P5。临时草稿随提交保留，完成后提示用户处理，不自动删除。
 
 提交前的暂存检查发现 factors.cpp、s4.cpp 和 tree.h 末尾多余空行；原字节保存在 `source_before_eof_fix/`，此前验证的二进制保存在 `committed_binaries/`。清理后本机/发布各重编23个主机单元，两个 CUDA 对象严格校验后复用；CMake 同步重建。`eof_source_identity`、`eof_s4_memory`、`eof_giant_memory`、`eof_owner_memory` 对最终源码重新通过。首次整 PE 比较只遇到链接时间戳差异：`eof_binary_identity_02.json` 根据 SDK 的 COFF/IMAGE_DEBUG_DIRECTORY 字段仅规范化两处时间戳，三个最终程序的其余全部字节（指令、常量、数据及 GPU 镜像）完全相同，CUDA 对象摘要也不变，没有忽略指令或其他数据。最终发布包的5组存档/5组 Stage2 对照见 `packaged_runtime_eof`；`release_eof_package.log`、`release_archive_eof.json` 核对最终 SkipBuild 和默认归档，已有配置/队列保持。最终二进制、DLL 和清单冻结在 `committed_binaries_02/`，静态语法与暂存检查见 `final_static_checks.json`，完整矩阵到最终程序的绑定见 `final_runtime_binding.json`。
+
+## P4 范围与删除依据
+
+基线为 `2a2606e`（0.44.4），原程序、清单、对象及输入冻结在 `data/experiments/cuda_structure_p4_20261020/baseline/`。以下路径均以本轮证据根目录为起点。先通过有限源码证明和资源模型，再验证生产二进制，随后迁移实验消费者并重新验证最终版本。
+
+- `batch.cpp` 的 `dev_leaves` 只有一次 false 初始化且地址不逃逸，因此删除 S5 设备叶读回分支；保留被执行分支的原花括号和析构位置。S5 配置、状态字段和兼容输出不删除。
+- 私有 `run_real` 只有一个存档入口调用，参数恒为 `run_s2=false, curves=1, d_plan_only=false, plan_result=nullptr`。删除这些私有参数和单次循环，保留原匿名块，使点缓存、owner 及 GMP 清理的先后不变。公共入口和独立计划查询保留。
+- D 候选模型有无条件 `calibrated=false`，因此删除不可达的候选选择、成本计算和输出分支。有效的 `legacy_56_1` 公式、D/预算选择、`NTT_D_MODEL` 解析、禁用原因及现有日志字符串保留。旧谓词还会预热实际 NTT 策略缓存，已在相同规划边界保留该调用。
+- `read_hex_mpz`、`read_f_dump`、`words_for_bits`、`hex_of_words`、`flat_truncate` 只有定义和私有声明，没有消费者；删除函数、声明、仅供其使用的 `FDump` 及未使用常量。有效的 F 转储写入和诊断开关保留。
+- 生产候选速率表从 `src/cuda/stage2/stage2_d_model.cuh` 原字节移到 `tools/experiments/cuda/stage2_tree/d_model_profiles.h`；旧树实验的不同速率表独立保存在 `legacy_d_model_profiles.h`。纯 baby payload 尺寸计算进入核心内存公式，不再为一个有效公式引入整份失效模型。
+
+`source_final/result.json` 严格比较32个保留生产模块，只允许上述有限变换及三段 pack 启动函数迁移；包括所有字面量、CUDA 调用、检查及回退。`arithmetic_source_final/result.json` 核对93个设备算术正文。`contracts_final/result.json` 核对五个探针接口，确认 Stage1、NTT 和独立 oracle 未改。
+
+## P4 实验目录与消费者
+
+27项原始迁移映射在 `tools/test/cuda_p4_migrations.json`；`isolation_final/result.json` 核对正文、入口默认值、宏和138个 CUDA 消费者，三个非法边界样本均被拒绝。
+
+- `tools/experiments/cuda/stage2_tree/` 拥有实验树、开发 wrapper、校准、点算术、baby/giant/scale 候选及冻结 D 表。保留原混合行尾；`.gitattributes` 的逐字节属性迁移到新 engine。实验 plain-scale 使用独立主机适配，只共享允许的纯设备原语和统计/转义帮助函数。
+- `stage2_bsgs/` 拥有旧 CGBN BSGS 的五个文件；`ntt_variants/` 拥有独立 NTT、carry、outer、Goldilocks 和 cuFFT 候选；`ntt_tensor/` 拥有 Tensor 算法候选。它们通过实验源组显式构建，不加入25单元生产目标。
+- GMP oracle 与测试夹具留在 `tools/test/`，测量入口留在 `tools/bench/`。所有活动 CUDA 消费者停止包含 `.cu`、使用 NO_MAIN 抑制入口或在构建时截取实现正文。冻结审计保留旧快照、原始身份和完整源码，使用独立历史适配，不改写快照。
+- pack 探针调用有限启动接口并链接实际算术/NTT 模块，保持其 per-thread ABI。giant 的已注册普通 chain 调用生产算术对象；旋转候选及160/192字控制组由独立 CU 拥有。host-wait 探针通过有限诊断 API 和唯一显式适配调用真实 Edwards 运行时及设备模块。
+- 生产闭包检查新增 `tools/test/`，包含编译器间接依赖；`identity_final_02/result.json` 的40项 CPU 身份/故障/跨 PowerShell 门禁通过。
+
+## P4 运行与算术验证
+
+工具链为 CUDA13.3、MSVC14.51.36231、sm89；运行使用 GPU1（RTX4060 Laptop）。本机 GMP 为仓库 Zen3 构建，发布使用 vcpkg 通用 x64 GMP。开发对照显式使用 AddSubMask=0，生产固定为1；host-wait 编译1280档。以下均为正确性或身份检查，不是性能资格。
+
+- `runtime_final/summary.json`：最终0.44.5与冻结0.44.4的14组完整叶/结果、4组计划及20项损坏拒绝一致，覆盖梅森/通用模数到16384位、预算与分配回退、异步 ring、阶段修剪及诊断路径。
+- `saves_final/summary.json`：Stage1 的5组、每组4条曲线存档字段一致（PARAM0/2/3、Edwards binary/NAF）；Stage2 的5组续算叶和稳定结果字段一致。Stage1 构建仅384档、PRAC关闭。
+- `sass_final/result.json`：最终生产程序的176个设备函数与0.44.4指令完全一致，无增删或变化。`arithmetic_final.log`：真实生产算术对象的114个模数、11286项 GMP 比较，bad=0。`graph_final.log`：368次完整卷积、14779392个 digit、8次构建/16次复用/8次失效，live=0；`graph_fault_final.log` 按原规则检测注入错误并返回3。
+- `probe_runtime_03/summary.json`：host-wait 的12组新旧点文件、事件设置及SDK调用数相同；giant 的40项独立 GMP 检查通过，覆盖64/128/160/192/256字与旋转/普通两路；pack 正常及故障门禁通过。giant 的原 oracle 对最多两块检查全部坐标，对中间块保留原抽样边界。
+- `initial_memory_final`：50例/4556检查/1500事件，错误范围被拒绝；`owner_memory_final`：140例/6580检查/1960事件，错误元数据范围被拒绝；`s4_memory_final`：299592检查/2136分配事件/192树租约；`giant_memory_final`：265638检查/2054时序/39665事件。均使用实际资源方法，bad=0。
+- `experiment_pairs_02/summary.json`：链接冻结旧 worker 对象与隔离后对象，在M383/M521/M1279、实际W=6/9/20（NW8/16/32）比较完整叶及结果，XADD、baby、Gamma/真实 scale、乘积及scaled/慢下降GMP检查通过。实验对象共224个设备函数，移动点原语后7个函数的编译指令变化，未发现函数增删；原始差异保留在 `development_sass/result.json`，这些函数由上述对象对照覆盖，不据此宣称实验SASS或性能完全相同。
+- 实验树独立构建通过。`tree_gate.log` 的150项原控制检查通过；其余旧脚本因参考程序缺失/硬编码路径及过期608断言失败，修正测试入口并构建原CPU参考后，`tree_reference_scope.log` 的39项参考检查通过。实际旧/新除法夹具均为800例，未修改数学实现或放宽门限；这不是一次全脚本零失败运行。
+- 独立NTT18项、carry的180例/657000字及12配置×18形状×2模式、baby的42例/379552字及9组树真实/回退检查、BSGS自检和42组点GMP检查通过。冻结shape/batch适配以明确标记的Git源夹具构建并通过，batch故障返回3，不声称该夹具是旧发布二进制。
+- `fixture_final_gate/summary.json`：最终路径的Tensor正常/故障、tile正常/故障、outer dense/policy及六种冻结候选profile共12项通过；`cufft_gate.log` 原有13项整数/系数GMP门禁通过。
+
+## P4 保留的失败与边界
+
+旧实验对象的指令差异完整保留；没有根据计时选择新算法。早期实验链接因 /MD 与 /MT 混用失败，适配随后按真实worker ABI构建。giant收集器首次误将完整整数检查数视为字数，第二次遗漏原中间块抽样，第三次按未改动oracle的实际计数通过；不曾调整算术或oracle。身份测试首次遗漏夹具目录，修正测试目录创建后40项通过。开发HostOnly因迁移后的carry依赖正确拒绝，随后使用新目录完整构建；所有失败原始证据保留。
+
+正常生产曲线仍不依赖已有M127活动点上下文中的合成baby诊断夹具；P3记录的该夹具限制和实验worker缺少曲线内存模型的拒绝行为继续保留。完整位宽、多架构、全部可选宏矩阵和性能资格属于P5。本草稿随提交保留，完成后提示用户处理，不自动清理；正式现状另已同步到Stage2、NTT、架构总览和构建说明。
+
+## P4 最终构建与交付绑定
+
+`native_final_build.log`、`stage1_build.log`、`experiment_final_build_02.log`、`cmake_stage2_build.log` 和 `release_build.log` 分别确认本机Stage2、受限384档Stage1、独立实验worker、CMake Stage2及通用GMP发布构建通过。`native_reuse_final.log` 的源/工具链/架构、对象与程序复用通过；`release_skip_final.log` 的发布SkipBuild通过，已有TOML和队列摘要保持。`release_archive_final.json` 核对ZIP仅8个允许文件，使用默认配置和空队列。
+
+`probe_native_final/summary.json` 对最终生产算术对象复用的giant探针重新通过12组host-wait、40组giant和2项pack门禁。`experiment_pairs_final/summary.json` 对完整重编后的最终开发对象重新通过三组完整叶/GMP对照。`tune_final/summary.json` 对生产及实验各28种形状、每形状2次校准进行双版本对照，GMP检查、计划形状、调度和稳定输出元数据一致，未用计时作性能结论。`output_final_gate/summary.json` 核对CMake的25单元清单、Montgomery普通及Edwards承载两组完整叶/结果，并复核新旧实验队列入口同样拒绝缺少曲线内存模型的工作。
+
+`packaged_runtime_final/summary.json` 直接运行最终发布包内程序，5组存档及5组Stage2输出对照通过。`powershell_static_final.json`、`python_static_final.json` 记录修改脚本语法；配置生成检查及暂存空白检查通过，配置与两份配置参考生成物无变动。`committed_binaries/identity.json` 冻结五类最终程序、DLL、源码/构建清单及发布ZIP。`final_summary.json` 将全部必需门禁与最终源码、对象和二进制摘要绑定；未重写中间失败或原始实验记录。

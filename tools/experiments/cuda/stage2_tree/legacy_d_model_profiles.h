@@ -141,4 +141,3 @@ struct DPhaseModel {
                     c.inv,c.accum,c.glue,c.total,owner);
     }
 };
-

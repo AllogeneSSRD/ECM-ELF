@@ -85,70 +85,6 @@ void s2g_print_last_state(const char *)
 {}
 #endif
 
-bool read_hex_mpz(mpz_t out,const std::string &hex)
-{
-    return !hex.empty() && mpz_set_str(out, hex.c_str(), 16) == 0;
-}
-
-FDump read_f_dump(const char *path)
-{
-    FDump d;
-    FILE *f = std::fopen(path, "rb");
-    if (!f) { d.err = "cannot open"; return d; }
-    char line[1 << 16];
-    if (!std::fgets(line, sizeof(line), f)) { std::fclose(f); d.err = "empty file"; return d; }
-    std::string hdr = line;
-    while (!hdr.empty() && (hdr.back() == '\n' || hdr.back() == '\r')) hdr.pop_back();
-    if (hdr != "stage2_tree_F_dump v1") {
-        std::fclose(f);
-        d.err = "not a stage2_tree_F_dump v1 file (got: " + hdr + ")";
-        return d;
-    }
-    bool saw_end = false;
-    while (std::fgets(line, sizeof(line), f)) {
-        std::string s = line;
-        while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
-        if (s.empty()) continue;
-        const size_t sp = s.find(' ');
-        const std::string key = (sp == std::string::npos) ? s : s.substr(0, sp);
-        const std::string rest = (sp == std::string::npos) ? std::string() : s.substr(sp + 1);
-        auto u64 = [&]() -> unsigned long long { return std::strtoull(rest.c_str(), nullptr, 10); };
-        auto first_token = [&]() -> std::string {
-            const size_t sp2 = rest.find(' ');
-            return (sp2 == std::string::npos) ? rest : rest.substr(0, sp2);
-        };
-        if (key == "N_dec") d.n_dec = rest;
-        else if (key == "N_hex") d.n_hex = rest;
-        else if (key == "N_bits") d.n_bits = std::atol(rest.c_str());
-        else if (key == "D") d.D = u64();
-        else if (key == "B1") d.B1 = u64();
-        else if (key == "B2") d.B2 = u64();
-        else if (key == "sigma") d.sigma = u64();
-        else if (key == "a24_hex") d.a24_hex = first_token();
-        else if (key == "Q_hex") d.q_hex = first_token();
-        else if (key == "baby_count") { /* implied by the baby lines; checked below */ }
-        else if (key == "baby") {
-            const size_t sp2 = rest.find(' ');
-            if (sp2 == std::string::npos) { std::fclose(f); d.err = "bad baby line"; return d; }
-            d.baby_j.push_back(std::strtoull(rest.substr(0, sp2).c_str(), nullptr, 10));
-            d.baby_x.push_back(rest.substr(sp2 + 1));
-        } else if (key == "F_degree") d.degree = u64();
-        else if (key == "F") d.F.push_back(first_token());
-        else if (key == "end") saw_end = true;
-    }
-    std::fclose(f);
-    if (!saw_end) { d.err = "no end marker"; return d; }
-    if (d.n_dec.empty() || d.baby_j.empty()) { d.err = "missing N or baby points"; return d; }
-    if (d.baby_j.size() != d.baby_x.size()) { d.err = "baby j/x count mismatch"; return d; }
-    if (d.F.size() != d.degree + 1) {
-        d.err = "F has " + std::to_string(d.F.size()) + " coefficients but F_degree=" +
-                std::to_string(d.degree);
-        return d;
-    }
-    d.ok = true;
-    return d;
-}
-
 bool write_f_dump(
     const char *path,
     const mpz_t N,
@@ -194,9 +130,6 @@ bool write_f_dump(
     return true;
 }
 
-size_t words_for_bits(size_t bits)
-{ return (bits + 63) / 64; }
-
 void gfinv_batch_fixture(const mpz_t actual,size_t actualW)
 {
     unsigned long long cases=0,checks=0,nonunits=0;
@@ -232,20 +165,6 @@ void gfinv_batch_fixture(const mpz_t actual,size_t actualW)
     stage2_log::print(stage2_log::debug, "gfinv_fixture: cases=%llu checks=%llu nonunits=%llu group_failures=%llu cache_hits=%llu scratch_peak_bytes=%llu bad=0\n",
         cases,checks,nonunits,stats.group_failures,stats.cache_hits,stats.scratch_peak_bytes);
     mpz_clears(N,value,want,got,test,nullptr);
-}
-
-void hex_of_words(std::string &out,const unsigned long long *w,size_t W,const mpz_t N)
-{
-    mpz_t v;
-    mpz_init(v);
-    words_to_mpz(v, w, W);
-    mpz_mod(v, v, N);
-    char *s = mpz_get_str(nullptr, 16, v);
-    out = s;
-    void (*ff)(void *, size_t) = nullptr;
-    mp_get_memory_functions(nullptr, nullptr, &ff);
-    ff(s, std::strlen(s) + 1);
-    mpz_clear(v);
 }
 
 void groot_device_fixture(PolyLayer &L)

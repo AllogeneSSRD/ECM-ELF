@@ -124,9 +124,6 @@ void leaf_mod_linear_batch(const std::vector<unsigned long long> &A, size_t da,
                                   const std::vector<unsigned long long> &B, size_t nbatch,
                                   size_t W, const mpz_t N, std::vector<unsigned long long> &out);
 
-void flat_truncate(std::vector<unsigned long long> &v, size_t nbatch, size_t nc,
-                          size_t keep, size_t W, const char *caller);
-
 void fold_flat_step(PolyLayer &L, const std::vector<unsigned long long> &G,
                            std::vector<unsigned long long> &H,
                            const std::vector<unsigned long long> &F,

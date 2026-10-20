@@ -110,10 +110,19 @@ set(ECM_STAGE2_PRODUCTION_SOURCES
     ${ECM_STAGE2_ENGINE_SOURCES}
     ${ECM_STAGE2_ARITHMETIC_SOURCES}
     ${ECM_STAGE2_NTT_SOURCES})
-set(ECM_STAGE2_DEVELOPMENT_SOURCES tools/bench/ecm_cuda_stage2_dev.cu)
+set(ECM_STAGE2_DEVELOPMENT_SOURCES tools/experiments/cuda/stage2_tree/worker.cu)
+set(ECM_EXPERIMENT_STAGE2_BSGS_SOURCES
+    tools/experiments/cuda/stage2_bsgs/cgbn_stage2.cu
+    tools/experiments/cuda/stage2_bsgs/cgbn_stage2_kernels_tpi4.cu
+    tools/experiments/cuda/stage2_bsgs/cgbn_stage2_kernels_tpi8.cu)
+set(ECM_EXPERIMENT_STAGE2_TREE_SOURCES tools/experiments/cuda/stage2_tree/main.cu)
+set(ECM_EXPERIMENT_NTT_SOURCES tools/experiments/cuda/ntt_variants/main.cu)
+set(ECM_EXPERIMENT_CUFFT_SOURCES tools/experiments/cuda/ntt_variants/cufft_probe.cu)
+set(ECM_EXPERIMENT_GIANT_SOURCES tools/experiments/cuda/stage2_tree/giant_variant.cu)
 set(ECM_CUDA_SOURCE_GROUPS
     STAGE1_COMMON STAGE1_CUDA STAGE1_EDWARDS STAGE1_MONT STAGE1_PRAC
-    STAGE2_HOST STAGE2_PRODUCTION STAGE2_DEVELOPMENT STAGE2_ENGINE STAGE2_ARITHMETIC STAGE2_NTT)
+    STAGE2_HOST STAGE2_PRODUCTION STAGE2_DEVELOPMENT STAGE2_ENGINE STAGE2_ARITHMETIC STAGE2_NTT
+    EXPERIMENT_STAGE2_BSGS EXPERIMENT_STAGE2_TREE EXPERIMENT_NTT EXPERIMENT_CUFFT EXPERIMENT_GIANT)
 set(ECM_CUDA_BUILD_INPUTS
     CMakeLists.txt
     tools/build/internal/cuda_sources.cmake

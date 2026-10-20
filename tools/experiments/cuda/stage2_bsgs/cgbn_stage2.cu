@@ -17,7 +17,7 @@
 
 #include "cgbn_stage2_cuda.h"
 #include "cgbn_stage2_kernel.h"
-#include "../../src/cuda/common/cuda_ecm_shim.h"      /* outputf / test_verbose */
+#include "../../../../src/cuda/common/cuda_ecm_shim.h"      /* outputf / test_verbose */
 
 #include <cuda_runtime.h>
 #include <gmp.h>

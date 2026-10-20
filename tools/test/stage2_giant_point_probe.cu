@@ -5,8 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
-#include "../../kernels/cuda/stage2/point.cuh"
-#include "../../kernels/cuda/stage2/giant_chain.cuh"
+#include "ecm/cuda/stage2_launch.h"
+#include "../experiments/cuda/stage2_tree/giant_launch.h"
 using Word=unsigned long long;
 #define CK(x) do{auto e=(x);if(e!=cudaSuccess){fprintf(stderr,"CUDA %s\n",cudaGetErrorString(e));exit(2);}}while(0)
 void pack(Word*p,int w,mpz_srcptr v){std::fill(p,p+w,0);size_t z;mpz_export(p,&z,-1,8,0,0,v);}
@@ -14,14 +14,20 @@ void unpack(mpz_ptr v,const Word*p,int w){mpz_import(v,w,-1,8,0,0,p);}
 template<int NW>void launch(int rotate,int threads,int nw,int npts,int block,Word ninv,Word*in,Word*out){
     int count=(npts+block-1)/block;auto *n=in,*dx=in+nw,*dz=in+2*nw,*sx=in+3*nw,*sz=sx+count*nw;
     auto *ex=sz+count*nw,*ez=ex+count*nw;
-    if(rotate)s2g_chain_rotate_kernel<NW,true,true><<<(count+threads-1)/threads,threads>>>(n,ninv,nw,dx,dz,sx,sz,ex,ez,npts,block,count,out,out+(size_t)npts*nw,1);
-    else s2g_chain_kernel<NW,true><<<(count+threads-1)/threads,threads>>>(n,ninv,nw,dx,dz,sx,sz,ex,ez,npts,block,count,out,out+(size_t)npts*nw,1);
+    EcmCudaLaunch cfg{(unsigned)((count+threads-1)/threads),(unsigned)threads};
+    if constexpr(NW==64 || NW==128 || NW==256) {
+        if(!rotate) {
+            ecm_launch_s2g_chain_kernel<NW,true>(cfg,n,ninv,nw,dx,dz,sx,sz,ex,ez,npts,block,count,out,out+(size_t)npts*nw,1);
+            return;
+        }
+    }
+    ecm_experiment_giant_launch(NW,rotate,cfg,n,ninv,nw,dx,dz,sx,sz,ex,ez,npts,block,count,out,out+(size_t)npts*nw,1);
 }
 int main(int argc,char**argv){
     if(argc!=8){fprintf(stderr,"nw template_width points chain_block threads rotate device\n");return 2;}
     int nw=atoi(argv[1]),width=atoi(argv[2]),npts=atoi(argv[3]),block=atoi(argv[4]),threads=atoi(argv[5]),rotate=atoi(argv[6]),device=atoi(argv[7]);
     if(nw<1||nw>256||width<nw||npts<1||npts>200000||block<2||threads<32||threads>256||rotate<0||rotate>1)return 2;
-    CK(cudaSetDevice(device));int count=(npts+block-1)/block;
+    CK(cudaSetDevice(device));S2GDeviceConstants constants{};CK(ecm_stage2_copy_constants(&constants,sizeof(constants)));int count=(npts+block-1)/block;
     std::vector<Word> in((3+4*count)*nw),out((size_t)2*npts*nw);
     mpz_t n,a,r,rinv,x[6],y[2],t,u;mpz_inits(n,a,r,rinv,t,u,nullptr);for(auto &v:x)mpz_init(v);for(auto &v:y)mpz_init(v);
     // An odd composite just below the radix exercises both reduction and carry.

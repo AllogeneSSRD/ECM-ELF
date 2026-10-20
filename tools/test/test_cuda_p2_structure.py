@@ -61,9 +61,19 @@ def main():
         ('s4_input_pack.cuh', 'pack.cuh', 'quotient pack_zero_kernel s4_pack_batch_kernel s4_pack_gather_kernel s4_pack_gather_reverse_kernel'),
         ('stage2_baby_device.cuh', 'baby_giant.cuh', 's2g_baby_negative s2g_baby_product_kernel s2g_baby_inverse_kernel s2g_baby_leaf_kernel'),
         ('scale_plain.cuh', 'plain_scale.cuh', 's2g_plain_scale_kernel'),
-    ]: compare(frozen('src/cuda/stage2/'+old), current('kernels/cuda/stage2/'+new), names)
+    ]:
+        implementation=current('kernels/cuda/stage2/'+new)
+        if new=='pack.cuh':implementation+='\n'+current('kernels/cuda/shared/pack_index.cuh')
+        compare(frozen('src/cuda/stage2/'+old), implementation, names)
     assert frozen('src/cuda/stage2/stage2_point_mersenne.cuh') == current('kernels/cuda/stage2/point_mersenne.cuh')
-    assert frozen('kernels/cuda/stage2_giant_chain.cuh') == current('kernels/cuda/stage2/giant_chain.cuh').split('\ntemplate<int NW,bool XADD6>\nvoid ecm_launch_')[0].replace('#include "ecm/cuda/stage2_launch.h"\n', '').rstrip()+'\n'
+    chain=current('kernels/cuda/stage2/giant_chain.cuh').split('\ntemplate<int NW,bool XADD6>\nvoid ecm_launch_')[0].replace('#include "ecm/cuda/stage2_launch.h"\n', '')
+    # The probe-only rotation has no production instantiation. P4 isolates it
+    # without changing a byte of its arithmetic or the real scalar chain.
+    if 's2g_chain_rotate_kernel' not in chain:
+        variant=current('tools/experiments/cuda/stage2_tree/giant_chain_variant.cuh')
+        rotation=variant[variant.index('// Probe-only buffer rotation'):]
+        chain=chain.rstrip()+'\n\n\n'+rotation
+    assert frozen('kernels/cuda/stage2_giant_chain.cuh') == chain.rstrip()+'\n'
     device_paths = sorted((ROOT/'kernels/cuda/stage2').glob('*'))
     ntt_original = frozen('src/cuda/stage2/ntt_runtime.cuh')
     ntt_device = '\n'.join(path.read_text(encoding='utf-8-sig')

@@ -1,5 +1,4 @@
-#define NTT_POLY_PROBE_NO_MAIN
-#include "../bench/ntt_poly_probe.cu"
+#include "../experiments/cuda/ntt_variants/engine.cuh"
 using U=unsigned long long;
 __global__ void sparse_pack(U *a,U *b,U n,U p,U slot_words){const auto i=blockIdx.x*256ull+threadIdx.x;const auto s=blockIdx.y;if(i<n){a[(U)s*n+i]=i==0 ? 2+s : i==(p-1)*slot_words ? 3+s : 0;b[(U)s*n+i]=i==0 ? 5+s : i==(p-1)*slot_words ? 7+s : 0;}}
 static int input(void *,const NttShape &sh,U batch,U *a,U *b){sparse_pack<<<dim3((unsigned int)((sh.N+255)/256),(unsigned int)batch),256>>>(a,b,sh.N,sh.P,sh.slot_words);CK(cudaGetLastError());return 0;}

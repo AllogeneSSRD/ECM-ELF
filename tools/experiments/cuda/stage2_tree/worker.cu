@@ -40,12 +40,11 @@ struct ProductionDefaults {
 }
 
 // Reuse the experimental engine verbatim, including its exact NTT and checks.
-#define STAGE2_TREE_GPU_NO_MAIN
-#include "stage2_tree_gpu.cu"
-#include "../../src/core/ecm_cuda_stage2.h"
-#include "../../src/core/ecm_stage2_logging.h"
-#include "../../kernels/cuda/ntt/tune_checks.cuh"
-#include "stage2_tune.cuh"
+#include "engine.cuh"
+#include "../../../../src/core/ecm_cuda_stage2.h"
+#include "../../../../src/core/ecm_stage2_logging.h"
+#include "../../../../kernels/cuda/ntt/tune_checks.cuh"
+#include "tune.cuh"
 
 bool ecm_cuda_stage2_shape_query(uint64_t p,int bits,uint64_t *length,uint64_t *output_slots)
 {

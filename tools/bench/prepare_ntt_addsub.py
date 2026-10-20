@@ -15,15 +15,20 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();out=a.output.resolve()
     if out.exists():raise ValueError('use a fresh output directory')
-    files=['tools/test/ntt_outer_v_probe.cu','tools/test/ntt_coop_outer_probe.cu',
-           'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh',
-           'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh',
-           'tools/bench/ntt_carry_partial.cuh','tools/bench/ntt_goldilocks_addsub.cuh',
+    files=['tools/test/ntt_outer_v_probe.cu','tools/test/ntt_outer_fixture.cuh',
+           'tools/experiments/cuda/ntt_variants/engine.cuh','tools/experiments/cuda/ntt_variants/ntt_coop_outer.cuh',
+           'tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh',
+           'tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_addsub.cuh',
            'tools/build/test/build_ntt_outer_v_probe.ps1']
+    files += ['tools/experiments/cuda/ntt_variants/carry_reference.cuh',
+              'tools/experiments/cuda/ntt_variants/carry_cone.cuh',
+              'tools/test/ntt_outer_fixture.cuh',
+              'include/ecm/cuda/ntt_parameters.h','include/ecm/cuda/ntt_launch.h',
+              'include/ecm/cuda/launch.h','tools/build/internal/cuda_build_state.ps1']
     original={n:sha(ROOT/n) for n in files};edits={}
     for name in files:
         src=ROOT/name;raw=src.read_bytes();changes=[]
-        if name=='tools/bench/ntt_poly_probe.cu':
+        if name=='tools/experiments/cuda/ntt_variants/engine.cuh':
             changes=[(b'#include "ntt_goldilocks_ptx.cuh"',b'#include "ntt_goldilocks_ptx.cuh"\n#include "ntt_goldilocks_addsub.cuh"'),
                 (b'    return gl_sub(a, b);',b'#if (NTT_GL_ADD_SUB_MASK & 1)\n    return gl_sub_canonical_ptx(a,b);\n#else\n    return gl_sub(a, b);\n#endif'),
                 (b'    return gl_add(a, b);',b'#if (NTT_GL_ADD_SUB_MASK & 2)\n    return gl_add_canonical_ptx(a,b);\n#else\n    return gl_add(a, b);\n#endif')]
@@ -36,7 +41,7 @@ def main():
                 (b'    int device=argc>1 ? std::atoi(argv[1]) : 1;CK(cudaSetDevice(device));',
                  b'    int device=argc>1 ? std::atoi(argv[1]) : 1;CK(cudaSetDevice(device));\n    std::printf("ntt_addsub_mask: value=%d\\n",NTT_GL_ADD_SUB_MASK);')]
         if name=='tools/build/test/build_ntt_outer_v_probe.ps1':
-            changes=[(b"'tools/bench/ntt_carry_partial.cuh',",b"'tools/bench/ntt_carry_partial.cuh','tools/bench/ntt_goldilocks_addsub.cuh',"),
+            changes=[(b"'tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh',",b"'tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_addsub.cuh',"),
                 (b'-DNTT_GL_FIXED_MODE=3',f'-DNTT_GL_ADD_SUB_MASK={a.mask} -DNTT_GL_FIXED_MODE=3'.encode())]
         before=raw
         for old,new in changes:

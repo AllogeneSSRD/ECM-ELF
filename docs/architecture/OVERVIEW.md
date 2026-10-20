@@ -14,7 +14,7 @@
 | GUI | 配置、worker 进程监管、队列生成、监控、结果展示 | [src/gui](../../src/gui/) |
 | 工具 | 构建、参考计算、数据集、计时、剖析和图表 | [tools](../../tools/) |
 
-生产 Stage2 源码独立于 `tools/bench/stage2_tree_gpu.cu` 原型；开发 wrapper 使用实验引擎。两者的构建、后端和源闭包须分别核对，不能以原型文档推断生产行为。
+生产 Stage2 源码独立于 `tools/experiments/cuda/stage2_tree/` 实验引擎；开发 wrapper 位于该目录的 `worker.cu`。实验树、BSGS、NTT 变体和 Tensor 候选均使用独立源组，生产闭包拒绝实验和测试目录。具体职责及探针接口见 [Stage2 模块边界](STAGE2.md#cuda-模块边界)。
 
 生产 giant chain 核在 `kernels/cuda/stage2/giant_chain.cuh`；Stage2 主机流程、算术和 NTT 的依赖方向见 [模块边界](STAGE2.md#cuda-模块边界)。G 根树的分块空位布局和压缩请求形状由 `src/core/ecm_stage2_giant_tree.h` 定义。它们分别服务点生成和根多项式调度，F 树及其有序下降仍由原布局控制。
 

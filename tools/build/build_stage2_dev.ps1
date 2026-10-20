@@ -3,7 +3,7 @@
 .SYNOPSIS
 Build the experimental Stage2 queue/save executable in an isolated directory.
 .DESCRIPTION
-Uses tools/bench/ecm_cuda_stage2_dev.cu. Arithmetic defaults match production;
+Uses tools/experiments/cuda/stage2_tree/worker.cu. Arithmetic defaults match production;
 alternative backends and schedules require explicit parameters. For the lower-level
 tree harness, use dev/build_stage2_tree_gpu.ps1.
 .EXAMPLE

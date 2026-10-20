@@ -9,10 +9,13 @@ if(Test-Path -LiteralPath $Build){throw 'Use a fresh build directory'}
 $vcvars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliary\Build\vcvars64.bat' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
 if(-not $vcvars){throw 'vcvars64.bat not found'}
 New-Item -ItemType Directory $Build | Out-Null
-$deps=@('tools/test/ntt_addsub_probe.cu','tools/bench/ntt_goldilocks_addsub.cuh',
-    'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh',
-    'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh',
-    'tools/bench/ntt_carry_partial.cuh','tools/build/test/build_ntt_addsub_probe.ps1')
+$deps=@('tools/test/ntt_addsub_probe.cu','tools/experiments/cuda/ntt_variants/ntt_goldilocks_addsub.cuh',
+    'tools/experiments/cuda/ntt_variants/main.cu','tools/experiments/cuda/ntt_variants/ntt_coop_outer.cuh',
+    'tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh',
+    'tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh','tools/build/test/build_ntt_addsub_probe.ps1')
+. (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
+$deps=@(Get-EcmSourceClosure $repo $deps @('include','third_party/gmp-zen3/dist/include'))+
+    @('tools/build/internal/cuda_build_state.ps1')
 $hashes=[ordered]@{}
 foreach($dep in $deps){
     $hashes[$dep]=(Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash.ToLower()

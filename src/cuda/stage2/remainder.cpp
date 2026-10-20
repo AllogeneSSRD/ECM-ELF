@@ -255,34 +255,6 @@ void leaf_mod_linear_batch(
     mpz_clears(h, x, t, nullptr);
 }
 
-void flat_truncate(
-    std::vector<unsigned long long> &v,
-    size_t nbatch,
-    size_t nc,
-    size_t keep,
-    size_t W,
-    const char *caller)
-{
-    if (keep == nc) return;                            /* already tight at `keep` coefficients */
-    const size_t need = nbatch * nc * W;               /* the last slice ends exactly here */
-    if (keep > nc || v.size() < need) {
-        std::fprintf(stderr, "%s: FATAL: %s: flat_truncate source too short (%llu words, needs "
-                             "%llu = nbatch(%llu)*stride_nc(%llu)*W(%llu)) keep=%llu "
-                             "per-slice-words-declared=%llu\n", NTT_PROBE_NAME, caller,
-                     (unsigned long long)v.size(), (unsigned long long)need,
-                     (unsigned long long)nbatch, (unsigned long long)nc, (unsigned long long)W,
-                     (unsigned long long)keep, (unsigned long long)(nc * W));
-        std::exit(3);
-    }
-    std::vector<unsigned long long> out(nbatch * keep * W, 0ull);
-    for (size_t s = 0; s < nbatch; ++s) {
-        const size_t src0 = s * nc * W;
-        std::copy(v.begin() + (long)src0, v.begin() + (long)(src0 + keep * W),
-                  out.begin() + (long)(s * keep * W));
-    }
-    v.swap(out);
-}
-
 void fold_flat_step(
     PolyLayer &L,
     const std::vector<unsigned long long> &G,
@@ -799,15 +771,8 @@ void inv_series_batch(
             std::copy(g.begin() + (long)(s * len * W),
                       g.begin() + (long)((s + 1) * len * W),
                       gpad.begin() + (long)(s * nxt * W));
-        /* ---- ag = (a*g) mod X^nxt ---------------------------------------------------
-           EVERY buffer below is nbatch slices of exactly the coefficient count its own `n`
-           argument declares, because each consumer (flat_mul_batch, flat_truncate,
-           cp_addsub_flat) strides by that declaration.  The multiply's two operands must also
-           be the arguments' OWN lengths: this call site used to pass (at, am, g, len) while `g`
-           actually held 2*len, so the multiply read the low `len` of `at` and the whole 2*len
-           of `g`, returning 3*len-1 coefficients where the code assumed am+len-1 -- the slice
-           strides below stopped matching their buffers, and at the real shape (P = 4096,
-           W = 83) that walked off the heap inside flat_truncate's memcpy. */
+        /* Every flat consumer uses the declared coefficient stride, including
+       padding and unequal operand widths. Select outputs with that stride. */
         flat_mul_batch(L, at, am, (len == nxt) ? g : gpad, nxt, nbatch, ag, cat, 0, nxt);
         /* The returned prefix is already tight at nxt coefficients per slice; the input and
            transform shape still cover the complete product. */
@@ -867,10 +832,8 @@ void divmod_batch(
         std::exit(3);
     }
     std::vector<unsigned long long> qrev, q, qb;
-    /* ra holds k coefficients (the reversed top k of the dividend) and the inverse holds k, so
-       the product qrev = ra*rbi has 2k-1: flat_truncate below reads exactly that stride and
-       keeps the top k, which is the reversed quotient.  inv_series_batch already returns k per
-       slice, so this is only an assertion of the contract the truncate depends on. */
+    /* Every flat consumer uses the declared coefficient stride, including
+       padding and unequal operand widths. Select outputs with that stride. */
     if (rbi.size() != nbatch * k * W) {
         std::fprintf(stderr, "%s: FATAL: the batched inverse has %llu words, expected %llu "
                              "(nbatch=%llu k=%llu W=%llu)\n", NTT_PROBE_NAME,

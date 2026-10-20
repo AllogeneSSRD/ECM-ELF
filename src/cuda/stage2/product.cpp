@@ -3,50 +3,17 @@
 #include "options.h"
 #include "checks.h"
 #include "s4_pack_state.h"
+#include "pack_launch.h"
 
 // Host packing policy, accounting and launch geometry. Device kernels live in
 // kernels/cuda/stage2/pack.cuh.
 namespace stage2_pack {
 
-static bool supported(unsigned long long N,unsigned long long sw,unsigned long long nc,
-    int bits,int bpw,int W)
-{
-    return N && N<=0xffffffffull && sw && sw<=0xffffffffull && nc<=N/sw &&
-        bits>0 && bpw>0 && bpw<64 && W==(bits+63)/64 &&
-        (unsigned long long)((bits+bpw-1)/bpw)<=sw;
-}
-template<bool GATHER,bool REVERSE=false>
-static void launch(const unsigned long long *src,const unsigned long long *offsets,
-    unsigned long long m,unsigned long long nc,int W,int bits,int bpw,
-    unsigned long long sw,unsigned long long N,unsigned long long *dst)
-{
-    const unsigned reciprocal=sw==1 ? 0 : (unsigned)((1ull<<32)/sw);
-    for(unsigned long long first=0;first<m;first+=65535) {
-        const unsigned y=(unsigned)std::min(65535ull,m-first);
-        const dim3 grid((unsigned)((N+255)/256),y);
-        ecm_launch_pack_zero_kernel<GATHER,REVERSE>(EcmCudaLaunch{grid,256}, src,offsets,(unsigned)nc,(unsigned)W,
-            (unsigned)((bits+bpw-1)/bpw),(unsigned)bpw,(unsigned)sw,reciprocal,(unsigned)N,first,dst);
-        CK(cudaGetLastError());
-    }
-}
 static void account(unsigned long long m,unsigned long long N,bool gather,bool reverse=false) {
     if(gather)++stats.gather;else ++stats.contiguous;
     if(reverse)++stats.reverse;
     stats.launches+=(m+65534)/65535;stats.words+=m*N;++stats.avoided_memsets;
 }
-}
-
-static void s4_launch_pack_batch(const unsigned long long *src, int S, int bpw,
-                                 unsigned long long slot_words, unsigned long long N,
-                                 unsigned long long ds, unsigned long long ma, int W,
-                                 unsigned long long *dst)
-{
-    const unsigned long long total = ds * ma;
-    if (total == 0) return;
-    const unsigned int th = 256;
-    const unsigned int bl = (unsigned int)((total + th - 1) / th);
-    ecm_launch_s4_pack_batch_kernel(EcmCudaLaunch{bl, th}, src, S, bpw, slot_words, N, ds, ma, W, dst);
-    CK(cudaGetLastError());
 }
 
 void MulCost::add(int cat,size_t m1,size_t m2)
@@ -809,18 +776,8 @@ void flat_mul_batch(
     const size_t W = L.W;
     const size_t P = (ma > mb) ? ma : mb;           /* the multiply takes ONE shape per launch */
     const size_t nc = count==(size_t)-1 ? ma+mb-1 : count;
-    /* CONTRACT: every operand holds exactly nbatch slices of MA (MB) coefficients -- so its
-       length is nbatch*ma*W (nbatch*mb*W) and its slice stride IS ma (mb) -- and the result is
-       written TIGHTLY at the requested count (default ma+mb-1) coefficients per slice.
-       FIRST addresses the full source convolution. All three are load-bearing, and
-       all three were assumed rather than checked until the real shape broke:
-         * a SHORTER operand (or one whose real slice is shorter than ma) is read past its end;
-         * a LONGER one used to make the result `A.size()/ma * nc` words -- inflating each
-           slice to k coefficients in the Newton step of inv_series_batch, after which
-           flat_truncate was handed a slice stride it had never declared and read off the end.
-       Both were host access violations at P = 4096 / W = 83.  The stride is stated once, here,
-       and every caller now has to satisfy it: Newton's two multiplies plus divmod_batch's
-       qrev = ra*rbi and qb = q*B. */
+    /* Every flat consumer uses the declared coefficient stride, including
+       padding and unequal operand widths. Select outputs with that stride. */
     if (A.size() != nbatch * ma * W || B.size() != nbatch * mb * W) {
         std::fprintf(stderr, "%s: FATAL: flat_mul_batch operand shape mismatch: A=%llu (must be "
                              "%llu = nbatch*ma*W), B=%llu (must be %llu = nbatch*mb*W) for "

@@ -4,8 +4,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
-#include "stage2_baby_arithmetic_fixture.cuh"
-#include "../bench/stage2_baby_device.cuh"
+#include "../experiments/cuda/stage2_tree/point_arithmetic.cuh"
+#include "../experiments/cuda/stage2_tree/stage2_baby_device.cuh"
 #define CK(c) do{auto e=(c);if(e!=cudaSuccess){std::fprintf(stderr,"CUDA %s\n",cudaGetErrorString(e));std::exit(3);}}while(0)
 #define DISP(w,fn,...) do{if(w<=4)fn<4>(__VA_ARGS__);else if(w<=8)fn<8>(__VA_ARGS__);else if(w<=16)fn<16>(__VA_ARGS__);else if(w<=32)fn<32>(__VA_ARGS__);else if(w<=64)fn<64>(__VA_ARGS__);else fn<128>(__VA_ARGS__);}while(0)
 static void store(unsigned long long *out,size_t w,const mpz_t v){std::fill(out,out+w,0);size_t c=0;mpz_export(out,&c,-1,8,0,0,v);}

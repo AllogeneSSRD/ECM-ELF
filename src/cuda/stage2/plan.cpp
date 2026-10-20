@@ -84,106 +84,34 @@ int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
         "stage2_modulus: target_bits=%llu carrier_bits=%llu carrier_exponent=%u lifted=%d target_divides_carrier=1\n",
         (unsigned long long)L.target_bits(),(unsigned long long)L.S,L.carrier_exponent,(int)L.lifted());
 
-    /* ---- THE D SEARCH (section 59) ----------------------------------------------------------
-       `--choose-d` used to take the LARGEST D whose transforms fit memory, on the grounds that
-       "work is proportional to 1/D".  That is half the story and the wrong half to optimise:
-
-         * the MAIN LOOP is proportional to 1/D -- imax = B2/D giant steps, and this engine ties
-           the batch size to P exactly (`num_poly_g = ceil(imax/P)`, section 27/S3), so every
-           multiply in the loop is a degree-P x degree-P multiply and the loop costs
-           imax * log2(min(P, imax));
-         * the F TREE, the Newton inverse, the remainder DESCENT and the block ACCUMULATION are all
-           proportional to P = phi(D)/2, which GROWS with D.
-
-       D balances giant steps against the baby/F tree, inverse and descent. The baby set
-       is j<=D/2 with gcd(j,D)=1; its +/- residues enumerate the units. A prime p>D is
-       automatically coprime to D. phi(D)/D is residue density, not prime-coverage probability.
-       Different D still changes the lower-bound/overshoot geometry, so rank by measured
-       cost without claiming identical prime sets. The calibrated resident model above
-       handles actual NTT lengths; the legacy rates below remain the unsupported-scope fallback.
-
-       THE MODEL IS FITTED TO MEASURED PHASE TIMES, NOT GUESSED.  The reference is the production
-       run of section 56.1 (D=570570, P=51840, imax=3400110, giant_points=3400110):
-           gtrees 192.920 + fold 72.836          = 265.756   loop,  per imax*log2(P)
-           pre 6.335 + descent 31.134 + accum 13.068 = 50.537  tree, per P
-           giant 50.655                                  per imax
-           gleaves 20.722 + loop_host 9.617      = 30.339   per batch
-           face value plus the ~25 s setup that lives outside `elapsed`
-       Turned into RATES (so the model does not depend on the B2 being planned) and re-applied, it
-       reproduces that run to 0.1%: 265.7 + 50.5 + 50.7 + 30.3 + 25.0 = 422.3 s against the measured
-       397.83 + 25 = 422.8 s.  Its job is ranking, not prediction to the second.
-
-       Memory feasibility stays a HARD filter: a candidate whose shapes do not fit the arena is not
-       a candidate at all. */
+    /* D balances giant work against the baby/F tree, inverse and descent.
+       P=phi(D)/2 grows with D, while imax=B2/D+2 decreases. Baby indices are
+       the units j<=D/2 modulo D; phi(D)/D is residue density.
+       legacy_56_1 ranks by the phase rates below; estimates are for ranking.
+       Actual transform shapes and the arena budget remain hard feasibility
+       filters. The model/version text is part of the existing report format. */
     unsigned long long D = D_in, P_baby = 0;
     const char *env4 = std::getenv("NTT_S4_OFF");
     const bool s4_on = !(env4 && *env4 && std::atoi(env4) != 0);
     const bool model_requested=fuse_env_ull("NTT_D_MODEL",0)!=0;
-    const auto outer_mode=fuse_env_ull("NTT_FUSE_COOP_OUTER",0);
-    const bool shape_ntt=outer_mode==2 && d_shape_rates_valid && fuse_shape_policy_supported(12);
+    // Preserve the live NTT device-policy cache warmup at the planning boundary.
+    if(fuse_env_ull("NTT_FUSE_COOP_OUTER",0)==2)(void)fuse_shape_policy_supported(12);
     const bool baby_requested=fuse_env_ull("NTT_BABY_DEVICE",0)!=0;
     const auto baby_budget=fuse_env_ull("NTT_BABY_DEVICE_MAX_MB",512)*1024*1024;
-    const auto baby_live_cap=freeb>64ull*1024*1024 ? freeb-64ull*1024*1024 : 0ull;
-    const auto baby_cap=std::min((unsigned long long)baby_budget,(unsigned long long)baby_live_cap);
-    // Frozen phase rates were measured under the legacy cache admission ledger.
-    // Payload accounting v2 needs a new calibration before those rates can be enabled.
-    const bool cache_rates_valid=false;
-    bool calibrated=model_requested && cache_rates_valid && s4_on && !s4_tail_mont_mode() && g_xadd6 && g_s4_mersenne && g_groot_device &&
-        g_s4_output_window && g_s4_chunk_output && g_s4_groot_only && g_s4_pack_direct &&
-        g_s4_oracle_async && g_s4_oracle_pack && g_s4_carry_batch && !g_s4_final_readback &&
-        L.S==4423 && mpz_popcount(L.N)==4423 && curves==1 && B1==1000 &&
-        B2>=100000000000ull && B2<=2011326186870ull &&
-        std::strstr(prop.name,"RTX 4060 Laptop") &&
-        fuse_env_ull("NTT_FUSE_T",12)==12 && fuse_env_ull("NTT_FUSE_M",4)==4 &&
-        fuse_env_ull("NTT_FUSE_WARP_TAIL",0)!=0 && (outer_mode==0 || shape_ntt) &&
-        fuse_env_ull("NTT_S4_BATCH_MB",64)==64 &&
-        fuse_env_ull("NTT_GIANT_CHAIN_BLOCK",64)==64 && fuse_env_ull("NTT_GIANT_CHAIN_MIN",32768)==32768 &&
-        fuse_env_ull("NTT_GIANT_CHAIN_SMALL_BLOCK",0)==0 && !g_giant_seed_pair &&
-        fuse_env_ull("NTT_ARENA_WORKSPACE_POOL",1)!=0 &&
-        fuse_env_ull("NTT_S4_SAMPLE",96)==96 && fuse_env_ull("NTT_S4_CHECK_EVERY",8)==8;
-    for(const char *key:{"NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE","NTT_GFINV_SEG_EXACT",
-                         "NTT_GFINV_BATCH","NTT_FOLD_FLAT","NTT_FOLD_DEVICE","NTT_DEVICE_GLEAF",
-                         "NTT_GROOT_TO_FOLD","NTT_SCALED_DESCENT"})
-        if(!fuse_env_ull(key,0))calibrated=false;
-    if(fuse_env_ull("NTT_S4_HOSTPACK",0) || !fuse_compact_scratch() ||
-       !fuse_env_ull("NTT_S4_FLAT_DIRECT",1))calibrated=false;
-    // Empirical rates must match the selected arithmetic and NTT policy.
     const bool gl_short=(ntt_gl_reduce_requested_mode()&1u)!=0;
     const bool gl_shift_scale=fuse_env_ull("NTT_GL_SHIFT_SCALE",0)!=0;
     const bool gl_ptx=NTT_GL_FIXED_MODE==3 || fuse_env_ull("NTT_GL_PTX_REDUCE",0)!=0;
-    const bool point_requested=fuse_env_ull("NTT_POINT_MERSENNE",0)!=0;
-    // Only the measured immutable PTX/GPU baby backend has profile5 rates.
-    const bool fixed_ptx=NTT_GL_FIXED_MODE==3 && d_fixed_ptx_rates_valid && gl_short && shape_ntt && baby_requested;
-    const bool point_fold=point_requested && fixed_ptx && d_point_fold_rates_valid &&
-        L.S==4423 && mpz_popcount(L.N)==4423;
-    // Outer ILP changes NTT timings; frozen profiles require the original schedule.
-    // The selected subtraction and resident descent need new calibrated rates.
-    calibrated=false;
-    stage2_log::print(stage2_log::debug, "ntt_addsub_arithmetic: mask=1\n");
-    if(NTT_OUTER_UNROLL_U!=0)calibrated=false;
-    if(ntt_carry_check_requested())calibrated=false;
-    if(point_requested && !point_fold)calibrated=false;
-    if(gl_shift_scale || (gl_ptx && !fixed_ptx) || (NTT_GL_FIXED_MODE>=0 && !fixed_ptx))calibrated=false;
-    if(gl_short && !(shape_ntt && (fixed_ptx ? d_fixed_ptx_rates_valid : d_short_rates_valid)))calibrated=false;
-    if(baby_requested && !(gl_short && shape_ntt && (fixed_ptx ? d_fixed_ptx_rates_valid : d_baby_rates_valid) && baby_cap))calibrated=false;
-    if(baby_requested)for(const char *key:{"NTT_BABY_DEVICE_CHECK","NTT_BABY_DEVICE_TEST",
-                                         "NTT_BABY_DEVICE_TEST_BAD","NTT_BABY_DEVICE_ALLOC_FAIL"})
-        if(fuse_env_ull(key,0))calibrated=false;
     const auto fold_budget=fuse_env_ull("NTT_FOLD_DEVICE_MAX_MB",640)*1024*1024;
-    auto owner_bytes=[&](unsigned long long p){return ecm_stage2::owner_bytes(p,nw,kFoldOwnerReuse);};
-    if(D_in && (phi_u64(D_in)/2==0 || B2/D_in+2<=phi_u64(D_in)/2 ||
-                owner_bytes(phi_u64(D_in)/2)>fold_budget ||
-                (baby_requested && d_baby_payload_bytes(phi_u64(D_in)/2,nw)>baby_cap)))calibrated=false;
-    if(model_requested && !cache_rates_valid)
+    stage2_log::print(stage2_log::debug, "ntt_addsub_arithmetic: mask=1\n");
+    if(model_requested)
         stage2_log::print(stage2_log::debug, "d_model_scope: calibrated=0 reason=cache_payload_v2_unmeasured\n");
     const double d_scan_begin=now_s();
     double selected_seconds=0;
-    auto &phase_model=runtime.phase_model.emplace((int)L.S,B2,point_fold ? 6 : fixed_ptx ? 5 : baby_requested ? 4 : gl_short && shape_ntt ? 3 : shape_ntt ? 2 : 0);
-    const char *model_version=calibrated ? (point_fold ? "resident_point_fold_v1" : fixed_ptx ? "resident_fixed_ptx_v1" : baby_requested ? "resident_baby_v1" : gl_short ? "resident_short_v1" : shape_ntt ? "resident_shape_v1" : "resident_xadd6_v1") : "legacy_56_1";
+    const char *model_version="legacy_56_1";
     stage2_log::print(stage2_log::debug, "ntt_outer_schedule: unroll_u=%d (0=compiler-default, 4=experimental ILP)\n",NTT_OUTER_UNROLL_U);
     stage2_log::print(stage2_log::debug, "d_model: requested=%d enabled=%d version=%s arena_cap_bytes=%llu fold_budget_bytes=%llu gl_short=%d gl_shift_scale=%d gl_ptx=%d "
                 "(calibrated scope: RTX4060 Laptop M4423 B1=1000 B2=1e11..2011326186870, batch64/chain64; estimates)\n",
-                (int)model_requested,(int)calibrated,model_version,
+                (int)model_requested,0,model_version,
                 (unsigned long long)cap,fold_budget,(int)gl_short,(int)gl_shift_scale,(int)gl_ptx);
     {
         struct DCand {
@@ -206,13 +134,7 @@ int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
             c.giant = (RGIANT / RIM) * (double)c.imax;
             c.glue = (RGLUE / RB) * (double)c.batches;
             c.total = c.loop + c.tree + c.giant + c.glue + RSETUP;
-            if(calibrated) {
-                if(c.P==0 || c.imax<=c.P || owner_bytes(c.P)>fold_budget ||
-                   (baby_requested && d_baby_payload_bytes(c.P,nw)>baby_cap)) {c.total=1e100;return;}
-                const auto e=phase_model.cost(c.D,c.P);
-                c.loop=e.gtrees+e.fold;c.tree=e.init+e.descent+e.inv+e.accum;
-                c.giant=e.giant;c.glue=e.glue;c.total=e.total;
-            }
+
             const double span = (B2 > B1) ? (double)(B2 - B1) : 1.0;
             c.rate = span / (c.total > 1e-9 ? c.total : 1e-9);
         };
@@ -226,11 +148,7 @@ int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
         }
         std::sort(cands.begin(), cands.end(),
                   [](const DCand &a, const DCand &b) { return a.total < b.total; });
-        if(calibrated) stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue D <= %llu) ; "
-                                  "model=%s ranked by empirical full Stage2 cost; "
-                                  "actual NTT lengths, partial trees/Newton, owner and arena filters\n",
-                                  (unsigned long long)cands.size(),dlim,model_version);
-        else stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue D <= %llu) ; model fitted to the section "
+stage2_log::print(stage2_log::debug, "d_scan: candidates=%llu (shared catalogue D <= %llu) ; model fitted to the section "
                     "56.1 run (rates: loop=%.3f s per imax*log2, tree=%.1f us per leaf, "
                     "giant=%.2f us per step, glue=%.2f ms per batch) ; ranked by TOTAL COST "
                     "(coverage is ~1 for every candidate: a prime p > D is coprime to D, so its "
@@ -243,7 +161,7 @@ int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
             if (shown >= 14 && best.D) break;
             if (checked++ > 4000 && best.D) break;
             unsigned long long tw = 0;
-            if(calibrated && (owner_bytes(c.P)>fold_budget || c.total>=1e80))continue;
+
             if (!real_run_words(c.P, (int)L.S, &tw, nullptr, nullptr)) continue;
             c.total_words = tw;
             c.fits = ((double)tw * 8.0 <= (double)cap);
@@ -260,7 +178,7 @@ int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
                             c.D, c.P, c.imax, c.batches, c.units, missed,
                             (double)tw * 8.0 / 1048576.0, c.loop, c.tree, c.giant, c.glue, c.total,
                             c.rate);
-                if(calibrated)phase_model.print(c.D,c.P,owner_bytes(c.P));
+
                 ++shown;
             }
         }
@@ -272,7 +190,7 @@ int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
             model(r);
             unsigned long long tw = 0;
             const bool okm = real_run_words(r.P, (int)L.S, &tw, nullptr, nullptr) && tw*8<=cap;
-            if(calibrated)phase_model.print(r.D,r.P,owner_bytes(r.P));
+
             stage2_log::print(stage2_log::debug, "d_scan_reference: D=%llu P=%llu imax=%llu batches=%llu units=%.4f "
                         "fit=%s | loop=%.1f tree=%.1f giant=%.1f glue=%.1f total=%.1f "
                         "rate=%.3g vals/s\n",
@@ -470,10 +388,10 @@ int prepare_stage2_plan(ecm_stage2::ModulusContext &L,size_t nw,
                 },memory_policy,s4_policy,*p.curve_workspace_memory,true,{},&owner_policy,&timeline,&initial_policy,true))return 3;
         }
         p.free_bytes=freeb; p.arena_cap_bytes=cap; p.owner_budget_bytes=fold_budget;
-        p.baby_bytes=d_baby_payload_bytes(P_baby,nw);
+        p.baby_bytes=ecm_stage2::baby_payload_bytes(P_baby,nw);
         p.owner_budget_fits=p.geometry.fold_owner_bytes<=fold_budget;
         p.arena_estimate_fits=p.geometry.arena_estimate_bytes<=cap;
-        p.estimated_seconds=selected_seconds; p.calibrated=calibrated; p.model=model_version;
+        p.estimated_seconds=selected_seconds; p.calibrated=false; p.model=model_version;
     }
     if(d_plan_only) {
         stage2_log::print(stage2_log::debug, "d_plan_only: D=%llu P=%llu curves_executed=0 model=%s\n",

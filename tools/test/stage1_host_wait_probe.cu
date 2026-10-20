@@ -53,29 +53,8 @@ static cudaError_t diagnostic_event_create(cudaEvent_t *event) {
     diagnostic_event_flags|=diagnostic_blocking_event?cudaEventBlockingSync:cudaEventDefault;
     if(++diagnostic_events==2)diagnostic_stop_event=*event;return rc;
 }
-#define ECM_TIERS_RESTRICTED
-#ifndef ECM_HOST_WAIT_TIER
-#define ECM_HOST_WAIT_TIER 1280
-#define ECM_TIER_1280
-#endif
-#define DIAGNOSTIC_JOIN_IMPL(A,B) A##B
-#define DIAGNOSTIC_JOIN(A,B) DIAGNOSTIC_JOIN_IMPL(A,B)
-#define cudaEventCreate diagnostic_event_create
-#define cudaEventRecord diagnostic_event_record
-#define cudaEventSynchronize diagnostic_event_sync
-#define cudaDeviceSynchronize diagnostic_device_sync
-#define cudaMemcpy diagnostic_memcpy
-#define cudaGetLastError diagnostic_last_error
-#define cudaEventElapsedTime diagnostic_elapsed
-#include "../../kernels/cuda/stage1/edwards/instances.cuh"
-#include "../../src/cuda/stage1/edwards_runtime.inl"
-#undef cudaEventCreate
-#undef cudaEventRecord
-#undef cudaEventSynchronize
-#undef cudaDeviceSynchronize
-#undef cudaMemcpy
-#undef cudaGetLastError
-#undef cudaEventElapsedTime
+#include "ecm/cuda/diagnostics/host_wait.h"
+#include "../../src/core/ecm_edwards_naf.h"
 
 static void require(bool value,const char *why){if(!value)throw std::runtime_error(why);}
 static double process_cpu() {
@@ -115,8 +94,10 @@ int main(int argc,char **argv) {
             mpz_mul(s[4],x.v,y.v);mpz_mod(s[4],s[4],n.v);mpz_set_ui(s[6],1);mpz_set_ui(s[7],1);
         }
         EcmEdwardsNaf plan(scalar.v,6);EcmEdwardsNafMetrics metrics;uint32_t done=0;
+        const ecm_cuda_diagnostics::HostWaitHooks hooks{diagnostic_event_create,diagnostic_event_record,
+            diagnostic_event_sync,diagnostic_device_sync,diagnostic_memcpy,diagnostic_last_error,diagnostic_elapsed};
         const auto start=std::chrono::steady_clock::now();const auto cpu=process_cpu();
-        const int rc=ecm_edwards_cuda_detail::DIAGNOSTIC_JOIN(run_,ECM_HOST_WAIT_TIER)({n.v,scalar.v,states.data(),count,done,chunk,nullptr,nullptr,&plan,4,&metrics,nullptr});
+        const int rc=ecm_cuda_diagnostics::host_wait_run(hooks,n.v,scalar.v,states.data(),count,done,chunk,plan,4,&metrics);
         const auto cpu_seconds=process_cpu()-cpu;
         const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
         require(rc==0 && done==plan.bits,"incomplete arithmetic");

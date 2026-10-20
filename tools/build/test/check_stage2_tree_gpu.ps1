@@ -54,7 +54,8 @@ param(
     # run the OLD host-side operand packing (NTT_S4_HOSTPACK=1) instead of the default device
     # packer, for the A/B: both must find the same factor set (section 33)
     [switch]$HostPack,
-    [string]$Sandbox = ''
+    [string]$Sandbox = '',
+    [string]$GpuExe = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,11 +63,11 @@ $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
 $ref = Join-Path $repo 'build_cuda_cmake\stage2_tree_ref.exe'
-$gpu = Join-Path $repo 'build_cuda_cmake\stage2_tree_gpu.exe'
+$gpu = if($GpuExe){$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($GpuExe)}else{Join-Path $repo 'build_cuda_cmake\stage2_tree_gpu.exe'}
 foreach ($e in @($ref, $gpu)) {
     if (-not (Test-Path $e)) { throw "missing $e (build it: tools\build\test\build_stage2_tree_ref.ps1 / tools\build\dev\build_stage2_tree_gpu.ps1)" }
 }
-if (-not $Sandbox) { $Sandbox = Join-Path $repo ('tools\test\_run\stage2gpuc_' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
+if (-not $Sandbox) { $Sandbox = Join-Path $repo ('data\experiments\stage2gpuc_' + (Get-Date -Format 'yyyyMMdd-HHmmss')+'_'+[Guid]::NewGuid().ToString('N').Substring(0,8)) }
 New-Item -ItemType Directory -Force $Sandbox | Out-Null
 $cpu = Join-Path $Sandbox 'F_cpu.txt'
 $gpuDump = Join-Path $Sandbox 'F_gpu.txt'

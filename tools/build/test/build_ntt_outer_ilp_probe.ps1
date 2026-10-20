@@ -12,9 +12,12 @@ $vcvars=(Get-ChildItem 'C:\Program Files*\Microsoft Visual Studio\*\*\*\Auxiliar
 if(-not $vcvars){throw 'vcvars64.bat not found'}
 New-Item -ItemType Directory -Force $Build | Out-Null
 if(Test-Path (Join-Path $Build 'manifest.json')){throw 'Use a fresh build directory'}
-$deps=@('tools/test/ntt_coop_outer_probe.cu','tools/bench/ntt_poly_probe.cu',
-        'tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh',
-        'tools/bench/ntt_goldilocks_ptx.cuh','tools/bench/ntt_carry_partial.cuh','tools/build/test/build_ntt_outer_ilp_probe.ps1')
+$deps=@('tools/test/ntt_coop_outer_probe.cu','tools/experiments/cuda/ntt_variants/main.cu',
+        'tools/experiments/cuda/ntt_variants/ntt_coop_outer.cuh','tools/experiments/cuda/ntt_variants/ntt_goldilocks_reduce.cuh',
+        'tools/experiments/cuda/ntt_variants/ntt_goldilocks_ptx.cuh','tools/experiments/cuda/ntt_variants/ntt_carry_partial.cuh','tools/build/test/build_ntt_outer_ilp_probe.ps1')
+. (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
+$deps=@(Get-EcmSourceClosure $repo $deps @('include','third_party/gmp-zen3/dist/include'))+
+    @('tools/build/internal/cuda_build_state.ps1')
 $original=[ordered]@{};$generated=[ordered]@{}
 $encoding=New-Object System.Text.UTF8Encoding($false)
 foreach($dep in $deps){
@@ -23,7 +26,7 @@ foreach($dep in $deps){
     $relative=Join-Path '_src' $dep;$dest=Join-Path $Build $relative
     New-Item -ItemType Directory -Force (Split-Path -Parent $dest) | Out-Null
     $raw=[System.IO.File]::ReadAllBytes((Join-Path $repo $dep))
-    if($dep -eq 'tools/bench/ntt_coop_outer.cuh' -and $UnrollU -ne 0 -and -not $IntegratedSchedule){
+    if($dep -eq 'tools/experiments/cuda/ntt_variants/ntt_coop_outer.cuh' -and $UnrollU -ne 0 -and -not $IntegratedSchedule){
         $text=$encoding.GetString($raw)
         $needle='            for(int u=row;u<d;u+=ROWS) {'
         if(($text.Split(@($needle),[StringSplitOptions]::None).Count-1) -ne 1){throw 'Outer loop extraction differs'}
@@ -31,7 +34,7 @@ foreach($dep in $deps){
         $text=$text.Replace($needle,"#pragma unroll $UnrollU$newline$needle")
         $raw=$encoding.GetBytes($text)
     }
-    if($dep -eq 'tools/test/ntt_coop_outer_probe.cu'){
+    if($dep -eq 'tools/test/ntt_outer_fixture.cuh'){
         $text=$encoding.GetString($raw)
         $needle='    CK(cudaSetDevice(device));'
         if(($text.Split(@($needle),[StringSplitOptions]::None).Count-1) -ne 1){throw 'Probe entry extraction differs'}

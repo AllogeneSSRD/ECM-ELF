@@ -1,7 +1,5 @@
 // Exercise the actual development launcher, with both V variants in one binary.
-#define main original_coop_probe_main
-#include "ntt_coop_outer_probe.cu"
-#undef main
+#include "ntt_outer_fixture.cuh"
 
 template<int M,bool INV,int V> static void v_resources()
 {
@@ -139,5 +137,5 @@ int main(int argc,char**argv)
         v_resources<7,false,32>();v_resources<7,true,32>();v_resources<7,false,16>();v_resources<7,true,16>();
         v_resources<8,false,16>();v_resources<8,true,16>();v_resources<8,false,8>();v_resources<8,true,8>();return 0;
     }
-    return original_coop_probe_main(argc,argv);
+    return ntt_coop_probe_run(argc,argv);
 }

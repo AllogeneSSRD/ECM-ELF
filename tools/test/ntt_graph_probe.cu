@@ -1,4 +1,3 @@
-#define NTT_POLY_PROBE_NO_MAIN
 #include "../../src/core/ecm_stage2_logging.h"
 #include "../../src/cuda/ntt/runtime.h"
 

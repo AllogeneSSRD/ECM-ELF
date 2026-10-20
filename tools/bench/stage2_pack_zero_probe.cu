@@ -1,8 +1,8 @@
 // Production input pack/zero study. GMP oracle does not use device indexing.
 #include "../../src/core/ecm_stage2_logging.h"
 #include "../../src/cuda/ntt/runtime.h"
-#include "../../kernels/cuda/stage2/pack.cuh"
-#include "../../src/cuda/stage2/s4_input_pack.cuh"
+#include "../../kernels/cuda/shared/pack_index.cuh"
+#include "../../src/cuda/stage2/pack_launch.h"
 #include <cuda_profiler_api.h>
 using Word=unsigned long long;
 struct Buffer {
@@ -71,9 +71,9 @@ static void launch(bool fused,int path,const Fixture &f,Buffer &source,Buffer &m
         CK(cudaMemsetAsync(dst,0,8*f.m*f.N));
         if(f.nc) {
             if(path==0)s4_launch_pack_batch(source.p,f.bits,f.bpw,f.sw,f.N,f.m,f.nc,f.W,dst);
-            else if(path==1)s4_pack_gather_kernel<<<(unsigned)((f.m*f.nc+255)/256),256>>>(
+            else if(path==1)ecm_launch_s4_pack_gather_kernel(EcmCudaLaunch{(unsigned)((f.m*f.nc+255)/256),256},
                 source.p,meta.p+2,f.m,f.nc,f.W,f.bits,f.bpw,f.sw,f.N,dst);
-            else s4_pack_gather_reverse_kernel<<<(unsigned)((f.m*f.nc+255)/256),256>>>(
+            else ecm_launch_s4_pack_gather_reverse_kernel(EcmCudaLaunch{(unsigned)((f.m*f.nc+255)/256),256},
                 source.p,meta.p+2,f.m,f.nc,f.W,f.bits,f.bpw,f.sw,f.N,dst);
             CK(cudaGetLastError());
         }

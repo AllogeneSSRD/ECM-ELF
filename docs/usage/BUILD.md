@@ -60,7 +60,7 @@ Stage2 的 `-HostOnly` 只复用完整清单中身份一致的 CUDA 对象，并
 
 ## CUDA 源清单与依赖身份
 
-翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 生产构建含25个单元：15个 `STAGE2_ENGINE` 主机 CPP、算术 CU、NTT CU、四个 NTT 主机 CPP 和四个驱动 CPP。CMake 直接使用，PowerShell 从该文件导出构建目录内的 `cuda_sources.json`。生产源码闭包拒绝包含 `tools/bench/`、`tools/experiments/` 和 `.refactor/`；开发 wrapper 使用单独源组。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
+翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 生产构建含25个单元：15个 `STAGE2_ENGINE` 主机 CPP、算术 CU、NTT CU、四个 NTT 主机 CPP 和四个驱动 CPP。CMake 直接使用，PowerShell 从该文件导出构建目录内的 `cuda_sources.json`。生产源码闭包拒绝包含 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`，包括编译器补齐的依赖；开发 wrapper 使用单独源组。实验树、BSGS、独立 NTT、cuFFT 和 giant 变体另有显式实验源组，不加入生产目标。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
 
 CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目对象库/静态库；条件目标按保守全集收集，导入库由工具链与依赖清单另行记录。对象枚举和 CUDA 完全重编按该目标闭包执行。`cuda_build_state.ps1` 扫描本地递归包含，包括 `.inc/.inl/.def`，并用 NVCC 依赖文件补齐宏包含及 SDK 头。每个对象的 `.ecm-state.json` 记录命令、依赖内容指纹与对象摘要；摘要编码在 Windows PowerShell 5.1 和 PowerShell 7 间一致。
 
@@ -70,4 +70,8 @@ CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目�
 
 P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设备算术正文并检查模块依赖方向。`build_cuda_p2_arithmetic_probe.ps1 -WorkerBuild <生产目录>` 将独立 GMP 检查器链接到经过身份验证的生产算术对象；`build_ntt_graph_probe.ps1 -WorkerBuild <生产目录>` 同样复用真实 NTT 对象。其他使用生产 NTT 的探针通过 `internal/cuda_ntt_probe.ps1` 消费同一源清单，所有单元保持探针指定的 legacy/per-thread 默认流设置；不再通过实现头或截取生产源码构建。
 
-P3 主机源码等价与依赖门禁为 `test_cuda_p3_host.py`；它对照 P2 基线，检查完整函数、字段、默认值、构造初始化及全局快照次序，并展开规划接口核对原语句。`test_cuda_p3_runtime.py` 消费冻结旧程序、独立验证的存档和新程序，比较完整叶指纹、稳定结果字段、计划查询、分配/预算回退及各日志级别的损坏拒绝。资源测试通过 `stage2_native_source.py` 读取实际模块的声明和方法，不使用另一份手写资源实现。依赖关系大幅收缩后，构建可能因旧编译依赖记录拒绝收缩后的依赖；保留该记录，使用新构建目录完整编译，再验证复用。
+当前主机清理门禁为 `test_cuda_p4_cleanup.py`，对照 P3 基线核对32个生产模块，只允许有调用点、恒值和作用域证明的有限删除。`test_cuda_p4_isolation.py` 核对实验迁移正文、入口默认值及包含边界，`test_cuda_p4_probe_contracts.py` 核对有限探针接口及独立 oracle。P3 的完整搬迁等价脚本是该阶段的冻结门禁；当前删除后的代码使用 P4 门禁。
+
+`test_cuda_p3_runtime.py` 继续消费冻结旧程序、独立验证的存档和新程序，比较完整叶指纹、稳定结果字段、计划查询、分配/预算回退及各日志级别的损坏拒绝。资源测试通过 `stage2_native_source.py` 读取实际模块的声明和方法，不使用另一份手写资源实现。依赖关系收缩后，构建可能因旧编译依赖记录拒绝收缩后的依赖；保留该记录，使用新构建目录完整编译，再验证复用。
+
+实验完整模块由 `internal/cuda_experiment_probe.ps1` 构建，记录递归源码闭包、命令、对象和程序摘要；入口不再截取 `.cu` 正文。GMP/测试夹具仍位于 `tools/test/`。pack 探针以原 per-thread ABI 独立编译同一生产模块；常规生产对象为 legacy，复用时会拒绝该差异。giant 可通过 `-WorkerBuild` 链接验证过的生产算术对象，其旋转及未注册容量单独编译。host-wait 探针通过显式适配编译真实 Edwards 运行时和设备模块。`build_stage2_d_model_probe.ps1` 默认保留旧实验表，`-Profiles frozen-production` 显式测试冻结的生产候选表。`build_cufft_probe.ps1` 从实验源组构建完整 cuFFT 候选并记录源码、命令、库和对象身份。冻结源码审计由 `internal/cuda_frozen_ntt_probe.ps1` 保留旧快照身份及其完整实现，不能用历史实验脚本的路径推断当前生产闭包。
