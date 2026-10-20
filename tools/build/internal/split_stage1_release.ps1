@@ -54,6 +54,7 @@ if (-not (Test-Path $nvprune)) { throw "nvprune.exe not found (expected $nvprune
 $cuObjs = @(Get-Stage1CudaObjects $BuildDir)
 $manifestPath = Join-Path $BuildDir 'stage1_build_manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+Assert-Stage1BuildIdentity $repo $BuildDir $manifest
 $originalExe = Join-Path $BuildDir 'ecm_cuda.exe'
 if ($manifest.architectures -ne $Archs -or $manifest.ptx_architecture -ne $PtxArch -or
     $manifest.cuda_root -ne $cuda.Root -or $manifest.host_compiler -ne $vc.Compiler -or

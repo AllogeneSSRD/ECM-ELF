@@ -23,6 +23,7 @@ config/ecm.toml.example text eol=lf
 docs/ECM_TOML_REFERENCE.md text eol=lf
 tools/gen/generate_ecm_config.py text eol=lf
 tools/build/internal/check_ecm_config.cmake text eol=lf
+tools/build/internal/cuda_sources.cmake text eol=lf
 src/core/ecm_toml.h text eol=lf
 src/core/generated/*.h text eol=lf
 

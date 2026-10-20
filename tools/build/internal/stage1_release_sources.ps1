@@ -1,46 +1,56 @@
-# Source identity shared by the Stage1 release build and SkipBuild checks.
+# Source/object identity shared by Stage1 release, splitting and SkipBuild.
+. (Join-Path $PSScriptRoot 'cuda_build_state.ps1')
+
 function Get-Stage1CudaObjects([string]$BuildDir) {
-    # Compile commands, rather than a directory glob, exclude stale optional kernels.
-    $root = [IO.Path]::GetFullPath($BuildDir).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
-    $entries = Get-Content -LiteralPath (Join-Path $root 'compile_commands.json') -Raw | ConvertFrom-Json
-    $objects = @($entries | Where-Object {
-        $_.file -match '\.cu$' -and $_.command.Replace('\','/') -match 'CMakeFiles/ecm_cuda\.dir/'
-    } | ForEach-Object {
-        $output = $_.output
-        if (-not $output) {
-            $match = [regex]::Match($_.command, '-o\s+("[^"]+"|\S+)')
-            if (-not $match.Success) { throw "Missing CUDA object output: $($_.file)" }
-            $output = $match.Groups[1].Value.Trim('"')
-        }
-        $path = if ([IO.Path]::IsPathRooted($output)) { $output } else { Join-Path $_.directory $output }
-        $path = [IO.Path]::GetFullPath($path)
-        if (-not $path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw "CUDA object outside build directory: $path" }
-        $path.Substring($root.Length).Replace('\','/')
-    } | Sort-Object -Unique)
+    $objects = @(Get-EcmTargetCompileEntries $BuildDir 'ecm_cuda' |
+        Where-Object { $_.file -match '\.cu$' } | ForEach-Object {
+            Get-EcmSourceKey $BuildDir (Get-EcmObjectPath $_ $BuildDir)
+        } | Sort-Object -Unique)
     if (-not $objects.Count) { throw 'No ecm_cuda CUDA objects in compile_commands.json' }
     return $objects
 }
 
-function Get-Stage1ReleaseSources([string]$Repo) {
-    $files = @(Get-Item -LiteralPath (Join-Path $Repo 'CMakeLists.txt'))
-    foreach ($dir in @('src','kernels','include','third_party/cgbn/include','tools/build')) {
-        $files += @(Get-ChildItem -LiteralPath (Join-Path $Repo $dir) -Recurse -File |
-            Where-Object { $_.Extension -in @('.c','.cpp','.h','.hpp','.cu','.cuh','.cmake','.ps1') })
+function Get-Stage1ReleaseSources([string]$Repo, [bool]$EnablePrac = $false, [string]$BuildDir = '') {
+    $inventory = Get-EcmCudaInventory $Repo
+    $sources = @($inventory.groups.STAGE1_COMMON) + @($inventory.groups.STAGE1_CUDA)
+    if ($EnablePrac) { $sources += @($inventory.groups.STAGE1_PRAC) }
+    $buildInputs = @()
+    if ($BuildDir) {
+        foreach ($name in @('compile_commands.json','cuda_target_graph.json')) {
+            $path = Join-Path $BuildDir $name
+            if (-not (Test-Path -LiteralPath $path)) { throw "Stage1 target metadata missing; reconfigure: $name" }
+            $buildInputs += Get-EcmSourceKey $Repo $path
+        }
+        # Linked host modules and generated identity sources are build inputs
+        # too, even when they are no longer direct sources of ecm_cuda.
+        $sources += @(Get-EcmTargetCompileEntries $BuildDir ecm_cuda | ForEach-Object { $_.file })
     }
-    foreach ($name in @('config/ecm_options.json','config/ecm_config.generated.json')) {
-        $files += Get-Item -LiteralPath (Join-Path $Repo $name)
-    }
-    $hashes = [ordered]@{}
-    foreach ($file in ($files | Sort-Object FullName -Unique)) {
-        $relative = $file.FullName.Substring($Repo.TrimEnd('\','/').Length + 1).Replace('\','/')
-        $hashes[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
-    }
-    return $hashes
+    $dirs = @('include','src','src/core','src/cpu','kernels/cuda',
+        'third_party/cgbn/include','third_party/cgbn/include/cgbn')
+    $paths = @(Get-EcmSourceClosure $Repo $sources $dirs -Production) + @($inventory.build_inputs) + $buildInputs
+    $paths += @('tools/build/build_stage1_local.ps1','tools/build/build_stage1_dev.ps1',
+        'tools/build/build_stage1_release.ps1','tools/build/internal/stage1_release_sources.ps1',
+        'tools/build/internal/parallel_nvcc.ps1','tools/build/internal/build_stage1_release_group.ps1',
+        'tools/build/internal/split_stage1_release.ps1','tools/build/internal/package_stage1.ps1',
+        'tools/build/internal/package_archive.ps1','tools/build/internal/release_payload.ps1')
+    return Get-EcmSourceHashes $Repo $paths
 }
+
 function Assert-Stage1ReleaseSources($Expected, $Actual) {
-    $names = @($Expected.PSObject.Properties.Name)
-    if ($names.Count -ne $Actual.Count) { throw 'Stage1 source file set changed; rebuild before packaging' }
-    foreach ($name in $names) {
-        if ($Expected.$name -ne $Actual[$name]) { throw "Stage1 source changed: $name; rebuild before packaging" }
+    Assert-EcmHashes $Expected $Actual 'Stage1 source changed; rebuild before packaging'
+}
+
+function Assert-Stage1BuildIdentity([string]$Repo, [string]$BuildDir, $Manifest) {
+    if ($Manifest.identity_schema -ne 1 -or -not $Manifest.compile_setup) { throw 'Stage1 build identity missing; rebuild old manifests' }
+    Assert-Stage1ReleaseSources $Manifest.source_hashes (Get-Stage1ReleaseSources $Repo -EnablePrac:$Manifest.enable_prac -BuildDir $BuildDir)
+    $objects = @(Get-Stage1CudaObjects $BuildDir)
+    if (@($Manifest.objects.PSObject.Properties).Count -ne $objects.Count) { throw 'Stage1 CUDA object set changed' }
+    foreach ($object in $objects) {
+        if ($Manifest.objects.$object -ne (Get-FileHash -LiteralPath (Join-Path $BuildDir $object)).Hash) { throw "Stage1 CUDA object changed: $object" }
     }
+    foreach ($entry in @(Get-EcmTargetCompileEntries $BuildDir ecm_cuda | Where-Object { $_.file -match '\.cu$' })) {
+        $state = Get-EcmCompileState $Repo $entry $Manifest.compile_setup -Production
+        if (-not (Test-EcmCompileState $state)) { throw "Stage1 CUDA dependency/command changed: $($entry.file)" }
+    }
+    if ($Manifest.executable_sha256 -ne (Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_cuda.exe')).Hash) { throw 'Stage1 executable changed' }
 }

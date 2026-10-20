@@ -52,6 +52,16 @@ Stage1 输出 `dist/cuda/`，Stage2 多架构输出 `dist/cuda-stage2/`；每架
 
 ## 复用构建
 
-Stage1 的 `-Incremental` 依赖时间戳，改变选项后应正常重建。Stage2 的 `-HostOnly`、发布的 `-SkipBuild` 要求源码/依赖/编译配置与冻结清单相符；不能修改清单或单独替换 DLL 来绕过核对。
+Stage1 的 `-Incremental` 按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。缺少当前依赖记录的旧对象会重编一次。`-RelinkOnly` 是显式交给 CMake 处理主机编译和链接的入口，不等同于已通过 CUDA 身份校验。
+
+Stage2 的 `-HostOnly` 只复用完整清单中身份一致的 CUDA 对象，并重建主机部分；架构、后端、工具链、GMP 头、CUDA 依赖或任一 CUDA 对象改变时拒绝。普通复用和发布 `-SkipBuild` 同时核对程序、编译单元、依赖和对象；旧 manifest 缺少身份记录时须正常重建。保留构建目录中的 `.ecm.d`、`.ecm-state.json`、源清单和 manifest；不能修改清单或替换 DLL 来绕过核对。
+
+## CUDA 源清单与依赖身份
+
+翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 主机源、生产引擎和开发 wrapper。CMake 直接使用，PowerShell 从该文件导出构建目录内的 `cuda_sources.json`。生产源码闭包拒绝包含 `tools/bench/`、`tools/experiments/` 和 `.refactor/`；开发 wrapper 使用单独源组。当前算法文件位置和 PRAC 显式开关保持。
+
+CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目对象库/静态库；条件目标按保守全集收集，导入库由工具链与依赖清单另行记录。对象枚举和 CUDA 完全重编按该目标闭包执行。`cuda_build_state.ps1` 扫描本地递归包含，包括 `.inc/.inl/.def`，并用 NVCC 依赖文件补齐宏包含及 SDK 头。每个对象的 `.ecm-state.json` 记录命令、依赖内容指纹与对象摘要；摘要编码在 Windows PowerShell 5.1 和 PowerShell 7 间一致。
+
+P0 独立验证入口为 `tools/build/test/build_cuda_p0.ps1`，用 `-Stage stage1/stage2/development` 选择构建；CPU 故障注入为 `tools/test/test_cuda_build_identity.ps1`，短曲线双版本对照为 `tools/test/test_cuda_p0_runtime.py`。这些入口不替代完整位宽、多架构或性能验收，证据写入 `data/experiments/`。
 
 `tools/build/dev/` 为开发和 GUI 入口，`test/` 为探针与参考实现构建，`internal/` 为配置检查、并行编译、拆分和打包辅助。详细参数入口见 [构建工具](../../tools/build/README.md)；配置生成合同见 [配置维护](../architecture/CONFIGURATION.md)。

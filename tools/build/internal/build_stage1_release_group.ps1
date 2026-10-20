@@ -51,7 +51,7 @@ Write-Host "Release GMP: $Gmp (matching header/import library/runtime)"
 if ($BuildDir.TrimEnd('\') -eq $OutDir.TrimEnd('\')) { throw 'Build and package directories must differ' }
 if (-not $OpenSslRoot) { $OpenSslRoot = "D:/code/vcpkg/installed/x64-windows" }
 . (Join-Path $PSScriptRoot 'stage1_release_sources.ps1')
-$sourceHashes = Get-Stage1ReleaseSources $repo
+$sourceHashes = Get-Stage1ReleaseSources $repo -EnablePrac:$EnablePrac
 $manifestPath = Join-Path $BuildDir 'stage1_build_manifest.json'
 $toolkit = $cuda.VersionText
 $dependencyHashes = [ordered]@{}
@@ -62,8 +62,6 @@ foreach ($name in @('include/gmp.h','lib/gmp.lib','bin/gmp-10.dll')) {
 if (-not $SkipBuild) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '../../diag/ensure_bom.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Source encoding check failed' }
-    # The encoding guard may restore tracked BOMs; fingerprint the actual build input.
-    $sourceHashes = Get-Stage1ReleaseSources $repo
     $cfg = @(
         "-S", "`"$repo`"", "-B", "`"$BuildDir`"", '-G', '"NMake Makefiles"',
         "-DCMAKE_BUILD_TYPE=Release",
@@ -95,10 +93,12 @@ if (-not $SkipBuild) {
     & cmd.exe /c "$($vc.Setup) && cmake $cfg" | Select-String -Pattern 'device code|PTX embedded|Error' |
         ForEach-Object { "   $($_.Line.Trim())" }
     if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+    # Configure and the encoding guard may update generated sources or tracked
+    # BOMs. Freeze the actual target closure before compiling.
+    $sourceHashes = Get-Stage1ReleaseSources $repo -EnablePrac:$EnablePrac -BuildDir $BuildDir
 
     if ($FullRebuild) {
-        Get-ChildItem (Join-Path $BuildDir "CMakeFiles\ecm_cuda.dir\kernels\cuda") -Filter *.obj -ErrorAction SilentlyContinue |
-            Remove-Item -Force
+        Remove-EcmCudaObjects $BuildDir
         Write-Host "   (CUDA objects removed)"
     }
 
@@ -107,7 +107,7 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Stage1 release build failed ($LASTEXITCODE)" }
     Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $BuildDir -Force
     $frozenSources = $sourceHashes | ConvertTo-Json -Depth 3 | ConvertFrom-Json
-    Assert-Stage1ReleaseSources $frozenSources (Get-Stage1ReleaseSources $repo)
+    Assert-Stage1ReleaseSources $frozenSources (Get-Stage1ReleaseSources $repo -EnablePrac:$EnablePrac -BuildDir $BuildDir)
     foreach ($name in $dependencyHashes.Keys) {
         if ($dependencyHashes[$name] -ne (Get-FileHash -LiteralPath (Join-Path $Gmp $name)).Hash) { throw "Dependency changed during build: $name" }
     }
@@ -115,12 +115,15 @@ if (-not $SkipBuild) {
     foreach ($obj in (Get-Stage1CudaObjects $BuildDir)) {
         $objectHashes[$obj] = (Get-FileHash -LiteralPath (Join-Path $BuildDir $obj)).Hash
     }
-    [ordered]@{ architectures = $Archs; ptx_architecture = $PtxArch; tiers = $Tiers; jobs = $Jobs; enable_prac = [bool]$EnablePrac;
+    [ordered]@{ identity_schema = 1; source_inventory_sha256 = (Get-FileHash (Join-Path $PSScriptRoot 'cuda_sources.cmake')).Hash;
+        compile_setup = $vc.Setup;
+        architectures = $Archs; ptx_architecture = $PtxArch; tiers = $Tiers; jobs = $Jobs; enable_prac = [bool]$EnablePrac;
         toolkit = $toolkit; cuda_root = $cuda.Root; host_compiler = $vc.Compiler; host_version = $vc.Version;
         gmp = $Gmp; dependency_hashes = $dependencyHashes;
         source_hashes = $sourceHashes; objects = $objectHashes; executable_sha256 = (Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_cuda.exe')).Hash;
         tests_run = $false } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 } else {
+    $sourceHashes = Get-Stage1ReleaseSources $repo -EnablePrac:$EnablePrac -BuildDir $BuildDir
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ($manifest.architectures -ne $Archs -or $manifest.ptx_architecture -ne $PtxArch -or $manifest.tiers -ne $Tiers -or
         $manifest.enable_prac -ne [bool]$EnablePrac -or $manifest.toolkit -ne $toolkit -or
@@ -129,6 +132,7 @@ if (-not $SkipBuild) {
         throw 'Stage1 SkipBuild requires the same architecture, tiers, PRAC flag, toolkit and executable'
     }
     Assert-Stage1ReleaseSources $manifest.source_hashes $sourceHashes
+    Assert-Stage1BuildIdentity $repo $BuildDir $manifest
     foreach ($name in $dependencyHashes.Keys) {
         if ($manifest.dependency_hashes.$name -ne $dependencyHashes[$name]) { throw "Stage1 dependency changed: $name" }
     }

@@ -45,32 +45,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tool
 if ($Engine -eq 'production' -and ($GlBackend -ne 'ptx' -or $OuterUnrollU -ne 0 -or $AddSubMask -ne 1)) {
     throw 'Production requires -GlBackend ptx -OuterUnrollU 0 -AddSubMask 1; use -Engine development for comparisons'
 }
-$cudaSource = if ($Engine -eq 'production') { 'src/cuda/ecm_cuda_stage2.cu' } else { 'tools/bench/ecm_cuda_stage2_dev.cu' }
-$cudaStem = [IO.Path]::GetFileNameWithoutExtension($cudaSource)
-$sources = @($cudaSource, 'src/core/ecm_cuda_stage2_main.cpp',
-    'src/core/ecm_expr.cpp', 'src/core/ecm_worktodo.cpp', 'src/core/ecm_queue_config.cpp')
-$deps = $sources + @('src/core/ecm_cuda_stage2.h', 'src/core/ecm_expr.h',
-    'src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h','src/core/ecm_file_publication.h','src/core/ecm_program_version.h','src/core/ecm_result_submission.h','src/core/ecm_result_paths.h','src/core/ecm_result_json.h','src/core/ecm_internal_result.h','src/core/ecm_submission_writer.h','src/core/generated/p95_fft_reference.h',
-    'src/core/ecm_stage2_phase_times.h','src/core/ecm_stage2_ntt_counts.h','src/core/ecm_stage2_d_catalog.h','src/core/ecm_stage2_d_search.h',
-    'src/core/ecm_stage2_tune_portable.h','src/core/ecm_stage2_tune_columns.def','src/core/ecm_stage2_tune_rows.def','src/core/ecm_stage2_portable_model.h','src/core/ecm_stage2_width_prediction.h','src/core/ecm_stage2_runtime_tune.h','src/core/ecm_stage2_runtime_cache.h','src/core/ecm_stage2_width_reference.h','src/core/ecm_stage2_portable_driver.inl','src/core/ecm_stage2_probability.h','src/core/ecm_stage1_cost_csv.h',
-    'src/core/ecm_stage2_giant_work.h','src/core/ecm_stage2_relocation.h','src/core/ecm_stage2_giant_tree.h',
-    'src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h', 'src/core/ecm_stage2_ntt_memory.h', 'src/core/ecm_stage2_giant_memory.h', 'src/core/ecm_stage2_s4_memory.h', 'src/core/ecm_stage2_s4_program.h', 'src/core/ecm_stage2_modulus.h', 'src/core/ecm_stage2_logging.h', 'src/core/ecm_stage2_console.h', 'src/core/ecm_stage2_queue_state.h', 'src/core/ecm_stage2_fingerprint.h', 'src/cuda/ecm_stage2_tune.cuh',
-    'src/core/ecm_stage2_factorize.h', 'src/core/ecm_stage2_cost_profile.h', 'src/core/ecm_stage2_tune_format.h', 'src/core/ecm_stage2_tune_ecm.h', 'src/core/ecm_stage2_tune_grid.h', 'src/core/ecm_stage2_tune_prediction.h', 'src/core/ecm_stage2_tune_auto.h', 'src/core/ecm_stage2_tune_components.h', 'src/core/ecm_stage2_tune_ntt_profile.h', 'src/core/ecm_stage1_tune_profile.h', 'src/core/ecm_stage2_workspace_memory.h', 'src/core/ecm_stage2_owner_memory.h', 'src/core/ecm_stage2_giant_state.h', 'src/core/ecm_stage2_initial_memory.h',
-    'src/core/ecm_worktodo.h', 'src/core/ecm_queue_config.h', 'src/core/ecm_toml.h',
-    'src/core/generated/ecm_config_generated.h', 'src/core/generated/ecm_toml_schema.h', 'src/core/generated/ecm_toml_template.h',
-    'config/ecm_options.json', 'config/ecm_config.generated.json',
-    'tools/gen/generate_ecm_config.py', 'tools/build/internal/check_ecm_config.cmake',
-    'tools/build/build_stage2_local.ps1','tools/build/internal/gmp_dependency.ps1','tools/build/internal/cuda_toolchain.ps1')
-if ($Engine -eq 'production') {
-    $deps += @('kernels/cuda/stage2_giant_chain.cuh')
-    $deps += @(Get-ChildItem -LiteralPath 'src/cuda/stage2' -File -Filter '*.cuh' |
-        Sort-Object Name | ForEach-Object { 'src/cuda/stage2/' + $_.Name })
-} else {
-    $deps += @(
-    'tools/bench/stage2_tree_gpu.cu', 'tools/bench/stage2_d_model.cuh', 'tools/bench/ntt_poly_probe.cu', 'tools/bench/ntt_coop_outer.cuh', 'tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/bench/ntt_goldilocks_addsub.cuh',
-    'tools/bench/stage2_baby_device.cuh', 'tools/bench/stage2_baby_host.cuh', 'tools/bench/stage2_point_mersenne.cuh', 'tools/bench/ntt_carry_partial.cuh',
-    'tools/bench/stage2_giant_base_host.cuh','tools/bench/stage2_scaled_frontier.cuh','src/cuda/stage2/scale_plain.cuh')
-}
+. (Join-Path $PSScriptRoot 'internal/cuda_build_state.ps1')
+$inventory = Get-EcmCudaInventory $repo (Join-Path $Build 'cuda_sources.json')
+$includeDirs = @((Join-Path $Gmp 'include'), 'include','src','src/core','src/cpu','kernels/cuda')
+$sourceSet = Get-EcmStage2SourceSet $repo $inventory $Engine $includeDirs
+$sources = @($sourceSet.Sources)
+$cudaSources = @($sourceSet.CudaSources)
+$deps = @($sourceSet.Dependencies)
+$cudaDeps = @($sourceSet.CudaDependencies)
+$objectNames = Get-EcmObjectNames $sources
 $objDir = Join-Path $Build '_objects'
 New-Item -ItemType Directory -Force $objDir | Out-Null
 $exe = Join-Path $Build 'ecm_cuda_stage2.exe'
@@ -87,15 +70,26 @@ $gmpHashes = $gmpDependency.Hashes
 $signature += "gmp=$Gmp"
 foreach ($name in $gmpHashes.Keys) { $signature += "gmp/$name=$($gmpHashes[$name])" }
 $signatureText = $signature -join "`n"
-$cudaDeps = @($cudaSource,'src/core/ecm_cuda_stage2.h','src/core/ecm_stage2_relocation.h','src/core/ecm_stage2_giant_tree.h','src/core/ecm_stage2_d_catalog.h','src/core/ecm_stage2_ntt_counts.h','src/core/ecm_stage2_phase_times.h','src/core/ecm_stage2_geometry.h', 'src/core/ecm_stage2_requests.h','src/core/ecm_stage2_ntt_memory.h','src/core/ecm_stage2_giant_memory.h','src/core/ecm_stage2_s4_memory.h','src/core/ecm_stage2_s4_program.h','src/core/ecm_stage2_modulus.h','src/core/ecm_stage2_logging.h',
-    'src/cuda/ecm_stage2_tune.cuh','src/core/ecm_stage2_workspace_memory.h','src/core/ecm_stage2_owner_memory.h','src/core/ecm_stage2_giant_state.h','src/core/ecm_stage2_initial_memory.h') + @($deps | Where-Object { $_ -like 'tools/bench/*' -or $_ -like 'src/cuda/stage2/*' -or $_ -like 'kernels/cuda/stage2*' })
+$compileEntries = [ordered]@{}
+$beforeStates = [ordered]@{}
+foreach ($src in $sources) {
+    $stem = $objectNames[$src]
+    $obj = Join-Path $objDir "$stem.obj"
+    $command = "`"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -DNTT_OUTER_UNROLL_U=$OuterUnrollU -DNTT_GL_ADD_SUB_MASK=$AddSubMask " +
+        "--split-compile=$SplitCompile -I `"$Gmp/include`" -Xcompiler /utf-8 -Xcompiler /wd4819 -c `"$src`" -o `"$obj`""
+    $entry = [pscustomobject]@{ file = (Resolve-EcmSourcePath $repo $src); directory = $repo; command = $command; output = $obj }
+    $compileEntries[$src] = $entry
+    $beforeStates[$src] = Get-EcmCompileState $repo $entry $vc.Setup $includeDirs -Production:($Engine -eq 'production')
+}
+$previous = $null
+$manifestPath = Join-Path $Build 'build_manifest.json'
+if (Test-Path -LiteralPath $manifestPath) { $previous = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json }
 if ($HostOnly) {
-    $previous = Get-Content -LiteralPath (Join-Path $Build 'build_manifest.json') -Raw | ConvertFrom-Json
-    $previousSplit = if ($previous.split_compile) { $previous.split_compile } else { 1 }
-    $previousAddSub = if ($null -ne $previous.add_sub_mask) { $previous.add_sub_mask } else { 0 }
-    if ($previous.engine -ne $Engine -or $previous.architecture -ne $Arch -or $previous.gl_fixed_mode -ne $glMode -or
-        $previous.outer_unroll_u -ne $OuterUnrollU -or $previousAddSub -ne $AddSubMask -or $previousSplit -ne $SplitCompile -or $previous.sources[4] -ne $signature[4] -or
-        $previous.cuda_root -ne $cuda.Root -or $previous.host_compiler -ne $vc.Compiler -or $previous.host_version -ne $vc.Version) {
+    if (-not $previous -or $previous.engine -ne $Engine -or $previous.architecture -ne $Arch -or
+        $previous.gl_fixed_mode -ne $glMode -or $previous.outer_unroll_u -ne $OuterUnrollU -or
+        $previous.add_sub_mask -ne $AddSubMask -or $previous.split_compile -ne $SplitCompile -or
+        $previous.toolkit -ne $cuda.VersionText -or $previous.cuda_root -ne $cuda.Root -or
+        $previous.host_compiler -ne $vc.Compiler -or $previous.host_version -ne $vc.Version) {
         throw 'HostOnly requires identical CUDA architecture, backend, schedule and toolkit'
     }
     if (-not $previous.gmp_hashes -or $previous.gmp_hashes.'include/gmp.h' -ne $gmpHashes['include/gmp.h']) {
@@ -104,41 +98,46 @@ if ($HostOnly) {
     foreach ($dep in $cudaDeps) {
         if ($previous.source_hashes.$dep -ne $sourceHashes[$dep]) { throw "HostOnly CUDA dependency changed: $dep" }
     }
-    $cudaObject = Join-Path $objDir "$cudaStem.obj"
-    if (-not (Test-Path -LiteralPath $cudaObject)) { throw 'HostOnly CUDA object missing' }
-    if ($previous.objects -and $previous.objects.$cudaStem -ne (Get-FileHash $cudaObject).Hash) {
-        throw 'HostOnly CUDA object changed'
+    if ($previous.identity_schema -ne 1 -or @($previous.cuda_sources).Count -ne $cudaSources.Count) {
+        throw 'HostOnly requires current CUDA dependency records; rebuild old manifests'
     }
-    $cudaObjectHash = (Get-FileHash $cudaObject).Hash
+    foreach ($src in $cudaSources) {
+        if ($src -notin $previous.cuda_sources) { throw "HostOnly CUDA source set changed: $src" }
+        $unit = $previous.compile_units.$src
+        $state = $beforeStates[$src]
+        if (-not $unit -or $unit.fingerprint -ne $state.fingerprint) { throw "HostOnly CUDA compile dependency changed: $src" }
+        if ($unit.object_sha256 -ne (Get-FileHash -LiteralPath $state.object).Hash) { throw "HostOnly CUDA object changed: $src" }
+    }
 }
-$fresh = -not $Rebuild -and (Test-Path $exe) -and (Test-Path $signaturePath) -and
-    ([IO.File]::ReadAllText((Resolve-Path $signaturePath)) -eq $signatureText)
+$fresh = -not $Rebuild -and (Test-Path $exe) -and (Test-Path $signaturePath) -and $previous -and
+    ([IO.File]::ReadAllText((Resolve-Path $signaturePath)) -eq $signatureText) -and
+    ($previous.sha256 -eq (Get-FileHash -LiteralPath $exe).Hash)
+if ($fresh) {
+    try { Assert-EcmBuildUnits $repo $Build $previous $sources $includeDirs -Production:($Engine -eq 'production') }
+    catch { $fresh = $false }
+}
 if (-not $fresh) {
     $objects = @()
     $compiled = 0
     $compileSeconds = 0.0
     Write-Host "== compile $($sources.Count) translation units =="
     foreach ($src in $sources) {
-        $stem = [IO.Path]::GetFileNameWithoutExtension($src)
+        $stem = $objectNames[$src]
         $obj = Join-Path $objDir "$stem.obj"
         $log = Join-Path $objDir "$stem.log"
         $objects += $obj
-        if ($HostOnly -and $src -eq $cudaSource) {
+        if ($HostOnly -and $src -in $cudaSources) {
             Write-Host ("  skip {0} (verified CUDA object)" -f $stem)
             continue
         }
         $compiled++
-        Write-Host ("  start [{0}/{1}] {2}" -f $compiled, ($sources.Count - [int][bool]$HostOnly), $src)
-        $line = "$($vc.Setup) && `"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -DNTT_OUTER_UNROLL_U=$OuterUnrollU -DNTT_GL_ADD_SUB_MASK=$AddSubMask " +
-            "--split-compile=$SplitCompile " +
-            "-I `"$Gmp/include`" -Xcompiler /utf-8 -Xcompiler /wd4819 " +
-            "-c `"$src`" -o `"$obj`""
+        Write-Host ("  start [{0}/{1}] {2}" -f $compiled, ($sources.Count - $(if ($HostOnly) { $cudaSources.Count } else { 0 })), $src)
+        $compileCommand = $compileEntries[$src].command + " --generate-dependencies-with-compile --dependency-output `"$obj.ecm.d`""
         $sw = [Diagnostics.Stopwatch]::StartNew()
         # Keep setup and compilation on separate lines. Capture via a pipe:
         # direct cmd file redirection crashes NVCC's compiler probe in some
         # restricted Windows execution environments, even on an empty source.
         $commandFile = Join-Path $objDir "$stem.compile.cmd"
-        $compileCommand = $line.Substring(($vc.Setup + ' && ').Length)
         [IO.File]::WriteAllText($commandFile, "@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$compileCommand`r`n", [Text.UTF8Encoding]::new($false))
         & cmd.exe /d /c $commandFile 2>&1 | Out-File -LiteralPath $log -Encoding utf8
         $code = $LASTEXITCODE
@@ -150,6 +149,9 @@ if (-not $fresh) {
             Get-Content $log -Tail 40
             throw "compile failed: $src"
         }
+        $after = Get-EcmCompileState $repo $compileEntries[$src] $vc.Setup $includeDirs -Production:($Engine -eq 'production')
+        Assert-EcmCompileInputs $beforeStates[$src] $after
+        Save-EcmCompileState $after
         Write-Host ("  ok   {0,-26} ({1:N1}s)" -f $stem, $sw.Elapsed.TotalSeconds)
     }
     Write-Host ("compiled {0} TU(s): wall {1:N1}s (nvcc split compile={2})" -f $compiled, $compileSeconds, $SplitCompile)
@@ -171,7 +173,13 @@ if (-not $fresh) {
             throw "Source changed during build: $dep"
         }
     }
-    if ($HostOnly -and (Get-FileHash $cudaObject).Hash -ne $cudaObjectHash) { throw 'Reused CUDA object changed during host build' }
+    $currentSet = Get-EcmStage2SourceSet $repo $inventory $Engine $includeDirs
+    Assert-EcmHashes $sourceHashes (Get-EcmSourceHashes $repo $currentSet.Dependencies) 'Source changed during build'
+    if ($HostOnly) {
+        foreach ($src in $cudaSources) {
+            if ((Get-FileHash $beforeStates[$src].object).Hash -ne $previous.compile_units.$src.object_sha256) { throw "Reused CUDA object changed during host build: $src" }
+        }
+    }
     [IO.File]::WriteAllText((Join-Path (Resolve-Path $objDir) 'build_signature.txt'), $signatureText)
 } else { Write-Host 'Source/toolkit/architecture signature unchanged; executable reused.' }
 foreach ($name in $gmpHashes.Keys) {
@@ -179,11 +187,24 @@ foreach ($name in $gmpHashes.Keys) {
 }
 Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $Build -Force
 $objectHashes = [ordered]@{}
+$compileUnits = [ordered]@{}
 foreach ($src in $sources) {
-    $stem = [IO.Path]::GetFileNameWithoutExtension($src)
-    $objectHashes[$stem] = (Get-FileHash -LiteralPath (Join-Path $objDir "$stem.obj")).Hash
+    $stem = $objectNames[$src]
+    $objectHash = (Get-FileHash -LiteralPath (Join-Path $objDir "$stem.obj")).Hash
+    $objectHashes[$stem] = $objectHash
+    $state = Get-EcmCompileState $repo $compileEntries[$src] $vc.Setup $includeDirs -Production:($Engine -eq 'production')
+    if ($fresh) { $expected = $previous.compile_units.$src.fingerprint }
+    elseif ($HostOnly -and $src -in $cudaSources) { $expected = $beforeStates[$src].fingerprint }
+    else { $expected = (Get-Content -LiteralPath "$($state.object).ecm-state.json" -Raw | ConvertFrom-Json).fingerprint }
+    if ($expected -ne $state.fingerprint) { throw "Compile dependency changed during build: $src" }
+    $compileUnits[$src] = [ordered]@{ entry = $compileEntries[$src]; fingerprint = $state.fingerprint; object_sha256 = $objectHash }
 }
 $manifest = [ordered]@{
+    identity_schema = 1
+    source_inventory_sha256 = (Get-FileHash -LiteralPath (Join-Path $repo 'tools/build/internal/cuda_sources.cmake')).Hash
+    compile_setup = $vc.Setup
+    compile_units = $compileUnits
+    cuda_sources = $cudaSources
     exe = (Resolve-Path $exe).Path
     sha256 = (Get-FileHash $exe -Algorithm SHA256).Hash
     architecture = $Arch
@@ -204,7 +225,7 @@ $manifest = [ordered]@{
     gmp_root = $Gmp
     gmp_hashes = $gmpHashes
 }
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 (Join-Path $Build 'build_manifest.json')
+$manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $Build 'build_manifest.json')
 $buildTimer.Stop()
 Write-Host '== produced =='
 Write-Host ("   ecm_cuda_stage2.exe: {0:N0} B ({1:N1} MB)" -f (Get-Item $exe).Length, ((Get-Item $exe).Length / 1MB))

@@ -20,8 +20,8 @@
 
     Because step 3 writes the very object files nmake is about to want, step 4 is
     normally just a link.  Step 3 always recompiles every selected .cu file: use
-    -Only to restrict it, or -SkipUpToDate to skip translation units whose object
-    is newer than the sources and headers it was built from.
+    -Only to restrict it, or -SkipUpToDate to reuse objects with matching command,
+    dependency-content and object identities.
 
 .PARAMETER BuildDir
     Build directory, relative to the repository root unless rooted.
@@ -39,9 +39,9 @@
     Re-run cmake configure first (adds -DCMAKE_EXPORT_COMPILE_COMMANDS=ON).
 
 .PARAMETER SkipUpToDate
-    Skip a translation unit whose .obj is newer than its source, the kernel headers
-    and CMakeLists.txt.  Faster for host-only edits, but it trusts timestamps: after
-    changing a CMake option, pass -Reconfigure or drop this switch.
+    Reuse an object only when its compile command, response files, transitive
+    dependency contents and recorded object hash all match. Old builds without
+    dependency records compile once to establish their identity.
 
 .PARAMETER NoBuild
     Stop after the parallel compiles (do not run the final cmake --build).
@@ -75,6 +75,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+. (Join-Path $PSScriptRoot 'cuda_build_state.ps1')
 & cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'check_ecm_config.cmake')
 if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
 if (-not [System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
@@ -90,7 +91,8 @@ if (-not (Test-Path $VcVars)) { throw "vcvars64.bat not found: $VcVars" }
 $vcSetup = "call `"$VcVars`"$(if ($VcVersion) { ' -vcvars_ver=' + $VcVersion }) >nul 2>&1"
 
 $cmakeFile = Join-Path $BuildDir "compile_commands.json"
-if ($Reconfigure -or -not (Test-Path $cmakeFile)) {
+if ($Reconfigure -or -not (Test-Path $cmakeFile) -or
+    ($Target -in @('ecm_cuda','ecm_cuda_stage2') -and -not (Test-Path (Join-Path $BuildDir 'cuda_target_graph.json')))) {
     Write-Host "configuring $BuildDir (exporting compile_commands.json) ..."
     $cfg = "$vcSetup && cmake -S `"$repo`" -B `"$BuildDir`" -DCMAKE_BUILD_TYPE=$Config -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
     & cmd.exe /c $cfg
@@ -98,8 +100,7 @@ if ($Reconfigure -or -not (Test-Path $cmakeFile)) {
     if (-not (Test-Path $cmakeFile)) { throw "cmake did not write compile_commands.json" }
 }
 
-$entries = (Get-Content $cmakeFile -Raw | ConvertFrom-Json) |
-    Where-Object { ($_.command.Replace('\','/')) -match ('CMakeFiles/' + [regex]::Escape($Target) + '\.dir/') } |
+$entries = @(Get-EcmTargetCompileEntries $BuildDir $Target) |
     Where-Object { $_.file -match $SourceRegex } |
     Where-Object { -not $Only -or $_.file -match $Only }
 if (-not $entries) { throw "no .cu entries matched (-Only '$Only')" }
@@ -111,40 +112,18 @@ $logDir = Join-Path $BuildDir "par_nvcc"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 
 # --- decide what to compile -------------------------------------------------
-$newestSource = Get-Date "1970-01-01"
-foreach ($pat in @("kernels\cuda\*", "src\cuda\*", "include\*", "CMakeLists.txt", "kernels\*.h", "src\core\ecm_prac_plan.h", "src\core\ecm_edwards_naf.h")) {
-    $p = Join-Path $repo $pat
-    Get-Item $p -ErrorAction SilentlyContinue | ForEach-Object {
-        if ($_.LastWriteTime -gt $newestSource) { $newestSource = $_.LastWriteTime }
-    }
-}
-
-function Get-ObjPath([string]$command, [string]$dir) {
-    $m = [regex]::Match($command, '-o\s+("[^"]+"|\S+)')
-    if (-not $m.Success) { return $null }
-    $o = $m.Groups[1].Value.Trim('"')
-    if (-not [System.IO.Path]::IsPathRooted($o)) { $o = Join-Path $dir $o }
-    return $o
-}
-
 $tuList = @()
 foreach ($e in $entries) {
     $name = [System.IO.Path]::GetFileNameWithoutExtension($e.file)
-    $obj = Get-ObjPath $e.command $e.directory
-    $skip = $false
-    if ($SkipUpToDate -and $obj -and (Test-Path $obj)) {
-        $objTime = (Get-Item $obj).LastWriteTime
-        $srcTime = (Get-Item $e.file).LastWriteTime
-        # The common progress formatter is host-only; only this CUDA TU includes
-        # it. Driver C++ dependencies are handled by the normal CMake build.
-        if ($name -eq 'cgbn_stage1') {
-            $progressTime=(Get-Item (Join-Path $repo 'src/core/ecm_stage1_gpu_progress.h')).LastWriteTime
-            if ($progressTime -gt $srcTime) { $srcTime=$progressTime }
-        }
-        if ($objTime -gt $srcTime -and $objTime -gt $newestSource) { $skip = $true }
+    $obj = Get-EcmObjectPath $e $BuildDir
+    if (@($entries | Where-Object { [IO.Path]::GetFileNameWithoutExtension($_.file) -ieq $name }).Count -gt 1) {
+        $name = (Get-EcmSourceKey $BuildDir $obj) -replace '[^A-Za-z0-9_.-]', '_'
     }
+    $state = Get-EcmCompileState $repo $e $vcSetup
+    $skip = $SkipUpToDate -and (Test-EcmCompileState $state)
     $tuList += [pscustomobject]@{
         Name = $name; Entry = $e; Obj = $obj; Skip = $skip
+        State = $state
         Bat = Join-Path $logDir "$name.bat"
         Out = Join-Path $logDir "$name.log"
         Err = Join-Path $logDir "$name.err.log"
@@ -167,8 +146,12 @@ $compileStart = Get-Date
 while ($queue.Count -gt 0 -or $running.Count -gt 0) {
     while ($queue.Count -gt 0 -and $running.Count -lt $Jobs) {
         $j = $queue.Dequeue()
-        $bat = "@echo off`r`n$vcSetup`r`nif errorlevel 1 exit /b 1`r`ncd /d `"$($j.Entry.directory)`"`r`n$($j.Entry.command)`r`n"
-        [System.IO.File]::WriteAllText($j.Bat, $bat, [System.Text.Encoding]::ASCII)
+        $compileCommand = $j.Entry.command
+        if ($j.Entry.file -match '\.cu$' -or $j.Entry.command -match '(?i)(?:^|[\\/" ])nvcc(?:\.exe)?(?:"|\s)') {
+            $compileCommand += " --generate-dependencies-with-compile --dependency-output `"$($j.Obj).ecm.d`""
+        }
+        $bat = "@echo off`r`n$vcSetup`r`nif errorlevel 1 exit /b 1`r`ncd /d `"$($j.Entry.directory)`"`r`n$compileCommand`r`n"
+        [System.IO.File]::WriteAllText($j.Bat, $bat, [System.Text.UTF8Encoding]::new($false))
         $j.Start = Get-Date
         $j.Proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$($j.Bat)`"" -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput $j.Out -RedirectStandardError $j.Err
@@ -193,6 +176,9 @@ while ($queue.Count -gt 0 -or $running.Count -gt 0) {
                 $tail = (Get-Content $j.Out -Tail 12 -ErrorAction SilentlyContinue) -join "`n"
                 Write-Host ("  FAIL {0} ({1:N1}s, exit {2})`n{3}" -f $j.Name, $j.Seconds, $code, $tail)
             } else {
+                $after = Get-EcmCompileState $repo $j.Entry $vcSetup
+                Assert-EcmCompileInputs $j.State $after
+                Save-EcmCompileState $after
                 Write-Host ("  ok   {0} ({1:N1}s)" -f $j.Name, $j.Seconds)
             }
             if ($objMissing) { Write-Host ("       (no object file at {0})" -f $j.Obj) }
@@ -219,6 +205,11 @@ if ($slowest) {
 if ($failed.Count -gt 0) {
     Write-Host ("{0} translation unit(s) FAILED; see {1}" -f $failed.Count, $logDir)
     exit 1
+}
+
+foreach ($j in $tuList) {
+    $current = Get-EcmCompileState $repo $j.Entry $vcSetup
+    if (-not (Test-EcmCompileState $current)) { throw "Compile dependency/object changed during build: $($j.Entry.file)" }
 }
 
 if ($NoBuild) { exit 0 }

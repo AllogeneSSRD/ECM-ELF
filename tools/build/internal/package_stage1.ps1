@@ -15,6 +15,8 @@ $splitPath = Join-Path $BuildDir 'split_manifest.json'
 $split = Get-Content -LiteralPath $splitPath -Raw | ConvertFrom-Json
 $manifestPath = Join-Path $BuildDir 'stage1_build_manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'stage1_release_sources.ps1')
+Assert-Stage1BuildIdentity $repo $BuildDir $manifest
 foreach ($name in $gmpDependency.Hashes.Keys) {
     if ($manifest.dependency_hashes.$name -ne $gmpDependency.Hashes[$name]) { throw "Stage1 build/release GMP mismatch: $name" }
 }

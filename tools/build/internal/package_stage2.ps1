@@ -30,6 +30,7 @@ $Gmp = $gmpDependency.Root
 . (Join-Path $PSScriptRoot 'cuda_toolchain.ps1')
 $cuda = Resolve-EcmCudaToolkit -Archs $Arch -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
+. (Join-Path $PSScriptRoot 'cuda_build_state.ps1')
 & cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'check_ecm_config.cmake')
 if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
 function Resolve-RepoPath([string]$Value) {
@@ -54,12 +55,12 @@ if ($manifest.engine -ne 'production' -or $manifest.architecture -ne $Arch -or
     $manifest.sha256 -ne (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash) {
     throw 'Build manifest does not match the requested production candidate'
 }
-# SkipBuild is a packaging convenience, not permission to package stale sources.
-foreach ($entry in $manifest.source_hashes.PSObject.Properties) {
-    if ($entry.Value -ne (Get-FileHash -LiteralPath (Join-Path $repo $entry.Name) -Algorithm SHA256).Hash) {
-        throw "Build sources changed: $($entry.Name); rebuild before packaging"
-    }
-}
+# Regenerate membership, rather than trusting a potentially incomplete old list.
+$inventory = Get-EcmCudaInventory $repo (Join-Path $Build 'cuda_sources.json')
+$includeDirs = @((Join-Path $Gmp 'include'),'include','src','src/core','src/cpu','kernels/cuda')
+$sourceSet = Get-EcmStage2SourceSet $repo $inventory production $includeDirs
+Assert-EcmHashes $manifest.source_hashes (Get-EcmSourceHashes $repo $sourceSet.Dependencies) 'Build sources changed; rebuild before packaging'
+Assert-EcmBuildUnits $repo $Build $manifest $sourceSet.Sources $includeDirs -Production
 if (-not $manifest.gmp_hashes) { throw 'Stage2 build does not record GMP identity; rebuild with the release GMP prefix' }
 foreach ($name in $gmpDependency.Hashes.Keys) {
     if ($manifest.gmp_hashes.$name -ne $gmpDependency.Hashes[$name]) { throw "Stage2 build/release GMP mismatch: $name" }

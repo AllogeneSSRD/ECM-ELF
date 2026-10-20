@@ -113,31 +113,8 @@ target_link_libraries(opencl_ecm_entry ${GMP_LIBRARY})
 # The Stage1 driver and CPU paths are identical source files in the OpenCL and
 # CUDA executables. Keep one source inventory while compiling them per target:
 # each executable still supplies its own GPU backend and compile definitions.
-set(ECM_STAGE1_COMMON_SOURCES
-    src/core/ecm_driver.cpp
-    src/core/ecm_params_init.cpp
-    src/core/ecm_checkpoint.cpp
-    src/core/ecm_stage1_checkpoint_runtime.cpp
-    src/core/ecm_save.cpp
-    src/core/ecm_gpu_common.cpp
-    src/core/ecm_queue_config.cpp
-    src/core/ecm_worktodo.cpp
-    src/core/ecm_stage2_transfer.cpp
-    src/core/ecm_expr.cpp
-    src/core/p95_transfer.cpp
-    src/core/p95_worktodo.cpp
-    src/opencl_ecm_log.cpp
-    src/cpu/ecm_edwards_cpu.cpp
-    src/cpu/ecm_edwards_save.cpp
-    src/cpu/simd_edwards.cpp
-    src/cpu/simd_mont_ifma.cpp
-    src/cpu/ecm_mont_cpu.cpp
-    src/cpu/simd_mont_curve.cpp
-    src/core/ecm_mont_ckpt.cpp
-    src/core/ecm_stage1_exp.cpp
-    src/core/ecm_stage1_exp_cache.cpp
-)
-
+include(${CMAKE_SOURCE_DIR}/tools/build/internal/cuda_sources.cmake)
+ecm_cuda_write_inventory("${CMAKE_BINARY_DIR}/cuda_sources.json")
 # Source identity is host-only: changing result/reporting code must not force
 # all CUDA kernel translation units to rebuild.
 execute_process(COMMAND git rev-parse --short=12 HEAD WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -285,11 +262,8 @@ if(ECM_ENABLE_CUDA)
             message(FATAL_ERROR "The minimal ecm_cuda_stage2 process/queue driver currently requires Windows")
         endif()
         add_executable(ecm_cuda_stage2
-            src/cuda/ecm_cuda_stage2.cu
-            src/core/ecm_cuda_stage2_main.cpp
-            src/core/ecm_expr.cpp
-            src/core/ecm_worktodo.cpp
-            src/core/ecm_queue_config.cpp)
+            ${ECM_STAGE2_PRODUCTION_SOURCES}
+            ${ECM_STAGE2_HOST_SOURCES})
         target_include_directories(ecm_cuda_stage2 PRIVATE ${GMP_INCLUDE_DIR})
         target_compile_definitions(ecm_cuda_stage2 PRIVATE NTT_GL_FIXED_MODE=3 NTT_OUTER_UNROLL_U=0 NTT_GL_ADD_SUB_MASK=1)
         target_link_libraries(ecm_cuda_stage2 PRIVATE ${GMP_LIBRARY})
@@ -317,56 +291,11 @@ if(ECM_ENABLE_CUDA)
 
     add_executable(ecm_cuda
         ${ECM_STAGE1_COMMON_SOURCES}
-        src/opencl_ecm_runtime_config.cpp
-        # CUDA backend + CGBN stage 1 (host TU + per-TPI kernel TUs)
-        src/cuda/ecm_cuda_backend.cu
-        src/cuda/ecm_cuda_edwards.cu
-        src/cuda/ecm_cuda_edwards_naf.cu
-        kernels/cuda/cgbn_edwards_instances_tpi4.cu
-        kernels/cuda/cgbn_edwards_instances_tpi8.cu
-        kernels/cuda/cgbn_edwards_instances_tpi16_2560_4096.cu
-        kernels/cuda/cgbn_edwards_instances_tpi16_4608_6144.cu
-        kernels/cuda/cgbn_edwards_instances_tpi16_6656_8192.cu
-        kernels/cuda/cgbn_edwards_instances_tpi32_9216_12288.cu
-        kernels/cuda/cgbn_edwards_instances_tpi32_13312_17408.cu
-        kernels/cuda/cgbn_stage1.cu
-        kernels/cuda/cgbn_stage1_kernels_tpi4.cu
-        kernels/cuda/cgbn_stage1_kernels_tpi8.cu
-        kernels/cuda/cgbn_stage1_kernels_tpi16.cu
-        kernels/cuda/cgbn_stage1_kernels_tpi32.cu
-        # Suyama param0 kernel variants (gpu_param = 0), kept in a separate TU so
-        # the param3 builds do not pay for the extra instantiations.
-        kernels/cuda/cgbn_stage1_kernels_suyama.cu
-        # param2 ("batch 2", 6-torsion) variants (gpu_param = 2): same kernel body as the
-        # Suyama family, instantiated with CONST_DIFF = true (no xdiff multiply).  Separate
-        # TU on purpose -- a runtime flag cost 34% (docs/performance/STAGE1.md).
-        kernels/cuda/cgbn_stage1_kernels_param2.cu
-        # The TPI=16 (2560..8192) and TPI=32 (9216..16384) lookups of the two families above,
-        # each in its own TU.  They dominate the kernel compile time: with everything in one
-        # file the suyama TU alone took 745 s and param2 711 s, which made them the critical
-        # path of the parallel build even with 6 concurrent nvcc jobs.  Split 2026-09-25 --
-        # see docs/performance/STAGE1.md 8.8.
-        kernels/cuda/cgbn_stage1_kernels_suyama_tpi16.cu
-        kernels/cuda/cgbn_stage1_kernels_suyama_tpi32.cu
-        kernels/cuda/cgbn_stage1_kernels_param2_tpi16.cu
-        kernels/cuda/cgbn_stage1_kernels_param2_tpi32.cu
-    )
+        ${ECM_STAGE1_CUDA_SOURCES})
     ecm_stage1_identity_sidecar(ecm_cuda)
 
     if(ECM_CUDA_ENABLE_PRAC)
-        target_sources(ecm_cuda PRIVATE
-            kernels/cuda/cgbn_stage1_prac_kernels.cu
-            kernels/cuda/cgbn_stage1_prac_small.cu
-            kernels/cuda/cgbn_stage1_prac_tpi16.cu
-            kernels/cuda/cgbn_stage1_prac_tpi32.cu
-            kernels/cuda/cgbn_stage1_prac_tpi32_9216_10240.cu
-            kernels/cuda/cgbn_stage1_prac_tpi32_11264_12288.cu
-            kernels/cuda/cgbn_stage1_prac_tpi32_13312_14336.cu
-            kernels/cuda/cgbn_stage1_prac_tpi32_15360_16384.cu
-            kernels/cuda/cgbn_stage1_prac_alternate32.cu
-            kernels/cuda/cgbn_stage1_prac_single_add.cu
-            kernels/cuda/cgbn_stage1_prac_constants.cu
-            src/core/ecm_prac_plan.cpp)
+        target_sources(ecm_cuda PRIVATE ${ECM_STAGE1_PRAC_SOURCES})
     endif()
     target_compile_definitions(ecm_cuda PRIVATE ECM_HAS_CUDA_EDWARDS=1 ECM_CUDA_ENABLE_PRAC=$<BOOL:${ECM_CUDA_ENABLE_PRAC}>)
     # CGBN uses uint32_t without including stdint.h. CUDA 12.6 does not provide
@@ -718,3 +647,6 @@ foreach(_ecm_config_target ecm ecm_cuda ecm_cuda_stage2 ecm_gui)
         add_dependencies(${_ecm_config_target} ecm_config_check)
     endif()
 endforeach()
+
+# Export object owners for build/dependency identity without changing CUDA flags.
+ecm_cuda_write_target_graph()

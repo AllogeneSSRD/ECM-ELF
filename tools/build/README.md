@@ -25,7 +25,9 @@ Stage1 默认 `Jobs=8`，Stage2 默认 `SplitCompile=8`。PS1 为默认参数来
 
 - `dev/`：GUI、CMake辅助、独立树实验驱动及显式实验构建。
 - `test/`：NTT/点运算探针、CPU树参考和数学门禁构建。
-- `internal/`：并行 nvcc、配置一致性、工具链选择、Stage1 拆分及两阶段打包。
+- `internal/`：CUDA 权威源清单与依赖身份、并行 nvcc、配置一致性、工具链选择、Stage1 拆分及两阶段打包。
+
+CUDA 源组在 `internal/cuda_sources.cmake` 维护，构建目录中的 JSON 由它生成；不要在脚本中另抄源文件列表。递归包含、编译命令和对象身份由 `internal/cuda_build_state.ps1` 校验；复用规则和测试入口见 [CUDA 源清单与依赖身份](../../docs/usage/BUILD.md#cuda-源清单与依赖身份)。
 
 `dev/build_stage2_tree_gpu.ps1` 的原型驱动与根目录 Stage2 生产/开发队列程序不同。实际生产算术和当前限制见 [NTT](../../docs/architecture/NTT.md)、[Stage2使用](../../docs/usage/STAGE2.md)。
 

@@ -36,7 +36,7 @@ param(
     [switch]$EnablePrac,       # experimental resident/PRAC kernels; excluded by default
     [switch]$FullRebuild,
     [switch]$RelinkOnly,
-    [switch]$Incremental,      # skip CUDA TUs whose object is newer than the sources (fast host-only edits)
+    [switch]$Incremental,      # reuse CUDA TUs only when dependency/command/object identities match
     [string]$Extra = "",       # extra cmake definitions, e.g. -Extra "-DECM_MERS_FOLD=1"
     [string]$Gmp = "",
     [string]$OpenSslRoot = "",
@@ -50,6 +50,7 @@ if (-not [System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $rep
 if (-not $Gmp) { $Gmp = Join-Path $repo "third_party\gmp-zen3\dist" }
 if (-not $OpenSslRoot) { $OpenSslRoot = "D:/code/vcpkg/installed/x64-windows" }
 . (Join-Path $PSScriptRoot 'internal/cuda_toolchain.ps1')
+. (Join-Path $PSScriptRoot 'internal/cuda_build_state.ps1')
 $cuda = Resolve-EcmCudaToolkit -Archs $Arch -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
 $VcVars = $vc.VcVars
@@ -94,8 +95,7 @@ if ($LASTEXITCODE -ne 0) { throw "source encoding check failed" }
 if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 
 if ($FullRebuild) {
-    Get-ChildItem (Join-Path $BuildDir "CMakeFiles\ecm_cuda.dir\kernels\cuda") -Filter *.obj -ErrorAction SilentlyContinue |
-        Remove-Item -Force
+    Remove-EcmCudaObjects $BuildDir
     Write-Host "   (CUDA objects removed)"
 }
 
@@ -119,3 +119,19 @@ if (Test-Path $exe) {
 } else {
     throw "no ecm_cuda.exe in $BuildDir"
 }
+
+. (Join-Path $PSScriptRoot 'internal/stage1_release_sources.ps1')
+$localObjects = [ordered]@{}
+foreach ($obj in (Get-Stage1CudaObjects $BuildDir)) {
+    $localObjects[$obj] = (Get-FileHash -LiteralPath (Join-Path $BuildDir $obj)).Hash
+}
+[ordered]@{ identity_schema = 1; engine = 'production'; tiers = $Tiers; enable_prac = [bool]$EnablePrac;
+    compile_setup = $vc.Setup; gmp_root = $Gmp;
+    dependency_hashes = [ordered]@{ header = (Get-FileHash (Join-Path $Gmp 'include/gmp.h')).Hash;
+        library = (Get-FileHash (Join-Path $Gmp 'lib/gmp.lib')).Hash; runtime = (Get-FileHash (Join-Path $Gmp 'bin/gmp-10.dll')).Hash };
+    architecture = $Arch; cuda_root = $cuda.Root; toolkit = $cuda.VersionText;
+    host_compiler = $vc.Compiler; host_version = $vc.Version;
+    source_inventory_sha256 = (Get-FileHash (Join-Path $PSScriptRoot 'internal/cuda_sources.cmake')).Hash;
+    source_hashes = (Get-Stage1ReleaseSources $repo -EnablePrac:$EnablePrac -BuildDir $BuildDir);
+    objects = $localObjects; executable_sha256 = (Get-FileHash -LiteralPath $exe).Hash
+} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $BuildDir 'stage1_local_manifest.json') -Encoding utf8
