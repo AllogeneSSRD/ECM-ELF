@@ -33,6 +33,8 @@ Stage1 的位宽与实例分组由 `include/ecm/cuda/tiers.def` 统一维护；�
 
 Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/STAGE2.md#cuda-模块边界)。`test/build_cuda_p2_arithmetic_probe.ps1` 与 `test/build_ntt_graph_probe.ps1` 可复用通过身份校验的生产对象；使用生产 NTT 的其他探针统一通过 `internal/cuda_ntt_probe.ps1` 编译显式源清单，并保留各自的默认流模式。
 
+本机完整位宽验收入口为 `tools/test/test_cuda_p5_native.py`；另备发布静态检查 `test_cuda_p5_release.py` 和发布镜像运行 `test_cuda_p5_images.py`。本轮验收限定本机LOCAL，多架构发布暂缓；实际覆盖及前置条件见 [CUDA 模块验收](../../docs/performance/CUDA_STRUCTURE_QUALIFICATION.md)。`tools/bench/prepare_cuda_refactor_qualification.py --inputs-only` 只准备输入，生成的计划不能进入采样；`qualify_cuda_refactor.py` 要求就绪计划与通过的前置门禁，使用冻结程序进行配对性能验收。所有测试和性能入口均须显式运行，构建器不自动调用。
+
 `dev/build_stage2_tree_gpu.ps1` 的原型驱动与根目录 Stage2 生产/开发队列程序不同。实际生产算术和当前限制见 [NTT](../../docs/architecture/NTT.md)、[Stage2使用](../../docs/usage/STAGE2.md)。
 
 独立 CPU Edwards Stage2 使用 `test/build_cpu_stage2.ps1`；`-GwPoly` 启用 GWNUM/polymult 多线程快速多项式后端，无此开关保留 libecm 构建。依赖、运行参数和输出见 [CPU Stage2](../../docs/usage/EDWARDS_CPU_STAGE2.md)，当前不随 CUDA 发布入口自动打包。

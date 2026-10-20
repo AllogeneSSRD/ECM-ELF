@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 using Word=unsigned long long;
@@ -68,7 +69,12 @@ int main(int argc,char **argv){
     try{
         check(cudaSetDevice(argc>1?std::atoi(argv[1]):1));
         gmp_randstate_t random;gmp_randinit_mt(random);gmp_randseed_ui(random,20261020);
-        for(int w:{1,2,3,4,5,7,8,9,16,17,32,33,64,65,127,128,129,255,256})
+        std::vector<int> widths={1,2,3,4,5,7,8,9,16,17,32,33,64,65,127,128,129,255,256};
+        if(argc>2){
+            if(argc!=3 || std::strcmp(argv[2],"--all-words"))throw std::runtime_error("usage: probe [DEVICE [--all-words]]");
+            widths.clear();for(int w=1;w<=256;++w)widths.push_back(w);
+        }
+        for(int w:widths)
             for(int tail:{1,63,64})for(bool mersenne:{false,true}){
                 const int bits=std::max(2,(w-1)*64+tail);
 #define ECM_PROBE_ROW(NW,FN,...) if(w<=NW){run<NW>(w,bits,mersenne,random);}else

@@ -50,4 +50,6 @@ GCD=1 表示本项未找到因子；GCD=N 是饱和/退化结果，需要细分�
 
 功能存在、通过构建、算术正确、性能提升和发布资格是不同结论。当前实现以源码与已完成验证为依据；性能数据绑定输入及冻结二进制。规划查询不执行曲线，组件 payload 不代表全进程显存峰。
 
+本机LOCAL完整位宽、可选路径及配对性能的实际覆盖与证据见 [CUDA 模块验收](../performance/CUDA_STRUCTURE_QUALIFICATION.md)。多架构发布暂缓；构建、兼容镜像或PTX JIT结果与目标实体GPU的原生运行分别记录。
+
 模块行为分别见 [Stage1](STAGE1.md)、[Stage2](STAGE2.md)、[NTT](NTT.md)、[内存](MEMORY.md)、[配置](CONFIGURATION.md)。未完成工作集中在 [TODO](../TODO.md)。
