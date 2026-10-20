@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+from stage2_native_source import STAGE2
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -20,9 +21,9 @@ def main():
     p.add_argument('--vcvars',type=Path,default=Path(
         r'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat'))
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
-    source=ROOT/'src/cuda/ecm_cuda_stage2.cu'
-    baby=ROOT/'src/cuda/stage2/stage2_baby_host.cuh'
-    mont=between(source.read_text(encoding='utf-8'),'static int mont_selftest(','static int xadd_selftest(')
+    source=STAGE2/'checks.cpp'
+    baby=STAGE2/'points.cpp'
+    mont=between(source.read_text(encoding='utf-8'),'int mont_selftest(','int xadd_selftest(')
     allocate=between(baby.read_text(encoding='utf-8'),'    BabyBuffer dn,dqx,dqz,da,dm,dj,dx,dz,tree,output,mask;',
                      '    CK(cudaMemcpy(dn.ptr')
     allocate=allocate.replace('tree.allocate(words*8)','tree.allocate(words*8+(mutate?8:0))')

@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import time
+from stage2_native_source import native_view
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -43,7 +44,7 @@ def statement(text, anchor):
 def extract(text):
     begin = text.index('struct S4Ctx {')
     ctx = text[begin:text.index('\n};', begin)+3]
-    start = text.index('static int s4_reduce_selftest(')
+    start = text.index('int s4_reduce_selftest(')
     selftest = text[start:text.index('\n}', start)+2]
     cases = re.search(r'const unsigned long long cases = (\d+);', selftest)
     if not cases or int(cases[1]) != 96:
@@ -85,15 +86,15 @@ def main():
     if out.exists() and any(out.iterdir()):
         raise ValueError('use a fresh output directory')
     out.mkdir(parents=True, exist_ok=True)
-    source = ROOT/'src/cuda/ecm_cuda_stage2.cu'
+    native_text, native_sources = native_view()
     template = Path(__file__).with_name('stage2_s4_memory_fixture.cpp')
     program_template = Path(__file__).with_name('stage2_s4_program_fixture.cpp')
     headers = ('ecm_stage2_s4_memory.h', 'ecm_stage2_s4_program.h', 'ecm_stage2_requests.h', 'ecm_stage2_geometry.h', 'ecm_stage2_giant_tree.h')
-    files = [source, template, program_template, Path(__file__).resolve(), *(ROOT/'src/core'/h for h in headers)]
+    files = [*native_sources, Path(__file__).with_name('stage2_native_source.py'), template, program_template, Path(__file__).resolve(), *(ROOT/'src/core'/h for h in headers)]
     identities = {str(f.relative_to(ROOT)):sha(f) for f in files}
     result = dict(complete=False, sources=identities, gpu_calls=0, scope='s4_component_allocation_events')
     try:
-        native = extract(source.read_text(encoding='utf-8'))
+        native = extract(native_text)
         cpp = template.read_text(encoding='utf-8')
         for h in headers:
             cpp = cpp.replace('"../../src/core/'+h+'"', '"'+(ROOT/'src/core'/h).as_posix()+'"')

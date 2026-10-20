@@ -2,7 +2,21 @@
 
 ## CUDA 模块边界
 
-`src/cuda/ecm_cuda_stage2.cu` 负责 ECM 流程：baby/F/G 树、inverse、fold、scaled 下降、GCD、计数和检查收尾。它通过 `include/ecm/cuda/stage2_launch.h` 与 `ntt/runtime.h` 调用底层模块，不定义设备核。`src/cuda/stage2/` 保留主机打包、归一化和多项式编排；这些流程尚未继续拆成独立主机模块。
+`src/cuda/stage2/` 是生产 Stage2 的普通 C++ 主机模块，私有头声明模块间合同，不包含整段引擎实现。公共入口仍为 `src/core/ecm_cuda_stage2.h`。
+
+- `engine.cpp` 接入一条存档曲线，编排初始化、relocation 试算/重放、检查收尾和结果；`batch.cpp` 执行单次区间的 giant 批循环、fold/下降阶段和因子扫描。
+- `plan.cpp` 维护 D 选择、设备/形状/请求/预算查询及计划报告。执行与查询复用 `prepare_stage2_plan`；查询直接使用模数上下文，不进入曲线入口或算术自检。`plan_runtime.h` 保留曲线规划缓存的寿命；纯 giant 坐标分块公式位于 `src/core/ecm_stage2_giant_chunk.h`。
+- `points.cpp` 维护 baby/giant 生成、分段与分组逆、单位性恢复及 baby 复用缓存。`tree.cpp` 维护 F/G 树布局、实际次数、空位、根选择和子节点释放。
+- `product.cpp` 维护普通/批量多项式乘法、输入打包、输出窗口、驻留输入合同与 NTT/S4 计数；不负责树遍历或 GCD。`remainder.cpp` 维护 Newton 逆、fold、scaled root/frontier 和下降。
+- `s4.cpp` 准备模数/shape 并执行归约 hook；`checks.cpp` 维护必需自检、GMP 抽样、异步快照、carry/归约检查及排空。`factors.cpp` 负责块积读回和目标 N 上的真因子记录。
+- `resources.cpp` 实现点、S4、fold/frontier owner 的分配、租约、事件和析构方法；类字段、默认值和接口分别声明在所属模块头中。`context.cpp` 提供共享编码与整数帮助函数。`options.cpp` 在一个翻译单元中先设置生产默认值，再按固定次序构造环境快照及共享状态，保持原来的解析时机。
+- `diagnostics.cpp` 保留可选夹具、GMP 参考、转储、故障注入和崩溃报告；这些诊断仍由现有开关触发。`tune.cpp` 使用生产 NTT 运行时执行校准。
+
+诊断 TODO：`NTT_BABY_DEVICE_TEST` 自建模数的夹具在 M127 的活动梅森点上下文中会报 affine GMP mismatch，通用8193位输入下通过；修复前需核对并验证设备点模数状态的刷新及恢复。正常曲线与必需算术自检不依赖该合成夹具。
+
+主要计算依赖为 engine/batch → points、tree、remainder、factors，tree/remainder → product → NTT/S4 → 中立启动接口。底层模块不包含 `engine.h`，计划模块不依赖曲线执行。资源实现依赖所属 owner 的声明及检查排空接口。可选检查通过有限的 GMP 参考函数调用诊断模块；诊断夹具可调用被测模块，但不能选择或接管生产流程。S4 自检与异步检查通过明确接口复用实际归约和 shape。
+
+`S4ResidentOwner` 持有独立分配，`S4DeviceBatch` 显式携带 owner、范围和元数据，fold/frontier 只借用合同允许的存储。pinned 输入/输出槽及快照事件仍使用原有等待和释放顺序；资源拆分不增加同步。每个成功结果及 relocation 决策前排空检查，reducer 析构时先排空依赖 shape/N 的快照，再释放 shape、设备/主机缓冲和事件。
 
 `kernels/cuda/stage2/arithmetic_kernels.cu` 是点与系数算术的设备编译单元。`point.cuh`/`point_mersenne.cuh` 处理点算术，`giant_chain.cuh` 处理相邻 seed 和 chain，`baby_giant.cuh` 处理 baby 归一化，`s4_reduce.cuh` 处理系数归约，`pack.cuh` 处理输入打包，`coefficient_ops.cuh` 与 `plain_scale.cuh` 处理系数搬运和缩放。设备常量及其上传接口归同一编译单元所有；不使用 RDC。
 
@@ -10,7 +24,7 @@
 
 NTT 主机规划、运行时、Graph 和校验位于 `src/cuda/ntt/`，设备变换和 carry 位于 `kernels/cuda/ntt/`，域原语位于 `kernels/cuda/shared/`。主机持有缓冲、事件、错误检查和计时，设备模块提供薄启动接口；依赖方向为 ECM 编排 → NTT/算术接口 → 设备原语。NTT 不依赖 ECM 树、fold 或 GCD，详见 [NTT 代码入口](NTT.md#代码入口与依据)。
 
-生产源由 `STAGE2_PRODUCTION` 清单选择；开发 wrapper 位于 `tools/bench/ecm_cuda_stage2_dev.cu`，继续使用独立实验引擎。实验探针可链接生产 NTT 模块或包含纯设备原语，生产闭包不包含 `tools/bench/`、`tools/experiments/` 或 `.refactor/`。CPU 内存模型测试的源码提取仅用于 CUDA 测试替身，不参与产品构建。
+生产源由 `STAGE2_PRODUCTION` 清单选择，其中 `STAGE2_ENGINE` 显式列出15个主机模块。开发 wrapper 位于 `tools/bench/ecm_cuda_stage2_dev.cu`，使用独立实验树/NTT 引擎及 `tools/bench/stage2_tune.cuh` 的实验校准；不编译生产 Stage2 流程模块。两者仅共享纯设备原语、有限的 plain-scale 主机帮助函数及 JSON 转义工具。实验探针也可显式链接生产 NTT 模块。生产闭包不包含 `tools/bench/`、`tools/experiments/` 或 `.refactor/`。CPU 内存模型测试的源码提取仅用于 CUDA 测试替身，不参与产品构建。
 
 ## 输入与表示
 
@@ -24,7 +38,7 @@ save提供目标N、sigma、B1和归一化X，不自动推断承载指数。Suya
 
 完整tune可按成本与联合显存比较普通/合法承载，允许配置跨条件复用及宽度/B2估算，详见[Auto B2/tune](AUTO_B2.md)。合法梅森worktodo结合已知因子和save验证后提供承载指数；仅save不猜指数。显式`--carrier-exponent 0`锁定普通模数。N本身为完整梅森数时，默认归约路径仍可使用梅森快速归约。
 
-承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/ecm_cuda_stage2.cu#L8401)。
+承载路径直接接入save的仿射X及Z=1，不重跑Stage1、不再次应用可选的12倍标量。逆元、单位性与最终GCD均针对目标N；承载增加的是Stage2算术位宽，合法性并不保证性能更优。依据：[save解析](../../src/core/ecm_cuda_stage2_main.cpp#L123)、[承载校验](../../src/core/ecm_stage2_modulus.h#L28)、[坐标接入](../../src/cuda/stage2/engine.cpp#L114)。
 
 设备点坐标使用 Montgomery 域，NTT digit 在 Goldilocks 域，多项式系数归约后为普通规范整数。不同表示不能直接相乘或判断数学相等。
 
@@ -112,7 +126,7 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 
 ## 代码依据
 
-- [生产引擎](../../src/cuda/ecm_cuda_stage2.cu)：baby/F、[`run_batched`](../../src/cuda/ecm_cuda_stage2.cu#L6652)、scaled下降、GCD；[完整计时输出](../../src/cuda/ecm_cuda_stage2.cu#L8898)。
+- [生产引擎](../../src/cuda/stage2/engine.cpp)：`run_real`、relocation 和 [完整计时输出](../../src/cuda/stage2/engine.cpp#L611)；[批次流程](../../src/cuda/stage2/batch.cpp)：`run_batched`；[规划](../../src/cuda/stage2/plan.cpp)：`prepare_stage2_plan`、`ecm_cuda_stage2_plan`。
 - [模数上下文](../../src/core/ecm_stage2_modulus.h#L28)：`configure`，目标/承载资格。
 - [请求程序](../../src/core/ecm_stage2_requests.h#L78)：`request_program`；[F树组](../../src/core/ecm_stage2_geometry.h#L147)：`tree_multiply_groups`；[G树布局/分组与选择](../../src/core/ecm_stage2_giant_tree.h)：`giant_tree_balanced`、`giant_tree_layout`、`giant_tree_multiply_groups`。
 - [点模乘](../../kernels/cuda/stage2/point.cuh)、[梅森点算术](../../kernels/cuda/stage2/point_mersenne.cuh)、[NTT](NTT.md)、[内存](MEMORY.md)。

@@ -1,5 +1,6 @@
 #pragma once
 #include "ecm/cuda/stage2_launch.h"
+#include "../common/plain_scale.h"
 
 // Included after s2g_mont_mul and S2G_DISPATCH. Coefficients stay in the plain
 // domain: Mont(h, factor*R mod N) = h*factor mod N, R = 2^(64*nw).
@@ -11,13 +12,6 @@ static void s2g_launch_plain_scale(int nw,size_t count,unsigned long long *h,
 {
     ecm_launch_s2g_plain_scale_kernel<NW>(EcmCudaLaunch{(unsigned)((count+127)/128),128}, h,count,factor,n,ninv,nw);
 }
-
-struct PlainScaleStats {
-    bool requested=false,enabled=false;
-    unsigned long long coefficients=0,h2d_bytes=0,check_d2h_bytes=0,checked_words=0;
-    double seconds=0;
-    const char *fallback="none";
-};
 
 // scratch is a dead W-word slot in a separate owner allocation. No allocation
 // on the normal path; diagnostic snapshots are host vectors, counted separately.

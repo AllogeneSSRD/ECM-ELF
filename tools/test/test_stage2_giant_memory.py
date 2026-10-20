@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools/bench'))
 from stage2_memory_ledger import parse
 from bench_stage2_production import sha
+from stage2_native_source import native_view
 
 
 def workspace_sites(source):
@@ -108,12 +109,11 @@ def main():
     if out.exists() and any(out.iterdir()):
         raise ValueError('use a fresh output directory')
     out.mkdir(parents=True, exist_ok=True)
-    source = ROOT/'src/cuda/ecm_cuda_stage2.cu'
+    text, native_sources = native_view()
     template = Path(__file__).with_name('stage2_giant_memory_fixture.cpp')
-    files = [source,template,Path(__file__).resolve(),ROOT/'src/core/ecm_stage2_giant_memory.h',
+    files = [*native_sources,Path(__file__).with_name('stage2_native_source.py'),template,Path(__file__).resolve(),ROOT/'src/core/ecm_stage2_giant_memory.h',
              ROOT/'src/core/ecm_stage2_geometry.h', ROOT/'src/core/ecm_stage2_giant_state.h', ROOT/'tools/bench/stage2_memory_ledger.py']
     identities = {str(p.relative_to(ROOT)):sha(p) for p in files}
-    text = source.read_text(encoding='utf-8')
     start = text.index('struct S3Workspace {')
     end = text.index('\n};',start)+3
     native = text[start:end]

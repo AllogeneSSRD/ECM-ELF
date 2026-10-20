@@ -85,7 +85,7 @@ def main():
     for path in (ROOT/'src/cuda/ntt').glob('*'):
         text = mask(path.read_text(encoding='utf-8-sig'))
         assert not re.search(r'__global__|__device__|<<<|ecm_stage2_(?:tree|fold|gcd)|S4Ctx', text), path
-    for path in ['src/cuda/ecm_cuda_stage2.cu', 'src/cuda/ecm_stage2_tune.cuh']:
+    for path in ['src/cuda/stage2/engine.cpp', 'src/cuda/stage2/tune.cpp']:
         assert not re.search(r'__global__|__device__|<<<', mask(current(path))), path
     device_paths += sorted((ROOT/'kernels/cuda/ntt').glob('*'))
     for path in device_paths:

@@ -2,7 +2,7 @@
 
 ## 范围与约束
 
-按已确认方案分 P0～P5 实施。P0（0.44.1）完成构建源清单、依赖与身份校验，P1（0.44.2）统一位宽清单并拆分 Stage1 主机与设备职责。本轮实施 P2：拆分 Stage2 算术与 NTT 底层模块，版本只递增修订号至 0.44.3。算法、配置、存档及程序输出语义保持。
+按已确认方案分 P0～P5 实施。P0（0.44.1）完成构建源清单、依赖与身份校验，P1（0.44.2）统一位宽清单并拆分 Stage1 主机与设备职责，P2（0.44.3）拆分 Stage2 算术与 NTT 底层模块。本轮实施 P3：拆分 Stage2 主机流程、资源管理和校验，版本只递增修订号至 0.44.4。算法、配置、存档及程序输出语义保持。
 
 P0 基线为 `36171f4`（0.44.0），当时的 TOML、队列及输出行为作为基线。478 个已跟踪 `src/`、`kernels/`、`include/` 文件的原始摘要保存在 `data/experiments/cuda_structure_p0_20261020/baseline.json`。P0 除版本头外未修改这些文件；P1 的迁移与验证另见下节。
 
@@ -118,3 +118,37 @@ P2 基线为 `5e3ed63`（0.44.2），575 个源码/构建输入摘要及原二�
 P3 的主机流程拆分、P4 的剩余实验消费者/旧分支整理和 P5 的多架构、完整矩阵及性能资格未实施。当前验证范围不等于全部 GPU 架构验收。草稿保留并随提交保存，后续处理由用户决定。
 
 提交前清理了新设备头的末尾空白，并精确保留实验树原有混合换行，仅增加一条包含。`structure_commit` / `host_body_commit` 重新通过；`stage2_commit_build.log`、`development_commit_build.log`、`release_commit_build.log`、`cmake_commit_build.log` 更新最终构建身份。`arithmetic_gmp_commit.log` / `graph_gmp_commit.log` 对最终生产对象重新完成上述 GMP/Graph 门禁；`packaged_runtime_commit` / `cmake_runtime_commit` 各重新完成5组存档与5组 Stage2 对照。`hostonly_commit.log`、`release_skip_commit.log`、`release_archive_commit.json` 核对最终复用及打包身份。`sass_commit/result.json` 的176个设备函数与格式清理前逐函数完全相同，和0.44.2的15个差异保持原样。最终二进制、DLL、清单和发布包冻结在 `committed_binaries_02/`；`final_static_checks.json` 记录9个 Python 文件、12个 PowerShell 脚本、配置生成物与暂存空白检查通过。
+
+## P3 范围与实现
+
+基线为 `d19123b`（0.44.3），本轮版本为0.44.4。证据根为 `data/experiments/cuda_structure_p3_20261020/`，`baseline/` 保存源码摘要及 P2 冻结的本机、发布、Stage1 和开发二进制。先核对 P2 可复用身份，再完成整段源码迁移与资源证明；首批构建、SASS 和存档/交接回归通过后，才分离计划查询并收紧模块依赖，最后进行原生扩展、发布及消费者验收。
+
+- 生产引擎拆为15个普通 C++ 单元：context、options、resources、plan、engine、batch、points、product、tree、remainder、s4、factors、checks、diagnostics、tune。删除已完整迁移的主流程 CU 及 baby/frontier/packing 实现头；保留原有函数、检查、可选分支和旧模型，不进入 P4 的死代码清理。权威清单增加 `STAGE2_ENGINE`，生产共25个 TU，其中只有算术与 NTT 两个设备 CU。
+- 私有头声明字段和有限模块接口；资源方法移到实现单元，保留字段/默认值、局部 owner 声明、分配、析构和事件顺序。成功结果与 relocation 决策前的异步排空仍在原调用位置，没有新增 CUDA 同步。环境默认值及全部动态快照/共享状态仍由同一 options 单元按原顺序初始化。
+- D/预算/请求计算迁到 `prepare_stage2_plan`；公共查询直接使用模数上下文和该规划函数，曲线执行也复用它。`Stage2PlanRuntime` 用原位 optional 保存模型，保持模型缓存到曲线结束的寿命，不增加模型堆分配。纯 giant 分块公式迁入 core，诊断夹具留在 diagnostics。
+- 生产 NTT 校准进入 tune.cpp；实验 wrapper 使用自己的实验校准头和既有独立树/NTT。共享的 JSON 转义、plain-scale 帮助函数和纯设备原语保持有限范围，生产闭包不包含实验源码。未改变实验引擎的选项限制或内存模型能力。
+- 正式职责、依赖与资源合同改写到 [Stage2](../architecture/STAGE2.md#cuda-模块边界)，同步构建、内存、Auto B2、准备开销和总览的当前入口。CPU 资源夹具读取实际头声明和实现方法；产品构建不截取源码。
+
+## P3 验证证据
+
+以下路径均相对于证据根。CUDA13.3 / MSVC14.51.36231 / sm89；原生运行使用 GPU1 RTX4060 Laptop，未改变功耗、频率或其他进程。Stage1 构建限定384档；本轮不是多架构、完整位宽或性能资格验收。
+
+- `step1_build_04.log`、`step1_runtime/summary.json`、`step1_sass/result.json`：首批25单元构建通过，5组 Stage1 存档及5组 Stage2 交接叶/稳定结果一致；176个设备函数与 P2 的完整 SASS 一致。随后 `step2_build_02.log` 完成规划分离后的新目录全构建。
+- `source_complete/result.json`：202个主机函数/方法及38类字段、默认值和构造初始化保持；显式展开规划调用后原语句、字符串、检查和同步一致，全局默认值及快照次序一致。packing、plain-scale、giant planner 和两套校准/清理正文另行逐段比较。95个底层源/接口/NTT 文件的仓库内容身份不变；无反向曲线流程包含。`arithmetic_structure_final/result.json` 的93个设备算术函数门禁通过；`sass_final/result.json` 再次确认176个函数无增删、无指令差异。
+- `s4_memory_final/checks.json`：299592项检查、2136个分配事件、192个树租约通过，保留96窗口必需自检。`giant_memory_final/checks.json`：265638项检查、2054个时间线场景、39665个分配事件检查。`owner_memory_final/result.json`：140场景、6580项检查、1960个分配事件；`initial_memory_final/result.json`：50场景、4556项检查和1500项事件检查。错误原生 extent/metadata 变异仍被拒绝。
+- `extended_runtime_03/summary.json`：14组双版本完整目标叶指纹、稳定结果及算术检查覆盖一致，包含8193/16381/16384位、通用/梅森、已知真因子、基点非单位、预算0、baby/fold/frontier分配回退、异步环1、阶段回收、两种packing及诊断夹具。单位样本同时核对已有独立 CPU/GMP 单项式叶指纹；真因子逐项验证。timing ledger 只核对闭合，不比较耗时快慢。固定D、自动D、承载、relocation的4组计划查询字段一致且不执行曲线；4种损坏各跨5个日志级别，共20组双版本拒绝，均没有发布成功结果。
+- `cmake_stage2_build_02.log`、`build_outputs_verified_02/summary.json`：真实 CMake 目标构建、25单元/2设备 CU 成员及完整目标叶一致。`stage1_version_build.log`：31个 CUDA 对象身份复用，只更新主机入口；`packaged_runtime/summary.json`：0.44.4 Stage1 与通用 GMP 发布 Stage2 对照旧版，5组存档和5组普通/Edwards/承载/relocation/主机回退交接一致。
+- `ntt_counts/summary.json`：11个计数开关、覆盖优先级及每曲线清零门禁；`ntt_tune_final/summary.json`：28组长度/批量的独立 GMP 校验、形状、调度与输出字段一致。`development_build.log`：实验默认 add/sub=0 构建通过；`build_outputs_verified_02/summary.json`：旧实验显式 add/sub=1 与新实验默认0各14个 NTT 校准形状均通过 GMP。这里不声称两种编译策略的 SASS 或速度相同。
+- `identity_final/result.json`：39项 CPU 构建身份/源闭包故障注入与跨 PowerShell 运行时检查通过。`hostonly_final.log`：精确身份一致，程序完整复用。`release_build.log`、`package_reuse.json` 及发布归档检查记录构建、SkipBuild、已有 TOML/队列保留及干净默认归档；没有向实际工作队列写入任务。
+
+## P3 失败证据、限制与后续
+
+首轮机械迁移暴露相对包含路径、未显式导出的诊断状态、packing 所属模块和 sstream/quote 依赖遗漏，`step1_build_01`～`03` 及 syntax 日志保留；修正声明和模块归属后才进入运行验证。依赖收缩时，`step2_build_01.log` 的旧编译依赖文件使内容未改的旧头在编译后集合中消失，被既有校验拒绝；没有放宽门禁，改用新目录全构建并最终验证复用。首个 CMake 辅助命令使用正斜杠相对路径，被 cmd 当作参数；修正为绝对 Windows 路径后通过。
+
+`extended_runtime_01` 的小存档参数未转为绝对路径，只完成宽样本便在预算用例报找不到存档；修正采集器后重新完成。`extended_runtime_02` 在旧版 M127 上触发 baby 合成夹具 GMP 不匹配。最终分开核对：通用8193位夹具正常通过，M127 上新旧版均以相同 point=1 诊断拒绝。该夹具自行切换 N，活动梅森点常量的刷新/恢复属于待修诊断上下文问题；P3 保持算法和现有拒绝行为，不将诊断失败解释为正常曲线失败。
+
+`build_outputs_smoke` 中的旧实验 worker 已因缺少当前曲线内存模型拒绝工作；后续实验校准首次还暴露仅接受 debug 日志级别的既有限制。`build_outputs_verified_02` 核对新旧 worker 同样拒绝，并在其支持的 debug/纯 NTT 校准路径通过 GMP。生产工作流未依赖该实验能力。以上失败日志与原样本均保留。
+
+P3 不删除尚存的不可达分支、旧候选模型或固定研究资料；剩余实验消费者整理归 P4，完整矩阵、多架构及性能资格归 P5。临时草稿随提交保留，完成后提示用户处理，不自动删除。
+
+提交前的暂存检查发现 factors.cpp、s4.cpp 和 tree.h 末尾多余空行；原字节保存在 `source_before_eof_fix/`，此前验证的二进制保存在 `committed_binaries/`。清理后本机/发布各重编23个主机单元，两个 CUDA 对象严格校验后复用；CMake 同步重建。`eof_source_identity`、`eof_s4_memory`、`eof_giant_memory`、`eof_owner_memory` 对最终源码重新通过。首次整 PE 比较只遇到链接时间戳差异：`eof_binary_identity_02.json` 根据 SDK 的 COFF/IMAGE_DEBUG_DIRECTORY 字段仅规范化两处时间戳，三个最终程序的其余全部字节（指令、常量、数据及 GPU 镜像）完全相同，CUDA 对象摘要也不变，没有忽略指令或其他数据。最终发布包的5组存档/5组 Stage2 对照见 `packaged_runtime_eof`；`release_eof_package.log`、`release_archive_eof.json` 核对最终 SkipBuild 和默认归档，已有配置/队列保持。最终二进制、DLL 和清单冻结在 `committed_binaries_02/`，静态语法与暂存检查见 `final_static_checks.json`，完整矩阵到最终程序的绑定见 `final_runtime_binding.json`。

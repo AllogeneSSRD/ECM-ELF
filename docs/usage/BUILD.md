@@ -60,7 +60,7 @@ Stage2 的 `-HostOnly` 只复用完整清单中身份一致的 CUDA 对象，并
 
 ## CUDA 源清单与依赖身份
 
-翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 主机源、生产引擎、算术、NTT 和开发 wrapper。Stage2 生产构建含 11 个单元：流程 CU、算术 CU、NTT CU、四个 NTT 主机 CPP 和四个驱动 CPP。CMake 直接使用，PowerShell 从该文件导出构建目录内的 `cuda_sources.json`。生产源码闭包拒绝包含 `tools/bench/`、`tools/experiments/` 和 `.refactor/`；开发 wrapper 使用单独源组。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
+翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 生产构建含25个单元：15个 `STAGE2_ENGINE` 主机 CPP、算术 CU、NTT CU、四个 NTT 主机 CPP 和四个驱动 CPP。CMake 直接使用，PowerShell 从该文件导出构建目录内的 `cuda_sources.json`。生产源码闭包拒绝包含 `tools/bench/`、`tools/experiments/` 和 `.refactor/`；开发 wrapper 使用单独源组。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
 
 CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目对象库/静态库；条件目标按保守全集收集，导入库由工具链与依赖清单另行记录。对象枚举和 CUDA 完全重编按该目标闭包执行。`cuda_build_state.ps1` 扫描本地递归包含，包括 `.inc/.inl/.def`，并用 NVCC 依赖文件补齐宏包含及 SDK 头。每个对象的 `.ecm-state.json` 记录命令、依赖内容指纹与对象摘要；摘要编码在 Windows PowerShell 5.1 和 PowerShell 7 间一致。
 
@@ -69,3 +69,5 @@ CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目�
 `tools/build/dev/` 为开发和 GUI 入口，`test/` 为探针与参考实现构建，`internal/` 为配置检查、并行编译、拆分和打包辅助。详细参数入口见 [构建工具](../../tools/build/README.md)；配置生成合同见 [配置维护](../architecture/CONFIGURATION.md)。
 
 P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设备算术正文并检查模块依赖方向。`build_cuda_p2_arithmetic_probe.ps1 -WorkerBuild <生产目录>` 将独立 GMP 检查器链接到经过身份验证的生产算术对象；`build_ntt_graph_probe.ps1 -WorkerBuild <生产目录>` 同样复用真实 NTT 对象。其他使用生产 NTT 的探针通过 `internal/cuda_ntt_probe.ps1` 消费同一源清单，所有单元保持探针指定的 legacy/per-thread 默认流设置；不再通过实现头或截取生产源码构建。
+
+P3 主机源码等价与依赖门禁为 `test_cuda_p3_host.py`；它对照 P2 基线，检查完整函数、字段、默认值、构造初始化及全局快照次序，并展开规划接口核对原语句。`test_cuda_p3_runtime.py` 消费冻结旧程序、独立验证的存档和新程序，比较完整叶指纹、稳定结果字段、计划查询、分配/预算回退及各日志级别的损坏拒绝。资源测试通过 `stage2_native_source.py` 读取实际模块的声明和方法，不使用另一份手写资源实现。依赖关系大幅收缩后，构建可能因旧编译依赖记录拒绝收缩后的依赖；保留该记录，使用新构建目录完整编译，再验证复用。

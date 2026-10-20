@@ -90,14 +90,30 @@ set(ECM_STAGE2_NTT_SOURCES
     src/cuda/ntt/graph.cpp
     src/cuda/ntt/checks.cpp
     kernels/cuda/ntt/transform_kernels.cu)
+set(ECM_STAGE2_ENGINE_SOURCES
+    src/cuda/stage2/context.cpp
+    src/cuda/stage2/options.cpp
+    src/cuda/stage2/resources.cpp
+    src/cuda/stage2/plan.cpp
+    src/cuda/stage2/engine.cpp
+    src/cuda/stage2/batch.cpp
+    src/cuda/stage2/points.cpp
+    src/cuda/stage2/product.cpp
+    src/cuda/stage2/tree.cpp
+    src/cuda/stage2/remainder.cpp
+    src/cuda/stage2/s4.cpp
+    src/cuda/stage2/factors.cpp
+    src/cuda/stage2/checks.cpp
+    src/cuda/stage2/diagnostics.cpp
+    src/cuda/stage2/tune.cpp)
 set(ECM_STAGE2_PRODUCTION_SOURCES
-    src/cuda/ecm_cuda_stage2.cu
+    ${ECM_STAGE2_ENGINE_SOURCES}
     ${ECM_STAGE2_ARITHMETIC_SOURCES}
     ${ECM_STAGE2_NTT_SOURCES})
 set(ECM_STAGE2_DEVELOPMENT_SOURCES tools/bench/ecm_cuda_stage2_dev.cu)
 set(ECM_CUDA_SOURCE_GROUPS
     STAGE1_COMMON STAGE1_CUDA STAGE1_EDWARDS STAGE1_MONT STAGE1_PRAC
-    STAGE2_HOST STAGE2_PRODUCTION STAGE2_DEVELOPMENT STAGE2_ARITHMETIC STAGE2_NTT)
+    STAGE2_HOST STAGE2_PRODUCTION STAGE2_DEVELOPMENT STAGE2_ENGINE STAGE2_ARITHMETIC STAGE2_NTT)
 set(ECM_CUDA_BUILD_INPUTS
     CMakeLists.txt
     tools/build/internal/cuda_sources.cmake

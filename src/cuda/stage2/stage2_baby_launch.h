@@ -5,13 +5,6 @@
 // Mont(1/(ab), bR) = 1/a, and Mont(xR, 1/z) = x/z.
 // Each 256-leaf root is checked/inverted on the host; nonunit groups are skipped.
 
-
-
-
-
-
-
-
 template<int NW>
 static void s2g_launch_baby_product(int nw,size_t count,const unsigned long long *in,
     unsigned long long *out,const unsigned long long *n,unsigned long long ninv)

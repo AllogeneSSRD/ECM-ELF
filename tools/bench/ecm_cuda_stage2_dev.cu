@@ -45,7 +45,7 @@ struct ProductionDefaults {
 #include "../../src/core/ecm_cuda_stage2.h"
 #include "../../src/core/ecm_stage2_logging.h"
 #include "../../kernels/cuda/ntt/tune_checks.cuh"
-#include "../../src/cuda/ecm_stage2_tune.cuh"
+#include "stage2_tune.cuh"
 
 bool ecm_cuda_stage2_shape_query(uint64_t p,int bits,uint64_t *length,uint64_t *output_slots)
 {

@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+from stage2_native_source import native_view, STAGE2
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -18,10 +19,11 @@ def main():
     p.add_argument('--vcvars',type=Path,default=Path(
         r'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat'))
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
-    source=ROOT/'src/cuda/ecm_cuda_stage2.cu'
-    fold=between(source.read_text(encoding='utf-8'),'struct FoldDeviceState {','static void fold_device_fixture(')
-    frontier_source=ROOT/'src/cuda/stage2/scaled_frontier.cuh'
-    frontier=frontier_source.read_text(encoding='utf-8')
+    source=STAGE2/'remainder.cpp'
+    text, native_sources=native_view()
+    fold=between(text,'struct FoldDeviceState {','void fold_device_fixture(')
+    frontier_source=STAGE2/'remainder.h'
+    frontier=text[text.index('struct ScaledFrontierDevice {'):]
     fragments=dict(
         NATIVE_RELEASE=between(fold,'memory.release();\n        if(map)','    bool init(PolyLayer &L').rsplit('}',1)[0],
         NATIVE_ALLOCATE=between(fold,'memory.words[0]=layout.source_words','        f=layout.f;'),
@@ -47,7 +49,7 @@ def main():
     if mutation.returncode==0:raise ValueError('wrong native metadata extent was accepted')
     result=json.loads(proc.stdout)
     result['sources']={str(x.relative_to(ROOT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in
-        [source,frontier_source,template,Path(__file__),ROOT/'src/core/ecm_stage2_owner_memory.h',ROOT/'src/core/ecm_stage2_geometry.h']}
+        [*native_sources,Path(__file__).with_name('stage2_native_source.py'),template,Path(__file__),ROOT/'src/core/ecm_stage2_owner_memory.h',ROOT/'src/core/ecm_stage2_geometry.h']}
     result['native_metadata_extent_mutation_rejected']=True
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in result.items() if k!='sources'}))

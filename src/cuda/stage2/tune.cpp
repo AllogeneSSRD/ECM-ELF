@@ -1,19 +1,13 @@
-#pragma once
+// Production NTT calibration against the linked NTT runtime.
+#include "../ntt/runtime.h"
+#include "../../core/ecm_cuda_stage2.h"
+#include "../common/json_quote.h"
 #include <sstream>
 #include <iomanip>
 #include <set>
 
 namespace stage2_tune {
-inline std::string quote(const char *s) {
-    std::string out="\"";
-    for(;*s;++s) {
-        const unsigned char c=(unsigned char)*s;
-        if(c=='"' || c=='\\') { out+='\\';out+=(char)c; }
-        else if(c<32) { char b[7];std::snprintf(b,sizeof(b),"\\u%04x",c);out+=b; }
-        else out+=(char)c;
-    }
-    return out+'"';
-}
+
 struct Resources {
     unsigned long long *a=nullptr,*b=nullptr,*want=nullptr,*bad=nullptr;
     cudaEvent_t start=nullptr,end=nullptr;
@@ -149,3 +143,33 @@ static int run(int device,int first,int last,int repeats,unsigned long long memo
     return measured ? 0 : 2;
 }
 } // namespace stage2_tune
+
+int ecm_cuda_stage2_tune_ntt(
+    int device,
+    int min_log2,
+    int max_log2,
+    int repeats,
+    uint64_t memory,
+    void (*report)(const char*,void*),
+    void *context,
+    bool warmup)
+{
+    if(ecm_cuda_stage2_check_configuration())return 2;
+    return stage2_tune::run(device,min_log2,max_log2,repeats,memory,report,context,nullptr,0,warmup);
+}
+
+int ecm_cuda_stage2_tune_ntt_batches(
+    int device,
+    int min_log2,
+    int max_log2,
+    int repeats,
+    uint64_t memory,
+    const uint64_t *slices,
+    size_t count,
+    void (*report)(const char*,void*),
+    void *context,
+    bool warmup)
+{
+    if(ecm_cuda_stage2_check_configuration())return 2;
+    return stage2_tune::run(device,min_log2,max_log2,repeats,memory,report,context,slices,count,warmup);
+}
