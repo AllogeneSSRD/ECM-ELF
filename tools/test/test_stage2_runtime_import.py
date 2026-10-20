@@ -34,7 +34,7 @@ def main():
     r=subprocess.run(command,capture_output=True,text=True,errors='replace',timeout=60)
     (out/'import.log').write_text(r.stdout+r.stderr,encoding='utf-8');assert not r.returncode,r.stderr
     assert sum(s['repeats'] for s in summaries(tomllib.loads(source.read_text(encoding='utf-8'))))==len(expected)
-    ini=out/'ecm.ini';ini.write_text('user=\ncomputer=\nverbose=false\n',encoding='utf-8')
+    ini=out/'ecm.toml';ini.write_text('user=\ncomputer=\nverbose=false\n',encoding='utf-8')
     destination=out/'merged.toml'
     command=[str(a.exe.resolve()),'--ini',str(ini),'--device','1','--tune','ecm','--tune-file',str(destination),
         '--tune-merge',str(source),'--tune-merge',str(source),'--tune-runtime-samples',str(a.sample_limit)]

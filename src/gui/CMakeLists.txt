@@ -33,7 +33,7 @@ add_executable(ecm_gui WIN32
     probability_panel.cpp
     gpu_monitor.cpp
     gpu_selftest.cpp
-    ini_file.cpp
+    toml_file.cpp
     localization.cpp
     log_parse.cpp
     platform_win32.cpp

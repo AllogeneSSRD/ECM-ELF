@@ -1,6 +1,6 @@
 # Save：Stage1 完成点、文本格式与交接
 
-本文是当前 save 的格式与发布说明。曲线内状态及 Stage2 队列进度另见 [CHECKPOINT](CHECKPOINT.md)。操作入口见 [Stage1](../usage/STAGE1.md)、[CUDA Stage2](../usage/STAGE2.md)、[CPU Edwards Stage2](../usage/EDWARDS_CPU_STAGE2.md)；配置默认值和范围见 [INI 参考](../ECM_INI_REFERENCE.md)。
+本文是当前 save 的格式与发布说明。曲线内状态及 Stage2 队列进度另见 [CHECKPOINT](CHECKPOINT.md)。操作入口见 [Stage1](../usage/STAGE1.md)、[CUDA Stage2](../usage/STAGE2.md)、[CPU Edwards Stage2](../usage/EDWARDS_CPU_STAGE2.md)；配置默认值和范围见 [TOML 参考](../ECM_TOML_REFERENCE.md)。
 
 ## 1. Save 保存的是什么
 
@@ -41,12 +41,12 @@ CPU/GPU 自动命名由 `save_name_pattern` 统一产生，当前模式结构为
 
 | save 文件名部分 | Stage1 队列行为 |
 | --- | --- |
-| `e_`，兼容 `ed_` | 覆盖 INI 曲线为 Edwards；使用固定 48·LCM，兼容名规范为 e_ |
-| `m0_`、`m2_`、`m3_` | 覆盖 INI 曲线为 Montgomery 及对应 gpu_param |
-| 无上述前缀 | 沿用 INI 构造并补充前缀 |
+| `e_`，兼容 `ed_` | 覆盖 TOML 曲线为 Edwards；使用固定 48·LCM，兼容名规范为 e_ |
+| `m0_`、`m2_`、`m3_` | 覆盖 TOML 曲线为 Montgomery 及对应 gpu_param |
+| 无上述前缀 | 沿用 TOML 构造并补充前缀 |
 | 最后一个下划线至 `.save` 前 | 提取 B1；支持可解析的正十进制/科学计数形式 |
 
-执行目标、设备仍由 INI 决定。CPU 不支持 m2/m3，会停止并保留队列；覆盖后仍须通过参数化能力和 sigma 范围检查。每条任务从基础配置复制，前一条覆盖不传播到下一条。`save_name_pattern` 不替代已经在任务中指定的词干和父目录。
+执行目标、设备仍由 TOML 决定。CPU 不支持 m2/m3，会停止并保留队列；覆盖后仍须通过参数化能力和 sigma 范围检查。每条任务从基础配置复制，前一条覆盖不传播到下一条。`save_name_pattern` 不替代已经在任务中指定的词干和父目录。
 
 控制台 `START:` 保留原始任务行；finished 与受支持的 Prime95 交接使用实际 save 字段，其余 AID、B2、skip、curves、因子字符串不因改名而改写。输入队列行只在任务成功完成后移除。
 

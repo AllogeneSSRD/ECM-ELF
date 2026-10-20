@@ -1,5 +1,6 @@
 #include "ecm_stage2_transfer.h"
 #include "ecm_worktodo.h"
+#include "ecm_worker_list.h"
 
 #include <filesystem>
 #include <fstream>
@@ -17,6 +18,14 @@ int main(int argc, char **argv) {
         require(argc == 2, "pass a fresh test directory");
         const fs::path root = argv[1];
         fs::create_directories(root);
+        std::vector<int> parsed;int ignored=0;
+        require(ecm_workers::parse_list("3,1-2,2",1000000,parsed,ignored) &&
+                parsed==std::vector<int>({3,1,2}) && ignored==0,"worker list/range parsing failed");
+        require(ecm_workers::parse_list("3-1",1000000,parsed,ignored) && parsed.size()==3,
+                "reversed range failed");
+        require(!ecm_workers::parse_list("1,wrong",1000000,parsed,ignored),"invalid list accepted");
+        require(ecm_workers::parse_list("1-9223372036854775807",8,parsed,ignored) &&
+                parsed.size()==8 && ignored>0,"large range not bounded");
         const Stage2TransferConfig cfg{
             (root / "worktodo.txt").string(),
             (root / "stage2_finished.txt").string(),
@@ -63,6 +72,48 @@ int main(int argc, char **argv) {
                 "retry after queue recovery failed");
         require(ecm_worktodo_first_line(blocked.worktodo, 3, current) && current == retry_line,
                 "retry lost assignment");
+
+        Stage2TransferConfig routed{(root/"routed.txt").string(),(root/"routed.finished").string(),
+                                   (root/"routed.pending").string(),1};
+        routed.workers={3,2};
+        require(ecm_append_text_line(routed.worktodo,"[Worker #2]\n"+line+"\n[Worker #3]"),"seed queues failed");
+        int receiver=0;
+        require(ecm_stage2_transfer_park(routed,retry_line,error,&receiver) && receiver==3,
+                "shortest candidate queue not selected");
+        require(ecm_stage2_transfer_flush(routed.pending,remaining,error),"routed flush failed");
+        const auto tie_line=retry_line+",\"3\"";
+        require(ecm_stage2_transfer_park(routed,tie_line,error,&receiver) && receiver==2,
+                "tie did not select lowest worker ID");
+        require(ecm_stage2_transfer_flush(routed.pending,remaining,error),"tie flush failed");
+        require(ecm_worktodo_first_line(routed.worktodo,3,current) && current==retry_line,
+                "receiver task missing");
+
+        Stage2TransferConfig pending_balance{(root/"new-target.txt").string(),(root/"new-target.finished").string(),
+                                             (root/"balanced.pending").string(),4};
+        pending_balance.auto_workers=true;pending_balance.configured_workers=3;
+        require(ecm_stage2_transfer_park(pending_balance,line,error,&receiver) && receiver==1,
+                "auto NumWorkers fallback failed");
+        require(ecm_stage2_transfer_park(pending_balance,retry_line,error,&receiver) && receiver==2,
+                "pending assignments excluded from candidate load");
+        require(ecm_stage2_transfer_flush(pending_balance.pending,remaining,error),"balanced flush failed");
+        pending_balance.worktodo=(root/"existing-sections.txt").string();
+        require(ecm_append_text_line(pending_balance.worktodo,"[Worker #7]\n[Worker #3]"),"seed auto sections failed");
+        require(ecm_stage2_transfer_park(pending_balance,line,error,&receiver) && receiver==3,
+                "auto ignored empty existing sections");
+        require(ecm_stage2_transfer_flush(pending_balance.pending,remaining,error),"auto sections flush failed");
+        require(ecm_stage2_transfer_park(pending_balance,retry_line,error,&receiver) && receiver==7,
+                "auto shortest existing section failed");
+        require(ecm_stage2_transfer_flush(pending_balance.pending,remaining,error),"auto receiver flush failed");
+
+        Stage2TransferConfig receipts{(root/"receipts.txt").string(),(root/"global.finished").string(),
+                                      (root/"receipts.pending").string(),2};
+        receipts.finished_by_worker[2]=(root/"worker2.finished").string();
+        require(ecm_append_text_line(receipts.finished_by_worker[2],line),"seed receiver receipt failed");
+        require(ecm_stage2_transfer_park(receipts,line,error) &&
+                ecm_stage2_transfer_flush(receipts.pending,remaining,error),"receiver receipt retry failed");
+        require(!ecm_worktodo_first_line(receipts.worktodo,2,current),"receiver-specific receipt ignored");
+        receipts.finished_by_worker[2].clear();
+        require(!ecm_stage2_transfer_park(receipts,retry_line,error),"empty receiver receipt path accepted");
         std::cout << "stage2 transfer recovery OK\n";
         return 0;
     } catch (const std::exception &e) {

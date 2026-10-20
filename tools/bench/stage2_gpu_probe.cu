@@ -24,7 +24,7 @@
                 gpu=0.123 elapsed=0.456 stage1_done=0 bad_factors=0
 
    Build (from the repo root, CUDA 13.3 + MSVC):
-     nvcc -std=c++17 -O3 -arch=sm_89 -I kernels/cuda -I cgbn/include -I include
+     nvcc -std=c++17 -O3 -arch=sm_89 -I kernels/cuda -I third_party/cgbn/include -I include
           -Xcompiler /wd4819 -o build_cuda_cmake/stage2_gpu_probe.exe
           tools/bench/stage2_gpu_probe.cu kernels/cuda/cgbn_stage2.cu
           kernels/cuda/cgbn_stage2_kernels_tpi4.cu kernels/cuda/cgbn_stage2_kernels_tpi8.cu

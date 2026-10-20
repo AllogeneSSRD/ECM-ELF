@@ -122,7 +122,7 @@ function Invoke-CjkRun([string]$Name, [string]$FontSetting, [string]$EnvCjkFont 
     )
     if ($FontSetting) { $ini += ('font = ' + $FontSetting) }
     $enc = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText((Join-Path $dir 'ecm.ini'), (($ini -join "`r`n") + "`r`n"), $enc)
+    [System.IO.File]::WriteAllText((Join-Path $dir 'ecm.toml'), (($ini -join "`r`n") + "`r`n"), $enc)
 
     # The GUI looks for localization/ next to the exe first; the build copies it there.
     $locDst = Join-Path (Split-Path -Parent $Exe) 'localization'
@@ -133,7 +133,7 @@ function Invoke-CjkRun([string]$Name, [string]$FontSetting, [string]$EnvCjkFont 
     # ECM_GUI_CJK_FONT overrides the CJK font search (see platform_win32.cpp): run [C]
     # uses it to simulate a machine with no CJK font at all.
     if ($EnvCjkFont) { $env:ECM_GUI_CJK_FONT = $EnvCjkFont } else { Remove-Item Env:\ECM_GUI_CJK_FONT -ErrorAction SilentlyContinue }
-    $argv = @('-ini', (Join-Path $dir 'ecm.ini'), '--trace')
+    $argv = @('-ini', (Join-Path $dir 'ecm.toml'), '--trace')
     if ($ExtraArgs) { $argv += $ExtraArgs.Split(' ') }
     $proc = Start-Process -FilePath $Exe -ArgumentList $argv -PassThru
     Start-Sleep -Seconds 6

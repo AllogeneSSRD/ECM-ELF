@@ -23,7 +23,7 @@ function Get-Stage1CudaObjects([string]$BuildDir) {
 
 function Get-Stage1ReleaseSources([string]$Repo) {
     $files = @(Get-Item -LiteralPath (Join-Path $Repo 'CMakeLists.txt'))
-    foreach ($dir in @('src','kernels','include','cgbn/include','tools/build')) {
+    foreach ($dir in @('src','kernels','include','third_party/cgbn/include','tools/build')) {
         $files += @(Get-ChildItem -LiteralPath (Join-Path $Repo $dir) -Recurse -File |
             Where-Object { $_.Extension -in @('.c','.cpp','.h','.hpp','.cu','.cuh','.cmake','.ps1') })
     }

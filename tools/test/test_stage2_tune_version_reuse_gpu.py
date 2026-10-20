@@ -35,7 +35,7 @@ def main():
     before=summaries(original)
     ordinary=next(s for s in before if s['benchmark_kind']=='runtime_save' and not s['carrier_exponent'])
     count=ordinary['repeats'];assert 2<=count<1000
-    ini=out/'ecm.ini';ini.write_text('user=\ncomputer=\nverbose=false\nstage2_debug_log=false\n',encoding='utf-8')
+    ini=out/'ecm.toml';ini.write_text('user=\ncomputer=\nverbose=false\nstage2_debug_log=false\n',encoding='utf-8')
     common=[str(a.exe.resolve()),'--ini',str(ini),'--device',str(a.device),'--save',str(saved),
         '--curves','1','--b2',str(ordinary['b2']),'--d',str(ordinary['d']),'--carrier-exponent','0',
         '--batch-mb','64','--arena-mb','6300','--owner-budget-mb','640','--short-calibration','0',

@@ -4,7 +4,7 @@
     M2 acceptance: the GUI supervises worker processes (docs/usage/GUI.md).
 
 .DESCRIPTION
-    Starts the real ecm_gui with a sandbox ecm.ini that points [GUI] exe= at the fake
+    Starts the real ecm_gui with a sandbox ecm.toml that points [GUI] exe= at the fake
     worker, autostarts two workers --
         Worker #1: --scenario ok          (prints a scripted run, exits 0 "queue done")
         Worker #2: --scenario crash-once  (exit 7 the first time, then like ok)
@@ -72,7 +72,7 @@ public static class Win32GuiWorkers {
 '@
 }
 
-$iniPath = Join-Path $Sandbox 'ecm.ini'
+$iniPath = Join-Path $Sandbox 'ecm.toml'
 $marker = Join-Path $Sandbox 'crashed.once.marker'
 $enc = New-Object System.Text.UTF8Encoding($false)
 $iniLines = @(

@@ -4,7 +4,7 @@
 
 Auto B2 选择连续生成、处理新曲线的单位时间收益，计入 Stage1 成本，即使当前读取已完成的 save。固定 B2 时，性能文件选择 D 和合法梅森承载；最终 B2=0 且启用 Auto B2 时联合选择 B2、D、承载。
 
-默认性能文件为 INI 所在目录的 `stage2_ecm_tune.toml`，可由 `stage2_tune_profile` 或 `--tune-profile FILE.toml`覆盖。`--auto-b2` 对应 `stage2_auto_b2=1`。显式同时提供非零 `--b2` 与 `--auto-b2` 报冲突；任务或 INI 已有非零 B2 时保持固定值。
+默认性能文件为 TOML 所在目录的 `stage2_ecm_tune.toml`，可由 `stage2_tune_profile` 或 `--tune-profile FILE.toml`覆盖。`--auto-b2` 对应 `stage2_auto_b2=1`。显式同时提供非零 `--b2` 与 `--auto-b2` 报冲突；任务或 TOML 已有非零 B2 时保持固定值。
 
 性能数据可跨实际位宽、B1 复用，允许插值、外推。复用从不要求 B1 相等；实际 B1 仍用于区间、成功概率、Stage1 成本和真实运算。模型估算与实测在输出中分别标识。
 
@@ -12,7 +12,7 @@ Auto B2 选择连续生成、处理新曲线的单位时间收益，计入 Stage
 
 非零 `--d` 锁定 D。`--carrier-exponent 0` 锁定普通运算，非零 p 锁定承载。`stage2_auto_carrier=1` 默认开启，CLI `--auto-carrier 0|1` 可覆盖：未锁定算术时，worktodo `ECMSTAGE2=1,2,p,-1,...` 先按已知因子重建实际 N，核对 save，再验证 **N 整除 2ᵖ−1**，将普通运算与梅森承载共同纳入选型。指数须满足 2≤p≤16384；非标准梅森表达式和单独读取 save 不猜测指数。
 
-`stage2_auto_carrier=0` 关闭自动加入承载候选，不影响显式 `--carrier-exponent p`。显式 0 始终锁定普通运算。父进程将最终开关传给曲线子进程；该开关不改变目标 N/B2，因此改变它不重置队列完成数。配置定义及双语说明见 [INI 参考](../ECM_INI_REFERENCE.md#stage2_auto_carrier)；入口为 `src/core/ecm_cuda_stage2_main.cpp::arguments/run`，候选与校准资格为 `src/core/ecm_stage2_portable_driver.inl::portable_carriers/ensure_portable_calibration`。
+`stage2_auto_carrier=0` 关闭自动加入承载候选，不影响显式 `--carrier-exponent p`。显式 0 始终锁定普通运算。父进程将最终开关传给曲线子进程；该开关不改变目标 N/B2，因此改变它不重置队列完成数。配置定义及双语说明见 [TOML 参考](../ECM_TOML_REFERENCE.md#stage2_auto_carrier)；入口为 `src/core/ecm_cuda_stage2_main.cpp::arguments/run`，候选与校准资格为 `src/core/ecm_stage2_portable_driver.inl::portable_carriers/ensure_portable_calibration`。
 
 当前代码依据：`config/ecm_options.json` 定义键及默认值；`ecm_cuda_stage2_main.cpp::arguments/run/child_run` 分别解析参数、识别任务指数及传递子进程设置；`ecm_stage2_queue_state.h::Task` 定义曲线进度身份；`ecm_stage2_portable_driver.inl::portable_carriers/ensure_portable_calibration` 验证整除关系及短校准覆盖。源码均在 `src/core/`。
 
@@ -20,7 +20,7 @@ Auto B2 选择连续生成、处理新曲线的单位时间收益，计入 Stage
 
 ### 自动承载未被选中时
 
-先区分候选识别与性能资格。规划中的 `carrier_exponent=p`、`lifted=1`、`target_divides_carrier=1` 表示已识别并验证承载；最终 `carrier_exponent=0` 表示选型保留普通路径，不能据此判断INI开关未读取。D210/B242020短探针不作为跨位宽完整曲线锚点；区间校正只使用P≥512的干净完整实测。
+先区分候选识别与性能资格。规划中的 `carrier_exponent=p`、`lifted=1`、`target_divides_carrier=1` 表示已识别并验证承载；最终 `carrier_exponent=0` 表示选型保留普通路径，不能据此判断TOML开关未读取。D210/B242020短探针不作为跨位宽完整曲线锚点；区间校正只使用P≥512的干净完整实测。
 
 `paired`策略及精确形状实测还核对实际batch、物理分块、缓冲数量、giant路线及fold/frontier状态，B1不参与匹配。`model`策略从当前请求重算工作量；预算数值和梅森指数不作为采样身份门槛。区间未覆盖或预测收益不足时保留默认。
 
@@ -97,7 +97,7 @@ CSV 必填 `b1,mhz,tpi,curves,seconds_per_curve`，另提供 `container_bits` �
 
 ### 真实任务的普通／承载配对
 
-任务输入按已知因子精确重建N，读取skip后的首个有效save记录，核对N、checksum及可用X，将这一条原始记录冻结到实验目录；不推进worktodo，不写生产完成回执。B2采用显式`--tune-b2`列表，否则采用任务非零B2，再采用INI的`stage2_b2`；均为0时使用等级网格，只保留B2>保存B1的档位。重复任务合并，同实际位宽但不同模数或承载指数的输入仍分别保留。
+任务输入按已知因子精确重建N，读取skip后的首个有效save记录，核对N、checksum及可用X，将这一条原始记录冻结到实验目录；不推进worktodo，不写生产完成回执。B2采用显式`--tune-b2`列表，否则采用任务非零B2，再采用TOML的`stage2_b2`；均为0时使用等级网格，只保留B2>保存B1的档位。重复任务合并，同实际位宽但不同模数或承载指数的输入仍分别保留。
 
 `stage2_auto_carrier=1`允许标准梅森任务在验证N整除2ᵖ−1后调优普通/承载两条路径；0只调优普通路径，显式`--tune-carrier-exponent p`配合`--tune-save`仍可指定承载。独立save可从当前worker中重建N完全相同的有效worktodo任务取得p，不从文件名或余因子位宽猜测指数。完整Mₚ的普通路径已经使用梅森归约，自动调优不重复运行相同模数的承载；显式承载仍保留。
 
@@ -429,4 +429,4 @@ G=1与baby预算回退缺完整联合生命周期，成本可估算但原生准�
 - [ecm_stage2_tune_portable.h:55](../../src/core/ecm_stage2_tune_portable.h#L55)：`LocalSearch`用于显式D研究列表；[Profile:442](../../src/core/ecm_stage2_tune_portable.h#L442)负责矩阵解析、排序与均值累计。
 - [ecm_stage1_cost_csv.h](../../src/core/ecm_stage1_cost_csv.h)、[ecm_stage2_probability.h](../../src/core/ecm_stage2_probability.h)：容器模型及概率。
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：配置、验证与队列。
-- [配置参考](../ECM_INI_REFERENCE.md)、[使用](../usage/STAGE2.md)、[工具](../../tools/bench/README_STAGE2_CARRIER_PLAN.md)。
+- [配置参考](../ECM_TOML_REFERENCE.md)、[使用](../usage/STAGE2.md)、[工具](../../tools/bench/README_STAGE2_CARRIER_PLAN.md)。

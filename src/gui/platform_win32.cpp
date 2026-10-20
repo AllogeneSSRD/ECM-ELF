@@ -139,9 +139,9 @@ long long newest_checkpoint_mtime(const std::string &dir, std::string *name_out)
 #endif
 }
 
-std::string default_ini_path() {
+std::string default_toml_path() {
     const std::string dir = exe_dir();
-    return dir.empty() ? std::string("ecm.ini") : path_join(dir, "ecm.ini");
+    return dir.empty() ? std::string("ecm.toml") : path_join(dir, "ecm.toml");
 }
 
 std::string default_localization_dir() {

@@ -199,7 +199,7 @@ device = 0
 "@ | Set-Content -Path $ini -Encoding ASCII
 
 $before = @(Get-ChildItem $work -Recurse -File | Select-Object -ExpandProperty FullName)
-$rini = (& $Exe --gpu-info -ini $ini 2>&1 | ForEach-Object { "$_" })
+$rini = (& $Exe --gpu-info --config $ini 2>&1 | ForEach-Object { "$_" })
 $eini = $LASTEXITCODE
 $after = @(Get-ChildItem $work -Recurse -File | Select-Object -ExpandProperty FullName)
 Check "ini run exits 0"                   ($eini -eq 0)
@@ -208,15 +208,15 @@ Check "ini is named in the output"        ((Get-Key $rini 'ini') -match 'probe\.
 Check "no file was created"               (($after.Count -eq $before.Count))
 Check "no log/tmp/save in the temp dir"   (@($after | Where-Object { $_ -match '\.(log|tmp|save|ini)$' }).Count -eq 1)  # only probe.ini
 
-$rcli = (& $Exe --gpu-info -ini $ini --gpu-param 2 2>&1 | ForEach-Object { "$_" })
+$rcli = (& $Exe --gpu-info --config $ini --gpu-param 2 2>&1 | ForEach-Object { "$_" })
 Check "--gpu-param beats the ini"         ((Get-Key $rcli 'gpu_param') -eq '2')
-$rworker = (& $Exe --gpu-info -ini $ini --worker 2 2>&1 | ForEach-Object { "$_" })
+$rworker = (& $Exe --gpu-info --config $ini --worker 2 2>&1 | ForEach-Object { "$_" })
 Check "worker 2 reads its own section"    ((Get-Key $rworker 'gpu_param') -eq '2')
 Check "worker is echoed"                  ((Get-Key $rworker 'worker') -eq '2')
-$redWorker = (& $Exe --gpu-info -ini $ini --worker 3 2>&1 | ForEach-Object { "$_" })
+$redWorker = (& $Exe --gpu-info --config $ini --worker 3 2>&1 | ForEach-Object { "$_" })
 Check "worker curve selects Edwards tiers" ((Get-Key $redWorker 'curve_model') -eq 'ed' -and
                                              (Get-Key $redWorker 'carry_bits') -eq '1')
-$rCurveCli = (& $Exe --gpu-info -ini $ini --worker 3 --curve mont 2>&1 | ForEach-Object { "$_" })
+$rCurveCli = (& $Exe --gpu-info --config $ini --worker 3 --curve mont 2>&1 | ForEach-Object { "$_" })
 Check "CLI curve beats worker curve"       ((Get-Key $rCurveCli 'curve_model') -eq 'mont')
 
 # The CUDA run path prints its own choice as "CGBN<TPI, BITS> kernel, N is k bits", so the

@@ -1,5 +1,5 @@
 #include "ecm_worktodo.h"
-#include "ecm_ini.h"
+#include "ecm_toml.h"
 
 #include <algorithm>
 #include <cctype>
@@ -709,6 +709,25 @@ bool ecm_worktodo_list_workers(const std::string &path, std::vector<uint32_t> &w
     }
     std::sort(seen.begin(), seen.end());
     workers = seen;
+    return true;
+}
+
+bool ecm_worktodo_worker_loads(const std::string &path,std::map<int,size_t> &loads,
+                                std::string &err) {
+    loads.clear();err.clear();std::error_code ec;
+    if(!std::filesystem::exists(std::filesystem::u8path(path),ec)) {
+        if(ec)err="cannot inspect destination queue: "+ec.message();
+        return !ec;
+    }
+    std::ifstream in(std::filesystem::u8path(path),std::ios::binary);
+    if(!in){err="cannot read destination queue: "+path;return false;}
+    std::string raw;int section=1;
+    while(std::getline(in,raw)) {
+        const auto kind=classify_line(raw,&section,nullptr);
+        if(kind==LineKind::Header)loads.emplace(section,0);
+        else if(kind==LineKind::Task && ecm_worktodo_stage(raw)!=WorktodoStage::Any)++loads[section];
+    }
+    if(in.bad()){err="cannot finish reading destination queue: "+path;return false;}
     return true;
 }
 

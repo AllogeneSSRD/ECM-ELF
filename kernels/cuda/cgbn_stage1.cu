@@ -90,7 +90,7 @@ static void print_progress(double pct, uint64_t s_partial, uint64_t this_batch,
         outputf(OUTPUT_ALWAYS,"%s\n",text.c_str());
     } else {
         // Interactive terminal: in-place update, coloured (ANSI; colour is
-        // configurable via ecm.ini progress_color).
+        // configurable via ecm.toml progress_color).
         fprintf(stdout,
                 "\r%s%s%s",
                 ecm_log_progress_color_code(),text.c_str(),

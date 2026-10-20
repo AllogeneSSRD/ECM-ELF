@@ -224,6 +224,6 @@ if ($Smoke) {
 
 Write-Host ""
 Write-Host ("done: " + $exe) -ForegroundColor Green
-Write-Host "next: run it next to your ecm.ini (and ecm_cuda.exe), or run the whole test suite:"
+Write-Host "next: run it next to your ecm.toml (and ecm_cuda.exe), or run the whole test suite:"
 Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File tools\test\test_gui_all.ps1"
 exit 0

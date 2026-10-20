@@ -186,7 +186,7 @@ def main():
     queue_dir = out/'queue_failure';queue_dir.mkdir()
     blocker = queue_dir/next(default.glob('e_*.save')).name;blocker.mkdir()
     queue = queue_dir/'worktodo.txt';task = 'ECM2=1,2,127,-1,20,0,1,17\n';queue.write_text(task)
-    ini = queue_dir/'ecm.ini';finished = queue_dir/'finished.txt'
+    ini = queue_dir/'ecm.toml';finished = queue_dir/'finished.txt'
     ini.write_text(f'curve=ed\ntarget=cpu\nimpl=scalar\nworktodo={queue}\nfinished={finished}\ntmp_dir={queue_dir}\nlog_file=\n')
     call('save_failure_queue', [s1, '-ini', ini], good=False)
     assert queue.read_text() == task and not finished.exists()
@@ -214,7 +214,7 @@ def main():
     try:
         restart = out/'cpu_restart';restart.mkdir()
         queue = restart/'worktodo.txt';task = 'ECM2=1,2,127,-1,1000000,0,1,17\n';queue.write_text(task)
-        ini = restart/'ecm.ini';finished = restart/'finished.txt'
+        ini = restart/'ecm.toml';finished = restart/'finished.txt'
         ini.write_text(f'curve=ed\ntarget=cpu\nimpl=scalar\nckpt_seconds=0.001\nworktodo={queue}\nfinished={finished}\ntmp_dir={restart}\nlog_file=\n')
         with (out/'stopped_stage1.log').open('wb') as log:
             proc = subprocess.Popen([str(s1), '-ini', str(ini), '--stage1-stop-handle', str(event)],

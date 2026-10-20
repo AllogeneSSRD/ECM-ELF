@@ -113,8 +113,8 @@ def main():
     with zipfile.ZipFile(out/'tools.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
         for path in [Path(__file__).resolve(), ROOT/'tools/test/test_edwards_gpu_pipeline.py', ROOT/'tools/stat/suyama_mont_ref.py']:
             archive.write(path, path.relative_to(ROOT).as_posix())
-    tracked = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard', 'src', 'kernels', 'include', 'cgbn/include', 'config', 'CMakeLists.txt', 'tools/build'], cwd=ROOT).decode().splitlines()
-    tracked += [str(path.relative_to(ROOT)).replace('\\', '/') for base in ['cgbn/include', 'third_party/gmp-zen3/dist/include'] for path in (ROOT/base).rglob('*') if path.is_file()]
+    tracked = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard', 'src', 'kernels', 'include', 'config', 'CMakeLists.txt', 'tools/build'], cwd=ROOT).decode().splitlines()
+    tracked += [str(path.relative_to(ROOT)).replace('\\', '/') for base in ['third_party/cgbn/include', 'third_party/gmp-zen3/dist/include'] for path in (ROOT/base).rglob('*') if path.is_file()]
     tracked = sorted(set(tracked))
     if a.source_archive:
         shutil.copy2(a.source_archive, out/'sources.zip')

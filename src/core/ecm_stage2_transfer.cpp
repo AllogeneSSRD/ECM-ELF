@@ -1,5 +1,6 @@
 #include "ecm_stage2_transfer.h"
 #include "ecm_worktodo.h"
+#include <algorithm>
 
 #include <filesystem>
 #include <cstdio>
@@ -43,15 +44,44 @@ bool replace(const std::string &source, const std::string &target) {
 }
 
 bool ecm_stage2_transfer_park(const Stage2TransferConfig &cfg,
-                              const std::string &line, std::string &error) {
+                              const std::string &line, std::string &error,int *receiver) {
     error.clear();
     if (cfg.worktodo.empty() || cfg.finished.empty() || cfg.pending.empty() ||
         cfg.worker < 1 || cfg.worker > 1000000 || line.compare(0, 10, "ECMSTAGE2=") != 0 ||
         line.find_first_of("\r\n") != std::string::npos) {
-        error = "invalid Edwards Stage2 transfer";
+        error = "invalid Stage2 transfer";
         return false;
     }
-    const std::string entry = encode({cfg.worktodo, cfg.finished, line, cfg.worker});
+    int selected=cfg.worker;
+    auto workers=cfg.workers;
+    if(cfg.auto_workers || !workers.empty()) {
+        std::map<int,size_t> loads;std::string load_error;
+        // An unavailable target still permits parking; retry will deliver later.
+        (void)ecm_worktodo_worker_loads(cfg.worktodo,loads,load_error);
+        if(cfg.auto_workers) {
+            workers.clear();for(const auto &load:loads)workers.push_back(load.first);
+            if(cfg.configured_workers<1 || cfg.configured_workers>1000000) {
+                error="invalid configured Stage2 worker count";return false;
+            }
+            if(workers.empty())for(int i=1;i<=cfg.configured_workers;++i)workers.push_back(i);
+        }
+        std::sort(workers.begin(),workers.end());
+        if(workers.empty() || workers.front()<1 || workers.back()>1000000) {
+            error="invalid Stage2 receiver worker list";return false;
+        }
+        // Include this source's undelivered assignments in the load snapshot.
+        std::ifstream parked(std::filesystem::u8path(cfg.pending),std::ios::binary);
+        std::string raw;while(std::getline(parked,raw)) {
+            Pending old;if(decode(raw,old)&&old.worktodo==cfg.worktodo)++loads[old.worker];
+        }
+        const auto best=std::min_element(workers.begin(),workers.end(),[&](int a,int b){return loads[a]<loads[b];});
+        selected=*best;
+    }
+    if(receiver)*receiver=selected;
+    const auto finished=cfg.finished_by_worker.find(selected);
+    const auto &finished_path=finished==cfg.finished_by_worker.end()?cfg.finished:finished->second;
+    if(finished_path.empty()){error="empty Stage2 receiver finished path";return false;}
+    const std::string entry = encode({cfg.worktodo, finished_path, line, selected});
     std::ofstream out(std::filesystem::u8path(cfg.pending), std::ios::binary | std::ios::app);
     if (out) {
         out << entry << '\n';
@@ -59,7 +89,7 @@ bool ecm_stage2_transfer_park(const Stage2TransferConfig &cfg,
         out.close();
     }
     if (!out) {
-        error = "cannot append Edwards Stage2 pending transfer: " + cfg.pending;
+        error = "cannot append Stage2 pending transfer: " + cfg.pending;
         return false;
     }
     return true;

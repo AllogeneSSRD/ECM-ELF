@@ -4,7 +4,7 @@
 
 ECM-ELF is an Elliptic Curve Method (ECM) toolkit: CUDA/CGBN and OpenCL GPU Stage1, GMP and optional AVX-512 IFMA CPU Stage1, a separate CUDA polynomial Stage2, libecm CPU Edwards Stage2, plus a Windows GUI, task queues and factor-data tools. The former name, OpenCL-ECM, described only one of these backends; executable names such as `ecm.exe` and `ecm_cuda.exe` remain in use.
 
-This page retains the purpose of each entry point, runnable commands, configuration workflows, save-file boundaries, build routes and tool index. The generated [INI reference](docs/ECM_INI_REFERENCE.md) is authoritative for configuration defaults, ranges and bilingual descriptions. Check the actual binary and its help output to determine which kernel tiers or experimental algorithms a build includes.
+This page retains the purpose of each entry point, runnable commands, configuration workflows, save-file boundaries, build routes and tool index. The generated [TOML reference](docs/ECM_TOML_REFERENCE.md) is authoritative for configuration defaults, ranges and bilingual descriptions. Check the actual binary and its help output to determine which kernel tiers or experimental algorithms a build includes.
 
 ![Language: C](https://img.shields.io/badge/language-C-blue)
 ![GitHub License](https://img.shields.io/github/license/AllogeneSSRD/ECM-ELF)
@@ -41,7 +41,7 @@ For performance comparisons and applicable ranges, see [Stage1 performance](docs
 | Program | Current purpose | Main input and output |
 | --- | --- | --- |
 | `ecm_cuda.exe` | NVIDIA CUDA/CGBN Stage1, processing batches of curves; PARAM0, PARAM2 and PARAM3 families when built in | Number/expression or Stage1 queue; completed `.save` files and in-progress checkpoints |
-| `ecm.exe` | OpenCL GPU Stage1 or CPU Edwards and Suyama-Montgomery Stage1 | Shared driver input, INI, queue and text saves; selectable OpenCL operators |
+| `ecm.exe` | OpenCL GPU Stage1 or CPU Edwards and Suyama-Montgomery Stage1 | Shared driver input, TOML, queue and text saves; selectable OpenCL operators |
 | `ecm_cuda_stage2.exe` | Separate CUDA polynomial Stage2 for eligible normalized PARAM0 Stage1 saves | Direct save input or `ECMSTAGE2=` tasks in the shared `worktodo`; factors, results and per-curve receipts |
 | `ecm_gui.exe` | Windows Stage1 workers, configuration, queue generation, logs, GPU status and results | Manages worker processes; the chosen `ecm_cuda.exe` still performs the computation |
 | `ecm_p95feeder` | Prime95 handoff for local CPU saves | Delivers tasks Prime95 can consume; the driver also supports completed-task handoff |
@@ -77,19 +77,24 @@ A one-off run has the form `echo '<N>' | <ecm.exe or ecm_cuda.exe> [options] B1 
 
 ### Run Stage1 from worktodo
 
-This example assumes `ecm_cuda.exe`, `ecm_cuda_stage2.exe` and `ecm.ini` are in the same directory and commands run there. Merge these keys into an existing INI if you have one. Create `ecm.ini`:
+This example assumes `ecm_cuda.exe`, `ecm_cuda_stage2.exe` and `ecm.toml` are in the same directory and commands run there. Merge these keys into an existing TOML if you have one. Create `ecm.toml`:
 
-```ini
-[Worker #1]
-curve = mont
-target = gpu
+```toml
+[shared]
+worktodo = "worktodo.txt"
+
+[stage1]
+curve = "mont"
+target = "gpu"
 gpu_param = 0
 device = 0
-worktodo = worktodo.txt
-finished = worktodo.finished.txt
-tmp_dir = .
-stage2_finished = worktodo.stage2.finished.txt
+finished = "worktodo.finished.txt"
+tmp_dir = "."
+
+[stage2]
+stage2_finished = "worktodo.stage2.finished.txt"
 ```
+
 
 Create `worktodo.txt`. The final `ECM2` fields are B1, B2 and curve count; `B2=0` runs Stage1 only:
 
@@ -99,14 +104,14 @@ ECM2=1,2,3001,-1,10000,0,8
 ```
 
 ```powershell
-.\ecm_cuda.exe -ini .\ecm.ini --worker 1
+.\ecm_cuda.exe --config .\ecm.toml --worker 1
 ```
 
 With no positional bounds, this command consumes only Stage1 assignments for the selected worker. A Montgomery `ECM2=` queue task writes its final save under `tmp_dir` using the `m{n}_{b1}.save` format, such as `m3001_1e4.save`. Completed assignments go to `worktodo.finished.txt`. On a normal interruption or save write failure, unfinished assignments remain in `worktodo.txt`; rerun the command to resume from a valid checkpoint. `ecm.exe` has the same queue entry point when configured for the chosen CPU/OpenCL path. Different workers may use separate sections of the same queue; run only one program at a time for each worker. See [queues and handoff](#queues) and [Stage1 usage](docs/usage/STAGE1.md).
 
 ### Run and tune CUDA Stage2
 
-After Stage1 finishes without finding a factor and writes `m3001_1e4.save`, append this line to the `[Worker #1]` section of the same `worktodo.txt`. Its explicit B2 and save name must match the actual output. Alternatively, set `auto_stage2=1` to let Stage1 replace its completed queue line in place when no factor was found:
+After Stage1 finishes without finding a factor and writes `m3001_1e4.save`, append this line to the `[Worker #1]` section of the same `worktodo.txt`. Its explicit B2 and save name must match the actual output. Alternatively, enable `auto_stage2 = 1` in `[stage1]`; it replaces the completed row in place by default. Receiver lists and another destination queue are described in the [handoff guide](docs/usage/STAGE1.md#自动交接到-stage2):
 
 ```text
 [Worker #1]
@@ -115,10 +120,10 @@ ECMSTAGE2=1,2,3001,-1,"m3001_1e4.save",1000000
 
 ```powershell
 # Optional: measure complete ECM using the current Stage2 queue and save; leaves the queue untouched
-.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --tune ecm --tune-level 1 --tune-file .\stage2_ecm_tune.toml
+.\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --tune ecm --tune-level 1 --tune-file .\stage2_ecm_tune.toml
 
 # Consume one queued assignment; after tuning, you may add --tune-profile .\stage2_ecm_tune.toml
-.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --once
+.\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --once
 
 # Or process the same save directly without the queue (do not run both paths)
 .\ecm_cuda_stage2.exe --save .\m3001_1e4.save --b2 1000000 --device 0
@@ -127,9 +132,9 @@ ECMSTAGE2=1,2,3001,-1,"m3001_1e4.save",1000000
 .\ecm_cuda_stage2.exe --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
 ```
 
-ECM tune reads the selected worker's Stage2 queue by default. If the queue is absent, it measures a generic bit-width grid; `--tune-save FILE --tune-b2 B2` selects one save explicitly. Tuning has a time budget, and the resulting profile can be loaded with `--tune-profile FILE` or the `stage2_tune_profile` INI key. Explicit B2 does not require tuning; Auto B2 also requires qualified Stage1 cost and a Stage2 profile. See [separate CUDA Stage2](#stage2), [Stage2 usage](docs/usage/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md) for queue, direct-save and Auto B2 limits.
+ECM tune reads the selected worker's Stage2 queue by default. If the queue is absent, it measures a generic bit-width grid; `--tune-save FILE --tune-b2 B2` selects one save explicitly. Tuning has a time budget, and the resulting profile can be loaded with `--tune-profile FILE` or the `stage2_tune_profile` TOML key. Explicit B2 does not require tuning; Auto B2 also requires qualified Stage1 cost and a Stage2 profile. See [separate CUDA Stage2](#stage2), [Stage2 usage](docs/usage/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md) for queue, direct-save and Auto B2 limits.
 
-Common options are below. Run the relevant binary's `--help` and consult the [INI reference](docs/ECM_INI_REFERENCE.md) for all options and exact defaults.
+Common options are below. Run the relevant binary's `--help` and consult the [TOML reference](docs/ECM_TOML_REFERENCE.md) for all options and exact defaults.
 
 | Option | Purpose |
 | --- | --- |
@@ -154,23 +159,26 @@ Operator microbenchmarks have their own CLI. `opencl_ecm_addsub` provides `--no-
 <a id="cpu-stage1"></a>
 ## CPU Stage1 configuration
 
-Both CPU curve models use the same driver and `ecm.ini` as the GPU, but curve construction, coordinates and checkpoint files differ. `curve=mont` with `target=cpu` selects Suyama sigma / GMP-ECM PARAM0; `curve=ed` selects the Atkin–Morain family. For Montgomery, `lcm=1` uses `lcm(1…B1)`; `lcm=12` multiplies it by 12 for workflows requiring Prime95 scalar semantics. Edwards uses a fixed `48*lcm(1…B1)` scalar and rejects `lcm=12`. The Montgomery choice changes the computed point and must be recorded when comparing saves.
+Both CPU curve models use the same driver and `ecm.toml` as the GPU, but curve construction, coordinates and checkpoint files differ. `curve=mont` with `target=cpu` selects Suyama sigma / GMP-ECM PARAM0; `curve=ed` selects the Atkin–Morain family. For Montgomery, `lcm=1` uses `lcm(1…B1)`; `lcm=12` multiplies it by 12 for workflows requiring Prime95 scalar semantics. Edwards uses a fixed `48*lcm(1…B1)` scalar and rejects `lcm=12`. The Montgomery choice changes the computed point and must be recorded when comparing saves.
 
 Example local Montgomery configuration:
 
-```ini
-curve = mont
-target = cpu
-impl = auto
-reduction = auto
-lcm = 1
+```toml
+[shared]
+worktodo = "worktodo.txt"
+
+[stage1]
+curve = "mont"
+target = "cpu"
+impl = "auto"
+reduction = "auto"
+lcm = "1"
 stage1_threads = 0
-tmp_dir = saves
-worktodo = worktodo.txt
-finished = worktodo.finished.txt
+tmp_dir = "saves"
+finished = "worktodo.finished.txt"
 ```
 
-Set `curve=ed` for the Edwards path; `naf_w` applies only there. To compare reductions on the same mathematical target, set `reduction` to `mersenne-fold` and `montgomery` in separate runs. The former requires a full `2^k−1` target. A Suyama save handed to Prime95 Stage2 must use compatible parametrization and scalar construction, and Prime95 must be able to access the save. Applicable keys and ranges are in the [INI reference](docs/ECM_INI_REFERENCE.md).
+Set `curve=ed` for the Edwards path; `naf_w` applies only there. To compare reductions on the same mathematical target, set `reduction` to `mersenne-fold` and `montgomery` in separate runs. The former requires a full `2^k−1` target. A Suyama save handed to Prime95 Stage2 must use compatible parametrization and scalar construction, and Prime95 must be able to access the save. Applicable keys and ranges are in the [TOML reference](docs/ECM_TOML_REFERENCE.md).
 
 Common CPU recipes:
 
@@ -185,12 +193,12 @@ Common CPU recipes:
 
 One eight-curve SIMD batch is one CPU scheduling task; 64 curves therefore create at most eight parallel batches. `stage1_threads=0` chooses worker count automatically, and an explicit count is still bounded by available tasks. Do not run multiple processes against the same `(N,B1)` save/checkpoint path; give them separate output directories. A fixed sigma helps reproduce a curve, while a random seed should not be inferred from log order.
 
-For common failures: if explicit `simd` reports a missing ISA, use `auto` or `scalar`; if workers are idle, compare the number of curve batches with the worker count; if `reduction=mersenne-fold` is rejected, verify that the actual N is still a full Mersenne number; if an INI edit has no effect, check the selected worker section and CLI overrides. Stage1 validation should compare final points under identical N/B1/sigma/parametrization/scalar conditions. Passing a checksum alone is not mathematical agreement.
+For common failures: if explicit `simd` reports a missing ISA, use `auto` or `scalar`; if workers are idle, compare the number of curve batches with the worker count; if `reduction=mersenne-fold` is rejected, verify that the actual N is still a full Mersenne number; if an TOML edit has no effect, check the selected worker section and CLI overrides. Stage1 validation should compare final points under identical N/B1/sigma/parametrization/scalar conditions. Passing a checksum alone is not mathematical agreement.
 
 <a id="queues"></a>
 ## Queues, workers and handoff
 
-Stage1 reads `worktodo.txt` and moves completed tasks into `worktodo.finished.txt`; failed tasks retain an error record. `[Worker #N]` sections in INI and worktodo must correspond: `--worker N` selects both. Give each queue one consumer and each worker separate output paths. The GUI generator can parse PrimeNet `ECM=` / `ECM2=` assignments, preview them and append them to the queue; the worker performs computation and writes the real saves.
+Stage1 reads `worktodo.txt` and moves completed tasks into `worktodo.finished.txt`; failed tasks retain an error record. `[Worker #N]` sections in TOML and worktodo must correspond: `--worker N` selects both. Give each queue one consumer and each worker separate output paths. The GUI generator can parse PrimeNet `ECM=` / `ECM2=` assignments, preview them and append them to the queue; the worker performs computation and writes the real saves.
 
 For example, put a Stage1 task into the chosen worker section:
 
@@ -213,10 +221,10 @@ Save compatibility is also bounded. Eligible CUDA/CPU PARAM0 and CUDA/OpenCL PAR
 
 ```powershell
 .\ecm_cuda_stage2.exe --save .\m3701_260e6.save --b2 26000000000 --device 0
-.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --once
+.\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --once
 ```
 
-Stage1 and Stage2 share `worktodo`; the `ECMSTAGE1=` / `ECMSTAGE2=` prefix selects the engine, and the GUI switches programs as needed. `priority=1` prefers Stage1, `2` prefers Stage2, and empty or `0` follows file order; if the preferred stage is empty, it runs the other. `skip=1` ignores Stage1, and `2` ignores Stage2. Worker sections may override `priority`, `skip` and `auto_stage2`. A nonzero integer `b2_ratio` makes Stage2 use B1 × ratio instead of other B2 sources; it also applies to a direct save run using that INI. A Stage2 assignment has the form `ECMSTAGE2=[AID,]k,b,n,c,save[,B2][,skip_curves][,num_curves][,"known_factors"]`. Direct save input can use `--skip-curves` and `--curves` to select records. The queue records completed curves with receipts and reconciles them after interruption; an unfinished current curve must be recomputed. Missing/corrupt saves, mismatched task fields and device/resource failures have distinct queue handling.
+Stage1 and Stage2 share `worktodo`; the `ECMSTAGE1=` / `ECMSTAGE2=` prefix selects the engine, and the GUI switches programs as needed. `priority=1` prefers Stage1, `2` prefers Stage2, and empty or `0` follows file order; if the preferred stage is empty, it runs the other. `skip=1` ignores Stage1, and `2` ignores Stage2. Worker sections may override `priority`, `skip` and `auto_stage2`. A nonzero integer `b2_ratio` makes Stage2 use B1 × ratio instead of other B2 sources; it also applies to a direct save run using that TOML. A Stage2 assignment has the form `ECMSTAGE2=[AID,]k,b,n,c,save[,B2][,skip_curves][,num_curves][,"known_factors"]`. Direct save input can use `--skip-curves` and `--curves` to select records. The queue records completed curves with receipts and reconciles them after interruption; an unfinished current curve must be recomputed. Missing/corrupt saves, mismatched task fields and device/resource failures have distinct queue handling.
 
 Manual B2 supports eligible 2…16384-bit inputs. Auto B2 additionally needs a suitable cost profile and Stage1 cost, and always remains subject to current memory and arithmetic checks. Give production tasks an explicit B2 when no qualified model is available. `--dry-run` only validates input. `--plan-only` may run a short startup calibration; add `--short-calibration 0` for a pure query. See [Stage2 usage](docs/usage/STAGE2.md), [pipeline](docs/architecture/STAGE2.md) and [Auto B2](docs/architecture/AUTO_B2.md) for arguments, receipts, memory summaries and tuning data.
 
@@ -254,7 +262,7 @@ The microbenchmark examples retain their old `build_rel` paths. If built using `
 
 The Android app lives in `Android/ECM` and provides OpenCL device probing, ECM Stage1 factoring, operator microbenchmarks, work queues and local saves. Open that subproject in Android Studio; native factoring requires GMP. The app loads the vendor OpenCL library at runtime. Do not package a `libOpenCL.so` pulled from a phone into the APK. The build syncs `.cl` kernels into assets; the first compilation of a large kernel may take time. See the [Android overview](Android/README.md), [factoring guide](Android/ECM/README_ECM_FACTORIZATION.md) and [app guide](Android/ECM/README.md) for entry points, 16 KiB page constraints and device checks.
 
-The Windows GUI uses Dear ImGui docking, Win32/DX11 and NVML. One worker corresponds to one Stage1 child process. It edits configuration, generates/previews assignments and displays worker output, GPU metrics and results. It performs no ECM arithmetic and is not a second Prime95 queue consumer. The `[GUI]` and `[Worker #N]` settings, window recovery and stop behavior are covered in [GUI usage](docs/usage/GUI.md).
+The Windows GUI uses Dear ImGui docking, Win32/DX11 and NVML. One worker corresponds to one Stage1 child process. It edits configuration, generates/previews assignments and displays worker output, GPU metrics and results. It performs no ECM arithmetic and is not a second Prime95 queue consumer. The `[gui]` and `[workers.N]` settings, window recovery and stop behavior are covered in [GUI usage](docs/usage/GUI.md).
 
 - [`ecm_prob`](tools/ecm_prob/README.md): ECM success probability, parametrization and effective-divisor models; interpret predictions under their model conditions.
 - [`ecm_report`](tools/ecm_report/README.md): PrimeNet ECM progress and result summaries.

@@ -49,6 +49,7 @@
 #include "ecm_queue_config.h"
 #include "ecm_worktodo.h"
 #include "ecm_stage2_transfer.h"
+#include "ecm_worker_list.h"
 #include "ecm_expr.h"              /* shared exact integer expression parser */
 #include "p95_transfer.h"           /* finished task -> Prime95 worktodo.add (D4/§13) */
 #include "ecm_edwards_cpu.h"        /* Edwards (Atkin-Morain) stage-1 CPU path */
@@ -630,17 +631,16 @@ static void print_ecm_usage(const char *prog) {
               << "  --sync-each-batch          Synchronize after each batch\n"
               << "  --verify-gpu [--verify-gpu-strict]   CPU cross-check GPU results\n\n"
               << "Queue manager (run with no positional B1/B2):\n"
-              << "  -ini <path>                Config file (default: <exe dir>/ecm.ini)\n"
+              << "  --config <path>                Config file (default: <exe dir>/ecm.toml)\n"
               << "  --worker <n>               Which worker this process is (1-based, default 1).\n"
-              << "                             Selects the [Worker #n] section of the ini AND of\n"
-              << "                             the worktodo file; keys before the first section\n"
-              << "                             header are the global defaults for every worker.\n\n"
+              << "                             Selects [workers.N.*] TOML overrides and the\n"
+              << "                             [Worker #N] worktodo queue section.\n\n"
               << "Examples:\n"
               << "  echo '(2^991-1)' | " << name << " -v --go --curve mont --target gpu -gpucurves 384 1e6 0\n"
               << "  echo '(2^421-1)' | " << name << " --curve mont --target gpu -gpucurves 256 -d 1 1e5 0\n"
               << "  echo '(2^4003-1)' | " << name << " --curve mont --target gpu -gpucurves 384 --add asm_b32 1e6 0\n"
               << "  " << name << " --showkernel\n"
-              << "  " << name << " -ini ecm.ini --worker 2      (queue manager, worker #2)\n\n"
+              << "  " << name << " --config ecm.toml --worker 2      (queue manager, worker #2)\n\n"
               << "Add/sub path names (for --add / --sub): default, fused, fused_unroll,\n"
               << "  asm/unroll_128b, asm/unroll_192b, asm/unroll_256b, asm/unroll_384b,\n"
               << "  asm/unroll_512b, asm/unroll_4096b (legacy: asm_b16, asm_b32, fused_unroll_b16).\n"
@@ -713,7 +713,7 @@ static long long current_epoch_seconds() {
 }
 
 struct Stage1RunOptions {
-    /* CLI and INI resolve the same mathematical and execution choices. */
+    /* CLI and TOML resolve the same mathematical and execution choices. */
     ecm_stage1::Selection selection{};
     uint32_t stage1_threads = ecm_config::defaults::stage1_stage1_threads;     // 0 = auto (min(#tasks, #cores)); 1 = 顺序
     long long stage1_t0_ms = 0;      // 进度条计时起点
@@ -1997,7 +1997,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
 // Run one stage-1 batch. N and the caller's n_expr are borrowed (not cleared);
 // factors / array_found are allocated here and returned via `out` (caller frees).
 /* ---------------------------------------------------------------------------
- * Shared automatic Stage1 save names (ecm.ini: save_name_pattern).
+ * Shared automatic Stage1 save names (ecm.toml: save_name_pattern).
  *
  *   {curve}: e / m0 / m2 / m3; {target}: m<original exponent> / bit<actual bits>;
  *   {n}  : original assignment exponent when available, else actual N bits;
@@ -3303,9 +3303,10 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     }
 
     const auto &completed_line=published_line.empty()?line:published_line;
-    if (stage2 != nullptr) {
+    int stage2_receiver=stage2?stage2->worker:worker;
+    if (stage2 != nullptr && !found_factor) {
         std::string transfer_error;
-        if (!ecm_stage2_transfer_park(*stage2, stage2_line, transfer_error)) {
+        if (!ecm_stage2_transfer_park(*stage2, stage2_line, transfer_error,&stage2_receiver)) {
             ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged\n", transfer_error.c_str());
             return false;
         }
@@ -3337,16 +3338,16 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     if (!opt.tmp_dir.empty() && opt.tmp_dir != exe_dir)
         ecm_sync_save_files(opt.tmp_dir, sync1, sync2, full_sync, marker);
 
-    if (stage2 != nullptr) {
+    if (stage2 != nullptr && !found_factor) {
         size_t remaining = 0;
         std::string transfer_error;
         const bool delivered = ecm_stage2_transfer_flush(stage2->pending, remaining, transfer_error);
         if (delivered)
             ecm_ts_fprintf(stdout, "stage2_transfer: ok worker=%d file=\"%s\"\n",
-                           stage2->worker, stage2->worktodo.c_str());
+                           stage2_receiver, stage2->worktodo.c_str());
         else
             ecm_ts_fprintf(stdout, "stage2_transfer: pending worker=%d lines=%zu file=\"%s\" error=\"%s\"\n",
-                           stage2->worker, remaining, stage2->worktodo.c_str(),
+                           stage2_receiver, remaining, stage2->worktodo.c_str(),
                            p95_quote(transfer_error).c_str());
     }
 
@@ -3467,10 +3468,10 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     /* Default home of the stage-1 exponent cache (overridable by --exp-cache / exp_cache). */
     ecm_exp_cache_set_dir(exe_dir);
 
-    // Resolve ini path (default: exe_dir/ecm.ini).
+    // Resolve ini path (default: exe_dir/ecm.toml).
     std::string ini = ini_path;
     if (ini.empty()) {
-        ini = exe_dir + "/ecm.ini";
+        ini = exe_dir + "/ecm.toml";
     } else {
         ini = resolve_rel_local(exe_dir, ini);
     }
@@ -3527,44 +3528,64 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     const std::string sync2 = resolve_rel_local(exe_dir, cfg.save_sync_dir_2);
 
     const std::string stage2_pending = worktodo_path + ".stage2_pending_worker" + std::to_string(worker);
-    Stage2TransferConfig stage2cfg;
-    if (cfg.edwards_stage2_transfer) {
-        const int receiver = cfg.edwards_stage2_worker == 0 ? worker : cfg.edwards_stage2_worker;
-        if (receiver < 1 || receiver > 1000000) {
-            ecm_ts_fprintf(stderr, "FATAL: edwards_stage2_worker must be 0 or 1..1000000\n");
-            return 1;
-        }
-        std::vector<ecm_config::IniLine> lines;
-        if (!ecm_config::read_ini(ini, lines)) {
-            ecm_ts_fprintf(stderr, "FATAL: cannot read Stage2 receiver configuration\n");
-            return 1;
-        }
-        const auto receiver_cfg = ecm_config::read_stage2(ecm_config::cli_entries(lines, receiver, true));
-        stage2cfg.worktodo = resolve_rel_local(ini_dir, receiver_cfg.worktodo);
-        stage2cfg.finished = resolve_rel_local(ini_dir, receiver_cfg.finished);
-        stage2cfg.pending = stage2_pending;
-        stage2cfg.worker = receiver;
-        auto same_path = [](const std::string &a, const std::string &b) {
-            std::error_code ec;
-            if (std::filesystem::equivalent(a, b, ec) && !ec) return true;
+    const auto same_path=[](const std::string &a,const std::string &b) {
+        std::error_code ec;
+        if(std::filesystem::equivalent(a,b,ec)&&!ec)return true;
 #ifdef _WIN32
-            return ecm_stage1::lower_ascii(a) == ecm_stage1::lower_ascii(b);
+        return ecm_stage1::lower_ascii(a)==ecm_stage1::lower_ascii(b);
 #else
-            return a == b;
+        return a==b;
 #endif
-        };
-        if (stage2cfg.worktodo.empty() || stage2cfg.finished.empty() ||
-            same_path(stage2cfg.worktodo, stage2cfg.finished) ||
-            same_path(stage2cfg.worktodo, finished_path) ||
-            same_path(stage2cfg.finished, worktodo_path) ||
-            same_path(stage2cfg.finished, finished_path) ||
-            same_path(stage2cfg.worktodo, stage2_pending) ||
-            same_path(stage2cfg.finished, stage2_pending)) {
-            ecm_ts_fprintf(stderr, "FATAL: Stage2 transfer queue/finished must be distinct from Stage1 queue/finished\n");
-            return 1;
+    };
+    const auto auto_worktodo=resolve_rel_local(ini_dir,cfg.auto_stage2_worktodo.empty()?cfg.worktodo:cfg.auto_stage2_worktodo);
+    const bool auto_stage2_routed=cfg.auto_stage2 &&
+        (!ecm_workers::trim(cfg.auto_stage2_workers).empty() || !same_path(auto_worktodo,worktodo_path));
+    Stage2TransferConfig stage2cfg;
+    if(auto_stage2_routed || (!cfg.auto_stage2 && cfg.edwards_stage2_transfer)) {
+        const int receiver=cfg.auto_stage2?worker:cfg.edwards_stage2_worker==0?worker:cfg.edwards_stage2_worker;
+        if(receiver<1 || receiver>1000000) {
+            ecm_ts_fprintf(stderr,"FATAL: Stage2 receiver worker must be 1..1000000\n");return 1;
         }
-        ecm_ts_fprintf(stdout, "stage2_transfer: ready source_worker=%d receiver_worker=%d file=\"%s\"\n",
-                       worker, receiver, stage2cfg.worktodo.c_str());
+        std::vector<ecm_config::TomlLine> lines;
+        if(!ecm_config::read_toml(ini,lines)) {
+            ecm_ts_fprintf(stderr,"FATAL: cannot read Stage2 receiver configuration\n");return 1;
+        }
+        const auto receiver_cfg=ecm_config::read_stage2(ecm_config::cli_entries(lines,receiver,true));
+        stage2cfg.worktodo=cfg.auto_stage2?auto_worktodo:resolve_rel_local(ini_dir,receiver_cfg.worktodo);
+        stage2cfg.finished=resolve_rel_local(ini_dir,receiver_cfg.finished);
+        stage2cfg.pending=stage2_pending;stage2cfg.worker=receiver;
+        if(cfg.auto_stage2) {
+            const auto spec=ecm_workers::trim(cfg.auto_stage2_workers);
+            stage2cfg.auto_workers=ecm_stage1::lower_ascii(spec)=="auto";
+            int ignored=0;
+            if(!stage2cfg.auto_workers && !spec.empty() &&
+               (!ecm_workers::parse_list(spec,1000000,stage2cfg.workers,ignored) ||
+                ignored || stage2cfg.workers.empty())) {
+                ecm_ts_fprintf(stderr,"FATAL: auto_stage2_workers must be a worker list/range in 1..1000000 or auto\n");return 1;
+            }
+            stage2cfg.configured_workers=ecm_config::read_gui(ecm_config::section_entries(lines,"gui")).NumWorkers;
+            const auto global=ecm_config::read_stage2(ecm_config::cli_entries(lines,0,true));
+            stage2cfg.finished=resolve_rel_local(ini_dir,global.finished);
+            for(const auto &entry:lines)if(entry.worker_scope>0 &&
+                !stage2cfg.finished_by_worker.count(entry.worker_scope)) {
+                const auto selected=ecm_config::read_stage2(ecm_config::cli_entries(lines,entry.worker_scope,true));
+                stage2cfg.finished_by_worker[entry.worker_scope]=resolve_rel_local(ini_dir,selected.finished);
+            }
+        }
+        const auto valid_finished=[&](const std::string &finished) {
+            return !finished.empty() && !same_path(stage2cfg.worktodo,finished) &&
+                !same_path(finished,worktodo_path) && !same_path(finished,finished_path) &&
+                !same_path(finished,stage2_pending);
+        };
+        bool valid= !stage2cfg.worktodo.empty() &&
+            !same_path(stage2cfg.worktodo,finished_path) && !same_path(stage2cfg.worktodo,stage2_pending) &&
+            valid_finished(stage2cfg.finished);
+        for(const auto &item:stage2cfg.finished_by_worker)valid=valid&&valid_finished(item.second);
+        if(!valid) {
+            ecm_ts_fprintf(stderr,"FATAL: Stage2 transfer queue/finished paths conflict with Stage1 output\n");return 1;
+        }
+        ecm_ts_fprintf(stdout,"stage2_transfer: ready source_worker=%d receiver=%s file=\"%s\"\n",
+            worker,cfg.auto_stage2 && !cfg.auto_stage2_workers.empty()?cfg.auto_stage2_workers.c_str():std::to_string(receiver).c_str(),stage2cfg.worktodo.c_str());
     }
     {
         size_t remaining = 0;
@@ -3575,7 +3596,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     }
 
     // Initialize handoff only for an eligible actual task. A typed save may override
-    // the INI curve, and unsupported constructions must not touch transfer paths.
+    // the TOML curve, and unsupported constructions must not touch transfer paths.
     P95TransferConfig p95cfg;
     bool p95_initialized=false,p95_ignore_reported=false;
     auto p95_for_task=[&](const Stage1RunOptions &actual)->const P95TransferConfig* {
@@ -3647,7 +3668,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     Stage1RunOptions opt;
     if (!ecm_stage1::parse_curve_model(cfg.curve_model, opt.selection.curve) ||
         !ecm_stage1::parse_execution_target(cfg.execution_target, opt.selection.target)) {
-        ecm_ts_fprintf(stderr, "ERROR: invalid curve or target in ecm.ini\n");
+        ecm_ts_fprintf(stderr, "ERROR: invalid curve or target in ecm.toml\n");
         return 1;
     }
     opt.affinity_cpus = parse_affinity_spec(cfg.affinity);
@@ -3655,14 +3676,14 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     /* CPU arithmetic: auto | simd | scalar */
     {
         if (!ecm_stage1::parse_cpu_implementation(cfg.cpu_implementation, opt.selection.cpu_implementation)) {
-            ecm_ts_fprintf(stderr, "ERROR: invalid impl in ecm.ini\n");
+            ecm_ts_fprintf(stderr, "ERROR: invalid impl in ecm.toml\n");
             return 1;
         }
     }
     /* SIMD reduction: auto | montgomery | mersenne-fold. */
     {
         if (!ecm_stage1::parse_simd_reduction(cfg.simd_reduction, opt.selection.simd_reduction)) {
-            ecm_ts_fprintf(stderr, "ERROR: invalid reduction in ecm.ini\n");
+            ecm_ts_fprintf(stderr, "ERROR: invalid reduction in ecm.toml\n");
             return 1;
         }
     }
@@ -3676,7 +3697,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     /* Montgomery scalar construction, shared by CPU and GPU. */
     {
         if (!ecm_stage1::parse_scalar_construction(cfg.scalar_construction, opt.selection.scalar_construction)) {
-            ecm_ts_fprintf(stderr, "ERROR: invalid lcm in ecm.ini (expected 1 or 12)\n");
+            ecm_ts_fprintf(stderr, "ERROR: invalid lcm in ecm.toml (expected 1 or 12)\n");
             return 1;
         }
     }
@@ -3711,8 +3732,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     ecm_ts_fprintf(stdout,"%s %s (Stage1)\n",ecm_program::name,ecm_program::version);
     ecm_ts_fprintf(stdout, "===== ECM queue manager =====\n");
     ecm_ts_fprintf(stdout, "config : %s\n", ini.c_str());
-    ecm_ts_fprintf(stdout, "worker : %d (ini section [Worker #%d]; unprefixed keys are the "
-                           "global defaults)\n", worker, worker);
+    ecm_ts_fprintf(stdout, "worker : %d (TOML [workers.%d.*]; worktodo [Worker #%d])\n", worker, worker, worker);
     ecm_ts_fprintf(stdout, "worktodo : %s\n", worktodo_path.c_str());
     ecm_ts_fprintf(stdout, "finished : %s\n", finished_path.c_str());
     ecm_ts_fprintf(stdout, "log_file : %s\n", cfg.log_file.c_str());
@@ -3757,7 +3777,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             return 1;
         }
         if (read == WorktodoReadResult::Empty) {
-            if(!saw_task)p95_for_task(opt); // Preserve idle-start recovery for an eligible INI.
+            if(!saw_task)p95_for_task(opt); // Preserve idle-start recovery for an eligible TOML.
             break;
         }
         saw_task=true;
@@ -3818,7 +3838,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                     mont_format_save_name(opt.save_name_pattern,N,task.B1,&opt);
             }
             const Stage2TransferConfig *stage2 =
-                !cfg.auto_stage2 && cfg.edwards_stage2_transfer && opt.selection.curve == ecm_stage1::CurveModel::Edwards
+                auto_stage2_routed || (!cfg.auto_stage2 && cfg.edwards_stage2_transfer && opt.selection.curve == ecm_stage1::CurveModel::Edwards)
                     ? &stage2cfg : nullptr;
             std::string stage2_line;
             if (stage2 != nullptr || cfg.auto_stage2) {
@@ -3839,7 +3859,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                 worktodo_path, finished_path, worker, opt,
                 exe_dir, sync1, sync2, full_sync, marker, &processed, p95_for_task(opt),
                 {}, stage2, stage2 != nullptr ? stage2_line : std::string{},
-                cfg.auto_stage2 ? stage2_line : std::string{});
+                cfg.auto_stage2 && !auto_stage2_routed ? stage2_line : std::string{});
             mpz_clear(N);
             if (!cont) {
                 if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
@@ -3890,7 +3910,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
                 opt.handoff_factors += task.factors[fi];
             }
         }
-        // The typed save owns curve/param and B1; untyped legacy names use the INI.
+        // The typed save owns curve/param and B1; untyped legacy names use the TOML.
         // Clone options so the next task always starts from the configured defaults.
         auto task_opt=opt;
         if(!stage1_save_construction(task.save_name,task_opt,err) ||
@@ -3908,11 +3928,14 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         }
         if(queue_save_name!=task.save_name)task_opt.legacy_save_source=task.save_name;
         const Stage2TransferConfig *stage2 =
-            !cfg.auto_stage2 && cfg.edwards_stage2_transfer && task_opt.selection.curve == ecm_stage1::CurveModel::Edwards
+            auto_stage2_routed || (!cfg.auto_stage2 && cfg.edwards_stage2_transfer && task_opt.selection.curve == ecm_stage1::CurveModel::Edwards)
                 ? &stage2cfg : nullptr;
         std::string stage2_line;
         if (stage2 != nullptr || cfg.auto_stage2) {
-            const auto save = normalize_path_local(std::filesystem::absolute(resolve_rel_local(exe_dir, queue_save_name)));
+            // The explicit queue save is published relative to the process work
+            // directory. Handoff must name that same file, including when the
+            // config and executable live in different directories.
+            const auto save = normalize_path_local(std::filesystem::absolute(queue_save_name));
             if (!ecm_rewrite_stage2_save(published_line, save, stage2_line, err)) {
                 mpz_clear(N);
                 ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged\n", err.c_str());
@@ -3927,7 +3950,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             worktodo_path, finished_path, worker, task_opt,
             exe_dir, sync1, sync2, full_sync, marker, &processed, p95_for_task(task_opt),published_line,
             stage2,stage2 != nullptr ? stage2_line : std::string{},
-            cfg.auto_stage2 ? stage2_line : std::string{});
+            cfg.auto_stage2 && !auto_stage2_routed ? stage2_line : std::string{});
         mpz_clear(N);
         if (!cont) {
             if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
@@ -4177,7 +4200,7 @@ int main(int argc, char **argv){
             }
             continue;
         }
-        if(a == "-ini" && i+1<argc) {
+        if(a == "--config" && i+1<argc) {
             ini_path = argv[++i];
             continue;
         }
@@ -4270,12 +4293,12 @@ int main(int argc, char **argv){
 
     if (show_gpu_info) {
         /* Effective settings resolve CLI > ini [Worker #N] > built-in, the same order the
-           queue path uses, so `-ini ecm.ini --gpu-info` reports what the workers will
+           queue path uses, so `-ini ecm.toml --gpu-info` reports what the workers will
            actually run. The ini is read, never created (a missing one leaves the CLI
            defaults alone and creates nothing). */
         const std::string raw_exe_dir = get_exe_dir_local();
         const std::string exe_dir = raw_exe_dir.empty() ? "." : raw_exe_dir;
-        std::string ini = ini_path.empty() ? (exe_dir + "/ecm.ini")
+        std::string ini = ini_path.empty() ? (exe_dir + "/ecm.toml")
                                            : resolve_rel_local(exe_dir, ini_path);
         int eff_device = gpu_device_index;
         int eff_param = gpu_param_set ? gpu_param_cli : ecm_config::defaults::stage1_gpu_param;
@@ -4305,7 +4328,7 @@ int main(int argc, char **argv){
     ecm_stage1_install_stop_handler();
 
     if (pos.empty()) {
-        // No positional B1/B2 → queue-manager mode (reads ecm.ini + worktodo).
+        // No positional B1/B2 → queue-manager mode (reads ecm.toml + worktodo).
         return run_queue_manager(ini_path, worker_index);
     }
 
@@ -4470,7 +4493,7 @@ int main(int argc, char **argv){
     opt.verbose = verbose ? 1 : 0;
     opt.device_index = gpu_device_index;
     /* Default home of the stage-1 exponent cache for single runs -- run_queue_manager()
-       sets the same default for queue mode, and an explicit --exp-cache / ecm.ini
+       sets the same default for queue mode, and an explicit --exp-cache / ecm.toml
        exp_cache always wins (the getter is only consulted when nothing was set). */
     if (ecm_exp_cache_get_dir().empty()) {
         const std::string d = get_exe_dir_local();
@@ -4505,14 +4528,14 @@ int main(int argc, char **argv){
     if (tmp_dir.empty()) tmp_dir = ".";      // 默认 = 当前目录 (本地)
     opt.tmp_dir = normalize_path_local(tmp_dir);
     {
-        const auto ini=ini_path.empty()?std::filesystem::path(get_exe_dir_local())/"ecm.ini":std::filesystem::path(ini_path);
+        const auto ini=ini_path.empty()?std::filesystem::path(get_exe_dir_local())/"ecm.toml":std::filesystem::path(ini_path);
         EcmQueueConfig cfg;
         if(ecm_queue_config_load(ini.string(),worker_index,cfg))stage1_result_settings(opt,cfg,ini.parent_path().string(),worker_index);
-        else if(!ini_path.empty()) {std::cerr<<"Cannot read Stage1 result settings from INI"<<std::endl;mpz_clear(N);return 1;}
+        else if(!ini_path.empty()) {std::cerr<<"Cannot read Stage1 result settings from TOML"<<std::endl;mpz_clear(N);return 1;}
     }
     if (!p95_dir_ignored.empty()) {
         std::cout << "Prime95 transfer path ignored: --p95-dir is obsolete; Stage1 saves "
-                     "remain local. Supported Montgomery handoff uses INI p95_worktodo_path."
+                     "remain local. Supported Montgomery handoff uses TOML p95_worktodo_path."
                   << std::endl;
     }
     {

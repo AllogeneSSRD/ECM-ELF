@@ -218,7 +218,7 @@ def run(args):
             point=next(s for s in Path(case['save']).read_text(encoding='utf-8-sig').splitlines() if s.startswith('METHOD='))
             save=folder/'replay.save';save.write_text((point+'\n')*plan['curves_per_condition'],encoding='utf-8')
             queue=folder/'worktodo.txt';line=task(case,cell,save,plan['curves_per_condition']);queue.write_text(line,encoding='utf-8');(folder/'worktodo.initial.txt').write_text(line,encoding='utf-8')
-            ini=folder/'ecm.ini';ini.write_text('user=\ncomputer=\nstage2_finished=finished.txt\n',encoding='utf-8')
+            ini=folder/'ecm.toml';ini.write_text('user=\ncomputer=\nstage2_finished=finished.txt\n',encoding='utf-8')
             command=[str(out/'bin/ecm_cuda_stage2.exe'),'--ini',str(ini),'--worktodo',str(queue),'--once','--device','1',
                 '--d','0','--auto-carrier','1','--tune-runtime','1','--tune-runtime-samples','10','--runtime-prepare-cache','1',
                 '--short-calibration','0','--tune-profile',str(profile),'--arena-mb','6300','--owner-budget-mb','640','--batch-mb','256',
@@ -276,7 +276,7 @@ def run(args):
             if any(s['cell']==cell['id'] for s in plan['decisions']):continue
             case=cases[cell['case']];folder=out/'decisions'/cell['id'];folder.mkdir(parents=True,exist_ok=False)
             queue=folder/'worktodo.txt';queue.write_text(task(case,cell,Path(case['save']),1),encoding='utf-8')
-            ini=folder/'ecm.ini';ini.write_text('user=\ncomputer=\nstage2_finished=finished.txt\n',encoding='utf-8')
+            ini=folder/'ecm.toml';ini.write_text('user=\ncomputer=\nstage2_finished=finished.txt\n',encoding='utf-8')
             command=[str(out/'bin/ecm_cuda_stage2.exe'),'--ini',str(ini),'--worktodo',str(queue),'--once','--plan-only',
                 '--device','1','--d','0','--auto-carrier','1','--tune-runtime','0','--short-calibration','0',
                 '--tune-profile',str(frozen),'--arena-mb','6300','--owner-budget-mb','640','--batch-mb','256',

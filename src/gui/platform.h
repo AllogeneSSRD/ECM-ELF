@@ -48,7 +48,7 @@ std::string file_name(const std::string &path);
 
 // Window setting names used by the [GUI] section, so the UI and the layout code
 // cannot drift apart.
-std::string default_ini_path();             // <exe dir>/ecm.ini
+std::string default_toml_path();             // <exe dir>/ecm.toml
 std::string default_localization_dir();     // <exe dir>/localization
 
 // CJK-capable UI font search. Returns the first existing candidate ("" = none,
@@ -81,7 +81,7 @@ bool browse_for_file(std::string &path, const std::string &title, const std::str
 // ---------------------------------------------------------------------------
 // Worker processes -- milestone M2 (docs/usage/GUI.md)
 //
-// One worker == one `ecm_cuda.exe -ini <ini> --worker N` process:
+// One worker == one `ecm_cuda.exe --config <ini> --worker N` process:
 //   * spawned with CREATE_NO_WINDOW, never through cmd.exe;
 //   * stdout and stderr share ONE pipe write end, so the reader sees the real
 //     interleaving and needs a single thread;
@@ -93,7 +93,7 @@ bool browse_for_file(std::string &path, const std::string &title, const std::str
 
 struct WorkerSpawn {
     std::string exe;                 // ecm_cuda.exe / ecm.exe (absolute)
-    std::string ini;                 // absolute path of ecm.ini
+    std::string ini;                 // absolute path of ecm.toml
     int worker_index = 1;            // becomes --worker N (ini + worktodo section)
     std::string priority = "below_normal";
     std::string working_dir;         // empty = the GUI's own directory

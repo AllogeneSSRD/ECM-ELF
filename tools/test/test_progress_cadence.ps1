@@ -63,7 +63,7 @@ function Check([string]$name, [bool]$ok, [string]$detail = "") {
 
 $enc = New-Object System.Text.UTF8Encoding($false)
 $todo = Join-Path $Sandbox 'worktodo.txt'
-$ini = Join-Path $Sandbox 'ecm.ini'
+$ini = Join-Path $Sandbox 'ecm.toml'
 $finished = Join-Path $Sandbox 'finished.txt'
 $saves = Join-Path $Sandbox 'saves'
 $logFile = Join-Path $Sandbox 'screen.log'
@@ -101,7 +101,7 @@ function Invoke-Cadence([string]$seconds) {
     [System.IO.File]::WriteAllText($ini, (($iniLines -join "`r`n") + "`r`n"), $enc)
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $out = (& cmd /c ('"{0}" -ini "{1}" --worker 1 < NUL 2>&1' -f $Exe, $ini) | Out-String)
+    $out = (& cmd /c ('"{0}" --config "{1}" --worker 1 < NUL 2>&1' -f $Exe, $ini) | Out-String)
     $sw.Stop()
     $log = @(Get-Content -LiteralPath $logFile -ErrorAction SilentlyContinue)
     return @{
@@ -178,9 +178,9 @@ Check "that is more than the 1 s run"     ($fp2 -gt $fp1 -or $sp2 -lt 5)
 
 # ------------------------------------------------------------------ template ---------
 Write-Host "[5] the default ini template documents the key"
-$fresh = Join-Path $Sandbox 'fresh\ecm.ini'
+$fresh = Join-Path $Sandbox 'fresh\ecm.toml'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fresh) | Out-Null
-$null = (& cmd /c ('cd /d "{0}" && "{1}" -ini "{2}" --worker 1 < NUL 2>&1' -f (Split-Path -Parent $fresh), $Exe, $fresh) | Out-String)
+$null = (& cmd /c ('cd /d "{0}" && "{1}" --config "{2}" --worker 1 < NUL 2>&1' -f (Split-Path -Parent $fresh), $Exe, $fresh) | Out-String)
 $freshText = if (Test-Path $fresh) { Get-Content -LiteralPath $fresh -Raw } else { '' }
 Check "the driver created a default ini" ($freshText.Length -gt 100)
 Check "it contains progress_log_seconds = 60" ($freshText -match '(?m)^\s*progress_log_seconds\s*=\s*60\s*$')

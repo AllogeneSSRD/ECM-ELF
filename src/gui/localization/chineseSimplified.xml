@@ -13,7 +13,7 @@
       <Item id="view"              name="视图"/>
       <Item id="language"          name="语言"/>
       <Item id="tools"             name="工具"/>
-      <Item id="open_ini"          name="打开 ecm.ini 所在目录"/>
+      <Item id="open_ini"          name="打开 ecm.toml 所在目录"/>
       <Item id="open_localization" name="打开 本地化目录"/>
       <Item id="save_settings"     name="立即保存布局与设置"/>
       <Item id="reload_localization" name="重新载入本地化"/>
@@ -63,8 +63,8 @@
     </Panel>
 
     <Panel id="p95">
-      <Item id="not_configured"  name="Prime95 交付已关闭：ecm.ini 缺少设置 『p95_worktodo_path』 或 『p95_add_workers』"/>
-      <Item id="open_ini"        name="打开 ecm.ini"/>
+      <Item id="not_configured"  name="Prime95 交付已关闭：ecm.toml 缺少设置 『p95_worktodo_path』 或 『p95_add_workers』"/>
+      <Item id="open_ini"        name="打开 ecm.toml"/>
       <Item id="ready"           name="Prime95 交付就绪：完成的 Stage1 任务将追加到 worktodo.add"/>
       <Item id="ok"              name="Prime95 交付成功：完成任务成功追加到 worktodo.add"/>
       <Item id="warn"            name="Prime95 交付警告"/>
@@ -77,7 +77,7 @@
       <Item id="worker_count" name="Worker 数量"/>
       <Item id="engine" name="计算阶段"/>
       <Item id="choose_exe" name="选择.exe…"/>
-      <Item id="choose_ini" name="选择INI…"/>
+      <Item id="choose_ini" name="选择 TOML…"/>
       <Item id="configuration_selected" name="已选择配置"/>
       <Item id="known_factors" name="已知因子"/>
       <Item id="task_unavailable" name="任务摘要不可用"/>
@@ -110,7 +110,7 @@
       <Item id="log_file"     name="日志文件"/>
       <Item id="open_saves"   name="打开存档目录"/>
       <Item id="no_output"    name="暂无输出"/>
-      <Item id="m1_note"      name="Worker 由 ecm.ini 配置。进程管理、实时输出和重启限制见 docs/usage/GUI.md。"/>
+      <Item id="m1_note"      name="Worker 由 ecm.toml 配置。进程管理、实时输出和重启限制见 docs/usage/GUI.md。"/>
       <Item id="duplicate_device" name="有另一个 worker 用了同一张 GPU 。"/>
       <Item id="state_stopped"    name="已停止"/>
       <Item id="state_starting"   name="启动中"/>

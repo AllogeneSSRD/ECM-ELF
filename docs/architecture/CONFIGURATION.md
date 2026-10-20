@@ -1,35 +1,21 @@
 # 配置定义与解析
 
-## 唯一数据源
+## 单一数据源
 
-[config/ecm_options.json](../../config/ecm_options.json) 定义 Stage1、Stage2、GUI 和 worker 的键、字段、默认值、类型、静态范围、别名、模板覆盖与英中说明。`shared_with` 将单一定义的共享键（如 user/computer）投影到其他消费端；INI 模板只生成一份键，不重复定义默认值。程序使用已生成的 C++ 文件，不在运行时解析 JSON。
+[config/ecm_options.json](../../config/ecm_options.json) 定义 Stage1、Stage2、GUI 与 worker 的键、类型、默认值、静态范围和英中说明。`shared_with` 使两阶段使用同一个 `[shared]` 定义。运行时读取生成的 C++ 绑定，不读取 JSON。修改定义后运行 `python tools/gen/generate_ecm_config.py`；`--check` 与 [构建检查](../../tools/build/internal/check_ecm_config.cmake) 验证生成物哈希。
 
-修改定义后调用 `tools/gen/generate_ecm_config.py` 生成并提交全部产物；`--check` 只检查同步。构建使用 `tools/build/internal/check_ecm_config.cmake` 检查输入/生成物哈希，不需要 Python。定义、生成器或产物不一致时停止构建。
+生成物包括 [默认配置](../../config/ecm.toml.default)、[示例配置](../../config/ecm.toml.example)、[逐键参考](../ECM_TOML_REFERENCE.md)、C++ 绑定、TOML 键表、嵌入模板和哈希清单。两份配置按分区及键名排序；每个条目先写 `键 = 默认值`，再写英文、中文注释，最后空一行。显式设置会改变 worker 后缀或环境变量优先级的键保留带注释的默认值，启用时取消注释。参考文档仅由生成器维护。
 
-## 说明与生成物
+## TOML 分区
 
-`description` 先英文后中文，说明用户能控制什么、各值的效果、空值/0语义及适用条件。显式换行保留，长行按 100 显示列折分；中文全角字符计 2 列。两个语言各起一行，不另写手工键表。
+- `[shared]`：Stage1 与 Stage2 共用；`[stage1]`、`[stage2]`：对应阶段的专用键。
+- `[gui]`：GUI 全局键；`[workers.N]`：第 N 个 GUI worker 的显示与启动设置。
+- `[workers.N.shared]`、`[workers.N.stage1]`、`[workers.N.stage2]`：只覆盖同名全局分区中的键。N 为 1…1000000。
 
-生成物包括配置值/绑定、嵌入 INI 模板、`ecm.ini.example`、[ECM_INI_REFERENCE.md](../ECM_INI_REFERENCE.md) 和哈希清单。参考使用 `key=<domain>; default=<value>`；默认值、范围及说明始终来自定义。生成物固定 LF，避免 checkout 换行改变指纹。
+键名和分区名区分大小写。一个键仅能放在其定义的分区或相应 worker 覆盖分区；同表重复键、未知键、未知表及类型错误会报告文件名和行号。内置默认值 < 全局分区 < 对应 worker 分区 < 命令行。`worktodo.txt` 的 `[Worker #N]` 是独立的队列语法，不是 TOML 配置分区。
 
-`default` 是内部初始化值；`implicit` 描述未指定时的派生策略；`effective_default` 提供消费端的派生名称；`present` 区分未指定与显式空值。模板的 `release_value`/`first_run_value` 可以有意覆盖内部默认，不能把两者混为同一默认。
+[ecm_toml.h](../../src/core/ecm_toml.h) 读取项目使用的 TOML 值类型：带引号的字符串、布尔值、整数、浮点数及窗口整数数组；允许 `#` 行注释和行尾注释。GUI 的 [TOML 编辑器](../../src/gui/toml_file.cpp) 保留未修改行、注释及顺序，改写值时按类型编码，再以临时文件原子替换并保留一份 `.bak`。配置文件默认为程序目录的 `ecm.toml`，显式路径使用 `--config`。不读取旧 `ecm.ini` 格式。
 
-## 读取与覆盖
+## 运行时限制
 
-[ecm_ini.h](../../src/core/ecm_ini.h) 提供保留原行的词法读取、worker 识别、层级覆盖及类型转换。worktodo 的 worker 段识别使用同一入口。Stage1/Stage2 使用生成绑定，GUI 保留注释、顺序及未知键并原子写回。
-
-CLI → worker → 全局 → 默认。相同层重复键采用最后一次，worker 层始终优先。支持 `#`/`;` 整行注释。Stage1 键名大小写规则和 Stage2 专用键不区分大小写的规则由各自消费端保留。
-
-命令行仅把 `[Worker #N]` 识别为覆盖范围，普通标题不结束该范围；`[GUI]` 键不进入命令行配置，避免 `[GUI] priority` 进程级别与队列数字 `priority` 冲突。GUI 把标题当作真实分区。共享模板以注释分组，公共键置于所有分区之前。
-
-## 静态与动态限制
-
-JSON 维护纯静态范围。设备存在性、路径冲突、save 与任务匹配、D/NTT 形状及 Auto B2 标定资格依赖实际运行环境，由消费端验证；不能复制为未经验证的配置业务规则。
-
-新增普通键可以通过定义生成字段、解析、模板和说明，但功能仍需实现消费逻辑。只改文档或生成字段不能视为功能完成。
-
-## 入口
-
-- [生成器](../../tools/gen/generate_ecm_config.py)：`reference`、`template_header` 和生成清单。
-- [配置检查](../../tools/build/internal/check_ecm_config.cmake)：原生构建一致性。
-- [Stage1 驱动](../../src/core/ecm_driver.cpp)、[Stage2 驱动](../../src/core/ecm_cuda_stage2_main.cpp)、[GUI INI](../../src/gui/ini_file.cpp)：动态接线。
+JSON 中的静态范围与类型由生成绑定检查。设备存在性、路径冲突、save/任务匹配、D/NTT 形状及 Auto B2 标定资格依赖实际运行环境，由消费端验证。`worktodo` 与 Stage2 相对路径基于 TOML 所在目录，其他 Stage1 相对路径基于程序目录。具体键、默认值和 worker 覆盖资格见[配置参考](../ECM_TOML_REFERENCE.md)。

@@ -19,7 +19,7 @@ localization/
 4. 编码：**UTF-8**（带不带 BOM 都行，与 Notepad++ 的本地化文件一致）。
    非 UTF-8（比如 GBK）会被 GUI 明确报错，而不是显示乱码。
 5. 在 GUI 的 `Language` 菜单里点一次 `Reload localization` 检查效果；
-   `[GUI] language = <文件名去掉 .xml>` 会在退出时写进 `ecm.ini`。
+   `[GUI] language = <文件名去掉 .xml>` 会在退出时写进 `ecm.toml`。
 
 ## 规则
 

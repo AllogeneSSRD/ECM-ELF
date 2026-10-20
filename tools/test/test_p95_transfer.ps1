@@ -103,7 +103,7 @@ function Invoke-Task {
 
     $p95TodoPath = Join-Path $dir 'p95\worktodo.txt'
     $todo = Join-Path $dir 'worktodo.txt'
-    $ini = Join-Path $dir 'ecm.ini'
+    $ini = Join-Path $dir 'ecm.toml'
     $log = Join-Path $dir 'screen.log'
     $addPath = Join-Path $dir 'p95\worktodo.add'
 
@@ -141,7 +141,7 @@ function Invoke-Task {
 
     $p95Before = if (Test-Path $p95TodoPath) { Get-Content -LiteralPath $p95TodoPath -Raw } else { '' }
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $out = (& cmd /c ('"{0}" -ini "{1}" --worker 1 < NUL 2>&1' -f $Exe, $ini) | Out-String)
+    $out = (& cmd /c ('"{0}" --config "{1}" --worker 1 < NUL 2>&1' -f $Exe, $ini) | Out-String)
     $sw.Stop()
 
     return @{

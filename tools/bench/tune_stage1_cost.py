@@ -197,7 +197,7 @@ def main():
                 trials=[];gpu=[]
                 for repeat in range(grid['repeats']+1):
                     where=out/f'{label}_b{b1}_c{batch}_r{repeat}';where.mkdir()
-                    ini=where/'ecm.ini';save=where/'stage1.save'
+                    ini=where/'ecm.toml';save=where/'stage1.save'
                     ini.write_text('device='+str(a.device)+'\nworktodo=unused.txt\ntmp_dir='+str(where)+
                                    '\nlog_file='+str(where/'screen.log')+'\nverbose=true\n',encoding='utf-8')
                     command=[str(exes[0]),'-ini',str(ini),'--curve','mont','--target','gpu','-d',str(a.device),'--gpu-param','0',

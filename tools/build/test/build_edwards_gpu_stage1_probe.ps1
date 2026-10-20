@@ -53,7 +53,7 @@ foreach($source in $sources){
     } elseif(-not ($reuse -and $previous.objects.$source -and (Test-Path $obj) -and
         $previous.objects.$source -eq (Get-FileHash -LiteralPath $obj).Hash)) {
         $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O2 -arch='+$Arch+
-            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I cgbn/include -I third_party/gmp-zen3/dist/include -I src/core -I src/cpu -I src/cuda -c "'+$source+'" -o "'+$obj+'"'
+            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I src/core -I src/cpu -I src/cuda -c "'+$source+'" -o "'+$obj+'"'
         if($Tiers){
             $definitions=' -DECM_TIERS_RESTRICTED'
             foreach($tier in $Tiers.Split(',')){

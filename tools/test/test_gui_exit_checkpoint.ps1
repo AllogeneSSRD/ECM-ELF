@@ -147,7 +147,7 @@ function New-Sandbox([string]$name, [string]$exitConfirm, [int]$gracefulMs, [boo
         'autostart = 1'
     )
     if (-not $realDriver) { $lines += 'extra_args = --scenario hang' }
-    [System.IO.File]::WriteAllText((Join-Path $dir 'ecm.ini'), (($lines -join "`r`n") + "`r`n"), $enc)
+    [System.IO.File]::WriteAllText((Join-Path $dir 'ecm.toml'), (($lines -join "`r`n") + "`r`n"), $enc)
     if ($realDriver) {
         Copy-Item $EcmCuda (Join-Path $dir 'ecm_cuda.exe')
         # 200000 curves of M991/B1=1e4: the run outlives the test, so the exit path is what
@@ -172,7 +172,7 @@ Write-Host ("sandbox  : " + $Sandbox)
 Write-Host "[A] exit_confirm = ask: WM_CLOSE asks, Escape cancels"
 $dirA = New-Sandbox 'cancel' 'ask' 2000 $false
 Remove-Item $trace -ErrorAction SilentlyContinue
-$pa = Start-Process -FilePath $Exe -ArgumentList @('-ini', (Join-Path $dirA 'ecm.ini'), '--trace') -PassThru
+$pa = Start-Process -FilePath $Exe -ArgumentList @('-ini', (Join-Path $dirA 'ecm.toml'), '--trace') -PassThru
 $hwndA = [IntPtr]::Zero
 $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline -and $hwndA -eq [IntPtr]::Zero) {
@@ -220,7 +220,7 @@ Check "no fake worker left behind after the cancelled close" ($stray.Count -eq 0
 Write-Host "[B] exit_confirm = ask + real driver: the checkpoint is written before the exit"
 $dirB = New-Sandbox 'checkpoint' 'ask' 90000 $true
 Remove-Item $trace -ErrorAction SilentlyContinue
-$pb = Start-Process -FilePath $Exe -ArgumentList @('-ini', (Join-Path $dirB 'ecm.ini'), '--trace') -PassThru
+$pb = Start-Process -FilePath $Exe -ArgumentList @('-ini', (Join-Path $dirB 'ecm.toml'), '--trace') -PassThru
 $hwndB = [IntPtr]::Zero
 $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline -and $hwndB -eq [IntPtr]::Zero) {
@@ -300,7 +300,7 @@ Check "the driver process is gone" ($alive.Count -eq 0) ("pid " + $workerPid + "
 Write-Host "[C] exit_confirm = kill: the documented opt-out still terminates immediately"
 $dirC = New-Sandbox 'kill' 'kill' 2000 $false
 Remove-Item $trace -ErrorAction SilentlyContinue
-$pc = Start-Process -FilePath $Exe -ArgumentList @('-ini', (Join-Path $dirC 'ecm.ini'), '--trace') -PassThru
+$pc = Start-Process -FilePath $Exe -ArgumentList @('-ini', (Join-Path $dirC 'ecm.toml'), '--trace') -PassThru
 $hwndC = [IntPtr]::Zero
 $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline -and $hwndC -eq [IntPtr]::Zero) {

@@ -40,6 +40,6 @@ case可含`environment`对象，对两侧共同设置严格0/1的`NTT_SHORT_GRAP
 
 ## 配置接线验证
 
-配置键为`stage2_pack_zero`，CLI为`--pack-zero 0|1`，完整默认值和覆盖规则见[INI参考](../../docs/ECM_INI_REFERENCE.md#stage2_pack_zero)。
+配置键为`stage2_pack_zero`，CLI为`--pack-zero 0|1`，完整默认值和覆盖规则见[INI参考](../../docs/ECM_TOML_REFERENCE.md#stage2_pack_zero)。
 
 `tools/test/test_stage2_pack_zero_config.py --exe <新生产exe> --save <M503的318-bit余因子save> --device 1 --output data/experiments/<新目录>`使用B1=20、sigma26有效save，检查默认值、共享/worker INI、环境、CLI、旧cprof隐式关闭和非法输入。有效项执行完整曲线，核对设置实际传入曲线子进程并通过GMP与完成回执；非法项须在曲线前拒绝。此项验证不加入性能矩阵。

@@ -2,6 +2,8 @@
 
 工具位于 `tools/build/`。从任意目录调用 PS1，或双击同名 BAT；BAT 转交参数，无参数运行结束后暂停。默认值由 PS1 维护。
 
+Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通过 `CGBN_INCLUDE_DIR` 指向该目录，需要其他安装位置时可在配置时覆盖。
+
 ## 六组入口
 
 独立 CPU Edwards Stage2 使用新功能入口 `tools/build/test/build_cpu_stage2.ps1`，不依赖 CUDA；依赖和输出见 [CPU Stage2](EDWARDS_CPU_STAGE2.md#构建与运行)。它尚未包含在下列 CUDA 发布包中。
@@ -44,7 +46,7 @@ Stage1 分工具链构建多架构程序，再用对应 nvprune/cuobjdump 拆分
 
 本机/开发默认使用本地 Zen3 GMP；发布默认使用 vcpkg 通用 x64 GMP，缺失时明确报错，不自动回退到 Zen3。自定义 `-Gmp <prefix>` 必须提供匹配的头文件、导入库、DLL 和许可证。Zen3 库使用 BMI2/ADX 等指令，其 CPU 兼容范围由实际构建决定。
 
-包内只分发程序、GMP DLL、共享 INI 模板、空队列、`ECM_INI_REFERENCE.md` 与许可证。不包含 `*manifest.json`、`DEV_*`、README 或其他项目文档。重新打包保留已有 INI/队列；ZIP 从干净暂存目录生成，不收录 save、日志和运行数据。
+包内只分发程序、GMP DLL、共享 TOML 模板、空队列、`ECM_TOML_REFERENCE.md` 与许可证。不包含 `*manifest.json`、`DEV_*`、README 或其他项目文档。重新打包保留已有 TOML/队列；ZIP 从干净暂存目录生成，不收录 save、日志和运行数据。
 
 Stage1 输出 `dist/cuda/`，Stage2 多架构输出 `dist/cuda-stage2/`；每架构有目录、ZIP 和 SHA256。构建/拆分/打包清单留在构建目录，包括源码、依赖、编译器、架构和程序身份。
 

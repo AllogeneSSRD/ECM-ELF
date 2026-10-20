@@ -328,7 +328,7 @@ New-Item -ItemType Directory -Force -Path $dirB | Out-Null
 $todoB = Join-Path $dirB 'worktodo.txt'
 $taskB = 'ECMSTAGE1=1,2,521,-1,"m521_1e3.save",0,0,1'
 [System.IO.File]::WriteAllText($todoB, ("[Worker #1]`r`n" + $taskB + "`r`n"), $enc)
-$iniB = Join-Path $dirB 'ecm.ini'
+$iniB = Join-Path $dirB 'ecm.toml'
 Write-SandboxIni $iniB $p95Todo '3' $todoB $EcmCuda
 # The [Worker #N] keys of the real driver section (device) plus autostart.
 $iniBText = [System.IO.File]::ReadAllText($iniB)
@@ -356,7 +356,7 @@ New-Item -ItemType Directory -Force -Path $dirC | Out-Null
 $todoC = Join-Path $dirC 'worktodo.txt'
 $taskC = 'ECMSTAGE1=1,2,522,-1,"m522_1e3.save",0,0,1'
 [System.IO.File]::WriteAllText($todoC, ("[Worker #1]`r`n" + $taskC + "`r`n"), $enc)
-$iniC = Join-Path $dirC 'ecm.ini'
+$iniC = Join-Path $dirC 'ecm.toml'
 Write-SandboxIni $iniC $p95Todo '1' $todoC $EcmCuda
 $iniCText = [System.IO.File]::ReadAllText($iniC)
 [System.IO.File]::WriteAllText($iniC, $iniCText + "autostart = 1`r`n", $enc)

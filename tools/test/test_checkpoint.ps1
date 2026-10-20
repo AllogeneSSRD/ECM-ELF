@@ -34,7 +34,7 @@ function Write-Worktodo {
 }
 
 # 注意: 故意**不设 sigma** —— 这正是自动续跑曾经失效的场景 (每轮随机 sigma 配不上存档).
-Set-Content (Join-Path $run "ecm.ini") -Value @"
+Set-Content (Join-Path $run "ecm.toml") -Value @"
 curve = ed
 target = cpu
 stage1_threads = 2
@@ -49,7 +49,7 @@ log_file =
 
 Write-Host "=== stage 1: full run (random sigma) ==="
 Write-Worktodo
-$o1 = & $Exe -ini (Join-Path $run "ecm.ini") *>&1 | Out-String
+$o1 = & $Exe --config (Join-Path $run "ecm.toml") *>&1 | Out-String
 $ck1 = (Get-ChildItem $saves -Filter *.ckpt -ErrorAction SilentlyContinue | Measure-Object).Count
 $tm1 = (Get-ChildItem $saves -Filter *.tmp  -ErrorAction SilentlyContinue | Measure-Object).Count
 Write-Host "  .ckpt=$ck1  .tmp=$tm1"
@@ -60,7 +60,7 @@ Copy-Item "$saves\*.tmp" $ref -Force
 Write-Host "=== stage 2: resume (keep .ckpt, drop .tmp) ==="
 Get-ChildItem "$saves\*.tmp" | Remove-Item -Force
 Write-Worktodo
-$o2 = & $Exe -ini (Join-Path $run "ecm.ini") *>&1 | Out-String
+$o2 = & $Exe --config (Join-Path $run "ecm.toml") *>&1 | Out-String
 $resume_lines = ($o2 -split "`n" | Select-String -Pattern "resume from \.ckpt").Count
 ($o2 -split "`n" | Select-String -Pattern "found \.ckpt|resume from \.ckpt" | Select-Object -First 2) |
     ForEach-Object { "  " + ($_.Line -replace "`e\[[0-9;]*[A-Za-z]","").Trim() }

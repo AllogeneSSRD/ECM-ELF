@@ -39,7 +39,7 @@ def main():
     (out/'curves.save').write_text((saved+'\n')*count,encoding='utf-8')
     queue=out/'worktodo.txt';profile=out/'stage2_ecm_tune.toml'
     queue.write_text(f'ECMSTAGE2=1,2,{a.exponent},-1,curves.save,100000000,0,{count},"{known}"\n',encoding='utf-8')
-    ini=out/'ecm.ini'
+    ini=out/'ecm.toml'
     ini.write_text('user=\ncomputer=\nverbose=false\nstage2_debug_log=false\n'+
         ('stage2_tune_runtime_samples='+str(a.sample_limit)+'\n' if a.sample_limit!=10 else '')+
         'stage2_finished=finished.txt\n'

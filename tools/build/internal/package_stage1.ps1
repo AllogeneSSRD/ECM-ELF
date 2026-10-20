@@ -29,17 +29,17 @@ foreach ($arch in $Archs.Split(',')) {
     Remove-EcmReleaseMetadata $package
     Copy-Item -LiteralPath $exe -Destination (Join-Path $package 'ecm_cuda.exe') -Force
     Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $package -Force
-    Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.ini.example') -Destination $package -Force
-    Copy-Item -LiteralPath (Join-Path $repo 'docs/ECM_INI_REFERENCE.md') -Destination $package -Force
+    Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.toml.example') -Destination $package -Force
+    Copy-Item -LiteralPath (Join-Path $repo 'docs/ECM_TOML_REFERENCE.md') -Destination $package -Force
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $package -Force
     Copy-Item -LiteralPath $gmpDependency.Copyright -Destination (Join-Path $package 'GMP-COPYRIGHT.txt') -Force
-    $ini = Join-Path $package 'ecm.ini'
-    if (-not (Test-Path -LiteralPath $ini)) { Copy-Item -LiteralPath (Join-Path $package 'ecm.ini.example') -Destination $ini }
+    $ini = Join-Path $package 'ecm.toml'
+    if (-not (Test-Path -LiteralPath $ini)) { Copy-Item -LiteralPath (Join-Path $package 'ecm.toml.example') -Destination $ini }
     $queue = Join-Path $package 'worktodo.txt'
     if (-not (Test-Path -LiteralPath $queue)) {
         [IO.File]::WriteAllText($queue, '# Add Stage1 ECM worktodo assignments here.' + [Environment]::NewLine, (New-Object Text.UTF8Encoding $false))
     }
-    $files = @('ecm_cuda.exe','gmp-10.dll','ecm.ini.example','LICENSE','GMP-COPYRIGHT.txt','ECM_INI_REFERENCE.md')
+    $files = @('ecm_cuda.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt','ECM_TOML_REFERENCE.md')
     $hashes = [ordered]@{}
     foreach ($file in $files) { $hashes[$file] = (Get-FileHash -LiteralPath (Join-Path $package $file)).Hash }
     [ordered]@{ architecture = "sm_$arch"; status = 'release_candidate_build_only'; tests_run = $false; hashes = $hashes } |

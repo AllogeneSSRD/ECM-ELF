@@ -119,7 +119,7 @@ def main():
         if type(case.get('fold_mb', 640)) is not int or case.get('fold_mb', 640) < 0:
             raise ValueError('fold_mb must be a nonnegative integer')
         case['save'] = str(freeze(Path(case['save'])))
-    ini = out / 'ecm.ini'
+    ini = out / 'ecm.toml'
     ini.write_text('verbose=true\nstage2_debug_log=false\nstage2_short_calibration=false\nstage2_tune_runtime=false\n')
     freeze(ini)
     (out / 'identity.json').write_text(json.dumps(dict(binary_sha256=sha(exe),

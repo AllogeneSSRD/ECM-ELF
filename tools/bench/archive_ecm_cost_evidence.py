@@ -64,7 +64,7 @@ def main():
             add(path)
     for row in study['stage1']:
         cmd = row['command']; saved = Path(cmd[cmd.index('-save')+1])
-        add(saved, row['save_sha256']); add(saved.parent/'driver.log'); add(saved.parent/'ecm.ini')
+        add(saved, row['save_sha256']); add(saved.parent/'driver.log'); add(saved.parent/'ecm.toml')
     for saved in study['saves'].values():
         add(saved['path'], saved['sha256'])
     if 'stage1_provenance' in study:

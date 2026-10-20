@@ -6,7 +6,7 @@
 //     Montgomery reduction is replaced by a fold (2^k == 1), which halves the
 //     madds per modular multiply (src/cpu/simd_mont_ifma.cpp, ifma_mersenne_mul);
 //   * CGBN's mont_mul is "full product (T*A) + full reduction (Q*N)" -- see
-//     cgbn/include/cgbn/core/core_mont_wmad.cu: chains 1-4 do T*A, chains 5-8 do
+//     third_party/cgbn/include/cgbn/core/core_mont_wmad.cu: chains 1-4 do T*A, chains 5-8 do
 //     Q*N, i.e. twice the word products of a bare product;
 //   * cgbn_mul_wide (core_mul_wmad.cu) computes ONLY the T*A half.
 // So the fold candidate is   r = fold(mul_wide(a,b))  and the question is purely
@@ -98,7 +98,7 @@ enum { OP_MONT_MUL, OP_MUL_WIDE, OP_REDUCE_WIDE, OP_FOLD_ALIGN, OP_FOLD_ALIGN_CA
  * to its INTERNAL accumulators.
  *
  * The product accumulation below is copied VERBATIM from
- *   cgbn/include/cgbn/core/core_mul_wmad.cu :: core_t<env>::mul_wide (lines 142-320)
+ *   third_party/cgbn/include/cgbn/core/core_mul_wmad.cu :: core_t<env>::mul_wide (lines 142-320)
  * (names qualified; the `add[]` input of that function is zero in every CGBN caller of
  * cgbn_mul_wide, hence mpzero(ra) here).  Only the EPILOGUE differs: instead of
  * publishing (lo, hi) as two cgbn_t and then folding them with cgbn_* operators, the

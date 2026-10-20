@@ -18,7 +18,7 @@
 
 工作量约为三次 O(L log₂L) 变换加 O(L) pointwise/carry、pack 和系数归约。每 butterfly 的访存/指令取决于融合层数、shared 布局和根缓存；该渐近式不能直接换算 GPU 周期数。
 
-独立生产程序默认使用pack/zero融合：`stage2_pack_zero=true`，可用false或`--pack-zero 0`关闭；共享/Worker INI、CLI和环境覆盖见[配置参考](../ECM_INI_REFERENCE.md#stage2_pack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/cuda/stage2/s4_input_pack.cuh)。
+独立生产程序默认使用pack/zero融合：`stage2_pack_zero=true`，可用false或`--pack-zero 0`关闭；共享/Worker TOML、CLI和环境覆盖见[配置参考](../ECM_TOML_REFERENCE.md#stage2_pack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/cuda/stage2/s4_input_pack.cuh)。
 
 ## 当前算术与调度
 
@@ -58,7 +58,7 @@ NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导�
 
 ### 实际运行的长度与运算量
 
-生产 Stage2 通过 `stage2_ntt_counts=1` 开启按长度计数，默认 0，关闭时不采集或输出长度表；CLI `--ntt-counts 0|1` 覆盖选定 worker 的 INI。Edwards/Montgomery 使用相同入口。实验引擎不支持此选项，开启时报错。
+生产 Stage2 通过 `stage2_ntt_counts=1` 开启按长度计数，默认 0，关闭时不采集或输出长度表；CLI `--ntt-counts 0|1` 覆盖选定 worker 的 TOML。Edwards/Montgomery 使用相同入口。实验引擎不支持此选项，开启时报错。
 
 开启后每条曲线结束输出 `ntt_count_table` 表，按长度升序列出 length、log2、convolutions、forward、inverse、total。每个 batch 成员独立计数，每次卷积含两个正向与一个逆向，因此 forward=2·convolutions、inverse=convolutions、total=3·convolutions。Graph 重放和物理分块不改变数学变换数；它不是 CUDA kernel 启动数。表显式开启后在 quiet 控制台也输出，正常日志中保留一份。
 

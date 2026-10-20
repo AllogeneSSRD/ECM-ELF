@@ -66,7 +66,7 @@ G 树不会为了填满 P 而扩大已经选定的 B2。若显式比较完整覆
 
 ## 可选 relocation
 
-`stage2_relocation=1` 或 `--relocation 1` 启用保守后缀算法，默认0，CLI 覆盖 INI。Edwards 和 PARAM0 共用该路径。设原 giant 终点 I=⌊B2/D⌋+2，m 为不整除 D 的最小素数，A=max(1,⌊I/m⌋)；试算仅生成 i=A,…,I，共 I−A+1 点。原 B1/B2、baby 集、补充小素数路径和终端 guard 覆盖保持不变。证明与 GCD=N 反例见 [relocation 固定资料](../reference/ECM_STAGE2_RELOCATION.md)。
+`stage2_relocation=1` 或 `--relocation 1` 启用保守后缀算法，默认0，CLI 覆盖 TOML。Edwards 和 PARAM0 共用该路径。设原 giant 终点 I=⌊B2/D⌋+2，m 为不整除 D 的最小素数，A=max(1,⌊I/m⌋)；试算仅生成 i=A,…,I，共 I−A+1 点。原 B1/B2、baby 集、补充小素数路径和终端 guard 覆盖保持不变。证明与 GCD=N 反例见 [relocation 固定资料](../reference/ECM_STAGE2_RELOCATION.md)。
 
 试算经过既有算术检查排空后，只有没有命中且目标 N 上没有非单位时才允许完成 NF。任何真因子、gcd=N、giant/分组/分段求逆非单位都令试算失效：丢弃其因子结果，重放 i=1,…,I，以原算法结果发布。baby 初始化已发现非单位时直接执行原区间，不先做后缀。F 树与 baby 初始化复用；原区间的 inverse、giant/G/fold、下降及 GCD 重新执行。不同区间的叶指纹通常不同，验收比较各自独立参考；重放完成叶必须匹配原算法。原算法只接收真因子块，gcd=N 本身不会发布成因子。
 

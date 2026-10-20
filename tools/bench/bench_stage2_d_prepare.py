@@ -78,7 +78,7 @@ def main():
     try:
         for index, mode in enumerate(modes, 1):
             folder = out/f'{index:02}_{mode}'; folder.mkdir()
-            ini = folder/'ecm.ini'; ini.write_text('user=\ncomputer=\nstage2_finished=finished.txt\n', encoding='utf-8')
+            ini = folder/'ecm.toml'; ini.write_text('user=\ncomputer=\nstage2_finished=finished.txt\n', encoding='utf-8')
             queue = folder/'worktodo.txt'
             line = f'ECMSTAGE2=1,2,{case["exponent"]},-1,"{save}",{a.b2},0,{a.curves},"{whole//n}"\n'
             queue.write_text(line, encoding='utf-8'); (folder/'worktodo.initial.txt').write_text(line, encoding='utf-8')

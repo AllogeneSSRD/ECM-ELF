@@ -52,7 +52,7 @@ def main():
     saved = out / 'replay.save'; saved.write_text((point + '\n') * args.curves, encoding='utf-8')
     queue = out / 'worktodo.txt'
     queue.write_text(f'ECMSTAGE2=1,2,{args.exponent},-1,replay.save,{args.b2},0,{args.curves},"{whole//n}"\n', encoding='utf-8')
-    ini = out / 'ecm.ini'; ini.write_text('user=\ncomputer=\nstage2_finished=finished.txt\n', encoding='utf-8')
+    ini = out / 'ecm.toml'; ini.write_text('user=\ncomputer=\nstage2_finished=finished.txt\n', encoding='utf-8')
     profile = out / 'stage2_ecm_tune.toml'
     common = [str(binary / args.exe.name), '--ini', str(ini), '--device', '1', '--batch-mb', '256',
               '--arena-mb', '6300', '--owner-budget-mb', '640', '--short-calibration', '0',

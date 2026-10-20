@@ -19,7 +19,7 @@ Stage1 默认 `Jobs=8`，Stage2 默认 `SplitCompile=8`。PS1 为默认参数来
 - 工具链：`-CudaRoot`、`-LegacyCudaRoot`、`-VcVars`、`-Gmp`；Stage1 另有 `-OpenSslRoot`。60/70 用CUDA12.6，其余默认CUDA13.3。
 - 缓存/拆分：`-SkipBuild` 要求冻结身份一致；Stage1 的 `-SkipSplit`/`-SkipPackage` 控制发布步骤。
 
-完整参数以各 PS1 的 param 与帮助为准。发布只附 `ECM_INI_REFERENCE.md` 这一份项目说明；源码/构建/拆分/打包清单保留在构建目录，ZIP 旁保留 SHA256。
+完整参数以各 PS1 的 param 与帮助为准。发布只附 `ECM_TOML_REFERENCE.md` 这一份项目说明；源码/构建/拆分/打包清单保留在构建目录，ZIP 旁保留 SHA256。
 
 ## 子目录
 

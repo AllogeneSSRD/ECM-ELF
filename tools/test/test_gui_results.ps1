@@ -95,7 +95,7 @@ public static class Win32GuiRes {
 $enc = New-Object System.Text.UTF8Encoding($false)
 $task = 'ECMSTAGE1=1,2,{0},-1,"m{0}_1e6.save",0,0,{1}' -f $Exp, $Curves
 $todo = Join-Path $Sandbox 'worktodo.txt'
-$ini = Join-Path $Sandbox 'ecm.ini'
+$ini = Join-Path $Sandbox 'ecm.toml'
 $finished = Join-Path $Sandbox 'finished.txt'
 $saves = Join-Path $Sandbox 'saves'
 $logFile = Join-Path $Sandbox 'screen_1.log'

@@ -90,7 +90,7 @@ def main():
         return r,time.monotonic()-t
     for case in plan['cases']:
         n=case['exponent'];where=out/f'm{n}';where.mkdir(exist_ok=True)
-        ini=where/'ecm.ini';ini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=unused.txt\ntmp_dir=.\n',encoding='utf-8')
+        ini=where/'ecm.toml';ini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=unused.txt\ntmp_dir=.\n',encoding='utf-8')
         save=where/'stage1.save'
         if not args.resume or not save.exists():
             if save.exists():raise RuntimeError('Use a fresh directory or --resume')

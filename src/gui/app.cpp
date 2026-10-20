@@ -153,7 +153,7 @@ const char *stage2_phase_key(const std::string &phase) {
 }
 
 // The layout blob (ImGui's own settings: dock nodes, panel sizes, viewport
-// positions) is stored as ONE escaped [GUI] key, because values are single-line.
+// positions) is stored as ONE escaped [gui] key, because values are single-line.
 std::string escape_blob(const std::string &s) {
     std::string out;
     out.reserve(s.size() + 16);
@@ -258,18 +258,19 @@ const WorkerRunState *all_worker_states(int *count) {
 }
 
 bool App::init(const std::string &ini_path, const std::string &language, std::string &err) {
-    ini_path_ = ini_path.empty() ? default_ini_path() : ini_path;
+    ini_path_ = ini_path.empty() ? default_toml_path() : ini_path;
     if(!path_is_absolute(ini_path_))ini_path_=std::filesystem::absolute(std::filesystem::u8path(ini_path_)).u8string();
     err.clear();
 
     if (!ini_.load(ini_path_, err)) {
+        if (file_exists(ini_path_)) return false;
         // First run: start from an empty file. The queue manager creates the
-        // template; the GUI only ever adds its own [GUI] keys.
+        // template; the GUI only ever adds its own [gui] keys.
         ini_.reset(ini_path_);
-        status_ = "new ini: " + ini_path_;
+        status_ = "new TOML: " + ini_path_;
     }
 
-    const auto gui=ecm_config::read_gui(ecm_config::section_entries(ini_.lines(),"GUI"));
+    const auto gui=ecm_config::read_gui(ecm_config::section_entries(ini_.lines(),"gui"));
     loc_dir_ = gui.localization_dir;
     if (loc_dir_.empty()) {
         loc_dir_ = default_localization_dir();
@@ -316,7 +317,7 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
     font_snap_=gui.font_snap;
     exit_confirm_=gui.exit_confirm;
     graceful_stop_ms_=static_cast<unsigned long long>(gui.graceful_stop_ms);
-    // Result files: [GUI] results_json / results_txt, defaulting next to the exe. The
+    // Result files: [gui] results_json / results_txt, defaulting next to the exe. The
     // JSONL is append-only (the durable record), results.txt is derived from it.
     results_json_ = gui.results_json;
     if (results_json_.empty()) {
@@ -329,8 +330,8 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
     // Prime95 handoff: the GUI reads these two [queue] keys itself so the notice strip can
     // say "not configured" before any worker runs, and so the two "open" buttons know
     // where to look (docs/usage/GUI.md 18).
-    p95_worktodo_path_ = ini_.get("", "p95_worktodo_path");
-    p95_add_workers_ = ini_.get("", "p95_add_workers");
+    p95_worktodo_path_ = ini_.get("stage1", "p95_worktodo_path");
+    p95_add_workers_ = ini_.get("stage1", "p95_add_workers");
     {
         std::string r_err;
         if (!results_.init(results_json_, results_txt_, r_err)) {
@@ -487,16 +488,16 @@ std::string App::task_text(const WorkerView &worker) const {
 }
 bool App::select_workflow_ini(const std::string &path) {
     for(const auto &w:workers_)if(w.proc && (w.proc->running() || w.proc->state()==WorkerRunState::Restarting))return false;
-    IniFile selected;std::string error;if(!selected.load(path,error)){status_=error;return false;}
+    TomlFile selected;std::string error;if(!selected.load(path,error)){status_=error;return false;}
     try {
-        const auto gui=ecm_config::read_gui(ecm_config::section_entries(selected.lines(),"GUI"));
+        const auto gui=ecm_config::read_gui(ecm_config::section_entries(selected.lines(),"gui"));
         for(int i=1;i<=gui.NumWorkers;++i) {
             const auto entries=ecm_config::cli_entries(selected.lines(),i,true);
             ecm_config::read_stage1(entries);ecm_config::read_stage2(entries);
         }
         capture_layout();if(!ini_.save(error)){status_=error;return false;}
-        if(selected.has("GUI","exe"))worker_exe_=gui.exe;
-        if(selected.has("GUI","stage2_exe"))stage2_exe_=gui.stage2_exe;
+        if(selected.has("gui","exe"))worker_exe_=gui.exe;
+        if(selected.has("gui","stage2_exe"))stage2_exe_=gui.stage2_exe;
         num_workers_=gui.NumWorkers;priority_=gui.priority;
         exit_confirm_=gui.exit_confirm;graceful_stop_ms_=static_cast<unsigned long long>(gui.graceful_stop_ms);
         ini_=std::move(selected);ini_path_=std::filesystem::absolute(std::filesystem::u8path(path)).u8string();
@@ -520,16 +521,14 @@ void App::rebuild_workers() {
 }
 
 WorkerView App::make_worker(int index) const {
-    const std::string section="Worker #"+std::to_string(index);
+    const std::string section="workers."+std::to_string(index);
     auto gui_entries=ecm_config::section_entries(ini_.lines(),section);
-    if(!ini_.has(section,"gpucurves") && ini_.has("","gpucurves"))
-        ecm_config::replace_entry(gui_entries,"gpucurves",ini_.get("","gpucurves"));
     const auto worker=ecm_config::read_worker(gui_entries);
     WorkerView w;
     w.index=index;w.stage2=worker_stage2(index);
     w.exe=resolve_worker_exe(index);
-    // Stage1 resolves paths beside its executable; Stage2 resolves INI paths
-    // beside the shared INI. An adjacent pair therefore shares one work directory.
+    // Stage1 resolves paths beside its executable; Stage2 resolves TOML paths
+    // beside the shared TOML. An adjacent pair therefore shares one work directory.
     w.working_dir=w.stage2?path_dir(ini_path_):path_dir(w.exe);
     if(w.working_dir.empty())w.working_dir=exe_dir();
     w.name=worker.name;
@@ -796,7 +795,7 @@ void App::tick() {
 }
 
 std::string App::effective_config_text(int worker_index) const {
-    const auto section="Worker #"+std::to_string(worker_index);
+    const auto section="workers."+std::to_string(worker_index);
     std::ostringstream out;
     out<<"next task = "<<(worker_stage2(worker_index)?"ECMSTAGE2":"ECMSTAGE1")<<"\n"
        <<"exe = "<<resolve_worker_exe(worker_index)<<"\n";
@@ -806,7 +805,7 @@ std::string App::effective_config_text(int worker_index) const {
     const auto entries=ecm_config::cli_entries(ini_.lines(),worker_index,true);
     for(const auto &entry:entries)if(keys.count(entry.first)) {
         bool overridden=false;
-        for(const auto &line:ini_.lines())if(line.kind==IniFile::Line::Kind::KeyValue &&
+        for(const auto &line:ini_.lines())if(line.kind==TomlFile::Line::Kind::KeyValue &&
             line.worker_scope==worker_index && ecm_config::lower(line.key)==entry.first)overridden=true;
         out<<entry.first<<" = "<<entry.second<<(overridden?"   ["+section+"]":"   [global]")<<"\n";
     }
@@ -816,7 +815,7 @@ std::string App::effective_config_text(int worker_index) const {
 void App::on_imgui_ready() {
     ImGuiIO &io = ImGui::GetIO();
     // The GUI owns the layout: ImGui must not write its own imgui.ini, the layout
-    // is persisted into [GUI] dock_layout (docs/usage/GUI.md 7.1).
+    // is persisted into [gui] dock_layout (docs/usage/GUI.md 7.1).
     io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
@@ -827,8 +826,8 @@ void App::on_imgui_ready() {
 
 void App::discard_saved_layout() {
     layout_blob_loaded_.clear();
-    ini_.set("GUI", "dock_layout", "");
-    ini_.set_int("GUI", "dock_layout_ver", 0);
+    ini_.set("gui", "dock_layout", "");
+    ini_.set_int("gui", "dock_layout_ver", 0);
     layout_built_ = false;
 }
 
@@ -837,18 +836,18 @@ void App::capture_layout(bool save_docking_layout) {
         std::size_t len = 0;
         const char *blob = ImGui::SaveIniSettingsToMemory(&len);
         if (blob != nullptr) {
-            ini_.set("GUI", "dock_layout", escape_blob(std::string(blob, len)));
-            ini_.set_int("GUI", "dock_layout_ver", kLayoutVersion);
+            ini_.set("gui", "dock_layout", escape_blob(std::string(blob, len)));
+            ini_.set_int("gui", "dock_layout_ver", kLayoutVersion);
         }
     }
     int rect[4] = {win_x_, win_y_, win_w_, win_h_};
-    ini_.set("GUI", "window", int_list(rect, 4));
-    ini_.set_int("GUI", "NumWorkers", num_workers_);
-    ini_.set("GUI", "language", language_);
-    ini_.set_int("GUI", "refresh_hz", refresh_hz_);
-    ini_.set_int("GUI", "gpu_poll_ms", gpu_poll_ms_);
-    ini_.set("GUI", "priority", priority_);
-    ini_.set("GUI","exe",worker_exe_);ini_.set("GUI","stage2_exe",stage2_exe_);
+    ini_.set("gui", "window", int_list(rect, 4));
+    ini_.set_int("gui", "NumWorkers", num_workers_);
+    ini_.set("gui", "language", language_);
+    ini_.set_int("gui", "refresh_hz", refresh_hz_);
+    ini_.set_int("gui", "gpu_poll_ms", gpu_poll_ms_);
+    ini_.set("gui", "priority", priority_);
+    ini_.set("gui","exe",worker_exe_);ini_.set("gui","stage2_exe",stage2_exe_);
 }
 
 bool App::shutdown(std::string &err, bool save_docking_layout) {
@@ -953,7 +952,7 @@ void App::draw() {
         }
     }
 
-    // [GUI] start_tab: focus the wanted panel so its dock TAB gets selected. Focusing is the
+    // [gui] start_tab: focus the wanted panel so its dock TAB gets selected. Focusing is the
     // only mechanism that works here -- DockNodeUpdate() copies the node's NavWindow back into
     // the tab bar every frame (third_party/imgui/imgui.cpp:19889 "Apply NavWindow focus back
     // to the tab bar"), so writing node->SelectedTabId is silently overwritten (measured
@@ -965,7 +964,7 @@ void App::draw() {
 
     // ---- dockspace host -------------------------------------------------------
     // One full-viewport window owns the dockspace. Panels dock into it, so the user
-    // can rearrange everything and the arrangement is persisted in [GUI] dock_layout.
+    // can rearrange everything and the arrangement is persisted in [gui] dock_layout.
     ImGui::SetNextWindowPos(host_pos);
     ImGui::SetNextWindowSize(host_size);
     ImGui::SetNextWindowViewport(vp->ID);
@@ -989,7 +988,7 @@ void App::draw() {
     // stored blob predates the current layout version -- so an ini written by an older
     // build (or by the "everything stacked" first run) gets repaired instead of pinned.
     if (!layout_built_ && frame_counter_ >= 2 &&
-        (ini_.get_int("GUI", "dock_layout_ver", ecm_config::defaults::gui_dock_layout_ver) < kLayoutVersion ||
+        (ini_.get_int("gui", "dock_layout_ver", ecm_config::defaults::gui_dock_layout_ver) < kLayoutVersion ||
          ImGui::DockBuilderGetNode(dockspace_id) == nullptr)) {
         build_default_layout(dockspace_id);
     }
@@ -1082,7 +1081,7 @@ bool App::request_close() {
         return true;
     }
     if (exit_confirm_ == "kill") {
-        // Explicit opt-out ([GUI] exit_confirm = kill): terminate immediately.
+        // Explicit opt-out ([gui] exit_confirm = kill): terminate immediately.
         trace("exit: " + std::to_string(running) + " worker(s) running, exit_confirm=kill");
         stop_all_quietly();
         quit_requested_ = true;
@@ -1308,12 +1307,12 @@ void App::build_default_layout(unsigned int dockspace_id) {
         ImGui::DockBuilderDockWindow(id.c_str(), left_bottom);
     }
     ImGui::DockBuilderFinish(dockspace_id);
-    // Which tab of the shared left-top node is selected at startup: [GUI] start_tab =
+    // Which tab of the shared left-top node is selected at startup: [gui] start_tab =
     // workers (default) | detail | gen. The generator is used in bursts (paste, preview,
     // apply), so being able to open the GUI straight on it is worth one ini key -- and it is
     // also what lets a test measure the panel's controls, because a non-selected tab is
     // skipped by ImGui and reports no geometry.
-    std::string tab = ini_.get("GUI", "start_tab", ecm_config::defaults::gui_start_tab);
+    std::string tab = ini_.get("gui", "start_tab", ecm_config::defaults::gui_start_tab);
     for (char &c : tab) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     const char *tab_id = (tab == "gen" || tab == "generator") ? "###gen"
                        : (tab == "prob" || tab == "probability") ? "###prob"
@@ -1689,7 +1688,7 @@ void App::draw_p95_notice(float height, float host_top) {
         ImGui::TextDisabled("p95_add_workers=%s",
                             p95_add_workers_.empty() ? "(none)" : p95_add_workers_.c_str());
     } else {
-        // One click to fix the missing key instead of hunting for ecm.ini.
+        // One click to fix the missing key instead of hunting for ecm.toml.
         ImGui::SameLine();
         if (ImGui::SmallButton(loc_.t("p95", "open_ini").c_str())) {
             open_in_explorer(ini_path_);
@@ -1766,7 +1765,7 @@ void App::gen_make_preview() {
     if (gen_use_recommended_) {
         // The tier table and the SM count come from the driver itself (D4), so a copied
         // table can never drift from the kernels. --gpu-info writes nothing.
-        std::string cmd = "\"" + resolve_stage1_exe() + "\" -ini \"" + ini_path_ +
+        std::string cmd = "\"" + resolve_stage1_exe() + "\" --config \"" + ini_path_ +
                           "\" --worker " + std::to_string(gen_worker_index_) + " --gpu-info -d " +
                           std::to_string(gen_target_device_) + " --curve " +
                           (gen_curve_type_=="e" ? "ed" : "mont");
@@ -1861,7 +1860,7 @@ void App::draw_gen_panel() {
     // A docked panel that is not the selected tab of its node is SKIPPED by ImGui: Begin()
     // returns false, items are not laid out, and GetItemRectSize() reports stale numbers.
     // Everything (including the geometry trace the tests read) therefore happens only when the
-    // tab is really visible. `[GUI] start_tab = gen` makes it the selected tab at startup.
+    // tab is really visible. `[gui] start_tab = gen` makes it the selected tab at startup.
     const bool visible = ImGui::Begin((loc_.t("gen", "title") + "###gen").c_str());
     if (!visible) {
         // A hidden tab reports no geometry, so the trace that the tests read cannot exist.
@@ -2404,7 +2403,7 @@ void App::draw_workers_table() {
     if(ImGui::InputInt("##worker_count",&worker_count,0,0) && worker_count!=num_workers_) {
         num_workers_=std::clamp(worker_count,static_cast<int>(ecm_config::limits::gui_NumWorkers_minimum),static_cast<int>(ecm_config::limits::gui_NumWorkers_maximum));
         rebuild_workers();selected_worker_=std::clamp(selected_worker_,0,num_workers_-1);
-        ini_.set_int("GUI","NumWorkers",num_workers_);std::string error;if(!ini_.save(error))status_=error;
+        ini_.set_int("gui","NumWorkers",num_workers_);std::string error;if(!ini_.save(error))status_=error;
     }
     ImGui::EndDisabled();
     for(bool stage2:{false,true}) {
@@ -2425,13 +2424,13 @@ void App::draw_workers_table() {
     ImGui::BeginDisabled(busy);
     if(ImGui::SmallButton(loc_.t("workers","choose_ini").c_str())) {
         std::string selected=ini_path_;
-        if(browse_for_file(selected,loc_.t("workers","choose_ini"),"Configuration\0*.ini\0All\0*.*\0\0"))select_workflow_ini(selected);
+        if(browse_for_file(selected,loc_.t("workers","choose_ini"),"TOML configuration\0*.toml\0All\0*.*\0\0"))select_workflow_ini(selected);
     }
     ImGui::EndDisabled();ImGui::SameLine();ImGui::TextDisabled("%s",ini_path_.c_str());
     if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",ini_path_.c_str());
 
     // Global controls: start/stop everything, plus the resolved worker executable
-    // (so a wrong [GUI] exe= is visible instead of mysterious).
+    // (so a wrong [gui] exe= is visible instead of mysterious).
     if (ImGui::Button(loc_.t("workers", "start_all").c_str())) start_all();
     ImGui::SameLine();
     if (ImGui::Button(loc_.t("workers", "stop_all").c_str())) stop_all();

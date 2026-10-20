@@ -57,8 +57,8 @@ $tus = @(
 
 $inc = @(
     '-I kernels/cuda',
-    '-I cgbn/include/cgbn',      # <cgbn.h> itself
-    '-I cgbn/include',           # cgbn.h's own "arith/..." includes
+    '-I third_party/cgbn/include/cgbn',      # <cgbn.h> itself
+    '-I third_party/cgbn/include',           # cgbn.h's own "arith/..." includes
     '-I include',                # ecm.h (via cuda_ecm_shim.h)
     '-I third_party/gmp-zen3/dist/include'
 ) -join ' '

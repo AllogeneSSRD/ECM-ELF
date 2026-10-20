@@ -1,13 +1,13 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Acceptance test for D1 (ini [Worker #N] sections) and D2 (worktodo [Worker #N]
-    sections) -- see docs/usage/GUI.md and docs/usage/STAGE1.md.
+    Acceptance test for TOML worker overrides and worktodo [Worker #N]
+    sections -- see docs/usage/GUI.md and docs/usage/STAGE1.md.
 
 .DESCRIPTION
     Builds a throw-away sandbox with
 
-        ecm.ini      : global keys + [Worker #1] + [Worker #2]
+        ecm.toml      : global tables + [workers.1] + [workers.2.stage1]
         worktodo.txt : [Worker #1] + [Worker #2], each holding one UNPARSEABLE task
                        line (so the driver never touches the GPU: a bad line is
                        marked "# ERROR <line>" and the queue keeps going)
@@ -69,9 +69,9 @@ function Write-Utf8NoBom([string]$path, [string[]]$lines) {
 
 function Run-Queue([string]$ini, [int]$worker, [bool]$withWorkerFlag) {
     if ($withWorkerFlag) {
-        $cmd = '"{0}" -ini "{1}" --worker {2} < NUL 2>&1' -f $Exe, $ini, $worker
+        $cmd = '"{0}" --config "{1}" --worker {2} < NUL 2>&1' -f $Exe, $ini, $worker
     } else {
-        $cmd = '"{0}" -ini "{1}" < NUL 2>&1' -f $Exe, $ini
+        $cmd = '"{0}" --config "{1}" < NUL 2>&1' -f $Exe, $ini
     }
     return (& cmd /c $cmd | Out-String)
 }
@@ -81,9 +81,9 @@ function Run-Queue([string]$ini, [int]$worker, [bool]$withWorkerFlag) {
 # Do NOT use something like 'ECMSTAGE2=BOGUS,1,2,5351,-1,"m5351_110e6.save",...':
 # the parser treats a non-integer first field as the optional AID, so that line is
 # a REAL M5351 task and would start hours of GPU work (this burned us once).
-$badW1 = 'ECMSTAGE2=garbage-W1'
-$badW2 = 'ECMSTAGE2=garbage-W2'
-$iniPath = Join-Path $Sandbox 'ecm.ini'
+$badW1 = 'ECMSTAGE1=garbage-W1'
+$badW2 = 'ECMSTAGE1=garbage-W2'
+$iniPath = Join-Path $Sandbox 'ecm.toml'
 $todoPath = Join-Path $Sandbox 'worktodo.txt'
 $finPath = Join-Path $Sandbox 'finished.txt'
 $tmpDir = Join-Path $Sandbox 'saves'
@@ -91,24 +91,29 @@ New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 
 # NOTE: inside a PowerShell array literal the comma binds tighter than '+', so
 # every concatenation below must be parenthesised (otherwise it becomes two
-# elements -- and two ini lines).
+# elements -- and two TOML lines).
 Write-Utf8NoBom $iniPath @(
-    '# global defaults (all workers)',
-    ('tmp_dir = ' + $tmpDir),
-    ('worktodo = ' + $todoPath),
-    ('finished = ' + $finPath),
-    'device = 0',
-    'curve = mont', 'target = gpu',
+    '# shared queue and stage-specific defaults',
+    '[shared]',
+    ('worktodo = ' + ($todoPath | ConvertTo-Json -Compress)),
     '',
-    '[GUI]',
+    '[stage1]',
+    ('tmp_dir = ' + ($tmpDir | ConvertTo-Json -Compress)),
+    ('finished = ' + ($finPath | ConvertTo-Json -Compress)),
+    'device = 0',
+    'curve = "mont"', 'target = "gpu"',
+    '',
+    '[gui]',
     'refresh_hz = 10',
     '',
-    '[Worker #1]',
+    '[workers.1]',
     'gpucurves = 8',
     '',
-    '[Worker #2]',
-    'device = 1',
-    'gpucurves = 16'
+    '[workers.2]',
+    'gpucurves = 16',
+    '',
+    '[workers.2.stage1]',
+    'device = 1'
 )
 $iniBefore = Get-Content -LiteralPath $iniPath -Raw
 
@@ -139,7 +144,7 @@ Check "worker 2 line untouched"     ($todo1 -match [regex]::Escape($badW2))
 Check "no ERROR prefix on W2 line"  (-not ($todo1 -match ('# ERROR ' + [regex]::Escape($badW2))))
 Check "both section headers kept"   (($todo1 -match '\[Worker #1\]') -and ($todo1 -match '\[Worker #2\]'))
 Check "comment kept"                ($todo1 -match '# two sections, each with one broken line')
-Check "ini not modified"            ((Get-Content -LiteralPath $iniPath -Raw) -eq $iniBefore)
+Check "TOML not modified"           ((Get-Content -LiteralPath $iniPath -Raw) -eq $iniBefore)
 
 # ---------------------------------------------------------------- worker 2 ----
 Write-Host "[2] --worker 2 (section overrides device=1, per-worker log default)"
@@ -167,7 +172,7 @@ Check "no [Worker] section needed"  (-not ($todo3 -match '\[Worker #'))
 Write-Host "[4] --worker 3 with no [Worker #3] section (must warn, must not fail)"
 Write-Utf8NoBom $todoPath @('[Worker #1]', $badW1)
 $out4 = Run-Queue $iniPath 3 $true
-Check "note about the missing section" ($out4 -match 'no \[Worker #3\] section')
+Check "note about the missing section" ($out4 -match 'no \[workers\.3\] table')
 Check "still uses global device 0"     ($out4 -match 'device 0') $out4
 
 Write-Host ""

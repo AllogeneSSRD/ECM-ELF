@@ -64,7 +64,7 @@ def main():
     for key,value in policy['environment'].items():
         assert type(value) is int and value >= 0
         environment['NTT_'+key.upper()] = str(value)
-    ini = out/'ecm.ini';ini.write_text('verbose=false\nstage2_debug_log=false\nstage2_b2=0\n')
+    ini = out/'ecm.toml';ini.write_text('verbose=false\nstage2_debug_log=false\nstage2_b2=0\n')
     common = ['--ini',str(ini),'--save',str(a.save.resolve()),'--device',str(a.device),
         '--batch-mb',str(policy['batch_mb']),'--arena-mb',str(policy['arena_mb']),
         '--owner-budget-mb',str(policy['fold_mb']),'--log-level','quiet',

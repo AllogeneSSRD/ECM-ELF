@@ -38,7 +38,7 @@ def main():
     report = dict(binary_sha256=__import__('hashlib').sha256(a.stage2.read_bytes()).hexdigest(), cases=[])
     def run(name, setting, overrides, expected_modes, success=True, line=None, source='queue', expected_error=None):
         folder = out/name; folder.mkdir()
-        ini = folder/'ecm.ini'
+        ini = folder/'ecm.toml'
         ini.write_text('stage2_log_level=quiet\nstage2_log_file=\n' +
                        ('' if setting is None else f'stage2_auto_carrier={setting}\n'), encoding='ascii')
         profile = folder/'tune.toml'

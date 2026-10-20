@@ -47,7 +47,7 @@ def main():
         frozen.write_bytes(path.read_bytes())
     state = dict(complete=False, identities=sources, cases=[])
     publish = lambda: (out/'state.json').write_text(json.dumps(state, indent=2)+'\n', encoding='utf-8')
-    ini = out/'ecm.ini'
+    ini = out/'ecm.toml'
     ini.write_text('verbose=false\nstage2_debug_log=false\n', encoding='utf-8')
     common = [str(exe), '--ini', str(ini), '--device', str(a.device),
               '--batch-mb', '256', '--arena-mb', '6300', '--owner-budget-mb', '640']

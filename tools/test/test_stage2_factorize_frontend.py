@@ -17,7 +17,7 @@ def main():
     if any(root.iterdir()):raise RuntimeError('Use a fresh directory')
     n=(1<<21)-1;x=7**2*127;save=root/'fixture.save'
     save.write_text(f'METHOD=ECM; PARAM=0; SIGMA=6; B1=2; N=(2^21-1); X=0x{x:x}; CHECKSUM={2*6*n*x%4294967291};\n')
-    ini=root/'ecm.ini';ini.write_text(f'[stage2]\nstage2_factorize_hits=1\nstage2_gp={a.gp.resolve()}\nstage2_factor_timeout=15\n')
+    ini=root/'ecm.toml';ini.write_text(f'[stage2]\nstage2_factorize_hits=1\nstage2_gp={a.gp.resolve()}\nstage2_factor_timeout=15\n')
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_')};rows=[]
     for name,extra in [('multiplicity',[]),('missing_gp',['--gp',str(root/'missing_gp.exe')])]:
         result=root/(name+'.jsonl');log=root/(name+'.log')

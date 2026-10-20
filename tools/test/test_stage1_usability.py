@@ -50,7 +50,7 @@ def identity_case(exe, out):
     user,computer,aid=(secrets.token_hex(12),secrets.token_hex(12),secrets.token_hex(16))
     task=f'ECM2={aid},1,2,130,-1,20,10000,2,20260922,"3"\n'
     queue=work/'worktodo.txt';queue.write_text('[Worker #2]\n'+task)
-    ini=work/'ecm.ini';ini.write_text(f'curve=ed\ntarget=cpu\nimpl=scalar\nstage1_threads=1\n'
+    ini=work/'ecm.toml';ini.write_text(f'curve=ed\ntarget=cpu\nimpl=scalar\nstage1_threads=1\n'
         f'worktodo={queue}\nfinished={work/"finished.txt"}\ntmp_dir={work}\nlog_file=\n'
         f'user={secrets.token_hex(12)}\ncomputer={secrets.token_hex(12)}\n[Worker #2]\nuser={user}\ncomputer={computer}\n')
     p=subprocess.run([str(exe),'-ini',str(ini),'--worker','2'],cwd=work,capture_output=True,timeout=120)
@@ -105,7 +105,7 @@ def main():
             expr=None, b1=1000, count=4, extra_env=None):
         work = out/name
         work.mkdir()
-        ini = work/'ecm.ini'
+        ini = work/'ecm.toml'
         ini.write_text('user=\ncomputer=\n')
         cmd = [exe, '--curve', model, '--target', target,
                '-d', args.device, '-sigma', 20260922, '-gpucurves', count,
@@ -162,7 +162,7 @@ def main():
                 work=out/name;submission=work/'results.json.txt'
                 before=submission.read_bytes()
                 cmd=[stage2,'--save',work/'points.save','--b2',40000,'--curves',4,
-                     '--results',work/'stage2_results.jsonl','--submission',submission,'--ini',work/'ecm.ini']
+                     '--results',work/'stage2_results.jsonl','--submission',submission,'--ini',work/'ecm.toml']
                 call(name+'_stage2',cmd,work)
                 rows=[json.loads(v) for v in submission.read_text().splitlines()]
                 if name=='ed_scalar':
@@ -172,7 +172,7 @@ def main():
                     assert len(rows)==4 and submission.read_bytes()==before
                 completed=submission.read_bytes()
                 replay=[exe,'--curve','ed','--target','cpu','--impl','scalar','--stage1-threads',2,
-                        '-sigma',20260922,'-gpucurves',4,'--tmp-dir',work,'-ini',work/'ecm.ini',
+                        '-sigma',20260922,'-gpucurves',4,'--tmp-dir',work,'-ini',work/'ecm.toml',
                         '-save',work/'points.save',1000,1000]
                 n=(1<<347)-1 if name=='ed_scalar' else 1009*((1<<127)-1)
                 call(name+'_stage1_replay',replay,work,str(n)+'\n')
@@ -201,7 +201,7 @@ def main():
             work=out/name;work.mkdir()
             queue=work/'worktodo.txt';task='ECM2=1,2,347,-1,1000,100000,4,20260922\n';queue.write_text(task)
             blocked=work/'blocked';blocked.write_text('preserved publication failure fixture\n')
-            ini=work/'ecm.ini';ini.write_text(f'curve={model}\ntarget=cpu\nimpl=scalar\nstage1_threads=2\nworktodo={queue}\n'
+            ini=work/'ecm.toml';ini.write_text(f'curve={model}\ntarget=cpu\nimpl=scalar\nstage1_threads=2\nworktodo={queue}\n'
                 f'finished={work/"finished.txt"}\ntmp_dir={work}\nlog_file=\nstage1_submission_file={blocked/"results.json.txt"}\n')
             call(name+'_failed',[exe,'-ini',ini],work,good=False)
             assert queue.read_text()==task
@@ -242,7 +242,7 @@ def main():
         task = f'ECM2=1,2,{bits},-1,100000,1000000,8,20260922\n'
         queue = work/'worktodo.txt'
         queue.write_text(task)
-        ini = work/'ecm.ini'
+        ini = work/'ecm.toml'
         ini.write_text(f'curve={model}\ntarget={target}\nimpl={impl}\ngpu_param={param}\ndevice={args.device}\n'
                        f'ckpt_seconds=0.001\nckpt_backups=2\nstage1_threads=1\nworktodo={queue}\nfinished={work/"finished.txt"}\n'
                        f'tmp_dir={work}\nlog_file=\np95_worktodo_path={work/"absent_prime95"/"worktodo.txt"}\n')

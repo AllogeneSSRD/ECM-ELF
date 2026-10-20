@@ -61,7 +61,7 @@ def main():
     # An unwritable destination is a failed publication, not a finished task.
     failed = out/'publication_failure'; failed.mkdir()
     (failed/'e_m127_20.save').mkdir()
-    todo = failed/'worktodo.txt'; finished = failed/'finished.txt'; ini = failed/'ecm.ini'
+    todo = failed/'worktodo.txt'; finished = failed/'finished.txt'; ini = failed/'ecm.toml'
     task = 'ECM2=1,2,127,-1,20,0,1,17\n'; todo.write_text(task)
     ini.write_text(f'curve=ed\ntarget=gpu\ndevice={a.device}\nworktodo={todo}\nfinished={finished}\ntmp_dir={failed}\nlog_file=\n')
     text = call('publication_failure', [s1, '-ini', ini], good=False)

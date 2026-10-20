@@ -7,7 +7,7 @@
 .DESCRIPTION
     Builds a sandbox where
 
-        ecm.ini       : global keys + [GUI] (exe = the real ecm_cuda.exe) + [Worker #1]
+        ecm.toml       : global keys + [GUI] (exe = the real ecm_cuda.exe) + [Worker #1]
                         (device 0) + [Worker #2] (device 1)
         worktodo.txt  : one ECMSTAGE1= line under [Worker #1] and one under [Worker #2]
 
@@ -100,7 +100,7 @@ public static class Win32GuiReal {
 '@
 }
 
-$iniPath = Join-Path $Sandbox 'ecm.ini'
+$iniPath = Join-Path $Sandbox 'ecm.toml'
 $todo = Join-Path $Sandbox 'worktodo.txt'
 $finished = Join-Path $Sandbox 'finished.txt'
 $enc = New-Object System.Text.UTF8Encoding($false)

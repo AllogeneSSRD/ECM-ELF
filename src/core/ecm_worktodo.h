@@ -15,7 +15,9 @@
 //    B2 defaults to 0, curves_to_run defaults to 100 (matching Prime95).
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
+#include <map>
 #include <vector>
 
 #include <gmp.h>
@@ -133,9 +135,14 @@ bool ecm_worktodo_advance(const std::string &path, int worker, const std::string
 
 // Distinct worker indices that own at least one task line (worker 1 when the file
 // has no headers), ascending. The GUI uses this to flag sections that have no
-// matching worker in ecm.ini. Returns false when the file cannot be opened.
+// matching worker in ecm.toml. Returns false when the file cannot be opened.
 bool ecm_worktodo_list_workers(const std::string &path, std::vector<uint32_t> &workers,
                                std::string &err);
+
+// Active assignment counts, including empty declared worker sections. A missing
+// destination is an empty queue; unreadable destinations are reported as errors.
+bool ecm_worktodo_worker_loads(const std::string &path,std::map<int,size_t> &loads,
+                                std::string &err);
 
 // Append one line (with trailing newline) to `path`, creating parent dirs.
 bool ecm_append_text_line(const std::string &path, const std::string &line);

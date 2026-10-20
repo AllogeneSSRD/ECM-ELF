@@ -153,7 +153,7 @@ def main():
     qdir=out/'queue';qdir.mkdir();save=qdir/'m521.save'
     save.write_bytes(args.save.read_bytes()*2)
     queue=qdir/'worktodo.txt';task='ECMSTAGE2=tune-auto,1,2,521,-1,"m521.save",0,0,2,""\n'
-    queue.write_text(task,encoding='utf-8');qini=qdir/'ecm.ini'
+    queue.write_text(task,encoding='utf-8');qini=qdir/'ecm.toml'
     qini.write_text('[gpu]\ndevice='+str(args.device)+'\n[queue]\nworktodo=worktodo.txt\nstage2_finished=finished.txt\n'
                     'tmp_dir='+str(qdir)+'\n[stage2]\nstage2_auto_b2=1\nstage2_tune_profile='+os.path.relpath(args.profile.resolve(),qdir)+
                     '\nstage1_seconds_per_curve=3\nstage2_batch_mb=256\nstage2_arena_mb=6300\nstage2_fold_mb=640\n'

@@ -154,7 +154,7 @@ def main():
     sa = SecurityAttributes(ctypes.sizeof(SecurityAttributes), None, True)
     event = kernel.CreateEventW(ctypes.byref(sa), True, False, None); assert event
     restart = out/'random_restart'; restart.mkdir()
-    queue = restart/'worktodo.txt'; finished = restart/'finished.txt'; ini = restart/'ecm.ini'
+    queue = restart/'worktodo.txt'; finished = restart/'finished.txt'; ini = restart/'ecm.toml'
     task = 'ECM2=1,2,521,-1,1000000,0,2\n'; queue.write_text(task)
     ini.write_text(f'curve=ed\ntarget=gpu\ndevice={a.device}\nckpt_seconds=0.05\nworktodo={queue}\nfinished={finished}\ntmp_dir={restart}\nlog_file=\n')
     with (out/'random_stopped.log').open('wb') as log:

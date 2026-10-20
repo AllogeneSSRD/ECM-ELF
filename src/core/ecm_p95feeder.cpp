@@ -505,7 +505,7 @@ int run_cycle(const FeederConfig &cfg) {
 }
 
 // Write a commented default config when none exists yet.
-bool write_default_ini(const std::string &path) {
+bool write_default_toml(const std::string &path) {
     std::ofstream o(path, std::ios::trunc);
     if (!o) return false;
     o <<
@@ -514,8 +514,8 @@ bool write_default_ini(const std::string &path) {
         "# ecm.exe writes stage-1 results locally as e{n:07d}_c{curve:06d}.tmp;\n"
         "# this program moves each finished curve into Prime95 so it can run stage 2.\n"
         "#\n"
-        "# Local directory holding the .tmp saves (usually the same dir as ecm.ini).\n"
-        "# 本地存放 e{n:07d}_c{curve:06d}.tmp 的目录（通常与 ecm.ini 同目录）。\n"
+        "# Local directory holding the .tmp saves (usually the same dir as ecm.toml).\n"
+        "# 本地存放 e{n:07d}_c{curve:06d}.tmp 的目录（通常与 ecm.toml 同目录）。\n"
         "tmp_dir = .\n"
         "\n"
         "# Prime95 working directory (must contain prime.txt and worktodo.txt).\n"
@@ -627,7 +627,7 @@ int main(int argc, char **argv) {
         if (load_ini(ini, file_cfg, err)) {
             cfg = file_cfg;
         } else {
-            if (write_default_ini(ini)) {
+            if (write_default_toml(ini)) {
                 log_line("no config at %s — wrote a default template; "
                          "set p95_dir and rerun", ini.c_str());
             } else {

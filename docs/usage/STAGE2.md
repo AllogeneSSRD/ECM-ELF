@@ -14,7 +14,7 @@
 
 直接多记录执行不使用队列自动续跑。每条曲线在独立子进程计算，结束后释放 CUDA 上下文与临时资源。
 
-`--results` 的内部 JSONL 以 `curve=ed|mont` 标明模型，Edwards 的 `param` 为 null，Suyama 的 `param` 为 0。另写 `--submission` 指定的 `results.json.txt`；INI 的 `user`、`computer` 用于提交身份，标准梅森队列自动传递原始指数、已知因子和可选 AID。直接处理梅森余因子时应提供 `--exponent P --known-factor F`，输出前验证与实际 N 的关系。批次去重和恢复见 [结果输出](ECM_RESULTS.md)。GUI 的因子结果文件使用其独立结果格式，见 [GUI 日志与结果](GUI.md#日志结果与监控)。控制台结果事件也携带模型及完整 sigma；显式 `--gui-events` 会在 quiet 级别保留该结果事件，普通 quiet 控制台规则保持不变。
+`--results` 的内部 JSONL 以 `curve=ed|mont` 标明模型，Edwards 的 `param` 为 null，Suyama 的 `param` 为 0。另写 `--submission` 指定的 `results.json.txt`；TOML 的 `user`、`computer` 用于提交身份，标准梅森队列自动传递原始指数、已知因子和可选 AID。直接处理梅森余因子时应提供 `--exponent P --known-factor F`，输出前验证与实际 N 的关系。批次去重和恢复见 [结果输出](ECM_RESULTS.md)。GUI 的因子结果文件使用其独立结果格式，见 [GUI 日志与结果](GUI.md#日志结果与监控)。控制台结果事件也携带模型及完整 sigma；显式 `--gui-events` 会在 quiet 级别保留该结果事件，普通 quiet 控制台规则保持不变。
 
 ## 队列语法
 
@@ -51,19 +51,17 @@ save 内部字段及读取限制见 [Save 架构](../architecture/SAVE.md)；队
 
 任务结束先写 finished 回执，再推进队列，最后清除进度。第一次 Ctrl+C 等待当前曲线落盘后退出；第二次立即终止子进程树。强制退出的当前曲线若没有完整回执，下次从头计算。
 
-## INI 与路径
+## TOML 与路径
 
-默认读取 exe 同目录 `ecm.ini`。隐式文件缺失采用默认值；显式指定但不可读则报错。全部键见 [INI 参考](../ECM_INI_REFERENCE.md)。
+默认读取 exe 同目录的 `ecm.toml`；隐式文件缺失采用内置默认值，显式 `--config FILE` 缺失或格式错误时报错。配置分区、优先级和逐键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.md)。
 
-Stage2 与 Stage1 共用 `worktodo`，但使用独立的 `stage2_finished`、`stage2_results_file`、`stage2_submission_file`、`stage2_log_file`、`stage2_progress_dir` 和 `stage2_debug_log_file`。队列中只领取 `ECMSTAGE2=` 行；`priority`、`skip` 的选择规则见 [Stage1 队列说明](STAGE1.md#共用-ini-与-worker)。非零 `b2_ratio` 将有效 B2 覆盖为 save 中 B1 × ratio；使用该 INI 直接读档时也适用。进度目录空值使用队列目录；显式设置旧 `stage2_progress_file` 时使用其父目录，并仅将该文件作为旧进度导入来源。save 目录空值继承 `tmp_dir`，设备未指定时继承共享 `device`。不同 worker 分区可共用队列；输出路径和相同任务的进度锁须避免冲突。
+Stage2 与 Stage1 共用 `[shared] worktodo`，使用 `[stage2]` 的 `stage2_finished`、`stage2_results_file`、`stage2_submission_file`、`stage2_log_file`、`stage2_progress_dir` 和 `stage2_debug_log_file`。队列只领取 `ECMSTAGE2=` 行；`priority`、`skip` 和 `b2_ratio` 在 `[shared]` 设置，按 worker 覆盖时写入 `[workers.N.shared]`。非零 `b2_ratio` 以 save 中 B1 × ratio 覆盖有效 B2，直接读档也适用。
 
-`auto_stage2=1` 使未找到因子的 Stage1 任务在同一队列位置转为 Stage2；Edwards 的 `edwards_stage2_transfer=1` 可投递到另一 worker 分区。交接不由 CLI 自行启动 Stage2 程序，GUI 会在当前阶段任务耗尽后按下一行启动对应程序。Edwards Stage2 需要有效 B2，可由任务、`stage2_b2` 或 `b2_ratio` 提供。
+共用 `worktodo` 及 Stage2 相对路径基于 TOML 目录，其他 Stage1 相对路径基于其程序目录；CLI 相对路径基于当前工作目录。进度目录空值使用队列目录；显式旧进度路径仍可作为导入来源。save 目录空值继承 Stage1 的 `tmp_dir`，`stage2_device = -1` 继承 Stage1 的 `device`。推荐将两个程序与共用 TOML 放在同一目录。
 
-共用 `worktodo` 以及 Stage2 INI 相对路径基于 INI 目录；其他 Stage1 相对路径基于程序目录，CLI 相对路径基于当前工作目录。共用 INI 推荐与两个 exe 放在同一目录。只将 `[Worker #N]` 用作命令行覆盖范围；模板的普通分组用注释，GUI 的真实分区规则见 [配置维护](../architecture/CONFIGURATION.md)。
+`[stage1] auto_stage2 = 1` 可将无因子的 Stage1 任务转为 Stage2；默认原位改写，也可选择接收 worker 列表或其他队列文件，见 [Stage1 自动交接](STAGE1.md#自动交接到-stage2)。交接由 GUI 在阶段切换时启动对应程序。Edwards Stage2 需要有效 B2，可来自任务、`stage2_b2` 或 `b2_ratio`。GUI 按 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀调度，不读取配置中的阶段字段。
 
-GUI 依据共用队列的 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀调度，不再读取 INI 的 `stage`。同一 worker 在当前阶段可运行任务耗尽后切换程序；优先级与跳过规则可按 worker 覆盖。没有 worker 标题的任务只归 worker 1。GUI 的生成器目标及停止方式见 [GUI 说明](GUI.md#worker-与配置)。
-
-运行时拒绝 Stage1/Stage2 队列冲突，以及 save、程序、配置、队列、进度、结果和日志之间的危险重叠。
+运行时拒绝 Stage1/Stage2 队列冲突及 save、程序、配置、队列、进度、结果和日志之间的危险重叠。
 
 ## 日志与内存摘要
 
@@ -75,7 +73,7 @@ GUI 依据共用队列的 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀调度，不再读�
 - `stage2_phase`：`previous` 为上阶段墙钟间隔，`elapsed` 为曲线累计时间。候选计划查询不输出正常阶段日志，也不更新曲线阶段时钟；实际运行的规划阶段每条曲线只打印一次。独立调试日志与规划 JSON 保留诊断信息。
 - `real_shape`：B1/B2、算术位宽、D/P、baby/giant 数及 G 批次数。
 - `mem`：设备 free/total、reserve 和 arena cap；预计最大变换及树顶形状。
-- 曲线结束的 `arena=a/b fold=a/b`：a 为实际完整 NTT 池峰值或启用 fold owner 占用；fold 回退时 a=0。b 保留读取的 INI 值，可能与 CLI/环境覆盖后的有效预算不同。
+- 曲线结束的 `arena=a/b fold=a/b`：a 为实际完整 NTT 池峰值或启用 fold owner 占用；fold 回退时 a=0。b 保留读取的 TOML 值，可能与 CLI/环境覆盖后的有效预算不同。
 - `stage2_ntt_counts=1`（默认 0，CLI `--ntt-counts` 可覆盖）：曲线结束输出按长度排列的卷积、正向、逆向和总次数表，并保留 `ntt_length_counts` 兼容行。一次卷积为两个正向加一个逆向，不是 kernel 启动数；关闭时不采集此表。`ntt_work` 的元素数、逻辑蝶形数、计数边界及开销见 [NTT](../architecture/NTT.md#实际运行的长度与运算量)。
 - `stage2_full_wall.total`：完整引擎 init+main，排除 Stage1 与自动 D 扫描。外层 result/curve_done 还含进程和发布结果等开销。
 - `stage2_tune_runtime`：只有成功补充缺失算术位宽/执行区间摘要时输出，包含位宽、算术家族、D/B2与实测/预测比值。默认采集已执行的干净完整曲线，可用`stage2_tune_runtime=false`关闭；完整规则见[运行补充](../architecture/AUTO_B2.md#正常运行补充缺失位宽)。
@@ -86,9 +84,9 @@ GUI 依据共用队列的 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀调度，不再读�
 
 ## 规划与依据
 
-`--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。默认`stage2_auto_carrier=1`允许标准梅森worktodo在已知因子、save和整除验证后比较普通与承载；设置0关闭自动候选，CLI `--auto-carrier 0|1`覆盖INI，显式carrier锁定仍优先。候选资格、性能保护及指数上限见[Auto B2 / tune](../architecture/AUTO_B2.md)。
+`--plan-only` 查询设备及算法/组件形状，不执行任务曲线、不写成功结果、不推进队列；默认启动短校准可能额外运行小基准并更新性能文件，可用`--short-calibration 0`关闭。`--dry-run`只检查输入。`--carrier-exponent p`要求保存的目标N整除2ᵖ−1，显式0锁定按save的N运算。默认`stage2_auto_carrier=1`允许标准梅森worktodo在已知因子、save和整除验证后比较普通与承载；设置0关闭自动候选，CLI `--auto-carrier 0|1`覆盖TOML，显式carrier锁定仍优先。候选资格、性能保护及指数上限见[Auto B2 / tune](../architecture/AUTO_B2.md)。
 
-`--tune ecm --tune-level 1`优先读取INI指定的当前worker队列与有效save，采用任务/INI的生产B2；`--tune-worktodo FILE`可指定队列。`stage2_auto_carrier=1`时先补普通默认基线与经整除验证的承载默认对照，再从模型D/P搜索相邻项；只有平均耗时降低超过2%且越过双方2×样本标准差噪声界限才继续移动。不会推进生产队列。
+`--tune ecm --tune-level 1`优先读取TOML指定的当前worker队列与有效save，采用任务/TOML的生产B2；`--tune-worktodo FILE`可指定队列。`stage2_auto_carrier=1`时先补普通默认基线与经整除验证的承载默认对照，再从模型D/P搜索相邻项；只有平均耗时降低超过2%且越过双方2×样本标准差噪声界限才继续移动。不会推进生产队列。
 
 `--tune-exponents bits,...`明确使用通用位宽网格；默认队列缺失或无Stage2任务时也使用网格。`--tune-save FILE`使用一个保存点，自动承载指数可来自当前worker中重建N相同的任务；也可用`--tune-carrier-exponent p`明确指定。完整梅森N的普通路径已使用梅森归约，自动模式不重复测量相同承载。
 
@@ -106,7 +104,7 @@ GUI 依据共用队列的 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀调度，不再读�
 
 通用位宽网格可用`--tune ecm --tune-exponents 512,2048,4096,8192,12288,15360 --tune-arithmetic both --tune-b2 26000000000,260000000000 --tune-budget-seconds 1800`。它分别收集通用与梅森算术资料；真实队列默认仍用真实save配对。网格的梅森实际余因子位数可能低于算术位数，两者不会混为同一索引。
 
-任务最终B2=0时，`--auto-b2`联合选择B2、D、承载。T1优先使用正的`--stage1-seconds-per-curve`，其次`--stage1-cost-csv FILE.csv`，最后`--stage1-tune-profile FILE.toml`。对应INI为`stage1_seconds_per_curve`、`stage1_cost_csv`、`stage1_tune_profile`。CSV明确target_bits或container_bits，缺项和跨TPI可估算；`--stage1-cost-mhz`给目标频率，0使用表内参考频率。秒/曲线不会再除batch。Stage1 标量构造默认跟随 INI 的 `lcm`，可用 `--lcm 1|12` 覆盖。现有成本证据文件中的 `lcm`、`choose12` 标签由程序在读取时映射。
+任务最终B2=0时，`--auto-b2`联合选择B2、D、承载。T1优先使用正的`--stage1-seconds-per-curve`，其次`--stage1-cost-csv FILE.csv`，最后`--stage1-tune-profile FILE.toml`。对应TOML为`stage1_seconds_per_curve`、`stage1_cost_csv`、`stage1_tune_profile`。CSV明确target_bits或container_bits，缺项和跨TPI可估算；`--stage1-cost-mhz`给目标频率，0使用表内参考频率。秒/曲线不会再除batch。Stage1 标量构造默认跟随 TOML 的 `lcm`，可用 `--lcm 1|12` 覆盖。现有成本证据文件中的 `lcm`、`choose12` 标签由程序在读取时映射。
 
 `--auto-min-b2`/`--auto-max-b2`控制搜索边界，默认B1<B2≤2.6×10¹²，不限于已测范围。完整tune优先于旧`stage2_cost_profile`；Auto缺T1/完整成本或没有满足当前显存的候选时明确失败，保留队列。每条worker重新规划。模型精度与当前限制见[Auto B2/tune](../architecture/AUTO_B2.md)。
 

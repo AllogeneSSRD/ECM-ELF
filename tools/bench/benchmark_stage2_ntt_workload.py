@@ -107,7 +107,7 @@ def main():
                  initial_missing=len(shapes-set(measured)), profiles=[], jobs=[])
     publish = lambda: (out/'state.json').write_text(json.dumps(state, indent=2)+'\n', encoding='utf-8')
     publish()
-    ini = out/'ecm.ini'
+    ini = out/'ecm.toml'
     ini.write_text('verbose=false\nstage2_debug_log=false\n', encoding='utf-8')
     env = dict(os.environ)
     for key, value in profile['policy']['environment'].items():

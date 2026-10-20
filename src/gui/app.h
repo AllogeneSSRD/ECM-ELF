@@ -6,7 +6,7 @@
 #include "gpu_monitor.h"
 #include "gen_input_text.h"
 #include "probability_panel.h"
-#include "ini_file.h"
+#include "toml_file.h"
 #include "localization.h"
 #include "log_parse.h"
 #include "results.h"
@@ -124,7 +124,7 @@ struct WorkerView {
 
 class App {
 public:
-    // Reads the ini (default: <exe dir>/ecm.ini) and the localization files.
+    // Reads the ini (default: <exe dir>/ecm.toml) and the localization files.
     // Returns false with `err` only when the ini cannot be read at all; a missing
     // localization file is reported through status() but is not fatal.
     bool init(const std::string &ini_path, const std::string &language, std::string &err);
@@ -156,7 +156,7 @@ public:
 
     Localization &loc() { return loc_; }
     const Localization &loc() const { return loc_; }
-    IniFile &ini() { return ini_; }
+    TomlFile &ini() { return ini_; }
     const std::string &status() const { return status_; }
     // The host may report a startup problem the App cannot know about (e.g. driver-only
     // command line arguments passed to the GUI): it shows up in the status line.
@@ -319,7 +319,7 @@ private:
     // Records one hit in the two result files and refreshes the status line.
     void record_hit(const WorkerView &w, const HitInfo &hit);
 
-    IniFile ini_;
+    TomlFile ini_;
     Localization loc_;
     GpuMonitor gpu_;
     ResultsStore results_;

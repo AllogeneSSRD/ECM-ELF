@@ -2,7 +2,7 @@
 
 // Worker process supervision (milestone M2, docs/usage/GUI.md).
 //
-// One worker == one `ecm_cuda.exe -ini ecm.ini --worker N` process:
+// One worker == one `ecm_cuda.exe --config ecm.toml --worker N` process:
 //   * CreateProcessW with CREATE_NO_WINDOW, never through cmd.exe;
 //   * stdout AND stderr point at the SAME pipe write end, so one reader thread
 //     sees the real write order (no cross-pipe reordering);

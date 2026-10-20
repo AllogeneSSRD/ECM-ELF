@@ -4,8 +4,8 @@
 Build and package the standalone CUDA Stage2 release candidate for one architecture.
 .DESCRIPTION
 Builds the production engine with fixed arithmetic defaults, then includes the
-GMP runtime, shared INI template, empty Stage2 queue and user documentation.
-Existing ecm.ini and user queue files are never overwritten. An optional
+GMP runtime, shared TOML template, empty Stage2 queue and user documentation.
+Existing ecm.toml and user queue files are never overwritten. An optional
 previously qualified Stage1 executable can be included with -Stage1Exe.
 This script does not run tests or certify other GPU architectures.
 .EXAMPLE
@@ -72,16 +72,16 @@ New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 Remove-EcmReleaseMetadata $OutDir
 Copy-Item -LiteralPath $exe -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $Build 'gmp-10.dll') -Destination $OutDir -Force
-Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.ini.example') -Destination $OutDir -Force
-$ini = Join-Path $OutDir 'ecm.ini'
-if (-not (Test-Path -LiteralPath $ini)) { Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.ini.example') -Destination $ini }
+Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.toml.example') -Destination $OutDir -Force
+$ini = Join-Path $OutDir 'ecm.toml'
+if (-not (Test-Path -LiteralPath $ini)) { Copy-Item -LiteralPath (Join-Path $repo 'config/ecm.toml.example') -Destination $ini }
 $queue = Join-Path $OutDir 'worktodo.txt'
 if (-not (Test-Path -LiteralPath $queue)) {
     $queueHeader = '# Add ECMSTAGE2=k,b,n,c,filename[,B2-or-zero][,skip_curves][,num_curves][,"known-factors"].'
     $queueHeader += [Environment]::NewLine
     [IO.File]::WriteAllText($queue, $queueHeader, (New-Object Text.UTF8Encoding $false))
 }
-Copy-Item -LiteralPath (Join-Path $repo 'docs/ECM_INI_REFERENCE.md') -Destination $OutDir -Force
+Copy-Item -LiteralPath (Join-Path $repo 'docs/ECM_TOML_REFERENCE.md') -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $OutDir -Force
 Copy-Item -LiteralPath $gmpDependency.Copyright -Destination (Join-Path $OutDir 'GMP-COPYRIGHT.txt') -Force
 if ($Stage1Exe) {
@@ -90,7 +90,7 @@ if ($Stage1Exe) {
     Copy-Item -LiteralPath $Stage1Exe -Destination (Join-Path $OutDir 'ecm_cuda.exe') -Force
 }
 $hashes = [ordered]@{}
-$files = @('ecm_cuda_stage2.exe','gmp-10.dll','ecm.ini.example','LICENSE','GMP-COPYRIGHT.txt','ECM_INI_REFERENCE.md')
+$files = @('ecm_cuda_stage2.exe','gmp-10.dll','ecm.toml.example','LICENSE','GMP-COPYRIGHT.txt','ECM_TOML_REFERENCE.md')
 foreach ($name in $files) {
     $hashes[$name] = (Get-FileHash -LiteralPath (Join-Path $OutDir $name) -Algorithm SHA256).Hash
 }

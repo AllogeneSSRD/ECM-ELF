@@ -7,7 +7,7 @@
  * WHAT IT IS
  *   CGBN's product accumulation with the fold applied to its OWN internal accumulators.
  *   The accumulation loops are copied verbatim from
- *     cgbn/include/cgbn/core/core_mul_wmad.cu :: core_t<env>::mul_wide (lines 142-320)
+ *     third_party/cgbn/include/cgbn/core/core_mul_wmad.cu :: core_t<env>::mul_wide (lines 142-320)
  *   (names qualified; that routine's `add[]` input is zero in every CGBN caller of
  *   cgbn_mul_wide, hence mpzero(ra) here).  Only the EPILOGUE differs.
  *

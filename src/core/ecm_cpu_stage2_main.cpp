@@ -33,19 +33,19 @@ struct Options {
 Options options(int argc,char **argv) {
     Options o;
     // Read local identity first so explicit CLI values, including empty values,
-    // always override the selected global/worker INI projection.
+    // always override the selected global/worker TOML projection.
     for(int i=1;i<argc;++i) {
         const std::string key=argv[i];
-        if((key=="--ini" || key=="-ini" || key=="--worker") && i+1<argc) {
+        if((key=="--config" || key=="--worker") && i+1<argc) {
             const std::string value=argv[++i];
             if(key=="--worker"){const auto n=decimal(value);if(!n || n>1000000)throw std::runtime_error("invalid worker");o.worker=int(n);}
             else o.ini=value;
         }
     }
-    const auto ini=o.ini.empty()?std::filesystem::path(argv[0]).parent_path()/"ecm.ini":std::filesystem::path(o.ini);
-    std::vector<ecm_config::IniLine> lines;
-    const bool read=ecm_config::read_ini(ini.string(),lines);
-    if(!read && (!o.ini.empty() || std::filesystem::exists(ini)))throw std::runtime_error("cannot read local INI");
+    const auto ini=o.ini.empty()?std::filesystem::path(argv[0]).parent_path()/"ecm.toml":std::filesystem::path(o.ini);
+    std::vector<ecm_config::TomlLine> lines;
+    const bool read=ecm_config::read_toml(ini.string(),lines);
+    if(!read && (!o.ini.empty() || std::filesystem::exists(ini)))throw std::runtime_error("cannot read local TOML");
     const auto settings=ecm_config::read_stage2(ecm_config::cli_entries(lines,o.worker,true));
     o.user=settings.result_user;o.computer=settings.result_computer;
     if(settings.has_submission && settings.submission.empty())throw std::runtime_error("empty submission path");
@@ -55,7 +55,7 @@ Options options(int argc,char **argv) {
         std::string key=argv[i];
         if(key=="--help") {
             std::cout<<"CPU Edwards Stage2\n--save FILE --b2 DECIMAL [--backend auto|ntt|plain|gwpoly] [--memory-mib 512]\n"
-                "[--threads 1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--ini FILE] [--worker N]\n"
+                "[--threads 1] [--results INTERNAL.jsonl] [--submission results.json.txt] [--config FILE] [--worker N]\n"
                 "[--skip N] [--curves N] [--dry-run] [--d D (gwpoly only)] [--gw-check] [--selftest-gwpoly]\n"
                 "--export-results --submission FILE regenerates owned submission output without arithmetic\n"
                 "[--exponent P] [--known-factor DECIMAL (repeatable)] [--user NAME] [--computer NAME] [--aid HEX32]\n"
@@ -74,7 +74,7 @@ Options options(int argc,char **argv) {
         if(++i>=argc)throw std::runtime_error("missing value for "+key);std::string value=argv[i];
         if(key=="--save")o.save=value;else if(key=="--results")o.results=value;
         else if(key=="--submission")o.submission=value;
-        else if(key=="--ini" || key=="-ini" || key=="--worker")continue;
+        else if(key=="--config" || key=="--worker")continue;
         else if(key=="--backend")o.backend=value;else if(key=="--b2")o.b2=decimal(value);
         else if(key=="--memory-mib")o.memory=decimal(value);else if(key=="--threads")o.threads=decimal(value);
         else if(key=="--skip")o.skip=decimal(value);else if(key=="--curves")o.count=decimal(value);

@@ -75,7 +75,7 @@ def main():
         for mode in (['baseline', 'candidate'] if repeat % 2 == 0 else ['candidate', 'baseline']):
             folder = out/f'{repeat}_{mode}'
             folder.mkdir()
-            ini = folder/'ecm.ini'
+            ini = folder/'ecm.toml'
             ini.write_text(f'user=\ncomputer=\nckpt_seconds=0\nlog_file=\nstage1_results_file={folder/"internal.jsonl"}\n', encoding='utf-8')
             save = folder/'points.save'
             command = list(map(str, [binaries[mode], '--curve', 'ed', '--target', 'gpu', '-d', 1,

@@ -285,7 +285,7 @@ def main():
     restart = out/'restart'; restart.mkdir()
     queue = restart/'worktodo.txt'; finished = restart/'finished.txt'
     task = 'ECM2=1,2,347,-1,100000,0,4,20260922\n'
-    queue.write_text(task); ini1 = restart/'ecm.ini'
+    queue.write_text(task); ini1 = restart/'ecm.toml'
     ini1.write_text(f'curve=ed\ntarget=gpu\ndevice={args.device}\nckpt_seconds=0.001\nckpt_backups=2\nworktodo={queue}\nfinished={finished}\ntmp_dir={restart}\nlog_file=\n')
     with (out/'stopped_worker.log').open('wb') as log:
         proc = subprocess.Popen([str(s1), '-ini', str(ini1), '--stage1-stop-handle', str(event)],

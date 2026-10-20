@@ -21,7 +21,7 @@ def main():
         lines.append(f'METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=48LCM; SIGMA={sigma}; B1=20; N=0x{n:x}; X=0x{x:x}; STATUS=POINT; CHECKSUM={checksum(n,x,sigma,20,"POINT")};\n')
     saved.write_text(''.join(lines),encoding='utf-8')
     queue=out/'worktodo.txt';task='ECMSTAGE2=1,2,347,-1,points.save,1000000000,0,4\n';queue.write_text(task)
-    ini=out/'ecm.ini';ini.write_text(f'user=\ncomputer=\nverbose=true\nstage2_save_dir={out}\nstage2_finished={out/"finished.txt"}\n')
+    ini=out/'ecm.toml';ini.write_text(f'user=\ncomputer=\nverbose=true\nstage2_save_dir={out}\nstage2_finished={out/"finished.txt"}\n')
     public=out/'results.json.txt';inside=out/'internal.jsonl'
     command=list(map(str,[a.exe.resolve(),'--ini',ini,'--device',1,'--once','--worktodo',queue,
         '--results',inside,'--submission',public,'--short-calibration',0,'--tune-runtime',0,

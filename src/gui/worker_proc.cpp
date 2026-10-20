@@ -103,7 +103,7 @@ void WorkerProc::configure(const WorkerSpawn &spawn, const WorkerLimits &limits)
 std::string WorkerProc::command_line() const {
     std::string cmd = spawn_.exe;
     if (!spawn_.ini.empty()) {
-        cmd += (spawn_.stage2?" --ini ":" -ini ") + spawn_.ini;
+        cmd += " --config " + spawn_.ini;
     }
     cmd += " --worker " + std::to_string(spawn_.worker_index);
     for (const std::string &a : spawn_.extra_args) {
@@ -164,7 +164,7 @@ bool WorkerProc::spawn_locked(std::string &err) {
     std::wstring cmd;
     append_quoted(cmd, widen(spawn_.exe), true);
     if (!spawn_.ini.empty()) {
-        append_quoted(cmd, spawn_.stage2?L"--ini":L"-ini", false);
+        append_quoted(cmd, spawn_.stage2?L"--config":L"--config", false);
         append_quoted(cmd, widen(spawn_.ini), false);
     }
     append_quoted(cmd, L"--worker", false);

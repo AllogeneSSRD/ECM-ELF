@@ -37,7 +37,7 @@ def main():
     assert all(s['b2']!=a.b2 for s in profile['ecm'].values())
     policy=profile['policy'];env=dict(os.environ)
     for k,v in policy['environment'].items():env['NTT_'+k.upper()]=str(v)
-    ini=out/'ecm.ini'
+    ini=out/'ecm.toml'
     ini.write_text('verbose=false\nstage2_debug_log=false\nstage2_b2=0\nstage2_auto_b2=1\n'
         'stage1_seconds_per_curve=3\nstage2_tune_profile='+str(a.profile.resolve())+'\n',encoding='utf-8')
     common=[str(a.exe.resolve()),'--ini',str(ini),'--save',str(a.save.resolve()),'--device',str(a.device),

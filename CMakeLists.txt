@@ -309,7 +309,10 @@ if(ECM_ENABLE_CUDA)
         endif()
     endif()
 
-    set(CGBN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/cgbn/include")
+    set(CGBN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/third_party/cgbn/include" CACHE PATH "CGBN include directory")
+    if(NOT EXISTS "${CGBN_INCLUDE_DIR}/cgbn/cgbn.h")
+        message(FATAL_ERROR "CGBN header not found at ${CGBN_INCLUDE_DIR}/cgbn/cgbn.h")
+    endif()
     option(ECM_CUDA_ENABLE_PRAC "Build experimental resident/PRAC Stage1 kernels (slow template compilation)" OFF)
 
     add_executable(ecm_cuda

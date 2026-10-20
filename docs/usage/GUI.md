@@ -1,24 +1,18 @@
 # Windows 图形前端
 
-窗口标题和启动输出显示公共程序名及版本；`ecm_gui.exe --version` 仅查询版本，不打开窗口或初始化 GPU 监控。每个 worker 输出窗只显示该工作程序启动横幅报告的实际版本，例如 `Worker 版本: ECM-ELF 0.41.0`；工作程序尚未报告时显示“尚未报告”。GUI 不把自身版本当作 worker 版本。
+窗口标题和启动输出显示公共程序名及版本；`ecm_gui.exe --version` 仅查询版本，不打开窗口或初始化 GPU 监控。每个 worker 输出窗只显示该工作程序启动横幅报告的实际版本，例如 `Worker 版本: ECM-ELF x.y.z`；工作程序尚未报告时显示“尚未报告”。GUI 不把自身版本当作 worker 版本。
 
 `ecm_gui.exe` 使用 Dear ImGui docking、Win32/DX11，管理 Stage1 或 Stage2 worker、配置、队列生成、GPU监控、结果展示及ECM概率估算。概率面板使用CPU数值模型；实际曲线计算来自所选worker程序，GUI不链接GMP/OpenCL/CUDA引擎。
 
 ## Worker 与配置
 
-一个 worker 对应一个计算进程，并有独立输出窗口和进程监管。Stage1 使用 `ecm_cuda.exe -ini <file> --worker N`；Stage2 使用 `ecm_cuda_stage2.exe --ini <file> --worker N`。INI/worktodo 的 `[Worker #N]` 使用同一编号。GUI 从共用 `worktodo` 中按 `priority`、`skip` 选择下一行，`ECMSTAGE1=` 启动 Stage1，`ECMSTAGE2=` 启动 Stage2；当前程序完成其可运行任务后，GUI 自动切换到另一阶段。一个 worker 同时只运行一个程序。
+一个 worker 对应一个计算进程，并有独立输出窗口和进程监管。Stage1 使用 `ecm_cuda.exe --config <file> --worker N`；Stage2 使用 `ecm_cuda_stage2.exe --config <file> --worker N`。配置文件默认为程序同目录的 `ecm.toml`。GUI 从共用 `worktodo` 按 `priority`、`skip` 选择下一行：`ECMSTAGE1=` 启动 Stage1，`ECMSTAGE2=` 启动 Stage2；同一 worker 同时只运行一个程序。
 
-Worker 管理顶部设置 worker 数量、两个阶段的程序路径和共用 INI。每行显示当前任务的阶段，阶段由 worktodo 前缀决定，不再提供 `[GUI] stage` 或 `[Worker #N] stage`。修改 worker 数量、共享程序或 INI 须先停止所有 worker。`priority` 和 `skip` 可在各 worker 分区单独覆盖；`[GUI] priority` 仍仅控制进程优先级。
+Worker 管理顶部设置 worker 数量、两个阶段的程序路径和共用 TOML。`[gui]` 中的 `exe` 指向 Stage1，`stage2_exe` 指向 Stage2，`NumWorkers` 控制 GUI worker 数量，`priority` 仅控制进程优先级。`[workers.N]` 保存第 N 个 worker 的 GUI 设置。Stage1/Stage2 键分别放在 `[stage1]`、`[stage2]`，共用键放在 `[shared]`；按 worker 覆盖时写入 `[workers.N.stage1]`、`[workers.N.stage2]` 或 `[workers.N.shared]`。配置文件中的 worker 表与 `worktodo.txt` 的 `[Worker #N]` 队列分区使用同一编号，但语法独立。
 
-`[GUI] exe` 用于 Stage1，`stage2_exe` 用于 Stage2。Stage2 默认查找 GUI 同目录程序、唯一 `cuda-stage2*` 子包、PATH；存在多个子包时明确选择程序。按任务前缀调度不改变直接从命令行启动的程序，也不替代 GPU 架构支持检查。
+GUI 选择配置前检查文件并保存当前窗口设置，选择后不自动运行。语言、字体和布局保持当前会话设置；计算配置、worker 数量及程序路径从所选 TOML 读取。两阶段共用的 `worktodo` 相对 TOML 目录解析；Stage2 输出也基于 TOML 目录，Stage1 的日志和存档等相对路径基于 Stage1 程序目录。生效配置从工作程序同一投影读取。完整分区与每键覆盖资格见[配置参考](../ECM_TOML_REFERENCE.md)。
 
-选择 INI 前检查参数并保存当前窗口设置，选择后不自动运行。当前窗口的语言、字体和布局保持，计算配置、worker 数量及程序设置从所选 INI 读取。INI 及实际队列路径在管理和详情面板展示。
-
-两阶段共用 `worktodo`，相对 INI 目录解析；Stage2 的 `stage2_log_file`、`stage2_finished` 等输出也基于 INI 目录，`stage2_device` 优先于公共 `device`。Stage1 的 `log_file`、`finished` 等相对路径仍基于 Stage1 程序目录。GUI 显示的生效设置从命令行使用的同一配置投影读取。配置共用规则见[Stage2 使用](STAGE2.md)；默认值及范围见[INI 参考](../ECM_INI_REFERENCE.md)。
-
-GUI 专用设置位于 `[GUI]`，worker 覆盖位于相应分区。公共 CLI 键放在任何分区前；`[GUI]` 键不会进入命令行配置。命令行的普通分组标题不重置 worker 范围，因此不要在 `[Worker #N]` 之后放置公共 CLI 键。推荐用注释对公共配置分组，并把 `[GUI]` 放在 worker 分区之前。
-
-例如，`[GUI] NumWorkers=2`，`[Worker #1] device=0`，`[Worker #2] stage2_device=1`；实际 INI 每行一个键。两个 worker 可分别处理同一 `worktodo.txt` 中的 `[Worker #1]`、`[Worker #2]` 分区，各分区按任务前缀选择程序。没有 worker 标题的队列行只归 worker 1。队列改写保留注释、未知键和顺序；GUI 保存 INI 使用原子替换。全部默认值和范围见 [INI 参考](../ECM_INI_REFERENCE.md)。
+例如两个 worker 分别选择 Stage1 设备时，可在 `[stage1]` 写 `device = 0`，在 `[workers.2.stage1]` 写 `device = 1`；`worktodo.txt` 中任务仍使用 `[Worker #1]`、`[Worker #2]`。没有 worker 标题的队列行只归 worker 1。GUI 保存 TOML 时保留注释和顺序，并原子替换文件。
 
 ### 当前任务摘要
 
@@ -34,7 +28,7 @@ worktodo 生成器解析 PrimeNet ECM/ECM2 任务，过滤、去重、排序、�
 
 GPU 批量建议向实际 Stage1 程序查询所选曲线的编译档位：Montgomery 按 param 选择档位，Edwards 使用其独立档位及一位容器余量；曲线数由 blocks/SM、SM 数及每 block 实例数计算。Edwards 当前查询不提供实际占用率，推荐值仅按界面设置的块/SM 计算。CPU Stage1 目标自动关闭并禁用推荐曲线数，保留任务原有曲线数，也不提供 `m2`/`m3`；选择器据此禁用不可执行的组合。生成器不使用 GMP，剥离已知因子后的位宽为估计下界，精确整数仍由驱动校验。
 
-生成器明确选择一个目标 worker，显示当前队列阶段、Stage1 设备及实际队列路径，生成的任务只写入该 worker 分区。即使当前任务正在 Stage2，生成器也依据该 worker 的 Stage1 配置产生 Stage1 行。切换目标 worker 或 INI 会清除旧预览，需要重新生成。
+生成器明确选择一个目标 worker，显示当前队列阶段、Stage1 设备及实际队列路径，生成的任务只写入该 worker 分区。即使当前任务正在 Stage2，生成器也依据该 worker 的 Stage1 配置产生 Stage1 行。切换目标 worker 或 TOML 会清除旧预览，需要重新生成。
 
 Prime95 交接状态显示 pending、失败或成功；真实 save/worktodo.add 写入由驱动负责。GUI 不是 Prime95 活动队列的第二个消费者。
 
@@ -52,13 +46,13 @@ Stage2支持启动短校准、存档校验、D/P与内存规划、小步点（ba
 
 GPU 面板动态加载 NVML，显示利用率、显存、SM/graphics 时钟、功耗、温度和限频原因。驱动不支持的指标显示不可用；NVML 利用率不是 SM occupancy。监控不改变 GPU 功率/频率配置。
 
-`[GUI] refresh_hz` 默认 10 Hz，设置空闲时绘制与 worker 状态处理的目标频率；鼠标、键盘和窗口消息会提前唤醒界面。较低值节省 CPU，但图表与仅由 worker 产生的状态更新可能最多延后一个刷新周期，10 Hz 时约 100 ms。`[GUI] gpu_poll_ms` 默认 500 ms，由独立线程控制 NVML 指标采样；即使提高界面刷新频率也不会增加采样次数。未选中的停靠页跳过内容布局与图表处理，NVML 采样仍持续。Prime95 待处理文件每 500 ms 检查一次，收到 worker 交接通知后立即重新检查。
+`[gui] refresh_hz` 默认 10 Hz，设置空闲时绘制与 worker 状态处理的目标频率；鼠标、键盘和窗口消息会提前唤醒界面。较低值节省 CPU，但图表与仅由 worker 产生的状态更新可能最多延后一个刷新周期，10 Hz 时约 100 ms。`[gui] gpu_poll_ms` 默认 500 ms，由独立线程控制 NVML 指标采样；即使提高界面刷新频率也不会增加采样次数。未选中的停靠页跳过内容布局与图表处理，NVML 采样仍持续。Prime95 待处理文件每 500 ms 检查一次，收到 worker 交接通知后立即重新检查。
 
 NVML 采样时不持有 UI 读取设备/历史的锁；初始化仍同步，没有进程隔离或超时保证。`--trace` 可记录初始化与窗口恢复。
 
 ## ECM 概率面板
 
-从“查看 → ECM 概率”打开或聚焦，也可设置`[GUI] start_tab=prob`直接进入。面板作为worker管理旁的独立页签加入现有停靠布局；关闭后可从菜单重开。输入只保存在本次GUI会话中，不写入任务队列或worker计算设置。
+从“查看 → ECM 概率”打开或聚焦，也可设置`[gui] start_tab=prob`直接进入。面板作为worker管理旁的独立页签加入现有停靠布局；关闭后可从菜单重开。输入只保存在本次GUI会话中，不写入任务队列或worker计算设置。
 
 输入目标素因子大小、B1、固定B2或B2/B1、曲线数C及曲线概率模型。大小可用bits或十进制位数，不是待分解完整N的位宽：b bits采用代表值2^(b−0.5)，d位十进制采用10^(d−0.5)。支持科学计数法。未启用Stage2时只计算Stage1。
 
@@ -82,7 +76,7 @@ GMP理论预设包括Suyama/param0、param1、param2和param3，采用`tools/ecm
 
 停止/关闭通过继承的事件请求安全退出：Stage1在安全边界写检查点；Stage2完成当前曲线、发布结果并记录完成数，再停止启动下一条。Stage2不写中间算术存档，也不把曲线计数文件当成Stage1检查点。待自动重启的worker可以直接取消重启。
 
-GUI等待进程自行退出，超过`graceful_stop_ms`仍未退出则强制终止；默认300秒，应覆盖当前完整Stage2曲线的最坏用时，可在INI调大。用户也可在退出等待界面强制退出，未完成的Stage2曲线会在下次运行时重做，已完成曲线按原生队列进度恢复。Stage1检查点规则见[Stage1使用](STAGE1.md#检查点与交接)，Stage2见[自动续跑](STAGE2.md#自动续跑与退出)。
+GUI等待进程自行退出，超过`graceful_stop_ms`仍未退出则强制终止；默认300秒，应覆盖当前完整Stage2曲线的最坏用时，可在TOML调大。用户也可在退出等待界面强制退出，未完成的Stage2曲线会在下次运行时重做，已完成曲线按原生队列进度恢复。Stage1检查点规则见[Stage1使用](STAGE1.md#检查点与交接)，Stage2见[自动续跑](STAGE2.md#自动续跑与退出)。
 
 混合阶段退出提示分别说明Stage1保存检查点和Stage2完成当前曲线；每个worker使用自己的工作目录及停止协议。Prime95交接提示在存在Stage1 worker时保留，并显示两种阶段的运行数量。
 
@@ -96,5 +90,5 @@ Stage2 GUI协议需要支持`--stage2-stop-handle`及`--gui-events`的当前工�
 - [task_display.h](../../src/gui/task_display.h)：只用于显示的任务摘要与AID/因子替代；`log_parse.cpp::parse_stage2/Stage2Status`汇总阶段及完成曲线。
 - [probability_panel.cpp](../../src/gui/probability_panel.cpp)：`ProbabilityPanel::draw`、后台输入快照及概率图；[probability_model.cpp](../../src/gui/probability_model.cpp)：`evaluate`、`calculate`、反算及CSV。数值核心复用[ecm_stage2_probability.h](../../src/core/ecm_stage2_probability.h)。
 - [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp)：GUI任务事件和继承的安全停止请求，队列/存档仍由原生驱动处理。
-- [gpu_monitor.cpp](../../src/gui/gpu_monitor.cpp)、[ini_file.cpp](../../src/gui/ini_file.cpp)：监控和配置。
+- [gpu_monitor.cpp](../../src/gui/gpu_monitor.cpp)、[toml_file.cpp](../../src/gui/toml_file.cpp)：监控和配置。
 - 构建入口：`tools/build/dev/build_gui.ps1`；[构建说明](BUILD.md)。

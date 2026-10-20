@@ -48,7 +48,7 @@ def main():
         report['naf_baseline_sha256']=sha(previous)
         cases.append(('naf_v2_old_tier',previous,677,2,True,8,5))
     for name, source, bits, count, fixed, window, doubling in cases:
-        folder = out/name; folder.mkdir(); ini = folder/'ecm.ini'; queue = folder/'worktodo.txt'; finished = folder/'finished.txt'
+        folder = out/name; folder.mkdir(); ini = folder/'ecm.toml'; queue = folder/'worktodo.txt'; finished = folder/'finished.txt'
         task = f'ECM2=1,2,{bits},-1,100000,0,{count}'+(',20260922' if fixed else '')+'\n'
         queue.write_text(task)
         base_ini = f'curve=ed\ntarget=gpu\ndevice={a.device}\nckpt_seconds=0.001\nckpt_backups=2\nworktodo={queue}\nfinished={finished}\ntmp_dir={folder}\nlog_file=\n'

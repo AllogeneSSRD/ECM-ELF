@@ -4,7 +4,7 @@
 
 ECM-ELF 是椭圆曲线因子分解（ECM）工具集：CUDA/CGBN 与 OpenCL GPU Stage1、GMP 与可选 AVX-512 IFMA CPU Stage1、独立 CUDA 多项式 Stage2、libecm CPU Edwards Stage2，以及 Windows GUI、任务队列和因子数据工具。原仓库名 OpenCL-ECM 只覆盖了其中一个后端；程序名仍为 `ecm.exe`、`ecm_cuda.exe` 等。
 
-本页保留各入口的实际用途、可运行命令、配置方法、存档关系、构建方式和工具索引。配置键的默认值、范围及双语说明以生成的 [INI 参考](docs/ECM_INI_REFERENCE.md) 为准；特定构建是否包含某个内核档位或实验算法，要检查该程序的构建身份与帮助输出。
+本页保留各入口的实际用途、可运行命令、配置方法、存档关系、构建方式和工具索引。配置键的默认值、范围及双语说明以生成的 [TOML 参考](docs/ECM_TOML_REFERENCE.md) 为准；特定构建是否包含某个内核档位或实验算法，要检查该程序的构建身份与帮助输出。
 
 ![Language: C](https://img.shields.io/badge/language-C-blue)
 ![GitHub License](https://img.shields.io/github/license/AllogeneSSRD/ECM-ELF)
@@ -41,7 +41,7 @@ ECM-ELF 提供可独立运行的多后端 ECM 工作流：使用 CUDA/CGBN、Ope
 | 程序 | 当前用途 | 主要输入与输出 |
 | --- | --- | --- |
 | `ecm_cuda.exe` | NVIDIA CUDA/CGBN Stage1，批量运行曲线；支持构建中包含的 PARAM0、PARAM2、PARAM3 曲线族 | 数字/表达式或 Stage1 队列；生成最终 `.save` 和运行中 checkpoint |
-| `ecm.exe` | OpenCL GPU Stage1 或 CPU Edwards、Suyama-Montgomery Stage1 | 与驱动共用的输入、INI、队列及文本 save；GPU 算子可单独选择 |
+| `ecm.exe` | OpenCL GPU Stage1 或 CPU Edwards、Suyama-Montgomery Stage1 | 与驱动共用的输入、TOML、队列及文本 save；GPU 算子可单独选择 |
 | `ecm_cuda_stage2.exe` | 独立 CUDA 多项式 Stage2，处理合格的归一化 PARAM0 Stage1 save | 直接读档或共用 `worktodo` 的 `ECMSTAGE2=` 任务；输出因子、结果和逐曲线回执 |
 | `ecm_gui.exe` | Windows Stage1 worker、配置、队列生成、日志、GPU 状态和结果界面 | 管理 worker 进程；计算仍由所选 `ecm_cuda.exe` 完成 |
 | `ecm_p95feeder` | CPU 本地 save 的 Prime95 交接工具 | 交付可供 Prime95 消费的任务；驱动也支持完成任务交接 |
@@ -77,19 +77,24 @@ echo '(2^1277-1)' | .\ecm.exe --curve mont --target cpu --impl auto -gpucurves 8
 
 ### 使用 worktodo 运行 Stage1
 
-以下示例假设 `ecm_cuda.exe`、`ecm_cuda_stage2.exe` 和 `ecm.ini` 位于同一目录，并从该目录运行命令；已有 INI 时将这些键合并进去。创建 `ecm.ini`：
+以下示例假设 `ecm_cuda.exe`、`ecm_cuda_stage2.exe` 和 `ecm.toml` 位于同一目录，并从该目录运行命令；已有 TOML 时将这些键合并进去。创建 `ecm.toml`：
 
-```ini
-[Worker #1]
-curve = mont
-target = gpu
+```toml
+[shared]
+worktodo = "worktodo.txt"
+
+[stage1]
+curve = "mont"
+target = "gpu"
 gpu_param = 0
 device = 0
-worktodo = worktodo.txt
-finished = worktodo.finished.txt
-tmp_dir = .
-stage2_finished = worktodo.stage2.finished.txt
+finished = "worktodo.finished.txt"
+tmp_dir = "."
+
+[stage2]
+stage2_finished = "worktodo.stage2.finished.txt"
 ```
+
 
 创建 `worktodo.txt`，其中 `ECM2` 的末尾字段依次为 B1、B2、曲线数；`B2=0` 表示只运行 Stage1：
 
@@ -99,14 +104,14 @@ ECM2=1,2,3001,-1,10000,0,8
 ```
 
 ```powershell
-.\ecm_cuda.exe -ini .\ecm.ini --worker 1
+.\ecm_cuda.exe --config .\ecm.toml --worker 1
 ```
 
 该命令不带位置参数，只消费所选 worker 的 Stage1 任务。`ECM2=` 队列任务的 Montgomery 最终存档写在 `tmp_dir`，仍采用 `m{n}_{b1}.save` 格式，例如 `m3001_1e4.save`。完成的任务写入 `worktodo.finished.txt`；正常中断或最终存档写入失败时，未完成任务留在 `worktodo.txt`，重启同一命令可从有效 checkpoint 恢复。`ecm.exe` 也使用同一队列入口，但应按所选 CPU/OpenCL 路径配置。不同 worker 可使用同一队列的独立分区；同一 worker 同时只运行一个程序。详见[队列与交接](#queues)和 [Stage1 使用](docs/usage/STAGE1.md)。
 
 ### 运行和调优 CUDA Stage2
 
-Stage1 完成且未找到因子，并生成 `m3001_1e4.save` 后，在同一个 `worktodo.txt` 的 `[Worker #1]` 分区添加下行；这里的 B2 为显式上界，save 文件名必须与实际产物一致。也可设置 `auto_stage2=1`，让 Stage1 完成且未找到因子时自动将原任务原位改写为 Stage2：
+Stage1 完成且未找到因子，并生成 `m3001_1e4.save` 后，在同一个 `worktodo.txt` 的 `[Worker #1]` 分区添加下行；这里的 B2 为显式上界，save 文件名必须与实际产物一致。也可在 `[stage1]` 设置 `auto_stage2 = 1` 自动交接，默认原位改写；接收 worker 列表和其他队列文件的设置见[自动交接说明](docs/usage/STAGE1.md#自动交接到-stage2)：
 
 ```text
 [Worker #1]
@@ -115,10 +120,10 @@ ECMSTAGE2=1,2,3001,-1,"m3001_1e4.save",1000000
 
 ```powershell
 # 可选：按当前 Stage2 队列和 save 测量完整 ECM；不会消费队列
-.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --tune ecm --tune-level 1 --tune-file .\stage2_ecm_tune.toml
+.\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --tune ecm --tune-level 1 --tune-file .\stage2_ecm_tune.toml
 
 # 执行队列中的一项；生成调优文件后可加 --tune-profile .\stage2_ecm_tune.toml
-.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --once
+.\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --once
 
 # 或跳过队列，直接处理同一 save（不要与上述队列命令重复执行）
 .\ecm_cuda_stage2.exe --save .\m3001_1e4.save --b2 1000000 --device 0
@@ -127,9 +132,9 @@ ECMSTAGE2=1,2,3001,-1,"m3001_1e4.save",1000000
 .\ecm_cuda_stage2.exe --tune ntt --tune-level 1 --tune-file .\stage2_ntt_tune.toml
 ```
 
-ECM tune 默认使用所选 worker 的 Stage2 队列；队列不存在时改测通用位宽网格，也可用 `--tune-save FILE --tune-b2 B2` 指定单个 save。调优有时间预算，生成的档案可由 `--tune-profile FILE` 或 INI 的 `stage2_tune_profile` 加载。显式 B2 无需先调优；自动选择 B2 还需要合格的 Stage1 成本和 Stage2 profile。Stage2 队列、直接读档和 Auto B2 的限制见[独立 CUDA Stage2](#stage2)、[Stage2 使用](docs/usage/STAGE2.md)及 [Auto B2](docs/architecture/AUTO_B2.md)。
+ECM tune 默认使用所选 worker 的 Stage2 队列；队列不存在时改测通用位宽网格，也可用 `--tune-save FILE --tune-b2 B2` 指定单个 save。调优有时间预算，生成的档案可由 `--tune-profile FILE` 或 TOML 的 `stage2_tune_profile` 加载。显式 B2 无需先调优；自动选择 B2 还需要合格的 Stage1 成本和 Stage2 profile。Stage2 队列、直接读档和 Auto B2 的限制见[独立 CUDA Stage2](#stage2)、[Stage2 使用](docs/usage/STAGE2.md)及 [Auto B2](docs/architecture/AUTO_B2.md)。
 
-常用命令行参数如下；完整参数和准确默认值请运行相应程序的 `--help` 并查 [INI 参考](docs/ECM_INI_REFERENCE.md)。
+常用命令行参数如下；完整参数和准确默认值请运行相应程序的 `--help` 并查 [TOML 参考](docs/ECM_TOML_REFERENCE.md)。
 
 | 选项 | 用途 |
 | --- | --- |
@@ -154,23 +159,26 @@ OpenCL 的内核根目录、二进制缓存、TPI、work-group 及日志诊断�
 <a id="cpu-stage1"></a>
 ## CPU Stage1 配置教程
 
-两条 CPU 曲线模型使用与 GPU 相同的驱动和 `ecm.ini`，但曲线构造、坐标和 checkpoint 文件不同。`curve=mont` 且 `target=cpu` 对应 Suyama σ / GMP-ECM PARAM0；`curve=ed` 对应 Atkin–Morain 曲线。Montgomery 路径的 `lcm=1` 使用 `lcm(1…B1)`，`lcm=12` 再乘 12，适用于需要 Prime95 标量约定的交接。标量构造改变了实际计算点，不应在比较 save 时忽略。
+两条 CPU 曲线模型使用与 GPU 相同的驱动和 `ecm.toml`，但曲线构造、坐标和 checkpoint 文件不同。`curve=mont` 且 `target=cpu` 对应 Suyama σ / GMP-ECM PARAM0；`curve=ed` 对应 Atkin–Morain 曲线。Montgomery 路径的 `lcm=1` 使用 `lcm(1…B1)`，`lcm=12` 再乘 12，适用于需要 Prime95 标量约定的交接。标量构造改变了实际计算点，不应在比较 save 时忽略。
 
 一份本地 Montgomery 配置示例：
 
-```ini
-curve = mont
-target = cpu
-impl = auto
-reduction = auto
-lcm = 1
+```toml
+[shared]
+worktodo = "worktodo.txt"
+
+[stage1]
+curve = "mont"
+target = "cpu"
+impl = "auto"
+reduction = "auto"
+lcm = "1"
 stage1_threads = 0
-tmp_dir = saves
-worktodo = worktodo.txt
-finished = worktodo.finished.txt
+tmp_dir = "saves"
+finished = "worktodo.finished.txt"
 ```
 
-将 `curve` 改为 `ed` 就会选择 Edwards 路径；`naf_w` 只影响该路径。需要在同一数学目标上比较归约方式时，可将 `reduction` 分别设为 `mersenne-fold` 和 `montgomery`，前者只适用于完整的 `2^k−1`。要给 Prime95 的 Suyama Stage2 交接，应明确使用与接收端相符的参数化、标量构造和可访问的 save 路径。配置范围与各键是否适用于 GPU/CPU 见 [INI 参考](docs/ECM_INI_REFERENCE.md)。
+将 `curve` 改为 `ed` 就会选择 Edwards 路径；`naf_w` 只影响该路径。需要在同一数学目标上比较归约方式时，可将 `reduction` 分别设为 `mersenne-fold` 和 `montgomery`，前者只适用于完整的 `2^k−1`。要给 Prime95 的 Suyama Stage2 交接，应明确使用与接收端相符的参数化、标量构造和可访问的 save 路径。配置范围与各键是否适用于 GPU/CPU 见 [TOML 参考](docs/ECM_TOML_REFERENCE.md)。
 
 常用 CPU 配方：
 
@@ -185,12 +193,12 @@ finished = worktodo.finished.txt
 
 一批 8 条 SIMD 曲线是一个 CPU 调度任务；例如 64 条曲线最多形成 8 个可并行批。`stage1_threads=0` 自动选线程，显式线程数也会受任务数约束。多个进程不要并发写同一 `(N,B1)` 的 save 和 checkpoint；为各进程配置独立输出目录。固定 σ 可用于重复验证曲线，随机 σ 不宜靠日志顺序推断。
 
-常见排查顺序：若显式 `simd` 报 ISA 错误，改用 `auto` 或 `scalar`；若线程数未用满，先比较曲线批数与线程数；若 `reduction=mersenne-fold` 被拒绝，核对实际 N 是否仍是完整梅森数；若改变 INI 后行为不变，检查所选 worker 分区与命令行覆盖。对 Stage1 校验应比较相同 N/B1/σ/参数化/标量构造下的最终点，不能把仅通过 checksum 当成数学一致。
+常见排查顺序：若显式 `simd` 报 ISA 错误，改用 `auto` 或 `scalar`；若线程数未用满，先比较曲线批数与线程数；若 `reduction=mersenne-fold` 被拒绝，核对实际 N 是否仍是完整梅森数；若改变 TOML 后行为不变，检查所选 worker 分区与命令行覆盖。对 Stage1 校验应比较相同 N/B1/σ/参数化/标量构造下的最终点，不能把仅通过 checksum 当成数学一致。
 
 <a id="queues"></a>
 ## 队列、worker 与交接
 
-Stage1 使用 `worktodo.txt`，完成的任务移入 `worktodo.finished.txt`；出错任务保留带原因的错误记录。INI 和 worktodo 的 `[Worker #N]` 必须对应，`--worker N` 同时选择两边的分区。每个队列只安排一个消费进程；不同 worker 使用独立输出路径。GUI 生成器可以解析 PrimeNet 的 `ECM=` / `ECM2=` 任务，预览并追加，而计算和真正的 save 写入仍由 worker 完成。
+Stage1 使用 `worktodo.txt`，完成的任务移入 `worktodo.finished.txt`；出错任务保留带原因的错误记录。TOML 和 worktodo 的 `[Worker #N]` 必须对应，`--worker N` 同时选择两边的分区。每个队列只安排一个消费进程；不同 worker 使用独立输出路径。GUI 生成器可以解析 PrimeNet 的 `ECM=` / `ECM2=` 任务，预览并追加，而计算和真正的 save 写入仍由 worker 完成。
 
 例如在所选 worker 的 worktodo 段中放入一条 Stage1 任务：
 
@@ -213,10 +221,10 @@ save 的兼容范围也有限：CUDA/CPU PARAM0 及 CUDA/OpenCL PARAM3 的合格
 
 ```powershell
 .\ecm_cuda_stage2.exe --save .\m3701_260e6.save --b2 26000000000 --device 0
-.\ecm_cuda_stage2.exe --ini .\ecm.ini --worker 1 --once
+.\ecm_cuda_stage2.exe --config .\ecm.toml --worker 1 --once
 ```
 
-Stage1 与 Stage2 共用 `worktodo`，由 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀决定执行阶段；GUI 会按队列自动切换程序。`priority=1` 优先 Stage1，`2` 优先 Stage2，空值或 `0` 按文件顺序；优先阶段无任务时处理另一阶段。`skip=1` 忽略 Stage1，`2` 忽略 Stage2；`priority`、`skip`、`auto_stage2` 均可按 worker 覆盖。`b2_ratio` 为非零整数时，Stage2 使用 B1 × ratio 覆盖其他 B2 来源；使用该 INI 直接读档时也适用。Stage2 任务格式为 `ECMSTAGE2=[AID,]k,b,n,c,save[,B2][,skip_curves][,num_curves][,"known_factors"]`。直接读档可用 `--skip-curves` 和 `--curves` 选择记录；队列按回执记录已完成的曲线，在中断后对账，未完成的当前曲线需要重算。输入文件缺失、损坏、任务字段不匹配与设备/资源故障有不同的队列处理方式。
+Stage1 与 Stage2 共用 `worktodo`，由 `ECMSTAGE1=` / `ECMSTAGE2=` 前缀决定执行阶段；GUI 会按队列自动切换程序。`priority=1` 优先 Stage1，`2` 优先 Stage2，空值或 `0` 按文件顺序；优先阶段无任务时处理另一阶段。`skip=1` 忽略 Stage1，`2` 忽略 Stage2；`priority`、`skip`、`auto_stage2` 均可按 worker 覆盖。`b2_ratio` 为非零整数时，Stage2 使用 B1 × ratio 覆盖其他 B2 来源；使用该 TOML 直接读档时也适用。Stage2 任务格式为 `ECMSTAGE2=[AID,]k,b,n,c,save[,B2][,skip_curves][,num_curves][,"known_factors"]`。直接读档可用 `--skip-curves` 和 `--curves` 选择记录；队列按回执记录已完成的曲线，在中断后对账，未完成的当前曲线需要重算。输入文件缺失、损坏、任务字段不匹配与设备/资源故障有不同的队列处理方式。
 
 手动 B2 支持符合实现约束的 2…16384-bit 输入。Auto B2 还要求适用的成本 profile 和 Stage1 成本，且始终受当前显存及算术检查约束；对没有合格模型的生产任务应明确给出 B2。`--dry-run` 只校验输入；`--plan-only` 可进行启动短校准，若要纯查询需配合 `--short-calibration 0`。参数、回执、内存摘要、调优数据格式见 [Stage2 使用](docs/usage/STAGE2.md)、[管线](docs/architecture/STAGE2.md)、[Auto B2](docs/architecture/AUTO_B2.md)。
 
@@ -254,7 +262,7 @@ cmake --build build_opencl --config Release
 
 Android App 位于 `Android/ECM`，提供 OpenCL 设备探测、ECM Stage1 分解、算子微基准、工作队列和本地保存。用 Android Studio 打开该子工程；原生分解需要链接 GMP。运行时动态加载设备厂商的 OpenCL 库，不应将从手机抽取的 `libOpenCL.so` 打包入 APK。构建会同步 `.cl` 内核到 assets；首次编译大型内核可能较慢。入口、16 KB 页设备约束及真机验证见 [Android 总览](Android/README.md)、[ECM 分解说明](Android/ECM/README_ECM_FACTORIZATION.md)、[App 说明](Android/ECM/README.md)。
 
-Windows GUI 使用 Dear ImGui docking、Win32/DX11 和 NVML。一个 worker 对应一个 Stage1 子进程；它可编辑配置、生成/预览任务、显示独立输出、GPU 指标与结果，但不执行 ECM 算术，也不作为 Prime95 队列的第二消费者。GUI 的 `[GUI]` 与 `[Worker #N]` 设置和窗口恢复、停止策略见 [GUI 使用](docs/usage/GUI.md)。
+Windows GUI 使用 Dear ImGui docking、Win32/DX11 和 NVML。一个 worker 对应一个 Stage1 子进程；它可编辑配置、生成/预览任务、显示独立输出、GPU 指标与结果，但不执行 ECM 算术，也不作为 Prime95 队列的第二消费者。GUI 的 `[gui]` 与 `[workers.N]` 设置和窗口恢复、停止策略见 [GUI 使用](docs/usage/GUI.md)。
 
 - [`ecm_prob`](tools/ecm_prob/README.md)：ECM 成功率、参数化与有效除子模型；预测值须按模型条件解释。
 - [`ecm_report`](tools/ecm_report/README.md)：PrimeNet ECM 进度与结果汇总。

@@ -185,7 +185,7 @@ def main():
                 if any(r['name']==name for r in data['stage1']): continue
                 where=out/name;where.mkdir(exist_ok=True);save=where/'stage1.save'
                 if save.exists(): raise ValueError('Unaccounted Stage1 output: '+str(save))
-                ini=where/'ecm.ini';ini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=unused.txt\ntmp_dir=.\n',encoding='utf-8')
+                ini=where/'ecm.toml';ini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=unused.txt\ntmp_dir=.\n',encoding='utf-8')
                 cmd=[str(exe1),'-ini',str(ini),'--curve','mont','--target','gpu','--gpu-param','0','--lcm','1',
                      '--exp-cache','off','-d','1','-sigma','26','-gpucurves',str(batch),'--ckpt','0','-save',str(save),'1000']
                 seconds,log=run(cmd,f'{(1<<bits)-1}\n'.encode(),where,where/'driver.log')

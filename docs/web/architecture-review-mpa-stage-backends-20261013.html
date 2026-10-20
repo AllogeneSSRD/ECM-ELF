@@ -27,7 +27,7 @@ h1{font-size:28px;line-height:1.25;margin:0 0 8px}h2{font-size:20px;margin:0 0 1
 
 <section class="section"><h2>从输入到执行</h2>
 <div class="diagram">
-  <div class="node"><h3>输入入口</h3><p>单次：CLI 选项、stdin 的 N、位置参数 B1/B2。</p><p>队列：ecm.ini 的 worker 配置与 worktodo 当前任务。</p></div>
+  <div class="node"><h3>输入入口</h3><p>单次：CLI 选项、stdin 的 N、位置参数 B1/B2。</p><p>队列：ecm.toml 的 worker 配置与 worktodo 当前任务。</p></div>
   <div class="arrow">→</div>
   <div class="node focus"><h3>正交选择项</h3><p>curve：Montgomery / Edwards；target：CPU / GPU。</p><p>CPU 实现、SIMD 约减及 Stage1 标量构造分别选择；Auto 枚举统一为 0。</p></div>
   <div class="arrow">→</div>
@@ -42,7 +42,7 @@ h1{font-size:28px;line-height:1.25;margin:0 0 8px}h2{font-size:20px;margin:0 0 1
     <div class="steps"><div class="step">--curve / --target<br>--impl / --reduction<br>--lcm</div><div class="to">→</div><div class="step">解析为 Selection<br>处理 -sigma i:s 与参数化冲突</div><div class="to">→</div><div class="step">结合 N、B1、曲线数与 sigma<br>执行能力及范围检查</div></div>
   </div>
   <div class="lane"><h3>worktodo 队列</h3><p class="muted">INI 的未知选择值直接报错；不支持的 GPU 参数组合在消费任务前退出。</p>
-    <div class="steps"><div class="step">ecm.ini 全局键及 Worker 键<br>由生成的配置绑定读取</div><div class="to">→</div><div class="step">共用 Selection 解析<br>后端能力预检</div><div class="to">→</div><div class="step">worktodo 的 N、B1、曲线数与 sigma<br>逐任务校验后运行</div></div>
+    <div class="steps"><div class="step">ecm.toml 全局键及 Worker 键<br>由生成的配置绑定读取</div><div class="to">→</div><div class="step">共用 Selection 解析<br>后端能力预检</div><div class="to">→</div><div class="step">worktodo 的 N、B1、曲线数与 sigma<br>逐任务校验后运行</div></div>
   </div>
 </div></section>
 

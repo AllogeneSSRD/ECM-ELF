@@ -12,7 +12,7 @@
 // worker's task" -- which is silent otherwise.
 
 #include "../../src/core/ecm_worktodo.h"
-#include "../../src/core/ecm_ini.h"
+#include "../../src/core/ecm_toml.h"
 
 #include <cstdio>
 #include <fstream>

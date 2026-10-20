@@ -1,4 +1,5 @@
 #include "p95_transfer.h"
+#include "ecm_worker_list.h"
 
 #include "p95_worktodo.h"
 
@@ -331,41 +332,7 @@ bool line_known_to_p95(const std::vector<P95WorkerSection> &sections, const std:
 } // namespace
 
 bool p95_parse_add_workers(const std::string &spec, std::vector<int> &workers, int &ignored) {
-    workers.clear();
-    ignored = 0;
-    const std::string s = trim(spec);
-    if (s.empty()) return true;
-
-    std::stringstream ss(s);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-        const std::string t = trim(item);
-        if (t.empty()) continue;
-        const size_t dash = t.find('-');
-        long lo = 0, hi = 0;
-        if (dash == std::string::npos) {
-            char *end = nullptr;
-            lo = std::strtol(t.c_str(), &end, 10);
-            if (end == t.c_str() || *end != '\0') return false;
-            hi = lo;
-        } else {
-            const std::string a = trim(t.substr(0, dash));
-            const std::string b = trim(t.substr(dash + 1));
-            char *ea = nullptr, *eb = nullptr;
-            lo = std::strtol(a.c_str(), &ea, 10);
-            if (ea == a.c_str() || *ea != '\0') return false;
-            hi = std::strtol(b.c_str(), &eb, 10);
-            if (eb == b.c_str() || *eb != '\0') return false;
-            if (hi < lo) std::swap(lo, hi);
-        }
-        for (long w = lo; w <= hi; ++w) {
-            if (w < 1 || w > kMaxP95Workers) { ++ignored; continue; }
-            if (std::find(workers.begin(), workers.end(), (int)w) == workers.end()) {
-                workers.push_back((int)w);
-            }
-        }
-    }
-    return true;
+    return ecm_workers::parse_list(spec,kMaxP95Workers,workers,ignored);
 }
 
 std::string p95_transfer_pending_path(const std::string &exe_dir) {

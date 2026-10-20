@@ -103,7 +103,7 @@ Check "nvidia-smi cross-check passed" ($log -match 'matches nvidia-smi')
 
 # ---------------------------------------------------- 2. the GUI reports it ----
 Write-Host "[2] the GUI picks the monitor up and traces the devices"
-$ini = Join-Path $Sandbox 'ecm.ini'
+$ini = Join-Path $Sandbox 'ecm.toml'
 $enc = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($ini, ("[GUI]`r`nNumWorkers = 1`r`nlanguage = english`r`n"), $enc)
 $trace = Join-Path (Split-Path -Parent $Exe) 'ecm_gui_trace.log'

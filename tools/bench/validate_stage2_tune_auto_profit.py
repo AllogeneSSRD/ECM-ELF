@@ -75,7 +75,7 @@ def main():
     assert all(b1<b2<=2**63-1-8192 and all(row['b2']!=b2 for group in groups.values() for row in group)
                for b2 in a.holdout_b2),'holdout B2 must be valid and absent from training'
     measurements,component_models=fixed.component_reference(profile,groups,a.training_plans,identities)
-    ini=out/'ecm.ini';ini.write_text('verbose=false\nstage2_debug_log=false\n',encoding='utf-8')
+    ini=out/'ecm.toml';ini.write_text('verbose=false\nstage2_debug_log=false\n',encoding='utf-8')
     policy=profile['policy'];common=[str(a.exe.resolve()),'--ini',str(ini),'--save',str(a.save.resolve()),
         '--device',str(a.device),'--tune-profile',str(a.profile.resolve()),'--batch-mb',str(policy['batch_mb']),
         '--arena-mb',str(policy['arena_mb']),'--owner-budget-mb',str(policy['fold_mb']),'--log-level','quiet']

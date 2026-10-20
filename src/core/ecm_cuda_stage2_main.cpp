@@ -319,7 +319,7 @@ Options arguments(int argc, char **argv) {
         };
         auto num = [&]() { return u64(value(), a.c_str()); };
         if (a == "--help" || a == "-h") o.help = true;
-        else if (a == "--ini" || a == "-ini") o.ini = value();
+        else if (a == "--config") o.ini = value();
         else if (a == "--save") o.save = value();
         else if (a == "--worktodo") o.worktodo = value();
         else if (a == "--results") o.results = value();
@@ -489,8 +489,8 @@ void configure_pack_zero(Options &o,const Settings *s=nullptr) {
         throw std::runtime_error("cannot configure Stage2 pack/zero fusion");
 }
 Settings stage2_ini(const fs::path &path,int worker) {
-    std::vector<ecm_config::IniLine> lines;
-    ecm_config::read_ini(path.string(),lines);
+    std::vector<ecm_config::TomlLine> lines;
+    ecm_config::read_toml(path.string(),lines);
     return ecm_config::read_stage2(ecm_config::cli_entries(lines,worker,true));
 }
 std::vector<std::string> csv(const std::string &s, std::vector<bool> *quotes = nullptr) {
@@ -650,7 +650,7 @@ int child_run(Options &o, const fs::path &save, const Record &r,
     arg(L"--relocation",o.relocation?1:0);
     cmd += L" --results " + quote(results.wstring());
     if(!o.submission.empty())cmd+=L" --submission "+quote(fs::path(o.submission).wstring());
-    if(!o.submission_ini.empty())cmd+=L" --ini "+quote(fs::path(o.submission_ini).wstring());
+    if(!o.submission_ini.empty())cmd+=L" --config "+quote(fs::path(o.submission_ini).wstring());
     if(o.submission_exponent)arg(L"--exponent",o.submission_exponent);
     for(const auto &factor:o.submission_known)cmd+=L" --known-factor "+quote(fs::path(factor).wstring());
     if(!o.submission_aid.empty())cmd+=L" --aid "+quote(fs::path(o.submission_aid).wstring());
@@ -1007,10 +1007,10 @@ int curve_worker(Options o) {
         factor_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
     }
     stage2_log::phase("Publish result");
-    const auto identity_ini=o.ini.empty()?executable().parent_path()/"ecm.ini":fs::path(o.ini);
-    std::vector<ecm_config::IniLine> identity_lines;
-    if(!ecm_config::read_ini(identity_ini.string(),identity_lines) && (!o.ini.empty() || fs::exists(identity_ini)))
-        throw std::runtime_error("cannot read result identity INI");
+    const auto identity_ini=o.ini.empty()?executable().parent_path()/"ecm.toml":fs::path(o.ini);
+    std::vector<ecm_config::TomlLine> identity_lines;
+    if(!ecm_config::read_toml(identity_ini.string(),identity_lines) && (!o.ini.empty() || fs::exists(identity_ini)))
+        throw std::runtime_error("cannot read result identity TOML");
     const auto identity=ecm_config::read_stage2(ecm_config::cli_entries(identity_lines,o.worker,true));
     ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
     submission.publication_task=o.publication_task;submission.when=ecm_results::utc_timestamp();
@@ -1062,10 +1062,10 @@ int curve_worker(Options o) {
 void help() {
     std::cout << "ecm_cuda_stage2 - resume normalized Suyama PARAM=0 or ECM-EDWARDS-AM Stage1 text saves\n"
         "  ecm_cuda_stage2 --save FILE --b2 B2 [--curves N] [--skip-curves N]\n"
-        "  ecm_cuda_stage2 [--ini ecm.ini] [--worktodo FILE] [--worker N] [--once]\n"
+        "  ecm_cuda_stage2 [--config ecm.toml] [--worktodo FILE] [--worker N] [--once]\n"
         "Options: --device N --d D --batch-mb MB --arena-mb MB --results INTERNAL.jsonl\n"
         "         --submission results.json.txt --exponent P --known-factor F (repeatable)\n"
-        "         --ntt-counts 0|1 (per-curve NTT length table; INI stage2_ntt_counts)\n"
+        "         --ntt-counts 0|1 (per-curve NTT length table; TOML stage2_ntt_counts)\n"
         "         --relocation 0|1 (optional conservative suffix, original-range replay on hits/nonunits)\n"
         "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
         "         --auto-carrier 0|1 (override stage2_auto_carrier; verified worktodo candidates, tune selection required)\n"
@@ -1087,7 +1087,7 @@ void help() {
         "           --tune-runtime-samples N (2..1000, default 10): per-condition/path observation cap.\n"
         "           --short-calibration 0|1 --short-calibration-seconds 10\n"
         "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
-        "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in INI).\n"
+        "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in TOML).\n"
         "           --stage1-cost-csv FILE --stage1-cost-mhz MHz --target-factor-bits N\n"
         "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
         "           --tune-ntt-profile FILE (repeatable): attach checked NTT summaries to ECM tune/merge.\n"
@@ -1107,14 +1107,14 @@ void help() {
         "      [--tune-memory-mb 1024] [--tune-file stage2_tune.toml]\n"
         "      Requires a fixed Goldilocks backend; measures field convolution only.\n"
         "Queue: ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
-        "INI: shared worktodo, stage2_finished, stage2_progress_dir, stage2_log_file;\n"
+        "TOML: [shared] worktodo; [stage2] stage2_finished, stage2_progress_dir, stage2_log_file;\n"
         "stage2_progress_file imports legacy single-file progress only.\n"
         "     shared tmp_dir/device/verbose; stage2_save_dir/device overrides; stage2_b2, stage2_d,\n"
-        "     stage2_batch_mb, stage2_arena_mb, stage2_pack_zero, stage2_results_file, stage2_log_level; [Worker #N].\n"
+        "     stage2_batch_mb, stage2_arena_mb, stage2_pack_zero, stage2_results_file, stage2_log_level.\n"
         "     stage2_debug_log=true enables separate diagnostics (stage2_debug_log_file).\n"
         "D=0 chooses automatically; count/curves=0 means all remaining; shortages are clamped.\n"
         "Queue only: resumes completed curves. Ctrl+C finishes current curve; twice stops now.\n"
-        "Missing implicit INI uses defaults. No Stage1 computation or checkpointing.\n";
+        "Missing implicit TOML uses defaults. Worker overrides use [workers.N.stage2].\n";
 }
 ecm_stage2::tune::Fields tune_environment() {
     std::map<std::string,std::string> env;
@@ -1184,10 +1184,10 @@ int driver(Options o) {
     if(o.tune=="ecm" && o.has_tune_memory)throw std::runtime_error("ECM tune uses batch/arena/owner budgets; tune-memory-mb requires --tune ntt");
     if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
     const fs::path cwd = fs::current_path();
-    const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.ini" : absolute_from(cwd, o.ini);
+    const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
     EcmQueueConfig cfg;
     if (!ecm_queue_config_load(ini.string(), o.worker, cfg) && (!o.ini.empty() || fs::exists(ini)))
-        throw std::runtime_error("cannot read explicit ini: " + ini.string());
+        throw std::runtime_error("cannot read explicit TOML: " + ini.string());
     Settings s = stage2_ini(ini, o.worker);
     configure_pack_zero(o,&s);
     if(!o.portable_cli.count("--auto-carrier"))o.auto_carrier=s.auto_carrier;
@@ -1373,7 +1373,7 @@ int driver(Options o) {
         if(fs::equivalent(a,b,error)&&!error)return true;
         return upper(a.lexically_normal().string())==upper(b.lexically_normal().string());
     };
-    // A common INI may share device/save defaults, never writable queue state.
+    // A common TOML may share device/save defaults, never writable queue state.
     const std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::path(o.debug_file),fs::path(o.submission)};
     for(size_t i=0;i<writable.size();++i) {
         if(!o.tune_profile.empty() && same_path(writable[i],fs::path(o.tune_profile)))throw std::runtime_error("output path conflicts with measured tune profile");

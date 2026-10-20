@@ -4,11 +4,11 @@
     Smoke test for ecm_gui milestone M1 (docs/usage/GUI.md).
 
 .DESCRIPTION
-    Runs the real GUI once, against a sandbox ecm.ini, and checks the two things a
+    Runs the real GUI once, against a sandbox ecm.toml, and checks the two things a
     headless self-test cannot:
 
       1. the window really appears (Win32 + Direct3D 11 + ImGui init succeed), and
-      2. closing it persists the layout back into ecm.ini [GUI] (window= + the
+      2. closing it persists the layout back into ecm.toml [GUI] (window= + the
          dock_layout blob), while the driver keys the GUI does not own are kept
          byte-for-byte.
 
@@ -113,7 +113,7 @@ function Check([string]$name, [bool]$ok, [string]$detail = "") {
     }
 }
 
-$iniPath = Join-Path $Sandbox 'ecm.ini'
+$iniPath = Join-Path $Sandbox 'ecm.toml'
 # The UI language under test: it drives the ini, the localization trace line and the
 # font assertions in step [7] (a CJK language must bring a CJK-capable system font).
 $Language = 'chineseSimplified'
@@ -267,7 +267,7 @@ if (-not $proc.WaitForExit(25000)) {
 $script:traceRun1 = Join-Path $Sandbox 'trace_run1.log'
 Copy-Item $script:tracePath $script:traceRun1 -Force -ErrorAction SilentlyContinue
 
-# ------------------------------------------------- 3. layout in ecm.ini ----
+# ------------------------------------------------- 3. layout in ecm.toml ----
 Write-Host "[3] [GUI] keys written back, driver keys preserved"
 $after = Get-Content -LiteralPath $iniPath -Raw
 Check "window= rectangle persisted"   ($after -match '(?m)^window\s*=\s*-?\d+,-?\d+,\d+,\d+')
@@ -292,7 +292,7 @@ if (Test-Path $ecmCuda) {
     if ($iniText -notmatch '(?m)^worktodo\s*=') {
         [System.IO.File]::AppendAllText($iniPath, ("worktodo = " + $todo + "`r`n"), $enc)
     }
-    $out = (& cmd /c ('"{0}" -ini "{1}" --worker 1 < NUL 2>&1' -f $ecmCuda, $iniPath) | Out-String)
+    $out = (& cmd /c ('"{0}" --config "{1}" --worker 1 < NUL 2>&1' -f $ecmCuda, $iniPath) | Out-String)
     Check "driver starts with the GUI-written ini" ($out -match 'ECM queue manager')
     Check "driver read NumWorkers/worker 1"        ($out -match 'worker : 1')
 } else {

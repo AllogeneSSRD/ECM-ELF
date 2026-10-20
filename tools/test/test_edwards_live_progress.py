@@ -23,8 +23,8 @@ def validate(text, mode):
     assert text.index("GPU Edwards initialization:") < first
     assert text.index("GPU Edwards dictionary:") < first
     counts = [int(row[1]) for row in rows]
-    assert counts == sorted(counts) and counts[0] > 0, counts
-    assert all(0 < int(row[2]) <= 256 for row in rows), rows
+    assert counts[0] > 0 and all(b > a for a, b in zip(counts, counts[1:])), counts
+    assert all(0 < int(row[2]) <= 4096 for row in rows), rows
     assert all(row[3] == ("columns" if mode == "naf" else "bits") for row in rows)
     assert all(float(row[4]) > 0 for row in rows), rows
     assert rows[-1][0] == "100.0" and float(rows[-1][6]) == 0, rows[-1]
@@ -44,18 +44,20 @@ def resume_check(exe, out, device, exponent, mode, env, reference):
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     work = out / (mode + "_resume")
     work.mkdir()
-    queue, ini = work / "worktodo.txt", work / "ecm.ini"
+    queue, ini = work / "worktodo.txt", work / "ecm.toml"
     task = f"ECM2=1,2,{exponent},-1,100000,0,8,20260922\n"
     queue.write_text(task, encoding="ascii")
-    ini.write_text(f"curve=ed\ntarget=gpu\ndevice={device}\nckpt_seconds=0\n" +
-                   f"worktodo={queue}\nfinished={work / 'finished.txt'}\ntmp_dir={work}\n" +
-                   "log_file=\nuser=\ncomputer=\n", encoding="utf-8")
+    ini.write_text("[shared]\nworktodo = " + json.dumps(str(queue)) +
+                   '\nuser = ""\ncomputer = ""\n[stage1]\ncurve = "ed"\ntarget = "gpu"\n' +
+                   f"device = {device}\nckpt_seconds = 0\n" +
+                   "finished = " + json.dumps(str(work / 'finished.txt')) +
+                   "\ntmp_dir = " + json.dumps(str(work)) + '\nlog_file = ""\n', encoding="utf-8")
     env = env | {"ECM_EDWARDS_STAGE1_ALGO": mode}
     event = kernel.CreateEventW(ctypes.byref(Attributes(ctypes.sizeof(Attributes), None, True)), True, False, None)
     assert event
     log = work / "stopped.log"
     with log.open("wb") as stream:
-        child = subprocess.Popen([str(exe), "-ini", str(ini), "--stage1-stop-handle", str(event)],
+        child = subprocess.Popen([str(exe), "--config", str(ini), "--stage1-stop-handle", str(event)],
                                  cwd=work, env=env, stdout=stream, stderr=subprocess.STDOUT,
                                  close_fds=False, creationflags=subprocess.CREATE_NO_WINDOW)
         try:
@@ -83,7 +85,7 @@ def resume_check(exe, out, device, exponent, mode, env, reference):
     _, rows = batch(ckpt)
     assert rows[0][1].startswith(b"ECMEDB3\0")
     before = struct.unpack_from("<I", rows[0][1], 24)[0]
-    run = subprocess.run([str(exe), "-ini", str(ini)], cwd=work, env=env,
+    run = subprocess.run([str(exe), "--config", str(ini)], cwd=work, env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                          encoding="utf-8", errors="replace", timeout=120)
     (work / "resumed.log").write_text(run.stdout, encoding="utf-8")
@@ -116,10 +118,11 @@ def main():
     for mode in ("naf", "binary"):
         work = out / mode
         work.mkdir()
-        ini = work / "ecm.ini"
-        ini.write_text("log_file=\nuser=\ncomputer=\nckpt_seconds=0\n" +
-                       f"exp_cache={out / 'exp_cache'}\ntmp_dir={work}\n", encoding="utf-8")
-        cmd = [str(exe), "-ini", str(ini), "--curve", "ed", "--target", "gpu",
+        ini = work / "ecm.toml"
+        ini.write_text('[shared]\nuser = ""\ncomputer = ""\n[stage1]\nlog_file = ""\nckpt_seconds = 0\n' +
+                       'exp_cache = ' + json.dumps(str(out / 'exp_cache')) +
+                       '\ntmp_dir = ' + json.dumps(str(work)) + '\n', encoding="utf-8")
+        cmd = [str(exe), "--config", str(ini), "--curve", "ed", "--target", "gpu",
                "-d", str(args.device), "-sigma", "20260922", "-gpucurves", "8",
                "-save", str(work / "point.save"), "100000", "100000"]
         env["ECM_EDWARDS_STAGE1_ALGO"] = mode

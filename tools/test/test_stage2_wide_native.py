@@ -266,7 +266,7 @@ def main():
     queue = queue_dir / 'worktodo.txt'
     line = 'ECMSTAGE2=1,2,16384,-15,"three.save",13230,1,1\n'
     queue.write_text(line, encoding='utf-8')
-    queue_ini = queue_dir / 'ecm.ini'
+    queue_ini = queue_dir / 'ecm.toml'
     queue_ini.write_text('[queue]\nworktodo=worktodo.txt\nfinished=finished.txt\ntmp_dir=.\n'
                          '[gpu]\ndevice=1\n[stage2]\nstage2_d=210\nstage2_arena_mb=512\n', encoding='utf-8')
     result, log = queue_dir / 'result.jsonl', queue_dir / 'engine.log'

@@ -1,31 +1,20 @@
 #pragma once
 
-// Structured INI access for ecm_gui.
-//
-// Why this is not the driver's ecm_queue_config_load(): that loader is a one-shot
-// "give me the values" pass which drops the file structure. The GUI has to WRITE
-// the ini as well (window geometry, NumWorkers, autostart, language...), and the
-// rule is (docs/usage/GUI.md 4.3):
-//
-//   * unknown keys, comments, blank lines and the user's own ordering survive;
-//   * only the VALUE of a key the GUI owns is ever rewritten;
-//   * new keys are appended at the end of their section, new sections at EOF;
-//   * the file is replaced atomically (tmp + MoveFileEx) with one .bak generation.
-//
-// Section semantics mirror the driver (D1): keys before the first [Section] line
-// are the global section, stored here under the empty section name "".
+// Lossless GUI editor for the known ecm.toml schema. Unchanged lines and comments
+// keep their order; rewritten values are encoded according to their schema type.
+// New keys are appended to their table, and saves replace the file atomically.
 
 #include <string>
 #include <vector>
-#include "../core/ecm_ini.h"
+#include "../core/ecm_toml.h"
 
 namespace ecmgui {
 
-class IniFile {
+class TomlFile {
 public:
-    using Line = ecm_config::IniLine;
+    using Line = ecm_config::TomlLine;
 
-    // Reads `path`. Returns false and fills `err` when the file cannot be opened.
+    // Reads `path`. Returns false with an error for missing or invalid TOML.
     bool load(const std::string &path, std::string &err);
     // Marks the object as "empty file at `path`" (used before the first save).
     void reset(const std::string &path);
@@ -34,7 +23,7 @@ public:
     bool loaded() const { return loaded_; }
     bool dirty() const { return dirty_; }
 
-    // Value lookup: `section` = "" is the global section. Returns `def` when absent.
+    // Exact table/key lookup; returns `def` when absent.
     std::string get(const std::string &section, const std::string &key,
                     const std::string &def = std::string()) const;
     bool has(const std::string &section, const std::string &key) const;
@@ -49,7 +38,7 @@ public:
     void set_int(const std::string &section, const std::string &key, int value);
     void set_double(const std::string &section, const std::string &key, double value);
 
-    // Section names in file order ("" first when the file starts with global keys).
+    // Table names in file order.
     std::vector<std::string> sections() const;
 
     // Writes the file back: <path>.tmp -> <path>, keeping one <path>.bak generation.

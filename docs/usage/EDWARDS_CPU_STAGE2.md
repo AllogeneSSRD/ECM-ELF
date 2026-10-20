@@ -4,7 +4,7 @@ CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=4
 
 ## 构建与运行
 
-Windows x64 新功能构建使用 `tools/build/test/build_cpu_stage2.ps1 -Jobs 8 -GwPoly`，输出 `build_cpu_stage2/native/ecm_cpu_stage2.exe`。需要 MSVC、CMake/Ninja、现有 GMP、`.refactor/gmp-ecm` 源码，以及 `.refactor/p95v3106b01.source/gwnum` 中匹配头文件的 `gwnum64.lib` / `polymult64.lib`，不需要 CUDA。GW 构建按这两个本地库使用静态 MSVC CRT（/MT）；不附加 `-GwPoly` 可构建仅有 libecm 的版本。源目录可在 CMake 中设置 `ECM_LIBECM_SOURCE_DIR` 和 `ECM_GWNUM_ROOT`；根 CMake 提供默认关闭的 `ECM_BUILD_CPU_STAGE2`，并以 `ECM_CPU_GW_POLY=ON` 启用 GW 后端。适配器不修改外部源码，分发目录附 GMP DLL 与上游许可文件。支持 INI 中的结果身份和提交文件配置；此程序尚未纳入 CUDA 发布包、GUI 或 Stage2 队列入口。
+Windows x64 新功能构建使用 `tools/build/test/build_cpu_stage2.ps1 -Jobs 8 -GwPoly`，输出 `build_cpu_stage2/native/ecm_cpu_stage2.exe`。需要 MSVC、CMake/Ninja、现有 GMP、`.refactor/gmp-ecm` 源码，以及 `.refactor/p95v3106b01.source/gwnum` 中匹配头文件的 `gwnum64.lib` / `polymult64.lib`，不需要 CUDA。GW 构建按这两个本地库使用静态 MSVC CRT（/MT）；不附加 `-GwPoly` 可构建仅有 libecm 的版本。源目录可在 CMake 中设置 `ECM_LIBECM_SOURCE_DIR` 和 `ECM_GWNUM_ROOT`；根 CMake 提供默认关闭的 `ECM_BUILD_CPU_STAGE2`，并以 `ECM_CPU_GW_POLY=ON` 启用 GW 后端。适配器不修改外部源码，分发目录附 GMP DLL 与上游许可文件。支持 TOML 中的结果身份和提交文件配置；此程序尚未纳入 CUDA 发布包、GUI 或 Stage2 队列入口。
 
 本机依赖为 GMP-ECM `7.0.6-dev`，上游提交 `17b5cdf1536b96fce4a7b92832f57f9028fbe570`。构建使用通用 GMP limb 路径及 OpenMP，不依赖上游 MPIR/YASM 汇编工程。实现入口为 [CPU Stage2](../../src/core/ecm_cpu_stage2_main.cpp)、[严格存档读取](../../src/core/ecm_edwards_save_reader.h) 和 [依赖构建](../../tools/build/internal/ecm_libecm.cmake)。
 
@@ -55,7 +55,7 @@ GW 后端直接使用保存的 x 和 a24；libecm 设置 A、保存的 x 和 `B1
 
 `--results` 保存逐曲线内部 JSONL，包含引擎、后端、时间、save 行号、真实构建身份和公开 CRC32。libecm 的内部 `fft-length=0`；gwpoly 记录实际 GW FFT 长度，并在 `stage2-engine` 中记录 init/main、最大舍入误差和额外 GMP 校验数。实际 D/P 紧随 B2。这些内部记录不能直接作为手工提交文件。
 
-`--submission` 另存 Prime95 ECM 字段结构的 `results.json.txt`，使用正的参考 FFT 长度、数字平台号及真实 ECM-ELF 程序名；gwpoly 另外输出实际 `stage2-fft-length`，NF 曲线合并为不可变批次，省略内部扩展、CRC32 和 `security-code`。INI 身份、目标关系检查、账本去重和无算术恢复命令统一见 [ECM 结果输出](ECM_RESULTS.md)。已接受的 Montgomery 批次不等于本后端或 Edwards 的服务器验收，详见结果主题。
+`--submission` 另存 Prime95 ECM 字段结构的 `results.json.txt`，使用正的参考 FFT 长度、数字平台号及真实 ECM-ELF 程序名；gwpoly 另外输出实际 `stage2-fft-length`，NF 曲线合并为不可变批次，省略内部扩展、CRC32 和 `security-code`。TOML 身份、目标关系检查、账本去重和无算术恢复命令统一见 [ECM 结果输出](ECM_RESULTS.md)。已接受的 Montgomery 批次不等于本后端或 Edwards 的服务器验收，详见结果主题。
 
 这里的实际 Stage2 FFT 长度是 GWNUM 每个系数模运算所用的长度，不是外层多项式次数 P，也不是 GPU 打包多项式的 NTT 长度。
 

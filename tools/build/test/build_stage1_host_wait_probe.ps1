@@ -18,14 +18,14 @@ $sources=@('tools/test/stage1_host_wait_probe.cu','kernels/cuda/cgbn_edwards_ins
  'src/core/ecm_edwards_curve.h','src/core/ecm_edwards_io.h','src/core/ecm_edwards_naf.h',
  'src/core/ecm_stage1_exp.h','src/core/ecm_stage1_exp.cpp',
  'tools/build/test/build_stage1_host_wait_probe.ps1')+
- @(Get-ChildItem cgbn/include/cgbn -File -Recurse | ForEach-Object {$_.FullName})
+ @(Get-ChildItem third_party/cgbn/include/cgbn -File -Recurse | ForEach-Object {$_.FullName})
 $hashes=[ordered]@{}
 foreach($source in $sources){$hashes[$source]=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash}
 $exe=Join-Path $Build 'probe.exe'
 $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O2 -arch='+$Arch+
  ' -DECM_HOST_WAIT_TIER='+$Tier+' -DECM_TIER_'+$Tier+
  ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819'+
- ' -I cgbn/include -I third_party/gmp-zen3/dist/include tools/test/stage1_host_wait_probe.cu src/core/ecm_stage1_exp.cpp'+
+ ' -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include tools/test/stage1_host_wait_probe.cu src/core/ecm_stage1_exp.cpp'+
  ' -L third_party/gmp-zen3/dist/lib -lgmp -o "'+$exe+'"'
 $batch=Join-Path $Build 'build.cmd'
 [IO.File]::WriteAllText($batch,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))

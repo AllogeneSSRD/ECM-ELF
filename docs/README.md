@@ -9,12 +9,12 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [Stage1](usage/STAGE1.md)：曲线计算、指数模式、保存点、统一批次检查点、双结果输出和 Prime95 交接。
 - [Stage2](usage/STAGE2.md)：读 Stage1 save、任务字段、数量不足、队列续跑、日志和结果。
 - [Edwards CPU Stage2](usage/EDWARDS_CPU_STAGE2.md)：统一文本存档、GW 多线程快速多项式、libecm NTT/plain 续算及大 B2 验证。
-- [ECM 结果输出](usage/ECM_RESULTS.md)：内部 JSONL、Prime95 结构提交文件、INI 身份、参考 FFT 长度、批次去重与本地恢复。
+- [ECM 结果输出](usage/ECM_RESULTS.md)：内部 JSONL、Prime95 结构提交文件、TOML 身份、参考 FFT 长度、批次去重与本地恢复。
 - [GUI](usage/GUI.md)：worker、队列生成、监控及结果。
 - [构建与发布](usage/BUILD.md)：六组一键入口、GPU 架构、CUDA/GMP 依赖和发布内容。
 - [因子数据集](usage/DATASET.md)：PARAM0数据库、最优sigma、扫描与生产验证，以及Edwards独立群阶/点阶分析。
 - [ECM 报告工具](../tools/ecm_report/README.md)：PrimeNet 进度导入、两日变化图和按日期及指数范围统计的增长热度图。
-- [INI 配置参考](ECM_INI_REFERENCE.md)：所有键的符号默认值、范围和英中说明；由配置定义生成。
+- [TOML 配置参考](ECM_TOML_REFERENCE.md)：所有键的符号默认值、范围和英中说明；由配置定义生成。
 
 ## 实现
 

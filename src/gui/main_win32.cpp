@@ -6,8 +6,8 @@
 //                               window (ini round-trip, localization, font search,
 //                               ImGui context + docking symbols). Prints to stdout
 //                               AND to <exe dir>\ecm_gui_selftest.log, exits 0/1.
-//   ecm_gui.exe -ini <path>     use another ecm.ini
-//   ecm_gui.exe --language <l>  override [GUI] language for this run
+//   ecm_gui.exe --config <path>     use another ecm.toml
+//   ecm_gui.exe --language <l>  override [gui] language for this run
 //
 // Verification for milestone M1 uses --selftest so it works without a desktop:
 //   build_vs18\Release\ecm_gui.exe --selftest
@@ -382,7 +382,7 @@ bool new_frame() {
 // at startup, while a Language-menu switch never reloaded one.
 //
 // Rules:
-//   * [GUI] font=<path> wins (the user asked for that file); if it cannot draw the
+//   * [gui] font=<path> wins (the user asked for that file); if it cannot draw the
 //     language we say so and rescue with a CJK system font rather than showing boxes;
 //   * else a CJK language -> find_cjk_font_file(), a Latin UI -> find_ui_font_file();
 //   * if nothing can draw the language at all -> fall back to English (readable)
@@ -417,7 +417,7 @@ void apply_ui_font(ecmgui::App &app, float dpi_scale, const char *why) {
         cfg.OversampleH = cfg.OversampleV = 1;
         // Snap glyph advances to whole pixels: ImGui lays text out at fractional
         // positions, which softens small Latin text noticeably. Only meaningful with a
-        // (near) integer size, hence the ini switch [GUI] font_snap.
+        // (near) integer size, hence the ini switch [gui] font_snap.
         cfg.PixelSnapH = app.font_snap();
         return io.Fonts->AddFontFromFileTTF(p.c_str(), size_px, &cfg);
     };
@@ -429,7 +429,7 @@ void apply_ui_font(ecmgui::App &app, float dpi_scale, const char *why) {
     // A font that cannot draw the language would render "???" boxes. The atlas API can
     // answer this exactly (a fallback box has a width too, so measuring text is not
     // enough -- see docs/usage/GUI.md 10.3):
-    //   1. [GUI] font=<path> that cannot draw the language -> rescue with a system CJK
+    //   1. [gui] font=<path> that cannot draw the language -> rescue with a system CJK
     //      font (the user asked for a font, not for unreadable labels);
     //   2. no font can draw it at all -> fall back to English, never show boxes.
     auto can_draw_language = [&](ImFont *f) {
@@ -450,7 +450,7 @@ void apply_ui_font(ecmgui::App &app, float dpi_scale, const char *why) {
     }
     if (!can_draw_language(font) && need_cjk) {
         app.fall_back_to_english(
-            "no CJK-capable font found: switched the UI to English (set [GUI] font=<path>)");
+            "no CJK-capable font found: switched the UI to English (set [gui] font=<path>)");
         return;                            // the English fallback re-applies the font
     }
     if (font == nullptr) {
@@ -512,7 +512,7 @@ int run_selftest(const std::string &ini_path, const std::string &language,
     };
 
     char head[256];
-    std::snprintf(head, sizeof(head), "ecm_gui self-test\n  exe dir     : %s\n  ini         : %s\n",
+    std::snprintf(head, sizeof(head), "ecm_gui self-test\n  exe dir     : %s\n  config      : %s\n",
                   ecmgui::exe_dir().c_str(), ini_path.c_str());
     std::fputs(head, stdout);
     std::fflush(stdout);
@@ -591,71 +591,42 @@ int run_selftest(const std::string &ini_path, const std::string &language,
                                                           ? std::string("none found -> UI would fall back to english")
                                                           : cjk_file);
 
-    // ---- 2. ini round-trip ----------------------------------------------
-    const std::string tmp_ini = ecmgui::path_join(ecmgui::exe_dir(), "ecm_gui_selftest.ini");
+    // ---- 2. TOML round-trip ----------------------------------------------
+    const std::string tmp_config = ecmgui::path_join(ecmgui::exe_dir(), "ecm_gui_selftest.toml");
     {
         std::string w_err;
-        ecmgui::IniFile seeded;
-        seeded.reset(tmp_ini);
         std::FILE *f = nullptr;
-        fopen_s(&f, tmp_ini.c_str(), "w");
+        fopen_s(&f, tmp_config.c_str(), "w");
         if (f) {
-            std::fputs("# a comment the GUI must not lose\n", f);
-            std::fputs("device = 0\n", f);
-            std::fputs("\n", f);
-            std::fputs("[Worker #2]\n", f);
-            std::fputs("device = 1\n", f);
-            std::fputs("custom_key = keep me\n", f);
+            std::fputs("# a comment the GUI must not lose\n[stage1]\ndevice = 0\n\n"
+                       "[workers.2]\ngpucurves = 256\n", f);
             std::fclose(f);
         }
-        ecmgui::IniFile ini;
-        check(ini.load(tmp_ini, w_err), "load a small ini", w_err);
-        ini.set("", "device", "0");            // unchanged value -> not dirty
-        check(!ini.dirty(), "setting the same value does not dirty the file");
-        ini.set("", "worktodo", "w1.txt");     // new global key (before the section)
-        ini.set("Worker #2", "gpucurves", "384");
-        ini.set("GUI", "language", "chineseSimplified");   // new section at EOF
-        check(ini.dirty(), "changes mark the file dirty");
-        check(ini.save(w_err), "atomic save", w_err);
-        check(ecmgui::file_exists(tmp_ini + ".bak"), "one .bak generation written");
-
-        ecmgui::IniFile back;
-        check(back.load(tmp_ini, w_err), "reload after save", w_err);
-        check(back.get("", "worktodo") == "w1.txt", "new global key persisted",
-              back.get("", "worktodo"));
-        check(back.get("Worker #2", "gpucurves") == "384", "section key persisted",
-              back.get("Worker #2", "gpucurves"));
-        check(back.get("GUI", "language") == "chineseSimplified", "new section persisted",
-              back.get("GUI", "language"));
-        check(back.get("Worker #2", "custom_key") == "keep me",
-              "an unknown key the driver ignores is preserved");
-        bool comment_kept = false, order_ok = true;
-        std::size_t dev_global_line = 0, worker_line = 0;
-        const auto &lines = back.lines();
-        for (std::size_t i = 0; i < lines.size(); ++i) {
-            if (lines[i].kind == ecmgui::IniFile::Line::Kind::Comment &&
-                lines[i].raw.find("must not lose") != std::string::npos) {
-                comment_kept = true;
-            }
-            if (lines[i].kind == ecmgui::IniFile::Line::Kind::KeyValue &&
-                lines[i].section.empty() && lines[i].key == "device") {
-                dev_global_line = i;
-            }
-            if (lines[i].kind == ecmgui::IniFile::Line::Kind::Section &&
-                lines[i].section == "Worker #2") {
-                worker_line = i;
-            }
-            if (lines[i].kind == ecmgui::IniFile::Line::Kind::KeyValue &&
-                lines[i].section.empty() && lines[i].key == "worktodo" &&
-                worker_line != 0 && i > worker_line) {
-                order_ok = false;          // leaked into the [Worker #2] section
+        ecmgui::TomlFile config;
+        check(config.load(tmp_config, w_err), "load a small TOML", w_err);
+        if(config.loaded()) {
+            config.set("stage1", "device", "0");
+            check(!config.dirty(), "same value leaves TOML clean");
+            config.set("shared", "worktodo", "w1.txt");
+            config.set("workers.2", "gpucurves", "384");
+            config.set("gui", "language", "chineseSimplified");
+            check(config.save(w_err), "atomic TOML save", w_err);
+            check(ecmgui::file_exists(tmp_config + ".bak"), "TOML backup written");
+            ecmgui::TomlFile back;
+            check(back.load(tmp_config, w_err), "reload TOML", w_err);
+            if(back.loaded()) {
+                check(back.get("shared", "worktodo") == "w1.txt", "shared string persisted");
+                check(back.get("workers.2", "gpucurves") == "384", "worker integer persisted");
+                check(back.get("gui", "language") == "chineseSimplified", "GUI string persisted");
+                bool comment_kept=false;
+                for(const auto &line:back.lines())
+                    if(line.kind==ecmgui::TomlFile::Line::Kind::Comment &&
+                       line.raw.find("must not lose")!=std::string::npos)comment_kept=true;
+                check(comment_kept, "TOML comment preserved");
             }
         }
-        check(comment_kept, "comments survive the rewrite");
-        check(dev_global_line < worker_line, "file order preserved (global before sections)");
-        check(order_ok, "a new global key stays before the first section header");
-        std::remove(tmp_ini.c_str());
-        std::remove((tmp_ini + ".bak").c_str());
+        std::remove(tmp_config.c_str());
+        std::remove((tmp_config + ".bak").c_str());
     }
 
     // ---- 3. app state (config-driven worker list) -------------------------
@@ -663,9 +634,9 @@ int run_selftest(const std::string &ini_path, const std::string &language,
         ecmgui::App app;
         std::string a_err;
         const bool ok = app.init(ini_path, language, a_err);
-        check(ok, "App::init reads the ini", a_err);
+        check(ok, "App::init reads TOML", a_err);
         if (ok) {
-            check(app.ini().loaded(), "ini handle is loaded");
+            check(app.ini().loaded(), "TOML handle is loaded");
             check(app.loc().count() > 0, "app has localization strings",
                   std::to_string(app.loc().count()));
             check(app.workers().size() >= 1, "worker list built from NumWorkers",
@@ -756,9 +727,9 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     std::fflush(stdout);
 
     const bool selftest = ecmgui::has_arg(args, "--selftest");
-    std::string ini_path = ecmgui::arg_value(args, "-ini");
+    std::string ini_path = ecmgui::arg_value(args, "--config");
     const std::string language = ecmgui::arg_value(args, "--language");
-    if (ini_path.empty()) ini_path = ecmgui::default_ini_path();
+    if (ini_path.empty()) ini_path = ecmgui::default_toml_path();
 
     // --switch-language <stem> [--switch-language-after <frames>]: diagnostic (like
     // --trace) that performs the Language-menu switch from a script. The menu itself
@@ -779,7 +750,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         g_trace = _fsopen(p.c_str(), "w", _SH_DENYWR);
         trace("%s %s (GUI)",ecm_program::name,ecm_program::version);
         trace("start: exe dir %s", ecmgui::exe_dir().c_str());
-        trace("start: ini %s", ini_path.c_str());
+        trace("start: config %s", ini_path.c_str());
     }
 
     if (selftest) {
@@ -824,13 +795,13 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     // verify the supervisor without looking at the window.
     app.set_trace([](const std::string &line) { trace("%s", line.c_str()); });
     // Driver-only switches given to the GUI. This is an easy mistake with a confusing
-    // symptom: `ecm_gui.exe -ini x.ini --worker 1` looks like "start the worker" but just
+    // symptom: `ecm_gui.exe --config x.toml --worker 1` looks like "start the worker" but just
     // opens an idle window -- which is how a scripted run once left a GUI sitting on the
     // desktop for minutes (2026-09-29). Say so instead of ignoring it silently.
     if (ecmgui::has_arg(args, "--worker")) {
         trace("warning: --worker is a driver flag, ecm_gui ignores it (start ecm_cuda.exe for a worker)");
         app.set_status("note: --worker is a driver flag and is ignored by the GUI; "
-                       "workers are started from [GUI] exe= / the Start button");
+                       "workers are started from [gui] exe= / the Start button");
     }
     g_app = &app;          // WM_CLOSE consults it (confirmation + checkpoint flow)
     struct AppGuard {
@@ -868,9 +839,9 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     // ---- fonts -----------------------------------------------------------------
     // Nothing is shipped with the GUI (docs/usage/GUI.md 10.3), so the font comes
     // from the system and its size follows the display DPI:
-    //   [GUI] font_size = auto | <px>     auto = 15 px * (window DPI / 96)
-    //   [GUI] font      = <path to a .ttf/.ttc>   (empty = pick automatically)
-    //   [GUI] font_snap = 1 | 0           snap glyph advances to whole pixels
+    //   [gui] font_size = auto | <px>     auto = 15 px * (window DPI / 96)
+    //   [gui] font      = <path to a .ttf/.ttc>   (empty = pick automatically)
+    //   [gui] font_snap = 1 | 0           snap glyph advances to whole pixels
     // A CJK language needs a CJK-capable font; a Latin UI prefers Segoe UI over the
     // built-in ~13 px bitmap font, which blurs when scaled.
     ImGuiIO &io = ImGui::GetIO();

@@ -28,7 +28,7 @@ def main():
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     exe,save=a.exe.resolve(),a.save.resolve();sha=lambda path:hashlib.sha256(path.read_bytes()).hexdigest()
     identities={str(path):sha(path) for path in [exe,save,Path(__file__)]}
-    ini=out/'ecm.ini';ini.write_text('verbose=false\nstage2_debug_log=false\n',encoding='utf-8')
+    ini=out/'ecm.toml';ini.write_text('verbose=false\nstage2_debug_log=false\n',encoding='utf-8')
     common=[str(exe),'--ini',str(ini),'--device',str(a.device),'--batch-mb','256','--arena-mb','6300','--owner-budget-mb','640']
     # All failures below are parser-only; no GPU benchmark or published file.
     refusals=[(['--tune','ecm','--tune-tail-samples','17'],'tune-tail-samples must be'),

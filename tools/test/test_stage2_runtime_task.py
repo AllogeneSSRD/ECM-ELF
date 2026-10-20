@@ -35,7 +35,7 @@ def main():
     old_samples=len(summaries(original))
     queue=out/'worktodo.txt';queue.write_text(
         f'ECMSTAGE2=1,2,{a.exponent},-1,points.save,{a.b2},0,{a.curves},"{whole//n}"\n',encoding='utf-8')
-    ini=out/'ecm.ini';ini.write_text('user=\ncomputer=\nverbose=false\nstage2_finished=finished.txt\n'
+    ini=out/'ecm.toml';ini.write_text('user=\ncomputer=\nverbose=false\nstage2_finished=finished.txt\n'
         'stage2_tune_runtime_samples=3\nstage2_debug_log=false\nstage2_save_dir='+str(out)+'\n',encoding='utf-8')
     results=out/'internal.jsonl';exe=a.exe.resolve()
     command=[str(exe),'--ini',str(ini),'--device',str(a.device),'--worktodo',str(queue),'--once',

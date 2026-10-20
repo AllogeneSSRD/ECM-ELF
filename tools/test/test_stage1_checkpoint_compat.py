@@ -76,7 +76,7 @@ def main():
     report=dict(complete=False,binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),checks=[])
 
     def setup(name, model='mont', target='gpu', param=0, pattern='', task=None):
-        work=out/name;work.mkdir();ini=work/'ecm.ini'
+        work=out/name;work.mkdir();ini=work/'ecm.toml'
         ini.write_text(f'curve={model}\ntarget={target}\nimpl={"scalar" if target=="cpu" else "auto"}\n'
             f'gpu_param={param}\ndevice={args.device}\nckpt_seconds=0\nckpt_backups=2\n'
             f'worktodo={work/"worktodo.txt"}\nfinished={work/"finished.txt"}\ntmp_dir={work}\n'

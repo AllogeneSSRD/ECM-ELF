@@ -26,7 +26,7 @@ def main():
         groups[key] = run
     assert len(groups) == 52
     cases = {c['id']: c for c in reference['cases']}
-    ini = out / 'ecm.ini'; ini.write_text('user=\ncomputer=\nstage2_tune_runtime=0\n', encoding='utf-8')
+    ini = out / 'ecm.toml'; ini.write_text('user=\ncomputer=\nstage2_tune_runtime=0\n', encoding='utf-8')
     report = dict(complete=False, planning_only=True, reference=str(source),
         reference_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         executable_sha256=hashlib.sha256(args.exe.read_bytes()).hexdigest(), cells=[])

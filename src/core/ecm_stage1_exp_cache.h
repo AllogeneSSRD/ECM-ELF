@@ -45,7 +45,7 @@ bool ecm_build_lcm_exponent_cached(mpz_t s, uint64_t B1, uint64_t torsion,
 /* Path of the cache entry for (B1, torsion) inside `dir`. */
 std::string ecm_exp_cache_path(const std::string &dir, uint64_t B1, uint64_t torsion);
 
-/* Process-wide cache directory, set once from the CLI (--exp-cache) or ecm.ini (exp_cache).
+/* Process-wide cache directory, set once from the CLI (--exp-cache) or ecm.toml (exp_cache).
    Empty disables caching; the string "off"/"none"/"0" passed to the setter also clears it.
    It is a global because the two producers of s live in different translation units
    (ecm_driver.cpp for the GPU batch, src/cpu/ecm_mont_cpu.cpp for the Montgomery path). */

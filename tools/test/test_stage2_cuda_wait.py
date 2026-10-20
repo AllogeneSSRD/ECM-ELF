@@ -34,7 +34,7 @@ def main():
         NTT_CARRY_CHECK_FUSED='0',NTT_GIANT_CHAIN_MIN='8192',NTT_FOLD_DEVICE_MAX_MB='0')
     info=json.loads(subprocess.run([str(exe),'--cost-device-info','--device','1'],capture_output=True,env=env,check=True,timeout=60).stdout)
     if info['uuid_hex']!='8a67b1f8ef1c3177a822813a7ac2224d':raise ValueError('Wrong device')
-    ini=out/'ecm.ini';ini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=worktodo.txt\nfinished=finished.txt\ntmp_dir=.\n[stage2]\nstage2_factor_only=1\n',encoding='utf-8')
+    ini=out/'ecm.toml';ini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=worktodo.txt\nfinished=finished.txt\ntmp_dir=.\n[stage2]\nstage2_factor_only=1\n',encoding='utf-8')
     width=128;points=2880;capacity=max(points,(256<<20)//(16*width));chunk=points*((capacity+points-1)//points);threshold=chunk+8192
     lo=30030*(threshold-3);hi=30030*(threshold+8192+100-2);expected=30030*(threshold-1)-1
     identity=[binary,info['uuid_hex'],info['major'],info['minor'],info['runtime'],info['driver'],info['fixed_mode'],info['outer_unroll_u'],2,0,7,8192,'0'*64,'0'*64]

@@ -90,7 +90,7 @@ def main():
     text=log.read_text(encoding='utf-8');assert 'gmp_selftest_bad=0' in text and 'gmp_check_bad=0' in text
     qdir=out/'queue';qdir.mkdir();qsave=qdir/'input.save';qsave.write_bytes(a.save.read_bytes()*2)
     queue=qdir/'worktodo.txt';queue.write_text(task,encoding='utf-8')
-    qini=qdir/'ecm.ini';qini.write_text('verbose=false\nlcm=1\ntmp_dir='+str(qdir)+
+    qini=qdir/'ecm.toml';qini.write_text('verbose=false\nlcm=1\ntmp_dir='+str(qdir)+
         '\nworktodo=worktodo.txt\nstage2_finished=finished.txt\nstage2_auto_b2=1\nstage1_batch=8\n'
         'stage2_tune_profile='+os.path.relpath(a.ecm_profile.resolve(),qdir)+'\nstage1_tune_profile='+os.path.relpath(a.stage1_profile.resolve(),qdir)+
         '\nstage2_results_file=results.jsonl\nstage2_log_file=stage2.log\n',encoding='utf-8')

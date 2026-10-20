@@ -96,7 +96,7 @@ GPU memset共4391次，写入84,325,430,832 bytes（78.53GiB），累计0.298869
 
 ### pack/zero 融合路径
 
-独立生产程序默认启用pack/zero融合，配置键为`stage2_pack_zero=true`；设为false或使用`--pack-zero 0`恢复原packer。优先级为CLI、显式INI、`NTT_S4_PACK_ZERO`环境变量、内置默认值；INI支持共享设置和Worker覆盖，环境/CLI接受严格0/1。父进程把解析值传给曲线及tune子进程，tune条件记录`env_s4_pack_zero`。完整规则见[INI参考](../ECM_INI_REFERENCE.md#stage2_pack_zero)。旧严格.cprof要求关闭融合；未显式覆盖且指定该配置时，驱动保持false，不放宽成本合同。
+独立生产程序默认启用pack/zero融合，配置键为`stage2_pack_zero=true`；设为false或使用`--pack-zero 0`恢复原packer。优先级为CLI、显式TOML、`NTT_S4_PACK_ZERO`环境变量、内置默认值；TOML支持共享设置和Worker覆盖，环境/CLI接受严格0/1。父进程把解析值传给曲线及tune子进程，tune条件记录`env_s4_pack_zero`。完整规则见[TOML参考](../ECM_TOML_REFERENCE.md#stage2_pack_zero)。旧严格.cprof要求关闭融合；未显式覆盖且指定该配置时，驱动保持false，不放宽成本合同。
 
 融合不改变D、NTT长度、分块、carry、设备归约或GMP抽查。显式B2的普通save输入和resident gather共用相同digit表示，reverse-B有独立编译实例。不符合整数索引范围和slot容量的输入回退原packer。底层探针/库入口由显式环境开关控制，生产默认值由驱动读取统一配置后设置。
 
@@ -146,7 +146,7 @@ M4423/batch64的独立6次/侧复测为1.381022→1.337825秒（3.13%），两�
 
 设备为上述4060LP和GPU0 RTX4070 Ti、12282MiB，UUID `d9139abeea58ffc8b97d2066e52c9702`；驱动/工具链相同，GMP DLL SHA256为`969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。用户锁定两卡SM1500MHz、暂停GPU0外部计算，逐卡测试；工具未改时钟、功耗。正式高负载采样中SM均为1500MHz。显存未独立锁定：4060LP采样7001–8001MHz、中位8001，4070 Ti为810–10251MHz、中位10251；采样含状态过渡，不能据此声称每个kernel的显存频率恒定。
 
-性能对照均用上述b4ca90b0二进制，仅切换PACK_ZERO，同一save、D/自动D、预算、检查和NTT工作量；交错次序，不丢弃预热。B1=20，sigma26，M2003使用27；Stage1不计时。新默认版SHA256为`da6bf9bcc893151ae7de5a9dcf2cc406df1eb7f2ce66026e7e2dbcc6f5f85e4a`，复用完全相同的CUDA对象SHA256=`87c49973a28b5d0f759fb31226da8d0b4691308abd34ff872a17a95e284edc64`，变化在INI/CLI与子进程配置。构建器逐项核对CUDA依赖及对象哈希，另通过14项配置检查、普通/承载配对tune和4条新二进制曲线冒烟。
+性能对照均用上述b4ca90b0二进制，仅切换PACK_ZERO，同一save、D/自动D、预算、检查和NTT工作量；交错次序，不丢弃预热。B1=20，sigma26，M2003使用27；Stage1不计时。新默认版SHA256为`da6bf9bcc893151ae7de5a9dcf2cc406df1eb7f2ce66026e7e2dbcc6f5f85e4a`，复用完全相同的CUDA对象SHA256=`87c49973a28b5d0f759fb31226da8d0b4691308abd34ff872a17a95e284edc64`，变化在TOML/CLI与子进程配置。构建器逐项核对CUDA依赖及对象哈希，另通过14项配置检查、普通/承载配对tune和4条新二进制曲线冒烟。
 
 | 正式矩阵 | 格数；每侧样本 | 引擎中位数之和 off→on，秒 | 减少 | 进程墙钟中位数之和减少 |
 |---|---:|---:|---:|---:|
@@ -224,5 +224,5 @@ Compute2026.2.1以管理员采集新路径的一个热点gather实例，核对Sy
 - [ntt_host_trace.cuh](../../src/cuda/stage2/ntt_host_trace.cuh)：默认关闭的范围标记；[ntt_runtime.cuh](../../src/cuda/stage2/ntt_runtime.cuh)中的`ntt_shape_plan`、`ntt_run_passes`、`ntt_poly_mul_batch_dev`为NTT范围入口。
 - [ecm_cuda_stage2.cu](../../src/cuda/ecm_cuda_stage2.cu)：`s4_reduce_init`、`s4_compare_snapshot`、`poly_mul_batch_modN`、`build_tree_flat`和`giant_chunk_chain`；`s4_gather_final_input`及`s4_pack_final_input`为补零与pack入口。
 - [s4_input_pack.cuh:6](../../src/cuda/stage2/s4_input_pack.cuh#L6)：商余数修正；[完整写入:13](../../src/cuda/stage2/s4_input_pack.cuh#L13)；[分段提交:43](../../src/cuda/stage2/s4_input_pack.cuh#L43)。[gather接入:3306](../../src/cuda/ecm_cuda_stage2.cu#L3306)与[contiguous接入:3355](../../src/cuda/ecm_cuda_stage2.cu#L3355)保留形状校验及不支持时的默认路径。
-- [配置解析:418](../../src/core/ecm_cuda_stage2_main.cpp#L418)、[子进程传递:569](../../src/core/ecm_cuda_stage2_main.cpp#L569)；默认值/双语说明源为[ecm_options.json:1109](../../config/ecm_options.json#L1109)，经生成器同步INI及参考。GPU0分配范围入口为[pin_words:1767](../../src/cuda/ecm_cuda_stage2.cu#L1767)。
+- [配置解析:418](../../src/core/ecm_cuda_stage2_main.cpp#L418)、[子进程传递:569](../../src/core/ecm_cuda_stage2_main.cpp#L569)；默认值/双语说明源为[ecm_options.json:1109](../../config/ecm_options.json#L1109)，经生成器同步TOML及参考。GPU0分配范围入口为[pin_words:1767](../../src/cuda/ecm_cuda_stage2.cu#L1767)。
 - 同文件`stage2_init_begin`、`stage2_init_seconds`及`run_batched`返回处定义引擎计时；[ecm_stage2_phase_times.h](../../src/core/ecm_stage2_phase_times.h)定义互斥阶段，不能将旧嵌套timer重新相加。

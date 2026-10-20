@@ -30,7 +30,7 @@ def main() -> None:
     todo = work / "worktodo.txt"
     todo.write_text(first + "\n" + second + "\n", encoding="ascii")
     finished = work / "finished.txt"
-    ini = work / "ecm.ini"
+    ini = work / "ecm.toml"
     ini.write_text(
         f"curve = mont\ntarget = gpu\ndevice = 0\ngpu_param = 0\nckpt_seconds = 0\n"
         f"worktodo = {todo}\nfinished = {finished}\ntmp_dir = {work}\nlog_file =\n",
@@ -54,7 +54,7 @@ def main() -> None:
             raise OSError(ctypes.get_last_error(), "CreateEventW")
     try:
         with (work / "run.log").open("wb") as log:
-            args = [str(exe), "-ini", str(ini)]
+            args = [str(exe), "--config", str(ini)]
             if event is not None:
                 args += ["--stage1-stop-handle", str(event)]
             proc = subprocess.Popen(

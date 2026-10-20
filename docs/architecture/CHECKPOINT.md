@@ -1,6 +1,6 @@
 # Checkpoint：状态、格式与恢复
 
-本文是当前 checkpoint 的格式与持久化说明。完成 Stage1 后的交换文件另见 [SAVE](SAVE.md)；启动和停止操作见 [Stage1 使用](../usage/STAGE1.md)、[Stage2 使用](../usage/STAGE2.md)。配置键的默认值、范围只在[生成的 INI 参考](../ECM_INI_REFERENCE.md)维护。
+本文是当前 checkpoint 的格式与持久化说明。完成 Stage1 后的交换文件另见 [SAVE](SAVE.md)；启动和停止操作见 [Stage1 使用](../usage/STAGE1.md)、[Stage2 使用](../usage/STAGE2.md)。配置键的默认值、范围只在[生成的 TOML 参考](../ECM_TOML_REFERENCE.md)维护。
 
 ## 1. 文件职责与范围
 

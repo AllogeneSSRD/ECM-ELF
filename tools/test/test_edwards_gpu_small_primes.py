@@ -26,7 +26,7 @@ def main():
                   parser=sha(ROOT/'tools/test/test_edwards_gpu_large_bounds.py')),
                   device=a.device, checks=[], complete=False, formal_performance_samples=0)
     (out/'collector.py').write_bytes(Path(__file__).read_bytes())
-    ini = out/'ecm.ini'; ini.write_text(f'device={a.device}\n')
+    ini = out/'ecm.toml'; ini.write_text(f'device={a.device}\n')
     base = {k: v for k, v in os.environ.items() if not k.startswith('NTT_')}
     base.update(NTT_NO_PROGRESS='1', NTT_SMALL_PRIME_CHECK='1', NTT_S4_DESCENT_CHECK='1')
     def persist(): (out/'summary.json').write_text(json.dumps(report, indent=2)+'\n')

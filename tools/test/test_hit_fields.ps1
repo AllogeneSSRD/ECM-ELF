@@ -69,7 +69,7 @@ $enc = New-Object System.Text.UTF8Encoding($false)
 $saveName = "m${Exp}_1e6.save"
 $task = 'ECMSTAGE1=1,2,{0},-1,"{1}",0,0,{2}' -f $Exp, $saveName, $Curves
 $todo = Join-Path $Sandbox 'worktodo.txt'
-$ini = Join-Path $Sandbox 'ecm.ini'
+$ini = Join-Path $Sandbox 'ecm.toml'
 $finished = Join-Path $Sandbox 'finished.txt'
 $saves = Join-Path $Sandbox 'saves'
 $logFile = Join-Path $Sandbox 'screen_1.log'
@@ -101,7 +101,7 @@ Write-Host "[1] run the queue manager on the task"
 # zero and the old version of this test then failed for luck, not for a defect (2026-09-29). The
 # queue mode takes the curve sigma from the ini's `sigma =`, so each attempt uses a different
 # FIXED sigma -- reproducible, and a retry is a new sample instead of the same dice again.
-$cmd = '"{0}" -ini "{1}" --worker 1 < NUL 2>&1' -f $EcmCuda, $ini
+$cmd = '"{0}" --config "{1}" --worker 1 < NUL 2>&1' -f $EcmCuda, $ini
 $out = ''
 $hits = @()
 $done = @()

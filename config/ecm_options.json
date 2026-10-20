@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "layout_version": 5,
+  "schema_version": 2,
+  "layout_version": 7,
   "owners": {
     "stage1": "Stage1Values",
     "stage2": "Stage2Values",
@@ -13,7 +13,9 @@
       "key": "worktodo",
       "field": "worktodo",
       "type": "string",
-      "shared_with": ["stage2"],
+      "shared_with": [
+        "stage2"
+      ],
       "default": "worktodo.txt",
       "domain": "<path>",
       "fx": "queue(S1)",
@@ -35,11 +37,13 @@
       "domain": "[0|1..1000000]",
       "fx": "B2(S2)=B1*ratio",
       "parser": "optional_integer",
-      "shared_with": ["stage2"],
+      "shared_with": [
+        "stage2"
+      ],
       "empty": "0",
       "description": [
-        "At Stage2 execution with this INI, nonzero ratio replaces B2 with saved B1 multiplied by this integer, including direct save runs. Zero or empty preserves normal B2 selection. Product overflow is rejected.",
-        "使用此 INI 执行 Stage2 时，非零整数将 B2 设为存档 B1 与此值的乘积，直接读档也适用。0 或留空沿用原有 B2 选择；乘积溢出会报错。"
+        "At Stage2 execution with this TOML, nonzero ratio replaces B2 with saved B1 multiplied by this integer, including direct save runs. Zero or omitting the key preserves normal B2 selection. Product overflow is rejected.",
+        "使用此 TOML 执行 Stage2 时，非零整数将 B2 设为存档 B1 与此值的乘积，直接读档也适用。0 或不填写此键沿用原有 B2 选择；乘积溢出会报错。"
       ]
     },
     {
@@ -55,8 +59,37 @@
       "parser": "optional_integer",
       "empty": "0",
       "description": [
-        "After Stage1 finishes without finding a factor, record the Stage1 assignment in finished and replace its worktodo row in place with ECMSTAGE2. A Stage1 factor hit completes the task without Stage2. Zero or empty removes the completed row as usual. Worker sections can override this setting.",
-        "Stage1 完成且未找到因子时，照常将原任务记录到 finished，并把 worktodo 原位置改写为 ECMSTAGE2。Stage1 找到因子时直接完成任务，不生成 Stage2 任务。0 或留空仍删除已完成行；worker 分区可覆盖此设置。"
+        "Enable Stage1-to-Stage2 handoff after successful Stage1 without a factor. With no receiver list and the same worktodo, replace the source row in place with ECMSTAGE2; otherwise deliver to auto_stage2_worktodo/auto_stage2_workers. Stage1 finished output is retained. A factor hit generates no Stage2 task. Zero disables new handoffs. Worker sections can override this setting.",
+        "启用 Stage1 无因子成功完成后的 Stage2 交接。未指定接收 worker 且目标为同一 worktodo 时，原位置改写为 ECMSTAGE2；否则按 auto_stage2_worktodo/auto_stage2_workers 投递。保留 Stage1 finished 记录；找到因子不生成 Stage2 任务。0 关闭新交接，worker 分区可覆盖。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "auto_stage2_workers",
+      "field": "auto_stage2_workers",
+      "type": "string",
+      "default": "",
+      "domain": "[<n>|<n>,...|<a>-<b>|auto]",
+      "fx": "workers(S2)",
+      "parser": "strict",
+      "description": [
+        "Receiving workers when auto_stage2=1: a single ID, comma list or ranges within 1..1000000. Select the shortest candidate queue; ties use the lowest ID. auto uses the destination's existing worker sections, falling back to GUI NumWorkers when none exist. Missing explicit sections are created. Empty keeps the current worker and rewrites in place when the destination is the same file; an external file receives that same worker number. Unreadable destinations remain pending for retry.",
+        "auto_stage2=1 时的接收 worker，可填写 1..1000000 内单个编号、逗号列表或区间；选择任务数最少者，并列取较小编号。auto 使用目标队列已有 worker 分区，无分区时使用 GUI NumWorkers。显式指定但尚不存在的分区会创建。留空保留当前 worker，同文件原位改写，其他文件也使用当前编号；目标不可写时保留待投递记录。"
+      ]
+    },
+    {
+      "owner": "stage1",
+      "key": "auto_stage2_worktodo",
+      "field": "auto_stage2_worktodo",
+      "type": "string",
+      "default": "",
+      "domain": "<path>",
+      "fx": "queue(S2)",
+      "parser": "strict",
+      "path_base": "toml_dir",
+      "description": [
+        "Destination queue when auto_stage2=1. Empty inherits this worker's effective shared worktodo. Accepts an absolute file path or a filename/relative path resolved beside ecm.toml. Save filenames in delivered tasks are absolute. Stage2 finished receipts use the receiving worker's stage2_finished setting from this TOML. Worker sections can override this setting.",
+        "auto_stage2=1 时的目标队列。留空使用当前 worker 生效的 shared worktodo；可填写绝对文件路径，或相对 ecm.toml 所在目录的文件名/路径。投递行中的 save 使用绝对路径。完成去重读取本 TOML 中接收 worker 的 stage2_finished；worker 分区可覆盖。"
       ]
     },
     {
@@ -70,7 +103,9 @@
       "domain": "[0|1|2]",
       "fx": "queue_order",
       "parser": "optional_integer",
-      "shared_with": ["stage2"],
+      "shared_with": [
+        "stage2"
+      ],
       "empty": "0",
       "description": [
         "Queue selection order: 0 follows file order; 1 drains ECMSTAGE1 first; 2 drains ECMSTAGE2 first. When no preferred task remains, the other stage runs. Worker sections can override this setting.",
@@ -88,7 +123,9 @@
       "domain": "[0|1|2]",
       "fx": "queue_filter",
       "parser": "optional_integer",
-      "shared_with": ["stage2"],
+      "shared_with": [
+        "stage2"
+      ],
       "empty": "0",
       "description": [
         "0 processes both stages; 1 leaves ECMSTAGE1 rows untouched; 2 leaves ECMSTAGE2 rows untouched. Worker sections can override this setting.",
@@ -436,8 +473,8 @@
       ],
       "empty": "default",
       "description": [
-        "Automatic Stage1 save filename pattern for CPU and GPU. {curve}=e|m0|m2|m3; {target}=m<exponent> for Mersenne assignments, otherwise bit<actual_bits>; {n}=original assignment exponent when available, otherwise actual bits; {b1}=compact B1. Missing curve prefixes are added. In ECMSTAGE1 queues, typed save prefixes override INI curve/param and the final filename field supplies B1; untyped names use the INI construction. Finished/handoff lines name the actual prefixed save. Explicit CLI save paths are preserved. Empty restores the default.",
-        "统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m<指数>，否则为 bit<实际位数>；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。ECMSTAGE1 队列中，类型前缀覆盖 INI 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 INI。完成/交接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。"
+        "Automatic Stage1 save filename pattern for CPU and GPU. {curve}=e|m0|m2|m3; {target}=m<exponent> for Mersenne assignments, otherwise bit<actual_bits>; {n}=original assignment exponent when available, otherwise actual bits; {b1}=compact B1. Missing curve prefixes are added. In ECMSTAGE1 queues, typed save prefixes override TOML curve/param and the final filename field supplies B1; untyped names use the TOML construction. Finished/handoff lines name the actual prefixed save. Explicit CLI save paths are preserved. Empty restores the default.",
+        "统一设置 CPU/GPU Stage1 自动 save 文件名。{curve}=e|m0|m2|m3；{target}=梅森任务的 m<指数>，否则为 bit<实际位数>；{n}=原任务指数，无任务元数据时为实际位数；{b1}=紧凑 B1。缺少曲线前缀时自动补充。ECMSTAGE1 队列中，类型前缀覆盖 TOML 曲线/param，末尾文件名字段给出 B1；无类型前缀时沿用 TOML。完成/交接行使用实际带前缀的 save；CLI 显式 save 路径保持原样。留空恢复默认。"
       ]
     },
     {
@@ -595,8 +632,6 @@
       "domain": "[0|2|3]",
       "fx": "curve_family(CUDA)",
       "parser": "legacy",
-      "release_value": 0,
-      "first_run_value": 0,
       "rules": [
         "OpenCL:3",
         "S2_save:0",
@@ -608,8 +643,8 @@
         3
       ],
       "description": [
-        "GPU Stage1 curve parametrization. The current CUDA Stage2 consumes param0 saves; use 0 for that handoff. OpenCL uses param3. The built-in default is 3, while first-run and release templates deliberately write 0. Existing INI files are not changed automatically.",
-        "选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。内置默认值为 3，但首次启动和发布模板有意写入 0；旧 INI 不会自动改值。"
+        "GPU Stage1 curve parametrization. CUDA Stage2 consumes param0 saves; select 0 for that handoff. OpenCL uses param3. The default is 3.",
+        "选择 GPU Stage1 曲线参数族。当前 CUDA Stage2 消费参数 0 的 save，准备交给它处理时使用 0；OpenCL 路径使用参数 3。默认值为 3。"
       ]
     },
     {
@@ -932,17 +967,18 @@
       "field": "device",
       "type": "int",
       "default": -1,
-      "domain": "<x:Z,0..2^31-1>",
+      "domain": "[-1|0..2^31-1]",
       "fx": "device(S2)",
       "parser": "strict",
-      "minimum": 0,
+      "minimum": -1,
       "maximum": 2147483647,
       "implicit": "device",
       "template_comment": true,
       "description": [
-        "Override Stage2's zero-based CUDA device ID. Unset inherits device. The internal inheritance sentinel does not mean -1 is accepted as an explicit INI value.",
-        "单独指定 Stage2 的 CUDA 设备编号，从 0 开始。未配置时继承共享 device；继承状态不等于可以在 INI 中显式填写 -1。"
-      ]
+        "Stage2 CUDA device ID. -1 inherits Stage1's device; 0 or greater selects a CUDA device explicitly.",
+        "Stage2 CUDA 设备编号。-1 继承 Stage1 的 device；0 及以上显式选择 CUDA 设备。"
+      ],
+      "parser_override": "signed_integer"
     },
     {
       "owner": "stage2",
@@ -979,8 +1015,8 @@
       "minimum": 0,
       "maximum": 1,
       "description": [
-        "Print a per-curve NTT length count table at the end of production Stage2: 1 enables; 0 disables collection and output. Counts mathematical transforms (two forwards and one inverse per convolution), including polynomial initialization and main work, excluding Stage1 and independent arithmetic selftests. Shared by Edwards and Montgomery; no GPU counters or extra synchronization. CLI --ntt-counts overrides the selected worker INI.",
-        "生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 INI。"
+        "Print a per-curve NTT length count table at the end of production Stage2: 1 enables; 0 disables collection and output. Counts mathematical transforms (two forwards and one inverse per convolution), including polynomial initialization and main work, excluding Stage1 and independent arithmetic selftests. Shared by Edwards and Montgomery; no GPU counters or extra synchronization. CLI --ntt-counts overrides the selected worker TOML.",
+        "生产 Stage2 每条曲线结束时输出 NTT 长度计数表：1 开启，0 关闭采集与输出。统计数学变换次数，每次卷积含两个正向与一个逆向；包含多项式初始化及主计算，不含 Stage1 或底层独立算术自检。Edwards/Montgomery 通用，不增加设备计数或额外同步。CLI --ntt-counts 覆盖选定 worker 的 TOML。"
       ]
     },
     {
@@ -996,8 +1032,8 @@
       "minimum": 0,
       "maximum": 1,
       "description": [
-        "Optional production GPU Stage2 conservative relocation. Keeps B2 and the original giant endpoint, uses a shorter suffix for clean NF, and replays the original interval on any hit or target-N nonunit (including GCD=N). Rebalances short point chunks on whole G boundaries. Default 0 preserves the original algorithm. CLI --relocation overrides this worker INI. D/AutoB2 and memory admission use original-interval estimates; relocation does not collect ECM tune samples or run startup ECM calibration, and explicit --tune ecm is unavailable in this mode. Pure NTT samples remain reusable.",
-        "可选的生产 GPU Stage2 保守 relocation。保持 B2 和原 giant 终点，干净 NF 使用较短后缀；命中或出现目标 N 非单位（包括 GCD=N）时重放原区间。短点块按完整 G 边界重分。默认 0 保留原算法，CLI --relocation 覆盖当前 worker 的 INI。D/AutoB2 和内存准入使用原区间估算；本模式不采集 ECM 调优样本、不执行启动 ECM 标定，并禁用显式 --tune ecm；纯 NTT 样本仍可复用。"
+        "Optional production GPU Stage2 conservative relocation. Keeps B2 and the original giant endpoint, uses a shorter suffix for clean NF, and replays the original interval on any hit or target-N nonunit (including GCD=N). Rebalances short point chunks on whole G boundaries. Default 0 preserves the original algorithm. CLI --relocation overrides this worker TOML. D/AutoB2 and memory admission use original-interval estimates; relocation does not collect ECM tune samples or run startup ECM calibration, and explicit --tune ecm is unavailable in this mode. Pure NTT samples remain reusable.",
+        "可选的生产 GPU Stage2 保守 relocation。保持 B2 和原 giant 终点，干净 NF 使用较短后缀；命中或出现目标 N 非单位（包括 GCD=N）时重放原区间。短点块按完整 G 边界重分。默认 0 保留原算法，CLI --relocation 覆盖当前 worker 的 TOML。D/AutoB2 和内存准入使用原区间估算；本模式不采集 ECM 调优样本、不执行启动 ECM 标定，并禁用显式 --tune ecm；纯 NTT 样本仍可复用。"
       ]
     },
     {
@@ -1154,8 +1190,8 @@
       "effective_default": "gp.exe",
       "path_base": "CreateProcess/PATH",
       "description": [
-        "PARI/GP executable used for further factor decomposition. gp.exe follows Windows executable search rules; a full path is also accepted. Required only when stage2_factorize_hits is enabled. This INI key does not use the dataset scripts' --gp environment-variable fallback.",
-        "指定进一步分解因子使用的 PARI/GP 可执行文件。默认 gp.exe 按 Windows 程序搜索规则查找；也可填写完整路径。仅在 stage2_factorize_hits 开启时需要它；此 INI 键不使用数据集脚本的 --gp 环境变量回退规则。"
+        "PARI/GP executable used for further factor decomposition. gp.exe follows Windows executable search rules; a full path is also accepted. Required only when stage2_factorize_hits is enabled. This TOML key does not use the dataset scripts' --gp environment-variable fallback.",
+        "指定进一步分解因子使用的 PARI/GP 可执行文件。默认 gp.exe 按 Windows 程序搜索规则查找；也可填写完整路径。仅在 stage2_factorize_hits 开启时需要它；此 TOML 键不使用数据集脚本的 --gp 环境变量回退规则。"
       ]
     },
     {
@@ -1303,7 +1339,7 @@
       "present": "has_pack_zero",
       "description": [
         "Fuse input digit packing and zero padding in one GPU kernel per operand. Covers contiguous, resident gather and reverse inputs; unsupported shapes use the original packer. Does not change arithmetic checks, D, NTT length or device workspace capacity. CLI --pack-zero overrides this key; an explicit key overrides NTT_S4_PACK_ZERO. Without an override, the built-in default applies; legacy .cprof cost profiles retain false and require false explicitly if this key is set.",
-        "每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式INI优先于NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。"
+        "每个操作数用一个GPU内核完成digit打包和补零，覆盖连续输入、设备驻留gather及反向输入；不支持的形状回退原packer。不改变算术检查、D、NTT长度或设备工作区容量。命令行--pack-zero优先于本键，显式TOML优先于NTT_S4_PACK_ZERO；均未指定时使用默认值。旧.cprof成本配置保留false；显式配置本键时须设false。"
       ]
     },
     {
@@ -1383,7 +1419,7 @@
       "fx": "AutoB2_S1_cost",
       "parser": "strict",
       "implicit": "profile",
-      "parser_override": "positive",
+      "parser_override": "nonnegative",
       "unit": "s/curve",
       "template_comment": true,
       "template_value": "<seconds>",
@@ -1422,8 +1458,8 @@
       "minimum": 1,
       "maximum": 64,
       "description": [
-        "Number of workers managed by the GUI, each using its [Worker #N] settings. Does not change task curve counts in worktodo. Concurrent workers should have separate queues and output paths.",
-        "设置 GUI 管理的 worker 数量。每个 worker 使用对应的 [Worker #N] 设置；此键不会修改 worktodo 中每项任务的曲线数。并行运行时应给各 worker 配置独立队列和输出路径。"
+        "Number of workers managed by the GUI, each using its [workers.N] settings. Does not change task curve counts in worktodo. Concurrent workers should have separate queues and output paths.",
+        "设置 GUI 管理的 worker 数量。每个 worker 使用对应的 [workers.N] 设置；此键不会修改 worktodo 中每项任务的曲线数。并行运行时应给各 worker 配置独立队列和输出路径。"
       ]
     },
     {
@@ -1451,8 +1487,8 @@
       "fx": "GUI_Stage2_executable",
       "parser": "gui",
       "description": [
-        "Shared executable path for Stage2 workers. Empty searches ecm_cuda_stage2.exe beside the GUI, then a single cuda-stage2* child package, then PATH. Multiple child packages require an explicit path. Each worker receives the same INI and its own --worker index, using an inherited Stage2 stop event. A current Stage2 build is required; exe remains the separate Stage1 path.",
-        "Stage2 worker共用的程序路径。留空先查找GUI同目录的ecm_cuda_stage2.exe，再查找唯一的cuda-stage2*子包，最后使用PATH；多个子包时须明确指定路径。各worker使用同一INI和自己的--worker编号，以及继承的Stage2停止事件，需要当前Stage2构建；exe仍保存独立Stage1路径。"
+        "Shared executable path for Stage2 workers. Empty searches ecm_cuda_stage2.exe beside the GUI, then a single cuda-stage2* child package, then PATH. Multiple child packages require an explicit path. Each worker receives the same TOML and its own --worker index, using an inherited Stage2 stop event. A current Stage2 build is required; exe remains the separate Stage1 path.",
+        "Stage2 worker共用的程序路径。留空先查找GUI同目录的ecm_cuda_stage2.exe，再查找唯一的cuda-stage2*子包，最后使用PATH；多个子包时须明确指定路径。各worker使用同一TOML和自己的--worker编号，以及继承的Stage2停止事件，需要当前Stage2构建；exe仍保存独立Stage1路径。"
       ]
     },
     {
@@ -1984,17 +2020,5 @@
       ]
     }
   ],
-  "aliases": [
-    {
-      "owner": "stage2",
-      "key": "debug_log",
-      "target": "stage2_debug_log",
-      "fallback_only": true,
-      "deprecated": false,
-      "description": [
-        "Compatibility alias for the Stage2 debug switch. Used only if stage2_debug_log is absent; the explicit canonical key always takes precedence.",
-        "Stage2 的兼容调试开关，仅在未配置 stage2_debug_log 时生效；一旦正式键存在，以正式键为准。"
-      ]
-    }
-  ]
+  "aliases": []
 }

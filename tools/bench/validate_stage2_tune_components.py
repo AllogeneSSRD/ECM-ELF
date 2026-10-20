@@ -66,7 +66,7 @@ def main():
     policy = full['policy']
     env = dict(os.environ)
     env.update({'NTT_'+k.upper():str(v) for k,v in policy['environment'].items()})
-    ini = out/'ecm.ini'
+    ini = out/'ecm.toml'
     ini.write_text('verbose=false\nstage2_debug_log=false\n',encoding='utf-8')
     common = [str(exe),'--ini',str(ini),'--save',str(save),'--device',str(a.device),
         '--batch-mb',str(policy['batch_mb']),'--arena-mb',str(policy['arena_mb']),

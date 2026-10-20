@@ -132,7 +132,7 @@ $iniLines = @(
     ('device = ' + $Device),
     'autostart = 1'
 )
-$iniPath = Join-Path $Sandbox 'ecm.ini'
+$iniPath = Join-Path $Sandbox 'ecm.toml'
 [System.IO.File]::WriteAllText($iniPath, (($iniLines -join "`r`n") + "`r`n"), $enc)
 
 $trace = Join-Path (Split-Path -Parent $Exe) 'ecm_gui_trace.log'

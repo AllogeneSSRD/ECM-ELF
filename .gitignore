@@ -36,6 +36,7 @@ Android/ECM/app/release/
 
 # Runtime identities and generated result/checksum values are private local data.
 *.ini
+ecm.toml
 *.jsonl*
 *.json.txt*
 *.json_*.txt*

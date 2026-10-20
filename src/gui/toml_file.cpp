@@ -1,4 +1,4 @@
-#include "ini_file.h"
+#include "toml_file.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -33,20 +33,22 @@ bool replace_file_atomic(const std::string &tmp, const std::string &dst, std::st
 
 } // namespace
 
-bool IniFile::load(const std::string &path, std::string &err) {
+bool TomlFile::load(const std::string &path, std::string &err) {
     path_=path;lines_.clear();loaded_=false;dirty_=false;
-    if(!ecm_config::read_ini(path,lines_)){err="cannot open "+path;return false;}
+    try {
+        if(!ecm_config::read_toml(path,lines_)){err="cannot open "+path;return false;}
+    } catch(const std::exception &e) {err=e.what();return false;}
     loaded_=true;return true;
 }
 
-void IniFile::reset(const std::string &path) {
+void TomlFile::reset(const std::string &path) {
     path_ = path;
     lines_.clear();
     loaded_ = true;
     dirty_ = false;
 }
 
-std::string IniFile::get(const std::string &section, const std::string &key,
+std::string TomlFile::get(const std::string &section, const std::string &key,
                          const std::string &def) const {
     // Later occurrences win, matching the driver's "last one wins" behaviour.
     const std::string *found = nullptr;
@@ -58,7 +60,7 @@ std::string IniFile::get(const std::string &section, const std::string &key,
     return found ? *found : def;
 }
 
-bool IniFile::has(const std::string &section, const std::string &key) const {
+bool TomlFile::has(const std::string &section, const std::string &key) const {
     for (const Line &l : lines_) {
         if (l.kind == Line::Kind::KeyValue && l.section == section && l.key == key) {
             return true;
@@ -67,15 +69,23 @@ bool IniFile::has(const std::string &section, const std::string &key) const {
     return false;
 }
 
-void IniFile::set(const std::string &section, const std::string &key,
+void TomlFile::set(const std::string &section, const std::string &key,
                   const std::string &value) {
+    const auto *option=ecm_config::toml_option(section,key);
+    if(!option)throw std::runtime_error("unknown TOML option: "+section+"."+key);
+    std::string encoded=value;
+    const std::string type=option->type;
+    if(type=="string"||type=="int|string"||type=="float|string")
+        encoded=ecm_results::json::quote(value);
+    else if(type=="rect")encoded="["+value+"]";
+    else if(type=="bool")encoded=(value=="1"||value=="true")?"true":"false";
     // Replace the LAST occurrence (that is the effective one) and drop nothing else.
     for (std::size_t i = lines_.size(); i-- > 0;) {
         Line &l = lines_[i];
         if (l.kind == Line::Kind::KeyValue && l.section == section && l.key == key) {
             if (l.value == value) return;                 // no change -> not dirty
             l.value = value;
-            l.raw = key + " = " + value;
+            l.raw = key + " = " + encoded;
             dirty_ = true;
             return;
         }
@@ -86,29 +96,17 @@ void IniFile::set(const std::string &section, const std::string &key,
     nl.section = section;
     nl.key = key;
     nl.value = value;
-    nl.raw = key + " = " + value;
+    nl.raw = key + " = " + encoded;
     const auto refresh_scopes=[this]() {
         int scope=0;
         for(auto &line:lines_) {
             if(line.kind==Line::Kind::Section) {
-                const int worker=ecm_config::worker_header(ecm_config::trim(line.raw));
+                const int worker=ecm_config::toml_worker(line.section);
                 if(worker)scope=worker;
             }
             line.worker_scope=scope;
         }
     };
-
-    if (section.empty()) {
-        // Global keys live before the first section header.
-        std::size_t pos = lines_.size();
-        for (std::size_t i = 0; i < lines_.size(); ++i) {
-            if (lines_[i].kind == Line::Kind::Section) { pos = i; break; }
-        }
-        lines_.insert(lines_.begin() + static_cast<std::ptrdiff_t>(pos), nl);
-        refresh_scopes();
-        dirty_ = true;
-        return;
-    }
 
     // Append at the end of that section (before the next header), or create it.
     std::size_t sec_start = lines_.size();
@@ -145,7 +143,7 @@ void IniFile::set(const std::string &section, const std::string &key,
     dirty_ = true;
 }
 
-int IniFile::get_int(const std::string &section, const std::string &key, int def) const {
+int TomlFile::get_int(const std::string &section, const std::string &key, int def) const {
     const std::string v = get(section, key);
     if (v.empty()) return def;
     char *end = nullptr;
@@ -153,7 +151,7 @@ int IniFile::get_int(const std::string &section, const std::string &key, int def
     return (end && *end == '\0') ? static_cast<int>(n) : def;
 }
 
-double IniFile::get_double(const std::string &section, const std::string &key,
+double TomlFile::get_double(const std::string &section, const std::string &key,
                            double def) const {
     const std::string v = get(section, key);
     if (v.empty()) return def;
@@ -162,17 +160,17 @@ double IniFile::get_double(const std::string &section, const std::string &key,
     return (end && *end == '\0') ? d : def;
 }
 
-void IniFile::set_int(const std::string &section, const std::string &key, int value) {
+void TomlFile::set_int(const std::string &section, const std::string &key, int value) {
     set(section, key, std::to_string(value));
 }
 
-void IniFile::set_double(const std::string &section, const std::string &key, double value) {
+void TomlFile::set_double(const std::string &section, const std::string &key, double value) {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.6g", value);
     set(section, key, buf);
 }
 
-std::vector<std::string> IniFile::sections() const {
+std::vector<std::string> TomlFile::sections() const {
     std::vector<std::string> out;
     bool have_global = false;
     for (const Line &l : lines_) {
@@ -190,7 +188,7 @@ std::vector<std::string> IniFile::sections() const {
     return out;
 }
 
-bool IniFile::save(std::string &err) {
+bool TomlFile::save(std::string &err) {
     err.clear();
     if (path_.empty()) {
         err = "no path";

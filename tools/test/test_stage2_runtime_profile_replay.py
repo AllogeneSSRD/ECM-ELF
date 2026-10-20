@@ -44,7 +44,7 @@ def main():
         inputs.append(a.baseline_exe.resolve())
     identities = {str(path): sha(path) for path in inputs}
     profile = out / 'profile.toml'; profile.write_bytes(a.profile.read_bytes())
-    ini = out / 'ecm.ini'; ini.write_bytes(a.ini.read_bytes())
+    ini = out / 'ecm.toml'; ini.write_bytes(a.ini.read_bytes())
     with a.save.open(encoding='utf-8-sig') as f:
         point = next(line for line in f if re.search(r'\bN=0x[\da-fA-F]+;', line))
     n = int(re.search(r'\bN=0x([\da-fA-F]+);', point)[1], 16)

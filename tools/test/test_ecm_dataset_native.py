@@ -29,7 +29,7 @@ def main():
     snapshots=[]
     for sigma,b1,b2 in [(6,29,563),(9,9,227)]:
         where=out/f'sigma{sigma}';where.mkdir();save=where/'stage1.save'
-        ini=where/'ecm.ini';ini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=unused.txt\n')
+        ini=where/'ecm.toml';ini.write_text('[gpu]\ndevice=1\n[queue]\nworktodo=unused.txt\n')
         cmd=[str(exe1),'-ini',str(ini),'--curve','mont','--target','gpu','--gpu-param','0','--lcm','1','--exp-cache','off',
              '-d','1','-sigma',str(sigma),'-gpucurves','1','--ckpt','0','-save',str(save),str(b1)]
         modulus=(1<<223)-1

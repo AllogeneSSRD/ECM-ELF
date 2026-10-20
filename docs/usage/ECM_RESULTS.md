@@ -4,19 +4,22 @@ CPU/CUDA Stage1、CPU Edwards Stage2 与 CUDA Stage2 同时维护逐曲线内部
 
 ## 文件与身份
 
-Stage1 通过 INI 的 `stage1_results_file`、`stage1_submission_file` 配置两份结果，默认内部文件为 `stage1_results.jsonl`。CPU Edwards Stage2 使用 `--results INTERNAL.jsonl --submission results.json.txt`；CUDA 也支持这两个参数，INI 对应 `stage2_results_file` 和 `stage2_submission_file`。CPU 的 `--results` 目前只从 CLI 设置。提交路径的默认值及范围见生成的 [INI 参考](../ECM_INI_REFERENCE.md)。
+Stage1 通过 TOML 的 `stage1_results_file`、`stage1_submission_file` 配置两份结果，默认内部文件为 `stage1_results.jsonl`。CPU Edwards Stage2 使用 `--results INTERNAL.jsonl --submission results.json.txt`；CUDA 也支持这两个参数，TOML 对应 `stage2_results_file` 和 `stage2_submission_file`。CPU 的 `--results` 目前只从 CLI 设置。提交路径的默认值及范围见生成的 [TOML 参考](../ECM_TOML_REFERENCE.md)。
 
-各程序默认读取 exe 同目录的 `ecm.ini`，`--ini FILE` 显式覆盖。身份键为 `user`、`computer`；空值省略对应 JSON 字段。全局键可由 `[Worker #N]` 覆盖，启动时通过 `--worker N` 选择。CPU 的 `--user`、`--computer` 最后覆盖 INI，显式空字符串也生效。CUDA 从选定 worker 的 INI 读取身份并传给每曲线发布路径。
+各程序默认读取 exe 同目录的 `ecm.toml`，`--config FILE` 显式覆盖。身份键为 `user`、`computer`；空值省略对应 JSON 字段。全局键可由 `[Worker #N]` 覆盖，启动时通过 `--worker N` 选择。CPU 的 `--user`、`--computer` 最后覆盖 TOML，显式空字符串也生效。CUDA 从选定 worker 的 TOML 读取身份并传给每曲线发布路径。
 
-本地配置可使用以下空值模板，实际值只填入被忽略的 INI：
+本地配置可使用以下空值模板，实际值只填入被忽略的 TOML：
 
-```ini
-user=
-computer=
-stage2_submission_file=results.json.txt
+```toml
+[shared]
+user = ""
+computer = ""
+
+[stage2]
+stage2_submission_file = "results.json.txt"
 ```
 
-INI 相对输出路径基于 INI 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀；显式配置路径需要自行区分。提交文件有独占写锁，不支持多个进程同时共享同一个输出路径。输入 save、内部结果与提交文件必须不同。GUI 摘要默认使用 `gui_results.jsonl`，不得与 CLI 输出共用文件。
+TOML 相对输出路径基于 TOML 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀；显式配置路径需要自行区分。提交文件有独占写锁，不支持多个进程同时共享同一个输出路径。输入 save、内部结果与提交文件必须不同。GUI 摘要默认使用 `gui_results.jsonl`，不得与 CLI 输出共用文件。
 
 AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA Stage2 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护。Windows x64 平台号为数字 4；其他平台不冒用该编号。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。Stage1 的 `source-build` 从链接后生成的 `ecm_stage1_build_identity.txt` 读取入口/共用源码及构建档位指纹；复制程序时可一并保留该文件，缺失时明确使用 development。精确二进制以构建清单中的 SHA256 为准。CPU Stage2 内部结果的 `source-build` 保留 Git/入口源码指纹，GW 构建另含算术模块与 GW 库指纹；CUDA 内部结果的 source-build 直接记录当前可执行文件 SHA256，构建清单另存编译条件。
 
@@ -106,7 +109,7 @@ ecm_cpu_stage2.exe --export-results --submission results.json.txt
 
 真实 user、computer、aid、checksum/security-code 值仅留在本地。仓库忽略运行时 `*.ini`、`*.jsonl*`、`*.json.txt*`、worker 后缀 `*.json_*.txt*`、`*.ckpt*` 及私有 `*.ecm-ledger*`；受控模板只含空身份。原始 Prime95 样本只在内存中做结构比较，测试身份在运行时随机产生，原始结果、日志和测试样本均写入忽略的 `data/experiments/`。
 
-提交 Git 前运行 [check_result_privacy.py](../../tools/test/check_result_privacy.py)，通过 `--reference-results` 指定本地正式样本、内部结果，通过可重复的 `--ini` 指定实际配置。它检查暂存新增行是否含这些私有值，并拒绝暂存运行时结果文件；只输出通过或失败，不打印匹配值。这个检查依赖提供的本地输入集合，不能替代对新增内容的审阅。
+提交 Git 前运行 [check_result_privacy.py](../../tools/test/check_result_privacy.py)，通过 `--reference-results` 指定本地正式样本、内部结果，通过可重复的 `--config` 指定实际配置。它检查暂存新增行是否含这些私有值，并拒绝暂存运行时结果文件；只输出通过或失败，不打印匹配值。这个检查依赖提供的本地输入集合，不能替代对新增内容的审阅。
 
 ## 历史 CUDA JSONL 转换
 
@@ -118,13 +121,13 @@ ecm_cpu_stage2.exe --export-results --submission results.json.txt
 
 实际 d/poly-size 来自已完成回执中的实际字段，或完整关联的原日志；整批一致且证据不冲突时才输出，位置紧随 b2。requested_D 不是实际选型证明。GPU 多层 NTT 不提供单一 Prime95 Stage2 FFT 长度，因此不伪填 stage2-fft-length。通用 fft-length 沿用前述正的容量参考。CRC32 按转换后的实际字段重新计算；它不覆盖所有扩展字段，不是整个 JSON 或曲线数的完整性签名。
 
-本地转换证据冻结于 `data/experiments/ecm_submission_rewrite_20261017/`：1056 条 PARAM0 NF 回执，剔除 17 条完全重复和 13 条较小 B2 覆盖记录，得到 1026 条不同曲线、7 个连续批次。M3877/M12011/M12037 的实际余因子分别为 3275/11694/11616 位，已知因子均精确重建目标，合数见证均为基数 3。该冻结输出使用 0.20.0 迁移标签，身份从快照 INI 读取；原文件不含逐条程序版本。冻结文件保留原版本与原文，已有合法数字版本的回执也不会被转换器改名。所有数据、身份、实际 CRC 和原始日志只保存在忽略目录。
+本地转换证据冻结于 `data/experiments/ecm_submission_rewrite_20261017/`：1056 条 PARAM0 NF 回执，剔除 17 条完全重复和 13 条较小 B2 覆盖记录，得到 1026 条不同曲线、7 个连续批次。M3877/M12011/M12037 的实际余因子分别为 3275/11694/11616 位，已知因子均精确重建目标，合数见证均为基数 3。该冻结输出使用 0.20.0 迁移标签，身份从快照 TOML 读取；原文件不含逐条程序版本。冻结文件保留原版本与原文，已有合法数字版本的回执也不会被转换器改名。所有数据、身份、实际 CRC 和原始日志只保存在忽略目录。
 
 用户于 2026-10-17 提供的服务器回执确认：其中 M3877 的 NF 批次、B1=260,000,000、B2=2,600,000,000,000 已接受 1 行，状态码 0，CPU credit 为 753.2415 GHz-days。该结果使用真实 ECM-ELF 身份、正的参考 fft-length 和 CRC32，省略 security-code。此回执证明这一批提交可用，不扩展为 Edwards 或因子结果的服务器验收结论。已接受批次保持冻结，不能因版本或排版更新再次申报。回执摘要和冻结文件身份保存在 `data/experiments/ecm_submission_v031_20261017/server_acceptance.json`。
 
 ## 验证与边界
 
-[结果生命周期回归](../../tools/test/test_result_output_consistency.py) 覆盖内部导出顺序、NF 任务隔离、完成前不导出、即时单曲线 F、最终 CRC、旧位置迁移、重复回执和不完整 JSON 回执拒绝。[双格式测试](../../tools/test/test_ecm_submission.py) 对照本地正式样本结构，验证 CPU/GPU1 F/NF、INI、合并、去重、恢复、FFT 和参数顺序。[Stage1 流程验收](../../tools/test/test_stage1_usability.py) 覆盖 CPU/CUDA、检查点恢复及跨 Stage2 共用账本。测试数据与实际身份只保存在忽略目录；这些检查均为离线验证，不代表新增服务器验收。
+[结果生命周期回归](../../tools/test/test_result_output_consistency.py) 覆盖内部导出顺序、NF 任务隔离、完成前不导出、即时单曲线 F、最终 CRC、旧位置迁移、重复回执和不完整 JSON 回执拒绝。[双格式测试](../../tools/test/test_ecm_submission.py) 对照本地正式样本结构，验证 CPU/GPU1 F/NF、TOML、合并、去重、恢复、FFT 和参数顺序。[Stage1 流程验收](../../tools/test/test_stage1_usability.py) 覆盖 CPU/CUDA、检查点恢复及跨 Stage2 共用账本。测试数据与实际身份只保存在忽略目录；这些检查均为离线验证，不代表新增服务器验收。
 
 0.38.0 的本地验收证据在 `data/experiments/result_output_audit_20261018/validation_manifest.json`：27 项 Stage1 流程检查、22 项双格式检查、plain/NTT/gwpoly 各 4 条 NF，以及 GPU1 停止一条后恢复剩余三条的整任务发布检查。完整位宽 local 程序另在 GPU1 上验证 1279、8191、11213、16381 位各两条 Edwards 曲线，与独立 Python 末点/因子校验及 CRC 一致。GUI 结果存储也拒绝新旧位置的 CLI 账本。以上为功能验证，不作性能结论。
 

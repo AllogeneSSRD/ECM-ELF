@@ -19,7 +19,7 @@ def main():
     paths=[a.exe.resolve(),a.profile.resolve(),a.save.resolve()]
     identities={str(f):sha(f) for f in paths}
     data=tomllib.loads(a.profile.read_text(encoding='utf-8-sig'))
-    ini=out/'ecm.ini';ini.write_text('verbose=false\nstage2_debug_log=false\n',encoding='utf-8')
+    ini=out/'ecm.toml';ini.write_text('verbose=false\nstage2_debug_log=false\n',encoding='utf-8')
     common=[str(a.exe.resolve()),'--ini',str(ini),'--save',str(a.save.resolve()),'--device',str(a.device),
         '--batch-mb',str(data['policy']['batch_mb']),'--arena-mb',str(data['policy']['arena_mb']),
         '--owner-budget-mb',str(data['policy']['fold_mb']),'--plan-only','--log-level','quiet']

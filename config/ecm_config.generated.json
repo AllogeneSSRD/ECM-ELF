@@ -1,12 +1,13 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "sha256": {
-    "src/core/generated/ecm_config_generated.h": "43f425a805884644f53e10d9ec35ad36748ba8d1c0de205309d3b575e3c14d24",
-    "src/core/generated/ecm_ini_template.h": "9ca8c1c424b0c606d50609bee10bb1643c64b7abfedd97820a99c3a245e6e39c",
-    "config/ecm.ini.default": "48b875c752ce0c822e62fe195c278a972c78045b162dae9df1b96ab20cfb12c9",
-    "config/ecm.ini.example": "48b875c752ce0c822e62fe195c278a972c78045b162dae9df1b96ab20cfb12c9",
-    "docs/ECM_INI_REFERENCE.md": "8253d0d066889189df009d90ff19f6f2a05d2c4321f14c1bf5c29aa0f3da9051",
-    "config/ecm_options.json": "2fd77ab3f9f57a7e724e4f0646446f23a443a74255fe9d5745d7ad6df2a3cd3a",
-    "tools/gen/generate_ecm_config.py": "ae8ba86a96e19f6cb061a6c3ca0026e0fbce928c081ef06b19ba2e09604dc5c3"
+    "src/core/generated/ecm_config_generated.h": "ff5e54cfbff2c449fd896d09500cb4886903d19ae70f04dec53cd69a145e4bef",
+    "src/core/generated/ecm_toml_schema.h": "8f10414bfcc8af764626d4292176a6b74821dd3db7f7e74b4d7b563bf73286a5",
+    "src/core/generated/ecm_toml_template.h": "603e5cccaf9a5be70d04b8d5f9df9527e085a6bc65af665aae25b8342f12e0a7",
+    "config/ecm.toml.default": "9489cce851873bb813db6b102a6fa1a81b6000723f18af228d8c7cd62646b9a4",
+    "config/ecm.toml.example": "c9b187176650f4bd557472043c28662fd4741d5e693d54b2383adbde6f075b23",
+    "docs/ECM_TOML_REFERENCE.md": "519b7193977ff52a08e7f6923928606e74c2dafe071a8336f2880d43a53c6092",
+    "config/ecm_options.json": "977917e69080bcec497697d0e304e2a777d81b81e8eaaae106b1824c5e2d9279",
+    "tools/gen/generate_ecm_config.py": "bd006d1a363bd98decd52f64d49f799c203e805f4c3c30cd31e9177ff7072ab5"
   }
 }
