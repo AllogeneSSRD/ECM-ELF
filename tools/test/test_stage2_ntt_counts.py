@@ -6,7 +6,10 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'ecm_report'))
+from result_format import normalize_result
 
 
 def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -33,10 +36,10 @@ def tables(text):
 
 
 def invoke(exe,save,out,name,text='',extra=(),b2=40000,d=210,curves=1,device=1,old=False,good=True):
-    prefix=out/name;ini=prefix.with_suffix('.ini')
-    ini.write_text('user=\ncomputer=\nstage2_short_calibration=0\nstage2_tune_runtime=0\n'+text,encoding='utf-8')
+    prefix=out/name;config=prefix.with_suffix('.toml')
+    config.write_text('[shared]\nuser=""\ncomputer=""\n[stage2]\nstage2_short_calibration=false\nstage2_tune_runtime=false\n'+text,encoding='utf-8')
     log=prefix.with_suffix('.engine.log');debug=prefix.with_suffix('.debug.log');result=prefix.with_suffix('.jsonl')
-    cmd=list(map(str,[exe,'--ini',ini,'--save',save,'--b2',b2,'--d',d,'--curves',curves,'--device',device,
+    cmd=list(map(str,[exe,'--config',config,'--save',save,'--b2',b2,'--d',d,'--curves',curves,'--device',device,
         '--short-calibration',0,'--tune-runtime',0,'--factor-only','--results',result,
         '--submission',prefix.with_suffix('.json.txt'),'--log',log,'--debug-log-file',debug,'--log-level','curve',*extra]))
     env={k:v for k,v in os.environ.items() if not k.startswith('NTT_') and k!='CUDA_VISIBLE_DEVICES'}
@@ -48,7 +51,7 @@ def invoke(exe,save,out,name,text='',extra=(),b2=40000,d=210,curves=1,device=1,o
         assert proc.returncode and not result.exists();return dict(name=name,returncode=proc.returncode)
     assert not proc.returncode,name+' failed; inspect ignored evidence'
     normal=log.read_text(encoding='utf-8');detail=debug.read_text(encoding='utf-8')
-    receipts=[json.loads(s) for s in result.read_text().splitlines()]
+    receipts=[normalize_result(json.loads(s)) for s in result.read_text().splitlines()]
     assert len(receipts)==curves and all(r['status']=='stage2_completed' and not r['bad_factors'] for r in receipts)
     checks=[dict(re.findall(r'(\w+)=(\S+)',s)) for s in re.findall(r'^s4_multiply_stats: (.+)$',normal+'\n'+detail,re.M)]
     assert checks and all(int(c['gmp_checked'])>0 and int(c['gmp_selftest_cases'])>0 and c['gmp_check_bad']=='0' and c['gmp_selftest_bad']=='0' for c in checks)
@@ -70,12 +73,12 @@ def main():
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
     exe=a.exe.resolve();ed=a.ed_save.resolve();mont=a.mont_save.resolve()
     report=dict(complete=False,exe_sha256=sha(exe),script_sha256=sha(__file__),device=a.device,runs=[])
-    tests=[('default','',[],False),('ini_on','stage2_ntt_counts=1\n',[],True),
-        ('worker_off','stage2_ntt_counts=1\n[Worker #2]\nstage2_ntt_counts=0\n',['--worker',2],False),
-        ('worker_on','stage2_ntt_counts=0\n[Worker #2]\nstage2_ntt_counts=1\n',['--worker',2],True),
-        ('cli_off','stage2_ntt_counts=1\n',['--ntt-counts',0],False),
-        ('cli_on','stage2_ntt_counts=0\n',['--ntt-counts',1],True),
-        ('quiet_on','stage2_ntt_counts=1\n',['--log-level','quiet'],True)]
+    tests=[('default','',[],False),('toml_on','stage2_ntt_counts=true\n',[],True),
+        ('worker_off','stage2_ntt_counts=true\n[workers.2.stage2]\nstage2_ntt_counts=false\n',['--worker',2],False),
+        ('worker_on','stage2_ntt_counts=false\n[workers.2.stage2]\nstage2_ntt_counts=true\n',['--worker',2],True),
+        ('cli_off','stage2_ntt_counts=true\n',['--ntt-counts',0],False),
+        ('cli_on','stage2_ntt_counts=false\n',['--ntt-counts',1],True),
+        ('quiet_on','stage2_ntt_counts=true\n',['--log-level','quiet'],True)]
     for name,text,extra,on in tests:
         row=invoke(exe,ed,out,name,text,extra,device=a.device)
         assert bool(row['tables'])==on and bool(row['stdout_tables'])==on
@@ -83,16 +86,16 @@ def main():
             assert (row['leaf_hashes'],row['factors'])==(report['runs'][0]['leaf_hashes'],report['runs'][0]['factors'])
         report['runs'].append(row);print(name,'PASS',flush=True)
     for name,save,curves in [('montgomery',mont,1),('two_curves',ed,2)]:
-        row=invoke(exe,save,out,name,'stage2_ntt_counts=1\n',curves=curves,device=a.device)
+        row=invoke(exe,save,out,name,'stage2_ntt_counts=true\n',curves=curves,device=a.device)
         assert len(row['tables'])==curves
         if curves==2:assert row['tables'][0]==row['tables'][1] # Geometry repeats, counters reset per child.
         report['runs'].append(row)
-    for name,text,extra in [('bad_ini','stage2_ntt_counts=2\n',[]),('bad_cli','',['--ntt-counts',2])]:
+    for name,text,extra in [('bad_toml','stage2_ntt_counts=2\n',[]),('bad_cli','',['--ntt-counts',2])]:
         report['runs'].append(invoke(exe,ed,out,name,text,extra,good=False,device=a.device))
     if a.old_exe:
         for name,save in [('old_ed',ed),('old_mont',mont)]:
             old=invoke(a.old_exe.resolve(),save,out,name,old=True,device=a.device)
-            new=next(r for r in report['runs'] if r['name']==('ini_on' if name=='old_ed' else 'montgomery'))
+            new=next(r for r in report['runs'] if r['name']==('toml_on' if name=='old_ed' else 'montgomery'))
             assert old['legacy_histograms']==new['legacy_histograms']
             assert (old['leaf_hashes'],old['factors'])==(new['leaf_hashes'],new['factors'])
             report['runs'].append(old)

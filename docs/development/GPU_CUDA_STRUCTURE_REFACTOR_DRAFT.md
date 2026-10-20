@@ -2,7 +2,7 @@
 
 ## 范围与约束
 
-按已确认方案分 P0～P5 实施。P0（0.44.1）完成构建源清单、依赖与身份校验。本轮实施 P1：统一位宽清单并拆分 Stage1 主机与设备职责，版本只递增修订号至 0.44.2。算法、配置、存档及程序输出语义保持。
+按已确认方案分 P0～P5 实施。P0（0.44.1）完成构建源清单、依赖与身份校验，P1（0.44.2）统一位宽清单并拆分 Stage1 主机与设备职责。本轮实施 P2：拆分 Stage2 算术与 NTT 底层模块，版本只递增修订号至 0.44.3。算法、配置、存档及程序输出语义保持。
 
 P0 基线为 `36171f4`（0.44.0），当时的 TOML、队列及输出行为作为基线。478 个已跟踪 `src/`、`kernels/`、`include/` 文件的原始摘要保存在 `data/experiments/cuda_structure_p0_20261020/baseline.json`。P0 除版本头外未修改这些文件；P1 的迁移与验证另见下节。
 
@@ -40,7 +40,7 @@ P0 分为源清单与 CPU 故障注入、原生构建、复用/发布校验及�
 
 ## 后续
 
-P0 已通过上述限定范围的分步验证。P2～P5 尚未实施。保留本草稿并提示用户处理，不自动删除。正式构建说明只记录已验证的当前行为；原始源码快照、失败夹具和日志不更改。
+P0/P1 已通过各自限定范围的分步验证；P2 见本文对应章节。保留本草稿并提示用户处理，不自动删除。正式构建说明只记录已验证的当前行为；原始源码快照、失败夹具和日志不更改。
 
 ## P1 范围与验证顺序
 
@@ -81,3 +81,40 @@ P0 已通过上述限定范围的分步验证。P2～P5 尚未实施。保留本
 `prac_runtime_01/02` 的夹具沿用旧检查点名称和损坏后自动重建预期，与当前二进制批次轮换合同不符；按现有主/备两代格式改为损坏拒绝并保留证据，重新验证通过，未修改程序恢复行为。首轮 PRAC 编译参数比较把目标各自的响应文件路径误判为包含内容差异；最终逐字比较响应文件内容。
 
 本轮验证了上述选档与 sm89，不宣称完整32档、全部 PRAC 特殊策略或多架构发布均已验收。受限构建 PARAM2/3 精确选档后缺失实例的行为保持。Stage2 主体拆分、旧分支删除及全部探针隔离属于 P2～P4；主机等待诊断仍直接包含私有运行时，保持现有诊断能力，后续改为独立探针接口。P5 的完整矩阵与性能资格未实施。草稿保留，完成后提示用户处理，不自动删除。
+
+## P2 范围与实现
+
+P2 基线为 `5e3ed63`（0.44.2），575 个源码/构建输入摘要及原二进制冻结在 `data/experiments/cuda_structure_p2_20261020/`。本轮版本为 0.44.3，只增加修订号。按算术、NTT、消费者/正式构建的顺序验证，不进入 P3 流程拆分、P4 旧分支清理或 P5 性能资格。
+
+- Stage2 点、baby/giant、S4、pack、系数搬运与缩放移至 `kernels/cuda/stage2/`，薄启动接口位于 `include/ecm/cuda/`。设备常量和上传仍由同一个算术 CU 所有；七档容量与实际 W/radix 不变，实例组合从原二进制实际设备符号核对。
+- NTT 的 shape、runtime、Graph、checks 分为四个普通 C++ 模块，设备变换、tile/outer、carry、tune 校验移至一个设备 CU。域原语可供实验探针复用。单一设备 CU 保持运行时后端常量的单一所有权，不增加 RDC 或额外上传。Arena、Graph 字段和默认值、分配/释放顺序、检查、错误回退、同步和计时边界保持。
+- 主流程及私有 host 包装改用中立启动接口；共享内存台账迁到 `src/cuda/common/`，保留原 C++17 inline 状态。生产构建共 11 个单元，CMake 与 PowerShell 消费相同算术/NTT 源组。CMake 的 SDK 显式包含只用于普通 C++。
+- 删除被迁移的旧实现头，不保留转发壳。giant 探针直接包含纯设备模块；使用生产 NTT 的探针链接显式模块清单，并保持各自的默认流 ABI。Graph 和独立算术探针可验证身份后复用真实生产对象。独立实验树/NTT 引擎保留，开发 wrapper 只增加所需纯校验核依赖；未合并两套引擎。
+- 当前模块职责及依赖方向写入 [Stage2](../architecture/STAGE2.md#cuda-模块边界)、[NTT](../architecture/NTT.md#代码入口与依据) 和 [构建](../usage/BUILD.md#cuda-源清单与依赖身份)。CPU 内存模型的现有源码提取测试适配声明/定义分离，产品构建和 GPU 消费者不截取实现源码。NTT 计数测试的旧 INI/结果读取方式按已有 TOML/紧凑结果格式修正，没有修改程序格式或门限。
+
+## P2 验证证据
+
+以下路径相对于 `data/experiments/cuda_structure_p2_20261020/`。CUDA 13.3 / MSVC 14.51.36231，构建及运行验收为 sm89，GPU1 RTX4060 Laptop；未改变功耗或频率。tune 和探针的计时仅为功能输出，不构成性能样本或性能结论。
+
+- `structure_final/result.json`：93 个迁移算术函数正文及完整纯算术头与基线一致，16 个算术/NTT 设备文件无 GMP、检查点或反向主机/实验依赖；主流程和 NTT 主机模块不定义设备核。`host_body_final/result.json`：70 个 NTT 主机函数、24 个 Arena/Graph 方法、两类字段/默认值及 outer 启动帮助函数一致。比较保留字符串、检查、启动参数和同步顺序，仅规范化薄启动接口。
+- `arithmetic_gmp_final.log`：直接链接最终生产算术对象，七档容量、114 种通用/梅森模数、实际字数与尾位边界，共 11,286 次独立 GMP 比较，bad=0。`giant_gmp_01.log`：实际 W=3/64/65/128/129/256 的 chain 与独立 GMP 对照通过。`reverse_final/summary.json`：216 个反转、补零和同一分配内保护区用例通过。
+- `graph_gmp_final.log`：368 个完整整数卷积及 14,779,392 个 digit 检查通过，8 次 Graph 构建、16 次命中、8 次失效；workspace 的 144 项检查、14 次根表寿命调用和 72 个容量场景通过，最终无泄漏。`graph_fault_01.log` 保留 bad=1、退出码3的预期拒绝。
+- `outer_check_01.log`：radix5…8 的 96 个 GMP 场景及缓存模式切换通过，并完成 3024 个主机、200000 个设备算术用例和 100064 个折叠对照。`pack_check_01.log`：663 个布局场景、38,030,604 字及 1,048,576 个除法检查通过；`pack_fault_01.log` 的错误补零被拒绝。生产 NTT 的 outer/pack、Tensor length/concurrency 及独立实验 Tensor 探针均可构建；`tensor_concurrency_check_01.log` 的长度与并发检查通过，live_bytes=0。
+- `ntt_memory_01/checks.json`：681,389 项 CPU Arena 检查通过。`ntt_events_02/checks.json`：173 个场景、47,936 个内存事件通过，错误释放顺序被拒绝。`s4_memory_final/checks.json`：299,592 项检查、2,136 个分配事件和 192 个树租约通过；保持 96 窗口强制自检合同。
+- `stage2_final_build_03.log` / `cmake_stage2.log`：最终生产 11 个单元分别通过原生入口与真实 CMake 目标构建；后者直接用 MSVC 编译 NTT CPP。`cmake_runtime_final/summary.json` 的5组存档/5组 Stage2 对照同时通过。`development_build_03.log` / `development_hostonly_final.log`：独立开发引擎及最终对象身份复用通过。`hostonly_final.log`：生产三份 CUDA 对象和整体身份匹配，程序完整复用。`identity_committed/result.json`：38 项 CPU 故障注入及 PS5.1/PS7 指纹一致性通过。
+- `stage1_build_01.log`：0.44.3 Stage1 的 384 档、31 CUDA 单元构建通过。`packaged_runtime_final/summary.json`：最终 Stage1 与正式 Stage2 包对照冻结 0.44.2，5 组规范存档及5组目标环完整叶/非计时结果字段一致，覆盖普通、Edwards、承载、relocation 和主机回退。
+- `wide_inputs/fixtures.json`：五个宽输入的 Stage1 经独立 Python/CPU 与 GMP-ECM 核对。`native_matrix_final_02/summary.json`：8193/16381/16384 位、两类非单位、宽输入主机回退及关闭融合 pack，共7组旧/新生产对照通过；完整目标环叶和稳定结果字段一致，必需自检与真因子校验保留。
+- `ntt_counts_final/summary.json`：11 项计数开关、worker/CLI 覆盖、多曲线重置及非法值拒绝通过。`ntt_tune_final_03/summary.json`：长度 2^3…2^16、batch1/3，共28组旧/新 tune 形状通过 GMP 校验；调度、payload、验证字段一致。保留当前 TOML profile 与原始 JSONL 证据布局。
+- `release_build_final.log` / `release_skip_final.log`：通用 x64 GMP 的最终 sm89 发布与 SkipBuild 身份核对通过。`release_archive_final.json`：已有 TOML/队列逐字保留，ZIP 的8个分发文件来自干净暂存区，不含用户配置、队列内容、内部 manifest 或运行数据。
+
+## P2 SASS 差异、失败证据与边界
+
+`arithmetic_sass_01/result.json` 和 `sass_final/result.json` 的严格指令比较均返回差异：176 个函数无增删，161 个完全相同，15 个算术函数不同。差异为 mont test 的 NW8/16/32/64/128/256、plain scale 的七档，以及 NW128 的 block product 和 baby product。可见寄存器分配及指令数变化，算术正文完全相同；具体编译器成因未确认。NTT 拆分未新增指令差异。没有放宽比较器、忽略指令或改动算法强求 SASS 相同；这15个函数的实际生产对象均由上述独立 GMP 矩阵覆盖。P2 不保证性能不变，P5 仍须完成性能资格。
+
+首轮算术构建暴露辅助函数顺序，NTT 首轮暴露默认参数重复和 MSVC 启动参数收窄检查；修正声明/定义与显式启动转换后通过，原日志保留。首次身份门禁仍假定单 CU，按新清单核对精确成员；探针构建器的清单层级、CPU 测试声明次序和开发 wrapper 校验核依赖错误均已修正并重跑。实验树文件恢复原 CRLF，仅保留一条必要包含，避免整文件格式改写。
+
+`ntt_counts_01/02` 分别保留旧 INI 参数及旧结果读取断言失败；当前 TOML、结果归一化和全部原门禁通过。宽矩阵首次采集触发 Python 4300 位十进制限制；仅对已限定的宽输入调整采集器后重新完成，未修改程序。tune 采集器原先误认控制台 JSON/单次 complete，按冻结旧版已存在的 TOML + 原始 JSONL、逐形状 complete 合同核对后通过。ZIP 首次校验误把用户现有配置当作归档模板，按现有干净暂存合同核对后通过。原失败日志与样本保留，没有改写原始实验结果。
+
+P3 的主机流程拆分、P4 的剩余实验消费者/旧分支整理和 P5 的多架构、完整矩阵及性能资格未实施。当前验证范围不等于全部 GPU 架构验收。草稿保留并随提交保存，后续处理由用户决定。
+
+提交前清理了新设备头的末尾空白，并精确保留实验树原有混合换行，仅增加一条包含。`structure_commit` / `host_body_commit` 重新通过；`stage2_commit_build.log`、`development_commit_build.log`、`release_commit_build.log`、`cmake_commit_build.log` 更新最终构建身份。`arithmetic_gmp_commit.log` / `graph_gmp_commit.log` 对最终生产对象重新完成上述 GMP/Graph 门禁；`packaged_runtime_commit` / `cmake_runtime_commit` 各重新完成5组存档与5组 Stage2 对照。`hostonly_commit.log`、`release_skip_commit.log`、`release_archive_commit.json` 核对最终复用及打包身份。`sass_commit/result.json` 的176个设备函数与格式清理前逐函数完全相同，和0.44.2的15个差异保持原样。最终二进制、DLL、清单和发布包冻结在 `committed_binaries_02/`；`final_static_checks.json` 记录9个 Python 文件、12个 PowerShell 脚本、配置生成物与暂存空白检查通过。

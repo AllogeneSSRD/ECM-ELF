@@ -69,3 +69,17 @@ void carry_partial_finish_kernel(const unsigned int *partial,unsigned long long 
         if(threadIdx.x==0){if(bad)atomicAdd(out,bad);atomicMax(out+1,(unsigned long long)mx);}
     }
 }
+
+void ecm_launch_carry_partial_kernel(EcmCudaLaunch cfg, const unsigned long long *c, unsigned long long n, int bpw, unsigned int *partial, unsigned long long stride) {
+    carry_partial_kernel<<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(c,n,bpw,partial,stride);
+}
+
+
+template<int ROUNDS>
+void ecm_launch_carry_cone_check_kernel(EcmCudaLaunch cfg, const unsigned long long *c, unsigned long long *cout, unsigned long long n, int bpw, unsigned long long stride, unsigned int *partial) {
+    carry_cone_check_kernel<ROUNDS><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(c,cout,n,bpw,stride,partial);
+}
+
+void ecm_launch_carry_partial_finish_kernel(EcmCudaLaunch cfg, const unsigned int *partial, unsigned long long blocks, unsigned long long *out) {
+    carry_partial_finish_kernel<<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(partial,blocks,out);
+}

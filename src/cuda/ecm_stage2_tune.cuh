@@ -14,19 +14,6 @@ inline std::string quote(const char *s) {
     }
     return out+'"';
 }
-__global__ void seed(unsigned long long *a,unsigned long long *b,unsigned long long n,unsigned long long slices) {
-    const auto i=blockIdx.x*(unsigned long long)blockDim.x+threadIdx.x;
-    if(i<n*slices) {
-        const auto position=i%n,slice=i/n;
-        a[i]=position==0 ? (slice?slice-1:GL_P-1) : position==1 ? 0x8000000000000000ull : position==2 ? GL_P-2 : 0;
-        b[i]=position==0 ? 3 : position==1 ? 5 : position==2 ? 7 : 0;
-    }
-}
-__global__ void verdict(const unsigned long long *a,unsigned long long n,
-                        unsigned long long slices,const unsigned long long *want,unsigned long long *bad) {
-    const auto i=blockIdx.x*(unsigned long long)blockDim.x+threadIdx.x;
-    if(i<n*slices && a[i]!=(i%n<5 ? want[(i/n)*5+i%n] : 0))atomicAdd(bad,1ull);
-}
 struct Resources {
     unsigned long long *a=nullptr,*b=nullptr,*want=nullptr,*bad=nullptr;
     cudaEvent_t start=nullptr,end=nullptr;
@@ -115,7 +102,7 @@ static int run(int device,int first,int last,int repeats,unsigned long long memo
         CK(cudaEventCreate(&r.start));CK(cudaEventCreate(&r.end));
         std::vector<double> samples;double check_seconds=0,warmup=0;
         for(int repeat=do_warmup?0:1;repeat<=repeats;++repeat) {
-            seed<<<(unsigned int)((words+255)/256),256>>>(r.a,r.b,n,slices);CK(cudaGetLastError());
+            ecm_ntt_tune_seed(EcmCudaLaunch{(unsigned int)((words+255)/256),256},r.a,r.b,n,slices);CK(cudaGetLastError());
             CK(cudaEventRecord(r.start));
             ntt_forward_fused(r.a,fc,om,slices);ntt_forward_fused(r.b,fc,om,slices);
             ntt_inverse_fused(r.a,r.b,fc,omi,scale,slices);
@@ -125,7 +112,7 @@ static int run(int device,int first,int last,int repeats,unsigned long long memo
             if(repeat)samples.push_back(ms/1000.0);else warmup=ms/1000.0;
             const double check_start=now_s();
             CK(cudaMemset(r.bad,0,8));
-            verdict<<<(unsigned int)((words+255)/256),256>>>(r.a,n,slices,r.want,r.bad);CK(cudaGetLastError());
+            ecm_ntt_tune_verdict(EcmCudaLaunch{(unsigned int)((words+255)/256),256},r.a,n,slices,r.want,r.bad);CK(cudaGetLastError());
             unsigned long long bad=0;CK(cudaMemcpy(&bad,r.bad,8,cudaMemcpyDeviceToHost));
             check_seconds+=now_s()-check_start;
             if(bad) {

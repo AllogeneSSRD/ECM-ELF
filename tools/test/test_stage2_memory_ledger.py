@@ -48,10 +48,11 @@ def main():
     # Verify the exact frozen source closure uses no device allocation API that
     # bypasses the instrumented cudaMalloc/free entry points. Runtime overhead
     # outside these source calls is explicitly outside the payload contract.
-    sources=identity['sources'];assert 'src/cuda/stage2/device_memory_ledger.cuh' in sources
+    sources=identity['sources']
+    assert any(name in sources for name in ('src/cuda/common/device_memory_ledger.h','src/cuda/stage2/device_memory_ledger.cuh'))
     allocation_api=r'\b(cuda(?:Malloc|Free)\w*|cuMem(?:Alloc|Free)\w*)\s*\('
     for name in sources:
-        if name.endswith(('.cu','.cuh')):
+        if name.endswith(('.cu','.cuh','.cpp','.h')):
             calls=set(re.findall(allocation_api,(ROOT/name).read_text(encoding='utf-8-sig')))
             if calls-{'cudaMalloc','cudaFree','cudaMallocHost','cudaFreeHost'}:
                 raise ValueError('untracked device allocation API in '+name)

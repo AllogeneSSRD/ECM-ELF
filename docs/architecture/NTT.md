@@ -80,9 +80,10 @@ NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导�
 
 ## 代码入口与依据
 
-- [ntt_runtime.cuh](../../src/cuda/stage2/ntt_runtime.cuh#L2773)：`choose_cfg`；[shape query](../../src/cuda/stage2/ntt_runtime.cuh#L3158)。
-- [ntt_goldilocks_ptx.cuh](../../src/cuda/stage2/ntt_goldilocks_ptx.cuh)、[ntt_goldilocks_reduce.cuh](../../src/cuda/stage2/ntt_goldilocks_reduce.cuh)、[ntt_goldilocks_sub.cuh](../../src/cuda/stage2/ntt_goldilocks_sub.cuh)：域算术。
-- [ntt_coop_outer.cuh](../../src/cuda/stage2/ntt_coop_outer.cuh)、[ntt_carry_partial.cuh](../../src/cuda/stage2/ntt_carry_partial.cuh)：outer 与 carry。
-- [ecm_cuda_stage2.cu](../../src/cuda/ecm_cuda_stage2.cu#L2011)：S4 长除法；[梅森归约](../../src/cuda/ecm_cuda_stage2.cu#L2079)。
+- [shape.cpp](../../src/cuda/ntt/shape.cpp)：`choose_cfg`、`ntt_shape_query`、exactness 与形状缓存。
+- [runtime.h](../../src/cuda/ntt/runtime.h)、[runtime.cpp](../../src/cuda/ntt/runtime.cpp)：私有主机接口、Arena、根表、分配/回退、forward/inverse 和乘法执行；[graph.cpp](../../src/cuda/ntt/graph.cpp)：Graph 捕获、重放与失效；[checks.cpp](../../src/cuda/ntt/checks.cpp)：GMP、workspace、寿命、容量与协作 outer 检查。
+- [ntt_launch.h](../../include/ecm/cuda/ntt_launch.h)、[transform_kernels.cu](../../kernels/cuda/ntt/transform_kernels.cu)：中立启动接口与唯一 NTT 设备编译单元；`transform.cuh`、`tile.cuh`、`outer_coop.cuh`、`carry.cuh`、`carry_partial.cuh` 分别维护基础变换、融合 tile/outer 和 carry。运行时后端常量在设备所属编译单元上传，不引入 RDC。
+- [goldilocks.cuh](../../kernels/cuda/shared/goldilocks.cuh)、[goldilocks_reduce.cuh](../../kernels/cuda/shared/goldilocks_reduce.cuh)、[goldilocks_ptx.cuh](../../kernels/cuda/shared/goldilocks_ptx.cuh)、[goldilocks_sub.cuh](../../kernels/cuda/shared/goldilocks_sub.cuh)、[goldilocks_tile.cuh](../../kernels/cuda/shared/goldilocks_tile.cuh)：域算术和可复用 tile 原语；设备闭包不包含 GMP 或 ECM 主机流程。
+- [s4_reduce.cuh](../../kernels/cuda/stage2/s4_reduce.cuh)、[stage2_scalar.cuh](../../kernels/cuda/shared/stage2_scalar.cuh)：S4 长除法与梅森归约；[模块职责及实验边界](STAGE2.md#cuda-模块边界)。
 - [内存模型](MEMORY.md)、[性能结论](../performance/STAGE2.md)、[tune 合同](AUTO_B2.md)。
 - 固定资料：[GPUOWL NTT](../reference/GPUOWL_NTT.md)、[Goldilocks 证明](../reference/GOLDILOCKS_ARITHMETIC.md)、[开源库分析](../reference/GPU_NTT_LIBRARIES.md)。

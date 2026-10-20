@@ -1,4 +1,5 @@
 #pragma once
+#include "ecm/cuda/stage2_launch.h"
 
 // The production scalar chain body is preserved verbatim.
 template <int NW, bool XADD6=false>
@@ -75,4 +76,9 @@ __global__ void s2g_chain_rotate_kernel(const unsigned long long *dn, unsigned l
         }
         if constexpr(ROTATE){auto *tx=ax,*tz=az;ax=bx;az=bz;bx=cx;bz=cz;cx=tx;cz=tz;}
     }
+}
+
+template<int NW,bool XADD6>
+void ecm_launch_s2g_chain_kernel(EcmCudaLaunch cfg, const unsigned long long *dn, unsigned long long ninv, int nw, const unsigned long long *ddx, const unsigned long long *ddz, const unsigned long long *dsx, const unsigned long long *dsz, const unsigned long long *esx, const unsigned long long *esz, unsigned long long npts, unsigned long long per_block, unsigned long long blocks, unsigned long long *out_x, unsigned long long *out_z, size_t seed_stride) {
+    s2g_chain_kernel<NW,XADD6><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(dn,ninv,nw,ddx,ddz,dsx,dsz,esx,esz,npts,per_block,blocks,out_x,out_z,seed_stride);
 }

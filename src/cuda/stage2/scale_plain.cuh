@@ -1,21 +1,15 @@
 #pragma once
+#include "ecm/cuda/stage2_launch.h"
 
 // Included after s2g_mont_mul and S2G_DISPATCH. Coefficients stay in the plain
 // domain: Mont(h, factor*R mod N) = h*factor mod N, R = 2^(64*nw).
-template<int NW>
-__global__ void s2g_plain_scale_kernel(unsigned long long *h, size_t count,
-    const unsigned long long *factor_mont, const unsigned long long *n,
-    unsigned long long ninv, int nw)
-{
-    const size_t i=(size_t)blockIdx.x*blockDim.x+threadIdx.x;
-    if(i<count)s2g_mont_mul<NW>(h+i*nw,h+i*nw,factor_mont,n,ninv,nw);
-}
+
 
 template<int NW>
 static void s2g_launch_plain_scale(int nw,size_t count,unsigned long long *h,
     const unsigned long long *factor,const unsigned long long *n,unsigned long long ninv)
 {
-    s2g_plain_scale_kernel<NW><<<(unsigned)((count+127)/128),128>>>(h,count,factor,n,ninv,nw);
+    ecm_launch_s2g_plain_scale_kernel<NW>(EcmCudaLaunch{(unsigned)((count+127)/128),128}, h,count,factor,n,ninv,nw);
 }
 
 struct PlainScaleStats {

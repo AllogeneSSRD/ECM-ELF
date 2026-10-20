@@ -391,8 +391,8 @@ NTT 参数表发布时按共享行规则 `(length,batch,tile)` 数值稳定升�
 
 - [ecm_stage2_tune.cuh:91](../../src/cuda/ecm_stage2_tune.cuh#L91)：基准载荷；[计时与核验:119](../../src/cuda/ecm_stage2_tune.cuh#L119)：两个正向、一个逆向与GPU事件；[字段输出:141](../../src/cuda/ecm_stage2_tune.cuh#L141)。
 - [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h)：`validate_ntt_summary`、`strip_ntt_auxiliary_timing`、`Profile::update_ntt/load/serialize`，摘要检查、时间字段剔除及参数表发布。
-- [ntt_runtime.cuh:1418](../../src/cuda/stage2/ntt_runtime.cuh#L1418)：外层级数规划；[形状选择:1488](../../src/cuda/stage2/ntt_runtime.cuh#L1488)；[正向与逆向:1678](../../src/cuda/stage2/ntt_runtime.cuh#L1678)；[packing:3224](../../src/cuda/stage2/ntt_runtime.cuh#L3224)。
-- [ntt_coop_outer.cuh:15](../../src/cuda/stage2/ntt_coop_outer.cuh#L15)：block协作外层内核。
+- [runtime.cpp](../../src/cuda/ntt/runtime.cpp)：`fuse_plan_stages`、`fuse_describe`、正向/逆向执行与 `ntt_pack_operand`；[shape.cpp](../../src/cuda/ntt/shape.cpp)：形状选择及精确性约束。
+- [outer_coop.cuh](../../kernels/cuda/ntt/outer_coop.cuh)：block 协作外层内核；[NTT 模块入口](NTT.md#代码入口与依据)。
 - [ecm_stage2_portable_model.h:130](../../src/core/ecm_stage2_portable_model.h#L130)：NTT成本查询/外推；[工作量:28](../../src/core/ecm_stage2_portable_model.h#L28)；[非负拟合:194](../../src/core/ecm_stage2_portable_model.h#L194)；[阶段估算:236](../../src/core/ecm_stage2_portable_model.h#L236)。
 
 ## 汇集预计算结果

@@ -264,7 +264,10 @@ if(ECM_ENABLE_CUDA)
         add_executable(ecm_cuda_stage2
             ${ECM_STAGE2_PRODUCTION_SOURCES}
             ${ECM_STAGE2_HOST_SOURCES})
-        target_include_directories(ecm_cuda_stage2 PRIVATE ${GMP_INCLUDE_DIR})
+        target_include_directories(ecm_cuda_stage2 PRIVATE
+            ${GMP_INCLUDE_DIR}
+            ${CMAKE_SOURCE_DIR}/include
+            "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}>")
         target_compile_definitions(ecm_cuda_stage2 PRIVATE NTT_GL_FIXED_MODE=3 NTT_OUTER_UNROLL_U=0 NTT_GL_ADD_SUB_MASK=1)
         target_link_libraries(ecm_cuda_stage2 PRIVATE ${GMP_LIBRARY})
         set_target_properties(ecm_cuda_stage2 PROPERTIES

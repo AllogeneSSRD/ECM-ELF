@@ -1,6 +1,6 @@
 #define NTT_POLY_PROBE_NO_MAIN
 #include "../../src/core/ecm_stage2_logging.h"
-#include "../../src/cuda/stage2/ntt_runtime.cuh"
+#include "../../src/cuda/ntt/runtime.h"
 
 using Word=unsigned long long;
 __global__ void graph_corrupt(Word *digits){if(threadIdx.x==0 && blockIdx.x==0)digits[0]^=1;}

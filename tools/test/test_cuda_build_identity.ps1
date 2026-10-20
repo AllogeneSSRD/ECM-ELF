@@ -156,7 +156,19 @@ $state=Get-EcmCompileState $Repo $entry
     Check ([IO.File]::ReadAllText($fingerprintPath) -eq $current.fingerprint) 'same content fingerprint across PowerShell runtimes'
 }
 $inventory = Get-EcmCudaInventory $repo (Join-Path $out 'cuda_sources.json')
-Check (@($inventory.groups.STAGE2_PRODUCTION).Count -eq 1 -and @($inventory.groups.STAGE2_DEVELOPMENT).Count -eq 1) 'production and development source groups separate'
+$ntt=@('src/cuda/ntt/shape.cpp','src/cuda/ntt/runtime.cpp','src/cuda/ntt/graph.cpp','src/cuda/ntt/checks.cpp','kernels/cuda/ntt/transform_kernels.cu')
+Check (@($inventory.groups.STAGE2_NTT).Count -eq 5 -and
+    @(Compare-Object ($inventory.groups.STAGE2_NTT|Sort-Object) ($ntt|Sort-Object)).Count -eq 0 -and
+    @($inventory.groups.STAGE2_ARITHMETIC).Count -eq 1 -and
+    $inventory.groups.STAGE2_ARITHMETIC[0] -eq 'kernels/cuda/stage2/arithmetic_kernels.cu') 'Stage2 arithmetic and NTT module membership'
+$expectedProduction=@('src/cuda/ecm_cuda_stage2.cu')+@($inventory.groups.STAGE2_ARITHMETIC)+@($inventory.groups.STAGE2_NTT)
+$expectedProduction=@($expectedProduction|Where-Object {$_})
+$production=@($inventory.groups.STAGE2_PRODUCTION)
+Check ($production.Count -eq $expectedProduction.Count -and
+    @(Compare-Object ($production|Sort-Object) ($expectedProduction|Sort-Object)).Count -eq 0 -and
+    @($inventory.groups.STAGE2_DEVELOPMENT).Count -eq 1 -and
+    $inventory.groups.STAGE2_DEVELOPMENT[0] -eq 'tools/bench/ecm_cuda_stage2_dev.cu' -and
+    @($production|Where-Object {$_ -like 'tools/*'}).Count -eq 0) 'production and development source groups separate'
 $set = Get-EcmStage2SourceSet $repo $inventory production @('include','src/core','kernels/cuda')
 Check (-not @($set.Dependencies | Where-Object { $_ -match '^tools/(bench|experiments)/' }).Count) 'actual production Stage2 source closure isolated'
 Check (@($set.Dependencies | Where-Object { $_ -like '*.def' }).Count -ge 2) 'Stage2 definition tables present in source identity'

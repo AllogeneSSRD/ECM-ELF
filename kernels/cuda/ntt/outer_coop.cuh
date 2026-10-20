@@ -88,22 +88,9 @@ void outer_coop_kernel(unsigned long long *a, unsigned long long n, int stage,
     for(int r=row;r<R;r+=ROWS)a[(unsigned long long)r*S]=x[r*V+v];
 }
 
-template <bool INVERSE>
-static void launch_outer_coop(int m,unsigned long long *a,unsigned long long n,int stage,
-                              const unsigned long long *coarse,const unsigned long long *radix,
-                              unsigned long long nbatch,unsigned long long stride,cudaStream_t stream=0)
-{
-    const auto S=INVERSE ? (1ull<<stage) : (n>>(stage+m));
-    const int v=m==8 ? 16 : 32;
-    if(m<5 || m>8 || S<(unsigned long long)v) {
-        std::fprintf(stderr,NTT_PROBE_NAME ": invalid cooperative outer M=%d S=%llu\n",m,S);
-        std::exit(3);
-    }
-    dim3 grid((unsigned int)(n/((1ull<<m)*v)),(unsigned int)nbatch);
-    switch(m) {
-    case 5:outer_coop_kernel<5,INVERSE><<<grid,256,0,stream>>>(a,n,stage,coarse,radix,stride);break;
-    case 6:outer_coop_kernel<6,INVERSE><<<grid,256,0,stream>>>(a,n,stage,coarse,radix,stride);break;
-    case 7:outer_coop_kernel<7,INVERSE><<<grid,256,0,stream>>>(a,n,stage,coarse,radix,stride);break;
-    case 8:outer_coop_kernel<8,INVERSE><<<grid,256,0,stream>>>(a,n,stage,coarse,radix,stride);break;
-    }
+
+
+template<int M,bool INVERSE>
+void ecm_launch_outer_coop_kernel(EcmCudaLaunch cfg, unsigned long long *a, unsigned long long n, int stage, const unsigned long long *coarse, const unsigned long long *radix, unsigned long long stride) {
+    outer_coop_kernel<M,INVERSE><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(a,n,stage,coarse,radix,stride);
 }

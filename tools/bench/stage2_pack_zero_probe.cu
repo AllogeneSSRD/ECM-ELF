@@ -1,6 +1,7 @@
 // Production input pack/zero study. GMP oracle does not use device indexing.
 #include "../../src/core/ecm_stage2_logging.h"
-#include "../../src/cuda/stage2/ntt_runtime.cuh"
+#include "../../src/cuda/ntt/runtime.h"
+#include "../../kernels/cuda/stage2/pack.cuh"
 #include "../../src/cuda/stage2/s4_input_pack.cuh"
 #include <cuda_profiler_api.h>
 using Word=unsigned long long;

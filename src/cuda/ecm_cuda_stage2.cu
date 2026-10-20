@@ -61,10 +61,14 @@ struct ProductionDefaults {
 } production_defaults;
 }
 
-#include "stage2/device_memory_ledger.cuh"
+#include "common/device_memory_ledger.h"
 #include "stage2/giant_chunk_plan.cuh"
-#include "stage2/ntt_runtime.cuh"
+#include "ntt/runtime.h"
+#include "ecm/cuda/stage2_launch.h"
+#include "../../kernels/cuda/shared/stage2_scalar.cuh"
+
 #include "../core/ecm_stage2_geometry.h"
+static_assert(ecm_stage2_capacity_max==ecm_stage2::max_words,"Stage2 capacity boundary");
 #include "../core/ecm_stage2_requests.h"
 #include "../core/ecm_stage2_ntt_memory.h"
 #include "../core/ecm_stage2_giant_memory.h"
@@ -586,330 +590,56 @@ static void gfinv_segprod_host(std::vector<unsigned long long> &out, size_t npts
  * ===================================================================================== */
 
 /* (hi, lo) = x*y + z + c, exactly */
-__device__ __forceinline__ void s2g_mac(unsigned long long x, unsigned long long y,
-                                        unsigned long long z, unsigned long long c,
-                                        unsigned long long &lo, unsigned long long &hi)
-{
-    const unsigned long long p0 = x * y;
-    const unsigned long long p1 = __umul64hi(x, y);
-    unsigned long long s = p0 + z;
-    unsigned long long k = (s < p0) ? 1ull : 0ull;
-    s += c;
-    k += (s < c) ? 1ull : 0ull;
-    lo = s;
-    hi = p1 + k;
-}
+
 
 /* r = (r - N) mod 2^(64*nw); returns the borrow */
-__device__ __forceinline__ unsigned long long s2g_sub_n(unsigned long long *r,
-                                                        const unsigned long long *n, int nw)
-{
-    unsigned long long borrow = 0;
-    for (int i = 0; i < nw; ++i) {
-        const unsigned long long d = r[i] - n[i];
-        const unsigned long long b1 = (r[i] < n[i]) ? 1ull : 0ull;
-        const unsigned long long d2 = d - borrow;
-        const unsigned long long b2 = (d < borrow) ? 1ull : 0ull;
-        r[i] = d2;
-        borrow = b1 + b2;
-    }
-    return borrow;
-}
 
-__device__ __forceinline__ bool s2g_ge_n(const unsigned long long *a,
-                                         const unsigned long long *n, int nw)
-{
-    for (int i = nw - 1; i >= 0; --i)
-        if (a[i] != n[i]) return a[i] > n[i];
-    return true;                                          /* equal counts as >= */
-}
+
+
 
 /* r = a + b mod N  (a, b < N) */
-template <int NW>
-__device__ __forceinline__ void s2g_addmod(unsigned long long *r, const unsigned long long *a,
-                                           const unsigned long long *b,
-                                           const unsigned long long *n, int nw)
-{
-    unsigned long long c = 0;
-    for (int i = 0; i < nw; ++i) {
-        const unsigned long long s1 = a[i] + b[i];
-        const unsigned long long c1 = (s1 < a[i]) ? 1ull : 0ull;
-        const unsigned long long s2 = s1 + c;
-        const unsigned long long c2 = (s2 < c) ? 1ull : 0ull;
-        r[i] = s2;
-        c = c1 + c2;
-    }
-    if (c != 0 || s2g_ge_n(r, n, nw)) s2g_sub_n(r, n, nw);   /* a+b < 2N: one subtraction */
-}
+
 
 /* r = a - b mod N  (a, b < N) */
-template <int NW>
-__device__ __forceinline__ void s2g_submod(unsigned long long *r, const unsigned long long *a,
-                                           const unsigned long long *b,
-                                           const unsigned long long *n, int nw)
-{
-    unsigned long long borrow = 0;
-    for (int i = 0; i < nw; ++i) {
-        const unsigned long long d = a[i] - b[i];
-        const unsigned long long b1 = (a[i] < b[i]) ? 1ull : 0ull;
-        const unsigned long long d2 = d - borrow;
-        const unsigned long long b2 = (d < borrow) ? 1ull : 0ull;
-        r[i] = d2;
-        borrow = b1 + b2;
-    }
-    if (borrow) {
-        unsigned long long c = 0;
-        for (int i = 0; i < nw; ++i) {
-            const unsigned long long s1 = r[i] + n[i];
-            const unsigned long long c1 = (s1 < r[i]) ? 1ull : 0ull;
-            const unsigned long long s2 = s1 + c;
-            const unsigned long long c2 = (s2 < c) ? 1ull : 0ull;
-            r[i] = s2;
-            c = c1 + c2;
-        }
-    }
-}
+
 
 /* One symbol makes the indexed divisor the first field, independently of the
    compiler's ordering of separate constant symbols. The point flag is updated
    separately; normalized-divisor uploads must never overwrite it. */
-struct S2GDeviceConstants {
-    unsigned long long divisor[ecm_stage2::max_words];
-    int point_mersenne_bits;
-};
-static_assert(offsetof(S2GDeviceConstants, divisor)==0, "divisor must lead constant storage");
-__device__ __constant__ S2GDeviceConstants g_s2g_device_constants={};
-#include "stage2/stage2_point_mersenne.cuh"
+
 
 /* r = a*b*R^-1 mod N, R = 2^(64*nw), a,b < N.  Schoolbook product + Montgomery reduction
    (SOS/REDC).  The result is < 2N, so ONE conditional subtraction of N finishes it.
    ninv = -N^-1 mod 2^64 (N odd).  Checked against GMP for every shape at startup. */
-template <int NW>
-__device__ __forceinline__ void s2g_mont_mul(unsigned long long *r,
-                                             const unsigned long long *a,
-                                             const unsigned long long *b,
-                                             const unsigned long long *n,
-                                             unsigned long long ninv, int nw)
-{
-    unsigned long long t[2 * NW + 2];
-    for (int i = 0; i < 2 * nw + 2; ++i) t[i] = 0;
-    for (int i = 0; i < nw; ++i) {
-        unsigned long long c = 0;
-        const unsigned long long bi = b[i];
-        for (int j = 0; j < nw; ++j) {
-            unsigned long long lo, hi;
-            s2g_mac(a[j], bi, t[i + j], c, lo, hi);
-            t[i + j] = lo;
-            c = hi;
-        }
-        t[i + nw] = c;                 /* untouched before this iteration (SOS invariant) */
-    }
-    unsigned long long out[NW];
-    const int mersenne_bits=g_s2g_device_constants.point_mersenne_bits;
-    if(mersenne_bits){s2g_mersenne_mont_reduce<NW>(r,t,n,nw,mersenne_bits,out);return;}
-    for (int i = 0; i < nw; ++i) {
-        const unsigned long long m = t[i] * ninv;
-        unsigned long long c = 0;
-        for (int j = 0; j < nw; ++j) {
-            unsigned long long lo, hi;
-            s2g_mac(m, n[j], t[i + j], c, lo, hi);
-            t[i + j] = lo;
-            c = hi;
-        }
-        int k = i + nw;
-        while (c != 0) {
-            const unsigned long long s = t[k] + c;
-            c = (s < c) ? 1ull : 0ull;
-            t[k] = s;
-            ++k;
-        }
-    }
-    for (int i = 0; i < nw; ++i) out[i] = t[nw + i];
-    if (t[2 * nw] != 0 || s2g_ge_n(out, n, nw)) s2g_sub_n(out, n, nw);
-    for (int i = 0; i < nw; ++i) r[i] = out[i];
-}
+
 
 /* r = 2p: the reference's xdbl, in Montgomery images */
-template <int NW>
-__device__ __forceinline__ void s2g_xdbl(unsigned long long *rx, unsigned long long *rz,
-                                         const unsigned long long *px, const unsigned long long *pz,
-                                         const unsigned long long *a24, const unsigned long long *n,
-                                         unsigned long long ninv, int nw)
-{
-    unsigned long long t1[NW], t2[NW], t3[NW], t4[NW];
-    s2g_addmod<NW>(t1, px, pz, n, nw);
-    s2g_submod<NW>(t2, px, pz, n, nw);
-    s2g_mont_mul<NW>(t3, t1, t1, n, ninv, nw);            /* (X+Z)^2 */
-    s2g_mont_mul<NW>(t4, t2, t2, n, ninv, nw);            /* (X-Z)^2 */
-    s2g_mont_mul<NW>(rx, t3, t4, n, ninv, nw);            /* X2 = (X+Z)^2 (X-Z)^2 */
-    s2g_submod<NW>(t1, t3, t4, n, nw);                    /* 4XZ */
-    s2g_mont_mul<NW>(t2, a24, t1, n, ninv, nw);
-    s2g_addmod<NW>(t2, t2, t4, n, nw);                    /* a24*4XZ + (X-Z)^2 */
-    s2g_mont_mul<NW>(rz, t1, t2, n, ninv, nw);
-}
+
 
 /* r = a/2 mod odd N, canonical a<N. Add N when odd BEFORE shifting;
    the carry out of the top limb belongs to the (nw+1)-limb sum, even when N
    almost fills the radix. Linear in the Montgomery image too. In-place safe. */
-template <int NW>
-__device__ __forceinline__ void s2g_halfmod(unsigned long long *r,
-                                            const unsigned long long *a,
-                                            const unsigned long long *n, int nw)
-{
-    const bool odd=(a[0]&1ull)!=0;
-    unsigned long long carry=0;
-    for(int i=0;i<nw;++i) {
-        const auto v=a[i], add=odd ? n[i] : 0ull;
-        const auto s=v+add, c1=(s<v) ? 1ull : 0ull;
-        const auto u=s+carry, c2=(u<s) ? 1ull : 0ull;
-        r[i]=u; carry=c1+c2;
-    }
-    for(int i=nw-1;i>=0;--i) {
-        const auto v=r[i];
-        r[i]=(v>>1)|(carry<<63); carry=v&1ull;
-    }
-}
+
 
 /* r = p + q with diff = p - q: the reference's xadd, in Montgomery images.
    The output is written only at the end, so the ladder may alias it with p and q (the
    reference documents exactly this trap: writing r.X early corrupted Z3). */
-template <int NW, bool XADD6=false>
-__device__ __forceinline__ void s2g_xadd(unsigned long long *rx, unsigned long long *rz,
-                                         const unsigned long long *px, const unsigned long long *pz,
-                                         const unsigned long long *qx, const unsigned long long *qz,
-                                         const unsigned long long *dx, const unsigned long long *dz,
-                                         const unsigned long long *n, unsigned long long ninv,
-                                         int nw)
-{
-    unsigned long long a[NW], b[NW], tx[NW], tz[NW];
-    if(XADD6) {
-        // u=(Xp+Zp)*(Xq-Zq), v=(Xp-Zp)*(Xq+Zq), all in Montgomery images.
-        s2g_addmod<NW>(a,px,pz,n,nw); s2g_submod<NW>(b,px,pz,n,nw);
-        s2g_addmod<NW>(tx,qx,qz,n,nw); s2g_submod<NW>(tz,qx,qz,n,nw);
-        s2g_mont_mul<NW>(a,a,tz,n,ninv,nw);
-        s2g_mont_mul<NW>(b,b,tx,n,ninv,nw);
-        s2g_addmod<NW>(tx,a,b,n,nw); s2g_submod<NW>(tz,a,b,n,nw);
-        // Halves recover the old coordinate scale exactly; the Z sign is squared.
-        s2g_halfmod<NW>(tx,tx,n,nw); s2g_halfmod<NW>(tz,tz,n,nw);
-        s2g_mont_mul<NW>(tx,tx,tx,n,ninv,nw);
-        s2g_mont_mul<NW>(tz,tz,tz,n,ninv,nw);
-        s2g_mont_mul<NW>(a,dz,tx,n,ninv,nw);
-        s2g_mont_mul<NW>(b,dx,tz,n,ninv,nw);
-        // Delay both writes, including when the output aliases the difference.
-        for(int i=0;i<nw;++i) {rx[i]=a[i];rz[i]=b[i];}
-        return;
-    }
-    s2g_mont_mul<NW>(a, px, qx, n, ninv, nw);
-    s2g_mont_mul<NW>(b, pz, qz, n, ninv, nw);
-    s2g_submod<NW>(a, a, b, n, nw);                /* X_P X_Q - Z_P Z_Q */
-    s2g_mont_mul<NW>(a, a, a, n, ninv, nw);
-    s2g_mont_mul<NW>(tx, dz, a, n, ninv, nw);
-    s2g_mont_mul<NW>(a, px, qz, n, ninv, nw);
-    s2g_mont_mul<NW>(b, pz, qx, n, ninv, nw);
-    s2g_submod<NW>(a, a, b, n, nw);                /* X_P Z_Q - Z_P X_Q */
-    s2g_mont_mul<NW>(a, a, a, n, ninv, nw);
-    s2g_mont_mul<NW>(tz, dx, a, n, ninv, nw);
-    for (int i = 0; i < nw; ++i) { rx[i] = tx[i]; rz[i] = tz[i]; }
-}
+
 
 /* the reference's ladder(): MSB first, the difference point is p itself */
-template <int NW, bool XADD6=false>
-__device__ void s2g_ladder(unsigned long long k, const unsigned long long *px,
-                           const unsigned long long *pz, const unsigned long long *a24,
-                           const unsigned long long *n, unsigned long long ninv, int nw,
-                           const unsigned long long *mone,          /* Montgomery image of 1 */
-                           unsigned long long *rx, unsigned long long *rz)
-{
-    if (k == 0) {                                              /* identity (1 : 0) */
-        for (int i = 0; i < nw; ++i) { rx[i] = mone[i]; rz[i] = 0; }
-        return;                                                /* affine_x then gives 0 */
-    }
-    int top = 63;
-    while (((k >> top) & 1ull) == 0) --top;
-    unsigned long long r0x[NW], r0z[NW], r1x[NW], r1z[NW];
-    for (int i = 0; i < nw; ++i) { r0x[i] = px[i]; r0z[i] = pz[i]; }
-    s2g_xdbl<NW>(r1x, r1z, px, pz, a24, n, ninv, nw);
-    for (int i = top - 1; i >= 0; --i) {
-        if (((k >> i) & 1ull) != 0) {
-            s2g_xadd<NW,XADD6>(r0x, r0z, r0x, r0z, r1x, r1z, px, pz, n, ninv, nw);
-            s2g_xdbl<NW>(r1x, r1z, r1x, r1z, a24, n, ninv, nw);
-        } else {
-            s2g_xadd<NW,XADD6>(r1x, r1z, r0x, r0z, r1x, r1z, px, pz, n, ninv, nw);
-            s2g_xdbl<NW>(r0x, r0z, r0x, r0z, a24, n, ninv, nw);
-        }
-    }
-    for (int i = 0; i < nw; ++i) { rx[i] = r0x[i]; rz[i] = r0z[i]; }
-}
+
 
 /* one thread per point: (X, Z) = [j]Q, written back in the NORMAL domain so the host sees the
    same pair the CPU ladder produces */
-template <int NW, bool XADD6=false>
-__global__ void s2g_ladder_kernel(const unsigned long long *n, unsigned long long ninv, int nw,
-                                  const unsigned long long *qx, const unsigned long long *qz,
-                                  const unsigned long long *a24, const unsigned long long *mone,
-                                  const unsigned long long *js, int npts,
-                                  unsigned long long *out_x, unsigned long long *out_z, bool normal_output)
-{
-    const int t = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= npts) return;
-    unsigned long long rx[NW], rz[NW], one[NW], nx[NW], nz[NW];
-    /* GRID-STRIDE: the launcher bounds the number of threads per launch (a ladder is a long
-       serial chain, and a multi-second kernel is killed by the display driver's watchdog), so
-       one launch may have to cover more points than it has threads.  The stride version is the
-       same arithmetic, point by point, with a different work assignment. */
-    for (int i = t; i < npts; i += gridDim.x * blockDim.x) {
-        s2g_ladder<NW,XADD6>(js[i], qx, qz, a24, n, ninv, nw, mone, rx, rz);
-        if(normal_output) {
-            for (int j = 0; j < NW; ++j) one[j] = 0;
-            one[0] = 1;
-            s2g_mont_mul<NW>(nx, rx, one, n, ninv, nw);
-            s2g_mont_mul<NW>(nz, rz, one, n, ninv, nw);
-        }
-        for (int j = 0; j < nw; ++j) {
-            out_x[(size_t)i * nw + j] = normal_output ? nx[j] : rx[j];
-            out_z[(size_t)i * nw + j] = normal_output ? nz[j] : rz[j];
-        }
-    }
-}
+
 
 /* device mod-N arithmetic selftest: out[i] = a[i]*b[i]*R^-1 mod N, compared with GMP */
-template <int NW>
-__global__ void s2g_mont_test_kernel(const unsigned long long *a, const unsigned long long *b,
-                                     const unsigned long long *n, unsigned long long ninv,
-                                     int nw, int cases, unsigned long long *out)
-{
-    const int t = blockIdx.x * blockDim.x + threadIdx.x;
-    if (t >= cases) return;
-    unsigned long long r[NW];
-    /* the caller's arrays are packed with stride nw (not NW: NW is only the template's
-       upper bound, chosen from the word-count dispatch) */
-    s2g_mont_mul<NW>(r, a + (size_t)t * nw, b + (size_t)t * nw, n, ninv, nw);
-    for (int i = 0; i < nw; ++i) out[(size_t)t * nw + i] = r[i];
-}
+
 
 /* Optional algebra gate: arbitrary canonical coordinates, including nonunits and
    zero Z, and independent p/q/difference/cross-output aliases. Both template variants
    are checked against GMP's old polynomial coordinates, without projective division. */
-template <int NW, bool XADD6>
-__global__ void s2g_xadd_test_kernel(const unsigned long long *input,
-                                     const unsigned long long *n, unsigned long long ninv,
-                                     int nw,int cases,unsigned long long *output)
-{
-    const int t=blockIdx.x*blockDim.x+threadIdx.x;
-    if(t>=cases*5) return;
-    const int c=t/5, alias=t%5;
-    const auto *s=input+(size_t)c*6*nw;
-    unsigned long long px[NW],pz[NW],qx[NW],qz[NW],dx[NW],dz[NW],tx[NW],tz[NW];
-    for(int i=0;i<nw;++i) {px[i]=s[i];pz[i]=s[nw+i];qx[i]=s[2*nw+i];
-                          qz[i]=s[3*nw+i];dx[i]=s[4*nw+i];dz[i]=s[5*nw+i];}
-    auto *rx=alias==1 || alias==4 ? px : alias==2 ? qx : alias==3 ? dx : tx;
-    auto *rz=alias==1 ? pz : alias==2 || alias==4 ? qz : alias==3 ? dz : tz;
-    s2g_xadd<NW,XADD6>(rx,rz,px,pz,qx,qz,dx,dz,n,ninv,nw);
-    auto *out=output+(size_t)t*3*nw;
-    for(int i=0;i<nw;++i) {out[i]=rx[i];out[nw+i]=rz[i];}
-    // Out-of-place here; candidate xADD also exercises in-place modular halves.
-    s2g_halfmod<NW>(out+2*nw,s,n,nw);
-}
+
 
 #include "../../include/ecm/cuda/tiers.def"
 #define ECM_S2G_CAPACITY_ROW(NW,FN,...) if (_nwd <= NW) { FN<NW>(__VA_ARGS__); } else
@@ -933,7 +663,7 @@ static void s2g_launch_mont_test(int nw, int cases, const unsigned long long *da
 {
     const unsigned int th = 128;
     const unsigned int bl = (unsigned int)((cases + th - 1) / th);
-    s2g_mont_test_kernel<NW><<<bl, th>>>(da, db, dn, ninv, nw, cases, dout);
+    ecm_launch_s2g_mont_test_kernel<NW>(EcmCudaLaunch{bl, th}, da, db, dn, ninv, nw, cases, dout);
 }
 
 template <int NW>
@@ -942,8 +672,8 @@ static void s2g_launch_xadd_test(int nw,int cases,const unsigned long long *in,
                                  unsigned long long *out,bool candidate)
 {
     const unsigned int th=64,bl=(cases*5+th-1)/th;
-    if(candidate) s2g_xadd_test_kernel<NW,true><<<bl,th>>>(in,n,ninv,nw,cases,out);
-    else s2g_xadd_test_kernel<NW,false><<<bl,th>>>(in,n,ninv,nw,cases,out);
+    if(candidate) ecm_launch_s2g_xadd_test_kernel<NW,true>(EcmCudaLaunch{bl,th}, in,n,ninv,nw,cases,out);
+    else ecm_launch_s2g_xadd_test_kernel<NW,false>(EcmCudaLaunch{bl,th}, in,n,ninv,nw,cases,out);
 }
 
 /* ONE ladder launch must stay SHORT.  A ladder is a serial 5261-bit chain (~2*S steps), so on
@@ -987,9 +717,9 @@ static void s2g_launch_ladder(int nw, int npts, const unsigned long long *dn,
         const int m = ((npts - p0) < g_ladder_cap) ? (npts - p0) : g_ladder_cap;
         const unsigned int bl = (unsigned int)((m + th - 1) / th);
         if constexpr(g_xadd6)
-            s2g_ladder_kernel<NW,true><<<bl,th>>>(dn,ninv,nw,dqx,dqz,da24,dmone,djs+p0,m,
+            ecm_launch_s2g_ladder_kernel<NW,true>(EcmCudaLaunch{bl,th}, dn,ninv,nw,dqx,dqz,da24,dmone,djs+p0,m,
                                                 dx+(size_t)p0*nw,dz+(size_t)p0*nw,normal_output);
-        else s2g_ladder_kernel<NW><<<bl, th>>>(dn, ninv, nw, dqx, dqz, da24, dmone, djs + p0, m,
+        else ecm_launch_s2g_ladder_kernel<NW>(EcmCudaLaunch{bl, th}, dn, ninv, nw, dqx, dqz, da24, dmone, djs + p0, m,
                                           dx + (size_t)p0 * nw, dz + (size_t)p0 * nw, normal_output);
     }
 }
@@ -997,43 +727,7 @@ static void s2g_launch_ladder(int nw, int npts, const unsigned long long *dn,
 /* H=[D]Q is already a Montgomery pair. A ladder on H ends with the two
    adjacent points [i]H and [i+1]H; retain both instead of running it twice.
    This deliberately leaves the original ladder/kernel unchanged for A/B. */
-template <int NW, bool XADD6>
-__global__ void s2g_seed_pair_kernel(const unsigned long long *n,unsigned long long ninv,int nw,
-                                    const unsigned long long *hx,const unsigned long long *hz,
-                                    const unsigned long long *a24,const unsigned long long *mone,
-                                    unsigned long long clo,unsigned long long npts,
-                                    unsigned long long per_block,unsigned long long blocks,
-                                    unsigned long long offset,unsigned long long count,
-                                    unsigned long long *ox,unsigned long long *oz)
-{
-    const unsigned long long local=blockIdx.x*(unsigned long long)blockDim.x+threadIdx.x;
-    if(local>=count)return;
-    const unsigned long long b=offset+local,k=clo+b*per_block;
-    unsigned long long ax[NW],az[NW],bx[NW],bz[NW];
-    if(k==0) {
-        for(int j=0;j<nw;++j){ax[j]=mone[j];az[j]=0;bx[j]=hx[j];bz[j]=hz[j];}
-    } else {
-        int top=63;while(((k>>top)&1ull)==0)--top;
-        for(int j=0;j<nw;++j){ax[j]=hx[j];az[j]=hz[j];}
-        s2g_xdbl<NW>(bx,bz,hx,hz,a24,n,ninv,nw);
-        for(int bit=top-1;bit>=0;--bit) {
-            if((k>>bit)&1ull) {
-                s2g_xadd<NW,XADD6>(ax,az,ax,az,bx,bz,hx,hz,n,ninv,nw);
-                s2g_xdbl<NW>(bx,bz,bx,bz,a24,n,ninv,nw);
-            } else {
-                s2g_xadd<NW,XADD6>(bx,bz,ax,az,bx,bz,hx,hz,n,ninv,nw);
-                s2g_xdbl<NW>(ax,az,ax,az,a24,n,ninv,nw);
-            }
-        }
-    }
-    const bool single=b*per_block+1>=npts;
-    for(int j=0;j<nw;++j) {
-        ox[(size_t)(2*b)*nw+j]=ax[j];oz[(size_t)(2*b)*nw+j]=az[j];
-        ox[(size_t)(2*b+1)*nw+j]=single?ax[j]:bx[j];
-        oz[(size_t)(2*b+1)*nw+j]=single?az[j]:bz[j];
-        if(b==0){ox[(size_t)(2*blocks)*nw+j]=hx[j];oz[(size_t)(2*blocks)*nw+j]=hz[j];}
-    }
-}
+
 
 template <int NW>
 static void s2g_launch_seed_pair(int nw,unsigned long long clo,unsigned long long npts,
@@ -1046,9 +740,9 @@ static void s2g_launch_seed_pair(int nw,unsigned long long clo,unsigned long lon
     for(unsigned long long offset=0;offset<blocks;offset+=g_ladder_cap) {
         const unsigned long long count=std::min(blocks-offset,(unsigned long long)g_ladder_cap);
         const unsigned int th=nw>128?32:64,bl=(unsigned int)((count+th-1)/th);
-        if constexpr(g_xadd6)s2g_seed_pair_kernel<NW,true><<<bl,th>>>(dn,ninv,nw,hx,hz,a24,mone,
+        if constexpr(g_xadd6)ecm_launch_s2g_seed_pair_kernel<NW,true>(EcmCudaLaunch{bl,th}, dn,ninv,nw,hx,hz,a24,mone,
             clo,npts,per_block,blocks,offset,count,ox,oz);
-        else s2g_seed_pair_kernel<NW,false><<<bl,th>>>(dn,ninv,nw,hx,hz,a24,mone,
+        else ecm_launch_s2g_seed_pair_kernel<NW,false>(EcmCudaLaunch{bl,th}, dn,ninv,nw,hx,hz,a24,mone,
             clo,npts,per_block,blocks,offset,count,ox,oz);
     }
 }
@@ -1069,7 +763,7 @@ static void s2g_launch_seed_pair(int nw,unsigned long long clo,unsigned long lon
  *  Montgomery domain -- the only consumer is the host's affine_x = X/Z mod N, which is invariant
  *  under projective scaling, so no inversion and no conversion is needed.
  * ===================================================================================== */
-#include "../../kernels/cuda/stage2_giant_chain.cuh"
+
 
 template <int NW>
 static void s2g_launch_chain(int nw, unsigned long long blocks, unsigned long long npts,
@@ -1083,9 +777,9 @@ static void s2g_launch_chain(int nw, unsigned long long blocks, unsigned long lo
     const unsigned int th = nw>128?32:64;
     const unsigned int bl = (unsigned int)((blocks + th - 1) / th);
     if constexpr(g_xadd6)
-        s2g_chain_kernel<NW,true><<<bl,th>>>(dn,ninv,nw,ddx,ddz,dsx,dsz,esx,esz,npts,per_block,
+        ecm_launch_s2g_chain_kernel<NW,true>(EcmCudaLaunch{bl,th}, dn,ninv,nw,ddx,ddz,dsx,dsz,esx,esz,npts,per_block,
                                            blocks,ox,oz,seed_stride);
-    else s2g_chain_kernel<NW><<<bl, th>>>(dn, ninv, nw, ddx, ddz, dsx, dsz, esx, esz, npts, per_block,
+    else ecm_launch_s2g_chain_kernel<NW>(EcmCudaLaunch{bl, th}, dn, ninv, nw, ddx, ddz, dsx, dsz, esx, esz, npts, per_block,
                                     blocks, ox, oz, seed_stride);
 }
 
@@ -1102,30 +796,7 @@ static void s2g_launch_chain(int nw, unsigned long long blocks, unsigned long lo
  *  inversion per point.  See the note at the leaf loop for why the two forms may be MIXED and
  *  why the tree is then bit-identical to the old one after one global scaling.
  * ===================================================================================== */
-template <int NW>
-__global__ void s2g_segprod_kernel(const unsigned long long *dn, unsigned long long ninv, int nw,
-                                   const unsigned long long *dz, unsigned long long npts,
-                                   unsigned long long seg, unsigned long long nseg,
-                                   unsigned long long *out, const unsigned long long *fix)
-{
-    const unsigned long long s = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
-    if (s >= nseg) return;
-    const unsigned long long start = s * seg;
-    if (start >= npts) return;
-    const unsigned long long end = ((start + seg) < npts) ? (start + seg) : npts;
-    unsigned long long p[NW], tmp[NW];
-    for (int i = 0; i < nw; ++i) p[i] = dz[(size_t)start * nw + i];
-    for (unsigned long long j = start + 1; j < end; ++j) {
-        s2g_mont_mul<NW>(tmp, p, dz + (size_t)j * nw, dn, ninv, nw);
-        for (int i = 0; i < nw; ++i) p[i] = tmp[i];
-    }
-    const size_t m=(size_t)(end-start);
-    if(fix && m>1) {
-        s2g_mont_mul<NW>(tmp,p,fix+m*nw,dn,ninv,nw);
-        for(int i=0;i<nw;++i)p[i]=tmp[i];
-    }
-    for (int i = 0; i < nw; ++i) out[(size_t)s * nw + i] = p[i];
-}
+
 
 template <int NW>
 static void s2g_launch_segprod(int nw, unsigned long long npts, unsigned long long seg,
@@ -1136,24 +807,12 @@ static void s2g_launch_segprod(int nw, unsigned long long npts, unsigned long lo
     const unsigned long long nseg = (npts + seg - 1) / seg;
     const unsigned int th = 64;
     const unsigned int bl = (unsigned int)((nseg + th - 1) / th);
-    s2g_segprod_kernel<NW><<<bl, th>>>(dn, ninv, nw, dz, npts, seg, nseg, out, fix);
+    ecm_launch_s2g_segprod_kernel<NW>(EcmCudaLaunch{bl, th}, dn, ninv, nw, dz, npts, seg, nseg, out, fix);
 }
 
 /* Actual returned X/Z words -> the same projective [-X,Z] linear leaf as the
    CPU path. No domain conversion: Gamma is a product of these exact Z words. */
-__global__ void s2g_projective_leaf_kernel(const unsigned long long *n,int nw,
-    const unsigned long long *x,const unsigned long long *z,size_t first,size_t count,
-    unsigned long long *out)
-{
-    const size_t k=blockIdx.x*(size_t)blockDim.x+threadIdx.x;if(k>=count)return;
-    const auto *xx=x+(first+k)*nw,*zz=z+(first+k)*nw;
-    bool zero=true;for(int j=0;j<nw;++j)if(xx[j])zero=false;
-    unsigned long long borrow=0;
-    for(int j=0;j<nw;++j) {
-        const unsigned long long t=n[j]-xx[j],b1=n[j]<xx[j],v=t-borrow,b2=t<borrow;
-        borrow=b1|b2;out[(2*k)*nw+j]=zero?0:v;out[(2*k+1)*nw+j]=zz[j];
-    }
-}
+
 
 /* ===================================================================================== *
  *  the polynomial layer: PolyN = m*W words, coefficient-major (see the header)
@@ -1996,10 +1655,8 @@ static void s4_dbad_resolve(S4Reduce &R, bool wait = false)
 static std::vector<unsigned long long> g_div_hns;
 static unsigned long long g_div_recip = 0;
 static int g_div_shift = 0, g_div_nw = 0;
-__host__ __device__ __forceinline__ void s2g_mul64(unsigned long long, unsigned long long,
-                                                unsigned long long &, unsigned long long &);
-__host__ __device__ __forceinline__ unsigned long long s2g_udiv_2by1(
-    unsigned long long, unsigned long long, unsigned long long, unsigned long long);
+
+
 
 /* Plain long division of an UNNORMALIZED coefficient by N.  ns = N << shift is normalized,
    and t has two spare high words.  No Montgomery domain enters this path: the result is C mod N.
@@ -2007,117 +1664,20 @@ __host__ __device__ __forceinline__ unsigned long long s2g_udiv_2by1(
    divisor's high bit is set.  Subtract the full product, then add the divisor back on underflow.
    Return the repair count (used by the independent GMP fixtures), or -1 on an invariant failure.
    The host and device execute this same helper, including the 64-bit multiplication primitive. */
-template <int NW>
-__host__ __device__ __forceinline__ int s4_div_rem(unsigned long long *t, int limbs,
-    const unsigned long long *ns, int nw, int shift, unsigned long long recip,
-    unsigned long long *out)
-{
-    for (int i = 0; i < nw; ++i) out[i] = 0;
-    if (shift != 0) {
-        unsigned long long carry = 0;
-        for (int i = 0; i < limbs; ++i) {
-            const unsigned long long v = t[i];
-            t[i] = (v << shift) | carry;
-            carry = v >> (64 - shift);
-        }
-        t[limbs++] = carry;
-    }
-    while (limbs > 0 && t[limbs - 1] == 0) --limbs;
-    t[limbs] = 0;                        /* high sentinel, including the shift == 0 case */
-    int repairs = 0;
-    const unsigned long long top = ns[nw - 1];
-    for (int j = limbs - nw; j >= 0; --j) {
-        const unsigned long long u1 = t[j + nw], u0 = t[j + nw - 1];
-        if (u1 > top) return -1;
-        const unsigned long long q = (u1 == top) ? ~0ull
-                                                  : s2g_udiv_2by1(u1, u0, top, recip);
-        unsigned long long carry = 0;
-        for (int i = 0; i < nw; ++i) {
-            unsigned long long lo, hi;
-            s2g_mul64(q, ns[i], lo, hi);
-            const unsigned long long sub = lo + carry;
-            hi += (sub < lo) ? 1ull : 0ull;
-            const unsigned long long v = t[j + i];
-            t[j + i] = v - sub;
-            carry = hi + ((v < sub) ? 1ull : 0ull);
-        }
-        bool under = t[j + nw] < carry;
-        t[j + nw] -= carry;
-        for (int correction = 0; under && correction < 2; ++correction) {
-            unsigned long long c = 0;
-            for (int i = 0; i < nw; ++i) {
-                const unsigned long long v = t[j + i], sum = v + ns[i];
-                const unsigned long long next = sum + c;
-                c = ((sum < v) || (next < sum)) ? 1ull : 0ull;
-                t[j + i] = next;
-            }
-            const unsigned long long v = t[j + nw];
-            t[j + nw] = v + c;
-            under = (t[j + nw] >= v);    /* wrapping the negative high word ends the borrow */
-            ++repairs;
-        }
-        if (under) return -1;
-    }
-    for (int i = 0; i < nw; ++i)
-        out[i] = (shift == 0) ? t[i]
-            : ((t[i] >> shift) | (i + 1 < nw ? (t[i + 1] << (64 - shift)) : 0ull));
-    return repairs;
-}
+
 
 /* Plain remainder modulo an EXACT Mersenne modulus. Each fold replaces v by
    low_S(v)+high_S(v), congruent because 2^S == 1. Read high words before overwriting
    low words: this is safe even at S<64 (q=0). No Montgomery scaling enters here.
    Input has at least one spare word; trailing words are ignored beyond live. */
-template <int NW>
-__host__ __device__ __forceinline__ int s4_mersenne_rem(unsigned long long *t, int live,
-    int nw, int bits, unsigned long long *out)
-{
-    const int q=bits/64,b=bits%64;
-    const unsigned long long mask=b ? ((1ull<<b)-1) : ~0ull;
-    while(live>0 && t[live-1]==0)--live;
-    int folds=0;
-    while(live>nw || (b && live==nw && (t[nw-1]>>b)!=0)) {
-        const int len=(live-q)>nw ? live-q : nw;
-        unsigned long long carry=0;
-        for(int i=0;i<len;++i) {
-            const int src=i+q;
-            const unsigned long long h0=src<live ? t[src] : 0ull;
-            const unsigned long long h1=(b && src+1<live) ? t[src+1] : 0ull;
-            const unsigned long long hi=b ? ((h0>>b)|(h1<<(64-b))) : h0;
-            const unsigned long long lo=i<nw ? (i==nw-1 ? (t[i]&mask) : t[i]) : 0ull;
-            const unsigned long long sum=lo+hi,next=sum+carry;
-            carry=((sum<lo)||(next<sum)) ? 1ull : 0ull;
-            t[i]=next;
-        }
-        live=len;
-        if(carry)t[live++]=carry;
-        while(live>0 && t[live-1]==0)--live;
-        ++folds;
-    }
-    bool equal=true;
-    for(int i=0;i<nw;++i) {
-        out[i]=i<live ? t[i] : 0ull;
-        if(out[i]!=(i==nw-1 ? mask : ~0ull))equal=false;
-    }
-    if(equal)for(int i=0;i<nw;++i)out[i]=0; // N itself is zero, canonical [0,N)
-    return folds;
-}
+
 
 static const bool g_s4_mersenne=[] {
     const char *e=std::getenv("NTT_S4_MERSENNE");return e && std::atoi(e)!=0;
 }();
 
 /* Gate-only GPU primitive, independently checked against ordinary GMP remainders. */
-template <int NW>
-__global__ void s4_mersenne_fixture_kernel(const unsigned long long *input,int stride,
-    const int *lengths,int cases,int nw,int bits,unsigned long long *out,int *counts)
-{
-    const int k=blockIdx.x*blockDim.x+threadIdx.x;if(k>=cases)return;
-    unsigned long long t[2*NW+4]={},u[NW];
-    for(int i=0;i<lengths[k];++i)t[i]=input[(size_t)k*stride+i];
-    counts[k]=s4_mersenne_rem<NW>(t,lengths[k],nw,bits,u);
-    for(int i=0;i<nw;++i)out[(size_t)k*nw+i]=u[i];
-}
+
 
 static void s4_mersenne_check()
 {
@@ -2152,8 +1712,8 @@ static void s4_mersenne_check()
         CK(cudaMalloc(&dl,ncase*sizeof(int)));CK(cudaMalloc(&dc,ncase*sizeof(int)));
         CK(cudaMemcpy(di,input.data(),input.size()*8,cudaMemcpyHostToDevice));
         CK(cudaMemcpy(dl,lengths.data(),ncase*sizeof(int),cudaMemcpyHostToDevice));
-        if(nw<=128)s4_mersenne_fixture_kernel<128><<<1,64>>>(di,stride,dl,ncase,nw,bits,doo,dc);
-        else s4_mersenne_fixture_kernel<256><<<1,64>>>(di,stride,dl,ncase,nw,bits,doo,dc);
+        if(nw<=128)ecm_launch_s4_mersenne_fixture_kernel<128>(EcmCudaLaunch{1,64}, di,stride,dl,ncase,nw,bits,doo,dc);
+        else ecm_launch_s4_mersenne_fixture_kernel<256>(EcmCudaLaunch{1,64}, di,stride,dl,ncase,nw,bits,doo,dc);
         CK(cudaGetLastError());
         CK(cudaMemcpy(gpu.data(),doo,gpu.size()*8,cudaMemcpyDeviceToHost));
         CK(cudaMemcpy(counts.data(),dc,ncase*sizeof(int),cudaMemcpyDeviceToHost));
@@ -2168,68 +1728,7 @@ static void s4_mersenne_check()
 }
 
 /* base-2^64 limbs of the slot window -> mod N, on the device.  One thread per coefficient. */
-template <int NW, bool MERSENNE=false>
-__global__ void s4_reduce_kernel(const unsigned long long *digits, unsigned long long n,
-                                 int bpw, unsigned long long slot_words,
-                                 unsigned long long out_slots, unsigned long long nbatch,
-                                 const unsigned long long *dn, unsigned long long ninv,
-                                 int nw, int L, const unsigned long long *dy,
-                                 unsigned long long w, unsigned long long *out,
-                                 unsigned long long slot_bits, unsigned long long *bad,
-                                 unsigned long long *s4_dbg, int tail_mont,
-                                 int div_shift, unsigned long long div_recip,
-                                 unsigned long long first, unsigned long long count, int mersenne_bits)
-{
-    const unsigned long long total = out_slots * nbatch;
-    const unsigned long long gid = blockIdx.x * (unsigned long long)blockDim.x + threadIdx.x;
-    if (gid >= total) return;
-    const unsigned long long s = gid / out_slots;
-    const unsigned long long k = gid - s * out_slots;
-    const unsigned long long *d = digits + s * n + k * slot_words;
-    /* SAME source-slot bound assertion, even for omitted coefficients. No NTT truncation.
-       Separate the source index from compact output slice*count+(k-first). */
-    const unsigned long long top_bits=slot_bits-(slot_words-1)*(unsigned long long)bpw;
-    if(top_bits<64 && bad && (d[slot_words-1]>>top_bits)!=0) atomicAdd(bad,1ull);
-    if(k<first || k-first>=count) return;
-    const unsigned long long out_gid=s*count+k-first;
 
-    /* ---- (1) bpw-bit digits -> base-2^64 limbs, least significant first.  acc holds the
-       bits not yet flushed; v << nacc may spill past bit 63, and the spill is recovered as
-       v >> (64-nacc) (nacc is never 0 when the spill happens, because bpw < 64). ------- */
-    unsigned long long t[2 * NW + 4];
-#pragma unroll 1
-    for (int i = 0; i < 2 * NW + 4; ++i) t[i] = 0;
-    {
-        unsigned long long acc = 0;
-        int nacc = 0, limb = 0;
-        for (unsigned long long j = 0; j < slot_words; ++j) {
-            const unsigned long long v = d[j];
-            acc |= v << nacc;
-            if (nacc + bpw >= 64) {
-                t[limb++] = acc;
-                acc = (nacc == 0) ? 0ull : (v >> (64 - nacc));
-                nacc = nacc + bpw - 64;
-            } else {
-                nacc += bpw;
-            }
-        }
-        if (nacc > 0) t[limb++] = acc;
-    }
-    unsigned long long u[NW];
-    if constexpr(MERSENNE) {
-        const int limbs=(int)((slot_words*(unsigned long long)bpw+63)/64);
-        s4_mersenne_rem<NW>(t,limbs,nw,mersenne_bits,u);
-        for(unsigned long long i=0;i<w;++i)out[out_gid*w+i]=i<(unsigned long long)nw ? u[i] : 0ull;
-        return;
-    }
-        const int limbs = (int)((slot_words * (unsigned long long)bpw + 63) / 64);
-        const int rc = s4_div_rem<NW>(t, limbs, g_s2g_device_constants.divisor, nw, div_shift, div_recip, u);
-        if (rc < 0 && bad != nullptr) atomicAdd(bad, 1ull);
-        for (unsigned long long i = 0; i < w; ++i)
-            out[out_gid * w + i] = (i < (unsigned long long)nw) ? u[i] : 0ull;
-        return;
-    
-}
 
 /* (the slot-canonical check is folded into s4_reduce_kernel above: the digits are in registers
    there, and a separate kernel would add one launch and one full read per batched multiply) */
@@ -2252,10 +1751,10 @@ static void s4_launch_reduce(int nw, int L, unsigned long long nbatch,
     const unsigned int th = 128;
     const unsigned int bl = (unsigned int)((total + th - 1) / th);
     if(mersenne_bits && !s4_tail_mont_mode() && s4_dbg==nullptr)
-        s4_reduce_kernel<NW,true><<<bl,th>>>(ddig,n,bpw,slot_words,out_slots,nbatch,dn,ninv,nw,
+        ecm_launch_s4_reduce_kernel<NW,true>(EcmCudaLaunch{bl,th}, ddig,n,bpw,slot_words,out_slots,nbatch,dn,ninv,nw,
             L,dy,w,dout,slot_bits,dbad,s4_dbg,0,g_div_shift,g_div_recip,first,count==~0ull ? out_slots : count,mersenne_bits);
     else
-        s4_reduce_kernel<NW><<<bl, th>>>(ddig, n, bpw, slot_words, out_slots, nbatch, dn, ninv, nw,
+        ecm_launch_s4_reduce_kernel<NW>(EcmCudaLaunch{bl, th}, ddig, n, bpw, slot_words, out_slots, nbatch, dn, ninv, nw,
             L, dy, w, dout, slot_bits, dbad, s4_dbg, s4_tail_mont_mode(),
             g_div_shift, g_div_recip, first, count==~0ull ? out_slots : count,0);
 }
@@ -2273,46 +1772,9 @@ static void s4_launch_reduce(int nw, int L, unsigned long long nbatch,
    estimate-plus-exact-remainder-correction, right by construction: Moeller-Granlund's estimate
    floor((v*u1)/2^64) + u1 is never above the true quotient and at most 2 below it, so the loop steps
    down on underflow and up while the remainder is still >= d. */
-__host__ __device__ __forceinline__ void s2g_mul64(unsigned long long a, unsigned long long b,
-                                                   unsigned long long &lo, unsigned long long &hi)
-{
-#if defined(__CUDA_ARCH__)
-    lo = a * b;
-    hi = __umul64hi(a, b);
-#else
-    /* host code has no 128-bit type here (MSVC), so the high half comes from the 32-bit split:
-       a*b = p11*2^64 + K*2^32 + p00 with K = p01 + p10, and floor((K*2^32 + p00)/2^64) =
-       (K>>32) + ((K&m32) + (p00>>32))>>32 -- the two carry terms below. */
-    const unsigned long long m32 = 0xffffffffull;
-    const unsigned long long a0 = a & m32, a1 = a >> 32, b0 = b & m32, b1 = b >> 32;
-    const unsigned long long p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
-    const unsigned long long ks = (p01 & m32) + (p10 & m32);
-    const unsigned long long lo_mid = ks + (p00 >> 32);
-    lo = (lo_mid << 32) | (p00 & m32);
-    hi = p11 + (p01 >> 32) + (p10 >> 32) + (lo_mid >> 32);
-#endif
-}
 
-__host__ __device__ __forceinline__ unsigned long long s2g_udiv_2by1(unsigned long long u1,
-                                                                    unsigned long long u0,
-                                                                    unsigned long long d,
-                                                                    unsigned long long v)
-{
-    unsigned long long lo = 0, hi = 0;
-    s2g_mul64(v, u1, lo, hi);
-    unsigned long long q = hi + u1;
-    for (int guard = 0; guard < 8; ++guard) {
-        unsigned long long plo = 0, phi = 0;
-        s2g_mul64(q, d, plo, phi);
-        const unsigned long long rlo = u0 - plo;
-        const unsigned long long b1 = (u0 < plo) ? 1ull : 0ull;
-        const unsigned long long rhi = u1 - phi - b1;
-        if ((u1 < phi) || (u1 == phi && b1 != 0)) { --q; continue; }   /* estimate too high */
-        if (rhi != 0 || rlo >= d) { ++q; continue; }                   /* still >= d: step up */
-        return q;                                                      /* exact */
-    }
-    return q;
-}
+
+
 
 /* the modulus-level division constants, computed once: FILE-STATICS ON PURPOSE.  An earlier attempt
    kept them in S4Reduce::Shape and the --check-F path then died silently -- exit 3 with EMPTY
@@ -2440,7 +1902,7 @@ static int s4_reduce_init(S4Reduce &R, const mpz_t N, size_t W,
             g_div_hns[(size_t)i] = (sh == 0)
                 ? v : ((v << sh) | (i > 0 ? (R.hn[(size_t)i - 1] >> (64 - sh)) : 0ull));
         }
-        CK(cudaMemcpyToSymbol(g_s2g_device_constants, g_div_hns.data(),
+        CK(ecm_stage2_copy_constants( g_div_hns.data(),
                               (size_t)R.nw * sizeof(unsigned long long)));
         const unsigned long long d = g_div_hns[(size_t)R.nw - 1];
         mpz_t num, den, q, t64;
@@ -3285,29 +2747,20 @@ static int s4_gather_final_input(void *ctx,const NttShape &sh,unsigned long long
     }
     CK(cudaMemsetAsync(a,0,(size_t)m*sh.N*8));
     CK(cudaMemsetAsync(b,0,(size_t)m*sh.N*8));
-    s4_pack_gather_kernel<<<(unsigned int)((m*p.ma+255)/256),256>>>(p.batch->src,
+    ecm_launch_s4_pack_gather_kernel(EcmCudaLaunch{(unsigned int)((m*p.ma+255)/256),256}, p.batch->src,
         p.batch->meta+p.s0,m,p.ma,p.W,p.bits,p.bpw,p.sw,p.N,a);
     CK(cudaGetLastError());
     if(p.batch->reverse_b)
-        s4_pack_gather_reverse_kernel<<<(unsigned int)((m*p.mb+255)/256),256>>>(p.batch->src,
+        ecm_launch_s4_pack_gather_reverse_kernel(EcmCudaLaunch{(unsigned int)((m*p.mb+255)/256),256}, p.batch->src,
             p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
     else
-        s4_pack_gather_kernel<<<(unsigned int)((m*p.mb+255)/256),256>>>(p.batch->src,
+        ecm_launch_s4_pack_gather_kernel(EcmCudaLaunch{(unsigned int)((m*p.mb+255)/256),256}, p.batch->src,
             p.batch->meta+p.batch->nbatch+p.s0,m,p.mb,p.W,p.bits,p.bpw,p.sw,p.N,b);
     CK(cudaGetLastError());
     p.C->t_packdev+=now_s()-start;
     return 0;
 }
-__global__ void s4_scatter_result_kernel(const unsigned long long *src,
-    size_t stride,size_t first,size_t count,size_t m,int W,
-    const unsigned long long *offsets,unsigned long long *dst)
-{
-    const size_t gid=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
-    const size_t words=count*(size_t)W;
-    if(gid>=m*words)return;
-    const size_t slice=gid/words,j=gid%words;
-    dst[offsets[slice]+j]=src[(slice*stride+first)*W+j];
-}
+
 
 struct S4InputPack {
     S4Ctx *C = nullptr;
@@ -3762,7 +3215,7 @@ static void poly_mul_batch_modN(PolyLayer &L,
            that has been copied but not yet written into `out`; the end of the call drains it. */
         const size_t out_words = (size_t)(m * output_slots * W);
         if(resident) {
-            s4_scatter_result_kernel<<<(unsigned int)((m*nc*W+255)/256),256>>>(h2.out,
+            ecm_launch_s4_scatter_result_kernel(EcmCudaLaunch{(unsigned int)((m*nc*W+255)/256),256}, h2.out,
                 output_slots,host_first,nc,m,(int)W,resident->meta+2*nbatch+s0,resident->dst);
             CK(cudaGetLastError());
             if(!host_output) {if(!resident->owner)g_gdevice.resident_words+=out_words;continue;}
@@ -4144,7 +3597,7 @@ static int mont_selftest(const std::vector<unsigned long long> &hn, size_t nw,
     const int bits=(int)mpz_sizeinbase(N,2);
     const bool exact_shape=bits>=2 && mpz_popcount(N)==(mp_bitcnt_t)bits && (size_t)((bits+63)/64)==nw;
     const int enabled_bits=requested && exact_shape ? bits : 0;
-    CK(cudaMemcpyToSymbol(g_s2g_device_constants,&enabled_bits,sizeof(enabled_bits),
+    CK(ecm_stage2_copy_constants(&enabled_bits,sizeof(enabled_bits),
                           offsetof(S2GDeviceConstants, point_mersenne_bits)));
     stage2_log::print(stage2_log::debug, "point_mersenne_mode: requested=%d enabled=%d bits=%d nw=%llu reduction=fold_rotate\n",
                 (int)requested,enabled_bits!=0,bits,(unsigned long long)nw);
@@ -5157,25 +4610,8 @@ static bool fold_device_flag(const char *key) {
 }
 // Two order-sensitive 64-bit checksums of the canonical root input stream.
 // Indices are global across roots; this is a diagnostic, not a cryptographic hash.
-__host__ __device__ static inline unsigned long long groot_mix64(unsigned long long x) {
-    x^=x>>30;x*=0xbf58476d1ce4e5b9ull;x^=x>>27;x*=0x94d049bb133111ebull;return x^(x>>31);
-}
-__global__ void groot_input_digest_kernel(const unsigned long long *input,size_t count,
-    unsigned long long base,unsigned long long *digest) {
-    unsigned long long sum=0,xorv=0;
-    for(size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;i<count;i+=gridDim.x*(size_t)blockDim.x) {
-        const auto index=base+i,value=input[i];
-        sum+=groot_mix64(value^groot_mix64(index+0x9e3779b97f4a7c15ull));
-        xorv^=groot_mix64(value+groot_mix64(index+0xd1b54a32d192ed03ull));
-    }
-    __shared__ unsigned long long sums[256],xors[256];
-    sums[threadIdx.x]=sum;xors[threadIdx.x]=xorv;__syncthreads();
-    for(unsigned d=128;d;d/=2) {
-        if(threadIdx.x<d){sums[threadIdx.x]+=sums[threadIdx.x+d];xors[threadIdx.x]^=xors[threadIdx.x+d];}
-        __syncthreads();
-    }
-    if(!threadIdx.x){atomicAdd(digest,sums[0]);atomicXor(digest+1,xors[0]);}
-}
+
+
 static void groot_input_digest_host(const std::vector<unsigned long long> &input,
     unsigned long long &words,unsigned long long *digest) {
     for(const auto value:input) {
@@ -5194,13 +4630,7 @@ struct ScaledRootDeviceStats {
     double seconds=0;
     const char *fallback="none";
 };
-__global__ void scaled_root_reverse_kernel(const unsigned long long *src,size_t count,
-    size_t degree,int W,unsigned long long *dst) {
-    const size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
-    if(i>=degree*(size_t)W)return;
-    const size_t c=degree-1-i/W;
-    dst[i]=c<count?src[c*W+i%W]:0ull;
-}
+
 struct FoldDeviceStats {
     bool requested=false,enabled=false;
     unsigned reuse=kFoldOwnerReuse;
@@ -5214,32 +4644,9 @@ struct FoldDeviceStats {
     double root_t_handoff=0;
     double t_setup=0,t_upload=0,t_reverse=0,t_subtract=0,t_readback=0;
 };
-__global__ void fold_reverse_kernel(const unsigned long long *src,size_t top,
-    size_t count,int W,unsigned long long *out) {
-    const size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;
-    if(i<count*(size_t)W)out[i]=src[(top-i/W)*W+i%W];
-}
+
 // Ordinary canonical subtraction; no Montgomery factor enters the remainder.
-__global__ void fold_subtract_kernel(const unsigned long long *a,const unsigned long long *b,
-    const unsigned long long *n,int W,size_t count,unsigned long long *out,
-    unsigned long long *length) {
-    const size_t i=blockIdx.x*(size_t)blockDim.x+threadIdx.x;if(i>=count)return;
-    a+=i*W;b+=i*W;out+=i*W;
-    unsigned long long borrow=0;
-    for(int j=0;j<W;++j) {
-        const unsigned long long t=a[j]-b[j],b1=a[j]<b[j],v=t-borrow,b2=t<borrow;
-        out[j]=v;borrow=b1|b2;
-    }
-    if(borrow) {
-        unsigned long long carry=0;
-        for(int j=0;j<W;++j) {
-            const unsigned long long t=out[j]+n[j],c1=t<out[j],v=t+carry,c2=v<t;
-            out[j]=v;carry=c1|c2;
-        }
-    }
-    unsigned long long any=0;for(int j=0;j<W;++j)any|=out[j];
-    if(any)atomicMax(length,(unsigned long long)i+1);
-}
+
 #include "stage2/scale_plain.cuh"
 
 static bool gscale_flag(const char *key)
@@ -5327,7 +4734,7 @@ struct FoldDeviceState {
     void digest_root(size_t offset,size_t words) {
         if(words) {
             const unsigned blocks=(unsigned)std::min((size_t)1024,(words+255)/256);
-            groot_input_digest_kernel<<<blocks,256>>>(memory.data[0]+offset,words,stats->root_digest_words,digest);
+            ecm_launch_groot_input_digest_kernel(EcmCudaLaunch{blocks,256}, memory.data[0]+offset,words,stats->root_digest_words,digest);
             CK(cudaGetLastError());stats->root_digest_words+=words;
         }
     }
@@ -5379,7 +4786,7 @@ struct FoldDeviceState {
         stats->avoided_d2h_bytes+=8ull*(g_s4_output_window?count:2*std::max(ma,mb)-1)*W;
     }
     void reverse_copy(size_t src,size_t top,size_t count) {
-        const double begin=now_s();fold_reverse_kernel<<<(unsigned)((count*W+255)/256),256>>>(
+        const double begin=now_s();ecm_launch_fold_reverse_kernel(EcmCudaLaunch{(unsigned)((count*W+255)/256),256},
             memory.data[1]+src,top,count,(int)W,memory.data[0]+reverse);CK(cudaGetLastError());
         stats->t_reverse+=now_s()-begin;
     }
@@ -5407,7 +4814,7 @@ struct FoldDeviceState {
             // Oracle slots hold independent digit/result snapshots.
             reverse_copy(q,k-1,k);mul(reverse,k,f,P+1,qb,P);
             const double begin=now_s();CK(cudaMemsetAsync(length,0,8));
-            fold_subtract_kernel<<<(unsigned)((P+127)/128),128>>>(memory.data[1]+t,memory.data[1]+qb,
+            ecm_launch_fold_subtract_kernel(EcmCudaLaunch{(unsigned)((P+127)/128),128}, memory.data[1]+t,memory.data[1]+qb,
                 modulus,(int)W,P,memory.data[0]+h,length);CK(cudaGetLastError());
             unsigned long long n=0;CK(cudaMemcpy(&n,length,8,cudaMemcpyDeviceToHost));
             hcount=std::max((size_t)1,(size_t)n);stats->d2h_bytes+=8;stats->sub_coeffs+=P;flat->sub_coeffs+=P;
@@ -5446,7 +4853,7 @@ struct FoldDeviceState {
             flat_mul_batch(*layer,a,P,ic,P,1,expected,BC_DESCENT,0,P);
         }
         // G/reverse is dead after the final fold; H and finv are disjoint.
-        scaled_root_reverse_kernel<<<(unsigned)((P*W+255)/256),256>>>(
+        ecm_launch_scaled_root_reverse_kernel(EcmCudaLaunch{(unsigned)((P*W+255)/256),256},
             memory.data[0]+h,hcount,P,(int)W,memory.data[0]+reverse);
         CK(cudaGetLastError());
         unsigned long long metadata[3]={(unsigned long long)reverse,(unsigned long long)inv,(unsigned long long)t};
@@ -5826,7 +5233,7 @@ static void s4_flat_input_check(PolyLayer &L, size_t slices = 3)
         unsigned long long *di = nullptr, *doo = nullptr;
         CK(cudaMalloc(&di, raw.size()*8)); CK(cudaMalloc(&doo, raw.size()*8));
         CK(cudaMemcpy(di, raw.data(), raw.size()*8, cudaMemcpyHostToDevice));
-        carry_cone_kernel<5><<<dim3((unsigned int)((carry_n+255)/256), (unsigned int)carry_nb), 256>>>(
+        ecm_launch_carry_cone_kernel<5>(EcmCudaLaunch{dim3((unsigned int)((carry_n+255)/256), (unsigned int)carry_nb), 256},
             di, doo, carry_n, bpw, carry_n);
         CK(cudaGetLastError());
         CK(cudaMemcpy(actual.data(), doo, actual.size()*8, cudaMemcpyDeviceToHost));
@@ -6430,23 +5837,7 @@ struct Stage2Tail {
    mod N.  R is invertible mod N, so the GCD with N -- the only thing stage 2 asks of this
    number -- is unchanged, every intermediate is a proper value in [0,N), and the reference
    records a gcd rather than the raw product, so nothing that is printed changes.) */
-template <int NW>
-__global__ void s2g_block_prod_kernel(const unsigned long long *vals, int nvals, int nw,
-                                      int per_block, const unsigned long long *n,
-                                      unsigned long long ninv, unsigned long long *out)
-{
-    const int b = (int)(blockIdx.x * blockDim.x + threadIdx.x);
-    const int nb = (nvals + per_block - 1) / per_block;
-    if (b >= nb) return;
-    const int lo = b * per_block;
-    int hi = lo + per_block;
-    if (hi > nvals) hi = nvals;
-    unsigned long long acc[NW];
-    for (int i = 0; i < nw; ++i) acc[i] = vals[(size_t)lo * nw + i];
-    for (int t = lo + 1; t < hi; ++t)
-        s2g_mont_mul<NW>(acc, acc, vals + (size_t)t * nw, n, ninv, nw);
-    for (int i = 0; i < nw; ++i) out[(size_t)b * nw + i] = acc[i];
-}
+
 
 template <int NW>
 static void s2g_launch_block_prod(int nw, int nvals, int per_block,
@@ -6456,7 +5847,7 @@ static void s2g_launch_block_prod(int nw, int nvals, int per_block,
     const int nb = (nvals + per_block - 1) / per_block;
     const unsigned int th = 64;
     const unsigned int bl = (unsigned int)((nb + th - 1) / th);
-    s2g_block_prod_kernel<NW><<<bl, th>>>(dv, nvals, nw, per_block, dn, ninv, dout);
+    ecm_launch_s2g_block_prod_kernel<NW>(EcmCudaLaunch{bl, th}, dv, nvals, nw, per_block, dn, ninv, dout);
 }
 
 /* every device buffer the batched engine needs, allocated ONCE for the whole curve: the
@@ -7801,7 +7192,7 @@ static BatchedRun run_batched(PolyLayer &L, const LadderCtx &C, const Stage2Para
         if(device_leaf) {
             auto fill=[&](unsigned long long *out) {
                 const double t=now_s();const size_t first=lo-c0,count=hi-lo;
-                s2g_projective_leaf_kernel<<<(unsigned)((count+127)/128),128>>>(ws.dn,(int)W,resident.x,resident.z,first,count,out);
+                ecm_launch_s2g_projective_leaf_kernel(EcmCudaLaunch{(unsigned)((count+127)/128),128}, ws.dn,(int)W,resident.x,resident.z,first,count,out);
                 CK(cudaGetLastError());
                 for(auto it=patches.begin();it!=patches.end();) {
                     const size_t start=it->first;size_t next=start;std::vector<unsigned long long> words;

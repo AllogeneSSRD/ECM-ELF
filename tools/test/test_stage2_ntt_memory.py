@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
+from ntt_native_fixture import FILES, arena_source
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,19 +28,12 @@ def main():
     if out.exists() and any(out.iterdir()):
         raise ValueError('use a fresh output directory')
     out.mkdir(parents=True, exist_ok=True)
-    source = ROOT/'src/cuda/stage2/ntt_runtime.cuh'
     template = Path(__file__).with_name('stage2_ntt_memory_fixture.cpp')
-    files = [source, template, Path(__file__).resolve(), ROOT/'src/core/ecm_stage2_ntt_memory.h',
+    files = [*FILES, ROOT/'tools/test/ntt_native_fixture.py', template, Path(__file__).resolve(), ROOT/'src/core/ecm_stage2_ntt_memory.h',
              ROOT/'src/core/ecm_stage2_requests.h', ROOT/'src/core/ecm_stage2_geometry.h',ROOT/'src/core/ecm_stage2_giant_tree.h',
-             ROOT/'tools/test/stage2_request_program_fixture.cpp',ROOT/'src/cuda/stage2/ntt_graph.cuh']
+             ROOT/'tools/test/stage2_request_program_fixture.cpp']
     identities = {str(p.relative_to(ROOT)): sha(p) for p in files}
-    text = source.read_text(encoding='utf-8')
-    begin = text.index('struct NttWorkspacePolicy {')
-    end = text.index('/* device arithmetic selftest kernel:', begin)
-    native = text[begin:end]
-    if native.count('#include "ntt_graph.cuh"')!=1:
-        raise ValueError('Graph lifetime dependency anchor changed')
-    native=native.replace('#include "ntt_graph.cuh"','// Graph-disabled lifetime double is declared by the CPU fixture.')
+    native = arena_source()
     cpp = out/'fixture.cpp'
     # The template normally lives in tools/test; generated fixture has an
     # absolute include so ignored output directories may be anywhere in the repo.

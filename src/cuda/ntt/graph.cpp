@@ -1,57 +1,37 @@
-#pragma once
-
-// Host-only cache. Nodes borrow arena arrays/tables; clear before any owner frees
-// them. Capture uses a private stream, replay keeps the original stream order.
-struct NttGraphCache {
-    struct Key {
-        unsigned long long v[64]={};
-        bool operator==(const Key &other)const{return std::memcmp(v,other.v,sizeof(v))==0;}
-    };
-    struct Entry {
-        Key key;unsigned long long seen=0,last=0;
-        cudaGraphExec_t forward=nullptr,inverse=nullptr;
-    };
-    bool enabled=fuse_env_ull("NTT_SHORT_GRAPH",0)!=0,failed=false;
-    unsigned long long max_k=fuse_env_ull("NTT_SHORT_GRAPH_MAX_K",19);
-    unsigned long long max_words=fuse_env_ull("NTT_SHORT_GRAPH_MAX_WORDS",1ull<<22);
-    unsigned long long min_calls=std::max(1ull,fuse_env_ull("NTT_SHORT_GRAPH_MIN_CALLS",4));
-    size_t limit=(size_t)std::max(1ull,std::min(256ull,fuse_env_ull("NTT_SHORT_GRAPH_ENTRIES",64)));
-    cudaStream_t capture_stream=nullptr;
-    std::vector<Entry> entries;
-    unsigned long long candidates=0,hits=0,builds=0,launches=0,skipped=0,cold=0;
-    unsigned long long failures=0,invalidations=0,evictions=0,peak_entries=0,nodes=0,saved_launches=0;
-    double setup_seconds=0;
-    static void destroy(Entry &entry) {
+#include "runtime.h"
+void NttGraphCache::destroy(Entry &entry) {
         if(entry.forward)CK(cudaGraphExecDestroy(entry.forward));
         if(entry.inverse)CK(cudaGraphExecDestroy(entry.inverse));
         entry.forward=entry.inverse=nullptr;
     }
-    void clear() {
+
+void NttGraphCache::clear() {
         if(!entries.empty())++invalidations;
         for(auto &entry:entries)destroy(entry);
         entries.clear();
     }
-    void release() {
+
+void NttGraphCache::release() {
         clear();if(capture_stream){CK(cudaStreamDestroy(capture_stream));capture_stream=nullptr;}
     }
-    ~NttGraphCache(){release();}
-    NttGraphCache()=default;
-    NttGraphCache(const NttGraphCache &)=delete;
-    NttGraphCache &operator=(const NttGraphCache &)=delete;
-    static bool recoverable(cudaError_t error) {
+
+NttGraphCache::~NttGraphCache() {release();}
+
+bool NttGraphCache::recoverable(cudaError_t error) {
         return error==cudaErrorMemoryAllocation || error==cudaErrorNotSupported ||
             error==cudaErrorStreamCaptureUnsupported || error==cudaErrorStreamCaptureInvalidated;
     }
-    bool accept(cudaError_t error) {
+
+bool NttGraphCache::accept(cudaError_t error) {
         if(error==cudaSuccess)return true;
         if(!recoverable(error))CK(error);
         ++failures;failed=true;(void)cudaGetLastError();
         stage2_log::print(stage2_log::debug,"ntt_graph_fallback: error=%s\n",cudaGetErrorString(error));return false;
     }
-    bool capture(cudaGraphExec_t &exec,bool inverse,const FuseCtx &fc,
+
+bool NttGraphCache::capture(cudaGraphExec_t &exec,bool inverse,const FuseCtx &fc,
         unsigned long long *a,unsigned long long *b,unsigned long long omega,
-        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch)
-    {
+        unsigned long long omega_inv,unsigned long long scale,unsigned long long batch) {
         if(!accept(cudaStreamBeginCapture(capture_stream,cudaStreamCaptureModeThreadLocal)))return false;
         if(inverse)ntt_inverse_fused(a,b,fc,omega_inv,scale,batch,capture_stream);
         else {ntt_forward_fused(a,fc,omega,batch,capture_stream);ntt_forward_fused(b,fc,omega,batch,capture_stream);}
@@ -62,9 +42,9 @@ struct NttGraphCache {
         CK(cudaGraphDestroy(graph));if(!accept(status))return false;
         nodes+=count;return true;
     }
-    Entry *lookup(int device,const FuseCtx &fc,unsigned long long *a,unsigned long long *b,
-        unsigned long long omega,unsigned long long omega_inv,unsigned long long scale,unsigned long long batch)
-    {
+
+NttGraphCache::Entry *NttGraphCache::lookup(int device,const FuseCtx &fc,unsigned long long *a,unsigned long long *b,
+        unsigned long long omega,unsigned long long omega_inv,unsigned long long scale,unsigned long long batch) {
         if(!enabled || failed || fc.k<0 || (unsigned long long)fc.k>max_k || !batch ||
             fc.n>max_words/batch || !fc.tables_cached || !fc.arena_borrowed || fuse_trace_on()) {++skipped;return nullptr;}
         ++candidates;Key key;int i=0;
@@ -100,10 +80,10 @@ struct NttGraphCache {
         }
         setup_seconds+=now_s()-begin;++builds;return &entry;
     }
-    void print()const {
+
+void NttGraphCache::print()const {
         stage2_log::print(stage2_log::phases,
             "ntt_graph_stats: requested=%d max_k=%llu max_words=%llu min_calls=%llu capacity=%llu candidates=%llu hits=%llu builds=%llu launches=%llu saved_launches=%llu skipped=%llu cold=%llu failures=%llu invalidations=%llu evictions=%llu entries=%llu peak_entries=%llu captured_nodes=%llu setup_seconds=%.6f\n",
             (int)enabled,max_k,max_words,min_calls,(unsigned long long)limit,candidates,hits,builds,launches,
             saved_launches,skipped,cold,failures,invalidations,evictions,(unsigned long long)entries.size(),peak_entries,nodes,setup_seconds);
     }
-};

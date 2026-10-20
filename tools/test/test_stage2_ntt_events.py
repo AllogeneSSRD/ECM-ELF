@@ -13,6 +13,7 @@ import re
 import subprocess
 import time
 from test_stage2_s4_memory import block
+from ntt_native_fixture import FILES, arena_source, fuse_source, remove_table_launches
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,15 +28,13 @@ def replace_one(text, old, new):
     return text.replace(old, new)
 
 
-def extract(text):
-    begin = text.index('struct FuseCtx {')
-    end = text.index('\n}', text.index('static void ntt_fuse_cache_tables('))+2
-    fuse = text[begin:end]
-    device = block(fuse, 'static bool fuse_shape_device_supported()')
+def extract():
+    fuse = fuse_source()
+    device = block(fuse, 'bool fuse_shape_device_supported()')
     # Deterministic CPU descriptor selection for the measured-policy branch.
     # This does not query or claim to emulate driver free memory.
-    fuse = replace_one(fuse, device, 'static bool fuse_shape_device_supported(){return true;}')
-    fuse, removed = re.subn(r'\bbuild_\w+_kernel<<<[^;]+;', '(void)0;', fuse)
+    fuse = replace_one(fuse, device, 'bool fuse_shape_device_supported(){return true;}')
+    fuse, removed = remove_table_launches(fuse)
     if removed != 6:
         raise ValueError('native fuse launch count changed')
     for field, site in [('tblF', 'NttBaseTileF'), ('tblI', 'NttBaseTileI'),
@@ -46,9 +45,7 @@ def extract(text):
                         ('passI', 'NttTablePassI'), ('radI', 'NttTableRadI')]:
         anchor='CK(cudaMalloc(&c.'+field+'[p],'
         fuse=replace_one(fuse, anchor, 'native_site='+site+';native_index=p;'+anchor)
-    begin=text.index('struct NttWorkspacePolicy {')
-    end=text.index('/* device arithmetic selftest kernel:', begin)
-    arena=text[begin:end]
+    arena=arena_source()
     arena=replace_one(arena, 'auto allocate=[&](unsigned long long **p, int index) {',
         'auto allocate=[&](unsigned long long **p, int index) { native_site=NttMemorySite(NttWorkspaceA+index-1);native_index=0;')
     arena=replace_one(arena, 'auto allocate_legacy=[&](unsigned long long **p) {',
@@ -68,14 +65,14 @@ def main():
     args=ap.parse_args();out=args.output.resolve()
     if out.exists() and any(out.iterdir()):raise ValueError('use a fresh output directory')
     out.mkdir(parents=True, exist_ok=True)
-    runtime=ROOT/'src/cuda/stage2/ntt_runtime.cuh';header=ROOT/'src/core/ecm_stage2_ntt_memory.h'
+    header=ROOT/'src/core/ecm_stage2_ntt_memory.h'
     template=Path(__file__).with_name('stage2_ntt_events_fixture.cpp')
-    files=[runtime, header, template, Path(__file__).resolve(), ROOT/'tools/test/test_stage2_s4_memory.py',
+    files=[*FILES, ROOT/'tools/test/ntt_native_fixture.py', header, template, Path(__file__).resolve(), ROOT/'tools/test/test_stage2_s4_memory.py',
            ROOT/'src/core/ecm_stage2_requests.h',ROOT/'src/core/ecm_stage2_geometry.h']
     identities={str(p.relative_to(ROOT)):sha(p) for p in files}
     result=dict(complete=False, sources=identities, gpu_calls=0)
     try:
-        start=time.monotonic();fuse,arena,removed=extract(runtime.read_text(encoding='utf-8'))
+        start=time.monotonic();fuse,arena,removed=extract()
         text=template.read_text(encoding='utf-8').replace('// @NATIVE_FUSE@',fuse).replace('// @NATIVE_ARENA@',arena)
         cpp=out/'fixture.cpp'
         include='"../../src/core/ecm_stage2_ntt_memory.h"'

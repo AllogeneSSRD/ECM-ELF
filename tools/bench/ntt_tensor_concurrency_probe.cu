@@ -138,7 +138,7 @@ int main(int argc,char **argv) {
             tile_resources("tensor40_forward",tc_goldilocks_tile<false,true>,threads);tile_resources("tensor40_inverse",tc_goldilocks_tile<true,true>,threads);
             tile_resources("narrow40_forward",tc_goldilocks_narrow64_tile<false>,threads);tile_resources("narrow40_inverse",tc_goldilocks_narrow64_tile<true>,threads);
         }
-        tile_resources("production_forward",tile_kernel<false,true>,512);tile_resources("production_inverse",tile_kernel<true,true>,512);
+        tile_resources("production_forward",ecm_ntt_tile_handle(false,true),512);tile_resources("production_inverse",ecm_ntt_tile_handle(true,true),512);
         int code=2;
         if(!std::strcmp(argv[2],"--check")){code=length_gate(false,4);if(!code)code=concurrency_gate();}
         else if(!std::strcmp(argv[2],"--fault"))code=length_gate(true,4);

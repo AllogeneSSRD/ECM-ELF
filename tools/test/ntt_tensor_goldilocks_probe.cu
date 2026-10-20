@@ -2,12 +2,27 @@
 #ifdef NTT_TENSOR_USE_PRODUCTION_RUNTIME
 #include <algorithm>
 #include "../../src/core/ecm_stage2_logging.h"
-#include "../../src/cuda/stage2/ntt_runtime.cuh"
+#include "../../src/cuda/ntt/runtime.h"
+#include "../../kernels/cuda/shared/goldilocks_tile.cuh"
 #else
 #include "../bench/ntt_poly_probe.cu"
 #endif
 #include "../bench/ntt_tensor_goldilocks.cuh"
 
+#include "ecm/cuda/ntt_launch.h"
+#ifndef NTT_TENSOR_USE_PRODUCTION_RUNTIME
+// The independent experimental engine retains its own kernels and launcher.
+template<bool INVERSE,bool WARP_TAIL>
+void ecm_launch_tile_kernel(EcmCudaLaunch cfg,unsigned long long *a,const unsigned long long *b,
+    unsigned long long n,int k,int t,const unsigned long long *tbl,unsigned long long n_scale,
+    unsigned long long stride,bool shift_scale) {
+    tile_kernel<INVERSE,WARP_TAIL><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(a,b,n,k,t,tbl,n_scale,stride,shift_scale);
+}
+inline const void *ecm_ntt_tile_handle(bool inverse,bool warp) {
+    if(inverse)return warp ? (const void*)tile_kernel<true,true> : (const void*)tile_kernel<true>;
+    return warp ? (const void*)tile_kernel<false,true> : (const void*)tile_kernel<false>;
+}
+#endif
 using Word=unsigned long long;
 static Word live_bytes=0,peak_bytes=0;
 struct Buffer {
@@ -231,8 +246,8 @@ static int tile_gate(bool fault)
                     if(inv)tc_goldilocks_tile<true><<<grid,threads,tile*8>>>(a.get(),b.get(),tile*tiles,t,ti.get(),plan.scale,stride,ri.get<unsigned int>());
                     else tc_goldilocks_tile<false><<<grid,threads,tile*8>>>(a.get(),nullptr,tile*tiles,t,tf.get(),0,stride,rf.get<unsigned int>());
                 } else {
-                    if(inv)tile_kernel<true,true><<<grid,512,tile*8>>>(a.get(),b.get(),tile*tiles,t,t,ti.get(),plan.scale,stride);
-                    else tile_kernel<false,true><<<grid,512,tile*8>>>(a.get(),nullptr,tile*tiles,t,t,tf.get(),0,stride);
+                    if(inv)ecm_launch_tile_kernel<true,true>(EcmCudaLaunch(grid,512,tile*8,0),a.get(),b.get(),tile*tiles,t,t,ti.get(),plan.scale,stride);
+                    else ecm_launch_tile_kernel<false,true>(EcmCudaLaunch(grid,512,tile*8,0),a.get(),nullptr,tile*tiles,t,t,tf.get(),0,stride);
                 }
             };
             for(int threads:{128,256,512,0}) {
@@ -296,8 +311,8 @@ struct TileBuffers {
             if(inverse)tc_goldilocks_tile<true><<<grid,threads,shared,stream>>>(a.get(),b.get(),n,t,ti.get(),plan.scale,n,ri.get<unsigned int>());
             else tc_goldilocks_tile<false><<<grid,threads,shared,stream>>>(a.get(),nullptr,n,t,tf.get(),0,n,rf.get<unsigned int>());
         } else {
-            if(inverse)tile_kernel<true,true><<<grid,512,shared,stream>>>(a.get(),b.get(),n,t,t,ti.get(),plan.scale,n);
-            else tile_kernel<false,true><<<grid,512,shared,stream>>>(a.get(),nullptr,n,t,t,tf.get(),0,n);
+            if(inverse)ecm_launch_tile_kernel<true,true>(EcmCudaLaunch(grid,512,shared,stream),a.get(),b.get(),n,t,t,ti.get(),plan.scale,n);
+            else ecm_launch_tile_kernel<false,true>(EcmCudaLaunch(grid,512,shared,stream),a.get(),nullptr,n,t,t,tf.get(),0,n);
         }
     }
 };
@@ -480,8 +495,8 @@ int main(int argc,char **argv)
         tile_resources("tensor_forward",tc_goldilocks_tile<false>,threads);
         tile_resources("tensor_inverse",tc_goldilocks_tile<true>,threads);
     }
-    tile_resources("cuda_forward",tile_kernel<false,true>,512);
-    tile_resources("cuda_inverse",tile_kernel<true,true>,512);
+    tile_resources("cuda_forward",ecm_ntt_tile_handle(false,true),512);
+    tile_resources("cuda_inverse",ecm_ntt_tile_handle(true,true),512);
     int code=2;
     if(!std::strcmp(mode,"--check") || !std::strcmp(mode,"--fault"))code=gate(!std::strcmp(mode,"--fault"));
     else if(!std::strcmp(mode,"--tile-check") || !std::strcmp(mode,"--tile-fault"))code=tile_gate(!std::strcmp(mode,"--tile-fault"));

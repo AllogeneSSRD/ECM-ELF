@@ -76,7 +76,7 @@ foreach ($src in $sources) {
     $stem = $objectNames[$src]
     $obj = Join-Path $objDir "$stem.obj"
     $command = "`"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -DNTT_OUTER_UNROLL_U=$OuterUnrollU -DNTT_GL_ADD_SUB_MASK=$AddSubMask " +
-        "--split-compile=$SplitCompile -I `"$Gmp/include`" -Xcompiler /utf-8 -Xcompiler /wd4819 -c `"$src`" -o `"$obj`""
+        "--split-compile=$SplitCompile -I `"$Gmp/include`" -I `"$repo/include`" -Xcompiler /utf-8 -Xcompiler /wd4819 -c `"$src`" -o `"$obj`""
     $entry = [pscustomobject]@{ file = (Resolve-EcmSourcePath $repo $src); directory = $repo; command = $command; output = $obj }
     $compileEntries[$src] = $entry
     $beforeStates[$src] = Get-EcmCompileState $repo $entry $vc.Setup $includeDirs -Production:($Engine -eq 'production')

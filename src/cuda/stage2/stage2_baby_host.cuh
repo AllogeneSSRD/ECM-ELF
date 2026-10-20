@@ -1,5 +1,5 @@
 #pragma once
-#include "stage2_baby_device.cuh"
+#include "stage2_baby_launch.h"
 
 struct DeviceBabyStats {
     size_t points=0,groups=0,bad_groups=0,payload_bytes=0,coordinate_d2h_bytes=0,

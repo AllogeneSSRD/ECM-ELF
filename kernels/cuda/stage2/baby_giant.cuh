@@ -1,8 +1,17 @@
 #pragma once
+#include "ecm/cuda/stage2_launch.h"
+template<int NW>
+__device__ __forceinline__ void s2g_baby_negative(unsigned long long *out,
+    const unsigned long long *x,const unsigned long long *inv,
+    const unsigned long long *n,unsigned long long ninv,int nw)
+{
+    unsigned long long v[NW];s2g_mont_mul<NW>(v,x,inv,n,ninv,nw);
+    bool zero=true;for(int j=0;j<nw;++j)if(v[j])zero=false;
+    unsigned long long borrow=0;
+    for(int j=0;j<nw;++j){const unsigned long long t=n[j]-v[j],b1=n[j]<v[j],u=t-borrow,b2=t<borrow;
+        borrow=b1|b2;out[j]=zero?0:u;}
+}
 
-// Products are Montgomery images. Inverses deliberately stay ordinary:
-// Mont(1/(ab), bR) = 1/a, and Mont(xR, 1/z) = x/z.
-// Each 256-leaf root is checked/inverted on the host; nonunit groups are skipped.
 template<int NW>
 __global__ void s2g_baby_product_kernel(const unsigned long long *in,size_t count,
     unsigned long long *out,const unsigned long long *n,unsigned long long ninv,int nw)
@@ -33,18 +42,6 @@ __global__ void s2g_baby_inverse_kernel(const unsigned long long *parent,
 }
 
 template<int NW>
-__device__ __forceinline__ void s2g_baby_negative(unsigned long long *out,
-    const unsigned long long *x,const unsigned long long *inv,
-    const unsigned long long *n,unsigned long long ninv,int nw)
-{
-    unsigned long long v[NW];s2g_mont_mul<NW>(v,x,inv,n,ninv,nw);
-    bool zero=true;for(int j=0;j<nw;++j)if(v[j])zero=false;
-    unsigned long long borrow=0;
-    for(int j=0;j<nw;++j){const unsigned long long t=n[j]-v[j],b1=n[j]<v[j],u=t-borrow,b2=t<borrow;
-        borrow=b1|b2;out[j]=zero?0:u;}
-}
-
-template<int NW>
 __global__ void s2g_baby_leaf_kernel(const unsigned long long *parent,
     const unsigned long long *x,const unsigned long long *z,size_t count,
     unsigned long long *out,const unsigned char *good,const unsigned long long *n,
@@ -67,16 +64,16 @@ __global__ void s2g_baby_leaf_kernel(const unsigned long long *parent,
 }
 
 template<int NW>
-static void s2g_launch_baby_product(int nw,size_t count,const unsigned long long *in,
-    unsigned long long *out,const unsigned long long *n,unsigned long long ninv)
-{s2g_baby_product_kernel<NW><<<(unsigned)((count+127)/128),64>>>(in,count,out,n,ninv,nw);}
+void ecm_launch_s2g_baby_product_kernel(EcmCudaLaunch cfg, const unsigned long long *in, size_t count, unsigned long long *out, const unsigned long long *n, unsigned long long ninv, int nw) {
+    s2g_baby_product_kernel<NW><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(in,count,out,n,ninv,nw);
+}
+
 template<int NW>
-static void s2g_launch_baby_inverse(int nw,size_t count,const unsigned long long *parent,
-    unsigned long long *children,const unsigned char *good,size_t ppg,
-    const unsigned long long *n,unsigned long long ninv)
-{s2g_baby_inverse_kernel<NW><<<(unsigned)((count+127)/128),64>>>(parent,children,count,good,ppg,n,ninv,nw);}
+void ecm_launch_s2g_baby_inverse_kernel(EcmCudaLaunch cfg, const unsigned long long *parent, unsigned long long *children, size_t count, const unsigned char *good, size_t parents_per_group, const unsigned long long *n, unsigned long long ninv, int nw) {
+    s2g_baby_inverse_kernel<NW><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(parent,children,count,good,parents_per_group,n,ninv,nw);
+}
+
 template<int NW>
-static void s2g_launch_baby_leaf(int nw,size_t count,const unsigned long long *parent,
-    const unsigned long long *x,const unsigned long long *z,unsigned long long *out,
-    const unsigned char *good,const unsigned long long *n,unsigned long long ninv)
-{s2g_baby_leaf_kernel<NW><<<(unsigned)((count+127)/128),64>>>(parent,x,z,count,out,good,n,ninv,nw);}
+void ecm_launch_s2g_baby_leaf_kernel(EcmCudaLaunch cfg, const unsigned long long *parent, const unsigned long long *x, const unsigned long long *z, size_t count, unsigned long long *out, const unsigned char *good, const unsigned long long *n, unsigned long long ninv, int nw) {
+    s2g_baby_leaf_kernel<NW><<<cfg.grid,cfg.block,cfg.shared,cfg.stream>>>(parent,x,z,count,out,good,n,ninv,nw);
+}

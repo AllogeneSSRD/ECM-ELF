@@ -31,6 +31,10 @@ kernels/cuda/shared/** text eol=lf
 src/cuda/stage1/** text eol=lf
 src/cuda/common/** text eol=lf
 src/cuda/backend.cpp text eol=lf
+kernels/cuda/stage2/** text eol=lf
+kernels/cuda/ntt/** text eol=lf
+src/cuda/ntt/** text eol=lf
+src/cuda/stage2/*.h text eol=lf
 src/core/ecm_toml.h text eol=lf
 src/core/generated/*.h text eol=lf
 
@@ -144,8 +148,7 @@ src/core/ecm_stage2_queue_state.h text eol=lf
 src/core/ecm_stage2_console.h text eol=lf
 tools/build/build_stage2_release.ps1 text eol=lf
 
-# Original-path Stage2 kernels, shape policy and reproducible benchmark sources.
-kernels/cuda/stage2_giant_chain.cuh text eol=lf
+# Stage2 shape policy and reproducible benchmark sources.
 src/core/ecm_stage2_giant_tree.h text eol=lf
 src/core/ecm_stage2_requests.h text eol=lf
 src/core/ecm_stage2_portable_model.h text eol=lf

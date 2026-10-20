@@ -65,18 +65,26 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()): raise ValueError('use a fresh output directory')
     identity = freeze(exe)
-    relative = 'tools/bench/stage2_tree_gpu.cu' if 'tools/bench/stage2_tree_gpu.cu' in identity['sources'] else 'src/cuda/ecm_cuda_stage2.cu'
+    modular = 'kernels/cuda/stage2/coefficient_ops.cuh' in identity['sources']
+    relative = ('kernels/cuda/stage2/coefficient_ops.cuh' if modular else
+                'tools/bench/stage2_tree_gpu.cu' if 'tools/bench/stage2_tree_gpu.cu' in identity['sources'] else 'src/cuda/ecm_cuda_stage2.cu')
     source = exe.parent / 'sources' / relative
     if sha(source) != identity['sources'][relative]: raise ValueError('frozen source changed')
     text = source.read_text()
-    start = text.index('__global__ void scaled_root_reverse_kernel(')
-    end = text.index('struct FoldDeviceStats {', start)
-    kernel = text[start:end]
+    if modular:
+        frozen = exe.parent/'sources'
+        kernel = ('#include "'+(frozen/'kernels/cuda/shared/stage2_scalar.cuh').as_posix()+'"\n'
+                  '#include "'+source.as_posix()+'"\n')
+    else:
+        start = text.index('__global__ void scaled_root_reverse_kernel(')
+        end = text.index('struct FoldDeviceStats {', start)
+        kernel = text[start:end]
     probe = out / 'reverse_probe.cu'; probe.write_text(DRIVER.replace('KERNEL_BODY', kernel), newline='\n')
     vc = next(Path('C:/Program Files/Microsoft Visual Studio').glob('*/Community/VC/Auxiliary/Build/vcvars64.bat'))
     binary = out / 'reverse_probe.exe'
     if any(any(c in str(s) for c in '&|<>%!^\r\n"') for s in (vc, probe, binary)): raise ValueError('unsafe compiler path')
-    command = f'call "{vc}" >nul 2>&1\nnvcc -std=c++17 -O3 -arch=sm_89 "{probe}" -o "{binary}"\nexit /b %errorlevel%\n'
+    includes = f' -I "{exe.parent / "sources/include"}"' if modular else ''
+    command = f'call "{vc}" >nul 2>&1\nnvcc -std=c++17 -O3 -arch=sm_89{includes} "{probe}" -o "{binary}"\nexit /b %errorlevel%\n'
     build = out / 'build.cmd'; build.write_text('@echo off\n' + command)
     with (out / 'build.log').open('wb') as stream:
         subprocess.run(['cmd.exe', '/d', '/c', str(build)], stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=120)

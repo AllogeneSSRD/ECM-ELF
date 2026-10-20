@@ -5,9 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
-namespace ecm_stage2 { constexpr int max_words=256; }
-#include "stage2_point_reference.cuh"
-#include "../../kernels/cuda/stage2_giant_chain.cuh"
+#include "../../kernels/cuda/stage2/point.cuh"
+#include "../../kernels/cuda/stage2/giant_chain.cuh"
 using Word=unsigned long long;
 #define CK(x) do{auto e=(x);if(e!=cudaSuccess){fprintf(stderr,"CUDA %s\n",cudaGetErrorString(e));exit(2);}}while(0)
 void pack(Word*p,int w,mpz_srcptr v){std::fill(p,p+w,0);size_t z;mpz_export(p,&z,-1,8,0,0,v);}

@@ -60,6 +60,9 @@ static Word gl_pow_host(Word,Word){return 1;}
 static bool ntt_carry_check_requested(){const auto e=std::getenv("NTT_CARRY_CHECK_FUSED");return e && std::atoi(e)!=0;}
 
 // @NATIVE_FUSE@
+// Graph/stream handles are outside this array-payload event oracle. Real Graph
+// lifetimes are checked separately by the production-object GPU probe.
+struct NttGraphCache {void clear(){} void print()const{} void release(){}};
 // @NATIVE_ARENA@
 
 static void flag(const char *key,bool on){_putenv_s(key,on?"1":"0");}

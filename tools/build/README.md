@@ -31,6 +31,8 @@ CUDA 源组在 `internal/cuda_sources.cmake` 维护，构建目录中的 JSON �
 
 Stage1 的位宽与实例分组由 `include/ecm/cuda/tiers.def` 统一维护；主机驱动和设备实例职责见 [CUDA 模块边界](../../docs/architecture/STAGE1.md#cuda-模块边界)。`test/build_cuda_p1.ps1` 提供清单配置、Stage1 和 Stage2 的分步构建入口。
 
+Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/STAGE2.md#cuda-模块边界)。`test/build_cuda_p2_arithmetic_probe.ps1` 与 `test/build_ntt_graph_probe.ps1` 可复用通过身份校验的生产对象；使用生产 NTT 的其他探针统一通过 `internal/cuda_ntt_probe.ps1` 编译显式源清单，并保留各自的默认流模式。
+
 `dev/build_stage2_tree_gpu.ps1` 的原型驱动与根目录 Stage2 生产/开发队列程序不同。实际生产算术和当前限制见 [NTT](../../docs/architecture/NTT.md)、[Stage2使用](../../docs/usage/STAGE2.md)。
 
 独立 CPU Edwards Stage2 使用 `test/build_cpu_stage2.ps1`；`-GwPoly` 启用 GWNUM/polymult 多线程快速多项式后端，无此开关保留 libecm 构建。依赖、运行参数和输出见 [CPU Stage2](../../docs/usage/EDWARDS_CPU_STAGE2.md)，当前不随 CUDA 发布入口自动打包。

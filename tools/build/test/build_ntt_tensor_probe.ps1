@@ -9,7 +9,7 @@ if(-not $vcvars){throw 'vcvars64.bat not found'}
 New-Item -ItemType Directory -Force $Build | Out-Null
 $exe=Join-Path $Build 'ntt_tensor_goldilocks_probe.exe'
 $log=Join-Path $Build 'build.log'
-$line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -Xptxas -v -I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 tools/test/ntt_tensor_goldilocks_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
+$line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -Xptxas -v -I include -I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 tools/test/ntt_tensor_goldilocks_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
 $watch=[Diagnostics.Stopwatch]::StartNew()
 & cmd.exe /c $line
 $code=$LASTEXITCODE;$watch.Stop()
@@ -18,6 +18,9 @@ Copy-Item third_party/gmp-zen3/dist/bin/gmp-10.dll $Build -Force
 $deps=@('tools/test/ntt_tensor_goldilocks_probe.cu','tools/bench/ntt_tensor_goldilocks.cuh',
     'tools/bench/ntt_poly_probe.cu','tools/bench/ntt_coop_outer.cuh','tools/bench/ntt_goldilocks_reduce.cuh','tools/bench/ntt_goldilocks_ptx.cuh','tools/bench/ntt_carry_partial.cuh','tools/build/test/build_ntt_tensor_probe.ps1')
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash}
+$hashes['include/ecm/cuda/ntt_launch.h']=(Get-FileHash include/ecm/cuda/ntt_launch.h).Hash
+$hashes['include/ecm/cuda/ntt_parameters.h']=(Get-FileHash include/ecm/cuda/ntt_parameters.h).Hash
+$hashes['include/ecm/cuda/launch.h']=(Get-FileHash include/ecm/cuda/launch.h).Hash
 [ordered]@{exe=(Resolve-Path $exe).Path;sha256=(Get-FileHash -LiteralPath $exe).Hash;
     architecture=$Arch;build_seconds=$watch.Elapsed.TotalSeconds;toolkit=(& nvcc --version | Out-String).Trim();
     sources=$hashes} | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $Build 'manifest.json')
