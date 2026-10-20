@@ -7,6 +7,7 @@ int main(int argc,char **argv) {
     try {
         namespace r=ecm_results;namespace fs=std::filesystem;
         if(argc==3 && std::string(argv[1])=="--export-internal"){r::refresh_internal(argv[2]);return 0;}
+        if(argc==3 && std::string(argv[1])=="--export-submission"){r::refresh_submission_if_owned(argv[2]);return 0;}
         if(argc!=2)return 2;const fs::path out=argv[1];fs::create_directories(out);
         ecm_edwards::Integer n;mpz_ui_pow_ui(n.v,2,127);mpz_sub_ui(n.v,n.v,1);
         r::Submission value;value.exponent=127;value.b1=20;value.b2=20;value.stage1_only=true;
@@ -29,11 +30,34 @@ int main(int argc,char **argv) {
         value.publication_task="task-b";value.sigma=2;r::publish_submission(out/"scoped.json.txt",value,n.v);
         r::seal_submissions(out/"scoped.json.txt",0,"task-a");
         {std::ifstream file(out/"scoped.json.txt");std::string line;check(bool(std::getline(file,line)));check(r::json::parse(line).get("curves").text()=="1");check(!std::getline(file,line));}
+        // Stage2 task aggregation ignores per-curve geometry and uses the final
+        // completed curve, regardless of receipt hash order.
+        value.publication_task="geometry-task";value.b2=2000;value.d=30030;value.poly_size=96;
+        for(unsigned i=0;i<3;++i) {
+            value.sigma=sigmas[i];value.publication_order=i+1;
+            value.when="2026-10-20 12:00:0"+std::to_string(i);
+            value.d=30030+2*i;value.poly_size=96+32*i;
+            r::publish_submission(out/"geometry.json.txt",value,n.v);
+        }
+        check(!fs::exists(out/"geometry.json.txt"));
+        r::seal_submissions(out/"geometry.json.txt",2,"geometry-task",true);
+        {std::ifstream file(out/"geometry.json.txt");std::string line;check(bool(std::getline(file,line)));
+            const auto row=r::json::parse(line);check(row.get("curves").text()=="3" && row.get("d").text()=="30034" &&
+                row.get("poly-size").text()=="160" && row.get("timestamp").text()=="2026-10-20 12:00:02");
+            check(!std::getline(file,line));}
         // A factor is an immediate individual submission, without sealing NF.
         ecm_edwards::Integer composite;mpz_ui_pow_ui(composite.v,2,29);mpz_sub_ui(composite.v,composite.v,1);
         auto factor=value;factor.exponent=29;factor.stage=1;factor.d=0;factor.poly_size=0;factor.factors={"233"};
         r::publish_submission(out/"factor.json.txt",factor,composite.v);
         check(fs::exists(out/"factor.json.txt"));
+        auto mixed=factor;mixed.publication_task="mixed-task";
+        r::publish_submission(out/"mixed.json.txt",mixed,composite.v);
+        {std::ifstream file(out/"mixed.json.txt");std::string line;check(bool(std::getline(file,line)));
+            check(r::json::parse(line).get("status").text()=="F" && !std::getline(file,line));}
+        mixed.factors.clear();mixed.stage=0;mixed.sigma=999;mixed.publication_order=2;
+        mixed.d=30030;mixed.poly_size=96;
+        r::publish_submission(out/"mixed.json.txt",mixed,composite.v);
+        r::seal_submissions(out/"mixed.json.txt",2,"mixed-task",true);
         // Migration is atomic and order survives export/replay from the new path.
         fs::rename(r::submission_ledger(out/"internal.jsonl"),r::legacy_submission_ledger(out/"internal.jsonl"));
         r::atomic_text(r::legacy_submission_ledger(out/"internal.jsonl")/"format","ECM_INTERNAL_LEDGER_V1\n");

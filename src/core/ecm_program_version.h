@@ -3,7 +3,7 @@
 // Public software identity. Source/build fingerprints belong in diagnostics.
 namespace ecm_program {
 inline constexpr char name[] = "ECM-ELF";
-inline constexpr char version[] = "0.41.0";
+inline constexpr char version[] = "0.42.0";
 #if defined(_WIN32)
 inline constexpr char host_os[] = "Windows";
 #elif defined(__ANDROID__)

@@ -44,6 +44,7 @@ struct Submission {
     std::string k="1";uint32_t b=2;int32_t c=-1;
     std::vector<std::string> factors,known;
     std::string user,computer,aid,when,publication_task;
+    uint64_t publication_order=0; // Position in the selected Stage2 task; not part of the public JSON.
 };
 // Verify original M metadata against the actual modulus. Only exact Mersenne
 // inputs are inferred; a cofactor needs its original exponent and known factors.

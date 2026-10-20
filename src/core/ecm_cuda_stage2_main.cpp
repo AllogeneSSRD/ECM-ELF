@@ -1014,6 +1014,7 @@ int curve_worker(Options o) {
     const auto identity=ecm_config::read_stage2(ecm_config::cli_entries(identity_lines,o.worker,true));
     ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
     submission.publication_task=o.publication_task;submission.when=ecm_results::utc_timestamp();
+    submission.publication_order=o.index;
     submission.known=o.submission_known;submission.aid=o.submission_aid;
     submission.sigma=r.sigma;submission.b1=r.b1;submission.b2=o.b2;
     submission.d=tune_metrics.d;submission.poly_size=tune_metrics.p;
@@ -1564,7 +1565,7 @@ int driver(Options o) {
                 report(message.str());
             }
         }
-        if(task_completed && !o.dry && !o.plan_only && !o.tune_child)ecm_results::seal_submissions(o.submission,0,o.publication_task);
+        if(task_completed && !o.dry && !o.plan_only && !o.tune_child)ecm_results::seal_submissions(o.submission,2,o.publication_task,true);
         if(!queue||o.dry||o.plan_only)break;
         if(state.done<state.total)break;
         std::string current;

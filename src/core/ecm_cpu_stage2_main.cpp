@@ -145,7 +145,7 @@ int main(int argc,char **argv) {
 #endif
         if(o.export_only) {
             if(!ecm_results::has_result_ledger(o.submission))throw std::runtime_error("no owned submission ledger");
-            ecm_results::seal_submissions(o.submission);std::cout<<"submission output regenerated\n";return 0;
+            ecm_results::seal_submissions(o.submission,2,{},true);std::cout<<"submission output regenerated\n";return 0;
         }
         auto rows=ecm_edwards::read_saved_curves(o.save);
         if(o.skip>=rows.size())throw std::runtime_error("skip exceeds saved curve count");
@@ -213,13 +213,14 @@ int main(int argc,char **argv) {
             const auto json=result(selected,r,n.v,f.v,stage,elapsed,details);
             ecm_results::Submission report;report.exponent=o.exponent;report.sigma=r.sigma;report.b1=r.b1;report.b2=o.b2;
             report.publication_task=publication_task;report.stage=stage;report.known=o.known;report.user=o.user;report.computer=o.computer;report.aid=o.aid;
+            report.publication_order=i+1;
             report.d=details.d;report.poly_size=details.poly_size;report.stage2_fft_length=details.fft_length;
             if(stage)report.factors.push_back(number(f.v));
             ecm_results::publish_submission(o.submission,report,n.v);
             if(!publish_save(o.results,json,true))throw std::runtime_error("result publication failed");
             std::cout<<"completed save-line="<<r.line<<" sigma="<<r.sigma<<" status="<<(stage?"F":"NF")<<" seconds="<<elapsed<<std::endl;
         }
-        ecm_results::seal_submissions(o.submission,0,publication_task);
+        ecm_results::seal_submissions(o.submission,2,publication_task,true);
         return 0;
     }catch(const std::exception &e){std::cerr<<"CPU Stage2: "<<e.what()<<'\n';return 1;}
 }

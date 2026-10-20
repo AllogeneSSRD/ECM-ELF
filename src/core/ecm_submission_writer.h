@@ -120,7 +120,15 @@ inline void render_submission(const fs::path &path,const fs::path &ledger) {
     for(const auto &pair:factors)output+=pair.second+'\n';
     atomic_text(path,output);
 }
-inline void seal_submissions(const fs::path &path,int stage_filter=0,const std::string &task={}) {
+inline uint64_t submission_order(const SubmissionEntry &entry) {
+    const auto marker=entry.group.find(":O:");
+    if(marker==std::string::npos)return 0;
+    const auto start=marker+3,end=entry.group.find(':',start);
+    if(end==std::string::npos || end==start ||
+       entry.group.find_first_not_of("0123456789",start)!=end)return 0;
+    return std::stoull(entry.group.substr(start,end-start));
+}
+inline void seal_submissions(const fs::path &path,int stage_filter=0,const std::string &task={},bool whole_task=false) {
     SubmissionLock lock(path);const auto ledger=migrate_result_ledger(path);if(!fs::exists(ledger/"format"))return;
     require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");
     std::set<std::string> sealed,lines;
@@ -129,7 +137,8 @@ inline void seal_submissions(const fs::path &path,int stage_filter=0,const std::
         std::istringstream ids(batch.group);std::string id;
         while(std::getline(ids,id,','))if(!sealed.insert(id).second)throw std::runtime_error("NF curve occurs in two submission batches");
     }
-    std::map<std::string,std::vector<std::pair<std::string,SubmissionEntry>>> pending;
+    struct Pending {std::string id;SubmissionEntry entry;fs::file_time_type time;};
+    std::map<std::string,std::vector<Pending>> pending;
     for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".curve") {
         const auto id=file.path().stem().string();const auto entry=read_submission_entry(file.path());
         if(entry.group=="F" || sealed.count(id))continue;
@@ -137,18 +146,33 @@ inline void seal_submissions(const fs::path &path,int stage_filter=0,const std::
         const auto row=json::parse(entry.json);
         const bool stage1=row.get("stage").text()=="1" || row.get("b1").text()==row.get("b2").text();
         if(stage_filter && stage1!=(stage_filter==1))continue;
-        pending[entry.group].push_back({id,entry});
+        std::string group=entry.group;
+        if(whole_task && group.compare(0,2,"T:")==0) {
+            const auto end=group.find(':',2);
+            if(end!=std::string::npos)group.resize(end);
+        }
+        pending[group].push_back({id,entry,fs::last_write_time(file.path())});
     }
     for(auto &group:pending) {
-        auto &entries=group.second;std::sort(entries.begin(),entries.end(),[](const auto &a,const auto &b){return a.first<b.first;});
-        std::string ids;for(const auto &entry:entries){if(!ids.empty())ids+=',';ids+=entry.first;}
-        auto json=entries.back().second.json;
+        auto &entries=group.second;
+        const auto latest=std::max_element(entries.begin(),entries.end(),[](const auto &a,const auto &b){
+            const auto ao=submission_order(a.entry),bo=submission_order(b.entry);
+            if(ao!=bo)return ao<bo;
+            if(a.time!=b.time)return a.time<b.time;
+            return a.id<b.id;
+        });
+        auto json=latest->entry.json;
+        std::sort(entries.begin(),entries.end(),[](const auto &a,const auto &b){return a.id<b.id;});
+        std::string ids;for(const auto &entry:entries){if(!ids.empty())ids+=',';ids+=entry.id;}
         {
             auto row=json::parse(json);row.set("curves",json::Value::number(std::to_string(entries.size())));
             // Only real UTC timestamps are used to distinguish equal batches.
             const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+            bool keep_completion_time=whole_task;
             for(;;) {
-                row.set("timestamp",json::Value::string(utc_timestamp()));json=with_result_checksum(row.dump());
+                if(!keep_completion_time)row.set("timestamp",json::Value::string(utc_timestamp()));
+                keep_completion_time=false;
+                json=with_result_checksum(row.dump());
                 if(!lines.count(json))break;
                 if(std::chrono::steady_clock::now()>deadline)throw std::runtime_error("system clock did not advance for NF report");
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -190,7 +214,8 @@ inline void publish_submission(const fs::path &path,const Submission &r,const mp
     for(const auto &factor:r.factors)key+='|'+factor;
     key=stage1_factor_key(key);
     auto group=r;group.when="1970-01-01 00:00:00";
-    const auto group_key=r.factors.empty()?"T:"+r.publication_task+":"+submission_json(group,n):"F";
+    const auto group_key=r.factors.empty()?"T:"+r.publication_task+":"+
+        (r.publication_order?"O:"+std::to_string(r.publication_order)+":":std::string{})+submission_json(group,n):"F";
     const auto group_line=r.factors.empty()?group_key.substr(0,group_key.size()-1):group_key;
     const auto entry=ledger/(std::to_string(ecm_edwards::hash(key))+".curve");
     if(r.stage==1 && !fs::exists(entry)) {
