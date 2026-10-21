@@ -877,6 +877,19 @@ PARI helper 和整段命中诊断移入应用私有 [diagnostics/group_order.cpp
 
 提交后的格式修复：移除诊断文件一行继承的尾空白，完整规范化函数/入口对照通过，local 仅 1 CXX/0 CU/1 link，31 个 CUDA 对象不变。版本仍为 0.45.17；[修复资格](../../data/experiments/main_flow_refactor_implementation_20261021/p4i_format/qualification.json)区分原运行验收二进制与格式后重链二进制，不把原运行记录改写成重跑。后续提交在 staging/空白检查成功后才执行。
 
+### P5a：Stage2 进度、回执与指纹存储已收口
+
+对应 Stage2 程序版本 `0.45.18`。公开 [stage2_progress.h](../../include/ecm/storage/queue/stage2_progress.h)只保留 State/Task 的原数据布局与实际读写/回执声明，完整实现落 [stage2_progress.cpp](../../src/ecm/storage/queue/stage2_progress.cpp)。公开 [fingerprint.h](../../include/ecm/platform/fingerprint.h)声明 SHA 接口，Windows CNG、动态加载和句柄清理全部进入 [fingerprint.cpp](../../src/ecm/platform/fingerprint.cpp)。不新增链接依赖、Pimpl 或 Runner。旧 SHA 实现头已删除；旧进度私有头只保留真实 legacy 身份适配与泛型匹配，不作为无价值转发保留。
+
+State/Task 字段和默认值、schema 1/2 接纳、pending_results、SHA 身份、临时文件/Flush/Move 原子提交、完整行 receipt/finished 确认，以及 legacy 导入匹配均保持。公开头不包含 Windows、bcrypt、JSON 或文件实现。完整 Stage2 父子、队列、规划和 tune 正文仍未变，后续继续 P5 深化。
+
+- [源码对照](../../data/experiments/main_flow_refactor_implementation_20261021/p5a/source_contract_02/result.json)：8 个存储方法、3 个 SHA 函数、状态布局、legacy 匹配和完整 driver 相同。比较工具补齐 const 方法识别，原失败记录保留。
+- [18 项独立存储检查](../../data/experiments/main_flow_refactor_implementation_20261021/p5a/storage_contract/manifest.json)：实际 MSVC/MT 编译并运行真实 CPP；CUDA SDK 路径/头和 nvcc 调用均为零。
+- [23 项结果生命周期](../../data/experiments/main_flow_refactor_implementation_20261021/p5a/results_02/result.json)通过，保留撕裂/损坏/重复回执和结果恢复断言；fixture 补齐其自身直接使用的 JSON 声明，未修改生产解析或放宽断言。
+- [5+5 基线运行](../../data/experiments/main_flow_refactor_implementation_20261021/p5a/runtime/summary.json)通过。Stage2 local 为 4 CXX/0 CU/1 link，两个 CUDA 对象不变；重复构建 0 CXX/0 CU/0 link。
+
+[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p5a/qualification.json)冻结当前 Stage2 worker。Stage1 对照协作者仍为 0.45.17，本步未重建 Stage1/OpenCL/CPU Stage2，不把这些写成 0.45.18 验收。P5 父子流程、规划与运行状态继续实施；未运行 release、性能或全位宽终验。
+
 ## 首先调整构建复用与输出隔离
 
 ### 当前样例说明了什么

@@ -135,3 +135,9 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 - [请求程序](../../src/ecm/backend/cuda/planning/ecm_stage2_requests.h#L78)：`request_program`；[F树组](../../src/ecm/core/stage2/ecm_stage2_geometry.h#L147)：`tree_multiply_groups`；[G树布局/分组与选择](../../src/ecm/core/stage2/ecm_stage2_giant_tree.h)：`giant_tree_balanced`、`giant_tree_layout`、`giant_tree_multiply_groups`。
 - [点模乘](../../src/ecm/backend/cuda/stage2/device/point.cuh)、[梅森点算术](../../src/ecm/backend/cuda/stage2/device/point_mersenne.cuh)、[NTT](NTT.md)、[内存](MEMORY.md)。
 - 固定资料：[多项式数学](../reference/ECM_STAGE2_MATH.md)、[Prime95 Poly](../reference/PRIME95_STAGE2.md)、[PrMers ECM](../reference/PRMERS_ECM.md)。
+
+## 进度与文件机制的接口
+
+[stage2_progress.h](../../include/ecm/storage/queue/stage2_progress.h)公开任务身份和曲线进度数据及读写/回执声明；[stage2_progress.cpp](../../src/ecm/storage/queue/stage2_progress.cpp)实现 schema、原子落盘、完整结果行与 finished 回执检查。旧身份导入的匹配模板仍在 storage/queue 私有头，由实际任务解析提供数学一致性判断。单任务 pending/确认/封存/源行复核由父流程排序，文件模块不拥有另一个任务循环。
+
+[fingerprint.h](../../include/ecm/platform/fingerprint.h)是 SHA256 的普通 C++ 声明；Windows CNG 的动态库与句柄实现仅在 [fingerprint.cpp](../../src/ecm/platform/fingerprint.cpp)。两个模块不依赖 CUDA SDK，构建使用普通主机编译器；实际计算引擎仍保持自己的 CUDA runtime 依赖。

@@ -1,4 +1,4 @@
-#pragma once
+#include "ecm/platform/fingerprint.h"
 #include <windows.h>
 #include <bcrypt.h>
 #include <filesystem>
@@ -10,7 +10,7 @@
 
 // Windows CNG loaded dynamically: no new link dependency for existing builders.
 namespace ecm_stage2 {
-inline std::string sha256_stream(std::istream &input) {
+std::string sha256_stream(std::istream &input) {
     struct Cng {
         HMODULE library=nullptr;
         BCRYPT_ALG_HANDLE algorithm=nullptr;
@@ -64,12 +64,12 @@ inline std::string sha256_stream(std::istream &input) {
     for(auto c:digest){result+=hex[c>>4];result+=hex[c&15];}
     return result;
 }
-inline std::string sha256_file(const std::filesystem::path &path) {
+std::string sha256_file(const std::filesystem::path &path) {
     std::ifstream input(path,std::ios::binary);
     if(!input)throw std::runtime_error("cannot fingerprint: "+path.string());
     return sha256_stream(input);
 }
-inline std::string sha256_text(const std::string &text) {
+std::string sha256_text(const std::string &text) {
     std::istringstream input(text);
     return sha256_stream(input);
 }

@@ -50,7 +50,7 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 </style></head><body><main>
 <header><div class="caption">ECM-ELF · 2026-10-21 · 实施草稿 / P0–P3 与 P4a 已完成，P4职责提取进行中</div>
 <h1>主流程重构完整方案</h1><p class="lead">构建复用先行；明确 driver、task、factory 与 QueueWorkflow 的职责，精简重复封装。完整目录、Interface、伪代码与阶段门槛。</p>
-<div class="hero-note"><strong>P4 已完成，程序版本 0.45.17。</strong>唯一 task/队列完成协议、普通 CXX 主机实现、私有拥有权合同与应用 PARI 均已归位。driver 1001 行；8 项任务、13 项队列、27 项实际运行和 PARI CPU/GPU 对照通过，31+2 个 CUDA 对象未变。P5–P7 继续实施。</div>
+<div class="hero-note"><strong>P5a 已完成，Stage2 版本 0.45.18。</strong>进度、回执与指纹存储已形成公开声明和普通 CPP；18 项独立存储、23 项结果及 5+5 基线通过。两个 CUDA 对象不变，重复构建零编译/链接。Stage1 P4 已完成；P5 后续、P6–P7 继续实施。</div>
 <div class="kpis"><div><b>31 个 CU</b><span>用户日志中的全量编译单元</span></div><div><b>1535.6 秒</b><span>单次 CUDA 编译阶段墙钟，非总脚本</span></div><div><b>默认逐 TU 复用</b><span>先落实 build_cuda_local 等隔离根</span></div><div><b>P0—P7</b><span>阶段交付与验收门槛</span></div></div>
 <p class="caption">沿用前期整合快照（HEAD 2e64b75e5d14287e2ee25bdaff27e3b1128c1d93 加当时工作区，版本头0.44.7），流程分析保留其0.44.6依据。以上为前期设计依据，保持原始快照。本次 P0 从干净 HEAD 5735108、版本0.44.9开始，另存1959项源码摘要与local日志；P0 local 基线与P1a构建复用分别保留实际程序、清单与验证证据；未运行release，没有性能结论。</p></header><nav class="review-nav" aria-label="方案目录"><a href="#plan-progress">实施记录</a><a href="#plan-overview">目标与约束</a><a href="#plan-build">先改构建</a><a href="#plan-tree">完整目录</a><a href="#plan-modules">模块职责</a><a href="#plan-boundaries">职责与精简</a><a href="#plan-interfaces">Interface 输入输出</a><a href="#plan-driver">driver 伪代码</a><a href="#plan-map">文件映射</a><a href="#plan-phases">阶段顺序</a><a href="#plan-validation">验收</a><a href="#source-analysis">现状依据</a></nav><div class="phase-nav"><a href="#phase-0">P0 · 冻结依据</a><a href="#phase-1">P1 · 构建先行</a><a href="#phase-2">P2 · 合同与CXX</a><a href="#phase-3">P3 · 目录归位</a><a href="#phase-4">P4 · Stage1提取</a><a href="#phase-5">P5 · Stage2收口</a><a href="#phase-6">P6 · GUI/CPU</a><a href="#phase-7">P7 · 综合验收</a></div><div class="pipeline" aria-label="Task内部七步"><span>task内部：校验</span><span>打开会话</span><span>准备</span><span>执行 + 安全点协作</span><span>核对</span><span>最终发布</span><span>结束会话</span><span>队列另行提交</span></div><section class="plan-section" id="plan-overview"><h2>完整重构目标与实施约束</h2>
 <p>本节是整合后的<strong>目标实施方案</strong>；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3 完成 CUDA/主机/OpenCL 家族归位，P4a–P4i 已完成 Stage1 职责整理，P5–P7 继续实施。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。</p>
@@ -300,6 +300,16 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 </ul>
 <p><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4i/qualification.json">最终资格</a>冻结三个当前 worker，CPU Stage2 互操作仍用 0.45.14；本阶段未重建可选 PRAC profile，其 0.45.16 的资格保持为历史证据。Stage1 仍限每进程一个活跃任务，实际 CUDA 同步/回读不脱离 SDK。Stage2 规划/持久化继续 P5，GUI 与 CPU 入口深化继续 P6，跨类别增量及完整位宽综合终验继续 P7；未运行 release 或性能采样。</p>
 <p>提交后的格式修复：移除诊断文件一行继承的尾空白，完整规范化函数/入口对照通过，local 仅 1 CXX/0 CU/1 link，31 个 CUDA 对象不变。版本仍为 0.45.17；<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4i_format/qualification.json">修复资格</a>区分原运行验收二进制与格式后重链二进制，不把原运行记录改写成重跑。后续提交在 staging/空白检查成功后才执行。</p>
+<h3 id="p5astage2-进度回执与指纹存储已收口">P5a：Stage2 进度、回执与指纹存储已收口</h3>
+<p>对应 Stage2 程序版本 <code>0.45.18</code>。公开 <a href="../../include/ecm/storage/queue/stage2_progress.h">stage2_progress.h</a>只保留 State/Task 的原数据布局与实际读写/回执声明，完整实现落 <a href="../../src/ecm/storage/queue/stage2_progress.cpp">stage2_progress.cpp</a>。公开 <a href="../../include/ecm/platform/fingerprint.h">fingerprint.h</a>声明 SHA 接口，Windows CNG、动态加载和句柄清理全部进入 <a href="../../src/ecm/platform/fingerprint.cpp">fingerprint.cpp</a>。不新增链接依赖、Pimpl 或 Runner。旧 SHA 实现头已删除；旧进度私有头只保留真实 legacy 身份适配与泛型匹配，不作为无价值转发保留。</p>
+<p>State/Task 字段和默认值、schema 1/2 接纳、pending_results、SHA 身份、临时文件/Flush/Move 原子提交、完整行 receipt/finished 确认，以及 legacy 导入匹配均保持。公开头不包含 Windows、bcrypt、JSON 或文件实现。完整 Stage2 父子、队列、规划和 tune 正文仍未变，后续继续 P5 深化。</p>
+<ul class="plan-list">
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p5a/source_contract_02/result.json">源码对照</a>：8 个存储方法、3 个 SHA 函数、状态布局、legacy 匹配和完整 driver 相同。比较工具补齐 const 方法识别，原失败记录保留。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p5a/storage_contract/manifest.json">18 项独立存储检查</a>：实际 MSVC/MT 编译并运行真实 CPP；CUDA SDK 路径/头和 nvcc 调用均为零。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p5a/results_02/result.json">23 项结果生命周期</a>通过，保留撕裂/损坏/重复回执和结果恢复断言；fixture 补齐其自身直接使用的 JSON 声明，未修改生产解析或放宽断言。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p5a/runtime/summary.json">5+5 基线运行</a>通过。Stage2 local 为 4 CXX/0 CU/1 link，两个 CUDA 对象不变；重复构建 0 CXX/0 CU/0 link。</li>
+</ul>
+<p><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p5a/qualification.json">最终资格</a>冻结当前 Stage2 worker。Stage1 对照协作者仍为 0.45.17，本步未重建 Stage1/OpenCL/CPU Stage2，不把这些写成 0.45.18 验收。P5 父子流程、规划与运行状态继续实施；未运行 release、性能或全位宽终验。</p>
 </section>
 <section class="plan-section" id="plan-build"><h2>首先调整构建复用与输出隔离</h2>
 <h3 id="当前样例说明了什么">当前样例说明了什么</h3>

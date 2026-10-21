@@ -9,7 +9,7 @@
 #include "../configuration/ecm_queue_config.h"
 #include "../../storage/queue/ecm_worktodo.h"
 #include "ecm/platform/program_version.h"
-#include "../../platform/ecm_stage2_fingerprint.h"
+#include "ecm/platform/fingerprint.h"
 #include "../../service/stage2/legacy/ecm_stage2_factorize.h"
 #include "../../service/planning/legacy/ecm_stage2_cost_profile.h"
 #include "../../service/planning/legacy/ecm_stage2_tune_format.h"

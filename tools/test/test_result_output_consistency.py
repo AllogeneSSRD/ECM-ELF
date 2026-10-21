@@ -21,7 +21,7 @@ def main():
     script=out/'compile.cmd';vc=r'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat'
     script.write_text('@echo off\ncall "'+vc+'" >nul 2>&1\nif errorlevel 1 exit /b 1\n'
         'cl /nologo /std:c++17 /EHsc /O2 /utf-8 /I"'+str(ROOT/'include')+'" /I"'+str(gmp/'include')+'" "'+str(ROOT/'tools/test/result_output_fixture.cpp')+
-        '" "'+str(ROOT/'src/ecm/storage/results/publication.cpp')+'" /Fe:"'+str(exe)+'" /Fo:"'+str(out)+'/'+'" /link /LIBPATH:"'+str(gmp/'lib')+'" gmp.lib\n',encoding='utf-8')
+        '" "'+str(ROOT/'src/ecm/storage/results/publication.cpp')+'" "'+str(ROOT/'src/ecm/storage/queue/stage2_progress.cpp')+'" "'+str(ROOT/'src/ecm/platform/fingerprint.cpp')+'" /Fe:"'+str(exe)+'" /Fo:"'+str(out)+'/'+'" /link /LIBPATH:"'+str(gmp/'lib')+'" gmp.lib\n',encoding='utf-8')
     r=subprocess.run(['cmd','/c',str(script)],capture_output=True);(out/'compile.log').write_bytes(r.stdout+r.stderr);assert not r.returncode,'inspect compile.log'
     shutil.copy2(gmp/'bin/gmp-10.dll',out/'gmp-10.dll')
     r=subprocess.run([str(exe),str(out/'run')],capture_output=True);(out/'run.log').write_bytes(r.stdout+r.stderr);assert not r.returncode,'inspect run.log'

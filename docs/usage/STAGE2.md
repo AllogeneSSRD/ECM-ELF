@@ -109,6 +109,6 @@ Stage2 与 Stage1 共用 `[shared] worktodo`，使用 `[stage2]` 的 `stage2_fin
 `--auto-min-b2`/`--auto-max-b2`控制搜索边界，默认B1<B2≤2.6×10¹²，不限于已测范围。完整tune优先于旧`stage2_cost_profile`；Auto缺T1/完整成本或没有满足当前显存的候选时明确失败，保留队列。每条worker重新规划。模型精度与当前限制见[Auto B2/tune](../architecture/AUTO_B2.md)。
 
 - [ecm_cuda_stage2_main.cpp](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L175)：`records`；[队列字段](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L395)：`queue_fields`。
-- [ecm_stage2_queue_state.h](../../src/ecm/storage/queue/ecm_stage2_queue_state.h)：原子进度和回执对账。
+- [Stage2 进度接口](../../include/ecm/storage/queue/stage2_progress.h)与[存储实现](../../src/ecm/storage/queue/stage2_progress.cpp)：原子进度和回执对账。
 - [ecm_stage2_console.h](../../src/ecm/application/cuda_stage2/ecm_stage2_console.h)：阶段和内存摘要。
 - [Stage2 管线](../architecture/STAGE2.md)、[Auto B2](../architecture/AUTO_B2.md)、[构建](BUILD.md)。

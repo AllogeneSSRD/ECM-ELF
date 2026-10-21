@@ -359,7 +359,7 @@ Stage2 不保存 NTT、多项式、树、fold 或单曲线内部状态。只在�
 
 旧 schema 1 / 单文件 `.progress` 仅作为兼容导入来源。按任务目标、AID、save 内容和范围匹配，成功后保留原字节为 `.migrated.<摘要>`；不匹配的旧任务不阻止当前新任务。不是任意 `.dat` 文件都能导入。
 
-来源：[State/Task/schema](../../src/ecm/storage/queue/ecm_stage2_queue_state.h#L22)、[结果回执判断](../../src/ecm/storage/queue/ecm_stage2_queue_state.h#L98)、[恢复与运行顺序](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L1395)。
+来源：[State/Task 声明](../../include/ecm/storage/queue/stage2_progress.h)、[schema 与结果回执实现](../../src/ecm/storage/queue/stage2_progress.cpp)、[恢复与运行顺序](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L1395)。
 
 ## 8. 存储、写入成本和边界
 

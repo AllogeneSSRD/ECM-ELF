@@ -95,6 +95,8 @@ set(ECM_STAGE1_PRAC_SOURCES
     src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_constants.cu
     src/ecm/backend/cuda/stage1/montgomery/prac/ecm_prac_plan.cpp)
 set(ECM_STAGE2_HOST_SOURCES
+    src/ecm/platform/fingerprint.cpp
+    src/ecm/storage/queue/stage2_progress.cpp
     src/ecm/storage/results/publication.cpp
     src/ecm/core/stage1/selection.cpp
     src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp
