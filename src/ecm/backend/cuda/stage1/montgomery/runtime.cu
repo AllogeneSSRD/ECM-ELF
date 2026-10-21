@@ -94,7 +94,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
              unsigned long checkpoint_interval_ms,
              float *gputime, int verbose, int gpu_param, uint64_t B1, uint32_t torsion,
              ecm_cuda_stage1::RunResult &outcome,ecm_cuda_stage1::FactorSink sink,void *context,
-             ecm_cuda_stage1::SigmaGenerator generate_sigma)
+             ecm_cuda_stage1::SigmaGenerator generate_sigma,const MontRequestedSpec &requested)
 {
   using namespace ecm_cuda_stage1;
   if(!factors || !array_found || !N || !s || !curves || !sigma_ptr || !gputime ||
@@ -105,8 +105,8 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   if(gpu_param!=0 && (*sigma_ptr>UINT32_MAX || curves>0x100000000ull-*sigma_ptr))
       throw RunError(Failure::Preparation,"CUDA batch parameter range exceeds uint32");
   MontResources resources;
-  const ConstructionResults construction{factors,array_found,sink,context};
-  const char *algorithm = stage1_algorithm();
+  const ConstructionResults construction{factors,array_found,sink,context,&outcome.degenerate_curve};
+  const char *algorithm = stage1_algorithm(requested);
   if (!algorithm) return ECM_ERROR;
   if (strcmp(algorithm, "ladder") != 0) {
 #if ECM_CUDA_ENABLE_PRAC
@@ -116,7 +116,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     }
     return run_mont_resident(factors, array_found, N, s, curves, sigma_ptr,
                                checkpoint_interval_ms, gputime, B1, torsion,
-                               strcmp(algorithm, "prac") == 0,outcome,construction,generate_sigma);
+                               strcmp(algorithm, "prac") == 0,outcome,construction,generate_sigma,requested);
 #else
     outputf(OUTPUT_ERROR, "GPU: resident/PRAC kernels are not built; rebuild with "
                          "-EnablePrac or -DECM_CUDA_ENABLE_PRAC=ON\n");
@@ -221,7 +221,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   /* Result / status variable used throughout the function */
   int youpi = ECM_NO_FACTOR_FOUND;
 
-  uint32_t dump_enable = gpu_dump_enabled() ? 1u : 0u;
+  uint32_t dump_enable = gpu_dump_enabled(requested) ? 1u : 0u;
   auto *&dump_file=resources.dump_file;
   auto *&dump_host=resources.dump;
   const char *dump_filename = "dump.csv";
@@ -443,6 +443,8 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     return ECM_ERROR;
   }
 
+  const MontResolvedKernel resolved{kernel,BITS,uint32_t(TPI),uint32_t(TPB),BLOCK_COUNT,data_size};
+
   // Print the *actual* sigma now that any checkpoint resume has been applied
   // (the checkpoint may override the freshly-computed sigma from the driver).
   outputf(OUTPUT_NORMAL, "GPU: sigma=%llu (param %d, %u curves)%s\n",
@@ -515,7 +517,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   outcome.failure=Failure::Execution;
   // Copy data
   outputf (OUTPUT_VERBOSE, "Copying %'lu bytes of curves data to GPU\n", data_size);
-  CUDA_CHECK(cudaMalloc((void **)&gpu_data, data_size));
+  CUDA_CHECK(cudaMalloc((void **)&gpu_data,resolved.state_bytes));
   CUDA_CHECK(cudaMemcpy(gpu_data, data, data_size, cudaMemcpyHostToDevice));
 
   outputf (OUTPUT_NORMAL,
@@ -648,7 +650,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
 
     /* Call CUDA Kernel. */
     assert (kernel != NULL);
-    cgbn_stage1_launch(kernel,BLOCK_COUNT,TPB,report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma_arg, np0);
+    cgbn_stage1_launch(resolved.entry,resolved.blocks,resolved.tpb,report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma_arg, np0);
     CUDA_CHECK(cudaGetLastError());
 
     s_partial += this_batch;
@@ -760,7 +762,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     outcome.snapshot_cursor=s_partial;
     CUDA_CHECK(cudaEventElapsedTime (gputime, global_start, stop));
     youpi = process_results(factors, array_found, N, data, BITS, curves, sigma64,
-                            words_per_curve, p1_word, p2_word, gpu_param,true);
+                            words_per_curve, p1_word, p2_word, gpu_param,true,&outcome.degenerate_curve);
   }
 
   // Task finalization owns checkpoint cleanup after all result publication.
@@ -774,11 +776,12 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
 
 ecm_cuda_stage1::RunResult ecm_cuda_stage1::execute_mont_batch(mpz_t *factors,int *found,
     mpz_srcptr n,mpz_srcptr scalar,uint32_t curves,uint64_t *sigma,unsigned long checkpoint_ms,
-    float *milliseconds,int verbose,int param,uint64_t b1,uint32_t torsion,FactorSink sink,void *context,SigmaGenerator generate_sigma) {
+    float *milliseconds,int verbose,int param,uint64_t b1,uint32_t torsion,FactorSink sink,void *context,SigmaGenerator generate_sigma,const ecm_cuda_mont_host::MontRequestedSpec *requested) {
     RunResult result;
     try {
+        MontRequestedSpec fallback;if(!requested){fallback=capture_mont_request();requested=&fallback;}
         result.code=run_mont_runtime(factors,found,n,scalar,curves,sigma,checkpoint_ms,
-                                    milliseconds,verbose,param,b1,torsion,result,sink,context,generate_sigma);
+                                    milliseconds,verbose,param,b1,torsion,result,sink,context,generate_sigma,*requested);
         if(result.code!=-1){result.termination=Termination::Completed;result.failure=Failure::None;}
         else if(result.termination==Termination::Stopped || result.termination==Termination::SampleLimit)
             result.failure=Failure::None;

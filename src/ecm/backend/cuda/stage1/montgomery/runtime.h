@@ -1,6 +1,7 @@
 #pragma once
 #include "../runtime_contract.h"
 #include <gmp.h>
+namespace ecm_cuda_mont_host {struct MontRequestedSpec;}
 
 namespace ecm_cuda_stage1 {
 // The callback persists a proper construction factor immediately. It borrows
@@ -10,5 +11,5 @@ using FactorSink=bool (*)(uint32_t,mpz_srcptr,void *);
 using SigmaGenerator=uint64_t (*)(uint32_t curves,int parametrization);
 RunResult execute_mont_batch(mpz_t *,int *,mpz_srcptr,mpz_srcptr,uint32_t,uint64_t *,
     unsigned long,float *,int,int,uint64_t,uint32_t,FactorSink=nullptr,void *context=nullptr,
-    SigmaGenerator generate_sigma=nullptr);
+    SigmaGenerator generate_sigma=nullptr,const ecm_cuda_mont_host::MontRequestedSpec *request=nullptr);
 }

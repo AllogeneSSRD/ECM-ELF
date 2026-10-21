@@ -64,6 +64,22 @@ int main() {
     using namespace ecm_cuda_stage1;
     try {
         edwards_runtime_contract();
+        {
+            using Result=ecm_stage1::ExecutionResult;using Kind=Result::CurveKind;
+            mpz_t n,value;mpz_init_set_ui(n,77);mpz_init_set_ui(value,7);
+            Result result;result.allocate_curves(3);
+            result.set_curve(0,Kind::Factor,value,26);
+            mpz_set_ui(value,12);result.set_curve(1,Kind::Stage2Point,value,27);
+            result.set_curve(2,Kind::CompletedWithoutPoint,nullptr,28);result.validate_curves(n);
+            Result moved(std::move(result));require(moved.curve_kinds[2]==Kind::CompletedWithoutPoint && moved.sigmas[2]==28,"curve outcome move lost data");
+            moved.set_curve(1,Kind::Degenerate,nullptr,27);bool rejected=false;
+            try{moved.validate_curves(n);}catch(const std::runtime_error &){rejected=true;}
+            require(rejected && moved.array_found[1]==ECM_NO_FACTOR_FOUND,"degenerate result published as factor/point");
+            moved.set_curve(1,Kind::Stage2Point,value,27);mpz_set_ui(value,77);moved.set_curve(0,Kind::Factor,value,26);
+            rejected=false;try{moved.validate_curves(n);}catch(const std::runtime_error &){rejected=true;}
+            require(rejected,"whole-modulus outcome accepted as a factor");mpz_clears(n,value,nullptr);
+            std::puts("curve_outcomes=PASS owned_move=1 point=1 no_point=1 degenerate=1 proper_factor=1");
+        }
         mpz_t prime,n;mpz_inits(prime,n,nullptr);mpz_ui_pow_ui(prime,2,127);mpz_sub_ui(prime,prime,1);
         for(int param:{0,2}) {
             ecm_stage1::ExecutionResult result;result.allocate_curves(1);

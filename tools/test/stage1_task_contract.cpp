@@ -1,6 +1,7 @@
 #include "ecm/service/stage1/task.h"
 #include "../../src/ecm/service/stage1/execution_contract.h"
 #include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "../../src/ecm/storage/checkpoint/ecm_stage1_binary.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -49,6 +50,18 @@ static int execute(mpz_srcptr,double,double,uint32_t count,const std::string &,b
     require(out->sigmas!=nullptr,"sigma allocation");
     for(uint32_t i=0;i<count;++i)out->sigmas[i]=ecm_stage1_batch_sigma(i,26+i);
     require(ecm_stage1_write_blob(ecm_stage1_curve_record(0),"task-contract-state"),"checkpoint write");
+    if(mode=="selection_snapshot") {
+#ifdef _WIN32
+        require(_putenv_s("ECM_GPU_STAGE1_ALGO","bad")==0,"environment mutation");
+#else
+        require(setenv("ECM_GPU_STAGE1_ALGO","bad",1)==0,"environment mutation");
+#endif
+        require(options.gpu_algorithm=="resident","execution selection did not retain snapshot");
+        std::ifstream file(ecm_stage1_checkpoint_path(),std::ios::binary);
+        const std::string bytes{std::istreambuf_iterator<char>(file),{}};
+        ecm_stage1_binary::Reader in(bytes);in.take(8);in.u32();in.u32();const auto identity=in.take(in.u64());
+        require(identity.size()>=13 && identity.substr(identity.size()-13)=="|gpu|resident","task identity differs from execution selection");
+    }
     if(mode=="stop" || mode=="stop_publication") {
         stop_now();out->publish_failed=mode=="stop_publication";
         return ECM_ERROR; // Deliberately only sigmas: owner must release independently.
@@ -78,6 +91,12 @@ static int execute(mpz_srcptr,double,double,uint32_t count,const std::string &,b
     out->factors=factors;out->array_found=found;
     out->firstsigma=26;out->firstsigma64=26;
     out->ret=ECM_NO_FACTOR_FOUND; // A hit array may carry a factor independently of this code.
+    if(mode=="typed_complete" || mode=="typed_no_point" || mode=="typed_invalid") {
+        using Kind=ExecutionResult::CurveKind;
+        out->curve_kinds.assign(count,mode=="typed_no_point"?Kind::CompletedWithoutPoint:Kind::Stage2Point);
+        if(mode=="typed_invalid")out->curve_kinds[0]=Kind::Degenerate;
+        out->completion=ExecutionResult::Completion::Completed;
+    }
     return out->ret;
 }
 
@@ -88,6 +107,14 @@ int main(int argc,char **argv) {
         fs::create_directories(folder);
         Stage1Options options;options.execution.selection.target=ExecutionTarget::Cpu;
         options.execution.selection.curve=CurveModel::Montgomery;options.execution.selection.gpu_param=0;
+        if(mode=="selection_snapshot") {
+            options.execution.selection.target=ExecutionTarget::Gpu;
+#ifdef _WIN32
+            require(_putenv_s("ECM_GPU_STAGE1_ALGO","resident")==0,"fixture environment");
+#else
+            require(setenv("ECM_GPU_STAGE1_ALGO","resident",1)==0,"fixture environment");
+#endif
+        }
         options.persistence.tmp_dir=folder.string();options.persistence.results_file=(folder/"internal.jsonl").string();
         options.persistence.submission_file=(folder/"results.json.txt").string();options.identity.sigma_fixed=true;options.identity.fixed_sigma64=26;
         const auto save=(folder/"point.save").string();const std::string expression="10403";
@@ -98,7 +125,7 @@ int main(int argc,char **argv) {
         auto result=run_stage1_task({n,20,20,2,save,false,expression,options},deps);
         mpz_clear(n); // Result factors/sigmas must not borrow the request's modulus.
         require(options.execution.stage1_threads==ecm_stage1::Stage1Options{}.execution.stage1_threads,"request changed");
-        if(mode=="complete" || mode=="factor") {
+        if(mode=="complete" || mode=="factor" || mode=="typed_complete" || mode=="typed_no_point" || mode=="selection_snapshot") {
             require(calls==1 && result.status()==TaskStatus::Completed,"completed status");
             require(result.failure_source()==FailureSource::None && result.task_return()==ECM_NO_FACTOR_FOUND,"completed code");
             require(result.curves()==2 && result.has_sigmas() && result.sigma(1)==27,"curve identity");
@@ -113,7 +140,7 @@ int main(int argc,char **argv) {
         } else if(mode=="publication" || mode=="stop_publication") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Publication,"publication priority/source");
             require(fs::exists(checkpoint),"publication failure lost checkpoint");
-        } else if(mode=="execution" || mode=="execution_stop" || mode=="throw") {
+        } else if(mode=="execution" || mode=="execution_stop" || mode=="throw" || mode=="typed_invalid") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Execution,"explicit execution failure/stop priority");
             require((mode=="throw" || fs::exists(checkpoint)) && !fs::exists(options.persistence.submission_file),"execution failure lost recovery or published NF");
         } else if(mode=="persistence" || mode=="persistence_stop") {

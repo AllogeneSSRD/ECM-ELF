@@ -1,6 +1,7 @@
 #pragma once
 #include "ecm/service/stage1/task.h"
 #include "../execution/ecm.h"
+#include <vector>
 
 // One private computation contract shared by CPU/GPU implementations.
 // Its raw payload and mutable progress stay private to the implementation.
@@ -11,12 +12,16 @@ struct ExecutionOptions : Stage1Options {
     explicit ExecutionOptions(const Stage1Options &options);
     long long stage1_t0_ms = 0;
     uint32_t stage1_curves = 0;
+    // Same owned selection is used by task identity and the CUDA workflow.
+    std::string gpu_algorithm;
 };
 
 struct ExecutionResult {
+    enum class CurveKind { Legacy, Factor, Stage2Point, CompletedWithoutPoint, Degenerate, Failed };
+    std::vector<CurveKind> curve_kinds;
     // Legacy CPU/OpenCL collaborators may still report through the old flags.
     // CUDA workflows report failure or stop explicitly, before returning.
-    enum class Completion { Legacy, Stopped, SampleLimit, Failed };
+    enum class Completion { Legacy, Completed, Stopped, SampleLimit, Failed };
     Completion completion = Completion::Legacy;
     TaskStatus status = TaskStatus::Failed;
     FailureSource failure_source = FailureSource::None;
@@ -36,6 +41,8 @@ struct ExecutionResult {
     ExecutionResult &operator=(ExecutionResult &&other) noexcept;
     ~ExecutionResult();
     void allocate_curves(uint32_t count);
+    void set_curve(uint32_t,CurveKind,mpz_srcptr,uint64_t sigma);
+    void validate_curves(mpz_srcptr modulus) const;
     void fail(FailureSource source) noexcept;
     void stop() noexcept;
     void finish_task(int code,bool stopped) noexcept;

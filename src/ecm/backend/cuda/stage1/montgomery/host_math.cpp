@@ -96,9 +96,11 @@ static bool inverse_or_factor(mpz_ptr inverse,mpz_srcptr denominator,mpz_srcptr 
         uint32_t lane,uint64_t sigma,int param,const ConstructionResults *result) {
     if(mpz_invert(inverse,denominator,n))return true;
     mpz_gcd(inverse,denominator,n);
-    if(mpz_cmp_ui(inverse,1)<=0 || mpz_cmp(inverse,n)>=0)
+    if(mpz_cmp_ui(inverse,1)<=0 || mpz_cmp(inverse,n)>=0) {
+        if(result && result->degenerate_curve)*result->degenerate_curve=lane;
         throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Preparation,
             "degenerate construction denominator: param="+std::to_string(param)+" sigma="+std::to_string(sigma));
+    }
     if(!result || !result->factors || !result->found)
         throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Preparation,
             "construction factor requires a per-curve result sink");
@@ -531,7 +533,7 @@ int process_results(mpz_t *factors, int *array_found,
                     const mpz_t N,
                     const uint32_t *data, uint32_t cgbn_bits,
                     int curves, uint64_t sigma, uint32_t words_per_curve,
-                    int p1_word, int p2_word, int curve_param,bool construction_results) {
+                    int p1_word, int p2_word, int curve_param,bool construction_results,uint32_t *degenerate_curve) {
   mpz_t x_final, z_final, modulo;
   mpz_init(modulo);
   mpz_init(x_final);
@@ -582,6 +584,7 @@ int process_results(mpz_t *factors, int *array_found,
 
     array_found[i] = findfactor(factors[i], N, x_final, z_final);
     if (array_found[i] == ECM_ERROR) {
+      if(degenerate_curve)*degenerate_curve=uint32_t(i);
       ++errors;
       array_found[i] = ECM_NO_FACTOR_FOUND;
       outputf(OUTPUT_ERROR, "GPU: degenerate final denominator on curve %zu (sigma %d:%llu); refusing final save\n",

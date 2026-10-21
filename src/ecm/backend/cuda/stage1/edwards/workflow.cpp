@@ -104,13 +104,14 @@ static bool progress(uint32_t done,void *context) {
 }
 
 int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32_t curves,
-        const std::string &savefilename,bool saveappend,const std::string &n_expr,const Stage1Options &opt,ExecutionResult *out) {
+        const std::string &savefilename,bool saveappend,const std::string &n_expr,const ecm_stage1::ExecutionOptions &opt,ExecutionResult *out) {
     using namespace ed_gpu_driver;
     *out=ExecutionResult{};out->curves=curves;
-    if(!curves)return ECM_ERROR;
+    if(!curves){out->fail(ecm_stage1::FailureSource::Preparation);return ECM_ERROR;}
     auto phase=ecm_stage1::FailureSource::Preparation;
     try {
         out->allocate_curves(curves);
+        std::fill(out->curve_kinds.begin(),out->curve_kinds.end(),ExecutionResult::CurveKind::Failed);
         (void)n_expr;
         const auto initialization_start=Progress::Clock::now();
         if(opt.execution.naf_w!=0 && (opt.execution.naf_w<2 || opt.execution.naf_w>12))throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
@@ -198,13 +199,15 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
                     sigma=opt.identity.sigma_fixed?opt.identity.fixed_sigma64+i:random_sigma_u64();
                 batch.sigmas[i]=ecm_stage1_batch_sigma(i,sigma);
             }
-            std::string error;
+            std::string error;uint32_t degenerate_curve=UINT32_MAX;
             if(!initialize(batch,n,error,[&](uint32_t lane,mpz_srcptr factor) {
-                mpz_set(out->factors[lane],factor);out->array_found[lane]=ECM_FACTOR_FOUND_STEP1;
-                out->sigmas[lane]=batch.sigmas[lane];
+                out->set_curve(lane,ExecutionResult::CurveKind::Factor,factor,batch.sigmas[lane]);
                 if(stage1_publish_factor(opt,n,uint64_t(b1),batch.sigmas[lane],factor))return true;
                 out->publish_failed=true;return false;
-            }))throw std::runtime_error(error);
+            },&degenerate_curve)) {
+                if(degenerate_curve<curves)out->set_curve(degenerate_curve,ExecutionResult::CurveKind::Degenerate,nullptr,batch.sigmas[degenerate_curve]);
+                throw std::runtime_error(error);
+            }
         }
         ecm_ts_fprintf(stdout,"GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu window=%u doubling=%d\n",
                        opt.execution.device_index,curves,mpz_sizeinbase(n,2),mpz_sizeinbase(scalar.v,2),batch.window,batch.doubling);
@@ -242,16 +245,16 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
                 else if(mpz_cmp(g.v,n)==0) {
                     ecm_ts_fprintf(stdout,"Edwards identity: sigma=%llu gcd(Qz,N)=N, no Stage2 point\n",
                                    static_cast<unsigned long long>(batch.sigmas[i]));
-                    mpz_set_ui(out->factors[i],0);out->sigmas[i]=batch.sigmas[i];continue;
+                    out->set_curve(i,ExecutionResult::CurveKind::CompletedWithoutPoint,nullptr,batch.sigmas[i]);continue;
                 }
                 else {mpz_invert(inv.v,z.v,n);mpz_mul(x.v,x.v,inv.v);mpz_mod(x.v,x.v,n);}
             }
             if(batch.hit[i])mpz_set(x.v,batch.factors[i]);
-            mpz_set(out->factors[i],x.v);out->sigmas[i]=batch.sigmas[i];
-            out->array_found[i]=hit?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
+            out->set_curve(i,hit?ExecutionResult::CurveKind::Factor:ExecutionResult::CurveKind::Stage2Point,x.v,batch.sigmas[i]);
             found=found || hit;
             lines+=save_line(n,x.v,batch.sigmas[i],uint64_t(b1),hit);
         }
+        out->validate_curves(n);
         // Arithmetic state stays immutable while owned final values are published.
         phase=ecm_stage1::FailureSource::Persistence;
         if(!path.empty() && !save_checkpoint(path,batch,n,scalar.v,uint64_t(b1)))
@@ -268,6 +271,7 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
         }
         // The task seals result publication before removing its resume state.
         out->firstsigma64=out->sigmas[0];out->firstsigma=uint32_t(out->sigmas[0]);
+        out->completion=ExecutionResult::Completion::Completed;
         out->ret=found?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
         if(!save.empty())ecm_ts_fprintf(stdout,"Edwards Stage1 save: %s (%u curves)\n",save.c_str(),curves);
         (void)b2;return out->ret;

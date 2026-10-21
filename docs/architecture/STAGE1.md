@@ -28,9 +28,9 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。结果中的 factors、array_found、sigmas 分别清理，sigmas 不依赖 factors 是否存在。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
 
-任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)保留单次输入、依赖组装、模式选择与展示/退出；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调，以及 CUDA 延迟验证能力标志 [私有依赖](../../src/ecm/service/stage1/execution_contract.h)。私有计算合同由 ExecutionOptions/ExecutionResult 表达，拥有权与状态实现落 execution_contract.cpp；TaskResult::State 仅在 task.cpp 定义。计算回调包含本后端所需准备和执行，不重复建立 Runner、Session.run 或 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task。
+任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)保留单次输入、依赖组装、模式选择与展示/退出；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调，以及 CUDA 延迟验证能力标志 [私有依赖](../../src/ecm/service/stage1/execution_contract.h)。私有计算合同由 ExecutionOptions/ExecutionResult 表达，拥有权与状态实现落 execution_contract.cpp；逐曲线状态明确区分 Factor、Stage2Point、CompletedWithoutPoint、Degenerate、Failed，旧 CPU/OpenCL 通过 Legacy 兼容。CUDA 的拥有值与 sigma 在发布前核对状态一致性，不能将退化/失败当作无因子完成；TaskResult::State 仅在 task.cpp 定义。计算回调包含本后端所需准备和执行，不重复建立 Runner、Session.run 或 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task。
 
-任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 14 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
+任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 18 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
 
 ## 应用输入与队列编排
 
@@ -81,6 +81,12 @@ CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先
 PARAM0/PARAM2 构造遇到模逆失败时计算 GCD：真因子立即通过既有 submission 通道持久化，并记录该曲线的 factor 结果；GCD=N 作为退化构造拒绝。设备批次不压紧索引：已找到因子的通道使用无害恒等状态，末点处理读取已保存的真因子，不能将该通道当作可用于 Stage2 的点。恢复时重新推导构造期因子元数据；旧载荷格式不变。有效曲线的公式与 sigma 身份不受影响；PARAM2 低层也拒绝 sigma<2，而不改用另一 sigma。
 
 构造布局、主机数组及结果分配检查尺寸；两曲线的结果数组在计算前取得完整所有权，后续失败仍由结果对象清理。临时参数和 GMP 标量也由工作流局部对象持有。共享 storage 和 task 仍拥有最终清理权限；普通成功路径的底层清理请求不会提前删除尚未封存的批次。
+
+## 运行选择与实际布局
+
+任务在建立批次身份前，将 GPU 算法选择保存到私有 ExecutionOptions；CUDA workflow 使用同一值。Montgomery 的 host_policy 在每次运行开始持有本次环境选项和默认计划缓存路径，保留“未设置”与“显式空值”的区别。其后的算法、PRAC 变体、寄存器、TPI、常量、窗口、采样和输出选择只读取该快照，不再重复查询进程环境。它是私有后端输入，不是新的配置系统或 factory。
+
+请求偏好在现有标量/档位阶段校验；存档先核对算法和布局约束，实际可用档位再确定不可变 MontResolvedKernel，直接供设备分配和发射使用。数学身份仍为曲线、参数化和 sigma；bits/TPI/域/PRAC 计划是执行或恢复约束。EdwardsOptions 与恢复后的批次模式决定 binary/NAF、窗口和倍点算法，统一 runtime 一次选择实际档位；完成普通坐标档直接走主机校验路径。参数非法或当前构建缺档明确拒绝，不修改数学身份以继续运行。
 
 ## Montgomery 主机数学与存档输出
 

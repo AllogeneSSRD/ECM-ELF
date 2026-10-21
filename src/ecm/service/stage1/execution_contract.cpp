@@ -5,7 +5,10 @@
 #include <limits>
 #include <stdexcept>
 namespace ecm_stage1 {
-ExecutionOptions::ExecutionOptions(const Stage1Options &options) : Stage1Options(options) {}
+ExecutionOptions::ExecutionOptions(const Stage1Options &options) : Stage1Options(options) {
+    if(const auto *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO"))gpu_algorithm=algorithm;
+    if(gpu_algorithm.empty())gpu_algorithm="ladder";
+}
 
 ExecutionResult::ExecutionResult(ExecutionResult &&other) noexcept { swap(other); }
 
@@ -27,6 +30,7 @@ void ExecutionResult::allocate_curves(uint32_t count) {
        count>std::numeric_limits<size_t>::max()/sizeof(uint64_t))
         throw std::length_error("invalid Stage1 result allocation size");
     ExecutionResult incoming;
+    incoming.curve_kinds.assign(count,CurveKind::Legacy);
     incoming.factors=static_cast<mpz_t *>(std::malloc(sizeof(mpz_t)*size_t(count)));
     incoming.array_found=static_cast<int *>(std::malloc(sizeof(int)*size_t(count)));
     incoming.sigmas=static_cast<uint64_t *>(std::malloc(sizeof(uint64_t)*size_t(count)));
@@ -36,6 +40,30 @@ void ExecutionResult::allocate_curves(uint32_t count) {
     }
     incoming.curves=count;
     swap(incoming);
+}
+
+void ExecutionResult::set_curve(uint32_t lane,CurveKind kind,mpz_srcptr value,uint64_t sigma) {
+    if(lane>=curves || curve_kinds.size()!=curves || !factors || !array_found || !sigmas)
+        throw std::logic_error("unallocated Stage1 curve result");
+    if(value)mpz_set(factors[lane],value);else mpz_set_ui(factors[lane],0);
+    sigmas[lane]=sigma;curve_kinds[lane]=kind;
+    array_found[lane]=kind==CurveKind::Factor?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
+}
+void ExecutionResult::validate_curves(mpz_srcptr n) const {
+    if(curve_kinds.empty())return; // Legacy CPU/OpenCL ownership contract.
+    if(curve_kinds.size()!=curves)throw std::logic_error("Stage1 curve result count mismatch");
+    for(uint32_t i=0;i<curves;++i) {
+        const auto kind=curve_kinds[i];if(kind==CurveKind::Legacy)continue;
+        if(kind==CurveKind::Failed || kind==CurveKind::Degenerate)
+            throw std::runtime_error("Stage1 completed with an invalid curve outcome");
+        if(kind==CurveKind::Factor) {
+            if(array_found[i]!=ECM_FACTOR_FOUND_STEP1 || mpz_cmp_ui(factors[i],1)<=0 ||
+               mpz_cmp(factors[i],n)>=0 || !mpz_divisible_p(n,factors[i]))
+                throw std::runtime_error("invalid Stage1 factor outcome");
+        } else if(array_found[i]!=ECM_NO_FACTOR_FOUND || mpz_sgn(factors[i])<0 || mpz_cmp(factors[i],n)>=0 ||
+                  (kind==CurveKind::CompletedWithoutPoint && mpz_sgn(factors[i])))
+            throw std::runtime_error("invalid Stage1 point outcome");
+    }
 }
 
 void ExecutionResult::fail(FailureSource source) noexcept {
@@ -74,5 +102,6 @@ void ExecutionResult::swap(ExecutionResult &other) noexcept {
         swap(ret,other.ret);swap(prepare_failed,other.prepare_failed);swap(publish_failed,other.publish_failed);
         swap(curves,other.curves);swap(firstsigma,other.firstsigma);swap(firstsigma64,other.firstsigma64);
         swap(factors,other.factors);swap(array_found,other.array_found);swap(sigmas,other.sigmas);
+        swap(curve_kinds,other.curve_kinds);
     }
 }

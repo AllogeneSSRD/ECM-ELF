@@ -163,6 +163,7 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
         const auto path=opt.persistence.tmp_dir.empty()?std::string{}:(std::filesystem::path(opt.persistence.tmp_dir)/name).lexically_normal().make_preferred().string();
         if(!path.empty())std::filesystem::create_directories(opt.persistence.tmp_dir);
         ecm_stage1_set_backup_limit(opt.persistence.ckpt_backups);ecm_stage1_set_checkpoint_path(path);
+        ExecutionOptions execution(opt);
         {
             auto identity=ecm_edwards::hex(N)+"|"+(base.edwards?"ed":"mont"+std::to_string(base.param))+"|"+
                 std::to_string(uint64_t(B1))+"|"+std::to_string(int(opt.execution.selection.scalar_construction))+"|"+
@@ -170,20 +171,19 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
             if(opt.execution.selection.target==ecm_stage1::ExecutionTarget::Cpu)
                 identity+="|"+std::to_string(opt.execution.naf_w?opt.execution.naf_w:deps.default_naf_window())+"|"+std::to_string(int(opt.execution.selection.cpu_implementation));
             else if(!base.edwards) {
-                const char *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO");
-                identity+="|"+std::string(algorithm && *algorithm?algorithm:"ladder");
+                identity+="|"+execution.gpu_algorithm;
             }
             session.begin(identity,curves,opt.identity.sigma_fixed,opt.identity.fixed_sigma64,
                 deps.defer_gpu_checkpoint_validation && opt.execution.selection.target==ExecutionTarget::Gpu);
         }
         stage1_copy_save_history(opt,savefilename);
         const auto begin=std::chrono::steady_clock::now();
-        ExecutionOptions execution(opt);
         phase=FailureSource::Execution;
         const int rc=deps.execute(N,B1,B2,curves,savefilename,saveappend,n_expr,execution,out);
         if(rc==ECM_ERROR){if(out->completion==ExecutionResult::Completion::Legacy && !ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;session.close(false);out->finish_task(rc,ecm_stage1_stop_requested()!=0);return result;}
-        phase=FailureSource::Publication;
         if(!out->sigmas || !out->factors || !out->array_found)throw std::runtime_error("Stage1 completed without per-curve result identity");
+        out->validate_curves(N);
+        phase=FailureSource::Publication;
         const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
         std::vector<std::pair<std::string,std::string>> internal_records;
         std::string task_identity=ecm_edwards::hex(N)+"|"+std::to_string(base.b1)+(base.edwards?"ed":"mont"+std::to_string(base.param));

@@ -6,9 +6,9 @@
 // and curve-specific save output. No CUDA SDK types cross this host boundary.
 namespace ecm_cuda_stage1 {
 int run_mont_stage1(mpz_srcptr,double,double,uint32_t,const std::string &,bool,
-                   const std::string &,const ecm_stage1::Stage1Options &,
+                   const std::string &,const ecm_stage1::ExecutionOptions &,
                    ecm_stage1::ExecutionResult *);
 int run_edwards_stage1(mpz_srcptr,double,double,uint32_t,const std::string &,bool,
-                      const std::string &,const ecm_stage1::Stage1Options &,
+                      const std::string &,const ecm_stage1::ExecutionOptions &,
                       ecm_stage1::ExecutionResult *);
 }

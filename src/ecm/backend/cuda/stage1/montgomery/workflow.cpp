@@ -9,7 +9,9 @@
 #include "../../../../storage/checkpoint/ecm_stage1_legacy_gpu.h"
 #include "../../runtime/cuda_ecm_shim.h"
 #include "runtime.h"
+#include "host_policy.h"
 #include <cmath>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -29,9 +31,11 @@ struct FactorPublication {
     mpz_srcptr modulus;
     uint64_t b1;
     const uint64_t *sigma;
+    ExecutionResult *result;
 };
 bool publish_construction_factor(uint32_t lane,mpz_srcptr factor,void *context) {
     const auto &p=*static_cast<FactorPublication *>(context);
+    p.result->set_curve(lane,ExecutionResult::CurveKind::Factor,factor,*p.sigma+lane);
     return stage1_publish_factor(p.options,p.modulus,p.b1,*p.sigma+lane,factor);
 }
 }
@@ -39,12 +43,15 @@ bool publish_construction_factor(uint32_t lane,mpz_srcptr factor,void *context) 
 int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
-                           const Stage1Options &opt, ExecutionResult *out) {
+                           const ExecutionOptions &opt, ExecutionResult *out) {
     *out=ExecutionResult{};
     auto phase=FailureSource::Preparation;
     try {
         if(!curves)throw std::invalid_argument("gpucurves must be > 0");
         out->allocate_curves(curves);
+        std::fill(out->curve_kinds.begin(),out->curve_kinds.end(),ExecutionResult::CurveKind::Failed);
+
+        const auto requested=ecm_cuda_mont_host::capture_mont_request(opt.gpu_algorithm.c_str());
 
         // Setup params.
         Parameters owned_params;
@@ -82,13 +89,14 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         if (!compute_batch_s(batch_s, B1,
                              opt.execution.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12u : 1u)) {
             std::cerr << "Failed to compute batch_s" << std::endl;
+            out->fail(FailureSource::Preparation);
             return ECM_ERROR;
         }
         mpz_set(params->batch_s, batch_s);
         params->batch_last_B1_used = B1;
         {
-            const char *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO");
-            if(std::string(ecm_backend_name())=="CUDA/CGBN" && (!algorithm || !*algorithm || std::string(algorithm)=="ladder"))
+            const auto &algorithm=opt.gpu_algorithm;
+            if(std::string(ecm_backend_name())=="CUDA/CGBN" && algorithm=="ladder")
                 ecm_stage1_import_legacy_gpu(N,batch_s,curves,uint32_t(params->gpu_param),
                     opt.identity.sigma_fixed,opt.identity.fixed_sigma64,[&](uint64_t sigma,uint32_t count){
                         std::vector<uint64_t> sigmas(count);for(uint32_t i=0;i<count;++i)sigmas[i]=sigma+i;
@@ -137,12 +145,12 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         float gputime = 0.0f;
         ecm_cuda_set_verbose(params->verbose);
         phase=FailureSource::Execution;
-        FactorPublication publication{opt,N,uint64_t(B1),&firstsigma64};
+        FactorPublication publication{opt,N,uint64_t(B1),&firstsigma64,out};
         const auto run=execute_mont_batch(factors,array_found,N,params->batch_s,curves,
             &firstsigma64,params->gpu_checkpoint_interval_ms,&gputime,params->verbose,
             params->gpu_param,uint64_t(std::floor(B1+0.0001)),
             opt.execution.selection.scalar_construction==ScalarConstruction::PrimePowerLcmTimes12?12u:1u,
-            publish_construction_factor,&publication,generate_sigma);
+            publish_construction_factor,&publication,generate_sigma,&requested);
         int ret=run.code;
         const auto firstsigma=uint32_t(firstsigma64);
         out->firstsigma=uint32_t(firstsigma64);out->firstsigma64=firstsigma64;
@@ -155,11 +163,17 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                 run.failure==Failure::Persistence?FailureSource::Persistence:
                 run.failure==Failure::Publication?FailureSource::Publication:FailureSource::Execution);
         }
+        if(run.degenerate_curve<curves)
+            out->set_curve(run.degenerate_curve,ExecutionResult::CurveKind::Degenerate,nullptr,firstsigma64+run.degenerate_curve);
+        if(ret!=ECM_ERROR)for(uint32_t i=0;i<curves;++i)
+            out->set_curve(i,array_found[i]==ECM_NO_FACTOR_FOUND?ExecutionResult::CurveKind::Stage2Point:
+                ExecutionResult::CurveKind::Factor,factors[i],firstsigma64+i);
+        if(ret!=ECM_ERROR)out->validate_curves(N);
         phase=FailureSource::Publication;
 
         std::cout << "GPU stage1 returned: " << ret << " gputime=" << gputime << " ms\n";
         if(ret!=ECM_ERROR)for(uint32_t i=0;i<curves;++i)if(array_found[i]!=ECM_NO_FACTOR_FOUND &&
-            !stage1_publish_factor(opt,N,uint64_t(B1),firstsigma64+i,factors[i])){out->publish_failed=true;ret=ECM_ERROR;break;}
+            !stage1_publish_factor(opt,N,uint64_t(B1),firstsigma64+i,factors[i])){out->fail(FailureSource::Publication);ret=ECM_ERROR;break;}
 
         if (ret != ECM_ERROR && !resolved_save.empty()) {
             /* The save must describe the SAME curve family the GPU just ran:
@@ -213,6 +227,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         }
 
 
+        if(ret!=ECM_ERROR)out->completion=ExecutionResult::Completion::Completed;
         out->ret=ret;
         return ret;
     } catch(const std::exception &error) {
