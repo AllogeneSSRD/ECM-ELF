@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.10`；P2、P3a/b/c、P4a 标量/进度与 P4b CPU 执行闭包提取已完成；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.11`；P2、P3a/b/c、P4a/b/c 已完成，CPU/GPU host workflow 与唯一执行分派已提取；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -767,6 +767,23 @@ P4 尚未整体完成：下一步是共享主机准备、完整 CPU 执行闭包
 
 [最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4b/qualification.json)冻结三个生产 worker、依赖记录与本阶段输入。未运行 release、性能采样或全 32 位宽终验。后续继续 GPU host workflow、唯一分派、配置/构造/codec/writer 和 QueueWorkflow；preparation 对 application lowercase helper 的临时依赖也待配置实现收口时消除。
 
+### P4c：GPU 主机流程与唯一分派已提取
+
+对应程序版本 `0.45.11`。driver 从 2635 行缩至 2390 行，不再文本包含 GPU Edwards inl，也不再包含 CPU/GPU 执行正文。task 的真实 execute 依赖直接绑定 service/stage1/execution.cpp 的 execute_stage1；该函数按原次序选择 GPU Edwards、CPU Montgomery、CPU Edwards 或链接时选择的 GPU Montgomery。共享 Montgomery 主机流程保留完整参数准备、执行、factor 与 save 规则，没有新 factory 类、执行注册框架或 driver 同参留壳。
+
+GPU Edwards 的完整状态、初始化/恢复、进度回调和完成发布进入 backend/cuda/stage1/edwards/host_workflow.cpp，普通 CXX 编译，私有头仅声明真实入口。生产主机流程只加入 STAGE1_CUDA，不污染被独立 GPU probe/worker 复用的 STAGE1_EDWARDS 低层清单。checkpoint codec 私有头仍供主机流程和容器验证使用。CMake 中原为文本包含补偿的 driver 强制 GPU OBJECT_DEPENDS 删除，实际 include 依赖保持。
+
+首次 CXX 构建发现队列归一化仍使用四个共享准备函数，补齐实际 using 声明后通过；失败日志保留。P4b 搬迁保留的一处尾随空格在本轮清理，完整 CPU token 与行为保持。独立身份测试首次给出的备用 PowerShell 路径不存在，改用已安装运行时路径重新完成 46 项；未放宽测试或生产验证。
+
+- [完整源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/source_contract/result.json)：Montgomery 主机正文、Edwards 完整状态/回调及分派次序与 P4b 保持。
+- [真实独立主机编译](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/host_compile/manifest.json)：准备、CPU 执行、唯一分派和 GPU Edwards 主机流程四个 CPP，0 nvcc、0 CUDA SDK include、0 SDK 头；不编译实际设备运行代码。
+- [构建身份](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/identity_02/result.json)：46 项依赖、命令、对象及篡改拒绝检查通过。
+- [运行检查](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/usability/summary.json)：27 项 CPU/GPU 恢复、停止、队列、发布及独立 CPU Stage2 交接通过。
+- [P0 对照](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/runtime/summary.json)：CUDA 两阶段各 5 组通过；[OpenCL](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/opencl_resources/result.json)的完成点/结果与 CRC、172 资源、两份旧缓存保持。
+- [重复 local 构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/stage1_repeat.log)：0 CXX、0 CU、0 链接；Stage1 31 个、Stage2 2 个 CUDA 对象摘要与 P4b 相同。
+
+[最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4c/qualification.json)冻结输入、三个生产 worker 与依赖。未运行 release、性能采样或全 32 位宽终验。接下来仍须提取 Montgomery adapter 的构造/结果/codec、配置与 writer，并将队列协议集中到 QueueWorkflow。新审查确认当前队列只在启动时加载 TOML，没有逐任务热重载；此前设计中“当前配置重读”的说法已纠正，后续提取应保留启动快照。
+
 ## 首先调整构建复用与输出隔离
 
 ### 当前样例说明了什么
@@ -1060,7 +1077,7 @@ executor → ExecutionContext             # 安全点、同步快照、可靠即
 
 application组装可供调用的创建函数，不在组装后先为同一任务create一次，再由task经过registry.select重选。task调用该函数一次，取得阶段级Executor；具体曲线/算法的实际支持、设备约束与恢复接纳由Executor.prepare负责。capabilities可用于查询或prepare内部校验，不要求每个task再额外查询一套全局能力。
 
-QueueWorkflow请求的next_task是窄函数引用或轻量来源对象，由应用适配配置重读、QueueStore读选和请求归一化。它只返回QueueItem/Empty/ReadError，不执行task或完成队列；不需要为这个回调再建立SourceService。这样service/work不用包含application的TOML/CLI实现。QueueItem保留ticket、规范化请求与完成所需的队列策略。
+QueueWorkflow请求的next_task是窄函数引用或轻量来源对象，由应用适配启动配置快照、QueueStore读选和请求归一化。它只返回QueueItem/Empty/ReadError，不执行task或完成队列；不需要为这个回调再建立SourceService。这样service/work不用包含application的TOML/CLI实现。QueueItem保留ticket、规范化请求与完成所需的队列策略。
 
 ### 状态、发布与文件机制各有一个所有者
 

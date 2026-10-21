@@ -1,15 +1,32 @@
-// Included by the shared Stage1 driver after its save-name helpers.
-#if ECM_HAS_CUDA_EDWARDS
-#include "../api.h"
-#include "../naf.h"
+#include "host_workflow.h"
+#include "../../../../service/stage1/preparation.h"
+#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "ecm/platform/logging.h"
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+using ecm_stage1::Stage1RunOptions;
+using ecm_stage1::LegacyStage1Result;
+using ecm_stage1::compute_batch_s;
+using ecm_stage1::random_sigma_u64;
+using ecm_stage1::mont_format_save_name;
+using ecm_stage1::ensure_dir;
+using ecm_stage1::stage1_now_ms;
+using ecm_stage1::stdout_is_tty_local;
+using ecm_stage1::stage1_results_complete;
+using ecm_stage1::stage1_publish_factor;
+#include "api.h"
+#include "naf.h"
 #include "ecm/core/stage1/scalar.h"
-#include "../../../../../storage/save/ecm_edwards_io.h"
-#include "../../../../../storage/checkpoint/ecm_stage1_binary.h"
+#include "../../../../storage/save/ecm_edwards_io.h"
+#include "../../../../storage/checkpoint/ecm_stage1_binary.h"
 #include "ecm/platform/stage1_progress.h"
 #include <iterator>
 #include <stdexcept>
 
-#include "ecm_edwards_gpu_checkpoint.h"
+#include "legacy/ecm_edwards_gpu_checkpoint.h"
 
 namespace ed_gpu_driver {
 struct Progress {
@@ -77,7 +94,7 @@ static bool publish(const std::string &path,const std::string &lines,bool append
 }
 }
 
-static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t curves,
+int ecm_cuda_edwards::run_stage1(const mpz_t n,double b1,double b2,uint32_t curves,
         const std::string &savefilename,bool saveappend,const Stage1RunOptions &opt,LegacyStage1Result *out) {
     using namespace ed_gpu_driver;
     *out=LegacyStage1Result{};out->curves=curves;
@@ -202,4 +219,3 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
         ecm_ts_fprintf(stderr,"ERROR: GPU Edwards Stage1: %s\n",e.what());return ECM_ERROR;
     }
 }
-#endif

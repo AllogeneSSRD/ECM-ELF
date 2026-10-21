@@ -136,7 +136,7 @@ endforeach()
 foreach(_source src/ecm/storage/results/ecm_result_paths.h src/ecm/storage/results/ecm_result_json.h src/ecm/storage/results/ecm_internal_result.h src/ecm/storage/results/ecm_result_submission.h
                 include/ecm/core/stage1/selection.h include/ecm/core/stage1/scalar.h include/ecm/service/stage1/task.h
                 src/ecm/service/stage1/legacy_execution.h
-                src/ecm/storage/results/ecm_submission_writer.h src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl
+                src/ecm/storage/results/ecm_submission_writer.h src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp
                 src/ecm/storage/save/ecm_edwards_io.h include/ecm/platform/program_version.h
                 include/ecm/platform/stage1_progress.h)
     file(SHA256 "${CMAKE_SOURCE_DIR}/${_source}" _stage1_hash)
@@ -147,16 +147,6 @@ string(SHA256 _stage1_identity "${_stage1_identity}")
 string(SUBSTRING "${_stage1_identity}" 0 12 _stage1_identity)
 set(_stage1_identity_file "${CMAKE_CURRENT_BINARY_DIR}/ecm_stage1_source_identity.txt")
 file(GENERATE OUTPUT "${_stage1_identity_file}" CONTENT "${_stage1_revision}.s1.${_stage1_identity}\n")
-# Keep the monolithic driver current even when an existing NMake build tree has
-# incomplete include dependencies (notably the included GPU driver .inl).
-set(_stage1_driver_headers
-    src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h
-    include/ecm/platform/stage1_progress.h include/ecm/platform/program_version.h
-    src/ecm/backend/cuda/stage1/edwards/api.h src/ecm/backend/cuda/stage1/edwards/naf.h)
-foreach(_header IN LISTS _stage1_driver_headers)
-    set_property(SOURCE src/ecm/application/cli/ecm_driver.cpp APPEND PROPERTY OBJECT_DEPENDS
-        "${CMAKE_SOURCE_DIR}/${_header}")
-endforeach()
 # A post-link sidecar leaves flags.make and CUDA response files unchanged.
 function(ecm_stage1_identity_sidecar target)
     add_custom_command(TARGET ${target} POST_BUILD COMMAND "${CMAKE_COMMAND}" -E copy_if_different

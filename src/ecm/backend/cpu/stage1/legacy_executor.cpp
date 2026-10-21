@@ -1376,7 +1376,7 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
        scalar backend, one curve.  Tasks are handed out by an atomic counter, so a
        worker that finishes a batch picks up the next one -- with uniform batch cost
        that is equivalent to a static split, but it degrades gracefully.
-       
+
        Curves are grouped by "bits already consumed" (descending) before chunking,
        because the lanes of a batch share ONE exponent prefix: every lane has to
        start at the same offset.  On a fresh run every offset is 0, so this is

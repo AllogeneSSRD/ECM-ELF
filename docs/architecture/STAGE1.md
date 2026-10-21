@@ -48,6 +48,14 @@ CPU 两条完整执行路径位于 [legacy_executor.cpp](../../src/ecm/backend/c
 
 各执行路径原有 factor、DONE、save 顺序和发布失败分类保持，不在本次组织调整中统一旧差异。实际设备同步和回读继续依赖 CUDA。
 
+## 唯一执行分派与 GPU 主机流程
+
+task 的 execute 依赖直接绑定 [execution.cpp](../../src/ecm/service/stage1/execution.cpp)的 execute_stage1。它保留一次后端选择：GPU Edwards、CPU Montgomery、CPU Edwards，剩余进入链接时选择的 CUDA/OpenCL Montgomery 主机流程；不再由 driver 持有执行正文，也没有为选择再增加 factory 类或同参转发层。共享 Montgomery 主机流程负责原参数、准备、执行、factor 发布和 save；具体设备运行仍经已有后端能力执行。
+
+Edwards GPU 的状态、初始化、恢复、进度回调、完成点检查、GCD 和 save 集中在 [host_workflow.cpp](../../src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp)，私有 host_workflow.h 只声明真实入口。它是普通 CXX，仅加入 CUDA 生产 worker 清单；低层 Edwards GPU probe 清单继续独立。原 checkpoint codec 私有头还有独立容器验证消费者，继续保留。driver 不再文本包含 GPU 实现，也不再强制依赖这些 GPU 主机头。
+
+这些主机 CPP 的实际独立编译依赖没有 CUDA SDK 头。CUDA runtime、同步、设备资源与回读实现保留现有 CUDA 依赖；Montgomery adapter 中构造/codec 的进一步提取尚待完成。
+
 ## GPU 点乘
 
 ### CUDA 模块边界
@@ -72,7 +80,7 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 [曲线构造](../../src/ecm/core/curve/edwards/ecm_edwards_curve.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
 
-[worker 接入](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl)支持 CLI 和队列、周期及安全停止检查点。当前 GPU Edwards 使用 V3 二进制载荷，保存完整 N、算法、进度、各 sigma 和普通整数状态；指数只保存位数与指纹。恢复重建基点、核对点不变量并采用已保存的模式，显式不匹配选择报错。载荷不绑定 TPI，恢复按 N 重新选择容器。NAF 列数与 binary 位数不能互换。完整字段、兼容读取和恢复资格统一见 [Checkpoint](CHECKPOINT.md#42-gpu-edwards-v3)。
+[worker 接入](../../src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp)支持 CLI 和队列、周期及安全停止检查点。当前 GPU Edwards 使用 V3 二进制载荷，保存完整 N、算法、进度、各 sigma 和普通整数状态；指数只保存位数与指纹。恢复重建基点、核对点不变量并采用已保存的模式，显式不匹配选择报错。载荷不绑定 TPI，恢复按 N 重新选择容器。NAF 列数与 binary 位数不能互换。完整字段、兼容读取和恢复资格统一见 [Checkpoint](CHECKPOINT.md#42-gpu-edwards-v3)。
 
 CPU/GPU Edwards 共用完成点文本，可由 CUDA Stage2 和 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md) 消费；sigma 不能按 Suyama PARAM0 解释。字段、状态、校验及外部程序能力统一见 [Save](SAVE.md#5-edwards-save-version1)。
 
@@ -82,7 +90,7 @@ Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery
 
 `arithmetic api_seconds` 覆盖标量编码、设备初始化/分配、字典、切片、回传及进度回调，排除之前的指数/曲线构造和之后的 GCD/归一化/save。`dictionary_gpu_ms` 与 `loop_gpu_ms` 是 CUDA event 区间，可能包含首次模块加载或主机发射间隙，不能当作 profiler 的纯 kernel 时间。这些计时存在嵌套，不能与进程 wall 重复相加。
 
-GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../include/ecm/platform/stage1_progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl)，设备准备边界位于[binary/NAF 主机循环](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)。
+GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../include/ecm/platform/stage1_progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp)，设备准备边界位于[binary/NAF 主机循环](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)。
 
 GPU Edwards 在 NAF 列或二进制位的片边界更新共用进度输出，GUI 管道可读取百分比。当前32档构建的三曲线族同exe数据见[性能依据](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，32档CPU末点、旧检查点跨容器恢复及Stage2交接见[细分实例验收](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)。冻结七档的binary/NAF、窗口/倍点对照及大界限证据分别见[性能参考](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)和[窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)，初始流水线见[开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
 
