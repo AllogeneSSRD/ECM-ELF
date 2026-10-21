@@ -85,8 +85,12 @@ function New-EcmStage2Profile([string]$Repo, [string]$Role, [string]$Engine, [st
 function Resolve-EcmBuildDirectory([string]$Repo, $buildProfile, [string]$Leaf = '', [string]$Root = '') {
     if ($Leaf -and $Root) { throw 'Specify a final build directory or a build root, not both' }
     if (-not $Leaf) {
-        if (-not $Root) { $Root = "build_cuda_$($buildProfile.Role)" }
-        $Leaf = Join-Path $Root $buildProfile.Relative
+        if (-not $Root -and $buildProfile.Role -eq 'local') {
+            $Leaf = "build_$($buildProfile.Stage)_local"
+        } else {
+            if (-not $Root) { $Root = "build_cuda_$($buildProfile.Role)" }
+            $Leaf = Join-Path $Root $buildProfile.Relative
+        }
     }
     if (-not [IO.Path]::IsPathRooted($Leaf)) { $Leaf = Join-Path $Repo $Leaf }
     $leafPath = [IO.Path]::GetFullPath($Leaf).TrimEnd('\','/')
@@ -94,8 +98,11 @@ function Resolve-EcmBuildDirectory([string]$Repo, $buildProfile, [string]$Leaf =
         throw 'Repository and filesystem roots cannot be build directories'
     }
     foreach ($part in $leafPath.Split([char[]]'\/')) {
-        if ($part -match '^build_cuda_(local|dev|release)$' -and $Matches[1] -ne $buildProfile.Role) {
+        if ($part -match '^(?:build_cuda_|build_stage[12]_)(local|dev|release)$' -and $Matches[1] -ne $buildProfile.Role) {
             throw "Build directory belongs to another role: $part; requested $($buildProfile.Role)"
+        }
+        if ($part -match '^build_(stage[12])_(?:local|dev|release)$' -and $Matches[1] -ne $buildProfile.Stage) {
+            throw "Build directory belongs to another stage: $part; requested $($buildProfile.Stage)"
         }
     }
     return $leafPath

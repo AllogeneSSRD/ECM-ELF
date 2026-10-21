@@ -19,7 +19,7 @@ Stage1 默认 `Jobs=8`，Stage2 默认 `SplitCompile=8`。PS1 为默认参数来
 - 工具链：`-CudaRoot`、`-LegacyCudaRoot`、`-VcVars`、`-Gmp`；Stage1 另有 `-OpenSslRoot`。60/70 用CUDA12.6，其余默认CUDA13.3。
 - 缓存/拆分：`-SkipBuild` 要求冻结身份一致；Stage1 的 `-SkipSplit`/`-SkipPackage` 控制发布步骤。
 
-默认构建叶目录按用途/profile 隔离在 `build_cuda_local/dev/release`；显式本机/开发目录是最终叶目录。`profile.json` 拒绝跨用途或不兼容配置复用，旧缓存仅经正式清单核对后原位接纳。Stage1 的 `RelinkOnly` 绕过入口已关闭，主机修改使用正常增量或严格 `HostOnly`。目录字段和发布参数的根/叶语义见 [用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
+local BAT/PowerShell 默认输出为 `build_stage1_local/ecm_cuda.exe`、`build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。dev/release 仍按用途/profile 隔离在 `build_cuda_dev/release`；显式本机/开发目录是最终叶目录。固定短目录中的 `profile.json` 仍拒绝跨用途、跨阶段或不兼容配置复用；需要并存时指定不同 `-BuildDir`/`-Build`，不自动覆盖。旧缓存仅经正式清单核对后原位接纳。Stage1 的 `RelinkOnly` 绕过入口已关闭，主机修改使用正常增量或严格 `HostOnly`。目录字段和发布参数的根/叶语义见 [用途与 profile 目录](../../docs/usage/BUILD.md#用途与-profile-目录)。
 
 完整参数以各 PS1 的 param 与帮助为准。发布只附 `ECM_TOML_REFERENCE.md` 这一份项目说明；源码/构建/拆分/打包清单保留在构建目录，ZIP 旁保留 SHA256。
 

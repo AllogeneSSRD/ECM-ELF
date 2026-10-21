@@ -15,7 +15,7 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 每项均有 `.ps1` 与 `.bat`。Stage1 默认 8 路独立 CUDA TU 并行；Stage2 默认 `SplitCompile=8`，多架构依次构建，每个架构内并行。构建入口不自动运行测试。
 
-本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。默认输出到用途隔离的 profile 叶目录，入口打印完整路径：Stage1 为 `build_cuda_local/stage1/sm89/<key>/ecm_cuda.exe`，Stage2 为 `build_cuda_local/stage2/production/sm89/<key>/ecm_cuda_stage2.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；分发包仍在独立 `dist` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
+本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。local 的 BAT/PowerShell 入口使用固定短目录：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`，GUI 为 `build_gui_local/ecm_gui.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；分发包仍在独立 `dist` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
 
 ## 默认策略
 
@@ -62,7 +62,7 @@ Stage2 的 `-HostOnly` 在任何编译前核对完整清单，只复用身份一
 
 ## 用途与 profile 目录
 
-`profile.json` 保存完整 SHA256 及字段，目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。不同 profile 使用不同默认叶目录；显式指定的叶目录不匹配时拒绝，不改写 marker。
+`profile.json` 保存完整 SHA256 及字段。CUDA local 默认使用 `build_stage1_local`、`build_stage2_local` 固定短目录；dev/release 及显式 Stage2 `-BuildRoot` 的 profile 目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。固定 local 目录与任何显式叶目录都只容纳一个相容 profile；配置不匹配时拒绝，不改写 marker，也不自动清空目录。需要同时保留不同架构、tiers 或编译策略时，为 Stage1 指定 `-BuildDir`、为 Stage2 指定 `-Build`；Stage2 也可用 `-BuildRoot` 选择带 profile 层级的根。
 
 本机/开发 Stage1 的 `-BuildDir`、Stage2 的 `-Build` 是最终叶目录，不额外拼层；Stage2 内部 `-BuildRoot` 才表示根。Stage1 多工具链 release 的公开 `-BuildDir`、Stage2 多架构 release 的 `-Build` 保持根语义；Stage2 单架构 release 的 `-Build` 为最终叶目录。不能把 local/dev/release 目录互作输出，也不能让包目录与 build 目录相同或互相嵌套。
 

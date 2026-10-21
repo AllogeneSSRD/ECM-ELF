@@ -3,7 +3,8 @@
     Local Stage1 build for ecm_cuda, using the general Montgomery baseline.
 
 .DESCRIPTION
-    Uses an isolated build_cuda_local/stage1/sm<Arch>/<profile> leaf by default.
+    Uses the fixed build_stage1_local directory by default.
+    A different profile requires an explicit BuildDir; existing objects are never relabelled.
     Explicit BuildDir remains a final leaf. Defaults are in docs/usage/BUILD.md:
 
         compression ON      -Xfatbin -compress-all
@@ -13,7 +14,7 @@
 
     The compile step uses tools\build\internal\parallel_nvcc.ps1 for independent CUDA TUs.
 
-.PARAMETER BuildDir   Explicit final build directory; omitted selects the profile leaf.
+.PARAMETER BuildDir   Explicit final build directory; omitted uses build_stage1_local.
 .PARAMETER Arch       CUDA architecture (default 89).
 .PARAMETER Jobs       Concurrent nvcc processes (default 8).
 .PARAMETER Tiers      Restrict the kernel tiers, e.g. "5120" -- cuts a rebuild from ~8 min to

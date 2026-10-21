@@ -31,7 +31,8 @@ function Profile([string]$Role='local',[string]$Engine='production',[int]$Split=
 $a = Profile
 Check ($a.Key -match '^[0-9a-f]{16}$' -and $a.Hash.Length -eq 64) 'short directory key and full configuration identity'
 $leaf = Resolve-EcmBuildDirectory $fixture $a
-Check ($leaf.Replace('\','/').EndsWith("build_cuda_local/stage2/production/sm89/$($a.Key)")) 'local production default leaf'
+Check ($leaf -eq (Join-Path $fixture 'build_stage2_local')) 'local Stage2 has a fixed short default directory'
+Check ((Resolve-EcmBuildDirectory $fixture $a '' 'profiles').Replace('\','/').EndsWith("profiles/stage2/production/sm89/$($a.Key)")) 'explicit build root retains profile hierarchy'
 Write-Fixture (Join-Path $fixture 'business.cpp') 'source version 1'
 $same = Profile
 Write-Fixture (Join-Path $fixture 'business.cpp') 'source version 2'
@@ -66,7 +67,8 @@ Reject { Assert-EcmBuildProfile $unmarked $a } 'no matching formal manifest' 'un
 Reject { Assert-EcmBuildProfile (Join-Path $fixture 'missing') $a -ReadOnly } 'required for SkipBuild' 'SkipBuild cannot create a new profile marker'
 $stage1Options = [ordered]@{configure='-DCMAKE_BUILD_TYPE=Release -DECM_TIERS=384 -DECM_CUDA_ARCHITECTURES=89';tiers='384';enable_prac='0';extra=''}
 $stage1 = New-EcmCudaProfile $fixture local stage1 production 89 $cuda $vc $gmp $stage1Options
-Check ((Resolve-EcmBuildDirectory $fixture $stage1) -like '*build_cuda_local\stage1\sm89*') 'Stage1 has its own profile hierarchy'
+Check ((Resolve-EcmBuildDirectory $fixture $stage1) -eq (Join-Path $fixture 'build_stage1_local')) 'local Stage1 has a separate fixed short default directory'
+Reject { Resolve-EcmBuildDirectory $fixture $stage1 $leaf } 'another stage' 'fixed Stage2 directory cannot be reused for Stage1'
 $legacy = Join-Path $fixture 'legacy_stage1'; New-Item -ItemType Directory -Path $legacy | Out-Null
 $legacyManifest = [ordered]@{identity_schema=1;architecture='89';tiers='384';enable_prac=$false
     cuda_root=$cuda.Root;toolkit=$cuda.VersionText;host_compiler=$vc.Compiler;host_version=$vc.Version

@@ -1,6 +1,6 @@
 # include/ecm 与 src/ecm 目录精简草稿
 
-日期：2026-10-21。依据：`7585e7a`、源码版本 `0.45.24`。状态：**方案 A 已获授权，D0–D1 完成，当前源码版本 0.45.26；D2–D3 待实施**。本文件是本轮目录精简的权威草稿，[网页阅读版](../web/directory-layout-plan-20261021.html)呈现同一方案；当前已实现的目录仍以[架构与术语](../architecture/OVERVIEW.md)为准。
+日期：2026-10-21。依据：`7585e7a`、源码版本 `0.45.24`。状态：**方案 A 已获授权，D0–D1b 完成，当前源码版本 0.45.27；D2–D3 待实施**。本文件是本轮目录精简的权威草稿，[网页阅读版](../web/directory-layout-plan-20261021.html)呈现同一方案；当前已实现的目录仍以[架构与术语](../architecture/OVERVIEW.md)为准。
 
 ## 实施进度与证据
 
@@ -25,6 +25,12 @@ D0 提交：`22380cc`。D1、D2、D3 按下文顺序继续，验证完成后逐�
 本阶段保留首轮失败：一次性迁移辅助脚本重复清理已空目录；另有 6 个移动头文件共 10 条相对引用，被通用搜索根掩盖而漏改，实际 Stage2 构建及时拒绝。已修正清理脚本与相对引用，并重新审计/构建；最初宽泛搜索根审计 `audit_0.45.26.json` 已明确作废，不作为验收。沙箱 CMake 空程序检测的 C1902，以及结果测试硬链接拒绝，均保留原记录，随后同脚本/参数在沙箱外通过，没有改变算术、编译策略或测试条件。细节见[相对路径修复](../../data/experiments/directory_layout_implementation_20261021/d1/relative_repair.json)。
 
 旧 `test_stage2_planning_extraction.py` 对照早期 44 个函数，D0 与 D1 都有相同的 52 个函数，因此该冻结提取检查在迁移前已不匹配；未修改其断言或当作本轮通过项。[定位证据](../../data/experiments/directory_layout_implementation_20261021/d1/legacy_gate_diagnosis.json)保留。Stage1 closeout 只补充一个已验证的 include 改名，十个实现单元、十个群阶辅助和执行顺序检查通过。D2–D3 继续使用当前冻结正文、包含边界和实际运行验证。
+
+### D1b：local 默认短目录（已完成，0.45.27）
+
+按用户补充要求，CUDA local 的 BAT 与 PowerShell 共用固定短路径：Stage1 为 `build_stage1_local/ecm_cuda.exe`，Stage2 为 `build_stage2_local/ecm_cuda_stage2.exe`；GUI 保持 `build_gui_local/ecm_gui.exe`。构建身份仍写入 `profile.json`，不把不同架构、tiers、引擎或用途自动混入同一个目录。需要并存时显式选择 Stage1 `-BuildDir`、Stage2 `-Build`；Stage2 显式 `-BuildRoot` 仍保留 profile 子目录。dev/release 布局保持现有合同，旧缓存不迁移、不删除。
+
+30 项 profile 检查通过，包含短默认路径、显式根层级、不同用途/阶段拒绝、身份突变、旧缓存准入及包目录隔离。Stage1 BAT 通过显式旧叶目录验证，31 个 CUDA 对象全部复用；GUI BAT 33 项自检通过。Stage2 BAT 已在默认 `build_stage2_local` 实际构建全部 35 个生产翻译单元，8 项规划/曲线子进程前后对照通过。D1 提交为 `2f22d10`；本阶段[结果](../../data/experiments/directory_layout_implementation_20261021/d1b/result.json)、[profile 检查](../../data/experiments/directory_layout_implementation_20261021/d1b/profiles/result.json)与[默认路径构建日志](../../data/experiments/directory_layout_implementation_20261021/d1b/stage2_default.log)保留。Stage1 的固定默认路径由同一解析器的实际 profile 检查验证；本阶段编译通过 BAT 显式复用既有两档验证目录，未在默认目录建立受限两档 profile，以便用户随后直接构建完整默认档位。
 
 ## 结论与适用范围
 
