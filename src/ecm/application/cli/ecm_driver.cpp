@@ -286,7 +286,7 @@ static const std::string &stage1_build_identity() {
 
 // Application assembly of the existing execution Adapter; no registry/select layer.
 static const ecm_stage1::TaskDependencies stage1_tasks{
-    ecm_stage1::execute_stage1,stage1_build_identity,edwards_get_naf_w};
+    ecm_stage1::execute_stage1,stage1_build_identity,edwards_get_naf_w,ecm_stage1::defer_gpu_checkpoint_validation};
 
 // Rebuild the original N expression for the save-file N= field.
 

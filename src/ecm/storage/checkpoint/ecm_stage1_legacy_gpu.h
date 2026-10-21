@@ -14,7 +14,7 @@
 inline bool ecm_stage1_import_legacy_gpu(mpz_srcptr n,mpz_srcptr scalar,uint32_t curves,
                                         uint32_t param,bool fixed,uint64_t requested,
                                         const std::function<bool(uint64_t,uint32_t)> &completed={}) {
-    if(ecm_stage1_checkpoint_path().empty())return false;
+    if(ecm_stage1_checkpoint_path().empty() || ecm_stage1_checkpoint_pending())return false;
     std::string existing;
     if(ecm_stage1_read_blob(ecm_stage1_curve_record(0),existing))return false;
     std::vector<char> text(mpz_sizeinbase(n,16)+2);mpz_get_str(text.data(),16,n);

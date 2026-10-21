@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <gmp.h>
+#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #define CHECKPOINT_MAGIC 0x45555047
 #define CHECKPOINT_VERSION 5
 namespace ecm_cuda_mont_host {
@@ -28,11 +29,14 @@ struct ResidentCheckpoint {
     uint32_t version, algorithm, domain, bits, tpi, curves, torsion, reserved;
 };
 
-char *get_checkpoint_filename(mpz_srcptr);
+std::string get_checkpoint_filename(mpz_srcptr);
 int save_checkpoint(const char *,const checkpoint_header_t *,const uint32_t *,size_t);
 int restore_checkpoint(const char *,checkpoint_header_t *,uint32_t **,size_t *);
+ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &,mpz_srcptr,
+    uint64_t scalar_bits,uint32_t curves,uint32_t param,checkpoint_header_t &,std::vector<uint32_t> &);
 #if ECM_CUDA_ENABLE_PRAC
 bool save_checkpoint(const std::string &,ResidentCheckpoint,const std::vector<uint32_t> &);
-bool restore_checkpoint(const std::string &,ResidentCheckpoint &,std::vector<uint32_t> &,uint64_t *,bool);
+ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &,mpz_srcptr,
+    ResidentCheckpoint &,std::vector<uint32_t> &,bool prac);
 #endif
 }

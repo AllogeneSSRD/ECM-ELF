@@ -88,19 +88,85 @@ static void edwards(const fs::path &dir,const fs::path &audit,bool naf=true) {
     const uint64_t b1=audit.empty()?1000:260000000;
     std::vector<uint64_t> sigmas(count,0);std::vector<std::string> records(count);records[0]=payload;
     write(p,v1(identity,sigmas,records));ecm_stage1_set_checkpoint_path(p);ecm_stage1_begin_batch(identity,count,false,0);
-    Batch before(count);check(restore_checkpoint(ecm_stage1_curve_record(0),before,n.v,scalar.v,b1,false,false,false,-1),"legacy Edwards restore");
+    Batch before(count);check(restore_checkpoint(ecm_stage1_curve_record(0),before,n.v,scalar.v,b1,false,false,false,-1).restored(),"legacy Edwards restore");
     const auto bytes=checkpoint_body(before,n.v,scalar.v,b1);
     check(bytes.size()<payload.size() || audit.empty(),"Edwards compactness");
     check(ecm_stage1_write_blob(ecm_stage1_curve_record(0),bytes),"Edwards binary write");ecm_stage1_end_batch(false);
     ecm_stage1_set_checkpoint_path(p);ecm_stage1_begin_batch(identity,count,false,0);
-    Batch after(count);check(restore_checkpoint(ecm_stage1_curve_record(0),after,n.v,scalar.v,b1,false,false,false,-1),"binary Edwards restore");
+    Batch after(count);check(restore_checkpoint(ecm_stage1_curve_record(0),after,n.v,scalar.v,b1,false,false,false,-1).restored(),"binary Edwards restore");
     check(before.done==after.done && before.sigmas==after.sigmas && before.hit==after.hit,"Edwards metadata changed");
     for(size_t i=0;i<count*9;++i)check(mpz_cmp(before.state[i],after.state[i])==0,"Edwards coordinates changed");
     for(size_t i=0;i<count;++i)check(mpz_cmp(before.factors[i],after.factors[i])==0,"Edwards factor changed");
     mpz_add_ui(scalar.v,scalar.v,2);Batch wrong(count);
-    check(!restore_checkpoint(ecm_stage1_curve_record(0),wrong,n.v,scalar.v,b1,false,false,false,-1),"scalar fingerprint did not reject");
+    check(!restore_checkpoint(ecm_stage1_curve_record(0),wrong,n.v,scalar.v,b1,false,false,false,-1).restored(),"scalar fingerprint did not reject");
     std::cout<<"edwards_payload old_bytes="<<payload.size()<<" new_bytes="<<bytes.size()<<" curves="<<count<<" all_coordinates_equal=1\n";
     ecm_stage1_end_batch(false);
+}
+static void deferred_restore(const fs::path &dir) {
+    using namespace ed_gpu_driver;using namespace ecm_stage1_checkpoint;
+    fs::create_directories(dir);const auto p=(dir/"pending.ckpt").string();
+    Integer n,scalar;mpz_ui_pow_ui(n.v,2,127);mpz_sub_ui(n.v,n.v,1);mpz_set_ui(scalar.v,12345);
+    ecm_stage1_set_checkpoint_path(p);ecm_stage1_begin_batch("r5|ed",2,true,26);
+    Batch initial(2);for(uint32_t i=0;i<2;++i)initial.sigmas[i]=ecm_stage1_batch_sigma(i,26+i);
+    std::string error;check(initialize(initial,n.v,error),"R5 curve setup");
+    check(save_checkpoint(ecm_stage1_curve_record(0),initial,n.v,scalar.v,1000),"R5 valid save");
+    const auto valid=checkpoint_body(initial,n.v,scalar.v,1000);
+    for(unsigned j=5;j<9;++j)mpz_set_ui(initial.state[j],0);
+    check(save_checkpoint(ecm_stage1_curve_record(0),initial,n.v,scalar.v,1000),"R5 bad math fixture");
+    ecm_stage1_end_batch(false);const auto damaged=read(p);
+    ecm_stage1_set_checkpoint_path(p);ecm_stage1_begin_batch("r5|ed",2,false,0,true);
+    uint64_t sigma=999;check(!ecm_stage1_saved_sigma(0,sigma) && sigma==999,"pending seeds exposed");
+    bool rejected=false;try{ecm_stage1_read_blob(ecm_stage1_curve_record(0),error);}catch(const Error &){rejected=true;}
+    check(rejected,"pending payload exposed");unsigned attempts=0;
+    ecm_stage1_validate_pending_checkpoint([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
+        ++attempts;Batch candidate(2);
+        if(!decode_checkpoint(records[0],candidate,n.v,scalar.v,1000,false,false,false,-1).restored())return false;
+        sigmas=candidate.sigmas;return true;
+    });
+    check(attempts==2 && !ecm_stage1_checkpoint_pending(),"valid mathematical backup not selected");
+    check(ecm_stage1_saved_sigma(0,sigma) && sigma==26,"accepted sigma lost");
+    std::string restored;check(ecm_stage1_read_blob(ecm_stage1_curve_record(0),restored) && restored==valid,"backup payload changed");
+    check(read(p)==damaged,"selection overwrote damaged evidence");
+    const auto blocker=ecm_stage1_checkpoint_temp_path(p);fs::create_directory(blocker);
+    check(!ecm_stage1_write_blob(ecm_stage1_curve_record(0),"replacement"),"blocked write succeeded");
+    check(ecm_stage1_read_blob(ecm_stage1_curve_record(0),restored) && restored==valid,"failed write changed accepted state");
+    check(read(p)==damaged,"failed write changed physical state");fs::remove(blocker);
+    check(ecm_stage1_write_blob(ecm_stage1_curve_record(0),valid),"retry after blocked write");ecm_stage1_end_batch(false);
+    // An archive containing only bad mathematical state must fail, without RNG or overwrite.
+    const auto bad=(dir/"bad_only.ckpt").string();write(bad,damaged);
+    ecm_stage1_set_checkpoint_path(bad);ecm_stage1_begin_batch("r5|ed",2,false,0,true);
+    rejected=false;try{ecm_stage1_validate_pending_checkpoint([](const auto &,auto &){return false;});}
+    catch(const Error &e){rejected=e.state==RestoreState::Corrupt;}
+    check(rejected && read(bad)==damaged,"invalid checkpoint silently restarted");ecm_stage1_end_batch(false);
+    const auto seed_only=(dir/"seed_only.ckpt").string();ecm_stage1_set_checkpoint_path(seed_only);
+    ecm_stage1_begin_batch("r5|ed",2,false,0);const auto import_blocker=ecm_stage1_checkpoint_temp_path(seed_only);
+    fs::create_directory(import_blocker);rejected=false;
+    try{ecm_stage1_import_gpu_payload(valid,std::vector<uint64_t>{26,27});}
+    catch(const Error &e){rejected=e.state==RestoreState::IoFailure;}
+    check(rejected && !ecm_stage1_saved_sigma(0,sigma),"failed import committed seeds");
+    check(!ecm_stage1_read_blob(ecm_stage1_curve_record(0),restored),"failed import committed payload");
+    fs::remove(import_blocker);check(ecm_stage1_import_gpu_payload(valid,std::vector<uint64_t>{26,27}),"import retry");
+    ecm_stage1_end_batch(false);
+    std::cout<<"deferred_restore=PASS math_backup=1 seed_visibility=1 write_rollback=1 import_rollback=1 invalid_only=1 gpu_runs=0\n";
+}
+static void construction_publication() {
+    using namespace ed_gpu_driver;
+    Integer n,d,x,y,a24,f;mpz_set_ui(n.v,77);uint64_t factor_sigma=0,degenerate_sigma=0;
+    for(uint64_t sigma=1;sigma<200 && (!factor_sigma || !degenerate_sigma);++sigma) {
+        const auto setup=construct(d.v,x.v,y.v,a24.v,f.v,sigma,n.v);
+        if(setup==Setup::Factor && !factor_sigma)factor_sigma=sigma;
+        if(setup==Setup::Degenerate && !degenerate_sigma)degenerate_sigma=sigma;
+    }
+    check(factor_sigma && degenerate_sigma,"missing Edwards construction fixtures");
+    Batch batch(2);batch.sigmas={factor_sigma,degenerate_sigma};unsigned calls=0;std::string error;
+    check(!initialize(batch,n.v,error,[&](uint32_t lane,mpz_srcptr value) {
+        check(lane==0 && mpz_cmp_ui(value,1)>0 && mpz_cmp(value,n.v)<0 && mpz_divisible_p(n.v,value),"bad construction factor");
+        ++calls;return true;
+    }),"degenerate later curve accepted");
+    check(calls==1 && batch.hit[0] && error.find("degenerate")!=std::string::npos,"earlier Edwards factor not published before failure");
+    Batch blocked(1);blocked.sigmas[0]=factor_sigma;
+    check(!initialize(blocked,n.v,error,[](uint32_t,mpz_srcptr){return false;}),"Edwards publication failure ignored");
+    std::cout<<"edwards_construction_publication=PASS factor_sigma="<<factor_sigma<<" degenerate_sigma="<<degenerate_sigma<<"\n";
 }
 static void legacy(const fs::path &dir,const fs::path &source,const std::string &nh) {
     fs::create_directories(dir);const auto bytes=read(source);check(bytes.size()>80,"legacy source length");
@@ -126,7 +192,7 @@ int main(int argc,char **argv) {
     try {
         check(argc>=2,"output required");const fs::path out=argv[1];
         check(!fs::exists(out),"use a fresh test directory");fs::create_directories(out);
-        container(out/"container");edwards(out/"ed_small",{});edwards(out/"ed_binary",{},false);
+        container(out/"container");edwards(out/"ed_small",{});edwards(out/"ed_binary",{},false);deferred_restore(out/"deferred");construction_publication();
         if(argc==5){edwards(out/"ed_audit",argv[2]);legacy(out/"mont_audit",argv[3],argv[4]);}
         std::cout<<"checkpoint_container_checks=PASS\n";return 0;
     }catch(const std::exception &e){ecm_stage1_end_batch(false);std::cerr<<e.what()<<'\n';return 1;}

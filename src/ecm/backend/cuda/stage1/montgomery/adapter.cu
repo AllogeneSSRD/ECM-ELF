@@ -69,6 +69,7 @@ using namespace ecm_cuda_mont_host;
 
 // For %I64u on windows or %llu on linux
 #include <cinttypes>
+#include <chrono>
 
 #ifdef _WIN32
 #include <io.h>      // _isatty, _fileno
@@ -274,7 +275,8 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
              uint32_t curves, uint64_t *sigma_ptr,
              unsigned long checkpoint_interval_ms,
              float *gputime, int verbose, int gpu_param, uint64_t B1, uint32_t torsion,
-             ecm_cuda_stage1::RunResult &outcome,ecm_cuda_stage1::FactorSink sink,void *context)
+             ecm_cuda_stage1::RunResult &outcome,ecm_cuda_stage1::FactorSink sink,void *context,
+             ecm_cuda_stage1::SigmaGenerator generate_sigma)
 {
   using namespace ecm_cuda_stage1;
   if(!factors || !array_found || !N || !s || !curves || !sigma_ptr || !gputime ||
@@ -296,7 +298,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     }
     return cgbn_stage1_resident(factors, array_found, N, s, curves, sigma_ptr,
                                checkpoint_interval_ms, gputime, B1, torsion,
-                               strcmp(algorithm, "prac") == 0,outcome,construction);
+                               strcmp(algorithm, "prac") == 0,outcome,construction,generate_sigma);
 #else
     outputf(OUTPUT_ERROR, "GPU: resident/PRAC kernels are not built; rebuild with "
                          "-EnablePrac or -DECM_CUDA_ENABLE_PRAC=ON\n");
@@ -436,47 +438,62 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   size_t n_log2 = mpz_sizeinbase(N, 2);
   
   // ========== CHECKPOINT LOADING ==========
-  char *ckpt_filename = get_checkpoint_filename(N);
-  checkpoint_header_t ckpt_header;
-  uint32_t *ckpt_data = NULL;
-  size_t ckpt_data_size = 0;
-  int ckpt_loaded = 0;
-  
-  // The primary may be torn or corrupted; try each older generation in order.
-  for (const std::string &candidate : ecm_stage1_checkpoint_candidates(ckpt_filename)) {
-    if (restore_checkpoint(candidate.c_str(), &ckpt_header, &ckpt_data, &ckpt_data_size) !=
-        ECM_NO_FACTOR_FOUND) continue;
-    const uint32_t wpc_want = suyama_layout ? 7u : 5u;
-    const uint32_t param_want = param0 ? 0u : (param2 ? 2u : 3u);
-    const uint64_t stride = (uint64_t)curves * (uint64_t)(ckpt_header.BITS / 32u) *
-                            sizeof(uint32_t);
-    if (ckpt_header.curves != curves || ckpt_header.s_num_bits != s_num_bits ||
-        ckpt_header.s_partial > s_num_bits || ckpt_header.BITS < 32u ||
-        ckpt_header.BITS % 32u || stride == 0 ||
-        ckpt_header.data_size != stride * wpc_want ||
-        ckpt_header.gpu_param != param_want || ckpt_header.TPI == 0u) {
-      outputf(OUTPUT_NORMAL, "Checkpoint parameters/layout mismatch: %s\n", candidate.c_str());
-      free(ckpt_data);
-      ckpt_data = NULL;
-      continue;
-    }
-    outputf(OUTPUT_NORMAL, "Resuming from checkpoint: %.1f%% complete (s_partial=%lu/%lu)%s\n",
-            s_num_bits ? 100.0 * ckpt_header.s_partial / s_num_bits : 0.0,
-            ckpt_header.s_partial, s_num_bits,
-            candidate == ckpt_filename ? "" : " [backup]");
-    ckpt_loaded = 1;
-    if (candidate != ckpt_filename) ecm_stage1_mark_bad_primary(ckpt_filename);
-    sigma64 = ckpt_header.sigma;
-    sigma32 = static_cast<uint32_t>(sigma64);
-    BITS = ckpt_header.BITS;
-    TPI = ckpt_header.TPI;
-    data_size = ckpt_data_size;
-    data = ckpt_data;
-    s_partial = ckpt_header.s_partial;
-    batches_complete = ckpt_header.batches_complete;
-    break;
+  const auto ckpt_path=get_checkpoint_filename(N);
+  const auto *ckpt_filename=ckpt_path.c_str();
+  checkpoint_header_t ckpt_header{};
+  std::vector<uint32_t> checkpoint_data;
+  bool ckpt_loaded=false;
+  auto decode=[&](const std::string &bytes) {
+    const auto result=decode_checkpoint(bytes,N,s_num_bits,curves,uint32_t(gpu_param),ckpt_header,checkpoint_data);
+    if(result.state==ecm_stage1_checkpoint::RestoreState::Incompatible)
+        throw ecm_stage1_checkpoint::Error(result.state,result.error);
+    return result.restored();
+  };
+  ecm_stage1_validate_pending_checkpoint([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
+    if(records.size()!=curves || sigmas.size()!=curves)return false;
+    for(size_t i=1;i<records.size();++i)if(!records[i].empty())return false;
+    if(records[0].empty())return true;
+    if(!decode(records[0]))return false;
+    uint32_t resolved_tpi=0;
+    const auto available=param2?cgbn_stage1_kernel_param2_dispatch(ckpt_header.BITS,&resolved_tpi):
+        param0?cgbn_stage1_kernel_suyama_dispatch(ckpt_header.BITS,&resolved_tpi):
+               cgbn_stage1_kernel_dispatch(ckpt_header.BITS,&resolved_tpi);
+    if(!available)throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,
+        "checkpoint kernel tier is unavailable in this build");
+    for(uint32_t i=0;i<curves;++i)if(sigmas[i] && sigmas[i]!=ckpt_header.sigma+i)return false;
+    for(uint32_t i=0;i<curves;++i)sigmas[i]=ckpt_header.sigma+i;
+    ckpt_loaded=true;return true;
+  });
+  if(!ckpt_loaded && !ckpt_path.empty())for(const auto &candidate:ecm_stage1_checkpoint_candidates(ckpt_path)) {
+    std::string bytes;
+    const auto read=ecm_stage1_read_checkpoint_blob(candidate,bytes);
+    if(read==ecm_stage1_checkpoint::BlobRead::IoFailure)
+        throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::IoFailure,"cannot read Montgomery checkpoint");
+    if(read==ecm_stage1_checkpoint::BlobRead::Missing || !decode(bytes))continue;
+    if(candidate!=ckpt_path)ecm_stage1_mark_bad_primary(ckpt_path);
+    ckpt_loaded=true;break;
   }
-  
+  if(ckpt_loaded) {
+    outputf(OUTPUT_NORMAL,"Resuming from checkpoint: %.1f%% complete (s_partial=%lu/%lu)\n",
+        100.0*ckpt_header.s_partial/s_num_bits,ckpt_header.s_partial,s_num_bits);
+    sigma64=ckpt_header.sigma;BITS=ckpt_header.BITS;TPI=ckpt_header.TPI;
+    data_size=ckpt_header.data_size;
+    data=static_cast<uint32_t *>(malloc(data_size));if(!data)throw std::bad_alloc();
+    memcpy(data,checkpoint_data.data(),data_size);std::vector<uint32_t>().swap(checkpoint_data);
+    s_partial=ckpt_header.s_partial;batches_complete=ckpt_header.batches_complete;
+  } else {
+    uint64_t saved=0;
+    if(ecm_stage1_saved_sigma(0,saved))sigma64=saved;
+    else if(generate_sigma)sigma64=generate_sigma(curves,gpu_param);
+  }
+  if(sigma64>UINT64_MAX-(curves-1ull) ||
+     (gpu_param!=0 && (sigma64>UINT32_MAX || curves>0x100000000ull-sigma64)))
+      throw RunError(Failure::Preparation,"CUDA sigma range overflow");
+  *sigma_ptr=sigma64;sigma32=uint32_t(sigma64);
+  for(uint32_t i=0;i<curves;++i)
+      if(ecm_stage1_batch_sigma(i,sigma64+i)!=sigma64+i)
+          throw RunError(Failure::Preparation,"nonconsecutive Montgomery checkpoint sigmas");
+
   // If no checkpoint, proceed with normal initialization
   if (!ckpt_loaded) {
   std::string existing_checkpoint;
@@ -762,7 +779,9 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   float batch_time = 0;
   
   /* Track time for checkpoint saving */
-  float last_checkpoint_time = 0;
+  auto last_checkpoint_time=std::chrono::steady_clock::now();
+  outcome.total=s_num_bits;outcome.cursor=s_partial;
+  outcome.durable_cursor=ckpt_loaded?s_partial:0;
 
   // if (checkpoint_interval_ms > 86400000) { // > 1 day, treat as disabled
   //   checkpoint_interval_ms = 86400000; // 1 day max
@@ -897,7 +916,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     // ========== CHECKPOINT SAVING ==========
     const bool stop_now = ecm_stage1_stop_requested();
     if (stop_now || s_partial>=s_num_bits || (checkpoint_interval_ms > 0 &&
-      (*gputime - last_checkpoint_time) >= checkpoint_interval_ms)) {
+      std::chrono::steady_clock::now()-last_checkpoint_time >= std::chrono::milliseconds(checkpoint_interval_ms))) {
       // Copy data back from GPU temporarily for checkpoint
       CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));
       
@@ -918,12 +937,16 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
       header.data_size = data_size;
       header.timestamp = time(NULL);
       
-      const int saved = save_checkpoint(ckpt_filename, &header, data, data_size);
-      if (saved == ECM_NO_FACTOR_FOUND) last_checkpoint_time = *gputime;
+      outcome.cursor=s_partial;
+      const int saved=ckpt_path.empty()?ECM_NO_FACTOR_FOUND:
+          save_checkpoint(ckpt_filename,&header,data,data_size);
+      if(saved!=ECM_NO_FACTOR_FOUND)throw RunError(Failure::Persistence,"Montgomery checkpoint write failed");
+      if(!ckpt_path.empty())outcome.durable_cursor=s_partial;
+      last_checkpoint_time=std::chrono::steady_clock::now();
       if (stop_now) {
         if(s_partial<s_num_bits)outcome.termination=Termination::Stopped;
         outputf(saved == ECM_NO_FACTOR_FOUND ? OUTPUT_NORMAL : OUTPUT_ERROR,
-                saved == ECM_NO_FACTOR_FOUND ? "Stage1 stopped: checkpoint saved\n" :
+                saved == ECM_NO_FACTOR_FOUND ? (ckpt_path.empty()?"Stage1 stopped: no checkpoint configured, progress is not recoverable\n":"Stage1 stopped: checkpoint saved\n") :
                                                "Stage1 stop requested but checkpoint write failed\n");
         break;
       }
@@ -947,12 +970,8 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
                             words_per_curve, p1_word, p2_word, gpu_param,true);
   }
 
-  // ========== CHECKPOINT CLEANUP ==========
-  // Remove checkpoint file on successful completion
-  if (youpi != ECM_ERROR) {
-    ecm_stage1_remove_checkpoints(ckpt_filename);
-    outputf (OUTPUT_VERBOSE, "Checkpoint file removed\n");
-  }
+  // Task finalization owns checkpoint cleanup after all result publication.
+  outcome.cursor=s_partial;
 
   /* Write back possibly-updated sigma to caller */
   *sigma_ptr = sigma64;
@@ -962,16 +981,19 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
 
 ecm_cuda_stage1::RunResult ecm_cuda_stage1::execute_mont_batch(mpz_t *factors,int *found,
     mpz_srcptr n,mpz_srcptr scalar,uint32_t curves,uint64_t *sigma,unsigned long checkpoint_ms,
-    float *milliseconds,int verbose,int param,uint64_t b1,uint32_t torsion,FactorSink sink,void *context) {
+    float *milliseconds,int verbose,int param,uint64_t b1,uint32_t torsion,FactorSink sink,void *context,SigmaGenerator generate_sigma) {
     RunResult result;
     try {
         result.code=run_mont_runtime(factors,found,n,scalar,curves,sigma,checkpoint_ms,
-                                    milliseconds,verbose,param,b1,torsion,result,sink,context);
+                                    milliseconds,verbose,param,b1,torsion,result,sink,context,generate_sigma);
         if(result.code!=-1){result.termination=Termination::Completed;result.failure=Failure::None;}
         else if(result.termination==Termination::Stopped || result.termination==Termination::SampleLimit)
             result.failure=Failure::None;
     } catch(const RunError &e) {
         result.code=-1;result.termination=Termination::Failed;result.failure=e.failure;result.error=e.what();
+    } catch(const ecm_stage1_checkpoint::Error &e) {
+        result.code=-1;result.termination=Termination::Failed;result.error=e.what();
+        result.failure=e.state==ecm_stage1_checkpoint::RestoreState::IoFailure?Failure::Persistence:Failure::Preparation;
     } catch(const std::exception &e) {
         result.code=-1;result.termination=Termination::Failed;result.error=e.what();
     }

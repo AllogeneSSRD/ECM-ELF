@@ -6,6 +6,9 @@ namespace ecm_cuda_stage1 {
 // The callback persists a proper construction factor immediately. It borrows
 // the value only for the call; false aborts execution as a publication failure.
 using FactorSink=bool (*)(uint32_t,mpz_srcptr,void *);
+// Invoked only for a fresh batch with no accepted checkpoint seed.
+using SigmaGenerator=uint64_t (*)(uint32_t curves,int parametrization);
 RunResult execute_mont_batch(mpz_t *,int *,mpz_srcptr,mpz_srcptr,uint32_t,uint64_t *,
-    unsigned long,float *,int,int,uint64_t,uint32_t,FactorSink=nullptr,void *context=nullptr);
+    unsigned long,float *,int,int,uint64_t,uint32_t,FactorSink=nullptr,void *context=nullptr,
+    SigmaGenerator generate_sigma=nullptr);
 }

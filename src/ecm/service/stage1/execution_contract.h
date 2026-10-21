@@ -53,6 +53,7 @@ struct TaskDependencies {
                    const std::string &,ExecutionOptions &,ExecutionResult *);
     const std::string &(*build_identity)();
     int (*default_naf_window)();
+    bool defer_gpu_checkpoint_validation=false;
 };
 
 bool stage1_publish_factor(const Stage1Options &,mpz_srcptr,uint64_t,uint64_t,mpz_srcptr);

@@ -110,9 +110,9 @@ public:
     Stage1TaskSession(const Stage1TaskSession &) = delete;
     Stage1TaskSession &operator=(const Stage1TaskSession &) = delete;
     ~Stage1TaskSession() { close(false); }
-    void begin(const std::string &identity,uint32_t curves,bool fixed,uint64_t sigma) {
+    void begin(const std::string &identity,uint32_t curves,bool fixed,uint64_t sigma,bool defer=false) {
         active_=true; // begin_batch may acquire its lock before throwing.
-        ecm_stage1_begin_batch(identity,curves,fixed,sigma);
+        ecm_stage1_begin_batch(identity,curves,fixed,sigma,defer);
     }
     void close(bool completed) {
         if(!active_)return;
@@ -173,7 +173,8 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
                 const char *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO");
                 identity+="|"+std::string(algorithm && *algorithm?algorithm:"ladder");
             }
-            session.begin(identity,curves,opt.identity.sigma_fixed,opt.identity.fixed_sigma64);
+            session.begin(identity,curves,opt.identity.sigma_fixed,opt.identity.fixed_sigma64,
+                deps.defer_gpu_checkpoint_validation && opt.execution.selection.target==ExecutionTarget::Gpu);
         }
         stage1_copy_save_history(opt,savefilename);
         const auto begin=std::chrono::steady_clock::now();
@@ -205,6 +206,9 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
         out->finish_task(out->ret,false);
         return result;
     } catch(const std::exception &e) {
+        if(const auto *checkpoint=dynamic_cast<const ecm_stage1_checkpoint::Error *>(&e))
+            phase=checkpoint->state==ecm_stage1_checkpoint::RestoreState::IoFailure?
+                FailureSource::Persistence:FailureSource::Preparation;
         if(out->completion!=ExecutionResult::Completion::Failed)out->fail(phase);
         session.close(false);ecm_ts_fprintf(stderr,"ERROR: Stage1: %s\n",e.what());
         out->finish_task(ECM_ERROR,ecm_stage1_stop_requested()!=0);return result;

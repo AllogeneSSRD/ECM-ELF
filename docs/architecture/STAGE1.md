@@ -28,7 +28,7 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。结果中的 factors、array_found、sigmas 分别清理，sigmas 不依赖 factors 是否存在。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
 
-任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)保留单次输入、依赖组装、模式选择与展示/退出；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调 [私有依赖](../../src/ecm/service/stage1/execution_contract.h)。私有计算合同由 ExecutionOptions/ExecutionResult 表达，拥有权与状态实现落 execution_contract.cpp；TaskResult::State 仅在 task.cpp 定义。计算回调包含本后端所需准备和执行，不重复建立 Runner、Session.run 或 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task。
+任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)保留单次输入、依赖组装、模式选择与展示/退出；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调，以及 CUDA 延迟验证能力标志 [私有依赖](../../src/ecm/service/stage1/execution_contract.h)。私有计算合同由 ExecutionOptions/ExecutionResult 表达，拥有权与状态实现落 execution_contract.cpp；TaskResult::State 仅在 task.cpp 定义。计算回调包含本后端所需准备和执行，不重复建立 Runner、Session.run 或 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task。
 
 任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 14 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
 
@@ -80,15 +80,19 @@ CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先
 
 PARAM0/PARAM2 构造遇到模逆失败时计算 GCD：真因子立即通过既有 submission 通道持久化，并记录该曲线的 factor 结果；GCD=N 作为退化构造拒绝。设备批次不压紧索引：已找到因子的通道使用无害恒等状态，末点处理读取已保存的真因子，不能将该通道当作可用于 Stage2 的点。恢复时重新推导构造期因子元数据；旧载荷格式不变。有效曲线的公式与 sigma 身份不受影响；PARAM2 低层也拒绝 sigma<2，而不改用另一 sigma。
 
-构造布局、主机数组及结果分配检查尺寸；Montgomery 结果数组在计算前取得完整所有权，后续失败仍由结果对象清理。临时参数和 GMP 标量也由工作流局部对象持有。共享 storage 和 task 仍拥有最终清理权限；普通成功路径的底层清理请求不会提前删除尚未封存的批次。
+构造布局、主机数组及结果分配检查尺寸；两曲线的结果数组在计算前取得完整所有权，后续失败仍由结果对象清理。临时参数和 GMP 标量也由工作流局部对象持有。共享 storage 和 task 仍拥有最终清理权限；普通成功路径的底层清理请求不会提前删除尚未封存的批次。
 
 ## Montgomery 主机数学与存档输出
 
 [host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)集中 param0/2/3 初始状态、param2 Jacobian 辅助计算、标量打包、np0、普通整数解包与最终结果处理。六个实际跨设备协作入口经私有 host_math.h 声明；内部转换和算术 helper 留在 CPP 内部。输出仍调用同一 factory 中的 outputf/test_verbose，verbose 状态没有复制。FULL_BUILD 条件下的诊断分支和断言语义保持。
 
-[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)持有 ladder V5 与 resident/PRAC 的编码、读取、校验及保存路径；[checkpoint.h](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.h)声明接口与载荷布局。[output.cpp](../../src/ecm/backend/cuda/stage1/montgomery/output.cpp)持有 TTY/screen、节流显示判断与 CSV，output.h 只声明输出接口。两种曲线均使用 save_checkpoint / restore_checkpoint 动词；现有返回类型与恢复策略仍由各自载荷决定。
+[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)持有 ladder V5 与 resident/PRAC 的编码、读取、校验及保存路径；[checkpoint.h](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.h)声明接口与载荷布局。[output.cpp](../../src/ecm/backend/cuda/stage1/montgomery/output.cpp)持有 TTY/screen、节流显示判断与 CSV，output.h 只声明输出接口。两种曲线的生产恢复使用 Missing、Resumed、AlreadyComputed、Incompatible、Corrupt、IoFailure；离线 decode 不读取文件或发布结果。外层候选通过本后端校验后才提交种子和载荷，详见 [Checkpoint](CHECKPOINT.md)。
 
 Edwards [batch.h](../../src/ecm/backend/cuda/stage1/edwards/batch.h)只描述主机状态；[host_math.cpp](../../src/ecm/backend/cuda/stage1/edwards/host_math.cpp)负责构造；[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp)负责 V3 和旧文本读取及状态资格。GMP 数组拥有权和点不变量属于 [核心曲线数学](../../src/ecm/core/curve/ecm_edwards_curve.h)，批次模型不再引入 save/文件实现。workflow 直接调用实际 save 发布函数。
+
+CUDA workflow 将 sigma 选择与曲线参数化分开：先恢复并校验当前/兼容存档，采用载荷中的 sigma；没有算术载荷时查询已持久化种子；只有缺失种子的新任务才调用随机生成器。随后使用确定的 sigma 构造曲线。恢复校验所需的基点重建仍使用存档 sigma，不生成新种子。Montgomery 保持连续批次，Edwards 保持逐曲线种子；结果、日志和 PARAM2/3 save 均使用实际采用的 sigma。
+
+两种 CUDA workflow 均在计算前拥有结果数组。Edwards 末点验证和归一化写入独立结果，不改写用于恢复的原始批次状态；构造期真因子立即经过既有 submission 通道。完成状态保存成功后才发布最终 save，任务封存结果后才清除恢复材料。周期保存失败作为持久化失败返回，优先于同时收到的停止；最后一片已完成时继续完成当前批次的结果发布。
 
 磁盘版本、字段顺序和 size_t/time_t 布局保持。adapter.cu 保留 tier/dispatch、CGBN report、设备分配、上传/回读、事件/同步、计算循环和资源释放；global event 与标量上传继续先于 checkpoint 恢复和 CPU 构造。上述主机 CPP 均以普通 CXX 编译且不包含 CUDA SDK；接口或实际设备协作改动仍会使其真实依赖失效。增量编译最终门禁与当前实施进度见 [实施草稿](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md)。
 

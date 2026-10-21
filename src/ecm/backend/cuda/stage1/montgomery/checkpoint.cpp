@@ -13,10 +13,8 @@ namespace ecm_cuda_mont_host {
  * Get checkpoint filename for given N (more readable format)
  * Uses bit length and first/last few hex chars as identifier
  */
-char* get_checkpoint_filename(const mpz_t N) {
-  static char filename[1024];
-  const auto path=ecm_stage1_checkpoint_path().empty()?std::string(".mont_stage1.ckpt"):ecm_stage1_curve_record(0);
-  snprintf(filename,sizeof(filename),"%s",path.c_str());(void)N;return filename;
+std::string get_checkpoint_filename(mpz_srcptr) {
+  return ecm_stage1_checkpoint_path().empty()?std::string{}:ecm_stage1_curve_record(0);
 }
 
 /**
@@ -70,6 +68,41 @@ int restore_checkpoint(const char *filename,
   return ECM_NO_FACTOR_FOUND;
 }
 
+ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &bytes,mpz_srcptr n,
+    uint64_t scalar_bits,uint32_t curves,uint32_t param,checkpoint_header_t &header,
+    std::vector<uint32_t> &data) {
+  using namespace ecm_stage1_checkpoint;
+  if(bytes.size()<sizeof(header)+sizeof(uint64_t))return {RestoreState::Corrupt,"short Montgomery checkpoint"};
+  checkpoint_header_t h;memcpy(&h,bytes.data(),sizeof(h));
+  if(h.magic!=CHECKPOINT_MAGIC || h.version!=CHECKPOINT_VERSION ||
+     !h.data_size || h.data_size!=bytes.size()-sizeof(h)-sizeof(uint64_t))
+      return {RestoreState::Corrupt,"invalid Montgomery header or length"};
+  uint64_t sum;memcpy(&sum,bytes.data()+bytes.size()-sizeof(sum),sizeof(sum));
+  if(sum!=ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,bytes.data(),bytes.size()-sizeof(sum)))
+      return {RestoreState::Corrupt,"Montgomery checksum mismatch"};
+  if(h.curves!=curves || h.s_num_bits!=scalar_bits || h.gpu_param!=param)
+      return {RestoreState::Incompatible,"Montgomery checkpoint request mismatch"};
+  if(h.BITS<mpz_sizeinbase(n,2)+6 || h.BITS>16384 || h.BITS%32 ||
+     (h.TPI!=4 && h.TPI!=8 && h.TPI!=16 && h.TPI!=32) ||
+     h.data_size!=uint64_t(param==3?5:7)*curves*(h.BITS/8) ||
+     !h.s_partial || h.s_partial>scalar_bits || h.batches_complete<0 ||
+     h.sigma>UINT64_MAX-(curves-1ull) ||
+     (param!=0 && (h.sigma>UINT32_MAX || curves>0x100000000ull-h.sigma)))
+      return {RestoreState::Corrupt,"invalid Montgomery geometry, cursor or sigma"};
+  std::vector<uint32_t> decoded(h.data_size/sizeof(uint32_t));
+  memcpy(decoded.data(),bytes.data()+sizeof(h),h.data_size);
+  const uint32_t words=param==3?5:7,limbs=h.BITS/32;
+  mpz_t value;mpz_init(value);bool valid=true;
+  for(uint32_t i=0;i<curves && valid;++i)for(uint32_t j=0;j<words;++j) {
+      mpz_import(value,limbs,-1,sizeof(uint32_t),0,0,decoded.data()+(size_t(i)*words+j)*limbs);
+      if(j==0?mpz_cmp(value,n)!=0:mpz_cmp(value,n)>=0){valid=false;break;}
+  }
+  mpz_clear(value);
+  if(!valid)return {RestoreState::Corrupt,"Montgomery modulus/residue mismatch"};
+  header=h;data.swap(decoded);
+  return {h.s_partial==scalar_bits?RestoreState::AlreadyComputed:RestoreState::Resumed,{}};
+}
+
 #if ECM_CUDA_ENABLE_PRAC
 bool save_checkpoint(const std::string &path, ResidentCheckpoint h,
                                       const std::vector<uint32_t> &data) {
@@ -79,28 +112,31 @@ bool save_checkpoint(const std::string &path, ResidentCheckpoint h,
     out.write(reinterpret_cast<const char *>(data.data()), h.bytes);
     return out && ecm_stage1_write_blob(path,out.str());
 }
-bool restore_checkpoint(const std::string &path,ResidentCheckpoint &h,
-                                 std::vector<uint32_t> &data,uint64_t *sigma,bool prac) {
-    const auto total=h.total,bytes=h.bytes;
-    const auto bits=h.bits,tpi=h.tpi,curves=h.curves,torsion=h.torsion;
-    bool resumed=false;
-    std::string saved;ecm_stage1_read_blob(path,saved);
-    std::istringstream in(saved,std::ios::binary|std::ios::in); ResidentCheckpoint old{};
-    if (in.read(reinterpret_cast<char *>(&old), sizeof(old))) {
-        bool compatible = old.magic == h.magic && old.version == h.version && old.b1 == h.b1 &&
-            old.scalar == h.scalar && old.modulus == h.modulus && old.identity == h.identity &&
-            old.total == total && old.bytes == bytes && old.algorithm == h.algorithm && old.domain == 1 &&
-            old.bits == bits && old.tpi == tpi && old.curves == curves && old.torsion == torsion &&
-            old.next <= total && (prac || old.next >= 1) && old.sigma <= UINT64_MAX - curves;
-        if (compatible && in.read(reinterpret_cast<char *>(data.data()), bytes) &&
-            in.peek() == std::char_traits<char>::eof() && ecm_prac_hash(data.data(), bytes) == old.checksum) {
-            h = old; *sigma = h.sigma; resumed = true;
-            outputf(OUTPUT_ALWAYS, "GPU: resident checkpoint resumed (next=%llu/%llu, sigma=%llu)\n",
-                (unsigned long long)h.next, (unsigned long long)total, (unsigned long long)*sigma);
-        } else throw std::runtime_error("resident checkpoint parameters/payload mismatch");
+ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &saved,mpz_srcptr n,
+    ResidentCheckpoint &h,std::vector<uint32_t> &data,bool prac) {
+    using namespace ecm_stage1_checkpoint;
+    if(saved.size()<sizeof(h))return {RestoreState::Corrupt,"short resident checkpoint"};
+    ResidentCheckpoint old{};memcpy(&old,saved.data(),sizeof(old));
+    if(old.magic!=h.magic || old.version!=h.version || old.b1!=h.b1 || old.scalar!=h.scalar ||
+       old.modulus!=h.modulus || old.identity!=h.identity || old.total!=h.total ||
+       old.algorithm!=h.algorithm || old.domain!=1 || old.bits!=h.bits || old.tpi!=h.tpi ||
+       old.curves!=h.curves || old.torsion!=h.torsion)
+        return {RestoreState::Incompatible,"resident checkpoint request/layout mismatch"};
+    if(old.bytes!=h.bytes || saved.size()-sizeof(old)!=old.bytes || old.next>h.total ||
+       (!prac && old.next<1) || old.sigma>UINT64_MAX-(h.curves-1ull) ||
+       ecm_prac_hash(saved.data()+sizeof(old),size_t(old.bytes))!=old.checksum)
+        return {RestoreState::Corrupt,"invalid resident payload/cursor"};
+    std::vector<uint32_t> decoded(size_t(old.bytes)/4);
+    memcpy(decoded.data(),saved.data()+sizeof(old),size_t(old.bytes));
+    mpz_t value;mpz_init(value);bool valid=true;const auto limbs=h.bits/32;
+    for(uint32_t i=0;i<h.curves && valid;++i)for(uint32_t j=0;j<7;++j) {
+        mpz_import(value,limbs,-1,4,0,0,decoded.data()+(size_t(i)*7+j)*limbs);
+        if(j==0?mpz_cmp(value,n)!=0:mpz_cmp(value,n)>=0){valid=false;break;}
     }
-    if(!saved.empty() && !resumed)throw std::runtime_error("invalid resident checkpoint payload");
-    return resumed;
+    mpz_clear(value);
+    if(!valid)return {RestoreState::Corrupt,"resident modulus/residue mismatch"};
+    h=old;data.swap(decoded);
+    return {old.next==old.total?RestoreState::AlreadyComputed:RestoreState::Resumed,{}};
 }
 #endif
 }

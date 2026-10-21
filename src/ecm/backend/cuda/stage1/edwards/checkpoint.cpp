@@ -6,6 +6,7 @@
 #include "ecm/platform/logging.h"
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 namespace ed_gpu_driver {
 static void binary_value(std::string &out,mpz_srcptr value) {
     if(mpz_sgn(value)<0)throw std::runtime_error("negative Edwards checkpoint value");
@@ -38,78 +39,98 @@ bool save_checkpoint(const std::string &path,Batch &b,const mpz_t n,const mpz_t 
     const auto body=checkpoint_body(b,n,scalar,b1);
     return ecm_stage1_write_blob(path,body);
 }
-bool restore_checkpoint(const std::string &path,Batch &b,const mpz_t n,const mpz_t scalar,
-                    uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
-    for(const auto &candidate:ecm_stage1_checkpoint_candidates(path)) {
-        std::string text;if(!ecm_stage1_read_blob(candidate,text))continue;
+ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &text,Batch &b,
+        mpz_srcptr n,mpz_srcptr scalar,uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
+    using namespace ecm_stage1_checkpoint;
         Batch temp(b.count);unsigned window=0;int doubling=0;bool valid=true;
         if(text.size()>=8 && !std::memcmp(text.data(),"ECMEDB3",8)) {
             using namespace ecm_stage1_binary;
             try {
-                if(text.size()<68)continue;
+                if(text.size()<68)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
                 const auto body=std::string_view(text).substr(0,text.size()-8);
                 Reader footer(std::string_view(text).substr(text.size()-8));
-                if(footer.u64()!=hash(std::string(body)))continue;
-                Reader data(body);data.take(8);if(data.u32()!=3)continue;
+                if(footer.u64()!=hash(std::string(body)))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
+                Reader data(body);data.take(8);if(data.u32()!=3)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
                 window=data.u32();doubling=int(data.u32());
-                if(data.u32()!=b.count)continue;temp.done=data.u32();
-                if(data.u32()!=0 || data.u64()!=b1 || data.u64()!=mpz_sizeinbase(scalar,2) ||
-                   data.u64()!=scalar_fingerprint(scalar))continue;
+                if(data.u32()!=b.count)return {RestoreState::Incompatible,"GPU Edwards checkpoint curve count differs"};temp.done=data.u32();
+                if(data.u32()!=0)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint flags"};
+                if(data.u64()!=b1 || data.u64()!=mpz_sizeinbase(scalar,2) || data.u64()!=scalar_fingerprint(scalar))
+                    return {RestoreState::Incompatible,"GPU Edwards checkpoint scalar or B1 differs"};
                 Integer saved_n;const auto maximum=(mpz_sizeinbase(n,2)+7)/8;
-                binary_value(data,saved_n.v,maximum);if(mpz_cmp(saved_n.v,n))continue;
-                if(b.count>data.left()/52)continue;
+                binary_value(data,saved_n.v,maximum);if(mpz_cmp(saved_n.v,n))return {RestoreState::Incompatible,"GPU Edwards checkpoint target differs"};
+                if(b.count>data.left()/52)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
                 for(uint32_t i=0;i<b.count;++i) {
                     temp.sigmas[i]=data.u64();temp.hit[i]=int(data.u32());
                     binary_value(data,temp.factors[i],maximum);
                     for(unsigned j=0;j<9;++j)binary_value(data,temp.state[size_t(i)*9+j],maximum);
                 }
-                if(data.left())continue;
-            }catch(const std::runtime_error &){continue;}
+                if(data.left())return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
+            }catch(const std::runtime_error &){return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};}
         } else {
-        const auto end=text.rfind("CHECKSUM ");if(end==std::string::npos)continue;
+        const auto end=text.rfind("CHECKSUM ");if(end==std::string::npos)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         const auto body=text.substr(0,end);std::istringstream check(text.substr(end+9));uint64_t sum;std::string extra;
-        if(!(check>>sum) || (check>>extra) || sum!=hash(body))continue;
+        if(!(check>>sum) || (check>>extra) || sum!=hash(body))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         std::istringstream data(body);std::string tag,nh,sh,fh;uint64_t bound;uint32_t count,done;
-        if(!(data>>tag))continue;
+        if(!(data>>tag))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         if(tag=="ECM_GPU_EDWARDS_NAF_V2") {
-            if(!(data>>window>>doubling) || window<2 || window>12 || (doubling!=4 && doubling!=5))continue;
-        } else if(tag!="ECM_GPU_EDWARDS_BINARY_V1")continue;
-        if(!(data>>nh>>sh>>bound>>count>>done) || nh!=hex(n) || sh!=hex(scalar) || bound!=b1 || count!=b.count)continue;
+            if(!(data>>window>>doubling) || window<2 || window>12 || (doubling!=4 && doubling!=5))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
+        } else if(tag!="ECM_GPU_EDWARDS_BINARY_V1")return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
+        if(!(data>>nh>>sh>>bound>>count>>done))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
+        if(nh!=hex(n) || sh!=hex(scalar) || bound!=b1 || count!=b.count)
+            return {RestoreState::Incompatible,"GPU Edwards checkpoint target/scalar/B1/curve count differs"};
         temp.done=done;
         for(uint32_t i=0;i<count && valid;++i) {
             if(!(data>>temp.sigmas[i]>>temp.hit[i]>>fh) ||
-               (fixed && temp.sigmas[i]!=b.sigmas[i]) || (temp.hit[i]!=0 && temp.hit[i]!=1) ||
+               (temp.hit[i]!=0 && temp.hit[i]!=1) ||
                mpz_set_str(temp.factors[i],fh.c_str(),16)){valid=false;break;}
             for(unsigned j=0;j<9;++j){if(!(data>>fh) || mpz_set_str(temp.state[size_t(i)*9+j],fh.c_str(),16)){valid=false;break;}}
         }
-        if(!valid || (data>>extra))continue;
+        if(!valid || (data>>extra))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         }
         if((window && (window<2 || window>12 || (doubling!=4 && doubling!=5))) ||
-           (!window && doubling!=0))continue;
+           (!window && doubling!=0))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         const auto total=window?EcmEdwardsNaf(scalar,window).bits:mpz_sizeinbase(scalar,2);
-        if(temp.done>total)continue;
+        if(temp.done>total)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         for(uint32_t i=0;i<b.count;++i)
-            if((fixed && temp.sigmas[i]!=b.sigmas[i]) || (temp.hit[i]!=0 && temp.hit[i]!=1))valid=false;
-        if(!valid)continue;
+            if((temp.hit[i]!=0 && temp.hit[i]!=1))valid=false;
+        if(!valid)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         temp.window=window;temp.doubling=doubling;
         Batch reference(b.count);reference.sigmas=temp.sigmas;std::string error;
-        if(!initialize(reference,n,error))continue;
+        if(!initialize(reference,n,error))return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
         for(uint32_t i=0;i<b.count && valid;++i) {
             if(reference.hit[i]!=temp.hit[i] || mpz_cmp(reference.factors[i],temp.factors[i])){valid=false;break;}
             for(unsigned j=0;j<5;++j)if(mpz_cmp(reference.state[size_t(i)*9+j],temp.state[size_t(i)*9+j]))valid=false;
             if(!point_valid(n,temp.state[size_t(i)*9],temp.state.data()+size_t(i)*9+5))valid=false;
         }
-        if(!valid)continue;
+        if(!valid)return {RestoreState::Corrupt,"invalid GPU Edwards checkpoint payload"};
+        if(fixed)for(uint32_t i=0;i<b.count;++i)
+            if(temp.sigmas[i]!=b.sigmas[i])return {RestoreState::Incompatible,"GPU Edwards checkpoint sigma differs from requested sigma"};
         if((window_fixed && b.window!=window) || (doubling_fixed && b.doubling!=doubling) ||
            (mode_fixed>=0 && bool(mode_fixed)!=bool(window)))
-            throw std::runtime_error("GPU Edwards checkpoint algorithm differs from explicit NAF/doubling selection");
+            return {RestoreState::Incompatible,"GPU Edwards checkpoint algorithm differs from explicit NAF/doubling selection"};
         b.window=window;b.doubling=doubling;
         b.done=temp.done;b.sigmas=temp.sigmas;b.hit=temp.hit;
         for(uint32_t i=0;i<b.count;++i)mpz_set(b.factors[i],temp.factors[i]);
         for(size_t i=0;i<size_t(b.count)*9;++i)mpz_set(b.state[i],temp.state[i]);
+    return {b.done==total?
+        RestoreState::AlreadyComputed:RestoreState::Resumed,{}};
+}
+
+ecm_stage1_checkpoint::RestoreResult restore_checkpoint(const std::string &path,Batch &b,
+        mpz_srcptr n,mpz_srcptr scalar,uint64_t b1,bool fixed,bool window_fixed,bool doubling_fixed,int mode_fixed) {
+    using namespace ecm_stage1_checkpoint;
+    RestoreResult result;
+    for(const auto &candidate:ecm_stage1_checkpoint_candidates(path)) {
+        std::string text;const auto read=ecm_stage1_read_checkpoint_blob(candidate,text);
+        if(read==BlobRead::Missing)continue;
+        if(read==BlobRead::IoFailure){result={RestoreState::IoFailure,"cannot read GPU Edwards checkpoint"};continue;}
+        auto decoded=decode_checkpoint(text,b,n,scalar,b1,fixed,window_fixed,doubling_fixed,mode_fixed);
+        if(decoded.state==RestoreState::Incompatible)return decoded;
+        if(!decoded.restored()){result=std::move(decoded);continue;}
         if(candidate!=path)ecm_stage1_mark_bad_primary(path);
-        ecm_ts_fprintf(stdout,"GPU Edwards resume: columns=%u window=%u doubling=%d path=%s\n",b.done,b.window,b.doubling,candidate.c_str());return true;
+        ecm_ts_fprintf(stdout,"GPU Edwards resume: columns=%u window=%u doubling=%d path=%s\n",b.done,b.window,b.doubling,candidate.c_str());
+        return decoded;
     }
-    return false;
+    return result;
 }
-}
+} // namespace ed_gpu_driver

@@ -124,32 +124,13 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         auto *factors=out->factors;
         auto *array_found=out->array_found;
 
-        /* Curve index (sigma) of the first curve.
-           gpu_param = 3 : the batch parametrization carries d = sigma/2^32 as a 32-bit
-                           kernel parameter, so sigma must stay inside 2^32;
-           gpu_param = 0 : Suyama sigma is a 64-bit value on the CPU path too, so use the
-                           same 53-bit random generator there (Prime95's ECMSTAGE2 reader
-                           only accepts sigma < 2^63, and random_sigma_u64() is < 2^53). */
-        const bool gpu_param0 = (params->gpu_param == 0);
-        uint64_t firstsigma64 = opt.identity.sigma_fixed
-            ? opt.identity.fixed_sigma64
-            : (gpu_param0 ? random_sigma_u64() : (uint64_t)gpu_pick_random_sigma(curves));
-        firstsigma64=ecm_stage1_batch_sigma(0,firstsigma64);
-        const uint32_t firstsigma = (uint32_t)(firstsigma64 & 0xFFFFFFFFull);
-        if (!gpu_param0 &&
-            (firstsigma64 > 0xFFFFFFFFull || curves > 0x100000000ull - firstsigma64)) {
-            std::cerr << "sigma range overflows uint32 (sigma + curves > 2^32)" << std::endl;
-            return ECM_ERROR;
-        }
-        for(uint32_t i=1;i<curves;++i)ecm_stage1_batch_sigma(i,firstsigma64+i);
-        ecm_edwards::Integer owned_batch_d;
-        auto *batch_d=owned_batch_d.v;
-        /* batch_d is the batch parametrization's curve constant; only param3 uses it */
-        gpu_compute_batch_d(batch_d, firstsigma, N);
+        // Resolve saved sigma before invoking the generator in the runtime.
+        uint64_t firstsigma64=opt.identity.sigma_fixed?opt.identity.fixed_sigma64:0;
+        const SigmaGenerator generate_sigma=opt.identity.sigma_fixed?nullptr:
+            +[](uint32_t count,int param)->uint64_t {
+                return param==0?random_sigma_u64():uint64_t(gpu_pick_random_sigma(count));
+            };
 
-        // B1/B2 are fixed for this run. The *actual* sigma is printed by the backend
-        // after it applies any checkpoint resume (the checkpoint may override the
-        // freshly-computed sigma), so it is not printed here.
         std::cout << "Using B1=" << B1 << ", B2=" << B2
                   << " (" << curves << " curves, " << ecm_backend_name() << ")" << std::endl;
 
@@ -161,8 +142,9 @@ int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
             &firstsigma64,params->gpu_checkpoint_interval_ms,&gputime,params->verbose,
             params->gpu_param,uint64_t(std::floor(B1+0.0001)),
             opt.execution.selection.scalar_construction==ScalarConstruction::PrimePowerLcmTimes12?12u:1u,
-            publish_construction_factor,&publication);
+            publish_construction_factor,&publication,generate_sigma);
         int ret=run.code;
+        const auto firstsigma=uint32_t(firstsigma64);
         out->firstsigma=uint32_t(firstsigma64);out->firstsigma64=firstsigma64;
         for(uint32_t i=0;i<curves;++i)out->sigmas[i]=firstsigma64+i;
         if(ret==ECM_ERROR) {

@@ -33,7 +33,7 @@ namespace ed_gpu_driver {
 struct Progress {
     using Clock=std::chrono::steady_clock;
     Batch &b;mpz_srcptr n,scalar;const Stage1Options &opt;std::string path;
-    uint64_t b1,total;long long last;const EcmEdwardsNafMetrics *metrics;bool failed=false;
+    uint64_t b1,total;Clock::time_point last;const EcmEdwardsNafMetrics *metrics;bool failed=false;
     Clock::time_point initialization_start,loop_start,sample_start,last_print;
     uint64_t sampled=0,delta=0;
     bool printed=false,line_open=false;
@@ -42,7 +42,7 @@ struct Progress {
              const std::string &checkpoint,uint64_t bound,uint64_t bits,
              const EcmEdwardsNafMetrics *measurements,Clock::time_point start)
         :b(batch),n(modulus),scalar(exponent),opt(options),path(checkpoint),b1(bound),total(bits),
-         last(stage1_now_ms()),metrics(measurements),initialization_start(start){}
+         last(Clock::now()),metrics(measurements),initialization_start(start){}
     void finish() {
         if(line_open){std::fputc('\n',stdout);std::fflush(stdout);line_open=false;}
     }
@@ -74,10 +74,10 @@ static bool progress(uint32_t done,void *context) {
     const auto sample_time=Progress::Clock::now();p.delta=done-p.sampled;
     p.speed.add(p.delta,std::chrono::duration<double,std::milli>(sample_time-p.sample_start).count());
     p.sampled=done;
-    const bool stop=ecm_stage1_stop_requested();const auto now=stage1_now_ms();
+    const bool stop=ecm_stage1_stop_requested();const auto now=sample_time;
     if(!p.printed || stop || done==p.total || sample_time-p.last_print>=std::chrono::milliseconds(200))
         p.display(sample_time);
-    if(stop || (p.opt.persistence.ckpt_ms && now-p.last>=p.opt.persistence.ckpt_ms)) {
+    if(done<p.total && (stop || (p.opt.persistence.ckpt_ms && now-p.last>=std::chrono::milliseconds(p.opt.persistence.ckpt_ms)))) {
         if(!p.path.empty() && !save_checkpoint(p.path,p.b,p.n,p.scalar,p.b1)) {
             p.finish();p.failed=true;
             ecm_ts_fprintf(stderr,"ERROR: GPU Edwards checkpoint write failed: %s\n",p.path.c_str());return false;
@@ -88,7 +88,7 @@ static bool progress(uint32_t done,void *context) {
     // checkpoint/console callback time. Elapsed is the complete loop wall time.
     p.sample_start=Progress::Clock::now();
     if(stop){p.finish();ecm_ts_fprintf(stdout,"GPU Edwards stopped at %s %u\n",p.b.window?"NAF column":"binary bit",done);}
-    return !stop;
+    return done==p.total || !stop;
 }
 
 }
@@ -100,6 +100,7 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
     if(!curves)return ECM_ERROR;
     auto phase=ecm_stage1::FailureSource::Preparation;
     try {
+        out->allocate_curves(curves);
         (void)n_expr;
         const auto initialization_start=Progress::Clock::now();
         if(opt.execution.naf_w!=0 && (opt.execution.naf_w<2 || opt.execution.naf_w>12))throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
@@ -124,10 +125,39 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
             if(value!="4" && value!="5")throw std::runtime_error("ECM_EDWARDS_DBL_ALGO must be 4 or 5");
             batch.doubling=value=="5"?5:4;
         }
-        for(uint32_t i=0;i<curves;++i)batch.sigmas[i]=ecm_stage1_batch_sigma(i,opt.identity.sigma_fixed?opt.identity.fixed_sigma64+i:random_sigma_u64());
+        bool selected_payload=false;
+        ecm_stage1_validate_pending_checkpoint([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
+            using namespace ecm_stage1_checkpoint;
+            if(records.size()!=curves || sigmas.size()!=curves)return false;
+            for(size_t i=1;i<records.size();++i)if(!records[i].empty())return false;
+            if(records[0].empty())return true; // Valid seed-only batch.
+            Batch candidate(curves);candidate.window=batch.window;candidate.doubling=batch.doubling;
+            candidate.sigmas=sigmas;
+            if(opt.identity.sigma_fixed)for(uint32_t i=0;i<curves;++i)candidate.sigmas[i]=opt.identity.fixed_sigma64+i;
+            const auto decoded=decode_checkpoint(records[0],candidate,n,scalar.v,uint64_t(b1),
+                opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed);
+            if(decoded.state==RestoreState::Incompatible || decoded.state==RestoreState::IoFailure)
+                throw Error(decoded.state,decoded.error);
+            if(!decoded.restored())return false;
+            for(uint32_t i=0;i<curves;++i)if(sigmas[i] && sigmas[i]!=candidate.sigmas[i])return false;
+            sigmas=candidate.sigmas;
+            batch.done=candidate.done;batch.window=candidate.window;batch.doubling=candidate.doubling;
+            batch.sigmas=candidate.sigmas;batch.hit=candidate.hit;
+            for(uint32_t i=0;i<curves;++i)mpz_set(batch.factors[i],candidate.factors[i]);
+            for(size_t i=0;i<size_t(curves)*9;++i)mpz_set(batch.state[i],candidate.state[i]);
+            selected_payload=true;return true;
+        });
+        if(opt.identity.sigma_fixed)for(uint32_t i=0;i<curves;++i)batch.sigmas[i]=opt.identity.fixed_sigma64+i;
         const auto stem=mont_format_save_name(opt.persistence.save_name_pattern,n,b1,&opt);
         const auto path=opt.persistence.tmp_dir.empty()?std::string{}:ecm_stage1_curve_record(0);
-        bool restored=!path.empty() && restore_checkpoint(path,batch,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed);
+        bool restored=selected_payload;
+        if(selected_payload)ecm_ts_fprintf(stdout,"GPU Edwards resume: columns=%u window=%u doubling=%d path=%s\n",batch.done,batch.window,batch.doubling,path.c_str());
+        if(!restored && !path.empty()) {
+            const auto decoded=restore_checkpoint(path,batch,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed);
+            if(decoded.state==ecm_stage1_checkpoint::RestoreState::Incompatible || decoded.state==ecm_stage1_checkpoint::RestoreState::IoFailure)
+                throw ecm_stage1_checkpoint::Error(decoded.state,decoded.error);
+            restored=decoded.restored();
+        }
         std::string existing;
         if(!restored && !path.empty() && !ecm_stage1_read_blob(path,existing)) {
             // Pre-container GPU Edwards used ed_<old-pattern>.save.gpu.ckpt.
@@ -136,7 +166,7 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
                 if(old.rfind("m0_",0)==0)old.erase(0,3);
                 const auto legacy=(std::filesystem::path(opt.persistence.tmp_dir)/("ed_"+old+".gpu.ckpt")).string();
                 Batch saved(curves);saved.sigmas=batch.sigmas;saved.window=batch.window;saved.doubling=batch.doubling;
-                if(restore_checkpoint(legacy,saved,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
+                if(restore_checkpoint(legacy,saved,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed).restored()) {
                     if(ecm_results::contains_stage1_curves(opt.persistence.results_file,n,uint64_t(b1),true,0,saved.sigmas))continue;
                     batch.done=saved.done;batch.window=saved.window;batch.doubling=saved.doubling;
                     batch.sigmas=saved.sigmas;batch.hit=saved.hit;
@@ -151,7 +181,20 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
         }
         if(!restored) {
             if(!path.empty() && ecm_stage1_read_blob(path,existing))throw std::runtime_error("GPU Edwards batch payload is invalid or unsupported");
-            std::string error;if(!initialize(batch,n,error))throw std::runtime_error(error);
+            // Sigma selection and curve parameterization are separate operations.
+            for(uint32_t i=0;i<curves;++i) {
+                uint64_t sigma=0;
+                if(!ecm_stage1_saved_sigma(i,sigma))
+                    sigma=opt.identity.sigma_fixed?opt.identity.fixed_sigma64+i:random_sigma_u64();
+                batch.sigmas[i]=ecm_stage1_batch_sigma(i,sigma);
+            }
+            std::string error;
+            if(!initialize(batch,n,error,[&](uint32_t lane,mpz_srcptr factor) {
+                mpz_set(out->factors[lane],factor);out->array_found[lane]=ECM_FACTOR_FOUND_STEP1;
+                out->sigmas[lane]=batch.sigmas[lane];
+                if(stage1_publish_factor(opt,n,uint64_t(b1),batch.sigmas[lane],factor))return true;
+                out->publish_failed=true;return false;
+            }))throw std::runtime_error(error);
         }
         ecm_ts_fprintf(stdout,"GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu window=%u doubling=%d\n",
                        opt.execution.device_index,curves,mpz_sizeinbase(n,2),mpz_sizeinbase(scalar.v,2),batch.window,batch.doubling);
@@ -182,52 +225,53 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
                 ecm_stage1::FailureSource::Execution);
             throw std::runtime_error(error);
         }
-        if(rc==2){if(p.failed)out->fail(ecm_stage1::FailureSource::Publication);else out->stop();return ECM_ERROR;}
-        phase=ecm_stage1::FailureSource::Publication;
-        if(!path.empty() && !save_checkpoint(path,batch,n,scalar.v,uint64_t(b1))) {
-            out->publish_failed=true;throw std::runtime_error("cannot retain completed Edwards batch");
-        }
+        if(rc==2){if(p.failed)out->fail(ecm_stage1::FailureSource::Persistence);else out->stop();return ECM_ERROR;}
         phase=ecm_stage1::FailureSource::Execution;
         Integer x,z,g,inv;std::string lines;bool found=false;
         for(uint32_t i=0;i<curves;++i) {
             auto *s=batch.state.data()+size_t(i)*9;
-            if(!batch.hit[i]) {
+            bool hit=batch.hit[i]!=0;
+            if(!hit) {
                 if(!point_valid(n,s[0],s+5))throw std::runtime_error("invalid GPU Edwards final point");
                 mpz_add(x.v,s[7],s[6]);mpz_mod(x.v,x.v,n);
                 mpz_sub(z.v,s[7],s[6]);mpz_mod(z.v,z.v,n);mpz_gcd(g.v,z.v,n);
-                if(mpz_cmp_ui(g.v,1)>0 && mpz_cmp(g.v,n)<0){batch.hit[i]=1;mpz_set(batch.factors[i],g.v);}
+                if(mpz_cmp_ui(g.v,1)>0 && mpz_cmp(g.v,n)<0){hit=true;mpz_set(x.v,g.v);}
                 else if(mpz_cmp(g.v,n)==0) {
                     ecm_ts_fprintf(stdout,"Edwards identity: sigma=%llu gcd(Qz,N)=N, no Stage2 point\n",
                                    static_cast<unsigned long long>(batch.sigmas[i]));
-                    mpz_set_ui(batch.factors[i],0);continue;
+                    mpz_set_ui(out->factors[i],0);out->sigmas[i]=batch.sigmas[i];continue;
                 }
                 else {mpz_invert(inv.v,z.v,n);mpz_mul(x.v,x.v,inv.v);mpz_mod(x.v,x.v,n);}
             }
-            if(batch.hit[i]){mpz_set(x.v,batch.factors[i]);found=true;
-                phase=ecm_stage1::FailureSource::Publication;
-                if(!stage1_publish_factor(opt,n,uint64_t(b1),batch.sigmas[i],batch.factors[i])){out->publish_failed=true;throw std::runtime_error("cannot publish Edwards factor");}}
-            else mpz_set(batch.factors[i],x.v);
-            phase=ecm_stage1::FailureSource::Execution;
-            lines+=save_line(n,x.v,batch.sigmas[i],uint64_t(b1),batch.hit[i]!=0);
+            if(batch.hit[i])mpz_set(x.v,batch.factors[i]);
+            mpz_set(out->factors[i],x.v);out->sigmas[i]=batch.sigmas[i];
+            out->array_found[i]=hit?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
+            found=found || hit;
+            lines+=save_line(n,x.v,batch.sigmas[i],uint64_t(b1),hit);
+        }
+        // Arithmetic state stays immutable while owned final values are published.
+        phase=ecm_stage1::FailureSource::Persistence;
+        if(!path.empty() && !save_checkpoint(path,batch,n,scalar.v,uint64_t(b1)))
+            throw std::runtime_error("cannot retain completed Edwards batch");
+        phase=ecm_stage1::FailureSource::Publication;
+        for(uint32_t i=0;i<curves;++i)if(out->array_found[i]!=ECM_NO_FACTOR_FOUND &&
+            !stage1_publish_factor(opt,n,uint64_t(b1),batch.sigmas[i],out->factors[i])) {
+            out->publish_failed=true;throw std::runtime_error("cannot publish Edwards factor");
         }
         const auto save=savefilename.empty()?(opt.persistence.tmp_dir.empty()?std::string{}:opt.persistence.tmp_dir+"/")+stem:savefilename;
         phase=ecm_stage1::FailureSource::Publication;
         if(!ecm_edwards::publish_save(save,lines,saveappend)) {
             out->publish_failed=true;throw std::runtime_error("cannot publish Edwards save "+save);
         }
-        // Only remove the resume state after publishing the completed batch.
-        if(!path.empty())ecm_stage1_remove_checkpoints(path);
-        auto *factors=static_cast<mpz_t *>(malloc(sizeof(mpz_t)*curves));
-        auto *hits=static_cast<int *>(malloc(sizeof(int)*curves));
-        auto *sigmas=static_cast<uint64_t *>(malloc(sizeof(uint64_t)*curves));
-        if(!factors || !hits || !sigmas){free(factors);free(hits);free(sigmas);throw std::bad_alloc();}
-        for(uint32_t i=0;i<curves;++i){mpz_init_set(factors[i],batch.factors[i]);hits[i]=batch.hit[i]?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;sigmas[i]=batch.sigmas[i];}
-        out->factors=factors;out->array_found=hits;out->sigmas=sigmas;
-        out->firstsigma64=sigmas[0];out->firstsigma=uint32_t(sigmas[0]);
+        // The task seals result publication before removing its resume state.
+        out->firstsigma64=out->sigmas[0];out->firstsigma=uint32_t(out->sigmas[0]);
         out->ret=found?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
         if(!save.empty())ecm_ts_fprintf(stdout,"Edwards Stage1 save: %s (%u curves)\n",save.c_str(),curves);
         (void)b2;return out->ret;
     } catch(const std::exception &e) {
+        if(const auto *checkpoint=dynamic_cast<const ecm_stage1_checkpoint::Error *>(&e))
+            phase=checkpoint->state==ecm_stage1_checkpoint::RestoreState::IoFailure?
+                ecm_stage1::FailureSource::Persistence:ecm_stage1::FailureSource::Preparation;
         if(out->completion!=ExecutionResult::Completion::Failed)
             out->fail(out->publish_failed?ecm_stage1::FailureSource::Publication:phase);
         ecm_ts_fprintf(stderr,"ERROR: GPU Edwards Stage1: %s\n",e.what());return ECM_ERROR;

@@ -29,6 +29,7 @@ def main():
     parser.add_argument('--fixtures',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--device',type=int,default=1)
+    parser.add_argument('--random-sigma',action='store_true',help='resume with random policy, retaining archived seeds')
     args=parser.parse_args();exe=args.exe.resolve();source=args.fixtures.resolve();out=args.output.resolve()
     out.mkdir(parents=True,exist_ok=False)
     report=dict(binary_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),device=args.device,cases=[],complete=False)
@@ -43,8 +44,9 @@ def main():
         save=folder/'completed.save'
         ini=folder/'ecm.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\n[stage1]\nauto_stage2=0\n',encoding='utf-8')
         command=[str(exe),'--config',str(ini),'-v','--curve','ed' if model=='ed' else 'mont','--target','gpu',
-            '-d',str(args.device),'-sigma',str(sigma),'-gpucurves',str(count),'--ckpt','0',
+            '-d',str(args.device),'-gpucurves',str(count),'--ckpt','0',
             '--tmp-dir',str(folder),'-save',str(save)]
+        if not args.random_sigma:command+=['-sigma',str(sigma)]
         if model!='ed':command+=['--gpu-param',model.removeprefix('mont')]
         command += [str(b1),'0']
         env=dict(os.environ,ECM_GPU_STAGE1_ALGO='ladder')

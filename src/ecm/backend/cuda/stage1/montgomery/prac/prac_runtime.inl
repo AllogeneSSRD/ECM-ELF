@@ -32,7 +32,7 @@ struct ResidentResources {
 static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_srcptr s,
     uint32_t curves, uint64_t *sigma, unsigned long checkpoint_ms, float *gputime,
     uint64_t B1, uint32_t torsion, bool prac,ecm_cuda_stage1::RunResult &outcome,
-    const ConstructionResults &construction) {
+    const ConstructionResults &construction,ecm_cuda_stage1::SigmaGenerator generate_sigma) {
         using namespace ecm_cuda_stage1;
         if (!curves || !sigma || *sigma > UINT64_MAX - curves || B1 < 2 || B1 > UINT32_MAX ||
             (torsion != 1 && torsion != 12)) throw std::runtime_error("invalid resident Stage1 parameters");
@@ -71,16 +71,52 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         const uint64_t total = prac ? plan.primes.size() : s_bits;
         const uint64_t total_work = prac ? plan.work : s_bits - 1;
         const PracWindow window = prac_window_settings(prac, total);
-        const size_t bytes = size_t(7) * curves * (bits / 8);
+        const size_t bytes=checked_size({7,size_t(curves),size_t(bits/8)});
         ResidentCheckpoint h{0x31524d444d434545ull, B1, ecm_prac_hash_mpz(s), ecm_prac_hash_mpz(N),
             prac ? plan.identity : ecm_prac_hash_mpz(s), prac ? 0ull : 1ull, total, *sigma,
             bytes, 0, 1, prac ? 3u : 2u, 1, bits, tpi, curves, torsion, 0};
-        const auto path=ecm_stage1_checkpoint_path().empty()?std::string(get_checkpoint_filename(N))+(prac?".prac-v1":".resident-v1"):ecm_stage1_curve_record(0);
+        const auto path=get_checkpoint_filename(N);
         std::vector<uint32_t> data(bytes / sizeof(uint32_t));
-        bool resumed = false;
-        if (!window.enabled()) {
-            resumed=restore_checkpoint(path,h,data,sigma,prac);
+        bool resumed=false;
+        ecm_stage1_validate_pending_checkpoint([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
+            if(window.enabled())throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,
+                "window sample cannot resume a production checkpoint");
+            if(records.size()!=curves || sigmas.size()!=curves)return false;
+            for(size_t i=1;i<records.size();++i)if(!records[i].empty())return false;
+            if(records[0].empty())return true;
+            const auto decoded=decode_checkpoint(records[0],N,h,data,prac);
+            if(decoded.state==ecm_stage1_checkpoint::RestoreState::Incompatible)
+                throw ecm_stage1_checkpoint::Error(decoded.state,decoded.error);
+            if(!decoded.restored())return false;
+            for(uint32_t i=0;i<curves;++i)if(sigmas[i] && sigmas[i]!=h.sigma+i)return false;
+            for(uint32_t i=0;i<curves;++i)sigmas[i]=h.sigma+i;
+            resumed=true;return true;
+        });
+        if(!resumed && !window.enabled() && !path.empty()) {
+            std::string saved;
+            const auto read=ecm_stage1_read_checkpoint_blob(path,saved);
+            if(read==ecm_stage1_checkpoint::BlobRead::IoFailure)
+                throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::IoFailure,"cannot read resident checkpoint");
+            if(read==ecm_stage1_checkpoint::BlobRead::Read) {
+                const auto decoded=decode_checkpoint(saved,N,h,data,prac);
+                if(!decoded.restored())throw ecm_stage1_checkpoint::Error(decoded.state,decoded.error);
+                resumed=true;
+            }
         }
+        if(resumed) {
+            *sigma=h.sigma;
+            outputf(OUTPUT_ALWAYS,"GPU: resident checkpoint resumed (next=%llu/%llu, sigma=%llu)\n",
+                (unsigned long long)h.next,(unsigned long long)h.total,(unsigned long long)*sigma);
+        } else {
+            uint64_t saved=0;
+            if(ecm_stage1_saved_sigma(0,saved))*sigma=saved;
+            else if(generate_sigma)*sigma=generate_sigma(curves,0);
+            h.sigma=*sigma;
+        }
+        if(*sigma>UINT64_MAX-(curves-1ull))throw RunError(Failure::Preparation,"resident sigma range overflow");
+        for(uint32_t i=0;i<curves;++i)
+            if(ecm_stage1_batch_sigma(i,*sigma+i)!=*sigma+i)
+                throw RunError(Failure::Preparation,"nonconsecutive resident checkpoint sigmas");
         {
             size_t initial_bytes = 0;
             std::unique_ptr<uint32_t, decltype(&free)> initial(set_p_2p_suyama(N, curves, *sigma, bits, &initial_bytes,&construction), &free);
@@ -131,6 +167,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         if (prac) for (uint64_t i = 0; i < h.next; ++i) completed_work += uint64_t(plan.primes[size_t(i)].work) * plan.primes[size_t(i)].repetitions;
         else completed_work = h.next - 1;
         auto start_wall = std::chrono::steady_clock::now(), last_ckpt = start_wall;
+        outcome.total=total;outcome.cursor=h.next;outcome.durable_cursor=resumed?h.next:0;
         uint64_t chunk = prac ? 16 : 200;
         double ring[50]{}; size_t ring_used = 0, ring_next = 0; double ring_sum = 0;
         double kernel_seconds = 0, last_print = -1;
@@ -167,12 +204,16 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
             const bool stopping=ecm_stage1_stop_requested();
             if (sampled || stopping || h.next>=total || (checkpoint_ms && std::chrono::duration<double, std::milli>(now - last_ckpt).count() >= checkpoint_ms)) {
                 CUDA_CHECK(cudaMemcpy(data.data(), gpu.data, bytes, cudaMemcpyDeviceToHost));
-                if (!save_checkpoint(path, h, data)) throw std::runtime_error("resident checkpoint write failed");
-                outputf(OUTPUT_ALWAYS, "GPU: checkpoint saved (Montgomery domain, next=%llu/%llu)\n",
+                outcome.cursor=h.next;
+                if(!path.empty()) {
+                    if(!save_checkpoint(path,h,data))throw RunError(Failure::Persistence,"resident checkpoint write failed");
+                    outcome.durable_cursor=h.next;
+                }
+                outputf(OUTPUT_ALWAYS,path.empty()?"GPU: no checkpoint configured (next=%llu/%llu)\n":"GPU: checkpoint saved (Montgomery domain, next=%llu/%llu)\n",
                         (unsigned long long)h.next, (unsigned long long)total);
                 last_ckpt = std::chrono::steady_clock::now();
             }
-            if(stopping){outcome.termination=Termination::Stopped;outputf(OUTPUT_ALWAYS,"Stage1 stopped: checkpoint saved\n");return ECM_ERROR;}
+            if(stopping && h.next<total){outcome.termination=Termination::Stopped;outputf(OUTPUT_ALWAYS,path.empty()?"Stage1 stopped: progress is not recoverable\n":"Stage1 stopped: checkpoint saved\n");return ECM_ERROR;}
             if (sampled) {
                 outcome.termination=Termination::SampleLimit;
                 *gputime = float(elapsed * 1000);
@@ -190,6 +231,6 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         *gputime = float(elapsed * 1000);
         outputf(OUTPUT_ALWAYS, "GPU: Stage1 %s completed; kernel=%.6f s, execution-wall=%.6f s\n", prac ? "PRAC" : "resident", kernel_seconds, elapsed);
         int result = process_results(factors, found, N, data.data(), bits, curves, *sigma, 7, 3, 5, 0,true);
-        if (result != ECM_ERROR) ecm_stage1_remove_checkpoints(path);
+        outcome.cursor=h.next; // Task finalization removes the durable native snapshot.
         return result;
 }

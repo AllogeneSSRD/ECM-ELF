@@ -14,6 +14,7 @@
 #include <iterator>
 #include <iostream>
 #include <utility>
+#include <memory>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -35,6 +36,17 @@ std::string batch_path, batch_identity;
 std::vector<std::string> batch_records;
 std::vector<uint64_t> batch_sigmas;
 std::mutex batch_mutex;
+struct DecodedBatch {
+    std::vector<std::string> records;
+    std::vector<uint64_t> sigmas;
+    bool binary=false;
+};
+std::unique_ptr<DecodedBatch> pending_batch;
+std::string pending_path;
+std::vector<std::string> pending_older;
+bool batch_fixed=false;
+uint64_t batch_requested_sigma=0;
+bool payload_validation_pending=false;
 constexpr char record_prefix[] = "ecm-batch-record:";
 #ifdef _WIN32
 std::atomic<unsigned> console_stop_count{0};
@@ -203,8 +215,73 @@ void ecm_stage1_set_checkpoint_path(const std::string &path) { batch_path=path; 
 const std::string &ecm_stage1_checkpoint_path() { return batch_path; }
 bool ecm_stage1_is_curve_record(const std::string &path) { return path.rfind(record_prefix,0)==0; }
 std::string ecm_stage1_curve_record(uint32_t curve) { return std::string(record_prefix)+std::to_string(curve); }
-void ecm_stage1_begin_batch(const std::string &identity,uint32_t curves,bool fixed,uint64_t first_sigma) {
+namespace {
+enum class Decode { Valid, Corrupt, Incompatible };
+Decode decode_batch(const std::string &bytes,const std::string &identity,uint32_t curves,DecodedBatch &decoded) {
+    if(ecm_stage1_binary::is_batch(bytes)) {
+        using namespace ecm_stage1_binary;
+        std::vector<std::string> records;std::vector<uint64_t> sigmas;
+        std::string saved_identity;uint32_t count=0;
+    try {
+        if(bytes.size()<28)return Decode::Corrupt;
+        Reader footer(std::string_view(bytes).substr(bytes.size()-4));
+        if(footer.u32()!=crc32c(std::string_view(bytes).substr(0,bytes.size()-4)))return Decode::Corrupt;
+        Reader in(std::string_view(bytes).substr(0,bytes.size()-4));in.take(8);
+        if(in.u32()!=2)return Decode::Corrupt;
+        count=in.u32();saved_identity=std::string(in.take(in.u64()));
+        if(count>in.left()/24)return Decode::Corrupt;
+        records.resize(count);sigmas.resize(count);
+        for(uint32_t i=0;i<count;++i) {
+            sigmas[i]=in.u64();const auto length=in.u64();const auto sum=in.u32();
+            if(in.u32()!=0)throw std::runtime_error("unsupported checkpoint record flags");
+            auto payload=in.take(length);
+            if(crc32c(payload)!=sum)throw std::runtime_error("checkpoint record CRC32C mismatch");
+            records[i]=std::string(payload);
+        }
+        if(in.left())return Decode::Corrupt;
+    }catch(const std::runtime_error &){return Decode::Corrupt;}
+
+        if(saved_identity!=identity || count!=curves)return Decode::Incompatible;
+        decoded.records=std::move(records);decoded.sigmas=std::move(sigmas);decoded.binary=true;
+        return Decode::Valid;
+    }
+        const auto at=bytes.rfind("CHECKSUM ");if(at==bytes.npos)return Decode::Corrupt;
+        const auto body=bytes.substr(0,at);std::istringstream footer(bytes.substr(at+9));uint64_t sum;std::string extra;
+        if(!(footer>>sum) || (footer>>extra) || sum!=ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,body.data(),body.size()))return Decode::Corrupt;
+        std::istringstream in(body);std::string tag,saved_identity;uint64_t count;
+        if(!std::getline(in,tag) || tag!="ECM_STAGE1_BATCH_V1" || !std::getline(in,saved_identity) || !(in>>count))return Decode::Corrupt;
+        if(saved_identity!=identity || count!=curves)return Decode::Incompatible;
+        std::vector<std::string> records(curves);std::vector<uint64_t> sigmas(curves);bool valid=true;
+        for(uint32_t i=0;i<curves;++i) {
+            uint64_t size;
+            if(!(in>>sigmas[i]>>size) || size>body.size() || in.get()!='\n'){valid=false;break;}
+            records[i].resize(static_cast<size_t>(size));in.read(records[i].data(),static_cast<std::streamsize>(size));
+            if(!in || in.get()!='\n'){valid=false;break;}
+        }
+        if(!valid || in.peek()!=std::char_traits<char>::eof())return Decode::Corrupt;
+
+    decoded.records=std::move(records);decoded.sigmas=std::move(sigmas);decoded.binary=false;
+    return Decode::Valid;
+}
+bool sigma_matches(const std::vector<uint64_t> &sigmas) {
+    if(sigmas.size()!=batch_records.size())return false;
+    for(size_t i=0;i<sigmas.size();++i)
+        if(batch_fixed && sigmas[i] && sigmas[i]!=batch_requested_sigma+i)return false;
+    return true;
+}
+void accept_batch(DecodedBatch &decoded,const std::string &path) {
+    batch_records.swap(decoded.records);batch_sigmas.swap(decoded.sigmas);
+    if(path!=batch_path)ecm_stage1_mark_bad_primary(batch_path);
+    std::cout<<"Stage1 batch resume: path="<<path<<" curves="<<batch_records.size()
+             <<(decoded.binary?" format=binary-v2":"")<<'\n';
+}
+}
+void ecm_stage1_begin_batch(const std::string &identity,uint32_t curves,bool fixed,uint64_t first_sigma,bool defer_payload_validation) {
     std::lock_guard<std::mutex> lock(batch_mutex);
+    pending_batch.reset();pending_path.clear();pending_older.clear();payload_validation_pending=false;
+    batch_fixed=fixed;batch_requested_sigma=first_sigma;
+    if(fixed && curves && first_sigma>UINT64_MAX-(curves-1ull))
+        throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,"batch sigma range overflow");
     batch_identity=identity;batch_records.assign(curves,{});batch_sigmas.assign(curves,0);
     if(batch_path.empty())return;
 #ifdef _WIN32
@@ -217,83 +294,115 @@ void ecm_stage1_begin_batch(const std::string &identity,uint32_t curves,bool fix
     if(batch_lock<0)throw std::runtime_error("cannot open batch checkpoint lock");
     if(::flock(batch_lock,LOCK_EX|LOCK_NB)){::close(batch_lock);batch_lock=-1;throw std::runtime_error("another worker owns this batch checkpoint; use a separate checkpoint directory");}
 #endif
-    bool existing=false;
-    for(const auto &candidate:ecm_stage1_checkpoint_candidates(batch_path)) {
-        std::ifstream file(candidate,std::ios::binary);if(!file)continue;existing=true;
-        const std::string bytes((std::istreambuf_iterator<char>(file)),{});
-        if(ecm_stage1_binary::is_batch(bytes)) {
-            using namespace ecm_stage1_binary;
-            std::vector<std::string> records;std::vector<uint64_t> sigmas;
-            std::string saved_identity;uint32_t count=0;
-            try {
-                if(bytes.size()<28)continue;
-                Reader footer(std::string_view(bytes).substr(bytes.size()-4));
-                if(footer.u32()!=crc32c(std::string_view(bytes).substr(0,bytes.size()-4)))continue;
-                Reader in(std::string_view(bytes).substr(0,bytes.size()-4));in.take(8);
-                if(in.u32()!=2)continue;
-                count=in.u32();saved_identity=std::string(in.take(in.u64()));
-                if(count>in.left()/24)continue;
-                records.resize(count);sigmas.resize(count);
-                for(uint32_t i=0;i<count;++i) {
-                    sigmas[i]=in.u64();const auto length=in.u64();const auto sum=in.u32();
-                    if(in.u32()!=0)throw std::runtime_error("unsupported checkpoint record flags");
-                    auto payload=in.take(length);
-                    if(crc32c(payload)!=sum)throw std::runtime_error("checkpoint record CRC32C mismatch");
-                    records[i]=std::string(payload);
-                }
-                if(in.left())continue;
-            }catch(const std::runtime_error &){continue;}
-            if(saved_identity!=identity || count!=curves)throw std::runtime_error("batch checkpoint belongs to different target/parameters/curve count/CPU algorithm; select another checkpoint directory");
-            for(uint32_t i=0;i<curves;++i)
-                if(fixed && sigmas[i] && sigmas[i]!=first_sigma+i)throw std::runtime_error("batch checkpoint sigma differs from requested sigma");
-            batch_records=std::move(records);batch_sigmas=std::move(sigmas);
-            if(candidate!=batch_path)ecm_stage1_mark_bad_primary(batch_path);
-            std::cout<<"Stage1 batch resume: path="<<candidate<<" curves="<<curves<<" format=binary-v2\n";
-            return;
-        }
-        const auto at=bytes.rfind("CHECKSUM ");if(at==bytes.npos)continue;
-        const auto body=bytes.substr(0,at);std::istringstream footer(bytes.substr(at+9));uint64_t sum;std::string extra;
-        if(!(footer>>sum) || (footer>>extra) || sum!=ecm_stage1_checksum(ECM_STAGE1_CHECKSUM_SEED,body.data(),body.size()))continue;
-        std::istringstream in(body);std::string tag,saved_identity;uint64_t count;
-        if(!std::getline(in,tag) || tag!="ECM_STAGE1_BATCH_V1" || !std::getline(in,saved_identity) || !(in>>count))continue;
-        if(saved_identity!=identity || count!=curves)throw std::runtime_error("batch checkpoint belongs to different target/parameters/curve count/CPU algorithm; select another checkpoint directory");
-        std::vector<std::string> records(curves);std::vector<uint64_t> sigmas(curves);bool valid=true;
-        for(uint32_t i=0;i<curves;++i) {
-            uint64_t size;
-            if(!(in>>sigmas[i]>>size) || size>body.size() || in.get()!='\n'){valid=false;break;}
-            records[i].resize(static_cast<size_t>(size));in.read(records[i].data(),static_cast<std::streamsize>(size));
-            if(!in || in.get()!='\n'){valid=false;break;}
-            if(fixed && sigmas[i] && sigmas[i]!=first_sigma+i)throw std::runtime_error("batch checkpoint sigma differs from requested sigma");
-        }
-        if(!valid || in.peek()!=std::char_traits<char>::eof())continue;
-        batch_records=std::move(records);batch_sigmas=std::move(sigmas);
-        if(candidate!=batch_path)ecm_stage1_mark_bad_primary(batch_path);
-        std::cout<<"Stage1 batch resume: path="<<candidate<<" curves="<<curves<<'\n';
+    using namespace ecm_stage1_checkpoint;
+    bool existing=false,io_failure=false;
+    const auto candidates=ecm_stage1_checkpoint_candidates(batch_path);
+    for(size_t index=0;index<candidates.size();++index) {
+        const auto &candidate=candidates[index];std::string bytes;
+        const auto read=ecm_stage1_read_checkpoint_blob(candidate,bytes);
+        if(read==BlobRead::Missing)continue;
+        existing=true;
+        if(read==BlobRead::IoFailure){io_failure=true;continue;}
+        auto decoded=std::make_unique<DecodedBatch>();
+        const auto result=decode_batch(bytes,identity,curves,*decoded);
+        if(result==Decode::Corrupt)continue;
+        if(result==Decode::Incompatible)
+            throw Error(RestoreState::Incompatible,"batch checkpoint belongs to different target/parameters/curve count/CPU algorithm; select another checkpoint directory");
+        if(!sigma_matches(decoded->sigmas))throw Error(RestoreState::Incompatible,"batch checkpoint sigma differs from requested sigma");
+        if(defer_payload_validation) {
+            pending_batch=std::move(decoded);pending_path=candidate;payload_validation_pending=true;
+            pending_older.assign(candidates.begin()+index+1,candidates.end());
+            std::cout<<"Stage1 batch candidate: path="<<candidate<<" curves="<<curves<<"; payload validation pending\n";
+        } else accept_batch(*decoded,candidate);
         return;
     }
-    if(existing)throw std::runtime_error("no valid batch checkpoint generation; preserve damaged evidence and select another checkpoint directory");
+    if(existing)throw Error(io_failure?RestoreState::IoFailure:RestoreState::Corrupt,
+        "no valid batch checkpoint generation; preserve damaged evidence and select another checkpoint directory");
     std::cout<<"Stage1 batch checkpoint: path="<<batch_path<<" curves="<<curves<<'\n';
+}
+
+bool ecm_stage1_checkpoint_pending() {
+    std::lock_guard<std::mutex> lock(batch_mutex);return payload_validation_pending;
+}
+void ecm_stage1_validate_pending_checkpoint(const EcmStage1PayloadValidator &validate) {
+    using namespace ecm_stage1_checkpoint;
+    std::lock_guard<std::mutex> lock(batch_mutex);
+    if(!payload_validation_pending)return;
+    if(!pending_batch)throw Error(RestoreState::Corrupt,"checkpoint selection already failed");
+    if(!validate)throw Error(RestoreState::Incompatible,"missing native checkpoint validator");
+    // At most one outer payload generation is retained while candidates are tried.
+    auto current=std::move(pending_batch);auto path=std::move(pending_path);
+    auto older=std::move(pending_older);bool io_failure=false;
+    for(size_t index=0;;++index) {
+        if(current) {
+            auto sigmas=current->sigmas;
+            if(validate(current->records,sigmas)) {
+                if(!sigma_matches(sigmas))throw Error(RestoreState::Incompatible,"batch checkpoint payload sigma differs from requested sigma");
+                current->sigmas.swap(sigmas);accept_batch(*current,path);payload_validation_pending=false;return;
+            }
+            std::cout<<"Stage1 checkpoint payload rejected: path="<<path<<"; trying older generation\n";
+            current.reset();
+        }
+        if(index>=older.size())break;
+        path=older[index];std::string bytes;
+        const auto read=ecm_stage1_read_checkpoint_blob(path,bytes);
+        if(read==BlobRead::IoFailure){io_failure=true;continue;}
+        if(read==BlobRead::Missing)continue;
+        auto next=std::make_unique<DecodedBatch>();
+        const auto parsed=decode_batch(bytes,batch_identity,uint32_t(batch_records.size()),*next);
+        // Older unrelated generations cannot become another task's resume state.
+        if(parsed!=Decode::Valid || !sigma_matches(next->sigmas))continue;
+        current=std::move(next);
+    }
+    throw Error(io_failure?RestoreState::IoFailure:RestoreState::Corrupt,"no valid mathematical batch checkpoint generation");
+}
+
+bool ecm_stage1_saved_sigma(uint32_t curve,uint64_t &sigma) {
+    std::lock_guard<std::mutex> lock(batch_mutex);
+    if(payload_validation_pending || curve>=batch_sigmas.size() || !batch_sigmas[curve])return false;
+    sigma=batch_sigmas[curve];return true;
 }
 uint64_t ecm_stage1_batch_sigma(uint32_t curve,uint64_t proposed) {
     std::lock_guard<std::mutex> lock(batch_mutex);
-    if(batch_path.empty() || curve>=batch_sigmas.size())return proposed;
+    if(payload_validation_pending || batch_path.empty() || curve>=batch_sigmas.size())return proposed;
     if(batch_sigmas[curve])return batch_sigmas[curve];
     batch_sigmas[curve]=proposed;
     // Every lane is seeded before arithmetic. Persist once at the end of that
     // pass; CPU codecs may additionally persist seed/state records along it.
-    if(curve+1==batch_sigmas.size() && !flush_batch())throw std::runtime_error("cannot persist batch checkpoint sigma");
+    if(curve+1==batch_sigmas.size()) {
+        try {
+            if(!flush_batch())throw ecm_stage1_checkpoint::Error(
+                ecm_stage1_checkpoint::RestoreState::IoFailure,"cannot persist batch checkpoint sigma");
+        }catch(...){batch_sigmas[curve]=0;throw;}
+    }
     return proposed;
 }
-bool ecm_stage1_read_blob(const std::string &path,std::string &bytes) {
+ecm_stage1_checkpoint::BlobRead ecm_stage1_read_checkpoint_blob(const std::string &path,std::string &bytes) {
+    using namespace ecm_stage1_checkpoint;
     if(ecm_stage1_is_curve_record(path)) {
-        std::lock_guard<std::mutex> lock(batch_mutex);bytes=batch_records.at(record_index(path));return !bytes.empty();
+        std::lock_guard<std::mutex> lock(batch_mutex);
+        if(payload_validation_pending)throw Error(RestoreState::Incompatible,"native payload read before validation");
+        bytes=batch_records.at(record_index(path));return bytes.empty()?BlobRead::Missing:BlobRead::Read;
     }
-    std::ifstream in(path,std::ios::binary);if(!in)return false;
-    bytes.assign(std::istreambuf_iterator<char>(in),{});return !in.bad();
+    std::ifstream in(path,std::ios::binary);
+    if(!in) {std::error_code error;const bool exists=std::filesystem::exists(path,error);
+        bytes.clear();return exists || error?BlobRead::IoFailure:BlobRead::Missing;}
+    bytes.assign(std::istreambuf_iterator<char>(in),{});
+    if(in.bad()){bytes.clear();return BlobRead::IoFailure;}
+    return BlobRead::Read;
 }
+bool ecm_stage1_read_blob(const std::string &path,std::string &bytes) {
+    return ecm_stage1_read_checkpoint_blob(path,bytes)==ecm_stage1_checkpoint::BlobRead::Read;
+}
+
 bool ecm_stage1_write_blob(const std::string &path,const std::string &bytes) {
     if(ecm_stage1_is_curve_record(path)) {
-        std::lock_guard<std::mutex> lock(batch_mutex);batch_records.at(record_index(path))=bytes;return flush_batch();
+        std::lock_guard<std::mutex> lock(batch_mutex);
+        if(payload_validation_pending)throw ecm_stage1_checkpoint::Error(ecm_stage1_checkpoint::RestoreState::Incompatible,"native checkpoint write before validation");
+        std::string staged(bytes);auto &record=batch_records.at(record_index(path));record.swap(staged);
+        try {if(flush_batch())return true;}
+        catch(...){record.swap(staged);throw;}
+        record.swap(staged);return false;
     }
     const auto temp=ecm_stage1_checkpoint_temp_path(path);
     std::ofstream out(temp,std::ios::binary|std::ios::trunc);out.write(bytes.data(),static_cast<std::streamsize>(bytes.size()));out.close();
@@ -307,14 +416,18 @@ bool ecm_stage1_import_gpu_payload(const std::string &bytes,uint64_t first_sigma
 }
 bool ecm_stage1_import_gpu_payload(const std::string &bytes,const std::vector<uint64_t> &sigmas) {
     std::lock_guard<std::mutex> lock(batch_mutex);
-    if(batch_path.empty() || batch_records.empty() || bytes.empty() || sigmas.size()!=batch_sigmas.size())return false;
+    if(payload_validation_pending || batch_path.empty() || batch_records.empty() || bytes.empty() || sigmas.size()!=batch_sigmas.size())return false;
     for(const auto &record:batch_records)if(!record.empty())return false;
-    batch_sigmas=sigmas;
-    batch_records[0]=bytes;
-    if(!flush_batch())throw std::runtime_error("cannot import legacy GPU checkpoint");
+    auto staged_sigmas=sigmas;std::string staged(bytes);
+    batch_sigmas.swap(staged_sigmas);batch_records[0].swap(staged);
+    try {
+        if(!flush_batch())throw ecm_stage1_checkpoint::Error(
+            ecm_stage1_checkpoint::RestoreState::IoFailure,"cannot import legacy GPU checkpoint");
+    }catch(...){batch_sigmas.swap(staged_sigmas);batch_records[0].swap(staged);throw;}
     return true;
 }
 void ecm_stage1_end_batch(bool completed) {
+    pending_batch.reset();pending_path.clear();pending_older.clear();payload_validation_pending=false;
     const auto path=std::move(batch_path);batch_path.clear();batch_identity.clear();batch_records.clear();batch_sigmas.clear();
     if(completed && !path.empty())ecm_stage1_remove_checkpoints(path);
 #ifdef _WIN32

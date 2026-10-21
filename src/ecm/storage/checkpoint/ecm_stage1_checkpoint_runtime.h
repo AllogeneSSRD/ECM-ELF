@@ -4,6 +4,25 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <functional>
+#include <stdexcept>
+
+namespace ecm_stage1_checkpoint {
+enum class RestoreState { Missing, Resumed, AlreadyComputed, Incompatible, Corrupt, IoFailure };
+struct RestoreResult {
+    RestoreState state=RestoreState::Missing;
+    std::string error;
+    bool restored() const noexcept {
+        return state==RestoreState::Resumed || state==RestoreState::AlreadyComputed;
+    }
+};
+class Error : public std::runtime_error {
+public:
+    RestoreState state;
+    Error(RestoreState kind,const std::string &message):std::runtime_error(message),state(kind){}
+};
+enum class BlobRead { Missing, Read, IoFailure };
+}
 
 // One process-wide stop request, shared by CUDA, OpenCL and CPU Stage1.
 // Signal handlers only set the flag; checkpoint I/O happens at a safe boundary.
@@ -33,12 +52,21 @@ constexpr uint64_t ECM_STAGE1_CHECKSUM_SEED = 1469598103934665603ull;
 void ecm_stage1_set_checkpoint_path(const std::string &path);
 const std::string &ecm_stage1_checkpoint_path();
 void ecm_stage1_begin_batch(const std::string &identity, uint32_t curves,
-                              bool fixed, uint64_t first_sigma);
+                              bool fixed, uint64_t first_sigma,bool defer_payload_validation=false);
+// CUDA validates one native batch payload with its resolved scalar/algorithm.
+// The validator is offline: no storage reentry or publication. It may replace
+// zero legacy seeds with verified payload sigmas. Only a valid candidate commits.
+using EcmStage1PayloadValidator=std::function<bool(const std::vector<std::string> &,std::vector<uint64_t> &)>;
+void ecm_stage1_validate_pending_checkpoint(const EcmStage1PayloadValidator &);
+bool ecm_stage1_checkpoint_pending();
 void ecm_stage1_end_batch(bool completed);
 std::string ecm_stage1_curve_record(uint32_t curve);
 bool ecm_stage1_is_curve_record(const std::string &path);
 uint64_t ecm_stage1_batch_sigma(uint32_t curve, uint64_t proposed);
+// Read an accepted seed without generating or persisting a replacement.
+bool ecm_stage1_saved_sigma(uint32_t curve,uint64_t &sigma);
 bool ecm_stage1_read_blob(const std::string &path, std::string &bytes);
+ecm_stage1_checkpoint::BlobRead ecm_stage1_read_checkpoint_blob(const std::string &,std::string &);
 bool ecm_stage1_write_blob(const std::string &path, const std::string &bytes);
 // Import only into a seed-only batch; never replace existing arithmetic state.
 bool ecm_stage1_import_gpu_payload(const std::string &bytes,uint64_t first_sigma);
