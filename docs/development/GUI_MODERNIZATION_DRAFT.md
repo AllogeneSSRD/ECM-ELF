@@ -1,6 +1,6 @@
 # 独立 GUI v2：ImGui / Vulkan 现代化规划草稿
 
-状态：P0 已完成，P1–P2 待实施。日期：2026-10-21。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。
+状态：P0–P1 已完成，P2 待实施。日期：2026-10-21。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。
 
 本文件是本主题的权威临时草稿。[HTML 阅读版](../web/gui-v2-vulkan-plan-20261021.html)呈现布局示意、阶段验收和本草稿全文，可离线打开。实施成功后另写 GUI v2 正式说明，旧 GUI 使用说明继续描述旧版；提示用户处理本草稿，不自动删除。
 
@@ -10,7 +10,10 @@
 - P0 验证：自检 33、日志 85、生成器 110、结果 26、Controller 44 项/10 场景全部通过。假 worker 输出、工作流与结果输入、英文/中文窗口截图和五次独立空闲采样保存在 [P0 证据](../../data/experiments/gui_v2/p0_20261021_03/baseline.json)。未运行真实计算 worker。
 - P0 测量边界：隐藏普通窗口，预热 1 秒后采样 2 秒，界面 10Hz / NVML 500ms；单核 CPU 百分比中位数 1.5625%，working set 中位数 116867072 bytes，private bytes 中位数 117784576 bytes。现场另有 GPU 负载，未隔离功耗策略；这些是冻结输入条件下的原始基线，不构成性能优劣结论，也没有输入延迟/显存/功耗测量。
 - P0 原始失败保留：第一轮测试配置误将 worktodo 放入 stage1，改到 shared；第二轮隐藏窗口截图被系统拒绝，改为截图时短暂非激活显示。未改旧实现、测试期望或验证门限。有效证据为 `_03`。
-- P1：待实施。先固定专用 Vulkan-Headers / Volk 和同提交 ImGui Vulkan 后端，验证宿主与旧版构建隔离。
+- P1：已完成，v2 里程碑 0.47.1。独立目标、入口与 Win32/Vulkan 宿主位于 `src/ecm/application/gui_v2/`；根开关 `ECM_BUILD_GUI_V2` 默认 OFF，独立构建不依赖旧 GUI、OpenCL 或计算 worker。Vulkan-Headers 1.3.290、Volk SDK 1.3.290.0 与同提交 ImGui Vulkan 后端放专用第三方目录，来源和哈希随源码维护。运行要求 Vulkan 1.1 loader/设备及 swapchain，动态加载，不需要开发 SDK/import library。
+- P1 验证：正常运行、缺 loader、device/surface lost 注入、非法参数、真实窗口四次缩放及最小化恢复全部通过；[最终有效证据](../../data/experiments/gui_v2/p1_20261021_04/result.json)，exe SHA256 `33f3ca409e623f5009c1620b7c93de9c60dc00382372b4db30843899ebd463aa`。RTX 4070 Ti，设备 API 1.4.341；使用官方 SDK 1.4.363.0 中解出的 validation layer，未执行 SDK 安装器、未改注册表。validation API 错误/警告均为 0；3 条 general loader 环境警告（重复的 NVIDIA/OBS 隐式层注册）单独计数，完整日志保留。正常启动不启用该开发层。
+- P1 隔离：原构建入口在独立 `build_gui_v2_legacy_proof` 构建 DX11 GUI，自检 33 项通过；缺专用 headers 的 v2 配置明确失败。未修改旧 GUI、旧 ImGui 或公共 0.46.7 版本。宿主仅单窗口，无计算任务、UI 状态保存和多 viewport 资格结论。
+- P1 诊断：第一次生命周期测试暴露 resize 后访问冲突。最小复现定位到 Vulkan backend shutdown 同时销毁主 viewport 的 Win32 数据；重建时按顺序同时重新初始化两个后端，保留 ImGui context。第二次复测暴露测试读取日志的文件共享问题，改为允许并发只读日志。失败目录 `_01`、`_02` 与最小诊断日志均保留，未改旧代码或降低门限。
 - P2：待实施。主题、字体和控件仅进入 v2；P3–P6 不在本批完成范围。
 - 草稿与 HTML 由 `tools/gen/render_gui_v2_plan.py` 同步，原始证据保留在忽略目录。各阶段独立提交 `[0.47.z]`。
 
@@ -130,7 +133,7 @@ v2 建议先采用与旧版一致的正文自动 15px 和手工字号含义，�
 
 ### 3.5 Vulkan 后端：新增宿主职责与验证门槛
 
-本地 `third_party/imgui/backends/` 目前只有 Win32 和 DX11 文件，没有 Vulkan 后端。本次环境检查没有 `VULKAN_SDK` 变量和 `C:/VulkanSDK/` 目录；这不能证明其他位置没有 SDK，P1 仍需显式查找并记录。当前规划不安装 SDK、不下载依赖。
+旧 `third_party/imgui/backends/` 仅含 Win32/DX11，保持不变。P1 在 `third_party/imgui_vulkan/` 固定同提交 Vulkan 后端，在 `third_party/gui_v2_vulkan/` 固定 headers/Volk，许可与来源随文件保存。本机无 `VULKAN_SDK` 变量或 `C:/VulkanSDK/`；构建不查找开发 SDK，运行使用系统 loader。开发验收仅从官方 SDK 归档解出 validation layer 到忽略的证据目录，未执行安装器。
 
 初始接入固定为：现有 ImGui 核心及 Win32 后端只读复用；将**同一提交** `64944b4520b30772de8dbf0b37d0311746477a32` 的 `imgui_impl_vulkan.h/.cpp` 新增在 v2 专用第三方目录，例如 `third_party/imgui_vulkan/`，记录哈希与许可。不得只取最新 Vulkan 后端配旧核心；如果固定版本不能通过 v2 验收，v2 才引入完整独立的 ImGui 版本目录，旧版仍使用原固定版本。
 
@@ -196,13 +199,13 @@ swapchain 图像数量变化还需核对固定 API 的实际限制：该版本 `
 - `main_win32.cpp`：v2 启动参数、原生窗口、消息循环、帧间字体/DPI处理和异常退出协调；不替换旧宿主。
 - `render/vulkan_context.*`：instance、物理/逻辑设备、队列、能力诊断。
 - `render/vulkan_window.*`：主窗口 surface、swapchain、render pass/framebuffer、帧同步、重建与回收。
-- `render/imgui_vulkan_host.*`：ImGui Vulkan 初始化、帧提交、动态纹理，以及 Win32 多 viewport surface 桥接。
+- ImGui Vulkan 初始化、帧提交和 Win32 surface 桥接集中在 `render/vulkan_window.*`，不额外分出 host 文件；多 viewport 完整生命周期留 P3。
 - `ui/theme.*`、`ui/fonts.*`、`ui/widgets.*`：Ely 风格语义、尺寸、字体角色和有限控件集合。
 - `ui/shell.*`、`views/`：导航、命令栏、通知、默认停靠和各功能页面；新增 v2 App，不调用旧 App 的绘制或保存设置入口。
 - `ui_state.*`：独立 v2 UI 状态读写与 schema 版本；不持有 WorkerProc。
 - v2 专用第三方目录记录固定 Vulkan 后端文件、来源提交和许可。需要后端修复时先评估 v2 独立版本，禁止给旧目录打补丁。
 
-这些是规划文件名，尚未创建。优先使用 ImGui 公共 API；DockBuilder 内部 API 限于 v2 布局模块。不引入通用渲染引擎或 GPUI 兼容层。
+P1 已建立入口与 render 模块；UI 模块从 P2 开始，shell/views/ui_state 尚待实施。优先使用 ImGui 公共 API；DockBuilder 内部 API 限于 v2 布局模块。不引入通用渲染引擎或 GPUI 兼容层。
 
 ### 5.1 只读复用业务模块
 
@@ -217,7 +220,7 @@ swapchain 图像数量变化还需核对固定 API 的实际限制：该版本 `
 - 新增目标 `ecm_gui_v2`、专用 ImGui/Vulkan backend 目标及 v2 业务适配目标；不能把旧 `ecm_gui_imgui` 拉入 v2，否则会同时引入 DX11 后端。
 - 新增 `ECM_BUILD_GUI_V2`，默认 OFF；v2 构建入口显式开启。根构建接线不放在旧 `ECM_BUILD_GUI` 成功分支里，旧 GUI 关闭时仍应能单独构建 v2。
 - 新增候选入口 `tools/build/build_gui_v2.bat` 与 `tools/build/dev/build_gui_v2.ps1`，默认输出 `build_gui_v2_local/`。它只构建 v2；原 `build_gui.bat` 仍只构建旧版。
-- Vulkan SDK/header/import library 检查仅在显式启用 v2 时进行；缺依赖时 v2 给出明确诊断，不能影响旧 GUI、CLI 或没有请求 v2 的 CMake 配置。不强制 GLSL 工具链，是否需要由实际固定后端资源决定。
+- 专用 headers/backend 检查仅在启用 v2 时进行；缺依赖时 v2 给出明确诊断，不能影响旧 GUI、CLI。Volk 动态加载系统 Vulkan，不依赖 SDK、import library 或 GLSL 工具链；固定后端已包含所需 shader。
 - v2 接入现有配置生成一致性检查，根目标依赖清单增加 v2，而不改旧目标输入。
 - Windows 为首个目标平台。Vulkan 渲染不等于已经跨平台，不在第一版引入 GLFW/SDL 或承诺 Linux/macOS。
 

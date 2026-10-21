@@ -132,6 +132,7 @@ window.addEventListener("beforeprint",()=>{document.getElementById("full-details
 </script>
 </body></html>
 '''
+page = page.replace('环境核对仅发现未设置 VULKAN_SDK、无 C:/VulkanSDK；尚未完成其他路径和运行能力检测。', 'P1 已在 RTX 4070 Ti 上通过单窗口 Vulkan / validation 验证。构建使用固定 headers 和 Volk，无开发 SDK 依赖；开发验证层仅解压在证据目录。')
 page = page.replace('规划 · 尚未实施', html.escape(status))
 page = page.replace('规划状态，尚未实施', html.escape(status))
 page = page.replace('<section id="boundaries">', '<section id="progress"><h2>实施进度</h2>' + markdown(progress) + '</section><section id="boundaries">')

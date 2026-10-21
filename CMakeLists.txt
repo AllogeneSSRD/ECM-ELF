@@ -664,8 +664,14 @@ else()
     message(STATUS "gui: ecm_gui enabled (ImGui from ${ECM_IMGUI_DIR})")
 endif()
 
+# GUI v2 is opt-in and independent of the legacy GUI target and its renderer.
+option(ECM_BUILD_GUI_V2 "Build the independent Win32/Vulkan GUI v2" OFF)
+if(ECM_BUILD_GUI_V2)
+    add_subdirectory(src/ecm/application/gui_v2)
+endif()
+
 # Explicit targets must run the guard too (not only the default ALL build).
-foreach(_ecm_config_target ecm ecm_cuda ecm_cuda_stage2 ecm_gui)
+foreach(_ecm_config_target ecm ecm_cuda ecm_cuda_stage2 ecm_gui ecm_gui_v2)
     if(TARGET ${_ecm_config_target})
         add_dependencies(${_ecm_config_target} ecm_config_check)
     endif()
