@@ -71,6 +71,7 @@ param(
     [switch]$Reconfigure,
     [switch]$SkipUpToDate = $true,
     [switch]$Rebuild,
+    [switch]$HostOnly,
     [switch]$NoBuild,
     [string]$VcVars = "",
     [ValidatePattern('^$|^[0-9.]+$')][string]$VcVersion = "",
@@ -78,6 +79,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($HostOnly -and ($Rebuild -or -not $SkipUpToDate -or $Only -or $SourceRegex -ne '\.cu$')) {
+    throw 'HostOnly requires verification of the full CUDA target and forbids forced compilation'
+}
 $repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 . (Join-Path $PSScriptRoot 'cuda_build_state.ps1')
 & cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'check_ecm_config.cmake')
@@ -126,6 +130,23 @@ foreach ($e in $entries) {
     $state = Get-EcmCompileState $repo $e $vcSetup
     $reason = if ($SkipUpToDate -and -not $Rebuild) { Get-EcmCompileInvalidationReason $state } else { 'forced rebuild' }
     $skip = $reason -eq ''
+    if ($HostOnly) {
+        if (-not $skip) { throw "HostOnly CUDA object is not reusable: $($e.file): $reason" }
+        # NMake also uses timestamps. Reject a pending native rebuild rather
+        # than letting its final host/link step silently invoke nvcc.
+        $objectTime = (Get-Item -LiteralPath $obj).LastWriteTimeUtc
+        $nativeInputs = @($state.source_hashes.Keys | ForEach-Object { Resolve-EcmSourcePath $repo $_ })
+        $owner = [regex]::Match((Get-EcmSourceKey $BuildDir $obj), '^(CMakeFiles/[^/]+\.dir)/')
+        if ($owner.Success) {
+            $nativeInputs += Join-Path $BuildDir ($owner.Groups[1].Value + '/flags.make')
+            $nativeInputs += Join-Path $BuildDir ($owner.Groups[1].Value + '/compiler_depend.ts')
+        }
+        foreach ($inputPath in $nativeInputs) {
+            if ((Test-Path -LiteralPath $inputPath) -and (Get-Item -LiteralPath $inputPath).LastWriteTimeUtc -gt $objectTime) {
+                throw "HostOnly native CUDA dependency is newer than its object: $inputPath"
+            }
+        }
+    }
     if (-not $skip) { Write-Host ("  rebuild {0}: {1}" -f $name, $reason) }
     $tuList += [pscustomobject]@{
         Name = $name; Entry = $e; Obj = $obj; Skip = $skip

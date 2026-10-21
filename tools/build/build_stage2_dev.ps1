@@ -12,7 +12,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_dev
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_dev.ps1 -AddSubMask 0 -Rebuild
 #>
 param(
-    [string]$Build = 'build_cuda_cmake/development_stage2',
+    [string]$Build = '',
+    [ValidateSet('production','development')][string]$Engine = 'development',
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
     [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'ptx',
     [ValidateSet(0,4)][int]$OuterUnrollU = 0,
@@ -26,6 +27,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $PSBoundParameters['Build'] = $Build
-$PSBoundParameters['Engine'] = 'development'
+$PSBoundParameters['Engine'] = $Engine
+$PSBoundParameters['BuildRole'] = 'dev'
 $PSBoundParameters['AddSubMask'] = $AddSubMask
 & (Join-Path $PSScriptRoot 'build_stage2_local.ps1') @PSBoundParameters

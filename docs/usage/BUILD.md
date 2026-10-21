@@ -15,7 +15,7 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 每项均有 `.ps1` 与 `.bat`。Stage1 默认 8 路独立 CUDA TU 并行；Stage2 默认 `SplitCompile=8`，多架构依次构建，每个架构内并行。构建入口不自动运行测试。
 
-本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。Stage1 默认输出 `build_cuda_cmake/ecm_cuda.exe`，Stage2 默认输出 `build_cuda_cmake/production_stage2/ecm_cuda_stage2.exe`。开发分别使用独立目录。
+本机/开发默认 sm89。Stage1 `-Arch 86`、Stage2 `-Arch sm_86` 可选择其他架构；本机表示单架构构建，不自动检测设备。默认输出到用途隔离的 profile 叶目录，入口打印完整路径：Stage1 为 `build_cuda_local/stage1/sm89/<key>/ecm_cuda.exe`，Stage2 为 `build_cuda_local/stage2/production/sm89/<key>/ecm_cuda_stage2.exe`。开发入口使用 `build_cuda_dev`；Stage2 dev 保留实验引擎默认值，目录为 `stage2/experimental/...`，可显式选生产引擎。发布构建使用 `build_cuda_release/stageN/cuda<版本>/sm<架构组>/<key>`；分发包仍在独立 `dist` 目录。exe、运行时 DLL 和清单保留在各叶目录根。
 
 ## 默认策略
 
@@ -54,11 +54,21 @@ Stage1 输出 `dist/cuda/`，Stage2 多架构输出 `dist/cuda-stage2/`；每架
 
 ## 复用构建
 
-Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编；内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件仍由 CMake/NMake 管理。当前 `-RelinkOnly` 仍是交给 CMake 处理主机编译和链接的旧入口，不等同于已通过 CUDA 身份校验，也不承诺零编译。
+Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编；内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件仍由 CMake/NMake 管理。`-HostOnly` 要求已配置的同 profile 目录，在配置/主机编译前验证所有 CUDA 对象及原生构建依赖时间戳，任一失效即拒绝；不用于首次配置。`-HostOnly` 与强制重建互斥。旧 `-RelinkOnly` 绕过入口已关闭，使用它会明确报错；主机修改使用正常增量或 `-HostOnly`。
 
 Stage2 默认逐编译单元复用，整体源码/构建签名变化不会直接触发整组重编；每个失效单元打印重编原因。主机 `.cpp` 暂时仍通过 nvcc 编译，普通 CXX 编译器迁移另行实施。链接命令、GMP 导入库、对象摘要和程序摘要全部匹配时跳过链接；旧清单首次建立链接输入记录可能需要一次链接。
 
 Stage2 的 `-HostOnly` 在任何编译前核对完整清单，只复用身份一致的 CUDA 对象，主机部分仍按需编译；架构、后端、工具链、GMP 头、CUDA 依赖或任一 CUDA 对象改变时拒绝。`-HostOnly` 与强制重建的 `-Rebuild` 互斥。普通复用和发布 `-SkipBuild` 同时核对程序、编译单元、依赖和对象；旧 manifest 缺少身份记录时须正常重建。保留构建目录中的 `.ecm.d`、`.ecm-state.json`、源清单和 manifest；不能修改清单或替换 DLL 来绕过核对。
+
+## 用途与 profile 目录
+
+`profile.json` 保存完整 SHA256 及字段，目录使用前 16 位 key。字段包含 role、stage、engine、架构、编译/链接策略、工具链和 GMP 内容身份；Stage1 还包含 CMake 身份、tiers、PRAC 和额外选项。源码 hash、HEAD、程序版本不进入目录 key，源码变化由原有逐 TU 身份处理。不同 profile 使用不同默认叶目录；显式指定的叶目录不匹配时拒绝，不改写 marker。
+
+本机/开发 Stage1 的 `-BuildDir`、Stage2 的 `-Build` 是最终叶目录，不额外拼层；Stage2 内部 `-BuildRoot` 才表示根。Stage1 多工具链 release 的公开 `-BuildDir`、Stage2 多架构 release 的 `-Build` 保持根语义；Stage2 单架构 release 的 `-Build` 为最终叶目录。不能把 local/dev/release 目录互作输出，也不能让包目录与 build 目录相同或互相嵌套。
+
+旧目录不自动移动或复制。显式指定旧目录时，仅对已有正式清单、工具链/GMP/架构/策略相符的目录原位核对并建立 marker；未知非空目录拒绝。`-SkipBuild` 要求已有正确 marker，仍需通过原有构建和打包身份检查。路径消费者需使用入口打印的精确叶目录或显式配置，不选择扫描结果中的“最新”程序。
+
+CPU-only 检查入口为 `test_cuda_build_profile.ps1`、`test_cuda_build_profile_paths.py`。发布静态检查 `test_cuda_p5_release.py` 对默认布局有多个相容 profile 时拒绝歧义，可用 `--build-leaves` JSON 显式指定各 stage/arch 的最终叶目录。该路径检查不等于 release 构建或多架构镜像资格。
 
 ## CUDA 源清单与依赖身份
 

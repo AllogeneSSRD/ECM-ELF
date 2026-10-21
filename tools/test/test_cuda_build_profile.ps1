@@ -1,0 +1,115 @@
+# CPU-only profile identity, isolation and marker mutation gates. No compilers.
+param([Parameter(Mandatory=$true)][string]$Output, [string]$AlternatePowerShell = '')
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $repo 'tools/build/internal/cuda_build_profile.ps1')
+$out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Output)
+if (Test-Path -LiteralPath $out) { throw 'Use a fresh output directory' }
+New-Item -ItemType Directory -Path $out | Out-Null
+$checks = New-Object 'System.Collections.Generic.List[string]'
+function Check([bool]$Valid, [string]$Name) {
+    if (-not $Valid) { throw "FAIL: $Name" }
+    $checks.Add($Name)
+}
+function Reject([scriptblock]$Action, [string]$Message, [string]$Name) {
+    $caught = ''
+    try { & $Action | Out-Null } catch { $caught = $_.Exception.Message }
+    Check ($caught -like "*$Message*") $Name
+}
+function Write-Fixture([string]$Path, [string]$Text) { [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false)) }
+$fixture = Join-Path $out 'fixture'
+New-Item -ItemType Directory -Path $fixture | Out-Null
+$nvcc = Join-Path $fixture 'nvcc.exe'; $cl = Join-Path $fixture 'cl.exe'
+Write-Fixture $nvcc 'CUDA compiler identity'
+Write-Fixture $cl 'MSVC compiler identity'
+$cuda = [pscustomobject]@{Root=$fixture;Nvcc=$nvcc;VersionText='Cuda compilation tools, release 13.3, V13.3.73'}
+$vc = [pscustomobject]@{Compiler=$cl;Version='14.51.36231';Setup='call fake-vcvars >nul 2>&1'}
+$gmp = [pscustomobject]@{Root=(Join-Path $fixture 'gmp');Hashes=[ordered]@{'include/gmp.h'='header';'lib/gmp.lib'='library';'bin/gmp-10.dll'='runtime'}}
+function Profile([string]$Role='local',[string]$Engine='production',[int]$Split=8,[string]$Arch='sm_89') {
+    New-EcmStage2Profile $fixture $Role $Engine $Arch ptx 0 1 $Split $cuda $vc $gmp
+}
+$a = Profile
+Check ($a.Key -match '^[0-9a-f]{16}$' -and $a.Hash.Length -eq 64) 'short directory key and full configuration identity'
+$leaf = Resolve-EcmBuildDirectory $fixture $a
+Check ($leaf.Replace('\','/').EndsWith("build_cuda_local/stage2/production/sm89/$($a.Key)")) 'local production default leaf'
+Write-Fixture (Join-Path $fixture 'business.cpp') 'source version 1'
+$same = Profile
+Write-Fixture (Join-Path $fixture 'business.cpp') 'source version 2'
+Check ((Profile).Hash -eq $same.Hash) 'business source changes do not create a new profile'
+Check ((Profile -Split 4).Hash -ne $a.Hash) 'compile schedule changes select another profile'
+Check ((Profile -Arch sm_86).Hash -ne $a.Hash) 'architecture changes select another profile'
+$dev = Profile -Role dev
+Check ($dev.Hash -ne $a.Hash -and (Resolve-EcmBuildDirectory $fixture $dev) -like '*build_cuda_dev*') 'development and local roles remain isolated'
+$experimental = Profile -Role dev -Engine development
+Check ((Resolve-EcmBuildDirectory $fixture $experimental) -like '*stage2\experimental\sm89*') 'experimental engine stays explicitly separate'
+$release = Profile -Role release
+Check ((Resolve-EcmBuildDirectory $fixture $release) -like '*build_cuda_release\stage2\cuda13_3\sm89*') 'release is grouped by toolkit and architecture'
+Reject { Profile -Role release -Engine development } 'production engine' 'experimental engine cannot become release'
+$explicit = Join-Path $fixture 'explicit_leaf'
+Check ((Resolve-EcmBuildDirectory $fixture $a $explicit) -eq $explicit) 'explicit Build remains a final leaf without appended profile'
+Reject { Resolve-EcmBuildDirectory $fixture $dev $leaf } 'another role' 'local path cannot be reused as dev'
+Reject { Resolve-EcmBuildDirectory $fixture $a $fixture } 'roots cannot' 'repository root cannot become a build leaf'
+Reject { Resolve-EcmBuildDirectory $fixture $a $explicit 'custom_root' } 'not both' 'leaf and root arguments are mutually exclusive'
+Assert-EcmBuildProfile $leaf $a
+Assert-EcmBuildProfile $leaf $same -ReadOnly
+Check $true 'matching profile marker is reusable and read-only verification succeeds'
+Reject { Assert-EcmBuildProfile $leaf (Profile -Split 4) } 'profile/role/engine differs' 'mismatched profile cannot relabel existing objects'
+$marker = Join-Path $leaf 'profile.json'; $original = [IO.File]::ReadAllBytes($marker)
+$json = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+$json.fields.role = 'dev'
+Write-Fixture $marker ($json | ConvertTo-Json -Depth 5)
+Reject { Assert-EcmBuildProfile $leaf $a } 'profile/role/engine differs' 'tampered marker fields fail even if full hash is retained'
+[IO.File]::WriteAllBytes($marker,$original)
+$unmarked = Join-Path $fixture 'unmarked'; New-Item -ItemType Directory -Path $unmarked | Out-Null
+Write-Fixture (Join-Path $unmarked 'unknown.obj') 'unknown artifact'
+Reject { Assert-EcmBuildProfile $unmarked $a } 'no matching formal manifest' 'unmarked unknown outputs cannot be silently adopted'
+Reject { Assert-EcmBuildProfile (Join-Path $fixture 'missing') $a -ReadOnly } 'required for SkipBuild' 'SkipBuild cannot create a new profile marker'
+$stage1Options = [ordered]@{configure='-DCMAKE_BUILD_TYPE=Release -DECM_TIERS=384 -DECM_CUDA_ARCHITECTURES=89';tiers='384';enable_prac='0';extra=''}
+$stage1 = New-EcmCudaProfile $fixture local stage1 production 89 $cuda $vc $gmp $stage1Options
+Check ((Resolve-EcmBuildDirectory $fixture $stage1) -like '*build_cuda_local\stage1\sm89*') 'Stage1 has its own profile hierarchy'
+$legacy = Join-Path $fixture 'legacy_stage1'; New-Item -ItemType Directory -Path $legacy | Out-Null
+$legacyManifest = [ordered]@{identity_schema=1;architecture='89';tiers='384';enable_prac=$false
+    cuda_root=$cuda.Root;toolkit=$cuda.VersionText;host_compiler=$vc.Compiler;host_version=$vc.Version
+    dependency_hashes=[ordered]@{header='header';library='library';runtime='runtime'}}
+Write-Fixture (Join-Path $legacy 'stage1_local_manifest.json') ($legacyManifest | ConvertTo-Json -Depth 4)
+$versionParts = $stage1.Fields.cmake_version.Split('.')
+$cache = "CMAKE_CACHE_MAJOR_VERSION:INTERNAL=$($versionParts[0])`nCMAKE_CACHE_MINOR_VERSION:INTERNAL=$($versionParts[1])`nCMAKE_CACHE_PATCH_VERSION:INTERNAL=$($versionParts[2])`n" +
+    "CMAKE_BUILD_TYPE:STRING=Release`nECM_TIERS:STRING=384`nECM_CUDA_ARCHITECTURES:STRING=89`n"
+Write-Fixture (Join-Path $legacy 'CMakeCache.txt') $cache
+Assert-EcmBuildProfile $legacy $stage1
+Assert-EcmBuildProfile $legacy $stage1 -ReadOnly
+Check $true 'compatible formal legacy Stage1 cache is marked in place without moving objects'
+$wrongLegacy = Join-Path $fixture 'legacy_mismatch'; New-Item -ItemType Directory -Path $wrongLegacy | Out-Null
+Write-Fixture (Join-Path $wrongLegacy 'stage1_local_manifest.json') ($legacyManifest | ConvertTo-Json -Depth 4)
+Write-Fixture (Join-Path $wrongLegacy 'CMakeCache.txt') $cache
+$stage1Options['tiers']='512'; $stage1Options['configure']=$stage1Options['configure'].Replace('TIERS=384','TIERS=512')
+$wrongStage1 = New-EcmCudaProfile $fixture local stage1 production 89 $cuda $vc $gmp $stage1Options
+Reject { Assert-EcmBuildProfile $wrongLegacy $wrongStage1 } 'architecture/tiers/PRAC differs' 'legacy tier mismatch is refused before adoption'
+Check (-not (Test-Path -LiteralPath (Join-Path $wrongLegacy 'profile.json'))) 'failed legacy admission creates no compatibility marker'
+Write-Fixture $nvcc 'changed compiler at same version and path'
+Check ((Profile).Hash -ne $a.Hash) 'compiler binary replacement changes configuration identity'
+Write-Fixture $nvcc 'CUDA compiler identity'
+$gmp.Hashes['lib/gmp.lib']='replacement library'
+Check ((Profile).Hash -ne $a.Hash) 'GMP binary identity affects compatibility'
+$gmp.Hashes['lib/gmp.lib']='library'
+Assert-EcmSeparatePackageDirectory $leaf (Join-Path $fixture 'dist')
+Check $true 'separate package directory accepted'
+Reject { Assert-EcmSeparatePackageDirectory $leaf $leaf } 'non-nested' 'package cannot equal build directory'
+Reject { Assert-EcmSeparatePackageDirectory $leaf (Join-Path $leaf 'package') } 'non-nested' 'package cannot be nested inside build'
+Reject { Assert-EcmSeparatePackageDirectory $leaf (Split-Path -Parent $leaf) } 'non-nested' 'build cannot be nested inside package'
+if ($AlternatePowerShell) {
+    $fieldsPath=Join-Path $out 'fields.json'; Write-Fixture $fieldsPath ($a.Fields | ConvertTo-Json -Depth 4)
+    $script=Join-Path $out 'alternate.ps1'; $fingerprint=Join-Path $out 'alternate_hash.txt'
+    Write-Fixture $script @'
+param([string]$Helper,[string]$FieldsPath,[string]$Output)
+. $Helper
+$fields=Get-Content -LiteralPath $FieldsPath -Raw -Encoding UTF8|ConvertFrom-Json
+[IO.File]::WriteAllText($Output,(Get-EcmProfileHash $fields),[Text.UTF8Encoding]::new($false))
+'@
+    & $AlternatePowerShell -NoProfile -ExecutionPolicy Bypass -File $script -Helper (Join-Path $repo 'tools/build/internal/cuda_build_profile.ps1') -FieldsPath $fieldsPath -Output $fingerprint
+    if ($LASTEXITCODE -ne 0) { throw 'Alternate PowerShell profile hash failed' }
+    Check ([IO.File]::ReadAllText($fingerprint) -eq $a.Hash) 'profile key is stable across PowerShell runtimes'
+}
+[ordered]@{complete=$true;checks=$checks.Count;tests=@($checks);gpu_runs=0} |
+    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $out 'result.json') -Encoding utf8
+Write-Host "PASS: $($checks.Count) profile isolation gates"

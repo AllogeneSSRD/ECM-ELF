@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0 已冻结，P1a 默认增量与 Stage2 逐 TU 复用已实施并验证，程序版本 `0.45.1`；P1b 输出隔离及后续阶段待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.2`；P2–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a 构建复用，实际交付与验证限制见下节；P1b 输出隔离及后续目标尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -590,6 +590,25 @@ Stage2 整体签名变化后按当前命令、依赖内容和对象摘要分别�
 同步修正一个旧验收样本：`test_stage2_phase_build_deps.py` 原来修改仅属主机的 phase-times 头摘要，却要求 CUDA 依赖错误；复制到不同叶目录后实际先遇到编译路径身份错误。现在改为变异真实 CUDA 源的已录入摘要，仍要求指定 CUDA 输入诊断、零编译且原构建清单不变；没有放宽为任意失败即通过。同时为 Windows PowerShell 子进程明确执行策略和系统模块路径，避免测试在依赖检查前因运行环境失败。旧失败日志保留。
 
 实际修改点见 [Stage1 local](../../tools/build/build_stage1_local.ps1)、[并行编译器](../../tools/build/internal/parallel_nvcc.ps1)、[身份校验](../../tools/build/internal/cuda_build_state.ps1) 与 [Stage2 local](../../tools/build/build_stage2_local.ps1)。源码/程序/清单摘要统一记录在上述 qualification.json。尚未实现新用途目录、Stage1 严格 HostOnly/RelinkOnly、Stage2 普通 CXX 迁移，也没有把四类非 GPU 变更的真实依赖全面隔离；这些分别属于 P1b、P2、P4。未运行 release 或性能比较。
+
+### P1b：用途/profile 隔离与严格构建入口已完成
+
+对应程序版本 `0.45.2`。[完整验证记录](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/qualification.json)保存源输入、程序、清单及 marker 摘要；[精确叶目录](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/locations.json)由实际入口输出记录。构建用法见[用途与 profile 目录](../usage/BUILD.md#用途与-profile-目录)。
+
+默认目录按 local/dev/release、阶段、引擎、架构、工具链和 profile 隔离。完整字段摘要保存在 profile.json，前 16 位用于目录；源码/HEAD/程序版本不进入 key。显式本机/开发目录是最终叶目录，不追加层次；公开多架构发布参数保持根语义。包目录与构建目录必须独立且不嵌套。旧目录只在正式清单及实际 cache 相容时原位接纳，不迁移缓存。
+
+Stage1 新增严格 HostOnly：要求已配置的同 profile 目录，在配置/主机编译前检查全部 CUDA 对象、内容身份和原生依赖时间戳。关闭旧 RelinkOnly 绕过入口并给出明确诊断，没有保留一个名为 relink 却可隐式重编 CUDA 的入口。Stage2 保留逐 TU 与链接身份门禁，增加 role/profile 对照；dev 默认仍为实验引擎。
+
+| 验证 | 结果与范围 | 证据 |
+| --- | --- | --- |
+| CPU profile/路径/身份门禁 | 29 项 profile、9 项发布路径、40 项既有身份检查通过；含 PS5/PS7 一致性和 marker 篡改拒绝 | [profile](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/profiles_final/result.json)、[路径](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/release_paths/result.json)、[身份](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/identity_final/result.json) |
+| 旧完整档目录原位复用 | build_cuda_cmake 保留 32 档；严格 HostOnly 下零 CU，版本头引起必要主机编译/链接 | [日志](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/stage1_legacy_hostonly.log) |
+| 新隔离叶目录冷构建 | Stage1 限定 384 档；Stage2 production 完整 25 TU；均使用 local 原有编译/算术参数，沙箱外执行 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/stage1_new_leaf.log)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/stage2_new_leaf.log) |
+| 同 profile 再次构建 | 两阶段均零编译、零链接 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/stage1_repeat.log)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/stage2_repeat.log) |
+| 入口拒绝 | 9 项通过：跨 role/profile/engine、无效生产参数、无缓存 HostOnly、互斥参数及旧绕过入口；零编译且原产物/清单/marker 未变 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/cli_rejections.json) |
+| 数学/文件运行对照 | 与冻结 P0 基线比较，Stage1 5 例和 Stage2 5 例一致 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/runtime/summary.json) |
+
+Stage1 主机 CXX 仍由 CMake/NMake 管理，Stage2 host CPP 仍由 nvcc 驱动，后者留待 P2。release 包装/marker/路径消费者完成静态和 CPU 检查，**没有执行 release 构建或打包验收**；新 Stage1 冷 profile 不代表全档重新验收。GUI 继续读取明确配置的程序路径，不递归选择最新叶目录；CPU/OpenCL/GUI 的正式 role 入口族仍属后续阶段。没有性能结论。首次 profile 测试的辅助变量类型错误已修正，失败证据保留，不影响原编译产物。
 
 ## 首先调整构建复用与输出隔离
 
@@ -651,7 +670,7 @@ profile.json 保存可读字段和完整配置 hash，短 key 冲突时核对完
 | reconfigure | 更新生成配置和构建图 | 不等于清空对象。 |
 | HostOnly | 强约束不重编 .cu；有效 CUDA 对象必须全部可复用；主机按失效状态编译并链接 | 缺对象、合同/依赖/命令变化时提前失败，不静默回退全量 CUDA 编译。 |
 | SkipBuild | 完全不编译，只对完整身份匹配的冻结产物继续拆分/打包 | 失配即拒绝，不能补写清单冒充新产物。 |
-| RelinkOnly | 若保留此名，只允许已验证有效对象参与链接 | 主机/CUDA 对象过期则拒绝。当前 Stage1 此开关实际调用普通 cmake --build，迁移时兼容名称需明确告知新语义。 |
+| RelinkOnly | P1b 已关闭旧绕过入口，使用时明确报错 | 正常增量处理必要主机编译/链接；严格 HostOnly 先验证全部 CUDA 对象，不承诺所有主机对象均不编译。 |
 
 互斥选项如 HostOnly+rebuild 明确拒绝。Incremental 可保留为旧入口兼容参数；新默认已经 reuse，不再需要用户记忆该开关。BAT 仅转发，默认值继续只维护在 PS1，生产源清单与 owner graph 保持唯一来源。
 
@@ -1162,7 +1181,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0 与 P1a 完成，P1b 及 P2–P7 未执行，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0 与 P1a/P1b 完成，P2–P7 未执行，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 

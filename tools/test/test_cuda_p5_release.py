@@ -19,13 +19,67 @@ def sha(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def load(path): return json.loads(Path(path).read_text(encoding='utf-8-sig'))
 
 
+def profile_hash(fields):
+    assert all(isinstance(k, str) and isinstance(v, str) for k, v in fields.items())
+    # Match the .NET UTF-16 string lengths used by the build helper's framing.
+    framed = ''.join(f'{len(v.encode("utf-16-le"))//2}:{v}'
+                     for k in sorted(fields, key=lambda k: k.encode('utf-16-be')) for v in (k, fields[k]))
+    return hashlib.sha256(framed.encode('utf-8')).hexdigest()
+
+
+def release_leaf(root, stage, arch, explicit=None):
+    """Use an explicit map or one compatible profile; never pick first/latest."""
+    root = Path(root)
+    toolkit = 'cuda12_6' if arch < 75 else 'cuda13_3'
+    architectures = ('60,70' if arch < 75 else '75,86,89,120') if stage == 'stage1' else str(arch)
+    arch_label = 'sm' + architectures.replace(',', '-sm')
+    def check_marker(leaf):
+        marker = load(leaf/'profile.json'); fields = marker['fields']
+        assert marker['schema'] == 1 and profile_hash(fields) == marker['profile_sha256']
+        assert fields['role'] == 'release' and fields['stage'] == stage and fields['engine'] == 'production'
+        assert fields['architectures'] == architectures
+        return fields
+    if explicit is not None:
+        candidates = [Path(explicit)]
+    elif (root/'profile.json').exists():
+        candidates = [root]
+    else:
+        markers = list(root.glob(f'{stage}/{toolkit}/{arch_label}/*/profile.json'))
+        candidates = []
+        for path in markers:
+            fields = check_marker(path.parent)
+            defaults = (fields.get('option/tiers') == '' and fields.get('option/enable_prac') == '0') if stage == 'stage1' else all(
+                fields.get('option/'+k) == str(v) for k, v in
+                dict(gl_backend='ptx', split_compile=8, add_sub_mask=1, outer_unroll_u=0, gl_fixed_mode=3).items())
+            if defaults:
+                candidates.append(path.parent)
+        if not markers:
+            # Frozen legacy directories retain their exact old layout.
+            legacy = root/(toolkit if stage == 'stage1' else f'sm_{arch}')
+            if not (legacy/'profile.json').exists():
+                return legacy
+            candidates = [legacy]
+    assert len(candidates) == 1, 'Ambiguous release profiles; pass --build-leaves with explicit architecture-to-leaf paths'
+    leaf = candidates[0]
+    check_marker(leaf)
+    return leaf
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('stage1-build', 'stage1-packages', 'stage2-build', 'stage2-packages', 'output'):
         p.add_argument('--'+name, type=Path, required=True)
     p.add_argument('--archs', default=','.join(map(str, ARCHS)),
                    help='Completed architecture subset; defaults to the complete six-target matrix')
+    p.add_argument('--build-leaves', type=Path,
+                   help='Optional JSON: stage1/stage2 maps architecture strings to exact profile leaves')
     a = p.parse_args()
+    leaf_map = load(a.build_leaves) if a.build_leaves else None
+    def leaf(stage, arch, root):
+        explicit = leaf_map[stage][str(arch)] if leaf_map is not None else None
+        if explicit is not None and not Path(explicit).is_absolute():
+            explicit = a.build_leaves.resolve().parent/explicit
+        return release_leaf(root, stage, arch, explicit)
     archs = list(map(int, a.archs.split(',')))
     assert archs and len(archs) == len(set(archs)) and set(archs) <= set(ARCHS)
     out = a.output.resolve(); out.mkdir(parents=True, exist_ok=False)
@@ -82,9 +136,11 @@ def main():
         return dict(zip=str(archive.resolve()), sha256=sha(archive), entries=sorted(expected))
     persist()
     for arch in archs:
-        group = a.stage1_build/('cuda12_6' if arch < 75 else 'cuda13_3')
+        group = leaf('stage1', arch, a.stage1_build)
         path = group/'stage1_build_manifest.json'
         manifest = load(path); split = load(group/'split_manifest.json')
+        if (group/'profile.json').exists():
+            assert manifest['role'] == 'release' and manifest['profile_sha256'] == load(group/'profile.json')['profile_sha256']
         assert manifest['tiers'] == '' and not manifest['enable_prac']
         assert manifest['architectures'] == ('60,70' if arch < 75 else '75,86,89,120')
         stage1_defaults(group, arch)
@@ -102,8 +158,10 @@ def main():
             images=inspect('stage1', arch, exe, manifest['cuda_root']),
             package=package(payload, load(group/f'package_sm{arch}_manifest.json'), payload/'ecm_cuda.exe'))
         result['images'].append(row); persist(); print('PASS static Stage1', arch, flush=True)
-        group = a.stage2_build/f'sm_{arch}'
+        group = leaf('stage2', arch, a.stage2_build)
         path = group/'build_manifest.json'; manifest = load(path)
+        if (group/'profile.json').exists():
+            assert manifest['role'] == 'release' and manifest['profile_sha256'] == load(group/'profile.json')['profile_sha256']
         assert manifest['architecture'] == f'sm_{arch}' and manifest['engine'] == 'production'
         assert manifest['gl_backend'] == 'ptx' and manifest['split_compile'] == 8
         assert manifest['add_sub_mask'] == 1 and manifest['outer_unroll_u'] == 0 and manifest['gl_fixed_mode'] == 3

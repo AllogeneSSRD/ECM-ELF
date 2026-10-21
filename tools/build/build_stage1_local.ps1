@@ -3,7 +3,8 @@
     Local Stage1 build for ecm_cuda, using the general Montgomery baseline.
 
 .DESCRIPTION
-    Configures and builds `build_cuda_cmake`; defaults are described in docs/usage/BUILD.md:
+    Uses an isolated build_cuda_local/stage1/sm<Arch>/<profile> leaf by default.
+    Explicit BuildDir remains a final leaf. Defaults are in docs/usage/BUILD.md:
 
         compression ON      -Xfatbin -compress-all
         no PTX              ECM_CUDA_EMBED_PTX=OFF        (needs exactly sm_<Arch>)
@@ -12,14 +13,15 @@
 
     The compile step uses tools\build\internal\parallel_nvcc.ps1 for independent CUDA TUs.
 
-.PARAMETER BuildDir   Build directory (default build_cuda_cmake, the local test dir).
+.PARAMETER BuildDir   Explicit final build directory; omitted selects the profile leaf.
 .PARAMETER Arch       CUDA architecture (default 89).
 .PARAMETER Jobs       Concurrent nvcc processes (default 8).
 .PARAMETER Tiers      Restrict the kernel tiers, e.g. "5120" -- cuts a rebuild from ~8 min to
                       ~40 s.  Empty (default) = every tier.
 .PARAMETER FullRebuild  Delete the CUDA objects first (forces a clean kernel compile).
 .PARAMETER EnablePrac  Include experimental resident/PRAC kernels (default OFF).
-.PARAMETER RelinkOnly   Skip the parallel compile and only run the CMake build (host + link).
+.PARAMETER HostOnly    Verify all CUDA objects and refuse any CUDA compilation.
+.PARAMETER RelinkOnly  Removed unsafe bypass; use verified reuse or HostOnly instead.
 .PARAMETER Gmp / OpenSslRoot  Override the dependency paths when they are not the defaults.
 
 .EXAMPLE
@@ -29,13 +31,15 @@
     powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage1_local.ps1 -Tiers 5120 -FullRebuild
 #>
 param(
-    [string]$BuildDir = "build_cuda_cmake",
+    [string]$BuildDir = "",
+    [ValidateSet('local','dev')][string]$BuildRole = 'local',
     [string]$Arch = "89",
     [int]$Jobs = 8,
     [string]$Tiers = "",
     [switch]$EnablePrac,       # experimental resident/PRAC kernels; excluded by default
     [switch]$FullRebuild,
     [switch]$RelinkOnly,
+    [switch]$HostOnly,
     [switch]$Incremental = $true, # default: verify dependency/command/object identities before reuse
     [string]$Extra = "",       # extra cmake definitions, e.g. -Extra "-DECM_MERS_FOLD=1"
     [string]$Gmp = "",
@@ -45,19 +49,24 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($RelinkOnly) { throw 'RelinkOnly no longer bypasses verification; use normal reuse or HostOnly for host edits' }
+if ($HostOnly -and ($FullRebuild -or -not $Incremental)) { throw 'HostOnly and forced CUDA rebuild are mutually exclusive' }
+if ($Extra -match '(?i)(?:^|\s)-(?:S|B|G)(?:\s|$)|-D(?:CMAKE_(?:CUDA_COMPILER|CUDA_HOST_COMPILER|CXX_COMPILER|BUILD_TYPE)|ECM_CUDA_(?:ARCHITECTURES|PTX_ARCH|EMBED_PTX|COMPRESS|ENABLE_PRAC)|ECM_TIERS)(?::\w+)?=') {
+    throw 'Extra cannot override toolchain, architecture, output or named build policy; use the corresponding build parameters'
+}
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-if (-not [System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
-if (-not $Gmp) { $Gmp = Join-Path $repo "third_party\gmp-zen3\dist" }
+. (Join-Path $PSScriptRoot 'internal/gmp_dependency.ps1')
+$gmpDependency = Resolve-EcmGmp -Repo $repo -Gmp $Gmp
+$Gmp = $gmpDependency.Root
 if (-not $OpenSslRoot) { $OpenSslRoot = "D:/code/vcpkg/installed/x64-windows" }
 . (Join-Path $PSScriptRoot 'internal/cuda_toolchain.ps1')
 . (Join-Path $PSScriptRoot 'internal/cuda_build_state.ps1')
+. (Join-Path $PSScriptRoot 'internal/cuda_build_profile.ps1')
 $cuda = Resolve-EcmCudaToolkit -Archs $Arch -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
 $VcVars = $vc.VcVars
-Assert-EcmCmakeToolchain $BuildDir $cuda $vc
-
-$cfg = @(
-    "-S", "`"$repo`"", "-B", "`"$BuildDir`"", '-G', '"NMake Makefiles"',
+$configureOptions = @(
+    '-G', '"NMake Makefiles"',
     "-DCMAKE_BUILD_TYPE=Release",
     "-DCMAKE_CUDA_COMPILER=`"$($cuda.Nvcc.Replace('\','/'))`"",
     "-DCMAKE_CUDA_HOST_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
@@ -80,11 +89,22 @@ $cfg = @(
     "-DGMP_LIBRARY=$($Gmp -replace '\\','/')/lib/gmp.lib",
     "-DOPENSSL_ROOT_DIR=$OpenSslRoot"
 ) -join ' '
-if ($Extra) { $cfg = "$cfg $Extra" }
+if ($Extra) { $configureOptions = "$configureOptions $Extra" }
+$buildProfile = New-EcmCudaProfile $repo $BuildRole stage1 production $Arch $cuda $vc $gmpDependency ([ordered]@{
+    configure = $configureOptions; tiers = $Tiers; enable_prac = $(if ($EnablePrac) { '1' } else { '0' }); extra = $Extra })
+$BuildDir = Resolve-EcmBuildDirectory $repo $buildProfile $BuildDir
+Assert-EcmCmakeToolchain $BuildDir $cuda $vc
+if ($HostOnly -and (-not (Test-Path -LiteralPath (Join-Path $BuildDir 'compile_commands.json')) -or
+    -not (Test-Path -LiteralPath (Join-Path $BuildDir "CMakeFiles/$($buildProfile.Fields.cmake_version)/CMakeCUDACompiler.cmake")))) {
+    throw 'HostOnly requires an existing configured build with the same CMake version; run normal reuse first'
+}
+Assert-EcmBuildProfile $BuildDir $buildProfile
+$cfg = "-S `"$repo`" -B `"$BuildDir`" $configureOptions"
 
 Write-Host "== LOCAL build rule: sm_$Arch, compression ON, no PTX, tiers='$(if ($Tiers) { $Tiers } else { 'all' })' =="
 Write-Host "   Experimental resident/PRAC: $([bool]$EnablePrac)"
 Write-Host "   CUDA: $($cuda.Root); MSVC: $($vc.Version)"
+Write-Host "   role=$BuildRole profile=$($buildProfile.Key) leaf=$BuildDir"
 # nvcc reads a BOM-less source file as GBK; a CJK comment then swallows the next line of
 # code (that silently removed `#define CHECKPOINT_VERSION` once).  tools/diag/ensure_bom.ps1
 # restores the BOM state git HEAD has, for every tracked source under kernels/ and src/.
@@ -99,13 +119,10 @@ if ($FullRebuild) {
     Write-Host "   (CUDA objects removed)"
 }
 
-if (-not $RelinkOnly) {
-    $engineArgs = @('-BuildDir', $BuildDir, '-Jobs', $Jobs, '-VcVars', $VcVars, '-VcVersion', $vc.Version)
-    if (-not $Incremental) { $engineArgs += '-Rebuild' }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "internal\parallel_nvcc.ps1") @engineArgs
-} else {
-    & cmd.exe /c "$($vc.Setup) && cmake --build `"$BuildDir`" --target ecm_cuda"
-}
+$engineArgs = @('-BuildDir', $BuildDir, '-Jobs', $Jobs, '-VcVars', $VcVars, '-VcVersion', $vc.Version)
+if (-not $Incremental) { $engineArgs += '-Rebuild' }
+if ($HostOnly) { $engineArgs += '-HostOnly' }
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "internal\parallel_nvcc.ps1") @engineArgs
 if ($LASTEXITCODE -ne 0) { throw "Stage1 build failed ($LASTEXITCODE)" }
 Copy-Item -LiteralPath (Join-Path $Gmp 'bin/gmp-10.dll') -Destination $BuildDir -Force
 
@@ -121,11 +138,13 @@ if (Test-Path $exe) {
 }
 
 . (Join-Path $PSScriptRoot 'internal/stage1_release_sources.ps1')
+Assert-EcmBuildProfile $BuildDir $buildProfile -ReadOnly
 $localObjects = [ordered]@{}
 foreach ($obj in (Get-Stage1CudaObjects $BuildDir)) {
     $localObjects[$obj] = (Get-FileHash -LiteralPath (Join-Path $BuildDir $obj)).Hash
 }
-[ordered]@{ identity_schema = 1; engine = 'production'; tiers = $Tiers; enable_prac = [bool]$EnablePrac;
+[ordered]@{ identity_schema = 1; role = $BuildRole; profile_sha256 = $buildProfile.Hash;
+    engine = 'production'; tiers = $Tiers; enable_prac = [bool]$EnablePrac;
     compile_setup = $vc.Setup; gmp_root = $Gmp;
     dependency_hashes = [ordered]@{ header = (Get-FileHash (Join-Path $Gmp 'include/gmp.h')).Hash;
         library = (Get-FileHash (Join-Path $Gmp 'lib/gmp.lib')).Hash; runtime = (Get-FileHash (Join-Path $Gmp 'bin/gmp-10.dll')).Hash };

@@ -13,7 +13,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/build/build_stage2_rel
 #>
 param(
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
-    [string]$Build = 'build_cuda_cmake/release_ux_sm89',
+    [string]$Build = '',
+    [string]$BuildRoot = '',
     [string]$OutDir = 'dist/cuda-stage2-sm89',
     [ValidateRange(1,64)][int]$SplitCompile = 8,
     [string]$Gmp = '',
@@ -31,24 +32,28 @@ $Gmp = $gmpDependency.Root
 $cuda = Resolve-EcmCudaToolkit -Archs $Arch -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
 . (Join-Path $PSScriptRoot 'cuda_build_state.ps1')
+. (Join-Path $PSScriptRoot 'cuda_build_profile.ps1')
 & cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'check_ecm_config.cmake')
 if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
 function Resolve-RepoPath([string]$Value) {
     if ([IO.Path]::IsPathRooted($Value)) { return [IO.Path]::GetFullPath($Value) }
     return [IO.Path]::GetFullPath((Join-Path $repo $Value))
 }
-$Build = Resolve-RepoPath $Build
+$buildProfile = New-EcmStage2Profile $repo release production $Arch ptx 0 1 $SplitCompile $cuda $vc $gmpDependency
+$Build = Resolve-EcmBuildDirectory $repo $buildProfile $Build $BuildRoot
 $OutDir = Resolve-RepoPath $OutDir
-if ($Build.TrimEnd('\') -eq $OutDir.TrimEnd('\')) { throw 'Build and package directories must differ' }
+Assert-EcmSeparatePackageDirectory $Build $OutDir
+Assert-EcmBuildProfile $Build $buildProfile -ReadOnly:$SkipBuild
 if (-not $SkipBuild) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '../build_stage2_local.ps1') `
-        -Build $Build -Engine production -Arch $Arch -SplitCompile $SplitCompile -Gmp $Gmp -CudaRoot $cuda.Root -VcVars $vc.VcVars
+        -Build $Build -BuildRole release -Engine production -Arch $Arch -SplitCompile $SplitCompile -Gmp $Gmp -CudaRoot $cuda.Root -VcVars $vc.VcVars
     if ($LASTEXITCODE -ne 0) { throw 'Stage2 release build failed' }
 }
 $manifestPath = Join-Path $Build 'build_manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $exe = Join-Path $Build 'ecm_cuda_stage2.exe'
-if ($manifest.engine -ne 'production' -or $manifest.architecture -ne $Arch -or
+if ($manifest.role -ne 'release' -or $manifest.profile_sha256 -ne $buildProfile.Hash -or
+    $manifest.engine -ne 'production' -or $manifest.architecture -ne $Arch -or
     $manifest.cuda_root -ne $cuda.Root -or $manifest.toolkit -ne $cuda.VersionText -or
     $manifest.host_compiler -ne $vc.Compiler -or $manifest.host_version -ne $vc.Version -or
     $manifest.add_sub_mask -ne 1 -or $manifest.outer_unroll_u -ne 0 -or $manifest.gl_fixed_mode -ne 3 -or

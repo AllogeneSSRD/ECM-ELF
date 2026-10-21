@@ -52,9 +52,8 @@ foreach ($legacy in @($true,$false)) {
     $groups += [pscustomobject]@{ Archs = $selected; Cuda = $cuda; Vc = $vc; Name = $(if ($legacy) { 'cuda12_6' } else { 'cuda13_3' }) }
 }
 foreach ($group in $groups) {
-    $groupBuild = Join-Path $BuildDir $group.Name
     Write-Host "== Stage1 release [$($group.Archs -join ',')] CUDA=$($group.Cuda.Root) MSVC=$($group.Vc.Version) =="
-    $forward = @('-BuildDir',$groupBuild,'-OutDir',$OutDir,'-Archs',($group.Archs -join ','),'-Jobs',$Jobs,
+    $forward = @('-BuildRoot',$BuildDir,'-OutDir',$OutDir,'-Archs',($group.Archs -join ','),'-Jobs',$Jobs,
         '-CudaRoot',$group.Cuda.Root,'-VcVars',$group.Vc.VcVars)
     if ($PtxArch -in $group.Archs) { $forward += @('-PtxArch',$PtxArch) }
     foreach ($name in @('Tiers','Gmp','OpenSslRoot')) { if ((Get-Variable -Name $name -ValueOnly)) { $forward += @(('-' + $name),(Get-Variable -Name $name -ValueOnly)) } }

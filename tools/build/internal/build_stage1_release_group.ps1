@@ -8,7 +8,8 @@ architectures supported by the selected toolkit. Manifests stay in BuildDir.
 Experimental resident/PRAC is opt-in; PtxArch empty means SASS only.
 #>
 param(
-    [string]$BuildDir = "build_cuda_release",
+    [string]$BuildDir = "",
+    [string]$BuildRoot = "build_cuda_release",
     [string]$OutDir = "dist\cuda",
     [ValidatePattern('^[0-9]+(,[0-9]+)*$')][string]$Archs = "75,86,89,120",
     [ValidatePattern('^$|^[0-9]+$')][string]$PtxArch = "",
@@ -37,33 +38,25 @@ $archList = @($Archs.Split(','))
 if (@($archList | Select-Object -Unique).Count -ne $archList.Count -or ($PtxArch -and $PtxArch -notin $archList)) {
     throw 'Architectures must be unique and include PtxArch'
 }
-if (-not [System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir = Join-Path $repo $BuildDir }
 if (-not [System.IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path $repo $OutDir }
 . (Join-Path $PSScriptRoot 'gmp_dependency.ps1')
 $gmpDependency = Resolve-EcmGmp -Repo $repo -Gmp $Gmp -Release
 $Gmp = $gmpDependency.Root
-$BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $OutDir = [IO.Path]::GetFullPath($OutDir)
-Assert-EcmCmakeToolchain $BuildDir $cuda $vc
 if (-not [IO.Path]::IsPathRooted($Gmp)) { $Gmp = Join-Path $repo $Gmp }
 $Gmp = [IO.Path]::GetFullPath($Gmp)
 Write-Host "Release GMP: $Gmp (matching header/import library/runtime)"
-if ($BuildDir.TrimEnd('\') -eq $OutDir.TrimEnd('\')) { throw 'Build and package directories must differ' }
 if (-not $OpenSslRoot) { $OpenSslRoot = "D:/code/vcpkg/installed/x64-windows" }
 . (Join-Path $PSScriptRoot 'stage1_release_sources.ps1')
 $sourceHashes = Get-Stage1ReleaseSources $repo -EnablePrac:$EnablePrac
-$manifestPath = Join-Path $BuildDir 'stage1_build_manifest.json'
 $toolkit = $cuda.VersionText
 $dependencyHashes = [ordered]@{}
 foreach ($name in @('include/gmp.h','lib/gmp.lib','bin/gmp-10.dll')) {
     $dependencyHashes[$name] = (Get-FileHash -LiteralPath (Join-Path $Gmp $name)).Hash
 }
 
-if (-not $SkipBuild) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '../../diag/ensure_bom.ps1')
-    if ($LASTEXITCODE -ne 0) { throw 'Source encoding check failed' }
-    $cfg = @(
-        "-S", "`"$repo`"", "-B", "`"$BuildDir`"", '-G', '"NMake Makefiles"',
+    $configureOptions = @(
+        '-G', '"NMake Makefiles"',
         "-DCMAKE_BUILD_TYPE=Release",
         "-DCMAKE_CUDA_COMPILER=`"$($cuda.Nvcc.Replace('\','/'))`"",
         "-DCMAKE_CUDA_HOST_COMPILER=`"$($vc.Compiler.Replace('\','/'))`"",
@@ -86,6 +79,21 @@ if (-not $SkipBuild) {
         "-DGMP_LIBRARY=$($Gmp -replace '\\','/')/lib/gmp.lib",
         "-DOPENSSL_ROOT_DIR=$OpenSslRoot"
     ) -join ' '
+. (Join-Path $PSScriptRoot 'cuda_build_profile.ps1')
+$buildProfile = New-EcmCudaProfile $repo release stage1 production $Archs $cuda $vc $gmpDependency ([ordered]@{
+    configure = $configureOptions; tiers = $Tiers; enable_prac = $(if ($EnablePrac) { '1' } else { '0' }); extra = '' })
+$rootArgument = if ($BuildDir) { '' } else { $BuildRoot }
+$BuildDir = Resolve-EcmBuildDirectory $repo $buildProfile $BuildDir $rootArgument
+Assert-EcmCmakeToolchain $BuildDir $cuda $vc
+Assert-EcmSeparatePackageDirectory $BuildDir $OutDir
+Assert-EcmBuildProfile $BuildDir $buildProfile -ReadOnly:$SkipBuild
+$manifestPath = Join-Path $BuildDir 'stage1_build_manifest.json'
+$cfg = "-S `"$repo`" -B `"$BuildDir`" $configureOptions"
+Write-Host "Release leaf: $BuildDir (profile=$($buildProfile.Key))"
+
+if (-not $SkipBuild) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot '../../diag/ensure_bom.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Source encoding check failed' }
 
     $ptxLabel = if ($PtxArch) { "PTX for sm_$PtxArch only" } else { 'SASS only' }
     Write-Host "== RELEASE rule: archs [$Archs], $ptxLabel, uncompressed (prunable) =="
@@ -115,7 +123,8 @@ if (-not $SkipBuild) {
     foreach ($obj in (Get-Stage1CudaObjects $BuildDir)) {
         $objectHashes[$obj] = (Get-FileHash -LiteralPath (Join-Path $BuildDir $obj)).Hash
     }
-    [ordered]@{ identity_schema = 1; source_inventory_sha256 = (Get-FileHash (Join-Path $PSScriptRoot 'cuda_sources.cmake')).Hash;
+    [ordered]@{ identity_schema = 1; role = 'release'; profile_sha256 = $buildProfile.Hash;
+        source_inventory_sha256 = (Get-FileHash (Join-Path $PSScriptRoot 'cuda_sources.cmake')).Hash;
         compile_setup = $vc.Setup;
         architectures = $Archs; ptx_architecture = $PtxArch; tiers = $Tiers; jobs = $Jobs; enable_prac = [bool]$EnablePrac;
         toolkit = $toolkit; cuda_root = $cuda.Root; host_compiler = $vc.Compiler; host_version = $vc.Version;
@@ -125,7 +134,8 @@ if (-not $SkipBuild) {
 } else {
     $sourceHashes = Get-Stage1ReleaseSources $repo -EnablePrac:$EnablePrac -BuildDir $BuildDir
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if ($manifest.architectures -ne $Archs -or $manifest.ptx_architecture -ne $PtxArch -or $manifest.tiers -ne $Tiers -or
+    if ($manifest.role -ne 'release' -or $manifest.profile_sha256 -ne $buildProfile.Hash -or
+        $manifest.architectures -ne $Archs -or $manifest.ptx_architecture -ne $PtxArch -or $manifest.tiers -ne $Tiers -or
         $manifest.enable_prac -ne [bool]$EnablePrac -or $manifest.toolkit -ne $toolkit -or
         $manifest.cuda_root -ne $cuda.Root -or $manifest.host_compiler -ne $vc.Compiler -or $manifest.host_version -ne $vc.Version -or
         $manifest.executable_sha256 -ne (Get-FileHash -LiteralPath (Join-Path $BuildDir 'ecm_cuda.exe')).Hash) {

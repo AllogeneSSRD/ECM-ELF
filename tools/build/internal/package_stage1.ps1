@@ -16,6 +16,13 @@ $split = Get-Content -LiteralPath $splitPath -Raw | ConvertFrom-Json
 $manifestPath = Join-Path $BuildDir 'stage1_build_manifest.json'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'stage1_release_sources.ps1')
+. (Join-Path $PSScriptRoot 'cuda_build_profile.ps1')
+$profileMarker = Get-Content -LiteralPath (Join-Path $BuildDir 'profile.json') -Raw | ConvertFrom-Json
+if ($profileMarker.schema -ne 1 -or $profileMarker.fields.role -ne 'release' -or $profileMarker.fields.stage -ne 'stage1' -or
+    $manifest.role -ne 'release' -or $manifest.profile_sha256 -ne $profileMarker.profile_sha256 -or
+    (Get-EcmProfileHash $profileMarker.fields) -ne $profileMarker.profile_sha256) {
+    throw 'Stage1 packaging requires the matching release profile and build manifest'
+}
 Assert-Stage1BuildIdentity $repo $BuildDir $manifest
 foreach ($name in $gmpDependency.Hashes.Keys) {
     if ($manifest.dependency_hashes.$name -ne $gmpDependency.Hashes[$name]) { throw "Stage1 build/release GMP mismatch: $name" }

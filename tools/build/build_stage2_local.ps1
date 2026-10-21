@@ -6,7 +6,9 @@ Build the standalone CUDA Stage2 save/queue executable (MSVC + nvcc + GMP).
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build\build_stage2_local.ps1 -Arch sm_89
 #>
 param(
-    [string]$Build = 'build_cuda_cmake/production_stage2',
+    [string]$Build = '',
+    [string]$BuildRoot = '',
+    [ValidateSet('local','dev','release')][string]$BuildRole = 'local',
     [ValidateSet('production','development')][string]$Engine = 'production',
     [ValidatePattern('^sm_[0-9]+$')][string]$Arch = 'sm_89',
     [ValidateSet('runtime','fold','short','ptx')][string]$GlBackend = 'ptx',
@@ -26,26 +28,27 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repo
 $buildTimer = [Diagnostics.Stopwatch]::StartNew()
 . (Join-Path $PSScriptRoot 'internal/gmp_dependency.ps1')
-$gmpDependency = Resolve-EcmGmp -Repo $repo -Gmp $Gmp
+$gmpDependency = Resolve-EcmGmp -Repo $repo -Gmp $Gmp -Release:($BuildRole -eq 'release')
 $Gmp = $gmpDependency.Root
 . (Join-Path $PSScriptRoot 'internal/cuda_toolchain.ps1')
 $cuda = Resolve-EcmCudaToolkit -Archs $Arch -CudaRoot $CudaRoot
 $vc = Resolve-EcmVcEnvironment $cuda -VcVars $VcVars
-$Build = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Build)
+. (Join-Path $PSScriptRoot 'internal/cuda_build_profile.ps1')
+$buildProfile = New-EcmStage2Profile $repo $BuildRole $Engine $Arch $GlBackend $OuterUnrollU $AddSubMask $SplitCompile $cuda $vc $gmpDependency
+$Build = Resolve-EcmBuildDirectory $repo $buildProfile $Build $BuildRoot
+Assert-EcmBuildProfile $Build $buildProfile
 Write-Host '== Stage2 build =='
 Write-Host "   engine    : $Engine"
 Write-Host "   GPU       : $Arch"
 Write-Host "   NTT       : backend=$GlBackend add/sub=$AddSubMask outer_unroll=$OuterUnrollU"
 Write-Host "   parallel  : nvcc split compile=$SplitCompile"
 Write-Host "   build dir : $Build"
+Write-Host "   role/key  : $BuildRole / $($buildProfile.Key)"
 Write-Host "   GMP       : $Gmp"
 Write-Host "   CUDA      : $($cuda.Root)"
 Write-Host "   MSVC      : $($vc.Version)"
 & cmake "-DECM_CONFIG_ROOT=$repo" -P (Join-Path $PSScriptRoot 'internal/check_ecm_config.cmake')
 if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
-if ($Engine -eq 'production' -and ($GlBackend -ne 'ptx' -or $OuterUnrollU -ne 0 -or $AddSubMask -ne 1)) {
-    throw 'Production requires -GlBackend ptx -OuterUnrollU 0 -AddSubMask 1; use -Engine development for comparisons'
-}
 . (Join-Path $PSScriptRoot 'internal/cuda_build_state.ps1')
 $inventory = Get-EcmCudaInventory $repo (Join-Path $Build 'cuda_sources.json')
 $includeDirs = @((Join-Path $Gmp 'include'), 'include','src','src/core','src/cpu','kernels/cuda')
@@ -76,8 +79,7 @@ $beforeStates = [ordered]@{}
 foreach ($src in $sources) {
     $stem = $objectNames[$src]
     $obj = Join-Path $objDir "$stem.obj"
-    $command = "`"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$glMode -DNTT_OUTER_UNROLL_U=$OuterUnrollU -DNTT_GL_ADD_SUB_MASK=$AddSubMask " +
-        "--split-compile=$SplitCompile -I `"$Gmp/include`" -I `"$repo/include`" -Xcompiler /utf-8 -Xcompiler /wd4819 -c `"$src`" -o `"$obj`""
+    $command = $buildProfile.CompilePrefix + " -c `"$src`" -o `"$obj`""
     $entry = [pscustomobject]@{ file = (Resolve-EcmSourcePath $repo $src); directory = $repo; command = $command; output = $obj }
     $compileEntries[$src] = $entry
     $beforeStates[$src] = Get-EcmCompileState $repo $entry $vc.Setup $includeDirs -Production:($Engine -eq 'production')
@@ -168,8 +170,7 @@ if (-not $fresh) {
     Write-Host ("compiled {0} TU(s): wall {1:N1}s (nvcc split compile={2})" -f $compiled, $compileSeconds, $SplitCompile)
     $objArgs = ($objects | ForEach-Object { '"' + $_ + '"' }) -join ' '
     $linkLog = Join-Path $objDir 'link.log'
-    $line = "$($vc.Setup) && `"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$Arch " +
-        "$objArgs -L `"$Gmp/lib`" -lgmp -o `"$exe`""
+    $line = $buildProfile.LinkPrefix + " $objArgs -L `"$Gmp/lib`" -lgmp -o `"$exe`""
     $linkObjects = [ordered]@{}
     foreach ($object in $objects) { $linkObjects[$object] = (Get-FileHash -LiteralPath $object).Hash }
     $linkInputs = [ordered]@{ command = $line; library = $gmpHashes['lib/gmp.lib']; objects = $linkObjects }
@@ -230,6 +231,8 @@ foreach ($src in $sources) {
 }
 $manifest = [ordered]@{
     identity_schema = 1
+    role = $BuildRole
+    profile_sha256 = $buildProfile.Hash
     source_inventory_sha256 = (Get-FileHash -LiteralPath (Join-Path $repo 'tools/build/internal/cuda_sources.cmake')).Hash
     compile_setup = $vc.Setup
     compile_units = $compileUnits
@@ -255,6 +258,7 @@ $manifest = [ordered]@{
     gmp_root = $Gmp
     gmp_hashes = $gmpHashes
 }
+Assert-EcmBuildProfile $Build $buildProfile -ReadOnly
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $Build 'build_manifest.json')
 $buildTimer.Stop()
 Write-Host '== produced =='

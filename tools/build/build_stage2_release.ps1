@@ -40,15 +40,14 @@ foreach ($target in $architectures) {
     $toolchains[$target] = [pscustomobject]@{ Cuda = $cuda; Vc = $vc }
 }
 $multi = $architectures.Count -gt 1
-if (-not $Build) { $Build = if ($multi) { 'build_cuda_cmake/release_stage2' } else { 'build_cuda_cmake/release_ux_' + $architectures[0].Replace('_','') } }
 if (-not $OutDir) { $OutDir = if ($multi) { 'dist/cuda-stage2' } else { 'dist/cuda-stage2-' + $architectures[0].Replace('_','') } }
 foreach ($target in $architectures) {
-    $targetBuild = if ($multi) { Join-Path $Build $target } else { $Build }
     $targetOut = if ($multi) { Join-Path $OutDir ('cuda-stage2-' + $target.Replace('_','')) } else { $OutDir }
     $tools = $toolchains[$target]
     Write-Host "== Stage2 release $target (split compile=$SplitCompile) CUDA=$($tools.Cuda.Root) MSVC=$($tools.Vc.Version) =="
-    $argsForPackage = @('-Arch', $target, '-Build', $targetBuild, '-OutDir', $targetOut, '-SplitCompile', $SplitCompile, '-Gmp', $Gmp,
+    $argsForPackage = @('-Arch', $target, '-OutDir', $targetOut, '-SplitCompile', $SplitCompile, '-Gmp', $Gmp,
         '-CudaRoot',$tools.Cuda.Root,'-VcVars',$tools.Vc.VcVars)
+    if ($Build) { $argsForPackage += @($(if ($multi) { '-BuildRoot' } else { '-Build' }), $Build) }
     if ($Stage1Exe) { $argsForPackage += @('-Stage1Exe', $Stage1Exe) }
     if ($SkipBuild) { $argsForPackage += '-SkipBuild' }
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'internal/package_stage2.ps1') @argsForPackage
