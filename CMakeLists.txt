@@ -138,6 +138,7 @@ foreach(_source include/ecm/storage/results/publication.h src/ecm/storage/result
                 src/ecm/service/stage1/legacy_execution.h src/ecm/platform/generated/configuration_defaults.h
                 src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp
                 src/ecm/backend/cuda/stage1/montgomery/host_math.cpp src/ecm/backend/cuda/stage1/montgomery/host_io.cpp
+                src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp
                 src/ecm/storage/save/ecm_edwards_io.h include/ecm/platform/program_version.h
                 include/ecm/platform/stage1_progress.h)
     file(SHA256 "${CMAKE_SOURCE_DIR}/${_source}" _stage1_hash)

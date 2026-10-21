@@ -52,7 +52,7 @@ task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/confi
 
 [stage1_progress.h](../../include/ecm/platform/stage1_progress.h)只声明共享 GPU screen 格式及 SpeedWindow 方法；实现位于 [stage1_progress.cpp](../../src/ecm/platform/stage1_progress.cpp)。50 样本窗口的布局、统计公式与 stdout 协议保持，不新增 Pimpl 分配。CUDA 包含声明；修改格式或速度统计函数体只需重编对应 CXX。Montgomery 对该头的多余显式 OBJECT_DEPENDS 已移除，真实 include 依赖仍正常校验。
 
-共享选择、主机准备、CPU/GPU host workflow、Montgomery 构造/codec 和结果发布已提取；队列已提取；环境策略、tune 与私有执行合同仍在收口，不能据此推定全部 P4 已完成。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
+共享选择、主机准备、CPU/GPU host workflow、Montgomery 构造/codec 和结果发布已提取；队列已提取；Montgomery 环境策略已提取，私有执行合同与应用 PARI 仍在收尾，不能据此推定全部 P4 已完成。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
 
 ## CPU 执行与共享主机准备
 
@@ -173,3 +173,9 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 使用和已测最佳范围见 [Stage1 使用](../usage/STAGE1.md)、[性能](../performance/STAGE1.md)。
 
 完整数学见 [Montgomery / Suyama / PRAC](../reference/ECM_MONTGOMERY_MATH.md)、[Edwards](../reference/ECM_EDWARDS_MATH.md) 和[参数化](../reference/ECM_PARAMETERIZATIONS.md)。
+
+## Montgomery 环境与诊断策略
+
+[host_policy.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp)在普通 CXX 实现环境选项、PRAC 策略、计划缓存选择、切片目标、采样和窗口解析；读取仍在原执行位置。私有数据声明不包含 SDK，域编号在 [domain.h](../../src/ecm/backend/cuda/stage1/montgomery/prac/domain.h)集中维护，与实际设备分派共享。修改解析正文不重新编译 CUDA 协作；修改实际域值/数据合同仍使设备依赖失效。
+
+诊断窗口的 GPU export、同步与回读在 CUDA，CSV 编码在 host_io.cpp。窗口部分乘积始终失败返回，不提交 NF/save 或内部完成结果。resident/PRAC 的资源、实际 dispatch、事件和定时循环继续属于 CUDA 模块，不要求脱离 CUDA。

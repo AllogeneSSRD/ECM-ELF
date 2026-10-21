@@ -28,6 +28,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include "api.h"
 #include "host_math.h"
 #include "host_io.h"
+#include "host_policy.h"
 using namespace ecm_cuda_mont_host;
 
 #include <cassert>
@@ -293,19 +294,9 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
              unsigned long checkpoint_interval_ms,
              float *gputime, int verbose, int gpu_param, uint64_t B1, uint32_t torsion)
 {
-  const char *algorithm = getenv("ECM_GPU_STAGE1_ALGO");
-  const char *window = getenv("ECM_PRAC_WINDOW");
-  const char *variant = getenv("ECM_PRAC_VARIANT");
-  if (((window && *window) || (variant && *variant && strcmp(variant, "baseline") != 0)) &&
-      (!algorithm || strcmp(algorithm, "prac") != 0)) {
-    outputf(OUTPUT_ERROR, "GPU: PRAC window/variant requires ECM_GPU_STAGE1_ALGO=prac\n");
-    return ECM_ERROR;
-  }
-  if (algorithm && *algorithm && strcmp(algorithm, "ladder") != 0) {
-    if (strcmp(algorithm, "prac") != 0 && strcmp(algorithm, "resident") != 0) {
-      outputf(OUTPUT_ERROR, "GPU: ECM_GPU_STAGE1_ALGO must be ladder, resident or prac\n");
-      return ECM_ERROR;
-    }
+  const char *algorithm = stage1_algorithm();
+  if (!algorithm) return ECM_ERROR;
+  if (strcmp(algorithm, "ladder") != 0) {
 #if ECM_CUDA_ENABLE_PRAC
     if (gpu_param != 0 || ECM_MERS_FOLD) {
       outputf(OUTPUT_ERROR, "GPU: resident/PRAC requires param0 and a Montgomery build\n");
@@ -416,8 +407,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   /* Result / status variable used throughout the function */
   int youpi = ECM_NO_FACTOR_FOUND;
 
-  const char *dump_env = getenv("ECM_GPU_DUMP");
-  uint32_t dump_enable = (dump_env != NULL && atoi(dump_env) != 0) ? 1u : 0u;
+  uint32_t dump_enable = gpu_dump_enabled() ? 1u : 0u;
   FILE *dump_file = NULL;
   uint32_t *dump_host = NULL;
   const char *dump_filename = "dump.csv";

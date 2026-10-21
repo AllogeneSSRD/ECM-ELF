@@ -36,50 +36,10 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         if (!curves || !sigma || *sigma > UINT64_MAX - curves || B1 < 2 || B1 > UINT32_MAX ||
             (torsion != 1 && torsion != 12)) throw std::runtime_error("invalid resident Stage1 parameters");
         uint32_t bits = 0, tpi = 0;
-        int mode = prac ? ECM_DOMAIN_PRAC : ECM_DOMAIN_LADDER;
-        if (prac) if (const char *cap = getenv("ECM_PRAC_REG_TARGET")) {
-            if (strcmp(cap, "255") == 0) mode = ECM_DOMAIN_PRAC_NATURAL;
-            else if (strcmp(cap, "168") == 0) mode = ECM_DOMAIN_PRAC_168;
-            else if (strcmp(cap, "128") == 0) mode = ECM_DOMAIN_PRAC_SINGLE_COMPACT_128;
-            else if (*cap && strcmp(cap, "0") != 0) throw std::runtime_error("ECM_PRAC_REG_TARGET must be 0, 128, 168 or 255");
-        }
-        bool compact = false, outlined = false, single_add = false, single_compact = false;
-        if (const char *variant = getenv("ECM_PRAC_VARIANT")) {
-            if (strcmp(variant, "compact") == 0) compact = true;
-            else if (strcmp(variant, "outline-add") == 0) outlined = true;
-            else if (strcmp(variant, "single-add") == 0) single_add = true;
-            else if (strcmp(variant, "single-compact") == 0) single_add = single_compact = true;
-            else if (*variant && strcmp(variant, "baseline") != 0)
-                throw std::runtime_error("ECM_PRAC_VARIANT must be baseline, compact, outline-add, single-add or single-compact");
-        }
-        if (mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT_128 && !single_compact)
-            throw std::runtime_error("128-register policy requires single-compact variant");
-        if (single_add) {
-            if (!prac) throw std::runtime_error("single-add variant requires PRAC");
-            if (mode == ECM_DOMAIN_PRAC_NATURAL) mode = single_compact ? ECM_DOMAIN_PRAC_SINGLE_COMPACT : ECM_DOMAIN_PRAC_SINGLE_ADD;
-            else if (mode == ECM_DOMAIN_PRAC_168) mode = single_compact ? ECM_DOMAIN_PRAC_SINGLE_COMPACT_168 : ECM_DOMAIN_PRAC_SINGLE_ADD_168;
-            else if (mode == ECM_DOMAIN_PRAC_SINGLE_COMPACT_128 && single_compact) { /* Already selected. */ }
-            else throw std::runtime_error("single-add variant requires register policy 255 or 168");
-        }
-        if (outlined) {
-            if (!prac) throw std::runtime_error("outline-add variant requires PRAC");
-            if (mode == ECM_DOMAIN_PRAC_NATURAL) mode = ECM_DOMAIN_PRAC_OUTLINE_ADD;
-            else if (mode == ECM_DOMAIN_PRAC_168) mode = ECM_DOMAIN_PRAC_OUTLINE_ADD_168;
-            else throw std::runtime_error("outline-add variant requires register policy 255 or 168");
-        }
-        if (compact) {
-            if (!prac) throw std::runtime_error("compact variant requires PRAC");
-            if (mode == ECM_DOMAIN_PRAC_NATURAL) mode = ECM_DOMAIN_PRAC_COMPACT;
-            else if (mode == ECM_DOMAIN_PRAC_168) mode = ECM_DOMAIN_PRAC_COMPACT_168;
-            else throw std::runtime_error("compact variant requires register policy 255 or 168");
-        }
-        uint32_t requested_tpi = 0;
-        if (const char *env = getenv("ECM_STAGE1_TPI")) {
-            if (!*env || strcmp(env, "0") == 0) requested_tpi = 0;
-            else if (strcmp(env, "16") == 0) requested_tpi = 16;
-            else if (strcmp(env, "32") == 0) requested_tpi = 32;
-            else throw std::runtime_error("ECM_STAGE1_TPI must be 0, 16 or 32");
-        }
+        const auto policy=read_prac_policy(prac);
+        int mode=policy.mode;
+        const bool compact=policy.compact,outlined=policy.outlined,single_add=policy.single_add,single_compact=policy.single_compact;
+        const uint32_t requested_tpi=policy.requested_tpi;
         std::vector<uint32_t> tiers; ecm_build_tier_list_param0(tiers);
         const size_t nbits = mpz_sizeinbase(N, 2);
         cgbn_stage1_kernel_fn kernel = nullptr;
@@ -90,30 +50,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
             if (kernel) { bits = tier; break; }
         }
         if (!kernel) throw std::runtime_error("no resident/PRAC kernel covers N in this build");
-        const char *constants = "none";
-        if (const char *env = getenv("ECM_PRAC_CONSTANTS")) {
-            if (!*env || strcmp(env, "none") == 0) { /* Existing policy. */ }
-            else if (strcmp(env, "runtime") == 0 || strcmp(env, "np0") == 0 || strcmp(env, "m4423") == 0)
-                constants = env;
-            else throw std::runtime_error("ECM_PRAC_CONSTANTS must be none, runtime, np0 or m4423");
-        }
-        if (strcmp(constants, "none") != 0) {
-            if (!prac || mode != ECM_DOMAIN_PRAC_SINGLE_COMPACT_168)
-                throw std::runtime_error("PRAC constants require single-compact variant and register policy 168");
-            if (bits != 4608 || requested_tpi == 32)
-                throw std::runtime_error("PRAC constants require the selected 4608/TPI16 tier");
-            if (strcmp(constants, "m4423") == 0) {
-                mpz_t next; mpz_init(next); mpz_add_ui(next, N, 1);
-                const bool exact = nbits == 4423 && mpz_popcount(next) == 1;
-                mpz_clear(next);
-                if (!exact) throw std::runtime_error("PRAC m4423 constants require N exactly 2^4423-1");
-                mode = ECM_DOMAIN_PRAC_CONSTANT_M4423;
-            } else if (strcmp(constants, "np0") == 0) {
-                if (uint32_t(mpz_get_ui(N)) != 0xffffffffu)
-                    throw std::runtime_error("PRAC np0 constants require N mod 2^32 = 0xffffffff");
-                mode = ECM_DOMAIN_PRAC_CONSTANT_NP0;
-            } else mode = ECM_DOMAIN_PRAC_CONSTANT_RUNTIME;
-        }
+        const char *constants=prac_constants_policy(prac,mode,bits,requested_tpi,N,nbits);
         kernel = cgbn_stage1_domain_dispatch(bits, &tpi, mode, requested_tpi);
         if (!kernel) throw std::runtime_error("requested Stage1 TPI/register policy is unavailable for the selected tier");
         if (verify_size_of_n(N, bits) != ECM_NO_FACTOR_FOUND) return ECM_ERROR;
@@ -121,8 +58,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         if (prac) {
             outputf(OUTPUT_ALWAYS, "GPU: preparing Prime95 PRAC plan (B1=%llu, t=%u, search=7)\n",
                     (unsigned long long)B1, torsion);
-            std::string cache = ecm_exp_cache_get_dir();
-            if (const char *env = getenv("ECM_PRAC_PLAN_CACHE")) cache = env;
+            const auto cache=prac_plan_cache();
             plan = ecm_prac_build(uint32_t(B1), torsion, s, cache);
             outputf(OUTPUT_ALWAYS, "GPU: PRAC plan %s; work=%llu\n", plan.status.c_str(),
                     (unsigned long long)plan.work);
@@ -188,17 +124,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         if (window.enabled()) return prac_window_run(window, plan, gpu, kernel, s_bits,
             bits, tpi, requested_tpi, curves, *sigma, B1, np0, blocks, data, gputime,
             mode == ECM_DOMAIN_PRAC_CONSTANT_M4423 ? 5 : 6);
-        double target_ms = 100;
-        if (prac) {
-            if (const char *value = getenv("ECM_PRAC_TARGET_MS")) {
-                char *end = nullptr;
-                target_ms = std::strtod(value, &end);
-                if (end == value || *end || !std::isfinite(target_ms) || target_ms < 10 || target_ms > 500)
-                    throw std::runtime_error("ECM_PRAC_TARGET_MS must be finite and in [10,500]");
-            }
-            outputf(OUTPUT_ALWAYS, "GPU: PRAC slice target=%.3f ms, adaptive bounds=%.3f..%.3f ms\n",
-                target_ms, target_ms * 0.8, target_ms * 1.2);
-        }
+        const double target_ms=prac_target_ms(prac);
         uint64_t completed_work = 0;
         if (prac) for (uint64_t i = 0; i < h.next; ++i) completed_work += uint64_t(plan.primes[size_t(i)].work) * plan.primes[size_t(i)].repetitions;
         else completed_work = h.next - 1;
@@ -206,11 +132,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         uint64_t chunk = prac ? 16 : 200;
         double ring[50]{}; size_t ring_used = 0, ring_next = 0; double ring_sum = 0;
         double kernel_seconds = 0, last_print = -1;
-        double sample_limit = 0;
-        if (const char *env = getenv("ECM_GPU_STAGE1_SAMPLE_SECONDS")) {
-            sample_limit = atof(env);
-            if (!(sample_limit >= 0 && sample_limit < 1e9)) throw std::runtime_error("invalid sample limit");
-        }
+        const double sample_limit=prac_sample_limit();
         while (h.next < total) {
             uint64_t length = std::min(chunk, total - h.next), work = 0;
             if (prac) for (uint64_t i = h.next; i < h.next + length; ++i) work += uint64_t(plan.primes[size_t(i)].work) * plan.primes[size_t(i)].repetitions;

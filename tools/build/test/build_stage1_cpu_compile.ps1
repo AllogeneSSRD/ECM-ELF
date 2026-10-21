@@ -22,7 +22,8 @@ if($IncludeGpuHost){
 }
 if($IncludeMontgomeryHost){
     $sources+=@('src/ecm/backend/cuda/stage1/montgomery/host_math.cpp',
-        'src/ecm/backend/cuda/stage1/montgomery/host_io.cpp')
+        'src/ecm/backend/cuda/stage1/montgomery/host_io.cpp',
+        'src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp')
 }
 if($IncludeQueueHost){
     $sources+=@('src/ecm/application/cli/stage1_input.cpp',

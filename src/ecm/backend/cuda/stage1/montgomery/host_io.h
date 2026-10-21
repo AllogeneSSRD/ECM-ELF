@@ -41,4 +41,7 @@ void dump_curve_state_csv(FILE *,const char *,int,uint64_t,uint64_t,uint32_t,uin
 bool resident_checkpoint_write(const std::string &,ResidentCheckpoint,const std::vector<uint32_t> &);
 bool resident_checkpoint_restore(const std::string &,ResidentCheckpoint &,std::vector<uint32_t> &,uint64_t *,bool);
 #endif
+struct PracWindow;
+void write_prac_window_csv(const PracWindow &,uint64_t,uint64_t,uint64_t,uint32_t,uint32_t,const std::vector<uint32_t> &);
+
 }

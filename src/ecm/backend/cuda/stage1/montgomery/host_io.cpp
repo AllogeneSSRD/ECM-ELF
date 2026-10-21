@@ -19,6 +19,8 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 */
 
 #include "host_io.h"
+#include "host_policy.h"
+#include <stdexcept>
 #include "../../runtime/cuda_ecm_shim.h"
 #include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "ecm/platform/stage1_progress.h"
@@ -224,4 +226,24 @@ bool resident_checkpoint_restore(const std::string &path,ResidentCheckpoint &h,
     return resumed;
 }
 #endif
+void write_prac_window_csv(const PracWindow &w,uint64_t work,uint64_t b1,uint64_t sigma,uint32_t curves,uint32_t bits,const std::vector<uint32_t> &data) {
+        FILE *dump = fopen("window_q.csv", "wb");
+        if (!dump) throw std::runtime_error("cannot write PRAC window diagnostic CSV");
+        bool failed = fprintf(dump, "kind,b1,first,count,work,sigma,x,z\n") < 0;
+        size_t limbs = bits / 32;
+        for (uint32_t i = 0; i < curves; ++i) {
+            failed |= fprintf(dump, "partial_product,%llu,%llu,%llu,%llu,%llu",
+                (unsigned long long)b1, (unsigned long long)w.first, (unsigned long long)w.count,
+                (unsigned long long)work, (unsigned long long)(sigma + i)) < 0;
+            for (size_t word : {size_t(3), size_t(4)}) {
+                failed |= fputs(",0x", dump) < 0;
+                const uint32_t *field = data.data() + (7 * size_t(i) + word) * limbs;
+                for (size_t j = limbs; j > 0; --j) failed |= fprintf(dump, "%08x", field[j - 1]) < 0;
+            }
+            failed |= fputc('\n', dump) == EOF;
+        }
+        failed |= fclose(dump) != 0;
+        if (failed) throw std::runtime_error("PRAC window diagnostic CSV write failed");
+}
+
 } // namespace ecm_cuda_mont_host

@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3 完成 CUDA/主机/OpenCL 家族归位，P4a–P4g 已逐步落实，P4 收尾及 P5–P7 继续实施。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3 完成 CUDA/主机/OpenCL 家族归位，P4a–P4h 已逐步落实，P4 收尾及 P5–P7 继续实施。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -850,6 +850,17 @@ task 中直接取得 SubmissionLock、prepare_internal_ledger 和 read_submissio
 - [27 项运行](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/usability/summary.json)、[5+5 基线](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/runtime/summary.json)、[OpenCL 172 资源/2 缓存命中](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/opencl_resources/result.json)通过。CPU Stage2 互操作使用已冻结的 0.45.14 worker，本轮未重建它。
 
 首次主程序编译暴露新增 include 留下中段 BOM 的编辑错误，已保留原始开头 BOM 并删除中段重复项；独立队列 fixture 补齐应用通常提前创建的同步目录，未修改生产文件机制。失败证据与修复记录均保留。[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/qualification.json)冻结三个 worker；31+2 个 CUDA 对象未变，重复构建 0 CXX/0 CU/0 link。后续继续环境/tune 与私有执行合同审查，P4 尚未整体结束；未运行 release、性能采样或全位宽终验。
+
+### P4h：Montgomery 环境策略与窗口输出已隔离
+
+对应程序版本 `0.45.16`。[host_policy.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp)集中算法、PRAC register/variant/TPI/constants、计划缓存目录、切片目标、采样和窗口参数解析；在原调用位置读取环境，不提前缓存或改变优先级/错误顺序。host_policy.h 是后端私有数据/声明，domain.h 只收纳原 launch/constants 两处的相同枚举值，不引入 CUDA 类型。真实 kernel 选择、资源、启动、同步与回读仍留 CUDA。窗口诊断 CSV 写入归现有 host_io.cpp，GPU export → 同步 → 回读 → CSV 顺序保持。
+
+- [源码对照](../../data/experiments/main_flow_refactor_implementation_20261021/p4h/source_contract_02/result.json)：8 个策略函数和 ladder/resident 完整主循环、窗口导出顺序及域值保持。设备闭包新增一个纯枚举头，4 份数学正文和 21+7 实例组未变。
+- [主机比较](../../data/experiments/main_flow_refactor_implementation_20261021/p4h/policy_contract.json)：2,656 组输入与从冻结版本提取的 oracle 比较返回值、异常和诊断文本。窗口/数值溢出、无效组合、特殊常量条件均覆盖；10 个主机 CPP 的真实依赖无 CUDA SDK。fixture 缓存 getter 的返回类型声明已修正，首次编译失败证据保留。
+- [27 项运行](../../data/experiments/main_flow_refactor_implementation_20261021/p4h/usability/summary.json)、[5+5 基线](../../data/experiments/main_flow_refactor_implementation_20261021/p4h/runtime/summary.json)、[OpenCL 172 资源/2 缓存](../../data/experiments/main_flow_refactor_implementation_20261021/p4h/opencl_resources/result.json)通过。
+- 独立 local/384/PRAC ON 构建实际编译可选协作路径；[resident](../../data/experiments/main_flow_refactor_implementation_20261021/p4h/resident_runtime/summary.json)和[PRAC](../../data/experiments/main_flow_refactor_implementation_20261021/p4h/prac_runtime/summary.json)均通过完成点以及停止/损坏接纳/恢复检查。[窗口 CSV](../../data/experiments/main_flow_refactor_implementation_20261021/p4h/prac_window/result.json)验证真实 GPU 导出/回读与两条 CSV，部分乘积未发布为完整 Stage1。此资格仅为实测 384 档、baseline 策略和 GPU1，不外推其他 TPI/variant/constants 或性能。
+
+首次默认 OFF 构建发现 CSV 提取后缺少直接 stdexcept 声明，补齐后通过；既有 ON 编译独立覆盖仍通过。默认 Stage1 仅 adapter 合法重编，其他 30 个及 Stage2 两个 CUDA 对象不变；重复构建 0 CXX/0 CU/0 link。[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p4h/qualification.json)冻结三个默认 worker 与可选 PRAC worker。CPU Stage2 互操作沿用 0.45.14。后续 P4 收尾为私有执行合同与应用 PARI 归位；未运行 release、性能或完整位宽终验。
 
 ## 首先调整构建复用与输出隔离
 
@@ -1422,7 +1433,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0–P3 完成，P4a–P4g 分步完成，P4 收尾及 P5–P7 未完成，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0–P3 完成，P4a–P4h 分步完成，P4 收尾及 P5–P7 未完成，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 

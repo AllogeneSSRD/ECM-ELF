@@ -1,7 +1,9 @@
 # Compile the real host task module and file collaborators; no CUDA compiler/SDK.
 param([Parameter(Mandatory=$true)][string]$WorkerBuild,
       [Parameter(Mandatory=$true)][string]$Build,
-      [switch]$QueueWorkflow)
+      [switch]$QueueWorkflow,
+      [switch]$MontgomeryPolicy,
+      [string]$PolicyBaseline='')
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
@@ -21,15 +23,21 @@ if($QueueWorkflow){
         'src/ecm/storage/queue/p95_worktodo.cpp','src/ecm/storage/transfer/p95_transfer.cpp',
         'src/ecm/storage/transfer/ecm_stage2_transfer.cpp')
 }
+if($MontgomeryPolicy){
+    if($QueueWorkflow -or -not (Test-Path -LiteralPath (Join-Path $PolicyBaseline 'baseline_policy.inc'))){throw 'Supply only MontgomeryPolicy and its frozen policy oracle directory'}
+    $PolicyBaseline=(Resolve-Path -LiteralPath $PolicyBaseline).Path
+    $sources=@('src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp')
+}
 foreach($source in $sources){if($source -notin $production){throw "Missing production collaborator: $source"}}
-$fixture=if($QueueWorkflow){'stage1_queue_contract'}else{'stage1_task_contract'}
+$fixture=if($MontgomeryPolicy){'stage1_policy_contract'}elseif($QueueWorkflow){'stage1_queue_contract'}else{'stage1_task_contract'}
 $sources+=@('tools/test/'+$fixture+'.cpp')
 New-Item -ItemType Directory -Path $buildPath|Out-Null
 $objects=@();$commands=@();$hashes=[ordered]@{}
 foreach($source in $sources){
     $name=$source.Replace('/','_')+'.obj';$object=Join-Path $buildPath $name;$objects+=('"'+$object+'"')
     $commands+=('"'+$manifest.host_compiler+'" /nologo /TP /std:c++17 /O2 /EHsc /MD /utf-8 /wd4819'+
-        ' /I "'+$repo+'/include" /I "'+$repo+'/src" /I "'+$repo+'/src" /I "'+$manifest.gmp_root+'/include"'+
+        ' /I "'+$repo+'/include" /I "'+$repo+'/src" /I "'+$manifest.gmp_root+'/include"'+
+        $(if($MontgomeryPolicy){' /I "'+$PolicyBaseline+'"'}else{''})+
         ' /c "'+$source+'" /Fo"'+$object+'" /sourceDependencies "'+$object+'.deps.json"')
     $commands+='if errorlevel 1 exit /b 1'
     $hashes[$source]=(Get-FileHash -LiteralPath (Join-Path $repo $source)).Hash
