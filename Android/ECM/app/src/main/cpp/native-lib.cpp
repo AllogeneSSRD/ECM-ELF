@@ -10,7 +10,7 @@
 #include "jni_utf8.h"
 #include "opencl_program_cache.h"
 #include "opencl_runtime.h"
-#include "opencl_ecm_path_registry.h"
+#include "../../../../../../src/ecm/backend/opencl/arithmetic/path_registry.h"
 
 #include "../../../../../../src/ecm/storage/checkpoint/ecm_checkpoint.h"
 

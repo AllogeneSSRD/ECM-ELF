@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT_DIR = ROOT / "kernels/opencl/special_mult"
+OUT_DIR = ROOT / "src/ecm/backend/opencl/resources/special_mult"
 
 WIDTHS = (
     (192, 6),

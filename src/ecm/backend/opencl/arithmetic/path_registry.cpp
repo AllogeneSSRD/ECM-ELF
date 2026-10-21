@@ -1,4 +1,4 @@
-#include "opencl_ecm_path_registry.h"
+#include "path_registry.h"
 
 #include <algorithm>
 #include <cassert>

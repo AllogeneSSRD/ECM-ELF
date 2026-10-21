@@ -1,4 +1,4 @@
-#include "cgbn_opencl.h"
+#include "ecm/backend/opencl/runtime/cgbn_opencl.h"
 #include "ecm/application/configuration/runtime.h"
 
 #include <CL/cl.h>

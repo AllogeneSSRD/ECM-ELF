@@ -1,16 +1,16 @@
 // OpenCL ECM Stage 1 host (mirrors test/cgbn_stage1.cu)
 
-#include "ecm/service/execution/legacy/cgbn_stage1.h"
-#include "ecm/service/execution/legacy/ecm.h"
-#include "cgbn_opencl.h"
-#include "ecm/storage/checkpoint/ecm_checkpoint.h"
-#include "ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
-#include "opencl_ecm_debug_utils.h"
-#include "ecm/platform/logging.h"
-#include "opencl_ecm_mont.h"
-#include "opencl_ecm_path_registry.h"
-#include "ecm/application/configuration/runtime.h"
-#include "opencl_ecm_selftest.h"
+#include "../../../../service/execution/legacy/cgbn_stage1.h"
+#include "../../../../service/execution/legacy/ecm.h"
+#include "../../runtime/cgbn_opencl.h"
+#include "../../../../storage/checkpoint/ecm_checkpoint.h"
+#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "debug_utils.h"
+#include "../../../../../../include/ecm/platform/logging.h"
+#include "montgomery.h"
+#include "../../arithmetic/path_registry.h"
+#include "../../../../../../include/ecm/application/configuration/runtime.h"
+#include "../../diagnostics/selftest.h"
 
 #include <CL/cl.h>
 #include <gmp.h>
@@ -37,7 +37,7 @@
 #include <ctime>
 
 // Progress bar (indicators header-only library)
-#include "indicators/indicators.hpp"
+#include "../../../../../../include/indicators/indicators.hpp"
 
 #define CARRY_BITS ECM_STAGE1_MONT_CARRY_BITS
 

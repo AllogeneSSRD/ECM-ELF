@@ -1,5 +1,5 @@
-#include "opencl_ecm_mont.h"
-#include "ecm/platform/logging.h"
+#include "montgomery.h"
+#include "../../../../../../include/ecm/platform/logging.h"
 
 #include <cstdlib>
 

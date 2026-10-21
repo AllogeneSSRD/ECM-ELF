@@ -22,8 +22,18 @@ OpenCL 编译器对整数乘法和内联汇编的生成方式可能随驱动/设
 
 ## 代码入口
 
-- [opencl_ecm_path_registry.h](../../src/opencl_ecm_path_registry.h)、[实现](../../src/opencl_ecm_path_registry.cpp)：路径元信息与选择。
+- [opencl_ecm_path_registry.h](../../src/ecm/backend/opencl/arithmetic/path_registry.h)、[实现](../../src/ecm/backend/opencl/arithmetic/path_registry.cpp)：路径元信息与选择。
 - [opencl_ecm_runtime_config.cpp](../../src/ecm/application/configuration/runtime.cpp)：设备和运行配置。
-- [opencl_ecm_stage1.cpp](../../src/opencl_ecm_stage1.cpp)、[impl_opencl.cpp](../../kernels/opencl/impl_opencl.cpp)：主机/内核接线。
-- [kernels/opencl](../../kernels/opencl/)：公共接口、算子与 Stage1 kernel。
-- [opencl_ecm_selftest.cpp](../../src/opencl_ecm_selftest.cpp)、[opencl_mont_isa_export.cpp](../../src/opencl_mont_isa_export.cpp)：验证和 ISA 入口。
+- [opencl_ecm_stage1.cpp](../../src/ecm/backend/opencl/stage1/montgomery/engine.cpp)、[impl_opencl.cpp](../../src/ecm/backend/opencl/runtime/runtime.cpp)：主机/内核接线。
+- [生产资源](../../src/ecm/backend/opencl/resources/)：公共原语、算子与 Stage1 kernel；纯工具资源仍在 kernels/opencl/bench。
+- [opencl_ecm_selftest.cpp](../../src/ecm/backend/opencl/diagnostics/selftest.cpp)、[opencl_mont_isa_export.cpp](../../src/opencl_mont_isa_export.cpp)：验证和 ISA 入口。
+
+## 资源与 local 构建
+
+桌面入口为 [build_opencl_local.ps1](../../tools/build/build_opencl_local.ps1)，默认输出到 build_opencl_local/stage1/&lt;profile-key&gt;。公开 include 只承载共享主机接口；OpenCL 的 context/program/cache、设备枚举和曲线实现均为 src/ecm/backend/opencl 内的私有实现。
+
+local 构建以普通 CXX 编译，关闭 CUDA、GUI、工具及独立 CPU Stage2 目标；profile 核对工具链、依赖与用途，拒绝不兼容或未标记的已有目录。CMake 将生产资源同步到叶目录 opencl_resources，修改资源不依赖 CXX 对象重编；build_manifest.json 记录程序及资源摘要。该入口不生成 release 包。
+
+资源加载保留显式 --kernel-root、当前目录相对查找及编译默认根的既有优先关系。默认根指向构建叶目录随附资源；不含默认宏的实现使用 src/ecm/backend/opencl/resources 回退。生产自检源在 diagnostics/mont.cl；旧逻辑名称 bench/mont.cl 先按旧方式查找，缺失时再加载 diagnostics/mont.cl，因此已有自定义根仍可使用原布局。实际算术、源拼装次序和设备/驱动/完整源/编译选项的缓存身份保持。
+
+Android CMake 消费同一主机源码，Gradle 从新生产根和原纯 bench 根组合资源，保留 assets/kernels/opencl 逻辑根。本轮只核对其路径合同，未进行 Android 实体构建或设备验收。当前没有 OpenCL release 打包入口，也未声明整个输出目录可任意移动后自动定位资源；可使用显式 --kernel-root 指定部署位置。

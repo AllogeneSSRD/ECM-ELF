@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cgbn_opencl.h"
+#include "../runtime/cgbn_opencl.h"
 
 #include <gmp.h>
 

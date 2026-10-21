@@ -16,9 +16,9 @@ def _collapse_blanks(s: str) -> str:
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ADD_MOD = ROOT / "kernels/opencl/add_mod"
-SUB_MOD = ROOT / "kernels/opencl/sub_mod"
-COMMON = ROOT / "kernels/opencl/common"
+ADD_MOD = ROOT / "src/ecm/backend/opencl/resources/add_mod"
+SUB_MOD = ROOT / "src/ecm/backend/opencl/resources/sub_mod"
+COMMON = ROOT / "src/ecm/backend/opencl/resources/common"
 
 # ── Threshold: limbs >= this value use loop-of-block16 instead of monolithic ASM
 ASM_LOOP_THRESHOLD = 48  # 1536-bit and above

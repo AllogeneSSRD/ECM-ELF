@@ -33,7 +33,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/CL"
         "${MPA_ROOT}/include"
         "${MPA_ROOT}/src"
-        "${MPA_ROOT}/kernels/opencl")
+        "${MPA_ROOT}/src/ecm/backend/opencl/runtime")
 
 set(_ECM_GMP_HEADER "${ECM_ANDROID_GMP_ROOT}/include/gmp.h")
 set(_ECM_GMP_LIB "${ECM_ANDROID_GMP_ROOT}/lib/libgmp.a")
@@ -44,20 +44,20 @@ if(ECM_ANDROID_GMP_ROOT AND EXISTS "${_ECM_GMP_HEADER}" AND EXISTS "${_ECM_GMP_L
     target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${ECM_ANDROID_GMP_ROOT}/include")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
             "${MPA_ROOT}/src/ecm/application/configuration/legacy/ecm_expr.cpp"
-            "${MPA_ROOT}/src/opencl_ecm_entry.cpp"
-            "${MPA_ROOT}/src/opencl_ecm_stage1.cpp"
+            "${MPA_ROOT}/src/ecm/backend/opencl/stage1/montgomery/entry.cpp"
+            "${MPA_ROOT}/src/ecm/backend/opencl/stage1/montgomery/engine.cpp"
             "${MPA_ROOT}/src/ecm/service/stage1/ecm_gpu_common.cpp"
             "${MPA_ROOT}/src/ecm/service/execution/legacy/ecm_params_init.cpp"
             "${MPA_ROOT}/src/ecm/storage/checkpoint/ecm_checkpoint.cpp"
             "${MPA_ROOT}/src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp"
             "${MPA_ROOT}/src/ecm/storage/save/ecm_save.cpp"
-            "${MPA_ROOT}/src/opencl_ecm_debug_utils.cpp"
-            "${MPA_ROOT}/src/opencl_ecm_mont.cpp"
-            "${MPA_ROOT}/src/opencl_ecm_limb24.cpp"
-            "${MPA_ROOT}/src/opencl_ecm_path_registry.cpp"
+            "${MPA_ROOT}/src/ecm/backend/opencl/stage1/montgomery/debug_utils.cpp"
+            "${MPA_ROOT}/src/ecm/backend/opencl/stage1/montgomery/montgomery.cpp"
+            "${MPA_ROOT}/src/ecm/backend/opencl/arithmetic/limb24.cpp"
+            "${MPA_ROOT}/src/ecm/backend/opencl/arithmetic/path_registry.cpp"
             "${MPA_ROOT}/src/ecm/application/configuration/runtime.cpp"
-            "${MPA_ROOT}/src/opencl_ecm_selftest.cpp"
-            "${MPA_ROOT}/kernels/opencl/impl_opencl.cpp")
+            "${MPA_ROOT}/src/ecm/backend/opencl/diagnostics/selftest.cpp"
+            "${MPA_ROOT}/src/ecm/backend/opencl/runtime/runtime.cpp")
     target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE "${_ECM_GMP_LIB}")
 else()
     message(STATUS "ECM Android: GMP not found (header=${_ECM_GMP_HEADER})")

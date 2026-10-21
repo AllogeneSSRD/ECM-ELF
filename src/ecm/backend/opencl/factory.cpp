@@ -4,14 +4,14 @@
    OpenCL host functions, so the shared driver behaves exactly as before.
 */
 
-#include "ecm/service/execution/legacy_gpu.h"
-#include "ecm/service/execution/legacy/ecm.h"                    /* ECM_ERROR */
+#include "../../../../include/ecm/service/execution/legacy_gpu.h"
+#include "../../service/execution/legacy/ecm.h"                    /* ECM_ERROR */
 
-#include "ecm/service/execution/legacy/cgbn_stage1.h"            /* gpu_prepare_opencl */
-#include "cl_probe.h"              /* configureOpenclDeviceIndex */
-#include "opencl_ecm_entry.h"       /* opencl_ecm_stage1 */
-#include "opencl_ecm_path_registry.h" /* opencl_ecm_print_available_kernels */
-#include "ecm/platform/logging.h"         /* ecm_ts_fprintf */
+#include "../../service/execution/legacy/cgbn_stage1.h"            /* gpu_prepare_opencl */
+#include "runtime/device.h"              /* configureOpenclDeviceIndex */
+#include "stage1/montgomery/entry.h"       /* opencl_ecm_stage1 */
+#include "arithmetic/path_registry.h" /* opencl_ecm_print_available_kernels */
+#include "../../../../include/ecm/platform/logging.h"         /* ecm_ts_fprintf */
 
 #include <string.h>                 /* memset */
 

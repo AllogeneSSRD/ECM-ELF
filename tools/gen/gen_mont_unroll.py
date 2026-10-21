@@ -11,7 +11,7 @@ WIDTHS = [(192,6,6),(256,8,8),(384,12,12),(512,16,16),(768,24,24),(1024,32,32),
          (1536,48,48),(2048,64,64),(2560,80,80),(3072,96,96),(3584,112,112),
          (4096,128,128),(4608,144,144),(5120,160,160),(5632,176,176),
          (6144,192,192),(6656,208,208),(7168,224,224),(7680,240,240),(8192,256,256)]
-ROOT = sys.argv[1] if len(sys.argv)>1 else "kernels/opencl/mont_mul"
+ROOT = sys.argv[1] if len(sys.argv)>1 else "src/ecm/backend/opencl/resources/mont_mul"
 
 def body(stem, A, C, manual):
     mul = f"mont_mul_{stem}"; sqr = f"mont_sqr_{stem}"

@@ -6,8 +6,8 @@ from pathlib import Path
 from mp_asm_block_gen import emit_add_block, emit_sub_block
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT_ADD = ROOT / "kernels/opencl/add_mod/asm_4096b.cl"
-OUT_SUB = ROOT / "kernels/opencl/sub_mod/asm_4096b.cl"
+OUT_ADD = ROOT / "src/ecm/backend/opencl/resources/add_mod/asm_4096b.cl"
+OUT_SUB = ROOT / "src/ecm/backend/opencl/resources/sub_mod/asm_4096b.cl"
 
 
 def asm_add_body() -> str:

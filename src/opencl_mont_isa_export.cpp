@@ -1,5 +1,5 @@
-#include "cl_probe.h"
-#include "cgbn_opencl.h"
+#include "ecm/backend/opencl/runtime/device.h"
+#include "ecm/backend/opencl/runtime/cgbn_opencl.h"
 
 #include <CL/cl.h>
 

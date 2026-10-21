@@ -81,13 +81,12 @@ endfunction()
 # OpenCL backend library (static) for tests and later integration.
 # Includes the runtime-config TU so every linker of this lib gets ecm_runtime_config().
 add_library(cgbn_opencl STATIC
-    kernels/opencl/impl_opencl.cpp
+    src/ecm/backend/opencl/runtime/runtime.cpp
     src/ecm/application/configuration/runtime.cpp
 )
 
 target_include_directories(cgbn_opencl PUBLIC
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/kernels/opencl
 )
 
 target_link_libraries(cgbn_opencl PRIVATE
@@ -95,11 +94,20 @@ target_link_libraries(cgbn_opencl PRIVATE
 )
 
 target_compile_definitions(cgbn_opencl PRIVATE
-    "ECM_KERNEL_ROOT_DEFAULT=\"${CMAKE_SOURCE_DIR}/kernels/opencl\""
+    "ECM_KERNEL_ROOT_DEFAULT=\"${CMAKE_BINARY_DIR}/opencl_resources\""
 )
 
+# Production resources accompany the local worker and are independent of CXX
+# objects. Keep the diagnostic Montgomery self-test in the same payload.
+add_custom_target(ecm_opencl_resources
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/src/ecm/backend/opencl/resources"
+        "${CMAKE_BINARY_DIR}/opencl_resources"
+    COMMENT "Syncing OpenCL production resources")
+add_dependencies(cgbn_opencl ecm_opencl_resources)
+
 add_library(opencl_ecm_entry STATIC
-    src/opencl_ecm_entry.cpp
+    src/ecm/backend/opencl/stage1/montgomery/entry.cpp
 )
 
 target_include_directories(opencl_ecm_entry PUBLIC
@@ -159,13 +167,13 @@ endfunction()
 
 add_executable(ecm
     ${ECM_STAGE1_COMMON_SOURCES}
-    src/opencl_ecm_stage1.cpp
-    src/opencl_backend_glue.cpp
-    src/cl_probe.cpp
-    src/opencl_ecm_debug_utils.cpp
-    src/opencl_ecm_mont.cpp
-    src/opencl_ecm_path_registry.cpp
-    src/opencl_ecm_selftest.cpp
+    src/ecm/backend/opencl/stage1/montgomery/engine.cpp
+    src/ecm/backend/opencl/factory.cpp
+    src/ecm/backend/opencl/runtime/device.cpp
+    src/ecm/backend/opencl/stage1/montgomery/debug_utils.cpp
+    src/ecm/backend/opencl/stage1/montgomery/montgomery.cpp
+    src/ecm/backend/opencl/arithmetic/path_registry.cpp
+    src/ecm/backend/opencl/diagnostics/selftest.cpp
 )
 ecm_stage1_identity_sidecar(ecm)
 
@@ -182,7 +190,6 @@ else()
 endif()
 
 target_include_directories(ecm PRIVATE
-    ${CMAKE_SOURCE_DIR}/kernels/opencl
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
 )
@@ -236,7 +243,7 @@ endif()
 #  Reuses the exact same driver / argument parsing / checkpoint / save / logging
 #  translation units as `ecm`, swapping only the GPU backend at link time via the
 #  ecm_backend_* seam (include/ecm/service/execution/legacy_gpu.h):
-#     - OpenCL: src/opencl_backend_glue.cpp  (in `ecm`)
+#     - OpenCL: src/ecm/backend/opencl/factory.cpp  (in `ecm`)
 #     - CUDA:   src/ecm/backend/cuda/factory.cpp  (here)
 #
 #  Auto-enabled when a CUDA toolkit is present; force off with -DECM_ENABLE_CUDA=OFF.
@@ -624,6 +631,15 @@ if(ECM_BUILD_TOOLS)
     add_subdirectory(tools/test)
     add_subdirectory(tools/disasm)
     add_subdirectory(tools/p95feeder)
+    add_custom_target(ecm_opencl_tool_resources
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/kernels/opencl/bench"
+            "${CMAKE_BINARY_DIR}/opencl_resources/bench"
+        COMMENT "Syncing OpenCL tool resources")
+    foreach(_tool opencl_ecm_addsub opencl_ecm_montsqr main
+                  opencl_asm_selftest opencl_mont_isa_export opencl_addsub_isa_export)
+        add_dependencies(${_tool} ecm_opencl_tool_resources)
+    endforeach()
     message(STATUS "tools: bench/test/disasm/p95feeder helper targets enabled (ECM_BUILD_TOOLS=ON)")
 else()
     message(STATUS "tools: helper targets disabled (ECM_BUILD_TOOLS=OFF)")

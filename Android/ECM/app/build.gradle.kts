@@ -81,11 +81,13 @@ android {
 
 val mpaRoot = rootProject.projectDir.parentFile.parentFile
 
-// All stage1 + bench + selftest kernels now live under kernels/opencl/ (bench/, common/,
-// mont_mul/, add_mod/, sub_mod/, special_mult/). A single sync mirrors the whole tree into
-// assets/kernels/opencl/. The cgbn backend no longer ships any .cl kernels.
+// Production Stage1 resources have one source owner under src/ecm. Android keeps
+// its existing logical asset root; standalone benchmark inputs remain tools data.
 tasks.register<Copy>("syncEcmStage1Kernels") {
-    from(mpaRoot.resolve("kernels/opencl"))
+    from(mpaRoot.resolve("src/ecm/backend/opencl/resources"))
+    from(mpaRoot.resolve("kernels/opencl")) {
+        include("bench/**")
+    }
     into(layout.projectDirectory.dir("src/main/assets/kernels/opencl"))
 }
 

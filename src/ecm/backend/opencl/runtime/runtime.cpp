@@ -1,5 +1,5 @@
 #include "cgbn_opencl.h"
-#include "ecm/application/configuration/runtime.h"
+#include "../../../../../include/ecm/application/configuration/runtime.h"
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
@@ -322,7 +322,7 @@ static std::string ecm_stage1_kernel_root() {
 #ifdef ECM_KERNEL_ROOT_DEFAULT
     return kernel_root_with_slash(ECM_KERNEL_ROOT_DEFAULT);
 #endif
-    return "kernels/opencl/";
+    return "src/ecm/backend/opencl/resources/";
 }
 
 static std::string load_kernel_at_roots(const char *rel_path) {
@@ -368,7 +368,13 @@ std::string load_kernel_file(const char *rel_path) {
         }
     }
 #endif
-    return load_kernel_at_roots(rel_path);
+    std::string content = load_kernel_at_roots(rel_path);
+    // Preserve the existing diagnostic logical name, including custom roots
+    // with the old layout, while the production source lives in diagnostics/.
+    if (content.empty() && std::strcmp(rel_path, "bench/mont.cl") == 0) {
+        return load_kernel_file("diagnostics/mont.cl");
+    }
+    return content;
 }
 
 std::string load_ecm_stage1_kernel_file(const char *rel_path) {
@@ -395,7 +401,7 @@ std::string load_ecm_stage1_kernel_file(const char *rel_path) {
         if (!content.empty()) {
             return content;
         }
-        path = std::string(pfx) + "kernels/opencl/" + rel_path;
+        path = std::string(pfx) + "src/ecm/backend/opencl/resources/" + rel_path;
         content = load_text_file(path.c_str());
         if (!content.empty()) {
             return content;

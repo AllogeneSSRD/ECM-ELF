@@ -1,5 +1,5 @@
-#include "cl_probe.h"
-#include "ecm/application/configuration/runtime.h"
+#include "device.h"
+#include "../../../../../include/ecm/application/configuration/runtime.h"
 #include <iostream>
 #include <vector>
 #include <string>

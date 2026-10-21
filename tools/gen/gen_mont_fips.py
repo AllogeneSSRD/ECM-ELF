@@ -6,11 +6,11 @@ instead of a full limb array, eliminating register spill at large bit-widths.
 Suitable for >=1024-bit where CIOS unroll overflows GPU VGPR limits.
 
 Generates:
-  kernels/opencl/mont_mul/mont_mul_fips_<W>b.cl
+  src/ecm/backend/opencl/resources/mont_mul/mont_mul_fips_<W>b.cl
 """
 import os, sys
 
-ROOT = sys.argv[1] if len(sys.argv) > 1 else "kernels/opencl/mont_mul"
+ROOT = sys.argv[1] if len(sys.argv) > 1 else "src/ecm/backend/opencl/resources/mont_mul"
 WIDTHS = [(1024, 32), (2048, 64)]  # (bit-width, limbs)
 
 def emit_fips(limbs: int, bits: int) -> str:

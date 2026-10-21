@@ -30,7 +30,7 @@ def relocation_text(relative):
     before=subprocess.check_output(['git','show',LAYOUT['baseline']+':'+relative],cwd=ROOT).decode('utf-8-sig').replace('\r\n','\n')
     pattern=re.compile(r'(?m)^(\s*#\s*include\s*["<])([^">\r\n]+)([">])')
     old=list(pattern.finditer(before));new=list(pattern.finditer(after));assert len(old)==len(new),relative
-    roots=['include','src','src/core','src/cpu','src/cuda/common','kernels/cuda','third_party/cgbn/include','third_party/cgbn/include/cgbn']
+    roots=['include','src','src/core','src/cpu','src/cuda/common','kernels/cuda','kernels/opencl','third_party/cgbn/include','third_party/cgbn/include/cgbn']
     for a,b in reversed(list(zip(old,new))):
         if a[0]==b[0]:continue
         candidates=[(Path(relative).parent/a[2]).as_posix()]+[(Path(base)/a[2]).as_posix() for base in roots]

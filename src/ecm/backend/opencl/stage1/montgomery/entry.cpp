@@ -1,4 +1,4 @@
-#include "opencl_ecm_entry.h"
+#include "entry.h"
 
 int opencl_ecm_stage1(mpz_t *factors,
                       int *array_found,

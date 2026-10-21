@@ -7,7 +7,7 @@
 | Stage1 驱动 | 参数、队列、指数、检查点、结果和交接 | [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp) |
 | CUDA Stage1 | CGBN 曲线批处理、分档和点乘 | [cgbn_stage1.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu) |
 | CPU Stage1 | Montgomery/Edwards，GMP 与可选 SIMD 算术 | [src/cpu](../../src/cpu/) |
-| OpenCL Stage1 | 设备配置、路径注册、动态内核组装 | [opencl_ecm_entry.cpp](../../src/opencl_ecm_entry.cpp) |
+| OpenCL Stage1 | 设备配置、路径注册、动态内核组装 | [opencl_ecm_entry.cpp](../../src/ecm/backend/opencl/stage1/montgomery/entry.cpp) |
 | Stage2 驱动 | save、独立队列、回执、日志、Auto B2 | [ecm_cuda_stage2_main.cpp](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp) |
 | CUDA Stage2 | 点生成、多项式树、NTT、归约、下降、GCD | [模块职责](STAGE2.md#cuda-模块边界)、[engine.cpp](../../src/ecm/backend/cuda/stage2/engine.cpp) |
 | CPU Stage2 | Edwards save 续算，GW 多线程快速多项式或 libecm NTT/plain | [ecm_cpu_stage2_main.cpp](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)、[GW 后端](../../src/ecm/backend/cpu/stage2/gwpoly/ecm_stage2_gwpoly.cpp) |

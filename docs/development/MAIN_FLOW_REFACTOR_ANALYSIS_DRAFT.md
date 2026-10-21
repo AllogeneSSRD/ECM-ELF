@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.7`；P2、P3a CUDA 与 P3b 主机家族归位已完成；P3c OpenCL/GUI 与 P4–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.8`；P2 与 P3a/b/c 已完成，P4–P7 待实施；GUI 的物理归位和 Controller 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -709,6 +709,24 @@ driver、独立 Stage2 入口及参数加载归 application；曲线、Stage1 �
 | 构建与隔离合同 | 46 项内容身份核对、32 个 Stage2 清理模块、27 项实验隔离及三项负向边界通过；选定两档工厂查询 20 项通过 | [身份](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/identity/result.json)、[清理](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/p4_cleanup/result.json)、[隔离](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/p4_isolation/result.json)、[工厂](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/registry/result.json) |
 
 完整 32 档 local 已在 P3a 冻结；后续组织调整以覆盖既有输入的 384/1024 档验证，P7 再做完整位宽终验。本阶段未运行 CUDA release，不新增性能、多架构、PRAC 或 GWPoly 资格。OpenCL 主机、运行资源与 GUI 文件的物理归位继续 P3c；实际 CUDA 同步、回读和资源管理保持其 CUDA 依赖。
+
+### P3c：OpenCL 主机与生产资源归位已完成
+
+对应程序版本 `0.45.8`。新增隔离的 OpenCL local 入口，在迁移前先构建 P3b 的实际 OpenCL 基线；随后将 18 个主机/头文件及 172 份生产资源统一迁入 backend/opencl，共 190 项。与 P3a/b 合计 452 项。曲线 engine/entry/packing、自检、路径描述与组装、context/program/cache、设备枚举各自保留完整职责与原有函数。limb24 只随现有工具/Android 消费归位，未新增桌面生产执行路径。
+
+CUDA 以外的生产 .cl 全部进入 resources；原 bench/mont.cl 作为生产自检迁入 diagnostics/mont.cl。旧逻辑名称优先按原加载顺序查找，缺失后才映射到诊断位置，保留自定义旧资源根。自检条件和失败处理不变，缓存继续使用设备/厂商/设备版本/驱动版本、完整源码与编译选项，未改变算法或键。Android 保持已有逻辑资产根，适配来源与 CMake 路径，未进行 Android 构建。
+
+新 build_opencl_local.ps1 使用普通 CXX、原有 /MD 优化合同和独立 build_opencl_local/stage1/profile 叶目录，关闭 CUDA 编译器、GUI、工具与独立 CPU Stage2；profile 拒绝用途/配置混用，清单记录程序与资源。生产资源由 runtime 库依赖的 CMake 目标同步到 opencl_resources，资源修改无需编译计算对象。现有 OpenCL 工具的目标另同步纯 bench 输入，保留共享 loader 的可用性；这些输入不出现在生产 local 的 172 项清单中。
+
+| 核对 | 实际结果与范围 | 证据 |
+| --- | --- | --- |
+| 全集与编译属性 | 合计 452 项一一对应、220 个 include 消费者、801 条引用；数学正文/BOM、TU 顺序、逐源编译属性保持。仅对 loader 的路径/诊断别名及资源 CMake 规则列出精确允许变更 | [完整检查](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/layout_final_02/result.json) |
+| OpenCL local | 迁移前基线和候选均以 33 条普通 CXX 命令构建；未启用 CUDA 编译器。候选重复构建 0 CXX、0 CU、0 链接 | [基线](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/opencl_baseline.log)、[候选](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/opencl_candidate.log)、[重复](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/opencl_repeat_final_02.log) |
+| 生产资源与计算 | 172 项随附资源逐字节匹配；当前设备 PARAM3、N=2^347−1、sigma=20260922、B1=B2=1000、4 曲线的完成点与结果保持，结果 CRC 有效；迁移前两份缓存被候选直接命中 | [核对](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/opencl_resources_final_02/result.json) |
+| CUDA 增量 | 严格 HostOnly 构建成功；Stage1 仅重编 3 个 CXX，Stage2 仅重编 1 个 CXX；31+2 个设备对象摘要保持 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/cuda_stage1_host.log)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/cuda_stage2_host.log)、[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/qualification.json) |
+| 主流程对照 | CUDA 两阶段各 5 组 P0 固定输入对照通过；本阶段无性能采样 | [对照](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/runtime/summary.json) |
+
+本轮未扩大 OpenCL 参数族、位宽或设备资格；未运行 release、Android 或性能验收。OpenCL 默认资源根绑定构建叶目录，部署到其他位置使用显式 --kernel-root；没有声称已有可任意移动的 OpenCL release 包。GUI 按既定 P6 完成物理归位和 Controller 提取，P3 不新增 GUI 转发层。P4 继续提取 CPU/GPU Stage1 host workflow、QueueWorkflow 及配置/数学/存档/结果/screen 的普通 .cpp 实现，P5 继续收口 Stage2。
 
 ## 首先调整构建复用与输出隔离
 

@@ -25,6 +25,10 @@ def expected_text(relative):
     if relative==edit.get('file'):
         assert before.count('"'+edit['before']+'"')==1
         before=before.replace('"'+edit['before']+'"','"'+edit['after']+'"')
+    for edit in LAYOUT.get('text_edits',[]):
+        if relative==edit['file']:
+            assert before.count(edit['before'])==edit.get('count',1),(relative,edit['before'])
+            before=before.replace(edit['before'],edit['after'])
     return before
 
 
@@ -77,6 +81,9 @@ def main():
     expected=expected.replace('src/cuda/common','src/ecm/backend/cuda/runtime').replace('kernels/cuda','src/ecm/backend/cuda')
     if LAYOUT.get('remove_legacy_include_dirs'):
         expected=re.sub(r'(?m)^\s*\$\{CMAKE_SOURCE_DIR\}/src/(?:core|cpu)\r?\n','',expected)
+    for edit in LAYOUT.get('cmake_edits',[]):
+        assert expected.count(edit['before'])==edit.get('count',1),edit['before']
+        expected=expected.replace(edit['before'],edit['after'])
     assert expected==(ROOT/'CMakeLists.txt').read_text(encoding='utf-8-sig'),'unapproved CMake policy change'
     result=dict(complete=True,baseline=LAYOUT['baseline'],moved_files=len(mapping),include_consumers=len(LAYOUT['include_consumers']),resolved_quote_edges=edges,generated_consumer_edges=generated_edges,tu_order_unchanged=True,source_properties_unchanged=True,inputs=hashes,gpu_runs=0)
     (args.output/'result.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf8')

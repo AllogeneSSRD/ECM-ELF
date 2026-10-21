@@ -1,10 +1,10 @@
 # ECM Stage1 OpenCL kernels
 
-Stage1 sources live under `kernels/opencl/`. Host assembles kernel source via
+Production Stage1 sources live under `src/ecm/backend/opencl/resources/`; this directory retains standalone benchmark inputs. The table below describes logical paths inside the production resource root. Host assembles kernel source via
 `opencl_ecm_stage1_assemble_kernel_source()`: injects `ECM_STAGE1_*_IMPL` macros, then
 concatenates only the files from `opencl_ecm_stage1_kernel_source_paths()`.
 
-算子选择/注入/拼装全部在单一文件 `src/opencl_ecm_path_registry.cpp` 中（mont_path /
+算子选择/注入/拼装全部在单一文件 `src/ecm/backend/opencl/arithmetic/path_registry.cpp` 中（mont_path /
 addsub_path 已合并进来）。新增/删除算子的完整指南见
 [`docs/architecture/OPENCL.md`](../../docs/architecture/OPENCL.md)。
 
@@ -49,7 +49,7 @@ Ladder code calls `mont_mul`, `mont_sqr`, `add_mod`, `sub_mod` (macros alias to 
 ## Load order
 
 1. Injected `ECM_STAGE1_*_IMPL` macros
-2. `common/stage1_config.h.cl`, `common/mp_priv.h.cl`, `common/ladder_helpers.cl`
+2. `common/stage1_config.h.cl`, `common/mp_priv.h.cl`, `common/ladder_helpers.h.cl`
 3. Selected operator files (mul, sqr, add, sub — deduped by path)
 4. `common/operator_iface.h.cl`
 5. `ecm_stage1_coop.cl` (only when `ECM_STAGE1_COOP_WG > 1`)

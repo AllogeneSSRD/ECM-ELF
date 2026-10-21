@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "opencl_ecm_mont.h"
+#include "../stage1/montgomery/montgomery.h"
 
 // OS and GPU vendor share a single 32-bit "platform mask" but occupy DISJOINT bit ranges:
 //   OS  -> low  16 bits (mask OS_ANY)

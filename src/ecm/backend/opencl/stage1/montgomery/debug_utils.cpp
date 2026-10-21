@@ -1,6 +1,6 @@
-#include "opencl_ecm_debug_utils.h"
-#include "ecm/platform/logging.h"
-#include "ecm/application/configuration/runtime.h"
+#include "debug_utils.h"
+#include "../../../../../../include/ecm/platform/logging.h"
+#include "../../../../../../include/ecm/application/configuration/runtime.h"
 
 #include <cstdarg>
 #include <cstdio>
