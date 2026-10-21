@@ -5,6 +5,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "../../platform/process/stage2_curve_process.h"
 #include <gmp.h>
 #include <filesystem>
 #include <set>
@@ -99,14 +100,7 @@ struct QueueSelection {
     EcmStage2Task task;
     uint64_t b2 = 0, skip = 0, count = 0;
 };
-struct Handle {
-    HANDLE value = INVALID_HANDLE_VALUE;
-    Handle()=default;
-    Handle(const Handle&)=delete;
-    Handle &operator=(const Handle&)=delete;
-    Handle(Handle &&other)noexcept:value(other.value){other.value=INVALID_HANDLE_VALUE;}
-    ~Handle() { if (value != INVALID_HANDLE_VALUE && value) CloseHandle(value); }
-};
+
 struct RuntimeTuneObservation {
     ecm_stage2::tune::portable::Shape shape;
     ecm_stage2::tune::Fields condition,sample;

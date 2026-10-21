@@ -1,11 +1,7 @@
 // Owns process/job/pipe lifetime, stop policy and streamed console projection.
 #include "stage2_curve_process.h"
-#include "../../service/stage2/input.h"
-#include "../../service/planning/stage2.h"
-#include "../../service/planning/legacy/ecm_stage2_runtime_cache.h"
 #include "../legacy/ecm_stage2_console.h"
 #include "../legacy/ecm_stage2_logging.h"
-#include "../../storage/results/ecm_result_json.h"
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -13,6 +9,7 @@
 #include <iostream>
 #include <sstream>
 namespace s2prod {
+namespace fs=std::filesystem;
 volatile LONG stop_requests = 0;
 HANDLE inherited_stop_event=nullptr;
 fs::path executable() {
@@ -41,9 +38,10 @@ std::wstring quote(const std::wstring &s) {
     out.append(2 * slashes, L'\\');
     return out + L'"';
 }
-int child_run(Options &o, const fs::path &save, const Record &r,
-              uint64_t b2, uint64_t d, int device, const fs::path &results, const fs::path &log,
-              uint64_t batch, const TaskDefaults &ini_settings) {
+int run_curve_process(const CurveProcessRequest &o) {
+    const auto &save=o.save,&results=o.results,&log=o.log;
+    const auto &r=o.record;const auto &ini_settings=o.console_budget;
+    const auto b2=o.b2,d=o.d,batch=o.batch;const int device=o.device;
     const fs::path exe = executable();
     std::wstring cmd = quote(exe.wstring()) + L" --curve-worker --save " + quote(save.wstring());
     auto arg = [&](const wchar_t *key, uint64_t n) { cmd += L" "; cmd += key; cmd += L" "; cmd += std::to_wstring(n); };
@@ -101,7 +99,7 @@ int child_run(Options &o, const fs::path &save, const Record &r,
     if(!o.receipt.empty())cmd+=L" --queue-receipt "+quote(fs::path(o.receipt).wstring());
     if(o.debug_log)cmd+=L" --debug-log-file "+quote(fs::path(o.debug_file).wstring());
     // Preserve readable batch statistics in the file even with a concise console.
-    const int engine_level=ecm_cuda_stage2_default_log_level()==stage2_log::debug?stage2_log::debug:stage2_log::batches;
+    const int engine_level=o.engine_log_level;
     arg(L"--log-level",static_cast<uint64_t>(engine_level));
     std::ofstream output;
     if(!log.empty()) {
@@ -145,14 +143,7 @@ int child_run(Options &o, const fs::path &save, const Record &r,
     };
     auto line=[&](const std::string &text,bool error) {
         if(!error && o.runtime_prepare_cache && text.rfind("{\"type\":\"tune_selection\"",0)==0) {
-            try {
-                const auto event=ecm_results::json::parse(text);
-                ecm_stage2::tune::portable::RuntimePauseHints hints;
-                hints.assign(event.get("runtime_prepare_hints").text());o.runtime_prepare_hints=hints.text();
-                const auto route_text=event.get("runtime_route_hints").text();
-                ecm_stage2::tune::portable::RuntimeRouteHints routes;
-                if(open_runtime_routes(route_text,routes))o.runtime_route_hints=route_text;else o.runtime_route_hints.clear();
-            }catch(const std::runtime_error &){o.runtime_prepare_hints.clear();o.runtime_route_hints.clear();}
+            if(o.observe_selection)o.observe_selection(text);
         }
         if(output.is_open()){output<<text<<'\n';output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");}
         if(o.tune_child)return; // Full diagnostic evidence stays in the per-trial file.

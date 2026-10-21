@@ -2,6 +2,7 @@
 #include "task.h"
 #include "input.h"
 #include "../planning/stage2.h"
+#include "../planning/legacy/ecm_stage2_runtime_cache.h"
 #include "../../backend/cuda/stage2/host_policy.h"
 #include "../../application/configuration/stage2_identity.h"
 #include "../../platform/process/stage2_curve_process.h"
@@ -21,6 +22,76 @@
 #include <sstream>
 namespace s2prod {
 fs::path fatal_log;
+// Shared by parent tasks and calibration; only process wire fields cross here.
+int child_run(Options &o,const fs::path &save,const Record &r,
+              uint64_t b2,uint64_t d,int device,const fs::path &results,const fs::path &log,
+              uint64_t batch,const TaskDefaults &ini_settings) {
+    CurveProcessRequest request;
+    request.save=save;request.results=results;request.log=log;
+    request.record={r.offset,r.hash,r.index};request.console_budget={ini_settings.arena,ini_settings.owner_mb};
+    request.b2=b2;request.d=d;request.device=device;request.batch=batch;
+    request.arena=o.arena;
+    request.auto_b2=o.auto_b2;
+    request.auto_carrier=o.auto_carrier;
+    request.auto_max=o.auto_max;
+    request.auto_min=o.auto_min;
+    request.carrier_exponent=o.carrier_exponent;
+    request.condition_tag=o.condition_tag;
+    request.cost_profile=o.cost_profile;
+    request.debug_file=o.debug_file;
+    request.debug_log=o.debug_log;
+    request.factor_bits=o.factor_bits;
+    request.factor_only=o.factor_only;
+    request.factor_timeout=o.factor_timeout;
+    request.factorize_hits=o.factorize_hits;
+    request.gp=o.gp;
+    request.gui_events=o.gui_events;
+    request.has_carrier=o.has_carrier;
+    request.inferred_carrier=o.inferred_carrier;
+    request.log_level=o.log_level;
+    request.ntt_counts=o.ntt_counts;
+    request.owner_mb=o.owner_mb;
+    request.pack_zero=o.pack_zero;
+    request.prediction_policy=o.prediction_policy;
+    request.publication_task=o.publication_task;
+    request.ratio_adjust=o.ratio_adjust;
+    request.receipt=o.receipt;
+    request.relocation=o.relocation;
+    request.runtime_prepare_cache=o.runtime_prepare_cache;
+    request.runtime_prepare_hints=o.runtime_prepare_hints;
+    request.runtime_remaining=o.runtime_remaining;
+    request.runtime_route_hints=o.runtime_route_hints;
+    request.runtime_samples=o.runtime_samples;
+    request.short_batch_tune=o.short_batch_tune;
+    request.stage1_batch=o.stage1_batch;
+    request.stage1_csv=o.stage1_csv;
+    request.stage1_exponent=o.stage1_exponent;
+    request.stage1_mhz=o.stage1_mhz;
+    request.stage1_profile=o.stage1_profile;
+    request.stage1_seconds=o.stage1_seconds;
+    request.submission=o.submission;
+    request.submission_aid=o.submission_aid;
+    request.submission_exponent=o.submission_exponent;
+    request.submission_ini=o.submission_ini;
+    request.submission_known=o.submission_known;
+    request.tune_child=o.tune_child;
+    request.tune_ignore=o.tune_ignore;
+    request.tune_profile=o.tune_profile;
+    request.tune_runtime=o.tune_runtime;
+    request.worker=o.worker;
+    request.engine_log_level=ecm_cuda_stage2_default_log_level()==stage2_log::debug?stage2_log::debug:stage2_log::batches;
+    request.observe_selection=[&o](const std::string &text) {
+            try {
+                const auto event=ecm_results::json::parse(text);
+                ecm_stage2::tune::portable::RuntimePauseHints hints;
+                hints.assign(event.get("runtime_prepare_hints").text());o.runtime_prepare_hints=hints.text();
+                const auto route_text=event.get("runtime_route_hints").text();
+                ecm_stage2::tune::portable::RuntimeRouteHints routes;
+                if(open_runtime_routes(route_text,routes))o.runtime_route_hints=route_text;else o.runtime_route_hints.clear();
+            }catch(const std::runtime_error &){o.runtime_prepare_hints.clear();o.runtime_route_hints.clear();}
+    };
+    return run_curve_process(request);
+}
 int curve_worker(Options o) {
     configure_pack_zero(o);
     // Children ignore the first console interrupt; the parent owns stop policy.

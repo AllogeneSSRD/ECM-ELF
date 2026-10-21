@@ -9,6 +9,7 @@
 #include "ecm/platform/fingerprint.h"
 #include "stage2.h"
 #include "../stage2/input.h"
+#include "../stage2/task.h"
 #include "../../platform/process/stage2_curve_process.h"
 #include "../../service/planning/legacy/ecm_stage2_cost_profile.h"
 #include "../../service/planning/legacy/ecm_stage2_tune_format.h"

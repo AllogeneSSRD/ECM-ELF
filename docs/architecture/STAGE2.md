@@ -151,3 +151,9 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 application/cuda_stage2 main 负责 CLI、配置合并、模式与退出。service/stage2/task.cpp 只有一条父任务循环：校验/恢复 → pending 落盘 → 子进程 → receipt 确认 → done → seal → 源行复核 → finished → 队列移除 → 进度清理。同文件的 curve_worker 保留重读 save/hash、规划、GCD/引擎和持久发布的完整顺序。
 
 platform/process/stage2_curve_process.cpp 管理 Job、管道、进程、停止和 console 投影；Worker/Task 不重复管理这些资源。service/stage2/input.cpp 集中实际输入校验；普通配置 CPP 在发布处读取结果身份。父流程只接受具体路径/队列策略/默认值，无完整 Settings 依赖。私有 Options 仍是 executable 内部调用数据，不是公开计算 API；一个进程只有一个活跃曲线/引擎状态。
+
+## 曲线进程协议
+
+[curve_process.h](../../include/ecm/platform/process/curve_process.h)只声明进程请求和同步执行入口。实际协议包括 49 项曲线/规划/发布参数，以及记录位置和 hash、save/日志/结果路径和显示预算；不包含完整 CLI Options 或配置解析类型。任务/校准共用一处协议投影；process 实现管理唯一进程循环和 OS 资源。
+
+输出为退出码（0 成功、3 为不纳入计时的已验证因子、1 失败）、原控制台/日志和可选同步 selection 行回调。回调位于原输出时点、日志写入之前，由任务层验证并接纳 hints；异常按原时点传播。Windows Handle 仅在私有声明中。进程实现可脱离计算引擎、GMP 和 CUDA 独立编译/测试，真实计算仍在独立子进程中完成。
