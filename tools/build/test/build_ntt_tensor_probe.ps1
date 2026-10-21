@@ -15,9 +15,9 @@ $deps=@('tools/test/ntt_tensor_goldilocks_probe.cu','tools/experiments/cuda/ntt_
 $deps=@(Get-EcmSourceClosure $repo $deps @('include','third_party/gmp-zen3/dist/include'))+
     @('tools/build/internal/cuda_build_state.ps1')
 $hashes=[ordered]@{};foreach($dep in $deps){$hashes[$dep]=(Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash}
-$hashes['include/ecm/cuda/ntt_launch.h']=(Get-FileHash include/ecm/cuda/ntt_launch.h).Hash
-$hashes['include/ecm/cuda/ntt_parameters.h']=(Get-FileHash include/ecm/cuda/ntt_parameters.h).Hash
-$hashes['include/ecm/cuda/launch.h']=(Get-FileHash include/ecm/cuda/launch.h).Hash
+$hashes['src/ecm/backend/cuda/ntt/launch.h']=(Get-FileHash src/ecm/backend/cuda/ntt/launch.h).Hash
+$hashes['src/ecm/backend/cuda/ntt/parameters.h']=(Get-FileHash src/ecm/backend/cuda/ntt/parameters.h).Hash
+$hashes['src/ecm/backend/cuda/runtime/launch.h']=(Get-FileHash src/ecm/backend/cuda/runtime/launch.h).Hash
 $line="call `"$vcvars`" >nul 2>&1 && nvcc -std=c++17 -O3 -arch=$Arch -Xptxas -v -I include -I third_party/gmp-zen3/dist/include -Xcompiler /utf-8 -Xcompiler /wd4819 tools/test/ntt_tensor_goldilocks_probe.cu -L third_party/gmp-zen3/dist/lib -lgmp -o `"$exe`" > `"$log`" 2>&1"
 $watch=[Diagnostics.Stopwatch]::StartNew()
 & cmd.exe /c $line

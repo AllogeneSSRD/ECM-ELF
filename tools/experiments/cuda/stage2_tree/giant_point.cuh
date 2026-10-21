@@ -1,5 +1,5 @@
 #pragma once
-#include "ecm/cuda/stage2_launch.h"
+#include "../../../../src/ecm/backend/cuda/stage2/launch.h"
 __device__ __forceinline__ void s2g_mac(unsigned long long x, unsigned long long y,
                                         unsigned long long z, unsigned long long c,
                                         unsigned long long &lo, unsigned long long &hi)

@@ -12,7 +12,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-CUDA_INPUT = 'kernels/cuda/stage2/arithmetic_kernels.cu'
+CUDA_INPUT = 'src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu'
 
 
 def main():

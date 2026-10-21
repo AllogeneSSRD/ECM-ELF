@@ -4,6 +4,7 @@ Only the finite, justified reductions below are allowed. Literal contents and
 all other statements (including CUDA calls, checks and fallbacks) are compared.
 This is a source proof, separate from the paired executable/GMP gates.
 """
+from source_layout import current_source,current_files,relocation_text
 import argparse
 import hashlib
 import json
@@ -145,10 +146,10 @@ def main():
         if path.endswith('plan_runtime.h'):
             old = old.replace('#include "stage2_d_model.cuh"','').replace('#include <optional>','')
             old = old.replace('std::optional<DPhaseModel> phase_model;', '')
-        current = (ROOT/path).read_text(encoding='utf-8-sig')
+        current = relocation_text(path)
         if path.endswith('product.cpp'):
             from test_cuda_p2_host import raw_body
-            header=(ROOT/'src/cuda/stage2/pack_launch.h').read_text()
+            header=(current_source('src/cuda/stage2/pack_launch.h')).read_text()
             names={'supported','launch','s4_launch_pack_batch'}
             def functions(text):
                 result={}

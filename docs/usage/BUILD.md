@@ -21,7 +21,7 @@ Stage1 CUDA 所需 CGBN 头文件位于 `third_party/cgbn/include`；CMake 通�
 
 Stage1：完整位宽/曲线族、通用 Montgomery、TPB128、分档寄存器策略；resident/PRAC 默认不编译，显式 `-EnablePrac` 才加入。`-Tiers` 可缩小开发档位。折叠域、统一寄存器上限和算术探针不是通用发布默认。
 
-位宽唯一清单为 `include/ecm/cuda/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `kernels/cuda/stage1/edwards/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `kernels/cuda/stage1/montgomery/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标，保留统一构建参数与发布拆分流程。
+位宽唯一清单为 `src/ecm/backend/cuda/dispatch/tiers.def`。Edwards binary/NAF 使用32档容器、七组 `src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_*.cu`；Montgomery PARAM0/2/3 各有七组 `src/ecm/backend/cuda/stage1/montgomery/instances/instances_param*_g*.cu`，均受 `-Tiers` 筛选。容器边界仍按 Edwards 的一位余量、Montgomery 的六位余量判断，具体限制见 [位宽与资源](../architecture/STAGE1.md#位宽与资源)。PRAC 显式启用时另编译 `ecm_cuda_prac` 对象目标，保留统一构建参数与发布拆分流程。
 
 新功能构建入口 `tools/build/test/build_edwards_gpu_workers.ps1` 可用 `-Stage stage1 -Tiers '' -Jobs 8` 编译完整三曲线族。该 worker 测试入口默认仅1024；检查其他位宽前需显式选档或使用空列表编全档。
 
@@ -91,3 +91,5 @@ P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设�
 单任务合同验证入口为 `tools/build/test/build_stage1_task_contract.ps1 -WorkerBuild <Stage1生产目录>`，然后由 `tools/test/test_stage1_task_contract.py --help` 查看运行参数。它以生产清单中的实际任务、checkpoint、日志和运行配置模块构建，读取正式 MSVC/GMP 身份，使用普通 CXX，不调用 nvcc、不添加 CUDA SDK include；编译器依赖记录同时确认未使用 CUDA SDK 头。测试仅替换计算回调，覆盖八种拥有权、停止、错误与锁释放场景，不代替 GPU 运算资格或性能验收，也不表示整个生产程序无需 CUDA。
 
 `tools/test/test_cuda_target_graph.ps1 -WorkerBuild <Stage1生产目录> -Output <证据目录>` 使用真实 CMake 目标收集器做五项 configure 检查，覆盖源目录与目标同名、显式对象库、直接/条件静态链接及 imported 排除。只有链接属性中的目标引用参与依赖图；普通源码路径的目录名不视为目标。
+
+主流程目录迁移的当前门禁为 `tools/test/test_main_flow_layout.py --output <新证据目录>`。它核对完整文件家族、原始 BOM、正文、实际 include 指向、TU 次序和逐源文件 CMake 属性；测试专用 main_flow_layout.json 保留历史路径与当前位置的明确映射，生产不读取它。旧编译器依赖记录若因搬迁拒绝复用，应保留记录并使用新 local 目录重建，不修改 sidecar 伪装复用。

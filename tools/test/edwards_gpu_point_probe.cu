@@ -9,7 +9,7 @@
 #include <cstring>
 #include <vector>
 #include "ecm_edwards_cpu.h"
-#include "../../kernels/cuda/stage1/edwards/point.cuh"
+#include "../../src/ecm/backend/cuda/stage1/edwards/point.cuh"
 
 #define CU(call) do { cudaError_t e=(call); if(e!=cudaSuccess) { \
     fprintf(stderr,"CUDA %s at line %d\n",cudaGetErrorString(e),__LINE__); exit(2); \

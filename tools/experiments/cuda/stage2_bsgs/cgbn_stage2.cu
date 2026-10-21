@@ -1,4 +1,4 @@
-﻿/* cgbn_stage2.cu — host side of the native CUDA/CGBN ECM stage 2 (pairing / BSGS).
+/* cgbn_stage2.cu — host side of the native CUDA/CGBN ECM stage 2 (pairing / BSGS).
 
    Everything that depends only on (N, sigma, B1, B2, D) happens here with GMP, exactly
    as the stage-1 host TU does for its curves, so the device never divides or inverts:
@@ -17,7 +17,7 @@
 
 #include "cgbn_stage2_cuda.h"
 #include "cgbn_stage2_kernel.h"
-#include "../../../../src/cuda/common/cuda_ecm_shim.h"      /* outputf / test_verbose */
+#include "../../../../src/ecm/backend/cuda/runtime/cuda_ecm_shim.h"      /* outputf / test_verbose */
 
 #include <cuda_runtime.h>
 #include <gmp.h>

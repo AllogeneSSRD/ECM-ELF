@@ -1,4 +1,5 @@
 """P4 experimental source relocation and consumer boundary gates (CPU only)."""
+from source_layout import current_source,current_files,LAYOUT
 import argparse
 import json
 from pathlib import Path
@@ -38,8 +39,9 @@ def check_boundary(path, text):
         target=(path.parent/match[1]).resolve()
         assert target.suffix not in ('.cu','.cpp','.inl'), ('implementation inclusion',path,match[1])
         if 'tools/experiments/' in path.as_posix():
-            private=ROOT/'src/cuda/stage2'
-            assert not target.is_relative_to(private), ('experiment includes private Stage2 host',path,target)
+            private=ROOT/'src/ecm/backend/cuda/stage2'
+            allowed={current_source(old).resolve() for old in LAYOUT['moved'] if old.startswith(('kernels/cuda/','include/ecm/cuda/','src/cuda/common/'))}
+            assert not target.is_relative_to(private) or target in allowed, ('experiment includes private Stage2 host',path,target)
 
 
 def main():
@@ -60,7 +62,7 @@ def main():
         checked.append(new)
     # The independent scale policy is an explicit experimental adapter. Its
     # body matches the existing production helper, with only includes relocated.
-    assert normalized((ROOT/'src/cuda/stage2/scale_plain.cuh').read_text())==normalized(
+    assert normalized((current_source('src/cuda/stage2/scale_plain.cuh')).read_text())==normalized(
         (ROOT/'tools/experiments/cuda/stage2_tree/plain_scale.cuh').read_text())
     old=subprocess.check_output(['git','show',BASE+':src/cuda/stage2/stage2_d_model.cuh'],cwd=ROOT)
     assert old==(ROOT/'tools/experiments/cuda/stage2_tree/d_model_profiles.h').read_bytes()
@@ -80,9 +82,9 @@ def main():
                 check_boundary(path,path.read_text(encoding='utf-8-sig'));count+=1
     rejected=0
     for file,body in [
-        (ROOT/'tools/experiments/bad.cuh','#include "../../src/cuda/stage2/scale_plain.cuh"'),
+        (ROOT/'tools/experiments/bad.cuh','#include "../../src/ecm/backend/cuda/stage2/scale_plain.cuh"'),
         (ROOT/'tools/test/bad.cu','#include "../experiments/cuda/ntt_variants/main.cu"'),
-        (ROOT/'tools/test/bad.cu','#include "../../src/cuda/stage1/edwards_runtime.inl"')]:
+        (ROOT/'tools/test/bad.cu','#include "../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl"')]:
         try:check_boundary(file,body)
         except AssertionError:rejected+=1
     assert rejected==3

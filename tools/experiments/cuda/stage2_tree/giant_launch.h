@@ -1,5 +1,5 @@
 #pragma once
-#include "ecm/cuda/stage2_launch.h"
+#include "../../../../src/ecm/backend/cuda/stage2/launch.h"
 // Experimental rotation and unregistered 160/192-word controls only.
 void ecm_experiment_giant_launch(int width,int rotate,EcmCudaLaunch cfg,
     const unsigned long long *n,unsigned long long ninv,int nw,

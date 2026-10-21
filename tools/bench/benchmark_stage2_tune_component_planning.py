@@ -80,7 +80,7 @@ def main():
         objects.append(freeze(build/'_objects'/(stem+'.obj'), out/'objects'/(stem+'.obj')))
         assert sha(objects[-1]) == expected.lower()
     # CUDA object and all of its recorded dependencies must be unchanged.
-    cuda_dependencies = [name for name in manifest['source_hashes'] if name.startswith('src/cuda/')]
+    cuda_dependencies = [name for name in manifest['source_hashes'] if name.startswith('src/ecm/backend/cuda/')]
     assert all(sha(ROOT/name) == manifest['source_hashes'][name].lower() for name in cuda_dependencies)
     b1 = samples[0]['b1']
     low, high = min(s['b2'] for s in samples), max(s['b2'] for s in samples)

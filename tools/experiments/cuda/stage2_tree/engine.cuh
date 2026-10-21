@@ -7552,7 +7552,7 @@ __global__ void fold_subtract_kernel(const unsigned long long *a,const unsigned 
     unsigned long long any=0;for(int j=0;j<W;++j)any|=out[j];
     if(any)atomicMax(length,(unsigned long long)i+1);
 }
-#include "../../../../kernels/cuda/stage2/plain_scale.cuh"
+#include "../../../../src/ecm/backend/cuda/stage2/device/plain_scale.cuh"
 #include "plain_scale.cuh"
 
 static bool gscale_flag(const char *key)

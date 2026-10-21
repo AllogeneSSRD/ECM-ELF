@@ -1,4 +1,5 @@
 """Check the Stage2 module boundary and frozen arithmetic, independently of builds."""
+from source_layout import current_source,current_files,relocation_text
 import argparse
 import hashlib
 import json
@@ -41,7 +42,7 @@ def main():
     p.add_argument('--baseline', default='5e3ed63')
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args(); out = a.output.resolve(); out.mkdir(parents=True, exist_ok=False)
-    current = lambda path: (ROOT/path).read_text(encoding='utf-8-sig')
+    current = lambda path: relocation_text(path)
     frozen = lambda path: subprocess.check_output(['git', 'show', a.baseline+':'+path], cwd=ROOT).decode('utf-8-sig')
     original = frozen('src/cuda/ecm_cuda_stage2.cu')
     groups = [
@@ -74,11 +75,11 @@ def main():
         rotation=variant[variant.index('// Probe-only buffer rotation'):]
         chain=chain.rstrip()+'\n\n\n'+rotation
     assert frozen('kernels/cuda/stage2_giant_chain.cuh') == chain.rstrip()+'\n'
-    device_paths = sorted((ROOT/'kernels/cuda/stage2').glob('*'))
+    device_paths = sorted(current_files('kernels/cuda/stage2'))
     ntt_original = frozen('src/cuda/stage2/ntt_runtime.cuh')
     ntt_device = '\n'.join(path.read_text(encoding='utf-8-sig')
         for folder in ('kernels/cuda/ntt', 'kernels/cuda/shared')
-        for path in sorted((ROOT/folder).glob('*')) if path.is_file())
+        for path in sorted(current_files(folder)) if path.is_file())
     compare(ntt_original, ntt_device, 'gl_reduce gl_mod gl_mul mul_64x64_hi_lo gl_mul_host gl_add gl_sub gl_mod_dev gl_sub_dev gl_add_dev gl_pow_host gl_add_host gl_sub_host bitlen_u64 bits_of gl_twiddle gl_mul_mod_n gl_mul_mod_n_host pointwise_twiddle_kernel ntt_stage dit_stage dit_stage_kernel ntt_stage_kernel bitrev_kernel bitrev_swap_kernel carry_extract_kernel carry_add_kernel carry_residual_kernel slot_assemble_kernel scale_kernel carry_cone_value carry_cone_kernel build_tile_table_kernel build_pass_table_kernel build_radix_table_kernel outer_fwd_kernel outer_inv_kernel tile_radix4_block tile_radix4_block_inv tile_radix2_stage tile_warp_twiddle tile_warp5 tile_warp6_pair tile_kernel gl_mul_test_kernel gl_twiddle_test_kernel dft_direct_kernel')
     for old, names in [
         ('ntt_coop_outer.cuh', 'outer_coop_kernel'),
@@ -92,12 +93,12 @@ def main():
         assert frozen('src/cuda/stage2/'+old) == current('kernels/cuda/shared/'+new)
     assert frozen('src/cuda/stage2/device_memory_ledger.cuh') == current('src/cuda/common/device_memory_ledger.h')
     assert frozen('src/cuda/stage2/ntt_host_trace.cuh') == current('src/cuda/ntt/host_trace.h')
-    for path in (ROOT/'src/cuda/ntt').glob('*'):
+    for path in current_files('src/cuda/ntt'):
         text = mask(path.read_text(encoding='utf-8-sig'))
         assert not re.search(r'__global__|__device__|<<<|ecm_stage2_(?:tree|fold|gcd)|S4Ctx', text), path
     for path in ['src/cuda/stage2/engine.cpp', 'src/cuda/stage2/tune.cpp']:
         assert not re.search(r'__global__|__device__|<<<', mask(current(path))), path
-    device_paths += sorted((ROOT/'kernels/cuda/ntt').glob('*'))
+    device_paths += sorted(current_files('kernels/cuda/ntt'))
     for path in device_paths:
         text = mask(path.read_text(encoding='utf-8-sig'))
         assert not re.search(r'\b(?:mpz_\w*|gmp_\w*|checkpoint\w*)\b', text), path

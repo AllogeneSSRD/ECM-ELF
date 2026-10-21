@@ -1,5 +1,5 @@
 #include "../../src/core/ecm_stage2_logging.h"
-#include "../../src/cuda/ntt/runtime.h"
+#include "../../src/ecm/backend/cuda/ntt/runtime.h"
 
 using Word=unsigned long long;
 __global__ void graph_corrupt(Word *digits){if(threadIdx.x==0 && blockIdx.x==0)digits[0]^=1;}

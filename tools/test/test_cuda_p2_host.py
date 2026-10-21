@@ -3,6 +3,7 @@
 Strings, checks, allocation/synchronization order and launch arguments remain
 significant. This complements GPU checks; it does not qualify timing behavior.
 """
+from source_layout import current_source,current_files
 import argparse
 import hashlib
 import json
@@ -73,7 +74,7 @@ def main():
     args = parser.parse_args(); out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
     frozen = lambda path: subprocess.check_output(['git', 'show', args.baseline+':'+path], cwd=ROOT).decode('utf-8-sig')
     old = frozen('src/cuda/stage2/ntt_runtime.cuh')
-    new = '\n'.join(p.read_text(encoding='utf-8-sig') for p in sorted((ROOT/'src/cuda/ntt').glob('*')))
+    new = '\n'.join(p.read_text(encoding='utf-8-sig') for p in sorted(current_files('src/cuda/ntt')))
     names = 'ntt_gl_reduce_requested_mode ntt_gl_reduce_configure now_s ntt_bitrev_inplace ntt_dif ntt_bitrev_perm ntt_forward ntt_inverse ntt_carry_check_requested ntt_tile_attributes fuse_base_allocate fuse_base_free fuse_plan_stages fuse_env_ull fuse_compact_scratch fuse_shape_device_supported fuse_shape_policy_supported fuse_joint_policy_supported fuse_selected_tile fuse_outer_max fuse_describe fuse_planned_table_words fuse_planned_base_words fuse_init fuse_release fuse_base_words ntt_fuse_cache_tables fuse_grid fuse_trace_on fuse_mark ntt_forward_fused ntt_inverse_fused ntt_arena_bufs ntt_arena_pin_smem ntt_arena_fuse ntt_trim_fuse_headroom gl_selftest exact_ok_terms exact_ok_nterms mpz_log2d mpz_log2d_p coeff_bound_bits_terms bound_over_p_terms coeff_bound_bits choose_cfg max_conv_coeff_gmp digit_sq_double mpz_add_u64 dump_cmp ntt_host_break_on extract_exact_coeffs ntt_shape_query ntt_shape_plan ntt_shape_plan_uncached ntt_shape_exactness ntt_pack_operand ntt_shape_maxcoeff ntt_shape_print ntt_run_passes ntt_pass_read_marks ntt_hook_window ntt_poly_mul_batch_host ntt_poly_mul_batch_dev ntt_batch_carry_finish ntt_workspace_check ntt_fuse_lifetime_check fuse_fixture_env ntt_fuse_capacity_check ntt_fuse_coop_check ntt_poly_mul_host'
     checked = []
     for name in names.split():
@@ -88,7 +89,7 @@ def main():
     ]:
         old_class = declaration(source, class_name)
         new_class = declaration(new, class_name)
-        new_methods = (ROOT/('src/cuda/ntt/runtime.cpp' if class_name == 'NttArena' else 'src/cuda/ntt/graph.cpp')).read_text(encoding='utf-8-sig')
+        new_methods = current_source('src/cuda/ntt/runtime.cpp' if class_name == 'NttArena' else 'src/cuda/ntt/graph.cpp').read_text(encoding='utf-8-sig')
         for name in methods.split():
             before_body = raw_body(old_class, name)
             before, after = tokens(before_body), tokens(raw_body(new_methods, name))

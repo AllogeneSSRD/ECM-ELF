@@ -1,5 +1,5 @@
 #include "ecm_edwards_naf.h"
-#include "../../src/cuda/stage1/edwards_slice.h"
+#include "../../src/ecm/backend/cuda/stage1/edwards/edwards_slice.h"
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>

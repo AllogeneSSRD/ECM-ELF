@@ -31,7 +31,7 @@ Stage1 默认 `Jobs=8`，Stage2 默认 `SplitCompile=8`。PS1 为默认参数来
 
 CUDA 源组在 `internal/cuda_sources.cmake` 维护，构建目录中的 JSON 由它生成；不要在脚本中另抄源文件列表。递归包含、编译命令和对象身份由 `internal/cuda_build_state.ps1` 校验；复用规则和测试入口见 [CUDA 源清单与依赖身份](../../docs/usage/BUILD.md#cuda-源清单与依赖身份)。
 
-Stage1 的位宽与实例分组由 `include/ecm/cuda/tiers.def` 统一维护；主机驱动和设备实例职责见 [CUDA 模块边界](../../docs/architecture/STAGE1.md#cuda-模块边界)。`test/build_cuda_p1.ps1` 提供清单配置、Stage1 和 Stage2 的分步构建入口。
+Stage1 的位宽与实例分组由 `src/ecm/backend/cuda/dispatch/tiers.def` 统一维护；主机驱动和设备实例职责见 [CUDA 模块边界](../../docs/architecture/STAGE1.md#cuda-模块边界)。`test/build_cuda_p1.ps1` 提供清单配置、Stage1 和 Stage2 的分步构建入口。
 
 Stage2 算术和 NTT 的职责见 [Stage2 模块边界](../../docs/architecture/STAGE2.md#cuda-模块边界)。`test/build_cuda_p2_arithmetic_probe.ps1` 与 `test/build_ntt_graph_probe.ps1` 可复用通过身份校验的生产对象；使用生产 NTT 的其他探针统一通过 `internal/cuda_ntt_probe.ps1` 编译显式源清单，并保留各自的默认流模式。
 

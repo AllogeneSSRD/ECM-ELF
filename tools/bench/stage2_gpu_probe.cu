@@ -1,4 +1,4 @@
-﻿/* stage2_gpu_probe.cu — standalone driver for the CUDA/CGBN stage 2 (M1).
+/* stage2_gpu_probe.cu — standalone driver for the CUDA/CGBN stage 2 (M1).
 
    Nothing in the production path is involved: this links
    kernels/cuda/cgbn_stage2.cu (+ the per-TPI instantiations) directly, so stage 2 can be
@@ -33,7 +33,7 @@
 */
 
 #include "../experiments/cuda/stage2_bsgs/cgbn_stage2_cuda.h"
-#include "../../src/cuda/common/cuda_ecm_shim.h"
+#include "../../src/ecm/backend/cuda/runtime/cuda_ecm_shim.h"
 
 #include <gmp.h>
 

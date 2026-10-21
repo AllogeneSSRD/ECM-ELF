@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.5`；P2 普通 CXX、任务拥有权及请求/状态合同已完成，P3–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.6`；P2 已完成，P3a CUDA 完整家族物理归位已完成；P3 其余家族与 P4–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -28,7 +28,7 @@
 
 直接输入与队列共用 `run_stage1_once`：`main` 在驱动第 3969 行，队列入口 `run_queue_manager` 在第 3465 行，队列任务经 `queue_run_one`（第 3201 行）进入 `run_stage1_once`（第 3030 行），直接 CLI 也在第 4551 行调用它。真正的执行分派在 `run_stage1_impl`（第 2753 行）。这些是现成的 Seam 起点，但当前参数、结果所有权和文件发布仍未收口。
 
-[ecm_driver.cpp](../../src/core/ecm_driver.cpp) 共 4676 行；它既是应用入口，也承担批次调度、结果发布和多种实现的运行控制。CUDA Montgomery 的 [montgomery.cu](../../src/cuda/stage1/montgomery.cu) 仍有 1705 行，并直接包含 checkpoint、进度、日志及文件系统相关设施（第 45–58 行），说明后端内部仍承载部分上层职责。
+[ecm_driver.cpp](../../src/core/ecm_driver.cpp) 共 4676 行；它既是应用入口，也承担批次调度、结果发布和多种实现的运行控制。CUDA Montgomery 的 [montgomery.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu) 仍有 1705 行，并直接包含 checkpoint、进度、日志及文件系统相关设施（第 45–58 行），说明后端内部仍承载部分上层职责。
 
 ### CUDA Stage2
 
@@ -36,7 +36,7 @@
 
 当前有父子进程分工：父进程 `driver`（main 文件第 1152 行）选择、规划和恢复任务，经 `child_run`（第 617 行）创建每曲线子进程（第 701 行）；子进程 `curve_worker`（第 898 行）重读原 save 并校验 fingerprint，再在第 967 行调用计算引擎。父进程根据持久化 receipt 确认完成，而不是只根据子进程退出码。重构后继续保留该隔离方式。
 
-[ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp) 共 1606 行，并结合 [ecm_stage2_portable_driver.inl](../../src/core/ecm_stage2_portable_driver.inl) 使用运行编排。引擎接口位于 [ecm_cuda_stage2.h](../../src/core/ecm_cuda_stage2.h)，执行入口位于 [engine.cpp](../../src/cuda/stage2/engine.cpp) 第 929 行。
+[ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp) 共 1606 行，并结合 [ecm_stage2_portable_driver.inl](../../src/core/ecm_stage2_portable_driver.inl) 使用运行编排。引擎接口位于 [ecm_cuda_stage2.h](../../src/core/ecm_cuda_stage2.h)，执行入口位于 [engine.cpp](../../src/ecm/backend/cuda/stage2/engine.cpp) 第 929 行。
 
 引擎中的主干计算是：校验模数与输入点 → 规划 D、形状及内存 → baby 点与 F 树 → giant 点与 G 树 → 乘积、模 F 累积和下降 → GCD 与命中处理 → 完成异步算术校验 → 返回结果。规划与执行已经复用 `prepare_stage2_plan`；规划仍会初始化 CUDA 并查询实时内存，不能称为完全无设备副作用的纯计算。
 
@@ -303,13 +303,13 @@ $$
 
 ### 当前重编的三个来源
 
-**第一类：真实的头文件或文本包含依赖。** [montgomery.cu](../../src/cuda/stage1/montgomery.cu) 第 45–52 行直接包含日志、checkpoint runtime、进度头；其曲线准备、GCD、checkpoint、dump 与 screen Implementation 也位于同一翻译单元。进度格式在 [ecm_stage1_gpu_progress.h](../../src/core/ecm_stage1_gpu_progress.h) 第 8–20 行内联，[CMakeLists.txt](../../CMakeLists.txt) 第 151–152 行还显式声明此头为该 .cu 的 OBJECT_DEPENDS。因此改进度文案会使这个 runtime .cu 失效；这不等于所有独立 kernel instances 都因该头失效。
+**第一类：真实的头文件或文本包含依赖。** [montgomery.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu) 第 45–52 行直接包含日志、checkpoint runtime、进度头；其曲线准备、GCD、checkpoint、dump 与 screen Implementation 也位于同一翻译单元。进度格式在 [ecm_stage1_gpu_progress.h](../../src/core/ecm_stage1_gpu_progress.h) 第 8–20 行内联，[CMakeLists.txt](../../CMakeLists.txt) 第 151–152 行还显式声明此头为该 .cu 的 OBJECT_DEPENDS。因此改进度文案会使这个 runtime .cu 失效；这不等于所有独立 kernel instances 都因该头失效。
 
-Edwards 的 [edwards_runtime.cu](../../src/cuda/stage1/edwards_runtime.cu) 仅包含 runtime .inl；后者第 31–115 行同时做 GMP 打包、CUDA 分配、同步、回读和进度回调。已有 [edwards_launch.h](../../include/ecm/cuda/edwards_launch.h) 和 [montgomery_launch.cuh](../../include/ecm/cuda/montgomery_launch.cuh) 提供 launch Seam，应优先利用；本轮不要求为消除 runtime 的 CUDA 依赖再重造一套框架。与设备相关的 runtime 可以继续为 .cu，把不相关 Implementation 移入 .cpp 就能缩小其变动范围。
+Edwards 的 [edwards_runtime.cu](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.cu) 仅包含 runtime .inl；后者第 31–115 行同时做 GMP 打包、CUDA 分配、同步、回读和进度回调。已有 [edwards_launch.h](../../src/ecm/backend/cuda/stage1/edwards/launch.h) 和 [montgomery_launch.cuh](../../src/ecm/backend/cuda/stage1/montgomery/launch.h) 提供 launch Seam，应优先利用；本轮不要求为消除 runtime 的 CUDA 依赖再重造一套框架。与设备相关的 runtime 可以继续为 .cu，把不相关 Implementation 移入 .cpp 就能缩小其变动范围。
 
-可选 resident/PRAC 路径也要同步收口：[prac_runtime.inl](../../src/cuda/stage1/prac_runtime.inl) 第 35–41、48–172、264–295 行包含 checkpoint、环境配置、计划缓存、恢复与输出；[prac_window.inl](../../src/cuda/stage1/prac_window.inl) 第 13–50、126–142 行包含配置解析与 CSV 输出。不能仅清理默认 ladder 的依赖后就声明 GPU 主机行为已全部隔离。
+可选 resident/PRAC 路径也要同步收口：[prac_runtime.inl](../../src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl) 第 35–41、48–172、264–295 行包含 checkpoint、环境配置、计划缓存、恢复与输出；[prac_window.inl](../../src/ecm/backend/cuda/stage1/montgomery/prac/prac_window.inl) 第 13–50、126–142 行包含配置解析与 CSV 输出。不能仅清理默认 ladder 的依赖后就声明 GPU 主机行为已全部隔离。
 
-CUDA Stage2 已经有所分离。[arithmetic_kernels.cu](../../kernels/cuda/stage2/arithmetic_kernels.cu) 第 1–8 行只引入 launch 与设备算术头；[transform_kernels.cu](../../kernels/cuda/ntt/transform_kernels.cu) 第 1–7 行引入 NTT 设备头。本次本地 include 扫描没有发现它们依赖主机配置解析、结果或文件 writer。NTT 的 tune_checks.cuh 是设备调优校验代码，不是 tune.toml 编码。配置和调优输出已在普通 C++ 侧，例如 [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp) 第 1284–1356 行。不能把 Stage2 当前的脚本全量重编误写成这些 kernel 都包含输出代码。
+CUDA Stage2 已经有所分离。[arithmetic_kernels.cu](../../src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu) 第 1–8 行只引入 launch 与设备算术头；[transform_kernels.cu](../../src/ecm/backend/cuda/ntt/device/transform_kernels.cu) 第 1–7 行引入 NTT 设备头。本次本地 include 扫描没有发现它们依赖主机配置解析、结果或文件 writer。NTT 的 tune_checks.cuh 是设备调优校验代码，不是 tune.toml 编码。配置和调优输出已在普通 C++ 侧，例如 [ecm_cuda_stage2_main.cpp](../../src/core/ecm_cuda_stage2_main.cpp) 第 1284–1356 行。不能把 Stage2 当前的脚本全量重编误写成这些 kernel 都包含输出代码。
 
 **第二类：构建入口主动重编。** 这是独立于目录和 Interface 的问题：
 
@@ -354,7 +354,7 @@ prepare内部保留各曲线/后端合法次序，不把K、恢复、字典、�
 
 这些协作调用发生在 prepare/execute 内部，**顶层顺序清晰和循环内即时 I/O 可以同时成立**。同一上下文里几个函数引用/方法就足够，CPU 并发回调继续由现有会话/发布 Implementation 负责串行化与所有权，不在此承诺多个任务可并发复用现有全局 checkpoint runtime。
 
-当前顺序依据：run_stage1_once 第 3047–3056 行校验输出，第 3064–3075 行打开 checkpoint batch，第 3077 行承接 save history，第 3079 行执行，第 3095–3099 行完成 submission → internal batch → seal → end_batch(true)。错误走第 3080、3104 行 end_batch(false)。各曲线即时因子的调用位置和 lane/快照差异见前文“拆分必须保留的时间顺序”。GPU 安全点示例见 [montgomery.cu](../../src/cuda/stage1/montgomery.cu) 第 1545–1580 行与 [edwards_runtime.inl](../../src/cuda/stage1/edwards_runtime.inl) 第 97–114 行。
+当前顺序依据：run_stage1_once 第 3047–3056 行校验输出，第 3064–3075 行打开 checkpoint batch，第 3077 行承接 save history，第 3079 行执行，第 3095–3099 行完成 submission → internal batch → seal → end_batch(true)。错误走第 3080、3104 行 end_batch(false)。各曲线即时因子的调用位置和 lane/快照差异见前文“拆分必须保留的时间顺序”。GPU 安全点示例见 [montgomery.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu) 第 1545–1580 行与 [edwards_runtime.inl](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl) 第 97–114 行。
 
 队列完成仍为一个完整 workflow：[ecm_driver.cpp](../../src/core/ecm_driver.cpp) 第 3307–3364 行依次处理 Stage2 outbox park、finished、source replace/remove、save sync、Stage2 flush 和 Prime95 delivery。Prime95 失败可以保留 pending，不倒退已完成计算；源队列更新失败不能静默进入下一轮重算。拆分前后均须保留这些具体行为。
 
@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同，P3–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3a 完成 CUDA 家族物理归位，其余 P3 与 P4–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -669,6 +669,26 @@ host_driver、主机命令与策略进入 profile，产生新 local 叶目录 `s
 新 src/ecm 路径暴露出旧 owner graph 收集器把源目录名 ecm 误认为同名 OpenCL target 的问题：首次编译/链接完成后身份核对拒绝未解析的 cgbn_opencl.h。修正为只有链接属性引用可形成 target 边，显式 TARGET_OBJECTS 在源码和链接两处继续识别；没有放宽依赖验证。首次失败日志保留，修正后正式 HostOnly 和真实 fixture 通过。请求分组时另一次编译发现 typed-save 副本的五个旧成员访问，按同一字段映射补齐后通过；失败原始日志未覆盖。
 
 本步尚未把 driver 缩成纯 application、拆完 writer 或建立最终 Executor；这些属于 P3/P4/P6。全局单批次限制、可选 CPU Stage2 尚未验收、只覆盖当前 local 设备的限制仍有效。未运行 release 或性能采样。
+
+### P3a：CUDA 完整家族物理归位已完成
+
+对应程序版本 `0.45.6`。本子步骤仅处理完整 CUDA 家族及其必要消费者，不宣称 P3 整体或职责提取完成。[验证记录](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/qualification.json)保存最终源码、对象与程序身份。原 src/cuda 的 54 个文件、kernels/cuda 的 71 个文件、include/ecm/cuda 的 15 个文件及混合主机 PRAC 计划两文件，共 142 个文件迁入 src/ecm/backend/cuda。
+
+Stage1 按 Montgomery/Edwards 组织主机实现、设备算法、独立实例；PRAC 保留完整可选家族。Stage2 的 15 个主机引擎、独立算术 CU 和 NTT CU 边界不变，设备头分别进入 stage2/device 和 ntt/device；CGBN 与 Goldilocks 原语单独归私有 arithmetic。launch/types/tiers/descriptor 不再留在公开 include 树。旧 backend.cpp 归 factory.cpp，但保留现有函数和组装方式，没有引入新工厂框架。核心 driver 仍通过过渡期私有接口消费执行实现；最终 Executor/prepare 和 writer 提取属于后续阶段。
+
+| 核对 | 结果与边界 | 证据 |
+| --- | --- | --- |
+| 物理迁移 | 142 项一一对应，原三处 CUDA 实现目录无文件；原始 BOM、全部非 include 正文、include 实际指向、源组次序及逐源 CMake 属性保持 | [完整核对](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/layout_final/result.json) |
+| 设备算术 | Stage1 55 项设备闭包、四组原始算术正文；Stage2 93 项算术函数保持；21+7 实例 TU 不合并 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/stage1_structure/result.json)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/stage2_structure/result.json) |
+| 主机及实验合同 | 94 项 NTT 函数/方法，32 个 Stage2 模块清理证明，27 项实验迁移和三项非法包含拒绝，五项探针合同通过；只恢复已核对的 include 拼写用于旧基线比较 | [NTT](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/ntt_host/result.json)、[清理](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/p4_cleanup_02/result.json)、[隔离](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/p4_isolation_03/result.json)、[探针](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/p4_probe_contracts/result.json) |
+| 构建身份 | 46 项通过，包括 PS5.1/PS7 内容指纹一致性 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/identity_cross/result.json) |
+| 正式 local | 完整 Stage1 与生产 Stage2 构建通过；路径身份变化进行必要重编。随后两阶段重复构建均 0 CXX、0 CU、0 链接 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/stage1_local_02.log)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/stage2_local_fresh.log)、[Stage1重复](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/stage1_repeat.log)、[Stage2重复](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/stage2_repeat.log) |
+| 实际对象独立对照 | Stage2 GMP：1536 模数/152064 比较，bad=0；NTT Graph：368 检查/14779392 字，bad=0，26 次分配/释放，live=0 | [GMP](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/arithmetic_run.log)、[NTT](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/ntt_run.log) |
+| 最终程序 | 24 项恢复/发布，完整位宽工厂查询，以及两阶段各 5 组 P0 对照通过 | [可用性](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/usability/summary.json)、[工厂](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/registry/result.json)、[对照](../../data/experiments/main_flow_refactor_implementation_20261021/p3a/runtime/summary.json) |
+
+原 Stage2 目录的 MSVC 依赖记录绑定旧源路径，正常拒绝搬迁后的同名对象复用；保留旧目录，正式输出改到显式 local 叶目录 build_cuda_local/stage2/production/sm89/p3a-eda4f0d985c23039，profile 本身仍为 eda4f0d985c23039，未复制对象或改写身份。首次 Stage1 搬迁工具去掉两份 CUDA 文件的 BOM，复现仓库已记录的 nvcc/GBK 注释吞行，导致 CHECKPOINT_VERSION 未定义；终止该失败轮次，恢复两份原有 BOM 后重新核对所有失效对象。首次失败日志和中止结果保留，未修改宏、数学或编译标准绕过错误。
+
+当前正式架构/使用文档的 CUDA 链接和离线图谱已同步；前期报告仍保留其冻结源码摘要，只将跳转链接映射到当前文件。core/CPU/application/配置生成器/OpenCL/GUI 的剩余物理归位继续 P3，私有混合实现的职责深化继续 P4–P6。没有新增 PRAC 运行资格、release、多架构或性能结论。
 
 ## 首先调整构建复用与输出隔离
 
@@ -1241,7 +1261,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0、P1a/P1b、P2 完成，P3–P7 未执行，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0、P1a/P1b、P2 与 P3a 完成，P3 其余家族及 P4–P7 未完成，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 

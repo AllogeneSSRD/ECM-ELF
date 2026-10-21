@@ -13,7 +13,7 @@ $dependency=Resolve-EcmGmp -Repo $repo -Gmp $manifest.gmp_root
 $cuda=Resolve-EcmCudaToolkit -Archs $manifest.architecture -CudaRoot $manifest.cuda_root
 $vc=Resolve-EcmVcEnvironment $cuda
 $inventory=Get-EcmCudaInventory $repo (Join-Path $Build 'cuda_sources.json')
-$includeDirs=@((Join-Path $dependency.Root 'include'),'include','src','src/core','src/cpu','kernels/cuda')
+$includeDirs=@((Join-Path $dependency.Root 'include'),'include','src','src/core','src/cpu','src/ecm/backend/cuda')
 $sourceSet=Get-EcmStage2SourceSet $repo $inventory production $includeDirs
 Assert-EcmBuildUnits $repo $Build $manifest $sourceSet.Sources $includeDirs -Production
 $engineObjects=@()

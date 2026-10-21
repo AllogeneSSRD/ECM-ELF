@@ -12,11 +12,11 @@ $manifest=Get-Content (Join-Path $WorkerBuild 'build_manifest.json') -Raw|Conver
 $cuda=Resolve-EcmCudaToolkit -Archs $manifest.architecture
 $vc=Resolve-EcmVcEnvironment $cuda
 $gmp=$manifest.gmp_root
-$dirs=@((Join-Path $gmp 'include'),'include','src','src/core','src/cpu','kernels/cuda')
+$dirs=@((Join-Path $gmp 'include'),'include','src','src/core','src/cpu','src/ecm/backend/cuda')
 $inventory=Get-EcmCudaInventory $repo
 $sourceSet=Get-EcmStage2SourceSet $repo $inventory production $dirs
 Assert-EcmBuildUnits $repo $WorkerBuild $manifest $sourceSet.Sources $dirs -Production
-$unit=$manifest.compile_units.'kernels/cuda/stage2/arithmetic_kernels.cu'
+$unit=$manifest.compile_units.'src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu'
 $object=$unit.entry.output
 if(-not $object){$object=Join-Path $WorkerBuild '_objects/arithmetic_kernels.obj'}
 $hash=(Get-FileHash $object).Hash

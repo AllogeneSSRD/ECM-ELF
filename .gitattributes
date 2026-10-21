@@ -170,3 +170,6 @@ src/core/ecm_stage2_tune_portable.h text eol=lf
 src/core/ecm_stage2_width_prediction.h text eol=lf
 tools/test/stage2_runtime_tune_fixture.cpp text eol=lf
 tools/test/test_stage2_runtime_tune.py text eol=lf
+
+# Production CUDA implementation and dispatch stay private under src.
+src/ecm/backend/cuda/** text eol=lf

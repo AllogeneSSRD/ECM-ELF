@@ -55,7 +55,7 @@ foreach($source in $sources){
     } elseif(-not ($reuse -and $previous.objects.$source -and (Test-Path $obj) -and
         $previous.objects.$source -eq (Get-FileHash -LiteralPath $obj).Hash)) {
         $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O2 -arch='+$Arch+
-            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I include -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I src/core -I src/cpu -I src/cuda/stage1 -c "'+$source+'" -o "'+$obj+'"'
+            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I include -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I src/core -I src/cpu -I src/ecm/backend/cuda/stage1/edwards -c "'+$source+'" -o "'+$obj+'"'
         if($Tiers){
             $definitions=' -DECM_TIERS_RESTRICTED'
             foreach($tier in $Tiers.Split(',')){
@@ -86,6 +86,6 @@ foreach($key in $hashes.Keys){if($hashes[$key] -ne (Get-FileHash -LiteralPath $k
 $objectHashes=[ordered]@{}
 foreach($source in $sources){$objectHashes[$source]=(Get-FileHash -LiteralPath $objectMap[$source]).Hash}
 [ordered]@{exe=$exe;sha256=(Get-FileHash $exe).Hash;arch=$Arch;tiers=$Tiers;worker_build=$WorkerBuild;objects=$objectHashes;
-    cuda_object_sha256=$objectHashes['src/cuda/stage1/edwards_runtime.cu'];sources=$hashes
+    cuda_object_sha256=$objectHashes['src/ecm/backend/cuda/stage1/edwards/edwards_runtime.cu'];sources=$hashes
 }|ConvertTo-Json -Depth 5|Set-Content $manifestPath -Encoding utf8
 Write-Host "Built $exe"

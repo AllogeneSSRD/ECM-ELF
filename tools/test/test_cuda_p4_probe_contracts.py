@@ -1,4 +1,5 @@
 """Finite P4 probe seams; real production math and independent oracles stay intact."""
+from source_layout import current_source,current_files,relocation_text
 import argparse,json,re,subprocess
 from pathlib import Path
 from test_cuda_p2_structure import mask
@@ -11,12 +12,13 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True)
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
     frozen=lambda p:subprocess.check_output(['git','show','2a2606e:'+p],cwd=ROOT).decode('utf-8-sig')
-    text=lambda p:(ROOT/p).read_text(encoding='utf-8-sig')
+    text=lambda p:relocation_text(p)
     # Nothing in the production Stage1 or NTT algorithms/host lifetime moved.
     unchanged=['src/cuda/stage1','kernels/cuda/stage1','src/cuda/ntt','kernels/cuda/ntt',
                'include/ecm/cuda/tiers.def','include/ecm/cuda/ntt_parameters.h',
                'tools/test/stage2_s4_program_fixture.cpp']
-    assert not subprocess.check_output(['git','diff','--name-only','2a2606e','--',*unchanged],cwd=ROOT).strip()
+    files=subprocess.check_output(['git','ls-tree','-r','--name-only','2a2606e','--',*unchanged],cwd=ROOT).decode().splitlines()
+    for name in files:assert frozen(name)==relocation_text(name),'production body changed beyond relocation: '+name
     before=frozen('tools/test/stage1_host_wait_probe.cu');after=text('tools/test/stage1_host_wait_probe.cu')
     begin=before.index('#define ECM_TIERS_RESTRICTED');end=before.index('\nstatic void require',begin)
     before=before[:begin]+before[end:]

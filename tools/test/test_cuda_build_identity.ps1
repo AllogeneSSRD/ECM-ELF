@@ -160,13 +160,13 @@ $state=Get-EcmCompileState $Repo $entry
     Check ([IO.File]::ReadAllText($fingerprintPath) -eq $current.fingerprint) 'same content fingerprint across PowerShell runtimes'
 }
 $inventory = Get-EcmCudaInventory $repo (Join-Path $out 'cuda_sources.json')
-$ntt=@('src/cuda/ntt/shape.cpp','src/cuda/ntt/runtime.cpp','src/cuda/ntt/graph.cpp','src/cuda/ntt/checks.cpp','kernels/cuda/ntt/transform_kernels.cu')
+$ntt=@('src/ecm/backend/cuda/ntt/shape.cpp','src/ecm/backend/cuda/ntt/runtime.cpp','src/ecm/backend/cuda/ntt/graph.cpp','src/ecm/backend/cuda/ntt/checks.cpp','src/ecm/backend/cuda/ntt/device/transform_kernels.cu')
 Check (@($inventory.groups.STAGE2_NTT).Count -eq 5 -and
     @(Compare-Object ($inventory.groups.STAGE2_NTT|Sort-Object) ($ntt|Sort-Object)).Count -eq 0 -and
     @($inventory.groups.STAGE2_ARITHMETIC).Count -eq 1 -and
-    $inventory.groups.STAGE2_ARITHMETIC[0] -eq 'kernels/cuda/stage2/arithmetic_kernels.cu') 'Stage2 arithmetic and NTT module membership'
+    $inventory.groups.STAGE2_ARITHMETIC[0] -eq 'src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu') 'Stage2 arithmetic and NTT module membership'
 $expectedProduction=@($inventory.groups.STAGE2_ENGINE)+@($inventory.groups.STAGE2_ARITHMETIC)+@($inventory.groups.STAGE2_NTT)
-$engine=@('context','options','resources','plan','engine','batch','points','product','tree','remainder','s4','factors','checks','diagnostics','tune') | ForEach-Object { 'src/cuda/stage2/'+$_+'.cpp' }
+$engine=@('context','options','resources','plan','engine','batch','points','product','tree','remainder','s4','factors','checks','diagnostics','tune') | ForEach-Object { 'src/ecm/backend/cuda/stage2/'+$_+'.cpp' }
 Check (@($inventory.groups.STAGE2_ENGINE).Count -eq 15 -and
     @(Compare-Object ($inventory.groups.STAGE2_ENGINE|Sort-Object) ($engine|Sort-Object)).Count -eq 0) 'Stage2 host module membership'
 $expectedProduction=@($expectedProduction|Where-Object {$_})
@@ -176,15 +176,15 @@ Check ($production.Count -eq $expectedProduction.Count -and
     @($inventory.groups.STAGE2_DEVELOPMENT).Count -eq 1 -and
     $inventory.groups.STAGE2_DEVELOPMENT[0] -eq 'tools/experiments/cuda/stage2_tree/worker.cu' -and
     @($production|Where-Object {$_ -like 'tools/*'}).Count -eq 0) 'production and development source groups separate'
-$set = Get-EcmStage2SourceSet $repo $inventory production @('include','src/core','kernels/cuda')
+$set = Get-EcmStage2SourceSet $repo $inventory production @('include','src/core','src/ecm/backend/cuda')
 Check (-not @($set.Dependencies | Where-Object { $_ -match '^tools/(bench|experiments)/' }).Count) 'actual production Stage2 source closure isolated'
 Check (@($set.Dependencies | Where-Object { $_ -like '*.def' }).Count -ge 2) 'Stage2 definition tables present in source identity'
 $stage1 = Get-Stage1ReleaseSources $repo
-foreach ($name in @('include/ecm/cuda/tiers.def','src/cuda/stage1/edwards_runtime.inl','src/core/ecm_edwards_gpu_driver.inl')) {
+foreach ($name in @('src/ecm/backend/cuda/dispatch/tiers.def','src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl','src/core/ecm_edwards_gpu_driver.inl')) {
     Check ($stage1.Contains($name)) "Stage1 release records $name"
 }
 $enabled = Get-Stage1ReleaseSources $repo -EnablePrac $true
-Check ($enabled.Contains('src/core/ecm_prac_plan.cpp') -and -not $stage1.Contains('src/core/ecm_prac_plan.cpp')) 'PRAC source membership follows explicit feature flag'
+Check ($enabled.Contains('src/ecm/backend/cuda/stage1/montgomery/prac/ecm_prac_plan.cpp') -and -not $stage1.Contains('src/ecm/backend/cuda/stage1/montgomery/prac/ecm_prac_plan.cpp')) 'PRAC source membership follows explicit feature flag'
 Reject { Assert-Stage1ReleaseSources ([pscustomobject]@{}) $stage1 } 'Stage1 source changed' 'missing release source entries rejected'
 $moduleSource = Join-Path $fixture 'src/host_module.cpp'
 $moduleHeader = Join-Path $fixture 'src/module_private.inc'

@@ -3,7 +3,7 @@
 #ifdef ECM_STAGE2_FROZEN_PRODUCTION_PROFILES
 #include "../../src/core/ecm_stage2_logging.h"
 #include "../../src/core/ecm_stage2_initial_memory.h"
-#include "../../src/cuda/ntt/runtime.h"
+#include "../../src/ecm/backend/cuda/ntt/runtime.h"
 #include "../experiments/cuda/stage2_tree/d_model_profiles.h"
 #else
 #include "../experiments/cuda/ntt_variants/engine.cuh"

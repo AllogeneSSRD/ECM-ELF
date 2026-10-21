@@ -1,4 +1,5 @@
 """Check Stage1 module direction and preserve the frozen device arithmetic bodies."""
+from source_layout import current_source,current_files,relocation_text
 import argparse
 import hashlib
 import json
@@ -32,7 +33,7 @@ def main():
         if path in visited: return
         visited.add(path); body = text(path)
         relative = path.relative_to(ROOT).as_posix()
-        if relative == 'include/ecm/cuda/cgbn_types.cuh':
+        if path == current_source('include/ecm/cuda/cgbn_types.cuh').resolve():
             # Upstream requires GMP only while parsing its host templates.
             assert '#if !defined(__CUDA_ARCH__)\n#include <gmp.h>\n#endif' in body
         else:
@@ -44,11 +45,12 @@ def main():
                               if v.is_file()), None)
             assert candidate is not None, (path, name)
             relative = candidate.resolve().relative_to(ROOT).as_posix()
-            assert not relative.startswith(('src/', 'tools/', '.refactor/')), (path, relative)
+            assert candidate.resolve() in device_files, (path, relative)
             walk(candidate)
+    device_files={p.resolve() for p in current_files('kernels/cuda')+current_files('include/ecm/cuda')}
     for s in sources:
-        if s.startswith('kernels/'): walk(ROOT/s)
-    for path in (ROOT/'src/cuda/stage1').iterdir():
+        if (ROOT/s).resolve() in device_files:walk(ROOT/s)
+    for path in current_files('src/cuda/stage1'):
         body = re.sub(r'/\*.*?\*/|//[^\n]*', '', text(path), flags=re.S)
         assert not re.search(r'__global__|__device__|<<<', body), path
     comparisons = [
@@ -62,7 +64,7 @@ def main():
     evidence = []
     for old, new, start, stop in comparisons:
         before = subprocess.check_output(['git', 'show', a.baseline+':'+old], cwd=ROOT).decode('utf-8-sig')
-        after = text(ROOT/new)
+        after = relocation_text(new)
         if start: before = before[before.index(start):]; after = after[after.index(start):]
         if stop:
             before = before[:before.index('// ── kernel param typedefs')]

@@ -30,7 +30,7 @@ def build():
                         '-P', str(ROOT / 'tools/build/internal/cuda_sources.cmake')],
                        cwd=ROOT, check=True, capture_output=True)
         groups = json.loads(inventory_path.read_text())['groups']
-    tier_source = (ROOT / 'include/ecm/cuda/tiers.def').read_text()
+    tier_source = (ROOT / 'src/ecm/backend/cuda/dispatch/tiers.def').read_text()
     tiers = [dict(bits=int(row[0]), tpi=int(row[1]), group=int(row[2]),
                   montgomery=int(row[3]), development=int(row[4]))
              for row in re.findall(r'^ECM_CUDA_TIER\((\d+),(\d+),(\d+),(\d+),(\d+),', tier_source, re.M)]
@@ -60,7 +60,7 @@ def build():
         assert set(module['depends']) <= module_ids, module['id']
         module['ref'] = add_reference(module['path'], module.get('find', ''))
     for tier in tiers:
-        tier['ref'] = add_reference('include/ecm/cuda/tiers.def', f"ECM_CUDA_TIER({tier['bits']},")
+        tier['ref'] = add_reference('src/ecm/backend/cuda/dispatch/tiers.def', f"ECM_CUDA_TIER({tier['bits']},")
     for flow in content['flows'].values():
         for step in flow['steps']:
             assert set(step['modules']) <= module_ids, step['title']
@@ -74,15 +74,17 @@ def build():
 
     catalog = []
     descriptions = {module['path']: module for module in content['modules']}
-    for folder, zone in [('src/cuda', 'host'), ('kernels/cuda', 'device'),
-                         ('include/ecm/cuda', 'interface'), ('tools/experiments/cuda', 'experiment')]:
+    for folder, zone in [('src/ecm/backend/cuda', 'host'), ('tools/experiments/cuda', 'experiment')]:
         for file in sorted((ROOT / folder).rglob('*')):
             if file.suffix not in {'.h', '.hpp', '.cuh', '.cu', '.cpp', '.inl', '.inc', '.def'}:
                 continue
             path = file.relative_to(ROOT).as_posix()
             member = [name for name, sources in groups.items() if path in sources]
             module = descriptions.get(path)
-            catalog.append(dict(path=path, zone=zone, groups=member,
+            file_zone=zone
+            if zone!='experiment':
+                file_zone='device' if file.suffix in ('.cu','.cuh') else 'interface' if file.name in ('launch.h','api.h','tiers.def') else 'host'
+            catalog.append(dict(path=path, zone=file_zone, groups=member,
                                 lines=len(file.read_text(encoding='utf-8-sig').splitlines()),
                                 sha256=sha(file.read_bytes()), module=module['id'] if module else None,
                                 ref=add_reference(path, module.get('find', '') if module else '')))
@@ -108,7 +110,7 @@ def build():
                              {'tools/build/internal/cuda_sources.cmake', 'src/core/ecm_program_version.h'})
     signature = sha('\n'.join(path + ':' + sha((ROOT / path).read_bytes()) for path in signature_paths).encode())
     revision = subprocess.check_output(['git', 'log', '-1', '--format=%h', '--',
-        'src/cuda', 'kernels/cuda', 'include/ecm/cuda', 'src/core/ecm_program_version.h',
+        'src/ecm/backend/cuda', 'src/core/ecm_program_version.h',
         'tools/build/internal/cuda_sources.cmake'], cwd=ROOT).decode().strip()
     data = dict(meta=dict(version=version, sourceRevision=revision, sourceSignature=signature,
                           sourceFiles=len(signature_paths), schema=1),

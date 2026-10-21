@@ -18,7 +18,7 @@
 
 工作量约为三次 O(L log₂L) 变换加 O(L) pointwise/carry、pack 和系数归约。每 butterfly 的访存/指令取决于融合层数、shared 布局和根缓存；该渐近式不能直接换算 GPU 周期数。
 
-独立生产程序默认使用pack/zero融合：`stage2_pack_zero=true`，可用false或`--pack-zero 0`关闭；共享/Worker TOML、CLI和环境覆盖见[配置参考](../ECM_TOML_REFERENCE.md#stage2_pack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/cuda/stage2/s4_input_pack.cuh)。
+独立生产程序默认使用pack/zero融合：`stage2_pack_zero=true`，可用false或`--pack-zero 0`关闭；共享/Worker TOML、CLI和环境覆盖见[配置参考](../ECM_TOML_REFERENCE.md#stage2_pack_zero)。普通上传、resident gather及reverse-B按最终digit地址一次覆盖完整工作区，融合有效digit写入与所有补零；无需额外设备数据数组，不改变数学NTT或carry/归约。驱动把解析值传入曲线及tune子进程，底层探针仍使用显式`NTT_S4_PACK_ZERO=0|1`。索引合同、两卡450条正式曲线、复测和默认资格统一见[准备与同步](../performance/STAGE2_PREPARATION.md#packzero-融合路径)，共享内核位于[s4_input_pack.cuh](../../src/ecm/backend/cuda/stage2/device/pack.cuh)。
 
 ## 当前算术与调度
 
@@ -80,11 +80,11 @@ NTT pool 保留最大工作区容量，shape 小缓冲/表按键缓存。非导�
 
 ## 代码入口与依据
 
-- [shape.cpp](../../src/cuda/ntt/shape.cpp)：`choose_cfg`、`ntt_shape_query`、exactness 与形状缓存。
-- [runtime.h](../../src/cuda/ntt/runtime.h)、[runtime.cpp](../../src/cuda/ntt/runtime.cpp)：私有主机接口、Arena、根表、分配/回退、forward/inverse 和乘法执行；[graph.cpp](../../src/cuda/ntt/graph.cpp)：Graph 捕获、重放与失效；[checks.cpp](../../src/cuda/ntt/checks.cpp)：GMP、workspace、寿命、容量与协作 outer 检查。
-- [ntt_launch.h](../../include/ecm/cuda/ntt_launch.h)、[transform_kernels.cu](../../kernels/cuda/ntt/transform_kernels.cu)：中立启动接口与唯一 NTT 设备编译单元；`transform.cuh`、`tile.cuh`、`outer_coop.cuh`、`carry.cuh`、`carry_partial.cuh` 分别维护基础变换、融合 tile/outer 和 carry。运行时后端常量在设备所属编译单元上传，不引入 RDC。
-- [goldilocks.cuh](../../kernels/cuda/shared/goldilocks.cuh)、[goldilocks_reduce.cuh](../../kernels/cuda/shared/goldilocks_reduce.cuh)、[goldilocks_ptx.cuh](../../kernels/cuda/shared/goldilocks_ptx.cuh)、[goldilocks_sub.cuh](../../kernels/cuda/shared/goldilocks_sub.cuh)、[goldilocks_tile.cuh](../../kernels/cuda/shared/goldilocks_tile.cuh)：域算术和可复用 tile 原语；设备闭包不包含 GMP 或 ECM 主机流程。
-- [s4_reduce.cuh](../../kernels/cuda/stage2/s4_reduce.cuh)、[stage2_scalar.cuh](../../kernels/cuda/shared/stage2_scalar.cuh)：S4 长除法与梅森归约；[模块职责及实验边界](STAGE2.md#cuda-模块边界)。
+- [shape.cpp](../../src/ecm/backend/cuda/ntt/shape.cpp)：`choose_cfg`、`ntt_shape_query`、exactness 与形状缓存。
+- [runtime.h](../../src/ecm/backend/cuda/ntt/runtime.h)、[runtime.cpp](../../src/ecm/backend/cuda/ntt/runtime.cpp)：私有主机接口、Arena、根表、分配/回退、forward/inverse 和乘法执行；[graph.cpp](../../src/ecm/backend/cuda/ntt/graph.cpp)：Graph 捕获、重放与失效；[checks.cpp](../../src/ecm/backend/cuda/ntt/checks.cpp)：GMP、workspace、寿命、容量与协作 outer 检查。
+- [ntt_launch.h](../../src/ecm/backend/cuda/ntt/launch.h)、[transform_kernels.cu](../../src/ecm/backend/cuda/ntt/device/transform_kernels.cu)：中立启动接口与唯一 NTT 设备编译单元；`transform.cuh`、`tile.cuh`、`outer_coop.cuh`、`carry.cuh`、`carry_partial.cuh` 分别维护基础变换、融合 tile/outer 和 carry。运行时后端常量在设备所属编译单元上传，不引入 RDC。
+- [goldilocks.cuh](../../src/ecm/backend/cuda/arithmetic/goldilocks/goldilocks.cuh)、[goldilocks_reduce.cuh](../../src/ecm/backend/cuda/arithmetic/goldilocks/goldilocks_reduce.cuh)、[goldilocks_ptx.cuh](../../src/ecm/backend/cuda/arithmetic/goldilocks/goldilocks_ptx.cuh)、[goldilocks_sub.cuh](../../src/ecm/backend/cuda/arithmetic/goldilocks/goldilocks_sub.cuh)、[goldilocks_tile.cuh](../../src/ecm/backend/cuda/arithmetic/goldilocks/goldilocks_tile.cuh)：域算术和可复用 tile 原语；设备闭包不包含 GMP 或 ECM 主机流程。
+- [s4_reduce.cuh](../../src/ecm/backend/cuda/stage2/device/s4_reduce.cuh)、[stage2_scalar.cuh](../../src/ecm/backend/cuda/stage2/stage2_scalar.cuh)：S4 长除法与梅森归约；[模块职责及实验边界](STAGE2.md#cuda-模块边界)。
 - 独立 NTT/carry/outer/cuFFT 候选位于 `tools/experiments/cuda/ntt_variants/`，Tensor 候选位于 `tools/experiments/cuda/ntt_tensor/`；GMP oracle 和夹具位于 `tools/test/`。使用生产 NTT 的探针显式链接同一源清单或经身份验证的对象，保留各自默认流 ABI。
 - [内存模型](MEMORY.md)、[性能结论](../performance/STAGE2.md)、[tune 合同](AUTO_B2.md)。
 - 固定资料：[GPUOWL NTT](../reference/GPUOWL_NTT.md)、[Goldilocks 证明](../reference/GOLDILOCKS_ARITHMETIC.md)、[开源库分析](../reference/GPU_NTT_LIBRARIES.md)。

@@ -7,7 +7,7 @@ from pathlib import Path
 from test_cuda_p2_structure import mask, balanced
 
 ROOT = Path(__file__).resolve().parents[2]
-STAGE2 = ROOT/'src/cuda/stage2'
+STAGE2 = ROOT/'src/ecm/backend/cuda/stage2'
 
 
 def units(text):

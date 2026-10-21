@@ -36,23 +36,23 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 ### CUDA 模块边界
 
-`include/ecm/cuda/` 提供中立接口、借用设备缓冲的发射描述及唯一位宽清单 `tiers.def`。`src/cuda/backend.cpp` 负责后端能力查询；`src/cuda/stage1/` 负责 GMP 编解码、分配释放、错误检查、切片、回调、计时和恢复。Montgomery 驱动为 `montgomery.cu`；Edwards 的参数校验在 `edwards.cpp` / `edwards_naf.cpp`，两种执行模式的主机循环由 `edwards_runtime.cu` 单独编译。
+CUDA 的发射描述、设备类型与位宽清单均为 `src/ecm/backend/cuda/` 内的私有实现；其中 `dispatch/tiers.def` 唯一维护位宽。公开任务与选择合同位于 `include/ecm/service/` 和 `include/ecm/core/`。`src/ecm/backend/cuda/factory.cpp` 负责后端能力查询；`src/ecm/backend/cuda/stage1/` 负责 GMP 编解码、分配释放、错误检查、切片、回调、计时和恢复。Montgomery 驱动为 `montgomery/adapter.cu`；Edwards 的参数校验在 `edwards.cpp` / `edwards_naf.cpp`，两种执行模式的主机循环由 `edwards_runtime.cu` 单独编译。
 
-`kernels/cuda/stage1/` 只维护设备算术、模板实例和薄发射器。Montgomery 的 PARAM0/2/3 各有七组实例；Edwards binary/NAF 共用七组实例。核目录不包含项目主机驱动，也不接收 GMP 对象、进度回调或 checkpoint 对象。第三方 CGBN 在 NVCC 主机解析阶段需要 GMP 类型，由 `include/ecm/cuda/cgbn_types.cuh` 的主机条件包含适配，设备运算接口仍使用原始缓冲和标量。
+设备算术与薄发射器位于各曲线目录，独立实例放在对应 `instances/`。Montgomery 的 PARAM0/2/3 各有七组实例；Edwards binary/NAF 共用七组实例。设备实例闭包不包含项目主机驱动，也不接收 GMP 对象、进度回调或 checkpoint 对象。第三方 CGBN 在 NVCC 主机解析阶段需要 GMP 类型，由 `src/ecm/backend/cuda/arithmetic/cgbn/types.cuh` 的主机条件包含适配，设备运算接口仍使用原始缓冲和标量。
 
-依赖方向为：核心驱动 → 中立接口 → CUDA 主机实现 → 中立发射接口 → 设备实例/算术；主机与设备都可读取 `tiers.def`。实际编译源由 `tools/build/internal/cuda_sources.cmake` 维护。PRAC 设备源码位于 `kernels/cuda/optional/prac/`，主机计划与运行时位于 `src/core/ecm_prac_plan.*` 和 `src/cuda/stage1/prac_*.inl`，仅在显式启用时链接 `ecm_cuda_prac` 对象目标。Stage2 的主机、算术、NTT 及实验边界见 [Stage2 模块职责](STAGE2.md#cuda-模块边界)。主机等待探针通过 `include/ecm/cuda/diagnostics/host_wait.h` 与唯一测试适配调用真实 Edwards 运行时，探针入口不再包含私有主机实现。生产闭包禁止反向包含工具与实验源码。
+依赖方向为：任务/旧执行适配 → CUDA 私有 API → CUDA 主机实现 → 私有发射接口 → 设备实例/算术；主机与设备都可读取 `tiers.def`。实际编译源由 `tools/build/internal/cuda_sources.cmake` 维护。PRAC 设备源码、主机计划与运行时统一位于 `src/ecm/backend/cuda/stage1/montgomery/prac/`，仅在显式启用时链接 `ecm_cuda_prac` 对象目标。Stage2 的主机、算术、NTT 及实验边界见 [Stage2 模块职责](STAGE2.md#cuda-模块边界)。主机等待探针通过 `src/ecm/backend/cuda/stage1/edwards/diagnostics/host_wait.h` 与唯一测试适配调用真实 Edwards 运行时，探针入口不再包含私有主机实现。生产闭包禁止反向包含工具与实验源码。
 
 Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由相邻点及固定差点组成。GPU 以切片推进，避免一个超长 kernel 占用整段 B1。每曲线的末点先解码、检查，求 Z 与 N 的 GCD；可逆时归一化 X=X/Z mod N，再输出 save。
 
 ### GPU Edwards
 
-[CUDA NAF 批量入口](../../src/cuda/stage1/edwards_naf.cpp)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12；每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，不做字典模逆。主机以两份紧凑位图保存非零列和有符号索引，生产调用使用自适应切片，按实测执行时间调整每片 NAF 列数。设备累加点在算术域跨片保留，只回传四个规范普通坐标供回调及检查点使用。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [ecm_edwards_naf.h](../../src/core/ecm_edwards_naf.h)，设备字典与切片见 [cgbn_edwards_naf.cuh](../../kernels/cuda/stage1/edwards/naf.cuh)。
+[CUDA NAF 批量入口](../../src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12；每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，不做字典模逆。主机以两份紧凑位图保存非零列和有符号索引，生产调用使用自适应切片，按实测执行时间调整每片 NAF 列数。设备累加点在算术域跨片保留，只回传四个规范普通坐标供回调及检查点使用。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [ecm_edwards_naf.h](../../src/core/ecm_edwards_naf.h)，设备字典与切片见 [cgbn_edwards_naf.cuh](../../src/ecm/backend/cuda/stage1/edwards/naf.cuh)。
 
 容器选择要求 N 至少留一位余量，选择本次构建中最小的可用容器。完整网格为128/192/256/384/512（TPI4）、768..2048间隔256（TPI8）、2560..8192间隔512（TPI16）、9216..17408间隔1024（TPI32），共32档，TPB128。Montgomery仍预留六位，不能把两个模型的边界条件互换。`ECM_TIERS`同时筛选Edwards实例；缺档时使用更大可用档，超过本次构建可用上限时报错。日志的 `GPU Edwards geometry` 给出实际容器、TPI及网格，查询入口为 `ecm_cuda_edwards_tier`。
 
-二进制与NAF的实例共享[位宽清单](../../include/ecm/cuda/tiers.def)，核函数和七组实例化文件位于 `kernels/cuda/stage1/edwards/`，按TPI及位宽范围拆分并行编译；`src/cuda/stage1/`保留输入校验、分派和主机驱动，中立接口位于 `include/ecm/cuda/`。模板算术与切片逻辑见[共用实例实现](../../kernels/cuda/stage1/edwards/instances.cuh)。字典显存为曲线数×容器字节数×4坐标×2^(w−2)，分配失败会报错并保留未完成队列，不静默改变显式窗口。
+二进制与NAF的实例共享[位宽清单](../../src/ecm/backend/cuda/dispatch/tiers.def)，核函数和七组实例化文件位于 `src/ecm/backend/cuda/stage1/edwards/instances/`，按TPI及位宽范围拆分并行编译；`src/ecm/backend/cuda/stage1/`保留输入校验、分派和主机驱动，相关 API 为曲线目录内的私有头。模板算术与切片逻辑见[共用实例实现](../../src/ecm/backend/cuda/stage1/edwards/instances/instances.cuh)。字典显存为曲线数×容器字节数×4坐标×2^(w−2)，分配失败会报错并保留未完成队列，不静默改变显式窗口。
 
-主循环默认倍点为 HWCD；`ECM_EDWARDS_DBL_ALGO=4|5` 选择 HWCD（内部编号 4）或 2XY 多项式（编号 5），字典构造使用 HWCD。后者采用 Prime95 算法 5 的代数形式，CGBN 不模拟其 FFT 复合指令；内部编号 4 不代表 Prime95 算法 4。参考版本与运算计数见 [数学说明](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。`ECM_EDWARDS_STAGE1_ALGO=binary|naf` 可显式选择 [原二进制路径](../../src/cuda/stage1/edwards.cpp)或 NAF，用于对照；binary 不接受窗口或 NAF 倍点设置。未指定时使用 NAF，恢复时遵从已保存的模式。
+主循环默认倍点为 HWCD；`ECM_EDWARDS_DBL_ALGO=4|5` 选择 HWCD（内部编号 4）或 2XY 多项式（编号 5），字典构造使用 HWCD。后者采用 Prime95 算法 5 的代数形式，CGBN 不模拟其 FFT 复合指令；内部编号 4 不代表 Prime95 算法 4。参考版本与运算计数见 [数学说明](../reference/ECM_EDWARDS_MATH.md#21-prime95-倍点算法编号与-fft-条件)。`ECM_EDWARDS_STAGE1_ALGO=binary|naf` 可显式选择 [原二进制路径](../../src/ecm/backend/cuda/stage1/edwards/edwards.cpp)或 NAF，用于对照；binary 不接受窗口或 NAF 倍点设置。未指定时使用 NAF，恢复时遵从已保存的模式。
 
 [曲线构造](../../src/core/ecm_edwards_curve.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
 
@@ -66,7 +66,7 @@ Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery
 
 `arithmetic api_seconds` 覆盖标量编码、设备初始化/分配、字典、切片、回传及进度回调，排除之前的指数/曲线构造和之后的 GCD/归一化/save。`dictionary_gpu_ms` 与 `loop_gpu_ms` 是 CUDA event 区间，可能包含首次模块加载或主机发射间隙，不能当作 profiler 的纯 kernel 时间。这些计时存在嵌套，不能与进程 wall 重复相加。
 
-GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../src/core/ecm_stage1_gpu_progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/core/ecm_edwards_gpu_driver.inl)，设备准备边界位于[binary/NAF 主机循环](../../src/cuda/stage1/edwards_runtime.inl)。
+GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../src/core/ecm_stage1_gpu_progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/core/ecm_edwards_gpu_driver.inl)，设备准备边界位于[binary/NAF 主机循环](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)。
 
 GPU Edwards 在 NAF 列或二进制位的片边界更新共用进度输出，GUI 管道可读取百分比。当前32档构建的三曲线族同exe数据见[性能依据](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，32档CPU末点、旧检查点跨容器恢复及Stage2交接见[细分实例验收](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)。冻结七档的binary/NAF、窗口/倍点对照及大界限证据分别见[性能参考](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)和[窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)，初始流水线见[开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
 
@@ -84,7 +84,7 @@ PRAC 的 `single-compact` 专用体将 xADD 统一到一个调用点，倍点使
 
 ## 位宽与资源
 
-[tiers.def](../../include/ecm/cuda/tiers.def) 唯一维护位宽、TPI、实例组、Montgomery 支持/dev 标记、旧宏别名及两族 TPB。七组为：128…512、768…2048、2560…4096、4608…6144、6656…8192、9216…12288、13312…17408；17408 仅支持 Edwards。旧 `small` / `medium` 仍对应 512 / 1024，`ECM_TIERS_RESTRICTED` 与 `ECM_NO_PARAM2` 保持原筛选方式。类型兼容别名不代表已注册实例；能力查询以真实工厂返回值为准。
+[tiers.def](../../src/ecm/backend/cuda/dispatch/tiers.def) 唯一维护位宽、TPI、实例组、Montgomery 支持/dev 标记、旧宏别名及两族 TPB。七组为：128…512、768…2048、2560…4096、4608…6144、6656…8192、9216…12288、13312…17408；17408 仅支持 Edwards。旧 `small` / `medium` 仍对应 512 / 1024，`ECM_TIERS_RESTRICTED` 与 `ECM_NO_PARAM2` 保持原筛选方式。类型兼容别名不代表已注册实例；能力查询以真实工厂返回值为准。
 
 Edwards 选择实际编入的最小严格大于 N bits 的容器；Montgomery 要求容器至少为 N bits+6。受限构建中 PARAM2/3 仍先选择完整网格的首个适配档，该档未编入时会失败；PARAM0 可跳过缺失实例。`--gpu-info` 查询的是实际注册集合。统一清单不改变这个现存差异。Stage2 使用同文件中的 NW=4/8/16/32/64/128/256 容量表，按实际 64-bit 字数选择，不套用 Stage1 的进位余量。
 
@@ -116,12 +116,12 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 - [ecm_stage1_checkpoint_runtime.cpp](../../src/core/ecm_stage1_checkpoint_runtime.cpp)、[ecm_stage1_binary.h](../../src/core/ecm_stage1_binary.h)：二进制外壳、长度边界、CRC32C、锁及轮换恢复。
 - [ecm_stage1_legacy_gpu.h](../../src/core/ecm_stage1_legacy_gpu.h)：旧 CUDA ladder V5 导入及逐 lane 模数校验。
 - [ecm_edwards_gpu_checkpoint.h](../../src/core/ecm_edwards_gpu_checkpoint.h)：GPU Edwards 二进制/旧文本载荷及状态验证。
-- [montgomery.cu](../../src/cuda/stage1/montgomery.cu)：曲线布局、归一化、调度及保存点。
-- [arithmetic.cuh](../../kernels/cuda/stage1/montgomery/arithmetic.cuh)、[instances.cuh](../../kernels/cuda/stage1/montgomery/instances.cuh)、[registry.cu](../../kernels/cuda/stage1/montgomery/registry.cu)：设备 ladder、按组实例及薄发射器。
-- [edwards_runtime.inl](../../src/cuda/stage1/edwards_runtime.inl)、[instances.cuh](../../kernels/cuda/stage1/edwards/instances.cuh)：Edwards 主机循环与设备实例。
-- [prac_runtime.inl](../../src/cuda/stage1/prac_runtime.inl)：计划、策略、切片及恢复。
-- [cgbn_stage1_prac_single_add.cuh](../../kernels/cuda/optional/prac/cgbn_stage1_prac_single_add.cuh)：专用链规则。
-- [cgbn_edwards_point.cuh](../../kernels/cuda/stage1/edwards/point.cuh)：GPU Edwards 扩展坐标算术，由批量 worker 与独立探针共用。
+- [montgomery.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu)：曲线布局、归一化、调度及保存点。
+- [arithmetic.cuh](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh)、[instances.cuh](../../src/ecm/backend/cuda/stage1/montgomery/instances/instances.cuh)、[registry.cu](../../src/ecm/backend/cuda/stage1/montgomery/registry.cu)：设备 ladder、按组实例及薄发射器。
+- [edwards_runtime.inl](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)、[instances.cuh](../../src/ecm/backend/cuda/stage1/edwards/instances/instances.cuh)：Edwards 主机循环与设备实例。
+- [prac_runtime.inl](../../src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl)：计划、策略、切片及恢复。
+- [cgbn_stage1_prac_single_add.cuh](../../src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_single_add.cuh)：专用链规则。
+- [cgbn_edwards_point.cuh](../../src/ecm/backend/cuda/stage1/edwards/point.cuh)：GPU Edwards 扩展坐标算术，由批量 worker 与独立探针共用。
 - [ecm_mont_cpu.cpp](../../src/cpu/ecm_mont_cpu.cpp)、[ecm_edwards_cpu.cpp](../../src/cpu/ecm_edwards_cpu.cpp)：CPU 实现。
 
 使用和已测最佳范围见 [Stage1 使用](../usage/STAGE1.md)、[性能](../performance/STAGE1.md)。

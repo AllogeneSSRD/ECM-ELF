@@ -1,14 +1,14 @@
 #ifdef NTT_TENSOR_USE_PRODUCTION_RUNTIME
 #include <algorithm>
 #include "../../src/core/ecm_stage2_logging.h"
-#include "../../src/cuda/ntt/runtime.h"
-#include "../../kernels/cuda/shared/goldilocks_tile.cuh"
+#include "../../src/ecm/backend/cuda/ntt/runtime.h"
+#include "../../src/ecm/backend/cuda/arithmetic/goldilocks/goldilocks_tile.cuh"
 #else
 #include "../experiments/cuda/ntt_variants/engine.cuh"
 #endif
 #include "../experiments/cuda/ntt_tensor/goldilocks.cuh"
 
-#include "../../include/ecm/cuda/ntt_launch.h"
+#include "../../src/ecm/backend/cuda/ntt/launch.h"
 #ifndef NTT_TENSOR_USE_PRODUCTION_RUNTIME
 // The independent experimental engine retains its own kernels and launcher.
 template<bool INVERSE,bool WARP_TAIL>

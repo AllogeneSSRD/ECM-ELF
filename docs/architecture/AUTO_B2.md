@@ -389,10 +389,10 @@ NTT 参数表发布时按共享行规则 `(length,batch,tile)` 数值稳定升�
 
 ### NTT 摘要代码依据
 
-- [tune.cpp](../../src/cuda/stage2/tune.cpp)：`stage2_tune::run`，基准载荷、两个正向/一个逆向、GPU事件核验及字段输出。
+- [tune.cpp](../../src/ecm/backend/cuda/stage2/tune.cpp)：`stage2_tune::run`，基准载荷、两个正向/一个逆向、GPU事件核验及字段输出。
 - [ecm_stage2_tune_portable.h](../../src/core/ecm_stage2_tune_portable.h)：`validate_ntt_summary`、`strip_ntt_auxiliary_timing`、`Profile::update_ntt/load/serialize`，摘要检查、时间字段剔除及参数表发布。
-- [runtime.cpp](../../src/cuda/ntt/runtime.cpp)：`fuse_plan_stages`、`fuse_describe`、正向/逆向执行与 `ntt_pack_operand`；[shape.cpp](../../src/cuda/ntt/shape.cpp)：形状选择及精确性约束。
-- [outer_coop.cuh](../../kernels/cuda/ntt/outer_coop.cuh)：block 协作外层内核；[NTT 模块入口](NTT.md#代码入口与依据)。
+- [runtime.cpp](../../src/ecm/backend/cuda/ntt/runtime.cpp)：`fuse_plan_stages`、`fuse_describe`、正向/逆向执行与 `ntt_pack_operand`；[shape.cpp](../../src/ecm/backend/cuda/ntt/shape.cpp)：形状选择及精确性约束。
+- [outer_coop.cuh](../../src/ecm/backend/cuda/ntt/device/outer_coop.cuh)：block 协作外层内核；[NTT 模块入口](NTT.md#代码入口与依据)。
 - [ecm_stage2_portable_model.h:130](../../src/core/ecm_stage2_portable_model.h#L130)：NTT成本查询/外推；[工作量:28](../../src/core/ecm_stage2_portable_model.h#L28)；[非负拟合:194](../../src/core/ecm_stage2_portable_model.h#L194)；[阶段估算:236](../../src/core/ecm_stage2_portable_model.h#L236)。
 
 ## 汇集预计算结果
@@ -422,7 +422,7 @@ G=1与baby预算回退缺完整联合生命周期，成本可估算但原生准�
 ## 代码入口
 
 - [ecm_stage2_d_catalog.h:14](../../src/core/ecm_stage2_d_catalog.h#L14)：唯一D字面量表；`entries`、`degree`提供派生P，编译期检查范围、偶数、唯一和顺序。
-- [plan.cpp:196](../../src/cuda/stage2/plan.cpp#L196)：原生默认成本候选。
+- [plan.cpp:196](../../src/ecm/backend/cuda/stage2/plan.cpp#L196)：原生默认成本候选。
 - [ecm_stage2_portable_driver.inl:310](../../src/core/ecm_stage2_portable_driver.inl#L310)：默认几何模型；[运行时搜索:337](../../src/core/ecm_stage2_portable_driver.inl#L337)、[运行时采用:461](../../src/core/ecm_stage2_portable_driver.inl#L461)处理候选和重复观察；[portable_select:614](../../src/core/ecm_stage2_portable_driver.inl#L614)负责实测预筛、成本排名及准入；[run_portable_tune:1149](../../src/core/ecm_stage2_portable_driver.inl#L1149)负责正式搜索、测量与发布。[运行采集:226](../../src/core/ecm_stage2_portable_driver.inl#L226)负责采集与可选缓存写回。
 - [ecm_stage2_portable_model.h](../../src/core/ecm_stage2_portable_model.h#L194)：`Estimator::fitted`负责非负拟合及留一资格；同文件提供工作量、观察匹配、插值与误差余量。
 - [ecm_stage2_d_search.h:27](../../src/core/ecm_stage2_d_search.h#L27)：`DSearch`负责改善方向延伸、比例细化和区间重启；[ecm_stage2_runtime_tune.h:34](../../src/core/ecm_stage2_runtime_tune.h#L34)负责额外成本预算，[runtime_choice:56](../../src/core/ecm_stage2_runtime_tune.h#L56)执行试跑/采用分离及合格运行均值排名。

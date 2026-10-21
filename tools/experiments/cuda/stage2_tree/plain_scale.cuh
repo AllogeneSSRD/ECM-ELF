@@ -1,6 +1,6 @@
 #pragma once
-#include "../../../../include/ecm/cuda/stage2_launch.h"
-#include "../../../../src/cuda/common/plain_scale.h"
+#include "../../../../src/ecm/backend/cuda/stage2/launch.h"
+#include "../../../../src/ecm/backend/cuda/stage2/plain_scale.h"
 
 // Included after s2g_mont_mul and S2G_DISPATCH. Coefficients stay in the plain
 // domain: Mont(h, factor*R mod N) = h*factor mod N, R = 2^(64*nw).
