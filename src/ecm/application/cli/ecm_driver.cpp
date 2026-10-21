@@ -48,6 +48,7 @@
 #include "../../service/execution/legacy/ecm.h"
 #include "../../service/execution/legacy/cgbn_stage1.h"            /* gpu_pick_random_sigma / gpu_compute_batch_d */
 #include "ecm/platform/logging.h"
+#include "ecm/platform/program_version.h"
 #include "../configuration/ecm_queue_config.h"
 #include "../../storage/queue/ecm_worktodo.h"
 #include "../../storage/transfer/ecm_stage2_transfer.h"
@@ -59,8 +60,6 @@
 #include <random>
 #include <algorithm>
 #include "../../storage/save/ecm_edwards_io.h"
-#include "../../storage/results/ecm_internal_result.h"
-#include "../../storage/results/ecm_submission_writer.h"
 #include <regex>
 #ifndef ECM_BUILD_ID
 #define ECM_BUILD_ID "development"
@@ -86,7 +85,6 @@ using ecm_stage1::Stage1TaskStatus;
 using ecm_stage1::Stage1FailureSource;
 using ecm_stage1::run_stage1_task;
 using ecm_stage1::stage1_publish_factor;
-using ecm_stage1::stage1_results_complete;
 
 
 

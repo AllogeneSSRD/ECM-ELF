@@ -1,3 +1,4 @@
+#include "ecm/storage/results/publication.h"
 #include "host_workflow.h"
 #include "../../../../service/stage1/preparation.h"
 #include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
@@ -15,7 +16,6 @@ using ecm_stage1::mont_format_save_name;
 using ecm_stage1::ensure_dir;
 using ecm_stage1::stage1_now_ms;
 using ecm_stage1::stdout_is_tty_local;
-using ecm_stage1::stage1_results_complete;
 using ecm_stage1::stage1_publish_factor;
 #include "api.h"
 #include "naf.h"
@@ -136,7 +136,7 @@ int ecm_cuda_edwards::run_stage1(const mpz_t n,double b1,double b2,uint32_t curv
                 const auto legacy=(std::filesystem::path(opt.persistence.tmp_dir)/("ed_"+old+".gpu.ckpt")).string();
                 Batch saved(curves);saved.sigmas=batch.sigmas;saved.window=batch.window;saved.doubling=batch.doubling;
                 if(restore(legacy,saved,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
-                    if(stage1_results_complete(opt,n,uint64_t(b1),true,0,saved.sigmas))continue;
+                    if(ecm_results::contains_stage1_curves(opt.persistence.results_file,n,uint64_t(b1),true,0,saved.sigmas))continue;
                     batch.done=saved.done;batch.window=saved.window;batch.doubling=saved.doubling;
                     batch.sigmas=saved.sigmas;batch.hit=saved.hit;
                     for(uint32_t i=0;i<curves;++i)mpz_set(batch.factors[i],saved.factors[i]);

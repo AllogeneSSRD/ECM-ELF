@@ -735,6 +735,14 @@
     "src/core/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp",
     "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp",
     "src/core/ecm_stage1_selection.h": "include/ecm/core/stage1/selection.h",
-    "src/ecm/application/configuration/ecm_stage1_selection.h": "include/ecm/core/stage1/selection.h"
+    "src/ecm/application/configuration/ecm_stage1_selection.h": "include/ecm/core/stage1/selection.h",
+    "src/core/ecm_result_submission.h": "include/ecm/storage/results/publication.h",
+    "src/ecm/storage/results/ecm_result_submission.h": "include/ecm/storage/results/publication.h",
+    "src/core/ecm_internal_result.h": "include/ecm/storage/results/publication.h",
+    "src/ecm/storage/results/ecm_internal_result.h": "include/ecm/storage/results/publication.h",
+    "src/core/ecm_result_paths.h": "include/ecm/storage/results/publication.h",
+    "src/ecm/storage/results/ecm_result_paths.h": "include/ecm/storage/results/publication.h",
+    "src/core/ecm_submission_writer.h": "include/ecm/storage/results/publication.h",
+    "src/ecm/storage/results/ecm_submission_writer.h": "include/ecm/storage/results/publication.h"
   }
 }

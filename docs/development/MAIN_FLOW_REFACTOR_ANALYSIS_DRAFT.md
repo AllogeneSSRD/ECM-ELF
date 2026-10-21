@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.13`；P2、P3a/b/c、P4a–e 已完成，共享选择与生成默认值已解除 service→应用解析依赖；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.14`；P2、P3a/b/c、P4a–f 已完成，结果 writer 已集中普通 CPP，公开声明隐藏文件锁/编码/发布实现；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -815,6 +815,25 @@ global event 与标量上传先于恢复/构造、checkpoint 在回读之后编�
 - [Stage1 重复构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/stage1_repeat.log)和 [Stage2 重复构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/stage2_repeat.log)均为 0 编译、0 链接；31+2 个 CUDA 对象与 P4d 最终版本相同。
 
 [最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/qualification.json)冻结源码、生成/构建输入和三个 worker。未运行 release、性能或全位宽终验。结果 writer、环境策略、QueueWorkflow 与私有 legacy 执行载荷继续按后续 P4 子步骤收口。
+
+### P4f：结果编码、ledger 与发布实现已集中
+
+对应程序版本 `0.45.14`。四份结果实现头合并为 554 行 storage/results/publication.cpp；公开 publication.h 只留原 Submission 数据布局和实际入口，Windows/POSIX 文件锁、CRC、解析、读写与迁移不再通过头文件进入消费者。Stage1 CUDA/OpenCL 和 CPU/CUDA Stage2 全部链接同一份普通 CXX 实现。没有给 SubmissionLock 增加 Pimpl/分配，也没有复制锁或状态。
+
+task 中直接取得 SubmissionLock、prepare_internal_ledger 和 read_submission_entry 的完整已完成曲线扫描，移到 writer 的 contains_stage1_curves(path,N,B1,curve,param,sigmas)。GPU 两条旧载荷导入路径直接调用该入口；原 task 同参 helper 和 legacy 声明删除，未新增转发层。driver 不再包含结果编码实现，版本声明改为显式包含。
+
+源码合同完整比较 33 个原函数、Submission、锁和 entry 布局及 receipt 扫描正文。默认空字符串参数含花括号，首次源码检查误将它当作函数体；本轮测试改为在平衡参数列表之后定位定义，校验真实全文。断言、输出顺序、异常字符串、文件/CRC 协议均未修改。
+
+阶段中保留的失败与核对：结果 fixture 补齐其自身 filesystem 头；原硬链接追加检查在沙箱被拒绝后，于正常本机环境完成，未删除或放宽检查。首次 worker 构建补齐 driver 原先间接取得的版本声明。Stage2 的旧 MSVC 依赖集合在正文移走后减少，guard 把不再使用的 corecrt_startup.h 报成内容变化；只读核对确认实际 SHA256 与旧记录一致。保留旧记录及新编译器依赖，再用正式脚本重编建立当前记录，重复构建复用通过，没有修改对象/依赖 sidecar 或绕过 guard。该误报条件列入构建工具 TODO，不能写成 SDK 真正变化。
+
+- [源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/source_contract_02/result.json)：33 函数与原布局保持；公开 OS 句柄/实现正文为 0。
+- [结果生命周期](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/results_03/result.json)：23 项顺序、F/NF、聚合、CRC、硬链接追加、partial append、重放和损坏拒绝通过。
+- [任务合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/task_contract/result.json)：8 项通过；[真实编译依赖](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/task_contract_build/manifest.json)包含实际 publication.cpp，0 nvcc、0 CUDA SDK 头。
+- [完整运行](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/usability/summary.json)：27 项恢复、停止、队列、发布及新编译真实 CPU Stage2 交接通过；[P0 对照](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/runtime/summary.json)两阶段各 5 组通过。
+- [OpenCL](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/opencl_resources/result.json)：39 个普通 CXX 项、172 资源，点位/结果/CRC 及两份旧缓存保持。
+- [Stage1 重复构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/stage1_repeat.log)和 [Stage2 重复构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/stage2_repeat.log)均无重编或链接；31+2 个 CUDA 对象与 P4e 相同。[依赖误报证据](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/dependency_guard/result.json)保留。
+
+[最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/qualification.json)冻结四个生产 worker 及输入。未运行 release、性能采样或全位宽终验。后续继续 QueueWorkflow、环境/tune 策略与私有执行合同，P4 仍未整体完成。
 
 ## 首先调整构建复用与输出隔离
 

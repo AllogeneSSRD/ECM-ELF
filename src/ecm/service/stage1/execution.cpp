@@ -1,3 +1,4 @@
+#include "ecm/storage/results/publication.h"
 #include "execution.h"
 #include "preparation.h"
 #include "../../backend/cpu/stage1/legacy_executor.h"
@@ -80,7 +81,7 @@ static int run_mont_gpu_stage1(const mpz_t N, double B1, double B2, uint32_t cur
             ecm_stage1_import_legacy_gpu(N,batch_s,curves,uint32_t(params->gpu_param),
                 opt.identity.sigma_fixed,opt.identity.fixed_sigma64,[&](uint64_t sigma,uint32_t count){
                     std::vector<uint64_t> sigmas(count);for(uint32_t i=0;i<count;++i)sigmas[i]=sigma+i;
-                    return stage1_results_complete(opt,N,uint64_t(B1),false,unsigned(params->gpu_param),sigmas);
+                    return ecm_results::contains_stage1_curves(opt.persistence.results_file,N,uint64_t(B1),false,unsigned(params->gpu_param),sigmas);
                 });
     }
 

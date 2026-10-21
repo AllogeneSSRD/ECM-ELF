@@ -4,6 +4,7 @@
 cmake_minimum_required(VERSION 3.20)
 set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/core/stage1/selection.cpp
+    src/ecm/storage/results/publication.cpp
     src/ecm/service/stage1/task.cpp
     src/ecm/service/stage1/preparation.cpp
     src/ecm/service/stage1/execution.cpp
@@ -88,6 +89,7 @@ set(ECM_STAGE1_PRAC_SOURCES
     src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_constants.cu
     src/ecm/backend/cuda/stage1/montgomery/prac/ecm_prac_plan.cpp)
 set(ECM_STAGE2_HOST_SOURCES
+    src/ecm/storage/results/publication.cpp
     src/ecm/core/stage1/selection.cpp
     src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp
     src/ecm/application/configuration/legacy/ecm_expr.cpp

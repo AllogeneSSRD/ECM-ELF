@@ -85,6 +85,4 @@ struct TaskDependencies {
 };
 
 bool stage1_publish_factor(const Stage1Options &,mpz_srcptr,uint64_t,uint64_t,mpz_srcptr);
-bool stage1_results_complete(const Stage1Options &,mpz_srcptr,uint64_t,bool,unsigned,
-                             const std::vector<uint64_t> &);
 } // namespace ecm_stage1

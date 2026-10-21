@@ -1,5 +1,12 @@
-#include "../../src/ecm/storage/results/ecm_submission_writer.h"
-#include "../../src/ecm/storage/results/ecm_internal_result.h"
+#include "../../src/ecm/core/curve/edwards/ecm_edwards_curve.h"
+#include <fstream>
+#include <iterator>
+#include <stdexcept>
+#include <filesystem>
+static std::filesystem::path data_ledger(const std::filesystem::path &p){return p.parent_path()/"data"/(p.filename().string()+".ecm-ledger");}
+static std::filesystem::path legacy_ledger(const std::filesystem::path &p){return std::filesystem::path(p.string()+".ecm-ledger");}
+static void fixture_text(const std::filesystem::path &p,const std::string &text){std::ofstream out(p,std::ios::binary|std::ios::trunc);out<<text;out.close();if(!out)throw std::runtime_error("cannot write fixture input");}
+#include "ecm/storage/results/publication.h"
 #include "../../src/ecm/storage/queue/ecm_stage2_queue_state.h"
 #include <iostream>
 static void check(bool ok){if(!ok)throw std::runtime_error("result lifecycle assertion failed");}
@@ -101,22 +108,22 @@ int main(int argc,char **argv) {
         r::publish_submission(alternating_path,alternating,composite.v);
         r::seal_submissions(alternating_path,2,alternating.publication_task,true);
         // Migration is atomic and order survives export/replay from the new path.
-        fs::rename(r::submission_ledger(out/"internal.jsonl"),r::legacy_submission_ledger(out/"internal.jsonl"));
-        r::atomic_text(r::legacy_submission_ledger(out/"internal.jsonl")/"format","ECM_INTERNAL_LEDGER_V1\n");
-        r::refresh_internal(out/"internal.jsonl");check(!fs::exists(r::legacy_submission_ledger(out/"internal.jsonl")));
+        fs::rename(data_ledger(out/"internal.jsonl"),legacy_ledger(out/"internal.jsonl"));
+        fixture_text(legacy_ledger(out/"internal.jsonl")/"format","ECM_INTERNAL_LEDGER_V1\n");
+        r::refresh_internal(out/"internal.jsonl");check(!fs::exists(legacy_ledger(out/"internal.jsonl")));
         r::publish_internal(out/"internal.jsonl","synthetic|ed|70|20|stage1","{}",true);
         // Two histories must never be merged or silently replace each other.
-        const auto conflict=out/"conflict.jsonl";r::atomic_text(conflict,"unchanged\n");
-        for(const auto &dir:{r::submission_ledger(conflict),r::legacy_submission_ledger(conflict)}) {
-            fs::create_directories(dir);r::atomic_text(dir/"format","ECM_INTERNAL_LEDGER_V2\n");
+        const auto conflict=out/"conflict.jsonl";fixture_text(conflict,"unchanged\n");
+        for(const auto &dir:{data_ledger(conflict),legacy_ledger(conflict)}) {
+            fs::create_directories(dir);fixture_text(dir/"format","ECM_INTERNAL_LEDGER_V2\n");
         }
         bool refused=false;try{r::refresh_internal(conflict);}catch(const std::runtime_error &){refused=true;}
         check(refused);{std::ifstream file(conflict);std::string line;std::getline(file,line);check(line=="unchanged");}
         // Receipt detection is independent of member order and rejects torn JSON.
         const auto receipt=out/"receipt.jsonl";
-        r::atomic_text(receipt,"{\"status\":\"NF\",\"queue_receipt\":\"ready\"}\n{\"queue_receipt\":\"torn\"}");
+        fixture_text(receipt,"{\"status\":\"NF\",\"queue_receipt\":\"ready\"}\n{\"queue_receipt\":\"torn\"}");
         check(stage2_queue::result_written(receipt,"ready"));check(!stage2_queue::result_written(receipt,"torn"));
-        r::atomic_text(receipt,"{\"queue_receipt\":\"broken\",}\n");check(!stage2_queue::result_written(receipt,"broken"));
+        fixture_text(receipt,"{\"queue_receipt\":\"broken\",}\n");check(!stage2_queue::result_written(receipt,"broken"));
         for(const auto &invalid:{"{\"x\":1,\"x\":2}","{\"x\":01}","[true,]","{\"x\":\"\\uD800\"}"}) {
             bool rejected=false;try{(void)r::json::parse(invalid);}catch(const std::runtime_error &){rejected=true;}check(rejected);
         }

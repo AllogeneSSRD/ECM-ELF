@@ -148,7 +148,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 
 CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、指数总长/进度及数组几何，并恢复保存的 BITS/TPI；相应内核须存在。原始 V5 自动导入另逐 lane 核对完整 N。保存整个指数不必要：当前任务重新生成相应指数。
 
-来源：[CUDA 头和读写](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu#L831)、[CUDA 恢复布局](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu#L1243)、[普通域写回](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/storage/checkpoint/ecm_checkpoint.cpp#L131)、[OpenCL 状态](../../src/ecm/backend/opencl/stage1/montgomery/engine.cpp#L937)。
+来源：[CUDA 头和读写](../../src/ecm/backend/cuda/stage1/montgomery/host_io.cpp)、[CUDA 恢复布局](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu)、[普通域写回](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/storage/checkpoint/ecm_checkpoint.cpp#L131)、[OpenCL 状态](../../src/ecm/backend/opencl/stage1/montgomery/engine.cpp#L937)。
 
 ### 4.2 GPU Edwards V3
 

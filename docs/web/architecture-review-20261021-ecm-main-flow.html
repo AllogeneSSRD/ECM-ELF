@@ -50,7 +50,7 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 </style></head><body><main>
 <header><div class="caption">ECM-ELF · 2026-10-21 · 实施草稿 / P0–P3 与 P4a 已完成，P4职责提取进行中</div>
 <h1>主流程重构完整方案</h1><p class="lead">构建复用先行；明确 driver、task、factory 与 QueueWorkflow 的职责，精简重复封装。完整目录、Interface、伪代码与阶段门槛。</p>
-<div class="hero-note"><strong>P4e 已完成，程序版本 0.45.13。</strong>11 个共享选择函数进入 core CPP，task 只读同一 JSON 生成的轻量默认值，解除应用解析依赖。配置、选择与 8 项任务合同通过；27 项运行和 CUDA/OpenCL 对照保持，33 个 CUDA 对象未变。结果 writer、队列与后续 P4–P7 继续实施。</div>
+<div class="hero-note"><strong>P4f 已完成，程序版本 0.45.14。</strong>四份结果实现头集中为一个 CPP，公开声明隐藏锁、CRC 与 ledger 细节；task 不再操作内部锁/目录。33 函数与布局保持，23 项结果、8 项任务和 27 项运行检查通过，33 个 CUDA 对象未变。QueueWorkflow 与后续 P4–P7 继续实施。</div>
 <div class="kpis"><div><b>31 个 CU</b><span>用户日志中的全量编译单元</span></div><div><b>1535.6 秒</b><span>单次 CUDA 编译阶段墙钟，非总脚本</span></div><div><b>默认逐 TU 复用</b><span>先落实 build_cuda_local 等隔离根</span></div><div><b>P0—P7</b><span>阶段交付与验收门槛</span></div></div>
 <p class="caption">沿用前期整合快照（HEAD 2e64b75e5d14287e2ee25bdaff27e3b1128c1d93 加当时工作区，版本头0.44.7），流程分析保留其0.44.6依据。以上为前期设计依据，保持原始快照。本次 P0 从干净 HEAD 5735108、版本0.44.9开始，另存1959项源码摘要与local日志；P0 local 基线与P1a构建复用分别保留实际程序、清单与验证证据；未运行release，没有性能结论。</p></header><nav class="review-nav" aria-label="方案目录"><a href="#plan-progress">实施记录</a><a href="#plan-overview">目标与约束</a><a href="#plan-build">先改构建</a><a href="#plan-tree">完整目录</a><a href="#plan-modules">模块职责</a><a href="#plan-boundaries">职责与精简</a><a href="#plan-interfaces">Interface 输入输出</a><a href="#plan-driver">driver 伪代码</a><a href="#plan-map">文件映射</a><a href="#plan-phases">阶段顺序</a><a href="#plan-validation">验收</a><a href="#source-analysis">现状依据</a></nav><div class="phase-nav"><a href="#phase-0">P0 · 冻结依据</a><a href="#phase-1">P1 · 构建先行</a><a href="#phase-2">P2 · 合同与CXX</a><a href="#phase-3">P3 · 目录归位</a><a href="#phase-4">P4 · Stage1提取</a><a href="#phase-5">P5 · Stage2收口</a><a href="#phase-6">P6 · GUI/CPU</a><a href="#phase-7">P7 · 综合验收</a></div><div class="pipeline" aria-label="Task内部七步"><span>task内部：校验</span><span>打开会话</span><span>准备</span><span>执行 + 安全点协作</span><span>核对</span><span>最终发布</span><span>结束会话</span><span>队列另行提交</span></div><section class="plan-section" id="plan-overview"><h2>完整重构目标与实施约束</h2>
 <p>本节是整合后的<strong>目标实施方案</strong>；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3a 完成 CUDA 家族物理归位，其余 P3 与 P4–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。</p>
@@ -254,6 +254,20 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 <li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4e/stage1_repeat.log">Stage1 重复构建</a>和 <a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4e/stage2_repeat.log">Stage2 重复构建</a>均为 0 编译、0 链接；31+2 个 CUDA 对象与 P4d 最终版本相同。</li>
 </ul>
 <p><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4e/qualification.json">最终资格记录</a>冻结源码、生成/构建输入和三个 worker。未运行 release、性能或全位宽终验。结果 writer、环境策略、QueueWorkflow 与私有 legacy 执行载荷继续按后续 P4 子步骤收口。</p>
+<h3 id="p4f结果编码ledger-与发布实现已集中">P4f：结果编码、ledger 与发布实现已集中</h3>
+<p>对应程序版本 <code>0.45.14</code>。四份结果实现头合并为 554 行 storage/results/publication.cpp；公开 publication.h 只留原 Submission 数据布局和实际入口，Windows/POSIX 文件锁、CRC、解析、读写与迁移不再通过头文件进入消费者。Stage1 CUDA/OpenCL 和 CPU/CUDA Stage2 全部链接同一份普通 CXX 实现。没有给 SubmissionLock 增加 Pimpl/分配，也没有复制锁或状态。</p>
+<p>task 中直接取得 SubmissionLock、prepare_internal_ledger 和 read_submission_entry 的完整已完成曲线扫描，移到 writer 的 contains_stage1_curves(path,N,B1,curve,param,sigmas)。GPU 两条旧载荷导入路径直接调用该入口；原 task 同参 helper 和 legacy 声明删除，未新增转发层。driver 不再包含结果编码实现，版本声明改为显式包含。</p>
+<p>源码合同完整比较 33 个原函数、Submission、锁和 entry 布局及 receipt 扫描正文。默认空字符串参数含花括号，首次源码检查误将它当作函数体；本轮测试改为在平衡参数列表之后定位定义，校验真实全文。断言、输出顺序、异常字符串、文件/CRC 协议均未修改。</p>
+<p>阶段中保留的失败与核对：结果 fixture 补齐其自身 filesystem 头；原硬链接追加检查在沙箱被拒绝后，于正常本机环境完成，未删除或放宽检查。首次 worker 构建补齐 driver 原先间接取得的版本声明。Stage2 的旧 MSVC 依赖集合在正文移走后减少，guard 把不再使用的 corecrt_startup.h 报成内容变化；只读核对确认实际 SHA256 与旧记录一致。保留旧记录及新编译器依赖，再用正式脚本重编建立当前记录，重复构建复用通过，没有修改对象/依赖 sidecar 或绕过 guard。该误报条件列入构建工具 TODO，不能写成 SDK 真正变化。</p>
+<ul class="plan-list">
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/source_contract_02/result.json">源码合同</a>：33 函数与原布局保持；公开 OS 句柄/实现正文为 0。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/results_03/result.json">结果生命周期</a>：23 项顺序、F/NF、聚合、CRC、硬链接追加、partial append、重放和损坏拒绝通过。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/task_contract/result.json">任务合同</a>：8 项通过；<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/task_contract_build/manifest.json">真实编译依赖</a>包含实际 publication.cpp，0 nvcc、0 CUDA SDK 头。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/usability/summary.json">完整运行</a>：27 项恢复、停止、队列、发布及新编译真实 CPU Stage2 交接通过；<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/runtime/summary.json">P0 对照</a>两阶段各 5 组通过。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/opencl_resources/result.json">OpenCL</a>：39 个普通 CXX 项、172 资源，点位/结果/CRC 及两份旧缓存保持。</li>
+<li><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/stage1_repeat.log">Stage1 重复构建</a>和 <a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/stage2_repeat.log">Stage2 重复构建</a>均无重编或链接；31+2 个 CUDA 对象与 P4e 相同。<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/dependency_guard/result.json">依赖误报证据</a>保留。</li>
+</ul>
+<p><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p4f/qualification.json">最终资格记录</a>冻结四个生产 worker 及输入。未运行 release、性能采样或全位宽终验。后续继续 QueueWorkflow、环境/tune 策略与私有执行合同，P4 仍未整体完成。</p>
 </section>
 <section class="plan-section" id="plan-build"><h2>首先调整构建复用与输出隔离</h2>
 <h3 id="当前样例说明了什么">当前样例说明了什么</h3>

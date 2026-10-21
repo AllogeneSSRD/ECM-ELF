@@ -2,6 +2,14 @@
 
 CPU/CUDA Stage1、CPU Edwards Stage2 与 CUDA Stage2 同时维护逐曲线内部 JSONL 和提交格式 `results.json.txt`。**NF 仅在整条 worktodo 任务完成时导出；有 NF 时，Stage2 每条完成的任务生成一行 NF，曲线数是该任务完成且未找到因子的曲线总数，参数取最后完成的 NF 曲线。中途停止只保存内部结果、进度和待发布回执。发现并验证因子时立即额外导出一行 F，固定 curves=1，保留 sigma。** 直接 CLI 运行所选曲线范围视为一个任务。Stage1 NF 的 B2=B1，Stage2 NF 记录最后一条 NF 曲线实际请求的 B2。提交结构参考 Prime95，程序身份如实记录为 ECM-ELF，并附 CRC32；生成文件不触发网络请求。
 
+## 共用发布接口与实现
+
+Stage1、OpenCL worker 与 CPU/CUDA Stage2 共用 [publication.h](../../include/ecm/storage/results/publication.h) 和 [publication.cpp](../../src/ecm/storage/results/publication.cpp)。公开头包含拥有字符串/集合的 Submission 数据和实际序列化、发布、seal、恢复导出入口；不包含 JSON 解析实现、文件锁、操作系统句柄、文件读写或 CRC 函数体。
+
+internal_json/submission_json 接收记录、借用 N 及实际运行元数据，返回原协议 JSON 文本；publish_submission 接收目标路径、单曲线记录与 N，验证后建立 receipt，因子立即发布，NF 按原 seal 规则完成整批发布。publish_internal_batch 保持内部逐曲线顺序；refresh_internal/refresh_submission_if_owned 沿原 owned-ledger 规则恢复输出。文件/协议失败继续抛出原异常，任务与队列决定失败策略。
+
+contains_stage1_curves 接收结果路径、N、B1、曲线族/param 和 sigma 集合，在同一个实际存储锁内核对全部 receipt；缺项返回 false，身份碰撞或损坏仍报错。它替代 task 对锁、内部目录和 ledger entry 的直接操作，不增加同参转发。锁、旧目录迁移、append 历史、partial append 恢复、CRC 与聚合规则集中在 CPP；原存储布局和协议保持。
+
 ## 文件与身份
 
 Stage1 通过 TOML 的 `stage1_results_file`、`stage1_submission_file` 配置两份结果，默认内部文件为 `stage1_results.jsonl`。CPU Edwards Stage2 使用 `--results INTERNAL.jsonl --submission results.json.txt`；CUDA 也支持这两个参数，TOML 对应 `stage2_results_file` 和 `stage2_submission_file`。CPU 的 `--results` 目前只从 CLI 设置。提交路径的默认值及范围见生成的 [TOML 参考](../ECM_TOML_REFERENCE.md)。
@@ -68,7 +76,7 @@ AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA 
 15. os.architecture，即 `x86_64`。
 16. timestamp，保留结果中的 UTC 字符串 `YYYY-MM-DD HH:MM:SS`。
 
-Stage1、CPU/CUDA Stage2 使用共用 [内部序列化模块](../../src/ecm/storage/results/ecm_internal_result.h)；提交字段和数学一致性验证使用 [公共结果模型](../../src/ecm/storage/results/ecm_result_submission.h)。`stage1-engine.batch-seconds` 是整个批次的引擎及 text-save 发布墙钟时间，包含指数、曲线准备、运行中检查点和算术，包括命中时的即时因子发布，排除外层批次档案读取、输入预检与最终双 JSON 发布；它在逐曲线记录中重复，不能求和当作总耗时。
+Stage1、CPU/CUDA Stage2 使用共用 [内部序列化模块](../../src/ecm/storage/results/publication.cpp)；提交字段和数学一致性验证使用 [公共结果模型](../../src/ecm/storage/results/publication.cpp)。`stage1-engine.batch-seconds` 是整个批次的引擎及 text-save 发布墙钟时间，包含指数、曲线准备、运行中检查点和算术，包括命中时的即时因子发布，排除外层批次档案读取、输入预检与最终双 JSON 发布；它在逐曲线记录中重复，不能求和当作总耗时。
 
 Stage1 内部 `fft-length=0` 表示没有 GWNUM 变换长度，提交版本使用正的 Prime95 参考容量；`stage1-engine.coverage=B1` 不表示执行过 Stage2。
 
@@ -139,4 +147,4 @@ ecm_cpu_stage2.exe --export-results --submission results.json.txt
 
 PrimeNet v5 API 0.97 描述的是 `ar` 请求字段与结果类型，不是现代手工提交 JSON 的完整规范；结构还需对照 Prime95 生成器及正式样本。[固定源码与 API 研究](../reference/ECM_RESULT_JSON.md) 列出依据。上述 Montgomery NF 批次已有用户提供的服务器接受回执；Edwards、因子结果及其他提交入口仍需各自验证。AutoPrimeNet 的固定程序名扫描规则未修改。
 
-实现入口：[提交序列化](../../src/ecm/storage/results/ecm_result_submission.h) 的 `submission_json`、[账本与原子导出](../../src/ecm/storage/results/ecm_submission_writer.h) 的 `publish_submission`/`seal_submissions`，CPU 和 CUDA 主程序在验证完成结果后调用它们。
+实现入口：[提交序列化](../../src/ecm/storage/results/publication.cpp) 的 `submission_json`、[账本与原子导出](../../src/ecm/storage/results/publication.cpp) 的 `publish_submission`/`seal_submissions`，CPU 和 CUDA 主程序在验证完成结果后调用它们。

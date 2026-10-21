@@ -27,9 +27,7 @@
 #include "ecm_stage2_console.h"
 #include "../../storage/queue/ecm_stage2_queue_state.h"
 #include "../../storage/save/ecm_edwards_io.h"
-#include "../../storage/results/ecm_result_submission.h"
-#include "../../storage/results/ecm_internal_result.h"
-#include "../../storage/results/ecm_submission_writer.h"
+#include "ecm/storage/results/publication.h"
 #include <algorithm>
 #include <chrono>
 #include <cctype>

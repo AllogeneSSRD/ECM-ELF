@@ -14,11 +14,9 @@ if(NOT _ecm_build_id)
 endif()
 file(SHA256 "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp" _ecm_source_id)
 foreach(_shared
-    src/ecm/storage/results/ecm_internal_result.h
-    src/ecm/storage/results/ecm_result_submission.h
+    include/ecm/storage/results/publication.h
+    src/ecm/storage/results/publication.cpp
     src/ecm/storage/results/ecm_result_json.h
-    src/ecm/storage/results/ecm_result_paths.h
-    src/ecm/storage/results/ecm_submission_writer.h
     include/ecm/platform/program_version.h)
     file(SHA256 "${_ecm_repo}/${_shared}" _ecm_shared_hash)
     string(APPEND _ecm_source_id "${_ecm_shared_hash}")
@@ -42,6 +40,7 @@ if(ECM_CPU_GW_POLY)
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp")
 add_executable(ecm_cpu_stage2 "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp"
+    "${_ecm_repo}/src/ecm/storage/results/publication.cpp"
     "${_ecm_repo}/src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp")
 target_compile_features(ecm_cpu_stage2 PRIVATE cxx_std_17)
 # Public host contracts; <ecm.h> remains the third-party libecm header.

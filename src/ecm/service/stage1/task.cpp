@@ -3,8 +3,7 @@
 #include "../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "ecm/core/stage1/selection.h"
 #include "../../storage/save/ecm_edwards_io.h"
-#include "../../storage/results/ecm_internal_result.h"
-#include "../../storage/results/ecm_submission_writer.h"
+#include "ecm/storage/results/publication.h"
 #include "../../platform/generated/configuration_defaults.h"
 #include "ecm/platform/logging.h"
 #include <chrono>
@@ -80,21 +79,6 @@ static void stage1_copy_save_history(const Stage1Options &opt,const std::string 
 }
 
 // Retained legacy sources must not replay curves already durably published.
-bool stage1_results_complete(const Stage1Options &opt,mpz_srcptr n,uint64_t b1,
-                                     bool edwards,unsigned param,const std::vector<uint64_t> &sigmas) {
-    if(!ecm_results::has_result_ledger(opt.persistence.results_file))return false;
-    ecm_results::SubmissionLock lock(opt.persistence.results_file);
-    const auto ledger=ecm_results::prepare_internal_ledger(opt.persistence.results_file);
-    for(const auto sigma:sigmas) {
-        const auto key=ecm_edwards::hex(n)+"|"+(edwards?"ed":"mont"+std::to_string(param))+"|"+
-            std::to_string(sigma)+"|"+std::to_string(b1)+"|stage1";
-        const auto entry=ledger/(std::to_string(ecm_edwards::hash(key))+".curve");
-        if(!std::filesystem::exists(entry))return false;
-        if(ecm_results::read_submission_entry(entry).key!=key)throw std::runtime_error("legacy result identity collision");
-    }
-    return !sigmas.empty();
-}
-
 static ecm_results::Submission stage1_submission(const Stage1Options &opt,const mpz_t N,uint64_t b1) {
     ecm_results::Submission r;r.b1=b1;r.b2=b1;r.stage1_only=true;
     r.edwards=opt.execution.selection.curve==ecm_stage1::CurveModel::Edwards;

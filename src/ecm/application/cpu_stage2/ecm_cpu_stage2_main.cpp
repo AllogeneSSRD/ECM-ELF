@@ -1,8 +1,7 @@
 // Standalone CPU Edwards continuation. This target's <ecm.h> is libecm's API.
 #include <ecm.h>
 #include "../../storage/save/ecm_edwards_save_reader.h"
-#include "../../storage/results/ecm_internal_result.h"
-#include "../../storage/results/ecm_submission_writer.h"
+#include "ecm/storage/results/publication.h"
 #include "../configuration/generated/ecm_config_generated.h"
 #include <chrono>
 #include <ctime>
