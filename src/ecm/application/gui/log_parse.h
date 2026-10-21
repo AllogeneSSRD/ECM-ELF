@@ -4,7 +4,7 @@
 // (docs/usage/GUI.md sections 7.2 / 7.3).
 //
 // Everything here is a pure function over one line, so it is unit-testable without
-// a GPU, a window or a worker process (see src/gui/log_parse_test.cpp).
+// a GPU, a window or a worker process (see tools/test/gui/log_parse_test.cpp).
 //
 // Facts this encodes (all measured from the driver source):
 //   * every line printed by ecm_ts_fprintf() carries a "[YYYY-MM-DD HH:MM:SS] "

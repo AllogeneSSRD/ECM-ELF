@@ -14,7 +14,7 @@
 // The NVML ABI subset this file needs is declared here instead of shipping NVIDIA's
 // nvml.h: the GUI links nothing from the driver, and the declarations below are the
 // stable part of the ABI (plain structs of unsigned int/long long, functions by
-// name). src/gui/gpu_selftest.cpp cross-checks every field against `nvidia-smi`
+// name). gpu_selftest.cpp cross-checks every field against `nvidia-smi`
 // so a wrong layout would fail loudly rather than silently show garbage.
 
 #include "platform.h"

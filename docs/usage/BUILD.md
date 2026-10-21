@@ -99,3 +99,9 @@ P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设�
 使用 tools/build/build_opencl_local.ps1 构建 ecm.exe，默认叶目录为 build_opencl_local/stage1/&lt;profile-key&gt;。可用 -BuildDir 指定最终叶目录，-OpenClRoot 指定含 include/CL/cl.h 与 OpenCL.lib 的 SDK 根；-Gmp、-OpenSslRoot、-VcVars 可覆盖主机依赖。入口不启用 CUDA 编译器，沿用普通 CXX 的 /MD 优化配置。
 
 输出包含程序、GMP/OpenSSL 运行库、profile.json、build_manifest.json 和 opencl_resources。原有环境或命令选择、PARAM3 支持范围和生产自检保持；资源查找和部署限制见 [OpenCL](../architecture/OPENCL.md#资源与-local-构建)。当前没有对应 OpenCL dev/release 包装族。
+
+### 编译期间输入稳定性
+
+构建前后核对已知依赖内容。成功编译发现新的系统/宏 include 时纳入新指纹；旧 include 退出新 compiler 清单时，按 live 源根重新读取旧文件哈希，而不是将缺少清单键当作内容变化。旧文件在编译期间被修改或删除、或无法验证仍失败。持久对象记录 schema、命令/工具链/对象哈希和 HostOnly 检查不变。
+
+`tools/test/test_cuda_build_identity.ps1` 覆盖身份变异与跨 PowerShell 指纹；`tools/build/test/test_msvc_header_retirement.ps1` 使用正式主机编译器产生真实旧/新依赖并核对退役行为。两者输出到显式隔离目录，不改生产对象缓存。

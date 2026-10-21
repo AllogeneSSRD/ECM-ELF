@@ -949,6 +949,18 @@ App 保留绘制、配置编辑、布局、语言与提示。Controller 拥有 W
 
 构建和 fixture 的失效记录均保留：补齐时钟声明、修正提取工具对函数调用的识别、修正测试不存在的 B1 配置键及错误消息寿命；旧版本 fake 与新 GUI 的版本断言失败后显式重建 helper，未放宽断言或修改正确 parser。最后再次核对实际默认值来源，生产 App 一直显式传入原配置值。[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p6b/qualification.json)。P6 完成；P7 继续修复已知构建保护误报、类别增量编译、完整位宽、文档和最终资格。
 
+### P7a：修复退役依赖的误报，保留构建保护
+
+程序源码版本 `0.45.24`。此前 P4f/P5c/P5d 已冻结的误报原因是：旧 compiler dependency 包含的头退出新清单后，Assert 把“新清单中无该键”当作“编译期间内容变化”。现在为 live CompileState 记录源根；遇到退役依赖时解析其真实路径并重新哈希，内容一致才接纳。文件被改动、删除，或无法获得验证上下文仍拒绝。已存在的新依赖仍直接核对 After 哈希，新发现的 compiler include 继续进入新指纹。
+
+持久 `.ecm-state.json` schema 2、指纹 framing/字段、对象/命令/工具链身份检查不变；source_root 是 live 校验上下文，不进入持久格式或指纹。不修改生产对象/sidecar，不以忽略消失键的方式绕过验证。
+
+- [55 项身份/变异检查](../../data/experiments/main_flow_refactor_implementation_20261021/p7a/identity/result.json)，包含既有 46 项和新增退役/改动/删除/缺少上下文/新增依赖等 9 项；PS5/PS7 同内容指纹一致。
+- [真实 MSVC 9 项](../../data/experiments/main_flow_refactor_implementation_20261021/p7a/msvc_retirement/result.json)：两次实际 CXX 编译产生旧/新依赖，确实移除 STL array 和相对本地头；正确移除成功、期间改动/删除仍失败，新对象可复用。无 CUDA 编译。
+- 正式 local Stage1 384/1024 更新 4 CXX、Stage2 更新 6 CXX，均 0 CU，31+2 个 CUDA 对象保持；Stage2 重复构建零编译/链接。[5+5 基线](../../data/experiments/main_flow_refactor_implementation_20261021/p7a/runtime/summary.json)通过。
+
+[本步资格](../../data/experiments/main_flow_refactor_implementation_20261021/p7a/qualification.json)冻结两个 CUDA worker。GUI/OpenCL/CPU2 尚未在 0.45.24 重建；完整 32 档、本轮类别增量与最后源/文档审计继续 P7b。未运行 release 或性能采样。
+
 ## 首先调整构建复用与输出隔离
 
 ### 当前样例说明了什么

@@ -193,7 +193,10 @@ function Get-EcmCompileState([string]$Repo, $Entry, [string]$Setup = '', [string
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $fingerprint = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))).Replace('-','') }
     finally { $sha.Dispose() }
-    return [pscustomobject]@{ schema = 2; fingerprint = $fingerprint; source_hashes = $hashes; object = $object }
+    # Source root is live validation context, not part of the saved object record
+    # or fingerprint. It resolves inputs retired from the new compiler depfile.
+    return [pscustomobject]@{ schema = 2; fingerprint = $fingerprint; source_hashes = $hashes; object = $object;
+        source_root = [IO.Path]::GetFullPath($Repo) }
 }
 
 function Get-EcmMsvcDependencyPaths([string]$Path, $Entry) {
@@ -238,9 +241,18 @@ function Save-EcmCompileState($State) {
 
 function Assert-EcmCompileInputs($Before, $After) {
     # A successful compiler may discover additional SDK/macro includes. Every
-    # dependency known before compilation must still have the same content.
+    # dependency known before compilation must still have the same content,
+    # including a retired include absent from the new dependency set.
     foreach ($name in $Before.source_hashes.Keys) {
-        if ($Before.source_hashes[$name] -ne $After.source_hashes[$name]) { throw "Source changed during build: $name" }
+        if ($After.source_hashes.Contains($name)) {
+            $actual = $After.source_hashes[$name]
+        } else {
+            if (-not $Before.source_root) { throw "Cannot validate retired build dependency without source root: $name" }
+            $path = Resolve-EcmSourcePath $Before.source_root $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Source changed during build (missing): $name" }
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        }
+        if ($Before.source_hashes[$name] -ne $actual) { throw "Source changed during build: $name" }
     }
 }
 

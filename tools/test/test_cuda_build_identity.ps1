@@ -210,6 +210,41 @@ $msvcState = Get-EcmCompileState $fixture $msvcEntry
 Save-EcmCompileState $msvcState
 Check ($msvcState.source_hashes.Contains((Get-EcmSourceKey $fixture $msvcHeader))) 'MSVC compiler discovers macro and SDK includes with spaces'
 Check (Test-EcmCompileState $msvcState) 'MSVC dependency record reused with unchanged inputs'
+# New compiler dependencies may legitimately retire an old SDK/macro include.
+# Recheck actual bytes, including relative keys under a different caller cwd.
+$beforeRetirement=Get-EcmCompileState $fixture $msvcEntry
+$msvcDeps.Data.Includes=@()
+Write-Fixture "$msvcObject.ecm-msvc.json" ($msvcDeps | ConvertTo-Json -Depth 5)
+$afterRetirement=Get-EcmCompileState $fixture $msvcEntry
+Assert-EcmCompileInputs $beforeRetirement $afterRetirement
+Check $true 'retired unchanged compiler include accepted after real content recheck'
+Check (-not (Test-EcmCompileState $afterRetirement)) 'retired include still invalidates the previous object fingerprint'
+Check ($beforeRetirement.source_root -eq [IO.Path]::GetFullPath($fixture)) 'retired relative dependency resolved from its source root rather than caller cwd'
+Write-Fixture $msvcHeader 'changed during compilation after retirement'
+Reject { Assert-EcmCompileInputs $beforeRetirement $afterRetirement } 'Source changed during build' 'retired dependency changed during compilation rejected'
+Remove-Item -LiteralPath $msvcHeader
+Reject { Assert-EcmCompileInputs $beforeRetirement $afterRetirement } 'missing' 'retired dependency removed during compilation rejected'
+Write-Fixture $msvcHeader 'SDK/macro include content'
+$missingContext=[pscustomobject]@{source_hashes=$beforeRetirement.source_hashes}
+Reject { Assert-EcmCompileInputs $missingContext $afterRetirement } 'without source root' 'unverifiable retired dependency fails closed'
+$msvcDeps.Data.Includes=@($msvcHeader)
+Write-Fixture "$msvcObject.ecm-msvc.json" ($msvcDeps | ConvertTo-Json -Depth 5)
+$sameInputs=Get-EcmCompileState $fixture $msvcEntry
+Assert-EcmCompileInputs $beforeRetirement $sameInputs
+Check $true 'unchanged active compiler includes remain accepted'
+Write-Fixture $msvcHeader 'changed active include during compilation'
+$changedInputs=Get-EcmCompileState $fixture $msvcEntry
+Reject { Assert-EcmCompileInputs $beforeRetirement $changedInputs } 'Source changed during build' 'active compiler dependency mutation remains rejected'
+Write-Fixture $msvcHeader 'SDK/macro include content'
+$newHeader=Join-Path $fixture 'sdk/new compiler include.h'
+Write-Fixture $newHeader 'newly discovered compiler dependency'
+$msvcDeps.Data.Includes=@($msvcHeader,$newHeader)
+Write-Fixture "$msvcObject.ecm-msvc.json" ($msvcDeps | ConvertTo-Json -Depth 5)
+$expandedInputs=Get-EcmCompileState $fixture $msvcEntry
+Assert-EcmCompileInputs $beforeRetirement $expandedInputs
+Check $true 'newly discovered compiler include remains accepted and enters the new fingerprint'
+$msvcDeps.Data.Includes=@($msvcHeader)
+Write-Fixture "$msvcObject.ecm-msvc.json" ($msvcDeps | ConvertTo-Json -Depth 5)
 $stamp = (Get-Item -LiteralPath $msvcHeader).LastWriteTimeUtc
 Write-Fixture $msvcHeader 'changed SDK/macro include content'
 (Get-Item -LiteralPath $msvcHeader).LastWriteTimeUtc = $stamp

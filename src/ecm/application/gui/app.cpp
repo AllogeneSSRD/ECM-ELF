@@ -160,8 +160,6 @@ bool parse_int_list(const std::string &s, int *v, int n) {
 // "state__stopped" (leading capital!) and every state label rendered as the raw
 // fallback text "workers.state__stopped" (user report, 2026-09-28). With an explicit
 // table the ids are greppable, and --selftest verifies every one of them resolves.
-// Percent the driver reported when it resumed from a checkpoint ("Resuming from
-// checkpoint: 23.8% complete"); defined below, declared here because controller_.tick() uses it.
 
 bool App::request_close(){return controller_.request_close();}
 
