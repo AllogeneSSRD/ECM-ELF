@@ -10,6 +10,7 @@
 #include "../../storage/queue/ecm_worktodo.h"
 #include "ecm/platform/program_version.h"
 #include "ecm/platform/fingerprint.h"
+#include "../../service/planning/stage2.h"
 #include "../../service/stage2/legacy/ecm_stage2_factorize.h"
 #include "../../service/planning/legacy/ecm_stage2_cost_profile.h"
 #include "../../service/planning/legacy/ecm_stage2_tune_format.h"
@@ -63,7 +64,7 @@ bool open_runtime_routes(const std::string &text,ecm_stage2::tune::portable::Run
 std::string seal_runtime_routes(const ecm_stage2::tune::portable::RuntimeRouteHints &routes) {
     const auto body=routes.text();return body.empty()?std::string{}:body+'#'+ecm_stage2::sha256_text(body);
 }
-struct TaskInputError : std::runtime_error { using std::runtime_error::runtime_error; };
+
 volatile LONG stop_requests = 0;
 HANDLE inherited_stop_event=nullptr;
 void poll_inherited_stop() {
@@ -76,13 +77,7 @@ BOOL WINAPI console_control(DWORD event) {
     InterlockedIncrement(&stop_requests);
     return TRUE;
 }
-struct Big {
-    mpz_t z;
-    Big() { mpz_init(z); }
-    ~Big() { mpz_clear(z); }
-    Big(const Big &) = delete;
-    Big &operator=(const Big &) = delete;
-};
+
 std::string trim(std::string s) {
     const auto a = s.find_first_not_of(" \t\r\n");
     if (a == s.npos) return {};
@@ -92,7 +87,7 @@ std::string upper(std::string s) {
     for (char &c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return s;
 }
-std::string number(const mpz_t z, int base = 16) {
+std::string number(const mpz_t z, int base) {
     std::vector<char> buf(mpz_sizeinbase(z, base) + 3);
     mpz_get_str(buf.data(), base, z);
     return buf.data();
@@ -121,11 +116,7 @@ uint64_t fingerprint(const std::string &s) {
     for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
     return h;
 }
-struct Record {
-    std::string n, x, a24;
-    uint64_t sigma = 0, b1 = 0, offset = 0, hash = 0, index = 0;
-    bool checksum = false, edwards = false;
-};
+
 Record parse_record(std::string line) {
     if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
     if (line.find('\0') != line.npos)
@@ -239,71 +230,7 @@ fs::path executable() {
     if (!n || n == buf.size()) throw std::runtime_error("cannot locate executable");
     return fs::path(std::wstring(buf.data(), n));
 }
-struct Options {
-    std::string ini, save, worktodo, results, log, debug_file, receipt,publication_task,submission,submission_ini,submission_aid;
-    uint64_t submission_exponent=0;
-    std::vector<std::string> submission_known;
-    bool debug_log = false;
-    uint64_t b2 = 0, d = 0, skip = 0, curves = 0, batch = 0, arena = 0;
-    unsigned carrier_exponent=0;
-    bool has_carrier=false;
-    bool auto_carrier=ecm_config::defaults::stage2_stage2_auto_carrier;
-    int device = -1, worker = 1;
-    int log_level = -1;
-    bool ntt_counts=ecm_config::defaults::stage2_stage2_ntt_counts;
-    bool relocation=ecm_config::defaults::stage2_stage2_relocation;
-    bool dry = false, once = false, selection = false, help = false;
-    bool has_d = false, has_batch = false, has_arena = false;
-    bool child = false;
-    bool gui_events=false;
-    uint64_t stop_handle=0;
-    uint64_t offset = 0, hash = 0, index = 0;
-    bool plan_only = false, tune_options = false;
-    std::string tune, tune_file;
-    int tune_first = 16, tune_last = 27, tune_repeats = 5;
-    std::vector<uint64_t> tune_slices{1};bool has_tune_slices=false;
-    int tune_level = 0;
-    bool has_tune_lengths = false, has_tune_repeats = false,has_tune_memory=false;
-    bool tune_child=false;
-    std::string tune_save;
-    std::string tune_worktodo;
-    bool tune_warmup=ecm_config::defaults::stage2_stage2_tune_warmup;
-    std::vector<std::string> tune_merge;
-    std::vector<std::string> tune_ntt_profiles;
-    std::vector<uint64_t> tune_ds,tune_b2s,tune_exponents;
-    unsigned tune_carrier=0;
-    uint64_t tune_max_batches=0;bool has_tune_max_batches=false;
-    unsigned tune_tail_samples=0;bool has_tune_tail_samples=false;
-    uint64_t tune_memory_mb = 1024;
-    bool factorize_hits = false;
-    bool factor_only = false;
-    bool has_gp = false, has_factor_timeout = false;
-    std::string gp = ecm_config::defaults::stage2_stage2_gp;
-    unsigned factor_timeout = static_cast<unsigned>(ecm_config::defaults::stage2_stage2_factor_timeout);
-    bool auto_b2=false,cost_device_info=false;
-    std::string cost_profile,tune_profile;
-    uint64_t auto_min=0,auto_max=0,owner_mb=ecm_config::defaults::stage2_stage2_fold_mb,stage1_batch=ecm_config::defaults::stage2_stage1_batch;
-    std::string stage1_profile,stage1_exponent="lcm",check_stage1_profile;
-    bool has_stage1_exponent=false;
-    double stage1_seconds=ecm_config::defaults::stage2_stage1_seconds_per_curve,ratio_adjust=ecm_config::defaults::stage2_stage2_ratio_adjust;
-    std::string tune_ignore="gpu,driver,cuda,backend,environment",stage1_csv,condition_tag;
-    uint64_t tune_budget=1800,short_budget=10,stage1_mhz=0,factor_bits=0;
-    unsigned inferred_carrier=0;
-    bool short_calibration=true;
-    bool short_batch_tune=false;
-    bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;
-    bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
-    uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
-    bool runtime_probe=false;
-    uint64_t runtime_remaining=0; // Parent queue hint; not part of a measurement identity.
-    bool runtime_prepare_cache=true; // Diagnostic A/B switch; not an arithmetic or timing-data identity.
-    std::string runtime_prepare_hints; // Parent-memory cost-search pauses, never a checkpoint.
-    std::string runtime_route_hints; // Sealed, successful geometry plans for this parent only.
-    std::string prediction_policy="model",tune_arithmetic="both";
-    double tune_error=.08;
-    std::set<std::string> portable_cli;
-    bool has_owner=false,has_stage1_seconds=false,has_stage1_batch=false,has_ratio=false;
-};
+
 double positive(const std::string &s,const char *name) {
     return ecm_config::positive(s,name);
 }
@@ -513,10 +440,7 @@ std::vector<std::string> csv(const std::string &s, std::vector<bool> *quotes = n
     if (quotes) quotes->push_back(had_quote);
     return out;
 }
-struct QueueSelection {
-    EcmStage2Task task;
-    uint64_t b2 = 0, skip = 0, count = 0;
-};
+
 QueueSelection queue_fields(std::string line) {
     if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
     line = trim(line);
@@ -584,14 +508,7 @@ std::wstring quote(const std::wstring &s) {
     out.append(2 * slashes, L'\\');
     return out + L'"';
 }
-struct Handle {
-    HANDLE value = INVALID_HANDLE_VALUE;
-    Handle()=default;
-    Handle(const Handle&)=delete;
-    Handle &operator=(const Handle&)=delete;
-    Handle(Handle &&other)noexcept:value(other.value){other.value=INVALID_HANDLE_VALUE;}
-    ~Handle() { if (value != INVALID_HANDLE_VALUE && value) CloseHandle(value); }
-};
+
 // Optional diagnostic for the calling process's CUDA context. Use the same
 // linked runtime as the CUDA translation unit.
 // The schedule bits affect CPU waits, not kernel ordering or arithmetic.
@@ -614,7 +531,7 @@ void configure_cuda_wait(int device) {
 }
 int child_run(Options &o, const fs::path &save, const Record &r,
               uint64_t b2, uint64_t d, int device, const fs::path &results, const fs::path &log,
-              uint64_t batch, const Settings &ini_settings) {
+              uint64_t batch, const TaskDefaults &ini_settings) {
     const fs::path exe = executable();
     std::wstring cmd = quote(exe.wstring()) + L" --curve-worker --save " + quote(save.wstring());
     auto arg = [&](const wchar_t *key, uint64_t n) { cmd += L" "; cmd += key; cmd += L" "; cmd += std::to_wstring(n); };
@@ -788,7 +705,6 @@ int child_run(Options &o, const fs::path &save, const Record &r,
     return code==0?0:(code==3?3:1);
 }
 
-std::string select_auto_tuned(Options &o,const Record &r);
 std::string select_auto(Options &o,const Record &r,bool apply=true) {
     if(!o.tune_profile.empty())return select_auto_tuned(o,r);
     if(!o.stage1_profile.empty() && !(o.stage1_seconds>0))throw std::runtime_error("Stage1 tune costs require a full ECM tune profile");
@@ -868,19 +784,7 @@ std::string select_auto(Options &o,const Record &r,bool apply=true) {
     }
     return c::json(plan,hash);
 }
-std::string select_tuned(Options &o,const Record &r);
-std::string select_runtime_tuned(Options &o,const Record &r);
-void configure_short_ntt_batches(const Options &o);
-struct RuntimeTuneObservation {
-    ecm_stage2::tune::portable::Shape shape;
-    ecm_stage2::tune::Fields condition,sample;
-    uint64_t plan_cache_hits=0;
-};
-RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r);
-std::string runtime_route_event(const Options &o);
-void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Metrics &m);
-void publish_runtime_tune(const Options &o,const RuntimeTuneObservation &observation);
-std::string runtime_tune_json(const RuntimeTuneObservation &observation);
+
 std::string tune_metrics_json(const EcmStage2Metrics &m) {
     std::ostringstream out;out<<std::setprecision(17)<<"{\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"giant_points\":"<<m.giant_points
         <<",\"total_seconds\":"<<m.total_seconds<<",\"init_seconds\":"<<m.init_seconds<<",\"main_seconds\":"<<m.main_seconds
@@ -1146,7 +1050,7 @@ std::string giant_memory_record(const std::string &json) {
     if(a==json.npos)throw std::runtime_error("giant route plan missing");
     return json.substr(a,json.find("\"model\":",a)-a);
 }
-#include "ecm_stage2_portable_driver.inl"
+
 int driver(Options o) {
     if (o.help) { help(); return 0; }
     if (o.child) return curve_worker(o);
@@ -1303,7 +1207,7 @@ int driver(Options o) {
         if(o.tune=="ecm") {
             if(!toml)throw std::runtime_error("ECM tune requires a .toml profile");
             if(!o.tune_merge.empty()){merge_portable_tune(o,destination);return 0;}
-            run_portable_tune(o,s,destination,worktodo,tmp);return 0;
+            run_portable_tune(o,TaskDefaults{s.b2,s.arena,s.owner_mb},destination,worktodo,tmp);return 0;
         }
         if(toml){run_portable_ntt(o,destination);return 0;}
         if (!destination.parent_path().empty()) fs::create_directories(destination.parent_path());
@@ -1461,7 +1365,7 @@ int driver(Options o) {
             report("WARNING: requested="+std::to_string(count)+" available="+std::to_string(plan.size())+
                    " after skip="+std::to_string(skip)+"; running available curves only.",true);
         if(plan.empty())report("WARNING: no available curves after skip; task will finish with zero curves.",true);
-        if(!o.relocation && !o.dry && !plan.empty() && !o.tune_profile.empty())ensure_portable_calibration(o,plan.front(),s,calibration_range);
+        if(!o.relocation && !o.dry && !plan.empty() && !o.tune_profile.empty())ensure_portable_calibration(o,plan.front(),TaskDefaults{s.b2,s.arena,s.owner_mb},calibration_range);
         stage2_queue::State state;
         const bool persist=queue&&!o.dry&&!o.plan_only;
         fs::path progress;
@@ -1549,7 +1453,7 @@ int driver(Options o) {
                 state.pending=stage2_queue::token();state.pending_results=results.string();state.save(progress);o.receipt=state.pending;
             }
             const auto begin=std::chrono::steady_clock::now();
-            if(child_run(o,save,r,b2,d,device,results,log,batch,s))
+            if(child_run(o,save,r,b2,d,device,results,log,batch,TaskDefaults{s.b2,s.arena,s.owner_mb}))
                 throw std::runtime_error("curve failed; queue and completed progress retained; inspect "+log.string());
             if(persist) {
                 if(!stage2_queue::result_written(results,state.pending))throw std::runtime_error("successful worker has no durable result receipt; queue retained");

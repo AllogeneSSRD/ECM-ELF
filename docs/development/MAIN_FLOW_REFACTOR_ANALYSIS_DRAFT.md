@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.14`；P2、P3a/b/c、P4a–f 已完成，结果 writer 已集中普通 CPP，公开声明隐藏文件锁/编码/发布实现；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，Stage2 程序版本 `0.45.19`；P2、P3a/b/c、P4a–i 已完成；P5a/b 已完成进度/指纹存储与独立规划 CPP，P5 父子流程和 P6–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -889,6 +889,16 @@ State/Task 字段和默认值、schema 1/2 接纳、pending_results、SHA 身份
 - [5+5 基线运行](../../data/experiments/main_flow_refactor_implementation_20261021/p5a/runtime/summary.json)通过。Stage2 local 为 4 CXX/0 CU/1 link，两个 CUDA 对象不变；重复构建 0 CXX/0 CU/0 link。
 
 [最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p5a/qualification.json)冻结当前 Stage2 worker。Stage1 对照协作者仍为 0.45.17，本步未重建 Stage1/OpenCL/CPU Stage2，不把这些写成 0.45.18 验收。P5 父子流程、规划与运行状态继续实施；未运行 release、性能或全位宽终验。
+
+### P5b：Stage2 规划成为独立编译单元
+
+Stage2 版本 `0.45.19`。原 1487 行文本包含已删除，选择、校准、测量及运行缓存整体进入 [planning/stage2.cpp](../../src/ecm/service/planning/stage2.cpp)。共享私有 [runtime_types.h](../../src/ecm/service/stage2/runtime_types.h)保留原 7 个数据/错误类型及默认值；TaskDefaults 只传 B2 默认值和原控制台 arena/owner 预算，未透传完整 Settings。原 Options 暂留私有调用合同，不作为公开任务 API。规划中的真实设备选择和显存快照仍使用 CUDA runtime，符合实施范围。
+
+- [完整源码核对](../../data/experiments/main_flow_refactor_implementation_20261021/p5b/source_contract/result.json)：44 个规划函数、36 个 main 函数、完整规划作用域及 7 个布局一致；3 处配置投影保持原调用位置、原预算来源。缓存、作用域指针和 stop 状态不新增拥有者。
+- [实际规划运行](../../data/experiments/main_flow_refactor_implementation_20261021/p5b/planning_runtime_06/result.json)：0.45.18 与当前程序各通过配置 B2、校准、测量方案选择、单曲线发布及不使用有效设备的 profile 合并，共 8 项。修正 fixture 对表达式输入、当前 CLI、format 8、默认方案保护及 NF 结果字段的假设；生产逻辑未随之修改，失败证据保留。时间值不作性能比较。
+- [5+5 基线](../../data/experiments/main_flow_refactor_implementation_20261021/p5b/runtime/summary.json)通过。两个构建尝试累计实际更新 3 CXX/0 CU/1 link；首次发现缺少私有前置声明，补齐后成功。两个 CUDA 对象相同，重复构建零编译/链接。真实编译依赖中无完整 TOML/Settings 实现头。
+
+[资格与冻结 worker](../../data/experiments/main_flow_refactor_implementation_20261021/p5b/qualification.json)。Stage1 对照仍为 0.45.17；本步未重建 OpenCL/CPU Stage2。下一步收口唯一父流程、曲线 worker 和进程适配，不添加重复 Runner；尚未进行全位宽和性能终验。
 
 ## 首先调整构建复用与输出隔离
 

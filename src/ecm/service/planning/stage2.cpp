@@ -1,3 +1,53 @@
+// Stage2 selection, calibration and profile publication; one complete planning TU.
+#define NOMINMAX
+#include <windows.h>
+#include <cuda_runtime_api.h>
+#include "../../backend/cuda/stage2/ecm_cuda_stage2.h"
+#include "../../core/stage2/ecm_stage2_modulus.h"
+#include "../../storage/queue/ecm_worktodo.h"
+#include "ecm/platform/program_version.h"
+#include "ecm/platform/fingerprint.h"
+#include "stage2.h"
+#include "../../service/planning/legacy/ecm_stage2_cost_profile.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_format.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_ecm.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_prediction.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_auto.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_components.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_ntt_profile.h"
+#include "../../service/planning/legacy/ecm_stage1_tune_profile.h"
+#include "../../service/planning/legacy/ecm_stage2_portable_model.h"
+#include "../../service/planning/legacy/ecm_stage2_width_prediction.h"
+#include "../../service/planning/legacy/ecm_stage2_runtime_tune.h"
+#include "../../core/stage2/ecm_stage2_geometry.h"
+#include "../../platform/legacy/ecm_stage2_logging.h"
+#include "ecm/storage/queue/stage2_progress.h"
+#include "../../storage/results/ecm_result_json.h"
+#include "ecm/storage/results/publication.h"
+#include <algorithm>
+#include <chrono>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <iomanip>
+#include <sstream>
+#include <random>
+
+#ifndef NTT_GL_ADD_SUB_MASK
+#define NTT_GL_ADD_SUB_MASK 0
+#endif
+
+namespace s2prod {
+namespace fs=std::filesystem;
 // Included inside s2prod after the save/worker/planning helpers.
 namespace pt=ecm_stage2::tune::portable;
 namespace et=ecm_stage2::tune;
@@ -823,7 +873,7 @@ PortableInput portable_input(unsigned bits,const fs::path &evidence,bool mersenn
     append(save,"METHOD=ECM; PARAM=0; SIGMA=26; B1=20; N=0x"+hex+"; X=0x"+x+"; Z=1;");
     return {save,records(save,0,1).at(0),mersenne?"mersenne_small_factor_stripped_band":"probable_prime_gmp_nextprime"};
 }
-bool portable_measure(Options o,const Settings &settings,const PortableInput &input,uint64_t b2,uint64_t d,unsigned carrier,
+bool portable_measure(Options o,const TaskDefaults &settings,const PortableInput &input,uint64_t b2,uint64_t d,unsigned carrier,
     unsigned repeats,pt::Budget &budget,const fs::path &evidence,pt::Profile &profile,ecm_stage2::Word condition,
     bool skip_verified_factor=false,unsigned *completed_repeats=nullptr,et::Fields *completed_sample=nullptr) {
     if(completed_repeats)*completed_repeats=0;
@@ -968,7 +1018,7 @@ std::vector<Record> portable_queue_range(const fs::path &worktodo,int worker,con
     }
     return range;
 }
-void ensure_portable_calibration(Options &o,const Record &r,const Settings &settings,const std::vector<Record> &range={}) {
+void ensure_portable_calibration(Options &o,const Record &r,const TaskDefaults &settings,const std::vector<Record> &range) {
     auto profile=portable_read(o.tune_profile);const auto current=portable_condition(o);const auto ignore=pt::Ignore::parse(o.tune_ignore);
     Big n,plus;mpz_set_str(n.z,r.n.c_str(),16);mpz_add_ui(plus.z,n.z,1);const unsigned bits=unsigned(mpz_sizeinbase(n.z,2));
     const bool ordinary_kind=mpz_popcount(plus.z)==1;
@@ -1064,7 +1114,7 @@ unsigned portable_task_carrier(const EcmStage2Task &task,const Record &record,bo
     if(modulus.target_bits()==task.n && !modulus.lifted())return 0;
     return unsigned(task.n);
 }
-std::vector<PortableTuneTarget> portable_tune_tasks(const Options &o,const Settings &settings,
+std::vector<PortableTuneTarget> portable_tune_tasks(const Options &o,const TaskDefaults &settings,
     const fs::path &worktodo,const fs::path &save_dir,const std::vector<uint64_t> &fallback_bounds,
     const fs::path &evidence,const fs::path &destination,bool require_tasks) {
     std::ifstream in(worktodo);std::vector<PortableTuneTarget> targets;
@@ -1146,7 +1196,7 @@ unsigned portable_tune_save_carrier(const Options &o,const Record &record,const 
     if(in.bad())throw std::runtime_error("tune carrier worktodo read failed");
     return 0;
 }
-void run_portable_tune(Options o,const Settings &settings,const fs::path &destination,
+void run_portable_tune(Options o,const TaskDefaults &settings,const fs::path &destination,
     const fs::path &default_worktodo,const fs::path &save_dir) {
     PortableQuiet quiet;
     o.short_batch_tune=false;configure_short_ntt_batches(o);
@@ -1484,4 +1534,6 @@ void run_portable_tune(Options o,const Settings &settings,const fs::path &destin
     portable_publish(destination,profile);
     std::cout<<"ecm_tune_complete: measured="<<measured<<" skipped="<<skipped<<" grid="<<full_grid<<" selected="<<cases.size()<<" summaries="<<profile.samples.size()
         <<" budget_elapsed="<<budget.elapsed()<<" s profile="<<destination.string()<<" evidence="<<evidence.string()<<std::endl;
+}
+
 }

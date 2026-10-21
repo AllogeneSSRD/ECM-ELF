@@ -746,6 +746,8 @@
     "src/ecm/storage/results/ecm_submission_writer.h": "include/ecm/storage/results/publication.h",
     "src/ecm/service/stage1/legacy_execution.h": "src/ecm/service/stage1/execution_contract.h",
     "src/core/ecm_stage2_fingerprint.h": "include/ecm/platform/fingerprint.h",
-    "src/ecm/platform/ecm_stage2_fingerprint.h": "include/ecm/platform/fingerprint.h"
+    "src/ecm/platform/ecm_stage2_fingerprint.h": "include/ecm/platform/fingerprint.h",
+    "src/core/ecm_stage2_portable_driver.inl": "src/ecm/service/planning/stage2.cpp",
+    "src/ecm/application/cuda_stage2/ecm_stage2_portable_driver.inl": "src/ecm/service/planning/stage2.cpp"
   }
 }

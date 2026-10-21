@@ -100,6 +100,7 @@ set(ECM_STAGE2_HOST_SOURCES
     src/ecm/storage/results/publication.cpp
     src/ecm/core/stage1/selection.cpp
     src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp
+    src/ecm/service/planning/stage2.cpp
     src/ecm/application/configuration/legacy/ecm_expr.cpp
     src/ecm/storage/queue/ecm_worktodo.cpp
     src/ecm/application/configuration/ecm_queue_config.cpp)

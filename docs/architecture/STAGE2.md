@@ -141,3 +141,7 @@ relocation 的点块末尾不足差分 chain 下限时，在容量允许且两�
 [stage2_progress.h](../../include/ecm/storage/queue/stage2_progress.h)公开任务身份和曲线进度数据及读写/回执声明；[stage2_progress.cpp](../../src/ecm/storage/queue/stage2_progress.cpp)实现 schema、原子落盘、完整结果行与 finished 回执检查。旧身份导入的匹配模板仍在 storage/queue 私有头，由实际任务解析提供数学一致性判断。单任务 pending/确认/封存/源行复核由父流程排序，文件模块不拥有另一个任务循环。
 
 [fingerprint.h](../../include/ecm/platform/fingerprint.h)是 SHA256 的普通 C++ 声明；Windows CNG 的动态库与句柄实现仅在 [fingerprint.cpp](../../src/ecm/platform/fingerprint.cpp)。两个模块不依赖 CUDA SDK，构建使用普通主机编译器；实际计算引擎仍保持自己的 CUDA runtime 依赖。
+
+## 主机规划实现
+
+[planning/stage2.cpp](../../src/ecm/service/planning/stage2.cpp)独立编译方案选择、校准、测量和 profile 合并；缓存和作用域状态保留在同一编译单元。配置调用方只投影 B2 默认值与控制台预算，规划实现不包含 TOML/完整 Settings 实现头。实际设备选择和显存快照仍使用 CUDA runtime。共享调用类型当前位于私有 service/stage2，不作为外部 API。
