@@ -189,3 +189,9 @@ Nsight Systems 独立采集相同输入的两版本五路径，计时不混入�
 CUPTI 记录的同时存活 device+managed 分配峰值，两版本依次均为 12,592 / 12,592 / 30,448 / 17,200 / 123,464 字节；静态分配另列。该计数不含 context 开销，也不是总进程物理显存峰值，未将主机/设备或各组件峰值相加。依据 `p5/profile_03/analysis.json` 及原始 SQLite/nsys-rep。首次标准输入剖析停在启动，改为队列后又发现测试配置没有显式固定曲线/param/device；两份无效材料保留，最终 profile_03 使用完整显式 TOML、核对实际设备 1 和全部完成点后才纳入结论。
 
 P0–P5 计划范围已完成。数学身份、后端资格、恢复约束和实际 CUDA 运行时依赖仍保持；本机完整档位编译耗时、未固定功耗及物理显存不可由分配计数代表，是本轮验证的明确边界。正式主题已同步当前职责和编译边界；本开发草稿等待用户决定归档或清理。
+
+## 补充维护：Edwards 构造公式可读性
+
+按用户要求整理 `src/ecm/core/curve/ecm_edwards_curve.h`：每行一个计算步骤，按公式分组，补充 Jacobian 倍点/混合加点、归一化、Atkin–Morain 参数与起点坐标、Montgomery a24 约定和扩展 Edwards 点校验注释。参考本地 `.refactor/p95v3106b01.source/ecm truncated P-1.cpp` 的 `choose_atkin_morain`，明确其普通投影坐标与本实现 Jacobian 坐标的差别，不搬用不同坐标下的倍点公式；扩展坐标注释也不在合数模数上无条件消去非单位 Z。
+
+此次只改排版和注释，版本保持 0.46.7。移除空白与注释后，前后 2,651 个 C++ token 完全相同，调用顺序、控制流和公式实现不变；使用正式 local 清单记录的 MSVC/GMP，通过现有曲线探针的普通 CXX 语法检查。本轮没有重新执行 GPU 计算或完整 CUDA 构建，证据位于 `data/experiments/edwards_curve_readability_20261021/`。
