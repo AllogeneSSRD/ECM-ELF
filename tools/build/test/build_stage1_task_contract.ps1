@@ -1,6 +1,7 @@
 # Compile the real host task module and file collaborators; no CUDA compiler/SDK.
 param([Parameter(Mandatory=$true)][string]$WorkerBuild,
-      [Parameter(Mandatory=$true)][string]$Build)
+      [Parameter(Mandatory=$true)][string]$Build,
+      [switch]$QueueWorkflow)
 $ErrorActionPreference='Stop'
 $repo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 Set-Location $repo
@@ -15,8 +16,14 @@ $production=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
 $sources=@('src/ecm/storage/results/publication.cpp','src/ecm/core/stage1/selection.cpp','src/ecm/service/stage1/task.cpp','src/ecm/storage/checkpoint/ecm_checkpoint.cpp',
     'src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
     'src/ecm/core/stage1/ecm_stage1_exp.cpp','src/ecm/platform/stage1_progress.cpp')
+if($QueueWorkflow){
+    $sources+=@('src/ecm/service/work/queue_workflow.cpp','src/ecm/storage/queue/ecm_worktodo.cpp',
+        'src/ecm/storage/queue/p95_worktodo.cpp','src/ecm/storage/transfer/p95_transfer.cpp',
+        'src/ecm/storage/transfer/ecm_stage2_transfer.cpp')
+}
 foreach($source in $sources){if($source -notin $production){throw "Missing production collaborator: $source"}}
-$sources+=@('tools/test/stage1_task_contract.cpp')
+$fixture=if($QueueWorkflow){'stage1_queue_contract'}else{'stage1_task_contract'}
+$sources+=@('tools/test/'+$fixture+'.cpp')
 New-Item -ItemType Directory -Path $buildPath|Out-Null
 $objects=@();$commands=@();$hashes=[ordered]@{}
 foreach($source in $sources){
@@ -27,7 +34,7 @@ foreach($source in $sources){
     $commands+='if errorlevel 1 exit /b 1'
     $hashes[$source]=(Get-FileHash -LiteralPath (Join-Path $repo $source)).Hash
 }
-$exe=Join-Path $buildPath 'stage1_task_contract.exe'
+$exe=Join-Path $buildPath ($fixture+'.exe')
 $commands+=('"'+$manifest.host_compiler+'" /nologo '+($objects -join ' ')+' "'+$manifest.gmp_root+'/lib/gmp.lib" /Fe"'+$exe+'"')
 $batch=Join-Path $buildPath 'build.cmd'
 [IO.File]::WriteAllText($batch,"@echo off`r`n$($manifest.compile_setup)`r`nif errorlevel 1 exit /b 1`r`n"+($commands -join "`r`n")+"`r`n",[Text.UTF8Encoding]::new($false))

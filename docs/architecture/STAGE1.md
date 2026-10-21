@@ -28,9 +28,17 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。结果中的 factors、array_found、sigmas 分别清理，sigmas 不依赖 factors 是否存在。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
 
-任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)保留输入、依赖组装及尚待提取的队列协议；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调 [私有依赖](../../src/ecm/service/stage1/legacy_execution.h)。私有 legacy 执行载荷仍是过渡合同，未声明最终 Executor 准备/执行接口已完成；没有 TaskRunner、Session.run 或重复 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task；私有 legacy 执行载荷仍待后续收口。
+任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)保留单次输入、依赖组装、模式选择与展示/退出；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调 [私有依赖](../../src/ecm/service/stage1/legacy_execution.h)。私有 legacy 执行载荷仍是过渡合同，未声明最终 Executor 准备/执行接口已完成；没有 TaskRunner、Session.run 或重复 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task；私有 legacy 执行载荷仍待后续收口。
 
 任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 8 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
+
+## 应用输入与队列编排
+
+driver 组装一次计算、身份和默认 NAF 三回调，直接模式调用 task，队列模式进入应用 [queue_source.cpp](../../src/ecm/application/cli/queue_source.cpp)。source 读取一次配置快照，解析两种任务格式，规范化参数/路径，并按实际曲线初始化 Prime95 交接；它通过 NextQueueTask 提供已规范化输入，不执行计算或完成提交。[stage1_input.cpp](../../src/ecm/application/cli/stage1_input.cpp)集中共同输入检查和命名。
+
+[queue_workflow.cpp](../../src/ecm/service/work/queue_workflow.cpp)是唯一任务循环与完成协议。其 [公开合同](../../include/ecm/service/work/queue_workflow.h)中 QueueItem 拥有 mpz 模数、字符串和本次选项；转交配置指针借用应用状态至同步返回，不能保存 Stage1Request 的借用引用。QueuePaths 仅传队列/finished/save 同步策略，没有整个应用 Settings 或额外 Runner。
+
+单任务发布封存仍在 task。QueueWorkflow 检查准备/发布失败 → 展示因子 → 检查停止/执行失败；成功后 Stage2 pending → finished → 按原票据删除/替换源行 → 同步 save → Stage2 flush → Prime95 delivery。文件模块只做具体读写。准备/发布失败或停止保留原行，执行失败标记原行；解析错误标记失败的既有返回 0 策略也保留。save skip 仍在执行前预读；Prime95 idle recovery 区分初始空队列和已读取无效任务。不存在逐任务重新读取 TOML。
 
 ## 选择词汇与配置依赖
 
@@ -44,13 +52,13 @@ task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/confi
 
 [stage1_progress.h](../../include/ecm/platform/stage1_progress.h)只声明共享 GPU screen 格式及 SpeedWindow 方法；实现位于 [stage1_progress.cpp](../../src/ecm/platform/stage1_progress.cpp)。50 样本窗口的布局、统计公式与 stdout 协议保持，不新增 Pimpl 分配。CUDA 包含声明；修改格式或速度统计函数体只需重编对应 CXX。Montgomery 对该头的多余显式 OBJECT_DEPENDS 已移除，真实 include 依赖仍正常校验。
 
-共享选择、主机准备、CPU/GPU host workflow、Montgomery 构造/codec 和结果发布已提取；环境策略、tune 与队列的剩余收口仍在进行，不能据此推定全部 P4 已完成。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
+共享选择、主机准备、CPU/GPU host workflow、Montgomery 构造/codec 和结果发布已提取；队列已提取；环境策略、tune 与私有执行合同仍在收口，不能据此推定全部 P4 已完成。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
 
 ## CPU 执行与共享主机准备
 
 CPU 两条完整执行路径位于 [legacy_executor.cpp](../../src/ecm/backend/cpu/stage1/legacy_executor.cpp)，通过同目录私有头的 run_edwards_stage1、run_mont_stage1 接收 N、B1/B2、曲线数、save 策略、表达式和本次执行选项，填充已有 LegacyStage1Result。线程/ISA 选择、点状态、恢复、分批推进、逐曲线 GCD、factor/DONE 与存档时序由该 Implementation 集中持有。它用普通基线 CXX 编译，不把 AVX512 编译设置施加到调度文件；原 SIMD 实现继续独立编译。应用仍解析 affinity 文本，执行模块只应用解析后的 CPU 集合。
 
-[preparation.cpp](../../src/ecm/service/stage1/preparation.cpp)集中 CPU/GPU 共用的标量缓存入口、随机 sigma、保存路径、固定 sigma 范围检查及主机时钟/终端检测；私有 preparation.h 只声明实际共用函数，不增加 wrapper 类。随机状态仍是同一个进程级状态。CPU 模块与准备实现已用真实 MSVC 依赖记录确认不包含 CUDA SDK 头；GPU host workflow、分派与队列仍待后续提取。
+[preparation.cpp](../../src/ecm/service/stage1/preparation.cpp)集中 CPU/GPU 共用的标量缓存入口、随机 sigma、保存路径、固定 sigma 范围检查及主机时钟/终端检测；私有 preparation.h 只声明实际共用函数，不增加 wrapper 类。随机状态仍是同一个进程级状态。CPU 模块与准备实现已用真实 MSVC 依赖记录确认不包含 CUDA SDK 头；GPU host workflow、分派与队列已提取到各自普通 CXX。
 
 各执行路径原有 factor、DONE、save 顺序和发布失败分类保持，不在本次组织调整中统一旧差异。实际设备同步和回读继续依赖 CUDA。
 

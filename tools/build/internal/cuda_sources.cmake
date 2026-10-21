@@ -9,6 +9,9 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/service/stage1/preparation.cpp
     src/ecm/service/stage1/execution.cpp
     src/ecm/backend/cpu/stage1/legacy_executor.cpp
+    src/ecm/application/cli/stage1_input.cpp
+    src/ecm/application/cli/queue_source.cpp
+    src/ecm/service/work/queue_workflow.cpp
     src/ecm/application/cli/ecm_driver.cpp
     src/ecm/service/execution/legacy/ecm_params_init.cpp
     src/ecm/storage/checkpoint/ecm_checkpoint.cpp

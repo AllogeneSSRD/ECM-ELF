@@ -119,3 +119,5 @@ std::string p95_strip_aid(const std::string &line);
 // Called automatically by p95_transfer_deliver; exposed for the tests.
 std::vector<std::string> p95_transfer_recover_lines(const P95TransferConfig &cfg,
                                                     size_t *rejected_count = nullptr);
+
+std::string p95_transfer_quote(const std::string &);

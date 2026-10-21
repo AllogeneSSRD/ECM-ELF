@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3a 完成 CUDA 家族物理归位，其余 P3 与 P4–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3 完成 CUDA/主机/OpenCL 家族归位，P4a–P4g 已逐步落实，P4 收尾及 P5–P7 继续实施。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -834,6 +834,22 @@ task 中直接取得 SubmissionLock、prepare_internal_ledger 和 read_submissio
 - [Stage1 重复构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/stage1_repeat.log)和 [Stage2 重复构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/stage2_repeat.log)均无重编或链接；31+2 个 CUDA 对象与 P4e 相同。[依赖误报证据](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/dependency_guard/result.json)保留。
 
 [最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4f/qualification.json)冻结四个生产 worker 及输入。未运行 release、性能采样或全位宽终验。后续继续 QueueWorkflow、环境/tune 策略与私有执行合同，P4 仍未整体完成。
+
+### P4g：应用输入与唯一队列完成协议已分离
+
+对应程序版本 `0.45.15`。driver 从上一阶段 2390 行减至 1419 行，保留 CLI/单次输入、依赖组装、模式选择、展示和退出；9 个应用输入函数落入 stage1_input.cpp。queue_source.cpp 持有启动配置快照、两种任务语法、路径/选择规范化和 Prime95 按实际任务惰性初始化；它向 QueueWorkflow 提供一个 next 回调，不调用 task，也不推进完成队列。
+
+[公开队列合同](../../include/ecm/service/work/queue_workflow.h)提供拥有模数、选项和字符串的 QueueItem，转交配置只借用至同步流程返回；QueuePaths 与 NextQueueTask 不携带完整应用 Settings。唯一 [queue_workflow.cpp](../../src/ecm/service/work/queue_workflow.cpp)持有外循环、task 调用和完成协议：先检查准备/发布失败，展示因子，再处理停止/执行失败；成功按 Stage2 pending → finished → 原票据删除/替换 → save 同步 → Stage2 flush → Prime95 delivery 的顺序提交。文件机制继续由现有 QueueStore/transfer 实现提供。无 TaskRunner、QueueRunner 类或重复 factory，单任务恢复/发布/封存仍只属于 task。
+
+保留启动 Stage2 pending flush、save skip 预读和 Prime95 lazy/recovery 的原顺序；启动配置仍只读一次。旧解析错误的 MarkError 写入失败会结束循环并返回 0，本轮明确保留，没有把组织重构混成失败策略变更。普通执行失败标记原行；准备/发布失败与停止保留原行。因子成功不生成本地自动 Stage2，Prime95 原交接政策保持。
+
+- [源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/source_contract_03/result.json)：9 个输入函数、7 个 source helper、两种完整解析流程、启动/Prime95 顺序和完整完成协议对照一致。
+- [独立队列合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/queue_contract_02/result.json)：13 用例覆盖空队列、读错、错误标记/写失败、完成、因子、自动 Stage2、准备/发布失败、读前停止/执行中停止、finished 写失败与票据不匹配；只替换算术，运行真实 task/checkpoint/publication/queue 文件模块。实际 MSVC 依赖无 CUDA SDK。
+- [9 个主机 CPP 编译](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/host_compile/manifest.json)无 nvcc、CUDA SDK 路径或头，包含应用 queue source 和 service workflow；PRAC codec ON 仅是主机编译覆盖，不新增 GPU 运行资格。
+- [Prime95 实际队列验收](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/p95_transfer_02.log)83 断言通过；旧 fixture 改为当前 TOML/绝对隔离路径，保留路由、锁、AID 与恢复断言并增加进程返回检查。首次旧路径失败证据保留。[Stage2 transfer](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/stage2_transfer.log)修正旧构建路径后通过。
+- [27 项运行](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/usability/summary.json)、[5+5 基线](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/runtime/summary.json)、[OpenCL 172 资源/2 缓存命中](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/opencl_resources/result.json)通过。CPU Stage2 互操作使用已冻结的 0.45.14 worker，本轮未重建它。
+
+首次主程序编译暴露新增 include 留下中段 BOM 的编辑错误，已保留原始开头 BOM 并删除中段重复项；独立队列 fixture 补齐应用通常提前创建的同步目录，未修改生产文件机制。失败证据与修复记录均保留。[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p4g/qualification.json)冻结三个 worker；31+2 个 CUDA 对象未变，重复构建 0 CXX/0 CU/0 link。后续继续环境/tune 与私有执行合同审查，P4 尚未整体结束；未运行 release、性能采样或全位宽终验。
 
 ## 首先调整构建复用与输出隔离
 
@@ -1406,7 +1422,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0、P1a/P1b、P2 与 P3a 完成，P3 其余家族及 P4–P7 未完成，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0–P3 完成，P4a–P4g 分步完成，P4 收尾及 P5–P7 未完成，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 

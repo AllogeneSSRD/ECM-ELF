@@ -11,7 +11,7 @@ $exe=Join-Path $Build 'stage2_transfer_test.exe'
 $script=Join-Path $Build 'build.cmd'
 $gmp=Join-Path $repo 'third_party/gmp-zen3/dist'
 $line="@echo off`r`ncall `"$vc`" >nul 2>&1`r`nif errorlevel 1 exit /b 1`r`n"+
-    "cl /nologo /std:c++17 /EHsc /MD /utf-8 /D NOMINMAX /I src/core /I `"$gmp/include`" tools/test/stage2_transfer_test.cpp src/core/ecm_stage2_transfer.cpp src/core/ecm_worktodo.cpp /Fe:`"$exe`" /Fo:`"$Build/`" /link /LIBPATH:`"$gmp/lib`" gmp.lib`r`nexit /b %errorlevel%`r`n"
+    "cl /nologo /std:c++17 /EHsc /MD /utf-8 /D NOMINMAX /I include /I src /I `"$gmp/include`" tools/test/stage2_transfer_test.cpp src/ecm/storage/transfer/ecm_stage2_transfer.cpp src/ecm/storage/queue/ecm_worktodo.cpp /Fe:`"$exe`" /Fo:`"$Build/`" /link /LIBPATH:`"$gmp/lib`" gmp.lib`r`nexit /b %errorlevel%`r`n"
 [IO.File]::WriteAllText($script,$line,[Text.UTF8Encoding]::new($false))
 & cmd.exe /d /c "`"$script`"" *> (Join-Path $Build 'build.log')
 if($LASTEXITCODE -ne 0){Get-Content (Join-Path $Build 'build.log') -Tail 25;throw 'Stage2 transfer fixture build failed'}

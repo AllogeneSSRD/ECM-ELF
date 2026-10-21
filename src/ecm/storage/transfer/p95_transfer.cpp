@@ -588,3 +588,15 @@ P95TransferResult p95_transfer_deliver(const P95TransferConfig &cfg, const std::
     r.pending_left = 0;
     return r;
 }
+
+std::string p95_transfer_quote(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        if (c == '"') { out += '\\'; out += c; }
+        else if (c == '\r' || c == '\n') out += ' ';
+        else out += c;
+    }
+    if (!out.empty() && out.back() == '\\') out += '\\';
+    return out;
+}

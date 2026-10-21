@@ -48,6 +48,7 @@ if (-not $Exe -or -not (Test-Path $Exe)) {
     exit 2
 }
 if (-not $Sandbox) { $Sandbox = Join-Path $repoRoot ('data\experiments\p95_transfer_' + (Get-Date -Format 'yyyyMMdd_HHmmss')) }
+$Sandbox = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Sandbox)
 if (Test-Path -LiteralPath $Sandbox) { throw 'Use a new sandbox; existing evidence is preserved' }
 New-Item -ItemType Directory -Force -Path $Sandbox | Out-Null
 
@@ -79,6 +80,9 @@ function Check([string]$name, [bool]$ok, [string]$detail = "") {
 $enc = New-Object System.Text.UTF8Encoding($false)
 function Write-Text([string]$path, [string]$text) {
     [System.IO.File]::WriteAllText($path, $text, $enc)
+}
+function Toml-String([string]$text) {
+    return '"' + $text.Replace('\','\\').Replace('"','\"') + '"'
 }
 
 # One scenario: build the sandbox, create the optional lock, run the queue once, collect.
@@ -115,18 +119,19 @@ function Invoke-Task {
     # NOTE: parenthesise every concatenation inside an array literal -- the comma binds
     # tighter than '+', so "key = " + $v would silently become two ini lines.
     $iniLines = @(
-        'curve = mont', 'target = gpu',
+        '[shared]',
+        ('worktodo = ' + (Toml-String $todo)),
+        '[stage1]',
+        'curve = "mont"', 'target = "gpu"',
         'gpu_param = 0',
-        'gpucurves = 1',
         ('device = ' + $Device),
-        ('tmp_dir = ' + (Join-Path $dir 'saves')),
-        ('finished = ' + (Join-Path $dir 'finished.txt')),
-        ('worktodo = ' + $todo),
-        ('log_file = ' + $log),
-        'verbose = 0',
+        ('tmp_dir = ' + (Toml-String (Join-Path $dir 'saves'))),
+        ('finished = ' + (Toml-String (Join-Path $dir 'finished.txt'))),
+        ('log_file = ' + (Toml-String $log)),
+        'verbose = false',
         'ckpt_seconds = 0',
-        ('p95_worktodo_path = ' + $p95TodoPath),
-        ('p95_add_workers = ' + $workerSpec)
+        ('p95_worktodo_path = ' + (Toml-String $p95TodoPath)),
+        ('p95_add_workers = ' + (Toml-String $workerSpec))
     )
     if ($iniExtra -ne '') { $iniLines += $iniExtra }
     Write-Text $ini (($iniLines -join "`r`n") + "`r`n")
@@ -142,7 +147,10 @@ function Invoke-Task {
     $p95Before = if (Test-Path $p95TodoPath) { Get-Content -LiteralPath $p95TodoPath -Raw } else { '' }
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $out = (& cmd /c ('"{0}" --config "{1}" --worker 1 < NUL 2>&1' -f $Exe, $ini) | Out-String)
+    $code = $LASTEXITCODE
     $sw.Stop()
+    Write-Text (Join-Path $dir ('run_' + [Guid]::NewGuid().ToString('N') + '.log')) $out
+    Check ($name + ' process completed') ($code -eq 0) ("exit=" + $code)
 
     return @{
         dir         = $dir
@@ -331,7 +339,7 @@ Check "no recovery while Prime95 holds it"      ($null -eq (Get-Notice $r10c.out
 # ------------------------------------------------------------------ [11] keep_aid = 0 ----
 Write-Host "[11] p95_keep_aid = 0 drops the AID even when it is not known to be bad"
 Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue
-$r11 = Invoke-Task -name 'noaid' -task $taskLiveAid -workerSpec '1' -p95Todo $todoBoth -iniExtra 'p95_keep_aid = 0'
+$r11 = Invoke-Task -name 'noaid' -task $taskLiveAid -workerSpec '1' -p95Todo $todoBoth -iniExtra 'p95_keep_aid = false'
 Check "the line went over without the AID"      ($r11.add -contains 'ECMSTAGE2=1,2,523,-1,"m0_m523_1e3.save",0,0,1')
 Check "no AID is present in worktodo.add"       (@($r11.add | Where-Object { $_ -match [regex]::Escape($liveAid) }).Count -eq 0)
 Check "the notice says why"                     ((Get-Notice $r11.out 'warn') -match 'p95_keep_aid = 0')
