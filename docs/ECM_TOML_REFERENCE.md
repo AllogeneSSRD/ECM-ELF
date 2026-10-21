@@ -1394,30 +1394,6 @@ Idle GUI frame and worker-status refresh target in Hz. Input messages wake the G
 
 GUI 空闲时绘制帧与 worker 状态处理的目标频率，单位为 Hz。输入消息会及时唤醒界面；提高此值可使图表和状态显示更平滑，但增加界面开销。GPU 指标按 gpu_poll_ms 独立采样，两项设置均不改变计算速度。
 
-### results_json
-
-```toml
-results_json = ""
-```
-
-Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `no / 不支持`.
-
-GUI factor summary cache; empty uses gui_results.jsonl. CLI workers own the submission results.json.txt and the canonical Stage1/Stage2 internal JSONL files.
-
-GUI 因子摘要缓存，留空使用 gui_results.jsonl。提交 results.json.txt 与统一格式的 Stage1/Stage2 内部 JSONL 由 CLI Worker 写入。
-
-### results_txt
-
-```toml
-results_txt = ""
-```
-
-Type / 类型: `string`; range / 范围: `<path>`; worker override / worker 覆盖: `no / 不支持`.
-
-Readable GUI result summary derived from JSONL. Empty uses results.txt in the GUI executable directory. Preserve the source JSONL as well for long-term result storage.
-
-指定 GUI 汇总结果的可读文本文件，由 JSONL 结果派生。留空使用 GUI 可执行文件目录下的 results.txt；需要长期保留结果时同时妥善保存 JSONL 来源。
-
 ### stage2_exe
 
 ```toml

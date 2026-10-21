@@ -85,7 +85,7 @@ $tests = @(
     @{ name = 'worker-selftest'; kind = 'exe';    target = $exe;     args = @('--worker-selftest'); gpu = $false; what = 'worker supervision against the fake worker (headless)' }
     @{ name = 'gpu-selftest';    kind = 'exe';    target = $exe;     args = @('--gpu-selftest');    gpu = $true;  what = 'NVML fields, cross-checked against nvidia-smi' }
     @{ name = 'log-parse';       kind = 'exe';    target = (Join-Path $Build 'ecm_gui_log_parse_test.exe');   args = @(); gpu = $false; what = 'progress/event/hit line parsing (unit)' }
-    @{ name = 'results-unit';    kind = 'exe';    target = (Join-Path $Build 'ecm_gui_results_test.exe');     args = @(); gpu = $false; what = 'results.json.txt + results.txt (unit)' }
+    @{ name = 'results-unit';    kind = 'exe';    target = (Join-Path $Build 'ecm_gui_results_test.exe'); args = @((Join-Path $repoRoot ('data/experiments/gui_result_suite_' + [Guid]::NewGuid().ToString('N')))); gpu = $false; what = 'published Result sources, filters, original copy and file reload' }
     @{ name = 'smoke';           kind = 'script'; target = 'test_gui_smoke.ps1';          exe = 'gui';    gpu = $false; what = 'window lifecycle, minimize/restore, layout, font, CJK' }
     @{ name = 'workers';         kind = 'script'; target = 'test_gui_workers.ps1';        exe = 'gui';    fake = $true; gpu = $false; what = 'fake-worker supervision, table geometry, graceful stop' }
     @{ name = 'refresh';         kind = 'script'; target = 'test_gui_refresh.ps1';        exe = 'gui';    gpu = $false; what = 'idle frame pacing and Prime95 pending-file transitions' }
@@ -94,7 +94,6 @@ $tests = @(
     @{ name = 'gpu-panel';       kind = 'script'; target = 'test_gui_gpu.ps1';            exe = 'gui';    gpu = $true;  what = 'GPU panel + NVML degradation' }
     @{ name = 'gpu-curves';      kind = 'script'; target = 'test_gui_gpu_curves.ps1';     exe = 'gui';    cuda = $true; gpu = $true;  what = 'power/clock curves really move under load' }
     @{ name = 'real-workers';    kind = 'script'; target = 'test_gui_real_workers.ps1';   exe = 'gui';    cuda = $true; gpu = $true;  what = 'real ecm_cuda on two cards, worktodo sections' }
-    @{ name = 'results-e2e';     kind = 'script'; target = 'test_gui_results.ps1';        exe = 'gui';    cuda = $true; gpu = $true;  what = 'results dual file, two real runs' }
     @{ name = 'hit-fields';      kind = 'script'; target = 'test_hit_fields.ps1';         exe = '';       cuda = $true; gpu = $true;  what = 'D3 hit line fields (real driver, queue mode)' }
     @{ name = 'worker-sections'; kind = 'script'; target = 'test_worker_sections.ps1';    exe = 'driver'; gpu = $true;  what = 'D1/D2 ini + worktodo [Worker #N] sections' }
     @{ name = 'gpu-info';        kind = 'script'; target = 'test_gpu_info.ps1';           exe = 'driver'; gpu = $true;  what = 'D4: --gpu-info tiers agree with the run path' }

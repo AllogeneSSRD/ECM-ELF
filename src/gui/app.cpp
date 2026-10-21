@@ -317,32 +317,11 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
     font_snap_=gui.font_snap;
     exit_confirm_=gui.exit_confirm;
     graceful_stop_ms_=static_cast<unsigned long long>(gui.graceful_stop_ms);
-    // Result files: [gui] results_json / results_txt, defaulting next to the exe. The
-    // JSONL is append-only (the durable record), results.txt is derived from it.
-    results_json_ = gui.results_json;
-    if (results_json_.empty()) {
-        results_json_ = path_join(exe_dir(), ecm_config::defaults::gui_results_json);
-    }
-    results_txt_ = gui.results_txt;
-    if (results_txt_.empty()) {
-        results_txt_ = path_join(exe_dir(), ecm_config::defaults::gui_results_txt);
-    }
     // Prime95 handoff: the GUI reads these two [queue] keys itself so the notice strip can
     // say "not configured" before any worker runs, and so the two "open" buttons know
     // where to look (docs/usage/GUI.md 18).
     p95_worktodo_path_ = ini_.get("stage1", "p95_worktodo_path");
     p95_add_workers_ = ini_.get("stage1", "p95_add_workers");
-    {
-        std::string r_err;
-        if (!results_.init(results_json_, results_txt_, r_err)) {
-            status_ = "results: " + r_err;
-            trace("results: init failed: " + r_err);
-        } else {
-            results_baseline_hits_ = results_.hit_count();
-            trace("results: " + results_json_ + " (" + std::to_string(results_baseline_hits_) +
-                  " hit(s) already recorded)");
-        }
-    }
     // GPU monitoring is optional. Initialization is synchronous; periodic driver
     // queries run on the sampling thread without holding the UI snapshot lock.
     if (!gpu_.start(gpu_poll_ms_)) {
@@ -361,76 +340,24 @@ bool App::init(const std::string &ini_path, const std::string &language, std::st
     return true;
 }
 
-void App::record_hit(const WorkerView &w, const HitInfo &hit) {
-    HitRecord r;
-    r.factor = hit.factor;
-    r.param = hit.param;
-    r.curve_model = hit.curve_model;
-    r.execution_target = hit.execution_target;
-    r.curve = hit.curve;
-    r.sigma = hit.sigma;
-    r.has_sigma = hit.has_sigma;
-    r.save = hit.save;
-    r.worker = w.index;
-    r.device = w.device;
-    r.task = w.task;
-    r.n_expr = w.task.empty() ? std::string() : std::string();
-    // Exponent and B1 come from the save name with an optional curve prefix.
-    // Otherwise fall back to the task's N expression.
-    std::string b1_text;
-    int exponent = 0;
-    if (!hit.save.empty() && ResultsStore::parse_save_name(hit.save, &exponent, &b1_text)) {
-        r.exponent = exponent;
-        r.b1_text = b1_text;
-        r.b1 = std::atof(b1_text.c_str());
-    }
-    if (r.exponent == 0 && !w.task.empty()) {
-        // ECMSTAGE2=1,2,677,... -> the third field is the exponent
-        const std::size_t eq = w.task.find('=');
-        const std::string fields = (eq == std::string::npos) ? w.task : w.task.substr(eq + 1);
-        std::vector<std::string> parts;
-        std::string cur;
-        for (char c : fields) {
-            if (c == ',') {
-                parts.push_back(cur);
-                cur.clear();
-            } else {
-                cur.push_back(c);
-            }
-        }
-        parts.push_back(cur);
-        // [aid,]k,b,n,c,...
-        for (std::size_t i = 0; i + 2 < parts.size(); ++i) {
-            const int n = std::atoi(parts[i + 2].c_str());
-            if (n > 0) {
-                exponent = n;
-                break;
-            }
-        }
-        r.exponent = exponent;
-    }
-    if(w.stage2) {
-        const auto summary=task_display(w.task);
-        if(summary.valid && summary.number.size()>1 && summary.number.front()=='M')r.exponent=std::atoi(summary.number.c_str()+1);
-        r.b1=static_cast<double>(w.stage2_status.b1);r.b1_text=std::to_string(w.stage2_status.b1);
-    }
+void App::refresh_result_sources() {
+    result_.set_paths({});result_error_.clear();
+    result_filter_=ResultFilter{};result_search_[0]=0;
+    result_selected_.clear();result_focus_.clear();result_refresh_at_=0;
+    try {
+        result_.set_paths(result_paths(ini_.lines(),ini_path_,num_workers_));
+    } catch(const std::exception &e) {result_.set_paths({});result_error_=e.what();status_="Result: "+result_error_;}
+}
 
-    std::string err;
-    if (!results_.add(r, err)) {
-        status_ = "results: " + err;
-        trace("results: add failed: " + err);
-        return;
+void App::copy_result_rows(const std::vector<std::size_t> &indices) {
+    const auto text=result_.copy_text(indices);
+    ImGui::SetClipboardText(text.c_str());
+    const char *copied=ImGui::GetClipboardText();
+    if(!copied || text!=copied) {
+        status_=loc_.t("results","copy_failed");trace("Result: clipboard write failed");return;
     }
-    if (!results_.flush(err)) {
-        status_ = "results: " + err;
-        trace("results: flush failed: " + err);
-        return;
-    }
-    char buf[256];
-    std::snprintf(buf, sizeof(buf), "factor found: %s (worker %d, %d factor(s) total)",
-                  r.factor.c_str(), w.index, static_cast<int>(results_.factors().size()));
-    status_ = buf;
-    trace(std::string("results: ") + buf + " -> " + results_.txt_path());
+    status_=loc_.t("results","copied")+": "+std::to_string(indices.size());
+    trace("Result: copied rows="+std::to_string(indices.size())+" bytes="+std::to_string(text.size())+" clipboard=verified");
 }
 
 void App::trace(const std::string &line) const {
@@ -509,6 +436,7 @@ bool App::select_workflow_ini(const std::string &path) {
 
 void App::rebuild_workers() {
     workers_.clear();
+    refresh_result_sources();
     resolved_stage2_exe_.clear();
     gen_has_preview_=false;
     for(int i=1;i<=num_workers_;++i)workers_.push_back(make_worker(i));
@@ -731,8 +659,7 @@ void App::tick() {
         }
         w.hits += static_cast<long long>(d.hits.size());
         for (const HitInfo &h : d.hits) {
-            // One record per hit: the JSONL keeps them all, results.txt merges them.
-            record_hit(w, h);
+            status_=loc_.t("results","factor_found")+": "+h.factor;
             w.hit_flash_until = now + 5000;   // highlight the row for 5 s
         }
         w.events.insert(w.events.end(), d.events.begin(), d.events.end());
@@ -859,9 +786,6 @@ bool App::shutdown(std::string &err, bool save_docking_layout) {
     // its checkpoint interval ([Worker #N] ckpt_seconds, default 600 s, the production ini
     // uses 120 s). A checkpoint-on-signal protocol would be a driver change (D6, not done).
     stop_all_quietly();
-    // Persist whatever the results store still owes the disk.
-    std::string r_err;
-    if (!results_.flush(r_err)) trace("results: final flush failed: " + r_err);
     capture_layout(save_docking_layout);
     if (!ini_.save(err)) return false;
     return true;
@@ -2886,91 +2810,142 @@ void App::draw_gpu_panel() {
 }
 
 void App::draw_results_panel() {
-    if (!ImGui::Begin((loc_.t("results", "title") + "###results").c_str())) {
-        ImGui::End();
-        return;
+    if(!ImGui::Begin((loc_.t("results","title")+"###results").c_str())) {ImGui::End();return;}
+    const auto tr=[&](const char *key){return loc_.t("results",key);};
+    if(!result_error_.empty())ImGui::TextWrapped("%s: %s",tr("read_error").c_str(),result_error_.c_str());
+    const auto now=mono_ms();
+    if(now>=result_refresh_at_) {
+        if(result_.refresh()) {
+            std::set<std::string> current;
+            for(const auto &row:result_.rows())current.insert(row.id);
+            for(auto it=result_selected_.begin();it!=result_selected_.end();)
+                if(!current.count(*it))it=result_selected_.erase(it);else ++it;
+            if(!current.count(result_focus_))result_focus_.clear();
+        }
+        result_refresh_at_=now+500;
     }
-    if (ImGui::Button(loc_.t("results", "rebuild").c_str())) {
-        std::string err;
-        if (results_.rebuild_from_jsonl(err)) {
-            status_ = "results.txt rebuilt from the JSONL";
-        } else {
-            status_ = "rebuild failed: " + err;
+    if(ImGui::Button(tr("refresh").c_str())) {
+        result_.refresh(true);result_selected_.clear();result_focus_.clear();result_refresh_at_=now+500;
+    }
+    ImGui::SameLine();
+    if(ImGui::Button(tr("add_file").c_str())) {
+        std::string path;
+        static constexpr char filter[]="Result files\0*.txt;*.jsonl\0All\0*.*\0\0";
+        if(browse_for_file(path,tr("add_file"),std::string(filter,sizeof(filter)))) {
+            try{result_.add_path(path);result_refresh_at_=0;}catch(const std::exception &e){status_=e.what();}
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button(loc_.t("results", "open_folder").c_str())) {
-        open_in_explorer(results_txt_.empty() ? exe_dir() : results_txt_);
+    if(ImGui::Button(tr("open_folder").c_str()))open_in_explorer(path_dir(ini_path_));
+    bool filter_changed=false;
+    const std::string all=tr("all");
+    const auto status_preview=result_filter_.status.empty()?all:result_filter_.status;
+    ImGui::SetNextItemWidth(115.0f);
+    if(ImGui::BeginCombo(tr("status").c_str(),status_preview.c_str())) {
+        for(const auto &value:{std::string(),std::string("F"),std::string("NF")})
+            if(ImGui::Selectable(value.empty()?all.c_str():value.c_str(),result_filter_.status==value)) {
+                result_filter_.status=value;filter_changed=true;
+            }
+        ImGui::EndCombo();
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%lld hit(s), %d factor(s)", results_.hit_count(),
-                        static_cast<int>(results_.factors().size()));
-
-    const std::vector<MergedFactor> &factors = results_.factors();
-    if (factors.empty()) {
-        ImGui::TextDisabled("%s", loc_.t("results", "empty").c_str());
-    } else if (ImGui::BeginTable("results", 6,
-                                 // Column order (user request): the SCALAR fields first
-                                 // (factor, bits, hits, first seen), then the LIST fields
-                                 // (curves, sigmas) last -- they are the wide ones and are
-                                 // truncated inside their column with the full list in the
-                                 // tooltip. ScrollX/ScrollY: the lists can be long, so the
-                                 // table scrolls instead of pushing the panel wide.
-                                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                     ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
-                                     ImGuiTableFlags_SizingFixedFit,
-                                 ImVec2(0.0f, ImGui::GetContentRegionAvail().y - 24.0f))) {
-        const float w_factor = ImGui::CalcTextSize("1943118631").x + 12.0f;   // 10-digit factor
-        const float w_count = ImGui::CalcTextSize("0000").x + 12.0f;
-        const float w_time = ImGui::CalcTextSize("2026-09-28 23:59").x + 12.0f;
-        const float w_list = ImGui::CalcTextSize("0000000000000000000").x + 12.0f;  // ~19 digits
-        ImGui::TableSetupColumn(loc_.t("results", "factor").c_str(),
-                                ImGuiTableColumnFlags_WidthFixed, w_factor);
-        ImGui::TableSetupColumn(loc_.t("results", "bits").c_str(),
-                                ImGuiTableColumnFlags_WidthFixed, w_count);
-        ImGui::TableSetupColumn(loc_.t("results", "hits").c_str(),
-                                ImGuiTableColumnFlags_WidthFixed, w_count);
-        ImGui::TableSetupColumn(loc_.t("results", "first_seen").c_str(),
-                                ImGuiTableColumnFlags_WidthFixed, w_time);
-        ImGui::TableSetupColumn(loc_.t("results", "curves").c_str(),
-                                ImGuiTableColumnFlags_WidthFixed, w_list);
-        ImGui::TableSetupColumn(loc_.t("results", "sigmas").c_str(),
-                                ImGuiTableColumnFlags_WidthFixed, w_list);
-        ImGui::TableSetupScrollFreeze(4, 1);      // keep the scalars visible while scrolling
-        ImGui::TableHeadersRow();
-        for (const MergedFactor &f : factors) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", f.factor.c_str());
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%s", ResultsStore::format_line(f).c_str());
+    if(ImGui::GetContentRegionAvail().x>180.0f)ImGui::SameLine();
+    ImGui::SetNextItemWidth(115.0f);
+    const auto stage_preview=result_filter_.stage?"Stage"+std::to_string(result_filter_.stage):all;
+    if(ImGui::BeginCombo(tr("stage").c_str(),stage_preview.c_str())) {
+        for(int stage=0;stage<=2;++stage) {
+            const auto label=stage?"Stage"+std::to_string(stage):all;
+            if(ImGui::Selectable(label.c_str(),result_filter_.stage==stage)) {result_filter_.stage=stage;filter_changed=true;}
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetNextItemWidth(std::max(120.0f,ImGui::GetContentRegionAvail().x-70.0f));
+    const auto source_preview=result_filter_.source<0?all:file_name(result_.files().at(result_filter_.source).path);
+    if(ImGui::BeginCombo(tr("source").c_str(),source_preview.c_str())) {
+        if(ImGui::Selectable(all.c_str(),result_filter_.source<0)) {result_filter_.source=-1;filter_changed=true;}
+        for(std::size_t i=0;i<result_.files().size();++i) {
+            const auto &file=result_.files()[i];ImGui::PushID(static_cast<int>(i));
+            if(ImGui::Selectable(file_name(file.path).c_str(),result_filter_.source==static_cast<int>(i))) {
+                result_filter_.source=static_cast<int>(i);filter_changed=true;
             }
-            ImGui::TableSetColumnIndex(1);
-            ImGui::Text("%d", f.bits);
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",file.path.c_str());
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetNextItemWidth(std::max(120.0f,ImGui::GetContentRegionAvail().x-70.0f));
+    if(ImGui::InputText(tr("search").c_str(),result_search_,sizeof(result_search_))) {
+        result_filter_.search=result_search_;filter_changed=true;
+    }
+    if(filter_changed){result_selected_.clear();result_focus_.clear();}
+    const auto visible=result_.filtered(result_filter_);
+    std::vector<std::size_t> selected;
+    for(const auto index:visible)if(result_selected_.count(result_.rows()[index].id))selected.push_back(index);
+    ImGui::BeginDisabled(visible.empty());
+    if(ImGui::Button(tr("copy_filtered").c_str())) {
+        copy_result_rows(visible);
+    }
+    ImGui::EndDisabled();
+    if(ImGui::GetContentRegionAvail().x>180.0f)ImGui::SameLine();
+    ImGui::BeginDisabled(selected.empty());
+    if(ImGui::Button(tr("copy_selected").c_str())) {
+        copy_result_rows(selected);
+    }
+    ImGui::EndDisabled();
+    bool select_all=!visible.empty() && selected.size()==visible.size();
+    ImGui::BeginDisabled(visible.empty());
+    if(ImGui::Checkbox(tr("select_all").c_str(),&select_all))for(const auto index:visible) {
+        if(select_all)result_selected_.insert(result_.rows()[index].id);else result_selected_.erase(result_.rows()[index].id);
+    }
+    ImGui::EndDisabled();ImGui::SameLine();
+    ImGui::TextDisabled("%zu / %zu %s | %zu %s",visible.size(),result_.rows().size(),tr("records").c_str(),selected.size(),tr("selected").c_str());
+    if(visible.empty())ImGui::TextWrapped("%s",tr(result_.rows().empty()?"empty":"no_match").c_str());
+    const float reserve=result_focus_.empty()?28.0f:140.0f;
+    if(ImGui::BeginTable("result_rows",11,ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollX|
+                        ImGuiTableFlags_ScrollY|ImGuiTableFlags_Resizable|ImGuiTableFlags_SizingFixedFit,
+                        ImVec2(0.0f,std::max(80.0f,ImGui::GetContentRegionAvail().y-reserve)))) {
+        const char *keys[]={"select","status","target","stage","factors","b1","b2","curves","model","time","source"};
+        for(int i=0;i<11;++i)ImGui::TableSetupColumn(tr(keys[i]).c_str(),ImGuiTableColumnFlags_WidthFixed,
+            i==0?28.0f:i==2||i==4?125.0f:i==9||i==10?170.0f:90.0f);
+        ImGui::TableSetupScrollFreeze(3,1);ImGui::TableHeadersRow();
+        ImGuiListClipper clipper;clipper.Begin(static_cast<int>(visible.size()));
+        while(clipper.Step())for(int n=clipper.DisplayStart;n<clipper.DisplayEnd;++n) {
+            const auto &row=result_.rows()[visible[static_cast<std::size_t>(n)]];
+            ImGui::PushID(static_cast<int>(visible[static_cast<std::size_t>(n)]));
+            ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
+            bool checked=result_selected_.count(row.id)!=0;
+            if(ImGui::Checkbox("##selected",&checked)) {if(checked)result_selected_.insert(row.id);else result_selected_.erase(row.id);}
+            ImGui::TableSetColumnIndex(1);ImGui::TextColored(row.status=="F"?ImVec4(.45f,1.f,.65f,1.f):ImVec4(.65f,.8f,1.f,1.f),"%s",row.status.c_str());
             ImGui::TableSetColumnIndex(2);
-            ImGui::Text("%d", f.hits);
-            ImGui::TableSetColumnIndex(3);
-            ImGui::TextUnformatted(f.first_seen.c_str());
-            ImGui::TableSetColumnIndex(4);
-            std::string curves;
-            for (std::size_t i = 0; i < f.curves.size(); ++i) {
-                if (i) curves += ",";
-                curves += std::to_string(f.curves[i]);
+            if(ImGui::Selectable(row.target.c_str(),result_focus_==row.id))result_focus_=row.id;
+            if(ImGui::IsItemHovered() && !row.factors.empty())ImGui::SetTooltip("%s",row.factors.c_str());
+            if(ImGui::BeginPopupContextItem()) {
+                if(ImGui::MenuItem(tr("copy_row").c_str()))copy_result_rows({visible[static_cast<std::size_t>(n)]});
+                ImGui::EndPopup();
             }
-            ImGui::TextUnformatted(curves.empty() ? "-" : curves.c_str());
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", curves.c_str());
-            ImGui::TableSetColumnIndex(5);
-            std::string sigmas;
-            for (std::size_t i = 0; i < f.sigmas.size(); ++i) {
-                if (i) sigmas += ",";
-                sigmas += std::to_string(f.sigmas[i]);
-            }
-            ImGui::TextUnformatted(sigmas.empty() ? "-" : sigmas.c_str());
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", sigmas.c_str());
+            ImGui::TableSetColumnIndex(3);ImGui::Text("Stage%d",row.stage);
+            const std::string cells[]={row.factors.empty()?"-":row.factors,row.b1,row.b2.empty()?"-":row.b2,row.curves,row.model,row.timestamp,file_name(result_.files()[row.source].path)};
+            for(int i=0;i<7;++i) {ImGui::TableSetColumnIndex(i+4);ImGui::TextUnformatted(cells[i].c_str());
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("%s",i==6?result_.files()[row.source].path.c_str():cells[i].c_str());}
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }
-    ImGui::TextDisabled("%s: %s", loc_.t("results", "json_file").c_str(), results_.json_path().c_str());
+    for(std::size_t i=0;i<result_.rows().size();++i)if(result_.rows()[i].id==result_focus_) {
+        const auto &row=result_.rows()[i];
+        if(ImGui::SmallButton(tr("copy_row").c_str()))copy_result_rows({i});
+        ImGui::SameLine();ImGui::TextDisabled("%s : %zu",file_name(result_.files()[row.source].path).c_str(),row.line);
+        ImGui::InputTextMultiline("##raw_result",const_cast<char*>(row.raw.c_str()),row.raw.size()+1,ImVec2(-1,70),ImGuiInputTextFlags_ReadOnly);
+        break;
+    }
+    if(ImGui::CollapsingHeader(tr("files").c_str()))for(const auto &file:result_.files()) {
+        ImGui::TextWrapped("%s",file.path.c_str());
+        if(!file.exists)ImGui::TextDisabled("%s",tr("missing").c_str());
+        if(!file.error.empty())ImGui::TextWrapped("%s: %s",tr("read_error").c_str(),file.error.c_str());
+        if(file.pending_lines)ImGui::TextDisabled("%s",tr("pending").c_str());
+    }
+    for(const auto &file:result_.files())if(!file.error.empty() || file.pending_lines) {
+        ImGui::TextColored(ImVec4(1.f,.75f,.4f,1.f),"%s",tr("file_notice").c_str());break;
+    }
     ImGui::End();
 }
 

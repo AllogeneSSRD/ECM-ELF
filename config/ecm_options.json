@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "layout_version": 7,
+  "layout_version": 8,
   "owners": {
     "stage1": "Stage1Values",
     "stage2": "Stage2Values",
@@ -1731,38 +1731,6 @@
       "description": [
         "Maximum wait in milliseconds after requesting a safe worker stop. Process exit ends the wait; workers still running at the deadline are terminated. Allow enough time for Stage1 checkpoint writes or the full current Stage2 curve. Stage2 curve counters are not intermediate arithmetic saves.",
         "请求安全停止后等待的最长时间，单位毫秒。进程退出结束等待；到期仍运行的worker强制终止。应为Stage1检查点写入或当前Stage2整条曲线留足时间；Stage2曲线计数不是中间算术存档。"
-      ]
-    },
-    {
-      "owner": "gui",
-      "key": "results_json",
-      "field": "results_json",
-      "type": "string",
-      "default": "",
-      "domain": "<path>",
-      "fx": "hit_JSONL(GUI)",
-      "parser": "gui",
-      "empty": "GUI_exe_dir/gui_results.jsonl",
-      "effective_default": "gui_results.jsonl",
-      "description": [
-        "GUI factor summary cache; empty uses gui_results.jsonl. CLI workers own the submission results.json.txt and the canonical Stage1/Stage2 internal JSONL files.",
-        "GUI 因子摘要缓存，留空使用 gui_results.jsonl。提交 results.json.txt 与统一格式的 Stage1/Stage2 内部 JSONL 由 CLI Worker 写入。"
-      ]
-    },
-    {
-      "owner": "gui",
-      "key": "results_txt",
-      "field": "results_txt",
-      "type": "string",
-      "default": "",
-      "domain": "<path>",
-      "fx": "hit_text(GUI)",
-      "parser": "gui",
-      "empty": "GUI_exe_dir/results.txt",
-      "effective_default": "results.txt",
-      "description": [
-        "Readable GUI result summary derived from JSONL. Empty uses results.txt in the GUI executable directory. Preserve the source JSONL as well for long-term result storage.",
-        "指定 GUI 汇总结果的可读文本文件，由 JSONL 结果派生。留空使用 GUI 可执行文件目录下的 results.txt；需要长期保留结果时同时妥善保存 JSONL 来源。"
       ]
     },
     {

@@ -1,11 +1,12 @@
 #include "platform.h"
 
+#include <algorithm>
 #include <cstring>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <commdlg.h>            /* GetOpenFileNameA (comdlg32) */
+#include <commdlg.h>            /* GetOpenFileNameW (comdlg32) */
 #include <shellapi.h>
 #endif
 
@@ -333,20 +334,33 @@ bool run_capture(const std::string &command_line, std::string &out, int &exit_co
 
 bool browse_for_file(std::string &path, const std::string &title, const std::string &filter) {
 #ifdef _WIN32
-    char name[MAX_PATH] = {0};
-    if (!path.empty() && path.size() < MAX_PATH) {
-        std::memcpy(name, path.c_str(), path.size());
-    }
-    OPENFILENAMEA ofn{};
+    const auto utf16=[](const std::string &text) {
+        if(text.empty())return std::wstring{};
+        const int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),static_cast<int>(text.size()),nullptr,0);
+        std::wstring converted(static_cast<std::size_t>(count),L'\0');
+        if(count)MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),static_cast<int>(text.size()),converted.data(),count);
+        return converted;
+    };
+    std::vector<wchar_t> name(32768,L'\0');
+    const auto initial=utf16(path),caption=utf16(title);
+    if(initial.size()<name.size())std::copy(initial.begin(),initial.end(),name.begin());
+    const std::string all("All files\0*.*\0\0",15);
+    auto pattern=utf16(filter.find('\0')==std::string::npos?all:filter);
+    pattern.push_back(L'\0');pattern.push_back(L'\0');
+    OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = GetActiveWindow();
-    ofn.lpstrFilter = filter.empty() ? "All files\0*.*\0\0" : filter.c_str();
-    ofn.lpstrFile = name;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrTitle = title.empty() ? nullptr : title.c_str();
+    ofn.lpstrFilter = pattern.c_str();
+    ofn.lpstrFile = name.data();
+    ofn.nMaxFile = static_cast<DWORD>(name.size());
+    ofn.lpstrTitle = caption.empty() ? nullptr : caption.c_str();
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
-    if (!GetOpenFileNameA(&ofn)) return false;
-    path.assign(name);
+    if (!GetOpenFileNameW(&ofn)) return false;
+    const int count=WideCharToMultiByte(CP_UTF8,0,name.data(),-1,nullptr,0,nullptr,nullptr);
+    if(count<=0)return false;
+    path.assign(static_cast<std::size_t>(count),'\0');
+    WideCharToMultiByte(CP_UTF8,0,name.data(),-1,path.data(),count,nullptr,nullptr);
+    path.pop_back();
     return true;
 #else
     (void)path; (void)title; (void)filter;

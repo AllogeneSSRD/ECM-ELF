@@ -16,6 +16,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -316,16 +317,19 @@ private:
                            float c_lo, float c_hi);
     std::string effective_config_text(int worker_index) const;
     void trace(const std::string &line) const;
-    // Records one hit in the two result files and refreshes the status line.
-    void record_hit(const WorkerView &w, const HitInfo &hit);
+    void refresh_result_sources();
+    void copy_result_rows(const std::vector<std::size_t> &indices);
 
     TomlFile ini_;
     Localization loc_;
     GpuMonitor gpu_;
-    ResultsStore results_;
-    std::string results_json_;
-    std::string results_txt_;
-    long long results_baseline_hits_ = 0;   // hits already in the files at startup
+    ResultStore result_;
+    ResultFilter result_filter_;
+    char result_search_[256]{};
+    std::set<std::string> result_selected_;
+    std::string result_focus_;
+    std::string result_error_;
+    unsigned long long result_refresh_at_=0;
     std::vector<WorkerView> workers_;
     std::string ini_path_;
     std::string loc_dir_;

@@ -105,8 +105,6 @@ inline constexpr TomlOptionMeta toml_options[]={
     {"gui","start_tab","string"},
     {"gui","exit_confirm","string"},
     {"gui","graceful_stop_ms","i64"},
-    {"gui","results_json","string"},
-    {"gui","results_txt","string"},
     {"workers.1","name","string"},
     {"workers.1","autostart","int"},
     {"workers.1","extra_args","string"},

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!--
   ecm_gui UI strings - ENGLISH IS THE BASELINE.
   Every <Item id="..."> here must exist in every other language file; a missing key
@@ -147,17 +147,39 @@
     </Panel>
 
     <Panel id="results">
-      <Item id="title"       name="Results"/>
-      <Item id="rebuild"     name="Rebuild results.txt from the JSONL"/>
-      <Item id="open_folder" name="Open results folder"/>
-      <Item id="bits"        name="bits"/>
-      <Item id="empty"       name="No factors yet. Hits from every worker land here."/>
-      <Item id="json_file"   name="raw record"/>
-      <Item id="factor"      name="Factor"/>
-      <Item id="curves"      name="Curves"/>
-      <Item id="sigmas"      name="Sigmas"/>
-      <Item id="hits"        name="Hits"/>
-      <Item id="first_seen"  name="First seen"/>
+      <Item id="title" name="Result"/>
+      <Item id="refresh" name="Refresh"/>
+      <Item id="add_file" name="Add file"/>
+      <Item id="open_folder" name="Open folder"/>
+      <Item id="all" name="All"/>
+      <Item id="status" name="Status"/>
+      <Item id="stage" name="Stage"/>
+      <Item id="source" name="Source"/>
+      <Item id="search" name="Search"/>
+      <Item id="copy_filtered" name="Copy filtered Result"/>
+      <Item id="copy_selected" name="Copy selected Result"/>
+      <Item id="copy_row" name="Copy this Result"/>
+      <Item id="copied" name="Result copied"/>
+      <Item id="copy_failed" name="Clipboard unavailable. Please try copying again."/>
+      <Item id="select_all" name="Select filtered"/>
+      <Item id="select" name="Pick"/>
+      <Item id="selected" name="selected"/>
+      <Item id="records" name="records"/>
+      <Item id="target" name="Target"/>
+      <Item id="factors" name="Factors"/>
+      <Item id="b1" name="B1"/>
+      <Item id="b2" name="B2"/>
+      <Item id="curves" name="Curves"/>
+      <Item id="model" name="Curve"/>
+      <Item id="time" name="Time (UTC)"/>
+      <Item id="empty" name="No published Result yet. Completed NF tasks and verified F results appear here."/>
+      <Item id="no_match" name="No Result matches these filters."/>
+      <Item id="files" name="Result files"/>
+      <Item id="missing" name="Not created yet"/>
+      <Item id="read_error" name="Result read error"/>
+      <Item id="pending" name="Waiting for the last row to finish writing"/>
+      <Item id="file_notice" name="Some source rows are pending or unreadable. See Result files."/>
+      <Item id="factor_found" name="Factor found"/>
     </Panel>
 
     <Panel id="stage2">

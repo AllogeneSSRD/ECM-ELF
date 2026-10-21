@@ -3,7 +3,7 @@
 #include "../ecm_toml.h"
 #include <array>
 namespace ecm_config {
-inline constexpr int layout_version=7;
+inline constexpr int layout_version=8;
 namespace defaults {
 inline constexpr char stage1_worktodo[]="worktodo.txt";
 inline constexpr uint64_t stage1_b2_ratio=0;
@@ -107,8 +107,6 @@ inline constexpr int gui_dock_layout_ver=0;
 inline constexpr char gui_start_tab[]="workers";
 inline constexpr char gui_exit_confirm[]="ask";
 inline constexpr int64_t gui_graceful_stop_ms=300000;
-inline constexpr char gui_results_json[]="gui_results.jsonl";
-inline constexpr char gui_results_txt[]="results.txt";
 inline constexpr char worker_name[]="Worker #{N}";
 inline constexpr int worker_autostart=0;
 inline constexpr char worker_extra_args[]="";
@@ -434,8 +432,6 @@ struct GuiValues {
     std::string start_tab="workers";
     std::string exit_confirm="ask";
     int64_t graceful_stop_ms=300000;
-    std::string results_json="";
-    std::string results_txt="";
 };
 inline const Binding<GuiValues> gui_bindings[]={
     {"NumWorkers",[](GuiValues&c,const std::string&v){c.NumWorkers=gui_integer(v,1,1,64);}},
@@ -455,8 +451,6 @@ inline const Binding<GuiValues> gui_bindings[]={
     {"start_tab",[](GuiValues&c,const std::string&v){c.start_tab=v;}},
     {"exit_confirm",[](GuiValues&c,const std::string&v){c.exit_confirm=(v=="ask"||v=="stop"||v=="kill")?v:"ask";}},
     {"graceful_stop_ms",[](GuiValues&c,const std::string&v){c.graceful_stop_ms=gui_long(v,300000,1000,3600000);}},
-    {"results_json",[](GuiValues&c,const std::string&v){c.results_json=v;}},
-    {"results_txt",[](GuiValues&c,const std::string&v){c.results_txt=v;}},
 };
 inline GuiValues read_gui(const Entries &entries){GuiValues c;apply(c,entries,gui_bindings);return c;}
 struct WorkerValues {

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!--
   ecm_gui 界面文案 —— 简体中文。
   与 localization/english.xml 一一对应：缺哪个键就自动回退英文（不会出现空文本）。
@@ -147,17 +147,39 @@
     </Panel>
 
     <Panel id="results">
-      <Item id="title"       name="结果"/>
-      <Item id="rebuild"     name="从 JSONL 重建 results.txt"/>
-      <Item id="open_folder" name="打开 results.txt"/>
-      <Item id="bits"        name="bits"/>
-      <Item id="empty"       name="未发现因子，此处统计所有 worker 的结果"/>
-      <Item id="json_file"   name="原始记录"/>
-      <Item id="factor"      name="因子"/>
-      <Item id="curves"      name="曲线"/>
-      <Item id="sigmas"      name="sigma 列表"/>
-      <Item id="hits"        name="命中次数"/>
-      <Item id="first_seen"  name="首次命中"/>
+      <Item id="title" name="Result"/>
+      <Item id="refresh" name="刷新"/>
+      <Item id="add_file" name="添加文件"/>
+      <Item id="open_folder" name="打开目录"/>
+      <Item id="all" name="全部"/>
+      <Item id="status" name="状态"/>
+      <Item id="stage" name="阶段"/>
+      <Item id="source" name="来源"/>
+      <Item id="search" name="搜索"/>
+      <Item id="copy_filtered" name="复制筛选结果"/>
+      <Item id="copy_selected" name="复制所选结果"/>
+      <Item id="copy_row" name="复制此 Result"/>
+      <Item id="copied" name="已复制 Result"/>
+      <Item id="copy_failed" name="剪贴板暂不可用，请重试复制。"/>
+      <Item id="select_all" name="选中筛选结果"/>
+      <Item id="select" name="选择"/>
+      <Item id="selected" name="已选"/>
+      <Item id="records" name="条记录"/>
+      <Item id="target" name="目标"/>
+      <Item id="factors" name="因子"/>
+      <Item id="b1" name="B1"/>
+      <Item id="b2" name="B2"/>
+      <Item id="curves" name="曲线数"/>
+      <Item id="model" name="曲线"/>
+      <Item id="time" name="时间 (UTC)"/>
+      <Item id="empty" name="尚无发布版 Result；任务完成后的 NF 与因子结果 F 将显示在这里。"/>
+      <Item id="no_match" name="没有符合筛选条件的 Result。"/>
+      <Item id="files" name="Result 来源文件"/>
+      <Item id="missing" name="文件尚未生成"/>
+      <Item id="read_error" name="Result 读取异常"/>
+      <Item id="pending" name="等待最后一行写入完成"/>
+      <Item id="file_notice" name="部分来源行尚未写完或不可读取，请展开 Result 来源文件查看。"/>
+      <Item id="factor_found" name="找到因子"/>
     </Panel>
 
     <Panel id="stage2">

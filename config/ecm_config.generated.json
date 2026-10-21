@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/core/generated/ecm_config_generated.h": "ff5e54cfbff2c449fd896d09500cb4886903d19ae70f04dec53cd69a145e4bef",
-    "src/core/generated/ecm_toml_schema.h": "8f10414bfcc8af764626d4292176a6b74821dd3db7f7e74b4d7b563bf73286a5",
-    "src/core/generated/ecm_toml_template.h": "603e5cccaf9a5be70d04b8d5f9df9527e085a6bc65af665aae25b8342f12e0a7",
-    "config/ecm.toml.default": "9489cce851873bb813db6b102a6fa1a81b6000723f18af228d8c7cd62646b9a4",
-    "config/ecm.toml.example": "c9b187176650f4bd557472043c28662fd4741d5e693d54b2383adbde6f075b23",
-    "docs/ECM_TOML_REFERENCE.md": "519b7193977ff52a08e7f6923928606e74c2dafe071a8336f2880d43a53c6092",
-    "config/ecm_options.json": "977917e69080bcec497697d0e304e2a777d81b81e8eaaae106b1824c5e2d9279",
+    "src/core/generated/ecm_config_generated.h": "6d26d52d289a1ad35be1721dd2ea040f1600b53252774c318980af4279df8c7c",
+    "src/core/generated/ecm_toml_schema.h": "346d5c5de19d2385445a161921b3f6d3effe7fd7d097472c376c03dc0206ac4a",
+    "src/core/generated/ecm_toml_template.h": "fa95ad75b8c21077862b17671385f6207d43cd38f0a0394fc0a9377ebfe8ff90",
+    "config/ecm.toml.default": "00e902da98e6aa5b53a278910a3cbf96b6429c820fa78e734a82534139f75ba0",
+    "config/ecm.toml.example": "16163c0aba3291a3c4fad675a706b18f09ef74a49f90ff0bcdd5f7de8434d031",
+    "docs/ECM_TOML_REFERENCE.md": "d87e652f72bdb9099b16e2a99a02548e2204676a574cfd0bd14ae6537a9bf5b0",
+    "config/ecm_options.json": "20057df2ffd4517458f4aa46154a7f3f3eab5c162debaf3f655629053c9d47ed",
     "tools/gen/generate_ecm_config.py": "bd006d1a363bd98decd52f64d49f799c203e805f4c3c30cd31e9177ff7072ab5"
   }
 }
