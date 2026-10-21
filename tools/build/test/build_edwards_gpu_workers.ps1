@@ -13,7 +13,7 @@ if($Stage -ne 'stage2') {
     . (Join-Path $root 'internal/cuda_build_state.ps1')
     $repo=(Get-Location).Path
     $inventory=Get-EcmCudaInventory $repo
-    $edwardsSources=@($inventory.groups.STAGE1_EDWARDS)
+    $edwardsSources=@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/core/stage1/ecm_stage1_exp.cpp')
     $sourcePaths=@(Get-EcmSourceClosure $repo $edwardsSources @('include','src','third_party/cgbn/include'))+@('CMakeLists.txt')
     $hashes=Get-EcmSourceHashes $repo $sourcePaths
     if($RelinkOnly){

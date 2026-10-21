@@ -1,4 +1,4 @@
-#include "../../src/ecm/core/stage1/ecm_edwards_naf.h"
+#include "ecm/core/stage1/scalar.h"
 #include "../../src/ecm/backend/cuda/stage1/edwards/edwards_slice.h"
 #include <cstdio>
 #include <cstdlib>

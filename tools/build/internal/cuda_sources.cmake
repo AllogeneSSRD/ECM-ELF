@@ -17,6 +17,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/storage/transfer/p95_transfer.cpp
     src/ecm/storage/queue/p95_worktodo.cpp
     src/ecm/platform/logging.cpp
+    src/ecm/platform/stage1_progress.cpp
     src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp
     src/ecm/storage/save/ecm_edwards_save.cpp
     src/ecm/backend/cpu/stage1/edwards/simd_edwards.cpp

@@ -49,7 +49,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 // ECM_* return codes (include/ecm.h).
 #include "../../runtime/cuda_ecm_shim.h"
 #include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
-#include "../../../../platform/legacy/ecm_stage1_gpu_progress.h"
+#include "ecm/platform/stage1_progress.h"
 
 #include <time.h>
 #include <sys/types.h>

@@ -13,7 +13,8 @@ if(-not $manifest.host_compiler -or -not $manifest.compile_setup){throw 'Formal 
 $inventory=Get-EcmCudaInventory $repo
 $production=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
 $sources=@('src/ecm/service/stage1/task.cpp','src/ecm/storage/checkpoint/ecm_checkpoint.cpp',
-    'src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp')
+    'src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
+    'src/ecm/core/stage1/ecm_stage1_exp.cpp','src/ecm/platform/stage1_progress.cpp')
 foreach($source in $sources){if($source -notin $production){throw "Missing production collaborator: $source"}}
 $sources+=@('tools/test/stage1_task_contract.cpp')
 New-Item -ItemType Directory -Path $buildPath|Out-Null

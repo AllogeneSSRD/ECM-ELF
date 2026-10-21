@@ -2,10 +2,10 @@
 #if ECM_HAS_CUDA_EDWARDS
 #include "../api.h"
 #include "../naf.h"
-#include "../../../../../core/stage1/ecm_edwards_naf.h"
+#include "ecm/core/stage1/scalar.h"
 #include "../../../../../storage/save/ecm_edwards_io.h"
 #include "../../../../../storage/checkpoint/ecm_stage1_binary.h"
-#include "../../../../../platform/legacy/ecm_stage1_gpu_progress.h"
+#include "ecm/platform/stage1_progress.h"
 #include <iterator>
 #include <stdexcept>
 

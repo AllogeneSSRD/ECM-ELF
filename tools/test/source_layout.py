@@ -13,12 +13,13 @@ LAYOUT = json.loads(Path(__file__).with_name('main_flow_layout.json').read_text(
 
 
 def current_source(relative):
-    return ROOT / LAYOUT['moved'].get(str(relative), str(relative))
+    relative=str(relative)
+    return ROOT / LAYOUT.get('current_overrides',{}).get(relative,LAYOUT['moved'].get(relative,relative))
 
 
 def current_files(legacy_folder):
     """Current files of one frozen family, without absorbing new subfamilies."""
-    return sorted(ROOT/new for old,new in LAYOUT['moved'].items()
+    return sorted(current_source(old) for old,new in LAYOUT['moved'].items()
                   if old.startswith(legacy_folder.rstrip('/')+'/'))
 
 

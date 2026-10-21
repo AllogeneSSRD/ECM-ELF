@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.8`；P2 与 P3a/b/c 已完成，P4–P7 待实施；GUI 的物理归位和 Controller 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.9`；P2、P3a/b/c 与 P4a 标量/进度实现隔离已完成；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -727,6 +727,27 @@ CUDA 以外的生产 .cl 全部进入 resources；原 bench/mont.cl 作为生产
 | 主流程对照 | CUDA 两阶段各 5 组 P0 固定输入对照通过；本阶段无性能采样 | [对照](../../data/experiments/main_flow_refactor_implementation_20261021/p3c/runtime/summary.json) |
 
 本轮未扩大 OpenCL 参数族、位宽或设备资格；未运行 release、Android 或性能验收。OpenCL 默认资源根绑定构建叶目录，部署到其他位置使用显式 --kernel-root；没有声称已有可任意移动的 OpenCL release 包。GUI 按既定 P6 完成物理归位和 Controller 提取，P3 不新增 GUI 转发层。P4 继续提取 CPU/GPU Stage1 host workflow、QueueWorkflow 及配置/数学/存档/结果/screen 的普通 .cpp 实现，P5 继续收口 Stage2。
+
+### P4a：共享标量与进度实现隔离已完成
+
+对应程序版本 `0.45.9`。先解除两条真实 CU 包含链：Edwards runtime 经 internal 头包含完整 NAF 构造，Montgomery adapter 包含完整 screen/速度统计。NAF 的 read、构造和 digit 并入现有 core/stage1/ecm_stage1_exp.cpp，公开 scalar.h 合并原两份标量/NAF 声明；没有新增 NAF 转发或标量 TU。旧私有 NAF 头删除。共享 screen 与 SpeedWindow 的五个方法进入 platform/stage1_progress.cpp，公开头只留声明和原私有字段布局；旧 legacy 进度头删除，没有新增 Pimpl 或改变分配行为。
+
+CPU/GPU 数学、NAF 的非零/符号码两位图、50 样本窗口、格式文本、调用时序和错误字符串保持。声明头位置改变导致首次两个 host runtime CU 合法失效；后续代表性函数体改写只重编 CXX。Montgomery 对进度头的显式 OBJECT_DEPENDS 已移除，实际 include 依赖继续保留。共享实现纳入普通 CXX 清单及 source-build 身份；独立 Edwards probe/worker 取同一个标量实现，host-wait 已有清单本就包含标量 CPP，补齐其漏写的 instances/ 实例路径。本轮不新增 host-wait 计时结论。
+
+| 核对 | 结果及范围 | 证据 |
+| --- | --- | --- |
+| 实现与布局 | 8 个函数正文逐 token 与 P3c 冻结版本比较，保留字符串；NAF/SpeedWindow 布局不变，原 LCM 实现正文保持 | [源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/source_contract_final/result.json) |
+| CPU 数学与 screen | 46574 个 NAF 用例，603364 个负数字、126047 个跨字编码，窗口 2..12；11 项 screen/速度统计通过 | [NAF](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/naf_build.log)、[进度](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/progress_run.log) |
+| 设备正文 | 55 项设备闭包和四组原始算术正文保持，21+7 独立实例不合并 | [检查](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/device_structure/result.json) |
+| 实现改动的实际增量 | NAF read 与 screen filled 计算各作等价 cast 改写；严格 HostOnly 仅重编 2 CXX、0 CU、链接一次，31 个 CUDA 对象摘要保持；随后恢复原函数正文并重建 | [构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/implementation_hostonly.log)、[身份](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/implementation_dependency_result.json) |
+| 最终 local | 最终无修改重复构建为 0 CXX、0 CU、0 链接；Stage2 HostOnly 仅版本相关 1 CXX，两个设备对象保持 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/stage1_repeat.log)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/stage2_hostonly.log) |
+| 独立主机合同 | 8 项任务合同通过；真实 task/持久化、标量和进度用普通 CXX 编译，实际记录为 0 nvcc、0 CUDA SDK include、0 CUDA SDK 头 | [运行](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/task_contract/result.json)、[依赖记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/task_contract_build/manifest.json) |
+| 主流程 | 27 项 CPU/GPU/独立 CPU Stage2 恢复与发布通过，CUDA 两阶段各 5 组 P0 对照通过 | [27项](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/usability/summary.json)、[对照](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/runtime/summary.json) |
+| OpenCL 消费 | 普通 CXX local 构建、实际 PARAM3 完成点/结果与 CRC、172 资源和两份旧缓存命中通过 | [构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/opencl_local.log)、[运行](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/opencl_resources/result.json) |
+
+[最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/qualification.json)冻结全部源码和程序身份。P3 的完整物理移动正文检查属于迁移阶段证据；进入获授权的实现提取后，新源码合同核对实际提取，source_layout 的 current_overrides 只供测试读取当前位置，生产不加载。没有通过还原丢失实现或放宽数学比较伪装迁移后正文不变。
+
+P4 尚未整体完成：下一步是共享主机准备、完整 CPU 执行闭包、GPU host workflow 和唯一分派，再深化 task 与 QueueWorkflow；仍需提取 Montgomery 构造/结果/checkpoint 和各 writer。后端现有 factor/DONE 与发布失败分类先后必须逐路径保持，不统一 CPU/GPU 的旧差异。实际 CUDA 同步/回读不要求脱离 CUDA；完整位宽终验留 P7，不运行 release。
 
 ## 首先调整构建复用与输出隔离
 

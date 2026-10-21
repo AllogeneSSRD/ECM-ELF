@@ -19,7 +19,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 ## 实现
 
 - [架构与术语](architecture/OVERVIEW.md)：模块职责、数据表示和入口。
-- [主流程重构方案草稿](development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md)：完整目标目录、模块与Interface、driver伪代码及构建先行阶段顺序；当前 P0、P1a/P1b、P2 与 P3a/b/c CUDA、主机与 OpenCL 归位已完成，P4–P7 待实施；GUI 归位按 P6 执行。[网页阅读版](web/architecture-review-20261021-ecm-main-flow.html)同步实施状态与源码依据，不替代当前架构与构建规范。
+- [主流程重构方案草稿](development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md)：完整目标目录、模块与Interface、driver伪代码及构建先行阶段顺序；当前 P0、P1a/P1b、P2 与 P3a/b/c 归位与 P4a 标量/进度实现隔离已完成，P4 其余子步骤及 P5–P7 待实施；GUI 按 P6 执行。[网页阅读版](web/architecture-review-20261021-ecm-main-flow.html)同步实施状态与源码依据，不替代当前架构与构建规范。
 - [CUDA 可视化架构图谱](../web/index.html)：代码分层、编译清单、位宽与运行时流程的离线交互网页；维护入口见 [网页说明](../web/README.md)。
 - [Stage1 算法](architecture/STAGE1.md)：曲线、标量、ladder/PRAC、域转换和存档。
 - [Checkpoint](architecture/CHECKPOINT.md)：Stage1 统一外壳、各后端载荷字段与偏移、校验、备份恢复及 Stage2 曲线进度。

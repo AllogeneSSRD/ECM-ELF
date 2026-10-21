@@ -1,6 +1,6 @@
 #pragma once
 #include "../../../../../storage/save/ecm_edwards_io.h"
-#include "../../../../../core/stage1/ecm_edwards_naf.h"
+#include "ecm/core/stage1/scalar.h"
 #include "../../../../../storage/checkpoint/ecm_stage1_binary.h"
 #include "ecm/platform/logging.h"
 #include <cstring>

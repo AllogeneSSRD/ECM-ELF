@@ -32,6 +32,14 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 8 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
 
+## 标量和进度的实现隔离
+
+[scalar.h](../../include/ecm/core/stage1/scalar.h)统一声明 LCM 标量与主机 NAF 位图；构造、位读取和 digit 方法全部在现有 [ecm_stage1_exp.cpp](../../src/ecm/core/stage1/ecm_stage1_exp.cpp)，没有新增标量转发层或第二个实现 TU。NAF 的字段、布局、窗口范围和编码保持，设备只消费已有位图/数据合同。
+
+[stage1_progress.h](../../include/ecm/platform/stage1_progress.h)只声明共享 GPU screen 格式及 SpeedWindow 方法；实现位于 [stage1_progress.cpp](../../src/ecm/platform/stage1_progress.cpp)。50 样本窗口的布局、统计公式与 stdout 协议保持，不新增 Pimpl 分配。CUDA 包含声明；修改格式或速度统计函数体只需重编对应 CXX。Montgomery 对该头的多余显式 OBJECT_DEPENDS 已移除，真实 include 依赖仍正常校验。
+
+配置/构造、checkpoint/save/result/tune 和完整 host workflow 的剩余实现提取仍在进行，不能据此推定所有非 GPU 行为已与 CU 分离。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
+
 ## GPU 点乘
 
 ### CUDA 模块边界
@@ -46,7 +54,7 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 ### GPU Edwards
 
-[CUDA NAF 批量入口](../../src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12；每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，不做字典模逆。主机以两份紧凑位图保存非零列和有符号索引，生产调用使用自适应切片，按实测执行时间调整每片 NAF 列数。设备累加点在算术域跨片保留，只回传四个规范普通坐标供回调及检查点使用。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [ecm_edwards_naf.h](../../src/ecm/core/stage1/ecm_edwards_naf.h)，设备字典与切片见 [cgbn_edwards_naf.cuh](../../src/ecm/backend/cuda/stage1/edwards/naf.cuh)。
+[CUDA NAF 批量入口](../../src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp)以 CGBN Montgomery 域的 `(X,Y,Z,T)` 执行 `48·lcm(1…B1)`。`naf_w=0` 在 GPU 选择窗口 6，显式允许 2..12；每曲线在 GPU 预计算 2^(w−2) 个奇数倍投影点，不做字典模逆。主机以两份紧凑位图保存非零列和有符号索引，生产调用使用自适应切片，按实测执行时间调整每片 NAF 列数。设备累加点在算术域跨片保留，只回传四个规范普通坐标供回调及检查点使用。连续倍点省略暂时不用的 T，在加法前及片边界恢复完整 `XY=ZT`。入口与位图定义见 [标量与 NAF 合同](../../include/ecm/core/stage1/scalar.h)，设备字典与切片见 [cgbn_edwards_naf.cuh](../../src/ecm/backend/cuda/stage1/edwards/naf.cuh)。
 
 容器选择要求 N 至少留一位余量，选择本次构建中最小的可用容器。完整网格为128/192/256/384/512（TPI4）、768..2048间隔256（TPI8）、2560..8192间隔512（TPI16）、9216..17408间隔1024（TPI32），共32档，TPB128。Montgomery仍预留六位，不能把两个模型的边界条件互换。`ECM_TIERS`同时筛选Edwards实例；缺档时使用更大可用档，超过本次构建可用上限时报错。日志的 `GPU Edwards geometry` 给出实际容器、TPI及网格，查询入口为 `ecm_cuda_edwards_tier`。
 
@@ -66,7 +74,7 @@ Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery
 
 `arithmetic api_seconds` 覆盖标量编码、设备初始化/分配、字典、切片、回传及进度回调，排除之前的指数/曲线构造和之后的 GCD/归一化/save。`dictionary_gpu_ms` 与 `loop_gpu_ms` 是 CUDA event 区间，可能包含首次模块加载或主机发射间隙，不能当作 profiler 的纯 kernel 时间。这些计时存在嵌套，不能与进程 wall 重复相加。
 
-GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../src/ecm/platform/legacy/ecm_stage1_gpu_progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl)，设备准备边界位于[binary/NAF 主机循环](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)。
+GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../include/ecm/platform/stage1_progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl)，设备准备边界位于[binary/NAF 主机循环](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)。
 
 GPU Edwards 在 NAF 列或二进制位的片边界更新共用进度输出，GUI 管道可读取百分比。当前32档构建的三曲线族同exe数据见[性能依据](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，32档CPU末点、旧检查点跨容器恢复及Stage2交接见[细分实例验收](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)。冻结七档的binary/NAF、窗口/倍点对照及大界限证据分别见[性能参考](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)和[窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)，初始流水线见[开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
 

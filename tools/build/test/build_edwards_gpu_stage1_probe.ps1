@@ -16,7 +16,7 @@ $objDir=Join-Path $Build 'CMakeFiles/edwards_gpu_stage1_probe.dir'
 New-Item -ItemType Directory -Force $objDir | Out-Null
 . (Join-Path $PSScriptRoot '../internal/stage1_release_sources.ps1')
 $inventory=Get-EcmCudaInventory $repo
-$workerSources=@($inventory.groups.STAGE1_EDWARDS)
+$workerSources=@($inventory.groups.STAGE1_EDWARDS)+@('src/ecm/core/stage1/ecm_stage1_exp.cpp')
 $sources=$workerSources+
     @('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp')
 $deps=@(Get-EcmSourceClosure $repo $sources @('include','src','third_party/cgbn/include'))+

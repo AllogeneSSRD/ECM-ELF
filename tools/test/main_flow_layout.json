@@ -726,5 +726,11 @@
       "before": "    message(STATUS \"tools: bench",
       "after": "    add_custom_target(ecm_opencl_tool_resources\n        COMMAND ${CMAKE_COMMAND} -E copy_directory\n            \"${CMAKE_SOURCE_DIR}/kernels/opencl/bench\"\n            \"${CMAKE_BINARY_DIR}/opencl_resources/bench\"\n        COMMENT \"Syncing OpenCL tool resources\")\n    foreach(_tool opencl_ecm_addsub opencl_ecm_montsqr main\n                  opencl_asm_selftest opencl_mont_isa_export opencl_addsub_isa_export)\n        add_dependencies(${_tool} ecm_opencl_tool_resources)\n    endforeach()\n    message(STATUS \"tools: bench"
     }
-  ]
+  ],
+  "current_overrides": {
+    "src/core/ecm_edwards_naf.h": "include/ecm/core/stage1/scalar.h",
+    "src/ecm/core/stage1/ecm_edwards_naf.h": "include/ecm/core/stage1/scalar.h",
+    "src/core/ecm_stage1_gpu_progress.h": "include/ecm/platform/stage1_progress.h",
+    "src/ecm/platform/legacy/ecm_stage1_gpu_progress.h": "include/ecm/platform/stage1_progress.h"
+  }
 }

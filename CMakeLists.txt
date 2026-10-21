@@ -134,11 +134,11 @@ foreach(_source IN LISTS ECM_STAGE1_COMMON_SOURCES)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
 endforeach()
 foreach(_source src/ecm/storage/results/ecm_result_paths.h src/ecm/storage/results/ecm_result_json.h src/ecm/storage/results/ecm_internal_result.h src/ecm/storage/results/ecm_result_submission.h
-                include/ecm/core/stage1/selection.h include/ecm/service/stage1/task.h
+                include/ecm/core/stage1/selection.h include/ecm/core/stage1/scalar.h include/ecm/service/stage1/task.h
                 src/ecm/service/stage1/legacy_execution.h
                 src/ecm/storage/results/ecm_submission_writer.h src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl
                 src/ecm/storage/save/ecm_edwards_io.h include/ecm/platform/program_version.h
-                src/ecm/platform/legacy/ecm_stage1_gpu_progress.h)
+                include/ecm/platform/stage1_progress.h)
     file(SHA256 "${CMAKE_SOURCE_DIR}/${_source}" _stage1_hash)
     string(APPEND _stage1_identity "${_stage1_hash}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
@@ -151,15 +151,13 @@ file(GENERATE OUTPUT "${_stage1_identity_file}" CONTENT "${_stage1_revision}.s1.
 # incomplete include dependencies (notably the included GPU driver .inl).
 set(_stage1_driver_headers
     src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h
-    src/ecm/platform/legacy/ecm_stage1_gpu_progress.h include/ecm/platform/program_version.h
+    include/ecm/platform/stage1_progress.h include/ecm/platform/program_version.h
     src/ecm/backend/cuda/stage1/edwards/api.h src/ecm/backend/cuda/stage1/edwards/naf.h)
 foreach(_header IN LISTS _stage1_driver_headers)
     set_property(SOURCE src/ecm/application/cli/ecm_driver.cpp APPEND PROPERTY OBJECT_DEPENDS
         "${CMAKE_SOURCE_DIR}/${_header}")
 endforeach()
 # A post-link sidecar leaves flags.make and CUDA response files unchanged.
-set_property(SOURCE src/ecm/backend/cuda/stage1/montgomery/adapter.cu APPEND PROPERTY OBJECT_DEPENDS
-    "${CMAKE_SOURCE_DIR}/src/ecm/platform/legacy/ecm_stage1_gpu_progress.h")
 function(ecm_stage1_identity_sidecar target)
     add_custom_command(TARGET ${target} POST_BUILD COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${_stage1_identity_file}" "$<TARGET_FILE_DIR:${target}>/ecm_stage1_build_identity.txt")
