@@ -40,6 +40,14 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 配置/构造、checkpoint/save/result/tune 和完整 host workflow 的剩余实现提取仍在进行，不能据此推定所有非 GPU 行为已与 CU 分离。实际设备同步、回读、资源管理继续依赖 CUDA。独立主机构建的真实依赖记录同时覆盖 task、标量与进度实现，不包含 CUDA SDK 头。
 
+## CPU 执行与共享主机准备
+
+CPU 两条完整执行路径位于 [legacy_executor.cpp](../../src/ecm/backend/cpu/stage1/legacy_executor.cpp)，通过同目录私有头的 run_edwards_stage1、run_mont_stage1 接收 N、B1/B2、曲线数、save 策略、表达式和本次执行选项，填充已有 LegacyStage1Result。线程/ISA 选择、点状态、恢复、分批推进、逐曲线 GCD、factor/DONE 与存档时序由该 Implementation 集中持有。它用普通基线 CXX 编译，不把 AVX512 编译设置施加到调度文件；原 SIMD 实现继续独立编译。应用仍解析 affinity 文本，执行模块只应用解析后的 CPU 集合。
+
+[preparation.cpp](../../src/ecm/service/stage1/preparation.cpp)集中 CPU/GPU 共用的标量缓存入口、随机 sigma、保存路径、固定 sigma 范围检查及主机时钟/终端检测；私有 preparation.h 只声明实际共用函数，不增加 wrapper 类。随机状态仍是同一个进程级状态。CPU 模块与准备实现已用真实 MSVC 依赖记录确认不包含 CUDA SDK 头；GPU host workflow、分派与队列仍待后续提取。
+
+各执行路径原有 factor、DONE、save 顺序和发布失败分类保持，不在本次组织调整中统一旧差异。实际设备同步和回读继续依赖 CUDA。
+
 ## GPU 点乘
 
 ### CUDA 模块边界

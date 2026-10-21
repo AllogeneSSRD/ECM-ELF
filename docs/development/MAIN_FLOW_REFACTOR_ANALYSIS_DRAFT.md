@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.9`；P2、P3a/b/c 与 P4a 标量/进度实现隔离已完成；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.10`；P2、P3a/b/c、P4a 标量/进度与 P4b CPU 执行闭包提取已完成；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -748,6 +748,24 @@ CPU/GPU 数学、NAF 的非零/符号码两位图、50 样本窗口、格式文�
 [最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4a/qualification.json)冻结全部源码和程序身份。P3 的完整物理移动正文检查属于迁移阶段证据；进入获授权的实现提取后，新源码合同核对实际提取，source_layout 的 current_overrides 只供测试读取当前位置，生产不加载。没有通过还原丢失实现或放宽数学比较伪装迁移后正文不变。
 
 P4 尚未整体完成：下一步是共享主机准备、完整 CPU 执行闭包、GPU host workflow 和唯一分派，再深化 task 与 QueueWorkflow；仍需提取 Montgomery 构造/结果/checkpoint 和各 writer。后端现有 factor/DONE 与发布失败分类先后必须逐路径保持，不统一 CPU/GPU 的旧差异。实际 CUDA 同步/回读不要求脱离 CUDA；完整位宽终验留 P7，不运行 release。
+
+### P4b：完整 CPU Stage1 执行闭包与共享准备已提取
+
+对应程序版本 `0.45.10`。driver 从 4469 行缩至 2635 行；约 1800 行 CPU 状态、线程、ISA 选择、恢复与执行逻辑整体进入 backend/cpu/stage1/legacy_executor.cpp。两个实际入口接收原参数并填充原结果，不新增类、同参转发或第二套 task。affinity 文本解析保留 application，CPU 模块只应用已有集合。新文件使用基线 CXX，三个 SIMD 实现原 ISA 设置保持。
+
+九个共用函数集中到 service/stage1/preparation.cpp：标量/缓存入口、随机 sigma、save 前缀与格式、固定 sigma 范围、目录、主机时钟和终端检测。随机状态与调用次数不变。首次普通 CXX 构建发现 GPU 文本实现也消费时钟/终端函数，且应用仍需 CPU 默认 NAF 窗口声明；补齐共享声明和实际头后重建通过，没有修改算法、门限或运行失败分类。首次失败日志保留在 p4b/stage1_hostonly.log。
+
+源码合同不仅比较入口，还逐 token 比较完整 CPU 闭包中的状态、结构体、预处理分支、函数正文和先后顺序；九个共享函数正文与上一提交一致。CPU Edwards 标量、IFMA 与 Montgomery 原有 GCD→factor→DONE/save 次序分别保持；CPU 发布失败的既有 Preparation 分类也保持，不借重构改变队列失败策略。
+
+- [源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4b/source_contract/result.json)：完整 CPU 闭包与九函数保持，0 新 wrapper 类。
+- [独立 CPU 编译](../../data/experiments/main_flow_refactor_implementation_20261021/p4b/cpu_compile/manifest.json)：两个实际 CPP，0 nvcc、0 CUDA SDK include、0 SDK 头、无 AVX512 编译选项；此项为编译验证，运行行为由生产 worker 验证。
+- [任务合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4b/task_contract/result.json)：8 项通过，真实 task/持久化支持仍为无 SDK 普通 CXX。
+- [完整运行检查](../../data/experiments/main_flow_refactor_implementation_20261021/p4b/usability/summary.json)：27 项 CPU/GPU 恢复、停止、队列、发布及独立 CPU Stage2 交接通过。
+- [P0 对照](../../data/experiments/main_flow_refactor_implementation_20261021/p4b/runtime/summary.json)：CUDA 两阶段各 5 组通过，保存点、因子和结果语义保持。
+- [OpenCL](../../data/experiments/main_flow_refactor_implementation_20261021/p4b/opencl_resources/result.json)：36 个普通 CXX 编译项，172 资源，完成点/结果与 CRC 保持，两份旧缓存命中。
+- [重复构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4b/stage1_repeat.log)：0 CXX、0 CU、0 链接；31 个 Stage1 与 2 个 Stage2 CUDA 对象摘要与 P4a 相同。
+
+[最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4b/qualification.json)冻结三个生产 worker、依赖记录与本阶段输入。未运行 release、性能采样或全 32 位宽终验。后续继续 GPU host workflow、唯一分派、配置/构造/codec/writer 和 QueueWorkflow；preparation 对 application lowercase helper 的临时依赖也待配置实现收口时消除。
 
 ## 首先调整构建复用与输出隔离
 

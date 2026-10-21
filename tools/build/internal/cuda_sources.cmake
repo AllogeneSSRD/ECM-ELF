@@ -4,6 +4,8 @@
 cmake_minimum_required(VERSION 3.20)
 set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/service/stage1/task.cpp
+    src/ecm/service/stage1/preparation.cpp
+    src/ecm/backend/cpu/stage1/legacy_executor.cpp
     src/ecm/application/cli/ecm_driver.cpp
     src/ecm/service/execution/legacy/ecm_params_init.cpp
     src/ecm/storage/checkpoint/ecm_checkpoint.cpp
