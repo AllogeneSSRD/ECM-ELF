@@ -30,7 +30,7 @@ Stage1 使用 `[stage1]` 的 `finished`、`log_file`、`tmp_dir`；Stage2 使用
 
 `[stage1] auto_stage2 = 1` 是总开关。Stage1 无因子成功完成后，照常将原任务写入 finished，并生成 `ECMSTAGE2=`；找到因子时直接完成，不生成 Stage2 任务。0 或省略此键时不生成新交接。投递保留 B2、曲线范围、AID 和已知因子，save 转为实际输出文件的绝对路径。
 
-`auto_stage2_workers` 留空时保留当前 worker：目标为同一队列文件时原位改写；显式指定其他文件时，写入该文件的同编号 worker，不选择其他编号。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。目标缺少显式指定的分区时会创建。`"auto"` 使用目标队列已有的 worker 分区（包括空分区），没有分区时使用本 TOML 的 `[gui] NumWorkers`。
+`auto_stage2_workers` 留空时保留当前 worker：目标为同一队列文件时原位改写；显式指定其他文件时，写入该文件的同编号 worker，不选择其他编号。填写 `"2"`、`"1,3"` 或 `"2-4"` 可选择接收 worker，编号范围为 1…1000000；在候选中选择任务行较少者，并列时取较小编号，同时考虑本 worker 尚未投递的记录。投递到目标 worker 已有的最后一段末尾，保持该 worker 的任务先后顺序；只有缺少分区时才创建标签，文件头未标号部分视为 worker 1。投递时移除同一连续分区中的重复 worker 标签，保留任务、注释和空行；跨其他 worker 或未知方括号标签的显式分隔保留。`"auto"` 使用目标队列已有的 worker 分区（包括空分区），没有分区时使用本 TOML 的 `[gui] NumWorkers`。
 
 `auto_stage2_worktodo` 留空时使用当前 worker 生效的 `[shared] worktodo`。可填写绝对文件路径或相对 TOML 所在目录的文件名/路径。接收端的完成去重使用本 TOML 中相应 worker 的 `stage2_finished`，相对路径同样基于 TOML 目录。这两个键均可在 `[workers.N.stage1]` 覆盖。
 

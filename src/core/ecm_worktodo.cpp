@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <thread>
 #include <chrono>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -783,8 +784,44 @@ bool ecm_worktodo_append_unique(const std::string &path, const std::string &fini
     };
     if (std::any_of(lines.begin(), lines.end(), same) || std::any_of(done.begin(), done.end(), same_done))
         return true;
-    lines.push_back("[Worker #" + std::to_string(worker) + "]");
-    lines.push_back(line);
+
+    // Repeated headers without a worker transition do not start a new queue.
+    // Preserve explicit boundaries around foreign bracket lines and all tasks,
+    // comments and blanks; only redundant worker labels are removed.
+    std::vector<std::string> compact;
+    compact.reserve(lines.size());
+    int section = 1;
+    bool explicit_header = false;
+    for (auto &raw : lines) {
+        const int previous = section;
+        const auto kind = classify_line(raw, &section, nullptr);
+        if (kind == LineKind::Header) {
+            if (explicit_header && section == previous) continue;
+            explicit_header = true;
+        } else if (kind == LineKind::ForeignBracket) {
+            explicit_header = false;
+        }
+        compact.push_back(std::move(raw));
+    }
+    lines = std::move(compact);
+
+    // Append to the last existing segment of this worker, before the next
+    // worker's header. The leading unlabelled segment belongs to worker 1.
+    section = 1;
+    bool found_section = worker == 1;
+    std::size_t insertion = 0;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        classify_line(lines[i], &section, nullptr);
+        if (section == worker) {
+            found_section = true;
+            insertion = i + 1;
+        }
+    }
+    if (!found_section) {
+        lines.push_back("[Worker #" + std::to_string(worker) + "]");
+        insertion = lines.size();
+    }
+    lines.insert(lines.begin() + static_cast<std::vector<std::string>::difference_type>(insertion), line);
     const std::string tmp = path + ".transfer.tmp";
     std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
     if (!out) { err = "cannot write Stage2 queue temp file"; return false; }

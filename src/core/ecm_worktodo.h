@@ -116,9 +116,9 @@ bool ecm_worktodo_advance(const std::string &path, const std::string &first_line
 //
 // Rules:
 //   * a worker consumes and advances ONLY its own section;
-//   * headers, comments, blank lines and foreign sections are preserved verbatim
-//     (and in order) when the file is rewritten;
-//   * a repeated header for the same worker is fine (appended-to files do that);
+//   * advancing a task preserves headers, comments, blanks and foreign sections;
+//   * repeated headers remain readable; routed additions reuse existing worker
+//     segments and remove redundant labels within an unchanged worker segment;
 //   * `worker <= 0` keeps the legacy behaviour: no section filter, i.e. the whole
 //     file is one queue (existing single-worker setups are unaffected).
 // ---------------------------------------------------------------------------
@@ -150,6 +150,8 @@ bool ecm_append_text_line(const std::string &path, const std::string &line);
 // Atomically add one Stage2 assignment to a worker section. The queue edit is
 // serialized with ecm_worktodo_advance; an active or finished identical line
 // counts as already delivered, which makes pending-file replay idempotent.
+// Reuse the worker's last segment (including implicit worker 1); create a header
+// only if absent. Redundant headers are compacted without changing task order.
 bool ecm_worktodo_append_unique(const std::string &path, const std::string &finished,
                                 int worker, const std::string &line, std::string &err);
 
