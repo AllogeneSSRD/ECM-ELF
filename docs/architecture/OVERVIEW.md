@@ -30,6 +30,8 @@ CUDA 实现集中在 `src/ecm/backend/cuda/`：Stage1 按曲线组织主机实�
 
 生产实现全部位于 `src/ecm/`；公开接口在 `include/ecm/` 的对应家族。私有协作头、模板、设备发射和 OpenCL 运行资源均留在 src，不为每个实现文件制造一个公开头。
 
+目录最多五层，最深文件属于曲线实例组或 Montgomery PRAC；共享 Edwards GMP 构造位于 `core/curve/`。当前配置解析、执行兼容声明、规划与阶段协作文件直接放在所属家族；兼容函数、旧格式读取和诊断接口仍按各自合同保留。生成物、设备实现、第三方引擎与 OpenCL 资源目录各自表达维护来源或实现职责。
+
 ```text
 include/ecm/
 ├── application/configuration/       runtime.h：已解析运行环境

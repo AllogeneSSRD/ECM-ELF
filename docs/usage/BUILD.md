@@ -94,7 +94,7 @@ P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设�
 
 `tools/test/test_cuda_target_graph.ps1 -WorkerBuild <Stage1生产目录> -Output <证据目录>` 使用真实 CMake 目标收集器做五项 configure 检查，覆盖源目录与目标同名、显式对象库、直接/条件静态链接及 imported 排除。只有链接属性中的目标引用参与依赖图；普通源码路径的目录名不视为目标。
 
-主流程目录迁移的当前门禁为 `tools/test/test_main_flow_layout.py --output <新证据目录>`。它核对完整文件家族、原始 BOM、正文、实际 include 指向、TU 次序和逐源文件 CMake 属性；测试专用 main_flow_layout.json 保留历史路径与当前位置的明确映射，生产不读取它。旧编译器依赖记录若因搬迁拒绝复用，应保留记录并使用新 local 目录重建，不修改 sidecar 伪装复用。
+当前包含边界检查为 `tools/test/test_main_flow_boundaries.py --output <新证据目录>`，配合实际编译和运行验证。测试专用 `main_flow_layout.json` 保留历史路径与当前位置的明确映射，生产不读取它；`test_main_flow_layout.py` 是原目录搬迁阶段的冻结对照，不能把后续实现一律按该旧正文验收。本轮目录精简的当前正文、直接相对 include、TU 顺序和 CMake 属性对照及证据见[目录精简草稿](../development/DIRECTORY_LAYOUT_SIMPLIFICATION_DRAFT.md)。旧编译器依赖记录若因搬迁拒绝复用，应保留记录并使用新 local 目录重建，不修改 sidecar 伪装复用。
 
 ## OpenCL local
 

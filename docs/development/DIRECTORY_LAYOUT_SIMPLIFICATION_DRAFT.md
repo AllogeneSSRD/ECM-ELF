@@ -1,6 +1,6 @@
 # include/ecm 与 src/ecm 目录精简草稿
 
-日期：2026-10-21。依据：`7585e7a`、源码版本 `0.45.24`。状态：**方案 A 已获授权，D0–D2 完成，当前源码版本 0.45.28；D3 收口验证待完成**。本文件是本轮目录精简的权威草稿，[网页阅读版](../web/directory-layout-plan-20261021.html)呈现同一方案；当前已实现的目录仍以[架构与术语](../architecture/OVERVIEW.md)为准。
+日期：2026-10-21。依据：`7585e7a`、源码版本 `0.45.24`。状态：**方案 A 的 D0–D3（含 D1b）全部完成，源码与最终 local 版本 0.45.28**。本文件是本轮目录精简的权威草稿，[网页阅读版](../web/directory-layout-plan-20261021.html)呈现同一方案；当前已实现的目录仍以[架构与术语](../architecture/OVERVIEW.md)为准。
 
 ## 实施进度与证据
 
@@ -42,9 +42,33 @@ CUDA Stage1 通过 BAT 在浅层 `build_stage1_local_check` 构建 384/1024 两�
 
 D1b 提交为 `3150abb`。D3 将完成无 CUDA SDK 的主机编译、9 类正文修改零 CU 和重复构建验证，再同步正式目录说明。
 
+### D3：当前状态与构建隔离收口（已完成，0.45.28）
+
+Stage1 12 个、Stage2 5 个实际主机实现使用正式 MSVC 身份进行普通 CXX 编译，未添加 CUDA SDK include、未调用 nvcc；编译器依赖记录确认 CUDA SDK 头数为 0。实际 CUDA 设备管理、同步和回读实现继续保留原依赖，没有为本轮目录整理增加替身实现。[Stage1 编译记录](../../data/experiments/directory_layout_implementation_20261021/d3/stage1_sdk_free/manifest.json)、[Stage2 编译记录](../../data/experiments/directory_layout_implementation_20261021/d3/stage2_sdk_free/manifest.json)。
+
+9 类独立正文探针覆盖配置读写、曲线主机数学、checkpoint、save、data、result、tune.toml、screen。修改、恢复、重复三轮均走正式 local 构建入口；33 个 CUDA 对象字节摘要全部保持。各轮实际重编数量如下；重复轮次同时确认无链接。
+
+| 轮次 | 目标 | 重编 CXX | 重编 CU |
+| --- | --- | --- | --- |
+| edited | stage1 | 10 | 0 |
+| edited | stage2 | 9 | 0 |
+| edited | gui | 6 | 0 |
+| restored | stage1 | 10 | 0 |
+| restored | stage2 | 9 | 0 |
+| restored | gui | 6 | 0 |
+| repeat | stage1 | 0 | 0 |
+| repeat | stage2 | 0 | 0 |
+| repeat | gui | 0 | 0 |
+
+所有探针原始源码字节已恢复，并与 D2 的 529 项文件摘要一致；353 个 C++/CUDA 文件对照、直接相对 include、TU 顺序/编译策略以及当前包含边界再次通过。最终重新构建的产物又通过 27 项 Stage1/CPU Stage2 可用性与恢复、12 项 Stage2 流程前后对照、GUI 33 项自检。172 个当前 OpenCL 源资源均与 D2 的冻结部署清单摘要相同。收尾时原 `build_opencl_local` 缓存目录已缺失；D2 冻结程序与清单完整，按摘要核对后保留于 D3，不重建旧路径，不将当前部署目录列为已复核。首次部分归档与后续处理分别保留，见[收尾记录](../../data/experiments/directory_layout_implementation_20261021/d3/closure_note.json)。[增量证据](../../data/experiments/directory_layout_implementation_20261021/d3/incremental/result.json)、[D3 结果](../../data/experiments/directory_layout_implementation_20261021/d3/result.json)、[源码与路径对照](../../data/experiments/directory_layout_implementation_20261021/d3/audit_0.45.28.json)、[最终产物身份](../../data/experiments/directory_layout_implementation_20261021/d3/artifacts.json)保留。
+
+正式架构与构建文档已同步当前路径和 local 短默认目录；网页与旧阅读入口同步，原始基线及独立沙箱诊断内容保留。D2 提交为 `dd1c279`。本阶段只验证与收口，不再增加程序版本。
+
+本轮范围仍为本机 local：Stage1 worker 为 384/1024 两档，host-wait 是独立 1280 档诊断；未重做全32档、release、多架构、可选 PRAC/GWPoly 或性能资格。旧 Stage2 冻结提取检查的已有不匹配按 D1 记录保留，不列为通过。临时草稿继续保留，等待用户决定如何处理。
+
 ## 结论与适用范围
 
-推荐方案 A：保留现有 application、service、core、backend、storage、platform 家族，删除 9 个不承担独立职责的分类目录，调整 31 个文件路径。`include/ecm` 的 14 个公开头保持现有路径。保留真实的曲线家族、实例编译组、PRAC、设备实现与 OpenCL 算子资源目录。
+本轮已采用方案 A：保留现有 application、service、core、backend、storage、platform 家族，删除 9 个不承担独立职责的分类目录，调整 31 个文件路径。`include/ecm` 的 14 个公开头保持现有路径。保留真实的曲线家族、实例编译组、PRAC、设备实现与 OpenCL 算子资源目录。
 
 本轮解决路径导航问题。目录层数与 Module 的 Depth 是两件事：去掉一层目录不会自动改善 Interface 或隐藏更多 Implementation。driver、task、factory、QueueWorkflow 的职责与调用关系沿用已完成的主流程重构，不增加新 Adapter、转发头或执行入口。Locality 的收益来自把同一职责的文件放在一起；不声称目录移动带来运行性能或编译速度提升。
 
@@ -69,7 +93,7 @@ D1b 提交为 `3150abb`。D3 将完成无 CUDA SDK 的主机编译、9 类正文
 
 ## 方案 A：删除哪些层级
 
-以下 9 项均为明确建议（Strong）。只调整文件归属路径并修正引用，不合并文件、不改变函数、类型、命名空间、链接符号或现有翻译单元。
+以下 9 项均已实施。只调整文件归属路径并修正引用，不合并文件、不改变函数、类型、命名空间、链接符号或现有翻译单元。
 
 | 当前相对 src/ecm 的路径 | 拟议路径 | 文件数 | 判断依据 |
 | --- | --- | --- | --- |
