@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>ECM-ELF · GUI v2 / Vulkan 规划</title>
+<style>
+:root{color-scheme:light;--bg:#fcfaf7;--surface:#fff;--sunken:#f6f4f1;--fg:#181613;--muted:#605d5a;--border:#e1dfdd;--hover:#f2f0ed;--active:#e9e7e5;--focus:#3772bb;--accent:#181613;--on-accent:#fcfaf7;--info:#2e69b2;--info-bg:#ebf4ff;--warn:#a25f12;--warn-bg:#fef2dd}
+[data-theme=dark]{color-scheme:dark;--bg:#252525;--surface:#2c2c2c;--sunken:#202020;--fg:#f3f1f0;--muted:#c4c2c0;--border:#3f3f3f;--hover:#383838;--active:#3f3f3f;--focus:#69a1e8;--accent:#f3f1f0;--on-accent:#252525;--info:#77abec;--info-bg:#19273a;--warn:#e8b45e;--warn-bg:#342611}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:28px}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.75 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}button{font:inherit;color:inherit;cursor:pointer;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px 12px;min-height:34px}button:hover{background:var(--hover)}button[aria-pressed=true]{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--focus);outline-offset:3px}a{color:var(--info);text-underline-offset:3px}code{font:0.9em/1.6 Consolas,"Cascadia Mono",monospace;background:var(--sunken);padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}h1,h2,h3,h4,p{margin:0}h1{font-size:34px;line-height:1.3;font-weight:650;letter-spacing:-.5px}h2{font-size:23px;line-height:1.4;margin-bottom:14px}h3{font-size:17px;line-height:1.5;margin-bottom:10px}h4{font-size:15px;margin:20px 0 8px}p+p{margin-top:12px}small,.caption{font-size:13px;color:var(--muted)}.eyebrow{font-size:12px;letter-spacing:1.8px;color:var(--muted);margin-bottom:14px}.frame{display:grid;grid-template-columns:206px minmax(0,1fr);max-width:1430px;margin:auto;min-height:100vh}.sidebar{border-right:1px solid var(--border);padding:35px 22px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:24px}.brand{font-size:17px;font-weight:650}.brand small{display:block;font-weight:400;font-size:12px;letter-spacing:.7px;margin-top:2px}.sidebar nav{display:flex;flex-direction:column;gap:5px}.sidebar nav a{color:var(--muted);text-decoration:none;border-radius:6px;padding:8px 10px}.sidebar nav a:hover{color:var(--fg);background:var(--hover)}.sidebar-foot{margin-top:auto;font-size:12px;color:var(--muted)}main{min-width:0;padding:44px 46px 80px}.hero{margin-bottom:36px}.hero-top{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}.badge{display:inline-block;border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:12px;color:var(--muted)}.intro{font-size:17px;max-width:790px;margin-top:18px}.meta{display:flex;gap:10px 18px;flex-wrap:wrap;margin-top:18px;font-size:13px;color:var(--muted)}section{padding:30px 0;border-top:1px solid var(--border)}.twocol{display:grid;grid-template-columns:1fr 1fr;gap:28px}.label{font-size:12px;color:var(--muted);margin-bottom:8px}.identity{padding:16px 0 18px;border-bottom:1px solid var(--border)}.identity strong{display:block;font-size:19px;margin-bottom:7px}.identity p{font-size:14px;color:var(--muted)}.table-wrap{overflow:auto;max-width:100%;margin-top:16px}table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}th{color:var(--muted);font-weight:500}th,td{border-bottom:1px solid var(--border);padding:12px 12px 12px 0;vertical-align:top;overflow-wrap:anywhere}th:first-child,td:first-child{min-width:90px;font-weight:500}table td code{font-size:12px}.notice{border-left:3px solid var(--focus);padding:12px 16px;background:var(--info-bg);margin:18px 0}.notice strong{display:block;margin-bottom:4px}.warn{border-left-color:var(--warn);background:var(--warn-bg)}ul,ol{padding-left:22px;margin:12px 0}li+li{margin-top:6px}.controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0}.controls .caption{margin-right:auto}.mock{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface)}.mock-title{padding:9px 15px;background:var(--sunken);border-bottom:1px solid var(--border);font-size:13px;color:var(--muted)}.commandbar{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;font-size:13px}.commandbar span{padding-right:14px}.board{display:grid;grid-template-columns:150px minmax(0,1fr)205px;min-height:330px}.mock-nav{padding:14px 10px;background:var(--sunken);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:stretch;gap:7px}.mock-nav button{border-color:transparent;text-align:left;background:transparent}.mock-nav button[aria-pressed=true]{background:var(--active);color:var(--fg)}.mock-nav .settings{margin-top:auto;font-size:12px;color:var(--muted);padding-left:10px}.mock-center{padding:20px;min-width:0;display:flex;flex-direction:column;gap:12px}.mock-center ul{margin:0;padding-left:18px;font-size:14px}.mock-rule{font-size:13px;color:var(--info)}.mock-log{border-top:1px solid var(--border);padding-top:12px;margin-top:auto;font-size:13px}.inspector{padding:20px 16px;border-left:1px solid var(--border);font-size:14px}.inspector .caption{display:block;margin-top:12px}.mock[data-width=narrow] .board{grid-template-columns:76px minmax(0,1fr)}.mock[data-width=narrow] .inspector{display:none}.mock[data-width=narrow] .mock-nav{padding:12px 6px}.mock[data-width=narrow] .mock-nav button{font-size:12px;padding:6px}.mock[data-width=narrow] .mock-nav .full{display:none}.mock-nav .short{display:none}.mock[data-width=narrow] .mock-nav .short{display:inline}.caption-line{margin-top:12px}.tokens{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:18px 0}.token{border-top:4px solid var(--border);padding-top:8px;min-width:0;font-size:13px}.token code{display:block;margin-top:4px;width:fit-content}.phase-grid{display:grid;grid-template-columns:200px minmax(0,1fr);gap:28px;margin-top:20px}.phase-nav{display:flex;flex-direction:column;gap:6px}.phase-button{text-align:left;font-size:13px;padding:8px 12px}.phase-button span{display:inline-block;width:30px;font:12px Consolas,monospace}.phase-detail{border-top:2px solid var(--accent);padding:18px 0}.phase-detail .label{margin-top:22px}.phase-detail .label:first-child{margin-top:0}.phase-detail h3{font-size:20px}.phase-detail p{white-space:pre-line}.check-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}.check-group{border-top:1px solid var(--border);padding-top:14px}.full-plan{margin-top:18px}.full-plan>summary{cursor:pointer;font-weight:500;padding:16px 0}.full-body{max-width:900px}.full-body h2{font-size:24px;margin:24px 0}.full-body h3{font-size:21px;border-top:1px solid var(--border);padding-top:25px;margin-top:32px}.full-body h4{font-size:17px;margin-top:22px}.full-body p,.full-body li{font-size:14px;line-height:1.85}.full-body p{margin:12px 0}.footer{margin-top:28px;color:var(--muted);font-size:13px}.source-links{display:flex;gap:10px 20px;flex-wrap:wrap;margin-top:14px}.flow{font:14px/1.9 Consolas,monospace;color:var(--muted);margin:14px 0}.hidden{display:none!important}
+@media(max-width:1100px){main{padding:34px 28px 60px}.frame{grid-template-columns:175px minmax(0,1fr)}.sidebar{padding:30px 16px}.board{grid-template-columns:120px minmax(0,1fr)160px}}
+@media(max-width:850px){.frame{display:block}.sidebar{position:static;height:auto;border-right:0;border-bottom:1px solid var(--border);padding:18px 22px;gap:14px}.sidebar nav{flex-direction:row;flex-wrap:wrap;font-size:13px;gap:2px}.sidebar nav a{padding:5px 8px}.sidebar-foot{display:none}.brand small{display:inline;margin-left:12px}.board{grid-template-columns:110px minmax(0,1fr)}.inspector{display:none}.phase-grid{grid-template-columns:1fr}.phase-nav{flex-direction:row;flex-wrap:wrap}.phase-button{flex:1 1 145px}.tokens{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:580px){main{padding:28px 18px 45px}h1{font-size:28px}.intro{font-size:15px}.twocol,.check-grid{grid-template-columns:1fr;gap:14px}.tokens{grid-template-columns:1fr 1fr}.board,.mock[data-width=narrow] .board{grid-template-columns:65px minmax(0,1fr)}.mock-nav{padding:10px 4px}.mock-nav button{font-size:12px;padding:6px 3px}.mock-nav .full{display:none}.mock-nav .short{display:inline}.mock-nav .settings{padding-left:4px}.mock-center{padding:14px}.mock-title{font-size:12px}.commandbar{padding:8px 12px}.phase-grid{gap:16px}table{font-size:13px}th,td{padding:10px 8px 10px 0}.hero{margin-bottom:25px}}
+@media print{.frame{display:block}.sidebar,.controls,#theme-toggle,.phase-nav{display:none}main{padding:0}.full-plan>.full-body{display:block}section{break-inside:avoid}html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<div class="frame">
+<aside class="sidebar"><div class="brand">ECM-ELF<small>GUI v2 · DESIGN PLAN</small></div><nav aria-label="章节"><a href="#boundaries">01 · 双版本边界</a><a href="#current">02 · 现状与设计规则</a><a href="#vulkan">03 · Vulkan 接入</a><a href="#layout">04 · 目标布局</a><a href="#phases">05 · 开发阶段</a><a href="#checks">06 · 验收与交付</a><a href="#full-plan">完整规划与依据</a></nav><div class="sidebar-foot">2026-10-21<br>离线阅读 · 无外部依赖<br>规划状态，尚未实施</div></aside>
+<main>
+<header class="hero"><div class="eyebrow">C++ / DEAR IMGUI / WIN32 / VULKAN</div><div class="hero-top"><h1>独立构建 GUI v2</h1><button id="theme-toggle" type="button" aria-pressed="false">深色阅读</button></div><p class="intro">保留原 GUI，在独立前端中实现 Ely 风格的布局、配色、字体和控件。先证明 Vulkan 宿主可靠，再逐页接入业务功能。</p><div class="meta"><span class="badge">规划 · 尚未实施</span><span>原版 DX11 保留</span><span>新版 Vulkan 独立构建</span><span>v2 为前端名称，不是公共版本 2.x</span></div></header>
+
+<section id="boundaries"><h2>01 · 两个前端，独立演进</h2><div class="twocol"><div class="identity"><div class="label">原 GUI · 保持不变</div><strong>ecm_gui.exe</strong><p>Win32 + ImGui + Direct3D 11<br>原目录、入口、默认值、布局与测试期望保留。</p></div><div class="identity"><div class="label">GUI v2 · 新增</div><strong>ecm_gui_v2.exe</strong><p>Win32 + ImGui + Vulkan<br>新增工程、构建入口、输出目录和 UI 状态。</p></div></div><div class="table-wrap"><table><thead><tr><th>范围</th><th>原 GUI</th><th>GUI v2 规划</th></tr></thead><tbody>
+<tr><td>实现</td><td><code>src/ecm/application/gui/</code></td><td><code>src/ecm/application/gui_v2/</code></td></tr><tr><td>构建入口</td><td><code>tools/build/build_gui.bat</code></td><td>新增 <code>tools/build/build_gui_v2.bat</code></td></tr><tr><td>默认输出</td><td><code>build_gui_local/</code></td><td><code>build_gui_v2_local/</code></td></tr><tr><td>界面状态</td><td>原 <code>[gui]</code> 及停靠布局</td><td>独立 <code>ecm_gui_v2.ui.toml</code>（候选）</td></tr><tr><td>依赖</td><td>不增加 Vulkan 要求</td><td><code>ECM_BUILD_GUI_V2</code> 默认 OFF，显式构建时检查依赖</td></tr><tr><td>业务模块</td><td>原实现和链接关系不变</td><td>明确列源，只读复用 Controller、结果、生成器和概率等模块</td></tr>
+</tbody></table></div><p class="caption-line caption">v2 保存外观和窗口状态不改写旧 UI 配置；业务 TOML 与 UI 状态分开。两个 GUI 对同一 worker / 队列组的控制拥有权必须在启动前验证。</p></section>
+
+<section id="current"><h2>02 · 保留成熟能力，重建界面规则</h2><div class="twocol"><div><h3>现有布局的空间约束</h3><p>停靠区左 60% / 右 40%，两边再上下对半。主页面约占停靠区 30%，11 列结果表位于右下小区。</p><p class="caption">以上为源码几何推算。没有把它当作实际可读性或性能测量。</p></div><div><h3>可以继续复用的能力</h3><p>独立进程控制、任务和结果合同、日志可见行裁剪，以及分开的界面刷新与 NVML 采样。</p><p class="caption">旧版参考配置：界面 10 Hz，GPU 采样 500 ms，日志最多 4000 行。</p></div></div><h3 style="margin-top:24px">Ely 风格的核心：中性背景、统一尺寸、清晰状态</h3><div class="tokens"><div class="token">背景<code>#252525</code></div><div class="token">表面<code>#2c2c2c</code></div><div class="token">内嵌区域<code>#202020</code></div><div class="token">正文<code>#f3f1f0</code></div><div class="token">结构边框<code>#3f3f3f</code></div></div><div class="table-wrap"><table><thead><tr><th>规则</th><th>Ely 组件库</th><th>v2 适配</th></tr></thead><tbody><tr><td>语义颜色</td><td>背景 / 表面 / 文字 / 悬停 / 选中 / 焦点 / 状态</td><td>所有控件和手绘图表走统一明暗主题；阶段色与成功/失败色分开</td></tr><tr><td>尺寸</td><td>控件高 24 / 28 / 32；圆角 4 / 6 / 8 / 12</td><td>逻辑尺寸随 DPI 计算，实际高度不能裁切中文</td></tr><tr><td>字体</td><td>Inter / JetBrains Mono，默认正文 13</td><td>先采用自动正文 15px，新增字体角色；保留中文救援</td></tr><tr><td>组件</td><td>Button / PathInput / ListItem / ColumnShell</td><td>封装项目需要的控件；输入、焦点和停靠继续交给 ImGui</td></tr></tbody></table></div></section>
+
+<section id="vulkan"><h2>03 · Vulkan 是独立的宿主工作</h2><p>Win32 平台后端处理窗口、输入、IME 和剪贴板；Vulkan 渲染后端绘制 ImGui。设备、主 surface、swapchain、帧同步、重建和资源回收仍由 v2 宿主管理。</p><div class="notice"><strong>P1 就要注册 Win32 surface 回调</strong>固定 Vulkan 后端要求 <code>Platform_CreateVkSurface</code>，同提交 Win32 后端没有提供。v2 需要自己的 HWND → Vulkan surface 桥接，不能把初始化接线推迟到多窗口阶段。</div><div class="table-wrap"><table><thead><tr><th>接入项</th><th>规划要求</th></tr></thead><tbody><tr><td>固定版本</td><td>新增同提交 <code>64944b4</code> 的 Vulkan 后端到专用目录，不混用最新后端与旧核心</td></tr><tr><td>设备与队列</td><td>按 surface 的 graphics / present 能力选择；渲染 GPU 不绑定 worker 的设备编号</td></tr><tr><td>初始路径</td><td>传统 render pass / framebuffer，先不强制 dynamic rendering 或额外引擎</td></tr><tr><td>生命周期</td><td>处理 resize、最小化零尺寸、OUT_OF_DATE / SUBOPTIMAL、surface / device lost</td></tr><tr><td>同步与纹理</td><td>明确帧资源拥有权和延迟释放；字体 / DPI 切换无悬空 descriptor；不每帧等待整个 device 空闲</td></tr><tr><td>运行环境</td><td>开发阶段 validation；分发机不要求开发 SDK，但必须有可用 loader / 驱动</td></tr></tbody></table></div><div class="notice warn"><strong>多窗口是完整交付门槛</strong>先做单窗口里程碑，再验收浮动窗的创建、跨屏、重建和销毁。固定后端标有新 viewport 闪烁问题，以及图像数量变化的 API 限制，必须以实际验证收口。</div><p class="caption">环境核对仅发现未设置 VULKAN_SDK、无 C:/VulkanSDK；尚未完成其他路径和运行能力检测。没有 Vulkan 时明确提示使用原 GUI，v2 内不暗中回退 DX11。</p></section>
+
+<section id="layout"><h2>04 · 导航稳定，主区获得更多空间</h2><p>左侧导航 + 中央主区 + 右侧检查区 + 底部日志。导航聚焦同一个窗口实例，保留自由停靠和弹出能力。</p><div class="controls"><span class="caption">结构示意 · 不是实际运行截图</span><button id="wide-toggle" type="button" aria-pressed="true">宽屏结构</button><button id="narrow-toggle" type="button" aria-pressed="false">窄屏结构</button></div><div class="mock" id="layout-mock" data-width="wide"><div class="mock-title">ECM-ELF GUI v2 · Windows 系统标题栏保留</div><div class="commandbar"><span>当前配置与全局动作</span><span>通知区域预留空间</span></div><div class="board"><div class="mock-nav" aria-label="示意页面"><button type="button" data-page="0" aria-pressed="true"><span class="full">工作台</span><span class="short">工作</span></button><button type="button" data-page="1" aria-pressed="false"><span class="full">结果</span><span class="short">结果</span></button><button type="button" data-page="2" aria-pressed="false"><span class="full">任务生成</span><span class="short">生成</span></button><button type="button" data-page="3" aria-pressed="false"><span class="full">ECM 概率</span><span class="short">概率</span></button><span class="settings">设置 / 语言</span></div><div class="mock-center"><h3 id="mock-heading">工作台 · 中央主区</h3><div id="mock-id" class="caption">###v2_workers</div><ul id="mock-items"><li>worker 状态、进度、速度与 ETA</li><li>保留表格宽度保护与任务摘要</li><li>低频配置移到配置区域</li></ul><p class="mock-rule" id="mock-rule">继续使用原 Controller / Proc 业务合同。</p><div class="mock-log">底部日志 <code>###v2_logN</code><br><small>初始高度候选 25%；收起时仍消费日志与推进进程监管。</small></div></div><div class="inspector"><h3>GPU / 详情</h3><p>跟随所选 worker 更新上下文，不自动抢焦点。</p><span class="caption">右区候选 300 逻辑单位，可调可收起。</span></div></div></div><p id="layout-caption" class="caption caption-line">宽屏候选：左导航 200 / 中央自适应 / 右区 300 逻辑单位。本图按容器宽度示意，并非像素规格。</p><p class="caption caption-line">v2 首次建立现代布局，重置只影响 v2。首版使用不透明主题与系统标题栏；磨砂和自绘系统按钮后置。</p></section>
+
+<section id="phases"><h2>05 · 七个阶段，独立退出条件</h2><p>首批范围 P0–P2：先冻结原版保护边界，完成 Vulkan 最小宿主，再建立主题、字体和控件样板。</p><div class="flow">P0 → P1 → P2 → P3 → P4 → P5 → P6</div><div class="phase-grid"><div class="phase-nav" aria-label="开发阶段"><button class="phase-button" data-phase="0" aria-pressed="true"><span>P0</span>冻结原版与并存合同</button><button class="phase-button" data-phase="1" aria-pressed="false"><span>P1</span>独立 Vulkan 最小宿主</button><button class="phase-button" data-phase="2" aria-pressed="false"><span>P2</span>v2 主题、字体与最小组件</button><button class="phase-button" data-phase="3" aria-pressed="false"><span>P3</span>v2 主布局、多窗口与业务接线</button><button class="phase-button" data-phase="4" aria-pressed="false"><span>P4</span>在 v2 逐页实现功能等价</button><button class="phase-button" data-phase="5" aria-pressed="false"><span>P5</span>双版本功能与低占用验收</button><button class="phase-button" data-phase="6" aria-pressed="false"><span>P6</span>独立分发准备</button></div><article class="phase-detail" aria-live="polite"><div class="label" id="phase-index">P0 · 基线</div><h3 id="phase-title">冻结原版与并存合同</h3><div class="label">工作范围</div><p id="phase-work">冻结原 GUI exe/源码哈希、原构建与 UI 配置，以及固定任务/结果/日志和操作截图。定义 v2 名称、独立输出/UI路径、只读业务复用清单、功能对照和资源基线。</p><div class="label">退出条件</div><p id="phase-gate">原目录和后端保护清单明确；各项新功能只落新目录；证据写 `data/experiments/gui_v2/&lt;run&gt;/`；不运行用户真实队列。基线记录实际构建身份，不仅记录版本字符串。</p></article></div><noscript><p>阶段详情也完整保存在下方“完整规划与依据”中。</p></noscript></section>
+
+<section id="checks"><h2>06 · 外观、业务、后端与原版保护分别验收</h2><div class="check-grid"><div class="check-group"><h3>原 GUI 不变</h3><p>源码与后端差异、原入口、UI 默认值和旧布局；v2 关闭或缺 SDK 时，旧版仍可配置与构建。</p></div><div class="check-group"><h3>Vulkan 生命周期</h3><p>主次窗口、呈现队列、同步、纹理、重建及失败清理；validation 输出和跨屏实际行为。</p></div><div class="check-group"><h3>业务功能等价</h3><p>安全停止、退出、原始 JSON / checksum 复制、生成器预览与 mtime、概率快照及监控采样。</p></div><div class="check-group"><h3>可读性与低占用</h3><p>中英、明暗、四档缩放、长标签和窄屏；同条件至少 5 次采样，性能门限事先冻结。</p></div></div><p class="caption caption-line">CPU、working set / private bytes、显存、绘制时间和输入延迟分别报告。worker 吞吐独立计时；不因使用 Vulkan 就宣称更低占用。</p><div class="source-links"><a href="../development/GUI_MODERNIZATION_DRAFT.md">权威 Markdown 草稿</a><a href="../usage/GUI.md">原 GUI 当前说明</a><a href="../README.md">文档入口</a></div></section>
+
+<section id="full-plan"><h2>完整规划与依据</h2><p class="caption">以下是权威草稿的完整阅读内容。源码依据、固定第三方提交、业务合同和待验证事项均保留。</p><details class="full-plan" id="full-details"><summary>展开完整规划</summary><div class="full-body"><h2>独立 GUI v2：ImGui / Vulkan 现代化规划草稿</h2>
+<p>状态：规划，尚未实施。日期：2026-10-21。用户已确定：原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。不是发布公告，不代表新界面已完成。</p>
+<p>本文件是本主题的权威临时草稿。<a href="../web/gui-v2-vulkan-plan-20261021.html">HTML 阅读版</a>呈现布局示意、阶段验收和本草稿全文，可离线打开。实施成功后另写 GUI v2 正式说明，旧 GUI 使用说明继续描述旧版；提示用户处理本草稿，不自动删除。</p>
+<h3>1. 分析边界与基线</h3>
+<ul>
+<li>仓库基线：本次修订检查时 HEAD 为 <code>8969467</code>，工作区已有其他开发中的改动；分析包含工作区源码，不能视作该提交的纯净快照。</li>
+<li>公共源码版本与 <code>build_gui_local/ecm_gui.exe --version</code> 均为 <code>ECM-ELF 0.46.7</code>。相同版本号不能独立证明源码和二进制完全一致。</li>
+<li>本次修订核对的旧 GUI SHA256：<code>32F3A9A2905FF39E6F098F0C943DEDBAA3BDBEA291EF7122417634958B85919B</code>。这不是将来 v2 的构建身份；P0 仍须冻结实际验收基线。</li>
+<li>当前 GUI 统一构建入口为 <code>tools/build/build_gui.bat</code>，默认输出 <code>build_gui_local/</code>，不另设 dev/local/release 三套 GUI 构建。见 <code>tools/build/README.md</code>、<code>tools/build/dev/build_gui.ps1</code>。</li>
+<li>本轮没有启动 GUI 做现场截图、输入法或跨屏验证，没有运行功能回归，也没有测量 CPU / GPU / 内存 / 功耗。现状布局依据源码重建；视觉、性能和系统兼容性结论须在实施阶段验证。</li>
+<li>不将本机二进制当作已对外发布的版本；本轮不构建、不打包、不发布、不改公共版本号。</li>
+</ul>
+<h4>1.1 原 GUI 不变的边界</h4>
+<ul>
+<li>保留 <code>src/ecm/application/gui/</code> 的源码、Win32/DX11 渲染路径、<code>ecm_gui</code> 目标、<code>ecm_gui.exe</code>、<code>tools/build/build_gui.bat</code> 及其默认输出 <code>build_gui_local/</code>。</li>
+<li>不向旧目标加入 Vulkan 库、宏、SDK 查找或新样式；不改旧 ImGui 核心、Win32/DX11 后端、默认布局、字体、配置默认值及现有测试期望。</li>
+<li>v2 使用新增 <code>src/ecm/application/gui_v2/</code>、<code>ecm_gui_v2</code> 目标、<code>ecm_gui_v2.exe</code>、独立构建入口和输出目录。根构建系统只增加受 v2 开关保护的接线，不改变旧入口的默认行为。</li>
+<li>可直接编译复用旧目录中不依赖 UI 的源码；为此建立 v2 专用源码清单/库，不移动、不提取改写旧模块，不改旧目标的链接关系。若 v2 需要不同业务行为，另做 v2 适配，不能偷偷修改被旧版使用的实现。</li>
+<li>v1/v2 UI 状态分别保存。v2 不导入或改写旧 <code>[gui] dock_layout</code>、窗口位置、字体、主题及布局版本；v2 不使用旧 App 的保存整个 GUI 设置路径。</li>
+<li>共用工作流 TOML、任务队列和发布文件是业务数据，不等于共用 UI 状态。v2 只有用户显式编辑计算配置时才写业务字段；保存 v2 外观/窗口状态不能顺带改写旧 <code>[gui]</code>。并行查看结果可行，同一 worker/队列组的进程控制必须有单一拥有者，不能让两个 GUI 重复启动同组任务；拥有权检查及旧版并行行为列入 P3 验证。</li>
+</ul>
+<p>参考快照：</p>
+<ul>
+<li><code>.refactor/Ely-GPUI-Components</code>：<code>17f936b98c8c8fbdd5454745ac70c22df8526689</code>。主要依据当前 <code>src/theme/</code>、<code>src/buttons/</code>、<code>src/forms/</code>、<code>src/lists/</code>、<code>src/shell/</code>。</li>
+<li><code>.refactor/ELYTerminal</code>：<code>fe07813fdfa9fd600274066d9fcd88d5f5a3bcc0</code>。主要参考实际分栏组织、侧栏动作及背景处理，不引入终端引擎。</li>
+<li>组件库 <code>frontend/public/shots/</code> 的深色窗口与浅色路径输入截图已用于辅助观察。图库截图与当前代码可能存在版本差异，具体数值以源码为准。</li>
+<li>参考目录仅供分析；GPUI/Rust 组件不直接链接到 C++ GUI。只迁移本项目所需的设计规则与交互，保持 ImGui 原生输入、焦点和停靠机制。</li>
+</ul>
+<h3>2. 旧 GUI：作为 v2 行为参照的现状分析</h3>
+<h4>2.1 布局</h4>
+<p><code>app.cpp::build_default_layout</code>（约 627 行）将停靠区分为左 60% / 右 40%，再各上下对半：</p>
+<ul>
+<li>左上：worker 管理、详情、生成器、概率为同一停靠节点的页签。</li>
+<li>左下：每个 worker 的输出窗。</li>
+<li>右上：GPU 监控。</li>
+<li>右下：Result。</li>
+</ul>
+<p>上方另有菜单和 Prime95 状态条，<code>app.cpp::draw</code>（426 行）测量并预留顶部空间。所有窗口具有稳定 ID，<code>on_imgui_ready</code>（325 行）开启 docking 和多 viewport，布局写回 TOML。</p>
+<p>主要矛盾是空间分配：默认主页面只获得停靠区约 30% 面积；11 列 Result 固定在约 20% 面积的右下区域。配置、生成器、概率这种较复杂的页面与 worker 表共享狭小区域。比例是源码几何推算，不是用户使用频率或实测可读性结论。</p>
+<p>worker 管理顶部还同时容纳数量、两个程序路径、TOML 路径和全局启动/停止，见 <code>draw_workers_table</code>（1741 行）。高频操作与低频配置挤在同一区域。</p>
+<h4>2.2 配色和控件</h4>
+<ul>
+<li><code>app.cpp</code> 的日志、worker 状态、Stage1/Stage2 进度、命中高亮、Prime95 提示分别指定颜色；<code>probability_panel.cpp</code> 另有独立的背景和曲线常量。</li>
+<li>未见应用级明暗主题入口或统一的语义样式模块；局部 <code>PushStyleColor/PushStyleVar</code> 与绘图颜色共同决定最终外观。</li>
+<li>当前已经有表格列宽保护、进度与文字同区裁剪、任务摘要独立测高、日志可见行绘制等有效行为，应保留，不因外观改造重新实现业务逻辑。</li>
+<li>v2 的首要任务是统一状态语义、尺寸和控件状态，而不是扩大圆角或给所有面板加卡片。本节发现不授权改造旧 GUI。</li>
+</ul>
+<h4>2.3 字体和 DPI</h4>
+<p><code>main_win32.cpp::apply_ui_font</code>（391 行）根据语言和配置选取字体：中文优先系统 CJK 字体，英文优先 Segoe UI；自动字号为 <code>15 × DPI scale</code>，手工字号为显式像素尺寸，支持小数。中文字体缺失时有救援和回退到英文的处理。</p>
+<p>当前主要使用单一默认字体，尚无正文、标题、注释和等宽数据的角色管理。样式 <code>ScaleAllSizes</code> 在启动阶段执行；语言切换会重载字体。没有据此确认跨屏 DPI 已损坏，但应用层完整的样式/字体重建及浮动窗跨屏行为需要专项核验，不能直接承诺已支持。</p>
+<h4>2.4 性能和职责边界</h4>
+<ul>
+<li><code>WorkerController</code> 拥有 worker 状态和生命周期；<code>WorkerProc</code> 拥有原生进程资源。App 借用只读 <code>WorkerView</code>，每帧调用 <code>controller_.tick()</code>。这条边界适合在不改计算逻辑的情况下改造视图。</li>
+<li>默认界面刷新 10 Hz、NVML 采样 500 ms，输入消息提前唤醒；未选中的页签跳过内容工作。日志有 4000 行上限，采用 <code>ImGuiListClipper</code>。</li>
+<li>Result 可见时每 500 ms 检查来源，变化后同步读取/解析；大文件可能阻塞界面线程。新主题不解决这项限制。若基线测量证明影响交互，另列性能任务，不借机改变发布记录合同。</li>
+<li>不能把低刷新实现描述成完全事件驱动。若以后跳过绘制，需要继续调度 Controller、退出协调、文件检查和必要的字体纹理处理。</li>
+</ul>
+<p>依据：<code>docs/usage/GUI.md</code>；<code>app.cpp::draw_results_panel</code>（2234 行）；<code>main_win32.cpp</code>（约 849–881 行）。</p>
+<h3>3. 从 Ely 提炼的设计规则</h3>
+<h4>3.1 颜色：中性背景，状态和数据使用颜色</h4>
+<p>组件库 <code>src/theme/palette.rs</code> 定义成组语义：<code>bg/surface/sunken/overlay</code>、<code>hover/active</code>、<code>border/border_strong</code>、<code>fg/fg_muted/fg_subtle/fg_disabled</code>、<code>accent/on_accent</code>、<code>focus/link/selection</code>、<code>success/warning/danger/info</code>。</p>
+<p>当前上游深色基础值为背景 <code>#252525</code>、表面 <code>#2c2c2c</code>、内嵌 <code>#202020</code>、文字 <code>#f3f1f0</code>、边框 <code>#3f3f3f</code>；浅色对应 <code>#fcfaf7</code>、<code>#ffffff</code>、<code>#f6f4f1</code>、<code>#181613</code>、<code>#e1dfdd</code>。这些是参考值，尚未接入 ECM GUI。</p>
+<p>采用以下规则：</p>
+<ul>
+<li>主按钮使用 Ely 的中性高对比强调色；焦点蓝色不等于所有按钮都涂蓝。</li>
+<li>工作状态单独映射为运行、等待、错误、停止等语义，必须同时有文字；Stage1/Stage2 和概率曲线的青绿/紫色是数据身份，不等同成功/失败。</li>
+<li>青绿、紫色可保留现有辨识关系，针对明暗背景分别取值；图例、曲线和悬停数据保持一致。</li>
+<li>Prime95 的未配置、pending、失败、成功均保留原语义。可缩为状态项，失败或积压仍有显著提示，完整说明与打开动作仍可访问。</li>
+<li>所有应用级颜色通过统一主题读取，包括手绘图表背景；切换浅色时不留下硬编码深色矩形。</li>
+</ul>
+<h4>3.2 尺寸：逻辑单位与文字共同决定实际高度</h4>
+<p>Ely 的 <code>src/theme/tokens.rs</code> 给出：</p>
+<ul>
+<li>标准控件高 Sm/Md/Lg = 24/28/32；Compact 减 4，Comfortable 加 4。</li>
+<li>横向内边距 8/12/16；圆角 4/6/8/12；图标常用 14/16/20。</li>
+<li>表格行高按密度为 28/36/44；侧栏展开 240、折叠 56；标题栏 38。</li>
+<li>上游字号为 11/12/13/14/16/20/24/32，默认正文 13。不能照搬这些字号并把当前 15px 正文缩小当作优化。</li>
+</ul>
+<p>v2 建议先采用与旧版一致的正文自动 15px 和手工字号含义，但在独立 UI 状态中保存，定义正文、辅助说明、标题、等宽数据角色。控件高度取逻辑尺寸与实际字体/内边距所需高度的较大值，不能为套 28px 而裁切中文。第一版提供 Standard 密度，Compact 在中文与缩放通过后再开放。</p>
+<p>间距使用少量统一档位，例如 4/8/12/16/24 逻辑单位；图标和间距按 DPI 计算。每次从未缩放基准重新计算样式，避免重复 <code>ScaleAllSizes</code> 累乘。</p>
+<h4>3.3 字体与资产</h4>
+<p>上游 <code>src/theme/mod.rs</code> 使用 Inter 和 JetBrains Mono，图标为 Lucide。建议将“外观接近”和“必须换字体”拆开：</p>
+<ol>
+<li>先用现有系统字体完成层级、间距和组件，保留 CJK 救援机制。</li>
+<li>需要更一致的拉丁文字时，再将 Inter / JetBrains Mono 作为可选随包字体。中文仍需 CJK 合并或明确的分段回退；不能期望 Inter/JetBrains Mono 自动包含中文。</li>
+<li>等宽字体优先用于日志、原始 JSON 和数值；导航、表单与帮助文本使用 UI 字体。数据按列右对齐，避免靠空格对齐。</li>
+<li>只随包需要的图标；可离线生成有限图集，按 DPI 缓存，不能每帧解析 SVG。不复制整套组件库资产。</li>
+</ol>
+<p>移植或分发上游代码/资产时按仓库 LICENSE 保留 Ely MIT、Lucide ISC 和所选字体 OFL 告知。具体清单在资产进入项目时形成；本轮不导入资产。</p>
+<h4>3.4 控件：风格统一，交互继续交给 ImGui</h4>
+<p>参考 <code>buttons/button.rs</code> 的 Primary/Secondary/Outline/Ghost/Subtle/Danger，以及 <code>forms/path.rs</code>、<code>lists/item.rs</code> 的结构。</p>
+<p>第一批只建立项目需要的 Button、IconButton、NavItem、SectionHeader、FormRow、PathField、StatusBadge、Notice、MetricLabel 和进度样式。绘制装饰可自定义，但点击、输入、选择、禁用和键盘焦点优先复用 ImGui 公共控件，保留稳定 ID。</p>
+<p>统一检查 normal/hover/pressed/disabled/focus/selected/loading；危险样式用于强制终止等破坏性动作，普通安全停止不自动变成红色主按钮。加载态使用真实任务状态，没有持续任务时不保留无限动画。</p>
+<p>不移植 GPUI 的实体树、Flex 布局引擎、事件派发、焦点框架、WebView、终端和宠物；不为这次改造新建通用 GUI 框架。</p>
+<h4>3.5 Vulkan 后端：新增宿主职责与验证门槛</h4>
+<p>本地 <code>third_party/imgui/backends/</code> 目前只有 Win32 和 DX11 文件，没有 Vulkan 后端。本次环境检查没有 <code>VULKAN_SDK</code> 变量和 <code>C:/VulkanSDK/</code> 目录；这不能证明其他位置没有 SDK，P1 仍需显式查找并记录。当前规划不安装 SDK、不下载依赖。</p>
+<p>初始接入固定为：现有 ImGui 核心及 Win32 后端只读复用；将<strong>同一提交</strong> <code>64944b4520b30772de8dbf0b37d0311746477a32</code> 的 <code>imgui_impl_vulkan.h/.cpp</code> 新增在 v2 专用第三方目录，例如 <code>third_party/imgui_vulkan/</code>，记录哈希与许可。不得只取最新 Vulkan 后端配旧核心；如果固定版本不能通过 v2 验收，v2 才引入完整独立的 ImGui 版本目录，旧版仍使用原固定版本。</p>
+<p>平台和渲染职责分开：<code>imgui_impl_win32</code> 继续处理 HWND、输入、IME、剪贴板和平台窗口；<code>imgui_impl_vulkan</code> 绘制 ImGui 数据并处理其纹理。主窗口的 Vulkan instance、设备/队列选择、Win32 surface、swapchain、命令缓冲、同步、呈现和资源生命周期由 v2 宿主管理，不能把换后端理解为只替换一个初始化函数。</p>
+<p>P1 至少完成：</p>
+<ul>
+<li>明确启用 Win32 surface 与 swapchain 所需扩展，按实际 surface 的 graphics/present 能力选择队列与设备。记录渲染设备及选择依据；GUI 渲染 GPU 不与 worker 的 CUDA/OpenCL 设备编号绑定。</li>
+<li>初始采用传统 render pass / framebuffer 路径，先不强制 dynamic rendering、Vulkan 1.3 或额外大框架；实际最低 API/扩展集合以固定后端与目标设备验证结果为准。</li>
+<li>按 surface 支持选择格式、图像数量和呈现模式，低占用优先可验证的同步呈现；不能使用官方示例的无限帧模式。帧同步与资源回收有明确拥有权，不把 <code>vkDeviceWaitIdle</code> 当作每帧节流。</li>
+<li>正确处理 resize、零尺寸最小化、<code>OUT_OF_DATE</code>、<code>SUBOPTIMAL</code>、surface/device lost，避免忙轮询；渲染失败不能跳过 worker 安全停止与退出协调。</li>
+<li>动态字体和图标纹理按该固定后端的 API 更新、提交和延迟释放；语言/DPI 反复切换期间不能释放 GPU 仍在使用的纹理或 descriptor。</li>
+<li>开发验收使用 validation layer / debug 输出记录错误；正式运行不要求用户安装开发 SDK 或 validation layers，需检测实际 Vulkan loader/驱动能力。没有可用 Vulkan 时清晰失败，提示使用仍独立存在的原 GUI，不在 v2 内暗中切换 DX11。</li>
+</ul>
+<p>多 viewport 必须独立验收。固定 Vulkan 后端依赖 <code>ImGuiPlatformIO::Platform_CreateVkSurface</code>，而同提交 Win32 后端没有提供它。v2 需要在自己的 Win32/Vulkan 桥接层根据平台 HWND 调用 <code>vkCreateWin32SurfaceKHR</code>，在正确初始化次序注册回调，不能改旧 Win32 后端源码。此回调的初始化接线归 P1：固定 Vulkan 初始化会检查平台后端宣告的多 viewport 能力，即使暂时不开浮动窗，也不能把回调注册拖到 P3。P3 再完整验证弹出窗口、跨屏和销毁/重建；不能把单窗口里程碑称为完整交付。</p>
+<p>swapchain 图像数量变化还需核对固定 API 的实际限制：该版本 <code>ImGui_ImplVulkan_SetMinImageCount</code> 对变化路径含未支持断言，不能把它当作任意重建都可调用的通用更新器；P1 确定一致的 backend 重建/重新初始化次序，P3 验证全部 viewport 的关联资源。</p>
+<p>固定版本后端头部还标明新建 viewport 的闪烁问题；实际严重程度、次窗口呈现模式、跨屏 DPI 与呈现支持均待测。发现问题先定位和验证，不能为了勾选功能直接打开未经验证的多窗口。</p>
+<p>官方依据（均固定到相同提交）：<a href="https://github.com/ocornut/imgui/blob/64944b4520b30772de8dbf0b37d0311746477a32/backends/imgui_impl_vulkan.h">Vulkan 后端头</a>、<a href="https://github.com/ocornut/imgui/blob/64944b4520b30772de8dbf0b37d0311746477a32/backends/imgui_impl_vulkan.cpp">Vulkan 多窗口实现</a>、<a href="https://github.com/ocornut/imgui/blob/64944b4520b30772de8dbf0b37d0311746477a32/backends/imgui_impl_win32.cpp">Win32 平台实现</a>、<a href="https://github.com/ocornut/imgui/blob/64944b4520b30772de8dbf0b37d0311746477a32/examples/example_glfw_vulkan/main.cpp">官方 Vulkan 示例</a>。示例用于理解生命周期，不意味着本项目引入 GLFW。</p>
+<h3>4. v2 目标布局与功能接入</h3>
+<h4>4.1 主窗口</h4>
+<p>默认组织为“左导航 / 中央停靠区 / 右检查区 / 中央底部日志”：</p>
+<ul>
+<li>左侧导航：工作台、结果、任务生成、ECM 概率；设置和语言入口放底部。建议展开 200、折叠 56 逻辑单位。200 是针对 ECM 的初始候选，不是 Ely 原值 240；最终以中文标签和可用宽度验证。</li>
+<li>中央主区：v2 使用 <code>###v2_workers</code>、<code>###v2_results</code>、<code>###v2_gen</code>、<code>###v2_prob</code> 同一主节点，按需切换。结果和表单在新版获得中央主区域；旧版布局不变。</li>
+<li>右检查区：<code>###v2_gpu</code> 和 <code>###v2_detail</code> 为同组页签，建议起始宽度 300 逻辑单位，可调可收起。选中 worker 只更新详情上下文，不自动抢焦点。</li>
+<li>中央底部：<code>###v2_logN</code> 保持独立输出窗与页签，建议初始占中央区域高度 25%，Vulkan 多 viewport 验收后支持弹出。</li>
+<li>客户区顶部用一条紧凑命令栏展示当前配置和全局启动/安全停止；保留菜单入口，避免迁移时丢失低频动作。Prime95 的异常/待处理提示在顶部测量预留空间。</li>
+</ul>
+<p>上述比例与宽度都是设计候选。第一版保留 Windows 系统标题栏；不同时引入无边框、自绘系统按钮和磨砂。</p>
+<p>导航只聚焦/重开目标窗口，不能每次点击重建 DockBuilder 布局。浮动窗存在时导航也应聚焦同一实例。页签和导航表达同一选中状态，不制造两套页面内容。</p>
+<h4>4.2 v2 停靠、独立状态与窄窗口</h4>
+<ul>
+<li>v2 提供用户手工停靠、分离和跨屏窗口；v2 窗口 ID 不因中文标题改变。旧窗口及其 ID 不修改。</li>
+<li>v2 初次运行直接建立现代默认布局，重置只影响 v2。旧布局留给原程序继续加载，v2 不自动迁移或写回旧布局。</li>
+<li>v2 的启动页、明暗主题、字号/字体角色、窗口位置和停靠状态写入独立侧车文件，初始候选为 v2 输出目录中的 <code>ecm_gui_v2.ui.toml</code>；可显式指定其他 UI 状态路径。路径不可写需明确诊断，不悄悄写旧工作流 TOML。</li>
+<li><code>--config</code> 表示工作流 TOML，v2 UI 状态入口与它区分；默认值/范围/英中说明仍在 <code>config/ecm_options.json</code> 建立独立 v2 定义并生成，不挪用或改变旧 <code>gui</code> 键。具体 schema/键名和生成接线在 P3 确定。</li>
+<li>窄屏按可用逻辑宽度折叠导航并隐藏默认右区，可通过按钮重开；更窄时表单从两列变单列。保留用户手动隐藏/展开状态，避免每帧按断点反复覆盖。</li>
+<li>表格保留横向滚动和关键列的最小宽度。缩小窗口不能让进度列、操作按钮或错误提示消失；不强行把 10/11 列挤成不可读文本。</li>
+<li>底部日志关闭时仍持续消费 worker 输出；切页不能停止 Controller 或退出协调。</li>
+</ul>
+<h4>4.3 在 v2 新建页面，保持业务合同</h4>
+<ul>
+<li>worker：保留高密度表格、任务摘要和 Stage2 进度；把程序/TOML 路径与 worker 数量移到配置区域或设置弹窗，常用动作留在命令栏。所有运行中禁用规则继续由原状态决定。</li>
+<li>Result：中央主区容纳筛选、搜索、11 列表格和原始行；来源诊断、复制与选中规则不变。窄屏工具栏换行，不改变筛选和原始 JSON/checksum 字节合同。</li>
+<li>生成器：以“输入→曲线与输出选项→预览→追加”组织，宽屏可并排输入/预览，窄屏单列；继续保留更改选项使预览失效、目标 worker、mtime 复核、B1/B2 与曲线模型规则。</li>
+<li>概率：保留后台输入快照、显式计算与反算；统一 FormRow、曲线图背景/图例/坐标样式，不改数值模型和口径。两列表单按可用宽度降为一列。</li>
+<li>GPU：摘要数值＋现有历史曲线，统一单位、标题、未知值和图例；不将 NVML 利用率改称 occupancy，不改变采样频率。</li>
+<li>日志/详情：UI 与等宽文字分工，错误和阶段色走语义映射；保留 4000 行、裁剪、跟随滚动开关、真实 worker 版本和原始输出。</li>
+<li>设置：v2 集中路径、worker 数、语言与新版显示配置；将业务字段与 v2 UI 字段分开保存。新增定义经 <code>config/ecm_options.json</code> 与生成器接入，旧 GUI 的默认值和 UI 字段不变。生成参考文档不手改。</li>
+</ul>
+<h3>5. 独立工程、依赖与复用边界</h3>
+<p>所有新版窗口、样式和渲染代码位于新增的 <code>src/ecm/application/gui_v2/</code>：</p>
+<ul>
+<li><code>main_win32.cpp</code>：v2 启动参数、原生窗口、消息循环、帧间字体/DPI处理和异常退出协调；不替换旧宿主。</li>
+<li><code>render/vulkan_context.*</code>：instance、物理/逻辑设备、队列、能力诊断。</li>
+<li><code>render/vulkan_window.*</code>：主窗口 surface、swapchain、render pass/framebuffer、帧同步、重建与回收。</li>
+<li><code>render/imgui_vulkan_host.*</code>：ImGui Vulkan 初始化、帧提交、动态纹理，以及 Win32 多 viewport surface 桥接。</li>
+<li><code>ui/theme.*</code>、<code>ui/fonts.*</code>、<code>ui/widgets.*</code>：Ely 风格语义、尺寸、字体角色和有限控件集合。</li>
+<li><code>ui/shell.*</code>、<code>views/</code>：导航、命令栏、通知、默认停靠和各功能页面；新增 v2 App，不调用旧 App 的绘制或保存设置入口。</li>
+<li><code>ui_state.*</code>：独立 v2 UI 状态读写与 schema 版本；不持有 WorkerProc。</li>
+<li>v2 专用第三方目录记录固定 Vulkan 后端文件、来源提交和许可。需要后端修复时先评估 v2 独立版本，禁止给旧目录打补丁。</li>
+</ul>
+<p>这些是规划文件名，尚未创建。优先使用 ImGui 公共 API；DockBuilder 内部 API 限于 v2 布局模块。不引入通用渲染引擎或 GPUI 兼容层。</p>
+<h4>5.1 只读复用业务模块</h4>
+<p>候选为旧目录中的 <code>worker_controller/worker_proc/log_parse</code>、<code>toml_file</code>、<code>results</code>、<code>worktodo_gen</code>、<code>probability_model</code>、<code>gpu_monitor</code>、<code>localization</code>、<code>task_display</code> 和系统文件/DPI辅助函数。按实际依赖为 v2 目标明确列源，直接编译未修改的原文件；必要的 v2 包装在新目录实现。</p>
+<p>旧 <code>app.cpp</code>、<code>probability_panel.cpp</code> 与 <code>main_win32.cpp</code> 是行为/交互参照，不整体链接到 v2，不为新版改写旧 UI。复用代码中的进程路径、默认值和相邻程序探测可能依赖 exe 目录，P3 必须验证 v2 独立输出位置，不假设更换程序名后天然正确。</p>
+<p>新主题和 Vulkan 层不反向进入 Controller/Proc 或数学模型。若必须修改共用源才能接通新功能，应先寻找 v2 包装；超出“原 GUI 不变”边界的公共修改需单独列出，不能并入本计划默认范围。</p>
+<h4>5.2 独立构建与可选依赖</h4>
+<ul>
+<li>新增目标 <code>ecm_gui_v2</code>、专用 ImGui/Vulkan backend 目标及 v2 业务适配目标；不能把旧 <code>ecm_gui_imgui</code> 拉入 v2，否则会同时引入 DX11 后端。</li>
+<li>新增 <code>ECM_BUILD_GUI_V2</code>，默认 OFF；v2 构建入口显式开启。根构建接线不放在旧 <code>ECM_BUILD_GUI</code> 成功分支里，旧 GUI 关闭时仍应能单独构建 v2。</li>
+<li>新增候选入口 <code>tools/build/build_gui_v2.bat</code> 与 <code>tools/build/dev/build_gui_v2.ps1</code>，默认输出 <code>build_gui_v2_local/</code>。它只构建 v2；原 <code>build_gui.bat</code> 仍只构建旧版。</li>
+<li>Vulkan SDK/header/import library 检查仅在显式启用 v2 时进行；缺依赖时 v2 给出明确诊断，不能影响旧 GUI、CLI 或没有请求 v2 的 CMake 配置。不强制 GLSL 工具链，是否需要由实际固定后端资源决定。</li>
+<li>v2 接入现有配置生成一致性检查，根目标依赖清单增加 v2，而不改旧目标输入。</li>
+<li>Windows 为首个目标平台。Vulkan 渲染不等于已经跨平台，不在第一版引入 GLFW/SDL 或承诺 Linux/macOS。</li>
+</ul>
+<h4>5.3 并存与回退</h4>
+<p>v1/v2 使用不同 exe、构建目录、UI 状态、布局版本和资源位置；v2 不覆盖旧版二进制。随时可关闭 v2 并启动原程序，原布局仍可用；这不是在 v2 内动态回退 DX11。</p>
+<p>任务、日志和结果仍遵循现有工作流格式。v2 默认不启动真实任务；验收使用隔离配置与假 worker。两版同时打开时，v2 须在启动同一 worker/队列组前验证拥有权，无法确认无其他控制者时拒绝重复启动并给出原因；不能假定只有 v2 写一个锁就能约束未修改的旧版。具体旧版进程识别、配置身份及重启恢复列入 P3。</p>
+<h3>6. 分阶段实施与退出条件</h3>
+<h4>P0 冻结原版与并存合同</h4>
+<p>冻结原 GUI exe/源码哈希、原构建与 UI 配置，以及固定任务/结果/日志和操作截图。定义 v2 名称、独立输出/UI路径、只读业务复用清单、功能对照和资源基线。</p>
+<p>退出条件：原目录和后端保护清单明确；各项新功能只落新目录；证据写 <code>data/experiments/gui_v2/&lt;run&gt;/</code>；不运行用户真实队列。基线记录实际构建身份，不仅记录版本字符串。</p>
+<h4>P1 独立 Vulkan 最小宿主</h4>
+<p>添加 v2 目标和独立入口，补充同提交 Vulkan 后端；完成 Win32 单窗口、设备/呈现队列选择、swapchain、命令/同步、ImGui基本绘制与字体纹理更新。提前注册 Win32 surface 桥接以满足初始化合同，P3再完整验收多窗口。先传统 render pass；记录 SDK、loader、API/扩展、GPU和驱动。</p>
+<p>退出条件：启动/关闭、连续缩放、最小化/恢复、无可用 Vulkan、重建及失败清理可验证；开发 validation 输出无未解释错误。v2 开关关闭和无 Vulkan SDK 的条件下，原版配置/构建仍通过。此阶段不宣称完整多窗口或功能就绪。</p>
+<h4>P2 v2 主题、字体与最小组件</h4>
+<p>只在新目录构建明暗主题、正文/辅助/标题/等宽角色、有限图标与按钮/表单/状态样板。采用 Ely 的语义与尺寸，保留中文救援和自动15px的初始可读性。</p>
+<p>退出条件：normal/hover/pressed/disabled/focus/selected 可区分；中英切换、100/125/150/200%和动态纹理生命周期通过；样式/字体不累乘，不持续增长显存。原 GUI 不引入这些样式或资源。</p>
+<h4>P3 v2 主布局、多窗口与业务接线</h4>
+<p>新 App 接入未修改的 Controller/Proc 与业务模型，建立导航、中央主区、右检查区和底部日志；添加独立 UI 状态。完成 Win32/Vulkan surface 回调、平台窗口初始化次序、次窗口呈现/重建/销毁、跨屏 DPI和输入。验证 v2 输出目录下的 worker路径解析及两版控制拥有权。</p>
+<p>退出条件：浮动窗完整生命周期、窄屏、独立状态重启恢复、通知占位和安全退出通过；v2运行与保存UI后原版UI配置和布局哈希不变；无重复控制同组worker；多viewport闪烁与呈现开销有实际结论。</p>
+<h4>P4 在 v2 逐页实现功能等价</h4>
+<p>顺序：worker/详情/日志 → Result → 生成器 → 概率 → GPU/设置。页面绘制在 v2 重建，业务模型只读复用；每页对照原版合同单独验收。</p>
+<p>退出条件：原始结果字节复制、过滤与选中、预览失效/mtime、任务分区、B1/B2与曲线含义、概率快照和监控采样不变。原版页面与既有测试期望不为新版布局修改。</p>
+<h4>P5 双版本功能与低占用验收</h4>
+<p>相同输入、设备、窗口、DPI、刷新与采样条件下配对比较旧DX11与v2 Vulkan，覆盖单窗口/多窗口、空闲/日志/长Result/多worker、最小化恢复和计算并行。</p>
+<p>退出条件：v2功能门禁及原版回归通过；原目录/目标/配置隔离证据完整；性能门限在采样前冻结，显著退化须定位，不事后放宽。不得因Vulkan名称声明更低CPU、显存或功耗。</p>
+<h4>P6 独立分发准备</h4>
+<p>沿用 v2 新入口构建，形成独立目录/包，不替换旧版。核对运行时 Vulkan loader/驱动要求、无开发SDK的启动、资源/许可、exe哈希和业务配置定位。新增 v2 正式说明；原 GUI 正式说明仍描述原行为。</p>
+<p>不透明主题和系统标题栏作为首版基础。磨砂、自绘标题栏与持续动画单列后续；Vulkan surface 的 alpha/composite、系统合成兼容性需要实测，不能照搬 DXGI 方案。</p>
+<p>退出条件：干净分发目录中运行、缺Vulkan清晰失败、缺字体/缺NVML、状态重启恢复与安全退出通过；原版仍可独立启动。公共版本按功能更新规则在实际开发时评估，不把前端 v2 写成公共版本 2.x，也不预占并行开发中的下一版本。本轮只修改规划。</p>
+<p>依赖：P0 → P1（Vulkan宿主）→ P2（主题字体）→ P3（完整布局/多窗口/业务）→ P4（页面）→ P5（双版本验收）→ P6（独立分发）。P1/P2为首批实现范围，多窗口和功能等价仍是完整v2交付门槛。</p>
+<h3>7. 验收清单与证据</h3>
+<h4>原版不变</h4>
+<ul>
+<li>比较 <code>src/ecm/application/gui/</code>、旧 ImGui 核心/Win32/DX11 后端、原构建入口、原UI键默认值及旧测试期望的内容哈希/差异。</li>
+<li>根构建仅新增可关闭的v2接线；关闭v2或缺SDK时，旧GUI/CLI仍能配置与构建。旧GUI开关关闭、v2开启也能独立构建。</li>
+<li>运行v2、切换主题/语言/窗口布局并退出后，旧GUI布局/字体/窗口状态不变。旧exe能继续使用原UI状态。</li>
+<li>原GUI与v2不同时启动同组worker/队列；原配置身份、进程识别和启动竞争需要实际测试，不只检查v2自己的锁。</li>
+</ul>
+<h4>Vulkan 专项</h4>
+<p>主/次surface创建、graphics/present队列支持、swapchain图像数量与格式、render pass/pipeline一致性、帧同步、纹理descriptor/上传/销毁次序；resize、连续创建/关闭viewport、跨屏、最小化零尺寸、OUT_OF_DATE/SUBOPTIMAL及受控失败清理。</p>
+<p>开发validation无未解释错误；记录新viewport闪烁及主次窗口呈现模式/空闲帧率。图形设备选择不修改计算设备配置。device/surface失败时仍能执行worker退出协调。没有开发SDK/validation layers的分发环境与无可用loader/驱动两类场景分别测试。</p>
+<h4>业务功能</h4>
+<ul>
+<li>Controller/Proc：启动、停止、崩溃/重启、混合阶段、退出确认、checkpoint安全边界及超时终止。</li>
+<li>显示：任务摘要、GUI与worker版本区分；Stage2任务进度与阶段进度区分；正式结果依据发布文件。</li>
+<li>生成器：固定输入原始输出对照，B1/B2、e/m0/m2/m3、CPU禁用组合、目标分区、预览失效和外部修改复核。</li>
+<li>Result：F/NF、来源去重、组合筛选/选择清理、JSON/checksum字节复制、截短/替换/半行写入和读取错误。</li>
+<li>概率：相同输入快照对应相同结果/反算口径，零值/未定义不伪造；不扩大数值模型范围。</li>
+<li>日志与监控：4000行、可见行绘制、跟随开关；NVML未知值和采样/刷新独立。关闭/切换页面仍推进Controller。</li>
+</ul>
+<h4>可见性、交互与性能</h4>
+<p>中英、明暗、100/125/150/200%缩放、长路径/标签、空/错误/运行/待停状态，宽/窄布局和跨屏浮动窗。初始客户端逻辑尺寸场景1280×800、1024×700、800×600，按实际最小窗口约束调整并记录对应物理尺寸。键盘Tab/Shift-Tab/Enter/Escape、中文组合输入、焦点和鼠标命中逐项验证，不据此宣称完整无障碍支持。</p>
+<p>各性能条件至少5次独立运行，预热后固定时长采样，报告中位数/分位值、设备与驱动/系统/功耗策略、缩放与显示刷新、GUI/worker哈希、输入、样本数、工具和计时边界。分别报告CPU时间、working set/private bytes、GUI显存、绘制时间、输入到呈现延迟；worker吞吐独立计时。不得相加组件峰值或嵌套计时。</p>
+<p>证据存 <code>data/experiments/gui_v2/</code>；汇总存 <code>data/benchmarks/</code>，图存 <code>data/figures/</code>。旧DX11与新Vulkan总体验收分开记录后端开销与页面/布局差异，不能把跨版本总差异全部归因于API。</p>
+<h4>测试组织</h4>
+<p>复用旧GUI无窗口helper、日志/结果/生成器/Controller合同与固定输入。Vulkan/新版UI/独立状态测试放新增 <code>tools/test/gui_v2/</code> 或明确的v2测试入口，显式指向 <code>ecm_gui_v2.exe</code>，不改旧几何/像素期望适配新版。需要时将可复用测试增加独立v2调用包装，旧调用方式与期望不变。</p>
+<p>旧 <code>test_gui_all.ps1</code> 等部分脚本默认查找旧 <code>build_gui/</code>，保留这些脚本，不把它们直接当v2全套验收。旧版回归和v2验收分别指定二进制、配置、构建目录与证据位置。v2测试helper显式构建，不进入普通交付目标。本轮没有执行这些回归。</p>
+<h3>8. 待验证事项与首批范围</h3>
+<p>首批实际实现为P0–P2：原版保护基线、独立Vulkan宿主、Ely主题与字体样板。先证明渲染/重建/纹理生命周期，再实现复杂页面。</p>
+<p>TODO：Vulkan SDK实际位置及依赖版本；固定后端最低API/扩展；Win32 surface桥接与多viewport闪烁；主次窗口呈现策略；渲染设备选择；旧程序并行控制身份；v2UI侧车schema和权威生成定义；字体/CJK资产；宽窄布局实测；大Result阻塞基线；Vulkan/计算并行的资源与功耗；分发机无SDK验证。</p>
+<p>本轮交付仅为修订规划与同步阅读版；未创建v2实现、下载后端或SDK、修改旧GUI源码/目标/状态、改变配置默认值或公共版本，也未构建或发布新版。</p></div></details></section><footer class="footer">本页为离线规划阅读版，内嵌样式与交互，不依赖外部脚本或字体。未构建 GUI v2、未测量运行性能、未执行发布。<br>来源：GUI_MODERNIZATION_DRAFT.md · 2026-10-21</footer>
+</main></div>
+<script>
+"use strict";
+const phases = [{"id": "P0", "title": "冻结原版与并存合同", "work": "冻结原 GUI exe/源码哈希、原构建与 UI 配置，以及固定任务/结果/日志和操作截图。定义 v2 名称、独立输出/UI路径、只读业务复用清单、功能对照和资源基线。", "gate": "原目录和后端保护清单明确；各项新功能只落新目录；证据写 `data/experiments/gui_v2/<run>/`；不运行用户真实队列。基线记录实际构建身份，不仅记录版本字符串。"}, {"id": "P1", "title": "独立 Vulkan 最小宿主", "work": "添加 v2 目标和独立入口，补充同提交 Vulkan 后端；完成 Win32 单窗口、设备/呈现队列选择、swapchain、命令/同步、ImGui基本绘制与字体纹理更新。提前注册 Win32 surface 桥接以满足初始化合同，P3再完整验收多窗口。先传统 render pass；记录 SDK、loader、API/扩展、GPU和驱动。", "gate": "启动/关闭、连续缩放、最小化/恢复、无可用 Vulkan、重建及失败清理可验证；开发 validation 输出无未解释错误。v2 开关关闭和无 Vulkan SDK 的条件下，原版配置/构建仍通过。此阶段不宣称完整多窗口或功能就绪。"}, {"id": "P2", "title": "v2 主题、字体与最小组件", "work": "只在新目录构建明暗主题、正文/辅助/标题/等宽角色、有限图标与按钮/表单/状态样板。采用 Ely 的语义与尺寸，保留中文救援和自动15px的初始可读性。", "gate": "normal/hover/pressed/disabled/focus/selected 可区分；中英切换、100/125/150/200%和动态纹理生命周期通过；样式/字体不累乘，不持续增长显存。原 GUI 不引入这些样式或资源。"}, {"id": "P3", "title": "v2 主布局、多窗口与业务接线", "work": "新 App 接入未修改的 Controller/Proc 与业务模型，建立导航、中央主区、右检查区和底部日志；添加独立 UI 状态。完成 Win32/Vulkan surface 回调、平台窗口初始化次序、次窗口呈现/重建/销毁、跨屏 DPI和输入。验证 v2 输出目录下的 worker路径解析及两版控制拥有权。", "gate": "浮动窗完整生命周期、窄屏、独立状态重启恢复、通知占位和安全退出通过；v2运行与保存UI后原版UI配置和布局哈希不变；无重复控制同组worker；多viewport闪烁与呈现开销有实际结论。"}, {"id": "P4", "title": "在 v2 逐页实现功能等价", "work": "顺序：worker/详情/日志 → Result → 生成器 → 概率 → GPU/设置。页面绘制在 v2 重建，业务模型只读复用；每页对照原版合同单独验收。", "gate": "原始结果字节复制、过滤与选中、预览失效/mtime、任务分区、B1/B2与曲线含义、概率快照和监控采样不变。原版页面与既有测试期望不为新版布局修改。"}, {"id": "P5", "title": "双版本功能与低占用验收", "work": "相同输入、设备、窗口、DPI、刷新与采样条件下配对比较旧DX11与v2 Vulkan，覆盖单窗口/多窗口、空闲/日志/长Result/多worker、最小化恢复和计算并行。", "gate": "v2功能门禁及原版回归通过；原目录/目标/配置隔离证据完整；性能门限在采样前冻结，显著退化须定位，不事后放宽。不得因Vulkan名称声明更低CPU、显存或功耗。"}, {"id": "P6", "title": "独立分发准备", "work": "沿用 v2 新入口构建，形成独立目录/包，不替换旧版。核对运行时 Vulkan loader/驱动要求、无开发SDK的启动、资源/许可、exe哈希和业务配置定位。新增 v2 正式说明；原 GUI 正式说明仍描述原行为。\n\n不透明主题和系统标题栏作为首版基础。磨砂、自绘标题栏与持续动画单列后续；Vulkan surface 的 alpha/composite、系统合成兼容性需要实测，不能照搬 DXGI 方案。", "gate": "干净分发目录中运行、缺Vulkan清晰失败、缺字体/缺NVML、状态重启恢复与安全退出通过；原版仍可独立启动。公共版本按功能更新规则在实际开发时评估，不把前端 v2 写成公共版本 2.x，也不预占并行开发中的下一版本。本轮只修改规划。"}];
+const pages = [
+ {name:"工作台",id:"###v2_workers",items:["worker 状态、进度、速度与 ETA","保留表格宽度保护与任务摘要","低频配置移到配置区域"],rule:"继续使用原 Controller / Proc 业务合同。"},
+ {name:"结果",id:"###v2_results",items:["来源、筛选、搜索与复制工具栏","11 列结果表使用中央主区域","保留原始 JSON 与来源诊断"],rule:"复制保留原始 JSON / checksum 字节，筛选变化清空选择。"},
+ {name:"任务生成",id:"###v2_gen",items:["输入 → 曲线/输出选项 → 预览 → 追加","宽屏可并排输入与预览，窄屏单列","保留目标 worker、分区和 B1 / B2 含义"],rule:"选项变化使旧预览失效，追加前重新核对目标文件。"},
+ {name:"ECM 概率",id:"###v2_prob",items:["统一输入表单与结果摘要","图表、图例和坐标适配明暗主题","宽窄窗口按可用空间切换列数"],rule:"不改数值模型、后台输入快照、显式计算和反算口径。"}
+];
+document.getElementById("theme-toggle").addEventListener("click",function(){const dark=document.documentElement.dataset.theme!=="dark";document.documentElement.dataset.theme=dark?"dark":"light";this.setAttribute("aria-pressed",String(dark));this.textContent=dark?"浅色阅读":"深色阅读";});
+function widthMode(narrow){document.getElementById("layout-mock").dataset.width=narrow?"narrow":"wide";document.getElementById("wide-toggle").setAttribute("aria-pressed",String(!narrow));document.getElementById("narrow-toggle").setAttribute("aria-pressed",String(narrow));document.getElementById("layout-caption").textContent=narrow?"窄屏候选：导航折叠为 56 逻辑单位，默认收起右检查区；表单单列，表格保留横向滚动。":"宽屏候选：左导航 200 / 中央自适应 / 右区 300 逻辑单位。本图按容器宽度示意，并非像素规格。";}
+document.getElementById("wide-toggle").addEventListener("click",()=>widthMode(false));document.getElementById("narrow-toggle").addEventListener("click",()=>widthMode(true));
+document.querySelectorAll("[data-page]").forEach(button=>button.addEventListener("click",()=>{const page=pages[Number(button.dataset.page)];document.querySelectorAll("[data-page]").forEach(b=>b.setAttribute("aria-pressed",String(b===button)));document.getElementById("mock-heading").textContent=page.name+" · 中央主区";document.getElementById("mock-id").textContent=page.id;const list=document.getElementById("mock-items");list.replaceChildren(...page.items.map(value=>{const li=document.createElement("li");li.textContent=value;return li;}));document.getElementById("mock-rule").textContent=page.rule;}));
+document.querySelectorAll("[data-phase]").forEach(button=>button.addEventListener("click",()=>{const phase=phases[Number(button.dataset.phase)];document.querySelectorAll("[data-phase]").forEach(b=>b.setAttribute("aria-pressed",String(b===button)));document.getElementById("phase-index").textContent=phase.id+" · 规划阶段";document.getElementById("phase-title").textContent=phase.title;document.getElementById("phase-work").textContent=phase.work;document.getElementById("phase-gate").textContent=phase.gate;}));
+document.querySelector('a[href="#full-plan"]').addEventListener("click",()=>{document.getElementById("full-details").open=true;});
+window.addEventListener("beforeprint",()=>{document.getElementById("full-details").open=true;});
+</script>
+</body></html>

@@ -567,7 +567,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 Stage1 样本覆盖 Montgomery PARAM0/2/3、Edwards NAF/binary；Stage2 覆盖普通 Montgomery/Edwards、承载、重定位和 host 回退，保留其生产算术检查。曲线身份、有效标量、checkpoint 安全点、即时因子发布、队列完成次序及 Stage2 pending/receipt 合同仍以本草稿的已核对流程和冻结源码为准。CPU/OpenCL/GUI 本次只冻结输入与已有支持限制，实际运行验收留在对应实施阶段，不把 CUDA 构建成功外推到这些后端。
 
-首次沙箱内 Stage2 构建在第 16/25 项 `kernels/cuda/stage2/arithmetic_kernels.cu` 失败：`Internal error`，随后 `nvcc error: 'ptxas' died with status 0xC0000008 (INVALID_HANDLE)`。失败记录和部分对象状态保留于 [原始失败记录](../../data/experiments/main_flow_refactor_implementation_20261021/p0/result.json)，不覆盖为成功。用户确认沙箱限制为已知问题并授权继续；随后沙箱外同脚本、同参数成功，旧失败不再阻塞 P0。**这只能证明沙箱外构建可用，具体错误根因未进一步诊断。** 后续 CUDA 编译沿用该执行方式，不为避开沙箱错误改变工具链、算术宏或编译并行度。
+首次沙箱内 Stage2 构建在第 16/25 项 `kernels/cuda/stage2/arithmetic_kernels.cu` 失败：`Internal error`，随后 `nvcc error: 'ptxas' died with status 0xC0000008 (INVALID_HANDLE)`。失败记录和部分对象状态保留于 [原始失败记录](../../data/experiments/main_flow_refactor_implementation_20261021/p0/result.json)，不覆盖为成功。用户确认沙箱限制为已知问题并授权继续；随后沙箱外同脚本、同参数成功，旧失败不再阻塞 P0。[独立诊断](PTXAS_SANDBOX_DIAGNOSIS_DRAFT.md)已通过最小 PTX 和 15 次重复对照，确认 CUDA 13.3.73 的 ptxas 单文件并行路径触发无效句柄操作，沙箱启用的严格句柄检查使其成为致命异常；仅在沙箱外测试子进程启用同一检查即可复现。原始算术 TU 已验证沙箱内 SplitCompile=1 成功，该配置不替代此处 SplitCompile=8 的冻结基线。后续 CUDA 编译沿用沙箱外执行方式，不为避开沙箱错误改变工具链、算术宏或编译并行度。
 
 工具链为 CUDA 13.3.73、MSVC 14.51.36231、sm_89。Stage1 保持完整 tiers、压缩开启、无 PTX、PRAC 关闭；Stage2 保持 SplitCompile=8、ptx/fixed mode3、outer unroll0、add/sub mask1。未运行 release、跨架构构建或性能比较。设备清单见 [devices.csv](../../data/experiments/main_flow_refactor_implementation_20261021/p0/devices.csv)。
 

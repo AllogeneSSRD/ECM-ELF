@@ -12,6 +12,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [ECM 结果输出](usage/ECM_RESULTS.md)：内部 JSONL、Prime95 结构提交文件、TOML 身份、参考 FFT 长度、批次去重与本地恢复。
 - [GUI](usage/GUI.md)：worker、队列生成、监控及结果。
 - [构建与发布](usage/BUILD.md)：六组一键入口、GPU 架构、CUDA/GMP 依赖和发布内容。
+- [ptxas 沙箱编译诊断草稿](development/PTXAS_SANDBOX_DIAGNOSIS_DRAFT.md)：CUDA 13.3.73 单文件并行与严格句柄检查的最小复现、因果对照及已验证的串行编译处理。
 - [因子数据集](usage/DATASET.md)：PARAM0数据库、最优sigma、扫描与生产验证，以及Edwards独立群阶/点阶分析。
 - [ECM 报告工具](../tools/ecm_report/README.md)：PrimeNet 进度导入、两日变化图和按日期及指数范围统计的增长热度图。
 - [TOML 配置参考](ECM_TOML_REFERENCE.md)：所有键的符号默认值、范围和英中说明；由配置定义生成。
