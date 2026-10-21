@@ -19,9 +19,9 @@
       4. run cmake --build once so that nmake only compiles host code and links
 
     Because step 3 writes the very object files nmake is about to want, step 4 is
-    normally just a link.  Step 3 always recompiles every selected .cu file: use
-    -Only to restrict it, or -SkipUpToDate to reuse objects with matching command,
-    dependency-content and object identities.
+    normally just a link. Step 3 reuses matching objects by default. Use -Only
+    to restrict the selection, or -Rebuild to compile every selected
+    file. Command, dependency-content and object identities must all match.
 
 .PARAMETER BuildDir
     Build directory, relative to the repository root unless rooted.
@@ -41,7 +41,10 @@
 .PARAMETER SkipUpToDate
     Reuse an object only when its compile command, response files, transitive
     dependency contents and recorded object hash all match. Old builds without
-    dependency records compile once to establish their identity.
+    dependency records compile once to establish their identity. Enabled by default.
+
+.PARAMETER Rebuild
+    Compile every selected translation unit even when its identity still matches.
 
 .PARAMETER NoBuild
     Stop after the parallel compiles (do not run the final cmake --build).
@@ -66,7 +69,8 @@ param(
     [string]$SourceRegex = '\.cu$',
     [switch]$AllSources,
     [switch]$Reconfigure,
-    [switch]$SkipUpToDate,
+    [switch]$SkipUpToDate = $true,
+    [switch]$Rebuild,
     [switch]$NoBuild,
     [string]$VcVars = "",
     [ValidatePattern('^$|^[0-9.]+$')][string]$VcVersion = "",
@@ -120,7 +124,9 @@ foreach ($e in $entries) {
         $name = (Get-EcmSourceKey $BuildDir $obj) -replace '[^A-Za-z0-9_.-]', '_'
     }
     $state = Get-EcmCompileState $repo $e $vcSetup
-    $skip = $SkipUpToDate -and (Test-EcmCompileState $state)
+    $reason = if ($SkipUpToDate -and -not $Rebuild) { Get-EcmCompileInvalidationReason $state } else { 'forced rebuild' }
+    $skip = $reason -eq ''
+    if (-not $skip) { Write-Host ("  rebuild {0}: {1}" -f $name, $reason) }
     $tuList += [pscustomobject]@{
         Name = $name; Entry = $e; Obj = $obj; Skip = $skip
         State = $state

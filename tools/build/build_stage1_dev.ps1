@@ -15,7 +15,7 @@ param(
     [switch]$EnablePrac,
     [switch]$FullRebuild,
     [switch]$RelinkOnly,
-    [switch]$Incremental,
+    [switch]$Incremental = $true,
     [string]$Extra = '',
     [string]$Gmp = '',
     [string]$OpenSslRoot = '',

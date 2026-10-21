@@ -20,6 +20,7 @@ param(
     [switch]$Rebuild
 )
 $ErrorActionPreference = 'Stop'
+if ($HostOnly -and $Rebuild) { throw 'HostOnly and Rebuild are mutually exclusive' }
 if (-not $PSBoundParameters.ContainsKey('AddSubMask') -and $Engine -eq 'production') { $AddSubMask = 1 }
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $repo
@@ -116,6 +117,7 @@ if ($fresh) {
     try { Assert-EcmBuildUnits $repo $Build $previous $sources $includeDirs -Production:($Engine -eq 'production') }
     catch { $fresh = $false }
 }
+$linkInputs = if ($previous) { $previous.link_inputs } else { $null }
 if (-not $fresh) {
     $objects = @()
     $compiled = 0
@@ -126,12 +128,21 @@ if (-not $fresh) {
         $obj = Join-Path $objDir "$stem.obj"
         $log = Join-Path $objDir "$stem.log"
         $objects += $obj
+        # The whole-build signature determines whether metadata/linking needs
+        # attention, never whether every translation unit must be recompiled.
+        # Keep HostOnly's complete CUDA preflight above, before any host writes.
         if ($HostOnly -and $src -in $cudaSources) {
             Write-Host ("  skip {0} (verified CUDA object)" -f $stem)
             continue
         }
+        $reason = if ($Rebuild) { 'forced rebuild' } else { Get-EcmCompileInvalidationReason $beforeStates[$src] }
+        if (-not $reason) {
+            Write-Host ("  skip {0} (verified command, dependencies and object)" -f $stem)
+            continue
+        }
         $compiled++
         Write-Host ("  start [{0}/{1}] {2}" -f $compiled, ($sources.Count - $(if ($HostOnly) { $cudaSources.Count } else { 0 })), $src)
+        Write-Host ("       reason: {0}" -f $reason)
         $compileCommand = $compileEntries[$src].command + " --generate-dependencies-with-compile --dependency-output `"$obj.ecm.d`""
         $sw = [Diagnostics.Stopwatch]::StartNew()
         # Keep setup and compilation on separate lines. Capture via a pipe:
@@ -157,17 +168,29 @@ if (-not $fresh) {
     Write-Host ("compiled {0} TU(s): wall {1:N1}s (nvcc split compile={2})" -f $compiled, $compileSeconds, $SplitCompile)
     $objArgs = ($objects | ForEach-Object { '"' + $_ + '"' }) -join ' '
     $linkLog = Join-Path $objDir 'link.log'
-    Write-Host '== link ecm_cuda_stage2.exe =='
-    $linkTimer = [Diagnostics.Stopwatch]::StartNew()
     $line = "$($vc.Setup) && `"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$Arch " +
         "$objArgs -L `"$Gmp/lib`" -lgmp -o `"$exe`""
-    $commandFile = Join-Path $objDir 'link.cmd'
-    $linkCommand = $line.Substring(($vc.Setup + ' && ').Length)
-    [IO.File]::WriteAllText($commandFile, "@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$linkCommand`r`n", [Text.UTF8Encoding]::new($false))
-    & cmd.exe /d /c $commandFile 2>&1 | Out-File -LiteralPath $linkLog -Encoding utf8
-    if ($LASTEXITCODE -ne 0) { Get-Content $linkLog -Tail 40; throw 'link failed' }
-    $linkTimer.Stop()
-    Write-Host ("  ok   link ({0:N1}s)" -f $linkTimer.Elapsed.TotalSeconds)
+    $linkObjects = [ordered]@{}
+    foreach ($object in $objects) { $linkObjects[$object] = (Get-FileHash -LiteralPath $object).Hash }
+    $linkInputs = [ordered]@{ command = $line; library = $gmpHashes['lib/gmp.lib']; objects = $linkObjects }
+    $reuseLink = -not $Rebuild -and $previous -and $previous.link_inputs -and
+        (Test-Path -LiteralPath $exe) -and $previous.sha256 -eq (Get-FileHash -LiteralPath $exe).Hash -and
+        $previous.link_inputs.command -eq $line -and $previous.link_inputs.library -eq $linkInputs.library
+    if ($reuseLink) {
+        try { Assert-EcmHashes $previous.link_inputs.objects $linkObjects 'Link object changed' }
+        catch { $reuseLink = $false }
+    }
+    if (-not $reuseLink) {
+        Write-Host '== link ecm_cuda_stage2.exe =='
+        $linkTimer = [Diagnostics.Stopwatch]::StartNew()
+        $commandFile = Join-Path $objDir 'link.cmd'
+        $linkCommand = $line.Substring(($vc.Setup + ' && ').Length)
+        [IO.File]::WriteAllText($commandFile, "@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$linkCommand`r`n", [Text.UTF8Encoding]::new($false))
+        & cmd.exe /d /c $commandFile 2>&1 | Out-File -LiteralPath $linkLog -Encoding utf8
+        if ($LASTEXITCODE -ne 0) { Get-Content $linkLog -Tail 40; throw 'link failed' }
+        $linkTimer.Stop()
+        Write-Host ("  ok   link ({0:N1}s)" -f $linkTimer.Elapsed.TotalSeconds)
+    } else { Write-Host 'Link command, library, objects and executable verified; link skipped.' }
     foreach ($dep in $deps) {
         if ((Get-FileHash -LiteralPath $dep -Algorithm SHA256).Hash -ne $sourceHashes[$dep]) {
             throw "Source changed during build: $dep"
@@ -193,10 +216,16 @@ foreach ($src in $sources) {
     $objectHash = (Get-FileHash -LiteralPath (Join-Path $objDir "$stem.obj")).Hash
     $objectHashes[$stem] = $objectHash
     $state = Get-EcmCompileState $repo $compileEntries[$src] $vc.Setup $includeDirs -Production:($Engine -eq 'production')
-    if ($fresh) { $expected = $previous.compile_units.$src.fingerprint }
-    elseif ($HostOnly -and $src -in $cudaSources) { $expected = $beforeStates[$src].fingerprint }
-    else { $expected = (Get-Content -LiteralPath "$($state.object).ecm-state.json" -Raw | ConvertFrom-Json).fingerprint }
+    if ($fresh -or ($HostOnly -and $src -in $cudaSources)) {
+        $expected = $previous.compile_units.$src.fingerprint
+        $expectedObject = $previous.compile_units.$src.object_sha256
+    } else {
+        $record = Get-Content -LiteralPath "$($state.object).ecm-state.json" -Raw | ConvertFrom-Json
+        $expected = $record.fingerprint
+        $expectedObject = $record.object_sha256
+    }
     if ($expected -ne $state.fingerprint) { throw "Compile dependency changed during build: $src" }
+    if ($expectedObject -ne $objectHash) { throw "Compile object changed during build: $src" }
     $compileUnits[$src] = [ordered]@{ entry = $compileEntries[$src]; fingerprint = $state.fingerprint; object_sha256 = $objectHash }
 }
 $manifest = [ordered]@{
@@ -204,6 +233,7 @@ $manifest = [ordered]@{
     source_inventory_sha256 = (Get-FileHash -LiteralPath (Join-Path $repo 'tools/build/internal/cuda_sources.cmake')).Hash
     compile_setup = $vc.Setup
     compile_units = $compileUnits
+    link_inputs = $linkInputs
     cuda_sources = $cudaSources
     exe = (Resolve-Path $exe).Path
     sha256 = (Get-FileHash $exe -Algorithm SHA256).Hash

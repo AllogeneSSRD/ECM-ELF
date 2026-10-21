@@ -36,7 +36,7 @@ param(
     [switch]$EnablePrac,       # experimental resident/PRAC kernels; excluded by default
     [switch]$FullRebuild,
     [switch]$RelinkOnly,
-    [switch]$Incremental,      # reuse CUDA TUs only when dependency/command/object identities match
+    [switch]$Incremental = $true, # default: verify dependency/command/object identities before reuse
     [string]$Extra = "",       # extra cmake definitions, e.g. -Extra "-DECM_MERS_FOLD=1"
     [string]$Gmp = "",
     [string]$OpenSslRoot = "",
@@ -101,7 +101,7 @@ if ($FullRebuild) {
 
 if (-not $RelinkOnly) {
     $engineArgs = @('-BuildDir', $BuildDir, '-Jobs', $Jobs, '-VcVars', $VcVars, '-VcVersion', $vc.Version)
-    if ($Incremental) { $engineArgs += '-SkipUpToDate' }
+    if (-not $Incremental) { $engineArgs += '-Rebuild' }
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "internal\parallel_nvcc.ps1") @engineArgs
 } else {
     & cmd.exe /c "$($vc.Setup) && cmake --build `"$BuildDir`" --target ecm_cuda"

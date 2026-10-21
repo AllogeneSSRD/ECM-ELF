@@ -188,15 +188,23 @@ function Get-EcmCompileState([string]$Repo, $Entry, [string]$Setup = '', [string
     return [pscustomobject]@{ schema = 2; fingerprint = $fingerprint; source_hashes = $hashes; object = $object }
 }
 
-function Test-EcmCompileState($State) {
+function Get-EcmCompileInvalidationReason($State) {
     $record = "$($State.object).ecm-state.json"
-    if (-not (Test-Path -LiteralPath $record) -or -not (Test-Path -LiteralPath $State.object)) { return $false }
+    if (-not (Test-Path -LiteralPath $State.object)) { return 'object missing' }
+    if (-not (Test-Path -LiteralPath $record)) { return 'dependency record missing' }
     try {
         $saved = Get-Content -LiteralPath $record -Raw | ConvertFrom-Json
-        Assert-EcmHashes $saved.source_hashes $State.source_hashes
-        return $saved.schema -eq 2 -and $saved.fingerprint -eq $State.fingerprint -and
-            $saved.object_sha256 -eq (Get-FileHash -LiteralPath $State.object -Algorithm SHA256).Hash
-    } catch { return $false }
+        if ($saved.schema -ne 2) { return 'dependency record schema changed' }
+        try { Assert-EcmHashes $saved.source_hashes $State.source_hashes }
+        catch { return "source or dependency changed: $($_.Exception.Message)" }
+        if ($saved.fingerprint -ne $State.fingerprint) { return 'compile command or setup changed' }
+        if ($saved.object_sha256 -ne (Get-FileHash -LiteralPath $State.object -Algorithm SHA256).Hash) { return 'object content changed' }
+        return ''
+    } catch { return "dependency record invalid: $($_.Exception.Message)" }
+}
+
+function Test-EcmCompileState($State) {
+    return (Get-EcmCompileInvalidationReason $State) -eq ''
 }
 
 function Save-EcmCompileState($State) {

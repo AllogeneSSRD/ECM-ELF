@@ -54,9 +54,11 @@ Stage1 输出 `dist/cuda/`，Stage2 多架构输出 `dist/cuda-stage2/`；每架
 
 ## 复用构建
 
-Stage1 的 `-Incremental` 按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。缺少当前依赖记录的旧对象会重编一次。`-RelinkOnly` 是显式交给 CMake 处理主机编译和链接的入口，不等同于已通过 CUDA 身份校验。
+Stage1 默认启用增量复用，按编译命令、响应文件、递归依赖内容与对象 SHA256 判断 CUDA 对象是否可复用；保留时间戳也不能绕过内容校验。`-Incremental` 保留为兼容参数，缺少当前依赖记录的旧对象会重编一次。`-FullRebuild` 删除 CUDA 对象后重编；内部并行编译器的 `-Rebuild` 强制编译选中的单元。主机 CXX 文件仍由 CMake/NMake 管理。当前 `-RelinkOnly` 仍是交给 CMake 处理主机编译和链接的旧入口，不等同于已通过 CUDA 身份校验，也不承诺零编译。
 
-Stage2 的 `-HostOnly` 只复用完整清单中身份一致的 CUDA 对象，并重建主机部分；架构、后端、工具链、GMP 头、CUDA 依赖或任一 CUDA 对象改变时拒绝。普通复用和发布 `-SkipBuild` 同时核对程序、编译单元、依赖和对象；旧 manifest 缺少身份记录时须正常重建。保留构建目录中的 `.ecm.d`、`.ecm-state.json`、源清单和 manifest；不能修改清单或替换 DLL 来绕过核对。
+Stage2 默认逐编译单元复用，整体源码/构建签名变化不会直接触发整组重编；每个失效单元打印重编原因。主机 `.cpp` 暂时仍通过 nvcc 编译，普通 CXX 编译器迁移另行实施。链接命令、GMP 导入库、对象摘要和程序摘要全部匹配时跳过链接；旧清单首次建立链接输入记录可能需要一次链接。
+
+Stage2 的 `-HostOnly` 在任何编译前核对完整清单，只复用身份一致的 CUDA 对象，主机部分仍按需编译；架构、后端、工具链、GMP 头、CUDA 依赖或任一 CUDA 对象改变时拒绝。`-HostOnly` 与强制重建的 `-Rebuild` 互斥。普通复用和发布 `-SkipBuild` 同时核对程序、编译单元、依赖和对象；旧 manifest 缺少身份记录时须正常重建。保留构建目录中的 `.ecm.d`、`.ecm-state.json`、源清单和 manifest；不能修改清单或替换 DLL 来绕过核对。
 
 ## CUDA 源清单与依赖身份
 

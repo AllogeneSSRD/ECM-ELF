@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0 local 基线与运行样本已冻结，P1 待实施。生产代码与构建脚本尚未修改。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0 已冻结，P1a 默认增量与 Stage2 逐 TU 复用已实施并验证，程序版本 `0.45.1`；P1b 输出隔离及后续阶段待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -16,7 +16,7 @@
 
 生产运行必需的算术检查、自检、错误检查仍属于主流程；不能按文件名包含 `test` 或 `selftest` 就排除。例如 OpenCL Stage1 编入并调用生产自检，见 [构建入口](../../CMakeLists.txt) 第 158–167 行及 [opencl_ecm_stage1.cpp](../../src/opencl_ecm_stage1.cpp) 第 929 行。
 
-本文件维护分析、目标方案与获授权后的分阶段实施记录，不将拟议目录写成已实现状态。实施验收采用 local build，不运行 release；已知沙箱编译限制通过沙箱外执行同一正式构建脚本处理，参数保持不变。其他预期外重大问题仍停止，不以修改算术或验收门限绕过。阶段提交使用 `[0.45.z]` 前缀；本次只有基线记录，程序版本仍为 `0.44.9`，不宣称已经产生 `0.45.0` 二进制，也不产生性能提升结论。当前实现的权威入口仍为 [架构与术语](../architecture/OVERVIEW.md)、[Stage1](../architecture/STAGE1.md)、[Stage2](../architecture/STAGE2.md)、[Save](../architecture/SAVE.md) 和 [Checkpoint](../architecture/CHECKPOINT.md)。已有 [CUDA 结构草稿](GPU_CUDA_STRUCTURE_REFACTOR_DRAFT.md) 描述其实施范围。
+本文件维护分析、目标方案与获授权后的分阶段实施记录，不将拟议目录写成已实现状态。实施验收采用 local build，不运行 release；已知沙箱编译限制通过沙箱外执行同一正式构建脚本处理，参数保持不变。其他预期外重大问题仍停止，不以修改算术或验收门限绕过。阶段提交使用 `[0.45.z]` 前缀；P0 基线保留 `0.44.9` 身份，P1a 程序版本为 `0.45.1`；`[0.45.0]` 为基线文档提交前缀，不是重新命名基线程序，也不产生性能提升结论。当前实现的权威入口仍为 [架构与术语](../architecture/OVERVIEW.md)、[Stage1](../architecture/STAGE1.md)、[Stage2](../architecture/STAGE2.md)、[Save](../architecture/SAVE.md) 和 [Checkpoint](../architecture/CHECKPOINT.md)。已有 [CUDA 结构草稿](GPU_CUDA_STRUCTURE_REFACTOR_DRAFT.md) 描述其实施范围。
 
 ## 当前主流程
 
@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 的 local 基线冻结，实际交付与验证限制见下节，P1 及后续目标尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a 构建复用，实际交付与验证限制见下节；P1b 输出隔离及后续目标尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -571,6 +571,26 @@ Stage1 样本覆盖 Montgomery PARAM0/2/3、Edwards NAF/binary；Stage2 覆盖�
 
 冻结程序 SHA256：Stage1 为 `22327aae26f81cde2bf8b95d075e50697649521890f5d7d97f71e85cd3980094`，Stage2 为 `6c1e5a4df7c813a17e561935dfa30068a689e7cdd2c439048d8a0beca9c8ccd5`；GMP DLL 为 `969f0e96ac587dedfecf611ca3442fc7211f9218f1a553214c83548dcdbcfd6e`。源摘要文件 SHA256 为 `8793675558067C2EA53D1AC3236B95F2F639297BC0AE1E12EAB2C6D19FB33570`，源归档 SHA256 为 `50A99E7C930EE9EF8F640493BC8711A4BA0FD66FFE819446AE319A746F0B91A4`。成功构建后另行复制两阶段程序与匹配清单，失败构建记录不作为当前基线。
 
+### P1a：默认增量与 Stage2 逐 TU 复用已完成
+
+对应程序版本 `0.45.1`，证据为 [P1a 验证记录](../../data/experiments/main_flow_refactor_implementation_20261021/p1a/qualification.json)。本子阶段保留原有目录、编译器、编译/算术宏和链接参数，先改变复用决策；P1b 继续处理用途/profile 目录隔离及构建模式收口。
+
+Stage1 local/dev 及内部并行编译器默认验证并复用 CUDA 对象；`Incremental` 保留兼容，显式关闭时转为强制编译。原有 `FullRebuild` 继续删除所选 CUDA 对象。Stage1 主机 CXX 仍由原生 CMake/NMake 管理，不能据此宣称已经统一全部 CXX 对象的内容身份。
+
+Stage2 整体签名变化后按当前命令、依赖内容和对象摘要分别判断每个 TU，仅重编失效单元；输出重编原因。另存链接命令、GMP 导入库及对象摘要，程序自身摘要匹配时可跳过链接。`HostOnly` 仍先验证全部 CUDA 输入/对象，和 `Rebuild` 互斥；结束时同时核对输入指纹及对象摘要，避免普通复用路径把构建期间被替换的对象直接接纳为新清单。
+
+| 验证 | 结果 | 证据 |
+| --- | --- | --- |
+| 同 profile 无修改重复构建 | Stage1 零 CU、零 CXX、零链接；Stage2 零 TU、零链接 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p1a/stage1_final.log)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p1a/stage2_final.log)。Stage2 最终轮还覆盖脚本身份变化而实际链接输入未变。 |
+| 独立主机源修改及还原 | 对 `ecm_expr.cpp` 临时追加注释，再原字节还原；两阶段两轮均各编译 1 个主机 TU、0 个 CU，并链接 | [受控变异记录](../../data/experiments/main_flow_refactor_implementation_20261021/p1a/integration.json)。源码已还原，最终程序及清单与还原后的输入匹配。 |
+| 身份/依赖变异 | 原有 40 项 CPU 门禁通过，含跨 PowerShell 指纹一致性 | [门禁记录](../../data/experiments/main_flow_refactor_implementation_20261021/p1a/identity_final/result.json)。 |
+| HostOnly 严格拒绝 | 真实算术 CUDA 对象内容变异在编译前被拒绝，对象和时间戳已还原；CUDA 源摘要变异也在编译前被指定诊断拒绝 | [对象变异日志](../../data/experiments/main_flow_refactor_implementation_20261021/p1a/hostonly_object_tamper.log)、[源摘要变异记录](../../data/experiments/main_flow_refactor_implementation_20261021/p1a/hostonly_rejection_fixed/result.json)。 |
+| 两阶段运行对照 | 与冻结的 `0.44.9` local 基线比较，Stage1 5 例、Stage2 5 例通过 | [运行记录](../../data/experiments/main_flow_refactor_implementation_20261021/p1a/runtime/summary.json)。覆盖范围和忽略的计时/身份字段沿用 P0 工具，不构成性能或完整后端资格。 |
+
+同步修正一个旧验收样本：`test_stage2_phase_build_deps.py` 原来修改仅属主机的 phase-times 头摘要，却要求 CUDA 依赖错误；复制到不同叶目录后实际先遇到编译路径身份错误。现在改为变异真实 CUDA 源的已录入摘要，仍要求指定 CUDA 输入诊断、零编译且原构建清单不变；没有放宽为任意失败即通过。同时为 Windows PowerShell 子进程明确执行策略和系统模块路径，避免测试在依赖检查前因运行环境失败。旧失败日志保留。
+
+实际修改点见 [Stage1 local](../../tools/build/build_stage1_local.ps1)、[并行编译器](../../tools/build/internal/parallel_nvcc.ps1)、[身份校验](../../tools/build/internal/cuda_build_state.ps1) 与 [Stage2 local](../../tools/build/build_stage2_local.ps1)。源码/程序/清单摘要统一记录在上述 qualification.json。尚未实现新用途目录、Stage1 严格 HostOnly/RelinkOnly、Stage2 普通 CXX 迁移，也没有把四类非 GPU 变更的真实依赖全面隔离；这些分别属于 P1b、P2、P4。未运行 release 或性能比较。
+
 ## 首先调整构建复用与输出隔离
 
 ### 当前样例说明了什么
@@ -579,7 +599,7 @@ Stage1 样本覆盖 Montgomery PARAM0/2/3、Edwards NAF/binary；Stage2 覆盖�
 
 这是用户提供的单个样本，未复现。源码/二进制完整身份、CPU 型号、内存、系统负载与功耗条件未提供；sm_89 不是实体 GPU 型号。这里据此确定验收重点为“同配置复用”和“无关主机修改零 CU 编译”，不宣称重构后的耗时或性能提升。原始文本按字节保留，SHA256 为 A044EE0B4891EF4F86AF2F586BCA39275D9571D01133FFDF6F02F8B3710B9D25。
 
-现有策略见前文“当前重编的三个来源”：Stage1 仅 Incremental 启用逐对象跳过；Stage2 普通 local 在整体 signature 变化后重编全部源。先解决这些策略，再用后续提取缩小真实依赖。
+前期快照中的策略见“当前重编的三个来源”：当时 Stage1 仅 Incremental 启用逐对象跳过，Stage2 普通 local 在整体 signature 变化后重编全部源。P1a 已修正这两项策略，验证见“实施进度与阻塞记录”；后续提取继续缩小真实依赖。
 
 ### 目标输出目录
 
@@ -1142,7 +1162,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0 local 基线与输入冻结完成，P1–P7 未执行，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0 与 P1a 完成，P1b 及 P2–P7 未执行，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 
