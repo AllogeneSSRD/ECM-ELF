@@ -875,6 +875,8 @@ PARI helper 和整段命中诊断移入应用私有 [diagnostics/group_order.cpp
 
 [最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p4i/qualification.json)冻结三个当前 worker，CPU Stage2 互操作仍用 0.45.14；本阶段未重建可选 PRAC profile，其 0.45.16 的资格保持为历史证据。Stage1 仍限每进程一个活跃任务，实际 CUDA 同步/回读不脱离 SDK。Stage2 规划/持久化继续 P5，GUI 与 CPU 入口深化继续 P6，跨类别增量及完整位宽综合终验继续 P7；未运行 release 或性能采样。
 
+提交后的格式修复：移除诊断文件一行继承的尾空白，完整规范化函数/入口对照通过，local 仅 1 CXX/0 CU/1 link，31 个 CUDA 对象不变。版本仍为 0.45.17；[修复资格](../../data/experiments/main_flow_refactor_implementation_20261021/p4i_format/qualification.json)区分原运行验收二进制与格式后重链二进制，不把原运行记录改写成重跑。后续提交在 staging/空白检查成功后才执行。
+
 ## 首先调整构建复用与输出隔离
 
 ### 当前样例说明了什么

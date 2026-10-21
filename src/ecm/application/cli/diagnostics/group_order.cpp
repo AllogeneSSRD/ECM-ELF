@@ -435,7 +435,7 @@ bool print_group_order_factor(const ecm_stage1::TaskResult &result,uint32_t i,in
                         mpz_clears(pw, best, best2, nullptr);
                     }
                     mpz_clear(go);
-                
+
 return true;
 }
 }
