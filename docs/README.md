@@ -59,3 +59,5 @@ CUDA 目录与模块重构的冻结实施记录和验证证据见 [CUDA 结构�
 原始运行日志、保存点、剖析和冻结证据在 `data/experiments/` 或工具指定的 `data/` 子目录；统计结果在 `data/benchmarks/`，图表在 `data/figures/`。这些目录不提交 Git，链接到本机证据的页面不能代替原始证据分发。复用脚本保留在 `tools/`，可按其说明重新生成结果。
 
 原论文、译述与论文分析保留在 `docs/paper/`；外部源码与上游工程资料在 `.refactor/`。项目的文档维护规则见根目录 [AGENTS.md](../AGENTS.md)。
+
+- [CUDA Stage1 统一架构实施草稿](development/CUDA_STAGE1_UNIFICATION_DRAFT.md)：获批方案、分阶段状态及验收证据。
