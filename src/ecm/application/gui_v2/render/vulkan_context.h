@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <volk.h>
 #include <cstdint>
+#include <atomic>
 #include <cstdio>
 #include <string>
 
@@ -24,9 +25,9 @@ public:
     uint32_t queue_family = 0;
     uint32_t api_version = VK_API_VERSION_1_1;
     VkPhysicalDeviceProperties properties{};
-    unsigned validation_errors = 0;
-    unsigned validation_warnings = 0;
-    unsigned environment_warnings = 0;
+    std::atomic<unsigned> validation_errors{0};
+    std::atomic<unsigned> validation_warnings{0};
+    std::atomic<unsigned> environment_warnings{0};
 private:
     bool loader_ = false;
     FILE* log_ = nullptr;

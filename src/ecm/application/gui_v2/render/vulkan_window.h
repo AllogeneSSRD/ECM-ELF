@@ -15,6 +15,7 @@ public:
     void shutdown();
     bool needs_rebuild = true;
     unsigned rebuilds = 0;
+    float clear_color[4]{.14f, .14f, .14f, 1};
 private:
     struct Image {
         VkImage image = VK_NULL_HANDLE;

@@ -152,7 +152,8 @@ bool VulkanWindow::render(ImDrawData* draw) {
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check_vk(vkBeginCommandBuffer(command_, &begin), "begin frame");
-    VkClearValue clear{}; clear.color = {{.14f, .14f, .14f, 1}};
+    VkClearValue clear{};
+    for (int i = 0; i < 4; ++i) clear.color.float32[i] = clear_color[i];
     VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     pass.renderPass = pass_; pass.framebuffer = images_[index].framebuffer;
     pass.renderArea.extent = extent_; pass.clearValueCount = 1; pass.pClearValues = &clear;

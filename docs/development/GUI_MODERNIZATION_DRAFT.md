@@ -1,6 +1,6 @@
 # 独立 GUI v2：ImGui / Vulkan 现代化规划草稿
 
-状态：P0–P1 已完成，P2 待实施。日期：2026-10-21。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。
+状态：P0–P2 已完成，P3–P6 待实施。日期：2026-10-21。原 GUI 保持不变；独立构建 GUI v2，采用 C++ / Dear ImGui / Win32 平台后端 / Vulkan 渲染后端，参考 Ely 组件库统一布局、配色、字体和控件。v2 是前端名称，不表示公共程序版本变为 2.x。
 
 本文件是本主题的权威临时草稿。[HTML 阅读版](../web/gui-v2-vulkan-plan-20261021.html)呈现布局示意、阶段验收和本草稿全文，可离线打开。实施成功后另写 GUI v2 正式说明，旧 GUI 使用说明继续描述旧版；提示用户处理本草稿，不自动删除。
 
@@ -14,14 +14,19 @@
 - P1 验证：正常运行、缺 loader、device/surface lost 注入、非法参数、真实窗口四次缩放及最小化恢复全部通过；[最终有效证据](../../data/experiments/gui_v2/p1_20261021_04/result.json)，exe SHA256 `33f3ca409e623f5009c1620b7c93de9c60dc00382372b4db30843899ebd463aa`。RTX 4070 Ti，设备 API 1.4.341；使用官方 SDK 1.4.363.0 中解出的 validation layer，未执行 SDK 安装器、未改注册表。validation API 错误/警告均为 0；3 条 general loader 环境警告（重复的 NVIDIA/OBS 隐式层注册）单独计数，完整日志保留。正常启动不启用该开发层。
 - P1 隔离：原构建入口在独立 `build_gui_v2_legacy_proof` 构建 DX11 GUI，自检 33 项通过；缺专用 headers 的 v2 配置明确失败。未修改旧 GUI、旧 ImGui 或公共 0.46.7 版本。宿主仅单窗口，无计算任务、UI 状态保存和多 viewport 资格结论。
 - P1 诊断：第一次生命周期测试暴露 resize 后访问冲突。最小复现定位到 Vulkan backend shutdown 同时销毁主 viewport 的 Win32 数据；重建时按顺序同时重新初始化两个后端，保留 ImGui context。第二次复测暴露测试读取日志的文件共享问题，改为允许并发只读日志。失败目录 `_01`、`_02` 与最小诊断日志均保留，未改旧代码或降低门限。
-- P2：待实施。主题、字体和控件仅进入 v2；P3–P6 不在本批完成范围。
+- P2：已完成，v2 里程碑 0.47.2。`ui/theme.*` 集中 Ely 明暗语义色及逻辑尺寸；`ui/fonts.*` 建立正文 15、辅助 13、标题 22、等宽 15 逻辑像素角色，使用系统 Segoe UI / 微软雅黑 / Consolas 与 CJK 合并救援。字体缺失回退英文并显示说明。`ui/widgets.*` 提供按钮、有限线条图标、导航选择、SectionHeader、FormRow/路径输入和状态样板；语言切换保持控件 ID，窄窗口换行及滚动，不接业务控制。MIT 设计告知见 `ui/NOTICE.md`，不分发系统字体或 Lucide 资产。
+- P2 验证：[最终组合证据](../../data/experiments/gui_v2/p2_20261021_06/result.json)，exe SHA256 `4454d74fad8fe4dd13511729ef81964e4b4e6508979dcb5ae7d84dc378386b8f`。中英 × 明暗 × 100/125/150/200% 共 16 组合，完整预热后 3 轮、48 个采样；字号/间距不累乘，正文和等宽字体均有中文字形，等宽 i/W 宽度一致。同一状态跨轮的显式 Vulkan 分配字节/数量/纹理数完全一致；范围 465408–1222656 bytes，每状态 5 个分配、1 个纹理，正常退出全部归零。该审计不包含驱动/swapchain 全部驻留，不能视为进程总显存或性能优势。
+- P2 输入与回退：ImGui 鼠标注入验证按钮，Win32 文本与 Escape/Tab 消息验证输入及可见键盘焦点；缺中文字体的受控模拟正确回退英文。普通模式不启用测试消息。真实桌面鼠标/焦点、IME 与物理跨屏 DPI 仍留 P3；四档比例验证不能替代跨屏资格。真实 HWND 的 P1 六项宿主回归在最终 P2 上再次通过，见 [宿主证据](../../data/experiments/gui_v2/p2_host_20261021_03/result.json)。validation API 错误/警告均为 0，原有 3 条 general 环境警告仍单独记录。
+- P2 诊断证据：首轮将首次启动容量与完整切换历史后的缓冲容量比较，发现 1 KiB 差异。逐块审计确认字体纹理同为 262144 bytes，变化来自顶点/索引缓冲（768+256 bytes）；固定完整预热序列后再比较三轮，未放宽相等门限。截图工具改为与宿主一致的物理 DPI 坐标。第三/四轮后台 Win32 鼠标消息受真实桌面鼠标所在窗口影响，改为显式 `--audit-ui` 的 ImGui 输入注入；实际桌面输入不据此宣称通过。原始 `_01`–`_04` 日志和截图保留，`_05` 已通过控件验收；补齐 loader 诊断及原子验证计数后，最终二进制证据为 `_06`。
+- P2 构建隔离：根工程 `ECM_BUILD_GUI=OFF`、`ECM_BUILD_GUI_V2=ON` 的独立目标构建通过，日志在 `data/experiments/gui_v2/root-*.log`；专用入口不依赖计算库。默认入口输出 `build_gui_v2_local/`，exe SHA256 `5b1c1eaf9a3b8a84a2ddb20945c5745b04df12207e03e80b8ac0e2453ce63c08`；移除 SDK/validation 环境变量后普通启动、8 帧呈现与退出通过，见 [默认入口证据](../../data/experiments/gui_v2/p2_default_smoke_20261021/result.json)。这是本机系统 runtime 验证，不代替干净分发机验收。补齐 loader 1.4.341 / 请求 API 1.1.0 / instance 扩展诊断，验证回调计数使用原子变量。新增依赖文件指定 LF，保证来源 SHA256 在 Windows checkout 后保持一致。当前使用与限制另见 [GUI v2 开发预览](../usage/GUI_V2.md)。
+- P2 文档：HTML 同步显示 3 个已完成阶段、4 个待实施阶段；离线浏览器验证阶段切换、明暗阅读、窄布局和 390px 视口均通过，无脚本错误或横向溢出。验证入口 `tools/test/gui_v2/test_plan_html.cjs`；草稿继续保留，等待用户决定后续整理。
 - 草稿与 HTML 由 `tools/gen/render_gui_v2_plan.py` 同步，原始证据保留在忽略目录。各阶段独立提交 `[0.47.z]`。
 
 ## 1. 分析边界与基线
 
-- 仓库基线：本次修订检查时 HEAD 为 `8969467`，工作区已有其他开发中的改动；分析包含工作区源码，不能视作该提交的纯净快照。
+- 初始分析检查时 HEAD 为 `8969467`，包含当时工作区改动；正式 P0–P2 实施从干净的 `a30c373` 开始，以 P0 保护清单及二进制哈希作为验收身份。
 - 公共源码版本与 `build_gui_local/ecm_gui.exe --version` 均为 `ECM-ELF 0.46.7`。相同版本号不能独立证明源码和二进制完全一致。
-- 本次修订核对的旧 GUI SHA256：`32F3A9A2905FF39E6F098F0C943DEDBAA3BDBEA291EF7122417634958B85919B`。这不是将来 v2 的构建身份；P0 仍须冻结实际验收基线。
+- 旧 GUI SHA256：`32F3A9A2905FF39E6F098F0C943DEDBAA3BDBEA291EF7122417634958B85919B`，已由 P0 冻结；不代表 v2 构建身份。
 - 当前 GUI 统一构建入口为 `tools/build/build_gui.bat`，默认输出 `build_gui_local/`，不另设 dev/local/release 三套 GUI 构建。见 `tools/build/README.md`、`tools/build/dev/build_gui.ps1`。
 - 初始规划的布局依据源码重建；实际验证与完成范围以本文件“实施进度”为准，未验证的输入法、跨屏和性能仍不能视作通过。
 - 本机二进制不当作对外发布版本。本批按 P0–P2 建立新版里程碑，不修改旧版公共版本、不发布安装包。
@@ -87,7 +92,7 @@ worker 管理顶部还同时容纳数量、两个程序路径、TOML 路径和�
 
 组件库 `src/theme/palette.rs` 定义成组语义：`bg/surface/sunken/overlay`、`hover/active`、`border/border_strong`、`fg/fg_muted/fg_subtle/fg_disabled`、`accent/on_accent`、`focus/link/selection`、`success/warning/danger/info`。
 
-当前上游深色基础值为背景 `#252525`、表面 `#2c2c2c`、内嵌 `#202020`、文字 `#f3f1f0`、边框 `#3f3f3f`；浅色对应 `#fcfaf7`、`#ffffff`、`#f6f4f1`、`#181613`、`#e1dfdd`。这些是参考值，尚未接入 ECM GUI。
+上游深色基础值为背景 `#252525`、表面 `#2c2c2c`、内嵌 `#202020`、文字 `#f3f1f0`、边框 `#3f3f3f`；浅色对应 `#fcfaf7`、`#ffffff`、`#f6f4f1`、`#181613`、`#e1dfdd`。P2 已接入独立 v2 主题，旧 GUI 配色保持原样。
 
 采用以下规则：
 
@@ -205,7 +210,7 @@ swapchain 图像数量变化还需核对固定 API 的实际限制：该版本 `
 - `ui_state.*`：独立 v2 UI 状态读写与 schema 版本；不持有 WorkerProc。
 - v2 专用第三方目录记录固定 Vulkan 后端文件、来源提交和许可。需要后端修复时先评估 v2 独立版本，禁止给旧目录打补丁。
 
-P1 已建立入口与 render 模块；UI 模块从 P2 开始，shell/views/ui_state 尚待实施。优先使用 ImGui 公共 API；DockBuilder 内部 API 限于 v2 布局模块。不引入通用渲染引擎或 GPUI 兼容层。
+P1 已建立入口与 render 模块，P2 已建立 theme/fonts/widgets；当前样板导航只服务组件预览，完整 shell/views/ui_state 尚待 P3–P4。优先使用 ImGui 公共 API；DockBuilder 内部 API 限于 v2 布局模块。不引入通用渲染引擎或 GPUI 兼容层。
 
 ### 5.1 只读复用业务模块
 
@@ -314,12 +319,14 @@ v1/v2 使用不同 exe、构建目录、UI 状态、布局版本和资源位置�
 
 复用旧GUI无窗口helper、日志/结果/生成器/Controller合同与固定输入。Vulkan/新版UI/独立状态测试放新增 `tools/test/gui_v2/` 或明确的v2测试入口，显式指向 `ecm_gui_v2.exe`，不改旧几何/像素期望适配新版。需要时将可复用测试增加独立v2调用包装，旧调用方式与期望不变。
 
-旧 `test_gui_all.ps1` 等部分脚本默认查找旧 `build_gui/`，保留这些脚本，不把它们直接当v2全套验收。旧版回归和v2验收分别指定二进制、配置、构建目录与证据位置。v2测试helper显式构建，不进入普通交付目标。本轮没有执行这些回归。
+旧 `test_gui_all.ps1` 等部分脚本默认查找旧 `build_gui/`，保留这些脚本，不把它们直接当 v2 全套验收。旧版回归和 v2 验收分别指定二进制、配置、构建目录与证据位置。v2 测试 helper 显式构建，不进入普通交付目标。P0 已运行的旧合同检查、P1–P2 宿主/组件检查见实施进度；完整业务与性能回归仍属于后续阶段。
 
 ## 8. 待验证事项与首批范围
 
 首批实际实现为P0–P2：原版保护基线、独立Vulkan宿主、Ely主题与字体样板。先证明渲染/重建/纹理生命周期，再实现复杂页面。
 
-TODO：Vulkan SDK实际位置及依赖版本；固定后端最低API/扩展；Win32 surface桥接与多viewport闪烁；主次窗口呈现策略；渲染设备选择；旧程序并行控制身份；v2UI侧车schema和权威生成定义；字体/CJK资产；宽窄布局实测；大Result阻塞基线；Vulkan/计算并行的资源与功耗；分发机无SDK验证。
+已确认：固定依赖来源/许可与最低 Vulkan 1.1 要求，Win32 主 surface 桥接，单窗口 FIFO，同帧字体纹理更新、帧间安全重载，四档比例和中英明暗组件样板。渲染设备为首个满足 graphics/present+swapchain 的设备，不改变计算设备配置。
+
+TODO：多 viewport 闪烁与主次窗口呈现/跨屏 DPI/IME；用户选择渲染设备；旧程序并行控制身份；v2 UI 侧车 schema 和权威生成定义；完整业务布局与各页接线；可选随包字体资产；大 Result 阻塞基线；Vulkan/计算并行的资源、总显存与功耗；干净分发机无 SDK 验证。
 
 本批实施范围为 P0–P2，实际状态见实施进度。后续 P3–P6 仍是规划；原 GUI 的源码、目标、状态和公共版本保持不变，不将样板程序当作完整前端发布。

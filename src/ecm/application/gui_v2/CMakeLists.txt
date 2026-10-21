@@ -31,7 +31,8 @@ target_include_directories(ecm_gui_v2_backend PUBLIC "${ECM_GUI_V2_IMGUI}" "${EC
 target_compile_definitions(ecm_gui_v2_backend PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK VK_USE_PLATFORM_WIN32_KHR
     WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_compile_features(ecm_gui_v2_backend PUBLIC cxx_std_17)
-add_executable(ecm_gui_v2 WIN32 main_win32.cpp render/vulkan_context.cpp render/vulkan_window.cpp)
+add_executable(ecm_gui_v2 WIN32 main_win32.cpp render/vulkan_context.cpp render/vulkan_window.cpp
+    ui/theme.cpp ui/fonts.cpp ui/widgets.cpp)
 target_link_libraries(ecm_gui_v2 PRIVATE ecm_gui_v2_backend user32 gdi32 shell32 dwmapi)
 target_compile_options(ecm_gui_v2 PRIVATE /W4 /utf-8 /EHsc)
 target_compile_options(ecm_gui_v2_backend PRIVATE /W3 /utf-8)

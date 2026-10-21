@@ -40,6 +40,12 @@ void VulkanContext::initialize(HWND window, bool validation, bool no_loader, FIL
     for (const char* name : extensions)
         if (std::none_of(available.begin(), available.end(), [&](const auto& e) { return std::strcmp(e.extensionName, name) == 0; }))
             throw std::runtime_error(std::string("Missing Vulkan instance extension: ") + name);
+    const auto loader_version = volkGetInstanceVersion();
+    std::fprintf(log_, "instance: loader=%u.%u.%u requested=%u.%u.%u extensions=",
+        VK_VERSION_MAJOR(loader_version), VK_VERSION_MINOR(loader_version), VK_VERSION_PATCH(loader_version),
+        VK_VERSION_MAJOR(api_version), VK_VERSION_MINOR(api_version), VK_VERSION_PATCH(api_version));
+    for (const auto extension : extensions) std::fprintf(log_, "%s ", extension);
+    std::fprintf(log_, "\n"); std::fflush(log_);
     const char* layer = "VK_LAYER_KHRONOS_validation";
     if (validation) {
         check_vk(vkEnumerateInstanceLayerProperties(&count, nullptr), "enumerate validation layers");
@@ -119,7 +125,7 @@ VulkanContext::~VulkanContext() {
     if (surface) vkDestroySurfaceKHR(instance, surface, nullptr);
     if (messenger_) vkDestroyDebugUtilsMessengerEXT(instance, messenger_, nullptr);
     if (instance) vkDestroyInstance(instance, nullptr);
-    if (log_) { std::fprintf(log_, "validation_summary: errors=%u warnings=%u environment_warnings=%u\n", validation_errors, validation_warnings, environment_warnings); std::fflush(log_); }
+    if (log_) { std::fprintf(log_, "validation_summary: errors=%u warnings=%u environment_warnings=%u\n", validation_errors.load(), validation_warnings.load(), environment_warnings.load()); std::fflush(log_); }
     if (loader_) volkFinalize();
 }
 }

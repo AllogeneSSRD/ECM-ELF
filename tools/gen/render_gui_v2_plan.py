@@ -72,8 +72,10 @@ for match in re.finditer(r'^### (P[0-6]) ([^\n]+)\n\n(.*?)(?=^### P[0-6] |^## 7\
 assert len(phases) == 7
 progress = text.split('## 实施进度', 1)[1].split('## 1.', 1)[0].strip() if '## 实施进度' in text else '尚未开始实施。'
 status = re.search(r'^状态：([^。]+)', text, re.M).group(1)
+for phase in phases:
+    phase['state'] = '已完成' if re.search(r'^- ' + phase['id'] + r'：已完成', progress, re.M) else '待实施'
 
-phase_buttons = ''.join(f'<button class="phase-button" data-phase="{i}" aria-pressed="{str(i==0).lower()}"><span>{p["id"]}</span>{html.escape(p["title"])}</button>' for i,p in enumerate(phases))
+phase_buttons = ''.join(f'<button class="phase-button" data-phase="{i}" data-state="{p["state"]}" aria-pressed="{str(i==0).lower()}"><span>{p["id"]} · {p["state"]}</span>{html.escape(p["title"])}</button>' for i,p in enumerate(phases))
 page = r'''<!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
@@ -135,6 +137,9 @@ window.addEventListener("beforeprint",()=>{document.getElementById("full-details
 page = page.replace('环境核对仅发现未设置 VULKAN_SDK、无 C:/VulkanSDK；尚未完成其他路径和运行能力检测。', 'P1 已在 RTX 4070 Ti 上通过单窗口 Vulkan / validation 验证。构建使用固定 headers 和 Volk，无开发 SDK 依赖；开发验证层仅解压在证据目录。')
 page = page.replace('规划 · 尚未实施', html.escape(status))
 page = page.replace('规划状态，尚未实施', html.escape(status))
+page = page.replace('P0 · 基线', 'P0 · ' + phases[0]['state'])
+page = page.replace('phase.id+" · 规划阶段"', 'phase.id+" · "+phase.state')
+page = page.replace('<a href="../usage/GUI.md">原 GUI 当前说明</a>', '<a href="../usage/GUI.md">原 GUI 当前说明</a><a href="../usage/GUI_V2.md">GUI v2 开发预览说明</a>')
 page = page.replace('<section id="boundaries">', '<section id="progress"><h2>实施进度</h2>' + markdown(progress) + '</section><section id="boundaries">')
 page = page.replace('<nav aria-label="章节">', '<nav aria-label="章节"><a href="#progress">实施进度</a>')
 page = page.replace('未构建 GUI v2、未测量运行性能、未执行发布。', '实际完成范围与验证见实施进度；后续阶段不视为已完成，未执行发布。')

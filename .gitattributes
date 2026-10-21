@@ -184,3 +184,7 @@ src/ecm/application/configuration/legacy/ecm_expr.h -text diff whitespace=cr-at-
 
 # Generated host defaults have no TOML or application implementation dependency.
 src/ecm/platform/generated/*.h text eol=lf
+
+# GUI v2 dependency provenance records raw upstream SHA256 hashes.
+third_party/gui_v2_vulkan/** text eol=lf
+third_party/imgui_vulkan/** text eol=lf
