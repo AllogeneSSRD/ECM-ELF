@@ -732,8 +732,8 @@
     "src/ecm/core/stage1/ecm_edwards_naf.h": "include/ecm/core/stage1/scalar.h",
     "src/core/ecm_stage1_gpu_progress.h": "include/ecm/platform/stage1_progress.h",
     "src/ecm/platform/legacy/ecm_stage1_gpu_progress.h": "include/ecm/platform/stage1_progress.h",
-    "src/core/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp",
-    "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp",
+    "src/core/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/workflow.cpp",
+    "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/workflow.cpp",
     "src/core/ecm_stage1_selection.h": "include/ecm/core/stage1/selection.h",
     "src/ecm/application/configuration/ecm_stage1_selection.h": "include/ecm/core/stage1/selection.h",
     "src/core/ecm_result_submission.h": "include/ecm/storage/results/publication.h",
@@ -818,6 +818,8 @@
     "src/ecm/service/planning/legacy/ecm_stage2_width_reference.h": "src/ecm/service/planning/ecm_stage2_width_reference.h",
     "src/ecm/service/stage2/legacy/ecm_stage2_factorize.h": "src/ecm/service/stage2/ecm_stage2_factorize.h",
     "src/ecm/backend/cuda/stage1/edwards/diagnostics/host_wait.h": "src/ecm/backend/cuda/stage1/edwards/host_wait.h",
-    "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h": "src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h"
+    "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h": "src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h",
+    "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp": "src/ecm/backend/cuda/stage1/edwards/workflow.cpp",
+    "src/ecm/backend/cuda/stage1/edwards/host_workflow.h": "src/ecm/backend/cuda/stage1/execution.h"
   }
 }

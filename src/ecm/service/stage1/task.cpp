@@ -178,7 +178,7 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
         const auto begin=std::chrono::steady_clock::now();
         ExecutionOptions execution(opt);
         const int rc=deps.execute(N,B1,B2,curves,savefilename,saveappend,n_expr,execution,out);
-        if(rc==ECM_ERROR){if(!ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;session.close(false);out->finish_task(rc,ecm_stage1_stop_requested()!=0);return result;}
+        if(rc==ECM_ERROR){if(out->completion==ExecutionResult::Completion::Legacy && !ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;session.close(false);out->finish_task(rc,ecm_stage1_stop_requested()!=0);return result;}
         if(!out->sigmas || !out->factors || !out->array_found)throw std::runtime_error("Stage1 completed without per-curve result identity");
         const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
         std::vector<std::pair<std::string,std::string>> internal_records;

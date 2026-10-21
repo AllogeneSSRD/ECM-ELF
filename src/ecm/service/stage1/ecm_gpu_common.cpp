@@ -7,7 +7,7 @@
    them without pulling in a specific GPU backend.
 */
 
-#include "../execution/cgbn_stage1.h"
+#include "gpu_common.h"
 
 #include <gmp.h>
 

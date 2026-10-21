@@ -134,7 +134,7 @@ PARAM 被禁止；默认不写 PROGRAM/WHO/TIME，也不写 Z。可选 Z 若提�
 
 CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且不超过2⁵³，并验证 FACTOR 严格大于1且整除 N。CUDA 读取器另受自身位宽上限约束；不能将两个入口的检查集合视为完全相同。
 
-来源：[save_line / save_checksum](../../src/ecm/storage/save/ecm_edwards_io.h#L19)、[坐标与状态判定](../../src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp)、[CPU 专用读取](../../src/ecm/storage/save/ecm_edwards_save_reader.h#L22)。
+来源：[save_line / save_checksum](../../src/ecm/storage/save/ecm_edwards_io.h#L19)、[坐标与状态判定](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)、[CPU 专用读取](../../src/ecm/storage/save/ecm_edwards_save_reader.h#L22)。
 
 ## 6. 写入、去重与发布
 

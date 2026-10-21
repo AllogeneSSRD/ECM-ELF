@@ -54,6 +54,11 @@ static int execute(mpz_srcptr,double,double,uint32_t count,const std::string &,b
         return ECM_ERROR; // Deliberately only sigmas: owner must release independently.
     }
     if(mode=="prepare") {out->prepare_failed=true;return ECM_ERROR;}
+    if(mode=="execution" || mode=="execution_stop") {
+        if(mode=="execution_stop")stop_now();
+        out->fail(FailureSource::Execution);
+        return ECM_ERROR;
+    }
     auto *factors=static_cast<mpz_t *>(std::malloc(sizeof(mpz_t)*count));
     auto *found=static_cast<int *>(std::malloc(sizeof(int)*count));
     if(!factors || !found){std::free(factors);std::free(found);throw std::bad_alloc();}
@@ -100,6 +105,9 @@ int main(int argc,char **argv) {
         } else if(mode=="publication" || mode=="stop_publication") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Publication,"publication priority/source");
             require(fs::exists(checkpoint),"publication failure lost checkpoint");
+        } else if(mode=="execution" || mode=="execution_stop") {
+            require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Execution,"explicit execution failure/stop priority");
+            require(fs::exists(checkpoint) && !fs::exists(options.persistence.submission_file),"execution failure lost recovery or published NF");
         } else if(mode=="prepare" || mode=="throw" || mode=="bad_begin") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Preparation,"legacy preparation mapping");
             if(mode=="bad_begin") {

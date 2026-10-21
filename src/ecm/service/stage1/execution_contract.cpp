@@ -19,16 +19,29 @@ ExecutionResult::~ExecutionResult() {
         free(sigmas); // May exist on a stopped CPU Montgomery task with no factors.
     }
 
+void ExecutionResult::fail(FailureSource source) noexcept {
+    ret=ECM_ERROR;completion=Completion::Failed;failure_source=source;
+    prepare_failed=source==FailureSource::Preparation;
+    publish_failed=source==FailureSource::Publication;
+}
+
+void ExecutionResult::stop() noexcept {
+    ret=ECM_ERROR;completion=Completion::Stopped;
+}
+
 void ExecutionResult::finish_task(int code,bool stopped) noexcept {
         task_return=code;
         // Publication/prepare failure retains the existing fatal queue policy,
         // even when a stop was requested at the same time.
-        if(prepare_failed || publish_failed) {
+        if(completion==Completion::Failed || prepare_failed || publish_failed) {
             status=TaskStatus::Failed;
-            failure_source=publish_failed?FailureSource::Publication:FailureSource::Preparation;
+            if(failure_source==FailureSource::None)
+                failure_source=publish_failed?FailureSource::Publication:FailureSource::Preparation;
         } else if(ret==ECM_ERROR) {
-            status=stopped?TaskStatus::Stopped:TaskStatus::Failed;
-            failure_source=stopped?FailureSource::None:FailureSource::Execution;
+            const bool interrupted=completion==Completion::Stopped ||
+                (completion==Completion::Legacy && stopped);
+            status=interrupted?TaskStatus::Stopped:TaskStatus::Failed;
+            failure_source=interrupted?FailureSource::None:FailureSource::Execution;
         } else {
             status=TaskStatus::Completed;
             failure_source=FailureSource::None;
@@ -37,6 +50,7 @@ void ExecutionResult::finish_task(int code,bool stopped) noexcept {
 
 void ExecutionResult::swap(ExecutionResult &other) noexcept {
         using std::swap;
+        swap(completion,other.completion);
         swap(status,other.status);swap(failure_source,other.failure_source);swap(task_return,other.task_return);
         swap(ret,other.ret);swap(prepare_failed,other.prepare_failed);swap(publish_failed,other.publish_failed);
         swap(curves,other.curves);swap(firstsigma,other.firstsigma);swap(firstsigma64,other.firstsigma64);

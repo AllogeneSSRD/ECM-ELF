@@ -9,8 +9,8 @@
 #else
 #include <unistd.h>
 #endif
-#ifndef ECM_HAS_CUDA_EDWARDS
-#define ECM_HAS_CUDA_EDWARDS 0
+#ifndef ECM_HAS_CUDA_STAGE1
+#define ECM_HAS_CUDA_STAGE1 0
 #endif
 namespace ecm_stage1_app {
 using Stage1Options=ecm_stage1::Stage1Options;
@@ -80,7 +80,7 @@ bool stage1_save_construction(const std::string &name,Stage1Options &opt,std::st
 
 bool stage1_selection_error(const ecm_stage1::Selection &selection,
                                    std::string &error) {
-    if (!ecm_stage1::valid_route(selection, ECM_HAS_CUDA_EDWARDS != 0)) {
+    if (!ecm_stage1::valid_route(selection, ECM_HAS_CUDA_STAGE1 != 0)) {
         error = "GPU Edwards requires the CUDA backend";
         return true;
     }

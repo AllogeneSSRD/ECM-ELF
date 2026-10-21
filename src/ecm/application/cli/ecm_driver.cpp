@@ -80,8 +80,8 @@ using ecm_stage1_app::print_group_order_factor;
 #ifndef ECM_BUILD_ID
 #define ECM_BUILD_ID "development"
 #endif
-#ifndef ECM_HAS_CUDA_EDWARDS
-#define ECM_HAS_CUDA_EDWARDS 0
+#ifndef ECM_HAS_CUDA_STAGE1
+#define ECM_HAS_CUDA_STAGE1 0
 #endif
 // Application assembly still selects the CPU default NAF window.
 #include "../../backend/cpu/stage1/edwards/ecm_edwards_cpu.h"

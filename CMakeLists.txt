@@ -136,7 +136,9 @@ endforeach()
 foreach(_source include/ecm/storage/results/publication.h src/ecm/storage/results/ecm_result_json.h
                 include/ecm/core/stage1/selection.h include/ecm/core/stage1/scalar.h include/ecm/service/stage1/task.h
                 src/ecm/service/stage1/execution_contract.h src/ecm/platform/generated/configuration_defaults.h
-                src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp
+                src/ecm/backend/opencl/stage1/montgomery/workflow.cpp
+                src/ecm/backend/cuda/stage1/montgomery/workflow.cpp
+                src/ecm/backend/cuda/stage1/edwards/workflow.cpp
                 src/ecm/backend/cuda/stage1/montgomery/host_math.cpp src/ecm/backend/cuda/stage1/montgomery/host_io.cpp
                 src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp
                 src/ecm/storage/save/ecm_edwards_io.h include/ecm/platform/program_version.h
@@ -157,6 +159,7 @@ endfunction()
 
 add_executable(ecm
     ${ECM_STAGE1_COMMON_SOURCES}
+    src/ecm/backend/opencl/stage1/montgomery/workflow.cpp
     src/ecm/backend/opencl/stage1/montgomery/engine.cpp
     src/ecm/backend/opencl/factory.cpp
     src/ecm/backend/opencl/runtime/device.cpp
@@ -298,7 +301,7 @@ if(ECM_ENABLE_CUDA)
         add_library(ecm_cuda_prac OBJECT ${ECM_STAGE1_PRAC_SOURCES})
         target_sources(ecm_cuda PRIVATE $<TARGET_OBJECTS:ecm_cuda_prac>)
     endif()
-    target_compile_definitions(ecm_cuda PRIVATE ECM_HAS_CUDA_EDWARDS=1 ECM_CUDA_ENABLE_PRAC=$<BOOL:${ECM_CUDA_ENABLE_PRAC}>)
+    target_compile_definitions(ecm_cuda PRIVATE ECM_HAS_CUDA_STAGE1=1 ECM_CUDA_ENABLE_PRAC=$<BOOL:${ECM_CUDA_ENABLE_PRAC}>)
     # CGBN uses uint32_t without including stdint.h. CUDA 12.6 does not provide
     # that transitive include; keep the compatibility fix in our tracked build.
     target_compile_options(ecm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--pre-include=stdint.h>)

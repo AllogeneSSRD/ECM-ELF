@@ -18,7 +18,8 @@ New-Item -ItemType Directory -Path $output|Out-Null
 $sources=@('src/ecm/service/stage1/execution_contract.cpp','src/ecm/service/stage1/preparation.cpp','src/ecm/backend/cpu/stage1/legacy_executor.cpp')
 if($IncludeGpuHost){
     $sources+=@('src/ecm/service/stage1/execution.cpp',
-        'src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp')
+        'src/ecm/backend/cuda/stage1/montgomery/workflow.cpp',
+        'src/ecm/backend/cuda/stage1/edwards/workflow.cpp')
 }
 if($IncludeMontgomeryHost){
     $sources+=@('src/ecm/backend/cuda/stage1/montgomery/host_math.cpp',
@@ -30,7 +31,7 @@ if($IncludeQueueHost){
         'src/ecm/application/cli/queue_source.cpp','src/ecm/service/work/queue_workflow.cpp')
 }
 if($EnablePracHost -and -not $IncludeMontgomeryHost){throw 'EnablePracHost requires IncludeMontgomeryHost'}
-$definitions=if($IncludeGpuHost){' /DECM_HAS_CUDA_EDWARDS=1'}else{''}
+$definitions=if($IncludeGpuHost){' /DECM_HAS_CUDA_STAGE1=1'}else{''}
 $definitions+=' /DECM_CUDA_ENABLE_PRAC='+$(if($EnablePracHost){'1'}else{'0'})
 $commands=@();$objects=[ordered]@{};$hashes=[ordered]@{}
 foreach($source in $sources){

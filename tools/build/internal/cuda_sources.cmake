@@ -75,7 +75,8 @@ set(ECM_STAGE1_MONT_SOURCES
 set(ECM_STAGE1_CUDA_SOURCES
     src/ecm/application/configuration/runtime.cpp
     src/ecm/backend/cuda/factory.cpp
-    src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp
+    src/ecm/backend/cuda/stage1/montgomery/workflow.cpp
+    src/ecm/backend/cuda/stage1/edwards/workflow.cpp
     src/ecm/backend/cuda/stage1/montgomery/host_math.cpp
     src/ecm/backend/cuda/stage1/montgomery/host_io.cpp
     src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp

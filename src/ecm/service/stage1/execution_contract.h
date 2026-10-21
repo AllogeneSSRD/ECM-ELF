@@ -14,6 +14,10 @@ struct ExecutionOptions : Stage1Options {
 };
 
 struct ExecutionResult {
+    // Legacy CPU/OpenCL collaborators may still report through the old flags.
+    // CUDA workflows report failure or stop explicitly, before returning.
+    enum class Completion { Legacy, Stopped, SampleLimit, Failed };
+    Completion completion = Completion::Legacy;
     TaskStatus status = TaskStatus::Failed;
     FailureSource failure_source = FailureSource::None;
     int task_return = ECM_ERROR; // Preserve the task/legacy return-code distinction.
@@ -31,6 +35,8 @@ struct ExecutionResult {
     ExecutionResult(ExecutionResult &&other) noexcept;
     ExecutionResult &operator=(ExecutionResult &&other) noexcept;
     ~ExecutionResult();
+    void fail(FailureSource source) noexcept;
+    void stop() noexcept;
     void finish_task(int code,bool stopped) noexcept;
     void swap(ExecutionResult &other) noexcept;
     // Per-curve sigma of THIS batch (malloc'd, `curves` entries, owned by this result; may be

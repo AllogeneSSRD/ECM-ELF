@@ -53,7 +53,7 @@ def main():
     expected=body(old('src/ecm/service/stage1/task.cpp'),'stage1_results_complete').replace('opt.persistence.results_file','path')
     assert body(impl,'contains_stage1_curves')==expected
     assert 'stage1_results_complete' not in read('src/ecm/service/stage1/task.cpp')
-    for name in ['src/ecm/service/stage1/execution.cpp','src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp']:
+    for name in ['src/ecm/backend/cuda/stage1/montgomery/workflow.cpp','src/ecm/backend/opencl/stage1/montgomery/workflow.cpp','src/ecm/backend/cuda/stage1/edwards/workflow.cpp']:
         s=read(name);assert 'ecm_results::contains_stage1_curves(opt.persistence.results_file,' in s
     assert 'SubmissionLock' not in public and not re.search(r'#\s*include[^\n]*(?:windows|src/|cuda|cgbn)',public)
     assert not re.search(r'inline |std::ofstream|std::ifstream|directory_iterator|mpz_gcd\(|WriteFile\(',public)

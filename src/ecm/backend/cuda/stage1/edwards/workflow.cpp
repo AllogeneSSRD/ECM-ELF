@@ -1,5 +1,5 @@
 #include "ecm/storage/results/publication.h"
-#include "host_workflow.h"
+#include "../execution.h"
 #include "../../../../service/stage1/preparation.h"
 #include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "ecm/platform/logging.h"
@@ -94,12 +94,14 @@ static bool publish(const std::string &path,const std::string &lines,bool append
 }
 }
 
-int ecm_cuda_edwards::run_stage1(const mpz_t n,double b1,double b2,uint32_t curves,
-        const std::string &savefilename,bool saveappend,const Stage1Options &opt,ExecutionResult *out) {
+int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32_t curves,
+        const std::string &savefilename,bool saveappend,const std::string &n_expr,const Stage1Options &opt,ExecutionResult *out) {
     using namespace ed_gpu_driver;
     *out=ExecutionResult{};out->curves=curves;
     if(!curves)return ECM_ERROR;
+    auto phase=ecm_stage1::FailureSource::Preparation;
     try {
+        (void)n_expr;
         const auto initialization_start=Progress::Clock::now();
         if(opt.execution.naf_w!=0 && (opt.execution.naf_w<2 || opt.execution.naf_w>12))throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
         Integer scalar;if(!compute_batch_s(scalar.v,b1,48))throw std::runtime_error("cannot build Edwards exponent");
@@ -161,6 +163,7 @@ int ecm_cuda_edwards::run_stage1(const mpz_t n,double b1,double b2,uint32_t curv
                        container,tpi,(curves+128/tpi-1)/(128/tpi));
         EcmEdwardsNafMetrics metrics;
         Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),mpz_sizeinbase(scalar.v,2),&metrics,initialization_start};std::string error;
+        phase=ecm_stage1::FailureSource::Execution;
         const auto arithmetic_start=std::chrono::steady_clock::now();
         const int rc=batch.window?
             ecm_cuda_edwards_stage1_naf(n,scalar.v,batch.state.data(),curves,batch.done,0,
@@ -174,7 +177,8 @@ int ecm_cuda_edwards::run_stage1(const mpz_t n,double b1,double b2,uint32_t curv
             metrics.columns,metrics.additions,metrics.container_bits,metrics.tpi,
             static_cast<unsigned long long>(metrics.dictionary_bytes),metrics.dictionary_gpu_ms,metrics.loop_gpu_ms,metrics.launches);
         if(rc<0)throw std::runtime_error(error);
-        if(rc==2){out->publish_failed=p.failed;return ECM_ERROR;}
+        if(rc==2){if(p.failed)out->fail(ecm_stage1::FailureSource::Publication);else out->stop();return ECM_ERROR;}
+        phase=ecm_stage1::FailureSource::Publication;
         if(!path.empty() && !write_checkpoint(path,batch,n,scalar.v,uint64_t(b1))) {
             out->publish_failed=true;throw std::runtime_error("cannot retain completed Edwards batch");
         }
@@ -215,7 +219,7 @@ int ecm_cuda_edwards::run_stage1(const mpz_t n,double b1,double b2,uint32_t curv
         if(!save.empty())ecm_ts_fprintf(stdout,"Edwards Stage1 save: %s (%u curves)\n",save.c_str(),curves);
         (void)b2;return out->ret;
     } catch(const std::exception &e) {
-        out->prepare_failed=!out->publish_failed;
+        out->fail(out->publish_failed?ecm_stage1::FailureSource::Publication:phase);
         ecm_ts_fprintf(stderr,"ERROR: GPU Edwards Stage1: %s\n",e.what());return ECM_ERROR;
     }
 }
