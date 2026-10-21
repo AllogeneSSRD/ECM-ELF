@@ -1,5 +1,5 @@
 #include "ecm/service/stage1/task.h"
-#include "../../src/ecm/service/stage1/legacy_execution.h"
+#include "../../src/ecm/service/stage1/execution_contract.h"
 #include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include <filesystem>
 #include <fstream>
@@ -39,7 +39,7 @@ static int window() {return 8;}
 // Computation is replaced at the private legacy seam. Real task sequencing,
 // checkpoint locking, publication, result ownership and status mapping run.
 static int execute(mpz_srcptr,double,double,uint32_t count,const std::string &,bool,
-                   const std::string &,Stage1ExecutionOptions &options,LegacyStage1Result *out) {
+                   const std::string &,ExecutionOptions &options,ExecutionResult *out) {
     ++calls;
     require(options.stage1_curves==0 && options.stage1_t0_ms==0,"execution state reused");
     options.stage1_curves=count;options.stage1_t0_ms=123;

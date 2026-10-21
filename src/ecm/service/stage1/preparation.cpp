@@ -24,7 +24,7 @@
 #endif
 
 namespace ecm_stage1 {
-using Stage1RunOptions=Stage1Options;
+using Stage1Options=Stage1Options;
 bool compute_batch_s(mpz_t s, double B1, unsigned torsion){
     if(B1 < 2.0) {
         mpz_set_ui(s, torsion);
@@ -65,7 +65,7 @@ uint64_t random_sigma_u64() {
     return sigma;
 }
 
-std::string stage1_save_prefix(const Stage1RunOptions &opt) {
+std::string stage1_save_prefix(const Stage1Options &opt) {
     if(opt.execution.selection.curve==ecm_stage1::CurveModel::Edwards)return "e";
     return "m"+std::to_string(opt.execution.selection.target==ecm_stage1::ExecutionTarget::Gpu?opt.execution.selection.gpu_param:0);
 }
@@ -80,7 +80,7 @@ std::string stage1_prefixed_save(const std::string &name,const std::string &pref
 }
 
 std::string mont_format_save_name(const std::string &pattern, const mpz_t N, double B1,
-                                         const Stage1RunOptions *options) {
+                                         const Stage1Options *options) {
     /* {n} */
     std::string n_str;
     {

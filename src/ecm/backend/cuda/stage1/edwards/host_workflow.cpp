@@ -8,8 +8,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-using ecm_stage1::Stage1RunOptions;
-using ecm_stage1::LegacyStage1Result;
+using ecm_stage1::Stage1Options;
+using ecm_stage1::ExecutionResult;
 using ecm_stage1::compute_batch_s;
 using ecm_stage1::random_sigma_u64;
 using ecm_stage1::mont_format_save_name;
@@ -31,13 +31,13 @@ using ecm_stage1::stage1_publish_factor;
 namespace ed_gpu_driver {
 struct Progress {
     using Clock=std::chrono::steady_clock;
-    Batch &b;mpz_srcptr n,scalar;const Stage1RunOptions &opt;std::string path;
+    Batch &b;mpz_srcptr n,scalar;const Stage1Options &opt;std::string path;
     uint64_t b1,total;long long last;const EcmEdwardsNafMetrics *metrics;bool failed=false;
     Clock::time_point initialization_start,loop_start,sample_start,last_print;
     uint64_t sampled=0,delta=0;
     bool printed=false,line_open=false;
     ecm_stage1_gpu_progress::SpeedWindow speed;
-    Progress(Batch &batch,mpz_srcptr modulus,mpz_srcptr exponent,const Stage1RunOptions &options,
+    Progress(Batch &batch,mpz_srcptr modulus,mpz_srcptr exponent,const Stage1Options &options,
              const std::string &checkpoint,uint64_t bound,uint64_t bits,
              const EcmEdwardsNafMetrics *measurements,Clock::time_point start)
         :b(batch),n(modulus),scalar(exponent),opt(options),path(checkpoint),b1(bound),total(bits),
@@ -95,9 +95,9 @@ static bool publish(const std::string &path,const std::string &lines,bool append
 }
 
 int ecm_cuda_edwards::run_stage1(const mpz_t n,double b1,double b2,uint32_t curves,
-        const std::string &savefilename,bool saveappend,const Stage1RunOptions &opt,LegacyStage1Result *out) {
+        const std::string &savefilename,bool saveappend,const Stage1Options &opt,ExecutionResult *out) {
     using namespace ed_gpu_driver;
-    *out=LegacyStage1Result{};out->curves=curves;
+    *out=ExecutionResult{};out->curves=curves;
     if(!curves)return ECM_ERROR;
     try {
         const auto initialization_start=Progress::Clock::now();

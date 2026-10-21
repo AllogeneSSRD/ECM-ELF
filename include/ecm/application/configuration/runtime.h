@@ -3,10 +3,10 @@
 // ============================================================================
 // ECM runtime configuration - single source of truth.
 //
-// All formerly-custom environment variables (getenv) are consolidated here.
-// Each executable's main() fills this struct from command-line arguments;
-// deep / cross-platform shared code (cgbn_stage1_opencl, impl_opencl,
-// debug_utils, opencl_ecm_log, ...) only READS it and never calls getenv.
+// Shared OpenCL/application options are consolidated here. Each executable's
+// main() fills this struct from command-line arguments; these consumers read it.
+// CUDA algorithms and Stage2 also have their own environment policies, read at
+// their documented execution boundaries rather than cached in this object.
 //
 // Defaults match the old "environment variable not set" behavior, so removing
 // getenv does not change semantics. Android has no CLI: its JNI entry writes

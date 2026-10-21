@@ -1,4 +1,4 @@
-#include "legacy_execution.h"
+#include "execution_contract.h"
 #include "../../storage/checkpoint/ecm_checkpoint.h"
 #include "../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "ecm/core/stage1/selection.h"
@@ -15,6 +15,7 @@
 #include <cstring>
 
 namespace ecm_stage1 {
+struct TaskResult::State : ExecutionResult {};
 
 Stage1ExecutionPreferences::Stage1ExecutionPreferences()
     : stage1_threads(ecm_config::defaults::stage1_stage1_threads),
@@ -126,9 +127,9 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
     const uint32_t curves=request.curves;
     const auto &savefilename=request.save_file,&n_expr=request.expression;
     const bool saveappend=request.append_save;
-    Stage1RunOptions opt=request.options;
+    Stage1Options opt=request.options;
     TaskResult result;
-    auto *out=result.data_.get(); // Private legacy execution Adapter; caller receives an owner.
+    auto *out=result.data_.get(); // Private execution payload; caller receives an owner.
     Stage1TaskSession session;
     try {
         if(!opt.identity.target_kbnc) {
@@ -175,7 +176,7 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
         }
         stage1_copy_save_history(opt,savefilename);
         const auto begin=std::chrono::steady_clock::now();
-        Stage1ExecutionOptions execution(opt);
+        ExecutionOptions execution(opt);
         const int rc=deps.execute(N,B1,B2,curves,savefilename,saveappend,n_expr,execution,out);
         if(rc==ECM_ERROR){if(!ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;session.close(false);out->finish_task(rc,ecm_stage1_stop_requested()!=0);return result;}
         if(!out->sigmas || !out->factors || !out->array_found)throw std::runtime_error("Stage1 completed without per-curve result identity");

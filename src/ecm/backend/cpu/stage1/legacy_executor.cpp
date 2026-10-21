@@ -58,9 +58,9 @@
 #include <windows.h>
 
 namespace ecm_cpu_stage1 {
-using ecm_stage1::Stage1RunOptions;
-using ecm_stage1::Stage1ExecutionOptions;
-using ecm_stage1::LegacyStage1Result;
+using ecm_stage1::Stage1Options;
+using ecm_stage1::ExecutionOptions;
+using ecm_stage1::ExecutionResult;
 using ecm_stage1::stage1_publish_factor;
 using ecm_stage1::compute_batch_s;
 using ecm_stage1::random_sigma_u64;
@@ -109,7 +109,7 @@ static std::mutex g_stage1_out_mutex;
 
 // 自我 checkpoint 上下文 + 进度回调 (写 STAGE1 存档)
 struct EdwardsCheckpointCtx {
-    const Stage1ExecutionOptions *opt;
+    const ExecutionOptions *opt;
     uint64_t sigma;
     uint64_t B1, B2;
     std::string save_path;
@@ -189,7 +189,7 @@ static bool edwards_completed_write(uint32_t curve,uint64_t sigma,const mpz_t fa
 }
 
 static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
-                                 const Stage1ExecutionOptions &opt, double B1, double B2,
+                                 const ExecutionOptions &opt, double B1, double B2,
                                  uint32_t idx, uint64_t sigma, uint32_t curves,
                                  mpz_t factor_out, const std::string &ckpt_path,std::string &save_line) {
     mpz_t Qx, Qz;
@@ -262,7 +262,7 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
 struct EdwardsWorkerCtx {
     mpz_srcptr N;
     mpz_srcptr s;
-    const Stage1ExecutionOptions *opt;
+    const ExecutionOptions *opt;
     double B1, B2;
     uint32_t curves;
     const uint64_t *sigmas;
@@ -458,7 +458,7 @@ struct EdSimdProg {
     uint32_t curves, batch_first, batch_count;
     size_t   s_bits;
     long long t0_ms;
-    const Stage1ExecutionOptions *opt;
+    const ExecutionOptions *opt;
     double   B1, B2;
     const uint64_t *sigmas;
     const ifma_ctx_t *mc;
@@ -551,7 +551,7 @@ static int edwards_checkpoint_progress_bar(void *ctx, const edwards_checkpoint_t
     return edwards_checkpoint_progress(ctx, cur);
 }
 
-static int edwards_run_batch_simd_impl(const Stage1ExecutionOptions &opt, mpz_srcptr N, mpz_srcptr s,
+static int edwards_run_batch_simd_impl(const ExecutionOptions &opt, mpz_srcptr N, mpz_srcptr s,
                                        double B1, double B2, uint32_t first, uint32_t count,
                                        const uint64_t *sigmas, mpz_t *factors, int *array_found,
                                        std::atomic<uint32_t> *done_ctr,std::string *save_lines) {
@@ -835,7 +835,7 @@ static void apply_thread_affinity(const std::vector<unsigned> &, uint32_t) {}
 int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                               const std::string &savefilename, bool saveappend,
                               const std::string &n_expr,
-                              Stage1ExecutionOptions &opt, LegacyStage1Result *out) {
+                              ExecutionOptions &opt, ExecutionResult *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->publish_failed = false;
@@ -1207,7 +1207,7 @@ static int mont_progress_cb_scalar(void *p, const mont_ladder_state_t *st)
 int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
-                           Stage1ExecutionOptions &opt, LegacyStage1Result *out) {
+                           ExecutionOptions &opt, ExecutionResult *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->curves = curves;

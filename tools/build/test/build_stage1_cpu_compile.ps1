@@ -15,7 +15,7 @@ if(Test-Path -LiteralPath $output){throw 'Use a fresh output directory'}
 $m=Get-Content -LiteralPath (Join-Path $worker 'stage1_local_manifest.json') -Raw|ConvertFrom-Json
 if(-not $m.host_compiler -or -not $m.compile_setup){throw 'Formal host toolchain identity required'}
 New-Item -ItemType Directory -Path $output|Out-Null
-$sources=@('src/ecm/service/stage1/preparation.cpp','src/ecm/backend/cpu/stage1/legacy_executor.cpp')
+$sources=@('src/ecm/service/stage1/execution_contract.cpp','src/ecm/service/stage1/preparation.cpp','src/ecm/backend/cpu/stage1/legacy_executor.cpp')
 if($IncludeGpuHost){
     $sources+=@('src/ecm/service/stage1/execution.cpp',
         'src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp')
@@ -26,7 +26,7 @@ if($IncludeMontgomeryHost){
         'src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp')
 }
 if($IncludeQueueHost){
-    $sources+=@('src/ecm/application/cli/stage1_input.cpp',
+    $sources+=@('src/ecm/application/cli/stage1_input.cpp','src/ecm/application/cli/diagnostics/group_order.cpp',
         'src/ecm/application/cli/queue_source.cpp','src/ecm/service/work/queue_workflow.cpp')
 }
 if($EnablePracHost -and -not $IncludeMontgomeryHost){throw 'EnablePracHost requires IncludeMontgomeryHost'}

@@ -6,10 +6,12 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/core/stage1/selection.cpp
     src/ecm/storage/results/publication.cpp
     src/ecm/service/stage1/task.cpp
+    src/ecm/service/stage1/execution_contract.cpp
     src/ecm/service/stage1/preparation.cpp
     src/ecm/service/stage1/execution.cpp
     src/ecm/backend/cpu/stage1/legacy_executor.cpp
     src/ecm/application/cli/stage1_input.cpp
+    src/ecm/application/cli/diagnostics/group_order.cpp
     src/ecm/application/cli/queue_source.cpp
     src/ecm/service/work/queue_workflow.cpp
     src/ecm/application/cli/ecm_driver.cpp

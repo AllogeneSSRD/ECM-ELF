@@ -1,5 +1,5 @@
 #include "ecm/service/work/queue_workflow.h"
-#include "../../src/ecm/service/stage1/legacy_execution.h"
+#include "../../src/ecm/service/stage1/execution_contract.h"
 #include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include <filesystem>
 #include <fstream>
@@ -26,7 +26,7 @@ static int window(){return 8;}
 // Only arithmetic is substituted. Task, checkpoint, result publication and queue
 // file mechanisms are the production implementations, including failure paths.
 static int execute(mpz_srcptr,double,double,uint32_t count,const std::string &save,bool,
-                   const std::string &,Stage1ExecutionOptions &,LegacyStage1Result *out){
+                   const std::string &,ExecutionOptions &,ExecutionResult *out){
     ++computations;out->curves=count;
     out->sigmas=static_cast<uint64_t *>(std::malloc(sizeof(uint64_t)*count));
     require(out->sigmas!=nullptr,"sigma allocation");

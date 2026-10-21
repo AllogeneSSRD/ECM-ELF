@@ -135,7 +135,7 @@ foreach(_source IN LISTS ECM_STAGE1_COMMON_SOURCES)
 endforeach()
 foreach(_source include/ecm/storage/results/publication.h src/ecm/storage/results/ecm_result_json.h
                 include/ecm/core/stage1/selection.h include/ecm/core/stage1/scalar.h include/ecm/service/stage1/task.h
-                src/ecm/service/stage1/legacy_execution.h src/ecm/platform/generated/configuration_defaults.h
+                src/ecm/service/stage1/execution_contract.h src/ecm/platform/generated/configuration_defaults.h
                 src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp
                 src/ecm/backend/cuda/stage1/montgomery/host_math.cpp src/ecm/backend/cuda/stage1/montgomery/host_io.cpp
                 src/ecm/backend/cuda/stage1/montgomery/host_policy.cpp

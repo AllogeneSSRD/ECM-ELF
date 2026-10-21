@@ -20,7 +20,7 @@ namespace ecm_stage1 {
 static int run_mont_gpu_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
-                           Stage1ExecutionOptions &opt, LegacyStage1Result *out) {
+                           ExecutionOptions &opt, ExecutionResult *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->curves = curves;
@@ -244,7 +244,7 @@ static int run_mont_gpu_stage1(const mpz_t N, double B1, double B2, uint32_t cur
 int execute_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
-                           Stage1ExecutionOptions &opt, LegacyStage1Result *out) {
+                           ExecutionOptions &opt, ExecutionResult *out) {
     ecm_stage1_set_backup_limit(opt.persistence.ckpt_backups);
 #if ECM_HAS_CUDA_EDWARDS
     if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu &&

@@ -13,7 +13,7 @@
 #define ECM_HAS_CUDA_EDWARDS 0
 #endif
 namespace ecm_stage1_app {
-using Stage1RunOptions=ecm_stage1::Stage1Options;
+using Stage1Options=ecm_stage1::Stage1Options;
 static bool is_absolute_path_local(const std::string &p) {
 #ifdef _WIN32
     if (p.size() >= 2 && std::isalpha((unsigned char)p[0]) && p[1] == ':') return true;
@@ -61,7 +61,7 @@ std::string get_exe_dir_local() {
 #endif
 }
 
-bool stage1_save_construction(const std::string &name,Stage1RunOptions &opt,std::string &error) {
+bool stage1_save_construction(const std::string &name,Stage1Options &opt,std::string &error) {
     const auto leaf=ecm_stage1::lower_ascii(std::filesystem::path(name).filename().string());
     const auto prefix=leaf.substr(0,leaf.find('_'));
     if(prefix=="e" || prefix=="ed") {
@@ -114,7 +114,7 @@ bool stage1_selection_error(const ecm_stage1::Selection &selection,
     return false;
 }
 
-bool stage1_task_error(const Stage1RunOptions &opt, uint32_t curves,
+bool stage1_task_error(const Stage1Options &opt, uint32_t curves,
                               std::string &error) {
     if (opt.identity.sigma_fixed && curves != 0 &&
         static_cast<uint64_t>(curves - 1) > UINT64_MAX - opt.identity.fixed_sigma64) {
@@ -183,7 +183,7 @@ std::vector<unsigned> parse_affinity_spec(const std::string &spec) {
     return out;
 }
 
-void stage1_result_settings(Stage1RunOptions &opt,const EcmQueueConfig &cfg,
+void stage1_result_settings(Stage1Options &opt,const EcmQueueConfig &cfg,
                                    const std::string &base,int worker) {
     opt.identity.result_user=cfg.result_user;opt.identity.result_computer=cfg.result_computer;
     opt.persistence.results_file=(std::filesystem::path(base)/(cfg.has_results?cfg.results:ecm_config::worker_file(cfg.results,worker))).string();

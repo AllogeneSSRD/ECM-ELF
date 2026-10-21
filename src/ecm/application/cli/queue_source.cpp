@@ -1,7 +1,7 @@
 #include "queue_source.h"
 #include "stage1_input.h"
 #include "ecm/service/work/queue_workflow.h"
-#include "../../service/stage1/legacy_execution.h"
+#include "../../service/stage1/execution_contract.h"
 #include "../../service/stage1/preparation.h"
 #include "../configuration/ecm_queue_config.h"
 #include "../../storage/queue/ecm_worktodo.h"
@@ -28,7 +28,7 @@
 #include <unistd.h>
 #endif
 namespace ecm_stage1_app {
-using ecm_stage1::Stage1RunOptions;
+using ecm_stage1::Stage1Options;
 using ecm_stage1::QueueReadStatus;
 using ecm_stage1::ensure_dir;
 using ecm_stage1::mont_format_save_name;
@@ -133,8 +133,7 @@ int run_queue_manager(const std::string &ini_path, int worker,const ecm_stage1::
     }
 
     // Load config; on first run (missing ini), write a default template.
-    // `worker` selects the [Worker #N] section; keys before the first section header
-    // are the global defaults for every worker (see ecm_queue_config.h / D1).
+    // `worker` selects the TOML worker projection over shared/stage defaults.
     EcmQueueConfig cfg;
     if (!ecm_queue_config_load(ini, worker, cfg)) {
         if (access(ini.c_str(), 0) == 0) {
@@ -255,7 +254,7 @@ int run_queue_manager(const std::string &ini_path, int worker,const ecm_stage1::
     // the TOML curve, and unsupported constructions must not touch transfer paths.
     P95TransferConfig p95cfg;
     bool p95_initialized=false,p95_ignore_reported=false;
-    auto p95_for_task=[&](const Stage1RunOptions &actual)->const P95TransferConfig* {
+    auto p95_for_task=[&](const Stage1Options &actual)->const P95TransferConfig* {
         const bool ignore=actual.execution.selection.curve==ecm_stage1::CurveModel::Edwards ||
             (actual.execution.selection.target==ecm_stage1::ExecutionTarget::Gpu && actual.execution.selection.gpu_param==2);
         if(ignore) {
@@ -321,7 +320,7 @@ int run_queue_manager(const std::string &ini_path, int worker,const ecm_stage1::
         return &p95cfg;
     };
 
-    Stage1RunOptions opt;
+    Stage1Options opt;
     if (!ecm_stage1::parse_curve_model(cfg.curve_model, opt.execution.selection.curve) ||
         !ecm_stage1::parse_execution_target(cfg.execution_target, opt.execution.selection.target)) {
         ecm_ts_fprintf(stderr, "ERROR: invalid curve or target in ecm.toml\n");

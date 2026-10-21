@@ -15,7 +15,7 @@ if(-not $manifest.host_compiler -or -not $manifest.compile_setup){throw 'Formal 
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $production=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
-$sources=@('src/ecm/storage/results/publication.cpp','src/ecm/core/stage1/selection.cpp','src/ecm/service/stage1/task.cpp','src/ecm/storage/checkpoint/ecm_checkpoint.cpp',
+$sources=@('src/ecm/storage/results/publication.cpp','src/ecm/core/stage1/selection.cpp','src/ecm/service/stage1/task.cpp','src/ecm/service/stage1/execution_contract.cpp','src/ecm/storage/checkpoint/ecm_checkpoint.cpp',
     'src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp',
     'src/ecm/core/stage1/ecm_stage1_exp.cpp','src/ecm/platform/stage1_progress.cpp')
 if($QueueWorkflow){

@@ -1,5 +1,5 @@
 #include "ecm/service/work/queue_workflow.h"
-#include "../stage1/legacy_execution.h"
+#include "../stage1/execution_contract.h"
 #include "../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "../../storage/queue/ecm_worktodo.h"
 #include "../../storage/transfer/ecm_stage2_transfer.h"
@@ -25,10 +25,10 @@ static bool run_one(const QueuePaths &paths,const QueueItem &item,const TaskDepe
 
     const bool has_factors = result.has_factors();
 
-    if (result.failure_source()==Stage1FailureSource::Preparation ||
-        result.failure_source()==Stage1FailureSource::Publication) {
+    if (result.failure_source()==FailureSource::Preparation ||
+        result.failure_source()==FailureSource::Publication) {
         ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged.\n",
-                       result.failure_source()==Stage1FailureSource::Publication ? "Stage1 save/result publication failed" :
+                       result.failure_source()==FailureSource::Publication ? "Stage1 save/result publication failed" :
                                                "backend prepare failed");
         return false;
     }
@@ -67,13 +67,13 @@ static bool run_one(const QueuePaths &paths,const QueueItem &item,const TaskDepe
     }
 
 
-    if (result.status()==Stage1TaskStatus::Stopped) {
+    if (result.status()==TaskStatus::Stopped) {
         ecm_ts_fprintf(stdout, "STOP: Stage1 interrupted; worktodo unchanged: %s\n",
                        line.c_str());
         return false;
     }
 
-    if (result.status()==Stage1TaskStatus::Failed) {
+    if (result.status()==TaskStatus::Failed) {
         ecm_ts_fprintf(stderr, "ERROR: stage1 failed for task: %s\n", line.c_str());
         // Marking the line is what stops the queue from re-running it: if that write
         // fails, abort instead of spinning on the same task forever.

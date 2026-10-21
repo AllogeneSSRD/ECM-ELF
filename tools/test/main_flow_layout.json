@@ -743,6 +743,7 @@
     "src/core/ecm_result_paths.h": "include/ecm/storage/results/publication.h",
     "src/ecm/storage/results/ecm_result_paths.h": "include/ecm/storage/results/publication.h",
     "src/core/ecm_submission_writer.h": "include/ecm/storage/results/publication.h",
-    "src/ecm/storage/results/ecm_submission_writer.h": "include/ecm/storage/results/publication.h"
+    "src/ecm/storage/results/ecm_submission_writer.h": "include/ecm/storage/results/publication.h",
+    "src/ecm/service/stage1/legacy_execution.h": "src/ecm/service/stage1/execution_contract.h"
   }
 }
