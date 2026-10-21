@@ -3,6 +3,11 @@
 #include "../../src/core/ecm_stage2_queue_state.h"
 #include <iostream>
 static void check(bool ok){if(!ok)throw std::runtime_error("result lifecycle assertion failed");}
+static std::string read_bytes(const std::filesystem::path &path) {
+    std::ifstream in(path,std::ios::binary);
+    if(!in)throw std::runtime_error("cannot read fixture output");
+    return {std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>()};
+}
 int main(int argc,char **argv) {
     try {
         namespace r=ecm_results;namespace fs=std::filesystem;
@@ -58,6 +63,43 @@ int main(int argc,char **argv) {
         mixed.d=30030;mixed.poly_size=96;
         r::publish_submission(out/"mixed.json.txt",mixed,composite.v);
         r::seal_submissions(out/"mixed.json.txt",2,"mixed-task",true);
+        {std::ifstream file(out/"mixed.json.txt");std::string line;
+            check(bool(std::getline(file,line)) && r::json::parse(line).get("status").text()=="F");
+            check(bool(std::getline(file,line)) && r::json::parse(line).get("status").text()=="NF");}
+        // Both stages preserve every published byte and append across tasks,
+        // even when result timestamps run backwards. A hard link detects replace.
+        for(int stage:{1,2}) {
+            const auto path=out/("append"+std::to_string(stage)+".json.txt");
+            const auto alias=out/("append"+std::to_string(stage)+".linked.txt");
+            auto next=value;next.stage1_only=stage==1;next.b2=stage==1?20:2000;
+            if(stage==1){next.d=0;next.poly_size=0;}
+            for(unsigned i=0;i<3;++i) {
+                const auto before=fs::exists(path)?read_bytes(path):std::string{};
+                next.sigma=100+i;next.publication_task="append-task-"+std::to_string(i);
+                next.when="2026-10-21 12:00:0"+std::to_string(2-i);
+                r::publish_submission(path,next,n.v);
+                r::seal_submissions(path,stage,next.publication_task,true);
+                const auto after=read_bytes(path);check(after.compare(0,before.size(),before)==0);
+                if(i==0)fs::create_hard_link(path,alias);
+                check(read_bytes(alias)==after);
+                r::publish_submission(path,next,n.v);
+                r::seal_submissions(path,stage,next.publication_task,true);
+                r::refresh_submission_if_owned(path);check(read_bytes(path)==after);
+            }
+        }
+        // NF, then F, then NF remains interleaved in publication order.
+        auto alternating=mixed;alternating.publication_task="alternating-a";alternating.sigma=1100;
+        const auto alternating_path=out/"alternating.json.txt";
+        r::publish_submission(alternating_path,alternating,composite.v);
+        r::seal_submissions(alternating_path,2,alternating.publication_task,true);
+        alternating.factors={"233"};alternating.stage=1;alternating.sigma=1101;
+        alternating.d=0;alternating.poly_size=0;
+        r::publish_submission(alternating_path,alternating,composite.v);
+        alternating.factors.clear();alternating.stage=0;alternating.sigma=1102;
+        alternating.d=30030;alternating.poly_size=96;
+        alternating.publication_task="alternating-b";alternating.when="2026-10-20 11:00:00";
+        r::publish_submission(alternating_path,alternating,composite.v);
+        r::seal_submissions(alternating_path,2,alternating.publication_task,true);
         // Migration is atomic and order survives export/replay from the new path.
         fs::rename(r::submission_ledger(out/"internal.jsonl"),r::legacy_submission_ledger(out/"internal.jsonl"));
         r::atomic_text(r::legacy_submission_ledger(out/"internal.jsonl")/"format","ECM_INTERNAL_LEDGER_V1\n");

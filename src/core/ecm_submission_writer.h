@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
@@ -102,23 +103,75 @@ inline void require_ledger_format(const fs::path &ledger,const std::string &form
     if(!std::getline(file,value) || value!=format || std::getline(file,extra))
         throw std::runtime_error("result ledger has a different owner/format");
 }
-inline void render_submission(const fs::path &path,const fs::path &ledger) {
-    std::map<std::string,std::string> batches;
-    std::map<std::string,std::string> factors;
-    std::map<std::string,fs::file_time_type> factor_times;
+inline std::string read_submission_bytes(const fs::path &path) {
+    if(!fs::exists(path))return {};
+    std::ifstream in(path,std::ios::binary);
+    if(!in)throw std::runtime_error("cannot read submission output");
+    std::string text{std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>()};
+    if(in.bad())throw std::runtime_error("cannot finish reading submission output");
+    return text;
+}
+// The caller holds SubmissionLock. The durable publication history is written
+// before appending: a retry can finish a partial append without reordering or
+// duplicating previously published bytes. Existing outputs seed the history.
+inline void append_submissions(const fs::path &path,const fs::path &ledger) {
+    struct Row {std::string id,json;fs::file_time_type time;};
+    std::map<std::string,Row> rows;
     for(const auto &file:fs::directory_iterator(ledger)) {
         if(file.path().extension()!=".curve" && file.path().extension()!=".batch")continue;
         const auto entry=read_submission_entry(file.path());
-        if(file.path().extension()==".batch")batches.emplace(entry.key,entry.json);
-        else if(entry.group=="F") {
-            const auto key=stage1_factor_key(entry.key);const auto time=fs::last_write_time(file.path());
-            if(!factors.count(key) || time<factor_times.at(key)){factors[key]=entry.json;factor_times[key]=time;}
-        }
+        const bool batch=file.path().extension()==".batch";
+        if(!batch && entry.group!="F")continue;
+        const auto id=batch?"NF:"+entry.key:"F:"+stage1_factor_key(entry.key);
+        const auto time=fs::last_write_time(file.path());
+        const auto previous=rows.find(id);
+        if(previous==rows.end() || time<previous->second.time)rows.insert_or_assign(id,Row{id,entry.json,time});
     }
-    std::string output;
-    for(const auto &pair:batches)output+=pair.second+'\n';
-    for(const auto &pair:factors)output+=pair.second+'\n';
-    atomic_text(path,output);
+    const auto actual=read_submission_bytes(path);
+    const auto order_path=ledger/"publication.order";
+    const bool has_order=fs::exists(order_path);
+    std::string ordered=actual;
+    if(has_order) {
+        const auto record=read_submission_entry(order_path);
+        const auto value=json::parse(record.json);
+        if(record.key!="publication-order" || record.group!="ORDER" || value.type!='s')
+            throw std::runtime_error("invalid submission publication history");
+        ordered=value.text();
+        if(actual.size()>ordered.size() || ordered.compare(0,actual.size(),actual)!=0)
+            throw std::runtime_error("submission output differs from publication history");
+    }
+    std::set<std::string> published;
+    std::istringstream existing(ordered);std::string line;
+    while(std::getline(existing,line)) {
+        if(!line.empty() && line.back()=='\r')line.pop_back();
+        if(line.empty())continue;
+        const auto value=json::parse(line);
+        if(value.type!='o')throw std::runtime_error("invalid submission output row");
+        published.insert(value.dump());
+    }
+    // Only unrecorded receipts need this recovery order. Normal publication
+    // appends each newly sealed NF batch or immediate F under the same lock.
+    std::vector<Row> pending;
+    for(const auto &pair:rows)if(!published.count(json::parse(pair.second.json).dump()))pending.push_back(pair.second);
+    std::sort(pending.begin(),pending.end(),[](const auto &a,const auto &b){
+        if(a.time!=b.time)return a.time<b.time;return a.id<b.id;
+    });
+    for(const auto &row:pending) {
+        if(!published.insert(json::parse(row.json).dump()).second)continue;
+        if(!ordered.empty() && ordered.back()!='\n')ordered+='\n';
+        ordered+=row.json+'\n';
+    }
+    if(!has_order || !pending.empty()) {
+        const auto body="ECM_SUBMISSION_V1\npublication-order\nORDER\n"+json::quote(ordered)+'\n';
+        atomic_text(order_path,body+std::to_string(ecm_edwards::hash(body))+'\n');
+    }
+    if(actual.size()!=ordered.size() || !fs::exists(path)) {
+        std::ofstream out(path,std::ios::binary|std::ios::app);
+        if(!out)throw std::runtime_error("cannot append submission output");
+        out.write(ordered.data()+actual.size(),static_cast<std::streamsize>(ordered.size()-actual.size()));
+        out.close();
+        if(!out)throw std::runtime_error("cannot finish submission output append");
+    }
 }
 inline uint64_t submission_order(const SubmissionEntry &entry) {
     const auto marker=entry.group.find(":O:");
@@ -182,13 +235,14 @@ inline void seal_submissions(const fs::path &path,int stage_filter=0,const std::
         const auto body="ECM_SUBMISSION_V1\n"+key+'\n'+ids+'\n'+json+'\n';
         atomic_text(ledger/(key+".batch"),body+std::to_string(ecm_edwards::hash(body))+'\n');
         lines.insert(json);
+        append_submissions(path,ledger);
     }
-    render_submission(path,ledger);
+    append_submissions(path,ledger);
 }
 inline void refresh_submission_if_owned(const fs::path &path) {
     SubmissionLock lock(path);const auto ledger=migrate_result_ledger(path);
     if(!fs::exists(ledger/"format"))return;
-    require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");render_submission(path,ledger);
+    require_ledger_format(ledger,"ECM_SUBMISSION_LEDGER_V1");append_submissions(path,ledger);
 }
 // The caller holds SubmissionLock, including while establishing ownership.
 inline fs::path prepare_submission_ledger(const fs::path &path) {
@@ -203,7 +257,7 @@ inline fs::path prepare_submission_ledger(const fs::path &path) {
 }
 inline void ensure_submission_output(const fs::path &path) {
     SubmissionLock lock(path);
-    render_submission(path,prepare_submission_ledger(path));
+    append_submissions(path,prepare_submission_ledger(path));
 }
 inline void publish_submission(const fs::path &path,const Submission &r,const mpz_t n,bool render_now=false) {
     if(r.curves!=1)throw std::runtime_error("submission ledger accepts individual completed curves");
@@ -224,7 +278,7 @@ inline void publish_submission(const fs::path &path,const Submission &r,const mp
         for(const auto &file:fs::directory_iterator(ledger))if(file.path().extension()==".curve") {
             const auto previous=read_submission_entry(file.path());
             if(previous.group=="F" && stage1_factor_key(previous.key)==key) {
-                if(render_now || !r.factors.empty())render_submission(path,ledger);return;
+                if(render_now || !r.factors.empty())append_submissions(path,ledger);return;
             }
         }
     }
@@ -236,7 +290,7 @@ inline void publish_submission(const fs::path &path,const Submission &r,const mp
     }
     // Factors publish immediately; NF waits for whole-task completion.
     // Immutable batches prevent cumulative counts being credited twice.
-    if(render_now || !r.factors.empty())render_submission(path,ledger);
+    if(render_now || !r.factors.empty())append_submissions(path,ledger);
 }
 // Internal receipts carry a monotone export order, independent of sigma and
 // directory iteration. V1 receipts retain their original creation/write order.
