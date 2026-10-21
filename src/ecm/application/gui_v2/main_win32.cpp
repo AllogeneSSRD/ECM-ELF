@@ -205,6 +205,7 @@ int run(const Options& options, int show, FILE* log) {
     if (!options.explicit_scale && state.ui_scale == 0) pending.scale = dpi / 96.f;
     auto active = pending;
     fonts.reload(active.chinese, options.missing_cjk, log);
+    state.ui_language=fonts.chinese?"zh":"en";
     active.chinese = pending.chinese = fonts.chinese;
     ecmgui_v2::ui::apply_theme(active);
     ecmgui_v2::ui::Showcase showcase;
@@ -214,6 +215,7 @@ int run(const Options& options, int show, FILE* log) {
     ecmgui_v2::pet::Window companion(native.hwnd, state, log);
     app.initialize(options.config, options.no_nvml || show_components); app.test_float = options.detach_probe;
     if (!state.notice.empty()) app.trace(state.notice);
+    if(!fonts.notice.empty()){app.status=fonts.notice;app.trace(fonts.notice);}
     try { const auto layout = state.layout(); if (!layout.empty() && !show_components) ImGui::LoadIniSettingsFromMemory(layout.data(), layout.size()); }
     catch (const std::exception& error) { app.trace(error.what()); app.reset_layout = true; }
     if (options.start_worker > 0) app.start(options.start_worker);

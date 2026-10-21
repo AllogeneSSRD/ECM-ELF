@@ -1,15 +1,15 @@
 # GUI v2
 
-GUI v2 是独立的 Windows / C++ / Dear ImGui / Vulkan 前端，当前开发版本 0.47.4。工作台、结果、生成器、概率、GPU、设置已接通；原 DX11 GUI 的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
+GUI v2 是独立的 Windows / C++ / Dear ImGui / Vulkan 前端，当前候选版本 0.47.6。工作台、结果、生成器、概率、GPU、设置已接通；原 DX11 GUI 的源码、默认值、二进制和构建入口保留。阶段证据与限制见 [实施草稿](../development/GUI_MODERNIZATION_DRAFT.md) 和 [离线 HTML](../web/gui-v2-vulkan-plan-20261021.html)。
 
 ## 构建与启动
 
 运行 `tools\build\build_gui_v2.bat`，默认生成 `build_gui_v2_local/ecm_gui_v2.exe`。测试入口 `tools/build/test/build_gui_v2.ps1 -BuildDir <独立目录> -TestHelpers`；helper 不进入默认交付目标。根开关 `ECM_BUILD_GUI_V2` 默认 OFF，与旧 GUI 独立。需要 MSVC/CMake 及仓库固定源码，构建无需开发 Vulkan SDK、CUDA 或浏览器运行时。
 
-运行要求系统 Vulkan 1.1 loader、graphics/present 与 swapchain 驱动；缺失明确失败，可另开原 GUI。常用参数：
+运行要求 Windows 10 1903+ / Windows 11 x64、匹配的 Microsoft Visual C++ x64 runtime，以及系统 Vulkan 1.1 loader、graphics/present 与 swapchain 驱动；缺失明确失败，可另开原 GUI。常用参数：
 
 - `--config <工作流.toml>`：打开已有业务配置；设置中也可选择。autostart 经过能力与拥有权检查后执行。
-- `--ui-state <侧车.toml>`：默认 `%LOCALAPPDATA%/ECM-ELF/gui-v2/<配置身份>.toml`；与业务文件分离，非法侧车保留并禁止覆盖。
+- `--ui-state <侧车.toml>`：默认 `%LOCALAPPDATA%/ECM-ELF/gui-v2/<配置身份>.toml`；按启动配置身份隔离，与业务文件分离，非法侧车保留并禁止覆盖。
 - `--theme dark|light`、`--language en|zh`、`--ui-scale 1|1.25|1.5|2`：初始外观；设置可选自动 DPI。
 - `--pet` / `--no-pet`、`--pet-static`：宠物及动画覆盖，默认关闭。
 - `--no-nvml`：关闭可选的 500ms 后台 GPU 监控。
@@ -34,3 +34,11 @@ Ely 宠物兼容固定 MIT 上游角色、七状态、边缘定位、拖动/抚�
 已验证同为 144 DPI 的两块物理显示器及合成输入。不同物理 DPI、真实 IME、总 GPU 驻留、受控功耗/计算并行与独立干净机器仍需专项资格。系统 Segoe UI / 微软雅黑 / Consolas 不随包分发，缺中文字体退回英文。HDR/显示格式改变导致 render pass 不兼容时要求重启。
 
 `--validation` 要求开发验证层，普通运行不需要。`--frames`、`--audit-ui`、`--audit-app`、`--no-loader`、`--inject-failure`、`--simulate-missing-cjk` 是测试入口。显式 Vulkan 分配不等于进程总显存，不能据 API 名称声明更低占用。验证脚本位于 `tools/test/gui_v2/`，证据存忽略目录 `data/experiments/gui_v2/`。
+
+## 独立候选包
+
+先用独立构建入口生成程序，再运行 `tools/build/package_gui_v2.ps1 -BuildDir build_gui_v2_local -Output <新的目录>`；可用 `-Python` 指定解释器。包包含 GUI、宠物资产、使用/侧车说明、许可、逐文件 SHA256、构建源目录快照及 ZIP 校验，不覆盖旧版。不包含计算 worker、系统字体、Vulkan loader、开发层或 Microsoft runtime；更新 worker 另行安装，1024-bit 专用验收 worker 不能作为完整发布替代。
+
+v2 自带 UTF-8 进程 manifest，使复用的窄字符文件接口在支持的 Windows 版本上处理中文路径；不改变系统代码页或旧 GUI。依据：[Microsoft 进程 UTF-8 文档](https://learn.microsoft.com/en-us/windows/apps/design/globalizing/use-utf8-code-page)。计算 worker 的非 ASCII 路径兼容性须按其自身构建单独确认。
+
+P5 仍有最小化 CPU 门禁未稳定通过（一次完整矩阵中位数1.031% > 1%）；线程拆分显示主线程中位数0，辅助驱动线程短窗口波动尚待进一步剖析。P6 是独立分发准备，不表示已获得全部生产资格；未放宽门限。具体输入、设备、二进制、样本及时间边界见实施草稿，原始失败证据保留。可显式使用 `--no-nvml` 关闭监控，但不据此改判默认监控条件下的门禁。

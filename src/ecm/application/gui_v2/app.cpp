@@ -272,7 +272,8 @@ void App::draw_inspector(const ui::Fonts& fonts) {
             const auto& s=worker->stage2_status;
             ImGui::Text("Task curves: %llu / %llu",s.done,s.total);
             ImGui::Text("Phase: %s | batch %llu / %llu",s.phase.c_str(),s.batch,s.batches);
-            ImGui::Text("%s param=%d sigma=%llu",s.curve_model.c_str(),s.param,s.sigma);
+            if(s.curve_model=="ed")ImGui::Text("Edwards sigma=%llu",s.sigma);
+            else ImGui::Text("%s param=%d sigma=%llu",s.curve_model.c_str(),s.param,s.sigma);
             ImGui::Text("B1=%llu B2=%llu",s.b1,s.b2);
         }
         if (!worker->hist_s_per_curve.empty()) ImGui::PlotLines("s/curve",worker->hist_s_per_curve.data(),static_cast<int>(worker->hist_s_per_curve.size()));

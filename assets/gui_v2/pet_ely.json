@@ -14,6 +14,9 @@
     "Doze",
     "Wink"
   ],
-  "source_sha256": "1ec32d05c9b9c9e9b171bad911c161956daabca25572829afd73d261a919cf88",
-  "layers": 50
+  "source_sha256": "c34e9274cf77d8011eee331d91f3ea7869a619f9fc72266a85ff7a9ad6a9cca6",
+  "layers": 50,
+  "upstream_source_sha256": "1ec32d05c9b9c9e9b171bad911c161956daabca25572829afd73d261a919cf88",
+  "source_normalization": "LF only",
+  "png_sha256": "eb0eac5b7a5809d5ea0cf4d1e6dac8e521650671e243648508408cc98bfb1972"
 }

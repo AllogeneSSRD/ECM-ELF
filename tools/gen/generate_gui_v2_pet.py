@@ -87,12 +87,14 @@ def main():
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args(); args.out.mkdir(parents=True, exist_ok=True)
     source = ROOT / 'third_party/gui_v2_pet/rig.rs'
+    canonical = source.read_bytes().replace(b'\r\n',b'\n')
+    assert hashlib.sha256(canonical).hexdigest() == 'c34e9274cf77d8011eee331d91f3ea7869a619f9fc72266a85ff7a9ad6a9cca6', 'Pinned upstream rig changed'
     parts = layers(source.read_text(encoding='utf-8'))
     moods = ['Calm','Working','Waiting','Error','Done','Doze','Wink']
     svgs = [frame(parts, mood, index) for mood in moods for index in range(8)]
     html = '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent}main{display:grid;grid-template-columns:repeat(8,224px);width:1792px}svg{display:block}</style></head><body><main>' + ''.join(svgs) + '</main></body></html>'
     (args.out / 'atlas.html').write_text(html, encoding='utf-8')
-    (args.out / 'metadata.json').write_text(json.dumps(dict(columns=8,rows=7,frame_width=224,frame_height=248,logical_width=112,logical_height=124,moods=moods,source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),layers=len(parts)),indent=2)+'\n',encoding='utf-8')
+    (args.out / 'metadata.json').write_text(json.dumps(dict(columns=8,rows=7,frame_width=224,frame_height=248,logical_width=112,logical_height=124,moods=moods,source_sha256=hashlib.sha256(canonical).hexdigest(),upstream_source_sha256='1ec32d05c9b9c9e9b171bad911c161956daabca25572829afd73d261a919cf88',source_normalization='LF only',layers=len(parts)),indent=2)+'\n',encoding='utf-8')
     print(f'Prepared {len(parts)} attributed layers / {len(svgs)} frames')
 
 

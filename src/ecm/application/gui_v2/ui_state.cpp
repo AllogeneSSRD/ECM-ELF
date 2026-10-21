@@ -83,7 +83,10 @@ bool UiState::load() {
         });
         if (!values.empty()) throw std::runtime_error("unknown UI key: " + values.begin()->first);
         for (const auto& table : tables) if (!known_tables.count(table)) throw std::runtime_error("unknown UI table: " + table);
-        validate_ui(candidate); static_cast<UiValues&>(*this) = std::move(candidate);
+        validate_ui(candidate);
+        if(candidate.ui_dock.size()%2 || candidate.ui_dock.find_first_not_of("0123456789abcdef")!=std::string::npos)
+            throw std::runtime_error("invalid UI layout hex");
+        static_cast<UiValues&>(*this) = std::move(candidate);
         return true;
     } catch (const std::exception& error) { writable = false; notice = "UI state not loaded; original retained: " + std::string(error.what()); return false; }
 }

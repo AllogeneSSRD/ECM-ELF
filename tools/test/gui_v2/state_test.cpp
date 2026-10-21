@@ -20,6 +20,9 @@ int main(int argc, char** argv) {
     ecmgui_v2::UiState bad; bad.path = invalid; assert(!bad.load() && !bad.save());
     std::ifstream retained(invalid,std::ios::binary); const std::string after((std::istreambuf_iterator<char>(retained)),{});
     assert(after == before);
+    const auto invalid_layout=dir/"invalid-layout.toml";
+    {std::ofstream out(invalid_layout);out<<"[ui]\ndock=\"0\"\n";}
+    ecmgui_v2::UiState bad_layout;bad_layout.path=invalid_layout;assert(!bad_layout.load()&&!bad_layout.save());
     using ecmgui_v2::pet::place;
     const auto top = place({100,400,1300,1200}, {0,0,1920,1440}, 1, 72);
     assert(!top.bottom && top.x == 172 && top.y == 276 && top.width == 112 && top.height == 124);
