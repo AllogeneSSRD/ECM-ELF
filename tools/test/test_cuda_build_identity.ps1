@@ -197,6 +197,32 @@ $linked = Get-Stage1ReleaseSources $repo -BuildDir (Join-Path $fixture 'build')
 Check ($linked.Contains((Get-EcmSourceKey $repo $moduleHeader))) 'linked host-module private includes enter Stage1 release identity'
 Write-Fixture $moduleHeader 'changed host module input'
 Reject { Assert-Stage1ReleaseSources $linked (Get-Stage1ReleaseSources $repo -BuildDir (Join-Path $fixture 'build')) } 'Stage1 source changed' 'linked host-module dependency mutation rejected'
+$msvcHeader = Join-Path $fixture 'sdk/macro include.h'
+New-Item -ItemType Directory -Force (Split-Path -Parent $msvcHeader) | Out-Null
+Write-Fixture $msvcHeader 'SDK/macro include content'
+$msvcObject = Join-Path $fixture 'build/host.obj'
+Write-Fixture $msvcObject 'MSVC host object'
+$msvcEntry = [pscustomobject]@{file=$moduleSource;directory=$fixture;output=$msvcObject;
+    command="cl /std:c++17 /MT /EHsc /c `"$moduleSource`" /Fo`"$msvcObject`" /sourceDependencies `"$msvcObject.ecm-msvc.json`""}
+$msvcDeps = [ordered]@{Version='1.2';Data=[ordered]@{Source=$moduleSource;Includes=@($msvcHeader);ImportedModules=@();ImportedHeaderUnits=@()}}
+Write-Fixture "$msvcObject.ecm-msvc.json" ($msvcDeps | ConvertTo-Json -Depth 5)
+$msvcState = Get-EcmCompileState $fixture $msvcEntry
+Save-EcmCompileState $msvcState
+Check ($msvcState.source_hashes.Contains((Get-EcmSourceKey $fixture $msvcHeader))) 'MSVC compiler discovers macro and SDK includes with spaces'
+Check (Test-EcmCompileState $msvcState) 'MSVC dependency record reused with unchanged inputs'
+$stamp = (Get-Item -LiteralPath $msvcHeader).LastWriteTimeUtc
+Write-Fixture $msvcHeader 'changed SDK/macro include content'
+(Get-Item -LiteralPath $msvcHeader).LastWriteTimeUtc = $stamp
+Check (-not (Test-EcmCompileState (Get-EcmCompileState $fixture $msvcEntry))) 'MSVC discovered header content invalidates object despite preserved timestamp'
+$msvcDeps.Data.Source=$source
+Write-Fixture "$msvcObject.ecm-msvc.json" ($msvcDeps | ConvertTo-Json -Depth 5)
+Reject { Get-EcmCompileState $fixture $msvcEntry } 'Invalid MSVC compiler dependency' 'MSVC dependency file cannot identify another source'
+$msvcDeps.Data.Source=$moduleSource; $msvcDeps.Data.ImportedModules=@('unexpected-module')
+Write-Fixture "$msvcObject.ecm-msvc.json" ($msvcDeps | ConvertTo-Json -Depth 5)
+Reject { Get-EcmCompileState $fixture $msvcEntry } 'explicit build contract' 'unsupported MSVC module imports are rejected rather than ignored'
+$msvcDeps.Data.ImportedModules=@();$msvcDeps.Version='future'
+Write-Fixture "$msvcObject.ecm-msvc.json" ($msvcDeps | ConvertTo-Json -Depth 5)
+Reject { Get-EcmCompileState $fixture $msvcEntry } 'Invalid MSVC compiler dependency' 'unknown MSVC dependency format fails closed'
 $result = [ordered]@{complete=$true;checks=$tests.Count;tests=@($tests);gpu_runs=0}
 $result | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $out 'result.json') -Encoding utf8
 Write-Host "PASS: $($tests.Count) CUDA build identity mutation gates (CPU only)"

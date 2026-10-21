@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.2`；P2–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.3`；P2a 普通 CXX 编译已完成，P2 任务合同及 P3–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2a 已完成普通 CXX 编译，P2 任务合同及 P3–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -609,6 +609,29 @@ Stage1 新增严格 HostOnly：要求已配置的同 profile 目录，在配置/
 | 数学/文件运行对照 | 与冻结 P0 基线比较，Stage1 5 例和 Stage2 5 例一致 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p1b/runtime/summary.json) |
 
 Stage1 主机 CXX 仍由 CMake/NMake 管理，Stage2 host CPP 仍由 nvcc 驱动，后者留待 P2。release 包装/marker/路径消费者完成静态和 CPU 检查，**没有执行 release 构建或打包验收**；新 Stage1 冷 profile 不代表全档重新验收。GUI 继续读取明确配置的程序路径，不递归选择最新叶目录；CPU/OpenCL/GUI 的正式 role 入口族仍属后续阶段。没有性能结论。首次 profile 测试的辅助变量类型错误已修正，失败证据保留，不影响原编译产物。
+
+### P2a：Stage2 主机源切换普通 C++ 编译已完成
+
+对应程序版本 `0.45.3`。[完整验证记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/qualification.json)保存程序、清单、源输入和各项证据；单任务合同与拥有权尚待 P2 后续子步骤，没有宣称 P2 整体完成。
+
+生产 Stage2 的 23 个主机 CPP 改由选定 MSVC 的 cl.exe 直接编译，两个 CU 仍经 nvcc，链接也保留原 nvcc 命令。已用原 nvcc dry-run 和对象 directives 核对实际参数：保留 `/MT`、C++17、`/O2`、`/EHsc`、NTT 宏、默认布局及 legacy 默认流；未伪造 CUDA 编译宏。主机真实 runtime 调用继续包含/链接 CUDA，这不要求脱离 SDK。
+
+MSVC 的 sourceDependencies JSON 捕获实际 SDK/STL/宏包含并进入既有内容指纹、对象摘要、最终核对及 HostOnly 门禁；不再把 CPP 交给 CUDA 前端。静态扫描仍保守检查本项目分支，项目内无法解析的引号包含仍报错；外部 SDK 的非活动引号包含允许缺失，实际启用的 SDK 依赖必须由成功的编译器记录。首轮遇到 CUDA SDK 的 NVRTC-only target 包含，编译前已明确失败；适配后成功，原始日志保留。
+
+host_driver、主机命令与策略进入 profile，产生新 local 叶目录 `stage2/production/sm89/eda4f0d985c23039`。原 P1b profile 未重标；新 profile 首次完整建档，未复制对象或放宽跨目录身份。两个 CU 的源摘要、编译前缀及链接前缀与 P1b 一致；不要求不同输出路径下对象字节相同。
+
+| 验证 | 结果与范围 | 证据 |
+| --- | --- | --- |
+| 正式 local 构建和重复 | 新 profile 23 CXX + 2 CU 成功；同 profile 再次零编译、零链接 | [构建](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/stage2_local_02.log)、[重复](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/stage2_repeat.log) |
+| ABI | 新主机对象和设备对象均为 MT_StaticRelease | [对象指令](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/object_directives.log)；原参数依据 [dry-run](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/nvcc_dryrun_02.log) |
+| 依赖身份 | 46 项通过，新增 MSVC SDK/宏包含、保留时间戳变异、错误源/格式/模块拒绝；29 项 profile 通过 | [身份](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/identity_final/result.json)、[profile](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/profiles/result.json) |
+| 主机变更隔离 | ecm_expr.cpp 受控注释修改及原字节还原，各只编译 1 个普通 CXX，0 CU；两 CUDA 对象摘要不变。真实 CUDA 对象篡改在编译前拒绝并还原 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/integration.json) |
+| 真实生产算术对象 | GMP 对照 1536 个模数、152064 次比较，bad=0 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/arithmetic_probe_run.log) |
+| 真实生产 NTT 对象 | 368 检查、14779392 words，bad=0；Graph 8 builds/16 hits/8 invalidations；fuse 26 allocations/26 frees、残留 0 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/ntt_probe_run.log) |
+| 两程序运行对照 | Stage1 5 例、Stage2 5 例与 P0 冻结基线一致 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/runtime_final/summary.json) |
+| Stage1 恢复/发布门禁 | 冻结基线和本阶段完整档 local 程序各通过 24 项；涵盖 scalar/SIMD、Edwards GPU、Montgomery PARAM0/2/3、停止/排他锁/身份拒绝/主备恢复/发布重试 | [基线](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/usability_baseline/summary.json)、[当前](../../data/experiments/main_flow_refactor_implementation_20261021/p2a/usability_candidate/summary.json) |
+
+同步适配既有 usability 输入：旧 -ini/--ini 与平面配置改为当前 --config、shared/stage1/workers 层次和合法 TOML 字符串，不改原断言或生产配置规则。可选 CPU Stage2 分支的 pending 工作副本额外移除已完成的 publication.order，才真实表示未发布状态；源账本不动，原 4→8 curves 断言保留。该可选跨阶段分支未执行，不列入 24 项通过范围；执行版本源码和 hash 另行保存。没有运行 release、性能采样或新增后端能力。
 
 ## 首先调整构建复用与输出隔离
 
@@ -1181,7 +1204,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0 与 P1a/P1b 完成，P2–P7 未执行，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0、P1a/P1b、P2a 完成，P2 任务合同及 P3–P7 未执行，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 

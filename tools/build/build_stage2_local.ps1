@@ -79,7 +79,11 @@ $beforeStates = [ordered]@{}
 foreach ($src in $sources) {
     $stem = $objectNames[$src]
     $obj = Join-Path $objDir "$stem.obj"
-    $command = $buildProfile.CompilePrefix + " -c `"$src`" -o `"$obj`""
+    $command = if ($src -in $cudaSources) {
+        $buildProfile.CompilePrefix + " -c `"$src`" -o `"$obj`""
+    } else {
+        $buildProfile.HostCompilePrefix + " /c `"$src`" /Fo`"$obj`" /sourceDependencies `"$obj.ecm-msvc.json`""
+    }
     $entry = [pscustomobject]@{ file = (Resolve-EcmSourcePath $repo $src); directory = $repo; command = $command; output = $obj }
     $compileEntries[$src] = $entry
     $beforeStates[$src] = Get-EcmCompileState $repo $entry $vc.Setup $includeDirs -Production:($Engine -eq 'production')
@@ -145,7 +149,10 @@ if (-not $fresh) {
         $compiled++
         Write-Host ("  start [{0}/{1}] {2}" -f $compiled, ($sources.Count - $(if ($HostOnly) { $cudaSources.Count } else { 0 })), $src)
         Write-Host ("       reason: {0}" -f $reason)
-        $compileCommand = $compileEntries[$src].command + " --generate-dependencies-with-compile --dependency-output `"$obj.ecm.d`""
+        $compileCommand = $compileEntries[$src].command
+        if ($src -in $cudaSources) {
+            $compileCommand += " --generate-dependencies-with-compile --dependency-output `"$obj.ecm.d`""
+        }
         $sw = [Diagnostics.Stopwatch]::StartNew()
         # Keep setup and compilation on separate lines. Capture via a pipe:
         # direct cmd file redirection crashes NVCC's compiler probe in some
@@ -251,6 +258,7 @@ $manifest = [ordered]@{
     toolkit = $cuda.VersionText
     host_compiler = $vc.Compiler
     host_version = $vc.Version
+    host_driver = 'msvc'
     sources = $signature
     source_hashes = $sourceHashes
     objects = $objectHashes

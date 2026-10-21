@@ -18,6 +18,9 @@ from stage1_checkpoint_decode import batch, progressed
 
 ROOT = Path(__file__).resolve().parents[2]
 from test_result_output_consistency import crc_valid
+
+def toml_string(value):
+    return json.dumps(str(value), ensure_ascii=False)
 def ledger(path): return path.parent/'data'/(path.name+'.ecm-ledger')
 spec = importlib.util.spec_from_file_location('oracle', ROOT/'tools/test/test_edwards_gpu_pipeline.py')
 oracle = importlib.util.module_from_spec(spec)
@@ -50,10 +53,11 @@ def identity_case(exe, out):
     user,computer,aid=(secrets.token_hex(12),secrets.token_hex(12),secrets.token_hex(16))
     task=f'ECM2={aid},1,2,130,-1,20,10000,2,20260922,"3"\n'
     queue=work/'worktodo.txt';queue.write_text('[Worker #2]\n'+task)
-    ini=work/'ecm.toml';ini.write_text(f'curve=ed\ntarget=cpu\nimpl=scalar\nstage1_threads=1\n'
-        f'worktodo={queue}\nfinished={work/"finished.txt"}\ntmp_dir={work}\nlog_file=\n'
-        f'user={secrets.token_hex(12)}\ncomputer={secrets.token_hex(12)}\n[Worker #2]\nuser={user}\ncomputer={computer}\n')
-    p=subprocess.run([str(exe),'-ini',str(ini),'--worker','2'],cwd=work,capture_output=True,timeout=120)
+    ini=work/'ecm.toml';ini.write_text(f'[shared]\nuser="{secrets.token_hex(12)}"\ncomputer="{secrets.token_hex(12)}"\n'
+        f'worktodo={toml_string(queue)}\n[stage1]\ncurve="ed"\ntarget="cpu"\nimpl="scalar"\nstage1_threads=1\n'
+        f'finished={toml_string(work/"finished.txt")}\ntmp_dir={toml_string(work)}\nlog_file=""\n'
+        f'[workers.2.shared]\nuser="{user}"\ncomputer="{computer}"\n',encoding='utf-8')
+    p=subprocess.run([str(exe),'--config',str(ini),'--worker','2'],cwd=work,capture_output=True,timeout=120)
     (work/'run.log').write_bytes(p.stdout+p.stderr)
     assert p.returncode==0, 'identity case failed; inspect private evidence log'
     inside=[json.loads(v) for v in (work/'stage1_results_2.jsonl').read_text().splitlines()]
@@ -106,10 +110,10 @@ def main():
         work = out/name
         work.mkdir()
         ini = work/'ecm.toml'
-        ini.write_text('user=\ncomputer=\n')
+        ini.write_text('[shared]\nuser=""\ncomputer=""\n',encoding='utf-8')
         cmd = [exe, '--curve', model, '--target', target,
                '-d', args.device, '-sigma', 20260922, '-gpucurves', count,
-               '--tmp-dir', work, '-ini', ini, '-save', work/'points.save', b1, b1]
+               '--tmp-dir', work, '--config', ini, '-save', work/'points.save', b1, b1]
         if target == 'gpu' and model == 'mont':
             cmd[1:1] = ['--gpu-param', param]
         if target == 'cpu':
@@ -162,7 +166,7 @@ def main():
                 work=out/name;submission=work/'results.json.txt'
                 before=submission.read_bytes()
                 cmd=[stage2,'--save',work/'points.save','--b2',40000,'--curves',4,
-                     '--results',work/'stage2_results.jsonl','--submission',submission,'--ini',work/'ecm.toml']
+                     '--results',work/'stage2_results.jsonl','--submission',submission,'--config',work/'ecm.toml']
                 call(name+'_stage2',cmd,work)
                 rows=[json.loads(v) for v in submission.read_text().splitlines()]
                 if name=='ed_scalar':
@@ -172,7 +176,7 @@ def main():
                     assert len(rows)==4 and submission.read_bytes()==before
                 completed=submission.read_bytes()
                 replay=[exe,'--curve','ed','--target','cpu','--impl','scalar','--stage1-threads',2,
-                        '-sigma',20260922,'-gpucurves',4,'--tmp-dir',work,'-ini',work/'ecm.toml',
+                        '-sigma',20260922,'-gpucurves',4,'--tmp-dir',work,'--config',work/'ecm.toml',
                         '-save',work/'points.save',1000,1000]
                 n=(1<<347)-1 if name=='ed_scalar' else 1009*((1<<127)-1)
                 call(name+'_stage1_replay',replay,work,str(n)+'\n')
@@ -187,12 +191,16 @@ def main():
                     shutil.copytree(ledger(submission),pending_ledger)
                     for sealed in pending_ledger.glob('*.batch'):
                         if json.loads(sealed.read_text().splitlines()[3])['b2']>1000:sealed.unlink()
-                    ini=work/'pending.ini';ini.write_text('user=\ncomputer=\nstage1_submission_file='+str(pending)+'\n')
-                    replay[replay.index('-ini')+1]=ini
+                    # This working copy models NF records never sealed/exported
+                    # by Stage2. A copied durable append history would instead
+                    # describe a completed publication and correctly replay it.
+                    (pending_ledger/'publication.order').unlink()
+                    ini=work/'pending.toml';ini.write_text('[shared]\nuser=""\ncomputer=""\n[stage1]\nstage1_submission_file='+toml_string(pending)+'\n',encoding='utf-8')
+                    replay[replay.index('--config')+1]=ini
                     call('stage1_with_pending_stage2_nf',replay,work,str(n)+'\n')
                     assert sum(json.loads(v)['curves'] for v in pending.read_text().splitlines())==4 and len(list(pending_ledger.glob('*.batch')))==1
                     assert len(list(pending_ledger.glob('*.curve')))==8
-                    call('pending_stage2_export',[stage2,'--export-results','--submission',pending,'--ini',ini],work)
+                    call('pending_stage2_export',[stage2,'--export-results','--submission',pending,'--config',ini],work)
                     assert sum(json.loads(v)['curves'] for v in pending.read_text().splitlines())==8
                     passed('stage1_preserves_pending_stage2_nf')
 
@@ -201,9 +209,9 @@ def main():
             work=out/name;work.mkdir()
             queue=work/'worktodo.txt';task='ECM2=1,2,347,-1,1000,100000,4,20260922\n';queue.write_text(task)
             blocked=work/'blocked';blocked.write_text('preserved publication failure fixture\n')
-            ini=work/'ecm.toml';ini.write_text(f'curve={model}\ntarget=cpu\nimpl=scalar\nstage1_threads=2\nworktodo={queue}\n'
-                f'finished={work/"finished.txt"}\ntmp_dir={work}\nlog_file=\nstage1_submission_file={blocked/"results.json.txt"}\n')
-            call(name+'_failed',[exe,'-ini',ini],work,good=False)
+            ini=work/'ecm.toml';ini.write_text(f'[shared]\nworktodo={toml_string(queue)}\n[stage1]\ncurve="{model}"\ntarget="cpu"\nimpl="scalar"\nstage1_threads=2\n'
+                f'finished={toml_string(work/"finished.txt")}\ntmp_dir={toml_string(work)}\nlog_file=""\nstage1_submission_file={toml_string(blocked/"results.json.txt")}\n',encoding='utf-8')
+            call(name+'_failed',[exe,'--config',ini],work,good=False)
             assert queue.read_text()==task
             primary=work/f'.{"e" if model=="ed" else "m0"}_s1_m347_1000.ckpt'
             _,saved=batch(primary)
@@ -211,7 +219,7 @@ def main():
             if model=='ed':
                 assert all(payload.startswith(b'ECM_EDWARDS_DONE_V1') for _,payload in saved)
             blocked.rename(work/'blocked_evidence')
-            call(name+'_retry',[exe,'-ini',ini],work)
+            call(name+'_retry',[exe,'--config',ini],work)
             assert not queue.read_text().strip() and not primary.exists()
             assert len((work/'stage1_results.jsonl').read_text().splitlines())==4
             assert sum(json.loads(v)['curves'] for v in (blocked/'results.json.txt').read_text().splitlines())==4
@@ -243,15 +251,15 @@ def main():
         queue = work/'worktodo.txt'
         queue.write_text(task)
         ini = work/'ecm.toml'
-        ini.write_text(f'curve={model}\ntarget={target}\nimpl={impl}\ngpu_param={param}\ndevice={args.device}\n'
-                       f'ckpt_seconds=0.001\nckpt_backups=2\nstage1_threads=1\nworktodo={queue}\nfinished={work/"finished.txt"}\n'
-                       f'tmp_dir={work}\nlog_file=\np95_worktodo_path={work/"absent_prime95"/"worktodo.txt"}\n')
+        ini.write_text(f'[shared]\nworktodo={toml_string(queue)}\n[stage1]\ncurve="{model}"\ntarget="{target}"\nimpl="{impl}"\ngpu_param={param}\ndevice={args.device}\n'
+                       f'ckpt_seconds=0.001\nckpt_backups=2\nstage1_threads=1\nfinished={toml_string(work/"finished.txt")}\n'
+                       f'tmp_dir={toml_string(work)}\nlog_file=""\np95_worktodo_path={toml_string(work/"absent_prime95"/"worktodo.txt")}\n',encoding='utf-8')
         # Only Edwards and param2 ignore transfer. Do not hand off other cases.
         if model != 'ed' and param != 2:
-            ini.write_text(ini.read_text().replace(f'p95_worktodo_path={work/"absent_prime95"/"worktodo.txt"}', 'p95_worktodo_path='))
+            ini.write_text(ini.read_text(encoding='utf-8').replace(f'p95_worktodo_path={toml_string(work/"absent_prime95"/"worktodo.txt")}', 'p95_worktodo_path=""'),encoding='utf-8')
         sa = Security(ctypes.sizeof(Security), None, True)
         event = kernel.CreateEventW(ctypes.byref(sa), True, False, None)
-        cmd = [exe, '-ini', ini]
+        cmd = [exe, '--config', ini]
         with (out/(name+'_stop.log')).open('wb') as log:
             p = subprocess.Popen(list(map(str, cmd+['--stage1-stop-handle', event])), stdout=log, stderr=log,
                                  cwd=work, env=env, close_fds=False, creationflags=subprocess.CREATE_NO_WINDOW)
@@ -294,7 +302,7 @@ def main():
         call(name+'_reject_target',cmd,work,good=False)
         assert primary.read_bytes()==original
         queue.write_text(task)
-        ini.write_text(ini.read_text().replace('ckpt_seconds=0.001', 'ckpt_seconds=0'))
+        ini.write_text(ini.read_text(encoding='utf-8').replace('ckpt_seconds=0.001', 'ckpt_seconds=0'),encoding='utf-8')
         backup = primary.with_name(primary.stem+'.bak'+primary.suffix)
         assert backup.exists()
         primary.write_bytes(original[:-4]+b'BAD\n')

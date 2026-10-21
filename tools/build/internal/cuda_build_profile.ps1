@@ -67,11 +67,17 @@ function New-EcmStage2Profile([string]$Repo, [string]$Role, [string]$Engine, [st
     $compile = "`"$($Cuda.Nvcc)`" -ccbin `"$($Vc.Compiler)`" -std=c++17 -O3 -arch=$Arch -DNTT_GL_FIXED_MODE=$mode -DNTT_OUTER_UNROLL_U=$OuterUnrollU -DNTT_GL_ADD_SUB_MASK=$AddSubMask " +
         "--split-compile=$SplitCompile -I `"$gmpRoot/include`" -I `"$Repo/include`" -Xcompiler /utf-8 -Xcompiler /wd4819"
     $link = "$($Vc.Setup) && `"$($Cuda.Nvcc)`" -ccbin `"$($Vc.Compiler)`" -std=c++17 -O3 -arch=$Arch"
-    $options = [ordered]@{ generator = 'direct-nvcc'; configuration = 'optimized'; host_driver = 'nvcc'
+    # Match the existing nvcc .cpp host invocation and object CRT directives.
+    # Device TUs and the nvcc link command retain their existing flags/default stream.
+    $hostCompile = "`"$($Vc.Compiler)`" /nologo /TP /std:c++17 /O2 /EHsc /MT /utf-8 /wd4819 " +
+        "/DNTT_GL_FIXED_MODE=$mode /DNTT_OUTER_UNROLL_U=$OuterUnrollU /DNTT_GL_ADD_SUB_MASK=$AddSubMask " +
+        "/I `"$gmpRoot/include`" /I `"$Repo/include`" /I `"$($Cuda.Root)/include`" /I `"$($Cuda.Root)/include/cccl`""
+    $options = [ordered]@{ generator = 'direct-msvc-nvcc'; configuration = 'optimized'; host_driver = 'msvc'
         gl_backend = $GlBackend; gl_fixed_mode = $mode; outer_unroll_u = $OuterUnrollU
-        add_sub_mask = $AddSubMask; split_compile = $SplitCompile; compile = $compile; link = $link }
+        add_sub_mask = $AddSubMask; split_compile = $SplitCompile; compile = $compile; host_compile = $hostCompile; link = $link }
     $buildProfile = New-EcmCudaProfile $Repo $Role stage2 $Engine $Arch $Cuda $Vc $GmpDependency $options
     $buildProfile | Add-Member -NotePropertyName CompilePrefix -NotePropertyValue $compile
+    $buildProfile | Add-Member -NotePropertyName HostCompilePrefix -NotePropertyValue $hostCompile
     $buildProfile | Add-Member -NotePropertyName LinkPrefix -NotePropertyValue $link
     return $buildProfile
 }
@@ -109,6 +115,9 @@ function Assert-EcmLegacyProfile([string]$Leaf, $buildProfile) {
         throw 'Legacy build toolchain identity differs; choose a fresh directory'
     }
     if ($buildProfile.Stage -eq 'stage2') {
+        if ($m.host_driver -ne $f.'option/host_driver') {
+            throw 'Legacy Stage2 host compiler driver differs; choose a fresh directory'
+        }
         foreach ($name in @('engine','architecture','gl_backend','gl_fixed_mode','outer_unroll_u','add_sub_mask','split_compile')) {
             $expected = if ($name -eq 'engine') { $f.engine } elseif ($name -eq 'architecture') { 'sm_' + $f.architectures } else { $f."option/$name" }
             if ([string]$m.$name -cne [string]$expected) { throw "Legacy Stage2 profile differs: $name" }

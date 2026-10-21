@@ -54,9 +54,14 @@ function Get-EcmSourceClosure([string]$Repo, [string[]]$Sources, [string[]]$Incl
                 if (Test-Path -LiteralPath $candidate -PathType Leaf) { $resolved = $candidate; break }
             }
             if ($resolved) { $pending.Push($resolved) }
-            elseif ($match.Groups[1].Value -eq '"') { throw "Unresolved local include '$name' in $key" }
+            elseif ($match.Groups[1].Value -eq '"' -and -not [IO.Path]::IsPathRooted($key)) {
+                throw "Unresolved local include '$name' in $key"
+            }
             # SDK/standard angle headers are added from compiler depfiles. An
             # inactive platform include is allowed to be absent on this host.
+            # The same applies to quoted includes *inside external SDK headers*
+            # (e.g. CUDA runtime's NVRTC-only "target"). Active SDK dependencies
+            # must still be discovered by the successful compiler and hashed.
         }
     }
     return @($seen.Values | Sort-Object -Unique)
@@ -161,7 +166,10 @@ function Get-EcmCompileState([string]$Repo, $Entry, [string]$Setup = '', [string
     $object = Get-EcmObjectPath $Entry
     $paths = @(Get-EcmSourceClosure $Repo @($Entry.file) (@($inputs.IncludeDirs) + $IncludeDirs) -Production:$Production)
     $paths += @($inputs.Responses | ForEach-Object { Get-EcmSourceKey $Repo $_ })
-    $paths += @(Get-EcmDepfilePaths "$object.ecm.d" $Entry.directory |
+    $compilerPaths = if ($Entry.command -match '(?:^|\s)/sourceDependencies\s') {
+        Get-EcmMsvcDependencyPaths "$object.ecm-msvc.json" $Entry
+    } else { Get-EcmDepfilePaths "$object.ecm.d" $Entry.directory }
+    $paths += @($compilerPaths |
         Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
         ForEach-Object { Get-EcmSourceKey $Repo $_ })
     # A removed old compiler dependency invalidates the saved fingerprint, but
@@ -186,6 +194,21 @@ function Get-EcmCompileState([string]$Repo, $Entry, [string]$Setup = '', [string
     try { $fingerprint = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))).Replace('-','') }
     finally { $sha.Dispose() }
     return [pscustomobject]@{ schema = 2; fingerprint = $fingerprint; source_hashes = $hashes; object = $object }
+}
+
+function Get-EcmMsvcDependencyPaths([string]$Path, $Entry) {
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    $dependencies = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($dependencies.Version -notin @('1.1','1.2') -or -not $dependencies.Data.Source -or
+        'Includes' -notin @($dependencies.Data.PSObject.Properties.Name) -or
+        [IO.Path]::GetFullPath($dependencies.Data.Source) -ine [IO.Path]::GetFullPath($Entry.file)) {
+        throw "Invalid MSVC compiler dependency file: $Path"
+    }
+    if (@($dependencies.Data.ImportedModules | Where-Object { $_ }).Count -or
+        @($dependencies.Data.ImportedHeaderUnits | Where-Object { $_ }).Count) {
+        throw "MSVC module dependencies require an explicit build contract: $Path"
+    }
+    return @($dependencies.Data.Source) + @($dependencies.Data.Includes)
 }
 
 function Get-EcmCompileInvalidationReason($State) {
