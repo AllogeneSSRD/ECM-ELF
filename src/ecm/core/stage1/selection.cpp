@@ -1,13 +1,8 @@
-#pragma once
-
 #include "ecm/core/stage1/selection.h"
-#include <string>
-#include <string_view>
 
-// Mathematical and execution choices are independent.
 namespace ecm_stage1 {
 
-inline std::string lower_ascii(std::string_view value) {
+std::string lower_ascii(std::string_view value) {
     std::string out(value);
     for (char &ch : out) {
         if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
@@ -15,7 +10,7 @@ inline std::string lower_ascii(std::string_view value) {
     return out;
 }
 
-inline bool parse_curve_model(std::string_view value, CurveModel &out) {
+bool parse_curve_model(std::string_view value, CurveModel &out) {
     const std::string v = lower_ascii(value);
     if (v == "mont") out = CurveModel::Montgomery;
     else if (v == "ed") out = CurveModel::Edwards;
@@ -23,7 +18,7 @@ inline bool parse_curve_model(std::string_view value, CurveModel &out) {
     return true;
 }
 
-inline bool parse_execution_target(std::string_view value, ExecutionTarget &out) {
+bool parse_execution_target(std::string_view value, ExecutionTarget &out) {
     const std::string v = lower_ascii(value);
     if (v == "cpu") out = ExecutionTarget::Cpu;
     else if (v == "gpu") out = ExecutionTarget::Gpu;
@@ -31,7 +26,7 @@ inline bool parse_execution_target(std::string_view value, ExecutionTarget &out)
     return true;
 }
 
-inline bool parse_cpu_implementation(std::string_view value, CpuImplementation &out) {
+bool parse_cpu_implementation(std::string_view value, CpuImplementation &out) {
     const std::string v = lower_ascii(value);
     if (v == "auto") out = CpuImplementation::Auto;
     else if (v == "simd") out = CpuImplementation::IfmaSimd;
@@ -40,7 +35,7 @@ inline bool parse_cpu_implementation(std::string_view value, CpuImplementation &
     return true;
 }
 
-inline bool parse_simd_reduction(std::string_view value, SimdReduction &out) {
+bool parse_simd_reduction(std::string_view value, SimdReduction &out) {
     const std::string v = lower_ascii(value);
     if (v == "auto") out = SimdReduction::Auto;
     else if (v == "mersenne-fold")
@@ -51,7 +46,7 @@ inline bool parse_simd_reduction(std::string_view value, SimdReduction &out) {
     return true;
 }
 
-inline bool parse_scalar_construction(std::string_view value, ScalarConstruction &out) {
+bool parse_scalar_construction(std::string_view value, ScalarConstruction &out) {
     const std::string v = lower_ascii(value);
     if (v == "1") out = ScalarConstruction::PrimePowerLcm;
     else if (v == "12")
@@ -60,15 +55,15 @@ inline bool parse_scalar_construction(std::string_view value, ScalarConstruction
     return true;
 }
 
-inline bool valid_route(const Selection &selection, bool gpu_edwards = false) {
+bool valid_route(const Selection &selection, bool gpu_edwards) {
     return selection.target != ExecutionTarget::Gpu ||
            selection.curve == CurveModel::Montgomery || gpu_edwards;
 }
 
-inline bool valid_gpu_param(int value) { return value == 0 || value == 2 || value == 3; }
+bool valid_gpu_param(int value) { return value == 0 || value == 2 || value == 3; }
 
 // -sigma i:s selects i unless --gpu-param explicitly selects another value.
-inline bool resolve_gpu_param(int configured, bool explicit_param, int sigma_claim,
+bool resolve_gpu_param(int configured, bool explicit_param, int sigma_claim,
                               int &resolved) {
     if (!valid_gpu_param(configured) ||
         (sigma_claim >= 0 && !valid_gpu_param(sigma_claim))) return false;
@@ -77,11 +72,11 @@ inline bool resolve_gpu_param(int configured, bool explicit_param, int sigma_cla
     return true;
 }
 
-inline const char *curve_model_name(CurveModel curve) {
+const char *curve_model_name(CurveModel curve) {
     return curve == CurveModel::Edwards ? "ed" : "mont";
 }
 
-inline const char *execution_target_name(ExecutionTarget target) {
+const char *execution_target_name(ExecutionTarget target) {
     return target == ExecutionTarget::Gpu ? "gpu" : "cpu";
 }
 

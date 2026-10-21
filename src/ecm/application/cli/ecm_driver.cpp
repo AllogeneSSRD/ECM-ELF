@@ -42,7 +42,7 @@
 #include "../../storage/checkpoint/ecm_checkpoint.h"         /* opencl_ecm_set_work_dir */
 #include "../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include "../../storage/checkpoint/ecm_stage1_legacy_gpu.h"
-#include "../configuration/ecm_stage1_selection.h"
+#include "ecm/core/stage1/selection.h"
 #include "../../service/stage1/legacy_execution.h"
 #include "ecm/application/configuration/runtime.h"
 #include "../../service/execution/legacy/ecm.h"

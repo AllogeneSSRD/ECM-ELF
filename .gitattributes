@@ -181,3 +181,6 @@ src/ecm/application/configuration/ecm_toml.h text eol=lf
 src/ecm/application/configuration/ecm_queue_config.cpp -text diff whitespace=cr-at-eol
 src/ecm/application/configuration/legacy/ecm_expr.cpp -text diff whitespace=cr-at-eol
 src/ecm/application/configuration/legacy/ecm_expr.h -text diff whitespace=cr-at-eol
+
+# Generated host defaults have no TOML or application implementation dependency.
+src/ecm/platform/generated/*.h text eol=lf

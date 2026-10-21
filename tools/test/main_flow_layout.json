@@ -733,6 +733,8 @@
     "src/core/ecm_stage1_gpu_progress.h": "include/ecm/platform/stage1_progress.h",
     "src/ecm/platform/legacy/ecm_stage1_gpu_progress.h": "include/ecm/platform/stage1_progress.h",
     "src/core/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp",
-    "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp"
+    "src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl": "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp",
+    "src/core/ecm_stage1_selection.h": "include/ecm/core/stage1/selection.h",
+    "src/ecm/application/configuration/ecm_stage1_selection.h": "include/ecm/core/stage1/selection.h"
   }
 }

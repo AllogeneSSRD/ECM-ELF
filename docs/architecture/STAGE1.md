@@ -18,7 +18,7 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 `ECMSTAGE1` 作为 save 型 Stage1 输入时，文件名前缀决定该任务的曲线构造，末尾字段决定 B1；覆盖 TOML 后再校验后端能力和 sigma 范围。`ECMSTAGE2` 只由独立 Stage2 程序领取。每条 Stage1 任务复制基础选项，防止混合队列之间传播覆盖。Edwards 前缀同时恢复其固定标量约定；执行目标保持 TOML 设置。名称、旧 save 历史复制及交接合同见[队列输入](../usage/STAGE1.md#程序与输入)。
 
-这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核、save 发布及各后端 checkpoint 仍沿用各自的路径。入口见 [ecm_stage1_selection.h](../../src/ecm/application/configuration/ecm_stage1_selection.h)、[ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp) 和 [ecm_backend.h](../../include/ecm/service/execution/legacy_gpu.h)。
+这一步统一的是选择项解析与能力检查。CPU 曲线实现、GPU 内核、save 发布及各后端 checkpoint 仍沿用各自的路径。入口见 [selection.h](../../include/ecm/core/stage1/selection.h)、[ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp) 和 [ecm_backend.h](../../include/ecm/service/execution/legacy_gpu.h)。
 
 ## 单任务编排与资源拥有权
 
@@ -28,9 +28,15 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。结果中的 factors、array_found、sigmas 分别清理，sigmas 不依赖 factors 是否存在。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
 
-任务实现已从 driver 提取为普通 CXX 翻译单元。CPU/GPU 算法块、输入与队列目前仍在旧 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)；它只组装一次包含实际执行入口、构建身份和默认 NAF 窗口读取的三回调 [私有依赖](../../src/ecm/service/stage1/legacy_execution.h)。此桥接是当前过渡边界，尚未实现最终的 Executor 准备/执行接口和后端创建合同；没有增加转发 TaskRunner、Session.run 或重复 factory/select。文件 writer 的部分实现仍为私有内联头，待后续提取。
+任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)保留输入、依赖组装及尚待提取的队列协议；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调 [私有依赖](../../src/ecm/service/stage1/legacy_execution.h)。私有 legacy 执行载荷仍是过渡合同，未声明最终 Executor 准备/执行接口已完成；没有 TaskRunner、Session.run 或重复 factory/select。部分结果 writer 仍是私有内联实现，待后续收口。
 
 任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 8 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
+
+## 选择词汇与配置依赖
+
+[selection.h](../../include/ecm/core/stage1/selection.h)公开曲线/目标/CPU 实现/归约/标量构造类型，以及这些词汇的解析、合法组合和名称声明；11 个实际函数集中在 [selection.cpp](../../src/ecm/core/stage1/selection.cpp)。旧应用私有选择头已删除，不保留转发。字段、枚举值、ASCII 解析、sigma 参数冲突规则与名称保持。
+
+task 的默认构造从 [生成默认值](../../src/ecm/platform/generated/configuration_defaults.h)获取同一 JSON 定义，不包含应用的 TOML 解析/完整绑定。准备模块也只依赖公共选择合同。应用完整生成绑定引用这份默认值，未复制默认值来源或新增配置服务。真实无 SDK 任务编译记录覆盖共享 selection 实现，且不包含 ecm_toml.h/ecm_config_generated.h。
 
 ## 标量和进度的实现隔离
 

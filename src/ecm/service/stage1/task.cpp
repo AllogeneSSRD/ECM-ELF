@@ -1,11 +1,11 @@
 #include "legacy_execution.h"
 #include "../../storage/checkpoint/ecm_checkpoint.h"
 #include "../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
-#include "../../application/configuration/ecm_stage1_selection.h"
+#include "ecm/core/stage1/selection.h"
 #include "../../storage/save/ecm_edwards_io.h"
 #include "../../storage/results/ecm_internal_result.h"
 #include "../../storage/results/ecm_submission_writer.h"
-#include "../../application/configuration/generated/ecm_config_generated.h"
+#include "../../platform/generated/configuration_defaults.h"
 #include "ecm/platform/logging.h"
 #include <chrono>
 #include <filesystem>

@@ -1,5 +1,5 @@
 #include "ecm_queue_config.h"
-#include "ecm_stage1_selection.h"
+#include "ecm/core/stage1/selection.h"
 #include "generated/ecm_toml_template.h"
 #include <fstream>
 

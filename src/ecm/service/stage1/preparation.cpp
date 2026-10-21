@@ -1,5 +1,5 @@
 #include "preparation.h"
-#include "../../application/configuration/ecm_stage1_selection.h"
+#include "ecm/core/stage1/selection.h"
 #include "../../storage/cache/ecm_stage1_exp_cache.h"
 #include "../../storage/save/ecm_edwards_io.h"
 #include "ecm/platform/logging.h"

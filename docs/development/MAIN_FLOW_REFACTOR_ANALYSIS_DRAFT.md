@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.12`；P2、P3a/b/c、P4a/b/c/d 已完成，Montgomery 主机构造、结果与存档输出已隔离；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.13`；P2、P3a/b/c、P4a–e 已完成，共享选择与生成默认值已解除 service→应用解析依赖；P4 其余子步骤及 P5–P7 待实施，GUI 按 P6 执行。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -800,6 +800,21 @@ global event 与标量上传先于恢复/构造、checkpoint 在回读之后编�
 - [最终 OpenCL](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/opencl_resources_final_02/result.json)：完成点、结果/CRC、172 资源及两份旧缓存保持；[最终重复 local](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/stage1_repeat_02.log)为 0 CXX、0 CU、0 链接。
 
 [最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4d/qualification.json)冻结最终源码和三个 worker。未运行 release、性能采样或全位宽终验。P4 继续收口配置/selection/writer、环境策略与 QueueWorkflow，不能把本子阶段写成整个 Stage1 架构已完成。
+
+### P4e：共享选择与轻量默认值合同已收口
+
+对应程序版本 `0.45.13`。11 个选择词汇/合法性/名称函数从应用私有 inline 头整体进入 core/stage1/selection.cpp，公共 selection.h 只留类型与声明，旧头删除。task 与 preparation 不再包含应用配置实现。Stage1 CUDA/OpenCL 和 Stage2 的真实配置消费者链接同一份普通 CXX 实现；独立选择测试的 CMake 目标同步接入，没有转发头、helper TU 拆分或配置服务类。
+
+生成器从原 JSON 同一次生成 platform/generated/configuration_defaults.h；完整应用绑定引用它，task 只读取这份无 TOML 解析依赖的常量。默认值声明、绑定、范围、别名、配置模板、示例和逐键参考逐 token/文本对照保持。首次独立编译发现默认值中的 GUI 数组需要显式 std::array 头，修正生成器并重新生成。生成器按既有 .gitattributes 使用 LF 原始指纹，重新生成哈希清单后两阶段重复构建通过。未直接修改生成默认值或复制业务规则。
+
+- [源码合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/source_contract_final/result.json)：11 函数、Selection 布局、默认值与完整绑定保持；6 份定义/模板/参考文件保持，service 对应用配置实现包含数为 0。
+- [配置运行检查](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/toml.log)：真实 TOML 解析与生成默认值通过；[选择目标构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/selection_build.log)和独立执行通过。该目标构建复用了 GUI 构建环境脚本，但未重建或重新验收 GUI。
+- [任务合同](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/task_contract/result.json)：8 项真实 task/持久化检查通过；[实际依赖](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/task_contract_build/manifest.json)为 0 nvcc、0 SDK 头，且无 TOML/完整配置绑定头。
+- [完整运行](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/usability/summary.json)：27 项恢复、停止、队列、发布与独立 CPU Stage2 交接通过；[两阶段 P0 对照](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/runtime/summary.json)各 5 组通过。
+- [OpenCL](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/opencl_resources/result.json)：38 个普通 CXX 编译项，172 资源、点位/结果与 CRC、两份旧缓存保持。
+- [Stage1 重复构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/stage1_repeat.log)和 [Stage2 重复构建](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/stage2_repeat.log)均为 0 编译、0 链接；31+2 个 CUDA 对象与 P4d 最终版本相同。
+
+[最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p4e/qualification.json)冻结源码、生成/构建输入和三个 worker。未运行 release、性能或全位宽终验。结果 writer、环境策略、QueueWorkflow 与私有 legacy 执行载荷继续按后续 P4 子步骤收口。
 
 ## 首先调整构建复用与输出隔离
 

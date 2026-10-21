@@ -4,7 +4,7 @@
 
 [config/ecm_options.json](../../config/ecm_options.json) 定义 Stage1、Stage2、GUI 与 worker 的键、类型、默认值、静态范围和英中说明。`shared_with` 使两阶段使用同一个 `[shared]` 定义。运行时读取生成的 C++ 绑定，不读取 JSON。修改定义后运行 `python tools/gen/generate_ecm_config.py`；`--check` 与 [构建检查](../../tools/build/internal/check_ecm_config.cmake) 验证生成物哈希。
 
-生成物包括 [默认配置](../../config/ecm.toml.default)、[示例配置](../../config/ecm.toml.example)、[逐键参考](../ECM_TOML_REFERENCE.md)、C++ 绑定、TOML 键表、嵌入模板和哈希清单。两份配置按分区及键名排序；每个条目先写 `键 = 默认值`，再写英文、中文注释，最后空一行。显式设置会改变 worker 后缀或环境变量优先级的键保留带注释的默认值，启用时取消注释。参考文档仅由生成器维护。
+生成物包括 [默认配置](../../config/ecm.toml.default)、[示例配置](../../config/ecm.toml.example)、[逐键参考](../ECM_TOML_REFERENCE.md)、C++ 绑定、[独立默认值头](../../src/ecm/platform/generated/configuration_defaults.h)、TOML 键表、嵌入模板和哈希清单。独立默认值头只依赖标准整数/数组类型，供 task 等主机实现消费；完整应用绑定包含该头，不重复生成默认值定义。两份配置按分区及键名排序；每个条目先写 `键 = 默认值`，再写英文、中文注释，最后空一行。显式设置会改变 worker 后缀或环境变量优先级的键保留带注释的默认值，启用时取消注释。参考文档仅由生成器维护。
 
 ## TOML 分区
 
