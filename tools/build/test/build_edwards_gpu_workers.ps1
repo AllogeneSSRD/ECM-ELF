@@ -14,7 +14,7 @@ if($Stage -ne 'stage2') {
     $repo=(Get-Location).Path
     $inventory=Get-EcmCudaInventory $repo
     $edwardsSources=@($inventory.groups.STAGE1_EDWARDS)
-    $sourcePaths=@(Get-EcmSourceClosure $repo $edwardsSources @('include','src/core','src/cpu','third_party/cgbn/include'))+@('CMakeLists.txt')
+    $sourcePaths=@(Get-EcmSourceClosure $repo $edwardsSources @('include','src','third_party/cgbn/include'))+@('CMakeLists.txt')
     $hashes=Get-EcmSourceHashes $repo $sourcePaths
     if($RelinkOnly){
         & (Join-Path $root 'build_stage1_local.ps1') -BuildDir "$Build/stage1" -Arch $Arch -Tiers $Tiers -Jobs $Jobs -RelinkOnly

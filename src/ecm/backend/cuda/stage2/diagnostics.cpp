@@ -8,7 +8,7 @@
 #include "options.h"
 #include "checks.h"
 #include "point_launch.h"
-#include "../../../../core/ecm_stage2_giant_chunk.h"
+#include "../planning/ecm_stage2_giant_chunk.h"
 #include "stage2_baby_launch.h"
 #include "scale_plain.cuh"
 

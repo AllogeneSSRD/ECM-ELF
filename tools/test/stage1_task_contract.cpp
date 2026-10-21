@@ -1,6 +1,6 @@
 #include "ecm/service/stage1/task.h"
 #include "../../src/ecm/service/stage1/legacy_execution.h"
-#include "../../src/core/ecm_stage1_checkpoint_runtime.h"
+#include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>

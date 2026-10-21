@@ -12,11 +12,17 @@ execute_process(COMMAND git rev-parse --short=12 HEAD WORKING_DIRECTORY "${_ecm_
 if(NOT _ecm_build_id)
     set(_ecm_build_id development)
 endif()
-file(SHA256 "${_ecm_repo}/src/core/ecm_cpu_stage2_main.cpp" _ecm_source_id)
-foreach(_shared ecm_internal_result.h ecm_result_submission.h ecm_result_json.h ecm_result_paths.h ecm_submission_writer.h ecm_program_version.h)
-    file(SHA256 "${_ecm_repo}/src/core/${_shared}" _ecm_shared_hash)
+file(SHA256 "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp" _ecm_source_id)
+foreach(_shared
+    src/ecm/storage/results/ecm_internal_result.h
+    src/ecm/storage/results/ecm_result_submission.h
+    src/ecm/storage/results/ecm_result_json.h
+    src/ecm/storage/results/ecm_result_paths.h
+    src/ecm/storage/results/ecm_submission_writer.h
+    include/ecm/platform/program_version.h)
+    file(SHA256 "${_ecm_repo}/${_shared}" _ecm_shared_hash)
     string(APPEND _ecm_source_id "${_ecm_shared_hash}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ecm_repo}/src/core/${_shared}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ecm_repo}/${_shared}")
 endforeach()
 string(SHA256 _ecm_source_id "${_ecm_source_id}")
 string(SUBSTRING "${_ecm_source_id}" 0 12 _ecm_source_id)
@@ -24,7 +30,7 @@ string(APPEND _ecm_build_id ".cpu-s2.${_ecm_source_id}")
 if(ECM_CPU_GW_POLY)
     set(ECM_GWNUM_ROOT "${_ecm_repo}/.refactor/p95v3106b01.source/gwnum" CACHE PATH "GWNUM/polymult include and x64 libraries")
     set(_ecm_gw_identity "")
-    foreach(_file "${_ecm_repo}/src/cpu/ecm_stage2_gwpoly.cpp" "${_ecm_repo}/src/cpu/ecm_stage2_gwpoly.h"
+    foreach(_file "${_ecm_repo}/src/ecm/backend/cpu/stage2/gwpoly/ecm_stage2_gwpoly.cpp" "${_ecm_repo}/src/ecm/backend/cpu/stage2/gwpoly/ecm_stage2_gwpoly.h"
                   "${ECM_GWNUM_ROOT}/gwnum64.lib" "${ECM_GWNUM_ROOT}/polymult64.lib")
         file(SHA256 "${_file}" _ecm_hash)
         string(APPEND _ecm_gw_identity "${_ecm_hash}")
@@ -34,10 +40,12 @@ if(ECM_CPU_GW_POLY)
     string(SUBSTRING "${_ecm_gw_identity}" 0 12 _ecm_gw_identity)
     string(APPEND _ecm_build_id ".gw.${_ecm_gw_identity}")
 endif()
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ecm_repo}/src/core/ecm_cpu_stage2_main.cpp")
-add_executable(ecm_cpu_stage2 "${_ecm_repo}/src/core/ecm_cpu_stage2_main.cpp"
-    "${_ecm_repo}/src/core/ecm_stage1_checkpoint_runtime.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp")
+add_executable(ecm_cpu_stage2 "${_ecm_repo}/src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp"
+    "${_ecm_repo}/src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp")
 target_compile_features(ecm_cpu_stage2 PRIVATE cxx_std_17)
+# Public host contracts; <ecm.h> remains the third-party libecm header.
+target_include_directories(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/include")
 target_compile_definitions(ecm_cpu_stage2 PRIVATE _CRT_SECURE_NO_WARNINGS "ECM_BUILD_ID=\"${_ecm_build_id}\"" "ECM_LIBECM_NTT_THRESHOLD=${_ecm_ntt_threshold}")
 target_link_libraries(ecm_cpu_stage2 PRIVATE ecm_cpu_library)
 target_compile_options(ecm_cpu_stage2 PRIVATE /O2 /openmp)
@@ -48,7 +56,7 @@ if(ECM_CPU_GW_POLY)
         endif()
     endforeach()
     set_property(TARGET ecm_cpu_stage2 ecm_cpu_library PROPERTY MSVC_RUNTIME_LIBRARY MultiThreaded)
-    target_sources(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/src/cpu/ecm_stage2_gwpoly.cpp")
+    target_sources(ecm_cpu_stage2 PRIVATE "${_ecm_repo}/src/ecm/backend/cpu/stage2/gwpoly/ecm_stage2_gwpoly.cpp")
     target_include_directories(ecm_cpu_stage2 PRIVATE "${ECM_GWNUM_ROOT}")
     target_compile_definitions(ecm_cpu_stage2 PRIVATE ECM_CPU_HAVE_GWPOLY=1)
     target_link_libraries(ecm_cpu_stage2 PRIVATE "${ECM_GWNUM_ROOT}/polymult64.lib" "${ECM_GWNUM_ROOT}/gwnum64.lib" advapi32)

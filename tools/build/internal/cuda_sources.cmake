@@ -4,28 +4,28 @@
 cmake_minimum_required(VERSION 3.20)
 set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/service/stage1/task.cpp
-    src/core/ecm_driver.cpp
-    src/core/ecm_params_init.cpp
-    src/core/ecm_checkpoint.cpp
-    src/core/ecm_stage1_checkpoint_runtime.cpp
-    src/core/ecm_save.cpp
-    src/core/ecm_gpu_common.cpp
-    src/core/ecm_queue_config.cpp
-    src/core/ecm_worktodo.cpp
-    src/core/ecm_stage2_transfer.cpp
-    src/core/ecm_expr.cpp
-    src/core/p95_transfer.cpp
-    src/core/p95_worktodo.cpp
-    src/opencl_ecm_log.cpp
-    src/cpu/ecm_edwards_cpu.cpp
-    src/cpu/ecm_edwards_save.cpp
-    src/cpu/simd_edwards.cpp
-    src/cpu/simd_mont_ifma.cpp
-    src/cpu/ecm_mont_cpu.cpp
-    src/cpu/simd_mont_curve.cpp
-    src/core/ecm_mont_ckpt.cpp
-    src/core/ecm_stage1_exp.cpp
-    src/core/ecm_stage1_exp_cache.cpp)
+    src/ecm/application/cli/ecm_driver.cpp
+    src/ecm/service/execution/legacy/ecm_params_init.cpp
+    src/ecm/storage/checkpoint/ecm_checkpoint.cpp
+    src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp
+    src/ecm/storage/save/ecm_save.cpp
+    src/ecm/service/stage1/ecm_gpu_common.cpp
+    src/ecm/application/configuration/ecm_queue_config.cpp
+    src/ecm/storage/queue/ecm_worktodo.cpp
+    src/ecm/storage/transfer/ecm_stage2_transfer.cpp
+    src/ecm/application/configuration/legacy/ecm_expr.cpp
+    src/ecm/storage/transfer/p95_transfer.cpp
+    src/ecm/storage/queue/p95_worktodo.cpp
+    src/ecm/platform/logging.cpp
+    src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp
+    src/ecm/storage/save/ecm_edwards_save.cpp
+    src/ecm/backend/cpu/stage1/edwards/simd_edwards.cpp
+    src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+    src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.cpp
+    src/ecm/backend/cpu/stage1/montgomery/simd_mont_curve.cpp
+    src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp
+    src/ecm/core/stage1/ecm_stage1_exp.cpp
+    src/ecm/storage/cache/ecm_stage1_exp_cache.cpp)
 set(ECM_STAGE1_EDWARDS_SOURCES
     src/ecm/backend/cuda/stage1/edwards/edwards.cpp
     src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp
@@ -62,7 +62,7 @@ set(ECM_STAGE1_MONT_SOURCES
     src/ecm/backend/cuda/stage1/montgomery/instances/instances_param2_g5.cu
     src/ecm/backend/cuda/stage1/montgomery/instances/instances_param2_g6.cu)
 set(ECM_STAGE1_CUDA_SOURCES
-    src/opencl_ecm_runtime_config.cpp
+    src/ecm/application/configuration/runtime.cpp
     src/ecm/backend/cuda/factory.cpp
     ${ECM_STAGE1_EDWARDS_SOURCES}
     ${ECM_STAGE1_MONT_SOURCES})
@@ -80,10 +80,10 @@ set(ECM_STAGE1_PRAC_SOURCES
     src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_constants.cu
     src/ecm/backend/cuda/stage1/montgomery/prac/ecm_prac_plan.cpp)
 set(ECM_STAGE2_HOST_SOURCES
-    src/core/ecm_cuda_stage2_main.cpp
-    src/core/ecm_expr.cpp
-    src/core/ecm_worktodo.cpp
-    src/core/ecm_queue_config.cpp)
+    src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp
+    src/ecm/application/configuration/legacy/ecm_expr.cpp
+    src/ecm/storage/queue/ecm_worktodo.cpp
+    src/ecm/application/configuration/ecm_queue_config.cpp)
 set(ECM_STAGE2_ARITHMETIC_SOURCES src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu)
 set(ECM_STAGE2_NTT_SOURCES
     src/ecm/backend/cuda/ntt/shape.cpp

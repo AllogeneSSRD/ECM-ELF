@@ -1,5 +1,5 @@
 // CPU-only independent dense topology oracle. No CUDA/runtime initialization.
-#include "../../src/core/ecm_stage2_requests.h"
+#include "../../src/ecm/backend/cuda/planning/ecm_stage2_requests.h"
 #include <iostream>
 #include <stdexcept>
 #include <string>

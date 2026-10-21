@@ -18,8 +18,8 @@ New-Item -ItemType Directory -Force $objDir | Out-Null
 $inventory=Get-EcmCudaInventory $repo
 $workerSources=@($inventory.groups.STAGE1_EDWARDS)
 $sources=$workerSources+
-    @('tools/test/edwards_gpu_stage1_probe.cpp','src/cpu/ecm_edwards_cpu.cpp')
-$deps=@(Get-EcmSourceClosure $repo $sources @('include','src/core','src/cpu','third_party/cgbn/include'))+
+    @('tools/test/edwards_gpu_stage1_probe.cpp','src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.cpp')
+$deps=@(Get-EcmSourceClosure $repo $sources @('include','src','third_party/cgbn/include'))+
     @('tools/build/test/build_edwards_gpu_stage1_probe.ps1')
 $hashes=[ordered]@{}
 foreach($source in ($sources+$deps|Select-Object -Unique)){$hashes[$source]=(Get-FileHash -LiteralPath $source).Hash}
@@ -55,7 +55,7 @@ foreach($source in $sources){
     } elseif(-not ($reuse -and $previous.objects.$source -and (Test-Path $obj) -and
         $previous.objects.$source -eq (Get-FileHash -LiteralPath $obj).Hash)) {
         $command='"'+$cuda.Nvcc+'" -ccbin "'+$vc.Compiler+'" -std=c++17 -O2 -arch='+$Arch+
-            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I include -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I src/core -I src/cpu -I src/ecm/backend/cuda/stage1/edwards -c "'+$source+'" -o "'+$obj+'"'
+            ' --pre-include=stdint.h -Xcompiler /MD -Xcompiler /utf-8 -Xcompiler /wd4819 -I include -I third_party/cgbn/include -I third_party/gmp-zen3/dist/include -I include -I src -I src -I src/ecm/backend/cuda/stage1/edwards -c "'+$source+'" -o "'+$obj+'"'
         if($Tiers){
             $definitions=' -DECM_TIERS_RESTRICTED'
             foreach($tier in $Tiers.Split(',')){

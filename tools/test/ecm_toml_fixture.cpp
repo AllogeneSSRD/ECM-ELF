@@ -1,4 +1,4 @@
-#include "../../src/core/generated/ecm_config_generated.h"
+#include "../../src/ecm/application/configuration/generated/ecm_config_generated.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>

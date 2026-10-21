@@ -2,8 +2,8 @@
 
 // Read-only view of worker-owned submission JSON lines. No result generation,
 // merging, checksum rewriting or ledger access belongs in the GUI.
-#include "../core/ecm_toml.h"
-#include "../core/generated/ecm_config_generated.h"
+#include "../ecm/application/configuration/ecm_toml.h"
+#include "../ecm/application/configuration/generated/ecm_config_generated.h"
 #include <cstdint>
 #include <filesystem>
 #include <string>

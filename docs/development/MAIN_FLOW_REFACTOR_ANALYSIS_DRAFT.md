@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.6`；P2 已完成，P3a CUDA 完整家族物理归位已完成；P3 其余家族与 P4–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.7`；P2、P3a CUDA 与 P3b 主机家族归位已完成；P3c OpenCL/GUI 与 P4–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -689,6 +689,26 @@ Stage1 按 Montgomery/Edwards 组织主机实现、设备算法、独立实例�
 原 Stage2 目录的 MSVC 依赖记录绑定旧源路径，正常拒绝搬迁后的同名对象复用；保留旧目录，正式输出改到显式 local 叶目录 build_cuda_local/stage2/production/sm89/p3a-eda4f0d985c23039，profile 本身仍为 eda4f0d985c23039，未复制对象或改写身份。首次 Stage1 搬迁工具去掉两份 CUDA 文件的 BOM，复现仓库已记录的 nvcc/GBK 注释吞行，导致 CHECKPOINT_VERSION 未定义；终止该失败轮次，恢复两份原有 BOM 后重新核对所有失效对象。首次失败日志和中止结果保留，未修改宏、数学或编译标准绕过错误。
 
 当前正式架构/使用文档的 CUDA 链接和离线图谱已同步；前期报告仍保留其冻结源码摘要，只将跳转链接映射到当前文件。core/CPU/application/配置生成器/OpenCL/GUI 的剩余物理归位继续 P3，私有混合实现的职责深化继续 P4–P6。没有新增 PRAC 运行资格、release、多架构或性能结论。
+
+### P3b：主机、核心、CPU 与存储家族归位已完成
+
+对应程序版本 `0.45.7`。本子步骤迁移 120 个文件：原 core 98 项、CPU 15 项和共享兼容文件 7 项；与 P3a 合计 262 项。原 src/core、src/cpu 已无文件。当前实现正文保持，只调整物理所有者、引用和构建清单；没有新增转发文件或空层。[最终资格记录](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/qualification.json)保存源码和程序摘要。
+
+driver、独立 Stage2 入口及参数加载归 application；曲线、Stage1 标量及 Stage2 几何归 core；CPU 算术、SIMD 和曲线执行归 backend/cpu；CUDA 硬件内存规划与执行约束归 backend/cuda。checkpoint、save、results、queue、transfer、cache、profile 归 storage；原子发布、指纹、日志和版本归 platform。混合调优保留 service/planning/legacy，PARI 因子拆分归 service/stage2/legacy。配置生成物移入 application/configuration/generated，并同步唯一生成器及清单。
+
+公开 include 与对应模块使用一致路径：Stage1 scalar/selection/task、Stage2 probability、platform logging/version、application runtime 和过渡执行 C ABI。它们不包含 CUDA SDK 或私有 CUDA 类型。probability 目前仍为原有完整头实现，runtime 仍保留全局配置，inline writer、driver 的 CPU/GPU/队列及 PARI 分支也仍存在；这些是 P4–P6 的深化对象，不能因迁移而宣称已完成接口与实现分离。
+
+| 核对 | 结果及范围 | 证据 |
+| --- | --- | --- |
+| 物理与依赖 | 合计 262 项正文/BOM、211 个包含消费者、785 条实际引用；TU 顺序和逐源编译属性保持。唯一生成测试 fixture 引用按已有生产脚本核对 | [布局检查](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/layout_final_02/result.json) |
+| 配置及头所有权 | 默认值、范围、JSON、默认/示例配置及生成参考内容不变；8 个公开主机头不泄漏 CUDA；CPU Stage2 的外部 libecm.h 保持真实所有者 | [主机检查](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/host_layout/result.json) |
+| local 构建 | Stage1 选用 384/1024 两档，覆盖全部既有恢复/发布输入；Stage2 生产 local 构建通过。两者重复构建均 0 CXX、0 CU、0 链接 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/stage1_local.log)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/stage2_local.log)、[重复1](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/stage1_repeat.log)、[重复2](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/stage2_repeat.log) |
+| 主流程 | 原 24 项通过；真实 CPU Stage2 联动共 27 项通过，覆盖跨阶段提交与 pending Stage2 NF 恢复；两阶段各 5 组 P0 对照通过 | [24项](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/usability/summary.json)、[27项](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/usability_cpu/summary.json)、[对照](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/runtime/summary.json) |
+| 独立任务 | 8 种成功/失败/停止/发布组合通过；实际编译依赖为 0 nvcc、0 CUDA SDK include、0 CUDA SDK 头 | [合同](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/task_contract/result.json)、[构建清单](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/task_contract_build/manifest.json) |
+| 其他消费者 | GUI 构建及 33 项无窗口自检、26 项结果读取、85 项日志解析通过；CPU Stage2 用真实 libecm 构建，GWPoly 关闭 | [GUI](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/gui_build.log)、[结果](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/gui_results.log)、[日志](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/gui_log_parse.log)、[CPU](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/cpu_stage2_build.log) |
+| 构建与隔离合同 | 46 项内容身份核对、32 个 Stage2 清理模块、27 项实验隔离及三项负向边界通过；选定两档工厂查询 20 项通过 | [身份](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/identity/result.json)、[清理](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/p4_cleanup/result.json)、[隔离](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/p4_isolation/result.json)、[工厂](../../data/experiments/main_flow_refactor_implementation_20261021/p3b/registry/result.json) |
+
+完整 32 档 local 已在 P3a 冻结；后续组织调整以覆盖既有输入的 384/1024 档验证，P7 再做完整位宽终验。本阶段未运行 CUDA release，不新增性能、多架构、PRAC 或 GWPoly 资格。OpenCL 主机、运行资源与 GUI 文件的物理归位继续 P3c；实际 CUDA 同步、回读和资源管理保持其 CUDA 依赖。
 
 ## 首先调整构建复用与输出隔离
 

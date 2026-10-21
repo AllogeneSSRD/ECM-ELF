@@ -33,7 +33,6 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}/CL"
         "${MPA_ROOT}/include"
         "${MPA_ROOT}/src"
-        "${MPA_ROOT}/src/core"
         "${MPA_ROOT}/kernels/opencl")
 
 set(_ECM_GMP_HEADER "${ECM_ANDROID_GMP_ROOT}/include/gmp.h")
@@ -44,19 +43,19 @@ if(ECM_ANDROID_GMP_ROOT AND EXISTS "${_ECM_GMP_HEADER}" AND EXISTS "${_ECM_GMP_L
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ECM_HAVE_GMP=1)
     target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${ECM_ANDROID_GMP_ROOT}/include")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-            "${MPA_ROOT}/src/core/ecm_expr.cpp"
+            "${MPA_ROOT}/src/ecm/application/configuration/legacy/ecm_expr.cpp"
             "${MPA_ROOT}/src/opencl_ecm_entry.cpp"
             "${MPA_ROOT}/src/opencl_ecm_stage1.cpp"
-            "${MPA_ROOT}/src/core/ecm_gpu_common.cpp"
-            "${MPA_ROOT}/src/core/ecm_params_init.cpp"
-            "${MPA_ROOT}/src/core/ecm_checkpoint.cpp"
-            "${MPA_ROOT}/src/core/ecm_stage1_checkpoint_runtime.cpp"
-            "${MPA_ROOT}/src/core/ecm_save.cpp"
+            "${MPA_ROOT}/src/ecm/service/stage1/ecm_gpu_common.cpp"
+            "${MPA_ROOT}/src/ecm/service/execution/legacy/ecm_params_init.cpp"
+            "${MPA_ROOT}/src/ecm/storage/checkpoint/ecm_checkpoint.cpp"
+            "${MPA_ROOT}/src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp"
+            "${MPA_ROOT}/src/ecm/storage/save/ecm_save.cpp"
             "${MPA_ROOT}/src/opencl_ecm_debug_utils.cpp"
             "${MPA_ROOT}/src/opencl_ecm_mont.cpp"
             "${MPA_ROOT}/src/opencl_ecm_limb24.cpp"
             "${MPA_ROOT}/src/opencl_ecm_path_registry.cpp"
-            "${MPA_ROOT}/src/opencl_ecm_runtime_config.cpp"
+            "${MPA_ROOT}/src/ecm/application/configuration/runtime.cpp"
             "${MPA_ROOT}/src/opencl_ecm_selftest.cpp"
             "${MPA_ROOT}/kernels/opencl/impl_opencl.cpp")
     target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE "${_ECM_GMP_LIB}")

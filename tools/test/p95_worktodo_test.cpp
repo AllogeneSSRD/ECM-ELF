@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "p95_worktodo.h"
+#include "../../src/ecm/storage/queue/p95_worktodo.h"
 
 static int g_fail = 0;
 static int g_pass = 0;

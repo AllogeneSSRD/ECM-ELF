@@ -1,7 +1,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-#include "ecm_stage1_gpu_progress.h"
+#include "../../src/ecm/platform/legacy/ecm_stage1_gpu_progress.h"
 #include <cstdlib>
 #include <limits>
 

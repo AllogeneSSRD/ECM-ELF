@@ -1,4 +1,4 @@
-#include "../../src/core/ecm_stage2_probability.h"
+#include "ecm/core/stage2/probability.h"
 #include <iomanip>
 #include <iostream>
 int main() {

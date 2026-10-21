@@ -20,7 +20,7 @@
 
 #include "cpu_addsub_impl.h"
 
-#include "opencl_ecm_runtime_config.h"
+#include "ecm/application/configuration/runtime.h"
 
 #include "cpu_info.h"
 

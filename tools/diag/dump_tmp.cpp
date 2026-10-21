@@ -4,7 +4,7 @@
  * mpz_get_str: mixing gmp_printf and printf interleaves out of order on Windows.
  *   usage: dump_tmp <file.tmp> [more.tmp ...]
  */
-#include "ecm_edwards_save.h"
+#include "../../src/ecm/storage/save/ecm_edwards_save.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <stdlib.h>

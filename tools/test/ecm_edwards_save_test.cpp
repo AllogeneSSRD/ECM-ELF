@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 #include <gmp.h>
-#include "ecm_edwards_save.h"
+#include "../../src/ecm/storage/save/ecm_edwards_save.h"
 
 static bool read_file_bytes(const std::string &path, std::vector<unsigned char> &out) {
     std::ifstream in(path, std::ios::binary);

@@ -41,8 +41,8 @@ struct ProductionDefaults {
 
 // Reuse the experimental engine verbatim, including its exact NTT and checks.
 #include "engine.cuh"
-#include "../../../../src/core/ecm_cuda_stage2.h"
-#include "../../../../src/core/ecm_stage2_logging.h"
+#include "../../../../src/ecm/backend/cuda/stage2/ecm_cuda_stage2.h"
+#include "../../../../src/ecm/platform/legacy/ecm_stage2_logging.h"
 #include "../../../../src/ecm/backend/cuda/ntt/device/tune_checks.cuh"
 #include "tune.cuh"
 

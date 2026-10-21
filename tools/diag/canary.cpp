@@ -1,7 +1,7 @@
 /* canary.cpp — is the kernel's *raw* result canonical (< N)?  mpz_mod() in
    ifma_to_mpz_lane() hides non-canonical representatives, so this reads the raw
    limbs and compares against a*b (mersenne) / a*b*R^-1 (montgomery). */
-#include "simd_mont_ifma.h"
+#include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <vector>

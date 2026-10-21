@@ -1,7 +1,7 @@
 // CPU allocation-event proof. The runner inserts production S4Ctx, lookup and
 // allocation statements. No CUDA runtime or arithmetic kernels are linked.
-#include "../../src/core/ecm_stage2_s4_memory.h"
-#include "../../src/core/ecm_stage2_requests.h"
+#include "../../src/ecm/backend/cuda/planning/ecm_stage2_s4_memory.h"
+#include "../../src/ecm/backend/cuda/planning/ecm_stage2_requests.h"
 #include <iostream>
 #include <stdexcept>
 #include <string>

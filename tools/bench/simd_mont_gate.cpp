@@ -15,8 +15,8 @@
  * Build: cmake --build build_vs18 --config Release --target simd_mont_gate
  * ------------------------------------------------------------------------- */
 
-#include "simd_mont_ifma.h"
-#include "ecm_edwards_mont.h"
+#include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../src/ecm/backend/cpu/arithmetic/scalar/ecm_edwards_mont.h"
 
 #include <gmp.h>
 #include <emmintrin.h>

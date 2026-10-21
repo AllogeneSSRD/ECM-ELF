@@ -1,4 +1,4 @@
-#include "opencl_ecm_log.h"
+#include "ecm/platform/logging.h"
 
 #include "ecm_log_android.h"
 #include "jni_utf8.h"

@@ -21,7 +21,7 @@ stage2_submission_file = "results.json.txt"
 
 TOML 相对输出路径基于 TOML 目录，显式 CLI 路径基于当前目录。默认提交文件为 worker 1 的 `results.json.txt`，其他 worker 自动添加后缀；显式配置路径需要自行区分。提交文件有独占写锁，不支持多个进程同时共享同一个输出路径。输入 save、内部结果与提交文件必须不同。GUI 的 [Result 面板](GUI.md#result) 只读这些提交文件，提供筛选和原文复制，不参与结果写入或账本维护。
 
-AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA Stage2 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../src/core/ecm_program_version.h) 统一维护。Windows x64 平台号为数字 4；其他平台不冒用该编号。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。Stage1 的 `source-build` 从链接后生成的 `ecm_stage1_build_identity.txt` 读取入口/共用源码及构建档位指纹；复制程序时可一并保留该文件，缺失时明确使用 development。精确二进制以构建清单中的 SHA256 为准。CPU Stage2 内部结果的 `source-build` 保留 Git/入口源码指纹，GW 构建另含算术模块与 GW 库指纹；CUDA 内部结果的 source-build 直接记录当前可执行文件 SHA256，构建清单另存编译条件。
+AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA Stage2 队列沿用任务的 AID。没有 AID 时不生成虚构值。程序名和数字版本由 [ecm_program_version.h](../../include/ecm/platform/program_version.h) 统一维护。Windows x64 平台号为数字 4；其他平台不冒用该编号。program.version 使用纯数字点分版本，Git 哈希放在构建身份中。Stage1 的 `source-build` 从链接后生成的 `ecm_stage1_build_identity.txt` 读取入口/共用源码及构建档位指纹；复制程序时可一并保留该文件，缺失时明确使用 development。精确二进制以构建清单中的 SHA256 为准。CPU Stage2 内部结果的 `source-build` 保留 Git/入口源码指纹，GW 构建另含算术模块与 GW 库指纹；CUDA 内部结果的 source-build 直接记录当前可执行文件 SHA256，构建清单另存编译条件。
 
 版本按 `x.y.z` 维护：新增功能递增 y，并将 z 归零；修复递增 z。版本不随单次构建或 Git 提交自动变化，发布功能或修复时统一更新该头文件；构建依赖会使 CPU/CUDA 输出同步采用新版本。创建 Release 不是生成结果的前提。
 
@@ -68,7 +68,7 @@ AID 可省略；CPU/CUDA Stage2 直接读档均可用 `--aid`，Stage1 与 CUDA 
 15. os.architecture，即 `x86_64`。
 16. timestamp，保留结果中的 UTC 字符串 `YYYY-MM-DD HH:MM:SS`。
 
-Stage1、CPU/CUDA Stage2 使用共用 [内部序列化模块](../../src/core/ecm_internal_result.h)；提交字段和数学一致性验证使用 [公共结果模型](../../src/core/ecm_result_submission.h)。`stage1-engine.batch-seconds` 是整个批次的引擎及 text-save 发布墙钟时间，包含指数、曲线准备、运行中检查点和算术，包括命中时的即时因子发布，排除外层批次档案读取、输入预检与最终双 JSON 发布；它在逐曲线记录中重复，不能求和当作总耗时。
+Stage1、CPU/CUDA Stage2 使用共用 [内部序列化模块](../../src/ecm/storage/results/ecm_internal_result.h)；提交字段和数学一致性验证使用 [公共结果模型](../../src/ecm/storage/results/ecm_result_submission.h)。`stage1-engine.batch-seconds` 是整个批次的引擎及 text-save 发布墙钟时间，包含指数、曲线准备、运行中检查点和算术，包括命中时的即时因子发布，排除外层批次档案读取、输入预检与最终双 JSON 发布；它在逐曲线记录中重复，不能求和当作总耗时。
 
 Stage1 内部 `fft-length=0` 表示没有 GWNUM 变换长度，提交版本使用正的 Prime95 参考容量；`stage1-engine.coverage=B1` 不表示执行过 Stage2。
 
@@ -80,7 +80,7 @@ CRC 使用标准反射 CRC-32/ISO-HDLC：宽度 32 位，初值 `0xFFFFFFFF`，�
 
 内部结果使用本行的实际 fft-length（libecm 为 0，gwpoly 为真实 GW 长度）和逐曲线 sigma；转换后提交文件使用正的参考 FFT、NF 模型标记和合并后的真实完成时间，必须从最终记录重新计算 CRC，不能拷贝内部旧值。版本、参与计算的字段或其表示改变时也须重算。单纯调整 JSON 键顺序、空格，以及移动 d/poly-size 不改变规范串。
 
-curves、d、poly-size、stage2-fft-length、status、stage、user、computer、aid、program.port 和 source-build 不在这 16 个槽位中；CRC 不保护这些字段。它也不是 Prime95 的 security-code/SEC5。第三方源码依据见 [PrMers CRC32 研究](../reference/ECM_RESULT_JSON.md#prmers-crc32)，本仓库入口为 [转换器 checksum](../../tools/ecm_report/rewrite_stage2_results.py) 与 [CPU result](../../src/core/ecm_cpu_stage2_main.cpp)；[独立按位校验](../../tools/test/test_stage2_result_rewrite.py) 用于复核库计算结果。真实运行产生的 checksum 值保留在忽略目录。
+curves、d、poly-size、stage2-fft-length、status、stage、user、computer、aid、program.port 和 source-build 不在这 16 个槽位中；CRC 不保护这些字段。它也不是 Prime95 的 security-code/SEC5。第三方源码依据见 [PrMers CRC32 研究](../reference/ECM_RESULT_JSON.md#prmers-crc32)，本仓库入口为 [转换器 checksum](../../tools/ecm_report/rewrite_stage2_results.py) 与 [CPU result](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)；[独立按位校验](../../tools/test/test_stage2_result_rewrite.py) 用于复核库计算结果。真实运行产生的 checksum 值保留在忽略目录。
 
 ## 去重、批次与恢复
 
@@ -139,4 +139,4 @@ ecm_cpu_stage2.exe --export-results --submission results.json.txt
 
 PrimeNet v5 API 0.97 描述的是 `ar` 请求字段与结果类型，不是现代手工提交 JSON 的完整规范；结构还需对照 Prime95 生成器及正式样本。[固定源码与 API 研究](../reference/ECM_RESULT_JSON.md) 列出依据。上述 Montgomery NF 批次已有用户提供的服务器接受回执；Edwards、因子结果及其他提交入口仍需各自验证。AutoPrimeNet 的固定程序名扫描规则未修改。
 
-实现入口：[提交序列化](../../src/core/ecm_result_submission.h) 的 `submission_json`、[账本与原子导出](../../src/core/ecm_submission_writer.h) 的 `publish_submission`/`seal_submissions`，CPU 和 CUDA 主程序在验证完成结果后调用它们。
+实现入口：[提交序列化](../../src/ecm/storage/results/ecm_result_submission.h) 的 `submission_json`、[账本与原子导出](../../src/ecm/storage/results/ecm_submission_writer.h) 的 `publish_submission`/`seal_submissions`，CPU 和 CUDA 主程序在验证完成结果后调用它们。

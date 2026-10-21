@@ -13,7 +13,7 @@ if($manifest.engine -ne 'development'){throw 'Require an explicitly experimental
 $cuda=Resolve-EcmCudaToolkit -Archs $manifest.architecture
 $vc=Resolve-EcmVcEnvironment $cuda
 $gmp=$manifest.gmp_root
-$dirs=@((Join-Path $gmp 'include'),'include','src','src/core','src/cpu','src/ecm/backend/cuda')
+$dirs=@((Join-Path $gmp 'include'),'include','src','src/ecm/backend/cuda')
 $inventory=Get-EcmCudaInventory $repo
 $set=Get-EcmStage2SourceSet $repo $inventory development $dirs
 Assert-EcmBuildUnits $repo $WorkerBuild $manifest $set.Sources $dirs

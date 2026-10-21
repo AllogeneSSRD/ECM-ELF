@@ -173,3 +173,11 @@ tools/test/test_stage2_runtime_tune.py text eol=lf
 
 # Production CUDA implementation and dispatch stay private under src.
 src/ecm/backend/cuda/** text eol=lf
+
+# Stable public contracts and relocated generated configuration.
+include/ecm/** text eol=lf
+src/ecm/application/configuration/generated/*.h text eol=lf
+src/ecm/application/configuration/ecm_toml.h text eol=lf
+src/ecm/application/configuration/ecm_queue_config.cpp -text diff whitespace=cr-at-eol
+src/ecm/application/configuration/legacy/ecm_expr.cpp -text diff whitespace=cr-at-eol
+src/ecm/application/configuration/legacy/ecm_expr.h -text diff whitespace=cr-at-eol

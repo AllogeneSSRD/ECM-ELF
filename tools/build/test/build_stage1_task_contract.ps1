@@ -12,8 +12,8 @@ if(-not $manifest.host_compiler -or -not $manifest.compile_setup){throw 'Formal 
 . (Join-Path $PSScriptRoot '../internal/cuda_build_state.ps1')
 $inventory=Get-EcmCudaInventory $repo
 $production=@($inventory.groups.STAGE1_COMMON)+@($inventory.groups.STAGE1_CUDA)
-$sources=@('src/ecm/service/stage1/task.cpp','src/core/ecm_checkpoint.cpp',
-    'src/core/ecm_stage1_checkpoint_runtime.cpp','src/opencl_ecm_log.cpp','src/opencl_ecm_runtime_config.cpp')
+$sources=@('src/ecm/service/stage1/task.cpp','src/ecm/storage/checkpoint/ecm_checkpoint.cpp',
+    'src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp','src/ecm/platform/logging.cpp','src/ecm/application/configuration/runtime.cpp')
 foreach($source in $sources){if($source -notin $production){throw "Missing production collaborator: $source"}}
 $sources+=@('tools/test/stage1_task_contract.cpp')
 New-Item -ItemType Directory -Path $buildPath|Out-Null
@@ -21,7 +21,7 @@ $objects=@();$commands=@();$hashes=[ordered]@{}
 foreach($source in $sources){
     $name=$source.Replace('/','_')+'.obj';$object=Join-Path $buildPath $name;$objects+=('"'+$object+'"')
     $commands+=('"'+$manifest.host_compiler+'" /nologo /TP /std:c++17 /O2 /EHsc /MD /utf-8 /wd4819'+
-        ' /I "'+$repo+'/include" /I "'+$repo+'/src" /I "'+$repo+'/src/core" /I "'+$manifest.gmp_root+'/include"'+
+        ' /I "'+$repo+'/include" /I "'+$repo+'/src" /I "'+$repo+'/src" /I "'+$manifest.gmp_root+'/include"'+
         ' /c "'+$source+'" /Fo"'+$object+'" /sourceDependencies "'+$object+'.deps.json"')
     $commands+='if errorlevel 1 exit /b 1'
     $hashes[$source]=(Get-FileHash -LiteralPath (Join-Path $repo $source)).Hash

@@ -48,9 +48,9 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 @media(max-width:800px){.kpis{grid-template-columns:repeat(2,1fr)}.plan-section h2{font-size:22px}pre{padding:16px 13px}}
 @media print{body{background:white}main{max-width:none;padding:10px}.review-nav,.phase-nav{display:none}pre{white-space:pre-wrap;background:#f1f4ef;color:#111}.evidence-details{break-before:page}}
 </style></head><body><main>
-<header><div class="caption">ECM-ELF · 2026-10-21 · 实施草稿 / P0–P2 与 P3a 已完成，其余目录迁移进行中</div>
+<header><div class="caption">ECM-ELF · 2026-10-21 · 实施草稿 / P0–P2、P3a/b 已完成，OpenCL/GUI 迁移待实施</div>
 <h1>主流程重构完整方案</h1><p class="lead">构建复用先行；明确 driver、task、factory 与 QueueWorkflow 的职责，精简重复封装。完整目录、Interface、伪代码与阶段门槛。</p>
-<div class="hero-note"><strong>P3a 已完成，程序版本 0.45.6。</strong>142 个 CUDA 家族文件统一归入 src/ecm/backend/cuda，设备头退出公开 include；源码、include 指向、实例 TU 与逐源编译属性保持。完整 local、实际算术/NTT、24 项恢复/发布、两阶段各 5 组对照通过。P3 其余家族与 P4–P7 继续实施。</div>
+<div class="hero-note"><strong>P3b 已完成，程序版本 0.45.7。</strong>CUDA 与主机家族合计 262 个文件已归位。主机实现正文、配置默认值和编译属性保持；local、27 项 CPU Stage2 联动、GUI 和独立任务合同通过。P3c OpenCL/GUI 与 P4–P7 继续实施，混合实现的接口深化尚未完成。</div>
 <div class="kpis"><div><b>31 个 CU</b><span>用户日志中的全量编译单元</span></div><div><b>1535.6 秒</b><span>单次 CUDA 编译阶段墙钟，非总脚本</span></div><div><b>默认逐 TU 复用</b><span>先落实 build_cuda_local 等隔离根</span></div><div><b>P0—P7</b><span>阶段交付与验收门槛</span></div></div>
 <p class="caption">沿用前期整合快照（HEAD 2e64b75e5d14287e2ee25bdaff27e3b1128c1d93 加当时工作区，版本头0.44.7），流程分析保留其0.44.6依据。以上为前期设计依据，保持原始快照。本次 P0 从干净 HEAD 5735108、版本0.44.9开始，另存1959项源码摘要与local日志；P0 local 基线与P1a构建复用分别保留实际程序、清单与验证证据；未运行release，没有性能结论。</p></header><nav class="review-nav" aria-label="方案目录"><a href="#plan-progress">实施记录</a><a href="#plan-overview">目标与约束</a><a href="#plan-build">先改构建</a><a href="#plan-tree">完整目录</a><a href="#plan-modules">模块职责</a><a href="#plan-boundaries">职责与精简</a><a href="#plan-interfaces">Interface 输入输出</a><a href="#plan-driver">driver 伪代码</a><a href="#plan-map">文件映射</a><a href="#plan-phases">阶段顺序</a><a href="#plan-validation">验收</a><a href="#source-analysis">现状依据</a></nav><div class="phase-nav"><a href="#phase-0">P0 · 冻结依据</a><a href="#phase-1">P1 · 构建先行</a><a href="#phase-2">P2 · 合同与CXX</a><a href="#phase-3">P3 · 目录归位</a><a href="#phase-4">P4 · Stage1提取</a><a href="#phase-5">P5 · Stage2收口</a><a href="#phase-6">P6 · GUI/CPU</a><a href="#phase-7">P7 · 综合验收</a></div><div class="pipeline" aria-label="Task内部七步"><span>task内部：校验</span><span>打开会话</span><span>准备</span><span>执行 + 安全点协作</span><span>核对</span><span>最终发布</span><span>结束会话</span><span>队列另行提交</span></div><section class="plan-section" id="plan-overview"><h2>完整重构目标与实施约束</h2>
 <p>本节是整合后的<strong>目标实施方案</strong>；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3a 完成 CUDA 家族物理归位，其余 P3 与 P4–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。</p>
@@ -161,6 +161,20 @@ pre code{font-size:12.5px;font-family:Consolas,ui-monospace,monospace;white-spac
 </tbody></table></div>
 <p>原 Stage2 目录的 MSVC 依赖记录绑定旧源路径，正常拒绝搬迁后的同名对象复用；保留旧目录，正式输出改到显式 local 叶目录 build_cuda_local/stage2/production/sm89/p3a-eda4f0d985c23039，profile 本身仍为 eda4f0d985c23039，未复制对象或改写身份。首次 Stage1 搬迁工具去掉两份 CUDA 文件的 BOM，复现仓库已记录的 nvcc/GBK 注释吞行，导致 CHECKPOINT_VERSION 未定义；终止该失败轮次，恢复两份原有 BOM 后重新核对所有失效对象。首次失败日志和中止结果保留，未修改宏、数学或编译标准绕过错误。</p>
 <p>当前正式架构/使用文档的 CUDA 链接和离线图谱已同步；前期报告仍保留其冻结源码摘要，只将跳转链接映射到当前文件。core/CPU/application/配置生成器/OpenCL/GUI 的剩余物理归位继续 P3，私有混合实现的职责深化继续 P4–P6。没有新增 PRAC 运行资格、release、多架构或性能结论。</p>
+<h3 id="p3b主机核心cpu-与存储家族归位已完成">P3b：主机、核心、CPU 与存储家族归位已完成</h3>
+<p>对应程序版本 <code>0.45.7</code>。本子步骤迁移 120 个文件：原 core 98 项、CPU 15 项和共享兼容文件 7 项；与 P3a 合计 262 项。原 src/core、src/cpu 已无文件。当前实现正文保持，只调整物理所有者、引用和构建清单；没有新增转发文件或空层。<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/qualification.json">最终资格记录</a>保存源码和程序摘要。</p>
+<p>driver、独立 Stage2 入口及参数加载归 application；曲线、Stage1 标量及 Stage2 几何归 core；CPU 算术、SIMD 和曲线执行归 backend/cpu；CUDA 硬件内存规划与执行约束归 backend/cuda。checkpoint、save、results、queue、transfer、cache、profile 归 storage；原子发布、指纹、日志和版本归 platform。混合调优保留 service/planning/legacy，PARI 因子拆分归 service/stage2/legacy。配置生成物移入 application/configuration/generated，并同步唯一生成器及清单。</p>
+<p>公开 include 与对应模块使用一致路径：Stage1 scalar/selection/task、Stage2 probability、platform logging/version、application runtime 和过渡执行 C ABI。它们不包含 CUDA SDK 或私有 CUDA 类型。probability 目前仍为原有完整头实现，runtime 仍保留全局配置，inline writer、driver 的 CPU/GPU/队列及 PARI 分支也仍存在；这些是 P4–P6 的深化对象，不能因迁移而宣称已完成接口与实现分离。</p>
+<div class="table-scroll"><table><thead><tr><th>核对</th><th>结果及范围</th><th>证据</th></tr></thead><tbody>
+<tr><td>物理与依赖</td><td>合计 262 项正文/BOM、211 个包含消费者、785 条实际引用；TU 顺序和逐源编译属性保持。唯一生成测试 fixture 引用按已有生产脚本核对</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/layout_final_02/result.json">布局检查</a></td></tr>
+<tr><td>配置及头所有权</td><td>默认值、范围、JSON、默认/示例配置及生成参考内容不变；8 个公开主机头不泄漏 CUDA；CPU Stage2 的外部 libecm.h 保持真实所有者</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/host_layout/result.json">主机检查</a></td></tr>
+<tr><td>local 构建</td><td>Stage1 选用 384/1024 两档，覆盖全部既有恢复/发布输入；Stage2 生产 local 构建通过。两者重复构建均 0 CXX、0 CU、0 链接</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/stage1_local.log">Stage1</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/stage2_local.log">Stage2</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/stage1_repeat.log">重复1</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/stage2_repeat.log">重复2</a></td></tr>
+<tr><td>主流程</td><td>原 24 项通过；真实 CPU Stage2 联动共 27 项通过，覆盖跨阶段提交与 pending Stage2 NF 恢复；两阶段各 5 组 P0 对照通过</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/usability/summary.json">24项</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/usability_cpu/summary.json">27项</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/runtime/summary.json">对照</a></td></tr>
+<tr><td>独立任务</td><td>8 种成功/失败/停止/发布组合通过；实际编译依赖为 0 nvcc、0 CUDA SDK include、0 CUDA SDK 头</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/task_contract/result.json">合同</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/task_contract_build/manifest.json">构建清单</a></td></tr>
+<tr><td>其他消费者</td><td>GUI 构建及 33 项无窗口自检、26 项结果读取、85 项日志解析通过；CPU Stage2 用真实 libecm 构建，GWPoly 关闭</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/gui_build.log">GUI</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/gui_results.log">结果</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/gui_log_parse.log">日志</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/cpu_stage2_build.log">CPU</a></td></tr>
+<tr><td>构建与隔离合同</td><td>46 项内容身份核对、32 个 Stage2 清理模块、27 项实验隔离及三项负向边界通过；选定两档工厂查询 20 项通过</td><td><a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/identity/result.json">身份</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/p4_cleanup/result.json">清理</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/p4_isolation/result.json">隔离</a>、<a href="../../data/experiments/main_flow_refactor_implementation_20261021/p3b/registry/result.json">工厂</a></td></tr>
+</tbody></table></div>
+<p>完整 32 档 local 已在 P3a 冻结；后续组织调整以覆盖既有输入的 384/1024 档验证，P7 再做完整位宽终验。本阶段未运行 CUDA release，不新增性能、多架构、PRAC 或 GWPoly 资格。OpenCL 主机、运行资源与 GUI 文件的物理归位继续 P3c；实际 CUDA 同步、回读和资源管理保持其 CUDA 依赖。</p>
 </section>
 <section class="plan-section" id="plan-build"><h2>首先调整构建复用与输出隔离</h2>
 <h3 id="当前样例说明了什么">当前样例说明了什么</h3>
@@ -581,7 +595,7 @@ if (curve_completed &amp;&amp;
     !context.accept_curve(classified_host_outcome))
     return Failed(SaveOrPublicationError);</code></pre>
 <p>主机快照writer无需CUDA；同步/D2H仍是Adapter行为。不能把暂态device pointer交给writer，也不为screen刷新额外下载全部曲线。CPU callback可直接持久化或先PAUSED返回再由外层持久化，不为整齐统一循环结构。</p>
-<p>必须保留当前细节：Edwards scalar的capture/DONE可先于factor发布，IFMA和Montgomery的具体顺序不同；最终submission→internal→seal→end_batch(true)不变；停止不得为未完成曲线发布NF。当前依据为 <a href="../../src/core/ecm_driver.cpp">ecm_driver.cpp</a> 第 3079–3104 行及前文逐后端细表。</p>
+<p>必须保留当前细节：Edwards scalar的capture/DONE可先于factor发布，IFMA和Montgomery的具体顺序不同；最终submission→internal→seal→end_batch(true)不变；停止不得为未完成曲线发布NF。当前依据为 <a href="../../src/ecm/application/cli/ecm_driver.cpp">ecm_driver.cpp</a> 第 3079–3104 行及前文逐后端细表。</p>
 <h3 id="独立-stage2-与-gui">独立 Stage2 与 GUI</h3>
 <p>Stage2有自己的状态机，不套用Stage1的checkpoint循环。其owner默认保留progress/pending；CUDA父进程流程示意中，checked表示失败即停止推进并由会话保留状态的错误检查：</p>
 <div class="code-caption">C++17 概念伪代码</div><pre><code>auto task = checked(stage2.open_and_validate(source));
@@ -601,7 +615,7 @@ for (auto curve : task.remaining_curves()) {
 checked(publisher.seal_task(task.identity()));
 checked(complete_stage2_source_after_recheck(task, queue_stores)); // workflow私有
 checked(task.remove_completed_progress());</code></pre>
-<p>子进程重读save并验证fingerprint后调用Stage2Executor；完成异步算术检查，再发布结果和receipt。exit=0不能替代receipt。非零退出沿用当前保留/报错，后续重启才按durable receipt恢复，不能悄悄改成当场成功。依据为 <a href="../../src/core/ecm_cuda_stage2_main.cpp">ecm_cuda_stage2_main.cpp</a> 第 617、898、914–920、1505–1508、1551–1585 行。</p>
+<p>子进程重读save并验证fingerprint后调用Stage2Executor；完成异步算术检查，再发布结果和receipt。exit=0不能替代receipt。非零退出沿用当前保留/报错，后续重启才按durable receipt恢复，不能悄悄改成当场成功。依据为 <a href="../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp">ecm_cuda_stage2_main.cpp</a> 第 617、898、914–920、1505–1508、1551–1585 行。</p>
 <p>CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/父子receipt。GUI的WorkerController负责configure→选择exe→启动/监管→事件归并→停止/重启→快照；视图只提交命令并读快照。Stage1安全点停止、Stage2当前曲线结束后停止和等待子进程退出的现有语义保留；看见checkpoint文件不表示可以强杀。GUI监管与Stage2父子编排可复用进程机制，不强行合成总Supervisor。</p>
 </section>
 <section class="plan-section" id="plan-map"><h2>现有文件到目标模块的迁移映射</h2>

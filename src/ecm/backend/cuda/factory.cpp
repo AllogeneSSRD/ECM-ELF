@@ -9,11 +9,11 @@
        enumeration + selection done here (the .cu never calls cudaSetDevice).
 */
 
-#include "../../../../include/ecm_backend.h"
+#include "ecm/service/execution/legacy_gpu.h"
 #include "stage1/montgomery/api.h"   /* native cgbn_ecm_stage1 */
 #include "runtime/cuda_ecm_shim.h"      /* OUTPUT_*, outputf/test_verbose/ecm_cuda_set_verbose */
 #include "runtime/cudacommon.h"         /* kernel_info declaration */
-#include "../../../opencl_ecm_log.h"     /* ecm_ts_vfprintf / ecm_ts_fprintf */
+#include "ecm/platform/logging.h"     /* ecm_ts_vfprintf / ecm_ts_fprintf */
 
 #include <cuda_runtime.h>
 

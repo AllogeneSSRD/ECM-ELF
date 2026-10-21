@@ -12,8 +12,8 @@
 #include <string>
 #include <vector>
 #include <gmp.h>
-#include "ecm_edwards_cpu.h"
-#include "ecm_edwards_mont.h"
+#include "../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.h"
+#include "../../src/ecm/backend/cpu/arithmetic/scalar/ecm_edwards_mont.h"
 
 static void compute_s(mpz_t s, unsigned long B1) {
     mpz_set_ui(s, 48);

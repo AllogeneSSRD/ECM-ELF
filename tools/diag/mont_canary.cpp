@@ -10,7 +10,7 @@
  *
  *   usage: mont_canary <bits> [trials]
  */
-#include "ecm_edwards_mont.h"
+#include "../../src/ecm/backend/cpu/arithmetic/scalar/ecm_edwards_mont.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <stdlib.h>

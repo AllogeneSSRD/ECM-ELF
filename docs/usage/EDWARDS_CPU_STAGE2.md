@@ -6,7 +6,7 @@ CPU 与 GPU Edwards Stage1 均生成 `METHOD=ECM-EDWARDS-AM; VERSION=1; SCALAR=4
 
 Windows x64 新功能构建使用 `tools/build/test/build_cpu_stage2.ps1 -Jobs 8 -GwPoly`，输出 `build_cpu_stage2/native/ecm_cpu_stage2.exe`。需要 MSVC、CMake/Ninja、现有 GMP、`.refactor/gmp-ecm` 源码，以及 `.refactor/p95v3106b01.source/gwnum` 中匹配头文件的 `gwnum64.lib` / `polymult64.lib`，不需要 CUDA。GW 构建按这两个本地库使用静态 MSVC CRT（/MT）；不附加 `-GwPoly` 可构建仅有 libecm 的版本。源目录可在 CMake 中设置 `ECM_LIBECM_SOURCE_DIR` 和 `ECM_GWNUM_ROOT`；根 CMake 提供默认关闭的 `ECM_BUILD_CPU_STAGE2`，并以 `ECM_CPU_GW_POLY=ON` 启用 GW 后端。适配器不修改外部源码，分发目录附 GMP DLL 与上游许可文件。支持 TOML 中的结果身份和提交文件配置；此程序尚未纳入 CUDA 发布包、GUI 或 Stage2 队列入口。
 
-本机依赖为 GMP-ECM `7.0.6-dev`，上游提交 `17b5cdf1536b96fce4a7b92832f57f9028fbe570`。构建使用通用 GMP limb 路径及 OpenMP，不依赖上游 MPIR/YASM 汇编工程。实现入口为 [CPU Stage2](../../src/core/ecm_cpu_stage2_main.cpp)、[严格存档读取](../../src/core/ecm_edwards_save_reader.h) 和 [依赖构建](../../tools/build/internal/ecm_libecm.cmake)。
+本机依赖为 GMP-ECM `7.0.6-dev`，上游提交 `17b5cdf1536b96fce4a7b92832f57f9028fbe570`。构建使用通用 GMP limb 路径及 OpenMP，不依赖上游 MPIR/YASM 汇编工程。实现入口为 [CPU Stage2](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp)、[严格存档读取](../../src/ecm/storage/save/ecm_edwards_save_reader.h) 和 [依赖构建](../../tools/build/internal/ecm_libecm.cmake)。
 
 典型交接：
 
@@ -23,7 +23,7 @@ Stage1 的 N 由标准输入提供；上例的 `--exponent 127` 仅适用于保�
 
 `--b2` 使用精确十进制整数，必须大于所选记录 B1。libecm 入口限制为 10^12，gwpoly 的整数规划范围为 10^15；后者不是最大界限的性能资格，当前实际完成的正确性界限为 B2=2.6×10^12、N=M347。`--memory-mib` 默认 512，是规划预算，不限制进程工作集或包含全部运行时开销。GW 以实际 FFT 布局估计 F 树、G 工作区及临时系数，自动选择平滑 D；`--d D` 可固定偶数 D（6…20,000,000），P=φ(D)/2，预算不足拒绝执行。自动选择是静态成本估计，未保证最快。
 
-规划器 [choose_d / stage2](../../src/cpu/ecm_stage2_gwpoly.cpp) 使用 L=⌈log₂P⌉、W=`gwnum_size+64`，按 `E=((P(L+18)+256)W)/2^20` MiB 筛预算，并最小化静态分数 `C=6PL+(B2/D+P)(L+8)`。E 是容量估计，不是测得的工作集上界；C 没有独立校准不同线程数、CPU 或全部尾树形状。实际单进程峰值与完整耗时分别测量。
+规划器 [choose_d / stage2](../../src/ecm/backend/cpu/stage2/gwpoly/ecm_stage2_gwpoly.cpp) 使用 L=⌈log₂P⌉、W=`gwnum_size+64`，按 `E=((P(L+18)+256)W)/2^20` MiB 筛预算，并最小化静态分数 `C=6PL+(B2/D+P)(L+8)`。E 是容量估计，不是测得的工作集上界；C 没有独立校准不同线程数、CPU 或全部尾树形状。实际单进程峰值与完整耗时分别测量。
 
 `--gw-check` 在完整运行中额外使用 GMP 直接累乘三个 baby 点对应的全部 giant 差值，与最终叶结果比较，适合正确性验证，不计入默认性能测量。`--d` 和 `--gw-check` 要求显式 `--backend gwpoly`。`--selftest-gwpoly --threads 4` 独立验证复合环上的多项式算法，无需 save。`--dry-run` 只检查文件和目标元数据，不执行完整算术与内存规划。
 

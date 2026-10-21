@@ -4,7 +4,7 @@
 #include "options.h"
 #include "checks.h"
 #include "diagnostics.h"
-#include "../../../../core/ecm_stage2_giant_chunk.h"
+#include "../planning/ecm_stage2_giant_chunk.h"
 
 BatchedRun run_batched(
     PolyLayer &L,

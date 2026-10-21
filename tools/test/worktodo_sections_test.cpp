@@ -11,8 +11,8 @@
 // loudly, because a broken section walk shows up as "the queue eats another
 // worker's task" -- which is silent otherwise.
 
-#include "../../src/core/ecm_worktodo.h"
-#include "../../src/core/ecm_toml.h"
+#include "../../src/ecm/storage/queue/ecm_worktodo.h"
+#include "../../src/ecm/application/configuration/ecm_toml.h"
 
 #include <cstdio>
 #include <fstream>

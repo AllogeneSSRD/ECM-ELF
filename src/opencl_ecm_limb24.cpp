@@ -1,6 +1,6 @@
 #include "opencl_ecm_limb24.h"
 
-#include "opencl_ecm_log.h"
+#include "ecm/platform/logging.h"
 
 #include <cstring>
 

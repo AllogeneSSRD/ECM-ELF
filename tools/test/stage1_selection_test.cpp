@@ -1,4 +1,4 @@
-#include "ecm_stage1_selection.h"
+#include "../../src/ecm/application/configuration/ecm_stage1_selection.h"
 
 #include <cstdlib>
 #include <iostream>

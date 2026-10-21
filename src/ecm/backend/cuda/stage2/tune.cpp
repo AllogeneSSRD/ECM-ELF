@@ -1,6 +1,6 @@
 // Production NTT calibration against the linked NTT runtime.
 #include "../ntt/runtime.h"
-#include "../../../../core/ecm_cuda_stage2.h"
+#include "ecm_cuda_stage2.h"
 #include "json_quote.h"
 #include <sstream>
 #include <iomanip>

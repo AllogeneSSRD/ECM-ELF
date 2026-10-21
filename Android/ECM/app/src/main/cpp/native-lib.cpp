@@ -12,7 +12,7 @@
 #include "opencl_runtime.h"
 #include "opencl_ecm_path_registry.h"
 
-#include "ecm_checkpoint.h"
+#include "../../../../../../src/ecm/storage/checkpoint/ecm_checkpoint.h"
 
 #include <cstdint>
 

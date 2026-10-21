@@ -1,7 +1,7 @@
 // Same-binary outer-plan study using the production runtime and arithmetic.
 #include <algorithm>
 #include <stdexcept>
-#include "../../src/core/ecm_stage2_logging.h"
+#include "../../src/ecm/platform/legacy/ecm_stage2_logging.h"
 #include "../../src/ecm/backend/cuda/ntt/runtime.h"
 #include <cuda_profiler_api.h>
 

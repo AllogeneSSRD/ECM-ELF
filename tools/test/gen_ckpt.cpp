@@ -3,8 +3,8 @@
 #include <cstdlib>
 #include <vector>
 #include <gmp.h>
-#include "ecm_edwards_cpu.h"
-#include "ecm_edwards_save.h"
+#include "../../src/ecm/backend/cpu/stage1/edwards/ecm_edwards_cpu.h"
+#include "../../src/ecm/storage/save/ecm_edwards_save.h"
 
 static void compute_s(mpz_t s, unsigned long B1) {
     mpz_set_ui(s, 48);

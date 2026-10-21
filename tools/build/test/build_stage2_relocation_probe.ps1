@@ -13,7 +13,7 @@ $dependency=Resolve-EcmGmp -Repo $repo -Gmp $manifest.gmp_root
 $cuda=Resolve-EcmCudaToolkit -Archs $manifest.architecture -CudaRoot $manifest.cuda_root
 $vc=Resolve-EcmVcEnvironment $cuda
 $inventory=Get-EcmCudaInventory $repo (Join-Path $Build 'cuda_sources.json')
-$includeDirs=@((Join-Path $dependency.Root 'include'),'include','src','src/core','src/cpu','src/ecm/backend/cuda')
+$includeDirs=@((Join-Path $dependency.Root 'include'),'include','src','src/ecm/backend/cuda')
 $sourceSet=Get-EcmStage2SourceSet $repo $inventory production $includeDirs
 Assert-EcmBuildUnits $repo $Build $manifest $sourceSet.Sources $includeDirs -Production
 $engineObjects=@()
@@ -27,7 +27,7 @@ $engineArgs=($engineObjects|ForEach-Object{'"'+$_+'"'}) -join ' '
 $output=Join-Path $Build 'relocation_probe.exe'
 $source=Join-Path $repo 'tools/test/stage2_relocation_probe.cpp'
 $command="`"$($cuda.Nvcc)`" -ccbin `"$($vc.Compiler)`" -std=c++17 -O3 -arch=$($manifest.architecture) -Xcompiler=/MT " +
-    "-I `"$repo/src/core`" -I `"$($dependency.Root)/include`" `"$source`" $engineArgs -L `"$($dependency.Root)/lib`" -lgmp -o `"$output`""
+    "-I `"$repo/src`" -I `"$($dependency.Root)/include`" `"$source`" $engineArgs -L `"$($dependency.Root)/lib`" -lgmp -o `"$output`""
 $batch=Join-Path $Build '_objects/relocation_probe.cmd'
 [IO.File]::WriteAllText($batch,"@echo off`r`n$($vc.Setup)`r`nif errorlevel 1 exit /b 1`r`n$command`r`n",[Text.UTF8Encoding]::new($false))
 & cmd.exe /d /c $batch

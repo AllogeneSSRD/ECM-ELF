@@ -1,6 +1,6 @@
 #ifdef NTT_TENSOR_USE_PRODUCTION_RUNTIME
 #include <algorithm>
-#include "../../src/core/ecm_stage2_logging.h"
+#include "../../src/ecm/platform/legacy/ecm_stage2_logging.h"
 #include "../../src/ecm/backend/cuda/ntt/runtime.h"
 #include "../../src/ecm/backend/cuda/arithmetic/goldilocks/goldilocks_tile.cuh"
 #else

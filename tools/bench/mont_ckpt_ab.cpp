@@ -27,8 +27,8 @@
 #include <chrono>
 #include <vector>
 
-#include "ecm_mont_cpu.h"
-#include "simd_mont_curve.h"
+#include "../../src/ecm/backend/cpu/stage1/montgomery/ecm_mont_cpu.h"
+#include "../../src/ecm/backend/cpu/stage1/montgomery/simd_mont_curve.h"
 
 /* the pre-checkpoint ladder, renamed by the build command (see the header note) */
 int old_mont_soa_init(mont_soa_ctx_t *c, const mpz_t N, int field_mode);

@@ -40,7 +40,7 @@ def check_boundary(path, text):
         assert target.suffix not in ('.cu','.cpp','.inl'), ('implementation inclusion',path,match[1])
         if 'tools/experiments/' in path.as_posix():
             private=ROOT/'src/ecm/backend/cuda/stage2'
-            allowed={current_source(old).resolve() for old in LAYOUT['moved'] if old.startswith(('kernels/cuda/','include/ecm/cuda/','src/cuda/common/'))}
+            allowed={current_source(old).resolve() for old in LAYOUT['moved'] if not old.startswith('src/cuda/stage2/')}
             assert not target.is_relative_to(private) or target in allowed, ('experiment includes private Stage2 host',path,target)
 
 

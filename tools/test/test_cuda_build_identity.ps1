@@ -176,11 +176,11 @@ Check ($production.Count -eq $expectedProduction.Count -and
     @($inventory.groups.STAGE2_DEVELOPMENT).Count -eq 1 -and
     $inventory.groups.STAGE2_DEVELOPMENT[0] -eq 'tools/experiments/cuda/stage2_tree/worker.cu' -and
     @($production|Where-Object {$_ -like 'tools/*'}).Count -eq 0) 'production and development source groups separate'
-$set = Get-EcmStage2SourceSet $repo $inventory production @('include','src/core','src/ecm/backend/cuda')
+$set = Get-EcmStage2SourceSet $repo $inventory production @('include','src','src/ecm/backend/cuda')
 Check (-not @($set.Dependencies | Where-Object { $_ -match '^tools/(bench|experiments)/' }).Count) 'actual production Stage2 source closure isolated'
 Check (@($set.Dependencies | Where-Object { $_ -like '*.def' }).Count -ge 2) 'Stage2 definition tables present in source identity'
 $stage1 = Get-Stage1ReleaseSources $repo
-foreach ($name in @('src/ecm/backend/cuda/dispatch/tiers.def','src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl','src/core/ecm_edwards_gpu_driver.inl')) {
+foreach ($name in @('src/ecm/backend/cuda/dispatch/tiers.def','src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl','src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl')) {
     Check ($stage1.Contains($name)) "Stage1 release records $name"
 }
 $enabled = Get-Stage1ReleaseSources $repo -EnablePrac $true

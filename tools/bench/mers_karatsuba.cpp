@@ -39,8 +39,8 @@
  *
  * usage: mers_karatsuba [k] [levels] [reps]
  * ------------------------------------------------------------------------- */
-#include "simd_mont_ifma.h"
-#include "../../src/cpu/simd_mont_ifma.cpp"
+#include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
+#include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp"
 
 #include <stdio.h>
 #include <stdlib.h>

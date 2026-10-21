@@ -42,14 +42,14 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include "../../runtime/cudacommon.h"
 
 // progress-bar colour helpers (ANSI code / reset)
-#include "../../../../../opencl_ecm_log.h"
+#include "ecm/platform/logging.h"
 
 // MPA-OpenCl port: replaces GMP-ECM's "ecm.h"/"ecm-gpu.h". Provides OUTPUT_*,
 // outputf/test_verbose shims, ECM_GPU_* constants, and pulls in the project's
 // ECM_* return codes (include/ecm.h).
 #include "../../runtime/cuda_ecm_shim.h"
-#include "../../../../../core/ecm_stage1_checkpoint_runtime.h"
-#include "../../../../../core/ecm_stage1_gpu_progress.h"
+#include "../../../../storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
+#include "../../../../platform/legacy/ecm_stage1_gpu_progress.h"
 
 #include <time.h>
 #include <sys/types.h>

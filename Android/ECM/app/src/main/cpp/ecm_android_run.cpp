@@ -3,8 +3,8 @@
 #include "ecm_log_android.h"
 #include "opencl_android_shim.h"
 #include "opencl_loader.h"
-#include "opencl_ecm_log.h"
-#include "opencl_ecm_runtime_config.h"
+#include "ecm/platform/logging.h"
+#include "ecm/application/configuration/runtime.h"
 #include "opencl_program_cache.h"
 
 #include <sstream>
@@ -34,13 +34,13 @@ std::string run_ecm_android(const EcmAndroidRunRequest& req) {
 
 #else
 
-#include "ecm_expr.h"
-#include "ecm_checkpoint.h"
+#include "../../../../../../src/ecm/application/configuration/legacy/ecm_expr.h"
+#include "../../../../../../src/ecm/storage/checkpoint/ecm_checkpoint.h"
 #include "opencl_ecm_entry.h"
-#include "ecm_save.h"
+#include "../../../../../../src/ecm/storage/save/ecm_save.h"
 
-#include "ecm.h"
-#include "cgbn_stage1.h"
+#include "../../../../../../src/ecm/service/execution/legacy/ecm.h"
+#include "../../../../../../src/ecm/service/execution/legacy/cgbn_stage1.h"
 
 #include <cstdlib>
 #include <cstring>

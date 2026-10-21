@@ -1,4 +1,4 @@
-#include "ecm_stage1_checkpoint_runtime.h"
+#include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 #include <windows.h>
 #include <filesystem>
 #include <fstream>

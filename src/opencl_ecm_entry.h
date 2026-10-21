@@ -5,7 +5,7 @@
 
 #include <gmp.h>
 
-#include "cgbn_stage1.h"
+#include "ecm/service/execution/legacy/cgbn_stage1.h"
 
 #ifdef __cplusplus
 extern "C" {

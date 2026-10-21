@@ -6,7 +6,7 @@
 #include "checks.h"
 #include "diagnostics.h"
 #include "point_launch.h"
-#include "../../../../core/ecm_stage2_giant_chunk.h"
+#include "../planning/ecm_stage2_giant_chunk.h"
 #include "scale_plain.cuh"
 #include "s4_pack_state.h"
 

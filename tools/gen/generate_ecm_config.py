@@ -335,9 +335,9 @@ def template_header(value):
 
 def products(schema):
     default = toml_template(schema, False)
-    files = {"src/core/generated/ecm_config_generated.h": header(schema),
-             "src/core/generated/ecm_toml_schema.h": toml_schema_header(schema),
-             "src/core/generated/ecm_toml_template.h": template_header(default),
+    files = {"src/ecm/application/configuration/generated/ecm_config_generated.h": header(schema),
+             "src/ecm/application/configuration/generated/ecm_toml_schema.h": toml_schema_header(schema),
+             "src/ecm/application/configuration/generated/ecm_toml_template.h": template_header(default),
              "config/ecm.toml.default": default,
              "config/ecm.toml.example": toml_template(schema, True),
              "docs/ECM_TOML_REFERENCE.md": toml_reference(schema)}

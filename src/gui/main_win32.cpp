@@ -16,7 +16,7 @@
 #include "platform.h"
 #include "gpu_selftest.h"
 #include "worker_selftest.h"
-#include "../core/ecm_program_version.h"
+#include "ecm/platform/program_version.h"
 
 #include "imgui.h"
 #include "imgui_impl_dx11.h"

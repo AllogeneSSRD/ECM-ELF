@@ -1,5 +1,5 @@
-#include "ecm_stage1_legacy_gpu.h"
-#include "ecm_edwards_gpu_checkpoint.h"
+#include "../../src/ecm/storage/checkpoint/ecm_stage1_legacy_gpu.h"
+#include "../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h"
 #include <cstdlib>
 #include <fstream>
 #include <iostream>

@@ -86,8 +86,8 @@
  * ------------------------------------------------------------------------- */
 #define NTT_PROBE_NAME "stage2_tree_gpu"
 #include "../ntt_variants/engine.cuh"
-#include "../../../../src/core/ecm_stage2_geometry.h"
-#include "../../../../src/core/ecm_stage2_d_catalog.h"
+#include "../../../../src/ecm/core/stage2/ecm_stage2_geometry.h"
+#include "../../../../src/ecm/core/stage2/ecm_stage2_d_catalog.h"
 
 #include <string>
 #include <utility>

@@ -1,5 +1,5 @@
 // Diagnostic entry into an already built experimental worker. No engine inclusion.
-#include "../../src/core/ecm_cuda_stage2.h"
+#include "../../src/ecm/backend/cuda/stage2/ecm_cuda_stage2.h"
 #include <cstdio>
 #include <cstdlib>
 

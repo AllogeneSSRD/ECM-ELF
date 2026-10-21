@@ -51,7 +51,7 @@ Write-Host "   MSVC      : $($vc.Version)"
 if ($LASTEXITCODE -ne 0) { throw 'Generated ECM config is stale; run python tools/gen/generate_ecm_config.py' }
 . (Join-Path $PSScriptRoot 'internal/cuda_build_state.ps1')
 $inventory = Get-EcmCudaInventory $repo (Join-Path $Build 'cuda_sources.json')
-$includeDirs = @((Join-Path $Gmp 'include'), 'include','src','src/core','src/cpu','src/ecm/backend/cuda')
+$includeDirs = @((Join-Path $Gmp 'include'), 'include','src','src/ecm/backend/cuda')
 $sourceSet = Get-EcmStage2SourceSet $repo $inventory $Engine $includeDirs
 $sources = @($sourceSet.Sources)
 $cudaSources = @($sourceSet.CudaSources)

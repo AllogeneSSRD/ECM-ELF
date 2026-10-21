@@ -1,6 +1,6 @@
 #include "opencl_ecm_selftest.h"
 
-#include "opencl_ecm_log.h"
+#include "ecm/platform/logging.h"
 #include "opencl_ecm_mont.h"
 
 #include <CL/cl.h>

@@ -1,5 +1,5 @@
 #include "results.h"
-#include "../core/ecm_result_json.h"
+#include "../ecm/storage/results/ecm_result_json.h"
 #include <chrono>
 #include <fstream>
 #include <iostream>

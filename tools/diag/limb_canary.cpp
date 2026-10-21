@@ -5,7 +5,7 @@
    canonical 52-bit limbs (soa_add/soa_sub/soa_cond_sub).
 
    usage: dirt <k> <mode 0=mont 1=mers> <trials> */
-#include "simd_mont_ifma.h"
+#include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
 #include <gmp.h>
 #include <stdio.h>
 #include <stdlib.h>

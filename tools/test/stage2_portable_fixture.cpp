@@ -1,4 +1,4 @@
-#include "../../src/core/ecm_stage2_portable_model.h"
+#include "../../src/ecm/service/planning/legacy/ecm_stage2_portable_model.h"
 #include <iostream>
 int main(int argc,char **argv) {
     try {

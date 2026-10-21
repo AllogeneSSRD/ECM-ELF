@@ -34,7 +34,7 @@ def main():
         'inline constexpr FftCapacity p95_fft_capacities[]={']+
         [f'    {{{limit}ull,{length}u}},' for limit, length in rows]+
         ['};', '} // namespace ecm_results', ''])
-    dest = ROOT/'src/core/generated/p95_fft_reference.h'
+    dest = ROOT/'src/ecm/storage/results/generated/p95_fft_reference.h'
     if args.check:
         if dest.read_text() != text:raise ValueError('stale Prime95 FFT reference')
     else:dest.write_text(text, encoding='utf-8')

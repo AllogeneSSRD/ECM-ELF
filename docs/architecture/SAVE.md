@@ -33,7 +33,7 @@ CPU/GPU 自动命名由 `save_name_pattern` 统一产生，当前模式结构为
 
 [GUI worktodo 生成器](../usage/GUI.md#队列生成与交接)按所选曲线类型展开同一默认模式；它不链接 GMP，非梅森目标的 `bit` 位数使用估计值，涉及已知因子或位数边界时须核对预览。核心 Stage1 自动命名仍使用实际 N 位数。
 
-来源：[命名器](../../src/core/ecm_driver.cpp#L1991)、[前缀规范](../../src/core/ecm_driver.cpp#L777)、[配置源](../../config/ecm_options.json)。
+来源：[命名器](../../src/ecm/application/cli/ecm_driver.cpp#L1991)、[前缀规范](../../src/ecm/application/cli/ecm_driver.cpp#L777)、[配置源](../../config/ecm_options.json)。
 
 ### 2.2 Stage1 以 ECMSTAGE2 行作为输入
 
@@ -54,7 +54,7 @@ CPU/GPU 自动命名由 `save_name_pattern` 统一产生，当前模式结构为
 
 Stage2 消费时，以每条记录内部的 METHOD/PARAM/SIGMA/B1/N 为算术依据；只改文件名前缀不能将一条 Mont 记录转换为 Edwards，也不能改变已完成 B1。
 
-来源：[前缀覆盖](../../src/core/ecm_driver.cpp#L761)、[队列入口](../../src/core/ecm_driver.cpp#L3725)、[旧历史复制](../../src/core/ecm_driver.cpp#L785)、[只改 save token](../../src/core/ecm_worktodo.cpp#L134)、[提取 B1](../../src/core/ecm_worktodo.cpp#L370)。
+来源：[前缀覆盖](../../src/ecm/application/cli/ecm_driver.cpp#L761)、[队列入口](../../src/ecm/application/cli/ecm_driver.cpp#L3725)、[旧历史复制](../../src/ecm/application/cli/ecm_driver.cpp#L785)、[只改 save token](../../src/ecm/storage/queue/ecm_worktodo.cpp#L134)、[提取 B1](../../src/ecm/storage/queue/ecm_worktodo.cpp#L370)。
 
 ## 3. 文本封装
 
@@ -102,7 +102,7 @@ PARAM3 当前路径会收集本批找到的不同有效因子，依次在表达�
 
 命中时的 X 是因子，没有点的继续意义。文本没有独立命中标志；消费者需据算术或其他结果判定。Stage1 结果账本是曲线结果的独立依据，见 [ECM 结果输出](../usage/ECM_RESULTS.md)。
 
-来源：[PARAM2/3 写入](../../src/core/ecm_save.cpp#L153)、[PARAM0 写入](../../src/core/ecm_save.cpp#L218)、[表达式剥离](../../src/core/ecm_save.cpp#L106)、[驱动选择](../../src/core/ecm_driver.cpp#L2904)。
+来源：[PARAM2/3 写入](../../src/ecm/storage/save/ecm_save.cpp#L153)、[PARAM0 写入](../../src/ecm/storage/save/ecm_save.cpp#L218)、[表达式剥离](../../src/ecm/storage/save/ecm_save.cpp#L106)、[驱动选择](../../src/ecm/application/cli/ecm_driver.cpp#L2904)。
 
 ## 5. Edwards save VERSION=1
 
@@ -134,7 +134,7 @@ PARAM 被禁止；默认不写 PROGRAM/WHO/TIME，也不写 Z。可选 Z 若提�
 
 CPU Edwards 专用读取器要求 N 为大于3的奇数，X∈[0,N)，B1≥2 且不超过2⁵³，并验证 FACTOR 严格大于1且整除 N。CUDA 读取器另受自身位宽上限约束；不能将两个入口的检查集合视为完全相同。
 
-来源：[save_line / save_checksum](../../src/core/ecm_edwards_io.h#L19)、[坐标与状态判定](../../src/core/ecm_edwards_gpu_driver.inl#L122)、[CPU 专用读取](../../src/core/ecm_edwards_save_reader.h#L22)。
+来源：[save_line / save_checksum](../../src/ecm/storage/save/ecm_edwards_io.h#L19)、[坐标与状态判定](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl#L122)、[CPU 专用读取](../../src/ecm/storage/save/ecm_edwards_save_reader.h#L22)。
 
 ## 6. 写入、去重与发布
 
@@ -167,7 +167,7 @@ Stage1 批次锁防止同名 checkpoint 的并发写入，**没有独立的跨�
 
 追加旧文件 S bytes、新行 T bytes，单次文本合并本身约读 S、写 S+T；启用备份还会复制旧主文件，增加约读 S、写 S。不能把这是“只追加 T bytes”当成实际磁盘工作量。主机保存新行集合及旧去重键，额外内存随这些文本增长；文件备份不属于GPU显存。
 
-来源：[publish_save](../../src/core/ecm_edwards_io.h#L30)、[可写性预检](../../src/core/ecm_save.cpp#L72)、[批次发布和错误保留](../../src/core/ecm_driver.cpp#L3048)。
+来源：[publish_save](../../src/ecm/storage/save/ecm_edwards_io.h#L30)、[可写性预检](../../src/ecm/storage/save/ecm_save.cpp#L72)、[批次发布和错误保留](../../src/ecm/application/cli/ecm_driver.cpp#L3048)。
 
 ## 7. 消费者和交接能力
 
@@ -195,7 +195,7 @@ Stage1 批次锁防止同名 checkpoint 的并发写入，**没有独立的跨�
 
 这些检查不回算 Stage1，不检测任意一个满足范围的伪造 POINT 是否正确。Stage2 队列恢复使用整个 save 的 SHA256，见 [CHECKPOINT](CHECKPOINT.md#7-stage2-队列进度格式)。
 
-来源：[CUDA 记录解析](../../src/core/ecm_cuda_stage2_main.cpp#L117)、[选定记录](../../src/core/ecm_cuda_stage2_main.cpp#L193)、[队列数学目标检查](../../src/core/ecm_cuda_stage2_main.cpp#L1360)、[CPU 文本入口](../../src/core/ecm_cpu_stage2_main.cpp#L150)。
+来源：[CUDA 记录解析](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L117)、[选定记录](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L193)、[队列数学目标检查](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L1360)、[CPU 文本入口](../../src/ecm/application/cpu_stage2/ecm_cpu_stage2_main.cpp#L150)。
 
 ### 7.3 Prime95、同步与错误
 
@@ -207,7 +207,7 @@ Stage1 批次锁防止同名 checkpoint 的并发写入，**没有独立的跨�
 
 Edwards 的本地 Stage2 队列交接由 `edwards_stage2_transfer` 独立控制，不使用 Prime95 `worktodo.add`。完成 save 发布后先记录待投递行，再将原任务移入 Stage1 finished；交付时将实际 save 的绝对路径写入接收 worker 的共用 `worktodo` 分区。队列追加和 Stage2 移除任务共用短时编辑锁；重试前检查活动队列及 Stage2 finished 中的完成行或输入错误回执，避免在队列发布后、待投递记录清除前崩溃导致重复交付。接收 worker 的选择和 B2 要求见 [Stage1 使用](../usage/STAGE1.md#检查点与交接)。
 
-来源：[队列完成与交接](../../src/core/ecm_driver.cpp#L3236)、[按实际构造启用交接](../../src/core/ecm_driver.cpp#L3431)、[save 同步](../../src/core/ecm_worktodo.cpp#L645)、[交付器](../../src/core/p95_transfer.h)。
+来源：[队列完成与交接](../../src/ecm/application/cli/ecm_driver.cpp#L3236)、[按实际构造启用交接](../../src/ecm/application/cli/ecm_driver.cpp#L3431)、[save 同步](../../src/ecm/storage/queue/ecm_worktodo.cpp#L645)、[交付器](../../src/ecm/storage/transfer/p95_transfer.h)。
 
 ## 8. 保留的二进制 MIDSTAGE 接口
 
@@ -225,13 +225,13 @@ Edwards 的本地 Stage2 队列交接由 `edwards_stage2_transfer` 独立控制�
 
 该 writer 直接截断写目标，并非文本 save 的 `.new`+轮换发布器。`read_midstage` 仅实现其 MIDSTAGE 子集；公共头版本数通过不等于任意 Prime95 版本/状态都已支持。不能把这层保留接口当作所有外部二进制 save 的通用恢复器。
 
-来源：[MIDSTAGE 写入/读取](../../src/cpu/ecm_edwards_save.cpp#L201)、[feeder 消费入口](../../src/core/ecm_p95feeder.cpp#L429)。
+来源：[MIDSTAGE 写入/读取](../../src/ecm/storage/save/ecm_edwards_save.cpp#L201)、[feeder 消费入口](../../src/ecm/application/p95_feeder/ecm_p95feeder.cpp#L429)。
 
 ## 9. 验证入口与 TODO
 
 - [可用性与保存失败重试](../../tools/test/test_stage1_usability.py)：CPU/GPU、固定种子、完整末点、输出所有权和停止恢复。
 - [命名、旧记录复制和混合队列](../../tools/test/test_stage1_checkpoint_compat.py)：原指数保留、显式路径、字段改写、前缀覆盖、构造冲突及交接。
-- [Edwards 独立点与 Stage2 校验](../../tools/test/test_edwards_gpu_pipeline.py)、[专用文本读取器](../../src/core/ecm_edwards_save_reader.h)。
+- [Edwards 独立点与 Stage2 校验](../../tools/test/test_edwards_gpu_pipeline.py)、[专用文本读取器](../../src/ecm/storage/save/ecm_edwards_save_reader.h)。
 - [Prime95 交付回归](../../tools/test/test_p95_transfer.ps1)、[GUI 新文件名解析](../../src/gui/results_test.cpp)。
 
 待验证/改进：

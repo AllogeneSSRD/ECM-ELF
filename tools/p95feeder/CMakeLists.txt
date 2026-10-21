@@ -10,10 +10,10 @@
 # tools/test/test_feeder.ps1 references that path.
 
 add_executable(ecm_p95feeder
-    ${CMAKE_SOURCE_DIR}/src/core/ecm_p95feeder.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/p95_worktodo.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ecm_worktodo.cpp
-    ${CMAKE_SOURCE_DIR}/src/cpu/ecm_edwards_save.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/application/p95_feeder/ecm_p95feeder.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/storage/queue/p95_worktodo.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/storage/queue/ecm_worktodo.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/storage/save/ecm_edwards_save.cpp
 )
 
 target_include_directories(ecm_p95feeder PRIVATE

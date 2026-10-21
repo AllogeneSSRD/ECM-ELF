@@ -15,7 +15,7 @@ function Invoke-EcmNttProbeBuild {
     $inventory=Get-EcmCudaInventory $Repo
     $moduleSources=@($inventory.groups.$ModuleGroup)+$AdditionalProductionSources
     $sources=@($Source)+$ExtraSources+$moduleSources
-    $dirs=@((Join-Path $Gmp 'include'),'include','src','src/core','src/cpu','src/ecm/backend/cuda')
+    $dirs=@((Join-Path $Gmp 'include'),'include','src','src/ecm/backend/cuda')
     $deps=@(Get-EcmSourceClosure $Repo $sources $dirs)
     foreach($dep in $deps) {
         if($dep -match '^(src|kernels|include|tools)/' -and [IO.Path]::GetExtension($dep) -in @('.cu','.cuh','.cpp','.h')) {

@@ -1,4 +1,4 @@
-#include "ecm_edwards_curve.h"
+#include "../../src/ecm/core/curve/edwards/ecm_edwards_curve.h"
 #include <cstdio>
 #include <exception>
 #include <stdexcept>

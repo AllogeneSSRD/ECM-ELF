@@ -32,7 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include "../core/ecm_program_version.h"
+#include "ecm/platform/program_version.h"
 #include <vector>
 
 #ifdef _WIN32

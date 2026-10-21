@@ -1,8 +1,8 @@
 // Historical model gate. Frozen production profiles use the actual NTT module;
 // the default retains the independent legacy engine's existing shape query.
 #ifdef ECM_STAGE2_FROZEN_PRODUCTION_PROFILES
-#include "../../src/core/ecm_stage2_logging.h"
-#include "../../src/core/ecm_stage2_initial_memory.h"
+#include "../../src/ecm/platform/legacy/ecm_stage2_logging.h"
+#include "../../src/ecm/backend/cuda/planning/ecm_stage2_initial_memory.h"
 #include "../../src/ecm/backend/cuda/ntt/runtime.h"
 #include "../experiments/cuda/stage2_tree/d_model_profiles.h"
 #else

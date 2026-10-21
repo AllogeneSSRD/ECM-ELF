@@ -25,7 +25,7 @@ function Get-Stage1ReleaseSources([string]$Repo, [bool]$EnablePrac = $false, [st
         # too, even when they are no longer direct sources of ecm_cuda.
         $sources += @(Get-EcmTargetCompileEntries $BuildDir ecm_cuda | ForEach-Object { $_.file })
     }
-    $dirs = @('include','src','src/core','src/cpu','src/ecm/backend/cuda/runtime','src/ecm/backend/cuda',
+    $dirs = @('include','src','src/ecm/backend/cuda/runtime','src/ecm/backend/cuda',
         'third_party/cgbn/include','third_party/cgbn/include/cgbn')
     $paths = @(Get-EcmSourceClosure $Repo $sources $dirs -Production) + @($inventory.build_inputs) + $buildInputs
     $paths += @('tools/build/build_stage1_local.ps1','tools/build/build_stage1_dev.ps1',

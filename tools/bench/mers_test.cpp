@@ -7,7 +7,7 @@
  * Checks ifma_mont_mul/sqr against mpz in BOTH field modes, with random,
  * adversarial and structured (zero-limb, 2^52j, top-boundary) inputs.
  */
-#include "simd_mont_ifma.h"
+#include "../../src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.h"
 
 #include <gmp.h>
 #include <stdio.h>

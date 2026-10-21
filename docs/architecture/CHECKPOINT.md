@@ -37,7 +37,7 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | `.bak.ckpt`、`.bak2.ckpt`… | 后缀前插入备份代数；最多 16 代，实际数量由 `ckpt_backups` 决定 |
 | `主文件名.lock` | 批次独占锁；Windows 使用无共享打开、关闭时删除；POSIX 使用非阻塞 flock |
 
-来源：[驱动命名与批次边界](../../src/ecm/service/stage1/task.cpp#L138)、[备份及锁](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L97)。
+来源：[驱动命名与批次边界](../../src/ecm/service/stage1/task.cpp#L138)、[备份及锁](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L97)。
 
 ### 2.2 内容身份
 
@@ -99,7 +99,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 
 读取先核对完整文件 CRC，再检查版本、长度、最小记录头空间、flags、逐记录 CRC 和无多余尾字节。变长字段读取不得越过剩余输入。外层通过后才比较任务身份、曲线数和固定 sigma。文件整体会先读入主机字符串，不能将“长度检查”理解为零拷贝或无需整文件内存。
 
-来源：[V2 写入](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L178)、[V2/V1 恢复](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L205)、[小端原语和 CRC32C](../../src/core/ecm_stage1_binary.h#L10)。
+来源：[V2 写入](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L178)、[V2/V1 恢复](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L205)、[小端原语和 CRC32C](../../src/ecm/storage/checkpoint/ecm_stage1_binary.h#L10)。
 
 ## 4. 后端载荷总览
 
@@ -148,7 +148,7 @@ CRC32C 使用 Castagnoli 多项式，反射形式 `0x82f63b78`，初值和最终
 
 CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、指数总长/进度及数组几何，并恢复保存的 BITS/TPI；相应内核须存在。原始 V5 自动导入另逐 lane 核对完整 N。保存整个指数不必要：当前任务重新生成相应指数。
 
-来源：[CUDA 头和读写](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu#L831)、[CUDA 恢复布局](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu#L1243)、[普通域写回](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh#L1148)、[OpenCL codec](../../src/core/ecm_checkpoint.cpp#L131)、[OpenCL 状态](../../src/opencl_ecm_stage1.cpp#L937)。
+来源：[CUDA 头和读写](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu#L831)、[CUDA 恢复布局](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu#L1243)、[普通域写回](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh#L1148)、[OpenCL codec](../../src/ecm/storage/checkpoint/ecm_checkpoint.cpp#L131)、[OpenCL 状态](../../src/opencl_ecm_stage1.cpp#L937)。
 
 ### 4.2 GPU Edwards V3
 
@@ -186,7 +186,7 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 
 大小精确为 **68 + bytes(N) + 52C + Σbytes(fᵢ) + Σbytes(vᵢⱼ)**，j=0..8。外层仍须再加自身开销。NAF 字典、完整指数、GPU 内存布局均不在该公式内。
 
-来源：[V3 编码和恢复](../../src/core/ecm_edwards_gpu_checkpoint.h#L38)、[GPU 驱动和安全边界](../../src/core/ecm_edwards_gpu_driver.inl#L18)。
+来源：[V3 编码和恢复](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h#L38)、[GPU 驱动和安全边界](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl#L18)。
 
 ### 4.3 CPU Montgomery 文本记录 V1
 
@@ -205,7 +205,7 @@ CUDA 当前载荷检查版本、精确长度、校验、曲线数、参数化、
 
 校验初值采用较短的 1469598103934665603。恢复要求 N/B1/TORSION/SBITS 一致，检查标记、结束行、校验和状态所需数据；上层同时核对曲线索引。标量和 SIMD 使用相同数学记录；实际批处理是否能继续还取决于 lane 进度等调用条件，不能仅根据 FIELD 文本推断可以切换实现。外层 CPU 实现身份也会限制切换。
 
-来源：[记录结构](../../src/core/ecm_mont_ckpt.h#L41)、[写入](../../src/core/ecm_mont_ckpt.cpp#L96)、[读取](../../src/core/ecm_mont_ckpt.cpp#L147)。
+来源：[记录结构](../../src/ecm/storage/checkpoint/ecm_mont_ckpt.h#L41)、[写入](../../src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp#L96)、[读取](../../src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp#L147)。
 
 ### 4.4 CPU Edwards 二进制记录和完成记录
 
@@ -239,7 +239,7 @@ giant 为 u32 limb 数 m，随后 m 个低 limb 在前的 u32；当前写入零�
 
 CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存 sigma、返回码 0/1、十六进制 factor，以及带双引号/转义的完整文本 save 行；无可用点时该行可以为空。记录没有独立尾校验，依靠外层 CRC。保存已完成结果是为了发布失败或批次停止后不重复计算已完成曲线。
 
-来源：[CPU Edwards codec](../../src/cpu/ecm_edwards_save.cpp#L279)、[驱动回调](../../src/core/ecm_driver.cpp#L878)、[完成记录](../../src/core/ecm_driver.cpp#L941)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
+来源：[CPU Edwards codec](../../src/ecm/storage/save/ecm_edwards_save.cpp#L279)、[驱动回调](../../src/ecm/application/cli/ecm_driver.cpp#L878)、[完成记录](../../src/ecm/application/cli/ecm_driver.cpp#L941)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
 
 ### 4.5 可选 CUDA resident / PRAC
 
@@ -275,7 +275,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 `ckpt_seconds=0` 关闭周期写入，不关闭正常停止存档。信号处理器只置停止标志；CPU 分块或 GPU 切片结束后才执行 I/O。强制终止、蓝屏或掉电不会调用这一正常停止流程。GPU Edwards 会在最终结果发布前再保留一份完成的批次状态；CPU 完成记录同样支持发布重试。
 
-来源：[批次发布边界](../../src/ecm/service/stage1/task.cpp#L138)、[种子持久化](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L277)、[GPU Edwards 完成状态](../../src/core/ecm_edwards_gpu_driver.inl#L118)。
+来源：[批次发布边界](../../src/ecm/service/stage1/task.cpp#L138)、[种子持久化](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L277)、[GPU Edwards 完成状态](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl#L118)。
 
 ### 5.2 原子替换和备份
 
@@ -287,7 +287,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 外层有效不代表后端语义有效。进入虚拟记录 codec 后，候选只有该记录；不会因内部状态/显式算法不匹配而自动再遍历整批旧备份。CUDA 当前路径会拒绝不兼容的非空载荷；CPU 部分 codec 的拒绝可导致曲线/批次重算，具体按调用入口处理。
 
-来源：[轮换和清理](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L121)、[文件替换](../../src/core/ecm_file_publication.h#L13)。
+来源：[轮换和清理](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L121)、[文件替换](../../src/ecm/platform/ecm_file_publication.h#L13)。
 
 ## 6. 仍可读取的兼容格式
 
@@ -304,7 +304,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 原始独立 GPU 来源只读保留。若内部结果账本已经确认其全部 sigma 完成，则跳过自动导入；仅将旧文件复制到全新目录而不携带账本，无法从该旧文件得知它是否已在别处完成。当前非空算术载荷优先，不用独立旧档覆盖它。
 
-来源：[V1 外层读取](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L254)、[CUDA V5 导入](../../src/core/ecm_stage1_legacy_gpu.h#L14)、[Edwards 旧格式读取](../../src/core/ecm_edwards_gpu_checkpoint.h#L97)、[独立 Edwards 导入](../../src/core/ecm_edwards_gpu_driver.inl#L69)。
+来源：[V1 外层读取](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L254)、[CUDA V5 导入](../../src/ecm/storage/checkpoint/ecm_stage1_legacy_gpu.h#L14)、[Edwards 旧格式读取](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h#L97)、[独立 Edwards 导入](../../src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl#L69)。
 
 ## 7. Stage2 队列进度格式
 
@@ -359,7 +359,7 @@ Stage2 不保存 NTT、多项式、树、fold 或单曲线内部状态。只在�
 
 旧 schema 1 / 单文件 `.progress` 仅作为兼容导入来源。按任务目标、AID、save 内容和范围匹配，成功后保留原字节为 `.migrated.<摘要>`；不匹配的旧任务不阻止当前新任务。不是任意 `.dat` 文件都能导入。
 
-来源：[State/Task/schema](../../src/core/ecm_stage2_queue_state.h#L22)、[结果回执判断](../../src/core/ecm_stage2_queue_state.h#L98)、[恢复与运行顺序](../../src/core/ecm_cuda_stage2_main.cpp#L1395)。
+来源：[State/Task/schema](../../src/ecm/storage/queue/ecm_stage2_queue_state.h#L22)、[结果回执判断](../../src/ecm/storage/queue/ecm_stage2_queue_state.h#L98)、[恢复与运行顺序](../../src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp#L1395)。
 
 ## 8. 存储、写入成本和边界
 

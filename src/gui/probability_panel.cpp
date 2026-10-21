@@ -1,6 +1,6 @@
 #include "probability_panel.h"
 #include "localization.h"
-#include "../core/ecm_stage2_probability.h"
+#include "ecm/core/stage2/probability.h"
 #include "imgui.h"
 #include <algorithm>
 #include <chrono>

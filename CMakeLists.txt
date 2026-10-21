@@ -82,7 +82,7 @@ endfunction()
 # Includes the runtime-config TU so every linker of this lib gets ecm_runtime_config().
 add_library(cgbn_opencl STATIC
     kernels/opencl/impl_opencl.cpp
-    src/opencl_ecm_runtime_config.cpp
+    src/ecm/application/configuration/runtime.cpp
 )
 
 target_include_directories(cgbn_opencl PUBLIC
@@ -125,12 +125,12 @@ foreach(_source IN LISTS ECM_STAGE1_COMMON_SOURCES)
     string(APPEND _stage1_identity "${_stage1_hash}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
 endforeach()
-foreach(_source src/core/ecm_result_paths.h src/core/ecm_result_json.h src/core/ecm_internal_result.h src/core/ecm_result_submission.h
+foreach(_source src/ecm/storage/results/ecm_result_paths.h src/ecm/storage/results/ecm_result_json.h src/ecm/storage/results/ecm_internal_result.h src/ecm/storage/results/ecm_result_submission.h
                 include/ecm/core/stage1/selection.h include/ecm/service/stage1/task.h
                 src/ecm/service/stage1/legacy_execution.h
-                src/core/ecm_submission_writer.h src/core/ecm_edwards_gpu_driver.inl
-                src/core/ecm_edwards_io.h src/core/ecm_program_version.h
-                src/core/ecm_stage1_gpu_progress.h)
+                src/ecm/storage/results/ecm_submission_writer.h src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl
+                src/ecm/storage/save/ecm_edwards_io.h include/ecm/platform/program_version.h
+                src/ecm/platform/legacy/ecm_stage1_gpu_progress.h)
     file(SHA256 "${CMAKE_SOURCE_DIR}/${_source}" _stage1_hash)
     string(APPEND _stage1_identity "${_stage1_hash}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${_source}")
@@ -142,16 +142,16 @@ file(GENERATE OUTPUT "${_stage1_identity_file}" CONTENT "${_stage1_revision}.s1.
 # Keep the monolithic driver current even when an existing NMake build tree has
 # incomplete include dependencies (notably the included GPU driver .inl).
 set(_stage1_driver_headers
-    src/core/ecm_edwards_gpu_driver.inl src/core/ecm_edwards_gpu_checkpoint.h
-    src/core/ecm_stage1_gpu_progress.h src/core/ecm_program_version.h
+    src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_driver.inl src/ecm/backend/cuda/stage1/edwards/legacy/ecm_edwards_gpu_checkpoint.h
+    src/ecm/platform/legacy/ecm_stage1_gpu_progress.h include/ecm/platform/program_version.h
     src/ecm/backend/cuda/stage1/edwards/api.h src/ecm/backend/cuda/stage1/edwards/naf.h)
 foreach(_header IN LISTS _stage1_driver_headers)
-    set_property(SOURCE src/core/ecm_driver.cpp APPEND PROPERTY OBJECT_DEPENDS
+    set_property(SOURCE src/ecm/application/cli/ecm_driver.cpp APPEND PROPERTY OBJECT_DEPENDS
         "${CMAKE_SOURCE_DIR}/${_header}")
 endforeach()
 # A post-link sidecar leaves flags.make and CUDA response files unchanged.
 set_property(SOURCE src/ecm/backend/cuda/stage1/montgomery/adapter.cu APPEND PROPERTY OBJECT_DEPENDS
-    "${CMAKE_SOURCE_DIR}/src/core/ecm_stage1_gpu_progress.h")
+    "${CMAKE_SOURCE_DIR}/src/ecm/platform/legacy/ecm_stage1_gpu_progress.h")
 function(ecm_stage1_identity_sidecar target)
     add_custom_command(TARGET ${target} POST_BUILD COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${_stage1_identity_file}" "$<TARGET_FILE_DIR:${target}>/ecm_stage1_build_identity.txt")
@@ -172,12 +172,12 @@ ecm_stage1_identity_sidecar(ecm)
 # 鍙湁杩欎袱涓?SIMD TU 鎷?AVX512 codegen; 璋冪敤鐐瑰繀椤诲湪 edwards_simd_available()
 # (鍩虹嚎 TU 閲岀殑 CPUID 鎺㈡祴) 杩斿洖 1 涔嬪悗, 瑙?docs/architecture/STAGE1.md 搂13.8銆?
 if(MSVC)
-    set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp
-        src/cpu/simd_mont_curve.cpp
+    set_source_files_properties(src/ecm/backend/cpu/stage1/edwards/simd_edwards.cpp src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+        src/ecm/backend/cpu/stage1/montgomery/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
 else()
-    set_source_files_properties(src/cpu/simd_edwards.cpp src/cpu/simd_mont_ifma.cpp
-        src/cpu/simd_mont_curve.cpp
+    set_source_files_properties(src/ecm/backend/cpu/stage1/edwards/simd_edwards.cpp src/ecm/backend/cpu/arithmetic/ifma/simd_mont_ifma.cpp
+        src/ecm/backend/cpu/stage1/montgomery/simd_mont_curve.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512ifma;-mavx512dq")
 endif()
 
@@ -185,8 +185,6 @@ target_include_directories(ecm PRIVATE
     ${CMAKE_SOURCE_DIR}/kernels/opencl
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/cpu
 )
 
 target_link_libraries(ecm
@@ -237,7 +235,7 @@ endif()
 #
 #  Reuses the exact same driver / argument parsing / checkpoint / save / logging
 #  translation units as `ecm`, swapping only the GPU backend at link time via the
-#  ecm_backend_* seam (include/ecm_backend.h):
+#  ecm_backend_* seam (include/ecm/service/execution/legacy_gpu.h):
 #     - OpenCL: src/opencl_backend_glue.cpp  (in `ecm`)
 #     - CUDA:   src/ecm/backend/cuda/factory.cpp  (here)
 #
@@ -314,8 +312,6 @@ if(ECM_ENABLE_CUDA)
     target_include_directories(ecm_cuda PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/src/core
-        ${CMAKE_SOURCE_DIR}/src/cpu
         ${CMAKE_SOURCE_DIR}/src/ecm/backend/cuda/runtime
         "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}>"
         ${CMAKE_SOURCE_DIR}/src/ecm/backend/cuda

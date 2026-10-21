@@ -1,0 +1,1606 @@
+// Standalone save -> CUDA Stage2 driver. Completed curve receipts commit queue
+// progress; invalid input tasks are commented out. Each child owns engine state.
+#define NOMINMAX
+#include <windows.h>
+#include <cuda_runtime_api.h>
+#include "../../backend/cuda/stage2/ecm_cuda_stage2.h"
+#include "../../core/stage2/ecm_stage2_modulus.h"
+#include "../configuration/legacy/ecm_expr.h"
+#include "../configuration/ecm_queue_config.h"
+#include "../../storage/queue/ecm_worktodo.h"
+#include "ecm/platform/program_version.h"
+#include "../../platform/ecm_stage2_fingerprint.h"
+#include "../../service/stage2/legacy/ecm_stage2_factorize.h"
+#include "../../service/planning/legacy/ecm_stage2_cost_profile.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_format.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_ecm.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_prediction.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_auto.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_components.h"
+#include "../../service/planning/legacy/ecm_stage2_tune_ntt_profile.h"
+#include "../../service/planning/legacy/ecm_stage1_tune_profile.h"
+#include "../../service/planning/legacy/ecm_stage2_portable_model.h"
+#include "../../service/planning/legacy/ecm_stage2_width_prediction.h"
+#include "../../service/planning/legacy/ecm_stage2_runtime_tune.h"
+#include "../../core/stage2/ecm_stage2_geometry.h"
+#include "../../platform/legacy/ecm_stage2_logging.h"
+#include "ecm_stage2_console.h"
+#include "../../storage/queue/ecm_stage2_queue_state.h"
+#include "../../storage/save/ecm_edwards_io.h"
+#include "../../storage/results/ecm_result_submission.h"
+#include "../../storage/results/ecm_internal_result.h"
+#include "../../storage/results/ecm_submission_writer.h"
+#include <algorithm>
+#include <chrono>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <iomanip>
+#include <sstream>
+#include <random>
+
+#ifndef NTT_GL_ADD_SUB_MASK
+#define NTT_GL_ADD_SUB_MASK 0
+#endif
+
+namespace s2prod {
+namespace fs = std::filesystem;
+bool open_runtime_routes(const std::string &text,ecm_stage2::tune::portable::RuntimeRouteHints &out) {
+    out={};if(text.empty())return true;
+    if(text.size()>8257 || text.size()<130 || text[text.size()-65]!='#')return false;
+    const auto body=text.substr(0,text.size()-65),digest=text.substr(text.size()-64);
+    if(!ecm_stage2::tune::portable::RuntimePauseHints::valid_key(digest) ||
+       ecm_stage2::sha256_text(body)!=digest)return false;
+    return out.assign(body);
+}
+std::string seal_runtime_routes(const ecm_stage2::tune::portable::RuntimeRouteHints &routes) {
+    const auto body=routes.text();return body.empty()?std::string{}:body+'#'+ecm_stage2::sha256_text(body);
+}
+struct TaskInputError : std::runtime_error { using std::runtime_error::runtime_error; };
+volatile LONG stop_requests = 0;
+HANDLE inherited_stop_event=nullptr;
+void poll_inherited_stop() {
+    if(inherited_stop_event && WaitForSingleObject(inherited_stop_event,0)==WAIT_OBJECT_0)
+        InterlockedCompareExchange(&stop_requests,1,0);
+}
+fs::path fatal_log;
+BOOL WINAPI console_control(DWORD event) {
+    if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT) return FALSE;
+    InterlockedIncrement(&stop_requests);
+    return TRUE;
+}
+struct Big {
+    mpz_t z;
+    Big() { mpz_init(z); }
+    ~Big() { mpz_clear(z); }
+    Big(const Big &) = delete;
+    Big &operator=(const Big &) = delete;
+};
+std::string trim(std::string s) {
+    const auto a = s.find_first_not_of(" \t\r\n");
+    if (a == s.npos) return {};
+    return s.substr(a, s.find_last_not_of(" \t\r\n") - a + 1);
+}
+std::string upper(std::string s) {
+    for (char &c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return s;
+}
+std::string number(const mpz_t z, int base = 16) {
+    std::vector<char> buf(mpz_sizeinbase(z, base) + 3);
+    mpz_get_str(buf.data(), base, z);
+    return buf.data();
+}
+void set64(mpz_t z, uint64_t n) {
+    mpz_set_ui(z, static_cast<unsigned long>(n >> 32));
+    mpz_mul_2exp(z, z, 32);
+    mpz_add_ui(z, z, static_cast<unsigned long>(n & 0xffffffffu));
+}
+// Exact decimal/scientific input: no double rounding for sigma or B2.
+uint64_t u64(std::string s,const char *label) {
+    return ecm_config::unsigned_integer(std::move(s),label);
+}
+std::string json_string(const std::string &s) {
+    std::string out = "\"";
+    const char *hex = "0123456789abcdef";
+    for (unsigned char c : s) {
+        if (c == '"' || c == '\\') { out += '\\'; out += c; }
+        else if (c < 32) { out += "\\u00"; out += hex[c >> 4]; out += hex[c & 15]; }
+        else out += c;
+    }
+    return out + '"';
+}
+uint64_t fingerprint(const std::string &s) {
+    uint64_t h = 14695981039346656037ull;
+    for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
+    return h;
+}
+struct Record {
+    std::string n, x, a24;
+    uint64_t sigma = 0, b1 = 0, offset = 0, hash = 0, index = 0;
+    bool checksum = false, edwards = false;
+};
+Record parse_record(std::string line) {
+    if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
+    if (line.find('\0') != line.npos)
+        throw std::runtime_error("binary checkpoint is not a METHOD=ECM text save");
+    std::map<std::string, std::string> fields;
+    size_t a = 0;
+    while (a < line.size()) {
+        const auto end = line.find(';', a);
+        std::string token = trim(line.substr(a, end == line.npos ? end : end - a));
+        a = end == line.npos ? line.size() : end + 1;
+        if (token.empty()) continue;
+        const auto eq = token.find('=');
+        if (eq == token.npos) throw std::runtime_error("save field has no '='");
+        const auto key = upper(trim(token.substr(0, eq)));
+        if (!fields.emplace(key, trim(token.substr(eq + 1))).second)
+            throw std::runtime_error("duplicate save field: " + key);
+    }
+    for (const char *key : {"METHOD", "SIGMA", "B1", "N", "X"})
+        if (!fields.count(key) || fields[key].empty())
+            throw std::runtime_error(std::string("save is missing ") + key);
+    const bool edwards=upper(fields["METHOD"])=="ECM-EDWARDS-AM";
+    if (!edwards && upper(fields["METHOD"]) != "ECM") throw std::runtime_error("save METHOD must be ECM or ECM-EDWARDS-AM");
+    if(edwards && (fields.count("PARAM") || fields["VERSION"]!="1" || fields["SCALAR"]!="48LCM" ||
+                   (fields["STATUS"]!="POINT" && fields["STATUS"]!="FACTOR") || !fields.count("CHECKSUM")))
+        throw std::runtime_error("invalid Edwards save identity (VERSION=1, SCALAR=48LCM, STATUS and CHECKSUM required; PARAM forbidden)");
+    if (fields.count("PARAM") && u64(fields["PARAM"], "PARAM") != 0)
+        throw std::runtime_error("only Suyama PARAM=0 text saves are supported");
+    std::string sigma = fields["SIGMA"];
+    if (sigma.compare(0, 2, "0:") == 0) sigma.erase(0, 2);
+    Record r;
+    r.edwards=edwards;
+    r.sigma = u64(sigma, "SIGMA");
+    r.b1 = u64(fields["B1"], "B1");
+    if (r.sigma < (edwards?1u:6u) || r.b1 < 2) throw std::runtime_error("invalid SIGMA or B1");
+    Big n, x, z, chk, factor;
+    std::string err;
+    if (!ecm_parse_expression(fields["N"], n.z, &err)) throw std::runtime_error("N: " + err);
+    if (mpz_cmp_ui(n.z, 3) <= 0 || !mpz_odd_p(n.z) || mpz_sizeinbase(n.z, 2) > ecm_stage2::max_input_bits)
+        throw std::runtime_error("N must be odd, >3 and at most 16384 bits");
+    if (mpz_set_str(x.z, fields["X"].c_str(), 0) || mpz_sgn(x.z) < 0 || mpz_cmp(x.z, n.z) >= 0)
+        throw std::runtime_error("X must be an integer in [0,N), decimal or 0x hex");
+    if (fields.count("Z") && (mpz_set_str(z.z, fields["Z"].c_str(), 0) || mpz_cmp_ui(z.z, 1)))
+        throw std::runtime_error("only normalized affine saves (Z=1 or absent) are supported");
+    if(edwards) {
+        const bool hit=fields["STATUS"]=="FACTOR";
+        if(u64(fields["CHECKSUM"],"CHECKSUM")!=ecm_edwards::save_checksum(number(n.z),number(x.z),r.sigma,r.b1,hit))
+            throw std::runtime_error("Edwards save CHECKSUM mismatch");
+        r.checksum=true;
+        if(hit) {
+            if(mpz_cmp_ui(x.z,1)<=0 || mpz_cmp(x.z,n.z)>=0 || !mpz_divisible_p(n.z,x.z))
+                throw std::runtime_error("invalid Edwards saved factor");
+        } else {
+            Big d,px,py,a24;
+            const auto setup=ecm_edwards::construct(d.z,px.z,py.z,a24.z,factor.z,r.sigma,n.z);
+            if(setup==ecm_edwards::Setup::Factor)mpz_set(x.z,factor.z);
+            else if(setup!=ecm_edwards::Setup::Ready)throw std::runtime_error("degenerate Edwards curve in save");
+            else r.a24=number(a24.z);
+        }
+    } else if (fields.count("CHECKSUM")) {
+        set64(chk.z, r.b1);
+        set64(factor.z, r.sigma);
+        mpz_mul(chk.z, chk.z, factor.z);
+        mpz_mul(chk.z, chk.z, n.z);
+        mpz_mul(chk.z, chk.z, x.z);
+        const uint64_t expected = mpz_fdiv_ui(chk.z, 4294967291UL);
+        if (u64(fields["CHECKSUM"], "CHECKSUM") != expected)
+            throw std::runtime_error("save CHECKSUM mismatch");
+        r.checksum = true;
+    }
+    r.n = number(n.z); r.x = number(x.z);
+    return r;
+}
+bool comment(const std::string &line) {
+    const auto t = trim(line);
+    return t.empty() || t[0] == '#' || t[0] == ';';
+}
+std::vector<Record> records(const fs::path &path, uint64_t skip, uint64_t count) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        if (!fs::exists(path)) throw TaskInputError("save not found: " + path.string());
+        throw std::runtime_error("cannot open save: " + path.string());
+    }
+    std::vector<Record> out;
+    std::string line;
+    uint64_t index = 0;
+    while (in) {
+        const auto offset = in.tellg();
+        if (!std::getline(in, line)) break;
+        if (comment(line)) continue;
+        ++index;
+        if (index <= skip) continue;
+        try {
+            auto r = parse_record(line);
+            r.offset = static_cast<uint64_t>(offset); r.index = index; r.hash = fingerprint(line);
+            out.push_back(std::move(r));
+        } catch (const std::runtime_error &e) {
+            throw TaskInputError("save record " + std::to_string(index) + ": " + e.what());
+        }
+        if (count && out.size() == count) break;
+    }
+    if (in.bad()) throw std::runtime_error("save read failed");
+    return out;
+}
+fs::path absolute_from(const fs::path &base, const std::string &p) {
+    fs::path v(p);
+    return fs::absolute(v.is_absolute() ? v : base / v).lexically_normal();
+}
+fs::path executable() {
+    std::vector<wchar_t> buf(32768);
+    const DWORD n = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+    if (!n || n == buf.size()) throw std::runtime_error("cannot locate executable");
+    return fs::path(std::wstring(buf.data(), n));
+}
+struct Options {
+    std::string ini, save, worktodo, results, log, debug_file, receipt,publication_task,submission,submission_ini,submission_aid;
+    uint64_t submission_exponent=0;
+    std::vector<std::string> submission_known;
+    bool debug_log = false;
+    uint64_t b2 = 0, d = 0, skip = 0, curves = 0, batch = 0, arena = 0;
+    unsigned carrier_exponent=0;
+    bool has_carrier=false;
+    bool auto_carrier=ecm_config::defaults::stage2_stage2_auto_carrier;
+    int device = -1, worker = 1;
+    int log_level = -1;
+    bool ntt_counts=ecm_config::defaults::stage2_stage2_ntt_counts;
+    bool relocation=ecm_config::defaults::stage2_stage2_relocation;
+    bool dry = false, once = false, selection = false, help = false;
+    bool has_d = false, has_batch = false, has_arena = false;
+    bool child = false;
+    bool gui_events=false;
+    uint64_t stop_handle=0;
+    uint64_t offset = 0, hash = 0, index = 0;
+    bool plan_only = false, tune_options = false;
+    std::string tune, tune_file;
+    int tune_first = 16, tune_last = 27, tune_repeats = 5;
+    std::vector<uint64_t> tune_slices{1};bool has_tune_slices=false;
+    int tune_level = 0;
+    bool has_tune_lengths = false, has_tune_repeats = false,has_tune_memory=false;
+    bool tune_child=false;
+    std::string tune_save;
+    std::string tune_worktodo;
+    bool tune_warmup=ecm_config::defaults::stage2_stage2_tune_warmup;
+    std::vector<std::string> tune_merge;
+    std::vector<std::string> tune_ntt_profiles;
+    std::vector<uint64_t> tune_ds,tune_b2s,tune_exponents;
+    unsigned tune_carrier=0;
+    uint64_t tune_max_batches=0;bool has_tune_max_batches=false;
+    unsigned tune_tail_samples=0;bool has_tune_tail_samples=false;
+    uint64_t tune_memory_mb = 1024;
+    bool factorize_hits = false;
+    bool factor_only = false;
+    bool has_gp = false, has_factor_timeout = false;
+    std::string gp = ecm_config::defaults::stage2_stage2_gp;
+    unsigned factor_timeout = static_cast<unsigned>(ecm_config::defaults::stage2_stage2_factor_timeout);
+    bool auto_b2=false,cost_device_info=false;
+    std::string cost_profile,tune_profile;
+    uint64_t auto_min=0,auto_max=0,owner_mb=ecm_config::defaults::stage2_stage2_fold_mb,stage1_batch=ecm_config::defaults::stage2_stage1_batch;
+    std::string stage1_profile,stage1_exponent="lcm",check_stage1_profile;
+    bool has_stage1_exponent=false;
+    double stage1_seconds=ecm_config::defaults::stage2_stage1_seconds_per_curve,ratio_adjust=ecm_config::defaults::stage2_stage2_ratio_adjust;
+    std::string tune_ignore="gpu,driver,cuda,backend,environment",stage1_csv,condition_tag;
+    uint64_t tune_budget=1800,short_budget=10,stage1_mhz=0,factor_bits=0;
+    unsigned inferred_carrier=0;
+    bool short_calibration=true;
+    bool short_batch_tune=false;
+    bool pack_zero=ecm_config::defaults::stage2_stage2_pack_zero;
+    bool tune_runtime=ecm_config::defaults::stage2_stage2_tune_runtime;
+    uint64_t runtime_samples=ecm_config::defaults::stage2_stage2_tune_runtime_samples;
+    bool runtime_probe=false;
+    uint64_t runtime_remaining=0; // Parent queue hint; not part of a measurement identity.
+    bool runtime_prepare_cache=true; // Diagnostic A/B switch; not an arithmetic or timing-data identity.
+    std::string runtime_prepare_hints; // Parent-memory cost-search pauses, never a checkpoint.
+    std::string runtime_route_hints; // Sealed, successful geometry plans for this parent only.
+    std::string prediction_policy="model",tune_arithmetic="both";
+    double tune_error=.08;
+    std::set<std::string> portable_cli;
+    bool has_owner=false,has_stage1_seconds=false,has_stage1_batch=false,has_ratio=false;
+};
+double positive(const std::string &s,const char *name) {
+    return ecm_config::positive(s,name);
+}
+Options arguments(int argc, char **argv) {
+    Options o;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        auto value = [&]() -> std::string {
+            if (++i >= argc) throw std::runtime_error("missing value for " + a);
+            return argv[i];
+        };
+        auto num = [&]() { return u64(value(), a.c_str()); };
+        if (a == "--help" || a == "-h") o.help = true;
+        else if (a == "--config") o.ini = value();
+        else if (a == "--save") o.save = value();
+        else if (a == "--worktodo") o.worktodo = value();
+        else if (a == "--results") o.results = value();
+        else if (a == "--submission") o.submission=value();
+        else if (a == "--exponent") o.submission_exponent=num();
+        else if (a == "--known-factor") o.submission_known.push_back(value());
+        else if (a == "--aid") o.submission_aid=value();
+        else if (a == "--log") o.log = value();
+        else if (a == "--log-level") o.log_level = stage2_log::parse(value());
+        else if (a == "--debug-log-file") { o.debug_file=value(); o.debug_log=true; }
+        else if (a == "--queue-receipt") o.receipt=value();
+        else if (a == "--publication-task") o.publication_task=value();
+        else if (a == "--stage2-stop-handle") o.stop_handle=num();
+        else if (a == "--gui-events") o.gui_events=true;
+        else if (a == "--b2") o.b2 = num();
+        else if (a == "--d") { o.d = num(); o.has_d = true; }
+        else if (a == "--carrier-exponent") {
+            const auto p=num();
+            if(p && (p<2 || p>ecm_stage2::max_input_bits))throw std::runtime_error("carrier-exponent must be 0 or 2..16384");
+            o.carrier_exponent=static_cast<unsigned>(p);
+            o.has_carrier=true;
+        }
+        else if (a == "--auto-carrier") {const auto n=num();if(n>1)throw std::runtime_error("auto-carrier must be 0 or 1");o.auto_carrier=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--prediction-policy") {o.prediction_policy=value();o.portable_cli.insert(a);}
+        else if (a == "--tune-arithmetic") {o.tune_arithmetic=value();o.portable_cli.insert(a);}
+        else if (a == "--skip-curves") { o.skip = num(); o.selection = true; }
+        else if (a == "--curves") { o.curves = num(); o.selection = true; }
+        else if (a == "--batch-mb") { o.batch = num(); o.has_batch = true; }
+        else if (a == "--arena-mb") { o.arena = num(); o.has_arena = true; }
+        else if (a == "--device" || a == "--worker") {
+            const auto n = num();
+            if (n > INT_MAX || (a == "--worker" && !n)) throw std::runtime_error("invalid " + a);
+            if (a == "--device") o.device = static_cast<int>(n); else o.worker = static_cast<int>(n);
+        }
+        else if (a == "--dry-run") o.dry = true;
+        else if (a == "--plan-only") o.plan_only = true;
+        else if (a == "--factorize-hits") o.factorize_hits = true;
+        else if (a == "--factor-only") o.factor_only = true;
+        else if (a == "--auto-b2") o.auto_b2=true;
+        else if (a == "--cost-profile") o.cost_profile=value();
+        else if (a == "--tune-profile") o.tune_profile=value();
+        else if (a == "--tune-runtime") {const auto n=num();if(n>1)throw std::runtime_error("tune-runtime must be 0 or 1");o.tune_runtime=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--tune-runtime-samples") {o.runtime_samples=num();if(o.runtime_samples<2 || o.runtime_samples>1000)throw std::runtime_error("tune-runtime-samples must be 2..1000");o.portable_cli.insert(a);}
+        else if (a == "--runtime-remaining-curves") {o.runtime_remaining=num();}
+        else if (a == "--runtime-prepare-cache") {const auto n=num();if(n>1)throw std::runtime_error("runtime-prepare-cache must be 0 or 1");o.runtime_prepare_cache=n!=0;}
+        else if (a == "--runtime-prepare-hints") {ecm_stage2::tune::portable::RuntimePauseHints hints;hints.assign(value());o.runtime_prepare_hints=hints.text();}
+        else if (a == "--runtime-route-hints") {const auto text=value();ecm_stage2::tune::portable::RuntimeRouteHints hints;if(open_runtime_routes(text,hints))o.runtime_route_hints=text;}
+        else if (a == "--short-ntt-batch-tune") {const auto n=num();if(n>1)throw std::runtime_error("short-ntt-batch-tune must be 0 or 1");o.short_batch_tune=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--ntt-counts") {const auto n=num();if(n>1)throw std::runtime_error("ntt-counts must be 0 or 1");o.ntt_counts=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--relocation") {const auto n=num();if(n>1)throw std::runtime_error("relocation must be 0 or 1");o.relocation=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--pack-zero") {const auto n=num();if(n>1)throw std::runtime_error("pack-zero must be 0 or 1");o.pack_zero=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--tune-ignore") {o.tune_ignore=value();o.portable_cli.insert(a);ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);}
+        else if (a == "--stage1-cost-csv") {o.stage1_csv=value();o.portable_cli.insert(a);}
+        else if (a == "--tune-condition-tag") {o.condition_tag=value();o.portable_cli.insert(a);}
+        else if (a == "--short-calibration") {const auto n=num();if(n>1)throw std::runtime_error("short-calibration must be 0 or 1");o.short_calibration=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--tune-warmup") {const auto n=num();if(n>1)throw std::runtime_error("tune-warmup must be 0 or 1");o.tune_warmup=n!=0;o.portable_cli.insert(a);}
+        else if (a == "--inferred-carrier-exponent") {const auto n=num();if(n>16384)throw std::runtime_error("invalid inferred carrier");o.inferred_carrier=unsigned(n);}
+        else if (a == "--tune-budget-seconds" || a == "--short-calibration-seconds" || a == "--stage1-cost-mhz" || a == "--target-factor-bits") {
+            const auto n=num();o.portable_cli.insert(a);
+            if(a=="--tune-budget-seconds"){if(!n||n>86400)throw std::runtime_error("tune budget must be 1..86400");o.tune_budget=n;}
+            else if(a=="--short-calibration-seconds"){if(!n||n>600)throw std::runtime_error("short budget must be 1..600");o.short_budget=n;}
+            else if(a=="--stage1-cost-mhz"){if(n>10000)throw std::runtime_error("Stage1 MHz must be 0..10000");o.stage1_mhz=n;}
+            else {if(n==1||n>16384)throw std::runtime_error("factor bits must be 0 or 2..16384");o.factor_bits=n;}
+        }
+        else if (a == "--tune-error-limit") {o.tune_error=positive(value(),"tune error limit");if(o.tune_error>1)throw std::runtime_error("tune error limit must be <=1");o.portable_cli.insert(a);}
+        else if (a == "--cost-device-info") o.cost_device_info=true;
+        else if (a == "--auto-min-b2") o.auto_min=num();
+        else if (a == "--auto-max-b2") o.auto_max=num();
+        else if (a == "--owner-budget-mb") {o.owner_mb=num();o.has_owner=true;if(o.owner_mb>ecm_config::limits::stage2_stage2_fold_mb_maximum)throw std::runtime_error("invalid owner budget");}
+        else if (a == "--stage1-batch") {o.stage1_batch=num();o.has_stage1_batch=true;if(!o.stage1_batch||o.stage1_batch>ecm_config::limits::stage2_stage1_batch_maximum)throw std::runtime_error("invalid Stage1 batch");}
+        else if (a == "--stage1-seconds-per-curve") {o.stage1_seconds=positive(value(),"Stage1 seconds");o.has_stage1_seconds=true;}
+        else if (a == "--stage1-tune-profile") o.stage1_profile=value();
+        else if (a == "--check-stage1-tune-profile") o.check_stage1_profile=value();
+        else if (a == "--lcm") {
+            const auto construction=value();o.has_stage1_exponent=true;
+            if(construction=="1")o.stage1_exponent="lcm";
+            else if(construction=="12")o.stage1_exponent="choose12";
+            else throw std::runtime_error("lcm must be 1 or 12");
+        }
+        else if (a == "--stage2-ratio-adjust") {o.ratio_adjust=positive(value(),"Stage2 ratio adjust");o.has_ratio=true;}
+        else if (a == "--gp") { o.gp = value(); o.has_gp = true; }
+        else if (a == "--factor-timeout") {
+            const auto seconds = num();
+            if (!seconds || seconds > ecm_config::limits::stage2_stage2_factor_timeout_maximum) throw std::runtime_error("factor-timeout must be 1..600 seconds");
+            o.factor_timeout = static_cast<unsigned>(seconds);
+            o.has_factor_timeout = true;
+        }
+        else if (a == "--tune") o.tune = value();
+        else if (a == "--ecm-tune-worker") o.tune_child=true;
+        else if (a == "--tune-save") {o.tune_save=value();o.tune_options=true;}
+        else if (a == "--tune-worktodo") {o.tune_worktodo=value();o.tune_options=true;}
+        else if (a == "--tune-merge") {o.tune_merge.push_back(value());o.tune_options=true;}
+        else if (a == "--tune-ntt-profile") {o.tune_ntt_profiles.push_back(value());o.tune_options=true;}
+        else if (a == "--tune-max-batches") {
+            o.tune_max_batches=num();if(o.tune_max_batches>1048576)throw std::runtime_error("tune-max-batches must be 0..1048576");
+            o.has_tune_max_batches=true;o.tune_options=true;
+        }
+        else if (a == "--tune-tail-samples") {
+            const auto n=num();if(n>16)throw std::runtime_error("tune-tail-samples must be 0..16");
+            o.tune_tail_samples=static_cast<unsigned>(n);o.has_tune_tail_samples=true;o.tune_options=true;
+        }
+        else if (a == "--tune-carrier-exponent") {
+            const auto p=num();if(p<2 || p>16384)throw std::runtime_error("tune-carrier-exponent must be 2..16384");
+            o.tune_carrier=static_cast<unsigned>(p);o.tune_options=true;
+        }
+        else if (a == "--tune-d" || a == "--tune-b2" || a == "--tune-exponents" || a=="--tune-slices") {
+            const auto text=value();std::vector<uint64_t> values;size_t start=0;
+            for(;;) {const auto end=text.find(',',start);values.push_back(u64(text.substr(start,end==text.npos?end:end-start),a.c_str()));
+                if(end==text.npos)break;start=end+1;}
+            if(values.size()>64 || std::set<uint64_t>(values.begin(),values.end()).size()!=values.size())throw std::runtime_error("tune grid must contain 1..64 distinct values");
+            if(a=="--tune-d"){for(auto d:values)if(d<6 || d%2 || d>200000000)throw std::runtime_error("tune-d must be even, 6..200000000");o.tune_ds=values;}
+            else if(a=="--tune-b2"){for(auto b:values)if(b<3 || b>(uint64_t)INT64_MAX-8192)throw std::runtime_error("invalid tune-b2");o.tune_b2s=values;}
+            else if(a=="--tune-slices"){for(auto b:values)if(!b || b>65535)throw std::runtime_error("tune-slices must be 1..65535");o.tune_slices=values;o.has_tune_slices=true;}
+            else {for(auto p:values)if(p<2 || p>16384)throw std::runtime_error("invalid tune exponent");o.tune_exponents=values;}
+            o.tune_options=true;
+        }
+        else if (a == "--tune-level") {
+            const auto level=num();if(level<1 || level>10)throw std::runtime_error("tune-level must be 1..10");
+            o.tune_level=static_cast<int>(level);o.tune_options=true;
+        }
+        else if (a == "--tune-file") { o.tune_file = value(); o.tune_options = true; }
+        else if (a == "--length-log2") {
+            o.tune_options = true;
+            const auto range = value();
+            const auto colon = range.find(':');
+            const auto first = u64(range.substr(0, colon), "length-log2");
+            const auto last = colon == range.npos ? first : u64(range.substr(colon + 1), "length-log2");
+            if (first < 3 || last > 27 || first > last)
+                throw std::runtime_error("length-log2 must be 3..27 or FIRST:LAST");
+            o.tune_first = static_cast<int>(first); o.tune_last = static_cast<int>(last);o.has_tune_lengths=true;
+        }
+        else if (a == "--tune-repeats") {
+            o.tune_options = true; const auto n = num();
+            if (!n || n > 1000) throw std::runtime_error("tune-repeats must be 1..1000");
+            o.tune_repeats = static_cast<int>(n);o.has_tune_repeats=true;
+        }
+        else if (a == "--tune-memory-mb") {
+            o.has_tune_memory=true;
+            o.tune_options = true; o.tune_memory_mb = num();
+            if (!o.tune_memory_mb || o.tune_memory_mb > 1048576)
+                throw std::runtime_error("invalid tune memory budget in MiB");
+        }
+        else if (a == "--once") o.once = true;
+        else if (a == "--curve-worker") o.child = true;
+        else if (a == "--record-offset") o.offset = num();
+        else if (a == "--record-hash") o.hash = num();
+        else if (a == "--record-index") o.index = num();
+        else throw std::runtime_error("unknown option: " + a);
+    }
+    if(o.prediction_policy!="model" && o.prediction_policy!="paired")throw std::runtime_error("prediction-policy must be model or paired");
+    if(o.tune_arithmetic!="both" && o.tune_arithmetic!="generic" && o.tune_arithmetic!="mersenne")throw std::runtime_error("tune-arithmetic must be both, generic or mersenne");
+    return o;
+}
+using Settings=ecm_config::Stage2Values;
+void configure_pack_zero(Options &o,const Settings *s=nullptr) {
+    // Resolve once in the parent; every curve/tune child receives the value.
+    // Legacy cprof has an exact PACK_ZERO=0 contract, including absent env.
+    if(!o.portable_cli.count("--pack-zero")) {
+        if(s && s->has_pack_zero)o.pack_zero=s->pack_zero;
+        else if(const char *v=std::getenv("NTT_S4_PACK_ZERO")) {
+            if(std::strcmp(v,"0") && std::strcmp(v,"1"))
+                throw std::runtime_error("NTT_S4_PACK_ZERO must be 0 or 1");
+            o.pack_zero=std::strcmp(v,"1")==0;
+        } else if(!o.cost_profile.empty() || (s && !s->cost_profile.empty()))o.pack_zero=false;
+    }
+    if(_putenv_s("NTT_S4_PACK_ZERO",o.pack_zero?"1":"0"))
+        throw std::runtime_error("cannot configure Stage2 pack/zero fusion");
+}
+Settings stage2_ini(const fs::path &path,int worker) {
+    std::vector<ecm_config::TomlLine> lines;
+    ecm_config::read_toml(path.string(),lines);
+    return ecm_config::read_stage2(ecm_config::cli_entries(lines,worker,true));
+}
+std::vector<std::string> csv(const std::string &s, std::vector<bool> *quotes = nullptr) {
+    std::vector<std::string> out;
+    std::string field;
+    bool quoted = false, had_quote = false;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c == '"') {
+            had_quote = true;
+            if (quoted && i + 1 < s.size() && s[i + 1] == '"') { field += c; ++i; }
+            else quoted = !quoted;
+        } else if (c == ',' && !quoted) {
+            out.push_back(trim(field)); field.clear();
+            if (quotes) quotes->push_back(had_quote);
+            had_quote = false;
+        }
+        else field += c;
+    }
+    if (quoted) throw std::runtime_error("unclosed worktodo quote");
+    out.push_back(trim(field));
+    if (quotes) quotes->push_back(had_quote);
+    return out;
+}
+struct QueueSelection {
+    EcmStage2Task task;
+    uint64_t b2 = 0, skip = 0, count = 0;
+};
+QueueSelection queue_fields(std::string line) {
+    if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
+    line = trim(line);
+    const std::string prefix = "ECMSTAGE2=";
+    if (line.compare(0, prefix.size(), prefix))
+        throw std::runtime_error("worktodo must contain ECMSTAGE2 save tasks");
+    std::vector<bool> quotes;
+    const auto cols = csv(line.substr(prefix.size()), &quotes);
+    auto integer_text = [](const std::string &s) {
+        size_t i = (!s.empty() && (s[0] == '+' || s[0] == '-')) ? 1 : 0;
+        if (i == s.size()) return false;
+        for (; i < s.size(); ++i) if (s[i] < '0' || s[i] > '9') return false;
+        return true;
+    };
+    QueueSelection q;
+    size_t idx = integer_text(cols.front()) ? 0 : 1;
+    if (idx) q.task.aid = cols.front();
+    if (cols.size() < idx + 5) throw std::runtime_error("ECMSTAGE2 needs k,b,n,c,filename");
+    q.task.raw_line = line;
+    q.task.k = cols[idx]; q.task.b = cols[idx + 1]; q.task.c = cols[idx + 3];
+    const uint64_t exponent = u64(cols[idx + 2], "worktodo exponent");
+    if (exponent > ecm_stage2::max_input_bits) throw std::runtime_error("worktodo exponent exceeds supported input range");
+    q.task.n = static_cast<unsigned long>(exponent);
+    q.task.save_name = cols[idx + 4];
+    if (q.task.save_name.empty()) throw std::runtime_error("worktodo save filename is empty");
+    idx += 5;
+    uint64_t *targets[] = {&q.b2, &q.skip, &q.count};
+    const char *labels[] = {"worktodo B2", "worktodo skip_curves", "worktodo num_curves"};
+    for (size_t i = 0; i < 3 && idx < cols.size() && !quotes[idx]; ++i, ++idx)
+        *targets[i] = cols[idx].empty() ? 0 : u64(cols[idx], labels[i]);
+    if (q.count > UINT32_MAX) throw std::runtime_error("worktodo num_curves exceeds uint32");
+    q.task.curves_to_run = static_cast<uint32_t>(q.count);
+    if (idx < cols.size()) {
+        if (!quotes[idx] || idx + 1 != cols.size())
+            throw std::runtime_error("extra worktodo fields; known factors must be the final quoted field");
+        for (const auto &factor : csv(cols[idx])) if (!factor.empty()) q.task.factors.push_back(factor);
+    }
+    return q;
+}
+void append(const fs::path &path, const std::string &line) {
+    if (!path.parent_path().empty()) fs::create_directories(path.parent_path());
+    bool separator=false;
+    if(fs::exists(path) && fs::file_size(path)>0) {
+        std::ifstream tail(path,std::ios::binary);tail.seekg(-1,std::ios::end);char last=0;
+        if(!tail.get(last))throw std::runtime_error("cannot inspect append tail: "+path.string());
+        separator=last!='\n';
+    }
+    HANDLE h=CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(h==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot append: "+path.string());
+    LARGE_INTEGER end{};
+    if(!SetFilePointerEx(h,end,nullptr,FILE_END)){CloseHandle(h);throw std::runtime_error("cannot seek append file");}
+    const std::string data=(separator?"\n":"")+line+'\n';DWORD written=0;
+    const bool ok=data.size()<=MAXDWORD && WriteFile(h,data.data(),static_cast<DWORD>(data.size()),&written,nullptr) && written==data.size() && FlushFileBuffers(h);
+    CloseHandle(h);
+    if(!ok)throw std::runtime_error("cannot flush append: "+path.string());
+}
+std::wstring quote(const std::wstring &s) {
+    std::wstring out = L"\"";
+    size_t slashes = 0;
+    for (wchar_t c : s) {
+        if (c == L'\\') { ++slashes; continue; }
+        out.append(c == L'"' ? 2 * slashes + 1 : slashes, L'\\');
+        slashes = 0; out += c;
+    }
+    out.append(2 * slashes, L'\\');
+    return out + L'"';
+}
+struct Handle {
+    HANDLE value = INVALID_HANDLE_VALUE;
+    Handle()=default;
+    Handle(const Handle&)=delete;
+    Handle &operator=(const Handle&)=delete;
+    Handle(Handle &&other)noexcept:value(other.value){other.value=INVALID_HANDLE_VALUE;}
+    ~Handle() { if (value != INVALID_HANDLE_VALUE && value) CloseHandle(value); }
+};
+// Optional diagnostic for the calling process's CUDA context. Use the same
+// linked runtime as the CUDA translation unit.
+// The schedule bits affect CPU waits, not kernel ordering or arithmetic.
+void configure_cuda_wait(int device) {
+    const char *value=std::getenv("NTT_CUDA_WAIT_MODE");
+    if(!value)return;
+    const uint64_t mode=ecm_stage2::cost::integer(value);
+    if(mode!=0&&mode!=1&&mode!=2&&mode!=4)
+        throw std::runtime_error("NTT_CUDA_WAIT_MODE must be 0(auto), 1(spin), 2(yield), or 4(blocking)");
+    auto check=[](cudaError_t error){if(error!=cudaSuccess)throw std::runtime_error(std::string("CUDA wait configuration failed: ")+cudaGetErrorString(error));};
+    check(cudaSetDevice(device));
+    unsigned before=0,after=0;check(cudaGetDeviceFlags(&before));
+    // MapHost (bit 3) is implicit in CUDA 13's returned flags and must not be
+    // passed to cudaSetDeviceFlags. Preserve all other non-schedule flags.
+    check(cudaSetDeviceFlags((before&~15u)|static_cast<unsigned>(mode)));check(cudaGetDeviceFlags(&after));
+    if((after&7u)!=mode||(after&~7u)!=(before&~7u))
+        throw std::runtime_error("CUDA wait flags did not match requested context state");
+    if(stage2_log::enabled(stage2_log::debug))std::cout<<"stage2_cuda_wait: device="<<device<<" requested="<<mode
+             <<" before="<<before<<" after="<<after<<std::endl;
+}
+int child_run(Options &o, const fs::path &save, const Record &r,
+              uint64_t b2, uint64_t d, int device, const fs::path &results, const fs::path &log,
+              uint64_t batch, const Settings &ini_settings) {
+    const fs::path exe = executable();
+    std::wstring cmd = quote(exe.wstring()) + L" --curve-worker --save " + quote(save.wstring());
+    auto arg = [&](const wchar_t *key, uint64_t n) { cmd += L" "; cmd += key; cmd += L" "; cmd += std::to_wstring(n); };
+    arg(L"--record-offset", r.offset); arg(L"--record-hash", r.hash); arg(L"--record-index", r.index);
+    arg(L"--b2", b2); arg(L"--d", d); arg(L"--device", device); arg(L"--worker", o.worker);
+    if(o.has_carrier || o.carrier_exponent)arg(L"--carrier-exponent",o.carrier_exponent);
+    if(!o.tune_profile.empty())cmd+=L" --tune-profile "+quote(fs::path(o.tune_profile).wstring());
+    arg(L"--short-ntt-batch-tune",o.short_batch_tune?1:0);
+    arg(L"--pack-zero",o.pack_zero?1:0);
+    arg(L"--tune-runtime",o.tune_runtime?1:0);
+    arg(L"--tune-runtime-samples",o.runtime_samples);
+    arg(L"--runtime-remaining-curves",o.runtime_remaining);
+    arg(L"--runtime-prepare-cache",o.runtime_prepare_cache?1:0);
+    if(o.runtime_prepare_cache && !o.runtime_prepare_hints.empty())
+        cmd+=L" --runtime-prepare-hints "+quote(std::wstring(o.runtime_prepare_hints.begin(),o.runtime_prepare_hints.end()));
+    if(o.runtime_prepare_cache && !o.runtime_route_hints.empty())
+        cmd+=L" --runtime-route-hints "+quote(std::wstring(o.runtime_route_hints.begin(),o.runtime_route_hints.end()));
+    cmd+=L" --tune-ignore "+quote(fs::path(o.tune_ignore).wstring());
+    if(!o.stage1_csv.empty())cmd+=L" --stage1-cost-csv "+quote(fs::path(o.stage1_csv).wstring());
+    if(!o.condition_tag.empty())cmd+=L" --tune-condition-tag "+quote(fs::path(o.condition_tag).wstring());
+    arg(L"--stage1-cost-mhz",o.stage1_mhz);arg(L"--target-factor-bits",o.factor_bits);
+    arg(L"--inferred-carrier-exponent",o.inferred_carrier);
+    arg(L"--auto-carrier",o.auto_carrier?1:0);
+    cmd+=L" --prediction-policy "+quote(fs::path(o.prediction_policy).wstring());
+    // Startup calibration belongs to the parent queue, never every curve child.
+    arg(L"--short-calibration",0);
+    arg(L"--batch-mb",batch);arg(L"--arena-mb",o.arena);arg(L"--owner-budget-mb",o.owner_mb);
+    if(o.tune_child)cmd+=L" --ecm-tune-worker";
+    arg(L"--log-level", static_cast<uint64_t>(o.log_level));
+    arg(L"--ntt-counts",o.ntt_counts?1:0);
+    arg(L"--relocation",o.relocation?1:0);
+    cmd += L" --results " + quote(results.wstring());
+    if(!o.submission.empty())cmd+=L" --submission "+quote(fs::path(o.submission).wstring());
+    if(!o.submission_ini.empty())cmd+=L" --config "+quote(fs::path(o.submission_ini).wstring());
+    if(o.submission_exponent)arg(L"--exponent",o.submission_exponent);
+    for(const auto &factor:o.submission_known)cmd+=L" --known-factor "+quote(fs::path(factor).wstring());
+    if(!o.submission_aid.empty())cmd+=L" --aid "+quote(fs::path(o.submission_aid).wstring());
+    if (o.factorize_hits) {
+        cmd += L" --factorize-hits --gp " + quote(fs::path(o.gp).wstring());
+        arg(L"--factor-timeout", o.factor_timeout);
+    }
+    if (o.factor_only) cmd += L" --factor-only";
+    if (o.auto_b2 && !b2) {
+        auto real=[](double value){std::wostringstream out;out.imbue(std::locale::classic());out<<std::setprecision(17)<<value;return out.str();};
+        cmd += L" --auto-b2";
+        if(!o.cost_profile.empty())cmd+=L" --cost-profile " + quote(fs::path(o.cost_profile).wstring());
+        arg(L"--arena-mb",o.arena);arg(L"--owner-budget-mb",o.owner_mb);arg(L"--stage1-batch",o.stage1_batch);
+        if(o.auto_min)arg(L"--auto-min-b2",o.auto_min);if(o.auto_max)arg(L"--auto-max-b2",o.auto_max);
+        if(o.stage1_seconds)cmd+=L" --stage1-seconds-per-curve "+real(o.stage1_seconds);
+        if(!o.stage1_profile.empty())cmd+=L" --stage1-tune-profile "+quote(fs::path(o.stage1_profile).wstring());
+        cmd+=L" --lcm "+quote(fs::path(o.stage1_exponent=="choose12"?"12":"1").wstring());
+        cmd+=L" --stage2-ratio-adjust "+real(o.ratio_adjust);
+    }
+    if(!o.publication_task.empty())cmd+=L" --publication-task "+quote(fs::path(o.publication_task).wstring());
+    if(!o.receipt.empty())cmd+=L" --queue-receipt "+quote(fs::path(o.receipt).wstring());
+    if(o.debug_log)cmd+=L" --debug-log-file "+quote(fs::path(o.debug_file).wstring());
+    // Preserve readable batch statistics in the file even with a concise console.
+    const int engine_level=ecm_cuda_stage2_default_log_level()==stage2_log::debug?stage2_log::debug:stage2_log::batches;
+    arg(L"--log-level",static_cast<uint64_t>(engine_level));
+    std::ofstream output;
+    if(!log.empty()) {
+        fs::create_directories(log.parent_path());
+        output.open(log,std::ios::binary|std::ios::app);
+        if(!output)throw std::runtime_error("cannot open Stage2 log: "+log.string());
+    }
+    if(o.debug_log)fs::create_directories(fs::path(o.debug_file).parent_path());
+    SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};
+    Handle out_read,out_write,err_read,err_write;
+    if(!CreatePipe(&out_read.value,&out_write.value,&security,0) ||
+       !CreatePipe(&err_read.value,&err_write.value,&security,0) ||
+       !SetHandleInformation(out_read.value,HANDLE_FLAG_INHERIT,0) ||
+       !SetHandleInformation(err_read.value,HANDLE_FLAG_INHERIT,0))
+        throw std::runtime_error("cannot create curve output pipes");
+    Handle job;job.value=CreateJobObjectW(nullptr,nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if(!job.value || !SetInformationJobObject(job.value,JobObjectExtendedLimitInformation,&limits,sizeof(limits)))
+        throw std::runtime_error("cannot create curve process job");
+    STARTUPINFOW si{};si.cb=sizeof(si);si.dwFlags=STARTF_USESTDHANDLES;
+    si.hStdOutput=out_write.value;si.hStdError=err_write.value;si.hStdInput=GetStdHandle(STD_INPUT_HANDLE);
+    PROCESS_INFORMATION pi{};
+    if(!CreateProcessW(exe.c_str(),cmd.data(),nullptr,nullptr,TRUE,CREATE_SUSPENDED|CREATE_NEW_PROCESS_GROUP,nullptr,nullptr,&si,&pi))
+        throw std::runtime_error("cannot launch curve process: "+std::to_string(GetLastError()));
+    Handle process,thread;process.value=pi.hProcess;thread.value=pi.hThread;
+    if(!AssignProcessToJobObject(job.value,pi.hProcess)) {
+        TerminateProcess(pi.hProcess,2);throw std::runtime_error("cannot bind curve process lifetime");
+    }
+    if(ResumeThread(pi.hThread)==static_cast<DWORD>(-1))throw std::runtime_error("cannot resume curve process");
+    CloseHandle(out_write.value);out_write.value=INVALID_HANDLE_VALUE;
+    CloseHandle(err_write.value);err_write.value=INVALID_HANDLE_VALUE;
+    const auto begin=std::chrono::steady_clock::now();
+    auto next=begin+std::chrono::seconds(30);
+    std::string phase="Starting curve",stdout_pending,stderr_pending;
+    bool heartbeat=false,stop_reported=false;
+    stage2_console::Summary console_summary(batch,ini_settings.arena,ini_settings.owner_mb);
+    auto console_line=[&](const std::string &text,bool error=false) {
+        if(heartbeat){std::cout<<'\n';heartbeat=false;}
+        (error?std::cerr:std::cout)<<text<<std::endl;
+    };
+    auto line=[&](const std::string &text,bool error) {
+        if(!error && o.runtime_prepare_cache && text.rfind("{\"type\":\"tune_selection\"",0)==0) {
+            try {
+                const auto event=ecm_results::json::parse(text);
+                ecm_stage2::tune::portable::RuntimePauseHints hints;
+                hints.assign(event.get("runtime_prepare_hints").text());o.runtime_prepare_hints=hints.text();
+                const auto route_text=event.get("runtime_route_hints").text();
+                ecm_stage2::tune::portable::RuntimeRouteHints routes;
+                if(open_runtime_routes(route_text,routes))o.runtime_route_hints=route_text;else o.runtime_route_hints.clear();
+            }catch(const std::runtime_error &){o.runtime_prepare_hints.clear();o.runtime_route_hints.clear();}
+        }
+        if(output.is_open()){output<<text<<'\n';output.flush();if(!output)throw std::runtime_error("Stage2 log write failed");}
+        if(o.tune_child)return; // Full diagnostic evidence stays in the per-trial file.
+        const auto summary=error?stage2_console::Projection{}:console_summary.observe(text);
+        if(stage2_log::enabled(stage2_log::phases))
+            for(const auto &entry:summary.lines)console_line(entry);
+        const bool milestone=text.compare(0,14,"stage2_phase: ")==0;
+        const bool tune_update=text.compare(0,21,"stage2_tune_runtime: ")==0;
+        const bool result=text.compare(0,15,"stage2_result: ")==0;
+        if(milestone){phase=text.substr(14);const auto timing=phase.find(" previous=");if(timing!=phase.npos)phase.resize(timing);}
+        if(!summary.replace && (error || (stage2_log::enabled(stage2_log::phases)&&(milestone||tune_update)) ||
+           ((stage2_log::enabled(stage2_log::curve)||o.gui_events)&&(result || text.rfind("stage2_relocation:",0)==0)) ||
+           stage2_log::enabled(stage2_log::batches) ||
+           (o.ntt_counts && (text.rfind("ntt_count_",0)==0 || text.rfind("ntt_length_counts:",0)==0 || text.rfind("ntt_work:",0)==0)) ||
+           text.find("WARNING")!=text.npos))console_line(text,error);
+    };
+    auto drain=[&](HANDLE pipe,std::string &pending,bool error) {
+        DWORD available=0;
+        while(PeekNamedPipe(pipe,nullptr,0,nullptr,&available,nullptr) && available) {
+            char buffer[4096];DWORD got=0;
+            if(!ReadFile(pipe,buffer,std::min<DWORD>(available,sizeof(buffer)),&got,nullptr) || !got)break;
+            pending.append(buffer,got);
+            size_t pos;
+            while((pos=pending.find('\n'))!=std::string::npos) {
+                std::string text=pending.substr(0,pos);pending.erase(0,pos+1);
+                if(!text.empty()&&text.back()=='\r')text.pop_back();
+                line(text,error);
+            }
+        }
+    };
+    DWORD wait=WAIT_TIMEOUT;
+    for(;;) {
+        poll_inherited_stop();
+        if(stop_requests>=2) {
+            TerminateJobObject(job.value,130);
+            WaitForSingleObject(pi.hProcess,5000);
+            throw std::runtime_error("immediate stop requested; incomplete curve will restart next time");
+        }
+        if(stop_requests && !stop_reported) {
+            line("Stop requested: finishing current curve; press Ctrl+C again to terminate immediately.",true);
+            stop_reported=true;
+        }
+        drain(out_read.value,stdout_pending,false);drain(err_read.value,stderr_pending,true);
+        wait=WaitForSingleObject(pi.hProcess,50);
+        if(wait==WAIT_OBJECT_0)break;
+        if(wait!=WAIT_TIMEOUT)throw std::runtime_error("curve process wait failed");
+        const auto now=std::chrono::steady_clock::now();
+        if(now>=next && !o.tune_child && stage2_log::enabled(stage2_log::curve)) {
+            std::cout<<'\r'<<"Curve "<<r.index<<": "<<phase<<" | elapsed="
+                     <<static_cast<unsigned long long>(std::chrono::duration<double>(now-begin).count())<<" s     "<<std::flush;
+            heartbeat=true;next=now+std::chrono::seconds(30);
+        }
+    }
+    drain(out_read.value,stdout_pending,false);drain(err_read.value,stderr_pending,true);
+    if(!stdout_pending.empty())line(stdout_pending,false);
+    if(!stderr_pending.empty())line(stderr_pending,true);
+    if(!o.tune_child && stage2_log::enabled(stage2_log::phases))
+        for(const auto &entry:console_summary.finish().lines)console_line(entry);
+    if(heartbeat)std::cout<<std::endl;
+    DWORD code=1;
+    if(!GetExitCodeProcess(pi.hProcess,&code))throw std::runtime_error("cannot read curve exit status");
+    return code==0?0:(code==3?3:1);
+}
+
+std::string select_auto_tuned(Options &o,const Record &r);
+std::string select_auto(Options &o,const Record &r,bool apply=true) {
+    if(!o.tune_profile.empty())return select_auto_tuned(o,r);
+    if(!o.stage1_profile.empty() && !(o.stage1_seconds>0))throw std::runtime_error("Stage1 tune costs require a full ECM tune profile");
+    namespace c=ecm_stage2::cost;
+    if(o.carrier_exponent)throw std::runtime_error("Auto B2 needs a calibrated Mersenne-carrier profile; use explicit B2");
+#if NTT_GL_ADD_SUB_MASK != 0
+    throw std::runtime_error("Auto B2 has no calibrated cost profile for selected NTT add/sub arithmetic");
+#endif
+    if(o.cost_profile.empty())throw std::runtime_error("Auto B2 requires --cost-profile FILE");
+    Handle guard;guard.value=CreateFileW(fs::path(o.cost_profile).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(guard.value==INVALID_HANDLE_VALUE)throw std::runtime_error("cannot lock cost profile for reading");
+    const std::string hash=ecm_stage2::sha256_file(fs::path(o.cost_profile));
+    const auto profile=c::Profile::load(fs::path(o.cost_profile));
+    if(profile.binary!=ecm_stage2::sha256_file(executable()))throw std::runtime_error("cost profile binary fingerprint mismatch; recalibration required");
+    // Bind only the measured configuration; explicit conflicting environment fails.
+    auto require=[](const char *key,uint64_t expected,uint64_t fallback) {
+        const char *value=std::getenv(key);const uint64_t actual=value?ecm_stage2::cost::integer(value):fallback;
+        if(actual!=expected)throw std::runtime_error(std::string("cost profile configuration mismatch: ")+key);
+    };
+    require("NTT_CUDA_WAIT_MODE",0,0);
+    for(const char *key:{"NTT_XADD6","NTT_BABY_DEVICE","NTT_POINT_MERSENNE","NTT_SMALL_PRIME_REUSE","NTT_GIANT_SEED_DEVICE",
+        "NTT_GFINV_SEG_EXACT","NTT_GFINV_BATCH","NTT_FOLD_FLAT","NTT_FOLD_DEVICE","NTT_GROOT_DEVICE","NTT_SCALED_DESCENT",
+        "NTT_S4_OUTPUT_WINDOW","NTT_S4_CHUNK_OUTPUT","NTT_DEVICE_GLEAF","NTT_GROOT_TO_FOLD","NTT_S4_ORACLE_ASYNC",
+        "NTT_S4_CARRY_BATCH","NTT_FUSE_WARP_TAIL"})require(key,1,1);
+    for(const char *key:{"NTT_GIANT_LADDER","NTT_GL_SHIFT_SCALE","NTT_CARRY_CHECK_FUSED","NTT_S4_HOSTPACK","NTT_S4_FINAL_READBACK"})require(key,0,0);
+    require("NTT_FUSE_COOP_OUTER",2,2);require("NTT_FUSE_T",12,12);require("NTT_FUSE_M",4,4);
+    require("NTT_FUSE_MID_COOP",0,0);
+    require("NTT_FUSE_JOINT",0,0);
+    require("NTT_S4_PACK_ZERO",0,0);
+    require("NTT_S4_BATCH_MB",64,64);require("NTT_DEVICE_GLEAF_MAX_MB",512,512);
+    require("NTT_GIANT_CHAIN_BLOCK",64,64);require("NTT_GIANT_CHAIN_MIN",profile.chain_min,profile.chain_min);
+    require("NTT_GIANT_CHAIN_SMALL_BLOCK",0,0); // Not covered by current v2 cost profiles.
+    require("NTT_GIANT_SEED_PAIR",0,0); // Paired/rebased seeds require new measured costs.
+    require("NTT_GIANT_BASE_CPU",0,0);
+    require("NTT_GSCALE_DEVICE",0,0); // GPU Gamma correction requires new costs.
+    require("NTT_SCALED_ROOT_DEVICE",0,0); // Resident root preparation needs new costs.
+    require("NTT_SCALED_FRONTIER_DEVICE",0,0); // Resident descent layers require new costs.
+    require("NTT_FOLD_OWNER_REUSE",0,0); // Owner aliases need a matching layout/cost scope.
+    require("NTT_LADDER_CAP",8192,8192);
+    require("CUDA_LAUNCH_BLOCKING",0,0);
+    require("NTT_S4_SAMPLE",96,96);require("NTT_S4_CHECK_EVERY",8,8);
+    require("NTT_ARENA_WORKSPACE_POOL",1,1);require("NTT_FUSE_COMPACT_SCRATCH",1,1);
+    require("NTT_WORKSPACE_REUSE_BQ",0,0); // Two-buffer layouts require a matching memory/cost profile.
+    require("NTT_PHASE_TRIM_RAW",0,0); // Phase reclamation also needs a matching cost scope.
+    require("NTT_PHASE_TRIM_OUTPUT",0,0); // Output reclamation changes residency and timings.
+    require("NTT_OWNER_TRIM_FUSE",0,0); // Phase cache eviction needs a calibrated lifecycle/cost scope.
+    require("NTT_MEMORY_LEDGER",0,0); // Allocation instrumentation is outside production timing profiles.
+    require("NTT_REQUEST_AUDIT",0,0); // Request topology instrumentation is outside timing profiles.
+    require("NTT_S3_COMPACT_PRODUCTS",1,1); // Independent product capacity is the production default.
+    require("NTT_S3_PRODUCTS_TEST",0,0);require("NTT_S3_PRODUCTS_TEST_BAD",0,0);
+    require("NTT_GIANT_CHUNK_FLOOR",0,0);require("NTT_GIANT_POINT_BUDGET_KB",262144,262144);
+    require("NTT_S4_WORKSPACE_BUDGET",0,0); // Chunk policy needs a matching cost scope.
+    require("NTT_S4_FLAT_DIRECT",1,1);require("NTT_GROOT_COMPACT_RAW",1,1);
+    if(o.factor_only)_putenv_s("NTT_NAME_HITS","0");
+    const char *naming=std::getenv("NTT_NAME_HITS");
+    if(naming)require("NTT_NAME_HITS",profile.naming,profile.naming);
+    else _putenv_s("NTT_NAME_HITS",profile.naming?"1":"0");
+    if(!profile.naming)o.factor_only=true;
+    Big n;mpz_set_str(n.z,r.n.c_str(),16);const int bits=(int)mpz_sizeinbase(n.z,2);
+    if(bits<2||bits>8192||mpz_popcount(n.z)!=(mp_bitcnt_t)bits)throw std::runtime_error("cost profile requires exact Mersenne input");
+    uint64_t arena=o.arena;
+    if(!arena)if(const char *v=std::getenv("NTT_ARENA_CAP_KB")) {
+        const auto kb=c::integer(v);if(!kb||kb%1024)throw std::runtime_error("cost profile requires an explicit whole-MiB arena scope");arena=kb/1024;
+    }
+    if(std::none_of(profile.scopes.begin(),profile.scopes.end(),[&](const c::Scope &s){return s.bits==(uint64_t)bits&&s.b1==r.b1&&(!arena||s.arena_mb==arena);}))
+        throw std::runtime_error("no measured bit-width/B1/arena scope");
+    EcmStage2DeviceInfo device;
+    if(ecm_cuda_stage2_device_info(o.device,&device,profile.uuid.c_str()))throw std::runtime_error("cannot query matching Auto B2 device");
+    c::Request request;request.bits=bits;request.b1=r.b1;request.d=o.d;request.arena_mb=arena;request.owner_mb=o.owner_mb;
+    request.b2min=o.auto_min;request.b2max=o.auto_max;request.batch=o.stage1_batch;request.t1=o.stage1_seconds;request.adjust=o.ratio_adjust;
+    const auto plan=c::choose(profile,request,device);o.b2=plan.b2;o.d=plan.d;o.arena=plan.arena_mb;o.owner_mb=plan.owner_mb;
+    if(apply){
+        _putenv_s("NTT_GIANT_CHAIN_MIN",std::to_string(profile.chain_min).c_str());
+        _putenv_s("NTT_ARENA_CAP_KB",std::to_string(o.arena*1024).c_str());
+        _putenv_s("NTT_FOLD_DEVICE_MAX_MB",std::to_string(o.owner_mb).c_str());
+        _putenv_s("NTT_D_MODEL","0");
+    }
+    return c::json(plan,hash);
+}
+std::string select_tuned(Options &o,const Record &r);
+std::string select_runtime_tuned(Options &o,const Record &r);
+void configure_short_ntt_batches(const Options &o);
+struct RuntimeTuneObservation {
+    ecm_stage2::tune::portable::Shape shape;
+    ecm_stage2::tune::Fields condition,sample;
+    uint64_t plan_cache_hits=0;
+};
+RuntimeTuneObservation prepare_runtime_tune(const Options &o,const Record &r);
+std::string runtime_route_event(const Options &o);
+void complete_runtime_tune(RuntimeTuneObservation &observation,const EcmStage2Metrics &m);
+void publish_runtime_tune(const Options &o,const RuntimeTuneObservation &observation);
+std::string runtime_tune_json(const RuntimeTuneObservation &observation);
+std::string tune_metrics_json(const EcmStage2Metrics &m) {
+    std::ostringstream out;out<<std::setprecision(17)<<"{\"d\":"<<m.d<<",\"p\":"<<m.p<<",\"giant_points\":"<<m.giant_points
+        <<",\"total_seconds\":"<<m.total_seconds<<",\"init_seconds\":"<<m.init_seconds<<",\"main_seconds\":"<<m.main_seconds
+        <<",\"giant_seconds\":"<<m.giant_seconds<<",\"gtrees_seconds\":"<<m.gtrees_seconds<<",\"fold_seconds\":"<<m.fold_seconds
+        <<",\"descent_seconds\":"<<m.descent_seconds<<",\"inverse_seconds\":"<<m.inverse_seconds<<",\"accum_seconds\":"<<m.accum_seconds
+        <<",\"selftest_cases\":"<<m.selftest_cases<<",\"checked\":"<<m.checked<<",\"bad\":"<<m.bad
+        <<",\"hits\":0,\"clean\":1,\"fold_resident\":"<<int(m.fold_resident)<<",\"frontier_resident\":"<<int(m.frontier_resident)
+        <<",\"phase_accounting\":"<<json_string(ecm_stage2::timing::contract);
+    for(size_t i=0;i<ecm_stage2::timing::count;++i)
+        out<<",\"phase_"<<ecm_stage2::timing::names[i]<<"_seconds\":"<<m.phases.seconds[i];
+    out<<'}';return out.str();
+}
+int curve_worker(Options o) {
+    configure_pack_zero(o);
+    // Children ignore the first console interrupt; the parent owns stop policy.
+    SetConsoleCtrlHandler(nullptr,TRUE);
+    std::setvbuf(stdout,nullptr,_IONBF,0);std::setvbuf(stderr,nullptr,_IONBF,0);
+    if(!o.debug_file.empty())stage2_log::open_debug(fs::path(o.debug_file));
+    if(o.log_level<0)o.log_level=ecm_cuda_stage2_default_log_level();
+    if(ecm_cuda_stage2_set_log_level(o.log_level))throw std::runtime_error("engine rejected log level (development requires debug)");
+    stage2_log::level=o.log_level;
+    stage2_log::phase("Read and validate Stage1 point");
+    if(ecm_cuda_stage2_set_ntt_counts(o.ntt_counts))throw std::runtime_error("NTT length counts require the production Stage2 engine");
+    if(ecm_cuda_stage2_check_configuration())throw std::runtime_error("Stage2 engine configuration rejected");
+    if (o.factor_only && _putenv_s("NTT_NAME_HITS", "0"))
+        throw std::runtime_error("cannot disable optional prime-witness naming");
+    if (o.save.empty() || o.results.empty() || !o.index || o.device < 0 || (!o.b2 && !o.auto_b2))
+        throw std::runtime_error("incomplete internal curve-worker arguments");
+    std::ifstream in(o.save, std::ios::binary);
+    if (!in) throw std::runtime_error("cannot reread save");
+    in.seekg(static_cast<std::streamoff>(o.offset));
+    std::string line;
+    if (!std::getline(in, line) || fingerprint(line) != o.hash)
+        throw std::runtime_error("save changed after planning");
+    const Record r = parse_record(line);
+    if(r.edwards && !o.b2 && o.auto_b2)
+        throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
+    if(o.carrier_exponent) {
+        ecm_stage2::ModulusContext modulus;std::string error;
+        if(!modulus.configure(r.n.c_str(),16,o.carrier_exponent,error))throw std::runtime_error(error);
+    }
+    std::string result;
+    EcmStage2Metrics tune_metrics;
+    const uint64_t requested_d=o.d,requested_b2=o.b2;
+    const unsigned requested_carrier=o.carrier_exponent;
+    const auto start = std::chrono::steady_clock::now();
+    std::string auto_json;
+    configure_short_ntt_batches(o);
+    if(!o.b2&&o.auto_b2){auto_json=select_auto(o,r);std::cout<<auto_json<<std::endl;}
+    o.has_d=requested_d!=0;
+    auto tuned_json=o.tune_child?std::string{}:auto_json.empty()?select_tuned(o,r):select_runtime_tuned(o,r);
+    const double selection_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+    const double auto_seconds=auto_json.empty()?0:std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+    if (o.b2 <= r.b1) throw std::runtime_error("B2 must be greater than saved B1");
+    Big n, x, gcd;
+    mpz_set_str(n.z, r.n.c_str(), 16); mpz_set_str(x.z, r.x.c_str(), 16);
+    mpz_gcd(gcd.z, x.z, n.z);
+    RuntimeTuneObservation observation;
+    const auto observation_start=std::chrono::steady_clock::now();
+    if(!o.relocation && !o.tune_child && o.tune_runtime && !o.tune_profile.empty() && mpz_cmp_ui(gcd.z,1)==0) {
+        try {observation=prepare_runtime_tune(o,r);}
+        catch(const std::exception &e){std::cerr<<"WARNING: runtime tune preparation skipped: "<<e.what()<<std::endl;}
+    }
+    if(!tuned_json.empty()) {
+        tuned_json.pop_back();tuned_json+=",\"selection_seconds\":"+ecm_stage2::tune::portable::numeric(selection_seconds)+
+            ",\"observation_prepare_seconds\":"+ecm_stage2::tune::portable::numeric(std::chrono::duration<double>(
+                std::chrono::steady_clock::now()-observation_start).count())+
+            ",\"observation_plan_cache_hits\":"+std::to_string(observation.plan_cache_hits)+'}';
+        auto event=tuned_json;event.pop_back();event+=",\"runtime_route_hints\":"+json_string(runtime_route_event(o))+'}';
+        std::cout<<event<<std::endl;
+    }
+    std::string status = "stage2_completed";
+    int code = 0;
+    if (mpz_cmp_ui(gcd.z, 1) > 0 && mpz_cmp(gcd.z, n.z) < 0) {
+        status = "factor_in_saved_X";
+        result = "\"hits\":1,\"bad_factors\":0,\"factors\":[" + json_string(number(gcd.z, 10)) + "]";
+        if(stage2_log::enabled(stage2_log::curve))std::cout << "saved_X_factor: " << number(gcd.z, 10) << '\n';
+    } else {
+        if (!mpz_cmp(gcd.z, n.z)) throw std::runtime_error("saved X=0 gives no usable Stage1 point");
+        configure_cuda_wait(o.device);
+        if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");
+        code = ecm_cuda_stage2_run(r.n.c_str(), r.x.c_str(), r.sigma, r.b1, o.b2, o.d, o.device,
+            [](const char *text, void *ctx) { *static_cast<std::string *>(ctx) = text; }, &result,o.carrier_exponent,
+            &tune_metrics,
+            r.a24.empty()?nullptr:r.a24.c_str());
+    }
+    if (code || result.empty()) return code ? code : 1;
+    if(o.tune_child) {
+        const auto &m=tune_metrics;
+        if(status!="stage2_completed" || !m.clean || !m.selftest_cases || !m.checked || m.bad || !m.phases.complete)
+            throw std::runtime_error("ECM tune requires a clean no-factor curve with arithmetic checks");
+        const auto calibration_factors=ecm_stage2::result_factors(result);
+        if(!calibration_factors.empty()) {
+            // A verified factor is not a timing sample. Startup calibration
+            // may skip this curve; explicit tune still rejects the nonzero exit.
+            Big factor;
+            for(const auto &text:calibration_factors)
+                if(mpz_set_str(factor.z,text.c_str(),10) || mpz_cmp_ui(factor.z,1)<=0 ||
+                    mpz_cmp(factor.z,n.z)>=0 || !mpz_divisible_p(n.z,factor.z))
+                    throw std::runtime_error("invalid calibration factor");
+            append(o.results,"{\"status\":\"verified_factor_not_timing_sample\",\"clean\":1,\"bad\":0,\"selftest_cases\":"+
+                std::to_string(m.selftest_cases)+",\"checked\":"+std::to_string(m.checked)+"}");
+            return 3;
+        }
+        if(result.find("\"hits\":0,")!=0)
+            throw std::runtime_error("ECM tune requires a clean no-factor curve with arithmetic checks");
+        append(o.results,tune_metrics_json(m));return 0;
+    }
+    if(!observation.sample.empty()) {
+        if(status!="stage2_completed" || result.find("\"hits\":0,")!=0 || !ecm_stage2::result_factors(result).empty())
+            observation.sample.clear();
+        else try {complete_runtime_tune(observation,tune_metrics);}
+        catch(const std::exception &e){observation.sample.clear();std::cerr<<"WARNING: runtime tune sample skipped: "<<e.what()<<std::endl;}
+    }
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    double factor_seconds = 0;
+    if (o.factorize_hits) {
+        stage2_log::phase("Optional factor decomposition");
+        const auto begin = std::chrono::steady_clock::now();
+        result += ',' + ecm_stage2::factor_details(result, n.z, fs::path(o.gp), o.factor_timeout,
+                                                   fs::path(o.results).parent_path() / "factor_details");
+        factor_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+    }
+    stage2_log::phase("Publish result");
+    const auto identity_ini=o.ini.empty()?executable().parent_path()/"ecm.toml":fs::path(o.ini);
+    std::vector<ecm_config::TomlLine> identity_lines;
+    if(!ecm_config::read_toml(identity_ini.string(),identity_lines) && (!o.ini.empty() || fs::exists(identity_ini)))
+        throw std::runtime_error("cannot read result identity TOML");
+    const auto identity=ecm_config::read_stage2(ecm_config::cli_entries(identity_lines,o.worker,true));
+    ecm_results::Submission submission;submission.edwards=r.edwards;submission.exponent=o.submission_exponent;
+    submission.publication_task=o.publication_task;submission.when=ecm_results::utc_timestamp();
+    submission.publication_order=o.index;
+    submission.known=o.submission_known;submission.aid=o.submission_aid;
+    submission.sigma=r.sigma;submission.b1=r.b1;submission.b2=o.b2;
+    submission.d=tune_metrics.d;submission.poly_size=tune_metrics.p;
+    submission.user=identity.result_user;submission.computer=identity.result_computer;
+    submission.factors=ecm_stage2::result_factors(result);
+    submission.stage=submission.factors.empty()?0:(status=="factor_in_saved_X"?1:2);
+    const auto external_path=o.submission.empty()?identity_ini.parent_path()/identity.submission:fs::path(o.submission);
+    if(submission.stage==1){submission.d=0;submission.poly_size=0;}
+    ecm_results::publish_submission(external_path,submission,n.z);
+    std::string engine="{\"name\":\"cuda-ntt\",\"status\":"+json_string(status)+
+        ",\"save\":"+json_string(o.save)+",\"record\":"+std::to_string(o.index)+
+        ",\"record_hash\":"+json_string(std::to_string(o.hash))+",\"worker\":"+std::to_string(o.worker)+
+        ",\"device\":"+std::to_string(o.device)+",\"seconds\":"+std::to_string(seconds)+
+        ",\"carrier_exponent\":"+std::to_string(o.carrier_exponent)+
+        ",\"requested_carrier_exponent\":"+std::to_string(requested_carrier)+
+        ",\"requested_D\":"+std::to_string(requested_d)+",\"requested_B2\":"+std::to_string(requested_b2)+
+        (tuned_json.empty()?"":",\"tune_plan\":"+tuned_json)+
+        (o.factorize_hits?",\"factorization_seconds\":"+std::to_string(factor_seconds):"")+
+        (o.factor_only?",\"requested_factor_only\":true":"")+
+        (auto_json.empty()?"":",\"auto_b2\":true,\"auto_planning_seconds\":"+std::to_string(auto_seconds)+",\"auto_plan\":"+auto_json)+
+        (o.relocation?",\"relocation\":true,\"relocation_replayed\":"+std::string(tune_metrics.relocation_replayed?"true":"false")+
+            ",\"giant_first\":"+std::to_string(tune_metrics.giant_first)+",\"giant_last\":"+std::to_string(tune_metrics.giant_last)+
+            ",\"giant_points\":"+std::to_string(tune_metrics.giant_points)+",\"relocation_points\":"+std::to_string(tune_metrics.relocation_points)+
+            ",\"relocation_prime\":"+std::to_string(tune_metrics.relocation_prime)+
+            ",\"relocation_probe_seconds\":"+std::to_string(tune_metrics.relocation_probe_seconds)+
+            ",\"relocation_replay_seconds\":"+std::to_string(tune_metrics.relocation_replay_seconds)+
+            ",\"relocation_estimate_scope\":\"original_replay_range\"":"")+","+result+"}";
+    auto details=ecm_results::json::parse(engine);
+    details.members.erase(std::remove_if(details.members.begin(),details.members.end(),[](const auto &p){return p.first=="factors";}),details.members.end());
+    const auto extra=",\"queue_receipt\":"+json_string(o.receipt)+",\"stage2-engine\":"+details.dump()+runtime_tune_json(observation);
+    static const auto source_build=ecm_stage2::sha256_file(executable());
+    auto internal=ecm_results::internal_json(submission,n.z,0,source_build,extra);internal.pop_back();append(o.results,internal);
+    // Optional cache work follows the durable result. It cannot invalidate the
+    // successful curve or cause the parent to replay a committed receipt.
+    if(!observation.sample.empty())try {publish_runtime_tune(o,observation);}
+    catch(const std::exception &e){std::cerr<<"WARNING: runtime tune write skipped; observation retained in results: "<<e.what()<<std::endl;}
+    std::cout << "stage2_result: record=" << o.index << " seconds=" << seconds
+              << " factorization_seconds=" << factor_seconds
+              << " sigma=" << r.sigma << " B1=" << r.b1
+              << " curve_model=" << (r.edwards?"ed":"mont")
+              << (r.edwards?"":" param=0") << " save=" << json_string(o.save)
+              << " " << result << std::endl;
+    return 0;
+}
+void help() {
+    std::cout << "ecm_cuda_stage2 - resume normalized Suyama PARAM=0 or ECM-EDWARDS-AM Stage1 text saves\n"
+        "  ecm_cuda_stage2 --save FILE --b2 B2 [--curves N] [--skip-curves N]\n"
+        "  ecm_cuda_stage2 [--config ecm.toml] [--worktodo FILE] [--worker N] [--once]\n"
+        "Options: --device N --d D --batch-mb MB --arena-mb MB --results INTERNAL.jsonl\n"
+        "         --submission results.json.txt --exponent P --known-factor F (repeatable)\n"
+        "         --ntt-counts 0|1 (per-curve NTT length table; TOML stage2_ntt_counts)\n"
+        "         --relocation 0|1 (optional conservative suffix, original-range replay on hits/nonunits)\n"
+        "         --carrier-exponent p (experimental: arithmetic modulo 2^p-1, factors still target saved N; 0=off)\n"
+        "         --auto-carrier 0|1 (override stage2_auto_carrier; verified worktodo candidates, tune selection required)\n"
+        "Tune: --tune ntt|ecm --tune-level 1..10 --tune-file FILE.toml --tune-repeats N\n"
+        "      ECM: configured worktodo by default; --tune-worktodo FILE or --tune-exponents bits,...\n"
+        "           --tune-save FILE [--tune-carrier-exponent p]; verified tasks pair ordinary/carrier modes.\n"
+        "           --tune-budget-seconds 1800 --tune-error-limit 0.08; incremental final summaries.\n"
+        "           --tune-d D,... --tune-b2 B2,...; --tune-warmup 0|1 (default 0); separate ECM processes.\n"
+        "           --tune-arithmetic both|generic|mersenne: arithmetic families for explicit width grids.\n"
+        "           Per width/B2: start at default D; follow measured improvements through adjacent D.\n"
+        "           TOML format 7: matrices with column names in the first row; regenerate older files.\n"
+        "           --tune-max-batches N limits G trees per curve; 0 removes the effort limit.\n"
+        "      Merge: --tune ecm --tune-merge A.toml --tune-merge B.toml --tune-file combined.toml\n"
+        "             Separate measurement conditions; only a strictly faster median replaces measured data.\n"
+        "Selection: --tune-profile FILE.toml --tune-ignore gpu,driver,cuda,backend,environment\n"
+        "           B1 never gates reuse; unmeasured widths/B2 retain estimate/uncertainty labels.\n"
+        "           --prediction-policy model|paired (default model); model supplies a no-tune basic prior.\n"
+        "           --tune-runtime 0|1 (default 1): accumulate checked NF curves and test legal carriers first.\n"
+        "           --tune-runtime-samples N (2..1000, default 10): per-condition/path observation cap.\n"
+        "           --short-calibration 0|1 --short-calibration-seconds 10\n"
+        "           --short-ntt-batch-tune 0|1: experimental batch selection for lengths <=2^19 (default 0).\n"
+        "           --pack-zero 0|1: fuse Stage2 input packing and zero padding (stage2_pack_zero in TOML).\n"
+        "           --stage1-cost-csv FILE --stage1-cost-mhz MHz --target-factor-bits N\n"
+        "           Explicit nonzero D locks D; explicit carrier-exponent (including 0) locks arithmetic.\n"
+        "           --tune-ntt-profile FILE (repeatable): attach checked NTT summaries to ECM tune/merge.\n"
+        "         --log FILE --log-level quiet|curve|phases|batches|debug (0..4)\n"
+        "         Production console default: phases; readable file: batches. --dry-run --help\n"
+        "         --factorize-hits [--gp gp.exe] [--factor-timeout 30]\n"
+        "         --factor-only (skip optional prime-witness naming; raw factors may be composite)\n"
+        "Auto B2: --auto-b2 --tune-profile FILE.toml --stage1-seconds-per-curve S\n"
+        "         Or: --stage1-tune-profile FILE.toml --stage1-batch N [--lcm 1|12]\n"
+        "         Offline validation: --check-stage1-tune-profile FILE.toml\n"
+        "         Legacy: --auto-b2 --cost-profile FILE [--stage1-batch N]\n"
+        "         [--stage1-seconds-per-curve S] [--stage2-ratio-adjust R]\n"
+        "         [--auto-min-b2 B2 --auto-max-b2 B2] [--owner-budget-mb MB]\n"
+        "         Portable profiles allow labeled estimates; legacy cost-profile requires a measured matching scope.\n"
+        "         --plan-only (does not consume tasks; may run startup calibration unless --short-calibration 0)\n"
+        "Tune: --tune ntt --device N [--tune-level 1..10] [--length-log2 3:27] [--tune-slices 1,4,16] [--tune-repeats 5]\n"
+        "      [--tune-memory-mb 1024] [--tune-file stage2_tune.toml]\n"
+        "      Requires a fixed Goldilocks backend; measures field convolution only.\n"
+        "Queue: ECMSTAGE2=[AID,]k,b,n,c,save[,B2-or-zero][,skip][,count][,\"factors\"]\n"
+        "TOML: [shared] worktodo; [stage2] stage2_finished, stage2_progress_dir, stage2_log_file;\n"
+        "stage2_progress_file imports legacy single-file progress only.\n"
+        "     shared tmp_dir/device/verbose; stage2_save_dir/device overrides; stage2_b2, stage2_d,\n"
+        "     stage2_batch_mb, stage2_arena_mb, stage2_pack_zero, stage2_results_file, stage2_log_level.\n"
+        "     stage2_debug_log=true enables separate diagnostics (stage2_debug_log_file).\n"
+        "D=0 chooses automatically; count/curves=0 means all remaining; shortages are clamped.\n"
+        "Queue only: resumes completed curves. Ctrl+C finishes current curve; twice stops now.\n"
+        "Missing implicit TOML uses defaults. Worker overrides use [workers.N.stage2].\n";
+}
+ecm_stage2::tune::Fields tune_environment() {
+    std::map<std::string,std::string> env;
+    const auto block=GetEnvironmentStringsA();if(!block)throw std::runtime_error("cannot inspect tune policy");
+    for(const char *p=block;*p;p+=std::strlen(p)+1) {
+        std::string row=p;const auto eq=row.find('=');if(eq==row.npos || row.compare(0,4,"NTT_")!=0)continue;
+        const auto key=row.substr(0,eq),value=row.substr(eq+1);
+        // D is explicit during tune; logging and audits are not runtime knobs.
+        if(key=="NTT_D_MODEL" || key=="NTT_NO_PROGRESS" || key=="NTT_MEMORY_AUDIT" || key=="NTT_REQUEST_AUDIT")continue;
+        if(value.find_first_not_of("0123456789.eE+-")!=value.npos) {
+            FreeEnvironmentStringsA(block);throw std::runtime_error("ECM tune cannot describe nonnumeric policy: "+key);
+        }
+        auto field=key.substr(4);for(char &c:field)c=(char)std::tolower((unsigned char)c);
+        env[field]=value.empty()?"\"\"":value;
+    }
+    FreeEnvironmentStringsA(block);return env;
+}
+// Access known scalar fields in the engine's trusted structured output. Nested
+// records are sliced first; keys are never obtained from external profile text.
+std::string plan_scalar(const std::string &json,const char *key) {
+    const auto marker=std::string("\"")+key+"\":";auto a=json.find(marker);
+    if(a==json.npos)throw std::runtime_error(std::string("plan field missing: ")+key);a+=marker.size();
+    const auto b=json.find_first_of(",}",a);return json.substr(a,b-a);
+}
+std::string curve_memory_record(const std::string &json) {
+    const auto a=json.find("\"curve_workspace_memory\":{");if(a==json.npos)throw std::runtime_error("curve memory model unavailable");
+    return json.substr(a,json.find("\"s4_memory\":",a)-a);
+}
+std::string giant_memory_record(const std::string &json) {
+    const auto a=json.find("\"giant_memory\":{");
+    if(a==json.npos)throw std::runtime_error("giant route plan missing");
+    return json.substr(a,json.find("\"model\":",a)-a);
+}
+#include "ecm_stage2_portable_driver.inl"
+int driver(Options o) {
+    if (o.help) { help(); return 0; }
+    if (o.child) return curve_worker(o);
+    if(o.stop_handle) {
+        inherited_stop_event=reinterpret_cast<HANDLE>(static_cast<uintptr_t>(o.stop_handle));
+        if(WaitForSingleObject(inherited_stop_event,0)==WAIT_FAILED)throw std::runtime_error("invalid inherited Stage2 stop event");
+    }
+    if(!o.check_stage1_profile.empty()) {
+        if(!o.save.empty() || !o.worktodo.empty() || !o.tune.empty() || o.auto_b2 || o.plan_only || o.dry ||
+           o.b2 || o.has_carrier || !o.tune_profile.empty() || !o.stage1_profile.empty())
+            throw std::runtime_error("Stage1 profile validation is independent of curve/queue options");
+        const auto p=ecm_stage2::tune::Stage1Profile::load(absolute_from(fs::current_path(),o.check_stage1_profile));
+        std::cout<<"{\"type\":\"stage1_profile_checked\",\"samples\":"<<p.samples.size()<<",\"valid\":true}"<<std::endl;
+        return 0;
+    }
+    if(o.tune_child)throw std::runtime_error("ecm-tune-worker requires the internal curve-worker mode");
+    if(o.auto_b2&&o.b2)throw std::runtime_error("explicit --auto-b2 conflicts with nonzero --b2");
+    if(o.cost_device_info) {
+        if(!o.save.empty()||!o.worktodo.empty()||!o.tune.empty()||o.auto_b2||o.plan_only||o.dry||o.b2||o.has_carrier||!o.tune_profile.empty())
+            throw std::runtime_error("--cost-device-info is independent of curve/queue options");
+        EcmStage2DeviceInfo info;if(ecm_cuda_stage2_device_info(o.device<0?0:o.device,&info))throw std::runtime_error("cannot query cost-profile device");
+        std::cout<<"{\"type\":\"cost_device\",\"uuid_hex\":\""<<info.uuid_hex<<"\",\"major\":"<<info.major<<",\"minor\":"<<info.minor
+            <<",\"runtime\":"<<info.runtime<<",\"driver\":"<<info.driver<<",\"fixed_mode\":"<<info.fixed_mode<<",\"outer_unroll_u\":"<<info.outer_unroll_u
+            <<",\"free_bytes\":"<<info.free_bytes<<",\"total_bytes\":"<<info.total_bytes<<"}"<<std::endl;return 0;
+    }
+    if (o.tune.empty() && o.tune_options) throw std::runtime_error("tune options require --tune ntt|ecm");
+    if (!o.tune.empty() && ((o.tune != "ntt" && o.tune!="ecm") || !o.save.empty() || !o.worktodo.empty() ||
+        o.b2 || o.has_d || o.selection || o.dry || o.plan_only || o.once || o.auto_b2 || !o.cost_profile.empty() || !o.tune_profile.empty() || o.has_carrier))
+        throw std::runtime_error("--tune ntt|ecm is independent of save/queue/curve planning options; ECM accepts --tune-save");
+    if(o.tune=="ntt" && (!o.tune_save.empty() || !o.tune_worktodo.empty() || o.tune_carrier || !o.tune_ds.empty() || !o.tune_b2s.empty() || !o.tune_exponents.empty() || o.has_tune_max_batches || o.has_tune_tail_samples || !o.tune_merge.empty() || !o.tune_ntt_profiles.empty()))throw std::runtime_error("ECM tune grid/merge options require --tune ecm");
+    if(o.tune=="ecm" && o.has_tune_lengths)throw std::runtime_error("length-log2 requires --tune ntt");
+    if(o.tune=="ecm" && o.has_tune_slices)throw std::runtime_error("tune-slices requires --tune ntt");
+    if(o.tune=="ecm" && o.has_tune_memory)throw std::runtime_error("ECM tune uses batch/arena/owner budgets; tune-memory-mb requires --tune ntt");
+    if (o.plan_only && o.dry) throw std::runtime_error("choose --plan-only or --dry-run");
+    const fs::path cwd = fs::current_path();
+    const fs::path ini = o.ini.empty() ? executable().parent_path() / "ecm.toml" : absolute_from(cwd, o.ini);
+    EcmQueueConfig cfg;
+    if (!ecm_queue_config_load(ini.string(), o.worker, cfg) && (!o.ini.empty() || fs::exists(ini)))
+        throw std::runtime_error("cannot read explicit TOML: " + ini.string());
+    Settings s = stage2_ini(ini, o.worker);
+    configure_pack_zero(o,&s);
+    if(!o.portable_cli.count("--auto-carrier"))o.auto_carrier=s.auto_carrier;
+    if(!o.portable_cli.count("--prediction-policy"))o.prediction_policy=s.prediction_policy;
+    if(!o.portable_cli.count("--tune-arithmetic"))o.tune_arithmetic=s.tune_arithmetic;
+    if(!o.portable_cli.count("--tune-runtime"))o.tune_runtime=s.tune_runtime;
+    if(!o.portable_cli.count("--tune-runtime-samples"))o.runtime_samples=s.runtime_samples;
+    if(o.prediction_policy!="model" && o.prediction_policy!="paired")throw std::runtime_error("prediction-policy must be model or paired");
+    if(o.tune_arithmetic!="both" && o.tune_arithmetic!="generic" && o.tune_arithmetic!="mersenne")throw std::runtime_error("tune-arithmetic must be both, generic or mersenne");
+    if(!o.portable_cli.count("--tune-ignore"))o.tune_ignore=s.tune_ignore;
+    if(!o.portable_cli.count("--tune-budget-seconds"))o.tune_budget=s.tune_budget;
+    if(!o.portable_cli.count("--tune-warmup"))o.tune_warmup=s.tune_warmup;
+    if(!o.portable_cli.count("--short-calibration-seconds"))o.short_budget=s.short_budget;
+    if(!o.portable_cli.count("--short-calibration"))o.short_calibration=s.short_calibration;
+    if(!o.portable_cli.count("--short-ntt-batch-tune"))o.short_batch_tune=s.short_batch_tune;
+    if(!o.portable_cli.count("--ntt-counts"))o.ntt_counts=s.ntt_counts;
+    if(!o.portable_cli.count("--relocation"))o.relocation=s.relocation;
+    if(o.relocation && (o.tune=="ecm" || o.tune_child))throw std::runtime_error("relocation does not collect legacy ECM tune samples; use --relocation 0 for --tune ecm");
+    if(!o.portable_cli.count("--tune-error-limit"))o.tune_error=s.tune_error;
+    if(!o.portable_cli.count("--stage1-cost-mhz"))o.stage1_mhz=s.stage1_mhz;
+    if(!o.portable_cli.count("--target-factor-bits"))o.factor_bits=s.factor_bits;
+    if(!o.portable_cli.count("--tune-condition-tag"))o.condition_tag=s.condition_tag;
+    ecm_stage2::tune::portable::Ignore::parse(o.tune_ignore);
+    if(o.tune_error>1 || o.factor_bits==1)throw std::runtime_error("invalid portable tune error/factor size");
+    if(o.log_level<0)o.log_level=s.log_level<0?(ecm_cuda_stage2_default_log_level()==stage2_log::debug ? stage2_log::debug : (cfg.verbose?stage2_log::phases:stage2_log::curve)):s.log_level;
+    o.debug_log=o.debug_log||s.debug_log||o.log_level==stage2_log::debug;
+    if(ecm_cuda_stage2_default_log_level()!=stage2_log::debug)o.log_level=std::min(o.log_level,static_cast<int>(stage2_log::batches));
+    if(ecm_cuda_stage2_set_log_level(o.log_level))throw std::runtime_error("engine rejected log level (development requires debug)");
+    stage2_log::level=o.log_level;
+    if(ecm_cuda_stage2_check_configuration())throw std::runtime_error("Stage2 engine configuration rejected");
+    if(s.factorize_hits)o.factorize_hits=true;
+    if(s.factor_only)o.factor_only=true;
+    if(o.factor_only && _putenv_s("NTT_NAME_HITS","0"))throw std::runtime_error("cannot disable optional prime-witness naming");
+    o.auto_b2=(o.auto_b2||s.auto_b2) && !cfg.b2_ratio;
+    if(!o.auto_min)o.auto_min=s.auto_min;if(!o.auto_max)o.auto_max=s.auto_max;
+    if(!o.has_owner){if(s.has_owner)o.owner_mb=s.owner_mb;else if(const char *v=std::getenv("NTT_FOLD_DEVICE_MAX_MB"))o.owner_mb=ecm_stage2::cost::integer(v);}
+    if(o.owner_mb>ecm_config::limits::stage2_stage2_fold_mb_maximum)throw std::runtime_error("invalid owner budget");
+    if(!o.has_stage1_batch)o.stage1_batch=s.stage1_batch;
+    if(!o.has_stage1_seconds)o.stage1_seconds=s.stage1_seconds;
+    if(!o.has_stage1_exponent)o.stage1_exponent=cfg.scalar_construction=="12"?"choose12":"lcm";
+    if(!o.has_ratio)o.ratio_adjust=s.ratio_adjust;
+    if(!o.has_gp && !s.gp.empty())o.gp=s.gp;
+    if(!o.has_factor_timeout)o.factor_timeout=static_cast<unsigned>(s.factor_timeout);
+    const fs::path base = ini.parent_path();
+    o.submission_ini=ini.string();
+    if(s.has_submission && s.submission.empty())throw std::runtime_error("empty submission path");
+    o.submission=(!o.submission.empty()?absolute_from(cwd,o.submission):
+        absolute_from(base,s.has_submission?s.submission:ecm_config::worker_file(s.submission,o.worker))).string();
+    if(!o.cost_profile.empty())o.cost_profile=absolute_from(cwd,o.cost_profile).string();
+    else if(!s.cost_profile.empty())o.cost_profile=absolute_from(base,s.cost_profile).string();
+    if(!o.tune_profile.empty())o.tune_profile=absolute_from(cwd,o.tune_profile).string();
+    else if(!s.tune_profile.empty())o.tune_profile=absolute_from(base,s.tune_profile).string();
+    else if(o.cost_profile.empty())o.tune_profile=absolute_from(base,"stage2_ecm_tune.toml").string();
+    if(!o.stage1_csv.empty())o.stage1_csv=absolute_from(cwd,o.stage1_csv).string();
+    else if(!s.stage1_csv.empty())o.stage1_csv=absolute_from(base,s.stage1_csv).string();
+    if(!o.stage1_profile.empty())o.stage1_profile=absolute_from(cwd,o.stage1_profile).string();
+    else if(!s.stage1_profile.empty())o.stage1_profile=absolute_from(base,s.stage1_profile).string();
+    const fs::path worktodo = o.worktodo.empty() ? absolute_from(base, s.worktodo) : absolute_from(cwd, o.worktodo);
+    const fs::path finished = absolute_from(base, s.finished);
+    const fs::path tmp = absolute_from(base, s.save_dir.empty()?cfg.tmp_dir:s.save_dir);
+    const std::string suffix = o.worker == 1 ? "" : "_" + std::to_string(o.worker);
+    const fs::path results = !o.results.empty() ? absolute_from(cwd, o.results) :
+        absolute_from(base, s.results.empty() ? ecm_config::worker_file(ecm_config::defaults::stage2_stage2_results_file,o.worker) : s.results);
+    fs::path log;
+    if (!o.log.empty()) log = absolute_from(cwd, o.log);
+    else if (!s.has_log) log = absolute_from(base, ecm_config::worker_file(ecm_config::defaults::stage2_stage2_log_file,o.worker));
+    else if (!s.log.empty()) log = absolute_from(base, s.log);
+    if(o.debug_log) {
+        if(o.debug_file.empty())o.debug_file=absolute_from(base,s.debug_file.empty()?ecm_config::worker_file(ecm_config::defaults::stage2_stage2_debug_log_file,o.worker):s.debug_file).string();
+        else o.debug_file=absolute_from(cwd,o.debug_file).string();
+    }
+    const fs::path legacy_progress=s.progress.empty()?fs::path(worktodo.string()+suffix+".progress"):absolute_from(base,s.progress);
+    const fs::path progress_dir=!s.progress_dir.empty()?absolute_from(base,s.progress_dir):
+        !s.progress.empty()?legacy_progress.parent_path():worktodo.parent_path();
+    const int device = o.device < 0 ? (s.device<0?cfg.device:s.device) : o.device;
+    const uint64_t d = o.has_d ? o.d : s.d;
+    o.device=device;o.d=d;o.has_d=d!=0;
+    if (device < 0 || (d && (d < 6 || d % 2))) throw std::runtime_error("device must be >=0; D must be even and >=6");
+    const uint64_t batch = o.has_batch ? o.batch : s.batch, arena = o.has_arena ? o.arena : s.arena;
+    o.arena=arena;
+    o.batch=batch;
+    if (batch < ecm_config::limits::stage2_stage2_batch_mb_minimum || batch > ecm_config::limits::stage2_stage2_batch_mb_maximum || arena > ecm_config::limits::stage2_stage2_arena_mb_maximum) throw std::runtime_error("invalid Stage2 memory budget in MB");
+    _putenv_s("NTT_FOLD_DEVICE_MAX_MB",std::to_string(o.owner_mb).c_str());
+    _putenv_s("NTT_S4_BATCH_MB", std::to_string(batch).c_str());
+    _putenv_s("NTT_S4_SHORT_BATCH_TUNE",o.short_batch_tune?"1":"");
+    if (arena) _putenv_s("NTT_ARENA_CAP_KB", std::to_string(arena * 1024).c_str());
+    if (!o.tune.empty()) {
+        if(o.tune_level && o.tune=="ntt") {
+            const auto effort=ecm_stage2::tune::effort(o.tune_level);
+            if(!o.has_tune_lengths){o.tune_first=effort.first;o.tune_last=effort.last;}
+            if(!o.has_tune_repeats)o.tune_repeats=effort.repeats;
+            if(!o.has_tune_slices)o.tune_slices.assign(effort.slices.begin(),effort.slices.end());
+        }
+        const fs::path destination = absolute_from(cwd, o.tune_file.empty() ? (o.tune=="ecm"?"stage2_ecm_tune.toml":"stage2_tune.toml") : o.tune_file);
+        auto same_path = [&](const fs::path &other) {
+            std::error_code error;
+            if (fs::equivalent(destination, other, error) && !error) return true;
+            return upper(destination.lexically_normal().string()) == upper(other.lexically_normal().string());
+        };
+        const bool toml=upper(destination.extension().string())==".TOML";
+        if (!toml && upper(destination.extension().string()) != ".JSONL")
+            throw std::runtime_error("tune-file must use the .toml or .jsonl extension");
+        if (same_path(executable()) || same_path(ini) || same_path(worktodo) || same_path(finished) ||
+            same_path(results) || same_path(legacy_progress) || (!log.empty() && same_path(log)) ||
+            (!o.debug_file.empty() && same_path(fs::path(o.debug_file))) || (!o.tune_save.empty() && same_path(absolute_from(cwd,o.tune_save))) ||
+            (!o.tune_worktodo.empty() && same_path(absolute_from(cwd,o.tune_worktodo))) ||
+            (o.tune!="ecm" && !o.tune_profile.empty() && same_path(fs::path(o.tune_profile))) ||
+            (!o.stage1_profile.empty() && same_path(fs::path(o.stage1_profile))) ||
+            (!o.stage1_csv.empty() && same_path(fs::path(o.stage1_csv))))
+            throw std::runtime_error("tune-file must differ from executable, config, queue and result files");
+        for(const auto &input:o.tune_merge)if(same_path(absolute_from(cwd,input)))
+            throw std::runtime_error("tune-file must differ from merge inputs");
+        for(const auto &input:o.tune_ntt_profiles)if(same_path(absolute_from(cwd,input)))
+            throw std::runtime_error("tune-file must differ from NTT inputs");
+        if(o.tune=="ecm") {
+            if(!toml)throw std::runtime_error("ECM tune requires a .toml profile");
+            if(!o.tune_merge.empty()){merge_portable_tune(o,destination);return 0;}
+            run_portable_tune(o,s,destination,worktodo,tmp);return 0;
+        }
+        if(toml){run_portable_ntt(o,destination);return 0;}
+        if (!destination.parent_path().empty()) fs::create_directories(destination.parent_path());
+        const fs::path partial(destination.string() + ".partial." + std::to_string(GetCurrentProcessId()));
+        std::ofstream output(partial, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("cannot write tune-file: " + partial.string());
+        const auto binary_hash = ecm_stage2::sha256_file(executable());
+        const auto manifest = executable().parent_path() / "build_manifest.json";
+        const auto manifest_hash = fs::is_regular_file(manifest) ? ecm_stage2::sha256_file(manifest) : "";
+        if(toml)output << "# ECM Stage2 tuning data. Times in seconds; capacities in bytes.\n"
+            << "[profile]\nformat = 2\nunit = \"field_convolution\"\nmin_log2 = " << o.tune_first
+            << "\nmax_log2 = " << o.tune_last << "\nrepeats = " << o.tune_repeats << "\neffort_level = " << o.tune_level << '\n';
+        else output << "{\"type\":\"profile\",\"schema\":2,\"unit\":\"field_convolution\""
+               << ",\"min_log2\":" << o.tune_first << ",\"max_log2\":" << o.tune_last
+               << ",\"repeats\":" << o.tune_repeats << ",\"effort_level\":" << o.tune_level << "}\n";
+        const auto env=tune_environment();
+        if(toml) {
+            output<<"slices = [";for(size_t i=0;i<o.tune_slices.size();++i){if(i)output<<", ";output<<o.tune_slices[i];}output<<"]\n";
+            output<<"\n[policy]\naccounting = \"cuda_events_two_forward_product_inverse_v1\"\n\n[policy.environment]\n";
+            for(const auto &entry:env)output<<entry.first<<" = "<<entry.second<<'\n';
+        } else {
+            output<<"{\"type\":\"policy\",\"accounting\":\"cuda_events_two_forward_product_inverse_v1\",\"slices\":[";
+            for(size_t i=0;i<o.tune_slices.size();++i){if(i)output<<',';output<<o.tune_slices[i];}
+            output<<"],\"environment\":{";size_t i=0;for(const auto &entry:env){if(i++)output<<',';output<<json_string(entry.first)<<':'<<entry.second;}output<<"}}\n";
+        }
+        struct TuneOutput {std::ofstream &file;bool toml;};
+        TuneOutput tune_output{output,toml};
+        auto sink = [](const char *json, void *ctx) {
+            auto &writer = *static_cast<TuneOutput *>(ctx);
+            auto &out=writer.file;
+            out << (writer.toml ? ecm_stage2::tune::table(json,true) : std::string(json)+"\n"); out.flush();
+            if (!out) throw std::runtime_error("tune profile write failed");
+            std::cout << json << std::endl;
+        };
+        const int code = ecm_cuda_stage2_tune_ntt_batches(device, o.tune_first, o.tune_last, o.tune_repeats,
+            o.tune_memory_mb * 1048576,o.tune_slices.data(),o.tune_slices.size(),sink,&tune_output,o.tune_warmup);
+        if (code) throw std::runtime_error("tune failed or measured no shapes; partial profile retained: " + partial.string());
+        if (binary_hash != ecm_stage2::sha256_file(executable()) ||
+            (!manifest_hash.empty() && manifest_hash != ecm_stage2::sha256_file(manifest)))
+            throw std::runtime_error("tune binary/build manifest changed; partial profile retained");
+        output.flush(); if (!output) throw std::runtime_error("tune profile flush failed");
+        output.close(); if (!output) throw std::runtime_error("tune profile close failed");
+        if (!MoveFileExW(partial.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            throw std::runtime_error("cannot publish tune profile; partial profile retained: " + partial.string());
+        std::cout << "tune_complete: profile=" << destination.string() << std::endl;
+        return 0;
+    }
+    const bool queue = o.save.empty();
+    if (queue && o.selection) throw std::runtime_error("queue curve selection comes from ECMSTAGE2; use --save for overrides");
+    Handle lock;
+    if (queue) {
+        if (!fs::exists(worktodo)) throw std::runtime_error("worktodo not found: " + worktodo.string());
+        if (!o.dry && !o.plan_only) {
+            // Each worker section has one Stage2 consumer. The shared queue edit
+            // lock serializes row rewrites across different workers.
+            fs::path lockpath(worktodo.string() + ".worker" + std::to_string(o.worker) + ".stage2.lock");
+            lock.value = CreateFileW(lockpath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                                     FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (lock.value == INVALID_HANDLE_VALUE) throw std::runtime_error("cannot lock worktodo worker (another process may own it)");
+        }
+    }
+    auto same_path=[](const fs::path &a,const fs::path &b) {
+        if(a.empty()||b.empty())return false;
+        std::error_code error;
+        if(fs::equivalent(a,b,error)&&!error)return true;
+        return upper(a.lexically_normal().string())==upper(b.lexically_normal().string());
+    };
+    // A common TOML may share device/save defaults, never writable queue state.
+    const std::vector<fs::path> writable={worktodo,finished,results,log,legacy_progress,fs::path(o.debug_file),fs::path(o.submission)};
+    for(size_t i=0;i<writable.size();++i) {
+        if(!o.tune_profile.empty() && same_path(writable[i],fs::path(o.tune_profile)))throw std::runtime_error("output path conflicts with measured tune profile");
+        if(!o.stage1_profile.empty() && same_path(writable[i],fs::path(o.stage1_profile)))throw std::runtime_error("output path conflicts with Stage1 tune profile");
+        if(!o.stage1_csv.empty() && same_path(writable[i],fs::path(o.stage1_csv)))throw std::runtime_error("output path conflicts with Stage1 cost CSV");
+        if(same_path(writable[i],ini)||same_path(writable[i],executable()))throw std::runtime_error("output path conflicts with configuration or executable");
+        for(size_t j=0;j<i;++j)if(same_path(writable[i],writable[j]))throw std::runtime_error("queue, finished, progress, result and log paths must be distinct");
+    }
+
+    if(queue && same_path(finished,absolute_from(executable().parent_path(),cfg.finished)))
+        throw std::runtime_error("Stage1 and Stage2 finished records must use distinct paths");
+    auto report=[&](const std::string &message,bool error=false) {
+        (error?std::cerr:std::cout)<<message<<std::endl;
+        if(!o.dry&&!o.plan_only&&!log.empty())append(log,message);
+    };
+    report(std::string(ecm_program::name)+" "+ecm_program::version+" (Stage2)");
+    if(!SetConsoleCtrlHandler(console_control,TRUE))throw std::runtime_error("cannot install console stop handler");
+    struct ControlGuard { ~ControlGuard(){SetConsoleCtrlHandler(console_control,FALSE);} } control_guard;
+    const auto calibration_range=queue && !o.dry && o.short_calibration?portable_queue_range(worktodo,o.worker,tmp):std::vector<Record>{};
+    uint64_t completed=0,failed_tasks=0;
+    for (;;) {
+        poll_inherited_stop();
+        fatal_log.clear();
+        if(stop_requests)break;
+        fs::path save;
+        std::string task_line,expected_n;
+        std::vector<Record> plan;
+        uint64_t skip=o.skip,count=o.curves,b2=o.b2?o.b2:s.b2;
+        if(queue) {
+            std::string read_error;
+            const auto read = ecm_worktodo_read_next_line(worktodo.string(), o.worker,
+                {cfg.worktodo_priority, cfg.worktodo_skip}, WorktodoStage::Stage2,
+                task_line, read_error);
+            if(read == WorktodoReadResult::Error)throw std::runtime_error(read_error);
+            if(read == WorktodoReadResult::Empty)break;
+        }
+        try {
+            if(queue) {
+                QueueSelection fields;
+                try { fields=queue_fields(task_line); }
+                catch(const std::runtime_error &e){throw TaskInputError(e.what());}
+                skip=fields.skip;count=fields.count;
+                if(!o.b2&&fields.b2)b2=fields.b2;
+                Big n;std::string error;
+                if(!ecm_compute_stage2_n(fields.task,n.z,error))throw TaskInputError("worktodo N: "+error);
+                expected_n=number(n.z);save=absolute_from(tmp,fields.task.save_name);
+                o.submission_exponent=fields.task.k=="1" && fields.task.b=="2" && fields.task.c=="-1"?fields.task.n:0;
+                o.submission_known=fields.task.factors;o.submission_aid=fields.task.aid;
+                o.inferred_carrier=o.auto_carrier && fields.task.k=="1" && fields.task.b=="2" && fields.task.c=="-1" &&
+                    fields.task.n>=2 && fields.task.n<=ecm_stage2::max_input_bits?unsigned(fields.task.n):0;
+            } else save=absolute_from(cwd,o.save);
+            for(const auto &path:writable)if(same_path(save,path))throw std::runtime_error("save path conflicts with writable queue/log/result state");
+            if(!o.dry&&!o.plan_only)fatal_log=log;
+            if(o.auto_b2&&!b2&&o.cost_profile.empty()&&o.tune_profile.empty())throw std::runtime_error("Auto B2 requires --tune-profile or --cost-profile FILE");
+            if(o.carrier_exponent && o.auto_b2 && !b2 && o.tune_profile.empty())throw std::runtime_error("Mersenne carrier Auto B2 requires full ECM tune data");
+            plan=records(save,skip,count);
+            if(cfg.b2_ratio && !plan.empty()) {
+                if(plan.front().b1 > (static_cast<uint64_t>(INT64_MAX)-8192)/cfg.b2_ratio)
+                    throw TaskInputError("b2_ratio multiplication exceeds Stage2 B2 range");
+                b2=plan.front().b1*cfg.b2_ratio;
+            }
+            for(const auto &r:plan) {
+                if(r.edwards && o.auto_b2 && !b2)throw std::runtime_error("Edwards Stage2 currently requires an explicit B2");
+                if((!(o.auto_b2&&!b2)&&b2<=r.b1)||b2>static_cast<uint64_t>(INT64_MAX)-8192)
+                    throw TaskInputError("B2 must exceed every saved B1 and fit the engine's signed index range");
+                if(!expected_n.empty()&&r.n!=expected_n)throw TaskInputError("worktodo N differs from save N");
+                if(queue&&r.b1!=plan.front().b1)throw TaskInputError("queue saves must have the same B1");
+                if(r.x=="0")throw TaskInputError("saved X=0 gives no usable Stage1 point");
+                if(o.carrier_exponent) {
+                    ecm_stage2::ModulusContext modulus;std::string error;
+                    // An invalid command option must not mark a valid queue row as erroneous.
+                    if(!modulus.configure(r.n.c_str(),16,o.carrier_exponent,error))throw std::runtime_error(error);
+                }
+            }
+        } catch(const TaskInputError &e) {
+            if(!queue || o.dry || o.plan_only)throw;
+            // Record the reason durably before commenting out the original row.
+            report("ERROR: task input: "+std::string(e.what())+" | task="+task_line,true);
+            append(finished,"# ERROR reason="+std::string(e.what())+"\n# "+task_line);
+            if(!ecm_worktodo_advance(worktodo.string(),o.worker,task_line,WorktodoAction::MarkError))
+                throw std::runtime_error("cannot mark invalid task; queue changed or rewrite failed");
+            ++failed_tasks;
+            if(o.once)break;
+            continue;
+        }
+        if(count && plan.size()<count)
+            report("WARNING: requested="+std::to_string(count)+" available="+std::to_string(plan.size())+
+                   " after skip="+std::to_string(skip)+"; running available curves only.",true);
+        if(plan.empty())report("WARNING: no available curves after skip; task will finish with zero curves.",true);
+        if(!o.relocation && !o.dry && !plan.empty() && !o.tune_profile.empty())ensure_portable_calibration(o,plan.front(),s,calibration_range);
+        stage2_queue::State state;
+        const bool persist=queue&&!o.dry&&!o.plan_only;
+        fs::path progress;
+        Handle progress_lock;
+        if(persist) {
+            const auto fields=queue_fields(task_line);
+            stage2_queue::Task task;task.aid=fields.task.aid;task.n=expected_n;
+            task.save_sha256=ecm_stage2::sha256_file(save);task.skip=skip;task.total=plan.size();
+            task.b2=b2;task.auto_b2=o.auto_b2&&!b2;
+            Big target;mpz_set_str(target.z,expected_n.c_str(),16);
+            progress=task.path(progress_dir,mpz_sizeinbase(target.z,2));
+            for(const auto &path:writable)if(same_path(progress,path))throw std::runtime_error("task checkpoint conflicts with output state");
+            if(same_path(progress,save)||same_path(progress,ini)||same_path(progress,executable())||
+               (!o.tune_profile.empty()&&same_path(progress,fs::path(o.tune_profile))))
+                throw std::runtime_error("task checkpoint conflicts with input");
+            fs::create_directories(progress_dir);
+            const fs::path lockpath(progress.string()+".lock");
+            progress_lock.value=CreateFileW(lockpath.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE,nullptr);
+            if(progress_lock.value==INVALID_HANDLE_VALUE)throw std::runtime_error("another process owns this Stage2 task checkpoint");
+            const auto key=task.id();
+            const bool loaded=state.load(progress);
+            if(loaded && state.identity!=key)throw std::runtime_error("Stage2 checkpoint task ID mismatch: "+progress.string());
+            if(!loaded && stage2_queue::import_legacy(legacy_progress,task,[&](const std::string &line) {
+                const auto old=queue_fields(line);Big n;std::string error;
+                return old.task.aid==task.aid && ecm_compute_stage2_n(old.task,n.z,error) && number(n.z)==task.n;
+            },state)) {
+                state.save(progress);
+                // Retain the old bytes as an archive; never overwrite an earlier import.
+                const fs::path archive(legacy_progress.string()+".migrated."+ecm_stage2::sha256_file(legacy_progress).substr(0,16));
+                const bool archived=MoveFileExW(legacy_progress.c_str(),archive.c_str(),0)!=0;
+                report("stage2_resume_import: completed="+std::to_string(state.done)+" total="+std::to_string(state.total)+
+                    " legacy_archived="+std::to_string(archived)+" checkpoint="+progress.string());
+            }
+            if(state.identity.empty()) {
+                state.identity=key;state.total=plan.size();state.run=stage2_queue::token();state.save(progress);
+            }
+            if(state.total!=plan.size())throw std::runtime_error("progress curve count differs from validated task");
+            const auto pending_results=state.pending_results.empty()?results:fs::path(state.pending_results);
+            if(!state.pending.empty() && stage2_queue::result_written(pending_results,state.pending)) {
+                ++state.done;state.pending.clear();state.pending_results.clear();state.save(progress);
+                report("Recovered completed curve from durable result receipt.");
+            }
+        }
+        if(stage2_log::enabled(stage2_log::curve)||o.dry) {
+            if(o.gui_events && !task_line.empty())std::cout<<"START: "<<task_line<<std::endl;
+            std::ostringstream message;
+            message << "stage2_plan: save=" << save.string() << " requested=" << (count?std::to_string(count):"all")
+                    << " available=" << plan.size() << " completed=" << state.done << " remaining=" << plan.size()-state.done
+                    << " B2=" << b2 << " D=" << d << " device=" << device << " worker=" << o.worker
+                    << " log=" << log.string() << " results=" << results.string();
+            if(persist)message<<" checkpoint="<<progress.string();
+            report(message.str());
+        }
+        o.publication_task=persist?state.identity:std::to_string(ecm_edwards::hash(ecm_stage2::sha256_file(save)+"|"+std::to_string(skip)+"|"+std::to_string(plan.size())+"|"+std::to_string(b2)));
+        bool task_completed=true;
+        for(size_t i=static_cast<size_t>(state.done);i<plan.size();++i) {
+            poll_inherited_stop();
+            if(stop_requests){task_completed=false;break;}
+            const auto &r=plan[i];
+            o.runtime_remaining=plan.size()-i;
+            if(stage2_log::enabled(stage2_log::curve)||o.dry)
+                report("curve_start: "+std::to_string(i+1)+"/"+std::to_string(plan.size())+" record="+std::to_string(r.index)+
+                       " sigma="+std::to_string(r.sigma)+" B1="+std::to_string(r.b1)+" checksum="+(r.checksum?"verified":"absent")+
+                       " curve_model="+(r.edwards?std::string("ed"):std::string("mont"))+(r.edwards?"":" param=0"));
+            if(o.dry)continue;
+            if(o.plan_only) {
+                Options local=o;local.b2=b2;local.has_d=d!=0;
+                configure_short_ntt_batches(local);
+                if(o.auto_b2&&!b2){
+                    std::cout<<select_auto(local,r,false)<<std::endl;if(o.tune_profile.empty())continue;
+                    const auto tuned=select_runtime_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;
+                }
+                else {const auto tuned=select_tuned(local,r);if(!tuned.empty())std::cout<<tuned<<std::endl;}
+                std::string result;
+                if(ecm_cuda_stage2_set_relocation(o.relocation))throw std::runtime_error("relocation requires the production Stage2 engine");
+                const int code=ecm_cuda_stage2_plan(r.n.c_str(),r.sigma,r.b1,local.b2,local.d,device,
+                    [](const char *json,void *ctx){*static_cast<std::string*>(ctx)=json;},&result,local.carrier_exponent);
+                if(code||result.empty())throw std::runtime_error("Stage2 planning failed");
+                std::cout<<result<<std::endl;continue;
+            }
+            if(persist) {
+                // Publish intent first, then launch. Only a complete result with
+                // this random receipt can resolve an ambiguous interrupted exit.
+                state.pending=stage2_queue::token();state.pending_results=results.string();state.save(progress);o.receipt=state.pending;
+            }
+            const auto begin=std::chrono::steady_clock::now();
+            if(child_run(o,save,r,b2,d,device,results,log,batch,s))
+                throw std::runtime_error("curve failed; queue and completed progress retained; inspect "+log.string());
+            if(persist) {
+                if(!stage2_queue::result_written(results,state.pending))throw std::runtime_error("successful worker has no durable result receipt; queue retained");
+                ++state.done;state.pending.clear();state.pending_results.clear();state.save(progress);
+            }
+            ++completed;
+            if(stage2_log::enabled(stage2_log::curve)) {
+                std::ostringstream message;
+                message << "curve_done: " << i+1 << '/' << plan.size() << " record=" << r.index << " sigma=" << r.sigma
+                        << " wall=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count() << " s";
+                report(message.str());
+            }
+        }
+        if(task_completed && !o.dry && !o.plan_only && !o.tune_child)ecm_results::seal_submissions(o.submission,2,o.publication_task,true);
+        if(!queue||o.dry||o.plan_only)break;
+        if(state.done<state.total)break;
+        std::string current;
+        std::string read_error;
+        const auto read = ecm_worktodo_read_next_line(worktodo.string(), o.worker,
+            {cfg.worktodo_priority, cfg.worktodo_skip}, WorktodoStage::Stage2,
+            current, read_error);
+        if(read == WorktodoReadResult::Error)throw std::runtime_error(read_error);
+        if(read != WorktodoReadResult::Task||current!=task_line)
+            throw std::runtime_error("task completed but worktodo changed; queue and progress retained");
+        if(!stage2_queue::finished_written(finished,state.run,task_line))
+            append(finished,"# stage2_task_id="+state.run+"\n"+task_line);
+        if(!ecm_worktodo_advance(worktodo.string(),o.worker,task_line,WorktodoAction::Remove))
+            throw std::runtime_error("task completed but queue could not be advanced; progress retained");
+        // A complete stale state is safe to replace if a crash happens here.
+        if(!DeleteFileW(progress.c_str()) && GetLastError()!=ERROR_FILE_NOT_FOUND)
+            throw std::runtime_error("task advanced but cannot remove completed progress file");
+        report("task_done: requested="+(count?std::to_string(count):"all")+" available="+std::to_string(plan.size())+
+               " completed="+std::to_string(state.done));
+        if(o.once||stop_requests)break;
+    }
+    if(stage2_log::enabled(stage2_log::curve)||o.dry)
+        report(std::string(o.plan_only?"plan_complete":o.dry?"dry_run_complete":stop_requests?"stage2_stopped":"stage2_complete")+
+               ": curves_this_run="+std::to_string(completed)+" invalid_tasks="+std::to_string(failed_tasks));
+    return failed_tasks?1:0;
+}
+
+} // namespace s2prod
+
+int main(int argc, char **argv) {
+    try { return s2prod::driver(s2prod::arguments(argc, argv)); }
+    catch (const std::exception &e) {
+        const std::string message=std::string("ecm_cuda_stage2: ")+e.what();
+        std::cerr<<message<<std::endl;
+        try {if(!s2prod::fatal_log.empty())s2prod::append(s2prod::fatal_log,message);}catch(...){}
+        return 2;
+    }
+}

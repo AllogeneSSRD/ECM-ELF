@@ -14,11 +14,11 @@ ecm_tool_output_root(stage1_selection_test)
 
 add_executable(stage1_checkpoint_rotation_test
     stage1_checkpoint_rotation_test.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ecm_checkpoint.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ecm_mont_ckpt.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ecm_stage1_checkpoint_runtime.cpp
-    ${CMAKE_SOURCE_DIR}/src/opencl_ecm_log.cpp
-    ${CMAKE_SOURCE_DIR}/src/opencl_ecm_runtime_config.cpp)
+    ${CMAKE_SOURCE_DIR}/src/ecm/storage/checkpoint/ecm_checkpoint.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/storage/checkpoint/ecm_mont_ckpt.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/platform/logging.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/application/configuration/runtime.cpp)
 target_include_directories(stage1_checkpoint_rotation_test PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 ecm_target_link_gmp(stage1_checkpoint_rotation_test)
@@ -26,7 +26,7 @@ ecm_tool_output_root(stage1_checkpoint_rotation_test)
 
 add_executable(worktodo_sections_test
     worktodo_sections_test.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ecm_worktodo.cpp)
+    ${CMAKE_SOURCE_DIR}/src/ecm/storage/queue/ecm_worktodo.cpp)
 target_include_directories(worktodo_sections_test PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
 ecm_target_link_gmp(worktodo_sections_test)
 if(MSVC)
@@ -36,8 +36,8 @@ ecm_tool_output_root(worktodo_sections_test)
 
 add_executable(stage2_transfer_test
     stage2_transfer_test.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ecm_stage2_transfer.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ecm_worktodo.cpp)
+    ${CMAKE_SOURCE_DIR}/src/ecm/storage/transfer/ecm_stage2_transfer.cpp
+    ${CMAKE_SOURCE_DIR}/src/ecm/storage/queue/ecm_worktodo.cpp)
 target_include_directories(stage2_transfer_test PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
 ecm_target_link_gmp(stage2_transfer_test)
 if(MSVC)

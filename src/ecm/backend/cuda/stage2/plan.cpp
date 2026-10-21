@@ -5,7 +5,7 @@
 #include "json_quote.h"
 #include <sstream>
 #include <iomanip>
-#include "../../../../core/ecm_stage2_giant_chunk.h"
+#include "../planning/ecm_stage2_giant_chunk.h"
 
 unsigned long long gcd_u64(unsigned long long a,unsigned long long b)
 {

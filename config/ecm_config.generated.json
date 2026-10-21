@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
   "sha256": {
-    "src/core/generated/ecm_config_generated.h": "6d26d52d289a1ad35be1721dd2ea040f1600b53252774c318980af4279df8c7c",
-    "src/core/generated/ecm_toml_schema.h": "346d5c5de19d2385445a161921b3f6d3effe7fd7d097472c376c03dc0206ac4a",
-    "src/core/generated/ecm_toml_template.h": "fa95ad75b8c21077862b17671385f6207d43cd38f0a0394fc0a9377ebfe8ff90",
+    "src/ecm/application/configuration/generated/ecm_config_generated.h": "6d26d52d289a1ad35be1721dd2ea040f1600b53252774c318980af4279df8c7c",
+    "src/ecm/application/configuration/generated/ecm_toml_schema.h": "346d5c5de19d2385445a161921b3f6d3effe7fd7d097472c376c03dc0206ac4a",
+    "src/ecm/application/configuration/generated/ecm_toml_template.h": "fa95ad75b8c21077862b17671385f6207d43cd38f0a0394fc0a9377ebfe8ff90",
     "config/ecm.toml.default": "00e902da98e6aa5b53a278910a3cbf96b6429c820fa78e734a82534139f75ba0",
     "config/ecm.toml.example": "16163c0aba3291a3c4fad675a706b18f09ef74a49f90ff0bcdd5f7de8434d031",
     "docs/ECM_TOML_REFERENCE.md": "d87e652f72bdb9099b16e2a99a02548e2204676a574cfd0bd14ae6537a9bf5b0",
     "config/ecm_options.json": "20057df2ffd4517458f4aa46154a7f3f3eab5c162debaf3f655629053c9d47ed",
-    "tools/gen/generate_ecm_config.py": "bd006d1a363bd98decd52f64d49f799c203e805f4c3c30cd31e9177ff7072ab5"
+    "tools/gen/generate_ecm_config.py": "d6f52fb7f0155aff05254a0810e23a97ec967e83c6f563e116e48d7ba6917365"
   }
 }

@@ -1,5 +1,5 @@
 #include "cl_probe.h"
-#include "opencl_ecm_runtime_config.h"
+#include "ecm/application/configuration/runtime.h"
 #include <iostream>
 #include <vector>
 #include <string>

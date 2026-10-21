@@ -10,8 +10,8 @@
 #include <vector>
 #define NOMINMAX
 #include <windows.h>
-#include "../../src/core/ecm_edwards_io.h"
-#include "../../src/core/ecm_stage1_exp.h"
+#include "../../src/ecm/storage/save/ecm_edwards_io.h"
+#include "ecm/core/stage1/scalar.h"
 
 static bool diagnostic_blocking_event=false;
 static unsigned diagnostic_pre_sync=0,diagnostic_event_flags=0;
@@ -54,7 +54,7 @@ static cudaError_t diagnostic_event_create(cudaEvent_t *event) {
     if(++diagnostic_events==2)diagnostic_stop_event=*event;return rc;
 }
 #include "../../src/ecm/backend/cuda/stage1/edwards/diagnostics/host_wait.h"
-#include "../../src/core/ecm_edwards_naf.h"
+#include "../../src/ecm/core/stage1/ecm_edwards_naf.h"
 
 static void require(bool value,const char *why){if(!value)throw std::runtime_error(why);}
 static double process_cpu() {

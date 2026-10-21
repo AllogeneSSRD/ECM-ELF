@@ -1,6 +1,6 @@
-#include "ecm_mont_ckpt.h"
-#include "ecm_checkpoint.h"
-#include "ecm_stage1_checkpoint_runtime.h"
+#include "../../src/ecm/storage/checkpoint/ecm_mont_ckpt.h"
+#include "../../src/ecm/storage/checkpoint/ecm_checkpoint.h"
+#include "../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.h"
 
 #include <filesystem>
 #include <cstdlib>

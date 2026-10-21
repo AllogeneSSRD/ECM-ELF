@@ -1,5 +1,5 @@
 // CPU opaque allocator. Runner inserts native startup and baby allocation sites.
-#include "../../src/core/ecm_stage2_initial_memory.h"
+#include "../../src/ecm/backend/cuda/planning/ecm_stage2_initial_memory.h"
 #include <iostream>
 #include <map>
 #include <stdexcept>

@@ -1,5 +1,5 @@
 #include "cgbn_opencl.h"
-#include "opencl_ecm_runtime_config.h"
+#include "ecm/application/configuration/runtime.h"
 
 #include <CL/cl.h>
 #include <gmp.h>

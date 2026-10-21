@@ -1,6 +1,6 @@
 // Independent x-only ladder verifies the complete Edwards 48*lcm saved point.
 // Stage1's production scalar multiplication uses Edwards point formulas.
-#include "ecm_edwards_save_reader.h"
+#include "../../src/ecm/storage/save/ecm_edwards_save_reader.h"
 #include <iostream>
 #include <stdexcept>
 using namespace ecm_edwards;

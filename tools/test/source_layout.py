@@ -39,7 +39,10 @@ def relocation_text(relative):
             key=os.path.normpath(candidate).replace('\\','/')
             path=current_source(key)
             if path.is_file():expected.append(path.resolve())
-        actual=(current_source(relative).parent/b[2]).resolve()
+        active_roots=['include','src','src/ecm/backend/cuda/runtime','src/ecm/backend/cuda',
+                      'third_party/cgbn/include','third_party/cgbn/include/cgbn']
+        actual=next((p.resolve() for p in [current_source(relative).parent/b[2]]+
+                     [ROOT/base/b[2] for base in active_roots] if p.is_file()),None)
         assert expected and actual==expected[0],('include edge changed',relative,a[2],b[2])
         after=after[:b.start()]+a[0]+after[b.end():]
     return after

@@ -1,6 +1,6 @@
-#include "ecm_stage2_transfer.h"
-#include "ecm_worktodo.h"
-#include "ecm_worker_list.h"
+#include "../../src/ecm/storage/transfer/ecm_stage2_transfer.h"
+#include "../../src/ecm/storage/queue/ecm_worktodo.h"
+#include "../../src/ecm/storage/queue/ecm_worker_list.h"
 
 #include <filesystem>
 #include <fstream>

@@ -1,6 +1,6 @@
-#include "../../src/core/ecm_submission_writer.h"
-#include "../../src/core/ecm_internal_result.h"
-#include "../../src/core/ecm_stage2_queue_state.h"
+#include "../../src/ecm/storage/results/ecm_submission_writer.h"
+#include "../../src/ecm/storage/results/ecm_internal_result.h"
+#include "../../src/ecm/storage/queue/ecm_stage2_queue_state.h"
 #include <iostream>
 static void check(bool ok){if(!ok)throw std::runtime_error("result lifecycle assertion failed");}
 static std::string read_bytes(const std::filesystem::path &path) {

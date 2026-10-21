@@ -1,8 +1,8 @@
 #include "app.h"
 #include "platform.h"
 #include "task_display.h"
-#include "../core/generated/ecm_config_generated.h"
-#include "../core/ecm_program_version.h"
+#include "../ecm/application/configuration/generated/ecm_config_generated.h"
+#include "ecm/platform/program_version.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"   // ImGui::DockBuilder* for the initial layout

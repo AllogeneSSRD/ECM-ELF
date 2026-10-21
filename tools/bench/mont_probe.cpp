@@ -1,6 +1,6 @@
 #include <cstdio>
 #include <gmp.h>
-#include "../../src/cpu/ecm_edwards_mont.h"
+#include "../../src/ecm/backend/cpu/arithmetic/scalar/ecm_edwards_mont.h"
 
 int main() {
     mpz_t N, a, b, c, expect;

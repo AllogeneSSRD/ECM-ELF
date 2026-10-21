@@ -15,7 +15,7 @@
 #include "log_parse.h"
 #include "platform.h"
 #include "worker_proc.h"
-#include "../core/ecm_program_version.h"
+#include "ecm/platform/program_version.h"
 
 #include <cmath>
 #include <cstdarg>

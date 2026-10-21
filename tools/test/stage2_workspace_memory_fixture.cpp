@@ -1,4 +1,4 @@
-#include "../../src/core/ecm_stage2_workspace_memory.h"
+#include "../../src/ecm/backend/cuda/planning/ecm_stage2_workspace_memory.h"
 #include <iostream>
 #include <stdexcept>
 #include <string>
