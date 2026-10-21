@@ -164,24 +164,31 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
         EcmEdwardsNafMetrics metrics;
         Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),mpz_sizeinbase(scalar.v,2),&metrics,initialization_start};std::string error;
         phase=ecm_stage1::FailureSource::Execution;
+        auto runtime_failure=ecm_cuda_stage1::Failure::Execution;
         const auto arithmetic_start=std::chrono::steady_clock::now();
         const int rc=batch.window?
             ecm_cuda_edwards_stage1_naf(n,scalar.v,batch.state.data(),curves,batch.done,0,
-                opt.execution.device_index,progress,&p,error,batch.window,batch.doubling,&metrics,prepared):
+                opt.execution.device_index,progress,&p,error,batch.window,batch.doubling,&metrics,prepared,&runtime_failure):
             ecm_cuda_edwards_stage1(n,scalar.v,batch.state.data(),curves,batch.done,0,
-                opt.execution.device_index,progress,&p,error,prepared);
+                opt.execution.device_index,progress,&p,error,prepared,&runtime_failure);
         const double arithmetic_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-arithmetic_start).count();
         p.finish();
         ecm_ts_fprintf(stdout,"GPU Edwards arithmetic: algorithm=%s api_seconds=%.9f\n",batch.window?"naf":"binary",arithmetic_seconds);
         if(batch.window)ecm_ts_fprintf(stdout,"GPU Edwards NAF: columns=%u additions=%u container_bits=%u tpi=%u dictionary_bytes=%llu dictionary_gpu_ms=%.6f loop_gpu_ms=%.6f launches=%u\n",
             metrics.columns,metrics.additions,metrics.container_bits,metrics.tpi,
             static_cast<unsigned long long>(metrics.dictionary_bytes),metrics.dictionary_gpu_ms,metrics.loop_gpu_ms,metrics.launches);
-        if(rc<0)throw std::runtime_error(error);
+        if(rc<0) {
+            out->fail(runtime_failure==ecm_cuda_stage1::Failure::Device?ecm_stage1::FailureSource::Device:
+                runtime_failure==ecm_cuda_stage1::Failure::Preparation?ecm_stage1::FailureSource::Preparation:
+                ecm_stage1::FailureSource::Execution);
+            throw std::runtime_error(error);
+        }
         if(rc==2){if(p.failed)out->fail(ecm_stage1::FailureSource::Publication);else out->stop();return ECM_ERROR;}
         phase=ecm_stage1::FailureSource::Publication;
         if(!path.empty() && !write_checkpoint(path,batch,n,scalar.v,uint64_t(b1))) {
             out->publish_failed=true;throw std::runtime_error("cannot retain completed Edwards batch");
         }
+        phase=ecm_stage1::FailureSource::Execution;
         Integer x,z,g,inv;std::string lines;bool found=false;
         for(uint32_t i=0;i<curves;++i) {
             auto *s=batch.state.data()+size_t(i)*9;
@@ -198,11 +205,14 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
                 else {mpz_invert(inv.v,z.v,n);mpz_mul(x.v,x.v,inv.v);mpz_mod(x.v,x.v,n);}
             }
             if(batch.hit[i]){mpz_set(x.v,batch.factors[i]);found=true;
+                phase=ecm_stage1::FailureSource::Publication;
                 if(!stage1_publish_factor(opt,n,uint64_t(b1),batch.sigmas[i],batch.factors[i])){out->publish_failed=true;throw std::runtime_error("cannot publish Edwards factor");}}
             else mpz_set(batch.factors[i],x.v);
+            phase=ecm_stage1::FailureSource::Execution;
             lines+=save_line(n,x.v,batch.sigmas[i],uint64_t(b1),batch.hit[i]!=0);
         }
         const auto save=savefilename.empty()?(opt.persistence.tmp_dir.empty()?std::string{}:opt.persistence.tmp_dir+"/")+stem:savefilename;
+        phase=ecm_stage1::FailureSource::Publication;
         if(!publish(save,lines,saveappend)) {
             out->publish_failed=true;throw std::runtime_error("cannot publish Edwards save "+save);
         }
@@ -219,7 +229,8 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
         if(!save.empty())ecm_ts_fprintf(stdout,"Edwards Stage1 save: %s (%u curves)\n",save.c_str(),curves);
         (void)b2;return out->ret;
     } catch(const std::exception &e) {
-        out->fail(out->publish_failed?ecm_stage1::FailureSource::Publication:phase);
+        if(out->completion!=ExecutionResult::Completion::Failed)
+            out->fail(out->publish_failed?ecm_stage1::FailureSource::Publication:phase);
         ecm_ts_fprintf(stderr,"ERROR: GPU Edwards Stage1: %s\n",e.what());return ECM_ERROR;
     }
 }

@@ -26,8 +26,11 @@ static bool run_one(const QueuePaths &paths,const QueueItem &item,const TaskDepe
     const bool has_factors = result.has_factors();
 
     if (result.failure_source()==FailureSource::Preparation ||
-        result.failure_source()==FailureSource::Publication) {
+        result.failure_source()==FailureSource::Publication || result.failure_source()==FailureSource::Persistence ||
+        result.failure_source()==FailureSource::Device) {
         ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged.\n",
+                       result.failure_source()==FailureSource::Device ? "Stage1 device execution failed" :
+                       result.failure_source()==FailureSource::Persistence ? "Stage1 checkpoint commit failed" :
                        result.failure_source()==FailureSource::Publication ? "Stage1 save/result publication failed" :
                                                "backend prepare failed");
         return false;

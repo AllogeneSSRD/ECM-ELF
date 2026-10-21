@@ -25,14 +25,16 @@ int ecm_edwards_cuda_detail::dispatch(const Request &r) {
     return tier->execute(r);
 }
 void ecm_edwards_cuda_detail::prepare_device(int device) {
-    auto check=[](cudaError_t rc){if(rc!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(rc));};
+    auto check=[](cudaError_t rc){if(rc!=cudaSuccess)throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,cudaGetErrorString(rc));};
     check(cudaSetDevice(device));
     unsigned flags=0;check(cudaGetDeviceFlags(&flags));
     check(cudaSetDeviceFlags((flags&~unsigned(cudaDeviceScheduleMask))|cudaDeviceScheduleBlockingSync));
 }
 int ecm_cuda_edwards_stage1(const mpz_t n,const mpz_t s,mpz_t *states,
         uint32_t count,uint32_t &done,uint32_t chunk,int device,
-        EcmEdwardsProgress cb,void *context,std::string &error,EcmEdwardsPrepared prepared) {
+        EcmEdwardsProgress cb,void *context,std::string &error,EcmEdwardsPrepared prepared,
+        ecm_cuda_stage1::Failure *failure) {
+    if(failure)*failure=ecm_cuda_stage1::Failure::Preparation;
     try {
         if(!states || !count || device<0 || mpz_cmp_ui(n,3)<=0 || !mpz_odd_p(n) ||
            mpz_sgn(s)<=0 || mpz_sizeinbase(s,2)>UINT32_MAX || done>mpz_sizeinbase(s,2))
@@ -40,6 +42,8 @@ int ecm_cuda_edwards_stage1(const mpz_t n,const mpz_t s,mpz_t *states,
         for(size_t i=0;i<size_t(count)*9;++i)
             if(mpz_sgn(states[i])<0 || mpz_cmp(states[i],n)>=0)throw std::runtime_error("noncanonical GPU Edwards state");
         ecm_edwards_cuda_detail::prepare_device(device);
+        if(failure)*failure=ecm_cuda_stage1::Failure::Execution;
         return ecm_edwards_cuda_detail::dispatch({n,s,states,count,done,chunk,cb,context,nullptr,4,nullptr,prepared});
-    }catch(const std::exception &e){error=e.what();return -1;}
+    }catch(const ecm_cuda_stage1::RunError &e){if(failure)*failure=e.failure;error=e.what();return -1;}
+    catch(const std::exception &e){error=e.what();return -1;}
 }

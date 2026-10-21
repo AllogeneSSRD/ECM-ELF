@@ -31,8 +31,9 @@ struct ResidentResources {
 #include "prac_window.inl"
 static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_srcptr s,
     uint32_t curves, uint64_t *sigma, unsigned long checkpoint_ms, float *gputime,
-    uint64_t B1, uint32_t torsion, bool prac) {
-    try {
+    uint64_t B1, uint32_t torsion, bool prac,ecm_cuda_stage1::RunResult &outcome,
+    const ConstructionResults &construction) {
+        using namespace ecm_cuda_stage1;
         if (!curves || !sigma || *sigma > UINT64_MAX - curves || B1 < 2 || B1 > UINT32_MAX ||
             (torsion != 1 && torsion != 12)) throw std::runtime_error("invalid resident Stage1 parameters");
         uint32_t bits = 0, tpi = 0;
@@ -80,13 +81,14 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         if (!window.enabled()) {
             resumed=resident_checkpoint_restore(path,h,data,sigma,prac);
         }
-        if (!resumed) {
+        {
             size_t initial_bytes = 0;
-            std::unique_ptr<uint32_t, decltype(&free)> initial(set_p_2p_suyama(N, curves, *sigma, bits, &initial_bytes), &free);
+            std::unique_ptr<uint32_t, decltype(&free)> initial(set_p_2p_suyama(N, curves, *sigma, bits, &initial_bytes,&construction), &free);
             if (!initial) throw std::bad_alloc();
             if (initial_bytes != bytes) throw std::runtime_error("resident curve buffer stride mismatch");
-            memcpy(data.data(), initial.get(), bytes);
+            if(!resumed)memcpy(data.data(), initial.get(), bytes);
         }
+        outcome.failure=Failure::Execution;
         ResidentResources gpu;
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&gpu.data), bytes));
         CUDA_CHECK(cudaMemcpy(gpu.data, data.data(), bytes, cudaMemcpyHostToDevice));
@@ -170,8 +172,9 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
                         (unsigned long long)h.next, (unsigned long long)total);
                 last_ckpt = std::chrono::steady_clock::now();
             }
-            if(stopping){outputf(OUTPUT_ALWAYS,"Stage1 stopped: checkpoint saved\n");return ECM_ERROR;}
+            if(stopping){outcome.termination=Termination::Stopped;outputf(OUTPUT_ALWAYS,"Stage1 stopped: checkpoint saved\n");return ECM_ERROR;}
             if (sampled) {
+                outcome.termination=Termination::SampleLimit;
                 *gputime = float(elapsed * 1000);
                 outputf(OUTPUT_ALWAYS, "GPU: sample limit reached; incomplete Stage1 saved only as checkpoint\n");
                 return ECM_ERROR; // Driver must not publish an incomplete final Stage1 save.
@@ -186,11 +189,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_wall).count();
         *gputime = float(elapsed * 1000);
         outputf(OUTPUT_ALWAYS, "GPU: Stage1 %s completed; kernel=%.6f s, execution-wall=%.6f s\n", prac ? "PRAC" : "resident", kernel_seconds, elapsed);
-        int result = process_results(factors, found, N, data.data(), bits, curves, *sigma, 7, 3, 5, 0);
+        int result = process_results(factors, found, N, data.data(), bits, curves, *sigma, 7, 3, 5, 0,true);
         if (result != ECM_ERROR) ecm_stage1_remove_checkpoints(path);
         return result;
-    } catch (const std::exception &e) {
-        outputf(OUTPUT_ERROR, "GPU: resident/PRAC Stage1 failed: %s\n", e.what());
-        return ECM_ERROR;
-    }
 }

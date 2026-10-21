@@ -131,6 +131,7 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
     TaskResult result;
     auto *out=result.data_.get(); // Private execution payload; caller receives an owner.
     Stage1TaskSession session;
+    auto phase=FailureSource::Preparation;
     try {
         if(!opt.identity.target_kbnc) {
             // Direct CLI expressions retain k*b^n+c for naming and reporting.
@@ -177,8 +178,10 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
         stage1_copy_save_history(opt,savefilename);
         const auto begin=std::chrono::steady_clock::now();
         ExecutionOptions execution(opt);
+        phase=FailureSource::Execution;
         const int rc=deps.execute(N,B1,B2,curves,savefilename,saveappend,n_expr,execution,out);
         if(rc==ECM_ERROR){if(out->completion==ExecutionResult::Completion::Legacy && !ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;session.close(false);out->finish_task(rc,ecm_stage1_stop_requested()!=0);return result;}
+        phase=FailureSource::Publication;
         if(!out->sigmas || !out->factors || !out->array_found)throw std::runtime_error("Stage1 completed without per-curve result identity");
         const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
         std::vector<std::pair<std::string,std::string>> internal_records;
@@ -202,7 +205,7 @@ TaskResult run_stage1_task(const Stage1Request &request,const TaskDependencies &
         out->finish_task(out->ret,false);
         return result;
     } catch(const std::exception &e) {
-        out->publish_failed=out->factors!=nullptr;out->prepare_failed=!out->publish_failed;out->ret=ECM_ERROR;
+        if(out->completion!=ExecutionResult::Completion::Failed)out->fail(phase);
         session.close(false);ecm_ts_fprintf(stderr,"ERROR: Stage1: %s\n",e.what());
         out->finish_task(ECM_ERROR,ecm_stage1_stop_requested()!=0);return result;
     }

@@ -23,6 +23,9 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <new>
+#include <algorithm>
+#include <stdexcept>
 #ifndef ECM_CUDA_FULL_BUILD
 #define IS_DEV_BUILD
 #endif
@@ -39,7 +42,7 @@ void from_mpz(const mpz_t s, uint32_t *x, uint32_t count) {
 
   if(mpz_sizeinbase (s, 2) > count * 32) {
     fprintf (stderr, "from_mpz failed -- result does not fit\n");
-    exit(EXIT_FAILURE);
+    throw std::runtime_error("Montgomery packed value exceeds container");
   }
 
   mpz_export (x, &words, -1, sizeof(uint32_t), 0, 0, s);
@@ -69,6 +72,38 @@ int findfactor(mpz_t factor, const mpz_t N, const mpz_t x_final, const mpz_t z_f
 }
 
 
+// A failed inverse is a mathematical result, never a zero coefficient.
+static bool inverse_or_factor(mpz_ptr inverse,mpz_srcptr denominator,mpz_srcptr n,
+        uint32_t lane,uint64_t sigma,int param,const ConstructionResults *result) {
+    if(mpz_invert(inverse,denominator,n))return true;
+    mpz_gcd(inverse,denominator,n);
+    if(mpz_cmp_ui(inverse,1)<=0 || mpz_cmp(inverse,n)>=0)
+        throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Preparation,
+            "degenerate construction denominator: param="+std::to_string(param)+" sigma="+std::to_string(sigma));
+    if(!result || !result->factors || !result->found)
+        throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Preparation,
+            "construction factor requires a per-curve result sink");
+    mpz_set(result->factors[lane],inverse);result->found[lane]=ECM_FACTOR_FOUND_STEP1;
+    if(result->publish && !result->publish(lane,inverse,result->context))
+        throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Publication,"cannot publish construction factor");
+    outputf(OUTPUT_NORMAL,"GPU: construction factor found: param=%d sigma=%llu curve=%u\n",param,
+            static_cast<unsigned long long>(sigma),lane);
+    return false;
+}
+static void identity_lane(uint32_t *lane,size_t limbs,mpz_srcptr n) {
+    // The lane's real factor is held separately. No fabricated curve is exposed.
+    // Identity arithmetic keeps indexing stable without device division.
+    std::fill(lane,lane+7*limbs,0u);from_mpz(n,lane,uint32_t(limbs));
+    lane[limbs]=1;lane[2*limbs]=2;lane[3*limbs]=1;lane[5*limbs]=1;
+}
+
+static size_t validate_layout(mpz_srcptr n,uint32_t curves,uint32_t bits,size_t *bytes) {
+    if(!bytes || !curves || bits<32 || bits%32 || mpz_cmp_ui(n,3)<=0 ||
+       !mpz_odd_p(n) || mpz_sizeinbase(n,2)>bits)
+        throw std::invalid_argument("invalid Montgomery host buffer layout/modulus");
+    return bits/32;
+}
+
 uint32_t find_np0(const mpz_t N) {
   uint32_t np0;
   mpz_t temp;
@@ -77,8 +112,7 @@ uint32_t find_np0(const mpz_t N) {
   // NB: must not put mpz_invert() inside assert() — NDEBUG (Release) would drop
   // the call and leave temp = 2^32, giving np0 = 0 on this platform.
   int inv_ok = mpz_invert(temp, N, temp);
-  assert(inv_ok);
-  (void)inv_ok;
+  if(!inv_ok){mpz_clear(temp);throw std::invalid_argument("Montgomery modulus must be odd");}
   np0 = -mpz_get_ui(temp);
   mpz_clear(temp);
   return np0;
@@ -86,12 +120,14 @@ uint32_t find_np0(const mpz_t N) {
 
 
 uint32_t* allocate_and_set_s_bits(const mpz_t s, uint64_t *nbits) {
+  if(!nbits || mpz_sgn(s)<=0)throw std::invalid_argument("positive Stage1 scalar required");
   uint64_t num_bits = *nbits = mpz_sizeinbase (s, 2);
 
   uint64_t allocated = (num_bits + 31) / 32;
-  uint32_t *s_bits = (uint32_t*) malloc (sizeof(uint32_t) * allocated);
+  uint32_t *s_bits = (uint32_t*) malloc (ecm_cuda_stage1::checked_size({sizeof(uint32_t),size_t(allocated)}));
 
-  uint64_t countp;
+  if(!s_bits)throw std::bad_alloc();
+  size_t countp;
   mpz_export (s_bits, &countp, -1, sizeof(uint32_t), 0, 0, s);
   assert (countp == allocated);
 
@@ -110,14 +146,15 @@ uint32_t* set_p_2p(const mpz_t N,
    * P_b (for the doubled terms) is initialized with (9, 64 * d + 8)
    */
 
-  const size_t limbs_per = BITS/32;
-  *data_size = 5 * curves * limbs_per * sizeof(uint32_t);
+  const size_t limbs_per = validate_layout(N,curves,BITS,data_size);
+  *data_size = ecm_cuda_stage1::checked_size({5,size_t(curves),limbs_per,sizeof(uint32_t)});
   uint32_t *data = (uint32_t*) malloc(*data_size);
+  if(!data)throw std::bad_alloc();
   uint32_t *datum = data;
 
   mpz_t x;
   mpz_init(x);
-  for(int index = 0; index < curves; index++) {
+  for(uint32_t index = 0; index < curves; index++) {
       // d = (sigma / 2^32) mod N BUT 2^32 handled by special_mul_ui32
       uint32_t d = sigma + index;
 
@@ -174,10 +211,12 @@ uint32_t* set_p_2p(const mpz_t N,
  * Layout per curve (7 * BITS/32 words):  N, a24, xdiff, aX, aZ, bX, bZ
  * ------------------------------------------------------------------------- */
 uint32_t* set_p_2p_suyama(const mpz_t N, uint32_t curves, uint64_t sigma0,
-                          uint32_t BITS, size_t *data_size) {
-  const size_t limbs_per = BITS/32;
-  *data_size = 7 * curves * limbs_per * sizeof(uint32_t);
+                          uint32_t BITS, size_t *data_size,const ConstructionResults *results) {
+  if(mpz_cmp_ui(N,3)<=0 || !mpz_odd_p(N))throw std::invalid_argument("odd modulus > 3 required");
+  const size_t limbs_per = validate_layout(N,curves,BITS,data_size);
+  *data_size = ecm_cuda_stage1::checked_size({7,size_t(curves),limbs_per,sizeof(uint32_t)});
   uint32_t *data = (uint32_t*) malloc(*data_size);
+  if(!data)throw std::bad_alloc();
   uint32_t *datum = data;
 
   mpz_t sigma, u, v, t, num, den, inv, A, a24, X0, Z0, xdiff;
@@ -185,6 +224,7 @@ uint32_t* set_p_2p_suyama(const mpz_t N, uint32_t curves, uint64_t sigma0,
   mpz_inits(sigma, u, v, t, num, den, inv, A, a24, X0, Z0, xdiff,
             aA, aB, AA, BB, E, X2, Z2, NULL);
 
+  try {
   for(uint32_t index = 0; index < curves; index++) {
       /* sigma is 64-bit here (unlike the batch parametrization's 32-bit d), and
          mpz_set_ui only takes a 32-bit unsigned long on Windows -- assemble from
@@ -210,15 +250,8 @@ uint32_t* set_p_2p_suyama(const mpz_t N, uint32_t curves, uint64_t sigma0,
       mpz_mul(den, den, v);
       mpz_mod(den, den, N);                         /* 4 u^3 v */
 
-      if (mpz_invert(inv, den, N) == 0) {
-          /* gcd(den, N) > 1 means N is already factorable; mirror the CPU path's
-             behaviour (inv = 0) and say so instead of silently building a
-             degenerate curve. */
-          outputf(OUTPUT_ERROR,
-                  "GPU: warning: sigma %llu gives a non-invertible denominator; "
-                  "curve %u will be degenerate (N is factorable)\n",
-                  (unsigned long long)sg, index);
-          mpz_set_ui(inv, 0);
+      if (!inverse_or_factor(inv,den,N,index,sg,0,results)) {
+          identity_lane(datum,limbs_per,N);goto next_curve;
       }
       mpz_mul(A, num, inv);
       mpz_sub_ui(A, A, 2);
@@ -233,11 +266,8 @@ uint32_t* set_p_2p_suyama(const mpz_t N, uint32_t curves, uint64_t sigma0,
       mpz_powm_ui(X0, u, 3, N);
       mpz_powm_ui(Z0, v, 3, N);
 
-      if (mpz_invert(inv, Z0, N) == 0) {
-          outputf(OUTPUT_ERROR,
-                  "GPU: warning: sigma %llu gives Z0 not invertible (N is factorable)\n",
-                  (unsigned long long)sg);
-          mpz_set_ui(inv, 0);
+      if (!inverse_or_factor(inv,Z0,N,index,sg,0,results)) {
+          identity_lane(datum,limbs_per,N);goto next_curve;
       }
       mpz_mul(xdiff, X0, inv);
       mpz_mod(xdiff, xdiff, N);                     /* affine x of P */
@@ -267,9 +297,15 @@ uint32_t* set_p_2p_suyama(const mpz_t N, uint32_t curves, uint64_t sigma0,
                "sigma %llu => a24 %Zd, xdiff %Zd, P (%Zd,%Zd) 2P (%Zd,%Zd)\n",
                (unsigned long long)sg, a24, xdiff, X0, Z0, X2, Z2);
 
+next_curve:
       datum += 7 * limbs_per;
   }
 
+  } catch(...) {
+  mpz_clears(sigma, u, v, t, num, den, inv, A, a24, X0, Z0, xdiff,
+             aA, aB, AA, BB, E, X2, Z2, NULL);
+    free(data);throw;
+  }
   mpz_clears(sigma, u, v, t, num, den, inv, A, a24, X0, Z0, xdiff,
              aA, aB, AA, BB, E, X2, Z2, NULL);
   return data;
@@ -378,29 +414,30 @@ static void p2_scalar_mul_base(mpz_t rx, mpz_t ry, mpz_t rz, const mpz_t k, cons
 }
 
 uint32_t* set_p_2p_param2(const mpz_t N, uint32_t curves, uint32_t sigma0,
-                          uint32_t BITS, size_t *data_size) {
-  const size_t limbs_per = BITS/32;
-  *data_size = 7 * curves * limbs_per * sizeof(uint32_t);
+                          uint32_t BITS, size_t *data_size,const ConstructionResults *results) {
+  if(mpz_cmp_ui(N,3)<=0 || !mpz_odd_p(N) || sigma0<2)throw std::invalid_argument("param2 needs odd modulus > 3 and sigma >= 2");
+  const size_t limbs_per = validate_layout(N,curves,BITS,data_size);
+  *data_size = ecm_cuda_stage1::checked_size({7,size_t(curves),limbs_per,sizeof(uint32_t)});
   uint32_t *data = (uint32_t*) malloc(*data_size);
+  if(!data)throw std::bad_alloc();
   uint32_t *datum = data;
 
   mpz_t k, x, y, z, t, u, v, w, A, a24, two, X2, Z2;
   mpz_inits(k, x, y, z, t, u, v, w, A, a24, two, X2, Z2, NULL);
   mpz_set_ui(two, 2);
 
+  try {
   for (uint32_t index = 0; index < curves; index++) {
       /* sigma is the scalar multiplier here (gmp-ecm requires sigma >= 2; a sigma of 0
-         or 1 would hit the same curve for every index, so clamp into range). */
+         or 1 is rejected before construction). */
       const uint32_t sg = sigma0 + index;
-      mpz_set_ui(k, sg < 2u ? 2u + index : sg);
+      mpz_set_ui(k, sg);
 
       p2_scalar_mul_base(x, y, z, k, N);
 
       /* affine normalisation of (x:y:z) */
-      if (mpz_invert(u, z, N) == 0) {
-          outputf(OUTPUT_ERROR,
-                  "GPU: warning: param2 sigma %u gives Z not invertible (N is factorable)\n", sg);
-          mpz_set_ui(u, 0);
+      if (!inverse_or_factor(u,z,N,index,sg,2,results)) {
+          identity_lane(datum,limbs_per,N);goto next_curve;
       }
       mpz_mul(v, u, u);   mpz_mod(v, v, N);
       mpz_mul(u, v, u);   mpz_mod(u, u, N);
@@ -410,10 +447,8 @@ uint32_t* set_p_2p_param2(const mpz_t N, uint32_t curves, uint32_t sigma0,
       /* x3 = (3x + y + 6) / (2(y - 3)) */
       mpz_sub_ui(t, y, 3); mpz_mod(t, t, N);
       mpz_mul_ui(t, t, 2); mpz_mod(t, t, N);
-      if (mpz_invert(u, t, N) == 0) {
-          outputf(OUTPUT_ERROR,
-                  "GPU: warning: param2 sigma %u gives a non-invertible denominator\n", sg);
-          mpz_set_ui(u, 0);
+      if (!inverse_or_factor(u,t,N,index,sg,2,results)) {
+          identity_lane(datum,limbs_per,N);goto next_curve;
       }
       mpz_mul_ui(w, x, 3); mpz_mod(w, w, N);
       mpz_add(w, w, y);    mpz_mod(w, w, N);
@@ -427,9 +462,8 @@ uint32_t* set_p_2p_param2(const mpz_t N, uint32_t curves, uint32_t sigma0,
       mpz_mul_ui(u, u, 6); mpz_mod(u, u, N); mpz_neg(u, u);
       mpz_mul_ui(v, v, 4); mpz_mod(v, v, N);
       mpz_mul_ui(w, w, 3); mpz_mod(w, w, N); mpz_neg(w, w);
-      if (mpz_invert(t, v, N) == 0) {
-          outputf(OUTPUT_ERROR, "GPU: warning: param2 sigma %u: 4 x3^3 not invertible\n", sg);
-          mpz_set_ui(t, 0);
+      if (!inverse_or_factor(t,v,N,index,sg,2,results)) {
+          identity_lane(datum,limbs_per,N);goto next_curve;
       }
       mpz_add(w, w, u);    mpz_mod(w, w, N);
       mpz_add_ui(w, w, 1); mpz_mod(w, w, N);
@@ -461,9 +495,14 @@ uint32_t* set_p_2p_param2(const mpz_t N, uint32_t curves, uint32_t sigma0,
       from_mpz(X2,    datum + 5 * limbs_per, limbs_per);      /* bX = 9 */
       from_mpz(Z2,    datum + 6 * limbs_per, limbs_per);      /* bZ */
 
+next_curve:
       datum += 7 * limbs_per;
   }
 
+  } catch(...) {
+  mpz_clears(k, x, y, z, t, u, v, w, A, a24, two, X2, Z2, NULL);
+    free(data);throw;
+  }
   mpz_clears(k, x, y, z, t, u, v, w, A, a24, two, X2, Z2, NULL);
   return data;
 }
@@ -473,7 +512,7 @@ int process_results(mpz_t *factors, int *array_found,
                     const mpz_t N,
                     const uint32_t *data, uint32_t cgbn_bits,
                     int curves, uint64_t sigma, uint32_t words_per_curve,
-                    int p1_word, int p2_word, int curve_param) {
+                    int p1_word, int p2_word, int curve_param,bool construction_results) {
   mpz_t x_final, z_final, modulo;
   mpz_init(modulo);
   mpz_init(x_final);
@@ -484,6 +523,12 @@ int process_results(mpz_t *factors, int *array_found,
   int youpi = ECM_NO_FACTOR_FOUND;
   int errors = 0;
   for(size_t i = 0; i < curves; i++) {
+    if(construction_results && array_found[i]==ECM_FACTOR_FOUND_STEP1) {
+        if(mpz_cmp_ui(factors[i],1)<=0 || mpz_cmp(factors[i],N)>=0 || !mpz_divisible_p(N,factors[i])) {
+            ++errors;continue;
+        }
+        youpi=ECM_FACTOR_FOUND_STEP1;continue;
+    }
     const uint32_t *datum = data + (words_per_curve * i * limbs_per);
 
     if (test_verbose (OUTPUT_TRACE) && i == 0) {

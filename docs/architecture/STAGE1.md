@@ -24,13 +24,13 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 直接输入和队列调用同一个 [run_stage1_task](../../src/ecm/service/stage1/task.cpp#L138)。它依次校验任务元数据与输出、打开批次、接纳旧 save 历史、执行后端、核对逐曲线身份、发布 submission/internal、seal 并结束批次。即时因子仍在原有安全位置发布；队列完成和跨阶段交接协议在任务之外。
 
-[公开请求与结果](../../include/ecm/service/stage1/task.h)只使用普通 C++ 和 GMP。Stage1Request 在同步调用期间借用模数、命名和已解析选项，选项分为执行偏好、身份和持久化策略三组。TaskResult 独立拥有逐曲线结果，禁止复制并允许移动，通过只读访问器取数；不保留请求引用，不公开原始分配或进度字段。状态区分完成、停止和失败，并记录准备、执行或发布失败；旧返回码继续保留以兼容原有退出和队列语义，已有准备/发布失败优先于停止。
+[公开请求与结果](../../include/ecm/service/stage1/task.h)只使用普通 C++ 和 GMP。Stage1Request 在同步调用期间借用模数、命名和已解析选项，选项分为执行偏好、身份和持久化策略三组。TaskResult 独立拥有逐曲线结果，禁止复制并允许移动，通过只读访问器取数；不保留请求引用，不公开原始分配或进度字段。状态区分完成、停止和失败，并记录准备、执行、持久化、发布或设备执行失败。CUDA 明确失败优先于同时收到的停止；CPU/OpenCL 的旧标记仍通过兼容映射接纳。设备执行失败使队列停止并保留原任务，不继续使用可能失效的设备 context。
 
 私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。结果中的 factors、array_found、sigmas 分别清理，sigmas 不依赖 factors 是否存在。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
 
 任务、CPU/GPU host workflow 与唯一执行分派已成为独立普通 CXX。应用 [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)保留单次输入、依赖组装、模式选择与展示/退出；它只组装一次实际 execute_stage1、构建身份和默认 NAF 窗口读取的三回调 [私有依赖](../../src/ecm/service/stage1/execution_contract.h)。私有计算合同由 ExecutionOptions/ExecutionResult 表达，拥有权与状态实现落 execution_contract.cpp；TaskResult::State 仅在 task.cpp 定义。计算回调包含本后端所需准备和执行，不重复建立 Runner、Session.run 或 factory/select。结果 writer 已收口为公共声明与一个普通 CPP，文件锁/编码/发布细节不再进入 task。
 
-任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 8 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
+任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 14 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
 
 ## 应用输入与队列编排
 
@@ -38,7 +38,7 @@ driver 组装一次计算、身份和默认 NAF 三回调，直接模式调用 t
 
 [queue_workflow.cpp](../../src/ecm/service/work/queue_workflow.cpp)是唯一任务循环与完成协议。其 [公开合同](../../include/ecm/service/work/queue_workflow.h)中 QueueItem 拥有 mpz 模数、字符串和本次选项；转交配置指针借用应用状态至同步返回，不能保存 Stage1Request 的借用引用。QueuePaths 仅传队列/finished/save 同步策略，没有整个应用 Settings 或额外 Runner。
 
-单任务发布封存仍在 task。QueueWorkflow 检查准备/发布失败 → 展示因子 → 检查停止/执行失败；成功后 Stage2 pending → finished → 按原票据删除/替换源行 → 同步 save → Stage2 flush → Prime95 delivery。文件模块只做具体读写。准备/发布失败或停止保留原行，执行失败标记原行；解析错误标记失败的既有返回 0 策略也保留。save skip 仍在执行前预读；Prime95 idle recovery 区分初始空队列和已读取无效任务。不存在逐任务重新读取 TOML。
+单任务发布封存仍在 task。QueueWorkflow 检查准备/持久化/发布/设备失败 → 展示因子 → 检查停止/执行失败；成功后 Stage2 pending → finished → 按原票据删除/替换源行 → 同步 save → Stage2 flush → Prime95 delivery。文件模块只做具体读写。准备/持久化/发布/设备失败或停止保留原行，其他执行失败标记原行；解析错误标记失败的既有返回 0 策略也保留。save skip 仍在执行前预读；Prime95 idle recovery 区分初始空队列和已读取无效任务。不存在逐任务重新读取 TOML。
 
 ## 选择词汇与配置依赖
 
@@ -70,9 +70,17 @@ task 的 execute 依赖绑定 [execution.cpp](../../src/ecm/service/stage1/execu
 
 CUDA 关闭时调用 [OpenCL Montgomery workflow](../../src/ecm/backend/opencl/stage1/montgomery/workflow.cpp)，保留其既有参数、后端 hook 和发布行为。两条 CPU 完整流程继续位于 CPU 实现；共享分派不包含任何曲线工作流正文。共用的随机 sigma 和 batch d 声明在 `service/stage1/gpu_common.h`，与 OpenCL 入口 ABI 分离。
 
-CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先于同时收到的停止信号，不再被任务层改写为准备失败。CPU/OpenCL 的旧返回码和准备/发布标记仍通过兼容映射接纳。Edwards 在设备执行前后分别归类准备与执行异常；后续存档/发布细分以持久化合同为准。
+CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先于同时收到的停止信号，不再被任务层改写为准备失败。CPU/OpenCL 的旧返回码和准备/发布标记仍通过兼容映射接纳。任务层按执行/发布调用边界归类逃逸异常，不根据结果指针是否已分配猜测阶段。Edwards 低层接口保留兼容返回码并可携带明确设备故障来源。周期存档策略和载荷模块的整理仍见实施草稿中的未完成项。
 
 这些主机 CPP 的实际独立编译依赖没有 CUDA SDK 头。CUDA runtime、同步、设备资源与回读实现保留现有 CUDA 依赖；Montgomery 构造、结果及 checkpoint/screen/CSV 实现也已提取到普通 CXX；设备协作继续由 adapter.cu 持有。
+
+## CUDA 故障与构造期结果
+
+[Montgomery runtime](../../src/ecm/backend/cuda/stage1/montgomery/runtime.h)返回完成、主动停止、采样截止或失败；[运行结果合同](../../src/ecm/backend/cuda/stage1/runtime_contract.h)区分实际失败来源。旧 C 入口只负责兼容适配。CUDA/CGBN 检查通过异常返回运行边界，设备缓冲、事件、报告、诊断文件和主机数组由 [资源拥有者](../../src/ecm/backend/cuda/stage1/montgomery/resources.cuh)释放。调用方不假定设备错误后的 context 可以继续使用。Edwards 的已有缓冲、报告及事件拥有者禁止复制，设备错误同样回到任务层。
+
+PARAM0/PARAM2 构造遇到模逆失败时计算 GCD：真因子立即通过既有 submission 通道持久化，并记录该曲线的 factor 结果；GCD=N 作为退化构造拒绝。设备批次不压紧索引：已找到因子的通道使用无害恒等状态，末点处理读取已保存的真因子，不能将该通道当作可用于 Stage2 的点。恢复时重新推导构造期因子元数据；旧载荷格式不变。有效曲线的公式与 sigma 身份不受影响；PARAM2 低层也拒绝 sigma<2，而不改用另一 sigma。
+
+构造布局、主机数组及结果分配检查尺寸；结果数组在计算前取得完整所有权，后续失败仍由结果对象清理。临时参数和 GMP 标量也由工作流局部对象持有。共享 storage 和 task 仍拥有最终清理权限；普通成功路径的底层清理请求不会提前删除尚未封存的批次。
 
 ## Montgomery 主机数学与存档输出
 

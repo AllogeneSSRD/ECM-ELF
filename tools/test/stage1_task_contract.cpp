@@ -59,6 +59,14 @@ static int execute(mpz_srcptr,double,double,uint32_t count,const std::string &,b
         out->fail(FailureSource::Execution);
         return ECM_ERROR;
     }
+    if(mode=="persistence" || mode=="persistence_stop") {
+        if(mode=="persistence_stop")stop_now();
+        out->fail(FailureSource::Persistence);return ECM_ERROR;
+    }
+    if(mode=="device" || mode=="device_stop") {
+        if(mode=="device_stop")stop_now();
+        out->fail(FailureSource::Device);return ECM_ERROR;
+    }
     auto *factors=static_cast<mpz_t *>(std::malloc(sizeof(mpz_t)*count));
     auto *found=static_cast<int *>(std::malloc(sizeof(int)*count));
     if(!factors || !found){std::free(factors);std::free(found);throw std::bad_alloc();}
@@ -105,10 +113,16 @@ int main(int argc,char **argv) {
         } else if(mode=="publication" || mode=="stop_publication") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Publication,"publication priority/source");
             require(fs::exists(checkpoint),"publication failure lost checkpoint");
-        } else if(mode=="execution" || mode=="execution_stop") {
+        } else if(mode=="execution" || mode=="execution_stop" || mode=="throw") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Execution,"explicit execution failure/stop priority");
-            require(fs::exists(checkpoint) && !fs::exists(options.persistence.submission_file),"execution failure lost recovery or published NF");
-        } else if(mode=="prepare" || mode=="throw" || mode=="bad_begin") {
+            require((mode=="throw" || fs::exists(checkpoint)) && !fs::exists(options.persistence.submission_file),"execution failure lost recovery or published NF");
+        } else if(mode=="persistence" || mode=="persistence_stop") {
+            require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Persistence,"persistence failure/stop priority");
+            require(fs::exists(checkpoint),"persistence failure lost checkpoint");
+        } else if(mode=="device" || mode=="device_stop") {
+            require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Device,"device failure/stop priority");
+            require(fs::exists(checkpoint),"device failure lost checkpoint");
+        } else if(mode=="prepare" || mode=="bad_begin") {
             require(result.status()==TaskStatus::Failed && result.failure_source()==FailureSource::Preparation,"legacy preparation mapping");
             if(mode=="bad_begin") {
                 require(calls==0,"corrupt begin reached execution");

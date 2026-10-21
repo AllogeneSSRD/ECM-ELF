@@ -61,7 +61,7 @@ struct Stage1Request {
 };
 
 enum class TaskStatus { Completed, Stopped, Failed };
-enum class FailureSource { None, Preparation, Execution, Publication };
+enum class FailureSource { None, Preparation, Execution, Publication, Persistence, Device };
 
 struct TaskDependencies;
 

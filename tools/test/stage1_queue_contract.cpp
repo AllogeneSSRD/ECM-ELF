@@ -34,6 +34,9 @@ static int execute(mpz_srcptr,double,double,uint32_t count,const std::string &sa
     require(ecm_stage1_write_blob(ecm_stage1_curve_record(0),"queue-contract-state"),"checkpoint write");
     if(mode=="stop"){stop_now();return ECM_ERROR;}
     if(mode=="prepare"){out->prepare_failed=true;return ECM_ERROR;}
+    if(mode=="device" || mode=="persistence") {
+        out->fail(mode=="device"?FailureSource::Device:FailureSource::Persistence);return ECM_ERROR;
+    }
     out->factors=static_cast<mpz_t *>(std::malloc(sizeof(mpz_t)*count));
     out->array_found=static_cast<int *>(std::malloc(sizeof(int)*count));
     require(out->factors && out->array_found,"factor allocation");
@@ -78,13 +81,13 @@ int main(int argc,char **argv){
         const int rc=run_queue_workflow(paths,source,{execute,identity,window});
         const auto todo=read(paths.worktodo),finished=read(paths.finished);
         const bool fatal=mode=="prepare" || mode=="publication" || mode=="stop" || mode=="stop_before" ||
-                         mode=="read_error" || mode=="advance_failure";
+                         mode=="read_error" || mode=="advance_failure" || mode=="device" || mode=="persistence";
         require(rc==(fatal?1:0),"workflow return policy");
         const bool no_compute=mode=="empty" || mode=="read_error" || mode=="mark" || mode=="mark_failure" || mode=="stop_before";
         require(computations==(no_compute?0:1),"compute count");
         if(mode=="stop_before")require(reads==0,"stopped workflow consumed source");
         if(mode=="mark" || mode=="finished_failure")require(todo.find("# ERROR")!=std::string::npos,"failed input not marked");
-        if(mode=="prepare" || mode=="publication" || mode=="stop" || mode=="stop_before" || mode=="read_error" || mode=="empty"){
+        if(mode=="prepare" || mode=="publication" || mode=="stop" || mode=="stop_before" || mode=="read_error" || mode=="empty" || mode=="device" || mode=="persistence"){
             require(todo.find(ticket)!=std::string::npos && finished.empty(),"failure advanced source or finished");
         }
         if(mode=="complete" || mode=="factor" || mode=="auto_stage2" || mode=="advance_failure"){
@@ -98,7 +101,7 @@ int main(int argc,char **argv){
                 require(read(dir/"sync/point.save")=="queue-contract-save\n","save sync");
             }
         }
-        if(mode=="stop" || mode=="prepare" || mode=="publication")require(fs::exists(dir/".m0_s1_bit14_20.ckpt"),"failure checkpoint lost");
+        if(mode=="stop" || mode=="prepare" || mode=="publication" || mode=="device" || mode=="persistence")require(fs::exists(dir/".m0_s1_bit14_20.ckpt"),"failure checkpoint lost");
         std::cout<<"queue_contract: mode="<<mode<<" reads="<<reads<<" computations="<<computations<<" passed=1\n";
         return 0;
     }catch(const std::exception &e){std::cerr<<"FAIL: "<<e.what()<<'\n';return 1;}

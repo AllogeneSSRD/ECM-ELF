@@ -14,15 +14,19 @@
 namespace {
 template<uint32_t W> struct HostMem {uint32_t _limbs[W/32];};
 template<uint32_t W,uint32_t T> struct HostParams {static const uint32_t BITS=W,TPI=T,TPB=128;};
-void check(cudaError_t rc) {if(rc!=cudaSuccess)throw std::runtime_error(cudaGetErrorString(rc));}
+void check(cudaError_t rc) {if(rc!=cudaSuccess)throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,cudaGetErrorString(rc));}
 template<class T> struct Device {
     T *p=nullptr;
     explicit Device(size_t n) {check(cudaMalloc(&p,n*sizeof(T)));}
+    Device(const Device &)=delete;
+    Device &operator=(const Device &)=delete;
     ~Device(){if(p)cudaFree(p);}
 };
 struct Report {
     cgbn_error_report_t *p=nullptr;
     Report(){check(cgbn_error_report_alloc(&p));}
+    Report(const Report &)=delete;
+    Report &operator=(const Report &)=delete;
     ~Report(){if(p)cgbn_error_report_free(p);}
 };
 template<class Mem> void put(Mem &r,const mpz_t x) {
@@ -53,7 +57,7 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
         check(cudaGetLastError());check(cudaDeviceSynchronize());
         slices.observe(stop-done,std::chrono::duration<double,std::milli>(
             std::chrono::steady_clock::now()-started).count());
-        if(cgbn_error_report_check(report.p))throw std::runtime_error("CGBN Edwards arithmetic error");
+        if(cgbn_error_report_check(report.p))throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,"CGBN Edwards arithmetic error");
         check(cudaMemcpy(host.data(),data.p,host.size()*sizeof(Mem),cudaMemcpyDeviceToHost));
         for(uint32_t i=0;i<count;++i)for(unsigned j=5;j<9;++j)
             mpz_import(states[9*i+j],P::BITS/32,-1,4,0,0,host[10*i+j+1]._limbs);
@@ -65,6 +69,8 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
 struct EdwardsEvent {
     cudaEvent_t value{};
     EdwardsEvent(){check(cudaEventCreate(&value));}
+    EdwardsEvent(const EdwardsEvent &)=delete;
+    EdwardsEvent &operator=(const EdwardsEvent &)=delete;
     ~EdwardsEvent(){cudaEventDestroy(value);}
     void wait(){check(cudaDeviceSynchronize());check(cudaEventSynchronize(value));}
 };
@@ -92,7 +98,7 @@ template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *sta
     check(cudaEventRecord(start.value));
     k.prepare(report.p,data.p,dictionary.p,entries,count);
     check(cudaGetLastError());check(cudaEventRecord(stop.value));stop.wait();
-    if(cgbn_error_report_check(report.p))throw std::runtime_error("CGBN Edwards dictionary arithmetic error");
+    if(cgbn_error_report_check(report.p))throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,"CGBN Edwards dictionary arithmetic error");
     if(metrics)check(cudaEventElapsedTime(&metrics->dictionary_gpu_ms,start.value,stop.value));
     if(metrics)metrics->dictionary_wall_ms=std::chrono::duration<double,std::milli>(
         std::chrono::steady_clock::now()-dictionary_start).count();
@@ -104,7 +110,7 @@ template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *sta
         k.naf(report.p,data.p,dictionary.p,result.p,
             nonzero.p,codes.p,plan.bits,done,end,entries,plan.window,count,doubling);
         check(cudaGetLastError());check(cudaEventRecord(stop.value));stop.wait();
-        if(cgbn_error_report_check(report.p))throw std::runtime_error("CGBN Edwards NAF arithmetic error");
+        if(cgbn_error_report_check(report.p))throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,"CGBN Edwards NAF arithmetic error");
         if(metrics || !chunk){float ms=0;check(cudaEventElapsedTime(&ms,start.value,stop.value));
             slices.observe(end-done,ms);
             if(metrics){metrics->loop_gpu_ms+=ms;++metrics->launches;}}

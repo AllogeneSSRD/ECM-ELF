@@ -1,6 +1,9 @@
 #include "execution_contract.h"
 #include <cstdlib>
 #include <utility>
+#include <new>
+#include <limits>
+#include <stdexcept>
 namespace ecm_stage1 {
 ExecutionOptions::ExecutionOptions(const Stage1Options &options) : Stage1Options(options) {}
 
@@ -18,6 +21,22 @@ ExecutionResult::~ExecutionResult() {
         free(array_found);
         free(sigmas); // May exist on a stopped CPU Montgomery task with no factors.
     }
+
+void ExecutionResult::allocate_curves(uint32_t count) {
+    if(!count || count>std::numeric_limits<size_t>::max()/sizeof(mpz_t) ||
+       count>std::numeric_limits<size_t>::max()/sizeof(uint64_t))
+        throw std::length_error("invalid Stage1 result allocation size");
+    ExecutionResult incoming;
+    incoming.factors=static_cast<mpz_t *>(std::malloc(sizeof(mpz_t)*size_t(count)));
+    incoming.array_found=static_cast<int *>(std::malloc(sizeof(int)*size_t(count)));
+    incoming.sigmas=static_cast<uint64_t *>(std::malloc(sizeof(uint64_t)*size_t(count)));
+    if(!incoming.factors || !incoming.array_found || !incoming.sigmas)throw std::bad_alloc();
+    for(uint32_t i=0;i<count;++i) {
+        mpz_init(incoming.factors[i]);incoming.array_found[i]=ECM_NO_FACTOR_FOUND;incoming.sigmas[i]=0;
+    }
+    incoming.curves=count;
+    swap(incoming);
+}
 
 void ExecutionResult::fail(FailureSource source) noexcept {
     ret=ECM_ERROR;completion=Completion::Failed;failure_source=source;
@@ -38,7 +57,7 @@ void ExecutionResult::finish_task(int code,bool stopped) noexcept {
             if(failure_source==FailureSource::None)
                 failure_source=publish_failed?FailureSource::Publication:FailureSource::Preparation;
         } else if(ret==ECM_ERROR) {
-            const bool interrupted=completion==Completion::Stopped ||
+            const bool interrupted=completion==Completion::Stopped || completion==Completion::SampleLimit ||
                 (completion==Completion::Legacy && stopped);
             status=interrupted?TaskStatus::Stopped:TaskStatus::Failed;
             failure_source=interrupted?FailureSource::None:FailureSource::Execution;

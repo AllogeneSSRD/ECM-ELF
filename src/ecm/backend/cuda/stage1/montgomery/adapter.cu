@@ -27,6 +27,7 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 
 #include "api.h"
 #include "host_math.h"
+#include "runtime.h"
 #include "host_io.h"
 #include "host_policy.h"
 using namespace ecm_cuda_mont_host;
@@ -35,15 +36,19 @@ using namespace ecm_cuda_mont_host;
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
+#include <memory>
 
 // GMP import must proceed cgbn.h
 #include <gmp.h>
-#include <cgbn.h>
+#include "../../arithmetic/cgbn/types.cuh"
 #include <cuda.h>
 
 #include "launch.h"  // device templates + per-TPI dispatch seam
 
 #include "../../runtime/cudacommon.h"
+#include "resources.cuh"
+#undef CUDA_CHECK
+#define CUDA_CHECK(action) ecm_cuda_stage1::check_cuda(action,#action)
 
 // progress-bar colour helpers (ANSI code / reset)
 #include "ecm/platform/logging.h"
@@ -130,32 +135,7 @@ static void ecm_build_tier_list_param0(std::vector<uint32_t> &out) {
 // 小端格式，magic number 0x45555047 在内存中表示为 "GPUE"，用于验证 checkpoint 文件的正确性
 
 // support routine copied from  "CGBN/samples/utility/support.h"
-void cgbn_check(cgbn_error_report_t *report, const char *file=NULL, int32_t line=0) {
-  // check for cgbn errors
-
-  if(cgbn_error_report_check(report)) {
-    fprintf (stderr, "\n");
-    fprintf (stderr, "CGBN error occurred: %s\n", cgbn_error_string(report));
-
-    if(report->_instance!=0xFFFFFFFF) {
-      fprintf (stderr, "Error reported by instance %d", report->_instance);
-      if(report->_blockIdx.x!=0xFFFFFFFF)
-        fprintf (stderr, ", blockIdx=(%d, %d, %d)", report->_blockIdx.x, report->_blockIdx.y, report->_blockIdx.z);
-      if(report->_threadIdx.x!=0xFFFFFFFF)
-        fprintf (stderr, ", threadIdx=(%d, %d, %d)", report->_threadIdx.x, report->_threadIdx.y, report->_threadIdx.z);
-      fprintf (stderr, "\n");
-    }
-    else {
-      fprintf (stderr, "Error reported by blockIdx=(%d %d %d)", report->_blockIdx.x, report->_blockIdx.y, report->_blockIdx.z);
-      fprintf (stderr, "threadIdx=(%d %d %d)\n", report->_threadIdx.x, report->_threadIdx.y, report->_threadIdx.z);
-    }
-    if(file!=NULL)
-      fprintf (stderr, "file %s, line %d\n", file, line);
-    exit(1);
-  }
-}
-
-#define CGBN_CHECK(report) cgbn_check(report, __FILE__, __LINE__)
+#define CGBN_CHECK(report) ecm_cuda_stage1::check_cgbn(report,__FILE__,__LINE__)
 
 static
 int verify_size_of_n(const mpz_t N, size_t max_bits) {
@@ -288,12 +268,23 @@ int ecm_cuda_tier_occupancy(int param0, int param2, uint32_t bits,
 #include "prac/prac_runtime.inl"
 #endif
 
-int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
+static int run_mont_runtime(mpz_t *factors, int *array_found,
              const mpz_t N, const mpz_t s,
              uint32_t curves, uint64_t *sigma_ptr,
              unsigned long checkpoint_interval_ms,
-             float *gputime, int verbose, int gpu_param, uint64_t B1, uint32_t torsion)
+             float *gputime, int verbose, int gpu_param, uint64_t B1, uint32_t torsion,
+             ecm_cuda_stage1::RunResult &outcome,ecm_cuda_stage1::FactorSink sink,void *context)
 {
+  using namespace ecm_cuda_stage1;
+  if(!factors || !array_found || !N || !s || !curves || !sigma_ptr || !gputime ||
+     mpz_cmp_ui(N,3)<=0 || !mpz_odd_p(N) || mpz_sgn(s)<=0 ||
+     *sigma_ptr>UINT64_MAX-(curves-1ull) ||
+     (gpu_param!=0 && gpu_param!=2 && gpu_param!=3))
+      throw RunError(Failure::Preparation,"invalid CUDA Montgomery Stage1 request");
+  if(gpu_param!=0 && (*sigma_ptr>UINT32_MAX || curves>0x100000000ull-*sigma_ptr))
+      throw RunError(Failure::Preparation,"CUDA batch parameter range exceeds uint32");
+  MontResources resources;
+  const ConstructionResults construction{factors,array_found,sink,context};
   const char *algorithm = stage1_algorithm();
   if (!algorithm) return ECM_ERROR;
   if (strcmp(algorithm, "ladder") != 0) {
@@ -304,7 +295,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     }
     return cgbn_stage1_resident(factors, array_found, N, s, curves, sigma_ptr,
                                checkpoint_interval_ms, gputime, B1, torsion,
-                               strcmp(algorithm, "prac") == 0);
+                               strcmp(algorithm, "prac") == 0,outcome,construction);
 #else
     outputf(OUTPUT_ERROR, "GPU: resident/PRAC kernels are not built; rebuild with "
                          "-EnablePrac or -DECM_CUDA_ENABLE_PRAC=ON\n");
@@ -334,10 +325,6 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
    * NOTE: the selector arrives from the driver (ini gpu_param / CLI --gpu-param);
    * see docs/architecture/STAGE1.md.
    * ------------------------------------------------------------------------- */
-  if (gpu_param != 0 && gpu_param != 2 && gpu_param != 3) {
-      outputf(OUTPUT_ERROR, "GPU: gpu_param=%d is not 0, 2 or 3; using 3\n", gpu_param);
-      gpu_param = 3;
-  }
   const bool param0 = (gpu_param == 0);
   const bool param2 = (gpu_param == 2);
   /* param0 and param2 share the 7-word Suyama buffer layout and kernel family shape
@@ -366,7 +353,8 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       
 
   uint64_t s_num_bits;
-  uint32_t *s_bits = allocate_and_set_s_bits(s, &s_num_bits);
+  auto *&s_bits=resources.scalar;
+  s_bits = allocate_and_set_s_bits(s, &s_num_bits);
   if (s_num_bits >= 4000000000)
       outputf (OUTPUT_ALWAYS, "GPU: Very Large B1! Check magnitute of B1.\n");
 
@@ -375,24 +363,28 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
                s_num_bits, s_num_bits >> 23);
   assert( s_bits != NULL );
 
-  cudaEvent_t global_start, batch_start, stop;
+  auto &global_start=resources.start,&batch_start=resources.batch,&stop=resources.stop;
+  auto *&gpu_s_bits=resources.device_scalar;
+  auto *&report=resources.report;
+  outcome.failure=Failure::Execution;
   CUDA_CHECK(cudaEventCreate (&global_start));
   CUDA_CHECK(cudaEventCreate (&batch_start));
   CUDA_CHECK(cudaEventCreate (&stop));
   CUDA_CHECK(cudaEventRecord (global_start));
 
   // Copy s_bits
-  uint32_t *gpu_s_bits;
   uint32_t s_words = (s_num_bits + 31) / 32;
   CUDA_CHECK(cudaMalloc((void **)&gpu_s_bits, sizeof(uint32_t) * s_words));
   CUDA_CHECK(cudaMemcpy(gpu_s_bits, s_bits, sizeof(uint32_t) * s_words, cudaMemcpyHostToDevice));
 
-  cgbn_error_report_t *report;
   // create a cgbn_error_report for CGBN to report back errors
   CUDA_CHECK(cgbn_error_report_alloc(&report));
 
-  size_t    data_size;
-  uint32_t *data, *gpu_data;
+
+  outcome.failure=Failure::Preparation;
+  size_t data_size=0;
+  auto *&data=resources.host;
+  auto *&gpu_data=resources.device_data;
 
   uint32_t  BITS = 0;        // kernel bits
   int32_t   TPB=TPB_DEFAULT; // Always the same default
@@ -408,8 +400,8 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   int youpi = ECM_NO_FACTOR_FOUND;
 
   uint32_t dump_enable = gpu_dump_enabled() ? 1u : 0u;
-  FILE *dump_file = NULL;
-  uint32_t *dump_host = NULL;
+  auto *&dump_file=resources.dump_file;
+  auto *&dump_host=resources.dump;
   const char *dump_filename = "dump.csv";
 
   /**
@@ -567,8 +559,8 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   assert( sizeof(cgbn_mem_t<1024>) == 1024/8 );
   
   if (!ckpt_loaded) {
-    data = param2 ? set_p_2p_param2(N, curves, sigma32, BITS, &data_size)
-                  : param0 ? set_p_2p_suyama(N, curves, sigma64, BITS, &data_size)
+    data = param2 ? set_p_2p_param2(N, curves, sigma32, BITS, &data_size,&construction)
+                  : param0 ? set_p_2p_suyama(N, curves, sigma64, BITS, &data_size,&construction)
                            : set_p_2p(N, curves, sigma32, BITS, &data_size);
     s_partial = 1;      // First bit (doubling) is handled in set_p_2p[_suyama]
     batches_complete = 0;
@@ -589,6 +581,13 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     IPB = TPB / TPI;
     BLOCK_COUNT = (curves + IPB - 1) / IPB;
     outputf(OUTPUT_VERBOSE, "Checkpoint: restored BITS=%d, TPI=%d, BLOCK_COUNT=%lu\n", BITS, TPI, BLOCK_COUNT);
+  }
+
+  if(ckpt_loaded && (param0 || param2)) {
+    size_t initial_size=0;
+    std::unique_ptr<uint32_t,decltype(&free)> initial(param0?
+        set_p_2p_suyama(N,curves,sigma64,BITS,&initial_size,&construction):
+        set_p_2p_param2(N,curves,sigma32,BITS,&initial_size,&construction),&free);
   }
 
   /* Buffer layout of this run: 5 words/curve for param3 (N, aX, aZ, bX, bZ) and
@@ -676,6 +675,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   const uint32_t sigma_arg = sigma32;
 #endif
 
+  outcome.failure=Failure::Execution;
   // Copy data
   outputf (OUTPUT_VERBOSE, "Copying %'lu bytes of curves data to GPU\n", data_size);
   CUDA_CHECK(cudaMalloc((void **)&gpu_data, data_size));
@@ -814,6 +814,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     /* Call CUDA Kernel. */
     assert (kernel != NULL);
     cgbn_stage1_launch(kernel,BLOCK_COUNT,TPB,report, s_num_bits, s_partial, this_batch, gpu_s_bits, gpu_data, curves, sigma_arg, np0);
+    CUDA_CHECK(cudaGetLastError());
 
     s_partial += this_batch;
     batches_complete++;
@@ -832,8 +833,8 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
 
     CUDA_CHECK(cudaEventRecord (stop));
     CUDA_CHECK(cudaEventSynchronize (stop));
-    cudaEventElapsedTime (&batch_time, batch_start, stop);
-    cudaEventElapsedTime (gputime, global_start, stop);
+    CUDA_CHECK(cudaEventElapsedTime (&batch_time, batch_start, stop));
+    CUDA_CHECK(cudaEventElapsedTime (gputime, global_start, stop));
 
     // ── Update recent-speed window + ETA ──────────────────────────────────
     if (batch_time > 0.0f && this_batch > 0u) {
@@ -919,6 +920,7 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
       const int saved = save_checkpoint(ckpt_filename, &header, data, data_size);
       if (saved == ECM_NO_FACTOR_FOUND) last_checkpoint_time = *gputime;
       if (stop_now) {
+        if(s_partial<s_num_bits)outcome.termination=Termination::Stopped;
         outputf(saved == ECM_NO_FACTOR_FOUND ? OUTPUT_NORMAL : OUTPUT_ERROR,
                 saved == ECM_NO_FACTOR_FOUND ? "Stage1 stopped: checkpoint saved\n" :
                                                "Stage1 stop requested but checkpoint write failed\n");
@@ -939,22 +941,11 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
   } else {
     outputf (OUTPUT_VERBOSE, "Copying results back to CPU ...\n");
     CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));
-    cudaEventElapsedTime (gputime, global_start, stop);
+    CUDA_CHECK(cudaEventElapsedTime (gputime, global_start, stop));
     youpi = process_results(factors, array_found, N, data, BITS, curves, sigma64,
-                            words_per_curve, p1_word, p2_word, gpu_param);
+                            words_per_curve, p1_word, p2_word, gpu_param,true);
   }
 
-  // clean up
-  CUDA_CHECK(cudaFree(gpu_s_bits));
-  CUDA_CHECK(cudaFree(gpu_data));
-  CUDA_CHECK(cgbn_error_report_free(report));
-  CUDA_CHECK(cudaEventDestroy (global_start));
-  CUDA_CHECK(cudaEventDestroy (batch_start));
-  CUDA_CHECK(cudaEventDestroy (stop));
-
-  free(s_bits);
-  free(data);
-  
   // ========== CHECKPOINT CLEANUP ==========
   // Remove checkpoint file on successful completion
   if (youpi != ECM_ERROR) {
@@ -962,17 +953,38 @@ int cgbn_ecm_stage1(mpz_t *factors, int *array_found,
     outputf (OUTPUT_VERBOSE, "Checkpoint file removed\n");
   }
 
-  if (dump_file != NULL) {
-    fclose(dump_file);
-  }
-  if (dump_host != NULL) {
-    free(dump_host);
-  }
-
   /* Write back possibly-updated sigma to caller */
   *sigma_ptr = sigma64;
 
   return youpi;
+}
+
+ecm_cuda_stage1::RunResult ecm_cuda_stage1::execute_mont_batch(mpz_t *factors,int *found,
+    mpz_srcptr n,mpz_srcptr scalar,uint32_t curves,uint64_t *sigma,unsigned long checkpoint_ms,
+    float *milliseconds,int verbose,int param,uint64_t b1,uint32_t torsion,FactorSink sink,void *context) {
+    RunResult result;
+    try {
+        result.code=run_mont_runtime(factors,found,n,scalar,curves,sigma,checkpoint_ms,
+                                    milliseconds,verbose,param,b1,torsion,result,sink,context);
+        if(result.code!=-1){result.termination=Termination::Completed;result.failure=Failure::None;}
+        else if(result.termination==Termination::Stopped || result.termination==Termination::SampleLimit)
+            result.failure=Failure::None;
+    } catch(const RunError &e) {
+        result.code=-1;result.termination=Termination::Failed;result.failure=e.failure;result.error=e.what();
+    } catch(const std::exception &e) {
+        result.code=-1;result.termination=Termination::Failed;result.error=e.what();
+    }
+    if(!result.error.empty())outputf(OUTPUT_ERROR,"GPU: Stage1 failed: %s\n",result.error.c_str());
+    return result;
+}
+
+// ABI compatibility for existing standalone probes and backend hooks. Production
+// workflows use the typed runtime result directly.
+int cgbn_ecm_stage1(mpz_t *factors,int *found,mpz_srcptr n,mpz_srcptr scalar,
+    uint32_t curves,uint64_t *sigma,unsigned long checkpoint_ms,float *milliseconds,
+    int verbose,int param,uint64_t b1,uint32_t torsion) {
+    return ecm_cuda_stage1::execute_mont_batch(factors,found,n,scalar,curves,sigma,
+        checkpoint_ms,milliseconds,verbose,param,b1,torsion).code;
 }
 
 #ifdef __CUDA_ARCH__

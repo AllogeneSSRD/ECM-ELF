@@ -35,6 +35,7 @@ struct ExecutionResult {
     ExecutionResult(ExecutionResult &&other) noexcept;
     ExecutionResult &operator=(ExecutionResult &&other) noexcept;
     ~ExecutionResult();
+    void allocate_curves(uint32_t count);
     void fail(FailureSource source) noexcept;
     void stop() noexcept;
     void finish_task(int code,bool stopped) noexcept;

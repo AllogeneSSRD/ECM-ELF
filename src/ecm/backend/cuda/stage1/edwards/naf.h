@@ -15,4 +15,4 @@ int ecm_cuda_edwards_stage1_naf(const mpz_t n,const mpz_t scalar,mpz_t *states,
         uint32_t count,uint32_t &done,uint32_t chunk_bits,int device,
         EcmEdwardsProgress progress,void *context,std::string &error,
         unsigned window=6,int doubling=4,EcmEdwardsNafMetrics *metrics=nullptr,
-        EcmEdwardsPrepared prepared=nullptr);
+        EcmEdwardsPrepared prepared=nullptr,ecm_cuda_stage1::Failure *failure=nullptr);
