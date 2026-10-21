@@ -37,7 +37,7 @@ param 为 0、2、3，CPU Montgomery 使用 0；bits 为实际模数位数，B1 
 | `.bak.ckpt`、`.bak2.ckpt`… | 后缀前插入备份代数；最多 16 代，实际数量由 `ckpt_backups` 决定 |
 | `主文件名.lock` | 批次独占锁；Windows 使用无共享打开、关闭时删除；POSIX 使用非阻塞 flock |
 
-来源：[驱动命名与批次边界](../../src/core/ecm_driver.cpp#L3076)、[备份及锁](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L97)。
+来源：[驱动命名与批次边界](../../src/ecm/service/stage1/task.cpp#L138)、[备份及锁](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L97)。
 
 ### 2.2 内容身份
 
@@ -239,7 +239,7 @@ giant 为 u32 limb 数 m，随后 m 个低 limb 在前的 u32；当前写入零�
 
 CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存 sigma、返回码 0/1、十六进制 factor，以及带双引号/转义的完整文本 save 行；无可用点时该行可以为空。记录没有独立尾校验，依靠外层 CRC。保存已完成结果是为了发布失败或批次停止后不重复计算已完成曲线。
 
-来源：[CPU Edwards codec](../../src/cpu/ecm_edwards_save.cpp#L279)、[驱动回调](../../src/core/ecm_driver.cpp#L987)、[完成记录](../../src/core/ecm_driver.cpp#L1055)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
+来源：[CPU Edwards codec](../../src/cpu/ecm_edwards_save.cpp#L279)、[驱动回调](../../src/core/ecm_driver.cpp#L878)、[完成记录](../../src/core/ecm_driver.cpp#L941)。Prime95 风格 MIDSTAGE 保留接口另见 [SAVE](SAVE.md#8-保留的二进制-midstage-接口)。
 
 ### 4.5 可选 CUDA resident / PRAC
 
@@ -275,7 +275,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 `ckpt_seconds=0` 关闭周期写入，不关闭正常停止存档。信号处理器只置停止标志；CPU 分块或 GPU 切片结束后才执行 I/O。强制终止、蓝屏或掉电不会调用这一正常停止流程。GPU Edwards 会在最终结果发布前再保留一份完成的批次状态；CPU 完成记录同样支持发布重试。
 
-来源：[批次发布边界](../../src/core/ecm_driver.cpp#L3076)、[种子持久化](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L277)、[GPU Edwards 完成状态](../../src/core/ecm_edwards_gpu_driver.inl#L118)。
+来源：[批次发布边界](../../src/ecm/service/stage1/task.cpp#L138)、[种子持久化](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L277)、[GPU Edwards 完成状态](../../src/core/ecm_edwards_gpu_driver.inl#L118)。
 
 ### 5.2 原子替换和备份
 

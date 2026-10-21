@@ -43,6 +43,7 @@
 #include "ecm_stage1_checkpoint_runtime.h"
 #include "ecm_stage1_legacy_gpu.h"
 #include "ecm_stage1_selection.h"
+#include "../ecm/service/stage1/legacy_execution.h"
 #include "opencl_ecm_runtime_config.h"
 #include "ecm.h"
 #include "cgbn_stage1.h"            /* gpu_pick_random_sigma / gpu_compute_batch_d */
@@ -75,6 +76,15 @@
 /* IFMA_FIELD_* 常量 (SIMD 域选择)。头文件不含 AVX512 intrinsic, 基线 TU 可包含;
    只给 simd_*.cpp 加 /arch:AVX512, 见 §14.1。 */
 #include "simd_mont_ifma.h"
+
+using ecm_stage1::Stage1RunOptions;
+using ecm_stage1::Stage1ExecutionOptions;
+using ecm_stage1::LegacyStage1Result;
+using ecm_stage1::Stage1TaskStatus;
+using ecm_stage1::Stage1FailureSource;
+using ecm_stage1::run_stage1_task;
+using ecm_stage1::stage1_publish_factor;
+using ecm_stage1::stage1_results_complete;
 
 static int to_ifma_field_mode(ecm_stage1::SimdReduction reduction) {
     switch (reduction) {
@@ -713,101 +723,22 @@ static long long current_epoch_seconds() {
     return static_cast<long long>(std::time(nullptr));
 }
 
-struct Stage1RunOptions {
-    /* CLI and TOML resolve the same mathematical and execution choices. */
-    ecm_stage1::Selection selection{};
-    uint32_t stage1_threads = ecm_config::defaults::stage1_stage1_threads;     // 0 = auto (min(#tasks, #cores)); 1 = 顺序
-    std::vector<unsigned> affinity_cpus;   // 亲核性 (空 = 不绑定)
-    int naf_w = ecm_config::defaults::stage1_naf_w;                   // Edwards 专属: 0 = ecm_edwards_cpu 的默认窗口
-    /* Shared automatic save pattern. {curve} separates e/m0/m2/m3, {target}
-       retains the Mersenne assignment or actual integer width, {b1} is compact.
-       The Stage1 queue reader extracts B1 from the last '_' token. */
-    std::string save_name_pattern = ecm_config::defaults::stage1_save_name_pattern;
-    std::string legacy_save_source; // Queue-only source when a save gains its curve prefix.
-    int verbose = 0;
-    int device_index = ecm_config::defaults::stage1_device;
-    unsigned long ckpt_ms = ECM_DEFAULT_GPU_CHECKPOINT_INTERVAL_MS;
-    unsigned ckpt_backups = ecm_config::defaults::stage1_ckpt_backups;
-    std::string gpu_mul_path, gpu_sqr_path, gpu_add_path, gpu_sub_path, gpu_special_mult_path;
-    bool sigma_fixed = false;
-    uint64_t fixed_sigma64 = 0;      // Full seed; GPU PARAM2/3 validate the 32-bit window
-    // 本地 stage-1 落盘目录 (空 = 不落盘/不 checkpoint)。
-    // One task owns one batch checkpoint; final text saves feed Stage2.
-    std::string tmp_dir;
-    double handoff_k = 1.0;
-    std::string handoff_k_str = "1"; // 原始 k 字符串 (worktodo.add 用)
-    uint32_t handoff_b = 2;
-    uint32_t handoff_n = 0;
-    int32_t handoff_c = -1;
-    std::string handoff_factors;     // 透传给 worktodo.add 的已知因子 (逗号分隔)
-    bool target_kbnc=false;
-    std::string result_user,result_computer,result_aid;
-    std::string results_file="stage1_results.jsonl",submission_file="results.json.txt";
-};
-
-static bool stage1_publish_factor(const Stage1RunOptions &,mpz_srcptr,uint64_t,uint64_t,mpz_srcptr);
-
-// Private mutable legacy execution state. The caller's resolved options remain immutable.
-struct Stage1ExecutionOptions : Stage1RunOptions {
-    explicit Stage1ExecutionOptions(const Stage1RunOptions &options) : Stage1RunOptions(options) {}
-    long long stage1_t0_ms = 0;
-    uint32_t stage1_curves = 0;
-};
-
-struct Stage1TaskResult {
-    int ret = ECM_ERROR;
-    bool prepare_failed = false;
-    bool publish_failed = false;
-    uint32_t curves = 0;
-    uint32_t firstsigma = 0;
-    uint64_t firstsigma64 = 0;       // full 64-bit sigma
-    mpz_t *factors = nullptr;
-    int *array_found = nullptr;
-    Stage1TaskResult() = default;
-    Stage1TaskResult(const Stage1TaskResult &) = delete;
-    Stage1TaskResult &operator=(const Stage1TaskResult &) = delete;
-    Stage1TaskResult(Stage1TaskResult &&other) noexcept { swap(other); }
-    Stage1TaskResult &operator=(Stage1TaskResult &&other) noexcept {
-        Stage1TaskResult incoming(std::move(other));
-        swap(incoming);
-        return *this;
-    }
-    ~Stage1TaskResult() {
-        if(factors)for(uint32_t i=0;i<curves;++i)mpz_clear(factors[i]);
-        free(factors);
-        free(array_found);
-        free(sigmas); // May exist on a stopped CPU Montgomery task with no factors.
-    }
-    void swap(Stage1TaskResult &other) noexcept {
-        using std::swap;
-        swap(ret,other.ret);swap(prepare_failed,other.prepare_failed);swap(publish_failed,other.publish_failed);
-        swap(curves,other.curves);swap(firstsigma,other.firstsigma);swap(firstsigma64,other.firstsigma64);
-        swap(factors,other.factors);swap(array_found,other.array_found);swap(sigmas,other.sigmas);
-    }
-    // Per-curve sigma of THIS batch (malloc'd, `curves` entries, owned by this result; may be
-    // null when a path does not know them). Needed because one batch does NOT always
-    // share a sigma sequence: the Edwards path draws a random 64-bit sigma per curve,
-    // so "firstsigma + i" would be wrong there. Consumers: the hit lines (D3, see
-    // docs/usage/GUI.md) and therefore the GUI's results.txt sigma list.
-    uint64_t *sigmas = nullptr;
-};
-
 static std::string mont_format_save_name(const std::string &pattern,const mpz_t N,double B1,
                                          const Stage1RunOptions *options=nullptr);
 static std::string stage1_save_prefix(const Stage1RunOptions &opt) {
-    if(opt.selection.curve==ecm_stage1::CurveModel::Edwards)return "e";
-    return "m"+std::to_string(opt.selection.target==ecm_stage1::ExecutionTarget::Gpu?opt.selection.gpu_param:0);
+    if(opt.execution.selection.curve==ecm_stage1::CurveModel::Edwards)return "e";
+    return "m"+std::to_string(opt.execution.selection.target==ecm_stage1::ExecutionTarget::Gpu?opt.execution.selection.gpu_param:0);
 }
 static bool stage1_save_construction(const std::string &name,Stage1RunOptions &opt,std::string &error) {
     const auto leaf=ecm_stage1::lower_ascii(std::filesystem::path(name).filename().string());
     const auto prefix=leaf.substr(0,leaf.find('_'));
     if(prefix=="e" || prefix=="ed") {
-        opt.selection.curve=ecm_stage1::CurveModel::Edwards;
-        opt.selection.scalar_construction=ecm_stage1::ScalarConstruction::PrimePowerLcm;
+        opt.execution.selection.curve=ecm_stage1::CurveModel::Edwards;
+        opt.execution.selection.scalar_construction=ecm_stage1::ScalarConstruction::PrimePowerLcm;
     } else if(prefix=="m0" || prefix=="m2" || prefix=="m3") {
-        opt.selection.curve=ecm_stage1::CurveModel::Montgomery;
-        opt.selection.gpu_param=static_cast<unsigned>(prefix[1]-'0');
-        if(opt.selection.target==ecm_stage1::ExecutionTarget::Cpu && opt.selection.gpu_param!=0) {
+        opt.execution.selection.curve=ecm_stage1::CurveModel::Montgomery;
+        opt.execution.selection.gpu_param=static_cast<unsigned>(prefix[1]-'0');
+        if(opt.execution.selection.target==ecm_stage1::ExecutionTarget::Cpu && opt.execution.selection.gpu_param!=0) {
             error="save prefix selects Montgomery PARAM"+prefix.substr(1)+", which requires target=gpu";
             return false;
         }
@@ -822,58 +753,6 @@ static std::string stage1_prefixed_save(const std::string &name,const std::strin
         if(lower.rfind(old,0)==0){leaf.erase(0,std::strlen(old));break;}
     return (file.parent_path()/(prefix+"_"+leaf)).string();
 }
-static void stage1_copy_save_history(const Stage1RunOptions &opt,const std::string &destination) {
-    if(opt.legacy_save_source.empty())return;
-    const auto source=opencl_ecm_resolve_data_path_buf(opt.legacy_save_source.c_str());
-    const auto target=opencl_ecm_resolve_data_path_buf(destination.c_str());
-    if((std::filesystem::exists(target) && std::filesystem::file_size(target)) ||
-       !std::filesystem::exists(source) || !std::filesystem::file_size(source))return;
-    std::ifstream input(source,std::ios::binary);if(!input)throw std::runtime_error("cannot read legacy save history");
-    std::string line;uint64_t records=0;
-    const bool ed=opt.selection.curve==ecm_stage1::CurveModel::Edwards;
-    const auto param=opt.selection.target==ecm_stage1::ExecutionTarget::Gpu?opt.selection.gpu_param:0;
-    const auto trim=[](std::string s){const auto a=s.find_first_not_of(" \r\n\t"),b=s.find_last_not_of(" \r\n\t");return a==s.npos?std::string{}:s.substr(a,b-a+1);};
-    while(std::getline(input,line)) {
-        auto text=trim(line);
-        if(text.compare(0,3,"\xef\xbb\xbf")==0)text.erase(0,3);
-        if(text.empty() || text[0]=='#' || text[0]==';')continue;
-        std::string method,kind="0";size_t at=0;
-        while(at<text.size()) {
-            const auto end=text.find(';',at);const auto field=trim(text.substr(at,end==text.npos?end:end-at));
-            at=end==text.npos?text.size():end+1;const auto eq=field.find('=');if(eq==field.npos)continue;
-            const auto key=trim(field.substr(0,eq)),value=trim(field.substr(eq+1));
-            if(key=="METHOD")method=value;else if(key=="PARAM")kind=value;
-        }
-        if((ed && method!="ECM-EDWARDS-AM") || (!ed && (method!="ECM" || kind!=std::to_string(param))))
-            throw std::runtime_error("legacy save belongs to another curve/parametrization; choose a separate curve-prefixed save name");
-        ++records;
-    }
-    if(input.bad())throw std::runtime_error("cannot read complete legacy save history");
-    if(!records)return;
-    if(!opencl_ecm_ensure_parent_dir(target.c_str()))throw std::runtime_error("cannot create prefixed save directory");
-    const auto temp=ecm_stage1_checkpoint_temp_path(target);
-    std::filesystem::copy_file(source,temp,std::filesystem::copy_options::overwrite_existing);
-    if(!ecm_stage1_commit_checkpoint(target,temp))throw std::runtime_error("cannot publish prefixed save history");
-    ecm_ts_fprintf(stdout,"Stage1 save history copied: source=%s target=%s records=%llu original_retained=1\n",
-                   source.c_str(),target.c_str(),static_cast<unsigned long long>(records));
-}
-
-// Retained legacy sources must not replay curves already durably published.
-static bool stage1_results_complete(const Stage1RunOptions &opt,mpz_srcptr n,uint64_t b1,
-                                     bool edwards,unsigned param,const std::vector<uint64_t> &sigmas) {
-    if(!ecm_results::has_result_ledger(opt.results_file))return false;
-    ecm_results::SubmissionLock lock(opt.results_file);
-    const auto ledger=ecm_results::prepare_internal_ledger(opt.results_file);
-    for(const auto sigma:sigmas) {
-        const auto key=ecm_edwards::hex(n)+"|"+(edwards?"ed":"mont"+std::to_string(param))+"|"+
-            std::to_string(sigma)+"|"+std::to_string(b1)+"|stage1";
-        const auto entry=ledger/(std::to_string(ecm_edwards::hash(key))+".curve");
-        if(!std::filesystem::exists(entry))return false;
-        if(ecm_results::read_submission_entry(entry).key!=key)throw std::runtime_error("legacy result identity collision");
-    }
-    return !sigmas.empty();
-}
-
 static bool edwards_capture_save(std::string &line,const mpz_t n,uint64_t sigma,uint64_t b1,
                                   const mpz_t qx,const mpz_t qz,const mpz_t factor,bool hit) {
     ecm_edwards::Integer x,g,inv;
@@ -931,19 +810,19 @@ static bool stage1_selection_error(const ecm_stage1::Selection &selection,
 
 static bool stage1_task_error(const Stage1RunOptions &opt, uint32_t curves,
                               std::string &error) {
-    if (opt.sigma_fixed && curves != 0 &&
-        static_cast<uint64_t>(curves - 1) > UINT64_MAX - opt.fixed_sigma64) {
+    if (opt.identity.sigma_fixed && curves != 0 &&
+        static_cast<uint64_t>(curves - 1) > UINT64_MAX - opt.identity.fixed_sigma64) {
         error = "sigma + curve index exceeds 2^64-1";
         return true;
     }
-    if (opt.selection.target != ecm_stage1::ExecutionTarget::Gpu ||
-        opt.selection.curve == ecm_stage1::CurveModel::Edwards ||
-        opt.selection.gpu_param == 0 || !opt.sigma_fixed) return false;
-    if (opt.fixed_sigma64 > 0xFFFFFFFFull) {
+    if (opt.execution.selection.target != ecm_stage1::ExecutionTarget::Gpu ||
+        opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards ||
+        opt.execution.selection.gpu_param == 0 || !opt.identity.sigma_fixed) return false;
+    if (opt.identity.fixed_sigma64 > 0xFFFFFFFFull) {
         error = "GPU batch sigma exceeds 2^32-1";
         return true;
     }
-    if (curves != 0 && curves > 0x100000000ull - opt.fixed_sigma64) {
+    if (curves != 0 && curves > 0x100000000ull - opt.identity.fixed_sigma64) {
         error = "GPU batch sigma + curves must be <= 2^32";
         return true;
     }
@@ -1008,10 +887,10 @@ static int edwards_checkpoint_progress(void *ctx, const edwards_checkpoint_t *cu
     edwards_atkin_morain(d, Px, Py, c->sigma, c->N);
 
     ecm_save_common cm;
-    cm.k = c->opt->handoff_k;
-    cm.b = c->opt->handoff_b;
-    cm.n = c->opt->handoff_n;
-    cm.c = c->opt->handoff_c;
+    cm.k = c->opt->identity.handoff_k;
+    cm.b = c->opt->identity.handoff_b;
+    cm.n = c->opt->identity.handoff_n;
+    cm.c = c->opt->identity.handoff_c;
     cm.curve = 1;
     cm.B1 = c->B1;
     cm.B2 = c->B2;
@@ -1082,7 +961,7 @@ static int edwards_run_one_curve(mpz_srcptr N, mpz_srcptr s,
         ck.B1 = (uint64_t)B1;
         ck.B2 = (uint64_t)B2;
         ck.save_path = ckpt_path;
-        ck.interval_ms = (long long)opt.ckpt_ms;
+        ck.interval_ms = (long long)opt.persistence.ckpt_ms;
         ck.last_ms = stage1_now_ms();
         ck.N = N;
         ck.s = s;
@@ -1358,7 +1237,7 @@ static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
 
     /* --- checkpoint (与标量路径同一套写入器/路径/字段) --- */
     const long long now = stage1_now_ms();
-    const bool due = !pr->opt->tmp_dir.empty() && ((pr->interval_ms>0 && now-pr->last_ms>=pr->interval_ms) || ecm_stage1_stop_requested());
+    const bool due = !pr->opt->persistence.tmp_dir.empty() && ((pr->interval_ms>0 && now-pr->last_ms>=pr->interval_ms) || ecm_stage1_stop_requested());
     if (due && bits_done > 0) {
         if (mc) {
             mpz_t d, Px, Py, rx, ry, rz;
@@ -1368,10 +1247,10 @@ static int edwards_simd_progress(void *p, size_t bits_done, size_t bits_total,
                 const uint32_t i = pr->batch_first + k;
                 const std::string path = ecm_stage1_curve_record(i);
                 ecm_save_common cm;
-                cm.k = pr->opt->handoff_k;
-                cm.b = pr->opt->handoff_b;
-                cm.n = pr->opt->handoff_n;
-                cm.c = pr->opt->handoff_c;
+                cm.k = pr->opt->identity.handoff_k;
+                cm.b = pr->opt->identity.handoff_b;
+                cm.n = pr->opt->identity.handoff_n;
+                cm.c = pr->opt->identity.handoff_c;
                 cm.curve = 1;
                 cm.B1 = (uint64_t)pr->B1;
                 cm.B2 = (uint64_t)pr->B2;
@@ -1439,7 +1318,7 @@ static int edwards_run_batch_simd_impl(const Stage1ExecutionOptions &opt, mpz_sr
                                        double B1, double B2, uint32_t first, uint32_t count,
                                        const uint64_t *sigmas, mpz_t *factors, int *array_found,
                                        std::atomic<uint32_t> *done_ctr,std::string *save_lines) {
-    if(!opt.tmp_dir.empty()) {
+    if(!opt.persistence.tmp_dir.empty()) {
         bool completed=true;std::vector<int> statuses(count);
         for(uint32_t k=0;k<count;++k)if(!edwards_completed_read(first+k,sigmas[first+k],factors[first+k],statuses[k],save_lines[first+k])){completed=false;break;}
         if(completed) {
@@ -1458,7 +1337,7 @@ static int edwards_run_batch_simd_impl(const Stage1ExecutionOptions &opt, mpz_sr
     auto run_exceptional=[&]() {
         for(uint32_t k=0;k<count;++k) {
             const uint32_t i=first+k;
-            const auto path=opt.tmp_dir.empty()?std::string():ecm_stage1_curve_record(i);
+            const auto path=opt.persistence.tmp_dir.empty()?std::string():ecm_stage1_curve_record(i);
             const int rc=edwards_run_one_curve(N,s,opt,B1,B2,i,sigmas[i],opt.stage1_curves,factors[i],path,save_lines[i]);
             if(rc==2 || rc<0)return rc;
             array_found[i]=rc==1?ECM_FACTOR_FOUND_STEP1:ECM_NO_FACTOR_FOUND;
@@ -1475,12 +1354,12 @@ static int edwards_run_batch_simd_impl(const Stage1ExecutionOptions &opt, mpz_sr
     int w = edwards_get_naf_w();
     if (w < 3 || w > 12) w = 8;
     {
-        const int rc = ed_soa_init_ex(&ctx, N, w, to_ifma_field_mode(opt.selection.simd_reduction));
+        const int rc = ed_soa_init_ex(&ctx, N, w, to_ifma_field_mode(opt.execution.selection.simd_reduction));
         if (rc != 0) {
             /* 保持与原来完全相同的控制流 (先尝试建 ctx, 失败就返回 -1), 只把
                "SIMD stage-1 internal error" 这句含糊的日志换成能看出原因的话:
                reduction=mersenne-fold 要求 N = 2^k-1 (k>=64), 这是最常见的误用。 */
-            bool want_mers = (opt.selection.simd_reduction == ecm_stage1::SimdReduction::MersenneFold);
+            bool want_mers = (opt.execution.selection.simd_reduction == ecm_stage1::SimdReduction::MersenneFold);
             if (want_mers) {
                 mpz_t t;
                 mpz_init(t);
@@ -1532,7 +1411,7 @@ static int edwards_run_batch_simd_impl(const Stage1ExecutionOptions &opt, mpz_sr
     pr.B2 = B2;
     pr.sigmas = sigmas;
     pr.last_ms = stage1_now_ms();
-    pr.interval_ms = (long long)opt.ckpt_ms;
+    pr.interval_ms = (long long)opt.persistence.ckpt_ms;
     pr.mc = &ctx.mc;
     /* ---- resume: 一批 8 条 lane 必须共用恢复点, 所以仅当**所有** lane 都有有效检查点
        且 bitnum 完全相同时才续跑 (这正是"整批一起被中止、一起落盘"的常态); 否则从头跑。 ---- */
@@ -1589,7 +1468,7 @@ static int edwards_run_batch_simd_impl(const Stage1ExecutionOptions &opt, mpz_sr
                            i, (unsigned long long)sigmas[i]);
         }
         if(!edwards_capture_save(save_lines[i],N,sigmas[i],uint64_t(B1),Qx[k],Qz[k],fac[k],array_found[i]==ECM_FACTOR_FOUND_STEP1))rc=ECM_ERROR;
-        if(rc==0 && !opt.tmp_dir.empty() && !edwards_completed_write(i,sigmas[i],factors[i],array_found[i]==ECM_FACTOR_FOUND_STEP1?1:0,save_lines[i]))rc=ECM_ERROR;
+        if(rc==0 && !opt.persistence.tmp_dir.empty() && !edwards_completed_write(i,sigmas[i],factors[i],array_found[i]==ECM_FACTOR_FOUND_STEP1?1:0,save_lines[i]))rc=ECM_ERROR;
     }
     for (int k = 0; k < 8; k++) mpz_clears(Qx[k], Qz[k], fac[k], NULL);
     ed_soa_clear(&ctx);
@@ -1604,7 +1483,7 @@ static int edwards_run_batch_simd_impl(const Stage1ExecutionOptions &opt, mpz_sr
 }
 
 static void edwards_worker(EdwardsWorkerCtx *ctx) {
-    const int use_simd = (ctx->opt->selection.cpu_implementation != ecm_stage1::CpuImplementation::GmpScalar) && ctx->simd_ok;
+    const int use_simd = (ctx->opt->execution.selection.cpu_implementation != ecm_stage1::CpuImplementation::GmpScalar) && ctx->simd_ok;
     for (;;) {
         if (ecm_stage1_stop_requested()) { ctx->aborted->store(1, std::memory_order_relaxed); break; }
         uint32_t i, n;
@@ -1641,7 +1520,7 @@ static void edwards_worker(EdwardsWorkerCtx *ctx) {
                 ctx->array_found[i] = ECM_FACTOR_FOUND_STEP1;
                 if(!stage1_publish_factor(*ctx->opt,ctx->N,uint64_t(ctx->B1),sigma,ctx->factors[i])){ctx->aborted->store(1);break;}
                 std::lock_guard<std::mutex> lk(g_stage1_out_mutex);
-                if (ctx->opt->verbose) {
+                if (ctx->opt->execution.verbose) {
                     std::cout << "  curve " << i << " sigma=" << sigma
                               << " -> factor found" << std::endl;
                 } else {
@@ -1762,12 +1641,12 @@ static void apply_thread_affinity(const std::vector<unsigned> &cpus, uint32_t t)
 static void apply_thread_affinity(const std::vector<unsigned> &, uint32_t) {}
 #endif
 
-// curves == 1 or opt.stage1_threads == 1 -> 顺序执行 (与历史行为一致);
+// curves == 1 or opt.execution.stage1_threads == 1 -> 顺序执行 (与历史行为一致);
 // 否则按曲线并行 (每线程独立曲线, 动态取号), 吞吐随核数线性提升.
 static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                               const std::string &savefilename, bool saveappend,
                               const std::string &n_expr,
-                              Stage1ExecutionOptions &opt, Stage1TaskResult *out) {
+                              Stage1ExecutionOptions &opt, LegacyStage1Result *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->publish_failed = false;
@@ -1784,9 +1663,9 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
     }
 
     // NAF 窗口 (字典大小 2^(w-2)); 0 = 保持 ecm_edwards_cpu 的默认值.
-    if (opt.naf_w >= 2) {
-        edwards_set_naf_w(opt.naf_w);
-    } else if (opt.naf_w != 0) {
+    if (opt.execution.naf_w >= 2) {
+        edwards_set_naf_w(opt.execution.naf_w);
+    } else if (opt.execution.naf_w != 0) {
         std::cerr << "naf_w must be 0 (default) or >= 2" << std::endl;
         return ECM_ERROR;
     }
@@ -1810,10 +1689,10 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         array_found[i] = ECM_NO_FACTOR_FOUND;
     }
 
-    const bool use_ckpt = !opt.tmp_dir.empty();
+    const bool use_ckpt = !opt.persistence.tmp_dir.empty();
     if (use_ckpt) {
-        if (!ensure_dir(opt.tmp_dir)) {
-            std::cerr << "ERROR: cannot create tmp_dir: " << opt.tmp_dir << std::endl;
+        if (!ensure_dir(opt.persistence.tmp_dir)) {
+            std::cerr << "ERROR: cannot create tmp_dir: " << opt.persistence.tmp_dir << std::endl;
             mpz_clear(s);
             for (uint32_t j = 0; j < curves; j++) mpz_clear(factors[j]);
             free(factors);
@@ -1831,11 +1710,11 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         // otherwise a fresh Prime95-style random sigma per curve -- 但若该曲线已有合格的
         // .ckpt 就**采用存档里的 sigma**（存档覆盖参数）。否则每轮都随机出新的 sigma,
         // 与存档永久不匹配, 自动续跑永远不会发生（这正是"不会自动从 saves/ 续跑"的根因）。
-        if (opt.sigma_fixed) {
-            sigmas[i] = ecm_stage1_batch_sigma(i,opt.fixed_sigma64 + i);
+        if (opt.identity.sigma_fixed) {
+            sigmas[i] = ecm_stage1_batch_sigma(i,opt.identity.fixed_sigma64 + i);
         } else {
             sigmas[i] = ecm_stage1_batch_sigma(i,random_sigma_u64());
-            if (!opt.tmp_dir.empty()) {
+            if (!opt.persistence.tmp_dir.empty()) {
                 const std::string cp = ecm_stage1_curve_record(i);
                 ecm_save_common rcm;
                 uint64_t rsp; uint32_t rebs, rbn, rds;
@@ -1864,7 +1743,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         }
     }
 
-    uint32_t nthreads = opt.stage1_threads;
+    uint32_t nthreads = opt.execution.stage1_threads;
     if (nthreads == 0) nthreads = edwards_default_threads(curves);
     if (nthreads > curves) nthreads = curves;
     if (nthreads < 1) nthreads = 1;
@@ -1873,7 +1752,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
               << " (" << curves << " Edwards curves, CPU";
     if (nthreads > 1) std::cout << ", " << nthreads << " threads";
     std::cout << ")";
-    if (use_ckpt) std::cout << " [saves -> " << opt.tmp_dir << "]";
+    if (use_ckpt) std::cout << " [saves -> " << opt.persistence.tmp_dir << "]";
     std::cout << std::endl;
 
     auto *bar = stage1_bar_create();
@@ -1888,7 +1767,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
             if (rc == 1) {
                 array_found[i] = ECM_FACTOR_FOUND_STEP1;
                 if(!stage1_publish_factor(opt,N,uint64_t(B1),sigmas[i],factors[i])){aborted=true;break;}
-                if (opt.verbose) {
+                if (opt.execution.verbose) {
                     std::cout << "  curve " << i << " sigma=" << sigmas[i]
                               << " -> factor found" << std::endl;
                 }
@@ -1911,15 +1790,15 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         std::atomic<uint32_t> &done_ctr = g_stage1_done;
         {
             const int isa = driver_simd_isa_ok();
-            if (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd && !isa) {
+            if (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd && !isa) {
                 ecm_ts_fprintf(stderr,
                                "ERROR: --impl simd requested but this CPU lacks "
                                "AVX512-F/DQ/IFMA. Refusing to fall back silently; use "
                                "--impl auto or scalar.\n");
                 return -1;
             }
-            wctx.simd_ok = (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd) ? 1
-                         : (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::Auto) ? (isa && curves >= 8) : 0;
+            wctx.simd_ok = (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd) ? 1
+                         : (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::Auto) ? (isa && curves >= 8) : 0;
             wctx.done_ctr = &done_ctr;
             char sbuf[160];
             snprintf(sbuf, sizeof(sbuf),
@@ -1940,14 +1819,14 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
                                batches, busy, nthreads,
                                busy < nthreads ? "  [raise --gpucurves for more parallelism]" : "");
             }
-            if (!opt.affinity_cpus.empty()) {
+            if (!opt.execution.affinity_cpus.empty()) {
                 std::string a;
-                for (size_t i = 0; i < opt.affinity_cpus.size(); i++) {
+                for (size_t i = 0; i < opt.execution.affinity_cpus.size(); i++) {
                     if (i) a += ",";
-                    a += std::to_string(opt.affinity_cpus[i]);
+                    a += std::to_string(opt.execution.affinity_cpus[i]);
                 }
                 ecm_ts_fprintf(stdout, "affinity        : %s (worker t -> cpu[%s][t %% %zu])\n",
-                               a.c_str(), a.c_str(), opt.affinity_cpus.size());
+                               a.c_str(), a.c_str(), opt.execution.affinity_cpus.size());
             } else {
                 ecm_ts_fprintf(stdout, "affinity        : none (OS scheduler)\n");
             }
@@ -1974,7 +1853,7 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         pool.reserve(nthreads);
         for (uint32_t t = 0; t < nthreads; t++)
             pool.emplace_back([&wctx, t]() {
-                apply_thread_affinity(wctx.opt->affinity_cpus, t);
+                apply_thread_affinity(wctx.opt->execution.affinity_cpus, t);
                 edwards_worker(&wctx);
             });
         for (auto &th : pool) th.join();
@@ -1993,8 +1872,8 @@ static int run_edwards_stage1(const mpz_t N, double B1, double B2, uint32_t curv
         return ECM_ERROR;
     }
 
-    const auto stem=mont_format_save_name(opt.save_name_pattern,N,B1,&opt);
-    const auto save=savefilename.empty()?(opt.tmp_dir.empty()?std::string{}:opt.tmp_dir+"/")+stem:savefilename;
+    const auto stem=mont_format_save_name(opt.persistence.save_name_pattern,N,B1,&opt);
+    const auto save=savefilename.empty()?(opt.persistence.tmp_dir.empty()?std::string{}:opt.persistence.tmp_dir+"/")+stem:savefilename;
     std::string lines;for(const auto &line:save_lines)lines+=line;
     if(!ecm_edwards::publish_save(save,lines,saveappend)) {
         out->publish_failed=true;out->ret=ECM_ERROR;
@@ -2045,9 +1924,9 @@ static std::string mont_format_save_name(const std::string &pattern, const mpz_t
         mpz_clear(t);
     }
     bool mersenne=false;
-    if(options && options->target_kbnc) {
-        n_str=std::to_string(options->handoff_n);
-        mersenne=options->handoff_k_str=="1" && options->handoff_b==2 && options->handoff_c==-1;
+    if(options && options->identity.target_kbnc) {
+        n_str=std::to_string(options->identity.handoff_n);
+        mersenne=options->identity.handoff_k_str=="1" && options->identity.handoff_b==2 && options->identity.handoff_c==-1;
     } else {
         ecm_edwards::Integer plus;mpz_add_ui(plus.v,N,1);mersenne=mpz_popcount(plus.v)==1;
     }
@@ -2186,7 +2065,7 @@ static int mont_progress_cb_scalar(void *p, const mont_ladder_state_t *st)
 static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
-                           Stage1ExecutionOptions &opt, Stage1TaskResult *out) {
+                           Stage1ExecutionOptions &opt, LegacyStage1Result *out) {
     out->ret = ECM_ERROR;
     out->prepare_failed = false;
     out->curves = curves;
@@ -2205,7 +2084,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
 
     mpz_t s;
     mpz_init(s);
-    const int torsion = opt.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12 : 1;
+    const int torsion = opt.execution.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12 : 1;
     std::string s_status;
     const size_t s_bits = mont_build_s(s, (uint64_t)B1, (uint64_t)torsion, &s_status);
     if (s_bits == 0) {
@@ -2220,15 +2099,15 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     }
 
     const bool isa = driver_simd_isa_ok();
-    if (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd && !isa) {
+    if (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd && !isa) {
         ecm_ts_fprintf(stderr,
                        "ERROR: --impl simd requested but this CPU lacks "
                        "AVX512-F/DQ/IFMA. Use auto or scalar.\n");
         mpz_clear(s);
         return ECM_ERROR;
     }
-    const bool use_simd = (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd) ? true
-                        : (opt.selection.cpu_implementation == ecm_stage1::CpuImplementation::GmpScalar) ? false
+    const bool use_simd = (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::IfmaSimd) ? true
+                        : (opt.execution.selection.cpu_implementation == ecm_stage1::CpuImplementation::GmpScalar) ? false
                         : (isa && curves >= 2);
     ecm_ts_fprintf(stdout, "curve model     : montgomery (Suyama sigma, %s, torsion=%d)\n",
                    use_simd ? "AVX512-IFMA 8-lane batch" : "scalar mpn", torsion);
@@ -2253,12 +2132,12 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
        One independently resumable record per curve in a shared batch file. The
        interval comes from ckpt_seconds / --ckpt; 0 = no autosave (Ctrl+C still
        checkpoints, which is what turns an interrupted run into a resumed one). */
-    const bool use_ckpt = !opt.tmp_dir.empty();
+    const bool use_ckpt = !opt.persistence.tmp_dir.empty();
     const std::string ckpt_stem = use_ckpt
-        ? (opt.tmp_dir + "/" + mont_save_stem(opt.save_name_pattern, N, B1))
+        ? (opt.persistence.tmp_dir + "/" + mont_save_stem(opt.persistence.save_name_pattern, N, B1))
         : std::string();
     const long long ckpt_interval_ms =
-        (opt.ckpt_ms > 0 && opt.ckpt_ms != ULONG_MAX) ? (long long)opt.ckpt_ms : -1;
+        (opt.persistence.ckpt_ms > 0 && opt.persistence.ckpt_ms != ULONG_MAX) ? (long long)opt.persistence.ckpt_ms : -1;
 
     /* per-curve results: the normalised x for misses, the factor for hits */
     std::vector<mpz_t> xs(curves);
@@ -2285,7 +2164,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     std::vector<uint64_t> sigmas(curves);
     std::atomic<int> checkpoint_failed(0);
     for (uint32_t i = 0; i < curves; i++) {
-        const uint64_t fixed_sigma = opt.fixed_sigma64 + i;
+        const uint64_t fixed_sigma = opt.identity.fixed_sigma64 + i;
         bool adopted = false;
         if (use_ckpt) {
             /* A checkpoint owns its curve's sigma.  Adopting it is what makes the
@@ -2297,7 +2176,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
             std::string why;
             if (mont_ckpt_read(mont_ckpt_path(ckpt_stem, i), N, B1, torsion, nbits, &ck, &why) &&
                 ck.curve == i &&
-                (!opt.sigma_fixed || ck.sigma == fixed_sigma)) {
+                (!opt.identity.sigma_fixed || ck.sigma == fixed_sigma)) {
                 sigmas[i] = ck.sigma;
                 adopted = true;
                 if (ck.status == MONT_CKPT_DONE) {
@@ -2321,7 +2200,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
             mont_ckpt_clear(&ck);
         }
         if (!adopted) {
-            sigmas[i] = ecm_stage1_batch_sigma(i,opt.sigma_fixed ? fixed_sigma : random_sigma_u64());
+            sigmas[i] = ecm_stage1_batch_sigma(i,opt.identity.sigma_fixed ? fixed_sigma : random_sigma_u64());
             if (use_ckpt) {
                 /* Seed record: pins the sigma before any ladder work happens, so a
                    run that is killed while this curve is still queued resumes the
@@ -2339,7 +2218,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
             }
         }
     }
-    if (opt.sigma_fixed && fixed_sigma_batch_exceeds_prime95_range(opt.fixed_sigma64, curves)) {
+    if (opt.identity.sigma_fixed && fixed_sigma_batch_exceeds_prime95_range(opt.identity.fixed_sigma64, curves)) {
         ecm_ts_fprintf(stderr,
             "WARNING: sigma >= 2^63; Prime95's ECMSTAGE2 reader (atoll) cannot read it.\n"
             "         Use gmp-ecm for stage 2 with these sigmas, or pass a smaller -sigma.\n");
@@ -2380,7 +2259,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         }
     }
     const uint32_t tasks = (uint32_t)task_list.size();
-    uint32_t nthreads = opt.stage1_threads ? opt.stage1_threads
+    uint32_t nthreads = opt.execution.stage1_threads ? opt.execution.stage1_threads
                                          : mont_default_threads(curves, use_simd);
     if (nthreads > tasks) nthreads = tasks;
     if (nthreads < 1) nthreads = 1;
@@ -2395,14 +2274,14 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
                        "  autosave %s\n",
                        ckpt_stem.c_str(), n_done_ck, n_inflight_ck, pending.size(), iv);
     }
-    if (!opt.affinity_cpus.empty()) {
+    if (!opt.execution.affinity_cpus.empty()) {
         std::string a;
-        for (size_t i = 0; i < opt.affinity_cpus.size(); i++) {
+        for (size_t i = 0; i < opt.execution.affinity_cpus.size(); i++) {
             if (i) a += ",";
-            a += std::to_string(opt.affinity_cpus[i]);
+            a += std::to_string(opt.execution.affinity_cpus[i]);
         }
         ecm_ts_fprintf(stdout, "affinity        : %s (worker t -> cpu[%s][t %% %zu])\n",
-                       a.c_str(), a.c_str(), opt.affinity_cpus.size());
+                       a.c_str(), a.c_str(), opt.execution.affinity_cpus.size());
     }
     fflush(stdout);
 
@@ -2421,7 +2300,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
     auto worker = [&]() {
         if (use_simd) {
             mont_soa_ctx_t ctx;                     /* per-thread scratch pool */
-            if (mont_soa_init(&ctx, N, to_ifma_field_mode(opt.selection.simd_reduction)) != 0) {
+            if (mont_soa_init(&ctx, N, to_ifma_field_mode(opt.execution.selection.simd_reduction)) != 0) {
                 init_failed.store(1);
                 return;
             }
@@ -2684,7 +2563,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         pool.reserve(nthreads);
         for (uint32_t t = 0; t < nthreads; t++)
             pool.emplace_back([&worker, &opt, t]() {
-                apply_thread_affinity(opt.affinity_cpus, t);
+                apply_thread_affinity(opt.execution.affinity_cpus, t);
                 worker();
             });
         for (auto &th : pool) th.join();
@@ -2709,7 +2588,7 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
         ecm_ts_fprintf(stdout,
                        "stage-1 paused (checkpoint saved under %s); rerun the same command "
                        "line to resume\n",
-                       opt.tmp_dir.c_str());
+                       opt.persistence.tmp_dir.c_str());
         mpz_clear(s);
         for (uint32_t i = 0; i < curves; i++) { mpz_clear(factors[i]); mpz_clear(xs[i]); }
         free(factors); free(array_found); free(hit);
@@ -2734,8 +2613,8 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
        CUDA/GPU convention: m{n}_{b1}.save */
     bool save_failed = false;
     if (use_ckpt || !savefilename.empty()) {
-        const std::string fname = mont_format_save_name(opt.save_name_pattern, N, B1,&opt);
-        const std::string path = savefilename.empty()?opt.tmp_dir+"/"+fname:
+        const std::string fname = mont_format_save_name(opt.persistence.save_name_pattern, N, B1,&opt);
+        const std::string path = savefilename.empty()?opt.persistence.tmp_dir+"/"+fname:
             opencl_ecm_resolve_data_path_buf(savefilename.c_str());
         if(!savefilename.empty() && !opencl_ecm_check_save_file_writable(path,saveappend))save_failed=true;
         if(!save_failed)save_failed = !ecm_append_save_lines_mont(
@@ -2780,20 +2659,20 @@ static int run_mont_stage1(const mpz_t N, double B1, double B2, uint32_t curves,
 static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
                            const std::string &savefilename, bool saveappend,
                            const std::string &n_expr,
-                           Stage1ExecutionOptions &opt, Stage1TaskResult *out) {
-    ecm_stage1_set_backup_limit(opt.ckpt_backups);
+                           Stage1ExecutionOptions &opt, LegacyStage1Result *out) {
+    ecm_stage1_set_backup_limit(opt.persistence.ckpt_backups);
 #if ECM_HAS_CUDA_EDWARDS
-    if (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu &&
-        opt.selection.curve == ecm_stage1::CurveModel::Edwards)
+    if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu &&
+        opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards)
         return run_edwards_gpu_stage1(N,B1,B2,curves,savefilename,saveappend,opt,out);
 #endif
-    if (opt.selection.target == ecm_stage1::ExecutionTarget::Cpu &&
-        opt.selection.curve == ecm_stage1::CurveModel::Montgomery) {
+    if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Cpu &&
+        opt.execution.selection.curve == ecm_stage1::CurveModel::Montgomery) {
         return run_mont_stage1(N, B1, B2, curves, savefilename, saveappend,
                                n_expr, opt, out);
     }
-    if (opt.selection.target == ecm_stage1::ExecutionTarget::Cpu &&
-        opt.selection.curve == ecm_stage1::CurveModel::Edwards) {
+    if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Cpu &&
+        opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards) {
         return run_edwards_stage1(N, B1, B2, curves, savefilename, saveappend,
                                   n_expr, opt, out);
     }
@@ -2815,36 +2694,36 @@ static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
     ecm_init(params);
     params->gpu = 1;
     params->gpu_number_of_curves = curves;
-    params->gpu_checkpoint_interval_ms = opt.ckpt_ms;
-    params->gpu_param = opt.selection.gpu_param;
-    if (!opt.gpu_mul_path.empty()) {
-        strncpy(params->gpu_mul_path, opt.gpu_mul_path.c_str(), sizeof(params->gpu_mul_path) - 1u);
+    params->gpu_checkpoint_interval_ms = opt.persistence.ckpt_ms;
+    params->gpu_param = opt.execution.selection.gpu_param;
+    if (!opt.execution.gpu_mul_path.empty()) {
+        strncpy(params->gpu_mul_path, opt.execution.gpu_mul_path.c_str(), sizeof(params->gpu_mul_path) - 1u);
         params->gpu_mul_path[sizeof(params->gpu_mul_path) - 1u] = '\0';
     }
-    if (!opt.gpu_sqr_path.empty()) {
-        strncpy(params->gpu_sqr_path, opt.gpu_sqr_path.c_str(), sizeof(params->gpu_sqr_path) - 1u);
+    if (!opt.execution.gpu_sqr_path.empty()) {
+        strncpy(params->gpu_sqr_path, opt.execution.gpu_sqr_path.c_str(), sizeof(params->gpu_sqr_path) - 1u);
         params->gpu_sqr_path[sizeof(params->gpu_sqr_path) - 1u] = '\0';
     }
-    if (!opt.gpu_add_path.empty()) {
-        strncpy(params->gpu_add_path, opt.gpu_add_path.c_str(), sizeof(params->gpu_add_path) - 1u);
+    if (!opt.execution.gpu_add_path.empty()) {
+        strncpy(params->gpu_add_path, opt.execution.gpu_add_path.c_str(), sizeof(params->gpu_add_path) - 1u);
         params->gpu_add_path[sizeof(params->gpu_add_path) - 1u] = '\0';
     }
-    if (!opt.gpu_sub_path.empty()) {
-        strncpy(params->gpu_sub_path, opt.gpu_sub_path.c_str(), sizeof(params->gpu_sub_path) - 1u);
+    if (!opt.execution.gpu_sub_path.empty()) {
+        strncpy(params->gpu_sub_path, opt.execution.gpu_sub_path.c_str(), sizeof(params->gpu_sub_path) - 1u);
         params->gpu_sub_path[sizeof(params->gpu_sub_path) - 1u] = '\0';
     }
-    if (!opt.gpu_special_mult_path.empty()) {
-        strncpy(params->gpu_special_mult_path, opt.gpu_special_mult_path.c_str(),
+    if (!opt.execution.gpu_special_mult_path.empty()) {
+        strncpy(params->gpu_special_mult_path, opt.execution.gpu_special_mult_path.c_str(),
                 sizeof(params->gpu_special_mult_path) - 1u);
         params->gpu_special_mult_path[sizeof(params->gpu_special_mult_path) - 1u] = '\0';
     }
-    params->verbose = opt.verbose ? 1 : 0;
+    params->verbose = opt.execution.verbose ? 1 : 0;
     params->param = ECM_PARAM_BATCH_32BITS_D;
 
     mpz_t batch_s;
     mpz_init(batch_s);
     if (!compute_batch_s(batch_s, B1,
-                         opt.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12u : 1u)) {
+                         opt.execution.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12u : 1u)) {
         std::cerr << "Failed to compute batch_s" << std::endl;
         mpz_clear(batch_s);
         ecm_clear(params);
@@ -2856,7 +2735,7 @@ static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
         const char *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO");
         if(std::string(ecm_backend_name())=="CUDA/CGBN" && (!algorithm || !*algorithm || std::string(algorithm)=="ladder"))
             ecm_stage1_import_legacy_gpu(N,batch_s,curves,uint32_t(params->gpu_param),
-                opt.sigma_fixed,opt.fixed_sigma64,[&](uint64_t sigma,uint32_t count){
+                opt.identity.sigma_fixed,opt.identity.fixed_sigma64,[&](uint64_t sigma,uint32_t count){
                     std::vector<uint64_t> sigmas(count);for(uint32_t i=0;i<count;++i)sigmas[i]=sigma+i;
                     return stage1_results_complete(opt,N,uint64_t(B1),false,unsigned(params->gpu_param),sigmas);
                 });
@@ -2864,7 +2743,7 @@ static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
 
     {
         const int prep = ecm_backend_prepare((size_t)mpz_sizeinbase(N, 2), params->verbose,
-                                             opt.device_index,
+                                             opt.execution.device_index,
                                              params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
                                              params->gpu_sqr_path[0] ? params->gpu_sqr_path : nullptr,
                                              params->gpu_add_path[0] ? params->gpu_add_path : nullptr,
@@ -2905,8 +2784,8 @@ static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
                        same 53-bit random generator there (Prime95's ECMSTAGE2 reader
                        only accepts sigma < 2^63, and random_sigma_u64() is < 2^53). */
     const bool gpu_param0 = (params->gpu_param == 0);
-    uint64_t firstsigma64 = opt.sigma_fixed
-        ? opt.fixed_sigma64
+    uint64_t firstsigma64 = opt.identity.sigma_fixed
+        ? opt.identity.fixed_sigma64
         : (gpu_param0 ? random_sigma_u64() : (uint64_t)gpu_pick_random_sigma(curves));
     firstsigma64=ecm_stage1_batch_sigma(0,firstsigma64);
     const uint32_t firstsigma = (uint32_t)(firstsigma64 & 0xFFFFFFFFull);
@@ -2937,7 +2816,7 @@ static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
                                        &firstsigma64, params->gpu_checkpoint_interval_ms,
                                        &gputime, params->verbose, params->gpu_param,
                                        (uint64_t)std::floor(B1 + 0.0001),
-                                       opt.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12u : 1u,
+                                       opt.execution.selection.scalar_construction == ecm_stage1::ScalarConstruction::PrimePowerLcmTimes12 ? 12u : 1u,
                                        params->gpu_mul_path[0] ? params->gpu_mul_path : nullptr,
                                        params->gpu_sqr_path[0] ? params->gpu_sqr_path : nullptr,
                                        params->gpu_add_path[0] ? params->gpu_add_path : nullptr,
@@ -3020,9 +2899,9 @@ static int run_stage1_impl(const mpz_t N, double B1, double B2, uint32_t curves,
 
 static void stage1_result_settings(Stage1RunOptions &opt,const EcmQueueConfig &cfg,
                                    const std::string &base,int worker) {
-    opt.result_user=cfg.result_user;opt.result_computer=cfg.result_computer;
-    opt.results_file=(std::filesystem::path(base)/(cfg.has_results?cfg.results:ecm_config::worker_file(cfg.results,worker))).string();
-    opt.submission_file=(std::filesystem::path(base)/(cfg.has_submission?cfg.submission:ecm_config::worker_file(cfg.submission,worker))).string();
+    opt.identity.result_user=cfg.result_user;opt.identity.result_computer=cfg.result_computer;
+    opt.persistence.results_file=(std::filesystem::path(base)/(cfg.has_results?cfg.results:ecm_config::worker_file(cfg.results,worker))).string();
+    opt.persistence.submission_file=(std::filesystem::path(base)/(cfg.has_submission?cfg.submission:ecm_config::worker_file(cfg.submission,worker))).string();
 }
 static const std::string &stage1_build_identity() {
     static const std::string identity=[] {
@@ -3032,126 +2911,9 @@ static const std::string &stage1_build_identity() {
     }();return identity;
 }
 
-static ecm_results::Submission stage1_submission(const Stage1RunOptions &opt,const mpz_t N,uint64_t b1) {
-    ecm_results::Submission r;r.b1=b1;r.b2=b1;r.stage1_only=true;
-    r.edwards=opt.selection.curve==ecm_stage1::CurveModel::Edwards;
-    r.param=opt.selection.target==ecm_stage1::ExecutionTarget::Gpu?opt.selection.gpu_param:0;
-    r.user=opt.result_user;r.computer=opt.result_computer;r.aid=opt.result_aid;
-    if(opt.target_kbnc) {
-        r.kbnc=true;r.k=opt.handoff_k_str;r.b=opt.handoff_b;r.exponent=opt.handoff_n;r.c=opt.handoff_c;
-        std::istringstream known(opt.handoff_factors);std::string f;
-        while(std::getline(known,f,','))if(!f.empty())r.known.push_back(f);
-    }
-    // Validate complete metadata against the actual modulus before running.
-    (void)ecm_results::target_exponent(r,N);return r;
-}
-
-static bool stage1_publish_factor(const Stage1RunOptions &opt,mpz_srcptr n,uint64_t b1,uint64_t sigma,mpz_srcptr factor) {
-    static std::mutex mutex;std::lock_guard<std::mutex> lock(mutex);
-    try {
-        auto r=stage1_submission(opt,n,b1);r.stage=1;r.sigma=sigma;r.when=ecm_results::utc_timestamp();
-        r.factors.push_back(ecm_results::decimal(factor));ecm_results::publish_submission(opt.submission_file,r,n);return true;
-    } catch(const std::exception &e){ecm_ts_fprintf(stderr,"ERROR: immediate Stage1 factor publication: %s\n",e.what());return false;}
-}
-
-// Owns batch state/lock lifetime only; task sequencing stays in run_stage1_task.
-class Stage1TaskSession {
-    bool active_ = false;
-public:
-    Stage1TaskSession() = default;
-    Stage1TaskSession(const Stage1TaskSession &) = delete;
-    Stage1TaskSession &operator=(const Stage1TaskSession &) = delete;
-    ~Stage1TaskSession() { close(false); }
-    void begin(const std::string &identity,uint32_t curves,bool fixed,uint64_t sigma) {
-        active_=true; // begin_batch may acquire its lock before throwing.
-        ecm_stage1_begin_batch(identity,curves,fixed,sigma);
-    }
-    void close(bool completed) {
-        if(!active_)return;
-        ecm_stage1_end_batch(completed);
-        active_=false;
-    }
-};
-
-static int run_stage1_task(const mpz_t N,double B1,double B2,uint32_t curves,
-                           const std::string &savefilename,bool saveappend,const std::string &n_expr,
-                           const Stage1RunOptions &options,Stage1TaskResult *out) {
-    Stage1RunOptions opt=options;*out=Stage1TaskResult{};
-    Stage1TaskSession session;
-    try {
-        if(!opt.target_kbnc) {
-            // Direct CLI expressions retain k*b^n+c for naming and reporting.
-            std::smatch m;
-            const std::regex form(R"(^\s*\(?\s*(?:(\d+)\s*\*\s*)?(\d+)\s*\^\s*(\d+)\s*([+-])\s*(\d+)\s*\)?\s*$)");
-            if(std::regex_match(n_expr,m,form)) {
-                const auto b=std::stoull(m[2]),n=std::stoull(m[3]);const auto c=std::stoll(m[5])*(m[4]=="-"?-1:1);
-                if(b<=UINT32_MAX && n<=UINT32_MAX && c>=INT32_MIN && c<=INT32_MAX) {
-                    opt.target_kbnc=true;opt.handoff_k_str=m[1].matched?m[1].str():"1";
-                    opt.handoff_b=static_cast<uint32_t>(b);opt.handoff_n=static_cast<uint32_t>(n);opt.handoff_c=static_cast<int32_t>(c);
-                }
-            }
-        }
-        const auto base=stage1_submission(opt,N,uint64_t(B1));
-        (void)ecm_results::submission_json(base,N);
-        const auto same=[](const std::string &a,const std::string &b){if(a.empty() || b.empty())return false;std::error_code ec;
-            return std::filesystem::absolute(a).lexically_normal()==std::filesystem::absolute(b).lexically_normal() || std::filesystem::equivalent(a,b,ec);};
-        if(same(opt.results_file,opt.submission_file) || same(savefilename,opt.results_file) || same(savefilename,opt.submission_file))
-            throw std::runtime_error("Stage1 save, internal results and submission paths must differ");
-        for(const auto &file:{opt.results_file,opt.submission_file}) {
-            if(file.empty())throw std::runtime_error("empty Stage1 result output path");
-            if(std::filesystem::exists(file) && !ecm_results::has_result_ledger(file))
-                throw std::runtime_error("result output has no owned ledger; select a fresh Stage1 result path");
-        }
-        ecm_edwards::Integer plus;mpz_add_ui(plus.v,N,1);
-        const auto exponent=opt.target_kbnc?opt.handoff_n:(mpz_popcount(plus.v)==1?mpz_scan1(plus.v,0):0);
-        const auto name=std::string(base.edwards?".e":".m"+std::to_string(base.param))+"_s1_"+
-            (exponent?"m"+std::to_string(exponent):"bit"+std::to_string(mpz_sizeinbase(N,2)))+"_"+std::to_string(uint64_t(B1))+".ckpt";
-        const auto path=opt.tmp_dir.empty()?std::string{}:normalize_path_local(std::filesystem::path(opt.tmp_dir)/name);
-        if(!path.empty())std::filesystem::create_directories(opt.tmp_dir);
-        ecm_stage1_set_backup_limit(opt.ckpt_backups);ecm_stage1_set_checkpoint_path(path);
-        {
-            auto identity=ecm_edwards::hex(N)+"|"+(base.edwards?"ed":"mont"+std::to_string(base.param))+"|"+
-                std::to_string(uint64_t(B1))+"|"+std::to_string(int(opt.selection.scalar_construction))+"|"+
-                ecm_stage1::execution_target_name(opt.selection.target);
-            if(opt.selection.target==ecm_stage1::ExecutionTarget::Cpu)
-                identity+="|"+std::to_string(opt.naf_w?opt.naf_w:edwards_get_naf_w())+"|"+std::to_string(int(opt.selection.cpu_implementation));
-            else if(!base.edwards) {
-                const char *algorithm=std::getenv("ECM_GPU_STAGE1_ALGO");
-                identity+="|"+std::string(algorithm && *algorithm?algorithm:"ladder");
-            }
-            session.begin(identity,curves,opt.sigma_fixed,opt.fixed_sigma64);
-        }
-        stage1_copy_save_history(opt,savefilename);
-        const auto begin=std::chrono::steady_clock::now();
-        Stage1ExecutionOptions execution(opt);
-        const int rc=run_stage1_impl(N,B1,B2,curves,savefilename,saveappend,n_expr,execution,out);
-        if(rc==ECM_ERROR){if(!ecm_stage1_stop_requested() && !out->publish_failed)out->prepare_failed=true;session.close(false);return rc;}
-        if(!out->sigmas || !out->factors || !out->array_found)throw std::runtime_error("Stage1 completed without per-curve result identity");
-        const auto seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
-        std::vector<std::pair<std::string,std::string>> internal_records;
-        std::string task_identity=ecm_edwards::hex(N)+"|"+std::to_string(base.b1)+(base.edwards?"ed":"mont"+std::to_string(base.param));
-        for(uint32_t i=0;i<out->curves;++i)task_identity+="|"+std::to_string(out->sigmas[i]);
-        const auto publication_task=std::to_string(ecm_edwards::hash(task_identity));
-        for(uint32_t i=0;i<out->curves;++i) {
-            auto r=base;r.publication_task=publication_task;r.sigma=out->sigmas[i];r.when=ecm_results::utc_timestamp();
-            if(out->array_found[i]!=ECM_NO_FACTOR_FOUND){r.stage=1;r.factors.push_back(ecm_results::decimal(out->factors[i]));}
-            (void)ecm_results::submission_json(r,N);
-            const auto key=ecm_edwards::hex(N)+"|"+(r.edwards?"ed":"mont"+std::to_string(r.param))+"|"+std::to_string(r.sigma)+"|"+std::to_string(r.b1)+"|stage1";
-            std::ostringstream extra;extra<<",\"stage1-engine\":{\"curve\":"<<i<<",\"target\":"<<ecm_results::quoted(ecm_stage1::execution_target_name(opt.selection.target))
-                <<",\"batch-seconds\":"<<seconds<<",\"coverage\":\"B1\"}";
-            internal_records.emplace_back(key,ecm_results::internal_json(r,N,0,stage1_build_identity(),extra.str()));
-            ecm_results::publish_submission(opt.submission_file,r,N,false);
-        }
-        ecm_results::publish_internal_batch(opt.results_file,internal_records);
-        ecm_results::seal_submissions(opt.submission_file,1,publication_task);
-        session.close(true);
-        ecm_ts_fprintf(stdout,"Stage1 results: internal=%s submission=%s\n",opt.results_file.c_str(),opt.submission_file.c_str());
-        return out->ret;
-    } catch(const std::exception &e) {
-        out->publish_failed=out->factors!=nullptr;out->prepare_failed=!out->publish_failed;out->ret=ECM_ERROR;
-        session.close(false);ecm_ts_fprintf(stderr,"ERROR: Stage1: %s\n",e.what());return ECM_ERROR;
-    }
-}
+// Application assembly of the existing execution Adapter; no registry/select layer.
+static const ecm_stage1::TaskDependencies stage1_tasks{
+    run_stage1_impl,stage1_build_identity,edwards_get_naf_w};
 
 // Rebuild the original N expression for the save-file N= field.
 static std::string build_n_expr(const std::string &k, const std::string &b,
@@ -3261,27 +3023,27 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
                           const std::string &stage2_line={},
                           const std::string &auto_stage2_line={}) {
     Stage1RunOptions opt = base_opt;
-    opt.result_aid=aid;
+    opt.identity.result_aid=aid;
     if (sigma_fixed) {
-        opt.sigma_fixed = true;
-        opt.fixed_sigma64 = sigma;
+        opt.identity.sigma_fixed = true;
+        opt.identity.fixed_sigma64 = sigma;
     }
     {
         std::string input_error;
-        if (stage1_selection_error(opt.selection,input_error) || stage1_task_error(opt, curves, input_error)) {
+        if (stage1_selection_error(opt.execution.selection,input_error) || stage1_task_error(opt, curves, input_error)) {
             ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged\n", input_error.c_str());
             return false;
         }
     }
 
-    Stage1TaskResult result;
-    run_stage1_task(N, B1, B2, curves, save_name, /*saveappend=*/true, n_expr, opt, &result);
+    auto result=run_stage1_task({N,B1,B2,curves,save_name,/*append_save=*/true,n_expr,opt},stage1_tasks);
 
-    const bool has_factors = (result.factors != nullptr);
+    const bool has_factors = result.has_factors();
 
-    if (result.prepare_failed || result.publish_failed) {
+    if (result.failure_source()==Stage1FailureSource::Preparation ||
+        result.failure_source()==Stage1FailureSource::Publication) {
         ecm_ts_fprintf(stderr, "FATAL: %s; worktodo unchanged.\n",
-                       result.publish_failed ? "Stage1 save/result publication failed" :
+                       result.failure_source()==Stage1FailureSource::Publication ? "Stage1 save/result publication failed" :
                                                "backend prepare failed");
         return false;
     }
@@ -3292,21 +3054,21 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
        incompatible hit line ("curve i sigma=M -> factor found" from the CPU paths,
        "GPU: factor ... with curve c (sigma p:s)" from the GPU ones). Fields: the
        factor, the curve index inside this batch, the EXACT per-curve sigma
-       (result.sigmas, when the path knows it), the parametrization, which engine ran,
+       (result.sigma(), when the path knows it), the parametrization, which engine ran,
        and the save-file name (generated for GPU ECM=/ECM2= tasks). */
-    const char *curve_token = ecm_stage1::curve_model_name(opt.selection.curve);
-    const char *target_token = ecm_stage1::execution_target_name(opt.selection.target);
+    const char *curve_token = ecm_stage1::curve_model_name(opt.execution.selection.curve);
+    const char *target_token = ecm_stage1::execution_target_name(opt.execution.selection.target);
     if (has_factors) {
-        for (uint32_t i = 0; i < result.curves; ++i) {
-            if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
-                char *fs = mpz_get_str(nullptr, 10, result.factors[i]);
+        for (uint32_t i = 0; i < result.curves(); ++i) {
+            if (result.found(i) != ECM_NO_FACTOR_FOUND) {
+                char *fs = mpz_get_str(nullptr, 10, result.factor(i));
                 std::cout << "factor[" << i << "]=" << (fs ? fs : "?") << " curve=" << i;
-                if (result.sigmas != nullptr) {
-                    std::cout << " sigma=" << result.sigmas[i];
+                if (result.has_sigmas()) {
+                    std::cout << " sigma=" << result.sigma(i);
                 }
-                if(opt.selection.curve==ecm_stage1::CurveModel::Montgomery)
-                    std::cout << " param=" << (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu
-                                                   ? opt.selection.gpu_param : 0);
+                if(opt.execution.selection.curve==ecm_stage1::CurveModel::Montgomery)
+                    std::cout << " param=" << (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu
+                                                   ? opt.execution.selection.gpu_param : 0);
                 std::cout << " curve_model=" << curve_token << " execution_target=" << target_token
                           << " save=" << save_name << "\n";
                 free(fs);
@@ -3320,13 +3082,13 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     }
 
 
-    if (result.ret == ECM_ERROR && ecm_stage1_stop_requested()) {
+    if (result.status()==Stage1TaskStatus::Stopped) {
         ecm_ts_fprintf(stdout, "STOP: Stage1 interrupted; worktodo unchanged: %s\n",
                        line.c_str());
         return false;
     }
 
-    if (result.ret == ECM_ERROR) {
+    if (result.status()==Stage1TaskStatus::Failed) {
         ecm_ts_fprintf(stderr, "ERROR: stage1 failed for task: %s\n", line.c_str());
         // Marking the line is what stops the queue from re-running it: if that write
         // fails, abort instead of spinning on the same task forever.
@@ -3371,8 +3133,8 @@ static bool queue_run_one(const mpz_t N, double B1, double B2, uint32_t curves,
     }
 
     ecm_sync_save_files(exe_dir, sync1, sync2, full_sync, marker);
-    if (!opt.tmp_dir.empty() && opt.tmp_dir != exe_dir)
-        ecm_sync_save_files(opt.tmp_dir, sync1, sync2, full_sync, marker);
+    if (!opt.persistence.tmp_dir.empty() && opt.persistence.tmp_dir != exe_dir)
+        ecm_sync_save_files(opt.persistence.tmp_dir, sync1, sync2, full_sync, marker);
 
     if (stage2 != nullptr && !found_factor) {
         size_t remaining = 0;
@@ -3636,8 +3398,8 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     P95TransferConfig p95cfg;
     bool p95_initialized=false,p95_ignore_reported=false;
     auto p95_for_task=[&](const Stage1RunOptions &actual)->const P95TransferConfig* {
-        const bool ignore=actual.selection.curve==ecm_stage1::CurveModel::Edwards ||
-            (actual.selection.target==ecm_stage1::ExecutionTarget::Gpu && actual.selection.gpu_param==2);
+        const bool ignore=actual.execution.selection.curve==ecm_stage1::CurveModel::Edwards ||
+            (actual.execution.selection.target==ecm_stage1::ExecutionTarget::Gpu && actual.execution.selection.gpu_param==2);
         if(ignore) {
             if(!cfg.p95_worktodo_path.empty() && !p95_ignore_reported) {
                 ecm_ts_fprintf(stdout,"Prime95 transfer path ignored for this curve construction; Stage1 saves remain local\n");
@@ -3702,59 +3464,59 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     };
 
     Stage1RunOptions opt;
-    if (!ecm_stage1::parse_curve_model(cfg.curve_model, opt.selection.curve) ||
-        !ecm_stage1::parse_execution_target(cfg.execution_target, opt.selection.target)) {
+    if (!ecm_stage1::parse_curve_model(cfg.curve_model, opt.execution.selection.curve) ||
+        !ecm_stage1::parse_execution_target(cfg.execution_target, opt.execution.selection.target)) {
         ecm_ts_fprintf(stderr, "ERROR: invalid curve or target in ecm.toml\n");
         return 1;
     }
-    opt.affinity_cpus = parse_affinity_spec(cfg.affinity);
+    opt.execution.affinity_cpus = parse_affinity_spec(cfg.affinity);
     /* ---- [cpu] shared by edwards and mont ----------------------------------- */
     /* CPU arithmetic: auto | simd | scalar */
     {
-        if (!ecm_stage1::parse_cpu_implementation(cfg.cpu_implementation, opt.selection.cpu_implementation)) {
+        if (!ecm_stage1::parse_cpu_implementation(cfg.cpu_implementation, opt.execution.selection.cpu_implementation)) {
             ecm_ts_fprintf(stderr, "ERROR: invalid impl in ecm.toml\n");
             return 1;
         }
     }
     /* SIMD reduction: auto | montgomery | mersenne-fold. */
     {
-        if (!ecm_stage1::parse_simd_reduction(cfg.simd_reduction, opt.selection.simd_reduction)) {
+        if (!ecm_stage1::parse_simd_reduction(cfg.simd_reduction, opt.execution.selection.simd_reduction)) {
             ecm_ts_fprintf(stderr, "ERROR: invalid reduction in ecm.toml\n");
             return 1;
         }
     }
     stage1_result_settings(opt,cfg,std::filesystem::path(ini).parent_path().string(),worker);
-    opt.stage1_threads = cfg.stage1_threads;
-    if (!cfg.save_name_pattern.empty()) opt.save_name_pattern = cfg.save_name_pattern;
+    opt.execution.stage1_threads = cfg.stage1_threads;
+    if (!cfg.save_name_pattern.empty()) opt.persistence.save_name_pattern = cfg.save_name_pattern;
     if (!cfg.exp_cache.empty()) ecm_exp_cache_set_dir(cfg.exp_cache);
     /* ---- [edwards] only ------------------------------------------------------ */
     if (cfg.naf_w >= 3 && cfg.naf_w <= 12) edwards_set_naf_w(cfg.naf_w);
-    opt.naf_w = cfg.naf_w;
+    opt.execution.naf_w = cfg.naf_w;
     /* Montgomery scalar construction, shared by CPU and GPU. */
     {
-        if (!ecm_stage1::parse_scalar_construction(cfg.scalar_construction, opt.selection.scalar_construction)) {
+        if (!ecm_stage1::parse_scalar_construction(cfg.scalar_construction, opt.execution.selection.scalar_construction)) {
             ecm_ts_fprintf(stderr, "ERROR: invalid lcm in ecm.toml (expected 1 or 12)\n");
             return 1;
         }
     }
-    opt.verbose = cfg.verbose ? 1 : 0;
+    opt.execution.verbose = cfg.verbose ? 1 : 0;
     /* ---- [gpu] only ---------------------------------------------------------- */
-    opt.device_index = cfg.device;
-    opt.selection.gpu_param = cfg.gpu_param;
-    opt.ckpt_ms = (cfg.ckpt_seconds > 0.0)
+    opt.execution.device_index = cfg.device;
+    opt.execution.selection.gpu_param = cfg.gpu_param;
+    opt.persistence.ckpt_ms = (cfg.ckpt_seconds > 0.0)
                          ? (unsigned long)(cfg.ckpt_seconds * 1000.0)
                          : 0UL;
-    opt.ckpt_backups = (unsigned)std::clamp(cfg.ckpt_backups, 0,
+    opt.persistence.ckpt_backups = (unsigned)std::clamp(cfg.ckpt_backups, 0,
                                            (int)ECM_STAGE1_MAX_BACKUPS);
-    opt.gpu_mul_path = cfg.kernel_mul;
-    opt.gpu_sqr_path = cfg.kernel_sqr;
-    opt.gpu_add_path = cfg.kernel_add;
-    opt.gpu_sub_path = cfg.kernel_sub;
-    opt.gpu_special_mult_path = cfg.kernel_special_mult;
+    opt.execution.gpu_mul_path = cfg.kernel_mul;
+    opt.execution.gpu_sqr_path = cfg.kernel_sqr;
+    opt.execution.gpu_add_path = cfg.kernel_add;
+    opt.execution.gpu_sub_path = cfg.kernel_sub;
+    opt.execution.gpu_special_mult_path = cfg.kernel_special_mult;
     /* ---- [task] -------------------------------------------------------------- */
-    opt.sigma_fixed = (cfg.sigma != 0);
-    opt.fixed_sigma64 = cfg.sigma;
-    opt.tmp_dir = resolve_rel_local(exe_dir, cfg.tmp_dir);
+    opt.identity.sigma_fixed = (cfg.sigma != 0);
+    opt.identity.fixed_sigma64 = cfg.sigma;
+    opt.persistence.tmp_dir = resolve_rel_local(exe_dir, cfg.tmp_dir);
     // Validate semantic combinations per task, after applying any save prefix.
     /* ---- [handoff] ----------------------------------------------------------- */
     if (!cfg.p95_dir.empty()) {
@@ -3762,7 +3524,7 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             "note: p95_dir=%s is informational here -- ecm.exe only writes local saves\n"
             "      to %s; the stage-2 handoff program ecm_p95feeder reads its own\n"
             "      feeder.ini (same key name)\n",
-            cfg.p95_dir.c_str(), opt.tmp_dir.c_str());
+            cfg.p95_dir.c_str(), opt.persistence.tmp_dir.c_str());
     }
 
     ecm_ts_fprintf(stdout,"%s %s (Stage1)\n",ecm_program::name,ecm_program::version);
@@ -3772,26 +3534,26 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
     ecm_ts_fprintf(stdout, "worktodo : %s\n", worktodo_path.c_str());
     ecm_ts_fprintf(stdout, "finished : %s\n", finished_path.c_str());
     ecm_ts_fprintf(stdout, "log_file : %s\n", cfg.log_file.c_str());
-    ecm_ts_fprintf(stdout, "saves : %s\n", opt.tmp_dir.c_str());
+    ecm_ts_fprintf(stdout, "saves : %s\n", opt.persistence.tmp_dir.c_str());
     ecm_ts_fprintf(stdout, "curve model : %s\n",
-                   ecm_stage1::curve_model_name(opt.selection.curve));
+                   ecm_stage1::curve_model_name(opt.execution.selection.curve));
     ecm_ts_fprintf(stdout, "execution target : %s\n",
-                   ecm_stage1::execution_target_name(opt.selection.target));
-    if (opt.selection.target == ecm_stage1::ExecutionTarget::Gpu) {
+                   ecm_stage1::execution_target_name(opt.execution.selection.target));
+    if (opt.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu) {
         /* The GPU implementation is chosen at LINK time (ecm.exe = OpenCL glue,
            ecm_cuda.exe = CUDA backend), so ask the backend instead of hardcoding
            "OpenCL" -- the CUDA build used to print "gpu (OpenCL)" here. */
-        if(opt.selection.curve==ecm_stage1::CurveModel::Edwards)
+        if(opt.execution.selection.curve==ecm_stage1::CurveModel::Edwards)
             ecm_ts_fprintf(stdout,"gpu backend : %s, Edwards Atkin-Morain, device %d\n",
-                           ecm_backend_name(),opt.device_index);
+                           ecm_backend_name(),opt.execution.device_index);
         else ecm_ts_fprintf(stdout, "gpu backend : %s, param%d, device %d\n",
-                            ecm_backend_name(), opt.selection.gpu_param, opt.device_index);
+                            ecm_backend_name(), opt.execution.selection.gpu_param, opt.execution.device_index);
     }
 
     // Startup full sync (matches the old work_manager.ps1 behaviour).
     ecm_sync_save_files(exe_dir, sync1, sync2, /*full=*/true, 0);
-    if (!opt.tmp_dir.empty() && opt.tmp_dir != exe_dir)
-        ecm_sync_save_files(opt.tmp_dir, sync1, sync2, /*full=*/true, 0);
+    if (!opt.persistence.tmp_dir.empty() && opt.persistence.tmp_dir != exe_dir)
+        ecm_sync_save_files(opt.persistence.tmp_dir, sync1, sync2, /*full=*/true, 0);
 
     int processed = 0;
     bool saw_task=false;
@@ -3844,16 +3606,16 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             const std::string n_expr = build_n_expr(task.k, task.b, task.n, task.c, task.factors);
             // 交接字段 (从 ECM= 任务读取)
             {
-                opt.target_kbnc = true;
-                opt.handoff_k_str = task.k;
-                opt.handoff_k = std::strtod(task.k.c_str(), nullptr);
-                opt.handoff_b = (uint32_t)std::strtoul(task.b.c_str(), nullptr, 10);
-                opt.handoff_n = (uint32_t)task.n;
-                opt.handoff_c = (int32_t)std::strtol(task.c.c_str(), nullptr, 10);
-                opt.handoff_factors.clear();
+                opt.identity.target_kbnc = true;
+                opt.identity.handoff_k_str = task.k;
+                opt.identity.handoff_k = std::strtod(task.k.c_str(), nullptr);
+                opt.identity.handoff_b = (uint32_t)std::strtoul(task.b.c_str(), nullptr, 10);
+                opt.identity.handoff_n = (uint32_t)task.n;
+                opt.identity.handoff_c = (int32_t)std::strtol(task.c.c_str(), nullptr, 10);
+                opt.identity.handoff_factors.clear();
                 for (size_t fi = 0; fi < task.factors.size(); ++fi) {
-                    if (fi) opt.handoff_factors += ",";
-                    opt.handoff_factors += task.factors[fi];
+                    if (fi) opt.identity.handoff_factors += ",";
+                    opt.identity.handoff_factors += task.factors[fi];
                 }
             }
             // ECM=/ECM2= has no save filename in the assignment. Give the GPU path a
@@ -3861,20 +3623,20 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
             // point for Stage2 and save synchronization. CPU Montgomery already writes
             // its own shared save under tmp_dir; both Edwards targets use text saves.
             std::string queue_save_name;
-            if (cfg.auto_stage2 || opt.selection.target == ecm_stage1::ExecutionTarget::Gpu ||
-                opt.selection.curve==ecm_stage1::CurveModel::Edwards) {
-                if (opt.tmp_dir.empty() || !ensure_dir(opt.tmp_dir)) {
+            if (cfg.auto_stage2 || opt.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu ||
+                opt.execution.selection.curve==ecm_stage1::CurveModel::Edwards) {
+                if (opt.persistence.tmp_dir.empty() || !ensure_dir(opt.persistence.tmp_dir)) {
                     ecm_ts_fprintf(stderr, "FATAL: cannot create tmp_dir for GPU save: %s\n",
-                                   opt.tmp_dir.c_str());
+                                   opt.persistence.tmp_dir.c_str());
                     mpz_clear(N);
                     if (logf) { ecm_log_set_mirror(nullptr); fclose(logf); }
                     return 1;
                 }
-                queue_save_name = opt.tmp_dir + "/" +
-                    mont_format_save_name(opt.save_name_pattern,N,task.B1,&opt);
+                queue_save_name = opt.persistence.tmp_dir + "/" +
+                    mont_format_save_name(opt.persistence.save_name_pattern,N,task.B1,&opt);
             }
             const Stage2TransferConfig *stage2 =
-                auto_stage2_routed || (!cfg.auto_stage2 && cfg.edwards_stage2_transfer && opt.selection.curve == ecm_stage1::CurveModel::Edwards)
+                auto_stage2_routed || (!cfg.auto_stage2 && cfg.edwards_stage2_transfer && opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards)
                     ? &stage2cfg : nullptr;
             std::string stage2_line;
             if (stage2 != nullptr || cfg.auto_stage2) {
@@ -3934,37 +3696,37 @@ static int run_queue_manager(const std::string &ini_path, int worker) {
         const std::string n_expr = build_n_expr(task.k, task.b, task.n, task.c, task.factors);
         // 交接字段 (从 ECMSTAGE2 任务读取)
         {
-            opt.target_kbnc = true;
-                opt.handoff_k_str = task.k;
-            opt.handoff_k = std::strtod(task.k.c_str(), nullptr);
-            opt.handoff_b = (uint32_t)std::strtoul(task.b.c_str(), nullptr, 10);
-            opt.handoff_n = (uint32_t)task.n;
-            opt.handoff_c = (int32_t)std::strtol(task.c.c_str(), nullptr, 10);
-            opt.handoff_factors.clear();
+            opt.identity.target_kbnc = true;
+                opt.identity.handoff_k_str = task.k;
+            opt.identity.handoff_k = std::strtod(task.k.c_str(), nullptr);
+            opt.identity.handoff_b = (uint32_t)std::strtoul(task.b.c_str(), nullptr, 10);
+            opt.identity.handoff_n = (uint32_t)task.n;
+            opt.identity.handoff_c = (int32_t)std::strtol(task.c.c_str(), nullptr, 10);
+            opt.identity.handoff_factors.clear();
             for (size_t fi = 0; fi < task.factors.size(); ++fi) {
-                if (fi) opt.handoff_factors += ",";
-                opt.handoff_factors += task.factors[fi];
+                if (fi) opt.identity.handoff_factors += ",";
+                opt.identity.handoff_factors += task.factors[fi];
             }
         }
         // The typed save owns curve/param and B1; untyped legacy names use the TOML.
         // Clone options so the next task always starts from the configured defaults.
         auto task_opt=opt;
         if(!stage1_save_construction(task.save_name,task_opt,err) ||
-           stage1_selection_error(task_opt.selection,err) || stage1_task_error(task_opt,task.curves_to_run,err)) {
+           stage1_selection_error(task_opt.execution.selection,err) || stage1_task_error(task_opt,task.curves_to_run,err)) {
             mpz_clear(N);ecm_ts_fprintf(stderr,"FATAL: %s; worktodo unchanged\n",err.c_str());
             if(logf){ecm_log_set_mirror(nullptr);fclose(logf);}return 1;
         }
         ecm_ts_fprintf(stdout,"queue_save: curve=%s param=%s B1=%.0f\n",
-            ecm_stage1::curve_model_name(task_opt.selection.curve),
-            task_opt.selection.curve==ecm_stage1::CurveModel::Edwards?"-":stage1_save_prefix(task_opt).substr(1).c_str(),B1);
+            ecm_stage1::curve_model_name(task_opt.execution.selection.curve),
+            task_opt.execution.selection.curve==ecm_stage1::CurveModel::Edwards?"-":stage1_save_prefix(task_opt).substr(1).c_str(),B1);
         const auto queue_save_name=stage1_prefixed_save(task.save_name,stage1_save_prefix(task_opt));
         std::string published_line=line;
         if(queue_save_name!=task.save_name && !ecm_rewrite_stage2_save(line,queue_save_name,published_line,err)) {
             mpz_clear(N);ecm_ts_fprintf(stderr,"FATAL: %s; worktodo unchanged\n",err.c_str());return 1;
         }
-        if(queue_save_name!=task.save_name)task_opt.legacy_save_source=task.save_name;
+        if(queue_save_name!=task.save_name)task_opt.persistence.legacy_save_source=task.save_name;
         const Stage2TransferConfig *stage2 =
-            auto_stage2_routed || (!cfg.auto_stage2 && cfg.edwards_stage2_transfer && task_opt.selection.curve == ecm_stage1::CurveModel::Edwards)
+            auto_stage2_routed || (!cfg.auto_stage2 && cfg.edwards_stage2_transfer && task_opt.execution.selection.curve == ecm_stage1::CurveModel::Edwards)
                 ? &stage2cfg : nullptr;
         std::string stage2_line;
         if (stage2 != nullptr || cfg.auto_stage2) {
@@ -4520,14 +4282,14 @@ int main(int argc, char **argv){
     }
 
     Stage1RunOptions opt;
-    opt.selection = selection;
+    opt.execution.selection = selection;
     /* The two CPU curve models share the thread count. */
-    opt.stage1_threads = stage1_threads;
-    opt.naf_w = naf_w;                       /* [edwards] */
-    if (!affinity_spec.empty()) opt.affinity_cpus = parse_affinity_spec(affinity_spec);
+    opt.execution.stage1_threads = stage1_threads;
+    opt.execution.naf_w = naf_w;                       /* [edwards] */
+    if (!affinity_spec.empty()) opt.execution.affinity_cpus = parse_affinity_spec(affinity_spec);
 
-    opt.verbose = verbose ? 1 : 0;
-    opt.device_index = gpu_device_index;
+    opt.execution.verbose = verbose ? 1 : 0;
+    opt.execution.device_index = gpu_device_index;
     /* Default home of the stage-1 exponent cache for single runs -- run_queue_manager()
        sets the same default for queue mode, and an explicit --exp-cache / ecm.toml
        exp_cache always wins (the getter is only consulted when nothing was set). */
@@ -4535,24 +4297,24 @@ int main(int argc, char **argv){
         const std::string d = get_exe_dir_local();
         ecm_exp_cache_set_dir(d.empty() ? "." : d);
     }
-    opt.selection.gpu_param = gpu_param_set ? gpu_param_cli
+    opt.execution.selection.gpu_param = gpu_param_set ? gpu_param_cli
                                             : ecm_config::defaults::stage1_gpu_param;
     {
         std::string selection_error;
-        if (stage1_selection_error(opt.selection, selection_error)) {
+        if (stage1_selection_error(opt.execution.selection, selection_error)) {
             std::cerr << "ERROR: " << selection_error << std::endl;
             mpz_clear(N);
             return 1;
         }
     }
-    opt.ckpt_ms = ckpt_ms;
-    opt.gpu_mul_path = gpu_mul_path;
-    opt.gpu_sqr_path = gpu_sqr_path;
-    opt.gpu_add_path = gpu_add_path;
-    opt.gpu_sub_path = gpu_sub_path;
-    opt.gpu_special_mult_path = gpu_special_mult_path;
-    opt.sigma_fixed = sigma_fixed;
-    opt.fixed_sigma64 = fixed_sigma64;
+    opt.persistence.ckpt_ms = ckpt_ms;
+    opt.execution.gpu_mul_path = gpu_mul_path;
+    opt.execution.gpu_sqr_path = gpu_sqr_path;
+    opt.execution.gpu_add_path = gpu_add_path;
+    opt.execution.gpu_sub_path = gpu_sub_path;
+    opt.execution.gpu_special_mult_path = gpu_special_mult_path;
+    opt.identity.sigma_fixed = sigma_fixed;
+    opt.identity.fixed_sigma64 = fixed_sigma64;
     {
         std::string input_error;
         if (stage1_task_error(opt, gpucurves, input_error)) {
@@ -4562,7 +4324,7 @@ int main(int argc, char **argv){
         }
     }
     if (tmp_dir.empty()) tmp_dir = ".";      // 默认 = 当前目录 (本地)
-    opt.tmp_dir = normalize_path_local(tmp_dir);
+    opt.persistence.tmp_dir = normalize_path_local(tmp_dir);
     {
         const auto ini=ini_path.empty()?std::filesystem::path(get_exe_dir_local())/"ecm.toml":std::filesystem::path(ini_path);
         EcmQueueConfig cfg;
@@ -4576,15 +4338,15 @@ int main(int argc, char **argv){
     }
     {
         // 存档命名: 假设 N = 2^n - 1 (Mersenne), n = 位长
-        opt.handoff_k = 1.0;
-        opt.handoff_k_str = "1";
-        opt.handoff_b = 2;
-        opt.handoff_n = (uint32_t)mpz_sizeinbase(N, 2);
-        opt.handoff_c = -1;
+        opt.identity.handoff_k = 1.0;
+        opt.identity.handoff_k_str = "1";
+        opt.identity.handoff_b = 2;
+        opt.identity.handoff_n = (uint32_t)mpz_sizeinbase(N, 2);
+        opt.identity.handoff_c = -1;
     }
 
-    Stage1TaskResult result;
-    const int rc1 = run_stage1_task(N, B1, B2, gpucurves, savefilename, saveappend, nline, opt, &result);
+    auto result=run_stage1_task({N,B1,B2,gpucurves,savefilename,saveappend,nline,opt},stage1_tasks);
+    const int rc1=result.task_return();
 
     std::vector<uint32_t> go_primes;
     if (print_group_order) {
@@ -4594,35 +4356,35 @@ int main(int argc, char **argv){
     // Failed/stopped tasks may have no result arrays or only a partial owned
     // payload. Inspect factors only after successful execution; the owner
     // releases every allocation on all exits, including group-order errors.
-    const bool cli_has_factors = (result.ret != ECM_ERROR && result.factors != nullptr && result.array_found != nullptr);
+    const bool cli_has_factors = (result.legacy_return() != ECM_ERROR && result.has_factors() && result.has_found());
 
     // Numeric Montgomery parameter used by the group-order helper. CPU Suyama
     // uses PARAM0; GPU Montgomery uses its selected family. Edwards hit metadata
     // identifies the curve model and carries no Montgomery PARAM.
-    const int go_param = opt.selection.target == ecm_stage1::ExecutionTarget::Gpu
-                             ? opt.selection.gpu_param : 0;
+    const int go_param = opt.execution.selection.target == ecm_stage1::ExecutionTarget::Gpu
+                             ? opt.execution.selection.gpu_param : 0;
 
     if (cli_has_factors) {
         /* Same D3 fields as the queue path (docs/usage/GUI.md): a consumer must not
            have to guess which of the three back-end hit lines it is looking at. */
-        const char *curve_token = ecm_stage1::curve_model_name(opt.selection.curve);
-        const char *target_token = ecm_stage1::execution_target_name(opt.selection.target);
-        for (uint32_t i = 0; i < result.curves; i++) {
-            if (result.array_found[i] != ECM_NO_FACTOR_FOUND) {
-                char *s = mpz_get_str(NULL, 10, result.factors[i]);
+        const char *curve_token = ecm_stage1::curve_model_name(opt.execution.selection.curve);
+        const char *target_token = ecm_stage1::execution_target_name(opt.execution.selection.target);
+        for (uint32_t i = 0; i < result.curves(); i++) {
+            if (result.found(i) != ECM_NO_FACTOR_FOUND) {
+                char *s = mpz_get_str(NULL, 10, result.factor(i));
                 std::cout << "factor[" << i << "]=" << (s ? s : "?") << " curve=" << i;
-                if (result.sigmas != nullptr) {
-                    std::cout << " sigma=" << result.sigmas[i];
+                if (result.has_sigmas()) {
+                    std::cout << " sigma=" << result.sigma(i);
                 }
-                if(opt.selection.curve==ecm_stage1::CurveModel::Montgomery)
+                if(opt.execution.selection.curve==ecm_stage1::CurveModel::Montgomery)
                     std::cout << " param=" << go_param;
                 std::cout << " curve_model=" << curve_token
                           << " execution_target=" << target_token
                           << " save=" << savefilename << "\n";
                 free(s);
                 if (print_group_order) {
-                    uint32_t sigma_curve = result.firstsigma + i;
-                    if (mpz_probab_prime_p(result.factors[i], 25) <= 0) {
+                    uint32_t sigma_curve = result.first_sigma() + i;
+                    if (mpz_probab_prime_p(result.factor(i), 25) <= 0) {
                         std::cout << "  go_factor[" << i << "]=[ ] (factor is not prime, skip #E(F_p))\n";
                         continue;
                     }
@@ -4630,7 +4392,7 @@ int main(int argc, char **argv){
                     mpz_init(go);
                     std::string err;
                     std::string go_factor_lines;
-                    if (!compute_group_order_pari(go, &go_factor_lines, result.factors[i],
+                    if (!compute_group_order_pari(go, &go_factor_lines, result.factor(i),
                                                   sigma_curve, go_param, go_gp_exe, &err)) {
                         std::cerr << "go_factor[" << i << "]: gp error: " << err << "\n"
                                   << "Please verify gp is working, or provide path with: --gp <path/to/gp>"
@@ -4703,5 +4465,5 @@ int main(int argc, char **argv){
     }
     mpz_clear(N);
     /* 让调用方 (脚本/Prime95 前端) 能看到失败, 而不是把 0 当成"跑完了没因子"。 */
-    return (rc1 == ECM_ERROR || result.ret == ECM_ERROR) ? 1 : 0;
+    return (rc1 == ECM_ERROR || result.legacy_return() == ECM_ERROR) ? 1 : 0;
 }

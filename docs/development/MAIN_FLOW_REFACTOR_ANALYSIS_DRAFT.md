@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.4`；P2a 普通 CXX 编译与 P2b 任务拥有权已完成，P2 请求/状态合同及 P3–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，程序版本 `0.45.5`；P2 普通 CXX、任务拥有权及请求/状态合同已完成，P3–P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2a/P2b 已完成普通 CXX 编译和任务拥有权，P2 请求/状态合同及 P3–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同，P3–P7 尚未实现。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -650,6 +650,25 @@ host_driver、主机命令与策略进入 profile，产生新 local 叶目录 `s
 | 最终程序对照 | Stage1 5 例、Stage2 5 例与 P0 冻结基线一致，记录摘要与最终冻结程序匹配 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2b/runtime/summary.json) |
 
 没有运行 release 或性能采样，也没有声称通过堆剖析证明整个旧执行块无泄漏；本步拥有权证据与运行退出路径范围如上。即时 factor、DONE/save、最终 submission→internal→seal→end_batch 及任务外队列推进顺序不变；具体 codec、CPU/GPU 算法块与输入处理仍待后续职责提取。
+
+### P2c：公开请求、拥有结果与独立任务模块已完成
+
+对应程序版本 `0.45.5`，本步完成 P2 的任务合同，P3–P7 继续实施。[验证记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/qualification.json)冻结最终程序、实际输入和范围；前述 P2a/P2b 记录描述各自提交时的中间状态。当前合同说明见 [Stage1](../architecture/STAGE1.md#单任务编排与资源拥有权)。
+
+公开接口位于 include/ecm/service/stage1/task.h，唯一任务流程与完整辅助闭包位于对应 src/ecm/service/stage1/task.cpp。请求分执行偏好、身份、持久化策略三组；TaskResult 以私有状态独立拥有结果，公开只读访问器、完成/停止/失败及失败来源。Selection 的原有值声明移到 include/ecm/core/stage1/selection.h；解析和名字转换仍是私有实现。CPU/GPU 算法块没有重新实现，只通过三项私有依赖接回原执行入口、构建身份和 NAF 默认窗口。driver 只组装一次，两处 task 调用共用；没有 TaskRunner、Session.run 或重复选择器。
+
+| 验证 | 结果与边界 | 证据 |
+| --- | --- | --- |
+| 实际源码等价 | 11 项核对：三个执行块及 Edwards GPU 正文仅显式类型/分组路径替换，四个 host helper 整块移动；执行/发布次序与 typed-save 请求副本保持 | [源码核对](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/source_audit.json) |
+| 独立 CXX 合同 | 8 项通过：成功、因子、准备失败、执行异常、发布失败、仅 sigma 的停止、停止伴发布失败、损坏批次开始；真实 task/checkpoint/文件模块，替换计算入口；实际编译器依赖中 0 CUDA SDK 头、0 nvcc | [最终运行](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/task_contract_final/result.json)、[构建身份](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/task_contract_build_03/manifest.json) |
+| 正式 local | Stage1 最终 HostOnly 成功，Stage2 成功；31+2 个 CUDA 对象与 P2b 完全一致。Stage1 重复 0 CXX、0 CU、0 链接 | [Stage1](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/stage1_local_hostonly_04.log)、[Stage2](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/stage2_local_hostonly.log)、[重复](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/stage1_repeat.log) |
+| 实际恢复/发布 | 最终分组选项接口程序 24 项通过，含八种实际后端/曲线路径 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/usability_final/summary.json) |
+| 最终基线对照 | Stage1/Stage2 各 5 组与冻结 P0 一致，程序摘要匹配最终冻结件 | [记录](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/runtime_final/summary.json) |
+| 构建依赖图 | 真实 CMake fixture 五项通过；46 项依赖身份门禁通过 | [目标图](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/owner_graph/result.json)、[身份](../../data/experiments/main_flow_refactor_implementation_20261021/p2c/identity/result.json) |
+
+新 src/ecm 路径暴露出旧 owner graph 收集器把源目录名 ecm 误认为同名 OpenCL target 的问题：首次编译/链接完成后身份核对拒绝未解析的 cgbn_opencl.h。修正为只有链接属性引用可形成 target 边，显式 TARGET_OBJECTS 在源码和链接两处继续识别；没有放宽依赖验证。首次失败日志保留，修正后正式 HostOnly 和真实 fixture 通过。请求分组时另一次编译发现 typed-save 副本的五个旧成员访问，按同一字段映射补齐后通过；失败原始日志未覆盖。
+
+本步尚未把 driver 缩成纯 application、拆完 writer 或建立最终 Executor；这些属于 P3/P4/P6。全局单批次限制、可选 CPU Stage2 尚未验收、只覆盖当前 local 设备的限制仍有效。未运行 release 或性能采样。
 
 ## 首先调整构建复用与输出隔离
 
@@ -1222,7 +1241,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0、P1a/P1b、P2a/P2b 完成，P2 请求/状态合同及 P3–P7 未执行，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0、P1a/P1b、P2 完成，P3–P7 未执行，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 

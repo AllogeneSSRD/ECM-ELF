@@ -3,6 +3,7 @@
 # Keep source order: it is the existing compile/link order, not a glob.
 cmake_minimum_required(VERSION 3.20)
 set(ECM_STAGE1_COMMON_SOURCES
+    src/ecm/service/stage1/task.cpp
     src/core/ecm_driver.cpp
     src/core/ecm_params_init.cpp
     src/core/ecm_checkpoint.cpp
@@ -184,7 +185,7 @@ function(ecm_cuda_collect_targets target output)
         foreach(_property SOURCES INTERFACE_SOURCES LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
             get_target_property(_items "${_target}" "${_property}")
             foreach(_item IN LISTS _items)
-                if(TARGET "${_item}")
+                if(_property MATCHES "^(INTERFACE_)?LINK_LIBRARIES$" AND TARGET "${_item}")
                     list(APPEND _pending "${_item}")
                 endif()
                 string(REGEX MATCHALL "\\$<TARGET_OBJECTS:[^>]+>" _objects "${_item}")
@@ -192,8 +193,14 @@ function(ecm_cuda_collect_targets target output)
                     string(REGEX REPLACE "^\\$<TARGET_OBJECTS:([^>]+)>$" "\\1" _name "${_object}")
                     list(APPEND _pending "${_name}")
                 endforeach()
-                # Non-imported target names can also be inside conditional link
-                # expressions. Keep a conservative superset, never omit objects.
+                # Only link expressions name further targets. Ordinary source
+                # paths such as src/ecm/... must not turn their directory names
+                # into unrelated executable targets. Explicit TARGET_OBJECTS
+                # references above remain valid in both source and link lists.
+                if(NOT _property MATCHES "^(INTERFACE_)?LINK_LIBRARIES$" OR NOT _item MATCHES "^\\$<")
+                    continue()
+                endif()
+                # Conditional link expressions retain a conservative superset.
                 string(REGEX REPLACE "(LINK_ONLY|BUILD_INTERFACE|INSTALL_INTERFACE|TARGET_NAME_IF_EXISTS|TARGET_OBJECTS):" ";" _link_tokens "${_item}")
                 string(REGEX MATCHALL "[A-Za-z_][A-Za-z0-9_.:+-]*" _tokens "${_link_tokens}")
                 foreach(_token IN LISTS _tokens)

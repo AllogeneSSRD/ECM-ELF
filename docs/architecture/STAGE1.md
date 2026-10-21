@@ -22,13 +22,15 @@ GPU 参数化的语法值为 0、2、3，均属于 Montgomery 曲线；可执行
 
 ## 单任务编排与资源拥有权
 
-直接输入和队列计算共用驱动中的 `run_stage1_task`。它依次校验任务元数据与输出、打开批次、接纳旧 save 历史、执行后端、核对逐曲线身份、发布 submission/internal、seal 并结束批次。即时因子发布仍在原有安全位置执行；队列完成和交接协议位于任务调用之外。
+直接输入和队列调用同一个 [run_stage1_task](../../src/ecm/service/stage1/task.cpp#L138)。它依次校验任务元数据与输出、打开批次、接纳旧 save 历史、执行后端、核对逐曲线身份、发布 submission/internal、seal 并结束批次。即时因子仍在原有安全位置发布；队列完成和跨阶段交接协议在任务之外。
 
-私有 `Stage1TaskSession` 只管理批次状态和锁，不提供另一套运行流程；在调用 begin 前建立清理责任，因此开始过程中抛出异常也能释放已取得的锁。成功结束才清除 checkpoint，失败或停止保留恢复材料。当前批次运行时仍是单进程单批次，不能据此推断已支持同进程并行任务。
+[公开请求与结果](../../include/ecm/service/stage1/task.h)只使用普通 C++ 和 GMP。Stage1Request 在同步调用期间借用模数、命名和已解析选项，选项分为执行偏好、身份和持久化策略三组。TaskResult 独立拥有逐曲线结果，禁止复制并允许移动，通过只读访问器取数；不保留请求引用，不公开原始分配或进度字段。状态区分完成、停止和失败，并记录准备、执行或发布失败；旧返回码继续保留以兼容原有退出和队列语义，已有准备/发布失败优先于停止。
 
-`Stage1TaskResult` 独立拥有 factors、array_found、sigmas，禁止复制并允许移动，所有退出路径自动释放；sigmas 的释放不以 factors 是否存在为条件。已解析的 `Stage1RunOptions` 不包含进度计时和曲线总数；这些可变字段属于每次执行的私有副本，CPU 回调不再强制修改只读选项。上述类型和算法块目前仍在同一驱动翻译单元中，尚未形成独立公开 task 接口。
+私有 Stage1TaskSession 只管理批次和锁，没有第二套 run。begin 前建立清理责任，部分开始失败也释放锁；成功结束才清除 checkpoint，失败或停止保留恢复材料。结果中的 factors、array_found、sigmas 分别清理，sigmas 不依赖 factors 是否存在。计时和总曲线数属于私有执行副本，CPU 回调不再强制修改只读选项。目前仍是单进程单活跃批次，尚未支持同进程并行任务。
 
-入口和拥有权见 [ecm_driver.cpp](../../src/core/ecm_driver.cpp#L757)，批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L317)；文件格式和恢复接纳以 [Checkpoint](CHECKPOINT.md) 为准。
+任务实现已从 driver 提取为普通 CXX 翻译单元。CPU/GPU 算法块、输入与队列目前仍在旧 [ecm_driver.cpp](../../src/core/ecm_driver.cpp)；它只组装一次包含实际执行入口、构建身份和默认 NAF 窗口读取的三回调 [私有依赖](../../src/ecm/service/stage1/legacy_execution.h)。此桥接是当前过渡边界，尚未实现最终的 Executor 准备/执行接口和后端创建合同；没有增加转发 TaskRunner、Session.run 或重复 factory/select。文件 writer 的部分实现仍为私有内联头，待后续提取。
+
+任务与真实持久化模块可通过普通 CXX 独立编译验证，替换计算入口的 8 个合同用例覆盖拥有权、失败/停止优先级和锁释放；生产程序另有实际后端恢复和发布回归。构建方式见 [构建说明](../usage/BUILD.md)。批次清理见 [ecm_stage1_checkpoint_runtime.cpp](../../src/core/ecm_stage1_checkpoint_runtime.cpp#L317)，格式与恢复接纳见 [Checkpoint](CHECKPOINT.md)。
 
 ## GPU 点乘
 

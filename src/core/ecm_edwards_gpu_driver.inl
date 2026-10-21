@@ -59,7 +59,7 @@ static bool progress(uint32_t done,void *context) {
     const bool stop=ecm_stage1_stop_requested();const auto now=stage1_now_ms();
     if(!p.printed || stop || done==p.total || sample_time-p.last_print>=std::chrono::milliseconds(200))
         p.display(sample_time);
-    if(stop || (p.opt.ckpt_ms && now-p.last>=p.opt.ckpt_ms)) {
+    if(stop || (p.opt.persistence.ckpt_ms && now-p.last>=p.opt.persistence.ckpt_ms)) {
         if(!p.path.empty() && !write_checkpoint(p.path,p.b,p.n,p.scalar,p.b1)) {
             p.finish();p.failed=true;
             ecm_ts_fprintf(stderr,"ERROR: GPU Edwards checkpoint write failed: %s\n",p.path.c_str());return false;
@@ -78,24 +78,24 @@ static bool publish(const std::string &path,const std::string &lines,bool append
 }
 
 static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t curves,
-        const std::string &savefilename,bool saveappend,const Stage1RunOptions &opt,Stage1TaskResult *out) {
+        const std::string &savefilename,bool saveappend,const Stage1RunOptions &opt,LegacyStage1Result *out) {
     using namespace ed_gpu_driver;
-    *out=Stage1TaskResult{};out->curves=curves;
+    *out=LegacyStage1Result{};out->curves=curves;
     if(!curves)return ECM_ERROR;
     try {
         const auto initialization_start=Progress::Clock::now();
-        if(opt.naf_w!=0 && (opt.naf_w<2 || opt.naf_w>12))throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
+        if(opt.execution.naf_w!=0 && (opt.execution.naf_w<2 || opt.execution.naf_w>12))throw std::runtime_error("GPU Edwards NAF window must be 0 (auto) or 2..12");
         Integer scalar;if(!compute_batch_s(scalar.v,b1,48))throw std::runtime_error("cannot build Edwards exponent");
-        if(!opt.tmp_dir.empty() && !ensure_dir(opt.tmp_dir))throw std::runtime_error("cannot create Edwards save directory");
+        if(!opt.persistence.tmp_dir.empty() && !ensure_dir(opt.persistence.tmp_dir))throw std::runtime_error("cannot create Edwards save directory");
         Batch batch(curves);
-        batch.window=opt.naf_w?unsigned(opt.naf_w):6;
+        batch.window=opt.execution.naf_w?unsigned(opt.execution.naf_w):6;
         int mode_fixed=-1;
         if(const char *mode=std::getenv("ECM_EDWARDS_STAGE1_ALGO")) {
             const std::string value=mode;
             if(value!="binary" && value!="naf")throw std::runtime_error("ECM_EDWARDS_STAGE1_ALGO must be binary or naf");
             mode_fixed=value=="naf"?1:0;
             if(!mode_fixed) {
-                if(opt.naf_w)throw std::runtime_error("binary Edwards mode cannot use --naf-w");
+                if(opt.execution.naf_w)throw std::runtime_error("binary Edwards mode cannot use --naf-w");
                 batch.window=0;batch.doubling=0;
             }
         }
@@ -106,19 +106,19 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
             if(value!="4" && value!="5")throw std::runtime_error("ECM_EDWARDS_DBL_ALGO must be 4 or 5");
             batch.doubling=value=="5"?5:4;
         }
-        for(uint32_t i=0;i<curves;++i)batch.sigmas[i]=ecm_stage1_batch_sigma(i,opt.sigma_fixed?opt.fixed_sigma64+i:random_sigma_u64());
-        const auto stem=mont_format_save_name(opt.save_name_pattern,n,b1,&opt);
-        const auto path=opt.tmp_dir.empty()?std::string{}:ecm_stage1_curve_record(0);
-        bool restored=!path.empty() && restore(path,batch,n,scalar.v,uint64_t(b1),opt.sigma_fixed,opt.naf_w!=0,dbl_env!=nullptr,mode_fixed);
+        for(uint32_t i=0;i<curves;++i)batch.sigmas[i]=ecm_stage1_batch_sigma(i,opt.identity.sigma_fixed?opt.identity.fixed_sigma64+i:random_sigma_u64());
+        const auto stem=mont_format_save_name(opt.persistence.save_name_pattern,n,b1,&opt);
+        const auto path=opt.persistence.tmp_dir.empty()?std::string{}:ecm_stage1_curve_record(0);
+        bool restored=!path.empty() && restore(path,batch,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed);
         std::string existing;
         if(!restored && !path.empty() && !ecm_stage1_read_blob(path,existing)) {
             // Pre-container GPU Edwards used ed_<old-pattern>.save.gpu.ckpt.
-            for(const auto &pattern:{std::string("m{n}_{b1}.save"),opt.save_name_pattern}) {
+            for(const auto &pattern:{std::string("m{n}_{b1}.save"),opt.persistence.save_name_pattern}) {
                 auto old=mont_format_save_name(pattern,n,b1);
                 if(old.rfind("m0_",0)==0)old.erase(0,3);
-                const auto legacy=(std::filesystem::path(opt.tmp_dir)/("ed_"+old+".gpu.ckpt")).string();
+                const auto legacy=(std::filesystem::path(opt.persistence.tmp_dir)/("ed_"+old+".gpu.ckpt")).string();
                 Batch saved(curves);saved.sigmas=batch.sigmas;saved.window=batch.window;saved.doubling=batch.doubling;
-                if(restore(legacy,saved,n,scalar.v,uint64_t(b1),opt.sigma_fixed,opt.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
+                if(restore(legacy,saved,n,scalar.v,uint64_t(b1),opt.identity.sigma_fixed,opt.execution.naf_w!=0,dbl_env!=nullptr,mode_fixed)) {
                     if(stage1_results_complete(opt,n,uint64_t(b1),true,0,saved.sigmas))continue;
                     batch.done=saved.done;batch.window=saved.window;batch.doubling=saved.doubling;
                     batch.sigmas=saved.sigmas;batch.hit=saved.hit;
@@ -136,7 +136,7 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
             std::string error;if(!initialize(batch,n,error))throw std::runtime_error(error);
         }
         ecm_ts_fprintf(stdout,"GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu window=%u doubling=%d\n",
-                       opt.device_index,curves,mpz_sizeinbase(n,2),mpz_sizeinbase(scalar.v,2),batch.window,batch.doubling);
+                       opt.execution.device_index,curves,mpz_sizeinbase(n,2),mpz_sizeinbase(scalar.v,2),batch.window,batch.doubling);
         uint32_t container=0,tpi=0;
         if(!ecm_cuda_edwards_tier(mpz_sizeinbase(n,2),container,tpi))
             throw std::runtime_error("no compiled GPU Edwards container with one spare bit for target");
@@ -147,9 +147,9 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
         const auto arithmetic_start=std::chrono::steady_clock::now();
         const int rc=batch.window?
             ecm_cuda_edwards_stage1_naf(n,scalar.v,batch.state.data(),curves,batch.done,0,
-                opt.device_index,progress,&p,error,batch.window,batch.doubling,&metrics,prepared):
+                opt.execution.device_index,progress,&p,error,batch.window,batch.doubling,&metrics,prepared):
             ecm_cuda_edwards_stage1(n,scalar.v,batch.state.data(),curves,batch.done,0,
-                opt.device_index,progress,&p,error,prepared);
+                opt.execution.device_index,progress,&p,error,prepared);
         const double arithmetic_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-arithmetic_start).count();
         p.finish();
         ecm_ts_fprintf(stdout,"GPU Edwards arithmetic: algorithm=%s api_seconds=%.9f\n",batch.window?"naf":"binary",arithmetic_seconds);
@@ -181,7 +181,7 @@ static int run_edwards_gpu_stage1(const mpz_t n,double b1,double b2,uint32_t cur
             else mpz_set(batch.factors[i],x.v);
             lines+=save_line(n,x.v,batch.sigmas[i],uint64_t(b1),batch.hit[i]!=0);
         }
-        const auto save=savefilename.empty()?(opt.tmp_dir.empty()?std::string{}:opt.tmp_dir+"/")+stem:savefilename;
+        const auto save=savefilename.empty()?(opt.persistence.tmp_dir.empty()?std::string{}:opt.persistence.tmp_dir+"/")+stem:savefilename;
         if(!publish(save,lines,saveappend)) {
             out->publish_failed=true;throw std::runtime_error("cannot publish Edwards save "+save);
         }

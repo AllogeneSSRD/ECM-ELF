@@ -87,3 +87,7 @@ P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设�
 `test_cuda_p3_runtime.py` 继续消费冻结旧程序、独立验证的存档和新程序，比较完整叶指纹、稳定结果字段、计划查询、分配/预算回退及各日志级别的损坏拒绝。资源测试通过 `stage2_native_source.py` 读取实际模块的声明和方法，不使用另一份手写资源实现。依赖关系收缩后，构建可能因旧编译依赖记录拒绝收缩后的依赖；保留该记录，使用新构建目录完整编译，再验证复用。
 
 实验完整模块由 `internal/cuda_experiment_probe.ps1` 构建，记录递归源码闭包、命令、对象和程序摘要；入口不再截取 `.cu` 正文。GMP/测试夹具仍位于 `tools/test/`。pack 探针以原 per-thread ABI 独立编译同一生产模块；常规生产对象为 legacy，复用时会拒绝该差异。giant 可通过 `-WorkerBuild` 链接验证过的生产算术对象，其旋转及未注册容量单独编译。host-wait 探针通过显式适配编译真实 Edwards 运行时和设备模块。`build_stage2_d_model_probe.ps1` 默认保留旧实验表，`-Profiles frozen-production` 显式测试冻结的生产候选表。`build_cufft_probe.ps1` 从实验源组构建完整 cuFFT 候选并记录源码、命令、库和对象身份。冻结源码审计由 `internal/cuda_frozen_ntt_probe.ps1` 保留旧快照身份及其完整实现，不能用历史实验脚本的路径推断当前生产闭包。
+
+单任务合同验证入口为 `tools/build/test/build_stage1_task_contract.ps1 -WorkerBuild <Stage1生产目录>`，然后由 `tools/test/test_stage1_task_contract.py --help` 查看运行参数。它以生产清单中的实际任务、checkpoint、日志和运行配置模块构建，读取正式 MSVC/GMP 身份，使用普通 CXX，不调用 nvcc、不添加 CUDA SDK include；编译器依赖记录同时确认未使用 CUDA SDK 头。测试仅替换计算回调，覆盖八种拥有权、停止、错误与锁释放场景，不代替 GPU 运算资格或性能验收，也不表示整个生产程序无需 CUDA。
+
+`tools/test/test_cuda_target_graph.ps1 -WorkerBuild <Stage1生产目录> -Output <证据目录>` 使用真实 CMake 目标收集器做五项 configure 检查，覆盖源目录与目标同名、显式对象库、直接/条件静态链接及 imported 排除。只有链接属性中的目标引用参与依赖图；普通源码路径的目录名不视为目标。
