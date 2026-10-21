@@ -31,6 +31,25 @@ http://www.gnu.org/licenses/ or write to the Free Software Foundation, Inc.,
 #endif
 
 namespace ecm_cuda_mont_host {
+int verify_size_of_n(mpz_srcptr N,size_t max_bits,size_t carry_bits) {
+  size_t n_log2 = mpz_sizeinbase(N, 2);
+
+  /* Using check_gpuecm.sage it looks like 4 bits would suffice. */
+  if(max_bits<carry_bits)return ECM_ERROR;
+  size_t max_usable_bits = max_bits - carry_bits;
+
+  if (n_log2 <= max_usable_bits)
+    return ECM_NO_FACTOR_FOUND;
+
+  outputf (OUTPUT_ERROR, "GPU: N(%zu bits) + carry(%zu bits) > BITS(%zu)\n",
+      n_log2, carry_bits, max_bits);
+  outputf (OUTPUT_ERROR, "GPU: Error, input number should be stricly lower than 2^%zu\n",
+      max_usable_bits);
+  return ECM_ERROR;
+}
+
+
+
 static
 void to_mpz(mpz_t r, const uint32_t *x, uint32_t count) {
   mpz_import (r, count, -1, sizeof(uint32_t), 0, 0, x);
@@ -123,7 +142,7 @@ uint32_t* allocate_and_set_s_bits(const mpz_t s, uint64_t *nbits) {
   if(!nbits || mpz_sgn(s)<=0)throw std::invalid_argument("positive Stage1 scalar required");
   uint64_t num_bits = *nbits = mpz_sizeinbase (s, 2);
 
-  uint64_t allocated = (num_bits + 31) / 32;
+  uint64_t allocated = num_bits/32+(num_bits%32!=0);
   uint32_t *s_bits = (uint32_t*) malloc (ecm_cuda_stage1::checked_size({sizeof(uint32_t),size_t(allocated)}));
 
   if(!s_bits)throw std::bad_alloc();

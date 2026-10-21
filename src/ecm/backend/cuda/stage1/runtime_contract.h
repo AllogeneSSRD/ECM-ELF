@@ -13,7 +13,7 @@ struct RunResult {
     int code=-1;
     Termination termination=Termination::Failed;
     Failure failure=Failure::Preparation;
-    uint64_t cursor=0,total=0,durable_cursor=0;
+    uint64_t cursor=0,total=0,snapshot_cursor=0,durable_cursor=0;
     std::string error;
 };
 class RunError : public std::runtime_error {

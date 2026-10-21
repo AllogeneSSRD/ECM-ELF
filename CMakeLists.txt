@@ -419,7 +419,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     target_compile_definitions(ecm_cuda PRIVATE ECM_PROBE_CHAIN_W=${ECM_PROBE_CHAIN_W})
 
     # Kernel launch/occupancy tunables (docs/performance/STAGE1.md).  TPB must
-    # match the launch config in src/ecm/backend/cuda/stage1/montgomery/adapter.cu, hence compile-time.  Defaults
+    # match the launch config in src/ecm/backend/cuda/stage1/montgomery/runtime.cu, hence compile-time.  Defaults
     # are the MEASURED best from the 2026-09-25 sweep (M511/M761, 8192 curves, B1=1e5,
     # param3, GPU 1): the historical 256/4 measured 78.18 M curve-bits/s at M511, 128/1
     # measures 79.15 M, and blocks = curves/(TPB/TPI) is what actually drives throughput
@@ -543,7 +543,7 @@ set(ECM_CUDA_PTX_ARCH   ""    CACHE STRING "embed PTX for this arch only (releas
     #
     # This is a WHOLE-BUILD switch: a binary built with -DECM_MERS_FOLD=1 only carries fold
     # kernels, so it REFUSES any N that is not 2^k - 1 and refuses --gpu-param 3
-    # (src/ecm/backend/cuda/stage1/montgomery/adapter.cu).  Default 0 keeps the historical Montgomery kernels.
+    # (src/ecm/backend/cuda/stage1/montgomery/runtime.cu).  Default 0 keeps the historical Montgomery kernels.
     set(ECM_MERS_FOLD "0" CACHE STRING "1 = suyama family runs the Mersenne fold domain (N = 2^k-1 only)")
     target_compile_definitions(ecm_cuda PRIVATE ECM_MERS_FOLD=${ECM_MERS_FOLD})
     if(ECM_MERS_FOLD)

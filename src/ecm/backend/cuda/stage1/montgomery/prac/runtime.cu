@@ -1,4 +1,16 @@
-// Included by the Stage1 host TU after curve construction/result/checkpoint helpers.
+#include "runtime.h"
+#include "../registry.cuh"
+#include "../resources.cuh"
+#include "../checkpoint.h"
+#include "../host_policy.h"
+#include "../output.h"
+#include "../../../runtime/cuda_ecm_shim.h"
+#include <algorithm>
+#include "ecm/platform/stage1_progress.h"
+#include <cstring>
+using namespace ecm_cuda_mont_host;
+#define CUDA_CHECK(action) ecm_cuda_stage1::check_cuda(action,#action)
+#define CGBN_CHECK(report) ecm_cuda_stage1::check_cgbn(report,__FILE__,__LINE__)
 #include "launch.h"
 #include "ecm_prac_plan.h"
 #include "constants.h"
@@ -20,6 +32,9 @@ struct ResidentResources {
     uint32_t *data = nullptr, *control = nullptr;
     cgbn_error_report_t *report = nullptr;
     cudaEvent_t begin = nullptr, end = nullptr;
+    ResidentResources()=default;
+    ResidentResources(const ResidentResources &)=delete;
+    ResidentResources &operator=(const ResidentResources &)=delete;
     ~ResidentResources() {
         if (data) cudaFree(data);
         if (control) cudaFree(control);
@@ -29,7 +44,7 @@ struct ResidentResources {
     }
 };
 #include "prac_window.inl"
-static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_srcptr s,
+int ecm_cuda_stage1::run_mont_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_srcptr s,
     uint32_t curves, uint64_t *sigma, unsigned long checkpoint_ms, float *gputime,
     uint64_t B1, uint32_t torsion, bool prac,ecm_cuda_stage1::RunResult &outcome,
     const ConstructionResults &construction,ecm_cuda_stage1::SigmaGenerator generate_sigma) {
@@ -54,7 +69,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         const char *constants=prac_constants_policy(prac,mode,bits,requested_tpi,N,nbits);
         kernel = cgbn_stage1_domain_dispatch(bits, &tpi, mode, requested_tpi);
         if (!kernel) throw std::runtime_error("requested Stage1 TPI/register policy is unavailable for the selected tier");
-        if (verify_size_of_n(N, bits) != ECM_NO_FACTOR_FOUND) return ECM_ERROR;
+        if (verify_size_of_n(N,bits,CARRY_BITS) != ECM_NO_FACTOR_FOUND) return ECM_ERROR;
         EcmPracPlan plan;
         if (prac) {
             outputf(OUTPUT_ALWAYS, "GPU: preparing Prime95 PRAC plan (B1=%llu, t=%u, search=7)\n",
@@ -75,7 +90,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         ResidentCheckpoint h{0x31524d444d434545ull, B1, ecm_prac_hash_mpz(s), ecm_prac_hash_mpz(N),
             prac ? plan.identity : ecm_prac_hash_mpz(s), prac ? 0ull : 1ull, total, *sigma,
             bytes, 0, 1, prac ? 3u : 2u, 1, bits, tpi, curves, torsion, 0};
-        const auto path=get_checkpoint_filename(N);
+        const auto path=checkpoint_record();
         std::vector<uint32_t> data(bytes / sizeof(uint32_t));
         bool resumed=false;
         ecm_stage1_validate_pending_checkpoint([&](const std::vector<std::string> &records,std::vector<uint64_t> &sigmas) {
@@ -128,13 +143,13 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         ResidentResources gpu;
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&gpu.data), bytes));
         CUDA_CHECK(cudaMemcpy(gpu.data, data.data(), bytes, cudaMemcpyHostToDevice));
-        const size_t control_bytes = prac ? plan.primes.size() * sizeof(EcmPracPrime) : size_t((s_bits + 31) / 32) * 4;
+        const size_t control_bytes = prac ? checked_size({plan.primes.size(),sizeof(EcmPracPrime)}) : checked_size({size_t(s_bits/32+(s_bits%32!=0)),4});
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&gpu.control), control_bytes));
         CUDA_CHECK(cudaMemcpy(gpu.control, prac ? static_cast<const void *>(plan.primes.data()) : exponent.get(),
                               control_bytes, cudaMemcpyHostToDevice));
         CUDA_CHECK(cgbn_error_report_alloc(&gpu.report));
         CUDA_CHECK(cudaEventCreate(&gpu.begin)); CUDA_CHECK(cudaEventCreate(&gpu.end));
-        const uint32_t np0 = find_np0(N), blocks = (curves + TPB_DEFAULT / tpi - 1) / (TPB_DEFAULT / tpi);
+        const uint32_t np0 = find_np0(N), blocks = (uint64_t(curves) + TPB_DEFAULT / tpi - 1) / (TPB_DEFAULT / tpi);
         auto launch = [&](cgbn_stage1_kernel_fn fn, uint64_t first, uint64_t length) {
             cgbn_stage1_launch(fn,blocks,TPB_DEFAULT,gpu.report, s_bits, first, length, gpu.control, gpu.data, curves, 0, np0);
             CUDA_CHECK(cudaGetLastError());
@@ -167,9 +182,9 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
         if (prac) for (uint64_t i = 0; i < h.next; ++i) completed_work += uint64_t(plan.primes[size_t(i)].work) * plan.primes[size_t(i)].repetitions;
         else completed_work = h.next - 1;
         auto start_wall = std::chrono::steady_clock::now(), last_ckpt = start_wall;
-        outcome.total=total;outcome.cursor=h.next;outcome.durable_cursor=resumed?h.next:0;
+        outcome.total=total;outcome.cursor=h.next;outcome.snapshot_cursor=h.next;outcome.durable_cursor=resumed?h.next:0;
         uint64_t chunk = prac ? 16 : 200;
-        double ring[50]{}; size_t ring_used = 0, ring_next = 0; double ring_sum = 0;
+        ecm_stage1_gpu_progress::SpeedWindow speed;
         double kernel_seconds = 0, last_print = -1;
         const double sample_limit=prac_sample_limit();
         while (h.next < total) {
@@ -182,14 +197,10 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
             float ms = 0; CUDA_CHECK(cudaEventElapsedTime(&ms, gpu.begin, gpu.end));
             kernel_seconds += ms / 1000.0; h.next += length; completed_work += work;
             double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_wall).count();
-            if (ms > 0) {
-                double rate = work / double(ms);
-                if (ring_used == 50) ring_sum -= ring[ring_next]; else ++ring_used;
-                ring[ring_next] = rate; ring_sum += rate; ring_next = (ring_next + 1) % 50;
-            }
-            double speed = ring_used ? ring_sum / ring_used : 0;
-            double per_curve = speed > 0 ? total_work / speed / 1000.0 / curves : 0;
-            double remaining = speed > 0 ? (total_work - completed_work) / speed / 1000.0 : 0;
+            outcome.cursor=h.next;
+            speed.add(work,ms);
+            const double per_curve=speed.per_curve(total_work,curves);
+            const double remaining=speed.remaining(total_work,completed_work);
             bool sampled = sample_limit > 0 && elapsed >= sample_limit && h.next < total;
             if (elapsed - last_print >= 0.2 || h.next == total || sampled) {
                 // Weighted work, not prime count: prime sizes/chains vary over the run.
@@ -204,7 +215,7 @@ static int cgbn_stage1_resident(mpz_t *factors, int *found, mpz_srcptr N, mpz_sr
             const bool stopping=ecm_stage1_stop_requested();
             if (sampled || stopping || h.next>=total || (checkpoint_ms && std::chrono::duration<double, std::milli>(now - last_ckpt).count() >= checkpoint_ms)) {
                 CUDA_CHECK(cudaMemcpy(data.data(), gpu.data, bytes, cudaMemcpyDeviceToHost));
-                outcome.cursor=h.next;
+                outcome.snapshot_cursor=h.next;
                 if(!path.empty()) {
                     if(!save_checkpoint(path,h,data))throw RunError(Failure::Persistence,"resident checkpoint write failed");
                     outcome.durable_cursor=h.next;

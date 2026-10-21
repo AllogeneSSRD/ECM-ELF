@@ -257,7 +257,7 @@ CPU 曲线完成后，对应记录改写为 `ECM_EDWARDS_DONE_V1`：依次保存
 
 next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内层 checksum 仅为 data 的标准 FNV-1a 64，初值14695981039346656037；N/S 的 hash 按低 limb 到高 limb 的 GMP 本机 limb 字节计算，因此不构成跨 ABI 的规范数值摘要。模数、指数和计划身份通过头字段比对，外层 CRC 保护整个载荷。恢复要求版本、算法、域、N/S/计划 hash、B1、总长、BITS/TPI、曲线数及 torsion 等匹配。PRAC window 局部采样不产生完整 Stage1 save 或 checkpoint。
 
-来源：[ResidentCheckpoint 与恢复](../../src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl#L18)、[window 范围](../../src/ecm/backend/cuda/stage1/montgomery/prac/prac_window.inl#L70)。
+来源：[ResidentCheckpoint 与恢复](../../src/ecm/backend/cuda/stage1/montgomery/prac/runtime.cu#L18)、[window 范围](../../src/ecm/backend/cuda/stage1/montgomery/prac/prac_window.inl#L70)。
 
 ## 5. 写入、恢复和清理顺序
 
@@ -287,7 +287,7 @@ next/total 对 ladder 表示位进度，对 PRAC 表示素数计划位置。内�
 
 CUDA 离线校验不重入 storage，也不发布因子。Edwards 核对原始构造、点方程、算法及进度；Montgomery 核对本机布局、完整逐 lane 模数、规范范围、进度和当前内核可用性，resident/PRAC 另核对域、标量/计划身份。校验不是重新执行整个标量乘法的证明。虚拟地址在候选待验证时禁止读写或导入；失败写入回滚内存记录，失败导入同时回滚种子和载荷。CPU/OpenCL 仍先接纳外层，再按原 codec 处理内部记录；此 CUDA 候选协议不宣称改变它们的恢复语义。
 
-CUDA Montgomery 的运行结果分别报告计算游标与已成功发布的持久化游标；计算前进不代表存档已提交。周期保存按 steady clock 计时。必要保存失败返回持久化错误并优先于停止，队列保留原行。未配置 checkpoint 路径时不创建隐式回退文件，停止进度不能恢复；末片完成与停止同时发生时完成当前批次的验证和发布，再由队列决定停止后续任务。
+CUDA Montgomery 的运行结果分别报告同步确认的计算游标、已回读的安全快照游标与已成功发布的持久化游标；计算前进不代表存档已提交。周期保存按 steady clock 计时。必要保存失败返回持久化错误并优先于停止，队列保留原行。未配置 checkpoint 路径时不创建隐式回退文件，停止进度不能恢复；末片完成与停止同时发生时完成当前批次的验证和发布，再由队列决定停止后续任务。
 
 来源：[轮换和清理](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp#L121)、[文件替换](../../src/ecm/platform/ecm_file_publication.h#L13)。
 

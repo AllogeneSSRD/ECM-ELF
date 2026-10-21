@@ -29,9 +29,8 @@ struct ResidentCheckpoint {
     uint32_t version, algorithm, domain, bits, tpi, curves, torsion, reserved;
 };
 
-std::string get_checkpoint_filename(mpz_srcptr);
+std::string checkpoint_record();
 int save_checkpoint(const char *,const checkpoint_header_t *,const uint32_t *,size_t);
-int restore_checkpoint(const char *,checkpoint_header_t *,uint32_t **,size_t *);
 ecm_stage1_checkpoint::RestoreResult decode_checkpoint(const std::string &,mpz_srcptr,
     uint64_t scalar_bits,uint32_t curves,uint32_t param,checkpoint_header_t &,std::vector<uint32_t> &);
 #if ECM_CUDA_ENABLE_PRAC

@@ -1,6 +1,6 @@
 # CUDA Stage1 统一执行架构实施草稿
 
-状态：P0–P3 完成；当前实现 0.46.4，P4 待实施。起点实现版本 0.45.28；实施提交使用 `[0.46.z]`。
+状态：P0–P3、P4a 完成；当前实现 0.46.5，P4b / P5 待实施。起点实现版本 0.45.28；实施提交使用 `[0.46.z]`。
 
 本草稿是此次开发的权威记录；[规划报告](../web/architecture-review-20261021-cuda-stage1.html)保留获批方案、R1–R9 的依据和目标，不代表已经实现。规划来源为任务“规划统一 CUDA Stage1 架构”（01a15f10-45d2-7a73-aa13-9dc3702ef03d）最后一轮扩展方案。起点 ef800e6。既有沙箱诊断相关四项工作区修改不属于此次工作。
 
@@ -123,3 +123,21 @@ P3 仍需完成对称 checkpoint 模块、外壳/载荷候选验证、计算/持
 - include 图 366 文件、791 边，0 环和公开私有依赖边。存档字段、版本及 native ABI 不变；未测量性能收益。Montgomery global event 仍先于主机恢复/构造；随机生成从 workflow 延迟到该区间内，随机新任务的事件统计因此包含此生成步骤，不将计时差解释为计算收益。
 
 P4 继续收敛 Edwards 入口、规格和完成档快路径、Montgomery 运行时命名及 resident 依赖、单次运行进度与预算。P5 承担完整档位、探针、CPU/OpenCL、最终增量编译和固定条件性能验收。开发草稿保留，未自行删除。
+
+## P4a 完成：运行时入口、独立 resident 编译与完成档优化
+
+0.46.5 将 Edwards 两个重复入口合并为普通 CXX 的 runtime.cpp：生产 workflow 直接调用 execute_edwards_batch，接收不可变 EdwardsOptions，统一校验状态/标量、解析一次档位和资源尺寸、映射错误；原 binary/NAF 接口只作探针兼容。设备设置进入实际 CUDA runtime，binary/NAF 模板循环仍独立。已完成状态在主机完整校验后，直接进入补发布，不选档、不准备设备、不上传、不构建字典。保留 NAF 兼容入口对 window=0 的拒绝。
+
+Montgomery adapter.cu 改为 runtime.cu，catalogue、查询与 dispatch 归现有 registry.cu，声明位于私有 registry.cuh；resident/PRAC 的实际协作由独立 prac/runtime.cu 编译，通过私有接口显式依赖主机数学、checkpoint、策略、输出及设备注册，不再依靠父翻译单元的隐含定义。window helper 保持在该实际运行时内。删除未使用的旧 int 读取 codec；native 载荷字段不变。
+
+三条 Montgomery 路径复用现有 SpeedWindow，保留各自进度单位、计时区间、切片策略和等待范围。静态节流改为每次运行私有。统一结果区分同步确认 cursor、安全主机 snapshot_cursor、成功提交 durable_cursor。补充字节乘法和索引宽度检查；没有为预算引入额外 CUDA 查询或文件策略框架。
+
+证据 `p4/qualification.json`：
+
+- PRAC 开启与关闭均通过 local sm89、384/1024 构建；分别仅重编译 4 / 3 个实际变化的 CUDA TU，设备实例复用。开启构建为 43 TU（新增独立 resident runtime），关闭仍为 31 TU。
+- 17 个真实主机 CPP 普通 CXX 编译，SDK 头和 CUDA 编译为 0；最终主机合同再次实际编译统一入口、数学与结果实现，验证完成 binary/NAF 在无适用档位/设备时直接完成、非法点拒绝、NAF 兼容限制、设备错误归类和请求传递。资源探针继续通过 7 种部分初始化状态，GPU 运行次数为 0。
+- 最终开启二进制通过 64 条数学门禁，完成点逐项等于 P0；32 条冻结旧档随机策略恢复；标准可用性 27 项、resident/PRAC 恢复各 2 项、8 项构造故障及五路径实际保存失败/停止/恢复。
+- 新生产门禁保留发布失败后的完成 Edwards checkpoint；随后隐藏所有 GPU，并使用设备编号 999，binary/NAF 各 4 曲线补发布成功，点记录不重复，任务封存后清理档案。恢复档由独立 Python codec 验证完成位置、原始因子及点方程。
+- 实时进度及两模式停止恢复通过，共用速度工具 11 项通过；include 图 368 文件、808 边，0 环和公开私有依赖边。循环没有额外发射/同步/回读；实际计数探针与性能测量留 P5 验收，未声称性能收益。
+
+为避免在结构移动中夹带结果/选择合同的大改，P4b 单独补齐逐曲线显式结果及运行选择快照；不再扩展通用 driver 或后端工厂层。P5 仍须完整档位、CPU/OpenCL、实际探针、增量编译和固定条件性能验收。旧的冻结正文提取门禁仅证明当时迁移，不替代本次语义与数学门禁。

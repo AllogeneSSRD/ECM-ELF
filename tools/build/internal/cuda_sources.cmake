@@ -38,8 +38,7 @@ set(ECM_STAGE1_COMMON_SOURCES
     src/ecm/core/stage1/ecm_stage1_exp.cpp
     src/ecm/storage/cache/ecm_stage1_exp_cache.cpp)
 set(ECM_STAGE1_EDWARDS_SOURCES
-    src/ecm/backend/cuda/stage1/edwards/edwards.cpp
-    src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp
+    src/ecm/backend/cuda/stage1/edwards/runtime.cpp
     src/ecm/backend/cuda/stage1/edwards/edwards_runtime.cu
     src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_tpi4.cu
     src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_tpi8.cu
@@ -49,7 +48,7 @@ set(ECM_STAGE1_EDWARDS_SOURCES
     src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_tpi32_9216_12288.cu
     src/ecm/backend/cuda/stage1/edwards/instances/cgbn_edwards_instances_tpi32_13312_17408.cu)
 set(ECM_STAGE1_MONT_SOURCES
-    src/ecm/backend/cuda/stage1/montgomery/adapter.cu
+    src/ecm/backend/cuda/stage1/montgomery/runtime.cu
     src/ecm/backend/cuda/stage1/montgomery/registry.cu
     src/ecm/backend/cuda/stage1/montgomery/instances/instances_param3_g0.cu
     src/ecm/backend/cuda/stage1/montgomery/instances/instances_param3_g1.cu
@@ -85,6 +84,7 @@ set(ECM_STAGE1_CUDA_SOURCES
     ${ECM_STAGE1_EDWARDS_SOURCES}
     ${ECM_STAGE1_MONT_SOURCES})
 set(ECM_STAGE1_PRAC_SOURCES
+    src/ecm/backend/cuda/stage1/montgomery/prac/runtime.cu
     src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_kernels.cu
     src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_small.cu
     src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_tpi16.cu

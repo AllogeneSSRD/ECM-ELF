@@ -17,7 +17,7 @@ template<uint32_t W,uint32_t T> struct HostParams {static const uint32_t BITS=W,
 void check(cudaError_t rc) {if(rc!=cudaSuccess)throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,cudaGetErrorString(rc));}
 template<class T> struct Device {
     T *p=nullptr;
-    explicit Device(size_t n) {check(cudaMalloc(&p,n*sizeof(T)));}
+    explicit Device(size_t n) {check(cudaMalloc(&p,ecm_cuda_stage1::checked_size({n,sizeof(T)})));}
     Device(const Device &)=delete;
     Device &operator=(const Device &)=delete;
     ~Device(){if(p)cudaFree(p);}
@@ -37,10 +37,10 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
                          EcmEdwardsPrepared prepared,const ecm_edwards_cuda_detail::Kernels &k) {
     using Mem=HostMem<P::BITS>;
     const uint32_t bits=static_cast<uint32_t>(mpz_sizeinbase(s,2));
-    std::vector<Mem> host(size_t(count)*10);
+    std::vector<Mem> host(ecm_cuda_stage1::checked_size({size_t(count),10}));
     for(uint32_t i=0;i<count;++i) {
-        put(host[10*i],n);
-        for(unsigned j=0;j<9;++j)put(host[10*i+j+1],states[9*i+j]);
+        put(host[size_t(i)*10],n);
+        for(unsigned j=0;j<9;++j)put(host[size_t(i)*10+j+1],states[size_t(i)*9+j]);
     }
     std::vector<uint32_t> words((bits+31ull)/32,0);size_t used=0;
     mpz_export(words.data(),&used,-1,4,0,0,s);
@@ -60,7 +60,7 @@ template<class P> int run(const mpz_t n,const mpz_t s,mpz_t *states,uint32_t cou
         if(cgbn_error_report_check(report.p))throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,"CGBN Edwards arithmetic error");
         check(cudaMemcpy(host.data(),data.p,host.size()*sizeof(Mem),cudaMemcpyDeviceToHost));
         for(uint32_t i=0;i<count;++i)for(unsigned j=5;j<9;++j)
-            mpz_import(states[9*i+j],P::BITS/32,-1,4,0,0,host[10*i+j+1]._limbs);
+            mpz_import(states[size_t(i)*9+j],P::BITS/32,-1,4,0,0,host[size_t(i)*10+j+1]._limbs);
         done=stop;
         if(cb && !cb(done,context))return 2;
     }
@@ -83,12 +83,12 @@ template<class P> int run_naf(const mpz_t n,const EcmEdwardsNaf &plan,mpz_t *sta
         metrics->container_bits=P::BITS;metrics->tpi=P::TPI;
         metrics->dictionary_bytes=uint64_t(count)*entries*4*sizeof(Mem);}
     if(done==plan.bits){if(prepared)prepared(context);return 0;}
-    std::vector<Mem> host(size_t(count)*10),ordinary(size_t(count)*4);
+    std::vector<Mem> host(ecm_cuda_stage1::checked_size({size_t(count),10})),ordinary(ecm_cuda_stage1::checked_size({size_t(count),4}));
     for(uint32_t i=0;i<count;++i) {
         put(host[size_t(i)*10],n);
         for(unsigned j=0;j<9;++j)put(host[size_t(i)*10+j+1],states[size_t(i)*9+j]);
     }
-    Device<Mem> data(host.size()),result(ordinary.size()),dictionary(size_t(count)*entries*4);
+    Device<Mem> data(host.size()),result(ordinary.size()),dictionary(ecm_cuda_stage1::checked_size({size_t(count),size_t(entries),4}));
     Device<uint32_t> nonzero(plan.nonzero.size()),codes(plan.codes.size());Report report;
     check(cudaMemcpy(data.p,host.data(),host.size()*sizeof(Mem),cudaMemcpyHostToDevice));
     check(cudaMemcpy(nonzero.p,plan.nonzero.data(),plan.nonzero.size()*4,cudaMemcpyHostToDevice));

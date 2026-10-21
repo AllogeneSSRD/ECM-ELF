@@ -78,196 +78,14 @@ using namespace ecm_cuda_mont_host;
 #endif
 
 
-// ASCII progress bar. Deliberately no Unicode: nvcc's EDG frontend misparses
-// UTF-8 string literals under the GBK code page on Windows, and -Xcompiler
-// flags only reach the host cl.exe stage, not nvcc's frontend.
-// How often to emit a full (newline-terminated) progress line when stdout is
-// redirected to a file/pipe. work_manager.ps1 tails the child's stdout file by
-// complete lines, so a `\r` in-place update would never be flushed to the log.
-// Redirected (pipe / file, e.g. under ecm_gui) progress: keep COMPLETE lines, but at the
-// same ~200 ms cadence the interactive branch gets for free from the batch loop (batch_size
-// is auto-tuned so one batch is ~100 ms -- see the pacing code at the end of the loop).
-// Gating on the batch number alone is wrong: that counter is RESTORED from the checkpoint
-// (`batches_complete = ckpt_header.batches_complete`), so a resumed run starts at, say,
-// 73900 and then matches only `n % 10000 == 0` -- with ~1 s per batch that is one line every
-// ~1.7 hours. That is exactly why the GUI sat on "waiting for the first progress line"
-// while the same exe in a console updated every batch (measured 2026-09-29 on a resumed
-// B1=2.6e8 task). The legacy milestones stay active so an old log tailer still sees them.
-static double g_last_progress_line_ms = -1.0e9;   // *gputime (ms) of the last line
-
-
-// ── Kernel tier list (D4) ──────────────────────────────────────────────────────
-// The tiers this build carries, in ASCENDING bits order. The run path used to build this
-// list inline twice (once for the default param2/param3 path, once for param0); both
-// copies are reproduced here verbatim so the run path and `--gpu-info`
-// (ecm_cuda_tier_list below) can never disagree about which tiers exist. The selection
-// loop additionally skips a tier whose dispatch returns no kernel, which is how a dev
-// build copes with the larger tiers.
-
-static void ecm_build_tier_list_default(std::vector<uint32_t> &out) {
-  out.clear();
-#define ECM_CUDA_ALL_TIERS
-#ifdef IS_DEV_BUILD
-#define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) if constexpr (M && D) out.push_back(W);
-#else
-#define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) if constexpr (M) out.push_back(W);
-#endif
-#include "../../dispatch/tiers.def"
-#undef ECM_CUDA_TIER
-#undef ECM_CUDA_ALL_TIERS
-#ifdef IS_DEV_BUILD
-    outputf(OUTPUT_ALWAYS, "Warning: Dev buils, only support N<1024.\n");
-    outputf(OUTPUT_ALWAYS, "Warning: Using dev build with only 2 kernels. Consider adding more kernels for better performance on large inputs.\n");
-#endif
-}
-
-// param0 uses the same container grid as param3, but the list is built without the
-// dev-build guards: the selection loop skips the tiers this build has no kernel for.
-static void ecm_build_tier_list_param0(std::vector<uint32_t> &out) {
-  out.clear();
-#define ECM_CUDA_ALL_TIERS
-#define ECM_CUDA_TIER(W,T,G,M,D,A,MT,ET) if constexpr (M) out.push_back(W);
-#include "../../dispatch/tiers.def"
-#undef ECM_CUDA_TIER
-#undef ECM_CUDA_ALL_TIERS
-}
-
-
-// Checkpoint configuration
-// 小端格式，magic number 0x45555047 在内存中表示为 "GPUE"，用于验证 checkpoint 文件的正确性
-
-// support routine copied from  "CGBN/samples/utility/support.h"
+#include "registry.cuh"
 #define CGBN_CHECK(report) ecm_cuda_stage1::check_cgbn(report,__FILE__,__LINE__)
-
-static
-int verify_size_of_n(const mpz_t N, size_t max_bits) {
-  size_t n_log2 = mpz_sizeinbase(N, 2);
-
-  /* Using check_gpuecm.sage it looks like 4 bits would suffice. */
-  size_t max_usable_bits = max_bits - CARRY_BITS;
-
-  if (n_log2 <= max_usable_bits)
-    return ECM_NO_FACTOR_FOUND;
-
-  outputf (OUTPUT_ERROR, "GPU: N(%d bits) + carry(%d bits) > BITS(%d)\n",
-      n_log2, CARRY_BITS, max_bits);
-  outputf (OUTPUT_ERROR, "GPU: Error, input number should be stricly lower than 2^%d\n",
-      max_usable_bits);
-  return ECM_ERROR;
-}
-
-
-// Resolve a kernel BITS to its instantiated __global__ function pointer (and
-// TPI) by consulting the per-TPI dispatch TUs in order.
-static cgbn_stage1_kernel_fn cgbn_stage1_kernel_dispatch(uint32_t BITS, uint32_t *TPI_out) {
-    cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_tpi4(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_tpi8(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_tpi16(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_tpi32(BITS, TPI_out);
-    return k;
-}
-
-/* Suyama param0 kernel lookup (see cgbn_stage1_kernels_suyama.cu). */
-static cgbn_stage1_kernel_fn cgbn_stage1_kernel_suyama_dispatch(uint32_t BITS, uint32_t *TPI_out) {
-    cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_suyama_tpi4(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_suyama_tpi8(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_suyama_tpi16(BITS, TPI_out);
-    if (k != nullptr) return k;
-    return cgbn_stage1_kernel_suyama_tpi32(BITS, TPI_out);
-}
-
-/* param2 kernel lookup (see cgbn_stage1_kernels_param2.cu). */
-static cgbn_stage1_kernel_fn cgbn_stage1_kernel_param2_dispatch(uint32_t BITS, uint32_t *TPI_out) {
-    cgbn_stage1_kernel_fn k = cgbn_stage1_kernel_param2_tpi4(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_param2_tpi8(BITS, TPI_out);
-    if (k != nullptr) return k;
-    k = cgbn_stage1_kernel_param2_tpi16(BITS, TPI_out);
-    if (k != nullptr) return k;
-    return cgbn_stage1_kernel_param2_tpi32(BITS, TPI_out);
-}
-
-/* ── D4: kernel-tier query (ecm_cuda.exe --gpu-info) ─────────────────────────────
-   Reports the tiers this build carries plus the TPB/TPI each one launches with, using the
-   SAME tier lists and the SAME per-TPI dispatch as the run path. That is what makes the
-   `gpucurves` recommendation (`curves = blocks_per_sm * sm_count * (tpb / tpi)`)
-   trustworthy: the numbers cannot drift from what the kernel would actually pick.
-
-   Pure query: no kernel launch, no device call, no file access. `want_bits` is the bit
-   length of the number the task will factor (CARRY_BITS is added here, so callers pass the
-   plain bit size); 0 means "every tier". Returns the number of entries written, or -1 when
-   no tier is large enough. */
-int ecm_cuda_tier_list(int param0, int param2, uint32_t want_bits,
-                       ecm_cuda_tier *out, int max_out, uint32_t *carry_bits) {
-    if (carry_bits != nullptr) *carry_bits = (uint32_t)CARRY_BITS;
-    if (out == nullptr || max_out <= 0) return -1;
-
-    std::vector<uint32_t> tiers;
-    if (param0) {
-        ecm_build_tier_list_param0(tiers);
-    } else {
-        ecm_build_tier_list_default(tiers);
-    }
-
-    int written = 0;
-    for (std::size_t i = 0; i < tiers.size(); ++i) {
-        const uint32_t bits = tiers[i];
-        if (want_bits != 0u && bits < want_bits + (uint32_t)CARRY_BITS) continue;
-        uint32_t tpi_u32 = 0;
-        cgbn_stage1_kernel_fn k = param0 ? cgbn_stage1_kernel_suyama_dispatch(bits, &tpi_u32)
-                                 : param2 ? cgbn_stage1_kernel_param2_dispatch(bits, &tpi_u32)
-                                          : cgbn_stage1_kernel_dispatch(bits, &tpi_u32);
-        if (k == nullptr) continue;          /* tier not instantiated in this build */
-        if (written < max_out) {
-            out[written].bits = bits;
-            out[written].tpb = (uint32_t)TPB_DEFAULT;
-            out[written].tpi = tpi_u32;
-        }
-        ++written;
-        if (want_bits != 0u) break;          /* the kernel would stop at the first fit */
-    }
-    if (want_bits != 0u && written == 0) return -1;
-    return written > max_out ? max_out : written;
-}
-
-int ecm_cuda_fold_build(void) {
-#if ECM_MERS_FOLD
-    return 1;
-#else
-    return 0;
-#endif
-}
-
-int ecm_cuda_tier_occupancy(int param0, int param2, uint32_t bits,
-                            uint32_t *blocks_per_sm) {
-    if (blocks_per_sm == nullptr) return 0;
-    *blocks_per_sm = 0;
-
-    uint32_t tpi_u32 = 0;
-    cgbn_stage1_kernel_fn k = param0 ? cgbn_stage1_kernel_suyama_dispatch(bits, &tpi_u32)
-                             : param2 ? cgbn_stage1_kernel_param2_dispatch(bits, &tpi_u32)
-                                      : cgbn_stage1_kernel_dispatch(bits, &tpi_u32);
-    if (k == nullptr) return 0;   /* tier not instantiated in this build */
-
-    int occ = 0;
-    if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occ, k, (int)TPB_DEFAULT, 0)
-            != cudaSuccess || occ <= 0) {
-        return 0;
-    }
-    *blocks_per_sm = (uint32_t)occ;
-    return 1;
-}
 
 #ifndef ECM_CUDA_ENABLE_PRAC
 #define ECM_CUDA_ENABLE_PRAC 0
 #endif
 #if ECM_CUDA_ENABLE_PRAC
-#include "prac/prac_runtime.inl"
+#include "prac/runtime.h"
 #endif
 
 static int run_mont_runtime(mpz_t *factors, int *array_found,
@@ -296,7 +114,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
       outputf(OUTPUT_ERROR, "GPU: resident/PRAC requires param0 and a Montgomery build\n");
       return ECM_ERROR;
     }
-    return cgbn_stage1_resident(factors, array_found, N, s, curves, sigma_ptr,
+    return run_mont_resident(factors, array_found, N, s, curves, sigma_ptr,
                                checkpoint_interval_ms, gputime, B1, torsion,
                                strcmp(algorithm, "prac") == 0,outcome,construction,generate_sigma);
 #else
@@ -376,9 +194,10 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   CUDA_CHECK(cudaEventRecord (global_start));
 
   // Copy s_bits
-  uint32_t s_words = (s_num_bits + 31) / 32;
-  CUDA_CHECK(cudaMalloc((void **)&gpu_s_bits, sizeof(uint32_t) * s_words));
-  CUDA_CHECK(cudaMemcpy(gpu_s_bits, s_bits, sizeof(uint32_t) * s_words, cudaMemcpyHostToDevice));
+  const size_t s_words=size_t(s_num_bits/32+(s_num_bits%32!=0));
+  const auto scalar_bytes=checked_size({sizeof(uint32_t),s_words});
+  CUDA_CHECK(cudaMalloc((void **)&gpu_s_bits, scalar_bytes));
+  CUDA_CHECK(cudaMemcpy(gpu_s_bits, s_bits, scalar_bytes, cudaMemcpyHostToDevice));
 
   // create a cgbn_error_report for CGBN to report back errors
   CUDA_CHECK(cgbn_error_report_alloc(&report));
@@ -438,7 +257,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   size_t n_log2 = mpz_sizeinbase(N, 2);
   
   // ========== CHECKPOINT LOADING ==========
-  const auto ckpt_path=get_checkpoint_filename(N);
+  const auto ckpt_path=checkpoint_record();
   const auto *ckpt_filename=ckpt_path.c_str();
   checkpoint_header_t ckpt_header{};
   std::vector<uint32_t> checkpoint_data;
@@ -532,7 +351,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
       TPI = (int32_t)tpi_u32;
 
       IPB = TPB / TPI;
-      BLOCK_COUNT = (curves + IPB - 1) / IPB;
+      BLOCK_COUNT = (size_t(curves) + IPB - 1) / IPB;
 
       break;
     }
@@ -567,7 +386,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     }
   }
 
-  youpi = verify_size_of_n(N, BITS);
+  youpi = verify_size_of_n(N, BITS,CARRY_BITS);
   if (youpi != ECM_NO_FACTOR_FOUND) {
     return youpi;
   }
@@ -597,7 +416,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     TPI = (int32_t)tpi_u32;
     
     IPB = TPB / TPI;
-    BLOCK_COUNT = (curves + IPB - 1) / IPB;
+    BLOCK_COUNT = (size_t(curves) + IPB - 1) / IPB;
     outputf(OUTPUT_VERBOSE, "Checkpoint: restored BITS=%d, TPI=%d, BLOCK_COUNT=%lu\n", BITS, TPI, BLOCK_COUNT);
   }
 
@@ -617,7 +436,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
      (= a24) instead of word 3 (= aX), which is what broke the gmp-ecm comparison. */
   const int      p1_word = suyama_layout ? 3 : 1;      /* X of P_a */
   const int      p2_word = suyama_layout ? 5 : 3;      /* X of P_b */
-  if (data_size != (size_t)words_per_curve * curves * (size_t)(BITS / 32) * sizeof(uint32_t)) {
+  if (data_size != checked_size({size_t(words_per_curve),size_t(curves),size_t(BITS/8)})) {
     outputf(OUTPUT_ERROR,
             "GPU: internal error: curve buffer size %zu does not match the %u-word/curve layout\n",
             data_size, words_per_curve);
@@ -778,10 +597,11 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   /* gputime and batch_time are measured in ms */
   float batch_time = 0;
   
+  double last_progress_line_ms=-1.0e9;
   /* Track time for checkpoint saving */
   auto last_checkpoint_time=std::chrono::steady_clock::now();
   outcome.total=s_num_bits;outcome.cursor=s_partial;
-  outcome.durable_cursor=ckpt_loaded?s_partial:0;
+  outcome.snapshot_cursor=s_partial;outcome.durable_cursor=ckpt_loaded?s_partial:0;
 
   // if (checkpoint_interval_ms > 86400000) { // > 1 day, treat as disabled
   //   checkpoint_interval_ms = 86400000; // 1 day max
@@ -812,12 +632,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   const bool show_progress = stdout_is_tty();
   // ──────────────────────────────────────────────────────────────────────
 
-  // Sliding window of recent per-batch speeds (bits/ms) for a stable ETA.
-  const size_t SPEED_WINDOW = 50;
-  double speed_ring[SPEED_WINDOW];
-  size_t speed_count = 0;
-  size_t speed_idx = 0;
-  double speed_sum = 0.0;
+  ecm_stage1_gpu_progress::SpeedWindow speed;
 
   while (s_partial < s_num_bits) {
     /* decrease batch_size for final batch if needed */
@@ -856,34 +671,11 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
     CUDA_CHECK(cudaEventElapsedTime (&batch_time, batch_start, stop));
     CUDA_CHECK(cudaEventElapsedTime (gputime, global_start, stop));
 
-    // ── Update recent-speed window + ETA ──────────────────────────────────
-    if (batch_time > 0.0f && this_batch > 0u) {
-        const double speed = static_cast<double>(this_batch) / static_cast<double>(batch_time);
-        if (speed_count < SPEED_WINDOW) {
-            speed_ring[speed_count++] = speed;
-            speed_sum += speed;
-        } else {
-            speed_sum -= speed_ring[speed_idx];
-            speed_ring[speed_idx] = speed;
-            speed_sum += speed;
-            speed_idx = (speed_idx + 1) % SPEED_WINDOW;
-        }
-    }
-    double remaining_s = 0.0;
-    double per_curve_s = 0.0;
-    if (speed_count > 0) {
-        const double avg_speed = speed_sum / static_cast<double>(speed_count);
-        if (avg_speed > 0.0) {
-            // Whole-task estimate (全程): s_num_bits at the current average speed.
-            const double total_ms = static_cast<double>(s_num_bits) / avg_speed;
-            per_curve_s = (curves > 0u)
-                              ? (total_ms / static_cast<double>(curves) / 1000.0)
-                              : 0.0;
-            if (s_num_bits > s_partial) {
-                remaining_s = static_cast<double>(s_num_bits - s_partial) / avg_speed / 1000.0;
-            }
-        }
-    }
+    // Only synchronized successful work enters the live speed window.
+    outcome.cursor=s_partial;
+    speed.add(this_batch,batch_time);
+    const double remaining_s=speed.remaining(s_num_bits,s_partial);
+    const double per_curve_s=speed.per_curve(s_num_bits,curves);
 
     // ── Update progress bar ───────────────────────────────────────────────
     {
@@ -896,13 +688,13 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
             // Interactive terminal: live in-place update every batch.
             print_progress(pct, s_partial, this_batch, per_curve_s,
                            (double)*gputime, remaining_s, false);
-        } else if (should_emit_progress_line(batches_complete, (double)*gputime, g_last_progress_line_ms) || final_batch) {
+        } else if (should_emit_progress_line(batches_complete, (double)*gputime, last_progress_line_ms) || final_batch) {
             // Redirected (pipe/file, e.g. under ecm_gui): complete lines, emitted at the
             // ~200 ms batch cadence (or on the legacy batch milestones), plus always the
             // final batch so the log shows 100%.
             print_progress(pct, s_partial, this_batch, per_curve_s,
                            (double)*gputime, remaining_s, true);
-            g_last_progress_line_ms = (double)*gputime;
+            last_progress_line_ms = (double)*gputime;
         }
     }
 
@@ -937,7 +729,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
       header.data_size = data_size;
       header.timestamp = time(NULL);
       
-      outcome.cursor=s_partial;
+      outcome.snapshot_cursor=s_partial;
       const int saved=ckpt_path.empty()?ECM_NO_FACTOR_FOUND:
           save_checkpoint(ckpt_filename,&header,data,data_size);
       if(saved!=ECM_NO_FACTOR_FOUND)throw RunError(Failure::Persistence,"Montgomery checkpoint write failed");
@@ -965,6 +757,7 @@ static int run_mont_runtime(mpz_t *factors, int *array_found,
   } else {
     outputf (OUTPUT_VERBOSE, "Copying results back to CPU ...\n");
     CUDA_CHECK(cudaMemcpy(data, gpu_data, data_size, cudaMemcpyDeviceToHost));
+    outcome.snapshot_cursor=s_partial;
     CUDA_CHECK(cudaEventElapsedTime (gputime, global_start, stop));
     youpi = process_results(factors, array_found, N, data, BITS, curves, sigma64,
                             words_per_curve, p1_word, p2_word, gpu_param,true);

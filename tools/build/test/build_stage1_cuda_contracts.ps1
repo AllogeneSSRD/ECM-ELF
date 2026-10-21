@@ -12,12 +12,13 @@ $m=Get-Content -LiteralPath (Join-Path $worker 'stage1_local_manifest.json') -Ra
 if(-not $m.compile_setup -or -not $m.host_compiler -or -not $m.cuda_root){throw 'Formal local toolchain manifest required'}
 New-Item -ItemType Directory -Path $output|Out-Null
 $sources=@('src/ecm/backend/cuda/stage1/montgomery/host_math.cpp',
+    'src/ecm/backend/cuda/stage1/edwards/runtime.cpp','src/ecm/core/stage1/ecm_stage1_exp.cpp',
     'src/ecm/service/stage1/execution_contract.cpp','tools/test/stage1_cuda_host_contract.cpp')
 $commands=@();$objects=@();$hashes=[ordered]@{}
 foreach($source in $sources){
     $object=Join-Path $output ($source.Replace('/','_')+'.obj');$objects+=('"'+$object+'"')
     $commands+=('"'+$m.host_compiler+'" /nologo /TP /std:c++17 /O2 /EHsc /MD /utf-8 /DECM_CUDA_FULL_BUILD=1'+
-        ' /I "'+$repo+'/include" /I "'+$repo+'/src" /I "'+$m.gmp_root+'/include"'+
+        ' /DECM_TIERS_RESTRICTED /DECM_TIER_384 /I "'+$repo+'/include" /I "'+$repo+'/src" /I "'+$m.gmp_root+'/include"'+
         ' /c "'+$source+'" /Fo"'+$object+'" /sourceDependencies "'+$object+'.deps.json"')
     $commands+='if errorlevel 1 exit /b 1'
     $hashes[$source]=(Get-FileHash -LiteralPath $source).Hash

@@ -1,5 +1,8 @@
 #include "../../src/ecm/backend/cuda/stage1/montgomery/host_math.h"
 #include "../../src/ecm/service/stage1/execution_contract.h"
+#include "../../src/ecm/backend/cuda/stage1/edwards/runtime.h"
+#include "../../src/ecm/backend/cuda/stage1/edwards/edwards_internal.h"
+#include "../../src/ecm/core/curve/ecm_edwards_curve.h"
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -15,11 +18,52 @@ bool accept(uint32_t lane,mpz_srcptr factor,void *) {
 }
 bool reject(uint32_t,mpz_srcptr,void *) {return false;}
 void require(bool value,const char *message){if(!value)throw std::runtime_error(message);}
+unsigned device_calls=0,dispatch_calls=0;bool reject_device=false;
+void edwards_runtime_contract() {
+    using namespace ecm_cuda_stage1;using namespace ecm_edwards;
+    Integer n,s;mpz_ui_pow_ui(n.v,2,521);mpz_sub_ui(n.v,n.v,1);mpz_set_ui(s.v,12345);
+    Array state(9);mpz_set_ui(state[6],1);mpz_set_ui(state[7],1);
+    for(unsigned window:{0u,6u}) {
+        uint32_t done=window?EcmEdwardsNaf(s.v,window).bits:uint32_t(mpz_sizeinbase(s.v,2));
+        EcmEdwardsNafMetrics metrics;unsigned prepared=0;
+        const auto result=execute_edwards_batch(n.v,s.v,state.data(),1,done,{999,window,4,0},nullptr,&prepared,&metrics,
+            [](void *p){++*static_cast<unsigned *>(p);});
+        require(result.termination==Termination::Completed && result.cursor==result.total && prepared==1,
+            "completed Edwards checkpoint did not finalize on host");
+        require(!device_calls && !dispatch_calls && !metrics.dictionary_bytes && !metrics.container_bits,
+            "completed Edwards checkpoint touched a device/tier");
+    }
+    uint32_t done=0;std::string error;Failure failure;
+    require(ecm_cuda_edwards_stage1_naf(n.v,s.v,state.data(),1,done,0,0,nullptr,nullptr,error,0,4,nullptr,nullptr,&failure)==-1 &&
+        failure==Failure::Preparation && !device_calls,"NAF compatibility wrapper accepted window 0");
+    done=uint32_t(mpz_sizeinbase(s.v,2));mpz_set_ui(state[7],0);
+    require(execute_edwards_batch(n.v,s.v,state.data(),1,done,{0,0,4,0},nullptr,nullptr,nullptr,nullptr).failure==Failure::Preparation,
+        "completed invalid Edwards point accepted");
+    require(!device_calls,"invalid complete state prepared device");mpz_set_ui(state[7],1);
+    mpz_ui_pow_ui(n.v,2,127);mpz_sub_ui(n.v,n.v,1);done=0;reject_device=true;
+    require(execute_edwards_batch(n.v,s.v,state.data(),1,done,{1,0,4,17},nullptr,nullptr,nullptr,nullptr).failure==Failure::Device,
+        "Edwards device error lost");
+    reject_device=false;EcmEdwardsNafMetrics metrics;
+    const auto stopped=execute_edwards_batch(n.v,s.v,state.data(),1,done,{1,6,5,17},nullptr,nullptr,&metrics,nullptr);
+    require(stopped.termination==Termination::Stopped && stopped.cursor==1 && device_calls==2 && dispatch_calls==1 &&
+        metrics.container_bits==384 && metrics.tpi==4,"resolved Edwards request/stop mismatch");
+    std::puts("edwards_runtime_contract=PASS complete_binary_naf_no_gpu_or_tier=1 invalid_state=1 compatibility=1 device_failure=1 resolved_dispatch=1");
+}
+}
+// Substitute only the hardware boundary. Validation and resolution above are
+// the real ordinary-CXX implementation; no CUDA SDK is linked by this test.
+void ecm_edwards_cuda_detail::prepare_device(int) {
+    ++device_calls;if(reject_device)throw ecm_cuda_stage1::RunError(ecm_cuda_stage1::Failure::Device,"injected device failure");
+}
+int ecm_edwards_cuda_detail::run_384(const Request &request) {
+    ++dispatch_calls;require(request.chunk==17 && request.plan && request.plan->window==6 && request.doubling==5,
+        "resolved request differs from requested NAF options");request.done=1;return 2;
 }
 int main() {
     using namespace ecm_cuda_mont_host;
     using namespace ecm_cuda_stage1;
     try {
+        edwards_runtime_contract();
         mpz_t prime,n;mpz_inits(prime,n,nullptr);mpz_ui_pow_ui(prime,2,127);mpz_sub_ui(prime,prime,1);
         for(int param:{0,2}) {
             ecm_stage1::ExecutionResult result;result.allocate_curves(1);

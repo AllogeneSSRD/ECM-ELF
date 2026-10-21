@@ -14,14 +14,14 @@
     "src/cuda/ntt/runtime.cpp": "src/ecm/backend/cuda/ntt/runtime.cpp",
     "src/cuda/ntt/runtime.h": "src/ecm/backend/cuda/ntt/runtime.h",
     "src/cuda/ntt/shape.cpp": "src/ecm/backend/cuda/ntt/shape.cpp",
-    "src/cuda/stage1/edwards.cpp": "src/ecm/backend/cuda/stage1/edwards/edwards.cpp",
+    "src/cuda/stage1/edwards.cpp": "src/ecm/backend/cuda/stage1/edwards/runtime.cpp",
     "src/cuda/stage1/edwards_internal.h": "src/ecm/backend/cuda/stage1/edwards/edwards_internal.h",
-    "src/cuda/stage1/edwards_naf.cpp": "src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp",
+    "src/cuda/stage1/edwards_naf.cpp": "src/ecm/backend/cuda/stage1/edwards/runtime.cpp",
     "src/cuda/stage1/edwards_runtime.cu": "src/ecm/backend/cuda/stage1/edwards/edwards_runtime.cu",
     "src/cuda/stage1/edwards_runtime.inl": "src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl",
     "src/cuda/stage1/edwards_slice.h": "src/ecm/backend/cuda/stage1/edwards/edwards_slice.h",
-    "src/cuda/stage1/montgomery.cu": "src/ecm/backend/cuda/stage1/montgomery/adapter.cu",
-    "src/cuda/stage1/prac_runtime.inl": "src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl",
+    "src/cuda/stage1/montgomery.cu": "src/ecm/backend/cuda/stage1/montgomery/runtime.cu",
+    "src/cuda/stage1/prac_runtime.inl": "src/ecm/backend/cuda/stage1/montgomery/prac/runtime.cu",
     "src/cuda/stage1/prac_window.inl": "src/ecm/backend/cuda/stage1/montgomery/prac/prac_window.inl",
     "src/cuda/stage2/batch.cpp": "src/ecm/backend/cuda/stage2/batch.cpp",
     "src/cuda/stage2/checks.cpp": "src/ecm/backend/cuda/stage2/checks.cpp",
@@ -823,6 +823,10 @@
     "src/ecm/backend/cuda/stage1/edwards/host_workflow.h": "src/ecm/backend/cuda/stage1/execution.h",
     "src/ecm/backend/cuda/stage1/edwards/ecm_edwards_gpu_checkpoint.h": "src/ecm/backend/cuda/stage1/edwards/checkpoint.h",
     "src/ecm/backend/cuda/stage1/montgomery/host_io.cpp": "src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp",
-    "src/ecm/backend/cuda/stage1/montgomery/host_io.h": "src/ecm/backend/cuda/stage1/montgomery/checkpoint.h"
+    "src/ecm/backend/cuda/stage1/montgomery/host_io.h": "src/ecm/backend/cuda/stage1/montgomery/checkpoint.h",
+    "src/ecm/backend/cuda/stage1/montgomery/adapter.cu": "src/ecm/backend/cuda/stage1/montgomery/runtime.cu",
+    "src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl": "src/ecm/backend/cuda/stage1/montgomery/prac/runtime.cu",
+    "src/ecm/backend/cuda/stage1/edwards/edwards.cpp": "src/ecm/backend/cuda/stage1/edwards/runtime.cpp",
+    "src/ecm/backend/cuda/stage1/edwards/edwards_naf.cpp": "src/ecm/backend/cuda/stage1/edwards/runtime.cpp"
   }
 }

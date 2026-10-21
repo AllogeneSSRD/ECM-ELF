@@ -72,7 +72,7 @@ CUDA 关闭时调用 [OpenCL Montgomery workflow](../../src/ecm/backend/opencl/s
 
 CUDA 工作流可以明确报告执行失败或主动停止；明确失败优先于同时收到的停止信号，不再被任务层改写为准备失败。CPU/OpenCL 的旧返回码和准备/发布标记仍通过兼容映射接纳。任务层按执行/发布调用边界归类逃逸异常，不根据结果指针是否已分配猜测阶段。Edwards 低层接口保留兼容返回码并可携带明确设备故障来源。周期存档策略和候选验证合同仍见实施草稿中的未完成项。
 
-这些主机 CPP 的实际独立编译依赖没有 CUDA SDK 头。CUDA runtime、同步、设备资源与回读实现保留现有 CUDA 依赖；Montgomery 构造、结果及 checkpoint/screen/CSV 实现也已提取到普通 CXX；设备协作继续由 adapter.cu 持有。
+这些主机 CPP 的实际独立编译依赖没有 CUDA SDK 头。CUDA runtime、同步、设备资源与回读实现保留现有 CUDA 依赖；Montgomery 构造、结果及 checkpoint/screen/CSV 实现也已提取到普通 CXX；Edwards 运行入口的校验/选择/错误适配也使用普通 CXX。设备协作继续由 runtime.cu 持有。
 
 ## CUDA 故障与构造期结果
 
@@ -84,7 +84,7 @@ PARAM0/PARAM2 构造遇到模逆失败时计算 GCD：真因子立即通过既�
 
 ## Montgomery 主机数学与存档输出
 
-[host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)集中 param0/2/3 初始状态、param2 Jacobian 辅助计算、标量打包、np0、普通整数解包与最终结果处理。六个实际跨设备协作入口经私有 host_math.h 声明；内部转换和算术 helper 留在 CPP 内部。输出仍调用同一 factory 中的 outputf/test_verbose，verbose 状态没有复制。FULL_BUILD 条件下的诊断分支和断言语义保持。
+[host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)集中 param0/2/3 初始状态、param2 Jacobian 辅助计算、标量打包、np0、普通整数解包与最终结果处理。跨设备协作所需入口经私有 host_math.h 声明；内部转换和算术 helper 留在 CPP 内部。输出仍调用同一 factory 中的 outputf/test_verbose，verbose 状态没有复制。FULL_BUILD 条件下的诊断分支和断言语义保持。
 
 [checkpoint.cpp](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)持有 ladder V5 与 resident/PRAC 的编码、读取、校验及保存路径；[checkpoint.h](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.h)声明接口与载荷布局。[output.cpp](../../src/ecm/backend/cuda/stage1/montgomery/output.cpp)持有 TTY/screen、节流显示判断与 CSV，output.h 只声明输出接口。两种曲线的生产恢复使用 Missing、Resumed、AlreadyComputed、Incompatible、Corrupt、IoFailure；离线 decode 不读取文件或发布结果。外层候选通过本后端校验后才提交种子和载荷，详见 [Checkpoint](CHECKPOINT.md)。
 
@@ -94,13 +94,15 @@ CUDA workflow 将 sigma 选择与曲线参数化分开：先恢复并校验当�
 
 两种 CUDA workflow 均在计算前拥有结果数组。Edwards 末点验证和归一化写入独立结果，不改写用于恢复的原始批次状态；构造期真因子立即经过既有 submission 通道。完成状态保存成功后才发布最终 save，任务封存结果后才清除恢复材料。周期保存失败作为持久化失败返回，优先于同时收到的停止；最后一片已完成时继续完成当前批次的结果发布。
 
-磁盘版本、字段顺序和 size_t/time_t 布局保持。adapter.cu 保留 tier/dispatch、CGBN report、设备分配、上传/回读、事件/同步、计算循环和资源释放；global event 与标量上传继续先于 checkpoint 恢复和 CPU 构造。上述主机 CPP 均以普通 CXX 编译且不包含 CUDA SDK；接口或实际设备协作改动仍会使其真实依赖失效。增量编译最终门禁与当前实施进度见 [实施草稿](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md)。
+磁盘版本、字段顺序和 size_t/time_t 布局保持。runtime.cu 保留 tier/dispatch、CGBN report、设备分配、上传/回读、事件/同步、计算循环和资源释放；global event 与标量上传继续先于 checkpoint 恢复和 CPU 构造。上述主机 CPP 均以普通 CXX 编译且不包含 CUDA SDK；接口或实际设备协作改动仍会使其真实依赖失效。增量编译最终门禁与当前实施进度见 [实施草稿](../development/CUDA_STAGE1_UNIFICATION_DRAFT.md)。
 
 ## GPU 点乘
 
 ### CUDA 模块边界
 
-CUDA 的发射描述、设备类型与位宽清单均为 `src/ecm/backend/cuda/` 内的私有实现；其中 `dispatch/tiers.def` 唯一维护位宽。公开任务与选择合同位于 `include/ecm/service/` 和 `include/ecm/core/`。`src/ecm/backend/cuda/factory.cpp` 负责后端能力查询；`src/ecm/backend/cuda/stage1/` 负责 GMP 编解码、分配释放、错误检查、切片、回调、计时和恢复。Montgomery 驱动为 `montgomery/adapter.cu`；Edwards 的参数校验在 `edwards.cpp` / `edwards_naf.cpp`，两种执行模式的主机循环由 `edwards_runtime.cu` 单独编译。
+Montgomery resident/PRAC 的设备协作位于独立的 `montgomery/prac/runtime.cu`，依赖通过私有 runtime.h、registry.cuh 和各主机模块接口显式声明；不依靠父翻译单元先定义函数。catalogue/query 与 tier dispatch 留在 registry.cu，资源拥有者留在 resources.cuh。
+
+CUDA 的发射描述、设备类型与位宽清单均为 `src/ecm/backend/cuda/` 内的私有实现；其中 `dispatch/tiers.def` 唯一维护位宽。公开任务与选择合同位于 `include/ecm/service/` 和 `include/ecm/core/`。`src/ecm/backend/cuda/factory.cpp` 负责后端能力查询；`src/ecm/backend/cuda/stage1/` 负责 GMP 编解码、分配释放、错误检查、切片、回调、计时和恢复。Montgomery 驱动为 `montgomery/runtime.cu`；Edwards 的参数、规范状态、档位选择及错误适配统一位于 `runtime.cpp`，生产 workflow 直接调用 execute_edwards_batch；binary/NAF 旧入口仅为独立算术探针兼容。设备准备位于 `edwards_runtime.cu`，两种执行模式的主机循环保持独立。
 
 设备算术与薄发射器位于各曲线目录，独立实例放在对应 `instances/`。Montgomery 的 PARAM0/2/3 各有七组实例；Edwards binary/NAF 共用七组实例。设备实例闭包不包含项目主机驱动，也不接收 GMP 对象、进度回调或 checkpoint 对象。第三方 CGBN 在 NVCC 主机解析阶段需要 GMP 类型，由 `src/ecm/backend/cuda/arithmetic/cgbn/types.cuh` 的主机条件包含适配，设备运算接口仍使用原始缓冲和标量。
 
@@ -120,7 +122,7 @@ Montgomery 默认 ladder 按 s 的比特进行差分加法和倍点，状态由�
 
 [曲线构造](../../src/ecm/core/curve/ecm_edwards_curve.h)先在辅助 Weierstrass 曲线上用 Jacobian 坐标计算 sigma 倍点，再构造 Atkin–Morain 参数。模逆失败在实际目标 N 上区分真因子与退化曲线，同时检查 d(1−d) 的单位性和基点方程。末点检查 `XY=ZT` 与 Edwards 方程，用 `(Z+Y):(Z−Y)` 转到 Montgomery，检查分母 GCD 后归一化；真因子独立标记。有效恒等点且 GCD=N 时没有可用 Stage2 点，该曲线完成但不写点记录。
 
-[worker 接入](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)支持 CLI 和队列、周期及安全停止检查点。当前 GPU Edwards 使用 V3 二进制载荷，保存完整 N、算法、进度、各 sigma 和普通整数状态；指数只保存位数与指纹。恢复重建基点、核对点不变量并采用已保存的模式，显式不匹配选择报错。载荷不绑定 TPI，恢复按 N 重新选择容器。NAF 列数与 binary 位数不能互换。完整字段、兼容读取和恢复资格统一见 [Checkpoint](CHECKPOINT.md#42-gpu-edwards-v3)。
+[worker 接入](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)支持 CLI 和队列、周期及安全停止检查点。当前 GPU Edwards 使用 V3 二进制载荷，保存完整 N、算法、进度、各 sigma 和普通整数状态；指数只保存位数与指纹。恢复重建基点、核对点不变量并采用已保存的模式，显式不匹配选择报错。载荷不绑定 TPI，未完成状态恢复按 N 重新选择容器。已计算完成的普通坐标状态经完整主机校验后直接补发布，不进行设备准备、档位查找、上传或字典分配。NAF 列数与 binary 位数不能互换。完整字段、兼容读取和恢复资格统一见 [Checkpoint](CHECKPOINT.md#42-gpu-edwards-v3)。
 
 CPU/GPU Edwards 共用完成点文本，可由 CUDA Stage2 和 [CPU Stage2](../usage/EDWARDS_CPU_STAGE2.md) 消费；sigma 不能按 Suyama PARAM0 解释。字段、状态、校验及外部程序能力统一见 [Save](SAVE.md#5-edwards-save-version1)。
 
@@ -130,7 +132,7 @@ Stage1 的 Edwards 日志和因子行携带 `curve_model=ed`，省略 Montgomery
 
 `arithmetic api_seconds` 覆盖标量编码、设备初始化/分配、字典、切片、回传及进度回调，排除之前的指数/曲线构造和之后的 GCD/归一化/save。`dictionary_gpu_ms` 与 `loop_gpu_ms` 是 CUDA event 区间，可能包含首次模块加载或主机发射间隙，不能当作 profiler 的纯 kernel 时间。这些计时存在嵌套，不能与进程 wall 重复相加。
 
-GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../include/ecm/platform/stage1_progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)，设备准备边界位于[binary/NAF 主机循环](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)。
+GPU Edwards 的 live 计时从设备准备回调开始；已恢复的累计位置只作为基准。三种 Montgomery 运行路径及 Edwards 均复用已有 SpeedWindow，各自保持原计时区间、进度单位和切片策略。每个完成切片产生推进量/毫秒样本，以最近最多 50 个样本的速度算术平均估算：每曲线耗时 = 总工作量 ÷ 平均速度 ÷ 曲线数；剩余时间 = 未完成工作量 ÷ 平均速度。速度样本包含设备切片与规范状态回传，排除主机进度回调中的输出及检查点写入；`elapsed` 则覆盖准备完成后的完整循环墙钟。NAF 使用列，binary 使用标量位。Montgomery 与 Edwards 共用 [GPU 文本格式](../../include/ecm/platform/stage1_progress.h)，Edwards 的计时和发布入口为 [Progress / prepared / progress](../../src/ecm/backend/cuda/stage1/edwards/workflow.cpp)，设备准备边界位于[binary/NAF 主机循环](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)。
 
 GPU Edwards 在 NAF 列或二进制位的片边界更新共用进度输出，GUI 管道可读取百分比。当前32档构建的三曲线族同exe数据见[性能依据](../performance/STAGE1.md#gpu-edwards-细分实例三曲线族对照)，32档CPU末点、旧检查点跨容器恢复及Stage2交接见[细分实例验收](../development/GPU_EDWARDS_FINE_TIERS_DRAFT.md#2026-10-16完整正确性门禁)。冻结七档的binary/NAF、窗口/倍点对照及大界限证据分别见[性能参考](../performance/STAGE1.md#gpu-edwards-初始基准与-naf-对照)和[窗口优化草稿](../development/GPU_EDWARDS_STAGE1_NAF_DRAFT.md)，初始流水线见[开发草稿](../development/GPU_EDWARDS_STAGE1_STAGE2_DRAFT.md)；已测范围不等于全部发布架构或生产 B1/B2 的性能保证。
 
@@ -180,7 +182,7 @@ Stage1 各后端共用二进制批次外壳和原子轮换写入，载荷保留�
 - [ecm_stage1_checkpoint_runtime.cpp](../../src/ecm/storage/checkpoint/ecm_stage1_checkpoint_runtime.cpp)、[ecm_stage1_binary.h](../../src/ecm/storage/checkpoint/ecm_stage1_binary.h)：二进制外壳、长度边界、CRC32C、锁及轮换恢复。
 - [ecm_stage1_legacy_gpu.h](../../src/ecm/storage/checkpoint/ecm_stage1_legacy_gpu.h)：旧 CUDA ladder V5 导入及逐 lane 模数校验。
 - [checkpoint.cpp](../../src/ecm/backend/cuda/stage1/edwards/checkpoint.cpp)：GPU Edwards 二进制/旧文本载荷及状态验证。
-- [adapter.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu)：设备调度、同步及回读；[host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)负责曲线布局与归一化，[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)负责保存点，output.cpp 负责输出。
+- [runtime.cu](../../src/ecm/backend/cuda/stage1/montgomery/runtime.cu)：设备调度、同步及回读；[host_math.cpp](../../src/ecm/backend/cuda/stage1/montgomery/host_math.cpp)负责曲线布局与归一化，[checkpoint.cpp](../../src/ecm/backend/cuda/stage1/montgomery/checkpoint.cpp)负责保存点，output.cpp 负责输出。
 - [arithmetic.cuh](../../src/ecm/backend/cuda/stage1/montgomery/arithmetic.cuh)、[instances.cuh](../../src/ecm/backend/cuda/stage1/montgomery/instances/instances.cuh)、[registry.cu](../../src/ecm/backend/cuda/stage1/montgomery/registry.cu)：设备 ladder、按组实例及薄发射器。
 - [edwards_runtime.inl](../../src/ecm/backend/cuda/stage1/edwards/edwards_runtime.inl)、[instances.cuh](../../src/ecm/backend/cuda/stage1/edwards/instances/instances.cuh)：Edwards 主机循环与设备实例。
 - [prac_runtime.inl](../../src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl)：计划、策略、切片及恢复。

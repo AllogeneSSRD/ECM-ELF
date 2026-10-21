@@ -50,7 +50,7 @@ def main():
     assert same_width.bit_length()==4423 and same_width&MASK==MASK and (same_width+1).bit_count()!=1
     report=dict(passed=True,word_REDC_cases=cases,results=results,M4423_words_reconstructed=144,
         invalid_np0_control_cases=64,invalid_np0_mismatches=wrong,exact_M4423_guard_rejects_same_width_non_mersenne=True,
-        sources={str(s):hashlib.sha256(s.read_bytes()).hexdigest() for s in map(Path,['src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_constants.cu','src/ecm/backend/cuda/stage1/montgomery/prac/prac_runtime.inl'])},
+        sources={str(s):hashlib.sha256(s.read_bytes()).hexdigest() for s in map(Path,['src/ecm/backend/cuda/stage1/montgomery/prac/cgbn_stage1_prac_constants.cu','src/ecm/backend/cuda/stage1/montgomery/prac/runtime.cu'])},
         scope='Independent radix-2^32 REDC/host integer shape model; no native CUDA performance or full-chain claim')
     a.output.parent.mkdir(parents=True,exist_ok=True)
     a.output.write_text(json.dumps(report,indent=2)+'\n')

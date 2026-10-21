@@ -19,6 +19,7 @@ using ecm_stage1::stdout_is_tty_local;
 using ecm_stage1::stage1_publish_factor;
 #include "api.h"
 #include "naf.h"
+#include "runtime.h"
 #include "ecm/core/stage1/scalar.h"
 #include "../../../../storage/save/ecm_edwards_io.h"
 #include "../../../../storage/checkpoint/ecm_stage1_binary.h"
@@ -33,7 +34,7 @@ namespace ed_gpu_driver {
 struct Progress {
     using Clock=std::chrono::steady_clock;
     Batch &b;mpz_srcptr n,scalar;const Stage1Options &opt;std::string path;
-    uint64_t b1,total;Clock::time_point last;const EcmEdwardsNafMetrics *metrics;bool failed=false;
+    uint64_t b1,total,durable=0;Clock::time_point last;const EcmEdwardsNafMetrics *metrics;bool failed=false;
     Clock::time_point initialization_start,loop_start,sample_start,last_print;
     uint64_t sampled=0,delta=0;
     bool printed=false,line_open=false;
@@ -61,6 +62,9 @@ static void prepared(void *context) {
     auto &p=*static_cast<Progress *>(context);
     const double dictionary=p.metrics->dictionary_wall_ms/1000.0;
     const double preparation=std::chrono::duration<double>(Progress::Clock::now()-p.initialization_start).count();
+    if(p.metrics->container_bits)ecm_ts_fprintf(stdout,"GPU Edwards geometry: container_bits=%u tpi=%u tpb=128 blocks=%llu\n",
+        p.metrics->container_bits,p.metrics->tpi,static_cast<unsigned long long>((uint64_t(p.b.count)+128/p.metrics->tpi-1)/(128/p.metrics->tpi)));
+    else ecm_ts_fprintf(stdout,"GPU Edwards completed checkpoint: host validation only; no device preparation\n");
     ecm_ts_fprintf(stdout,"GPU Edwards initialization: %.3f s\n",(std::max)(0.0,preparation-dictionary));
     ecm_ts_fprintf(stdout,"GPU Edwards dictionary: %.3f s (gpu=%.3f ms)\n",dictionary,p.metrics->dictionary_gpu_ms);
     p.total=p.b.window?p.metrics->columns:p.total;
@@ -78,16 +82,22 @@ static bool progress(uint32_t done,void *context) {
     if(!p.printed || stop || done==p.total || sample_time-p.last_print>=std::chrono::milliseconds(200))
         p.display(sample_time);
     if(done<p.total && (stop || (p.opt.persistence.ckpt_ms && now-p.last>=std::chrono::milliseconds(p.opt.persistence.ckpt_ms)))) {
-        if(!p.path.empty() && !save_checkpoint(p.path,p.b,p.n,p.scalar,p.b1)) {
+        bool saved=true;
+        try{if(!p.path.empty())saved=save_checkpoint(p.path,p.b,p.n,p.scalar,p.b1);}
+        catch(const std::exception &error){saved=false;ecm_ts_fprintf(stderr,"ERROR: %s\n",error.what());}
+        if(!saved) {
             p.finish();p.failed=true;
-            ecm_ts_fprintf(stderr,"ERROR: GPU Edwards checkpoint write failed: %s\n",p.path.c_str());return false;
+            ecm_ts_fprintf(stderr,"ERROR: GPU Edwards checkpoint write failed: %s cursor=%u durable=%llu\n",
+                p.path.c_str(),done,static_cast<unsigned long long>(p.durable));return false;
         }
+        if(!p.path.empty())p.durable=done;
         p.last=now;
     }
     // The rate samples include each slice and its state readback, excluding
     // checkpoint/console callback time. Elapsed is the complete loop wall time.
     p.sample_start=Progress::Clock::now();
-    if(stop){p.finish();ecm_ts_fprintf(stdout,"GPU Edwards stopped at %s %u\n",p.b.window?"NAF column":"binary bit",done);}
+    if(stop && done<p.total){p.finish();ecm_ts_fprintf(stdout,"GPU Edwards stopped at %s %u; %s\n",
+        p.b.window?"NAF column":"binary bit",done,p.path.empty()?"no checkpoint configured, progress is not recoverable":"checkpoint committed");}
     return done==p.total || !stop;
 }
 
@@ -198,21 +208,14 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
         }
         ecm_ts_fprintf(stdout,"GPU Edwards Stage1: device=%d curves=%u N_bits=%zu scalar_bits=%zu window=%u doubling=%d\n",
                        opt.execution.device_index,curves,mpz_sizeinbase(n,2),mpz_sizeinbase(scalar.v,2),batch.window,batch.doubling);
-        uint32_t container=0,tpi=0;
-        if(!ecm_cuda_edwards_tier(mpz_sizeinbase(n,2),container,tpi))
-            throw std::runtime_error("no compiled GPU Edwards container with one spare bit for target");
-        ecm_ts_fprintf(stdout,"GPU Edwards geometry: container_bits=%u tpi=%u tpb=128 blocks=%u\n",
-                       container,tpi,(curves+128/tpi-1)/(128/tpi));
         EcmEdwardsNafMetrics metrics;
-        Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),mpz_sizeinbase(scalar.v,2),&metrics,initialization_start};std::string error;
+        Progress p{batch,n,scalar.v,opt,path,uint64_t(b1),mpz_sizeinbase(scalar.v,2),&metrics,initialization_start};
+        p.durable=restored?batch.done:0;
         phase=ecm_stage1::FailureSource::Execution;
-        auto runtime_failure=ecm_cuda_stage1::Failure::Execution;
         const auto arithmetic_start=std::chrono::steady_clock::now();
-        const int rc=batch.window?
-            ecm_cuda_edwards_stage1_naf(n,scalar.v,batch.state.data(),curves,batch.done,0,
-                opt.execution.device_index,progress,&p,error,batch.window,batch.doubling,&metrics,prepared,&runtime_failure):
-            ecm_cuda_edwards_stage1(n,scalar.v,batch.state.data(),curves,batch.done,0,
-                opt.execution.device_index,progress,&p,error,prepared,&runtime_failure);
+        const auto run=execute_edwards_batch(n,scalar.v,batch.state.data(),curves,batch.done,
+            {opt.execution.device_index,batch.window,batch.doubling,0},progress,&p,&metrics,prepared);
+        const int rc=run.code;
         const double arithmetic_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-arithmetic_start).count();
         p.finish();
         ecm_ts_fprintf(stdout,"GPU Edwards arithmetic: algorithm=%s api_seconds=%.9f\n",batch.window?"naf":"binary",arithmetic_seconds);
@@ -220,10 +223,10 @@ int ecm_cuda_stage1::run_edwards_stage1(const mpz_t n,double b1,double b2,uint32
             metrics.columns,metrics.additions,metrics.container_bits,metrics.tpi,
             static_cast<unsigned long long>(metrics.dictionary_bytes),metrics.dictionary_gpu_ms,metrics.loop_gpu_ms,metrics.launches);
         if(rc<0) {
-            out->fail(runtime_failure==ecm_cuda_stage1::Failure::Device?ecm_stage1::FailureSource::Device:
-                runtime_failure==ecm_cuda_stage1::Failure::Preparation?ecm_stage1::FailureSource::Preparation:
+            out->fail(run.failure==ecm_cuda_stage1::Failure::Device?ecm_stage1::FailureSource::Device:
+                run.failure==ecm_cuda_stage1::Failure::Preparation?ecm_stage1::FailureSource::Preparation:
                 ecm_stage1::FailureSource::Execution);
-            throw std::runtime_error(error);
+            throw std::runtime_error(run.error);
         }
         if(rc==2){if(p.failed)out->fail(ecm_stage1::FailureSource::Persistence);else out->stop();return ECM_ERROR;}
         phase=ecm_stage1::FailureSource::Execution;
