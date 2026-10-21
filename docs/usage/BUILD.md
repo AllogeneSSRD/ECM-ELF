@@ -72,7 +72,7 @@ CPU-only 检查入口为 `test_cuda_build_profile.ps1`、`test_cuda_build_profil
 
 ## CUDA 源清单与依赖身份
 
-翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 生产构建含25个单元：15个 `STAGE2_ENGINE` 主机 CPP、算术 CU、NTT CU、四个 NTT 主机 CPP 和四个驱动 CPP。CMake 直接使用，PowerShell 从该文件导出构建目录内的 `cuda_sources.json`。生产源码闭包拒绝包含 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`，包括编译器补齐的依赖；开发 wrapper 使用单独源组。实验树、BSGS、独立 NTT、cuFFT 和 giant 变体另有显式实验源组，不加入生产目标。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
+翻译单元唯一清单为 `tools/build/internal/cuda_sources.cmake`：分别维护 Stage1 共用源、CUDA 源、可选 PRAC、Stage2 驱动源、生产主机引擎、算术、NTT 和开发 wrapper。Stage2 生产构建含35个单元：15个 `STAGE2_ENGINE` 主机 CPP、算术 CU、NTT CU、四个 NTT 主机 CPP 和14个应用/服务/平台/存储 CPP。CMake 直接使用，PowerShell 从该文件导出构建目录内的 `cuda_sources.json`。生产源码闭包拒绝包含 `tools/bench/`、`tools/test/`、`tools/experiments/` 和 `.refactor/`，包括编译器补齐的依赖；开发 wrapper 使用单独源组。实验树、BSGS、独立 NTT、cuFFT 和 giant 变体另有显式实验源组，不加入生产目标。模块职责以 [Stage2 模块边界](../architecture/STAGE2.md#cuda-模块边界) 为准。
 
 CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目对象库/静态库；条件目标按保守全集收集，导入库由工具链与依赖清单另行记录。对象枚举和 CUDA 完全重编按该目标闭包执行。`cuda_build_state.ps1` 扫描本地递归包含，包括 `.inc/.inl/.def`，并用 NVCC 依赖文件补齐宏包含及 SDK 头。每个对象的 `.ecm-state.json` 记录命令、依赖内容指纹与对象摘要；摘要编码在 Windows PowerShell 5.1 和 PowerShell 7 间一致。
 

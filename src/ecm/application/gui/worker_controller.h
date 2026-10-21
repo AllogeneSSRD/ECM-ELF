@@ -82,7 +82,7 @@ private:
     double last_traced_pct = -1.0;
     unsigned long long stop_deadline_ms = 0;
     long long ckpt_baseline = 0;      // newest checkpoint mtime when the stop was requested
-    bool ckpt_seen = false;           // a newer checkpoint appeared -> safe to terminate
+    bool ckpt_seen = false;           // newer checkpoint observed; continue waiting for graceful exit
 };
 struct WorkerSettings {
     std::string ini_path,worker_exe,stage2_exe,priority,exit_confirm;

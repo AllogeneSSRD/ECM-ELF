@@ -109,4 +109,4 @@ Stage1 与 Stage2 仍为独立可执行文件。GUI 按队列行自动选择并�
 - [ecm_driver.cpp](../../src/ecm/application/cli/ecm_driver.cpp)：命令行、TOML、队列、进度和交接。
 - [adapter.cu](../../src/ecm/backend/cuda/stage1/montgomery/adapter.cu)：CUDA 设备调度与资源；曲线构造/结果在同目录 host_math.cpp，codec/screen 在 host_io.cpp。
 - [ecm_stage1_exp.cpp](../../src/ecm/core/stage1/ecm_stage1_exp.cpp)：指数生成与缓存。
-- [CPU 实现目录](../../src/cpu/)：Montgomery、Edwards 和保存点。
+- [CPU 实现目录](../../src/ecm/backend/cpu/stage1/)：Montgomery、Edwards 和保存点。

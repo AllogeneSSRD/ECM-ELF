@@ -1,0 +1,1214 @@
+{
+  "title": "ECM-ELF · CUDA 架构图谱",
+  "modules": [
+    {
+      "id": "driver",
+      "title": "Stage1 应用入口",
+      "path": "src/ecm/application/cli/ecm_driver.cpp",
+      "role": "合并默认值、TOML、CLI，解析输入、组装依赖并选择单次/队列模式；展示结果和退出。",
+      "input": "N、B1、curve、param、sigma、配置/存档",
+      "output": "已解析任务、模式、展示与退出状态",
+      "depends": [
+        "backend",
+        "s1_task",
+        "queue"
+      ],
+      "note": "单次与队列使用同一任务入口；driver 不再承担曲线执行和队列完成协议。",
+      "find": "int main("
+    },
+    {
+      "id": "backend",
+      "title": "CUDA 后端接缝",
+      "path": "src/ecm/backend/cuda/factory.cpp",
+      "role": "实现链接后端的能力查询与设备准备接缝；选择已注册 Montgomery 实例。",
+      "input": "设备索引、模数位数、参数化",
+      "output": "设备能力、kernel 注册信息及 Stage1 返回值",
+      "depends": [
+        "mont"
+      ],
+      "note": "factory.cpp 是已有 CUDA 能力接缝，不新增一层完整任务工厂。",
+      "find": "int ecm_backend_prepare("
+    },
+    {
+      "id": "mont",
+      "title": "Montgomery 主机驱动",
+      "path": "src/ecm/backend/cuda/stage1/montgomery/adapter.cu",
+      "role": "管理实际 CUDA 设备资源、切片发射、同步和回读；调用普通 CXX 曲线数学及文件编码。",
+      "input": "N、标量 s、sigma、批量曲线、可选恢复状态",
+      "output": "规范点 X:Z / 因子 / 进度",
+      "depends": [
+        "mont_math",
+        "mont_io",
+        "mont_device",
+        "tiers",
+        "launch"
+      ],
+      "note": "真实 CUDA runtime 调用保留 SDK 依赖；host_math/host_io 正文修改不进入 CU。",
+      "find": "int ecm_cuda_tier_list("
+    },
+    {
+      "id": "edwards",
+      "title": "Edwards 主机入口",
+      "path": "src/ecm/backend/cuda/stage1/edwards/edwards.cpp",
+      "role": "校验规范坐标、设置实际 CUDA 设备并选择容器；标量/NAF 准备位于普通主机实现。",
+      "input": "N、48·lcm(1…B1)、X/Y/Z/T、NAF 计划",
+      "output": "按片推进的曲线状态",
+      "depends": [
+        "ed_runtime",
+        "tiers"
+      ],
+      "note": "Edwards 是独立曲线模型，不使用 Montgomery 的 param。",
+      "find": "bool ecm_cuda_edwards_tier("
+    },
+    {
+      "id": "ed_runtime",
+      "title": "Edwards 切片运行时",
+      "path": "src/ecm/backend/cuda/stage1/edwards/edwards_runtime.cu",
+      "role": "单独编译 edwards_runtime.inl 的主机模板，持有缓冲、事件及 binary/NAF 主机循环。",
+      "input": "初始点、字典/标量、切片位置",
+      "output": "设备运行、坐标回读、回调与恢复进度",
+      "depends": [
+        "ed_device",
+        "launch"
+      ],
+      "note": "生产调用的自适应切片按实际上一片耗时调整；图中的演示时长不代表真实运行时间。",
+      "find": ""
+    },
+    {
+      "id": "mont_device",
+      "title": "Montgomery 设备实例",
+      "path": "src/ecm/backend/cuda/stage1/montgomery/registry.cu",
+      "role": "解析 kernel 工厂并薄发射。PARAM0/2/3 各有 g0…g6 七组实例，设备模板和算术归核目录。",
+      "input": "原始设备缓冲、标量位段、几何参数",
+      "output": "已实例化的点乘 kernel",
+      "depends": [
+        "shared",
+        "tiers"
+      ],
+      "note": "主机负责 GMP、回调与存档；kernel 接口不接收这些对象。",
+      "find": ""
+    },
+    {
+      "id": "ed_device",
+      "title": "Edwards 设备实例",
+      "path": "src/ecm/backend/cuda/stage1/edwards/instances/instances.cuh",
+      "role": "七组 CU 实例化 binary/NAF 设备逻辑，执行 CGBN Montgomery 域点运算。",
+      "input": "设备点、NAF 字典及标量片段",
+      "output": "跨片保留的设备点",
+      "depends": [
+        "shared",
+        "tiers"
+      ],
+      "note": "TPI 表示协作处理一个整数的线程数，TPB 表示线程块线程数，两者不同。",
+      "find": ""
+    },
+    {
+      "id": "tiers",
+      "title": "唯一位宽与几何清单",
+      "path": "src/ecm/backend/cuda/dispatch/tiers.def",
+      "role": "同一清单供类型声明、主机候选、设备实例和构建筛选反复展开。另列 Stage2 容量及显式 PRAC 几何。",
+      "input": "位宽、TPI、分组、族筛选和宏",
+      "output": "各编译单元一致的候选/实例声明",
+      "depends": [],
+      "note": "统一清单不等于统一边界：Edwards 留一位，Montgomery 留六位，Stage2 用实际 W。",
+      "find": ""
+    },
+    {
+      "id": "launch",
+      "title": "中立发射接口",
+      "path": "src/ecm/backend/cuda/runtime/launch.h",
+      "role": "定义 grid、block、shared、stream 这类薄发射描述；各族接口头声明可链接的启动函数。",
+      "input": "借用设备缓冲和显式几何",
+      "output": "主机到设备编译单元的边界",
+      "depends": [],
+      "note": "例如 stage2_launch.h、ntt_launch.h。接口描述发射参数，不拥有 ECM 树或文件状态。",
+      "find": ""
+    },
+    {
+      "id": "transfer",
+      "title": "存档 / 队列交接",
+      "path": "src/ecm/storage/transfer/ecm_stage2_transfer.cpp",
+      "role": "先暂存交接记录，再向接收 worker 的 Stage2 队列去重追加，保留失败待交接项。",
+      "input": "已完成 Stage1 save、ECMSTAGE2 任务行",
+      "output": "接收队列、pending 与去重状态",
+      "depends": [],
+      "note": "Stage2 是另一进程消费的任务；这里不是直接调用其 GPU 引擎。",
+      "find": "bool ecm_stage2_transfer_flush("
+    },
+    {
+      "id": "s2_driver",
+      "title": "Stage2 应用入口",
+      "path": "src/ecm/application/cuda_stage2/ecm_cuda_stage2_main.cpp",
+      "role": "解析 CLI/TOML、选择查询/调优/曲线子进程/父任务模式并输出退出状态。",
+      "input": "Stage1 save / ECMSTAGE2 队列 / tune 请求",
+      "output": "Plan、曲线执行、结果与任务进度",
+      "depends": [
+        "s2_task",
+        "planning"
+      ],
+      "note": "父任务、曲线 worker 和进程协议在独立模块，入口不复制其循环。",
+      "find": "int main("
+    },
+    {
+      "id": "engine",
+      "title": "单曲线编排",
+      "path": "src/ecm/backend/cuda/stage2/engine.cpp",
+      "role": "设置设备与模数上下文，执行规划、算术预检、baby/F 树初始化，调用批次并处理 relocation、验证和收尾。",
+      "input": "规范仿射 Q、N、B1/B2、D、预算与可选承载指数",
+      "output": "单曲线 Stage2Tail 与长度/资源/计时信息",
+      "depends": [
+        "plan",
+        "points",
+        "tree",
+        "remainder",
+        "batch",
+        "checks",
+        "resources"
+      ],
+      "note": "接入已有 Stage1 点，不重算 Stage1 标量。",
+      "find": "int run_real("
+    },
+    {
+      "id": "plan",
+      "title": "规划与准入",
+      "path": "src/ecm/backend/cuda/stage2/plan.cpp",
+      "role": "选择 D，查询设备、NTT 形状、请求及内存预算；执行与查询复用 prepare_stage2_plan。",
+      "input": "模数、B1/B2、D、显存和策略",
+      "output": "D、P、容量/预算与可执行计划",
+      "depends": [
+        "ntt_shape",
+        "context"
+      ],
+      "note": "有效 D 扫描继续使用 legacy_56_1。冻结候选速率表在实验目录，不能把它们当生产选型。",
+      "find": "int prepare_stage2_plan("
+    },
+    {
+      "id": "batch",
+      "title": "Giant 批次主循环",
+      "path": "src/ecm/backend/cuda/stage2/batch.cpp",
+      "role": "交织 giant 生成、G 树、fold，再执行下降、块积和因子扫描；管理批次内数据流。",
+      "input": "Q、D、F/finv、区间、资源 owner",
+      "output": "目标环叶值、命中和因子",
+      "depends": [
+        "points",
+        "tree",
+        "remainder",
+        "factors",
+        "checks"
+      ],
+      "note": "Giant → G 树 → fold 会多次循环，不能理解为三项一次性的并行任务。",
+      "find": "run_batched("
+    },
+    {
+      "id": "points",
+      "title": "点与归一化",
+      "path": "src/ecm/backend/cuda/stage2/points.cpp",
+      "role": "生成 baby/giant；按规则选择 ladder 或相邻 seed/差分 chain；分段积、主机逆及单位性恢复。",
+      "input": "Q、D、索引集合、实际模数宽度",
+      "output": "仿射/齐次叶与 Gamma 状态",
+      "depends": [
+        "arith",
+        "resources"
+      ],
+      "note": "GPU 积树与主机逆/GCD 配合。非单位和预算不足保留回退。",
+      "find": ""
+    },
+    {
+      "id": "tree",
+      "title": "F / G 乘积树",
+      "path": "src/ecm/backend/cuda/stage2/tree.cpp",
+      "role": "组织树布局、实际次数、空位、根选择和子节点释放，发出多项式请求。",
+      "input": "X−xⱼ 或 ZᵢX−Xᵢ 叶",
+      "output": "F/G 根及下降需要的树层",
+      "depends": [
+        "product",
+        "resources"
+      ],
+      "note": "尾批按真实次数计算，不能把空位当完整数学工作量。",
+      "find": ""
+    },
+    {
+      "id": "product",
+      "title": "多项式乘法与打包",
+      "path": "src/ecm/backend/cuda/stage2/product.cpp",
+      "role": "打包、普通/批量乘法、输出窗口、驻留输入合同和 NTT/S4 计数；不负责树遍历或 GCD。",
+      "input": "多精度系数及乘法/窗口请求",
+      "output": "乘积或约定输出窗口",
+      "depends": [
+        "ntt_runtime",
+        "s4",
+        "arith"
+      ],
+      "note": "pack_launch.h 是有限的 pack 启动帮助接口；测量入口链接实际模块。",
+      "find": ""
+    },
+    {
+      "id": "remainder",
+      "title": "逆 / fold / 下降",
+      "path": "src/ecm/backend/cuda/stage2/remainder.cpp",
+      "role": "Newton 截断逆、G·H mod F、scaled root/frontier 与 F 树下降。",
+      "input": "F、finv、G/H、真实布局和缩放",
+      "output": "累计 H 与最终叶值",
+      "depends": [
+        "product",
+        "resources"
+      ],
+      "note": "驻留、复用和主机回退保持同一数学结果；Gamma 在下降前校正。",
+      "find": ""
+    },
+    {
+      "id": "s4",
+      "title": "系数归约",
+      "path": "src/ecm/backend/cuda/stage2/s4.cpp",
+      "role": "准备除数、形状及 hook，把 NTT/carry 结果归约到实际算术模数。",
+      "input": "打包槽、乘积 digit、模数 M",
+      "output": "规范多精度系数",
+      "depends": [
+        "arith",
+        "checks",
+        "resources"
+      ],
+      "note": "通用模数用 reciprocal 长除法；梅森模数可以折叠。目标 N 的因子语义保持。",
+      "find": "int s4_reduce_init("
+    },
+    {
+      "id": "resources",
+      "title": "资源所有权",
+      "path": "src/ecm/backend/cuda/stage2/resources.cpp",
+      "role": "实现点、S4、fold/frontier owner 的分配、租约、事件和析构。",
+      "input": "准入计划、缓冲请求、借用范围",
+      "output": "有明确寿命的分配与释放",
+      "depends": [
+        "context",
+        "checks"
+      ],
+      "note": "释放/增长前排空依赖快照，owner 与借用 slice 不重复拥有同一分配。",
+      "find": ""
+    },
+    {
+      "id": "checks",
+      "title": "必需检查与排空",
+      "path": "src/ecm/backend/cuda/stage2/checks.cpp",
+      "role": "必需算术自检、GMP 抽样、异步快照、carry/归约检查及排空。",
+      "input": "中间算术结果、事件、形状和模数",
+      "output": "通过、失败或阻止成功发布",
+      "depends": [
+        "diagnostics"
+      ],
+      "note": "降低日志等级不能跳过算术错误；结果成功和 relocation 决策前排空相关检查。",
+      "find": "void s4_oracle_drain("
+    },
+    {
+      "id": "factors",
+      "title": "块积与因子",
+      "path": "src/ecm/backend/cuda/stage2/factors.cpp",
+      "role": "设备每64叶形成块积，主机在目标 N 上执行 GCD 并记录真因子。",
+      "input": "下降叶、目标 N、块积",
+      "output": "验证后的命中和因子集合",
+      "depends": [
+        "arith"
+      ],
+      "note": "承载 M 的单位性不能替代目标 N 的因子语义。",
+      "find": "void dev_block_products("
+    },
+    {
+      "id": "diagnostics",
+      "title": "可选诊断",
+      "path": "src/ecm/backend/cuda/stage2/diagnostics.cpp",
+      "role": "可选夹具、GMP 参考、F 转储、故障注入和崩溃报告。",
+      "input": "显式诊断开关与被测模块",
+      "output": "诊断证据或错误",
+      "depends": [],
+      "note": "不是正常执行的流程选择器；既有 M127 活动点上下文 baby 合成夹具限制见正式 Stage2 文档。",
+      "find": ""
+    },
+    {
+      "id": "context",
+      "title": "模数与编码上下文",
+      "path": "src/ecm/backend/cuda/stage2/context.cpp",
+      "role": "共享 GMP/字数组编码及整数帮助；核心 ModulusContext 区分目标 N 与算术模数 M。",
+      "input": "目标 N、可选承载指数和编码数据",
+      "output": "实际 S/W、规范编码和上下文",
+      "depends": [],
+      "note": "W=ceil(S/64)；显式承载必须验证 N 整除 2ᵖ−1，不能按位宽猜测资格。",
+      "find": ""
+    },
+    {
+      "id": "options",
+      "title": "默认值与静态快照",
+      "path": "src/ecm/backend/cuda/stage2/options.cpp",
+      "role": "同一翻译单元先设置未显式指定的生产默认值，再按固定次序构造环境快照和共享状态。",
+      "input": "进程启动时的环境、生产默认宏",
+      "output": "后续模块读取的选项状态",
+      "depends": [],
+      "note": "这一部分发生在 main 之前；改变环境解析时机可能改变行为，不能随意分散。",
+      "find": ""
+    },
+    {
+      "id": "tune",
+      "title": "生产 NTT 校准",
+      "path": "src/ecm/backend/cuda/stage2/tune.cpp",
+      "role": "用真实 NTT 运行时执行指定长度/batch 的校准和 GMP 验证，向外层输出 profile 记录。",
+      "input": "长度范围、batch、重复次数和预算",
+      "output": "校准采样与完整 profile",
+      "depends": [
+        "ntt_runtime",
+        "ntt_checks"
+      ],
+      "note": "纯 NTT tune 不执行 ECM 曲线；完整 Auto B2 的规划/校准编排由外层核心工具和驱动负责。",
+      "find": "int ecm_cuda_stage2_tune_ntt_batches("
+    },
+    {
+      "id": "ntt_shape",
+      "title": "NTT 形状规划",
+      "path": "src/ecm/backend/cuda/ntt/shape.cpp",
+      "role": "从多项式系数请求选择 packing、digit 位宽、变换长度和形状，检查 Goldilocks 精确性。",
+      "input": "系数数、S、batch 与预算",
+      "output": "NttShape、根表/精确性约束",
+      "depends": [],
+      "note": "NTT 的 bpw 和 N 是另一层几何，不是 CGBN 容器。",
+      "find": "bool ntt_shape_query("
+    },
+    {
+      "id": "ntt_runtime",
+      "title": "NTT 主机执行",
+      "path": "src/ecm/backend/cuda/ntt/runtime.cpp",
+      "role": "拥有 Arena、根表、缓冲与事件，调度 pack、两个 forward、融合 product/inverse、carry 和输出 hook。",
+      "input": "系数/设备输入、形状、batch、归约 hook",
+      "output": "精确卷积 digit 或系数输出",
+      "depends": [
+        "ntt_shape",
+        "ntt_graph",
+        "ntt_checks",
+        "ntt_kernel"
+      ],
+      "note": "NTT 不依赖 ECM 的 F/G 树、fold 或 GCD；能被独立探针复用。",
+      "find": "int ntt_poly_mul_batch_host("
+    },
+    {
+      "id": "ntt_graph",
+      "title": "可选 Graph 缓存",
+      "path": "src/ecm/backend/cuda/ntt/graph.cpp",
+      "role": "在显式开启短 NTT Graph 时捕获/复用提交；释放、增长或驱逐工作区/根表前失效。",
+      "input": "稳定工作区、形状及根表",
+      "output": "可复用提交图或普通提交",
+      "depends": [],
+      "note": "默认关闭。Graph 只改变提交方式，不改变 pack、carry、S4 和数学 NTT 数。",
+      "find": ""
+    },
+    {
+      "id": "ntt_checks",
+      "title": "NTT 独立检查",
+      "path": "src/ecm/backend/cuda/ntt/checks.cpp",
+      "role": "GMP、workspace、寿命、容量及协作 outer 检查。",
+      "input": "NTT 请求、设备输出和 Arena 状态",
+      "output": "可复现正确性与资源检查",
+      "depends": [],
+      "note": "与 Stage2 的曲线检查分层，避免底层依赖 ECM 树流程。",
+      "find": ""
+    },
+    {
+      "id": "arith",
+      "title": "Stage2 算术 CU",
+      "path": "src/ecm/backend/cuda/stage2/device/arithmetic_kernels.cu",
+      "role": "唯一点/系数算术设备编译单元，展开模板并提供薄启动及设备常量上传接口。",
+      "input": "原始设备指针、实际 W/S、发射参数",
+      "output": "point/chain/baby/S4/pack/scale 等 kernel",
+      "depends": [
+        "shared",
+        "tiers",
+        "launch"
+      ],
+      "note": "常量定义与上传归同一 CU 所有；当前模块不使用 RDC。",
+      "find": ""
+    },
+    {
+      "id": "ntt_kernel",
+      "title": "NTT 设备 CU",
+      "path": "src/ecm/backend/cuda/ntt/device/transform_kernels.cu",
+      "role": "唯一生产 NTT 设备编译单元，实例化 transform、tile、outer、carry 并提供启动接口。",
+      "input": "Goldilocks digit、根、形状与几何",
+      "output": "变换、逐点乘法、逆变换和 carry 结果",
+      "depends": [
+        "shared",
+        "launch"
+      ],
+      "note": "普通离线构建把目标架构设备镜像嵌入程序；运行时按请求选已编入 kernel。",
+      "find": ""
+    },
+    {
+      "id": "shared",
+      "title": "纯设备原语",
+      "path": "src/ecm/backend/cuda/arithmetic/goldilocks/goldilocks.cuh",
+      "role": "可复用 Goldilocks 域、tile、CGBN 适配、Stage2 scalar 与 pack 索引等原语。",
+      "input": "域元素/原始字数组",
+      "output": "局部算术操作",
+      "depends": [],
+      "note": "Goldilocks digit、Montgomery 点域和普通规范系数是不同表示，不能直接混用。",
+      "find": ""
+    },
+    {
+      "id": "experiments",
+      "title": "独立实验实现",
+      "path": "tools/experiments/cuda/stage2_tree/worker.cu",
+      "role": "开发 wrapper 选择自己的树、NTT 与校准实现；BSGS、NTT 变体、Tensor 和 giant 候选分目录维护。",
+      "input": "显式实验构建选项和受支持输入",
+      "output": "独立实验程序 / 探针",
+      "depends": [
+        "shared"
+      ],
+      "note": "生产闭包禁止 tools/bench、tools/test、tools/experiments 和 .refactor；有限测试适配只由测试目标链接。",
+      "find": ""
+    },
+    {
+      "id": "inventory",
+      "title": "权威编译源清单",
+      "path": "tools/build/internal/cuda_sources.cmake",
+      "role": "显式维护源成员和次序，CMake 直接消费，PowerShell 导出同一 JSON 清单。",
+      "input": "Stage1、Stage2、PRAC 与实验源组",
+      "output": "源清单、目标依赖图和编译输入",
+      "depends": [],
+      "note": "这里按翻译单元列源；.cuh/.inl/.def 是依赖，并不自动成为独立编译目标。",
+      "find": ""
+    },
+    {
+      "id": "identity",
+      "title": "构建身份与依赖",
+      "path": "tools/build/internal/cuda_build_state.ps1",
+      "role": "递归包含扫描与 NVCC depfile 互补，比较命令、响应文件、依赖内容和对象摘要。",
+      "input": "源组、工具链、依赖及已有对象",
+      "output": "重编 / 拒绝 / 身份一致的复用",
+      "depends": [
+        "inventory"
+      ],
+      "note": "文件时间戳不是复用依据；保留 mtime 也不能绕过内容变化。",
+      "find": ""
+    },
+    {
+      "id": "s1_task",
+      "title": "Stage1 单任务",
+      "path": "src/ecm/service/stage1/task.cpp",
+      "role": "唯一单任务顺序、批次寿命、逐曲线身份核对、发布和 seal。",
+      "input": "借用 Stage1Request、三项 TaskDependencies",
+      "output": "拥有结果的 TaskResult",
+      "depends": [
+        "execution",
+        "publication"
+      ],
+      "find": "TaskResult run_stage1_task(",
+      "note": ""
+    },
+    {
+      "id": "execution",
+      "title": "Stage1 唯一执行分派",
+      "path": "src/ecm/service/stage1/execution.cpp",
+      "role": "保留 GPU Edwards、CPU Montgomery、CPU Edwards、GPU Montgomery 的接纳顺序。",
+      "input": "已解析执行选项、N/B1、曲线批量",
+      "output": "结果、状态与持久化回调",
+      "depends": [
+        "backend",
+        "ed_workflow"
+      ],
+      "find": "",
+      "note": ""
+    },
+    {
+      "id": "ed_workflow",
+      "title": "Edwards 普通主机流程",
+      "path": "src/ecm/backend/cuda/stage1/edwards/host_workflow.cpp",
+      "role": "构造、恢复、标量/NAF、计算请求、归一化和文件协作。",
+      "input": "N、sigma、标量及任务选项",
+      "output": "完成点、因子和保存点",
+      "depends": [
+        "edwards"
+      ],
+      "find": "",
+      "note": ""
+    },
+    {
+      "id": "mont_math",
+      "title": "Montgomery 主机数学",
+      "path": "src/ecm/backend/cuda/stage1/montgomery/host_math.cpp",
+      "role": "PARAM0/2/3 曲线构造、编码、规范点和 GCD；无 CUDA SDK。",
+      "input": "N、sigma、主机字数组",
+      "output": "曲线布局、规范点与因子",
+      "depends": [],
+      "find": "",
+      "note": ""
+    },
+    {
+      "id": "mont_io",
+      "title": "Montgomery 文件与输出",
+      "path": "src/ecm/backend/cuda/stage1/montgomery/host_io.cpp",
+      "role": "checkpoint/save、进度文本、窗口 CSV 和完成摘要的编码；无设备同步。",
+      "input": "已回读/编码的主机数据",
+      "output": "文件、屏幕和返回状态",
+      "depends": [],
+      "find": "",
+      "note": ""
+    },
+    {
+      "id": "publication",
+      "title": "结果发布",
+      "path": "src/ecm/storage/results/publication.cpp",
+      "role": "内部逐曲线与外部合并结果的校验、锁、编码、账本和 durable 发布。",
+      "input": "Submission/内部记录及目标路径",
+      "output": "已提交记录、CRC 和去重状态",
+      "depends": [],
+      "find": "",
+      "note": ""
+    },
+    {
+      "id": "queue",
+      "title": "Stage1 队列工作流",
+      "path": "src/ecm/service/work/queue_workflow.cpp",
+      "role": "领取任务、解释任务结果、finished/源行改写/交接/P95 完成协议。",
+      "input": "NextQueueTask、QueuePaths、任务依赖",
+      "output": "队列及交接状态",
+      "depends": [
+        "s1_task",
+        "transfer"
+      ],
+      "find": "int run_queue_workflow(",
+      "note": ""
+    },
+    {
+      "id": "s2_task",
+      "title": "Stage2 父任务与曲线 worker",
+      "path": "src/ecm/service/stage2/task.cpp",
+      "role": "父循环维护 pending/receipt/done/seal/源行复核；worker 重读 save/hash 后规划、计算和发布。",
+      "input": "已解析 Options、窄 TaskPaths/QueuePolicy/TaskDefaults",
+      "output": "持久曲线进度、结果和退出状态",
+      "depends": [
+        "planning",
+        "process",
+        "engine",
+        "publication"
+      ],
+      "find": "int run_tasks(",
+      "note": ""
+    },
+    {
+      "id": "planning",
+      "title": "Stage2 主机规划与调优",
+      "path": "src/ecm/service/planning/stage2.cpp",
+      "role": "方案、校准、测量、profile/cache 协作；不含完整 Settings/TOML。",
+      "input": "Options、记录、三个 TaskDefaults 值",
+      "output": "选定计划、运行测量和 tune profile",
+      "depends": [
+        "plan",
+        "tune"
+      ],
+      "find": "",
+      "note": ""
+    },
+    {
+      "id": "process",
+      "title": "曲线进程适配",
+      "path": "src/ecm/platform/process/stage2_curve_process.cpp",
+      "role": "唯一子进程循环、Job/pipe、停止与资源寿命；不依赖 CUDA/GMP/引擎。",
+      "input": "显式 CurveProcessRequest",
+      "output": "退出码、stdout/stderr 和同步选择通知",
+      "depends": [],
+      "find": "int run_curve_process(",
+      "note": ""
+    }
+  ],
+  "flows": {
+    "mont": {
+      "label": "Stage1 · Montgomery",
+      "sub": "PARAM0 / 2 / 3，主机切片驱动",
+      "steps": [
+        {
+          "title": "进程与任务入口",
+          "owner": "cpu",
+          "modules": [
+            "driver",
+            "s1_task"
+          ],
+          "body": "应用合并配置并解析任务；task 验证输出/身份、打开批次；单次和队列共用此入口。",
+          "artifact": "有效任务身份",
+          "detail": "曲线、param（仅 Montgomery）、sigma 固定后，外部因子语义必须统一。"
+        },
+        {
+          "title": "指数与恢复准备",
+          "owner": "cpu",
+          "modules": [
+            "execution",
+            "mont_math"
+          ],
+          "body": "构造/复用光滑标量，检查 checkpoint 身份，恢复已完成切片；新任务准备初始曲线。",
+          "artifact": "标量 s / 恢复状态",
+          "detail": "部分曲线构造与设备环境准备在具体路径内交织，图中表示职责顺序而非每条 API 的全序。"
+        },
+        {
+          "title": "选择设备与容器",
+          "owner": "cpu",
+          "modules": [
+            "backend",
+            "mont",
+            "tiers"
+          ],
+          "body": "查询并选择 GPU；按 N 位数加六位余量确定候选，由实际链接的 kernel 工厂确认可用。",
+          "artifact": "BITS、TPI、TPB 与 kernel 指针",
+          "detail": "PARAM0 可跳过未编入档；PARAM2/3 保留现有精确工厂查找的拒绝边界。"
+        },
+        {
+          "title": "分配、编码与上传",
+          "owner": "transfer",
+          "modules": [
+            "mont",
+            "mont_math"
+          ],
+          "body": "构建/恢复点状态，GMP 编为字数组，分配标量和曲线设备缓冲并上传。",
+          "artifact": "设备驻留的曲线与标量",
+          "detail": "曲线构造/编码属于普通 CXX；CUDA 分配、上传、同步属于 adapter。"
+        },
+        {
+          "title": "切片发射点乘",
+          "owner": "gpu",
+          "modules": [
+            "mont_device",
+            "launch"
+          ],
+          "body": "主机发射一个标量片段；设备按已编译 PARAM 与几何执行 ladder/点算术。",
+          "artifact": "推进后的设备点",
+          "detail": "重复：发射 → 完成/回读 → 回调/检查点 → 下一片。PRAC/resident 只有显式编入与选择时才走可选路径。"
+        },
+        {
+          "title": "等待与状态回读",
+          "owner": "transfer",
+          "modules": [
+            "mont"
+          ],
+          "body": "CUDA 等待切片完成，检查错误并回读所需状态；停止仍在原切片边界。",
+          "artifact": "可恢复的批次进度",
+          "detail": "同步和回读保留 CUDA SDK，不在 GPU 中写文件。"
+        },
+        {
+          "title": "进度和 checkpoint 文件",
+          "owner": "disk",
+          "modules": [
+            "mont_io"
+          ],
+          "body": "按时间和停止条件编码主机状态、原子写 checkpoint，并输出进度。",
+          "artifact": "可恢复进度/屏幕",
+          "detail": "设备回读与文件写入分开；不是每片均写完成 save。"
+        },
+        {
+          "title": "归一化与结果",
+          "owner": "cpu",
+          "modules": [
+            "mont_math",
+            "mont_io"
+          ],
+          "body": "主机解码末点，逐曲线在 N 上计算 GCD；可逆时规范化并按路径原顺序写 save。",
+          "artifact": "Stage1 save / 因子",
+          "detail": ""
+        },
+        {
+          "title": "逐曲线与批次结果",
+          "owner": "disk",
+          "modules": [
+            "s1_task",
+            "publication"
+          ],
+          "body": "task 核对逐曲线 sigma/结果，发布外部 submission、内部批次并 seal；成功后结束批次。",
+          "artifact": "内部 JSONL / 外部合并结果",
+          "detail": "即时因子仍在各后端原安全位置；不统一 CPU/GPU 的旧顺序差异。"
+        },
+        {
+          "title": "可选交接",
+          "owner": "disk",
+          "modules": [
+            "queue",
+            "transfer"
+          ],
+          "body": "在支持的队列交接模式下暂存并去重追加 ECMSTAGE2 记录，供独立 Stage2 worker 消费。",
+          "artifact": "Stage2 队列任务",
+          "detail": "单次 GPU kernel 完成不等于另一个进程已经启动。"
+        }
+      ]
+    },
+    "edwards": {
+      "label": "Stage1 · Edwards",
+      "sub": "Atkin–Morain，默认 NAF，可选 binary",
+      "steps": [
+        {
+          "title": "任务与曲线身份",
+          "owner": "cpu",
+          "modules": [
+            "driver",
+            "s1_task",
+            "ed_workflow"
+          ],
+          "body": "应用合并配置并解析任务；task 验证输出/身份、打开批次；单次和队列共用此入口。",
+          "artifact": "48·lcm(1…B1) 与曲线状态",
+          "detail": ""
+        },
+        {
+          "title": "设备与容器分派",
+          "owner": "cpu",
+          "modules": [
+            "edwards",
+            "tiers"
+          ],
+          "body": "设置 GPU 和 blocking-sync 调度，选择至少保留一位余量的最小已编入容器。",
+          "artifact": "容器、TPI、TPB",
+          "detail": "由 edwards_naf.cpp / edwards.cpp 分别接入 NAF/binary。"
+        },
+        {
+          "title": "NAF 准备 / binary 分支",
+          "owner": "cpu",
+          "modules": [
+            "ed_workflow",
+            "ed_runtime"
+          ],
+          "body": "默认 NAF 构造紧凑有符号位图；binary 使用标量位段。恢复时保留原标量、窗口与列位置合同。",
+          "artifact": "NAF 计划或 binary 标量",
+          "detail": ""
+        },
+        {
+          "title": "设备字典与驻留点",
+          "owner": "gpu",
+          "modules": [
+            "ed_device"
+          ],
+          "body": "NAF 在 GPU 预计算奇数倍字典；点以 CGBN Montgomery 域 X/Y/Z/T 在设备驻留。binary 不需要 NAF 字典。",
+          "artifact": "NAF 字典 / 初始累加点",
+          "detail": "窗口和倍点公式受现有显式选项控制，网页不改变任何设置。"
+        },
+        {
+          "title": "自适应切片",
+          "owner": "gpu",
+          "modules": [
+            "ed_runtime",
+            "ed_device"
+          ],
+          "body": "主机循环发射列/位片段，设备推进点；生产自适应控制器根据上一片时间调节后续片大小。",
+          "artifact": "推进后的投影点",
+          "detail": "这是有状态循环，阶段图的播放间隔只是阅读节奏。"
+        },
+        {
+          "title": "阻塞等待与规范回读",
+          "owner": "transfer",
+          "modules": [
+            "ed_runtime"
+          ],
+          "body": "按该路径等待顺序完成设备工作，检查报告并回读规范普通坐标，再进入进度/停止回调。",
+          "artifact": "可回调、可检查点的状态",
+          "detail": "这些检查与回读由 Stage1 自己的主机运行时完成，不依赖 Stage2 的检查模块。"
+        },
+        {
+          "title": "规范点与完成 save",
+          "owner": "disk",
+          "modules": [
+            "ed_workflow"
+          ],
+          "body": "普通主机流程按原顺序核对因子和点，编码完成 save；GPU 只返回计算状态。",
+          "artifact": "ECM-EDWARDS-AM save",
+          "detail": "Edwards Stage2 当前要求显式 B2。"
+        },
+        {
+          "title": "逐曲线与批次结果",
+          "owner": "disk",
+          "modules": [
+            "s1_task",
+            "publication"
+          ],
+          "body": "task 核对逐曲线 sigma/结果，发布外部 submission、内部批次并 seal；成功后结束批次。",
+          "artifact": "内部 JSONL / 外部合并结果",
+          "detail": "即时因子仍在各后端原安全位置；不统一 CPU/GPU 的旧顺序差异。"
+        },
+        {
+          "title": "队列完成与交接",
+          "owner": "disk",
+          "modules": [
+            "queue",
+            "transfer"
+          ],
+          "body": "队列工作流提交 finished、复核/改写源行并刷新 Stage2/P95 交接；单次模式直接展示并退出。",
+          "artifact": "队列/交接",
+          "detail": ""
+        }
+      ]
+    },
+    "stage2": {
+      "label": "Stage2 · 生产续算",
+      "sub": "直接 save / 队列 → tree GPU batched",
+      "steps": [
+        {
+          "title": "main 前的默认值",
+          "owner": "cpu",
+          "modules": [
+            "options"
+          ],
+          "body": "options.cpp 先补未设置的生产默认环境值，再按固定顺序构造静态快照。",
+          "artifact": "稳定的进程选项快照",
+          "detail": "不是每条曲线都重新解析这一组静态环境值。"
+        },
+        {
+          "title": "入口、模式与存档",
+          "owner": "disk",
+          "modules": [
+            "s2_driver",
+            "s2_task"
+          ],
+          "body": "解析 CLI/TOML，选择直接 save 或队列；校验完成点、曲线模型、checksum、B1/B2 及曲线进度。",
+          "artifact": "规范 Q、N 与单曲线请求",
+          "detail": "纯 NTT tune 和 plan-only 会在各自分支返回，不进入本条曲线链路。"
+        },
+        {
+          "title": "父任务持久化与子进程",
+          "owner": "disk",
+          "modules": [
+            "s2_task",
+            "process"
+          ],
+          "body": "先写 pending，再启动曲线子进程；worker 重读 save 和 hash，失败保留恢复材料。",
+          "artifact": "pending / 独立 worker",
+          "detail": ""
+        },
+        {
+          "title": "设备、模数与规划",
+          "owner": "cpu",
+          "modules": [
+            "engine",
+            "context",
+            "plan"
+          ],
+          "body": "设置设备，区分目标 N 与算术 M；验证承载资格，选择 D、P、NTT 请求及预算/回退策略。",
+          "artifact": "S、W、D、P 与资源计划",
+          "detail": "Q 是 Stage1 保存的仿射点，不重新执行 Stage1。"
+        },
+        {
+          "title": "算术预检与 baby 点",
+          "owner": "gpu",
+          "modules": [
+            "engine",
+            "checks",
+            "points",
+            "arith"
+          ],
+          "body": "准备 Montgomery 常量和 Q，运行必需算术检查，生成 baby 点；GPU 积树配合主机逆/GCD 完成归一化。",
+          "artifact": "普通 xⱼ 与 baby 数据",
+          "detail": "校验/点归一化跨 CPU 和 GPU；GPU 标签表示主要计算归属。"
+        },
+        {
+          "title": "F 树与 Newton 逆",
+          "owner": "gpu",
+          "modules": [
+            "tree",
+            "product",
+            "remainder"
+          ],
+          "body": "构造 F=∏(X−xⱼ)，生成/保留下降所需树层；准备反转 F 的截断逆 finv。",
+          "artifact": "F、finv 和有序树层",
+          "detail": "多项式请求进入 NTT/S4，可按准入选择驻留或回退路径。"
+        },
+        {
+          "title": "Giant 点块",
+          "owner": "gpu",
+          "modules": [
+            "batch",
+            "points",
+            "arith"
+          ],
+          "body": "按 D 和批次区间生成 giant；选择 ladder 或相邻 seed/chain，处理目标环单位性和必要重做。",
+          "artifact": "仿射/齐次 giant 叶与 Gamma",
+          "detail": "本步与后两步组成批次循环，直到本区间所有 giant 覆盖完成。"
+        },
+        {
+          "title": "G 树与累计 fold",
+          "owner": "gpu",
+          "modules": [
+            "tree",
+            "remainder",
+            "product"
+          ],
+          "body": "把本批叶构成 G，累计 H←G·H mod F；按实际次数与尾批布局调度多项式请求。",
+          "artifact": "累计 H 及缩放状态",
+          "detail": "下一块 giant 到来后重复构树与 fold；不能把三个阶段墙钟简单相加当并行峰值。"
+        },
+        {
+          "title": "缩放校正与下降",
+          "owner": "gpu",
+          "modules": [
+            "remainder",
+            "product",
+            "s4"
+          ],
+          "body": "校正齐次 Gamma，准备 scaled 根并沿 F 树向下传播，得到 P 个叶值。",
+          "artifact": "目标解释所需的叶值",
+          "detail": "普通 digit、Goldilocks 元素与 Montgomery 点域在明确接口转换。"
+        },
+        {
+          "title": "块积、GCD 与重放判断",
+          "owner": "cpu",
+          "modules": [
+            "factors",
+            "batch"
+          ],
+          "body": "GPU 求块积，CPU 在目标 N 上求 GCD、筛真因子；relocation 的必要条件下重放原区间。",
+          "artifact": "Stage2Tail、命中与真因子",
+          "detail": "承载 M 只改变算术表示；GCD/因子语义始终针对 N。"
+        },
+        {
+          "title": "检查排空与资源收尾",
+          "owner": "transfer",
+          "modules": [
+            "checks",
+            "resources",
+            "ntt_graph"
+          ],
+          "body": "排空相关异步检查后作成功/relocation 决策；释放前处理依赖事件，NTT 根表/工作区变化前使 Graph 失效。",
+          "artifact": "已验证的结果与释放后的 owner",
+          "detail": "检查穿插在执行中，不是到最后才第一次校验；资源释放由实际作用域/析构负责。"
+        },
+        {
+          "title": "结果发布与任务进度",
+          "owner": "disk",
+          "modules": [
+            "s2_task",
+            "publication"
+          ],
+          "body": "worker 发布内部/外部结果与 receipt；父进程确认 done、seal、源行复核、finished 和队列移除，最后清理进度。",
+          "artifact": "JSONL、提交文件、日志与进度",
+          "detail": "日志级别影响可见性，不屏蔽算术错误。"
+        }
+      ]
+    },
+    "plan": {
+      "label": "Stage2 · 仅规划",
+      "sub": "--plan-only，不执行 ECM 曲线",
+      "steps": [
+        {
+          "title": "解析与校验输入",
+          "owner": "cpu",
+          "modules": [
+            "s2_driver",
+            "planning"
+          ],
+          "body": "读取请求、配置和存档，建立规划所需的模数与曲线任务身份。",
+          "artifact": "合法查询",
+          "detail": ""
+        },
+        {
+          "title": "建立模数上下文",
+          "owner": "cpu",
+          "modules": [
+            "context"
+          ],
+          "body": "确定目标 N 与实际算术 M，验证显式承载条件。",
+          "artifact": "S / W / 承载资格",
+          "detail": ""
+        },
+        {
+          "title": "共享规划器",
+          "owner": "cpu",
+          "modules": [
+            "plan",
+            "ntt_shape"
+          ],
+          "body": "查询设备能力、NTT 形状和请求预算，运行与执行路径相同的 prepare_stage2_plan。",
+          "artifact": "D、P、内存准入/回退信息",
+          "detail": ""
+        },
+        {
+          "title": "返回计划",
+          "owner": "disk",
+          "modules": [
+            "s2_driver",
+            "planning"
+          ],
+          "body": "输出计划记录后返回，不进入 run_real 的 baby/F/G 树和算术自检。",
+          "artifact": "curves_executed=0",
+          "detail": "规划可能查询 CUDA 设备或策略缓存，不等于完全不访问 GPU 驱动。"
+        }
+      ]
+    },
+    "tune": {
+      "label": "Stage2 · 纯 NTT 校准",
+      "sub": "--tune ntt，不执行 ECM 曲线",
+      "steps": [
+        {
+          "title": "校准参数与身份",
+          "owner": "cpu",
+          "modules": [
+            "planning",
+            "process"
+          ],
+          "body": "选择设备、长度范围、batch、重复数与预算，记录程序/构建身份。",
+          "artifact": "明确的校准集合",
+          "detail": ""
+        },
+        {
+          "title": "真实 NTT 模块",
+          "owner": "gpu",
+          "modules": [
+            "tune",
+            "ntt_runtime",
+            "ntt_kernel"
+          ],
+          "body": "对各形状执行 warmup 与测量，请求使用生产 NTT 运行时和相同启动接口。",
+          "artifact": "按形状采样",
+          "detail": ""
+        },
+        {
+          "title": "GMP 与采样检查",
+          "owner": "cpu",
+          "modules": [
+            "ntt_checks",
+            "tune"
+          ],
+          "body": "验证卷积结果及测量边界，将状态、校验和形状信息输出给 sink。",
+          "artifact": "验证后的 sample",
+          "detail": ""
+        },
+        {
+          "title": "完整 profile 发布",
+          "owner": "disk",
+          "modules": [
+            "planning"
+          ],
+          "body": "先写 partial，核对程序/manifest 身份不变，成功后完整发布；失败保留部分证据。",
+          "artifact": "校准 profile",
+          "detail": "纯 NTT profile 不自动代表整曲线的 D/B2 选型已获得性能资格。"
+        }
+      ]
+    }
+  },
+  "buildSteps": [
+    [
+      "选择构建边界",
+      "从六组入口选择 Stage1 / Stage2 和 dev / local / release。Stage1 dev 是受限/实验构建策略；Stage2 dev 选择独立实验 worker，二者含义不同。",
+      "tools/build/build_stage2_local.ps1"
+    ],
+    [
+      "展开权威源清单",
+      "CMake 消费 cuda_sources.cmake；PowerShell 导出同一 cuda_sources.json。按实际目标闭包收集对象库/静态库，保持显式源成员及次序。",
+      "tools/build/internal/cuda_sources.cmake"
+    ],
+    [
+      "确定编译合同",
+      "固定工具链、GMP、GPU 架构、位宽筛选、算法宏和默认流 ABI。tiers.def 在各 TU 反复展开，不是运行时加载的插件清单。",
+      "src/ecm/backend/cuda/dispatch/tiers.def"
+    ],
+    [
+      "校验依赖与缓存",
+      "扫描 .h/.cuh/.inl/.inc/.def 与响应文件，NVCC depfile 补齐宏/SDK 依赖；按内容、命令和对象摘要判定复用，生产闭包拒绝工具与实验目录。",
+      "tools/build/internal/cuda_build_state.ps1"
+    ],
+    [
+      "独立编译与设备镜像",
+      "普通 C++ 形成主机对象；NVCC 分离 CUDA 主机/设备代码并经 ptxas 生成目标 SASS。Stage1 多 TU 可并行，Stage2 本机脚本按源单元构建并使用 split-compile。",
+      "tools/build/internal/parallel_nvcc.ps1"
+    ],
+    [
+      "链接成可执行程序",
+      "主机对象、薄启动器、设备镜像及 GMP/CUDA 库链接为 ecm_cuda 或 ecm_cuda_stage2。当前 Stage2 设备常量与上传同 CU，无需 RDC；不在启动时重新编译项目 .cu。",
+      "CMakeLists.txt"
+    ],
+    [
+      "发布、拆分与身份",
+      "发布使用匹配的通用 GMP；Stage1 按策略拆分设备镜像，Stage2 逐架构构建。发布 ZIP 只含允许文件，SkipBuild 校验已有程序、对象与源身份。",
+      "tools/build/internal/package_stage2.ps1"
+    ]
+  ],
+  "changes": [
+    {
+      "id": "host_io",
+      "label": "修改配置/构造/文件/输出正文",
+      "title": "普通 CXX 按需编译，CUDA 对象复用",
+      "body": "配置解析、主机曲线数学、checkpoint/save 编码、data/result/tune/screen 正文均属于普通 CXX 编译闭包。修改真实设备合同或头仍会使受影响 CU 失效。",
+      "paths": [
+        "src/ecm/application/configuration/ecm_toml.h",
+        "src/ecm/backend/cuda/stage1/montgomery/host_math.cpp",
+        "src/ecm/backend/cuda/stage1/montgomery/host_io.cpp",
+        "src/ecm/storage/results/publication.cpp"
+      ]
+    },
+    {
+      "id": "host",
+      "label": "修改 Stage2 主机 .cpp",
+      "title": "重编受影响的主机单元并重新链接",
+      "body": "若 CUDA 的命令、依赖与对象身份仍匹配，-HostOnly 可复用两个设备对象。不是无条件相信旧 .obj。",
+      "paths": [
+        "src/ecm/backend/cuda/stage2/engine.cpp",
+        "src/ecm/backend/cuda/stage2/batch.cpp"
+      ]
+    },
+    {
+      "id": "device",
+      "label": "修改设备 .cuh",
+      "title": "所有实际依赖它的 CUDA TU 必须重编",
+      "body": "模板头不是独立对象。依赖扫描和编译器记录共同定位消费者；共享原语可能影响多个族及实验目标。",
+      "paths": [
+        "src/ecm/backend/cuda/arithmetic/goldilocks/goldilocks.cuh",
+        "src/ecm/backend/cuda/ntt/device/transform_kernels.cu"
+      ]
+    },
+    {
+      "id": "tiers",
+      "label": "修改 tiers.def / -Tiers",
+      "title": "重新核对主机候选、注册与设备实例",
+      "body": "位宽表与编译筛选都是合同的一部分。只保留一个档时，运行时可用性也受限；不能把完整清单当成该二进制已编入能力。",
+      "paths": [
+        "src/ecm/backend/cuda/dispatch/tiers.def",
+        "src/ecm/backend/cuda/stage1/montgomery/registry.cu"
+      ]
+    },
+    {
+      "id": "abi",
+      "label": "修改架构 / 宏 / ABI",
+      "title": "命令或工具链身份变化，不能复用不兼容对象",
+      "body": "GPU 架构、编译器、GMP 头、后端宏和 legacy/per-thread 默认流都影响身份。pack 探针保留 per-thread，不能直接混用常规 legacy 生产对象。",
+      "paths": [
+        "tools/build/internal/cuda_toolchain.ps1",
+        "tools/build/internal/cuda_ntt_probe.ps1"
+      ]
+    },
+    {
+      "id": "experiment",
+      "label": "修改独立实验源码",
+      "title": "只进入显式选择的实验目标",
+      "body": "生产不依赖 tools/experiments、tools/test 或 tools/bench。共享纯设备原语仍按真实依赖重编；实验与生产不能用同一份旧 manifest 混充身份。",
+      "paths": [
+        "tools/experiments/cuda/stage2_tree/worker.cu",
+        "tools/build/internal/cuda_sources.cmake"
+      ]
+    }
+  ],
+  "reading": [
+    [
+      "总体职责",
+      "docs/architecture/OVERVIEW.md",
+      "术语、程序边界与后端"
+    ],
+    [
+      "Stage1",
+      "docs/architecture/STAGE1.md",
+      "曲线、容器、切片与存档"
+    ],
+    [
+      "Stage2",
+      "docs/architecture/STAGE2.md",
+      "模块合同、点/树/下降与限制"
+    ],
+    [
+      "NTT",
+      "docs/architecture/NTT.md",
+      "精确卷积、shape、carry 与 Graph"
+    ],
+    [
+      "内存",
+      "docs/architecture/MEMORY.md",
+      "owner、借用、预算与峰值口径"
+    ],
+    [
+      "构建",
+      "docs/usage/BUILD.md",
+      "六组入口、工具链及身份复用"
+    ]
+  ]
+}

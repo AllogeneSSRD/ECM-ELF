@@ -1,6 +1,6 @@
 # ECM 主流程重构方案与分析草稿
 
-分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：已获实施授权；P0、P1a、P1b 已完成并通过 local 验证，Stage2 程序版本 `0.45.21`；P2、P3a/b/c、P4a–i 已完成；P5a–d 已完成存储、规划、父子流程和进程请求；P6a/b 已完成 GUI 归位、Controller 和 CPU 入口核对；P7 待实施。详见[实施进度与阻塞记录](#实施进度与阻塞记录)。
+分析与实施日期：2026-10-21。范围：当前桌面生产程序的主流程、接口、计算实现和运行资源。状态：P0–P7已完成，源码与最终local版本0.45.24。实际覆盖和限制见[实施进度](#实施进度与阻塞记录)；当前目录/接口以正式架构文档为准。
 
 阅读顺序：[完整目标与约束](#完整重构目标与实施约束) → [构建复用与输出隔离](#首先调整构建复用与输出隔离) → [完整目标目录](#完整目标目录) → [模块职责](#模块职责依赖与构建目标) → [职责划分与重复封装检查](#职责划分与重复封装检查) → [Interface输入输出](#interface-的数据输入输出与所有权) → [driver伪代码](#driver-主流程伪代码) → [正式阶段顺序](#分阶段正式重构顺序)。前半部分保留当前运行、数学与源码依赖的核对依据。
 
@@ -533,7 +533,7 @@ profile 读取可以共享语法解析，验证仍应区分完整 Stage2、纯�
 
 ## 完整重构目标与实施约束
 
-本节是整合后的**目标实施方案**；前文保留分析时的现状、数学和耦合依据。用户已授权按方案实施；当前已完成 P0 local 基线冻结与 P1a/P1b 构建复用和输出隔离，实际交付与验证限制见下节；P2 已完成普通 CXX、任务拥有权与请求/状态合同；P3 完成 CUDA/主机/OpenCL 家族归位，P4a–P4i 已完成 Stage1 职责整理，P5–P7 继续实施。不把目标目录写成当前结构，后续以本节的阶段顺序为准，不再并行维护一套目录迁移顺序。
+本节保留获批设计与阶段记录；P0–P7现已完成。后续目标目录、Interface与设计伪代码保留为实施前方案，实际采用的粗接口、名称和调用关系见P7b实施定稿及正式架构总览，不把示意类名当作已实现API。
 
 整合方案沿用HEAD为2e64b75e5d14287e2ee25bdaff27e3b1128c1d93、当时包含工作区修改且版本头为0.44.7的[读取快照](../../data/experiments/main_flow_refactor_plan_20261021/source_snapshot_final.json)，记录633个源码/构建输入hash，早期采集文件另行保留。职责与封装的文档细化不代表重新审计当前并行源码，原始证据不改写。当时版本与worktodo修改非本文档工作所作；已核对的队列投递规则为复用目标worker最后一段、必要时才建标签、压缩同一连续分区重复标签并保留任务顺序。该规则归storage/queue与service/work的现状合同，迁移保持；前文0.44.6细粒度依据不被改写成同一源码身份。
 
@@ -960,6 +960,53 @@ App 保留绘制、配置编辑、布局、语言与提示。Controller 拥有 W
 - 正式 local Stage1 384/1024 更新 4 CXX、Stage2 更新 6 CXX，均 0 CU，31+2 个 CUDA 对象保持；Stage2 重复构建零编译/链接。[5+5 基线](../../data/experiments/main_flow_refactor_implementation_20261021/p7a/runtime/summary.json)通过。
 
 [本步资格](../../data/experiments/main_flow_refactor_implementation_20261021/p7a/qualification.json)冻结两个 CUDA worker。GUI/OpenCL/CPU2 尚未在 0.45.24 重建；完整 32 档、本轮类别增量与最后源/文档审计继续 P7b。未运行 release 或性能采样。
+
+### P7b：综合终验与当前实施定稿
+
+程序源码及最终 local 版本 `0.45.24`，P0–P7 完成。当前目录、职责和接口以 [架构总览](../architecture/OVERVIEW.md#目录与依赖)、[Stage1](../architecture/STAGE1.md)、[Stage2](../architecture/STAGE2.md) 为权威说明；[主流程验收](../performance/MAIN_FLOW_QUALIFICATION.md)记录输入、设备、二进制与限制。[最终资格](../../data/experiments/main_flow_refactor_implementation_20261021/p7b/qualification.json)冻结实际产物与证据。
+
+本草稿后续的完整目标树、Interface 方案和设计伪代码保留为实施前设计记录，示意名字不代表额外 API。实施采用已有粗合同和完整后端流程，没有新增通用 CurveFactory、Runner、Session.run 或总 Supervisor。公开头共14个，只暴露实际跨模块使用的合同；私有协作和实现留在src/ecm，不为每个CPP制造公开头。
+
+当前调用关系与主流程伪代码：
+
+```text
+driver：默认值 → TOML → CLI → 输入/选择校验 → 依赖组装 → 运行模式
+  单次：run_stage1_task → 展示已有因子/可选群阶诊断 → 兼容退出码
+  队列：run_queue_manager（启动配置快照与任务选取）
+         → run_queue_workflow → 每项调用 run_stage1_task → 唯一完成协议
+
+run_stage1_task：校验元数据/输出 → session.begin → 旧save历史接纳
+  → execute_stage1（唯一分派，含各后端自己的准备/恢复/执行/安全点）
+  → 核对逐曲线身份 → submission → internal batch → seal → close(true)
+  失败/停止：close(false)，保留恢复材料，结果记录失败来源与旧返回码
+
+QueueWorkflow：准备/发布失败优先终止并保留来源；可展示因子后处理停止
+  → 执行失败按原策略标记错误
+  → 成功时 Stage2 park → finished → 精确源行更新 → save sync
+     → Stage2 flush → P95 delivery → processed++
+
+Stage2 main → run_tasks：恢复 → pending → run_curve_process
+  → curve_worker：重读save/hash → 规划 → GCD/实际引擎 → 结果/receipt
+  → 父任务确认receipt → done → seal → 源行复核 → finished → 移除 → 清理
+
+GUI App（绘制/交互）→ WorkerController（阶段与worker编排）
+  → WorkerProc（原生进程、Job/pipe/thread、停止、重启与breaker）
+```
+
+以上不统一 CPU scalar/IFMA/Montgomery 与 GPU 的 factor、capture、DONE、save 时点。QueueSource 不逐项热重载完整配置。曲线进程适配接收显式49项协议字段及记录/路径/预算，不接收完整Settings；实际CUDA同步、回读、设备策略和规划显存查询仍依赖CUDA runtime。
+
+- 完整32档LOCAL、260项注册、93项Montgomery对照、131项Edwards独立GMP用例（537条曲线、96个边界模式）通过。Stage2有1536个模数、152064次独立比较bad=0，另有14对运行、4个规划和20项拒绝检查。
+- 配置读/写、CPU曲线数学/编码、checkpoint、save、data、result、tune.toml、screen共9类正文探针经正式脚本构建，33个CUDA对象保持。恢复原始源码字节后重新构建，随后重复构建零编译/零链接。该结论不涵盖设备合同/头或真实CUDA runtime实现的修改。
+- 353个生产源码/接口文件、753条项目内include边无环，公开头不包含私有src。17个实际主机CPP无CUDA SDK编译。身份55项、真实MSVC退役依赖9项、task8项、queue13项、process30项、storage18项通过。
+- OpenCL172份资源、2项缓存和4项数学/输出；CPU互操作27项、结果23项、P9583项；Stage2规划8项、工作流12项、停止恢复及GUI真实两阶段worker贯通通过。GUI另有33/54/85/26/110项检查，未进行可见窗口验收。
+- 性能仅覆盖8个代表local样例，每项至少21对；墙钟和内部边界各自的配对比值中位数及95%区间上界均≤1.05。慢样本全部保留，功能计时不当作性能样本。完整输入/设备/功耗/程序/样本与证据见验收说明，不宣称完整性能矩阵或多架构发布资格。
+
+正式架构/使用/性能文档的本地引用已核对；修正迁移后失效的规划、GUI测试、NTT和console引用，不改变既有性能数据。根web仍是按原规则忽略的本地辅助页，讲解源入库为docs/web/cuda-architecture.content.json；正式阅读报告位于docs/web/architecture-review-20261021-ecm-main-flow.html。
+
+现有PRAC资格保留为0.45.16受限构建，最终全位宽默认PRAC关闭；GWPoly未重建。不新增同进程多会话、跨后端checkpoint互换或群阶诊断严格最小B1/B2能力。修正WorkerView.ckpt_seen的过时注释：仅记录观察到新checkpoint，继续等待平滑退出，不表示可以强杀；GUI/Controller重建并复验，行为未改。性能首轮校验把NAF doubling=4误用于binary；旧程序日志和当前实现均报告binary window=0/doubling=0。修正精确模式校验并新增正反例，20项协议检查通过；失败采样保留，成功研究另存performance_02，不修改程序或5%门限。原始失败与前期阶段证据保留。临时草稿已完成，留待用户决定如何归档/整理，不自动删除。
+
+
+本轮失败探针原始证据保留在p7b/incremental：GUI正式脚本过滤编译行导致计数误判，现增加Building CXX日志；Windows一次恢复访问错误的底层原因未确认，已用原字节备份恢复全部8文件并逐项验SHA。工具改为每项核对、有限重试并记录错误；不以忽略计数或跳过恢复通过验收。第二轮重复了相同探针内容，Stage2正确复用已有主机对象；现为每轮绑定不同正文身份，要求实际编译再通过。成功记录为p7b/incremental_03，未修改生产行为。
 
 ## 首先调整构建复用与输出隔离
 
@@ -1532,7 +1579,7 @@ CPU Stage2保留当前Edwards save直接续算，不新增CUDA式队列/Auto B2/
 
 ## 分阶段正式重构顺序
 
-每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0–P6 完成，P7 未完成，详见“实施进度与阻塞记录”。
+每阶段独立可审核、可构建并有退出条件。物理迁移、拥有权变化、算法/格式变化分开；后两类未经本方案授权新增的行为不混入组织重构。以下为各阶段交付目标；实际进度为 P0–P7 完成，详见“实施进度与阻塞记录”。
 
 ### P0 冻结现状与生产闭包
 
@@ -1606,15 +1653,15 @@ task实现收敛为前述七步；application driver仅保留输入、组装、�
 | GUI/CPU | 子进程状态、平滑停止、实际支持范围、普通CXX和第三方运行依赖 | P6 |
 | 性能资格 | 相同输入、设备/功耗、源码与二进制、样本数和计时边界；原始证据不改写 | P7 |
 
-这些是未来验证工作，不在本轮修改测试/工具内部的范围。必要的现有测试/工具路径适配随生产移动同步进行，不能通过删除测试、放宽门限或改变正确实现消除表面不一致。
+该矩阵保留实施验收设计；实际覆盖以P7b与正式验收说明为准。门限未放宽，原始失败保留。
 
-仍需在实施时核对的条件：
+实施后保留的限制：
 
-- 最终profile字段与短key长度由真实命令/清单决定；不得把源码hash作为目录key。跨目录artifact import尚未设计与验证，初期不承诺。
-- GUI/打包/现有脚本对exe根和运行时资源路径的全部消费者，P1/P3生成清单后逐一核对。
+- profile已按真实命令/清单形成16位短key；源码hash不作为目录key。跨目录artifact import尚未设计与验证，初期不承诺。
+- 默认输出和本轮实际消费者的路径已核对；不新增多架构发布或便携OpenCL资格。
 - 共享源能否跨exe共用对象取决于目标宏与ABI；无证明时继续按目标编译。
 - 同进程多会话、跨后端checkpoint互换、错误恢复升级、结构化GUI进程协议属于另行验证/设计的能力，不由本次组织重构自动获得。
-- 实际支持组合以当前生产接纳和本机资格为准；当前CPU Stage2/GUI缺少的正式构建入口族是计划交付，不是现状声明。
+- 实际支持组合以当前生产接纳和本机资格为准；CPU Stage2使用独立test构建入口，GUI默认build_gui_local；未新增其完整local/dev/release入口族。
 
 ## C++ Core Guidelines 参考
 

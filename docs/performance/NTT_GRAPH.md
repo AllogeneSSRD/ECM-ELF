@@ -153,7 +153,7 @@ batch2880的off/on重放时钟约1795/1799MHz，时间约568/565µs、long-score
 - 额外4条诊断曲线分别核对4423/7995-bit的全部下降叶子投影指纹，off/on一致；这不是逐叶GMP独立数学证明，也不计入正式性能。
 - 原始证据：`data/experiments/stage2_short_graph_20261015/`，含`ab`、`broad_ab`、`production_ab`、`diagnostic`、`nsys_*`、`ncu_*`、门禁与故障注入日志、冻结构建和命令。
 - 汇总：`data/benchmarks/stage2_short_graph_20261015_report/{summary.json,summary.csv}`，JSON包含4份Systems与6份Compute的核验摘要；图片在`data/figures/`。全部原始样本保留，不用复测覆盖首轮。
-- 使用与复现：[Graph验证工具](../../tools/bench/README_STAGE2_GRAPH.md)。实现入口：[缓存身份及生命周期](../../src/cuda/stage2/ntt_graph.cuh#L5)、[生产调用](../../src/cuda/stage2/ntt_runtime.cuh#L3565)、[独立门禁](../../tools/test/ntt_graph_probe.cu#L20)。
+- 使用与复现：[Graph验证工具](../../tools/bench/README_STAGE2_GRAPH.md)。实现入口：[缓存身份及生命周期](../../src/ecm/backend/cuda/ntt/graph.cpp)、[生产调用](../../src/ecm/backend/cuda/ntt/runtime.cpp)、[独立门禁](../../tools/test/ntt_graph_probe.cu#L20)。
 
 ## 后续优化条件
 

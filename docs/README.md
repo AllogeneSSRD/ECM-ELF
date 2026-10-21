@@ -19,7 +19,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 ## 实现
 
 - [架构与术语](architecture/OVERVIEW.md)：模块职责、数据表示和入口。
-- [主流程重构方案草稿](development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md)：完整目标目录、模块与Interface、driver伪代码及构建先行阶段顺序；当前 P0、P1a/P1b、P2 与 P3a/b/c 归位与 P4a–f 主机实现、选择/默认值及结果发布隔离已完成，P4 其余子步骤及 P5–P7 待实施；GUI 按 P6 执行。[网页阅读版](web/architecture-review-20261021-ecm-main-flow.html)同步实施状态与源码依据，不替代当前架构与构建规范。
+- [主流程重构方案草稿](development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md)：P0–P7已完成，源码/local版本0.45.24；保留设计、分阶段记录和证据，当前目录与职责以正式架构为准。[网页阅读版](web/architecture-review-20261021-ecm-main-flow.html)同步实施状态与源码依据，不替代当前架构与构建规范。
 - [CUDA 可视化架构图谱](../web/index.html)：代码分层、编译清单、位宽与运行时流程的离线交互网页；维护入口见 [网页说明](../web/README.md)。
 - [Stage1 算法](architecture/STAGE1.md)：曲线、标量、ladder/PRAC、域转换和存档。
 - [Checkpoint](architecture/CHECKPOINT.md)：Stage1 统一外壳、各后端载荷字段与偏移、校验、备份恢复及 Stage2 曲线进度。
@@ -32,6 +32,8 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 - [OpenCL 算子](architecture/OPENCL.md)：路径注册、内核组装和设备约束。
 
 ## 性能与后续工作
+
+- [主流程重构验收](performance/MAIN_FLOW_QUALIFICATION.md)：0.45.24本机local、完整位宽、非GPU正文零CU、实际恢复/交接与8个代表样例的配对性能范围。
 
 - [Stage1 性能](performance/STAGE1.md)：GPU Edwards细分实例与Montgomery三曲线族同exe成本、冻结初始基准、NAF窗口/倍点图表、PRAC投影和资源约束。
 - [Stage2 性能](performance/STAGE2.md)：0.38.4 完整 GPU 矩阵、普通/承载、版本对照、分项分析与 Montgomery 全范围参考。
@@ -49,7 +51,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 
 候选是否可继续精简、几何包络的局限，以及按P比例跨步与跨区间持续探索，见 [D候选压缩与搜索研究草稿](development/STAGE2_D_SEARCH_DRAFT.md)。0.39.0源码已接入有界搜索，当前验证范围与尚待完成的性能验收见草稿；运行规则以Auto B2 / tune为准。
 
-CUDA 目录与模块重构的 P0～P4 实施范围、验证证据和后续阶段见 [CUDA 结构重构草稿](development/GPU_CUDA_STRUCTURE_REFACTOR_DRAFT.md)；当前模块职责以 Stage1/Stage2 架构说明、构建规则以构建与发布说明为准。
+CUDA 目录与模块重构的冻结实施记录和验证证据见 [CUDA 结构重构草稿](development/GPU_CUDA_STRUCTURE_REFACTOR_DRAFT.md)；当前模块职责以 Stage1/Stage2 架构说明、构建规则以构建与发布说明为准。
 
 ## 数据位置
 

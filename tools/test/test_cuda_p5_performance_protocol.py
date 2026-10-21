@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools/bench'))
-from qualify_cuda_refactor import passes_metrics, ratio_interval
+from qualify_cuda_refactor import passes_metrics, ratio_interval, validate_edwards_geometry
 
 
 def main():
@@ -16,6 +16,14 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args(); out = a.output.resolve(); out.mkdir(parents=True, exist_ok=False)
     checks = []
+    for model, window, doubling in [('ed', 6, 4), ('ed-5', 6, 5), ('ed-binary', 0, 0)]:
+        validate_edwards_geometry(model, window, doubling)
+        checks.append(model+' exact geometry accepted')
+    for model, window, doubling in [('ed-binary', 0, 4), ('ed-binary', 6, 0),
+                                    ('ed', 6, 0), ('ed-5', 6, 4)]:
+        try: validate_edwards_geometry(model, window, doubling)
+        except AssertionError: checks.append(model+' wrong geometry rejected')
+        else: raise AssertionError('incorrect Edwards mode accepted')
     fast = ratio_interval([.99]*21)
     slow = ratio_interval([1.06]*21)
     uncertain = ratio_interval([.99]*12+[1.08]*9)

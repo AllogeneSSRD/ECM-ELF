@@ -49,6 +49,12 @@ def passes_metrics(metrics):
     return all(v['median'] <= 1.05 and v['high95'] <= 1.05 for v in metrics.values())
 
 
+def validate_edwards_geometry(model, window, doubling):
+    # Binary has no NAF dictionary/doubling selection; production reports 0/0.
+    expected = (0, 0) if model == 'ed-binary' else (6, 5 if model == 'ed-5' else 4)
+    assert (window, doubling) == expected, (model, window, doubling, expected)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--plan', type=Path, required=True)
@@ -202,8 +208,7 @@ def main():
                 assert len(values) == 1 and values[0][0] == ('binary' if binary else 'naf')
                 selected = re.findall(r'GPU Edwards Stage1: device=(\d+).*window=(\d+) doubling=(\d+)', text)
                 assert len(selected) == 1 and int(selected[0][0]) == plan['device']
-                assert int(selected[0][1]) == (0 if binary else 6)
-                assert int(selected[0][2]) == (5 if case['model']=='ed-5' else 4)
+                validate_edwards_geometry(case['model'], int(selected[0][1]), int(selected[0][2]))
                 internal = float(values[0][1])
             else:
                 assert f'GPU: will use device {plan["device"]}:' in text

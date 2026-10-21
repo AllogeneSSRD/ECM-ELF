@@ -1,6 +1,6 @@
 """Generate the offline CUDA architecture snapshot from the authoritative sources.
 
-Editorial explanations live in web/architecture.content.json; source members,
+Editorial explanations live in docs/web/cuda-architecture.content.json; source members,
 geometry, symbols, snippets and fingerprints are extracted, never hand copied.
 """
 import argparse
@@ -20,7 +20,7 @@ def sha(value):
 
 
 def build():
-    content = json.loads((ROOT / 'web/architecture.content.json').read_text(encoding='utf-8'))
+    content = json.loads((ROOT / 'docs/web/cuda-architecture.content.json').read_text(encoding='utf-8'))
     cache = ROOT / 'data/experiments/cuda_architecture_web'
     cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='inventory-', dir=cache) as directory:
@@ -74,7 +74,8 @@ def build():
 
     catalog = []
     descriptions = {module['path']: module for module in content['modules']}
-    for folder, zone in [('src/ecm/backend/cuda', 'host'), ('tools/experiments/cuda', 'experiment')]:
+    for folder, zone in [('include/ecm', 'interface'), ('src/ecm', 'host'),
+                         ('tools/experiments/cuda', 'experiment')]:
         for file in sorted((ROOT / folder).rglob('*')):
             if file.suffix not in {'.h', '.hpp', '.cuh', '.cu', '.cpp', '.inl', '.inc', '.def'}:
                 continue
@@ -82,8 +83,8 @@ def build():
             member = [name for name, sources in groups.items() if path in sources]
             module = descriptions.get(path)
             file_zone=zone
-            if zone!='experiment':
-                file_zone='device' if file.suffix in ('.cu','.cuh') else 'interface' if file.name in ('launch.h','api.h','tiers.def') else 'host'
+            if zone == 'host':
+                file_zone='device' if file.suffix in ('.cu','.cuh') else 'host'
             catalog.append(dict(path=path, zone=file_zone, groups=member,
                                 lines=len(file.read_text(encoding='utf-8-sig').splitlines()),
                                 sha256=sha(file.read_bytes()), module=module['id'] if module else None,
@@ -104,13 +105,13 @@ def build():
                             sha256=sha(file.read_bytes()), module=module['id'] if module else None,
                             ref=add_reference(path, module.get('find', '') if module else '')))
     version = re.search(r'version\[\]\s*=\s*"([^"]+)"',
-                        (ROOT / 'src/core/ecm_program_version.h').read_text())[1]
+                        (ROOT / 'include/ecm/platform/program_version.h').read_text())[1]
     signature_paths = sorted({file['path'] for file in catalog} |
                              {ref['path'] for ref in refs.values()} |
-                             {'tools/build/internal/cuda_sources.cmake', 'src/core/ecm_program_version.h'})
+                             {'tools/build/internal/cuda_sources.cmake', 'include/ecm/platform/program_version.h'})
     signature = sha('\n'.join(path + ':' + sha((ROOT / path).read_bytes()) for path in signature_paths).encode())
     revision = subprocess.check_output(['git', 'log', '-1', '--format=%h', '--',
-        'src/ecm/backend/cuda', 'src/core/ecm_program_version.h',
+        'src/ecm', 'include/ecm',
         'tools/build/internal/cuda_sources.cmake'], cwd=ROOT).decode().strip()
     data = dict(meta=dict(version=version, sourceRevision=revision, sourceSignature=signature,
                           sourceFiles=len(signature_paths), schema=1),

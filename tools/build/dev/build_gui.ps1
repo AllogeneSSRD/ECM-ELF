@@ -187,7 +187,7 @@ if ($needConfig) {
 Write-Host "== build =="
 $targetArgs = ($Targets | ForEach-Object { "--target $_" }) -join ' '
 $r = Invoke-DevCmd "cmake --build `"$BuildDir`" $targetArgs"
-($r.text -split "`r?`n") | Select-String -Pattern 'error|Error|warning C|Built target|Linking' |
+($r.text -split "`r?`n") | Select-String -Pattern 'error|Error|warning C|Building CXX object|Built target|Linking' |
     ForEach-Object { "   " + $_.Line.Trim() }
 if ($r.exit -ne 0) {
     Write-Host "build failed (exit $($r.exit)) -- full output:" -ForegroundColor Red

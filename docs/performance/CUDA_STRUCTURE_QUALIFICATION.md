@@ -8,7 +8,7 @@
 
 完整重构的对照基线为0.44.0、源码`36171f43f5737d525d7b5d013bd9b04d0131468c`，使用预先冻结的完整程序。验收根目录为`data/experiments/cuda_structure_p5_20261020/`，`baseline/identity.json`绑定程序、匹配构建记录和源归档。保留原始失败、日志、存档与采样，不覆盖失败轮次。
 
-当前功能程序为LOCAL、CUDA13.3、MSVC14.51.36231、sm89、Zen3 GMP；生产算术默认保持PTX GL backend、fixed mode3、add/sub mask1、outer unroll0。Stage1完整32档、PARAM2启用、TPB128、Mersenne fold关闭、PRAC默认关闭。共享位宽政策以[权威清单](../../include/ecm/cuda/tiers.def)为准，Stage1容器与Stage2容量保持不同语义。
+当前功能程序为LOCAL、CUDA13.3、MSVC14.51.36231、sm89、Zen3 GMP；生产算术默认保持PTX GL backend、fixed mode3、add/sub mask1、outer unroll0。Stage1完整32档、PARAM2启用、TPB128、Mersenne fold关闭、PRAC默认关闭。共享位宽政策以[权威清单](../../src/ecm/backend/cuda/dispatch/tiers.def)为准，Stage1容器与Stage2容量保持不同语义。
 
 运行仅使用GPU1：NVIDIA GeForce RTX4060 Laptop GPU、sm89、驱动610.88。主机AMD Ryzen AI9 HX370、32GiB、24逻辑处理器；不更改GPU功耗、频率或其他进程。驱动报告GPU1功耗上限不可用，按不可用记录，不写成0。设备与工具链依据为`devices.csv`、`toolchains.json`。
 
@@ -43,7 +43,7 @@ Stage2为176个函数，161个指令正文相同，15个算术函数不同，与
 
 显式PRAC选档384/2560/4608/9216/16384单独构建，不进入默认生产性能结论。16组CPU/GMP、暂停恢复和双代损坏拒绝通过；46组策略完整点比较与4组非法策略拒绝通过，覆盖替代TPI32、168/255寄存器、128 single-compact和三种常量策略。依据为`optional_runtime/result.json`、`optional_policies_03/result.json`。
 
-最高Montgomery GPU目标为16378位，Edwards为17407位。CPU标量MPN参考的固定容量为160 limbs、10240位，源码依据为[mont上下文](../../src/cpu/ecm_edwards_mont.h:55)。旧／新版在16378位均同样拒绝，相关CPU源码与0.44.0相同；超过该参考边界时，使用独立任意精度整数ladder并与冻结旧版GPU完整点交叉核对，包含LCM和12LCM两种已有模式。证据见`cpu_oracle_diagnosis/result.json`。未扩展或修改生产CPU边界。
+最高Montgomery GPU目标为16378位，Edwards为17407位。CPU标量MPN参考的固定容量为160 limbs、10240位，源码依据为[mont上下文](../../src/ecm/backend/cpu/arithmetic/scalar/ecm_edwards_mont.h)。旧／新版在16378位均同样拒绝，相关CPU源码与0.44.0相同；超过该参考边界时，使用独立任意精度整数ladder并与冻结旧版GPU完整点交叉核对，包含LCM和12LCM两种已有模式。证据见`cpu_oracle_diagnosis/result.json`。未扩展或修改生产CPU边界。
 
 显式Graph探针完成368次GMP卷积、14779392个数字检查，缓存捕获、重放、失效及释放通过；故障模式bad1并按预期退出3。另有5组真实曲线双版本对照和一组双版本错误拒绝，覆盖owner回退、单槽校验队列、较大树、合法承载及8193位输入。依据为`graph/result.json`、`graph_curves/result.json`。日志可能重复打印同一arena累计计数，不将记录之和当作独立调用总数。
 

@@ -39,7 +39,7 @@ def main():
     tiers = list(map(int, re.findall(r'^ECM_CUDA_TIER\((\d+),',
         (ROOT/'src/ecm/backend/cuda/dispatch/tiers.def').read_text(), re.M)))
     assert len(tiers) == 32 and len(set(tiers)) == 32
-    assert read(a.preflight/'identity_preflight/result.json')['checks'] == 40
+    assert read(a.preflight/'identity_preflight/result.json')['checks'] == 55
     assert read(a.preflight/'identity_preflight/result.json')['complete']
     tier_gate = read(a.tier_gate)
     assert tier_gate['complete'] and tier_gate['profiles'] == 16
