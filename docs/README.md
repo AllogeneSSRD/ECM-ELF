@@ -19,6 +19,7 @@ CUDA 支持 Atkin–Morain Edwards Stage1 与同曲线的 NTT Stage2 交接；�
 ## 实现
 
 - [架构与术语](architecture/OVERVIEW.md)：模块职责、数据表示和入口。
+- [目录精简规划草稿](development/DIRECTORY_LAYOUT_SIMPLIFICATION_DRAFT.md)：方案 A 实施中，D0/GUI 统一入口已完成；调整 31 个文件路径，公开头保留。[网页阅读版](web/directory-layout-plan-20261021.html)。
 - [主流程重构方案草稿](development/MAIN_FLOW_REFACTOR_ANALYSIS_DRAFT.md)：P0–P7已完成，源码/local版本0.45.24；保留设计、分阶段记录和证据，当前目录与职责以正式架构为准。[网页阅读版](web/architecture-review-20261021-ecm-main-flow.html)同步实施状态与源码依据，不替代当前架构与构建规范。
 - [CUDA 可视化架构图谱](../web/index.html)：代码分层、编译清单、位宽与运行时流程的离线交互网页；维护入口见 [网页说明](../web/README.md)。
 - [Stage1 算法](architecture/STAGE1.md)：曲线、标量、ladder/PRAC、域转换和存档。

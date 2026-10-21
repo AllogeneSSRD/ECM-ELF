@@ -78,7 +78,9 @@ CMake 同时导出 `cuda_target_graph.json`，收集目标及其链接的项目�
 
 源身份验证入口为 `tools/build/test/build_cuda_p0.ps1`，用 `-Stage stage1/stage2/development` 选择构建；CPU 故障注入为 `tools/test/test_cuda_build_identity.ps1`，短曲线双版本对照为 `tools/test/test_cuda_p0_runtime.py`。`tools/build/test/build_cuda_p1.ps1 -Stage tiers` 编译清单的16种筛选/几何配置，`-Stage stage1/stage2` 构建迁移后的程序。结构与冻结算术正文校验使用 `test_cuda_p1_structure.py`；实际注册、跨组曲线与可选运行时分别使用 `test_cuda_p1_registry.py`、`test_cuda_p1_curves.py`、`test_cuda_p1_prac.py`。这些入口不替代完整位宽、多架构或性能验收，证据写入 `data/experiments/`。
 
-`tools/build/dev/` 为开发和 GUI 入口，`test/` 为探针与参考实现构建，`internal/` 为配置检查、并行编译、拆分和打包辅助。详细参数入口见 [构建工具](../../tools/build/README.md)；配置生成合同见 [配置维护](../architecture/CONFIGURATION.md)。
+GUI 只有一个 BAT 入口：`tools/build/build_gui.bat`，不分 dev/local/release，默认输出 `build_gui_local/ecm_gui.exe`。参数原样传给现有 `tools/build/dev/build_gui.ps1`；例如 `tools\build\build_gui.bat -Selftest` 构建并自检。无参数调用结束暂停，有参数调用返回实际退出码。
+
+`tools/build/dev/` 为开发辅助与 GUI PowerShell 实现，`test/` 为探针与参考实现构建，`internal/` 为配置检查、并行编译、拆分和打包辅助。详细参数入口见 [构建工具](../../tools/build/README.md)；配置生成合同见 [配置维护](../architecture/CONFIGURATION.md)。
 
 P2 结构验证使用 `test_cuda_p2_structure.py` 对照冻结 Git 基线的设备算术正文并检查模块依赖方向。`build_cuda_p2_arithmetic_probe.ps1 -WorkerBuild <生产目录>` 将独立 GMP 检查器链接到经过身份验证的生产算术对象；`build_ntt_graph_probe.ps1 -WorkerBuild <生产目录>` 同样复用真实 NTT 对象。其他使用生产 NTT 的探针通过 `internal/cuda_ntt_probe.ps1` 消费同一源清单，所有单元保持探针指定的 legacy/per-thread 默认流设置；不再通过实现头或截取生产源码构建。
 
